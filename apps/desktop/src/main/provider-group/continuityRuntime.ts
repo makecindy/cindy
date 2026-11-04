@@ -86,7 +86,7 @@ export function createGroupContinuityRuntime(readRunning: () => Promise<Readonly
     },
   });
   type Prepared = { owner: string; target: string; grant: GroupContinuityGrant; fingerprint: string;
-    wall: number; mono: number; current(): boolean };
+    wall: number; mono: number; missing?: true; current(): boolean };
   type PrepareAttempt = { row?: Prepared; transient?: true; refused?: true };
   const prepared = new Map<string, Prepared>();
   const preparing = new Map<string, { group: string; promise: Promise<PrepareAttempt> }>();
@@ -208,7 +208,7 @@ export function createGroupContinuityRuntime(readRunning: () => Promise<Readonly
     };
     let verified = false;
     // Age alone does not end a healthy ACK; verify every still-valid row.
-    if (row) {
+    if (row && !row.missing) {
       const self = getSelfDeviceId();
       if (!self) {
         // No local device identity: preserve the acknowledged row; a restart
@@ -219,6 +219,10 @@ export function createGroupContinuityRuntime(readRunning: () => Promise<Readonly
         let timer: ReturnType<typeof setTimeout> | undefined;
         const checked = row;
         const verifyWall = Date.now(), verifyMono = performance.now();
+        const missingContext = (value: unknown) => {
+          const absent = value as { id?: unknown; remainingMs?: unknown } | null;
+          return absent?.id === checked.grant.id && absent.remainingMs === 0;
+        };
         const retireChecked = () => {
           if (current() && prepared.get(key) === checked) invalidatePrepared(key, checked);
         };
@@ -227,6 +231,11 @@ export function createGroupContinuityRuntime(readRunning: () => Promise<Readonly
             action: 'continuity-inspect', id: row.grant.id, ownerDeviceId: self,
             sessionId: 'continuity-verify',
           }], { preSend: () => { if (!current()) throw new Error('Group routing context changed'); } }).then(result => {
+            // Missing is authoritative even after the soft timeout returned an
+            // older ACK. Keep its deadlines for retry, but never deliver it again.
+            if (result.ok && missingContext(result.result) && current() && prepared.get(key) === checked) {
+              checked.missing = true;
+            }
             if (!result.ok && isProviderAccessDeniedError(replyError(result)!)) retireChecked();
             return result;
           }, error => {
@@ -261,8 +270,7 @@ export function createGroupContinuityRuntime(readRunning: () => Promise<Readonly
               verified = true;
             } else {
               // Only the issuer's missing-context response permits re-authorization.
-              const absent = reply.result as { id?: unknown; remainingMs?: unknown } | null;
-              if (absent?.id !== checked.grant.id || absent.remainingMs !== 0) {
+              if (!missingContext(reply.result)) {
                 retireChecked(); return undefined;
               }
             }
@@ -272,8 +280,8 @@ export function createGroupContinuityRuntime(readRunning: () => Promise<Readonly
     }
     // M keeps continuity grants in memory. A still-fresh O row can therefore
     // outlive a restarted M, so a reused row must be re-ACKed by M before it is
-    // handed to C. The old row remains the offline fallback when this attempt is
-    // transient; a successful replacement keeps the original wall/mono budget.
+    // handed to C. A missing row only caps the replacement's wall/mono budget;
+    // it cannot be an offline fallback while replacement has no M ACK.
     if (!verified) {
       let pending = preparing.get(key);
       if (!pending) {
@@ -427,7 +435,7 @@ export function createGroupContinuityRuntime(readRunning: () => Promise<Readonly
       else if (!outcome || outcome.transient) row = prepared.get(key);
       else row = undefined;
     }
-    if (!row || !current()) return undefined;
+    if (!row || row.missing || !current()) return undefined;
     const remainingMs = Math.min(row.wall - Date.now(), row.mono - performance.now());
     return remainingMs > 0 ? { id: row.grant.id, remainingMs, config: JSON.parse(fingerprint) } : undefined;
   };

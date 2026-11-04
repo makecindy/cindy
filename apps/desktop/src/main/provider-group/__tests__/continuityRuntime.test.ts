@@ -581,32 +581,64 @@ describe('group continuity Main wiring', () => {
       mono.mockRestore();
     }
   });
-  it('keeps the previous context when the prepare probe throws TIMEOUT', async () => {
-    const clock = { wall: 0, mono: 0 };
-    const date = vi.spyOn(Date, 'now').mockImplementation(() => clock.wall);
-    const mono = vi.spyOn(performance, 'now').mockImplementation(() => clock.mono);
+  // Unit integration: a real restarted M reports the old id missing. A timeout
+  // before that evidence may retain an ACK; after it, O must await a new M ACK.
+  // Gap: the former TIMEOUT case incorrectly expected a known-dead id back.
+  // Cover rejected/pending replacement and a missing reply arriving after the
+  // soft verification fallback; retry must keep the original two-clock budget.
+  it.each(['TIMEOUT', 'PENDING', 'LATE_ZERO'] as const)(
+    'does not redeliver a missing M context when replacement encounters %s', async failure => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
     try {
       io.self = 'O';
       const f = fixture();
       const normal = io.invoke.getMockImplementation()!;
-      let fail = false;
-      io.invoke.mockImplementation(async (target, channel, args, options) => {
-        if (fail && channel === PROVIDER_GROUP_REMOTE_CHANNEL && (args[0] as { action?: string })?.action === 'continuity-inspect') {
-          return { ok: true, result: { id: (args[0] as { id: string }).id, remainingMs: 0 } };
+      let executor = makeMExecutor();
+      let replacing = false;
+      let releaseVerify: (() => Promise<void>) | undefined;
+      io.invoke.mockImplementation(async (target: string, channel: string, args: unknown[], options?: { preSend?: () => void }) => {
+        if (channel === REMOTE_AGENT_CHANNEL) return normal(target, channel, args, options);
+        options?.preSend?.();
+        const command = JSON.parse(JSON.stringify(args))[0] as GroupContinuityRequest;
+        if (replacing && command.action === 'continuity-inspect' && failure === 'LATE_ZERO') {
+          return new Promise(resolve => {
+            releaseVerify = async () => { resolve({ ok: true, result: await executor.handle('O', command) }); };
+          });
         }
-        if (fail && channel === PROVIDER_GROUP_REMOTE_CHANNEL && (args[0] as { action?: unknown })?.action === 'continuity-prepare') {
+        if (replacing && command.action === 'continuity-prepare') {
+          if (failure === 'PENDING') return new Promise(() => undefined);
           throw Object.assign(new Error('[TIMEOUT] prepare timed out'), { code: 'TIMEOUT' });
         }
-        return normal(target, channel, args, options);
+        return { ok: true, result: await executor.handle('O', command) };
       });
-      const grant = await f.prepare();
-      clock.wall = clock.mono = 20 * 60_000 + 1;
-      fail = true;
-      expect((await f.prepare())?.id).toBe(grant?.id);
-    } finally {
-      date.mockRestore();
-      mono.mockRestore();
-    }
+      const startedAt = Date.now();
+      const first = await f.prepare();
+      expect(first).toBeDefined();
+      executor = makeMExecutor();
+      replacing = true;
+      const pending = f.prepare();
+      await vi.advanceTimersByTimeAsync(2_000);
+      if (failure === 'LATE_ZERO') {
+        await expect(pending).resolves.toMatchObject({ id: first!.id });
+        expect(releaseVerify).toBeDefined();
+        await releaseVerify!();
+        await vi.advanceTimersByTimeAsync(0);
+        const afterMissing = f.prepare();
+        await vi.advanceTimersByTimeAsync(2_000);
+        await expect(afterMissing).resolves.toBeUndefined();
+      } else {
+        await expect(pending).resolves.toBeUndefined();
+      }
+      await expect(executor.handle('C', { action: 'continuity-inspect', id: first!.id,
+        ownerDeviceId: 'O', sessionId: 'dead-context' })).rejects.toThrow('ACCESS_REVOKED');
+      replacing = false;
+      const recovered = await f.prepare();
+      expect(recovered).toBeDefined();
+      expect(recovered!.id).not.toBe(first!.id);
+      expect(recovered!.remainingMs).toBeLessThanOrEqual(first!.remainingMs - (Date.now() - startedAt));
+      await expect(executor.handle('C', { action: 'continuity-admit', id: recovered!.id,
+        ownerDeviceId: 'O', sessionId: 'recovered-context' })).resolves.toMatchObject({ id: recovered!.id });
+    } finally { vi.useRealTimers(); }
   });
   it('does not let a late legacy caps result poison a newer prepared context', async () => {
     io.self = 'O';
