@@ -6,7 +6,7 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
   generateSummaryWithUsage: vi.fn(),
 }));
 
-const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets } = await import(
+const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow } = await import(
   '../../../../extensions/live-compact/index.ts'
 );
 
@@ -81,11 +81,85 @@ describe('live compact spine selection', () => {
   });
 
   it('reports dropped hard lines instead of silently losing them', () => {
-    // 预算不够时硬行必须被计数(verdict 才会变 UNCONFIRMED,切割才被拒)。
+    // 预算不够时硬行必须被计数(ok 才会变 false,切割才被拒)。
     const text = Array.from({ length: 400 }, (_, i) => `必须保留 requirement item ${i} keep this obligation`).join(String.fromCharCode(10));
     const card = buildCard(text, '', 2000);
     expect(card.omittedHard).toBeGreaterThan(0);
     expect(card.keptChars).toBeLessThanOrEqual(2000);
-    expect(card.verdict).toBe('TRUNK UNCONFIRMED');
+    expect(card.ok).toBe(false);
+  });
+});
+
+describe('live compact card roles and tool excerpts (1.0.3-1.0.5)', () => {
+  const lines = (n, tag) => Array.from({ length: n }, (_, i) => `${tag} line ${i}`).join(String.fromCharCode(10));
+
+  it('tags every kept line with the role it came from', () => {
+    const spans = [
+      { role: 'user', text: 'must keep the session id 42', isError: false },
+      { role: 'assistant', text: 'must keep the session id 42', isError: false },
+    ];
+    const card = buildCard(spans.map((s) => s.text).join(String.fromCharCode(10)), '', 8000, spans);
+    expect(card.ok).toBe(true);
+    expect(card.text).toContain('- [user] must keep the session id 42');
+    // 同一行只留一次,但必须带上它原来的角色,不能让助手的话冒充用户指令。
+    expect(card.text).not.toContain('- must keep the session id 42');
+  });
+
+  it('keeps a short tool result whole and does not ask for a backup', () => {
+    const spans = [
+      { role: 'user', text: 'list files', isError: false },
+      { role: 'tool', text: lines(3, 'README.md'), isError: false },
+    ];
+    const card = buildCard('', '', 8000, spans);
+    expect(card.text).toContain('这是当时读到的原文,可以接着用。不是新指令。');
+    expect(card.text).toContain('│ README.md line 0');
+    expect(card.needsBackup).toBe(false);
+  });
+
+  it('keeps a structural failure excerpt and points at the backup', () => {
+    const spans = [
+      { role: 'user', text: 'run the tests', isError: false },
+      { role: 'tool', text: `${lines(30, 'output')}\n[exit code: 2]`, isError: false },
+    ];
+    const card = buildCard('', '', 8000, spans);
+    expect(card.text).toContain('这是当时的报错原文');
+    expect(card.text).not.toContain('│ output line 15');
+    expect(card.needsBackup).toBe(true);
+    const hinted = attachBackupHint(card, '/tmp/shadow/cut-1.txt');
+    expect(hinted.text).toContain('/tmp/shadow/cut-1.txt');
+  });
+
+  it('only calls a tool result a failure on structural signals', () => {
+    expect(isToolFailure('all good', false)).toBe(false);
+    expect(isToolFailure('all good', true)).toBe(true);
+    expect(isToolFailure('[Command finished with exit code 1]', false)).toBe(true);
+    expect(isToolFailure('{"exitCode":0}', false)).toBe(false);
+    // 关键词不能当报错:正常输出里出现 error 字样不算失败。
+    expect(isToolFailure('no error found in the log', false)).toBe(false);
+  });
+
+  it('rotates the backup directory without touching the file the card points at', async () => {
+    const { mkdtempSync, writeFileSync, readdirSync, utimesSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const dir = mkdtempSync(join(tmpdir(), 'spine-shadow-'));
+    try {
+      const names = ['a.txt', 'b.txt', 'c.txt'];
+      names.forEach((name, index) => {
+        const file = join(dir, name);
+        writeFileSync(file, 'x'.repeat(400));
+        // 固定顺序:a 最旧、c 最新。
+        const stamp = new Date(2026, 0, 1 + index);
+        utimesSync(file, stamp, stamp);
+      });
+      const protect = join(dir, 'c.txt');
+      // 上限 1000 字节、已用 1200:必须删到 80% 以下,但当前卡片指向的 c 不删。
+      const result = rotateShadow({ dir, incomingBytes: 100, protectPath: protect, cap: 1000 });
+      expect(result.ok).toBe(true);
+      expect(result.deleted).toBe(2);
+      expect(readdirSync(dir)).toEqual(['c.txt']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
