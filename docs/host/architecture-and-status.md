@@ -85,7 +85,7 @@ flowchart LR
 | `cindy-host` Node 进程与 `GET /health` | 部分 | `apps/host/src/main.ts` 绑定 `127.0.0.1:3456`；`CINDY_HOST_OWNER` 存在时先取 profile Runtime 租约再打开真实 owner 库。实测：持锁进程存在时第二个 Host 报告 `blocked` 且不碰数据库。 |
 | 真实 Maker/Agent Runtime | 未实现 | 当前 `getMaker()` 生产装配仍在 Electron Main；不能把空 Maker、评测 Runner 或 API key adapter 冒充生产 Runtime。需先抽出共享 factory 与单 Runtime 所有权门。 |
 | 现有 session/message SQLite 与历史恢复 | 部分 | Host 执行了全部迁移（临时 profile 实测 145 条 migration / 87 张表），并通过 `OwnerSessionStorage` 创建与重读同一条任务；重启 Host 后 `/health` 仍报告 `sessions: 1`。消息写入、Tool 结果、Desktop 同库并发互斥尚未验证。 |
-| Cindy OAuth 与凭据持久化 | 未实现 | 当前入口仍被 Electron APIs 包围；后续必须复用原 OAuth 及存储。 |
+| Cindy OAuth 与凭据持久化 | 部分 | 凭据层已实现：Host 直接读写 Desktop 现有 `safeStorage` 密文（Chromium OSCrypt v11）。实测双向兼容——Desktop 真实密文可被 Host 解密；Host 写入的密文可被 Electron `safeStorage.decryptString` 解出。OAuth 流程仍未迁出。 |
 | Claude Code / Codex / Pi Harness | 部分 | 二进制就绪查询已抽成 `agent-binaries/binaryStatus.ts`，Desktop 与 Host 共用同一判定；实测 Host `/health` 对三种 Harness 均报告可用。Agent 启动所需的认证适配、代理、目录与 MCP 注入尚未迁出。 |
 | Plugin 执行与状态 | 未实现 | `cindy-brain`/plugin manager 依赖 Main 宿主接口与 Electron IPC；存量 plugin 向下兼容是阻断条件。 |
 | Web / `cindy-web` | 未实现 | 后续接 renderer 现有 UI 与 i18n；不得重写页面/交互。 |
@@ -106,6 +106,15 @@ flowchart LR
 尚未迁移、明确记为 TODO 的 Desktop-only 步骤：数据库瘦身 worker、dev 反射式 drift 修复/nuke、对话框与 renderer 广播、`initializeCodexHistoryPromptState`、对话工作区修复、Orca 悬空 Lead 对账、周期 `PRAGMA optimize`。
 
 `localDb/index.ts` 的 `ensureReady` 与 `startupCore.ts` 目前共享 lease/migration/CJK/vec 原语但保留两处编排；在 Electron 去核心化（阶段 5）前必须收敛为同一实现。
+
+## 凭据存储（OSCrypt）实测结论
+
+- 位置与格式不变：`<userData>/safe-storage/<key>.enc`，内容为 base64 文本，解密后前缀 `v11`。
+- Linux 参数（对真实密文实测）：keyring `application=Cindy`（schema `chrome_libsecret_os_crypt_password_v2`）；key = PBKDF2-SHA1(secret, "saltysalt", 1 轮, 16 字节)；AES-128-CBC；IV 为 16 个空格。
+- 无 Secret Service 时抛 `CREDENTIAL_STORE_UNAVAILABLE`，不回退明文、不静默失败。
+- 新写入使用 0600 与同目录临时文件 + rename 原子替换。
+- 实现：`apps/host/src/credentials/{oscrypt,linux-keyring,store}.mjs`；测试 `store.test.mjs`（9 例）。
+- 未覆盖：macOS Keychain 与 Windows DPAPI 分支；真实登录写入、重启续期、与 Desktop 交替运行的端到端验证。
 
 ## 明确排除的参考实现
 

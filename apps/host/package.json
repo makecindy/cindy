@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node --import tsx src/main.ts",
-    "test": "node --import tsx --test src/*.test.mjs"
+    "test": "node --test \"src/**/*.test.mjs\""
   },
   "devDependencies": {
     "tsx": "^4.19.0"
