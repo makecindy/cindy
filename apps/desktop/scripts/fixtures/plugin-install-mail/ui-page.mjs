@@ -1,6 +1,17 @@
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
+const withMailResizeCheck = check => async (page, ui) => {
+  try {
+    await check(page, ui);
+  } finally {
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() =>
+      requestAnimationFrame(() => setTimeout(resolve, 0)))));
+    const errors = await page.evaluate(() => window.__mailResizeObserverErrors);
+    if (!Array.isArray(errors) || errors.length) throw new Error(`Mail resize delivery failed: ${JSON.stringify(errors)}`);
+  }
+};
+
 export default {
   name: 'plugin-install-mail',
   entry: './fixture.tsx',
@@ -32,7 +43,7 @@ export default {
     'not-ready': { about: 'An unconfigured mail plugin without a pointless retry', viewport: { width: 360, height: 600 } },
     'read-failed': { about: 'A real read failure offers both original URL and retry', viewport: { width: 360, height: 600 } },
   },
-  async check(page, ui) {
+  check: withMailResizeCheck(async (page, ui) => {
     const selected = await page.evaluate(() => window.__uiPage.ctx.case);
     if (selected === 'participant-avatars') {
       const imageData = name => 'data:image/png;base64,' + readFileSync(new URL('../../../resources/' + name, import.meta.url)).toString('base64');
@@ -249,5 +260,5 @@ export default {
       })
       .waitFor();
     await ui.capture('confirmation');
-  },
+  }),
 };

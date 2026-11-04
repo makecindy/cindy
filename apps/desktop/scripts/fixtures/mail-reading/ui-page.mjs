@@ -1,3 +1,14 @@
+const withMailResizeCheck = check => async (page, ui) => {
+  try {
+    await check(page, ui);
+  } finally {
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() =>
+      requestAnimationFrame(() => setTimeout(resolve, 0)))));
+    const errors = await page.evaluate(() => window.__mailResizeObserverErrors);
+    if (!Array.isArray(errors) || errors.length) throw new Error(`Mail resize delivery failed: ${JSON.stringify(errors)}`);
+  }
+};
+
 export default {
   name: 'mail-reading',
   entry: './fixture.tsx',
@@ -9,7 +20,7 @@ export default {
     narrow: { about: 'Sender responsive layout in a narrow reader', viewport: { width: 320, height: 700 } },
     'fixed-width': { about: 'A fixed-width message remains scrollable inside its own document', viewport: { width: 320, height: 400 } },
   },
-  async check(page, ui) {
+  check: withMailResizeCheck(async (page, ui) => {
     await page.locator('iframe[aria-busy="false"]').waitFor();
     const result = await page.evaluate(() => {
       const frame = document.querySelector('iframe'), doc = frame.contentDocument;
@@ -39,5 +50,5 @@ export default {
     if (ui.theme === 'dark' && result.color === 'rgb(0, 0, 0)') throw new Error('Text was not adapted to the dark background');
     if (result.runs || result.heights.some(height => height !== 28)) throw new Error('Source indentation changed the rendered line spacing');
     if (result.padding !== (ui.case === 'narrow' ? '25px' : '55px')) throw new Error('Sender responsive CSS was lost');
-  },
+  }),
 };

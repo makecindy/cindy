@@ -6,6 +6,14 @@ export default {
   viewport: { width: 660, height: 520 },
   real: 'IM defaults settings, real model selector, automatic model resolution and restore action',
   notCovered: 'Live credentials and model discovery; host supplies a catalog and settings writes',
+  stubs: {
+    // Model location selection needs a device identity; authentication remains
+    // synthetic so this page never initializes a real account or credentials.
+    'src/renderer/contexts/AuthContext': { partial: `export const useAuth = () => ({
+      mode: 'local', isAuthenticated: false, dataOwnerId: null,
+      dataOwnerGeneration: 0, deviceId: 'fixture-self', user: null,
+    });` },
+  },
   cases: {
     default: { about: 'Automatic selection shows the actual model' },
     'im-automatic': { about: 'Automatic selection shows the actual model' },

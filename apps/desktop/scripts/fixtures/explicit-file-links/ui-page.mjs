@@ -29,6 +29,10 @@ export default {
     await page.getByTestId('restore-file').click();
     await page.getByRole('link', { name: '下载 PDF', exact: true }).focus();
     await page.keyboard.press('Enter');
-    await page.waitForFunction(() => document.documentElement.dataset.openedFile === '/fixture/report.pdf');
+    // Restored authored files use Cindy's current in-app viewer, never an OS app.
+    await page.waitForFunction(() => document.documentElement.dataset.previewedFile === '/fixture/report.pdf');
+    await page.locator('[data-pdf-page="1"][aria-busy="false"] canvas').waitFor({ state: 'visible' });
+    await page.getByText(await ui.t('chat.markdownRenderer.fileUnavailable'), { exact: true }).waitFor({ state: 'hidden' });
+    await ui.capture('restored-pdf-preview');
   },
 };

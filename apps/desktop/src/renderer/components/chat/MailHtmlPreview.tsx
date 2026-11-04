@@ -89,11 +89,23 @@ function PreviewFrame({ value, images = [], enlarged = false, reading = false, d
   useEffect(() => {
     if (!frame.current || typeof ResizeObserver === 'undefined') return;
     let width = -1;
+    let scheduled: number | undefined;
     const observer = new ResizeObserver(entries => {
       const next = entries[0]?.contentRect.width;
-      if (next !== width) { width = next; fit(); }
+      if (next !== width) {
+        width = next;
+        // Fitting changes the observed iframe's height; leave observer delivery
+        // before writing geometry so the browser does not report a resize loop.
+        if (scheduled === undefined) scheduled = requestAnimationFrame(() => {
+          scheduled = undefined;
+          fit();
+        });
+      }
     }); observer.observe(frame.current);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (scheduled !== undefined) cancelAnimationFrame(scheduled);
+    };
   }, [enlarged, reading]);
   // Hide only the initial load. Synchronized content never hides/remounts it.
   return <iframe ref={frame} title={t('chat.ghostCall.mailPreview')} sandbox="allow-same-origin"

@@ -27,7 +27,7 @@ import {
   useCallback,
   useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { isLightboxCovered } from '@/lib/lightboxLayer';
+import { isLightboxCovered, isLightboxEscapeOwnedByPopup } from '@/lib/lightboxLayer';
 import { Copy, Search, WrapText, ListOrdered, ExternalLink, TriangleAlert } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -269,8 +269,45 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
 
   // F6: Esc key listener
   useEffect(() => {
+    let fullscreen = Boolean(overlayRef.current?.contains(document.fullscreenElement));
+    let exitedFullscreenAt = -Infinity;
+    let handledFullscreenExit = false;
+    const onFullscreenChange = () => {
+      const next = Boolean(overlayRef.current?.contains(document.fullscreenElement));
+      if (fullscreen && !next) exitedFullscreenAt = handledFullscreenExit ? -Infinity : performance.now();
+      fullscreen = next;
+      handledFullscreenExit = false;
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        if (fullscreen) handledFullscreenExit = true;
+        exitedFullscreenAt = -Infinity;
+      }
+    };
+    // Observe before rendered find can consume keydown at window capture. The
+    // document listener keeps its normal priority below find, menus and tips.
+    const observeFullscreenEscape = (event: KeyboardEvent) => {
+      const host = overlayRef.current;
+      const native = document.fullscreenElement;
+      if (event.key === 'Escape' && !event.repeat && !event.isComposing && event.keyCode !== 229 &&
+        host && native instanceof HTMLElement && host.contains(native) &&
+        !isLightboxEscapeOwnedByPopup(native, event.target)) handledFullscreenExit = true;
+    };
     const handler = (e: KeyboardEvent) => {
       if (e.repeat || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
+      const host = overlayRef.current;
+      if (!host || isLightboxCovered(host)) return;
+      if (host.contains(document.fullscreenElement)) return;
+      if (e.key === 'Escape') {
+        if (isLightboxEscapeOwnedByPopup(host, e.target)) return;
+        // Chromium may deliver the exit event before that physical Escape.
+        if (performance.now() - exitedFullscreenAt < 250) {
+          exitedFullscreenAt = -Infinity;
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          return;
+        }
+      }
       if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -288,7 +325,15 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
       }
     };
     document.addEventListener('keydown', handler, true);
-    return () => document.removeEventListener('keydown', handler, true);
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    window.addEventListener('keyup', onKeyUp, true);
+    window.addEventListener('keydown', observeFullscreenEscape, true);
+    return () => {
+      document.removeEventListener('keydown', handler, true);
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
+      window.removeEventListener('keyup', onKeyUp, true);
+      window.removeEventListener('keydown', observeFullscreenEscape, true);
+    };
   }, [handleClose, search]);
 
   // F6: Scroll lock on the message stream's scroll container.

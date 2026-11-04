@@ -15,7 +15,7 @@ vi.mock('@/components/markdown/PlaintextEditor', async () => {
   const { forwardRef, useImperativeHandle } = await import('react');
   return {
     PlaintextEditor: forwardRef(({ initialValue }: { initialValue: string }, ref) => {
-      useImperativeHandle(ref, () => ({ scrollToLine: state.line, search: { clear: vi.fn() } }));
+      useImperativeHandle(ref, () => ({ scrollToLine: state.line, search: { clear: vi.fn(), findAll: vi.fn(() => 0), setActive: vi.fn() } }));
       return <pre>{initialValue}</pre>;
     }),
   };
@@ -103,10 +103,100 @@ it.each(['pending', 'invalid'])('keeps the diagram %s state closable', async (ph
     await vi.runOnlyPendingTimersAsync();
   });
   const button = screen.getByRole('button', { name: i18n.t('chat.lightbox.close') });
-  if (phase === 'pending') fireEvent.keyDown(document.body, { key: 'Escape' });
+  if (phase === 'pending') {
+    // Mount autofocus may open a toolbar tooltip. This case tests the viewer's
+    // own close surface; foreground tooltip ownership is covered separately.
+    act(() => { document.querySelector<HTMLElement>('[data-text-lightbox-overlay]')?.focus(); });
+    expect(screen.queryByRole('tooltip')).toBeNull();
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+  }
   else fireEvent.click(button);
   await act(async () => {
     await vi.advanceTimersByTimeAsync(250);
   });
   expect(close).toHaveBeenCalledOnce();
+});
+
+
+// PR #8022 UI regressions: the real TextLightbox capture listener must yield to
+// a foreground popup/fullscreen surface. Earlier cases covered close buttons,
+// not the event ownership that destroyed a preview while a menu was dismissing.
+it.each(['menu', 'tooltip'] as const)('leaves Escape to a foreground %s', async (kind) => {
+  vi.useFakeTimers();
+  mockFile('preview content');
+  const close = vi.fn();
+  render(<TextLightbox filePath="/preview.txt" onClose={close} />);
+  await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+  const overlay = document.querySelector<HTMLElement>('[data-text-lightbox-overlay]')!;
+  const popup = document.createElement('div');
+  popup.setAttribute('role', kind);
+  popup.id = 'owned-popup';
+  document.body.append(popup);
+  const trigger = screen.getByRole('button', { name: i18n.t('chat.textLightbox.copyAll') });
+  if (kind === 'tooltip') trigger.setAttribute('aria-describedby', popup.id);
+  try {
+    fireEvent.keyDown(kind === 'menu' ? popup : trigger, { key: 'Escape' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    expect(close).not.toHaveBeenCalled();
+    expect(overlay.style.opacity).toBe('1');
+  } finally {
+    trigger.removeAttribute('aria-describedby');
+    popup.remove();
+  }
+  fireEvent.keyDown(document.body, { key: 'Escape' });
+  await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+  expect(close).toHaveBeenCalledOnce();
+});
+
+it.each(['key-first', 'exit-first', 'keyup-before-exit', 'consumer-before-rerender'] as const)('keeps the document while fullscreen owns find and Escape (%s)', async (order) => {
+  vi.useFakeTimers();
+  mockFile('native fullscreen document');
+  const close = vi.fn();
+  const view = render(<TextLightbox filePath="/preview.md" onClose={close} />);
+  await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+  const overlay = document.querySelector<HTMLElement>('[data-text-lightbox-overlay]')!;
+  const player = document.createElement('video');
+  player.tabIndex = 0;
+  overlay.append(player);
+  act(() => { player.focus(); });
+  expect(document.activeElement).toBe(player);
+  let fullscreen: Element | null = player;
+  const original = Object.getOwnPropertyDescriptor(document, 'fullscreenElement');
+  Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => fullscreen });
+  try {
+    fireEvent(document, new Event('fullscreenchange'));
+    fireEvent.keyDown(player, { key: 'f', metaKey: true });
+    expect(screen.queryByRole('searchbox')).toBeNull();
+    expect(screen.queryByText('native fullscreen document')).toBeNull();
+    if (order === 'consumer-before-rerender') {
+      window.addEventListener('keydown', event => event.stopImmediatePropagation(), { capture: true, once: true });
+      view.rerender(<TextLightbox filePath="/preview.md" onClose={() => close()} />);
+      expect(document.activeElement).toBe(player);
+    }
+    if (order === 'exit-first') {
+      fullscreen = null;
+      fireEvent(document, new Event('fullscreenchange'));
+    }
+    if (order === 'keyup-before-exit') {
+      // The rendered-find window listener can consume keydown before the
+      // document listener; the native exit can still arrive after keyup.
+      window.addEventListener('keydown', event => event.stopImmediatePropagation(), { capture: true, once: true });
+    }
+    fireEvent.keyDown(player, { key: 'Escape' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    expect(close).not.toHaveBeenCalled();
+    expect(overlay.style.opacity).toBe('1');
+    if (order === 'keyup-before-exit' || order === 'consumer-before-rerender') fireEvent.keyUp(player, { key: 'Escape' });
+    if (order !== 'exit-first') {
+      fullscreen = null;
+      fireEvent(document, new Event('fullscreenchange'));
+    }
+    if (order !== 'keyup-before-exit' && order !== 'consumer-before-rerender') fireEvent.keyUp(player, { key: 'Escape' });
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    expect(close).toHaveBeenCalledOnce();
+  } finally {
+    if (original) Object.defineProperty(document, 'fullscreenElement', original);
+    else Reflect.deleteProperty(document, 'fullscreenElement');
+  }
 });

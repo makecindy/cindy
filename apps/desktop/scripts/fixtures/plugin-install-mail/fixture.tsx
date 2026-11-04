@@ -7,6 +7,14 @@ import { MailConversationView } from '../../../src/renderer/features/right-sideb
 import { useState } from 'react';
 import previewImage from '../../../resources/icon.png';
 
+// Browser-generated ResizeObserver ErrorEvents are not reliably forwarded as
+// Playwright pageerror after readiness. Keep a page-owned regression receipt.
+const mailResizeObserverErrors: string[] = [];
+Object.assign(window, { __mailResizeObserverErrors: mailResizeObserverErrors });
+window.addEventListener('error', event => {
+  if (event.message.includes('ResizeObserver loop')) mailResizeObserverErrors.push(event.message);
+});
+
 function MailAvatarsFixture() {
   const [opened, setOpened] = useState(false);
   const message = { accountId: 'fixture-account', messageId: 'fixture-message',

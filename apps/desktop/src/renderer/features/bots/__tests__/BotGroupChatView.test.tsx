@@ -987,6 +987,16 @@ describe('BotGroupChatView', () => {
         expect(preview.contains(document.activeElement)).toBe(true);
       } else expect(preview.contains(document.activeElement)).toBe(true);
     }
+    const tooltip = document.querySelector('[role="tooltip"]');
+    if (kind !== 'image' && tooltip && preview.querySelector(`[aria-describedby~="${tooltip.id}"]`)) {
+      // A focused/hovered header control can still own the first Escape.
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(document.contains(tooltip)).toBe(false));
+      expect(document.contains(preview)).toBe(true);
+      expect((preview as HTMLElement).style.opacity).toBe('1');
+      expect(screen.getByRole('complementary')).toBe(panel);
+      expect((within(panel).getByRole('textbox') as HTMLTextAreaElement).value).toBe('Unsent thread reply');
+    }
     await user.keyboard('{Escape}');
     expect(screen.getByRole('complementary')).toBe(panel);
     expect((within(panel).getByRole('textbox') as HTMLTextAreaElement).value).toBe('Unsent thread reply');

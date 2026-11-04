@@ -37,7 +37,7 @@ export default {
     'loading-editor': { about: 'The foreground document owns find and Escape before its file read completes' },
     'focus-restore': { about: 'Closing find restores the document toolbar opener for keyboard navigation' },
     'ime-escape': { about: 'An IME-cancelling Escape and its repeats keep search open until a new press' },
-    'outside-focus': { about: 'Escape closes find first even after Tab reaches the backdrop or covered page' },
+    'outside-focus': { about: 'Escape closes find from the preview root, while covered-page focus stays inside the modal' },
     'background-project-search': { about: 'The covered project-search sidebar retains its mode and query until the document closes' },
     'background-ask-voice': { about: 'Preview Escape preserves question-card dictation and its answer draft' },
     'background-voice': { about: 'Preview Escape leaves the real composer voice-cancel handler untouched until the document closes' },
@@ -269,12 +269,13 @@ export default {
     await page.keyboard.press('Shift+Enter');
     await card.getByText('1/2', { exact: true }).waitFor();
     if (ui.case === 'outside-focus') {
-      for (const target of [page.locator('[data-text-lightbox-overlay] > [data-preview-scrim]'), page.getByTestId('open-preview')]) {
+      const overlay = page.locator('[data-text-lightbox-overlay]');
+      for (const target of [overlay, page.getByTestId('open-preview')]) {
         await input.focus();
-        for (let tab = 0; tab < 20 && !await target.evaluate(el => document.activeElement === el); tab += 1) {
-          await page.keyboard.press('Tab');
-        }
-        assert.equal(await target.evaluate(el => document.activeElement === el), true);
+        await target.focus();
+        // The modal intentionally traps focus; its aria-hidden scrim is not a
+        // Tab stop, and covered controls must not receive keyboard focus.
+        assert.equal(await overlay.evaluate(el => el.contains(document.activeElement)), true);
         await page.keyboard.press('Escape');
         await input.waitFor({ state: 'detached' });
         assert.equal(await card.count(), 1);
