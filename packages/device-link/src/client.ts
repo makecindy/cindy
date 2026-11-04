@@ -73,7 +73,7 @@ import {
 import { PLUGIN_SYNC_CHANNEL } from './pluginSyncProtocol.js';
 import { RELAY_AUTH_CHANNEL, relayAuthHandshake } from './selfHostedRelayAuth.js';
 import { DIRECT_LINK_CAPABILITY, DIRECT_LINK_SIGNAL, PROVIDER_SHARE_DIRECT_CAPABILITY, DirectLinkNegotiator, parseDirectSignal,
-  type DirectRuntime } from './directNegotiation.js';
+  type DirectRuntime, type DirectDiagnostic, type DirectDiagnosticReason } from './directNegotiation.js';
 import { MAKER_EVENT_BATCH_CHANNEL } from './topics.js';
 import {
   DIRECT_PATH_HIGH_WATER_BYTES,
@@ -284,6 +284,8 @@ interface RelayChallengeQueue {
 export interface DeviceLinkClientOptions {
   /** Host WebRTC adapter. Both peers must opt in; unavailable/old hosts keep using relay. */
   directRuntime?: DirectRuntime;
+  /** Host executions/outbox can outlive transport admission; keep their direct peer alive. */
+  isPeerBusy?(peer: string): boolean;
   /** relay 的完整 ws(s) URL,如 wss://host/api/device-link/ws */
   getWsUrl(): string;
   /** 每次(重)连前取新鲜 token;null = 当前无登录态,跳过本轮并按退避重试 */
@@ -929,6 +931,10 @@ export class DeviceLinkClient {
    */
   private readonly directPaths = new Map<string, DeviceLinkDirectChannel>();
   private readonly directPeerSupport = new Set<string>();
+  /** Bounded anonymous diagnostic identities, never credentials, SDP or addresses. */
+  private readonly directDiagnostics = new Map<string, {
+    logged: Partial<Record<DirectDiagnosticReason, number>>; hash: Promise<string>;
+  }>();
   /** Relay-authenticated provider-share path leases never survive process/account replacement. */
   private readonly providerShareDirectLeases = new Map<string, {
     wallUntil: number; monotonicUntil: number; timer: ReturnType<typeof setTimeout>;
@@ -944,6 +950,13 @@ export class DeviceLinkClient {
       runtime: opts.directRuntime,
       identity: () => this.selfDeviceId,
       peerDeviceId: (id) => parseProviderSharePeer(id)?.deviceId ?? (isScopedPeer(id) ? null : id),
+      kind: (id) => isProviderSharePeer(id) ? 'share' : 'device',
+      isBusy: (id) => {
+        const peer = this.peerTransport.get(id);
+        return this.opts.isPeerBusy?.(id) === true || !!peer?.pending.size || [...this.pending.values()].some(p => p.dst === id)
+          || !!peer && [...peer.receive.values()].some(s => s.deliveringSeq !== null || s.bufferedBytes > 0);
+      },
+      diagnostic: (id, event) => this.logDirectDiagnostic(id, event),
       canSignal: (peer) => this.status === 'online'
         && (!isProviderSharePeer(peer) || this.hasServerCapability(PROVIDER_SHARE_DIRECT_SIGNAL_CAPABILITY)),
       streams: (id) => {
@@ -985,6 +998,31 @@ export class DeviceLinkClient {
       warn: () => {},
       error: () => {},
     };
+  }
+
+  private logDirectDiagnostic(peerId: string, event: DirectDiagnostic): void {
+    const now = Date.now();
+    let entry = this.directDiagnostics.get(peerId);
+    const previous = entry?.logged[event.reason];
+    if (previous !== undefined && now - previous < 60_000) return;
+    if (!entry) {
+      if (this.directDiagnostics.size >= 256) this.directDiagnostics.delete(this.directDiagnostics.keys().next().value!);
+      // WebCrypto is optional in older Mobile hosts. Never fall back to logging an ID.
+      const hash = Promise.resolve().then(async () => {
+        if (!globalThis.crypto?.subtle) return 'unavailable';
+        const bytes = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(`cindy:direct-peer-v1:${peerId}`));
+        return [...new Uint8Array(bytes)].map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+      }).catch(() => 'unavailable');
+      entry = { logged: {}, hash };
+      this.directDiagnostics.set(peerId, entry);
+    }
+    entry.logged[event.reason] = now;
+    // Only fixed metadata crosses the logging boundary. Hashing never delays routing.
+    void entry.hash.then(hash => {
+      this.log.info(`direct transport reason=${event.reason} peerHash=${hash} kind=${event.kind}`
+        + ` active=${event.active} limit=${event.limit} queued=${event.queued}`
+        + ` device=${event.device} share=${event.share} reserved=${event.reserved}`);
+    }).catch(() => { /* Logging is independent of transport scheduling. */ });
   }
 
   // ─── 生命周期 ───────────────────────────────────────────────────────────────
@@ -1209,6 +1247,7 @@ export class DeviceLinkClient {
     this.inboundInvokeTransfer.clear();
     if (this.stopped) return;
     this.stopped = true;
+    this.directDiagnostics.clear();
     this.clearTimers();
     this.handshakeTimeoutStreak = 0;
     this.failAllPending(new DeviceLinkError('NOT_CONNECTED', 'client stopped'));
@@ -3382,6 +3421,7 @@ export class DeviceLinkClient {
       }
       return true;
     }
+    if (env.src) this.directNegotiator?.activity(env.src);
     if (env.kind === 'invoke' && env.src && env.id && !isScopedPeer(env.src)) {
       this.inboundInvokeTransfer.record(env.src, env.id, env.payload);
     }
@@ -3489,6 +3529,7 @@ export class DeviceLinkClient {
   }
 
   private sendPeerEnvelope(env: Envelope, allowClosedLegacyResponse = false): boolean {
+    if (env.dst) this.directNegotiator?.activity(env.dst);
     if (!env.dst || !isReliableKind(env.kind)) {
       this.sendBestEffortRoutedEnvelope(env);
       return false;

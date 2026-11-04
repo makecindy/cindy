@@ -383,3 +383,15 @@ pnpm --filter desktop exec vitest run scripts/installer-directory-messages.test.
 还需在普通权限 Windows 环境走查：默认目录、自定义受保护目录、允许／取消授权、使用
 另一管理员账号、旧版覆盖安装，以及静默安装失败时旧版仍在。原生对话框的 Light／Dark
 外观由 Windows 提供，自动测试不代表两种模式已完成目检。
+
+远程桌面 helper 的 CRT 链接验收另运行：
+
+```bash
+node apps/desktop/scripts/check-windows-remote-desktop-runtime.mjs
+```
+
+这是显式 Windows x64 原生集成验收：编译两个 EXE 与 `.node`，检查 PE 依赖，对照
+动态／静态链接在临时目录中遇到不可用 VC++ DLL 时的结果，并以随机测试产品身份实跑
+生产 NSIS 钩子的当前用户安装、覆盖安装和卸载。它不改系统 DLL、不安装服务、不操作
+正式 Cindy 的安装。该故障注入不能代替干净 Windows 虚拟机、「所有用户」安装或已注册
+远程桌面服务的真实验收；编译与安装器子进程不进入默认单测。
