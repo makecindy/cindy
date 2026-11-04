@@ -1151,7 +1151,7 @@ function makeRelayClient(
   relay: MemoryRelay,
   deviceId: string,
   timing?: ConstructorParameters<typeof DeviceLinkClient>[0]['timing'],
-  extra?: Pick<ConstructorParameters<typeof DeviceLinkClient>[0], 'transferCodec' | 'invokeMetrics' | 'directRuntime' | 'frameAuth'>
+  extra?: Pick<ConstructorParameters<typeof DeviceLinkClient>[0], 'transferCodec' | 'invokeMetrics' | 'directRuntime' | 'frameAuth' | 'logger'>
     & { remoteControlEnabled?: boolean },
 ): DeviceLinkClient {
   return new DeviceLinkClient({
@@ -10946,7 +10946,7 @@ const reliableKinds = (envs: readonly Envelope[] | undefined, kind: Envelope['ki
 class MemoryDirectRuntime {
   readonly sessions = new Map<string, Array<{ events: DirectRuntimeEvents; closed: boolean; drop: boolean }>>();
   frames = 0;
-  createRuntime(): DirectRuntime {
+  createRuntime(options?: Parameters<typeof createDirectRuntimeBridge>[0]): DirectRuntime {
     const native: DirectRuntime = { create: (id, events) => {
       const row = { events, closed: false, drop: false };
       const pair = this.sessions.get(id) ?? [];
@@ -10965,7 +10965,7 @@ class MemoryDirectRuntime {
         close: () => pair.forEach(p => { if (!p.closed) { p.closed = true; p.events.closed(); } }),
       };
     } };
-    const bridge = createDirectRuntimeBridge();
+    const bridge = createDirectRuntimeBridge(options);
     const host = createDirectRuntimeHost(native, event => bridge.receive(event));
     const detach = bridge.attach(command => { void host.command(command); });
     return { ...bridge.runtime, suspend: () => { detach(); host.dispose(); } };
@@ -10973,6 +10973,46 @@ class MemoryDirectRuntime {
 }
 
 describe('automatic LAN connection through platform bridges', () => {
+  // Unit, capacity recovery contract: a new peer keeps executing on relay while
+  // full, then upgrades without reopening its control link or the relay socket.
+  // The old tests cover failed RTC sessions, not a rejected capacity admission.
+  it('serves a full peer over relay then upgrades it when a slot is released, with anonymous reasons', async () => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay(true), rtc = new MemoryDirectRuntime(), logs: string[] = [];
+    const sockets = vi.spyOn(relay, 'makeWebSocket');
+    const host = makeRelayClient(relay, 'a-host', undefined, { directRuntime: rtc.createRuntime({ maxPeers: 1 }),
+      logger: { debug() {}, info: (...args) => logs.push(args.join(' ')), warn() {}, error() {} } });
+    const first = makeRelayClient(relay, 'b-first', undefined, { directRuntime: rtc.createRuntime() });
+    const second = makeRelayClient(relay, 'c-second', undefined, { directRuntime: rtc.createRuntime() });
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+    let executions = 0;
+    host.onFrame(env => {
+      if (env.kind === 'link-open') host.sendLinkAccept(env.src!, env.id!, { appVersion: '1', allowlistHash: 'hash' });
+      if (env.kind === 'invoke') { executions++; host.sendInvokeResult(env.src!, env.id!, { ok: true, result: 'fixture-result' }); }
+    });
+    try {
+      host.start(); first.start(); second.start(); await pump();
+      for (const client of [first, second]) {
+        const opening = client.openLink('a-host', { controllerName: 'Controller', protocolVersion: 1, appVersion: '1' });
+        await pump(); await opening;
+      }
+      expect(first.getPeerPath('a-host')).toBe('direct');
+      expect(second.getPeerPath('a-host')).toBe('relay');
+      const result = second.invoke('a-host', { channel: 'maker:remote-agent:v1', args: ['fixture'] });
+      await pump(); expect(await result).toEqual({ ok: true, result: 'fixture-result' });
+      const socketCount = sockets.mock.calls.length;
+      host.closeLink('b-first', 'user', 'inbound'); await pump();
+      expect(second.getPeerPath('a-host')).toBe('direct');
+      expect(second.isLinkReady('a-host')).toBe(true);
+      expect(sockets).toHaveBeenCalledTimes(socketCount);
+      expect(executions).toBe(1);
+      // WebCrypto runs outside fake timers; await this diagnostic's actual hash.
+      for (let i = 0; i < 30 && !logs.some(s => s.includes('reason=capacity-full')); i++) await new Promise(r => setImmediate(r));
+      const diagnostic = logs.find(s => s.includes('reason=capacity-full'));
+      expect(diagnostic).toMatch(/peerHash=[0-9a-f]{16} kind=device active=1 limit=1 queued=1/);
+      expect(diagnostic).not.toContain('c-second');
+    } finally { host.stop(); first.stop(); second.stop(); vi.useRealTimers(); }
+  });
   // Unit, provider-sharing-direct-execution.md authorization contract: a renewed
   // scoped link must survive the former deadline on the same RTC session. The
   // relay-restart cases below do not advance through a successful lease renewal.

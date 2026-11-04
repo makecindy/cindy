@@ -26,7 +26,10 @@ import path from 'node:path';
 
 import type { RemoteAgentKind } from '@cindy/device-link';
 
+import { isSkillDisabled } from '@cindy/maker-core';
+
 import { isShareCredentialPath } from '../credentials';
+import { listManagedSkillFiles, managedSkillDigest } from '../managedSkillDigest';
 import {
   ANCESTOR_INSTRUCTION_FILES,
   ANCESTOR_MARKER_NAMES,
@@ -34,7 +37,15 @@ import {
   PROJECT_INSTRUCTION_DIRECTORIES as DIRECTORIES,
   PROJECT_INSTRUCTION_FILES as TOP_LEVEL_FILES,
   PROJECT_SETTINGS_FILES as SETTINGS_FILES,
+  MAX_MANAGED_SKILL_BYTES,
+  MAX_MANAGED_SKILL_FILES,
+  MAX_MANAGED_SKILLS,
+  REMOTE_AGENT_SYNC_FILE_BYTES,
+  REMOTE_AGENT_SYNC_TOTAL_BYTES,
   isSafeProjectFilePath,
+  managedSkillDir,
+  managedSkillPluginLayout,
+  type RemoteAgentWireManagedSkill,
   type RemoteAgentWireAncestorFile,
   type RemoteAgentWireAncestorMarkers,
   type RemoteAgentWireFile,
@@ -42,8 +53,8 @@ import {
   type RemoteAgentWirePersonal,
 } from '../wire';
 const MAX_FILES = 512;
-const MAX_FILE_BYTES = 512 * 1024;
-const MAX_TOTAL_BYTES = 4 * 1024 * 1024;
+const MAX_FILE_BYTES = REMOTE_AGENT_SYNC_FILE_BYTES;
+const MAX_TOTAL_BYTES = REMOTE_AGENT_SYNC_TOTAL_BYTES;
 const MAX_DEPTH = 6;
 /** 扫描时最多看这么多个文件：链接指向很大的目录时不一直扫下去。 */
 const MAX_CANDIDATES = 8 * MAX_FILES;
@@ -59,21 +70,24 @@ interface Budget {
   files: number;
   bytes: number;
   skipCredentials: boolean;
+  maxFiles: number;
+  maxBytes: number;
 }
 
-function newBudget(options: CollectOptions = {}): Budget {
-  return { files: 0, bytes: 0, skipCredentials: options.skipCredentials === true };
+function newBudget(options: CollectOptions = {}, maxFiles = MAX_FILES, maxBytes = MAX_TOTAL_BYTES): Budget {
+  return { files: 0, bytes: 0, skipCredentials: options.skipCredentials === true, maxFiles, maxBytes };
 }
+
 
 /**
  * 读一个文件(跟随链接)。超出数量与大小上限、不是普通文件，或受邀者任务里的凭证类文件返回 null。
  * `sanitized`：内容随后只保留权限规则(项目设置)，不按凭证类跳过。
  */
 async function readLimited(file: string, budget: Budget, sanitized = false): Promise<Buffer | null> {
-  if (budget.files >= MAX_FILES) return null;
+  if (budget.files >= budget.maxFiles) return null;
   try {
     const stat = await fs.stat(file);
-    if (!stat.isFile() || stat.size > MAX_FILE_BYTES || budget.bytes + stat.size > MAX_TOTAL_BYTES) return null;
+    if (!stat.isFile() || stat.size > MAX_FILE_BYTES || budget.bytes + stat.size > budget.maxBytes) return null;
     if (budget.skipCredentials && !sanitized
       && (isShareCredentialPath(file) || isShareCredentialPath(await fs.realpath(file)))) return null;
     const data = await fs.readFile(file);
@@ -282,8 +296,67 @@ function permissionRules(value: unknown): string[] {
 
 export interface CollectedPersonalConfig {
   personal: RemoteAgentWirePersonal;
-  /** 同步过去的个人 Skill / 子代理 / 命令 / 规则：影子目录里的相对路径 → 你这台的真实位置。 */
-  roots: Array<{ relative: string; local: string }>;
+  /**
+   * 同步过去的个人 Skill / 子代理 / 命令 / 规则：影子目录里的相对路径 → 你这台的真实位置。
+   * `managed`：Cindy 托管 Skill，重连时映射以新的为准(见 ExecutorWorkspace.addAliases)。
+   */
+  roots: Array<{ relative: string; local: string; managed?: true }>;
+}
+
+/** 本次要带过去的 Cindy 托管 Skill(已按本机启用状态与伙伴授权过滤)。 */
+export interface LocalManagedSkill {
+  /** Claude 命令名 `<插件>:<Skill>`。 */
+  command: string;
+  /** 本机 Skill 目录(SKILL.md 所在目录)。 */
+  dir: string;
+}
+
+export interface CollectPersonalOptions extends CollectOptions {
+  env?: NodeJS.ProcessEnv;
+  home?: string;
+  /** 本机停用的 Skill：个人 Skill 里停用的不带过去。 */
+  disabledSkillPaths?: readonly string[];
+  /** 提供时(含空数组)由本机决定托管 Skill，对方不再加载它自己的；缺省时对方沿用原规则。 */
+  managedSkills?: readonly LocalManagedSkill[];
+  /**
+   * 对方声明的 `caps.managedSkills.digests`(新运行端)：托管 Skill 用单独额度放进 `managedFiles`，与对方指纹
+   * 相同的只报名字。缺省(旧运行端)时与个人配置共用额度、放进 `files`。
+   */
+  agentDigests?: Readonly<Record<string, string>>;
+}
+
+/**
+ * 一个托管 Skill 要么整个带过去，要么不带：文件清单与指纹用同一份(`listManagedSkillFiles`)，所以带过去的
+ * 与指纹复用时对方那份范围一致。清单超出上限、有单个超过 512 KB 的文件、受邀者任务里的凭证类文件、读不到的
+ * 文件、放不下额度，都整个跳过，不留半个 Skill。
+ */
+async function addManagedSkill(
+  skill: LocalManagedSkill,
+  relative: string,
+  budget: Budget,
+  out: RemoteAgentWireFile[],
+): Promise<boolean> {
+  const list = await listManagedSkillFiles(skill.dir);
+  if (!list?.some((file) => file.relative === 'SKILL.md')) return false;
+  let bytes = 0;
+  for (const file of list) {
+    if (file.size > MAX_FILE_BYTES) return false;
+    bytes += file.size;
+  }
+  if (budget.files + list.length > budget.maxFiles || budget.bytes + bytes > budget.maxBytes) return false;
+  const read: RemoteAgentWireFile[] = [];
+  try {
+    for (const file of list) {
+      if (budget.skipCredentials && (isShareCredentialPath(file.local) || isShareCredentialPath(await fs.realpath(file.local)))) return false;
+      read.push({ path: `${relative}/${file.relative}`, data: (await fs.readFile(file.local)).toString('base64') });
+    }
+  } catch {
+    return false;
+  }
+  budget.files += read.length;
+  budget.bytes += bytes;
+  out.push(...read);
+  return true;
 }
 
 /**
@@ -295,7 +368,7 @@ export interface CollectedPersonalConfig {
 export async function collectPersonalConfig(
   kind: RemoteAgentKind,
   projectFiles: readonly RemoteAgentWireFile[],
-  options: CollectOptions & { env?: NodeJS.ProcessEnv; home?: string } = {},
+  options: CollectPersonalOptions = {},
 ): Promise<CollectedPersonalConfig> {
   const env = options.env ?? process.env;
   const home = options.home ?? os.homedir();
@@ -322,6 +395,9 @@ export async function collectPersonalConfig(
       } catch {
         continue;
       }
+      // 本机停用的个人 Skill 不带过去(与本机任务一致)。
+      if (root.skills && options.disabledSkillPaths?.length
+        && isSkillDisabled(stat.isDirectory() ? path.join(local, 'SKILL.md') : local, options.disabledSkillPaths)) continue;
       if (stat.isDirectory()) await scan(root, item.name, 1, candidates);
       else if (stat.isFile()) candidates.push({ path: relative, local, entry: isEntry(root.skills, item.name) });
       else continue;
@@ -362,8 +438,42 @@ export async function collectPersonalConfig(
   }
   await readCandidates(candidates, budget, personal.files);
   const synced = new Set(personal.files.map((file) => file.path));
-  const roots = entries.filter(({ relative }) => synced.has(relative)
+  const roots: CollectedPersonalConfig['roots'] = entries.filter(({ relative }) => synced.has(relative)
     || personal.files.some((file) => file.path.startsWith(`${relative}/`)));
+  if (options.managedSkills) {
+    personal.managedSkills = [];
+    const agentDigests = options.agentDigests;
+    // 新运行端：托管 Skill 单独额度。旧运行端：个人配置先占，托管 Skill 用剩下的(收到超过上限的文件会拒绝打开)。
+    const managedBudget = agentDigests ? newBudget(options, MAX_MANAGED_SKILL_FILES, MAX_MANAGED_SKILL_BYTES) : budget;
+    const managedFiles: RemoteAgentWireFile[] = agentDigests ? [] : personal.files;
+    const taken = new Set(roots.map(({ relative }) => relative));
+    for (const skill of options.managedSkills) {
+      // 条目数不能超过线上上限，否则接收方拒绝整个打开。
+      if (personal.managedSkills.length >= MAX_MANAGED_SKILLS) break;
+      // 托管 Skill 在本机是插件命名空间里的 `cindy:pr`，与项目或个人的 `cindy-pr` 是两个不同的命令：暂存目录被占用时
+      // 换成带哈希的目录共存，不丢掉任何一边。
+      let relative = managedSkillDir(kind, skill.command);
+      if (relative && (taken.has(relative) || projectEntries.has(relative))) relative = managedSkillDir(kind, skill.command, true);
+      if (!relative || taken.has(relative) || projectEntries.has(relative)) continue;
+      let entry: RemoteAgentWireManagedSkill;
+      const digest = agentDigests ? await managedSkillDigest(skill.dir) : null;
+      if (digest && agentDigests?.[skill.command] === digest) {
+        // 对方有一模一样的一份：只报名字，对方复制自己那份。
+        entry = { command: skill.command, dir: relative, digest, reuse: true };
+      } else if (await addManagedSkill(skill, relative, managedBudget, managedFiles)) {
+        entry = { command: skill.command, dir: relative, ...(digest ? { digest } : {}) };
+      } else {
+        continue;
+      }
+      taken.add(relative);
+      personal.managedSkills.push(entry);
+      roots.push({ relative, local: skill.dir, managed: true });
+      // 新运行端把 Claude Code 的托管 Skill 挪到插件目录：那里的路径同样对应回你这台的 Skill 目录。
+      const plugin = kind === 'claude-code' ? managedSkillPluginLayout(skill.command) : null;
+      if (plugin) roots.push({ relative: plugin.dir, local: skill.dir, managed: true });
+    }
+    if (agentDigests && managedFiles.length) personal.managedFiles = managedFiles;
+  }
   return { personal, roots };
 }
 

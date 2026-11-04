@@ -20,6 +20,7 @@ import {
   PanelRight,
   Radio,
   Shield,
+  Smartphone,
   Sparkles,
   Terminal,
   Wrench,
@@ -60,6 +61,7 @@ const icons = {
   preview: AppWindow,
   skill: GraduationCap,
   workspace: FolderPlus,
+  "live-screen": Smartphone,
 };
 
 /** Host owns the copy and permission meaning. Older Hosts retain a neutral icon. */

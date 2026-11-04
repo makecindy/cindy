@@ -1,6 +1,7 @@
 import path from 'node:path';
+import fs from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readDesktopInputPermission } from '../inputHost';
+import { readDesktopInputPermission, resolveDesktopInputBinary } from '../inputHost';
 import { readLinuxDesktopInputSupport } from '../linuxInput';
 
 const mocks = vi.hoisted(() => ({
@@ -29,6 +30,7 @@ vi.mock('node:fs/promises', () => ({
     mkdtemp: vi.fn(async () => '/fixture/compile'),
     writeFile: vi.fn(),
     rm: vi.fn(),
+    copyFile: vi.fn(),
     rename: vi.fn(),
   },
 }));
@@ -105,6 +107,46 @@ describe('desktop input permission detection', () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
     expect(await readDesktopInputPermission()).toBe('notRequired');
     expect(mocks.exec).not.toHaveBeenCalled();
+  });
+
+  // #8571: resolveDesktopInputBinary must rebuild a cached Windows helper when
+  // CRT settings change and pass those settings to Cargo. Existing permission
+  // probes never enter the Windows source build. Minimal input: unchanged Rust
+  // sources and an existing binary, with only config.toml changed. Unit tier:
+  // in-memory filesystem/compiler; real native loading has explicit integration coverage.
+  it('reuses a Windows input build only while its CRT configuration is unchanged', async () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    const config = path.join(
+      mocks.app.getAppPath(),
+      'native',
+      'remote-desktop',
+      '.cargo',
+      'config.toml',
+    );
+    let settings = 'first CRT configuration';
+    const cached = new Set<string>();
+    vi.spyOn(fs, 'readFile').mockImplementation(async (file) =>
+      String(file) === config ? settings : 'fixture source',
+    );
+    mocks.access.mockImplementation(async (file) => {
+      if (!cached.has(String(file))) throw new Error('ENOENT');
+    });
+    vi.spyOn(fs, 'rename').mockImplementation(async (_source, destination) => {
+      cached.add(String(destination));
+    });
+
+    const first = await resolveDesktopInputBinary();
+    expect(await resolveDesktopInputBinary()).toBe(first);
+    expect(mocks.exec).toHaveBeenCalledTimes(1);
+
+    settings = 'updated CRT configuration';
+    expect(await resolveDesktopInputBinary()).not.toBe(first);
+    expect(mocks.exec).toHaveBeenCalledTimes(2);
+    expect(mocks.exec).toHaveBeenLastCalledWith(
+      'cargo',
+      expect.arrayContaining(['--config', config]),
+      { timeout: 180_000 },
+    );
   });
   // Capability must come from the authenticated helper, not just a DISPLAY variable.
   it('probes XTest without granting control to missing helpers or XWayland', async () => {
