@@ -1,6 +1,9 @@
 import { TAB_LABEL_KEY } from '@/lib/tabLabels';
 import { AGENT_ISLAND_MASCOT_SKINS } from '../../../shared/agentIsland';
-import { defineSettings, type SettingsSearchModule } from './settingsSearchTypes';
+import { defineSettings, type SettingsSearchContext, type SettingsSearchModule } from './settingsSearchTypes';
+
+const areIslandControlsVisible = ({ agentIsland }: SettingsSearchContext) =>
+  agentIsland?.supported === true && agentIsland.enabled;
 
 /** Static search metadata owned by this settings module; no component mounting or IPC. */
 export const agentIslandSettings = defineSettings({
@@ -12,6 +15,7 @@ export const agentIslandSettings = defineSettings({
     sectionKey: 'settings.sections.agentIsland',
   },
   enableLabel: {
+    isVisible: ({ agentIsland }) => agentIsland?.supported === true,
     id: 'settings.agentIsland.enableLabel',
     fallbackTargetId: 'settings-panel-agent-island',
     tab: 'agent-island',
@@ -21,6 +25,7 @@ export const agentIslandSettings = defineSettings({
     descriptionKey: 'settings.agentIsland.enableHint',
   },
   displayLabel: {
+    isVisible: areIslandControlsVisible,
     id: 'settings.agentIsland.displayLabel',
     fallbackTargetId: 'settings-panel-agent-island',
     tab: 'agent-island',
@@ -30,6 +35,7 @@ export const agentIslandSettings = defineSettings({
     descriptionKey: 'settings.agentIsland.displayHint',
   },
   skinLabel: {
+    isVisible: areIslandControlsVisible,
     id: 'settings.agentIsland.skinLabel',
     fallbackTargetId: 'settings-panel-agent-island',
     tab: 'agent-island',
@@ -44,6 +50,7 @@ export const agentIslandSettings = defineSettings({
     })),
   },
   soundLabel: {
+    isVisible: areIslandControlsVisible,
     id: 'settings.agentIsland.soundLabel',
     fallbackTargetId: 'settings-panel-agent-island',
     tab: 'agent-island',

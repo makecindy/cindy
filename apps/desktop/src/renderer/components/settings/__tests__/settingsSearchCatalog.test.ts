@@ -149,19 +149,30 @@ describe('settings discoverability regressions', () => {
   // Unit regression (PR #8481): generic setting queries miss the mascot choices
   // rendered by AgentIslandSection. Real translated names/descriptions must locate
   // the skin selector on macOS, and must not reveal a hidden settings tab.
-  it('finds visible mascot choices by their names and descriptions', () => {
-    const context = { ...searchContext, platform: 'darwin' };
+  it.each([
+    { supported: true, enabled: true },
+    { supported: true, enabled: false },
+    { supported: false, enabled: true },
+    { supported: false, enabled: false },
+  ])('finds mascot choices only when their controls are mounted: %j', (agentIsland) => {
+    const context = { ...searchContext, platform: 'darwin', agentIsland };
     const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, context);
     const hiddenDocuments = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS.filter((tab) => tab !== 'agent-island'), context);
     for (const lng of ['zh-CN', 'en']) {
       for (const field of ['name', 'description']) {
         const query = searchI18n.t(`settings.agentIsland.skins.whitesnow.${field}`, { lng });
-        expect(searchSettings(documents, query).find(({ entry }) => entry.id === 'settings.agentIsland.skinLabel')?.entry.targetId)
-          .toBe('settings-search-settings-agentIsland-skinLabel');
+        const target = searchSettings(documents, query).find(({ entry }) => entry.id === 'settings.agentIsland.skinLabel')?.entry.targetId;
+        expect(target).toBe(agentIsland.supported && agentIsland.enabled
+          ? 'settings-search-settings-agentIsland-skinLabel' : undefined);
         expect(searchSettings(hiddenDocuments, query).map(({ entry }) => entry.id))
           .not.toContain('settings.agentIsland.skinLabel');
       }
     }
+    for (const field of ['displayLabel', 'soundLabel']) {
+      expect(documents.some(({ entry }) => entry.id === `settings.agentIsland.${field}`))
+        .toBe(agentIsland.supported && agentIsland.enabled);
+    }
+    expect(documents.some(({ entry }) => entry.id === 'settings.agentIsland.enableLabel')).toBe(agentIsland.supported);
   });
 
   // Unit regression (PR #8481): option descriptions previously ignored local mode.

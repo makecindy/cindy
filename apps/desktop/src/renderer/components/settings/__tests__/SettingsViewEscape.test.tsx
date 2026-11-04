@@ -10,11 +10,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DiffPanelShell } from '@/components/diff-panel/DiffPanelShell';
 import { SettingsView } from '../SettingsView';
 import type { useVoiceInputModelSelection } from '@/hooks/useVoiceInputModelSelection';
+import { setAgentIslandEnabled } from '@/hooks/useAgentIslandSettings';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => ({
     'settings.voiceInput.serviceSource.customAsr.websocketUrl.label': 'WebSocket URL',
     'settings.voiceInput.refinement.instructions.label': 'Refinement instructions',
+    'settings.agentIsland.skins.whitesnow.name': 'Apple Girl',
   }[key] ?? key) }),
 }));
 vi.mock('@/contexts/AuthContext', () => ({
@@ -130,7 +132,8 @@ beforeEach(() => {
     observe() {}
     disconnect() {}
   });
-  vi.stubGlobal('electronAPI', { platform: 'darwin', appVersion: '1.0.0', voiceInput: {
+  vi.stubGlobal('electronAPI', { platform: 'darwin', osRelease: '23.0.0', appVersion: '1.0.0',
+    agentIsland: { setEnabled: vi.fn(async () => ({ ok: true })) }, voiceInput: {
     getModelSelection: vi.fn(async () => ({ selection: { serviceMode: 'cindy', asrProvider: 'openai' } })),
     onDataChanged: () => () => {},
   } });
@@ -139,10 +142,27 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  localStorage.clear();
   vi.unstubAllGlobals();
 });
 
 describe('SettingsView Escape', () => {
+  // Unit regression (#8481): the real preference setter must update search before
+  // opening Agent Island, without a native side effect just from searching.
+  it('updates mascot search results when Agent Island is enabled and disabled', async () => {
+    await act(async () => { renderSettings('/settings'); });
+    fireEvent.change(screen.getByRole('combobox', { name: 'settings.search.ariaLabel' }), {
+      target: { value: 'Apple Girl' },
+    });
+    const results = () => screen.queryAllByRole('option');
+    expect(results()).toHaveLength(0);
+    expect(window.electronAPI.agentIsland.setEnabled).not.toHaveBeenCalled();
+    await act(async () => { expect(await setAgentIslandEnabled(true)).toBe(true); });
+    expect(results()).toHaveLength(1);
+    await act(async () => { expect(await setAgentIslandEnabled(false)).toBe(true); });
+    expect(results()).toHaveLength(0);
+  });
+
   // Unit regression (#8481): search must follow the same main-owned refinement
   // snapshot/broadcast as the voice controls, even before opening that page.
   it('updates refinement search results when the saved toggle changes', async () => {
