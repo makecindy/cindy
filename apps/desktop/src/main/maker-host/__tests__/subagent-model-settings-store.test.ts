@@ -19,6 +19,7 @@ vi.mock('../logger-adapter.js', () => ({
 }));
 
 vi.mock('../../ownerContext.js', () => ({
+  configureOwnerContext: () => {},
   ownerScopedPath: (...parts: string[]) => path.join('/tmp/cindy-subagent-model-test', ...parts),
   ownerGeneration: () => 1,
   hasCommittedOwner: () => true,

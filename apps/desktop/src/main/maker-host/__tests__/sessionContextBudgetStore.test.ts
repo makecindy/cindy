@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({ dir: '' }));
 vi.mock('../../ownerContext.js', async () => {
   const nodePath = await import('node:path');
   return {
+    configureOwnerContext: () => {},
     ownerScopedPath: (...parts: string[]): string => nodePath.join(state.dir, ...parts),
     hasCommittedOwner: () => true,
     ownerGeneration: () => 0,

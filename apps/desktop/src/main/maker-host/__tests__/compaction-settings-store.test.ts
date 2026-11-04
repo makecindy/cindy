@@ -22,6 +22,7 @@ vi.mock('../logger-adapter.js', () => ({
 }));
 
 vi.mock('../../ownerContext.js', () => ({
+  configureOwnerContext: () => {},
   hasCommittedOwner: () => true,
   ownerGeneration: () => 1,
   ownerScopedPath: (...parts: string[]) => path.join(tempRoot, ...parts),

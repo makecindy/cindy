@@ -17,6 +17,8 @@ export interface OwnerContextFacts {
   dataOwnerId: string | null;
   /** Bumped on every owner commit so caches can be dropped. */
   generation: number;
+  /** True while an owner transition is in flight; reads must fail closed. */
+  boundaryPending: boolean;
 }
 
 export interface OwnerContextConfig {
@@ -51,6 +53,16 @@ export function ownerScopedPath(...parts: string[]): string {
   const ownerId = active.read().dataOwnerId;
   if (!ownerId) return path.join(active.fallbackBaseDir(), ...parts);
   return path.join(getUserDataDir(), 'owners', dataOwnerStorageKey(ownerId), ...parts);
+}
+
+/** Current committed owner id, or null while signed out / unsettled. */
+export function activeDataOwnerId(): string | null {
+  return requireConfig().read().dataOwnerId;
+}
+
+/** True while an owner transition is in flight. */
+export function isOwnerBoundaryPending(): boolean {
+  return requireConfig().read().boundaryPending;
 }
 
 /** Commit generation for cache invalidation; changes on login/logout/switch. */

@@ -19,6 +19,7 @@ vi.mock('../logger-adapter.js', () => ({
   desktopMakerLogger: { child: () => ({ info: () => {}, warn: () => {}, error: () => {} }) },
 }));
 vi.mock('../../ownerContext.js', () => ({
+  configureOwnerContext: () => {},
   ownerScopedPath: (name: string) => path.join(tmpDir, owner.current, name),
   ownerGeneration: () => owner.generation,
   hasCommittedOwner: () => true,

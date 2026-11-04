@@ -8,18 +8,11 @@ import { createBetterSqliteDatabase } from '../../localDb/betterSqliteFactory.js
 const userDataDir = '/tmp/native-provider-auth-binding-test';
 const session = { dataOwnerId: 'owner-a' as string | null, boundaryPending: false };
 
-vi.mock('electron', () => ({
-  app: { getPath: () => userDataDir },
-}));
-
-vi.mock('../../appSessionState.js', () => ({
-  LOCAL_DATA_OWNER_ID: 'local-v1',
-  getActiveAppSession: () => ({
-    mode: session.dataOwnerId ? 'cloud' : 'signed-out',
-    dataOwnerId: session.dataOwnerId,
-    generation: 1,
-  }),
-  isAppSessionBoundaryPending: () => session.boundaryPending,
+vi.mock('../../userDataPath.js', () => ({ userDataPath: (...parts: string[]) => path.join(userDataDir, ...parts) }));
+vi.mock('../../ownerContext.js', () => ({
+  configureOwnerContext: () => {},
+  activeDataOwnerId: () => session.dataOwnerId,
+  isOwnerBoundaryPending: () => session.boundaryPending,
 }));
 
 import {

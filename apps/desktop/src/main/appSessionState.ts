@@ -39,6 +39,7 @@ configureOwnerContext({
   read: () => ({
     dataOwnerId: getActiveAppSession().dataOwnerId,
     generation: getActiveAppSession().generation,
+    boundaryPending: isAppSessionBoundaryPending(),
   }),
   // Some services register before authentication settles. Give them an
   // ephemeral process namespace so they can initialize without ever

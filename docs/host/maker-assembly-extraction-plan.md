@@ -59,6 +59,10 @@
 
 `packages/maker-core/src/agents/claude-code/cli-login-status.ts` 承载 `auth status --json` 的解析与一次性 spawn 读取；Desktop 的 `claude-native-cli` 改为复用同一解析（27 个 CLI 测试覆盖），Host 已用真实二进制实测读通（本机返回 `loggedIn:false`）。
 
+## 已完成：本机 CLI 使用许可绑定
+
+`nativeProviderAuthBinding`（1,072 行）改走注入的 profile 根与 owner 上下文，不再 import `electron`；`hasClaudeNativeLogin` 因此可在 Host 侧成立。owner 上下文新增 `boundaryPending` 与 `activeDataOwnerId()` / `isOwnerBoundaryPending()`。
+
 ## 已知风险
 
 - 装配体量约 2,300 行，闭包捕获大量模块级状态；必须整段迁移后一次 typecheck，不能半途提交。
