@@ -952,6 +952,16 @@ function buildDesktopCommonEntries(apacheText, sharpPackageNames) {
 
   // Workspace packages are skipped by npm closure discovery. The vendored
   // OpenCodex helpers are also bundled into Desktop main, not only the SSH proxy.
+  const opencli = readJson(path.join(REPO_ROOT, "packages/opencli-vendor/UPSTREAM.json"));
+  entries.push(
+    bundledComponent({
+      name: "OpenCLI browser recipes (adapted)",
+      version: opencli.revision,
+      license: "Apache-2.0",
+      url: `${opencli.repository}/tree/${opencli.revision}`,
+      licenseText: readBundledLicense("packages/opencli-vendor/LICENSE"),
+    }),
+  );
   const opencodex = readJson(path.join(REPO_ROOT, "packages/model-compat/UPSTREAM.json"));
   entries.push(
     bundledComponent({

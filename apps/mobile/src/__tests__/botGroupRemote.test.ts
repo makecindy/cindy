@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
-import { chatGroupMembership } from '@cindy/maker-shared/botGroupPresentation';
+import { botGroupComposerPlanState, chatGroupMembership, openBotGroupPlan } from '@cindy/maker-shared/botGroupPresentation';
 import {
   botGroupChatDataFromResource,
   botGroupErrorCode,
@@ -47,6 +47,32 @@ function chatData(overrides: Record<string, unknown> = {}) {
 }
 
 describe('parseBotGroupChatData', () => {
+  // The remote resource must preserve the queue semantics before choosing composer copy.
+  it.each([
+    ['all', 'talk', true, { kind: 'running', botName: '咪咪', talk: true }],
+    ['mentioned', 'talk', true, null],
+    ['all', 'talk', false, null],
+    ['mentioned', 'future', 'true', { kind: 'running', botName: '' }],
+  ] as const)('keeps the host queue reply policy through parsing (%s, %s, %s)', (replyMode, kind, canAdd, expected) => {
+    const data = chatData({ replyMode, plans: [{ ...chatData().plans[0], status: 'running', kind, canAdd }] });
+    const parsed = parseBotGroupChatData(data)!;
+    expect(botGroupComposerPlanState(openBotGroupPlan(parsed), parsed.replyMode)).toEqual(expected);
+    expect(parsed.plans[0].kind).toBe(kind === 'talk' ? 'talk' : undefined);
+    expect(parsed.plans[0].canAdd).toBe(typeof canAdd === 'boolean' ? canAdd : undefined);
+  });
+
+  // The new public group image field must not turn a host path, credentialed URL
+  // or malformed input into a phone image source; keep the legacy fallback (unit).
+  it.each([null, 7, 'http://example.invalid/avatar.png', 'file:///avatar.png',
+    'https://user:pass@example.invalid/avatar.png', 'https://', `https://example.invalid/${'x'.repeat(4_096)}`,
+  ])('drops an invalid member image URL without dropping its fallback: %s', avatarUrl => {
+    const member = parseBotGroupChatData(chatData({ members: [
+      { botId: 'person', name: 'Person', avatar: '🙂', avatarUrl, status: 'active' },
+    ] }))!.members[0];
+    expect(member.avatarUrl).toBeUndefined();
+    expect(member.avatar).toBe('🙂');
+  });
+
   it('retains validated management roles, revisions and capability without granting them to old hosts', () => {
     const parsed = parseBotGroupChatData(chatData({ revision: 3, supportsSettingsManagement: true,
       members: [{ botId: 'mimi', name: 'Mimi', role: 'admin', isOwned: true }] }));
@@ -88,6 +114,16 @@ describe('parseBotGroupChatData', () => {
     expect(byId.get('q4')?.quote).toEqual({ ...quote, originalDeleted: true });
     // Older computers send neither field.
     expect(parseBotGroupChatData(chatData())!.messages.every(message => !message.quote && !message.deleted)).toBe(true);
+  });
+
+  it('preserves an owned-host process reference through remote group and thread data', () => {
+    const process = { groupId: 'g1', executionId: 'turn', sessionId: 'lane', clientId: 'source' };
+    const base = { id: 'p', sequence: 7, kind: 'message', authorKind: 'bot', authorBotId: 'mimi', authorName: '',
+      content: 'Result', noticeCode: null, planId: null, files: [], createdAt: 70, process, threadRootId: 'root' };
+    const view = parseBotGroupChatData(chatData({ messages: [base, { ...base, id: 'human', authorKind: 'user' },
+      { ...base, id: 'bad', process: { ...process, sessionId: '' } }, { ...base, id: 'deleted', deleted: true }] }))!;
+    expect(view.messages[0]).toMatchObject({ process, threadRootId: 'root', content: 'Result' });
+    expect(view.messages.slice(1).every(row => !row.process)).toBe(true);
   });
 
   it('keeps a validated task card only on a teammate message (bot-group-chat.md §10)', () => {
@@ -284,5 +320,16 @@ describe('actions', () => {
     expect(nextBotGroupSendAttempt(first, '@Ann', false, next, [], { all: false, botIds: ['new'] }).clientId).toBe('c2');
     expect(nextBotGroupSendAttempt(first, '@Ann', false, next, [], { all: false, botIds: ['other', 'picked'] }).clientId).toBe('c3');
     expect(nextBotGroupSendAttempt(first, '@Ann', false, next, [], { all: true, botIds: ['picked', 'other'] }).clientId).toBe('c4');
+    const quoted = nextBotGroupSendAttempt(first, '@Ann', false, next, [], { all: false, botIds: ['picked', 'other'] }, 'original');
+    expect(quoted.clientId).toBe('c5');
+    expect(nextBotGroupSendAttempt(quoted, '@Ann', false, next, [], { all: false, botIds: ['picked', 'other'] }, 'original')).toBe(quoted);
+    expect(nextBotGroupSendAttempt(quoted, '@Ann', false, next, [], { all: false, botIds: ['picked', 'other'] }, 'another').clientId).toBe('c6');
   });
+});
+
+// Wire: a phone must retain the host's personal setting and reject unknown modes.
+it('retains notification capability and confirmed mode from a computer', () => {
+  expect(parseBotGroupChatData(chatData({ supportsNotificationSettings: true, notificationMode: 'mentions' })))
+    .toMatchObject({ supportsNotificationSettings: true, notificationMode: 'mentions' });
+  expect(parseBotGroupChatData(chatData({ notificationMode: 'unknown' }))?.notificationMode).toBeUndefined();
 });

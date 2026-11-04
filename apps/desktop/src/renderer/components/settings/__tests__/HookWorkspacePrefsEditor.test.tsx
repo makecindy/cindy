@@ -6,6 +6,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderPrefsView, SlackHookView } from '../../../../shared/hookControlIpc';
 import { IM_DEFAULT_SETTINGS } from '../../../../shared/imDefaultSettings';
 
+// The shared-quota rail observes auth; this component fixture has no auth host.
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, vars?: { provider?: string }) =>

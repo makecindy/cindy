@@ -546,6 +546,24 @@ export function setActiveGlobalTabId(tabId: string | null): void {
   notify();
 }
 
+type RevealSessionTabListener = (sessionId: string, tabId: string) => void;
+const revealListeners = new Set<RevealSessionTabListener>();
+
+/**
+ * 程序替某任务打开的任务页签(插件任务页)要露出来:全局激活位优先于任务激活位,
+ * 只写任务桶会被前排的全局页签挡住。只有正在显示该任务、且页签归本组的 Shell 响应。
+ */
+export function requestRevealSessionTab(sessionId: string, tabId: string): void {
+  for (const listener of revealListeners) listener(sessionId, tabId);
+}
+
+export function subscribeRevealSessionTab(listener: RevealSessionTabListener): () => void {
+  revealListeners.add(listener);
+  return () => {
+    revealListeners.delete(listener);
+  };
+}
+
 export function subscribeGlobalTabs(cb: () => void): () => void {
   getGlobalTabsSnapshot();
   subscribers.add(cb);

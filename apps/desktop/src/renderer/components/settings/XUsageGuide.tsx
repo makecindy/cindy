@@ -67,11 +67,9 @@ function GuideGroup({ label, children }: { label: string; children: React.ReactN
  *
  * **颜色沿用 --text-tertiary(本仓 settings 说明文字的既有 token,约 157 处在用),这里
  * 刻意没跟着风险组一起提到 --text-primary。** 两者的判据不同:风险组那两段叠在 warning
- * alpha 底上、且 U2 裁决把 text-secondary 的低对比明确限定在「二级信息」,所以必须换;
- * 而 text-tertiary 在 CINDY 两套主题里已经被整改到 AA(light #686B72 = 5.03、dark
- * #BFC1C4 = 7.38,cindy-*.ts 注明「整改: 非 U2 token AA」),default 主题那份值
- * (light #a3a3a3 = 2.39 / dark #737373 = 2.95)属**冻结的主题数据**,不是本组件能单方面
- * 决定的;只把这一节的说明文字提亮,会让它比 settings 里其它所有说明文字都重一档 ——
+ * alpha 底上、且文字阶梯把 text-secondary 限定在「二级信息」,所以必须换;
+ * 而 text-tertiary 是说明类文字的既有档位(CINDY 下为墨水三级档,DESIGN.md §15.16),
+ * 各主题的值都属**冻结的主题数据**,不是本组件能单方面决定的;只把这一节的说明文字提亮,会让它比 settings 里其它所有说明文字都重一档 ——
  * 那是视觉取舍而非规范缺陷,留给 Dash 判断。
  */
 function GuideBody({ children }: { children: React.ReactNode }) {
@@ -96,8 +94,8 @@ export function XUsageGuide({ companion = false }: { companion?: boolean } = {})
           价格冲突提示)—— 图标 mt-0.5 shrink-0 顶对齐, 文本自己折行向下伸展。
 
           **但文字色刻意不跟那份:这两段走 --text-primary, 不是 --text-secondary。**
-          DESIGN.md §15.5 的 U2 裁决把 text-secondary 的低对比**明确限定在「二级信息」**
-          并承认它低于正文 4.5:1(cindy-dark.ts 就把它标成「直映: 二级信息; U2 例外」)。
+          文字阶梯(DESIGN.md §2 / §15.16,2026-10-22 起取代 U2)把 text-secondary
+          **明确限定在「二级信息」**,它本来就低于正文 4.5:1。
           而这两段是用户绑定后必须读清的公开回帖与私密仓库暴露风险, 不是二级信息;
           叠上 warning-bg-soft 的橙色 alpha 底之后更差。实测(见
           renderer/__tests__/xUsageGuideRiskContrast.test.ts, 有用例钉着):
@@ -105,12 +103,11 @@ export function XUsageGuide({ companion = false }: { companion?: boolean } = {})
             合成底             text-secondary   text-primary
             default light            3.96           12.64
             default dark             4.38            7.46
-            CINDY   light            2.71            8.77
-            CINDY   dark             2.09            7.09
+            CINDY   (墨水阶梯,数值以测试为准)
 
-          四种组合下 secondary 全部低于 4.5, primary 全部 ≥7。修法是在组件内换语义色 ——
-          **不能去改全局 token**: §15.5 写明 text-secondary 的值「never darken
-          unilaterally」, 要改需要新的用户裁决(#1347 review 由 codex 指出 P2)。 */}
+          表中 secondary 全部低于 4.5;primary 在四种组合下都 ≥4.5(测试钉住)。修法是在组件内换语义色 ——
+          **不能去改全局 token**: 文字阶梯任一档改值都需要新的用户裁决(原 U2 保护
+          延续到整条阶梯,#1347 review 由 codex 指出 P2)。 */}
       <GuideGroup label={t(k('riskLabel'))}>
         <div className="flex gap-2 rounded-lg bg-[var(--warning-bg-soft)] px-3 py-2.5">
           <AlertTriangle size={15} className="mt-0.5 shrink-0 text-[var(--warning-fg)]" />

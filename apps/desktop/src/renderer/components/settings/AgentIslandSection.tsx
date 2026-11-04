@@ -257,7 +257,7 @@ export function AgentIslandSection() {
           {t('settings.agentIsland.title')}
         </h2>
         <SettingsCard>
-          <p className="text-13 leading-[1.45] text-[var(--settings-section-sublabel)] opacity-75">
+          <p className="text-13 leading-[1.45] text-[var(--text-secondary)]">
             {t('settings.agentIsland.unsupported')}
           </p>
         </SettingsCard>
@@ -276,7 +276,7 @@ export function AgentIslandSection() {
           <p id="settings-search-settings-agentIsland-enableLabel" className="text-13 font-medium text-[var(--settings-section-sublabel)]">
             {t('settings.agentIsland.enableLabel')}
           </p>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
             {t('settings.agentIsland.enableHint')}
           </p>
         </div>
@@ -295,7 +295,7 @@ export function AgentIslandSection() {
               <p id="settings-search-settings-agentIsland-displayLabel" className="text-13 font-medium text-[var(--settings-section-sublabel)]">
                 {t('settings.agentIsland.displayLabel')}
               </p>
-              <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+              <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
                 {t('settings.agentIsland.displayHint')}
               </p>
             </div>
@@ -329,7 +329,7 @@ export function AgentIslandSection() {
               </select>
               <ChevronDown
                 size={15}
-                className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-[var(--settings-input-text)] opacity-75"
+                className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-[var(--text-secondary-mid)]"
                 aria-hidden="true"
               />
             </div>
@@ -340,7 +340,7 @@ export function AgentIslandSection() {
               <p id="settings-search-settings-agentIsland-skinLabel" className="text-13 font-medium text-[var(--settings-section-sublabel)]">
                 {t('settings.agentIsland.skinLabel')}
               </p>
-              <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+              <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
                 {t('settings.agentIsland.skinHint')}
               </p>
             </div>
@@ -365,7 +365,7 @@ export function AgentIslandSection() {
                 <p id="settings-search-settings-agentIsland-soundLabel" className="text-13 font-medium text-[var(--settings-section-sublabel)]">
                   {t('settings.agentIsland.soundLabel')}
                 </p>
-                <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+                <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
                   {t('settings.agentIsland.soundHint')}
                 </p>
               </div>
@@ -482,7 +482,7 @@ function AgentIslandSkinRow({
         <p className="truncate text-13 font-medium text-[var(--settings-section-sublabel)]">
           {skinName}
         </p>
-        <p className="mt-1 line-clamp-2 text-12 leading-[1.35] text-[var(--settings-section-sublabel)] opacity-65">
+        <p className="mt-1 line-clamp-2 text-12 leading-[1.35] text-[var(--text-secondary)]">
           {t(`settings.agentIsland.skins.${skin}.description`)}
         </p>
       </div>
@@ -716,7 +716,7 @@ function AgentIslandSoundRow({
   return (
     <div className="grid grid-cols-[minmax(88px,1fr)_minmax(150px,220px)_32px] items-center gap-2">
       <label
-        className="truncate text-12 text-[var(--settings-section-sublabel)] opacity-80"
+        className="truncate text-12 text-[var(--text-secondary)]"
         htmlFor={`agent-island-sound-${event}`}
       >
         {t(`settings.agentIsland.soundEvents.${event}`)}
@@ -756,7 +756,7 @@ function AgentIslandSoundRow({
         </select>
         <ChevronDown
           size={14}
-          className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[var(--settings-input-text)] opacity-75"
+          className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-secondary-mid)]"
           aria-hidden="true"
         />
       </div>

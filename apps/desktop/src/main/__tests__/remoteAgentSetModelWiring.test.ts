@@ -87,7 +87,9 @@ describe('agent-device model selection wiring', () => {
   });
 
   it("lists the other computer's models for Orca leads whose agent runs there", () => {
-    const start = source.indexOf('listAvailableModels: async ({ agent, callerSessionId, agentDeviceId: requestedAgentDeviceId }) => {');
+    // Locate the protocol adapter by its name, independent of optional inputs.
+    // Worker discovery behavior is covered by orcaRemoteWorkers unit tests.
+    const start = source.indexOf('listAvailableModels: async (');
     expect(start).toBeGreaterThan(0);
     const body = source.slice(start, source.indexOf('const providerRouting = await getProviderRoutingContext();', start));
     // 不指定位置时列 Lead 所在位置(Lead 归在供应商组里时列组那一项所在电脑)；Lead 也可以指定别的电脑 / 分享，

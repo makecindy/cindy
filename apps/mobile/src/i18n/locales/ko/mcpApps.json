@@ -8,5 +8,6 @@
   "messageSource": "$t(mcpApps.appName) “{{name}}”에서 전송",
   "serverId": "MCP 서버 ID: {{id}}",
   "exitFullscreen": "전체 화면 종료",
-  "mobileUpdateRequired": "이 카드를 열려면 휴대폰의 Cindy를 업데이트하세요."
+  "mobileUpdateRequired": "이 카드를 열려면 휴대폰의 Cindy를 업데이트하세요.",
+  "filesOnExecutionComputer": "파일 내용은 실행 컴퓨터에서 확인해 주세요"
 }

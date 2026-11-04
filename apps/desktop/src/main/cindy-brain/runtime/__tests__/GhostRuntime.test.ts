@@ -86,6 +86,22 @@ describe('GhostRuntime · 状态机', () => {
     expect(handles.length).toBe(1);
   });
 
+  it('换版后再 spawn:旧安装拉起的沙箱销毁并按新回执重开(面板分区才同源)', async () => {
+    const { runtime, handles } = setup();
+    await runtime.spawn(chipGhost());
+    const updated = chipGhost();
+    updated.manifest = { ...updated.manifest, version: '1.0.1' };
+    updated.approval = { state: 'approved', revision: '00000000-0000-4000-8000-000000000002' };
+    const result = await runtime.spawn(updated);
+    expect(result).toEqual({ ok: true, state: 'running' });
+    expect(handles.length).toBe(2);
+    expect(handles[0].destroyed).toBe(true);
+    expect(handles[1].destroyed).toBe(false);
+    // 同一份新记录再 spawn 仍幂等。
+    await runtime.spawn(updated);
+    expect(handles.length).toBe(2);
+  });
+
   it('adapter.create 同步 throw(如 app 未 ready)→ 结构化失败 + crashed 记账,state 不卡 starting', async () => {
     let createFails = true;
     const handles: FakeHandle[] = [];

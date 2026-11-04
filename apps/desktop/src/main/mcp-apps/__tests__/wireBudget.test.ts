@@ -101,19 +101,48 @@ async function initialized(host: McpAppsHost, caller: string) {
 }
 
 describe('MCP Apps serialized remote result budgets', () => {
-  it('accepts the complete remote document at its limit, including CSP and JSON escaping', async () => {
+  // Ordinary metadata and an authored SDK prefix both keep the legacy wire budget.
+  it.each([
+    '<script>const packageName = "@modelcontextprotocol/ext-apps";</script>',
+    '<script type="importmap">{"imports":{"@modelcontextprotocol/":"https://vendor.example/mcp/"}}</script><script type="module">import "@modelcontextprotocol/ext-apps";</script>',
+  ])('accepts the complete remote document at its limit with authored SDK provisioning: %s', async (prefix) => {
     const f = fixture();
     const empty = await f.host.open('renderer:local', 'task', 'card', {});
-    const overhead = Buffer.byteLength(JSON.stringify(empty));
-    const html = 'x'.repeat(MCP_APPS_MAX_REMOTE_BYTES - overhead);
+    const overhead = Buffer.byteLength(JSON.stringify({ ...empty, html: prefix, sdk: undefined }));
+    const html = prefix + 'x'.repeat(MCP_APPS_MAX_REMOTE_BYTES - overhead);
     f.resource.mockResolvedValue({ result: f.contents(html) });
     const document = await f.host.open('device:phone', 'task', 'card', {});
+    expect(document.sdk).toBeUndefined();
     expect(Buffer.byteLength(JSON.stringify(document))).toBe(MCP_APPS_MAX_REMOTE_BYTES);
     expect(() => encodeReliableFrames(wire(document), 'stream', 1)).not.toThrow();
     f.resource.mockResolvedValue({ result: f.contents(html + 'x') });
     await expect(f.host.open('device:phone', 'task', 'card', {})).rejects.toThrow(
       'MCP_APP_RESOURCE_TOO_LARGE',
     );
+  });
+
+  // Always-on SDK cannot reduce the legacy page budget: real Host.open must
+  // open an otherwise valid page even when the optional environment bytes do not fit.
+  it('opens a page without SDK bytes when only the appended SDK exceeds the remote budget', async () => {
+    const f = fixture();
+    const html = '<script type="module">import "@modelcontextprotocol/ext-apps";</script>' + 'x'.repeat(MCP_APPS_MAX_REMOTE_BYTES - 4096);
+    f.resource.mockResolvedValue({ result: f.contents(html) });
+    const local = await f.host.open('renderer:local', 'task', 'card', {});
+    expect(local.sdk).toBeDefined();
+    expect(Buffer.byteLength(JSON.stringify({ ...local, sdk: undefined }))).toBeLessThan(MCP_APPS_MAX_REMOTE_BYTES);
+    expect(Buffer.byteLength(JSON.stringify(local))).toBeGreaterThan(MCP_APPS_MAX_REMOTE_BYTES);
+    const document = await f.host.open('device:phone', 'task', 'card', {});
+    expect(document.html).toBe(html);
+    expect(document.sdk).toBeUndefined();
+    expect(() => encodeReliableFrames(wire(document), 'wire-id', 1)).not.toThrow();
+  });
+
+  it('supplies the environment for custom MCP pages without an initial SDK import', async () => {
+    const f = fixture();
+    f.resource.mockResolvedValue({ result: f.contents('<!doctype html><p>Legacy page</p>') });
+    const document = await f.host.open('device:phone', 'task', 'card', {});
+    expect(document.sdk?.source).toContain('export');
+    expect(document.html).toBe('<!doctype html><p>Legacy page</p>');
   });
 
   it.each(['multibyte', 'quotes', 'control characters'] as const)(

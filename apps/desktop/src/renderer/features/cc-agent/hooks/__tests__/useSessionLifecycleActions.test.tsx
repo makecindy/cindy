@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   beginPendingStatus: vi.fn(),
   completePendingStatus: vi.fn(),
   rollbackPendingStatus: vi.fn(),
+  isPendingStatusCurrent: vi.fn(),
   clearComposerDraft: vi.fn(),
   cleanupSessionLayoutPrefs: vi.fn(),
   cleanupSessionImages: vi.fn(),
@@ -63,6 +64,7 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
     beginPendingStatus: mocks.beginPendingStatus,
     completePendingStatus: mocks.completePendingStatus,
     rollbackPendingStatus: mocks.rollbackPendingStatus,
+    isPendingStatusCurrent: mocks.isPendingStatusCurrent,
   },
 }));
 
@@ -134,6 +136,7 @@ beforeEach(() => {
   );
   mocks.completePendingStatus.mockReturnValue(true);
   mocks.rollbackPendingStatus.mockReturnValue(true);
+  mocks.isPendingStatusCurrent.mockReturnValue(true);
   mocks.rollbackStatusTransition.mockReturnValue(true);
   mocks.refreshSessions.mockResolvedValue([]);
   mocks.cleanupSessionImages.mockResolvedValue(undefined);
@@ -144,6 +147,45 @@ beforeEach(() => {
 });
 
 describe('archive uses current state after asynchronous checks', () => {
+  // Regression: remote preflight used to block the optimistic row update.
+  // Unit: a deferred preflight must hide the row before any write/navigation,
+  // then cancellation/failure restores it; a newer intent prevents a late write.
+  it.each(['confirm', 'cancel', 'fail', 'superseded', 'running'] as const)(
+    'updates the remote list during preflight and handles %s', async (outcome) => {
+      mocks.resolveStatusWriteTarget.mockResolvedValue({ kind: 'device-link', deviceId: 'device-1' });
+      let resolve!: (confirmed: boolean) => void;
+      let reject!: (error: Error) => void;
+      const preparation = new Promise<boolean>((done, fail) => { resolve = done; reject = fail; });
+      const { result } = renderHook(() => useSessionLifecycleActions());
+      let action!: Promise<void>;
+      await act(async () => {
+        action = result.current.runSessionAction('session-1', 'archive', {
+          activeSessionId: 'session-1', prepareArchive: () => preparation,
+        });
+      });
+      expect(mocks.beginPendingStatus).toHaveBeenCalledWith('device-1', 'session-1', 'archived');
+      expect(mocks.setStatus).not.toHaveBeenCalled();
+      expect(mocks.navigate).not.toHaveBeenCalled();
+      expect(mocks.purgeSession).not.toHaveBeenCalled();
+      await act(async () => {
+        if (outcome === 'superseded') mocks.isPendingStatusCurrent.mockReturnValue(false);
+        if (outcome === 'running') mocks.getRunningSnapshot.mockReturnValue(new Map([['session-1', { isRunning: true }]]));
+        if (outcome === 'fail') reject(new Error('preflight failed'));
+        else resolve(outcome !== 'cancel');
+        await action;
+      });
+      if (outcome === 'confirm') {
+        expect(mocks.setStatus).toHaveBeenCalledOnce();
+        expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new');
+        expect(mocks.completePendingStatus).toHaveBeenCalledOnce();
+      } else {
+        expect(mocks.setStatus).not.toHaveBeenCalled();
+        expect(mocks.navigate).not.toHaveBeenCalled();
+        expect(mocks.purgeSession).not.toHaveBeenCalled();
+        expect(mocks.rollbackPendingStatus).toHaveBeenCalledTimes(outcome === 'superseded' ? 0 : 1);
+      }
+    },
+  );
   it('shares a live running guard with callers before they close sharing', () => {
     const { result } = renderHook(() => useSessionLifecycleActions());
     const guard = result.current.archiveBlockedByRunning;

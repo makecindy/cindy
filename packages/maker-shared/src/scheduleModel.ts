@@ -606,6 +606,8 @@ export interface FailedScheduleRunSnapshot {
   firedAt: number;
   scheduleId?: string;
   failureKind?: ScheduleFailureKind;
+  /** Optional on older hosts; error content is only disclosed on demand. */
+  errorMsg?: string;
 }
 
 /** Old hosts can omit the classification; keep their warning generic. */

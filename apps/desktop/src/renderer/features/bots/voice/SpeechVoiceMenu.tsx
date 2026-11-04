@@ -214,7 +214,11 @@ export function SpeechVoiceMenu(props: Props) {
           role="status"
           className="border-t border-[var(--border-default)] px-2 pb-1 pt-2 text-12 text-[var(--text-secondary)]"
         >
-          {t(`bots.voiceMode.previewStatus.${props.previewPhase}`)}
+          {t(
+            props.previewPhase === 'timeout'
+              ? 'bots.voiceMode.errors.speechTimeout'
+              : `bots.voiceMode.previewStatus.${props.previewPhase}`,
+          )}
         </p>
       </PopoverContent>
     </Popover>

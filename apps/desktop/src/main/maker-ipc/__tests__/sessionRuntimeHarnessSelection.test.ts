@@ -279,7 +279,10 @@ describe('runtime harness selection', () => {
     h.pending.set('s1', previous);
     const read = h.switchDeps.getSessionRow;
     h.switchDeps.getSessionRow = async (id) => ({ ...(await read(id))!, ...overrides });
-    expect(await setSessionRuntimeHarness(h.deps, request)).toMatchObject({ ok: false });
+    expect(await setSessionRuntimeHarness(h.deps, request)).toMatchObject({
+      ok: false,
+      errorCode: overrides.status === 'deleted' ? 'NOT_FOUND' : 'ROUTE_UNAVAILABLE',
+    });
     expect(h.pending.get('s1')).toBe(previous);
     expect(h.close).not.toHaveBeenCalled();
   });

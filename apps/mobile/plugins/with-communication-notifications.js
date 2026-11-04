@@ -1,10 +1,15 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const plist = require('@expo/plist');
-const { withEntitlementsPlist, withInfoPlist, withXcodeProject } = require('@expo/config-plugins');
+const { withDangerousMod, withEntitlementsPlist, withInfoPlist, withXcodeProject } = require('@expo/config-plugins');
 
 const TARGET = 'CindyNotificationService';
 const ENTITLEMENT = 'com.apple.developer.usernotifications.communication';
+const portraits = {
+  cindy: '../desktop/src/renderer/assets/bot-presets/cindy.png',
+  dash: '../desktop/resources/legacy-teammate-avatars/dash.png',
+  lizi: '../desktop/resources/legacy-teammate-avatars/lizi.png',
+};
 
 function extensionInfo() {
   return {
@@ -30,11 +35,6 @@ function configureProject(project, config, platformRoot, projectRoot) {
   fs.copyFileSync(path.join(__dirname, 'communication-notifications/NotificationService.swift'), path.join(directory, 'NotificationService.swift'));
   fs.writeFileSync(path.join(directory, 'Info.plist'), plist.default.build(extensionInfo()));
   fs.writeFileSync(path.join(directory, `${TARGET}.entitlements`), plist.default.build({ [ENTITLEMENT]: true }));
-  const portraits = {
-    cindy: '../desktop/src/renderer/assets/bot-presets/cindy.png',
-    dash: '../desktop/resources/legacy-teammate-avatars/dash.png',
-    lizi: '../desktop/resources/legacy-teammate-avatars/lizi.png',
-  };
   for (const [name, file] of Object.entries(portraits)) {
     fs.copyFileSync(path.resolve(projectRoot, file), path.join(directory, `teammate-${name}.png`));
   }
@@ -70,6 +70,17 @@ function configureProject(project, config, platformRoot, projectRoot) {
 }
 
 module.exports = function withCommunicationNotifications(config) {
+  config = withDangerousMod(config, ['android', async mod => {
+    const res = path.join(mod.modRequest.platformProjectRoot, 'app/src/main/res');
+    fs.mkdirSync(path.join(res, 'drawable-nodpi'), { recursive: true });
+    fs.mkdirSync(path.join(res, 'raw'), { recursive: true });
+    for (const [name, file] of Object.entries(portraits)) {
+      fs.copyFileSync(path.resolve(mod.modRequest.projectRoot, file), path.join(res, 'drawable-nodpi', `cindy_teammate_${name}.png`));
+    }
+    fs.writeFileSync(path.join(res, 'raw/cindy_chat_keep.xml'),
+      '<resources xmlns:tools="http://schemas.android.com/tools" tools:keep="@drawable/cindy_teammate_*" />');
+    return mod;
+  }]);
   config = withEntitlementsPlist(config, mod => {
     mod.modResults[ENTITLEMENT] = true;
     return mod;

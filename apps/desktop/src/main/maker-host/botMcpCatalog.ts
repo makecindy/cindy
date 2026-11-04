@@ -2,6 +2,7 @@ import type { McpProvider, McpProviderContext } from '@cindy/maker-core';
 import type { McpTransport } from '../../shared/customMcp.js';
 import { isPiCustomMcpProviderAvailable } from '../mcp-integrations/piMcpTransport.js';
 import { CustomMcpProvider } from '../mcp-integrations/custom-mcp-provider.js';
+import { getHarnessMcpCatalog } from './harnessMcpCatalog.js';
 
 function isCustomMcpAvailable(input: {
   agentKind: McpProviderContext['agentKind'];
@@ -34,7 +35,7 @@ export function buildBotMcpCatalog(input: {
 }) {
   const builtinNames = new Set(input.builtinNames);
   const customServers = new Map(input.customServers.map((entry) => [entry.id, entry]));
-  return [...new Map(input.providers.map((provider) => {
+  const providers = [...new Map(input.providers.map((provider) => {
     const builtin = builtinNames.has(provider.name) && provider.name !== 'companion_connections';
     const custom = customServers.get(provider.name);
     // Builtins retain their SDK bridge path and are not instantiated by catalog queries.
@@ -52,4 +53,6 @@ export function buildBotMcpCatalog(input: {
         : custom ? `${custom.transport}:${custom.updatedAt}` : 'custom:unknown',
     }];
   })).values()];
+  const harness = getHarnessMcpCatalog(input);
+  return [...providers.filter((provider) => !harness.some((entry) => entry.name === provider.name)), ...harness];
 }

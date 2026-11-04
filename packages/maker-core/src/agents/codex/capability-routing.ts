@@ -87,9 +87,14 @@ export function buildCodexBotMcpConfigOverrides(
 ): Record<string, unknown> {
   if (!policy || policy.mode !== 'allowlist') return {};
   const result: Record<string, unknown> = {};
+  // Apps is a native server without command/url. A disabled-only MCP entry is
+  // invalid in Codex; use its feature switch, and never force-enable an account feature.
+  if (!isBotMcpServerAllowed(policy, 'codex_apps')) result['features.apps'] = false;
   // Codex parses transport before enabled. Never synthesize disabled-only
   // entries for absent servers: even `enabled=false` makes thread/start fail.
   for (const name of transportServerNames) {
+    // Native Apps has no transport. A real transport with the same name must
+    // still obey the allowlist (including configs inherited from CODEX_HOME).
     const restricted = ['cindy_group_history', 'cindy_orca'].includes(name);
     if (!restricted && isBotMcpServerAllowed(policy, name)) continue;
     result[`mcp_servers.${renderThreadConfigKeySegment(name)}.enabled`] = false;

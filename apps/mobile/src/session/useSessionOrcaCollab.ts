@@ -299,14 +299,15 @@ export function useOrcaWorkerForm(params: {
   const leadAgentDeviceIdRef = useRef(params.leadAgentDeviceId ?? null);
   leadAgentDeviceIdRef.current = params.leadAgentDeviceId ?? null;
   const agentLocationSelectableRef = useRef(params.agentLocationSelectable === true);
-  agentLocationSelectableRef.current = params.agentLocationSelectable === true;
+  const leadLocationSelectableRef = useRef(params.agentLocationSelectable === true);
+  leadLocationSelectableRef.current = params.agentLocationSelectable === true;
   /**
    * 复位时 Worker 的 Agent 位置：跟 Lead。Lead 在另一台电脑时本机记忆的模型属于别的目录，
    * 模型回到「默认」交给被控端按那台的目录解析(与桌面不指定模型时同口径)。
    */
   const withLeadLocation = useCallback((value: OrcaWorkerFormValue): OrcaWorkerFormValue => {
     const lead = leadAgentDeviceIdRef.current;
-    const selectable = agentLocationSelectableRef.current;
+    const selectable = leadLocationSelectableRef.current;
     return {
       ...value,
       ...(lead ? { model: null } : {}),
@@ -321,6 +322,9 @@ export function useOrcaWorkerForm(params: {
     ? params.executionMakerForDevice(form.executionDeviceId)
     : maker, [form.executionDeviceId, maker, params.executionMakerForDevice]);
   const [executionDevices, setExecutionDevices] = useState<OrcaExecutionDeviceView[]>([]);
+  const workerAgentLocationSelectable = params.agentLocationSelectable === true
+    && (!form.executionDeviceId || executionDevices.some(device => device.deviceId === form.executionDeviceId && device.supportsAgentDevice === true));
+  agentLocationSelectableRef.current = workerAgentLocationSelectable;
   const [executionDevicesLoading, setExecutionDevicesLoading] = useState(false);
   const [executionDevicesError, setExecutionDevicesError] = useState<string | null>(null);
   const [customRoleMode, setCustomRoleMode] = useState(false);
@@ -578,7 +582,7 @@ export function useOrcaWorkerForm(params: {
     touchedRef.current = true;
     if ('executionDeviceId' in next && next.executionDeviceId !== formRef.current.executionDeviceId) {
       convergeGenRef.current += 1;
-      // 运行设备与远程供应商互斥：换运行设备时 Worker 的 Agent 回到任务所在的那台。
+      // 换工作电脑先回到它的本机默认；随后可单独选择它可调用的远程供应商。
       setForm((current) => ({
         ...current,
         ...next,
@@ -586,12 +590,16 @@ export function useOrcaWorkerForm(params: {
         modelSelectionExplicit: false,
         remoteDirMode: 'dialogue',
         remoteDir: '',
-        agentDeviceId: current.agentDeviceId === undefined ? undefined : null,
+        agentDeviceId: next.executionDeviceId
+          ? executionDevices.some(device => device.deviceId === next.executionDeviceId && device.supportsAgentDevice === true) ? null : undefined
+          : params.agentLocationSelectable ? leadAgentDeviceIdRef.current : undefined,
       }));
     } else {
-      setForm((current) => ({ ...current, ...next }));
+      setForm((current) => ({ ...current, ...next,
+        ...('agentDeviceId' in next && !agentLocationSelectableRef.current ? { agentDeviceId: undefined } : {}),
+      }));
     }
-  }, []);
+  }, [executionDevices, params.agentLocationSelectable]);
 
   const changePermission = useCallback(async (mode: OrcaWorkerPermissionMode) => {
     touchedRef.current = true;
@@ -610,6 +618,7 @@ export function useOrcaWorkerForm(params: {
     source?: { deviceId: string | null },
   ): Promise<boolean> => {
     if (!ALL_AGENTS.includes(config.agent as OrcaWorkerAgentKind)) return false;
+    if (source !== undefined && formRef.current.executionDeviceId && !agentLocationSelectableRef.current) return false;
     touchedRef.current = true;
     agentChosenRef.current = true;
     convergeGenRef.current += 1;
@@ -670,11 +679,11 @@ export function useOrcaWorkerForm(params: {
     agents,
     pickerAgents,
     valid: canSubmitOrcaWorkerForm(form, customRoleMode)
-      && (!form.modelSelectionExplicit || params.agentLocationSelectable === true
-        || form.agentDeviceId === undefined || form.agentDeviceId === (params.leadAgentDeviceId ?? null))
+      && (!form.modelSelectionExplicit || workerAgentLocationSelectable
+        || form.agentDeviceId === undefined || form.agentDeviceId === (form.executionDeviceId ? null : params.leadAgentDeviceId ?? null))
       && (!form.executionDeviceId || executionDevices.some((device) => device.deviceId === form.executionDeviceId && device.supported)),
-    /** 模型选择器是否列出远程供应商(被控电脑支持给 Worker 选 Agent 位置，且没选运行设备)。 */
-    agentLocationSelectable: params.agentLocationSelectable === true && !form.executionDeviceId,
+    /** 模型选择器是否列出远程供应商(Lead 与选定工作电脑均支持独立 Agent 位置)。 */
+    agentLocationSelectable: workerAgentLocationSelectable,
     reset,
     remember,
     directoryPicker,
@@ -731,7 +740,7 @@ export function useSessionOrcaCollab(params: {
   const workerForm = useOrcaWorkerForm({
     maker,
     executionMakerForDevice: params.executionMakerForDevice,
-    executionDevicesEnabled: eligible && !session?.remoteHostId && !session?.agentDeviceId,
+    executionDevicesEnabled: eligible && !session?.remoteHostId,
     prefsScope,
     taskHostDeviceId: deviceId,
     sshRemote: !!session?.remoteHostId,

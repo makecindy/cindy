@@ -16,7 +16,7 @@ import {
   type RemoteCollectionItem,
   type PluginConfigurationSummary,
 } from '@cindy/device-link';
-import { ghostContentKeys, ghostInstallApprovalToken, ghostPermissionItems, ghostTrustLabelKey, type GhostSetupAssessment, type InstalledGhost } from '../../shared/ghost.js';
+import { ghostContentKeys, ghostFallbackDisplayAuthor, ghostInstallApprovalToken, ghostPermissionItems, ghostTrustLabelKey, type GhostSetupAssessment, type InstalledGhost } from '../../shared/ghost.js';
 import { getRemoteOauthContext, notifyOauthCardClosed } from '../plugin-oauth/context.js';
 import type { OauthCardBinding } from '../plugin-oauth/transactions.js';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
@@ -25,6 +25,7 @@ import { t } from '../i18n.js';
 import { mobilePluginUsage } from './mobilePluginUsage.js';
 import { mobilePluginConfiguration } from './mobilePluginConfiguration.js';
 import type { GhostConfirmShowParams } from './confirmSlot.js';
+import type { PluginModelPickerTarget } from './ghostModelPicker.js';
 import {
   RemoteResourceRegistryError,
   type RemoteResourceProvider,
@@ -32,6 +33,7 @@ import {
 
 interface Page {
   desktopSettings?: true;
+  modelPickerRemoteSources?: boolean;
   documentEpoch?: number;
   documentId?: string;
   documentSources?: Set<string>;
@@ -66,6 +68,7 @@ interface Page {
     answering: boolean;
   };
   directoryAnswers?: Map<string, string>;
+  modelPicker?: { value: NonNullable<PluginPagePoll['modelPickers']>[number]; cancel(): void };
   intents?: import('@cindy/device-link').PluginNativeIntent[];
   previews?: Map<string, MobilePluginPreview>;
 }
@@ -114,6 +117,7 @@ interface Dependencies {
     ): Promise<import('@cindy/device-link').PluginTaskPreferences>;
   };
   now?(): number;
+  answerModelPicker?(pageId: string, requestId: string, route: unknown): Promise<{ handled: boolean; accepted: boolean }>;
 }
 const fail = (message = 'Plugin page is no longer available'): never => {
   throw new RemoteResourceRegistryError('NOT_FOUND', message);
@@ -172,6 +176,7 @@ export class MobilePluginPages {
     for (const id of page.documentSources ?? []) this.documentSources.delete(id);
     for (const id of page.authorizations?.keys() ?? []) notifyOauthCardClosed(id);
     this.cancelDirectory(page);
+    page.modelPicker?.cancel();
     page.previews?.clear();
     for (const pending of page.confirms.values()) {
       clearTimeout(pending.timer);
@@ -300,6 +305,7 @@ export class MobilePluginPages {
         (page.documentSources ??= new Set()).add(page.documentId);
         this.documentSources.set(page.documentId, page);
         this.cancelDirectory(page);
+        page.modelPicker?.cancel();
         for (const pending of page.confirms.values()) {
           clearTimeout(pending.timer);
           pending.answer(false);
@@ -341,6 +347,7 @@ export class MobilePluginPages {
           confirms: sameDocument ? [...page.confirms.values()].map((p) => p.value) : [],
           notifications: page.notices.splice(0),
           directories: sameDocument && page.directory ? [page.directory.value] : [],
+          modelPickers: sameDocument && page.modelPicker ? [page.modelPicker.value] : [],
         });
       }
       case 'confirm': {
@@ -350,6 +357,10 @@ export class MobilePluginPages {
         page.confirms.delete(command.requestId);
         pending.answer(command.accepted);
         return {};
+      }
+      case 'answer-model-picker': {
+        if (!page.modelPicker || command.requestId !== page.modelPicker.value.requestId || !this.deps.answerModelPicker) return fail();
+        return done(await this.deps.answerModelPicker(page.id, command.requestId, command.route));
       }
       case 'answer-directory':
         await this.answerDirectory(page, command);
@@ -380,7 +391,7 @@ export class MobilePluginPages {
         if (
           url.origin !== 'https://plugin.invalid' ||
           url.hash ||
-          !/^\/(?:kv|app-context|agent-models|media-models|secrets(?:\/[^/]+(?:\/check)?)?|oauth(?:\/[^/]+\/(?:client|default|insufficient-scopes|accounts\/[^/]+))?|connections(?:\/[^/]+(?:\/[^/]+)?)?|wake)$/.test(
+          !/^\/(?:kv|models|app-context|agent-models|media-models|secrets(?:\/[^/]+(?:\/check)?)?|oauth(?:\/[^/]+\/(?:client|default|insufficient-scopes|accounts\/[^/]+))?|connections(?:\/[^/]+(?:\/[^/]+)?)?|wake)$/.test(
             url.pathname,
           )
         )
@@ -598,6 +609,30 @@ export class MobilePluginPages {
       });
     });
   }
+  modelPickerTarget(pageId: string, pluginId: string): PluginModelPickerTarget | null {
+    const page = this.source(pageId);
+    if (!page || !page.active || page.sourceHidden || page.plugin !== pluginId) return null;
+    this.check(page);
+    return {
+      id: page.id,
+      supportsRemoteRoutes: page.modelPickerRemoteSources === true,
+      isCurrent: () => {
+        try {
+          this.check(page);
+          return this.source(pageId) === page && page.active && !page.sourceHidden;
+        } catch { return false; }
+      },
+      send: (value, cancel) => {
+        this.check(page);
+        if (this.source(pageId) !== page || !page.active || page.sourceHidden || page.modelPicker) return false;
+        page.modelPicker = { value, cancel };
+        return true;
+      },
+      dismiss: requestId => {
+        if (page.modelPicker?.value.requestId === requestId) page.modelPicker = undefined;
+      },
+    };
+  }
   private item(
     ghost: InstalledGhost,
     order?: RemoteCollectionItem['pluginOrder'],
@@ -707,18 +742,19 @@ export class MobilePluginPages {
               .filter(Boolean)
               .join('\n\n'),
           }));
+        const author = ghostFallbackDisplayAuthor(ghost);
         const detailFacts = [
           {
             key: 'version',
             title: t('settings.ghosts.detail.infoVersion', locale),
             value: 'v' + ghost.manifest.version,
           },
-          ...(ghost.manifest.author
+          ...(author
             ? [
                 {
                   key: 'author',
                   title: t('settings.ghosts.detail.infoAuthor', locale),
-                  value: ghost.manifest.author,
+                  value: author,
                 },
               ]
             : []),
@@ -892,6 +928,7 @@ export class MobilePluginPages {
             id: randomUUID(),
             plugin: id,
             controller: context.controllerDeviceId,
+            modelPickerRemoteSources: input.modelPickerRemoteSources === true,
             revision: this.deps.revision(ghost),
             currentOwner: this.deps.captureOwner(),
             currentController: this.deps.captureController(context.controllerDeviceId),
@@ -942,6 +979,7 @@ export class MobilePluginPages {
             id: randomUUID(),
             plugin: id,
             controller: context.controllerDeviceId,
+            modelPickerRemoteSources: input.modelPickerRemoteSources === true,
             revision: this.deps.revision(ghost),
             currentOwner: this.deps.captureOwner(),
             currentController: this.deps.captureController(context.controllerDeviceId),
@@ -1001,6 +1039,7 @@ export class MobilePluginPages {
             // Suspension removes native intents; their cover must not survive resume.
             page.sourceHidden = false;
             this.cancelDirectory(page);
+            page.modelPicker?.cancel();
             page.intents = [];
             page.previews?.clear();
             for (const pending of page.confirms.values()) {
@@ -1055,6 +1094,7 @@ export class MobilePluginPages {
               notifications: page.notices.splice(0),
               unreadAt: page.unreadAt,
               directories: page.directory ? [page.directory.value] : [],
+              modelPickers: page.modelPicker ? [page.modelPicker.value] : [],
               intents: page.intents ?? [],
             };
             return { effects: [], result };
@@ -1063,6 +1103,7 @@ export class MobilePluginPages {
             if (typeof input.hidden !== 'boolean' || !page.active) return fail();
             page.sourceHidden = input.hidden;
             if (input.hidden) {
+              page.modelPicker?.cancel();
               for (const pending of page.confirms.values()) {
                 clearTimeout(pending.timer);
                 pending.answer(false);
@@ -1111,6 +1152,13 @@ export class MobilePluginPages {
             page.intents = page.intents?.filter((intent) => intent.id !== input.intentId);
             page.previews?.delete(input.intentId);
             return { effects: [] };
+          }
+          case 'answer-model-picker': {
+            if (!page.active || page.sourceHidden || !page.modelPicker ||
+                input.requestId !== page.modelPicker.value.requestId || !this.deps.answerModelPicker) return fail();
+            const result = await this.deps.answerModelPicker(page.id, page.modelPicker.value.requestId, input.route);
+            this.check(page);
+            return { effects: [], result };
           }
           case 'answer-directory':
             await this.answerDirectory(page, input);

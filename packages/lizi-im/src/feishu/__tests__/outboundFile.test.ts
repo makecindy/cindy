@@ -102,6 +102,9 @@ describe('Feishu parent-chat file reuse', () => {
     );
   });
 
+  // The first Windows upload cold-starts PowerShell/Add-Type. Its production
+  // helper has a 15s deadline; allow it to finish before asserting the attested
+  // path instead of timing out at Vitest's default 5s (CI run 39577662696).
   it('uploads a regular file once and reuses its file_key for the parent chat', async () => {
     const absPath = await fileFixture('报告.txt', 'trusted report');
 
@@ -133,7 +136,7 @@ describe('Feishu parent-chat file reuse', () => {
     expect(mocks.createFile).toHaveBeenCalledOnce();
     expect(mocks.createImage).not.toHaveBeenCalled();
     expect(mocks.createMessage).toHaveBeenCalledTimes(2);
-  });
+  }, process.platform === 'win32' ? 20_000 : undefined);
 
   // Windows starts a fresh PowerShell process and compiles the native helper
   // for each containment proof. Keep this security regression independent of

@@ -47,6 +47,7 @@ function summarize(label: string, intervals: number[], durationMs: number): Fram
  * 从 fromY 以固定速度(pxPerFrame,向 toY 方向)滚动,每帧推进一小段并记录帧间隔。
  * scrollTo 用 animated:false(自己控制匀速推进,精确测 JS 帧时)。
  * warmup:跳过前 N 帧(首帧跳到 fromY 会一次挂载一批,不算稳态)。
+ * 返回取消函数；调用后停止滚动，也不发布未完成的测量。
  */
 export function runScrollSweep(opts: {
   label: string;
@@ -57,7 +58,7 @@ export function runScrollSweep(opts: {
   onDone: (stats: FrameStats) => void;
   warmup?: number;
   maxFrames?: number;
-}): void {
+}): () => void {
   const { label, fromY, toY, pxPerFrame, scrollTo, onDone } = opts;
   const warmup = opts.warmup ?? 3;
   const maxFrames = opts.maxFrames ?? 400;
@@ -68,12 +69,15 @@ export function runScrollSweep(opts: {
   let lastTs = 0;
   let frameIdx = 0;
   let measureStartTs = 0;
+  let cancelled = false;
+  let frame: ReturnType<typeof requestAnimationFrame>;
 
   const tick = (ts: number) => {
+    if (cancelled) return;
     if (lastTs === 0) {
       lastTs = ts;
       scrollTo(y);
-      requestAnimationFrame(tick);
+      frame = requestAnimationFrame(tick);
       return;
     }
     const dt = ts - lastTs;
@@ -91,7 +95,11 @@ export function runScrollSweep(opts: {
       return;
     }
     scrollTo(y);
-    requestAnimationFrame(tick);
+    frame = requestAnimationFrame(tick);
   };
-  requestAnimationFrame(tick);
+  frame = requestAnimationFrame(tick);
+  return () => {
+    cancelled = true;
+    cancelAnimationFrame(frame);
+  };
 }

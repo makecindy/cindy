@@ -9,22 +9,39 @@ import { useLoginHandoff } from '@/contexts/LoginHandoffContext';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { OpenLogsRow, UploadLogsActionRow } from './LogSupportActions';
 import { useManualLogUpload } from './useManualLogUpload';
+import { useStartupGateStallReport } from './useStartupGateStallReport';
 
 /** Outside startup/auth/database gates so the failure being diagnosed cannot hide the entry. */
 export function StartupLogSupport() {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const upload = useManualLogUpload();
-  const { canEnterApp, isInitializing } = useAuth();
-  const { localDbGateStatus } = useAppShellCover();
+  const { canEnterApp, isInitializing, isAuthenticated, mode } = useAuth();
+  const { localDbGateStatus, coverHeld } = useAppShellCover();
   const { status } = useEnvCheck();
-  const { brandStageMounted } = useLoginHandoff();
+  const { brandStageMounted, phase, branch, panelRevealed, startSignals } = useLoginHandoff();
   const visible =
     isInitializing ||
     !canEnterApp ||
     status !== 'passed' ||
     localDbGateStatus !== 'ready' ||
     brandStageMounted;
+  // 登录面板已显示 = 等用户登录,不是卡住。只看挂载不够:未登录冷启动时登录页会先挂在开屏
+  // 底下,此时开屏若卡住,用户看到的仍是开屏。
+  const awaitingUserLogin = startSignals.loginPanelMounted && panelRevealed;
+  useStartupGateStallReport(visible && !awaitingUserLogin, {
+    authInitializing: isInitializing,
+    authMode: mode,
+    authenticated: isAuthenticated,
+    canEnterApp,
+    envStatus: status,
+    localDbGate: localDbGateStatus,
+    coverHeld,
+    handoffPhase: phase,
+    handoffBranch: branch ?? 'none',
+    brandStageMounted,
+    ...startSignals,
+  });
 
   return (
     <>

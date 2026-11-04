@@ -26,10 +26,9 @@ import {
   messageContentToPreview,
   sortMessagesByCreatedAt,
 } from '@cindy/maker-shared/message-normalize';
-import { describeAgentAuthError } from '@/device-link/remoteStatus';
-import { i18n } from '@/i18n';
 import type { InputProjection, QueuedRemoteMessage, RemoteMessage, RemoteSession } from '@/session/types';
 import {
+  describeNonRetryableAgentError,
   localizeAgentError,
   requiresAgentErrorConfigurationChange,
   localizeUnclassifiedAgentError,
@@ -106,8 +105,8 @@ export function resolveSessionTailBanner(input: ResolveSessionTailBannerInput): 
 
   const tail = findErrorTailMessage(input.messages);
   if (tail && !input.hiddenErrorClientIds.has(tail.clientId)) {
-    const nonRetryableGuidance = describeNonRetryableTailError(tail.text);
-    const agentErrorGuidance = localizeAgentError(tail.reason, tail.toolLoop);
+    const nonRetryableGuidance = describeNonRetryableAgentError(tail.text, tail.reason);
+    const agentErrorGuidance = localizeAgentError(tail.reason, tail.toolLoop, tail.text);
     return {
       kind: 'error-tail',
       clientId: tail.clientId,
@@ -132,31 +131,6 @@ export function resolveSessionTailBanner(input: ResolveSessionTailBannerInput): 
   const ended = input.session.lastTurnEndedAt ?? 0;
   const cleared = input.session.clearedAt ? Date.parse(input.session.clearedAt) : 0;
   if (started > ended && started > cleared) return { kind: 'interrupted' };
-  return null;
-}
-
-/**
- * 不可重试的持久化尾行错误 → 引导文案(null = 可重试,展示原文)。对齐桌面
- * ErrorBanner hide-Retry 门控的核心子集——这些错误重试只会撞同一个失败循环:
- *  - agent 未鉴权(describeAgentAuthError 模板):凭证在被控电脑上,手机改不了;
- *  - codex thread not found:进程重启 / 鉴权模式切换后旧 thread 已随旧进程销毁;
- *  - invalid_encrypted_content:换供应商后协议加密内容不可用,需回桌面处理
- *    (fork 剥离入口仅桌面本地 codex 会话有)。
- * 桌面还有依赖本地上下文的更细分支(codex 401 区分 oauth-bearer / 网关 key、
- * session-expired 的登录引导等),手机端拿不到对应信号,不搬——这些场景重试
- * 失败后错误会重新浮现,不破坏数据。
- */
-function describeNonRetryableTailError(
-  text: string,
-): string | null {
-  const authGuidance = describeAgentAuthError(text);
-  if (authGuidance) return authGuidance;
-  if (/thread not found/i.test(text)) {
-    return i18n.t('session.tail.codexThreadLost');
-  }
-  if (/invalid_encrypted_content/i.test(text)) {
-    return i18n.t('session.tail.encryptedContentInvalid');
-  }
   return null;
 }
 

@@ -1,4 +1,35 @@
 {
+  "githubPrs": {
+    "title": "管理 PR 链接",
+    "hint": "顶栏最多显示 3 个，固定的 PR 优先显示",
+    "empty": "粘贴 GitHub PR 链接即可添加",
+    "removed": "已移除 {{count}} 个",
+    "legacy": "未确认的历史引用：{{count}}",
+    "addLabel": "添加 PR 链接",
+    "add": "添加 PR",
+    "loading": "正在读取…",
+    "restore": "恢复 PR",
+    "pin": "固定到顶栏",
+    "unpin": "取消固定",
+    "pinLimit": "最多固定 3 个 PR",
+    "reorderHint": "按 Alt+↑/↓ 在已固定或未固定组内调整顺序。",
+    "dragHandle": "拖动排序 {{repo}} #{{number}}",
+    "remove": "移除 PR",
+    "errors": {
+      "duplicate": "此 PR 已关联；已移除的链接可在列表中恢复",
+      "notFound": "找不到此 PR，或没有访问权限",
+      "invalidUrl": "请输入有效的 GitHub PR 链接",
+      "reorderFailed": "顺序没有保存，请重试",
+      "verifyFailed": "无法验证 PR，请检查 GitHub 登录与访问权限",
+      "unsupported": "这台电脑的版本暂不支持管理 PR 链接",
+      "failed": "无法更新 PR 链接"
+    },
+    "moveUp": "上移"
+  },
+  "paneResize": {
+    "label": "分栏宽度",
+    "hint": "左右拖动可调整两栏宽度"
+  },
   "sideChat": {
     "collapse": "收起追问",
     "resume": "继续追问",
@@ -177,7 +208,7 @@
       },
       "actionCopy": {
         "pending": "先处理待处理请求，处理后输入区会恢复。",
-        "archived": "任务已归档，恢复后才能继续发送。",
+        "archived": "任务已归档，发送消息会自动取消归档。",
         "deleted": "任务已删除，不能继续操作。",
         "queuePaused": "队列已暂停，可在队列面板继续执行。"
       }
@@ -253,6 +284,7 @@
     "voiceSenderNotReady": "消息暂时无法发送，请返回后重新进入任务。",
     "voiceStopAndSend": "结束语音输入并发送",
     "sendMessage": "发送远程消息",
+    "inputSyncFailed": "未能读取完整输入，内容已保留，请重试。",
     "voiceStartInput": "开始语音输入",
     "stopSession": "停止远程任务",
     "sessionNotFoundResync": "未找到当前远程任务，请重新同步后再发送。",
@@ -415,11 +447,12 @@
     "chipArchived": "已归档",
     "titleFallback": "远程任务",
     "unnamedTitle": "未命名任务",
+    "openSection": "打开",
     "renameAction": "重命名任务",
     "copyLinkAction": "复制任务链接",
     "unpin": "取消置顶",
     "pin": "置顶",
-    "restore": "恢复",
+    "restore": "取消归档",
     "archive": "归档",
     "deleteAction": "删除任务",
     "deleteConversation": "删除任务",
@@ -435,12 +468,12 @@
     "deleteConfirmTitle": "删除任务？",
     "deleteConfirmBody": "删除后不可恢复。",
     "archiveScheduleConfirmTitle": "归档任务？",
-    "archiveScheduleConfirmBody_one": "该任务绑定了自动化{{names}}，归档后将暂停。",
-    "archiveScheduleConfirmBody_other": "该任务绑定了自动化{{names}}，归档后将暂停。",
+    "archiveScheduleConfirmBody_one": "关联的自动化{{names}}仍会运行，并恢复此任务。",
+    "archiveScheduleConfirmBody_other": "关联的自动化{{names}}仍会运行，并恢复此任务。",
     "archiveScheduleName": "「{{name}}」",
     "archiveScheduleNameSeparator": "、",
-    "archiveScheduleBulkNotice_one": "其中 {{count}} 个任务绑定了自动化，归档后这些自动化将暂停。",
-    "archiveScheduleBulkNotice_other": "其中 {{count}} 个任务绑定了自动化，归档后这些自动化将暂停。",
+    "archiveScheduleBulkNotice_one": "其中 {{count}} 个任务关联了自动化，后续运行时会恢复这些任务。",
+    "archiveScheduleBulkNotice_other": "其中 {{count}} 个任务关联了自动化，后续运行时会恢复这些任务。",
     "dirAlreadyAdded": "这个目录已经在列表里。",
     "resetCodexTitle": "重置 Codex 用量？",
     "resetCodexBody": "将为 {{account}} 消耗 1 次重置。配额窗口会立即重开，此操作不能撤销。",
@@ -557,9 +590,11 @@
     "toolUseLoopDetectedPingPongWithCount": "模型在多个工具调用之间来回循环，Cindy 检测到本轮已有 {{count}} 次调用后停止了本轮。可以发送新消息继续。",
     "toolUseLoopDetectedRotationWithCount": "模型持续轮转调用多个工具，Cindy 检测到本轮已有 {{count}} 次调用后停止了本轮。可以发送新消息继续。",
     "codexThreadLost": "Codex 鉴权模式已切换，当前任务无法继续，请新建任务。",
+    "remoteCompactEncryptedContent": "整理上下文失败：模型无法读取历史中的加密内容。自动接续未完成，可重试恢复。",
     "encryptedContentInvalid": "由于更换供应商导致加密不可用，本任务只能在原供应商下使用；请回到电脑端处理（可以用「从这里开启新任务」丢弃协议加密内容，在新任务里继续）。"
   },
   "row": {
+    "markRead": "已读",
     "moreOptions": "更多选项",
     "archiveConversation": "归档任务",
     "closeActionMenu": "关闭任务操作菜单",
@@ -581,6 +616,9 @@
     "taskAlreadyCreated": "电脑上已创建这个任务，已保存的消息会在原任务中继续发送。"
   },
   "remoteError": {
+    "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任务暂不支持切换 Harness。请选择当前 Harness 下的模型，或使用所需 Harness 新建 SSH 任务。",
+    "MODEL_SELECTION_UNAVAILABLE": "所选模型在该供应商下已不可用。请在设置中检查连接，或重新选择可用模型。",
+    "HARNESS_SWITCH_NOT_READY": "Harness 尚未完成切换。请查看错误详情，待 Harness 就绪后重试。",
     "REMOTE_AGENT_GROUP_USAGE_LIMIT": "此模型的可用账号已达到用量上限。可换用其他模型，或等配额重置后继续。",
     "REMOTE_AGENT_GROUP_UNAVAILABLE": "供应商组里的电脑现在都不能运行这个任务：可能都不在线、已暂停分配、正在冷却，或没有这个模型。可以在电脑上这个供应商的「远程与分享」页查看组内电脑。",
     "REMOTE_DAEMON_CLOSED": "远程连接中断了，可能正在更新。这一轮已经结束，请重新发送。",
@@ -594,6 +632,7 @@
     "DEVICE_LINK_CONTROL_DISABLED": "已关闭对该设备的控制，消息未发送。",
     "DEVICE_LINK_BUSY": "远端繁忙，请稍后重试。",
     "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件传输失败，消息未发送。请重试。",
+    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy 无法读取源附件，消息未发送。请将文件另存到“下载”或其他可访问的文件夹，移除原附件，再用附件按钮添加副本后发送。",
     "MCP_APPROVAL_AUTO_BLOCKED": "这次工具调用被自动审批拦截，未收到你手动拒绝的记录。",
     "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "权限确认超时，未收到有效的确认结果。仅凭超时无法判断你是否点过按钮。",
     "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "这次权限确认未完成，未收到你手动拒绝的记录。",
@@ -615,7 +654,9 @@
     "REMOTE_AGENT_RESUME_LOST": "之前在那台电脑上的对话没能接上，Agent 会在没有之前上下文的情况下继续。",
     "REMOTE_AGENT_UNSUPPORTED": "那台电脑上这个 Agent 不可用。在那台电脑上安装或登录后再试，或换一个 Agent。",
     "REMOTE_AGENT_INVALID": "和运行 Agent 的电脑通信出错。请重试；如果一直出现，请把两台电脑上的 Cindy 都更新到最新版。",
+    "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已达到分享者设置的模型占比上限。请选择其他可用模型继续。",
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那台电脑没有允许远程调用这个供应商。请在那台电脑的「设置 → 模型供应商」里打开「允许被远程调用」，或换一个模型。",
+    "REMOTE_AGENT_FORK_FAILED": "运行 Agent 的电脑没能从这里开启新任务。请重试，或换一条消息再试。",
     "REMOTE_AGENT_SHARE_PAUSED": "对方已暂停对你的分享，恢复前不能使用这些模型。可以换成其他模型继续。",
     "REMOTE_AGENT_SHARE_REMOVED": "这个分享已不可用（对方删除了分享或你已退出）。可以换成其他模型继续。",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "分享的供应商暂时不可用：对方电脑可能不在线，或对方暂时关闭了分享。可以稍后再试，或换成其他模型继续。"
@@ -746,5 +787,17 @@
     "confirm": "换过去",
     "remember": "换过去，以后自动换（仅本任务）",
     "cancel": "取消"
+  },
+  "messageEdit": {
+    "editing": "正在编辑消息",
+    "discard": "放弃编辑消息",
+    "stopTimeout": "等待任务停止超时，请稍后重试",
+    "queueNotEmpty": "任务有排队中的消息，先发送或移除队列内容后再编辑",
+    "notLast": "任务里已有更新的消息，这条不再是最后一条，无法编辑重发",
+    "failed": "编辑重发失败，请重试",
+    "noPriorAssistant": "这条消息前面还没有 AI 回复，电脑端当前版本暂不支持编辑；更新电脑端 Cindy 后再试。",
+    "uploadsPending": "还有附件正在上传，等上传完成后再编辑消息。",
+    "rollbackHint": "发送将撤销上一轮对 {{count}} 个文件的改动",
+    "conversationOnlyHint": "发送不会恢复项目文件，上一轮的文件改动会保留"
   }
 }

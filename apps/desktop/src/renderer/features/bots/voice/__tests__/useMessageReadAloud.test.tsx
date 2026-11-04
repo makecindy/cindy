@@ -2,11 +2,13 @@
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { VoiceConversationApi } from '@/../shared/voiceConversation';
+import type { SpeechPlayer } from '../PcmSpeechPlayer';
 import { useMessageReadAloud } from '../useMessageReadAloud';
 
 const h = vi.hoisted(() => ({
   close: vi.fn(),
   warning: vi.fn(),
+  play: vi.fn<SpeechPlayer['play']>(),
   t: (key: string) => key,
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: h.t }) }));
@@ -21,10 +23,7 @@ vi.mock('../PcmSpeechPlayer', () => ({
     pause() {}
     resume() {}
     cancel() {}
-    play(_read: unknown, _rate: number, onStarted: () => void) {
-      onStarted();
-      return new Promise<void>(() => {});
-    }
+    play = h.play;
   },
 }));
 const selection = { modelId: 'speech', voice: 'saved-voice', speed: 1.15 };
@@ -59,6 +58,10 @@ function makeApi() {
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  h.play.mockReset().mockImplementation((_read, _rate, onStarted) => {
+    onStarted?.();
+    return new Promise<void>(() => {});
+  });
   api = makeApi();
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
@@ -104,6 +107,63 @@ it('advertises only a saved usable selection and rechecks it on every click', as
   await waitFor(() => expect(h.warning).toHaveBeenCalled());
   expect(api.startPlayback).not.toHaveBeenCalled();
   expect(result.current.value?.available).toBe(false);
+});
+
+// PR #6660 P2: the real hook/controller/queue must carry failed speak/readSpeech
+// errors into the toast. Existing tests covered unavailable configuration, not
+// synthesis errors. Unit tier; no network/audio device or real timeout wait.
+it.each([
+  { stage: 'speak', code: 'VOICE_SPEECH_TIMEOUT', key: 'bots.voiceMode.errors.speechTimeout' },
+  { stage: 'readSpeech', code: 'VOICE_SPEECH_TIMEOUT', key: 'bots.voiceMode.errors.speechTimeout' },
+  { stage: 'speak', code: 'PRECONDITION_FAILED', key: 'bots.voiceMode.readAloudFailed' },
+] as const)(
+  'shows $key for $stage $code and clears it on a new playback',
+  async ({ stage, code, key }) => {
+    vi.mocked(api[stage]).mockRejectedValueOnce(
+      new Error(
+        `Error invoking remote method 'voice-conversation:${stage}': Error: [${code}] private provider detail`,
+      ),
+    );
+    if (stage === 'readSpeech') {
+      h.play.mockImplementationOnce(async (read) => {
+        await read();
+      });
+    }
+    const { result } = renderHook(() => useMessageReadAloud(options));
+    await waitFor(() => expect(result.current.value?.available).toBe(true));
+    act(() => result.current.value?.toggle('reply', 'hello'));
+    await waitFor(() => expect(h.warning).toHaveBeenCalledWith(key));
+    expect(h.warning).toHaveBeenCalledOnce();
+    expect(result.current.value?.phase).toBe('error');
+    expect(result.current.value?.available).toBe(true);
+    expect(api.speak).toHaveBeenCalledOnce();
+    expect(api.end).toHaveBeenCalledOnce();
+    expect(h.close).toHaveBeenCalledOnce();
+
+    act(() => result.current.value?.toggle('reply', 'hello'));
+    await waitFor(() => expect(result.current.value?.phase).toBe('playing'));
+    expect(h.warning).toHaveBeenCalledOnce();
+  },
+);
+
+it('does not report a late synthesis timeout after the user stops reading aloud', async () => {
+  let fail!: (error: Error) => void;
+  api.speak.mockReturnValueOnce(
+    new Promise((_resolve, reject) => {
+      fail = reject;
+    }),
+  );
+  const { result } = renderHook(() => useMessageReadAloud(options));
+  await waitFor(() => expect(result.current.value?.available).toBe(true));
+  act(() => result.current.value?.toggle('reply', 'hello'));
+  await waitFor(() => expect(api.speak).toHaveBeenCalledOnce());
+  act(() => result.current.value?.toggle('reply', 'hello'));
+  await act(async () => fail(new Error('[VOICE_SPEECH_TIMEOUT] Speech timed out')));
+  expect(result.current.value?.phase).toBe('idle');
+  expect(h.warning).not.toHaveBeenCalled();
+  expect(h.play).not.toHaveBeenCalled();
+  expect(h.close).toHaveBeenCalledOnce();
+  expect(api.end).toHaveBeenCalledOnce();
 });
 
 it('updates discovery without defaulting to another connection with the same model ID', async () => {

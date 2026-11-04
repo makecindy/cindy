@@ -313,10 +313,13 @@ async function readBody(req: http.IncomingMessage): Promise<string | null> {
   for await (const chunk of req) {
     const buf = chunk as Buffer;
     total += buf.length;
-    if (total > MAX_BODY_BYTES) return null;
+    if (total > MAX_BODY_BYTES) {
+      chunks.length = 0;
+      continue;
+    }
     chunks.push(buf);
   }
-  return Buffer.concat(chunks).toString('utf8');
+  return total > MAX_BODY_BYTES ? null : Buffer.concat(chunks).toString('utf8');
 }
 
 function tokenMatches(presented: string, expected: string): boolean {

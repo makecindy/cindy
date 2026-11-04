@@ -116,6 +116,8 @@ describe('RewindPreviewDialog running-session flow', () => {
   });
 
   it('switches to an exact preview if the turn finishes while the dialog is open', async () => {
+    let finishPreview!: (result: { canRewind: boolean; filesChanged: never[]; insertions: number; deletions: number }) => void;
+    mocks.rewindPreview.mockReturnValueOnce(new Promise(resolve => { finishPreview = resolve; }));
     const props = {
       open: true,
       sessionId: 'session-1',
@@ -130,7 +132,9 @@ describe('RewindPreviewDialog running-session flow', () => {
     view.rerender(<RewindPreviewDialog {...props} sessionRunning={false} />);
 
     await waitFor(() => expect(mocks.rewindPreview).toHaveBeenCalledWith('session-1', 'message-1'));
-    expect(screen.getByText('chat.rewind.dialog.summaryEmpty')).toBeTruthy();
+    expect(screen.getByTestId('spinner')).toBeTruthy();
+    finishPreview({ canRewind: true, filesChanged: [], insertions: 0, deletions: 0 });
+    expect(await screen.findByText('chat.rewind.dialog.summaryEmpty')).toBeTruthy();
   });
 
   it('upgrades an authoritative running preview race to stop-then-rewind', async () => {

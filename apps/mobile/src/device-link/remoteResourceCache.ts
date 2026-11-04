@@ -1,10 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import type { ChatActor } from '@/chat/chatServerClient';
+import { resolveRemoteText } from '@cindy/device-link';
 import { isMobileRemoteCollectionSupported, normalizeRemoteCollectionItems, parseRemoteResourceTargets, type HostedRemoteCollectionItem, type RemoteHomeCollection } from './remoteResources';
 
 const PREFIX = 'cindy.remoteResources.v1.';
 const MAX_CHARS = 256 * 1024;
 type ChatRoster = { items: HostedRemoteCollectionItem[]; ids: string[] };
-type Snapshot = { home: RemoteHomeCollection[]; items: Record<string, HostedRemoteCollectionItem[]>; read: Record<string, number>; readSequences?: Record<string, string>; chatRosters?: Record<string, ChatRoster> };
+export type CachedCloudHome = { cindyIds?: string[]; supported: boolean; actors: ChatActor[]; deviceNames: Array<[string, string]> };
+type Snapshot = { home: RemoteHomeCollection[]; items: Record<string, HostedRemoteCollectionItem[]>; read: Record<string, number>; readSequences?: Record<string, string>; chatRosters?: Record<string, ChatRoster>; cloudHomes?: Record<string, CachedCloudHome> };
 const empty = (): Snapshot => ({ home: [], items: {}, read: {}, readSequences: {} });
 const validSequence = (value: unknown): value is string => typeof value === 'string' && /^\d{1,30}$/.test(value);
 let epoch = 0;
@@ -23,6 +26,17 @@ function normalize(raw: unknown): Snapshot {
   const out = empty();
   if (!raw || typeof raw !== 'object') return out;
   const value = raw as Partial<Snapshot>;
+  if (value.cloudHomes && typeof value.cloudHomes === 'object') for (const realm of ['cn', 'global']) {
+    const home = value.cloudHomes[realm];
+    if (!home || typeof home.supported !== 'boolean' || !Array.isArray(home.actors) || !Array.isArray(home.deviceNames)) continue;
+    (out.cloudHomes ??= {})[realm] = { supported: home.supported,
+      ...(Array.isArray(home.cindyIds) ? { cindyIds: home.cindyIds.filter(id => typeof id === 'string' && home.actors.some(actor => actor?.externalId === id)) } : {}),
+      actors: home.actors.filter(actor => actor && typeof actor.id === 'string' && typeof actor.name === 'string'
+        && typeof actor.kind === 'string' && typeof actor.externalId === 'string'
+        && (actor.homeDeviceId === null || typeof actor.homeDeviceId === 'string')
+        && (actor.avatar === null || typeof actor.avatar === 'string')),
+      deviceNames: home.deviceNames.filter(pair => Array.isArray(pair) && pair.length === 2 && pair.every(part => typeof part === 'string')) };
+  }
   if (Array.isArray(value.home)) for (const row of value.home.slice(0, 32)) {
     if (!row || typeof row.id !== 'string' || row.id.length > 160 || typeof row.title !== 'string' || typeof row.resourceKind !== 'string') continue;
     if (!isMobileRemoteCollectionSupported(row.id)) continue;
@@ -59,6 +73,11 @@ function normalize(raw: unknown): Snapshot {
           avatarColor: typeof member.avatarColor === 'string' ? member.avatarColor.slice(0, 64) : '' }];
       }) : undefined;
       return [{ key: `chat:${item.ref.id}`, host: { deviceId: '', deviceName: '' }, item, groupMembers,
+        ...(row.chatUnread && Number.isInteger(row.chatUnread.count) && row.chatUnread.count >= 0
+          && typeof row.chatUnread.mentioned === 'boolean' && Number.isInteger(row.chatUnread.threadCount)
+          && row.chatUnread.threadCount >= 0 && row.chatUnread.threadCount <= row.chatUnread.count
+          && typeof row.chatUnread.threadMentioned === 'boolean'
+          ? { chatUnread: { count: Math.min(row.chatUnread.count, 999), mentioned: row.chatUnread.mentioned, threadCount: Math.min(row.chatUnread.threadCount, 999), threadMentioned: row.chatUnread.threadMentioned } } : {}),
         ...(validSequence(row.lastReplySequence) ? { lastReplySequence: row.lastReplySequence } : {}) }];
     });
     (out.chatRosters ??= {})[realm] = { items, ids: [...new Set(roster.ids.filter(id => typeof id === 'string' && id.length <= 160))].slice(-2000) };
@@ -75,9 +94,32 @@ export async function readRemoteResourceSnapshot(userId: string): Promise<Snapsh
   let value = empty();
   try { if (raw && raw.length <= MAX_CHARS) value = normalize(JSON.parse(raw)); } catch { /* cache miss */ }
   if (epoch !== expected) return empty();
-  if (!snapshots.has(userId)) snapshots.set(userId, value);
+  if (!snapshots.has(userId)) {
+    snapshots.set(userId, value);
+    // Rows read before the disk answered (e.g. task follow marks) must see the restored roster.
+    if (raw) emit();
+  }
   return snapshots.get(userId)!;
 }
+
+/** Reopening a page paints the same saved rows in its first render, without an async blank frame. */
+export const peekRemoteResourceSnapshot = (userId: string): Snapshot | undefined => snapshots.get(userId);
+export const peekCachedChatRoster = (userId: string, realm: string): ChatRoster | null => snapshots.get(userId)?.chatRosters?.[realm] ?? null;
+export const peekCachedCloudHome = (userId: string, realm: string): CachedCloudHome | null => snapshots.get(userId)?.cloudHomes?.[realm] ?? null;
+export const readCachedCloudHome = async (userId: string, realm: string): Promise<CachedCloudHome | null> =>
+  (await readRemoteResourceSnapshot(userId)).cloudHomes?.[realm] ?? null;
+export const cacheCloudHome = (userId: string, realm: string, value: CachedCloudHome, current: () => boolean = () => true) => update(userId, s => {
+  if (current()) (s.cloudHomes ??= {})[realm] = value;
+});
+
+/** Independent metadata reads merge inside the serialized cache update. */
+export const patchCachedCloudHome = (userId: string, realm: string,
+  patch: Pick<CachedCloudHome, 'cindyIds'> & Partial<Pick<CachedCloudHome, 'deviceNames'>>,
+  current: () => boolean,
+) => update(userId, s => {
+  const home = s.cloudHomes?.[realm];
+  if (current() && home) s.cloudHomes![realm] = { ...home, ...patch };
+});
 
 /** Trim only the disposable disk mirror; live rows and read positions stay intact. */
 function diskSnapshot(raw: string): string {
@@ -110,6 +152,10 @@ function diskSnapshot(raw: string): string {
     remaining -= JSON.stringify(roster.ids.shift()).length;
   }
   while (remaining > 0 && copy.home.length) remaining -= JSON.stringify(copy.home.shift()).length;
+  for (const home of Object.values(copy.cloudHomes ?? {})) {
+    while (remaining > 0 && home.actors.length) remaining -= JSON.stringify(home.actors.pop()).length;
+    while (remaining > 0 && home.deviceNames.length) remaining -= JSON.stringify(home.deviceNames.pop()).length;
+  }
   return JSON.stringify(copy);
 }
 
@@ -175,6 +221,30 @@ export function cachedBotIdForSession(userId: string, collectionId: string, devi
     && item.ref.kind === 'bot' && item.links.some(({ rel, target }) => rel === 'conversation'
       && target.kind === 'session' && target.sessionId === sessionId));
   return row?.item.ref.id ?? '';
+}
+const NO_FOLLOWERS: readonly HostedRemoteCollectionItem[] = [];
+let followIndex: { userId: string; revision: number; byTask: Map<string, HostedRemoteCollectionItem[]> } | null = null;
+/**
+ * Teammates whose roster row follows this task (link rel `following`), by name, as the desktop
+ * sidebar mark orders them. Same computer only; presentation only, never authorization.
+ */
+export function cachedTaskFollowers(userId: string, deviceId: string, sessionId: string): readonly HostedRemoteCollectionItem[] {
+  if (!userId || !deviceId) return NO_FOLLOWERS;
+  if (followIndex?.userId !== userId || followIndex.revision !== revision) {
+    const byTask = new Map<string, HostedRemoteCollectionItem[]>();
+    for (const row of snapshots.get(userId)?.items.teammates ?? []) {
+      if (row.item.ref.kind !== 'bot') continue;
+      for (const { rel, target } of row.item.links) {
+        if (rel !== 'following' || target.kind !== 'session') continue;
+        const key = JSON.stringify([row.host.deviceId, target.sessionId]);
+        byTask.set(key, [...(byTask.get(key) ?? []), row]);
+      }
+    }
+    const name = (row: HostedRemoteCollectionItem) => resolveRemoteText(row.item.display.title);
+    for (const rows of byTask.values()) rows.sort((left, right) => name(left).localeCompare(name(right)));
+    followIndex = { userId, revision, byTask };
+  }
+  return followIndex.byTask.get(JSON.stringify([deviceId, sessionId])) ?? NO_FOLLOWERS;
 }
 /** A cached roster row for display (name/avatar) only; never an authorization or availability signal. */
 export function cachedBotItem(userId: string, collectionId: string, deviceId: string, botId: string) {

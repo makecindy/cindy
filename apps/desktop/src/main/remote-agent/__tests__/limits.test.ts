@@ -23,7 +23,7 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
-function makeHost(extra: Partial<RemoteAgentHostDeps> = {}) {
+function makeHost(extra: Partial<RemoteAgentHostDeps> = {}, onStarted = () => {}) {
   const host = createRemoteAgentHost({
     readLimits: () => limits,
     isAgentAvailable: () => true,
@@ -37,7 +37,7 @@ function makeHost(extra: Partial<RemoteAgentHostDeps> = {}) {
         send: async () => {}, steer: async () => {}, abort: async () => {}, close: vi.fn(async () => {}),
         events: () => ({ [Symbol.asyncIterator]: () => ({ next: () => new Promise<IteratorResult<AgentEvent>>(() => {}) }) }),
         getUsageSnapshot: () => ({ tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 }),
-        setInteractionResolver() {},
+        setInteractionResolver: onStarted,
       };
       handles.push(handle);
       return handle;
@@ -50,6 +50,16 @@ function makeHost(extra: Partial<RemoteAgentHostDeps> = {}) {
   hosts.push(host);
   return host;
 }
+
+// open acknowledges receipt before the shadow workspace and tunnel are ready.
+// Wait for handle installation rather than vi.waitFor's 1s disk-speed budget;
+// the suite's normal test timeout still catches startup that never completes.
+function whenStarted(count: number) {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, onStarted: () => { if (--count === 0) resolve(); } };
+}
+
 function request(runId = randomUUID(), extra: Record<string, unknown> = {}) {
   return { op: 'open', runId, agentKind: 'claude-code', payload: { json: {
     sessionId: runId, virtualWorkspace: true, options: { model: 'm' },
@@ -59,7 +69,7 @@ function request(runId = randomUUID(), extra: Record<string, unknown> = {}) {
 }
 describe('provider computer session limits', () => {
   it('keeps defaults and advertises the configured limit', async () => {
-    expect(DEFAULT_REMOTE_AGENT_LIMITS).toEqual({ perDevice: 16, total: 64 });
+    expect(DEFAULT_REMOTE_AGENT_LIMITS).toEqual({ perDevice: 16, total: 64, idleMinutes: 30 });
     const host = makeHost();
     expect(await host.handle('a', { op: 'caps' })).toMatchObject({ maxRuns: 2 });
     limits = { perDevice: 70, total: 100 };
@@ -98,12 +108,14 @@ describe('provider computer session limits', () => {
     expect(host.limitUsage().total).toBe(1);
   });
   it('keeps retries idempotent and existing tasks alive after lowering limits', async () => {
-    const host = makeHost();
+    const started = whenStarted(2);
+    const host = makeHost({}, started.onStarted);
     const first = request();
     await host.handle('a', first);
     await host.handle('a', request());
     await host.handle('a', first);
-    await vi.waitFor(() => expect(handles).toHaveLength(2));
+    await started.promise;
+    expect(handles).toHaveLength(2);
     limits = { perDevice: 1, total: 1 };
     expect(host.limitUsage().total).toBe(2);
     expect(handles.every(h => vi.mocked(h.close).mock.calls.length === 0)).toBe(true);
@@ -116,10 +128,12 @@ describe('provider computer session limits', () => {
   });
   it('counts a slot until asynchronous close finishes', async () => {
     limits = { perDevice: 1, total: 1 };
-    const host = makeHost();
+    const started = whenStarted(1);
+    const host = makeHost({}, started.onStarted);
     const first = request();
     await host.handle('a', first);
-    await vi.waitFor(() => expect(handles).toHaveLength(1));
+    await started.promise;
+    expect(handles).toHaveLength(1);
     let finish!: () => void;
     vi.mocked(handles[0].close).mockImplementation(() => new Promise<void>(resolve => { finish = resolve; }));
     const closing = host.handle('a', { op: 'close', runId: first.runId, mode: 'close', reason: 'navigation' });

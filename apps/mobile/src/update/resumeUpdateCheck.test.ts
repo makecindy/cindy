@@ -233,11 +233,17 @@ describe('createResumeUpdateChecker 整包路径', () => {
     expect(bundle).toBe('up-to-date');
   });
 
-  it('非强更整包更新 → update-available 但完全静默(不回调)', async () => {
-    const deps = makeDeps({ fetchLatest: vi.fn(async () => latestRecord()) });
+  // Unit: resume used to discard ordinary APK releases, so long-running Android
+  // apps could not prepare a new package. The public checker now forwards them.
+  it('非强更整包更新交给自动下载出口，不进入强更闸门', async () => {
+    const onAvailableUpdate = vi.fn();
+    const deps = makeDeps({ fetchLatest: vi.fn(async () => latestRecord()), onAvailableUpdate });
     const { bundle } = await runOnce(deps);
     expect(bundle).toBe('update-available');
     expect(deps.onForcedUpdate).not.toHaveBeenCalled();
+    expect(onAvailableUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      forced: false, target: expect.objectContaining({ version: '2.0.0' }),
+    }));
   });
 
   it.each(['0.1.4', '0.1.5'])('整包 version=%s 不高于本机 → 忽略整包,OTA 仍正常下载', async (version) => {

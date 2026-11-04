@@ -79,7 +79,7 @@ export function providerGroupRebalanceTarget(
 }
 
 /**
- * 几个窗口取最不急的那个(也是设置页进度条画的那个)：一个窗口已经用得太快，就不再催这台。有一个读不到就整台读不到。
+ * 几个窗口取最不急的那个：一个窗口已经用得太快，就不再催这台。有一个读不到就整台读不到。
  */
 function paceOf(
   windows: readonly ProviderGroupMemberQuota[],
@@ -94,7 +94,7 @@ function paceOf(
   return pace;
 }
 
-/** 排序用的急不急，加上设置页进度条画的那个窗口；读不到时两者都是 null。 */
+/** 排序用的急不急，加上算出它的那个窗口；读不到时两者都是 null。 */
 function paceState(windows: readonly ProviderGroupMemberQuota[] | null, now: number) {
   const pace = windows ? paceOf(windows, now) : null;
   return { urgency: pace?.urgency ?? null, quota: pace?.window ?? null };

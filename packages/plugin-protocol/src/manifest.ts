@@ -1,5 +1,10 @@
+import { isSafeGhostRelativePath } from './internal/ghostPath.js';
+import { validateWithStoredMcpApps, parseGhostMcpApps, type GhostMcpApps } from './toolUi.js';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from './secretCheck.js';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from './routineEvents.js';
+import { parseGhostModelsNeeds, type GhostModelsNeeds } from './pluginModels.js';
+import { GHOST_LOCALES, type GhostLocale } from './locales.js';
+export { GHOST_LOCALES, type GhostLocale } from './locales.js';
 
 /** `.cindy` 包根目录中的 manifest 文件名。 */
 export const GHOST_MANIFEST_FILE = 'ghost.json';
@@ -14,8 +19,6 @@ export const GHOST_MANIFEST_SCHEMA_VERSION = 3 as const;
 export const GHOST_MANIFEST_SUMMARY_MAX_CHARS = 300;
 
 /** Cindy host locales supported by Plugin manifest resources. */
-export const GHOST_LOCALES = ['zh-CN', 'en', 'ja', 'ko'] as const;
-export type GhostLocale = (typeof GHOST_LOCALES)[number];
 export type GhostManifestLocales = {
   en: string;
 } & Partial<Record<Exclude<GhostLocale, 'en'>, string>>;
@@ -57,6 +60,8 @@ function isWindowsReservedName(name: string): boolean {
  * 'main-view' = 应用级插件主视图：宿主只挂载已批准 manifest 声明的包内
  * HTML 入口。它与会话内 panel 独立授权，本身不附赠网络、文件或
  * 凭证能力。
+ * 'task-view' = 跟对话的任务页：页签存在各任务的右侧栏里、随任务切换；与
+ * main-view 同一 WebView 沙箱，本身不附赠网络、文件或凭证能力。
  * 'session-context' = 会话上下文(2026-07-23):agent 派活(tool-call)时,主机把
  * 当次会话的可信 {session_id, workdir, workdir_is_local} 注入 args.session_context。
  * 只注入宿主认证过的事实,插件与 agent 自报的同名字段一律被剥除;远程工作区
@@ -93,6 +98,7 @@ export const LEGACY_GHOST_SLOTS = [
   'card',
   'panel',
   'main-view',
+  'task-view',
   'cindy',
   'agent',
   'node',
@@ -109,6 +115,7 @@ export const LEGACY_GHOST_SLOTS = [
   'skill',
   'workspace',
   'ios-simulator',
+  'live-screen',
 ] as const;
 type LegacyGhostSlot = string;
 
@@ -186,6 +193,14 @@ export interface GhostMainViewDecl {
   multiple?: true;
 }
 
+/** 跟对话的任务页:页签存在各任务的右侧栏里,随任务切换;页面经查询参数 `session` 得知所在任务。 */
+export interface GhostTaskViewDecl {
+  /** 页签标题；缺省回退插件 name。 */
+  title?: string;
+  /** 任务页入口（安装目录内安全相对路径）。 */
+  html: string;
+}
+
 /**
  * 芯片型意识注册给 agent 的工具声明(卡槽②)。
  * 声明式而非运行时动态注册(规则 9:确定性;且会话中途增删工具会破坏
@@ -199,6 +214,8 @@ export interface GhostToolDecl {
   description: string;
   /** JSON Schema(object)形态的参数声明;可省略(无参工具)。 */
   parameters?: Record<string, unknown>;
+  /** Host approval policy. `auto` requires explicit installation consent. */
+  approval?: 'auto' | 'each-call';
 }
 
 /**
@@ -222,9 +239,13 @@ export interface GhostAgentNeeds {
   tasks?: boolean;
   /** 查询项目、任务、伙伴并投递消息;必须同时声明 tasks,需独立批准。 */
   targets?: boolean;
+  /** Independently approved, scoped Auto delegation to an existing companion. */
+  delegation?: boolean;
   /** 后台隐藏任务;必须与 `tasks: true` 同时声明。 */
   hiddenTasks?: boolean;
   schedule?: boolean;
+  /** 只读查看项目任务的列表与状态并打开任务;不含任务内容,需独立批准。 */
+  observe?: boolean;
 }
 
 /** 插件随包本地 Node 工作进程使用的 stdio 协议。 */
@@ -873,6 +894,8 @@ export const GHOST_SETUP_KV_KEY_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 
 /** 已校验的 ghost.json 协议文档；Desktop 会再投影成无 slots 的运行时模型。 */
 export interface GhostManifest {
+  /** Optional MCP Apps resources and links to existing tools. */
+  mcpApps?: unknown;
   /** Host-owned mail editor; providers supply mailbox adapters only. */
   mail?: true;
   /** Provider-owned read capability; Cindy owns mail presentation. */
@@ -887,6 +910,8 @@ export interface GhostManifest {
   name: string;
   /** 版本字符串(不强制 semver,仅展示用)。 */
   version: string;
+  /** 本版本相对上一实际发布包的完整更新说明；旧包可省略。纯文本。 */
+  releaseNotes?: string;
   /**
    * 安装此 Release 所需的最低 Cindy 客户端版本。缺省表示不限制客户端版本；
    * 声明时必须是合法 SemVer，客户端与 Plugin Server 使用同一比较语义。
@@ -947,7 +972,7 @@ export interface GhostManifest {
    * 页用它避免抖动)。须与 settingsHtml 成对声明。
    */
   settingsHeight?: number;
-  /** 是否显示宿主「模型与任务」默认配置卡；缺省或 true 显示，false 仅隐藏卡片。 */
+  /** 本插件是否使用宿主默认配置卡；缺省/true 启用，false 隐藏且不读取该插件的卡片配置。 */
   showTaskPreferences?: boolean;
   /** 仅 schemaVersion 2 存在的兼容声明。 */
   slots?: LegacyGhostSlot[];
@@ -969,6 +994,8 @@ export interface GhostManifest {
   subscribe?: GhostSubscribeNeeds;
   /** Autonomous publishing of declared events into user-configured routines. */
   routineEvents?: GhostRoutineEvents;
+  /** Models this plugin may add to the model picker; the list is published at runtime. */
+  models?: GhostModelsNeeds;
   /**
    * network 能力与访问范围。
    * 域名白名单 + 凭证声明由插件详情逐项展示,运行期主机代发并守门。
@@ -991,6 +1018,8 @@ export interface GhostManifest {
   panel?: GhostPanelDecl;
   /** 应用级主视图声明；v3 直接声明，v2 与 `main-view` slot 成对。 */
   mainView?: GhostMainViewDecl;
+  /** 跟对话的任务页声明；v3 直接声明，v2 与 `task-view` slot 成对。 */
+  taskView?: GhostTaskViewDecl;
   /**
    * preview 能力详单；v2 与 'preview' slot 成对。可在右侧栏内置浏览器
    * 打开预览标签页的域名白名单。
@@ -1016,6 +1045,12 @@ export interface GhostManifest {
   workspace?: true;
   /** @deprecated Retirement detection only. No runtime capability is granted. */
   iosSimulator?: true;
+  /**
+   * Device screens the plugin's Node worker serves for viewing on the owner's
+   * phone over remote desktop. Requires `node`; Cindy calls only the fixed
+   * `liveScreen.*` worker methods.
+   */
+  liveScreen?: true;
   /**
    * 随包渐进披露手册。它不是能力 slot 或授权项；Host 只把索引投影给模型，
    * 正文经 ghost_manual 按需读取。旧客户端忽略这一可选顶层字段。
@@ -1064,20 +1099,11 @@ export function ghostIconMimeType(p: string): string | null {
  * 无 `.`/`..` 段、无 Windows 设备保留名、字符集收敛,天然杜绝路径穿越
  * 与跨平台歧义。
  */
-const GHOST_PATH_SEGMENT_RE = /^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,63}$/;
-export function isSafeGhostRelativePath(p: unknown): p is string {
-  if (typeof p !== 'string' || p.length === 0 || p.length > 256) return false;
-  if (p.includes('\\')) return false;
-  const segments = p.split('/');
-  return segments.every(
-    (seg) =>
-      GHOST_PATH_SEGMENT_RE.test(seg) && seg !== '.' && seg !== '..' && !isWindowsReservedName(seg),
-  );
-}
+export { isSafeGhostRelativePath } from './internal/ghostPath.js';
 
 /** `validateGhostManifest` 的无异常校验结果。 */
 export type ManifestValidation =
-  { ok: true; manifest: GhostManifest } | { ok: false; reason: string };
+  { ok: true; manifest: GhostManifest & { mcpApps?: GhostMcpApps } } | { ok: false; reason: string };
 
 interface ParsedCindyVersion {
   core: readonly [string, string, string];
@@ -1177,11 +1203,14 @@ function isGhostManifestReservedRecordKey(value: string): boolean {
 }
 
 const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
+  'mcpApps',
   'routineEvents',
+  'models',
   'schemaVersion',
   'id',
   'name',
   'version',
+  'releaseNotes',
   'minCindyVersion',
   'author',
   'locales',
@@ -1209,6 +1238,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'keywords',
   'panel',
   'mainView',
+  'taskView',
   'preview',
   'skill',
   'manual',
@@ -1223,6 +1253,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'pick',
   'workspace',
   'iosSimulator',
+  'liveScreen',
 ]);
 
 const V3_BOOLEAN_CAPABILITY_FIELDS = [
@@ -1236,6 +1267,7 @@ const V3_BOOLEAN_CAPABILITY_FIELDS = [
   'pick',
   'workspace',
   'iosSimulator',
+  'liveScreen',
 ] as const;
 
 const V3_DECLARATION_TO_LEGACY_SLOT = [
@@ -1243,6 +1275,7 @@ const V3_DECLARATION_TO_LEGACY_SLOT = [
   ['card', 'card'],
   ['panel', 'panel'],
   ['mainView', 'main-view'],
+  ['taskView', 'task-view'],
   ['subscribe', 'subscribe'],
   ['skill', 'skill'],
   ['cindy', 'cindy'],
@@ -1263,6 +1296,7 @@ const V3_BOOLEAN_TO_LEGACY_SLOT: Record<(typeof V3_BOOLEAN_CAPABILITY_FIELDS)[nu
   pick: 'pick',
   workspace: 'workspace',
   iosSimulator: 'ios-simulator',
+  liveScreen: 'live-screen',
 };
 
 type PreparedGhostManifest = {
@@ -1361,6 +1395,12 @@ function dropEmptyLegacyCapabilitySlots(
  * 校验一份 JSON.parse 后的未知 `ghost.json` 值。已知字段严格检查；v2 未知
  * 字段忽略，v3 未知顶层字段原样保留但不解释、不授权。
  */
+/** Historical persisted data only; new packages must use validateGhostManifest. */
+export function validateStoredGhostManifest(value: unknown):
+  { ok: true; manifest: GhostManifest } | { ok: false; reason: string } {
+  return validateWithStoredMcpApps(value, validateGhostManifest);
+}
+
 export function validateGhostManifest(value: unknown): ManifestValidation {
   const preparation = prepareGhostManifestForValidation(value);
   if (!preparation.ok) return preparation;
@@ -1396,6 +1436,9 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
   ) {
     return { ok: false, reason: 'version 必须是 1–32 字符的非空字符串' };
   }
+  if (raw.releaseNotes !== undefined && typeof raw.releaseNotes !== 'string') {
+    return { ok: false, reason: 'releaseNotes 必须是纯文本字符串' };
+  }
   if (
     raw.minCindyVersion !== undefined &&
     (typeof raw.minCindyVersion !== 'string' || !isValidCindyVersion(raw.minCindyVersion))
@@ -1423,6 +1466,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
     raw.settingsHtml,
     isPlainObject(raw.panel) ? raw.panel.html : undefined,
     isPlainObject(raw.mainView) ? raw.mainView.html : undefined,
+    isPlainObject(raw.taskView) ? raw.taskView.html : undefined,
     isPlainObject(raw.node) ? raw.node.entry : undefined,
     ...(isPlainObject(raw.node) && Array.isArray(raw.node.entries) ? raw.node.entries : []),
   ]
@@ -1686,6 +1730,29 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
     };
   }
 
+  let taskView: GhostTaskViewDecl | undefined;
+  if (raw.taskView !== undefined) {
+    if (!isPlainObject(raw.taskView)) {
+      return { ok: false, reason: 'taskView 必须是对象' };
+    }
+    if (
+      raw.taskView.title !== undefined &&
+      (typeof raw.taskView.title !== 'string' ||
+        raw.taskView.title.trim().length === 0 ||
+        raw.taskView.title.length > 64)
+    ) {
+      return { ok: false, reason: 'taskView.title 必须是 1–64 字符的非空字符串' };
+    }
+    if (!isSafeGhostRelativePath(raw.taskView.html)) {
+      return { ok: false, reason: 'taskView.html 必填，且必须是安装目录内的安全相对路径' };
+    }
+    taskView = {
+      ...unknownDeclarationFields(raw.taskView, ['html', 'title']),
+      ...(raw.taskView.title !== undefined ? { title: raw.taskView.title } : {}),
+      html: raw.taskView.html,
+    };
+  }
+
   if (!isSafeGhostRelativePath(raw.entry)) {
     return {
       ok: false,
@@ -1759,6 +1826,12 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       ok: false,
       reason: 'slots 声明了 "main-view" 但缺少 mainView(html 必填)',
     };
+  }
+  if (taskView !== undefined && !slots.includes('task-view')) {
+    return { ok: false, reason: '声明了 taskView 但 slots 未包含 "task-view"' };
+  }
+  if (slots.includes('task-view') && taskView === undefined) {
+    return { ok: false, reason: 'slots 声明了 "task-view" 但缺少 taskView(html 必填)' };
   }
   if (slots.includes('badge') && panel === undefined) {
     return {
@@ -1838,9 +1911,13 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
           return { ok: false, reason: 'tools[].parameters 必须可序列化' };
         }
       }
+      if (t.approval !== undefined && t.approval !== 'auto' && t.approval !== 'each-call') {
+        return { ok: false, reason: 'tools[].approval 必须是 auto 或 each-call' };
+      }
       tools.push({
         name: t.name,
         description: t.description,
+        ...(t.approval !== undefined ? { approval: t.approval as 'auto' | 'each-call' } : {}),
         ...(t.parameters !== undefined
           ? { parameters: t.parameters as Record<string, unknown> }
           : {}),
@@ -1961,6 +2038,8 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
   }
   const routineEvents = raw.routineEvents === undefined ? undefined : parseGhostRoutineEvents(raw.routineEvents);
   if (routineEvents === null) return { ok: false, reason: 'Invalid routineEvents declaration' };
+  const models = raw.models === undefined ? undefined : parseGhostModelsNeeds(raw.models);
+  if (models === null) return { ok: false, reason: 'models must be { "types": [...] } with unique type names' };
   let subscribe: GhostSubscribeNeeds | undefined;
   if (raw.subscribe !== undefined) {
     if (!isPlainObject(raw.subscribe)) {
@@ -2012,6 +2091,10 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
           '声明了 subscribe.hooks(拦截钩子)必须同时声明 launch: "resident"——拦截要求常驻在场,否则每条消息都要等冷启动',
       };
     }
+  }
+
+  if (models?.types.includes('route') && !(subscribe?.hooks as readonly string[] | undefined)?.includes('will-start-task')) {
+    return { ok: false, reason: 'A route model needs subscribe.hooks to include will-start-task' };
   }
 
   // network 槽详单:与 slots 含 'network' 成对(有详单必有槽;有槽
@@ -3026,24 +3109,35 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
         return { ok: false, reason: 'agent.targets: true 需要同时声明 agent.tasks: true' };
       }
     }
+    if (agentRaw.delegation !== undefined) {
+      if (typeof agentRaw.delegation !== 'boolean') return { ok: false, reason: 'agent.delegation must be boolean' };
+      if (agentRaw.delegation === true && (agentRaw.tasks !== true || agentRaw.targets !== true)) {
+        return { ok: false, reason: 'agent.delegation requires agent.tasks and agent.targets' };
+      }
+    }
     if (agentRaw.schedule !== undefined && typeof agentRaw.schedule !== 'boolean') {
       return { ok: false, reason: 'agent.schedule 必须是布尔值' };
     }
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets'])).length === 0) {
+    if (agentRaw.observe !== undefined && typeof agentRaw.observe !== 'boolean') {
+      return { ok: false, reason: 'agent.observe must be boolean' };
+    }
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe'])).length === 0) {
       return {
         ok: false,
         reason:
-          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true 四项加档;仅需用户点击触发时请省略 agent 字段',
+          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true 五项加档;仅需用户点击触发时请省略 agent 字段',
       };
     }
     agent = {
-      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets']),
+      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe']),
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
       ...(agentRaw.tasks === true ? { tasks: true } : {}),
       ...(agentRaw.tasks === true && agentRaw.targets === true ? { targets: true } : {}),
+      ...(agentRaw.tasks === true && agentRaw.targets === true && agentRaw.delegation === true ? { delegation: true } : {}),
       ...(agentRaw.tasks === true && agentRaw.hiddenTasks === true ? { hiddenTasks: true } : {}),
       ...(agentRaw.schedule === true ? { schedule: true } : {}),
+      ...(agentRaw.observe === true ? { observe: true } : {}),
     };
   }
 
@@ -3336,6 +3430,9 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       ok: false,
       reason: 'slots 声明了 "node" 但缺少 node 工作进程详单',
     };
+  }
+  if (slots.includes('live-screen') && node === undefined) {
+    return { ok: false, reason: 'liveScreen: true 需要同时声明 node 工作进程' };
   }
   if (node?.secretBindings) {
     for (const binding of node.secretBindings) {
@@ -3800,14 +3897,20 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
     }
   }
 
+  if (raw.mcpApps !== undefined && raw.schemaVersion !== 3) return { ok: false, reason: 'mcpApps requires schemaVersion 3' };
+  const parsedMcpApps = raw.mcpApps === undefined ? undefined : parseGhostMcpApps(raw.mcpApps, tools ?? [], network?.hosts ?? [], isSafeGhostRelativePath);
+  if (parsedMcpApps === null) return { ok: false, reason: 'mcpApps.ui 页面或工具声明无效，页面域名必须在 network.hosts 内' };
+  const mcpApps = parsedMcpApps;
   return {
     ok: true,
     manifest: {
       ...prepared.unknownV3Fields,
+      ...(mcpApps !== undefined ? { mcpApps } : {}),
       schemaVersion: prepared.schemaVersion,
       id: raw.id,
       name: raw.name,
       version: raw.version,
+      ...(raw.releaseNotes !== undefined ? { releaseNotes: raw.releaseNotes as string } : {}),
       ...(raw.minCindyVersion !== undefined
         ? { minCindyVersion: raw.minCindyVersion as string }
         : {}),
@@ -3841,11 +3944,13 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       ...(cindy !== undefined ? { cindy } : {}),
       ...(subscribe !== undefined ? { subscribe } : {}),
       ...(routineEvents !== undefined ? { routineEvents } : {}),
+      ...(models !== undefined ? { models } : {}),
       ...(network !== undefined ? { network } : {}),
       ...(raw.command !== undefined ? { command: raw.command as string } : {}),
       ...(keywords !== undefined ? { keywords } : {}),
       ...(panel !== undefined ? { panel } : {}),
       ...(mainView !== undefined ? { mainView } : {}),
+      ...(taskView !== undefined ? { taskView } : {}),
       ...(preview !== undefined ? { preview } : {}),
       ...(skill !== undefined ? { skill } : {}),
       ...(prepared.schemaVersion === 3 && slots.includes('notify') ? { notify: true as const } : {}),
@@ -3865,6 +3970,9 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
         : {}),
       ...(prepared.schemaVersion === 3 && slots.includes('ios-simulator')
         ? { iosSimulator: true as const }
+        : {}),
+      ...(prepared.schemaVersion === 3 && slots.includes('live-screen')
+        ? { liveScreen: true as const }
         : {}),
       ...(manual !== undefined ? { manual } : {}),
       ...(setup !== undefined ? { setup } : {}),

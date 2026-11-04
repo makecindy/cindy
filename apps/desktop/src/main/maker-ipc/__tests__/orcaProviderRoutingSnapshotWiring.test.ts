@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { BUNDLED_CATALOG, buildRegistry, type Catalog } from '@cindy/model-providers';
 import { describe, expect, it, vi } from 'vitest';
 
-import { readOrcaWorkerProviderRoutingContext } from '../orcaProviderRoutingContext.js';
+import { deviceAvailableModels, localAvailableModels, readOrcaWorkerProviderRoutingContext } from '../orcaProviderRoutingContext.js';
 
 const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8').replace(
   /\r\n?/g,
@@ -167,5 +167,57 @@ describe('Orca provider routing snapshot wiring', () => {
     expect(routing.resolveDefaultProviderIdForModel('claude-code', 'claude-first-fire')).toBe(
       'anthropic',
     );
+  });
+});
+
+describe('localAvailableModels (#6970)', () => {
+  // Automation model discovery previously discarded pricing/effort data before it
+  // reached tools. Same-id routes must retain their own rates; no credentials cross.
+  it.each(['claude-code', 'codex', 'pi'] as const)('preserves source-specific prices and known/unknown efforts for %s automation discovery', async (agent) => {
+    const base = BUNDLED_CATALOG.providers.find(p => p.id === 'xd')!;
+    const seed = base.models.pi![0]!;
+    const catalog: Catalog = { ...BUNDLED_CATALOG, providers: [
+      { ...base, id: 'first', access: { kind: 'api' }, models: { [agent]: [{ ...seed, id: 'same',
+        cost: { input: 0, output: 0.5 }, currency: 'USD', efforts: ['low'], defaultEffort: 'low',
+        route: { baseUrl: 'https://private.invalid', wireProtocol: 'openai-chat' },
+      }] } },
+      { ...base, id: 'second', access: { kind: 'subscription', product: 'test' }, models: { [agent]: [{ ...seed, id: 'same',
+        cost: undefined, currency: undefined, efforts: [], defaultEffort: null, effortsUnknown: true,
+      }] } },
+    ] };
+    const views = buildRegistry(catalog, { first: true, second: true });
+    const routing = await readOrcaWorkerProviderRoutingContext({
+      providerService: { listProviders: vi.fn(async () => views) }, getCatalog: () => catalog,
+    });
+    const local = localAvailableModels([{ id: 'same', displayName: 'Same' }], routing.availability[agent],
+      routing.resolveDefaultProviderIdForModel, agent);
+    for (const models of [local, deviceAvailableModels(views, agent)]) {
+      expect(models[0]?.providers).toMatchObject([
+        { id: 'first', access: { kind: 'api' }, modelDetails: { cost: { input: 0, output: 0.5 }, currency: 'USD', efforts: ['low'] } },
+        { id: 'second', access: { kind: 'subscription' }, modelDetails: { cost: undefined, efforts: [], defaultEffort: null, effortsUnknown: true } },
+      ]);
+      expect(JSON.stringify(models)).not.toContain('private.invalid');
+    }
+  });
+
+  it('drops catalog models that no enabled provider offers', () => {
+    const models = localAvailableModels(
+      [
+        { id: 'codex/gpt-6.1-sol', displayName: 'GPT 6.1 Sol' },
+        { id: 'anthropic/claude-opus-5-5', displayName: 'Opus 5.5' },
+      ],
+      [{ id: 'chatgpt', name: 'ChatGPT', models: ['codex/gpt-6.1-sol'] }],
+      (_agent, model) => (model === 'codex/gpt-6.1-sol' ? 'chatgpt' : null),
+      'claude-code',
+    );
+    // 提供商被关后只剩目录骨架的模型(providers 会是空)不能再暴露给 Lead。
+    expect(models).toEqual([
+      {
+        id: 'codex/gpt-6.1-sol',
+        label: 'GPT 6.1 Sol',
+        providers: [{ id: 'chatgpt', name: 'ChatGPT' }],
+        defaultProviderId: 'chatgpt',
+      },
+    ]);
   });
 });

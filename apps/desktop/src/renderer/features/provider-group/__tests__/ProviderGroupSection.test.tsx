@@ -288,25 +288,6 @@ describe('ProviderGroupSection', () => {
     expect(within(rows[0]).queryByText(/providerGroup\.member\.runningCount/)).toBeNull();
   });
 
-  // provider-groups.md §10(2026-10-21 用户要求)：不展开就能比较各账号用到哪；读不到配额的电脑不画进度条。
-  it('shows each computer’s quota against an even pace without expanding, and nothing when unknown', async () => {
-    realLocale = createInstance();
-    await realLocale.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } }, interpolation: { escapeValue: false } });
-    const DAY = 86_400_000;
-    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] };
-    const view = viewOf(stored);
-    // 周配额还剩一半时间：按时间该用到 50%。
-    view.members[0] = { ...view.members[0], quota: { usedPercent: 40, resetAtMs: Date.now() + 3.5 * DAY + 30_000, windowMs: 7 * DAY } };
-    command.mockImplementation(async (cmd: { action: string }) => (cmd.action === 'list' ? { anthropic: stored } : view));
-    render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
-    const rows = await screen.findAllByTestId('provider-group-member');
-    expect(await within(rows[0]).findByText('已用 40%，该用到 50%')).toBeTruthy();
-    expect(within(rows[0]).getByTestId('provider-group-member-pace-fill').style.width).toBe('40%');
-    expect(within(rows[0]).getByTestId('provider-group-member-pace-marker').style.left).toBe('50%');
-    expect(within(rows[0]).getByText('3天 12小时后重置')).toBeTruthy();
-    expect(within(rows[1]).queryByTestId('provider-group-member-pace')).toBeNull();
-  });
-
   it('changes the group strategy and turns automatic switching off', async () => {
     stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] };
     render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);

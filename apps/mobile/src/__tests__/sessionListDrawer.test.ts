@@ -71,7 +71,7 @@ describe('mobile session list drawer', () => {
     const text = source();
     const route = readTextLf(resolve(process.cwd(), 'app/devices/index.tsx'), 'utf8');
     const home = readTextLf(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8');
-    expect(route).toContain("tasks={<MobileHome active={navigation.mode === 'tasks'} onModeChange={navigation.setMode} />}");
+    expect(route).toContain("<MobileHome />");
     expect(route).toContain("@/session/HomeSurface");
     expect(text).toContain("import { MobileHome } from './HomeSurface'");
     expect(text).toContain('<MobileHome');

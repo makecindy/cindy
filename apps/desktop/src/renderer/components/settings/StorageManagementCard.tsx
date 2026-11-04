@@ -36,6 +36,7 @@ import { Switch } from '@/components/ui/switch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { DialogueDirectorySection } from './DialogueDirectorySection';
+import { ProjectsRootSection } from './ProjectsRootSection';
 import {
   DB_SLIMMING_ARCHIVE_AGE_OPTIONS,
   DB_SLIMMING_DEFAULT_ARCHIVE_AGE,
@@ -283,6 +284,8 @@ export function StorageManagementCard() {
 
       <DialogueDirectorySection />
 
+      <ProjectsRootSection />
+
       {/* 占用总览 */}
       <div
         className={cn(
@@ -374,7 +377,7 @@ export function StorageManagementCard() {
             <span className="text-13 text-[var(--settings-section-sublabel)]">
               {t('settings.about.storage.legacyImagesLabel')}
             </span>
-            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
               {t('settings.about.storage.legacyImagesDescription')}
             </p>
           </div>
@@ -398,7 +401,7 @@ export function StorageManagementCard() {
             <span className="text-13 text-[var(--settings-section-sublabel)]">
               {t('settings.about.storage.chatAttachmentsLabel')}
             </span>
-            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
               {t('settings.about.storage.chatAttachmentsDescription')}
             </p>
           </div>
@@ -418,7 +421,7 @@ export function StorageManagementCard() {
               <span id="settings-search-settings-about-storage-remoteMediaLabel">{t('settings.about.storage.remoteMediaLabel')}</span>
               {' · '}{stats?.remoteMedia ? formatBytes(stats.remoteMedia.bytes) : t('settings.about.storage.unknown')}
             </span>
-            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
               {t('settings.about.storage.remoteMediaDescription')}
             </p>
           </div>
@@ -471,7 +474,7 @@ export function StorageManagementCard() {
             <span id="settings-search-settings-about-storage-cleanupLabel" className="text-13 text-[var(--settings-section-sublabel)]">
               {t('settings.about.storage.cleanupLabel')}
             </span>
-            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
               {t('settings.about.storage.cleanupDescription')}
             </p>
           </div>
@@ -570,7 +573,7 @@ export function StorageManagementCard() {
             <span id="settings-search-settings-about-storage-reconcileLabel" className="text-13 text-[var(--settings-section-sublabel)]">
               {t('settings.about.storage.reconcileLabel')}
             </span>
-            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
               {t('settings.about.storage.reconcileDescription')}
             </p>
           </div>
@@ -893,7 +896,7 @@ function DatabaseSlimmingSection({
           <span id="settings-search-settings-about-storage-dbSlimmingLabel" className="text-13 text-[var(--settings-section-sublabel)]">
             {t('settings.about.storage.dbSlimmingLabel')}
           </span>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
             {t('settings.about.storage.dbSlimmingDescription')}
           </p>
         </div>
@@ -990,7 +993,7 @@ function DatabaseSlimmingSection({
           <span className="text-12 text-[var(--settings-section-sublabel)]">
             {t('settings.about.storage.dbSlimmingIncludeActiveLabel')}
           </span>
-          <span className="text-11 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+          <span className="text-11 leading-[1.4] text-[var(--text-secondary)]">
             {t('settings.about.storage.dbSlimmingIncludeActiveDescription')}
           </span>
         </label>
@@ -1009,7 +1012,7 @@ function DatabaseSlimmingSection({
           <span className="text-12 text-[var(--settings-section-sublabel)]">
             {t('settings.about.storage.dbSlimmingBackupLabel')}
           </span>
-          <span className="truncate text-11 text-[var(--settings-section-sublabel)] opacity-70">
+          <span className="truncate text-11 text-[var(--text-secondary)]">
             {backupDirectory.selected && backupDirectory.displayPath
               ? backupDirectory.displayPath
               : t('settings.about.storage.dbSlimmingBackupDefaultLocation')}
@@ -1124,7 +1127,7 @@ function DatabaseSlimmingSection({
           <span id="settings-search-settings-about-storage-dbSizeWarningDisableLabel" className="text-12 text-[var(--settings-section-sublabel)]">
             {t('settings.about.storage.dbSizeWarningDisableLabel')}
           </span>
-          <span className="text-11 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+          <span className="text-11 leading-[1.4] text-[var(--text-secondary)]">
             {t('settings.about.storage.dbSizeWarningDisableDescription')}
           </span>
         </label>
@@ -1270,7 +1273,7 @@ function DatabaseCleanupDialog({
                         {t('settings.about.storage.dbSlimmingInsufficientSpace')}
                       </p>
                     )}
-                    <p className="mt-2 text-12 leading-[1.5] text-[var(--settings-section-sublabel)] opacity-70">
+                    <p className="mt-2 text-12 leading-[1.5] text-[var(--text-secondary)]">
                       {backupEnabled
                         ? t('settings.about.storage.dbSlimmingConfirmDescriptionWithBackup')
                         : t('settings.about.storage.dbSlimmingConfirmDescriptionWithoutBackup')}

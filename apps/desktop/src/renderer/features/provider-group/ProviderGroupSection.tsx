@@ -44,7 +44,6 @@ import {
   type ProviderGroupStrategy,
 } from '../../../shared/providerGroup';
 import { providerShareComputerName, useProviderShareOwnerNameOf } from '../provider-share/providerShareNames';
-import { GroupMemberPace } from './GroupMemberPace';
 import { GroupMemberQuota, groupMemberQuotaTarget } from './GroupMemberQuota';
 import { GroupMemberReshare, reshareSummaryText } from './GroupMemberReshare';
 import { GroupMemberDetailsButton, GroupMemberVersion } from './GroupMemberVersion';
@@ -67,13 +66,14 @@ const selectableStrategy = (strategy: ProviderGroupStrategy): ProviderGroupStrat
 const LIMIT_OPTIONS = Array.from({ length: PROVIDER_GROUP_MAX_LIMIT }, (_, i) => String(i + 1));
 const WEIGHT_OPTIONS = ['1', '2', '3', '5', '10', '20', '50', String(PROVIDER_GROUP_MAX_WEIGHT)];
 
-export function ProviderGroupSection({ providerId, providerName, deviceId, deviceName, initialConfig, remoteProvider, onConfigChange }: {
+export function ProviderGroupSection({ providerId, providerName, deviceId, deviceName, initialConfig, remoteProvider, fastPolicySupported, onConfigChange }: {
   providerId: string;
   providerName: string;
   deviceId?: string;
   deviceName?: string;
   initialConfig?: ProviderGroupConfig | null;
   remoteProvider?: ProviderView;
+  fastPolicySupported?: boolean;
   onConfigChange?: (config: ProviderGroupConfig | null) => void;
 }) {
   const { t } = useTranslation();
@@ -259,6 +259,17 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
                 onCheckedChange={(autoSwitch) => void save({ ...config, autoSwitch })}
               />
             </div>
+            {fastPolicySupported && (
+              <div className="flex items-start justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-4">
+                <div className="flex min-w-0 flex-col gap-1">
+                  <span className="text-13 font-medium text-[var(--text-primary)]">{t('subscriptionFastPolicy.label')}</span>
+                  <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">{t('subscriptionFastPolicy.groupHint')}</span>
+                  {group.view?.fastPolicyPending && <span role="status" className="text-12 leading-[1.4] text-[var(--text-secondary)]">{t('subscriptionFastPolicy.pending')}</span>}
+                </div>
+                <Switch checked={config.allowFast !== false} disabled={blocked} aria-label={t('subscriptionFastPolicy.label')}
+                  onCheckedChange={allowFast => void save({ ...config, allowFast })} />
+              </div>
+            )}
           </>
         )}
       </div>
@@ -459,12 +470,6 @@ function MemberRow({
                     <span data-testid="provider-group-member-reshare-summary">
                       {reshareSummaryText(t, reshare, ownerName ?? '')}
                     </span>
-                  </>
-                )}
-                {status?.quota && (
-                  <>
-                    <span aria-hidden="true">·</span>
-                    <GroupMemberPace quota={status.quota} />
                   </>
                 )}
               </span>

@@ -56,6 +56,13 @@ function unwrapVal(v: unknown): unknown {
   return v;
 }
 
+/** grok.com 把 prepaidBalance.val 记成 prepaidBalanceCents，单位是美分。 */
+function prepaidBalanceUsd(raw: unknown): number | null {
+  const cents = toFiniteNumber(unwrapVal(raw));
+  if (cents === null) return null;
+  return cents / 100;
+}
+
 /** settings JSON → 套餐名。没有 subscription_tier_display 则 null。 */
 export function parseXaiSettingsPlanLabel(data: unknown): string | null {
   if (!isPlainObject(data)) return null;
@@ -134,7 +141,7 @@ export function parseXaiBillingCreditsConfig(
     weeklyResetsAt
     ?? toXaiUsageEpochSeconds(period?.end)
     ?? toXaiUsageEpochSeconds(config.billingPeriodEnd);
-  const prepaidBalance = toFiniteNumber(unwrapVal(config.prepaidBalance));
+  const prepaidBalance = prepaidBalanceUsd(config.prepaidBalance);
   if (creditUsagePercent === null && resetsAt === null) return null;
   return {
     creditUsagePercent: inferXaiWeeklyUsagePercent(

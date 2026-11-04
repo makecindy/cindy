@@ -152,6 +152,12 @@ function parseCommand(raw: unknown): RsbWindowCommand {
   if (r.type === 'close-orca-workers-tab') {
     return { type: 'close-orca-workers-tab', sessionId: r.sessionId };
   }
+  if (r.type === 'open-plugin-task') {
+    if (typeof r.instanceId !== 'string' || !r.instanceId || r.instanceId.length > 256) {
+      throwIpcError('INVALID_PARAMS', 'Invalid plugin instance');
+    }
+    return { type: 'open-plugin-task', sessionId: r.sessionId, instanceId: r.instanceId };
+  }
   if (r.type === 'open-routines-tab') {
     if (typeof r.botId !== 'string' || !r.botId || r.botId.length > 128) throwIpcError('INVALID_PARAMS', 'Invalid teammate');
     return { type: 'open-routines-tab', sessionId: r.sessionId, botId: r.botId };

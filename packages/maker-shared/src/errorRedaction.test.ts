@@ -9,6 +9,7 @@ import {
   isResponsesLiteParallelToolCallsError,
   matchesDeterministicUsageExhaustionText,
   redactSensitiveText,
+  redactSensitiveTextDeep,
   parseAgentErrorCode,
 } from './errorRedaction.js';
 
@@ -243,6 +244,84 @@ describe('redactSensitiveText', () => {
   });
 });
 
+describe('redactSensitiveTextDeep', () => {
+  const SK = 'sk-live-abcdef123456';
+  const BEARER = 'Bearer eyJhbGciOiJIUzI1NiJ9.payload';
+  const AIGW = 'aigw:user-9f3a2b';
+  const PASSWORD = 'password=hunter2';
+
+  it('redacts every string leaf of a nested object and preserves the shape', () => {
+    expect(
+      redactSensitiveTextDeep({
+        message: `provider refused key=${SK}`,
+        nested: { deep: { sdkError: `unauthorized ${BEARER}` } },
+        reason: `principal ${AIGW} rejected`,
+        sibling: 'plain diagnostic text',
+      }),
+    ).toEqual({
+      message: 'provider refused key=[REDACTED_KEY]',
+      nested: { deep: { sdkError: 'unauthorized Bearer [REDACTED]' } },
+      reason: 'principal aigw:[REDACTED] rejected',
+      sibling: 'plain diagnostic text',
+    });
+    // 顶层字符串本身也走同一条规则。
+    expect(redactSensitiveTextDeep(SK)).toBe('[REDACTED_KEY]');
+  });
+
+  it('walks arrays and the objects nested inside them', () => {
+    expect(redactSensitiveTextDeep([SK, { reason: AIGW }, [`x ${PASSWORD}`]])).toEqual([
+      '[REDACTED_KEY]',
+      { reason: 'aigw:[REDACTED]' },
+      ['x password=[REDACTED]'],
+    ]);
+  });
+
+  it('returns non-string leaves untouched', () => {
+    // 不要用 new Date() 当样本:deep 走 Object.entries, Date 没有自有可枚举属性,
+    // 会被重建成空对象 {}。用 number / boolean / null / undefined。
+    const output = redactSensitiveTextDeep({
+      code: 42,
+      ok: true,
+      nil: null,
+      missing: undefined,
+    });
+    expect(output).toStrictEqual({ code: 42, ok: true, nil: null, missing: undefined });
+    expect(Object.keys(output as Record<string, unknown>)).toEqual([
+      'code',
+      'ok',
+      'nil',
+      'missing',
+    ]);
+  });
+
+  it('does not mutate the input', () => {
+    const input = { message: `key=${SK}`, nested: [{ reason: AIGW }] };
+    const snapshot = structuredClone(input);
+
+    const output = redactSensitiveTextDeep(input) as typeof input;
+
+    expect(input).toEqual(snapshot);
+    expect(output).not.toBe(input);
+    expect(output.nested).not.toBe(input.nested);
+  });
+
+  it('is idempotent across repeated passes', () => {
+    const first = redactSensitiveTextDeep({
+      message: `key=${SK} ${BEARER}`,
+      reason: AIGW,
+      list: [PASSWORD],
+    });
+    const second = redactSensitiveTextDeep(first);
+
+    expect(second).toEqual(first);
+    const serialized = JSON.stringify(second);
+    // 占位符不能被第二轮再吃一遍(撑成 [REDACTED]])。
+    expect(serialized).not.toContain('[REDACTED]]');
+    expect(serialized).not.toContain('abcdef123456');
+    expect(serialized).not.toContain('hunter2');
+  });
+});
+
 describe('isGatewayProxyTokenInvalidError', () => {
   it('matches LiteLLM invalid proxy-token 401 copy after redaction', () => {
     expect(
@@ -276,9 +355,9 @@ describe('isGatewayProxyTokenInvalidError', () => {
 
 
 describe('agent error envelopes shared by desktop and mobile', () => {
-  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'AUTO_REVIEW_UNAVAILABLE'])(
+  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'AUTO_REVIEW_UNAVAILABLE', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY'])(
     'parses %s directly and inside an IPC error', code => {
-      for (const prefix of ['', "Error invoking remote method 'maker:send': Error: "]) {
+      for (const prefix of ['', '[IPC_ERROR] ', "Error invoking remote method 'maker:send': Error: "]) {
         expect(parseAgentErrorCode(`${prefix}[${code}] first line\nsecond line`)).toEqual({ code, fallback: 'first line\nsecond line' });
       }
     },

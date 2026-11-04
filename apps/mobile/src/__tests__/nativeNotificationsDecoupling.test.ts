@@ -1,27 +1,16 @@
-/**
- * Android 与 expo-notifications 原生模块解耦的守门(静态断言 + 面接口对齐)。
- *
- * expo-notifications 的 JS 入口在 **import 期**就 `requireNativeModule(...)`,原生模块
- * 缺失即抛;而 Android 推送从未实现(`isPushSupported()` 只放行 iOS),那颗原生模块只是
- * 把 Firebase Messaging / Installations / DataTransport 与消息权限带进 Android 包。
- * 因此约定:业务代码只经 `@/notifications/nativeNotifications` 访问该 SDK,Android 由
- * `nativeNotifications.android.ts` 顶成空实现,Android bundle 完全不引用真模块。
- *
- * 这两条断言拦的是**运行期才会暴露**的两类回归:
- *  1. 有人在别处直接 import 'expo-notifications' → Android 冷启动崩(typecheck 拦不住);
- *  2. 有人新增 `Notifications.foo()` 调用但没在 Android 替身里补 foo → Android 上
- *     `undefined is not a function`。typecheck 已能拦第 2 类(替身按
- *     NativeNotificationsApi 收敛),这里再加一道源码级兜底,顺带覆盖 app/ 路由文件。
- */
+/** SDK imports stay at the platform adapters; Android now has an actual FCM receiver. */
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it, vi } from 'vitest';
 
-// 真模块拖 react-native 依赖链,node 环境下不可 import;替身只用到 PermissionStatus 枚举。
-vi.mock('expo-modules-core', () => ({
-  PermissionStatus: { GRANTED: 'granted', UNDETERMINED: 'undetermined', DENIED: 'denied' },
+// Native calls are mocked at the SDK boundary; adapter surface remains checked.
+vi.mock('expo-notifications', () => ({
+  setNotificationHandler: vi.fn(), getPermissionsAsync: vi.fn(), requestPermissionsAsync: vi.fn(),
+  getDevicePushTokenAsync: vi.fn(), addPushTokenListener: vi.fn(), addNotificationResponseReceivedListener: vi.fn(),
+  getLastNotificationResponseAsync: vi.fn(), clearLastNotificationResponseAsync: vi.fn(),
+  setNotificationChannelAsync: vi.fn(), AndroidImportance: { HIGH: 4 }, AndroidNotificationVisibility: { PRIVATE: 0 },
 }));
 
 const SRC_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -31,6 +20,7 @@ const NOTIFICATIONS_DIR = path.join(SRC_ROOT, 'notifications');
 /** 唯一允许出现 'expo-notifications' 的两个文件:真接入点与它的纯类型契约。 */
 const SDK_ALLOWLIST = new Set([
   path.join(NOTIFICATIONS_DIR, 'nativeNotifications.ts'),
+  path.join(NOTIFICATIONS_DIR, 'nativeNotifications.android.ts'),
   path.join(NOTIFICATIONS_DIR, 'nativeNotifications.types.ts'),
 ]);
 
@@ -61,7 +51,7 @@ function allSourceFiles(): string[] {
   return [...walkSourceFiles(SRC_ROOT), ...walkSourceFiles(APP_ROOT)];
 }
 
-describe('Android 不引用 expo-notifications 原生模块', () => {
+describe('通知 SDK 只由平台适配层访问', () => {
   // 守门自身的判据要有用例:正则悄悄失配会让上面两条断言变成永绿的假保险。
   it('模块引用正则认得各种写法,且不被散文/相似词误命中', () => {
     for (const violation of [

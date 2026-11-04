@@ -77,7 +77,7 @@ describe('mobile message media thumbnail wiring', () => {
     expect(rendererSource).toContain('{attachmentStripNode}');
     // 普通消息仍按原判据省略空气泡；外层现在先分流独立错误卡片。
     expect(rendererSource).toContain(
-      'hasBubbleContent || (!attachmentStripNode && messageQuotes.length === 0) ? bubble : null}',
+      '&& (hasBubbleContent || (!attachmentStripNode && messageQuotes.length === 0));',
     );
     const attachmentStrip = rendererSource.slice(
       rendererSource.indexOf('function AttachmentStrip'),
@@ -120,7 +120,7 @@ describe('mobile message media thumbnail wiring', () => {
     expect(pendingBranch).toContain('<FileChip');
     expect(pendingBranch).toContain('<MarkdownBody');
     expect(pendingBranch).not.toContain('onOpenPayload=');
-    expect(pending.indexOf('<AttachmentThumbStrip')).toBeLessThan(pending.indexOf('{hasBody ?'));
+    expect(pending.indexOf('<AttachmentThumbStrip')).toBeLessThan(pending.indexOf('{hasBody || (item.replyQuote && renderReplyQuote) ?'));
     expect(pending).toContain('item.fileNames.map(renderFile)');
     expect(pending).not.toContain('height: 72');
     expect(pending).not.toContain('contentFit="cover"');
@@ -171,7 +171,7 @@ describe('mobile message media thumbnail wiring', () => {
     expect(rendererSource).toContain('lightboxImagesForPayload(galleryImages, payload, payloadSourceGroupKey, prev, sourceGroupPresent, retainPendingSnapshot)');
     expect(rendererSource).toContain("const imageLightboxOpen = historyActive && payload?.kind === 'media' && isLightboxMediaKind(payload.media.kind);");
     expect(rendererSource).toContain('payload={historyActive ? payload : null}');
-    expect(rendererSource).toContain('() => (imageLightboxOpen');
+    expect(rendererSource).toMatch(/\(\) =>\s*\(?imageLightboxOpen/);
     expect(rendererSource).toContain(': null),');
     // 旧的内嵌缩放查看器与图库箭头已退役
     expect(rendererSource).not.toContain('ZoomablePayloadImage');

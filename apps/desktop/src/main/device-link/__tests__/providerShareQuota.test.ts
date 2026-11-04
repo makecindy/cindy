@@ -166,3 +166,11 @@ describe('share quota projection', () => {
     await expect(readProviderShareQuota('xd')).rejects.toThrow('PRECONDITION_FAILED');
   });
 });
+
+// Unit: adding a Kimi family must not fall through to the Codex account reader.
+it('keeps Kimi account quota outside the provider-sharing projection', async () => {
+  state.providers = [{ id: 'kimi-coding', connected: true, auth: { method: 'apiKey' }, routing: { pi: { upstream: 'https://api.kimi.com/coding/v1' } } }];
+  readers.codex.mockClear();
+  expect(await readProviderShareQuotaAccount('kimi-coding')).toMatchObject({ state: 'unsupported', windows: [], balance: null });
+  expect(readers.codex).not.toHaveBeenCalled();
+});

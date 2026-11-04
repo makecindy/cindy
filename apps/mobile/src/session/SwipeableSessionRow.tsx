@@ -2,7 +2,7 @@
  * SwipeableSessionRow —— 首页会话行的 iOS 式滑动操作包装。
  *
  * 交互契约(2026-07-07 与产品确认):
- *  - 右滑露出「置顶/取消置顶」(按 pinnedAt 切换),全滑(超过屏宽 55%)松手直接触发;
+ *  - 右滑露出「置顶/取消置顶」和「已读」,全滑(超过屏宽 55%)松手标为已读;
  *  - 左滑露出「选项」+「归档」,全滑=归档(归档按钮越过阈值时扩展盖满,预告松手即触发);
  *  - 删除不做滑动直达,只在「选项」菜单里(带系统 Alert 确认),由页面层承接;
  *  - 同一时间只允许一行滑开:互斥由页面级 SwipeRowRegistry 驱动(开新关旧、滚动关行)。
@@ -26,7 +26,7 @@ import {
   ClassicSwipeable as Swipeable,
   type ClassicSwipeableMethods,
 } from '@/platform/gestureHandler';
-import { Archive, ArchiveRestore, Ellipsis, Pin, PinOff } from 'lucide-react-native';
+import { Check, Archive, ArchiveRestore, Ellipsis, Pin, PinOff } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { pinToggleAction, statusToggleAction, type SwipeRowRegistry } from '@/session/swipeRowRegistry';
 import type { RemoteSession } from '@/session/types';
@@ -38,8 +38,8 @@ import { radius, spacing } from '@/theme/tokens';
 const BUTTON_SIZE = 56;
 /** 按钮与行边缘 / 屏幕边缘 / 相邻按钮的间距(iOS 26 的悬浮圆钮留白比色块时代更宽)。 */
 const BUTTON_GAP = spacing.md;
-/** 左面板(置顶):gap + 圆 + gap;右面板(选项 + 归档):gap + 圆 + gap + 圆 + gap。 */
-const LEFT_PANEL_WIDTH = BUTTON_GAP * 2 + BUTTON_SIZE;
+/** 两侧面板都放两个按钮:gap + 圆 + gap + 圆 + gap。 */
+const LEFT_PANEL_WIDTH = BUTTON_GAP * 3 + BUTTON_SIZE * 2;
 const RIGHT_PANEL_WIDTH = BUTTON_GAP * 3 + BUTTON_SIZE * 2;
 /** 全滑触发阈值:位移超过屏宽的这个比例,松手即执行(iOS Mail 惯例的 50-60% 区间)。 */
 const FULL_SWIPE_RATIO = 0.55;
@@ -51,13 +51,14 @@ type ReadableSwipeTranslation = SwipeTranslation & { __getValue?(): unknown };
 type ClassicSwipeDirection = 'left' | 'right';
 
 /**
- * 页面级滑动控制 bundle:registry + 三个动作回调打包成一个稳定引用(useMemo),
+ * 页面级滑动控制 bundle:registry + 四个动作回调打包成一个稳定引用(useMemo),
  * 供 ProjectRow / AutomationGroupChildren 等嵌套渲染路径向下透传——不提供时对应
  * 行退化为不可滑动(选择态或不需要手势的调用点保持原行为)。
  */
 export interface SessionSwipeControls {
   registry: SwipeRowRegistry;
   onTogglePin(session: RemoteSession): void;
+  onMarkRead(session: RemoteSession): void;
   onArchive(session: RemoteSession): void;
   onShowOptions(session: RemoteSession): void;
 }
@@ -70,8 +71,9 @@ export interface SwipeableSessionRowProps {
    * 回调统一带 session 入参:页面层可以传稳定引用(useCallback / setState),
    * renderItem 里不必为每行现造闭包(否则 memo 的浅比较永远失败,review P2)。
    */
-  /** 右滑按钮 / 右滑全滑:置顶或取消置顶(实现方负责先关行再发 RPC 的时序)。 */
+  /** 右滑置顶按钮:置顶或取消置顶(实现方负责先关行再发 RPC 的时序)。 */
   onTogglePin(session: RemoteSession): void;
+  onMarkRead(session: RemoteSession): void;
   /** 左滑「归档」按钮 / 左滑全滑(不关行:乐观更新立即把行移出列表,失败由页面层回滚收口)。 */
   onArchive(session: RemoteSession): void;
   /** 左滑「选项」按钮:先关行,再由页面层弹出操作菜单。 */
@@ -84,11 +86,13 @@ function SwipeableSessionRowInner({
   session,
   registry,
   onTogglePin,
+  onMarkRead,
   onArchive,
   onShowOptions,
   testID,
   children,
 }: SwipeableSessionRowProps) {
+  const { t } = useTranslation();
   const rowKey = session.id;
   const pinnedAt = session.pinnedAt;
   const styles = useThemedStyles(makeStyles);
@@ -157,7 +161,7 @@ function SwipeableSessionRowInner({
 
   const handleTranslationValue = useCallback((value: number) => {
     latestTranslationRef.current = value;
-    const nextArmed = -value >= fullSwipeThreshold;
+    const nextArmed = Math.abs(value) >= fullSwipeThreshold;
     if (nextArmed === armedRef.current) return;
     armedRef.current = nextArmed;
     Animated.timing(armedProgress, {
@@ -185,15 +189,20 @@ function SwipeableSessionRowInner({
     const releaseTranslation = readReleaseTranslation();
     if (direction === 'left') {
       if (releaseTranslation < fullSwipeThreshold) return;
-      // 置顶后行只重排不消失:先关再发,避免重排后行停在打开态。
+      // 已读后收起滑动操作。
       close();
-      onTogglePin(session);
+      onMarkRead(session);
       return;
     }
     if (-releaseTranslation < fullSwipeThreshold) return;
     // 归档刻意不先关:乐观更新立即把行移出列表(卸载即收行);失败由页面层回滚 + Alert 收口。
     onArchive(session);
-  }, [fullSwipeThreshold, close, onTogglePin, onArchive, readReleaseTranslation, session]);
+  }, [fullSwipeThreshold, close, onMarkRead, onArchive, readReleaseTranslation, session]);
+
+  const handleReadPress = useCallback(() => {
+    close();
+    onMarkRead(session);
+  }, [close, onMarkRead, session]);
 
   const handlePinPress = useCallback(() => {
     close();
@@ -218,13 +227,16 @@ function SwipeableSessionRowInner({
       return (
         <View style={styles.pinShell}>
           {actionsMounted ? (
-            <PinActionContent
-              label={pinLabel}
+            <LeftActionsContent
+              pinLabel={pinLabel}
+              readLabel={t("session.row.markRead")}
               onTranslationValue={handleTranslationValue}
-              onPress={handlePinPress}
+              onPin={handlePinPress}
+              onRead={handleReadPress}
               pinned={pinned}
+              armedProgress={armedProgress}
               styles={styles}
-              testID={testID ? `${testID}.pinAction` : undefined}
+              testID={testID}
               translation={translation}
               windowWidth={windowWidth}
             />
@@ -234,6 +246,9 @@ function SwipeableSessionRowInner({
     },
     [
       handlePinPress,
+      handleReadPress,
+      armedProgress,
+      t,
       handleTranslationValue,
       actionsMounted,
       pinLabel,
@@ -298,25 +313,27 @@ function SwipeableSessionRowInner({
   );
 }
 
-/**
- * 右滑露出的「置顶」浮块:定宽壳决定 snap 位;按钮绝对定位;overshoot / 全滑时
- * 背景用 native-driver transform 拉成长胶囊,图标跟着行边缘移动。经典 Animated
- * 不经过 Reanimated synchronouslyUpdateUIProps,列表批量卸载时不会追写失效 Fabric tag。
- */
-function PinActionContent({
-  label,
-  onTranslationValue,
-  onPress,
+/** 右滑双按钮:置顶可点按,已读在全滑阈值后展开。 */
+function LeftActionsContent({
+  armedProgress,
+  readLabel,
+  pinLabel,
   pinned,
+  onRead,
+  onPin,
+  onTranslationValue,
   styles,
   testID,
   translation,
   windowWidth,
 }: {
-  label: string;
-  onTranslationValue(value: number): void;
-  onPress(): void;
+  armedProgress: Animated.Value;
+  readLabel: string;
+  pinLabel: string;
   pinned: boolean;
+  onRead(): void;
+  onPin(): void;
+  onTranslationValue(value: number): void;
   styles: SwipeStyles;
   testID?: string;
   translation: SwipeTranslation;
@@ -325,46 +342,86 @@ function PinActionContent({
   const { colors } = useTheme();
   // 置顶 / 归档会让行移位:按下即提前挂上列表过渡,松手时直接执行。
   const prepareDisclosure = useDisclosurePrepare();
-  const opacity = translation.interpolate({
+  const PinIcon = pinned ? PinOff : Pin;
+  const revealed = translation;
+  const pinOpacity = Animated.multiply(
+    revealed.interpolate({
+      extrapolate: 'clamp',
+      inputRange: [LEFT_PANEL_WIDTH * 0.3, LEFT_PANEL_WIDTH * 0.8],
+      outputRange: [0, 1],
+    }),
+    Animated.subtract(1, armedProgress),
+  );
+  const pinScale = revealed.interpolate({
     extrapolate: 'clamp',
-    inputRange: [LEFT_PANEL_WIDTH * 0.15, LEFT_PANEL_WIDTH * 0.7],
-    outputRange: [0, 1],
-  });
-  const scale = translation.interpolate({
-    extrapolate: 'clamp',
-    inputRange: [LEFT_PANEL_WIDTH * 0.15, LEFT_PANEL_WIDTH],
+    inputRange: [LEFT_PANEL_WIDTH * 0.3, LEFT_PANEL_WIDTH],
     outputRange: [0.5, 1],
   });
-  const extension = translation.interpolate({
+  const pinExtension = revealed.interpolate({
     extrapolate: 'clamp',
     inputRange: [LEFT_PANEL_WIDTH, Math.max(LEFT_PANEL_WIDTH + 1, windowWidth)],
     outputRange: [0, Math.max(0, windowWidth - LEFT_PANEL_WIDTH)],
   });
-  const backgroundScaleX = Animated.add(1, Animated.divide(extension, BUTTON_SIZE));
-  const halfExtension = Animated.divide(extension, 2);
-  const IconComponent = pinned ? PinOff : Pin;
+  const readOpacity = revealed.interpolate({
+    extrapolate: 'clamp',
+    inputRange: [LEFT_PANEL_WIDTH * 0.08, LEFT_PANEL_WIDTH * 0.45],
+    outputRange: [0, 1],
+  });
+  const readScale = revealed.interpolate({
+    extrapolate: 'clamp',
+    inputRange: [LEFT_PANEL_WIDTH * 0.08, LEFT_PANEL_WIDTH * 0.6],
+    outputRange: [0.5, 1],
+  });
+  const readStretchStart = BUTTON_GAP * 2 + BUTTON_SIZE;
+  const availableReadExtension = revealed.interpolate({
+    extrapolate: 'clamp',
+    inputRange: [readStretchStart, Math.max(readStretchStart + 1, windowWidth)],
+    outputRange: [0, Math.max(0, windowWidth - readStretchStart)],
+  });
+  const readExtension = Animated.multiply(availableReadExtension, armedProgress);
+  const readScaleX = Animated.add(1, Animated.divide(readExtension, BUTTON_SIZE));
+  const halfReadExtension = Animated.divide(readExtension, 2);
+
   return (
     <>
       <TranslationObserver onValue={onTranslationValue} translation={translation} />
-      <Animated.View style={[styles.pinButton, { opacity, transform: [{ scale }] }]}>
+      <Animated.View
+        style={[
+          styles.leadingPinButton,
+          { opacity: pinOpacity, transform: [{ translateX: pinExtension }, { scale: pinScale }] },
+        ]}
+      >
+        <Pressable
+          accessibilityLabel={pinLabel}
+          accessibilityRole="button"
+          onPress={onPin}
+          onPressIn={() => prepareDisclosure(true)}
+          style={styles.actionPressable}
+          testID={testID ? `${testID}.pinAction` : undefined}
+        >
+          <View style={styles.actionIconWrap}>
+            <PinIcon color={colors.swipeActionText} size={ICON_SIZE} strokeWidth={iconStroke.regular} />
+          </View>
+        </Pressable>
+      </Animated.View>
+      <Animated.View style={[styles.readButton, { opacity: readOpacity, transform: [{ scale: readScale }] }]}>
         <Animated.View
           pointerEvents="none"
           style={[
-            styles.pinButtonBackground,
-            { transform: [{ translateX: halfExtension }, { scaleX: backgroundScaleX }] },
+            styles.readButtonBackground,
+            { transform: [{ translateX: halfReadExtension }, { scaleX: readScaleX }] },
           ]}
         />
-        <Animated.View style={[styles.actionPressableFrame, { transform: [{ translateX: extension }] }]}>
+        <Animated.View style={[styles.actionPressableFrame, { transform: [{ translateX: readExtension }] }]}>
           <Pressable
-            accessibilityLabel={label}
+            accessibilityLabel={readLabel}
             accessibilityRole="button"
-            onPress={onPress}
-            onPressIn={() => prepareDisclosure(true)}
+            onPress={onRead}
             style={styles.actionPressable}
-            testID={testID}
+            testID={testID ? `${testID}.readAction` : undefined}
           >
             <View style={styles.actionIconWrap}>
-            <IconComponent color={colors.swipeActionText} size={ICON_SIZE} strokeWidth={iconStroke.regular} />
+              <Check color={colors.swipeActionText} size={ICON_SIZE} strokeWidth={iconStroke.regular} />
             </View>
           </Pressable>
         </Animated.View>
@@ -518,18 +575,28 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     overflow: 'visible',
     width: LEFT_PANEL_WIDTH,
   },
-  pinButton: {
+  leadingPinButton: {
+    backgroundColor: colors.swipeActionPin,
+    borderRadius: radius.pill,
     height: BUTTON_SIZE,
-    left: BUTTON_GAP,
-    // 行高内垂直居中(面板 wrapper 与行等高):50% 锚点 + 负半径回拉,不写死行高。
     marginTop: -BUTTON_SIZE / 2,
-    overflow: 'visible',
+    overflow: 'hidden',
     position: 'absolute',
+    left: BUTTON_GAP * 2 + BUTTON_SIZE,
     top: '50%',
     width: BUTTON_SIZE,
   },
-  pinButtonBackground: {
-    backgroundColor: colors.swipeActionPin,
+  readButton: {
+    height: BUTTON_SIZE,
+    marginTop: -BUTTON_SIZE / 2,
+    overflow: 'visible',
+    position: 'absolute',
+    left: BUTTON_GAP,
+    top: '50%',
+    width: BUTTON_SIZE,
+  },
+  readButtonBackground: {
+    backgroundColor: colors.swipeActionRead,
     borderRadius: radius.pill,
     bottom: 0,
     left: 0,

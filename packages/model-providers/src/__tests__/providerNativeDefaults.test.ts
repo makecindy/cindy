@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { BUNDLED_CATALOG } from '../catalog.js';
 import { buildUserProvider } from '../user-provider.js';
 import { modelProtocolComparison } from '../modelProtocol.js';
+import { pickRecommendedAgent } from '../unifiedSelection.js';
+import { resolveModelMetadata } from '../modelMetadataLayers.js';
 import type { CustomProviderConfig, ProviderRuntimeModelConfig } from '../types.js';
 
 const agents = ['claude-code', 'codex', 'pi'] as const;
@@ -19,26 +21,75 @@ function connection(presetId: string, modelId: string): CustomProviderConfig {
   ) };
 }
 
-describe('supplier import follows Gateway native model defaults', () => {
+// Chris 2026-10-30: an API the supplier offers is used as is and enabled by default; only
+// engines that need Cindy's local conversion stay off. Recommendation, not visibility, picks the engine.
+const harnessApi = { 'claude-code': 'anthropic-messages', codex: 'openai-responses' } as const;
+const usesOfferedApi = (agent: (typeof agents)[number], api: string | undefined) =>
+  agent === 'pi' || api === harnessApi[agent] || (agent === 'codex' && api === 'azure-openai-responses');
+
+describe('supplier import enables engines that use an offered API', () => {
+  // Chris 2026-10-30: DeepSeek follows the community/Pi default (Chat Completions), so the
+  // catalog lists no rule for it and the real bundled directory must still recommend Pi.
+  it('recommends Pi for the official DeepSeek connection from the bundled directory', () => {
+    const provider = buildUserProvider(connection('deepseek', 'deepseek-v4-pro'), options);
+    expect(pickRecommendedAgent(provider, 'deepseek-v4-pro', provider.agents)).toBe('pi');
+  });
+  it('saved DeepSeek Flash aliases retain the Codex image restriction', () => {
+    const config = connection('deepseek', 'deepseek-flash');
+    for (const agent of agents) {
+      config.runtimes[agent]!.models = [{ id: 'deepseek-v4-flash', name: 'DeepSeek Flash' }];
+    }
+    const provider = buildUserProvider(config, options);
+    for (const agent of agents) {
+      const metadata = resolveModelMetadata(options.modelRegistry, 'deepseek', 'deepseek-v4-flash', undefined, undefined, agent);
+      expect(metadata.supportsImageInput).toBeUndefined();
+    }
+    expect(provider.models.codex![0].supportsImageInput).toBe(false);
+    const current = buildUserProvider(connection('deepseek', 'deepseek-flash'), options);
+    for (const agent of agents) expect(current.models[agent]![0].supportsImageInput).toBe(agent !== 'codex');
+  });
+
+  // #7005: route context overrides must also bound the inherited output sent to Pi adapters.
   it.each([
-    ['openrouter', 'google/gemini-3.8-flash', 'google-generative-ai', [false, false, true], ['anthropic-messages', 'openai-responses', 'openai-completions']],
-    ['openrouter', 'anthropic/claude-fable-5', 'anthropic-messages', [true, false, true], ['anthropic-messages', 'openai-responses', 'anthropic-messages']],
-    ['openrouter', 'openai/gpt-6-astra', 'openai-responses', [false, true, true], ['anthropic-messages', 'openai-responses', 'openai-completions']],
-    ['openrouter', 'deepseek/deepseek-v4-pro', 'openai-completions', [false, false, true], ['anthropic-messages', 'openai-responses', 'openai-completions']],
-    ['vercel-ai-gateway', 'google/gemini-3.8-flash', 'google-generative-ai', [false, false, true], ['anthropic-messages', 'openai-responses', 'anthropic-messages']],
-    ['vercel-ai-gateway', 'anthropic/claude-fable-5', 'anthropic-messages', [true, false, true], ['anthropic-messages', 'openai-responses', 'anthropic-messages']],
-    ['vercel-ai-gateway', 'openai/gpt-6-astra', 'openai-responses', [false, true, true], ['anthropic-messages', 'openai-responses', 'anthropic-messages']],
-    ['opencode', 'gemini-3.8-flash', 'google-generative-ai', [false, false, true], ['google-generative-ai', 'google-generative-ai', 'google-generative-ai']],
-    ['opencode', 'claude-fable-5', 'anthropic-messages', [true, false, true], ['anthropic-messages', 'anthropic-messages', 'anthropic-messages']],
-    ['opencode', 'gpt-6-astra', 'openai-responses', [false, true, true], ['openai-responses', 'openai-responses', 'openai-responses']],
-    ['opencode-go', 'qwen3.7-plus', 'openai-completions', [false, false, true], ['anthropic-messages', 'anthropic-messages', 'anthropic-messages']],
-  ] as const)('%s / %s retains supplier endpoints but defaults only native engines', (preset, id, nativeApi, enabled, apis) => {
+    ['moonshot-kimi-code', 'k3.1-pro', 262_144],
+    ['moonshot-kimi-code', 'k3', 262_144],
+    ['moonshot-kimi-code', 'k3-256k', 262_144],
+    ['moonshot-kimi-code', 'k3.1-pro-highspeed', 1_048_576],
+    ['moonshot-kimi-cn', 'kimi-k3.1-pro', 1_048_576],
+    ['moonshot-kimi-global', 'kimi-k3.1-pro', 1_048_576],
+  ] as const)('%s / %s inherits output within its route context', (preset, id, limit) => {
+    const provider = buildUserProvider(connection(preset, id), options);
+    for (const agent of agents) {
+      const metadata = resolveModelMetadata(options.modelRegistry, preset, id, undefined, undefined, agent);
+      expect(metadata.maxOutputTokens).toBeLessThanOrEqual(metadata.contextWindow!);
+      const model = provider.models[agent]![0];
+      expect(model.contextWindow).toBe(limit);
+      expect(model.maxOutput).toBeGreaterThan(0);
+      expect(model.maxOutput).toBeLessThanOrEqual(limit);
+      if (limit === 1_048_576) expect(model.maxOutput).toBe(limit);
+    }
+  });
+
+  it.each([
+    ['openrouter', 'google/gemini-3.8-flash', 'google-generative-ai', ['anthropic-messages', 'openai-responses', 'openai-completions']],
+    ['openrouter', 'anthropic/claude-fable-5', 'anthropic-messages', ['anthropic-messages', 'openai-responses', 'anthropic-messages']],
+    ['openrouter', 'openai/gpt-6-astra', 'openai-responses', ['anthropic-messages', 'openai-responses', 'openai-completions']],
+    ['openrouter', 'deepseek/deepseek-v4-pro', 'openai-completions', ['anthropic-messages', 'openai-responses', 'openai-completions']],
+    ['vercel-ai-gateway', 'google/gemini-3.8-flash', 'google-generative-ai', ['anthropic-messages', 'openai-responses', 'anthropic-messages']],
+    ['vercel-ai-gateway', 'anthropic/claude-fable-5', 'anthropic-messages', ['anthropic-messages', 'openai-responses', 'anthropic-messages']],
+    ['vercel-ai-gateway', 'openai/gpt-6-astra', 'openai-responses', ['anthropic-messages', 'openai-responses', 'anthropic-messages']],
+    ['opencode', 'gemini-3.8-flash', 'google-generative-ai', ['google-generative-ai', 'google-generative-ai', 'google-generative-ai']],
+    ['opencode', 'claude-fable-5', 'anthropic-messages', ['anthropic-messages', 'anthropic-messages', 'anthropic-messages']],
+    ['opencode', 'gpt-6-astra', 'openai-responses', ['openai-responses', 'openai-responses', 'openai-responses']],
+    ['opencode-go', 'qwen3.7-plus', 'openai-completions', ['anthropic-messages', 'anthropic-messages', 'anthropic-messages']],
+  ] as const)('%s / %s retains supplier endpoints and defaults on every engine without local conversion', (preset, id, nativeApi, apis) => {
     const provider = buildUserProvider(connection(preset, id), options);
     const byAgent = Object.fromEntries(agents.map(agent => [agent, provider.models[agent]![0]]));
     const comparison = modelProtocolComparison(provider, byAgent);
     agents.forEach((agent, i) => {
-      expect(provider.models[agent]![0]).toMatchObject({ nativeApi, api: apis[i], defaultEnabled: enabled[i] });
-      expect(comparison.forAgent(agent)?.mode).toBe(enabled[i] ? 'matching' : 'compatibility');
+      const enabled = usesOfferedApi(agent, apis[i]);
+      expect(provider.models[agent]![0]).toMatchObject({ nativeApi, api: apis[i], defaultEnabled: enabled });
+      expect(comparison.forAgent(agent)?.mode).toBe(enabled ? 'matching' : 'compatibility');
     });
   });
 
@@ -68,7 +119,7 @@ describe('supplier import follows Gateway native model defaults', () => {
     const imported = buildUserProvider(config, options);
     expect(JSON.stringify(config)).toBe(before);
     for (const agent of agents) expect(imported.models[agent]![0]).toMatchObject({
-      contextWindow: 1_048_576, maxOutput: 65_536, supportsImageInput: true, defaultEnabled: agent === 'pi',
+      contextWindow: 1_048_576, maxOutput: 65_536, supportsImageInput: true, defaultEnabled: true,
     });
     Object.assign(config.runtimes.codex!.models[0], { defaultEnabled: true, contextWindow: 64_000,
       reasoning: true, reasoningEfforts: ['low', 'medium'], reasoningDefaultEffort: 'low' } satisfies Partial<ProviderRuntimeModelConfig>);
@@ -76,15 +127,15 @@ describe('supplier import follows Gateway native model defaults', () => {
     const refreshed = buildUserProvider(JSON.parse(JSON.stringify(config)), options);
     expect(refreshed.models.codex![0]).toMatchObject({ defaultEnabled: true, contextWindow: 64_000, defaultEffort: 'low' });
     expect(refreshed.models.pi![0].defaultEnabled).toBe(false);
-    expect(refreshed.models['claude-code']![0].defaultEnabled).toBe(false);
+    expect(refreshed.models['claude-code']![0].defaultEnabled).toBe(true);
   });
 
-  it('uses declared manufacturer families on unrelated endpoints without enabling compatibility', () => {
+  it('keeps the manufacturer family on unrelated endpoints and enables the offered Responses API', () => {
     const provider = buildUserProvider({ id: 'proxy', name: 'Proxy', runtimes: {
       codex: { baseUrl: 'https://proxy.example/v1', models: [{ id: 'google/gemini-99', name: 'Gemini', api: 'openai-responses' }] },
     } }, options);
     expect(provider.models.codex![0].nativeApi).toBe('google-generative-ai');
-    expect(provider.models.codex![0].defaultEnabled).toBe(false);
+    expect(provider.models.codex![0].defaultEnabled).toBe(true);
   });
 
   it.each([null, 'openai-responses'] as const)('a Server correction %s wins over the local Gemini declaration', nativeApi => {
@@ -96,7 +147,7 @@ describe('supplier import follows Gateway native model defaults', () => {
       }],
     } });
     for (const agent of agents) expect(provider.models[agent]![0].nativeApi).toBe(nativeApi);
-    expect(provider.models.codex![0].defaultEnabled).toBe(nativeApi === 'openai-responses');
+    expect(provider.models.codex![0].defaultEnabled).toBe(true);
   });
 
   function auditProvider(preset: NonNullable<typeof options.presets>[number]) {
@@ -109,19 +160,18 @@ describe('supplier import follows Gateway native model defaults', () => {
   }
 
   // Each supplier gets its own test budget and failure report as the catalog grows.
-  it.each(options.presets!)('$id leaves mismatched fixed engines off and preserves Pi adapters', preset => {
+  it.each(options.presets!)('$id enables engines on an offered API and leaves local conversion off', preset => {
     const provider = auditProvider(preset);
     let checked = 0;
     for (const agent of agents) for (const model of provider.models[agent] ?? []) {
       if (model.mode && !['chat', 'responses'].includes(model.mode)) continue;
       checked++;
       const message = `${preset.id}/${agent}/${model.id}`;
-      if (agent === 'pi') expect(model.defaultEnabled, message).toBe(true);
-      else if (model.defaultEnabled) {
-        const api = agent === 'claude-code' ? 'anthropic-messages' : 'openai-responses';
-        expect(model.nativeApi, message).toBe(api);
-        expect([api, ...(agent === 'codex' ? ['azure-openai-responses'] : [])], message).toContain(model.api);
-      }
+      // Without a declared API, a fixed-protocol engine sends its own format to the configured endpoint.
+      const wire = model.route?.wireProtocol ?? provider.routing[agent]?.wireProtocol;
+      const api = model.api ?? (agent === 'pi' ? model.piApi : undefined) ??
+        (wire === 'openai-chat' ? 'openai-completions' : wire) ?? (agent === 'pi' ? undefined : harnessApi[agent]);
+      expect(model.defaultEnabled, message).toBe(usesOfferedApi(agent, api));
     }
     expect(checked).toBe(agents.reduce((total, agent) => total + (preset.runtimes[agent]?.models.length ?? 0), 0));
   });

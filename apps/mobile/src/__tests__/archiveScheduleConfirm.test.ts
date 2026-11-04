@@ -35,13 +35,13 @@ describe('archive schedule lookup deadline', () => {
     await expect(bulk).resolves.toBe(0);
   });
 
-  it('still reports active non-persistent bindings that arrive in time', async () => {
+  it('reports both ordinary and persistent active bindings that will restore the task', async () => {
     mocks.list.mockResolvedValue([
       { id: 'a', name: 'Daily', status: 'active', targetSessionId: 'task' },
       { id: 'b', name: 'Persistent', status: 'active', targetSessionId: 'task', persistentSession: true },
     ]);
 
-    await expect(loadActiveBoundScheduleNames(args)).resolves.toEqual(['Daily']);
+    await expect(loadActiveBoundScheduleNames(args)).resolves.toEqual(['Daily', 'Persistent']);
   });
 
   it('asks only for the binding projection so a large list cannot overflow the frame', async () => {

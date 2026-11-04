@@ -19,6 +19,7 @@ import type { OrcaRemotePendingReport } from '../../shared/orcaRemoteWorker.js';
 
 import type {
   AgentInputCreateOpts,
+  AgentInputProjection,
   AgentInputQueuedMessage,
 } from '../../shared/agentInputQueue.js';
 import type { HistoryCursor, HistoryMessage, HistoryPage } from '../localDb/chatHistoryReader.js';
@@ -345,16 +346,45 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
     };
   }
 
-  async function deliveryStates(ref: RemoteWorkerRef, clientIds: string[]): Promise<string[]> {
+  async function readDelivery(ref: RemoteWorkerRef, clientIds: string[]): Promise<{
+    states: string[];
+    waitingForTurn: boolean;
+  }> {
     const projection = (await deps.invoke(ref.deviceId, 'maker:input:get-projection', [
       ref.remoteSessionId,
       { deliveryClientIds: clientIds },
-    ])) as { deliveryReceipts?: Array<{ clientId?: unknown; state?: unknown }> };
+    ])) as Partial<Pick<AgentInputProjection,
+      'turnInProgress' | 'autoResumePending' | 'usageLimitWait' | 'pendingQueue' | 'recovery'
+    >> & { deliveryReceipts?: Array<{ clientId?: unknown; state?: unknown }> };
     const receipts = Array.isArray(projection?.deliveryReceipts) ? projection.deliveryReceipts : [];
-    return clientIds.map((id) => {
+    const states = clientIds.map((id) => {
       const receipt = receipts.find((entry) => entry.clientId === id);
       return typeof receipt?.state === 'string' ? receipt.state : 'unknown';
     });
+    const ownsInput = (item: AgentInputQueuedMessage): boolean => {
+      const sourceId = item.retrySourceClientId ?? item.supersedesUserClientId ?? item.clientId;
+      return typeof sourceId !== 'string' || clientIds.includes(sourceId);
+    };
+    const pendingQueue = Array.isArray(projection?.pendingQueue) ? projection.pendingQueue : [];
+    // An unrelated phone input's recovery must not hold an older completed Lead reply.
+    const recovery = projection?.recovery;
+    let ownsRecovery = true;
+    if (recovery?.kind === 'active-turn') {
+      ownsRecovery = ownsInput(recovery.item);
+    } else if (recovery?.kind === 'queue-head') {
+      const queued = pendingQueue.find(item => item?.clientId === recovery.clientId);
+      ownsRecovery = queued ? ownsInput(queued) : clientIds.includes(recovery.clientId);
+    }
+    const pendingResume = pendingQueue.some(item => item?.autoResume === true && ownsInput(item));
+    return {
+      states,
+      // autoResumePending covers backoff and preparation; it is absent while the
+      // hidden continuation is queued. turnInProgress also fences a stale idle
+      // snapshot while the vendor/dispatch/terminal-persistence boundary is busy.
+      waitingForTurn: projection?.turnInProgress === true || pendingResume || (ownsRecovery && (
+        !!projection?.autoResumePending || !!projection?.usageLimitWait
+      )),
+    };
   }
 
   async function replyForInputs(
@@ -438,6 +468,8 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
     if (!awaiting?.terminalHandler) return;
     const clientIds = awaiting.clientIds;
     if (running) {
+      awaiting.historyScan = null;
+      awaiting.missingReplyPolls = 0;
       if (!awaiting.startedNotified) {
         awaiting.startedNotified = true;
         awaiting.turnStartPromise = deps.onTurnStarted(state.ref.proxySessionId);
@@ -445,8 +477,14 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
       }
       return;
     }
-    const states = await deliveryStates(state.ref, clientIds);
+    const delivery = await readDelivery(state.ref, clientIds);
     if (!current(state) || state.awaiting !== awaiting || awaiting.clientIds !== clientIds) return;
+    if (delivery.waitingForTurn) {
+      awaiting.historyScan = null;
+      awaiting.missingReplyPolls = 0;
+      return;
+    }
+    const { states } = delivery;
     // 仍在运行设备的队列里(排在用户插话之后等)，继续等。
     if (states.some((value) => value === 'pending')) return;
     if (states.every((value) => value === 'removed')) {
@@ -477,6 +515,16 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
     );
     // 历史读取期间又派入新任务时保留新的 awaiting，下一轮按完整输入集合复核。
     if (!current(state) || state.awaiting !== awaiting || awaiting.clientIds !== clientIds) return;
+    // A retry can start while a history page is in flight. Recheck before using
+    // its candidate, even for a partial scan, so a pre-recovery cursor/text
+    // cannot survive into the completed continuation and hide its final reply.
+    const latest = await readDelivery(state.ref, clientIds);
+    if (!current(state) || state.awaiting !== awaiting || awaiting.clientIds !== clientIds) return;
+    if (latest.waitingForTurn || latest.states.some((value, index) => value !== states[index])) {
+      awaiting.historyScan = null;
+      awaiting.missingReplyPolls = 0;
+      return;
+    }
     // 扫描预算不足不代表没有回复，保留当前游标与候选，下一轮继续。
     if (!last.complete) return;
     awaiting.historyScan = null;
@@ -731,9 +779,8 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
             errorCode(err) === 'INVOKE_TIMEOUT' ||
             (err as { inFlight?: unknown })?.inFlight === true
           ) {
-            const [delivered] = await deliveryStates(ref, [params.clientId]).catch(() => [
-              'unknown',
-            ]);
+            const delivery = await readDelivery(ref, [params.clientId]).catch(() => null);
+            const delivered = delivery?.states[0] ?? 'unknown';
             if (delivered === 'pending' || delivered === 'accepted') return accept();
             // 已发出但无法确认的请求保留身份，后续轮询核对，不让调用方重派同一工作。
             if (delivered === 'unknown') return accept();

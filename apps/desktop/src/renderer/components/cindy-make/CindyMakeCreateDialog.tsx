@@ -125,7 +125,7 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
                   rows={5}
                   maxLength={MAX_REQUEST_LENGTH}
                   disabled={starting}
-                  className="min-h-[120px] resize-y placeholder:opacity-55"
+                  className="min-h-[120px] resize-y"
                   onKeyDown={(event) => {
                     if (
                       event.key === 'Enter' &&

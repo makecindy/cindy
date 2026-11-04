@@ -28,8 +28,9 @@ import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core'
 import type { SharedPermission } from '../../maker-ipc/sharedPermission';
 import { INTERACTION_CHOICE_RECEIVED_TEXT, permissionOutcomeText } from '../shared/permissionPresentation';
 
-import { autoReviewUnavailablePromptLine } from '../shared/autoReviewUnavailablePrompt';
+import { autoReviewUnavailablePromptLine, permissionOperationPreview, permissionPromptDescription } from '../shared/autoReviewUnavailablePrompt';
 import { buildImReplyContextBlock } from '../shared/replyContext';
+import { receivedHistoryScope, recordReceivedImageMessage } from '../shared/receivedImageHistory';
 import { captureImContext } from '../../../shared/imMessageSource';
 import type { ImSessionRepo } from '../shared/sessionRepo';
 import type { ImOrchestratorConfig } from '../shared/types';
@@ -93,6 +94,7 @@ interface StoredWechatCredentials {
 
 interface WechatTaskPayload {
   text: string;
+  platformMessageId?: string;
   /** Optional for queued messages saved by older clients. */
   replyContext?: string;
   attachments: WechatTaskAttachment[];
@@ -1021,6 +1023,9 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         if (!committed.committed) return;
         cursor = result.cursor;
         failures = 0;
+        if (this.#state.phase === 'reconnecting') {
+          this.#setState({ ...this.#state, phase: 'connected', errorCode: undefined });
+        }
         if (result.messages.length > 0) {
           this.#setState({
             ...this.#state,
@@ -1147,8 +1152,18 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     let dispatch;
     try {
       if (!signal || signal.aborted) throw new Error('WECHAT_CONNECTION_STOPPED');
+      const groupHistoryAccess = receivedHistoryScope('wechat', botContextId, task.peerId);
+      if (payload.platformMessageId) {
+        await recordReceivedImageMessage({
+          scope: groupHistoryAccess,
+          messageId: payload.platformMessageId,
+          text: payload.text,
+          attachments: payload.attachments,
+        }).catch(() => this.log.warn('wechat image history indexing failed'));
+      }
       dispatch = await runtime.runner.dispatchAgentTurn({
         botContextId,
+        groupHistoryAccess,
         userId: task.peerId,
         userMessageId: task.id,
         // 个人微信只有私聊；渠道说明、引用与投递事实只进模型，落库保留原文。
@@ -1185,6 +1200,9 @@ export class WechatIM extends BaseIM implements RichChannelIM {
             active.routeSessionId = sessionId;
           }
         },
+        // The runner decides after resolving the actual route; a stale binding
+        // must not relax permissions on the channel-owned fallback session.
+        inheritCompanionOwnerPermissions: true,
         turnPermissionPolicy: createWechatTurnPermissionPolicy(task.id, {
           onInteractionStateChange: (state) => {
             void this.#requireStore().setWaitingDesktop(
@@ -1367,7 +1385,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
       return;
     }
     if (companion && /^\/(?:permission|model|project)(?:\s|$)/.test(command)) {
-      await this.#commitSimpleReply(task, '请在 Cindy 的伙伴设置中调整模型和权限。');
+      await this.#commitSimpleReply(task, '请在 Cindy 中打开这位伙伴：模型在伙伴设置中调整，权限在对话输入框下方切换。');
       return;
     }
     if (/^\/permission(?:\s|$)/.test(command)) {
@@ -1699,6 +1717,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         conversationEpoch: epoch,
         payloadJson: JSON.stringify({
           text: message.text,
+          platformMessageId: message.messageId,
           ...(quote ? { replyContext: quote } : {}),
           attachments: staged.attachments,
           unsupportedMedia: staged.unsupportedMedia,
@@ -1838,6 +1857,9 @@ function parseTaskPayload(raw: string): WechatTaskPayload {
   }
   return {
     text: value.text,
+    ...(typeof value.platformMessageId === 'string'
+      ? { platformMessageId: value.platformMessageId }
+      : {}),
     ...(value.replyContext !== undefined ? { replyContext: value.replyContext } : {}),
     attachments,
     unsupportedMedia: value.unsupportedMedia,
@@ -2072,8 +2094,8 @@ export function wechatPreDispatchFailureText(reason: string, companion = false):
     reason.includes(WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED)
     || reason.includes('unsupported_turn_permission')
   )) {
-    return '当前伙伴的模型或权限模式不支持微信的逐次权限确认，消息无法启动。\n'
-      + '请主人在 Cindy 的伙伴设置中选择 Claude Code 或 Codex，并将权限设为自动审查或询问，然后重试。';
+    return '这条消息需要逐次权限确认，但伙伴当前的模型或权限模式不支持，消息无法启动。\n'
+      + '请主人在 Cindy 中打开这位伙伴，检查伙伴设置中的模型，并在对话输入框下方选择默认权限或自动审批。';
   }
   if (reason.includes(`${WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED}:agent`)) {
     // 当前权限模式若是换 Agent 后仍不兼容的档位(bypassPermissions / acceptEdits),
@@ -2108,8 +2130,8 @@ function formatWechatInteractionPrompt(request: InteractionRequest): string {
   if (request.kind === 'permission') {
     const unavailable = autoReviewUnavailablePromptLine(request);
     return `需要确认工具“${request.displayName ?? request.toolName}”。
-${request.description ?? ''}
-${unavailable ? `${unavailable}\n` : ''}回复“允许”执行一次，或回复“拒绝”取消本次操作。微信内不支持永久授权。`;
+${permissionPromptDescription(request) ?? ''}
+${unavailable ? `${unavailable}\n` : ''}${permissionOperationPreview(request) ? `操作：\n${permissionOperationPreview(request)}\n` : ''}回复“允许”执行一次，或回复“拒绝”取消本次操作。微信内不支持永久授权。`;
   }
   if (request.kind === 'plan_review') {
     const plan = request.plan.length > 6_000 ? `${request.plan.slice(0, 6_000)}…` : request.plan;

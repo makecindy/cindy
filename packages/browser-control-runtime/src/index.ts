@@ -37,6 +37,9 @@ export {
 export { setBrowserRuntimeConfig as setBrowserControlRuntimeConfig } from './shim/runtime-config-snapshot.js';
 export { refreshBrowserRuntimeConfigDir } from './shim/_local/text-utils.js';
 export { isPublicHttpResourceUrl } from './resource-url-policy.js';
+export { assertRecipeCommand } from './recipe-command.js';
+export { RecipeBrowserSessions, type RecipeTransport } from './recipe-sessions.js';
+export { DEFAULT_UPLOAD_DIR as browserUploadDirectory } from './_generated/extension/src/browser/paths.js';
 export {
   managedProfilePidOwnsCdpPort,
   pidIsManagedChromeForProfile,

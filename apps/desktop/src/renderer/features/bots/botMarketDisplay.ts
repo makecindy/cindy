@@ -29,10 +29,17 @@ export function botRoutineRhythm(cron: string, t: Translate, language: string): 
 
 // Bundled dependencies' published names; installed/catalog metadata takes priority.
 export const bundledPluginNames: Record<string, string> = {
-  'google-gmail': 'Gmail',
+  'cindy-github': 'GitHub',
   'cindy-gitlab': 'GitLab',
-  'cindy-web-search': 'Web Search',
-  'opendesign-trial': 'OpenDesign',
-  'cindy-art': 'Art',
+  'cindy-notion': 'Notion',
   'google-sheets': 'Google Sheets',
+  'google-gmail': 'Gmail',
+  'outlook-mail': 'Outlook',
+  'google-drive': 'Google Drive',
+  'cindy-web-search': 'Web Search',
+  'x-manager': 'X Manager',
+  'cindy-art': 'Art',
+  'opendesign-trial': 'OpenDesign',
+  'cindy-simulator': 'Device Simulator',
+  'baguette-simulator': 'Device Simulator',
 };

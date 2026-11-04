@@ -11,6 +11,8 @@
  *   capabilities?.availableModels.map(...);
  */
 import { useEffect, useState } from 'react';
+import { invokeModelCatalog } from '@/lib/invokeModelCatalog';
+import { parseModelCatalogKey } from '../../shared/controlledModelCatalog';
 
 import { createLogger } from '@/lib/logger';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
@@ -123,6 +125,11 @@ export interface AgentCapabilities {
    * device-link 老被控端无此字段 → undefined，控制端必须阻止开启协同并提示升级。
    */
   supportsOrcaWorkerPermissionMode?: boolean;
+  /**
+   * 被控端是否支持创建后修改 Worker 的角色名/标识(maker:worker:update)。
+   * device-link 老被控端无此字段 → undefined,控制端对远程 Worker 隐藏编辑入口。
+   */
+  supportsOrcaWorkerUpdate?: boolean;
   /** 被控端支持把 UI initial_task 延后到 Lead 首条输入 accepted 后派发。 */
   supportsDeferredOrcaUiAssignment?: boolean;
   /**
@@ -296,6 +303,7 @@ function parseAgentCapabilities(value: unknown): AgentCapabilities {
     !isOptionalBoolean(value.supportsSessionAgentSwitch) ||
     !isOptionalBoolean(value.supportsSessionAgentSwitchCas) ||
     !isOptionalBoolean(value.supportsOrcaWorkerPermissionMode) ||
+    !isOptionalBoolean(value.supportsOrcaWorkerUpdate) ||
     !isOptionalBoolean(value.supportsDeferredOrcaUiAssignment) ||
     !isOptionalBoolean(value.supportsOrcaWorkerAgentDevice) ||
     !isOptionalCapabilityStatus(value.writableDirs) ||
@@ -411,7 +419,7 @@ async function fetchCapabilities(
     // 远程:隧道到被控端的 maker:get-capabilities(已在 allowlist)。
     const dl = getDeviceLink();
     if (!dl) throw new Error('device-link IPC not available');
-    raw = dl.invoke(deviceId, 'maker:get-capabilities', [agentKind]) as Promise<AgentCapabilities>;
+    raw = invokeModelCatalog(dl, deviceId, 'maker:get-capabilities', [agentKind]) as Promise<AgentCapabilities>;
   } else {
     // 本机:原路径,行为不变。
     const api = getMakerApi();
@@ -598,11 +606,34 @@ export async function prefetchDeviceCapabilities(deviceId: string): Promise<void
   await Promise.allSettled(ALL_AGENT_KINDS.map((agent) => fetchCapabilities(agent, deviceId)));
 }
 
+export function evictControlledDeviceCapabilities(taskDeviceId: string): void {
+  const devices = new Set([...cache.keys(), ...inflight.keys(), ...remoteListeners.keys()]
+    .map(key => key.slice(0, key.lastIndexOf(':'))));
+  for (const key of devices) {
+    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId) evictDeviceCapabilities(key);
+  }
+}
+
+export function refreshControlledDeviceCapabilities(taskDeviceId: string): void {
+  const devices = new Set([...remoteListeners.keys()].map(key => key.slice(0, key.lastIndexOf(':'))));
+  for (const key of devices) {
+    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId) void prefetchDeviceCapabilities(key);
+  }
+}
+
 /** device-link:被控设备下线 / 断链时驱逐其能力缓存(只清该设备的 key)。 */
 export function evictDeviceCapabilities(
   deviceId: string,
   options?: { retainDisplaySnapshot?: boolean },
 ): void {
+  const scopedDevices = new Set([...cache.keys(), ...inflight.keys(), ...remoteListeners.keys()]
+    .map(key => key.slice(0, key.lastIndexOf(':'))));
+  for (const key of scopedDevices) {
+    const route = parseModelCatalogKey(key);
+    if (route && (route.taskDeviceId === deviceId || route.agentDeviceId === deviceId)) {
+      evictDeviceCapabilities(key, options);
+    }
+  }
   const prefix = `${deviceId}:`;
   for (const k of [...cache.keys()]) if (k.startsWith(prefix)) cache.delete(k);
   for (const k of [...inflight.keys()]) if (k.startsWith(prefix)) inflight.delete(k);

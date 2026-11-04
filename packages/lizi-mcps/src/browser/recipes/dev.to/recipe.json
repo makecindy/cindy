@@ -1,12 +1,23 @@
 {
   "id": "devto-articles",
-  "match": ["dev.to"],
-  "description": "用 dev.to 公开 Articles API 按 tag 拉最新文章列表，返回 JSON 数组。读接口而非扒 DOM。",
-  "inputs": { "tag": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://dev.to/api/articles?tag={{tag|url}}&per_page=20" },
-    { "action": "wait", "loadState": "load" },
-    { "action": "extract", "as": "json", "extract": { "fields": { "body": "body" } } }
+  "match": [
+    "dev.to"
   ],
-  "output": "{{json}}"
+  "description": "Latest DEV.to articles for a specific tag",
+  "access": "read",
+  "adapter": "devto/tag",
+  "inputs": {
+    "tag": {
+      "required": true,
+      "type": "str",
+      "description": "Tag name (e.g. javascript, python, webdev)"
+    },
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "Number of articles"
+    }
+  },
+  "steps": []
 }

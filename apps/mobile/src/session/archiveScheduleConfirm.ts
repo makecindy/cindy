@@ -6,8 +6,8 @@ import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import { sessionMayHaveScheduleRuns } from '@/session/scheduleIndex';
 
 /**
- * 归档前的自动化提醒:绑定到已归档任务的自动化在下次触发时会被电脑暂停(持续会话除外,
- * 它会换绑新任务继续跑),归档前先让用户知道。已知未绑定的普通任务直接放行,不额外请求;
+ * 归档前的自动化提醒:绑定的自动化仍会运行，并像用户发送消息一样恢复原任务。
+ * 已知未绑定的普通任务直接放行,不额外请求;
  * 读取失败或超过等待上限按无绑定处理。
  */
 /** 查询自动化列表的等待上限:超时按「无绑定」处理,不让归档卡在远程请求上(通道超时预算可达 40 秒)。 */
@@ -31,8 +31,8 @@ function listBindingSchedules(deviceId: string, invoke: RemoteInvoke): Promise<u
   return invoke(deviceId, 'maker:schedule:list', [null, { sessionBindings: true }]);
 }
 
-function stopsWhenTargetArchived(schedule: RemoteSchedule): boolean {
-  return schedule.status === 'active' && !schedule.persistentSession && !!schedule.targetSessionId;
+function hasActiveTarget(schedule: RemoteSchedule): boolean {
+  return schedule.status === 'active' && !!schedule.targetSessionId;
 }
 
 export interface BulkArchiveCandidate {
@@ -48,7 +48,7 @@ export function anyMayHaveBoundSchedules(
   return candidates.some((c) => sessionMayHaveScheduleRuns(deviceId, c.id, c.source));
 }
 
-/** 批量归档:所选任务里归档后会停掉自动化的任务数(最多一次列表请求;全部已知无绑定则不请求;失败按 0)。 */
+/** 批量归档:所选任务里绑定了 active 自动化的任务数(最多一次列表请求;全部已知无绑定则不请求;失败按 0)。 */
 export async function countSessionsWithActiveBoundSchedules(
   deviceId: string,
   invoke: RemoteInvoke,
@@ -59,7 +59,7 @@ export async function countSessionsWithActiveBoundSchedules(
     const ids = new Set(candidates.map((c) => c.id));
     const bound = new Set(
       normalizeScheduleList(await withLookupDeadline(listBindingSchedules(deviceId, invoke), []))
-        .filter((schedule) => stopsWhenTargetArchived(schedule) && ids.has(schedule.targetSessionId!))
+        .filter((schedule) => hasActiveTarget(schedule) && ids.has(schedule.targetSessionId!))
         .map((schedule) => schedule.targetSessionId),
     );
     return bound.size;
@@ -85,14 +85,14 @@ export async function loadActiveBoundScheduleNames({
       await withLookupDeadline(listBindingSchedules(deviceId, invoke), []),
     );
     return schedules
-      .filter((schedule) => schedule.targetSessionId === sessionId && stopsWhenTargetArchived(schedule))
+      .filter((schedule) => schedule.targetSessionId === sessionId && hasActiveTarget(schedule))
       .map((schedule) => schedule.name || schedule.id);
   } catch {
     return [];
   }
 }
 
-/** 有会停掉的自动化时弹系统确认;没有直接返回 true。 */
+/** 有 active 自动化时提示后续会恢复任务;没有直接返回 true。 */
 export function confirmArchiveWithSchedules(t: TFunction, names: readonly string[]): Promise<boolean> {
   if (names.length === 0) return Promise.resolve(true);
   return new Promise((resolve) => {

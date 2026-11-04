@@ -51,9 +51,9 @@ import {
  *   manifest_failed/download_failed = 各自重试动作(checkEnvironment);
  *   spawn_failed 的 CTA =「前往下载」打开现网下载页(onSpawnFailedDownload),禁 retry。
  *
- * 不透明白底全盖 + 最短停留 3s 地板(+热更重启守地板)机制不变:前者由
+ * 不透明白底全盖 + 首启/热更 3s、已有会话返回启动 2s 的最短停留机制:前者由
  * LoginBrandStage 背景子层承载(var(--surface) token),后者仍在 useSplash
- * (MIN_DISPLAY_MS,fake-timer 用例保留)。
+ * (fake-timer 用例覆盖)。加载安全门不变；返回启动淡出复用标准 motion-enter。
  *
  * dev-only 状态遍历:VITE_SPLASH_PHASE_FIXTURE(readSplashPhaseFixture,DEV 短路)
  * 只覆盖**显示** phase,生命周期(fade/卸载/data-splash-active)仍跟真实 phase。
@@ -175,6 +175,7 @@ export function SplashScreen() {
       : realPhase;
 
   const {
+    isReturningSession,
     isDownloading: realIsDownloading,
     downloadProgress,
     downloadInfo,
@@ -353,7 +354,9 @@ export function SplashScreen() {
         {
           // 根透明:不透明白底全盖由 LoginBrandStage 背景子层(var(--surface))承载,
           // 品牌五要素从下层透出——本层只叠状态面板与窗口 chrome。
-          transition: 'opacity var(--splash-fade-duration) var(--splash-fade-easing)',
+          transition: `opacity ${
+            isReturningSession ? 'var(--motion-enter)' : 'var(--splash-fade-duration)'
+          } var(--splash-fade-easing)`,
           WebkitAppRegion: 'drag',
         } as React.CSSProperties
       }
@@ -419,7 +422,7 @@ export function SplashScreen() {
               />
             )}
 
-            {/* spinner 64×64 @面板内(308,188),内弧 #6F6F6F;动画挂 HTML wrapper
+            {/* spinner 64×64 @面板内(308,188),内弧走次要档;动画挂 HTML wrapper
                 (compositor-only,规则 7),reduced-motion 直落静止 */}
             {showSpinner && (
               <span
@@ -433,7 +436,7 @@ export function SplashScreen() {
                   width: SPLASH_PANEL.spinner.size,
                   height: SPLASH_PANEL.spinner.size,
                   // 轨道走 --login-loading-ring-track(与登录页 LoginLoadingRing 同构,
-                  // 暗色 rgba(212,212,212,.18) 才可见;内弧仍按 wave4 帧 #6F6F6F)
+                  // 墨水弱档 黑 10% / 白 13%;内弧走 --login-secondary-text 次要档)
                   border: '6px solid var(--login-loading-ring-track)',
                   borderTopColor: LOGIN_COLORS.secondaryText,
                 }}

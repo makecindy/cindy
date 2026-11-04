@@ -40,6 +40,7 @@ function rejectionReason(reason: string): string {
 }
 
 const FAILURE_PATTERNS: Array<[RegExp, string]> = [
+  [/^empty_transcript$/, 'empty_transcript'],
   [/不可优化|次数已用完/, 'refine_quota_exhausted'],
   [/rate.?limit|too many|频繁|\b429\b/i, 'rate_limited'],
   [/timed? ?out|timeout|超时/i, 'timeout'],
@@ -263,7 +264,7 @@ export function createMobileVoiceTimelineRecorder(context: {
       case 'error':
         logMobileVoice('error', 'run failed', {
           runId,
-          reason: classifyMobileVoiceFailure(event.message),
+          reason: event.code ?? classifyMobileVoiceFailure(event.message),
         });
         return;
     }

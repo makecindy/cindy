@@ -1,3 +1,4 @@
+import { openPluginTaskTab } from './openPluginTaskTab';
 import { openRoutinesTab } from './openRoutinesTab';
 import { openMailPreview, openMailCard } from './mailPreview';
 /** 执行 main 已裁决并推给当前 renderer host 的 RSB command。 */
@@ -26,6 +27,12 @@ export async function executeSidebarCommand(command: RsbWindowCommand): Promise<
   }
   if (command.type === 'open-mail-preview') {
     await openMailPreview(command.sessionId, command.url);
+    return;
+  }
+  if (command.type === 'open-plugin-task') {
+    await openPluginTaskTab(command.sessionId, command.instanceId, {
+      userInitiated: command.userInitiated === true,
+    });
     return;
   }
   if (command.type === 'open-routines-tab') {

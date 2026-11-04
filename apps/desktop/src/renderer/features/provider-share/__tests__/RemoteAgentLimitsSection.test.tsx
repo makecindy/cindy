@@ -92,6 +92,37 @@ describe('RemoteAgentLimitsSection', () => {
     expect(screen.queryByTestId('remote-agent-limit-perDevice')).toBeNull();
   });
 
+  // provider-sharing.md §3「闲置收回由提供方决定」：只有设置里带 idleMinutes 的电脑显示这一项；旧版电脑会拒绝
+  // 不认识的字段，所以读不到时既不显示也不提交。
+  it('edits idle reclaim minutes only on computers that report the setting', async () => {
+    const withIdle = (idleMinutes: number, isCustomized = false) => ({
+      ...view(), value: { perDevice: 16, total: 64, idleMinutes }, defaults: { perDevice: 16, total: 64, idleMinutes: 30 },
+      isCustomized, customizedKeys: isCustomized ? ['idleMinutes'] : [],
+    });
+    command.mockResolvedValue(withIdle(30));
+    render(<RemoteAgentLimitsSection deviceId="provider-computer" />);
+    const idle = () => screen.getByTestId('remote-agent-limit-idleMinutes') as HTMLInputElement;
+    await waitFor(() => expect(idle().value).toBe('30'));
+    fireEvent.change(idle(), { target: { value: '1441' } });
+    expect(button('save').disabled).toBe(true);
+    expect(screen.getByText('providerShare.runLimits.idleInvalid')).toBeTruthy();
+    fireEvent.change(idle(), { target: { value: '' } });
+    expect(button('save').disabled).toBe(true);
+    fireEvent.change(idle(), { target: { value: '0' } });
+    command.mockResolvedValue(withIdle(0, true));
+    fireEvent.click(button('save'));
+    await waitFor(() => expect(command).toHaveBeenCalledWith({ action: 'set-run-limits', limits: { idleMinutes: 0 } }, 'provider-computer'));
+    await waitFor(() => expect(idle().value).toBe('0'));
+    cleanup();
+    command.mockResolvedValue(view());
+    render(<RemoteAgentLimitsSection deviceId="old-computer" />);
+    await waitFor(() => expect(input('perDevice').value).toBe('16'));
+    expect(screen.queryByTestId('remote-agent-limit-idleMinutes')).toBeNull();
+    fireEvent.change(input('perDevice'), { target: { value: '20' } });
+    fireEvent.click(button('save'));
+    await waitFor(() => expect(command).toHaveBeenLastCalledWith({ action: 'set-run-limits', limits: { perDevice: 20 } }, 'old-computer'));
+  });
+
   it('keeps failed edits for retry and shows an unsupported remote computer', async () => {
     render(<RemoteAgentLimitsSection deviceId="old-computer" />);
     await waitFor(() => expect(input('perDevice').value).toBe('16'));

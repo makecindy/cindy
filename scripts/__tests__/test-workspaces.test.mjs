@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -35,6 +36,7 @@ import {
 	filterRunsByWorkspace,
 	findDependencyInstallIssues,
 	selectionNeedsElectron,
+	stripAgentEnvPollutants,
 	isIgnoredFile,
 	mapWithConcurrency,
 	normalizeRelPath,
@@ -264,6 +266,8 @@ test("real agent integration tests are explicit tiers outside unit", () => {
 	]);
 	assert.deepEqual(desktop.tiers.e2e.include, [
 		"src/main/maker-host/__tests__/*.e2e.test.ts",
+		"src/main/remote-agent/__tests__/groupRelayClaudeFork.e2e.test.ts",
+		"src/main/remote-agent/__tests__/startupProbe.e2e.test.ts",
 	]);
 });
 
@@ -327,10 +331,13 @@ test("nodeWebstorageEnabled detects the globals that force the webstorage flag",
 	);
 });
 
-test("desktop unit uses forks on Node 24+ to avoid native finalizer crashes", () => {
+test("desktop unit isolates native finalizers on macOS, Windows and Node 24+", () => {
 	assert.equal(desktopUnitPool("darwin", "24.18.0", false), "forks");
-	assert.equal(desktopUnitPool("darwin", "22.23.0", false), "threads");
+	assert.equal(desktopUnitPool("darwin", "22.22.3", false), "forks");
+	assert.equal(desktopUnitPool("darwin", "22.23.0", false), "forks");
 	assert.equal(desktopUnitPool("win32", "22.23.0", false), "forks");
+	assert.equal(desktopUnitPool("linux", "22.23.0", false), "threads");
+	assert.equal(desktopUnitPool("linux", "24.18.0", false), "forks");
 	assert.equal(desktopUnitPool("darwin", "25.0.0", true), "forks");
 });
 
@@ -719,6 +726,7 @@ test("desktop guard selects source-contract tests only", () => {
 	}
 	assert.deepEqual(
 		selectFilesForTier(workspace, tier, [
+			"apps/desktop/src/main/plugin-oauth/__tests__/runtimePrompt.test.ts",
 			"apps/desktop/src/main/__tests__/directSessionSendGuard.test.ts",
 			"apps/desktop/src/main/__tests__/makerSendToSessionOrdering.test.ts",
 			"apps/desktop/src/main/__tests__/authCaptchaIpcSecurity.test.ts",
@@ -727,6 +735,7 @@ test("desktop guard selects source-contract tests only", () => {
 			"apps/desktop/src/main/localDb/ipc/messages.test.ts",
 		]),
 		[
+			"apps/desktop/src/main/plugin-oauth/__tests__/runtimePrompt.test.ts",
 			"apps/desktop/src/main/__tests__/directSessionSendGuard.test.ts",
 			"apps/desktop/src/main/__tests__/makerSendToSessionOrdering.test.ts",
 			"apps/desktop/src/main/__tests__/authCaptchaIpcSecurity.test.ts",
@@ -1282,7 +1291,7 @@ function raceWithDeadline(candidates, deadlineMs, deadlineValue) {
 	});
 }
 
-test("two real test gate lock holders serialize on the same identity", async () => {
+test("two real test gate lock holders serialize after a probe resets its connection", async () => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "test-gate-real-lock-"));
 	let firstLock;
 	let secondLockPromise;
@@ -1298,6 +1307,16 @@ test("two real test gate lock holders serialize on the same identity", async () 
 			lockPortCount: REAL_LOCK_TEST_PORT_COUNT,
 			lockPortStride: REAL_LOCK_TEST_PORT_STRIDE,
 			output: () => {},
+		});
+		// Regression: an early-disconnecting probe emitted an unhandled ECONNRESET
+		// on the holder's accepted socket, terminating the gate before tests finished.
+		// Existing serialization coverage only exercised graceful probes. One real
+		// loopback RST now verifies the public lock entry stays available (runner tier).
+		await new Promise((resolve, reject) => {
+			const probe = net.createConnection({ host: "127.0.0.1", port: firstLock.port });
+			probe.once("error", reject);
+			probe.once("connect", () => probe.resetAndDestroy());
+			probe.once("close", resolve);
 		});
 		secondLockPromise = acquireTestGateLock({
 			repoRoot: root,
@@ -2443,4 +2462,14 @@ test("only selections that include Desktop need the Electron binary", () => {
 	assert.equal(selectionNeedsElectron(workspaces, { workspaces: ["packages/auth-client"] }), false);
 	assert.equal(selectionNeedsElectron(workspaces, { excludeWorkspaces: ["desktop"] }), false);
 	assert.equal(selectionNeedsElectron([{ name: "sample", cwd: "packages/sample" }]), false);
+});
+
+// Unit: suites run inside an agent session failed on variables the agent shell carried (#880:
+// CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL; a remotely controlled Cindy task's CINDY_INPUT_HANDOFF_ROUTE),
+// though nothing in the code under test changed. Children inherit the runner's env.
+test("the runner drops agent-shell variables that change test results, and nothing else", () => {
+	const env = { NODE_ENV: "production", CINDY_INPUT_HANDOFF_ROUTE: "route-1", CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: "1", PATH: "/bin", CI: "true" };
+	assert.deepEqual(stripAgentEnvPollutants(env), ["NODE_ENV", "CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL", "CINDY_INPUT_HANDOFF_ROUTE"]);
+	assert.deepEqual(env, { PATH: "/bin", CI: "true" });
+	assert.deepEqual(stripAgentEnvPollutants(env), []);
 });

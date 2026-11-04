@@ -9,9 +9,15 @@ vi.mock('react-i18next', () => ({
     t: (key: string, options?: { number: number }) => (options ? `${key}-${options.number}` : key),
   }),
 }));
+const chooseAvatar = vi.fn();
 const drawImage = vi.fn();
 const decode = vi.fn(async () => {});
 beforeEach(() => {
+  chooseAvatar.mockReset().mockResolvedValue({ canceled: true });
+  vi.stubGlobal('electronAPI', {
+    profileChooseAvatar: vi.fn(() => { throw new Error('Account service is unavailable in local mode'); }),
+    localDb: { bots: { chooseAvatarSource: chooseAvatar } },
+  });
   drawImage.mockClear();
   decode.mockReset().mockResolvedValue(undefined);
   vi.stubGlobal(
@@ -39,8 +45,8 @@ afterEach(() => {
 describe('shared teammate portrait gallery', () => {
   it('offers Cindy first, all existing portraits next and upload last', () => {
     const onChange = vi.fn();
-    const onUpload = vi.fn();
-    render(<BotPortraitPicker value="existing.png" onChange={onChange} onUpload={onUpload} />);
+
+    render(<BotPortraitPicker value="existing.png" onChange={onChange} />);
     expect(document.querySelector('img')?.getAttribute('src')).toBe('existing.png');
     fireEvent.click(screen.getByRole('button', { name: 'bots.profile.changeAvatar' }));
     const buttons = within(screen.getByRole('dialog')).getAllByRole('button');
@@ -52,7 +58,7 @@ describe('shared teammate portrait gallery', () => {
     expect(buttons[17].getAttribute('aria-label')).toBe('bots.guided.upload');
     expect(onChange).not.toHaveBeenCalled();
     fireEvent.click(buttons[17]);
-    expect(onUpload).toHaveBeenCalledOnce();
+    expect(chooseAvatar).toHaveBeenCalledOnce();
     expect(onChange).not.toHaveBeenCalled();
   });
 
@@ -97,13 +103,13 @@ describe('shared teammate portrait gallery', () => {
         }),
     );
     const onChange = vi.fn();
-    const onUpload = vi.fn();
-    render(<BotPortraitPicker onChange={onChange} onUpload={onUpload} />);
+
+    render(<BotPortraitPicker onChange={onChange} />);
     fireEvent.click(screen.getByRole('button', { name: 'bots.profile.changeAvatar' }));
     fireEvent.click(screen.getByRole('button', { name: 'Cindy' }));
     fireEvent.click(screen.getByRole('button', { name: 'bots.guided.upload' }));
     await act(async () => complete());
-    expect(onUpload).toHaveBeenCalledOnce();
+    expect(chooseAvatar).toHaveBeenCalledOnce();
     expect(onChange).not.toHaveBeenCalled();
   });
 
@@ -149,36 +155,26 @@ it.each(['cindy://avatar/preset/cindy', '🤖', '👩🏽‍💻'])(
   },
 );
 
-it.each(['error', 'abort', 'throw', 'unmount'])(
-  'releases file preparation on %s without accepting a portrait',
+it.each(['error', 'cancel', 'unmount'])(
+  'releases native image preparation on %s without accepting a portrait',
   async (outcome) => {
-    let reader: { onerror: () => void; onabort: () => void; onload: () => void; result: string };
-    vi.stubGlobal(
-      'FileReader',
-      class {
-        result = 'data:image/png;base64,cG5n';
-        onerror = () => {};
-        onabort = () => {};
-        onload = () => {};
-        readAsDataURL() {
-          reader = this;
-          if (outcome === 'throw') throw new Error('read failed');
-        }
-      },
+    let resolve!: (result: { canceled: boolean }) => void;
+    chooseAvatar.mockImplementationOnce(() =>
+      outcome === 'error'
+        ? Promise.reject(new Error('HDR conversion failed'))
+        : new Promise((done) => {
+            resolve = done;
+          }),
     );
     const pending = vi.fn();
     const onChange = vi.fn();
     const view = render(<BotPortraitPicker onChange={onChange} onPreparingChange={pending} />);
-    fireEvent.change(document.querySelector('input[type="file"]')!, {
-      target: { files: [new File(['image'], 'avatar.png', { type: 'image/png' })] },
+    fireEvent.click(screen.getByRole('button', { name: 'bots.profile.changeAvatar' }));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.guided.upload' }));
+    if (outcome === 'unmount') view.unmount();
+    await act(async () => {
+      if (outcome !== 'error') resolve({ canceled: true });
     });
-    expect(pending).toHaveBeenNthCalledWith(1, true);
-    if (outcome === 'unmount') {
-      view.unmount();
-      await act(async () => reader!.onload());
-    } else if (outcome !== 'throw') {
-      await act(async () => (outcome === 'error' ? reader!.onerror() : reader!.onabort()));
-    }
     expect(pending.mock.calls).toEqual([[true], [false]]);
     expect(onChange).not.toHaveBeenCalled();
   },
@@ -212,4 +208,117 @@ it('releases preparation after a gallery decode failure', async () => {
   await screen.findByRole('alert');
   expect(pending.mock.calls).toEqual([[true], [false]]);
   expect(onChange).not.toHaveBeenCalled();
+});
+
+// Unit: the production picker must gate uploaded bytes on crop confirmation.
+// Gallery tests did not cover this boundary; minimal input is one non-square PNG.
+const cropIO = vi.hoisted(() => ({ load: vi.fn(), export: vi.fn() }));
+vi.mock('@/components/settings/avatarCropImage', () => ({
+  loadAvatarSource: cropIO.load,
+  exportAvatarCrop: cropIO.export,
+}));
+
+describe('custom portrait crop confirmation', () => {
+  let closeBitmap: ReturnType<typeof vi.fn>;
+  const upload = () => {
+    fireEvent.click(screen.getByRole('button', { name: 'bots.profile.changeAvatar' }));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.guided.upload' }));
+  };
+  beforeEach(() => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    chooseAvatar.mockResolvedValue({
+      canceled: false,
+      previewDataUrl: 'data:image/png;base64,c2Ry',
+    });
+    closeBitmap = vi.fn();
+    cropIO.load.mockReset().mockResolvedValue({
+      bitmap: { close: closeBitmap },
+      size: { width: 800, height: 400 },
+    });
+    cropIO.export.mockReset().mockResolvedValue({ blob: new Blob(['cropped']) });
+    vi.stubGlobal(
+      'FileReader',
+      class {
+        result = 'data:image/png;base64,Y3JvcHBlZA==';
+        onload = () => {};
+        readAsDataURL() {
+          this.onload();
+        }
+      },
+    );
+  });
+
+  it('uses the host-prepared SDR source before decoding a custom upload', async () => {
+    render(<BotPortraitPicker onChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'bots.profile.changeAvatar' }));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.guided.upload' }));
+    await waitFor(() => expect(cropIO.load).toHaveBeenCalledWith('data:image/png;base64,c2Ry'));
+    expect(chooseAvatar).toHaveBeenCalledOnce();
+  });
+
+  it('retains the old avatar until Done and submits exported bytes', async () => {
+    const onChange = vi.fn();
+    render(<BotPortraitPicker value="old.png" onChange={onChange} />);
+    upload();
+    await screen.findByRole('alertdialog');
+    expect(onChange).not.toHaveBeenCalled();
+    expect(document.querySelector('img')?.getAttribute('src')).toBe('old.png');
+    fireEvent.click(screen.getByRole('button', { name: 'settings.userProfile.edit.crop.done' }));
+    await waitFor(() =>
+      expect(onChange).toHaveBeenCalledExactlyOnceWith('data:image/png;base64,Y3JvcHBlZA=='),
+    );
+    expect(cropIO.export.mock.calls[0][1]).toEqual({ cx: 400, cy: 200, side: 400 });
+    expect(closeBitmap).toHaveBeenCalledOnce();
+  });
+
+  it('cancels without changing the avatar and permits selecting the same file again', async () => {
+    const onChange = vi.fn();
+    render(<BotPortraitPicker value="old.png" onChange={onChange} />);
+    upload();
+    await screen.findByRole('alertdialog');
+    fireEvent.click(screen.getByRole('button', { name: 'settings.userProfile.edit.cancel' }));
+    expect(onChange).not.toHaveBeenCalled();
+    expect(closeBitmap).toHaveBeenCalledOnce();
+    upload();
+    await screen.findByRole('alertdialog');
+    expect(cropIO.load).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a corrupt image and releases the navigation guard', async () => {
+    cropIO.load.mockRejectedValueOnce(new Error('Invalid image'));
+    const onChange = vi.fn();
+    const pending = vi.fn();
+    render(<BotPortraitPicker onChange={onChange} onPreparingChange={pending} />);
+    upload();
+    await screen.findByRole('alert');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(pending.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it('discards a decoded upload after the picker unmounts', async () => {
+    let resolve!: (source: unknown) => void;
+    cropIO.load.mockReturnValueOnce(
+      new Promise((done) => {
+        resolve = done;
+      }),
+    );
+    const onChange = vi.fn();
+    const view = render(<BotPortraitPicker onChange={onChange} />);
+    upload();
+    await act(async () => {});
+    view.unmount();
+    await act(async () =>
+      resolve({ bitmap: { close: closeBitmap }, size: { width: 800, height: 400 } }),
+    );
+    expect(closeBitmap).toHaveBeenCalledOnce();
+    expect(onChange).not.toHaveBeenCalled();
+  });
 });

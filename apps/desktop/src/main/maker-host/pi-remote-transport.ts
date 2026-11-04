@@ -236,6 +236,47 @@ fi
       throw new Error('remote stat returned an invalid response');
     },
 
+    async lstat(file: string): Promise<{ isSymbolicLink: boolean } | null> {
+      // No `-L`: the only question is whether the namespace entry itself is a
+      // link, so a broken link still reports `symbolic link` instead of ENOENT.
+      const script = `
+P=${shellQuote(file)}
+case "$P" in '$HOME'/*) H=$(printf '%s' "$HOME"); [ "\${P#\\$HOME}" != "$P" ] && P="\${H}\${P#\\$HOME}";; esac
+if stat -c '%F' / >/dev/null 2>&1; then
+  RESULT=$(LC_ALL=C stat -c '%F' -- "$P" 2>&1)
+else
+  RESULT=$(LC_ALL=C stat -f '%HT' -- "$P" 2>&1)
+fi
+STATUS=$?
+if [ "$STATUS" -ne 0 ]; then
+  case "$RESULT" in
+    *': No such file or directory') printf 'MISSING\\n' ;;
+    *': Permission denied') printf 'EACCES' >&2; exit 1 ;;
+    *) exit 1 ;;
+  esac
+else
+  case "$RESULT" in
+    'symbolic link'|'Symbolic Link') printf 'SYMLINK\\n' ;;
+    *) printf 'OTHER\\n' ;;
+  esac
+fi
+`;
+      const result = await remoteHost.exec(`bash -c ${shellQuote(script)}`, {
+        timeoutMs: 10_000,
+        label: 'pi-remote-lstat',
+      });
+      if (result.exitCode !== 0) {
+        const code = result.stderr.trim();
+        const reason = /^E[A-Z0-9]+$/.test(code) ? `: ${code}` : '';
+        throw new Error(`remote lstat failed (exit ${result.exitCode})${reason}`);
+      }
+      const kind = result.stdout.trim();
+      if (kind === 'SYMLINK') return { isSymbolicLink: true };
+      if (kind === 'OTHER') return { isSymbolicLink: false };
+      if (kind === 'MISSING') return null;
+      throw new Error('remote lstat returned an invalid response');
+    },
+
     readFile: (file, maxBytes = 1_048_576) => readBounded(file, maxBytes, false),
     readFileTail: (file, maxBytes) => readBounded(file, maxBytes, true),
 

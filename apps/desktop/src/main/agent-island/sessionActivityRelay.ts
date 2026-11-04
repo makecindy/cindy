@@ -301,11 +301,13 @@ export class SessionActivityRelay {
 
 function toSessionActivityPayload(activity: AgentIslandSessionActivity): SessionActivityPayload {
   return {
+    ...(activity.completionToken ? { completionToken: activity.completionToken } : {}),
     ...(activity.completionNotification ? { completionNotification: activity.completionNotification } : {}),
     sessionId: activity.sessionId,
     phase: activity.phase,
     workingPhase: activity.workingPhase,
     compactDetail: activity.compactDetail,
+    ...(activity.summaryFormat ? { summaryFormat: activity.summaryFormat } : {}),
     interactionKind: activity.interactionKind,
     attention: activity.attention,
   };
@@ -334,9 +336,11 @@ function toTerminalActivityPayload(sessionId: string): SessionActivityPayload {
 
 function activitySignature(payload: SessionActivityPayload): string {
   return [
+    payload.completionToken ?? '',
     payload.phase,
     payload.completionNotification ?? '',
     payload.compactDetail,
+    payload.summaryFormat ?? '',
     payload.workingPhase,
     payload.interactionKind ?? '',
     payload.attention === true ? '1' : '0',

@@ -1,19 +1,15 @@
 {
   "site": "m.okjike.com",
-  "auth": "公开用户主页/帖子/话题免登录即可读(数据走 Next.js SSR 内嵌 JSON);首页关注流、搜索等个性化内容需登录(走 web.okjike.com,扒 React fiber,较脆弱)",
+  "auth": "鉴权以具体命令为准：cookie。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "userMobile": "https://m.okjike.com/users/<username>",
-    "postMobile": "https://m.okjike.com/originalPosts/<postId>",
-    "topicMobile": "https://m.okjike.com/topics/<topicId>",
-    "postWeb": "https://web.okjike.com/originalPost/<postId>"
+    "home": "https://m.okjike.com"
   },
-  "pages": [
-    {
-      "type": "user-posts",
-      "url": "https://m.okjike.com/users/<username>",
-      "notes": "SSR <script type=\"application/json\"> 内 props.pageProps.posts[{content,type,likeCount,commentCount,actionTime,createdAt,id}];帖子 URL = https://web.okjike.com/originalPost/<id>"
-    }
+  "recipes": [
+    "jike-user-posts"
   ],
-  "recipes": ["jike-user-posts"],
-  "notes": "即刻数据获取分两条路。推荐路:移动站 m.okjike.com 是 Next.js SSR,页面里有一个 <script id=\"__NEXT_DATA__\" type=\"application/json\"> 节点,优先用 document.getElementById('__NEXT_DATA__')(比盲取第一个 application/json script 稳)、JSON.parse 它的 textContent 即可拿到 props.pageProps,无需调接口、公开内容免登录,稳定不踩反爬。已收录 jike-user-posts(用户动态,走 /users/<username>)。同模式的其它移动站读流程:帖子详情+评论 /originalPosts/<postId>(pageProps.post{user.screenName,content,likeCount,createdAt} + pageProps.comments[{user.screenName,content,likeCount,createdAt}]);话题/圈子帖子 /topics/<topicId>(pageProps.posts[{content,user.screenName,likeCount,commentCount,actionTime,id}]),帖子 URL 用 https://web.okjike.com/originalPost/<id> 拼。备用路(脆弱、需登录):web.okjike.com 是纯 CSR,首页关注流(/)和搜索(/search?q=<kw>)没有接口,只能 navigate 后遍历 DOM 元素([class*=\"_post_\"])、从 React fiber(__reactFiber$ 开头的 key 向上找含 data.id 的 memoizedProps)里抠帖子数据,DOM/类名变了就失效,本配方集不收录,需要时让模型现场扒。"
+  "notes": "兼容入口 jike-user-posts 现执行内置 jike/user，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

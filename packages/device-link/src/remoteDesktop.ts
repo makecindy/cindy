@@ -11,6 +11,15 @@ import {
 /** Additive, same-account business channel. Never broadcast screen data or input. */
 export const REMOTE_DESKTOP_CHANNEL = "device-link:remote-desktop:v1";
 export const REMOTE_DESKTOP_LEASE_MS = 12_000;
+/** Human inactivity, independent of transport heartbeats. Zero disables it. */
+export const REMOTE_DESKTOP_IDLE_MINUTES = [0, 1, 5, 10, 15, 30] as const;
+export const REMOTE_DESKTOP_DEFAULT_IDLE_MINUTES = 5;
+export function isRemoteDesktopIdleMinutes(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    REMOTE_DESKTOP_IDLE_MINUTES.some((minutes) => minutes === value)
+  );
+}
 export const REMOTE_DESKTOP_MAX_FRAME_BYTES = 180_000;
 
 export const REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS = 16_384;
@@ -21,7 +30,35 @@ export type DesktopInput =
   | { kind: "scroll"; dx: number; dy: number }
   | { kind: "key"; code: string; down: boolean }
   | { kind: "text"; text: string }
-  | { kind: "release" };
+  | { kind: "release" }
+  /** Live screen leases only: every current contact, 0..1 in the shown picture. */
+  | {
+      kind: "touch";
+      touches: LiveScreenTouch[];
+      edge?: LiveScreenEdge;
+    }
+  /** Live screen leases only: a button the screen's descriptor lists. */
+  | { kind: "press"; button: string };
+
+export type LiveScreenTouchPhase =
+  "began" | "moved" | "stationary" | "ended" | "cancelled";
+export type LiveScreenEdge = "bottom" | "top" | "left" | "right";
+export interface LiveScreenTouch {
+  id: number;
+  x: number;
+  y: number;
+  phase: LiveScreenTouchPhase;
+}
+const TOUCH_PHASES: readonly string[] = [
+  "began",
+  "moved",
+  "stationary",
+  "ended",
+  "cancelled",
+];
+const EDGES: readonly string[] = ["bottom", "top", "left", "right"];
+export const LIVE_SCREEN_MAX_TOUCHES = 10;
+export const LIVE_SCREEN_BUTTON_ID = /^[a-z0-9-]{1,32}$/;
 
 export const DESKTOP_KEY_CODES = [
   ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map((key) => `Key${key}`),
@@ -89,9 +126,43 @@ export function isDesktopInput(value: unknown): value is DesktopInput {
       );
     case "text":
       return typeof v.text === "string" && v.text.length <= 4096;
+    case "press":
+      return (
+        typeof v.button === "string" && LIVE_SCREEN_BUTTON_ID.test(v.button)
+      );
+    case "touch": {
+      if (v.edge !== undefined && !EDGES.includes(v.edge as string))
+        return false;
+      if (
+        !Array.isArray(v.touches) ||
+        v.touches.length > LIVE_SCREEN_MAX_TOUCHES
+      )
+        return false;
+      const ids = new Set<number>();
+      return v.touches.every((touch: unknown) => {
+        if (!touch || typeof touch !== "object") return false;
+        const t = touch as Record<string, unknown>;
+        if (
+          !Number.isInteger(t.id) ||
+          (t.id as number) < 0 ||
+          (t.id as number) >= LIVE_SCREEN_MAX_TOUCHES ||
+          ids.has(t.id as number)
+        )
+          return false;
+        ids.add(t.id as number);
+        return (
+          unit(t.x) && unit(t.y) && TOUCH_PHASES.includes(t.phase as string)
+        );
+      });
+    }
     default:
       return false;
   }
+}
+
+/** Input kinds that act on a plugin-provided live screen, never the desktop. */
+export function isLiveScreenOnlyInput(input: DesktopInput): boolean {
+  return input.kind === "touch" || input.kind === "press";
 }
 
 /** Viewer intent; the host owns the concrete encoder and capture parameters. */
@@ -155,6 +226,8 @@ export interface RemoteDesktopCapabilities {
   connectionTakeover?: boolean;
   /** Can lock the host on exit. New hosts also honor the lease's lockOnExit policy. */
   lockOnExit?: boolean;
+  /** Host enforces human inactivity and locks before ending the lease. */
+  idleLock?: boolean;
   videoSettings?: boolean;
   trickleIce?: boolean;
   systemAudio?: boolean;
@@ -202,7 +275,70 @@ export interface RemoteDesktopCapabilities {
    * window; a viewer can never name one.
    */
   handoffWindow?: boolean;
+  /**
+   * Accepts `screens` and `start` with `screen`: a live view of a device screen
+   * a plugin provides (for example a simulator), with `touch` / `press` input
+   * routed to that plugin. Older hosts drop `screen` and end sessions on the
+   * new input kinds, so viewers send neither without this flag.
+   */
+  liveScreens?: boolean;
 }
+export type LiveScreenPlatform =
+  "ios" | "ipados" | "tvos" | "visionos" | "android";
+export const LIVE_SCREEN_PLATFORMS: readonly LiveScreenPlatform[] = [
+  "ios",
+  "ipados",
+  "tvos",
+  "visionos",
+  "android",
+];
+/** One screen offered by an enabled plugin, as listed by `screens`. */
+export interface RemoteLiveScreen {
+  plugin: string;
+  pluginName: string;
+  id: string;
+  name: string;
+  platform: LiveScreenPlatform;
+  state: "running" | "starting" | "off";
+  /** Tasks the plugin has bound this screen to. */
+  taskIds: string[];
+}
+export const LIVE_SCREEN_BUTTON_ICONS = [
+  "home",
+  "back",
+  "recents",
+  "lock",
+  "power",
+  "volume-up",
+  "volume-down",
+  "rotate-left",
+  "rotate-right",
+  "menu",
+  "play-pause",
+  "siri",
+  "shake",
+  "screenshot",
+] as const;
+export type LiveScreenButtonIcon = (typeof LIVE_SCREEN_BUTTON_ICONS)[number];
+export interface LiveScreenButton {
+  id: string;
+  icon: LiveScreenButtonIcon;
+  label: string;
+}
+/** Host-verified description of the plugin screen a live screen lease shows. */
+export interface RemoteDesktopLeaseScreen {
+  plugin: string;
+  id: string;
+  name: string;
+  platform: LiveScreenPlatform;
+  /** Share of the shorter side, 0..0.5. */
+  cornerRadius: number;
+  maxTouches: number;
+  keyboard: boolean;
+  buttons: LiveScreenButton[];
+}
+export const LIVE_SCREEN_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+export const LIVE_SCREEN_PLUGIN_ID = /^[A-Za-z0-9._-]{1,160}$/;
 export type DesktopPermission = "screenRecording" | "accessibility";
 export type DesktopPermissionStatus =
   "granted" | "missing" | "unknown" | "notRequired";
@@ -230,6 +366,8 @@ export interface RemoteDesktopLease {
   videoKept?: boolean;
   /** A 代输入 live view: the video is this one window, and input stays inside it. */
   window?: RemoteDesktopLeaseWindow;
+  /** A plugin live screen: the video is that screen, and input goes to the plugin. */
+  screen?: RemoteDesktopLeaseScreen;
 }
 /** Host-verified description of the single window a 代输入 live view shows. */
 export interface RemoteDesktopLeaseWindow {
@@ -257,6 +395,8 @@ export type RemoteDesktopRequest =
   | RemoteDesktopIceRequest
   | ClipboardContentRequest
   | { op: "capabilities" }
+  /** Only to hosts advertising `liveScreens`. */
+  | { op: "screens" }
   | { op: "permissions"; action: "check" | "guide" }
   | {
       op: "start";
@@ -265,11 +405,28 @@ export type RemoteDesktopRequest =
       takeover?: boolean;
       control?: boolean;
       lockOnExit?: boolean;
+      idleTimeoutMinutes?: number;
       /** 代输入 request id; only to hosts advertising `handoffWindow`. */
       handoff?: string;
+      /** A listed plugin screen; only to hosts advertising `liveScreens`. */
+      screen?: { plugin: string; id: string };
     }
-  | { op: "heartbeat"; lease: string; lockOnExit?: boolean }
+  | {
+      op: "heartbeat";
+      lease: string;
+      lockOnExit?: boolean;
+      idleTimeoutMinutes?: number;
+    }
   | { op: "stop"; lease: string; lockScreen?: boolean }
+  /**
+   * A live screen's upright size, answered once it differs from `known` (or
+   * after a few seconds), so the viewer follows a turn as it happens.
+   */
+  | {
+      op: "screenShape";
+      lease: string;
+      known?: { width: number; height: number };
+    }
   | { op: "frame"; lease: string; cursorOverlay?: boolean }
   | { op: "control" | "presentation"; lease: string; enabled: boolean }
   | { op: "input"; lease: string; sequence: number; events: DesktopInput[] }
@@ -313,10 +470,18 @@ export function parseRemoteDesktopRequest(
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("INVALID_REQUEST");
   const v = value as Record<string, unknown>;
+  const idleTimeout = () => {
+    if (v.idleTimeoutMinutes === undefined) return {};
+    if (!isRemoteDesktopIdleMinutes(v.idleTimeoutMinutes))
+      throw new Error("INVALID_REQUEST");
+    return { idleTimeoutMinutes: v.idleTimeoutMinutes };
+  };
   const lockOnExit = () => {
     if (v.lockOnExit !== undefined && typeof v.lockOnExit !== "boolean")
       throw new Error("INVALID_REQUEST");
-    return typeof v.lockOnExit === "boolean" ? { lockOnExit: v.lockOnExit } : {};
+    return typeof v.lockOnExit === "boolean"
+      ? { lockOnExit: v.lockOnExit }
+      : {};
   };
   // Optional on start and display changes; older hosts drop it and the viewer
   // asks for control separately.
@@ -325,7 +490,7 @@ export function parseRemoteDesktopRequest(
       throw new Error("INVALID_REQUEST");
     return v.control === true ? { control: true as const } : {};
   };
-  if (v.op === "capabilities") return { op: v.op };
+  if (v.op === "capabilities" || v.op === "screens") return { op: v.op };
   if (v.op === "permissions" && (v.action === "check" || v.action === "guide"))
     return { op: v.op, action: v.action };
   if (
@@ -341,17 +506,39 @@ export function parseRemoteDesktopRequest(
       throw new Error("INVALID_REQUEST");
     if (
       v.handoff !== undefined &&
-      (typeof v.handoff !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(v.handoff))
+      (typeof v.handoff !== "string" ||
+        !/^[A-Za-z0-9_-]{1,128}$/.test(v.handoff))
+    )
+      throw new Error("INVALID_REQUEST");
+    const screen = v.screen as Record<string, unknown> | undefined;
+    if (
+      screen !== undefined &&
+      (!screen ||
+        typeof screen !== "object" ||
+        typeof screen.plugin !== "string" ||
+        !LIVE_SCREEN_PLUGIN_ID.test(screen.plugin) ||
+        typeof screen.id !== "string" ||
+        !LIVE_SCREEN_ID.test(screen.id) ||
+        v.handoff !== undefined)
     )
       throw new Error("INVALID_REQUEST");
     return {
       op: v.op,
       displayId: v.displayId,
       ...(typeof v.handoff === "string" ? { handoff: v.handoff } : {}),
+      ...(screen
+        ? {
+            screen: {
+              plugin: screen.plugin as string,
+              id: screen.id as string,
+            },
+          }
+        : {}),
       ...(v.takeover === true ? { takeover: true } : {}),
       ...(typeof v.resume === "boolean" ? { resume: v.resume } : {}),
       ...control(),
       ...lockOnExit(),
+      ...idleTimeout(),
     };
   }
   if (typeof v.lease !== "string" || v.lease.length > 128 || !v.lease)
@@ -438,7 +625,29 @@ export function parseRemoteDesktopRequest(
       ...(v.lockScreen === true ? { lockScreen: true } : {}),
     };
   }
-  if (v.op === "heartbeat") return { op: v.op, lease, ...lockOnExit() };
+  if (v.op === "heartbeat")
+    return { op: v.op, lease, ...lockOnExit(), ...idleTimeout() };
+  if (v.op === "screenShape") {
+    if (v.known === undefined) return { op: v.op, lease };
+    const known = v.known as { width?: unknown; height?: unknown } | null;
+    if (
+      !known ||
+      typeof known !== "object" ||
+      ![known.width, known.height].every(
+        (size) =>
+          typeof size === "number" &&
+          Number.isInteger(size) &&
+          size > 0 &&
+          size <= 16384,
+      )
+    )
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      lease,
+      known: { width: known.width as number, height: known.height as number },
+    };
+  }
   if (
     (v.op === "control" || v.op === "presentation") &&
     typeof v.enabled === "boolean"
@@ -558,6 +767,7 @@ export const REMOTE_DESKTOP_CHANNEL_OPS: ReadonlySet<string> = new Set([
   "displayModes",
   "clipboardSync",
   "clipboardVersion",
+  "screenShape",
 ]);
 export const REMOTE_DESKTOP_CHANNEL_MAX_ID_CHARS = 64;
 /** Fits one SCTP message on every shipped receiver. */

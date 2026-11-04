@@ -2,10 +2,13 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-const env = vi.hoisted(() => ({ visible: true, current: true, access: vi.fn(), get: vi.fn() }));
+const env = vi.hoisted(() => ({ visible: true, current: true, access: vi.fn(), get: vi.fn(),
+  dailyRead: vi.fn(), dailySet: vi.fn(), broadcast: vi.fn() }));
+vi.mock('../../../routines/service.js', () => ({ routineTools: { todoCheckEnabled: env.dailyRead, setTodoCheck: env.dailySet } }));
 vi.mock('../../../agent-island/service.js', () => ({ getAgentIslandService: () => null }));
 vi.mock('../../../maker-ipc/botRemoteResourceInvalidation.js', () => ({
   scheduleBotRemoteResourceChangedForSession: vi.fn(),
+  broadcastBotRemoteResourceChanged: env.broadcast,
 }));
 vi.mock('../../../maker-ipc/workingStatus.js', () => ({ getWorkingStatusCopy: vi.fn() }));
 vi.mock('../../client/current.js', () => ({ getDbClient: () => null }));
@@ -48,6 +51,9 @@ beforeEach(async () => {
   env.current = true;
   env.get.mockReset();
   env.access.mockReset();
+  env.dailyRead.mockReset().mockResolvedValue(false);
+  env.dailySet.mockReset().mockImplementation(async (_botId: string, enabled: boolean) => enabled);
+  env.broadcast.mockReset();
   env.get.mockImplementation(async (id: string) =>
     id === 'bot-one' && env.visible ? source : null,
   );
@@ -170,4 +176,31 @@ it('projects the next deferral expiry even when the deferred item is absent from
   expect(page.items).toHaveLength(1);
   expect(page.items[0].id).not.toBe(later.id);
   expect(page.nextDeferredAt).toBe(until);
+});
+
+it('reads and switches the weekday todo check only for a visible teammate on the current account', async () => {
+  // 「每天帮我查一次」：手机与别的电脑读 dailyCheck 字段、经 todo-daily-check 动作开关宿主的内置例行任务。
+  const daily = (input: Record<string, unknown>, resourceRef = ref) =>
+    remoteResourceRegistry.invoke(context, { client, collectionId: 'teammates', resourceRef, actionId: 'todo-daily-check', input });
+  env.dailyRead.mockResolvedValueOnce(true);
+  expect((await remoteResourceRegistry.get(context, { client, ref })).blocks?.[0].data).toMatchObject({ dailyCheck: true });
+  // The routine engine not ready (paused teammate): todos still load, the switch stays hidden.
+  env.dailyRead.mockRejectedValueOnce(new Error('The teammate is paused'));
+  expect((await remoteResourceRegistry.get(context, { client, ref })).blocks?.[0].data).not.toHaveProperty('dailyCheck');
+
+  expect(await daily({ enabled: true })).toMatchObject({ dailyCheck: true });
+  expect(env.dailySet).toHaveBeenLastCalledWith('bot-one', true);
+  expect(env.broadcast).toHaveBeenLastCalledWith('bot-one');
+
+  await expect(daily({ enabled: 'yes' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+  env.visible = false;
+  await expect(daily({ enabled: true })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  env.visible = true;
+  await expect(daily({ enabled: true }, { ...ref, id: 'bot-one' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  expect(env.dailySet).toHaveBeenCalledTimes(1);
+
+  // The account changes while the host switches it: no result crosses accounts, no broadcast.
+  env.dailySet.mockImplementationOnce(async () => { env.current = false; return false; });
+  await expect(daily({ enabled: false })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  expect(env.broadcast).toHaveBeenCalledTimes(1);
 });

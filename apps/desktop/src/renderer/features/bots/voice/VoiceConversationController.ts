@@ -1,10 +1,14 @@
 import type {
+  VoiceCallSnapshot,
   VoiceConversationApi,
   VoiceConversationSelection,
   VoiceExitDecision,
 } from '@/../shared/voiceConversation';
+import { SPEAKER_FILTER_NOTICE_MS } from '@cindy/voice-input-core';
+
 import type { ChatMessage } from '@/lib/makerChatStore';
 import { createLogger } from '@/lib/logger';
+import { extractIpcError } from '@/utils/ipcError';
 import type { PcmChunk } from '@/voice-input/WebMicAudioEngine';
 import type { SpeechPlayer } from './PcmSpeechPlayer';
 import { speechChunks, VoiceReplyTracker, type VoiceTaskFailure } from './VoiceReplyTracker';
@@ -32,34 +36,8 @@ type ExitReason =
 type QueuedUtterance = { text: string; id?: string };
 type IntentExitReason = 'voice_command' | 'farewell' | 'semantic';
 
-export type VoicePhase =
-  | 'idle'
-  | 'connecting'
-  | 'microphone'
-  | 'listening'
-  | 'thinking'
-  | 'preparing'
-  | 'speaking'
-  | 'paused'
-  | 'error';
-export type VoiceSnapshot = {
-  callRecord?: import('@cindy/maker-core').VoiceCallRecord;
-  phase: VoicePhase;
-  transcript: string;
-  unsent: string;
-  /** Partial question answers must never be concatenated into ordinary chat. */
-  questionDraft?: string;
-  level: number;
-  error: 'connection' | 'microphone' | 'send' | 'speech' | null;
-  muted: boolean;
-  microphonePending: boolean;
-  microphoneError: boolean;
-  exitCountdown: {
-    reason: 'idle' | 'farewell' | 'semantic';
-    secondsRemaining: number;
-    waitingForSend?: boolean;
-  } | null;
-};
+export type VoicePhase = VoiceCallSnapshot['phase'];
+export type VoiceSnapshot = VoiceCallSnapshot;
 interface Microphone {
   onPcm16k(callback: (chunk: PcmChunk) => void): void;
   start(): Promise<void>;
@@ -77,6 +55,7 @@ export class VoiceConversationController {
     muted: false,
     microphonePending: false,
     microphoneError: false,
+    speakerFiltered: false,
     exitCountdown: null,
   };
   private listeners = new Set<() => void>();
@@ -117,6 +96,7 @@ export class VoiceConversationController {
   private idleSince: number | null = null;
   private exitDeadline = 0;
   private exitTimer: ReturnType<typeof setTimeout> | undefined;
+  private speakerFilteredTimer: ReturnType<typeof setTimeout> | undefined;
   private exitVersion = 0;
   private exitAfterSend: { reason: IntentExitReason } | null = null;
   private pendingExitHandoffs = 0;
@@ -171,6 +151,18 @@ export class VoiceConversationController {
     // PCM level updates are not evidence of speech and must not reset idleness.
     if (Object.keys(patch).some((key) => key !== 'level' && key !== 'exitCountdown'))
       this.refreshActivity();
+  }
+
+  private showSpeakerFiltered(): void {
+    clearTimeout(this.speakerFilteredTimer);
+    this.speakerFilteredTimer = setTimeout(() => this.clearSpeakerFiltered(), SPEAKER_FILTER_NOTICE_MS);
+    if (!this.state.speakerFiltered) this.patch({ speakerFiltered: true });
+  }
+
+  private clearSpeakerFiltered(): void {
+    clearTimeout(this.speakerFilteredTimer);
+    this.speakerFilteredTimer = undefined;
+    if (this.state.speakerFiltered) this.patch({ speakerFiltered: false });
   }
 
   private isIdle(): boolean {
@@ -389,6 +381,10 @@ export class VoiceConversationController {
           if (event.type === 'error' && this.resumingInput) this.patch({ microphoneError: true });
           return;
         }
+        if (event.type === 'speaker-filtered') {
+          this.showSpeakerFiltered();
+          return;
+        }
         if (event.type === 'speech-started') {
           this.captureQuestion();
           this.latestUtterance = null;
@@ -519,8 +515,9 @@ export class VoiceConversationController {
       if (!current()) return;
       this.setReplyPhase(this.pendingInput ? 'thinking' : null);
       this.updateMessages(this.latestMessages);
-    } catch {
-      if (current()) this.fail('connection');
+    } catch (error) {
+      if (current())
+        this.fail(extractIpcError(error)?.code === 'VOICE_CONVERSATION_BUSY' ? 'busy' : 'connection');
     }
   }
 
@@ -1004,8 +1001,9 @@ export class VoiceConversationController {
             if (epoch === this.epoch && deferredEpoch === this.speechEpoch) this.fail('speech');
           });
       },
-      failed: () => {
-        if (current()) this.fail('speech');
+      failed: (error) => {
+        if (current())
+          this.fail(extractIpcError(error)?.code === 'VOICE_SPEECH_TIMEOUT' ? 'speechTimeout' : 'speech');
       },
       diagnostic: (event, details) => {
         if (current())
@@ -1078,6 +1076,7 @@ export class VoiceConversationController {
       this.queued = [];
       this.capturedQuestion = undefined;
       this.patch({ muted: true, transcript: '', unsent });
+      this.clearSpeakerFiltered();
       // A possible interruption can no longer be confirmed with the mic closed.
       // Restore the held reply instead of discarding its playback/ownership.
       if (this.speechCandidate) {
@@ -1198,6 +1197,7 @@ export class VoiceConversationController {
 
   private release(): void {
     this.cancelCountdown('release', false);
+    this.clearSpeakerFiltered();
     ++this.epoch;
     this.resumingInput = false;
     ++this.captureVersion;

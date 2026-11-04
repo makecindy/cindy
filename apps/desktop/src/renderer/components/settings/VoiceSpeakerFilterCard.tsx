@@ -120,7 +120,7 @@ export function VoiceSpeakerFilterCard({
           >
             {t('settings.voiceInput.speakerFilter.label')}
           </p>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
             {supported
               ? t('settings.voiceInput.speakerFilter.hint')
               : t('settings.voiceInput.speakerFilter.unsupported')}
@@ -154,7 +154,7 @@ export function VoiceSpeakerFilterCard({
                       : 'settings.voiceInput.speakerFilter.profile.missing',
                   )}
                 </p>
-                <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+                <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
                   {status.enrolled && status.enrolledAt
                     ? t('settings.voiceInput.speakerFilter.profile.enrolledAt', {
                         date: new Date(status.enrolledAt).toLocaleDateString(i18n.language),
@@ -212,7 +212,7 @@ export function VoiceSpeakerFilterCard({
                 <p className="text-13 font-medium text-[var(--settings-section-title)]">
                   {t('settings.voiceInput.speakerFilter.strictness.label')}
                 </p>
-                <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+                <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
                   {t('settings.voiceInput.speakerFilter.strictness.hint')}
                 </p>
               </div>
@@ -241,7 +241,7 @@ export function VoiceSpeakerFilterCard({
       ) : null}
 
       {supported ? (
-        <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+        <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
           {t('settings.voiceInput.speakerFilter.privacy')}
         </p>
       ) : null}

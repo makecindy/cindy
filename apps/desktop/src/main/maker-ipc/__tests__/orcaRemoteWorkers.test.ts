@@ -6,6 +6,7 @@ import type { OrcaRemotePendingReport } from '../../../shared/orcaRemoteWorker.j
 import { createOrcaTeamService, type OrcaTeamService, type OrcaTeamServiceDeps, type OrcaWorkerRecordSnapshot, type WorkerTerminalTurnCapture } from '../orcaTeamService.js';
 import { withSendToSessionLock } from '../sendToSessionLock.js';
 import { createOrcaRemoteWorkerHost, type OrcaRemoteWorkerExistingSession } from '../orcaRemoteWorkerHost.js';
+import { orcaModelDiscoveryFailure } from '../orcaServiceFailure.js';
 
 const store = vi.hoisted(() => ({
   archiveSingleWorkerSession: vi.fn(async () => undefined),
@@ -157,6 +158,21 @@ describe('invokeDeviceValue', () => {
 });
 
 describe('execution devices', () => {
+  // PR #6787, unit: the roster still says online, then the real model invoke
+  // disconnects. Verify readModels plus the host mapper's public failure result;
+  // existing offline-open coverage never exercised discovery after the roster.
+  it('reports an execution computer that disconnects during model discovery', async () => {
+    const { workers, remoteInvoke } = setup({ handle: (_device, channel) =>
+      channel === 'maker:orca:remote-worker:models' ? fail('DEVICE_OFFLINE', 'work computer disconnected') : undefined });
+    try {
+      const result = await workers.readModels('mac-mini', { agent: 'codex' })
+        .catch(error => orcaModelDiscoveryFailure(error, true));
+      expect(result).toEqual({ ok: false, errorCode: 'REMOTE_AGENT_DEVICE_UNREACHABLE',
+        message: '[DEVICE_OFFLINE] work computer disconnected' });
+      expect(remoteInvoke.mock.calls.map(([, channel]) => channel)).toEqual(['maker:orca:remote-worker:models']);
+    } finally { workers.stop(); }
+  });
+
   it('only offers other online desktops that allow remote control', () => {
     expect(isExecutionDeviceCandidate(device({}))).toBe(true);
     expect(isExecutionDeviceCandidate(device({ online: false }))).toBe(false);
@@ -209,6 +225,59 @@ describe('execution devices', () => {
 });
 
 describe('openRemoteWorker', () => {
+  // PR #6787 review: unit coverage through the public open boundary. Existing
+  // transport/directory failures miss an online execution host rejecting its
+  // nested Agent route; callers must retain the share reason or connectivity code.
+  it.each([
+    ['REMOTE_AGENT_SHARE_PAUSED', 'REMOTE_AGENT_SHARE_PAUSED'],
+    ['REMOTE_AGENT_SHARE_REMOVED', 'REMOTE_AGENT_SHARE_REMOVED'],
+    ['REMOTE_AGENT_SHARE_UNAVAILABLE', 'REMOTE_AGENT_SHARE_UNAVAILABLE'],
+    ['DEVICE_LINK_DEVICE_OFFLINE', 'REMOTE_AGENT_DEVICE_UNREACHABLE'],
+    ['REMOTE_AGENT_DEVICE_UNREACHABLE', 'REMOTE_AGENT_DEVICE_UNREACHABLE'],
+  ])('preserves nested Agent admission failure %s as %s', async (code, expected) => {
+    const { workers, remoteInvoke } = setup({ handle: (_device, channel) => {
+      if (channel === 'maker:orca:remote-worker:caps') return ok({ version: 1, agentDevice: true });
+      if (channel === 'maker:orca:remote-worker:open') return fail('IPC_ERROR', `[${code}] Agent route unavailable`);
+      return undefined;
+    } });
+    try {
+      await expect(workers.openRemoteWorker({ ...openInput, agentDeviceId: 'provider-pc' }))
+        .resolves.toMatchObject({ ok: false, errorCode: expected, message: expect.stringContaining(code) });
+      expect(remoteInvoke.mock.calls.filter(([, channel]) => channel === 'maker:orca:remote-worker:open')).toHaveLength(1);
+      expect(store.addRemoteWorker).not.toHaveBeenCalled();
+      expect(store.removeRemoteWorkerOpen).not.toHaveBeenCalled();
+    } finally { workers.stop(); }
+  });
+
+  // Unit: old execution hosts silently discard unknown model-location fields.
+  // Reject before open; a capable host must receive and return the exact route.
+  it.each([false, true])('negotiates the independent model computer (supported=%s)', async supported => {
+    const { workers, remoteInvoke } = setup({ handle: (_device, channel, args) => {
+      if (channel === 'maker:orca:remote-worker:caps') return ok({ version: 1, ...(supported ? { agentDevice: true } : {}) });
+      if (channel === 'maker:orca:remote-worker:open') return ok({ sessionId: (args[0] as {sessionId: string}).sessionId,
+        agentKind: 'codex', model: 'remote-only', workingDir: '/worker', agentDeviceId: 'provider-pc', providerId: 'openai' });
+      return undefined;
+    } });
+    try {
+      const result = await workers.openRemoteWorker({ ...openInput, agentDeviceId: 'provider-pc', model: 'remote-only' });
+      if (supported) {
+        expect(result).toMatchObject({ ok: true, model: 'remote-only', agentDeviceId: 'provider-pc', providerId: 'openai' });
+        expect(remoteInvoke.mock.calls.find(call => call[1] === 'maker:orca:remote-worker:open')?.[2][0]).toMatchObject({ agentDeviceId: 'provider-pc' });
+        // PR #6787: the transient result used to retain the Agent computer while
+        // the proxy seed lost it. Unit regression through open + association;
+        // the store needs the admitted location to retain it after a refresh.
+        if (!result.ok) throw Error('expected successful open');
+        await workers.recordRemoteWorker({ ...openInput, proxySessionId: result.proxySessionId,
+          proxySession: result.proxySession, remoteSessionId: result.remoteSessionId });
+        expect(store.addRemoteWorker).toHaveBeenCalledWith(expect.objectContaining({
+          proxySession: expect.objectContaining({ agentDeviceId: 'provider-pc' }),
+        }));
+      } else {
+        expect(result).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+        expect(remoteInvoke.mock.calls.some(call => call[1] === 'maker:orca:remote-worker:open')).toBe(false);
+      }
+    } finally { workers.stop(); }
+  });
   it.each([
     [false, true, false],
     [true, false, true],
@@ -408,6 +477,28 @@ describe('wrapTeamDeps', () => {
       expect(base.resumeWorkerSession).not.toHaveBeenCalled();
       expect(base.dispatchWorkerMessage).not.toHaveBeenCalled();
       expect(remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:input:enqueue')).toBe(true);
+    } finally { workers.stop(); }
+  });
+
+  it('rejects image attachments for cross-device workers instead of silently dropping them', async () => {
+    // 图片是 Lead 本机文件, 运行设备上的 Agent 读不到; 必须显式拒错, 不能只发文本返回 ok。
+    const { workers, remoteInvoke } = setup();
+    const base = baseDeps();
+    const wrapped = workers.wrapTeamDeps(base);
+    store.listActiveRemoteWorkers.mockResolvedValueOnce([restoredRow] as never);
+    try {
+      await workers.start();
+      const result = await wrapped.dispatchWorkerMessage({
+        targetSessionId: 'proxy-1', message: 'look at this', workerId: 'w-1',
+        imagePaths: ['C:/tmp/a.png'],
+        dispatchMeta: { source: 'mcp', context: 'send_to_worker' },
+      } as never);
+      expect(result.ok).toBe(false);
+      expect(result.dispatchOutcome).toMatchObject({
+        code: 'SEND_FAILED', accepted: false,
+        message: expect.stringContaining('image attachments'),
+      });
+      expect(remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:input:enqueue')).toBe(false);
     } finally { workers.stop(); }
   });
 
@@ -1370,12 +1461,12 @@ describe('remote open recovery', () => {
     workers.stop();
   });
 
-  it('retains a timed out open even if the reconciliation receives a definitive error', async () => {
+  it.each(['ALREADY_EXISTS', 'REMOTE_AGENT_SHARE_PAUSED'])('retains an uncertain open when reconciliation receives %s', async code => {
     let opens = 0;
     const { workers } = setup({ handle: (_device, channel) =>
       channel === 'maker:orca:remote-worker:open'
-        ? fail(++opens === 1 ? 'INVOKE_TIMEOUT' : 'ALREADY_EXISTS', 'reply lost or released') : undefined });
-    await expect(workers.openRemoteWorker(openInput)).resolves.toMatchObject({ ok: false });
+        ? fail(++opens === 1 ? 'INVOKE_TIMEOUT' : 'IPC_ERROR', `[${code}] reply lost or rejected`) : undefined });
+    await expect(workers.openRemoteWorker(openInput)).resolves.toMatchObject({ ok: false, errorCode: 'INTERNAL' });
     expect(store.removeRemoteWorkerOpen).not.toHaveBeenCalled();
     workers.stop();
   });

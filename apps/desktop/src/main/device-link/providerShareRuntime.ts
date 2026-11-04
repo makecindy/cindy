@@ -1,8 +1,14 @@
+import { isProviderShareMemberBudget } from '../../shared/providerShareBudget.js';
+import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../shared/controlledModelCatalog.js';
+import { readMemberBudgetStatus, supportsMemberBudget } from './providerShareBudgetRuntime.js';
 import { isRemoteAgentLimitsPatch } from '../../shared/remoteAgentLimits.js';
+import { supportsSubscriptionFastPolicy, unifiedModelKeyId } from '@cindy/model-providers';
+import { providerFastPolicy } from '../maker-host/provider-fast-policy-store.js';
+import { notifySubscriptionFastPolicyChanged } from '../maker-host/subscription-fast-policy.js';
+import { notifyProviderShareCatalogChanged } from './dispatch.js';
+import { DEVICE_LINK_PUSH } from '../../shared/deviceLinkIpc.js';
 import { readRemoteAgentLimitsState, saveRemoteAgentLimits } from '../remote-agent/host/limitsStore.js';
 import { remoteAgentLimitUsage, revalidateRemoteModelAccess } from './dispatch.js';
-import { isRemoteAgentIdleRelease } from '../../shared/remoteAgentIdleRelease.js';
-import { readRemoteAgentIdleReleaseState, saveRemoteAgentIdleRelease } from '../remote-agent/controller/idleReleaseStore.js';
 /**
  * 供应商分享的本机接线：分享者与受邀者两侧运行时的起停、推送给 Renderer、系统通知，以及
  * Renderer 的命令通道。账号操作只接受本机应用窗口，不能经设备互联从别的电脑调用。
@@ -15,7 +21,9 @@ import {
   PROVIDER_SHARE_NEUTRAL_DEVICE_NAME,
   PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL,
   MAX_FRAME_BYTES,
+  REMOTE_AGENT_CHANNEL,
   parseProviderSharePeer,
+  providerShareGuestPeer,
   scrubProviderShareLabel,
   scrubSharedProviderCatalog,
   type InvokeResultPayload,
@@ -72,7 +80,8 @@ import {
 import { getDeviceLinkInvokeContext } from './invoke-context.js';
 import { tapWindowBroadcast } from './broadcast-tap.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
-import { fetchIdentityCard, providerShareApi, providerShareLinkFor, sha256Hex } from './providerShareApi.js';
+import { broadcast as broadcastLocal } from './index.js';
+import { fetchIdentityCard, providerShareApi, providerShareLinkFor, providerShareOwnerKey, sha256Hex } from './providerShareApi.js';
 import { configureProviderShareApprovalWindows } from './providerShareApprovalWindows.js';
 import {
   findReceivedShare,
@@ -104,6 +113,7 @@ import {
   getProviderShareQuietRequestIds,
   getProviderShareWatchedRequests,
   markProviderShareHostActive,
+  ownedProviderShareGuestAccess,
   providerShareGuestAccess,
   providerShareAccessRevision,
   providerShareGuestDenial,
@@ -122,7 +132,7 @@ import {
   type ProviderShareReshareEvents,
   type ProviderShareReshareRecord,
 } from './providerShareReshare.js';
-import { getProviderShareUsageStore, providerUsageLocalDay } from './providerShareUsageStore.js';
+import { getProviderShareUsageStore, installProviderShareUsageStore, providerUsageLocalDay } from './providerShareUsageStore.js';
 import { readDeviceLinkSettings, readLastKnownDeviceNames } from './settings-store.js';
 import { currentProviderPartyUsageStore, type ProviderPartyUsage } from '../usage/providerPartyUsageStore.js';
 
@@ -135,6 +145,11 @@ type ShareInvoke = (agentDeviceId: string, channel: string, args: unknown[], opt
 let broadcastFn: Broadcast | null = null;
 let shareInvoke: ShareInvoke | null = null;
 let running = false;
+let directForgetTimer: ReturnType<typeof setInterval> | null = null;
+let directForgetWork: Promise<void> | null = null;
+let directForgetAgain = false;
+let directForgetCursor = 0;
+let directForgetEpoch = 0;
 const liveNotifications = new Set<Notification>();
 
 function emit(channel: string, payload: unknown): void {
@@ -143,6 +158,11 @@ function emit(channel: string, payload: unknown): void {
   } catch (error) {
     log.warn('provider share broadcast failed', { channel, error: String(error) });
   }
+}
+
+function notifyControlledModelCatalogChanged(): void {
+  emit(CONTROLLED_MODEL_CATALOG_CHANGED, {});
+  tapWindowBroadcast(CONTROLLED_MODEL_CATALOG_CHANGED, {});
 }
 
 function focusMainWindow(): void {
@@ -186,9 +206,68 @@ function format(template: string, values: Record<string, string>): string {
 }
 
 function revoke(match: (controller: string) => boolean, purge: boolean): void {
+  if (purge) {
+    void (async () => {
+      const scope = providerShareOwnerKey();
+      const store = getProviderShareUsageStore() ?? installProviderShareUsageStore(app.getPath('userData'));
+      await store.enqueueDirectCleanup(scope, (target) => match(providerShareGuestPeer(
+        target.shareId, target.memberId, target.guestDeviceId,
+      )));
+      await retryDirectForgets();
+    })().catch((error: unknown) => {
+      log.warn('provider share direct guest cleanup could not be queued', { error: String(error) });
+    });
+  }
   void revokeProviderShareControllers(match, purge).catch((error) => {
     log.warn('provider share revoke failed', { purge, error: error instanceof Error ? error.message : String(error) });
   });
+}
+
+/** O's durable deletion queue survives offline M and an O restart. Only an ACK removes a target. */
+function retryDirectForgets(): Promise<void> {
+  if (directForgetWork) {
+    directForgetAgain = true;
+    return directForgetWork;
+  }
+  const invoke = shareInvoke;
+  if (!running || !invoke) return Promise.resolve();
+  const epoch = directForgetEpoch;
+  const work = (async () => {
+    const assertCurrent = captureProviderManagementScope();
+    const scope = providerShareOwnerKey();
+    const store = getProviderShareUsageStore() ?? installProviderShareUsageStore(app.getPath('userData'));
+    const batch = store.listPendingDirectCleanup(scope, 32, directForgetCursor);
+    directForgetCursor += batch.length;
+    for (let index = 0; index < batch.length; index += 4) {
+      await Promise.allSettled(batch.slice(index, index + 4).map(async (target) => {
+        if (!target.pendingId || epoch !== directForgetEpoch || !running) return;
+        try {
+          const result = await invoke(target.executorDeviceId, REMOTE_AGENT_CHANNEL, [{
+            op: 'forget', directGuest: { shareId: target.shareId, memberId: target.memberId,
+              guestDeviceId: target.guestDeviceId, forgetId: target.pendingId,
+              cleanupEpoch: target.cleanupEpoch },
+          }], { preSend: assertCurrent });
+          if (!result.ok) throw new Error(result.error?.code ?? 'remote cleanup failed');
+          assertCurrent();
+          if (epoch !== directForgetEpoch || !running || providerShareOwnerKey() !== scope) return;
+          await store.acknowledgeDirectCleanup(target);
+        } catch (error) {
+          log.warn('provider share direct guest cleanup delivery failed', { error: String(error) });
+        }
+      }));
+    }
+  })().catch((error: unknown) => {
+    log.warn('provider share direct guest cleanup retry failed', { error: String(error) });
+  }).finally(() => {
+    if (directForgetWork !== work) return;
+    directForgetWork = null;
+    if (directForgetAgain) {
+      directForgetAgain = false;
+      void retryDirectForgets();
+    }
+  });
+  directForgetWork = work;
+  return work;
 }
 
 /** 转分享记录所属的那台组所在电脑(受邀者对端)。 */
@@ -254,10 +333,47 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
   invalidateProviderShareGuestPrefsCache();
   broadcastFn = broadcast;
   shareInvoke = options.invoke ?? null;
+  directForgetEpoch += 1;
+  if (directForgetTimer) clearInterval(directForgetTimer);
+  directForgetTimer = setInterval(() => { void retryDirectForgets(); }, 60_000);
+  (directForgetTimer as { unref?: () => void }).unref?.();
   const readInvoke = options.invoke;
   running = true;
+  void retryDirectForgets();
   setProviderShareReshareEvents(reshareEvents);
   startProviderShareHost({
+    async prepareSnapshot(shares) {
+      const assertCurrent = captureProviderManagementScope();
+      const scope = providerShareOwnerKey();
+      const ownerDeviceId = getDeviceId();
+      if (!ownerDeviceId) throw new Error('Provider share owner device is unavailable');
+      const store = getProviderShareUsageStore() ?? installProviderShareUsageStore(app.getPath('userData'));
+      const pending = await store.reconcileMemberGenerations(scope, ownerDeviceId, shares);
+      assertCurrent();
+      // Every changed incarnation is blocked by memberReady until local/relay
+      // cleanup and all durable direct forgets have been acknowledged.
+      for (const member of pending) {
+        try {
+          assertCurrent();
+          await pruneProviderShareReshares((record) => record.shareId === member.shareId && record.memberId === member.memberId);
+          assertCurrent();
+          // Only the installed host can ACK local cleanup after checking its
+          // persisted guest index. A missing handler must leave this fence pending.
+          await revokeProviderShareControllers(providerShareMemberMatcher(member), true);
+          assertCurrent();
+        } catch (error) {
+          log.warn('provider share membership cleanup remains pending', { error: String(error) });
+        }
+      }
+      void retryDirectForgets();
+    },
+    memberReady(member) {
+      const store = getProviderShareUsageStore();
+      const ownerDeviceId = getDeviceId();
+      return !!store && !!ownerDeviceId && store.memberGenerationReady({
+        ownerScope: providerShareOwnerKey(), ownerDeviceId, shareId: member.shareId, memberId: member.memberId,
+      }, member.joinedAt);
+    },
     changed() {
       emit(PROVIDER_SHARE_IPC.OWNED_CHANGED, null);
     },
@@ -302,8 +418,13 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
     },
   }, { readWatchedShares: readInvoke ? (hostDeviceId) => readProviderManagementShares(readInvoke, hostDeviceId) : undefined });
   startProviderShareGuest({
+    catalogChanged(deviceId) {
+      emit(DEVICE_LINK_PUSH.REMOTE_PUSH, { deviceId, channel: 'maker:provider:changed', payload: {} });
+      notifyControlledModelCatalogChanged();
+    },
     changed(received) {
       emit(PROVIDER_SHARE_IPC.RECEIVED_CHANGED, received);
+      notifyControlledModelCatalogChanged();
     },
     settled(state, preview) {
       emit(PROVIDER_SHARE_IPC.SETTLED, { state, preview });
@@ -322,12 +443,16 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
 export function stopProviderShareRuntime(): void {
   invalidateProviderShareGuestPrefsCache();
   running = false;
+  directForgetEpoch += 1;
+  if (directForgetTimer) clearInterval(directForgetTimer);
+  directForgetTimer = null;
   shareInvoke = null;
   setProviderShareReshareEvents(null);
   stopProviderShareHost();
   stopProviderShareGuest();
   emit(PROVIDER_SHARE_IPC.OWNED_CHANGED, null);
   emit(PROVIDER_SHARE_IPC.RECEIVED_CHANGED, [] satisfies ProviderShareReceived[]);
+  notifyControlledModelCatalogChanged();
 }
 
 // ─── 命令 ───────────────────────────────────────────────────────
@@ -350,6 +475,13 @@ export function parseProviderShareCommand(raw: unknown): ProviderShareCommand {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throwIpcError('INVALID_PARAMS', 'Invalid command');
   const value = raw as Record<string, unknown>;
   switch (value.action) {
+    case 'get-fast-policy':
+    case 'set-fast-policy': {
+      if (!isProviderGroupProviderId(value.providerId)) throwIpcError('INVALID_PARAMS', 'Invalid providerId');
+      if (value.action === 'get-fast-policy') return { action: value.action, providerId: value.providerId };
+      if (typeof value.allowFast !== 'boolean') throwIpcError('INVALID_PARAMS', 'allowFast must be a boolean');
+      return { action: value.action, providerId: value.providerId, allowFast: value.allowFast };
+    }
     case 'get-model-access':
     case 'set-model-access': {
       if (!isProviderGroupProviderId(value.providerId)) throwIpcError('INVALID_PARAMS', 'Invalid providerId');
@@ -357,7 +489,10 @@ export function parseProviderShareCommand(raw: unknown): ProviderShareCommand {
       const scope = { providerId: value.providerId, ...(memberId !== undefined ? { memberId } : {}) };
       if (value.action === 'get-model-access') return { action: value.action, ...scope };
       if (!isRemoteModelSelection(value.models)) throwIpcError('INVALID_PARAMS', 'Invalid remote model selection');
-      return { action: value.action, ...scope, models: value.models === null ? null : [...value.models] };
+      if (value.memberBudget !== undefined && (!memberId || (value.memberBudget !== null && !isProviderShareMemberBudget(value.memberBudget))))
+        throwIpcError('INVALID_PARAMS', 'Invalid member budget');
+      return { action: value.action, ...scope, models: value.models === null ? null : [...value.models],
+        ...(value.memberBudget !== undefined ? { memberBudget: value.memberBudget as import('../../shared/providerShareBudget.js').ProviderShareMemberBudget | null } : {}) };
     }
     case 'get-visibility':
     case 'quota-account':
@@ -378,16 +513,11 @@ export function parseProviderShareCommand(raw: unknown): ProviderShareCommand {
       return { action: 'insights', shareId: text(value.shareId, 'shareId', 128), includeUsage: value.includeUsage };
     case 'get-run-limits':
     case 'reset-run-limits':
+    case 'shared-provider-ids':
       return { action: value.action };
     case 'set-run-limits':
       if (!isRemoteAgentLimitsPatch(value.limits)) throwIpcError('INVALID_PARAMS', 'Invalid remote task limits');
       return { action: value.action, limits: { ...value.limits } };
-    case 'get-idle-release':
-    case 'reset-idle-release':
-      return { action: value.action };
-    case 'set-idle-release':
-      if (!isRemoteAgentIdleRelease(value.value)) throwIpcError('INVALID_PARAMS', 'Invalid idle release minutes');
-      return { action: value.action, value: { idleMinutes: value.value.idleMinutes } };
     case 'owned':
       return { action: 'owned', range: usageRange(value.range) };
     case 'own-usage':
@@ -733,6 +863,28 @@ async function createLink(
 async function execute(command: ProviderShareCommand, assertCurrent: () => void = () => undefined): Promise<unknown> {
   assertCurrent();
   switch (command.action) {
+    case 'get-fast-policy':
+    case 'set-fast-policy': {
+      const assertOwner = captureProviderManagementScope();
+      const assertScope = () => { assertCurrent(); assertOwner(); };
+      const providers = await getDesktopProviderService().listProviders({ allowSideEffects: false });
+      assertScope();
+      const provider = providers.find(entry => entry.id === command.providerId);
+      const supported = supportsSubscriptionFastPolicy(provider);
+      if (command.action === 'set-fast-policy') {
+        if (!supported) throwIpcError('INVALID_PARAMS', 'Fast policy is available only for supported subscription accounts');
+        await providerFastPolicy.set(command.providerId, command.allowFast, assertScope);
+        // Publish catalog invalidation even if a native live update needs retrying.
+        emit(PROVIDER_SHARE_IPC.OWNED_CHANGED, null);
+        // Local subscription use also works without a running account/share transport.
+        broadcastLocal(MAKER_PUSH.PROVIDER_CHANGED, {});
+        tapWindowBroadcast(MAKER_PUSH.PROVIDER_CHANGED, {});
+        notifyProviderShareCatalogChanged(command.providerId);
+        await notifySubscriptionFastPolicyChanged();
+        assertScope();
+      }
+      return { supported, allowFast: supported ? providerFastPolicy.allows(command.providerId) : true };
+    }
     case 'get-model-access':
     case 'set-model-access': {
       const assertOwner = captureProviderManagementScope();
@@ -749,8 +901,22 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
       assertScope();
       const provider = providers.find((entry) => entry.id === command.providerId);
       if (!provider) throwIpcError('NOT_FOUND', 'This provider is no longer available');
+      const budgetAvailable = supportsMemberBudget(provider);
+      const recommendationModelIds = [...new Set(Object.values(provider.models).flatMap(models => (models ?? []).filter(model => !model.disabled).map(model => model.id)))];
+      const budgetModelIds = recommendationModelIds.filter(id => id === unifiedModelKeyId(id)
+        || !recommendationModelIds.includes(unifiedModelKeyId(id)));
       if (command.action === 'set-model-access') {
-        await remoteModelAccess.set(command.providerId, command.models, command.memberId, assertScope);
+        if (command.memberBudget?.rules.length && !budgetAvailable) throwIpcError('PRECONDITION_FAILED', 'Member model limits are not available for this provider group');
+        if (command.memberBudget) {
+          const previous = remoteModelAccess.read(command.providerId, command.memberId).memberBudget;
+          const retained = new Set(previous?.rules.flatMap(rule => rule.models) ?? []);
+          if (command.memberBudget.rules.some(rule => rule.models.some(model => !budgetModelIds.includes(model) && !retained.has(model))))
+            throwIpcError('INVALID_PARAMS', 'This model does not support percentage budgets');
+          const recommended = command.memberBudget.recommendedModel;
+          if (recommended && !recommendationModelIds.includes(recommended) && recommended !== previous?.recommendedModel)
+            throwIpcError('INVALID_PARAMS', 'The recommended model is unavailable');
+        }
+        await remoteModelAccess.set(command.providerId, command.models, command.memberId, assertScope, command.memberBudget);
         assertScope();
         await revalidateRemoteModelAccess();
         assertScope();
@@ -762,7 +928,11 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
       for (const entries of [...Object.values(provider.models), ...PROVIDER_MEDIA_FIELDS.map(field => provider[field])]) for (const model of entries ?? []) {
         if (!model.disabled) availableModels.set(model.id, { id: model.id, name: model.name || model.id });
       }
+      assertScope();
       return { version: 1, ...remoteModelAccess.read(command.providerId, command.memberId),
+        providerName: provider.name,
+        budgetSupported: true, budgetAvailable, budgetModelIds, recommendationModelIds,
+        ...(command.memberId ? { budgetStatus: readMemberBudgetStatus(command.providerId, command.memberId, true) ?? undefined } : {}),
         availableModels: [...availableModels.values()] } satisfies RemoteModelAccessView;
     }
     case 'get-visibility':
@@ -813,14 +983,13 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
       }
       return { ...readRemoteAgentLimitsState(), usage: remoteAgentLimitUsage() };
     }
-    case 'get-idle-release':
-    case 'set-idle-release':
-    case 'reset-idle-release':
-      if (command.action !== 'get-idle-release') {
-        await saveRemoteAgentIdleRelease(command.action === 'reset-idle-release' ? null : command.value);
-        assertCurrent();
-      }
-      return readRemoteAgentIdleReleaseState();
+    case 'shared-provider-ids':
+      return {
+        ready: running,
+        providerIds: running
+          ? [...new Set(getProviderShareHostSnapshot().filter(share => share.members.length > 0).map(share => share.providerId))]
+          : [],
+      };
     case 'owned':
       if (running) markProviderShareHostActive(60_000);
       return ownerState(command.range);
@@ -1003,6 +1172,9 @@ export function registerProviderShareIpc(): void {
     owner: () => ({ displayName: getAuthState().user?.name ?? '', avatarUrl: getAuthState().user?.avatar ?? null }),
     history: usageHistory,
     quota: readProviderShareQuota,
+    budget: async (providerId, memberId) => {
+      return readMemberBudgetStatus(providerId, memberId);
+    },
   });
   setProviderShareAccess({
     remoteModels: (providerId) => {
@@ -1015,6 +1187,7 @@ export function registerProviderShareIpc(): void {
     insights,
     insightsCurrent: insights.isCurrent,
     guestAccess: providerShareGuestAccess,
+    catalogGuestAccess: ownedProviderShareGuestAccess,
     ensureKnown: ensureProviderSharePeerKnown,
     hasShares: () => getProviderShareHostSnapshot().length > 0,
     denial: providerShareGuestDenial,

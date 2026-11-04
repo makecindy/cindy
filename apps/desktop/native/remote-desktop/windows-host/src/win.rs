@@ -119,6 +119,7 @@ steps! {
     ElevateLaunch => "elevate-launch",
     ElevateTimeout => "elevate-timeout",
     ElevateChild => "elevate-child",
+    ElevateBootstrap => "elevate-bootstrap",
 }
 
 /// A failed step plus the raw OS error number — the part that distinguishes

@@ -1,16 +1,34 @@
 {
   "id": "coupang-search",
-  "match": ["coupang.com"],
-  "description": "搜索 Coupang(韩国电商)商品(排名/标题/商品ID/价格/原价/评分/评价数/商品页链接)。先落到 coupang.com 域,再在页面内同源 fetch 搜索 JSON——带上登录 cookie、不被风控挡(Coupang 反爬严,未登录/被挡时返回 HTML 而非 JSON)。",
-  "inputs": { "query": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://www.coupang.com/np/search?channel=user&page=1&q={{query|url}}" },
-    { "action": "wait", "loadState": "load" },
-    {
-      "action": "evaluate",
-      "as": "items",
-      "fn": "async () => { const num = v => { const s = (v == null ? '' : String(v)).replace(/[^\\d.]/g, ''); const n = Number(s); return s && Number.isFinite(n) ? n : null; }; const r = await fetch('/np/search?q=' + encodeURIComponent('{{query|js}}') + '&channel=user&page=1', { credentials: 'include' }); const t = await r.text(); if (t.trim().startsWith('<')) throw new Error('Coupang 返回 HTML 而非 JSON(未登录或被反爬挡),请在持久浏览器登录 coupang.com 后重试'); let d; try { d = JSON.parse(t); } catch (e) { throw new Error('Coupang 返回非 JSON(被反爬挡),请在持久浏览器登录 coupang.com 后重试'); } const list = d.data && (d.data.products || d.data.productList) || d.products || d.productList || d.items || []; return (Array.isArray(list) ? list : []).slice(0, 20).map((p, i) => { const pid = String(p.productId || p.product_id || p.id || p.productNo || '').match(/(\\d{6,})/); const id = pid ? pid[1] : ''; return { rank: i + 1, title: p.title || p.name || p.productName || '', productId: id, price: num(p.price || p.salePrice || p.finalPrice || p.sellingPrice), originalPrice: num(p.originalPrice || p.basePrice || p.listPrice), rating: num(p.rating || p.star || p.reviewRating), reviewCount: num(p.reviewCount || p.ratingCount || p.reviews), url: id ? 'https://www.coupang.com/vp/products/' + id : '' }; }); }"
-    }
+  "match": [
+    "coupang.com"
   ],
-  "output": "{{items}}"
+  "description": "Search Coupang products with logged-in browser session",
+  "access": "read",
+  "adapter": "coupang/search",
+  "inputs": {
+    "query": {
+      "required": true,
+      "type": "str",
+      "description": "Search keyword"
+    },
+    "page": {
+      "required": false,
+      "type": "int",
+      "default": 1,
+      "description": "Search result page number"
+    },
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "Max results (max 50)"
+    },
+    "filter": {
+      "required": false,
+      "type": "str",
+      "description": "Optional search filter (currently supports: rocket)"
+    }
+  },
+  "steps": []
 }

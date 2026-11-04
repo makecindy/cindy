@@ -41,11 +41,15 @@ export function viewerClipboardFailure(error: unknown, failures: number): Viewer
   if (code === 'CLIPBOARD_CONFLICT')
     return { code, notice: 'clipboardSyncConflict', delay: RETRY_MS, transient: true };
   // The computer's clipboard is refused while its screen is locked or it is busy.
-  if (code === 'DESKTOP_CLIPBOARD_UNAVAILABLE')
-    return { code, notice: 'clipboardSyncWaiting', delay: RETRY_MS, transient: true };
+  // Sync resumes by itself, so the locked state stays silent.
   if (
     code.endsWith('_CHANGED') ||
-    ['DESKTOP_BUSY', 'DESKTOP_CLIPBOARD_BUSY', 'DESKTOP_INPUT_BUSY'].includes(code)
+    [
+      'DESKTOP_BUSY',
+      'DESKTOP_CLIPBOARD_BUSY',
+      'DESKTOP_CLIPBOARD_UNAVAILABLE',
+      'DESKTOP_INPUT_BUSY',
+    ].includes(code)
   )
     return { code, notice: null, delay: RETRY_MS, transient: true };
   return {
@@ -108,11 +112,22 @@ export class ViewerSafety {
       clipboardNoticeVersion: this.clipboardNoticeVersion,
     };
   }
+  private clearClipboardErrorNotice(): void {
+    if (
+      ['clipboardSyncFailed', 'clipboardSyncPermission'].includes(
+        this.notices.get('clipboardSync') ?? '',
+      )
+    )
+      this.notices.delete('clipboardSync');
+  }
   private recordClipboardFailure(error: unknown): void {
     const failure = viewerClipboardFailure(error, this.failures);
     if (!failure.transient) this.failures++;
     // Only the computer refusing sync needs it re-enabled; a local helper failure does not.
-    if (failure.code === 'DESKTOP_CLIPBOARD_UNAVAILABLE') this.applied.delete('clipboardSync');
+    if (failure.code === 'DESKTOP_CLIPBOARD_UNAVAILABLE') {
+      this.applied.delete('clipboardSync');
+      this.clearClipboardErrorNotice();
+    }
     if (failure.notice) this.notices.set('clipboardSync', failure.notice);
     this.retryAt = failure.delay === null ? Infinity : Date.now() + failure.delay;
   }
@@ -244,12 +259,7 @@ export class ViewerSafety {
     try {
       await engine.tick();
       if (current()) {
-        if (
-          ['clipboardSyncFailed', 'clipboardSyncPermission', 'clipboardSyncWaiting'].includes(
-            this.notices.get('clipboardSync') ?? '',
-          )
-        )
-          this.notices.delete('clipboardSync');
+        this.clearClipboardErrorNotice();
         this.failures = 0;
       }
     } catch (error) {

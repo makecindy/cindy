@@ -36,18 +36,28 @@ import {
   useId,
   type KeyboardEvent,
 } from 'react';
-import { GitBranch, ChevronDown, Folder, MessageCircle, Search } from 'lucide-react';
+import {
+  GitBranch,
+  ChevronDown,
+  Folder,
+  MessageCircle,
+  Search,
+  RefreshCw,
+  Check,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tip, Tooltip } from '@/components/ui/tooltip';
+import { Spinner } from '@/components/ui/spinner';
 import {
   FolderPickerPopover,
   addRecentFolder,
   type FolderPickerOption,
   type FolderPickerSelectSource,
 } from './FolderPickerPopover';
+import { useBranchSync } from '@/hooks/useBranchSync';
 import { resolveBranchPick } from './branchPick';
 import { useBranches, useDetectCwd, useSuggestName } from '@/hooks/useWorktreeQueries';
 import { getProjectPickerDisplayName } from '@/hooks/useProjectPickerOptions';
@@ -248,9 +258,7 @@ export function WorktreeChipsRow({
   // 确认不合格(2026-08-07 裁决)→ 整条控件隐藏,勾选记忆保留、发送侧放行普通会话;
   // 探测中/失败(confirmedIneligible === null)时已 ON 仍显示,由上层 fail closed。
   const showBranchChip =
-    !advancedHidden
-    && confirmedIneligible !== true
-    && (enabled || !!detect.data?.isGitRepo);
+    !advancedHidden && confirmedIneligible !== true && (enabled || !!detect.data?.isGitRepo);
   // 分支选择与 checkbox 是两条独立轴；仅环境不具备 worktree 资格或创建在途时禁用。
   const branchInteractive =
     !(disabled || branchDisabled || environmentDisabled) && baseRepo !== null;
@@ -268,6 +276,9 @@ export function WorktreeChipsRow({
 
   const branchWorktree = showBranchChip ? (
     <BranchWorktreeChip
+      baseRepo={baseRepo ?? undefined}
+      deviceId={deviceLinkDeviceId}
+      remoteDefaultBranch={branches.remoteDefaultBranch}
       branchLabel={branchLabel}
       branches={branches.branches}
       branchesLoading={branches.loading}
@@ -417,8 +428,11 @@ function FolderChipBig({
 // ── [分支 │ ☑ worktree] 联合控件(对齐 Claude Code,2026-07-29 用户裁决) ──────
 
 export function BranchWorktreeChip({
+  baseRepo,
+  deviceId,
+  remoteDefaultBranch,
   branchLabel,
-  branchDisplayLabel = branchLabel,
+  branchDisplayLabel = branchLabel.replace(/^refs\/remotes\//, ''),
   branchOnly = false,
   branches,
   branchesLoading,
@@ -434,6 +448,9 @@ export function BranchWorktreeChip({
   onToggle,
   compact,
 }: {
+  baseRepo?: string;
+  deviceId?: string | null;
+  remoteDefaultBranch?: string;
   branchLabel: string;
   /** Display text only; branchLabel remains the selection value. */
   branchDisplayLabel?: string;
@@ -460,14 +477,25 @@ export function BranchWorktreeChip({
 }) {
   const { t } = useTranslation();
 
+  const sync = useBranchSync(baseRepo, branchLabel, deviceId);
+  const allBranches = useMemo(
+    () =>
+      (checked || branchOnly) && remoteDefaultBranch
+        ? [remoteDefaultBranch, ...branches]
+        : branches,
+    [checked, branchOnly, remoteDefaultBranch, branches],
+  );
+  const displayBranch = (value: string) =>
+    value === remoteDefaultBranch ? value.replace(/^refs\/remotes\//, '') : value;
+
   // 分支菜单内搜索词(2026-08-20 用户裁决:对齐 Codex 分支选择器,菜单顶部加搜索框)。
   // 菜单关闭即清空——搜索只是本次挑选的临时过滤,不是需要记忆的偏好。
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [branchQuery, setBranchQuery] = useState('');
   const normalizedBranchQuery = branchQuery.trim().toLowerCase();
   const visibleBranches = normalizedBranchQuery
-    ? branches.filter((b) => b.toLowerCase().includes(normalizedBranchQuery))
-    : branches;
+    ? allBranches.filter((b) => displayBranch(b).toLowerCase().includes(normalizedBranchQuery))
+    : allBranches;
 
   // 组合框键盘导航(2026-09-08 Codex review:改用 aria-activedescendant 组合框结构):
   // 焦点始终留在输入框,方向键只移动高亮项,Enter 选中高亮项——不再依赖菜单
@@ -490,9 +518,9 @@ export function BranchWorktreeChip({
   // 输入搜索词时接管,避免打断已经在筛选/用方向键挑选的操作。
   useEffect(() => {
     if (!branchMenuOpen || normalizedBranchQuery) return;
-    const current = branches.indexOf(branchLabel);
+    const current = allBranches.indexOf(branchLabel);
     setActiveBranchIndex(current >= 0 ? current : 0);
-  }, [branchMenuOpen, branches, branchLabel, normalizedBranchQuery]);
+  }, [branchMenuOpen, allBranches, branchLabel, normalizedBranchQuery]);
 
   const pickBranch = (branch: string) => {
     onPick(branch);
@@ -557,7 +585,9 @@ export function BranchWorktreeChip({
       aria-label={t('newChat.branchChip.label')}
     >
       <GitBranch size={compact ? 12 : 15} className="shrink-0" />
-      <span className="min-w-0 truncate" title={branchDisplayLabel}>{branchDisplayLabel}</span>
+      <span className="min-w-0 truncate" title={branchDisplayLabel}>
+        {branchDisplayLabel}
+      </span>
       {branchInteractive && (
         <ChevronDown
           size={12}
@@ -586,6 +616,7 @@ export function BranchWorktreeChip({
         setBranchMenuOpen(open);
         if (open) {
           onOpenRequested();
+          void sync.refresh();
           // 高亮定位交给上面的 useEffect(依赖 branches,分支异步到达/刷新时
           // 会自动重新定位到当前源分支,不再只在“打开那一刻”算一次)。
         } else {
@@ -609,7 +640,7 @@ export function BranchWorktreeChip({
           <div className="px-3 py-1.5 text-13 text-muted-foreground">
             {t('newChat.branchChip.loading')}
           </div>
-        ) : branchesFailed || branches.length === 0 ? (
+        ) : branchesFailed || allBranches.length === 0 ? (
           /* 失败与空列表都给重试入口(空列表也可能是隧道/瞬时问题);
              点击不关闭弹层,重试期间留在原地显示 loading。 */
           <button
@@ -669,27 +700,48 @@ export function BranchWorktreeChip({
               </div>
             </div>
             <div role="listbox" id={listboxId} aria-label={t('newChat.branchChip.label')}>
-              {visibleBranches.map((b, index) => (
-                <div
-                  key={b}
-                  ref={(el) => {
-                    optionRefs.current[index] = el;
-                  }}
-                  id={`${listboxId}-option-${index}`}
-                  role="option"
-                  aria-selected={b === branchLabel}
-                  onMouseMove={() => setActiveBranchIndex(index)}
-                  onClick={() => pickBranch(b)}
-                  className={cn(
-                    'cursor-pointer rounded-[8px] px-3 py-1.5 text-13 text-foreground',
-                    index === clampedActiveIndex
-                      ? 'bg-accent text-accent-foreground'
-                      : b === branchLabel && 'bg-accent/60',
-                  )}
-                >
-                  {b}
-                </div>
-              ))}
+              {['remote', 'local'].map((group) => {
+                const values = visibleBranches.filter(
+                  (b) => (b === remoteDefaultBranch) === (group === 'remote'),
+                );
+                if (!values.length) return null;
+                return (
+                  <div key={group} role="group" aria-label={t(`newChat.branchSync.${group}Group`)}>
+                    {(checked || branchOnly) && remoteDefaultBranch && (
+                      <div className="px-3 py-1 text-12 text-muted-foreground">
+                        {t(`newChat.branchSync.${group}Group`)}
+                      </div>
+                    )}
+                    {values.map((b) => {
+                      const index = visibleBranches.indexOf(b);
+                      return (
+                        <div
+                          key={b}
+                          ref={(el) => {
+                            optionRefs.current[index] = el;
+                          }}
+                          id={`${listboxId}-option-${index}`}
+                          role="option"
+                          aria-selected={b === branchLabel}
+                          onMouseMove={() => setActiveBranchIndex(index)}
+                          onClick={() => pickBranch(b)}
+                          className={cn(
+                            'cursor-pointer rounded-[8px] px-3 py-1.5 text-13 text-foreground',
+                            index === clampedActiveIndex
+                              ? 'bg-accent text-accent-foreground'
+                              : b === branchLabel && 'bg-accent/60',
+                          )}
+                        >
+                          {displayBranch(b)}
+                          {b === branchLabel && sync.details && (
+                            <div className="text-12 text-muted-foreground">{sync.details}</div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
             </div>
             {/* 常驻播报区域，让过滤为空时的文本更新可被读屏感知；列表关联始终保留。 */}
             <div
@@ -793,17 +845,62 @@ export function BranchWorktreeChip({
       )}
     >
       {branchArea}
-      {!branchOnly && <>
-      {/* 悬停激活任一半区时分隔线隐去,让 hover 填充看起来是一体的(对齐 Claude Code)。 */}
-      <span
-        aria-hidden
-        className={cn(
-          'w-px shrink-0 self-center transition-opacity group-hover:opacity-0',
-          compact ? 'h-[14px] bg-[var(--create-agent-control-border)]' : 'h-[18px] bg-border',
-        )}
-      />
-      {checkboxArea}
-      </>}
+      {sync.visible && (
+        <Tooltip.Root>
+          <Tooltip.Trigger asChild>
+            <span
+              className="inline-flex h-full"
+              tabIndex={sync.disabled ? 0 : undefined}
+              onMouseEnter={sync.onHover}
+              onFocus={sync.onHover}
+            >
+              <button
+                type="button"
+                disabled={sync.disabled}
+                aria-disabled={sync.disabled}
+                aria-label={sync.hint}
+                onClick={() => void sync.sync()}
+                className={cn(
+                  'inline-flex h-full w-8 shrink-0 items-center justify-center text-muted-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50',
+                  compact
+                    ? 'hover:bg-[var(--create-agent-control-bg-hover)] active:bg-[var(--create-agent-control-bg-pressed)]'
+                    : 'hover:bg-sidebar-item-hover',
+                  branchOnly && 'pr-1',
+                )}
+              >
+                {sync.done ? (
+                  <Check size={14} aria-hidden />
+                ) : (
+                  <Spinner icon={RefreshCw} size={14} spinning={sync.busy} aria-hidden />
+                )}
+              </button>
+            </span>
+          </Tooltip.Trigger>
+          <Tooltip.Content
+            side="top"
+            className="max-w-[320px] whitespace-pre-line break-normal [overflow-wrap:anywhere]"
+          >
+            <div className="space-y-2">
+              {sync.hint.split('\n').map((paragraph, index) => (
+                <p key={index}>{paragraph}</p>
+              ))}
+            </div>
+          </Tooltip.Content>
+        </Tooltip.Root>
+      )}
+      {!branchOnly && (
+        <>
+          {/* 悬停激活任一半区时分隔线隐去,让 hover 填充看起来是一体的(对齐 Claude Code)。 */}
+          <span
+            aria-hidden
+            className={cn(
+              'w-px shrink-0 self-center transition-opacity group-hover:opacity-0',
+              compact ? 'h-[14px] bg-[var(--create-agent-control-border)]' : 'h-[18px] bg-border',
+            )}
+          />
+          {checkboxArea}
+        </>
+      )}
     </div>
   );
 }

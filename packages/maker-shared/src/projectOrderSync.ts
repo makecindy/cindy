@@ -252,7 +252,7 @@ export function isHostLocalProjectKey(key: string): boolean {
 function isWindowsStyleProjectPath(value: string): boolean {
   // 只按明确形态识别 Windows:盘符(`C:/` 或 `C:\`)或 UNC 前缀(`\\` / `//`)。
   // 不能用 `includes('\\')`——POSIX 路径里的反斜杠是合法文件名,会被误判成分隔符而错误合并项目键。
-  return /^[a-z]:[\\/]/i.test(value) || value.startsWith('\\') || value.startsWith('//');
+  return /^[a-z]:[\\/]/i.test(value) || value.startsWith('\\\\') || value.startsWith('//');
 }
 
 function stripTrailingProjectSlashes(path: string): string {

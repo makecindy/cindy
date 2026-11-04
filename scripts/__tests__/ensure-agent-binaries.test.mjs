@@ -13,6 +13,7 @@ import { execFileSync } from 'node:child_process';
 import {
   binaryRelativePathFor,
   binFileFor,
+  ensureCodexPackageLauncher,
   isValidBinary,
   isValidDirDist,
   listSiblingWorktreeRoots,
@@ -24,6 +25,57 @@ import {
   updateScriptForKind,
 } from '../ensure-agent-binaries.mjs';
 import { verifyDirDistManifest, writeDirDistManifest } from '../../tools/shared/dir-dist-manifest.mjs';
+
+// 测试价值：生产 ensureCodexPackageLauncher 为已验证包补入口并保持清单有效；
+// 回归 Codex shell 被旧系统 CLI 抢占。原覆盖只验证下载/复用，未覆盖包内入口。
+// 最小输入是有效但缺入口的包；node unit，POSIX 另执行一次脚本检查 argv 不变。
+test('Codex launcher preserves the manifest, updates managed files and leaves upstream files alone', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex launcher space-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'bin'));
+  fs.mkdirSync(path.join(root, 'codex-path'));
+  fs.writeFileSync(path.join(root, 'bin', 'codex'), '#!/bin/sh\nprintf \'%s\\0\' "$@"\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(root, 'codex-package.json'), JSON.stringify({ pathDir: 'codex-path' }));
+  writeDirDistManifest(root);
+  const destination = path.join(root, 'codex-path', 'codex');
+  const manifestPath = path.join(root, '.manifest');
+  assert.equal(verifyDirDistManifest(root), true);
+  ensureCodexPackageLauncher(root, 'darwin-arm64');
+  assert.equal(verifyDirDistManifest(root), true);
+  const content = fs.readFileSync(destination, 'utf8');
+  const previous = new Date('2000-01-01T00:00:00Z');
+  fs.utimesSync(destination, previous, previous);
+  fs.utimesSync(manifestPath, previous, previous);
+  ensureCodexPackageLauncher(root, 'darwin-arm64');
+  assert.equal(fs.statSync(destination).mtimeMs, previous.getTime());
+  assert.equal(fs.statSync(manifestPath).mtimeMs, previous.getTime());
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(destination).mode & 0o777, 0o755);
+    const args = ['a b', '"quoted"', "it's", '', '-n', '$HOME', '%^!'];
+    assert.deepEqual(execFileSync(destination, args), Buffer.from(args.join('\0') + '\0'));
+  }
+  fs.writeFileSync(destination, content.replace('exec ', '# old\nexec '));
+  writeDirDistManifest(root);
+  ensureCodexPackageLauncher(root, 'linux-x64');
+  assert.equal(fs.readFileSync(destination, 'utf8'), content);
+  assert.equal(verifyDirDistManifest(root), true);
+  fs.writeFileSync(destination, 'upstream executable');
+  writeDirDistManifest(root);
+  ensureCodexPackageLauncher(root, 'linux-x64');
+  assert.equal(fs.readFileSync(destination, 'utf8'), 'upstream executable');
+  assert.equal(verifyDirDistManifest(root), true);
+});
+
+test('Windows Codex targets never get a POSIX launcher, including cross-platform preparation', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-launcher-win-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'codex-path'));
+  fs.writeFileSync(path.join(root, 'codex-package.json'), '{}');
+  writeDirDistManifest(root);
+  ensureCodexPackageLauncher(root, 'win32-x64');
+  assert.deepEqual(fs.readdirSync(path.join(root, 'codex-path')), []);
+  assert.equal(verifyDirDistManifest(root), true);
+});
 
 test('directory distributions never use the single-binary CDN fallback', () => {
   assert.equal(supportsCdnFallback('pi'), false);

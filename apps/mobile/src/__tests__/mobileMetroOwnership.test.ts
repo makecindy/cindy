@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { metroEnvironmentFingerprint, probeMetroOwnership, windowsProcessSnapshot } from '../../scripts/sim-metro.mjs';
-import { classifySimMetroListener, resolveSimMetroHandoff } from '../../scripts/lib/sim-whoami.mjs';
+import { classifySimMetroListener, inspectSimMetroIdentity, resolveSimMetroHandoff } from '../../scripts/lib/sim-whoami.mjs';
 
 const worktreeRoot = join('/worktrees', 'metro-owner');
 const owner = { pid: 100, launcherPid: 100, worktreeRoot, source: 'branch@commit', recordedAtMs: 1500,
@@ -10,6 +10,55 @@ type ProcessEntry = { pid: number; parentPid: number; startedAtMs: number };
 const launcher = { pid: 100, parentPid: 1, startedAtMs: 1000 };
 const wrapper = { pid: 200, parentPid: 100, startedAtMs: 1100 };
 const listener = { pid: 300, parentPid: 200, startedAtMs: 1200 };
+
+// PR #7814 discussion_r4409775119: listener discovery coverage did not reach
+// command/cwd/source timeouts. Call the importable whoami receipt entry with
+// injected process I/O (unit): errors must reach its receipt and suppress the
+// start hint, without reading or evaluating production source as text.
+const target = { ports: [8081], expectedPort: 8081, worktreeRoot,
+  expectedSource: owner.source, region: 'global', envFingerprint: 'env-1' };
+
+describe('whoami Metro identity probe failures', () => {
+  it.each(['command', 'cwd', 'source', 'process-snapshot'])('reports %s timeout without suggesting another Metro', (failedStage) => {
+    const result = inspectSimMetroIdentity(target, {
+      inspectListeners: () => ({ healthy: true, code: 'ready', pids: { 8081: '300' } }),
+      probeOwnership: (port: number, options: object = {}) => probeMetroOwnership(port, {
+        ...options, platform: failedStage === 'process-snapshot' ? 'win32' : 'darwin', readOwner: () => owner,
+        execFile: (command: string, args: string[]) => {
+          const stage = command === 'powershell.exe' ? 'process-snapshot'
+            : command === 'lsof' ? 'cwd' : args.includes('-E') ? 'source' : 'command';
+          if (stage === failedStage) throw Object.assign(new Error('private child output'), { code: 'ETIMEDOUT', stderr: 'private environment' });
+          if (stage === 'command') return 'node expo start';
+          if (stage === 'cwd') return `p300\nn${join(worktreeRoot, 'apps/mobile')}\n`;
+          return `EXPO_PUBLIC_XDT_GIT_SOURCE=${owner.source}`;
+        },
+      }),
+    });
+    expect(result.healthy).toBe(false);
+    expect(result.probeErrors).toEqual([expect.objectContaining({ port: 8081, stage: failedStage, code: 'METRO_PROCESS_TIMEOUT' })]);
+    expect(result.metros[0].identity.healthy).toBe(false);
+    expect(result.canSuggestStart).toBe(false);
+    expect(JSON.stringify(result)).not.toContain('private');
+  });
+
+  // Preserve the other receipt outcomes while extracting the CLI logic (#7814
+  // discussion_r4409904097); old timeout cases alone could pass if every result
+  // were incorrectly unhealthy or every start hint were disabled.
+  it.each([
+    ['empty ports', true, false, false, true],
+    ['failed discovery', false, false, false, false],
+    ['matching Metro', true, true, true, false],
+  ] as const)('preserves %s', (_name, discoveryHealthy, hasMetro, healthy, canSuggestStart) => {
+    const result = inspectSimMetroIdentity(target, {
+      inspectListeners: () => ({ healthy: discoveryHealthy, code: discoveryHealthy ? 'ready' : 'METRO_LISTENERS_TIMEOUT',
+        pids: hasMetro ? { 8081: '300' } : {} }),
+      probeOwnership: () => ({ pid: '300', cwd: join(worktreeRoot, 'apps/mobile'), source: owner.source,
+        region: 'global', envFingerprint: 'env-1' }),
+    });
+    expect(result).toMatchObject({ healthy, canSuggestStart, anyMetro: hasMetro, currentSourceOnExpectedPort: hasMetro });
+    expect(result.probeErrors).toEqual(discoveryHealthy ? [] : [{ stage: 'metro-listeners', code: 'METRO_LISTENERS_TIMEOUT' }]);
+  });
+});
 
 function probe(processes: ProcessEntry[], metadata: object | null = owner, listenerPid = '300') {
   return probeMetroOwnership(8081, {

@@ -509,6 +509,70 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
     await session.close().catch(() => undefined);
   });
 
+  // 2026-10-24: Session.steer 在前台 result 后被 adapter 拒绝，手机消息永久排队。
+  // unit: 现有 Stop/continuation 用例未覆盖这个输入窗口；捕获真实 adapter 输入队列，
+  // 验证插话只提交一次、后台任务保留、最终只产生一个产品终态。
+  it.each(['completed', 'stopped'] as const)('accepts a steer while awaiting a background task that later %s', async (status) => {
+    const { agent, handle, stream, fakeQuery } = await startSessionWithStream(undefined, {
+      autoCollect: false, capturePrompts: true,
+    });
+    const session = new Session({
+      id: 'background-steer', agentKind: 'claude-code', workDir: path.join('workspace', 'repo'),
+      handle, capabilities: agent.capabilities, logger: createNoopLogger(), turnStallMs: 0,
+    });
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push(event));
+    const prompt = sdkMock.query.mock.calls.at(-1)?.[0].prompt as AsyncIterable<unknown>;
+    const submitted: unknown[] = [];
+    const collecting = (async () => { for await (const value of prompt) submitted.push(value); })();
+    try {
+      await session.send('spawn background agent');
+      stream.emit(taskStarted('worker', 'local_agent'));
+      stream.emit(turnResult('waiting'));
+      await waitFor(() => seen.some((event) => event.turnContinuationId !== undefined), 'awaiting background');
+      await session.steer('reload the save without restarting');
+      await waitFor(() => submitted.length === 2, 'steer accepted once');
+      expect(submitted[1]).toMatchObject({ message: { content: 'reload the save without restarting' } });
+      expect(handle.listBackgroundTasks?.().map((task) => task.taskId)).toEqual(['worker']);
+      expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+      expect(fakeQuery.stopTask).not.toHaveBeenCalled();
+      stream.emit(taskNotification('worker', status));
+      await waitFor(() => taskEvents(seen).length === 2, 'background terminal');
+      expect(seen.filter(isProductTerminal)).toHaveLength(0);
+      stream.emit(assistantText('using your correction'));
+      stream.emit(turnResult('complete'));
+      await waitFor(() => seen.filter(isProductTerminal).length === 1, 'product terminal');
+      expect(session.isTurnRunning()).toBe(false);
+      expect(submitted).toHaveLength(2);
+    } finally {
+      stream.end();
+      await session.close();
+      await collecting;
+    }
+  });
+
+  it('does not deliver a waiting-turn steer when Stop wins during attachment conversion', async () => {
+    const { handle, stream, events } = await startSessionWithStream();
+    await handle.send({ type: 'user', content: 'background work' });
+    stream.emit(taskStarted('worker', 'local_agent'));
+    stream.emit(turnResult('waiting'));
+    await waitFor(() => events.some((event) => event.turnContinuationId !== undefined), 'awaiting background');
+    const resize = createDeferred<string>();
+    const entered = createDeferred<void>();
+    imageResizerMock.process.mockImplementationOnce(() => { entered.resolve(); return resize.promise; });
+    const imagePath = path.join(os.tmpdir(), 'waiting-steer.png');
+    const steer = handle.steer({ type: 'user', content: [{ type: 'image', path: imagePath }] });
+    const rejected = expect(steer).rejects.toThrow('No active Claude turn to steer');
+    await entered.promise;
+    await handle.abort();
+    resize.resolve(imagePath);
+    await rejected;
+    expect(events.filter(isProductTerminal)).toHaveLength(1);
+    expect(handle.isTurnRunning?.()).toBe(false);
+    stream.end();
+    await handle.close();
+  });
+
   it('graceful stop sends only the SDK interrupt without closing or stopping background tasks', async () => {
     const { handle, stream, events, fakeQuery } = await startSessionWithStream();
     await handle.send({ type: 'user', content: 'long turn' });

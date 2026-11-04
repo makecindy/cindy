@@ -2,10 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import type { DbClient } from '../localDb/client/DbClient.js';
 import { pluginTaskRequests } from '../localDb/schema.js';
-import type { PluginTargetReceipt, PluginTargetStore } from '../cindy-brain/pluginTargetSlot.js';
+import type { PluginTargetReceipt, PluginTargetStore, PluginTargetTerminal } from '../cindy-brain/pluginTargetSlot.js';
 
 /** Reuse the receipt table and unique request index; target rows confer no task ownership. */
-export function createPluginTargetStore(db: DbClient, assertCurrent: () => void): PluginTargetStore {
+export function createPluginTargetStore(db: DbClient, assertCurrent: () => void): PluginTargetStore & { settle(id: string, taskId: string, terminal: PluginTargetTerminal): Promise<void> } {
   const table = pluginTaskRequests;
   const read = async (where: ReturnType<typeof and>) => {
     assertCurrent();
@@ -21,6 +21,16 @@ export function createPluginTargetStore(db: DbClient, assertCurrent: () => void)
     payload: JSON.stringify(receipt), revision: 0, createdAt: Date.now(),
   });
   return {
+    settle: async (id, taskId, terminal) => {
+      assertCurrent();
+      await db.drizzle.update(table).set({
+        payload: sql`json_set(${table.payload}, '$.terminal', json(${JSON.stringify(terminal)}))`,
+        revision: sql`${table.revision} + 1`,
+      }).where(and(eq(table.id, id), eq(table.operation, 'target'),
+        sql`json_extract(${table.payload}, '$.taskId') = ${taskId}`,
+        sql`json_extract(${table.payload}, '$.terminal') IS NULL`));
+      assertCurrent();
+    },
     get: (pluginId, key) => read(and(eq(table.pluginId, pluginId), eq(table.targetId, ''), eq(table.requestKey, key))),
     getById: id => read(eq(table.id, id)),
     reserve: async receipt => {

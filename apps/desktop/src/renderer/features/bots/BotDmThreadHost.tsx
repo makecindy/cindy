@@ -126,6 +126,7 @@ export function BotDmThreadHost({ enabled, bot, rootSessionId, mentions, childre
             state={open.state}
             mentions={mentions}
             lastAssistantAt={openThread?.lastAssistantAt ?? null}
+            replyCount={openThread?.replyCount}
             onRetry={() => ensure(open.rootClientId)}
             onClose={close}
           />

@@ -1,9 +1,26 @@
-import { buildSharedTaskInvitationLink, createSharedTaskApi, parseSharedTaskInvitation, sharedTaskAccountName, SharedTaskScopeChangedError } from '@cindy/device-link';
+import { buildSharedTaskInvitationLink, createSharedTaskApi, parseSharedTaskInvitation, sharedTaskAccountName, SharedTaskScopeChangedError, type SharedTaskListItem } from '@cindy/device-link';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getAccessToken, getActiveAuthRealm, getAuthState, getCurrentUserId } from '../authManager.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { serverApiFetch } from '../serverApiClient.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+
+// The host runtime and the guest directory both read the same account list.
+// Concurrent and closely spaced reads share one request; any write, including
+// one still in flight, makes earlier lists unusable.
+const LIST_REUSE_MS = 5_000;
+let listWrites = 0;
+let listCache: { key: string; writes: number; settledAt: number | null; result: Promise<SharedTaskListItem[]> } | null = null;
+function trackListWrite<T>(method: string, work: () => Promise<T>): Promise<T> {
+  if (method === 'GET') return work();
+  listWrites++;
+  return work().finally(() => { listWrites++; });
+}
+
+/** The next list() is a real request: an external event (reconnect, revocation) may postdate the cache. */
+export function forgetSharedTaskList(): void {
+  listCache = null;
+}
 
 /** Main-owned adapter. Tokens remain inside the existing authenticated HTTP client. */
 const accountApi = createSharedTaskApi({
@@ -15,7 +32,7 @@ const accountApi = createSharedTaskApi({
   },
   async request(path, options) {
     try {
-      return await serverApiFetch<unknown>(path, {
+      return await trackListWrite(options.method, () => serverApiFetch<unknown>(path, {
         method: options.method,
         body: options.body,
         // Executed before EACH physical attempt, including automatic token refresh.
@@ -30,7 +47,7 @@ const accountApi = createSharedTaskApi({
         redactErrorDetails: true,
         allowedRedactedErrorCodes: ['NOT_FOUND', 'CONFLICT', 'PERMISSION_DENIED', 'INVALID_PARAMS', 'RATE_LIMITED',
           'SHARED_TASK_HOST_LIMIT', 'SHARED_TASK_JOIN_LIMIT', 'SHARED_TASK_GUEST_LIMIT', 'SHARED_TASK_SELF_JOIN'],
-      });
+      }));
     } catch (error) {
       const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
       if (code === 'SHARED_TASK_HOST_LIMIT' || code === 'SHARED_TASK_JOIN_LIMIT' || code === 'SHARED_TASK_GUEST_LIMIT') {
@@ -49,6 +66,19 @@ const accountApi = createSharedTaskApi({
 
 export const sharedTaskApi = {
   ...accountApi,
+  list(): Promise<SharedTaskListItem[]> {
+    // Signed-out or boundary callers fail inside the adapter, never from cache.
+    if (!getAuthState().isAuthenticated || isAppSessionBoundaryPending()) return accountApi.list();
+    const key = [activeOwnerScopeKey(), getActiveAuthRealm(), getClientEndpoint('deviceLinkApiBaseUrl')].join('\n');
+    const cached = listCache;
+    // A negative age means the clock moved backwards; treat that list as stale.
+    const age = cached?.settledAt == null ? 0 : Date.now() - cached.settledAt;
+    if (cached && cached.key === key && cached.writes === listWrites && age >= 0 && age < LIST_REUSE_MS) return cached.result;
+    const entry: NonNullable<typeof listCache> = { key, writes: listWrites, settledAt: null, result: accountApi.list() };
+    listCache = entry;
+    entry.result.then(() => { entry.settledAt = Date.now(); }, () => { if (listCache === entry) listCache = null; });
+    return entry.result;
+  },
   async invite(sharedTaskId: string) {
     const endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
     const result = await accountApi.invite(sharedTaskId);
@@ -74,11 +104,11 @@ export function captureSharedTaskBoundaryClose(ownerAccountId: string, region: R
   const endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
   const api = createSharedTaskApi({
     captureScope: () => ({ isCurrent: () => true }),
-    request: (path, options) => serverApiFetch<unknown>(path, {
+    request: (path, options) => trackListWrite(options.method, () => serverApiFetch<unknown>(path, {
       method: options.method, body: options.body, token, baseUrl: endpoint,
       skipAutoRefresh: true, skipSessionInvalidation: true, timeoutMs: 3_000,
       cache: 'no-store', redactErrorDetails: true, logLabel: '/api/device-link/shared-tasks',
-    }),
+    })),
   });
   return (sharedTaskId: string) => api.close(sharedTaskId);
 }

@@ -907,15 +907,18 @@ describe('MiniMax OpenAI Responses 预设契约 (issue #345)', () => {
     const preset = BUNDLED_CATALOG.presets?.find((candidate) => candidate.id === id);
     expect(preset?.docsUrl).toBe(docsUrl);
     expect(preset?.runtimes['claude-code']?.baseUrl).toMatch(/\/anthropic$/);
-    // 以线上服务端推荐清单为准（M2 系列仍在官方文档中）。
+    // Match the complete ordered recommendation list and its capabilities. V6 adds
+    // resolved interface metadata; route selection is covered by providerInterfaceRoutes.
+    // toMatchObject on arrays still rejects missing/extra entries and reordered models.
     const expected = [
+      { id: 'MiniMax-M3.1-Flash', name: 'MiniMax M3.1 Flash', contextWindow: 1_000_000, supportsImageInput: true },
       { id: 'MiniMax-M3', name: 'MiniMax-M3', contextWindow: 1_000_000, supportsImageInput: true },
       ...['MiniMax-M2.7', 'MiniMax-M2.7-highspeed', 'MiniMax-M2.5', 'MiniMax-M2.5-highspeed',
         'MiniMax-M2.1', 'MiniMax-M2.1-highspeed', 'MiniMax-M2'].map((id) => (
         { id, name: id, contextWindow: 204_800, supportsImageInput: false })),
     ];
-    expect(preset?.runtimes['claude-code']?.models.filter(model => model.defaultEnabled !== false)).toEqual(expected);
-    expect({ ...preset?.runtimes.codex, models: preset?.runtimes.codex?.models.filter(model => model.defaultEnabled !== false) }).toEqual({
+    expect(preset?.runtimes['claude-code']?.models.filter(model => model.defaultEnabled !== false)).toMatchObject(expected);
+    expect({ ...preset?.runtimes.codex, models: preset?.runtimes.codex?.models.filter(model => model.defaultEnabled !== false) }).toMatchObject({
       baseUrl: codexBaseUrl,
       models: expected,
     });
@@ -982,7 +985,7 @@ describe('官方渠道预设契约', () => {
   });
 
   it('LongCat 同时提供 Anthropic Messages、Codex 与 Pi Chat 端点', () => {
-    expect(preset('longcat')?.runtimes).toEqual({
+    expect(preset('longcat')?.runtimes).toMatchObject({
       'claude-code': {
         baseUrl: 'https://api.longcat.chat/anthropic',
         modelsUrl: 'https://api.longcat.chat/openai/v1/models',
@@ -991,7 +994,7 @@ describe('官方渠道预设契约', () => {
       codex: {
         baseUrl: 'https://api.longcat.chat/openai/v1',
         modelsUrl: 'https://api.longcat.chat/openai/v1/models',
-        models: [{ id: 'LongCat-2.0', name: 'LongCat 2.0', contextWindow: 1_000_000, api: 'openai-completions', route: { baseUrl: 'https://api.longcat.chat/openai/v1', wireProtocol: 'openai-chat' } }],
+        models: [{ id: 'LongCat-2.0', name: 'LongCat 2.0', contextWindow: 1_000_000, api: 'openai-responses', route: { baseUrl: 'https://api.longcat.chat/openai/v1', wireProtocol: 'openai-responses' } }],
       },
       pi: {
         baseUrl: 'https://api.longcat.chat/openai/v1',
@@ -1145,7 +1148,7 @@ describe('官方渠道预设契约', () => {
       docsUrl: 'https://help.aliyun.com/zh/model-studio/token-plan-team-overview',
       regionHint: 'cn',
     }));
-    expect(codingPlan?.runtimes['claude-code']).toEqual({
+    expect(codingPlan?.runtimes['claude-code']).toMatchObject({
       baseUrl: 'https://coding.dashscope.aliyuncs.com/apps/anthropic',
       modelsUrl: 'https://coding.dashscope.aliyuncs.com/v1/models',
       models: codingPlanModels,
@@ -1153,7 +1156,7 @@ describe('官方渠道预设契约', () => {
     // Codex 走 openai-chat 桥接：桥接未验证图片格式的型号在 Codex 下不声明图片输入。
     const codexChatImages = (models: readonly { id: string; supportsImageInput?: boolean }[], unverified: string[]) =>
       models.map((model) => (unverified.includes(model.id) ? { ...model, supportsImageInput: false } : model));
-    expect(codingPlan?.runtimes.codex).toEqual({
+    expect(codingPlan?.runtimes.codex).toMatchObject({
       baseUrl: 'https://coding.dashscope.aliyuncs.com/v1',
       wireProtocol: 'openai-chat',
       models: codexChatImages(codingPlanModels, ['kimi-k2.5']),
@@ -1162,12 +1165,12 @@ describe('官方渠道预设契约', () => {
       [personalTokenPlan, personalTokenPlanModels],
       [teamTokenPlan, teamTokenPlanModels],
     ] as const) {
-      expect({ ...tokenPlan?.runtimes['claude-code'], models: tokenPlan?.runtimes['claude-code']?.models.filter(model => model.defaultEnabled !== false) }).toEqual({
+      expect({ ...tokenPlan?.runtimes['claude-code'], models: tokenPlan?.runtimes['claude-code']?.models.filter(model => model.defaultEnabled !== false) }).toMatchObject({
         baseUrl: 'https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic',
         modelsUrl: tokenPlanModelsUrl,
         models,
       });
-      expect({ ...tokenPlan?.runtimes.codex, models: tokenPlan?.runtimes.codex?.models.filter(model => model.defaultEnabled !== false) }).toEqual({
+      expect({ ...tokenPlan?.runtimes.codex, models: tokenPlan?.runtimes.codex?.models.filter(model => model.defaultEnabled !== false) }).toMatchObject({
         baseUrl: 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
         wireProtocol: 'openai-chat',
         modelsUrl: tokenPlanModelsUrl,
@@ -1193,7 +1196,7 @@ describe('官方渠道预设契约', () => {
     '%s 的 Claude Code 使用官方 [1m] 入口,与 Pi 的 glm-5.3 窗口一致 (#3883)',
     (id) => {
       const claudeModels = preset(id)?.runtimes['claude-code']?.models ?? [];
-      expect(claudeModels.find((model) => model.id === 'glm-5.3[1m]')).toEqual({
+      expect(claudeModels.find((model) => model.id === 'glm-5.3[1m]')).toMatchObject({
         id: 'glm-5.3[1m]',
         name: 'GLM-5.3 (1M)',
         contextWindow: 1_000_000,

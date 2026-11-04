@@ -1,5 +1,6 @@
 /** Personal records belong to the executing host's account database. */
 export type PluginUsageOutcome = 'unknown' | 'succeeded' | 'failed' | 'timed-out' | 'cancelled';
+export type PluginUsageEntryKind = 'tool' | 'execution';
 
 export interface PluginUsageSummary {
   subjectId: string;
@@ -69,6 +70,7 @@ export type PluginUsageTransaction =
       toolName: string;
       sessionId: string | null;
       occurredAt: number;
+      entryKind?: PluginUsageEntryKind;
     }
   | { action: 'settle'; handle: PluginUsageHandle; callId: string; outcome: PluginUsageOutcome }
   | { action: 'clear'; subjectId: string | null; now: number }

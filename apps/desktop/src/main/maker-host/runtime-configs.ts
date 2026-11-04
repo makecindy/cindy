@@ -9,6 +9,8 @@ import type { AgentRuntimeConfig } from '@cindy/maker-core';
 import { app } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import { getCachedBinaryStatus } from '../agent-binaries/index.js';
+import { codexPackagePathPrepends } from '../agent-binaries/codex-cli-launcher.js';
 
 import {
   isModelDisabled,
@@ -21,11 +23,13 @@ import { readModelDisableOverrides } from './model-disable-store.js';
 import { claudeBehaviorFlagsForSpawn } from './claude-behavior-flags.js';
 import { isAnthropicWireModel } from './claude-gateway-config.js';
 import { hasClaudeNativeLogin } from './claude-native-auth.js';
+import { readUserToolSearchOverride } from './claude-user-tool-search.js';
 import claudeSystemPrompt from './claude-system-prompt.md?raw';
 import codexSystemPrompt from './codex-system-prompt.md?raw';
 import hostSystemPrompt from './host-system-prompt.md?raw';
+import businessOwnershipPrompt from './business-ownership-prompt.md?raw';
 import skillSourcePrecedencePrompt from './skill-source-precedence-prompt.md?raw';
-import { readCompactionPct } from './compaction-settings-store.js';
+import { DEFAULT_MODEL_COMPACTION_PCT } from '../../shared/modelContextLimit.js';
 import { readMemorySettings } from './memory-settings-store.js';
 import { readSubagentModelSettings } from './subagent-model-settings-store.js';
 import { shouldKeepSubagentOverrideForParent } from './subagent-override-route.js';
@@ -39,7 +43,7 @@ import {
 // Claude / Codex 的 host system prompt：产品身份 → Skill 来源优先级 → agent 专属段。
 // Skill 优先级不放 host-system-prompt.md，避免把 #1645 的 Claude/Codex 行为扩到 Pi。
 function composeHostPrompt(agentSpecific: string): string {
-  return [hostSystemPrompt, skillSourcePrecedencePrompt, agentSpecific]
+  return [hostSystemPrompt, businessOwnershipPrompt, skillSourcePrecedencePrompt, agentSpecific]
     .map(s => s.trim())
     .filter(s => s.length > 0)
     .join('\n\n');
@@ -177,6 +181,8 @@ export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string): Agent
         // 独立 Claude 账号已停用,只有本机 Claude Code 登录算「连了订阅」。
         oauthConnected: () => getActiveCatalog().providers.find(p => p.id === ctx.sessionProviderId)?.auth.native === 'claude'
           ? false : hasClaudeNativeLogin(),
+        // 用户显式配置的 ENABLE_TOOL_SEARCH 压过来源默认值(#7524);只对本机 spawn 读。
+        userToolSearch: ctx.spawnMode === 'remote' ? undefined : () => readUserToolSearchOverride(),
       }),
       // 工具链限核 env(agent 资源占用治理):只对本机 spawn 注入 —— 值按本机
       // 核数算,远端机器的资源不归本设置管。设置关闭时为空对象,零影响。
@@ -212,7 +218,7 @@ export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string): Agent
     configurable: false,
   });
   Object.defineProperty(config, 'autoCompactThresholdPct', {
-    get: () => readCompactionPct(),
+    get: () => DEFAULT_MODEL_COMPACTION_PCT,
     enumerable: true,
     configurable: false,
   });
@@ -222,7 +228,7 @@ export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string): Agent
         assessModelSwitchContext({
           contextTokens,
           targetContextWindow: contextWindow,
-          autoCompactThresholdPct: readCompactionPct(),
+          autoCompactThresholdPct: DEFAULT_MODEL_COMPACTION_PCT,
         }),
       ),
     enumerable: true,
@@ -315,7 +321,12 @@ export const desktopCodexRuntimeConfig: AgentRuntimeConfig = {
   // fail-fast 由 maker-host 启动期的 ensureBundledRipgrepReady() 承担,此处 getter
   // 在 env-builder 每次 codex spawn 时求值(结果已 memoize)。
   get pathPrepends() {
-    return [bundledRipgrepDir()];
+    return [
+      bundledRipgrepDir(),
+      ...(process.platform === 'win32'
+        ? codexPackagePathPrepends(getCachedBinaryStatus('codex').binaryPath, process.platform)
+        : []),
+    ];
   },
   userDataPath: app.getPath('userData'),
   get memoryEnabled() {

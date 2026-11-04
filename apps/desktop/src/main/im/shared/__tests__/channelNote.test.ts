@@ -95,6 +95,21 @@ describe('guest direct messages', () => {
   });
 });
 
+describe('group owner speaker', () => {
+  // #7519: 群里只有 open_id, 不写「是主人」时伙伴只能把主人当普通成员。
+  it('says the Main-verified group speaker is the owner, and stays silent otherwise', () => {
+    expect(
+      buildImChannelNote('feishu', { chatKind: 'group', chatId: 'oc_x', senderId: 'ou_o', senderIsOwner: true }),
+    ).toBe('[渠道说明] 系统追加，不是用户消息。本条来自飞书群 (chat_id: oc_x)，发言人 (user_id: ou_o)，是主人。');
+    expect(
+      buildImChannelNote('feishu', { chatKind: 'group', chatId: 'oc_x', senderId: 'ou_m', senderIsOwner: false }),
+    ).toBe('[渠道说明] 系统追加，不是用户消息。本条来自飞书群 (chat_id: oc_x)，发言人 (user_id: ou_m)。');
+    expect(
+      imChannelNoteSourceFromEvent({ chatId: 'c1', speaker: { id: 'u2', name: 'Ann', isOwner: false } }),
+    ).toEqual({ chatKind: 'group', chatId: 'c1', senderId: 'u2', senderName: 'Ann' });
+  });
+});
+
 describe('imMessageOriginFor', () => {
   it('captures who spoke and where for the UI, falling back to sender-only before the note is known', () => {
     const event = {
@@ -146,7 +161,7 @@ describe('imChannelNoteSourceFromEvent', () => {
         speaker: { id: 'u1', name: 'u1', isOwner: true },
         interactionSource: { chatName: 'cid1' },
       }),
-    ).toEqual({ chatKind: 'group', chatId: 'cid1', senderId: 'u1' });
+    ).toEqual({ chatKind: 'group', chatId: 'cid1', senderIsOwner: true, senderId: 'u1' });
     expect(
       imChannelNoteSourceFromEvent(
         { chatId: 'cid1', speaker: { id: 'u1', name: 'Ann', isOwner: true } },

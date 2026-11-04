@@ -50,6 +50,7 @@ import {
   isGlobalTabId,
   removeGlobalTab,
   useGlobalTabs,
+  requestRevealSessionTab,
 } from '@/features/right-sidebar/globalTabs';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
@@ -129,6 +130,9 @@ export function SidebarTabWindowLayout() {
     }
     for (const id of [...seenRef.current]) if (!nextIds.has(id)) seenRef.current.delete(id);
     setAssignment(next);
+    if (next.sessionId && next.revealTabId && nextIds.has(next.revealTabId)) {
+      requestRevealSessionTab(next.sessionId, next.revealTabId);
+    }
   }, []);
 
   // mount:订阅指派推送 + 主动拉一次(重载 / 推送早于订阅)+ renderer-ready 握手。

@@ -78,6 +78,7 @@ export function parseOrcaExecutionDevices(value: unknown): OrcaExecutionDeviceVi
       name: typeof row.name === 'string' && row.name ? row.name : row.deviceId,
       platform: typeof row.platform === 'string' ? row.platform : null,
       supported: row.supported === true,
+      ...(row.supportsAgentDevice === true ? { supportsAgentDevice: true } : {}),
     }];
   });
 }

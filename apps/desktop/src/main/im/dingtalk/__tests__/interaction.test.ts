@@ -36,6 +36,20 @@ describe('dingtalk text interactions', () => {
     });
   });
 
+  // 2026-10-24 review: text channels showed only the tool name, so a safe and a destructive
+  // Bash call looked identical. They now share the desktop/phone operation summary.
+  it('确认提示显示要执行的具体操作和审核原因', () => {
+    const prompt = __testing.formatInteractionPrompt({
+      kind: 'permission',
+      requestId: 'request-2',
+      toolName: 'Bash',
+      input: { command: 'xcrun simctl delete all' },
+      metadata: { autoReviewReason: '这会删除所有模拟器。' },
+    });
+    expect(prompt).toContain('操作：xcrun simctl delete all');
+    expect(prompt).toContain('自动审批需要你决定：这会删除所有模拟器。');
+  });
+
   it('自动审批故障时在钉钉确认提示里写明原因', () => {
     const ordinary = __testing.formatInteractionPrompt({
       kind: 'permission',

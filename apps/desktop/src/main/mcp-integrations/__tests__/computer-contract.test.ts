@@ -1,11 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import fixture from './fixtures/cua-driver-0.23.2.json';
-import { adaptComputerDriverArgs, type ComputerDriverToolSchema } from '../computer-contract.js';
+import {
+  adaptComputerDriverArgs,
+  selectAdvertisedComputerDriverArgs,
+  type ComputerDriverToolSchema,
+} from '../computer-contract.js';
 
 const schemas = new Map(
   fixture.tools.map((tool) => [tool.name, tool.inputSchema as ComputerDriverToolSchema]),
 );
 describe('installed Computer Use contract', () => {
+  // Production argument adapter, unit tier: new incremental evidence requests
+  // must still dispatch with the existing old-driver fixture (previously untested).
+  it('preserves Markdown evidence diffs only for drivers advertising since', () => {
+    const input = { pid: 1, window_id: 2, include_screenshot: false, tree_format: 'markdown', since: 'latest' };
+    const modern = new Map<string, ComputerDriverToolSchema>([['get_window_state', {
+      properties: { pid: {}, window_id: {}, include_screenshot: {}, tree_format: {}, since: {} },
+      additionalProperties: false,
+    }]]);
+    expect(adaptComputerDriverArgs('get_window_state', input, modern)).toEqual(input);
+    expect(adaptComputerDriverArgs('get_window_state', input, schemas)).not.toHaveProperty('since');
+  });
   it('preserves driver credentials and rejects missing observation provenance', () => {
     const args = {
       pid: 1,
@@ -101,5 +116,38 @@ describe('installed Computer Use contract', () => {
     expect(() =>
       adaptComputerDriverArgs('verify_state', { pid: 1, window_id: 2 }, schemas),
     ).toThrow('requires expect');
+  });
+  // 测试价值：#6979 中 cua-driver 0.38 的闭合 schema 移除了旧光标样式字段；生产契约
+  // 协商必须在派发前跳过无兼容参数的可选装饰，避免每个新会话产生拒绝日志。旧覆盖只验证
+  // 必需动作的 fail-closed 适配；最小失败输入是一个仅声明新运动字段的闭合 schema，unit tier。
+  it('negotiates optional cursor decoration against the advertised schema', () => {
+    const legacyInput = {
+      cursor_id: 'session',
+      cursor_icon: 'arrow',
+      cursor_color: '#DF0C27',
+    };
+    const v038 = new Map<string, ComputerDriverToolSchema>([
+      ['set_agent_cursor_motion', {
+        properties: { arc_flow: {}, style: {}, timing: {} },
+        additionalProperties: false,
+      }],
+    ]);
+    expect(selectAdvertisedComputerDriverArgs('set_agent_cursor_motion', legacyInput, v038)).toBeNull();
+    expect(selectAdvertisedComputerDriverArgs('set_agent_cursor_style', legacyInput, v038)).toBeNull();
+
+    const compatible = new Map<string, ComputerDriverToolSchema>([
+      ['set_agent_cursor_motion', {
+        properties: { cursor_color: {} },
+        additionalProperties: false,
+      }],
+    ]);
+    expect(selectAdvertisedComputerDriverArgs('set_agent_cursor_motion', legacyInput, compatible))
+      .toEqual({ cursor_color: '#DF0C27' });
+
+    const permissive = new Map<string, ComputerDriverToolSchema>([
+      ['set_agent_cursor_motion', { additionalProperties: true }],
+    ]);
+    expect(selectAdvertisedComputerDriverArgs('set_agent_cursor_motion', legacyInput, permissive))
+      .toEqual(legacyInput);
   });
 });

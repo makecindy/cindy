@@ -154,13 +154,16 @@ describe('MacAgentIslandNativeHost', () => {
     const host = new MacAgentIslandNativeHost(createOptions());
 
     expect(host.publish(createDisplayState(), createFrame())).toBe(true);
+    expect(host.available).toBe(false);
     await vi.advanceTimersByTimeAsync(0);
     expect(h.spawn).toHaveBeenCalledTimes(1);
 
     (children[0].stdout as PassThrough).write(`${JSON.stringify({ type: 'ready' })}\n`);
     await vi.advanceTimersByTimeAsync(0);
+    expect(host.available).toBe(true);
 
     children[0].stdin.emit('error', new Error('write EPIPE'));
+    expect(host.available).toBe(false);
     expect(children[0].kill).toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(999);
     expect(h.spawn).toHaveBeenCalledTimes(1);
@@ -213,6 +216,30 @@ describe('MacAgentIslandNativeHost', () => {
 
     expect(host.failed).toBe(true);
     expect(h.spawn).toHaveBeenCalledTimes(4);
+  });
+
+  // The native protocol must accept only the two completion actions; no existing
+  // callback test covers malformed completion events (unit tier).
+  it('forwards completion actions and rejects unknown actions', async () => {
+    const child = createFakeChild();
+    h.spawn.mockReturnValue(child);
+    const options = { ...createOptions(), onCompletionAction: vi.fn().mockResolvedValueOnce(true).mockRejectedValueOnce(new Error('offline')) };
+    const replies: string[] = [];
+    child.stdin.on('data', (data) => replies.push(String(data)));
+    const { MacAgentIslandNativeHost } = await import('../MacAgentIslandNativeHost.js');
+    const host = new MacAgentIslandNativeHost(options);
+    host.publish(createDisplayState(), createFrame());
+    await vi.advanceTimersByTimeAsync(0);
+    for (const action of ['mark-read', 'archive', 'delete']) {
+      (child.stdout as PassThrough).write(`${JSON.stringify({ type: 'completion-action', sessionId: 's1', action, requestId: action, completionToken: 'card-1' })}\n`);
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    expect(options.onCompletionAction.mock.calls).toEqual([['s1', 'mark-read', 'card-1'], ['s1', 'archive', 'card-1']]);
+    expect(replies.map(line => JSON.parse(line)).filter(message => message.type === 'completion-action-result')).toEqual([
+      { type: 'completion-action-result', requestId: 'mark-read', success: true },
+      { type: 'completion-action-result', requestId: 'archive', success: false },
+    ]);
+    host.stop();
   });
 
   it('forwards permission action events from the helper', async () => {

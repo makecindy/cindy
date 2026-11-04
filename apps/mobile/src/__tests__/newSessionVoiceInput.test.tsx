@@ -1,12 +1,15 @@
 // @vitest-environment jsdom
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { act, createElement, createRef, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { TextInputProps, TextStyle } from 'react-native';
-import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MobileComposerInputRow, type MobileComposerInputRowProps } from '@/session/MobileComposerInputRow';
+import { MobileComposerInputRow } from '@/session/MobileComposerInputRow';
+import {
+  changeNewSessionVoiceSelection, changeNewSessionVoiceText, finishNewSessionVoiceRecording,
+  newSessionVoiceComposerProps, publishNewSessionVoiceDraft,
+  type NewSessionVoiceSelectionInput, type NewSessionVoiceStopInput,
+} from '@/session/newSessionVoiceInput';
+import { deferred } from './fixtures/newSession';
 import { palettes } from '@/theme/tokens';
 
 const native = vi.hoisted(() => ({
@@ -54,118 +57,50 @@ vi.mock('@/theme', () => ({
   useThemedStyles: (make: (colors: typeof palettes.light) => unknown) => make(palettes[native.mode]),
 }));
 
-// Exercise the page's actual visibility/event expressions and the real input row.
-// Extract only this boundary so unrelated screen/network/native dependencies are not loaded.
-// Native drawing and hit testing still require the Android emulator regression.
-const source = ts.createSourceFile('new.tsx', readFileSync(
-  resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8',
-), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-function findOne<T extends ts.Node>(guard: (node: ts.Node) => node is T): T {
-  const found: T[] = [];
-  function visit(node: ts.Node) {
-    if (guard(node)) found.push(node);
-    ts.forEachChild(node, visit);
-  }
-  visit(source);
-  if (found.length !== 1) throw new Error(`Expected one source boundary, found ${found.length}`);
-  return found[0];
-}
-const hiddenStyle = findOne((node): node is ts.PropertyAssignment =>
-  ts.isPropertyAssignment(node) && node.name.getText(source) === 'inputVoiceHidden');
-const composer = findOne((node): node is ts.JsxSelfClosingElement =>
-  ts.isJsxSelfClosingElement(node) && node.tagName.getText(source) === 'MobileComposerInputRow');
-const propNames = ['inputStyle', 'caretHidden', 'value', 'placeholder', 'selection', 'onPressIn', 'onKeyPress'];
-function composerExpression(name: string) {
-  const prop = composer.attributes.properties.find((node) =>
-    ts.isJsxAttribute(node) && node.name.getText(source) === name);
-  if (!prop || !ts.isJsxAttribute(prop) || !prop.initializer
-    || !ts.isJsxExpression(prop.initializer) || !prop.initializer.expression) {
-    throw new Error(`Missing composer expression: ${name}`);
-  }
-  return prop.initializer.expression.getText(source);
-}
-const expressions = propNames.map((name) => `${name}: ${composerExpression(name)}`);
-const compiled = ts.transpileModule(`function pageProps(bindings) {
-  const { Platform, voiceIsListening, draft, finishVoiceRecording, composerPlaceholder, firstMessageSelection,
-    voiceStopGestureSelectionGuardRef, voicePendingSelectionEchoesRef } = bindings;
-  const styles = { inputVoiceHidden: ${hiddenStyle.initializer.getText(source)} };
-  return { ${expressions.join(',\n')} };
-}`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-const pageProps = new Function(`${compiled}; return pageProps;`)() as
-  (bindings: Record<string, unknown>) => Partial<MobileComposerInputRowProps>;
-
-// Run the actual page callbacks across a deferred stop(), including native
-// selection echoes and typing, instead of asserting the source of a guard.
-const draftCallback = findOne((node): node is ts.PropertyAssignment =>
-  ts.isPropertyAssignment(node) && node.name.getText(source) === 'onDraftChanged');
-const stopCallback = findOne((node): node is ts.VariableDeclaration =>
-  ts.isVariableDeclaration(node) && node.name.getText(source) === 'finishVoiceRecording');
-if (!stopCallback.initializer || !ts.isCallExpression(stopCallback.initializer)) {
-  throw new Error('Missing finishVoiceRecording callback');
-}
+// Unit: production voice/form functions and the real input row protect delayed
+// selection echoes, typing during stop, and Android's native-text regression.
+// Deferred stop plus a user edit is the minimum timing input. Native drawing and
+// hit testing still require the Android emulator regression.
 type Selection = { start: number; end: number };
-const compiledVoice = ts.transpileModule(`function voiceCallbacks(bindings) {
-  const { voiceSelectionUserOwnedRef, voiceRecordingActiveRef, voiceStopInFlightRef,
-    voiceStopGestureSelectionGuardRef, voicePendingSelectionEchoesRef,
-    firstMessageRef, firstMessageSelectionRef, setFirstMessageSelection, setFirstMessageDraft,
-    voiceControllerSessionRef, voiceStartupSeqRef, voiceStartupInFlightRef, voiceState,
-    setVoiceState, setVoiceError, setAudioModeAsync, requestAnimationFrame,
-    firstMessageInputRef, formatRemoteError, voiceIsListening, finishVoiceRecording } = bindings;
-  return {
-    publish: ${draftCallback.initializer.getText(source)},
-    select: ${composerExpression('onSelectionChange')},
-    type: ${composerExpression('onChangeText')},
-    press: ${composerExpression('onPressIn')},
-    key: ${composerExpression('onKeyPress')},
-    stop: ${stopCallback.initializer.arguments[0].getText(source)},
-  };
-}`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-const voiceCallbacks = new Function(`${compiledVoice}; return voiceCallbacks;`)() as
-  (bindings: Record<string, unknown>) => {
-    publish: (text: string, selection?: Selection, replacement?: Selection & { text: string }) => void;
-    select: (event: { nativeEvent: { selection: Selection } }) => void;
-    type: (text: string) => void;
-    press: () => void;
-    key: () => void;
-    stop: () => Promise<string | null>;
-  };
 
 function pendingVoiceStop(initialDraft = '前后') {
   const firstMessageRef = { current: initialDraft };
   const firstMessageSelectionRef = { current: { start: 1, end: 1 } };
   let controlledSelection = firstMessageSelectionRef.current;
-  let completeStop!: (draft: string) => void;
-  let finishVoiceRecording!: () => Promise<string | null>;
   let activeStop: Promise<string | null> | undefined;
-  const stopGate = new Promise<string>((resolve) => { completeStop = resolve; });
+  const stopGate = deferred<string>();
   const setNativeProps = vi.fn();
   const bindings = {
     firstMessageRef, firstMessageSelectionRef,
     voiceSelectionUserOwnedRef: { current: false },
     voiceStopGestureSelectionGuardRef: { current: false },
-    voicePendingSelectionEchoesRef: { current: [] },
+    voicePendingSelectionEchoesRef: { current: [] as Selection[] },
     voiceRecordingActiveRef: { current: true }, voiceStopInFlightRef: { current: false },
     voiceStartupSeqRef: { current: 1 }, voiceStartupInFlightRef: { current: false },
-    voiceControllerSessionRef: { current: { stop: () => stopGate } },
+    voiceControllerSessionRef: { current: { stop: () => stopGate.promise } },
     voiceState: 'listening', setVoiceState: vi.fn(), setVoiceError: vi.fn(),
     setFirstMessageSelection: (next: Selection) => { controlledSelection = next; },
     setFirstMessageDraft: (text: string) => { firstMessageRef.current = text; },
-    setAudioModeAsync: async () => undefined,
     requestAnimationFrame: (callback: () => void) => callback(),
     firstMessageInputRef: { current: { setNativeProps } }, formatRemoteError: String,
-    voiceIsListening: true, finishVoiceRecording: () => {
-      activeStop = callbacks.stop();
-      return activeStop;
-    },
-  };
-  const callbacks = voiceCallbacks(bindings);
+  } satisfies NewSessionVoiceSelectionInput & NewSessionVoiceStopInput;
+  const stop = () => finishNewSessionVoiceRecording(bindings);
+  const composer = (voiceIsListening: boolean) => newSessionVoiceComposerProps({
+    ...bindings, platform: 'android', voiceIsListening, firstMessage: firstMessageRef.current,
+    firstMessageSelection: controlledSelection, composerPlaceholder: 'Draft',
+    finishVoiceRecording: () => { activeStop = stop(); return activeStop; },
+  });
   return {
-    ...callbacks,
+    stop,
+    publish: (text: string, selection?: Selection, replacement?: Selection & { text: string }) =>
+      publishNewSessionVoiceDraft(bindings, text, selection, replacement),
+    type: (text: string) => changeNewSessionVoiceText(bindings, text),
+    key: () => composer(true).onKeyPress(),
     selection: () => controlledSelection,
-    move: (start: number, end = start) => callbacks.select({ nativeEvent: { selection: { start, end } } }),
-    complete: () => completeStop(firstMessageRef.current), setNativeProps,
-    press: () => { callbacks.press(); return activeStop; },
-    pressToEdit: () => voiceCallbacks({ ...bindings, voiceIsListening: false }).press(),
+    move: (start: number, end = start) => changeNewSessionVoiceSelection(bindings, { start, end }),
+    complete: () => stopGate.resolve(firstMessageRef.current), setNativeProps,
+    press: () => { composer(true).onPressIn(); return activeStop; },
+    pressToEdit: () => composer(false).onPressIn(),
     insert: (text: string) => firstMessageRef.current.slice(0, controlledSelection.start)
       + text + firstMessageRef.current.slice(controlledSelection.end),
   };
@@ -356,10 +291,10 @@ function mountInput() {
     const colors = palettes[native.mode];
     act(() => root!.render(createElement(MobileComposerInputRow, {
       accessibilityLabel: 'Draft', inputTestID: 'draft', inputRef: ref,
-      placeholder: 'Draft', placeholderTextColor: colors.textTertiary,
-      value: draft, onChangeText: vi.fn(), onPasteImages: vi.fn(),
-      ...pageProps({ Platform: { OS: native.platform }, voiceIsListening: listening,
-        draft: { firstMessage: draft }, firstMessageSelection: selection,
+      placeholderTextColor: colors.textTertiary,
+      onChangeText: vi.fn(), onPasteImages: vi.fn(),
+      ...newSessionVoiceComposerProps({ platform: native.platform, voiceIsListening: listening,
+        firstMessage: draft, firstMessageSelection: selection,
         finishVoiceRecording, composerPlaceholder: 'Draft',
         voiceStopGestureSelectionGuardRef: { current: false },
         voicePendingSelectionEchoesRef: { current: [] } }),

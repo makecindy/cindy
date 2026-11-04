@@ -22,3 +22,4 @@ import './background-tasks';
 import './resource-usage';
 import './routines';
 import './plugin-view';
+import './plugin-task';

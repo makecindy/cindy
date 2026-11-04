@@ -1,6 +1,5 @@
 /**
- * 归档前的自动化提醒:绑定到已归档任务的自动化在下次触发时会被调度器暂停(持续会话
- * 除外,它会换绑新任务继续跑),归档入口据此升级到确认弹窗,让用户先知道。本机读
+ * 归档前的自动化提醒:绑定的自动化仍会运行，并像用户发送消息一样恢复原任务。本机读
  * schedulesStore,远程任务读 remoteProjectsStore 的绑定分片;读取失败按「无绑定」处理。
  */
 import type { Schedule } from '@cindy/maker-scheduler';
@@ -55,7 +54,7 @@ async function readRemoteBindingsOnce(
   return Promise.race([load, timeout]);
 }
 
-/** 每个任务归档后会停掉的自动化名称(active、非持续会话);没有的任务不出现在结果里。 */
+/** 每个任务绑定的 active 自动化名称；包含持续任务，没有的任务不出现在结果里。 */
 export async function loadActiveBoundScheduleNames(
   targets: readonly ArchiveTarget[],
 ): Promise<Map<string, string[]>> {
@@ -88,7 +87,7 @@ export async function loadActiveBoundScheduleNames(
         : remoteProjectsStore.getSessionScheduleBindings(deviceId, target.id);
     }
     const names = bindings
-      .filter((schedule) => schedule.status === 'active' && !schedule.persistentSession)
+      .filter((schedule) => schedule.status === 'active')
       .map((schedule) => schedule.name);
     if (names.length > 0) result.set(target.id, names);
   }

@@ -5,7 +5,7 @@ import { X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import type { BotProfile } from './botStore';
-import { runBotLifecycleAction } from './botStore';
+import { useBotSettingsTarget } from './useBotSettingsTarget';
 
 /** Shared destructive confirmation for the roster and teammate settings. */
 export function BotDeleteDialog({
@@ -18,6 +18,7 @@ export function BotDeleteDialog({
   onDeleted: (botId: string) => void;
 }) {
   const { t } = useTranslation();
+  const target = useBotSettingsTarget();
   const inFlight = useRef(false);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -34,7 +35,7 @@ export function BotDeleteDialog({
     setBusy(true);
     setFailed(false);
     try {
-      await runBotLifecycleAction({
+      await target.lifecycle.run({
         botId: bot.id,
         action: 'delete',
         confirmName: bot.name,

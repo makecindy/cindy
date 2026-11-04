@@ -70,35 +70,41 @@ export function useSessionHardwareTaskActions({
       toast.warning(t('ccAgent.sidebar.archiveBlocked.running'));
       return;
     }
-    const attached = await window.electronAPI.binding
-      .resolveSession(sessionId)
-      .then((binding) => binding.attached)
-      .catch(() => false);
-    if (attached) {
-      toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
-      return;
-    }
-    const scheduleNames =
-      (await loadActiveBoundScheduleNames([{ id: sessionId, deviceLinkDeviceId }])).get(
-        sessionId,
-      ) ?? [];
-    // 预检与确认期间保留当前任务，确定归档后再隐藏并跳离。
-    const preflight = await resolveWorktreeRemovalPreflight(sessionId, deviceLinkDeviceId);
-    if (preflight !== 'clean' || scheduleNames.length > 0) {
-      const ok = await confirmDialog({
-        title: t('ccAgent.sidebar.confirmArchive.title'),
-        description: archiveConfirmDescription(t, {
-          dirtyWorktree: preflight === 'dirty',
-          scheduleNames,
-        }),
-        confirmText: t('ccAgent.sidebar.confirmArchive.confirm'),
-        cancelText: t('ccAgent.sidebar.confirmArchive.cancel'),
-      });
-      if (!ok) {
-        return;
-      }
-    }
-    await runSessionAction(sessionId, 'archive', { activeSessionId: sessionId });
+    await runSessionAction(sessionId, 'archive', {
+      activeSessionId: sessionId,
+      prepareArchive: async (isCurrent) => {
+        const attached = await window.electronAPI.binding
+          .resolveSession(sessionId)
+          .then((binding) => binding.attached)
+          .catch(() => false);
+        if (attached) {
+          toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
+          return false;
+        }
+        const scheduleNames =
+          (await loadActiveBoundScheduleNames([{ id: sessionId, deviceLinkDeviceId }])).get(
+            sessionId,
+          ) ?? [];
+        // 远程列表先乐观换桶；确认前保留详情，取消后恢复行。
+        const preflight = await resolveWorktreeRemovalPreflight(sessionId, deviceLinkDeviceId);
+        if (!isCurrent()) return false;
+        if (preflight !== 'clean' || scheduleNames.length > 0) {
+          const ok = await confirmDialog({
+            title: t('ccAgent.sidebar.confirmArchive.title'),
+            description: archiveConfirmDescription(t, {
+              dirtyWorktree: preflight === 'dirty',
+              scheduleNames,
+            }),
+            confirmText: t('ccAgent.sidebar.confirmArchive.confirm'),
+            cancelText: t('ccAgent.sidebar.confirmArchive.cancel'),
+          });
+          if (!ok) {
+            return false;
+          }
+        }
+        return true;
+      },
+    });
   }, [
     confirmDialog,
     deviceLinkDeviceId,

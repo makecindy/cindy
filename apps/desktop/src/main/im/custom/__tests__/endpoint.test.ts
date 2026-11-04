@@ -3,7 +3,7 @@
  * 鉴权先行、按连接路由、body 校验、超限拒绝、重启复用同一路径。
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -23,6 +23,10 @@ const TOKEN = 'a'.repeat(64);
 
 let endpoint: CustomEndpointHandle | null = null;
 let dir = '';
+
+beforeEach(() => {
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'custom-im-'));
+});
 
 afterEach(async () => {
   await endpoint?.shutdown();
@@ -45,6 +49,7 @@ function request(
     const req = http.request(
       {
         socketPath,
+        agent: false,
         path: pathname,
         method: options.method ?? 'POST',
         headers: options.headers ?? {},
@@ -64,7 +69,6 @@ function request(
 }
 
 async function start(): Promise<CustomEndpointHandle> {
-  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'custom-im-'));
   endpoint = await startCustomEndpoint({
     discoveryDir: dir,
     log: { info: () => {}, warn: () => {} },
@@ -123,7 +127,8 @@ describe('custom im endpoint (unix socket)', () => {
 
   it('非法 body 400; 超过 1MiB 413; 非 POST 405', async () => {
     const handle = await start();
-    handle.register('abc123', { token: TOKEN, handle: () => {} });
+    const delivered: unknown[] = [];
+    handle.register('abc123', { token: TOKEN, handle: (message) => void delivered.push(message) });
     const headers = { authorization: `Bearer ${TOKEN}` };
     const target = '/im/custom/abc123/inbound';
 
@@ -139,12 +144,21 @@ describe('custom im endpoint (unix socket)', () => {
     expect(
       (await request(handle.socketPath, target, { method: 'GET', headers })).status,
     ).toBe(405);
+    expect(delivered).toEqual([]);
+    const accepted = await request(handle.socketPath, target, {
+      headers,
+      body: JSON.stringify({ conversationId: 'c1', text: 'after-oversized-body' }),
+    });
+    expect(accepted.status).toBe(202);
+    expect(delivered).toEqual([{ conversationId: 'c1', text: 'after-oversized-body' }]);
   });
 
-  it.skipIf(process.platform === 'win32')('发现文件只含 socketPath, 不含 token, 权限 0600', async () => {
+  it('发现文件只含 socketPath, 不含 token, 权限 0600', async () => {
     const handle = await start();
     const file = path.join(dir, 'endpoint.json');
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') {
+      expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    }
     const body = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
     expect(body.socketPath).toBe(handle.socketPath);
     expect(JSON.stringify(body)).not.toContain('token');

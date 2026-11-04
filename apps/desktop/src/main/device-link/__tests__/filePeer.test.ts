@@ -87,8 +87,32 @@ import {
 import { readRemoteDeviceFile } from '../fileAccess';
 import { DesktopCaptureWindow } from '../../remote-desktop/captureWindow';
 import { createHash } from 'node:crypto';
+import { isSourceFileAccessError } from '../sourceFileError';
 
 describe('peer attachment upload preflight', () => {
+  // #6530: an unreadable local file must not cool down a healthy peer or trigger OSS fallback.
+  it.each(['EPERM', 'EACCES'])('keeps the peer usable after source open fails with %s', async code => {
+    const source = path.resolve('unreadable-inventory.xlsx');
+    const error = Object.assign(new Error(`${code}: open '${source}'`), { code, syscall: 'open', path: source });
+    const open = vi.spyOn(fsPromises, 'open').mockRejectedValueOnce(error);
+    const invoke = vi.fn(async () => ({ ok: true, result: { version: 1 } }));
+    const peer = `source-access-${code}`;
+    try {
+      // The generic helper also serves plugin picking and directory export, outside outboundMedia.
+      const failure = await tryUploadPeerAttachment(peer, source, undefined, invoke).catch(error => error);
+      expect(failure).toMatchObject({ code: 'DEVICE_LINK_MEDIA_ACCESS_DENIED' });
+      expect(String(failure)).not.toContain(source);
+      expect(failure).not.toHaveProperty('path');
+      expect(failure).not.toHaveProperty('cause');
+      expect(invoke).not.toHaveBeenCalled();
+      // A subsequent readable attachment still probes the peer (no permission-error cooldown).
+      await tryUploadPeerAttachment(peer, Buffer.from('readable copy'), undefined, invoke);
+      expect(invoke).toHaveBeenCalled();
+    } finally {
+      open.mockRestore();
+    }
+  });
+
   it('checks the peer before reading a large file and never connects to an old peer', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'cindy-peer-upload-'));
     try {
@@ -110,6 +134,70 @@ describe('peer attachment upload preflight', () => {
 });
 
 describe('authorized file peer source', () => {
+  // Oct 30: a healthy but slow TURN connection was reused forever. Unit coverage
+  // uses real receive/write/cleanup entrypoints; existing tests only cover stalls.
+  it.each(['direct', 'relay', 'failed', 'cancel', 'revoked'] as const)(
+    'reprobes between slow files and preserves the usable connection when candidate is %s',
+    async candidatePath => {
+      const realNow = Date.now.bind(Date);
+      let offset = 0, offers = 0;
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + offset);
+      const abort = new AbortController();
+      const closed: string[] = [];
+      const invoke = vi.fn(async (_peer: string, _channel: string, args: unknown[]) => {
+        const request = args[0] as { action: string; connection?: string };
+        if (request.action === 'caps') return { ok: true, result: { version: 1, streaming: true, sessionBound: true } };
+        if (request.action === 'close') { closed.push(request.connection!); return { ok: true }; }
+        if (request.action === 'open') return { ok: true, result: { ticket: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', size: 5, mimeType: 'text/plain' } };
+        offers++;
+        if (offers === 2 && candidatePath === 'failed') throw new Error('offer failed');
+        if (offers === 2 && candidatePath === 'cancel') abort.abort();
+        if (offers === 2 && candidatePath === 'revoked') stopFilePeers('route-peer');
+        return { ok: true, result: { connection: offers === 1 ? 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' : 'cccccccc-cccc-cccc-cccc-cccccccccccc', sdp: 'v=0' } };
+      });
+      mock.commandReply.mockImplementation(action => action === 'stats'
+        ? JSON.stringify({ path: offers > 1 ? candidatePath : 'relay' }) : 'v=0');
+      const finish = async () => {
+        await vi.waitFor(() => expect(mock.receiving).toBeDefined());
+        await mock.handlers.get('file-peer:host:write')!({}, mock.receiving!.sink, 0, 'aGVsbG8=');
+        mock.receiving!.reply();
+        mock.receiving = undefined;
+      };
+      try {
+        const first = tryPeerFile('route-peer', 'xdt-file://test', invoke);
+        await vi.waitFor(() => expect(mock.receiving).toBeDefined());
+        offset += 16_000; // A completed low-throughput sample, never a stalled download.
+        await finish();
+        await (await first)?.dispose();
+        const other = await connect('other-peer');
+        const oldConnection = mock.commands.find(c => c.action === 'receive')!.connection;
+        const second = tryPeerFile('route-peer', 'xdt-file://test', invoke, abort.signal);
+        if (candidatePath === 'cancel' || candidatePath === 'revoked') {
+          await expect(second).rejects.toThrow('FILE_PEER_CANCELLED');
+          expect(mock.commands.filter(c => c.action === 'receive')).toHaveLength(1);
+          expect(closed).toContain('cccccccc-cccc-cccc-cccc-cccccccccccc');
+          const source = await open(other.connection, 'other-peer');
+          expect(await read(other.connection, source.ticket, 0)).toBe('aGVsbG8=');
+          return;
+        }
+        await finish();
+        await (await second)?.dispose();
+        expect(offers).toBe(2);
+        const source = await open(other.connection, 'other-peer');
+        expect(await read(other.connection, source.ticket, 0)).toBe('aGVsbG8=');
+        const current = mock.commands.filter(c => c.action === 'receive').at(-1)!.connection;
+        expect(current === oldConnection).toBe(candidatePath !== 'direct');
+        expect(closed.includes('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')).toBe(candidatePath === 'direct');
+        // No repeated negotiation on the next file while the route-check budget is warm.
+        // A successful direct upgrade must stay reusable beyond that budget too.
+        if (candidatePath === 'direct') offset += 61_000;
+        const third = tryPeerFile('route-peer', 'xdt-file://test', invoke);
+        await finish();
+        await (await third)?.dispose();
+        expect(offers).toBe(2);
+      } finally { clock.mockRestore(); }
+    },
+  );
   it.each([0, 15_001])(
     'preserves a file receive after concurrent RPC failure (reply delay %i)',
     async (delay) => {
@@ -347,6 +435,15 @@ describe('authorized file peer source', () => {
       url: 'xdt-file://local/?path=/test',
     })) as { ticket: string; size: number; version: string };
   }
+  // Unit regression: an authorized path without a MIME was sent as octet-stream,
+  // so the mobile player rejected a completely downloaded MP4.
+  it.each([['.mp4', 'video/mp4'], ['.MP4', 'video/mp4'], ['mp4', 'video/mp4'], ['.webm', 'video/webm'], ['.html', 'text/html']])(
+    'returns playable direct-file metadata for extension %s', async (uploadExtHint, mimeType) => {
+      mock.resolve.mockResolvedValue({ absPath: file, uploadExtHint, maxBytes: 100 });
+      const { connection } = await connect();
+      await expect(open(connection)).resolves.toMatchObject({ mimeType, size: 5 });
+    },
+  );
   const read = (connection: string, ticket: string, offset: number) =>
     mock.handlers.get('file-peer:host:read')!({}, connection, ticket, offset);
   it('keeps negotiated connections until release, isolates transport failure and still expires stalled files', async () => {
@@ -675,6 +772,84 @@ describe('authorized file peer source', () => {
       Buffer.alloc(0.5 * 1024 * 1024, 7),
     );
   });
+  // #6530 / review r4322213153, unit: open errors do not cover pathless fd failures.
+  // Exercise the upload entry with a real source handle failing at stat, hash or transfer read;
+  // it must reject as a source denial, close the handle, cancel staging and reuse the warm peer.
+  it.each([
+    ['stat', 'EPERM'],
+    ['hash', 'EACCES'],
+    ['transfer', 'EPERM'],
+  ] as const)('preserves the peer after pathless %s denial (%s)', async (phase, code) => {
+    const peer = `fd-denial-${phase}`;
+    const ticket = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
+    const invoke = vi.fn(async (_peer: string, _channel: string, args: unknown[]) => ({
+      ok: true,
+      result: (args[0] as { action: string }).action === 'caps'
+        ? { version: 1, streaming: true, attachments: true }
+        : { connection: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', sdp: 'v=0' },
+    }));
+    const ops = () => mock.commands.filter(c => c.action === 'invoke')
+      .map(c => JSON.parse(c.payload).args[0].request.op as string);
+    mock.commandReply.mockImplementation(action => action === 'invoke'
+      ? JSON.stringify({ ok: true, result: ops().at(-1) === 'begin' ? { ticket } : {} })
+      : 'v=0');
+    // Warm up the connection before injecting the source-only failure.
+    expect(await tryUploadPeerAttachment(peer, Buffer.from('hello'), undefined, invoke)).toContain(ticket);
+    const offers = mock.sent.filter(action => action === 'offer').length;
+    mock.commands.length = 0;
+    const handle = await fsPromises.open(file, 'r');
+    const close = vi.spyOn(handle, 'close');
+    const denial = Object.assign(new Error('fd access denied'), {
+      code, syscall: phase === 'stat' ? 'fstat' : 'read',
+    });
+    if (phase === 'stat') vi.spyOn(handle, 'stat').mockRejectedValueOnce(denial);
+    else {
+      const read = handle.read.bind(handle);
+      let reads = 0;
+      vi.spyOn(handle, 'read').mockImplementation(async (...args: any[]) => {
+        if (++reads === (phase === 'hash' ? 1 : 2)) throw denial;
+        return (read as (...args: any[]) => Promise<any>)(...args);
+      });
+    }
+    const openSource = vi.spyOn(fsPromises, 'open').mockResolvedValueOnce(handle);
+    try {
+      let caught: unknown;
+      try {
+        await tryUploadPeerAttachment(peer, file, undefined, invoke);
+      } catch (error) { caught = error; }
+      expect(isSourceFileAccessError(caught, file)).toBe(true);
+      expect(caught).toMatchObject({ code: 'DEVICE_LINK_MEDIA_ACCESS_DENIED' });
+      expect(caught).not.toHaveProperty('path');
+      expect(caught).not.toHaveProperty('cause');
+      expect(close).toHaveBeenCalledOnce();
+      if (phase === 'transfer') expect(ops()).toEqual(['begin', 'cancel']);
+      else expect(ops()).toEqual([]);
+      expect(await tryUploadPeerAttachment(peer, Buffer.from('copy'), undefined, invoke)).toContain(ticket);
+      expect(mock.sent.filter(action => action === 'offer')).toHaveLength(offers);
+    } finally {
+      openSource.mockRestore();
+      await handle.close();
+    }
+  });
+
+  // The source handle context must not turn network or explicitly different-file errors
+  // into local attachment guidance. These still return null for the existing OSS fallback.
+  it.each(['network', 'other-file'] as const)('retains fallback for %s permission failures', async kind => {
+    const denial = Object.assign(new Error('permission denied'), kind === 'network'
+      ? { code: 'EACCES', syscall: 'connect' }
+      : { code: 'EPERM', syscall: 'fstat', path: path.join(directory, 'another-file') });
+    const handle = await fsPromises.open(file, 'r');
+    if (kind === 'other-file') vi.spyOn(handle, 'stat').mockRejectedValueOnce(denial);
+    const openSource = vi.spyOn(fsPromises, 'open').mockResolvedValueOnce(handle);
+    const invoke = vi.fn().mockRejectedValue(denial);
+    try {
+      expect(await tryUploadPeerAttachment(`non-source-${kind}`, file, undefined, invoke)).toBeNull();
+    } finally {
+      openSource.mockRestore();
+      await handle.close();
+    }
+  });
+
   it('stops a cancelled upload mid-file, discards the staging and keeps the peer usable', async () => {
     const peer = 'cancel-upload-peer';
     const source = path.join(directory, 'upload');

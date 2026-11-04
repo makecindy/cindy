@@ -145,7 +145,7 @@ export function Toast({ item, message }: ToastProps) {
           <span className="max-w-[160px] truncate text-13 font-medium leading-snug text-[var(--text-tertiary)]">
             {item.source.name}
           </span>
-          <span aria-hidden className="text-13 leading-snug text-[var(--text-tertiary)] opacity-60">
+          <span aria-hidden className="text-13 leading-snug text-[var(--text-tertiary)]">
             ·
           </span>
         </span>

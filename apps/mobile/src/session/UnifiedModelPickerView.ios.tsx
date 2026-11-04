@@ -1,10 +1,10 @@
-import { NativeErrorNotice } from '@/components/NativeErrorNotice.ios';
-import { ModelSpeedIcon } from './ModelSpeedIcon';
+import { NativeErrorNotice } from "@/components/NativeErrorNotice.ios";
+import { ModelSpeedIcon } from "./ModelSpeedIcon";
+import { ModelQuotaBar } from "./ModelQuotaBar";
 import {
   Button,
   HStack,
   Picker,
-  ProgressView,
   RNHostView,
   VStack,
   Text,
@@ -20,7 +20,6 @@ import {
   foregroundStyle,
   frame,
   pickerStyle,
-  progressViewStyle,
   tint,
   tag,
   padding,
@@ -218,7 +217,12 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                     </Text>
                   ) : null}
                   {row.config.fast ? (
-                    <NativeMark><ModelSpeedIcon mode={row.config.fast} color={colors.textSecondary} /></NativeMark>
+                    <NativeMark>
+                      <ModelSpeedIcon
+                        mode={row.config.fast}
+                        color={colors.textSecondary}
+                      />
+                    </NativeMark>
                   ) : null}
                 </HStack>
               }
@@ -301,16 +305,13 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
               <ProviderSourceMark filter={item} />
             </NativeMark>
             {item.quota ? (
-              <ProgressView
-                value={item.quota.remaining / 100}
-                modifiers={[
-                  progressViewStyle("linear"),
-                  frame({ width: 24 }),
-                  tint(colors.textSecondary),
-                  accessibilityLabel(item.quota.label),
-                ]}
-                testID={`${p.testID}.source.${item.id}.quota`}
-              />
+              <RNHostView matchContents>
+                <ModelQuotaBar
+                  remaining={item.quota.remaining}
+                  label={item.quota.label}
+                  testID={`${p.testID}.source.${item.id}.quota`}
+                />
+              </RNHostView>
             ) : null}
           </VStack>
         ) : (
@@ -466,18 +467,32 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                 )}
               </Picker>
             ) : null}
-            {options.fastCapable && options.row.entry.capabilities[config.agent]?.supportsUltrafastMode ? (
+            {options.fastCapable &&
+            options.row.entry.capabilities[config.agent]
+              ?.supportsUltrafastMode ? (
               <Picker
                 label={t("models.options.speed.label")}
-                selection={config.fast === 'ultrafast' ? 'ultrafast' : config.fast ? 'fast' : 'standard'}
-                onSelectionChange={(value: string) => options.onChange({
-                  ...config, fast: value === 'ultrafast' ? 'ultrafast' : value === 'fast',
-                })}
+                selection={
+                  config.fast === "ultrafast"
+                    ? "ultrafast"
+                    : config.fast
+                      ? "fast"
+                      : "standard"
+                }
+                onSelectionChange={(value: string) =>
+                  options.onChange({
+                    ...config,
+                    fast:
+                      value === "ultrafast" ? "ultrafast" : value === "fast",
+                  })
+                }
                 modifiers={[pickerStyle("menu"), disabled(p.busy)]}
                 testID={`${p.testID}.speed`}
               >
-                {(['standard', 'fast', 'ultrafast'] as const).map(value => (
-                  <Text key={value} modifiers={[tag(value)]}>{t(`models.options.speed.${value}`)}</Text>
+                {(["standard", "fast", "ultrafast"] as const).map((value) => (
+                  <Text key={value} modifiers={[tag(value)]}>
+                    {t(`models.options.speed.${value}`)}
+                  </Text>
                 ))}
               </Picker>
             ) : options.fastCapable ? (

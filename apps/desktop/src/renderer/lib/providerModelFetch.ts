@@ -17,6 +17,7 @@ import {
 export type CustomProviderAuthMode = 'apiKey' | 'oauth' | 'none';
 
 export interface ProviderModelFetchSignatureFields {
+  wireProtocol?: ProviderWireProtocol;
   baseUrl: string;
   requestPath: string;
   modelsUrl: string;
@@ -136,6 +137,7 @@ export function providerModelFetchRequestSignature(
     authMode,
     baseUrl: fields.baseUrl.trim(),
     requestPath: fields.requestPath.trim(),
+    wireProtocol: fields.wireProtocol,
     modelsUrl: fields.modelsUrl.trim(),
     apiKey: authMode === 'apiKey' ? fields.apiKey.trim() : null,
     headers: Object.entries(effectiveHeaders).sort(([a], [b]) => a.localeCompare(b)),

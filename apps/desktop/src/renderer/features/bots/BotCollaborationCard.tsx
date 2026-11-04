@@ -19,6 +19,7 @@ import {
   useChatSessionFile,
 } from '@/components/chat/ChatSessionFileContext';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
+import { SessionQuickSendProvider } from '@/components/chat/SessionQuickSendContext';
 import { Spinner } from '@/components/ui/spinner';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { usePrActions, usePrRefsForSession, usePrStatuses } from '@/contexts/PrRefsContext';
@@ -300,6 +301,16 @@ export function BotTaskCard({
   // differ from the Bot's main task: the frozen receipt records it, the live card reads the
   // child session's. The surrounding chat's directory is only the last resort.
   const workingDir = frozen?.workingDir ?? session?.workingDir ?? fileContext.workingDir;
+  // The result is the child's: a confirmed-local chat does not make a child that runs on another
+  // device (or over SSH, or with a conflicting origin) local, and its directory must not be
+  // searched on this machine. Until the child's row has loaded its ownership is unknown.
+  const childLocalConfirmed =
+    fileContext.localConfirmed === true &&
+    session !== null &&
+    !ref.sourceDeviceId &&
+    !ref.originConflict &&
+    !session?.deviceLinkDeviceId &&
+    !session?.remoteHostId;
   const canOpen = Boolean(childSessionId) && !ref.originConflict;
   const canAddNote = state === 'running' && Boolean(childSessionId) && !ref.sourceDeviceId && !frozen;
   const resultLabel =
@@ -468,7 +479,7 @@ export function BotTaskCard({
             }}
             aria-label={t('bots.collab.addNote')}
             placeholder={t('bots.collab.addNotePlaceholder')}
-            className="h-8 w-full rounded-full border border-[var(--border-default)] bg-[var(--surface)] px-3 text-12 text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"
+            className="h-8 w-full rounded-full border border-[var(--border-default)] bg-[var(--surface)] px-3 text-12 text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"
           />
         </form>
       ) : null}
@@ -477,36 +488,43 @@ export function BotTaskCard({
           id={resultId}
           className="mt-2 space-y-2 border-t border-[var(--border-default)] pt-2 text-13 text-[var(--text-primary)]"
         >
-          <ChatSessionFileProvider
-            value={{ ...fileContext, workingDir, sessionId: childSessionId ?? undefined }}
-          >
-            {resultText ? (
-              <MarkdownRenderer
-                workingDir={workingDir}
-                currentSessionId={childSessionId ?? undefined}
-                renderRichAnswers
-                streamFadeKey={`bot-result:${childSessionId ?? parentSessionId}:${card.delegationId}`}
-                content={resultText}
-              />
-            ) : (
-              <p className="whitespace-pre-wrap break-words text-[var(--text-secondary)]">
-                {t('bots.collab.noWrittenResult')}
-              </p>
-            )}
-            {files.map((path) => (
-              <MarkdownRenderer
-                key={path}
-                workingDir={workingDir}
-                currentSessionId={childSessionId ?? undefined}
-                content={`[${
-                  path
-                    .split(/[\\/]/)
-                    .pop()
-                    ?.replace(/[[\]\\]/g, '\\$&') ?? t('bots.collab.viewResult')
-                }](<${encodeURI(path).replace(/[<>?#]/g, encodeURIComponent)}>)`}
-              />
-            ))}
-          </ChatSessionFileProvider>
+          <SessionQuickSendProvider value={null}>
+            <ChatSessionFileProvider
+              value={{
+                ...fileContext,
+                workingDir,
+                sessionId: childSessionId ?? undefined,
+                localConfirmed: childLocalConfirmed,
+              }}
+            >
+              {resultText ? (
+                <MarkdownRenderer
+                  workingDir={workingDir}
+                  currentSessionId={childSessionId ?? undefined}
+                  renderRichAnswers
+                  streamFadeKey={`bot-result:${childSessionId ?? parentSessionId}:${card.delegationId}`}
+                  content={resultText}
+                />
+              ) : (
+                <p className="whitespace-pre-wrap break-words text-[var(--text-secondary)]">
+                  {t('bots.collab.noWrittenResult')}
+                </p>
+              )}
+              {files.map((path) => (
+                <MarkdownRenderer
+                  key={path}
+                  workingDir={workingDir}
+                  currentSessionId={childSessionId ?? undefined}
+                  content={`[${
+                    path
+                      .split(/[\\/]/)
+                      .pop()
+                      ?.replace(/[[\]\\]/g, '\\$&') ?? t('bots.collab.viewResult')
+                  }](<${encodeURI(path).replace(/[<>?#]/g, encodeURIComponent)}>)`}
+                />
+              ))}
+            </ChatSessionFileProvider>
+          </SessionQuickSendProvider>
           {errorText ? (
             <details>
               <summary className="flex min-h-8 cursor-pointer items-center rounded-lg text-12 text-[var(--text-secondary)] focus-visible:outline focus-visible:outline-2">

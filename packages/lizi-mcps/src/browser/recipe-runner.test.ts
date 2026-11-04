@@ -1,3 +1,5 @@
+import { runInNewContext } from 'node:vm';
+
 import type { BrowserControlRequest, BrowserControlResult } from '@cindy/browser-control-runtime';
 import { describe, expect, it } from 'vitest';
 
@@ -74,6 +76,11 @@ describe('stepToRequest', () => {
     expect(req.action).toBe('act');
     expect(req.request?.kind).toBe('evaluate');
     expect(req.request?.fn).toContain('querySelectorAll');
+    // PR #7432: unguarded recipe reads must reach the same fixed DOM path as
+    // direct extracts, while retaining fn for older runtime backends.
+    expect(req.request?.domRead).toEqual({ kind: 'extract',
+      extract: { from: '.row', multiple: true, fields: { t: '.t' } },
+    });
   });
 
   it('maps an evaluate step to act:evaluate, interpolating vars into the fn source', () => {
@@ -420,5 +427,79 @@ describe('findUnsafeEvaluateInterpolations', () => {
         steps: [{ action: 'wait', fn: "() => document.title.includes('{{q|js}}')" }],
       }),
     ).toHaveLength(0);
+  });
+});
+
+
+describe('recipe guards and output checks', () => {
+  // #6822: resolving equals after a browser call misclassified missing input as
+  // stale data. Unit production runner; both guarded read implementations must
+  // reject before any page execution, rather than suspending a saved recipe.
+  it.each(['extract', 'evaluate'] as const)('preflights equals variables before a guarded %s', async (action) => {
+    const m = mockCall([{ data: { result: { matched: true, value: { title: 'found' } } } }]);
+    const result = await runRecipe({ id: 'missing-equals', steps: [{ action,
+      fn: '() => ({ title: "found" })', extract: { fields: { title: 'h1' } },
+      guard: { url: 'https://example.com/' }, expect: { equals: { title: '{{missing}}' } } }] }, {}, m);
+    expect(result).toMatchObject({ ok: false, failureKind: 'input', steps: [] });
+    expect(m.calls).toHaveLength(0);
+  });
+  it.each([
+    { visible: 1, hidden: 1, url: 'https://x.com/', text: 'account', ok: true },
+    { visible: 2, hidden: 0, url: 'https://x.com/', text: 'account', ok: false },
+    { visible: 0, hidden: 1, url: 'https://x.com/', text: 'account', ok: false },
+    { visible: 1, hidden: 0, url: 'https://x.com/other', text: 'account', ok: false },
+    { visible: 1, hidden: 0, url: 'https://x.com/', text: 'other account', ok: false },
+  ])('checks page identity and unique visible nodes in the actual extraction: %j', async (scenario) => {
+    let reads = 0;
+    let calls = 0;
+    const nodes = [
+      ...Array.from({ length: scenario.visible }, () => ({ textContent: scenario.text, getBoundingClientRect: () => ({ width: 10, height: 10 }) })),
+      ...Array.from({ length: scenario.hidden }, () => ({ textContent: scenario.text, getBoundingClientRect: () => ({ width: 0, height: 0 }) })),
+    ];
+    const result = await runRecipe({ id: 'guarded-read', steps: [{ action: 'extract',
+      guard: { url: 'https://x.com/', selector: '#account', text: 'account' },
+      extract: { fields: { title: 'h1' } }, expect: { requiredFields: ['title'] }, as: 'data' }], output: '{{data}}' }, {}, {
+      call: async (req) => {
+        // The runtime ignores fn when domRead is present: leaving this metadata
+        // on the combined request would bypass the page identity guard.
+        expect(req.request?.domRead).toBeUndefined();
+        calls++;
+        const value = await runInNewContext(`(${req.request!.fn})()`, {
+          location: { href: scenario.url }, getComputedStyle: () => ({ visibility: 'visible' }),
+          document: { querySelectorAll: () => nodes, querySelector: () => { reads++; return { textContent: 'Title' }; } },
+        });
+        return { ok: true, action: req.action, data: { result: value } };
+      },
+    });
+    expect(result.ok).toBe(scenario.ok);
+    expect(reads).toBe(scenario.ok ? 1 : 0);
+    expect(calls).toBe(1); // guard + extract use one page evaluation
+    if (scenario.ok) expect(result.output).toMatchObject({ records: [{ title: 'Title' }] });
+    else expect(result.failureKind).toBe('guard');
+  });
+  it('stops before a write when page identity does not match', async () => {
+    const m = mockCall([{ data: { result: false } }]);
+    const result = await runRecipe({ id: 'save', steps: [{ action: 'click', selector: '#save', guard: { url: 'https://x.com/' } }] }, {}, m);
+    expect(result).toMatchObject({ ok: false, failureKind: 'guard', failedStep: 0, steps: [] });
+    expect(m.calls).toHaveLength(1);
+    expect(m.calls[0].request?.kind).toBe('evaluate');
+  });
+  it.each([[[]], [[{ title: '' }]], [[{ title: 'wrong' }]]])('rejects missing or wrong business results: %j', async (records) => {
+    const m = mockCall([{ data: { result: { records, count: 100 } } }]);
+    const result = await runRecipe({ id: 'read', steps: [{ action: 'extract', extract: { fields: { title: 'h1' } }, expect: { minCount: 1, requiredFields: ['title'], equals: { title: 'expected' } } }] }, {}, m);
+    expect(result).toMatchObject({ ok: false, failureKind: 'expect' });
+  });
+  it('accepts validated fields and preserves structured output', async () => {
+    const m = mockCall([{ data: { result: true } }, { data: { result: [{ title: 'expected', count: 0 }] } }]);
+    const result = await runRecipe({ id: 'read', steps: [{ action: 'evaluate', fn: '() => []', guard: { url: 'https://x.com/' }, expect: { minCount: 1, requiredFields: ['count'], equals: { title: '{{title}}' } }, as: 'result' }], output: '{{result}}' }, { title: 'expected' }, m);
+    expect(result).toMatchObject({ ok: true, output: [{ title: 'expected', count: 0 }] });
+  });
+  it('captures a transport exception without retrying a possibly successful write', async () => {
+    let calls = 0;
+    const result = await runRecipe({ id: 'save', steps: [{ action: 'click', selector: '#save' }, { action: 'click', selector: '#again' }] }, {}, {
+      call: async () => { calls++; throw new Error('response lost'); },
+    });
+    expect(result).toMatchObject({ ok: false, failedStep: 0, failureKind: 'action' });
+    expect(calls).toBe(1);
   });
 });

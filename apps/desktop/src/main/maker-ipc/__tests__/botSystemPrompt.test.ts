@@ -7,6 +7,7 @@
  * **能力有没有被写进提示词**,以及**没挂的能力有没有被闭嘴**。
  */
 import { describe, expect, it } from 'vitest';
+import { TEAMMATE_SYSTEM_SKILLS } from '@cindy/mcps';
 
 import {
   buildBotTeammateRoster,
@@ -33,16 +34,20 @@ function input(overrides: Partial<BotSystemPromptInput> = {}): BotSystemPromptIn
 }
 
 describe('稳定层:能力必须写进提示词', () => {
-  it('advertises native routines without an optional scheduler toolset only when mounted', () => {
+  // Rule (cindy-bots-runtime.md §6「伙伴技能分层」): routines and the workbench are system Skills, read on demand
+  // and dropped together with their tools when the owner turns them off.
+  it('leaves routines to their system Skill and drops the workbench line when follow is off', () => {
     const enabled = input();
     enabled.capabilities.routinesEnabled = true;
     enabled.capabilities.botModeEnabled = true;
-    const stable = buildBotStableTier(enabled);
-    expect(stable).toContain('routine_save');
-    expect(stable).toContain('保存后再读回');
-    expect(buildBotStableTier(input())).not.toContain('routine_save');
-    enabled.capabilities.botModeEnabled = false;
     expect(buildBotStableTier(enabled)).not.toContain('routine_save');
+    expect(TEAMMATE_SYSTEM_SKILLS.routine.body).toContain('保存后再读回');
+    const main = input();
+    main.capabilities.botModeEnabled = true;
+    main.capabilities.sessionControlEnabled = true;
+    main.capabilities.followEnabled = false;
+    expect(buildBotStableTier(main)).not.toContain('set_workbench_task_responsibility');
+    expect(TEAMMATE_SYSTEM_SKILLS.follow.body).toContain('set_workbench_task_responsibility');
   });
   it('只给本机伙伴主任务讲它能管主人的任务,自动化另需挂载', () => {
     const main = input();
@@ -50,7 +55,10 @@ describe('稳定层:能力必须写进提示词', () => {
     main.capabilities.sessionControlEnabled = true;
     const stable = buildBotStableTier(main);
     expect(stable).toContain('你能看、能管主人的任务');
-    expect(stable).toContain('沿用当前任务的权限档与用户授权');
+    // The prompt states the same principal boundary the host gate enforces.
+    expect(stable).toContain('同意后继续本次调用');
+    expect(stable).not.toContain('NEEDS_OWNER_REQUEST');
+    expect(stable).toContain('照常走当前任务的权限档');
     expect(stable).not.toContain('OWNER_TURN_REQUIRED');
     expect(stable).not.toContain('TASK_OUT_OF_SCOPE');
     expect(stable).toContain('set_workbench_task_responsibility');
@@ -122,7 +130,9 @@ describe('稳定层:能力必须写进提示词', () => {
     expect(all).toContain('你记得住事');
     expect(all).toContain('第一次明确说出一条稳定偏好');
     expect(all).toContain('save_teammate_skill');
-    expect(all).toContain('第一次验证完就');
+    // 2026-10-23 主人裁决：对话中只在主人明确要求时新建技能，其余交给夜间学习。
+    expect(all).toContain('用户明确要你把一套做法记成技能时');
+    expect(all).not.toContain('第一次验证完就');
     expect(all).toContain('开后台任务，也可以给伙伴发消息');
     expect(all).toContain('start_session_task');
     expect(all).toContain('check_session_task');

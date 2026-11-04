@@ -1,4 +1,5 @@
-import { randomUUID } from 'node:crypto';
+import { readGithub } from '../git-context/githubReadRuntime';
+import { createHash, randomUUID } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 
 import type { Schedule, ScriptCapability } from '@cindy/maker-scheduler';
@@ -13,6 +14,9 @@ import {
 } from '../cindy-brain/index.js';
 import { validateFsRelPath } from '../cindy-brain/fsSlot.js';
 import { tryGetOrcaCollabService } from '../maker-ipc/register.js';
+import { getSessionRowSnapshotStrict, restoreArchivedSessionForSend } from '../localDb/ipc/sessions';
+import { assertReviewSessionExternalInputAllowed } from '../reviewer/reviewSessionInputPolicy';
+import { isManagedScheduledTarget } from './restore-target';
 import type { ScriptCapabilityBroker, ScriptCapabilityCall } from './script-runner';
 // model 兜底与 runner 同源(2026-06 曾因多份拷贝不同步导致 UI 显示与实跑模型不一致)
 
@@ -192,13 +196,14 @@ const SCRIPT_METHOD_CATALOG: ReadonlyArray<{
   params: string;
   description: string;
 }> = [
+  ...(['get_pr_status', 'get_pr_changes', 'get_pr_details'] as const).map(name => ({ method: `github.${name}`, capability: 'github.read' as const, params: '{pr:{url}|{repo,number},freshness?,kind?,after?,limit?,item?}', description: '读取与界面共用的 GitHub 状态/变化/详情；不关联任务、不启动监听，读取不确认投递' })),
   { method: 'host.capabilities', capability: null, params: '{}', description: '自省:返回协议版本、本任务已授予的能力、可用方法目录' },
   { method: 'jira.get', capability: 'jira.read', params: '{issue_key, fields?, out_file?}', description: '按 key 读单条 Jira issue(out_file = 结果落盘到工作目录的相对路径)' },
   { method: 'jira.search_jql', capability: 'jira.read', params: '{jql, fields?, max_results?≤100, next_page_token?, out_file?}', description: 'JQL 搜索(大结果集用 next_page_token 分页,或 out_file 落盘后自行读回)' },
   { method: 'jira.add_comment', capability: 'jira.comment', params: '{issue_key, body_text | body_adf}', description: '向 Jira issue 添加评论;body_text 纯文本与 body_adf(ADF 文档对象,支持 @mention)恰好二选一' },
   { method: 'feishu.recent_chats', capability: 'feishu.read', params: '{count?≤50}', description: '按活跃时间倒序列最近飞书会话' },
   { method: 'feishu.recent_messages', capability: 'feishu.read', params: '{chat_id, count?≤50, start_time?}', description: '拉指定飞书会话最近消息(新→旧,start_time 增量)' },
-  { method: 'sessions.dispatch', capability: 'sessions.dispatch', params: '{message, title?, target_session_id?}', description: '创建或唤醒 Cindy 会话并投递消息' },
+  { method: 'sessions.dispatch', capability: 'sessions.dispatch', params: '{message, title?, target_session_id?, idempotency_key?}', description: '创建或唤醒 Cindy 会话并投递消息' },
 ];
 
 /**
@@ -218,14 +223,18 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
 
   /** 新建任务的配置:模型留空时按新建任务口径实时解析,不写死型号。 */
   private async createDefaultsFor(schedule: Schedule) {
+    if (schedule.modelAgentDeviceId ?? schedule.agentDeviceId) {
+      fail('PRECONDITION_FAILED', 'script execution does not support remote model sources; select a local model before switching modes');
+    }
+    const agentKind = schedule.modelAgentKind ?? schedule.agentKind;
     const explicitProviderId = schedule.providerId?.trim() || null;
     const dynamicDefaultRoute = !schedule.model?.trim()
-      ? await this.deps.resolveDefaultModelRoute?.(schedule.agentKind, explicitProviderId) ?? null
+      ? await this.deps.resolveDefaultModelRoute?.(agentKind, explicitProviderId) ?? null
       : null;
     const model = schedule.model?.trim() || dynamicDefaultRoute?.model;
-    if (!model) fail('PRECONDITION_FAILED', `${schedule.agentKind} has no connected model source`);
+    if (!model) fail('PRECONDITION_FAILED', `${agentKind} has no connected model source`);
     return {
-      agentKind: schedule.agentKind,
+      agentKind,
       model,
       providerId: explicitProviderId ?? dynamicDefaultRoute?.providerId ?? null,
       effort: schedule.effort as DispatchEffort | undefined,
@@ -273,6 +282,13 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
             available: entry.capability === null || granted.has(entry.capability),
           })),
         };
+      case 'github.get_pr_status':
+      case 'github.get_pr_changes':
+      case 'github.get_pr_details': {
+        requireCapability(granted, 'github.read');
+        if (params.device && params.device !== 'local') fail('INVALID_ARGS', 'Scripts read GitHub on their execution computer');
+        return readGithub(request.method.slice(7) as 'get_pr_status' | 'get_pr_changes' | 'get_pr_details', params);
+      }
       case 'jira.get': {
         requireCapability(granted, 'jira.read');
         const fields = optionalStringArray(params, 'fields');
@@ -396,9 +412,26 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
           fail('INVALID_ARGS', 'bound scripts can only dispatch to their target session');
         }
         const targetSessionId = schedule.targetSessionId ?? requestedTarget;
+        const message = requireString(params, 'message');
+        const deliveryKey = params.idempotency_key;
+        if (deliveryKey !== undefined && (typeof deliveryKey !== 'string' || !deliveryKey.trim() || deliveryKey.length > 512 || !targetSessionId))
+          fail('INVALID_ARGS', 'idempotency_key requires a target and 1–512 characters');
+        const deliveryClientId = typeof deliveryKey === 'string'
+          ? `schedule-delivery:${createHash('sha256').update(JSON.stringify([schedule.id, targetSessionId, deliveryKey])).digest('hex')}` : undefined;
+        // Bound owners are restored once at fire admission. A later archive must
+        // not be undone by the same run. Unbound scripts first choose their target here.
+        if (targetSessionId && !schedule.targetSessionId) {
+          const target = await getSessionRowSnapshotStrict(targetSessionId);
+          // Use the dispatcher's Review policy before any lifecycle mutation.
+          await assertReviewSessionExternalInputAllowed(targetSessionId, () => target?.source ?? null);
+          if (target && !isManagedScheduledTarget(target)) {
+            await restoreArchivedSessionForSend(targetSessionId);
+          }
+        }
         const result = await service.sendToSession({
           targetSessionId,
-          message: requireString(params, 'message'),
+          deliveryClientId,
+          message,
           title: typeof params.title === 'string' ? params.title : undefined,
           useWorktree: false,
           // 投递到已有任务时沿用该任务自己的配置,只有新建任务才需要默认路由。
@@ -409,6 +442,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
         if (!result.ok) fail(result.errorCode, result.message);
         return {
           target_session_id: result.targetSessionId,
+          ...(deliveryClientId ? { delivery_id: deliveryClientId } : {}),
           agent_kind: result.agentKind,
           wake_kind: result.wakeKind,
           target_title: result.targetTitle,

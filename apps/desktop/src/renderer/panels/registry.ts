@@ -38,6 +38,12 @@ export interface PanelDefinition {
 
 const registry = new Map<string, PanelDefinition>();
 /**
+ * 「停放」中的 kind:仍在注册表里、pane 保持挂载,但引擎不给它布局空间(容器 0 宽 / 0 高、
+ * aria-hidden、不画分割线、不参与份额账本)。边页签组在路由离开聊天页时使用 —— 直接注销
+ * 会把 pane 卸掉,webview 宿主随之销毁,回来整页重载(#8081)。
+ */
+const parked = new Set<string>();
+/**
  * 注册表版本与订阅:页签组 pane 的 kind 随「组里有没有页签」动态注册 / 注销
  * (features/right-sidebar/tabGroupPanes.ts),布局引擎靠订阅感知在场面板变化,
  * 不再只依赖插件装卸广播。
@@ -68,7 +74,21 @@ export function registerPanelKind(definition: PanelDefinition): void {
  * "未安装意识"隐藏 —— 树数据保留,重装即原位复活。幂等。
  */
 export function unregisterPanelKind(kind: PanelKind): void {
-  if (registry.delete(kind)) bump();
+  const wasParked = parked.delete(kind);
+  if (registry.delete(kind) || wasParked) bump();
+}
+
+/** 停放 / 解除停放一种已注册面板(见 `parked`);状态没变不通知。注销时一并清除。 */
+export function setPanelKindParked(kind: PanelKind, isParked: boolean): void {
+  if (isParked === parked.has(kind)) return;
+  if (isParked) parked.add(kind);
+  else parked.delete(kind);
+  bump();
+}
+
+/** 该 kind 是否处于停放态(未注册的 kind 恒为 false)。 */
+export function isPanelKindParked(kind: PanelKind): boolean {
+  return parked.has(kind) && registry.has(kind);
 }
 
 /** 注册表变更订阅(注册 / 注销都会通知);返回退订函数。 */
@@ -101,6 +121,7 @@ export function listPanelKinds(): string[] {
 /** 仅测试用:清空注册表,保证用例间隔离。 */
 export function __resetPanelRegistryForTest(): void {
   registry.clear();
+  parked.clear();
   subscribers.clear();
   version = 0;
 }

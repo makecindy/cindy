@@ -20,6 +20,8 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import * as sessionService from '@/lib/sessionService';
 import { toast } from '@/lib/toast';
+import { ErrorNotice } from '@/components/ui/error-notice';
+import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 import type { AgentKind, RunStatus, ScheduleRun } from '@cindy/maker-scheduler';
 import type { SessionReference } from '../../../../shared/sessionReference';
 import {
@@ -29,6 +31,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 
+import { buildErrorDiagnosisPrompt, prefillErrorDiagnosisDraft } from '@/lib/errorDiagnosisPrompt';
+import { buildSessionDeepLink } from '@/lib/deepLink';
 import { AgentMark } from './AgentMark';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import { formatDuration, formatRunTimestamp, formatStartedAgo } from '../lib/formatters';
@@ -143,7 +147,9 @@ export function RunHistoryCard({
   onRestart,
   sessionReference,
 }: Props) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const errorCode = run.errorMsg ? parseAgentErrorCode(run.errorMsg)?.code : undefined;
+  const errorKey = errorCode ? `chat.remoteError.${errorCode}` : undefined;
   const navigate = useNavigate();
   const isLegacySessionRun = run.id.startsWith(LEGACY_SESSION_RUN_ID_PREFIX);
   const showError =
@@ -353,7 +359,23 @@ export function RunHistoryCard({
         )}
       </div>
 
-      {showError && (
+      {showError && (run.status === 'failed' ? (
+        <ErrorNotice
+          message={errorKey && i18n.exists(errorKey) ? t(errorKey) : t('chat.unreadFailedScheduleBanner.text')}
+          details={run.errorMsg!}
+          onDiagnose={() => {
+            // 当前自动化可能已切换或重新绑定；只信任这次运行记录保存的任务归属。
+            prefillErrorDiagnosisDraft(buildErrorDiagnosisPrompt(t,
+              run.sessionId ? buildSessionDeepLink(run.sessionId) : null, {
+                message: errorKey && i18n.exists(errorKey) ? t(errorKey) : t('chat.unreadFailedScheduleBanner.text'),
+                details: `scheduleId: ${run.scheduleId}\nrunId: ${run.id}\nfiredAt: ${new Date(run.firedAt).toISOString()}\n${run.errorMsg}`,
+              }));
+            navigate('/cc-agent/new');
+          }}
+        />
+      ) : errorKey && i18n.exists(errorKey) ? (
+        <ErrorNotice message={t(errorKey)} details={run.errorMsg!} />
+      ) : (
         <p
           className={cn(
             'rounded-[8px] border px-2 py-1.5 font-mono text-11 break-words',
@@ -362,7 +384,7 @@ export function RunHistoryCard({
         >
           {run.errorMsg}
         </p>
-      )}
+      ))}
 
       {/* skipped:展示前置检查摘要(exit code / 耗时 / stdout 首行),灰阶弱化 —— 让
           "为什么这轮没跑"在历史里可追溯,与调度器故障区分。 */}

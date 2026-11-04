@@ -32,7 +32,6 @@ import {
 } from '@/session/ContextSheet';
 import {
   orcaAgentLabel,
-  orcaWorkerAgentElsewhere,
   orcaWorkerDisplayName,
   orcaWorkerStatusLabel,
   isAbsoluteOrcaWorkerDir,
@@ -146,8 +145,8 @@ export function OrcaWorkerFormView({
           />
         ) : null}
       </ContextSheetGroup>
-      {/* 运行设备与远程供应商互斥：Worker 的 Agent 已选在另一台电脑时不提供运行设备。 */}
-      {(executionDevices.length > 0 || form.executionDeviceId) && !orcaWorkerAgentElsewhere(form) ? (
+      {/* 工作电脑与模型电脑独立选择。 */}
+      {(executionDevices.length > 0 || form.executionDeviceId) ? (
         <ContextSheetGroup
           footer={t('session.collab.executionDeviceHint')}
           label={title(t('session.collab.executionDeviceLabel'))}

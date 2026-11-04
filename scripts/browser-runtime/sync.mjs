@@ -292,6 +292,86 @@ const LOCAL_PATCHES = {
   ],
   'extension/src/browser/routes/agent.act.ts': [
     {
+      desc: 'execute fixed structured DOM reads in an isolated world without the interaction grace delay',
+      transform: (source) => applyExactReplacements(source, [
+        [
+          `import { normalizeActRequest, validateBatchTargetIds } from "./agent.act.normalize.js";`,
+          `import { normalizeActRequest, validateBatchTargetIds } from "./agent.act.normalize.js";
+import { readBrowserDom } from "../../../../../shim/browser-dom-read.js";`,
+        ],
+        [
+          `          const profileName = profileCtx.profile.name;
+          if (isExistingSession) {`,
+          `          // Only structured host reads enter this path. Arbitrary fn is
+          // ignored here, never trusted as a promise of read-only behavior.
+          if (action.kind === "evaluate" && body.domRead !== undefined && !isExistingSession) {
+            if (!evaluateEnabled) {
+              return jsonActError(res, 403, ACT_ERROR_CODES.evaluateDisabled,
+                browserEvaluateDisabledMessage("evaluate"));
+            }
+            const observed = await readBrowserDom({
+              cdpUrl, targetId: tab.targetId, spec: body.domRead,
+              timeoutMs: action.timeoutMs, ssrfPolicy,
+              browserProxyMode: navigationPolicy.browserProxyMode, signal: req.signal,
+            });
+            if ("blockedByDialog" in observed) {
+              return res.json({ ok: true, targetId: tab.targetId, ...observed });
+            }
+            return res.json({ ok: true, targetId: tab.targetId, url: observed.url, result: observed.value });
+          }
+          const profileName = profileCtx.profile.name;
+          if (isExistingSession) {`,
+        ],
+      ]),
+    },
+    {
+      desc: 'resolve the selected tab alias before comparing or executing action targets',
+      transform: (source) => applyExactReplacements(source, [
+        [
+          `import { normalizeActRequest, validateBatchTargetIds } from "./agent.act.normalize.js";`,
+          `import { normalizeActRequest, validateBatchTargetIds } from "./agent.act.normalize.js";
+import { resolveActionTargetIds } from "openclaw/plugin-sdk/browser-action-targets";`,
+        ],
+        [
+          `      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId,
+        enforceCurrentUrlAllowed: shouldEnforceCurrentUrlForAct(action),
+        run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {`,
+          `      const requestedAction = action;
+      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId,
+        enforceCurrentUrlAllowed: shouldEnforceCurrentUrlForAct(action),
+        run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {
+          let resolvedAction: BrowserActRequest;
+          try {
+            resolvedAction = resolveActionTargetIds(requestedAction, targetId, tab.targetId);
+          } catch {
+            return jsonActError(res, 403, ACT_ERROR_CODES.targetIdMismatch,
+              "action targetId must match request targetId");
+          }
+          const action = resolvedAction;`,
+        ],
+        [
+          `          if (action.targetId && action.targetId !== tab.targetId) {
+            return jsonActError(
+              res,
+              403,
+              ACT_ERROR_CODES.targetIdMismatch,
+              "action targetId must match request targetId",
+            );
+          }
+`,
+          ``,
+        ],
+      ]),
+    },
+    {
       desc: 'carry the effective browser proxy mode through interaction navigation guards',
       transform: (source) => applyExactReplacements(source, [
         [
@@ -826,7 +906,16 @@ const LOCAL_PATCHES = {
     cleanup();
   }
 }`,
-          `        await waitForStep(page.waitForFunction(fn, { timeout }));
+          `        // Pass a real function so Playwright caches its compilation between
+        // polls (string expressions re-eval and can fail under Trusted Types).
+        // Compile only on the host; execution stays in the page context.
+        const predicate = new Function(
+          "const value = (" + normalizeBrowserEvaluateFunctionSource(fn) + ")(); " +
+            "if (value && typeof value.then === 'function') { " +
+            "Promise.resolve(value).catch(() => {}); throw new Error('wait.fn requires a synchronous predicate'); } " +
+            "return value;",
+        ) as () => unknown;
+        await waitForStep(page.waitForFunction(predicate, undefined, { timeout }));
       }
     }
       },
@@ -1456,6 +1545,30 @@ const UNTORN_DOWN_BROWSER_MESSAGE =
     },
   ],
   'extension/src/browser/pw-session.ts': [
+    {
+      desc: 'use Playwright local-path uploads only for a live browser managed by this runtime',
+      transform: (source) => applyExactReplacements(source, [
+        [
+          `import path from "node:path";`,
+          `import path from "node:path";
+import { getBrowserControlState } from "../browser-control-state.js";
+import { isManagedLocalCdpConnection } from "openclaw/plugin-sdk/cdp-locality";`,
+        ],
+        [
+          `          const headers = getHeadersWithAuth(target);
+          // Bypass proxy for loopback CDP connections (#31219)`,
+          `          const headers = getHeadersWithAuth(target);
+          const isLocal = isManagedLocalCdpConnection(
+            normalized, target, getBrowserControlState()?.profiles.values() ?? [],
+          );
+          // Bypass proxy for loopback CDP connections (#31219)`,
+        ],
+        [
+          `chromium.connectOverCDP(target, { timeout, headers })`,
+          `chromium.connectOverCDP(target, { timeout, headers, isLocal })`,
+        ],
+      ]),
+    },
     {
       desc: 'export a non-blocking quarantine so the popup-overflow path can mark a target unusable without awaiting close() (a hung page must not keep the interaction pending)',
       find: `// Quarantine and close a tab that OpenClaw itself navigated to a blocked URL.`,

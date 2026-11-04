@@ -91,6 +91,18 @@ function register(controller: ReturnType<typeof makeController>) {
 }
 
 describe('sidebar-tab-window IPC', () => {
+  // 扩展已有 focus 请求时保留旧调用默认，并拒绝不合法的后台手势标记。
+  it('validates optional focus intent and preserves legacy foreground requests', async () => {
+    const controller = makeController();
+    register(controller);
+    const focus = handlers().get(MAKER_INVOKE.SIDEBAR_TAB_WINDOW_FOCUS)!;
+    await call(focus, { sender: mainSender }, 'tab-a');
+    expect(controller.focus).toHaveBeenLastCalledWith('tab-a', { userInitiated: true });
+    await call(focus, { sender: mainSender }, 'tab-a', { userInitiated: false });
+    expect(controller.focus).toHaveBeenLastCalledWith('tab-a', { userInitiated: false });
+    await expect(call(focus, { sender: mainSender }, 'tab-a', { userInitiated: 'false' })).rejects.toThrow(/INVALID_PARAMS/);
+    expect(controller.focus).toHaveBeenCalledTimes(2);
+  });
   it('only the main window may pop a tab out, and the payload must be well-formed', async () => {
     const controller = makeController();
     register(controller);

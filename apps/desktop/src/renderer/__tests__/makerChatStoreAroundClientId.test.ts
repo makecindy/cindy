@@ -126,8 +126,8 @@ describe('makerChatStore loadAroundMessageClientId', () => {
     const visible = simplifyBotRenderItems(groupWorkRuns(items, running), running)
       .flatMap(item => item.type === 'message' && item.message.role === 'assistant' ? [item.message.content] : []);
     expect(visible).toContain('Explicit reply');
-    expect(visible).not.toContain('Working before');
-    expect(visible).not.toContain('Working after');
+    expect(visible.includes('Working before')).toBe(running);
+    expect(visible.includes('Working after')).toBe(running);
   });
 
   it('hydrates shorter authoritative tool_result content during around-message hydration', async () => {

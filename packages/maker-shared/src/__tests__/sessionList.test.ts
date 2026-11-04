@@ -220,6 +220,19 @@ describe('sessionList', () => {
     });
   });
 
+  it('uses handoff activity for remote ordering and row time without changing legacy fallbacks', () => {
+    const now = Date.parse('2026-01-01T00:10:00.000Z');
+    const sessions = [
+      session('legacy', { userSendAt: '2026-01-01T00:04:00.000Z', updatedAt: '2026-01-01T00:09:00.000Z' }),
+      session('handoff', { lastActivityAt: '2026-01-01T00:08:00.000Z', userSendAt: '2026-01-01T00:01:00.000Z' }),
+    ];
+    const sections = buildRemoteSessionSections(sessions, now);
+    expect(sections.flatMap(section => section.data).map(item => item.session.id)).toEqual(['handoff', 'legacy']);
+    expect(toRemoteSessionListItem(sessions[1], now)).toMatchObject({
+      lastActivityAt: '2026-01-01T00:08:00.000Z', detail: expect.stringContaining('2 minutes ago'),
+    });
+  });
+
   it('caps oversized message counts at 1000+', () => {
     const item = toRemoteSessionListItem(session('s-big', {
       title: '大库',
@@ -860,6 +873,16 @@ describe('sessionList', () => {
     expect(sections[0].data[0].messagePreview).not.toContain('{');
   });
 
+  it('shows only the basename for Windows attachment paths in session previews', () => {
+    const messagePreviewIndex = buildSessionMessagePreviewIndex(['windows-file'], () => [
+      message('windows-file', 'm1', 'user', {
+        files: [{ path: 'C:\\work\\report.pdf' }],
+      }, '2026-01-01T00:01:00.000Z'),
+    ]);
+
+    expect(messagePreviewIndex.get('windows-file')).toBe('附件 report.pdf');
+  });
+
   it('never leaks hidden synthetic trigger prompts into session previews', () => {
     // 桌面「失败后继续」的隐藏续跑 prompt(带 [UI_ACTION_TRIGGER] 前缀)常是会话
     // 最后一条 user 行:预览必须回落到上一条可见消息,而不是把裸英文指令亮出来。
@@ -1145,5 +1168,58 @@ describe('formatRemoteSessionSidebarTime', () => {
     expect(formatRemoteSessionSidebarTime('2026-01-01T11:55:00.000Z', now, t)).toBe('5 分钟');
     expect(formatRemoteSessionSidebarTime('2026-01-01T09:00:00.000Z', now, t)).toBe('3 小时');
     expect(formatRemoteSessionSidebarTime('2025-12-30T12:00:00.000Z', now, t)).toBe('2 天');
+  });
+});
+
+describe('project sections fold Windows path spelling', () => {
+  const now = new Date('2026-01-01T00:10:00.000Z').getTime();
+
+  it('keeps one section when Windows sessions report the same project differently', () => {
+    const sessions = [
+      session('win-backslash', { workingDir: 'C:\\Repo\\App' }),
+      session('win-forward', { workingDir: 'c:/repo/app' }),
+    ];
+    const sections = buildRemoteSessionSections(sessions, now);
+    const projectSections = sections.filter((section) => section.key.startsWith('project:'));
+    expect(projectSections).toHaveLength(1);
+    expect(projectSections[0].data).toHaveLength(2);
+    // 标题取组内首条会话的原始写法，不能被分组键的小写归一覆盖。
+    expect(projectSections[0].title).toBe('App');
+    expect(summarizeRemoteSessionOverview(sessions, new Map(), new Map()).projectCount).toBe(1);
+  });
+
+  it('folds a trailing separator and a projectDir/workingDir split into one section', () => {
+    const trailing = buildRemoteSessionSections(
+      [session('no-slash', { workingDir: '/repo/app' }), session('slash', { workingDir: '/repo/app/' })],
+      now,
+    );
+    expect(trailing.filter((section) => section.key.startsWith('project:'))).toHaveLength(1);
+
+    const mixed = buildRemoteSessionSections(
+      [
+        session('with-project-dir', { workingDir: 'C:\\Repo\\App', projectDir: 'C:\\Repo\\App' }),
+        session('cwd-only', { workingDir: 'c:/repo/app' }),
+      ],
+      now,
+    );
+    const mixedProjects = mixed.filter((section) => section.key.startsWith('project:'));
+    expect(mixedProjects).toHaveLength(1);
+    expect(mixedProjects[0].title).toBe('App');
+  });
+});
+
+describe('trim whitespace before grouping', () => {
+  const now = new Date('2026-01-01T00:10:00.000Z').getTime();
+
+  it('does not lose the section title when a session reports a padded working dir', () => {
+    const sessions = [
+      session('padded', { workingDir: ' /repo/app/ ' }),
+      session('plain', { workingDir: '/repo/app' }),
+    ];
+    const sections = buildRemoteSessionSections(sessions, now);
+    const projectSections = sections.filter((section) => section.key.startsWith('project:'));
+    expect(projectSections).toHaveLength(1);
+    expect(projectSections[0].title).toBe('app');
+    expect(summarizeRemoteSessionOverview(sessions, new Map(), new Map()).projectCount).toBe(1);
   });
 });

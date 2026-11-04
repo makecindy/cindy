@@ -14,6 +14,7 @@ import type { ProviderService } from '../maker-host/provider-service.js';
 import {
   providerRouteRequiresExplicitSelection,
   type OrcaWorkerProviderRoutingContext,
+  type OrcaWorkerProviderSnapshot,
 } from './orcaWorkerCreationService.js';
 
 /** The SSH discovery projection is native OpenAI only and already ordered by remote default. */
@@ -87,6 +88,14 @@ function routableModels(provider: ProviderView, kind: AgentKind): CatalogModel[]
   );
 }
 
+/** Do not expose route URLs, auth or the whole provider config through model discovery. */
+function modelDetails(model: CatalogModel): NonNullable<OrcaWorkerProviderSnapshot['modelDetailsByModel']>[string] {
+  const { description, contextWindow, efforts, defaultEffort, effortsUnknown, supportsFastMode,
+    supportsUltrafastMode, supportsToolCalls, cost, currency, costDiscount, displayPricing } = model;
+  return { description, contextWindow, efforts, defaultEffort, effortsUnknown, supportsFastMode,
+    supportsUltrafastMode, supportsToolCalls, cost, currency, costDiscount, displayPricing };
+}
+
 /** 那台电脑上某种 Agent 可选的模型(各来源去重，按来源顺序)。 */
 function deviceRoutableModels(views: ProviderView[], agent: AgentKind): CatalogModel[] {
   const seen = new Set<string>();
@@ -99,7 +108,7 @@ function deviceRoutableModels(views: ProviderView[], agent: AgentKind): CatalogM
 export function deviceAvailableModels(views: ProviderView[], agent: AgentKind): Array<{
   id: string;
   label: string;
-  providers: Array<{ id: string; name: string }>;
+  providers: Array<{ id: string; name: string; access?: OrcaWorkerProviderSnapshot['access']; modelDetails?: ReturnType<typeof modelDetails> }>;
   defaultProviderId: string | null;
 }> {
   const providers = connectedProvidersForAgent(views, agent);
@@ -108,9 +117,44 @@ export function deviceAvailableModels(views: ProviderView[], agent: AgentKind): 
     label: model.name || model.id,
     providers: providers
       .filter((provider) => routableModels(provider, agent).some((entry) => entry.id === model.id))
-      .map((provider) => ({ id: provider.id, name: provider.name })),
+      .map((provider) => ({ id: provider.id, name: provider.name,
+        access: provider.access,
+        modelDetails: modelDetails(routableModels(provider, agent).find((entry) => entry.id === model.id)!),
+      })),
     defaultProviderId: effectiveSourceIdForModel(views, null, model.id, agent),
   }));
+}
+
+/**
+ * list_available_models 用：本机某种 Agent 的模型、提供它的来源与默认来源。
+ * 没有任何已启用来源提供的模型(提供商被关/断连后只剩目录骨架)不进返回，
+ * 否则 Lead 会把 `providers: []` 的模型当成仍可选(#6970)，与 deviceAvailableModels 口径一致。
+ */
+export function localAvailableModels(
+  availableModels: ReadonlyArray<{ id: string; displayName: string }>,
+  providers: ReadonlyArray<OrcaWorkerProviderSnapshot>,
+  resolveDefaultProviderIdForModel: (agent: AgentKind, model: string) => string | null,
+  agent: AgentKind,
+): Array<{
+  id: string;
+  label: string;
+  providers: Array<{ id: string; name: string; access?: OrcaWorkerProviderSnapshot['access']; modelDetails?: ReturnType<typeof modelDetails> }>;
+  defaultProviderId: string | null;
+}> {
+  return availableModels.flatMap((m) => {
+    const modelProviders = providers
+      .filter((provider) => provider.models.includes(m.id))
+      .map((provider) => ({ id: provider.id, name: provider.name,
+        ...(provider.access ? { access: provider.access } : {}),
+        ...(provider.modelDetailsByModel?.[m.id] ? { modelDetails: provider.modelDetailsByModel[m.id] } : {}),
+      }));
+    return modelProviders.length === 0 ? [] : [{
+      id: m.id,
+      label: m.displayName,
+      providers: modelProviders,
+      defaultProviderId: resolveDefaultProviderIdForModel(agent, m.id),
+    }];
+  });
 }
 
 /**
@@ -161,6 +205,8 @@ export async function readOrcaWorkerProviderRoutingContext(deps: {
         name: provider.name,
         models: models.map((model) => model.id),
         registryIdentityByModel,
+        access: provider.access,
+        modelDetailsByModel: Object.fromEntries(models.map((model) => [model.id, modelDetails(model)])),
         fastModels: models.filter((model) => model.supportsFastMode).map((model) => model.id),
         ultrafastModels: models.filter((model) => agent === 'codex' && model.supportsUltrafastMode).map((model) => model.id),
         effortMetaByModel: Object.fromEntries(

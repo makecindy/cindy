@@ -93,7 +93,7 @@ function mergeTariffs(previous: ModelReferencePrice[], next: ModelReferencePrice
 export function buildXaiSyncCandidate(baseline: Catalog, accountPayload: unknown, detailsPayload: unknown, observedAt: string) {
   if (!Number.isFinite(Date.parse(observedAt))) throw new Error('Invalid observation timestamp');
   const catalog = structuredClone(baseline);
-  if (catalog.modelRegistry?.schemaVersion !== 5) throw new Error('Sync requires an existing V5 catalog');
+  if (catalog.modelRegistry?.schemaVersion !== 5 && catalog.modelRegistry?.schemaVersion !== 6) throw new Error('Sync requires an existing V5/V6 catalog');
   const registry = catalog.modelRegistry;
   const provider = catalog.providers.find(p => p.id === 'xai');
   if (!provider) throw new Error('Catalog lacks xAI subscription routing');

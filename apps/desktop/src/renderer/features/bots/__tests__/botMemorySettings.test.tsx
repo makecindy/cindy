@@ -60,6 +60,7 @@ function renderMemory(memoryEnabled = true) {
       botName="Cindy"
       memoryEnabled={memoryEnabled}
       onMemoryEnabledChange={onMemoryEnabledChange}
+      aboutMe={{ value: '', onChange: vi.fn(), onBlur: vi.fn() }}
       backRef={backRef}
       leaveRef={leaveRef}
     />,

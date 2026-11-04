@@ -97,12 +97,35 @@ describe('mail reader opening intent', () => {
     Object.assign(ghost.manifest, { mail: true, mailReader: { tool: 'read_mail', hosts: ['mail.example.test'], markRead: optIn } });
     ghost.manifest.tools = ['read_mail', 'set_read'].map(name => ({ name, description: name }));
     const h = makeHarness({ ghost });
-    const args = { url: 'https://mail.example.test/message/one', markRead: !opened, mailReaderOpened: true };
+    const args = { url: 'https://mail.example.test/message/one', markRead: !opened, openDraft: true, mailReaderOpened: true };
     const pending = h.dispatcher.callGhostTool({ ghostId: 'art', tool, args, ...(opened ? { mailReaderOpened: true as const } : {}) });
-    expect(h.sent[0].args).toEqual(expected ? { ...args, markRead: true } : { url: args.url, mailReaderOpened: true });
+    expect(h.sent[0].args).toEqual(tool === 'set_read' ? args : {
+      url: args.url, mailReaderOpened: true, ...(opened ? { openDraft: true } : {}), ...(expected ? { markRead: true } : {}),
+    });
     expect(args.markRead).toBe(!opened); // Never mutate the caller's data.
     h.dispatcher.handleToolResult('art', { callId: h.sent[0].callId, ok: true, result: 'mail' });
     expect(await pending).toEqual({ ok: true, result: 'mail' });
+  });
+});
+
+describe('images shown to the model', () => {
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]).toString('base64');
+
+  it('accepts top-level images next to result and drops invalid ones', async () => {
+    const h = makeHarness();
+    const pending = h.dispatcher.callGhostTool({ ghostId: 'art', tool: 'gen_image', args: {} });
+    h.dispatcher.handleToolResult('art', { callId: h.sent[0].callId, ok: true, result: { path: '/x.jpg' }, images: [{ data: PNG }, { data: 'nope!' }] });
+    expect(await pending).toEqual({ ok: true, result: { path: '/x.jpg' }, images: [{ data: PNG, mimeType: 'image/png' }] });
+  });
+
+  it('a result without images, or a failure, is unchanged', async () => {
+    const h = makeHarness();
+    const plain = h.dispatcher.callGhostTool({ ghostId: 'art', tool: 'gen_image', args: {} });
+    h.dispatcher.handleToolResult('art', { callId: h.sent[0].callId, ok: true, result: 'r' });
+    expect(await plain).toEqual({ ok: true, result: 'r' });
+    const failed = h.dispatcher.callGhostTool({ ghostId: 'art', tool: 'gen_image', args: {} });
+    h.dispatcher.handleToolResult('art', { callId: h.sent[1].callId, ok: false, errorCode: 'INVALID_ARGS', message: 'bad', images: [{ data: PNG }] });
+    expect(await failed).toEqual({ ok: false, errorCode: 'INVALID_ARGS', message: 'bad' });
   });
 });
 
@@ -116,7 +139,7 @@ describe('caller cancellation', () => {
     h.dispatcher.getPendingCallSignal('art', 'stopped');
     const keptSignal = h.dispatcher.getPendingCallSignal('art', 'kept')!;
     h.dispatcher.cancelSessionCalls('session-a');
-    expect(await stopped).toMatchObject({ ok: false, message: 'Plugin tool call cancelled' });
+    expect(await stopped).toMatchObject({ ok: false, errorCode: 'CANCELLED', message: 'Plugin tool call cancelled' });
     expect(keptSignal.aborted).toBe(false);
     expect(h.dispatcher.pendingCount()).toBe(2);
     h.dispatcher.handleToolResult('art', { callId: 'legacy', ok: true, result: 'legacy-kept' });
@@ -137,7 +160,7 @@ describe('caller cancellation', () => {
     expect(h.dispatcher.getPendingCallSessionId('other-plugin', 'call-1')).toBeNull();
     expect(h.dispatcher.getPendingCallSessionId('art', 'missing')).toBeNull();
     a.abort();
-    expect(await first).toMatchObject({ ok: false, message: 'Plugin tool call cancelled' });
+    expect(await first).toMatchObject({ ok: false, errorCode: 'CANCELLED', message: 'Plugin tool call cancelled' });
     expect(firstLifetime.aborted).toBe(true);
     expect(secondLifetime.aborted).toBe(false);
     expect(h.dispatcher.pendingCount()).toBe(1);
@@ -173,7 +196,7 @@ describe('caller cancellation', () => {
     started();
     await vi.waitFor(() => expect(h.sent).toHaveLength(1));
     expect(h.dispatcher.getPendingCallSignal('art', 'stopped-before-binding')).toBeNull();
-    await expect(pending).resolves.toMatchObject({ ok: false, message: 'Plugin tool call cancelled' });
+    await expect(pending).resolves.toMatchObject({ ok: false, errorCode: 'CANCELLED', message: 'Plugin tool call cancelled' });
 
     // Stop belongs to that invocation, not future turns reusing the session.
     h.deps.runtimeStateOf.mockReturnValue('running');
@@ -188,7 +211,7 @@ describe('caller cancellation', () => {
     const pending = h.dispatcher.callGhostTool({ ...CALL, callId: 'late-bind', signal: abort.signal });
     abort.abort();
     expect(h.dispatcher.getPendingCallSignal('art', 'late-bind')).toBeNull();
-    expect(await pending).toMatchObject({ ok: false, message: 'Plugin tool call cancelled' });
+    expect(await pending).toMatchObject({ ok: false, errorCode: 'CANCELLED', message: 'Plugin tool call cancelled' });
     expect(h.dispatcher.pendingCount()).toBe(0);
   });
 });
@@ -420,7 +443,9 @@ describe('配对交卷', () => {
     await expect(p).resolves.toMatchObject({ ok: false, errorCode: 'INTERNAL', message: '画布爆炸' });
   });
 
-  it('透传合法插件业务错误码，但不允许覆盖主机错误码', async () => {
+  // PR #6434: a plugin has already executed when it submits its result, so it
+  // cannot claim the host's pre-dispatch namespace failure and trigger a retry.
+  it.each(['GHOST_CRASHED', 'GHOST_NAMESPACE_MISMATCH'])('不允许插件覆盖主机错误码 %s', async (hostErrorCode) => {
     const h = makeHarness();
     const business = h.dispatcher.callGhostTool(CALL);
     await vi.waitFor(() => expect(h.sent).toHaveLength(1));
@@ -439,7 +464,7 @@ describe('配对交卷', () => {
       type: 'tool-result',
       callId: h.sent[1].callId,
       ok: false,
-      errorCode: 'GHOST_CRASHED',
+      errorCode: hostErrorCode,
       message: '伪造主机错误',
     });
     await expect(reserved).resolves.toMatchObject({ ok: false, errorCode: 'INTERNAL' });
@@ -879,4 +904,30 @@ describe('dispatch usage observation', () => {
     h.dispatcher.handleToolResult('art',{callId:'no-block',ok:true,result:'done'});
     expect(await pending).toMatchObject({ok:true,result:'done'});
   });
+});
+
+// A1: production dispatch observation must accept numeric progress only for the
+// live owning call. Existing heartbeat cases do not cover forwarding. Unit tier.
+it('forwards validated progress only within the owning call, retaining heartbeat compatibility', async () => {
+  const h = makeHarness(), onProgress = vi.fn();
+  const pending = h.dispatcher.callGhostTool({ ...CALL, onProgress });
+  const callId = h.sent[0].callId;
+  expect(h.dispatcher.handleToolProgress('art', { callId }).accepted).toBe(true);
+  expect(onProgress).not.toHaveBeenCalled();
+  for (const invalid of [{ progress: NaN }, { progress: -1 }, { progress: 2, total: 1 }, { progress: 1, message: 4 }])
+    expect(h.dispatcher.handleToolProgress('art', { callId, ...invalid }).accepted).toBe(false);
+  expect(h.dispatcher.handleToolProgress('other', { callId, progress: 1 }).accepted).toBe(false);
+  expect(h.dispatcher.handleToolProgress('art', { callId, progress: 1, total: 3, message: 'Importing' }).accepted).toBe(true);
+  expect(onProgress).toHaveBeenCalledExactlyOnceWith({ progress: 1, total: 3, message: 'Importing' });
+  // B6: a Host read phase followed by network sending cannot repeat or decrease MCP progress.
+  const transfer = h.dispatcher.createHostProgress('art', callId);
+  transfer(3, 3, 'Reading');
+  expect(onProgress).toHaveBeenLastCalledWith({ progress: 4, total: 4, message: 'Reading (3 / 3 bytes)' });
+  transfer(undefined, undefined, 'Uploading');
+  expect(onProgress).toHaveBeenLastCalledWith({ progress: 5, message: 'Uploading' });
+  h.dispatcher.handleToolResult('art', { callId, ok: true, result: null });
+  await pending;
+  transfer(100, 100, 'Reading');
+  expect(onProgress).toHaveBeenCalledTimes(3);
+  expect(h.dispatcher.handleToolProgress('art', { callId, progress: 3 }).accepted).toBe(false);
 });

@@ -16,6 +16,7 @@
  */
 
 import WebSocket from 'ws';
+import { ConnectionRetry, connectionBackoffDelayMs } from '@cindy/im/connection-retry';
 
 import {
   makeHello,
@@ -66,8 +67,6 @@ export interface HookTransport {
   dispose(): void;
 }
 
-const BACKOFF_BASE_MS = 1000;
-const BACKOFF_MAX_MS = 30_000;
 /**
  * 退避抖动下界：实际延迟取 [BACKOFF_JITTER_MIN_RATIO, 1.0] × 退避值。
  *
@@ -97,10 +96,12 @@ export function computeBackoffDelayMs(
   maxMs: number,
   random: () => number,
 ): number {
-  const capped = Math.min(baseMs * 2 ** attempt, maxMs);
-  return Math.round(
-    capped * (BACKOFF_JITTER_MIN_RATIO + random() * (1 - BACKOFF_JITTER_MIN_RATIO)),
-  );
+  return connectionBackoffDelayMs(attempt, {
+    baseMs,
+    maxMs,
+    random,
+    jitterMinRatio: BACKOFF_JITTER_MIN_RATIO,
+  });
 }
 
 /** 服务端 first-wins：同账号同 deviceId 的后续 hello 被此 close code 拒绝。 */
@@ -117,17 +118,18 @@ const IDLE_TIMEOUT_MS = 65_000;
 
 export function createHookTransport(opts: HookTransportOpts): HookTransport {
   const { url, getAuthToken, refreshAuthToken, buildHello, onMessage, onStatus, log } = opts;
-  const backoffBaseMs = opts.timing?.backoffBaseMs ?? BACKOFF_BASE_MS;
-  const backoffMaxMs = opts.timing?.backoffMaxMs ?? BACKOFF_MAX_MS;
   const standbyRetryMs = opts.timing?.standbyRetryMs ?? STANDBY_RETRY_MS;
-  const random = opts.random ?? Math.random;
+  const retry = new ConnectionRetry({
+    baseMs: opts.timing?.backoffBaseMs,
+    maxMs: opts.timing?.backoffMaxMs,
+    jitterMinRatio: BACKOFF_JITTER_MIN_RATIO,
+    random: opts.random,
+  });
 
   let ws: WebSocket | null = null;
   let stopped = false;
   let standby = false;
-  let attempt = 0;
   let authRefreshAttempted = false;
-  let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let pingTimer: ReturnType<typeof setInterval> | null = null;
   let lastFrameAt = 0;
   let lastError: string | null = null;
@@ -148,10 +150,7 @@ export function createHookTransport(opts: HookTransportOpts): HookTransport {
   }
 
   function clearTimers(): void {
-    if (retryTimer) {
-      clearTimeout(retryTimer);
-      retryTimer = null;
-    }
+    retry.reset();
     if (pingTimer) {
       clearInterval(pingTimer);
       pingTimer = null;
@@ -159,16 +158,10 @@ export function createHookTransport(opts: HookTransportOpts): HookTransport {
   }
 
   function scheduleRetry(delayOverrideMs?: number): void {
-    if (stopped || retryTimer) return;
+    if (stopped) return;
     // 显式周期（standby 低频探测）不抖动：它表达的是「多久探一次首实例是否退出」，
     // 是一个产品语义上的固定节奏，不是用来防重连风暴的退避。
-    const delay =
-      delayOverrideMs ?? computeBackoffDelayMs(attempt, backoffBaseMs, backoffMaxMs, random);
-    attempt += 1;
-    retryTimer = setTimeout(() => {
-      retryTimer = null;
-      connect();
-    }, delay);
+    retry.schedule(connect, { fixedDelayMs: delayOverrideMs });
   }
 
   function send(msg: HookMessage): boolean {
@@ -298,7 +291,7 @@ export function createHookTransport(opts: HookTransportOpts): HookTransport {
       if (msg.type === 'pong') return;
       if (msg.type === 'welcome') {
         standby = false;
-        attempt = 0;
+        retry.reset();
         authRefreshAttempted = false;
         lastError = null;
         log.info(`handshake complete with ${msg.payload.serverName}`);
@@ -330,7 +323,9 @@ export function createHookTransport(opts: HookTransportOpts): HookTransport {
       if (code === DUPLICATE_DEVICE_CLOSE_CODE && reasonText === DUPLICATE_DEVICE_CLOSE_REASON) {
         standby = true;
         lastError = null;
-        log.info(`duplicate device connection rejected; entering standby, retrying in ${standbyRetryMs}ms`);
+        log.info(
+          `duplicate device connection rejected; entering standby, retrying in ${standbyRetryMs}ms`,
+        );
         onStatus('standby', null);
         scheduleRetry(standbyRetryMs);
         return;

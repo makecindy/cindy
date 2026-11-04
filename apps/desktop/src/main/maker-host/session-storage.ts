@@ -13,6 +13,7 @@
 import { and, eq, inArray, ne } from 'drizzle-orm';
 
 import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
+import { pruneSessionContextWindowBudget } from './session-context-budget-store.js';
 
 import type {
   AgentKind,
@@ -54,6 +55,7 @@ function rowToMeta(row: SessionRow): SessionMeta {
     title: row.title,
     model: row.model,
     workspaceKind: row.workspaceKind,
+    projectDir: row.projectDir,
     effort: row.effort,
     permissionMode: row.permissionMode,
     fastMode: row.fastMode,
@@ -78,6 +80,7 @@ export class DesktopSessionStorage implements SessionStorage {
       title: meta.title,
       workingDir,
       workspaceKind: normalizeWorkspaceKind(meta.workspaceKind),
+      projectDir: normalizeWorkingDirForStorage(meta.projectDir),
       model: meta.model,
       effort: meta.effort ?? 'high',
       permissionMode: meta.permissionMode ?? 'ask',
@@ -157,6 +160,15 @@ export class DesktopSessionStorage implements SessionStorage {
   async delete(id: string): Promise<void> {
     const db = getDbClient().drizzle;
     await db.delete(sessions).where(eq(sessions.id, id));
+    // 任务行已消失，偏好文件里的档位条目也就没有意义了（软删除保留行，故不在这里清理）。
+    try {
+      pruneSessionContextWindowBudget(id);
+    } catch (error) {
+      console.warn('[session-storage] pruning context window budget failed', {
+        sessionId: id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 }
 
@@ -195,10 +207,10 @@ export async function writeCodexHistoryHasProductPrompt(
 }
 
 /**
- * 读 sessions.working_dir(既有会话的权威值)。SEND lazy-create / rehydrate 用它
- * 兜底 caller 传入的陈旧 createOpts.workingDir(典型:输入队列崩溃快照里内嵌的
- * 老路径,启动 sweep 改写 DB 后快照回放仍带旧值,2026-07-20 实报)。
- * 行不存在 / 空值 → null,不抛错。
+ * 读 sessions.working_dir(既有会话的权威值)。SEND lazy-create 把它当唯一真源直接
+ * 采纳(caller 传入的 createOpts.workingDir 可能是陈旧快照 —— 输入队列崩溃回放里
+ * 内嵌的老路径,或用户把任务移走后排队/重试项里内嵌的旧目录);rehydrate 在 caller
+ * 目录校验失败时用它兜底。行不存在 / 空值 → null,不抛错。
  */
 export async function readSessionWorkingDirFromDb(id: string): Promise<string | null> {
   const db = getDbClient().drizzle;
@@ -216,6 +228,29 @@ export async function readSessionWorkingDirFromDb(id: string): Promise<string | 
  * SEND lazy-create handler 用它兜底 (renderer 不走 createOpts 透传 extraDirs)。
  * 失败 / 空 / 不是数组 → 返回 []，不抛错。
  */
+/**
+ * 读 working_dir 时同时报告「行是否存在」。lazy-create 必须区分两种 null：
+ * 「没有这一行」(首次建 runtime,沿用 caller 快照)与「行在、但 working_dir 已被
+ * 显式清空」(DB 明确说这个会话没有目录,不能让排队/重试快照里的旧目录把它复活)。
+ */
+export async function readSessionWorkingDirRow(
+  id: string,
+): Promise<{ exists: boolean; workingDir: string | null }> {
+  const db = getDbClient().drizzle;
+  const rows = await db
+    .select({ workingDir: sessions.workingDir })
+    .from(sessions)
+    .where(eq(sessions.id, id))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return { exists: false, workingDir: null };
+  const raw = row.workingDir;
+  return {
+    exists: true,
+    workingDir: typeof raw === 'string' && raw.trim() !== '' ? raw : null,
+  };
+}
+
 export async function readSessionExtraDirsFromDb(id: string): Promise<string[]> {
   const db = getDbClient().drizzle;
   const rows = await db

@@ -27,6 +27,35 @@ export function historyDiskAuthority(deviceId: string, sessionId: string) {
 }
 type Authority = ReturnType<typeof historyDiskAuthority>;
 
+/** Chat Server pages share the same account-scoped disk and logout/delete fences. */
+export async function readConversationDisk<T>(authority: Authority, validate: (value: unknown) => value is T): Promise<T | null> {
+  if (!authority.current()) return null;
+  try {
+    const text = await (await disk()).read(authority.key, authority.current);
+    const value: unknown = text ? JSON.parse(text) : null;
+    return authority.current() && validate(value) ? value : null;
+  } catch { return null; }
+}
+
+export async function writeConversationDisk(authority: Authority, value: unknown): Promise<boolean> {
+  if (!authority.current()) return false;
+  if (historyValueBytes(value, HISTORY_DISK_ITEM_BYTES) > HISTORY_DISK_ITEM_BYTES) return false;
+  try { return await (await disk()).write(authority.key, JSON.stringify(value), authority.current); }
+  catch { return false; }
+}
+
+export function clearConversationDisk(roomId: string): Promise<void> {
+  const owner = getMobileAuthOwner();
+  const realm = getActiveMobileSessionRealm();
+  const matches = (key: string) => {
+    try { const [region, account, device, session] = JSON.parse(key); return region === realm && account === owner.accountId
+      && device === 'chat-server' && JSON.parse(session)[0] === roomId; }
+    catch { return false; }
+  };
+  for (const [key, value] of keyEpochs) if (matches(key)) keyEpochs.set(key, value + 1);
+  return disk().then(cache => cache.clear(matches)).catch(() => undefined);
+}
+
 function validSummary(value: unknown, depth = 0): boolean {
   if (!value || typeof value !== 'object' || depth > 32) return false;
   const s = value as Record<string, unknown>;

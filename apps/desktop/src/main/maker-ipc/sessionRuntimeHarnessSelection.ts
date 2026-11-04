@@ -133,6 +133,7 @@ export async function setSessionRuntimeHarness(
       code === 'NOT_FOUND' ||
       code === 'INVALID_PARAMS' ||
       code === 'UNSUPPORTED_CAPABILITY' ||
+      code === 'SSH_HARNESS_SWITCH_UNSUPPORTED' ||
       code === 'CREDENTIAL_SWITCH_BUSY'
     ) {
       return {

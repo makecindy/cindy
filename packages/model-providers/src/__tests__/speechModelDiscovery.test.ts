@@ -108,8 +108,13 @@ describe('BYOK speech discovery and projection', () => {
     ] })!);
     expect(merged[0]).toMatchObject(original[0]);
     const p = provider(merged);
+    // PR #6768: the saved display switch must survive the media projection too;
+    // checking only models.codex missed unchecked TTS leaking into the voice picker.
     expect(p.audioModels?.[0]).toMatchObject({ id: 'gpt-private', name: 'My Voice',
-      mode: 'audio_speech', nativeApi: 'openai-audio-speech' });
+      mode: 'audio_speech', nativeApi: 'openai-audio-speech', defaultEnabled: false });
+    expect(projectProviderMediaModels(p, registry, {
+      userMetadata: () => pickModelMetadata(merged[0]),
+    }).audioModels?.[0]?.defaultEnabled).toBe(false);
     expect(p.models.codex![0].defaultEnabled).toBe(false);
     expect(isAgentSelectableModel(p.models.codex![0], { userProvider: true })).toBe(false);
     const inherited = provider([{ ...merged[0], mode: undefined, nativeApi: undefined }]);

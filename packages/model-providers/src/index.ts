@@ -1,4 +1,5 @@
-export { parseModelDisplayPricing, type ModelDisplayPricing } from './modelDisplayPricing.js';
+export { parseModelDisplayPricing, type ModelDisplayPricing, type ModelDisplayPricingSummary, type SummaryQuote } from './modelDisplayPricing.js';
+export { providerProtocolCandidates, type ProviderProtocolCandidate } from './providerProtocolProbe.js';
 export { remoteInvocationModels } from './remoteModels.js';
 /**
  * @cindy/model-providers — 模型供应商目录 + 路由抽象（纯逻辑，零 Electron / maker-core 运行时依赖）。
@@ -26,6 +27,7 @@ export type {
 
 export type {
   AgentKind,
+  ModelInterfaceSnapshot,
   ProviderWireProtocol,
   CodexCompatibilityWireProtocol,
   Effort,
@@ -56,7 +58,7 @@ export type {
 } from "./types.js";
 
 export { NATIVE_SUBSCRIPTION_AUTHS, NATIVE_SUBSCRIPTION_DEFAULT_PROVIDER_IDS, PI_MODEL_APIS, PI_REASONING_EFFORTS } from "./types.js";
-export { isLocalOnlyProviderForAgent, isOpenAiSubscriptionProvider, providerCatalogId, isCustomRoutedProvider, isOrganizationManagedProvider, isCindyDistributedProvider, isCindyAutoModelId } from './provider-identity.js';
+export { isLocalOnlyProviderForAgent, isOpenAiSubscriptionProvider, supportsSubscriptionFastPolicy, providerCatalogId, isCustomRoutedProvider, isOrganizationManagedProvider, isCindyDistributedProvider, isCindyAutoModelId } from './provider-identity.js';
 export { sourceProviderForPreset } from './providerPresetIdentity.js';
 export { isMimoTokenPlanPreset } from './mimoPresentation.js';
 
@@ -115,6 +117,7 @@ export {
   decideModelRegistrySnapshot,
   findModelRegistryRoute,
   resolveModelNativeApi,
+  resolveRecommendedAgent,
   resolveCatalogModelNativeApi,
   resolveModelReferencePrice,
   resolveBaseModelReferencePrice,
@@ -193,6 +196,7 @@ export {
   defaultEffortForCapabilities,
   resolveEffort,
   resolveRequestedEffort,
+  resolveRemoteSwitchEffort,
   composeAtomicModelSelection,
   resolveIntentReselectEffort,
   resolveProviderSwitchEffort,
@@ -255,6 +259,7 @@ export {
   normalizeModelIdForClassification,
   catalogModelIdCandidates,
   findCatalogModel,
+  uniqueRenamedSessionModelId,
   resolveWireModelId,
   candidateAgentsForModel,
   nativeAgentForProviderModel,
@@ -262,6 +267,8 @@ export {
   recommendedAgentForModel,
   resolveAgentCapability,
   unifiedModelEntries,
+  resolveStoredModelEntry,
+  displayNameOfStoredModelId,
   partitionEntriesByNativeAgent,
   sortEntriesForAgent,
 } from "./unifiedSelection.js";
@@ -291,6 +298,7 @@ export type { VisionCapability } from "./visionCapability.js";
 
 export {
   parseLocalModelCatalog,
+  localModelDescription,
   isLocalModelLibraryName,
 } from "./localModelCatalog.js";
 export type {
@@ -336,3 +344,9 @@ export { providerSetupLink } from './providerSetupLinks.js';
 export { providerPresetOAuth, providerPresetOAuthRuntimes, providerOAuthContract } from './providerPresetOAuth.js';
 
 export { alignModelApiRoute, providerWireProtocolForApi, providerBaseUrlForApi } from "./providerInterfaceRoutes.js";
+
+export { availableModelInterfaces, modelWithInterface, MODEL_INTERFACE_CAPABILITIES } from './providerInterfaceRoutes.js';
+export * from './providerDetection.js';
+
+export { validDiscoveredModelSource, modelSupplierLabel } from './modelSource.js';
+export type { DiscoveredModelSource } from './modelSource.js';

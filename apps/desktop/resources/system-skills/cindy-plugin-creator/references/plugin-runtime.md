@@ -48,7 +48,8 @@ cindy.send({ type: 'tool-result', callId: msg.callId, ok: true, result: {
   note: "干完了"
 }});
 // 失败交卷：errorCode 是可选的插件业务错误码；主机保留码
-// (GHOST_NOT_FOUND / GHOST_ASLEEP / GHOST_CRASHED / TIMEOUT / INTERNAL 等)不可由插件写入。
+// (GHOST_NOT_FOUND / GHOST_NAMESPACE_MISMATCH / GHOST_ASLEEP / GHOST_CRASHED / TIMEOUT / INTERNAL 等)
+// 不可由插件写入；GHOST_NAMESPACE_MISMATCH 只由主机在派发前产生，插件交卷时已执行，不能冒用。
 // message 必须包含用户可执行的恢复指引；不要把失败对象 JSON.stringify 到 message。
 cindy.send({
   type: 'tool-result',
@@ -58,11 +59,31 @@ cindy.send({
   message: '删除需要确认，请传 confirm:true 后重试',
 });
 
+// 给模型看的图片：工具的用途就是让当前 Agent「看一眼」时(截图、渲染预览、
+// 图表快照),在 tool-result **顶层**(与 result 平级,不要放进 result)附 images,
+// 主机把它们作为图片内容放在结果文字之后交给模型,省掉模型再去读文件的一步:
+cindy.send({ type: 'tool-result', callId: msg.callId, ok: true,
+  result: { path: '/…/shot.jpg', width: 402, height: 874 },   // 文字照常给
+  images: [{ data: '<base64>' }],                              // 最多 2 张
+});
+// - 格式由主机按字节判定,只收 PNG / JPEG / WebP / GIF(不收 SVG),单张解码后
+//   ≤6MB;无效项静默丢弃。一次结果里所有图合计约 140KB:小于份额的原样交给
+//   模型,超出的由主机重新编码(可能缩小像素尺寸),仍放不下的不附,结果里会多
+//   images_omitted:N。图上的像素若有含义(例如可直接点击的坐标),自己先压到
+//   份额以内,别让主机替你缩放。
+// - 每张图都占模型上下文(几百到一千多 token)且留在对话里:只在 Agent 明确要看
+//   时附,自动附带的观察结果给路径即可。
+// - 图片只交给模型和本次工具步骤展示,不入媒体库、不进产物账本、不会自动发到
+//   IM;要交付给用户的产物仍走上面的 xdt_image_urls 等媒体字段。
+// - 旧版 Cindy 不认这个字段,会直接忽略:result 里仍要给出够用的文字或路径。
+
 // 长任务续命(超时窗口默认 330s,从派发起算绝对上限 30 分钟):
 // - 经 cindy-request 请主机代办且带 callId 的署名单(出图/视频)在途时,
 //   主机**自动**替这份卷续命,你不用做任何事;
 // - 自己经 network 能力轮询外部长任务时,期间定期(建议 ≤60s 一次)发心跳:
 //   cindy.send({ type: 'tool-progress', callId: msg.callId });
+// 可选 progress / total / message；页面可通过 SDK onprogress 接收。
+// cindy.send({ type: 'tool-progress', callId: msg.callId, progress: 1, total: 3, message: '处理中' });
 //   每次心跳把窗口重新续满一个 330s 档;callId 不是派给你的会被静默丢弃。
 // - 预计超过 30 分钟天花板的超长任务,不要吊着一次 tool-call 等:视频代办用
 //   mode:'submit' 异步提交(见下),自己的外部任务拆成"提交 + 查询"两个工具。
@@ -374,3 +395,6 @@ const r = await cindy.send({
   不会让你的 `await` 永久悬着;
 - 同步返回,没有异步单;每插件在途上限与媒体代办共用;详情页会单列一行
   「可把文字送去算成向量」并写明单次条数上限。
+
+页面用 SDK onprogress 接收工具进度；文件选择、上传、下载会自动报告自身进度。
+进度值保持递增，成功、失败、取消都应结束等待。完整写法见[§4.23](plugin-interactive-pages.md)。

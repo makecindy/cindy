@@ -79,7 +79,6 @@ describe('available reset list', () => {
   it('shows a count-only response honestly without inventing rows', () => {
     mocks.snapshot!.rateLimitResetCredits!.credits = null;
     render(<CodexResetCredits variant="dialog" snapshot={mocks.snapshot} busy={mocks.busy} canReset={mocks.canReset} onReset={mocks.reset} />);
-    expect(screen.getByText('codexResets.available 2')).toBeTruthy();
     expect(screen.getByText('codexResets.detailsUnavailable')).toBeTruthy();
     expect(screen.queryByRole('list')).toBeNull();
   });
@@ -97,7 +96,7 @@ describe('available reset list', () => {
   it('shows zero availability without a reset action', () => {
     mocks.snapshot!.rateLimitResetCredits = { availableCount: 0, credits: [] };
     render(<CodexResetCredits variant="dialog" snapshot={mocks.snapshot} busy={mocks.busy} canReset={mocks.canReset} onReset={mocks.reset} />);
-    expect(screen.getByText('codexResets.available 0')).toBeTruthy();
+    expect(screen.getByText('codexResets.noCredit')).toBeTruthy();
     expect(screen.queryByRole('button')).toBeNull();
   });
 

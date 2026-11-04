@@ -1,4 +1,3 @@
-import { colorRegistry } from '../themes/color-registry';
 import '../themes/colors';
 /**
  * textLightbox.test.ts
@@ -16,7 +15,8 @@ import '../themes/colors';
  *       moved exclusively to the Oversize CTA after the file-modal-and-toast
  *       polish on 2026-04-19.
  *   F4  Toolbar Close (X) button wires to handleClose.
- *   F4  Doc Card sized at 80vw/80vh capped 1600/1200 (no longer 1024×640).
+ *   Private-card geometry and tooltip source checks retired with PreviewChrome;
+ *   real closing and rendering are covered in runtime acceptance.
  *   F5  Oversize body shows triangle-alert + i18n 阈值文案 + Open-in-system CTA
  *       (Oversize is the SOLE caller of window.electronAPI.openPath now).
  *   F6  Esc closes; Doc Card clicks stop propagation; Overlay onClick=handleClose
@@ -58,19 +58,6 @@ describe('TextLightbox — F6 close behaviour', () => {
     expect(source).toMatch(/handleClose\(\)/);
   });
 
-  it('backdrop button wires onClick to handleClose (backdrop click closes)', () => {
-    expect(source).toMatch(/<button[\s\S]*type="button"[\s\S]*aria-label=\{t\('chat\.lightbox\.close'\)\}/);
-    expect(source).toMatch(/onClick=\{handleClose\}/);
-  });
-
-  it('Doc Card is layered above the backdrop button so inner clicks DO NOT close', () => {
-    // The backdrop close target is a separate background button behind the Doc
-    // Card. Toolbar buttons and text selection stay on the higher card layer.
-    expect(source).toMatch(/data-text-lightbox-card/);
-    expect(source).toContain('backdrop is a separate background button behind the Doc Card');
-    expect(source).toMatch(/zIndex:\s*1/);
-  });
-
   it('handleClose guards against double-fire via isClosingRef', () => {
     expect(source).toContain('isClosingRef.current');
     expect(source).toMatch(/if\s*\(isClosingRef\.current\)\s*return;/);
@@ -80,27 +67,12 @@ describe('TextLightbox — F6 close behaviour', () => {
 // ── F3: overlay style parity ────────────────────────────────────────────────
 
 describe('TextLightbox — F3 overlay style', () => {
-  it('overlay background uses the lightbox overlay theme token', () => {
-    // overlay 已迁到主题 token,避免组件内写死 rgba 颜色。
-    expect(source).toContain("background: 'var(--overlay-lightbox)'");
-    for (const mode of ['light', 'dark'] as const) expect(colorRegistry.resolveDefault('overlay-lightbox', mode)).toBe('rgba(0, 0, 0, 0.85)');
-  });
-
-  it('overlay is rendered via createPortal to document.body', () => {
-    expect(source).toMatch(/createPortal\(overlay,\s*document\.body\)/);
-  });
-
-  it('keeps every toolbar tooltip above the lightbox overlay', () => {
-    expect(source).toMatch(/TEXT_LIGHTBOX_OVERLAY_Z_INDEX\s*=\s*9999/);
-    expect(source).toMatch(
-      /TEXT_LIGHTBOX_TOOLTIP_STYLE\s*=\s*\{[\s\S]*zIndex:\s*TEXT_LIGHTBOX_OVERLAY_Z_INDEX\s*\+\s*1/,
-    );
-
-    const tooltipContents = source.match(/<Tooltip\.Content\b/g) ?? [];
-    const layeredTooltipContents =
-      source.match(/<Tooltip\.Content\s+style=\{TEXT_LIGHTBOX_TOOLTIP_STYLE\}/g) ?? [];
-    expect(tooltipContents.length).toBeGreaterThan(0);
-    expect(layeredTooltipContents).toHaveLength(tooltipContents.length);
+  it('floats the document over the shared preview scrim instead of filling the window', () => {
+    // 遮罩与弹窗共用 .modal-scrim(PreviewScrim),组件内不写遮罩颜色;
+    // 文稿卡片使用公共预览窗几何。
+    expect(source).toContain('<PreviewScrim onClose={handleClose} zIndex={0} />');
+    expect(source).toContain('style={{ ...PREVIEW_PANEL_STYLE, zIndex: 1 }}');
+    expect(source).not.toContain("width: '100vw'");
   });
 });
 
@@ -145,27 +117,6 @@ describe('TextLightbox — F4 toolbar wiring', () => {
     const openInSystemMatches = source.match(/onClick=\{openInSystem\}/g) ?? [];
     expect(openInSystemMatches.length).toBe(1);
   });
-
-  it('Toolbar adds an X close button wired to handleClose', () => {
-    // The new affordance — a visible × button on the Toolbar's right side
-    // gives users a third escape hatch (besides Esc and backdrop click).
-    expect(source).toMatch(/import\s+\{[^}]*\bX\b[^}]*\}\s+from\s+'lucide-react'/);
-    // Two `onClick={handleClose}` are now expected: overlay backdrop + Toolbar X.
-    const handleCloseClicks = source.match(/onClick=\{handleClose\}/g) ?? [];
-    expect(handleCloseClicks.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it('Doc Card sizes to 80vw/80vh with 1600/1200 caps (post-polish)', () => {
-    // Old hard-coded `min(1024px, …)` caused the modal to feel small + offset.
-    // Polish picks the design-spec 80%/80% with sane upper bounds for 4K/5K.
-    expect(source).toMatch(/width:\s*'80vw'/);
-    expect(source).toMatch(/height:\s*'80vh'/);
-    expect(source).toMatch(/maxWidth:\s*'1600px'/);
-    expect(source).toMatch(/maxHeight:\s*'1200px'/);
-    // And explicitly NOT the old hard-coded 1024 / 640 values.
-    expect(source).not.toMatch(/min\(1024px/);
-    expect(source).not.toMatch(/min\(640px/);
-  });
 });
 
 // ── F5: Oversize body ───────────────────────────────────────────────────────
@@ -178,9 +129,7 @@ describe('TextLightbox — F5 Oversize body', () => {
   it('uses i18n copy with dynamic file size and the preview cap', () => {
     // 文案必须通过 i18n 注入动态 size/limit，组件内不再保留英文裸文案。
     expect(source).toContain("t('chat.textLightbox.oversizeTitle')");
-    expect(source).toContain(
-      "t('chat.textLightbox.oversizeBody', { size: oversizeSizeText, limit: oversizeLimitMb })",
-    );
+    expect(source.replace(/\s+/g, "")).toContain("t('chat.textLightbox.oversizeBody',{size:oversizeSizeText,limit:oversizeLimitMb");
     expect(source).not.toMatch(
       /This file is \{oversizeSizeText\}, exceeding the \{oversizeLimitMb\} MB preview limit/,
     );

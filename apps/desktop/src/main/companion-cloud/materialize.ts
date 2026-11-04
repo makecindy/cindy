@@ -8,12 +8,15 @@
  */
 import type { CompanionMirrorCursor, CompanionMirrorRow } from './mirror.js';
 import { COMPANION_HISTORY_CLIENT_PREFIX } from './mirror.js';
+import { parseCompanionCapabilities, type CompanionArrivalNotice, type CompanionCapabilitiesValue } from './capabilities.js';
 import { directRoomSourceId } from './directRoom.js';
 import { readAllRoomMessages } from './room.js';
+import type { BotSkillFile } from '../maker-ipc/botSkillFiles.js';
+import { companionSkillFileFetch, parseCompanionSkillFiles } from './skillFiles.js';
 import type { CompanionCloudState } from './state.js';
 import { errorCode, isTransientAttachmentFailure, type CompanionApi, type CompanionLog } from './types.js';
 import {
-  COMPANION_MEMORY_PREFIX, COMPANION_PROFILE_KEY, COMPANION_ROUTINE_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_TODO_PREFIX,
+  COMPANION_CAPABILITIES_KEY, COMPANION_MEMORY_PREFIX, COMPANION_PROFILE_KEY, COMPANION_ROUTINE_PREFIX, COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_TODO_PREFIX,
   COMPANION_WORKBENCH_KEY, TOMBSTONE_HASH, isCompanionProfileSnapshot, valueHash,
 } from './uploader.js';
 
@@ -28,17 +31,29 @@ export interface CompanionWriteFence {
 /** Local profile, Bot Home and Session operations, all through the existing services. */
 export interface CompanionMaterializeHost {
   readProfile: (botId: string) => Promise<CompanionLocalProfile | null>;
-  /** The cloud avatar must be restored (an image that cannot be downloaded fails the call). */
+  /**
+   * The cloud avatar is restored when its bytes are still available. A temporary download failure
+   * rejects; a permanent one stores the default avatar together with durable local-only provenance.
+   */
   createProfile: (input: {
     id: string; name: string; description: string; identitySource: string; userContextSource: string; avatar: string | null;
+    /** The preset the companion was made from (the cloud profile's `templateId`). */
+    templateId?: string;
   }, fence: CompanionWriteFence) => Promise<void>;
   /**
-   * Also makes the profile active again. Undefined fields stay unchanged; a cloud avatar replaces
-   * the local one (failing like createProfile), since the home publishes its avatar back.
+   * Also makes the profile active again. Undefined fields stay unchanged; a restored cloud avatar
+   * replaces the local one. A permanent download failure persists the default with local-only provenance.
    */
   updateProfile: (input: {
     id: string; name: string; description?: string; identitySource?: string; userContextSource?: string; avatar: string | null;
+    templateId?: string;
   }, fence: CompanionWriteFence) => Promise<void>;
+  /**
+   * Apply the companion's portable capability setup (capabilities.ts): references stay even when
+   * this computer lacks them, a model chain that is not usable here falls back to the default.
+   * Returns what could not be kept, for the one-line notice.
+   */
+  applyCapabilities?: (botId: string, value: CompanionCapabilitiesValue, fence: CompanionWriteFence) => Promise<CompanionArrivalNotice[]>;
   writeSystemPrompt: (botId: string, text: string, fence: CompanionWriteFence) => Promise<void>;
   /** Copy the companion's Home (identity, prompt, user file, memories, skills) aside; returns where. */
   backupHome?: (botId: string, fence: CompanionWriteFence) => Promise<string | null>;
@@ -48,6 +63,10 @@ export interface CompanionMaterializeHost {
   readSkill: (botId: string, slug: string) => Promise<string | null>;
   saveSkill: (botId: string, slug: string, content: string, enabled: boolean, fence: CompanionWriteFence) => Promise<void>;
   removeSkill: (botId: string, slug: string, fence: CompanionWriteFence) => Promise<void>;
+  readSkillFiles?: (botId: string, slug: string) => Promise<BotSkillFile[]>;
+  /** Make a restored skill's folder hold these files. `fetch` gives a file's local path; null when it is gone for good. Returns the files that did not arrive. */
+  applySkillFiles?: (botId: string, slug: string, files: BotSkillFile[], fetch: (file: BotSkillFile) => Promise<string | null>,
+    options: { removeOthers: boolean; keep?: string[] }, fence: CompanionWriteFence) => Promise<string[]>;
   /** The companion's todos from the cloud replace the same ids here; `remove` ids are deleted. */
   applyTodos?: (botId: string, items: unknown[], remove: string[], fence: CompanionWriteFence) => Promise<void>;
   /** Its routines from the cloud are created or updated with their ids; `remove` ids are deleted. */
@@ -90,6 +109,8 @@ export interface CompanionMaterializeResult {
   rebuild: 'rebuilt' | 'skipped';
   /** Where an existing, never-synced local copy was saved before being overwritten. */
   backup?: string | null;
+  /** What of the old setup this computer could not keep (the permission level never travels). */
+  notices: CompanionArrivalNotice[];
 }
 
 const text = (value: unknown) => typeof value === 'string' ? value : undefined;
@@ -145,12 +166,17 @@ export async function materializeCompanion(input: {
     state.update(botId, actor.id, entry => { entry.backedUp = true; });
   }
   const name = text(profile?.name)?.trim() || actor.name || local?.displayName || '伙伴';
+  const templateId = text(record(profile)?.templateId);
   if (!local) {
     await step(() => host.createProfile({ id: botId, name, description: text(profile?.description) ?? '',
-      identitySource: text(profile?.soul) ?? '', userContextSource: text(profile?.user) ?? '', avatar: actor.avatar }, fence));
+      identitySource: text(profile?.soul) ?? '', userContextSource: text(profile?.user) ?? '', avatar: actor.avatar,
+      ...(templateId ? { templateId } : {}) }, fence));
+    // From here the copy exists, so a retry no longer sees it as new: remember the permission reset now.
+    state.update(botId, actor.id, entry => { entry.arrivalNotices = [...new Set([...(entry.arrivalNotices ?? []), 'permissions' as const])]; });
   } else {
     await step(() => host.updateProfile({ id: botId, name, description: text(profile?.description),
-      identitySource: text(profile?.soul), userContextSource: text(profile?.user), avatar: actor.avatar }, fence));
+      identitySource: text(profile?.soul), userContextSource: text(profile?.user), avatar: actor.avatar,
+      ...(templateId ? { templateId } : {}) }, fence));
   }
   const systemPrompt = text(profile?.systemPrompt);
   if (systemPrompt !== undefined) await step(() => host.writeSystemPrompt(botId, systemPrompt, fence));
@@ -203,6 +229,48 @@ export async function materializeCompanion(input: {
     }
   }
 
+  // After every SKILL.md: the files go into folders that now exist. Each skill's list says exactly
+  // what its folder holds; a skill without a list (an older home) keeps the files it has here.
+  if (host.applySkillFiles && input.download) {
+    for (const [key, row] of prefs) {
+      if (!key.startsWith(COMPANION_SKILL_FILES_PREFIX)) continue;
+      const slug = key.slice(COMPANION_SKILL_FILES_PREFIX.length);
+      const list = row.value === null ? { files: [], omitted: [], truncated: false } : parseCompanionSkillFiles(row.value);
+      if (!list) continue;
+      await apply('skill-files', async () => {
+        const fetch = companionSkillFileFetch(await step(() => input.roomId()), list.files, input.download!, log);
+        const missing = await step(() => host.applySkillFiles!(botId, slug, list.files, fetch, { removeOthers: !list.truncated, keep: list.omitted }, fence));
+        const held = missing.length && host.readSkillFiles ? await step(() => host.readSkillFiles!(botId, slug)) : [];
+        const stale = Object.fromEntries(held.filter(file => missing.includes(file.path)).map(file => [file.path, file.sha256]));
+        state.update(botId, actor.id, entry => {
+          entry.skillFileMedia = { ...entry.skillFileMedia, ...Object.fromEntries(list.files.filter(file => file.mediaId).map(file => [file.sha256, file.mediaId])) };
+          const { [slug]: _previous, ...gaps } = entry.skillFileGaps ?? {};
+          // A file that did not arrive still exists where it came from: this computer not having it is no deletion.
+          const omitted = [...list.omitted, ...missing];
+          entry.skillFileGaps = omitted.length || list.truncated ? { ...gaps, [slug]: { omitted, ...(list.truncated ? { truncated: true } : {}), ...(Object.keys(stale).length ? { stale } : {}) } } : gaps;
+        });
+        applied.set(key, { hash: row.value === null ? TOMBSTONE_HASH : valueHash(row.value), revision: row.revision });
+      });
+    }
+  }
+
+  // Capability setup (references, memory switch, model preference). A new copy gets this computer's
+  // default permission level; an existing copy keeps its own. A cloud value from an older home is
+  // simply absent: the copy keeps what it has.
+  // (Notices a failed earlier try of this take-over already recorded stay until the owner clears them.)
+  const notices: CompanionArrivalNotice[] = known?.actorId === actor.id ? [...(known.arrivalNotices ?? [])] : [];
+  if (!local && !notices.includes('permissions')) notices.push('permissions');
+  const capabilitiesRow = prefs.get(COMPANION_CAPABILITIES_KEY);
+  const capabilities = capabilitiesRow ? parseCompanionCapabilities(capabilitiesRow.value) : null;
+  if (capabilitiesRow && capabilities && host.applyCapabilities) {
+    await apply('capabilities', async () => {
+      for (const notice of await step(() => host.applyCapabilities!(botId, capabilities, fence))) {
+        if (!notices.includes(notice)) notices.push(notice);
+      }
+      applied.set(COMPANION_CAPABILITIES_KEY, { hash: valueHash(capabilitiesRow.value), revision: capabilitiesRow.revision });
+    });
+  }
+
   // Todos, routines and the workbench move with the companion: applied in one batch each (the
   // cloud wins; a routine tombstone removes it here). A todo is deleted by marking it (the mark
   // travels as a value); its tombstone only means it left the travelling window (closed long ago),
@@ -235,7 +303,11 @@ export async function materializeCompanion(input: {
 
   if (failures > 0) {
     // Keep what was restored (so the retry does not back the copy up again) and stay demoted.
-    state.update(botId, actor.id, entry => { for (const [key, value] of applied) entry.prefs[key] = { ...value, local: true }; });
+    state.update(botId, actor.id, entry => {
+      for (const [key, value] of applied) entry.prefs[key] = { ...value, local: true };
+      // The copy now exists: the retry no longer sees it as new, so remember what it could not keep.
+      if (notices.length) entry.arrivalNotices = notices;
+    });
     throw new Error('RESTORE_INCOMPLETE');
   }
 
@@ -257,6 +329,7 @@ export async function materializeCompanion(input: {
     for (const [key, value] of applied) entry.prefs[key] = { ...value, local: true };
     if (!keepCursor) entry.mirror = { sessionId, ...cursor };
     if (needsRebuild) entry.pendingRebuild = true;
+    if (notices.length) entry.arrivalNotices = notices; else delete entry.arrivalNotices;
   });
   // Rebuild while still demoted: a failure, or a turn still running (`busy`), leaves the copy
   // demoted and the automatic take-over retries until the rebuild completes.
@@ -267,8 +340,9 @@ export async function materializeCompanion(input: {
     delete entry.demoted;
     // The next take-over (after this copy hands the companion away again) backs it up anew.
     delete entry.backedUp;
+
   });
-  return { created: !local, inserted, rebuild, ...(backup !== undefined ? { backup } : {}) };
+  return { created: !local, inserted, rebuild, notices, ...(backup !== undefined ? { backup } : {}) };
 }
 
 /** Insert the room's whole conversation that is not already local, in message-time order. */

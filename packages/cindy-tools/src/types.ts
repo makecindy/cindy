@@ -144,6 +144,7 @@ export interface CindyGhostInfo {
 export type CindyGhostCallErrorCode =
   | 'GHOST_NOT_FOUND' // 未装入或已抽离
   | 'GHOST_AMBIGUOUS' // 同名多实例，需指定 namespace
+  | 'GHOST_NAMESPACE_MISMATCH' // 插件已安装，但指定的 namespace 不匹配；按返回身份修正参数
   | 'GHOST_ASLEEP' // 沉睡中(用户可在主界面侧边栏「插件」中唤醒)
   | 'GHOST_RETIRED' // 功能已下线，不可唤醒或重试
   | 'GHOST_DISABLED_IN_WORKDIR' // 用户在当前工作目录停用了该意识(不要重试)
@@ -158,7 +159,7 @@ export type CindyGhostCallErrorCode =
 
 export type CindyGhostInfoErrorCode = Extract<
   CindyGhostCallErrorCode,
-  'GHOST_NOT_FOUND' | 'GHOST_AMBIGUOUS' | 'GHOST_ASLEEP' | 'GHOST_DISABLED_IN_WORKDIR' | 'GHOST_RETIRED'
+  'GHOST_NOT_FOUND' | 'GHOST_AMBIGUOUS' | 'GHOST_NAMESPACE_MISMATCH' | 'GHOST_ASLEEP' | 'GHOST_DISABLED_IN_WORKDIR' | 'GHOST_RETIRED'
 >;
 
 /** host 可见性判序回调(getAwakeGhost)的返回:只产可见性错误,不产 INTERNAL。 */
@@ -216,6 +217,14 @@ export type CindyGhostCallResult =
        * 固定媒体字段,不消费本字段(兼容性有回归测试锁定)。
        */
       xdt_media_descriptions?: Array<{ url: string; description: string }>;
+      /**
+       * Images the plugin shows the model (host-checked and re-encoded under
+       * the inline budget). ghost_call returns them as MCP image content after
+       * the JSON text; they are not part of the JSON.
+       */
+      images?: Array<{ data: string; mimeType: string }>;
+      /** Images the plugin offered that did not fit the inline budget. */
+      imagesOmitted?: number;
     }
   | {
       ok: false;
@@ -265,12 +274,16 @@ export type CindyForgeInstallResult =
       name: string;
       version: string;
       enabled: boolean;
+      instanceId?: string;
+      namespace?: string | null;
       note: string;
     }
   | {
       ok: false;
       errorCode: CindyForgePackErrorCode | (string & {});
       message: string;
+      targets?: Array<{ instanceId: string; name: string; namespace: string | null; version: string; enabled: boolean }>;
+      copyNamespace?: string | null;
     };
 
 /** ghost_forge_publish 立即返回时的失败分类。传输开始后的失败走 status.errorCode。 */
@@ -352,13 +365,16 @@ export type CindyMediaToolRequest =
   | { action: 'request'; invocationId: string; body: Record<string, unknown> }
   | { action: 'poll'; invocationId: string };
 
+/** Host-owned connections: Grok login, or a messaging platform a teammate connects to itself. */
+export type CindyHostConnectionId = 'grok' | 'im-telegram' | 'im-feishu' | 'im-wecom' | 'im-dingtalk' | 'im-discord';
+
 /** host 注入的依赖:总机的全部真实能力都在这几个回调里。 */
 export interface CindyGhostsMcpDeps {
   /** Cindy's own catalog, separate from installed plugins and provider app marketplaces. */
   searchMarket?(query: string): Promise<Record<string, unknown>>;
   installMarket?(request: { pluginId: string; releaseId: string }, signal?: AbortSignal): Promise<Record<string, unknown>>;
   /** Host-owned connection card. No URLs or credentials may be supplied by the model. */
-  connectAccount?(target: { kind: 'plugin'; id: string; namespace?: string | null; reauthorize?: boolean } | { kind: 'host'; id: 'grok'; reauthorize?: boolean }, signal?: AbortSignal): Promise<Record<string, unknown>>;
+  connectAccount?(target: { kind: 'plugin'; id: string; namespace?: string | null; reauthorize?: boolean } | { kind: 'host'; id: CindyHostConnectionId; reauthorize?: boolean }, signal?: AbortSignal): Promise<Record<string, unknown>>;
   /** Cindy Core 原生媒体调用器；能力本身不依赖任何插件。 */
   callMedia?(request: CindyMediaToolRequest): Promise<Record<string, unknown>>;
   /**
@@ -455,12 +471,19 @@ export interface CindyGhostsMcpDeps {
   /** 意识编写手册(markdown,随主机版本走;agent 写意识前先读)。 */
   forgeGuide(): Promise<string>;
   /**
+   * MCP Apps 页面生成手册(markdown,随主机版本走):ghost_forge_guide 传
+   * section "pages" 时整份返回。缺省 = 不提供,"pages" 按普通章节查找。
+   */
+  forgePageManual?(): Promise<string>;
+  /**
    * 在新的目标目录创建一份安全起步骨架。目标已存在时必须拒绝，绝不覆盖
    * 用户文件；Node 模板只生成随包源码，不安装依赖。
    */
   forgeScaffold(request: {
     dir: string;
     template: CindyForgeScaffoldTemplate;
+    /** Add a standard MCP Apps page bridging the existing main.js runtime. */
+    withUi?: boolean;
     id: string;
     name: string;
     description?: string;
@@ -484,7 +507,7 @@ export interface CindyGhostsMcpDeps {
    * 重新校验并打包源码目录，然后把这次产生的确切包安装或原位更新。
    * 只有显式调用本工具才安装；forgePack 本身始终保持纯打包。
    */
-  forgeInstall(request: { dir: string; iconSource?: string }): Promise<CindyForgeInstallResult>;
+  forgeInstall(request: { dir: string; iconSource?: string; targetInstanceId?: string; installCopy?: boolean; namespace?: string | null }): Promise<CindyForgeInstallResult>;
   /**
    * 消费 forgePack(intent=publish) 签发的一次性票据，把该次打包的确切字节
    * 提交到当前组织发布。立即返回 transferId / uploadId,传输在后台跑。
@@ -492,6 +515,15 @@ export interface CindyGhostsMcpDeps {
   forgePublish(request: { token: string }): Promise<CindyForgePublishResult>;
   /** 查询一次后台发布传输的当前状态。 */
   forgePublishStatus(request: { transferId: string }): Promise<CindyForgePublishStatusResult>;
+  /** Ordinary personal community author capability, separate from organization Forge publishing. */
+  communityContribution?(request:
+    | { action: 'prepare'; ghostId: string; namespace?: string | null }
+    | { action: 'submit' | 'status' | 'cancel'; id: string }
+    | { action: 'list'; query?: string; filter?: 'all' | 'pending' | 'needs_action' | 'published'; cursor?: string }
+    | { action: 'detail'; pluginId: string; cursor?: string }
+    | { action: 'submission'; pluginId: string; submissionId: string }
+    | { action: 'cancel-review'; pluginId: string; release: { releaseId: string; sha256: string; revision: string } }
+  ): Promise<unknown>;
   logger?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;

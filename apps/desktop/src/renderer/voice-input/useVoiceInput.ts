@@ -57,6 +57,7 @@ import { resolveVoiceInputStartGuards } from './startGuards';
 import { createVoiceInputStartupTimeline, type VoiceInputStartupTimeline } from './startupTimeline';
 import { getVoiceInputWorkletUrl } from './workletUrl';
 import { buildRefinementPreviewText } from './refinementPreviewText';
+import { useSpeakerFilterNotice } from './useSpeakerFilterNotice';
 import { clearVoiceInputDraftInTransaction } from '@/components/new-chat/VoiceInputDraftDecoration';
 import { isVoiceInputEventScopeActive, shouldHandleVoiceInputEvent } from './eventScope';
 import {
@@ -141,10 +142,14 @@ export type UseVoiceInputResult = {
   isListening: boolean;
   isCaptureReady: boolean;
   isBusy: boolean;
+  /** The voiceprint filter just muted someone else's speech in this run. */
+  speakerFiltered: boolean;
   getLastSubmittedText: () => string;
   getLastRefinement: () => VoiceInputRefinementSnapshot | null;
   /** 同步读取当前状态，不经过 React 渲染。长按手势靠它判断是否占用了录音。 */
   getState: () => VoiceInputState;
+  /** 仅预热音频处理与服务连接，不打开麦克风。 */
+  prepare: () => void;
   /** 同步 claim 录音后立刻返回是否占用；启动流程（授权确认、采集、连接）在后台继续。 */
   start: (options?: VoiceInputStartOptions) => boolean;
   stop: (options?: VoiceInputStopOptions) => Promise<void>;
@@ -199,6 +204,11 @@ export function useVoiceInput(
   const [draftText, setDraftText] = useState('');
   const [draftSource, setDraftSource] = useState<VoiceInputDraftSource | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
+  const {
+    visible: speakerFiltered,
+    show: showSpeakerFiltered,
+    clear: clearSpeakerFiltered,
+  } = useSpeakerFilterNotice();
   const { t } = useTranslation();
   const { settings: voiceInputSettings } = useVoiceInputSettings();
   const promptCodexSessionExpired = useCodexSessionExpiredPrompt();
@@ -1103,6 +1113,9 @@ export function useVoiceInput(
         case 'usage':
           recordVoiceInputRefinementUsage(event.refinement);
           break;
+        case 'speaker-filtered':
+          showSpeakerFiltered();
+          break;
         case 'timeline':
           if (
             event.event.type === 'refine_rejected' &&
@@ -1126,7 +1139,7 @@ export function useVoiceInput(
       }
       unsubscribe();
     };
-  }, [applyRefinedText, clampEditorTextRange, commitUsageStats, formatVoiceInputError, insertSubmittedText, promptCodexSessionExpired, recordVisibleTextChanged, reportVoiceInputError, resolveStopCompletion, restoreEditorFocusAfterVoiceInput, restoreSystemAudioForRecording, setVoiceState, stopEngine, upsertDictionaryLearningWatch]);
+  }, [applyRefinedText, clampEditorTextRange, commitUsageStats, formatVoiceInputError, insertSubmittedText, promptCodexSessionExpired, recordVisibleTextChanged, reportVoiceInputError, resolveStopCompletion, restoreEditorFocusAfterVoiceInput, restoreSystemAudioForRecording, setVoiceState, showSpeakerFiltered, stopEngine, upsertDictionaryLearningWatch]);
 
   useEffect(() => {
     return () => {
@@ -1204,9 +1217,11 @@ export function useVoiceInput(
 
   // Microphone keep-alive is deliberately a separate effect: unlike the prewarm
   // above it opens a real capture device and turns on the OS privacy indicator,
-  // so it must not re-run for settings unrelated to the microphone. Language and
-  // refinement changes used to re-assert keep-alive intent here, which kept the
-  // device warm for reasons the user never asked for.
+  // so it must not re-run for settings unrelated to the microphone. It only
+  // opens the device while the user is inside the use window, so a remount
+  // cannot relight the indicator on its own (see WebMicAudioEngine). Language
+  // and refinement changes used to re-assert keep-alive intent here, which kept
+  // the device warm for reasons the user never asked for.
   useEffect(() => {
     if (disabledRef.current) return;
     if (!voiceInputSettings.fastActivationEnabled) {
@@ -1236,6 +1251,19 @@ export function useVoiceInput(
     voiceInputSettings.microphoneDeviceId,
   ]);
 
+  const prepare = useCallback(() => {
+    if (disabledRef.current || !editorRef.current || editorRef.current.isDestroyed) return;
+    if (!['idle', 'done', 'error'].includes(stateRef.current)) return;
+    // Every composer mouse-down reaches here, including ordinary clicks and
+    // text selection. Opening even an authorized microphone can switch Bluetooth
+    // headphones to call audio, so leave device capture to start() after the hold.
+    void prewarmVoiceInputAudio(workletUrl).catch(() => undefined);
+    void window.electronAPI.voiceInput.prewarm({
+      sourceLanguage: voiceInputSettings.language,
+      refinementEnabled: voiceInputSettings.refinementEnabled,
+    }).catch(() => undefined);
+  }, [voiceInputSettings.language, voiceInputSettings.refinementEnabled]);
+
   const start = useCallback((startOptions?: VoiceInputStartOptions): boolean => {
     const currentState = stateRef.current;
     if (
@@ -1252,6 +1280,7 @@ export function useVoiceInput(
     startupTimelineRef.current = timeline;
     setCaptureReady(false);
     dismissInlineError();
+    clearSpeakerFiltered();
     shouldRestoreEditorFocusRef.current = true;
     insertionRangeRef.current = readEditorSelectionRange();
     draftDisplayRangeRef.current = insertionRangeRef.current;
@@ -1743,7 +1772,7 @@ export function useVoiceInput(
       setVoiceState('done');
       restoreEditorFocusAfterVoiceInput();
     }
-  }, [cancel, notifyReadyForEndCue, commitUsageStats, dismissInlineError, drainAndStopEngine, drainQueuedAudioToMain, formatVoiceInputStartError, invalidateStartAttempt, reportVoiceInputError, resolveStopCompletion, restoreEditorFocusAfterVoiceInput, restoreSystemAudioAndNotifyEndCue, setVoiceState, waitForBusyCompletion, waitForStartReadyWhileStopping]);
+  }, [cancel, notifyReadyForEndCue, clearSpeakerFiltered, commitUsageStats, dismissInlineError, drainAndStopEngine, drainQueuedAudioToMain, formatVoiceInputStartError, invalidateStartAttempt, reportVoiceInputError, resolveStopCompletion, restoreEditorFocusAfterVoiceInput, restoreSystemAudioAndNotifyEndCue, setVoiceState, waitForBusyCompletion, waitForStartReadyWhileStopping]);
 
   const stopWithGate = useCallback(async (options?: VoiceInputStopOptions) => {
     if (stopInFlightPromiseRef.current) return stopInFlightPromiseRef.current;
@@ -1786,9 +1815,11 @@ export function useVoiceInput(
     isListening: state === 'listening',
     isCaptureReady: state === 'listening' && captureReady,
     isBusy: state === 'listening' || state === 'submitting' || state === 'refining',
+    speakerFiltered,
     getLastSubmittedText: () => lastSubmittedTextRef.current,
     getLastRefinement: () => lastRefinementRef.current,
     getState,
+    prepare,
     start,
     stop: stopWithGate,
     cancel,

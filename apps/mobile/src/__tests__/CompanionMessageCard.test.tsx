@@ -108,6 +108,7 @@ vi.mock('@/device-link/DeviceLinkContext', () => ({
 }));
 vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
 import { CompanionMessageCard } from '@/session/CompanionMessageCard';
+import { SessionQuickSendProvider, useSessionQuickSend } from '@/session/SessionQuickSendContext';
 import { _clearRemotePathVerdictCache } from '@/session/remotePathVerdict';
 import type { NormalizedRemoteMessage } from '@/session/messageNormalize';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
@@ -860,7 +861,9 @@ it('renders the frozen result with the conversation Markdown, resolving links in
     const { useContext } = require('react') as typeof import('react');
     const ctx = useContext(ChatFilePathContext);
     seen.push(ctx);
-    return createElement('article', { 'data-testid': 'result-markdown' }, text);
+    const sender = useSessionQuickSend();
+    return createElement('article', { 'data-testid': 'result-markdown' }, text,
+      createElement('button', { 'data-testid': 'preview-send', disabled: !sender, onClick: () => sender?.('child reply') }));
   }
   const meta = { ...message.companion!.meta, role: 'delegation-result', childSessionId: 'child',
     result: { runSequence: 1, status: 'completed', workingDir: '/child-task',
@@ -868,15 +871,23 @@ it('renders the frozen result with the conversation Markdown, resolving links in
   // The chat's long-press menu is reused, but every action must target the child task.
   const onLongPressPath = vi.fn();
   const parent = { deviceId: 'home', sessionId: 'chat', workdir: '/chat', statPath: vi.fn(), onOpenPath: vi.fn(), onLongPressPath };
-  await act(async () => root.render(createElement(ChatFilePathContext.Provider, { value: parent },
-    createElement(CompanionTaskResultCard, {
-      meta, deviceId: 'home', renderMarkdown: (text: string) => createElement(MarkdownProbe, { text }),
-    }))));
+  // PR #6871 regression: a writable parent must not lend sending to child previews.
+  // Tier 1; the existing production result-card test covered file context only.
+  const send = vi.fn().mockResolvedValue(true);
+  await act(async () => root.render(createElement(SessionQuickSendProvider, { value: send },
+    createElement(ChatFilePathContext.Provider, { value: parent },
+      createElement(CompanionTaskResultCard, {
+        meta, deviceId: 'home', renderMarkdown: (text: string) => createElement(MarkdownProbe, { text }),
+      })))));
   // Collapsed: status + view result only; the body is not rendered until opened.
   expect(node.querySelector('[data-testid="result-markdown"]')).toBeNull();
   await act(async () => node.querySelector('button')!.click());
   expect(node.querySelector('[data-testid="result-markdown"]')?.textContent)
     .toBe('![chart](./chart.png) [Report](https://example.com/report.pdf)');
+  const previewSend = node.querySelector<HTMLButtonElement>('[data-testid="preview-send"]')!;
+  expect(previewSend.disabled).toBe(true);
+  await act(async () => previewSend.click());
+  expect(send).not.toHaveBeenCalled();
   // No second, duplicated link list below the Markdown (Desktop MarkdownRenderer parity).
   expect([...node.querySelectorAll('button')].some(button => ['chart', 'Report'].includes(button.textContent ?? ''))).toBe(false);
   const ctx = seen.at(-1);

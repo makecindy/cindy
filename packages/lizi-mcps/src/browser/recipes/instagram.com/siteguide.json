@@ -1,12 +1,15 @@
 {
   "site": "instagram.com",
-  "auth": "需要登录:在持久浏览器里登录 Instagram,接口靠会话 cookie 鉴权(同源 fetch + credentials:include),未登录会被风控返回非 JSON",
+  "auth": "鉴权以具体命令为准：cookie。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "home": "https://www.instagram.com",
-    "webProfileInfo": "https://www.instagram.com/api/v1/users/web_profile_info/?username=<username>",
-    "topSearch": "https://www.instagram.com/web/search/topsearch/?query=<query>&context=user",
-    "userFeed": "https://www.instagram.com/api/v1/feed/user/<userId>/?count=12"
+    "home": "https://www.instagram.com"
   },
-  "recipes": ["instagram-profile"],
-  "notes": "策略:cookie/login。关键姿势——先 navigate 到 https://www.instagram.com(取得同源 + 登录 cookie),再在页面内 fetch 内部 web API,所有请求都要带 header {'X-IG-App-ID':'936619743392459'}(这是 IG 网页端公开的固定 app id,不是用户私密 token)和 credentials:'include',否则会 401/403。直接 navigate 到 JSON URL 会被喂 SPA HTML。instagram-profile 配方走 users/web_profile_info,返回 data.user:{username,full_name,biography,is_verified,is_private,id,edge_followed_by.count(粉丝),edge_follow.count(关注),edge_owner_to_timeline_media.count(发帖数)};配方里顺带回传了 userId,可用于下面取该用户帖子。其它常用读接口(同样在页面内 fetch + 上述 header):1) 搜账号 web/search/topsearch/?query=<q>&context=user 返回 {users:[{user:{username,full_name,is_verified,is_private}}]};2) 取某用户帖子 api/v1/feed/user/<userId>/?count=12 返回 {items:[{caption:{text},like_count,comment_count,media_type(1=图/2=视频/8=多图),taken_at}]}(userId 先从 web_profile_info 拿)。JSON.parse 失败一律按未登录/风控处理,提示用户先在持久浏览器登录。"
+  "recipes": [
+    "instagram-profile"
+  ],
+  "notes": "兼容入口 instagram-profile 现执行内置 instagram/profile，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

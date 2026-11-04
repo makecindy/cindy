@@ -16,7 +16,7 @@
 
 import { GitPullRequest, MessageSquare } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 
 import { cn } from '@/lib/utils';
 import { Tooltip } from '@/components/ui/tooltip';
@@ -25,11 +25,7 @@ import { prStatusKey, MAX_STATUS_QUERIES } from '@/lib/prStatus';
 import { usePrStatuses } from '@/contexts/PrRefsContext';
 import { PR_STATUS_COLOR, PR_STATUS_ICON, prFailureCopyKey } from '../gitContextPrVisuals';
 import { formatSidebarFutureTime } from '../lib/formatSidebarTime';
-import {
-  findLatestSidebarIndexRunForSession,
-  loadScheduleSidebarIndexRuns,
-  type ScheduleSidebarIndexRun,
-} from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
+import { useAutomationScheduleSessionInfo } from '../hooks/useAutomationScheduleSessionIndex';
 
 const CONTENT_SURFACE_CLASS = cn(
   'bg-[var(--surface-elevated)] text-[var(--text-primary)]',
@@ -38,6 +34,19 @@ const CONTENT_SURFACE_CLASS = cn(
   // dark: override 才能让这个浅色浮层在两模式下都看得到边框。
   'border-[var(--border-default)] dark:border-[var(--border-default)] shadow-sm',
 );
+
+/**
+ * 只把 Radix 的**关闭**请求回灌给行级受控开关。
+ *
+ * 打开仍由行的 `onPointerOver` / `onFocusCapture` 谓词决定:Radix Trigger 自己会在
+ * 指针进入时请求打开,写回调用方就绕过了行内动作按钮的排除判断,行级浮层会压在动作
+ * 的 Tip 上。关闭请求(点别处 / Esc / 窗口失活)必须回灌,否则受控 open 关不掉。
+ */
+function closeRequestOnly(onOpenChange?: (open: boolean) => void) {
+  return (open: boolean) => {
+    if (!open) onOpenChange?.(false);
+  };
+}
 
 export interface SessionTooltipProps {
   sessionId: string;
@@ -57,6 +66,8 @@ export interface SessionTooltipProps {
    * 未提供时保持各变体原有的 Radix 非受控行为。
    */
   controlledOpen?: boolean;
+  /** 受控开关的关闭请求(点别处 / Esc / 窗口失活),调用方据此复位。 */
+  onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }
 
@@ -66,25 +77,39 @@ export function SessionTooltip({
   sourceLabel,
   isAutomationSession,
   controlledOpen,
+  onOpenChange,
   children,
 }: SessionTooltipProps) {
   if (prRefs.length > 0) {
     return (
-      <PrTooltip sessionId={sessionId} prRefs={prRefs} controlledOpen={controlledOpen}>
+      <PrTooltip
+        sessionId={sessionId}
+        prRefs={prRefs}
+        controlledOpen={controlledOpen}
+        onOpenChange={onOpenChange}
+      >
         {children}
       </PrTooltip>
     );
   }
   if (isAutomationSession) {
     return (
-      <AutomationTooltip sessionId={sessionId} controlledOpen={controlledOpen}>
+      <AutomationTooltip
+        sessionId={sessionId}
+        controlledOpen={controlledOpen}
+        onOpenChange={onOpenChange}
+      >
         {children}
       </AutomationTooltip>
     );
   }
   if (sourceLabel) {
     return (
-      <SourceTooltip sourceLabel={sourceLabel} controlledOpen={controlledOpen}>
+      <SourceTooltip
+        sourceLabel={sourceLabel}
+        controlledOpen={controlledOpen}
+        onOpenChange={onOpenChange}
+      >
         {children}
       </SourceTooltip>
     );
@@ -96,11 +121,13 @@ function PrTooltip({
   sessionId,
   prRefs,
   controlledOpen,
+  onOpenChange,
   children,
 }: {
   sessionId: string;
   prRefs: readonly SessionPrRef[];
   controlledOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }) {
   const { statuses, fetchStatusesForSession } = usePrStatuses(sessionId);
@@ -117,6 +144,7 @@ function PrTooltip({
         open={controlledOpen}
         onOpenChange={(open) => {
           if (open && controlledOpen === undefined) fetchStatusesForSession(sessionId);
+          closeRequestOnly(onOpenChange)(open);
         }}
       >
         <Tooltip.Trigger
@@ -147,51 +175,40 @@ function PrTooltip({
 
 /**
  * 单独 automation-generated 会话行的 hover 浮层 —— 显示下次运行剩余时间或停止状态。
- * 数据源和 Timer chip 点击复用同一套 loadScheduleSidebarIndexRuns；tooltip 打开时才发起一次拉取
- * (与 PrTooltip 的 fetchStatusesForSession 同风格,不在密集渲染路径上常驻拉数据);
- * 拉到的 nextFireAt 用一次性 formatSidebarFutureTime 转成 "N 分钟后运行",不做秒级 tick
+ * 数据源 = 已发布的实时 schedule 索引(useAutomationScheduleSessionInfo,随 scheduler
+ * 事件刷新)。旧实现是「tooltip 首次打开时拉一次 listSidebarIndexRuns 就把
+ * 快照留在组件 state 里」,此后永不刷新:用户停用(暂停)自动化后,气泡仍拿停用前的
+ * scheduleStatus=active + nextFireAt 继续显示倒计时,直到该行重新挂载。
+ * 走实时索引后停用/恢复立刻反映,也不用在密集渲染路径上自己发 IPC。
+ * 索引未就绪 / 为空时与组头同源降级(不显示气泡),本浮层不再单独兜底拉取。
+ * nextFireAt 用一次性 formatSidebarFutureTime 转成 "N 分钟后运行",不做秒级 tick
  * (tooltip 通常只停留几秒,静态文案够用)。
  */
 function AutomationTooltip({
   sessionId,
   controlledOpen,
+  onOpenChange,
   children,
 }: {
   sessionId: string;
   controlledOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
-  const effectiveOpen = controlledOpen ?? open;
-  const [runs, setRuns] = useState<ScheduleSidebarIndexRun[] | null>(null);
-  useEffect(() => {
-    if (!effectiveOpen || runs !== null) return;
-    let cancelled = false;
-    loadScheduleSidebarIndexRuns()
-      .then((next) => {
-        if (!cancelled) setRuns(next);
-      })
-      .catch(() => {
-        if (!cancelled) setRuns([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [effectiveOpen, runs]);
-
-  const hit = runs ? (findLatestSidebarIndexRunForSession(runs, sessionId) ?? null) : null;
+  const scheduleInfo = useAutomationScheduleSessionInfo(sessionId);
   const countdownText =
-    hit && hit.scheduleStatus === 'active' && typeof hit.nextFireAt === 'number'
-      ? formatSidebarFutureTime(hit.nextFireAt, t)
+    scheduleInfo?.scheduleStatus === 'active' && typeof scheduleInfo.nextFireAt === 'number'
+      ? formatSidebarFutureTime(scheduleInfo.nextFireAt, t)
       : '';
-  const isStopped = hit?.scheduleStatus === 'paused' || hit?.scheduleStatus === 'expired';
+  const isStopped =
+    scheduleInfo?.scheduleStatus === 'paused' || scheduleInfo?.scheduleStatus === 'expired';
   const stoppedText = isStopped ? t('ccAgent.sidebar.automationGroup.stopped') : '';
   const hasContent = countdownText || stoppedText;
 
   return (
     <Tooltip.Provider delayDuration={0} skipDelayDuration={0}>
-      <Tooltip.Root open={controlledOpen} onOpenChange={setOpen}>
+      <Tooltip.Root open={controlledOpen} onOpenChange={closeRequestOnly(onOpenChange)}>
         <Tooltip.Trigger asChild onFocus={(event) => event.preventDefault()}>
           {children}
         </Tooltip.Trigger>
@@ -211,16 +228,18 @@ function AutomationTooltip({
 function SourceTooltip({
   sourceLabel,
   controlledOpen,
+  onOpenChange,
   children,
 }: {
   sourceLabel: string;
   controlledOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }) {
   return (
     // 独立 Provider + delayDuration=0:与 PrTooltip 同规,hover 立即弹出。
     <Tooltip.Provider delayDuration={0} skipDelayDuration={0}>
-      <Tooltip.Root open={controlledOpen}>
+      <Tooltip.Root open={controlledOpen} onOpenChange={closeRequestOnly(onOpenChange)}>
         <Tooltip.Trigger asChild onFocus={(event) => event.preventDefault()}>
           {children}
         </Tooltip.Trigger>

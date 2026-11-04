@@ -187,9 +187,10 @@ export function ensureProvisionalDraftTask(
 }
 
 /** 输入清空 / 草稿不再适合提前建任务：删掉未发送任务。 */
-export function discardProvisionalDraftTask(): Promise<void> {
+export function discardProvisionalDraftTask(shouldDiscard: () => boolean = () => true): Promise<void> {
   return serial(async () => {
-    await discardCurrent();
+    // A queued empty check may run after typing / voice input has resumed.
+    if (shouldDiscard()) await discardCurrent();
   });
 }
 
@@ -218,8 +219,6 @@ export function takeProvisionalDraftTask(
       return null;
     }
     const taken = current;
-    current = null;
-    notify();
     try {
       await window.electronAPI.maker.commitProvisionalSession?.(taken.id);
     } catch (error) {
@@ -228,7 +227,14 @@ export function takeProvisionalDraftTask(
     }
     // The account changed while committing: the task lives in the old account's database,
     // so this send cannot use it (fails like a failed create; the draft is kept).
-    if (!isDataOwnerIdCurrent(taken.owner)) throw new ProvisionalDraftTaskBusyError(taken.id);
+    if (!isDataOwnerIdCurrent(taken.owner)) {
+      releaseForeignCurrent();
+      throw new ProvisionalDraftTaskBusyError(taken.id);
+    }
+    // Release editing/navigation ownership, but retain project placement while
+    // the ordinary send path and any in-flight list snapshots catch up.
+    current = null;
+    setProvisionalDraftTaskId(null, true);
     return taken.session;
   });
 }

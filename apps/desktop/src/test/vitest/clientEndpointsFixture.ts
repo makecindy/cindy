@@ -41,6 +41,7 @@ export const TEST_CLIENT_ENDPOINTS: ClientEndpointMap = {
   skillhubApiBaseUrl: 'https://skillhub.test.invalid',
   cindySkillHubApiBaseUrl: 'https://cindy-skillhub.test.invalid',
   pluginApiBaseUrl: 'https://plugin.test.invalid',
+  shareBaseUrl: '',
   cdnBaseUrl: TEST_CDN_BASE_URL,
   mobileUpdateBaseUrl: 'https://mobile-update.test.invalid',
 };

@@ -89,6 +89,7 @@ beforeEach(() => {
 afterEach(() => {
   setMobileDebugSink(undefined);
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 const messages = () =>
@@ -97,6 +98,51 @@ const messages = () =>
   );
 
 describe('mobile voice diagnostics', () => {
+  it.each(['text', 'empty', 'rate_limit'] as const)('recovers an empty mobile recording and diagnoses the result: %s', async (outcome) => {
+    vi.useFakeTimers();
+    let emit: (event: AsrEvent) => void = () => {};
+    let recovered = false;
+    const recover = vi.fn(async () => {
+      if (outcome === 'rate_limit') throw new ApiError('RATE_LIMITED', 429, 'PRIVATE_SERVER_MESSAGE');
+      recovered = true;
+    });
+    const onError = vi.fn();
+    const onDraftChanged = vi.fn();
+    const session = createMobileVoiceControllerSession({
+      credential: credential(), initialDraft: '', startAudio: startAudibleAudio,
+      refiner: null,
+      asr: {
+        onEvent(callback) { emit = callback; },
+        async start() { emit({ type: 'connected', at: Date.now() }); },
+        async stop() {}, appendAudio() {}, recover,
+        async flushAudio() {
+          if (recovered && outcome === 'text') emit({ type: 'stable', text: SPOKEN, at: Date.now() });
+        },
+      },
+      onError, onDraftChanged,
+    });
+    await session.start();
+    const stopping = session.stop().then(() => undefined, (error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(1100);
+    const stopError = await stopping;
+    expect(recover).toHaveBeenCalledTimes(1);
+    const logged = messages();
+    expect(logged.find((record) => record.args[0] === 'asr recovery attempted')?.args[1])
+      .toMatchObject({ trigger: 'empty_transcript', attempt: 1 });
+    if (outcome === 'text') {
+      expect(stopError).toBeUndefined();
+      expect(onError).not.toHaveBeenCalled();
+      expect(JSON.stringify(onDraftChanged.mock.calls)).toContain(SPOKEN);
+    } else {
+      expect(stopError).toBeInstanceOf(Error);
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(logged.find((record) => record.args[0] === 'run failed')?.args[1])
+        .toMatchObject({ reason: outcome === 'empty' ? 'empty_transcript' : 'rate_limited' });
+    }
+    expect(records.join('\n')).not.toContain(SPOKEN);
+    expect(records.join('\n')).not.toContain('PRIVATE_SERVER_MESSAGE');
+  });
+
   it('records the run stages and summaries in the voice scope without any dictated text', async () => {
     const session = createMobileVoiceControllerSession({
       credential: credential(),

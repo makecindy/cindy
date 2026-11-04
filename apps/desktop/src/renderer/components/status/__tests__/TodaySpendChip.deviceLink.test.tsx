@@ -23,7 +23,8 @@ import type { SessionUsageMoney } from '@/hooks/useSessionUsageMoney';
 import type { ProviderView } from '@cindy/model-providers';
 
 type TestProvider = Pick<ProviderView, 'id' | 'openAiAccount' | 'subscriptionAccount'> & {
-  auth: { native: string };
+  name?: string;
+  auth?: { native: string };
 };
 
 const mocks = vi.hoisted(() => ({
@@ -297,6 +298,8 @@ describe('TodaySpendChip device-link remote sessions', () => {
 
   it('默认路由远程会话路由观察值为 gateway 时按网关形态渲染被控端配额镜像', () => {
     mocks.remoteRoute = 'gateway';
+    mocks.localProviders = [{ id: 'xd', name: 'Cindy AI · 个人' }];
+    mocks.deviceProviders = [{ id: 'xd', name: 'Cindy AI · 心动' }];
     mocks.remoteClaudeQuota = {
       spend: 120,
       maxBudget: 3000,
@@ -309,6 +312,9 @@ describe('TodaySpendChip device-link remote sessions', () => {
     // 网关形态主 chip 显示今日额度(月度进 tooltip),数据来自被控端 LiteLLM 镜像。
     expect(container.textContent).toContain('今日');
     expect(container.textContent).not.toContain('剩余 ');
+    fireEvent.click(screen.getByRole('button', { name: 'quotaCard.usageTitle' }));
+    expect(screen.getByText('Cindy AI · 心动')).toBeTruthy();
+    expect(screen.queryByText('Cindy AI · 个人')).toBeNull();
   });
 
   it('远程 codex 会话按订阅形态渲染被控端账号窗口(组合 payload 选桶)', () => {

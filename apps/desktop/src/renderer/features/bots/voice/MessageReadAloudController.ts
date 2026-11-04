@@ -3,12 +3,17 @@ import type {
   VoiceConversationSelection,
 } from '@/../shared/voiceConversation';
 import { createLogger } from '@/lib/logger';
+import { extractIpcError } from '@/utils/ipcError';
 import type { SpeechPlayer } from './PcmSpeechPlayer';
 import { SpeechPlaybackQueue } from './SpeechPlaybackQueue';
 import { speechChunks, speechText } from './VoiceReplyTracker';
 
 const log = createLogger('voice-conversation');
-type Snapshot = { messageId: string | null; phase: 'idle' | 'preparing' | 'playing' | 'error' };
+type Snapshot = {
+  messageId: string | null;
+  phase: 'idle' | 'preparing' | 'playing' | 'error';
+  error?: 'speech' | 'speechTimeout';
+};
 type Playback = {
   id: string;
   messageId: string;
@@ -88,12 +93,17 @@ export class MessageReadAloudController {
     this.current = run;
     this.update({ messageId, phase: 'preparing' });
     const isCurrent = () => this.current === run;
-    const finish = (failed = false) => {
+    const finish = (failed = false, error?: unknown) => {
       if (!isCurrent()) return;
       void this.stop();
       if (failed) {
         log.warn('message playback failed', { callId: run.id });
-        this.update({ messageId: null, phase: 'error' });
+        this.update({
+          messageId: null,
+          phase: 'error',
+          error:
+            extractIpcError(error)?.code === 'VOICE_SPEECH_TIMEOUT' ? 'speechTimeout' : 'speech',
+        });
       }
     };
     try {
@@ -126,13 +136,13 @@ export class MessageReadAloudController {
         },
         drained: () => finish(),
         deferred: () => finish(true),
-        failed: () => finish(true),
+        failed: (error) => finish(true, error),
         diagnostic: (event, details) => log.info(event, { callId: run.id, ...details }),
       });
       // Bound each request, retain the complete reply and prefetch at most one segment.
       run.queue.append(speechChunks(text, 500), true);
-    } catch {
-      finish(true);
+    } catch (error) {
+      finish(true, error);
     } finally {
       // A cancelled IPC start can settle after a replacement. End only its own lease.
       if (!isCurrent() && run.opened) await this.end(run.id);

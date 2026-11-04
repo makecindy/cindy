@@ -84,6 +84,9 @@ it.each(['catalog', 'harness-read', 'native-preview', 'valid-harness', 'valid-mo
           isSessionInTurn: () => false, registerPendingCredentialSwitchForSession: vi.fn(),
           clearPendingCredentialSwitchForSession: vi.fn(), getPendingCredentialSwitchTarget: () => null,
           getCodexProxyAuthInjectionState: () => null, log: { debug: vi.fn(), info: vi.fn() },
+          // 任务级窗口预算：切片里的重建判定会读它。这里 = 本用例的场景（无预算），
+          // 两项窗口都未知 → 条件短路，与本文件其余注入同一约定。
+          sessionContextWindowBudget: null, targetContextWindow: undefined, budgetCompareWindow: undefined,
         };
         const result = await new Function(...Object.keys(mutationDeps), mutation)(...Object.values(mutationDeps));
         return { deferred: result.status === 'deferred', generation: 1 };
@@ -122,7 +125,7 @@ it.each([true, false])('refreshes after the final deferred-route read (revoked=%
   let prepared = false;
   const accept = vi.fn(() => 2);
   const deps = {
-    sessionId: 'route-child', model: 'next', effectiveProviderId: 'provider', routeExplicit: true, atomicSelection: undefined,
+    sessionId: 'route-child', model: 'next', effectiveProviderId: 'provider', routeExplicit: true, atomicSelection: undefined, currentEffort: null,
     internalOptions: { source: 'agent', beforeMutation: async () => {
       if (prepared && revoked) throw new GroupToolAuthorizationError();
     } },

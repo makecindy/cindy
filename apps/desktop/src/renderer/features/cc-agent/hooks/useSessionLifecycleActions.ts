@@ -5,19 +5,17 @@
  *   - CCAgentSidebarUpper：会话列表右键菜单 / 行内 archive 快捷按钮
  *   - SessionContentHeader：右栏顶栏 ··· 菜单
  *
- * 本 hook 只封装"确认之后的执行序列"（关子进程 / 写库 / 乐观补丁 / 释放内存 /
- * 清 composer draft / refresh 列表与 worktree / 必要时跳转）。**前置检查
- * （IM 接管拦截）和确认弹窗留在调用方**；运行态判据由本 hook 统一提供，
- * 调用方在关闭共享前复用，执行层在异步等待后复核。两处的确认交互形态不同
- * （sidebar 是受控 ConfirmDialog + 行内两步确认，header 是 imperative
- * confirmDialog），强行收进来反而耦合。
+ * 本 hook 封装乐观补丁、预检、写库与收尾。前置检查（IM 接管拦截）和确认弹窗
+ * 由调用方通过 prepareArchive 提供；运行态判据由本 hook 统一提供，
+ * 调用方在关闭共享前复用，执行层在异步等待后复核。归档入口共用可等待的
+ * confirmDialog，确认文案与是否需要确认仍由各入口按预检结果决定。
  *
  * activeSessionId 表示调用方原先浏览的会话；归档跳转前还会读取实时路由，
  * 防止预检或确认期间切换任务后，旧操作把新页面带走。
  *
  * 远程(device-link)任务的归档 / 恢复走 remoteProjectsStore 的状态迁移叠加层,与本机
  * sessionsStore 状态事务对称:行当帧换桶,写库成功后落被控端返回的行,失败回滚。
- * 调用方完成 worktree 预检与必要的确认后才进入本 hook；等待期间保留任务行与选中状态。
+ * 远程预检通过 prepareArchive 在乐观换桶之后执行；取消或失败恢复行，确认后才跳离详情。
  *
  * includeArchived 必须与调用方自己的 useCCSessions 桶一致：unarchive 的 refreshSessions
  * 只刷当前桶，sidebar 处于 archived / all 桶时删除行后若刷的是默认 active
@@ -78,6 +76,8 @@ function setStatusInOrder(
 }
 
 export interface RunSessionActionOptions {
+  /** 归档预检与确认。远程任务先乐观换桶，未获确认不写入、不清理或跳离详情。 */
+  prepareArchive?: (isCurrent: () => boolean) => Promise<boolean>;
   /** 当前活跃会话 id —— 决定 archive / delete 后是否需要跳走。 */
   activeSessionId: string | null | undefined;
   /**
@@ -142,7 +142,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
     async (
       sessionId: string,
       action: 'delete' | 'archive',
-      { activeSessionId, deleteRedirectRoute }: RunSessionActionOptions,
+      { activeSessionId, deleteRedirectRoute, prepareArchive }: RunSessionActionOptions,
     ) => {
       const actionStartedAt = performance.now();
       const targetStatus: SessionStatus = action === 'delete' ? 'deleted' : 'archived';
@@ -157,8 +157,34 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       // sessions:patched 回流。
       let remoteStatus: RemotePendingStatusToken | null = null;
 
+      if (action === 'archive' && prepareArchive) {
+        if (isDeviceLinkSession) {
+          remoteStatus = beginRemoteArchive(sessionId, statusWriteTarget.deviceId, null);
+        }
+        try {
+          const confirmed = await prepareArchive(
+            () => !remoteStatus || remoteProjectsStore.isPendingStatusCurrent(remoteStatus),
+          );
+          if (!confirmed || archiveBlockedByRunning(sessionId, deviceId)) {
+            if (remoteStatus) remoteProjectsStore.rollbackPendingStatus(remoteStatus);
+            return;
+          }
+          // 恢复、删除或设备移除已经取代了本次意图时，迟到预检不能再发归档。
+          if (remoteStatus && !remoteProjectsStore.isPendingStatusCurrent(remoteStatus)) return;
+        } catch (err) {
+          if (remoteStatus) remoteProjectsStore.rollbackPendingStatus(remoteStatus);
+          log.error('[archive preparation]', err);
+          toast.error(t('ccAgent.sidebar.archiveFailed'));
+          return;
+        }
+      }
+
       if (action === 'archive' && isDeviceLinkSession) {
-        remoteStatus = beginRemoteArchive(sessionId, statusWriteTarget.deviceId, activeSessionId);
+        if (!remoteStatus) {
+          remoteStatus = beginRemoteArchive(sessionId, statusWriteTarget.deviceId, activeSessionId);
+        } else if (sessionId === activeSessionId && isSessionRemovalRouteCurrent(sessionId)) {
+          navigate('/cc-agent/new');
+        }
       } else if (action === 'archive') {
         // 乐观更新的顺序取决于**被归档的行还会不会留在当前列表里**,两种情况相反:
         //

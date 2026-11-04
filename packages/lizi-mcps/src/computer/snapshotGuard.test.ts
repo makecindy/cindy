@@ -320,7 +320,9 @@ describe("opaque element credentials", () => {
       expect(await h.call("click", action)).toMatchObject({
         errorCode: "STALE_SNAPSHOT",
       });
-      expect(dispatch).toHaveBeenCalledTimes(3);
+      // click, the failed read, plus the one window-state discovery every unavailable
+      // observation of a known window now gets.
+      expect(dispatch).toHaveBeenCalledTimes(4);
     } finally {
       await h.cleanup();
     }
@@ -751,12 +753,10 @@ describe('computer snapshot guard', () => {
         const { elements: _elements, ...markdownOnly } = state as Record<string, unknown>;
         const hasMarkdown = "tree_markdown" in state && typeof state.tree_markdown === "string" && state.tree_markdown.trim() !== "";
         expect(observed.data).toEqual(ok && hasMarkdown ? markdownOnly : state);
-        // A failed AX observation may discover windows once, but never replays
-        // the observation, switches the target, or restarts the driver.
-        const rediscovered =
-          !ok &&
-          "degraded_reason" in state &&
-          state.degraded_reason === "ax_window_unresolved";
+        // An unavailable observation of a known window discovers windows once (so a
+        // minimized or other-Space window is told apart from a driver fault), but never
+        // replays the observation, switches the target, or restarts the driver.
+        const rediscovered = !ok;
         expect(callTool.mock.calls.map(([name]) => name)).toEqual(
           rediscovered
             ? ["get_window_state", "list_windows"]
@@ -770,7 +770,9 @@ describe('computer snapshot guard', () => {
 });
 
 describe('password fields', () => {
-  it('refuses agent typing into a password field and points at 代输入', async () => {
+  // MCP entry, unit tier: follow-up observations must retain OS hit-test frames;
+  // ordinary explicit reads alone did not cover the action + observation path.
+  it.each([false, true])('refuses typing into passwords, including action observations (observe=%s)', async (observe) => {
     const dispatch = vi.fn(async (name: string) => name === 'get_window_state'
       ? {
           elements: [
@@ -785,18 +787,20 @@ describe('password fields', () => {
       point ? point.y === 70 : focusedSecure);
     const h = await makeHarness({ getStatus: vi.fn(), callTool: dispatch, isSecureTarget }, { sessionId: 'secure' });
     try {
-      const state = await h.call('get_window_state', { pid: 1, window_id: 2 });
+      const state = observe
+        ? (await h.call('click', { pid: 1, window_id: 2, x: 1, y: 1, observe: {} })).observation as Record<string, unknown>
+        : await h.call('get_window_state', { pid: 1, window_id: 2 });
       for (const [tool, extra] of [['type_text', { text: 'synthetic' }], ['set_value', { value: 'synthetic' }]] as const) {
         expect(await h.call(tool, { pid: 1, window_id: 2, element_token: 'w:1', ...extra })).toMatchObject({
           ok: false,
           errorCode: 'SECURE_FIELD',
-          data: { hint: expect.stringContaining('request_input_handoff') },
+          data: { hint: expect.stringContaining('ask_owner') },
         });
         expect(await h.call(tool, { pid: 1, window_id: 2, element_index: 1, snapshot_id: state.snapshot_id, ...extra }))
           .toMatchObject({ errorCode: 'SECURE_FIELD' });
       }
       expect(isSecureTarget).toHaveBeenCalledWith({ pid: 1, point: { x: 60, y: 70 } });
-      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(dispatch).toHaveBeenCalledTimes(observe ? 2 : 1);
       expect(await h.call('type_text', { pid: 1, window_id: 2, element_token: 'w:0', text: 'someone@example.test' }))
         .toMatchObject({ ok: true });
       // Plain typing lands in the focused element.

@@ -2292,6 +2292,7 @@ interface PiSubagentResumeLaunch {
     modelsJson: Buffer;
     bridgeSource: Buffer;
     runnerSource: Buffer;
+    cacheRulesJson?: Buffer;
   };
 }
 
@@ -2724,6 +2725,26 @@ async function resumeClaimedPiSubagentRun(
         fs.readFile(selectedRunnerFile),
       ]);
   JSON.parse(modelsJson.toString('utf8'));
+  // Rules and models must come from the same generation. An older caller's
+  // current snapshot without rules must not inherit a historical route digest.
+  let cacheRules = launch.runtimeSnapshot?.cacheRulesJson;
+  if (cacheRules && cacheRules.byteLength > 256 * 1024) {
+    throw new Error('PI Subagent resume cache rules escaped their source run');
+  }
+  if (!launch.runtimeSnapshot) {
+    try {
+      const sourceCacheRules = path.join(sourceConfigHome, 'pi-cache-compatibility.json');
+      const [info, canonical] = await Promise.all([fs.lstat(sourceCacheRules), fs.realpath(sourceCacheRules)]);
+      if (info.isSymbolicLink() || !info.isFile() || info.size > 256 * 1024
+        || path.dirname(canonical) !== canonicalConfigHome) {
+        throw new Error('PI Subagent resume cache rules escaped their source run');
+      }
+      cacheRules = await fs.readFile(sourceCacheRules);
+    } catch (error) {
+      // Optional for older durable snapshots; preserve their missing-file compatibility.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
   const runId = randomUUID();
   const runDir = path.join(root, runId);
   const childConfigHome = path.join(runDir, 'pi-home');
@@ -2793,6 +2814,7 @@ async function resumeClaimedPiSubagentRun(
     }
     await fs.mkdir(childConfigHome, { recursive: true, mode: 0o700 });
     await fs.writeFile(path.join(childConfigHome, 'models.json'), modelsJson, { mode: 0o600, flag: 'wx' });
+    if (cacheRules) await fs.writeFile(path.join(childConfigHome, 'pi-cache-compatibility.json'), cacheRules, { mode: 0o600, flag: 'wx' });
     await copyStagedRipgrep(
       sourceConfigHome,
       childConfigHome,
@@ -3074,9 +3096,22 @@ async function sweepableRunsUnderRoots(
   // from each consuming another slice of the shared recovery deadline.
   const processes = await readRecoveryProcessInventory(recoveryDeadline);
   if (!processes) return byRoot;
+  const missing: string[] = [];
+  for (const runs of byRoot.values()) {
+    for (const { terminalIdentities } of runs) {
+      if (!terminalIdentities) continue;
+      if (processes.some((command) => terminalIdentities.some((id) => command.includes(id)))) continue;
+      missing.push(...terminalIdentities);
+    }
+  }
+  const procfs = process.platform === 'linux' && missing.length > 0
+    ? await linuxProcfsLiveIdentities(missing, recoveryDeadline)
+    : 'unavailable';
+  if (procfs === 'unknown') return byRoot;
   for (const [root, runs] of byRoot) {
     byRoot.set(root, runs.filter(({ terminalIdentities }) => !terminalIdentities
-      || processes.some(command => terminalIdentities.some(id => command.includes(id)))));
+      || processes.some((command) => terminalIdentities.some((id) => command.includes(id)))
+      || (procfs !== 'unavailable' && terminalIdentities.some((id) => procfs.has(id)))));
   }
   return byRoot;
 }
@@ -3135,14 +3170,109 @@ async function terminalResultProcessIdentities(
 
 /**
  * Inventory only for receipt recovery; never a source of PIDs to signal.
- * Empty/failed/truncated probes are unknown, not proof of absence. Windows can
- * omit command lines for protected processes in other accounts. Use the OS
- * user filter first (tasklist /FI USERNAME, like POSIX ps -u), then require a
- * readable command line or independent exit confirmation for every selected
- * PID, except OS-confirmed antimalware PPL processes (which cannot be our
- * ordinary Node/Electron/Pi runtimes). Other inaccessible live processes keep
- * recovery closed; PID discovery never authorizes a kill.
+ * Empty stdout, a failed probe, or `complete: false` are unknown, not proof of
+ * absence. A finished Windows probe may return no command lines: that means
+ * the current user had no process left to read, which is absence.
+ * Windows can omit command lines for protected processes in other accounts.
+ * Use the OS user filter first (tasklist /FI USERNAME, like POSIX ps -u), then
+ * require a readable command line or independent exit confirmation for every
+ * selected PID, except OS-confirmed antimalware PPL processes (which cannot be
+ * our ordinary Node/Electron/Pi runtimes). Other inaccessible live processes
+ * keep recovery closed; PID discovery never authorizes a kill.
+ *
+ * The Windows probe has to finish inside the kill budget. Enumerating every
+ * Win32_Process property, plus compiling a protection helper before checking
+ * which PIDs are still alive, exceeded that budget on hosted runners (8238ms
+ * against an 8000ms cap) and failed a dead child closed.
  */
+/** Full Linux argv, or null if that pid is already gone. `'unknown'` is fail-closed. */
+async function readLinuxProcArgs(
+  pid: string,
+  options: { ignorePermission?: boolean } = {},
+): Promise<string | null | 'unknown'> {
+  try {
+    const cmdline = await fs.readFile(`/proc/${pid}/cmdline`);
+    const args = cmdline.toString('utf8').split('\0').filter((part) => part.length > 0).join(' ');
+    return args.trim() ? args : null;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return null;
+    if (options.ignorePermission && (code === 'EACCES' || code === 'EPERM')) return null;
+    return 'unknown';
+  }
+}
+
+/**
+ * Identities still visible in `/proc` after `ps` missed them.
+ * `unavailable` means this is not a Linux procfs (a unit test may only pretend
+ * to be Linux). `unknown` means the scan could not finish and must fail closed.
+ */
+async function linuxProcfsLiveIdentities(
+  identities: readonly string[],
+  deadline: number,
+): Promise<Set<string> | 'unavailable' | 'unknown'> {
+  const sought = identities.filter((id) => id.length >= 32);
+  if (sought.length === 0) return new Set();
+  let names: string[];
+  try {
+    names = await fs.readdir('/proc');
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' || code === 'ENOTDIR' ? 'unavailable' : 'unknown';
+  }
+  const found = new Set<string>();
+  for (const name of names) {
+    if (Date.now() >= deadline) return 'unknown';
+    if (!/^[1-9]\d*$/.test(name)) continue;
+    // Other users' cmdlines are often unreadable. Skip those; a permission
+    // error is not evidence that our own child is still alive.
+    const args = await readLinuxProcArgs(name, { ignorePermission: true });
+    if (args === 'unknown') return 'unknown';
+    if (!args) continue;
+    for (const id of sought) {
+      if (args.includes(id)) found.add(id);
+    }
+    if (sought.every((id) => found.has(id))) break;
+  }
+  return found;
+}
+
+/** Add same-user processes `ps` omitted. An unreadable live command line is unknown. */
+async function supplementLinuxProcCommandLines(
+  commands: string[],
+  seenPids: Set<string>,
+  uid: number,
+  deadline: number,
+): Promise<string[] | null> {
+  let names: string[];
+  try {
+    names = await fs.readdir('/proc');
+  } catch {
+    return null;
+  }
+  for (const name of names) {
+    if (Date.now() >= deadline) return null;
+    if (!/^[1-9]\d*$/.test(name) || seenPids.has(name)) continue;
+    let statusText: string;
+    try {
+      statusText = await fs.readFile(`/proc/${name}/status`, 'utf8');
+    } catch {
+      continue;
+    }
+    const uidField = statusText.split('\n').find((line) => line.startsWith('Uid:'));
+    const realUid = uidField ? Number(uidField.slice(4).trim().split(/\s+/)[0]) : Number.NaN;
+    if (realUid !== uid) continue;
+    const stateField = statusText.split('\n').find((line) => line.startsWith('State:'));
+    if (stateField?.slice(6).trim().startsWith('Z')) continue;
+    const args = await readLinuxProcArgs(name);
+    if (args === 'unknown') return null;
+    if (!args) continue;
+    commands.push(args);
+    seenPids.add(name);
+  }
+  return commands;
+}
+
 async function readRecoveryProcessInventory(deadline: number): Promise<string[] | null> {
   try {
     const remaining = Math.floor(deadline - Date.now());
@@ -3155,42 +3285,82 @@ async function readRecoveryProcessInventory(deadline: number): Promise<string[] 
         // own probe PID so that its expected exit cannot block every recovery.
         '$probe = [System.Diagnostics.Process]::new()',
         '$probe.StartInfo.FileName = "$env:SystemRoot\\System32\\tasklist.exe"',
-        '$probe.StartInfo.Arguments = \'/V /FO CSV /NH /FI "USERNAME eq \' + $user + \'"\'',
+        // /V adds a window title per process and is not needed for the user
+        // filter. PID and image name are the only columns this probe reads.
+        '$probe.StartInfo.Arguments = \'/FO CSV /NH /FI "USERNAME eq \' + $user + \'"\'',
         '$probe.StartInfo.UseShellExecute = $false',
         '$probe.StartInfo.CreateNoWindow = $true',
         '$probe.StartInfo.RedirectStandardOutput = $true',
+        '$probe.StartInfo.RedirectStandardError = $true',
         'if (-not $probe.Start()) { throw "tasklist did not start" }',
         '$probeId = $probe.Id',
+        // Drain both pipes before WaitForExit. Reading only stdout while stderr
+        // fills its pipe deadlocks until the outer timeout kills the probe.
         '$csv = $probe.StandardOutput.ReadToEnd()',
+        '$null = $probe.StandardError.ReadToEnd()',
         '$probe.WaitForExit()',
         '$probeExitCode = $probe.ExitCode',
         '$probe.Dispose()',
         'if ($probeExitCode -ne 0) { throw "tasklist failed" }',
-        '$owned = @($csv | ConvertFrom-Csv -Header Name,ProcessId,SessionName,SessionNumber,Memory,Status,UserName,CPUTime,WindowTitle)',
+        // Without /V the columns are Image Name, PID, Session Name, Session#, Mem Usage.
+        '$owned = @($csv | ConvertFrom-Csv -Header Name,ProcessId,SessionName,SessionNumber,Memory)',
         '$processIds = @{}',
+        '$names = @{}',
         'foreach ($row in $owned) {',
         '  $number = 0',
         '  if (-not [int]::TryParse($row.ProcessId, [ref]$number) -or $number -le 0) { throw "invalid process inventory" }',
         '  if ($number -eq $probeId) { continue }',
         '  $processIds[$number] = $true',
+        '  $name = [string]$row.Name',
+        '  if (-not [string]::IsNullOrWhiteSpace($name)) { $names[$name] = $true }',
         '}',
         '$count = $processIds.Count',
         '$commands = [System.Collections.Generic.List[string]]::new()',
         '$complete = $true',
-        '$items = @(Get-CimInstance Win32_Process -ErrorAction Stop)',
-        'foreach ($item in $items) {',
-        '  $number = [int]$item.ProcessId',
-        '  if (-not $processIds.ContainsKey($number)) { continue }',
-        '  if ([string]::IsNullOrWhiteSpace($item.CommandLine)) { continue }',
-        '  $commands.Add($item.CommandLine)',
-        '  $processIds.Remove($number)',
+        'if ($names.Count -gt 0) {',
+        // A short name filter uses the indexed Name column. A long OR list can
+        // be rejected by WQL; fall back to the same two fields without a filter
+        // rather than failing the whole probe closed.
+        '  $items = $null',
+        '  if ($names.Count -le 32) {',
+        '    try {',
+        '      $clauses = @(foreach ($name in @($names.Keys)) { "Name=\'" + ($name -replace "\'", "\'\'" ) + "\'" })',
+        '      $filter = $clauses -join \' OR \'',
+        '      $items = @(Get-CimInstance -ClassName Win32_Process -Property ProcessId,CommandLine -Filter $filter -ErrorAction Stop)',
+        '    } catch { $items = $null }',
+        '  }',
+        '  if ($null -eq $items) {',
+        '    $items = @(Get-CimInstance -ClassName Win32_Process -Property ProcessId,CommandLine -ErrorAction Stop)',
+        '  }',
+        '  foreach ($item in $items) {',
+        '    $number = [int]$item.ProcessId',
+        '    if (-not $processIds.ContainsKey($number)) { continue }',
+        '    if ([string]::IsNullOrWhiteSpace($item.CommandLine)) { continue }',
+        '    $commands.Add($item.CommandLine)',
+        '    $processIds.Remove($number)',
+        '  }',
+        '}',
+        // Confirm exits before compiling the protection helper. csc.exe is
+        // another multi-second startup, and PIDs that have already vanished
+        // do not need it.
+        '$stillLive = New-Object System.Collections.Generic.List[int]',
+        'foreach ($number in @($processIds.Keys)) {',
+        '  $unreadable = $null',
+        '  try {',
+        '    $unreadable = [System.Diagnostics.Process]::GetProcessById($number)',
+        '    if ($unreadable.HasExited) { $count-- } else { [void]$stillLive.Add($number) }',
+        '  } catch [System.ArgumentException] {',
+        '    $count--',
+        '  } finally {',
+        '    if ($null -ne $unreadable) { $unreadable.Dispose() }',
+        '  }',
         '}',
         // DefenderSessionHelper can belong to this user but hide its command
         // line. Never exempt an image name: query the OS protection level with
         // minimum read-only rights. Only ANTIMALWARE_LIGHT is excluded; NONE,
         // third-party PPL_APP, unknown levels and query failures remain unknown.
         // https://learn.microsoft.com/windows/win32/api/processthreadsapi/nf-processthreadsapi-getprocessinformation
-        'if ($processIds.Count -gt 0) {',
+        'if ($stillLive.Count -gt 0) {',
         "Add-Type -TypeDefinition @'",
         'using System;',
         'using System.Runtime.InteropServices;',
@@ -3211,46 +3381,67 @@ async function readRecoveryProcessInventory(deadline: number): Promise<string[] 
         '  }',
         '}',
         "'@",
-        '}',
-        // Other short-lived processes can exit between tasklist and CIM too.
-        // Missing command lines alone are not exit evidence; independently
-        // check each remaining PID. Retire only confirmed exits or the OS
-        // antimalware role above, never an arbitrary unreadable live process.
-        'foreach ($number in @($processIds.Keys)) {',
-        '  $unreadable = $null',
-        '  try {',
-        '    $unreadable = [System.Diagnostics.Process]::GetProcessById($number)',
-        '    if ($unreadable.HasExited -or [CindyRecoveryProcessProtection]::IsAntimalware($number)) { $count-- } else { $complete = $false }',
-        '  } catch [System.ArgumentException] {',
-        '    $count--',
-        '  } finally {',
-        '    if ($null -ne $unreadable) { $unreadable.Dispose() }',
+        // Exits were already retired above. Only a still-live PID remains, and
+        // only OS-confirmed antimalware may be dropped without a command line.
+        '  foreach ($number in $stillLive) {',
+        '    if ([CindyRecoveryProcessProtection]::IsAntimalware([uint32]$number)) { $count-- } else { $complete = $false }',
         '  }',
         '}',
-        '@{ complete = $complete; commands = @($commands.ToArray()); count = $count } | ConvertTo-Json -Compress',
+        // ConvertTo-Json unwraps a one-element array and can emit null for an
+        // empty one. Build the array explicitly so a finished probe stays JSON.
+        '$encoded = @(foreach ($command in $commands) { ConvertTo-Json -InputObject $command -Compress })',
+        '$commandJson = \'[\' + ($encoded -join \',\') + \']\'',
+        '$completeJson = if ($complete) { \'true\' } else { \'false\' }',
+        '\'{"complete":\' + $completeJson + \',"count":\' + $count + \',"commands":\' + $commandJson + \'}\'',
       ].join('\n');
       const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
         encoding: 'utf8', timeout: Math.min(DEFAULT_KILL_BUDGET_MS, remaining), maxBuffer: 4 * 1024 * 1024, windowsHide: true,
       });
       const value = JSON.parse(stdout);
-      if (value?.complete !== true || !Number.isSafeInteger(value.count) || value.count <= 0
-        || !Array.isArray(value.commands) || value.commands.length !== value.count
-        || value.commands.some((command: unknown) => typeof command !== 'string' || !command.trim())) return null;
-      return value.commands;
+      const commands = Array.isArray(value?.commands)
+        ? value.commands
+        : value?.count === 0 && value?.commands == null ? [] : null;
+      if (value?.complete !== true || !Number.isSafeInteger(value.count) || value.count < 0
+        || !Array.isArray(commands) || commands.length !== value.count
+        || commands.some((command: unknown) => typeof command !== 'string' || !command.trim())) return null;
+      return commands;
     }
-    const uid = process.geteuid?.();
-    if (!Number.isSafeInteger(uid)) return null;
+    if (process.geteuid === undefined) return null;
+    const uid = process.geteuid();
+    // COLUMNS does not always yield to -ww when stdout is a pipe. A clipped
+    // line can drop --session-id and look like the child already exited.
     const { stdout } = await execFileAsync('ps', ['-ww', '-u', String(uid), '-o', 'pid=,args='], {
-      encoding: 'utf8', timeout: Math.min(KILL_PROBE_TIMEOUT_MS, remaining), maxBuffer: 4 * 1024 * 1024,
+      encoding: 'utf8',
+      timeout: Math.min(KILL_PROBE_TIMEOUT_MS, remaining),
+      maxBuffer: 4 * 1024 * 1024,
+      env: { ...process.env, COLUMNS: '1000000' },
     });
     const lines = stdout.trim().split('\n');
     const commands: string[] = [];
+    const seenPids = new Set<string>();
     for (const line of lines) {
+      if (Date.now() >= deadline) return null;
       const match = /^\s*([1-9]\d*)\s+(.+)$/.exec(line);
       if (!match || !match[2]!.trim()) return null;
-      commands.push(match[2]!);
+      const pid = match[1]!;
+      let command = match[2]!;
+      if (process.platform === 'linux') {
+        const full = await readLinuxProcArgs(pid);
+        if (full === 'unknown') return null;
+        // Replace only a listing /proc confirms. A missing entry keeps the ps
+        // text so a test stub pid is not overwritten by an unrelated process.
+        // A live argv that does not contain the visible ps text is still
+        // recorded: ps can show only `comm` while /proc keeps --session-id.
+        const visible = command.endsWith('+') ? command.slice(0, -1) : command;
+        if (full && visible && full.includes(visible)) command = full;
+        else if (full && full !== command) commands.push(full);
+      }
+      commands.push(command);
+      seenPids.add(pid);
     }
-    return commands.length > 0 ? commands : null;
+    if (commands.length === 0) return null;
+    if (process.platform !== 'linux') return commands;
+    return supplementLinuxProcCommandLines(commands, seenPids, uid, deadline);
   } catch {
     return null;
   }

@@ -491,6 +491,7 @@ it('captures completion execution before asynchronous reads or a later turn', as
   await h.watch.start();
   h.watch.applyActivity('child', activity('child', 'running', { turnGeneration: null }));
   await h.watch.settled();
+  expect(h.watch.reportDelivery('child', execution, true)).toBe(true);
   h.watch.applyActivity('child', activity('child', 'completed', { turnGeneration: null }));
   execution = { instanceId: 'native-2', generation: 2 };
   await h.watch.settled();
@@ -503,4 +504,34 @@ it('captures completion execution before asynchronous reads or a later turn', as
   expect(h.watch.get('child')?.execution).toEqual(execution);
   expect(saved.data).toMatchObject({ executionInstanceId: 'native-1', executionGeneration: 1 });
   h.watch.stop();
+});
+
+// Unit / #7253: a model report must not survive a different native execution,
+// nor turn stopped/error activity into delivery. Existing identity coverage only
+// freezes event attribution. Minimal input: true in generation 1, completion in 2.
+it('binds delivery reports to the live execution and permits correcting a report before completion', async () => {
+  let execution = { instanceId: 'native', generation: 1 };
+  const h = harness({ metas: [meta('child')], creators: { child: 'a' }, readSessionExecution: () => execution });
+  await h.watch.start();
+  try {
+    h.watch.applyActivity('child', activity('child', 'running', { turnGeneration: 1 }));
+    expect(h.watch.reportDelivery('child', execution, true)).toBe(true);
+    expect(h.watch.reportDelivery('child', execution, false)).toBe(true);
+    await h.watch.settled();
+    expect(h.watch.get('child')?.finalDelivery).toBe(false);
+    expect(h.watch.reportDelivery('child', execution, true)).toBe(true);
+    execution = { instanceId: 'native', generation: 2 };
+    expect(h.watch.reportDelivery('child', { ...execution, generation: 1 }, true)).toBe(false);
+    h.watch.applyActivity('child', activity('child', 'running', { turnGeneration: 2 }));
+    h.watch.applyActivity('child', activity('child', 'completed', { turnGeneration: 2 }));
+    await h.watch.settled();
+    expect(new AutonomyEventLedger().evaluate(h.watch.list(), h.now()).due).toEqual([]);
+    expect(h.watch.reportDelivery('child', execution, true)).toBe(false);
+    h.watch.applyActivity('child', activity('child', 'running', { turnGeneration: 3 }));
+    execution = { instanceId: 'native', generation: 3 };
+    expect(h.watch.reportDelivery('child', execution, true)).toBe(true);
+    h.watch.applyActivity('child', null);
+    await h.watch.settled();
+    expect(new AutonomyEventLedger().evaluate(h.watch.list(), h.now()).due).toEqual([]);
+  } finally { h.watch.stop(); }
 });

@@ -6,7 +6,14 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+import { includeProjectInFilter } from '@/features/cc-agent/hooks/helpers/sidebarFilterCore';
+import type { PersistentLocalProject } from '@/features/cc-agent/lib/projectGrouping';
+import {
+  collectRestorableProjectKeys,
+  restoreHiddenProjectIfPresent,
+} from '@/features/cc-agent/lib/sidebarProjectRestore';
 
 const sidebarSource = readFileSync(
   resolve(__dirname, '..', 'features', 'cc-agent', 'CCAgentSidebarUpper.tsx'),
@@ -78,21 +85,40 @@ describe('pinned project sidebar integration', () => {
     expect(railRemoveBlock).not.toContain('railPanelStore.closeAll();');
   });
 
-  it('restores against the latest project catalogue and re-admits the active filter', () => {
-    expect(sidebarSource).toContain(
-      'const filter = useSidebarFilter(hiddenProjectKeys, sidebarSettingsSnapshot);',
-    );
-    expect(sidebarSource).toContain('collectRestorableProjectKeys({');
-    expect(sidebarSource).toContain('const restorableProjectKeys = useMemo(');
-    expect(sidebarSource).toContain('restorableProjectKeysRef.current = restorableProjectKeys;');
-    expect(sidebarSource).toContain('sessions: scopedSidebarSessions,');
-    expect(sidebarSource).toContain('const restored = await restoreHiddenProjectIfPresent({');
-    expect(sidebarSource).toContain(
-      'getCurrentProjectKeys: () => restorableProjectKeysRef.current,',
-    );
-    expect(sidebarSource).toContain('ensureProjectIncluded: filter.ensureProjectIncluded,');
-    expect(sidebarSource).toContain('localPlatform,');
-    expect(sidebarSource).toContain('if (restored) return;');
+  // #7469, unit: the old source-string assertion required eager useMemo and
+  // failed after lazy collection, without testing restore/filter outcomes.
+  // An empty catalogue gains one project while IPC is pending; exercise the
+  // real collector, restore transaction and filter reducer together.
+  it('restores against the latest project catalogue and re-admits the active filter', async () => {
+    const projectKey = 'local:/workspace/restored';
+    let catalogue: PersistentLocalProject[] = [];
+    let filter: Parameters<typeof includeProjectInFilter>[0] = ['local:/workspace/old'];
+    let finishUpdate!: (changed: boolean) => void;
+    const update = new Promise<boolean>((resolve) => { finishUpdate = resolve; });
+    const setProjectHidden = vi.fn(() => update);
+    const getCurrentProjectKeys = vi.fn(() => collectRestorableProjectKeys({
+      sessions: [], persistentLocalProjects: catalogue, lastActivityCutoff: null,
+      pinnedProjectKeys: new Set(), vendorPredicate: null, localPlatform: 'linux',
+    }));
+    const restore = () => restoreHiddenProjectIfPresent({
+      projectKey, wasHiddenAtPickerOpen: true, setProjectHidden, getCurrentProjectKeys,
+      ensureProjectIncluded: (key) => { filter = includeProjectInFilter(filter, key, 'linux'); },
+      localPlatform: 'linux',
+    });
+    const pending = restore();
+    expect(setProjectHidden).toHaveBeenCalledWith(projectKey, false);
+    expect(getCurrentProjectKeys).not.toHaveBeenCalled();
+    expect(filter).toEqual(['local:/workspace/old']);
+
+    catalogue = [{ workingDir: '/workspace/restored', lastUsedAt: '2026-01-01T00:00:00Z', knownAgentKinds: [] }];
+    filter = ['local:/workspace/concurrent'];
+    finishUpdate(true);
+
+    await expect(pending).resolves.toBe(true);
+    expect(getCurrentProjectKeys).toHaveBeenCalledOnce();
+    expect(filter).toEqual(['local:/workspace/concurrent', projectKey]);
+    await expect(restore()).resolves.toBe(true);
+    expect(filter).toEqual(['local:/workspace/concurrent', projectKey]);
   });
 
   it('prunes hidden projects from filters in every renderer hook', () => {

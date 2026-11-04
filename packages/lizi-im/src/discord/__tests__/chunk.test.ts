@@ -34,6 +34,16 @@ describe('chunkDiscordText', () => {
     expect(chunks[1].endsWith('\n```')).toBe(true);
   });
 
+  it('closes an unterminated code fence in the final chunk', () => {
+    const chunks = chunkDiscordText(`\`\`\`ts\n${'x'.repeat(25)}`, 20);
+
+    // 源码末尾仍在代码块内时，出站的最后一段也必须闭合，不能把未闭合围栏交给客户端渲染。
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 20)).toBe(true);
+    expect(chunks[0].startsWith('```ts\n')).toBe(true);
+    expect(chunks.at(-1)?.endsWith('\n```')).toBe(true);
+  });
+
   it('hard-splits a single line over the limit', () => {
     const chunks = chunkDiscordText('x'.repeat(25), 10);
 

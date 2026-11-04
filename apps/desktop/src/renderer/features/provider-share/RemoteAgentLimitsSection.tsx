@@ -6,14 +6,22 @@ import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
-import { isRemoteAgentLimits, REMOTE_AGENT_LIMIT_MAX, type RemoteAgentLimitsView } from '../../../shared/remoteAgentLimits';
+import {
+  isRemoteAgentLimits,
+  isRemoteAgentLimitsPatch,
+  REMOTE_AGENT_IDLE_MINUTES_MAX,
+  REMOTE_AGENT_LIMIT_MAX,
+  type RemoteAgentLimitsView,
+} from '../../../shared/remoteAgentLimits';
 import { providerManagementErrorKey, providerShareManagementCommand } from '../provider-group/providerManagement';
 
-/** 各供应商管理页共用同一份提供方额度；只展示提供方自己的占用合计。 */
+type LimitKey = 'perDevice' | 'total' | 'idleMinutes';
+
+/** 各供应商管理页共用同一份提供方额度与闲置收回时长；只展示提供方自己的占用合计。 */
 export function RemoteAgentLimitsSection({ deviceId }: { deviceId?: string }) {
   const { t } = useTranslation();
   const [view, setView] = useState<RemoteAgentLimitsView | null>(null);
-  const [draft, setDraft] = useState<Partial<{ perDevice: string; total: string }> | null>(null);
+  const [draft, setDraft] = useState<Partial<Record<LimitKey, string>> | null>(null);
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const saving = useRef(false);
@@ -46,10 +54,22 @@ export function RemoteAgentLimitsSection({ deviceId }: { deviceId?: string }) {
     return () => { sequence.current += 1; reading.current = null; window.clearInterval(timer); };
   }, [load]);
 
-  const values = { perDevice: String(view?.value.perDevice ?? ''), total: String(view?.value.total ?? ''), ...draft };
-  const limits = { perDevice: Number(values.perDevice), total: Number(values.total) };
-  const valid = isRemoteAgentLimits(limits);
-  const changed = view && (['perDevice', 'total'] as const).some(key =>
+  // 远程管理旧版电脑时它的设置里没有闲置收回：不显示这一项，也不提交(旧版会拒绝不认识的字段)。
+  const idleSupported = typeof view?.value.idleMinutes === 'number';
+  const keys: LimitKey[] = idleSupported ? ['perDevice', 'total', 'idleMinutes'] : ['perDevice', 'total'];
+  const values: Record<LimitKey, string> = {
+    perDevice: String(view?.value.perDevice ?? ''),
+    total: String(view?.value.total ?? ''),
+    idleMinutes: String(view?.value.idleMinutes ?? ''),
+    ...draft,
+  };
+  const limits: Record<LimitKey, number> = {
+    perDevice: Number(values.perDevice), total: Number(values.total), idleMinutes: Number(values.idleMinutes),
+  };
+  const countsValid = isRemoteAgentLimits({ perDevice: limits.perDevice, total: limits.total });
+  const idleValid = !idleSupported || (values.idleMinutes.trim() !== '' && isRemoteAgentLimitsPatch({ idleMinutes: limits.idleMinutes }));
+  const valid = countsValid && idleValid;
+  const changed = view && keys.some(key =>
     draft?.[key] !== undefined && (limits[key] !== view.value[key] || !view.customizedKeys.includes(key)));
 
   const save = async (reset: boolean) => {
@@ -60,10 +80,9 @@ export function RemoteAgentLimitsSection({ deviceId }: { deviceId?: string }) {
     const owner = getDataOwnerGeneration();
     try {
       const next = await providerShareManagementCommand(reset
-        ? { action: 'reset-run-limits' } : { action: 'set-run-limits', limits: {
-          ...(draft?.perDevice !== undefined ? { perDevice: limits.perDevice } : {}),
-          ...(draft?.total !== undefined ? { total: limits.total } : {}),
-        } }, deviceId);
+        ? { action: 'reset-run-limits' } : { action: 'set-run-limits', limits: Object.fromEntries(
+          keys.filter(key => draft?.[key] !== undefined).map(key => [key, limits[key]]),
+        ) }, deviceId);
       if (seq !== sequence.current || !isDataOwnerGenerationCurrent(owner)) return;
       setView(next);
       setDraft(null);
@@ -98,10 +117,21 @@ export function RemoteAgentLimitsSection({ deviceId }: { deviceId?: string }) {
               </FormField>
             ))}
           </div>
-          {draft && !valid && <p role="alert" className="text-12 leading-[1.5] text-[var(--text-danger)]">{t('providerShare.runLimits.invalid', { max: REMOTE_AGENT_LIMIT_MAX })}</p>}
+          {(draft?.perDevice !== undefined || draft?.total !== undefined) && !countsValid && <p role="alert" className="text-12 leading-[1.5] text-[var(--text-danger)]">{t('providerShare.runLimits.invalid', { max: REMOTE_AGENT_LIMIT_MAX })}</p>}
           <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]" aria-live="polite">
             {t('providerShare.runLimits.usage', { used: view.usage.total, total: view.value.total, devices: view.usage.devices, largest: view.usage.largestDevice })}
           </p>
+          {idleSupported && (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <FormField label={t('providerShare.runLimits.idleMinutes')} hint={t('providerShare.runLimits.idleHint')}
+                error={draft?.idleMinutes !== undefined && !idleValid
+                  ? t('providerShare.runLimits.idleInvalid', { max: REMOTE_AGENT_IDLE_MINUTES_MAX }) : undefined}>
+                {control => <Input {...control} type="number" min={0} max={REMOTE_AGENT_IDLE_MINUTES_MAX} step={1}
+                  disabled={busy || Boolean(errorKey)} value={values.idleMinutes} data-testid="remote-agent-limit-idleMinutes"
+                  onChange={value => setDraft(previous => ({ ...previous, idleMinutes: value }))} />}
+              </FormField>
+            </div>
+          )}
           <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">{t('providerShare.runLimits.applyHint')}</p>
           <div className="flex flex-wrap gap-2">
             <Button type="submit" variant="cta" size="sm" disabled={busy || !valid || !changed || Boolean(errorKey)}>{t('providerShare.runLimits.save')}</Button>

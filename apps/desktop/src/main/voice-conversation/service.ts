@@ -11,6 +11,7 @@ import {
   type SpeechPreviewStart,
   type SpeechVoiceCatalog,
   type SpeechStartResult,
+  type SpeechAudioResult,
   type VoiceExitDecision,
 } from '../../shared/voiceConversation.js';
 import type {
@@ -62,7 +63,7 @@ export class VoiceConversationService {
       models(): VoiceConversationModel[];
       createDialogue?(selection: VoiceConversationStart, emit: (record: import("@cindy/maker-core").VoiceCallRecord) => void): CompanionCallDialogue;
       createProvider(): Promise<AsrProvider>;
-      createAudioGate?(): AudioGate | undefined;
+      createAudioGate?(onFiltered: () => void): AudioGate | undefined;
       connection(selection: SpeechModelSelection): SpeechConnection;
       fetch: typeof fetch;
       hasReplyHook?(): boolean;
@@ -80,20 +81,26 @@ export class VoiceConversationService {
     const owner = this.deps.owner();
     const connection = this.deps.connection(selection);
     const identity = JSON.stringify(connection);
-    return loadSpeechVoices(connection, selection.modelId, this.deps.fetch, () => {
-      if (
-        this.deps.owner() !== owner ||
-        JSON.stringify(this.deps.connection(selection)) !== identity
-      )
-        throw new Error('connection_changed');
-    });
+    return loadSpeechVoices(
+      connection,
+      selection.modelId,
+      this.deps.fetch,
+      () => {
+        if (
+          this.deps.owner() !== owner ||
+          JSON.stringify(this.deps.connection(selection)) !== identity
+        )
+          throw new Error('connection_changed');
+      },
+      selection.providerId ?? 'xd',
+    );
   }
 
   /** Preview uses the exact synthesis adapter without starting ASR or submitting a task. */
   async startPreview(
     sender: number,
     selection: SpeechPreviewStart,
-  ): Promise<{ sampleRate: number }> {
+  ): Promise<SpeechAudioResult> {
     if (this.call || this.preview || this.deps.hasDictation()) throw new Error('busy');
     if (!this.models().some((model) => voiceModelKey(model) === voiceModelKey(selection)))
       throw new Error('model_unavailable');
@@ -255,7 +262,11 @@ export class VoiceConversationService {
   private createInput(call: Call): VoiceConversationInput {
     const inputGeneration = call.inputGeneration;
     const current = () => this.call === call && call.inputGeneration === inputGeneration;
-    const audioGate = this.deps.createAudioGate?.();
+    const audioGate = this.deps.createAudioGate?.(() => {
+      // Muted speech never reaches ASR, so only this notice tells the user why.
+      if (!current() || this.deps.owner() !== call.owner) return;
+      this.deps.emit(call.sender, { callId: call.id, inputGeneration, event: { type: 'speaker-filtered' } });
+    });
     this.deps.log?.info('input filter configured', {
       callId: call.id,
       inputGeneration,

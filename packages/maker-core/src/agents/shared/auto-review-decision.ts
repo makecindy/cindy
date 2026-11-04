@@ -4,6 +4,7 @@ import { AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_RE
 
 import {
   MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
+  MAX_AUTO_REVIEW_STATIC_TEXT_CHARS,
   reviewAction,
   type ReviewableAction,
   type ReviewVerdict,
@@ -199,7 +200,7 @@ export function isSystemPermissionDenialReason(reason: unknown): boolean {
   return SYSTEM_PERMISSION_DENIAL_PREFIXES.some((prefix) => reason.startsWith(prefix));
 }
 
-/** Model-visible text on the rejected tool result, never an extra conversation message. */
+/** Denial provenance for tool results and Codex's same-turn host feedback. */
 export function formatPermissionDenial(source: 'auto' | 'user' | 'system', reason?: string): string {
   const label = source === 'auto' ? 'Cindy Auto-review denied this tool call'
     : source === 'user' ? 'User denied this tool call via Cindy'
@@ -230,6 +231,33 @@ export function annotatePermissionRequestForUnavailableReview<
       [AUTO_REVIEW_UNAVAILABLE_METADATA_KEY]: true,
     },
   };
+}
+
+/** InteractionRequest.metadata：审阅器判定「需要用户决定」时写给用户的原因（已脱敏、限长）。 */
+export const AUTO_REVIEW_REASON_METADATA_KEY = 'autoReviewReason';
+
+export function autoReviewReasonFromMetadata(
+  metadata: Record<string, unknown> | undefined,
+): string | undefined {
+  const reason = metadata?.[AUTO_REVIEW_REASON_METADATA_KEY];
+  return typeof reason === 'string' && reason.trim() ? reason.trim() : undefined;
+}
+
+/**
+ * 确认卡说明「为什么问你」：故障降级用固定文案；审阅器的 ask 原因挂在 metadata 上，
+ * 不覆盖 Agent／SDK 自带的 description。其余确认（Ask 档、逐次确认策略）原样返回。
+ */
+export function annotatePermissionRequestForAutoReview<
+  T extends {
+    kind: 'permission';
+    description?: string;
+    metadata?: Record<string, unknown>;
+  },
+>(req: T, review: { unavailable?: boolean; reason?: string } | undefined): T {
+  if (review?.unavailable) return annotatePermissionRequestForUnavailableReview(req);
+  const reason = review?.reason?.trim().slice(0, MAX_AUTO_REVIEW_REASON_CHARS);
+  if (!reason) return req;
+  return { ...req, metadata: { ...req.metadata, [AUTO_REVIEW_REASON_METADATA_KEY]: reason } };
 }
 
 /**
@@ -423,6 +451,8 @@ export type LocalAutoReviewTier = Exclude<ReviewVerdict, 'prompt'> | 'needs-revi
 export function classifyLocalAutoReviewTier(
   request: AutoReviewRequest,
 ): LocalAutoReviewTier {
+  // Large payloads bypass synchronous parsing, not permission review.
+  if (getAutoReviewActionTextLength(request.action) > MAX_AUTO_REVIEW_STATIC_TEXT_CHARS) return 'needs-review';
   const verdict = reviewAction(
     request.action,
     request.workspaceRoots,
@@ -446,17 +476,32 @@ function missingReviewEvidence(action: ReviewableAction): string | null {
         ? null
         : 'Network review needs a concrete destination or query.';
     case 'other':
-      return action.description?.trim()
-        ? null
-        : 'Unknown actions cannot be reviewed without concrete action details.';
+      if (!action.description?.trim()) return 'Unknown actions cannot be reviewed without concrete action details.';
+      return fileChangeWithoutPaths(action.description)
+        ? 'File-change review needs concrete paths.'
+        : null;
     default:
       return null;
   }
 }
 
+/** A risk-first reviewer would wave a pathless patch through as "low risk"; never approve unseen writes. */
+function fileChangeWithoutPaths(description: string): boolean {
+  let envelope: unknown;
+  try { envelope = JSON.parse(description); } catch { return false; }
+  if (!envelope || typeof envelope !== 'object') return false;
+  const { toolName, input } = envelope as { toolName?: unknown; input?: unknown };
+  if (toolName !== 'file_change') return false;
+  const changes = input && typeof input === 'object' ? (input as { changes?: unknown }).changes : undefined;
+  const paths = Array.isArray(changes)
+    ? changes.map((change) => (change && typeof change === 'object' ? (change as { path?: unknown }).path : undefined))
+    : changes && typeof changes === 'object' ? Object.keys(changes) : [];
+  return !paths.some((path) => typeof path === 'string' && path.trim().length > 0);
+}
+
 function oversizedReviewEvidence(action: ReviewableAction): string | null {
   return getAutoReviewActionTextLength(action) > MAX_AUTO_REVIEW_ACTION_TEXT_CHARS
-    ? `Automatic review requires action text at most ${MAX_AUTO_REVIEW_ACTION_TEXT_CHARS} characters.`
+    ? 'This action is too large for automatic review in full, so it needs your confirmation.'
     : null;
 }
 
@@ -471,7 +516,7 @@ function oversizedReviewEvidence(action: ReviewableAction): string | null {
  * 安全边界不降低（未经用户点头仍然不会执行），但用户至少知道该点头还是拒绝。
  *
  * 与「模型判定危险」的 `block` 仍然严格区分：那个继续静默，因为 Auto 的本意
- * 就是不打扰；模型 ask 与 unavailable 才交用户。
+ * 就是不打扰；模型 ask、完整证据超出预算与 unavailable 才交用户。
  */
 export async function resolveAutoReviewDecision(
   request: AutoReviewRequest,
@@ -485,11 +530,11 @@ export async function resolveAutoReviewDecision(
   // Outside Auto, only establish whether Host trust can skip confirmation.
   // A delegated request must use the existing human approval path, never AI.
   if (hostShortcutOnly) return { verdict: 'ask' };
-  // Bound untrusted input before the static classifier's command/path parsers,
-  // not merely before the model request. Neither may inspect an oversized action.
+  // Never review a truncated action or deny routine work merely for its length.
+  // Beyond the complete model-review budget, retain the existing confirmation path.
   const oversizedEvidenceReason = oversizedReviewEvidence(request.action);
   if (oversizedEvidenceReason) {
-    return { verdict: 'block', reason: oversizedEvidenceReason };
+    return { verdict: 'ask', reason: oversizedEvidenceReason };
   }
   const localTier = classifyLocalAutoReviewTier(request);
   // The registered task can constrain reads as well as writes. No delegated
@@ -607,11 +652,11 @@ export function createAutoReviewActionContext() {
       blocked = [];
     },
     record(action: ReviewableAction, decision: AutoReviewDecision): void {
-      if (decision.verdict !== 'block' || getAutoReviewActionTextLength(action) > MAX_AUTO_REVIEW_ACTION_TEXT_CHARS) return;
+      if (decision.verdict !== 'block' || getAutoReviewActionTextLength(action) > MAX_AUTO_REVIEW_STATIC_TEXT_CHARS) return;
       const snapshot = JSON.parse(JSON.stringify(action)) as ReviewableAction;
       const key = JSON.stringify(snapshot);
       blocked = [...blocked.filter((item) => JSON.stringify(item) !== key), snapshot].slice(-3);
-      while (blocked.length && JSON.stringify(blocked).length > MAX_AUTO_REVIEW_ACTION_TEXT_CHARS) blocked.shift();
+      while (blocked.length && JSON.stringify(blocked).length > MAX_AUTO_REVIEW_STATIC_TEXT_CHARS) blocked.shift();
     },
     get precedingBlockedActions(): readonly ReviewableAction[] { return preceding; },
   };

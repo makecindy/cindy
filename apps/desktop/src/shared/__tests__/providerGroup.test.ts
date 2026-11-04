@@ -24,6 +24,13 @@ it.each([undefined, {}, { resetAtMs: '5000' }, { resetAtMs: -1 }, { resetAtMs: I
 );
 
 describe('group detail diagnostics compatibility', () => {
+  it('round-trips a Fast prohibition and retains only a strict pending flag', () => {
+    const config = normalizeProviderGroupConfig({ allowFast: false, members: [{ kind: 'local' }] }, 'openai')!;
+    expect(providerGroupSummaryForWire(config).allowFast).toBe(false);
+    expect(parseProviderGroupRemoteView({ config, members: [], fastPolicyPending: true }, 'openai')).toMatchObject({ config: { allowFast: false }, fastPolicyPending: true });
+    expect(parseProviderGroupRemoteView({ config, members: [], fastPolicyPending: 'true' }, 'openai')).not.toHaveProperty('fastPolicyPending');
+    expect(normalizeProviderGroupConfig({ members: [{ kind: 'local' }] }, 'openai')).not.toHaveProperty('allowFast');
+  });
   const config = { members: [{ kind: 'local' }] };
   const payload = (extra: Record<string, unknown>) => ({ config, members: [{ key: 'local', state: 'available', ...extra }] });
 

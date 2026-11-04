@@ -100,7 +100,7 @@ describe('loadActiveBoundScheduleNames', () => {
     }
   });
 
-  it('持续会话归档后会换绑新任务继续跑,不提示', async () => {
+  it('持续任务与普通绑定任务都会恢复原任务，均提示', async () => {
     mocks.ensure.mockResolvedValue([
       {
         id: 'p',
@@ -114,7 +114,7 @@ describe('loadActiveBoundScheduleNames', () => {
 
     const result = await loadActiveBoundScheduleNames([{ id: 'task' }]);
 
-    expect(result.get('task')).toEqual(['Heartbeat']);
+    expect(result.get('task')).toEqual(['Persistent', 'Heartbeat']);
   });
 
   it('有缓存时直接使用,不等列表请求', async () => {

@@ -128,6 +128,28 @@
   }
 }
 
+@container plugin-detail (min-width: 680px) {
+  .plugin-detail-frame .plugin-detail-hero {
+    grid-template-columns: 64px minmax(160px, 1fr) auto;
+  }
+
+  .plugin-detail-frame .plugin-detail-actions {
+    /* Keep a readable title even when update/result actions wrap on the right. */
+    max-width: calc(100cqi - 64px - 160px - 2.5rem);
+    justify-content: flex-end;
+  }
+}
+
+@container plugin-detail (width < 680px) {
+  .plugin-detail-frame .plugin-detail-hero {
+    grid-template-columns: 64px minmax(0, 1fr);
+  }
+
+  .plugin-detail-frame .plugin-detail-actions {
+    grid-column: 1 / -1;
+  }
+}
+
 @container plugin-management-content (max-width: 720px) {
   .plugin-installed-card-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -191,6 +213,51 @@
   .plugin-management-layout-root
     :is(.plugin-management-action-label, .plugin-management-action-chevron) {
     display: none;
+  }
+}
+
+.my-plugins-columns,
+.my-plugins-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 6rem 6rem 9rem 5rem;
+  align-items: center;
+  gap: 1.25rem;
+}
+
+.my-plugins-mobile-label {
+  display: none;
+}
+
+@container plugin-management-content (max-width: 600px) {
+  .my-plugins-columns {
+    display: none;
+  }
+
+  .my-plugins-row {
+    grid-template-columns: minmax(0, 1fr) 5rem;
+    gap: 0.5rem;
+  }
+
+  .my-plugins-identity {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .my-plugins-chevron {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .my-plugins-local,
+  .my-plugins-market,
+  .my-plugins-latest {
+    grid-column: 1 / -1;
+    margin-inline-start: 3.75rem;
+  }
+
+  .my-plugins-mobile-label {
+    display: inline;
+    color: var(--text-tertiary);
   }
 }
 

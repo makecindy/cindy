@@ -8,14 +8,18 @@
  */
 import {
   ORCA_REMOTE_WORKER_CAPS_CHANNEL,
+  ORCA_REMOTE_WORKER_MODELS_CHANNEL,
   ORCA_REMOTE_WORKER_OPEN_CHANNEL,
   ORCA_REMOTE_WORKER_RELEASE_CHANNEL,
   ORCA_REMOTE_WORKER_VERSION,
   parseOrcaRemoteWorkerOpenRequest,
+  parseOrcaRemoteWorkerModelsRequest,
   parseOrcaRemoteWorkerReleaseRequest,
   type OrcaRemoteWorkerCaps,
   type OrcaRemoteWorkerOpenRequest,
   type OrcaRemoteWorkerOpenResult,
+  type OrcaRemoteWorkerModelsRequest,
+  type OrcaRemoteWorkerModelsResult,
 } from '@cindy/device-link';
 
 import type { OrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
@@ -28,15 +32,30 @@ export function createOrcaRemoteWorkerSessionOpener(deps: {
   insertSession(row: OpenedSessionRow): Promise<void>;
   bootstrapSession(row: OpenedSessionRow, assertCurrent: () => void): Promise<unknown>;
   broadcastSessionCreated(sessionId: string): void;
+  isSelfDeviceId?(deviceId: string): boolean;
+  resolveAgentSelection?(request: OrcaRemoteWorkerOpenRequest): Promise<OrcaRemoteWorkerOpenRequest>;
+  captureOwner?(): () => void;
 }): OrcaRemoteWorkerHostDeps['openSession'] {
   return async (request, lead) => {
+    const assertOwner = deps.captureOwner?.() ?? (() => {});
+    assertOwner();
+    if (request.agentDeviceId && deps.isSelfDeviceId?.(request.agentDeviceId)) {
+      request = { ...request, agentDeviceId: null };
+    }
+    if (request.agentDeviceId) {
+      if (!deps.resolveAgentSelection) fail('UNSUPPORTED_CAPABILITY', 'remote Worker Agent selection is unavailable');
+      request = await deps.resolveAgentSelection(request);
+      assertOwner();
+    }
     const { row } = await deps.openSession({
       id: request.sessionId,
+      assertCurrent: assertOwner,
       body: {
         title: request.title,
         agentKind: request.agentKind === 'claude-code' ? 'cc' : request.agentKind,
         model: request.model,
         providerId: request.providerId,
+        ...(request.agentDeviceId !== undefined ? { agentDeviceId: request.agentDeviceId } : {}),
         effort: request.effort,
         fastMode: request.fastMode,
         permissionMode: request.permissionMode,
@@ -52,7 +71,8 @@ export function createOrcaRemoteWorkerSessionOpener(deps: {
     });
     deps.broadcastSessionCreated(row.id);
     const agentKind = row.agentKind === 'cc' ? 'claude-code' : (row.agentKind as 'codex' | 'pi');
-    return { workingDir: row.workingDir ?? '', model: row.model, agentKind, effort: row.effort, fastMode: row.fastMode };
+    return { workingDir: row.workingDir ?? '', model: row.model, agentKind, effort: row.effort, fastMode: row.fastMode,
+      ...(request.agentDeviceId !== undefined ? { agentDeviceId: row.agentDeviceId ?? null, providerId: row.providerId ?? null } : {}) };
   };
 }
 
@@ -71,11 +91,14 @@ export interface OrcaRemoteWorkerExistingSession {
   agentKind: OrcaRemoteWorkerOpenResult['agentKind'];
   effort?: string;
   fastMode?: boolean | 'ultrafast';
+  agentDeviceId?: string | null;
+  providerId?: string | null;
 }
 
 export interface OrcaRemoteWorkerHostDeps {
   getCaller(): OrcaRemoteWorkerCaller | null;
   readSession(sessionId: string): Promise<OrcaRemoteWorkerExistingSession | null>;
+  readModels?(request: OrcaRemoteWorkerModelsRequest): Promise<OrcaRemoteWorkerModelsResult>;
   /**
    * 任务与远端 Worker 标记一起落库，再启动 Agent(复用普通开任务与模型准入)并广播。
    * 未给 workingDir 时由本机按自身设置分配任务目录。
@@ -89,6 +112,8 @@ export interface OrcaRemoteWorkerHostDeps {
     agentKind: OrcaRemoteWorkerOpenResult['agentKind'];
     effort?: string;
     fastMode?: boolean | 'ultrafast';
+    agentDeviceId?: string | null;
+    providerId?: string | null;
   }>;
   writeRemoteLead(sessionId: string, lead: OrcaRemoteLead): Promise<void>;
   /** 同一任务 id 的 open / release 串行。 */
@@ -113,7 +138,13 @@ export function createOrcaRemoteWorkerHost(deps: OrcaRemoteWorkerHostDeps) {
   return {
     caps(): OrcaRemoteWorkerCaps {
       requireCaller(deps);
-      return { version: ORCA_REMOTE_WORKER_VERSION, workerBridge: true };
+      return { version: ORCA_REMOTE_WORKER_VERSION, workerBridge: true, ...(deps.readModels ? { agentDevice: true } : {}) };
+    },
+
+    async models(raw: unknown): Promise<OrcaRemoteWorkerModelsResult> {
+      requireCaller(deps);
+      if (!deps.readModels) fail('UNSUPPORTED_CAPABILITY', 'remote Worker model discovery is unavailable');
+      return deps.readModels(parseOrcaRemoteWorkerModelsRequest(raw));
     },
 
     async open(raw: unknown): Promise<OrcaRemoteWorkerOpenResult> {
@@ -140,6 +171,7 @@ export function createOrcaRemoteWorkerHost(deps: OrcaRemoteWorkerHostDeps) {
               agentKind: existing.agentKind,
               effort: existing.effort,
               fastMode: existing.fastMode,
+              ...(request.agentDeviceId !== undefined ? { agentDeviceId: existing.agentDeviceId ?? null, providerId: existing.providerId ?? null } : {}),
             };
           }
           fail('ALREADY_EXISTS', 'a different task already uses this id');
@@ -183,6 +215,7 @@ export function registerOrcaRemoteWorkerHandlers(
   host: OrcaRemoteWorkerHost,
 ): void {
   registry.handle(ORCA_REMOTE_WORKER_CAPS_CHANNEL, () => host.caps());
+  registry.handle(ORCA_REMOTE_WORKER_MODELS_CHANNEL, (_event, raw) => host.models(raw));
   registry.handle(ORCA_REMOTE_WORKER_OPEN_CHANNEL, (_event, raw) => host.open(raw));
   registry.handle(ORCA_REMOTE_WORKER_RELEASE_CHANNEL, (_event, raw) => host.release(raw));
 }

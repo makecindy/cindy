@@ -30,7 +30,7 @@ const identity: PluginUsageIdentity = {
 const migration = readFileSync(
   new URL('../../../../drizzle/0128_demonic_odin.sql', import.meta.url),
   'utf8',
-);
+) + '\n--> statement-breakpoint\n' + readFileSync(new URL('../../../../drizzle/0132_abnormal_dazzler.sql', import.meta.url), 'utf8');
 const now = Date.UTC(2026, 9, 12, 12);
 const week = 168 * 60 * 60 * 1000;
 let db: Database.Database;
@@ -65,6 +65,21 @@ afterEach(async () => {
   db.close();
 });
 const capture = () => service.capture(identity)!;
+
+// 通用调用统计：同一宿主调用的工具派发及投递共享身份，旧工具记录保留类型。
+// 现有 fixture 只覆盖工具派发；最小回归是两次接受同一个真实宿主 ID。
+it('records invocation kinds without counting a tool and its child delivery twice', async () => {
+  await service.bind(identity);
+  const handle = capture();
+  service.accept(handle, 'parent-root', 'run', null, now - 2, 'tool');
+  service.accept(handle, 'parent-root', 'tasks.send', 'task', now - 1, 'execution');
+  service.accept(handle, 'tool-root', 'status', null, now - 1);
+  expect((await service.summary(handle.subjectId))?.totalCalls).toBe(2);
+  expect(db.prepare('SELECT call_id,entry_kind FROM plugin_usage_events ORDER BY call_id').all()).toEqual([
+    { call_id: 'parent-root', entry_kind: 'tool' },
+    { call_id: 'tool-root', entry_kind: 'tool' },
+  ]);
+});
 
 it('keeps one SQLite subject when a detail request overlaps the committed local upgrade', async () => {
   await service.bind(identity);
@@ -132,6 +147,21 @@ async function withReporting() {
   await service.bind(identity);
   return reporting;
 }
+
+it('reports accepted inputs through the existing event contract without uploading local classification', async () => {
+  const reporting = await withReporting();
+  const h = capture();
+  service.accept(h, 'tool', 'status', null, now - 2);
+  service.accept(h, 'execution', 'tasks.send', null, now - 1, 'execution');
+  await service.summary(h.subjectId);
+  await vi.advanceTimersByTimeAsync(2500);
+  expect(reporting.send.mock.calls[0]?.[1]).toEqual([
+    { eventId: 'tool', releaseId: null, occurredAt: new Date(now - 2).toISOString() },
+    { eventId: 'execution', releaseId: null, occurredAt: new Date(now - 1).toISOString() },
+  ]);
+  expect(reporting.send).toHaveBeenCalledOnce();
+  expect((await service.summary(h.subjectId))?.totalCalls).toBe(2);
+});
 
 it('resumes persisted pending rows on the next service and never recreates cleared data from an ACK', async () => {
   const reporting = await withReporting();

@@ -39,7 +39,7 @@ export function NotificationSection() {
           >
             {t('settings.notifications.sessionDoneLabel')}
           </p>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
             {t('settings.notifications.sessionDoneHint')}
           </p>
         </div>

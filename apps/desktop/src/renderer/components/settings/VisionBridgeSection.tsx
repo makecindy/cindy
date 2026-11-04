@@ -1,3 +1,4 @@
+import { useAppSettingsRevision } from '@/hooks/useAppSettingsRevision';
 /**
  * Settings -> Personalization 的视觉桥（Vision Bridge）设置。
  *
@@ -44,6 +45,7 @@ interface TargetRow {
 }
 
 export function VisionBridgeSection() {
+  const settingsRevision = useAppSettingsRevision('vision-bridge');
   const { t } = useTranslation();
   const { providers, loading: providersLoading } = useProviders();
 
@@ -89,7 +91,7 @@ export function VisionBridgeSection() {
     return () => {
       disposed = true;
     };
-  }, []);
+  }, [settingsRevision]);
 
   const persistPatch = useCallback(
     async (patch: Record<string, unknown>) => {
@@ -358,7 +360,7 @@ export function VisionBridgeSection() {
           <p id="settings-search-settings-visionBridge-enableLabel" className="text-14 font-medium text-[var(--text-primary)]">
             {t('settings.visionBridge.enableLabel')}
           </p>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
             {t('settings.visionBridge.enableHint')}
           </p>
         </div>
@@ -377,7 +379,7 @@ export function VisionBridgeSection() {
             <p id="settings-search-settings-visionBridge-targetModels-label" className="text-14 font-medium text-[var(--text-primary)]">
               {t('settings.visionBridge.targetModels.label')}
             </p>
-            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
               {t('settings.visionBridge.targetModels.hint')}
             </p>
           </div>
@@ -434,7 +436,7 @@ export function VisionBridgeSection() {
             <p id="settings-search-settings-visionBridge-backends-label" className="text-14 font-medium text-[var(--text-primary)]">
               {t('settings.visionBridge.backends.label')}
             </p>
-            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
               {t('settings.visionBridge.backends.hint')}
             </p>
           </div>
@@ -450,6 +452,7 @@ export function VisionBridgeSection() {
             </div>
             <div className="min-w-0 flex-1">
               <ModelSelector
+                localOnlyReason="vision-bridge-local-proxy"
                 providersOverride={visionProviders}
                 modelId={primary?.modelId ?? ''}
                 effort=""
@@ -504,6 +507,7 @@ export function VisionBridgeSection() {
             </div>
             <div className="min-w-0 flex-1">
               <ModelSelector
+                localOnlyReason="vision-bridge-local-proxy"
                 providersOverride={visionProviders}
                 modelId={fallback?.modelId ?? ''}
                 effort=""

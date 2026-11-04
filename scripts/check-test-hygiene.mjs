@@ -19,7 +19,7 @@
 // 或基线外的文件出现未豁免的命中，都会失败。门禁对照可信 Git 基准拒绝基线上调，
 // 手改 JSON 与 `--update` 均不能绕过；只有确认基准提交还没有基线文件时才首次登记。
 
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -1454,7 +1454,9 @@ export async function main(args = process.argv.slice(2)) {
   return 1;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// macOS temp directories and linked CLI entrypoints may spell the same file
+// differently from import.meta.url, which Node resolves to its real path.
+if (process.argv[1] && existsSync(process.argv[1]) && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().then((code) => { process.exitCode = code; }, (error) => {
     console.error(`[test-hygiene] ${error.message}`);
     process.exitCode = 2;

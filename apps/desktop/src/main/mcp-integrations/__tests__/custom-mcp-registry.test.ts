@@ -118,6 +118,19 @@ describe('refreshCustomMcpProviders', () => {
     expect(Object.getPrototypeOf({} as Record<string, unknown>)).toBe(Object.prototype);
   });
 
+  // P1: stored native-name collisions bypassed provider-only reserved names.
+  // Exercise refresh with the real validator, including repeated refresh.
+  it('quarantines a persisted native Apps collision without mutating stored configs', async () => {
+    const arr: McpProvider[] = [];
+    registerCustomMcpArrays(arr);
+    const saved = [config('codex_apps'), config('safe_one')];
+    storeMock.listCustomMcpServers.mockResolvedValue(saved);
+    await refreshCustomMcpProviders();
+    await refreshCustomMcpProviders();
+    expect(arr.map((p) => p.name)).toEqual(['safe_one']);
+    expect(saved.map((entry) => entry.id)).toEqual(['codex_apps', 'safe_one']);
+  });
+
   it('quarantines persisted configs with invalid custom headers', async () => {
     const arr: McpProvider[] = [builtin('cindy_browser')];
     registerCustomMcpArrays(arr);

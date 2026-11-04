@@ -59,6 +59,8 @@ export interface ClaudeFlagSettingsInput {
    * 缺省时整字段不出现 → 与未升级行为逐字节一致,零缓存影响。
    */
   fastMode: boolean;
+  /** A trusted subscription prohibition must override native/user defaults explicitly. */
+  fastModeAllowed?: boolean;
   /** Host-owned policy for colliding downstream skills. */
   capabilityRouting?: CapabilityRoutingPolicy;
   /** Bot Profile's native per-session Skill policy. */
@@ -104,7 +106,7 @@ export function buildClaudeFlagSettings(input: ClaudeFlagSettingsInput): Setting
       autoMemoryEnabled: input.memoryOverride,
       autoDreamEnabled: input.memoryOverride,
     }),
-    ...(input.fastMode && { fastMode: true }),
+    ...(input.fastModeAllowed === false ? { fastMode: false } : input.fastMode ? { fastMode: true } : {}),
     ...(input.availableModels && input.availableModels.length > 0 && {
       availableModels: [...new Set(input.availableModels)],
     }),

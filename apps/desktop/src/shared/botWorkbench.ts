@@ -3,7 +3,7 @@
  *
  * 2026-10-17 起放弃「项目」思路:伙伴不再按目录接手项目,也不再写候选任务的判断。工作台只剩
  * 它负责的任务(自己开的 + 明确接手的)与宿主观察层给出的「一眼」投影(见 `botAutonomy.ts`)。
- * 旧版 `workbench.json` 里的 `directories` / `tasks` 读取时一律忽略,不迁移、不报错;旧判断
+ * `workbench.json` 的 directories 用于伙伴设置中的关联项目,不作为任务责任来源;旧判断
  * 只作为 Todo 的兼容来源由主进程读取(`botWorkbenchLegacy.ts`)。
  *
  * 任务状态只从宿主已有的真实信号推导——运行中、等待交互、上一轮出错或被打断、后台任务状态、
@@ -13,6 +13,23 @@
 export interface BotWorkbench {
   /** Verified creation plus explicit take/release. Older hosts omit it. */
   responsibleSessionIds?: string[];
+}
+
+/** Project references provide context, never task responsibility or execution permission. */
+export interface BotLinkedProject {
+  path: string;
+  addedAt: string;
+  /** Missing means this computer; a foreign path must never be opened locally. */
+  deviceId?: string;
+}
+
+export interface BotProjectOption {
+  id: string;
+  name: string;
+  path: string;
+  deviceId?: string;
+  linked: boolean;
+  available: boolean;
 }
 
 /** 一件任务最近内容的只读摘录(工具与详情视图共用)。 */

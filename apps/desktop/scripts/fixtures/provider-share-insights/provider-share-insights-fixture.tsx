@@ -6,10 +6,7 @@ import type {
   ProviderShareQuotaAccount,
 } from '../../../src/shared/providerShareInsights';
 import type { ProviderShareReceived } from '@cindy/device-link';
-import {
-  DEFAULT_REMOTE_AGENT_IDLE_RELEASE,
-  type RemoteAgentIdleReleaseView,
-} from '../../../src/shared/remoteAgentIdleRelease';
+import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimitsView } from '../../../src/shared/remoteAgentLimits';
 
 const now = Date.parse('2026-10-19T12:00:00Z');
 const share: ProviderShareReceived = {
@@ -188,8 +185,6 @@ void mountPage({
           };
         case 'get-credential-consent':
           return { skip: false };
-        case 'get-idle-release':
-          return { value: { idleMinutes: 0 }, defaults: { idleMinutes: 0 }, isCustomized: false };
         case 'owned':
           return {
             ready: true,
@@ -210,18 +205,12 @@ void mountPage({
           return { providerId: 'xd', local: null, devices: [], relays: [] };
         case 'get-run-limits':
           return {
-            value: { perDevice: 16, total: 64 },
-            defaults: { perDevice: 16, total: 64 },
+            value: { ...DEFAULT_REMOTE_AGENT_LIMITS },
+            defaults: { ...DEFAULT_REMOTE_AGENT_LIMITS },
             isCustomized: false,
             customizedKeys: [],
             usage: { total: 0, devices: 0, largestDevice: 0 },
-          };
-        case 'get-idle-release':
-          return {
-            value: { ...DEFAULT_REMOTE_AGENT_IDLE_RELEASE },
-            defaults: { ...DEFAULT_REMOTE_AGENT_IDLE_RELEASE },
-            isCustomized: false,
-          } satisfies RemoteAgentIdleReleaseView;
+          } satisfies RemoteAgentLimitsView;
         default:
           return forbid(`providerShare.${cmd.action}`)();
       }

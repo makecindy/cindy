@@ -18,6 +18,7 @@ import {
 import type { VoicePreviewController } from './VoicePreviewController';
 import { readSpeechVoiceLabel, rememberSpeechVoiceLabel } from './speechVoiceLabelCache';
 import { SpeechVoiceMenu } from './SpeechVoiceMenu';
+import { useBotSettingsTarget } from '../useBotSettingsTarget';
 
 const MANUAL = 'manual';
 const LOADING = 'loading';
@@ -31,6 +32,7 @@ type Props = {
   route: SpeechModelSelection;
   protocol?: SpeechProtocol;
   voice: string;
+  autoSelectFirstVoice: boolean;
   speed?: number;
   children?: ReactNode;
   disabled: boolean;
@@ -44,6 +46,7 @@ export function SpeechVoicePicker({
   route,
   protocol,
   voice,
+  autoSelectFirstVoice,
   speed,
   children,
   disabled,
@@ -52,6 +55,7 @@ export function SpeechVoicePicker({
   onChange,
 }: Props) {
   const { t } = useTranslation();
+  const voiceApi = useBotSettingsTarget().voice;
   const [catalogState, setCatalogState] = useState<CatalogState>();
   const [revision, setRevision] = useState(0);
   const [manualRouteKey, setManualRouteKey] = useState<string>();
@@ -76,21 +80,26 @@ export function SpeechVoicePicker({
     () => readSpeechVoiceLabel(owner, botId, selectionRouteKey, voice),
     [owner, botId, selectionRouteKey, voice, catalog],
   );
-  // A saved label bridges initial loading and offline re-entry. A successful
-  // response is authoritative for display, but never changes the saved ID.
-  const showCachedLabel = !!cachedLabel && !catalog && (initialLoading || failed);
+  // A partial private lookup is not evidence that the saved voice was removed.
+  // Keep its known label as well as the public choices, without changing the ID.
+  const showCachedLabel =
+    !!cachedLabel &&
+    !listed &&
+    ((!catalog && (initialLoading || failed)) || !!catalog?.customVoicesUnavailable);
   const showManual =
     manual ||
     (!initialLoading && !showCachedLabel && ((!!voice && !listed) || !catalog?.voices.length));
   const catalogHint = failed
     ? t('bots.voiceMode.voicesError')
-    : catalog?.source === 'reference'
-      ? t('bots.voiceMode.voicesReference')
+    : catalog?.customVoicesUnavailable
+      ? t('bots.voiceMode.voicesCustomError')
       : catalog?.truncated
         ? t('bots.voiceMode.voicesTruncated')
-        : !initialLoading && !catalog?.voices.length
-          ? t('bots.voiceMode.voicesManual')
-          : '';
+        : catalog?.source === 'reference' || catalog?.source === 'mixed'
+          ? t('bots.voiceMode.voicesReference')
+          : !initialLoading && !catalog?.voices.length
+            ? t('bots.voiceMode.voicesManual')
+            : '';
   const voiceOptions = useMemo(() => {
     const voices = (catalog?.voices ?? []).map((item) => ({
       ...item,
@@ -130,7 +139,7 @@ export function SpeechVoicePicker({
       catalog: protocol && current?.routeKey === routeKey ? current.catalog : undefined,
     }));
     if (protocol) {
-      void window.electronAPI.voiceConversation
+      void voiceApi
         .voices(route)
         .then((result) => {
           if (version.current === request && isDataOwnerGenerationCurrent(owner))
@@ -153,14 +162,26 @@ export function SpeechVoicePicker({
   }, [routeKey, revision]);
 
   useEffect(() => {
+    // Reuse only this route's successful catalog. Manual input, including an
+    // intentionally empty draft, always wins over a late catalog response.
+    if (
+      !autoSelectFirstVoice ||
+      voice ||
+      manual ||
+      disabled ||
+      currentCatalog?.phase !== 'ready' ||
+      !isDataOwnerGenerationCurrent(owner)
+    )
+      return;
+    const firstVoice = catalog?.voices[0]?.id;
+    if (firstVoice) onChange(firstVoice, true);
+  }, [autoSelectFirstVoice, voice, manual, disabled, currentCatalog, catalog, owner, onChange]);
+
+  useEffect(() => {
     if (currentCatalog?.phase !== 'ready' || !catalog || !voice) return;
-    rememberSpeechVoiceLabel(
-      owner,
-      botId,
-      selectionRouteKey,
-      voice,
-      voiceOptions.find((option) => option.value === `voice:${voice}`)?.label,
-    );
+    const label = voiceOptions.find((option) => option.value === `voice:${voice}`)?.label;
+    if (catalog.customVoicesUnavailable && !label) return;
+    rememberSpeechVoiceLabel(owner, botId, selectionRouteKey, voice, label);
   }, [owner, botId, selectionRouteKey, voice, currentCatalog, catalog, voiceOptions]);
 
   useEffect(() => {
@@ -207,7 +228,7 @@ export function SpeechVoicePicker({
               }
               options={[
                 ...(showCachedLabel
-                  ? [{ value: `voice:${voice}`, label: cachedLabel! }]
+                  ? [{ value: `voice:${voice}`, label: cachedLabel! }, ...voiceOptions]
                   : initialLoading
                     ? [{ value: LOADING, label: t('bots.voiceMode.voicesLoading'), disabled: true }]
                     : voiceOptions),
@@ -298,7 +319,11 @@ export function SpeechVoicePicker({
             )}
           </FormField>
           <p role="status" className="text-12 text-[var(--text-secondary)]">
-            {t(`bots.voiceMode.previewStatus.${phase}`)}
+            {t(
+              phase === 'timeout'
+                ? 'bots.voiceMode.errors.speechTimeout'
+                : `bots.voiceMode.previewStatus.${phase}`,
+            )}
           </p>
         </div>
       ) : null}

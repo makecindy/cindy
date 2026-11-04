@@ -43,6 +43,10 @@ export interface AgentIslandCompanionSnapshot {
  * Renderer-facing session snapshot for the macOS Agent Island overlay.
  */
 export interface AgentIslandSessionSnapshot {
+  /** Group-message UI only; never a maker task or a remotely relayed activity. */
+  groupChat?: { avatars: AgentIslandCompanionSnapshot[]; mentionLabel?: string };
+  /** Opaque identity of the completed card, issued by its owning process. */
+  completionToken?: string;
   /** This completion preserves older unread state without requesting a new alert. */
   completionNotification?: 'silent';
   sessionId: string;
@@ -75,11 +79,14 @@ export interface AgentIslandPermissionActionSnapshot {
  */
 export interface AgentIslandSessionActivity
   extends Omit<SessionActivitySnapshot, 'phase' | 'interactionKind'> {
+  completionToken?: string;
   completionNotification?: 'silent';
   phase: AgentIslandSessionPhase;
   interactionKind?: AgentIslandInteractionKind;
   /** Compatibility/display alias; canonical probe field is currentActionSummary. */
   compactDetail: string;
+  /** Only marked summaries can bypass legacy Markdown recovery on another host. */
+  summaryFormat?: 'plain-text';
 }
 
 export type AgentIslandDisplayMode = 'compact' | 'expanded';
@@ -426,6 +433,8 @@ export function createEmptyAgentIslandPillSnapshot(): AgentIslandPillSnapshot {
  */
 export interface AgentIslandStrings {
   appName: string;
+  markRead?: string;
+  archive?: string;
   newConversationTitle: string;
   newConversationHint: string;
   muteSound: string;
@@ -480,7 +489,7 @@ export const DEFAULT_AGENT_ISLAND_STRINGS: AgentIslandStrings = {
   deny: 'Deny',
 };
 
-export const AGENT_ISLAND_MAX_EXPANDED_WIDTH = 640;
+export const AGENT_ISLAND_MAX_EXPANDED_WIDTH = 440;
 export const AGENT_ISLAND_MAX_RESIZABLE_WIDTH = 920;
 export const AGENT_ISLAND_MIN_EXPANDED_WIDTH = 360;
 export const AGENT_ISLAND_IDLE_EXPANDED_WIDTH = 340;
@@ -796,18 +805,67 @@ export const AGENT_ISLAND_PREVIEW_SOUND_CHANNEL = 'agent-island:preview-sound';
 export const AGENT_ISLAND_SELECT_SOUND_FILE_CHANNEL = 'agent-island:select-sound-file';
 /** renderer(主窗)→ main:按侧栏「任务范围」筛过的远程设备任务活动。 */
 export const AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL = 'agent-island:set-remote-sessions';
+// Local main-window presentation only; never exposed through device-link.
+export const AGENT_ISLAND_SET_COMPANION_CHATS_CHANNEL = 'agent-island:set-companion-chats';
+export const AGENT_ISLAND_READ_COMPANION_CHAT_CHANNEL = 'agent-island:read-companion-chat';
+
+export interface AgentIslandCompanionChatInput {
+  sessionId: string;
+  botId: string;
+  deviceId: string | null;
+  companion: AgentIslandRemoteCompanionInput;
+  visible: boolean;
+  unread: boolean;
+  lastMessageAt: number;
+  preview: string;
+}
+
+export interface AgentIslandCompanionChatsInput {
+  dataOwnerId: string | null;
+  ownerGeneration: number;
+  chats: AgentIslandCompanionChatInput[];
+}
+
+export interface AgentIslandCompanionChatRead extends AgentIslandCompanionChatInput {
+  readThroughAt: number;
+}
+
+export function parseAgentIslandCompanionChats(raw: unknown): AgentIslandCompanionChatInput[] | null {
+  if (!Array.isArray(raw) || raw.length > AGENT_ISLAND_REMOTE_SESSIONS_MAX) return null;
+  const chats: AgentIslandCompanionChatInput[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') return null;
+    const row = item as Record<string, unknown>;
+    const sessionId = readBoundedString(row.sessionId, AGENT_ISLAND_REMOTE_ID_MAX_LENGTH);
+    const botId = readBoundedString(row.botId, AGENT_ISLAND_REMOTE_ID_MAX_LENGTH);
+    const deviceId = row.deviceId === null ? null : readBoundedString(row.deviceId, AGENT_ISLAND_REMOTE_ID_MAX_LENGTH);
+    const companion = readRemoteCompanion(row.companion);
+    if (!sessionId || !botId || !companion || (row.deviceId !== null && !deviceId)
+      || typeof row.visible !== 'boolean' || typeof row.unread !== 'boolean'
+      || typeof row.lastMessageAt !== 'number' || !Number.isFinite(row.lastMessageAt) || row.lastMessageAt < 0
+      || seen.has(sessionId)) return null;
+    seen.add(sessionId);
+    chats.push({ sessionId, botId, deviceId, companion, visible: row.visible, unread: row.unread,
+      lastMessageAt: row.lastMessageAt, preview: readBoundedString(row.preview, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH) ?? '' });
+  }
+  return chats;
+}
 
 /**
  * 远程设备(device-link「我控制它」)任务的活动镜像,供本机灵动岛与桌面通知使用。
  * 只含 running / needs-interaction / 未读终态;范围由 renderer 按侧栏「任务范围」裁剪。
  */
 export interface AgentIslandRemoteSessionInput {
+  summaryFormat?: 'plain-text';
+  completionToken?: string;
   completionNotification?: 'pending' | 'teammate' | 'silent';
   sessionId: string;
   deviceId: string;
   deviceName: string | null;
   title: string | null;
   workingDir: string | null;
+  projectDir?: string | null;
   workspaceKind: string | null;
   /** DB 形态('cc' | 'codex' | 'pi')。 */
   agentKind: string | null;
@@ -864,19 +922,24 @@ export function parseAgentIslandRemoteSessions(raw: unknown): AgentIslandRemoteS
       ? record.interactionKind as AgentIslandInteractionKind
       : undefined;
     const workingPhase = readBoundedString(record.workingPhase, 64);
+    const completionToken = readBoundedString(record.completionToken, 128);
     const companion = readRemoteCompanion(record.companion);
     out.push({
       sessionId,
       deviceId,
+      ...(completionToken ? { completionToken } : {}),
       deviceName: readBoundedString(record.deviceName, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH),
       title: readBoundedString(record.title, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH),
       workingDir: readBoundedString(record.workingDir, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH * 4),
+      ...(record.projectDir !== undefined
+        ? { projectDir: readBoundedString(record.projectDir, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH * 4) } : {}),
       workspaceKind: readBoundedString(record.workspaceKind, 64),
       agentKind: readBoundedString(record.agentKind, 64),
       phase: phase as AgentIslandSessionPhase,
       ...(record.completionNotification === 'pending' || record.completionNotification === 'teammate' || record.completionNotification === 'silent'
         ? { completionNotification: record.completionNotification } : {}),
       detail: readBoundedString(record.detail, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH) ?? '',
+      ...(record.summaryFormat === 'plain-text' ? { summaryFormat: 'plain-text' as const } : {}),
       ...(workingPhase ? { workingPhase } : {}),
       ...(interactionKind ? { interactionKind } : {}),
       ...(companion ? { companion } : {}),

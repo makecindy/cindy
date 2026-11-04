@@ -1,18 +1,18 @@
-import { useMemo } from 'react';
 import { UsersRound } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import { useWorkerProjection } from '@/features/cc-agent/hooks/workerProjectionStore';
 import { useWorkerAttentionSnapshot } from '@/features/cc-agent/lib/workerAttentionStore';
+import type { AttentionKind } from '@/lib/sessionAttentionStore';
 import {
-  useSessionsAttentionUrgentKind,
-  type AttentionKind,
-} from '@/lib/sessionAttentionStore';
+  localOrcaWorkerSessionIds,
+  useOrcaWorkerTaskAttentionKinds,
+} from '@/features/cc-agent/lib/orcaWorkerTaskAttention';
 
 /**
  * 多个 Worker 时取最高一档:出错(红)> 等待确认(蓝)> 完成未读(绿)。
- * 出错 / 等待确认跟随 Worker 自己的 attention,tab 激活时同样显示(与侧栏 Lead 行同口径);
+ * 出错跟随任务 attention，等待确认同时读取 Worker 未处理交互,tab 激活时同样显示(与侧栏 Lead 行同口径);
  * 完成未读沿用原语义,tab 激活即视为看到。
  */
 export function resolveOrcaWorkersTabTone({
@@ -38,11 +38,14 @@ export function OrcaWorkersAttentionIcon({
   const { t } = useTranslation();
   const attention = useWorkerAttentionSnapshot();
   const projection = useWorkerProjection(sessionId ?? '');
-  const workerSessionIds = useMemo(
-    () => (sessionId ? projection.workers.map((worker) => worker.sessionId) : []),
-    [sessionId, projection.workers],
+  const taskAttention = useOrcaWorkerTaskAttentionKinds(
+    sessionId ? localOrcaWorkerSessionIds(projection.workers, sessionId) : [],
   );
-  const urgentKind = useSessionsAttentionUrgentKind(workerSessionIds);
+  const urgentKind = [...taskAttention.values()].includes('error')
+    ? 'error'
+    : taskAttention.size > 0
+      ? 'awaiting'
+      : undefined;
   const hasDoneAttention = Boolean(
     sessionId && projection.workers.some((worker) => attention.has(worker.workerId)),
   );

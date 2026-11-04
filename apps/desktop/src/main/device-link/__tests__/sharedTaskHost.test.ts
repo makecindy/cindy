@@ -160,6 +160,71 @@ describe('task host sharedTask lifecycle', () => {
     expect(api.close).toHaveBeenCalledWith('sharedTask');
     expect(api.get).not.toHaveBeenCalled();
   });
+  // Idle hosts stop polling the server; open shares and unconfirmed closures keep it.
+  it('needs server authority only while a share is open or a closure is unconfirmed', async () => {
+    serverDetail = { ...detail(), status: 'closed' };
+    await host.restore();
+    expect(host.needsAuthorityRefresh()).toBe(false);
+    // Another process archived a task; the server has not confirmed that closure.
+    records.set('archived', { sharedTaskId: 'archived', sessionId: 'old', terminal: true, snapshot: null });
+    await host.restore(false);
+    expect(host.needsAuthorityRefresh()).toBe(true);
+    await host.restore();
+    expect(host.needsAuthorityRefresh()).toBe(false);
+    serverDetail = detail();
+    await host.open('session');
+    expect(host.needsAuthorityRefresh()).toBe(true);
+    api.close.mockRejectedValueOnce(new Error('offline'));
+    await expect(host.close('sharedTask')).rejects.toThrow('offline');
+    expect(host.needsAuthorityRefresh()).toBe(true);
+    api.close.mockImplementation(async () => { serverDetail = { ...detail(2), status: 'closed', guests: [] }; });
+    await host.restore();
+    expect(api.close).toHaveBeenLastCalledWith('sharedTask');
+    expect(host.needsAuthorityRefresh()).toBe(false);
+  });
+  it('does not settle a share created while a list request was in flight', async () => {
+    serverDetail = { ...detail(), status: 'closed' };
+    await host.restore();
+    // The server built this list before the create committed; it returns after.
+    let finishList!: (items: unknown[]) => void;
+    api.list.mockImplementationOnce(() => new Promise(resolve => { finishList = resolve; }));
+    const restoring = host.restore();
+    await vi.waitFor(() => expect(finishList).toBeTypeOf('function'));
+    serverDetail = detail();
+    let finishGet!: () => void;
+    api.get.mockImplementationOnce(() => new Promise(resolve => { finishGet = () => resolve(serverDetail); }));
+    const opening = host.open('session');
+    await vi.waitFor(() => expect(finishGet).toBeTypeOf('function'));
+    finishList([]); await restoring;
+    finishGet(); await opening;
+    api.close.mockRejectedValueOnce(new Error('offline'));
+    await expect(host.close('sharedTask')).rejects.toThrow('offline');
+    // The unconfirmed close must keep the server retry scheduled.
+    expect(host.needsAuthorityRefresh()).toBe(true);
+  });
+  it('rechecks the server after a create whose response was lost', async () => {
+    serverDetail = { ...detail(), status: 'closed' };
+    await host.restore();
+    api.create.mockRejectedValueOnce(new Error('timeout'));
+    await expect(host.open('session')).rejects.toThrow('timeout');
+    expect(host.needsAuthorityRefresh()).toBe(true);
+    await host.restore();
+    expect(host.needsAuthorityRefresh()).toBe(false);
+  });
+  // Fault radius of the reconnect sync: with two guests, an unchanged or failed
+  // server read revokes nobody; existing captures stay valid.
+  it('keeps every guest of an open share unaffected by reconnect syncs', async () => {
+    await host.open('session');
+    const capture = host.capturePeer(sharedTaskGuestPeer('sharedTask', 'member-a', 'phone-a'))!;
+    vi.mocked(options.revoke).mockClear();
+    await host.restore();
+    api.list.mockRejectedValueOnce(new Error('offline'));
+    await expect(host.restore()).rejects.toThrow('offline');
+    expect(options.revoke).not.toHaveBeenCalled();
+    expect(canRead('a')).toBe(true);
+    expect(canRead('b')).toBe(true);
+    expect(capture.isCurrent()).toBe(true);
+  });
   it('allows first sharing after an unshared task is archived and restored', async () => {
     await host.closeLocallyForBoundary('session');
     options.readSession = vi.fn(async (id) => ({ id, title: 'Task', status: 'archived' }));

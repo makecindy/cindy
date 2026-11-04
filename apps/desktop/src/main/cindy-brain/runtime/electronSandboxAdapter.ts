@@ -14,11 +14,13 @@ import {
   type GhostMediaModelsResult,
   type GhostMediaModelType,
   type InstalledGhost,
+  ghostLoopbackOrigin,
+  ghostPanelLoopbackEmbedAllowed,
 } from '../../../shared/ghost.js';
 import { getActiveAppSession, type ActiveAppSession } from '../../appSessionState.js';
 import { ownerScopedGhostPartition, ownerScopedGhostPartitionForInstalledGhost } from '../ghostWebviewPartition.js';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
-import { GHOST_BOOT_PATH, GHOST_MAIL_SDK_PATH, ghostBootHtml, ghostFileMime, resolveGhostFilePath } from './ghostFiles.js';
+import { GHOST_BOOT_PATH, GHOST_MAIL_SDK_PATH, ghostBootHtml, ghostFileMime, mediaTypeForLibraryPath, resolveGhostFilePath } from './ghostFiles.js';
 import mailComposeRuntimeSource from './mailComposeRuntime.js?raw';
 import { handleGhostKvRequest, readBoundedBodyText } from './ghostKvEndpoint.js';
 import { resolveHashRef as resolveBlobHashRef } from '../../cindy-media/blobStore.js';
@@ -207,7 +209,8 @@ export async function fetchGhostSettings(ghost: InstalledGhost, pathname: string
   const args = { ghostId: id, pathname: path, method, readBodyText: async () => body ?? '', isCurrent, confirmConnection };
   const handler = path === '/secrets' || path.startsWith('/secrets/') ? ghostSecretsHandler
     : path === '/oauth' || path.startsWith('/oauth/') ? ghostOauthHandler
-    : path === '/connections' || path.startsWith('/connections/') ? ghostConnectionsHandler : null;
+    : path === '/connections' || path.startsWith('/connections/') ? ghostConnectionsHandler
+    : path === '/models' ? ghostModelsHandler : null;
   let result: { status: number; body?: string };
   if (handler) result = await handler(args);
   else if (path === '/kv' && ghostKvStore) result = await handleGhostKvRequest({
@@ -267,9 +270,13 @@ export function setGhostMediaModelsProvider(
   ghostMediaModelsProvider = provider;
 }
 
-let ghostAgentModelsProvider: ((ghostId: string) => Promise<GhostAgentModelsResult>) | null = null;
+let ghostAgentModelsProvider: ((ghostId: string, agentDeviceId?: string) => Promise<GhostAgentModelsResult>) | null = null;
+let ghostModelPickerProvider: ((id: string, options: unknown, current: () => boolean, signal: AbortSignal) => Promise<import('../../../shared/pluginModelPicker.js').PluginModelPickerResult>) | null = null;
+export function setGhostModelPickerProvider(provider: NonNullable<typeof ghostModelPickerProvider>): void {
+  ghostModelPickerProvider = provider;
+}
 export function setGhostAgentModelsProvider(
-  provider: (ghostId: string) => Promise<GhostAgentModelsResult>,
+  provider: (ghostId: string, agentDeviceId?: string) => Promise<GhostAgentModelsResult>,
 ): void {
   ghostAgentModelsProvider = provider;
 }
@@ -305,6 +312,12 @@ type GhostSecretsProtocolHandler = (args: {
 }) => Promise<{ status: number; body?: string }>;
 
 let ghostSecretsHandler: GhostSecretsProtocolHandler | null = null;
+let ghostModelsHandler: GhostSecretsProtocolHandler | null = null;
+
+/** /models：插件发布它提供给模型选择器的模型(index.ts 注入，形态同 /secrets)。 */
+export function setGhostModelsHandler(handler: GhostSecretsProtocolHandler): void {
+  ghostModelsHandler = handler;
+}
 
 export function setGhostSecretsHandler(handler: GhostSecretsProtocolHandler): void {
   ghostSecretsHandler = handler;
@@ -405,6 +418,37 @@ export function revokeLegacyGhostProtocolPartition(ghostId: string): void {
  */
 export const GHOST_HTML_CSP =
   "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob:";
+/** 回环嵌入插件(见 ghostPanelLoopbackEmbedAllowed)额外允许的子帧来源;其余 CSP 不变。 */
+const GHOST_LOOPBACK_FRAME_CSP = "frame-src 'self' http://127.0.0.1:* http://localhost:*";
+
+/** 分区网络闸看到的请求形状(只取判定所需字段,便于单测构造)。 */
+interface LoopbackEmbedRequestDetails {
+  url: string;
+  resourceType: string;
+  referrer?: string;
+  frame?: { url: string; parent?: { url: string } | null } | null;
+}
+
+/**
+ * 回环嵌入请求是否放行:
+ * - 首层子帧(subFrame)到回环地址:父帧必须是本插件自己的页面;
+ * - 更深的子帧:父帧必须是同一回环主机:端口(插件自己那台本机服务内部的
+ *   分层页面),跨到另一个端口一律拒绝;
+ * - 子帧内的其它请求(脚本/样式/XHR/WebSocket/媒体…):发起帧与目标必须是
+ *   同一回环主机:端口;
+ * - 顶层导航(mainFrame)与来自 cindy-ghost 页面自身的回环请求一律拒绝。
+ */
+function loopbackEmbedRequestAllowed(details: LoopbackEmbedRequestDetails, selfPrefix: string): boolean {
+  const target = ghostLoopbackOrigin(details.url);
+  if (!target) return false;
+  if (details.resourceType === 'mainFrame') return false;
+  if (details.resourceType === 'subFrame') {
+    const parent = details.frame?.parent?.url ?? details.referrer ?? '';
+    return parent.startsWith(selfPrefix) || ghostLoopbackOrigin(parent) === target;
+  }
+  const from = details.frame?.url ?? details.referrer;
+  return ghostLoopbackOrigin(from) === target;
+}
 
 function createGhostProtocolTargetGuard(
   ghostId: string,
@@ -460,6 +504,11 @@ function registerGhostProtocol(
   // 任意插件页面发出的 HTTPS image 请求（<img> 与 CSS 图片共用该资源类型）。
   // HTTP 图片、XHR/fetch、脚本、样式、字体、媒体、WebSocket 与其它协议继续拒绝。
   const selfPrefix = `${SCHEME}://${ghostId}/`;
+  // 回环嵌入(ghostPanelLoopbackEmbedAllowed):面板页可以把随包 Node 进程在本机
+  // 提供的页面装进 <iframe>;该子帧内的请求只许回到同一主机:端口(含 WebSocket)。
+  // 面板页自身发出的回环 fetch/XHR 仍被拒;顶层导航到回环地址仍被拒。
+  const loopbackEmbed = ghostPanelLoopbackEmbedAllowed(ghost.manifest);
+  const htmlCsp = loopbackEmbed ? `${GHOST_HTML_CSP}; ${GHOST_LOOPBACK_FRAME_CSP}` : GHOST_HTML_CSP;
   ses.webRequest.onBeforeRequest((details, callback) => {
     let allowed = details.url.startsWith(selfPrefix);
     if (!allowed && isGhostProtocolOwnerActive(owner) && details.resourceType === 'image') {
@@ -468,6 +517,9 @@ function registerGhostProtocol(
       } catch {
         allowed = false;
       }
+    }
+    if (!allowed && loopbackEmbed && isGhostProtocolOwnerActive(owner)) {
+      allowed = loopbackEmbedRequestAllowed(details, selfPrefix);
     }
     callback({ cancel: !allowed });
   });
@@ -529,13 +581,43 @@ function registerGhostProtocol(
           },
         });
       }
+      if (url.pathname === '/model-picker') {
+        const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
+        if (request.method !== 'POST') return new Response(null, { status: 405, headers });
+        if (url.search) return new Response(null, { status: 400, headers });
+        if (!ghostModelPickerProvider) return new Response(null, { status: 503, headers });
+        let options: unknown;
+        try {
+          const body = await readBoundedBodyText(request);
+          if (body.length > 4096) return new Response(null, { status: 400, headers });
+          options = JSON.parse(body || '{}');
+        } catch { return new Response(null, { status: 400, headers }); }
+        // Page authors cannot choose a different phone or impersonate a logic request.
+        if (!options || typeof options !== 'object' || Array.isArray(options) ||
+            Object.keys(options).some(key => !['initial', 'allowRemote'].includes(key))) return new Response(null, { status: 400, headers });
+        const result = await ghostModelPickerProvider(storagePart, options, isRegistrationCurrent, request.signal);
+        if (!isRegistrationCurrent()) return new Response(null, { status: 403, headers });
+        return new Response(JSON.stringify(result), { status: 200, headers });
+      }
       if (url.pathname === '/agent-models') {
         const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
         if (request.method !== 'GET') return new Response(null, { status: 405, headers });
-        if (url.search) return new Response(null, { status: 400, headers });
+        const keys = [...url.searchParams.keys()];
+        const ids = url.searchParams.getAll('agent_device_id');
+        let agentDeviceId: string | undefined;
+        if (keys.length > 0) {
+          if (keys.length !== 1 || keys[0] !== 'agent_device_id' || ids.length !== 1) {
+            return new Response(null, { status: 400, headers });
+          }
+          const id = ids[0];
+          if (!id || id.length > 128) return new Response(null, { status: 400, headers });
+          agentDeviceId = id;
+        }
         if (!ghostAgentModelsProvider) return new Response(null, { status: 503, headers });
         try {
-          const result = await ghostAgentModelsProvider(storagePart);
+          const result = agentDeviceId === undefined
+            ? await ghostAgentModelsProvider(storagePart)
+            : await ghostAgentModelsProvider(storagePart, agentDeviceId);
           if (!isGhostProtocolOwnerActive(owner)) return new Response(null, { status: 403, headers });
           return new Response(JSON.stringify(result), {
             status: result.ok ? 200 : result.errorCode === 'PERMISSION_DENIED' ? 403 : 503,
@@ -595,6 +677,23 @@ function registerGhostProtocol(
             ...(out.body !== undefined
               ? { 'Content-Type': 'application/json; charset=utf-8' }
               : {}),
+            'Cache-Control': 'no-cache',
+          },
+        });
+      }
+      if (url.pathname === '/models') {
+        if (!ghostModelsHandler) return new Response(null, { status: 503 });
+        const out = await ghostModelsHandler({
+          ghostId: storagePart,
+          method: request.method,
+          pathname: url.pathname,
+          readBodyText: () => readBoundedBodyText(request),
+          isCurrent: isRegistrationCurrent,
+        });
+        return new Response(out.body ?? null, {
+          status: out.status,
+          headers: {
+            ...(out.body !== undefined ? { 'Content-Type': 'application/json; charset=utf-8' } : {}),
             'Cache-Control': 'no-cache',
           },
         });
@@ -676,7 +775,7 @@ function registerGhostProtocol(
           status: 200,
           headers: {
             'Content-Type': 'text/html; charset=utf-8',
-            'Content-Security-Policy': GHOST_HTML_CSP,
+            'Content-Security-Policy': htmlCsp,
             'Cache-Control': 'no-cache',
           },
         });
@@ -691,7 +790,7 @@ function registerGhostProtocol(
         status: 200,
         headers: {
           'Content-Type': mime,
-          ...(mime.startsWith('text/html') ? { 'Content-Security-Policy': GHOST_HTML_CSP } : {}),
+          ...(mime.startsWith('text/html') ? { 'Content-Security-Policy': htmlCsp } : {}),
           'Cache-Control': 'no-cache',
         },
       });
@@ -825,30 +924,6 @@ async function serveGhostLibraryFile(ghostId: string, relPath: string, rangeHead
   }
 }
 
-/** library 投影的 MIME 按扩展名粗判(面板展示用;嗅探不做,宿主只供已存文件)。 */
-function mediaTypeForLibraryPath(relPath: string): string {
-  const ext = relPath.slice(relPath.lastIndexOf('.')).toLowerCase();
-  switch (ext) {
-    case '.png': return 'image/png';
-    case '.jpg':
-    case '.jpeg': return 'image/jpeg';
-    case '.gif': return 'image/gif';
-    case '.webp': return 'image/webp';
-    case '.svg': return 'image/svg+xml';
-    case '.mp4': return 'video/mp4';
-    case '.webm': return 'video/webm';
-    case '.mov': return 'video/quicktime';
-    case '.mp3': return 'audio/mpeg';
-    case '.wav': return 'audio/wav';
-    case '.ogg': return 'audio/ogg';
-    case '.m4a': return 'audio/mp4';
-    case '.pdf': return 'application/pdf';
-    case '.json': return 'application/json; charset=utf-8';
-    case '.txt': return 'text/plain; charset=utf-8';
-    default: return 'application/octet-stream';
-  }
-}
-
 /** 画廊清单响应:[{src, caption}](新的在前;账本不可用时回空数组不报错)。 */
 async function serveGhostGallery(storagePart: string, protocolHost: string): Promise<Response> {
   let items: Awaited<ReturnType<typeof listGhostGalleryFromLedger>> = [];
@@ -870,6 +945,10 @@ async function serveGhostGallery(storagePart: string, protocolHost: string): Pro
 
 class ElectronSandboxHandle implements SandboxHandle {
   private win: BrowserWindow | null;
+  // 建窗时记下:窗口可能先于 destroy() 被外部销毁(更新重启的 forceQuit 会逐个
+  // destroy 全部 BrowserWindow),那时再读 win.webContents 会抛 Object has been
+  // destroyed,打断 destroyAll 让后续沙箱与 Node runtime 都收不掉。
+  private readonly logicWebContentsId: number;
   private goneCb: ((details: { reason: string }) => void) | null = null;
   private destroyed = false;
 
@@ -896,8 +975,9 @@ class ElectronSandboxHandle implements SandboxHandle {
         devTools: !ghostSandboxDevToolsDisabled,
       },
     });
-    ghostWebContentsIds.add(this.win.webContents.id);
-    logicWebContentsToGhost.set(this.win.webContents.id, installedGhostStoragePart(ghost));
+    this.logicWebContentsId = this.win.webContents.id;
+    ghostWebContentsIds.add(this.logicWebContentsId);
+    logicWebContentsToGhost.set(this.logicWebContentsId, installedGhostStoragePart(ghost));
     this.win.webContents.on('render-process-gone', (_event, details) => {
       if (this.destroyed) return;
       // 延迟一拍再收尸:不在 Chromium 事件分发中途销毁窗口(重入风险)。
@@ -918,10 +998,8 @@ class ElectronSandboxHandle implements SandboxHandle {
     this.destroyed = true;
     const win = this.win;
     this.win = null;
-    if (win) {
-      logicWebContentsToGhost.delete(win.webContents.id);
-      if (!win.isDestroyed()) win.destroy();
-    }
+    logicWebContentsToGhost.delete(this.logicWebContentsId);
+    if (win && !win.isDestroyed()) win.destroy();
   }
 
   crashForTest(): void {

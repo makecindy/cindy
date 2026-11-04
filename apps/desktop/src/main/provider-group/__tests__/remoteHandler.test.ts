@@ -92,6 +92,15 @@ function deps(overrides: Partial<ProviderGroupRemoteHandlerDeps> = {}) {
 const PICK = { action: 'pick', sessionId: 's1', providerId: 'anthropic', agentKind: 'claude-code', model: 'opus', exclude: ['local'] };
 
 describe('provider-group:remote', () => {
+  it('tries another member when the selected executor cannot acknowledge a prohibited Fast policy', async () => {
+    const bind = vi.fn().mockRejectedValueOnce(Error('[REMOTE_AGENT_PEER_TOO_OLD] update')).mockResolvedValue(undefined);
+    const d = deps({ bindFastPolicy: bind });
+    d.router.pick.mockResolvedValueOnce({ kind: 'member', member: MINI, label: 'Mini', resolved: [] })
+      .mockResolvedValueOnce({ kind: 'member', member: CONFIG.members[0], label: 'Local', resolved: [] });
+    expect(await handleProviderGroupRemote(d, 'laptop', { ...PICK, exclude: [] })).toMatchObject({ kind: 'member', member: { key: 'local' } });
+    expect(d.router.pick.mock.calls[1][0].exclude?.has(MINI.key)).toBe(true);
+    expect(bind).toHaveBeenLastCalledWith({ group: 'anthropic', deviceId: null, sessionId: 's1', controllerDeviceId: 'laptop' });
+  });
   // Unit/protocol: old owners ignored the final rebalance constraints. Verify the real wire and acknowledgement.
   it('requires the owner to acknowledge the rebalance constraint before accepting its pick', async () => {
     const d = deps();

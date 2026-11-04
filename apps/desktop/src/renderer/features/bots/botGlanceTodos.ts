@@ -43,14 +43,17 @@ export interface GlanceTodos {
   doneTotal: number;
   /** 最早一条「稍后再说」到期的时刻；到时重读，让它回到列表。 */
   nextDeferredAt: string | null;
+  /** 「每天帮我查一次」是否开着；那台电脑的宿主还不支持时为 null，开关不出现。 */
+  dailyCheck: boolean | null;
 }
 
-const EMPTY: GlanceTodos = { open: [], openTotal: 0, done: [], doneTotal: 0, nextDeferredAt: null };
+const EMPTY: GlanceTodos = { open: [], openTotal: 0, done: [], doneTotal: 0, nextDeferredAt: null, dailyCheck: null };
 
 interface TodoPage {
   items: TeammateTodo[];
   total: number;
   nextDeferredAt?: string | null;
+  dailyCheck?: boolean;
 }
 
 function todosRef(botId: string) {
@@ -66,10 +69,15 @@ async function readRemotePage(deviceId: string, botId: string, query: TodoListQu
   const resource = await window.electronAPI.deviceLink.invoke(deviceId, REMOTE_RESOURCE_GET_CHANNEL, [request]);
   const blocks = (resource as { blocks?: Array<{ primitive?: string; data?: unknown }> } | null)?.blocks;
   const page = blocks?.find((block) => block.primitive === 'teammate-todos')?.data as
-    | { items?: TeammateTodo[]; total?: number; nextDeferredAt?: string | null }
+    | { items?: TeammateTodo[]; total?: number; nextDeferredAt?: string | null; dailyCheck?: unknown }
     | undefined;
   if (!page || !Array.isArray(page.items)) throw new Error('invalid todo page');
-  return { items: page.items, total: page.total ?? page.items.length, nextDeferredAt: page.nextDeferredAt ?? null };
+  return {
+    items: page.items,
+    total: page.total ?? page.items.length,
+    nextDeferredAt: page.nextDeferredAt ?? null,
+    ...(typeof page.dailyCheck === 'boolean' ? { dailyCheck: page.dailyCheck } : {}),
+  };
 }
 
 /** 一类待办按页读完（宿主单页上限 25）；页数在开头读到的总数内收敛，总数中途变化时以最新一页为准。 */
@@ -87,11 +95,12 @@ async function readAll(
     if (page.items.length === 0) break;
     items.push(...page.items);
   }
-  return { items: items.slice(0, MAX_ITEMS), total, nextDeferredAt: first.nextDeferredAt ?? null };
+  return { items: items.slice(0, MAX_ITEMS), total, nextDeferredAt: first.nextDeferredAt ?? null, dailyCheck: first.dailyCheck };
 }
 
 async function readTodos(host: GlanceTodoHost): Promise<GlanceTodos> {
   let readPage: (query: TodoListQuery) => Promise<TodoPage>;
+  let dailyCheck: Promise<boolean | null> | null = null;
   if (host.deviceId) {
     const deviceId = host.deviceId;
     readPage = (query) => readRemotePage(deviceId, host.botId, query);
@@ -99,15 +108,40 @@ async function readTodos(host: GlanceTodoHost): Promise<GlanceTodos> {
     const { items } = await window.electronAPI.localDb.bots.todos.list(host.botId);
     const now = new Date();
     readPage = async (query) => queryTodoItems(items, query, now);
+    // 读不到开关（伙伴暂停等）时只是不显示开关，待办照常。
+    dailyCheck = (async () => window.electronAPI.localDb.bots.todos.dailyCheck(host.botId))().catch(() => null);
   }
-  const [open, done] = await Promise.all([readAll(readPage, 'open'), readAll(readPage, 'done')]);
+  const [open, done, localDailyCheck] = await Promise.all([readAll(readPage, 'open'), readAll(readPage, 'done'), dailyCheck]);
   return {
     open: open.items,
     openTotal: open.total,
     done: [...done.items].reverse(),
     doneTotal: done.total,
     nextDeferredAt: open.nextDeferredAt ?? null,
+    dailyCheck: host.deviceId ? (open.dailyCheck ?? null) : (localDailyCheck ?? null),
   };
+}
+
+/** 只重读「每天帮我查一次」：例行任务列表里暂停或恢复它时用，不必重读整份待办。 */
+async function readDailyCheck(host: GlanceTodoHost): Promise<boolean | null> {
+  if (!host.deviceId) return window.electronAPI.localDb.bots.todos.dailyCheck(host.botId);
+  const page = await readRemotePage(host.deviceId, host.botId, { view: 'open', order: 'due', offset: 0, limit: 1 });
+  return page.dailyCheck ?? null;
+}
+
+/** 打开或关掉伙伴的「每天帮我查一次」（宿主上的内置例行任务）；返回宿主确认后的状态。 */
+export async function setGlanceDailyCheck(host: GlanceTodoHost, enabled: boolean): Promise<boolean> {
+  if (!host.deviceId) return window.electronAPI.localDb.bots.todos.dailyCheck(host.botId, enabled);
+  const result = await window.electronAPI.deviceLink.invoke(host.deviceId, REMOTE_RESOURCE_INVOKE_CHANNEL, [{
+    client: { protocolVersion: 1, primitives: ['teammate-todos'] },
+    collectionId: 'teammates',
+    actionId: 'todo-daily-check',
+    resourceRef: todosRef(host.botId),
+    input: { enabled },
+  }]);
+  const value = (result as { dailyCheck?: unknown } | null)?.dailyCheck;
+  if (typeof value !== 'boolean') throw new Error('invalid daily check result');
+  return value;
 }
 
 /** 本机或那台电脑上的一次待办更新；撤销删除走同一条路径的 `restore`。 */
@@ -150,6 +184,13 @@ export function useGlanceTodos(host: GlanceTodoHost, enabled = true) {
     }
   }, [botId, deviceId, enabled]);
 
+  const refreshDailyCheck = useCallback(async () => {
+    const owner = getDataOwnerGeneration();
+    const dailyCheck = await readDailyCheck({ botId, deviceId }).catch(() => undefined);
+    if (dailyCheck === undefined || !isDataOwnerGenerationCurrent(owner)) return;
+    setState((previous) => ({ ...previous, todos: { ...previous.todos, dailyCheck } }));
+  }, [botId, deviceId]);
+
   useEffect(() => {
     setState({ todos: EMPTY, loaded: false, failed: false });
     if (!enabled || !botId) return;
@@ -159,6 +200,8 @@ export function useGlanceTodos(host: GlanceTodoHost, enabled = true) {
           if (push.deviceId !== deviceId || push.channel !== REMOTE_RESOURCE_CHANGED_CHANNEL) return;
           if (!isDeviceLinkRemotePushCurrent(push, stamp)) return;
           const payload = parseRemoteResourceChangedPayload(push.payload);
+          // 例行任务列表里暂停或恢复「每天查待办」：只重读开关。
+          if (payload?.collectionId === 'routines') return void refreshDailyCheck();
           if (payload?.collectionId !== 'teammates') return;
           if (
             payload.resourceRefs?.length &&
@@ -170,6 +213,7 @@ export function useGlanceTodos(host: GlanceTodoHost, enabled = true) {
       : window.electronAPI.maker.onBotWorkbenchChanged((event) => {
           if (event.botId === botId) void refresh();
         });
+    const offRoutines = deviceId ? undefined : window.electronAPI.routines?.onChanged(() => void refreshDailyCheck());
     const foreground = () => {
       if (document.visibilityState === 'visible') void refresh();
     };
@@ -178,10 +222,11 @@ export function useGlanceTodos(host: GlanceTodoHost, enabled = true) {
     return () => {
       epoch.current++;
       unsubscribe?.();
+      offRoutines?.();
       document.removeEventListener('visibilitychange', foreground);
       window.removeEventListener('focus', foreground);
     };
-  }, [botId, deviceId, enabled, refresh]);
+  }, [botId, deviceId, enabled, refresh, refreshDailyCheck]);
 
   // 浮层开着时也要跟上时间：「稍后再说」到时回到列表，跨过午夜时重算今天到期的红点。
   const nextDeferredAt = state.todos.nextDeferredAt;
@@ -193,7 +238,12 @@ export function useGlanceTodos(host: GlanceTodoHost, enabled = true) {
     return scheduleTodoDeferralRefresh(next, () => void refresh());
   }, [botId, enabled, nextDeferredAt, refresh, state.loaded, state.todos]);
 
-  return { ...state, refresh };
+  /** 宿主确认后的开关状态先写进当前列表，不等下一次读取。 */
+  const setDailyCheck = useCallback((dailyCheck: boolean) => {
+    setState((previous) => ({ ...previous, todos: { ...previous.todos, dailyCheck } }));
+  }, []);
+
+  return { ...state, refresh, setDailyCheck };
 }
 
 const SEEN_PREFIX = 'cindy:bots:glance-due-seen:';

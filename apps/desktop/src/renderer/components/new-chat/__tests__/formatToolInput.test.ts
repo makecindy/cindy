@@ -24,13 +24,18 @@ describe('formatToolInput (harness-agnostic)', () => {
 
   it('extracts pattern/path for search tools including pi grep/find/ls', () => {
     expect(formatToolInput('Grep', { pattern: 'TODO' })).toBe('TODO');
-    expect(formatToolInput('grep', { pattern: 'TODO', path: '/src' })).toBe('TODO');
+    // A search shows both the query and where it looks.
+    expect(formatToolInput('grep', { pattern: 'TODO', path: '/src' })).toBe('TODO \u2192 /src');
     expect(formatToolInput('find', { path: '/src' })).toBe('/src');
     expect(formatToolInput('ls', { path: '/src' })).toBe('/src');
   });
 
+  it('shows MCP and Codex exec calls as the operation, not JSON', () => {
+    expect(formatToolInput('mcp__x__y', { a: 1 })).toBe('y {"a":1}');
+    expect(formatToolInput('exec', { command: 'git status', cwd: '/repo' })).toBe('git status\n# cwd: /repo');
+  });
+
   it('falls back to truncated JSON for unknown tools / missing fields', () => {
-    expect(formatToolInput('mcp__x__y', { a: 1 })).toBe('{\n  "a": 1\n}');
     expect(formatToolInput('bash', {})).toBe('{}');
     const long = formatToolInput('weird', { s: 'x'.repeat(600) });
     expect(long.endsWith('...')).toBe(true);

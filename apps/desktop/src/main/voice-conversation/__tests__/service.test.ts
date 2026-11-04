@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AsrSegment, AudioGate, AudioGateEmit } from '@cindy/voice-input-core';
+import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
+import { speechModels, resolveSpeechConnection, type SpeechCatalogDeps } from '../models.js';
 import { VoiceConversationService } from '../service.js';
+import type { SpeechConnection } from '../speech.js';
 import { hasVoiceConversationLease } from '../lease.js';
 import type { VoiceExitDecision } from '../../../shared/voiceConversation.js';
 import type { VoiceExitClassification } from '../semanticExit.js';
@@ -19,6 +22,27 @@ const previewSelection = {
   voice: 'alloy',
   text: 'voice sample',
 };
+// Unit regression: Gateway catalogs were empty for these authorized speech models.
+// Exercise the service entrance so same-ID BYOK connections cannot inherit Gateway
+// references; catalog reads must not trigger a paid preview or allocate ASR.
+it.each(['elevenlabs/eleven_multilingual_v2', 'elevenlabs/eleven_v3', 'minimax/speech-2.8-turbo'])(
+  'offers named references only on the Gateway route for %s',
+  async (modelId) => {
+    const { service, deps } = fixture();
+    const catalog = await service.voices({ modelId });
+    expect(catalog.source).toBe('reference');
+    expect(catalog.voices).toHaveLength(4);
+    expect(catalog.voices.every(({ id, name }) => id && name && id !== name)).toBe(true);
+    expect(await service.voices({ providerId: 'xd', modelId })).toEqual(catalog);
+    expect(await service.voices({ providerId: 'custom', agent: 'codex', modelId })).toEqual({
+      source: 'manual',
+      voices: [],
+    });
+    expect(deps.fetch).not.toHaveBeenCalled();
+    expect(deps.createProvider).not.toHaveBeenCalled();
+  },
+);
+
 describe('voice preview ownership', () => {
   it('synthesizes the exact selection without allocating ASR, and excludes concurrent calls', async () => {
     const { service, deps } = fixture();
@@ -138,8 +162,8 @@ function fixture() {
     assertCompanion: vi.fn(async () => {}),
     models: vi.fn(() => [{ id: 'tts', name: 'Speech' }]),
     createProvider: vi.fn(async () => provider),
-    createAudioGate: vi.fn<() => AudioGate | undefined>(() => undefined),
-    connection: vi.fn(() => ({
+    createAudioGate: vi.fn<(onFiltered: () => void) => AudioGate | undefined>(() => undefined),
+    connection: vi.fn<() => SpeechConnection>(() => ({
       baseUrl: 'https://gateway.test/v1',
       protocol: 'openai' as const,
       headers: { authorization: 'Bearer test-key' },
@@ -366,6 +390,24 @@ describe('local companion call ownership', () => {
     service.interrupt(1, selection.callId);
     await expect(service.readSpeech(1, selection.callId, 'two')).rejects.toThrow();
     await expect(service.readSpeech(1, selection.callId, 'three')).rejects.toThrow();
+  });
+
+  // Unit regression: MP3 completes during start/prefetch rather than readSpeech.
+  // Retaining those slots would make the third sentence fail as a full queue.
+  it('releases completed MP3 prefetch slots without requiring a PCM read', async () => {
+    const { service, deps } = fixture();
+    const modelId = 'minimax/speech-2.8-turbo';
+    deps.models.mockReturnValue([{ id: modelId, name: 'MiniMax speech' }]);
+    deps.connection.mockReturnValue({ baseUrl: 'https://openrouter.ai/api/v1', protocol: 'openai', headers: {} });
+    deps.fetch.mockImplementation(async () => new Response(new Uint8Array([0xff, 0xfb, 1]), {
+      headers: { 'Content-Type': 'audio/mpeg' },
+    }));
+    await service.start(1, { ...selection, modelId });
+    const ready = await Promise.all(['one', 'two'].map(id => service.speak(1, selection.callId, id, id, true)));
+    expect(ready).toEqual(Array.from({ length: 2 }, () => ({ format: 'mp3', data: new Uint8Array([0xff, 0xfb, 1]).buffer })));
+    await expect(service.speak(1, selection.callId, 'three', 'three', true)).resolves.toHaveProperty('format', 'mp3');
+    expect(deps.fetch).toHaveBeenCalledTimes(3);
+    await expect(service.readSpeech(1, selection.callId, 'three')).rejects.toThrow('cancelled');
   });
 
   it('cancels pending lookahead headers and prevents their late audio from joining a new reply', async () => {
@@ -607,9 +649,10 @@ describe('input-only mute', () => {
   // Real call service/input; a held gate callback models delayed inference.
   // Existing mute tests only delayed ASR, so they missed pre-ASR voiceprint work.
   // Unit, in-memory: a 200ms held voice must not revive a muted/ended/other-owner
-  // call, interrupt TTS, or reach the new microphone's ASR after unmute.
+  // call, interrupt TTS, or reach the new microphone's ASR after unmute. Its
+  // late "ignored another voice" notice is fenced the same way.
   it.each(['mute', 'end', 'owner'] as const)(
-    'fences delayed filtered audio on %s and rereads filter availability on unmute',
+    'fences delayed filtered audio and its notice on %s and rereads filter availability on unmute',
     async (action) => {
       const { service, deps, provider } = fixture();
       let release!: AudioGateEmit;
@@ -621,17 +664,27 @@ describe('input-only mute', () => {
         finish: vi.fn(async () => {}),
         abort: vi.fn(),
       };
-      deps.createAudioGate.mockReturnValueOnce(audioGate);
+      let filtered!: () => void;
+      deps.createAudioGate.mockImplementationOnce((onFiltered) => {
+        filtered = onFiltered;
+        return audioGate;
+      });
       await service.start(1, selection);
       await service.speak(1, selection.callId, 'reply', 'keep reading');
       const voice = new Int16Array(3_200).fill(2_000).buffer;
       service.audio(1, selection.callId, voice);
       expect(provider.appendAudio).not.toHaveBeenCalled();
+      filtered();
+      expect(deps.emit).toHaveBeenCalledWith(1, expect.objectContaining({
+        callId: selection.callId,
+        event: { type: 'speaker-filtered' },
+      }));
       if (action === 'mute') await service.setInputMuted(1, selection.callId, true);
       else if (action === 'end') await service.end(1, selection.callId);
       else deps.owner.mockReturnValue('owner-b');
       deps.emit.mockClear();
       release(voice);
+      filtered();
       expect(provider.appendAudio).not.toHaveBeenCalled();
       expect(deps.emit).not.toHaveBeenCalled();
       expect(audioGate.finish).not.toHaveBeenCalled();
@@ -736,3 +789,35 @@ describe('input-only mute', () => {
     },
   );
 });
+
+// Review regression: real catalog admission + service starts, not a direct resolver
+// assertion. Hiding a saved route must not revoke it; disabling it must. Unit tier,
+// mock ASR/transport only, no devices, credentials or paid network requests.
+it.each(['startPreview', 'start', 'startPlayback'] as const)(
+  'keeps a hidden saved speech route usable through %s, but rejects a disabled route',
+  async (method) => {
+    const { service, deps } = fixture();
+    const catalog: SpeechCatalogDeps = {
+      catalog: { ...BUNDLED_CATALOG, providers: [buildUserProvider({
+        id: 'speech', name: 'Speech', runtimes: { codex: {
+          baseUrl: 'https://api.openai.com/v1', models: [{ id: 'tts', name: 'Speech', mode: 'audio_speech', defaultEnabled: false }],
+        } },
+      })] },
+      gatewayAllowed: false, disabled: () => false, visibilityOverride: () => false,
+      gatewayConnection: () => ({ baseUrl: '', apiKey: '' }), readKey: () => 'fake-test-key',
+    };
+    const saved = { ...selection, ...previewSelection, providerId: 'speech', agent: 'codex' as const };
+    deps.models.mockImplementation(() => speechModels(catalog));
+    deps.connection.mockImplementation(() => resolveSpeechConnection(catalog, saved));
+    await expect(service[method](1, saved)).resolves.toBeDefined();
+    expect(deps.connection).toHaveBeenCalled();
+    await service.end(1);
+    deps.fetch.mockClear();
+    deps.createProvider.mockClear();
+    catalog.disabled = () => true;
+    await expect(service[method](1, saved)).rejects.toThrow('model_unavailable');
+    expect(deps.fetch).not.toHaveBeenCalled();
+    expect(deps.createProvider).not.toHaveBeenCalled();
+    expect(hasVoiceConversationLease()).toBe(false);
+  },
+);
