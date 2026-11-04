@@ -84,6 +84,7 @@ describe('useFileTree refresh scheduling', () => {
   // #8422: restored folders previously started all directory IPCs at once.
   // Unit through the real hook: bounded outstanding reads, complete final tree,
   // and no queued reads after leaving. Existing tests restore only a few folders.
+  // Assert the eight-read budget and single-slot refill, not merely < all 13 reads.
   it.each([false, true])('bounds restored reads and cancels pending restore on unmount=%s', async (leave) => {
     const folders: DirEntry[] = Array.from({ length: 12 }, (_, i) => ({
       name: `pkg${i}`, relPath: `pkg${i}`, type: 'directory', size: 0, mtimeMs: 1,
@@ -100,19 +101,25 @@ describe('useFileTree refresh scheduling', () => {
     });
     const view = renderHook(() => useFileTree({ workdir: `/restore-budget-${leave}` }));
     expect(pending[0].path).toBe('');
-    expect(pending.length).toBeLessThan(folders.length + 1);
+    expect(pending).toHaveLength(8);
     const startedBeforeLeaving = pending.length;
     if (leave) view.unmount();
-    for (let i = 0; i < pending.length; i++) {
+    await act(async () => {
+      pending[0].request.resolve(folders);
+    });
+    expect(pending).toHaveLength(leave ? startedBeforeLeaving : startedBeforeLeaving + 1);
+    expect(active).toBe(leave ? 7 : 8);
+    for (let i = 1; i < pending.length; i++) {
       await act(async () => {
         const { path: relPath, request } = pending[i];
         request.resolve(relPath === '' ? folders : []);
       });
     }
+    expect(peak).toBeLessThanOrEqual(8);
+    expect(active).toBe(0);
     if (leave) {
       expect(pending).toHaveLength(startedBeforeLeaving);
     } else {
-      expect(peak).toBeLessThan(folders.length + 1);
       expect(view.result.current.entries.size).toBe(folders.length + 1);
       expect(view.result.current.loadingPaths.size).toBe(0);
       expect(view.result.current.initialLoading).toBe(false);
