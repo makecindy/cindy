@@ -12,6 +12,12 @@ import type { PluginModelSelection } from '@cindy/device-link';
 import type { WorktreeRecycleAction, WorktreeRecycleStatus } from '../shared/worktreeRecycle';
 import type { GhostControlPointCandidate, GhostControlPointInfo, GhostPickerModel, GhostStartTaskPointData, GhostStartTaskRouteResult } from '../shared/ghost';
 import {
+  SETUP_MIGRATION_IPC,
+  type SetupMigrationApi,
+  type SetupMigrationHostRequest,
+  type SetupMigrationProgress,
+} from '../shared/setupMigration';
+import {
   FAVORITE_HOST_READY,
   FAVORITE_HOST_REQUEST,
   FAVORITE_HOST_REPLY,
@@ -1168,6 +1174,34 @@ contextBridge.exposeInMainWorld('electronAPI', {
       };
     },
   } satisfies ModelFavoritesHostApi,
+  // 新电脑设置：只暴露固定的几次调用；计划、安装与写入都由 Main 复核。
+  setupMigration: {
+    sources: () => ipcRenderer.invoke(SETUP_MIGRATION_IPC.SOURCES),
+    preview: (deviceId) => ipcRenderer.invoke(SETUP_MIGRATION_IPC.PREVIEW, deviceId),
+    apply: (request) => ipcRenderer.invoke(SETUP_MIGRATION_IPC.APPLY, request),
+    state: () => ipcRenderer.invoke(SETUP_MIGRATION_IPC.STATE),
+    dismiss: (request) => ipcRenderer.invoke(SETUP_MIGRATION_IPC.DISMISS, request),
+    onProgress: (listener) => {
+      const receive = (_event: Electron.IpcRendererEvent, progress: SetupMigrationProgress) =>
+        listener(progress);
+      ipcRenderer.on(SETUP_MIGRATION_IPC.PROGRESS, receive);
+      return () => {
+        ipcRenderer.removeListener(SETUP_MIGRATION_IPC.PROGRESS, receive);
+      };
+    },
+    host: {
+      ready: () => ipcRenderer.send(SETUP_MIGRATION_IPC.HOST_READY),
+      reply: (reply) => ipcRenderer.send(SETUP_MIGRATION_IPC.HOST_REPLY, reply),
+      onRequest: (listener) => {
+        const receive = (_event: Electron.IpcRendererEvent, request: SetupMigrationHostRequest) =>
+          listener(request);
+        ipcRenderer.on(SETUP_MIGRATION_IPC.HOST_REQUEST, receive);
+        return () => {
+          ipcRenderer.removeListener(SETUP_MIGRATION_IPC.HOST_REQUEST, receive);
+        };
+      },
+    },
+  } satisfies SetupMigrationApi,
   botMarket: {
     list: () => ipcRenderer.invoke('companion-import', 'packages'),
     invite: (input: import('../shared/botMarket').BotPackageIdentity & { locale?: string }) => ipcRenderer.invoke('companion-import', 'invite-package', input),
@@ -1490,7 +1524,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     uiPrompts: (): Promise<Array<{id: string; name: string; version: string}>> => ipcRenderer.invoke('ghosts:ui-prompts'),
     deferUiPrompt: (id: string, version: string): Promise<void> => ipcRenderer.invoke('ghosts:defer-ui-prompt', id, version),
     requestUiApproval: (id: string): Promise<{ granted: boolean }> => ipcRenderer.invoke('ghosts:request-ui-approval', id),
-    requestTaskApproval: (id: string, capability?: 'observe'): Promise<{ granted: boolean }> =>
+    requestTaskApproval: (id: string, capability?: 'observe' | 'companions'): Promise<{ granted: boolean }> =>
       ipcRenderer.invoke('ghosts:request-task-approval', id, capability),
     /** 本插件声明的控制节点(运行前检查)与生效状态。 */
     getControlPoints: (id: string): Promise<GhostControlPointInfo[]> =>
@@ -5633,7 +5667,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listAllPrRefs: (): Promise<unknown> => ipcRenderer.invoke('git-context:pr-refs:list-all'),
     /** 批量查 PR 实时状态(main 侧 60s TTL 缓存;未配 PAT 返回 no-token)。 */
     getPrStatuses: (
-      queries: Array<{ owner: string; repo: string; prNumber: number }>,
+      queries: Array<{
+        provider?: 'github' | 'gitlab';
+        host?: string;
+        owner: string;
+        repo: string;
+        prNumber: number;
+      }>,
     ): Promise<unknown> => ipcRenderer.invoke('git-context:pr-status', queries),
     /** 订阅 HEAD 分支变化。payload: { workdir, head }。 */
     onChanged: fanOutGitContextChanged,

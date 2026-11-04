@@ -1161,6 +1161,7 @@ interface ElectronAPI {
   botMarket: import('../shared/botMarket').BotMarketApi;
   companionImport: import('@cindy/maker-shared/companion-import').CompanionImportApi;
   modelFavoritesHost: import('../shared/modelFavoritesSync').ModelFavoritesHostApi;
+  setupMigration: import('../shared/setupMigration').SetupMigrationApi;
   routines: import('../shared/routines').RoutinesAPI;
   platform: string;
   /** 当前 Desktop 构建是否具备 Beta 更新渠道。 */
@@ -1399,7 +1400,7 @@ interface ElectronAPI {
     uiPrompts: () => Promise<Array<{id: string; name: string; version: string}>>;
     deferUiPrompt: (id: string, version: string) => Promise<void>;
     requestUiApproval: (id: string) => Promise<{ granted: boolean }>;
-    requestTaskApproval: (id: string, capability?: 'observe') => Promise<{ granted: boolean }>;
+    requestTaskApproval: (id: string, capability?: 'observe' | 'companions') => Promise<{ granted: boolean }>;
     getControlPoints: (id: string) => Promise<import('../shared/ghost').GhostControlPointInfo[]>;
     listControlPointCandidates: (point: 'will-schedule-run' | 'will-routine-run' | 'will-start-task') => Promise<import('../shared/ghost').GhostControlPointCandidate[]>;
     listPickerModels: () => Promise<import('../shared/ghost').GhostPickerModel[]>;
@@ -4663,7 +4664,13 @@ interface ElectronAPI {
     /** null = main 侧 db 尚未就绪(登录前/启动期),调用方应稍后重试。 */
     listAllPrRefs: () => Promise<import('@/lib/gitContext.types').SessionPrRef[] | null>;
     getPrStatuses: (
-      queries: Array<{ owner: string; repo: string; prNumber: number }>,
+      queries: Array<{
+        provider?: 'github' | 'gitlab';
+        host?: string;
+        owner: string;
+        repo: string;
+        prNumber: number;
+      }>,
     ) => Promise<import('@/lib/gitContext.types').PrStatusResult[]>;
     onChanged: (
       cb: (data: import('@/lib/gitContext.types').GitContextSnapshot) => void,

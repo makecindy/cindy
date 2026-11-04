@@ -1036,11 +1036,19 @@
       "copied": "Copied",
       "copyFailed": "Could not copy. Try again or save the file.",
       "scrollHint": "Scroll up or down in the selection, or choose Auto Scroll.",
-      "recordHint": "Draw on the preview to annotate the recording. No audio.",
+      "recordHint": "Draw on the preview to annotate the recording.",
       "format": "Format",
       "videoFormat": "Video (WebM)",
-      "prepareHint": "Starts after a 3-second countdown. No audio.",
+      "prepareHint": "Starts after a 3-second countdown.",
       "countdown": "Recording starts in {{count}}",
+      "systemAudio": "Speaker",
+      "microphone": "Microphone",
+      "audioHint": "Choose sound sources, then start recording.",
+      "preparingAudio": "Preparing audio…",
+      "systemAudioFailed": "Speaker audio unavailable. Check system permissions or turn it off.",
+      "microphoneFailed": "Microphone unavailable. Check permissions and the input device, or turn it off.",
+      "audioFailed": "Audio could not start. Check your devices or turn off audio.",
+      "audioInterrupted": "Audio stopped. Finish recording to save the captured portion.",
       "countdownHint": "Starting shortly. Press Esc to cancel.",
       "annotate": "Annotate",
       "finishing": "Finishing…",
@@ -7599,6 +7607,9 @@
         "agentObserve": "Can view task lists and status in local projects",
         "agentObserveDetail": "Can view the titles, agent type, archive state and status (running, needs attention, last activity) of tasks in registered local projects, and open a task in the main window. Cannot read messages, plans or files, send messages, or change tasks.",
         "agentObserveRequest": "Review task viewing permission",
+        "agentCompanions": "Can view your teammates, their status and recent conversation",
+        "agentCompanionsDetail": "Can view all your teammates, including those running on your other computers: name, description, avatar, status (working, waiting for you, idle, offline), what kind of step each is on (such as thinking or running a tool), the requests waiting for you as their cards show them (questions, commands to run, plans), and the recent conversation in each teammate’s main chat (up to 50 of your messages and their replies, without tool steps); and open a teammate’s conversation in the main window. With the message delivery permission as well, it can pass on the answers you give in the plugin: answer questions, decline requests, and give feedback on plans. Allowing a step still takes your click in Cindy’s own confirmation. Cannot read files, tool steps or thinking.",
+        "agentCompanionsRequest": "Review teammate viewing permission",
         "agentHiddenTasks": "Can create background tasks hidden from the task list",
         "agentHiddenTasksDetail": "Tasks this plugin creates can stay out of the task list, search and notifications. You can always view, open or show them in the task list from Background Tasks on this plugin’s page; uninstalling the plugin shows them again.",
         "agentErrand": "Create tasks, perform work, and read results",
@@ -10670,7 +10681,8 @@
         "lifecycleUnavailable": "The current server or computer does not support this action yet.",
         "groupDissolved": "This group has been dissolved. You can still read the available history.",
         "lastOwner": "Transfer ownership or dissolve this group before leaving.",
-        "allBotsMentionDisabled": "The group owner has not enabled @all teammates."
+        "allBotsMentionDisabled": "The group owner has not enabled @all teammates.",
+        "turnAlreadyStarted": "This teammate has already started and cannot be skipped"
       },
       "organizer": "Organizer",
       "plan": {
@@ -10701,7 +10713,17 @@
         "stepSpoken": "Done",
         "allTurns_one": "All {{count}} teammate",
         "allTurns_other": "All {{count}} teammates",
-        "foldTurns": "Show fewer"
+        "foldTurns": "Show fewer",
+        "stepQueued": "Waiting to Start",
+        "stepExecuting": "Running",
+        "stepSkipped": "Skipped",
+        "skippingTurn": "Skipping…",
+        "queueWaiting": "Waiting for you to continue",
+        "skipTurnLabel": "Skip {{name}}",
+        "queueEnded": "Round ended",
+        "talkTitle": "Hear from everyone in turn",
+        "talkPending": "Not started",
+        "skipTurn": "Skip"
       },
       "speaking": {
         "planning": "Splitting the work…"
@@ -14758,7 +14780,7 @@
         "manage": {
           "title": "Manage PR Links",
           "hint": "Up to 3 in the header; pinned PRs appear first",
-          "empty": "Paste a GitHub PR link to add it",
+          "empty": "Paste a GitHub PR or GitLab MR URL to add it",
           "removed": "Removed: {{count}}",
           "legacy": "Unconfirmed references: {{count}}",
           "addLabel": "Add PR Link",
@@ -14769,17 +14791,26 @@
           "unpin": "Unpin PR",
           "pinLimit": "Pin up to 3 PRs",
           "reorderHint": "Use Alt+↑/↓ to reorder within the pinned or unpinned group.",
-          "dragHandle": "Drag to reorder {{repo}} #{{number}}",
+          "dragHandle": "Drag to reorder {{repo}} {{numberLabel}}",
           "remove": "Remove PR",
           "errors": {
             "duplicate": "This PR is already linked; restore removed links from the list",
             "notFound": "PR not found or access denied",
-            "invalidUrl": "Enter a valid GitHub PR link",
+            "invalidUrl": "Enter a valid GitHub PR or GitLab MR URL",
             "reorderFailed": "The order was not saved. Please try again.",
-            "verifyFailed": "Could not verify the PR; check GitHub sign-in and access",
+            "verifyFailed": "Could not verify the PR; check GitHub or GitLab sign-in and access",
             "unsupported": "This computer’s version does not support managing PR links",
             "failed": "Could not update PR links"
           }
+        },
+        "gitlab": {
+          "missing": "GitLab CLI (glab) was not found. Install glab and sign in to see MR status.",
+          "notLoggedIn": "Local glab is not signed in to {{host}}. Run glab auth login in a terminal to see MR status.",
+          "unsupported": "This computer does not support GitLab MR status yet",
+          "openAria": "Open MR !{{number}} in browser",
+          "summaryAria": "MR !{{number}} summary",
+          "urlPlaceholder": "GitHub PR or GitLab MR URL",
+          "notFound": "MR not found, or the current account cannot view it"
         }
       }
     },
@@ -18765,6 +18796,21 @@
     "allow": "Allow and continue",
     "cancel": "Not now"
   },
+  "pluginCompanionAnswer": {
+    "title": "Confirm allow",
+    "planMessage": "Let {{companion}} start working on this plan?",
+    "permissionMessage": {
+      "command": "Allow {{companion}} to run this command?",
+      "file-read": "Allow {{companion}} to read these files?",
+      "file-write": "Allow {{companion}} to change these files?",
+      "browser": "Allow {{companion}} to take this browser step?",
+      "plugin": "Allow {{companion}} to use “{{tool}}”?",
+      "tool": "Allow {{companion}} to use {{tool}}?"
+    },
+    "source": "You chose Allow in the plugin “{{plugin}}”. {{appName}} asks once more here; after you allow, the teammate continues.",
+    "allow": "Allow",
+    "cancel": "Cancel"
+  },
   "groupTools": {
     "authorizationRequired": "Group authorization has expired or does not allow this action. Ask the teammate owner to make a new request in this group.",
     "localPeersOnly": "Group messages can only target teammates on this device and account.",
@@ -18850,6 +18896,297 @@
     "openVideoSource": "Open original video",
     "calculationUnavailable": "Unable to calculate this value.",
     "incomplete": "Some content could not be displayed."
+  },
+  "setupMigration": {
+    "title": "Migration Assistant",
+    "back": "← Back",
+    "cancel": "Cancel",
+    "listSeparator": ", ",
+    "steps": {
+      "label": "Setup steps",
+      "source": "Computer",
+      "review": "Content",
+      "apply": "Move"
+    },
+    "source": {
+      "description": "Pick a computer signed in to this account. Its plugins, skills, settings and connections are set up the same way here; keys are copied only after you allow it there, and sign-ins never leave that computer.",
+      "loading": "Looking for your other computers…",
+      "empty": "No other computers found for this account. Sign in to Cindy on another computer, then open this again",
+      "loadFailed": "Couldn't load your computers",
+      "reload": "Reload Computers",
+      "ready": "Online, ready to move",
+      "next": "Read Settings",
+      "readAgain": "Read Again",
+      "unavailable": {
+        "offline": "Offline. Open Cindy on that computer to move from it",
+        "remote-control-off": "Enable “Allow same-account devices to control this machine” on that computer first",
+        "control-disabled": "Control of that computer is disabled here. Enable it again in Remote Connection"
+      }
+    },
+    "reading": "Reading settings on “{{name}}”…",
+    "errors": {
+      "SETUP_SOURCE_OUTDATED": "Cindy on “{{name}}” is too old to move from. Update Cindy on that computer, then try again",
+      "SETUP_SOURCE_UNAVAILABLE": "Couldn't read settings on “{{name}}”. That computer needs to be online with “Allow same-account devices to control this machine” turned on",
+      "SETUP_SNAPSHOT_INVALID": "Settings from “{{name}}” couldn't be read. This happens when the two computers run different Cindy versions; update both to the same version, then try again",
+      "SETUP_PLAN_EXPIRED": "This list has expired. Read the settings on “{{name}}” again",
+      "GENERIC": "Couldn't read settings on “{{name}}”"
+    },
+    "review": {
+      "description": "Choose what to move from “{{name}}” to this computer. Settings you already changed on this computer are kept.",
+      "partial": "Some content on that computer couldn't be read this time. Only what was read is listed below.",
+      "groupCount": "{{selected}} of {{total}} selected",
+      "present_one": "{{count}} more item is already the same here",
+      "present_other": "{{count}} more items are already the same here",
+      "start_one": "Move {{count}} Item",
+      "start_other": "Move {{count}} Items",
+      "continue": "Continue",
+      "version": "Version {{version}}",
+      "pluginDisabled": "Turned off on that computer; stays off here",
+      "pluginConsentLater": "From the “{{market}}” marketplace; you'll confirm its permissions when it installs",
+      "skillTeam": "Team skill",
+      "settingsChanges_one": "{{count}} setting",
+      "settingsChanges_other": "{{count}} settings",
+      "settingsKept_one": "Keeps {{count}} setting from this computer",
+      "settingsKept_other": "Keeps {{count}} settings from this computer",
+      "settingsChangesKept_one": "{{count}} setting; keeps {{kept}} from this computer",
+      "settingsChangesKept_other": "{{count}} settings; keeps {{kept}} from this computer",
+      "kept": "Keeps this computer's setting",
+      "rendererPrefs": "Interface Preferences",
+      "rendererPrefsHint": "Theme, language, notifications and chat display",
+      "toolOn": "Enable built-in tool “{{name}}”",
+      "toolOff": "Disable built-in tool “{{name}}”",
+      "mcp": "MCP · {{url}}",
+      "mcpToken": "MCP · {{url}} · Enter its access credentials again on this computer",
+      "checklistTitle": "To Finish on This Computer",
+      "checklistDescription": "Sign-ins, keys and system permissions stay on the original computer. After moving, finish them one by one from this list.",
+      "groups": {
+        "plugins": "Plugins",
+        "skills": "Skills",
+        "settings": "Settings",
+        "connections": "Providers and MCP",
+        "access": "Access to This Computer",
+        "secrets": "Keys",
+        "ssh": "SSH Servers"
+      },
+      "reason": {
+        "not-in-catalog": "Not in this computer's plugin marketplace",
+        "source-not-added": "From a marketplace this computer can't read",
+        "local-only": "Only exists on that computer; move it by hand",
+        "needs-sign-in": "Sign in first",
+        "platform": "Only for another operating system",
+        "invalid": "This computer can't read it"
+      },
+      "providerAuth": {
+        "apiKey": "Enter the API key again on this computer",
+        "oauth": "Sign in again on this computer",
+        "native": "Sign in to the subscription on this computer",
+        "none": "No key needed",
+        "apiKeyCopy": "API key can be copied with Keys"
+      },
+      "access": {
+        "remote-control": "Allow same-account devices to control this machine",
+        "remote-controlHint": "Same as on “{{name}}”. You can disable it anytime in Remote Connection",
+        "keep-awake": "Keep computer awake",
+        "keep-awakeHint": "Same as on “{{name}}”. This computer won't go to sleep"
+      },
+      "secrets": {
+        "title_one": "Copy Keys for {{count}} Item",
+        "title_other": "Copy Keys for {{count}} Items",
+        "description": "Copied only after you select Allow on “{{name}}”, encrypted for this request only. Account sign-ins aren't copied; sign in from the list after moving."
+      },
+      "sshDescription": "This computer creates a new SSH key, “{{name}}” adds it to these servers once allowed there, and each server is then tested. Private keys never leave their computer.",
+      "sshHost": "{{user}}@{{host}}:{{port}}",
+      "mcpTokenCopy": "MCP · {{url}} · Credentials can be copied with Keys",
+      "checklistDescriptionWithKeys": "Sign-ins and system permissions stay on the original computer; keys are copied only after “{{name}}” allows it. After moving, finish the rest from this list."
+    },
+    "permissions": {
+      "title": "Confirm Plugin Permissions",
+      "description_one": "Once installed, the {{count}} plugin below gets these permissions. Confirming installs it.",
+      "description_other": "Once installed, the {{count}} plugins below get these permissions. Confirming installs them together.",
+      "pluginTitle": "{{name}} · Version {{version}}",
+      "confirm_one": "Allow and Install {{count}} Plugin",
+      "confirm_other": "Allow and Install {{count}} Plugins"
+    },
+    "running": {
+      "progress": "Moving: {{completed}} of {{total}} done",
+      "label": "Moving…",
+      "confirm": "Select Allow on “{{name}}”.",
+      "confirmCode": "Both computers should show the same code:"
+    },
+    "done": {
+      "summary_one": "Moved {{count}} item from “{{name}}”",
+      "summary_other": "Moved {{count}} items from “{{name}}”",
+      "applyFailed": "Moving plugins, skills and settings didn't finish",
+      "failedTitle_one": "{{count}} item couldn't be moved",
+      "failedTitle_other": "{{count}} items couldn't be moved",
+      "checklistTitle": "Still to Do on This Computer",
+      "checklistEmpty": "Nothing else to do on this computer",
+      "checklistDescription": "You can also find this list later in Settings → General.",
+      "restartHint": "Some settings take effect after you reopen Cindy.",
+      "finish": "Done",
+      "finishReload": "Done and Reload"
+    },
+    "failure": {
+      "generic": "Couldn't move it ({{code}})",
+      "SOURCE_NOT_ADDED": "Couldn't add its plugin marketplace",
+      "MUTATION_CANCELLED": "Installation canceled",
+      "PRECONDITION_FAILED": "The plugin or this computer changed while moving",
+      "PERMISSION_DENIED": "This account can't install it",
+      "NOT_FOUND": "Not found in this computer's plugin marketplace",
+      "ALREADY_EXISTS": "Something with the same name already exists here",
+      "SETUP_PLAN_EXPIRED": "This list has expired",
+      "SETUP_TRANSFER_DECLINED": "Not allowed on the other computer, or no answer within 2 minutes",
+      "SETUP_TRANSFER_BUSY": "The other computer is handling another setup request. Try again shortly",
+      "SETUP_TRANSFER_INVALID": "The other computer sent an unreadable reply",
+      "SETUP_SOURCE_OUTDATED": "Update Cindy on the other computer to copy this",
+      "SETUP_SOURCE_UNAVAILABLE": "The other computer is not answering",
+      "SSH_AUTHORIZE_FAILED": "The other computer could not add the new key to this server",
+      "SSH_KEYGEN_FAILED": "This computer could not create an SSH key (ssh-keygen is required)",
+      "SSH_HOST_NOT_FOUND": "This server is no longer on the other computer",
+      "SSH_AUTH_FAILED": "The key was added, but the server refused this computer",
+      "SSH_CONNECT_FAILED": "This computer can't reach the server; it may only be reachable from the other computer's network",
+      "SSH_KEY_FILE_NOT_FOUND": "The new key file wasn't found on this computer"
+    },
+    "checklist": {
+      "done": "Done",
+      "markDone": "Mark as Done",
+      "needs": "Needs: {{items}}",
+      "voiceAsrName": "Speech recognition",
+      "plugin-setup": {
+        "title": "Connect accounts for “{{name}}”",
+        "action": "Connect"
+      },
+      "plugin-manual": {
+        "title": "Install the “{{name}}” plugin by hand",
+        "detail": "It was imported directly on that computer. Export its package from the plugin details there, then import it here",
+        "action": "Open Plugins"
+      },
+      "market-source": {
+        "title": "Add the “{{name}}” plugin marketplace",
+        "detail": "This marketplace's address is only saved on that computer. Add it to install its plugins",
+        "action": "Open Plugins"
+      },
+      "skill-manual": {
+        "title": "Copy the “{{name}}” skill",
+        "detail": "It wasn't installed from SkillHub and only exists on that computer",
+        "action": "Open Skills"
+      },
+      "provider-key": {
+        "title": "Enter the API key for “{{name}}”",
+        "action": "Enter Key"
+      },
+      "provider-connection": {
+        "title": "Re-enter the connection address for “{{name}}”",
+        "detail": "Sign-in details or query parameters in the original address may contain credentials, so they were not copied",
+        "action": "Enter Address"
+      },
+      "provider-sign-in": {
+        "title": "Sign in to “{{name}}”",
+        "action": "Sign In"
+      },
+      "local-model": {
+        "title": "Set up the local model “{{name}}” on this computer",
+        "detail": "Local models run on the original computer; this computer needs its own install",
+        "action": "Open Providers"
+      },
+      "mcp-token": {
+        "title": "Enter the access credentials for MCP “{{name}}”",
+        "action": "Enter Credentials"
+      },
+      "builtin-key": {
+        "title": "Enter the API key for “{{name}}”",
+        "action": "Enter Key"
+      },
+      "im-channel": {
+        "title": "Connect “{{name}}”",
+        "detail": "A bot receives messages on one computer at a time. Decide which computer should receive them before connecting",
+        "action": "Connect"
+      },
+      "computer-use": {
+        "title": "Enable Automation",
+        "detail": "Grant Accessibility and Screen Recording permissions on this computer",
+        "action": "Enable"
+      },
+      "remote-desktop": {
+        "title": "Enable Remote Desktop",
+        "detail": "Enable it separately on this computer and grant Screen Recording permission",
+        "action": "Enable"
+      },
+      "ssh": {
+        "title_one": "Copy SSH keys and config for {{count}} remote host",
+        "title_other": "Copy SSH keys and config for {{count}} remote hosts",
+        "detail": "Keys and config in ~/.ssh aren't moved automatically; copy them to this computer",
+        "action": "Open Remote Connection"
+      },
+      "ssh-host": {
+        "title": "Set up SSH server “{{name}}”",
+        "detail": "It couldn't be set up automatically. Choose a key for it in SSH settings and test the connection",
+        "action": "Open Remote Connection"
+      },
+      "startAll_one": "Go Through {{count}} Item",
+      "startAll_other": "Go Through {{count}} Items"
+    },
+    "settingsGroups": {
+      "appearance": "Appearance",
+      "windowBehavior": "App Behavior",
+      "menubar": "Menu Bar Usage",
+      "collaboration": "Collaboration",
+      "agentResource": "Agent Resource Usage",
+      "gitSafety": "Git Safety",
+      "goal": "Goal Mode",
+      "memory": "Memory",
+      "compaction": "Context Compaction",
+      "silentEncryptedRetry": "Silently drop protocol-encrypted content and retry",
+      "silentStopAutoResume": "Continue after an unexpected stop",
+      "sessionRuntimeFallback": "Automatic task model fallback",
+      "subagentModels": "Subagents",
+      "auxiliaryModels": "Auxiliary Models",
+      "visionBridge": "Vision Bridge",
+      "modelVisibility": "Shown and Hidden Models",
+      "providerOrder": "Provider Order",
+      "modelCatalogOverrides": "Model Parameter Changes",
+      "modelPriceOverrides": "Model Prices",
+      "autoUpdate": "Install updates while idle",
+      "updateChannel": "Beta channel"
+    },
+    "settings": {
+      "title": "Migration Assistant",
+      "description": "On a new computer, copy over all the features, plugins and settings Cindy is connected to on your other computers, ready to use.",
+      "start": "Open Migration Assistant",
+      "pending_one": "{{count}} item still to do on this computer",
+      "pending_other": "{{count}} items still to do on this computer",
+      "allDone": "Everything to do on this computer is done",
+      "from": "Moved from “{{name}}”",
+      "closeChecklist": "Close List"
+    },
+    "suggestion": {
+      "title": "Use Migration Assistant to move from “{{name}}”?",
+      "description": "You can set up this computer with the plugins, skills, settings and connections from that one. Anything that needs a new sign-in or permission here is listed for you. You can also open it later in Settings → General → Migration Assistant.",
+      "confirm": "Open Migration Assistant",
+      "later": "Not Now"
+    },
+    "walkthrough": {
+      "progress": "Setup checklist {{current}} / {{total}}",
+      "open": "Open",
+      "skip": "Skip",
+      "next": "Done, Next",
+      "stop": "End",
+      "allDone": "Checklist finished"
+    },
+    "transfer": {
+      "prompt": {
+        "title": "Migration Assistant",
+        "message": "“{{name}}” asks to copy the following from this computer",
+        "secrets": "Keys (copied to that computer only; keys here stay as they are):",
+        "ssh": "Add that computer's new SSH public key to these servers:",
+        "sshKey": "Key fingerprint: {{fingerprint}}",
+        "code": "Code: {{code}}. Allow only if it matches the code on that computer.",
+        "notice": "If you aren't setting up a new computer yourself, deny.",
+        "more": "and {{count}} more",
+        "allow": "Allow",
+        "deny": "Deny"
+      }
+    }
   },
   "forwardedRequest": {
     "sourcePresent": "[Source] The host preserved the user’s original words as request background, without changes. The current request is in the Agent supplement.",

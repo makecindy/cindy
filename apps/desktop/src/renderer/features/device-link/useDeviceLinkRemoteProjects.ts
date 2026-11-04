@@ -57,7 +57,12 @@ import {
 import { revokedDevicesStore } from './revokedDevicesStore';
 import { unresponsiveDevicesStore } from './unresponsiveDevicesStore';
 import { subscribeDeviceLinkDeviceRemoval } from './useDeviceLinkDeviceList';
-import { collectSessionListSnapshot, refreshRemoteDeviceSessions } from './refreshRemoteSessions';
+import {
+  collectSessionListSnapshot,
+  refreshRemoteDeviceSessions,
+  remoteScheduleIndexLastRead,
+  remoteScheduleIndexReadSeq,
+} from './refreshRemoteSessions';
 import {
   cancelSessionListPersist,
   clearCachedDevice,
@@ -137,6 +142,21 @@ const RESEED_DEBOUNCE_MS = 300;
 // Limit only the startup route's discovery wait, not the request or peer lifetime.
 // Matches the background device directory's 10s budget; late results still apply.
 const INITIAL_DISCOVERY_WAIT_MS = 10_000;
+/**
+ * Schedule events from another computer arrive in pairs (fired, then completed or
+ * skipped, usually seconds apart). Each refresh pulls the whole run index, and the
+ * index alternates between "running" and "not running", so the content cache never
+ * hits. Wait for a quiet period so a pair costs one read whose content is usually
+ * unchanged; the max wait keeps a steady stream of events from postponing it forever.
+ */
+const SCHEDULE_EVENT_QUIET_MS = 10_000;
+const SCHEDULE_EVENT_MAX_WAIT_MS = 30_000;
+/**
+ * Live schedule events already keep the run index current, so the 60 s safety-net
+ * reconcile only re-reads it every few minutes, or at once after events were skipped
+ * while the window was hidden or idle.
+ */
+const PERIODIC_SCHEDULE_INDEX_MS = 5 * 60_000;
 /**
  * 「检测中」最多撑多久:冷启动缓存种入 / relay 重连期间分片标 connecting,link 过了这么久
  * 还没上线就降为 disconnected,免得 relay 长时间不可用时侧栏一直显示检测中。
@@ -435,6 +455,11 @@ export function useDeviceLinkRemoteProjects(
     }
 
     let disposed = false;
+    const scheduleEventRefreshes = new Map<string, { timer: ReturnType<typeof setTimeout>; firstAt: number }>();
+    /** Count of schedule events skipped while the window was hidden or idle. */
+    const scheduleEventsMissed = new Map<string, number>();
+    const markScheduleEventMissed = (deviceId: string) =>
+      scheduleEventsMissed.set(deviceId, (scheduleEventsMissed.get(deviceId) ?? 0) + 1);
     const finishInitialDiscovery = remoteProjectsStore.beginInitialDiscovery();
     const initialDiscoveryTimer = setTimeout(finishInitialDiscovery, INITIAL_DISCOVERY_WAIT_MS);
     /**
@@ -901,11 +926,22 @@ export function useDeviceLinkRemoteProjects(
         // sessions:list 是 200 条有界窗口；refresh 层会保留窗口外 active 行，并有界补查
         // 缺席缓存 id 的终态，不能直接把响应缺席解释成删除。
         void refreshAliases(deviceId);
+        const seqBefore = remoteScheduleIndexReadSeq();
+        const missed = scheduleEventsMissed.get(deviceId) ?? 0;
+        // A negative age means the clock moved back; read rather than trust it.
+        const indexAge = Date.now() - (remoteScheduleIndexLastRead(deviceId)?.startedAt ?? 0);
+        const withSchedule = missed > 0 || indexAge < 0 || indexAge >= PERIODIC_SCHEDULE_INDEX_MS;
         const result = await refreshRemoteDeviceSessions(deviceId, name, {
-          scope: 'both',
+          scope: withSchedule ? 'both' : 'sessions',
           snapshotMode: 'merge',
           coalescingMode: 'weak',
         });
+        // Only a read started after these events were skipped covers them; events
+        // skipped during this read stay pending for the next reconcile.
+        if (missed > 0 && (remoteScheduleIndexLastRead(deviceId)?.seq ?? 0) > seqBefore
+          && scheduleEventsMissed.get(deviceId) === missed) {
+          scheduleEventsMissed.delete(deviceId);
+        }
         if (result === 'revoked' && !disposed) handleRevoked(deviceId);
         // 回传结果供 reconciler 的失败退避记账('gave-up' 加深退避,'ok' 复位)。
         return result;
@@ -1011,14 +1047,32 @@ export function useDeviceLinkRemoteProjects(
         // 推送照收；闲着不跟事件去拉整份自动化索引。人回来 / 窗口重新可见时 wake 用 scope both 补上。
         const watching =
           periodicReconcileActiveRef.current && (mainPresenceRef.current?.isActive() ?? true);
-        if (!watching) return;
+        if (!watching) {
+          markScheduleEventMissed(push.deviceId);
+          return;
+        }
         // 与手机同一份事件投影：运行诊断、静默提醒这类不改索引的事件不重拉，
         // 否则 run 进行期间高频推送会反复取消在途的列表 / 索引读取。
         const { refresh } = projectScheduleEvent(push.payload);
         if (!refresh.sessionIndex && !refresh.scheduleList && !refresh.unreadSummary) return;
-        void refreshRemoteDeviceSessions(push.deviceId, eligible.get(push.deviceId), { scope: 'schedule' }).then((result) => {
-          if (result === 'revoked' && !disposed) handleRevoked(push.deviceId);
-        });
+        const deviceId = push.deviceId;
+        const pending = scheduleEventRefreshes.get(deviceId);
+        if (pending) clearTimeout(pending.timer);
+        const firstAt = pending?.firstAt ?? Date.now();
+        const delay = Math.min(SCHEDULE_EVENT_QUIET_MS, Math.max(0, firstAt + SCHEDULE_EVENT_MAX_WAIT_MS - Date.now()));
+        const timer = setTimeout(() => {
+          scheduleEventRefreshes.delete(deviceId);
+          if (disposed || !eligible.has(deviceId)) return;
+          // Hidden again: the wake refresh (scope both) catches up instead.
+          if (!(periodicReconcileActiveRef.current && (mainPresenceRef.current?.isActive() ?? true))) {
+            markScheduleEventMissed(deviceId);
+            return;
+          }
+          void refreshRemoteDeviceSessions(deviceId, eligible.get(deviceId), { scope: 'schedule' }).then((result) => {
+            if (result === 'revoked' && !disposed) handleRevoked(deviceId);
+          });
+        }, delay);
+        scheduleEventRefreshes.set(deviceId, { timer, firstAt });
         return;
       }
       if (push.channel !== 'maker:provider:changed') return;
@@ -1149,6 +1203,8 @@ export function useDeviceLinkRemoteProjects(
     return () => {
       disposed = true;
       clearTimeout(initialDiscoveryTimer);
+      for (const { timer } of scheduleEventRefreshes.values()) clearTimeout(timer);
+      scheduleEventRefreshes.clear();
       clearConnectingGrace();
       setRemoteReseedImpl(null);
       setRemoteSessionBootstrapRetryImpl(null);

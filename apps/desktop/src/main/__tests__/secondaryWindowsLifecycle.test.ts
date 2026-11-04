@@ -44,7 +44,10 @@ vi.mock('../app-shortcuts/new-maker-window-shortcut.js', () => ({ installNewMake
 vi.mock('../windowFocusClassifier.js', () => ({ markAppContentWindow: vi.fn(), isAppContentWindow: vi.fn() }));
 vi.mock('../window-behavior-settings-store.js', () => ({ readWindowBehaviorSettings: () => ({ swallowActivationClick: false }) }));
 vi.mock('../selection-context-menu.js', () => ({ installSelectionContextMenu: vi.fn() }));
-vi.mock('../appearance-settings-ipc.js', () => ({ applyAppearanceToWindow: vi.fn() }));
+vi.mock('../appearance-settings-ipc.js', () => ({
+  applyAppearanceToWindow: vi.fn(),
+  installWindowZoomRestoration: vi.fn(),
+}));
 vi.mock('../mainWindowFullscreenStartup.js', () => ({ installWindowFullscreenStateBroadcast: vi.fn() }));
 vi.mock('../window-theme-mode-store.js', () => ({ readWindowThemeSnapshot: () => null }));
 

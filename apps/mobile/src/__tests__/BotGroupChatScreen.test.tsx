@@ -130,7 +130,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
 vi.mock('expo-crypto', () => ({ randomUUID: () => `uuid-${++h.uuid}` }));
 vi.mock('lucide-react-native', () => Object.fromEntries(
   ['Copy', 'Share', 'ArrowUpRight', 'CornerDownRight', 'Circle', 'Bell', 'ChevronLeft', 'Settings2', 'Plus', 'Square', 'Users', 'X', 'Check', 'CircleAlert', 'CircleCheck', 'CircleDashed', 'FileText', 'Sparkles', 'Folder', 'Camera', 'Image',
-    'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown', 'Reply', 'SlidersHorizontal', 'UserPlus']
+    'Minus', 'ChevronUp', 'CircleMinus', 'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown', 'Reply', 'SlidersHorizontal', 'UserPlus']
     .map((name) => [name, () => null]),
 ));
 vi.mock('@/theme', async () => ({
@@ -983,6 +983,33 @@ describe('group timeline', () => {
     expect(byId('botGroup.message.plan')?.textContent).not.toContain('groupChat.plan.stepRunning');
     expect(byId('botGroup.message.plan')?.textContent).toContain('groupChat.plan.stepDone');
     expect(byId('botGroup.plan.start')).toBeNull();
+  });
+
+  // The real card folds the queue, sends future positions without an execution, and protects running turns (unit).
+  it('folds a talk queue and sends the exact queued turn when skipping', async () => {
+    const data = group();
+    data.openPlan = { id: 'p1', status: 'running', currentStep: 1, stepCount: 6, currentBotName: '阿布', currentStepStatus: 'running' };
+    const plan = { ...data.plans[0]!, kind: 'talk' as const, status: 'running' as const, currentStep: 1, canManage: true, supportsPendingSkip: true,
+      steps: Array.from({ length: 6 }, (_, position) => ({ ...data.plans[0]!.steps[position === 0 ? 0 : 1]!, position,
+        status: position === 0 ? 'done' as const : position === 1 ? 'running' as const : 'pending' as const,
+        ...(position === 1 ? { executionId: 'queued-turn', executionStatus: 'queued' as const } : {}),
+      })),
+    };
+    data.plans[0] = plan;
+    await render(data);
+    const card = byId('botGroup.plan')!;
+    expect(card.textContent).toContain('groupChat.plan.talkTitle');
+    expect(card.textContent).not.toContain('groupChat.plan.intro');
+    expect(card.querySelectorAll('[data-testid="botGroup.plan.step"]')).toHaveLength(3);
+    await click('botGroup.plan.fold');
+    expect(card.querySelectorAll('[data-testid="botGroup.plan.step"]')).toHaveLength(6);
+    await click('botGroup.plan.skipTurn');
+    expect(h.chat.act).toHaveBeenLastCalledWith('plan-edit', { planId: 'p1', position: 1, action: 'skip', executionId: 'queued-turn' });
+    data.plans[0] = { ...plan, steps: plan.steps.map(step => step.position === 1 ? { ...step, executionStatus: 'running' } : step) };
+    await render(data);
+    expect(card.querySelectorAll('[data-testid="botGroup.plan.step"]')[1]?.querySelector('[data-testid="botGroup.plan.skipTurn"]')).toBeNull();
+    await click('botGroup.plan.skipTurn');
+    expect(h.chat.act).toHaveBeenLastCalledWith('plan-edit', { planId: 'p1', position: 2, action: 'skip', executionId: undefined });
   });
 
   it('shows one row per speaker with its lane session', async () => {

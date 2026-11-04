@@ -2419,6 +2419,13 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   不在任务所在电脑时带值，旧端忽略即可。Lead 的 MCP 工具同步：`list_available_models` 可选 `agent_device_id` 并返回
   `locations`，`create_worker` / `create_workers` 可选 `agent_device_id`(`"local"` = 任务所在电脑)。同账号 allowlist 新增上述 models 查询；共享任务清单不变。回归见 `orcaWorkerCreationService.test.ts`、`CreateWorkerPopover.test.tsx`、Mobile
   `orcaTeam.test.ts` / `useOrcaWorkerForm.test.tsx`。
+- **被控电脑上的协同任务换 Agent 位置**(2026-11-04)：A 从 v0.1.112 起接受给它上面的协同 Lead / 本机 Worker
+  发带 `agentDeviceId` 的 `maker:switch-session-agent`(运行设备 Worker 仍回 `UNSUPPORTED_CAPABILITY`)；v0.1.104–v0.1.110
+  的 A 在登记意图前就回 `UNSUPPORTED_CAPABILITY`。A 在 `maker:get-capabilities` 声明 `supportsOrcaAgentRelocation: true`
+  后，桌面控制端才对这类任务列其他电脑与分享、走与普通任务相同的换电脑事务；缺省 false 时维持原样，不出现能点却必失败的
+  选项。协议位是整台 A 的，控制端读到任一已注册 Agent 的快照带这一位即可。通道与参数不变，只新增可选能力位；中转只按通道名
+  放行(`packages/device-link/src/allowlist.ts`)、不解析能力字段，自建中转无需同步修改。Mobile 控制端见 makecindy/cindy#8841。
+  回归见 `sessionAgentSwitchRemoteRouting.test.ts`、`remoteAgentRelocationWiring.test.ts`、`sessionRuntimeControlWiring.test.ts`。
 - **账号余量**(2026-10-09)：这一轮消耗的是 Agent 所在那台(B)的账号，桌面底部用量 chip 与手机任务菜单都改读 B 的
   余量，不读任务所在电脑(本机或被控电脑)的同名账号。直接经 device-link 调 B 已有的 `maker:usage:*` 读取与推送
   (与模型选择器读 B 的余量同一份镜像)，不新增 channel；任务价值与上下文仍读任务所在电脑。远程控制的任务把 Agent
@@ -4641,6 +4648,20 @@ agent.observe 为可选独立能力，不依赖 tasks/targets，只有 Host 确�
 逻辑页管道新增 `observe-request`（`project-tasks` / `open-task`），只在本机 Desktop Main 消费，不进入 device-link 白名单。
 旧 Host 忽略声明且没有 `cindy.observe`，插件须探测入口后降级。作者契约见 plugin-agent-tasks.md §4.11.8。
 
+## 插件查看伙伴和状态（未发布）
+
+agent.companions 为可选独立能力，只有 Host 确认的 `companionsCapabilityApproved` 才授予；
+历史未知字段、旧 tasks/targets/observe 批准不推断新授权；旧 receipt 缺少新可选字段照常读取，无需 schema migration。
+新包严格校验布尔值；已安装快照中的非布尔历史值原样保留但不授予，不因新校验停用。
+逻辑页管道新增 `companions-request`（capabilities / list / avatar / reply / history / open / interaction / answer / watch / unwatch）与下行 `companions-changed` 推送，只在本机 Desktop Main 消费，不进入 device-link 白名单。
+`interaction` 的 permission / plan 带 `allowHere`；插件对 `allowHere` 为 false 的请求「允许」返回 `ALLOW_IN_CINDY`（需在 Cindy 里允许），拒绝不受影响。
+`answer` 作答其他电脑上的伙伴时复用已在同账号远控白名单里的 `maker:get-pending-interactions` / `maker:resolve-interaction`，不新增 channel；旧版主力电脑不报告待处理请求，插件无从作答。
+旧 Host 忽略声明且没有 `cindy.companions`，插件须探测入口后降级。作者契约见 plugin-agent-tasks.md §4.11.9。
+跨电脑新增 device-link channel `maker:companion-live:read`（`COMPANION_LIVE_CHANNEL`，版本 1，只读，进同账号远控白名单、不进 sharedTask 访客白名单）：
+主力电脑返回本机伙伴的插件视图。旧版主力电脑没有该 channel → `CHANNEL_NOT_ALLOWED`，新查看端退回已发布的 teammates 列表（只有状态与工作阶段），
+不推断其他内容；请求带 `version`，未知版本返回 `INVALID_PARAMS`。返回字段只增不改，查看端逐字段校验后再交给插件。
+请求 `kind` 为 `list` / `reply` / `history`；不认识 `history` 的主力电脑返回 `INVALID_PARAMS`，查看端把对话记录当作读不到（null），不影响列表与回复。
+
 ## 伙伴列表的可选活动摘要
 
 RemoteResourceDisplay 与 BotGroupSummary 可选携带 `teammateActivity: { phase }`。宿主从现有运行、待确认、完成、错误状态投影，Desktop/iOS/Android 共用状态优先级。生成文案、确认权限、已读回执均保持原有路径。旧控制端忽略字段；新控制端连接旧宿主时回退已有 generation、确认快照及普通未读，不把缺失状态推断成完成。
@@ -4733,3 +4754,24 @@ device-link 操作、字段或白名单。远程打开在执行端判定：新�
 ## GitHub 公共读取能力
 
 `git-context:github-read` 只在同账号授权链路开放，控制端先检查 `github-read-v1`。未声明的旧电脑返回明确不支持，既有 `pr-status` 的关联范围过滤与链接打开不变。新通道不进入共享任务访客 allowlist；中转仍转发原 invoke / invoke-result 帧，不引入服务器消息种类。关联新增 `associationSource / associationOrigin` 可选字段；旧消费者按原字段兼容，新消费者默认只显示宿主投影的明确有效关联。详见 [功能合同](../product-rules/github-status-and-associations.md)。
+
+## GitLab MR 关联状态
+
+关联与状态结果追加可选 `provider`（github / gitlab）和 `host`；缺省仍为公共 GitHub。
+新 Desktop / Mobile 的 GitLab 查询带完整 namespace / repo / number / provider / host，
+走同账号 `git-context:mr-status`；GitHub 继续使用原 `git-context:pr-status` 和旧参数形状。
+新通道复用原任务关联过滤与只读权限，不授予共享任务访客任意查询权限。
+旧 host 不认识新通道时，GitLab 显示不支持/未知，绝不回退为 GitHub 查询。
+新 host 可继续处理旧控制端的 GitHub 查询。新控制端正确显示并打开 GitLab MR，
+旧控制端对新增 GitLab 关联没有展示保证，使用 GitLab 需要更新控制端。
+
+Desktop 的本机查询、同账号远端查询、任务摘要及 Mobile 共用带 host 的状态身份。
+GitLab 的 glab 安装/登录原因仅本机可见，远端结果统一为无状态；凭证不进入协议。
+子路径部署的链接会被识别为多级分组，部署前缀进入项目路径，因路径不正确而查不到状态。
+Agent 的 GitHub 工具和脚本入口仍不支持 GitLab，不复用其 GitHub token。
+
+共享客户端 allowlist / invokePolicy 与 Mobile 低优先级读取表同步加入新通道。
+自建中转透传既有加密 invoke 帧，不解析 channel 的业务参数，因此不改 relay 内核、
+帧格式、认证、版本或部署程序。验证入口为 `pnpm --filter @cindy/device-link test`、
+`pnpm --filter @cindy/device-link-relay test` 与
+`pnpm --filter @cindy/device-link-relay run interop`；结果以本次交付的执行日志为准。

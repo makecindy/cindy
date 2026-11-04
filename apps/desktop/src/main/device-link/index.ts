@@ -1155,11 +1155,16 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     }
     if (env.kind !== 'push') return;
     const p = env.payload as PushPayload;
-    tapRemoteModelCatalogChange(env.src, p?.channel, isDeviceRevoked(env.src));
     const sharePeer = parseProviderSharePeer(env.src);
+    const activeShareHost = sharePeer?.role === 'host' && getReceivedShares().some(share => share.shareId === sharePeer.shareId
+      && share.hostDeviceId === sharePeer.deviceId && share.status === 'active');
+    // An active same-region share's catalog change reaches controllers that read it
+    // through this computer, like an ordinary source; the minute-by-minute received
+    // poll no longer stands in for it.
+    tapRemoteModelCatalogChange(env.src, p?.channel, isDeviceRevoked(env.src), activeShareHost);
+    if (typeof p?.channel === 'string' && !isDeviceRevoked(env.src)) notifyRemotePushChannel(env.src, p.channel);
     if (sharePeer && p?.channel === 'maker:provider:changed') {
-      if (sharePeer.role !== 'host' || !getReceivedShares().some(share => share.shareId === sharePeer.shareId
-        && share.hostDeviceId === sharePeer.deviceId && share.status === 'active')) return;
+      if (!activeShareHost) return;
       broadcast(DEVICE_LINK_PUSH.REMOTE_PUSH, { deviceId: `share:${sharePeer.shareId}`, channel: p.channel, payload: {} });
       return;
     }
@@ -2052,6 +2057,18 @@ export async function remoteInvoke(
  * 若本机仍无控制意图(无订阅)就立即关闭本次建的链路,以 UNSUPPORTED_CAPABILITY 失败,不发请求。
  * 链路已就绪(用户正在控制对端)时直接复用,不产生新的 link-open。
  */
+/** Main-process observers of pushes from other computers: the source and channel only, never the payload. */
+const remotePushChannelListeners = new Set<(deviceId: string, channel: string) => void>();
+export function onRemotePushChannel(listener: (deviceId: string, channel: string) => void): () => void {
+  remotePushChannelListeners.add(listener);
+  return () => { remotePushChannelListeners.delete(listener); };
+}
+function notifyRemotePushChannel(deviceId: string, channel: string): void {
+  for (const listener of remotePushChannelListeners) {
+    try { listener(deviceId, channel); } catch { /* An observer never blocks forwarding to the renderer. */ }
+  }
+}
+
 export async function remoteBackgroundInvoke(
   agentDeviceId: string,
   channel: string,
