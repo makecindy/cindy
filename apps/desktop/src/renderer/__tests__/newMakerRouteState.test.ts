@@ -8,6 +8,9 @@ import {
   isSameNewMakerDevice,
   readNewMakerDialogueTargetRequest,
   readNewMakerFolderPickerRequest,
+  consumeNewMakerModelInheritanceRequest,
+  isSameNewMakerTaskComputer,
+  readNewMakerModelInheritanceRequest,
 } from '@/features/cc-agent/lib/newMakerRouteState';
 
 describe('new maker execution device identity', () => {
@@ -146,5 +149,60 @@ describe('new maker folder picker request', () => {
     expect(consumed).toEqual({ workspacePrompt: 'generic', preserved: true });
     expect(readNewMakerFolderPickerRequest(consumed)).toBeNull();
     expect(readNewMakerFolderPickerRequest(original)).toEqual({ requestId: 'picker-1' });
+  });
+});
+
+describe('new maker model inheritance request', () => {
+  const request = {
+    requestId: 'r1',
+    vendor: 'codex',
+    model: 'gpt-5.5',
+    providerId: null,
+    effort: 'high',
+    fastMode: 'ultrafast',
+    agentDeviceId: null,
+    taskDeviceId: 'remote-a',
+    remoteHostId: null,
+  };
+
+  it('reads a well-formed request and rejects malformed axes', () => {
+    expect(readNewMakerModelInheritanceRequest({ modelInheritanceRequest: request })).toEqual(
+      request,
+    );
+    for (const bad of [
+      { vendor: 'orca' },
+      { model: '' },
+      { fastMode: 'yes' },
+      { providerId: '' },
+      { effort: 3 },
+      { taskDeviceId: undefined },
+    ]) {
+      expect(
+        readNewMakerModelInheritanceRequest({ modelInheritanceRequest: { ...request, ...bad } }),
+      ).toBeNull();
+    }
+    expect(readNewMakerModelInheritanceRequest(null)).toBeNull();
+  });
+
+  it('consumes only the model request', () => {
+    const original = { workspacePrompt: 'generic', modelInheritanceRequest: request, other: 1 };
+    expect(consumeNewMakerModelInheritanceRequest(original)).toEqual({
+      workspacePrompt: 'generic',
+      other: 1,
+    });
+    const unrelated = { workspacePrompt: 'generic' };
+    expect(consumeNewMakerModelInheritanceRequest(unrelated)).toBe(unrelated);
+  });
+
+  it.each([
+    [{ taskDeviceId: null, remoteHostId: null }, {}, true],
+    [{ taskDeviceId: null, remoteHostId: null }, { deviceLinkDeviceId: 'remote-a' }, false],
+    [{ taskDeviceId: 'remote-a', remoteHostId: null }, { deviceLinkDeviceId: 'remote-a' }, true],
+    [{ taskDeviceId: 'remote-a', remoteHostId: null }, { deviceLinkDeviceId: 'remote-b' }, false],
+    [{ taskDeviceId: null, remoteHostId: 'ssh-a' }, { remoteHostId: 'ssh-a' }, true],
+    [{ taskDeviceId: null, remoteHostId: 'ssh-a' }, { remoteHostId: 'ssh-b' }, false],
+    [{ taskDeviceId: null, remoteHostId: 'ssh-a' }, {}, false],
+  ])('applies only on the same task computer: %j vs %j', (source, draft, expected) => {
+    expect(isSameNewMakerTaskComputer(source, draft)).toBe(expected);
   });
 });

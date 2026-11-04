@@ -129,10 +129,14 @@ import {
   getProviderModelEffort,
   getProviderModelFast,
   hasAnyProviderModelOverride,
+  setProviderModelEffort,
   setProviderModelFast,
   useProviderModelMemoryVersion,
 } from '@/state/providerModelMemory';
-import { useAgentDeviceModelMemoryVersion } from '@/state/agentDeviceModelMemory';
+import {
+  agentDeviceModelMemoryAccessors,
+  useAgentDeviceModelMemoryVersion,
+} from '@/state/agentDeviceModelMemory';
 import {
   deliverRecoverableHandoff,
   rememberRecoverableHandoff,
@@ -190,9 +194,12 @@ import { crossAgentConvertService } from '@/lib/crossAgentConvertService';
 import {
   consumeNewMakerDialogueTargetRequest,
   consumeNewMakerFolderPickerRequest,
+  consumeNewMakerModelInheritanceRequest,
   isSameNewMakerDevice,
+  isSameNewMakerTaskComputer,
   readNewMakerDialogueTargetRequest,
   readNewMakerFolderPickerRequest,
+  readNewMakerModelInheritanceRequest,
 } from './lib/newMakerRouteState';
 import { useCrossAgentMigrationDialog } from '@/hooks/useCrossAgentConvertPrompt';
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
@@ -735,7 +742,12 @@ export function NewMakerDraftRoute() {
     () => readNewMakerFolderPickerRequest(location.state),
     [location.state],
   );
+  const modelInheritanceRequest = useMemo(
+    () => readNewMakerModelInheritanceRequest(location.state),
+    [location.state],
+  );
   const handledDialogueTargetRequestRef = useRef<string | null>(null);
+  const handledModelInheritanceRequestRef = useRef<string | null>(null);
   const modePickerSelectionSeqRef = useRef(0);
   const handledFolderPickerRequestRef = useRef<string | null>(null);
   // Writable picker evidence is Main-owned and bound to the actual local task id.
@@ -3314,6 +3326,110 @@ export function NewMakerDraftRoute() {
     sendInFlightRef.current = value;
     setSendInFlight(value);
   }, []);
+
+  // 新建任务默认沿用前一个任务正在用的模型(Harness / 来源 / 模型 / 深度 / Fast / Agent 所在电脑)。
+  // 等同用户在这里手动选了那一行:走 handleUnifiedDraftSelect 同一条写入链路，选择打标后成为
+  // 之后新建任务的默认。只在任务电脑相同时套用 —— 模型目录、来源与档位记忆都按电脑划分,
+  // 换了电脑(对话分组指定别的设备 / 项目在另一台电脑)沿用那边原有默认。
+  useLayoutEffect(() => {
+    const request = modelInheritanceRequest;
+    if (!request || handledModelInheritanceRequestRef.current === request.requestId) return;
+    // 目标电脑请求先落地：它改草稿的任务电脑并单独替换 history state;下一帧再判同机。
+    if (dialogueTargetRequest) return;
+    const switchesAgentDevice =
+      !request.remoteHostId && request.agentDeviceId !== (effectiveAgentDeviceId ?? null);
+    const localCatalogTarget =
+      !request.agentDeviceId &&
+      !request.taskDeviceId &&
+      !(request.remoteHostId && request.vendor === 'codex');
+    const applicable =
+      isSameNewMakerTaskComputer(request, getDraft()) &&
+      !sendInFlightRef.current &&
+      // 等待播种期间用户已手动改过远程运行配置：以用户这次选择为准。
+      !(usesDeviceCatalog && !switchesAgentDevice && dlRuntimeTouchedRef.current) &&
+      (switchesAgentDevice ||
+        !availableAgentsLoaded ||
+        availableVendors.has(request.vendor));
+    if (applicable) {
+      // 被控电脑 / 另一台电脑的目录:等这份草稿先按那边的默认播种(带上那边的权限档),
+      // 再像手动选中一样覆盖模型;没播种就选，播种基线缺失会把这次选择丢掉。
+      if (!switchesAgentDevice && usesDeviceCatalog && !dlSel) return;
+      if (request.providerId === null && localCatalogTarget && localProvidersLoading) return;
+      const agent = dbToMakerAgentKind(request.vendor);
+      const memoryProviderId =
+        request.providerId ??
+        (localCatalogTarget
+          ? effectiveSourceIdForModel(localProviders, null, request.model, agent)
+          : null);
+      // 档位 / Fast 记忆按目标目录写(与 ChatInput.handleUnifiedDraftSelect 同口径):本机目录写
+      // 本机预设，另一台电脑写本机为那台记的一份，被控电脑写它的镜像(写穿过去)。
+      const memory = request.agentDeviceId
+        ? agentDeviceModelMemoryAccessors(request.agentDeviceId)
+        : request.taskDeviceId
+          ? deviceLinkDraftMemory
+          : localCatalogTarget
+            ? { setEffort: setProviderModelEffort, setFast: setProviderModelFast }
+            : null;
+      if (memory && memoryProviderId) {
+        if (request.effort) {
+          memory.setEffort(agent, memoryProviderId, request.model, request.effort);
+        }
+        memory.setFast(agent, memoryProviderId, request.model, request.fastMode);
+      } else if (localCatalogTarget) {
+        // 来源未知时本机草稿的 Fast 回退读 per-model 旧库(resolveDraftFast)。
+        setFastModeForModel(request.model, request.fastMode);
+      }
+      const agentDevice = request.remoteHostId
+        ? undefined
+        : request.agentDeviceId
+          ? {
+              deviceId: request.agentDeviceId,
+              name:
+                remoteAgentDevices?.find((device) => device.deviceId === request.agentDeviceId)
+                  ?.name ?? deviceDisplayName(request.agentDeviceId, null),
+            }
+          : null;
+      const selectedProviderId = request.providerId ?? memoryProviderId;
+      handleUnifiedDraftSelect({
+        vendor: request.vendor,
+        // 来源未知 = 跟随默认路由；选择链只收 string,随后改回 null。
+        providerId: selectedProviderId ?? '',
+        modelId: request.model,
+        ...(request.effort ? { effort: request.effort } : {}),
+        fast: request.fastMode,
+        favoriteUid: null,
+        ...(agentDevice !== undefined ? { agentDevice } : {}),
+      });
+      if (selectedProviderId === null) {
+        if (localCatalogTarget) patchVendorPrefs(request.vendor, { providerId: null });
+        else setDlSel((prev) => (prev?.providerId === '' ? { ...prev, providerId: null } : prev));
+      }
+    }
+    handledModelInheritanceRequestRef.current = request.requestId;
+    navigate(`${location.pathname}${location.search}${location.hash}`, {
+      replace: true,
+      state: consumeNewMakerModelInheritanceRequest(location.state),
+    });
+  }, [
+    modelInheritanceRequest,
+    dialogueTargetRequest,
+    draft.deviceLinkDeviceId,
+    draft.remoteHostId,
+    effectiveAgentDeviceId,
+    usesDeviceCatalog,
+    dlSel,
+    dlRuntimeTouchedRef,
+    deviceLinkDraftMemory,
+    availableAgentsLoaded,
+    availableVendors,
+    localProviders,
+    localProvidersLoading,
+    remoteAgentDevices,
+    handleUnifiedDraftSelect,
+    setDlSel,
+    location,
+    navigate,
+  ]);
 
   directoryRecoveryContextRef.current = isDeviceLinkDraft || isRemoteProjectDraft ? null : {
     scopeId: localDraftSessionIdRef.current,

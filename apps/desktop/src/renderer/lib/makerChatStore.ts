@@ -1,4 +1,5 @@
 import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-form';
+import { registerAgentSwitchIntentReader } from '@/lib/agentSwitchIntentReader';
 import { isVoiceCallTaskMessage } from '../../shared/voiceConversation';
 import { remoteAgentLimitErrorKey } from '../../shared/remoteAgentLimits';
 import { readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
@@ -18447,6 +18448,8 @@ function mirrorSessionFields(
     );
   }
 }
+
+registerAgentSwitchIntentReader(getAgentSwitchIntent);
 
 export const makerChatStore = {
   initGlobalListeners,

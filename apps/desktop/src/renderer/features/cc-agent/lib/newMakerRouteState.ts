@@ -12,10 +12,32 @@ export interface NewMakerFolderPickerRequest {
   requestId: string;
 }
 
+/**
+ * 新建任务时当前任务正在用的模型(Harness / 来源 / 模型 / 深度 / Fast / Agent 所在电脑)。
+ * 只在新任务建在同一台任务电脑上时套用(本机、同一台被控电脑或同一台 SSH 主机);
+ * 模型目录与来源都按电脑划分，换了电脑就沿用那边原有默认。
+ */
+export interface NewMakerModelInheritanceRequest {
+  requestId: string;
+  vendor: 'cc' | 'codex' | 'pi';
+  model: string;
+  /** null = 跟随默认路由。 */
+  providerId: string | null;
+  effort: string | null;
+  fastMode: boolean | 'ultrafast';
+  /** Agent 在另一台电脑运行时那台电脑;null = 任务所在电脑。 */
+  agentDeviceId: string | null;
+  /** 任务所在的被控电脑;null = 本机或 SSH。 */
+  taskDeviceId: string | null;
+  /** 任务所在的 SSH 主机;null = 非 SSH。 */
+  remoteHostId: string | null;
+}
+
 export interface NewMakerRouteState {
   workspacePrompt: 'generic' | 'dialogue';
   dialogueTargetRequest?: NewMakerDialogueTargetRequest;
   folderPickerRequest?: NewMakerFolderPickerRequest;
+  modelInheritanceRequest?: NewMakerModelInheritanceRequest;
 }
 
 let dialogueTargetRequestSequence = 0;
@@ -45,6 +67,72 @@ export function makeDialogueNewMakerRouteState(
       deviceName: target?.deviceName ?? null,
     },
   };
+}
+
+function nullableNonEmptyString(value: unknown): string | null | undefined {
+  if (value === null) return null;
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+export function readNewMakerModelInheritanceRequest(
+  state: unknown,
+): NewMakerModelInheritanceRequest | null {
+  if (!state || typeof state !== 'object') return null;
+  const request = (state as Record<string, unknown>).modelInheritanceRequest;
+  if (!request || typeof request !== 'object') return null;
+  const record = request as Record<string, unknown>;
+  const { requestId, vendor, model, fastMode } = record;
+  if (typeof requestId !== 'string' || requestId.length === 0) return null;
+  if (vendor !== 'cc' && vendor !== 'codex' && vendor !== 'pi') return null;
+  if (typeof model !== 'string' || model.length === 0) return null;
+  if (typeof fastMode !== 'boolean' && fastMode !== 'ultrafast') return null;
+  const providerId = nullableNonEmptyString(record.providerId);
+  const effort = nullableNonEmptyString(record.effort);
+  const agentDeviceId = nullableNonEmptyString(record.agentDeviceId);
+  const taskDeviceId = nullableNonEmptyString(record.taskDeviceId);
+  const remoteHostId = nullableNonEmptyString(record.remoteHostId);
+  if (
+    providerId === undefined ||
+    effort === undefined ||
+    agentDeviceId === undefined ||
+    taskDeviceId === undefined ||
+    remoteHostId === undefined
+  ) {
+    return null;
+  }
+  return {
+    requestId,
+    vendor,
+    model,
+    providerId,
+    effort,
+    fastMode,
+    agentDeviceId,
+    taskDeviceId,
+    remoteHostId,
+  };
+}
+
+/** 与 dialogueTargetRequest 同理:一次性指令，应用后从 history entry 移除，后退不重放。 */
+export function consumeNewMakerModelInheritanceRequest(state: unknown): unknown {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return state;
+  if (!Object.prototype.hasOwnProperty.call(state, 'modelInheritanceRequest')) return state;
+  const { modelInheritanceRequest: _consumed, ...remainingState } = state as Record<
+    string,
+    unknown
+  >;
+  return remainingState;
+}
+
+/** 草稿此刻所在的任务电脑是否就是来源任务的那台(本机 / 同一台被控电脑 / 同一台 SSH 主机)。 */
+export function isSameNewMakerTaskComputer(
+  request: Pick<NewMakerModelInheritanceRequest, 'taskDeviceId' | 'remoteHostId'>,
+  draft: { deviceLinkDeviceId?: string | null; remoteHostId?: string | null },
+): boolean {
+  return (
+    (request.taskDeviceId ?? null) === (draft.deviceLinkDeviceId ?? null) &&
+    (request.remoteHostId ?? null) === (draft.remoteHostId ?? null)
+  );
 }
 
 export function makeFolderPickerNewMakerRouteState(): NewMakerRouteState {
