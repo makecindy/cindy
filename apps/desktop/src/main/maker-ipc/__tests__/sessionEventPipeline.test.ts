@@ -134,6 +134,7 @@ vi.mock('../../messagePersistBroadcaster.js', () => ({
   flushAssistantBlock: effects.fn('flushAssistantBlock'),
   onAssistantTextEvent: effects.fn('onAssistantTextEvent'),
   onAssistantAttemptFailure: effects.fn('onAssistantAttemptFailure'),
+  onAssistantSamplingAccepted: effects.fn('onAssistantSamplingAccepted'),
   onStandaloneTextEvent: effects.fn('onStandaloneTextEvent'),
   onAgentTaskUpdateEvent: effects.fn('onAgentTaskUpdateEvent'),
   onThinkingEvent: effects.fn('onThinkingEvent'),
@@ -443,6 +444,19 @@ function ordered(...names: string[]) {
 }
 
 describe('production Session event pipeline', () => {
+  it('accepts only provider-confirmed sampling items and releases the remainder at done', async () => {
+    const current = harness();
+    try {
+      current.emit(event('tool_result_full', { toolUseId: 'command', fullText: 'done', assistantSamplingAccepted: { agentMessageIds: ['item-a'] } }));
+      expect(effects.fn('onAssistantSamplingAccepted')).toHaveBeenCalledWith('task', ['item-a']);
+      expect(current.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({ event: expect.objectContaining({ type: 'tool_result_full' }) }));
+      current.emit(event('tool_result', { toolUseIds: ['search'], summary: 'search done' }));
+      expect(effects.fn('onAssistantSamplingAccepted')).toHaveBeenCalledTimes(1);
+      current.emit(event('done', {}));
+      expect(effects.fn('onAssistantSamplingAccepted')).toHaveBeenLastCalledWith('task');
+    } finally { await current.dispose(); }
+  });
+
   it.each(['auth', 'gateway', 'overflow'] as const)(
     'commits held %s activity once at its original end only when recovery finally fails', async recovery => {
       const current = harness();
