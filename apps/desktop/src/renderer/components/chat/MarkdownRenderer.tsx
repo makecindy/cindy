@@ -513,10 +513,9 @@ function useStreamingThrottle(value: string, enabled: boolean): string {
 }
 
 /**
- * CodeBlockPre — fenced code block with a hover-revealed copy button at the
+ * CodeBlockPre — fenced code block with a persistent copy button at the
  * top-right corner. The button reads `innerText` from the live <pre>, so it
- * always copies the latest text even mid-stream. We use group-hover to keep
- * the chrome out of the way until the user reaches for it.
+ * always copies the latest text even mid-stream.
  */
 function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
   const { t } = useTranslation();
@@ -570,8 +569,7 @@ function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
             CHAT_ICON_BUTTON_CLASS,
             'absolute right-2 top-2 h-7 w-7 border border-[var(--msg-code-block-border)]',
             'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
-            'opacity-0 transition-[color,background-color,opacity] duration-[var(--motion-fast)]',
-            'group-hover:opacity-100 focus-visible:opacity-100',
+            'transition-[color,background-color] duration-[var(--motion-fast)]',
             'enabled:hover:bg-[var(--cmd-palette-item-hover)] enabled:hover:text-[var(--msg-assistant-text)]',
           )}
         >
