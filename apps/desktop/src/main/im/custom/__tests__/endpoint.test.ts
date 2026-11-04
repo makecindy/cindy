@@ -73,7 +73,7 @@ async function start(): Promise<CustomEndpointHandle> {
 }
 
 describe('custom im endpoint (unix socket)', () => {
-  it('不监听任何 TCP 端口, socket 文件权限 0600', async () => {
+  it.skipIf(process.platform === 'win32')('不监听任何 TCP 端口, socket 文件权限 0600', async () => {
     const handle = await start();
     const stat = fs.statSync(handle.socketPath);
     expect(stat.isSocket()).toBe(true);
@@ -141,7 +141,7 @@ describe('custom im endpoint (unix socket)', () => {
     ).toBe(405);
   });
 
-  it('发现文件只含 socketPath, 不含 token, 权限 0600', async () => {
+  it.skipIf(process.platform === 'win32')('发现文件只含 socketPath, 不含 token, 权限 0600', async () => {
     const handle = await start();
     const file = path.join(dir, 'endpoint.json');
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
@@ -173,7 +173,7 @@ describe('custom im endpoint (unix socket)', () => {
     expect(ok.status).toBe(202);
   });
 
-  it('进程被强杀留下的 socket 文件会被清理后重建', async () => {
+  it.skipIf(process.platform === 'win32')('进程被强杀留下的 socket 文件会被清理后重建', async () => {
     const socketPath = resolveSocketPath(dir);
     fs.mkdirSync(dir, { recursive: true });
     // 真造一次崩溃: 子进程监听 socket 后被 SIGKILL, 文件留在原地且没人监听。
