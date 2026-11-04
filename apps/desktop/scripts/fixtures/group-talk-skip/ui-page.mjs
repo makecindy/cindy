@@ -1,11 +1,17 @@
 import assert from 'node:assert/strict';
 export default {
   name: 'group-talk-skip', entry: './fixture.tsx', viewport: { width: 600, height: 380 },
-  real: 'BotGroupPlanCard, shared step-state/skip predicates, production buttons, translations and styles',
+  real: 'BotGroupTimelineItem and its actual bubble-width wrappers, BotGroupPlanCard, shared step-state/skip predicates, production buttons, translations and styles',
   notCovered: 'API, actual devices, leases and Mobile native runtime. Skip receipt is fixture data; server concurrency is tested separately.',
   cases: Object.fromEntries(['default', 'running', 'stopped', 'viewer', 'legacy', 'busy', 'waiting'].map(name => [name, { about: `Talk card: ${name}` }])),
   async ready(page) { await page.getByTestId('bot-group-plan').waitFor(); },
   async check(page, ui) {
+    // Regression: inline-size containment must not collapse the actual timeline's auto-width column.
+    // The previous direct-to-main fixture never exercised the shrink-to-fit ancestors.
+    const card = await page.getByTestId('bot-group-plan').boundingBox();
+    const row = await page.locator('[data-bot-group-message-id="queue-message"]').boundingBox();
+    assert.ok(card && row && card.width > row.width / 2, 'Talk queue collapsed inside the timeline');
+    assert.ok(card.x + card.width <= row.x + row.width, 'Talk queue exceeds its timeline row');
     const skip = page.getByRole('button', { name: await ui.t('bots.groupChat.plan.skipTurnLabel', { name: 'Engineering Delivery Teammate' }), exact: true });
     assert.equal(await skip.count(), ['default', 'busy'].includes(ui.case) ? 1 : 0);
     assert.equal(await page.getByTestId('bot-group-plan-step').count(), 3);

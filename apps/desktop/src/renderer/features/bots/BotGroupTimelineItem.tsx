@@ -529,8 +529,8 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
       <Row {...rowProps} block="author">
         <div className="flex min-w-0 gap-2.5">
           <span aria-hidden className="w-7 shrink-0" />
-          <div data-testid="bot-group-arrangement" className={cn('min-w-0', CHAT_BUBBLE_COLUMN_CLASS)}>
-            <div className="w-fit min-w-0 max-w-full">
+          <div data-testid="bot-group-arrangement" className={cn('w-full min-w-0', CHAT_BUBBLE_COLUMN_CLASS)}>
+            <div className="w-full min-w-0 max-w-full">
               <BotGroupPlanCard
                 plan={props.plan}
                 members={members}

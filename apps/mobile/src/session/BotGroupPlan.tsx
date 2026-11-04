@@ -390,7 +390,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   talkActionTail: { minHeight: 44 },
   talkStatus: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   talkButton: { minHeight: 28, paddingHorizontal: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center' },
-  talkButtonLabel: { color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.medium },
+  talkButtonLabel: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.medium },
   talkFold: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: spacing.xs, minHeight: 28, paddingHorizontal: spacing.md, marginTop: spacing.xs, borderRadius: radius.pill },
 
   organizerBadge: { borderRadius: radius.pill, backgroundColor: colors.surfaceChip, paddingHorizontal: spacing.sm, flexShrink: 0 },

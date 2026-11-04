@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { ctx, mountPage } from '../../ui-page/harness';
-import { BotGroupPlanCard } from '../../../src/renderer/features/bots/BotGroupPlan';
+import { BotGroupTimelineItem } from '../../../src/renderer/features/bots/BotGroupTimelineItem';
 import type { BotGroupPlanView } from '../../../src/shared/botGroupChat';
 
 const names = ['PR 管理', 'Engineering Delivery Teammate', 'Search Ads Review', '选题策划', '代码审计', 'Cindy'];
@@ -17,9 +17,14 @@ const initial: BotGroupPlanView = {
 function Fixture() {
   const [plan, setPlan] = useState(initial);
   const [pending, setPending] = useState<'edit' | null>(ctx.case === 'busy' ? 'edit' : null);
-  return <main className="p-4"><BotGroupPlanCard plan={plan} members={[]} actionable={false}
-    pending={pending} onStart={() => {}} onDismiss={() => {}}
-    onEditStep={(step, action) => {
+  return <main className="p-4"><BotGroupTimelineItem plan={plan} members={[]}
+    message={{ id: 'queue-message', sequence: 1, kind: 'plan', authorKind: 'bot',
+      authorBotId: 'bot-0', authorName: names[0], content: '', mentions: { all: false, botIds: [] },
+      noticeCode: null, planId: plan.id, files: [], attachments: [], createdAt: 1 }}
+    continued={false} authorName={names[0]} mentionLabels={[]} locale={ctx.locale}
+    shareScope="fixture" sharing={false} onChanged={() => {}} planReassignable
+    planPending={pending}
+    onEditStep={(_planId, step, action) => {
       if (action !== 'skip') throw new Error('Unexpected command');
       setPending('edit');
       // Fixture-only receipt. Production scheduling and races are covered by server integration tests.
