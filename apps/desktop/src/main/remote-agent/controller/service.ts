@@ -696,11 +696,36 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       // Poll recovery can run while send is waiting for a terminal. Serialize
       // grants separately from sends, or renewal would deadlock behind that turn.
       let grantTurn = Promise.resolve();
-      const authorizeCurrentExecutor = (model: string, isCurrent?: () => boolean): Promise<void> => {
-        const result = grantTurn.then(() => applyAuthorization(model, isCurrent));
+      const serializeGrant = (work: () => Promise<void>): Promise<void> => {
+        const result = grantTurn.then(work);
         grantTurn = result.catch(() => undefined);
         return result;
       };
+      const authorizeCurrentExecutor = (model: string, isCurrent?: () => boolean): Promise<void> =>
+        serializeGrant(() => applyAuthorization(model, isCurrent));
+      const restoreHistoricalExecutor = (isCurrent: () => boolean): Promise<void> => serializeGrant(async () => {
+        assertLeaseAlive();
+        const previous = directTasks.get(taskKey);
+        if (stopped || !isCurrent() || !previous || previous.target !== target || !targetDeviceId
+          || liveDirectGuestSessions.get(sessionId)?.identity !== directIdentity) {
+          throw new Error('[REMOTE_AGENT_UNAVAILABLE] original shared executor authorization is no longer retained');
+        }
+        // Restoring a live history handle has the same original window as
+        // reopening it. Only an explicit renewal/model change may replace it.
+        const restored = await authorizeSharedTaskExecutor(input.deviceId, sessionId,
+          input.agentKind, authorizedModel, targetDeviceId, false, attempt.signal, { ...previous, direct: true });
+        if (stopped || !isCurrent() || directTasks.get(taskKey) !== previous
+          || liveDirectGuestSessions.get(sessionId)?.identity !== directIdentity) {
+          await releaseFailedDirectAllocation(restored.generation);
+          throw new Error('[REMOTE_AGENT_UNAVAILABLE] shared task has closed');
+        }
+        directTasks.set(taskKey, { ...previous, ...restored });
+        authorizedUntil = Math.min(authorizedUntil, restored.authorizedUntil ?? authorizedUntil);
+        leaseDeadline = Math.min(leaseDeadline, restored.leaseDeadline ?? leaseDeadline);
+        wallDeadline = Math.min(wallDeadline, restored.wallDeadline ?? wallDeadline);
+        nextRenewAt = Math.min(nextRenewAt, restored.renewAt ?? nextRenewAt);
+        armLeaseExpiry();
+      });
       // setModel already owns the grant for its new model until its RPC settles.
       // An outage callback must not replace that grant with the previous model.
       const confirmExistingExecutor = async (isCurrent: () => boolean, force = false): Promise<void> => {
@@ -711,7 +736,10 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         // caps is a generic capability read and never proves this task's grant
         // still exists. Do not turn an unrelated caps failure into a fresh
         // 30-minute authorization. A task-scoped open denial asks for force.
-        if (force) await authorizeCurrentExecutor(authorizedModel, isCurrent);
+        if (force) {
+          if (reusedHistory) await restoreHistoricalExecutor(isCurrent);
+          else await authorizeCurrentExecutor(authorizedModel, isCurrent);
+        }
         else await RemoteAgentRunClient.caps(remoteAgentInvoker(target, deps.remoteInvoke));
         if (stopped || !isCurrent() || Date.now() >= authorizedUntil || performance.now() >= leaseDeadline) {
           throw new Error('[REMOTE_AGENT_UNAVAILABLE] shared task authorization has expired');

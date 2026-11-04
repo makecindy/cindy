@@ -1651,6 +1651,25 @@ describe('shared startup lease budget', () => {
     await resumed.close();
   });
 
+  // Unit: a second M restart after a history handle is live must not turn
+  // recovery into renewal; exercise the real released -> ensure -> open path.
+  it('keeps the original history window when its live handle reconnects after another M restart', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
+    const first = await f.open('historical'); await first.close({ reason: 'navigation' });
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    const resumed = await f.open('historical', f.owner, 'm', 'native-only-on-m');
+    const liveRun = [...f.runs.values()].at(-1)!;
+    f.emit(liveRun, { t: 'closed', reason: 'provider-restarting' });
+    f.state.loseGrantOnOpen = true;
+    await resumed.send({ type: 'user', content: 'resume on the original executor' });
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
+    const disposedBeforeExpiry = f.disposed.length;
+    await vi.advanceTimersByTimeAsync(28 * 60_000 + 1);
+    expect(f.disposed).toHaveLength(disposedBeforeExpiry + 1);
+    expect(liveSharedTaskTarget('historical', f.owner)).toBeNull();
+    await resumed.close();
+  });
+
   it('ends an already running direct task on a known pause and requires fresh authorization after resume', async () => {
     const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
     const handle = await f.open('historical');
