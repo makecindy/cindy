@@ -1972,6 +1972,8 @@
       "add": {
         "title": "Ajouter une machine distante",
         "alias": "Alias",
+        "aliasHint": "Utilisez 1 à 128 caractères : lettres anglaises, chiffres ou . _ @ : -. Pour les autres caractères, utilisez « Nom d’affichage ».",
+        "aliasInvalid": "L’alias contient des caractères non pris en charge ou dépasse 128 caractères. Suivez les règles ci-dessus.",
         "displayName": "Nom d'affichage",
         "displayNamePlaceholder": "Nom facultatif affiché dans Cindy",
         "hostname": "Nom d'hôte",

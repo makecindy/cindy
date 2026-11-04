@@ -1972,6 +1972,8 @@
       "add": {
         "title": "Agregar una máquina remota",
         "alias": "Alias",
+        "aliasHint": "Usa entre 1 y 128 caracteres: letras inglesas, números o . _ @ : -. Para otros caracteres, usa Nombre para mostrar.",
+        "aliasInvalid": "El alias contiene caracteres no admitidos o supera los 128 caracteres. Sigue las reglas anteriores.",
         "displayName": "Nombre para mostrar",
         "displayNamePlaceholder": "Nombre opcional mostrado en Cindy",
         "hostname": "Nombre de host",

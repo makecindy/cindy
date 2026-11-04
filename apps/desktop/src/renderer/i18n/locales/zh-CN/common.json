@@ -1907,6 +1907,8 @@
       "add": {
         "title": "添加一台远端机器",
         "alias": "别名",
+        "aliasHint": "1–128 个字符，仅限英文字母、数字及 . _ @ : -；中文名称请填写在「显示名」。",
+        "aliasInvalid": "别名包含不支持的字符或超过 128 个字符，请按上述规则修改。",
         "displayName": "显示名",
         "displayNamePlaceholder": "可选，仅在 Cindy 中显示",
         "hostname": "主机名",

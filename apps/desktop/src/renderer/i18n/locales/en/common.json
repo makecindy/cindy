@@ -1937,6 +1937,8 @@
       "add": {
         "title": "Add a remote machine",
         "alias": "Alias",
+        "aliasHint": "Use 1–128 characters: English letters, numbers, or . _ @ : -. For Chinese or other characters, use Display name.",
+        "aliasInvalid": "The alias contains unsupported characters or exceeds 128 characters. Follow the rules above.",
         "displayName": "Display name",
         "displayNamePlaceholder": "Optional name shown in Cindy",
         "hostname": "Hostname",
