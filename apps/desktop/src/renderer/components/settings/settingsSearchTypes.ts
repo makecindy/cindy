@@ -9,6 +9,8 @@ export interface SettingsSearchContext extends ImBotIdentity {
   /** Loaded service selectors only; never index user endpoints, models, or credentials. */
   voiceInput?: { serviceMode: 'cindy' | 'byok'; asrProvider: string };
   voiceRefinementEnabled?: boolean;
+  /** Capability and profile presence only; never include voiceprint data. */
+  speakerFilter?: { supported: boolean; enrolled: boolean };
   agentIsland?: { supported: boolean; enabled: boolean; soundEnabled?: boolean };
   /** Selector visibility only; never expose the user's custom media URL to search. */
   wallpaperMotionAvailable?: boolean;

@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DiffPanelShell } from '@/components/diff-panel/DiffPanelShell';
 import { SettingsView } from '../SettingsView';
 import type { useVoiceInputModelSelection } from '@/hooks/useVoiceInputModelSelection';
+import type { VoiceSpeakerFilterStatus } from '../../../../shared/voiceSpeakerFilter';
 import { getAgentIslandSoundSettings, setAgentIslandEnabled, setAgentIslandSoundSettings } from '@/hooks/useAgentIslandSettings';
 import { LocaleProvider, useLocale } from '@/hooks/useLocale';
 import { WallpaperSettingsProvider } from '@/hooks/useWallpaperSettings';
@@ -20,6 +21,9 @@ vi.mock('react-i18next', async (importOriginal) => ({
   useTranslation: () => ({ t: (key: string) => ({
     'settings.voiceInput.serviceSource.customAsr.websocketUrl.label': 'WebSocket URL',
     'settings.voiceInput.refinement.instructions.label': 'Refinement instructions',
+    'settings.voiceInput.speakerFilter.hint': 'Recognize only your voice',
+    'settings.voiceInput.speakerFilter.unsupported': 'Speaker filter unavailable',
+    'settings.voiceInput.speakerFilter.strictness.label': 'Voice match strictness',
     'settings.agentIsland.skins.whitesnow.name': 'Apple Girl',
     'settings.agentIsland.soundOptions.startup-chime': 'Startup chime',
     'settings.language.classical.label': 'Classical script and style',
@@ -169,6 +173,32 @@ afterEach(() => {
 });
 
 describe('SettingsView Escape', () => {
+  // Unit wiring regression (#8481): static context tests cannot prove status
+  // pushes update search before the voice page is mounted.
+  it('updates speaker-filter search after capability and enrollment status pushes', async () => {
+    let publish!: (status: VoiceSpeakerFilterStatus) => void;
+    const status: VoiceSpeakerFilterStatus = {
+      supported: false, enrolled: false, modelState: 'missing', downloadedBytes: 0, totalBytes: 0,
+    };
+    Object.assign(window.electronAPI.voiceInput, { speakerFilter: {
+      getStatus: vi.fn(async () => status),
+      onStatusChanged: (notify: typeof publish) => { publish = notify; return () => {}; },
+    } });
+    await act(async () => { renderSettings('/settings'); });
+    for (const [supported, enrolled] of [[false, false], [true, false], [true, true], [true, false]] as const) {
+      act(() => publish({ ...status, supported, enrolled }));
+      for (const [query, visible] of [
+        ['Recognize only your voice', supported],
+        ['Speaker filter unavailable', !supported],
+        ['Voice match strictness', supported && enrolled],
+      ] as const) {
+        fireEvent.change(screen.getByRole('combobox', { name: 'settings.search.ariaLabel' }), {
+          target: { value: query },
+        });
+        expect(screen.queryAllByRole('option'), query).toHaveLength(visible ? 1 : 0);
+      }
+    }
+  });
   // Unit wiring regression (#8481): generic island visibility coverage misses
   // sound-only toggles. Use the real preference setter to verify live search.
   it('updates sound search results when the sound rows are enabled and disabled', async () => {

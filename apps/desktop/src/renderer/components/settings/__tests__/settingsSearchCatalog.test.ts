@@ -46,6 +46,33 @@ const searchContext = { platform: 'win32', region: 'cn', mode: 'cloud', membersh
 } as const;
 
 describe('settings discoverability regressions', () => {
+  // Unit regressions (#8481): generic titles did not cover visible storage
+  // explanations or the speaker card's unsupported/enrolled branches.
+  it('finds storage rows by their visible descriptions', () => {
+    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, searchContext);
+    for (const lng of ['zh-CN', 'en']) {
+      for (const field of ['cleanup', 'reconcile', 'dbSlimming', 'dbSizeWarningThreshold', 'dbSizeWarningDisable']) {
+        const query = searchI18n.t(`settings.about.storage.${field}Description`, { lng });
+        expect(searchSettings(documents, query).some(({ entry }) => entry.id === `settings.about.storage.${field}Label`), query).toBe(true);
+      }
+    }
+  });
+  it.each([undefined, { supported: false, enrolled: false }, { supported: true, enrolled: false }, { supported: true, enrolled: true }])(
+    'indexes only rendered speaker-filter text for %j', (speakerFilter) => {
+      const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, speakerFilter });
+      for (const lng of ['zh-CN', 'en']) {
+        for (const [key, visible] of [
+          ['hint', speakerFilter?.supported !== false],
+          ['unsupported', speakerFilter?.supported === false],
+          ...['strictness.label', 'strictness.hint', 'strictness.options.relaxed', 'strictness.options.standard', 'strictness.options.strict']
+            .map((key) => [key, speakerFilter?.supported === true && speakerFilter.enrolled] as const),
+        ] as const) {
+          const query = searchI18n.t(`settings.voiceInput.speakerFilter.${key}`, { lng });
+          expect(searchSettings(documents, query).some(({ entry }) => entry.id === 'settings.voiceInput.speakerFilter.label'), query).toBe(visible);
+        }
+      }
+    },
+  );
   // Unit regression (#8481): backend title coverage missed the visible selected
   // description. Query real translated explanations through the production index.
   it('finds browser settings by each backend description', () => {

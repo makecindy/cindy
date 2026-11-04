@@ -42,6 +42,7 @@ export const storageManagementCardSettings = defineSettings({
     tab: 'storage',
     targetId: 'settings-search-settings-about-storage-cleanupLabel',
     titleKey: 'settings.about.storage.cleanupLabel',
+    descriptionKey: 'settings.about.storage.cleanupDescription',
     sectionKey: 'settings.tabs.storage',
   },
   aboutStorageReconcileLabel: {
@@ -50,6 +51,7 @@ export const storageManagementCardSettings = defineSettings({
     tab: 'storage',
     targetId: 'settings-search-settings-about-storage-reconcileLabel',
     titleKey: 'settings.about.storage.reconcileLabel',
+    descriptionKey: 'settings.about.storage.reconcileDescription',
     sectionKey: 'settings.tabs.storage',
   },
   aboutStorageDbSlimmingLabel: {
@@ -58,6 +60,7 @@ export const storageManagementCardSettings = defineSettings({
     tab: 'storage',
     targetId: 'settings-search-settings-about-storage-dbSlimmingLabel',
     titleKey: 'settings.about.storage.dbSlimmingLabel',
+    descriptionKey: 'settings.about.storage.dbSlimmingDescription',
     sectionKey: 'settings.tabs.storage',
   },
   aboutStorageDbSizeWarningThresholdLabel: {
@@ -66,6 +69,7 @@ export const storageManagementCardSettings = defineSettings({
     tab: 'storage',
     targetId: 'settings-search-settings-about-storage-dbSizeWarningThresholdLabel',
     titleKey: 'settings.about.storage.dbSizeWarningThresholdLabel',
+    descriptionKey: 'settings.about.storage.dbSizeWarningThresholdDescription',
     sectionKey: 'settings.tabs.storage',
   },
   aboutStorageDbSizeWarningDisableLabel: {
@@ -74,6 +78,7 @@ export const storageManagementCardSettings = defineSettings({
     tab: 'storage',
     targetId: 'settings-search-settings-about-storage-dbSizeWarningDisableLabel',
     titleKey: 'settings.about.storage.dbSizeWarningDisableLabel',
+    descriptionKey: 'settings.about.storage.dbSizeWarningDisableDescription',
     sectionKey: 'settings.tabs.storage',
   },
 });

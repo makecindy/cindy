@@ -476,7 +476,7 @@ export function StorageManagementCard() {
               {t(storageManagementCardSettings.aboutStorageCleanupLabel.titleKey)}
             </span>
             <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t('settings.about.storage.cleanupDescription')}
+              {t(storageManagementCardSettings.aboutStorageCleanupLabel.descriptionKey)}
             </p>
           </div>
           <CardButton onClick={handleScan}>
@@ -575,7 +575,7 @@ export function StorageManagementCard() {
               {t(storageManagementCardSettings.aboutStorageReconcileLabel.titleKey)}
             </span>
             <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t('settings.about.storage.reconcileDescription')}
+              {t(storageManagementCardSettings.aboutStorageReconcileLabel.descriptionKey)}
             </p>
           </div>
           <CardButton onClick={handleReconcile}>
@@ -898,7 +898,7 @@ function DatabaseSlimmingSection({
             {t(storageManagementCardSettings.aboutStorageDbSlimmingLabel.titleKey)}
           </span>
           <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {t('settings.about.storage.dbSlimmingDescription')}
+            {t(storageManagementCardSettings.aboutStorageDbSlimmingLabel.descriptionKey)}
           </p>
         </div>
         <Button data-setting-id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.id}
@@ -1089,7 +1089,7 @@ function DatabaseSlimmingSection({
         <FormField
           id="db-size-warning-threshold"
           label={t(storageManagementCardSettings.aboutStorageDbSizeWarningThresholdLabel.titleKey)}
-          hint={t('settings.about.storage.dbSizeWarningThresholdDescription')}
+          hint={t(storageManagementCardSettings.aboutStorageDbSizeWarningThresholdLabel.descriptionKey)}
           error={warningThresholdInvalid ? t('settings.about.storage.dbSizeWarningThresholdInvalid') : undefined}
           reserveFeedback
           className="col-span-2 grid grid-cols-[minmax(0,1fr)_auto] items-center [&>div:last-child]:col-span-2"
@@ -1129,7 +1129,7 @@ function DatabaseSlimmingSection({
             {t(storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.titleKey)}
           </span>
           <span className="text-11 leading-[1.4] text-[var(--text-secondary)]">
-            {t('settings.about.storage.dbSizeWarningDisableDescription')}
+            {t(storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.descriptionKey)}
           </span>
         </label>
         <Switch data-setting-id={storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.id}

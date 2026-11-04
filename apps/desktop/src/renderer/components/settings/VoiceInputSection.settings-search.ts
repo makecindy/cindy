@@ -1,4 +1,5 @@
 import { TAB_LABEL_KEY } from '@/lib/tabLabels';
+import { SPEAKER_GATE_STRICTNESS_VALUES } from '@cindy/voice-input-core';
 import { VOICE_INPUT_EXTRA_LANGUAGES } from '../../../shared/voiceInputData';
 import { defineSettings, type SettingsSearchContext, type SettingsSearchModule } from './settingsSearchTypes';
 
@@ -125,6 +126,21 @@ export const voiceInputSettings = defineSettings({
     titleKey: 'settings.voiceInput.speakerFilter.label',
     sectionKey: 'settings.tabs.voiceInput',
     descriptionKey: 'settings.voiceInput.speakerFilter.hint',
+    descriptionKeyForContext: ({ speakerFilter }) => speakerFilter?.supported === false
+      ? 'settings.voiceInput.speakerFilter.unsupported' : undefined,
+    options: [
+      {
+        value: 'strictness',
+        labelKey: 'settings.voiceInput.speakerFilter.strictness.label',
+        descriptionKey: 'settings.voiceInput.speakerFilter.strictness.hint',
+      },
+      ...SPEAKER_GATE_STRICTNESS_VALUES.map((value) => ({
+        value, labelKey: `settings.voiceInput.speakerFilter.strictness.options.${value}`,
+      })),
+    ].map((option) => ({
+      ...option,
+      isVisible: ({ speakerFilter }: SettingsSearchContext) => speakerFilter?.supported === true && speakerFilter.enrolled,
+    })),
     isVisible: ({ platform }) => platform === 'darwin' || platform === 'win32',
   },
   shortcutLabel: {

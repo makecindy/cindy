@@ -95,6 +95,7 @@ import { canAccessUsageSettings } from './usageVisibility';
 import { UsageHistorySection } from './usage/UsageHistorySection';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { useVoiceInputModelSelection } from '@/hooks/useVoiceInputModelSelection';
+import { useVoiceSpeakerFilterStatus } from '@/hooks/useVoiceSpeakerFilterStatus';
 import { getVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 import { getAgentIslandEnabled, getAgentIslandSoundSettings, isAgentIslandSupported, subscribeAgentIslandSettings } from '@/hooks/useAgentIslandSettings';
 
@@ -120,6 +121,10 @@ function SettingsViewContent() {
   const wallpaperMotionAvailable = isSceneWallpaper(wallpaperId) ||
     (wallpaperId === 'custom' && isCustomWallpaperVideo(customWallpaperUrl));
   const voiceModelSelection = useVoiceInputModelSelection();
+  const { status: speakerFilterStatus } = useVoiceSpeakerFilterStatus(
+    (window.electronAPI?.platform === 'darwin' || window.electronAPI?.platform === 'win32') &&
+    Boolean(window.electronAPI?.voiceInput?.speakerFilter),
+  );
   const voiceRefinementEnabled = useSyncExternalStore(subscribeVoiceSettings, getVoiceRefinementEnabled);
   const agentIslandEnabled = useSyncExternalStore(subscribeAgentIslandSettings, getAgentIslandEnabled);
   const agentIslandSoundEnabled = useSyncExternalStore(subscribeAgentIslandSettings, getAgentIslandSoundEnabled);
@@ -297,12 +302,15 @@ function SettingsViewContent() {
     platform: window.electronAPI?.platform ?? '',
     supportsBetaUpdateChannel: window.electronAPI?.supportsBetaUpdateChannel,
     voiceRefinementEnabled,
+    speakerFilter: speakerFilterStatus ? {
+      supported: speakerFilterStatus.supported, enrolled: speakerFilterStatus.enrolled,
+    } : undefined,
     agentIsland: { enabled: agentIslandEnabled, supported: agentIslandSupported, soundEnabled: agentIslandSoundEnabled },
     voiceInput: voiceModelSelection.ready && voiceModelSelection.selection ? {
       serviceMode: voiceModelSelection.selection.serviceMode,
       asrProvider: voiceModelSelection.selection.asrProvider,
     } : undefined,
-  }), [locale, wallpaperMotionAvailable, mode, user?.membershipKind, voiceModelSelection.ready, voiceModelSelection.selection, voiceRefinementEnabled, agentIslandEnabled, agentIslandSupported, agentIslandSoundEnabled]);
+  }), [locale, wallpaperMotionAvailable, mode, user?.membershipKind, voiceModelSelection.ready, voiceModelSelection.selection, voiceRefinementEnabled, speakerFilterStatus?.supported, speakerFilterStatus?.enrolled, agentIslandEnabled, agentIslandSupported, agentIslandSoundEnabled]);
   const requestedEntry = resolveSettingsSearchEntry(activeTab, searchParams.get('section'));
   const searchEntry = piExtensionsPanelOpen || (requestedEntry?.isVisible && !requestedEntry.isVisible(searchContext))
     ? null : requestedEntry;
