@@ -1033,6 +1033,13 @@ function devEnvEntries(env) {
     ['XDT_DESKTOP_DEV_STARTUP_STATUS_FILE', env.XDT_DESKTOP_DEV_STARTUP_STATUS_FILE],
     // 插件存储启动边界的 dev 黑盒验收：仅显式临时结果路径时启用。
     ['XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE', env.XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE],
+    // 实验原型 pi-live-compact：宿主外置 pi 扩展与扩展自身的 SPINE_* 旋钮。
+    // 仅显式设置时透传，不改变默认行为（pi 扩展无自动发现，SPINE 默认关闭）。
+    ['CINDY_PI_EXTRA_EXTENSIONS', env.CINDY_PI_EXTRA_EXTENSIONS],
+    ['SPINE_THUNDER', env.SPINE_THUNDER],
+    ['SPINE_THUNDER_MODEL', env.SPINE_THUNDER_MODEL],
+    ['SPINE_MIN_TOKENS', env.SPINE_MIN_TOKENS],
+    ['SPINE_SHADOW_DIR', env.SPINE_SHADOW_DIR],
   ];
 }
 

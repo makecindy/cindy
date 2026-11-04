@@ -4145,6 +4145,16 @@ export class PiAgent extends BaseAgent {
         bridgeExtensionPath,
         ...(localSubagentSupported ? ['--extension', subagentExtensionPath] : []),
         ...(!reviewMode && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly && planModeExtAvailable ? ['--extension', planModeExtPath] : []),
+        // 实验原型(dev-only)：宿主外置 pi 扩展经 CINDY_PI_EXTRA_EXTENSIONS 注入
+        // (';' 分隔，绝对路径)。仅本地会话 —— 远端 daemon 加载不了本机路径。
+        // 只走显式 --extension，不影响自动发现；排在自带扩展之后，注册最晚。
+        ...(opts.remoteHostId
+          ? []
+          : (process.env.CINDY_PI_EXTRA_EXTENSIONS ?? '')
+            .split(';')
+            .map((candidate) => candidate.trim())
+            .filter(Boolean)
+            .flatMap((extensionPath) => ['--extension', extensionPath])),
         ...(loadProjectResourcesInPlace
           ? piProjectResourceCliArgs(projectResourceCli)
           : []),
