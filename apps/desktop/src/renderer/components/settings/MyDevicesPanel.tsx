@@ -565,6 +565,7 @@ export function MyDevicesPanel({
         description={t('settings.devices.deleteMessage')}
         confirmText={t('settings.devices.delete')}
         confirmVariant="destructive"
+        autoFocusConfirm
         loading={deleting}
         onConfirm={() => void handleDelete()}
       />

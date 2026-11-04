@@ -70,8 +70,12 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   端口，它对每个目标重新按系统代理 / PAC 决定直连或走代理（env 作用于整棵进程树，含 Bash
   工具里的 git / npm，内网例外必须照旧直连），明文 HTTP 不下发代理。都是 TCP 隧道，TLS
   端到端，代理、转发端口与 Cindy 都看不到凭证。
-- 订阅会话不设 host 接管标记；Cindy 的所有 Claude 会话统一使用 `claude-desktop` 入口，
-  CLI 会启用 Desktop 宿主的项目级上游 / 鉴权环境过滤。入口身份不改变凭证来源，普通项目
+- 订阅会话不设 host 接管标记，并保留 `claude-desktop` 入口，
+  CLI 会启用 Desktop 宿主的项目级上游 / 鉴权环境过滤。OAuth token 路径同样保留该入口
+  的刷新回调白名单；API Key 路径使用 SDK 原生 `sdk-ts`，避免 Individual API 额度被
+  Desktop 身份误拒（[上游报告](https://github.com/anthropics/claude-code/issues/106458)）。
+  API 路径仍通过 `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1` 锁定上游和认证，远端在
+  route materialization 后按最终认证形态重选入口。入口身份不改变凭证来源，普通项目
   设置、权限与 hooks 仍由 CLI 加载。SDK 模式仍没有终端的工作区信任确认，因此继续对
   CLI 实际加载的项目级设置（工作目录的两份文件，加上主仓库根目录的 `settings.local.json`）
   设闸作为纵深防御（maker-core `workspace-settings-guard`），不依赖上游过滤替代宿主检查：
@@ -101,17 +105,26 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   真实 CLI 的入口、项目设置、原生 / SDK hooks 与权限回归见
   [smoke-claude-sdk.mjs](../../scripts/smoke-claude-sdk.mjs)。
 
-## Linux Hyprland / Omarchy 凭证后端
+## Linux 凭证后端
 
-- Desktop 在 Electron `ready` 之前为 Hyprland 默认选择 `gnome-libsecret`，避免桌面
-  自动识别失败导致登录回调收到令牌后无法加密保存。桌面身份依次取非空的
-  `XDG_CURRENT_DESKTOP`、`XDG_SESSION_DESKTOP`、`DESKTOP_SESSION`；其他桌面保持
-  Electron 原有选择。实现见
-  [linuxPasswordStore.ts](../../apps/desktop/src/main/linuxPasswordStore.ts)，回归见
+- Desktop 在 Electron `ready` 之前为 Hyprland、labwc，以及没有桌面身份的会话默认选择
+  `gnome-libsecret`。Chromium 不认识这些会话时会落到 `basic_text`，打包版会把它当成
+  加密不可用，即使 Secret Service 已经解锁。桌面身份依次取非空的
+  `XDG_CURRENT_DESKTOP`、`XDG_SESSION_DESKTOP`、`DESKTOP_SESSION`。GNOME、KDE、XFCE
+  等 Chromium 已能识别的桌面，以及 sway、niri 等未证实的命名桌面，保持 Electron 原有选择。
+  实现见 [linuxPasswordStore.ts](../../apps/desktop/src/main/linuxPasswordStore.ts)，回归见
   [linuxPasswordStore.test.ts](../../apps/desktop/src/main/__tests__/linuxPasswordStore.test.ts)。
 - 显式 `--password-store` 优先于此默认值。系统仍需提供可用且已解锁的 Secret Service
-  （例如 GNOME Keyring）；此修复不安装或解锁钥匙串，也不新增明文降级。现有仅限开发版的
+  （例如 GNOME Keyring）；此修复不安装或解锁钥匙串，也不新增明文降级。libsecret 缺失时
+  Chromium 仍会回退，Cindy 继续拒绝明文。现有仅限开发版的
   `XDT_DEV_SAFE_STORAGE_BASIC=1` 调试行为保持不变。
+- 不把空的桌面环境变量本身当成禁止登录的条件，也不在启动时探测钥匙串。用户发起验证码
+  请求、验证码提交或浏览器登录时，才检查当前加密后端是否可用；不可用则返回既有的
+  `CREDENTIAL_STORE_UNAVAILABLE`，不发送验证码、不打开浏览器、不交换授权码。凭证读取
+  失败时记录后端名称、`password-store` 开关类别，以及是否有桌面身份、是否有会话总线
+  两个布尔值，不记录桌面名、总线地址、令牌或完整环境变量。加密不可用且 vault 或退出
+  标记文件确实不存在时，日志说明记录缺席且后端不可用，仍抛出
+  `CREDENTIAL_STORE_UNAVAILABLE`，不把已有但暂时读不出的记录当成已删除。
 - 旧版临时处理：完全退出 Cindy 后运行 `cindy --password-store=gnome-libsecret`。
   实机验收需覆盖登录、退出应用后正常启动仍保持登录，以及 `cindy://` 回调启动路径。
 
@@ -222,6 +235,7 @@ promise，恢复信号不能在旧请求结束后追加立即续期。只有用�
 | 本机应用 Agent 授权 | `owners/<owner-key>/local-agent/grants.json`，仅含令牌 SHA-256、自报应用资料、账号范围和按授权归属的原生恢复绑定，不存令牌明文、供应商凭据或消息。复用原子写入与恢复 helper；profile 根 `local-agent/host.lock` 复用跨进程锁，保证一个发现端点和写入者。开发连接码从当前服务内存按需生成，不新增公共实例登记或短码映射文件。临时输入与新授权的 Codex 运行历史在同一 owner 下的 `local-agent/clients/<grant-hash>/`；撤权同时关闭执行及工具入口，不允许跨授权恢复。协议与旧版兼容见 [本机应用接入](../local-agent-api.md) |
 | 预创建 worktree 的取消标记          | `userData/worktree-cancelled-creations/<sessionId 的 SHA-256>`，空文件原子排他创建；不含路径、草稿或关联密钥。保留以拒绝重启后迟到的创建请求，不按超时删除。只在核实未被任务认领后写入。同路径加 `.lock` 是可释放的跨进程操作锁，复用既有锁协议；同一 profile、同一任务的创建登记与取消回收串行，拿不到锁不得确认回收完成。异步创建完成后、登记前再次核对取消标记                                               |
 | Mobile 已取消创建的草稿             | 复用账号隔离的 durable outbox；持久创建流程先保存草稿、原项目目录和附件，再登记 reservation 和发送远端 worktree 创建；创建回包前暂停发件箱投递。回收确认后，`creation.cancelled` 与原项目目录先持久写入，再忘记回收账本。重建使用新远端 ID，`storageSessionId` 保持原 AsyncStorage 键和附件目录，通过单次记录写入提交；写入失败时原草稿仍可读。编辑页恢复目录时重新探测资格，不沿用旧 worktree 的资格或分支偏好 |
+| 对话交给插件的文件副本 | `owners/<账号>/ghost-handoff/<插件实例键>/<uuid>/`：以清理后的原文件名（每段最多 64 字符、无保留字符与尾点、避开 Windows 保留名）存批准时读入的字节，便于用户在设置页打开目录后认出；`.cindy-handoff.json` 只含显示用原文件名、磁盘文件名、类型、大小、SHA-256 与时间，不含原路径。写入先落 `.tmp/<uuid>` 并刷盘后整目录改名；删除先改名进 `.tmp/del-*`。连续 7 天未使用（签发页面地址、页面读取、上传成功会顺延）后在访问时、启动后延迟清理及切换账号时删除，卸载随插件删除，换源随归档实例键搬走；每实例 512 MiB／200 个。见 `cindy-brain/handoffStore.ts` |
 | 可丢弃的临时数据                    | `app.getPath('temp')` 或 `os.tmpdir()` 下的任务专属目录                                                                                                                                                                                                                                                                                                                                                         |
 | 测试生成物                          | `os.tmpdir()` 下通过 `mkdtemp` 创建的独立目录，并在测试结束时清理                                                                                                                                                                                                                                                                                                                                               |
 | Skill 卸载清理回执                  | `app.getPath('userData')/skillhub/uninstall-cleanups/<token>.json`，记录操作 owner、旧文件/注册/偏好身份与完成阶段；跨窗口和重启保留，当前 owner 重试完成后删除，不作为授权凭据                                                                                                                                                                                                                                 |
@@ -252,7 +266,10 @@ promise，恢复信号不能在旧请求结束后追加立即续期。只有用�
 | 语音输入声纹识别模型 | `userData/voice-models/<哈希前缀>-<文件名>.onnx`，按内容哈希从区域 CDN 下载并在可见前校验 SHA-256；不含个人数据，本机所有账号共用。新版本模型下载完成后删除旧版本文件 |
 | Mobile 语音输入声纹（生物特征） | SecureStore（iOS 钥匙串 / Android Keystore）键 `xdt.voiceSpeakerProfile.v1.<账号 key 的 SHA-256 前 32 位>`，内容同 Desktop：声纹向量、录入时间与模型哈希；开关与灵敏度 override 在 AsyncStorage `cindy.mobile.voice-speaker-filter.v1.<账号 key>`。只在本机，不同步、不上传、不进日志；退出登录时随该账号的其他本机数据一起删除（模型文件保留）。删除前写 AsyncStorage `cindy.mobile.voice-speaker-filter.cleanup.v1.<账号 key>` 重试标记，不含声纹；失败时保留标记，启动、回到前台及该账号下次读写前重试，全部删除成功后才移除。标记落盘也失败时保留进程内重试，无法保证进程终止后的恢复；不因声纹删除失败阻止退出凭证清除。朗读音频只在内存中处理 |
 | Mobile 语音输入声纹识别模型 | `cacheDirectory/voice-models/`，与 Desktop 同一组按内容哈希下载、校验 SHA-256 后才可见的文件；放缓存目录以免进入 iCloud / Android 备份。系统清理缓存后，下次语音输入发现缺失会在后台重新下载，本次不过滤 |
+| iOS 桌面小组件数据 | App Group `group.<bundle id>`（与 expo-sharing 共用）里的 `usage-widget-snapshot.json`：每台电脑最近一次的余量与用量快照（已按电脑上「隐藏个人信息」打码，含账号名或邮箱前缀、余量、近 30 天用量与模型名）、「自动」所选电脑 id 与电脑名列表；不含凭证。同一 App Group 的 UserDefaults 键 `usageWidgetPins` 只记组件选中的电脑 id 与时间，超过 2 天的丢弃。App 在前台时整份原子替换写入；切换或退出账号时删除快照文件。见 `apps/mobile/modules/cindy-usage-widgets` 与 `plugins/usage-widgets` |
+| Android 桌面小组件数据 | 应用私有 `noBackupFilesDir/usage-widget-snapshot.json`（不进 Android 自动备份），内容与 iOS 的 App Group 文件相同（已打码的余量与用量快照、「自动」所选电脑 id 与电脑名列表，不含凭证）；SharedPreferences `cindy-usage-widgets` 里 `computer.<组件 id>` 记组件选中的电脑，`usageWidgetPins` 记固定电脑 id 与时间（超过 2 天丢弃），删除组件时清理。切换或退出账号时删除快照文件，并清掉所有 `computer.` / `pinned.` / `hidden.` 与 `usageWidgetPins`（它们含上一个账号的电脑 id 与账号名），再重绘组件。见 `apps/mobile/modules/cindy-usage-widgets/android` |
 | Windows 锁屏控制的系统服务程序 | `%ProgramFiles%\Cindy Remote Desktop\<安装目录哈希>\`,由「授权开启」的管理员提权步骤写入:两个原生 helper 与记录所属安装目录的 `install.txt`。目录与文件的所有者是 Administrators,只有 Administrators 与 SYSTEM 可写——SYSTEM 服务不能从用户可写的安装目录启动,否则本机任何普通进程都能换掉它。不含凭证、账号或对话。源码运行的开发版另将构建缓存放在 `userData/remote-desktop/development/<安装身份哈希>/`，只含本机编译产物与源码摘要；它仍复制到上述受保护目录后才注册服务。只有设置页的「移除服务」(同样需要管理员确认)会删除它;按安装目录分子目录,多份安装互不影响。见 `native/remote-desktop/windows-host/src/staging.rs`、`apps/desktop/src/main/remote-desktop/windowsHost.ts` 与 [`../remote-desktop.md`](../remote-desktop.md) |
+| 新项目存放位置 | `userData/owners/<账号>/projects-root-settings.json`，只存用户在设置页或「新建项目…」弹窗里经原生选择框选定的目录（`directory`），未设置为 null；推荐位置（已登记可见项目最常见的父目录，否则 `~/Projects`）读取时推算，不写回文件。复用 override settings 跨进程锁、原子写入与损坏保留，选择框返回后核对账号未切换再写入。不含凭证或对话；见 `projects-root-settings.ts`、`mcp-integrations/projectManagement.ts`（`resolveProjectsRoot`）与 `createProjectFromTaskHost.ts` |
 | 用户明确导出的文件                  | 用户选择或任务明确指定的目标路径                                                                                                                                                                                                                                                                                                                                                                                |
 
 - worktree 启动维护（回收重试、旧归档清理、快照引用清理、审计与池恢复）在主窗口首帧、
@@ -289,6 +306,12 @@ promise，恢复信号不能在旧请求结束后追加立即续期。只有用�
   回归见对应上传策略测试和 `packages/lizi-mcps/src/browser/opencli-recipes.test.ts`。
 
 ## Review 清单
+
+截图翻译语言覆盖存于 `userData/screenshot-translation-settings.json`，仅保存
+`targetLanguage`，本机客户端共用，不含截图、识别文字或账号数据，不同步到其他设备。
+复用 override settings 的跨进程锁和原子写；恢复「跟随界面语言」移除覆盖，
+文件损坏时保留原文件并报告保存失败。实现与回归见
+`main/region-screenshot/translationPreferences.ts` 及其同名单测。
 
 1. 写入目标是否可能位于仓库、当前工作目录或被 Git 跟踪的路径？
 2. 是否把真实凭证带入了测试、fixture、日志、错误或 Renderer？

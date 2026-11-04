@@ -1,4 +1,5 @@
 import { StyleSheet, View } from "react-native";
+import { quotaLevelFromRemaining } from "@cindy/maker-shared/quota-level";
 import { radius, useTheme } from "@/theme";
 
 /** Both pickers draw the real remainder, without a native minimum fill width. */
@@ -13,11 +14,12 @@ export function ModelQuotaBar({
 }) {
   const { colors } = useTheme();
   const now = Math.max(0, Math.min(100, remaining));
-  // Match the desktop provider rail: <=10% critical, <30% warning.
+  // Shared with every quota surface: 30% or less left is yellow, 10% or less is red.
+  const level = quotaLevelFromRemaining(now);
   const fillColor =
-    now <= 10
+    level === "crit"
       ? colors.quotaBarCrit
-      : now < 30
+      : level === "warn"
         ? colors.quotaBarWarn
         : colors.textSecondary;
 

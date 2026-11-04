@@ -27,6 +27,8 @@ const api: DesktopCaptureApi = {
   viewHeartbeat: (lease) => ipcRenderer.invoke(DESKTOP_LOCAL.VIEW_HEARTBEAT, lease),
   nativeFrame: (lease) => ipcRenderer.invoke(DESKTOP_LOCAL.NATIVE_FRAME, lease),
   nativeAudio: (lease) => ipcRenderer.invoke(DESKTOP_LOCAL.NATIVE_AUDIO, lease),
+  liveScreenFrames: (lease, keyframe) =>
+    ipcRenderer.invoke(DESKTOP_LOCAL.LIVE_SCREEN_FRAMES, lease, keyframe),
 };
 if (location.search === '?mode=direct') {
   const direct: DirectLinkHostApi = {
@@ -41,7 +43,7 @@ if (location.search === '?mode=direct') {
   contextBridge.exposeInMainWorld('directLinkHost', direct);
 } else if (location.search === '?mode=files') {
   const files: FilePeerHostApi = {
-    closed: (connection) => ipcRenderer.invoke(FILE_PEER_LOCAL.CLOSED, connection),
+    closed: (connection, reason) => ipcRenderer.invoke(FILE_PEER_LOCAL.CLOSED, connection, reason),
     register: () => ipcRenderer.invoke(FILE_PEER_LOCAL.REGISTER),
     onCommand: (listener) => {
       const wrapped = (_e: Electron.IpcRendererEvent, id: string, command: FilePeerCommand) =>

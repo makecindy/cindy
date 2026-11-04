@@ -15,9 +15,7 @@
  * active-catalog 合并,是路由/能力派生的输入,MCP create_worker / scheduler 等
  * 无窗口路径也要一致生效,真源必须 main 可靠可读。
  *
- * 本轮(PR-C)刻意**不加 IPC/写 API**:设置 UI 是后续 PR,现在没有 renderer
- * 消费者,提前开 channel 或留死写入口只会扩大 attack surface。用户仍可直接编辑
- * 文件；坏 JSON/超限文件原样保留，修正后下一次同步自动恢复。
+ * 设置页只写明确选择的能力字段；其它覆盖与隔离中的条目原样保留。
  */
 
 import { desktopMakerLogger } from './logger-adapter.js';
@@ -27,7 +25,8 @@ import {
   sanitizeModelCatalogOverrides,
   type ModelCatalogOverrides,
 } from './model-plane/localCatalogOverrides.js';
-import { ownerScopedUserDataPath } from '../appSessionState.js';
+import { getActiveAppSession, ownerScopedUserDataPath } from '../appSessionState.js';
+import type { ModelPriceOverrideTarget } from '../../shared/modelPriceOverride.js';
 
 const log = desktopMakerLogger.child('model-catalog-overrides');
 
@@ -45,18 +44,126 @@ function normalize(raw: unknown): ModelCatalogOverrides {
   return overrides;
 }
 
-const store = createOverrideSettingsFile<ModelCatalogOverrides>({
-  filePath: () => ownerScopedUserDataPath('model-catalog-overrides.json'),
-  defaults: EMPTY_MODEL_CATALOG_OVERRIDES,
-  normalize,
-  log,
-  label: 'model-catalog-overrides',
-  maxBytes: MAX_MODEL_CATALOG_OVERRIDE_FILE_BYTES,
-  preserveUnreadableFile: true,
-});
+function createStore(filePath: () => string, scopeKey?: () => string) {
+  return createOverrideSettingsFile<ModelCatalogOverrides>({
+    filePath,
+    scopeKey,
+    defaults: EMPTY_MODEL_CATALOG_OVERRIDES,
+    normalize,
+    log,
+    label: 'model-catalog-overrides',
+    maxBytes: MAX_MODEL_CATALOG_OVERRIDE_FILE_BYTES,
+    preserveUnreadableFile: true,
+    mergeOverrides: ({ next, overrides }) => {
+      if (overrides.version !== undefined && overrides.version !== 1) {
+        throw new Error('Unsupported model catalog override version');
+      }
+      const previous = sanitizeModelCatalogOverrides(overrides).overrides.patches;
+      const raw = overrides.patches;
+      if (raw !== undefined && (!raw || typeof raw !== 'object' || Array.isArray(raw))) {
+        throw new Error('Invalid model catalog patches');
+      }
+      // A malformed sibling must remain available for repair, not disappear on save.
+      const quarantined = Object.fromEntries(
+        Object.entries(raw ?? {}).filter(([key]) => !Object.hasOwn(previous, key)),
+      );
+      for (const key of Object.keys(next.patches)) {
+        if (Object.hasOwn(quarantined, key))
+          throw new Error('Model override needs repair before editing');
+      }
+      return { ...overrides, version: 1, patches: { ...quarantined, ...next.patches } };
+    },
+  });
+}
+
+const store = createStore(
+  () => ownerScopedUserDataPath('model-catalog-overrides.json'),
+  () => String(getActiveAppSession().generation),
+);
 
 /** 当前 override 快照(注入 active-catalog 合并;mtime 守卫让手改文件下次读取生效)。 */
 export function readModelCatalogOverrides(): ModelCatalogOverrides {
   store.invalidateIfChanged();
   return store.read();
+}
+
+const keyOf = (target: ModelPriceOverrideTarget) =>
+  `${encodeURIComponent(target.providerId)}:${target.modelId}`;
+
+export function readModelImageInputOverride(target: ModelPriceOverrideTarget): boolean | null {
+  const patch = readModelCatalogOverrides().patches[keyOf(target)];
+  if (patch?.agents && !patch.agents.includes(target.agent)) return null;
+  return (
+    patch?.perAgent?.[target.agent]?.supportsImageInput ?? patch?.base?.supportsImageInput ?? null
+  );
+}
+
+/** Persist all row aliases together; refresh failure restores only this edit. */
+export async function writeModelImageInputOverride(
+  targets: readonly ModelPriceOverrideTarget[],
+  value: boolean | null,
+  refresh: () => Promise<void>,
+): Promise<void> {
+  const file = ownerScopedUserDataPath('model-catalog-overrides.json');
+  const generation = getActiveAppSession().generation;
+  const keys = new Set(targets.map(keyOf));
+  let previous: ModelCatalogOverrides['patches'] = {};
+  let written: ModelCatalogOverrides['patches'] = {};
+  await store.updateAtomic((current) => {
+    previous = current.value.patches;
+    const patches = structuredClone(previous);
+    for (const target of targets) {
+      const key = keyOf(target);
+      const entry = (patches[key] ??= {});
+      if (entry.agents && !entry.agents.includes(target.agent)) {
+        // Do not broaden other hand-authored fields to a new harness.
+        throw new Error('Model override excludes this engine');
+      }
+      if (value === null) {
+        if (entry.base) {
+          delete entry.base.supportsImageInput;
+          if (!Object.keys(entry.base).length) delete entry.base;
+        }
+        const fields = entry.perAgent?.[target.agent];
+        if (fields) {
+          delete fields.supportsImageInput;
+          if (!Object.keys(fields).length) delete entry.perAgent![target.agent];
+        }
+        if (entry.perAgent && !Object.keys(entry.perAgent).length) delete entry.perAgent;
+        if (!entry.base && !entry.perAgent && !entry.agents) delete patches[key];
+      } else {
+        entry.perAgent ??= {};
+        entry.perAgent[target.agent] = {
+          ...entry.perAgent[target.agent],
+          supportsImageInput: value,
+        };
+      }
+    }
+    const checked = sanitizeModelCatalogOverrides({ ...current.value, patches });
+    if (checked.invalid.length) throw new Error('Invalid model image input override');
+    written = patches;
+    return { patches };
+  });
+  try {
+    await refresh();
+  } catch (error) {
+    // Roll back in the original account even if the active owner changed while refreshing.
+    await createStore(() => file).updateAtomic((current) => {
+      const patches = { ...current.value.patches };
+      for (const key of keys) {
+        if (JSON.stringify(patches[key]) !== JSON.stringify(written[key])) continue;
+        if (previous[key]) patches[key] = previous[key];
+        else delete patches[key];
+      }
+      return { patches };
+    });
+    if (getActiveAppSession().generation === generation) {
+      try {
+        await refresh();
+      } catch {
+        log.warn('model image input rollback refresh failed');
+      }
+    }
+    throw error;
+  }
 }

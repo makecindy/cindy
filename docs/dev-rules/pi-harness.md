@@ -72,7 +72,8 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   展示层通过共享 `parseMessageToolUse` 将网关调用还原为既有 MCP 工具名与参数；实时事件、
   Pi 分支历史和旧持久化消息共用此解析，保留 toolUseId，不改变 Pi 原生 transcript 或授权路径。
   MCP 请求接入 Pi 的取消信号；Bun fetch 的独立空闲计时关闭，由既有请求期限统一约束响应头与
-  正文。取消只中止本次 HTTP 等待，不承诺撤销服务端已执行的动作。网络错误只附白名单错误码，
+  正文。取消会中止本次 HTTP 等待，并通过独立、限时的请求尽力发送 `notifications/cancelled`；
+  不重放调用，也不承诺撤销服务端已执行的动作。网络错误只附白名单错误码，
   仅 JSON-RPC `-32602` 明确参数错误附 schema，工具业务错误保留原反馈。
   启动失败、传输断开、请求超时或已建立的 MCP session 返回 404 后，下一次定向发现／调用
   按服务重新 initialize + tools/list，复用既有启动期限；并发等待共享一次握手，取消只退出
@@ -110,7 +111,7 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
 
 本机 Pi bridge 在原生 `before_provider_request` 处理后，通过既有单向通知发送白名单
 请求摘要。宿主以 `startupTraceId + requestSequence` 记录 debug 级 `pi request stage`：
-`provider-request-prepared`（本桥处理后的工具数、消息数、wire effort）、`first-output`
+`provider-request-prepared`（本桥处理后的工具数、消息数、wire effort、`preparationMs`）、`first-output`
 （首个文本／推理增量或工具调用开始／增量）、`agent-settled`（原生整轮终态，不能用 `agent_end` 替代）。
 请求阶段时长用宿主单调时钟，`elapsedMs` 从最近一次请求摘要到达起算；终态另有
 `turnElapsedMs`，从本轮第一次请求摘要到达起算，包含重试／工具等后续处理。
@@ -121,6 +122,15 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
 只记录有界计数和已知档位名，无法识别的请求字段省略，不把未知工具数当成零。
 不记录请求正文、工具定义、模型 ID、凭据或任意上游字符串；
 诊断失败不能阻止发送，也不出现在聊天里，不增加需要宿主应答的 RPC。
+`preparationMs` 单独记录本桥 `before_provider_request` 的单调时钟耗时，包含 Fast 偏好
+查询的等待；它不包含此前 Pi 构造上下文及此后网络传输，也不改变既有 `elapsedMs` 起点。
+
+升级官方 Pi 后可运行 `node scripts/pi-healthcheck.mjs --binary /absolute/path/to/pi`。
+省略参数使用仓库分发二进制；脚本不安装或替换运行时、不读取正式任务或配置、不启用扩展。
+它启动临时 PiAgent 与本机协议端点，逐项检查 Fast、窗口与恢复、线上请求档位投影、图片与
+历史、MCP 批准／拒绝、多服务、结构化结果、SSE 和分页。JSON 报告输出到 stdout，测试输出
+到 stderr；任一必需项失败、跳过或未发现都返回非零。它验证接线兼容性，不证明在线模型
+质量、上游服务可用性或真实网络速度。
 
 Gateway 的档位成员仍以供应商实报为准。目录支持 low 时，Cindy 能传 low；不支持时，
 启动选择按现有默认档收敛，不能把直接调用 SDK 的 low→medium 结果冒充完整宿主路径。
@@ -190,9 +200,10 @@ Claude Code、Codex 共用同一模型比例，各自适配原生参数。env:`C
 分支；确认后续只有空的错误响应及模型／推理档位变更记录，再通过原生树导航回到输入之前重发。
 导航只回退消息，保留当前模型和推理档位；重新打开任务时仍由 Cindy 已保存的选择恢复设置。
 回归见 `session-tree.test.ts` 与 `pi-provider-routing.test.ts`。旧失败分支完整保留，
-不按文本去重，也不重放已有工具结果。若该轮明确遇到 HTTP 413，用户这次重试在重发前
+不按文本去重，也不重放已有工具结果。若该轮明确遇到请求体超限拒收（HTTP 413，或网关以 400
+`BadRequest.TooLarge` / `Exceeded limit on max bytes to request body` 拒收），用户这次重试在重发前
 调用一次原生 compact；压缩失败（包括 RPC 超时、普通错误或无法压缩）时，沿用原请求的
-413 证据，本机锁存下一次发送前换窗，并在持久错误中记录专用恢复失败标记，关闭运行时后
+字节超限证据，本机锁存下一次发送前换窗，并在持久错误中记录专用恢复失败标记，关闭运行时后
 仍能恢复。用户取消不触发换窗，SSH 保留错误。
 这一恢复由用户重试触发，不改变正常轮次由 Pi 自己管理自动压缩的约定。
 

@@ -69,3 +69,14 @@ it('offers group chats in the same menu and reports a new group only after its f
   await act(async () => h.groupSheet.onClosed());
   expect(h.groupCreated).toHaveBeenCalledExactlyOnceWith(hosts[1], 'group');
 });
+
+// Unit: an invitation needs no computer; preserve creation actions and fence old account callbacks.
+it('offers invitation independently of creation targets without inventing a disabled create action', async () => {
+  const invite = vi.fn(); root = createRoot(document.createElement('div'));
+  const show = () => act(async () => root!.render(createElement(Create, { targets: [], onCreated: h.created, onInvite: invite })));
+  await show();
+  expect(h.menu.actions).toHaveLength(1); expect(h.menu.actions[0].subactions[0].id).toBe('invite');
+  const old = h.menu.onAction;
+  await act(async () => h.menu.onAction('invite')); expect(invite).toHaveBeenCalledTimes(1);
+  h.account++; await show(); await act(async () => old('invite')); expect(invite).toHaveBeenCalledTimes(1);
+});

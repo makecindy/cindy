@@ -54,6 +54,7 @@ import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { resetRemoteDataOwnerPushFence } from '@/lib/remoteDataOwnerPushFence';
 import { CCAgentIndexRedirect } from '@/features/cc-agent/CCAgentIndexRedirect';
 import { clearLastView, saveLastChatView } from '@/features/cc-agent/lib/lastViewStore';
+import { sharedTaskHostPeer } from '@cindy/device-link';
 
 afterEach(() => {
   cleanup();
@@ -106,8 +107,36 @@ function setupStartup() {
     onControlTargetChanged: listen, onRemotePush: listen, onResponsivenessChanged: listen,
   } } });
   saveLastChatView({ kind: 'session', sessionId: 'remote-A' });
-  return { cache, link, directory, stop: () => onStatus({ status: 'stopped' }) };
+  return { cache, link, directory, status: (status: string) => onStatus({ status }), stop: () => onStatus({ status: 'stopped' }) };
 }
+
+// PR #8182: the primary synchronizer owns same-account mirrors. A healthy
+// shared task has its own poller/connection and must retain its writable row
+// and lifecycle when only the selected primary relay is unavailable.
+it.each(['initial', 'connecting', 'stopped'] as const)('preserves shared-task mirrors when the primary relay is %s', async (transition) => {
+  const { cache, link, directory, status } = setupStartup();
+  renderHook(() => useDeviceLinkRemoteProjects());
+  const shared = sharedTaskHostPeer('shared-task', 'shared-host');
+  const row = (id: string) => ({ id, status: 'active', source: 'desktop' }) as import('@/lib/ccAgent.types').Session;
+  await act(async () => {
+    cache.resolve([]);
+    remoteProjectsStore.setDeviceSessions('peer', 'Peer', [row('ordinary')]);
+    remoteProjectsStore.setDeviceSessions(shared, 'Shared', [row('shared')]);
+  });
+  const sharedRow = remoteProjectsStore.getDeviceSessions(shared)[0];
+  const epoch = remoteProjectsStore.getDeviceLifecycleEpoch(shared);
+  await act(async () => {
+    link.resolve({ linkStatus: transition === 'initial' ? 'connecting' : 'online' });
+    directory.resolve({ devices: [{ deviceId: 'peer', name: 'Peer', online: false, remoteControlEnabled: true, isSelf: false }] });
+    if (transition !== 'initial') status(transition);
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(remoteProjectsStore.getDeviceSessions(shared)).toEqual([sharedRow]);
+  expect(remoteProjectsStore.getDeviceSessions(shared)[0].deviceLinkConnectionStatus).toBe('connected');
+  expect(remoteProjectsStore.getDeviceLifecycleEpoch(shared)).toBe(epoch);
+  if (transition === 'stopped') expect(remoteProjectsStore.hasDevice('peer')).toBe(false);
+  else expect(remoteProjectsStore.getDeviceSessions('peer')[0].deviceLinkConnectionStatus).toBe('disconnected');
+});
 
 it('waits for late cold cache after device discovery settles', async () => {
   const { cache, link, directory } = setupStartup();

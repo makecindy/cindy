@@ -8,6 +8,7 @@ import ts from 'typescript';
 import { PluginTaskError, readPluginTaskPlanReceipt } from '../pluginTaskService.js';
 import type { PluginTaskRoute } from '../../../shared/pluginTasks.js';
 import { resolvePluginWorkerDirectory } from '../pluginWorkerDirectory.js';
+import { pluginTaskRouteAttempts, pluginTaskSelectionIsOpen } from '../pluginTaskDefaultRoute.js';
 
 import { createSessionExecutionResolver } from '../sessionExecutionSelection';
 import { createGhostProductionCallbacks } from '../../cindy-brain/__tests__/ghostProductionCallbacksFixture.js';
@@ -193,6 +194,10 @@ it.each(['provider', 'receipt', 'directory', 'creator'])('keeps default-route co
         },
       }),
       routeUnavailable: () => { throw Error('unavailable'); },
+      // These configurations name a complete route, so the auxiliary-chain default never applies.
+      pluginTaskSelectionIsOpen, pluginTaskRouteAttempts,
+      getEffectiveAuxiliaryModelRefs: () => [], getEffectiveAuxiliaryModelChainSnapshot: () => '',
+      auxiliaryChainSessionCandidates: () => [],
       resolvePluginWorkerDirectory: async () => { if (phase === 'directory') change(); return '/root'; },
       createPluginTaskSession: create, clampPluginTaskPermissionMode: (value: string) => value,
       getCurrentDbClientSnapshot: () => epoch, isPluginTaskAuthorized: () => true,

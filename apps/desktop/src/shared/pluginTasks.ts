@@ -101,6 +101,8 @@ export type PluginTaskRequest = (
       hidden?: boolean;
     }
   | { type: 'tasks-request'; kind: 'setHidden'; taskId: string; hidden: boolean }
+  /** Archive this plugin's own idle task; the user can unarchive it from the task list or plugin page. */
+  | { type: 'tasks-request'; kind: 'archive'; taskId: string }
   | { type: 'tasks-request'; kind: 'list'; after?: string; limit?: number }
   | { type: 'tasks-request'; kind: 'get'; taskId: string }
   | { type: 'tasks-request'; kind: 'startTeam' | 'getTeam'; taskId: string }

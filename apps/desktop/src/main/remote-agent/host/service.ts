@@ -25,7 +25,8 @@ import { setRemoteAgentHandler } from '../../device-link/dispatch.js';
 import { getSelfDeviceId, remoteBackgroundInvoke } from '../../device-link/index.js';
 import { getProviderShareHostLoadedSnapshot, onProviderShareHostChanged, ownedProviderShareGuestAccess, providerShareGuestAccess, verifyProviderShareMemberGeneration } from '../../device-link/providerShareHost.js';
 import { applyProviderShareDelegation, clearProviderShareDelegations, delegatedProviderShareGuestAccess, delegatedProviderShareLeases, delegatedProviderShareModelAllowed, delegatedProviderShareReceiptAuthority, delegatedProviderShareSessionAllowed, delegatedProviderShareTaskAccess, invalidateProviderShareDelegation, revokeDelegatedProviderShareGuest } from '../../device-link/providerShareDelegatedAccess.js';
-import { checkProviderShareDelegation, grantProviderShareDelegation, providerShareOwnerKey, revokeProviderShareDelegation } from '../../device-link/providerShareApi.js';
+import { checkProviderShareDelegation, clearProviderShareDelegationChecks, grantProviderShareDelegation, providerShareOwnerKey, revokeProviderShareDelegation } from '../../device-link/providerShareApi.js';
+import { startProviderShareDelegationRechecks } from '../../device-link/providerShareDelegationChecks.js';
 import { remoteModelAccess } from '../../device-link/remoteModelAccess.js';
 import { handleProviderShareReshare, providerShareReshareAllows } from '../../device-link/providerShareReshare.js';
 import { createProviderGroupGuestRelay } from '../../provider-group/guestRelay.js';
@@ -83,6 +84,8 @@ export function hostedStartOptions(input: HostedStartInput): StartSessionOptions
     ...(options.makerMemoryScopeKey ? { makerMemoryScopeKey: options.makerMemoryScopeKey } : {}),
     // 记忆在对方电脑上：没有快照时也给空快照，本机不读自己的记忆库。
     ...(options.makerMemoryEnabled ? { makerMemoryIndexSnapshot: options.makerMemoryIndexSnapshot ?? '' } : {}),
+    // 插件同理在对方电脑上：Agent 用对方给的花名册快照(空串表示对方没有可用插件，也要原样传下去)。
+    ...(options.ghostRosterSnapshot !== undefined ? { ghostRosterSnapshot: options.ghostRosterSnapshot } : {}),
     ...(options.permissionMode ? { permissionMode: options.permissionMode as StartSessionOptions['permissionMode'] } : {}),
     ...(options.planMode !== undefined ? { planMode: options.planMode } : {}),
     ...(options.displayReasoning ? { displayReasoning: options.displayReasoning as StartSessionOptions['displayReasoning'] } : {}),
@@ -111,19 +114,25 @@ export function hostedStartOptions(input: HostedStartInput): StartSessionOptions
       ...(input.guest && input.guestProvider
         ? { guestProvider: { ...input.guestProvider, modelIds: [...input.guestProvider.modelIds] } }
         : {}),
+      ...(input.controllerManagedSkills
+        ? { controllerManagedSkills: { claudePluginRoots: [...input.controllerManagedSkills.claudePluginRoots] } }
+        : {}),
     },
     ...(input.onInvalidResumeSession ? { onInvalidResumeSession: input.onInvalidResumeSession } : {}),
   };
 }
 
 let host: RemoteAgentHost | null = null;
+// resetMaker can install a replacement while the previous host is still deleting
+// its shadow workspaces. Preserve that boundary across repeated resets.
+let hostDisposal: Promise<void> = Promise.resolve();
 let stopFastPolicySync: (() => void) | undefined;
 let stopDirectRouteWatch: (() => void) | undefined;
 let stopDirectModelWatch: (() => void) | undefined;
 let stopDirectGroupWatch: (() => void) | undefined;
 let stopDirectSettingsWatch: (() => void) | undefined;
 let directRouteSweep: ReturnType<typeof setInterval> | undefined;
-let delegationCheckTimer: ReturnType<typeof setInterval> | undefined;
+let stopDelegationChecks: (() => void) | undefined;
 
 /** M's per-task delegated lease takes precedence over any other task's lease. */
 function guestAccessForTask(controller: string, sessionId?: string) {
@@ -247,8 +256,14 @@ export function createProviderShareMemberPurger(options: {
   return purgeMemberControllers;
 }
 
-export function installRemoteAgentHost(options: { getMaker: () => Maker; userDataDir: string }): void {
+export function installRemoteAgentHost(options: {
+  getMaker: () => Maker;
+  userDataDir: string;
+  /** 这台自己启用中的 Cindy 托管 Skill(与本机任务同一来源)。 */
+  managedSkills?: () => Promise<Array<{ command: string; dir: string }>>;
+}): void {
   if (host) return;
+  const previousHostDisposal = hostDisposal;
   const usage = installProviderShareUsageStore(options.userDataDir);
   const isControllerAuthorized = (controller: string): boolean => {
     if (isProviderSharePeer(controller)) return providerShareGuestAccess(controller) !== null;
@@ -273,40 +288,17 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
     now: () => Date.now(),
     log,
   });
-  let checkingDelegations = false;
-  delegationCheckTimer = setInterval(() => {
-    if (checkingDelegations) return;
-    checkingDelegations = true;
-    const byPeer = new Map<string, ReturnType<typeof delegatedProviderShareLeases>>();
-    for (const item of delegatedProviderShareLeases()) {
-      const list = byPeer.get(item.peer) ?? [];
-      list.push(item);
-      byPeer.set(item.peer, list);
-    }
-    const groups = [...byPeer.values()];
-    let next = 0;
-    void Promise.all(Array.from({ length: Math.min(8, groups.length) }, async () => {
-      while (next < groups.length) {
-        const items = groups[next++];
-        const first = items[0];
-        const peer = parseProviderSharePeer(first.peer);
-        const deviceId = getSelfDeviceId();
-        if (peer?.role !== 'guest' || !deviceId) continue;
-        try {
-          const confirmed = await checkProviderShareDelegation({
-            shareId: peer.shareId, memberId: peer.memberId, guestDeviceId: peer.deviceId,
-            executorDeviceId: deviceId,
-          });
-          for (const item of items) if (!confirmed.active || confirmed.ownerDeviceId !== item.lease.ownerDeviceId) {
-            invalidateProviderShareDelegation(item.peer, item.sessionId, item.lease.nonce);
-          }
-        } catch {
-          // An unavailable server cannot extend a lease; its original deadline still applies.
-        }
-      }
-    })).finally(() => { checkingDelegations = false; });
-  }, 60_000);
-  (delegationCheckTimer as { unref?: () => void }).unref?.();
+  stopDelegationChecks = startProviderShareDelegationRechecks({
+    leases: delegatedProviderShareLeases,
+    async check(first) {
+      const peer = parseProviderSharePeer(first.peer);
+      const deviceId = getSelfDeviceId();
+      if (peer?.role !== 'guest' || !deviceId) throw new Error('Provider share executor is unavailable');
+      return checkProviderShareDelegation({ shareId: peer.shareId, memberId: peer.memberId,
+        guestDeviceId: peer.deviceId, executorDeviceId: deviceId }, first.lease.generation);
+    },
+    invalidate: item => invalidateProviderShareDelegation(item.peer, item.sessionId, item.lease.nonce),
+  });
   const directRoutes = new Map<string, {
     shareId: string; memberId: string; guestDeviceId: string; executorDeviceId: string;
     providerId: string; groupProviderId: string; memberKey: string; agentKind: string;
@@ -877,6 +869,7 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
         return false;
       }
     },
+    ...(options.managedSkills ? { managedSkills: options.managedSkills } : {}),
     startHosted: async (input) => {
       if (input.groupProviderId) await bindLocalHostedGroupFastPolicy(input.groupProviderId, input.hostSessionId);
       return options.getMaker().startHostedAgentSession(input.kind, {
@@ -908,7 +901,7 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
           return rule.models !== null || rule.providerModels !== null || !!(rule.memberBudget?.enabled && rule.memberBudget.rules.length);
         } catch { return true; }
       },
-      resolve: async (kind, model, providerId, controller, sessionId) => {
+      resolve: async (kind, model, providerId, controller, sessionId, context) => {
         const views = await getDesktopProviderService().listProviders({ allowSideEffects: false });
         const access = isProviderSharePeer(controller) ? guestAccessForTask(controller, sessionId) : null;
         const memberId = access?.memberId;
@@ -928,6 +921,7 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
             kind,
             model,
             delegated ? undefined : providerId,
+            context,
           );
         }
         return resolveSharedProviderId(views, allowed, kind, model, providerId);
@@ -1445,9 +1439,13 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
   });
   stopFastPolicySync = startGroupFastPolicySync();
   setRemoteAgentHandler({
-    handle: (controller, raw) => current.handle(controller, raw),
-    abortAll: () => {
-      void current.abortAll();
+    handle: async (controller, raw) => {
+      await previousHostDisposal;
+      if (host !== current) throw new Error('[REMOTE_AGENT_UNAVAILABLE] remote agent host has been replaced');
+      return current.handle(controller, raw);
+    },
+    abortAll: (reason) => {
+      void current.abortAll(reason);
     },
     abortControllers: (match) => current.abortControllers(match),
     revalidateModelAccess: () => current.revalidateModelAccess(),
@@ -1471,8 +1469,9 @@ export function resolveRemoteAgentHostClaudeSessionId(sdkSessionId: string): str
 
 /** 退出时结束全部远程 Agent 任务。 */
 export function disposeRemoteAgentHost(): void {
-  if (delegationCheckTimer) clearInterval(delegationCheckTimer);
-  delegationCheckTimer = undefined;
+  stopDelegationChecks?.();
+  stopDelegationChecks = undefined;
+  clearProviderShareDelegationChecks();
   if (directRouteSweep) clearInterval(directRouteSweep);
   directRouteSweep = undefined;
   stopDirectRouteWatch?.();
@@ -1486,7 +1485,7 @@ export function disposeRemoteAgentHost(): void {
   stopFastPolicySync?.();
   stopFastPolicySync = undefined;
   setRemoteAgentHandler(null);
-  host?.dispose();
+  if (host) hostDisposal = Promise.all([hostDisposal, host.dispose()]).then(() => undefined);
   host = null;
   clearProviderShareDelegations();
   void flushProviderShareUsage();

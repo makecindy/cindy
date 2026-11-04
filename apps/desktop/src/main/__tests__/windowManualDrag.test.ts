@@ -19,6 +19,7 @@ function makeWindow(x = 100, y = 100) {
     maximized: false,
     fullScreen: false,
     position: [x, y] as [number, number],
+    size: [813, 607] as [number, number],
     isDestroyed() {
       return this.destroyed;
     },
@@ -33,6 +34,13 @@ function makeWindow(x = 100, y = 100) {
     },
     setPosition(nx: number, ny: number) {
       this.position = [nx, ny];
+    },
+    getBounds() {
+      return { x: this.position[0], y: this.position[1], width: this.size[0], height: this.size[1] };
+    },
+    setBounds(bounds: { x: number; y: number; width: number; height: number }) {
+      this.position = [bounds.x, bounds.y];
+      this.size = [bounds.width, bounds.height];
     },
   };
   return win satisfies DragWindowLike & Record<string, unknown>;
@@ -67,6 +75,87 @@ describe('WindowManualDragController', () => {
     cursor.x = 900;
     vi.advanceTimersByTime(64);
     expect(win.position).toEqual([300, 200]);
+  });
+
+  // #7860: the old position-only path repeatedly round-trips the native size at
+  // fractional DPI. Existing fakes only tracked position, hiding that feedback.
+  // Unit tier: model that native rounding and assert the public drag preserves size.
+  it('preserves the starting size through movement and stationary polling at fractional DPI', () => {
+    const { screen, cursor } = makeScreen();
+    const win = makeWindow();
+    const updates = vi.spyOn(win, 'setBounds');
+    win.setPosition = (x, y) => {
+      win.position = [x, y];
+      win.size = [win.size[0] + 1, win.size[1] + 1];
+    };
+    const controller = new WindowManualDragController(screen, 16);
+
+    controller.start(win);
+    cursor.x += 40;
+    cursor.y += 20;
+    vi.advanceTimersByTime(16);
+    expect(win.position).toEqual([140, 120]);
+    expect(win.size).toEqual([813, 607]);
+    vi.advanceTimersByTime(160);
+    expect(win.size).toEqual([813, 607]);
+    expect(updates).toHaveBeenCalledTimes(1);
+    controller.stop();
+
+    // A new gesture must capture a user's intervening resize, not an old size.
+    win.size = [901, 701];
+    controller.start(win);
+    cursor.x += 20;
+    vi.advanceTimersByTime(32);
+    expect(win.position).toEqual([160, 120]);
+    expect(win.size).toEqual([901, 701]);
+    controller.stop();
+  });
+
+  // #7860: native physical movement must never re-enter the DIP resize path.
+  it('delegates native movement until stop or native failure, without writing DIP bounds', () => {
+    const { screen } = makeScreen();
+    const win = makeWindow();
+    const bounds = vi.spyOn(win, 'setBounds');
+    const follow = vi.fn(() => true);
+    const controller = new WindowManualDragController(screen, 16, 1000, () => follow);
+    controller.start(win);
+    vi.advanceTimersByTime(16);
+    expect(follow).toHaveBeenCalledTimes(1);
+    controller.stop();
+    vi.advanceTimersByTime(32);
+    expect(follow).toHaveBeenCalledTimes(1);
+
+    controller.start(win);
+    follow.mockReturnValue(false);
+    vi.advanceTimersByTime(16);
+    expect(controller.isDragging()).toBe(false);
+    expect(bounds).not.toHaveBeenCalled();
+  });
+
+  // #7898 review: a native offset read can throw during a Windows desktop
+  // switch. Unit tier: start must still move with fixed bounds and stop normally;
+  // prior native coverage only exercised a follower returning false after start.
+  it('falls back to fixed bounds when native drag initialization throws', () => {
+    const { screen, cursor } = makeScreen();
+    const win = makeWindow();
+    const error = new Error('GetCursorPos failed');
+    const report = vi.fn();
+    const controller = new WindowManualDragController(screen, 16, 1000, () => {
+      throw error;
+    }, report);
+
+    expect(() => controller.start(win)).not.toThrow();
+    expect(report).toHaveBeenCalledWith(error);
+    cursor.x += 40;
+    cursor.y += 20;
+    vi.advanceTimersByTime(16);
+    expect(win.position).toEqual([140, 120]);
+    expect(win.size).toEqual([813, 607]);
+    controller.stop(win);
+    cursor.x += 40;
+    vi.advanceTimersByTime(16);
+    expect(win.position).toEqual([140, 120]);
+    expect(controller.isDragging()).toBe(false);
   });
 
   it('clamps window y to the display workArea top (menu bar)', () => {

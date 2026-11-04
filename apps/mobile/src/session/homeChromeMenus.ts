@@ -134,7 +134,7 @@ export function buildHomeScopePullDownActions(
 
 /**
  * 显示菜单与桌面侧栏 SidebarFilterPopover 同结构:一级是「设置项 + 当前值」行,具体选项
- * 在子菜单里;三段依次是 分组 / 任务排序 / 项目排序,任务状态 / 筛选,显示 / 任务信息。
+ * 在子菜单里;三段依次是 分组 / 任务排序 / 项目排序,任务状态 / 筛选,显示 / 任务信息 / 伙伴。
  * 当前值放在一级行的 subtitle:Cindy 自绘菜单(安卓 / 旧 iOS 包)显示在标题下方;系统
  * UIMenu 的子菜单不显示 subtitle,选中项在子菜单内打勾。
  */
@@ -150,6 +150,7 @@ export interface HomeDisplayMenuState {
   lastActivityFilter: HomeLastActivityFilter;
   viewMode: HomeListViewMode;
   taskInfoFields: readonly HomeTaskInfoField[];
+  showCollapsedTeammateAvatars?: boolean;
 }
 
 export type HomeDisplayPatch = Partial<Omit<HomeDisplayMenuState, "taskInfoFields">> & {
@@ -332,6 +333,9 @@ export function buildHomeDisplayPullDownActions(input: {
       submenu("taskInfo", t(`${MENU}.taskInfoHeading`), homeTaskInfoSummary(state.taskInfoFields, t), "info.circle",
         HOME_TASK_INFO_FIELDS.map((field) =>
           checkable(`taskInfo.${field}`, t(`${MENU}.taskInfo.${field}`), state.taskInfoFields.includes(field), true))),
+      submenu("teammates", t("devices.companions.title"), "", "person.2", [
+        checkable("teammates.showCollapsedAvatars", t(`${MENU}.showCollapsedTeammateAvatars`), state.showCollapsedTeammateAvatars !== false),
+      ]),
     ]),
   ];
 }
@@ -341,6 +345,7 @@ export function homeDisplayActionPatch(
   id: string,
   state: HomeDisplayMenuState,
 ): HomeDisplayPatch | null {
+  if (id === "teammates.showCollapsedAvatars") return { showCollapsedTeammateAvatars: !(state.showCollapsedTeammateAvatars ?? true) };
   if (id === "group.project") return { groupByProject: !state.groupByProject };
   if (id === "group.dialogue") return { groupDialogue: !state.groupDialogue };
   if (id === "filter.reset") return { lastActivityFilter: "all", projectFilter: "all", teammateFilter: "all", vendorFilter: "all" };

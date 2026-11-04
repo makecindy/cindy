@@ -93,6 +93,7 @@ import { HomeGlassMenuPanel, HomeMenuScrim } from '@/session/HomeGlassMenuPanel'
 import { FilterReminderDot } from '@/components/FilterReminderDot';
 import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
 import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
+import { sharedStatusRowTrailingReserve } from '@/platform/windowGeometry';
 import { useBalancedTitle } from '@/platform/chrome/balancedTitle';
 import { HomeSearchBar } from '@/session/HomeSearchBar';
 import { HomeProjectMachineLabel } from '@/session/HomeProjectMachineLabel';
@@ -246,7 +247,7 @@ import {
   type HomeViewPreferencePatch,
   type HomeViewPreferences,
 } from '@/session/homeViewPreferenceStore';
-import { homeNavigationOwner } from '@/session/useHomeMode';
+import { homeNavigationOwner, useHomeMode } from '@/session/useHomeMode';
 import {
   getCachedHomeListSnapshot,
   scheduleHomeListSnapshotPersist,
@@ -486,6 +487,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const residentList = useResidentHomeList(embedded);
   // Captured here: Android draws the list above the route, outside its roster and navigation context.
   const teammatesSectionContext = useHomeTeammatesSectionContext();
+  const { showCollapsedTeammateAvatars, setShowCollapsedTeammateAvatars } = useHomeMode();
   // Bumped by a manual home refresh so the teammate section also re-reads its cloud companions.
   const [teammatesRefreshKey, setTeammatesRefreshKey] = useState(0);
   const activeHomeSession = useContext(ActiveHomeSession);
@@ -2971,13 +2973,14 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     lastActivityFilter,
     projectFilter,
     teammateFilter: effectiveTeammateFilter,
+    showCollapsedTeammateAvatars,
     projectOrder: displayedProjectOrder,
     sortBy,
     statusFilter,
     taskInfoFields,
     vendorFilter,
     viewMode,
-  }), [displayedProjectOrder, groupByProject, groupDialogue, lastActivityFilter, projectFilter, effectiveTeammateFilter, sortBy, statusFilter, taskInfoFields, vendorFilter, viewMode]);
+  }), [showCollapsedTeammateAvatars, displayedProjectOrder, groupByProject, groupDialogue, lastActivityFilter, projectFilter, effectiveTeammateFilter, sortBy, statusFilter, taskInfoFields, vendorFilter, viewMode]);
   // 在看已归档任务时,顶栏「⋯」带提醒点(iOS 系统顶栏 / 自绘按钮两条路径共用这一个判据),
   // 同时把状态写进无障碍名称,读屏用户不用打开菜单也知道列表不是平常的进行中任务。
   const archivedReminder = statusFilter === 'archived';
@@ -3003,8 +3006,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   );
   const handleDisplayAction = useCallback((id: string) => {
     const patch = homeDisplayActionPatch(id, displayMenuState);
-    if (patch) applyDisplayView(patch);
-  }, [applyDisplayView, displayMenuState]);
+    if (!patch) return;
+    if (patch.showCollapsedTeammateAvatars !== undefined) {
+      void setShowCollapsedTeammateAvatars(patch.showCollapsedTeammateAvatars);
+    } else applyDisplayView(patch);
+  }, [applyDisplayView, displayMenuState, setShowCollapsedTeammateAvatars]);
   // iOS 系统顶栏的菜单项是顶栏选项的一部分,任何变化都会重建顶栏并关掉展开中的菜单。
   // 菜单内容按结构比较、回调走 ref 保持同一引用:后台同步刷新任务列表时,菜单没实质变化
   // 就不重建顶栏;只有用户自己的勾选会更新它。
@@ -3028,6 +3034,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const nativeHomeHeader = !embedded && usesNativeStackHeader();
   const homeGeometry = useAdaptiveWindow();
   const keepMenuTopLeft = nativeHomeHeader && homeGeometry.barEdge !== 'none';
+  const homeStatusRowReserve = sharedStatusRowTrailingReserve(homeGeometry);
   const nativeHeaderHeight = useOptionalHeaderHeight();
   const chromeHeight = nativeHomeHeader
     ? nativeHeaderHeight + (headerHeight ?? 0)
@@ -3289,6 +3296,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       {nativeHomeHeader && active ? (
         <HomeNativeStackHeader
           keepMenuTopLeft={keepMenuTopLeft}
+          statusRowReserve={homeStatusRowReserve}
           syncing={quietSyncing}
           displayA11y={displayA11y}
           displayActions={stableDisplayActions}
@@ -3395,6 +3403,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
             filterA11y={searchFilterA11y}
             filterActions={searchFilterMenu.filterActions}
             filterActive={indexedSearch.activeFilterCount > 0}
+            searching={indexedSearch.status === 'searching'}
             onChangeQuery={indexedSearch.setQuery}
             onFilterAction={searchFilterMenu.onFilterAction}
             onOpenFilter={() => setSearchFilterOpen(true)}

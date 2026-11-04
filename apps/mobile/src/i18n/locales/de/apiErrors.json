@@ -1,0 +1,6 @@
+{
+  "requestTimeout": "Die Anfrage hat zu lange gedauert. Versuch es später erneut.",
+  "networkUnavailable": "Keine Netzwerkverbindung. Prüfe deine Verbindung und versuch es erneut.{{webHint}}",
+  "networkUnavailableWebHint": " Die Webvorschau wird möglicherweise durch die CORS-Richtlinie des Browsers blockiert. Teste sie mit Expo Go oder einem Simulator.",
+  "requestFailed": "Die Anfrage wurde nicht abgeschlossen. Versuch es gleich erneut."
+}

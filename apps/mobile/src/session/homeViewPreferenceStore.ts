@@ -257,8 +257,10 @@ export interface LastTeammateIdentity {
 export interface HomeNavigationPreferences {
   /** Preselects the computer when creating another teammate; launch never reopens it. */
   lastTeammate?: LastTeammateIdentity;
-  /** The task home's teammate section: rows (false/absent) or the avatar strip (true). */
+  /** The task home's teammate section: expanded rows or collapsed header. */
   teammatesCollapsed?: boolean;
+  /** Explicit account override; absent defaults to showing the collapsed avatar strip. */
+  showCollapsedTeammateAvatars?: boolean;
 }
 const NAVIGATION_PREFIX = 'cindy.mobile.home.navigation.v1.';
 
@@ -271,6 +273,7 @@ export function normalizeHomeNavigationPreferences(value: unknown): HomeNavigati
     typeof last[field] === 'string' && last[field].trim().length > 0 && last[field].length <= 256);
   // The retired tasks/teammates `mode` is dropped here, so the next write clears it.
   return {
+    ...(typeof record.showCollapsedTeammateAvatars === 'boolean' ? { showCollapsedTeammateAvatars: record.showCollapsedTeammateAvatars } : {}),
     ...(typeof record.teammatesCollapsed === 'boolean' ? { teammatesCollapsed: record.teammatesCollapsed } : {}),
     ...(validLast ? { lastTeammate: {
       deviceId: last!.deviceId as string,
@@ -291,7 +294,7 @@ export async function readHomeNavigationPreferences(owner: string): Promise<Home
 
 export function saveHomeNavigationPreferences(
   owner: string,
-  patch: { lastTeammate?: LastTeammateIdentity | null; teammatesCollapsed?: boolean },
+  patch: { lastTeammate?: LastTeammateIdentity | null; teammatesCollapsed?: boolean; showCollapsedTeammateAvatars?: boolean },
 ): Promise<void> {
   if (!owner) return Promise.resolve();
   // Share the existing serialized writer; each operation captures its own owner.

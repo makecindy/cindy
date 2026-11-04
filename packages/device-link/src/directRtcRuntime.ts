@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
 import { MAX_FRAME_BYTES } from './protocol.js';
-import type { DirectRuntime, DirectRuntimeEvents, DirectRuntimeSession } from './directNegotiation.js';
+import type { DirectRuntime, DirectRuntimeEvents, DirectRuntimeSession, DirectRuntimeCloseReason } from './directNegotiation.js';
 
 /** Data-only WebRTC, shared by Electron and the isolated Mobile WebView. No STUN/TURN:
  * host candidates try the LAN, and the existing authenticated relay is the fallback.
@@ -16,7 +16,7 @@ export function createDirectRtcRuntime(): DirectRuntime {
     let bufferTimer: ReturnType<typeof setTimeout> | undefined;
     const encoder = new TextEncoder();
     const decoder = new TextDecoder('utf-8', { fatal: true });
-    const close = () => {
+    const close = (reason: DirectRuntimeCloseReason = 'channel-closed') => {
       if (closed) return;
       closed = true;
       clearTimeout(receiveTimer);
@@ -24,7 +24,7 @@ export function createDirectRtcRuntime(): DirectRuntime {
       parts = [];
       dc?.close();
       pc.close();
-      events.closed();
+      events.closed(reason);
     };
     const scheduleBufferReport = () => {
       if (!closed && dc && dc.bufferedAmount > 0 && !bufferTimer) {
@@ -47,8 +47,8 @@ export function createDirectRtcRuntime(): DirectRuntime {
       // Always report the final zero, including messages smaller than a low-water mark.
       dc.bufferedAmountLowThreshold = 0;
       dc.onopen = () => { if (!closed) events.open(); };
-      dc.onclose = close;
-      dc.onerror = close;
+      dc.onclose = () => close();
+      dc.onerror = () => close('network-failed');
       dc.onbufferedamountlow = () => {
         clearTimeout(bufferTimer);
         bufferTimer = undefined;
@@ -75,7 +75,9 @@ export function createDirectRtcRuntime(): DirectRuntime {
     };
     pc.ondatachannel = ({ channel }) => bind(channel);
     pc.onconnectionstatechange = () => {
-      if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) close();
+      if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+        close('network-failed');
+      } else if (pc.connectionState === 'closed') close();
     };
     const gather = async (description: RTCSessionDescriptionInit): Promise<string> => {
       await pc.setLocalDescription(description);
@@ -117,7 +119,7 @@ export function createDirectRtcRuntime(): DirectRuntime {
         } catch (error) { close(); throw error; }
       },
       get bufferedAmount() { return dc?.bufferedAmount ?? 0; },
-      close,
+      close: () => close(),
     };
   } };
 }

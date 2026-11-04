@@ -500,6 +500,7 @@ describe('dispatchLocalInvoke', () => {
 import {
   wireInboundDispatch,
   setControllersChangedListener,
+  setOrdinaryPeerLinkAcceptedListener,
   setRemoteInvokeBusyChangedListener,
   setSessionsSubscribedListener,
   setControllerDisplayName,
@@ -509,6 +510,7 @@ import {
   getUpdateRelaunchControllers,
   hasInFlightRemoteInvokes,
   dropAllControllers,
+  setRemoteAgentHandler,
   pushSessionActivityToController,
 } from '../device-link/dispatch';
 import {
@@ -575,6 +577,18 @@ function makeFakeClient(initialStatus: 'stopped' | 'connecting' | 'online' = 'on
 }
 
 describe('被控端控制链路生命周期', () => {
+  // Restart recovery must not turn the provider owner's explicit disconnect into
+  // an automatic reconnect. Exercise the production dropAll entry for each cause.
+  it.each(['user', 'toggle-off', 'shutdown'] as const)('passes the teardown intent to the Agent host: %s', reason => {
+    const { client } = makeFakeClient();
+    const abortAll = vi.fn();
+    setRemoteAgentHandler({ handle: vi.fn(), abortAll });
+    try {
+      dropAllControllers(client, reason);
+      expect(abortAll).toHaveBeenCalledExactlyOnceWith(reason === 'shutdown' ? 'app-quit' : 'navigation');
+    } finally { setRemoteAgentHandler(null); }
+  });
+
   beforeEach(() => {
     setControllersChangedListener(null);
     // 清掉可能残留的 controllers:dropAll 需要 client,改用重置 listener 后逐个 close
@@ -587,9 +601,15 @@ describe('被控端控制链路生命周期', () => {
     const { client, calls, feed } = makeFakeClient();
     wireInboundDispatch(client);
 
+    // #6572: inbound subscription recovery must observe a successfully sent
+    // accept, never merely receipt of an unverified link-open.
+    const onAccepted = vi.fn(() => expect(calls.linkAccept).toHaveLength(1));
+    setOrdinaryPeerLinkAcceptedListener(onAccepted);
+
     feed({ v: 1, kind: 'link-open', id: 'r1', src: 'ctrl-a', payload: { controllerName: 'MacBook', protocolVersion: 1, appVersion: '1.0.0' } });
 
     expect(calls.linkAccept).toHaveLength(1);
+    expect(onAccepted).toHaveBeenCalledExactlyOnceWith('ctrl-a');
     const ctrls = getActiveControllers();
     expect(ctrls).toEqual([{ deviceId: 'ctrl-a', name: 'MacBook' }]);
     expect(hasBroadcastTapListener()).toBe(true);
@@ -782,17 +802,23 @@ describe('被控端控制链路生命周期', () => {
     expect(getActiveControllers()).toEqual([{ deviceId, name: '12345678' }]);
   });
 
-  it('link-open(开关关)→ 不 accept、不记录', () => {
-    remoteControlEnabled = false;
+  it.each(['disabled', 'revoked'] as const)('link-open(%s)→ 不 accept、不触发订阅恢复', (reason) => {
+    remoteControlEnabled = reason !== 'disabled';
+    if (reason === 'revoked') revokedControllers = ['ctrl-b'];
+    const onAccepted = vi.fn();
+    setOrdinaryPeerLinkAcceptedListener(onAccepted);
     const { client, calls, feed } = makeFakeClient();
     wireInboundDispatch(client);
     feed({ v: 1, kind: 'link-open', id: 'r2', src: 'ctrl-b', payload: { controllerName: 'X', protocolVersion: 1, appVersion: '1' } });
     expect(calls.linkAccept).toHaveLength(0);
     expect(getActiveControllers()).toHaveLength(0);
+    expect(onAccepted).not.toHaveBeenCalled();
   });
 
   it('link-accept 发送失败时不提交幽灵控制端订阅', async () => {
     remoteControlEnabled = true;
+    const onAccepted = vi.fn();
+    setOrdinaryPeerLinkAcceptedListener(onAccepted);
     const { client, feed } = makeFakeClient();
     const mutableClient = client as unknown as {
       sendLinkAccept: (dst: string, requestId: string) => void;
@@ -818,6 +844,7 @@ describe('被控端控制链路生命周期', () => {
 
     expect(getActiveControllers()).toEqual([]);
     expect(hasBroadcastTapListener()).toBe(false);
+    expect(onAccepted).not.toHaveBeenCalled();
   });
 
   it('弱网下 link-close 写 socket 失败也会完成本地 dropAll 清理', () => {
@@ -1293,7 +1320,7 @@ describe('被控端控制链路生命周期', () => {
 
   it('sessions:list fresh 请求不并入已有 listing 单飞', async () => {
     remoteControlEnabled = true;
-    let resolvers: Array<(value: unknown[]) => void> = [];
+    const resolvers: Array<(value: unknown[]) => void> = [];
     const handler = vi.fn(() => new Promise<unknown[]>((resolve) => {
       resolvers.push(resolve);
     }));

@@ -1,0 +1,13 @@
+{
+  "sharedTaskReadOnly": "Seul le propriétaire de la session peut interagir avec cette carte.",
+  "retry": "Recharger",
+  "loadFailed": "Impossible de charger l'application. Vérifiez la connexion et rechargez.",
+  "updateRequired": "Cet ordinateur ne prend pas encore en charge les MCP Apps. Mettez à jour Cindy sur cet ordinateur et réessayez.",
+  "appName": "MCP App",
+  "cardTitle": "{{title}} · $t(mcpApps.appName)",
+  "messageSource": "Envoyé par $t(mcpApps.appName) « {{name}} »",
+  "serverId": "ID du serveur MCP : {{id}}",
+  "exitFullscreen": "Quitter le plein écran",
+  "mobileUpdateRequired": "Mettez à jour Cindy sur ce téléphone pour ouvrir cette carte.",
+  "filesOnExecutionComputer": "Afficher le contenu du fichier sur l'ordinateur d'exécution"
+}

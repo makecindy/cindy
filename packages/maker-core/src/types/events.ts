@@ -216,6 +216,13 @@ export interface AgentEvent {
    */
   runtimeRecovery?: true;
   /**
+   * Host-only. Session fans this out after a listener-requested stream hold
+   * (`Session.holdEventStream`); the requesting host already persisted and
+   * published it. Translators never produce it, and it never crosses a
+   * renderer or device boundary.
+   */
+  hostProjection?: true;
+  /**
    * A complete extension notice, independent of model text assembly and turn
    * settlement. Hosts deliver it as its own durable message, never as a delta
    * or a full-text replacement for the currently streaming assistant reply.
@@ -517,6 +524,9 @@ export interface RewindCommitOptions {
    * (首条消息,或 /clear、上下文重建、切换引擎新开线程后的第一轮)。此时没有可作
    * fork 边界的 turn,rollback 不可用时 Codex 改为按当前配置新开一条空线程替换。
    * 只在没有 lastTurnId / forkAtTimestampMs 时生效。
+   *
+   * Claude:目标之前没有可续接的 assistant 时由宿主传入,只回滚文件、不设续接点;
+   * 宿主随后关闭会话并清掉原生会话 id,下次发送开全新原生会话。
    */
   rewindsToNativeThreadStart?: boolean;
 }

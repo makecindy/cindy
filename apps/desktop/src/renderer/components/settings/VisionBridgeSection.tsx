@@ -1,3 +1,4 @@
+import { useAppSettingsRevision } from '@/hooks/useAppSettingsRevision';
 /**
  * Settings -> Personalization 的视觉桥（Vision Bridge）设置。
  *
@@ -44,6 +45,7 @@ interface TargetRow {
 }
 
 export function VisionBridgeSection() {
+  const settingsRevision = useAppSettingsRevision('vision-bridge');
   const { t } = useTranslation();
   const { providers, loading: providersLoading } = useProviders();
 
@@ -89,7 +91,7 @@ export function VisionBridgeSection() {
     return () => {
       disposed = true;
     };
-  }, []);
+  }, [settingsRevision]);
 
   const persistPatch = useCallback(
     async (patch: Record<string, unknown>) => {
@@ -450,6 +452,7 @@ export function VisionBridgeSection() {
             </div>
             <div className="min-w-0 flex-1">
               <ModelSelector
+                localOnlyReason="vision-bridge-local-proxy"
                 providersOverride={visionProviders}
                 modelId={primary?.modelId ?? ''}
                 effort=""
@@ -504,6 +507,7 @@ export function VisionBridgeSection() {
             </div>
             <div className="min-w-0 flex-1">
               <ModelSelector
+                localOnlyReason="vision-bridge-local-proxy"
                 providersOverride={visionProviders}
                 modelId={fallback?.modelId ?? ''}
                 effort=""

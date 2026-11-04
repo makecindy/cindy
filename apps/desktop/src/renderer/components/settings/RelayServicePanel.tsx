@@ -2,8 +2,9 @@
  * 「远程连接 → 连接线路」:设备之间经 Cindy 官方中转,还是用户自己的中转
  * (部署到自己的服务器 / 这台电脑当中转 / 加入别的中转)。方案见 docs/self-hosted-relay-plan.md。
  *
- * 紧跟在「我的设备」下面直接展示:单选的线路列表(选中的那条就是正在用的)、服务器中转的管理,
- * 以及三步部署窗口(选择服务器 → 部署 → 添加设备)。
+ * 紧跟在「我的设备」下面直接展示:单选的线路列表(选中的那条就是正在用的)、服务器中转的管理
+ * (可以部署到多台服务器,每台一行),以及三步部署窗口(选择服务器 → 部署 → 完成)。
+ * 部署完成不切换线路,改用哪条由用户自己切换。
  *
  * 状态以 main 为准(`window.electronAPI.selfHostedRelay`):命令返回最新状态,另有 CHANGED 推送;
  * 连接问题(被移出中转)来自 device-link 链路,低频轮询兜底。
@@ -21,6 +22,7 @@ import {
   Info,
   Link2,
   Monitor,
+  Pencil,
   Plus,
   RefreshCw,
   Server,
@@ -42,12 +44,15 @@ import { cn } from '@/lib/utils';
 import {
   DEFAULT_RELAY_PORT,
   normalizeRelayAddress,
+  normalizeRelayName,
   RELAY_DEPLOY_STEPS,
+  RELAY_NAME_MAX_LENGTH,
   RELAY_UNINSTALL_STEPS,
   type SelfHostedRelayCommand,
   type SelfHostedRelayCommandResult,
   type SelfHostedRelayDeployJobView,
   type SelfHostedRelayDeploymentStatus,
+  type SelfHostedRelayDeploymentView,
   type SelfHostedRelayErrorCode,
   type SelfHostedRelayServerCheck,
   type SelfHostedRelayState,
@@ -296,26 +301,16 @@ function AddDevice({
   state,
   controller,
   bare = false,
-  autoCreate = false,
 }: {
   state: SelfHostedRelayState;
   controller: SelfHostedRelayController;
   /** 已放在有边界的区域里时不再画顶部分隔线。 */
   bare?: boolean;
-  /** 部署刚完成时直接生成加入链接,不用再点一次「添加设备」。 */
-  autoCreate?: boolean;
 }) {
   const { t } = useTranslation();
   const [qr, setQr] = useState<string | null>(null);
   const link = state.joinLink?.link ?? null;
   const k = 'settings.remoteControl.relay.add';
-  const autoCreated = useRef(false);
-
-  useEffect(() => {
-    if (!autoCreate || link || autoCreated.current) return;
-    autoCreated.current = true;
-    void controller.run({ type: 'create-join-link' });
-  }, [autoCreate, link, controller]);
 
   useEffect(() => {
     if (!link) {
@@ -515,7 +510,8 @@ function useSshHosts(enabled: boolean, refreshKey: unknown): SshHostOption[] | n
   return hosts;
 }
 
-type DeployTarget = { sshHostId: string; address: string; name: string };
+/** 部署表单的初始值;`relayId` 是继续或修改的那条部署记录。 */
+type DeployTarget = { sshHostId: string; address: string; name: string; relayId?: string };
 
 const DEPLOY = 'settings.remoteControl.relay.deploy';
 const SERVER = 'settings.remoteControl.relay.server';
@@ -638,12 +634,15 @@ function Actions({ start, children }: { start?: React.ReactNode; children?: Reac
   );
 }
 
-function stepLabel(t: (key: string, options?: Record<string, unknown>) => string, step: RelayDeployLogEntry['step'], cleanupServer: string) {
-  return t(`${DEPLOY}.steps.${step}`, { server: cleanupServer });
+function stepLabel(t: (key: string) => string, step: RelayDeployLogEntry['step']) {
+  return t(`${DEPLOY}.steps.${step}`);
 }
 
-/** 依次列出这次任务的步骤:进行中的一步下面写实时进展,失败的一步下面写原因,失败后不再列出没执行的步骤。 */
-function JobSteps({ job, cleanupServer }: { job: SelfHostedRelayDeployJobView; cleanupServer: string }) {
+/**
+ * 依次列出这次任务的步骤:进行中的一步下面写实时进展(liveDetail=false 时由调用方放在固定位置),
+ * 失败的一步下面写原因,失败后不再列出没执行的步骤。
+ */
+function JobSteps({ job, liveDetail = true }: { job: SelfHostedRelayDeployJobView; liveDetail?: boolean }) {
   const { t } = useTranslation();
   const steps = job.steps ?? (job.action === 'uninstall' ? RELAY_UNINSTALL_STEPS : RELAY_DEPLOY_STEPS);
   const found = steps.indexOf(job.step);
@@ -666,9 +665,9 @@ function JobSteps({ job, cleanupServer }: { job: SelfHostedRelayDeployJobView; c
                   (tone === 'progress' || tone === 'failed') && 'font-medium',
                 )}
               >
-                {stepLabel(t, step, cleanupServer)}
+                {stepLabel(t, step)}
               </span>
-              {tone === 'progress' && latest?.message && latest.step === step ? (
+              {liveDetail && tone === 'progress' && latest?.message && latest.step === step ? (
                 <p role="status" className="text-12 leading-[1.5] text-[var(--text-secondary)]">
                   {t(`${DEPLOY}.progress.${latest.message}`)}
                 </p>
@@ -682,7 +681,7 @@ function JobSteps({ job, cleanupServer }: { job: SelfHostedRelayDeployJobView; c
   );
 }
 
-function JobLog({ job, cleanupServer }: { job: SelfHostedRelayDeployJobView; cleanupServer: string }) {
+function JobLog({ job }: { job: SelfHostedRelayDeployJobView }) {
   const { t } = useTranslation();
   const logs = job.logs ?? [];
   if (logs.length === 0) return null;
@@ -695,7 +694,7 @@ function JobLog({ job, cleanupServer }: { job: SelfHostedRelayDeployJobView; cle
               {formatDuration(Math.max(0, Math.floor((entry.at - (job.startedAt ?? entry.at)) / 1_000)))}
             </span>
             <span className="min-w-0 break-words">
-              {entry.message ? t(`${DEPLOY}.progress.${entry.message}`) : stepLabel(t, entry.step, cleanupServer)}
+              {entry.message ? t(`${DEPLOY}.progress.${entry.message}`) : stepLabel(t, entry.step)}
             </span>
           </li>
         ))}
@@ -705,7 +704,7 @@ function JobLog({ job, cleanupServer }: { job: SelfHostedRelayDeployJobView; cle
 }
 
 /** 移除失败(服务器连不上、上面的中转不归这台电脑管)时的退路。 */
-function RemovalFallback({ controller }: { controller: SelfHostedRelayController }) {
+function RemovalFallback({ controller, relayId }: { controller: SelfHostedRelayController; relayId: string }) {
   const { t } = useTranslation();
   const confirm = useConfirm();
   return (
@@ -717,7 +716,7 @@ function RemovalFallback({ controller }: { controller: SelfHostedRelayController
           disabled={controller.busy}
           onClick={() => {
             void confirm(t(`${SERVER}.forgetTitle`), t(`${SERVER}.forgetDescription`), t(`${SERVER}.forget`)).then((ok) => {
-              if (ok) void controller.run({ type: 'forget-deployment' });
+              if (ok) void controller.run({ type: 'forget-deployment', relayId });
             });
           }}
         >
@@ -725,7 +724,7 @@ function RemovalFallback({ controller }: { controller: SelfHostedRelayController
         </Button>
       }
     >
-      <Button size="sm" disabled={controller.busy} onClick={() => void controller.run({ type: 'uninstall-deployment', removeData: true })}>
+      <Button size="sm" disabled={controller.busy} onClick={() => void controller.run({ type: 'uninstall-deployment', relayId, removeData: true })}>
         {t(`${DEPLOY}.retry`)}
       </Button>
     </Actions>
@@ -762,14 +761,14 @@ function useServerCheck(sshHostId: string) {
 }
 
 function ServerCheckLine({
+  idle,
   check,
   checking,
-  cleanupServer,
   onRecheck,
 }: {
+  idle: boolean;
   check: SelfHostedRelayServerCheck | null;
   checking: boolean;
-  cleanupServer: string | null;
   onRecheck: () => void;
 }) {
   const { t } = useTranslation();
@@ -777,8 +776,12 @@ function ServerCheckLine({
   let tone: LineTone = 'progress';
   let title = t(`${k}.checking`);
   let meta: string | null = null;
-  let body: React.ReactNode = null;
-  if (!checking && check && !check.ok) {
+  let body: React.ReactNode = <p className="text-12 leading-[1.6] text-[var(--text-tertiary)]">{t(`${k}.checkingHint`)}</p>;
+  if (idle) {
+    tone = 'pending';
+    title = t(`${k}.idle`);
+    body = null;
+  } else if (!checking && check && !check.ok) {
     tone = 'failed';
     title = t(`${k}.blocked`);
     body = <FailureReason error={check.error} detail={check.detail} />;
@@ -788,18 +791,19 @@ function ServerCheckLine({
     meta = check.system;
     const notes = [t(`${k}.${check.plan}`)];
     if (check.existing !== 'none') notes.push(t(`${k}.${check.existing}`));
-    if (cleanupServer) notes.push(t(`${k}.cleanup`, { server: cleanupServer }));
     body = <p className="text-12 leading-[1.6] text-[var(--text-secondary)]">{notes.join(' ')}</p>;
   }
   return (
     <div role="status" className="flex items-start gap-2">
       <LineIcon tone={tone} />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <p className="text-13 leading-5 text-[var(--text-primary)]">
+        <p className={cn('text-13 leading-5', idle ? 'text-[var(--text-tertiary)]' : 'text-[var(--text-primary)]')}>
           {title}
-          {meta ? <span className="ml-2 text-12 text-[var(--text-tertiary)]">{meta}</span> : null}
+          {/* 行高收紧:小一号的字放在同一行里不把这一行撑高,检查结果出来时下面的表单不动。 */}
+          {meta ? <span className="ml-2 text-12 leading-none text-[var(--text-tertiary)]">{meta}</span> : null}
         </p>
-        {body}
+        {/* 未选、检查中、检查通过都先占两行说明的高度,结果出来时下面的表单不被推动。 */}
+        <div className="min-h-[3.2em] text-12">{body}</div>
       </div>
       {tone === 'failed' ? (
         <Button variant="secondary" size="xs" compact onClick={onRecheck}>
@@ -827,14 +831,15 @@ const DIALOG = 'settings.remoteControl.relay.dialog';
 const MANAGE = 'settings.remoteControl.relay.manage';
 
 /**
- * 线路行右侧只放同样大小的图标,贴右对齐:切换在前,这条线路自己的操作(删除、设置)在后;
+ * 线路行右侧只放同样大小的图标,贴右对齐:切换在前,这条线路自己的操作(改名、删除、设置)在后;
  * 没有的不占位,只有一个图标时它就在最右边。正在用的线路用名字旁边的绿点表示,不进这一列。
  */
-function RouteSide({ switchAction, action }: { switchAction?: React.ReactNode; action?: React.ReactNode }) {
+function RouteSide({ switchAction, actions = [] }: { switchAction?: React.ReactNode; actions?: React.ReactNode[] }) {
   return (
     <>
-      {switchAction ? <span className="flex w-7 shrink-0 justify-center">{switchAction}</span> : null}
-      {action ? <span className="flex w-7 shrink-0 justify-center">{action}</span> : null}
+      {[switchAction, ...actions].map((item, index) =>
+        item ? <span key={index} className="flex w-7 shrink-0 justify-center">{item}</span> : null,
+      )}
     </>
   );
 }
@@ -902,6 +907,18 @@ function DeployProgressBar({ job }: { job: SelfHostedRelayDeployJobView }) {
   );
 }
 
+/** 当前这一步的实时进展:固定在进度条下面占一行,内容变了只换文字,不推动下面的步骤列表。 */
+function LiveProgress({ job }: { job: SelfHostedRelayDeployJobView }) {
+  const { t } = useTranslation();
+  const latest = job.logs?.at(-1);
+  const text = latest?.message && latest.step === job.step ? t(`${DEPLOY}.progress.${latest.message}`) : '';
+  return (
+    <p role="status" title={text || undefined} className="min-h-[1.5em] truncate text-12 leading-[1.5] text-[var(--text-secondary)]">
+      {text}
+    </p>
+  );
+}
+
 /** 第 1 步:选服务器后自动只读检查,检查通过才能开始。 */
 function DeployFormStep({
   state,
@@ -933,10 +950,6 @@ function DeployFormStep({
     if (selected && !addressTouched) setAddress(normalizeRelayAddress(selected.hostname) ?? '');
   }, [hosts, hostId, addressTouched]);
 
-  const deployment = state.deployment;
-  const cleanupServer = deployment && !deployment.relayVersion && deployment.sshHostId !== hostId
-    ? hostLabel(hosts, deployment.sshHostId)
-    : null;
   const normalized = normalizeRelayAddress(address);
   const ready = Boolean(!checking && check?.ok && check.sshHostId === hostId);
   // 服务器上的中转不归这台电脑:检查结果里已用警示写明后果,按钮也直接叫「清除并部署」。
@@ -956,7 +969,7 @@ function DeployFormStep({
 
   return (
     <>
-      <div className="flex flex-col gap-4 overflow-y-auto px-4 pb-4">
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-4">
         {hosts && hosts.length === 0 ? (
           <Hint>{t(`${DEPLOY}.noHosts`)}</Hint>
         ) : (
@@ -976,11 +989,9 @@ function DeployFormStep({
                   options={(hosts ?? []).map((host) => ({ value: host.id, label: hostOptionLabel(host) }))}
                 />
               </FieldRow>
-              {hostId ? (
-                <div className="rounded-lg border border-[var(--border-default)] px-3 py-2.5">
-                  <ServerCheckLine check={check} checking={checking} cleanupServer={cleanupServer} onRecheck={recheck} />
-                </div>
-              ) : null}
+              <div className="rounded-lg border border-[var(--border-default)] px-3 py-2.5">
+                <ServerCheckLine idle={!hostId} check={check} checking={checking} onRecheck={recheck} />
+              </div>
             </div>
             <FieldRow label={t(`${DEPLOY}.address`)} hint={<Hint>{t(`${DEPLOY}.addressHint`)}</Hint>}>
               <Input
@@ -1025,7 +1036,7 @@ function DeployFormStep({
 
 function DialogFooter({ start, children }: { start?: React.ReactNode; children?: React.ReactNode }) {
   return (
-    <div className="flex flex-wrap items-center gap-2 border-t border-[var(--border-default)] px-4 py-3">
+    <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-[var(--border-default)] px-4 py-3">
       {start}
       <div className="ml-auto flex flex-wrap justify-end gap-2">{children}</div>
     </div>
@@ -1033,8 +1044,9 @@ function DialogFooter({ start, children }: { start?: React.ReactNode; children?:
 }
 
 /**
- * 部署窗口:选择服务器 → 部署 → 添加设备。关掉窗口部署照样在后台继续,线路列表里那一行显示进度;
+ * 部署窗口:选择服务器 → 部署 → 完成。关掉窗口部署照样在后台继续,线路列表里那一行显示进度;
  * 失败时原因写在出错的那一步下面,可以重试、回到表单修改或放弃(清理服务器)。
+ * 部署完成不切换线路:完成页给「使用这条线路」,切换照常先确认。
  */
 function DeployDialog({
   open,
@@ -1043,6 +1055,9 @@ function DeployDialog({
   controller,
   hosts,
   initial,
+  startInForm,
+  openKey,
+  onUse,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -1050,32 +1065,53 @@ function DeployDialog({
   controller: SelfHostedRelayController;
   hosts: SshHostOption[] | null;
   initial: DeployTarget | null;
+  /** 打开时直接显示表单(新部署、继续某条记录),不显示上一次任务的进度。 */
+  startInForm: boolean;
+  /** 列表每次打开窗口都换一个值;窗口为确认框临时关闭再打开时不变,不会退回表单。 */
+  openKey: number;
+  /** 完成页的「使用这条线路」:由列表弹切换确认。 */
+  onUse: (relayId: string) => void;
 }) {
   const { t } = useTranslation();
   const confirm = useConfirm();
-  // undefined:跟着部署任务显示;DeployTarget / null:回到表单(null 为空表单)。
+  // undefined:跟着部署任务显示;DeployTarget / null:显示表单(null 为空表单)。
   const [editing, setEditing] = useState<DeployTarget | null | undefined>(undefined);
+  // 从任务的「修改设置」进来的表单,取消时回到任务;新开的表单取消就关窗口。
+  const [backToJob, setBackToJob] = useState(false);
   const job = state.deployJob?.action === 'deploy' ? state.deployJob : null;
   const elapsed = useElapsed(job);
   useEffect(() => {
-    if (open) setEditing(undefined);
-  }, [open]);
+    setEditing(startInForm ? initial : undefined);
+    setBackToJob(false);
+    // 只跟着列表的打开动作重置(initial / startInForm 与 openKey 同时更新)。
+  }, [openKey]);
 
   const view = editing !== undefined ? 'form' : job?.status === 'done' ? 'done' : job ? 'progress' : 'form';
-  const deployment = state.deployment;
-  const incomplete = Boolean(deployment && !deployment.relayVersion);
-  const target = job?.target ?? deployment;
+  // 这次窗口对应的部署记录:修改中的、任务的、或打开时指定继续的那一条。
+  const recordId = view === 'form' ? (editing ?? initial)?.relayId : job?.relayId;
+  const record = state.deployments.find((deployment) => deployment.relayId === recordId) ?? null;
+  const incomplete = Boolean(record && !record.relayVersion);
+  const target = job?.target ?? record;
   const close = () => onOpenChange(false);
   // 确认框与本窗口同层,先关窗口再确认,确认框才不会被盖住。
   const abandon = () => {
+    if (!record) return;
+    const relayId = record.relayId;
     close();
     void confirm(t(`${DEPLOY}.abandonTitle`), t(`${DEPLOY}.abandonDescription`), t(`${DEPLOY}.abandon`)).then((ok) => {
-      if (ok) void controller.run({ type: 'uninstall-deployment', removeData: true });
+      if (ok) void controller.run({ type: 'uninstall-deployment', relayId, removeData: true });
     });
   };
   const finish = () => {
     close();
     void controller.run({ type: 'dismiss-deploy-job' });
+  };
+  const done = view === 'done' && record?.relayVersion ? record : null;
+  const canUse = Boolean(done && !done.active);
+  const use = () => {
+    if (!done) return;
+    finish();
+    onUse(done.relayId);
   };
   const retry = async () => {
     if (!target) return;
@@ -1095,7 +1131,7 @@ function DeployDialog({
   const description =
     view === 'form'
       ? t(`${DEPLOY}.hint`)
-      : view === 'done'
+      : view === 'done' && canUse
         ? t(`${DIALOG}.doneHint`)
         : target
           ? `${hostLabel(hosts, target.sshHostId)} · ${target.baseUrl}`
@@ -1107,20 +1143,21 @@ function DeployDialog({
         <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
-          className="modal-panel fixed left-1/2 top-1/2 z-[10001] flex max-h-[88vh] w-[min(600px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col outline-none"
+          className="modal-panel fixed left-1/2 top-1/2 z-[10001] flex h-[min(560px,88vh)] w-[min(600px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col outline-none"
         >
-          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 pb-3 pt-4">
+          {/* 三步共用一个固定高度:内容在中间区域滚动,换步骤、步骤推进时窗口不变高也不重新居中。 */}
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 pb-3 pt-4">
             <Dialog.Title className="text-16 font-semibold text-[var(--confirm-title)]">{t(`${DEPLOY}.title`)}</Dialog.Title>
             <DialogSteps current={view === 'form' ? 0 : view === 'progress' ? 1 : 2} />
           </div>
           {controller.error ? (
-            <div className="px-4 pb-3">
+            <div className="shrink-0 px-4 pb-3">
               <CommandError error={controller.error} port={state.host.port} detail={controller.errorDetail} />
             </div>
           ) : null}
           {view === 'form' ? (
             <>
-              <Dialog.Description className="px-4 pb-4 text-12 leading-[1.5] text-[var(--text-tertiary)]">
+              <Dialog.Description className="shrink-0 px-4 pb-4 text-12 leading-[1.5] text-[var(--text-tertiary)]">
                 {description}
               </Dialog.Description>
               <DeployFormStep
@@ -1128,14 +1165,14 @@ function DeployDialog({
                 controller={controller}
                 hosts={hosts}
                 initial={editing !== undefined ? editing : initial}
-                onCancel={() => (editing !== undefined && job ? setEditing(undefined) : close())}
+                onCancel={() => (backToJob && job ? setEditing(undefined) : close())}
                 onAbandon={incomplete ? abandon : null}
                 onStarted={() => setEditing(undefined)}
               />
             </>
           ) : view === 'progress' && job ? (
             <>
-              <div className="flex flex-col gap-4 overflow-y-auto px-4 pb-4">
+              <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-4">
                 <div className="flex flex-col gap-2">
                   <div className="flex items-baseline justify-between gap-3">
                     <p className="min-w-0 truncate text-13 font-medium text-[var(--text-primary)]">
@@ -1150,10 +1187,15 @@ function DeployDialog({
                     ) : null}
                   </div>
                   <Dialog.Description className="truncate text-12 text-[var(--text-tertiary)]">{description}</Dialog.Description>
-                  {job.status === 'running' ? <DeployProgressBar job={job} /> : null}
+                  {job.status === 'running' ? (
+                    <>
+                      <DeployProgressBar job={job} />
+                      <LiveProgress job={job} />
+                    </>
+                  ) : null}
                 </div>
-                <JobSteps job={job} cleanupServer={deployment ? hostLabel(hosts, deployment.sshHostId) : ''} />
-                <JobLog job={job} cleanupServer={deployment ? hostLabel(hosts, deployment.sshHostId) : ''} />
+                <JobSteps job={job} liveDetail={false} />
+                <JobLog job={job} />
               </div>
               {job.status === 'running' ? (
                 <DialogFooter start={<span className="text-12 text-[var(--text-tertiary)]">{t(`${DIALOG}.backgroundHint`)}</span>}>
@@ -1164,7 +1206,7 @@ function DeployDialog({
               ) : (
                 <DialogFooter
                   start={
-                    deployment ? (
+                    record ? (
                       <Button variant="secondary" size="sm" disabled={controller.busy} onClick={abandon}>
                         {t(`${DEPLOY}.abandon`)}
                       </Button>
@@ -1179,7 +1221,11 @@ function DeployDialog({
                     variant="secondary"
                     size="sm"
                     disabled={controller.busy || !target}
-                    onClick={() => target && setEditing({ sshHostId: target.sshHostId, address: target.address, name: target.name })}
+                    onClick={() => {
+                      if (!target) return;
+                      setBackToJob(true);
+                      setEditing({ sshHostId: target.sshHostId, address: target.address, name: target.name, relayId: job.relayId });
+                    }}
                   >
                     {t(`${DEPLOY}.edit`)}
                   </Button>
@@ -1196,7 +1242,7 @@ function DeployDialog({
             </>
           ) : (
             <>
-              <div className="flex flex-col gap-4 overflow-y-auto px-4 pb-4">
+              <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-4">
                 <div className="flex items-center gap-3">
                   <span
                     aria-hidden
@@ -1206,21 +1252,37 @@ function DeployDialog({
                   </span>
                   <div className="flex min-w-0 flex-col gap-0.5">
                     <p className="truncate text-14 font-medium text-[var(--text-primary)]">
-                      {t(`${DIALOG}.doneTitle`, { name: target?.name ?? '' })}
+                      {t(`${DIALOG}.doneTitle`, { name: done?.name ?? target?.name ?? '' })}
                     </p>
                     <Dialog.Description className="text-12 leading-[1.5] text-[var(--text-secondary)]">
                       {description}
                     </Dialog.Description>
                   </div>
                 </div>
-                <div className="rounded-xl border border-[var(--border-default)] p-3">
-                  <AddDevice state={state} controller={controller} bare autoCreate />
-                </div>
+                {done ? (
+                  <dl className="flex flex-col divide-y divide-[var(--border-default)] rounded-lg border border-[var(--border-default)]">
+                    {[
+                      [t(`${DEPLOY}.server`), hostLabel(hosts, done.sshHostId)],
+                      [t(`${DEPLOY}.address`), done.baseUrl],
+                      [t(`${MANAGE}.version`), done.relayVersion],
+                    ].map(([label, value]) => (
+                      <div key={label} className="flex items-center justify-between gap-4 px-3 py-2.5 text-12">
+                        <dt className="shrink-0 text-[var(--text-tertiary)]">{label}</dt>
+                        <dd className="min-w-0 truncate font-mono text-[var(--text-primary)]">{value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                ) : null}
               </div>
-              <DialogFooter start={<span className="text-12 text-[var(--text-tertiary)]">{t(`${DIALOG}.doneLater`)}</span>}>
-                <Button variant="cta" size="sm" onClick={finish}>
+              <DialogFooter start={canUse ? <span className="text-12 text-[var(--text-tertiary)]">{t(`${DIALOG}.doneLater`)}</span> : null}>
+                <Button variant={canUse ? 'secondary' : 'cta'} size="sm" onClick={finish}>
                   {t(`${DIALOG}.finish`)}
                 </Button>
+                {canUse ? (
+                  <Button variant="cta" size="sm" disabled={controller.busy} onClick={use}>
+                    {t(`${DIALOG}.use`)}
+                  </Button>
+                ) : null}
               </DialogFooter>
             </>
           )}
@@ -1230,24 +1292,75 @@ function DeployDialog({
   );
 }
 
+/** 改服务器中转在本机显示的名字。 */
+function RenameForm({
+  deployment,
+  controller,
+  onClose,
+}: {
+  deployment: SelfHostedRelayDeploymentView;
+  controller: SelfHostedRelayController;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const [name, setName] = useState(deployment.name);
+  const normalized = normalizeRelayName(name);
+  const canSave = Boolean(normalized && normalized !== deployment.name) && !controller.busy;
+  const save = async () => {
+    if (!normalized) return;
+    if (await controller.run({ type: 'rename-deployment', relayId: deployment.relayId, name: normalized })) onClose();
+  };
+  return (
+    <form
+      className="flex min-h-0 flex-col"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (canSave) void save();
+      }}
+    >
+      <div className="flex flex-col gap-3 px-4 pb-4">
+        <Input
+          value={name}
+          onChange={setName}
+          size="sm"
+          maxLength={RELAY_NAME_MAX_LENGTH}
+          autoFocus
+          error={!normalized}
+          ariaLabel={t(`${DEPLOY}.name`)}
+        />
+        <CommandError error={controller.error} port={0} detail={controller.errorDetail} />
+      </div>
+      <DialogFooter>
+        <Button type="button" variant="secondary" size="sm" disabled={controller.busy} onClick={onClose}>
+          {t(`${ROUTE}.renameCancel`)}
+        </Button>
+        <Button type="submit" variant="cta" size="sm" disabled={!canSave}>
+          {t(`${ROUTE}.renameSave`)}
+        </Button>
+      </DialogFooter>
+    </form>
+  );
+}
+
 /**
  * 服务器中转的实时状态:进入页面时读一次,之后每分钟刷新;刷新时保留上一次结果,不闪空。
  * 查询本身失败(例如主进程还是旧版本)不等于服务器连不上:这时不下结论,不显示状态。
  */
-function useDeploymentStatus(enabled: boolean) {
+function useDeploymentStatus(relayId: string | null) {
   const [status, setStatus] = useState<SelfHostedRelayDeploymentStatus | null>(null);
   const [checking, setChecking] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  // 换了一个中转才清空;同一个中转定时刷新时保留上一次结果。
+  useEffect(() => {
+    setStatus(null);
+  }, [relayId]);
   useEffect(() => {
     const api = window.electronAPI?.selfHostedRelay;
-    if (!enabled || !api) {
-      setStatus(null);
-      return;
-    }
+    if (!relayId || !api) return;
     let active = true;
     setChecking(true);
     void api
-      .command({ type: 'deployment-status' })
+      .command({ type: 'deployment-status', relayId })
       .then((res) => {
         if (active && res.deploymentStatus) setStatus(res.deploymentStatus);
       })
@@ -1258,12 +1371,12 @@ function useDeploymentStatus(enabled: boolean) {
     return () => {
       active = false;
     };
-  }, [enabled, attempt]);
+  }, [relayId, attempt]);
   useEffect(() => {
-    if (!enabled) return;
+    if (!relayId) return;
     const timer = setInterval(() => setAttempt((value) => value + 1), DEPLOYMENT_STATUS_POLL_MS);
     return () => clearInterval(timer);
-  }, [enabled]);
+  }, [relayId]);
   return { status, checking, refresh: () => setAttempt((value) => value + 1) };
 }
 
@@ -1351,13 +1464,13 @@ function TaskPanel({ job, controller }: { job: SelfHostedRelayDeployJobView; con
         title={t(`${DEPLOY}.${running ? 'running' : 'failed'}.${job.action}`)}
         trailing={elapsed !== null ? t(`${DEPLOY}.elapsed`, { time: formatDuration(elapsed) }) : null}
       />
-      <JobSteps job={job} cleanupServer="" />
-      <JobLog job={job} cleanupServer="" />
-      {running ? null : job.action === 'uninstall' ? (
-        <RemovalFallback controller={controller} />
+      <JobSteps job={job} />
+      <JobLog job={job} />
+      {running || !job.relayId ? null : job.action === 'uninstall' ? (
+        <RemovalFallback controller={controller} relayId={job.relayId} />
       ) : (
         <Actions>
-          <Button size="sm" disabled={controller.busy} onClick={() => void controller.run({ type: 'upgrade-deployment' })}>
+          <Button size="sm" disabled={controller.busy} onClick={() => void controller.run({ type: 'upgrade-deployment', relayId: job.relayId! })}>
             {t(`${DEPLOY}.retry`)}
           </Button>
         </Actions>
@@ -1410,17 +1523,18 @@ function IconAction({
 /** 正在用的服务器中转的详情:状态用数字说话(设备、证书、版本),下面就是添加设备。 */
 function ServerDetails({
   state,
+  deployment,
   controller,
   status,
 }: {
   state: SelfHostedRelayState;
+  deployment: SelfHostedRelayDeploymentView;
   controller: SelfHostedRelayController;
   status: SelfHostedRelayDeploymentStatus | null;
 }) {
   const { t } = useTranslation();
-  const deployment = state.deployment!;
   const job = state.deployJob;
-  const task = job && job.action !== 'deploy' && job.status !== 'done' ? job : null;
+  const task = job && job.relayId === deployment.relayId && job.action !== 'deploy' && job.status !== 'done' ? job : null;
   const busy = controller.busy || job?.status === 'running';
   const expiresAt = status?.certificateExpiresAt ? Date.parse(status.certificateExpiresAt) : NaN;
   const daysLeft = Number.isFinite(expiresAt) ? Math.max(0, Math.ceil((expiresAt - Date.now()) / DAY_MS)) : null;
@@ -1459,7 +1573,7 @@ function ServerDetails({
                 compact
                 className="mt-1"
                 disabled={busy}
-                onClick={() => void controller.run({ type: 'upgrade-deployment' })}
+                onClick={() => void controller.run({ type: 'upgrade-deployment', relayId: deployment.relayId })}
               >
                 {t(`${SERVER}.upgrade`, { version: state.bundledRelayVersion ?? '' })}
               </Button>
@@ -1479,6 +1593,7 @@ function ServerDetails({
 /**
  * 「连接线路」:所有线路是一个单选列表,选中的那条就是正在用的。切换线路都先确认;
  * 正在用的那条在自己那一行里展开详情(服务器中转的设备数、证书、添加设备;这台电脑当中转的加入链接)。
+ * 部署到服务器的中转每台一行,各自可以切换、改名、移除;随时可以再部署到另一台服务器。
  */
 export function RelayServicePanel({ controller }: { controller: SelfHostedRelayController }) {
   const { t } = useTranslation();
@@ -1487,14 +1602,17 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
   const [form, setForm] = useState<'none' | 'host' | 'join'>('none');
   const [deployOpen, setDeployOpen] = useState(false);
   const [deployInitial, setDeployInitial] = useState<DeployTarget | null>(null);
+  const [deployInForm, setDeployInForm] = useState(false);
+  const [deployOpenKey, setDeployOpenKey] = useState(0);
+  const [renaming, setRenaming] = useState<SelfHostedRelayDeploymentView | null>(null);
   const { state, error } = controller;
   const hosts = useSshHosts(Boolean(state?.available), deployOpen);
   const k = 'settings.remoteControl.relay';
   const job = state?.deployJob ?? null;
   const previousJobStatus = useRef(job?.status);
-  const complete = Boolean(state?.deployment?.relayVersion);
-  const serverActive = Boolean(complete && state?.deployment?.active);
-  const deploymentStatus = useDeploymentStatus(Boolean(state?.available && serverActive));
+  // 详情只给正在用的那个服务器中转:没在用时设备数、证书等没有意义,也不去请求。
+  const activeServer = state?.deployments.find((deployment) => deployment.active && deployment.relayVersion) ?? null;
+  const deploymentStatus = useDeploymentStatus(state?.available ? activeServer?.relayId ?? null : null);
 
   // 移除完成后这一行随之消失,用一条提示说明结果。
   useEffect(() => {
@@ -1519,13 +1637,9 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
   }
 
   const relay = state.relay;
-  const deployment = state.deployment;
   const isHost = relay?.origin === 'host';
   const isServer = relay?.origin === 'server';
   const isMember = relay?.origin === 'join';
-  const deploying = job?.action === 'deploy' && job.status === 'running';
-  const deployFailed = job?.action === 'deploy' && job.status === 'failed';
-  const removing = job?.action === 'uninstall' && job.status === 'running';
   const confirmKey = isHost ? 'owner' : isServer ? 'server' : 'member';
   const busy = controller.busy || job?.status === 'running';
 
@@ -1541,9 +1655,8 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
       await controller.run({ type: 'use-official' });
     }
   };
-  // 切换到服务器中转前先确认,并说清楚原线路会怎样。
-  const switchToDeployment = async () => {
-    if (!deployment) return;
+  // 切换到服务器中转前先确认,并说清楚原线路会怎样(从另一个服务器中转切过来时原中转继续运行)。
+  const switchToDeployment = async (deployment: SelfHostedRelayDeploymentView) => {
     const ok = !confirmDialog || (await confirmDialog.confirm({
       title: t(`${ROUTE}.switchTitle`, { name: deployment.name }),
       description: t(
@@ -1555,17 +1668,24 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
     }));
     if (!ok) return;
     setForm('none');
-    await controller.run({ type: 'use-deployment' });
+    await controller.run({ type: 'use-deployment', relayId: deployment.relayId });
   };
-  const removeDeployment = () => {
+  const switchToDeploymentById = (relayId: string) => {
+    const deployment = state.deployments.find((item) => item.relayId === relayId);
+    if (deployment) void switchToDeployment(deployment);
+  };
+  const removeDeployment = (relayId: string) => {
     void confirm(t(`${SERVER}.removeTitle`), t(`${SERVER}.removeDescription`), t(`${SERVER}.remove`)).then((ok) => {
-      if (ok) void controller.run({ type: 'uninstall-deployment', removeData: true });
+      if (ok) void controller.run({ type: 'uninstall-deployment', relayId, removeData: true });
     });
   };
-  const openDeploy = (initial: DeployTarget | null) => {
+  /** `inForm`:直接显示表单(新部署、继续某条记录);否则跟着当前部署任务显示进度。 */
+  const openDeploy = (initial: DeployTarget | null, inForm: boolean) => {
     controller.clearError();
     setForm('none');
     setDeployInitial(initial);
+    setDeployInForm(inForm);
+    setDeployOpenKey((value) => value + 1);
     setDeployOpen(true);
   };
   const openForm = (next: 'host' | 'join') => {
@@ -1575,6 +1695,14 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
   const closeForm = () => {
     controller.clearError();
     setForm('none');
+  };
+  const openRename = (deployment: SelfHostedRelayDeploymentView) => {
+    controller.clearError();
+    setRenaming(deployment);
+  };
+  const closeRename = () => {
+    controller.clearError();
+    setRenaming(null);
   };
   // 等待主人同意时关窗口,就撤回这次加入申请。
   const closeJoin = () => {
@@ -1586,63 +1714,102 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
       <ArrowRightLeft aria-hidden size={14} />
     </IconAction>
   );
-
-  const serverTitle = job?.action === 'deploy' && job.target ? job.target.name : deployment?.name ?? '';
-  const serverHint = deploying ? (
+  const runningHint = (text: string) => (
     <span className="inline-flex items-center gap-1.5">
       <Spinner size={12} />
-      {t(`${ROUTE}.deployingStep`, { step: stepLabel(t, job?.step ?? 'check', deployment ? hostLabel(hosts, deployment.sshHostId) : '') })}
+      {text}
     </span>
-  ) : removing ? (
-    <span className="inline-flex items-center gap-1.5">
-      <Spinner size={12} />
-      {t(`${DEPLOY}.running.uninstall`)}
-    </span>
-  ) : !complete ? (
-    t(`${DEPLOY}.failed.deploy`)
-  ) : deployment ? (
-    <span className="flex min-w-0 flex-wrap items-center gap-x-1.5">
-      <span className="truncate">
-        {hostLabel(hosts, deployment.sshHostId)} · <span className="font-mono">{deployment.address}</span>
-      </span>
-      {serverActive && (deploymentStatus.status || deploymentStatus.checking) ? (
-        <>
-          <span aria-hidden>·</span>
-          <StatusLabel status={deploymentStatus.status} checking={deploymentStatus.checking} />
-          <IconAction label={t(`${MANAGE}.check`)} disabled={deploymentStatus.checking} onClick={deploymentStatus.refresh}>
-            <RefreshCw aria-hidden size={12} className={cn(deploymentStatus.checking && 'animate-spin motion-reduce:animate-none')} />
-          </IconAction>
-        </>
-      ) : null}
-    </span>
-  ) : null;
-  const serverSide = deploying ? (
-    <Button variant="secondary" size="sm" onClick={() => openDeploy(null)}>
-      {t(`${ROUTE}.viewProgress`)}
-    </Button>
-  ) : removing ? null : !complete ? (
-    <Button
-      variant="secondary"
-      size="sm"
-      disabled={busy}
-      onClick={() =>
-        openDeploy(deployFailed && job?.target ? null : deployment ? { sshHostId: deployment.sshHostId, address: deployment.address, name: deployment.name } : null)
-      }
-    >
-      {t(`${ROUTE}.resume`)}
-    </Button>
-  ) : (
-    <RouteSide
-      switchAction={deployment?.active ? null : switchAction(deployment?.name ?? '', () => void switchToDeployment())}
-      action={
-        <IconAction label={t(`${MANAGE}.remove`)} disabled={busy} onClick={removeDeployment}>
-          <Trash2 aria-hidden size={14} />
-        </IconAction>
-      }
-    />
   );
-  const serverTask = job && job.action !== 'deploy' && job.status === 'failed' ? job : null;
-  const showAddRow = (!deployment && !deploying && !deployFailed) || !relay;
+
+  const serverRow = (deployment: SelfHostedRelayDeploymentView) => {
+    const rowJob = job?.relayId === deployment.relayId ? job : null;
+    const running = rowJob?.status === 'running';
+    const deploying = running && rowJob.action === 'deploy';
+    const removing = running && rowJob.action === 'uninstall';
+    const complete = Boolean(deployment.relayVersion);
+    // 重新部署在改动服务器前失败时旧记录仍完整,也要保留查看原因和重试的入口。
+    const needsResume = !complete || (rowJob?.action === 'deploy' && rowJob.status === 'failed');
+    const inUse = Boolean(isServer && deployment.active);
+    const showStatus = inUse && complete && (deploymentStatus.status || deploymentStatus.checking);
+    const hint = deploying ? (
+      runningHint(t(`${ROUTE}.deployingStep`, { step: stepLabel(t, rowJob.step) }))
+    ) : removing ? (
+      runningHint(t(`${DEPLOY}.running.uninstall`))
+    ) : needsResume ? (
+      t(`${DEPLOY}.failed.deploy`)
+    ) : (
+      <span className="flex min-w-0 flex-wrap items-center gap-x-1.5">
+        <span className="truncate">
+          {hostLabel(hosts, deployment.sshHostId)} · <span className="font-mono">{deployment.address}</span>
+        </span>
+        {showStatus ? (
+          <>
+            <span aria-hidden>·</span>
+            <StatusLabel status={deploymentStatus.status} checking={deploymentStatus.checking} />
+            <IconAction label={t(`${MANAGE}.check`)} disabled={deploymentStatus.checking} onClick={deploymentStatus.refresh}>
+              <RefreshCw aria-hidden size={12} className={cn(deploymentStatus.checking && 'animate-spin motion-reduce:animate-none')} />
+            </IconAction>
+          </>
+        ) : null}
+      </span>
+    );
+    const side = deploying ? (
+      <Button variant="secondary" size="sm" onClick={() => openDeploy(null, false)}>
+        {t(`${ROUTE}.viewProgress`)}
+      </Button>
+    ) : removing ? null : needsResume ? (
+      <Button
+        variant="secondary"
+        size="sm"
+        disabled={busy}
+        onClick={() =>
+          // 这一条刚失败过:回到它的进度看原因、重试;否则用记录里的设置打开表单。
+          rowJob?.action === 'deploy'
+            ? openDeploy(null, false)
+            : openDeploy({ sshHostId: deployment.sshHostId, address: deployment.address, name: deployment.name, relayId: deployment.relayId }, true)
+        }
+      >
+        {t(`${ROUTE}.resume`)}
+      </Button>
+    ) : (
+      <RouteSide
+        switchAction={deployment.active ? null : switchAction(deployment.name, () => void switchToDeployment(deployment))}
+        actions={[
+          <IconAction key="rename" label={t(`${ROUTE}.rename`)} disabled={busy} onClick={() => openRename(deployment)}>
+            <Pencil aria-hidden size={14} />
+          </IconAction>,
+          <IconAction key="remove" label={t(`${MANAGE}.remove`)} disabled={busy} onClick={() => removeDeployment(deployment.relayId)}>
+            <Trash2 aria-hidden size={14} />
+          </IconAction>,
+        ]}
+      />
+    );
+    const failedTask = rowJob && rowJob.action !== 'deploy' && rowJob.status === 'failed' ? rowJob : null;
+    return (
+      <RouteRow
+        key={deployment.relayId}
+        selected={inUse}
+        icon={<Server size={15} />}
+        title={deploying && rowJob.target ? rowJob.target.name : deployment.name}
+        tag={t(`${ROUTE}.kindServer`)}
+        hint={hint}
+        side={side}
+      >
+        {inUse && complete && !removing ? (
+          <ServerDetails state={state} deployment={deployment} controller={controller} status={deploymentStatus.status} />
+        ) : failedTask ? (
+          <div className="rounded-lg border border-[var(--border-default)] px-3 py-3">
+            <TaskPanel job={failedTask} controller={controller} />
+          </div>
+        ) : null}
+      </RouteRow>
+    );
+  };
+  // 检查通过前停下或还在进行的部署还没有记录:用任务里的目标单独占一行。
+  const pendingDeploy =
+    job?.action === 'deploy' && job.status !== 'done' && !state.deployments.some((deployment) => deployment.relayId === job.relayId)
+      ? job
+      : null;
 
   return (
     <div className="flex flex-col gap-4">
@@ -1656,23 +1823,24 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
             hint={t(`${ROUTE}.officialHint`)}
             side={<RouteSide switchAction={relay ? switchAction(t(`${k}.summary.official`), () => void switchToOfficial()) : null} />}
           />
-          {deployment || deploying || deployFailed ? (
+          {state.deployments.map(serverRow)}
+          {pendingDeploy ? (
             <RouteRow
-              selected={Boolean(isServer && deployment?.active)}
+              selected={false}
               icon={<Server size={15} />}
-              title={serverTitle}
+              title={pendingDeploy.target?.name ?? ''}
               tag={t(`${ROUTE}.kindServer`)}
-              hint={serverHint}
-              side={serverSide}
-            >
-              {serverActive && !removing ? (
-                <ServerDetails state={state} controller={controller} status={deploymentStatus.status} />
-              ) : serverTask ? (
-                <div className="rounded-lg border border-[var(--border-default)] px-3 py-3">
-                  <TaskPanel job={serverTask} controller={controller} />
-                </div>
-              ) : null}
-            </RouteRow>
+              hint={
+                pendingDeploy.status === 'running'
+                  ? runningHint(t(`${ROUTE}.deployingStep`, { step: stepLabel(t, pendingDeploy.step) }))
+                  : t(`${DEPLOY}.failed.deploy`)
+              }
+              side={
+                <Button variant="secondary" size="sm" onClick={() => openDeploy(null, false)}>
+                  {t(pendingDeploy.status === 'running' ? `${ROUTE}.viewProgress` : `${ROUTE}.resume`)}
+                </Button>
+              }
+            />
           ) : null}
           <RouteRow
             selected={isHost}
@@ -1689,13 +1857,13 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
               <RouteSide
                 // 这台电脑当中转要先填端口等设置,切换就是打开设置窗口,在窗口里点「开启」。
                 switchAction={isHost ? null : switchAction(t(`${ROUTE}.hostTitle`), () => openForm('host'))}
-                action={
+                actions={[
                   isHost ? (
-                    <IconAction label={t(`${k}.actions.editHost`)} onClick={() => openForm('host')}>
+                    <IconAction key="settings" label={t(`${k}.actions.editHost`)} onClick={() => openForm('host')}>
                       <Settings2 aria-hidden size={14} />
                     </IconAction>
-                  ) : null
-                }
+                  ) : null,
+                ]}
               />
             }
           >
@@ -1715,31 +1883,27 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
               side={<RouteSide />}
             />
           ) : null}
-          {showAddRow ? (
-            <li className="px-4 py-2">
-              <div className="-mx-3 flex flex-wrap items-center gap-1">
-                {!deployment && !deploying && !deployFailed ? (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    tone="quiet"
-                    compact
-                    disabled={!state.bundledRelayVersion || busy}
-                    onClick={() => openDeploy(null)}
-                  >
-                    <Plus aria-hidden size={13} />
-                    {t(`${k}.actions.deploy`)}
-                  </Button>
-                ) : null}
-                {!relay ? (
-                  <Button variant="secondary" size="sm" tone="quiet" compact disabled={busy} onClick={() => openForm('join')}>
-                    <Link2 aria-hidden size={13} />
-                    {t(`${k}.actions.join`)}
-                  </Button>
-                ) : null}
-              </div>
-            </li>
-          ) : null}
+          <li className="px-4 py-2">
+            <div className="-mx-3 flex flex-wrap items-center gap-1">
+              <Button
+                variant="secondary"
+                size="sm"
+                tone="quiet"
+                compact
+                disabled={!state.bundledRelayVersion || busy}
+                onClick={() => openDeploy(null, true)}
+              >
+                <Plus aria-hidden size={13} />
+                {t(`${k}.actions.deploy`)}
+              </Button>
+              {!relay ? (
+                <Button variant="secondary" size="sm" tone="quiet" compact disabled={busy} onClick={() => openForm('join')}>
+                  <Link2 aria-hidden size={13} />
+                  {t(`${k}.actions.join`)}
+                </Button>
+              ) : null}
+            </div>
+          </li>
         </ul>
         {state.issue ? (
           <ErrorText>
@@ -1755,7 +1919,7 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
         </p>
       </div>
       {/* 窗口里的命令失败写在窗口里,这里只显示列表上的操作(切换、移除等)出的错。 */}
-      {!deployOpen && form === 'none' && error && error !== 'CANCELLED' ? (
+      {!deployOpen && form === 'none' && !renaming && error && error !== 'CANCELLED' ? (
         <CommandError error={error} port={state.host.port} detail={controller.errorDetail} />
       ) : null}
       <FormDialog
@@ -1774,6 +1938,9 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
       <FormDialog open={form === 'join'} onClose={closeJoin} title={t(`${k}.join.title`)} description={t(`${k}.join.hint`)}>
         <JoinForm state={state} controller={controller} onClose={closeJoin} />
       </FormDialog>
+      <FormDialog open={Boolean(renaming)} onClose={closeRename} title={t(`${ROUTE}.rename`)} description={t(`${ROUTE}.renameHint`)}>
+        {renaming ? <RenameForm key={renaming.relayId} deployment={renaming} controller={controller} onClose={closeRename} /> : null}
+      </FormDialog>
       <DeployDialog
         open={deployOpen}
         onOpenChange={setDeployOpen}
@@ -1781,6 +1948,9 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
         controller={controller}
         hosts={hosts}
         initial={deployInitial}
+        startInForm={deployInForm}
+        openKey={deployOpenKey}
+        onUse={switchToDeploymentById}
       />
     </div>
   );

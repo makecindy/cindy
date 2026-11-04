@@ -21,7 +21,7 @@ const COPY_NOTICE_DISMISS_MS = 2500;
 export function HtmlWebsiteBrowser({ visit, insets, chrome, onReturn }: {
   visit: WebsiteVisit;
   insets: BrowserInsets;
-  chrome: Pick<HtmlBrowserChromeProps, 'top' | 'bottom' | 'left' | 'right' | 'onClose'>;
+  chrome: Pick<HtmlBrowserChromeProps, 'top' | 'bottom' | 'left' | 'right' | 'standalone' | 'onClose'>;
   onReturn(): void;
 }) {
   const { t } = useTranslation();

@@ -1,3 +1,5 @@
+import { effectiveGatewayModelCost } from '../../shared/modelPriceQuote.js';
+import { projectCurrentModelSources } from './model-source-snapshots.js';
 import type { ModelDisplayPricing } from '@cindy/model-providers';
 import {
   projectProviderMediaModels,
@@ -43,6 +45,7 @@ import {
  */
 
 import { isDeepStrictEqual } from 'node:util';
+import { compatibilityProtocol } from '@cindy/model-compat/protocol';
 
 import {
   BUNDLED_CATALOG,
@@ -55,6 +58,7 @@ import {
   defaultEffortForCapabilities,
   findModelRegistryRoute,
   resolveModelNativeApi,
+  resolveRecommendedAgent,
   projectXaiApiImageModels,
   isOpenAiSubscriptionProvider,
   providerCatalogId,
@@ -530,41 +534,6 @@ export function isXdCodexAnthropicBridgeModel(modelId: string): boolean {
   // 剥到目录身份再查，否则投影特例不命中、误走 Responses 面。
   const normalized = stripCodexGatewayWirePrefix(modelId.replace(/\[1m\]$/, ''));
   return xdCodexAnthropicBridgeModelIds.has(normalized);
-}
-
-function nonNegativeFiniteOrUndefined(value: number | undefined): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
-function effectiveGatewayModelCost(model: XdGatewayModelInfo): CatalogModel['cost'] | undefined {
-  const input = model.inputCostPerToken;
-  const output = model.outputCostPerToken;
-  if (
-    typeof input !== 'number' ||
-    !Number.isFinite(input) ||
-    input < 0 ||
-    typeof output !== 'number' ||
-    !Number.isFinite(output) ||
-    output < 0
-  ) {
-    return undefined;
-  }
-  const discount =
-    typeof model.costDiscount === 'number' &&
-    Number.isFinite(model.costDiscount) &&
-    model.costDiscount > 0 &&
-    model.costDiscount <= 1
-      ? model.costDiscount
-      : 0;
-  const multiplier = 1 - discount;
-  const cacheRead = nonNegativeFiniteOrUndefined(model.cacheReadInputTokenCost);
-  const cacheWrite = nonNegativeFiniteOrUndefined(model.cacheCreationInputTokenCost);
-  return {
-    input: input * 1_000_000 * multiplier,
-    output: output * 1_000_000 * multiplier,
-    ...(cacheRead !== undefined ? { cacheRead: cacheRead * 1_000_000 * multiplier } : {}),
-    ...(cacheWrite !== undefined ? { cacheWrite: cacheWrite * 1_000_000 * multiplier } : {}),
-  };
 }
 
 /** base + custom + discovered augment 的合并缓存;null = 待重算(惰性)。 */
@@ -1565,8 +1534,9 @@ function computeMerged(): Catalog {
           efforts.length === 0
             ? null
             : ((clampEffortToSupported(intent, efforts) ?? null) as Effort | null);
-        // Canonical Registry API determines native versus compatibility defaults. Explicit
-        // per-harness policy remains an override; user visibility preferences are applied later.
+        // Cindy AI serves Messages and Responses for every model, so only a declared wire that
+        // needs Cindy's local conversion starts off. Explicit per-harness policy remains an
+        // override; user visibility preferences are applied later.
         const nativeApi = nativeApiForRoute('xd', gm.id);
         const piApi = agent === 'pi' ? resolveXdPiGatewayModelApi(gm) : undefined;
         const harnessApi =
@@ -1577,7 +1547,8 @@ function computeMerged(): Catalog {
               : piApi;
         const outboundApi = agent === 'pi' ? piApi : (ov.wireProtocol ?? harnessApi);
         const compatible = Boolean(
-          nativeApi && (harnessApi !== nativeApi || outboundApi !== nativeApi),
+          outboundApi && harnessApi &&
+            compatibilityProtocol(outboundApi) !== compatibilityProtocol(harnessApi),
         );
         const defaultEnabled = ov.defaultEnabled ?? (compatible ? false : gm.defaultEnabled);
         const cost = effectiveGatewayModelCost(gm);
@@ -1949,6 +1920,20 @@ function computeMerged(): Catalog {
         ? { ...model, supportsUltrafastMode: false } : model),
     ]),
   ) }));
+  // One recommendation per source and model from the accepted Registry, applied after every
+  // overlay so all views agree. It is advice only: membership and visibility are unchanged.
+  providers = providers.map(provider => {
+    const catalogId = providerCatalogId(provider);
+    return { ...provider, models: Object.fromEntries(Object.entries(provider.models).map(([agent, models]) => [
+      agent, models?.map(model => {
+        // Preset connections are keyed by their catalog preset, built-ins by their catalog identity.
+        const recommended = resolveRecommendedAgent(modelRegistry, model.catalogPresetId ?? catalogId, model.id);
+        if (recommended === model.recommendedAgent) return model;
+        if (!recommended) { const { recommendedAgent: _stale, ...rest } = model; return rest; }
+        return { ...model, recommendedAgent: recommended };
+      }),
+    ])) };
+  });
   return { ...b, modelRegistry, providers };
 }
 
@@ -1983,7 +1968,10 @@ export function getActiveLocalModelCatalog() {
  * (安全兜底,绝不抛)。消费方(路由 / 标题 / 能力派生 / 注册表)统一走这里。
  */
 export function getActiveCatalog(): Catalog {
-  if (!merged) merged = computeMerged();
+  if (!merged) {
+    const catalog = computeMerged();
+    merged = { ...catalog, providers: catalog.providers.map(projectCurrentModelSources) };
+  }
   return merged;
 }
 

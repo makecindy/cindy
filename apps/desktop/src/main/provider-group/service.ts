@@ -207,6 +207,7 @@ export interface ProviderGroupServiceDeps {
   directGuestSession?(sessionId: string): {
     ownerRoute: string;
     requestSwitch(): Promise<string | undefined>;
+    probeReconnect?(isCurrent?: () => boolean): Promise<'ok' | 'offline' | 'unavailable'>;
   } | null;
   /** 这个任务现在是否正在运行一轮。 */
   isTurnRunning(sessionId: string): boolean;
@@ -557,6 +558,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     options?: {
       /** 调用方刚现读过、确认连不上，不再读第一次。 */
       knownOffline?: boolean;
+      probe?: () => Promise<'ok' | 'offline' | 'unavailable'>;
       /**
        * 这次失败只是连接断了：现读第一次就已连得上，也算一次重试、留在原电脑继续(断线刚好已恢复)，
        * 不当成「问题不在连接」直接换。次数照算，那台反复断也只这 5 次。
@@ -574,7 +576,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     const current = () => isCurrent() && signal?.aborted !== true;
     const probe = async () =>
       (await untilAborted(
-        withTimeout(deps.directory.probe(agentDeviceId, providerId), PROVIDER_GROUP_PROBE_TIMEOUT_MS),
+        withTimeout(options?.probe ? options.probe() : deps.directory.probe(agentDeviceId, providerId), PROVIDER_GROUP_PROBE_TIMEOUT_MS),
         signal,
       )) ?? 'offline';
     if (!options?.knownOffline) {
@@ -1219,6 +1221,38 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     const lease = deps.leaseRecovery(sessionId, token);
     const { run, done } = trackRun(sessionId);
     try {
+      if (signals.reason === 'remote_agent_restarted') {
+        // A missing run after a supplier restart is not a reason to move the task.
+        // Reuse the existing recovery lease, bounded wait, cancellation and UI trail
+        // even for suppliers that do not belong to a group.
+        if (!(await deps.isFailoverEligible(sessionId))) return false;
+        const row = await deps.readSessionRow(sessionId);
+        if (!row?.agentDeviceId || !row.providerId || row.remoteHostId) return false;
+        if (!lease) return true;
+        await withSwitchRun(sessionId, signals, token, lease, run, hooks, async (isCurrent, handBack) => {
+          // Unlike a group relocation, this keeps the local Session alive. Its
+          // original candidate must still exist: explicit close cancels it even
+          // though the reusable recovery lease remains for a manual retry.
+          const direct = deps.directGuestSession?.(sessionId);
+          const restartIsCurrent = () => isCurrent() && deps.leaseRecovery(sessionId, token) === lease
+            && (!direct || deps.directGuestSession?.(sessionId) === direct);
+          // The stored share route identifies O, not the executor M. Reauthorize
+          // and probe the pinned M, without exposing its identity in the activity row.
+          const outcome = await awaitReturn(sessionId, row, row.agentDeviceId!, restartIsCurrent, (attempt) => {
+            hooks?.reconnecting?.(attempt, PROVIDER_GROUP_RECONNECT_MAX_ATTEMPTS);
+          }, { connectionLost: true, ...(direct?.probeReconnect ? { probe: () => direct.probeReconnect!(restartIsCurrent) } : {}) }).catch((error: unknown) => {
+            // A pending probe can reject after explicit close. Do not let the
+            // group's general fallback rearm a candidate that close cancelled.
+            if (!restartIsCurrent()) return 'stopped' as const;
+            throw error;
+          });
+          if (outcome === 'stopped') return;
+          if (outcome === 'back') {
+            await continueOnSameComputer(sessionId, '', lease, restartIsCurrent, hooks);
+          } else handBack();
+        });
+        return true;
+      }
       return await failoverRun(sessionId, signals, token, hooks, decision, lease, run);
     } finally {
       done();
@@ -1842,6 +1876,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     },
 
     mayHandleTurnError(sessionId, signals) {
+      if (signals.reason === 'remote_agent_restarted') return true;
       if (decideProviderGroupFailure(signals, 'run').action !== 'switch') return false;
       const binding = deps.readBinding(sessionId);
       if (!binding) return deps.guestSwitch?.hasOffer(sessionId) === true

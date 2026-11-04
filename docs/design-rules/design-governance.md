@@ -65,11 +65,11 @@ authoritative inventory」的现行表述一致（该句本身也限定在颜色
 ### 2.1 台账 schema（现行生成与人工维护合同）
 
 - 单一文件 `docs/design-rules/design-inventory.md`，不建立第二份迁移台账；
-- 机器事实与人工决策物理分开：
+- 登记事实与人工决策物理分开：
 
 ```text
 <!-- BEGIN GENERATED: surface-facts -->
-脚本生成：稳定 surface ID、平台、生产入口、可达组件、样式来源、Token/裸值统计
+脚本生成：稳定 surface ID、平台、标题、生产入口，以及 Desktop 路由 / Mobile 文件路由覆盖
 <!-- END GENERATED: surface-facts -->
 
 人工维护：按 surface ID 记录 owner、迁移状态（legacy / pilot / migrated）、
@@ -77,6 +77,17 @@ protected 标签、目标道路、下一动作
 ```
 
 - 生成器只允许重写 GENERATED 区块，不得覆盖人工状态；连续两次生成结果必须字节一致；
+- GENERATED 只放登记事实，它们只在新增、删除、改名 surface 或更换入口时变化。可达组件、
+  样式来源与 Token / 裸颜色 / 裸圆角统计**不入库**：它们随任意样式改动漂移，每个 surface
+  又只占一行，入库会让碰到同一 surface 的 PR 必然在同一行冲突，且只能重跑生成器解决；
+  这道“数字是否最新”的检查也不阻断欠账增加（拦新增裸色的是 `check:design-colors`）。
+  需要时运行 `pnpm design:inventory:report`，输出到 gitignore 的
+  `tmp/design-inventory-report.md`；要看某次提交时的数字，在该提交上重跑。不得把这些列
+  加回台账；
+- `pnpm check:design-inventory` 是阻断的登记检查：新增或删除的 Desktop 路由、`?view=`
+  分支、renderer 入口参数、Mobile 文件路由未登记，入口组件与 catalog 不符，styleRoot
+  路径失效，或 GENERATED 与 catalog 不一致时失败；人工区出现已不存在的 surface ID 时
+  报告孤儿行；
 - `protected` 是与迁移阶段**正交**的独立标签（一个 surface 可以同时 `legacy + protected`，
   也可以 `migrated + protected`），表示其视觉或交互合同被有意保护——例如 `DESIGN.md §10`
   的语义豁免色族、`§15` CINDY 皮肤族、外部主题导入保护 Token；
@@ -199,9 +210,10 @@ Primitive 与 Pattern 默认只绑定 semantic 角色。只有品牌表达、兼
 | 有意可见变化 | 标准组件落地、Pattern 迁移中的有意调整 | 附两级证据 + 设计师批准 |
 | CI 门禁调整 | 新增/升级检查、required 名单变动 | 先报告后阻断 + 管理员人工审核（§8） |
 
-每张 PR 必须写明独立回退方式；任一阶段结束时仓库必须不劣于开始状态。影子 Token 包
-在约定复查期内没有真实消费者时应删除，不长期并存（DS-3 弃坑复查日期 **2026-11-01**，
-详见 `packages/design-tokens/README.md`）。已登记缺口不得描述为已完成能力；
+每张 PR 必须写明独立回退方式；任一阶段结束时仓库必须不劣于开始状态。DS-3 的影子 Token
+包已由 DS-8 转为 Desktop 生产数值源（原 2026-11-01 弃坑复查日不再适用，**不得**据此删除该包）；
+此后新增的并行 Token 实现若在约定复查期内没有真实消费者才应删除，不长期并存，包的维护规则见
+`packages/design-tokens/README.md`。已登记缺口不得描述为已完成能力；
 缺口未修复前，对应验收矩阵格不得记为通过。
 
 ## 8. 治理接线纪律
@@ -213,6 +225,19 @@ Primitive 与 Pattern 默认只绑定 semantic 角色。只有品牌表达、兼
    （机制已在 mivo-canvas-plugin 仓 `design-governance-wiring.test.mjs` 验证）；
 3. 没有标准替代道路时不上阻断级门禁——先报告模式运行并用历史 PR 回放验证误报率，
    再升级阻断；门禁错误信息必须包含文件、行号与推荐改法。
+
+### 门禁加固（2026-10-30）
+
+审计发现「规则写了但没人守」，本批只调门禁，不改任何界面；存量违规不在本批修，按页面另作有意可见 PR。回放与反例见 [证据](../design-evidence/2026-10-30/design-gates-hardening.md)。
+
+| 改动 | 方式 | 存量处理 |
+| --- | --- | --- |
+| 颜色豁免表 | 43 条早已不生效的整文件记录移入 `scripts/hardcoded-color-exemptions.archive.json`（审计不读，只作回归样例）；窄豁免 `reviewDate` 过期即不再放行新增行，CI 输出列出过期条目 | 用户 2026-10-30 决定：Toast 四色、hljs 提亮、灵动岛素材色、实体键盘复刻色续期到 2027-04-30；composer 兜底色一条按原定「集成收口删」不续期 |
+| Desktop 规范外圆角 | 新增行在确认的样式语境（class 属性、`cn()` 等调用、纯类名字符串、样式对象、CSS 文件）里解析为 0 / 2 / 4 / 8 / 12px / pill 以外的值即 block；普通文案里的字样只 report（`rounded-md` 6px、`rounded-2xl` / `3xl`、`rounded-[6px]` 等任意值、字面 `border-radius` / `borderRadius`）；`var()` / `calc()` / % 仍 report；内容自身形状用 `design: intrinsic-geometry — <理由>` 注释声明后降为 report | 约 200 处存量是债，改到哪行修哪行，或按页面分批迁移 |
+| Mobile 五档字色与占位字 | `textColorDiscipline.test.ts`（登记在 mobile guard 层）两条全仓扫描：文字色只能是五档中性色或已登记语义色；`placeholderTextColor` 只能是 `textPlaceholder`（登录画布除外） | 存量名单按次数登记、只许减少（共 17 次，逐条清单见证据文档第 3 节）：光标蓝与 `cta` 文字、额度 / 未读计数 / 错误状态色 / 警告 / 就绪 / 录制状态色被当作文字色、共享任务危险文字借用确认钮红、ContextSheet 占位字三级色，待设计裁决或有意可见 PR |
+| PR 设计依据检查 | `apps/mobile/src/**/*.tsx` 计入 UI 路径；设计依据按现行规范确切文件名（含 `mobile-design-guide`）且区分大小写，任意 `*-design.md` 不再误过；补 workflow ↔ 检查名 ↔ 脚本一致性测试 | 无存量 |
+
+UI 路径与 design-inventory 共用唯一来源（§11）本批未做。行高 `leading-4/5/6` 是否随字号缩放尚未核实，未纳入。回退：撤回本批脚本、测试与豁免表改动即可，不影响 DS-7 / DS-10 既有接线；续期的 4 条豁免回退后恢复为过期前的放行行为。
 
 ### DS-10 报告准确性与维护（提交候选已验证）
 
@@ -238,7 +263,7 @@ DS-7 已合并 [#4215](https://github.com/makecindy/cindy/pull/4215)，最终 he
 | Desktop renderer 消费者新增 HEX 字面颜色、样式语境中的 RGB/HSL/OKLCH 等字面颜色函数与字面 fallback | block；准确新增行、列、原因、建议；已验证范围见证据 | 语义角色入口为 `themes/colors.ts`；不能机械替换为随意 Token。数值颜色函数要求位于样式属性、CSS 声明/函数或任意值语境——普通文案字符串里的颜色函数文本不算设计变化。不清洗已有存量 |
 | 颜色来源、测试 fixture、已正式批准的具体角色/值 | allowed，输出仍保留 | 来源由现有冻结测试保护；消费者只读窄 `matches`，旧 glob 记录不再整文件放行；窄规则可经 `object` 绑定获批对象路径（如 `VARIANT_MAP.info`、`MASCOT_PREVIEW_CONFIGS.cindy`），同文件其它对象/变体复用批准色即违规；原批准值/上下文和新违规均有反例 |
 | Mobile 及非上述生产消费者、素材/文档中的字面颜色 | report（是否违规仍需判断） | Mobile 既有 designTokenDiscipline / typographyTokenDiscipline 继续阻断；新增 diff 规则不冒充覆盖所有平台 |
-| 已注册可见层圆角、命中层/指示层、未知几何与任意间距 | report | 识别范围与未知分类分开；keycap 4px、已登记图元 2px，不能从 button 标签推出 pill；未决命中方案不自动批准 |
+| 已注册可见层圆角、命中层/指示层、未知几何与任意间距 | report（规范外圆角值自 2026-10-30 起 block，见上「门禁加固」） | 识别范围与未知分类分开；keycap 4px、已登记图元 2px，不能从 button 标签推出 pill；未决命中方案不自动批准 |
 | 广泛表单采用、焦点/secret/保存行为 | 采用建议 report，现有 DS-6 行为测试保留 | G2 独立试用未完成；不以类名检查取代行为测试，不将全部确认改 CTA |
 | Desktop/Mobile 入口台账新鲜度 | block | 入口发现不等于迁移；人工 owner/pilot/legacy/下一动作不由生成器重写 |
 
@@ -261,10 +286,11 @@ commit 模式不覆盖未提交内容。正式 CI 比较事件 base 与当前候
 文档中出现的任何统计数字（Token 数、主题数、违规数）都是**当日快照**，必须标注统计
 日期与可重复执行的生成命令，不作为长期人工维护数据。
 
-设计台账中标记为 `GENERATED` 的源码事实区块是例外：它随源码提交维护，不写生成日期，
-保证同一源码树跨日重新生成字节一致；保留 `pnpm design:inventory` 与
-`pnpm check:design-inventory` 命令，事实变化时间以 Git 提交历史为准。人工区与其他文档中的
-快照统计仍须标注日期和生成命令。
+设计台账中标记为 `GENERATED` 的登记区块是例外：它只含登记事实、不含统计，随源码提交维护，
+不写生成日期，保证同一源码树跨日重新生成字节一致；保留 `pnpm design:inventory` 与
+`pnpm check:design-inventory` 命令。逐 surface 的 Token / 裸值统计不入库（见 §2.1），
+由 `pnpm design:inventory:report` 按需生成；同一源码树重跑结果一致，某次提交的数字在该
+提交上重跑即得。人工区与其他文档中的快照统计仍须标注日期和生成命令。
 
 人工快照示例：
 
@@ -306,7 +332,7 @@ ls apps/desktop/src/renderer/themes/builtin/*.ts | wc -l
 
 **Permission 三项（主次、危险样式、外层与布局）的 Desktop 决定未关闭前，Desktop Permission 相关文件不得进入迁移 diff；前置批次是 DS-9。Mobile 对应决定留待独立阶段，不阻塞 Desktop。** 2026-09-11 用户明确本期只收尾桌面端，DS-9 包含聊天与桌面授权，DS-10 做保护、维护与最终验收。已批准但未实现的圆角不等于三项已关闭；待决只约束对应改动。正式决定须写适用范围、决定人、依据与实施阶段，回写 `DESIGN.md` 并追加 `design-decision-log.md`，不修改历史记录来伪造批准。
 
-DS-4/4b 尚有公开附件交接与完整设置页/部分状态证据缺口，DS-6 补齐并更新既有证据索引；已合入不能自动消除未验收项。影子层复查日仍为 **2026-11-01**，DS-8 负责结束影子阶段，到期按 §7 的真实消费者与维护情况处置，不为赶日期跳过兼容。
+DS-4/4b 尚有公开附件交接与完整设置页/部分状态证据缺口，DS-6 补齐并更新既有证据索引；已合入不能自动消除未验收项。影子阶段已由 DS-8（[#4268](https://github.com/makecindy/cindy/pull/4268)，merge `2e74488d21`）结束：Token 包转为生产数值源，原定 2026-11-01 的影子层复查日不再适用；遗留兼容项按 §7 的真实消费者与维护情况处置。
 
 ## 11. 存量门禁与文档处置表
 
@@ -354,7 +380,7 @@ DS-4/4b 尚有公开附件交接与完整设置页/部分状态证据缺口，DS
 | DS-8 | Desktop 颜色、排版、间距、圆角/尺寸与动效的 DTCG → 生成 → 生产链；旧主题兼容，结束影子阶段 | 零视觉接管 | 已合并 [#4268](https://github.com/makecindy/cindy/pull/4268)，merge `2e74488d21`；人工及平台证据缺口继续登记 |
 | DS-9 | 统一桌面聊天、代码与附件；核跨入口继承；按正式决定整理桌面授权呈现 | 有意可见 | [#4300](https://github.com/makecindy/cindy/pull/4300) 已于 09-12 合并，最终 head `023bde86ac` / merge `f1955f9354`；09-11 用户视觉验收通过，后续媒体 FocusScope 修复有测试与 CI 证据，实机复验另记；[实现与验收记录](../design-evidence/2026-09-11/ds9-desktop-core.md) |
 | DS-10 | 完善报告准确性、维护交接与 Desktop G1—G4 验收 | CI 门禁 | [#4427](https://github.com/makecindy/cindy/pull/4427) 已合入，main 提交 `2afecd89e5`（本轮核对）；复用已有接线与阻断，不新增 required；[本地结果与未验收项](../design-evidence/2026-09-13/ds10-desktop-guards.md)分别记录，不额外拆批 |
-| DS-11 | 收尾复核确认的字体、焦点、表单、通知、日期入口与规范冲突；Cindy 两模式逐项前后对照；N7 Mobile Sheet 减弱动效于 2026-09-16 按用户决定撤出，留待后续独立处理 | 有意可见 / 交互修复 | 正式 PR [#4455](https://github.com/makecindy/cindy/pull/4455)，历史实现已完成自审与单测；结合最新 main 的增量验证另记；[方案、结果与证据边界](../design-evidence/2026-09-15/ds11-review-fixes.md)；接续 DS-10，独立审查与用户最终视觉验收分别跟进 |
+| DS-11 | 收尾复核确认的字体、焦点、表单、通知、日期入口与规范冲突；Cindy 两模式逐项前后对照；N7 Mobile Sheet 减弱动效于 2026-09-16 按用户决定撤出，留待后续独立处理 | 有意可见 / 交互修复 | 已合并 [#4455](https://github.com/makecindy/cindy/pull/4455)，merge `5a5ad0eff2`（2026-09-16）；历史实现已完成自审与单测；结合最新 main 的增量验证另记；[方案、结果与证据边界](../design-evidence/2026-09-15/ds11-review-fixes.md)；接续 DS-10，独立审查与用户最终视觉验收分别跟进 |
 | Mobile 后续（未编号） | 接同一数值源，保留平台适配；独立裁决授权呈现，验证 iOS/Android | 按实际变化分类 | 新重构方案就绪后另行启动；沿用 fingerprint 冷更规则与既有兼容检查 |
 
 ### 完成条件：分别验收 G1—G4

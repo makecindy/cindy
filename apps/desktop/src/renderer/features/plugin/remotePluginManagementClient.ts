@@ -96,6 +96,7 @@ export function parsePluginManagementSnapshot(value: unknown): PluginManagementS
         new Set(data.projects.map((project) => project.id)).size !== data.projects.length)) ||
     (data.projectBrowse !== undefined && data.projectBrowse !== true) ||
     (data.localShares !== undefined && data.localShares !== true) ||
+    (data.uiCapabilityApproval !== undefined && data.uiCapabilityApproval !== true) ||
     !data.ghosts.every(
       (g) =>
         typeof g.instanceKey === 'string' &&

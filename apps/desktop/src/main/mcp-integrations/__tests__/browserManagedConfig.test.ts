@@ -38,6 +38,18 @@ describe('managed browser runtime config', () => {
     expect(buildManagedConfig(options).browser?.extraArgs).toContain('--restore-last-session');
   });
 
+  // The copied cookies belong to websites, not Chrome's OAuth identity. DICE
+  // must not reconcile them against an incomplete copied browser account list.
+  it.each([undefined, 'http://proxy.example.test:8080'])(
+    'disables browser-account reconciliation for copied logins with proxy=%s',
+    (proxyServer) => {
+      expect(buildManagedConfig({ useRealProfile: true, proxyServer }).browser?.extraArgs)
+        .toContain('--allow-browser-signin=false');
+      expect(buildManagedConfig({ proxyServer }).browser?.extraArgs)
+        .not.toContain('--allow-browser-signin=false');
+    },
+  );
+
   it.each([false, true])('allows private-network browsing with useRealProfile=%s', (useRealProfile) => {
     expect(buildManagedConfig({ useRealProfile }).browser?.ssrfPolicy).toEqual({
       dangerouslyAllowPrivateNetwork: true,

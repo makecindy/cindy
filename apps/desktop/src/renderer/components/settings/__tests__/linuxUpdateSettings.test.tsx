@@ -2,6 +2,7 @@
 
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { supportsBetaUpdateChannel } from '../../../../shared/updateChannelCapability';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -75,21 +76,24 @@ describe('Linux update settings', () => {
     expect(screen.queryByText('settings.about.linuxUpdateDescription')).toBeNull();
   });
 
-  it('shows the beta channel card on Linux x64', () => {
+  // Exercise the shared capability consumed by preload and the real settings
+  // section: ARM64 used to hide this row. In-memory renderer mocks; tier: unit.
+  it.each(['x64', 'arm64'])('shows the beta channel card on Linux %s', (arch) => {
+    window.electronAPI.supportsBetaUpdateChannel = supportsBetaUpdateChannel('linux', arch);
     render(<ExperimentalSection />);
 
     expect(screen.getByText('lsp-beta-cell')).toBeTruthy();
     expect(screen.getByText('beta-channel-cell')).toBeTruthy();
   });
 
-  it('hides the beta channel card on Linux arm64', () => {
+  it('hides the beta channel card on unsupported Linux architectures', () => {
     (
       window as unknown as {
         electronAPI: { platform: string; supportsBetaUpdateChannel?: boolean };
       }
     ).electronAPI = {
       platform: 'linux',
-      supportsBetaUpdateChannel: false,
+      supportsBetaUpdateChannel: supportsBetaUpdateChannel('linux', 'ia32'),
     };
     render(<ExperimentalSection />);
 

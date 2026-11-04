@@ -1,7 +1,7 @@
 /**
- * Provider import deep links.
+ * Provider imports from deep links and local JSON files.
  *
- * The external URL may contain credentials, so it is converted immediately into a
+ * External input may contain credentials, so it is converted immediately into a
  * short-lived Main-process draft. Only the opaque import id and redacted previews
  * are ever sent through Electron IPC to the Renderer.
  */
@@ -47,6 +47,9 @@ const MAX_API_KEY_LENGTH = 4 * 1024;
 const MAX_BUILTIN_API_KEY_LENGTH = 1024;
 const MAX_ENDPOINTS = 8;
 const MAX_MODELS_PER_ENDPOINT = 256;
+const MAX_FILE_MODELS_PER_ENDPOINT = 10_000;
+export const MAX_PROVIDER_IMPORT_FILE_BYTES = 4 * 1024 * 1024;
+const MAX_FILE_PROVIDERS = 50;
 const MAX_HEADERS_PER_ENDPOINT = 24;
 const MAX_TEXT_LENGTH = 2 * 1024;
 const MAX_DRAFTS = 128;
@@ -338,7 +341,7 @@ export function assertProviderImportModels(
   }
 }
 
-function parseEndpoint(value: unknown, index: number): ParsedEndpoint {
+function parseEndpoint(value: unknown, index: number, maxModels: number): ParsedEndpoint {
   const label = `endpoints[${index}]`;
   const endpoint = object(value, label);
   exactFields(
@@ -365,7 +368,7 @@ function parseEndpoint(value: unknown, index: number): ParsedEndpoint {
     if (new Set(targets).size !== targets.length) fail(`${label}.targets contains duplicates`);
   }
   const modelsRaw = endpoint.models ?? [];
-  if (!Array.isArray(modelsRaw) || modelsRaw.length > MAX_MODELS_PER_ENDPOINT) {
+  if (!Array.isArray(modelsRaw) || modelsRaw.length > maxModels) {
     fail(`${label}.models must be a bounded array`);
   }
   const models = modelsRaw.map((model, modelIndex) =>
@@ -529,7 +532,7 @@ function slugFromName(name: string): string {
   return slug || `provider-${randomUUID().slice(0, 8)}`;
 }
 
-function parsePayload(value: unknown): ProviderImportDraft {
+function parsePayload(value: unknown, maxModels: number): ProviderImportDraft {
   const input = object(value, 'data');
   if (input.kind === 'builtin') {
     exactFields(input, ['kind', 'provider', 'apiKey'], 'data');
@@ -600,7 +603,7 @@ function parsePayload(value: unknown): ProviderImportDraft {
   ) {
     fail('data.endpoints must be a bounded non-empty array');
   }
-  const endpoints = input.endpoints.map(parseEndpoint);
+  const endpoints = input.endpoints.map((endpoint, index) => parseEndpoint(endpoint, index, maxModels));
   if (
     auth?.method === 'none' &&
     endpoints.some(
@@ -689,13 +692,78 @@ function decodeBase64Url(value: string): string {
   if (canonical !== value.replace(/=+$/, '')) fail('data is not canonical base64url');
   const decoded = bytes.toString('utf8');
   if (Buffer.from(decoded, 'utf8').compare(bytes) !== 0) fail('data is not valid UTF-8');
-  if (decoded.length === 0 || decoded.length > MAX_JSON_LENGTH)
+  if (bytes.length === 0 || bytes.length > MAX_JSON_LENGTH)
     fail('decoded data exceeds the size limit');
   return decoded;
 }
 
 function pruneExpired(now = Date.now()): void {
   for (const [id, record] of drafts) if (record.expiresAt <= now) drafts.delete(id);
+}
+
+/** Both transports use the same validation, ownership, preview and confirmation lifecycle. */
+function createDraft(value: unknown, maxModels: number, scope?: ProviderImportScope): string {
+  const draft = parsePayload(value, maxModels);
+  if (draft.kind === 'custom' && draft.config.auth?.method === 'oauth') {
+    const discovery = draft.config.auth.oauth?.modelsDiscoveryUrl;
+    if (discovery && Object.values(draft.config.runtimes).some(
+      (runtime) => new URL(runtime!.baseUrl).origin !== new URL(discovery).origin,
+    )) fail('OAuth model discovery must share every runtime origin');
+  }
+  pruneExpired();
+  if (drafts.size >= MAX_DRAFTS) fail('too many pending provider imports');
+  const importId = randomUUID();
+  drafts.set(importId, {
+    draft, expiresAt: Date.now() + IMPORT_TTL_MS, confirming: false,
+    ...(scope ? { scope: { ...scope } } : {}),
+  });
+  return importId;
+}
+
+/** Main-only: the file contains a v1 payload, never a URL or renderer-provided path. */
+export function createProviderImportDraftFromFile(
+  bytes: Buffer,
+  scope: ProviderImportScope,
+): string {
+  return createDraft(decodeProviderImportFile(bytes), MAX_FILE_MODELS_PER_ENDPOINT, scope);
+}
+
+function decodeProviderImportFile(bytes: Buffer): unknown {
+  if (!bytes.length || bytes.length > MAX_PROVIDER_IMPORT_FILE_BYTES)
+    fail('provider import file exceeds the size limit');
+  const decoded = bytes.toString('utf8');
+  if (!Buffer.from(decoded, 'utf8').equals(bytes)) fail('provider import file is not UTF-8');
+  // UTF-8 BOMs are common in files saved by Windows editors.
+  return JSON.parse(decoded.replace(/^\uFEFF/, ''));
+}
+
+/** Validate the whole batch before exposing any drafts; rollback only in-memory drafts on failure. */
+export function createProviderImportDraftsFromFile(bytes: Buffer, scope: ProviderImportScope): string[] {
+  const input = object(decodeProviderImportFile(bytes), 'data');
+  if (!Object.hasOwn(input, 'providers')) return [createDraft(input, MAX_FILE_MODELS_PER_ENDPOINT, scope)];
+  exactFields(input, ['providers'], 'data');
+  if (!Array.isArray(input.providers) || !input.providers.length || input.providers.length > MAX_FILE_PROVIDERS)
+    fail('providers must contain 1 to 50 configurations');
+  const ids: string[] = [];
+  const destinations = new Set<string>();
+  try {
+    for (const value of input.providers) {
+      const id = createDraft(value, MAX_FILE_MODELS_PER_ENDPOINT, scope);
+      ids.push(id);
+      const draft = drafts.get(id)!.draft;
+      const source = object(value, 'provider');
+      const destination = draft.kind === 'builtin' ? `builtin:${draft.provider}`
+        : typeof source.id === 'string' ? `custom:${source.id.trim()}` : undefined;
+      if (destination) {
+        if (destinations.has(destination)) fail('duplicate provider identity in file');
+        destinations.add(destination);
+      }
+    }
+    return ids;
+  } catch (error) {
+    for (const id of ids) drafts.delete(id);
+    throw error;
+  }
 }
 
 /** Parse the exact `provider/import` path and create a short-lived secret-bearing draft. */
@@ -715,21 +783,7 @@ export function createProviderImportDraftFromRest(rest: string): string | null {
   const encoded = params.get('data');
   if (!encoded) return null;
   try {
-    const draft = parsePayload(JSON.parse(decodeBase64Url(encoded)));
-    if (draft.kind === 'custom' && draft.config.auth?.method === 'oauth') {
-      const discovery = draft.config.auth.oauth?.modelsDiscoveryUrl;
-      if (discovery) {
-        const runtimeUrls = Object.values(draft.config.runtimes).map((runtime) => runtime!.baseUrl);
-        if (runtimeUrls.some((baseUrl) => new URL(baseUrl).origin !== new URL(discovery).origin)) {
-          return null;
-        }
-      }
-    }
-    pruneExpired();
-    if (drafts.size >= MAX_DRAFTS) return null;
-    const importId = randomUUID();
-    drafts.set(importId, { draft, expiresAt: Date.now() + IMPORT_TTL_MS, confirming: false });
-    return importId;
+    return createDraft(JSON.parse(decodeBase64Url(encoded)), MAX_MODELS_PER_ENDPOINT);
   } catch {
     return null;
   }

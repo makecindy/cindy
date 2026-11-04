@@ -35,6 +35,19 @@ const CONTENT_SURFACE_CLASS = cn(
   'border-[var(--border-default)] dark:border-[var(--border-default)] shadow-sm',
 );
 
+/**
+ * 只把 Radix 的**关闭**请求回灌给行级受控开关。
+ *
+ * 打开仍由行的 `onPointerOver` / `onFocusCapture` 谓词决定:Radix Trigger 自己会在
+ * 指针进入时请求打开,写回调用方就绕过了行内动作按钮的排除判断,行级浮层会压在动作
+ * 的 Tip 上。关闭请求(点别处 / Esc / 窗口失活)必须回灌,否则受控 open 关不掉。
+ */
+function closeRequestOnly(onOpenChange?: (open: boolean) => void) {
+  return (open: boolean) => {
+    if (!open) onOpenChange?.(false);
+  };
+}
+
 export interface SessionTooltipProps {
   sessionId: string;
   /** 该 session 关联的 PR 引用列表;非空时浮层内容切到 PR 视图。 */
@@ -53,6 +66,8 @@ export interface SessionTooltipProps {
    * 未提供时保持各变体原有的 Radix 非受控行为。
    */
   controlledOpen?: boolean;
+  /** 受控开关的关闭请求(点别处 / Esc / 窗口失活),调用方据此复位。 */
+  onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }
 
@@ -62,25 +77,39 @@ export function SessionTooltip({
   sourceLabel,
   isAutomationSession,
   controlledOpen,
+  onOpenChange,
   children,
 }: SessionTooltipProps) {
   if (prRefs.length > 0) {
     return (
-      <PrTooltip sessionId={sessionId} prRefs={prRefs} controlledOpen={controlledOpen}>
+      <PrTooltip
+        sessionId={sessionId}
+        prRefs={prRefs}
+        controlledOpen={controlledOpen}
+        onOpenChange={onOpenChange}
+      >
         {children}
       </PrTooltip>
     );
   }
   if (isAutomationSession) {
     return (
-      <AutomationTooltip sessionId={sessionId} controlledOpen={controlledOpen}>
+      <AutomationTooltip
+        sessionId={sessionId}
+        controlledOpen={controlledOpen}
+        onOpenChange={onOpenChange}
+      >
         {children}
       </AutomationTooltip>
     );
   }
   if (sourceLabel) {
     return (
-      <SourceTooltip sourceLabel={sourceLabel} controlledOpen={controlledOpen}>
+      <SourceTooltip
+        sourceLabel={sourceLabel}
+        controlledOpen={controlledOpen}
+        onOpenChange={onOpenChange}
+      >
         {children}
       </SourceTooltip>
     );
@@ -92,11 +121,13 @@ function PrTooltip({
   sessionId,
   prRefs,
   controlledOpen,
+  onOpenChange,
   children,
 }: {
   sessionId: string;
   prRefs: readonly SessionPrRef[];
   controlledOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }) {
   const { statuses, fetchStatusesForSession } = usePrStatuses(sessionId);
@@ -113,6 +144,7 @@ function PrTooltip({
         open={controlledOpen}
         onOpenChange={(open) => {
           if (open && controlledOpen === undefined) fetchStatusesForSession(sessionId);
+          closeRequestOnly(onOpenChange)(open);
         }}
       >
         <Tooltip.Trigger
@@ -155,10 +187,12 @@ function PrTooltip({
 function AutomationTooltip({
   sessionId,
   controlledOpen,
+  onOpenChange,
   children,
 }: {
   sessionId: string;
   controlledOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }) {
   const { t } = useTranslation();
@@ -174,7 +208,7 @@ function AutomationTooltip({
 
   return (
     <Tooltip.Provider delayDuration={0} skipDelayDuration={0}>
-      <Tooltip.Root open={controlledOpen}>
+      <Tooltip.Root open={controlledOpen} onOpenChange={closeRequestOnly(onOpenChange)}>
         <Tooltip.Trigger asChild onFocus={(event) => event.preventDefault()}>
           {children}
         </Tooltip.Trigger>
@@ -194,16 +228,18 @@ function AutomationTooltip({
 function SourceTooltip({
   sourceLabel,
   controlledOpen,
+  onOpenChange,
   children,
 }: {
   sourceLabel: string;
   controlledOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }) {
   return (
     // 独立 Provider + delayDuration=0:与 PrTooltip 同规,hover 立即弹出。
     <Tooltip.Provider delayDuration={0} skipDelayDuration={0}>
-      <Tooltip.Root open={controlledOpen}>
+      <Tooltip.Root open={controlledOpen} onOpenChange={closeRequestOnly(onOpenChange)}>
         <Tooltip.Trigger asChild onFocus={(event) => event.preventDefault()}>
           {children}
         </Tooltip.Trigger>

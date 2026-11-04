@@ -87,6 +87,23 @@ describe('parseBotGroupChatData', () => {
     expect(parsed.messages[0].runtimeFailureCode).toBe(runtimeFailureCode === 'AUTH_REQUIRED' ? runtimeFailureCode : undefined);
     expect(JSON.stringify(parsed.messages)).not.toContain('private diagnostic');
   });
+  // Unit #8443 review: the real device-link parser must preserve the localized
+  // notice discriminator, while old/unknown input keeps its readable fallback.
+  it.each([
+    ['GROUP_AUTHORIZATION_REQUIRED', 'bot', false, true],
+    ['GROUP_AUTHORIZATION_UNAVAILABLE', 'bot', false, true],
+    ['ATTACHMENTS_UNAVAILABLE', 'bot', false, true],
+    ['private diagnostic', 'bot', false, false],
+    [undefined, 'bot', false, false],
+    ['ATTACHMENTS_UNAVAILABLE', 'user', false, false],
+    ['ATTACHMENTS_UNAVAILABLE', 'bot', true, false],
+  ])('preserves only a live companion capability notice (%s, %s, deleted=%s)', (code, authorKind, deleted, keep) => {
+    const parsed = parseBotGroupChatData(chatData({ messages: [{ id: 'capability', sequence: 1,
+      kind: 'notice', authorKind, authorName: 'Bot', content: 'Readable host-language fallback',
+      createdAt: 1, deleted, capabilityNoticeCode: code }] }))!;
+    expect(parsed.messages[0].capabilityNoticeCode).toBe(keep ? code : undefined);
+    expect(parsed.messages[0].content).toBe('Readable host-language fallback');
+  });
   it('preserves server member identities and removal capability', () => {
     const parsed = parseBotGroupChatData(chatData({ serverBacked: true, supportsMemberRemoval: true,
       members: [{ botId: 'human', actorId: 'actor', actorKind: 'human', isOwned: false, name: 'Person', status: 'active' }] }));
@@ -114,6 +131,16 @@ describe('parseBotGroupChatData', () => {
     expect(byId.get('q4')?.quote).toEqual({ ...quote, originalDeleted: true });
     // Older computers send neither field.
     expect(parseBotGroupChatData(chatData())!.messages.every(message => !message.quote && !message.deleted)).toBe(true);
+  });
+
+  it('preserves an owned-host process reference through remote group and thread data', () => {
+    const process = { groupId: 'g1', executionId: 'turn', sessionId: 'lane', clientId: 'source' };
+    const base = { id: 'p', sequence: 7, kind: 'message', authorKind: 'bot', authorBotId: 'mimi', authorName: '',
+      content: 'Result', noticeCode: null, planId: null, files: [], createdAt: 70, process, threadRootId: 'root' };
+    const view = parseBotGroupChatData(chatData({ messages: [base, { ...base, id: 'human', authorKind: 'user' },
+      { ...base, id: 'bad', process: { ...process, sessionId: '' } }, { ...base, id: 'deleted', deleted: true }] }))!;
+    expect(view.messages[0]).toMatchObject({ process, threadRootId: 'root', content: 'Result' });
+    expect(view.messages.slice(1).every(row => !row.process)).toBe(true);
   });
 
   it('keeps a validated task card only on a teammate message (bot-group-chat.md §10)', () => {
@@ -315,4 +342,11 @@ describe('actions', () => {
     expect(nextBotGroupSendAttempt(quoted, '@Ann', false, next, [], { all: false, botIds: ['picked', 'other'] }, 'original')).toBe(quoted);
     expect(nextBotGroupSendAttempt(quoted, '@Ann', false, next, [], { all: false, botIds: ['picked', 'other'] }, 'another').clientId).toBe('c6');
   });
+});
+
+// Wire: a phone must retain the host's personal setting and reject unknown modes.
+it('retains notification capability and confirmed mode from a computer', () => {
+  expect(parseBotGroupChatData(chatData({ supportsNotificationSettings: true, notificationMode: 'mentions' })))
+    .toMatchObject({ supportsNotificationSettings: true, notificationMode: 'mentions' });
+  expect(parseBotGroupChatData(chatData({ notificationMode: 'unknown' }))?.notificationMode).toBeUndefined();
 });

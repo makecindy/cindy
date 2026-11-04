@@ -8,12 +8,15 @@ import {
   cancelProviderImport,
   clearProviderImportDraftsForTest,
   createProviderImportDraftFromRest,
+  createProviderImportDraftFromFile,
+  createProviderImportDraftsFromFile,
   finishProviderImportConfirm,
   previewProviderImport,
 } from '../providerImport.js';
 
 import { validateCustomProviderConfig } from '../../maker-host/custom-provider-store.js';
 import { applyRuntimeFillFields, type RuntimeFillDraft } from '../../../renderer/lib/customProviderRuntimeFill.js';
+import { PROVIDER_IMPORT_EXAMPLE_JSON, PROVIDER_IMPORT_BATCH_EXAMPLE_JSON } from '../../../shared/providerImportExample.js';
 
 const SCOPE = { dataOwnerId: 'owner-a', generation: 1 };
 
@@ -76,6 +79,112 @@ function existingCustomProvider(
 afterEach(() => {
   clearProviderImportDraftsForTest();
   vi.useRealTimers();
+});
+
+// #7760: unit coverage of the real file parser -> preview -> confirm lifecycle.
+// Existing URL cases cannot carry >24 KiB or >256 models. A 257-model file with
+// metadata is the smallest case crossing both limits; no real credentials or network.
+// Measured standalone on Windows: 1.80s (85 tests, 2026-10-29).
+describe('provider configuration files', () => {
+  // Batch import contract: one file creates independently owned drafts, with no
+  // surviving partial batch after a validation error. Existing cases only cover one draft.
+  it('accepts the shipped batch example and independently previews, confirms or cancels its entries', () => {
+    const ids = createProviderImportDraftsFromFile(Buffer.from(PROVIDER_IMPORT_BATCH_EXAMPLE_JSON), SCOPE);
+    expect(ids).toHaveLength(2);
+    expect(ids.map(id => previewProviderImport(id, SCOPE, []).name)).toEqual(['Example AI', 'Example AI 2']);
+    expect(() => previewProviderImport(ids[1], { ...SCOPE, generation: 2 }, [])).toThrow(/account changed/);
+    beginProviderImportConfirm(ids[0], SCOPE, []);
+    finishProviderImportConfirm(ids[0], true);
+    expect(() => previewProviderImport(ids[0], SCOPE, [])).toThrow(/expired/);
+    expect(previewProviderImport(ids[1], SCOPE, []).runtimes[0].modelCount).toBe(1);
+    cancelProviderImport(ids[1]);
+    expect(() => previewProviderImport(ids[1], SCOPE, [])).toThrow(/expired/);
+  });
+
+  it.each([
+    { providers: [] },
+    { providers: Array.from({ length: 51 }, () => customPayload()) },
+    { providers: [customPayload()], extra: true },
+    { providers: [customPayload({ id: 'same' }), customPayload({ id: ' same ' })] },
+    { providers: [{ kind: 'builtin', provider: 'gemini', apiKey: 'FAKE-ONE' }, { kind: 'builtin', provider: 'gemini', apiKey: 'FAKE-TWO' }] },
+  ])('rejects invalid batch bounds, envelope or repeated identities', payload => {
+    expect(() => createProviderImportDraftsFromFile(Buffer.from(JSON.stringify(payload)), SCOPE)).toThrow();
+  });
+
+  it('does not exhaust the draft budget when a later batch entry is invalid', () => {
+    const bytes = Buffer.from(JSON.stringify({ providers: [customPayload(), { kind: 'unsupported' }] }));
+    // More failures than the global 128-draft budget must still leave room for a valid file.
+    for (let i = 0; i < 129; i++) expect(() => createProviderImportDraftsFromFile(bytes, SCOPE)).toThrow();
+    const ids = createProviderImportDraftsFromFile(Buffer.from(PROVIDER_IMPORT_EXAMPLE_JSON), SCOPE);
+    expect(ids).toHaveLength(1);
+    expect(previewProviderImport(ids[0], SCOPE, []).name).toBe('Example AI');
+  });
+
+  // The downloadable example is a public input contract, not a second schema.
+  // Existing hand-built payloads cannot catch a shipped template that stops importing.
+  it('accepts the shipped JSON example through preview and confirmation without losing model metadata', () => {
+    const id = createProviderImportDraftFromFile(Buffer.from(PROVIDER_IMPORT_EXAMPLE_JSON), SCOPE);
+    expect(previewProviderImport(id, SCOPE, []).runtimes).toMatchObject([
+      { agent: 'pi', modelCount: 1, willFetchModels: false, hasApiKey: true },
+    ]);
+    const { draft } = beginProviderImportConfirm(id, SCOPE, []);
+    if (draft.kind !== 'custom') throw new Error('expected custom example');
+    expect(validateCustomProviderConfig(draft.config)).toMatchObject({ ok: true });
+    expect(draft.config.runtimes.pi?.models[0]).toMatchObject({
+      id: 'your-model-id', group: 'custom:example', maxOutputTokens: 32000,
+      contextWindow: 200000, efforts: ['low', 'high'], defaultEffort: 'high',
+    });
+  });
+  it('preserves a large UTF-8/BOM catalog and secrets through the existing confirmation lifecycle', () => {
+    const models = Array.from({ length: 257 }, (_, i) => ({
+      id: `model-${i}`, name: `模型 ${i}`, group: 'custom:acme', maxOutputTokens: 32000,
+      contextWindow: 200000, efforts: ['low', 'high'], defaultEffort: 'high',
+    }));
+    const payload = customPayload({ endpoints: [{ protocol: 'openai-chat',
+      baseUrl: 'https://api.acme.test/v1', targets: ['pi'], models,
+      headers: { 'X-Acme-Tenant': 'FAKE-HEADER-SECRET' },
+    }] });
+    const bytes = Buffer.from('\uFEFF' + JSON.stringify(payload));
+    expect(bytes.length).toBeGreaterThan(24 * 1024);
+    expect(createProviderImportDraftFromRest(importRest(payload))).toBeNull();
+    const id = createProviderImportDraftFromFile(bytes, SCOPE);
+    expect(() => beginProviderImportConfirm(id, SCOPE, [])).toThrow(/preview/);
+    const preview = previewProviderImport(id, SCOPE, []);
+    expect(preview.runtimes).toMatchObject([{ modelCount: 257, willFetchModels: false, hasApiKey: true }]);
+    expect(JSON.stringify(preview)).not.toContain('sk-import-secret');
+    expect(JSON.stringify(preview)).not.toContain('FAKE-HEADER-SECRET');
+    const { draft } = beginProviderImportConfirm(id, SCOPE, []);
+    if (draft.kind !== 'custom') throw new Error('expected custom import');
+    expect(draft.config.runtimes.pi?.models).toEqual(models);
+    expect(draft.keys.pi).toBe('sk-import-secret');
+    expect(validateCustomProviderConfig(draft.config)).toMatchObject({ ok: true });
+    finishProviderImportConfirm(id, true);
+    expect(() => previewProviderImport(id, SCOPE, [])).toThrow(/expired/);
+  });
+
+  it.each([
+    ['malformed JSON', Buffer.from('{"apiKey":"FAKE-SECRET"')],
+    ['invalid UTF-8', Buffer.from([0xff])],
+    ['empty', Buffer.alloc(0)],
+    ['oversized', Buffer.alloc(4 * 1024 * 1024 + 1, 32)],
+    ['unknown field', Buffer.from(JSON.stringify(customPayload({ extra: true })))],
+    ['cross-origin discovery', Buffer.from(JSON.stringify(customPayload({ endpoints: [{
+      protocol: 'openai-chat', baseUrl: 'https://api.acme.test/v1', modelsUrl: 'https://other.test/models',
+    }] })))],
+    ['too many models', Buffer.from(JSON.stringify(customPayload({ endpoints: [{
+      protocol: 'openai-chat', baseUrl: 'https://api.acme.test/v1',
+      models: Array.from({ length: 10001 }, (_, i) => `model-${i}`),
+    }] })))],
+  ])('rejects %s without making a draft', (_label, bytes) => {
+    expect(() => createProviderImportDraftFromFile(bytes, SCOPE)).toThrow();
+  });
+
+  it('binds the file draft before its first preview and supports cancellation', () => {
+    const id = createProviderImportDraftFromFile(Buffer.from(JSON.stringify(customPayload())), SCOPE);
+    expect(() => previewProviderImport(id, { ...SCOPE, generation: 2 }, [])).toThrow(/account changed/);
+    cancelProviderImport(id);
+    expect(() => previewProviderImport(id, SCOPE, [])).toThrow(/expired/);
+  });
 });
 
 describe('provider import URL parsing', () => {

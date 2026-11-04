@@ -10,10 +10,12 @@ import { Button } from '@/components/ui/button';
  */
 
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { goalApiFor } from '@/lib/makerTransport';
+import { extractIpcError } from '@/utils/ipcError';
+import { isWritableDirectoryGrantErrorCode } from '../../../shared/writableDirectoryGrantError';
 import { GoalAdvancedLimits, DEFAULT_GOAL_LIMITS, type GoalLimitValues } from './GoalAdvancedLimits';
 import { ListComposerTextarea } from './ListComposerTextarea';
 
@@ -34,14 +36,21 @@ interface NewGoalDialogProps {
    * (目标的默认文字来自 composer,创建成功后原文该清掉)。
    */
   onCreated?: () => void;
+  creationRecovery?: ReactNode;
+  creationRecoveryBusy?: boolean;
 }
 
-export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initialObjective, onCreated }: NewGoalDialogProps): React.ReactElement {
+interface GoalCreationError {
+  message: string;
+  pickerAuthorization: boolean;
+}
+
+export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initialObjective, onCreated, creationRecovery, creationRecoveryBusy = false }: NewGoalDialogProps): React.ReactElement {
   const { t } = useTranslation();
   const [objective, setObjective] = useState('');
   const [limits, setLimits] = useState<GoalLimitValues>(DEFAULT_GOAL_LIMITS);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<GoalCreationError | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -58,10 +67,18 @@ export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initial
     // 故依赖仅 [open]。
   }, [open]);
 
+  useEffect(() => {
+    if (creationRecovery) {
+      // The parent can publish recovery after this dialog's async catch ran.
+      // Discard its handled picker error so returning to editing cannot reveal it.
+      setError((current) => current?.pickerAuthorization ? null : current);
+    }
+  }, [creationRecovery, error?.pickerAuthorization]);
+
   const trimmed = objective.trim();
 
   const save = async () => {
-    if (!trimmed) return;
+    if (!trimmed || saving || creationRecoveryBusy) return;
     setSaving(true);
     setError(null);
     try {
@@ -73,7 +90,12 @@ export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initial
       onCreated?.(); // 创建成功 → 通知父组件清空 composer(默认目标文字的来源)
       onOpenChange(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('goal.newGoalDialog.failed'));
+      // The recovery notice explains the handled picker error. A later retry
+      // can fail for another reason while that notice is still visible.
+      setError({
+        message: err instanceof Error ? err.message : t('goal.newGoalDialog.failed'),
+        pickerAuthorization: isWritableDirectoryGrantErrorCode(extractIpcError(err)?.code),
+      });
     } finally {
       setSaving(false);
     }
@@ -124,9 +146,10 @@ export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initial
             }}
           />
           <GoalAdvancedLimits value={limits} onChange={setLimits} />
-          {error && (
+          {creationRecovery}
+          {error && !(error.pickerAuthorization && creationRecovery) && (
             <div className="text-12" style={{ color: 'var(--error-fg)' }}>
-              {error}
+              {error.pickerAuthorization ? t('goal.newGoalDialog.failed') : error.message}
             </div>
           )}
           <div className="flex justify-end gap-2">
@@ -143,7 +166,7 @@ export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initial
               compact
               loading={saving}
               type="button"
-              disabled={saving || !trimmed}
+              disabled={saving || creationRecoveryBusy || !trimmed}
               onClick={() => {
                 void save();
               }}

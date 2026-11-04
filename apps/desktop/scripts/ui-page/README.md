@@ -42,6 +42,9 @@ FAIL group-chat.no-sidebar.dark.zh-CN.1280x800
 - 后台检查使用无边框窗口，Windows 额外启用离屏渲染，避免原生边框的 DPI 取整和隐藏
   窗口不刷新导致尺寸偏差或截图超时；仍严格核对实际视口与目标尺寸。`ui:preview` 保留
   正常的可见窗口。
+- Electron 复用隔离进程，每个场景新建窗口，防止前一场景的 CDP 视口、全屏或失败状态
+  污染后续检查。测试源仅允许 HTML 全屏，后台运行不改变系统全屏状态，其它权限仍拒绝；
+  系统全屏切换需在完整 Desktop 验证。
 - 报告写到 stdout。环境里设置了 `NODE_DEBUG` 时 Node 会往 stderr 刷调试日志，用
   `env -u NODE_DEBUG pnpm ui:check …` 或丢弃 stderr。
 - `real` 是本页面真实加载的产品代码，`not covered` 是这些场景没有验证的行为，`replaced`
@@ -91,7 +94,7 @@ FAIL group-chat.no-sidebar.dark.zh-CN.1280x800
 ## 多语言、主题与尺寸
 
 `--locale` 取自 `src/shared/locale.ts` 的 `SUPPORTED_LOCALES`，`--theme` 为 `light`／`dark`，
-都可以写逗号列表或 `all`；`--viewport` 可以写多个尺寸。所有组合在同一个窗口里依次运行。
+都可以写逗号列表或 `all`；`--viewport` 可以写多个尺寸。所有组合在同一个隔离进程中依次运行。
 语言和主题按产品启动时的同一套偏好写入（`localStorage` 的 `theme` 与语言偏好），字体使用产品
 自带的 Inter、JetBrains Mono 与鸿蒙黑体子集。断言里不要写死某种语言的文字，用 `ui.t(key)`
 取当前语言的翻译。
@@ -158,6 +161,12 @@ mountPage({
 `AppFrame` 复刻主界面的侧栏（默认 260px）与内容区结构，并挂载真实的 `ContentHeaderSlot`，
 让页面在真实宽度和标题栏里排版；不需要外框时直接渲染组件。
 
+构建器支持 Vite 的 `?url` 资源导入（含包路径与相对路径），按原字节生成独立资源 URL；
+PDF worker 的 `.mjs` 在 Electron 与 Chromium 宿主均按 JavaScript 提供。`?worker` 则编译为
+真实模块 worker。两类输入都纳入 `--changed`、`--compare` 与预览刷新，不应为绕过构建错误
+替换整个 PDF 组件。回归由 `runner.selftest.mjs` 验证真实 PDF worker 解析与资源变更追踪；
+这不代表单页工具会自动加载项目的其它 Vite 插件或其提供的静态目录。
+
 `check(page, ui)` 里的 `page` 是 Playwright Page。`ui` 包含当前变体
 （`case`、`theme`、`locale`、`viewport`、`data`）以及：
 
@@ -192,6 +201,9 @@ Tailwind 配置由 Tailwind 直接从磁盘加载，两侧都用当前版本；�
 
 ## 运行方式
 
+- 构建器支持 Vite 的 `?worker` 与 `?url` 导入：前者构建真实 worker，后者把文件原样
+  输出为资源 URL（包括 PDF.js 的预构建 `.mjs` worker）。两者的源文件都参与改动扫描与
+  对照指纹；`.mjs` 在 Electron 和 Chromium 检查模式中按 JavaScript 提供，不以替身绕过加载。
 - 默认 `--engine electron`：仓库里的 Electron，与 Cindy 同一个 Chromium。每次运行使用新的
   临时 profile、拒绝权限与下载、只允许访问测试源，运行完删除临时数据；后台检查不显示窗口、
   不占 Dock。
