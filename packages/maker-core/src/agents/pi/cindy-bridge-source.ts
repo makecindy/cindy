@@ -4179,7 +4179,7 @@ class CindyMcpGateway {
             model: { type: 'string', minLength: 1, maxLength: 512 },
             providerId: { anyOf: [{ type: 'null' }, { type: 'string', minLength: 1, maxLength: 512 }] },
             agentDeviceId: { anyOf: [{ type: 'null' }, { type: 'string', minLength: 1, maxLength: 512 }] },
-            effort: { type: 'string', enum: ['', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
+            effort: { type: 'string', enum: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] }, // No '' sentinel: Gemini rejects empty enum values; omitting effort means unset (#8784).
             fastMode: { anyOf: [{ type: 'boolean' }, { type: 'string', enum: ['ultrafast'] }] },
           }, required: ['agentKind', 'model'], additionalProperties: false }], description: 'This routine only: choose a complete route from schedule_list_models. null follows the companion; omission preserves the saved choice. Read back with routine_list.' },
           delivery: { anyOf: [

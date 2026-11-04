@@ -2482,6 +2482,9 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
       const model = tool.parameters.properties.modelOverride.anyOf.find((schema: any) => schema.type === 'object');
       expect(model.required).toEqual(['agentKind', 'model']);
       expect(model.properties.fastMode.anyOf).toContainEqual({ type: 'string', enum: ['ultrafast'] });
+      // #8784: Gemini rejects empty enum values with 400, so the effort enum
+      // must not carry the '' unset sentinel; omitting effort means unset.
+      expect(model.properties.effort.enum).not.toContain('');
       const variants = tool.parameters.properties.triggers.items.anyOf;
       const interval = variants.find((item: any) => item.properties.kind.enum.includes('interval'));
       expect(interval.properties.intervalMs.minimum).toBe(60000);
@@ -2506,6 +2509,22 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
     await tool.execute('call-1', args, controller.signal);
     expect(calls.at(-1)).toEqual({ method: 'tools/call', params: { name: 'call_tool', arguments: { name, args } }, signal: controller.signal });
   }
+
+  // #8784: Gemini rejects empty enum/const values with 400, so no tool schema
+  // registered for a Pi session may contain one, whatever the provider.
+  const emptyValues: string[] = [];
+  const visit = (schema: unknown, trail: string): void => {
+    if (!schema || typeof schema !== 'object') return;
+    const record = schema as Record<string, unknown>;
+    if (Array.isArray(record.enum) && record.enum.includes('')) emptyValues.push(`${trail}.enum`);
+    if (record.const === '') emptyValues.push(`${trail}.const`);
+    for (const [key, value] of Object.entries(record)) {
+      if (key === 'enum' || key === 'const') continue;
+      visit(value, `${trail}.${key}`);
+    }
+  };
+  for (const tool of bot) visit(tool.parameters, tool.name);
+  expect(emptyValues).toEqual([]);
 });
 
 
