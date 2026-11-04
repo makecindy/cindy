@@ -239,6 +239,11 @@ export function createStorageIpcHandlers(deps: StorageIpcDeps) {
       }
     },
 
+    /** 只报影子原文目录的占用:实验功能行用它显示体积,不值得走全量 stats。 */
+    async spineStats(): Promise<FixedDirectoryStats> {
+      return deps.getSpineDirStats?.() ?? { bytes: 0, fileCount: 0 };
+    },
+
     async stats(): Promise<StorageStatsResult> {
       try {
         const [blobs, deadDirs, legacyImages, chatAttachments, spine, remoteMedia] = await Promise.all([

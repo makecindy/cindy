@@ -8931,6 +8931,10 @@ const registerIpcHandlers = () => {
         return { cleared: true };
       }),
     );
+    ipcMain.handle('cindy-media:spine-stats', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return storageHandlers.spineStats();
+    });
     ipcMain.handle('cindy-media:spine-open-dir', (event) => {
       assertTrustedAppRendererEvent(event);
       return storageHandlers.openSpineDir();
@@ -8939,9 +8943,9 @@ const registerIpcHandlers = () => {
       runFixedDirectoryIpcAction('spine-clear', async () => {
         assertTrustedAppRendererEvent(event);
         const confirmed = await confirmFixedDirectoryClear(event, {
-          title: t('settings.about.storage.spineClearConfirmTitle'),
-          message: t('settings.about.storage.spineClearConfirmDescription'),
-          confirmButton: t('settings.about.storage.spineClearConfirmButton'),
+          title: t('settings.liveCompact.shadow.clearConfirmTitle'),
+          message: t('settings.liveCompact.shadow.clearConfirmDescription'),
+          confirmButton: t('settings.liveCompact.shadow.clearConfirmButton'),
         });
         if (!confirmed) return { cleared: false };
         await storageHandlers.clearSpineDir();

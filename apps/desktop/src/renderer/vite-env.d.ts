@@ -4008,6 +4008,7 @@ interface ElectronAPI {
     clearLegacyImagesDir: () => Promise<{ cleared: boolean }>;
     openChatAttachmentsDir: () => Promise<{ opened: boolean }>;
     clearChatAttachmentsDir: () => Promise<{ cleared: boolean }>;
+    spineStats: () => Promise<{ bytes: number; fileCount: number }>;
     openSpineDir: () => Promise<{ opened: boolean }>;
     clearSpineDir: () => Promise<{ cleared: boolean }>;
     stats: () => Promise<{

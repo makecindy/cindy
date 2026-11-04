@@ -9,15 +9,20 @@
  * 与 LSP Beta 同一口径: 只对新会话生效 —— pi 进程启动时一次性决定是否加载,
  * 已开 session 不变,toggle 后 toast 明示。
  *
+ * 子行(影子原文): 扩展把被切走的原文写到 <agentHome>/compaction-spine/,这里报体积、
+ * 提供打开目录与清理。放在开关下方而不是「存储空间」页:它只对这个功能有意义。
+ *
  * 没有独立 store/hook: 本行是这个开关唯一的消费者,直接 IPC + 本地 state。
  */
 
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
+import { formatBytes } from '@/features/cc-agent/workdir-browse/lib/fileMeta';
 
 const log = createLogger('LiveCompactCell');
 
@@ -30,6 +35,8 @@ export function LiveCompactCell() {
   const [pending, setPending] = useState(false);
   // 首屏拉取期间禁用:避免「读到之前一律显示关闭」误导用户动手点。
   const [loading, setLoading] = useState(true);
+  const [shadowBytes, setShadowBytes] = useState<number | null>(null);
+  const [shadowBusy, setShadowBusy] = useState(false);
 
   // main 是唯一真源(设置文件);renderer 每次挂载时拉一次。
   useEffect(() => {
@@ -75,6 +82,43 @@ export function LiveCompactCell() {
     [enabled, t],
   );
 
+  const refreshShadow = useCallback(async () => {
+    try {
+      const stats = await window.electronAPI.cindyMediaStorage.spineStats();
+      setShadowBytes(stats.bytes);
+    } catch (err) {
+      log.warn('spineStats failed', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshShadow();
+  }, [refreshShadow]);
+
+  const handleOpenShadowDir = useCallback(async () => {
+    try {
+      const result = await window.electronAPI.cindyMediaStorage.openSpineDir();
+      if (!result.opened) toast.info(t('settings.liveCompact.shadow.directoryMissing'));
+    } catch {
+      toast.error(t('settings.liveCompact.shadow.openFailed'));
+    }
+  }, [t]);
+
+  const handleClearShadow = useCallback(async () => {
+    if (shadowBusy) return;
+    setShadowBusy(true);
+    try {
+      const result = await window.electronAPI.cindyMediaStorage.clearSpineDir();
+      if (!result.cleared) return;
+      toast.success(t('settings.liveCompact.shadow.cleared'));
+      void refreshShadow();
+    } catch {
+      toast.error(t('settings.liveCompact.shadow.clearFailed'));
+    } finally {
+      setShadowBusy(false);
+    }
+  }, [shadowBusy, refreshShadow, t]);
+
   const handleOpenUpstream = useCallback(async () => {
     try {
       const result = await window.electronAPI.openExternal(UPSTREAM_URL);
@@ -113,6 +157,30 @@ export function LiveCompactCell() {
           onCheckedChange={(v) => void handleToggle(v)}
           aria-label={t('settings.liveCompact.toggleAria')}
         />
+      </div>
+
+      <div className="flex items-center justify-between gap-3 border-t border-[var(--settings-theme-card-border)] pt-3">
+        <span className="text-12 text-[var(--text-secondary)]">
+          {t('settings.liveCompact.shadow.label')}
+          {' · '}
+          {shadowBytes === null ? t('settings.about.storage.unknown') : formatBytes(shadowBytes)}
+        </span>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button variant="secondary" size="sm" compact type="button" onClick={() => void handleOpenShadowDir()}>
+            {t('settings.liveCompact.shadow.openButton')}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            compact
+            type="button"
+            onClick={() => void handleClearShadow()}
+            disabled={shadowBusy}
+            aria-busy={shadowBusy || undefined}
+          >
+            {t('settings.liveCompact.shadow.clearButton')}
+          </Button>
+        </div>
       </div>
     </div>
   );

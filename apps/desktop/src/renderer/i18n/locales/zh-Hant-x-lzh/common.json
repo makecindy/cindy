@@ -2712,17 +2712,6 @@
         "chatAttachmentsClearConfirmButton": "清附件快取",
         "chatAttachmentsCleared": "訊附件快取已清",
         "chatAttachmentsClearFailed": "未能清訊附件快取，請再試",
-        "spineLabel": "邊做邊壓之影子原文所",
-        "spineDescription": "邊做邊壓削某段對語時，留其被削之原文於此，摘要可隨時溯之。清之無損已成之對語，然此舊摘要不復能展其原文。",
-        "spineOpenButton": "啟其所",
-        "spineClearButton": "清其影子原文",
-        "spineDirectoryMissing": "未得邊做邊壓之影子原文所",
-        "spineOpenFailed": "啟邊做邊壓之影子原文所不得，請復試。",
-        "spineClearConfirmTitle": "清邊做邊壓之影子原文乎？",
-        "spineClearConfirmDescription": "唯刪影子原文所中之文，對語與摘要不損。已指此諸文之摘要不復能展其原文，且不可復。",
-        "spineClearConfirmButton": "清其影子原文",
-        "spineCleared": "邊做邊壓之影子原文已清",
-        "spineClearFailed": "清邊做邊壓之影子原文不成，請復試。",
         "dbSlimmingBackupDirectoryDialogTitle": "擇資料庫清理之備份目錄",
         "dbSlimmingLabel": "資料庫清理",
         "dbSlimmingDescription": "掃描逾所擇時限未更之軟刪除及已封存差事歷史，亦可併納未封存差事。確認後重啟 Cindy，於資料庫開啟前清理並壓縮。不刪磁碟附件與所生媒體。",
@@ -4443,7 +4432,19 @@
         "readFailed": "讀取邊做邊壓之開關，未成"
       },
       "openFailed": "啟其鏈，未成",
-      "toggleAria": "邊做邊壓 Live Compact"
+      "toggleAria": "邊做邊壓 Live Compact",
+      "shadow": {
+        "label": "影子原文",
+        "openButton": "啟其所",
+        "clearButton": "清",
+        "directoryMissing": "未得邊做邊壓之影子原文所",
+        "openFailed": "啟邊做邊壓之影子原文所不得，請復試。",
+        "clearConfirmTitle": "清邊做邊壓之影子原文乎？",
+        "clearConfirmDescription": "唯刪影子原文所中之文，對語與摘要不損。已指此諸文之摘要不復能展其原文，且不可復。",
+        "clearConfirmButton": "清其影子原文",
+        "cleared": "邊做邊壓之影子原文已清",
+        "clearFailed": "清邊做邊壓之影子原文不成，請復試。"
+      }
     },
     "betaChannel": {
       "title": "Beta 試行之道",

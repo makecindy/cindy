@@ -2712,17 +2712,6 @@
         "chatAttachmentsClearConfirmButton": "첨부 파일 캐시 정리",
         "chatAttachmentsCleared": "메시지 첨부 파일 캐시를 정리했습니다",
         "chatAttachmentsClearFailed": "메시지 첨부 파일 캐시를 정리할 수 없습니다. 다시 시도해 주세요.",
-        "spineLabel": "Live Compact 섀도 원문 디렉터리",
-        "spineDescription": "Live Compact가 대화 일부를 압축할 때 잘라낸 원문을 여기에 남겨 두므로 요약에서 언제든 되짚을 수 있습니다. 정리해도 끝난 대화에는 영향이 없지만, 오래된 요약은 원문을 더 이상 펼칠 수 없습니다.",
-        "spineOpenButton": "디렉터리 열기",
-        "spineClearButton": "섀도 정리",
-        "spineDirectoryMissing": "Live Compact 섀도 원문 디렉터리를 찾을 수 없습니다",
-        "spineOpenFailed": "Live Compact 섀도 원문 디렉터리를 열 수 없습니다. 다시 시도해 주세요.",
-        "spineClearConfirmTitle": "Live Compact 섀도 원문을 정리할까요?",
-        "spineClearConfirmDescription": "섀도 원문 디렉터리의 파일만 삭제되며 대화와 요약은 그대로 남습니다. 이 파일을 가리키던 요약은 원문을 펼칠 수 없게 됩니다. 되돌릴 수 없습니다.",
-        "spineClearConfirmButton": "섀도 정리",
-        "spineCleared": "Live Compact 섀도 원문을 정리했습니다",
-        "spineClearFailed": "Live Compact 섀도 원문을 정리하지 못했습니다. 다시 시도해 주세요.",
         "dbSlimmingBackupDirectoryDialogTitle": "데이터베이스 정리 백업 폴더 선택",
         "dbSlimmingLabel": "데이터베이스 정리",
         "dbSlimmingDescription": "선택한 기간보다 오래 업데이트되지 않은 소프트 삭제 및 보관 작업의 기록을 검사하며, 보관되지 않은 작업도 선택적으로 포함할 수 있습니다. 확인 후 Cindy를 다시 시작하고 데이터베이스를 열기 전에 기록을 정리하고 압축합니다. 디스크의 첨부 파일과 생성 미디어는 삭제하지 않습니다.",
@@ -4443,7 +4432,19 @@
         "readFailed": "Live Compact 설정을 읽지 못했습니다"
       },
       "openFailed": "링크를 열지 못했습니다",
-      "toggleAria": "Live Compact"
+      "toggleAria": "Live Compact",
+      "shadow": {
+        "label": "섀도 원문",
+        "openButton": "디렉터리 열기",
+        "clearButton": "정리",
+        "directoryMissing": "Live Compact 섀도 원문 디렉터리를 찾을 수 없습니다",
+        "openFailed": "Live Compact 섀도 원문 디렉터리를 열 수 없습니다. 다시 시도해 주세요.",
+        "clearConfirmTitle": "Live Compact 섀도 원문을 정리할까요?",
+        "clearConfirmDescription": "섀도 원문 디렉터리의 파일만 삭제되며 대화와 요약은 그대로 남습니다. 이 파일을 가리키던 요약은 원문을 펼칠 수 없게 됩니다. 되돌릴 수 없습니다.",
+        "clearConfirmButton": "섀도 정리",
+        "cleared": "Live Compact 섀도 원문을 정리했습니다",
+        "clearFailed": "Live Compact 섀도 원문을 정리하지 못했습니다. 다시 시도해 주세요."
+      }
     },
     "betaChannel": {
       "title": "베타 채널",

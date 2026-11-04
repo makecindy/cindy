@@ -2712,17 +2712,6 @@
         "chatAttachmentsClearConfirmButton": "清理附件快取",
         "chatAttachmentsCleared": "訊息附件快取已清理",
         "chatAttachmentsClearFailed": "無法清理訊息附件快取，請重試",
-        "spineLabel": "邊做邊壓的影子原文目錄",
-        "spineDescription": "邊做邊壓壓縮某段對話時，會把被切走的原文留在這裡，摘要隨時可以回溯。清理不影響已完成的對話，但這些舊摘要無法再展開原文。",
-        "spineOpenButton": "開啟目錄",
-        "spineClearButton": "清理影子原文",
-        "spineDirectoryMissing": "沒有找到邊做邊壓的影子原文目錄",
-        "spineOpenFailed": "無法開啟邊做邊壓的影子原文目錄，請重試。",
-        "spineClearConfirmTitle": "清理邊做邊壓的影子原文？",
-        "spineClearConfirmDescription": "只會刪除影子原文目錄裡的檔案，對話和摘要本身不受影響。已經指向這些檔案的摘要將無法再展開原文，且無法復原。",
-        "spineClearConfirmButton": "清理影子原文",
-        "spineCleared": "邊做邊壓的影子原文已清理",
-        "spineClearFailed": "清理邊做邊壓的影子原文失敗，請重試。",
         "dbSlimmingBackupDirectoryDialogTitle": "選擇資料庫清理備份目錄",
         "dbSlimmingLabel": "資料庫清理",
         "dbSlimmingDescription": "掃描超過所選時間未更新的軟刪除和已封存任務歷史，可選擇同時納入未封存任務。確認後重新啟動 Cindy，在資料庫開啟前清理並壓縮。不會刪除磁碟附件或生成媒體。",
@@ -4443,7 +4432,19 @@
         "readFailed": "讀取邊做邊壓開關失敗"
       },
       "openFailed": "開啟連結失敗",
-      "toggleAria": "邊做邊壓 Live Compact"
+      "toggleAria": "邊做邊壓 Live Compact",
+      "shadow": {
+        "label": "影子原文",
+        "openButton": "開啟目錄",
+        "clearButton": "清理",
+        "directoryMissing": "沒有找到邊做邊壓的影子原文目錄",
+        "openFailed": "無法開啟邊做邊壓的影子原文目錄，請重試。",
+        "clearConfirmTitle": "清理邊做邊壓的影子原文？",
+        "clearConfirmDescription": "只會刪除影子原文目錄裡的檔案，對話和摘要本身不受影響。已經指向這些檔案的摘要將無法再展開原文，且無法復原。",
+        "clearConfirmButton": "清理影子原文",
+        "cleared": "邊做邊壓的影子原文已清理",
+        "clearFailed": "清理邊做邊壓的影子原文失敗，請重試。"
+      }
     },
     "betaChannel": {
       "title": "Beta 測試管道",

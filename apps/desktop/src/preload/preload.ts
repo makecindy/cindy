@@ -4871,6 +4871,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     clearChatAttachmentsDir: (): Promise<{ cleared: boolean }> =>
       ipcRenderer.invoke('cindy-media:chat-attachments-clear'),
 
+    spineStats: (): Promise<{ bytes: number; fileCount: number }> =>
+      ipcRenderer.invoke('cindy-media:spine-stats'),
+
     openSpineDir: (): Promise<{ opened: boolean }> =>
       ipcRenderer.invoke('cindy-media:spine-open-dir'),
 

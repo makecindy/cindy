@@ -2712,17 +2712,6 @@
         "chatAttachmentsClearConfirmButton": "添付ファイルキャッシュを削除",
         "chatAttachmentsCleared": "メッセージ添付ファイルのキャッシュをクリーンアップしました",
         "chatAttachmentsClearFailed": "メッセージ添付ファイルのキャッシュをクリーンアップできませんでした。もう一度お試しください。",
-        "spineLabel": "Live Compact のシャドー原文ディレクトリ",
-        "spineDescription": "Live Compact が会話の一部を圧縮するとき、切り出した原文をここに残すので、要約からいつでもたどれます。消去しても完了した会話には影響しませんが、古い要約は原文を展開できなくなります。",
-        "spineOpenButton": "ディレクトリを開く",
-        "spineClearButton": "シャドーを消去",
-        "spineDirectoryMissing": "Live Compact のシャドー原文ディレクトリが見つかりません",
-        "spineOpenFailed": "Live Compact のシャドー原文ディレクトリを開けませんでした。もう一度お試しください。",
-        "spineClearConfirmTitle": "Live Compact のシャドー原文を消去しますか？",
-        "spineClearConfirmDescription": "削除されるのはシャドー原文ディレクトリ内のファイルだけです。会話と要約はそのまま残ります。これらのファイルを参照している要約は原文を展開できなくなります。元に戻せません。",
-        "spineClearConfirmButton": "シャドーを消去",
-        "spineCleared": "Live Compact のシャドー原文を消去しました",
-        "spineClearFailed": "Live Compact のシャドー原文を消去できませんでした。もう一度お試しください。",
         "dbSlimmingBackupDirectoryDialogTitle": "データベースのクリーンアップ用バックアップ先を選択",
         "dbSlimmingLabel": "データベースのクリーンアップ",
         "dbSlimmingDescription": "選択した期間を超えて更新されていない論理削除済みおよびアーカイブ済みタスクの履歴をスキャンし、必要に応じて未アーカイブのタスクも対象に含めます。確認後に Cindy を再起動し、データベースを開く前に履歴を削除して圧縮します。ディスク上の添付ファイルや生成メディアは削除しません。",
@@ -4443,7 +4432,19 @@
         "readFailed": "Live Compact の設定を読み取れませんでした"
       },
       "openFailed": "リンクを開けませんでした",
-      "toggleAria": "Live Compact"
+      "toggleAria": "Live Compact",
+      "shadow": {
+        "label": "シャドー原文",
+        "openButton": "ディレクトリを開く",
+        "clearButton": "消去",
+        "directoryMissing": "Live Compact のシャドー原文ディレクトリが見つかりません",
+        "openFailed": "Live Compact のシャドー原文ディレクトリを開けませんでした。もう一度お試しください。",
+        "clearConfirmTitle": "Live Compact のシャドー原文を消去しますか？",
+        "clearConfirmDescription": "削除されるのはシャドー原文ディレクトリ内のファイルだけです。会話と要約はそのまま残ります。これらのファイルを参照している要約は原文を展開できなくなります。元に戻せません。",
+        "clearConfirmButton": "シャドーを消去",
+        "cleared": "Live Compact のシャドー原文を消去しました",
+        "clearFailed": "Live Compact のシャドー原文を消去できませんでした。もう一度お試しください。"
+      }
     },
     "betaChannel": {
       "title": "Beta チャンネル",

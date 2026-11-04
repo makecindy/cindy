@@ -2777,17 +2777,6 @@
         "chatAttachmentsClearConfirmButton": "Limpar cache de anexos",
         "chatAttachmentsCleared": "Cache de anexos de mensagens limpo",
         "chatAttachmentsClearFailed": "Não foi possível limpar o cache de anexos de mensagens. Tente novamente.",
-        "spineLabel": "Diretório de sombra do Live Compact",
-        "spineDescription": "Quando o Live Compact compacta um trecho da conversa, ele guarda aqui o texto original recortado para que qualquer resumo possa ser rastreado. Limpar não afeta conversas concluídas, mas esses resumos antigos não poderão mais expandir o original.",
-        "spineOpenButton": "Abrir diretório",
-        "spineClearButton": "Limpar sombra",
-        "spineDirectoryMissing": "O diretório de sombra do Live Compact não foi encontrado",
-        "spineOpenFailed": "Não foi possível abrir o diretório de sombra do Live Compact. Tente novamente.",
-        "spineClearConfirmTitle": "Limpar a sombra do Live Compact?",
-        "spineClearConfirmDescription": "Apenas os arquivos do diretório de sombra do Live Compact serão excluídos; as conversas e os resumos não são afetados. Resumos que já apontam para esses arquivos não poderão mais mostrar o texto original. Isso não pode ser desfeito.",
-        "spineClearConfirmButton": "Limpar sombra",
-        "spineCleared": "Sombra do Live Compact limpa",
-        "spineClearFailed": "Não foi possível limpar a sombra do Live Compact. Tente novamente.",
         "dbSlimmingBackupDirectoryDialogTitle": "Escolher pasta de backup da limpeza do banco de dados",
         "dbSlimmingLabel": "Limpeza do banco de dados",
         "dbSlimmingDescription": "Verifica o histórico de tarefas arquivadas e marcadas como excluídas que não foram atualizadas no período selecionado, com a opção de incluir tarefas não arquivadas. Após a confirmação, o Cindy reinicia e compacta o banco de dados antes de abri-lo. Arquivos e mídias geradas no disco não são excluídos.",
@@ -4539,7 +4528,19 @@
         "readFailed": "Não foi possível ler a opção Live Compact"
       },
       "openFailed": "Não foi possível abrir o link",
-      "toggleAria": "Live Compact"
+      "toggleAria": "Live Compact",
+      "shadow": {
+        "label": "Texto de sombra",
+        "openButton": "Abrir diretório",
+        "clearButton": "Limpar",
+        "directoryMissing": "O diretório de sombra do Live Compact não foi encontrado",
+        "openFailed": "Não foi possível abrir o diretório de sombra do Live Compact. Tente novamente.",
+        "clearConfirmTitle": "Limpar a sombra do Live Compact?",
+        "clearConfirmDescription": "Apenas os arquivos do diretório de sombra do Live Compact serão excluídos; as conversas e os resumos não são afetados. Resumos que já apontam para esses arquivos não poderão mais mostrar o texto original. Isso não pode ser desfeito.",
+        "clearConfirmButton": "Limpar sombra",
+        "cleared": "Sombra do Live Compact limpa",
+        "clearFailed": "Não foi possível limpar a sombra do Live Compact. Tente novamente."
+      }
     },
     "betaChannel": {
       "title": "Canal beta",
