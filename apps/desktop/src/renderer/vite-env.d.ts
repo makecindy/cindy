@@ -1746,6 +1746,11 @@ interface ElectronAPI {
     resolveConfirm: (requestId: string, confirmed: boolean) => Promise<{ handled: boolean }>;
   };
   voiceConversation: import('../shared/voiceConversation').VoiceConversationApi;
+  composer: {
+    enhancePrompt: (
+      text: string,
+    ) => Promise<import('../shared/composerPromptEnhance').ComposerEnhancePromptSuccess>;
+  };
   voiceInput: {
     prewarm: (payload?: {
       sourceLanguage?: string;

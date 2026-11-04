@@ -1,5 +1,6 @@
 import { APP_PREFERENCE_REQUEST, APP_PREFERENCE_REPLY, APP_SETTINGS_CHANGED, type AppPreferenceControlBridge } from '../shared/appPreferenceControl.js';
 import type { VoiceConversationApi } from '../shared/voiceConversation';
+import { COMPOSER_ENHANCE_PROMPT_CHANNEL } from '../shared/composerPromptEnhance';
 import { PERFORMANCE_TRACE_CHANNEL, PERFORMANCE_TRACE_EVENTS_CHANNEL, PERFORMANCE_TRACE_STATE_CHANNEL, type PerformanceTraceAPI, type PerformanceTraceState } from '../shared/performanceTrace';
 import { createAccessibilitySupportBridge } from './accessibilitySupport';
 import { createMicrophonePermissionSnapshot } from './microphonePermissionSnapshot';
@@ -8674,6 +8675,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:computer:update-driver', opts),
       onUpdateProgress: fanOutComputerDriverUpdateProgress,
     },
+  },
+
+  // ── 对话输入框：增强提示词 ────────────────────────────────────────
+  composer: {
+    enhancePrompt: (text: string): Promise<{ text: string; model: string }> =>
+      ipcRenderer.invoke(COMPOSER_ENHANCE_PROMPT_CHANNEL, text),
   },
 
   // ── 剪贴板历史快捷面板 ────────────────────────────────────────────

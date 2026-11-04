@@ -5120,7 +5120,7 @@
     },
     "auxiliaryModels": {
       "title": "Modelos auxiliares",
-      "description": "Utilizado para nomear tarefas automaticamente e mudar nomes com IA, sugestões de prompts no editor, Ajuda, resumos de tarefas afixadas, títulos de IM / Feishu e verificações de contexto de grupo, scripts de tarefas agendadas, perguntas e respostas rápidas de plugins com “seguir predefinição” e aperfeiçoamento de voz BYOK.",
+      "description": "Utilizado para nomear tarefas automaticamente e mudar nomes com IA, sugestões de prompts no editor, Ajuda, resumos de tarefas afixadas, títulos de IM / Feishu e verificações de contexto de grupo, scripts de tarefas agendadas, perguntas e respostas rápidas de plugins com “seguir predefinição” e aperfeiçoamento de voz BYOK.、a ação de melhorar o prompt na caixa de entrada。",
       "automatic": "Recomendação automática",
       "customize": "Personalizado",
       "preferred": {
@@ -12778,6 +12778,13 @@
       "later": "Mais tarde",
       "ready": "As páginas interativas estão ativadas para a próxima chamada de ferramenta do plugin.",
       "updateHost": "Atualize o Cindy no computador de execução para aprovar páginas interativas aqui."
+    },
+    "composerEnhance": {
+      "enhance": "Melhorar o prompt",
+      "undo": "Anular a melhoria",
+      "success": "Prompt melhorado",
+      "working": "A melhorar…",
+      "failed": "Não foi possível melhorar o prompt"
     }
   },
   "onboarding": {

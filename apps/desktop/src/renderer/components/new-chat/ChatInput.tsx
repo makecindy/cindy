@@ -129,6 +129,7 @@ import {
 } from '@/lib/composerActionsBus';
 import { resolveComposerModelSelection } from './composerModelSelection';
 import type { SessionRuntimeProfileProjection, SessionRuntimePendingProjection } from '@/lib/ccAgent.types';
+import { ComposerEnhancePromptButton } from './ComposerEnhancePromptButton';
 import {
   ModelSelector,
   resolveRemoteModelListStatus,
@@ -10094,6 +10095,12 @@ export function ChatInput({
                             : 'min-w-0')
                     : useNarrowToolbar ? 'min-w-0 shrink' : undefined}
                 >
+                  {!sessionModelLoading && (
+                    <ComposerEnhancePromptButton
+                      editor={editor}
+                      disabled={composerEditorLocked || settingsLocked || sharedGuest}
+                    />
+                  )}
                   {!sessionModelLoading && <ModelSelector
                     sshCodex={sshCodexCatalog}
                     // 选中态一律是会话 / 草稿持有的 **wire model id**(sessions.model 或
