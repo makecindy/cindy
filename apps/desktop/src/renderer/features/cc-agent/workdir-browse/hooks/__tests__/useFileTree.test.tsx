@@ -130,6 +130,7 @@ describe('useFileTree refresh scheduling', () => {
   // Focus recovery calls the public refresh while remote reads are outstanding.
   // Unit gap: queued restores must not start twice, while reads begun before
   // focus still need fresh data. Nine folders leave one queued after root settles.
+  // Once a slot is free, the root retry must precede that untouched backlog.
   it.each([false, true])('shares the restore budget with focus refresh and unmount=%s', async (leave) => {
     const folders: DirEntry[] = Array.from({ length: 9 }, (_, i) => ({
       name: `pkg${i}`, relPath: `pkg${i}`, type: 'directory', size: 0, mtimeMs: 1,
@@ -165,6 +166,10 @@ describe('useFileTree refresh scheduling', () => {
         };
         item.request.resolve(item.path === '' ? [...folders, entry] : [entry]);
       });
+      if (!leave && pending[i].path === 'pkg0' && pending[i].phase === 1) {
+        expect(pending.at(-1)?.path).toBe('');
+        expect(pending.some((item) => item.path === 'pkg8')).toBe(false);
+      }
     }
     await act(async () => { await refreshed; });
     expect(peak).toBeLessThanOrEqual(8);

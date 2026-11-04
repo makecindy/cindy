@@ -246,7 +246,8 @@ interface FileTreeStore {
 }
 
 interface DirectoryRestoreQueue {
-  paths: string[];
+  /** Refresh retries precede untouched restoration paths without adding workers. */
+  priority: string[];
   pending: Set<string>;
   promise: Promise<void>;
 }
@@ -733,7 +734,7 @@ async function initStore(store: FileTreeStore): Promise<void> {
     : inheritedExpanded.filter((p) => !store.snapshot.entries.has(p));
   invalidateBorrowedCollapsedEntries(store);
   const paths = [...new Set([ROOT_KEY, ...restored, ...refetchInherited])];
-  const queue: DirectoryRestoreQueue = { paths, pending: new Set(paths), promise: Promise.resolve() };
+  const queue: DirectoryRestoreQueue = { priority: [], pending: new Set(paths), promise: Promise.resolve() };
   store.restoreQueue = queue;
   // Publish queued loading paths together. Otherwise every newly freed slot
   // introduces another synchronous store notification/render during restoration.
@@ -744,8 +745,8 @@ async function initStore(store: FileTreeStore): Promise<void> {
   emit(store);
   let next = 0;
   queue.promise = Promise.all(Array.from({ length: Math.min(RESTORE_CONCURRENCY, paths.length) }, async () => {
-    while (next < paths.length && store.restoreGeneration === generation) {
-      const path = paths[next++];
+    while ((queue.priority.length > 0 || next < paths.length) && store.restoreGeneration === generation) {
+      const path = queue.priority.shift() ?? paths[next++];
       queue.pending.delete(path);
       await fetchDir(store, path);
     }
@@ -856,7 +857,9 @@ async function refresh(store: FileTreeStore): Promise<void> {
       if (store.inFlight.has(path)) {
         running.push(fetchDir(store, path));
       } else {
-        queue.paths.push(path);
+        // targets starts with root: retry it at the next free slot rather than
+        // leaving a stale/error root behind many remote restoration round trips.
+        queue.priority.push(path);
         queue.pending.add(path);
         added.push(path);
       }
