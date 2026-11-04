@@ -10620,7 +10620,8 @@
         "lifecycleUnavailable": "当前服务器或电脑尚不支此操作。",
         "groupDissolved": "群议已散，仍可览有权访问之旧讯。",
         "lastOwner": "请先转让群主或解散群议，再退出。",
-        "allBotsMentionDisabled": "群主尚未启 @诸同僚。"
+        "allBotsMentionDisabled": "群主尚未启 @诸同僚。",
+        "turnAlreadyStarted": "此同伴已启，不可略过"
       },
       "organizer": "主事",
       "plan": {
@@ -10651,7 +10652,17 @@
         "stepSpoken": "言毕",
         "allTurns_one": "凡 {{count}} 位",
         "allTurns_other": "凡 {{count}} 位",
-        "foldTurns": "收"
+        "foldTurns": "收",
+        "stepQueued": "待启",
+        "stepExecuting": "行中",
+        "stepSkipped": "已略",
+        "skippingTurn": "略过中…",
+        "queueWaiting": "待君续行",
+        "skipTurnLabel": "略过 {{name}}",
+        "queueEnded": "此轮已终",
+        "talkTitle": "依次陈议",
+        "talkPending": "未始",
+        "skipTurn": "略过"
       },
       "speaking": {
         "planning": "方筹划…"

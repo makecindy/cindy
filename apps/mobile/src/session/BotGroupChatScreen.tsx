@@ -527,12 +527,13 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     }
   };
 
-  const editPlanStep = async (planId: string, step: BotGroupPlanStepView, action: 'reassign' | 'remove', botId?: string, expectedRevision?: number) => {
+  const editPlanStep = async (planId: string, step: BotGroupPlanStepView, action: 'reassign' | 'remove' | 'skip', botId?: string, expectedRevision?: number) => {
     if (planPendingRef.current) return;
     const pending = {}; planPendingRef.current = pending;
     setPlanPending({ planId, action: 'edit' });
     try {
-      await chat.act('plan-edit', { planId, position: step.position, action, ...(botId ? { botId } : {}), ...(!deviceId ? { expectedRevision } : {}) });
+      await chat.act('plan-edit', { planId, position: step.position, action, ...(botId ? { botId } : {}),
+        ...(action === 'skip' ? { executionId: step.executionId } : {}), ...(!deviceId ? { expectedRevision } : {}) });
     } catch (error) {
       if (planPendingRef.current === pending) report(error, 'groupChat.plan.editFailed');
     } finally {
@@ -840,7 +841,7 @@ export function BotGroupTimeline({
   planPending: PlanPending | null;
   onContinue(): void;
   onPlanAction(action: BotGroupPlanAction, planId: string, revision?: number): void;
-  onEditStep(planId: string, step: BotGroupPlanStepView, action: 'reassign' | 'remove', botId?: string, revision?: number): void;
+  onEditStep(planId: string, step: BotGroupPlanStepView, action: 'reassign' | 'remove' | 'skip', botId?: string, revision?: number): void;
   onMessageLayout?: (id: string, y: number, height: number) => void;
   onLocateMessage?: (id: string) => void;
   highlightId?: string;
@@ -1011,7 +1012,7 @@ function BotGroupTimelineItem({
   planReassignable: boolean;
   planPending: BotGroupPlanCardAction | null;
   onPlanAction(action: 'start' | 'dismiss'): void;
-  onEditStep(step: BotGroupPlanStepView, action: 'reassign' | 'remove', botId?: string): void;
+  onEditStep(step: BotGroupPlanStepView, action: 'reassign' | 'remove' | 'skip', botId?: string): void;
 }) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);

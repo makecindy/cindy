@@ -113,6 +113,8 @@ interface Execution {
   context_seq: string; attachment_after_seq?: string; epoch: number; status: string; access_mode: 'owner' | 'chat' | 'tools'; access_revision: number;
 }
 interface ServerPlan {
+  activeExecution?: { id: string; status: string };
+  supportsPendingSkip?: boolean;
   id: string; revision: number; source_message_id: string; request_text: string; organizer_id: string; creator_id: string;
   note_message_ids?: string[];
   status: BotGroupPlanView['status']; current_step: number | null; steps: Array<BotGroupPlanView['steps'][number] & { resultMessageId?: string | null }>;
@@ -1837,7 +1839,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const executionFailures = summaryOnly || direct ? undefined : await failureSnapshot(roomId, s.members, [...(o.sourceMessageIds ?? []), ...page.map(m => m.id)], executions);
     const serverPlans = await plansRead;
     const workspace = workspaces().read(roomId);
-    const plans = serverPlans.map(plan => planView(plan, s.members, workspace));
+    const plans = serverPlans.map(plan => planView(plan, s.members, workspace, Boolean(s.room.archived || s.room.dissolved_at)));
     const open = plans.find(p => ['proposed', 'running', 'waiting'].includes(p.status));
     // Keep execution identity across computers and concurrent threads. Only the executing
     // computer resolves a lane; authenticated peers retrieve it through the group resource.
@@ -1914,13 +1916,15 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         othersActive: executions.some(e => ['queued', 'running', 'needs_input'].includes(e.status) && e.requester_id !== selfId
           && !localBot(e.bot_id) && !s.members.some(m => m.id === e.bot_id && m.ownerActorId === selfId)), canContinue: !open && !planning.has(roomId) && (executions.some(e => !e.plan_id && ordinaryExecution(e)) || s.messages.some(discussionSource)) && !executions.some(e => ['queued','running','stopping'].includes(e.status)) } };
   }
-  function planView(plan: ServerPlan, members: Member[], workspace: ReturnType<ReturnType<typeof chatServerWorkspaces>['read']>): BotGroupPlanView {
+  function planView(plan: ServerPlan, members: Member[], workspace: ReturnType<ReturnType<typeof chatServerWorkspaces>['read']>, readOnly = false): BotGroupPlanView {
     return { id: plan.id, status: plan.status, organizerBotId: localBot(plan.organizer_id)?.id ?? plan.organizer_id,
       organizerName: members.find(m => m.id === plan.organizer_id)?.name ?? '',
-      steps: plan.steps.map(s => ({ ...s, botId: localBot(s.botId)?.id ?? s.botId })), currentStep: plan.current_step,
+      supportsPendingSkip: plan.supportsPendingSkip === true,
+      steps: plan.steps.map(s => ({ ...s, botId: localBot(s.botId)?.id ?? s.botId,
+        ...(s.position === plan.current_step && plan.activeExecution ? { executionId: plan.activeExecution.id, executionStatus: plan.activeExecution.status } : {}) })), currentStep: plan.current_step,
       workDir: workspace?.plans[plan.id]?.workDir ?? null, branch: workspace?.plans[plan.id]?.branch ?? null,
       ...(plan.kind ? { kind: plan.kind,
-        canManage: plan.creator_id === selfId || members.some(m => m.ownerActorId === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role)),
+        canManage: !readOnly && (plan.creator_id === selfId || members.some(m => m.ownerActorId === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role))),
         // Same rule as sendMessage's commentPlan: additions are written as the human, so a teammate's role does not count.
         canAdd: plan.creator_id === selfId || members.some(m => m.id === selfId && ['owner', 'admin'].includes(m.role)) } : {}),
       // Only a 分工 started here follows this computer's choice; its 继续 is pressed from here.
@@ -1929,7 +1933,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   }
   async function actPlan(input: unknown, action: string) {
     const i = z.object({ groupId: id, planId: id, position: z.number().int().min(0).max(11).optional(),
-      action: z.enum(['remove','reassign']).optional(), botId: z.string().optional() }).parse(input);
+      action: z.enum(['remove','reassign','skip']).optional(), botId: z.string().optional(), executionId: id.optional() }).parse(input);
     const room = await groupRoom(i.groupId);
     await replacePlanIntent(room);
     const plans = await api<ServerPlan[]>(`/conversations/${room}/plans?ids=${i.planId}`);
@@ -1942,7 +1946,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const manager = plan.creator_id === selfId ? undefined : managementActor(await recentSnapshot(room));
     const asManager = manager === selfId ? undefined : manager;
     await api(`/conversations/${room}/plans/${plan.id}`, 'POST', { operationId: randomUUID(), expectedRevision: plan.revision,
-      action: serverAction, position: i.position, botId }, asManager);
+      action: serverAction, position: i.position, botId, ...(serverAction === 'skip' ? { executionId: i.executionId } : {}) }, asManager);
     changed(room); return { ok: true as const };
   }
   /**

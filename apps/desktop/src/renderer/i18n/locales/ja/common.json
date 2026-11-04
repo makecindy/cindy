@@ -10620,7 +10620,8 @@
         "lifecycleUnavailable": "現在のサーバーまたはコンピューターは、この操作にまだ対応していません。",
         "groupDissolved": "このグループは解散しました。閲覧権限のある履歴は引き続き確認できます。",
         "lastOwner": "退出する前にオーナーを譲渡するか、グループを解散してください。",
-        "allBotsMentionDisabled": "グループ所有者がすべての仲間への @ を有効にしていません。"
+        "allBotsMentionDisabled": "グループ所有者がすべての仲間への @ を有効にしていません。",
+        "turnAlreadyStarted": "この仲間はすでに実行を開始しているため、スキップできません"
       },
       "organizer": "まとめ役",
       "plan": {
@@ -10651,7 +10652,17 @@
         "stepSpoken": "発言済み",
         "allTurns_one": "全 {{count}} 人",
         "allTurns_other": "全 {{count}} 人",
-        "foldTurns": "折りたたむ"
+        "foldTurns": "折りたたむ",
+        "stepQueued": "開始待ち",
+        "stepExecuting": "実行中",
+        "stepSkipped": "スキップ済み",
+        "skippingTurn": "スキップ中…",
+        "queueWaiting": "続行待ち",
+        "skipTurnLabel": "スキップ {{name}}",
+        "queueEnded": "このラウンドは終了",
+        "talkTitle": "順番に意見を聞く",
+        "talkPending": "未開始",
+        "skipTurn": "スキップ"
       },
       "speaking": {
         "planning": "役割分担を考えています…"

@@ -333,7 +333,7 @@ export interface BotGroupTimelineItemProps {
   planDoneAt?: ReadonlyMap<number, number>;
   onPlanAction?: (action: 'start' | 'dismiss', planId: string) => void;
   readOnly?: boolean;
-  onEditStep?: (planId: string, step: BotGroupPlanStepView, action: 'reassign' | 'remove', botId?: string) => void;
+  onEditStep?: (planId: string, step: BotGroupPlanStepView, action: 'reassign' | 'remove' | 'skip', botId?: string) => void;
   /** Present on the open 分工 card for whoever may press 继续 (§7.4). */
   onPlanAutoContinue?: (planId: string, on: boolean) => void;
 }
@@ -535,6 +535,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
                 plan={props.plan}
                 members={members}
                 actionable={false}
+                readOnly={props.readOnly}
                 // Only the creator, an owner or an admin may change who speaks next.
                 reassignable={(props.planReassignable ?? false) && props.plan.canManage !== false}
                 pending={props.planPending ?? null}

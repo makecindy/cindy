@@ -10665,7 +10665,8 @@
         "lifecycleUnavailable": "The current server or computer does not support this action yet.",
         "groupDissolved": "This group has been dissolved. You can still read the available history.",
         "lastOwner": "Transfer ownership or dissolve this group before leaving.",
-        "allBotsMentionDisabled": "The group owner has not enabled @all teammates."
+        "allBotsMentionDisabled": "The group owner has not enabled @all teammates.",
+        "turnAlreadyStarted": "This teammate has already started and cannot be skipped"
       },
       "organizer": "Organizer",
       "plan": {
@@ -10696,7 +10697,17 @@
         "stepSpoken": "Done",
         "allTurns_one": "All {{count}} teammate",
         "allTurns_other": "All {{count}} teammates",
-        "foldTurns": "Show fewer"
+        "foldTurns": "Show fewer",
+        "stepQueued": "Waiting to Start",
+        "stepExecuting": "Running",
+        "stepSkipped": "Skipped",
+        "skippingTurn": "Skipping…",
+        "queueWaiting": "Waiting for you to continue",
+        "skipTurnLabel": "Skip {{name}}",
+        "queueEnded": "Round ended",
+        "talkTitle": "Hear from everyone in turn",
+        "talkPending": "Not started",
+        "skipTurn": "Skip"
       },
       "speaking": {
         "planning": "Splitting the work…"

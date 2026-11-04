@@ -112,6 +112,36 @@ describe('direct group plans', () => {
     expect(request).toHaveBeenCalledWith(`/conversations/${id(1)}/plans?ids=${id(40)},${id(41)}`);
     expect(chatGroupView(next, id(10)).plans[0]).toMatchObject({ id: id(41), status: 'done' });
   });
+  it('projects future-skip support and sends only a pending position while the current bot runs', async () => {
+    const { client, state, request } = fixture();
+    Object.assign(state.plan, { kind: 'talk', status: 'running', current_step: 0, supportsPendingSkip: true,
+      activeExecution: { id: id(50), status: 'running' } });
+    state.plan.steps[0].status = 'running';
+    state.plan.steps.push({ ...state.plan.steps[0], position: 1, status: 'pending' });
+    const page = await client.load(id(1));
+    expect(chatGroupView(page, id(10)).plans[0].supportsPendingSkip).toBe(true);
+    await client.actPlan(id(1), page.plans![0], { action: 'skip', position: 1 }, 'future-skip');
+    expect(request).toHaveBeenLastCalledWith(`/conversations/${id(1)}/plans/${id(40)}`, 'POST',
+      { action: 'skip', position: 1, expectedRevision: 3, operationId: 'future-skip' }, undefined, undefined);
+    await expect(client.actPlan(id(1), { ...page.plans![0], supportsPendingSkip: undefined },
+      { action: 'skip', position: 1 }, 'old-server')).rejects.toThrow('PLAN_CLOSED');
+  });
+  it('projects the exact queued attempt and sends it with the displayed revision', async () => {
+    const { client, state, request } = fixture();
+    Object.assign(state.plan, { kind: 'talk', status: 'running', current_step: 0,
+      activeExecution: { id: id(50), status: 'queued' } });
+    state.plan.steps[0].status = 'running';
+    const page = await client.load(id(1));
+    expect(chatGroupView(page, id(10)).plans[0].steps[0]).toMatchObject({ executionId: id(50), executionStatus: 'queued' });
+    await client.actPlan(id(1), page.plans![0], { action: 'skip', position: 0, executionId: id(50) }, 'skip');
+    expect(request).toHaveBeenLastCalledWith(`/conversations/${id(1)}/plans/${id(40)}`, 'POST',
+      { action: 'skip', position: 0, executionId: id(50), expectedRevision: 3, operationId: 'skip' }, undefined, undefined);
+    await expect(client.actPlan(id(1), { ...page.plans![0], activeExecution: { id: id(50), status: 'running' } },
+      { action: 'skip', position: 0, executionId: id(50) }, 'claimed')).rejects.toThrow('TURN_ALREADY_STARTED');
+    await expect(client.actPlan(id(1), { ...page.plans![0], kind: 'work' },
+      { action: 'skip', position: 0, executionId: id(50) }, 'work')).rejects.toThrow('PLAN_CLOSED');
+    expect(request.mock.calls.filter(([, method]) => method === 'POST')).toHaveLength(1);
+  });
   it('reassigns only eligible work steps and refuses talk-plan edits', async () => {
     const { client, state, request } = fixture();
     Object.assign(state.plan, { status: 'waiting', current_step: 0 });
