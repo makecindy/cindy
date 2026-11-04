@@ -459,7 +459,7 @@ import { cindyGhostSchemePrivilege } from './cindy-brain/runtime/electronSandbox
 import { fetchReleaseNotes, fetchReleaseNotesIndex } from './releaseNotesService';
 import { resolveWorkspacePathCached, resolveWorkspacePathBatchCached } from './pathResolver';
 import { registerLocalDbIpc } from './localDb/ipc/registerAll';
-import { listRecentWorkdirs } from './localDb/ipc/recentWorkdirs';
+import { hasRecentWorkdir, listRecentWorkdirs } from './localDb/ipc/recentWorkdirs';
 import { getActiveCatalog } from './maker-host/active-catalog';
 import { resolveSessionContextWindow } from '../shared/sessionContextWindow';
 import { resumeDeletedPiSubagentCleanup } from './localDb/ipc/sessions';
@@ -615,7 +615,11 @@ import { initPerformanceTraceService } from './performance-trace';
 import { createOpenLogsMenuItem, openLogsDirectory } from './logSupport';
 import { WindowManualDragController } from './windowManualDrag';
 import { loadWindowsTaskbarNative } from './windowsTaskbarNative';
-import { issueWritableDirectoryPickerGrant } from './maker-ipc/writableDirectoryPickerGrant.js';
+import {
+  issueWritableDirectoryPickerGrant,
+  issueWritableDirectoryRecentGrant,
+  WritableDirectoryPickerGrantError,
+} from './maker-ipc/writableDirectoryPickerGrant.js';
 // 设备互联(跨设备远程控制): relay 连接 host + 开关/设备列表 IPC
 import {
   initDeviceLinkService,
@@ -1191,7 +1195,7 @@ import { runPluginStorageSmoke } from './smoke/pluginStorageSmoke.js';
 import { runComputerUseSmokeIfRequested } from './smoke/computerUseSmoke.js';
 import { getResolvedMainLocale, setMainClassicalStyle, setMainLocale, t } from './i18n.js';
 import { isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
-import { requireObject, throwIpcError } from './utils/ipcValidate.js';
+import { requireObject, requireString, throwIpcError } from './utils/ipcValidate.js';
 import { pickNativeAtResource } from './nativeAtResourcePicker.js';
 // Scheduler (Phase 3) — 启动单例需要 maker / localDb / mainWindow 都 ready，但
 // splash check-environment / user login (触发 ensureReady) 谁先到不固定。
@@ -7317,6 +7321,33 @@ const registerIpcHandlers = () => {
       return { success: true, path: selectedPath };
     },
   );
+
+  // ── 从最近项目列表添加可写目录：与把它选作任务工作目录同等范围，只认列表里原样保存的路径 ──
+  const recentWritableDirectoryLog = createLogger('writable-directory:recent-grant');
+  ipcMain.handle('dialog:authorize-recent-writable-directory', async (event, input: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const body = requireObject(input);
+    const directory = requireString(body.directory, 'directory');
+    const writableGrantScope = requireString(body.writableGrantScope, 'writableGrantScope');
+    if (writableGrantScope.length > 128) {
+      throwIpcError('INVALID_PARAMS', 'invalid writable directory grant scope');
+    }
+    try {
+      await issueWritableDirectoryRecentGrant({
+        scopeId: writableGrantScope,
+        senderId: event.sender.id,
+        directory,
+        isRecentProject: (candidate) => hasRecentWorkdir(candidate),
+      });
+    } catch (error) {
+      if (error instanceof WritableDirectoryPickerGrantError) throwIpcError(error.code, error.message);
+      recentWritableDirectoryLog.warn('recent writable directory authorization failed', {
+        error: String(error),
+      });
+      throwIpcError('INTERNAL', 'Writable directory authorization failed');
+    }
+    return { success: true };
+  });
 
   // ── Dialog: 文件选择器(前置检查脚本选取等通用场景;与目录选择器同形) ──
   ipcMain.handle(

@@ -3,14 +3,12 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 /** One document canvas, including the fixed copies behind the composer. */
 export function useWallpaperBackground({
   background,
-  pending,
   visibility,
   blur,
   reducedMotion,
   decodeUrl,
 }: {
   background: string | undefined;
-  pending: boolean;
   visibility: number;
   blur: number;
   reducedMotion: boolean;
@@ -49,9 +47,9 @@ export function useWallpaperBackground({
       root.style.removeProperty('--app-wallpaper-previous-image');
     };
     const previous = root.style.getPropertyValue('--app-wallpaper-image');
-    // A download, disk-cache lookup or decode must not replace a displayed
-    // original with the next thumbnail. A failed selection also retains it.
-    const next = background && (pending || !imageReady) && previous ? previous : background;
+    // Official selections show their bundled preview until the asset hook
+    // supplies a decoded original. Only custom images need to wait here.
+    const next = background && !imageReady && previous ? previous : background;
     if (!next) {
       stopTransition();
       delete root.dataset.wallpaperActive;
@@ -92,7 +90,7 @@ export function useWallpaperBackground({
       delete root.dataset.wallpaperBlur;
       root.style.removeProperty('--app-wallpaper-blur');
     }
-  }, [background, pending, visibility, blur, reducedMotion, imageReady]);
+  }, [background, visibility, blur, reducedMotion, imageReady]);
 
   useLayoutEffect(() => {
     const root = document.documentElement;

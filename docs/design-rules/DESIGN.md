@@ -96,10 +96,13 @@ It follows real transfer progress and disappears once ready;
 cache hits show the original directly. A failed tile shows a retry icon and supports click,
 Enter and Space to retry, preserving the grid's single Tab stop and selected border.
 Expose progress and failure descriptions to assistive technology outside the radio descendants.
-Keep the displayed background while the next official original is loading or decoding;
-reuse already decoded original URLs directly when revisiting a selection. Once ready,
-crossfade the static canvas and its composer copies using opacity and the fast motion
-token, respecting reduced motion. Initial load may use the bundled preview.
+Show the selected official wallpaper's bundled preview immediately while its original
+is loading or decoding (user decision, 2026-11-03, #8591). Download or decode failure
+keeps that selection's preview, not the previous wallpaper. Reuse already decoded
+original URLs directly when revisiting a selection. Crossfade both the preview and
+the ready original on the static canvas and its composer copies using opacity and
+the fast motion token, respecting reduced motion. Custom image replacements still
+retain the previous background until decoding succeeds.
 Reuse the settings download percentage normalization. Browsing the grid or hiding the wallpaper does not
 download originals; only a selected, visible image is requested. Reuse valid cached
 images offline and after upgrades. Do not request CDN assets for IDs absent from the manifest.
@@ -135,7 +138,11 @@ The media store's client wallpaper scope isolates its bytes from chat attachment
 switching accounts (or signing out) keeps the same wallpaper. Font-only utility renderers never receive
 custom media URLs.
 Detached sidebar and plugin-panel host chrome use the same wallpaper provider;
-embedded plugin webviews retain their own surfaces and permission boundary.
+plugin main-view documents share the host canvas while wallpaper is active, including
+when docked or detached. Only their html/body background color becomes transparent;
+theme surface tokens, controls, author background images, regular panels and settings
+webviews retain their own surfaces. Disabling wallpaper restores the page background
+without reloading the plugin. All webviews retain their permission boundary.
 Cancellation and import failures retain the existing media. Switching to a built-in
 or None keeps the imported media available; Remove Wallpaper forgets it. Custom imagery
 shares the continuous cover-fit canvas and readability veil. Custom MP4 exposes the existing
@@ -515,6 +522,19 @@ row with the existing layer separation, not a nested card. Provider-specific aut
 recovery content may fill the explanation slot without replacing the header layout.
 Identity, state, action semantics and pending implementation are defined in
 [供应商设置](../product-rules/provider-settings.md). This contract does not declare existing headers migrated.
+
+### Provider dialog disclosures
+
+In Desktop `ProviderConnectionDialog`, Manual add model and Advanced connection settings are
+registered frameless text disclosures (user-approved lightweight indentation layout, 2026-11-03).
+Stack the sections vertically with aligned left chevrons, existing 13px/500 settings section title
+color and a minimum 32px hit height. Resting, hover and pressed states retain no fill or border
+and do not change label color or geometry. Keyboard focus independently uses a 2px semantic
+`--focus-ring` with a pill outline; this does not introduce a resting button frame. The left
+chevron rotates with the expanded state. Indent the expanded manual form by 20px, retaining
+vertical fields and existing shared inputs, select and Add button. Light and Dark use existing
+semantic theme tokens. This registration covers only these two disclosures; other provider
+actions retain their shared Button treatment. Model and connection logic remain unchanged.
 
 ### Teammate model settings
 

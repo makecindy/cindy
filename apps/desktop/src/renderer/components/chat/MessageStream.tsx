@@ -6352,7 +6352,7 @@ export function MessageStream({
     previousLocalFileRefsRef.current = localFileRefs;
   }, [localFileRefs]);
 
-  // 伙伴聊天的工作过程与回复正文同列：只占头像宽度，不重复画脸。memo 住以保持
+  // 伙伴聊天的工作过程、成果与回复正文同列：只占头像宽度，不重复画脸。memo 住以保持
   // WorkGroupRenderItemView 的 memo 比较成立。
   const botReplyColumnSpacer = useMemo(
     () =>
@@ -6362,6 +6362,14 @@ export function MessageStream({
         </span>
       ) : undefined,
     [assistantAvatar, simplifiedBotConversation],
+  );
+  const renderBotArtifacts = useCallback(
+    (content: ReactNode, renderItemKey?: string) => (
+      <div data-render-item-key={renderItemKey}>
+        {withAssistantAvatar(botReplyColumnSpacer, content)}
+      </div>
+    ),
+    [botReplyColumnSpacer],
   );
   const workGroupRenderContext = useMemo<WorkGroupRenderContext>(
     () => ({
@@ -6643,6 +6651,7 @@ export function MessageStream({
                         <GeneratedFilesCard
                           key={item.key}
                           renderItemKey={item.key}
+                          renderBotArtifacts={botReplyColumnSpacer ? renderBotArtifacts : undefined}
                           files={item.files}
                           turnStartMs={item.turnStartMs}
                           turnEndMs={item.turnEndMs}

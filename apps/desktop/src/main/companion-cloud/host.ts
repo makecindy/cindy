@@ -8,6 +8,7 @@ import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
 import { getDbClient } from '../localDb/client/current.js';
+import { flushAssistantSamplingMetadata, getAssistantSamplingRuntimeId } from '../messagePersistBroadcaster.js';
 import { createBotProfile, getBotMemoryService, setBotProfileAvatar, updateBotProfile } from '../localDb/ipc/bots.js';
 import { decodeBotAvatarImage } from '../localDb/ipc/botAvatarSelection.js';
 import { restoreCloudAvatar } from './avatarRestore.js';
@@ -375,6 +376,13 @@ export function createCompanionCloudHost(input: {
   // Every reader (send guards, routines, lists) sees only the active owner's homes, and that
   // owner's persisted demotion, even before its Chat Server instance has started.
   companionHomes.bindOwner(activeOwnerScopeKey, () => companionShadowStore().read());
+  const samplingRows = async (sessionId: string, read: () => Promise<CompanionMirrorRow[]>) => {
+    if (!await flushAssistantSamplingMetadata(sessionId)) throw new Error('COMPANION_STILL_CHANGING');
+    const samplingRuntimeId = getAssistantSamplingRuntimeId(sessionId);
+    const rows = await read();
+    if (getAssistantSamplingRuntimeId(sessionId) !== samplingRuntimeId) throw new Error('COMPANION_STILL_CHANGING');
+    return rows.map(row => ({ ...row, samplingRuntimeId }));
+  };
   return {
     homes: companionHomes,
     openState: (endpoint, humanActorId, current) => createCompanionCloudState({
@@ -390,8 +398,8 @@ export function createCompanionCloudHost(input: {
       if (resolved.status === 'conflict') throw new Error('COMPANION_TASK_CONFLICT');
       return resolved.status === 'resolved' ? resolved.sessionId : null;
     },
-    rowsAfter: readMirrorRowsAfter,
-    latestRows: readLatestMirrorRows,
+    rowsAfter: (sessionId, cursor, limit) => samplingRows(sessionId, () => readMirrorRowsAfter(sessionId, cursor, limit)),
+    latestRows: (sessionId, limit, options) => samplingRows(sessionId, () => readLatestMirrorRows(sessionId, limit, options)),
     replyAttachments: (_botId, sessionId, row, text) => replyArtifactAttachments(row, text, sessionId, {
       roots: readTaskFileRoots,
       blob: readReplyBlob,

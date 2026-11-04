@@ -1,3 +1,8 @@
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+import type { AgentSkillCommand } from '@cindy/maker-core';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -11,6 +16,7 @@ import {
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
 import * as schema from '../../localDb/schema.js';
+import { createCindyLearnInvocationCapture } from '../captureInvocation.js';
 
 let activeDb: { sqlite: Database.Database; client: DbClient } | null = null;
 
@@ -51,6 +57,63 @@ afterEach(() => {
 });
 
 describe('Learn invocation grant', () => {
+  // #7381/#8549 (unit): real capture must produce a grant for Pi's
+  // /cindy:learn -> skill:learn mapping. Send tests injected a ready grant,
+  // so they could not catch the bare namespaced command losing authorization.
+  it('captures the trusted Pi runtime Skill for the namespaced Learn invocation', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'learn-invocation-capture-'));
+    try {
+      const skillFile = path.join(root, 'SKILL.md');
+      await fs.writeFile(skillFile, '---\nname: learn\n---\nLearn.\n');
+      const session = {
+        id: 'session-1', instanceId: 'instance-1', agentKind: 'pi' as const,
+        workDir: root, remoteHostId: null,
+      };
+      const builtInSkill: AgentSkillCommand = {
+        kind: 'agent-skill', name: 'learn', source: 'user',
+        path: skillFile, runtimeCommandName: 'skill:learn',
+      };
+      let skills = [builtInSkill];
+      let enabled = true;
+      let currentSession = session;
+      const listSkills = vi.fn(async () => ({ skills }));
+      const capture = createCindyLearnInvocationCapture({
+        getSession: () => currentSession,
+        builtInSkillDescriptors: () => [{ name: 'learn', absolutePath: root, nativeClaudePath: root }],
+        isSkillEnabled: () => enabled,
+        canGrantUnqualifiedClaudeInvocation: async () => true,
+        listSkills,
+      });
+      await expect(capture(session, '/cindy:learn', '/cindy:learn')).resolves.toEqual({
+        version: 1,
+        sessionInstanceId: session.instanceId,
+        resolvedSkillPath: await fs.realpath(skillFile),
+      });
+
+      // Neither the spelling nor a discovery-provided builtIn flag proves trust.
+      for (const candidates of [
+        [{ ...builtInSkill, builtIn: true, path: path.join(root, 'custom', 'SKILL.md') }],
+        [builtInSkill, { ...builtInSkill }],
+        [{ ...builtInSkill, runtimeCommandName: 'cindy:learn' }],
+      ]) {
+        skills = candidates;
+        await expect(capture(session, '/cindy:learn', '/cindy:learn')).resolves.toBeNull();
+      }
+      skills = [builtInSkill];
+      enabled = false;
+      await expect(capture(session, '/cindy:learn', '/cindy:learn')).resolves.toBeNull();
+      enabled = true;
+      await expect(capture(session, '/cindy:learn other', '/cindy:learn')).resolves.toBeNull();
+      listSkills.mockImplementationOnce(async () => {
+        currentSession = { ...session, instanceId: 'replaced-instance' };
+        return { skills };
+      });
+      await expect(capture(session, '/cindy:learn', '/cindy:learn')).resolves.toBeNull();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('does not attest a Bot-owned /learn alias using the global skill catalog', async () => {
     const sqlite = createInvocationDb();
     sqlite.prepare('INSERT INTO bot_session_links(session_id) VALUES (?)').run('bot-session');

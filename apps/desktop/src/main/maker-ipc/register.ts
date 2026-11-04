@@ -634,11 +634,8 @@ import {
   builtInSkillDescriptorsAsync,
 } from '../maker-host/built-in-skills.js';
 import { isCindySkillEnabled, readDisabledSkillPaths, skillActivationKey } from '../skillhub/activationPreferences.js';
-import {
-  parseDirectLearnInvocation,
-  canGrantUnqualifiedClaudeLearnInvocation,
-  type CindyLearnInvocationGrant,
-} from '../learn-host/invocationGrant.js';
+import { canGrantUnqualifiedClaudeLearnInvocation } from '../learn-host/invocationGrant.js';
+import { createCindyLearnInvocationCapture } from '../learn-host/captureInvocation.js';
 import { ensurePiManagerInstalled } from '../maker-host/pi-manager-client.js';
 import {
   setRemoteCodexLiveTurnChecker,
@@ -6399,8 +6396,8 @@ const sessionEventDependencies: SessionEventDependencies = {
   get broadcastToAllWindows() {
     return broadcastToAllWindows;
   },
-  get broadcastCodexImageAsToolResult() {
-    return broadcastCodexImageAsToolResult;
+  get deliverCodexGeneratedImage() {
+    return deliverCodexGeneratedImage;
   },
   get autoResumeBookkeeping() {
     return autoResumeBookkeeping;
@@ -13541,6 +13538,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           message: params.message,
         }),
       });
+      // Chat-only dispatch allocates a queue id; keep the server execution identity
+      // so error recovery can restore the group's full background as well.
+      if (params.clientId?.startsWith(BOT_GROUP_CLIENT_ID_PREFIX)) queued.retrySourceClientId = params.clientId;
       const enqueue = () => inputCoordinator.enqueue(params.targetSessionId, queued, {
         resumeRestorePausedQueue: true,
       });
@@ -13742,6 +13742,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     || inputCoordinator.getQueueControlSnapshot(sessionId).pendingQueue.length > 0;
   const botGroupChatDeps: BotGroupChatServiceDeps = {
     chatHistoryStore: (endpoint, human, reader, current) => createSqliteChatHistoryStore(getDbClient(), endpoint, human, reader, current),
+    readLaneContext: (id) => {
+      const session = maker.getSession(id);
+      if (!session || session.getStatus() !== 'active' || !session.sdkSessionId) return null;
+      return { key: JSON.stringify([session.instanceId, session.sdkSessionId, session.agentKind, session.model,
+        getSessionProvider(id), session.getTurnGeneration()]), contextTokens: session.getUsageSnapshot().contextTokens };
+    },
     ensureLane: async (input) => {
       try {
         return await ensureBotGroupLaneSession(input);
@@ -18630,66 +18636,25 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     prepareSendUserMessage: (sessionId, message) =>
       prepareUserMessageForAgent(sessionId, message, 'send'),
     materializeDirectSendOssAttachments,
-    captureCindyLearnInvocation: async (session, persistedContent, dispatchedText) => {
-      const invocationText = visibleMessageTextForConversationSearch(
-        'user',
-        typeof persistedContent === 'string' ? persistedContent : JSON.stringify(persistedContent),
-      );
-      const persistedInvocation = parseDirectLearnInvocation(invocationText);
-      const dispatchedInvocation = parseDirectLearnInvocation(dispatchedText);
-      if (
-        !persistedInvocation
-        || !dispatchedInvocation
-        || JSON.stringify(persistedInvocation) !== JSON.stringify(dispatchedInvocation)
-      ) return null;
-      if (
-        session.remoteHostId
-        || maker.getSession(session.id) !== session
-        || (session.getStatus && session.getStatus() !== 'active')
-      ) return null;
-
-      if (session.agentKind === 'claude-code'
-        && !/^\/cindy:learn(?:\s|$)/i.test(dispatchedText.trim())
-        && !await canGrantUnqualifiedClaudeLearnInvocation(session.id)) return null;
-
-      const descriptors = builtInSkillDescriptors(
+    captureCindyLearnInvocation: createCindyLearnInvocationCapture({
+      getSession: (sessionId) => maker.getSession(sessionId),
+      builtInSkillDescriptors: () => builtInSkillDescriptors(
         app.getPath('userData'),
         app.getPath('appData'),
-      );
-      const learnDescriptor = descriptors.find((descriptor) => descriptor.name === 'learn');
-      if (!learnDescriptor || !isCindySkillEnabled(learnDescriptor.absolutePath)) return null;
-
-      const result = session.agentKind === 'claude-code'
-        ? await maker.listAgentRuntimeSkills(session.agentKind, {
+      ),
+      isSkillEnabled: isCindySkillEnabled,
+      canGrantUnqualifiedClaudeInvocation: canGrantUnqualifiedClaudeLearnInvocation,
+      listSkills: (session) => session.agentKind === 'claude-code'
+        ? maker.listAgentRuntimeSkills(session.agentKind, {
           workingDir: session.workDir,
           sessionId: session.id,
           runtimeConfigDir: process.env.CLAUDE_CONFIG_DIR?.trim() || path.join(os.homedir(), '.claude'),
         })
-        : await maker.listAgentSkills(session.agentKind, {
+        : maker.listAgentSkills(session.agentKind, {
           workingDir: session.workDir,
           sessionId: session.id,
-        });
-      if (result.errors?.length || maker.getSession(session.id) !== session) return null;
-      const learnCandidates = activeCindyBuiltInAgentSkills(
-        result.skills,
-        descriptors,
-        isCindySkillEnabled,
-      ).filter((skill) => (skill.name.toLowerCase() === 'learn' || skill.runtimeCommandName === 'cindy:learn')
-        && (!/^\/cindy:learn(?:\s|$)/i.test(dispatchedText.trim())
-          || (skill.builtIn === true && skill.runtimeCommandName === 'cindy:learn')));
-      if (
-        learnCandidates.length !== 1
-        || learnCandidates.some((skill) => skill.builtIn !== true || !skill.path)
-      ) return null;
-
-      const resolvedSkillPath = await fsp.realpath(learnCandidates[0]!.path!);
-      if (maker.getSession(session.id) !== session) return null;
-      return {
-        version: 1,
-        sessionInstanceId: session.instanceId,
-        resolvedSkillPath,
-      } satisfies CindyLearnInvocationGrant;
-    },
+        }),
+    }),
     createDbMessage: createUserMessageDurably,
     rewindPersistedUserMessageAfterClear: (sessionId, clientId) =>
       enqueueDurableWrite(`user-rewind:${sessionId}:${clientId}`, () =>
@@ -26403,9 +26368,22 @@ const generatedImageDelivery = createGeneratedImageDelivery({
 });
 setGeneratedImageRecovery((sessionId) => generatedImageDelivery.recover(sessionId), () => generatedImageDelivery.reconcile());
 
-async function broadcastCodexImageAsToolResult(sessionId: string, event: AgentEvent): Promise<void> {
-  try { await generatedImageDelivery.deliver(sessionId, event); }
-  catch { log.warn('Codex generated image delivery could not be persisted', { sessionId }); }
+/**
+ * Live delivery of a Codex native generated image. The returned promise resolves
+ * with the tool events published for it (`[]` when none), so the wire listener can
+ * hold the Session stream and hand them to IM / hook listeners before `done`.
+ */
+function deliverCodexGeneratedImage(sessionId: string, event: AgentEvent): Promise<readonly AgentEvent[]> {
+  const warn = () => log.warn('Codex generated image delivery could not be persisted', { sessionId });
+  try {
+    const run = generatedImageDelivery.start(sessionId, event);
+    if (!run) return Promise.resolve([]);
+    run.completion.catch(warn);
+    return run.published;
+  } catch {
+    warn();
+    return Promise.resolve([]);
+  }
 }
 
 function broadcastSyntheticToolEvent(

@@ -52,6 +52,7 @@ vi.mock('../../authManager.js', () => ({ getDeviceId: () => 'one' }));
 vi.mock('../../device-link/providerShareApi.js', () => ({
   providerShareOwnerKey: () => state.owner,
   checkProviderShareDelegation: (...args: unknown[]) => state.check(...args),
+  clearProviderShareDelegationChecks: () => {},
   grantProviderShareDelegation: async ({ executorDeviceId }: { executorDeviceId: string }) => {
     if (state.failGrant) throw Error('server unavailable');
     state.pair = { generation: randomUUID(), expiresAt: Date.now() + 30 * 60_000,
