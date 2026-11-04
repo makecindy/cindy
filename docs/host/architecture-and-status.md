@@ -72,7 +72,7 @@ flowchart LR
 - 177 个直接依赖中，**118 个在 6 跳内可达 `electron`**；
 - 其中 **36 个直接 `import 'electron'`**（`authManager`、`appSessionState`、`agent-binaries/index`、`cindy-brain/index`、`device-link/*`、`cindy-media/blobStore`、`local-agent/service`、`maker-host/{auth-adapters,pi-host,maker-memory-host,...}` 等）。
 
-结论：不能靠一两个 seam 让 `getMaker()` 在 Node 中加载；共享装配必须把 Maker 组装移到只依赖 `maker-core` + 注入服务的新模块，并由 Desktop 适配 —— 这是一次独立的大重构，不能在阶段 1 顺带完成。`apps/host/src/boundary.test.mjs` 守住反向依赖：Host 源码一旦 import Electron 即失败。
+结论：不能靠一两个 seam 让 `getMaker()` 在 Node 中加载；共享装配必须把 Maker 组装移到只依赖 `maker-core` + 注入服务的新模块，并由 Desktop 适配 —— 这是一次独立的大重构，不能在阶段 1 顺带完成。按组划分的端口清单与分步计划见 [maker-assembly-extraction-plan.md](maker-assembly-extraction-plan.md)。`apps/host/src/boundary.test.mjs` 守住反向依赖：Host 源码一旦 import Electron 即失败。
 
 ## Electron 耦合分类
 
