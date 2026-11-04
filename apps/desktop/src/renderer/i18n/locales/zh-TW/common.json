@@ -14706,7 +14706,7 @@
         "manage": {
           "title": "管理 PR 連結",
           "hint": "頂列最多顯示 3 個，固定的 PR 優先顯示",
-          "empty": "貼上 GitHub PR 連結即可新增",
+          "empty": "貼上 GitHub PR 或 GitLab MR 連結即可新增",
           "removed": "已移除 {{count}} 個",
           "legacy": "未確認的歷史引用：{{count}}",
           "addLabel": "新增 PR 連結",
@@ -14717,17 +14717,26 @@
           "unpin": "取消固定",
           "pinLimit": "最多固定 3 個 PR",
           "reorderHint": "按 Alt+↑/↓ 在已固定或未固定群組內調整順序。",
-          "dragHandle": "拖曳排序 {{repo}} #{{number}}",
+          "dragHandle": "拖曳排序 {{repo}} {{numberLabel}}",
           "remove": "移除 PR",
           "errors": {
             "duplicate": "此 PR 已關聯；已移除的連結可在清單中還原",
             "notFound": "找不到此 PR，或沒有存取權限",
-            "invalidUrl": "請輸入有效的 GitHub PR 連結",
+            "invalidUrl": "請輸入有效的 GitHub PR 或 GitLab MR 連結",
             "reorderFailed": "順序未儲存，請重試",
-            "verifyFailed": "無法驗證 PR，請檢查 GitHub 登入與存取權限",
+            "verifyFailed": "無法驗證 PR，請檢查 GitHub 或 GitLab 登入與存取權限",
             "unsupported": "這台電腦的版本暫不支援管理 PR 連結",
             "failed": "無法更新 PR 連結"
           }
+        },
+        "gitlab": {
+          "missing": "未偵測到 GitLab CLI（glab），無法顯示 MR 狀態。安裝 glab 並登入後即可顯示。",
+          "notLoggedIn": "本機 glab 尚未登入 {{host}}，無法顯示 MR 狀態。在終端執行 glab auth login 登入後即可顯示。",
+          "unsupported": "此電腦暫不支援 GitLab MR 狀態",
+          "openAria": "在瀏覽器開啟 MR !{{number}}",
+          "summaryAria": "MR !{{number}} 摘要",
+          "urlPlaceholder": "GitHub PR 或 GitLab MR 連結",
+          "notFound": "MR 不存在，或目前帳號無權限檢視"
         }
       }
     },

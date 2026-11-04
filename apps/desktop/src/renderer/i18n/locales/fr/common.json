@@ -14912,7 +14912,7 @@
         "manage": {
           "title": "Gérer les liens de PR",
           "hint": "Jusqu’à 3 dans l’en-tête ; les PR épinglées apparaissent en premier",
-          "empty": "Collez un lien de PR GitHub pour l’ajouter",
+          "empty": "Collez un lien de PR GitHub ou de MR GitLab pour l’ajouter",
           "removed": "Supprimées : {{count}}",
           "legacy": "Références non confirmées : {{count}}",
           "addLabel": "Ajouter un lien de PR",
@@ -14923,17 +14923,26 @@
           "unpin": "Désépingler la PR",
           "pinLimit": "Épingler jusqu’à 3 PR",
           "reorderHint": "Utilisez Alt+↑/↓ pour réorganiser les PR au sein du groupe épinglé ou non épinglé.",
-          "dragHandle": "Faire glisser pour réorganiser {{repo}} #{{number}}",
+          "dragHandle": "Faire glisser pour réorganiser {{repo}} {{numberLabel}}",
           "remove": "Supprimer la PR",
           "errors": {
             "duplicate": "Cette PR est déjà liée ; restaurez les liens supprimés depuis la liste",
             "notFound": "PR introuvable ou accès refusé",
-            "invalidUrl": "Saisissez un lien de PR GitHub valide",
+            "invalidUrl": "Saisissez un lien valide de PR GitHub ou de MR GitLab",
             "reorderFailed": "L’ordre n’a pas été enregistré. Réessayez.",
-            "verifyFailed": "Impossible de vérifier la PR ; vérifiez la connexion à GitHub et les droits d’accès",
+            "verifyFailed": "Impossible de vérifier la PR ; vérifiez la connexion à GitHub ou GitLab et les droits d’accès",
             "unsupported": "La version installée sur cet ordinateur ne permet pas de gérer les liens de PR",
             "failed": "Impossible de mettre à jour les liens de PR"
           }
+        },
+        "gitlab": {
+          "missing": "GitLab CLI (glab) est introuvable. Installez glab et connectez-vous pour voir l’état des MR.",
+          "notLoggedIn": "Le glab local n’est pas connecté à {{host}}. Exécutez glab auth login dans un terminal pour voir l’état des MR.",
+          "unsupported": "Cet ordinateur ne prend pas encore en charge l’état des MR GitLab",
+          "openAria": "Ouvrir la MR !{{number}} dans le navigateur",
+          "summaryAria": "Résumé de la MR !{{number}}",
+          "urlPlaceholder": "Lien de PR GitHub ou de MR GitLab",
+          "notFound": "MR introuvable, ou le compte actuel ne peut pas la consulter"
         }
       }
     },

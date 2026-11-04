@@ -4747,3 +4747,24 @@ device-link 操作、字段或白名单。远程打开在执行端判定：新�
 ## GitHub 公共读取能力
 
 `git-context:github-read` 只在同账号授权链路开放，控制端先检查 `github-read-v1`。未声明的旧电脑返回明确不支持，既有 `pr-status` 的关联范围过滤与链接打开不变。新通道不进入共享任务访客 allowlist；中转仍转发原 invoke / invoke-result 帧，不引入服务器消息种类。关联新增 `associationSource / associationOrigin` 可选字段；旧消费者按原字段兼容，新消费者默认只显示宿主投影的明确有效关联。详见 [功能合同](../product-rules/github-status-and-associations.md)。
+
+## GitLab MR 关联状态
+
+关联与状态结果追加可选 `provider`（github / gitlab）和 `host`；缺省仍为公共 GitHub。
+新 Desktop / Mobile 的 GitLab 查询带完整 namespace / repo / number / provider / host，
+走同账号 `git-context:mr-status`；GitHub 继续使用原 `git-context:pr-status` 和旧参数形状。
+新通道复用原任务关联过滤与只读权限，不授予共享任务访客任意查询权限。
+旧 host 不认识新通道时，GitLab 显示不支持/未知，绝不回退为 GitHub 查询。
+新 host 可继续处理旧控制端的 GitHub 查询。新控制端正确显示并打开 GitLab MR，
+旧控制端对新增 GitLab 关联没有展示保证，使用 GitLab 需要更新控制端。
+
+Desktop 的本机查询、同账号远端查询、任务摘要及 Mobile 共用带 host 的状态身份。
+GitLab 的 glab 安装/登录原因仅本机可见，远端结果统一为无状态；凭证不进入协议。
+子路径部署的链接会被识别为多级分组，部署前缀进入项目路径，因路径不正确而查不到状态。
+Agent 的 GitHub 工具和脚本入口仍不支持 GitLab，不复用其 GitHub token。
+
+共享客户端 allowlist / invokePolicy 与 Mobile 低优先级读取表同步加入新通道。
+自建中转透传既有加密 invoke 帧，不解析 channel 的业务参数，因此不改 relay 内核、
+帧格式、认证、版本或部署程序。验证入口为 `pnpm --filter @cindy/device-link test`、
+`pnpm --filter @cindy/device-link-relay test` 与
+`pnpm --filter @cindy/device-link-relay run interop`；结果以本次交付的执行日志为准。

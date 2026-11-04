@@ -14912,7 +14912,7 @@
         "manage": {
           "title": "Gerir ligações de PR",
           "hint": "Até 3 no cabeçalho; os PRs fixados aparecem primeiro",
-          "empty": "Cole uma ligação de PR do GitHub para o adicionar",
+          "empty": "Cole uma ligação de PR do GitHub ou MR do GitLab para o adicionar",
           "removed": "Removidos: {{count}}",
           "legacy": "Referências por confirmar: {{count}}",
           "addLabel": "Adicionar ligação de PR",
@@ -14923,17 +14923,26 @@
           "unpin": "Desafixar PR",
           "pinLimit": "Fixar até 3 PRs",
           "reorderHint": "Use Alt+↑/↓ para reordenar dentro do grupo de fixados ou não fixados.",
-          "dragHandle": "Arraste para reordenar {{repo}} #{{number}}",
+          "dragHandle": "Arraste para reordenar {{repo}} {{numberLabel}}",
           "remove": "Remover PR",
           "errors": {
             "duplicate": "Este PR já está associado; restaure as ligações removidas a partir da lista",
             "notFound": "PR não encontrado ou acesso negado",
-            "invalidUrl": "Introduza uma ligação de PR do GitHub válida",
+            "invalidUrl": "Introduz uma ligação válida de PR do GitHub ou MR do GitLab",
             "reorderFailed": "A ordem não foi guardada. Tente novamente.",
-            "verifyFailed": "Não foi possível verificar o PR; verifique o início de sessão e o acesso ao GitHub",
+            "verifyFailed": "Não foi possível verificar o PR; verifique o início de sessão e o acesso ao GitHub ou GitLab",
             "unsupported": "A versão deste computador não permite gerir ligações de PR",
             "failed": "Não foi possível atualizar as ligações de PR"
           }
+        },
+        "gitlab": {
+          "missing": "GitLab CLI (glab) não foi encontrado. Instala o glab e inicia sessão para ver o estado dos MR.",
+          "notLoggedIn": "O glab local não tem sessão iniciada em {{host}}. Executa glab auth login num terminal para ver o estado dos MR.",
+          "unsupported": "Este computador ainda não suporta o estado dos MR do GitLab",
+          "openAria": "Abrir MR !{{number}} no navegador",
+          "summaryAria": "Resumo do MR !{{number}}",
+          "urlPlaceholder": "Ligação de PR do GitHub ou MR do GitLab",
+          "notFound": "MR não encontrado ou a conta atual não o pode ver"
         }
       }
     },

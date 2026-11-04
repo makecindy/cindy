@@ -2,7 +2,7 @@
   "githubPrs": {
     "title": "管理 PR 連結",
     "hint": "頂列最多顯示 3 個，固定的 PR 優先顯示",
-    "empty": "貼上 GitHub PR 連結即可新增",
+    "empty": "貼上 GitHub PR 或 GitLab MR 連結即可新增",
     "removed": "已移除 {{count}} 個",
     "legacy": "未確認的歷史引用：{{count}}",
     "addLabel": "新增 PR 連結",
@@ -18,12 +18,13 @@
     "errors": {
       "duplicate": "此 PR 已關聯；已移除的連結可在清單中還原",
       "notFound": "找不到此 PR，或沒有存取權限",
-      "invalidUrl": "請輸入有效的 GitHub PR 連結",
+      "invalidUrl": "請輸入有效的 GitHub PR 或 GitLab MR 連結",
       "reorderFailed": "順序未儲存，請重試",
-      "verifyFailed": "無法驗證 PR，請檢查 GitHub 登入與存取權限",
+      "verifyFailed": "無法驗證 PR，請檢查 GitHub 或 GitLab 登入與存取權限",
       "unsupported": "這台電腦的版本暫不支援管理 PR 連結",
       "failed": "無法更新 PR 連結"
     },
+    "urlPlaceholder": "GitHub PR 或 GitLab MR 連結",
     "moveUp": "上移"
   },
   "paneResize": {
