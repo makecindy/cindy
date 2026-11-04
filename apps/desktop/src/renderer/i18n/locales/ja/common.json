@@ -13425,6 +13425,24 @@
           "autocompactBuffer": "自動圧縮バッファ",
           "compactBuffer": "圧縮バッファ",
           "freeSpace": "空き容量"
+        },
+        "estimate": {
+          "title": "テキストの推定値",
+          "delivery": "回答の表示",
+          "host": "Cindy の指示",
+          "plugins": "プラグイン一覧",
+          "memoryRules": "メモリの指示",
+          "memoryIndex": "メモリ索引",
+          "profile": "チームメイトのプロフィール",
+          "user": "ユーザーの指示",
+          "directories": "追加ディレクトリ",
+          "native": "Pi の指示",
+          "skills": "スキル一覧",
+          "project": "プロジェクトの指示",
+          "tools": "ツール定義",
+          "messages": "会話本文",
+          "other": "その他の指示",
+          "note": "現在のテキストからの概算で、モデルのトークン分割結果ではありません。画像やプロバイダーの形式による追加分を含まず、合計は Pi の値と一致しません。"
         }
       },
       "compact": {
