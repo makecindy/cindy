@@ -3739,7 +3739,12 @@
           "stop": "止試"
         },
         "fetch": {
-          "button": "取模型清單",
+          "selectedCount": "已選 {{count}} 模型",
+          "availableCount": "已得 {{count}} 可選模型",
+          "notFetched": "尚未取模型清單",
+          "failedRetry": "取模型清單未成，請重試",
+          "retryFailed": "此番未成，請重試",
+          "button": "取並選模型",
           "fetching": "方取模型…",
           "needBaseUrl": "請先填基礎 URL",
           "failed": "模型清單取之未成",
