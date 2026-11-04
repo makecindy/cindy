@@ -66,10 +66,15 @@ const MAC_RIGHT_TOGGLE_WIDTH = 36;
 export function useContentHeaderHidden(args: {
   sidebarVisible: boolean;
   rightSidebarAvailable: boolean;
+  sidebarWidth?: number;
 }): boolean {
-  const { isMac } = useMacFullscreen();
+  const { isMac, isFullscreen, trafficLightInset = CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft } = useMacFullscreen();
   const headerContent = useFeatureContentHeader();
-  return isMac && args.sidebarVisible && headerContent == null && !args.rightSidebarAvailable;
+  // 替代拖拽条不拥有浮动按钮的命中洞；按钮溢出侧栏时保留公共 chrome。
+  const hasOverflow = !isFullscreen && chromeActionsHitHoleWidth(
+    args.sidebarWidth ?? CHROME_ACTIONS_MAC_RIGHT_EDGE, trafficLightInset,
+  ) > 0;
+  return isMac && args.sidebarVisible && headerContent == null && !args.rightSidebarAvailable && !hasOverflow;
 }
 
 interface ContentHeaderProps {
@@ -251,7 +256,7 @@ export function ContentHeaderSlot({
   trailing,
   children,
 }: Omit<ContentHeaderProps, 'hidden'> & { children: ReactNode }) {
-  const hidden = useContentHeaderHidden({ sidebarVisible, rightSidebarAvailable });
+  const hidden = useContentHeaderHidden({ sidebarVisible, rightSidebarAvailable, sidebarWidth });
   return (
     <>
       <ContentHeader

@@ -16,10 +16,11 @@ const mocks = vi.hoisted(() => ({
   dataOwnerId: 'owner-a' as string | null,
   isMac: true,
   isFullscreen: false,
+  trafficLightInset: 78,
 }));
 
 vi.mock('@/hooks/useMacFullscreen', () => ({
-  useMacFullscreen: () => ({ isMac: mocks.isMac, isFullscreen: mocks.isFullscreen }),
+  useMacFullscreen: () => ({ isMac: mocks.isMac, isFullscreen: mocks.isFullscreen, trafficLightInset: mocks.trafficLightInset }),
 }));
 vi.mock('react-router-dom', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-router-dom')>()),
@@ -64,10 +65,12 @@ function HeaderSlotView({
   sidebarVisible = true,
   isSidebarRail = false,
   rightSidebarAvailable = false,
+  sidebarWidth,
 }: {
   sidebarVisible?: boolean;
   isSidebarRail?: boolean;
   rightSidebarAvailable?: boolean;
+  sidebarWidth?: number;
 } = {}) {
   return (
     <FeatureSidebarSlotProvider isCollapsed={!sidebarVisible}>
@@ -76,6 +79,7 @@ function HeaderSlotView({
         showCollapsedActions={!sidebarVisible}
         isSidebarRail={isSidebarRail}
         rightSidebarAvailable={rightSidebarAvailable}
+        sidebarWidth={sidebarWidth}
       >
         <GhostMainViewHost />
       </ContentHeaderSlot>
@@ -96,6 +100,7 @@ beforeEach(() => {
   mocks.dataOwnerId = 'owner-a';
   mocks.isMac = true;
   mocks.isFullscreen = false;
+  mocks.trafficLightInset = 78;
   mocks.routeCapable = [
     {
       ghostId: 'workspace',
@@ -210,6 +215,36 @@ describe('GhostMainViewHost', () => {
       }
     },
   );
+
+  // #8662: a hidden common header must not hand an overflow button to a drag-only band.
+  it('keeps the common header while zoom overflows an expanded sidebar', () => {
+    const { container, rerender } = renderInHeaderSlot({ sidebarWidth: 220 });
+    const webview = screen.getByTestId('webview');
+    expect(container.querySelector('header')).toBeNull();
+    expect(screen.getByTestId('ghost-main-view-drag-band')).toBeTruthy();
+
+    mocks.trafficLightInset = 130;
+    rerender(<HeaderSlotView sidebarWidth={220} />);
+    expect(container.querySelector('header')).not.toBeNull();
+    expect(screen.queryByTestId('ghost-main-view-drag-band')).toBeNull();
+    const hole = screen.getByTestId('content-header-rail-chrome-actions-hit-hole');
+    expect(hole.style.width).toBe('34px');
+    expect((hole.style as CSSStyleDeclaration & { WebkitAppRegion: string }).WebkitAppRegion).toBe('no-drag');
+    expect(screen.getByTestId('webview')).toBe(webview);
+
+    mocks.isFullscreen = true;
+    rerender(<HeaderSlotView sidebarWidth={220} />);
+    expect(container.querySelector('header')).toBeNull();
+    expect(screen.queryByTestId('ghost-main-view-drag-band')).toBeNull();
+    expect(screen.getByTestId('webview')).toBe(webview);
+  });
+
+  it('still hides an empty common header when a wide sidebar covers the zoomed cluster', () => {
+    mocks.trafficLightInset = 130;
+    const { container } = renderInHeaderSlot({ sidebarWidth: 280 });
+    expect(container.querySelector('header')).toBeNull();
+    expect(screen.getByTestId('ghost-main-view-drag-band')).toBeTruthy();
+  });
 
   it('removes and restores the drag band as mac fullscreen changes in place', () => {
     const { rerender } = renderInHeaderSlot();
