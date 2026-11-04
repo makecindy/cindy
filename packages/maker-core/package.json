@@ -11,7 +11,12 @@
     "./customization-scanner": "./src/agents/shared/customization-worker-api.ts",
     "./pi-extension-ui": "./src/agents/pi/extension-ui-capabilities.ts",
     "./pi-subagent-runs": "./src/agents/pi/pi-subagent-runs.ts",
-    "./skill-scan-limits": "./src/agents/shared/skill-scan-limits.ts"
+    "./skill-scan-limits": "./src/agents/shared/skill-scan-limits.ts",
+    "./runtime-owner-lock": {
+      "types": "./src/runtime-owner-lock.d.ts",
+      "import": "./src/runtime-owner-lock.js",
+      "default": "./src/runtime-owner-lock.js"
+    }
   },
   "scripts": {
     "build": "tsc --noEmit",
