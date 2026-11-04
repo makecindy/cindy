@@ -156,6 +156,70 @@ afterEach(async () => {
 });
 
 describe('Claude extraDirs mid-session rebuild', () => {
+  // 测试价值：startSession / send 必须把 hosted 虚拟目录传进 SDK Query，模型才能从原生环境信息看到它们。
+  // Bug：hosted 分支省略 additionalDirectories；已有用例只覆盖本机会话。
+  // 最小失败输入：一个 hosted 附加目录；运行中修改目录后，下一轮 resume+fork 必须使用新范围。
+  // tier：unit，SDK 用内存 fake，直接检查生产入口生成的 Query 协议与重建行为。
+  it.each(['setExtraDirs', 'setWritableDirs'] as const)('hosted %s rebuild exposes virtual directories without enabling local tools', async (setter) => {
+    const configDir = await makeTempDir();
+    const mirrorRoot = path.join(await makeTempDir(), 'fs');
+    const workingDir = path.join(mirrorRoot, 'workspace');
+    const initialDir = path.join(mirrorRoot, 'additional', 'dir-0');
+    const nextDir = path.join(mirrorRoot, 'additional', 'runtime-0');
+    await Promise.all([workingDir, initialDir, nextDir].map((dir) => fs.mkdir(dir, { recursive: true })));
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    process.env.XDT_CC_SSE_IDLE_TIMEOUT_MS = '0';
+    const sdkSessionId = 'sdk-hosted-extradirs';
+    const projectDir = path.join(configDir, 'projects', sanitizeClaudeProjectKey(await fs.realpath(workingDir)));
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(path.join(projectDir, `${sdkSessionId}.jsonl`), '{"type":"summary"}\n', 'utf8');
+
+    const firstQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(firstQuery);
+    const handle = await new ClaudeCodeAgent(createDeps()).startSession({
+      sessionId: 'session-hosted-extradirs',
+      model: 'claude-opus-4-6',
+      workingDir,
+      resumeSessionId: sdkSessionId,
+      extraDirs: [initialDir],
+      deviceHosted: {
+        workingDir,
+        extraDirs: [initialDir],
+        writableDirs: [],
+        platform: process.platform,
+        pathPlatform: process.platform,
+        shell: 'bash',
+        isGitRepo: false,
+        tunnelUrl: 'http://127.0.0.1:4000/t/fixture/',
+        tunnelToken: 'fixture',
+        mcpServers: [],
+        mirrorRoot,
+      },
+    });
+    try {
+      const initialOptions = sdkMock.query.mock.calls[0][0].options;
+      expect.soft(initialOptions.additionalDirectories).toEqual([initialDir]);
+      expect(initialOptions.disallowedTools).toEqual(expect.arrayContaining(['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep']));
+
+      await handle[setter]?.([nextDir]);
+      expect(sdkMock.query).toHaveBeenCalledTimes(1);
+      sdkMock.query.mockReturnValue(createFakeQuery());
+      await handle.send({ type: 'user', content: 'inspect the attached directory' });
+
+      expect(sdkMock.query).toHaveBeenCalledTimes(2);
+      const rebuiltOptions = sdkMock.query.mock.calls[1][0].options;
+      expect(rebuiltOptions.additionalDirectories).toEqual(setter === 'setWritableDirs' ? [initialDir, nextDir] : [nextDir]);
+      expect(rebuiltOptions.resume).toBe(sdkSessionId);
+      expect(rebuiltOptions.forkSession).toBe(true);
+      expect(rebuiltOptions.resumeSessionAt).toBeUndefined();
+      expect(rebuiltOptions).not.toHaveProperty('fresh');
+      expect(rebuiltOptions.disallowedTools).toEqual(initialOptions.disallowedTools);
+      expect(firstQuery.close).toHaveBeenCalled();
+    } finally {
+      await handle.close();
+    }
+  });
+
   it.each(['none', 'remove', 'disable', 'enable'] as const)('setExtraDirs rebuild preserves conversation and launch skill preferences: %s', async (change) => {
     const configDir = await makeTempDir();
     const workingDir = await makeTempDir();
