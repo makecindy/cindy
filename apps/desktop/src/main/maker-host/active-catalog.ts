@@ -1,4 +1,5 @@
 import { effectiveGatewayModelCost } from '../../shared/modelPriceQuote.js';
+import { projectCurrentModelSources } from './model-source-snapshots.js';
 import type { ModelDisplayPricing } from '@cindy/model-providers';
 import {
   projectProviderMediaModels,
@@ -1967,7 +1968,10 @@ export function getActiveLocalModelCatalog() {
  * (安全兜底,绝不抛)。消费方(路由 / 标题 / 能力派生 / 注册表)统一走这里。
  */
 export function getActiveCatalog(): Catalog {
-  if (!merged) merged = computeMerged();
+  if (!merged) {
+    const catalog = computeMerged();
+    merged = { ...catalog, providers: catalog.providers.map(projectCurrentModelSources) };
+  }
   return merged;
 }
 

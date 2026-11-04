@@ -54,7 +54,8 @@ type Props = {
   };
   connected: boolean;
   controlling: boolean;
-  displayControl: ReactNode;
+  /** Absent for a device screen: only frame rate and quality apply there. */
+  displayControl?: ReactNode;
 };
 export function RemoteDesktopDisplaySettings({
   video,
@@ -262,6 +263,7 @@ export function RemoteDesktopDisplaySettings({
         )}
         <Text style={hint}>{t("remoteDesktop.qualityHint")}</Text>
       </View>
+      {displayControl !== undefined && (
       <View style={{ gap: spacing.sm }}>
         <View
           style={{
@@ -389,6 +391,7 @@ export function RemoteDesktopDisplaySettings({
           )}
         </Text>
       </View>
+      )}
       {!video.supported && (
         <Text style={hint}>{t("remoteDesktop.settingUnsupported")}</Text>
       )}
