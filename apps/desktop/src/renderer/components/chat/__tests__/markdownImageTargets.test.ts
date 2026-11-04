@@ -45,6 +45,27 @@ describe('extractRenderedMarkdownImageTargets', () => {
     ).toEqual([url, `${url}/after-inline-code`, `${url}/raw-img`]);
   });
 
+  it('counts a bare-space local image as rendered, as IM delivery does, but not inside code', () => {
+    // 2026-11-03: the chat showed only the tool-result card for this reply while IM sent raw text.
+    const local = '/Users/me/Library/Application Support/Cindy/generated_images/design.png';
+    expect(
+      extractRenderedMarkdownImageTargets([
+        `Design: ![Credits mockup](${local})`,
+        `\`![inline code](${local})\``,
+        '```',
+        `![fenced](${local})`,
+        '```',
+      ].join('\n')),
+    ).toEqual([local]);
+  });
+
+  it('applies the same source-span rules as IM delivery to bare-space images', () => {
+    const local = '/tmp/my shot.png';
+    expect(extractRenderedMarkdownImageTargets(`Design &amp; preview: ![pic](${local})`)).toEqual([local]);
+    expect(extractRenderedMarkdownImageTargets(`\\![example](${local})`)).toEqual([]);
+    expect(extractRenderedMarkdownImageTargets(`*note* then ![pic](${local}) &lt;done&gt;`)).toEqual([local]);
+  });
+
   it('reuses completed-message results and invalidates them when content changes', () => {
     const cache: MarkdownImageTargetCache = new Map();
     const first = extractCachedRenderedMarkdownImageTargets(

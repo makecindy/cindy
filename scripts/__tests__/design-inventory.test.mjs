@@ -39,6 +39,7 @@ import {
   normalizeDocEol,
   productionRouterCoverage,
   renderGeneratedBlock,
+  renderStatsReport,
   splitInventoryDocument,
   stripJsComments,
 } from '../shared/design-inventory.mjs';
@@ -270,7 +271,7 @@ test('人工区块被改后 merge 仍原样保留', () => {
   const human =
     '\n## 人工标注\n\n| ID | owner | 迁移状态 | protected | 目标道路 | 下一动作 |\n| --- | --- | --- | --- | --- | --- |\n| `desktop.test.surface` | kiro | pilot | 手改标签 | 手改道路 | 手改动作 |\n';
   const existing = `# Cindy 生产 UI 台账\n${generated}${human}`;
-  const nextGenerated = renderGeneratedBlock([{ ...tinySurface(), bareColors: 99 }], {
+  const nextGenerated = renderGeneratedBlock([{ ...tinySurface(), title: '改名后的测试面' }], {
     generateCommand: 'pnpm design:inventory',
     routerCoverage: { mapped: [], missing: [] },
     redirects: [],
@@ -279,8 +280,8 @@ test('人工区块被改后 merge 仍原样保留', () => {
   const parts = splitInventoryDocument(merged);
   assert.equal(parts.suffix, human);
   assert.equal(parts.suffix.includes('手改标签'), true);
-  assert.equal(parts.generated.includes('99'), true);
-  assert.equal(parts.generated.includes('| 2 |'), false);
+  assert.equal(parts.generated.includes('改名后的测试面'), true);
+  assert.equal(parts.generated.includes('| 测试面 |'), false);
 });
 
 test('compareGenerated: 最新通过、过期失败', () => {
@@ -291,7 +292,7 @@ test('compareGenerated: 最新通过、过期失败', () => {
   });
   const doc = `# 台账\n${generated}\n人工区\n`;
   assert.equal(compareGenerated(doc, generated).equal, true);
-  const stale = doc.replace('裸颜色', '裸色值');
+  const stale = doc.replace('生产入口', '入口');
   assert.equal(compareGenerated(stale, generated).equal, false);
 });
 
@@ -334,16 +335,24 @@ test('router.tsx 每条生产路由都能映射到 surface,布局壳在排除清
   assert.ok(redirectPaths.includes('/cc-agent/new-dialogue'));
 });
 
-test('GENERATED 含 §2.1 六项字段,裸颜色与 audit 共用匹配器', () => {
+test('GENERATED 只含登记字段,统计与样式来源只进按需报告', () => {
+  // 统计随任意样式改动漂移;入库会让碰到同一 surface 的 PR 必然在同一行冲突。
   const generated = renderGeneratedBlock([tinySurface()], {
-    generateCommand: 'pnpm design:inventory',
     routerCoverage: { mapped: [], missing: [] },
     redirects: [],
   });
-  assert.equal(generated.includes('| ID | 平台 | 标题 | 生产入口 | 可达组件 | 样式来源 | Token 数 | 裸颜色 | 裸圆角 |'), true);
+  assert.equal(generated.includes('| ID | 平台 | 标题 | 生产入口 |\n'), true);
+  for (const leaked of ['FixtureView', 'apps/desktop/src/renderer/fixture.tsx', '| 1 | 2 | 3 |', '| Token 数 |']) {
+    assert.equal(generated.includes(leaked), false, `GENERATED 不得含 ${leaked}`);
+  }
   assert.equal(generated.includes('计数快照日期'), false);
-  assert.equal(generated.includes('生成命令：`pnpm design:inventory`'), true);
-  assert.equal(generated.includes('hardcoded-color-match.mjs'), true);
+  assert.equal(generated.includes('`pnpm design:inventory:report`'), true);
+
+  const report = renderStatsReport([tinySurface()]);
+  assert.equal(report.includes('| ID | 平台 | 可达组件 | 样式来源 | Token 数 | 裸颜色 | 裸圆角 |'), true);
+  assert.equal(report.includes('| `desktop.test.surface` | desktop | FixtureView | apps/desktop/src/renderer/fixture.tsx | 1 | 2 | 3 |'), true);
+  assert.equal(report.includes('hardcoded-color-match.mjs'), true);
+  assert.equal(report.includes(GENERATED_BEGIN), false);
 
   const auditSource = fs.readFileSync(path.join(ROOT, 'scripts', 'hardcoded-color-audit.mjs'), 'utf8');
   assert.equal(/from ['"]\.\/shared\/hardcoded-color-match\.mjs['"]/.test(auditSource), true);

@@ -68,6 +68,7 @@ import * as authManager from '../authManager';
 import { remoteCredentialHost } from '../remote-desktop/credentialHost';
 import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { createLogger } from '../logger';
+import { markStartupMilestone } from '../startupTimeline';
 import { onQuit } from '../lifecycle';
 import { getCurrentDbClientUserId } from '../localDb/client/current';
 import { isSessionNotificationsMutedSync } from '../localDb/sessionFlagRegistry';
@@ -97,6 +98,7 @@ import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { createDnsFallbackLookup } from './dnsFallbackLookup';
 import {
   wireInboundDispatch,
+  hasRemoteInvokeWorkForPeer,
   setControllersChangedListener,
   setOrdinaryPeerLinkAcceptedListener,
   setRemoteInvokeBusyChangedListener,
@@ -134,6 +136,7 @@ import {
   applyControllerPresenceDirectorySnapshot,
   createControllerPresenceFreshnessTracker,
   markControllerPresenceFresh,
+  resolveControllerPresence,
   resetControllerPresenceFreshness,
   type ControllerPresenceDirectoryDevice,
 } from './controllerPresenceDirectory';
@@ -298,8 +301,8 @@ export function applyControllerPresenceListSnapshot(
     selfDeviceId: client.getSelfDeviceId(),
     freshness: controllerPresenceFreshness,
     getOnline: (deviceId) => presenceOnlineByDevice.get(deviceId),
-    setOnline: (deviceId, online) => presenceOnlineByDevice.set(deviceId, online),
-    forgetOnline: (deviceId) => presenceOnlineByDevice.delete(deviceId),
+    setOnline: (deviceId, online) => presenceOnlineByDevice.set(deviceId, online || hasOfflineDirectPath(deviceId)),
+    forgetOnline: (deviceId) => { if (!hasOfflineDirectPath(deviceId)) presenceOnlineByDevice.delete(deviceId); },
     setPlatform: setControllerPlatform,
     setName: (deviceId, name) => presenceNameByDevice.set(deviceId, name),
     shouldNotifyPeerOnline: ({ deviceId, online, platform }) =>
@@ -573,7 +576,12 @@ const presenceOnlineByDevice = new Map<string, boolean>();
  *   (刚重连、尚无首帧 presence)一律 fail-open。它是减量优化,不是安全边界。
  */
 function isPresenceExplicitlyOffline(deviceId: string): boolean {
-  return presenceOnlineByDevice.get(deviceId) === false;
+  return presenceOnlineByDevice.get(deviceId) === false && !hasOfflineDirectPath(deviceId);
+}
+
+/** Existing bounded data-plane availability, never a new offline authorization. */
+export function hasOfflineDirectPath(deviceId: string): boolean {
+  return !isAppSessionBoundaryPending() && client?.hasOfflineDirectPath(deviceId) === true;
 }
 
 const presenceNameByDevice = new Map<string, string>();
@@ -772,6 +780,8 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   client = new RoutedDeviceLinkClient({
     ...connectionOptions,
     directRuntime: desktopDirectRuntime,
+    isPeerBusy: hasRemoteInvokeWorkForPeer,
+    retainDirectPathsOnRelayLoss: true,
     getWsUrl: wsUrl,
     // 自建中转用中转凭证(CindyRelay),官方中转用账号 token(Bearer);两者每次建连前同一轮取值。
     authorizationScheme: () => (activeSelfHostedRelay() ? 'CindyRelay' : 'Bearer'),
@@ -889,6 +899,11 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
 
   client.onPeerRouteStateChanged((change) => {
     if (change.state === 'offline') {
+      const connection = client?.connectionFor(change.deviceId);
+      if (!connection || change.connectionEpoch !== connection.getConnectionEpoch()
+        || change.linkGeneration < connection.getPeerLinkGeneration(change.deviceId)) return;
+      presenceOnlineByDevice.set(change.deviceId, false);
+      presenceAvailableByDevice.set(change.deviceId, false);
       invalidatePluginOauth(change.deviceId);
       handleControllerOffline(change.deviceId, change);
     }
@@ -905,10 +920,10 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       stopFilePeers();
       invalidatePluginOauth();
       // The shared relay connection is a larger fault domain than one peer:
-      // release every active controller projection, but keep remembered topics
-      // so reconnect recovery can still replay them explicitly.
+      // Retain only bounded, authenticated data paths. Other projections keep
+      // remembered topics so reconnect recovery can replay them explicitly.
       // Cross-account peers on their own connection are outside this fault.
-      deactivateAllControllers('relay-disconnected', hasSeparateCrossAccountConnection() ? 'same-account' : 'all');
+      deactivateAllControllers('relay-disconnected', hasSeparateCrossAccountConnection() ? 'same-account' : 'all', hasOfflineDirectPath);
       controllerDisplayNameRefreshGeneration += 1;
       // 不清 openLinkInFlight:登记生命周期的唯一判据是 promise settle(每个
       // 请求 settle 时自清理,closeRemoteLink 的显式删除有取消代次兜底)。建链
@@ -928,8 +943,8 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 上线时 wasAvailable 仍是 true,「不可用→可用」翻转永远不发生,推送流一直
     // 缺到下次无关恢复事件(review P1)。
     if (status !== 'online') {
-      presenceOnlineByDevice.clear();
-      presenceAvailableByDevice.clear();
+      for (const id of presenceOnlineByDevice.keys()) if (!hasOfflineDirectPath(id)) presenceOnlineByDevice.delete(id);
+      for (const id of presenceAvailableByDevice.keys()) if (!hasOfflineDirectPath(id)) presenceAvailableByDevice.delete(id);
       resetControllerDisplayNameFreshness(controllerDisplayNameFreshness);
       resetControllerPresenceFreshness(controllerPresenceFreshness);
       clearControllerPlatforms();
@@ -937,6 +952,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     }
     broadcast(DEVICE_LINK_PUSH.STATUS_CHANGED, { status });
     if (status === 'online') {
+      markStartupMilestone('device-link-online');
       // 本地 last-known 先同步种入，覆盖 REST 返回前的 link-open 竞态；随后用
       // 当前设备目录刷新，补齐本连接代没有历史 presence 的已在线设备。
       seedControllerDisplayNamesFromLastKnown();
@@ -954,7 +970,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   // 独立的跨账号连接只影响它承载的 peer,不改主线路状态,也不打扰设置页的连接提示。
   client.onSeparateCrossAccountStatus((status) => {
     if (status !== 'online') {
-      deactivateAllControllers('cross-account-relay-disconnected', 'cross-account');
+      deactivateAllControllers('cross-account-relay-disconnected', 'cross-account', hasOfflineDirectPath);
       transportTimeoutReopen.disposeWhere(isScopedPeer);
       return;
     }
@@ -998,10 +1014,12 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   client.onPresenceChanged((snap: PresenceSnapshot) => {
     markControllerPresenceFresh(controllerPresenceFreshness, snap.deviceId);
     const wasAvailable = presenceAvailableByDevice.get(snap.deviceId);
-    const available = snap.online && snap.remoteControlEnabled;
+    const { directOnline, online, available } = resolveControllerPresence(
+      snap, hasOfflineDirectPath(snap.deviceId), wasAvailable,
+    );
     const wasOnline = presenceOnlineByDevice.get(snap.deviceId);
     presenceAvailableByDevice.set(snap.deviceId, available);
-    presenceOnlineByDevice.set(snap.deviceId, snap.online);
+    presenceOnlineByDevice.set(snap.deviceId, online);
     // 权威 presence 已宣布不可用(离线 / 关被控):「响应性」判定失去意义,清熔断状态
     // 并作废在途结果,让离线态自己的 UI 接管;设备回来后首个请求再超时会重新累计。
     // `!== false` 与重放侧的 `!== true` 对称:视图清空后重连的首帧不可用 presence
@@ -1028,9 +1046,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       },
     });
     presenceNameByDevice.set(snap.deviceId, snap.selfName || snap.deviceName);
-    broadcast(DEVICE_LINK_PUSH.PRESENCE_CHANGED, snap);
+    broadcast(DEVICE_LINK_PUSH.PRESENCE_CHANGED, directOnline ? { ...snap, online: true } : snap);
     // 被控端兜底:对等控制端下线 → 清掉它在本机的订阅 registry(防僵尸订阅持续 sendPush)。
-    if (!snap.online) handleControllerOffline(snap.deviceId);
+    if (!online) handleControllerOffline(snap.deviceId);
     // `!== true` 而非 `=== false`:断线时 availability 视图整体清空,重连后该设备
     // 的首帧 presence(wasAvailable=undefined)同样是「不可用→可用」翻转——重放
     // 循环在目标离线期间被 presence 门禁终止后,这里是唯一的恢复事件。目标本就
@@ -1137,11 +1155,16 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     }
     if (env.kind !== 'push') return;
     const p = env.payload as PushPayload;
-    tapRemoteModelCatalogChange(env.src, p?.channel, isDeviceRevoked(env.src));
     const sharePeer = parseProviderSharePeer(env.src);
+    const activeShareHost = sharePeer?.role === 'host' && getReceivedShares().some(share => share.shareId === sharePeer.shareId
+      && share.hostDeviceId === sharePeer.deviceId && share.status === 'active');
+    // An active same-region share's catalog change reaches controllers that read it
+    // through this computer, like an ordinary source; the minute-by-minute received
+    // poll no longer stands in for it.
+    tapRemoteModelCatalogChange(env.src, p?.channel, isDeviceRevoked(env.src), activeShareHost);
+    if (typeof p?.channel === 'string' && !isDeviceRevoked(env.src)) notifyRemotePushChannel(env.src, p.channel);
     if (sharePeer && p?.channel === 'maker:provider:changed') {
-      if (sharePeer.role !== 'host' || !getReceivedShares().some(share => share.shareId === sharePeer.shareId
-        && share.hostDeviceId === sharePeer.deviceId && share.status === 'active')) return;
+      if (!activeShareHost) return;
       broadcast(DEVICE_LINK_PUSH.REMOTE_PUSH, { deviceId: `share:${sharePeer.shareId}`, channel: p.channel, payload: {} });
       return;
     }
@@ -2034,6 +2057,18 @@ export async function remoteInvoke(
  * 若本机仍无控制意图(无订阅)就立即关闭本次建的链路,以 UNSUPPORTED_CAPABILITY 失败,不发请求。
  * 链路已就绪(用户正在控制对端)时直接复用,不产生新的 link-open。
  */
+/** Main-process observers of pushes from other computers: the source and channel only, never the payload. */
+const remotePushChannelListeners = new Set<(deviceId: string, channel: string) => void>();
+export function onRemotePushChannel(listener: (deviceId: string, channel: string) => void): () => void {
+  remotePushChannelListeners.add(listener);
+  return () => { remotePushChannelListeners.delete(listener); };
+}
+function notifyRemotePushChannel(deviceId: string, channel: string): void {
+  for (const listener of remotePushChannelListeners) {
+    try { listener(deviceId, channel); } catch { /* An observer never blocks forwarding to the renderer. */ }
+  }
+}
+
 export async function remoteBackgroundInvoke(
   agentDeviceId: string,
   channel: string,

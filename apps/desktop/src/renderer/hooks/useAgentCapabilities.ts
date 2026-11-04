@@ -138,6 +138,11 @@ export interface AgentCapabilities {
    */
   supportsOrcaWorkerAgentDevice?: boolean;
   /**
+   * 被控端接受给它上面的协同 Lead / 本机 Worker 换 Agent 所在电脑。
+   * 老被控端无此字段 → undefined：控制端对这类任务不列其他电脑与分享(v0.1.104–v0.1.110 会拒绝)。
+   */
+  supportsOrcaAgentRelocation?: boolean;
+  /**
    * 手动压缩会话上下文能力(pi 原生 compact)。与 maker-core Capabilities.manualCompact
    * 同形；device-link 老被控端序列化的 capabilities 无此字段 → undefined = 不支持。
    * 上下文环压缩入口据此判定(见 resolveManualCompactChannel),不再硬编码 agentKind 列表。
@@ -306,6 +311,7 @@ function parseAgentCapabilities(value: unknown): AgentCapabilities {
     !isOptionalBoolean(value.supportsOrcaWorkerUpdate) ||
     !isOptionalBoolean(value.supportsDeferredOrcaUiAssignment) ||
     !isOptionalBoolean(value.supportsOrcaWorkerAgentDevice) ||
+    !isOptionalBoolean(value.supportsOrcaAgentRelocation) ||
     !isOptionalCapabilityStatus(value.writableDirs) ||
     !isOptionalCapabilityStatus(value.manualCompact)
   ) {

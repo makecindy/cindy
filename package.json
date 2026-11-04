@@ -69,7 +69,8 @@
       "@expo/cli@57.0.25": "dependency-patches/@expo__cli@57.0.25.patch",
       "react-native-screens@4.26.2": "dependency-patches/react-native-screens@4.26.2.patch",
       "expo-router@57.0.17": "dependency-patches/expo-router@57.0.17.patch",
-      "react-native-gesture-handler@2.32.0": "dependency-patches/react-native-gesture-handler@2.32.0.patch"
+      "react-native-gesture-handler@2.32.0": "dependency-patches/react-native-gesture-handler@2.32.0.patch",
+      "expo-modules-core@57.0.18": "dependency-patches/expo-modules-core@57.0.18.patch"
     },
     "allowUnusedPatches": true
   },
@@ -77,9 +78,11 @@
     "h": "node scripts/help.mjs",
     "mobile:xcode": "node apps/mobile/scripts/open-ios-xcode.mjs",
     "mobile:sim:rebuild": "node scripts/ensure-deps.mjs --workspace-only && node apps/mobile/scripts/sim-rebuild.mjs",
+    "mobile:sim:up": "node scripts/ensure-deps.mjs --workspace-only && node apps/mobile/scripts/sim-up.mjs",
     "mobile:sim:start": "node scripts/ensure-deps.mjs --workspace-only && node apps/mobile/scripts/sim-start.mjs",
     "mobile:sim:start:cn": "node scripts/ensure-deps.mjs --workspace-only && node apps/mobile/scripts/sim-start.mjs --region=cn",
     "mobile:sim:whoami": "node scripts/ensure-deps.mjs --workspace-only && node apps/mobile/scripts/sim-whoami.mjs",
+    "mobile:sim:logcheck": "node scripts/ensure-deps.mjs --workspace-only && node apps/mobile/scripts/sim-logcheck.mjs",
     "mobile:sim:open": "node scripts/ensure-deps.mjs --workspace-only && node apps/mobile/scripts/sim-open.mjs",
     "sync:mobile-rich-content-assets": "node apps/mobile/scripts/sync-rich-content-assets.mjs",
     "mobile:release:check": "node apps/mobile/scripts/release-with-env.mjs check",
@@ -126,6 +129,7 @@
     "report:design-colors": "node scripts/hardcoded-color-audit.mjs --report",
     "check:design-inventory": "node scripts/design-inventory.mjs --check",
     "design:inventory": "node scripts/design-inventory.mjs",
+    "design:inventory:report": "node scripts/design-inventory.mjs --report",
     "i18n:glossary-doc": "node scripts/generate-glossary-doc.mjs",
     "check:brand-terminology": "node scripts/brand-terminology-guard.mjs",
     "check:endpoints": "node scripts/check-endpoint-literals.mjs",

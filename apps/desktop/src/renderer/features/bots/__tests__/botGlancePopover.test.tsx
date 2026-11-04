@@ -16,6 +16,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildTodoReferenceHref } from '@cindy/maker-shared/agent-input-projection';
 import { todoLocalDate, type TeammateTodo } from '@cindy/maker-shared/teammate-todo';
+import type { BotChatIdentity } from '../BotSessionContentHeader';
 
 const h = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -34,6 +35,9 @@ const h = vi.hoisted(() => ({
   scopes: [] as Array<Record<string, unknown>>,
   pin: vi.fn(),
   openExternal: vi.fn(),
+  routines: [] as Array<Record<string, unknown>>,
+  listRoutines: vi.fn(),
+  remoteRoutines: vi.fn(),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -44,6 +48,7 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => h.navigate }));
+vi.mock('../remoteBotSettingsClient', () => ({ invokeBotSettings: h.remoteRoutines }));
 vi.mock('@/lib/composerActionsBus', () => ({ insertTodoReferenceIntoComposer: h.insert }));
 vi.mock('@/lib/toast', () => ({ toast: { info: h.toastInfo, error: h.toastError } }));
 vi.mock('@/lib/orcaSessionIdentity', () => ({ resolveSessionRoute: async (id: string) => `/cc-agent/${id}` }));
@@ -112,10 +117,16 @@ const update = vi.fn(async (_botId: string, patch: { id: string }) => ({ ...todo
 const openPath = vi.fn(async () => ({ ok: true }));
 let dailyOn = false;
 let routinesChanged: (() => void) | null = null;
+const routineListeners = new Set<() => void>();
 const dailyCheck = vi.fn(async (_botId: string, enabled?: boolean) => (dailyOn = enabled ?? dailyOn));
 
 beforeEach(() => {
   items = [];
+  h.routines = [];
+  h.listRoutines.mockImplementation(async () => h.routines);
+  h.remoteRoutines.mockResolvedValue([]);
+  routineListeners.clear();
+  routinesChanged = () => routineListeners.forEach(listener => listener());
   h.sessions = []; h.remoteSessions = []; h.refs = []; h.scopes = []; h.statuses.clear(); h.attention.clear();
   dailyOn = false;
   dailyCheck.mockImplementation(async (_botId: string, enabled?: boolean) => (dailyOn = enabled ?? dailyOn));
@@ -126,7 +137,7 @@ beforeEach(() => {
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     localDb: { bots: { todos: { list, update, dailyCheck }, workbench: { followScopes: async () => h.scopes } } },
     maker: { onBotWorkbenchChanged: () => () => undefined },
-    routines: { onChanged: (listener: () => void) => { routinesChanged = listener; return () => { routinesChanged = null; }; } },
+    routines: { list: h.listRoutines, onChanged: (listener: () => void) => { routineListeners.add(listener); return () => { routineListeners.delete(listener); }; } },
     deviceLink: { invoke: vi.fn(), onRemotePush: () => () => undefined },
     openPath,
     openExternal: h.openExternal,
@@ -139,14 +150,96 @@ afterEach(() => {
 
 const bot = { id: 'bot-1', name: '葫芦', sessionId: 's1' };
 
-async function openGlance(target = bot) {
+async function openGlance(target: BotChatIdentity = bot) {
   render(<BotGlanceButton bot={target} cloudHome={false} />);
-  await waitFor(() => expect(list).toHaveBeenCalled());
+  if (!target.deviceId) await waitFor(() => expect(list).toHaveBeenCalled());
   fireEvent.click(screen.getByTestId('bot-glance-button'));
   return screen.findByTestId('bot-glance-popover');
 }
 
 describe('BotGlanceButton', () => {
+  // A never-run rule must be visible in the same list as ordinary tasks. Multiple run
+  // sessions for one rule must not duplicate it or discard its latest unread result.
+  // Recency follows ordinary task activity (creation for never-run rules), not rule edits.
+  it('mixes never-run routines and tasks, groups runs, and opens the existing routine settings', async () => {
+    h.routines = [
+      { id: 'clean', name: '磁盘低空间自动清理', enabled: true, createdAt: 30, updatedAt: 900 },
+      { id: 'issues', name: '跟进 issue 和 bug', enabled: false, createdAt: 1, updatedAt: 999 },
+      { id: 'builtin', name: 'Internal follow-up', builtin: 'follow-up', updatedAt: 40 },
+    ];
+    h.sessions = [
+      { id: 'ordinary', title: 'Ordinary task', status: 'active', lastActivityAt: new Date(25).toISOString(), updatedAt: new Date(990).toISOString() },
+      ...['newest', 'older'].map((id, i) => ({ id, title: `Run ${id}`, status: 'active',
+        updatedAt: new Date(19 - i).toISOString(), companion: { id: bot.id, role: 'routine', routineId: 'issues' } })),
+    ];
+    h.scopes = h.sessions.map(task => ({ sessionId: task.id }));
+    h.attention.set('newest', 'done');
+    const popover = await openGlance();
+    await screen.findByText('磁盘低空间自动清理');
+    expect(screen.getAllByTestId('bot-glance-task').map(row => row.querySelector('[title]')?.getAttribute('title')))
+      .toEqual(['磁盘低空间自动清理', 'Ordinary task', '跟进 issue 和 bug']);
+    expect(screen.queryByText('Run newest')).toBeNull();
+    expect(screen.queryByText('Internal follow-up')).toBeNull();
+    expect(popover.querySelectorAll('[aria-label="routines.title"]')).toHaveLength(2);
+    expect(screen.getByText('routines.paused')).toBeTruthy();
+    expect(screen.getByLabelText('bots.glance.unread')).toBeTruthy();
+    fireEvent.click(screen.getByText('磁盘低空间自动清理'));
+    expect(h.navigate).toHaveBeenCalledWith('/bots/bot-1?settings=1&settingsPage=routines');
+  });
+
+  // PR #8532 review: 31 fresh runs used to consume the raw 30-session window before
+  // grouping. Exercise the real popover: older tasks must fill it, another rule must
+  // retain its execution time/unread, and the final list (not raw runs) stays capped.
+  it('applies the recent-task limit after grouping runs and preserves older rule activity', async () => {
+    h.routines = [
+      { id: 'busy', name: 'Frequent routine', enabled: true, createdAt: 1 },
+      { id: 'older', name: 'Older routine', enabled: true, createdAt: 2 },
+    ];
+    h.sessions = [
+      ...Array.from({ length: 31 }, (_, i) => ({ id: `run-${i}`, title: `Fresh run ${i}`, status: 'active',
+        updatedAt: new Date(2000 - i).toISOString(), companion: { id: bot.id, role: 'routine', routineId: 'busy' } })),
+      ...Array.from({ length: 29 }, (_, i) => ({ id: `ordinary-${i}`, title: `Ordinary task ${i}`, status: 'active',
+        updatedAt: new Date(1000 - i * 2).toISOString() })),
+      { id: 'older-run', title: 'Older execution', status: 'active', updatedAt: new Date(989).toISOString(),
+        companion: { id: bot.id, role: 'routine', routineId: 'older' } },
+    ];
+    h.scopes = h.sessions.map(task => ({ sessionId: task.id }));
+    h.attention.set('older-run', 'done');
+    // PR output discovery retains its existing 30-raw-session budget.
+    h.refs = [{ sessionId: 'ordinary-0', owner: 'example', repo: 'app', prNumber: 1, lastSeenAt: 1 }];
+    await openGlance();
+    await screen.findByText('Frequent routine');
+    expect(screen.getAllByTestId('bot-glance-task')).toHaveLength(5);
+    fireEvent.click(screen.getByText('bots.glance.showMore'));
+    const titles = screen.getAllByTestId('bot-glance-task').map(row => row.querySelector('[title]')?.getAttribute('title'));
+    expect(titles).toHaveLength(30);
+    expect(titles.slice(0, 3)).toEqual(['Frequent routine', 'Ordinary task 0', 'Ordinary task 1']);
+    expect(titles.indexOf('Older routine')).toBe(titles.indexOf('Ordinary task 5') + 1);
+    expect(screen.getByText('Older routine').closest('button')?.querySelector('[aria-label="bots.glance.unread"]')).not.toBeNull();
+    expect(screen.queryByText('Ordinary task 28')).toBeNull();
+    expect(screen.queryByText('Fresh run 0')).toBeNull();
+    expect(screen.queryByTestId('bot-glance-pr')).toBeNull();
+  });
+
+  it('reads remote routines from their computer and keeps the settings link on that computer', async () => {
+    h.remoteRoutines.mockResolvedValue([{ id: 'clean', name: 'Remote cleanup', enabled: true, updatedAt: 30 }]);
+    await openGlance({ ...bot, deviceId: 'mini' });
+    fireEvent.click(await screen.findByText('Remote cleanup'));
+    expect(h.remoteRoutines).toHaveBeenCalledWith('mini', 'routines.list', bot.id);
+    expect(h.listRoutines).not.toHaveBeenCalled();
+    expect(h.navigate).toHaveBeenCalledWith('/bots/remote/mini/bot-1?settings=1&settingsPage=routines');
+  });
+
+  it('offers retry after a routine read fails, then refreshes rule changes without reopening', async () => {
+    h.listRoutines.mockRejectedValueOnce(new Error('offline'));
+    await openGlance();
+    fireEvent.click(await screen.findByTestId('bot-glance-routines-retry'));
+    await waitFor(() => expect(screen.queryByTestId('bot-glance-routines-retry')).toBeNull());
+    h.routines = [{ id: 'clean', name: 'Added cleanup', enabled: true, updatedAt: 30 }];
+    await act(async () => routinesChanged?.());
+    expect(await screen.findByText('Added cleanup')).toBeTruthy();
+  });
+
   it('quotes a todo into the composer instead of acting on it, and offers only an undoable delete', async () => {
     items = [todo('t1')];
     await openGlance();
@@ -222,7 +315,7 @@ describe('BotGlanceButton', () => {
     h.scopes = [{ sessionId: a.id }, { sessionId: b.id, deviceId: 'mini' }];
     h.attention.set(a.id, 'done'); h.attention.set(b.id, 'error');
     h.refs = [a,b].map((task, i) => ({ id: String(i), sessionId: task.id, owner: 'makecindy', repo: 'cindy', prNumber: 123, lastSeenAt: 2-i }));
-    h.statuses.set('makecindy/cindy#123', { ok: true, status: 'merged', title: 'Actual PR title' });
+    h.statuses.set('github:github.com/makecindy/cindy#123', { ok: true, status: 'merged', title: 'Actual PR title' });
     await openGlance();
     expect(screen.getAllByTestId('bot-glance-task')).toHaveLength(2);
     expect(screen.queryByText('Unrelated')).toBeNull();
@@ -316,7 +409,7 @@ describe('BotGlanceButton', () => {
     h.sessions = [{ id: 'task', title: 'Task', status: 'active' }];
     h.scopes = [{ sessionId: 'task' }];
     h.refs = [4, 2].map(at => ({ sessionId: 'task', owner: 'example', repo: 'app', prNumber: at, lastSeenAt: at }));
-    for (const at of [4, 2]) h.statuses.set(`example/app#${at}`, { ok: true, status: 'merged', title: `PR title ${at}` });
+    for (const at of [4, 2]) h.statuses.set(`github:github.com/example/app#${at}`, { ok: true, status: 'merged', title: `PR title ${at}` });
     h.delegations = [3, 1].map(at => ({ id: `d${at}`, requestingBotId: 'bot-1', status: 'completed',
       title: 'Task', childSessionId: 'task', completedAt: at, updatedAt: at,
       artifacts: [{ path: `file-${at}.pdf`, absolutePath: `/w/file-${at}.pdf`, status: 'added' }] }));

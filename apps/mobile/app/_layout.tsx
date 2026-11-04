@@ -200,7 +200,7 @@ function NavigationGate() {
             // react-native-screens 让滚动优先识别,不会被返回手势抢走。
           }}
         >
-          <Stack.Screen name="sessions/[sessionId]" getId={({ params }) => recentTaskKey(params ?? {})} options={{
+          <Stack.Screen name="sessions/[sessionId]" dangerouslySingular={(_name, params) => recentTaskKey(params)} options={{
             headerShown: sessionHeaderShown,
             headerTransparent: true,
             headerShadowVisible: false,

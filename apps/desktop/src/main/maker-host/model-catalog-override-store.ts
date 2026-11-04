@@ -19,7 +19,7 @@
  */
 
 import { desktopMakerLogger } from './logger-adapter.js';
-import { createOverrideSettingsFile } from './override-settings-file.js';
+import { createOverrideSettingsFile, portableOverrideSettings } from './override-settings-file.js';
 import {
   EMPTY_MODEL_CATALOG_OVERRIDES,
   sanitizeModelCatalogOverrides,
@@ -54,7 +54,7 @@ function createStore(filePath: () => string, scopeKey?: () => string) {
     label: 'model-catalog-overrides',
     maxBytes: MAX_MODEL_CATALOG_OVERRIDE_FILE_BYTES,
     preserveUnreadableFile: true,
-    mergeOverrides: ({ next, overrides }) => {
+    mergeOverrides: ({ patch, next, overrides }) => {
       if (overrides.version !== undefined && overrides.version !== 1) {
         throw new Error('Unsupported model catalog override version');
       }
@@ -71,7 +71,15 @@ function createStore(filePath: () => string, scopeKey?: () => string) {
         if (Object.hasOwn(quarantined, key))
           throw new Error('Model override needs repair before editing');
       }
-      return { ...overrides, version: 1, patches: { ...quarantined, ...next.patches } };
+      // New-computer setup writes whole sections this computer has not changed; a section
+      // already in the file, even one that needs repair, stays as it is.
+      const sections = Object.fromEntries(
+        Object.keys(patch)
+          .filter((key) => key !== 'version' && key !== 'patches' && !Object.hasOwn(overrides, key))
+          .map((key) => [key, next[key as keyof ModelCatalogOverrides]] as const)
+          .filter(([, value]) => value !== undefined),
+      );
+      return { ...overrides, ...sections, version: 1, patches: { ...quarantined, ...next.patches } };
     },
   });
 }
@@ -167,3 +175,8 @@ export async function writeModelImageInputOverride(
     throw error;
   }
 }
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const modelCatalogOverridePortableSettings = portableOverrideSettings(store, {
+  optionalKeys: ['baseModels', 'localModels'],
+});

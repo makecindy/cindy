@@ -1,17 +1,10 @@
 /**
  * portReclaim.ts — loopback 固定端口的占用检测与自动回收。
  * ---------------------------------------------------------------------------
- * 场景:意识 OAuth 声明了 redirectPort(如 xd-atlassian 钉死 53682)时,回调
- * 端口被外部进程占用会让授权直接 LISTEN_FAILED。产品决策(2026-07-14 与
- * Lizi):点「连接」遇占用不再让用户自己去杀进程,主机自动查出占用者并强杀,
- * 然后重试监听——rclone 这类同端口默认值的工具属于可接受的误伤面。
- *
- * 与 ghostOauthFlow 的分工:flow 引擎只认注入的 `reclaimPort` 回调(规则 14,
- * 单测零 child_process);本模块是生产实现,负责平台差异:
- * - Windows:`netstat -ano` 找 LISTENING 行取 PID → `taskkill /T /F`;
- * - macOS / Linux:`lsof -iTCP:<port> -sTCP:LISTEN -Fpn` 取 PID → SIGKILL。
- * 门控在接线层:只有第一方官方意识的授权流会拿到本回收器(第三方 manifest
- * 可声明任意端口,放开等于借「连接账号」强杀用户本地服务)。
+ * 场景：OAuth 固定回调端口被其它程序占用时，主窗口展示占用程序与 PID。
+ * 用户确认后重新核对端口、进程身份和连接目标，再结束占用程序并重试。
+ * 所有插件采用相同规则；没有确认入口时不结束程序。
+ * 平台查询：Windows netstat + Get-CimInstance，POSIX lsof + ps；不读取进程参数。
  *
  * 安全护栏(不可妥协):
  * - 只杀**真的会挡住 `127.0.0.1:<port>` bind** 的监听:本地地址必须是
@@ -24,6 +17,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import path from 'node:path';
 
 const execFileAsync = promisify(execFile);
 
@@ -140,15 +134,46 @@ export async function killPortOwner(pid: number, logger?: PortReclaimLogger): Pr
  * (至少杀掉一个占用者,或查询时端口已空闲——占用者刚好自己退了);false =
  * 回收失败(受保护 PID / 杀不动,调用方按占用失败收场)。
  */
-export async function reclaimLoopbackPort(port: number, logger?: PortReclaimLogger): Promise<boolean> {
+export interface PortOwner { pid: number; name: string }
+
+async function readPortOwner(pid: number): Promise<(PortOwner & { identity: string }) | null> {
+  try {
+    if (process.platform === 'win32') {
+      const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+        `Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" | Select-Object Name,CreationDate | ConvertTo-Json -Compress`],
+      { windowsHide: true, timeout: 5000, maxBuffer: OUTPUT_MAX_BYTES });
+      const record = JSON.parse(stdout) as { Name?: unknown; CreationDate?: unknown };
+      if (typeof record.Name !== 'string' || !record.CreationDate) return null;
+      return { pid, name: record.Name, identity: JSON.stringify(record) };
+    }
+    const { stdout } = await execFileAsync('ps', ['-p', String(pid), '-o', 'lstart=', '-o', 'comm='],
+      { timeout: 5000, maxBuffer: OUTPUT_MAX_BYTES });
+    const match = /^(.+?\b\d{4})\s+(.+)$/.exec(stdout.trim());
+    return match ? { pid, name: path.basename(match[2]), identity: stdout.trim() } : null;
+  } catch { return null; }
+}
+
+export async function reclaimLoopbackPort(port: number, logger?: PortReclaimLogger,
+  confirm?: (owners: readonly PortOwner[]) => Promise<boolean>, isCurrent: () => boolean = () => true,
+): Promise<boolean> {
   const pids = await findPortOwnerPids(port);
   if (pids.length === 0) {
     // 查不到占用者:可能已释放,也可能查询工具不可用——都值得让调用方重试一次。
     logger?.info('port reclaim 未查到占用进程,直接重试监听', { port });
     return true;
   }
+  if (!confirm || !isCurrent() || pids.some(pid => pid <= 4 || pid === process.pid)) return false;
+  const owners = await Promise.all(pids.map(readPortOwner));
+  if (owners.some(owner => owner === null) || !isCurrent()) return false;
+  if (!await confirm(owners as PortOwner[]) || !isCurrent()) return false;
+  const currentPids = await findPortOwnerPids(port);
+  if (currentPids.length === 0) return true;
+  const currentOwners = await Promise.all(currentPids.map(readPortOwner));
+  if (currentOwners.length !== owners.length || currentOwners.some(owner => !owner ||
+    !owners.some(previous => previous?.pid === owner.pid && previous.identity === owner.identity))) return false;
   let killedAny = false;
-  for (const pid of pids) {
+  for (const pid of currentPids) {
+    if (!isCurrent()) return false;
     const killed = await killPortOwner(pid, logger);
     if (killed) {
       killedAny = true;

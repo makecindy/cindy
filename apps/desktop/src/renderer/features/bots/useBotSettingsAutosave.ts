@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   createBotSettingsAutosave,
+  botSettingsSaveErrorKey,
   normalizeBotSettingsPayload,
   type BotAutosaveStatus,
   type BotAutosaveTrigger,
@@ -43,6 +44,7 @@ export interface UseBotSettingsAutosaveOptions {
 
 export interface BotSettingsAutosaveController {
   status: BotAutosaveStatus;
+  errorKey: string | null;
   /** 字段变化:文本走防抖,离散选择走即时合并窗口。 */
   onEdit: (trigger: BotAutosaveTrigger) => void;
   /** blur / 返回聊天等显式边界的冲刷。 */
@@ -90,6 +92,7 @@ export function useBotSettingsAutosave(
   const discardedRef = useRef(false);
 
   const [status, setStatus] = useState<BotAutosaveStatus>('idle');
+  const [errorKey, setErrorKey] = useState<string | null>(null);
   const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
   // A failure belongs to the draft that was sent, not to whatever is on screen when it
@@ -100,13 +103,14 @@ export function useBotSettingsAutosave(
   const editGenerationRef = useRef(0);
   const failedGenerationRef = useRef<number | null>(null);
 
-  const handleStatus = useCallback((next: BotAutosaveStatus) => {
+  const handleStatus = useCallback((next: BotAutosaveStatus, error?: unknown) => {
     if (!mountedRef.current) return;
     if (savedTimerRef.current !== null) {
       clearTimeout(savedTimerRef.current);
       savedTimerRef.current = null;
     }
     setStatus(next);
+    setErrorKey(next === 'error' ? botSettingsSaveErrorKey(error) : null);
     if (next !== 'saved') return;
     savedTimerRef.current = setTimeout(() => {
       savedTimerRef.current = null;
@@ -201,5 +205,5 @@ export function useBotSettingsAutosave(
 
   const failed = useCallback(() => failedGenerationRef.current === editGenerationRef.current, []);
 
-  return { status, onEdit, flush, retry, isDirty, hasPendingModelSelection: autosave.hasPendingModelSelection, failed, discard, composition };
+  return { status, errorKey, onEdit, flush, retry, isDirty, hasPendingModelSelection: autosave.hasPendingModelSelection, failed, discard, composition };
 }

@@ -1589,4 +1589,4 @@ export async function packGhostDirToFile(
 }
 
 // Keep the existing tool/test export while the built-in Skill owns the documentation.
-export { FORGE_GUIDE } from './forgeGuide.js';
+export { FORGE_GUIDE, FORGE_PAGE_MANUAL } from './forgeGuide.js';

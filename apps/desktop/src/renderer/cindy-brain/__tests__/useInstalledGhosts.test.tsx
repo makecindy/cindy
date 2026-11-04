@@ -13,6 +13,7 @@ import { act, cleanup, render, renderHook, screen } from '@testing-library/react
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { InstalledGhost } from '../../../shared/ghost';
+import { useWorkdirDisabledGhostIds } from '../ghostWorkdirFilter';
 import {
   __resetInstalledGhostsStoreForTest,
   useInstalledGhosts,
@@ -60,6 +61,26 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   __resetInstalledGhostsStoreForTest();
+});
+
+// KFJS unit regression: old-directory responses must not expose commands in a
+// newly selected directory; this asynchronous display path must not sendSync.
+it('loads directory policy asynchronously and discards stale directory responses', async () => {
+  const pending = new Map<string, (value: { disabled: string[] }) => void>();
+  const workdirPrefs = vi.fn((dir: string) => new Promise<{ disabled: string[] }>((resolve) => pending.set(dir, resolve)));
+  const workdirPrefsSync = vi.fn(() => { throw new Error('blocking IPC'); });
+  Object.assign(window.electronAPI.ghosts, { workdirPrefs, workdirPrefsSync });
+  const ghosts = [ghost('a')];
+  const { result, rerender } = renderHook(({ dir }) => useWorkdirDisabledGhostIds(dir, ghosts), { initialProps: { dir: 'first' } });
+  expect(result.current).toBeNull();
+  await act(async () => {});
+  rerender({ dir: 'second' });
+  await act(async () => {});
+  await act(async () => { pending.get('second')!({ disabled: ['a'] }); });
+  expect([...result.current!]).toEqual(['a']);
+  await act(async () => { pending.get('first')!({ disabled: [] }); });
+  expect([...result.current!]).toEqual(['a']);
+  expect(workdirPrefsSync).not.toHaveBeenCalled();
 });
 
 function Probe({ label }: { label: string }) {
