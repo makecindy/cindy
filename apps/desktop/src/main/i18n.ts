@@ -34,6 +34,7 @@ import zhCNCommon from '../renderer/i18n/locales/zh-CN/common.json';
 import zhTWCommon from '../renderer/i18n/locales/zh-TW/common.json';
 import jaCommon from '../renderer/i18n/locales/ja/common.json';
 import koCommon from '../renderer/i18n/locales/ko/common.json';
+import trCommon from '../renderer/i18n/locales/tr/common.json';
 
 const resources: Record<SupportedLocale, Record<string, unknown>> = {
   'es': esCommon as Record<string, unknown>,
@@ -48,6 +49,7 @@ const resources: Record<SupportedLocale, Record<string, unknown>> = {
   'zh-TW': zhTWCommon as Record<string, unknown>,
   ja: jaCommon as Record<string, unknown>,
   ko: koCommon as Record<string, unknown>,
+  tr: trCommon as Record<string, unknown>,
 };
 
 /**
@@ -68,6 +70,7 @@ const FALLBACK_CHAIN: Record<SupportedLocale, readonly SupportedLocale[]> = {
   en: ['en'],
   ja: ['ja', 'en'],
   ko: ['ko', 'en'],
+  tr: ['tr', 'en'],
 };
 
 let cachedLocale: SupportedLocale | null = null;

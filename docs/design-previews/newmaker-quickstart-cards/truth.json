@@ -487,6 +487,14 @@
             "locator": "newChat.createAgent.quickStarts.explore",
             "hash": "80ac523f1f14b66091ef266c9082f9c5fcfa46c19a83d4395dcf50019dd2637f"
           }
+        },
+        "tr": {
+          "value": "Kodu keşfet ve anla",
+          "provenance": {
+            "locator": "newChat.createAgent.quickStarts.explore",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
+            "hash": "8b15bad4b06d5b8ad926e2d028ed6e248e2774972d17813f45f1abd99080282d"
+          }
         }
       }
     },
@@ -602,6 +610,14 @@
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hans-x-lzh/common.json",
             "locator": "newChat.createAgent.quickStarts.build",
             "hash": "80ac523f1f14b66091ef266c9082f9c5fcfa46c19a83d4395dcf50019dd2637f"
+          }
+        },
+        "tr": {
+          "value": "Yeni özellik, uygulama veya araç oluştur",
+          "provenance": {
+            "locator": "newChat.createAgent.quickStarts.build",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
+            "hash": "8b15bad4b06d5b8ad926e2d028ed6e248e2774972d17813f45f1abd99080282d"
           }
         }
       }
@@ -719,6 +735,14 @@
             "locator": "newChat.createAgent.quickStarts.review",
             "hash": "80ac523f1f14b66091ef266c9082f9c5fcfa46c19a83d4395dcf50019dd2637f"
           }
+        },
+        "tr": {
+          "value": "Kodu incele ve değişiklik öner",
+          "provenance": {
+            "locator": "newChat.createAgent.quickStarts.review",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
+            "hash": "8b15bad4b06d5b8ad926e2d028ed6e248e2774972d17813f45f1abd99080282d"
+          }
         }
       }
     },
@@ -834,6 +858,14 @@
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hans-x-lzh/common.json",
             "locator": "newChat.createAgent.quickStarts.fix",
             "hash": "80ac523f1f14b66091ef266c9082f9c5fcfa46c19a83d4395dcf50019dd2637f"
+          }
+        },
+        "tr": {
+          "value": "Sorunları ve hataları düzelt",
+          "provenance": {
+            "locator": "newChat.createAgent.quickStarts.fix",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
+            "hash": "8b15bad4b06d5b8ad926e2d028ed6e248e2774972d17813f45f1abd99080282d"
           }
         }
       }
@@ -1152,6 +1184,14 @@
           "locator": "newChat.createAgent.quickStart",
           "hash": "80ac523f1f14b66091ef266c9082f9c5fcfa46c19a83d4395dcf50019dd2637f"
         }
+      },
+      "tr": {
+        "value": "Hızlı Başlangıç",
+        "provenance": {
+          "locator": "newChat.createAgent.quickStarts.title",
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
+          "hash": "8b15bad4b06d5b8ad926e2d028ed6e248e2774972d17813f45f1abd99080282d"
+        }
       }
     }
   },
@@ -1250,6 +1290,14 @@
         "hash": "4fdab9d79466d01f3876806e1f0fed4e36670d0c5ced911d72cbba5917c3854b",
         "locator": "SUPPORTED_LOCALES[11]",
         "source": "../../../apps/desktop/src/shared/locale.ts"
+      }
+    },
+    {
+      "value": "tr",
+      "provenance": {
+        "locator": "SUPPORTED_LOCALES[12]",
+        "source": "../../../apps/desktop/src/shared/locale.ts",
+        "hash": "4fdab9d79466d01f3876806e1f0fed4e36670d0c5ced911d72cbba5917c3854b"
       }
     }
   ]

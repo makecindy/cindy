@@ -1,0 +1,88 @@
+{
+  "cachedHistory": {
+    "title": "Bilgisayar bağlı değil",
+    "hint": "Kaydedilen içerik kullanılabilir. Daha fazlasını yüklemek için bilgisayarınızı bağlayın."
+  },
+  "recovery": {
+    "syncing": "Eşitleniyor…",
+    "recovered": "Geri Yüklendi",
+    "syncingHint": "İçerik bilgisayarınızdan güncelleniyor."
+  },
+  "syncFailed": "Eşitleme başarısız",
+  "resync": "Yeniden Eşitle",
+  "resyncing": "Yeniden Eşitleniyor",
+  "syncShort": "Eşitle",
+  "deviceUnresponsiveTitle": "Henüz yanıt yok",
+  "deviceUnresponsiveHint": "Henüz bir yanıt alınamadı. Otomatik olarak yeniden deneniyor.",
+  "localNetwork": {
+    "title": "Telefon ağı kullanılamıyor",
+    "hint": "Telefonunuzun ağını kontrol edin. Düzeldiğinde otomatik olarak yeniden bağlanacaktır."
+  },
+  "serviceConnection": {
+    "title": "Servise ulaşılamıyor",
+    "hint": "Telefonunuz şu anda servise ulaşamıyor. Otomatik olarak yeniden bağlanıyor."
+  },
+  "connectStep1": "Bilgisayarınıza {{appName}} uygulamasını yükleyin ve açın",
+  "connectStep2": "Telefonunuzla aynı hesapla giriş yapın",
+  "connectStep3": "Ayarlar → Uzaktan Bağlantı altında \"Aynı hesaba ait cihazların bu bilgisayarı kontrol etmesine izin ver\" seçeneğini açın",
+  "brandEyebrow": "Cindy Mobil",
+  "cloudTeaserTitle": "Bulutta {{appName}}, Yakında",
+  "cloudTeaserCopy": "Kullanıma sunulduğunda mobil uygulama bilgisayara ihtiyaç duymadan tek başına çalışacaktır.",
+  "sectionFirstRun": "Başlarken",
+  "sectionOffline": "Bağlı Cihazlar",
+  "sectionRemoteDisabled": "Bilgisayarınızda",
+  "sectionAccessRevoked": "Erişimi Tekrar Onaylayın",
+  "retryAccess": "Erişimi Yeniden Dene",
+  "recheck": "Tekrar Kontrol Et",
+  "deviceRemovedTitle": "Cihaz kaldırıldı",
+  "deviceRemovedHint": "Cihaz listesine tekrar katılmak için çıkış yapıp yeniden giriş yapın.",
+  "authFailedTitle": "Oturum süresi doldu",
+  "authFailedHint": "Giriş oturumunuzun süresi doldu. Çıkış yapıp yeniden giriş yapın.",
+  "replacedTitle": "Bağlantı yenilendi",
+  "replacedHint": "Bu cihaz bağlantısı başka bir yerde yenilendi. Şimdi yeniden bağlanıyor.",
+  "tooManyConnectionsTitle": "Çok fazla bağlantı",
+  "tooManyConnectionsHint": "Bu hesap için çok fazla cihaz çevrimiçi. Başka bir cihazın bağlantısını kesip tekrar deneyin.",
+  "versionMismatchTitle": "Sürüm uyuşmazlığı",
+  "versionMismatchHint": "Bu uygulama sürümü servis ile uyumlu değil. En son sürüme güncelleyip tekrar deneyin.",
+  "unstableTitle": "Bağlantı sürekli kopuyor",
+  "unstableHint": "Bağlantı kararsız. Ağınızı kontrol edin ve bağlantının düzelmesini bekleyin.",
+  "relay": {
+    "label": {
+      "online": "Aktarma bağlı",
+      "connecting": "Aktarmaya Bağlanılıyor",
+      "stopped": "Aktarma bağlantısı kesildi"
+    },
+    "hint": {
+      "online": "Uzak görevler eşitlenebilir.",
+      "lastSynced": "Son eşitleme: {{time}}",
+      "connecting": "Ağ düzeldiğinde uzak görevler otomatik olarak yeniden abone olacaktır.",
+      "stopped": "Uygulamaya döndüğünüzde veya yeniden giriş yaptığınızda bağlantı devam edecektir."
+    }
+  },
+  "agentAuth": {
+    "noKey": "Bilgisayarda yapılandırılmış API anahtarı olmadığından {{agent}} kullanılamıyor. Bilgisayardaki {{appName}} uygulamasında Ayarlar → Model Sağlayıcıları altında bir anahtar yapılandırıp tekrar deneyin.",
+    "noOauth": "Bilgisayarda hesap yetkilendirmesi tamamlanmadığından {{agent}} kullanılamıyor. Bilgisayardaki {{appName}} uygulamasında Ayarlar → Model Sağlayıcıları altında hesabı yeniden bağlayıp tekrar deneyin.",
+    "noCredentials": "Bilgisayarda oturum açılmadığından {{agent}} kullanılamıyor. Bilgisayardaki {{appName}} uygulamasında Ayarlar → Model Sağlayıcıları üzerinden oturum açıp tekrar deneyin.",
+    "noEncryption": "Bilgisayardaki güvenli sistem depolaması kullanılamadığından {{agent}} kullanılamıyor. macOS'ta Anahtar Zincirini veya Windows'ta hesap şifrelemesini kontrol edip bilgisayardaki {{appName}} uygulamasını yeniden başlatın.",
+    "proxyNotReady": "{{agent}} bilgisayarda henüz hazır değil. Kısa süre sonra tekrar deneyin; bu durum devam ederse bilgisayardaki {{appName}} uygulamasını yeniden başlatın.",
+    "default": "Bilgisayar oturumu kullanılamadığından {{agent}} kullanılamıyor. Bilgisayardaki {{appName}} uygulamasında Ayarlar → Model Sağlayıcıları üzerinden tekrar oturum açın. ({{reason}})"
+  },
+  "remoteError": {
+    "remoteDisabled": "Uzak bilgisayarda uzaktan kontrol devre dışı bırakıldı.",
+    "channelNotAllowed": "Mevcut masaüstü sürümü bu uzak yeteneği desteklemiyor.",
+    "accessRevoked": "Bu bilgisayar mobil erişimi iptal etti.",
+    "deviceUnresponsive": "Henüz yanıt alınamadı. Otomatik olarak yeniden deneniyor.",
+    "versionMismatch": "Servis protokolü sürümü eşleşmiyor. Uygulamayı güncelleyip tekrar deneyin.",
+    "payloadTooLarge": "Bu aktarım çok büyük. Daha küçük parçalara bölüp tekrar deneyin.",
+    "mediaFetchFailed": "Dosya bilgisayardan alınamadı. Daha sonra tekrar deneyin.",
+    "voiceTranscribeFailed": "Ses dökümü başarısız oldu. Tekrar deneyin veya klavyeyi kullanın.",
+    "linkNotOpen": "Bilgisayara olan kontrol bağlantısı kesildi ve yeniden bağlanıyor.",
+    "accountChanged": "Codex hesabı veya çalışma alanı değişti. Kotayı yenileyip tekrar onaylayın.",
+    "offerExpired": "Codex sıfırlama teklifinin süresi doldu. Kotayı yenileyip tekrar onaylayın.",
+    "preconditionFailed": "İşlem koşulları değişti. Yenileyip tekrar onaylayın.",
+    "transient": "Ağ veya uzak bilgisayar geçici olarak kullanılamıyor. Daha sonra tekrar eşitleyin.",
+    "callFailed": "Uzak çağrı tamamlanamadı. Birazdan tekrar deneyin.",
+    "unclassified": "Bu işlem tamamlanamadı. Birazdan tekrar deneyin.",
+    "notFound": "Bu öğe artık mevcut değil. Listeye geri dönün ve tekrar denemeden önce yenileyin."
+  }
+}

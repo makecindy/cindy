@@ -1,0 +1,16 @@
+{
+  "picker": {
+    "shareName": "{{owner}} tarafından paylaşıldı",
+    "numbered": "{{name}} ({{index}})",
+    "unavailable": "Kullanılamayan paylaşım"
+  },
+  "link": {
+    "title": "Sağlayıcı Paylaşımı",
+    "heading": "Bu Bağlantıyı Bir Bilgisayarda Açın",
+    "body": "Sağlayıcı paylaşımı yalnızca bir bilgisayardaki {{appName}} üzerinden talep edilebilir ve kullanılabilir. Bağlantıyı bilgisayarınıza gönderip orada açın veya Ayarlar → Sağlayıcılar → Benimle Paylaşılan Sağlayıcılar bölümüne yapıştırın.",
+    "note": "Paylaşım bağlantılarının süresi oluşturulduktan 5 dakika sonra dolar ve yalnızca bir kez çalışır.",
+    "copy": "Paylaşım Bağlantısını Kopyala",
+    "copied": "Paylaşım bağlantısı kopyalandı",
+    "copyFailed": "Paylaşım bağlantısı kopyalanamadı. Birazdan tekrar deneyin."
+  }
+}

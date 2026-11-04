@@ -24,6 +24,7 @@ import zhCNInteraction from "@/i18n/locales/zh-CN/interaction.json";
 import zhTWInteraction from "@/i18n/locales/zh-TW/interaction.json";
 import lzhInteraction from "@/i18n/locales/zh-Hant-x-lzh/interaction.json";
 import lzhHansInteraction from "@/i18n/locales/zh-Hans-x-lzh/interaction.json";
+import trInteraction from "@/i18n/locales/tr/interaction.json";
 
 export type FullAccessConfirmationCopy = Readonly<{
   title: string;
@@ -62,4 +63,5 @@ export const FULL_ACCESS_CONFIRMATION_COPY: Record<
   "zh-TW": project(zhTWInteraction),
   "zh-Hant-x-lzh": project(lzhInteraction),
   "zh-Hans-x-lzh": project(lzhHansInteraction),
+  tr: project(trInteraction),
 };

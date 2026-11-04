@@ -95,6 +95,14 @@
         "locator": "SUPPORTED_LOCALES[11]",
         "hash": "sha256:4fdab9d79466d01f3876806e1f0fed4e36670d0c5ced911d72cbba5917c3854b"
       }
+    },
+    {
+      "value": "tr",
+      "provenance": {
+        "locator": "SUPPORTED_LOCALES[12]",
+        "source": "../../../apps/desktop/src/shared/locale.ts",
+        "hash": "sha256:4fdab9d79466d01f3876806e1f0fed4e36670d0c5ced911d72cbba5917c3854b"
+      }
     }
   ],
   "structure": {
@@ -1094,6 +1102,64 @@
             "hash": "sha256:80ac523f1f14b66091ef266c9082f9c5fcfa46c19a83d4395dcf50019dd2637f"
           }
         }
+      },
+      "tr": {
+        "pendingTitle": {
+          "value": "Account scheduled for deletion",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
+            "locator": "accountDeletion.status(en).pendingTitle",
+            "hash": "sha256:8b15bad4b06d5b8ad926e2d028ed6e248e2774972d17813f45f1abd99080282d"
+          }
+        },
+        "pendingCopy": {
+          "value": "Scheduled for permanent deletion on {{date}}. Sign in before then to cancel deletion.",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
+            "locator": "accountDeletion.status(en).pendingCopy",
+            "hash": "sha256:8b15bad4b06d5b8ad926e2d028ed6e248e2774972d17813f45f1abd99080282d"
+          }
+        },
+        "processingTitle": {
+          "value": "Account deletion in progress",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
+            "locator": "accountDeletion.status(en).processingTitle",
+            "hash": "sha256:8b15bad4b06d5b8ad926e2d028ed6e248e2774972d17813f45f1abd99080282d"
+          }
+        },
+        "processingCopy": {
+          "value": "The waiting period ended. Your Cindy sign-in account is being removed.",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
+            "locator": "accountDeletion.status(en).processingCopy",
+            "hash": "sha256:8b15bad4b06d5b8ad926e2d028ed6e248e2774972d17813f45f1abd99080282d"
+          }
+        },
+        "completedTitle": {
+          "value": "Account deleted",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
+            "locator": "accountDeletion.status(en).completedTitle",
+            "hash": "sha256:8b15bad4b06d5b8ad926e2d028ed6e248e2774972d17813f45f1abd99080282d"
+          }
+        },
+        "completedCopy": {
+          "value": "Your Cindy sign-in account has been removed.",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
+            "locator": "accountDeletion.status(en).completedCopy",
+            "hash": "sha256:8b15bad4b06d5b8ad926e2d028ed6e248e2774972d17813f45f1abd99080282d"
+          }
+        },
+        "dismissButton": {
+          "value": "Got it",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/tr/common.json",
+            "locator": "accountDeletion.status(en).dismissButton",
+            "hash": "sha256:8b15bad4b06d5b8ad926e2d028ed6e248e2774972d17813f45f1abd99080282d"
+          }
+        }
       }
     }
   },
@@ -2087,6 +2153,64 @@
           "provenance": {
             "source": "../../../apps/mobile/src/auth/loginMessages.ts",
             "locator": "accountDeletion*(zh-Hans-x-lzh).dismissButton",
+            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
+          }
+        }
+      },
+      "tr": {
+        "pendingTitle": {
+          "value": "Account scheduled for deletion",
+          "provenance": {
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
+            "locator": "accountDeletion*(en).pendingTitle",
+            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
+          }
+        },
+        "pendingCopy": {
+          "value": "Scheduled for permanent deletion on {date}. Sign in now to cancel deletion.",
+          "provenance": {
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
+            "locator": "accountDeletion*(en).pendingCopy",
+            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
+          }
+        },
+        "processingTitle": {
+          "value": "Account deletion in progress",
+          "provenance": {
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
+            "locator": "accountDeletion*(en).processingTitle",
+            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
+          }
+        },
+        "processingCopy": {
+          "value": "Your Cindy sign-in account is being deleted and will be permanently deleted when processing is complete.",
+          "provenance": {
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
+            "locator": "accountDeletion*(en).processingCopy",
+            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
+          }
+        },
+        "completedTitle": {
+          "value": "Account deleted",
+          "provenance": {
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
+            "locator": "accountDeletion*(en).completedTitle",
+            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
+          }
+        },
+        "completedCopy": {
+          "value": "Your Cindy sign-in account has been deleted.",
+          "provenance": {
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
+            "locator": "accountDeletion*(en).completedCopy",
+            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
+          }
+        },
+        "dismissButton": {
+          "value": "Got it",
+          "provenance": {
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
+            "locator": "accountDeletion*(en).dismissButton",
             "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
           }
         }
