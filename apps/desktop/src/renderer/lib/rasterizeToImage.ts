@@ -84,9 +84,9 @@ export function parseSvgIntrinsicSize(svgText: string): { width: number; height:
 function flattenOverSurface(bg: string): string {
   if (bg.startsWith('rgb(')) return bg;
   const ctx = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
-  if (!ctx) return bg;
   const surface = window.getComputedStyle(document.documentElement).getPropertyValue('--surface').trim();
-  ctx.fillStyle = surface || '#ffffff';
+  if (!ctx || !surface) return bg;
+  ctx.fillStyle = surface;
   ctx.fillRect(0, 0, 1, 1);
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, 1, 1);
