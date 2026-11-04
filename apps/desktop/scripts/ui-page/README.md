@@ -161,6 +161,12 @@ mountPage({
 `AppFrame` 复刻主界面的侧栏（默认 260px）与内容区结构，并挂载真实的 `ContentHeaderSlot`，
 让页面在真实宽度和标题栏里排版；不需要外框时直接渲染组件。
 
+构建器支持 Vite 的 `?url` 资源导入（含包路径与相对路径），按原字节生成独立资源 URL；
+PDF worker 的 `.mjs` 在 Electron 与 Chromium 宿主均按 JavaScript 提供。`?worker` 则编译为
+真实模块 worker。两类输入都纳入 `--changed`、`--compare` 与预览刷新，不应为绕过构建错误
+替换整个 PDF 组件。回归由 `runner.selftest.mjs` 验证真实 PDF worker 解析与资源变更追踪；
+这不代表单页工具会自动加载项目的其它 Vite 插件或其提供的静态目录。
+
 `check(page, ui)` 里的 `page` 是 Playwright Page。`ui` 包含当前变体
 （`case`、`theme`、`locale`、`viewport`、`data`）以及：
 
@@ -195,6 +201,9 @@ Tailwind 配置由 Tailwind 直接从磁盘加载，两侧都用当前版本；�
 
 ## 运行方式
 
+- 构建器支持 Vite 的 `?worker` 与 `?url` 导入：前者构建真实 worker，后者把文件原样
+  输出为资源 URL（包括 PDF.js 的预构建 `.mjs` worker）。两者的源文件都参与改动扫描与
+  对照指纹；`.mjs` 在 Electron 和 Chromium 检查模式中按 JavaScript 提供，不以替身绕过加载。
 - 默认 `--engine electron`：仓库里的 Electron，与 Cindy 同一个 Chromium。每次运行使用新的
   临时 profile、拒绝权限与下载、只允许访问测试源，运行完删除临时数据；后台检查不显示窗口、
   不占 Dock。

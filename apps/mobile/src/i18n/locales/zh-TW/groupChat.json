@@ -1,4 +1,7 @@
 {
+  "progress": {
+    "stop": "停止"
+  },
   "title": "群聊",
   "memberSeparator": "、",
   "memberCount_one": "{{count}} 位成員",
@@ -33,8 +36,10 @@
   },
   "mention": {
     "all": "所有人",
-    "allHint": "大家都回答",
-    "label": "點名夥伴"
+    "allHint": "僅真人",
+    "label": "點名夥伴",
+    "allBots": "所有夥伴",
+    "allBotsHint": "僅夥伴"
   },
   "composer": {
     "label": "群聊訊息",
@@ -150,7 +155,12 @@
         "details": "請重新傳送訊息；若仍失敗，請查看記錄並回報問題。"
       }
     },
-    "runtimeFailureSetupHint": "如需調整模型或設定，請在夥伴所屬電腦上處理。"
+    "runtimeFailureSetupHint": "如需調整模型或設定，請在夥伴所屬電腦上處理。",
+    "capability": {
+      "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具呼叫未執行：群內授權已失效或不允許此操作。請由夥伴主人在目前群組重新發起。",
+      "GROUP_AUTHORIZATION_UNAVAILABLE": "暫時無法核驗 {{name}} 的群聊授權，這次工具呼叫未執行。請在連線恢復後重試。",
+      "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。"
+    }
   },
   "plan": {
     "intro_one": "這件事分 {{count}} 步，我這樣分工：",
@@ -184,9 +194,16 @@
     "allDone": "都做完了"
   },
   "speaking": {
+    "queued": "排隊中",
     "stopping": "正在停止…",
     "planning": "正在安排…",
     "step": "正在做…"
+  },
+  "work": {
+    "queued": "排隊 {{count}}",
+    "active": "進行中 {{count}}",
+    "expand": "展開夥伴動態",
+    "collapse": "收起夥伴動態"
   },
   "task": {
     "state": {
@@ -205,6 +222,17 @@
     "untitled": "附件"
   },
   "settings": {
+    "notifications": {
+      "title": "訊息通知",
+      "all": "所有訊息",
+      "mentions": "僅 @我",
+      "none": "關閉通知",
+      "allHint": "群聊訊息和已關注話題的新回覆都會提醒",
+      "mentionsHint": "有人 @你或 @所有人時提醒，分工待處理仍會提醒",
+      "noneHint": "關閉本群所有系統提醒，未讀訊息仍會保留",
+      "saving": "正在儲存…",
+      "saveFailed": "未能儲存通知設定，請重試"
+    },
     "open": "群聊設定",
     "title": "群聊設定",
     "members": "成員",
@@ -228,7 +256,7 @@
     "speakingMode": "發言方式",
     "speakingModeAuto": "自動",
     "speakingModeSequential": "一律輪流",
-    "speakingModeAutoNote": "未 @ 人或 @所有人時，首輪同時思考，之後輪流；@ 夥伴按提及順序輪流。",
+    "speakingModeAutoNote": "未 @ 人或 @所有夥伴時，首輪同時思考，之後輪流；@ 夥伴按提及順序輪流。",
     "speakingModeSequentialNote": "每次只有一位夥伴發言，後說的能看到前面的回答。",
     "speakingModeSaveFailed": "發言方式沒能儲存，請再試一次",
     "setOrganizer": "設為負責人",
@@ -254,7 +282,9 @@
     "cloudStatus": {
       "loading": "正在讀取群組設定…",
       "unavailable": "群組設定讀取失敗，請重試"
-    }
+    },
+    "allowMentionAllBots": "允許 @所有夥伴",
+    "allowMentionAllBotsHint": "僅群主可更改。夥伴可能都會回覆，大群請謹慎開啟。此開關不影響 AI 代答。"
   },
   "errors": {
     "memberLimit": "一個群聊需要 2–6 位夥伴",
@@ -278,7 +308,8 @@
     "quoteUnavailable": "引用的訊息已刪除或無法查看，已取消引用，請再傳送一次",
     "lifecycleUnavailable": "目前伺服器或電腦尚不支援此操作。",
     "groupDissolved": "群聊已解散，仍可查看有權存取的歷史訊息。",
-    "lastOwner": "請先轉讓群主或解散群聊，再退出。"
+    "lastOwner": "請先轉讓群主或解散群聊，再退出。",
+    "allBotsMentionDisabled": "群主尚未開啟 @所有夥伴。"
   },
   "followUp": {
     "next": "分工 · 下一步",

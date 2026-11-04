@@ -44,7 +44,7 @@ export function createMobileVoiceDictionaryLearningTracker(
   options: TrackerOptions,
 ): MobileVoiceDictionaryLearningTracker {
   const timeoutMs = options.timeoutMs ?? MOBILE_VOICE_DICTIONARY_LEARNING_TRACK_TIMEOUT_MS;
-  const setTimeoutFn = options.setTimeoutFn ?? setTimeout;
+  const setTimeoutFn: NonNullable<TrackerOptions['setTimeoutFn']> = options.setTimeoutFn ?? setTimeout;
   const clearTimeoutFn = options.clearTimeoutFn ?? clearTimeout;
   let watch: Watch | null = null;
 

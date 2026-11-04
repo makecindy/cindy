@@ -36,6 +36,7 @@ import {
 	filterRunsByWorkspace,
 	findDependencyInstallIssues,
 	selectionNeedsElectron,
+	stripAgentEnvPollutants,
 	isIgnoredFile,
 	mapWithConcurrency,
 	normalizeRelPath,
@@ -330,10 +331,13 @@ test("nodeWebstorageEnabled detects the globals that force the webstorage flag",
 	);
 });
 
-test("desktop unit uses forks on Node 24+ to avoid native finalizer crashes", () => {
+test("desktop unit isolates native finalizers on macOS, Windows and Node 24+", () => {
 	assert.equal(desktopUnitPool("darwin", "24.18.0", false), "forks");
-	assert.equal(desktopUnitPool("darwin", "22.23.0", false), "threads");
+	assert.equal(desktopUnitPool("darwin", "22.22.3", false), "forks");
+	assert.equal(desktopUnitPool("darwin", "22.23.0", false), "forks");
 	assert.equal(desktopUnitPool("win32", "22.23.0", false), "forks");
+	assert.equal(desktopUnitPool("linux", "22.23.0", false), "threads");
+	assert.equal(desktopUnitPool("linux", "24.18.0", false), "forks");
 	assert.equal(desktopUnitPool("darwin", "25.0.0", true), "forks");
 });
 
@@ -2458,4 +2462,14 @@ test("only selections that include Desktop need the Electron binary", () => {
 	assert.equal(selectionNeedsElectron(workspaces, { workspaces: ["packages/auth-client"] }), false);
 	assert.equal(selectionNeedsElectron(workspaces, { excludeWorkspaces: ["desktop"] }), false);
 	assert.equal(selectionNeedsElectron([{ name: "sample", cwd: "packages/sample" }]), false);
+});
+
+// Unit: suites run inside an agent session failed on variables the agent shell carried (#880:
+// CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL; a remotely controlled Cindy task's CINDY_INPUT_HANDOFF_ROUTE),
+// though nothing in the code under test changed. Children inherit the runner's env.
+test("the runner drops agent-shell variables that change test results, and nothing else", () => {
+	const env = { NODE_ENV: "production", CINDY_INPUT_HANDOFF_ROUTE: "route-1", CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: "1", PATH: "/bin", CI: "true" };
+	assert.deepEqual(stripAgentEnvPollutants(env), ["NODE_ENV", "CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL", "CINDY_INPUT_HANDOFF_ROUTE"]);
+	assert.deepEqual(env, { PATH: "/bin", CI: "true" });
+	assert.deepEqual(stripAgentEnvPollutants(env), []);
 });

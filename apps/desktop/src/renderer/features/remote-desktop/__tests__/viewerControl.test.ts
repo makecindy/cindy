@@ -1050,3 +1050,10 @@ it('waits for auto-unlock to finish before reapplying a remembered resolution', 
   await vi.advanceTimersByTimeAsync(0);
   expect(f.resolution).toHaveBeenCalledExactlyOnceWith('4k');
 });
+
+// GX102/X11: an unsupported backend must not ask users to re-enable permissions.
+it('distinguishes unsupported host input from missing permission', async () => {
+  await fixture(undefined, false, { caps: { canControl: false } });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(snapshot).toMatchObject({ ready: false, controlling: false, error: 'inputUnsupported' });
+});

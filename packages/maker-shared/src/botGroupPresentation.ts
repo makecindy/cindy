@@ -6,6 +6,7 @@
 import { RichAnswerStream, splitRichAnswer, richMarkdown, richString, richLabel, richResolvedValues, richChart, richOptions, richCalculationUnavailable } from './richAnswer.js';
 import {
   isBotGroupPlanOpen,
+  isBotGroupCapabilityNoticeCode,
   type BotGroupDetail,
   type BotGroupErrorCode,
   type BotGroupExecutionFailureView,
@@ -90,7 +91,8 @@ export function botGroupNewMessageCount(messages: readonly BotGroupMessageView[]
   const incoming = new Set<string>();
   for (const message of messages) {
     if (BigInt(message.serverSequence ?? message.sequence) <= BigInt(seenThrough) || message.deleted || (message.threadRootId ?? undefined) !== threadRootId || message.isSelf === true
-      || (message.kind !== 'message' && message.kind !== 'plan')
+      || (message.kind !== 'message' && message.kind !== 'plan'
+        && !(message.kind === 'notice' && message.authorKind === 'bot' && isBotGroupCapabilityNoticeCode(message.capabilityNoticeCode)))
       || (message.authorKind !== 'bot' && message.isSelf !== false) || message.authorKind === 'system') continue;
     incoming.add(message.id);
   }
@@ -170,6 +172,7 @@ export type BotGroupErrorVariant =
   | 'memberLimit'
   | 'memberUnavailable'
   | 'mentionUnavailable'
+  | 'allBotsMentionDisabled'
   | 'notFound'
   | 'hostNotReady'
   | 'planOpen'
@@ -194,6 +197,7 @@ const ERROR_VARIANTS: ReadonlyMap<string, BotGroupErrorVariant> = new Map<BotGro
   ['MEMBER_LIMIT', 'memberLimit'],
   ['MEMBER_UNAVAILABLE', 'memberUnavailable'],
   ['MENTION_UNAVAILABLE', 'mentionUnavailable'],
+  ['ALL_BOTS_MENTION_DISABLED', 'allBotsMentionDisabled'],
   ['NOT_FOUND', 'notFound'],
   ['HOST_NOT_READY', 'hostNotReady'],
   ['PLAN_OPEN', 'planOpen'],

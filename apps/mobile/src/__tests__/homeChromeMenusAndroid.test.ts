@@ -164,6 +164,8 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
     expect(settings).not.toMatch(/Platform\.OS\s*===\s*['"]ios['"]/);
     expect(settings).toContain("onPress={usesNativePullDownMenu() ? () => undefined : openAppearancePicker}");
     expect(settings).toContain("onPress={usesNativePullDownMenu() ? () => undefined : openLanguagePicker}");
-    expect(settings.match(/<NativePullDownMenu/g)).toHaveLength(2);
+    expect(settings).toContain("onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('script')}");
+    expect(settings).toContain("onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('style')}");
+    expect(settings.match(/<NativePullDownMenu/g)).toHaveLength(4);
   });
 });

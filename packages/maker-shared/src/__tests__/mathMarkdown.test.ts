@@ -71,6 +71,12 @@ describe('normalizeMathDelimiters', () => {
   it('同段多个公式全部转换', () => {
     expect(normalizeMathDelimiters('\\(a\\) 与 \\(b\\)')).toBe('$a$ 与 $b$');
   });
+
+  it('keeps escaped literal delimiters and skips escaped closers', () => {
+    expect(normalizeMathDelimiters(String.raw`\\(literal\\) and \(x\)`)).toBe(String.raw`\\(literal\\) and $x$`);
+    expect(normalizeMathDelimiters(String.raw`\(a\\)b\)`)).toBe(String.raw`$a\\)b$`);
+    expect(normalizeMathDelimiters(String.raw`\\[literal\\]`)).toBe(String.raw`\\[literal\\]`);
+  });
 });
 
 describe('normalizeMathDelimiters — link destination 保护', () => {
@@ -178,6 +184,52 @@ describe('latexToUnicodeApproximation', () => {
   it('\\sqrt → √', () => {
     expect(latexToUnicodeApproximation('\\sqrt{2}')).toBe('√2');
     expect(latexToUnicodeApproximation('\\sqrt{a+b}')).toBe('√(a+b)');
+  });
+
+  // Production fallback used by mobile RN Text (MessageRenderer.renderInline).
+  // Screenshot regression: nested radicals bypassed FRAC_RE; accents leaked
+  // command names. Existing coverage only exercised flat braced arguments.
+  it.each([
+    ['\\frac{2\\sqrt{3}}{3}\\pi = 3.63', '((2√3)/3)π = 3.63'],
+    ['\\frac{1}{\\frac{a}{b}}', '1/(a/b)'],
+    ['\\frac{a}{bc}', 'a/(bc)'],
+    ['\\sqrt{\\frac{a+b}{c}}', '√((a+b)/c)'],
+    ['\\dot c', 'c\u0307'],
+    ['\\dot{c}(t)', 'c\u0307(t)'],
+    ['\\ddot{x}_1', 'x\u0308₁'],
+    ['\\dot{\\theta}', 'θ\u0307'],
+    ['t_s \\approx \\frac{3}{\\xi\\omega_n}', 'tₛ ≈ 3/(ξωₙ)'],
+    ['\\frac{a}{b}^2', '(a/b)²'],
+    ['\\frac{a}{b}c', '(a/b)c'],
+    ['\\frac{x^{a+b}}{y}', '(x^(a+b))/y'],
+    ['\\frac\\sqrt{3}2', '(√3)/2'],
+    ['\\sqrt[3]{x}', '∛x'],
+    ['\\sqrt[4]{x}', '∜x'],
+    ['\\sqrt[n]{a+b}', '√[n](a+b)'],
+    ['\\sqrt{1-x^{2}}', '√(1-x²)'],
+    ['\\sqrt{\\alpha}x', '√αx'],
+    ['\\sqrt[n]{\\alpha}x', '√[n]αx'],
+    ['\\hat{x} + \\bar{y} + \\vec{v}', 'x\u0302 + y\u0305 + v\u20d7'],
+    ['\\{x\\} + x\\_1', '{x} + x_1'],
+    ['x\\,y\\quad z', 'x y z'],
+  ])('preserves inline math structure: %s', (source, expected) => {
+    expect(latexToUnicodeApproximation(source)).toBe(expected);
+  });
+
+  it('handles incomplete streaming fragments and bounded nesting without throwing', () => {
+    const source = String.raw`\frac{\sqrt[3]{x}}{y}`;
+    for (let end = 0; end <= source.length; end += 1) {
+      expect(() => latexToUnicodeApproximation(source.slice(0, end))).not.toThrow();
+    }
+    expect(() => latexToUnicodeApproximation('\\sqrt{'.repeat(2000) + 'x' + '}'.repeat(2000))).not.toThrow();
+  });
+
+  // PR #7560 / Greptile 4391615793: the numerator must not be rendered
+  // speculatively when a denominator is absent. This exact input previously
+  // exceeded a 3s isolated reproduction budget (exponential repeated work).
+  it('returns readable text for nested fractions with missing denominators', () => {
+    const source = '\\frac{'.repeat(30) + 'x' + '}'.repeat(30);
+    expect(latexToUnicodeApproximation(source)).toBe('frac'.repeat(30) + 'x');
   });
 
   it('样式包装剥壳保内容,函数名保字面', () => {

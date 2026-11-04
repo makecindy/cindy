@@ -2,15 +2,16 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { ErrorNotice } from '@/components/ui/error-notice';
-import { ModelSelectorContent } from '@/components/new-chat/ModelSelector';
+import { ModelRouteSelectorContent } from '@/components/new-chat/ModelRouteSelector';
+import { modelCatalogKey } from '../../shared/controlledModelCatalog';
 import { useTransientModelPickerPreferences } from '@/components/new-chat/modelPickerPreferences';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import type { Effort } from '@/lib/userPreferences.types';
 import type {
   PluginModelPickerRequest,
   PluginModelPickerPresentation,
+  PluginModelPickerRoute,
 } from '../../shared/pluginModelPicker';
-import type { PluginTaskRoute } from '../../shared/pluginTasks';
 
 /** Host-owned presentation: selecting and editing only changes this dialog's draft. */
 export function PluginModelPickerDialog({
@@ -20,19 +21,19 @@ export function PluginModelPickerDialog({
 }: {
   request: PluginModelPickerRequest;
   deviceId?: string;
-  onAnswer(route: PluginTaskRoute | null): Promise<{ handled: boolean; accepted: boolean }>;
+  onAnswer(route: PluginModelPickerRoute | null): Promise<{ handled: boolean; accepted: boolean }>;
 }) {
   const { t } = useTranslation();
   const [route, setRoute] = useState(request.initial);
   const preferenceStore = useTransientModelPickerPreferences(deviceId);
   const agents = useModelPickerAgents(
     route?.agentKind === 'cc' ? 'claude-code' : (route?.agentKind ?? 'codex'),
-    deviceId,
+    modelCatalogKey(route?.agentDeviceId ?? deviceId, deviceId),
   );
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(false);
   const lock = useRef(false);
-  const answer = async (value: PluginTaskRoute | null) => {
+  const answer = async (value: PluginModelPickerRoute | null) => {
     if (lock.current) return;
     lock.current = true;
     setBusy(true);
@@ -66,9 +67,11 @@ export function PluginModelPickerDialog({
       }}
       content={
         <>
-          <ModelSelectorContent
+          <ModelRouteSelectorContent
+            sshRemote={!request.allowRemote}
             preferenceStore={preferenceStore}
             deviceId={deviceId}
+            agentDeviceId={route?.agentDeviceId}
             modelId={route?.model ?? ''}
             currentProviderId={route?.providerId ?? null}
             vendorKey={route?.agentKind}
@@ -83,8 +86,9 @@ export function PluginModelPickerDialog({
             onFastModeChange={(fastMode) => {
               setRoute((r) => (r ? { ...r, fastMode } : r));
             }}
-            onUnifiedSelect={({ providerId, modelId, engine, effort, fast }) => {
+            onUnifiedSelect={({ providerId, modelId, engine, effort, fast, agentDevice }) => {
               setRoute({
+                ...(agentDevice?.deviceId ? { agentDeviceId: agentDevice.deviceId } : {}),
                 providerId,
                 model: modelId,
                 agentKind: engine,

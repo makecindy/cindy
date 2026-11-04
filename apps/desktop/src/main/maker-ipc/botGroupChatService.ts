@@ -140,11 +140,15 @@ export interface BotGroupChatServiceDeps {
     talkPlanId?: string;
     personalDigest?: boolean;
   }) => Promise<LaneResult>;
+  /** Live native context identity; absent/unknown means background must be restored. */
+  readLaneContext?: (sessionId: string) => { key: string; contextTokens: number } | null;
   /** Same hidden, durable input path as Bot DMs; attachments go with the turn like a task message's. */
   dispatch: (params: {
     targetSessionId: string;
     message: string;
     persistedContent: string;
+    /** Exact owner-authored text verified by the live server execution, never the group envelope. */
+    autoReviewUserText?: string;
     clientId: string;
     attachments?: BotGroupAttachment[];
     toolsDisabled?: boolean;
@@ -2010,7 +2014,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     mentions: BotGroupMention,
   ): string[] => {
     const active = new Set(members.filter((member) => member.status === 'active').map((member) => member.botId));
-    if (mentions.all) return members.map((member) => member.botId).filter((id) => active.has(id));
+    if (mentions.all) return mentions.botIds.filter((id) => active.has(id));
     if (mentions.botIds.length > 0) return mentions.botIds.filter((id) => active.has(id));
     return group.replyMode === 'all' ? members.map((member) => member.botId).filter((id) => active.has(id)) : [];
   };
@@ -2036,6 +2040,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     }
     if (!text && attachmentInputs.length === 0) return failure('INVALID_PARAMS', '消息不能为空');
     if (Array.from(text).length > BOT_GROUP_MESSAGE_MAX_CHARS) return failure('INVALID_PARAMS', '消息过长');
+    if ((raw.mentions as { allBots?: unknown } | undefined)?.allBots === true) return failure('ALL_BOTS_MENTION_DISABLED', 'ALL_BOTS_MENTION_DISABLED');
     const rawMentions = raw.mentions && typeof raw.mentions === 'object' ? (raw.mentions as Record<string, unknown>) : null;
     const inputMentions: BotGroupMention | null = rawMentions
       ? { all: rawMentions.all === true, botIds: readBotIds(rawMentions.botIds) ?? [] }
@@ -2113,11 +2118,11 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
           scope,
         });
         // Mention-only applies to planning too: ordinary messages must not wake
-        // the organizer. Explicit arrangements and @all remain actionable.
-        if (!division && group.replyMode === 'mentioned' && !mentions.all && !mentions.botIds.length) {
+        // the organizer. Human broadcasts stay quiet; explicit arrangements remain actionable.
+        if (!division && ((mentions.all && !mentions.botIds.length) || (group.replyMode === 'mentioned' && !mentions.botIds.length))) {
           return { ok: true, messageId: appended.id } as const;
         }
-        // Naming specific Bots is ordinary chat; @all may use 分工 routing (§7.2–7.4).
+        // Naming specific Bots is ordinary chat; unaddressed requests may use 分工 routing (§7.2–7.4).
         const direct = mentions.botIds.length > 0;
         if (direct && !division) {
           chatRound();

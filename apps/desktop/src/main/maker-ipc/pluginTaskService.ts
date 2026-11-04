@@ -6,7 +6,6 @@ import { isPluginTaskPermissionMode, isPluginTeamPlanWithinBudget, PLUGIN_TASK_R
 import type { PluginMessageAttachment } from '../../shared/pluginAttachments.js';
 import { withParsedPluginMessageAttachments, type PluginMessageImage } from '../cindy-media/pluginMessageAttachments.js';
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
-import { pluginMessageText } from '../../shared/pluginMessage.js';
 import {
   isSameSessionExecution,
   queuedInputBelongsTo,
@@ -574,7 +573,8 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
             try { deps.acceptInvocation?.(pluginId, prepared.run.invocationId); } catch { /* Best effort, as tool recording. */ }
           }
           if (prepared.autoTitle) {
-            try { deps.scheduleAutoTitle?.(pluginId, prepared.run.taskId, pluginMessageText(request.text, request.context), request.text); }
+            // Reference material must not consume the title model's limited input budget.
+            try { deps.scheduleAutoTitle?.(pluginId, prepared.run.taskId, request.text, request.text); }
             catch { /* Naming failure never retries an accepted message. */ }
           }
         }

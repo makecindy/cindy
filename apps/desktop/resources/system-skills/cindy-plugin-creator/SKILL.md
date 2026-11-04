@@ -49,14 +49,14 @@ Use when implementing plugin code, calling host APIs or declaring access to reso
 - [插件打开宿主统一模型选择器 pickModel（§4.0.3b）](references/plugin-agent-models.md)
 - [插件接入媒体模型与生成结果（§4.0.4）](references/plugin-media.md)
 - [插件联网与凭证代发 network（§4.7）](references/plugin-network.md)
-- [插件文件操作与持久作品库 fs / library（§4.10）](references/plugin-files-and-library.md)
+- [插件文件操作、持久作品库与对话文件交接 fs / library / cindy_handoff_files（§4.10）](references/plugin-files-and-library.md)
 - [插件随包 Node 工作进程、CLI 与 stdio MCP（§4.12）](references/plugin-node-worker.md)
 
 ### 插件界面与用户交互
 
 Use for the UI surfaces and interactions the plugin actually exposes; mobile pages are optional.
 
-- [插件交互页面 MCP Apps（§4.23）](references/plugin-interactive-pages.md)
+- [插件交互页面：生成首屏、SDK 交互与完整示例（§4.23）](references/plugin-interactive-pages.md)
 - [插件面板与主题适配（§5）](references/plugin-panels.md)
 - [插件一级主视图 mainView（§4.20）](references/plugin-main-view.md)
 - [插件跟对话的任务页 taskView（§4.22）](references/plugin-task-view.md)
@@ -66,7 +66,7 @@ Use for the UI surfaces and interactions the plugin actually exposes; mobile pag
 - [插件轻提示与未读角标 notify / badge（§4.9）](references/plugin-notifications.md)
 - [插件目录选择 pick（§4.14）](references/plugin-directory-picker.md)
 - [插件面板预览 preview（§4.15）](references/plugin-panel-preview.md)
-- [插件随包浏览器扩展 browserExtension（§4.23）](references/plugin-browser-extension.md)
+- [插件随包浏览器扩展 browserExtension（§4.24）](references/plugin-browser-extension.md)
 - [插件确认弹窗 confirm（§4.18）](references/plugin-confirm-dialog.md)
 - [插件推荐任务（§4.21）](references/plugin-recommendations.md)
 
@@ -77,15 +77,17 @@ Use when the plugin listens for events, supplies routine triggers or interacts w
 - [插件提交例行任务事件 routineEvents](references/plugin-routine-events.md)
 - [插件事件订阅 subscribe（§4.6）](references/plugin-event-subscriptions.md)
 - [插件处理 Agent 回复的消息钩子（§4.6.1）](references/plugin-message-hooks.md)
+- [插件控制节点：自动化与例行任务运行前先问插件（§4.6.2）](references/plugin-control-points.md)
+- [给模型选择器提供模型 models（§4.6.3）](references/plugin-models.md)
 - [插件发起 Agent 任务与请求自动化（§4.11）](references/plugin-agent-tasks.md)
 - [插件读取当前任务上下文 sessionContext（§4.13）](references/plugin-session-context.md)
 - [插件创建工作区任务入口 workspace（§4.17）](references/plugin-workspace-sessions.md)
 
 ### 插件打包、发布与兼容
 
-Read packaging before implementation and delivery. Read publishing only for publication, and bundled Skills only when maintaining an older plugin.
+Read packaging before implementation and delivery. Read publishing only for publication, and bundled Skills when the plugin ships a slash-command workflow or local scripts.
 
 - [插件打包、安装与验证（§7）](references/plugin-packaging.md)
 - [插件发布签名与审核（§8）](references/plugin-publishing.md)
 - [插件版本兼容与拒装排查（§9）](references/plugin-compatibility.md)
-- [旧插件捆绑 Skill 的维护与迁移（§4.16）](references/plugin-bundled-skills-legacy.md)
+- [捆绑 Agent Skill，以及它与 Manual 的分工（§4.16）](references/plugin-bundled-skills.md)

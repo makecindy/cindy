@@ -126,6 +126,12 @@ interface Fixture {
   noFeatureList?: boolean;
   /** 宿主提供的任务隧道往来记录。 */
   linkActivity?: DeviceHostedSession['linkActivity'];
+  /** 任务所在电脑带来的插件花名册快照。 */
+  ghostRosterSnapshot?: string;
+  /** 经隧道的 Cindy MCP；默认只有通讯录。 */
+  mcpServers?: string[];
+  /** 任务所在电脑带来了自己的托管 Skill。 */
+  controllerManagedSkills?: boolean;
 }
 
 /** app-server 的功能清单，分两页返回。 */
@@ -167,9 +173,9 @@ async function startHosted(fixture: Fixture) {
   const systemSkill = path.join(codexHome, 'skills', '.system', 'imagegen', 'SKILL.md');
   const pluginSkill = path.join(codexHome, 'plugins', 'cache', 'personal', 'secret-plugin', '1.0.0', 'skills', 's', 'SKILL.md');
   const guestSkill = path.join(workingDir, '.agents', 'skills', 'guest', 'SKILL.md');
+  const hostManagedSkill = path.join(codexHome, 'skills', 'cindy-cindy%3Alearn', 'SKILL.md');
 
   const getGhostRosterPrompt = vi.fn(() => GHOST_ROSTER);
-  const getContactsPromptState = vi.fn(() => 'enabled' as const);
   const getDisabledSkillPaths = vi.fn(() => [hostSkill]);
   const prepareCodexSkills = vi.fn(async () => {});
   const prepareCodexResumeSession = vi.fn(async () => undefined);
@@ -192,8 +198,10 @@ async function startHosted(fixture: Fixture) {
     binaryPath: process.execPath,
     logger: noopLogger(),
     getGhostRosterPrompt,
-    getContactsPromptState,
     getDisabledSkillPaths,
+    getManagedSkills: async () => [{
+      kind: 'agent-skill', name: 'learn', path: hostManagedSkill, source: 'skill', enabled: true, claudeCommandName: 'cindy:learn',
+    }],
     prepareCodexSkills,
     prepareCodexResumeSession,
     resolveCodexThreadStorage,
@@ -311,11 +319,12 @@ async function startHosted(fixture: Fixture) {
     isGitRepo: false,
     tunnelUrl: 'http://127.0.0.1:4000/',
     tunnelToken: 'tok',
-    mcpServers: ['cindy_contacts'],
+    mcpServers: fixture.mcpServers ?? ['cindy_contacts'],
     mirrorRoot,
     ...(fixture.guest ? { guest: true, guestProvider: SHARED_PROVIDER } : {}),
     ...(guestHome ? { guestHome } : {}),
     ...(fixture.linkActivity ? { linkActivity: fixture.linkActivity } : {}),
+    ...(fixture.controllerManagedSkills ? { controllerManagedSkills: { claudePluginRoots: [] } } : {}),
   };
   const started = agent.startSession({
     sessionId: 'hosted-session',
@@ -324,12 +333,13 @@ async function startHosted(fixture: Fixture) {
     workingDir,
     permissionMode: 'acceptEdits',
     deviceHosted,
+    ...(fixture.ghostRosterSnapshot !== undefined ? { ghostRosterSnapshot: fixture.ghostRosterSnapshot } : {}),
     ...(fixture.resume ? { resumeSessionId: '0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000' } : {}),
   });
   return {
-    started, request, getHost, getGhostRosterPrompt, getContactsPromptState, getDisabledSkillPaths,
+    started, request, getHost, getGhostRosterPrompt, getDisabledSkillPaths,
     prepareCodexSkills, prepareCodexResumeSession, resolveCodexThreadStorage, recordCodexThreadLocation,
-    hostSkill, systemSkill, pluginSkill, guestSkill, guestHome, codexHome, agent, workingDir,
+    hostSkill, systemSkill, pluginSkill, guestSkill, hostManagedSkill, guestHome, codexHome, agent, workingDir,
   };
 }
 
@@ -489,12 +499,36 @@ describe('Codex device-hosted guest sessions', () => {
     ]));
     expect(skills.map((entry) => entry.path)).not.toContain(fixture.systemSkill);
     expect(skills.map((entry) => entry.path)).not.toContain(fixture.guestSkill);
-    // 不带本机的插件清单、通讯录说明与技能偏好。
+    // 不带本机的插件清单与技能偏好。
     expect(String(params.developerInstructions ?? '')).not.toContain(GHOST_ROSTER);
     expect(fixture.getGhostRosterPrompt).not.toHaveBeenCalled();
-    expect(fixture.getContactsPromptState).not.toHaveBeenCalled();
     expect(fixture.getDisabledSkillPaths).not.toHaveBeenCalled();
     await handle.close();
+  });
+
+  // 插件工具经隧道回到受邀者电脑：花名册用它带来的快照，本机的仍不读。
+  it('gives a shared user the roster from its own computer', async () => {
+    const ownerRoster = 'TASK COMPUTER GHOST ROSTER';
+    const fixture = await startHosted({ guest: true, ghostRosterSnapshot: ownerRoster, mcpServers: ['cindy'] });
+    const handle = await fixture.started;
+    const instructions = String(threadParams(fixture.request, Method.ThreadStart).developerInstructions ?? '');
+    expect(instructions).toContain(ownerRoster);
+    expect(instructions).not.toContain(GHOST_ROSTER);
+    expect(fixture.getGhostRosterPrompt).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  // 任务所在电脑带来的托管 Skill 作为项目 Skill 加载；共用 CODEX_HOME 里本机的那份对这个线程停用，不重复出现。
+  it('turns off this computer managed skills when the task computer brings its own', async () => {
+    for (const controllerManagedSkills of [true, false]) {
+      const fixture = await startHosted({ guest: false, controllerManagedSkills });
+      const handle = await fixture.started;
+      const config = threadParams(fixture.request, Method.ThreadStart).config as Record<string, unknown>;
+      const disabled = (config['skills.config'] as Array<{ path: string; enabled: boolean }> | undefined ?? [])
+        .filter((entry) => !entry.enabled).map((entry) => entry.path);
+      expect(disabled.some((entry) => entry.includes('cindy-cindy%3Alearn'))).toBe(controllerManagedSkills);
+      await handle.close();
+    }
   });
 
   it('keeps same-account hosted sessions unchanged', async () => {
@@ -520,7 +554,6 @@ describe('Codex device-hosted guest sessions', () => {
       'mcp_servers.cindy_contacts.url': 'http://127.0.0.1:4000/t/tok/mcp/cindy_contacts',
     });
     expect(String(params.developerInstructions)).toContain(GHOST_ROSTER);
-    expect(fixture.getContactsPromptState).toHaveBeenCalled();
     expect(fixture.getDisabledSkillPaths).toHaveBeenCalled();
     // 同账号不检查本机 Skill / MCP 清单(Review 与受邀者才逐项关闭)，Codex 功能也不按白名单收窄。
     expect(fixture.request.mock.calls.some(([method]) => method === Method.McpServerStatusList)).toBe(false);

@@ -1,5 +1,6 @@
 // Real Chromium WebRTC + production clients/bridges; loopback fixture relay, no accounts.
 // Usage: node scripts/direct-link-smoke.mjs <Chrome executable>
+// Capacity/throughput fixture: append --capacity (isolated browser, no accounts).
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -12,7 +13,9 @@ const output = await build({ stdin: {
   contents: `export { DeviceLinkClient } from './packages/device-link/src/client.ts';
     export { createDirectRtcRuntime } from './packages/device-link/src/directRtcRuntime.ts';
     export { createDirectRuntimeBridge, createDirectRuntimeHost } from './packages/device-link/src/directRuntimeBridge.ts';
-    export { DIRECT_LINK_RUNTIME_SOURCE } from './packages/device-link/src/directRuntimeSource.ts';`,
+    export { DIRECT_LINK_RUNTIME_SOURCE } from './packages/device-link/src/directRuntimeSource.ts';
+    export { DirectLinkNegotiator, DIRECT_LINK_DESKTOP_MAX_PEERS, DIRECT_LINK_DESKTOP_RESERVED_PEERS }
+      from './packages/device-link/src/directNegotiation.ts';`,
   resolveDir: fileURLToPath(new URL('../', import.meta.url)),
 }, bundle: true, write: false, format: 'iife', globalName: 'DirectSmoke', platform: 'browser' });
 const browser = await chromium.launch({ executablePath, headless: true, chromiumSandbox: true });
@@ -92,4 +95,79 @@ try {
   assert.equal(result.relayBusinessFramesDuringDirect, 0);
   assert.equal(result.fallback, true);
   console.log(JSON.stringify(result, null, 2));
+  if (process.argv.includes('--capacity')) console.log(JSON.stringify(await page.evaluate(async () => {
+    const { DirectLinkNegotiator, createDirectRuntimeBridge, createDirectRuntimeHost, createDirectRtcRuntime,
+      DIRECT_LINK_DESKTOP_MAX_PEERS: limit, DIRECT_LINK_DESKTOP_RESERVED_PEERS: reserved } = DirectSmoke;
+    const bridge = createDirectRuntimeBridge({ maxPeers: limit, reservedPeers: reserved });
+    // The serialized browser runtime must accept the same desktop budget.
+    const native = CindyDirectLink.create(e => bridge.receive(JSON.parse(JSON.stringify(e))));
+    const detach = bridge.attach(c => { void native.command(JSON.parse(JSON.stringify(c))); });
+    const remotes = new Map(), paths = new Map(), received = new Set(), errors = [];
+    const diagnostics = [];
+    let sequence = 0, peakActive = 0, lagMaxMs = 0, lastTick = performance.now();
+    const lagTimer = setInterval(() => {
+      const now = performance.now(); lagMaxMs = Math.max(lagMaxMs, now - lastTick - 20); lastTick = now;
+    }, 20);
+    const wait = async (predicate, label) => {
+      const deadline = performance.now() + 30_000;
+      while (!predicate()) {
+        if (performance.now() > deadline) throw new Error(`capacity timeout ${label}: ${JSON.stringify({ errors, diagnostics: diagnostics.slice(-8), capacity: bridge.runtime.capacity.snapshot() })}`);
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+    };
+    const controller = new DirectLinkNegotiator({ runtime: bridge.runtime, identity: () => 'a-host',
+      kind: peer => peer.startsWith('b-device') ? 'device' : 'share',
+      streams: peer => ({ local: 'host-stream', remote: `${peer}-stream` }), id: () => `load-${++sequence}`,
+      signal: (peer, signal) => queueMicrotask(() => remotes.get(peer)?.controller.receive('a-host', signal)),
+      diagnostic: (peer, event) => { diagnostics.push({ peer, ...event }); peakActive = Math.max(peakActive, event.active); },
+      attach: (peer, channel) => {
+        paths.set(peer, channel);
+        return { receive: text => { if (text === `ack:${peer}`) received.add(peer); }, drained() {},
+          closed: () => { if (paths.get(peer) === channel) paths.delete(peer); }, isActive: () => paths.get(peer) === channel };
+      },
+    });
+    const peers = Array.from({ length: limit + 1 }, (_, i) => i < reserved ? `b-device-${i}` : `b-share-${i}`);
+    for (const peer of peers) {
+      const remoteBridge = createDirectRuntimeBridge();
+      const remoteNative = createDirectRuntimeHost(createDirectRtcRuntime(), e => remoteBridge.receive(e));
+      const remoteDetach = remoteBridge.attach(c => { void remoteNative.command(c); });
+      const remote = new DirectLinkNegotiator({ runtime: remoteBridge.runtime, identity: () => peer,
+        streams: () => ({ local: `${peer}-stream`, remote: 'host-stream' }), id: () => `unused-${++sequence}`,
+        signal: (_dst, signal) => queueMicrotask(() => controller.receive(peer, signal)),
+        attach: (_dst, channel) => ({ receive: text => {
+          if (text !== '局域网😀'.repeat(8_192)) { errors.push('corrupt payload'); return; }
+          channel.send(`ack:${peer}`);
+        }, drained() {}, closed() {}, isActive: () => true }),
+      });
+      remotes.set(peer, { controller: remote, dispose() { remote.clear(); remoteDetach(); remoteNative.dispose(); } });
+    }
+    const started = performance.now();
+    try {
+      for (const peer of peers) controller.ready(peer);
+      await wait(() => paths.size === limit, 'initial peers');
+      const establishMs = Math.round(performance.now() - started);
+      if (bridge.runtime.capacity.snapshot().queued !== 1 || paths.has(peers[limit])) throw new Error('overflow not queued');
+      const payload = '局域网😀'.repeat(8_192);
+      const transferStarted = performance.now();
+      const rounds = 8;
+      for (let round = 0; round < rounds; round++) {
+        received.clear();
+        for (const channel of paths.values()) channel.send(payload);
+        await wait(() => received.size === limit, `parallel UTF-8 transfer ${round}`);
+      }
+      const transferMs = Math.round(performance.now() - transferStarted);
+      const surviving = [...paths].filter(([peer]) => peer !== peers[reserved]);
+      controller.forget(peers[reserved]);
+      await wait(() => paths.has(peers[limit]), 'released slot recovery');
+      if (paths.size !== limit || surviving.some(([peer, channel]) => paths.get(peer) !== channel)) throw new Error('healthy channel displaced');
+      if (errors.length || diagnostics.some(d => ['network-failed', 'negotiation-timeout', 'runtime-failed'].includes(d.reason))) throw new Error(JSON.stringify({ errors, diagnostics }));
+      return { capacity: { peers: limit, reservedPerClass: reserved, peakActive, establishMs, transferMs,
+        rounds, totalPayloadBytes: new TextEncoder().encode(payload).length * limit * rounds, lagMaxMs: Math.round(lagMaxMs),
+        overflowRecovered: true, healthyPeersPreserved: surviving.length } };
+    } finally {
+      clearInterval(lagTimer); controller.clear();
+      for (const remote of remotes.values()) remote.dispose();
+      detach(); native.dispose();
+    }
+  }), null, 2));
 } finally { await browser.close(); }

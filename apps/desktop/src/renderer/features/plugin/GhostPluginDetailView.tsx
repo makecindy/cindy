@@ -38,7 +38,9 @@ import { PluginUsageCard } from './PluginUsageCard';
 import { PluginSharedUsage } from './PluginSharedUsage';
 import type { PluginMarketItem } from '../../../shared/pluginMarket';
 import { GhostLibrarySection } from './GhostLibrarySection';
+import { GhostHandoffFilesSection } from './GhostHandoffFilesSection';
 import { PluginBackgroundTasksSection } from './PluginBackgroundTasksSection';
+import { PluginControlPointsSection } from './PluginControlPointsSection';
 import { PluginTaskPrefs } from '@/cindy-brain/PluginTaskPrefs';
 import { GhostSettingsWebview } from '@/cindy-brain/GhostSettingsWebview';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
@@ -54,9 +56,10 @@ import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import {
+  declaredGhostControlPoints,
   ghostDeclaresHiddenTasks,
+  ghostToolDeclaresHandoff,
   ghostTrustLabelKey,
-  isUserInstallReservedGhostId,
   type GhostPermissionItem,
   type GhostToolDecl,
   type InstalledGhost,
@@ -174,6 +177,7 @@ export function GhostPluginDetailView({
   const publicationBlocked = publishingPreview?.preflight?.actions.canSubmit === false;
   const [githubConnectionVersion, setGithubConnectionVersion] = useState(0);
   const [taskApprovalPending, setTaskApprovalPending] = useState(false);
+  const [browserActivation, setBrowserActivation] = useState<{ id: string; state: 'pending' | 'done' | 'failed' } | null>(null);
   // 未批准的安装不可运行；恢复入口与普通停用区分。
   const needsReapproval = detail.approvalState !== 'approved';
   const enabled = (enabledOverride ?? detail.enabled) && !needsReapproval;
@@ -182,18 +186,13 @@ export function GhostPluginDetailView({
     enabled &&
     (primaryAction === 'panel' ||
       (primaryAction === 'command' && detail.canUse));
-  // Local imports with the same id cannot use the host gh credential. Match the
-  // official receipt before advertising that connection in this plugin's UI.
+  // The shared GitHub login is available to any approved declaration.
   const hasGithubConnection =
-    !remote && detail.ghostId === 'cindy-github' &&
-    Boolean(ghost) &&
-    ghost?.trust?.level === 'cindy-official' &&
-    ghost.trust.publisherSigned &&
-    ghost.trust.publisherVerified &&
-    ghost.trust.reviewed &&
-    ghost.trust.publisherName === 'Cindy Plugin Market';
+    !remote && !needsReapproval &&
+    ghost?.manifest.network?.secrets?.some(secret => secret.source === 'gh-cli') === true;
   const hasConfiguration =
     hasGithubConnection ||
+    Boolean(ghost?.manifest.browserExtension) ||
     detail.hasMainView ||
     detail.hasSettingsUi ||
     detail.hasTaskPreferences;
@@ -201,13 +200,11 @@ export function GhostPluginDetailView({
     ? t('ccAgent.gitContext.pr.setup.account.summary')
     : ghostPluginSummary(detail.description, detail.ghostId);
   // 远程文件更新按目标 Host 能力判断，不能使用控制端的 DEV 状态。
-  const localUpdateAvailable = remote
-    ? remoteFileUpdate && !isUserInstallReservedGhostId(detail.ghostId)
-    : import.meta.env.DEV || !isUserInstallReservedGhostId(detail.ghostId);
+  const localUpdateAvailable = (!remote || remoteFileUpdate) && ghost?.publishingSource?.kind !== 'public-market';
   const hasAdditionalActions = localUpdateAvailable || onExport !== undefined;
   const localShareAvailable = !remote && ghost?.publishingSource?.kind === 'local' &&
-    ghost.approval.state === 'approved' && ghost.namespaceState === 'confirmed' && ghost.namespace === null &&
-    !ghost.builtin && !isUserInstallReservedGhostId(ghost.manifest.id);
+    ghost.approval.state === 'approved' && ghost.namespaceState === 'confirmed' && (ghost.namespace === null || ghost.namespace === 'local') &&
+    !ghost.builtin;
 
   return (
     <main
@@ -228,6 +225,7 @@ export function GhostPluginDetailView({
           author={detail.author}
           version={detail.version}
           marketItem={marketItem}
+          installationLabel={detail.installationLabelKey ? t(`settings.ghosts.detail.${detail.installationLabelKey}`, { name: detail.installationNamespace }) : undefined}
           iconDataUrl={detail.iconDataUrl}
           onIconLoadError={onIconLoadError}
           actions={
@@ -424,6 +422,26 @@ export function GhostPluginDetailView({
                 'space-y-3',
               )}
             >
+              {ghost?.manifest.browserExtension ? (
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button variant="secondary" disabled={!enabled || browserActivation?.id === detail.id && browserActivation.state === 'pending'}
+                    onClick={async () => {
+                      const id = detail.id;
+                      setBrowserActivation({ id, state: 'pending' });
+                      try {
+                        const result = await window.electronAPI.ghosts.activateBrowser(id);
+                        setBrowserActivation({ id, state: result.ok ? 'done' : 'failed' });
+                      } catch { setBrowserActivation({ id, state: 'failed' }); }
+                    }}>
+                    {t('settings.ghosts.detail.browserUse')}
+                  </Button>
+                  {browserActivation?.id === detail.id && browserActivation.state !== 'pending' ? (
+                    <p role="status" className="text-13 leading-5 text-[var(--text-secondary)]">
+                      {t(browserActivation.state === 'done' ? 'settings.ghosts.detail.browserActivated' : 'settings.ghosts.detail.browserActivationFailed')}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
               {detail.hasMainView ? (
                 <div
                   className={cn(
@@ -514,6 +532,13 @@ export function GhostPluginDetailView({
           hiddenTasksDeclared={ghostDeclaresHiddenTasks(ghost?.manifest)}
         />
 
+        {ghost && !remote ? (
+          <PluginControlPointsSection
+            ghostId={detail.id}
+            declared={declaredGhostControlPoints(ghost.manifest).length > 0}
+          />
+        ) : null}
+
         {detail.tools.length > 0 ? <ToolsSection tools={detail.tools} /> : null}
 
         {detail.permissions.length > 0 ? <PermissionSummary items={detail.permissions} /> : null}
@@ -545,8 +570,28 @@ export function GhostPluginDetailView({
             {t('settings.ghosts.perm.agentTasksRequest')}
           </Button>
         ) : null}
+        {!remote && enabled && ghost?.manifest.agent?.observe === true && ghost.observeCapabilityApproved !== true ? (
+          <Button variant="secondary" size="sm" className="mt-4" disabled={taskApprovalPending} onClick={async () => {
+            setTaskApprovalPending(true);
+            try {
+              await window.electronAPI.ghosts.requestTaskApproval(detail.id, 'observe');
+            } catch {
+              toast.error(t('settings.ghosts.errors.generic'));
+            } finally {
+              setTaskApprovalPending(false);
+            }
+          }}>
+            {t('settings.ghosts.perm.agentObserveRequest')}
+          </Button>
+        ) : null}
 
         {!remote ? <GhostLibrarySection ghostId={detail.id} enabled={ghost?.manifest.library === true} /> : null}
+        {!remote ? (
+          <GhostHandoffFilesSection
+            ghostId={detail.id}
+            declared={(ghost?.manifest.tools ?? []).some((tool) => ghostToolDeclaresHandoff(tool))}
+          />
+        ) : null}
 
         {publishingSection}
 
@@ -577,6 +622,7 @@ export function PluginDetailHeader({
   author,
   version,
   marketItem,
+  installationLabel,
   iconDataUrl,
   actions,
   children,
@@ -588,6 +634,7 @@ export function PluginDetailHeader({
   author?: string | null;
   version?: string;
   marketItem?: PluginMarketItem | null;
+  installationLabel?: string;
   iconDataUrl?: string;
   actions?: ReactNode;
   children?: ReactNode;
@@ -653,6 +700,7 @@ export function PluginDetailHeader({
             {name}
           </h1>
           <GhostPluginMetadata author={author} version={version} marketItem={marketItem} />
+          {installationLabel ? <p className="mt-1 break-words text-12 text-[var(--text-tertiary)]">{installationLabel}</p> : null}
         </div>
 
         {actions}

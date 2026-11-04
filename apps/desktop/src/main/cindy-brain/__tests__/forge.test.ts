@@ -15,6 +15,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { resolveCanonicalSessionPath } from '@cindy/mcps';
+import { handleForgeGuide, type CindyGhostsMcpDeps } from 'cindy-tools';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   GHOST_MANIFEST_SUMMARY_MAX_CHARS,
@@ -26,6 +27,7 @@ import {
 
 import {
   FORGE_GUIDE,
+  FORGE_PAGE_MANUAL,
   // 本测试文件用同名本地包装器(注入 sessionWorkdir / writeScaffold 门参)遮蔽,
   // 故 raw 函数以别名导入;main 的 packGhostDirToFile 无包装器,直接导入。
   packGhostDir as packGhostDirRaw,
@@ -43,6 +45,7 @@ import {
 import { sameForgeScaffoldParentIdentity } from '../forgeScaffoldIdentity';
 import { GHOST_SIGNATURE_FILE, signGhostPackage } from '../ghostSignature';
 import { GHOST_INSTALL_MANIFEST_MAX_BYTES } from '../../../shared/ghost';
+import { PLUGIN_PAGE_MANUAL_SKILL_PATH } from '../../../shared/pluginPageManual.mjs';
 
 const canSymlink = (() => {
   const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-forge-symlink-probe-'));
@@ -1421,11 +1424,19 @@ describe('scaffoldGhostDir', () => {
   });
 
   // The withUi overlay must preserve each template and execute its example handler.
-  // Existing plain scaffolds did not cover mixed handlers or a packaged resource. Tier: unit.
+  // The published UI floor must reject older declarations without creating files,
+  // accept its exact version and preserve newer declarations. Tier: unit.
+  // Regression: the author-example migration must not relax the scaffold input contract.
+  // The SDK import guard protects the host-provided module contract in the generated asset.
   it.each((['plain', 'agent-action', 'node-json-rpc', 'node-mcp'] as ForgeScaffoldTemplate[])
-    .flatMap(template => [false, true].map(withUi => ({ template, withUi }))))(
-    '生成 $template 模板（withUi=$withUi），随后可以直接打包并通过装入检查',
-    async ({ template, withUi }) => {
+    .flatMap(template => [
+      { template, withUi: false, minCindyVersion: '1.2.3', expectedMin: '1.2.3' },
+      { template, withUi: true, minCindyVersion: '0.1.122-beta', expectedMin: '0.1.122-beta' },
+      { template, withUi: true, minCindyVersion: '0.1.121', expectedMin: null },
+      { template, withUi: true, minCindyVersion: '1.2.3', expectedMin: '1.2.3' },
+    ]))(
+    '校验 $template 模板（withUi=$withUi，min=$minCindyVersion），仅为有效版本生成可打包骨架',
+    async ({ template, withUi, minCindyVersion, expectedMin }) => {
       const dir = path.join(workDir, template);
       const result = await scaffoldGhostDir(
         {
@@ -1433,11 +1444,21 @@ describe('scaffoldGhostDir', () => {
           template,
           id: `demo-${template}`,
           withUi,
+          minCindyVersion,
           name: `演示 ${template}`,
           description: `${template} 起步插件`,
         },
         { sessionWorkdir: workDir },
       );
+      if (expectedMin === null) {
+        expect(result).toEqual({
+          ok: false,
+          errorCode: 'INVALID_INPUT',
+          message: '交互页面要求 minCindyVersion >= 0.1.122-beta',
+        });
+        expect(fs.existsSync(dir)).toBe(false);
+        return;
+      }
       expect(result, JSON.stringify(result)).toMatchObject({ ok: true, dir, template });
       if (!result.ok) return;
       expect(result.files).toContain('ghost.json');
@@ -1451,7 +1472,7 @@ describe('scaffoldGhostDir', () => {
       ) as Record<string, unknown>;
       expect(manifestJson.icon).toBe('assets/icon.png');
       expect(manifestJson.schemaVersion).toBe(3);
-      expect(manifestJson.minCindyVersion).toBe('1.2.3');
+      expect(manifestJson.minCindyVersion).toBe(expectedMin);
       expect(manifestJson).not.toHaveProperty('slots');
       const iconBytes = await fs.promises.readFile(path.join(dir, 'assets/icon.png'));
       expect(iconBytes.subarray(0, 8)).toEqual(
@@ -1467,13 +1488,24 @@ describe('scaffoldGhostDir', () => {
       const mainSource = await fs.promises.readFile(path.join(dir, 'main.js'), 'utf8');
       if (withUi) {
         expect(result.files).toContain('ui/page.html');
-        expect(getPluginToolUi(packed.manifest)?.resources[0].uri).toBe('ui://planner/v1');
+        expect(getPluginToolUi(packed.manifest)?.resources[0].uri).toBe('ui://interactive-records/v1');
+        const page = await fs.promises.readFile(path.join(dir, 'ui/page.html'), 'utf8');
+        expect(page).toContain("import { App } from '@modelcontextprotocol/ext-apps'");
         let handler: ((message: unknown) => unknown) | undefined;
         const results: Array<{ result: { structuredContent: unknown } }> = [];
         runInNewContext(mainSource, { cindy: { onHostMessage: (callback: typeof handler) => { handler = callback; }, send: (message: typeof results[number]) => { results.push(message); } } });
-        await handler!({ type: 'tool-call', tool: 'save_plan', callId: 'page', args: { title: '用户修改' } });
+        await handler!({ type: 'tool-call', tool: 'save_record', callId: 'page', args: { title: '用户修改', idempotencyKey: 'request-1' } });
         expect(results).toHaveLength(1);
-        expect(results[0].result.structuredContent).toEqual({ title: '用户修改', savedPlans: 1 });
+        expect(results[0].result.structuredContent).toEqual({ title: '用户修改', saved: 1 });
+        await handler!({ type: 'tool-call', tool: 'save_record', callId: 'retry', args: { title: '用户修改', idempotencyKey: 'request-1' } });
+        expect(results[1].result.structuredContent).toEqual({ title: '用户修改', saved: 1 });
+        // Regression: the scaffolded write must reject a reused request id with different content.
+        await handler!({ type: 'tool-call', tool: 'save_record', callId: 'conflict', args: { title: '另一条', idempotencyKey: 'request-1' } });
+        expect(results[2].result).toMatchObject({ isError: true });
+        if (template === 'plain') {
+          await handler!({ type: 'tool-call', tool: 'hello', callId: 'original' });
+          expect(results[3].result).toEqual({ message: '插件已经正常工作。' });
+        }
       } else expect(packed.manifest).not.toHaveProperty('mcpApps');
 
       if (template === 'agent-action') {
@@ -1723,6 +1755,33 @@ describe('scaffoldGhostDir', () => {
 });
 
 describe('FORGE_GUIDE', () => {
+  // 协议:ghost_forge_guide 按章号精确取章,章号重复时只能取到靠前的一章。
+  // 历史 bug:随包浏览器扩展与交互页面都编号 4.23,section "4.23" 返回的是浏览器扩展。
+  it('keeps chapter numbers unique so ghost_forge_guide reaches every chapter by number', async () => {
+    const numbers = FORGE_GUIDE.split('\n')
+      .map((line) => line.match(/^## ([0-9]+(?:\.[0-9]+)*)\.?(?:\s|$)/)?.[1])
+      .filter((n): n is string => n !== undefined);
+    expect(numbers.filter((n, i) => numbers.indexOf(n) !== i)).toEqual([]);
+    const deps = {
+      forgeGuide: async () => FORGE_GUIDE,
+      forgePageManual: async () => FORGE_PAGE_MANUAL,
+    } as unknown as CindyGhostsMcpDeps;
+    const read = async (section: string) => (await handleForgeGuide(deps, { section })).content[0].text;
+    expect(await read('4.23')).toMatch(/^## 4\.23 交互页面 MCP Apps/);
+    expect(await read('4.24')).toMatch(/^## 4\.24 随包浏览器扩展/);
+    expect(await read('pages')).toBe(FORGE_PAGE_MANUAL);
+  });
+
+  // 协议:ghost_forge_guide section "pages" 返回的手册与 MCP Apps 请求头按 sha256 公布的
+  // 是同一份文件;两者分叉时模型读到的手册与 CDN 上的版本对不上。
+  it('serves the same page manual bytes that the MCP Apps manual header hashes', () => {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const shipped = fs.readFileSync(
+      path.resolve(here, '../../../../resources/system-skills', PLUGIN_PAGE_MANUAL_SKILL_PATH),
+    );
+    expect(Buffer.from(FORGE_PAGE_MANUAL, 'utf8').equals(shipped)).toBe(true);
+  });
+
   it('documents plugin-level defaults independently of Host authorization', () => {
     expect(FORGE_GUIDE).toContain('"showTaskPreferences": false');
     expect(FORGE_GUIDE).toContain('"showTaskPreferences": true');
@@ -1828,22 +1887,23 @@ describe('FORGE_GUIDE', () => {
     expect(FORGE_GUIDE).not.toContain('只有大手册才拆深层文件');
   });
 
-  it('skill 迁移精确映射召回元数据、正文与容器目录', () => {
+  it('skill 章节写明它是正式能力、与 Manual 的分工和长期使用的脚本路径', () => {
     const skillSection = FORGE_GUIDE.slice(
       FORGE_GUIDE.indexOf('## 4.16 捆绑 Agent Skills(skill 能力)'),
       FORGE_GUIDE.indexOf('## 4.17'),
     );
     for (const marker of [
-      '迁移时按职责映射,不是按篇幅搬运',
-      'Skill frontmatter 的 `name + description` 所承担的身份/召回作用',
-      '对标系统提示词区\n  插件花名册的身份与 `recall`',
-      '`manual.items` 只是插件容器级一级目录,不对标 Skill frontmatter',
-      '`MANUAL.md` 与深层 Markdown 承接 Skill 正文、references',
-      '只经 `ghost_manual` tool-result 按需进入上下文',
-      '当前已停止新增,未来计划全部废弃',
+      '装了插件才有这些技能,不装就完全不出现',
+      '按职责选,不按篇幅选',
+      '需要斜杠命令入口(`/<name>`)',
+      '经 `ghost_manual` 读取,不占技能列表',
+      '斜杠菜单里显示的就是 `name`',
+      '跨插件版本不变的入口(路径含 `/agent-skills/skills/`)',
+      '不受插件沙箱约束',
     ]) {
       expect(skillSection).toContain(marker);
     }
+    expect(skillSection).not.toContain('停止新增');
   });
 
   it('Manual-only 插件可发现，已下线 Host 能力不再宣传', () => {
@@ -1869,7 +1929,7 @@ describe('FORGE_GUIDE', () => {
       'Cindy 先发布',
       '确认首个支持它的**正式版本号**',
       '`minCindyVersion` 设为不低于\n该正式版本',
-      '移除\n`skill.items` 的迁移版本也必须设置上述 `minCindyVersion`',
+      '把存量\n`skill.items` 改成 Manual 的版本也必须设置上述 `minCindyVersion`',
       '服务端还要保留上一份带 Skill 的历史 release',
       '旧客户端能通过历史版本回退',
     ];

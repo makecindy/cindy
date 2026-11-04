@@ -17,6 +17,11 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'steer_session',
   'stop_session_turn',
   'set_session_runtime',
+  'set_app_default_model',
+  'update_app_settings',
+  'set_model_configuration',
+  'configure_model_provider',
+  'reset_app_settings',
   'update_session_queued_message',
   'cancel_session_queued_message',
   'steer_session_queued_message',
@@ -29,6 +34,7 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'unarchive_sessions',
   'rename_sessions',
   'move_session',
+  'manage_session_prs',
 ]);
 
 export const ORCA_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
@@ -107,8 +113,11 @@ const denied = (errorCode = 'TASK_ACTION_AUTHORIZATION_REQUIRED'): Decision => (
     'The host could not admit this action for the current turn. Prepare the target, action and content for the owner instead of retrying.',
 });
 
+
 export const HELPER_AUTOMATION_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'routine_save', 'routine_delete', 'routine_run_now', 'schedule_set_pre_run_hook',
+  // Re-enabling a feature the owner switched off is a resume (teammate-authority.md).
+  'set_teammate_capability', 'set_bot_capability',
 ]);
 
 /** Side-effect coverage, not an allowlist of what autonomous teammates may do. */
@@ -215,6 +224,9 @@ export function taskActionRisk(call: Pick<Call, 'server' | 'tool' | 'args'>,
     return 'authority';
   if ((call.tool === 'message_session_task' && args.mode === 'resume') || call.tool === 'schedule_resume')
     return 'resume';
+  // The owner's off switch for memory or a system Skill stands until the owner turns it back on.
+  if ((call.tool === 'set_teammate_capability' || call.tool === 'set_bot_capability') &&
+    args.kind === 'feature' && args.joined === true) return 'resume';
   return undefined;
 }
 
@@ -235,7 +247,7 @@ export function createTaskActionAuthorizer(deps: {
         ? TASK_ACTION_TOOLS.has(call.tool) || HELPER_AUTOMATION_ACTION_TOOLS.has(call.tool)
         : call.server === 'cindy_scheduler' ? SCHEDULER_TASK_ACTION_TOOLS.has(call.tool)
         : call.server === 'cindy_orca' && ORCA_TASK_ACTION_TOOLS.has(call.tool);
-    if (!protectedAction) return { ok: true };
+    if (!protectedAction || (call.tool === 'manage_session_prs' && (call.args as Record<string, unknown>)?.action === 'list')) return { ok: true };
     const scope = await deps.capture(call);
     if (!scope) return { ok: true }; // ordinary user-delegated Agent task, unchanged
     if (!call.sessionId) return denied();
@@ -374,11 +386,15 @@ const REVOKED_MESSAGES: ReadonlySet<string> = new Set([
  * message stays queued for retry instead of being destroyed. Group errors are matched by
  * code (`GROUP_AUTHORIZATION_UNAVAILABLE` is the temporary one) to avoid importing the group module.
  */
-export function isTaskActionRevoked(error: unknown): boolean {
-  if (error instanceof TaskActionAuthorizationError) return true;
+export function taskActionRevocationCode(error: unknown): string | undefined {
+  if (error instanceof TaskActionAuthorizationError) return 'TASK_ACTION_AUTHORIZATION_EXPIRED';
   if (typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'GROUP_AUTHORIZATION_REQUIRED')
-    return true;
-  return error instanceof Error && REVOKED_MESSAGES.has(error.message);
+    return 'GROUP_AUTHORIZATION_REQUIRED';
+  return error instanceof Error && REVOKED_MESSAGES.has(error.message) ? error.message : undefined;
+}
+
+export function isTaskActionRevoked(error: unknown): boolean {
+  return taskActionRevocationCode(error) !== undefined;
 }
 
 /** Capture once; late callbacks must not pick up another invocation's authority. */

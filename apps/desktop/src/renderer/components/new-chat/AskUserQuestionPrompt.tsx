@@ -31,6 +31,7 @@ import { visibleAskOptions } from '@cindy/maker-shared';
 import { InteractionPromptCardShell } from '@/components/interaction-portal';
 import { ChatSessionFileProvider, useChatSessionFile, useChatSessionFileValue } from '@/components/chat/ChatSessionFileContext';
 import { QuestionReferenceText } from '@/components/chat/MarkdownRenderer';
+import { getTextPreviewSearchHost } from '@/components/find-in-page/findInPageOwnership';
 import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Tip } from '@/components/ui/tooltip';
 import { useAutoResize } from '@/hooks/useAutoResize';
@@ -653,6 +654,7 @@ function AskUserQuestionForm({
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.repeat || event.isComposing) return;
+      if (event.key === 'Escape' && getTextPreviewSearchHost()) return;
       if (event.key === 'Escape' && dictationRef.current.isBusy && shortcutCard.owns(event.target)) {
         event.preventDefault();
         event.stopPropagation();
@@ -767,6 +769,12 @@ function AskUserQuestionForm({
         {t(`chat.askUserQuestion.voice.${voiceFeedback === 'hint' && !options.length ? 'freeTextHint' : voiceFeedback}`)}
       </p>
     </div>
+  ) : null;
+  // A companion call's question bridge shows this on the call bar instead.
+  const speakerFilteredNotice = !voiceBridge && dictation.speakerFiltered ? (
+    <p role="status" className="px-[4px] text-12 leading-5 text-[var(--text-secondary)]">
+      {t('voiceInputOverlay.speakerFiltered')}
+    </p>
   ) : null;
 
   // ── Keyboard shortcuts ──
@@ -1091,7 +1099,11 @@ function AskUserQuestionForm({
       restoreAriaLabel={t('chat.askUserQuestion.restoreAriaLabel')}
       minimizeAriaLabel={t('chat.askUserQuestion.minimizeAriaLabel')}
       minimizeDisabled={isAnimating}
-      pinnedContent={voiceBridge ? <div className="flex flex-col gap-3">{voiceNotice}{customAnswerEntry}</div> : customAnswerEntry}
+      pinnedContent={voiceBridge
+        ? <div className="flex flex-col gap-3">{voiceNotice}{customAnswerEntry}</div>
+        : customAnswerEntry && speakerFilteredNotice
+          ? <div className="flex flex-col gap-2">{customAnswerEntry}{speakerFilteredNotice}</div>
+          : customAnswerEntry}
       headerLeading={
         currentQ?.header ? (
           <Tip text={currentQ.header}>
@@ -1266,6 +1278,7 @@ function AskUserQuestionForm({
             </div>
           </div>
         )}
+        {options.length === 0 && speakerFilteredNotice}
       </div>
     </InteractionPromptCardShell>
   );

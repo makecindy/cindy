@@ -3,12 +3,13 @@
  * 模型面板底部「配置模型」：本机目录与分享来的供应商显示，点分享来的供应商时带上分享 id，
  * 设置页直接选中那一条(provider-sharing.md §5.2)。自己其他电脑与被控电脑上的目录要到那台电脑上改，不显示。
  */
+import type { ModelSelectorContentBaseProps } from '../components/new-chat/ModelSelector';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The shared-quota rail observes auth; this component fixture has no auth host.
-vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => null }));
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
@@ -116,7 +117,7 @@ type Props = React.ComponentProps<typeof ModelSelectorContent>;
 
 function renderPanel(
   remoteAgent: Partial<NonNullable<Props['remoteAgent']>> = {},
-  props: Partial<Props> = {},
+  props: Partial<ModelSelectorContentBaseProps> = {},
 ) {
   const onNavigateToProviders = vi.fn();
   render(

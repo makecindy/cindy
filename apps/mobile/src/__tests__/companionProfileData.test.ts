@@ -83,3 +83,13 @@ it('recognizes creation model support without exposing a raw JSON form field to 
   expect(panel.action?.fields?.map(field => field.id)).toEqual(['name']);
   expect(parseCompanionProfileData(raw(), ref).panels[0].creationModelChain).toBeUndefined();
 });
+
+it('negotiates explicit model acceptance only from the models form capability', () => {
+  const input = raw(); input.blocks[0].id = 'models';
+  Object.assign(input.blocks[0].data, { acceptsModelSelection: true });
+  expect(parseCompanionProfileData(input, ref).panels[0].acceptsModelSelection).toBe(true);
+  for (const value of [undefined, false, 'true', 1]) {
+    Object.assign(input.blocks[0].data, { acceptsModelSelection: value });
+    expect(parseCompanionProfileData(input, ref).panels[0].acceptsModelSelection).not.toBe(true);
+  }
+});

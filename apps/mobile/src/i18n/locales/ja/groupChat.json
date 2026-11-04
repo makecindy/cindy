@@ -1,4 +1,7 @@
 {
+  "progress": {
+    "stop": "停止"
+  },
   "title": "グループチャット",
   "memberSeparator": "、",
   "memberCount_one": "メンバー {{count}} 人",
@@ -33,8 +36,10 @@
   },
   "mention": {
     "all": "全員",
-    "allHint": "全員が返信",
-    "label": "仲間をメンション"
+    "allHint": "人のみ",
+    "label": "仲間をメンション",
+    "allBots": "すべての仲間",
+    "allBotsHint": "仲間のみ"
   },
   "composer": {
     "label": "グループチャットのメッセージ",
@@ -150,7 +155,12 @@
         "details": "メッセージを再送してください。再度失敗する場合は、ログを確認して問題を報告してください。"
       }
     },
-    "runtimeFailureSetupHint": "モデルや設定を変更する場合は、この仲間が動作するパソコンで行ってください。"
+    "runtimeFailureSetupHint": "モデルや設定を変更する場合は、この仲間が動作するパソコンで行ってください。",
+    "capability": {
+      "GROUP_AUTHORIZATION_REQUIRED": "{{name}} のツールは実行されませんでした。グループの許可が失効しているか、この操作が許可されていません。仲間の所有者がこのグループで改めて依頼してください。",
+      "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}} のグループでの許可を確認できず、ツールは実行されませんでした。接続が回復してから再試行してください。",
+      "ATTACHMENTS_UNAVAILABLE": "ダウンロードの失敗または添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。"
+    }
   },
   "plan": {
     "intro_one": "この件は {{count}} ステップに分けて、次のように分担します:",
@@ -184,9 +194,16 @@
     "allDone": "すべて完了"
   },
   "speaking": {
+    "queued": "待機中",
     "stopping": "停止中…",
     "planning": "役割分担を考えています…",
     "step": "作業中…"
+  },
+  "work": {
+    "queued": "待機中 {{count}}",
+    "active": "進行中 {{count}}",
+    "expand": "チームメイトの状況を展開",
+    "collapse": "チームメイトの状況を折りたたむ"
   },
   "task": {
     "state": {
@@ -205,6 +222,17 @@
     "untitled": "添付ファイル"
   },
   "settings": {
+    "notifications": {
+      "title": "メッセージ通知",
+      "all": "すべてのメッセージ",
+      "mentions": "自分へのメンションのみ",
+      "none": "通知をオフ",
+      "allHint": "グループのメッセージとフォロー中のスレッドへの新しい返信を通知します。",
+      "mentionsHint": "自分へのメンションと @全員を通知します。役割分担の対応待ちも引き続き通知します。",
+      "noneHint": "このグループのシステム通知をすべてオフにします。未読メッセージは保持されます。",
+      "saving": "保存中…",
+      "saveFailed": "通知設定を保存できませんでした。もう一度お試しください。"
+    },
     "open": "グループの設定",
     "title": "グループの設定",
     "members": "メンバー",
@@ -228,7 +256,7 @@
     "speakingMode": "発言の順番",
     "speakingModeAuto": "自動",
     "speakingModeSequential": "常に順番に",
-    "speakingModeAutoNote": "メンションなし・@全員：最初の一巡は同時に考え、その後は順番に発言。特定の仲間へのメンションは指定順です。",
+    "speakingModeAutoNote": "メンションなし・@すべての仲間：最初の一巡は同時に考え、その後は順番に発言。特定の仲間へのメンションは指定順です。",
     "speakingModeSequentialNote": "一度に一人の仲間だけが話し、後の仲間は前の返信を見てから答えます。",
     "speakingModeSaveFailed": "発言の順番を保存できませんでした。もう一度お試しください。",
     "setOrganizer": "まとめ役にする",
@@ -254,7 +282,9 @@
     "cloudStatus": {
       "loading": "設定を読み込み中…",
       "unavailable": "グループ設定を読み込めませんでした。もう一度お試しください。"
-    }
+    },
+    "allowMentionAllBots": "すべての仲間への @ を許可",
+    "allowMentionAllBotsHint": "変更できるのはグループ所有者のみです。全員が返信する可能性があるため、大人数のグループでは慎重に有効にしてください。本人に代わる AI の返信には影響しません。"
   },
   "errors": {
     "memberLimit": "グループチャットには仲間が 2〜6 人必要です",
@@ -278,7 +308,8 @@
     "quoteUnavailable": "引用したメッセージは削除されたか、表示できなくなりました。引用を外したので、もう一度送信してください。",
     "lifecycleUnavailable": "現在のサーバーまたはコンピューターは、この操作にまだ対応していません。",
     "groupDissolved": "このグループは解散しました。閲覧権限のある履歴は引き続き確認できます。",
-    "lastOwner": "退出する前にオーナーを譲渡するか、グループを解散してください。"
+    "lastOwner": "退出する前にオーナーを譲渡するか、グループを解散してください。",
+    "allBotsMentionDisabled": "グループ所有者がすべての仲間への @ を有効にしていません。"
   },
   "followUp": {
     "next": "分担 · 次のステップ",

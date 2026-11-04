@@ -196,7 +196,7 @@ Claude Code 适配层 `toSdkModelString` 会按目录窗口自动追加 `[1m]`�
 - 回执独立落库，区分任务、输入执行及原生执行代次；原生终态按 instanceId + generation 结算，不以 idle 或最后一条 assistant 消息猜测完成。
 - send 回执写入后，进入宿主派发前的检查拒绝可确定未发送，结算为 failed；进入派发后的异常仍为 reconciling，明确拒绝仍为 failed，已有原生进展优先。同 requestKey 只读取旧回执，权限恢复后需新 key 显式提交。若账号、归属或存储条件不再允许结算，调用仍拒绝并保留回执，不绕过权限门补写终态。
 - 读取限定于本插件创建的任务；返回消息 clientId。list/listRuns 按 (createdAt, id) 排序，现有回执 ID 游标在同插件与目标内解析，不再只按随机 UUID 排序。列表是分页查询，不是增量订阅；刷新应从首页重扫，不能把游标当永久同步水位（同毫秒追加、系统时钟回退或既有回执终态更新均需刷新）。
-- 插件创建的任务及其 Orca Worker 使用普通任务的 `cindy_helper` 能力面；`cindy_memory`（含 `session_search`）、`cindy_contacts`、`cindy_scheduler` 和 `cindy_slack` 也按普通任务的账号、对象归属及工具权限检查。任务创建来源不参与 Agent 工具授权；插件消息标签不额外收窄任务权限，原本要求用户当场输入的操作仍按通用规则判断。个人插件投稿同样沿当前任务权限档与账号身份检查。插件直接调用的 `cindy.tasks` 仍只能管理自己的任务，不能凭此接口读取或控制其他任务。
+- 插件创建的任务及其 Orca Worker 使用普通任务的 `cindy_helper` 能力面；`cindy_memory`（含 `session_search`）、`cindy_scheduler` 和 `cindy_slack` 也按普通任务的账号、对象归属及工具权限检查。任务创建来源不参与 Agent 工具授权；插件消息标签不额外收窄任务权限，原本要求用户当场输入的操作仍按通用规则判断。个人插件投稿同样沿当前任务权限档与账号身份检查。插件直接调用的 `cindy.tasks` 仍只能管理自己的任务，不能凭此接口读取或控制其他任务。
 - 账号数据工具仍在访问前和返回前复核任务与账号，缺少任务、账号变化或查询失败时拒绝，不伪装为空结果，也不回滚已经接受的外部写入。插件卸载或创建回执损坏只撤销插件继续调用自有任务接口的资格，不收窄保留任务内 Agent 的工具面，也不保证停止已接受执行。
 - 取消只撤回自己的排队输入或其原生重试别名；停止前在 Session 锁内再次核对执行身份与插件权限。
 - 请求跨账号切换后不能继续操作新账号数据库。禁用插件后不能继续发送或停止。
@@ -343,6 +343,21 @@ DB 中下一条输入的 armed 值为 false 不代表原生执行已退出 Plan�
 
 此能力供同时声明并获批 `agent.tasks` 与 `agent.targets` 的插件使用；投递沿用目标任务权限，不授予读取历史、修改配置或停止其他任务的权限。
 静态检查与单元测试不等于真实 AI 执行的联调验收，不得把 accepted 当成完成。
+
+## 只读查看项目任务（增量接口，尚未发布）
+
+`cindy.observe` 的作者契约见 `FORGE_GUIDE` §4.11.8。入口 `observe-request` 在 `cindy-brain/index.ts` 守门，
+请求解析在 `pluginObserveSlot.ts`，数据在 `maker-ipc/pluginObserveTasks.ts`。
+- 要求 `agent.observe: true`，不依赖 tasks；单列 `agent:observe`，需 Host receipt 的 `observeCapabilityApproved`。
+  安装/更新只记录实际展示的确认；同能力更新保留批准，移除声明后不保留。首次调用经 `requestPluginTaskApproval(..., 'observe')` 复用既有确认。
+- 任务可见范围复用投递目标的普通任务筛选（本机、非隐藏、非伙伴、非 review、非 Worker），另含已归档、排除对话与已删除；
+  项目按 `projectKeyComparisonKey` 匹配已登记且存在的目录，worktree 归入原项目。每次最多 200 条。
+- 状态用 `createCanonicalSessionActivityBatchReader`（一次实时快照 + 本次查询的持久事实）经 `resolveSessionRightStatus` 投影，与侧边栏、MCP 同一读模型；
+  本机 Orca Lead 合并活跃团队中本机 Worker 的 error / awaiting（同 `orcaLeadWorkerAttention.ts`）。只返回元数据。
+- 首次确认被拒后插件不能自动重弹；插件详情页对未批准的 `agent.observe` 提供独立确认按钮（`ghosts:request-task-approval` 的 `capability:'observe'`）。
+- `openTask` 只校验这一条任务可见且属于已登记项目，再复核批准后以 `openMainWindowSession(..., { focus: 'if-active' })` 打开。
+- 每次请求固定 owner generation、逻辑页与批准 revision，读取后复核；变化返回 `PERMISSION_DENIED` 并丢弃结果。
+  仅本机 Desktop 逻辑页，Mobile 页面返回 `UNSUPPORTED_CAPABILITY`，不新增 device-link 透传。
 
 ### 消息图片附件
 

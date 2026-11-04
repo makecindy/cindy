@@ -15,12 +15,13 @@ import { findThreadMessageElement, flashThreadTarget } from './BotGroupThreadVie
 import { useReadLocatedMention } from './groupMaskPresentation';
 import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
+import { useAttachments } from '@/hooks/useAttachments';
 import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
 import { shareSelectionStore, useShareSelectionActive } from '@/components/chat/shareSelectionStore';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
-import type { BotGroupDetail, BotGroupExecutionFailureView, BotGroupMessageView } from '../../../shared/botGroupChat';
+import type { BotGroupDetail, BotGroupExecutionFailureView, BotGroupMessageView, ChatServerApi } from '../../../shared/botGroupChat';
 import { resolveBotGroupQuote } from '../../../shared/botGroupChat';
-import { botGroupThreadDraftKey, refreshPendingBotGroupAttachments } from './botGroupAttachments';
+import { botGroupAttachmentPreview, botGroupThreadDraftKey, refreshPendingBotGroupAttachments } from './botGroupAttachments';
 import { refreshBotGroups } from './botGroupStore';
 import { mergeBotGroupMessages, projectBotGroupExecutionFailures } from './botGroupPresentation';
 import { BotGroupComposer, type BotGroupOutgoingMessage, type BotGroupSendOutcome } from './BotGroupComposer';
@@ -440,7 +441,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
 
   const members = group.members;
   const mentionLabels = useMemo(
-    () => [t('bots.groupChat.mention.all'), ...members.flatMap((member) => [member.name, botGroupMemberDisplayName(member), member.nickname || member.displayName || member.name])],
+    () => [t('bots.groupChat.mention.all'), t('bots.groupChat.mention.allBots'), ...members.flatMap((member) => [member.name, botGroupMemberDisplayName(member), member.nickname || member.displayName || member.name])],
     [members, t],
   );
   const memberById = useMemo(() => new Map(members.map((member) => [member.botId, member])), [members]);
@@ -549,7 +550,9 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   const revealShare = (shareId: string) => {
     if (!onRevealShare?.(shareId)) toast.info(t(key('thread.shareNotLoaded')));
   };
-  const sendReply = async (input: { text: string; clientId: string; mentions: BotGroupMessageView['mentions'] }) => {
+  const attachmentScope = botGroupThreadDraftKey(group.id, rootId);
+  const attachmentState = useAttachments(attachmentScope);
+  const sendReply = async (input: Omit<Parameters<ChatServerApi['reply']>[0], 'groupId' | 'rootId'>) => {
     const owner = getDataOwnerGeneration();
     const toMain = alsoSend;
     const result = await api().reply({ groupId: group.id, rootId, ...input });
@@ -557,7 +560,8 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
       setAlsoSend(false);
       // The topic receipt settles its own send; the optional main-chat copy has its own retry.
       if (toMain) void postToMain(result.messageId, true, { ...pendingBotGroupMessage({
-        clientId: input.clientId, text: input.text, mentions: input.mentions, attachments: [], quote: null,
+        clientId: input.clientId, text: input.text, mentions: input.mentions,
+        attachments: (input.attachments ?? []).map(file => botGroupAttachmentPreview({ ...file, ext: file.ext ?? '', size: file.size ?? 0 })), quote: null,
         createdAt: Date.now(), afterSequence: lastRealSequenceRef.current }), id: result.messageId, threadRootId: rootId });
     }
     return result;
@@ -604,6 +608,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
         shareScope={shareScope}
         sharing={sharing}
         reactionGroupId={group.id}
+        readersEnabled={group.supportsMessageReaders === true}
         reactionRevision={messageReactionRevision(group, message.id)}
         // A 话题 root may itself be a 引用回复; its original lives in the main timeline.
         quoteDisplay={message.quote ? resolveBotGroupQuote(message.quote, quoteSources) : undefined}
@@ -669,10 +674,12 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
             <Button variant="secondary" size="sm" compact disabled={readOnly} loading={[...unposted].some(id => posting.has(id))} onClick={() => void retryUnposted()}>
               {t(key('thread.retryPost'))}</Button>
           </div>}
-            <BotGroupComposer
+            <BotGroupComposer allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true}
               mode="thread"
               groupId={group.id}
-              draftKey={botGroupThreadDraftKey(group.id, rootId)}
+              draftKey={attachmentScope}
+              attachmentScope={attachmentScope}
+              attachments={attachmentState}
               members={members}
               running={false}
               disabled={readOnly}

@@ -222,6 +222,7 @@ import { applyPiBotSkillPolicy } from './bot-skill-policy.js';
 import { resolveAllowedManagedSkills, snapshotManagedSkillGrants } from '../shared/managed-skill-policy.js';
 import {
   DEVICE_HOSTED_PI_ENV,
+  deviceHostedGhostRoster,
   deviceHostedGuestSessionRoot,
   deviceHostedPiEnvValue,
   deviceHostedPiMcpBridge,
@@ -3867,10 +3868,13 @@ export class PiAgent extends BaseAgent {
 
     // 追加而非替换:pi 默认 prompt(工具用法/工程约定)原样保留,只追加 host 产品段
     // 与用户段。前缀稳定(默认 prompt 静态),易变内容禁止进入(缓存规则 3.1)。
-    // 受邀者(另一个账号)的托管会话不带本机的插件清单。
-    const ghostRosterPrompt = reviewMode || opts.botRuntimeProfile || hostedGuest
+    // 设备托管(含受邀者)用任务所在电脑给的花名册：插件工具经隧道在那台，本机装的插件不进这个任务。
+    const localGhostRoster = () => this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir }) ?? '';
+    const ghostRosterPrompt = reviewMode || opts.botRuntimeProfile
       ? ''
-      : (this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir }) ?? '');
+      : hosted
+        ? deviceHostedGhostRoster(hosted, opts.ghostRosterSnapshot, localGhostRoster)
+        : localGhostRoster();
     const appendSections = [
       reviewMode ? undefined : this.deps.runtimeConfig.answerDeliveryPrompt?.trim(),
       reviewMode ? undefined : opts.botProfilePrompt?.trim(),
@@ -4070,7 +4074,8 @@ export class PiAgent extends BaseAgent {
     try {
       const managedSkillGrants = snapshotManagedSkillGrants(opts.botRuntimeProfile?.skillPolicy);
       // 受邀者不带本机安装的托管技能(属于本机用户与其组织)。
-      const managedSkills = opts.remoteHostId || reviewMode || hostedGuest || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : await this.deps.getManagedSkills?.() ?? [];
+      // 任务所在电脑提供了托管技能时，它们已作为项目技能放在影子目录，本机的不再加载。
+      const managedSkills = opts.remoteHostId || reviewMode || hostedGuest || hosted?.controllerManagedSkills || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : await this.deps.getManagedSkills?.() ?? [];
       const managedDisabledPaths = snapshotDisabledSkillLaunch(opts.remoteHostId || reviewMode || hostedGuest ? [] : this.deps.getDisabledSkillPaths?.() ?? []);
       const managedSourceIdentities = new Set(managedSkills.flatMap((skill) =>
         skill.path ? [canonicalSkillPath(skill.path)] : []));
@@ -7852,7 +7857,7 @@ export class PiAgent extends BaseAgent {
                   const result = await requestPiCompact();
                   rejectIfCancelled(sendOpts, 'send');
                   if (result.noop) {
-                    throw new Error('Pi cannot compact the request rejected with HTTP 413');
+                    throw new Error('Pi cannot compact the request rejected with a body size limit');
                   }
                 } catch (error) {
                   rejectIfCancelled(sendOpts, 'send');

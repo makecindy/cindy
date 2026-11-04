@@ -22,6 +22,7 @@ import type { AgentInputQueuedMessage } from '../../../../shared/agentInputQueue
 import type { ProviderView } from '@cindy/model-providers';
 import { createHash } from 'node:crypto';
 import { createCompanionCloudHost } from '../../../companion-cloud/host';
+import { clearSessionPersistState, noteSessionAgentKind, getAssistantSamplingRuntimeId } from '../../../messagePersistBroadcaster';
 import { join, resolve } from 'node:path';
 import { existsSync, mkdirSync, promises as fsPromises, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
@@ -198,7 +199,7 @@ vi.mock('../../../maker-host/index.js', () => ({
   validateBotCapabilityAdditions: h.validateCapabilityAdditions,
   getMaker: () => ({ getSession: h.getSession, listAgentSkills: async () => ({ skills: [{ name: 'release-check', description: 'Release checklist', enabled: true }] }) }),
   getPluginRegistry: () => ({
-    getPlugins: () => ['memory', 'xdt_helper', 'contacts', 'lsp'].map((id) => ({ id, name: id, description: id })),
+    getPlugins: () => ['memory', 'xdt_helper', 'calendar', 'lsp'].map((id) => ({ id, name: id, description: id })),
     getEnableState: async () => ({ effectiveEnabled: true }),
   }),
   isBotToolsetAvailable: () => h.toolsetsAvailable,
@@ -243,6 +244,12 @@ vi.mock('../../../appSessionState.js', async (importOriginal) => {
     isAppSessionBoundaryPending: () => h.ownerBoundaryPending,
     ownerScopedUserDataPath: () => join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex')),
   };
+});
+vi.mock('../../../assistantSamplingSettlement.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../assistantSamplingSettlement.js')>();
+  return { ...actual, assistantSamplingSettlements: actual.createAssistantSamplingSettlementStore(
+    () => join(h.userDataDir, 'sampling-settlements', createHash('sha256').update(h.ownerScopeKey).digest('hex')),
+  ) };
 });
 
 import {
@@ -956,6 +963,68 @@ describe('Bot canonical Session lifecycle', () => {
       .rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
     expect(h.sqlite!.prepare('SELECT display_name AS name, current_version FROM bot_profiles WHERE id = ?').get('bot-1'))
       .toEqual({ name: 'Release Bot', current_version: 1 });
+  });
+
+  it('captures live sampling ownership on mirror rows and retires it when the native runtime closes', async () => {
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    const sessionId = created.session.id;
+    noteSessionAgentKind(sessionId, 'codex');
+    const runtimeId = getAssistantSamplingRuntimeId(sessionId)!;
+    await createMessage(sessionId, { clientId: 'unconfirmed', role: 'assistant', content: 'uncertain',
+      agentMeta: { samplingAttemptPending: { runtimeId } } });
+    const host = createCompanionCloudHost({ deliverToCanonical: async () => ({ ok: true }),
+      ensureCanonicalSession: async () => sessionId, rebuildContext: async () => 'rebuilt', listDevices: async () => [],
+    });
+    expect(await host.latestRows(sessionId, 200)).toContainEqual(expect.objectContaining({ clientId: 'unconfirmed', samplingRuntimeId: runtimeId }));
+    clearSessionPersistState(sessionId);
+    expect(await host.rowsAfter(sessionId, { createdAt: 0, id: '' }, 200)).toContainEqual(expect.objectContaining({
+      clientId: 'unconfirmed', samplingRuntimeId: null, agentMeta: JSON.stringify({ samplingAttemptPending: { runtimeId } }),
+    }));
+  });
+
+  // A durable accepted outcome must fence mirror cursors while its DB replay still fails.
+  it.each([false, true])('blocks mirror progress until durable settlement replay succeeds (existing cursor=%s)', async existingCursor => {
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    const sessionId = created.session.id;
+    await createMessage(sessionId, { clientId: 'accepted-retry', role: 'assistant', content: 'Accepted answer', createdAt: 1000,
+      agentMeta: { samplingAttemptPending: { runtimeId: 'retired' } } });
+    await createMessage(sessionId, { clientId: 'later-input', role: 'user', content: 'Later input', createdAt: 20 * 60_000 });
+    const { assistantSamplingSettlements } = await import('../../../assistantSamplingSettlement.js');
+    assistantSamplingSettlements.put({ sessionId, persistId: 'accepted-retry', patch: { samplingAttemptPending: false } });
+    clearSessionPersistState(sessionId);
+    const messageApi = await import('../messages.js');
+    const patch = vi.spyOn(messageApi, 'patchMessageAgentMetaWithResult').mockRejectedValue(new Error('transient SQLite failure'));
+    const { createCompanionMirror } = await import('../../../companion-cloud/mirror.js');
+    const { memoryState, fakeApi } = await import('../../../companion-cloud/__tests__/fakes.js');
+    const { state } = memoryState();
+    state.update('bot-1', 'actor', entry => {
+      entry.roomId = 'room';
+      if (existingCursor) entry.mirror = { sessionId, createdAt: 0, id: '' };
+    });
+    const { api, calls } = fakeApi(() => ({ messages: [] }));
+    const host = createCompanionCloudHost({ deliverToCanonical: async () => ({ ok: true }),
+      ensureCanonicalSession: async () => sessionId, rebuildContext: async () => 'rebuilt', listDevices: async () => [],
+    });
+    const mirror = createCompanionMirror({ api, state, humanActorId: () => 'human', canonicalSession: async () => sessionId,
+      rowsAfter: host.rowsAfter, latestRows: host.latestRows });
+    const before = structuredClone(state.bot('bot-1'));
+    try {
+      await expect(mirror.syncBot('bot-1', 'actor', 'Bot', { drain: true })).rejects.toThrow('COMPANION_STILL_CHANGING');
+      expect(state.bot('bot-1')).toEqual(before);
+      expect(calls).toEqual([]);
+      expect(assistantSamplingSettlements.list(sessionId)).toHaveLength(1);
+    } finally { patch.mockRestore(); }
+    await mirror.syncBot('bot-1', 'actor', 'Bot', { drain: true });
+    await mirror.syncBot('bot-1', 'actor', 'Bot', { drain: true });
+    const imported = calls.filter(call => call.route.endsWith('/import')).flatMap(call =>
+      (call.data as { messages: Array<{ content: Array<{ text?: string }> }> }).messages);
+    expect(imported.filter(message => message.content.some(part => part.text === 'Accepted answer'))).toHaveLength(1);
+    expect(assistantSamplingSettlements.list(sessionId)).toEqual([]);
+    expect(state.bot('bot-1')?.mirror?.createdAt).toBe(20 * 60_000);
   });
 
   // #7095: the default companion seeded on a fresh computer is demoted mid-meeting; the take-over then
@@ -2642,8 +2711,8 @@ describe('Bot canonical Session lifecycle', () => {
   });
 
   it.each([
-    { versioned: false, selected: true, mode: 'inherit', expectedMcp: ['docs', 'mail'], expectedTools: ['browser', 'contacts'] },
-    { versioned: false, selected: false, mode: 'inherit', expectedMcp: ['docs', 'mail'], expectedTools: ['browser', 'contacts'] },
+    { versioned: false, selected: true, mode: 'inherit', expectedMcp: ['docs', 'mail'], expectedTools: ['browser', 'calendar'] },
+    { versioned: false, selected: false, mode: 'inherit', expectedMcp: ['docs', 'mail'], expectedTools: ['browser', 'calendar'] },
     { versioned: true, selected: false, mode: 'allowlist', expectedMcp: [], expectedTools: [] },
     { versioned: true, selected: true, mode: 'allowlist', expectedMcp: ['docs'], expectedTools: ['browser'] },
   ])('keeps stored capability selections consistent in settings and runtime: %j', async (entry) => {
@@ -2669,7 +2738,7 @@ describe('Bot canonical Session lifecycle', () => {
     await hydrateBotProfileRuntime(opts, {
       listSkills: async () => [],
       listMcpServers: async () => ['docs', 'mail'].map(name => ({ name, source: 'custom', available: true })),
-      listToolsets: async () => ['browser', 'contacts'].map(id => ({ id, name: id, available: true })),
+      listToolsets: async () => ['browser', 'calendar'].map(id => ({ id, name: id, available: true })),
     });
     expect(opts.botRuntimeProfile).toMatchObject({
       mcpPolicy: { mode: 'allowlist', configured: entry.expectedMcp },
@@ -2839,9 +2908,9 @@ describe('Bot canonical Session lifecycle', () => {
     ]);
     expect(opts.botProfileContextPrompt).toContain('Use `update_teammate_profile`');
     expect(opts.botProfileContextPrompt).not.toContain('direct the user to the teammate’s model settings');
-    expect(opts.botProfileContextPrompt).toContain('login/configuration card is already in this chat');
-    expect(opts.botProfileContextPrompt).toContain('End the turn and wait for the Host authorization-completed notification');
-    expect(opts.botProfileContextPrompt).not.toContain('This remote runtime does not provide');
+    // The card details are on-demand (read_teammate_skill name=plugins); the core keeps the route.
+    expect(opts.botProfileContextPrompt).toContain('Plugin logins go through `connect_account` cards on the trusted desktop.');
+    expect(opts.botProfileContextPrompt).not.toContain('This remote runtime has no authorization cards');
     // 用户配的 Skill 那一栏不受影响。
     expect(opts.botRuntimeProfile?.skillPolicy.catalog).toEqual([]);
   });
@@ -2880,16 +2949,13 @@ describe('Bot canonical Session lifecycle', () => {
     expect(opts.botProfileContextPrompt).toContain('Personal Skill storage and learning are unavailable');
     expect(opts.botProfileContextPrompt).toContain('`create_teammate`');
     expect(opts.botProfileContextPrompt).toContain('`start_session_task`');
-    expect(opts.botProfileContextPrompt).toContain('Respect the user’s memory switch');
+    expect(opts.botProfileContextPrompt).toContain('Respect the memory switch');
     expect(opts.botProfileContextPrompt).toContain('Use `update_teammate_profile`');
     expect(opts.botProfileContextPrompt).not.toContain('direct the user to the teammate’s model settings');
-    expect(opts.botProfileContextPrompt).not.toContain('login/configuration card is already in this chat');
-    expect(opts.botProfileContextPrompt).not.toContain('End the turn and wait for the Host authorization-completed notification');
+    expect(opts.botProfileContextPrompt).not.toContain('Plugin logins go through `connect_account` cards');
     if (agentKind === 'pi') {
       expect(opts.botProfileContextPrompt).toContain('`ghost_list`, `ghost_info`, `ghost_call`');
-      expect(opts.botProfileContextPrompt).toContain('This remote runtime does not provide plugin authorization cards');
-      expect(opts.botProfileContextPrompt).toContain('Plugins page on the trusted desktop');
-      expect(opts.botProfileContextPrompt).toContain('after the user confirms readiness');
+      expect(opts.botProfileContextPrompt).toContain('This remote runtime has no authorization cards: point the user to the trusted desktop\'s Plugins page.');
     } else {
       expect(opts.botProfileContextPrompt).not.toContain('`ghost_call`');
     }
@@ -3086,7 +3152,7 @@ describe('Bot canonical Session lifecycle', () => {
       });
       let available = true;
       const kind = scenario.startsWith('toolset') ? 'toolset' as const : scenario as 'skill' | 'mcp';
-      const id = kind === 'skill' ? 'release-check' : kind === 'toolset' ? 'contacts' : 'shared-docs';
+      const id = kind === 'skill' ? 'release-check' : kind === 'toolset' ? 'calendar' : 'shared-docs';
       const field = kind === 'skill' ? 'skills' : kind === 'toolset' ? 'toolsets' : 'mcpServers';
       const patch = (ids: string[]) => kind === 'skill' ? { skills: ids } : { capabilities: { [field]: ids } };
       const listAgentSkills = vi.fn(async (_agentKind: AgentKind, opts: { forceReload?: boolean }) => ({
@@ -3253,7 +3319,7 @@ describe('Bot canonical Session lifecycle', () => {
     // The profile changes during the current Claude turn; it has not applied a switch yet.
     chain = [{ ...chain[0]!, harness: 'codex', model: 'codex-x' }];
     await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { modelChain: chain } });
-    for (const [kind, id] of [['mcp', 'events'], ['skill', 'route-skill'], ['toolset', 'contacts']] as const) {
+    for (const [kind, id] of [['mcp', 'events'], ['skill', 'route-skill'], ['toolset', 'calendar']] as const) {
       await expect(service.list({ ...input, kind })).resolves.toMatchObject({
         capabilities: expect.arrayContaining([expect.objectContaining({ id, available: false })]),
       });
@@ -3486,7 +3552,7 @@ describe('Bot canonical Session lifecycle', () => {
       .resolves.toMatchObject({ ok: true, joined: false });
   });
 
-  it.each(['contacts'])('rejects gated %s despite registry enablement and keeps joined references removable', async (id) => {
+  it.each(['calendar'])('rejects gated %s despite registry enablement and keeps joined references removable', async (id) => {
     const created = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
     const input = { callerSessionId: created.session.id, kind: 'toolset' as const, id };
     await expect(findBotCapabilities(input)).resolves.toMatchObject({
@@ -3575,7 +3641,7 @@ describe('Bot canonical Session lifecycle', () => {
     expect(apply).not.toHaveBeenCalled();
   });
 
-  it.each([['browser', 'cindy_browser'], ['scheduler', 'cindy_scheduler'], ['contacts', 'cindy_contacts']])('mounts the selected %s toolset into the actual MCP policy', async (toolset, server) => {
+  it.each([['browser', 'cindy_browser'], ['scheduler', 'cindy_scheduler']])('mounts the selected %s toolset into the actual MCP policy', async (toolset, server) => {
     await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { toolsets: [toolset], toolsetMode: 'allowlist' } });
     const created = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 2 });
     const opts: MakerSessionCreateOpts = { id: created.session.id, agentKind: 'codex', workingDir: created.session.workingDir, workspaceKind: 'dialogue', model: 'test-model', permissionMode: 'auto' };
@@ -3604,7 +3670,7 @@ describe('Bot canonical Session lifecycle', () => {
       capabilities: {
         mcpServers: ['docs'],
         mcpMode: 'allowlist',
-        toolsets: ['contacts'],
+        toolsets: ['calendar'],
         toolsetMode: 'allowlist',
       },
     });
@@ -3630,8 +3696,8 @@ describe('Bot canonical Session lifecycle', () => {
           generation: mcpGeneration,
         }],
         listToolsets: async () => [{
-          id: 'contacts',
-          name: 'Contacts',
+          id: 'calendar',
+          name: 'Calendar',
           available: true,
           version: toolsetVersion,
         }],
@@ -3641,7 +3707,7 @@ describe('Bot canonical Session lifecycle', () => {
     await markBotProfileRuntimeApplied(first!);
     await expect(hydrate('http:1000', '1.0.0')).resolves.toMatchObject({
       resolvedMcpServers: ['docs'],
-      resolvedToolsets: ['contacts'],
+      resolvedToolsets: ['calendar'],
       runtimeEpochChanged: false,
     });
     await expect(hydrate('http:1001', '1.0.0')).resolves.toMatchObject({
@@ -3651,7 +3717,7 @@ describe('Bot canonical Session lifecycle', () => {
     });
     await expect(hydrate('http:1000', '2.0.0')).resolves.toMatchObject({
       sessionId: created.session.id,
-      resolvedToolsets: ['contacts'],
+      resolvedToolsets: ['calendar'],
       runtimeEpochChanged: true,
     });
   });
@@ -4224,6 +4290,85 @@ describe('Bots list unread projection', () => {
     expect(resource.lastMessagePreview).toBe('Visible final result');
     insertMessage(sessionId, { id: 'next-result', role: 'assistant', content: 'Requested update', createdAt: 4000 });
     expect(await unreadFor('bot-1', { 'bot-1': 1500 })).toBe(1);
+  });
+
+  it.each([false, true])('does not count failed welcome sampling attempts (running=%s)', async (running) => {
+    const sessionId = await canonicalFor('bot-1');
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      insertMessage(sessionId, {
+        id: `failed-opening-${attempt}`, role: 'assistant', content: `你好，我是 Cindy。尝试 ${attempt}`,
+        createdAt: 2000 + attempt,
+        agentMeta: {
+          assistantPhase: 'final_answer', turnCompleted: false, turnCostUsd: 0.01,
+          failedSamplingAttempt: { threadId: 'native-thread', turnId: 'welcome-turn', attempt, itemId: `failed-${attempt}` },
+        },
+      });
+    }
+    insertMessage(sessionId, {
+      id: 'successful-opening', role: 'assistant', content: '你好，我是 Cindy。', createdAt: 3000,
+      agentMeta: { assistantPhase: 'final_answer', turnCompleted: true },
+    });
+    h.getSession.mockReturnValue(running ? { isTurnRunning: () => true, compactSession: vi.fn() } : null);
+    expect(await unreadFor('bot-1', { 'bot-1': 1000 })).toBe(1);
+  });
+
+  it('keeps failed sampling output out of local previews and remote reply watermarks', async () => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, {
+      id: 'answer', role: 'assistant', content: 'Accepted reply', createdAt: 2000,
+      agentMeta: { turnCompleted: true },
+    });
+    for (let attempt = 1; attempt <= 105; attempt += 1) {
+      insertMessage(sessionId, {
+        id: `failed-${attempt}`, role: 'assistant', content: 'Incomplete replacement', createdAt: 3000 + attempt,
+        agentMeta: { failedSamplingAttempt: { threadId: 'native-thread', turnId: 'next-turn', attempt, itemId: `failed-${attempt}` } },
+      });
+    }
+    expect(await unreadFor('bot-1', { 'bot-1': 1000 })).toBe(1);
+    expect(await unreadFor('bot-1', { 'bot-1': 2000 })).toBe(0);
+    expect(await invoke('local-db:bots:get', 'bot-1')).toMatchObject({
+      lastMessagePreview: 'Accepted reply', lastMessageAt: 2000,
+    });
+    expect(await getBotRemoteResourceSource('bot-1')).toMatchObject({
+      lastMessagePreview: 'Accepted reply', lastReplyAt: 2000,
+    });
+  });
+
+  it.each([true, { runtimeId: 'retired-runtime' }])('does not promote orphaned pending replies after close (%j)', async samplingAttemptPending => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, { id: 'accepted', role: 'assistant', content: 'Accepted reply', createdAt: 2000,
+      agentMeta: { samplingAttemptPending: false, turnCompleted: true } });
+    for (let index = 0; index < 105; index++) insertMessage(sessionId, {
+      id: `orphan-${index}`, role: 'assistant', content: 'Unconfirmed prose', createdAt: 3000 + index,
+      agentMeta: { samplingAttemptPending, turnCompleted: true, turnCostUsd: 0.01 },
+    });
+    h.getSession.mockReturnValue(null);
+    expect(await unreadFor('bot-1', { 'bot-1': 1000 })).toBe(1);
+    expect(await unreadFor('bot-1', { 'bot-1': 2000 })).toBe(0);
+    expect(await invoke('local-db:bots:get', 'bot-1')).toMatchObject({
+      lastMessagePreview: 'Accepted reply', lastMessageAt: 2000,
+    });
+    expect(await getBotRemoteResourceSource('bot-1')).toMatchObject({
+      lastMessagePreview: 'Accepted reply', lastReplyAt: 2000,
+    });
+  });
+
+  it.each(['local', 'remote'])('recovers an accepted intent through %s projection without creating a cloud host', async projection => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, { id: 'accepted-pending', role: 'assistant', content: 'Accepted after close', createdAt: 2000,
+      agentMeta: { samplingAttemptPending: { runtimeId: 'old-runtime' }, turnCompleted: true } });
+    const { assistantSamplingSettlements } = await import('../../../assistantSamplingSettlement.js');
+    assistantSamplingSettlements.put({ sessionId, persistId: 'accepted-pending', patch: { samplingAttemptPending: false } });
+    const { clearSessionPersistState } = await import('../../../messagePersistBroadcaster.js');
+    clearSessionPersistState(sessionId);
+    h.getSession.mockReturnValue(null);
+    if (projection === 'local') {
+      expect(await unreadFor('bot-1', { 'bot-1': 1000 })).toBe(1);
+      expect(await invoke('local-db:bots:get', 'bot-1')).toMatchObject({ lastMessagePreview: 'Accepted after close', lastMessageAt: 2000 });
+    } else {
+      expect(await getBotRemoteResourceSource('bot-1')).toMatchObject({ lastMessagePreview: 'Accepted after close', lastReplyAt: 2000 });
+    }
+    expect(assistantSamplingSettlements.list(sessionId)).toEqual([]);
   });
 
   it('counts only replies that landed after the read position', async () => {

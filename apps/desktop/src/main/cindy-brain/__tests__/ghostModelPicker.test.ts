@@ -1,14 +1,27 @@
 /** Test value: new public request/resolve round trip, not covered by the read-only catalog tests.
  * Protects plugin-security §3/§5 and Electron §5: minimal foreign-window answer, account switch
  * during async validation, revoked source and closed page must never deliver a route. Tier: unit.
- * No Electron, filesystem, network or real waits. Standalone wall time: 2.18s (2026-10-28).
+ * No Electron, user data, network or real waits; routing source is read once as a fixture.
+ * Standalone wall time: 1.09s (2026-11-02).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
+import ts from 'typescript';
 import type { ProviderView } from '@cindy/model-providers';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import type { PluginTaskRoute } from '../../../shared/pluginTasks.js';
 import type { PluginModelPickerRequest } from '../../../shared/pluginModelPicker.js';
-import { GhostModelPicker, isPluginModelPickerRouteAvailable } from '../ghostModelPicker.js';
+import { GhostModelPicker, chooseModelPickerWindow, readPluginModelRouteCatalog, isGhostCardModelRouteAvailable, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled, setPluginRouteAgentStatusProvider } from '../ghostModelPicker.js';
+
+// Run the production routing entry without booting Electron or loading the IPC registry.
+const hostSource = ts.createSourceFile('index.ts', readFileSync(new URL('../index.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
+const routeEntry = hostSource.statements.find((node): node is ts.FunctionDeclaration =>
+  ts.isFunctionDeclaration(node) && node.name?.text === 'routeGhostNewTask');
+if (!routeEntry) throw new Error('routeGhostNewTask entry missing');
+const routeEntryCode = ts.transpileModule(`(${routeEntry.getText(hostSource).replace(/^export\s+/, '')})`, {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+}).outputText;
 
 const route: PluginTaskRoute = {
   agentKind: 'codex',
@@ -27,6 +40,7 @@ function setup() {
   let cancel!: () => void;
   const target = vi.fn(() => ({
     id: 7,
+    supportsRemoteRoutes: true,
     dismiss,
     send: (request: PluginModelPickerRequest, close: () => void) => {
       sent.push(request);
@@ -185,4 +199,121 @@ it('validates effort and Fast against the exact connected model and available en
   expect(
     isPluginModelPickerRouteAvailable({ ...route, fastMode: false }, [provider], ['codex']),
   ).toBe(false);
+});
+
+// Rule: the card dropdown also offers other computers and shared providers. A remote pick must be a
+// location that is currently offered, and the model must be in that location's remotely callable catalog.
+it('checks a card model at its own location: local catalog, or the offered remote location', async () => {
+  const view = (models: string[]) => ({
+    id: 'mine', source: 'user', connected: true, agents: ['codex'], routing: { codex: { enabled: true } },
+    models: { codex: models.map((id) => ({ id, mode: 'chat', efforts: ['high'], supportsFastMode: true, supportsUltrafastMode: true })) },
+  }) as unknown as ProviderView;
+  const remoteViews = vi.fn(async (id: string) => [view(id === 'mac-mini' ? ['remote-model'] : [])]);
+  const sources = {
+    localViews: async () => [view(['model'])],
+    localAgents: () => ['codex'],
+    locations: async () => ({ locations: [{ agentDeviceId: 'mac-mini' }, { agentDeviceId: 'share:abc' }] }),
+    remoteViews,
+  };
+  expect(await isGhostCardModelRouteAvailable(route, sources)).toBe(true);
+  expect(await isGhostCardModelRouteAvailable({ ...route, model: 'remote-model', agentDeviceId: 'mac-mini' }, sources)).toBe(true);
+  // Remote engines are judged by the remote catalog, not by what is installed here.
+  expect(await isGhostCardModelRouteAvailable({ ...route, model: 'remote-model', agentDeviceId: 'mac-mini' }, { ...sources, localAgents: () => [] })).toBe(true);
+  expect(await isGhostCardModelRouteAvailable({ ...route, agentDeviceId: 'mac-mini' }, sources)).toBe(false);
+  expect(await isGhostCardModelRouteAvailable({ ...route, model: 'remote-model', agentDeviceId: 'offline-mac' }, sources)).toBe(false);
+  expect(remoteViews).not.toHaveBeenCalledWith('offline-mac');
+  expect(await isGhostCardModelRouteAvailable({ ...route, agentDeviceId: 'mac-mini' }, { ...sources, locations: null })).toBe(false);
+});
+
+// Unit: after a first successful pick, "choose a model" on a PR card stopped opening the picker.
+// The request went to a pre-warmed hidden app window (still an app window) and timed out unseen.
+describe('chooseModelPickerWindow', () => {
+  it('uses the focused window only when usable, otherwise the first visible app window', () => {
+    const hidden = { id: 'prewarmed', usable: false }, main = { id: 'main', usable: true };
+    const usable = (w: { usable: boolean }) => w.usable;
+    expect(chooseModelPickerWindow(hidden, [hidden, main], usable)).toBe(main);
+    expect(chooseModelPickerWindow(null, [hidden, main], usable)).toBe(main);
+    expect(chooseModelPickerWindow(main, [hidden, main], usable)).toBe(main);
+    expect(chooseModelPickerWindow(null, [hidden], usable)).toBeUndefined();
+  });
+});
+
+// Rule: a plugin model must never stop the message. A Harness that is not installed makes the send
+// gate block with a dialog, so the route falls back; a failed check is left to that gate.
+it('reports a routed Harness as missing only when the host says so', async () => {
+  setPluginRouteAgentStatusProvider(async (agent) => ({ binaryReady: agent !== 'codex' }));
+  expect(await isPluginRouteHarnessInstalled('codex')).toBe(false);
+  expect(await isPluginRouteHarnessInstalled('pi')).toBe(true);
+  setPluginRouteAgentStatusProvider(async () => { throw new Error('status failed'); });
+  expect(await isPluginRouteHarnessInstalled('codex')).toBe(true);
+  setPluginRouteAgentStatusProvider(async () => ({ binaryReady: false }));
+  expect(await isPluginRouteHarnessInstalled('claude-code')).toBe(true);
+});
+
+// PR #8460 / unit: a remote catalog can advertise Pi when that source has no Pi runtime.
+// Previous cases checked only local status or catalog availability, not the routed/kept outcome.
+// Minimal input: connected Pi model, explicit share source, and a definitive binaryReady value.
+it.each([false, true])('checks the remote runtime before accepting a route (binaryReady=%s)', async (binaryReady) => {
+  const localStatus = vi.fn(async (agent: string) => ({ binaryReady: agent !== 'pi' }));
+  setPluginRouteAgentStatusProvider(localStatus);
+  const remoteStatus = vi.fn(async () => ({ binaryReady }));
+  const remoteRoute = { agentKind: 'pi', providerId: 'mine', model: 'model', agentDeviceId: 'share:fixture' };
+  const remoteView = {
+    id: 'mine', source: 'user', connected: true, agents: ['pi'], routing: { pi: { enabled: true } },
+    models: { pi: [{ id: 'model', name: 'Remote model', mode: 'chat', efforts: [] }] },
+  } as unknown as ProviderView;
+  const ghost = { manifest: { name: 'Example' } };
+  const run = runInNewContext(routeEntryCode, {
+    activeOwnerScopeKey: () => 'owner', availableGhosts: () => [ghost],
+    findInstalledGhostByInstanceId: () => ghost, publishedRouteModels: () => [{ id: 'auto' }],
+    screenGhostControlPoint: async () => ({ action: 'route', route: remoteRoute, ghostName: 'Example' }),
+    getDesktopProviderService: () => ({ listProviders: async () => [] }),
+    readPluginModelRouteCatalog, readGhostAgentRemoteViews: async () => [remoteView],
+    getPluginModelPickerAgents: () => ['codex'], readGhostAgentRemoteStatus: remoteStatus,
+    isPluginRouteHarnessInstalled, isPluginModelPickerRouteAvailable, log: { warn: vi.fn() },
+  });
+  const result = await run('plugin', { modelId: 'auto', route });
+  expect(result).toMatchObject(binaryReady
+    ? { outcome: 'routed', route: remoteRoute }
+    : { outcome: 'kept', why: 'unavailable-route' });
+  expect(remoteStatus).toHaveBeenCalledExactlyOnceWith('share:fixture', 'pi');
+  expect(localStatus).not.toHaveBeenCalled();
+});
+
+// Bug: plugin routing validated only the local catalog; a share with the same provider/model
+// could either disappear or run locally. Exact source catalog is observable through acceptance.
+// Existing availability fixtures cover only local views. Minimal input: share route + local namesake.
+// Tier: unit; no network or Electron.
+it('reads only the selected share and never falls back to a local namesake', async () => {
+  const local = vi.fn(async () => [{ id: 'local' }] as ProviderView[]);
+  const remote = vi.fn(async () => [] as ProviderView[]);
+  expect(await readPluginModelRouteCatalog({ agentDeviceId: 'share:fixture' }, {
+    local, remote, localAgents: () => ['codex'],
+  })).toMatchObject({ views: [] });
+  expect(remote).toHaveBeenCalledWith('share:fixture');
+  expect(local).not.toHaveBeenCalled();
+  expect(await readPluginModelRouteCatalog({ agentDeviceId: 'share:fixture' }, {
+    local, localAgents: () => ['codex'],
+  })).toMatchObject({ views: [] });
+  remote.mockRejectedValueOnce(new Error('share revoked'));
+  await expect(readPluginModelRouteCatalog({ agentDeviceId: 'share:fixture' }, {
+    local, remote, localAgents: () => ['codex'],
+  })).rejects.toThrow('share revoked');
+  expect(local).not.toHaveBeenCalled();
+});
+
+// Old callers use this picker to create local plugin tasks. Remote answers are accepted only
+// after explicit opt-in, so adding route sources cannot change their execution contract. Tier: unit.
+it('requires remote opt-in and keeps the complete share location in the accepted reply', async () => {
+  const h = setup();
+  const remote = { ...route, agentDeviceId: 'share:fixture' };
+  const localResult = h.picker.request('plugin');
+  expect(await h.picker.resolve(7, h.sent[0].requestId, remote)).toEqual({ handled: true, accepted: false });
+  h.close();
+  await localResult;
+  h.advance();
+  const remoteResult = h.picker.request('plugin', { allowRemote: true, initial: remote });
+  expect(h.sent[1].allowRemote).toBe(true);
+  expect(await h.picker.resolve(7, h.sent[1].requestId, remote)).toEqual({ handled: true, accepted: true });
+  expect(await remoteResult).toEqual({ ok: true, route: remote });
 });
