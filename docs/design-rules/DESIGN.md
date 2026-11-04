@@ -74,8 +74,8 @@ it (user request, 2026-11-03). Higher visibility raises that opacity so the artw
 contributes at most 16% under the surface, keeping the tertiary text tier at the 3:1
 floor over any wallpaper (84% at 100% visibility). Fill only, no `backdrop-filter`, which
 would become the containing block for the composer's fixed palettes. Floating layers
-(menus, popovers, dialogs, tooltips, anything positioned over other content), code blocks
-(their fixed syntax palette needs a solid surface, §15.4) and embedded
+(menus, popovers, dialogs, tooltips, anything positioned over other content), any surface holding
+syntax-highlighted code, such as code blocks and diffs (the fixed syntax palette needs a solid surface, §15.4), and embedded
 web or editor content keep their readable opaque surfaces. Implementation: the in-page
 glass rule in `globals.css`, scoped to page containers and excluding floating roles and
 absolute / fixed / sticky surfaces; the floor comes from `useWallpaperBackground`.

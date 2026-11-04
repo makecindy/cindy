@@ -2408,8 +2408,9 @@ html[data-wallpaper-active='true'] .wallpaper-composer-fade {
    containing block for the composer's fixed palettes. Keeps base-utility
    specificity, so hover and state variants still win. Each token needs a fill
    line and an entry in the target list. Left out on purpose: tokens that are
-   already translucent (selected-row ink tints) and code blocks, whose fixed
-   syntax palette needs a solid surface. */
+   already translucent (selected-row ink tints), and any surface holding
+   syntax-highlighted code (code blocks, diffs), whose fixed palette needs a
+   solid surface. */
 html[data-wallpaper-active='true'] {
   --wallpaper-glass-opacity: max(72%, var(--app-wallpaper-glass-floor, 0%));
 }
@@ -2443,6 +2444,7 @@ html.dark[data-wallpaper-active='true'] {
   .bg-sidebar-item-active
 ):where(:not(
   .absolute, .fixed, .sticky,
+  :has(.hljs, [class^='hljs-']),
   [role='dialog'], [role='alertdialog'], [role='menu'], [role='listbox'], [role='tooltip'],
   :is([role='dialog'], [role='alertdialog'], [role='menu'], [role='listbox'], [role='tooltip']) *
 )) {
