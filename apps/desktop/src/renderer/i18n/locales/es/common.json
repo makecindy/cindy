@@ -1972,6 +1972,8 @@
       "add": {
         "title": "Agregar una máquina remota",
         "alias": "Alias",
+        "aliasHint": "Usa entre 1 y 128 caracteres: letras inglesas, números o . _ @ : -. Para otros caracteres, usa Nombre para mostrar.",
+        "aliasInvalid": "El alias contiene caracteres no admitidos o supera los 128 caracteres. Sigue las reglas anteriores.",
         "displayName": "Nombre para mostrar",
         "displayNamePlaceholder": "Nombre opcional mostrado en Cindy",
         "hostname": "Nombre de host",
@@ -10342,6 +10344,7 @@
       "continueEditing": "Seguir editando"
     },
     "profileSaveFailed": "No se pudo guardar la configuración del compañero. No se aplicó ningún cambio.",
+    "profileSaveOffline": "No se puede conectar con el ordenador del compañero. Restablece la conexión y vuelve a guardar.",
     "modelLabel": "Modelo",
     "modelUnavailable": "{{model}} (no disponible actualmente)",
     "codexAutomaticCompact": "Los compañeros de Codex compactan el contexto por su cuenta, y /new conserva la tarea actual. Inicia una nueva tarea solo cuando realmente necesites empezar de cero.",
@@ -11129,7 +11132,7 @@
         "items": {
           "tasks": {
             "title": "Tareas",
-            "body": "Decide cuándo iniciar una tarea en segundo plano, controla las que inició y trae el resultado al chat, también en tus otras computadoras."
+            "body": "Conoce las tareas que puede controlar y los equipos disponibles. Organiza y sigue las tareas que le pides, trae los resultados y comprueba las operaciones admitidas antes de trabajar en otro equipo."
           },
           "teammates": {
             "title": "Otros compañeros",
@@ -11144,8 +11147,8 @@
             "body": "Recuerda tus preferencias y contexto, comprueba antes de usarlos y los actualiza cuando cambian."
           },
           "self": {
-            "title": "Conocerse",
-            "body": "Sabe lo que puede hacer y activa o desactiva funciones por ti; para Telegram, MCP o plugins consulta primero la ayuda de Cindy."
+            "title": "Conocer y configurar Cindy",
+            "body": "Conoce las funciones y el uso de Cindy, y consulta o cambia ajustes cuando se lo pides. Si necesita que introduzcas datos o confirmes algo, te lo pide dentro de la tarea."
           }
         }
       },

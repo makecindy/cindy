@@ -1,3 +1,4 @@
+import { configureModelSettingsActions, manageAppModels } from '../../app-settings/models';
 import Database from 'better-sqlite3';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
@@ -5703,4 +5704,29 @@ describe('Magpie discovery source lifecycle through real IPC and persistence', (
     } } });
     expect((await getCustomProvider(config.id))!.runtimes.pi!.models[0].discoveredSource).toBeUndefined();
   });
+});
+
+// Unit: AI and Settings use the same domain action, while the renderer retains
+// its sender fence. The minimal regression is a valid context override via AI
+// followed by an untrusted IPC attempt on the same handler instance.
+it('shares model actions with AI without making untrusted renderer writes valid', async () => {
+  const harness = new IpcHarness();
+  let contextLimit: number | null = null;
+  const deps = makeDeps({
+    assertTrustedSender: () => { throwIpcError('PERMISSION_DENIED', 'untrusted'); },
+    listProviders: async () => [catalogView('custom', { pi: ['model'] })],
+    currentOwnerSession: () => ({ dataOwnerId: 'test-user', generation: 1 }),
+    readModelContextLimit: () => ({ limit: contextLimit, isCustomized: contextLimit !== null }),
+    writeModelContextLimit: async (_targets, value) => { contextLimit = value; },
+  });
+  const actions = registerProviderHandlers(harness, deps);
+  const target = { providerId: 'custom', agent: 'pi', modelId: 'model' };
+  const owner = actions.owner();
+  configureModelSettingsActions(actions);
+  await manageAppModels({ operation: 'set', target: { ...target, agent: 'pi' }, change: { setting: 'contextLimit', value: 16000 } }, async () => {});
+  expect(await actions.getContext(target)).toMatchObject({ limit: 16000, isCustomized: true });
+  await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, target, 32000, owner)).rejects.toThrow('untrusted');
+  expect(contextLimit).toBe(16000);
+  await actions.resetContext(target, owner);
+  expect(contextLimit).toBe(null);
 });

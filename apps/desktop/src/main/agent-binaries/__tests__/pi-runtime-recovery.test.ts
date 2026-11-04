@@ -193,6 +193,59 @@ describe('Pi runtime recovery', () => {
 // Existing recovery tests only covered failed prepare. These unit cases exercise the
 // production startup boundary with controlled readiness, without downloads or Electron.
 describe('optional Pi startup', () => {
+  // #8589 follow-up: successful prepare plus failed registration used to report
+  // passed, so bootstrap never enabled recovery. Exercise the production startup
+  // and recovery entries with a real Maker; fake timers keep this in the unit tier.
+  it('recovers failed startup registration after successful preparation', async () => {
+    vi.useFakeTimers();
+    const maker = new Maker({
+      agents: {},
+      storage: {
+        create: vi.fn(), get: vi.fn(), list: vi.fn(), update: vi.fn(),
+        compareAndClearSdkSessionId: vi.fn(), delete: vi.fn(),
+      },
+      logger: createConsoleLogger('pi-registration-recovery-test'),
+    });
+    const pi = {} as BaseAgent;
+    const prepare = vi.fn(async () => ({ ready: true, path: '/managed/pi' }));
+    const register = vi.fn()
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(false)
+      .mockImplementation(() => maker.registerAgent('pi', pi));
+    const onRegistered = vi.fn();
+    const recovery = createPiRuntimeRecovery({
+      isOnline: () => true,
+      prepare,
+      register,
+      onRegistered,
+    });
+
+    try {
+      const result = await prepareOptionalPiRuntime({ prepare, register });
+      expect(result).toEqual({ status: 'failed', error: 'registration_failed' });
+      if (result.status === 'failed') recovery.markUnavailable(result.error);
+      expect(recovery.isDisabled()).toBe(true);
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(maker.listAvailableAgents()).toEqual([]);
+      expect(onRegistered).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(maker.listAvailableAgents()).toEqual(['pi']);
+      expect(prepare).toHaveBeenCalledTimes(3);
+      expect(recovery.isDisabled()).toBe(false);
+      expect(onRegistered).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+      await expect(recovery.retryNow('duplicate')).resolves.toBe(false);
+      expect(register).toHaveBeenCalledTimes(3);
+    } finally {
+      recovery.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it('registers an already-created Maker only after managed preparation succeeds', async () => {
     let resolvePrepare!: (result: { ready: boolean; path: string }) => void;
     const maker = new Maker({
@@ -207,7 +260,7 @@ describe('optional Pi startup', () => {
       getBinaryPath: () => '/managed/pi',
       getAuthState: async () => ({ authenticated: true }),
     } as unknown as BaseAgent;
-    const register = vi.fn(() => maker.registerAgent('pi', pi));
+    const register = vi.fn(() => maker.listAvailableAgents().includes('pi') || maker.registerAgent('pi', pi));
     const startup = prepareOptionalPiRuntime({
       prepare: () => new Promise((resolve) => { resolvePrepare = resolve; }),
       register,
@@ -219,16 +272,17 @@ describe('optional Pi startup', () => {
     await expect(maker.getAgentStatus('pi')).resolves.toMatchObject({
       binaryReady: true, binaryPath: '/managed/pi', authReady: true,
     });
-    await prepareOptionalPiRuntime({
+    await expect(prepareOptionalPiRuntime({
       prepare: async () => ({ ready: true, path: '/managed/pi' }),
       register,
-    });
+    })).resolves.toEqual({ status: 'passed', path: '/managed/pi' });
     expect(maker.listAvailableAgents()).toEqual(['pi']);
-    expect(register.mock.results.map((result) => result.value)).toEqual([true, false]);
+    expect(register.mock.results.map((result) => result.value)).toEqual([true, true]);
   });
 
   it('keeps a prepared runtime available when Maker has not been constructed yet', async () => {
-    const register = vi.fn(() => false);
+    // Bootstrap reports success without trying to register before Maker exists.
+    const register = vi.fn(() => true);
     await expect(prepareOptionalPiRuntime({
       prepare: async () => ({ ready: true, path: '/managed/pi' }),
       register,

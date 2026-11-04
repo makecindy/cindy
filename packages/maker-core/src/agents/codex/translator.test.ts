@@ -132,6 +132,10 @@ describe('Codex assistant text streaming contract', () => {
       'progress', 'failed-commentary', 'failed-answer',
       'successful-commentary', 'successful-intro', 'successful-answer',
     ]);
+    expect(events.filter(event => (event.data as { assistantSamplingAccepted?: unknown }).assistantSamplingAccepted))
+      .toEqual([expect.objectContaining({ type: 'tool_result_full', source: 'codex',
+        data: expect.objectContaining({ assistantSamplingAccepted: { agentMessageIds: ['progress'] } }) })]);
+    expect(events.filter(event => event.type === 'status')).toHaveLength(0);
     expect(events.find(event => event.type === 'error')).toMatchObject({
       data: { isTerminal: false, willRetry: true, assistantAttemptFailure: {
         threadId: 't1', turnId: 'turn-a', attempt: 1,

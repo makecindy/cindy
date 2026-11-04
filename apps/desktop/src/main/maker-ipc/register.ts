@@ -1,3 +1,7 @@
+import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
+import { z as settingsSchema } from 'zod';
+import { registerPreferenceControlIpc } from '../app-settings/preferences.js';
+import { configureModelSettingsActions } from '../app-settings/models.js';
 import { createTaskCompletionDeliveryHost, type TaskCompletionDeliveryHost } from './taskCompletionDeliveryHost.js';
 import { setRoutineResultDispatch } from '../routines/deliveryDispatch.js';
 import { McpSetupBridge } from './mcpSetupBridge.js';
@@ -750,6 +754,7 @@ import {
   type MemorySettings,
   writeMemorySetting,
 } from '../maker-host/memory-settings-store.js';
+import { updateMakerMemorySettings, type NativeMemoryPatch } from '../app-settings/memory.js';
 import { GLOBAL_PLUGIN_IDS } from '../maker-host/plugins/types.js';
 import {
   assertCollabProjectEnabled,
@@ -6396,8 +6401,8 @@ const sessionEventDependencies: SessionEventDependencies = {
   get broadcastToAllWindows() {
     return broadcastToAllWindows;
   },
-  get broadcastCodexImageAsToolResult() {
-    return broadcastCodexImageAsToolResult;
+  get deliverCodexGeneratedImage() {
+    return deliverCodexGeneratedImage;
   },
   get autoResumeBookkeeping() {
     return autoResumeBookkeeping;
@@ -6704,6 +6709,7 @@ export function applyNewMakerDraftRoute(route: BotModelRoute): void {
  * soon as the Renderer selects an owner, before the splash-gated Maker IPC bundle is available.
  */
 export function registerModelVisibilitySyncIpc(): void {
+  registerPreferenceControlIpc();
   registerModelFavoritesSync(broadcastToAllWindows);
   configureAppDefaultModelSelection((appDefaultSelection) => {
     broadcastToAllWindows(MAKER_PUSH.DRAFT_PREF_APPLY, {
@@ -7769,7 +7775,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return { dataOwnerId: session.dataOwnerId, generation: session.generation };
   });
 
-  registerProviderHandlers(createElectronIpcHandlerRegistry(), {
+  configureModelSettingsActions(registerProviderHandlers(createElectronIpcHandlerRegistry(), {
     listProviders: (opts) => getDesktopProviderService().listProviders(opts),
     isOrganizationManagedProviderId: (providerId) =>
       getActiveCatalog().providers.some(
@@ -8193,7 +8199,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ? removeCodexAccountCredentialsReversibly(providerId)
         : removeGenericOAuthCredentialsReversibly(storedCustomProviderId(providerId));
     },
-  });
+  }));
 
   // 自定义 MCP 服务器 CRUD —— CRUD 成功后刷新三个 agent 的 mcpProviders 数组
   // （下次新建会话生效）并广播 MCP_CHANGED 让设置页列表 live 刷新。
@@ -13538,6 +13544,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           message: params.message,
         }),
       });
+      // Chat-only dispatch allocates a queue id; keep the server execution identity
+      // so error recovery can restore the group's full background as well.
+      if (params.clientId?.startsWith(BOT_GROUP_CLIENT_ID_PREFIX)) queued.retrySourceClientId = params.clientId;
       const enqueue = () => inputCoordinator.enqueue(params.targetSessionId, queued, {
         resumeRestorePausedQueue: true,
       });
@@ -13739,6 +13748,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     || inputCoordinator.getQueueControlSnapshot(sessionId).pendingQueue.length > 0;
   const botGroupChatDeps: BotGroupChatServiceDeps = {
     chatHistoryStore: (endpoint, human, reader, current) => createSqliteChatHistoryStore(getDbClient(), endpoint, human, reader, current),
+    readLaneContext: (id) => {
+      const session = maker.getSession(id);
+      if (!session || session.getStatus() !== 'active' || !session.sdkSessionId) return null;
+      return { key: JSON.stringify([session.instanceId, session.sdkSessionId, session.agentKind, session.model,
+        getSessionProvider(id), session.getTurnGeneration()]), contextTokens: session.getUsageSnapshot().contextTokens };
+    },
     ensureLane: async (input) => {
       try {
         return await ensureBotGroupLaneSession(input);
@@ -25886,7 +25901,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return maker.getAgentMemoryStatus(agentKind);
   });
 
-  ipcMain.handle(MAKER_INVOKE.MEMORY_SET, async (_e, agentKind: unknown, enabled: unknown) => {
+  const updateNativeMemorySetting = async (agentKind: unknown, enabled: unknown) => {
     if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi') {
       throwIpcError(
         'INVALID_PARAMS',
@@ -25917,7 +25932,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       customizedKeys: settingsState.customizedKeys,
       defaults: settingsState.defaults,
     };
-  });
+  };
+  ipcMain.handle(MAKER_INVOKE.MEMORY_SET, async (_e, agentKind: unknown, enabled: unknown) => { return updateNativeMemorySetting(agentKind, enabled); });
 
   ipcMain.handle(MAKER_INVOKE.MEMORY_RESET, async (_e, agentKind: unknown) => {
     if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi') {
@@ -25930,7 +25946,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return maker.resetAgentMemory(agentKind);
   });
 
-  ipcMain.handle(MAKER_INVOKE.MAKER_MEMORY_SET_ENABLED, async (_e, enabled: unknown) => {
+  const updateMakerMemorySetting = async (enabled: unknown, nativePatch: NativeMemoryPatch = {}) => {
     if (typeof enabled !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'enabled required (boolean)');
     }
@@ -25943,50 +25959,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 立刻按新值注入);native setMemory 的 live-host RPC 热推放 applyRuntime ——
     // Codex busy 的延迟路径把它挪到所有会话空闲后执行,不 mid-turn 热更正在跑的
     // 任务(review P1 2026-07-23)。
-    const wasEnabled = makerMemory.isEnabled();
-    let persistedSettings: MemorySettings | null = null;
-    return applyMemoryChangeWithCodexRestart({
-      persist: async () => {
-        // Persist before changing the manager. A failed maker:false write must reject the toggle
-        // instead of presenting an opt-out that silently disappears after restart.
-        const settingsState = writeMemorySetting('maker', enabled, { preserveDefault: enabled });
-        persistedSettings = settingsState.value;
-        const result = enabled
-          ? await makerMemory.enable({ skipAgentSync: true })
-          : await makerMemory.disable();
-        // Claude 的原生覆盖立即应用(纯内存,不碰 busy 的 Codex host)——
-        // 延迟路径下新建 Claude 会话也要立刻符合最新设置(review P1 2026-07-23)。
-        if (enabled) {
-          await makerMemory.syncNativeAgentsOff(['claude-code']);
-        } else if (!settingsState.value.maker) {
-          await maker.setAgentMemory('claude-code', settingsState.value.claudeCode);
-        }
-        return {
-          ...result,
-          isCustomized: settingsState.isCustomized,
-          customizedKeys: settingsState.customizedKeys,
-          defaults: settingsState.defaults,
-        };
-      },
-      applyRuntime: async () => {
-        if (enabled) {
-          await makerMemory.syncNativeAgentsOff(['codex']);
-        } else if (persistedSettings && !persistedSettings.maker) {
-          await maker.setAgentMemory('codex', persistedSettings.codex);
-        }
-        // 开关翻转 ⇒ 重建 codex bridge, 理由与约束见
-        // shutdownAgentMcpEnvironmentsBestEffort 文档 (review R1 P2)。
-        if (wasEnabled !== enabled) {
-          await shutdownAgentMcpEnvironmentsBestEffort('maker-memory toggle');
-        }
-      },
+    return updateMakerMemorySettings(enabled, nativePatch, {
+      makerMemory, maker, writeMemorySetting,
+      applyChange: applyMemoryChangeWithCodexRestart,
+      invalidateBridge: shutdownAgentMcpEnvironmentsBestEffort,
     });
-  });
+  };
+  ipcMain.handle(MAKER_INVOKE.MAKER_MEMORY_SET_ENABLED, async (_e, enabled: unknown) => { return updateMakerMemorySetting(enabled); });
 
   // MEMORY_GET_SETTINGS 故意不在这里注册 —— renderer/index.tsx 在 React mount
   // 之前 (远早于 splash 完成) 就会调一次, 所以挂在 bootstrap-electron 的早期
   // registerIpcHandlers() 里, 见那里的注释。
-  ipcMain.handle(MAKER_INVOKE.MEMORY_RESET_SETTINGS, async () => {
+  const restoreMemorySettings = async () => {
     // 同 MAKER_MEMORY_SET_ENABLED 的 persist / applyRuntime 拆分。
     const wasMakerEnabled = maker.makerMemory?.isEnabled() ?? false;
     let resetSettings_: MemorySettings | null = null;
@@ -26028,6 +26012,35 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
       },
     });
+  };
+  ipcMain.handle(MAKER_INVOKE.MEMORY_RESET_SETTINGS, async () => { return restoreMemorySettings(); });
+
+  registerRuntimeSettingsSection({
+    id: 'memory', title: '记忆开关', description: 'Cindy 记忆和各引擎记忆的开关。恢复默认只恢复开关，不删除已有记忆。',
+    effective: 'immediate-or-when-idle',
+    schema: settingsSchema.strictObject({ maker: settingsSchema.boolean().optional(), claudeCode: settingsSchema.boolean().optional(),
+      codex: settingsSchema.boolean().optional(), pi: settingsSchema.boolean().optional() }),
+    read: () => ({ ...memorySettingsWire(), runtime: { maker: maker.makerMemory?.isEnabled() ?? null } }),
+    update: async patch => {
+      const next = { ...readMemorySettingsState().value, ...patch };
+      if (next.maker && (patch.claudeCode !== undefined || patch.codex !== undefined))
+        throwIpcError('INVALID_PARAMS', 'Disable Cindy memory before changing native memory, as in Settings');
+      let result: unknown;
+      if (patch.maker !== undefined) {
+        const nativePatch: NativeMemoryPatch = {};
+        for (const key of ['claudeCode', 'codex', 'pi'] as const) {
+          if (typeof patch[key] === 'boolean') nativePatch[key] = patch[key];
+        }
+        return updateMakerMemorySetting(patch.maker, nativePatch);
+      }
+      for (const key of ['claudeCode', 'codex', 'pi'] as const) {
+        if (patch[key] !== undefined) {
+          await updateNativeMemorySetting(key === 'claudeCode' ? 'claude-code' : key, patch[key]);
+          if (readMemorySettingsState().value[key] !== patch[key]) throwIpcError('INTERNAL', 'memory setting was not persisted');
+        }
+      }
+      return result;
+    }, reset: restoreMemorySettings,
   });
 
   ipcMain.handle(MAKER_INVOKE.MAKER_MEMORY_RESET, async () => {
@@ -26359,9 +26372,22 @@ const generatedImageDelivery = createGeneratedImageDelivery({
 });
 setGeneratedImageRecovery((sessionId) => generatedImageDelivery.recover(sessionId), () => generatedImageDelivery.reconcile());
 
-async function broadcastCodexImageAsToolResult(sessionId: string, event: AgentEvent): Promise<void> {
-  try { await generatedImageDelivery.deliver(sessionId, event); }
-  catch { log.warn('Codex generated image delivery could not be persisted', { sessionId }); }
+/**
+ * Live delivery of a Codex native generated image. The returned promise resolves
+ * with the tool events published for it (`[]` when none), so the wire listener can
+ * hold the Session stream and hand them to IM / hook listeners before `done`.
+ */
+function deliverCodexGeneratedImage(sessionId: string, event: AgentEvent): Promise<readonly AgentEvent[]> {
+  const warn = () => log.warn('Codex generated image delivery could not be persisted', { sessionId });
+  try {
+    const run = generatedImageDelivery.start(sessionId, event);
+    if (!run) return Promise.resolve([]);
+    run.completion.catch(warn);
+    return run.published;
+  } catch {
+    warn();
+    return Promise.resolve([]);
+  }
 }
 
 function broadcastSyntheticToolEvent(

@@ -1907,6 +1907,8 @@
       "add": {
         "title": "增一台远方之机",
         "alias": "别号",
+        "aliasHint": "限 1–128 字元，惟英文字母、数字及 . _ @ : - 可用；中文名请填于「显示之名」。",
+        "aliasInvalid": "别名含不支持字元，或逾 128 字元，请依上例改之。",
         "displayName": "显示之名",
         "displayNamePlaceholder": "可不填，仅于 Cindy 中显",
         "hostname": "主机名",
@@ -10218,6 +10220,7 @@
       "continueEditing": "续修"
     },
     "profileSaveFailed": "同僚之设未能存，变更未生效。",
+    "profileSaveOffline": "同僚所在之电脑未能连通，请复连后再存。",
     "modelLabel": "模型",
     "modelUnavailable": "{{model}}（今不可用）",
     "codexAutomaticCompact": "Codex 同僚自能压缩上下文，/new 亦存当前差事。唯确须从头始之，方新开差事。",
@@ -10990,7 +10993,7 @@
         "items": {
           "tasks": {
             "title": "任务",
-            "body": "度何时开后台任务，掌己所开之任务，携其果归于言谈；亦可至汝他机行事。"
+            "body": "知可掌之任务与可用之机，依汝之命布置、跟进，携其果归；跨机行事前，先查所能。"
           },
           "teammates": {
             "title": "联同伴",
@@ -11005,8 +11008,8 @@
             "body": "记汝所好与所历，用前先查，有变则更。"
           },
           "self": {
-            "title": "自知",
-            "body": "知己所能，为汝开关诸能；Cindy 之用法（添 Telegram、设 MCP、装法器），先阅帮助而后行。"
+            "title": "知与设 Cindy",
+            "body": "知 Cindy 之能与用法，依汝之命查改设置；须汝填写或确认者，于任务中请汝亲为。"
           }
         }
       },
