@@ -195,24 +195,45 @@ describe('runtime auth refresh backoff', () => {
   });
 });
 
-// Unit: the accepted 401 exception must remain jittered and bounded even through
-// a prolonged transport outage. Existing long-backoff tests did not exercise it.
+// Unit: the 401 exception requires new evidence for each quick attempt, remains
+// jittered/capped, and retains its tier when the ordinary offline retry takes over.
 describe('401 quick retry deadlines', () => {
-  it.each([0, 0.5, 0.999])('caps every jittered delay at sixty seconds (random=%s)', fraction => {
+  it.each([0, 0.5, 0.999])('caps evidence-driven retries without automatically rearming them (random=%s)', fraction => {
     let now = 1_000_000;
     const backoff = new AuthRefreshBackoff(() => now, () => fraction);
-    backoff.defer(1, undefined, true);
+    for (let i = 0; i < 3; i++) backoff.defer(1, undefined, true);
     expect(backoff.serverRejectedToken(1)).toBe(true);
     expect(backoff.runtimeRemaining(1)).toBeLessThan(3_000);
     const longDeadline = now + backoff.remaining(1);
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 8; i++) {
       now += backoff.runtimeRemaining(1);
-      const delay = backoff.defer(1, undefined, true);
+      backoff.startRuntimeAttempt(1);
+      backoff.defer(1, undefined, true);
+      expect(backoff.runtimeRemaining(1)).toBe(backoff.remaining(1));
+      expect(now + backoff.remaining(1)).toBe(longDeadline);
+      expect(backoff.serverRejectedToken(1)).toBe(true);
+      const delay = backoff.runtimeRemaining(1);
       expect(delay).toBeGreaterThanOrEqual(1_500);
       expect(delay).toBeLessThanOrEqual(60_000);
-      if (now < longDeadline) expect(now + backoff.remaining(1)).toBe(longDeadline);
       expect(backoff.serverRejectedToken(1)).toBe(false);
+      expect(backoff.runtimeRemaining(1)).toBe(delay);
     }
+    // Let the last quick attempt fail, then the ordinary long retry fail. Its
+    // backoff advances normally, while the quick tier remains at the 60s cap.
+    now += backoff.runtimeRemaining(1);
+    backoff.startRuntimeAttempt(1);
+    backoff.defer(1, undefined, true);
+    now = longDeadline;
+    backoff.startRuntimeAttempt(1);
+    expect(backoff.defer(1, undefined, true)).toBeGreaterThanOrEqual(300_000);
+    expect(backoff.serverRejectedToken(1)).toBe(true);
+    now += backoff.runtimeRemaining(1);
+    backoff.startRuntimeAttempt(1);
+    backoff.defer(1, undefined, true);
+    expect(backoff.serverRejectedToken(1)).toBe(true);
+    expect(backoff.runtimeRemaining(1)).toBeGreaterThanOrEqual(30_000);
+    expect(backoff.runtimeRemaining(1)).toBeLessThanOrEqual(60_000);
+
     expect(backoff.runtimeRemaining(2)).toBe(0);
     expect(backoff.defer(2, undefined, true)).toBeGreaterThanOrEqual(60_000);
     expect(backoff.runtimeRemaining(2)).toBe(backoff.remaining(2));

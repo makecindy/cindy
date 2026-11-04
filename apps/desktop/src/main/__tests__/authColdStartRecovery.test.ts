@@ -526,11 +526,13 @@ describe('saved login recovery after startup network failure', () => {
 // Unit regression: runtime refresh + its real timer must recover within 3 seconds
 // after three transport failures and a trusted 401 (2026-11-04 outage). Existing
 // cold-start tests and admission-only backoff tests never ran this timer path.
+// Each quick attempt now needs evidence received after the previous launch;
+// without it the original long deadline must resume (2026-11-04 follow-up).
 describe('runtime token rejection after an offline backoff', () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
 
-  it('recovers within three seconds, coalesces 401s, and preserves the long failure tier', async () => {
+  it('requires fresh 401 evidence for every quick attempt and retains its tier across an offline wait', async () => {
     const h = setup(0.5);
     h.activateRuntime();
     await h.runtimeRefresh();
@@ -545,15 +547,32 @@ describe('runtime token rejection after an offline backoff', () => {
     expect(h.request).toHaveBeenCalledTimes(4);
     expect(Date.now() + h.backoff.remaining(0)).toBe(longDeadline);
 
+    // No new evidence: the timer returns to the original long deadline, even
+    // though the quick tier's earliest retry time has already passed.
+    await vi.advanceTimersByTimeAsync(65_000);
+    expect(h.request).toHaveBeenCalledTimes(4);
+    expect(Date.now() + h.backoff.runtimeRemaining(0)).toBe(longDeadline);
+    await h.runtimeRefresh({ serverRejectedToken: true });
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(h.request).toHaveBeenCalledTimes(5);
+    expect(Date.now() + h.backoff.remaining(0)).toBe(longDeadline);
+
     let finish!: (result: unknown) => void;
     h.request.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
-    // First quick failure: equal jitter in [1.5s, 3s), independent of further 401s.
-    await vi.advanceTimersByTimeAsync(2_250);
+    await h.runtimeRefresh({ serverRejectedToken: true });
+    // Tier retained across the 65s outage: the next floor is 3s, not 1.5s.
+    await vi.advanceTimersByTimeAsync(3_000);
     expect(h.request).toHaveBeenCalledTimes(5);
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(h.request).toHaveBeenCalledTimes(6);
+    // Evidence received after launch (even while in flight) may authorize the
+    // following attempt, but never a concurrent request or a second deadline.
     const concurrent = [h.runtimeRefresh(), h.runtimeRefresh({ serverRejectedToken: true })];
-    finish(h.ok);
-    await expect(Promise.all(concurrent)).resolves.toEqual([true, true]);
-    expect(h.request).toHaveBeenCalledTimes(5);
+    finish({ ok: false, status: 0, data: null });
+    await expect(Promise.all(concurrent)).resolves.toEqual([false, false]);
+    h.request.mockResolvedValue(h.ok);
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(h.request).toHaveBeenCalledTimes(7);
     expect(h.saved.session.refreshToken).toBe('test-rotated');
     expect(h.backoff.remaining(0)).toBe(0);
     expect(h.deps.notifyAccessTokenRefreshed).toHaveBeenCalled();
@@ -568,6 +587,7 @@ describe('runtime token rejection after an offline backoff', () => {
     await vi.advanceTimersByTimeAsync(1_500); // One quick transport failure.
     const retryAt = Date.now() + 600_000;
     h.request.mockResolvedValue({ ok: false, status, retryAt, data: null });
+    await h.runtimeRefresh({ serverRejectedToken: true });
     await vi.advanceTimersByTimeAsync(2_250);
     expect(h.request).toHaveBeenCalledTimes(3);
     // The failed quick request consumes only the next long tier (2–4m).

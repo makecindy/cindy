@@ -6081,18 +6081,19 @@ export async function refresh(options?: { serverRejectedToken?: boolean }): Prom
   // Cold-start recovery owns rotation until it settles. Runtime callers must
   // not consume the same saved refresh token concurrently, or wait indefinitely.
   if (coldStartAuthInFlight !== null && (!accessToken || !currentUser)) return false;
-  if (refreshPromise !== null) return refreshPromise;
   // Explicit callers (including chat polling and resume) share the same wait
   // as the retry timer; skipped calls must not move the deadline forward.
   if (options?.serverRejectedToken && refreshBackoff.serverRejectedToken(authStateEpoch)) {
     scheduleRefreshRetry(authStateEpoch);
   }
+  if (refreshPromise !== null) return refreshPromise;
   if (refreshBackoff.runtimeRemaining(authStateEpoch) > 0) return false;
   if (refreshTimer !== null) {
     clearTimeout(refreshTimer);
     refreshTimer = null;
   }
 
+  refreshBackoff.startRuntimeAttempt(authStateEpoch);
   refreshPromise = (async () => {
     const refreshEpoch = authStateEpoch;
     const refreshWasSuperseded = (point: string): boolean => {

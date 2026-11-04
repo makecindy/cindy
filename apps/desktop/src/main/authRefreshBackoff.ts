@@ -6,6 +6,8 @@ export class AuthRefreshBackoff {
   private networkFailure = false;
   private quickRetryAt: number | null = null;
   private quickFailures = 0;
+  private quickNotBefore = 0;
+  private quickAttemptInFlight = false;
 
   constructor(
     private readonly now: () => number = () => Date.now(),
@@ -18,12 +20,25 @@ export class AuthRefreshBackoff {
 
   /** Runtime-only 401 evidence; cold-start/manual retries keep their own contract. */
   serverRejectedToken(epoch: number): boolean {
-    if (!this.networkFailure || this.remaining(epoch) <= 0 || this.quickRetryAt !== null) {
+    if (this.epoch !== epoch || !this.networkFailure || this.quickRetryAt !== null) return false;
+    // Evidence is consumed at launch. Evidence arriving during that request may
+    // authorize its successor, but must not start a second timer/request yet.
+    const candidate = Math.max(this.quickNotBefore, this.now() + Math.floor(this.random() * 3_000));
+    if (this.quickAttemptInFlight) {
+      this.quickRetryAt = candidate;
       return false;
     }
-    // Share one sampled deadline across all callers, never delay the existing retry.
-    this.quickRetryAt = Math.min(this.retryAt, this.now() + Math.floor(this.random() * 3_000));
+    // The ordinary retry wins if its deadline is earlier; do not misclassify it
+    // as a quick attempt and then immediately repeat it after a network failure.
+    if (candidate >= this.retryAt) return false;
+    this.quickRetryAt = candidate;
     return true;
+  }
+
+  startRuntimeAttempt(epoch: number): void {
+    if (this.epoch !== epoch) return;
+    this.quickAttemptInFlight = this.quickRetryAt !== null;
+    this.quickRetryAt = null;
   }
 
   runtimeRemaining(epoch: number): number {
@@ -36,16 +51,26 @@ export class AuthRefreshBackoff {
   defer(epoch: number, serverRetryAt?: number, networkFailure = false): number {
     if (this.epoch !== epoch) this.clear();
     this.networkFailure = networkFailure && serverRetryAt === undefined;
-    if (this.networkFailure && this.quickRetryAt !== null) {
+    const wasQuickAttempt = this.quickAttemptInFlight;
+    this.quickAttemptInFlight = false;
+    if (this.networkFailure && wasQuickAttempt) {
       // Equal jitter with ceilings 3s, 6s, 12s, 24s, 48s, then 60s.
-      // Do not advance the long backoff's tier or deadline on these attempts.
+      // Retain the tier, but only fresh evidence may schedule another quick try.
       const floor = Math.min(3_000 * 2 ** this.quickFailures, 60_000) / 2;
       this.quickFailures = Math.min(this.quickFailures + 1, 5);
-      this.quickRetryAt = this.now() + floor + Math.floor(this.random() * floor);
+      this.quickNotBefore = this.now() + floor + Math.floor(this.random() * floor);
+      if (this.quickRetryAt !== null) {
+        const candidate = Math.max(this.quickNotBefore, this.quickRetryAt);
+        this.quickRetryAt = candidate < this.retryAt ? candidate : null;
+      }
+      // No evidence: resume the original long deadline without advancing it.
       return this.runtimeRemaining(epoch);
     }
     this.quickRetryAt = null;
-    this.quickFailures = 0;
+    if (!this.networkFailure) {
+      this.quickFailures = 0;
+      this.quickNotBefore = 0;
+    }
     this.epoch = epoch;
     // Equal jitter: 1–2m, 2–4m, 4–8m, then 5–10m indefinitely. Add the
     // random spread AFTER a shared server deadline, not before a max() that
@@ -70,5 +95,7 @@ export class AuthRefreshBackoff {
     this.networkFailure = false;
     this.quickRetryAt = null;
     this.quickFailures = 0;
+    this.quickNotBefore = 0;
+    this.quickAttemptInFlight = false;
   }
 }
