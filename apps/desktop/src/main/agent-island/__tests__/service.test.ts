@@ -3295,6 +3295,42 @@ describe('AgentIslandService native publishing', () => {
     expect(publish.mock.calls.at(-1)?.[0].compactReminder).toBeUndefined();
   });
 
+  // Unit regression #8848: a dismissed waiting task must not silence a different
+  // task's completion. Existing sound tests do not cover the subtle projection.
+  it.each([false, true])('keeps completion sound after dismissing another task (subtle=%s)', async (subtle) => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const { AgentIslandService } = await import('../service.js');
+      const publish = vi.fn((state: AgentIslandDisplayState) => { void state; return true; });
+      const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+      const service = new AgentIslandService({ getMainWindow: () => null,
+        nativeHost: { failed: false, publish, playSound } });
+      syncEnabledForTest(service, publish);
+      service.registerIpc();
+      service.setSoundSettings({ enabled: true, sounds: {
+        ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds, complete: customSound('complete.wav'),
+      } });
+      handleInteractionRequestForTest(service, { sessionId: 'waiting' }, {
+        kind: 'permission', requestId: 'p', toolName: 'Bash', input: { command: 'pwd' },
+      });
+      vi.setSystemTime(2_000);
+      (service as unknown as { handleOutsideClick(): void }).handleOutsideClick();
+      expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ mode: 'compact', smartSuppressed: true });
+      registeredIpcHandler(AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL)({}, subtle);
+      playSound.mockClear();
+
+      service.handleAgentEvent({ sessionId: 'done' }, doneEvent());
+      expect(playSound).toHaveBeenCalledExactlyOnceWith(customSound('complete.wav'));
+      expect(publish.mock.calls.at(-1)?.[0].mode).toBe(subtle ? 'compact' : 'expanded');
+      // Republishing the same state must not replay the completion sound.
+      registeredIpcHandler(AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL)({}, subtle);
+      expect(playSound).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('publishes the selected mascot skin through native state', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {

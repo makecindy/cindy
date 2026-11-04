@@ -86,6 +86,28 @@ describe('subtle island reminders', () => {
     expect(next.pillSnapshot.attentionCount).toBe(3);
   });
 
+  // Review #8848: card-hover suppression must not block the collapsed island's
+  // deliberate hover. Existing subtle-reminder cases only exercise clicking.
+  it.each([
+    { phase: 'needs-interaction', hoverAt: 4_100 },
+    { phase: 'completed', hoverAt: 1_100 },
+  ] as const)('opens the list on hover for $phase in subtle mode', ({ phase, hoverAt }) => {
+    const state = createAgentIslandState();
+    state.subtleReminders = true;
+    if (phase === 'needs-interaction') {
+      applyAgentIslandInteractionRequest(state, { sessionId: 'task' }, permissionRequest('p'), 1_000);
+    } else {
+      applyAgentIslandEvent(state, { sessionId: 'task' }, doneEvent(), 1_000);
+    }
+
+    setAgentIslandHovered(state, true, hoverAt);
+    expect(buildAgentIslandDisplayState(state, hoverAt + 400).mode).toBe('compact');
+    const expanded = buildAgentIslandDisplayState(state, hoverAt + 510);
+    expect(expanded).toMatchObject({ mode: 'expanded', displaySurface: 'sessionList' });
+    expect(expanded.sessions.map(session => session.sessionId)).toEqual(['task']);
+    expect(expanded.compactReminder).toBeUndefined();
+  });
+
   it.each(['visible', 'muted'] as const)('does not pulse for a %s task', (suppression) => {
     const state = createAgentIslandState();
     state.subtleReminders = true;

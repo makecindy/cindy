@@ -1608,7 +1608,9 @@ export function buildAgentIslandDisplayState(
     displaySurface,
     layoutMode,
     appFocused: state.appFocused,
-    smartSuppressed: decision.smartSuppressed,
+    // A visible reminder can belong to a different task than the compact current.
+    // Its sound must not inherit that task's dismissed/suppressed presentation.
+    smartSuppressed: decision.smartSuppressed && !reminder,
     shadowVisible,
     currentSessionId: current?.sessionId ?? null,
     expandedDisplayId: displayPolicy === 'manualExpanded' ? state.hoverDisplayId : null,
@@ -1829,7 +1831,8 @@ function updateHoverLifecycle(state: AgentIslandState, now: number): void {
 }
 
 function isHoverExpansionSuppressedByReminder(state: AgentIslandState, now: number): boolean {
-  if (state.hoverExpanded) return false;
+  // Subtle reminders have no expanded card whose hover would replace its content.
+  if (state.hoverExpanded || state.subtleReminders) return false;
   if (hasBlockingSession(state, now)) return true;
   const activeTransient = getActiveTransientSession(state, now);
   return Boolean(activeTransient && !shouldSmartSuppressSession(state, activeTransient));
