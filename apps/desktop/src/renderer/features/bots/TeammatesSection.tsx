@@ -17,7 +17,6 @@ import {
   Pin,
   Settings,
   Trash2,
-  Users,
 } from 'lucide-react';
 import { matchPath, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -548,7 +547,7 @@ export function TeammatesSection() {
                 : entry.kind === 'cindy' ? cindyStatus : statusForBot(entry.bot);
               // 与展开行的「@」同口径:群(含话题)里有未读且 @ 了本人。
               const mentioned = entry.kind === 'group' && unread && entry.group.serverUnread?.mentioned === true;
-              const label = [name, ...(entry.kind === 'group' ? [t('bots.groupChat.sidebar.title')] : []), ...(status === 'idle' ? [] : [t(`bots.avatarStatus.${status}`)]),
+              const label = [name, ...(status === 'idle' ? [] : [t(`bots.avatarStatus.${status}`)]),
                 ...(mentioned ? [t('bots.groupChat.server.thread.hintMentioned')] : [])].join(' · ');
               return { entry, key, name, selected, unread, status, mentioned, label };
             });
@@ -582,11 +581,6 @@ export function TeammatesSection() {
                           <BotGroupSidebarAvatar members={entry.group.members} compact />
                         ) : (entry.kind === 'cindy' ? currentCindy?.bot : entry.bot) ? (
                           <BotAvatar bot={(entry.kind === 'cindy' ? currentCindy?.bot : entry.bot)!} size="strip" />
-                        ) : null}
-                        {entry.kind === 'group' ? (
-                          <span aria-hidden className="absolute -left-1 -top-1 flex size-4 items-center justify-center rounded-full bg-sidebar text-[var(--sidebar-nav-text)]">
-                            <Users size={12} />
-                          </span>
                         ) : null}
                         <TeammateStatusDot status={status} mentioned={mentioned} />
                       </span>

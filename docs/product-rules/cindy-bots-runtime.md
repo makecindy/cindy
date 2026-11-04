@@ -347,6 +347,10 @@ Cindy 应用，也不取消伙伴已委派的独立任务。操作中禁用重�
 
 离线、对方未响应、动作不支持与冲突都不引起布局跳动：离线提示浮在页面底部边缘（不占位，在线时页面与本机设置在同一位置），页面保留已读内容；写入失败沿用自动保存的失败与重试，
 记忆 / 例行任务的 revision 冲突沿用各自页面的冲突提示（失败以数据形式返回，保留 `PRECONDITION_FAILED` 与冲突标记）。
+主模型与备用模型均可保存远程供应商位置；主模型额外保留的顶层位置字段与链首项一致，
+切回本机或恢复本机默认时清空，不影响备用项。控制端通过完整模型链发送位置，省去派生的
+顶层位置字段以兼容旧主机；链内的远程位置不得省略。保存失败按已知错误区分参数、模型不可用、
+伙伴电脑离线与配置冲突；超时只说明保存结果未确认，未知异常保留通用提示，不显示原始错误。
 实现见 `RemoteTeammateSettings.tsx`、`remoteBotSettingsTarget.ts`、`localBotSettingsTarget.ts`、`BotSettingsDrawer.tsx`，
 主机侧见 `main/localDb/ipc/botRemoteSettingsHost.ts` 与 `botRemoteSettingsOps.ts`；手机见 Mobile `CompanionProfileSheet.tsx`。
 
@@ -414,10 +418,17 @@ harness + provider + model + effort + fastMode
 
 - 第一项是首选；首次主任务启动和确定性重建从第一项开始尝试。
 - 只有连接、鉴权、配额、容量、模型不可用和启动失败等“候选不可用”错误才进入下一项。
+  路由所在的另一台电脑结束或失联（`remote_agent_closed` / `remote_agent_lost`）也属于候选不可用；
+  供应商组的自动换电脑不接管伙伴任务，这类错误直接由伙伴候选链处理。来源主人主动断开
+  （`user-revoked`）和原电脑重连（`remote_agent_restarted`）不进入下一项。远程 Agent 丢失后本机
+  Session 随即自行关闭，已排期的续跑跨过这次关闭，换到下一项后只发“继续”，不重放原文
+  （对方电脑上的工具可能已经执行过）；普通任务遇到同样错误仍直接交还错误。
 - 候选不可用与原路由自动续跑分开判定；Pi 原生重连耗尽（`pi-gateway-drop`）仍可切到伙伴候选链。
   已落库失败回合只有在切换成功后才自动发送：有持久产出时只续跑，确认零产出才重发原文。
   候选耗尽、切换失败或需要换窗确认时交还错误，不继续重试失效路由；复用现有恢复额度和退避，
-  不覆盖用户的新选择。实现与回归见 `maker-ipc/botCandidateRecovery.ts`、
+  不覆盖用户的新选择。没有其它可用路由（单项候选链、例行任务显式模型）时不存在“候选耗尽”：
+  过载、空响应等普通任务会原路由续跑的错误照常原路由续跑，其余错误交还用户。
+  实现与回归见 `maker-ipc/botCandidateRecovery.ts`、
   `maker-ipc/__tests__/botCandidateRecovery.test.ts` 和 `sessionRuntimeFallbackIntent.test.ts`。
   跨 harness 路由已提交但新引擎启动失败时停止自动恢复并显示错误；不使用提交前的路由代次继续推进候选。
 - 定时自动化的恢复只属于当前运行轮次；候选耗尽或自动恢复放弃后，该轮按失败收口并保留错误记录，

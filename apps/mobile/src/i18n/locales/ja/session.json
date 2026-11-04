@@ -451,6 +451,7 @@
     "chipArchived": "アーカイブ済み",
     "titleFallback": "リモートセッション",
     "unnamedTitle": "名称未設定のセッション",
+    "openSection": "開く",
     "renameAction": "セッションの名前を変更",
     "copyLinkAction": "セッションリンクをコピー",
     "unpin": "ピン留めを解除",

@@ -1,3 +1,4 @@
+import { issueModelSourceSnapshot, modelSourceRequestSignature } from './model-source-snapshots.js';
 import { resolveCopilotAccountUrl } from './copilot-account-url.js';
 import { collectModelDiscoveryPages } from './model-discovery-pages.js';
 import type { DiscoveredModel } from '@cindy/model-providers';
@@ -336,5 +337,5 @@ export async function fetchProviderModels(
       detail: 'no models found in response',
     };
   }
-  return { ok: true, models };
+  return { ok: true, models: issueModelSourceSnapshot(models, spec.agent, modelSourceRequestSignature(url, init)) };
 }

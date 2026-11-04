@@ -753,45 +753,71 @@ describe('maker SEND transaction', () => {
     );
   });
 
-  it('forwards the exact Learn pin to Claude for provider-boundary expansion', async () => {
-    const grant = {
-      version: 1 as const,
-      sessionInstanceId: 'session-instance-1',
-      resolvedSkillPath: '/system-skills/v10/learn/SKILL.md',
-    };
-    const captureCindyLearnInvocation = vi.fn(async () => grant);
-    const claudeSession = createSession({ agentKind: 'claude-code' });
-    const { deps } = createDeps({
-      getSession: vi.fn(() => claudeSession),
-      captureCindyLearnInvocation,
-    });
+  // #8549 (unit): provider dispatch must retain the direct command and pin.
+  // Review found the missing state: a fresh engine-switch handoff preceding
+  // /cindy:learn. Keep it pending until an accepted ordinary message delivers it.
+  const learnDispatchCases = (['claude-code', 'pi'] as const).flatMap((agentKind) =>
+    ['/learn release flow', '/skill:learn release flow', '/cindy:learn'].flatMap((command) =>
+      [false, true].map((hasHandoff) => ({ agentKind, command, hasHandoff })),
+    ),
+  );
+  it.each(learnDispatchCases)(
+    'forwards the exact Learn pin and command: $agentKind $command handoff=$hasHandoff', async ({ agentKind, command, hasHandoff }) => {
+      const grant = {
+        version: 1 as const,
+        sessionInstanceId: 'session-instance-1',
+        resolvedSkillPath: '/system-skills/v10/learn/SKILL.md',
+      };
+      const captureCindyLearnInvocation = vi.fn<NonNullable<MakerSendTransactionDeps['captureCindyLearnInvocation']>>(async () => grant);
+      const learnSession = createSession({ agentKind });
+      let handoff = hasHandoff ? 'HANDOFF-TEXT' : null;
+      const consumePendingHandoff = vi.fn(() => { handoff = null; });
+      const { deps } = createDeps({
+        getSession: vi.fn(() => learnSession),
+        captureCindyLearnInvocation,
+        peekPendingHandoff: vi.fn(async () => handoff),
+        consumePendingHandoff,
+      });
+      const transaction = createMakerSendTransaction(deps);
 
-    await createMakerSendTransaction(deps).sendToAgentAccepted(
-      'session-1',
-      { type: 'user', content: '/learn release flow' },
-      undefined,
-      {
-        persistUserMessage: {
-          clientId: 'claude-learn-1',
-          content: '/learn release flow',
+      await transaction.sendToAgentAccepted(
+        'session-1',
+        { type: 'user', content: command },
+        undefined,
+        {
+          persistUserMessage: {
+            clientId: 'claude-learn-1',
+            content: command,
+          },
         },
-      },
-    );
+      );
 
-    expect(captureCindyLearnInvocation).toHaveBeenCalledTimes(1);
-    const sendOptions = vi.mocked(claudeSession.send).mock.calls[0]?.[1];
-    expect(sendOptions?.[PINNED_SKILL_INVOCATION]).toEqual({
-      name: 'learn',
-      path: grant.resolvedSkillPath,
-    });
-    expect(deps.createDbMessage).toHaveBeenCalledWith(
-      'session-1',
-      expect.objectContaining({
-        agentMeta: expect.objectContaining({ cindyLearnInvocation: grant }),
-      }),
-      undefined,
-    );
-  });
+      expect(captureCindyLearnInvocation).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(learnSession.send).mock.calls[0]?.[0]).toEqual({
+        type: 'user', content: command,
+      });
+      const sendOptions = vi.mocked(learnSession.send).mock.calls[0]?.[1];
+      expect(sendOptions?.[PINNED_SKILL_INVOCATION]).toEqual({
+        name: 'learn',
+        path: grant.resolvedSkillPath,
+      });
+      expect(deps.createDbMessage).toHaveBeenCalledWith(
+        'session-1',
+        expect.objectContaining({
+          agentMeta: expect.objectContaining({ cindyLearnInvocation: grant }),
+        }),
+        undefined,
+      );
+      expect(consumePendingHandoff).not.toHaveBeenCalled();
+
+      captureCindyLearnInvocation.mockResolvedValue(null);
+      await transaction.sendToAgentAccepted('session-1', { type: 'user', content: 'Continue' });
+      expect(vi.mocked(learnSession.send).mock.calls[1]?.[0]).toEqual(
+        withUiLanguageUserMessage(`${hasHandoff ? 'HANDOFF-TEXT\n\n' : ''}Continue`),
+      );
+      expect(consumePendingHandoff).toHaveBeenCalledTimes(hasHandoff ? 1 : 0);
+    },
+  );
 
   it('restamps a trusted local queue edit for the existing Desktop command route', async () => {
     const { deps, session } = createDeps();
