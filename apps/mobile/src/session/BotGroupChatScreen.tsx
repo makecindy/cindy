@@ -48,6 +48,7 @@ import { resolveRemoteText } from '@cindy/device-link';
 import {
   BOT_GROUP_REMOTE_COLLECTION_ID,
   isBotGroupRuntimeFailureCode,
+  isBotGroupCapabilityNoticeCode,
   resolveBotGroupQuote,
   BOT_GROUP_MEMBER_LINK_REL,
   botGroupQuoteFromMessage,
@@ -310,7 +311,10 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
       || measured.contentHeight - measured.offsetY - measured.viewportHeight >= STICK_TO_BOTTOM_PX) return;
     setSeen(previous => previous?.owner === viewportOwner && previous.sequence === latestSequence
       ? previous : { owner: viewportOwner, sequence: latestSequence });
-    const incoming = group.messages.filter(message => (!threadRootId || message.threadRootId === threadRootId) && message.kind === 'message' && message.isSelf !== true
+    const incoming = group.messages.filter(message => (!threadRootId || message.threadRootId === threadRootId)
+      && (message.kind === 'message' || (message.kind === 'notice' && message.authorKind === 'bot' && !message.deleted
+        && (message.threadRootId ?? undefined) === threadRootId && isBotGroupCapabilityNoticeCode(message.capabilityNoticeCode)))
+      && message.isSelf !== true
       && (message.authorKind === 'bot' || (message.authorKind === 'user' && message.isSelf === false))
     );
     if (chat.server && chat.markRead) { void chat.markRead(incoming.map(message => message.id)); return; }
@@ -527,12 +531,13 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     }
   };
 
-  const editPlanStep = async (planId: string, step: BotGroupPlanStepView, action: 'reassign' | 'remove', botId?: string, expectedRevision?: number) => {
+  const editPlanStep = async (planId: string, step: BotGroupPlanStepView, action: 'reassign' | 'remove' | 'skip', botId?: string, expectedRevision?: number) => {
     if (planPendingRef.current) return;
     const pending = {}; planPendingRef.current = pending;
     setPlanPending({ planId, action: 'edit' });
     try {
-      await chat.act('plan-edit', { planId, position: step.position, action, ...(botId ? { botId } : {}), ...(!deviceId ? { expectedRevision } : {}) });
+      await chat.act('plan-edit', { planId, position: step.position, action, ...(botId ? { botId } : {}),
+        ...(action === 'skip' ? { executionId: step.executionId } : {}), ...(!deviceId ? { expectedRevision } : {}) });
     } catch (error) {
       if (planPendingRef.current === pending) report(error, 'groupChat.plan.editFailed');
     } finally {
@@ -840,7 +845,7 @@ export function BotGroupTimeline({
   planPending: PlanPending | null;
   onContinue(): void;
   onPlanAction(action: BotGroupPlanAction, planId: string, revision?: number): void;
-  onEditStep(planId: string, step: BotGroupPlanStepView, action: 'reassign' | 'remove', botId?: string, revision?: number): void;
+  onEditStep(planId: string, step: BotGroupPlanStepView, action: 'reassign' | 'remove' | 'skip', botId?: string, revision?: number): void;
   onMessageLayout?: (id: string, y: number, height: number) => void;
   onLocateMessage?: (id: string) => void;
   highlightId?: string;
@@ -1011,7 +1016,7 @@ function BotGroupTimelineItem({
   planReassignable: boolean;
   planPending: BotGroupPlanCardAction | null;
   onPlanAction(action: 'start' | 'dismiss'): void;
-  onEditStep(step: BotGroupPlanStepView, action: 'reassign' | 'remove', botId?: string): void;
+  onEditStep(step: BotGroupPlanStepView, action: 'reassign' | 'remove' | 'skip', botId?: string): void;
 }) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
@@ -1026,6 +1031,7 @@ function BotGroupTimelineItem({
   if (message.kind === 'plan-end') return <BotGroupPlanEndDivider stepCount={plan ? plan.steps.length : null} />;
   if (message.kind === 'notice' || (message.authorKind === 'system' && message.kind !== 'plan')) {
     const name = message.authorName.trim() || member?.name || '';
+    if (isBotGroupCapabilityNoticeCode(message.capabilityNoticeCode)) return <Text style={styles.capabilityNotice} testID="botGroup.notice">{t(`groupChat.notice.capability.${message.capabilityNoticeCode}`, { name })}</Text>;
     if (isBotGroupRuntimeFailureCode(message.runtimeFailureCode)) {
       return <BotGroupRuntimeFailureNotice key={message.id} code={message.runtimeFailureCode} name={name} />;
     }
@@ -1162,6 +1168,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.lg, paddingTop: spacing.sm },
   olderNote: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, textAlign: 'center' },
   time: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, textAlign: 'center' },
+  capabilityNotice: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, textAlign: 'center' },
   notice: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, textAlign: 'center' },
   dividerText: { flexShrink: 1, color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, textAlign: 'center' },
   userRow: { flexDirection: 'row', justifyContent: 'flex-end' },

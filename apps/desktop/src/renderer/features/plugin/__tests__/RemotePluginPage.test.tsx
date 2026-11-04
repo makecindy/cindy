@@ -1023,5 +1023,33 @@ describe('remote task interactive-page consent prompt', () => {
     expect(invoke.mock.calls.filter(c => c[2]?.[0]?.actionId === 'management:answer')).toHaveLength(1);
     expect(screen.queryByText('newChat.pluginUi.ready')).toBeNull();
   });
+  // Unit, real prompt + push listener. Every remote task composer mounts this prompt; a
+  // working teammate's status pushes re-read the ~1 MB plugin snapshot each time and
+  // starved the link to that computer (2026-11-03: 86 snapshots, 129.5 MB). Plugin
+  // changes are always pushed with collectionId "plugins"; other collections must not
+  // re-read it, while a plugin change still must.
+  it.each([
+    ['teammates', 0],
+    ['bot-groups', 0],
+    ['plugin-results', 0],
+    ['plugins', 1],
+  ])('re-reads the plugin snapshot after a %s change: %i', async (collectionId, rereads) => {
+    setup(true);
+    let push: ((value: unknown, stamp?: unknown) => void) | undefined;
+    window.electronAPI.deviceLink.onRemotePush = ((listener: typeof push) => {
+      push = listener;
+      return () => {};
+    }) as never;
+    render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    await screen.findByText('newChat.pluginUi.enable');
+    const snapshots = () => invoke.mock.calls.filter(c => c[2]?.[0]?.actionId === 'management:snapshot').length;
+    const before = snapshots();
+    await act(async () => {
+      push!({ deviceId: 'computer-a', channel: 'maker:remote-resources:changed', payload: { collectionId } });
+    });
+    await waitFor(() => expect(snapshots()).toBe(before + rereads));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+    expect(snapshots()).toBe(before + rereads);
+  });
 
 });

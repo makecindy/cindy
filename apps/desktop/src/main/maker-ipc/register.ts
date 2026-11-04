@@ -1,3 +1,7 @@
+import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
+import { z as settingsSchema } from 'zod';
+import { registerPreferenceControlIpc } from '../app-settings/preferences.js';
+import { configureModelSettingsActions } from '../app-settings/models.js';
 import { createTaskCompletionDeliveryHost, type TaskCompletionDeliveryHost } from './taskCompletionDeliveryHost.js';
 import { setRoutineResultDispatch } from '../routines/deliveryDispatch.js';
 import { McpSetupBridge } from './mcpSetupBridge.js';
@@ -48,6 +52,7 @@ import {
   setPluginTaskHandler,
   setPluginTargetAdapter,
   setPluginObserveAdapter,
+  setPluginCompanionAdapter,
   assertPluginTargetQueuedDelivery,
   getPluginTaskSourceSessionId,
   setPluginTaskUninstaller,
@@ -63,6 +68,7 @@ import {
 } from '../cindy-brain/index.js';
 import { listPluginTargetCandidates, resolvePluginTargetSession } from './pluginTargetCandidates.js';
 import { assertPluginObservableTask, listPluginObserveTasks } from './pluginObserveTasks.js';
+import { createPluginCompanionHost } from './pluginCompanionHost.js';
 import { createPluginTargetStore } from './pluginTargetStore.js';
 import { collectPluginAttachmentPayloadTexts, withPluginMessageAttachments } from '../cindy-media/pluginMessageAttachments.js';
 import { isPluginTaskPermissionMode, type PluginTaskRoute, type PluginTaskRequest } from '../../shared/pluginTasks.js';
@@ -85,7 +91,8 @@ import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device
 import { configureBotAutonomyHost, getBotAutonomyGlance, noteBotAutonomyInputProjection } from '../bot-autonomy/hub.js';
 import { countMachineRunningTasks } from '../machines/directory.js';
 import { configureLocalMachineActivity, readLocalMachineStatus } from '../machines/localStatus.js';
-import { getHostSourceDevice, getSelfDeviceId, remoteBackgroundInvoke, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
+import { getHostSourceDevice, getSelfDeviceId, onRemotePushChannel, remoteBackgroundInvoke, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
+import { getAppCapabilities } from '../appCapabilities.js';
 import { readDeviceProviderViews, readRemoteProviderRoute } from '../remote-agent/controller/deviceCatalog.js';
 import { checkDeviceRoute } from '../remote-agent/controller/deviceRouteCheck.js';
 import { cancelPendingRemoteStart } from '../remote-agent/controller/startRemote.js';
@@ -750,6 +757,7 @@ import {
   type MemorySettings,
   writeMemorySetting,
 } from '../maker-host/memory-settings-store.js';
+import { updateMakerMemorySettings, type NativeMemoryPatch } from '../app-settings/memory.js';
 import { GLOBAL_PLUGIN_IDS } from '../maker-host/plugins/types.js';
 import {
   assertCollabProjectEnabled,
@@ -1108,6 +1116,8 @@ import {
   ORCA_EXECUTION_DEVICES_CHANNEL,
   ORCA_REMOTE_WORKER_BRIDGE_CHANNEL,
   COMPANION_CLOUD_CAPS_CHANNEL,
+  COMPANION_LIVE_CHANNEL,
+  REMOTE_RESOURCE_CHANGED_CHANNEL,
   MACHINE_STATUS_CHANNEL,
   COMPANION_CLOUD_FLUSH_CHANNEL,
   COMPANION_CLOUD_HAND_OVER_CHANNEL,
@@ -1312,6 +1322,7 @@ import {
   readCustomProviderKeyForMutation,
   removeCustomProviderHeaders,
   removeCustomProviderKey,
+  storeCustomMcpToken,
   storeCustomProviderHeaders,
   storeCustomProviderKey,
 } from '../secrets/providerSecretStore.js';
@@ -1585,7 +1596,7 @@ import {
   findActiveSessionByWorkdir,
 } from '../localDb/ipc/pluginWorkspaceSessions.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
-import { openMainWindowSession } from '../deepLink.js';
+import { getDeepLinkMainWindow, openMainWindowSession } from '../deepLink.js';
 import { handleSessionEvent, type SessionEventDependencies } from './sessionEventPipeline.js';
 import {
   createDeferredProductTurnFailureGate,
@@ -6396,8 +6407,8 @@ const sessionEventDependencies: SessionEventDependencies = {
   get broadcastToAllWindows() {
     return broadcastToAllWindows;
   },
-  get broadcastCodexImageAsToolResult() {
-    return broadcastCodexImageAsToolResult;
+  get deliverCodexGeneratedImage() {
+    return deliverCodexGeneratedImage;
   },
   get autoResumeBookkeeping() {
     return autoResumeBookkeeping;
@@ -6704,6 +6715,7 @@ export function applyNewMakerDraftRoute(route: BotModelRoute): void {
  * soon as the Renderer selects an owner, before the splash-gated Maker IPC bundle is available.
  */
 export function registerModelVisibilitySyncIpc(): void {
+  registerPreferenceControlIpc();
   registerModelFavoritesSync(broadcastToAllWindows);
   configureAppDefaultModelSelection((appDefaultSelection) => {
     broadcastToAllWindows(MAKER_PUSH.DRAFT_PREF_APPLY, {
@@ -7769,7 +7781,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return { dataOwnerId: session.dataOwnerId, generation: session.generation };
   });
 
-  registerProviderHandlers(createElectronIpcHandlerRegistry(), {
+  configureModelSettingsActions(registerProviderHandlers(createElectronIpcHandlerRegistry(), {
     listProviders: (opts) => getDesktopProviderService().listProviders(opts),
     isOrganizationManagedProviderId: (providerId) =>
       getActiveCatalog().providers.some(
@@ -8193,7 +8205,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ? removeCodexAccountCredentialsReversibly(providerId)
         : removeGenericOAuthCredentialsReversibly(storedCustomProviderId(providerId));
     },
-  });
+  }));
 
   // 自定义 MCP 服务器 CRUD —— CRUD 成功后刷新三个 agent 的 mcpProviders 数组
   // （下次新建会话生效）并广播 MCP_CHANGED 让设置页列表 live 刷新。
@@ -8230,6 +8242,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // Persisted MCP changes must eventually replace the frozen spawn config;
     // busy hosts keep their bridge until the existing idle retry can refresh it.
     invalidateCodex: refreshMcpHarnesses,
+    storeMcpToken: storeCustomMcpToken,
   });
   // Claude 原生 Auto 分类器不可用 → 会话仍保持 Auto，只把后续审批切到 Cindy reviewer。
   // coordinator 内部复核 DB 仍为 auto 并按 session 去重；不改偏好、不弹提示。
@@ -13538,6 +13551,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           message: params.message,
         }),
       });
+      // Chat-only dispatch allocates a queue id; keep the server execution identity
+      // so error recovery can restore the group's full background as well.
+      if (params.clientId?.startsWith(BOT_GROUP_CLIENT_ID_PREFIX)) queued.retrySourceClientId = params.clientId;
       const enqueue = () => inputCoordinator.enqueue(params.targetSessionId, queued, {
         resumeRestorePausedQueue: true,
       });
@@ -13739,6 +13755,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     || inputCoordinator.getQueueControlSnapshot(sessionId).pendingQueue.length > 0;
   const botGroupChatDeps: BotGroupChatServiceDeps = {
     chatHistoryStore: (endpoint, human, reader, current) => createSqliteChatHistoryStore(getDbClient(), endpoint, human, reader, current),
+    readLaneContext: (id) => {
+      const session = maker.getSession(id);
+      if (!session || session.getStatus() !== 'active' || !session.sdkSessionId) return null;
+      return { key: JSON.stringify([session.instanceId, session.sdkSessionId, session.agentKind, session.model,
+        getSessionProvider(id), session.getTurnGeneration()]), contextTokens: session.getUsageSnapshot().contextTokens };
+    },
     ensureLane: async (input) => {
       try {
         return await ensureBotGroupLaneSession(input);
@@ -15117,6 +15139,92 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       openMainWindowSession(taskId, { focus: 'if-active' });
     },
   });
+  // cindy.companions: changes reach watching plugins as content-free notices (island activity, companion
+  // homes, pushes from the computers companions run on); subscribed on first use, once the island service exists.
+  let invalidatePluginCompanions: () => void = () => {};
+  let companionChangesSubscribed = false;
+  const subscribeCompanionChanges = () => {
+    const island = getAgentIslandService();
+    if (companionChangesSubscribed || !island) return;
+    companionChangesSubscribed = true;
+    island.subscribeSessionActivity(() => invalidatePluginCompanions());
+    companionHomes.onChange(() => invalidatePluginCompanions());
+    // The sidebar's sessions subscription already brings these from every reachable computer.
+    onRemotePushChannel((deviceId, channel) => {
+      if (channel !== REMOTE_RESOURCE_CHANGED_CHANNEL && channel !== 'local-db:sessions:activity') return;
+      if (companionHomes.snapshot().actors.some(actor => actor.homeDeviceId === deviceId)) invalidatePluginCompanions();
+    });
+  };
+  let companionDevices: { at: number; value: Promise<Array<{ deviceId: string; name: string; online: boolean; reachable: boolean }> | null> } | null = null;
+  const companionHost = createPluginCompanionHost({
+    pending: getPendingInteractionsForSession,
+    openSession: (id, deviceId) => openMainWindowSession(id, { focus: 'if-active', ...(deviceId ? { deviceId } : {}) }),
+    flushMessages: drainPersistQueue,
+    resolve: (requestId, decision) => resolvePendingInteraction(requestId, decision as InteractionDecision),
+    // Cindy's own dialog over the main window: a plugin's page cannot draw or click it.
+    // It shows the whole request: the host only asks for what fits (allowHere), and says no to anything else.
+    confirmAllow: async ({ ghostId, companion, detail }) => {
+      if (!detail.allowHere) return false;
+      const window = getDeepLinkMainWindow();
+      const plugin = getInstalledGhostName(ghostId) ?? ghostId;
+      const fill = (key: string, values: Record<string, string>) =>
+        Object.entries(values).reduce((value, [name, replacement]) => value.replaceAll(`{{${name}}}`, replacement), t(key));
+      const body = detail.kind === 'plan' ? detail.plan : detail.preview;
+      const options = {
+        type: 'question' as const,
+        title: t('pluginCompanionAnswer.title'),
+        message: detail.kind === 'plan'
+          ? fill('pluginCompanionAnswer.planMessage', { companion })
+          : fill(`pluginCompanionAnswer.permissionMessage.${detail.action}`, { companion, tool: detail.subject ?? detail.tool }),
+        detail: `${body}\n\n${fill('pluginCompanionAnswer.source', { plugin })}`,
+        buttons: [t('pluginCompanionAnswer.allow'), t('pluginCompanionAnswer.cancel')], defaultId: 1, cancelId: 1,
+      };
+      const result = window && !window.isDestroyed() ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options);
+      return result.response === 0;
+    },
+    remote: {
+      // The same computers the sidebar reads teammates from: online, remote control on there, allowed here.
+      devices: () => {
+        if (!getAppCapabilities().canUseDeviceLink) return Promise.resolve(null);
+        if (companionDevices && Date.now() - companionDevices.at < 5_000) return companionDevices.value;
+        const value = handleListDevices(deviceDirectoryDeps()).then(({ devices }) => devices.filter(device => !device.isSelf).map(device => ({
+          deviceId: device.deviceId, name: device.name, online: device.online, reachable: device.remoteControlEnabled && device.controlEnabled,
+        })));
+        companionDevices = { at: Date.now(), value };
+        value.catch(() => { if (companionDevices?.value === value) companionDevices = null; });
+        return value;
+      },
+      // Background reads do not show the home computer as being controlled; older homes fall back like the sidebar.
+      invoke: async (deviceId, channel, args) => {
+        let result;
+        try {
+          result = await remoteBackgroundInvoke(deviceId, channel, args);
+        } catch (error) {
+          if (!String((error as { code?: unknown })?.code ?? (error as Error)?.message).includes('UNSUPPORTED_CAPABILITY')) throw error;
+          result = await invokeBotPeer(deviceId, channel, args);
+        }
+        if (!result.ok) throw Object.assign(new Error(result.error.code), { code: result.error.code });
+        return result.result;
+      },
+      // Answering there goes the way remote control answers: the generic resolve channel, its origin gate included.
+      write: async (deviceId, channel, args) => {
+        const result = await invokeBotPeer(deviceId, channel, args);
+        if (!result.ok) throw Object.assign(new Error(result.error.code), { code: result.error.code });
+        return result.result;
+      },
+    },
+  });
+  // Another computer of this account shows companions running here: same view as a plugin here gets.
+  makerSessionRegistry.handle(COMPANION_LIVE_CHANNEL, (_event, raw: unknown) => companionHost.serveRemote(raw));
+  const companionHub = setPluginCompanionAdapter({
+    ...companionHost,
+    list: guard => {
+      settleCompanionOwner();
+      subscribeCompanionChanges();
+      return companionHost.list(guard);
+    },
+  });
+  invalidatePluginCompanions = () => companionHub?.invalidate();
   let pluginTargetReviewReady = false;
   setPluginTargetAdapter({
     prepareInvocation: preparePluginInvocation,
@@ -20728,21 +20836,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // sendToAgent 同步触发的新 attempt（即使 runId 相同）不会被旧派发清掉。
         clearSchedulerAutoResumePending(sessionId, item.origin.runId, attemptToken);
       }
-      // 「继续任务」只能在 vendor dispatch 不可逆后 durable ack：
-      // - enqueue 时 ack：排队可取消，旧中断横幅回不来；
-      // - onAccepted 时 ack：仍可能 cancelled-before-dispatch，且无新 started，
-      //   旧横幅被抹掉、隐藏续跑行也不可操作，任务会静默丢失。
-      // dispatch 返回前 agent 事件可能已经写入新 started；因此 durable ack 使用
-      // 进入 vendor 前冻结的时间戳，既确认旧中断，又不会盖过新 turn 的 started。
-      if (item.originalSyntheticTrigger !== 'continue') return;
-      try {
-        await ackSessionTurnEndedDurable(sessionId, preVendorDispatchAt);
-      } catch (err) {
-        log.warn('continue dispatched ack failed', {
-          sessionId,
-          err: err instanceof Error ? err.message : String(err),
-        });
-      }
+      // 旧中断的 durable ack 统一由 makerSendTransaction 在真正派发后处理，
+      // 普通消息和「继续任务」共用同一路径；这里不再重复确认。
     },
     noteSessionClearBoundary,
     // 复用真人活跃边界：队首 Retry / Continue 和新输入尚未落库时也开始新限额周期。
@@ -21990,7 +22085,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           sendTrace?.stage('dedupe');
         }
 
-        // 「继续任务」durable ack 延后到 vendor dispatch 成功（onDispatchedUserTurn）：
+        // 「继续任务」durable ack 延后到共享发送事务的 vendor dispatch 成功后：
         // 排队可取消时旧中断提示必须能恢复；accepted 但仍可能 cancelled-before-dispatch
         // 时也不能提前 ack。续跑项本身由 coordinator 插到队首（普通输入仍 FIFO）。
         let duplicate = false;
@@ -25886,7 +25981,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return maker.getAgentMemoryStatus(agentKind);
   });
 
-  ipcMain.handle(MAKER_INVOKE.MEMORY_SET, async (_e, agentKind: unknown, enabled: unknown) => {
+  const updateNativeMemorySetting = async (agentKind: unknown, enabled: unknown) => {
     if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi') {
       throwIpcError(
         'INVALID_PARAMS',
@@ -25917,7 +26012,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       customizedKeys: settingsState.customizedKeys,
       defaults: settingsState.defaults,
     };
-  });
+  };
+  ipcMain.handle(MAKER_INVOKE.MEMORY_SET, async (_e, agentKind: unknown, enabled: unknown) => { return updateNativeMemorySetting(agentKind, enabled); });
 
   ipcMain.handle(MAKER_INVOKE.MEMORY_RESET, async (_e, agentKind: unknown) => {
     if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi') {
@@ -25930,7 +26026,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return maker.resetAgentMemory(agentKind);
   });
 
-  ipcMain.handle(MAKER_INVOKE.MAKER_MEMORY_SET_ENABLED, async (_e, enabled: unknown) => {
+  const updateMakerMemorySetting = async (enabled: unknown, nativePatch: NativeMemoryPatch = {}) => {
     if (typeof enabled !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'enabled required (boolean)');
     }
@@ -25943,50 +26039,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 立刻按新值注入);native setMemory 的 live-host RPC 热推放 applyRuntime ——
     // Codex busy 的延迟路径把它挪到所有会话空闲后执行,不 mid-turn 热更正在跑的
     // 任务(review P1 2026-07-23)。
-    const wasEnabled = makerMemory.isEnabled();
-    let persistedSettings: MemorySettings | null = null;
-    return applyMemoryChangeWithCodexRestart({
-      persist: async () => {
-        // Persist before changing the manager. A failed maker:false write must reject the toggle
-        // instead of presenting an opt-out that silently disappears after restart.
-        const settingsState = writeMemorySetting('maker', enabled, { preserveDefault: enabled });
-        persistedSettings = settingsState.value;
-        const result = enabled
-          ? await makerMemory.enable({ skipAgentSync: true })
-          : await makerMemory.disable();
-        // Claude 的原生覆盖立即应用(纯内存,不碰 busy 的 Codex host)——
-        // 延迟路径下新建 Claude 会话也要立刻符合最新设置(review P1 2026-07-23)。
-        if (enabled) {
-          await makerMemory.syncNativeAgentsOff(['claude-code']);
-        } else if (!settingsState.value.maker) {
-          await maker.setAgentMemory('claude-code', settingsState.value.claudeCode);
-        }
-        return {
-          ...result,
-          isCustomized: settingsState.isCustomized,
-          customizedKeys: settingsState.customizedKeys,
-          defaults: settingsState.defaults,
-        };
-      },
-      applyRuntime: async () => {
-        if (enabled) {
-          await makerMemory.syncNativeAgentsOff(['codex']);
-        } else if (persistedSettings && !persistedSettings.maker) {
-          await maker.setAgentMemory('codex', persistedSettings.codex);
-        }
-        // 开关翻转 ⇒ 重建 codex bridge, 理由与约束见
-        // shutdownAgentMcpEnvironmentsBestEffort 文档 (review R1 P2)。
-        if (wasEnabled !== enabled) {
-          await shutdownAgentMcpEnvironmentsBestEffort('maker-memory toggle');
-        }
-      },
+    return updateMakerMemorySettings(enabled, nativePatch, {
+      makerMemory, maker, writeMemorySetting,
+      applyChange: applyMemoryChangeWithCodexRestart,
+      invalidateBridge: shutdownAgentMcpEnvironmentsBestEffort,
     });
-  });
+  };
+  ipcMain.handle(MAKER_INVOKE.MAKER_MEMORY_SET_ENABLED, async (_e, enabled: unknown) => { return updateMakerMemorySetting(enabled); });
 
   // MEMORY_GET_SETTINGS 故意不在这里注册 —— renderer/index.tsx 在 React mount
   // 之前 (远早于 splash 完成) 就会调一次, 所以挂在 bootstrap-electron 的早期
   // registerIpcHandlers() 里, 见那里的注释。
-  ipcMain.handle(MAKER_INVOKE.MEMORY_RESET_SETTINGS, async () => {
+  const restoreMemorySettings = async () => {
     // 同 MAKER_MEMORY_SET_ENABLED 的 persist / applyRuntime 拆分。
     const wasMakerEnabled = maker.makerMemory?.isEnabled() ?? false;
     let resetSettings_: MemorySettings | null = null;
@@ -26028,6 +26092,35 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
       },
     });
+  };
+  ipcMain.handle(MAKER_INVOKE.MEMORY_RESET_SETTINGS, async () => { return restoreMemorySettings(); });
+
+  registerRuntimeSettingsSection({
+    id: 'memory', title: '记忆开关', description: 'Cindy 记忆和各引擎记忆的开关。恢复默认只恢复开关，不删除已有记忆。',
+    effective: 'immediate-or-when-idle',
+    schema: settingsSchema.strictObject({ maker: settingsSchema.boolean().optional(), claudeCode: settingsSchema.boolean().optional(),
+      codex: settingsSchema.boolean().optional(), pi: settingsSchema.boolean().optional() }),
+    read: () => ({ ...memorySettingsWire(), runtime: { maker: maker.makerMemory?.isEnabled() ?? null } }),
+    update: async patch => {
+      const next = { ...readMemorySettingsState().value, ...patch };
+      if (next.maker && (patch.claudeCode !== undefined || patch.codex !== undefined))
+        throwIpcError('INVALID_PARAMS', 'Disable Cindy memory before changing native memory, as in Settings');
+      let result: unknown;
+      if (patch.maker !== undefined) {
+        const nativePatch: NativeMemoryPatch = {};
+        for (const key of ['claudeCode', 'codex', 'pi'] as const) {
+          if (typeof patch[key] === 'boolean') nativePatch[key] = patch[key];
+        }
+        return updateMakerMemorySetting(patch.maker, nativePatch);
+      }
+      for (const key of ['claudeCode', 'codex', 'pi'] as const) {
+        if (patch[key] !== undefined) {
+          await updateNativeMemorySetting(key === 'claudeCode' ? 'claude-code' : key, patch[key]);
+          if (readMemorySettingsState().value[key] !== patch[key]) throwIpcError('INTERNAL', 'memory setting was not persisted');
+        }
+      }
+      return result;
+    }, reset: restoreMemorySettings,
   });
 
   ipcMain.handle(MAKER_INVOKE.MAKER_MEMORY_RESET, async () => {
@@ -26359,9 +26452,22 @@ const generatedImageDelivery = createGeneratedImageDelivery({
 });
 setGeneratedImageRecovery((sessionId) => generatedImageDelivery.recover(sessionId), () => generatedImageDelivery.reconcile());
 
-async function broadcastCodexImageAsToolResult(sessionId: string, event: AgentEvent): Promise<void> {
-  try { await generatedImageDelivery.deliver(sessionId, event); }
-  catch { log.warn('Codex generated image delivery could not be persisted', { sessionId }); }
+/**
+ * Live delivery of a Codex native generated image. The returned promise resolves
+ * with the tool events published for it (`[]` when none), so the wire listener can
+ * hold the Session stream and hand them to IM / hook listeners before `done`.
+ */
+function deliverCodexGeneratedImage(sessionId: string, event: AgentEvent): Promise<readonly AgentEvent[]> {
+  const warn = () => log.warn('Codex generated image delivery could not be persisted', { sessionId });
+  try {
+    const run = generatedImageDelivery.start(sessionId, event);
+    if (!run) return Promise.resolve([]);
+    run.completion.catch(warn);
+    return run.published;
+  } catch {
+    warn();
+    return Promise.resolve([]);
+  }
 }
 
 function broadcastSyntheticToolEvent(

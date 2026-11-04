@@ -167,6 +167,7 @@ import {
   MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT,
 } from '@/session/MobileComposerInputRow';
 import { MAX_FONT_SIZE_MULTIPLIER, Text } from '@/components/AppText';
+import { pluginCardPlainText } from '@/plugins/pluginCardText';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type {
   NormalizedAttachment,
@@ -7040,11 +7041,19 @@ function PluginResultCard({ callId, sessionId, excludedUrls, actions }: {
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
   if (hidden) return null;
+  // Desktop draws every plugin card in a frame; mail cards already draw their own.
+  const mailCard = blocks?.some((block) => block.primitive === 'plugin-card-actions'
+    && !!((block.data as { mail?: unknown; legacyMail?: unknown } | undefined)?.mail || (block.data as { legacyMail?: unknown } | undefined)?.legacyMail));
+  // With live controls the card's text becomes their title and detail lines (Desktop's layout).
+  const controlsText = !mailCard && actions.remoteDeviceId && blocks?.some((block) => block.primitive === 'plugin-card-actions')
+    ? blocks.find((block) => block.id === 'text' && block.primitive === 'markdown') : undefined;
   return (
-    <View style={styles.toolMediaBlock} testID="message.pluginResultCard">
+    <View style={mailCard ? styles.toolMediaBlock : styles.pluginResultCard} testID="message.pluginResultCard">
     {blocks?.map((block) => {
+      if (block === controlsText) return null;
       if (block.primitive === 'plugin-card-actions') return (
             <PluginCardActions key={block.id} data={block.data} deviceId={actions.remoteDeviceId} sessionId={sessionId} callId={callId}
+        text={controlsText ? pluginCardPlainText(controlsText.fallbackMarkdown) : undefined}
         onOpenAttachment={actions.onOpenPayload ? (url, name) => actions.onOpenPayload!(buildMediaPayload({ kind: 'image', url, previewable: true }, name)) : undefined} />
           );
       const url = (block.data as { url?: unknown } | undefined)?.url;
@@ -7066,8 +7075,7 @@ function PluginResultCard({ callId, sessionId, excludedUrls, actions }: {
           );
         }
         return (
-          <MarkdownBody key={block.id} text={block.fallbackMarkdown} layout={layout} streaming={false} selectable
-        onOpenPayload={actions.onOpenPayload} onOpenSessionLink={actions.onOpenSessionLink} />
+          <Text key={block.id} selectable style={mailCard ? styles.messageText : styles.pluginResultCardText}>{pluginCardPlainText(block.fallbackMarkdown)}</Text>
         );
     })}
     {!blocks && !error ? (
@@ -9650,6 +9658,16 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   // tool 产出媒体独立块:agent 侧左对齐,逐个竖排(图片 attachment 帧自带圆角)。
   toolMediaBlock: { alignItems: 'flex-start', maxWidth: '100%' },
+  pluginResultCard: {
+    alignSelf: 'stretch',
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.container,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceElevated,
+  },
+  pluginResultCardText: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body },
   imagePreviewWrap: {
     backgroundColor: colors.surfaceChip,
     borderRadius: radius.container,

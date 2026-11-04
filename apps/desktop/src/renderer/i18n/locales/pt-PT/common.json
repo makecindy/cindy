@@ -1972,6 +1972,8 @@
       "add": {
         "title": "Adicionar uma máquina remota",
         "alias": "Alias",
+        "aliasHint": "Usa 1 a 128 caracteres: letras inglesas, números ou . _ @ : -. Para outros caracteres, usa Nome apresentado.",
+        "aliasInvalid": "O alias contém caracteres não suportados ou excede 128 caracteres. Segue as regras acima.",
         "displayName": "Nome apresentado",
         "displayNamePlaceholder": "Nome opcional apresentado na Cindy",
         "hostname": "Nome do anfitrião",
@@ -7664,6 +7666,9 @@
         "agentObserve": "Pode ver a lista e o estado das sessões dos projetos locais",
         "agentObserveDetail": "Pode ver o título, o tipo de agente, se está arquivada e o estado (em execução, requer atenção, última atividade) das sessões dos projetos locais registados, e abrir uma sessão na janela principal. Não pode ler mensagens, planos ou ficheiros, nem enviar mensagens ou alterar sessões.",
         "agentObserveRequest": "Rever permissão para ver sessões",
+        "agentCompanions": "Pode ver os colegas, o respetivo estado e a conversa recente",
+        "agentCompanionsDetail": "Pode ver todos os colegas, incluindo os que são executados nos seus outros computadores: nome, descrição, avatar, estado (a trabalhar, a aguardar por si, inativo, offline), o tipo de passo em que cada um está (como a pensar ou a executar uma ferramenta), os pedidos que aguardam por si tal como os cartões os mostram (perguntas, comandos a executar, planos) e a conversa recente do chat principal (até 50 das suas mensagens e das respostas deles, sem os passos de ferramentas); e abrir a conversa de um colega na janela principal. Com a permissão de entregar mensagens também, pode transmitir as respostas que der no plugin: responder a perguntas, recusar pedidos e comentar planos. Para permitir um passo, continua a clicar na confirmação do próprio Cindy. Não pode ler ficheiros, passos de ferramentas nem raciocínios.",
+        "agentCompanionsRequest": "Rever permissão para ver colegas",
         "agentHiddenTasks": "Pode criar tarefas em segundo plano ocultas da lista de tarefas",
         "agentHiddenTasksDetail": "As tarefas criadas por este plugin podem ficar fora da lista de tarefas, da pesquisa e das notificações. Pode sempre vê-las, abri-las ou mostrá-las na lista de tarefas a partir de Tarefas em segundo plano na página deste plugin; desinstalar o plugin volta a mostrá-las.",
         "agentErrand": "Criar tarefas, realizar trabalho e ler resultados",
@@ -10342,6 +10347,7 @@
       "continueEditing": "Continuar a editar"
     },
     "profileSaveFailed": "Não foi possível guardar as definições do colega. Não foram aplicadas alterações.",
+    "profileSaveOffline": "Não é possível ligar ao computador do colega. Restabeleça a ligação e volte a guardar.",
     "modelLabel": "Modelo",
     "modelUnavailable": "{{model}} (atualmente indisponível)",
     "codexAutomaticCompact": "Os colegas Codex compactam o contexto autonomamente, e /new mantém a tarefa atual. Só deve iniciar uma nova tarefa quando precisar mesmo de começar do zero.",
@@ -10677,6 +10683,11 @@
           "NETWORK_ERROR": "{{name}} não conseguiu responder: a ligação de rede falhou.\nVerifique a rede ou o proxy e volte a enviar a mensagem.",
           "RUNTIME_TIMEOUT": "{{name}} não respondeu dentro do tempo limite.\nVolte a enviar a mensagem ou escolha outro modelo disponível.",
           "RUNTIME_ERROR": "{{name}} não conseguiu responder desta vez.\nVolte a enviar a mensagem. Se continuar a falhar, consulte os registos e comunique o problema."
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} não pôde executar a ferramenta: a autorização do grupo expirou ou não permite esta ação. O proprietário do colega pode repetir o pedido neste grupo.",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "Não foi possível verificar a autorização de grupo de {{name}}, pelo que a ferramenta não foi executada. Tente novamente quando a ligação for restabelecida.",
+          "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha na transferência ou ao limite de anexos. Reenvie os anexos necessários para este pedido."
         }
       },
       "settings": {
@@ -10746,7 +10757,8 @@
         "lifecycleUnavailable": "O servidor ou computador atual ainda não suporta esta ação.",
         "groupDissolved": "Este grupo foi dissolvido. Ainda pode ler o histórico disponível.",
         "lastOwner": "Transfira a propriedade ou dissolva este grupo antes de sair.",
-        "allBotsMentionDisabled": "O proprietário do grupo ainda não ativou @Todos os colegas."
+        "allBotsMentionDisabled": "O proprietário do grupo ainda não ativou @Todos os colegas.",
+        "turnAlreadyStarted": "Este colega já começou e não pode ser ignorado"
       },
       "organizer": "Organizador",
       "plan": {
@@ -10779,7 +10791,17 @@
         "allTurns_other": "Os {{count}} colegas",
         "foldTurns": "Mostrar menos",
         "intro_many": "São necessários {{count}} passos. Eis quem faz o quê:",
-        "allTurns_many": "Os {{count}} colegas"
+        "allTurns_many": "Os {{count}} colegas",
+        "stepQueued": "À espera de início",
+        "stepExecuting": "Em execução",
+        "stepSkipped": "Ignorado",
+        "skippingTurn": "A saltar…",
+        "queueWaiting": "À espera que continues",
+        "skipTurnLabel": "Saltar {{name}}",
+        "queueEnded": "Ronda terminada",
+        "talkTitle": "Ouvir todos à vez",
+        "talkPending": "Não iniciado",
+        "skipTurn": "Saltar"
       },
       "speaking": {
         "planning": "A dividir o trabalho…"
@@ -11129,7 +11151,7 @@
         "items": {
           "tasks": {
             "title": "Tarefas",
-            "body": "Decide quando iniciar uma tarefa em segundo plano, controla as que iniciou e traz o resultado para o chat, incluindo nos teus outros computadores."
+            "body": "Conhece as tarefas que pode controlar e os computadores disponíveis. Organiza e acompanha tarefas a teu pedido, traz os resultados e verifica as operações suportadas antes de trabalhar noutro computador."
           },
           "teammates": {
             "title": "Outros colegas",
@@ -11144,8 +11166,8 @@
             "body": "Lembra-se das tuas preferências e do teu contexto, confirma antes de usar e atualiza quando algo muda."
           },
           "self": {
-            "title": "Conhecer-se",
-            "body": "Sabe o que consegue fazer e ativa ou desativa funcionalidades por ti; para Telegram, MCP ou plugins, consulta primeiro a ajuda do Cindy."
+            "title": "Conhecer e configurar o Cindy",
+            "body": "Conhece as funções e a utilização do Cindy e consulta ou altera definições a teu pedido. Pede-te na tarefa que preenchas ou confirmes o que for necessário."
           }
         }
       },
@@ -13832,7 +13854,7 @@
       "REMOTE_PROVIDER_UPDATING": "As credenciais deste fornecedor de modelos estão a ser atualizadas. Tenta novamente dentro de instantes.",
       "REMOTE_WORKDIR_UNAVAILABLE": "O diretório de trabalho remoto está indisponível. Verifica se a pasta ainda existe nesse computador e tenta novamente.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "O computador ainda não consegue confirmar se esta mensagem foi enviada. Aguarda um momento e tenta novamente. Não envies a mesma mensagem duas vezes.",
-      "REMOTE_AGENT_UNAVAILABLE": "Não é possível contactar o computador que executa o Agent. Certifica-te de que está online e permite o controlo remoto e tenta novamente.",
+      "REMOTE_AGENT_UNAVAILABLE": "A ligação ao computador que executa o Agent foi interrompida. Tenta novamente. Se continuar a acontecer, certifica-te de que está online e permite o controlo remoto.",
       "REMOTE_AGENT_PEER_TOO_OLD": "A versão do Cindy no outro computador é demasiado antiga para esta ação. Atualize primeiro o Cindy nesse computador.",
       "REMOTE_AGENT_EXPIRED": "Esta sessão já terminou no computador que executa o Agent. Envia a tua mensagem novamente.",
       "REMOTE_AGENT_NOT_FOUND": "Esta sessão já terminou no computador que executa o Agent. Envia a tua mensagem novamente.",
@@ -13959,6 +13981,18 @@
       "cancelTitle": "Parar de esperar e remover esta mensagem"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "Nenhum tópico de revisão aberto",
+        "mergeReady": "Pronta para integrar",
+        "mergeConflict": "Tem conflitos",
+        "mergeBehind": "Atrás do ramo base",
+        "mergeApproval": "A aguardar aprovação",
+        "mergeChanges": "Alterações pedidas",
+        "mergeWaiting": "A aguardar integração",
+        "merged": "Integrada",
+        "closed": "Fechada",
+        "draft": "Rascunho"
+      },
       "verb": "Plugin utilizado",
       "cardRunning": "O plugin está a desenhar",
       "cardDone": "Concluído",
@@ -13972,6 +14006,7 @@
       "collapseFields": "Recolher",
       "formSyncFailed": "As alterações ao cartão não foram sincronizadas. Verifique a ligação e continue a editar; a mensagem não foi enviada.",
       "linkOpenFailed": "Não foi possível abrir a ligação",
+      "modelSelectFailed": "O modelo não foi alterado. Escolha novamente.",
       "mailPreview": "Pré-visualização do email",
       "mailEnlarge": "Ampliar pré-visualização",
       "mailInsertImage": "Inserir na mensagem",
@@ -16173,7 +16208,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "Ver detalhes da Skill",
-    "projectSkillNotLoaded": "Esta tarefa Pi não carregou esta Skill do projeto. As novas tarefas tentarão carregá-la automaticamente."
+    "projectSkillNotLoaded": "Esta tarefa Pi não carregou esta Skill do projeto. As novas tarefas tentarão carregá-la automaticamente.",
+    "pluginSkillSetup": {
+      "install": "Não instalado",
+      "enable": "Desativado"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "Abre um PR, corrige a CI e o feedback de revisão e acompanha até ser integrado · Requer instalar o plugin do GitHub",
+        "enable": "Abre um PR, corrige a CI e o feedback de revisão e acompanha até ser integrado · Requer ativar o plugin do GitHub"
+      }
+    }
   },
   "skillhub": {
     "remote": {
@@ -18905,6 +18950,21 @@
     "allow": "Permitir e continuar",
     "cancel": "Agora não"
   },
+  "pluginCompanionAnswer": {
+    "title": "Confirmar permissão",
+    "planMessage": "Deixar {{companion}} começar a trabalhar neste plano?",
+    "permissionMessage": {
+      "command": "Permitir que {{companion}} execute este comando?",
+      "file-read": "Permitir que {{companion}} leia estes ficheiros?",
+      "file-write": "Permitir que {{companion}} altere estes ficheiros?",
+      "browser": "Permitir que {{companion}} execute este passo no navegador?",
+      "plugin": "Permitir que {{companion}} utilize «{{tool}}»?",
+      "tool": "Permitir que {{companion}} utilize {{tool}}?"
+    },
+    "source": "Escolheu Permitir no plugin «{{plugin}}». O {{appName}} confirma aqui mais uma vez; depois, o colega continua.",
+    "allow": "Permitir",
+    "cancel": "Cancelar"
+  },
   "groupTools": {
     "authorizationRequired": "A autorização do grupo expirou ou não permite esta ação. Peça ao proprietário do colega para fazer um novo pedido neste grupo.",
     "localPeersOnly": "As mensagens de grupo só podem ser dirigidas a colegas neste dispositivo e nesta conta.",
@@ -18990,6 +19050,310 @@
     "openVideoSource": "Abrir vídeo original",
     "calculationUnavailable": "Não foi possível calcular este valor.",
     "incomplete": "Não foi possível apresentar algum conteúdo."
+  },
+  "setupMigration": {
+    "title": "Assistente de migração",
+    "back": "← Voltar",
+    "cancel": "Cancelar",
+    "listSeparator": ", ",
+    "steps": {
+      "label": "Etapas de configuração",
+      "source": "Computador",
+      "review": "Conteúdo",
+      "apply": "Transferir"
+    },
+    "source": {
+      "description": "Escolha um computador com sessão iniciada nesta conta. Os plugins, competências, definições e ligações dele são configurados aqui da mesma forma; os inícios de sessão e as chaves só saem desse computador se o permitir nele.",
+      "loading": "A procurar os seus outros computadores…",
+      "empty": "Não foram encontrados outros computadores para esta conta. Inicie sessão no Cindy noutro computador e volte a abrir isto",
+      "loadFailed": "Não foi possível carregar os seus computadores",
+      "reload": "Recarregar computadores",
+      "ready": "Online, pronto para transferir",
+      "next": "Ler definições",
+      "readAgain": "Voltar a ler",
+      "unavailable": {
+        "offline": "Offline. Abra o Cindy nesse computador para transferir a partir dele",
+        "remote-control-off": "Ative primeiro “Permitir que dispositivos da mesma conta controlem este computador” nesse computador",
+        "control-disabled": "O controlo desse computador está desativado aqui. Volte a ativá-lo em Ligação remota"
+      }
+    },
+    "reading": "A ler as definições de “{{name}}”…",
+    "errors": {
+      "SETUP_SOURCE_OUTDATED": "O Cindy em “{{name}}” é demasiado antigo para transferir. Atualize o Cindy nesse computador e tente novamente",
+      "SETUP_SOURCE_UNAVAILABLE": "Não foi possível ler as definições de “{{name}}”. Esse computador tem de estar online com “Permitir que dispositivos da mesma conta controlem este computador” ativado",
+      "SETUP_SNAPSHOT_INVALID": "Não foi possível ler as definições de “{{name}}”. Isto acontece quando os dois computadores usam versões diferentes do Cindy; atualize ambos para a mesma versão e tente novamente",
+      "SETUP_PLAN_EXPIRED": "Esta lista expirou. Volte a ler as definições de “{{name}}”",
+      "GENERIC": "Não foi possível ler as definições de “{{name}}”"
+    },
+    "review": {
+      "description": "Escolha o que transferir de “{{name}}” para este computador. As definições que já alterou neste computador são mantidas.",
+      "partial": "Desta vez não foi possível ler parte do conteúdo desse computador. Abaixo aparece apenas o que foi lido.",
+      "groupCount": "{{selected}} de {{total}} selecionados",
+      "present_one": "Mais {{count}} item já é igual aqui",
+      "present_other": "Mais {{count}} itens já são iguais aqui",
+      "present_many": "Mais {{count}} itens já são iguais aqui",
+      "start_one": "Transferir {{count}} item",
+      "start_other": "Transferir {{count}} itens",
+      "start_many": "Transferir {{count}} itens",
+      "continue": "Continuar",
+      "version": "Versão {{version}}",
+      "pluginDisabled": "Desativado nesse computador; continua desativado aqui",
+      "pluginConsentLater": "Do marketplace “{{market}}”; confirmará as permissões ao instalar",
+      "skillTeam": "Competência da equipa",
+      "settingsChanges_one": "{{count}} definição",
+      "settingsChanges_other": "{{count}} definições",
+      "settingsChanges_many": "{{count}} definições",
+      "settingsKept_one": "Mantém {{count}} definição deste computador",
+      "settingsKept_other": "Mantém {{count}} definições deste computador",
+      "settingsKept_many": "Mantém {{count}} definições deste computador",
+      "settingsChangesKept_one": "{{count}} definição; mantém {{kept}} deste computador",
+      "settingsChangesKept_other": "{{count}} definições; mantém {{kept}} deste computador",
+      "settingsChangesKept_many": "{{count}} definições; mantém {{kept}} deste computador",
+      "kept": "Mantém a definição deste computador",
+      "rendererPrefs": "Preferências da interface",
+      "rendererPrefsHint": "Tema, idioma, notificações e apresentação do chat",
+      "toolOn": "Ativar a ferramenta integrada “{{name}}”",
+      "toolOff": "Desativar a ferramenta integrada “{{name}}”",
+      "mcp": "MCP · {{url}}",
+      "mcpToken": "MCP · {{url}} · Introduza novamente as credenciais de acesso neste computador",
+      "checklistTitle": "Para concluir neste computador",
+      "checklistDescription": "Os inícios de sessão, as chaves e as permissões do sistema ficam no computador original. Depois de transferir, conclua-os um a um a partir desta lista.",
+      "groups": {
+        "plugins": "Plugins",
+        "skills": "Competências",
+        "settings": "Definições",
+        "connections": "Fornecedores e MCP",
+        "access": "Acesso a este computador",
+        "secrets": "Chaves",
+        "ssh": "Servidores SSH"
+      },
+      "reason": {
+        "not-in-catalog": "Não está no marketplace de plugins deste computador",
+        "source-not-added": "De um marketplace que este computador não consegue ler",
+        "local-only": "Só existe nesse computador; transfira manualmente",
+        "needs-sign-in": "Inicie sessão primeiro",
+        "platform": "Somente para outro sistema operacional",
+        "invalid": "Este computador não o consegue ler"
+      },
+      "providerAuth": {
+        "apiKey": "Introduza novamente a chave de API neste computador",
+        "oauth": "Inicie sessão novamente neste computador",
+        "native": "Inicie sessão na subscrição neste computador",
+        "none": "Nenhuma chave necessária",
+        "apiKeyCopy": "A chave de API pode ser copiada com Chaves"
+      },
+      "access": {
+        "remote-control": "Permitir que dispositivos da mesma conta controlem este computador",
+        "remote-controlHint": "Igual a “{{name}}”. Pode desativá-lo a qualquer momento em Ligação remota",
+        "keep-awake": "Manter o computador ativo",
+        "keep-awakeHint": "Igual a “{{name}}”. Este computador não entra em suspensão"
+      },
+      "secrets": {
+        "title_one": "Copiar as chaves de {{count}} item",
+        "title_other": "Copiar as chaves de {{count}} itens",
+        "title_many": "Copiar as chaves de {{count}} itens",
+        "description": "Copiadas só depois de escolher Permitir em “{{name}}”, encriptadas apenas para este pedido. Os inícios de sessão das contas não são copiados; inicie sessão a partir da lista depois de transferir."
+      },
+      "sshDescription": "Este computador cria uma nova chave SSH, “{{name}}” adiciona-a a estes servidores depois de o permitir lá e, em seguida, cada servidor é testado. As chaves privadas nunca saem do respetivo computador.",
+      "sshHost": "{{user}}@{{host}}:{{port}}",
+      "mcpTokenCopy": "MCP · {{url}} · As credenciais podem ser copiadas com Chaves",
+      "checklistDescriptionWithKeys": "Os inícios de sessão e as permissões do sistema ficam no computador original; as chaves só são copiadas depois de “{{name}}” o permitir. Depois de transferir, conclua o resto a partir desta lista."
+    },
+    "permissions": {
+      "title": "Confirmar permissões dos plugins",
+      "description_one": "Depois de instalado, o plugin abaixo recebe estas permissões. Confirmar instala-o.",
+      "description_other": "Depois de instalados, os {{count}} plugins abaixo recebem estas permissões. Confirmar instala-os em conjunto.",
+      "description_many": "Depois de instalados, os {{count}} plugins abaixo recebem estas permissões. Confirmar instala-os em conjunto.",
+      "pluginTitle": "{{name}} · Versão {{version}}",
+      "confirm_one": "Permitir e instalar {{count}} plugin",
+      "confirm_other": "Permitir e instalar {{count}} plugins",
+      "confirm_many": "Permitir e instalar {{count}} plugins"
+    },
+    "running": {
+      "progress": "A transferir: {{completed}} de {{total}} concluídos",
+      "label": "A transferir…",
+      "confirm": "Escolha Permitir em “{{name}}”.",
+      "confirmCode": "Os dois computadores devem mostrar o mesmo código:"
+    },
+    "done": {
+      "summary_one": "{{count}} item transferido de “{{name}}”",
+      "summary_other": "{{count}} itens transferidos de “{{name}}”",
+      "summary_many": "{{count}} itens transferidos de “{{name}}”",
+      "applyFailed": "A transferência de plugins, competências e definições não foi concluída",
+      "failedTitle_one": "{{count}} item não pôde ser transferido",
+      "failedTitle_other": "{{count}} itens não puderam ser transferidos",
+      "failedTitle_many": "{{count}} itens não puderam ser transferidos",
+      "checklistTitle": "Ainda a fazer neste computador",
+      "checklistEmpty": "Nada mais a fazer neste computador",
+      "checklistDescription": "Também encontra esta lista mais tarde em Definições → Geral.",
+      "restartHint": "Algumas definições só têm efeito depois de voltar a abrir o Cindy.",
+      "finish": "Concluído",
+      "finishReload": "Concluir e recarregar"
+    },
+    "failure": {
+      "generic": "Não foi possível transferir ({{code}})",
+      "SOURCE_NOT_ADDED": "Não foi possível adicionar o respetivo marketplace de plugins",
+      "MUTATION_CANCELLED": "Instalação cancelada",
+      "PRECONDITION_FAILED": "O plugin ou este computador mudou durante a transferência",
+      "PERMISSION_DENIED": "Esta conta não o pode instalar",
+      "NOT_FOUND": "Não encontrado no marketplace de plugins deste computador",
+      "ALREADY_EXISTS": "Já existe algo com o mesmo nome aqui",
+      "SETUP_PLAN_EXPIRED": "Esta lista expirou",
+      "SETUP_TRANSFER_DECLINED": "Não permitido no outro computador ou sem resposta em 2 minutos",
+      "SETUP_TRANSFER_BUSY": "O outro computador está a tratar outro pedido. Tente novamente daqui a pouco",
+      "SETUP_TRANSFER_INVALID": "Não foi possível ler a resposta do outro computador",
+      "SETUP_SOURCE_OUTDATED": "Atualize o Cindy no outro computador para copiar isto",
+      "SETUP_SOURCE_UNAVAILABLE": "O outro computador não está a responder",
+      "SSH_AUTHORIZE_FAILED": "O outro computador não conseguiu adicionar a nova chave a este servidor",
+      "SSH_KEYGEN_FAILED": "Este computador não conseguiu criar uma chave SSH (é necessário o ssh-keygen)",
+      "SSH_HOST_NOT_FOUND": "Este servidor já não está no outro computador",
+      "SSH_AUTH_FAILED": "A chave foi adicionada, mas o servidor recusou este computador",
+      "SSH_CONNECT_FAILED": "Este computador não consegue chegar ao servidor; talvez só esteja acessível a partir da rede do outro computador",
+      "SSH_KEY_FILE_NOT_FOUND": "O novo ficheiro de chave não foi encontrado neste computador"
+    },
+    "checklist": {
+      "done": "Concluído",
+      "markDone": "Marcar como concluído",
+      "needs": "Precisa de: {{items}}",
+      "voiceAsrName": "Reconhecimento de voz",
+      "plugin-setup": {
+        "title": "Ligar as contas de “{{name}}”",
+        "action": "Ligar"
+      },
+      "plugin-manual": {
+        "title": "Instalar manualmente o plugin “{{name}}”",
+        "detail": "Foi importado diretamente nesse computador. Exporte lá o pacote a partir dos detalhes do plugin e importe-o aqui",
+        "action": "Abrir plugins"
+      },
+      "market-source": {
+        "title": "Adicionar o marketplace de plugins “{{name}}”",
+        "detail": "O endereço deste marketplace só está guardado nesse computador. Adicione-o para instalar os respetivos plugins",
+        "action": "Abrir plugins"
+      },
+      "skill-manual": {
+        "title": "Copiar a competência “{{name}}”",
+        "detail": "Não foi instalada a partir do SkillHub e só existe nesse computador",
+        "action": "Abrir competências"
+      },
+      "provider-key": {
+        "title": "Introduzir a chave de API de “{{name}}”",
+        "action": "Introduzir chave"
+      },
+      "provider-connection": {
+        "title": "Introduzir novamente o endereço de ligação de “{{name}}”",
+        "detail": "Os dados de início de sessão ou os parâmetros de consulta do endereço original podem conter credenciais, por isso não foram copiados",
+        "action": "Introduzir endereço"
+      },
+      "provider-sign-in": {
+        "title": "Iniciar sessão em “{{name}}”",
+        "action": "Iniciar sessão"
+      },
+      "local-model": {
+        "title": "Preparar o modelo local “{{name}}” neste computador",
+        "detail": "Os modelos locais são executados no computador original; este computador precisa da sua própria instalação",
+        "action": "Abrir fornecedores"
+      },
+      "mcp-token": {
+        "title": "Introduzir as credenciais de acesso do MCP “{{name}}”",
+        "action": "Introduzir credenciais"
+      },
+      "builtin-key": {
+        "title": "Introduzir a chave de API de “{{name}}”",
+        "action": "Introduzir chave"
+      },
+      "im-channel": {
+        "title": "Ligar “{{name}}”",
+        "detail": "Um bot recebe mensagens num computador de cada vez. Decida qual o computador que as recebe antes de ligar",
+        "action": "Ligar"
+      },
+      "computer-use": {
+        "title": "Ativar a automação",
+        "detail": "Conceda as permissões de Acessibilidade e Gravação do ecrã neste computador",
+        "action": "Ativar"
+      },
+      "remote-desktop": {
+        "title": "Ativar o ambiente de trabalho remoto",
+        "detail": "Ative-o separadamente neste computador e conceda a permissão de Gravação do ecrã",
+        "action": "Ativar"
+      },
+      "ssh": {
+        "title_one": "Copiar chaves e configuração SSH de {{count}} host remoto",
+        "title_other": "Copiar chaves e configuração SSH de {{count}} hosts remotos",
+        "title_many": "Copiar chaves e configuração SSH de {{count}} hosts remotos",
+        "detail": "As chaves e a configuração em ~/.ssh não são transferidas automaticamente; copie-as para este computador",
+        "action": "Abrir Ligação remota"
+      },
+      "ssh-host": {
+        "title": "Configurar o servidor SSH “{{name}}”",
+        "detail": "Não foi possível configurá-lo automaticamente. Escolha uma chave para ele nas definições de SSH e teste a ligação",
+        "action": "Abrir Ligação remota"
+      },
+      "startAll_one": "Concluir {{count}} item em sequência",
+      "startAll_other": "Concluir {{count}} itens em sequência",
+      "startAll_many": "Concluir {{count}} itens em sequência"
+    },
+    "settingsGroups": {
+      "appearance": "Aparência",
+      "windowBehavior": "Comportamento da app",
+      "menubar": "Uso da barra de menus",
+      "collaboration": "Colaboração",
+      "agentResource": "Uso de recursos do agente",
+      "gitSafety": "Segurança do Git",
+      "goal": "Modo objetivo",
+      "memory": "Memória",
+      "compaction": "Compactação de contexto",
+      "silentEncryptedRetry": "Descartar silenciosamente conteúdo encriptado pelo protocolo e tentar novamente",
+      "silentStopAutoResume": "Continuar após uma parada inesperada",
+      "sessionRuntimeFallback": "Troca automática do modelo das tarefas",
+      "subagentModels": "Subagentes",
+      "auxiliaryModels": "Modelos auxiliares",
+      "visionBridge": "Vision Bridge",
+      "modelVisibility": "Modelos exibidos e ocultos",
+      "providerOrder": "Ordem dos fornecedores",
+      "modelCatalogOverrides": "Parâmetros de modelo alterados",
+      "modelPriceOverrides": "Preços dos modelos",
+      "autoUpdate": "Instalar atualizações quando inativo",
+      "updateChannel": "Canal beta"
+    },
+    "settings": {
+      "title": "Assistente de migração",
+      "description": "Num computador novo, copie todas as funcionalidades, plugins e definições que o Cindy tem ligados nos seus outros computadores, prontos a usar.",
+      "start": "Abrir o assistente de migração",
+      "pending_one": "Falta {{count}} item neste computador",
+      "pending_other": "Faltam {{count}} itens neste computador",
+      "pending_many": "Faltam {{count}} itens neste computador",
+      "allDone": "Tudo concluído neste computador",
+      "from": "Transferido de “{{name}}”",
+      "closeChecklist": "Fechar lista"
+    },
+    "suggestion": {
+      "title": "Usar o assistente de migração para transferir de “{{name}}”?",
+      "description": "Pode configurar este computador com os plugins, competências, definições e ligações do outro. Tudo o que aqui precisar de um novo início de sessão ou permissão fica listado. Também o pode abrir mais tarde em Definições → Geral → Assistente de migração.",
+      "confirm": "Abrir o assistente de migração",
+      "later": "Agora não"
+    },
+    "walkthrough": {
+      "progress": "Lista de configuração {{current}} / {{total}}",
+      "open": "Abrir",
+      "skip": "Saltar",
+      "next": "Concluído, próximo",
+      "stop": "Encerrar",
+      "allDone": "Lista concluída"
+    },
+    "transfer": {
+      "prompt": {
+        "title": "Assistente de migração",
+        "message": "“{{name}}” pede para copiar o seguinte deste computador",
+        "secrets": "Chaves (copiadas só para esse computador; as chaves daqui não mudam):",
+        "ssh": "Adicionar a nova chave pública SSH desse computador a estes servidores:",
+        "sshKey": "Impressão digital da chave: {{fingerprint}}",
+        "code": "Código: {{code}}. Permita apenas se for igual ao código desse computador.",
+        "notice": "Se não for o próprio a configurar um computador novo, recuse.",
+        "more": "e mais {{count}}",
+        "allow": "Permitir",
+        "deny": "Recusar"
+      }
+    }
   },
   "forwardedRequest": {
     "sourcePresent": "[Origem] O anfitrião preservou as palavras originais do utilizador como contexto do pedido, sem alterações. O pedido atual está no suplemento do Agent.",
