@@ -332,6 +332,43 @@ describe('ChatImageView', () => {
     scroller.remove();
   });
 
+  // PR #8776 review: an inactive sidebar tab mounts its message stream hidden, where
+  // no ancestor has a size. Observing then would fall back to the window and lose the
+  // preload; wait until the placeholder is laid out, then use the real scroller.
+  it('finds the remote preload scroller once a hidden panel becomes visible', () => {
+    const observers: IntersectionObserverInit[] = [];
+    vi.stubGlobal('IntersectionObserver', class {
+      constructor(_callback: IntersectionObserverCallback, options?: IntersectionObserverInit) { observers.push(options ?? {}); }
+      observe() {}
+      disconnect() {}
+    });
+    let relayout: (() => void) | undefined;
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { relayout = callback; }
+      observe() {}
+      disconnect() {}
+    });
+    let laidOut = false;
+    vi.spyOn(HTMLElement.prototype, 'getClientRects').mockImplementation(
+      () => (laidOut ? [{}] : []) as unknown as DOMRectList,
+    );
+    const scroller = document.createElement('div');
+    scroller.style.overflowY = 'auto';
+    Object.defineProperties(scroller, { scrollHeight: { value: 9000 }, clientHeight: { value: 600 } });
+    document.body.appendChild(scroller);
+    render(React.createElement(ChatImageView, { src: 'cindy-remote-media://m/device/tab', filename: 'tab.png', variant: 'tool-output' }),
+      { container: scroller.appendChild(document.createElement('div')) });
+    expect(observers).toHaveLength(0);
+    act(() => relayout?.());
+    expect(observers).toHaveLength(0);
+    laidOut = true;
+    act(() => relayout?.());
+    expect(observers).toEqual([{ root: scroller, rootMargin: '1800px 0px' }]);
+    expect(screen.getByAltText('tab.png').hasAttribute('src')).toBe(false);
+    vi.restoreAllMocks();
+    scroller.remove();
+  });
+
   it('displaySrc 变化后清掉上一张图的错误占位', () => {
     const { rerender } = render(
       React.createElement(ChatImageView, {

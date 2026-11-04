@@ -48,19 +48,38 @@ function useNearScrollViewport(defer: boolean) {
       setNear(true);
       return;
     }
-    const root = scrollRootOf(placeholder);
-    // rootMargin percentages resolve against the root's width, so use pixels.
-    const preload = Math.round(REMOTE_PRELOAD_VIEWPORTS * (root?.clientHeight ?? window.innerHeight));
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (!entries.some((entry) => entry.isIntersecting)) return;
-        observer.disconnect();
-        setNear(true);
-      },
-      { root, rootMargin: `${preload}px 0px` },
-    );
-    observer.observe(placeholder);
-    return () => observer.disconnect();
+    let observer: IntersectionObserver | null = null;
+    const observeNearScroll = () => {
+      const root = scrollRootOf(placeholder);
+      // rootMargin percentages resolve against the root's width, so use pixels.
+      const preload = Math.round(REMOTE_PRELOAD_VIEWPORTS * (root?.clientHeight ?? window.innerHeight));
+      const intersection = new IntersectionObserver(
+        (entries) => {
+          if (!entries.some((entry) => entry.isIntersecting)) return;
+          intersection.disconnect();
+          setNear(true);
+        },
+        { root, rootMargin: `${preload}px 0px` },
+      );
+      intersection.observe(placeholder);
+      observer = intersection;
+    };
+    // Inside a hidden panel (e.g. an inactive sidebar tab) nothing has a size yet, so
+    // the scroll root cannot be found. Wait until the placeholder is laid out.
+    if (placeholder.getClientRects().length === 0 && typeof ResizeObserver !== 'undefined') {
+      const layout = new ResizeObserver(() => {
+        if (placeholder.getClientRects().length === 0) return;
+        layout.disconnect();
+        observeNearScroll();
+      });
+      layout.observe(placeholder);
+      return () => {
+        layout.disconnect();
+        observer?.disconnect();
+      };
+    }
+    observeNearScroll();
+    return () => observer?.disconnect();
   }, [near]);
   return { placeholderRef, near };
 }
