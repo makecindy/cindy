@@ -170,7 +170,7 @@ export function isRouteExhaustedForCandidate(
     // Native Codex and WHAM are independent; Pi and Claude Code share WHAM.
     return !(candidate.quotaPool && current.quotaPool && candidate.quotaPool !== current.quotaPool);
   }
-  if (candidate.harness === 'codex' && current.harness === 'codex') {
+  if (candidate.quotaPool === 'codex' && current.quotaPool === 'codex') {
     return areCodexModelsInSameQuotaBucket(current.model, candidate.model, buckets);
   }
   return true;
@@ -201,6 +201,11 @@ export function isCandidateQuotaBlocked(
   if (scope === 'account' && isSameAccountRoute(candidate, current, resolveDefaultProvider)) {
     return true;
   }
+  // A paid-channel snapshot cannot revive the exact model/pool already rejected.
+  if (scope === 'bucket' && candidate.model && candidate.model === current.model
+    && isRouteExhaustedForCandidate(candidate, current, scope, buckets, resolveDefaultProvider)) {
+    return true;
+  }
   // 2. If a live quota snapshot is available for this candidate:
   if (liveLimit) {
     if (liveLimit.limited) {
@@ -208,7 +213,7 @@ export function isCandidateQuotaBlocked(
       // Only waive when candidate is on the same account as the current failure AND has no dedicated bucket in targetBuckets.
       // A candidate on a separate account (or with proven dedicated Spark bucket) must not have its limit waived by another account's incomplete snapshot.
       const isSpark = (m: string | null | undefined) => Boolean(m && m.toLowerCase().includes('spark'));
-      if (candidate.harness === 'codex' && isSpark(candidate.model)) {
+      if (candidate.quotaPool === 'codex' && isSpark(candidate.model)) {
         const isSameAccount = isSameAccountRoute(candidate, current, resolveDefaultProvider);
         if (isSameAccount && !isRouteExhaustedForCandidate(candidate, current, scope, buckets, resolveDefaultProvider)) {
           const targetBuckets = candidateBuckets ?? buckets;
@@ -225,7 +230,7 @@ export function isCandidateQuotaBlocked(
     // liveLimit is { limited: false }:
     // For bucket-scope failures on the same provider (e.g. separate model buckets on Anthropic/Gemini/Argon),
     // a model whose own live quota is free is eligible, unless static rules prove it shares the same Codex bucket:
-    if (scope === 'bucket' && candidate.harness === 'codex' && current.harness === 'codex' && isSameAccountRoute(candidate, current, resolveDefaultProvider)) {
+    if (scope === 'bucket' && candidate.quotaPool === 'codex' && current.quotaPool === 'codex' && isSameAccountRoute(candidate, current, resolveDefaultProvider)) {
       if (areCodexModelsInSameQuotaBucket(current.model, candidate.model, buckets)) {
         return true;
       }

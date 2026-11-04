@@ -186,11 +186,17 @@ export async function readAccountUsageLimit(
         agentKind,
         modelId,
       });
-    case 'claude':
+    case 'claude': {
       // 独立 Claude 账号已停用，只有内置默认账号有快照。
-      return providerId === 'anthropic' || !providerId
-        ? claudeAccountUsageLimit(await readClaudeSubscriptionUsageSnapshot(), modelId)
-        : null;
+      if (providerId && providerId !== 'anthropic') return null;
+      const snapshot = await readClaudeSubscriptionUsageSnapshot();
+      // Enabled extra usage can admit requests after the plan window fills.
+      // Cached paid balances are not an admission verdict; let the upstream decide.
+      if (purpose === 'admission' && snapshot?.extraUsage?.isEnabled) {
+        return { limited: false, resetAtMs: null };
+      }
+      return claudeAccountUsageLimit(snapshot, modelId);
+    }
     case 'xai':
       return xaiAccountUsageLimit(
         !providerId || providerId === 'xai'

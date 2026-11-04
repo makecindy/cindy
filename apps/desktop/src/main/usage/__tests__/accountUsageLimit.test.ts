@@ -315,6 +315,15 @@ describe('subscriptionFamilyOf / readAccountUsageLimit', () => {
     await expect(readAccountUsageLimit('codex', 'codex-work', 'gpt-5.5')).resolves.toMatchObject({ limited: true });
   });
 
+  it('keeps Claude extra usage admission separate from a full plan reset window', async () => {
+    mocks.claude.mockResolvedValue({
+      fiveHour: { utilization: 100, resetsAt: RESET_5H },
+      extraUsage: { isEnabled: true, utilization: 10, usedCredits: 10, monthlyLimit: 100 },
+    });
+    await expect(readAccountUsageLimit('claude-code', 'anthropic', 'claude-sonnet-5', 'admission')).resolves.toMatchObject({ limited: false });
+    await expect(readAccountUsageLimit('claude-code', 'anthropic', 'claude-sonnet-5')).resolves.toMatchObject({ limited: true });
+  });
+
   it('reads independent SuperGrok accounts through the account reader', async () => {
     mocks.providers = [{ id: 'xai-2', auth: { native: 'xai' } }];
     mocks.accountUsage.mockResolvedValue({

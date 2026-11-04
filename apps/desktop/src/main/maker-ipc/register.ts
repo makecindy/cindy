@@ -17655,10 +17655,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       allowSideEffects: false,
       catalog: getActiveCatalog(),
     }).catch(() => []);
+    const remoteProviders = new Map<string, Awaited<ReturnType<typeof readDeviceProviderViews>>>();
+    if (scope && !row.remoteHostId) {
+      const deviceIds = new Set([...chain, currentRoute].flatMap(route =>
+        route.agentDeviceId ? [route.agentDeviceId] : []));
+      await Promise.all([...deviceIds].map(async deviceId => {
+        remoteProviders.set(deviceId, await readDeviceProviderViews(remoteBackgroundInvoke, deviceId).catch(() => []));
+      }));
+    }
     const resolveDefaultProvider = (route: AccountRoute): string | null => {
       if (route.providerId) return route.providerId;
       return effectiveSourceIdForModel(
-        providers,
+        route.agentDeviceId ? remoteProviders.get(route.agentDeviceId) ?? [] : providers,
         null,
         route.model ?? '',
         toAgentKind(route.harness),
@@ -17681,12 +17689,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
       }));
     }
-    const withQuotaPool = (route: AccountRoute): AccountRoute => ({
-      ...route,
-      quotaPool: subscriptionFamilyOf(toAgentKind(route.harness), resolveDefaultProvider(route)) === 'codex'
-        ? route.harness === 'codex' ? 'codex' : 'wham'
-        : null,
-    });
+    const withQuotaPool = (route: AccountRoute): AccountRoute => {
+      const providerId = resolveDefaultProvider(route);
+      const remoteProvider = route.agentDeviceId
+        ? remoteProviders.get(route.agentDeviceId)?.find(view => view.id === providerId)
+        : undefined;
+      // Never borrow this computer's same-ID account family for a remote route.
+      const family = route.agentDeviceId
+        ? remoteProvider?.auth?.native ?? (remoteProvider?.id === 'openai' ? 'codex' : null)
+        : subscriptionFamilyOf(toAgentKind(route.harness), providerId);
+      return {
+        ...route,
+        quotaPool: family === 'codex' ? route.harness === 'codex' ? 'codex' : 'wham' : null,
+      };
+    };
     const isBlocked = (candidate: BotModelRoute) => isCandidateQuotaBlocked(
       withQuotaPool(candidate),
       withQuotaPool(currentRoute),

@@ -363,10 +363,10 @@ describe('Bot candidate recovery', () => {
     });
 
     it('preserves candidates in independent quota buckets when bucket quota is exhausted', () => {
-      const current = { harness: 'codex', model: 'gpt-5.3-codex', providerId: 'account-a', agentDeviceId: null };
-      const sameBucket = { harness: 'codex', model: 'gpt-5.1-codex', providerId: 'account-a', agentDeviceId: null };
-      const sparkCandidate = { harness: 'codex', model: 'gpt-5.3-codex-spark', providerId: 'account-a', agentDeviceId: null };
-      const diffAccount = { harness: 'codex', model: 'gpt-5.3-codex', providerId: 'account-b', agentDeviceId: null };
+      const current = { harness: 'codex', model: 'gpt-5.3-codex', providerId: 'account-a', agentDeviceId: null, quotaPool: 'codex' as const };
+      const sameBucket = { harness: 'codex', model: 'gpt-5.1-codex', providerId: 'account-a', agentDeviceId: null, quotaPool: 'codex' as const };
+      const sparkCandidate = { harness: 'codex', model: 'gpt-5.3-codex-spark', providerId: 'account-a', agentDeviceId: null, quotaPool: 'codex' as const };
+      const diffAccount = { harness: 'codex', model: 'gpt-5.3-codex', providerId: 'account-b', agentDeviceId: null, quotaPool: 'codex' as const };
 
       // Bucket scope (e.g. usageLimitExceeded):
       // - Same bucket on same account is excluded
@@ -385,8 +385,8 @@ describe('Bot candidate recovery', () => {
     });
 
     it('falls back to Spark candidate on the same account when primary model hits usageLimitExceeded', () => {
-      const standard = { harness: 'codex' as const, model: 'gpt-5.3-codex', providerId: 'account-a' };
-      const spark = { harness: 'codex' as const, model: 'gpt-5.3-codex-spark', providerId: 'account-a' };
+      const standard = { harness: 'codex' as const, model: 'gpt-5.3-codex', providerId: 'account-a', quotaPool: 'codex' as const };
+      const spark = { harness: 'codex' as const, model: 'gpt-5.3-codex-spark', providerId: 'account-a', quotaPool: 'codex' as const };
       const sonnet = { harness: 'claude' as const, model: 'sonnet-3-5', providerId: 'account-b' };
       const chain = [standard, spark, sonnet];
 
@@ -395,9 +395,9 @@ describe('Bot candidate recovery', () => {
         chain,
         standard,
         [],
-        (candidate) => !isRouteExhaustedForCandidate(candidate, standard, 'bucket'),
+        (candidate) => !isRouteExhaustedForCandidate({ ...candidate, quotaPool: candidate.harness === 'codex' ? 'codex' : null }, standard, 'bucket'),
       );
-      expect(fallbackForBucket).toMatchObject(spark);
+      expect(fallbackForBucket).toMatchObject({ harness: spark.harness, model: spark.model, providerId: spark.providerId });
 
       // Standard hits sessionBudgetExceeded / 402 (scope: 'account') -> entire account is skipped, falls back to Sonnet:
       const fallbackForAccount = nextBotModelRoute(
@@ -439,6 +439,8 @@ describe('quota fallback review regressions (#8811)', () => {
     const readLimit = vi.fn(async (_kind: string, _provider: string, _model: string, purpose?: string) =>
       purpose === 'admission' ? undefined : { limited: true });
     let chain: BotModelRoute[] = [];
+    const readRemoteViews = vi.fn(async () => [{ id: 'work-remote-only', auth: { native: 'codex' } }]);
+    const remoteInvoke = vi.fn(async () => ({ ok: false }));
     const deps = {
       getDbClient: () => ({ drizzle: { select: () => query } }),
       botProfileVersions: {}, botSessionLinks: {}, sessions: {},
@@ -446,6 +448,7 @@ describe('quota fallback review regressions (#8811)', () => {
       readEffectiveBotModelChain: async () => chain,
       getDesktopProviderService: () => ({ listProviders: async () => [] }), getActiveCatalog: () => ({}),
       readAccountUsageLimit: readLimit, readCodexAccountUsageSnapshot: async () => null,
+      readDeviceProviderViews: readRemoteViews, remoteBackgroundInvoke: remoteInvoke,
       subscriptionFamilyOf: (_kind: string, provider: string) => provider.startsWith('chatgpt') ? 'codex' : null,
       getSessionRuntimeControlSnapshot: () => ({ visitedRoutes: [] }),
       nextBotModelRoute, botModelRouteIndex, botModelRouteRuntimeKey, isCandidateQuotaBlocked,
@@ -463,6 +466,26 @@ describe('quota fallback review regressions (#8811)', () => {
     expect(readLimit).toHaveBeenCalledWith('codex', 'chatgpt-b', 'b', 'admission');
     chain = [a, { ...a, harness: 'claude' }, { ...b, providerId: 'chatgpt-a' }];
     expect((await select('s', current, 's', 'bucket')).candidate).toMatchObject({ agentKind: 'codex', providerId: 'chatgpt-a' });
+    const remote = { ...b, providerId: 'work-remote-only', agentDeviceId: 'remote-pc' };
+    chain = [remote, { ...remote, harness: 'pi' }];
+    const remoteCurrent = { agentKind: 'codex', model: remote.model, providerId: remote.providerId, agentDeviceId: 'remote-pc' };
+    expect((await select('s', remoteCurrent, 's', 'bucket')).candidate).toMatchObject({ agentKind: 'pi', providerId: 'work-remote-only', agentDeviceId: 'remote-pc' });
+    expect(readRemoteViews).toHaveBeenCalledWith(remoteInvoke, 'remote-pc');
+    readRemoteViews.mockClear();
+    expect((await select('s', remoteCurrent, 's', false)).candidate).toMatchObject({ agentKind: 'pi' });
+    expect(readRemoteViews).not.toHaveBeenCalled();
+    // An unavailable remote catalog must not borrow a local same-ID subscription.
+    const shadow = { ...remote, providerId: 'chatgpt-shadow' };
+    chain = [shadow, { ...shadow, harness: 'pi' }];
+    readRemoteViews.mockRejectedValueOnce(new Error('remote offline'));
+    expect((await select('s', { ...remoteCurrent, providerId: shadow.providerId }, 's', 'bucket')).candidate).toBeNull();
+
+  });
+
+  it('does not apply ChatGPT model buckets to a Codex custom bridge with free model quota', () => {
+    const current = { harness: 'codex', model: 'gemini-4-argon', providerId: 'local-bridge', quotaPool: null };
+    const candidate = { ...current, model: 'gemini-3-pro' };
+    expect(isCandidateQuotaBlocked(candidate, current, 'bucket', { limited: false })).toBe(false);
   });
 
   it('keeps a rejected Claude model window bucket-scoped when another model is free', () => {
@@ -470,6 +493,7 @@ describe('quota fallback review regressions (#8811)', () => {
     expect(scope).toBe('bucket');
     const current = { harness: 'claude', model: 'claude-opus-5-5', providerId: 'anthropic' };
     expect(isCandidateQuotaBlocked({ ...current, model: 'claude-sonnet-5-5' }, current, scope, { limited: false })).toBe(false);
+    expect(isCandidateQuotaBlocked({ ...current }, current, scope, { limited: false })).toBe(true);
   });
 
   it('keeps an explicit balance error account-wide across harnesses', () => {
@@ -481,7 +505,7 @@ describe('quota fallback review regressions (#8811)', () => {
   });
 
   it('does not revive an exhausted Spark bucket via an implicit provider alias', () => {
-    const current = { harness: 'codex', model: 'gpt-5.3-codex-spark', providerId: null };
+    const current = { harness: 'codex', model: 'gpt-5.3-codex-spark', providerId: null, quotaPool: 'codex' as const };
     const candidate = { ...current, providerId: 'openai' };
     expect(isCandidateQuotaBlocked(candidate, current, 'bucket', { limited: true }, { codex: { limitId: 'codex' } })).toBe(true);
   });
@@ -509,15 +533,15 @@ describe('Live per-model quota for configured fallbacks', () => {
   });
 
   it('keeps a free same-bucket Codex model available after a non-quota failure', () => {
-    const route = { harness: 'codex', model: 'gpt-5.3-codex', providerId: 'openai' };
+    const route = { harness: 'codex', model: 'gpt-5.3-codex', providerId: 'openai', quotaPool: 'codex' as const };
     const candidate = { ...route, model: 'gpt-5.4' };
     expect(isCandidateQuotaBlocked(candidate, route, null, { limited: false })).toBe(false);
     expect(isCandidateQuotaBlocked(candidate, route, 'bucket', { limited: false })).toBe(true);
   });
 
   it('does not let fallback generic bucket block Spark candidate when bucket snapshot is incomplete', () => {
-    const codexCurrent = { harness: 'codex', model: 'gpt-5.3-codex', providerId: 'openai', agentDeviceId: null };
-    const sparkCandidate = { harness: 'codex', model: 'gpt-5.3-codex-spark', providerId: 'openai', agentDeviceId: null };
+    const codexCurrent = { harness: 'codex', model: 'gpt-5.3-codex', providerId: 'openai', agentDeviceId: null, quotaPool: 'codex' as const };
+    const sparkCandidate = { harness: 'codex', model: 'gpt-5.3-codex-spark', providerId: 'openai', agentDeviceId: null, quotaPool: 'codex' as const };
     const onlyGenericBuckets = { codex: { limitId: 'codex', limitName: 'Codex' } };
     // Even if readAccountUsageLimit fell back to the generic bucket and returned { limited: true }:
     expect(isCandidateQuotaBlocked(sparkCandidate, codexCurrent, 'bucket', { limited: true }, onlyGenericBuckets)).toBe(false);
@@ -530,7 +554,7 @@ describe('Live per-model quota for configured fallbacks', () => {
     expect(isCandidateQuotaBlocked(sparkCandidate, codexCurrent, 'bucket', { limited: true }, bucketsWithSpark)).toBe(true);
 
     // Cross-account Spark candidate: Account A's generic bucket snapshot must NOT waive Account B's own limited reading:
-    const sparkCandidateAccountB = { harness: 'codex', model: 'gpt-5.3-codex-spark', providerId: 'openai-b', agentDeviceId: null };
+    const sparkCandidateAccountB = { harness: 'codex', model: 'gpt-5.3-codex-spark', providerId: 'openai-b', agentDeviceId: null, quotaPool: 'codex' as const };
     expect(isCandidateQuotaBlocked(sparkCandidateAccountB, codexCurrent, 'bucket', { limited: true }, onlyGenericBuckets)).toBe(true);
 
     // When candidateBuckets is explicitly provided for candidate account, it is respected:
