@@ -4013,6 +4013,7 @@
             "hint": "Aplica-se à conexão de Images de {{agent}}. Declare apenas capacidades realmente compatíveis com a API. Reabra os detalhes de Art após salvar."
           },
           "capabilityHint": "Usa as capacidades declaradas por este provedor. Quando não declarado, o suporte a imagens é inferido pelo nome do modelo.",
+          "imageInputDefault": "{{value}} (padrão)",
           "imageInput": "Entrada de imagem",
           "imageInputMixed": "Varia conforme o mecanismo",
           "supported": "Compatível",

@@ -3920,6 +3920,7 @@
             "hint": "施於 {{agent}} 之圖連線。唯宣介面實所支援之能，存後重啟 Art 詳情。"
           },
           "capabilityHint": "先用今供方所宣之能；未宣者，圖之能參酌模型之名。",
+          "imageInputDefault": "{{value}}（預設）",
           "imageInput": "圖輸入",
           "imageInputMixed": "諸引擎各異",
           "supported": "可",

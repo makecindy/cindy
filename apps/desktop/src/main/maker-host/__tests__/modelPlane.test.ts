@@ -13,6 +13,7 @@ import {
   BUNDLED_CATALOG,
   buildRegistry,
   deriveModelList,
+  parseModelRegistry,
   resolveModelNativeApi,
   type Catalog,
   type CatalogModel,
@@ -1361,4 +1362,61 @@ describe('OpenAI 订阅 Pi 与 Codex 同序同显示', () => {
     expect(pi.find((model) => model.id === 'chatgpt/gpt-5.6-luna')?.defaultEnabled).toBe(false);
     expect(pi.find((model) => model.id === 'chatgpt/gpt-6-sol')?.defaultEnabled).not.toBe(false);
   });
+});
+
+// Settings needs the pre-override default, including false, after root/bridge
+// overlays and catalog refreshes; saving null must continue to remove the patch.
+describe('image-input default projection', () => {
+  it.each([true, false])('keeps an undeclared default distinct from an explicit %s override', (supported) => {
+    setActiveCatalog(baseCatalog());
+    setDiscoveredCodexModels([accountModel('private-undeclared-model', { supportsImageInput: undefined, modalities: undefined })]);
+    setLocalCatalogOverrides(overridesOf({ patches: {
+      'openai:private-undeclared-model': { perAgent: { codex: { supportsImageInput: supported } } },
+    } }));
+    expect(models('openai', 'codex').find(model => model.id === 'private-undeclared-model'))
+      .toMatchObject({ supportsImageInput: supported, defaultSupportsImageInput: null });
+  });
+
+  it.each([true, false])('retains catalog default %s through user overrides and refresh', (supported) => {
+    setActiveCatalog(baseCatalog());
+    setDiscoveredCodexModels([accountModel('gpt-6', { supportsImageInput: supported })]);
+    setLocalCatalogOverrides(overridesOf({ patches: {
+      'openai:gpt-6': { perAgent: { codex: { supportsImageInput: !supported } } },
+    } }));
+    const read = () => models('openai', 'codex').find(model => model.id === 'gpt-6')!;
+    expect(read()).toMatchObject({ supportsImageInput: !supported, defaultSupportsImageInput: supported });
+    setDiscoveredCodexModels([accountModel('gpt-6', { supportsImageInput: !supported })]);
+    expect(read()).toMatchObject({ supportsImageInput: !supported, defaultSupportsImageInput: !supported });
+    setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+    expect(read().supportsImageInput).toBe(!supported);
+    expect(read()).not.toHaveProperty('defaultSupportsImageInput');
+  });
+});
+
+// A bridge can have its own declared default after the root's user patch.
+// The display provenance must follow that bridge's metadata, not the root override.
+it('retains each bridge engine image default after a root override', () => {
+  const catalog = baseCatalog();
+  catalog.modelRegistry = {
+    schemaVersion: 4, updatedAt: '2026-11-04T00:00:00.000Z',
+    baseModels: [{ id: 'vendor/image-test', aliases: [], defaults: { supportsImageInput: true } }],
+    models: [
+      { id: 'openai/image-test-codex', modelRef: 'vendor/image-test', name: 'Image test',
+        supportsImageInput: true,
+        routes: [{ providerId: 'openai', modelId: 'image-test', agents: ['codex'] }] },
+      { id: 'openai/image-test-claude', modelRef: 'vendor/image-test', name: 'Image test',
+        supportsImageInput: false,
+        routes: [{ providerId: 'openai', modelId: 'image-test', agents: ['claude-code'] }] },
+    ],
+  };
+  expect(parseModelRegistry(catalog.modelRegistry).ok).toBe(true);
+  setActiveCatalog(catalog);
+  setDiscoveredCodexModels([accountModel('image-test')]);
+  expect(models('openai', 'codex')[0].supportsImageInput).toBe(true);
+  expect(models('openai', 'claude-code')[0].supportsImageInput).toBe(false);
+  setLocalCatalogOverrides(overridesOf({ patches: {
+    'openai:image-test': { perAgent: { codex: { supportsImageInput: false }, 'claude-code': { supportsImageInput: true } } },
+  } }));
+  expect(models('openai', 'codex')[0]).toMatchObject({ supportsImageInput: false, defaultSupportsImageInput: true });
+  expect(models('openai', 'claude-code')[0]).toMatchObject({ supportsImageInput: true, defaultSupportsImageInput: false });
 });

@@ -1,5 +1,7 @@
+import type { ModelImageInputCatalogModel } from '../../../shared/modelImageInputOverride.js';
 import {
   BUILTIN_PROVIDERS,
+  classifyVisionCapability,
   validModelMetadata,
   type ModelMetadata,
   type BaseModel,
@@ -432,11 +434,11 @@ function entryRootAgents(entry: ModelCatalogOverrideEntry, providerId: string): 
   return policy.roots.filter((agent) => membership.includes(agent));
 }
 
-function overlayFields(model: CatalogModel, f: ModelCatalogOverrideFields): CatalogModel | string {
+function overlayFields(model: ModelImageInputCatalogModel, f: ModelCatalogOverrideFields): ModelImageInputCatalogModel | string {
   if (f.efforts?.length === 0 && f.defaultEffort !== undefined && f.defaultEffort !== null) {
     return 'local patch sets a defaultEffort for a fixed-effort model';
   }
-  let next: CatalogModel = {
+  let next: ModelImageInputCatalogModel = {
     ...model,
     ...(f.name !== undefined ? { name: f.name } : {}),
     ...(f.group !== undefined ? { group: f.group } : {}),
@@ -452,7 +454,17 @@ function overlayFields(model: CatalogModel, f: ModelCatalogOverrideFields): Cata
     ...(f.efforts !== undefined ? { efforts: f.efforts } : {}),
     ...(f.defaultEffort !== undefined ? { defaultEffort: f.defaultEffort } : {}),
     ...(f.supportsFastMode !== undefined ? { supportsFastMode: f.supportsFastMode } : {}),
-    ...(f.supportsImageInput !== undefined ? { supportsImageInput: f.supportsImageInput } : {}),
+    ...(f.supportsImageInput !== undefined ? {
+      // Preserve the pre-override capability across root / bridge overlays, so
+      // Settings can restore inheritance without mistaking the user's value for the default.
+      defaultSupportsImageInput: model.defaultSupportsImageInput !== undefined
+        ? model.defaultSupportsImageInput
+        : model.supportsImageInput ?? (model.modalities
+          ? model.modalities.input.includes('image')
+          : classifyVisionCapability(model.id) === 'unknown'
+            ? null : classifyVisionCapability(model.id) === 'vision'),
+      supportsImageInput: f.supportsImageInput,
+    } : {}),
     ...(f.status !== undefined
       ? { status: f.status === 'preview' ? ('alpha' as const) : f.status }
       : {}),

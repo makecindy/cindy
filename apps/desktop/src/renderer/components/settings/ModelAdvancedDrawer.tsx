@@ -1,3 +1,4 @@
+import type { ModelImageInputCatalogModel } from '../../../shared/modelImageInputOverride';
 import { displayPricingComponent, isDisplayPricingTableRedundant } from '@/lib/displayPricingFormat';
 import { DisplayPricingDetails, DisplayPricingQuote } from '@/components/DisplayPricingDetails';
 import { Button } from '@/components/ui/button';
@@ -435,6 +436,29 @@ export function ModelAdvancedDrawer({
           ? 'vision'
           : 'no-vision'
         : classifyVisionCapability(primaryModel.id);
+  const imageInputModel: ModelImageInputCatalogModel = primaryModel;
+  const imageInputDefault = imageInputModel.defaultSupportsImageInput !== undefined
+    ? imageInputModel.defaultSupportsImageInput
+    : vision === 'unknown' ? null : vision === 'vision';
+  // An undeclared catalog has no default option: both choices remain explicit overrides.
+  const imageInputValue = imageInputOverride.value ?? (imageInputOverride.error
+    ? vision === 'unknown' ? null : vision === 'vision'
+    : imageInputDefault);
+  const imageInputTargetDefaults = (contextTarget ? [contextTarget, ...contextTarget.relatedTargets] : []).map(({ agent }) => {
+    if (agent === primaryAgent) return imageInputDefault;
+    const candidate: ModelImageInputCatalogModel | undefined = row.byAgent[agent];
+    if (!candidate) return null;
+    if (candidate.defaultSupportsImageInput !== undefined) return candidate.defaultSupportsImageInput;
+    if (candidate.supportsImageInput !== undefined) return candidate.supportsImageInput;
+    if (candidate.modalities) return candidate.modalities.input.includes('image');
+    const capability = classifyVisionCapability(candidate.id);
+    return capability === 'unknown' ? null : capability === 'vision';
+  });
+  const imageDefaultsMatch = (value: boolean) => imageInputTargetDefaults.length > 0 &&
+    imageInputTargetDefaults.every(defaultValue => defaultValue === value);
+  const imageInputMixed = imageInputOverride.mixed ||
+    (!imageInputOverride.error && imageInputOverride.value === null && new Set(imageInputTargetDefaults).size > 1);
+
   const conversational = isAgentSelectableModel(primaryModel, {
     userProvider: provider.source === 'user',
   });
@@ -984,21 +1008,27 @@ export function ModelAdvancedDrawer({
                             <button type="button" disabled={imageInputOverride.loading || localConfigurationBlocked}
                               aria-label={t('settings.providers.models.advanced.imageInput')}
                               className="inline-flex min-h-8 items-center gap-1.5 rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50">
-                              {imageInputOverride.mixed
+                              {imageInputMixed
                                 ? t('settings.providers.models.advanced.imageInputMixed')
-                                : imageInputOverride.value === null
-                                  ? <><span>{t('settings.providers.models.advanced.imageCapability.default')}</span><span aria-hidden>·</span><span>{t(`settings.providers.models.advanced.vision.${vision}`)}</span></>
-                                  : t(`settings.providers.models.advanced.${imageInputOverride.value ? 'supported' : 'unsupported'}`)}
+                                : imageInputValue === null
+                                  ? t('settings.providers.models.advanced.undeclared')
+                                  : t(`settings.providers.models.advanced.${imageInputValue ? 'supported' : 'unsupported'}`)}
                               <ChevronDown size={12} aria-hidden />
                             </button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent className="z-[10003]" align="end">
                             <DropdownMenuRadioGroup
-                              value={imageInputOverride.mixed ? '' : imageInputOverride.value === null ? 'default' : String(imageInputOverride.value)}
-                              onValueChange={(value) => void imageInputOverride.setValue(value === 'default' ? null : value === 'true')}>
-                              <DropdownMenuRadioItem value="default">{t('settings.providers.models.advanced.imageCapability.default')}</DropdownMenuRadioItem>
-                              <DropdownMenuRadioItem value="true">{t('settings.providers.models.advanced.supported')}</DropdownMenuRadioItem>
-                              <DropdownMenuRadioItem value="false">{t('settings.providers.models.advanced.unsupported')}</DropdownMenuRadioItem>
+                              value={imageInputMixed || imageInputValue === null ? '' : String(imageInputValue)}
+                              onValueChange={(value) => void imageInputOverride.setValue(
+                                imageDefaultsMatch(value === 'true') ? null : value === 'true',
+                              )}>
+                              {[true, false].map((supported) => {
+                                const label = t(`settings.providers.models.advanced.${supported ? 'supported' : 'unsupported'}`);
+                                return <DropdownMenuRadioItem key={String(supported)} value={String(supported)}>
+                                  {imageDefaultsMatch(supported)
+                                    ? t('settings.providers.models.advanced.imageInputDefault', { value: label }) : label}
+                                </DropdownMenuRadioItem>;
+                              })}
                             </DropdownMenuRadioGroup>
                           </DropdownMenuContent>
                         </DropdownMenu>

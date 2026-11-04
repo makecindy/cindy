@@ -3962,6 +3962,7 @@
             "hint": "Applies to the {{agent}} Images connection. Only declare capabilities the API actually supports. Reopen Art details after saving."
           },
           "capabilityHint": "Uses capabilities declared by this provider. Image support falls back to model naming when undeclared.",
+          "imageInputDefault": "{{value}} (Default)",
           "imageInput": "Image input",
           "imageInputMixed": "Varies by engine",
           "supported": "Supported",

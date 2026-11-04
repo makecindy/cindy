@@ -3962,6 +3962,7 @@
             "hint": "Gilt für die Images-Verbindung von {{agent}}. Nur Funktionen angeben, die die API tatsächlich unterstützt. Nach dem Speichern die Art-Details erneut öffnen."
           },
           "capabilityHint": "Verwendet von diesem Anbieter deklarierte Funktionen. Die Bildunterstützung greift auf die Modellbenennung zurück, wenn sie nicht deklariert ist.",
+          "imageInputDefault": "{{value}} (Standard)",
           "imageInput": "Bildeingabe",
           "imageInputMixed": "Je nach Engine unterschiedlich",
           "supported": "Unterstützt",

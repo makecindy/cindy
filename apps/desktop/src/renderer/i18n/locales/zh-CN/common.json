@@ -3920,6 +3920,7 @@
             "hint": "应用于 {{agent}} 的图片连接。仅声明接口实际支持的能力，保存后重新打开 Art 详情。"
           },
           "capabilityHint": "优先使用当前供应商声明的能力；未声明时，图片能力参考模型名称。",
+          "imageInputDefault": "{{value}}（默认）",
           "imageInput": "图片输入",
           "imageInputMixed": "各引擎不同",
           "supported": "支持",

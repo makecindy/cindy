@@ -1,3 +1,4 @@
+import type { ModelImageInputCatalogModel } from '../../shared/modelImageInputOverride.js';
 import { effectiveGatewayModelCost } from '../../shared/modelPriceQuote.js';
 import { projectCurrentModelSources } from './model-source-snapshots.js';
 import type { ModelDisplayPricing } from '@cindy/model-providers';
@@ -900,26 +901,41 @@ function assembleRoot(
 
 /** Registry / local override 只能补账号已返回的条目，不能重新实体化账号没有的成员。 */
 function applyLayeredConsumer(
-  model: CatalogModel,
+  model: ModelImageInputCatalogModel,
   providerId: string,
   agent: RootAgentKind,
   plan: ModelPlaneRegistryPlan,
-): CatalogModel {
-  const overlaid = applyRegistryConsumerOverlay(model, providerId, agent, model.id, plan);
+): ModelImageInputCatalogModel {
   const registry = (base ?? BUNDLED_CATALOG).modelRegistry;
-  return (registry?.schemaVersion ?? 0) >= 4
-    ? applyModelMetadata(
-        overlaid,
-        resolveModelMetadata(
-          registry,
-          providerId,
-          model.id,
-          model.discoveredMetadata,
-          model.userModelConfig ? runtimeUserModelMetadata(model.userModelConfig) : undefined,
-          agent,
-        ),
-      )
-    : overlaid;
+  const applyConsumer = (source: CatalogModel): CatalogModel => {
+    const overlaid = applyRegistryConsumerOverlay(source, providerId, agent, source.id, plan);
+    return (registry?.schemaVersion ?? 0) >= 4
+      ? applyModelMetadata(
+          overlaid,
+          resolveModelMetadata(
+            registry,
+            providerId,
+            source.id,
+            source.discoveredMetadata,
+            source.userModelConfig ? runtimeUserModelMetadata(source.userModelConfig) : undefined,
+            agent,
+          ),
+        )
+      : overlaid;
+  };
+  const result = applyConsumer(model);
+  if (model.defaultSupportsImageInput === undefined) return result;
+  // Resolve display provenance through the same consumer layers, without the
+  // root's image override. A bridge may declare a different catalog default.
+  const inherited = applyConsumer({
+    ...model,
+    supportsImageInput: model.defaultSupportsImageInput ?? undefined,
+  });
+  return {
+    ...result,
+    defaultSupportsImageInput: inherited.supportsImageInput ?? (inherited.modalities
+      ? inherited.modalities.input.includes('image') : model.defaultSupportsImageInput),
+  };
 }
 
 function xaiCatalogModelById(
