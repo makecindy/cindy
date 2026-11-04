@@ -8,7 +8,7 @@ import type { BotGroupChangedPayload, BotGroupSummary } from '../../../../shared
 import { getBotGroupListSnapshot, refreshBotGroups, resetBotGroupStoreForTests, startBotGroupSync, subscribeBotGroups, useBotGroupList } from '../botGroupStore';
 import { getAllDraftAttachmentUrls, getDraft, saveDraft } from '@/lib/composerDraftStore';
 import { botGroupThreadDraftKey } from '../botGroupAttachments';
-import { botGroupReadKey, getBotLastReadAt, isBotGroupUnread, markBotRead, resetBotReadStateForTests, setBotReadStateOwner } from '../botReadState';
+import { botGroupReadKey, getBotLastReadAt, isBotGroupUnread, markBotRead, resetBotReadStateForTests, seedBotGroupReadState, setBotReadStateOwner } from '../botReadState';
 
 const dataOwner = vi.hoisted(() => ({ generation: 1, dataOwnerId: 'owner' }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({
@@ -61,6 +61,35 @@ afterEach(() => {
 });
 
 describe('group list mirror', () => {
+  // Unit / review4464044463: a main-window list or unrelated personal-list
+  // projection cannot erase a baseline first discovered by another mirror.
+  it.each(['list', 'visibility'] as const)('preserves another mirror first read through a stale main %s', async boundary => {
+    window.localStorage.clear(); resetBotReadStateForTests(); setBotReadStateOwner('owner');
+    markBotRead(botGroupReadKey('g1'), 50);
+    let finish!: (value: unknown) => void;
+    listBotGroups.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const main = render(createElement(AppWindowSync));
+    const created = { ...summary('New group'), id: 'g2', lastReplyAt: 100 };
+    try {
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      if (boundary === 'list') seedBotGroupReadState([created], false);
+      listBotGroups.mockResolvedValueOnce({ ok: false });
+      if (boundary === 'list') refreshBotGroups();
+      await act(async () => finish({ ok: true, groups: [summary('Old group')] }));
+      if (boundary === 'visibility') {
+        seedBotGroupReadState([created], false);
+        act(() => push({ groupId: 'g1', change: 'list', listState: { hidden: true, revision: 1 } }));
+        await act(() => vi.advanceTimersByTimeAsync(300));
+      }
+      expect(getBotLastReadAt(botGroupReadKey('g2'))).toBe(100);
+      listBotGroups.mockResolvedValue({ ok: true, groups: [{ ...created, lastReplyAt: 200 }] });
+      act(() => refreshBotGroups());
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(isBotGroupUnread(getBotGroupListSnapshot().groups[0])).toBe(true);
+      expect(getBotLastReadAt(botGroupReadKey('g1'))).toBeNull();
+    } finally { main.unmount(); resetBotReadStateForTests(); window.localStorage.clear(); }
+  });
+
   // Unit / review4463310770: existing multi-window coverage seeded from main.
   // The actual secondary mount alone must establish a local group's baseline
   // at100, keep reply200 unread, and carry that mark through main's return.

@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({ seed: vi.fn(), generation: 1 }));
-vi.mock('../botReadState', () => ({ seedBotGroupReadState: h.seed }));
+vi.mock('../botReadState', () => ({ seedBotGroupReadState: h.seed,
+  botGroupReadKey: (id: string) => `group:${id}`, getBotLastReadAtMap: () => ({ 'group:room': 100 }) }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({
   getDataOwnerGeneration: () => h.generation, isDataOwnerGenerationCurrent: (owner: number) => owner === h.generation,
   isDataOwnerPushCurrent: () => true,
@@ -25,5 +26,5 @@ it('removes an acknowledged personal entry immediately and filters an older in-f
   expect(store.getBotGroupListSnapshot().groups).toEqual([]);
   changed({ groupId: 'room', change: 'list', listState: { hidden: false, revision: 1 } });
   expect(store.getBotGroupListSnapshot().groups).toEqual([]);
-  expect(h.seed).toHaveBeenLastCalledWith([]);
+  expect(h.seed).toHaveBeenLastCalledWith([], { 'group:room': 100 });
 });

@@ -138,10 +138,10 @@ describe('bot profile store', () => {
   // Unit / review4457849939: the per-window unread sync now refreshes this
   // production store in secondary windows; the older list must not prune a
   // newly created Bot's shared mark. Existing profile mutation tests missed it.
-  it('keeps shared Bot read marks through a late secondary hydration', async () => {
+  it.each(['secondary', 'main'])('keeps shared Bot read marks through a late %s hydration', async windowKind => {
     const previousOwner = getDataOwnerGeneration();
     const storage = new Map<string, string>();
-    const location = { search: '?secondaryWindow=1' };
+    const location = { search: windowKind === 'secondary' ? '?secondaryWindow=1' : '' };
     let finish!: (rows: unknown[]) => void;
     const list = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     vi.stubGlobal('window', {

@@ -10,7 +10,7 @@
  * §4–5：renderer 不持有真相）。
  */
 import { useCallback, useSyncExternalStore } from 'react';
-import { seedBotGroupReadState } from './botReadState';
+import { botGroupReadKey, getBotLastReadAtMap, seedBotGroupReadState } from './botReadState';
 import { discardDraftTree } from '@/lib/composerDraftStore';
 import { botGroupAttachmentScope } from './botGroupAttachments';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
@@ -152,6 +152,7 @@ export function refreshBotGroups(): void {
   cancelRetryRefresh();
   const requestOwner = owner;
   const requestGeneration = generation;
+  const pruneReads = isSecondaryWindow() ? false : getBotLastReadAtMap();
   const isCurrent = () =>
     requestGeneration === generation && isDataOwnerGenerationCurrent(requestOwner);
   const request = (async () => {
@@ -165,7 +166,7 @@ export function refreshBotGroups(): void {
       // absent from its list. A secondary may have the first live group list.
       if (result.ok) {
         if (isSecondaryWindow()) seedBotGroupReadState(visibleGroups(result.groups), false);
-        else seedBotGroupReadState(visibleGroups(result.groups));
+        else seedBotGroupReadState(visibleGroups(result.groups), pruneReads);
       }
       // An unchanged list keeps its snapshot: subscribers (sidebar, Dock badge) do not re-render.
       if (result.ok && snapshot.loaded && JSON.stringify(visibleGroups(result.groups)) === JSON.stringify(snapshot.groups)) return;
@@ -209,7 +210,10 @@ export function startBotGroupSync(): () => void {
           listReadVersion++;
           const groups = visibleGroups(snapshot.groups);
           if (isSecondaryWindow()) seedBotGroupReadState(groups, false);
-          else seedBotGroupReadState(groups);
+          else {
+            const key = botGroupReadKey(payload.groupId);
+            seedBotGroupReadState(groups, payload.listState.hidden ? { [key]: getBotLastReadAtMap()[key] } : false);
+          }
           applySnapshot({ ...snapshot, groups });
           persistList();
         }

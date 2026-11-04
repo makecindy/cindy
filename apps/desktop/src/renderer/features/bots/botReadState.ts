@@ -63,13 +63,14 @@ function legacyReads(): ReadStateMap {
   }
   return next;
 }
-function readStorage(refresh = false): ReadStateMap {
+function readStorage(refresh = false, observedMarks?: ReturnType<typeof storedMarks>): ReadStateMap {
   if (cache && !refresh) return cache;
   const seeds = { ...sessionSeeds };
   const next = { ...sessionReads };
   try {
     for (const [id, at] of Object.entries(legacyReads())) next[id] = Math.max(next[id] ?? 0, at);
     for (const mark of storedMarks()) {
+      observedMarks?.push(mark);
       if (mark.initial) seeds[mark.botId] = Math.min(seeds[mark.botId] ?? Infinity, mark.at);
       else next[mark.botId] = Math.max(next[mark.botId] ?? 0, mark.at);
     }
@@ -91,14 +92,17 @@ function seedRead(botId: string, at: number): void {
     window.localStorage.setItem(markPrefix() + JSON.stringify([botId, at, 'initial']), '1');
   } catch { /* Preserve the session baseline when storage is unavailable. */ }
 }
-function writeStorage(next: ReadStateMap, removed: readonly string[]): void {
+function writeStorage(next: ReadStateMap, removed: readonly string[], observedMarks: ReturnType<typeof storedMarks>): void {
+  const previous = cache ?? {};
   cache = next;
   for (const id of removed) { delete sessionSeeds[id]; delete sessionReads[id]; }
   try {
     const removedIds = new Set(removed);
-    const marks = storedMarks().filter(mark => removedIds.has(mark.botId));
+    // Remove only facts used in this decision; another window may have added
+    // an earlier initial baseline since that read.
+    const marks = observedMarks.filter(mark => removedIds.has(mark.botId));
     const legacy = legacyReads();
-    for (const id of removed) delete legacy[id];
+    for (const id of removed) if (legacy[id] <= (previous[id] ?? 0)) delete legacy[id];
     // Never promote automatic baselines into the legacy acknowledgement map.
     window.localStorage.setItem(storageKey(), JSON.stringify(legacy));
     for (const mark of marks) window.localStorage.removeItem(mark.key);
@@ -173,16 +177,18 @@ export function seedMissingBotReadState(botIds: readonly string[], at: number = 
 }
 
 /** Drop read positions for Bots that no longer exist, keeping the map bounded. */
-export function pruneBotReadState(botIds: readonly string[]): boolean {
-  const current = readStorage(true);
+export function pruneBotReadState(botIds: readonly string[], observed?: Readonly<ReadStateMap>): boolean {
+  const observedMarks: ReturnType<typeof storedMarks> = [];
+  const current = readStorage(true, observedMarks);
   const alive = new Set(botIds);
   const next: ReadStateMap = {};
   let changed = false;
   for (const [botId, at] of Object.entries(current)) {
-    if (botId.startsWith('group:') || botId.startsWith('thread:') || alive.has(botId)) next[botId] = at;
+    if (botId.startsWith('group:') || botId.startsWith('thread:') || alive.has(botId)
+      || (observed && observed[botId] !== at)) next[botId] = at;
     else changed = true;
   }
-  if (changed) writeStorage(next, Object.keys(current).filter(key => next[key] === undefined));
+  if (changed) writeStorage(next, Object.keys(current).filter(key => next[key] === undefined), observedMarks);
   return changed;
 }
 
@@ -250,11 +256,17 @@ export function botGroupUnreadCount(group: GroupReadSummary): number {
 export function isBotGroupUnread(group: GroupReadSummary): boolean {
   return botGroupUnreadCount(group) > 0;
 }
-export function seedBotGroupReadState(groups: readonly GroupReadSummary[], prune = true): void {
-  const current = readStorage(true);
+export function seedBotGroupReadState(groups: readonly GroupReadSummary[], prune: boolean | Readonly<ReadStateMap> = true): void {
+  const observedMarks: ReturnType<typeof storedMarks> = [];
+  const current = readStorage(true, observedMarks);
   const next = { ...current };
   const alive = new Set(groups.map(group => botGroupReadKey(group.id)));
-  if (prune) for (const key of Object.keys(next)) if (key.startsWith('group:') && !alive.has(key)) delete next[key];
+  // An async list may prune only unchanged reads it observed before the request.
+  // A visibility mutation supplies only its own identity, never the whole mirror.
+  if (prune) for (const key of Object.keys(next)) {
+    if (key.startsWith('group:') && !alive.has(key)
+      && (prune === true || (prune[key] !== undefined && prune[key] === current[key]))) delete next[key];
+  }
   for (const group of groups) {
     const key = botGroupReadKey(group.id);
     if (next[key] === undefined) {
@@ -264,7 +276,7 @@ export function seedBotGroupReadState(groups: readonly GroupReadSummary[], prune
   }
   if (JSON.stringify(next) !== JSON.stringify(current)) {
     const removed = Object.keys(current).filter(key => next[key] === undefined);
-    if (removed.length) writeStorage(next, removed);
+    if (removed.length) writeStorage(next, removed, observedMarks);
     readStorage(true);
     notify();
   }

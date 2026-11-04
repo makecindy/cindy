@@ -136,6 +136,46 @@ describe('Bot read positions', () => {
     expect(getBotLastReadAt(id)).toBe(300);
   });
 
+  // Unit / review4464044463: an old list may remove unchanged old identities,
+  // but cannot erase a subsequent acknowledgement or first discovery.
+  it('limits list pruning to unchanged reads observed before the request', () => {
+    setBotReadStateOwner('owner-1');
+    seedBotGroupReadState([{ id: 'g', lastReplyAt: 100 }, { id: 'gone', lastReplyAt: 50 }], false);
+    const beforeRequest = getBotLastReadAtMap();
+    markBotRead(botGroupReadKey('g'), 200);
+    seedBotGroupReadState([{ id: 'new', lastReplyAt: 100 }], false);
+    seedBotGroupReadState([], beforeRequest);
+    resetBotReadStateForTests(); setBotReadStateOwner('owner-1');
+    expect(getBotLastReadAt(botGroupReadKey('g'))).toBe(200);
+    expect(getBotLastReadAt(botGroupReadKey('new'))).toBe(100);
+    expect(getBotLastReadAt(botGroupReadKey('gone'))).toBeNull();
+    markBotRead('bot', 100); markBotRead('old-bot', 50);
+    const beforeBotRequest = getBotLastReadAtMap();
+    markBotRead('bot', 200); markBotRead('new-bot', 100);
+    pruneBotReadState([], beforeBotRequest);
+    resetBotReadStateForTests(); setBotReadStateOwner('owner-1');
+    expect(getBotLastReadAt('bot')).toBe(200);
+    expect(getBotLastReadAt('new-bot')).toBe(100);
+    expect(getBotLastReadAt('old-bot')).toBeNull();
+    seedBotGroupReadState([{ id: 'late', lastReplyAt: 100 }], false);
+    const beforeLateRequest = getBotLastReadAtMap();
+    const prefix = 'cindy.bots.readState.v1.mark.' + JSON.stringify('owner-1') + '.';
+    const hundred = prefix + JSON.stringify(['group:late', 100, 'initial']);
+    const fifty = prefix + JSON.stringify(['group:late', 50, 'initial']);
+    const nativeGet = Storage.prototype.getItem;
+    const nativeSet = Storage.prototype.setItem;
+    let pending = true;
+    const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, key: string) {
+      // Another mirror commits after enumeration captured only initial100.
+      if (pending && key === hundred) { pending = false; nativeSet.call(this, fifty, '1'); }
+      return nativeGet.call(this, key);
+    });
+    try { seedBotGroupReadState([], beforeLateRequest); } finally { get.mockRestore(); }
+    expect(pending).toBe(false);
+    resetBotReadStateForTests(); setBotReadStateOwner('owner-1');
+    expect(getBotLastReadAt(botGroupReadKey('late'))).toBe(50);
+  });
+
   it('keeps group watermarks on list refresh/restart, prunes deletion, and observes another window', () => {
     setBotReadStateOwner('owner-1');
     seedBotGroupReadState([{ id: 'g', lastReplyAt: 100 }]);

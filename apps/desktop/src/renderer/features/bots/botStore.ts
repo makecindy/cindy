@@ -770,7 +770,8 @@ async function hydrateFromDatabase(): Promise<void> {
       }
     }
     if (!isCurrent()) return;
-    const rows = await api.list({ lastReadAtByBotId: getBotLastReadAtMap(), welcomeContext: readCachedBotWelcomeContext(), locale: getEffectiveLocale() });
+    const lastReadAtByBotId = getBotLastReadAtMap();
+    const rows = await api.list({ lastReadAtByBotId, welcomeContext: readCachedBotWelcomeContext(), locale: getEffectiveLocale() });
     if (!isCurrent()) return;
     const dbProfiles = rows.map(normalizeDbProfile).filter((item): item is BotProfile => !!item);
     profiles = dbProfiles;
@@ -782,7 +783,7 @@ async function hydrateFromDatabase(): Promise<void> {
     // the stored map from growing with deleted Bots.
     const visibleIds = profiles.map((bot) => bot.id);
     seedMissingBotReadState(visibleIds);
-    if (!isSecondaryWindow()) pruneBotReadState(visibleIds);
+    if (!isSecondaryWindow()) pruneBotReadState(visibleIds, lastReadAtByBotId);
     emit();
   } catch {
     // DB readiness can race the first renderer render during account/bootstrap.
