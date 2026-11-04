@@ -67,9 +67,21 @@ settings and other host pages share continuous viewport-aligned artwork. This
 opt-in setting supersedes the CINDY sidebar-only backdrop treatment while active;
 disabling it restores the original theme without modifying theme files or tokens.
 Blend wallpaper with the theme surface, never a fixed black overlay in Light mode. Image opacity
-must not affect text or icons. Elevated controls, menus, dialogs and embedded web
-or editor content keep their readable surfaces. Composer scroll masking must
-align with the same wallpaper instead of introducing an opaque footer rectangle.
+must not affect text or icons. In-page raised surfaces — composer, message bubbles,
+tool and table-header cards, page cards, inputs and the selected sidebar row —
+tint the wallpaper with their own token at 72% (Light) / 64% (Dark) instead of covering
+it (user request, 2026-11-03), in the CINDY themes only: their translucent-ink text keeps its
+contrast on any wallpaper, while other built-in themes use fixed text colors calibrated
+against solid surfaces and keep them opaque. Higher visibility raises that opacity so the artwork
+contributes at most 16% under the surface, keeping the tertiary text tier at the 3:1
+floor over any wallpaper (84% at 100% visibility). Fill only, no `backdrop-filter`, which
+would become the containing block for the composer's fixed palettes. Floating layers
+(menus, popovers, dialogs, tooltips, anything positioned over other content), any surface holding
+syntax-highlighted code, such as code blocks and diffs (the fixed syntax palette needs a solid surface, §15.4), and embedded
+web or editor content keep their readable opaque surfaces. Implementation: the in-page
+glass rule in `globals.css`, scoped to page containers and excluding floating roles and
+absolute / fixed / sticky surfaces; the floor comes from `useWallpaperBackground`.
+Composer scroll masking must align with the same wallpaper instead of introducing an opaque footer rectangle.
 Built-in SVG wallpapers are decorative assets, not new semantic UI colors.
 Verify actual Light/Dark screenshots across host pages and the expanded tool pane.
 
