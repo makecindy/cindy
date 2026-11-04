@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildWorkLouderCodexPublishedTasks,
+  WORKLOUDER_CODEX_REMOTE_TASK_CANDIDATE_LIMIT,
   type WorkLouderCodexPublishSession,
 } from '../workLouderCodexTaskPublish';
 import { WORKLOUDER_CODEX_TASK_OPTION_LIMIT } from '../../../../../shared/workLouderCodex';
@@ -13,7 +14,7 @@ import { WORKLOUDER_CODEX_TASK_OPTION_LIMIT } from '../../../../../shared/workLo
  * - Bug／规则依据：all 与指定设备复现；publisher 的 100 条 local-first 截断会饿死远程任务。
  * - 现有覆盖缺口：machineSwitcher 只测选择顺序，agentIslandRemoteSessions 只测 setRemoteSessions，
  *   taskSlots 只测 main 端 cap；没有 renderer publisher 的行为覆盖。
- * - 最小失败输入：100 条 ordinary active local + 13 条 active remote，空 visibleProjection；
+ * - 最小失败输入：100 条 ordinary active local + 36 条 active remote，空 visibleProjection；
  *   旧实现只保留 100 条 local，remote 不在 payload。
  * - tier：unit；实测耗时 3.2s（本机单独运行）。
  */
@@ -66,24 +67,58 @@ describe('buildWorkLouderCodexPublishedTasks', () => {
     );
   });
 
-  it('keeps at most thirteen remote rows in the shared 100-row budget', () => {
+  it('keeps the first 36 remote rows when 37 compete', () => {
     const locals = Array.from({ length: 100 }, (_, index) => local(index));
-    const remotes = Array.from({ length: 15 }, (_, index) => remote(`remote-${index}`));
+    const remotes = Array.from({ length: 37 }, (_, index) => remote(`remote-${index}`));
     const tasks = buildWorkLouderCodexPublishedTasks([...locals, ...remotes], [], []);
     const remoteIds = tasks.map((task) => task.id).filter((id) => id.startsWith('remote-'));
 
     expect(tasks).toHaveLength(WORKLOUDER_CODEX_TASK_OPTION_LIMIT);
-    expect(remoteIds).toEqual(Array.from({ length: 13 }, (_, index) => `remote-${index}`));
-    expect(tasks.filter((task) => task.id.startsWith('local-'))).toHaveLength(87);
+    expect(remoteIds).toHaveLength(36);
+    expect(remoteIds).toEqual(
+      Array.from(
+        { length: WORKLOUDER_CODEX_REMOTE_TASK_CANDIDATE_LIMIT },
+        (_, index) => `remote-${index}`,
+      ),
+    );
+    expect(tasks.filter((task) => task.id.startsWith('local-'))).toHaveLength(64);
   });
 
-  it('keeps all thirteen remote candidates when locals fill the slot budget', () => {
+  it('keeps all 36 remote candidates when locals fill the budget', () => {
     const locals = Array.from({ length: 100 }, (_, index) => local(index));
-    const remotes = Array.from({ length: 13 }, (_, index) => remote(`remote-${index}`));
+    const remotes = Array.from(
+      { length: WORKLOUDER_CODEX_REMOTE_TASK_CANDIDATE_LIMIT },
+      (_, index) => remote(`remote-${index}`),
+    );
     const tasks = buildWorkLouderCodexPublishedTasks([...locals, ...remotes], [], []);
 
     expect(tasks).toHaveLength(WORKLOUDER_CODEX_TASK_OPTION_LIMIT);
-    expect(idsOf(tasks).filter((id) => id.startsWith('remote-'))).toHaveLength(13);
+    expect(idsOf(tasks).filter((id) => id.startsWith('remote-'))).toHaveLength(36);
+    expect(idsOf(tasks).filter((id) => id.startsWith('remote-'))).toHaveLength(
+      WORKLOUDER_CODEX_REMOTE_TASK_CANDIDATE_LIMIT,
+    );
+    expect(tasks.filter((task) => task.id.startsWith('local-'))).toHaveLength(64);
+  });
+
+  it('keeps visible projections and the remote quota within the 100-row budget', () => {
+    const visible = Array.from({ length: 13 }, (_, index) =>
+      local(1000 + index, { id: `archived-${index}`, status: 'archived' }),
+    );
+    const locals = Array.from({ length: 100 }, (_, index) => local(index));
+    const remotes = Array.from(
+      { length: WORKLOUDER_CODEX_REMOTE_TASK_CANDIDATE_LIMIT },
+      (_, index) => remote(`remote-${index}`),
+    );
+    const tasks = buildWorkLouderCodexPublishedTasks(
+      [...locals, ...remotes],
+      visible,
+      visible.map((session) => session.id),
+    );
+
+    expect(tasks).toHaveLength(WORKLOUDER_CODEX_TASK_OPTION_LIMIT);
+    expect(tasks.filter((task) => task.id.startsWith('archived-'))).toHaveLength(13);
+    expect(tasks.filter((task) => task.id.startsWith('local-'))).toHaveLength(51);
+    expect(tasks.filter((task) => task.id.startsWith('remote-'))).toHaveLength(36);
   });
 
   it('preserves sidebarOrder and catalogEligible for visible projections', () => {

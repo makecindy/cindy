@@ -11,6 +11,12 @@ export type WorkLouderCodexPublishSession = Pick<
 >;
 
 /**
+ * Remote active tasks reserved in the 100-row publish budget. This is a
+ * candidate pool, not the 13 physical key slots that can light at once.
+ */
+export const WORKLOUDER_CODEX_REMOTE_TASK_CANDIDATE_LIMIT = 36;
+
+/**
  * Build the keyboard's task rows without letting a large local catalog starve
  * the remote tasks that share the same MACHINE_ALL scope.
  */
@@ -33,10 +39,12 @@ export function buildWorkLouderCodexPublishedTasks(
     Boolean(session.deviceLinkDeviceId),
   );
   const localCatalogSessions = catalogSessions.filter((session) => !session.deviceLinkDeviceId);
-  // The board exposes thirteen Agent slots. Reserve the full slot count for
-  // remote rows so a large local catalog cannot consume the whole IPC
-  // allowance first; the task source still decides which rows reach keys.
-  const remoteQuota = Math.min(remoteCatalogSessions.length, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
+  // Keep a wider remote candidate pool than the 13 physical key slots; the task
+  // source still decides which of these candidates reach keys.
+  const remoteQuota = Math.min(
+    remoteCatalogSessions.length,
+    WORKLOUDER_CODEX_REMOTE_TASK_CANDIDATE_LIMIT,
+  );
   const localQuota = Math.max(0, remainingCatalogSlots - remoteQuota);
   const publishedCatalog = [
     ...localCatalogSessions.slice(0, localQuota),
