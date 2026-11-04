@@ -207,6 +207,32 @@ describe('Chat Server result delivery and refresh', () => {
   });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); fixture.config = ''; vi.clearAllMocks(); });
 
+  it('keeps the displayed talk execution identity across a refreshed plan revision', async () => {
+    const planId = '60000000-0000-4000-8000-000000000001';
+    const plan = { id: planId, revision: 4, kind: 'talk', source_message_id: execution.source_message_id,
+      request_text: 'Take turns', organizer_id: botId, creator_id: selfId, status: 'running', current_step: 0,
+      created_at: '2026-10-03T00:00:00Z', updated_at: '2026-10-03T00:00:00Z',
+      activeExecution: { id: execution.id, status: 'queued' }, supportsPendingSkip: true,
+      steps: [{ position: 0, botId, botName: 'Bot', task: '', status: 'running' },
+        { position: 1, botId, botName: 'Next', task: '', status: 'pending' }] };
+    fixture.handle.mockImplementation((route, method) => route.includes('/plans')
+      ? { body: method === 'POST' ? {} : [plan] } : response(route));
+    const result = await service.getGroup(roomId);
+    if (!result.ok) throw new Error(result.errorCode);
+    expect(result.group.plans?.[0].steps[0]).toMatchObject({ executionId: execution.id, executionStatus: 'queued' });
+    expect(result.group.plans?.[0].supportsPendingSkip).toBe(true);
+    // A replacement at the same position must not be substituted for the displayed attempt.
+    plan.activeExecution.id = '40000000-0000-4000-8000-000000000002';
+    const edited = await service.editPlanStep({ groupId: roomId, planId, position: 0, action: 'skip', executionId: execution.id });
+    expect(edited.ok).toBe(true);
+    const post = fixture.handle.mock.calls.find(([route, method]) => route === `/conversations/${roomId}/plans/${planId}` && method === 'POST');
+    expect(post?.[2]).toMatchObject({ action: 'skip', position: 0, executionId: execution.id, expectedRevision: 4 });
+    expect((await service.editPlanStep({ groupId: roomId, planId, position: 1, action: 'skip' })).ok).toBe(true);
+    const futurePost = fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}/plans/${planId}` && method === 'POST').at(-1);
+    expect(futurePost?.[2]).toMatchObject({ action: 'skip', position: 1, expectedRevision: 4 });
+    expect(futurePost?.[2]).not.toHaveProperty('executionId');
+  });
+
   it('uses the personal mask grant without requiring bot membership or elevating a peer to owner', async () => {
     let downgraded = false;
     const peer = '30000000-0000-4000-8000-000000000002';

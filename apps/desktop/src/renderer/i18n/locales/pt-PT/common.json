@@ -10757,7 +10757,8 @@
         "lifecycleUnavailable": "O servidor ou computador atual ainda não suporta esta ação.",
         "groupDissolved": "Este grupo foi dissolvido. Ainda pode ler o histórico disponível.",
         "lastOwner": "Transfira a propriedade ou dissolva este grupo antes de sair.",
-        "allBotsMentionDisabled": "O proprietário do grupo ainda não ativou @Todos os colegas."
+        "allBotsMentionDisabled": "O proprietário do grupo ainda não ativou @Todos os colegas.",
+        "turnAlreadyStarted": "Este colega já começou e não pode ser ignorado"
       },
       "organizer": "Organizador",
       "plan": {
@@ -10790,7 +10791,17 @@
         "allTurns_other": "Os {{count}} colegas",
         "foldTurns": "Mostrar menos",
         "intro_many": "São necessários {{count}} passos. Eis quem faz o quê:",
-        "allTurns_many": "Os {{count}} colegas"
+        "allTurns_many": "Os {{count}} colegas",
+        "stepQueued": "À espera de início",
+        "stepExecuting": "Em execução",
+        "stepSkipped": "Ignorado",
+        "skippingTurn": "A saltar…",
+        "queueWaiting": "À espera que continues",
+        "skipTurnLabel": "Saltar {{name}}",
+        "queueEnded": "Ronda terminada",
+        "talkTitle": "Ouvir todos à vez",
+        "talkPending": "Não iniciado",
+        "skipTurn": "Saltar"
       },
       "speaking": {
         "planning": "A dividir o trabalho…"

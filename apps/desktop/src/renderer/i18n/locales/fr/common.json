@@ -10757,7 +10757,8 @@
         "lifecycleUnavailable": "Le serveur ou l'ordinateur actuel ne prend pas encore en charge cette action.",
         "groupDissolved": "Ce groupe a été dissous. Vous pouvez toujours lire l'historique disponible.",
         "lastOwner": "Transférez la propriété ou dissolvez ce groupe avant de le quitter.",
-        "allBotsMentionDisabled": "Le propriétaire du groupe n’a pas encore activé @Tous les coéquipiers."
+        "allBotsMentionDisabled": "Le propriétaire du groupe n’a pas encore activé @Tous les coéquipiers.",
+        "turnAlreadyStarted": "Ce coéquipier a déjà commencé et ne peut plus être ignoré"
       },
       "organizer": "Organisateur",
       "plan": {
@@ -10790,7 +10791,17 @@
         "allTurns_other": "Les {{count}} coéquipiers",
         "foldTurns": "Afficher moins",
         "intro_many": "Cela prend {{count}} étapes. Voici qui fait quoi :",
-        "allTurns_many": "Les {{count}} coéquipiers"
+        "allTurns_many": "Les {{count}} coéquipiers",
+        "stepQueued": "En attente de démarrage",
+        "stepExecuting": "En cours",
+        "stepSkipped": "Ignoré",
+        "skippingTurn": "Passage en cours…",
+        "queueWaiting": "En attente de la suite",
+        "skipTurnLabel": "Passer {{name}}",
+        "queueEnded": "Tour terminé",
+        "talkTitle": "Écouter chacun à son tour",
+        "talkPending": "Non commencé",
+        "skipTurn": "Passer"
       },
       "speaking": {
         "planning": "Répartition du travail…"
