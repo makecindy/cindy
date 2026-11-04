@@ -335,7 +335,7 @@ describe('model advanced editor', () => {
 
   // #7258: selecting Responses first must not leave a generated route that
   // survives refresh and blocks Pi's Messages /v1 endpoint correction.
-  it.each(['openai-chat', 'anthropic-messages'] as const)('avoids generated Pi %s routes on refresh', async (wireProtocol) => {
+  it.each(['openai-chat', 'anthropic-messages', 'google-generative-ai'] as const)('avoids generated Pi %s routes on refresh', async (wireProtocol) => {
     const update = vi.fn(async (...args: unknown[]) => {
       void args;
       return { ok: true };

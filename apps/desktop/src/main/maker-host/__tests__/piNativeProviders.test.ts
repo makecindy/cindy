@@ -617,7 +617,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     }
   });
 
-  it('removes inherited /v1 for a route-free Anthropic runtime unless it has a custom request path', () => {
+  it('removes inherited /v1 for route-free Anthropic models on Anthropic or Google runtimes', () => {
     const baseUrl = 'https://proxy.example/custom/v1';
     const { providers } = buildPiNativeProvidersFromConfigs([
       {
@@ -634,6 +634,13 @@ describe('buildPiNativeProvidersFromConfigs', () => {
           models: [{ id: 'custom-path-model', name: 'Custom Path Model' }],
         }) },
       },
+      {
+        id: 'google-proxy', name: 'Google Proxy', auth: { method: 'none' },
+        runtimes: { pi: piRuntime({
+          baseUrl, wireProtocol: 'google-generative-ai',
+          models: [{ id: 'messages-model', name: 'Messages Model', piApi: 'anthropic-messages' }],
+        }) },
+      },
     ], () => null);
 
     expect(providers[0]).toMatchObject({ baseUrl, api: 'anthropic-messages' });
@@ -642,6 +649,10 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     });
     expect(providers[1]).toMatchObject({ baseUrl, api: 'anthropic-messages' });
     expect(providers[1].models[0]).not.toHaveProperty('baseUrl');
+    expect(providers[2]).toMatchObject({ baseUrl, api: 'google-generative-ai' });
+    expect(providers[2].models[0]).toMatchObject({
+      id: 'messages-model', api: 'anthropic-messages', baseUrl: 'https://proxy.example/custom',
+    });
   });
 
   // Tier 2: native SDK APIs have no HTTP-bridge route resolution, but their

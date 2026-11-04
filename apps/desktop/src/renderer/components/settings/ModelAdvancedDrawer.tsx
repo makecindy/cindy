@@ -341,7 +341,7 @@ export function ModelAdvancedDrawer({
       // Keep existing routes and endpoints that change for the selected API.
       const inheritPiEndpoint = agent === 'pi' && !model.route && !runtime.requestPath &&
         (runtime.wireProtocol === 'openai-chat' || runtime.wireProtocol === 'openai-responses' ||
-          runtime.wireProtocol === 'anthropic-messages') &&
+          runtime.wireProtocol === 'anthropic-messages' || runtime.wireProtocol === 'google-generative-ai') &&
         (api === 'anthropic-messages' ||
           ((api === 'openai-completions' || api === 'openai-responses') &&
             providerBaseUrlForApi(runtime.baseUrl, api) === runtime.baseUrl));
