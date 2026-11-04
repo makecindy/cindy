@@ -1404,6 +1404,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
   };
 
   const renderProviderCard = (provider: NeutralCardProvider) => {
+    const setting = provider === 'telegram' ? imBotSettings.cindyTelegram : imBotSettings.cindyX;
     const view = hook[provider] as ProviderHookView | undefined;
     if (view === undefined) return null; // 旧 main 快照尚无该 provider 字段时不渲染
     const cs = providerCardState(provider, view);
@@ -1421,7 +1422,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
         routeSummary={companion ? null : cs.bindingLine}
         status={<ChannelStatusBadge tone={cs.badge.tone} label={cs.badge.label} />}
         headerAction={
-          <Switch data-setting-id={imBotSettings.cindy.id}
+          <Switch data-setting-id={setting.id}
             checked={cs.toggleChecked}
             disabled={!view.enabled && view.url.length === 0}
             onCheckedChange={(enabled) => handleProviderToggle(provider, enabled)}

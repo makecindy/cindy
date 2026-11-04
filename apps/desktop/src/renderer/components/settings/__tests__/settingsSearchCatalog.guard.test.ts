@@ -52,6 +52,18 @@ describe('settings search anchor contract', () => {
         const definition = definitions.get(match[1])?.[match[2]];
         if (definition) definitionTargets.add(definition.targetId);
       }
+      // Dynamic rows read the same imported collection as the catalog. Require
+      // the selected definition's targetId to actually feed a rendered anchor.
+      // Per-row identity and platform filtering are also checked against real DOM
+      // in KeyboardShortcutsSection.mutationRace.test.tsx.
+      for (const match of text.matchAll(/const (\w+) = (\w+)\[[^\]]+\];/g)) {
+        if (!text.includes('id={' + match[1] + '.targetId}')) continue;
+        const collection = definitions.get(match[2]);
+        if (!collection) continue;
+        for (const definition of Object.values(collection)) {
+          definitionTargets.add(definition.targetId);
+        }
+      }
       for (const match of text.matchAll(/const (\w+) = useSettingDefinition\(([\s\S]*?)\);/g)) {
         if (!text.includes('...' + match[1] + '.anchorProps')) continue;
         for (const reference of match[2].matchAll(/(\w+)\.(\w+)/g)) {
@@ -68,13 +80,9 @@ describe('settings search anchor contract', () => {
         const dynamicProviderAnchor =
           /^cindy-im-(slack|telegram|x)$/.test(target) &&
           source.includes('id={`cindy-im-${provider}`}');
-        const dynamicShortcutAnchor =
-          target.startsWith('settings-shortcut-') &&
-          source.includes('id={`settings-shortcut-${def.id}`}');
         expect(
           source.includes('id="' + target + '"') ||
             dynamicProviderAnchor ||
-            dynamicShortcutAnchor ||
             definitionTargets.has(target),
           target,
         ).toBe(true);
