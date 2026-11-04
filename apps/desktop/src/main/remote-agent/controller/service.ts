@@ -437,6 +437,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     const webFetch = deps.webFetch && shared ? deps.webFetch : undefined;
     const collect = { skipCredentials: shared };
     let cancelPreparedHandle: (() => void) | undefined;
+    let restartedHistory = false;
     const handle = await startRemoteAgentSession(input.agentKind, opts, {
       startupSignal: attempt.signal,
       reconnectAuthorization: (isCurrent, options) => reconnectAuthorization?.(isCurrent, options) ?? Promise.resolve(),
@@ -567,10 +568,12 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
             // M restarted and lost its memory-only grant. Reissue only for the
             // original M through O; never send native history to another peer.
             const reauthorized = await authorizeSharedTaskExecutor(input.deviceId, sessionId,
-              input.agentKind, opts.model, original.deviceId, false, attempt.signal);
+              input.agentKind, opts.model, original.deviceId, false, attempt.signal,
+              openingDirectRoute?.reused ? { ...openingDirectRoute, direct: true } : undefined);
             if (!reauthorized.direct || reauthorized.target !== target) throw error;
             requireCurrent();
-            return startAttempt(input, false, attempt, false, true);
+            restartedHistory = true;
+            return startAttempt(input, false, attempt, false, !reauthorized.reused);
           }
         }
         const taskKey = `${shareId}:${sessionId}`;
@@ -604,6 +607,9 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       void handle.close({ reason: 'account-boundary' }).catch(() => undefined);
       throw attempt.signal.reason;
     }
+    // The recursive attempt already owns its lease and lifecycle. Wrapping it
+    // again would install a second set of status/renewal timers from this attempt.
+    if (restartedHistory) return handle;
     if (shareId && sessionId && target !== input.deviceId) {
       const taskKey = `${shareId}:${sessionId}`;
       const targetDeviceId = parseProviderSharePeer(target)?.deviceId;

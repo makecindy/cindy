@@ -681,8 +681,10 @@ export async function renewCrossRegionProviderShareLink(peerKey: string): Promis
 
 function crossRegionShareState(rt: Runtime | null, peer: { shareId: string; deviceId: string; role?: string }) {
   if (!rt || !current(rt) || peer.role !== 'host') return null;
+  // The regional connection belongs to the share, not only its owner O.
+  // O may delegate a task to M; M still checks that task's grant on every call.
   return [...rt.regions.values()].flatMap((state) => state.shares)
-    .find((share) => share.shareId === peer.shareId && share.hostDeviceId === peer.deviceId) ?? null;
+    .find((share) => share.shareId === peer.shareId) ?? null;
 }
 
 function crossRegionShareEpoch(share: ProviderShareReceived): number {

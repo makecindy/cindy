@@ -123,6 +123,7 @@ import {
   refreshProviderShareCrossRegion,
   waitForCrossRegionReceived,
   isCrossRegionProviderShareTarget,
+  renewCrossRegionProviderShareLink,
   startProviderShareCrossRegion,
   stopProviderShareCrossRegion,
 } from '../providerShareCrossRegion';
@@ -534,6 +535,25 @@ describe('cross-region provider share', () => {
     expect(isCrossRegionProviderShareTarget(target)).toBe(false);
     expect(state.calls).toEqual([]);
     expect(__testing.readMarkers()).toEqual({});
+  });
+
+  // Unit: O and its delegated executor M are distinct physical targets. The
+  // existing owner-only cases did not exercise the executor's regional route.
+  it('routes an approved cross-region executor through the share region and still stops on a pause', async () => {
+    state.responses.set('/session', { credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [share] });
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
+    await refreshReceivedShares('test');
+    await resolveRemoteAgentTargetWhenReady('share:share-x');
+    const target = providerShareHostPeer('share-x', 'executor-m');
+    await renewCrossRegionProviderShareLink(target);
+    await expect(crossRegionInvoke(target, 'maker:remote-agent:v1', [{ op: 'caps' }])).resolves.toMatchObject({ ok: true });
+    expect(state.invokes).toEqual([{ target, channel: 'maker:remote-agent:v1' }]);
+    state.responses.set('/session', { credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+      shares: [{ ...share, status: 'paused' }] });
+    await refreshProviderShareCrossRegion('global');
+    await expect(renewCrossRegionProviderShareLink(target)).rejects.toMatchObject({ code: 'ACCESS_REVOKED' });
+    await expect(crossRegionInvoke(target, 'maker:remote-agent:v1', [{ op: 'caps' }])).rejects.toMatchObject({ code: 'ACCESS_REVOKED' });
+    expect(state.invokes).toHaveLength(1);
   });
 
   // Unit: the same wrapper is used by reads, metadata mirrors and the remote

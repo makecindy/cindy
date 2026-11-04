@@ -1635,14 +1635,19 @@ describe('shared startup lease budget', () => {
     await resumed.close();
   });
 
-  it('re-arms renewal after O restores a lost historical grant to the original executor', async () => {
+  // Unit: caps can succeed through another task's grant while this history's
+  // task-scoped open is denied. Both restart paths must keep the original window.
+  it('does not re-arm renewal when O restores a reused historical grant to the original executor', async () => {
     const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
     const first = await f.open('history-lost'); await first.close({ reason: 'navigation' });
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
     f.state.loseGrantOnOpen = true;
     const resumed = await f.open('history-lost', f.owner, 'm', 'native-only-on-m');
     expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
     await vi.advanceTimersByTimeAsync(20 * 60_000);
-    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(3);
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(8 * 60_000 + 1);
+    expect(liveSharedTaskTarget('history-lost', f.owner)).toBeNull();
     await resumed.close();
   });
 
@@ -1674,11 +1679,18 @@ describe('shared startup lease budget', () => {
   it('re-authorizes only the original executor when its cached task grant was lost in an M restart', async () => {
     const f = fixture(); f.state.ready = true; f.state.duration = 60_000;
     const first = await f.open('historical'); await first.close({ reason: 'navigation' });
+    await vi.advanceTimersByTimeAsync(20_000);
+    f.state.duration = 30 * 60_000;
     f.state.loseGrantOnOpen = true;
     const resumed = await f.open('historical', f.owner, 'm', 'native-only-on-m');
     expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
     expect(f.calls.filter(call => call.op === 'direct-locate')).toHaveLength(0);
     expect(f.calls.filter(call => call.op === 'open').map(call => call.device)).toEqual([f.target, f.target, f.target]);
+    expect(liveSharedTaskTarget('historical', f.owner)).toBe(f.target);
+    const disposedBeforeExpiry = f.disposed.length;
+    await vi.advanceTimersByTimeAsync(40_000 + 1);
+    expect(liveSharedTaskTarget('historical', f.owner)).toBeNull();
+    expect(f.disposed).toHaveLength(disposedBeforeExpiry + 1);
     await resumed.close();
   });
 
@@ -1691,6 +1703,19 @@ describe('shared startup lease budget', () => {
     await flush(); forgetSharedTaskAuthorization(f.owner, 'historical'); gate.resolve();
     await expect(pending).rejects.toThrow('original shared executor authorization');
     expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+  });
+
+  it('does not reopen historical M after its retained window is released during O reauthorization', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 10 * 60_000;
+    const first = await f.open('historical'); await first.close({ reason: 'navigation' });
+    f.state.loseGrantOnOpen = true; f.state.blockAllocation = true;
+    const pending = f.open('historical', f.owner, 'm', 'native-only-on-m'); void pending.catch(() => undefined);
+    try {
+      await vi.waitFor(() => expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2));
+      forgetSharedTaskAuthorization(f.owner, 'historical');
+    } finally { f.allocation.resolve(); }
+    await expect(pending).rejects.toThrow('original shared executor authorization');
+    expect(f.calls.filter(call => call.op === 'open')).toHaveLength(2);
   });
 
   it.each(['model', 'task', 'explicit-link-close', 'wall-expiry'] as const)('never reuses a historical grant across %s during O outage', async boundary => {

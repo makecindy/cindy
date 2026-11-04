@@ -79,12 +79,19 @@ export async function releaseSharedTaskAuthorization(ownerRoute: string, session
 export async function authorizeSharedTaskExecutor(
   ownerRoute: string, sessionId: string, agentKind: RemoteAgentKind, model: string,
   deviceId: string, releaseOnFailure = false, signal?: AbortSignal,
-  retainedWindow?: RetainedTask,
+  retainedHistory?: SharedTaskAuthorization,
 ): Promise<SharedTaskAuthorization> {
   signal?.throwIfAborted();
   const shareId = parseProviderShareAgentDeviceId(ownerRoute);
   if (!shareId) throw new Error('[REMOTE_AGENT_INVALID] a shared task owner is required');
   const target = providerShareHostPeer(shareId, deviceId);
+  const retainedWindow = retainedHistory ? retainedTasks.get(taskKey(ownerRoute, sessionId)) : undefined;
+  if (retainedHistory && (!retainedWindow || !retainedWindow.current()
+    || retainedWindow.target !== target || retainedWindow.agentKind !== agentKind || retainedWindow.model !== model
+    || (['generation', 'leaseDeadline', 'wallDeadline', 'authorizedUntil', 'renewAt'] as const)
+      .some(key => retainedHistory[key] !== retainedWindow[key]))) {
+    throw new Error('[REMOTE_AGENT_UNAVAILABLE] original shared executor authorization is no longer retained');
+  }
   const closeEpoch = getRemoteLinkCloseEpoch(target);
   const owner = activeOwnerScopeKey(), endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
   const share = findReceivedShare(shareId);
