@@ -1569,6 +1569,45 @@ describe('shared startup lease budget', () => {
     await resumed.close();
   });
 
+  // Unit: a real restarted M rejects the scoped link before it can answer caps.
+  // The old fixture only lost the task grant after caps had already succeeded.
+  it.each(['INVOKE_TIMEOUT', 'TIMEOUT', 'DEVICE_UNRESPONSIVE'])(
+    'reauthorizes the original historical executor after a %s caps failure without extending retention', async code => {
+      const f = fixture(); f.state.ready = true; f.state.duration = 10 * 60_000;
+      const first = await f.open('historical'); await first.close({ reason: 'navigation' });
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
+      f.state.duration = 30 * 60_000;
+      historyInvoke.mockRejectedValueOnce(Object.assign(new Error('no link-accept within 30000ms'), { code }));
+      // The failed caps RPC already started recovery before O installed the
+      // new grant. The first explicit open joins that pre-grant flight.
+      const opensBefore = historyOpenLink.mock.calls.length;
+      historyOpenLink.mockRejectedValueOnce(Object.assign(new Error('pre-grant handshake timed out'), { code: 'TIMEOUT' }));
+      const resumed = await f.open('historical', f.owner, 'm', 'native-only-on-m');
+      expect(historyOpenLink.mock.calls.length - opensBefore).toBe(2);
+      expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
+      expect(f.calls.filter(call => call.op === 'allocate').at(-1)).toMatchObject({
+        device: f.owner, preferredExecutorDeviceId: 'executor-m', sessionId: 'historical', model: 'm',
+      });
+      expect(f.calls.filter(call => call.op === 'open').map(call => call.device)).toEqual([f.target, f.target]);
+      expect(f.calls.filter(call => call.op === 'open').at(-1)).toMatchObject({
+        payload: { json: { options: { resumeSessionId: 'native-only-on-m' } } },
+      });
+      await vi.advanceTimersByTimeAsync(8 * 60_000 + 1);
+      expect(liveSharedTaskTarget('historical', f.owner)).toBeNull();
+      expect(f.disposed).toEqual(['historical', 'historical']);
+      await resumed.close();
+    },
+  );
+
+  it.each(['ACCESS_REVOKED', 'REMOTE_DISABLED'])('does not reauthorize historical caps denial %s', async code => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 10 * 60_000;
+    const first = await f.open('historical'); await first.close({ reason: 'navigation' });
+    historyInvoke.mockRejectedValueOnce(Object.assign(new Error('explicit permission denial'), { code }));
+    await expect(f.open('historical', f.owner, 'm', 'native-only-on-m')).rejects.toThrow('explicit permission denial');
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    expect(f.calls.filter(call => call.op === 'open')).toHaveLength(1);
+  });
+
   it('re-arms renewal after an online model change on a reused history route', async () => {
     const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
     const first = await f.open('history-renew-model'); await first.close({ reason: 'navigation' });

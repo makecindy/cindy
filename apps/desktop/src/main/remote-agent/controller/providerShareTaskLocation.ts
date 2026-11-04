@@ -1,4 +1,4 @@
-import { providerShareHostPeer, type RemoteAgentKind } from '@cindy/device-link';
+import { parseProviderSharePeer, providerShareHostPeer, type RemoteAgentKind } from '@cindy/device-link';
 
 import { getRemoteLinkCloseEpoch, openRemoteLink, remoteBackgroundInvoke } from '../../device-link/index.js';
 import { isCrossRegionProviderShareTarget, renewCrossRegionProviderShareLink } from '../../device-link/providerShareCrossRegion.js';
@@ -79,6 +79,7 @@ export async function releaseSharedTaskAuthorization(ownerRoute: string, session
 export async function authorizeSharedTaskExecutor(
   ownerRoute: string, sessionId: string, agentKind: RemoteAgentKind, model: string,
   deviceId: string, releaseOnFailure = false, signal?: AbortSignal,
+  retainedWindow?: RetainedTask,
 ): Promise<SharedTaskAuthorization> {
   signal?.throwIfAborted();
   const shareId = parseProviderShareAgentDeviceId(ownerRoute);
@@ -102,6 +103,9 @@ export async function authorizeSharedTaskExecutor(
     }
     const requireCurrentLink = (): void => {
       signal?.throwIfAborted();
+      if (retainedWindow && !retainedWindow.current()) {
+        throw new Error('[REMOTE_AGENT_UNAVAILABLE] original shared executor authorization is no longer retained');
+      }
       if (getRemoteLinkCloseEpoch(target) !== closeEpoch) {
         throw new Error('[REMOTE_AGENT_UNAVAILABLE] shared executor link was closed during authorization');
       }
@@ -117,7 +121,18 @@ export async function authorizeSharedTaskExecutor(
     // ready. Reconfirm only this peer after its fresh grant, before native IDs
     // or task contents are sent. Preserve the share's existing regional relay.
     if (isCrossRegionProviderShareTarget(target)) await renewCrossRegionProviderShareLink(target);
-    else await openRemoteLink(target);
+    else {
+      try { await openRemoteLink(target); }
+      catch (error) {
+        // The timed-out caps RPC can have started a single-flight recovery
+        // before O installed the replacement grant. Once that flight settles,
+        // confirm again under the new grant; never retry a denial or closure.
+        const code = (error as { code?: unknown })?.code;
+        if (!retainedWindow || !['TIMEOUT', 'INVOKE_TIMEOUT', 'DEVICE_UNRESPONSIVE'].includes(String(code))) throw error;
+        requireCurrentLink();
+        await openRemoteLink(target);
+      }
+    }
     requireCurrentLink();
     const caps = await RemoteAgentRunClient.caps(remoteAgentInvoker(target, remoteBackgroundInvoke));
     requireCurrentLink();
@@ -125,10 +140,19 @@ export async function authorizeSharedTaskExecutor(
       throw new Error('[REMOTE_AGENT_PEER_TOO_OLD] the computer holding this shared task cannot accept it');
     }
     const leaseDeadline = sharedTaskLeaseDeadline(value, requestedAt);
-    const grant = { target, direct: true, ...(generation ? { generation } : {}),
+    const grant: SharedTaskAuthorization = { target, direct: true, ...(generation ? { generation } : {}),
       ...(leaseDeadline !== undefined ? { leaseDeadline, wallDeadline: requestedWall + leaseDeadline - requestedAt,
         renewAt: requestedWall + Math.min(20 * 60_000, (leaseDeadline - requestedAt) * 2 / 3),
         authorizedUntil: requestedWall + Math.min(29 * 60_000, leaseDeadline - requestedAt) } : {}) };
+    if (retainedWindow) {
+      // A failed probe is not a renewal. Even a successful O/M replacement
+      // remains bounded by this history's original wall/monotonic window.
+      for (const key of ['leaseDeadline', 'wallDeadline', 'authorizedUntil', 'renewAt'] as const) {
+        const previous = retainedWindow[key];
+        if (previous !== undefined) grant[key] = Math.min(grant[key] ?? previous, previous);
+      }
+      grant.reused = true;
+    }
     rememberSharedTaskAuthorization(ownerRoute, sessionId, agentKind, model, grant);
     return grant;
   } catch (error) {
@@ -163,11 +187,15 @@ export async function authorizeSharedTaskHistory(
         authorizedUntil: retained.authorizedUntil, renewAt: retained.renewAt };
     } catch (error) {
       signal?.throwIfAborted();
-      // caps is a generic capability read: it neither proves that M lost this
-      // task's grant nor that O is reachable. Keep the retained deadline and
-      // original-M affinity; a real loss is detected by the task-scoped open
-      // error and reauthorized explicitly there.
-      throw error;
+      // After an M restart the scoped handshake can fail before caps/open
+      // can report a missing task grant. Ask O for a real replacement, pinned
+      // to the same M, then require M's fresh handshake and caps. A timeout
+      // alone grants nothing; explicit denials and offline verdicts propagate.
+      const code = (error as { code?: unknown })?.code;
+      const peer = parseProviderSharePeer(retained.target);
+      if (!retained.current() || !peer || peer.role !== 'host'
+        || !['TIMEOUT', 'INVOKE_TIMEOUT', 'DEVICE_UNRESPONSIVE'].includes(String(code))) throw error;
+      return authorizeSharedTaskExecutor(agentDeviceId, sessionId, agentKind, model, peer.deviceId, false, signal, retained);
     }
   }
   let location: unknown;
