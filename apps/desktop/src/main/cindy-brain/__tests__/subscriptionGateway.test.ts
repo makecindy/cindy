@@ -41,7 +41,7 @@ const createSessionNotification = createGhostProductionCallbacks<{
     kind: 'switched',
     data: { sessionId: string },
     claim: () => Promise<boolean>,
-    releaseRaw: () => void,
+    releaseRaw: (resetPrimary?: boolean) => void,
   ): void;
 }>({ functions: ['notifyGhostSessionEvent'] });
 
@@ -145,9 +145,9 @@ describe('createGhostPrimarySessionFocusTracker', () => {
   });
 
   it('claims publication at the final async boundary', async () => {
-    const pending: Array<{ sessionId: string; claim: () => Promise<boolean> }> = [];
-    const tracker = createGhostPrimarySessionFocusTracker(async () => 'lead', (sessionId, claim) => {
-      pending.push({ sessionId, claim });
+    const pending: Array<{ sessionId: string; claim: () => Promise<boolean>; releaseRaw: (resetPrimary?: boolean) => void }> = [];
+    const tracker = createGhostPrimarySessionFocusTracker(async () => 'lead', (sessionId, claim, releaseRaw) => {
+      pending.push({ sessionId, claim, releaseRaw });
     });
 
     tracker.note('worker-1');
@@ -157,6 +157,8 @@ describe('createGhostPrimarySessionFocusTracker', () => {
 
     await expect(pending[0]?.claim()).resolves.toBe(false);
     await expect(pending[1]?.claim()).resolves.toBe(true);
+    // A late discovery failure must not erase the newer focus's deduplication.
+    pending[0]?.releaseRaw(true);
     await expect(pending[1]?.claim()).resolves.toBe(false);
   });
 
@@ -337,6 +339,49 @@ const TURN_DATA = { sessionId: 's1', agent: 'claude-code' };
 // synchronous scan, and must not reuse another owner's pending discovery.
 // Existing fan-out tests only exercise synchronous discovery / wake boundaries.
 describe('asynchronous notification discovery', () => {
+  // Unit regression: an unreadable discovery root must not reserve a failed
+  // focus, either when the same raw focus retries or when the user returns.
+  it.each([false, true])('recovers after discovery fails (retry same focus: %s)', async (retrySameFocus) => {
+    let failDiscovery = false;
+    const subscriber = ghost('a', { topics: ['session'] });
+    const { gw, sent, running } = makeGateway({
+      listGhostsAsync: async () => {
+        if (failDiscovery) throw new Error('receipt root temporarily unreadable');
+        return [subscriber];
+      },
+    });
+    running.add('a');
+    const eligible = vi.fn(async () => ({ outcome: 'eligible' }));
+    const { notifyGhostSessionEvent } = createSessionNotification({
+      ghostOwnerScope: { capture: () => 1, isCurrent: () => true, isStable: () => true },
+      getGhostSubscriptionGateway: () => gw,
+      isGhostEligibleSession: eligible,
+    });
+    const tracker = createGhostPrimarySessionFocusTracker(
+      async (id) => id,
+      (sessionId, claim, releaseRaw) => notifyGhostSessionEvent('switched', { sessionId }, claim, releaseRaw),
+    );
+    tracker.note('A');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    failDiscovery = true;
+    tracker.note('B');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(sent).toHaveLength(1);
+    expect(eligible).toHaveBeenCalledTimes(1);
+
+    failDiscovery = false;
+    if (retrySameFocus) {
+      tracker.note('B');
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(sent).toHaveLength(2);
+    }
+    tracker.note('A');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(sent.map(({ payload }) => 'data' in payload ? payload.data : undefined)).toEqual(
+      (retrySameFocus ? ['A', 'B', 'A'] : ['A', 'A']).map(sessionId => ({ sessionId })),
+    );
+  });
+
   // Unit regression (PR #8752): the gateway-only preflight tests did not cover
   // focus bookkeeping across an empty subscription set. A -> disabled B -> A
   // must deliver both A events through the production notification entry.

@@ -3402,12 +3402,21 @@ export function notifyGhostSessionEvent(
   kind: 'created' | 'archived' | 'switched',
   data: { sessionId: string; workdir?: string },
   shouldPublish: () => boolean | Promise<boolean> = () => true,
-  onRetry: () => void = () => {},
+  onRetry: (resetPrimary?: boolean) => void = () => {},
 ): void {
   void (async () => {
     try {
       const owner = ghostOwnerScope.capture();
-      if (!(await getGhostSubscriptionGateway().hasSubscribers('session'))) {
+      let hasSubscribers: boolean;
+      try {
+        hasSubscribers = await getGhostSubscriptionGateway().hasSubscribers('session');
+      } catch {
+        // Discovery did not establish a delivery target. Release both markers:
+        // the same focus may retry, and returning to the previous focus is new.
+        onRetry(true);
+        return;
+      }
+      if (!hasSubscribers) {
         // Even without listeners, advance the focus tracker's deduplication state.
         // Otherwise disabling at A, visiting B, then enabling and returning to A
         // suppresses a real switch. The claim retains generation/Lead rechecks;

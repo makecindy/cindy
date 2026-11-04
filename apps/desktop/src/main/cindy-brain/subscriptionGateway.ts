@@ -928,7 +928,7 @@ export function createGhostPrimarySessionFocusTracker(
   notify: (
     sessionId: string,
     claim: () => Promise<boolean>,
-    releaseRaw: () => void,
+    releaseRaw: (resetPrimary?: boolean) => void,
   ) => void,
 ): { note(sessionId: string | null): void } {
   let lastRawSessionId: string | null = null;
@@ -974,8 +974,12 @@ export function createGhostPrimarySessionFocusTracker(
             if (primarySessionId === lastPrimarySessionId) return false;
             lastPrimarySessionId = primarySessionId;
             return true;
-          }, () => {
-            if (currentGeneration === generation) lastRawSessionId = null;
+          }, (resetPrimary = false) => {
+            if (currentGeneration !== generation) return;
+            lastRawSessionId = null;
+            // Discovery failures invalidate the whole focus claim. Eligibility
+            // retries retain the published Lead for same-Lead worker deduplication.
+            if (resetPrimary) lastPrimarySessionId = null;
           });
         })
         .catch(() => {
