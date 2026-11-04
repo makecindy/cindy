@@ -13967,6 +13967,18 @@
       "cancelTitle": "Dejar de esperar y eliminar este mensaje"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "Sin hilos de revisión abiertos",
+        "mergeReady": "Lista para fusionar",
+        "mergeConflict": "Tiene conflictos",
+        "mergeBehind": "Por detrás de la rama base",
+        "mergeApproval": "Esperando aprobación",
+        "mergeChanges": "Cambios solicitados",
+        "mergeWaiting": "Esperando la fusión",
+        "merged": "Fusionada",
+        "closed": "Cerrada",
+        "draft": "Borrador"
+      },
       "verb": "Complemento utilizado",
       "cardRunning": "El complemento está dibujando",
       "cardDone": "Listo",
@@ -13980,6 +13992,7 @@
       "collapseFields": "Contraer",
       "formSyncFailed": "Las ediciones de la tarjeta no se han sincronizado. Verifique la conexión y continúe editando; el mensaje no ha sido enviado.",
       "linkOpenFailed": "No se pudo abrir el enlace",
+      "modelSelectFailed": "No se cambió el modelo. Vuelve a elegirlo.",
       "mailPreview": "Vista previa de correo electrónico",
       "mailEnlarge": "Ampliar vista previa",
       "mailInsertImage": "Insertar en mensaje",
@@ -16181,7 +16194,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "Ver detalles de la habilidad",
-    "projectSkillNotLoaded": "Esta tarea de Pi no ha cargado esta Skill del proyecto. Las tareas nuevas intentarán cargarla automáticamente."
+    "projectSkillNotLoaded": "Esta tarea de Pi no ha cargado esta Skill del proyecto. Las tareas nuevas intentarán cargarla automáticamente.",
+    "pluginSkillSetup": {
+      "install": "No instalado",
+      "enable": "Desactivado"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "Abre un PR, corrige la CI y los comentarios de revisión y lo sigue hasta que se fusione · Requiere instalar el complemento de GitHub",
+        "enable": "Abre un PR, corrige la CI y los comentarios de revisión y lo sigue hasta que se fusione · Requiere activar el complemento de GitHub"
+      }
+    }
   },
   "skillhub": {
     "remote": {

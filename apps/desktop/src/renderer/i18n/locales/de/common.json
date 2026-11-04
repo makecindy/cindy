@@ -13839,6 +13839,18 @@
       "cancelTitle": "Warten beenden und diese Nachricht entfernen"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "Keine offenen Review-Threads",
+        "mergeReady": "Bereit zum Mergen",
+        "mergeConflict": "Hat Konflikte",
+        "mergeBehind": "Hinter dem Basis-Branch",
+        "mergeApproval": "Wartet auf Freigabe",
+        "mergeChanges": "Änderungen angefordert",
+        "mergeWaiting": "Wartet auf Merge",
+        "merged": "Gemergt",
+        "closed": "Geschlossen",
+        "draft": "Entwurf"
+      },
       "verb": "Plugin verwendet",
       "cardRunning": "Plugin zeichnet",
       "cardDone": "Fertig",
@@ -13852,6 +13864,7 @@
       "collapseFields": "Einklappen",
       "formSyncFailed": "Kartenänderungen wurden nicht synchronisiert. Prüfe die Verbindung und bearbeite weiter; die Nachricht wurde nicht gesendet.",
       "linkOpenFailed": "Link konnte nicht geöffnet werden",
+      "modelSelectFailed": "Das Modell wurde nicht geändert. Bitte erneut auswählen.",
       "mailPreview": "E-Mail-Vorschau",
       "mailEnlarge": "Vorschau vergrößern",
       "mailInsertImage": "In Nachricht einfügen",
@@ -16033,7 +16046,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "Skill-Details anzeigen",
-    "projectSkillNotLoaded": "Diese Pi-Aufgabe hat diesen Projekt-Skill noch nicht geladen. Neue Aufgaben versuchen automatisch, ihn zu laden."
+    "projectSkillNotLoaded": "Diese Pi-Aufgabe hat diesen Projekt-Skill noch nicht geladen. Neue Aufgaben versuchen automatisch, ihn zu laden.",
+    "pluginSkillSetup": {
+      "install": "Nicht installiert",
+      "enable": "Deaktiviert"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "PR öffnen, CI und Review-Feedback beheben und bis zum Merge begleiten · Erfordert die Installation des GitHub-Plugins",
+        "enable": "PR öffnen, CI und Review-Feedback beheben und bis zum Merge begleiten · Erfordert die Aktivierung des GitHub-Plugins"
+      }
+    }
   },
   "skillhub": {
     "remote": {

@@ -343,5 +343,23 @@
     "purpose": "确认交互页面权限",
     "updateHost": "请更新执行电脑上的 Cindy，再在此确认。文字工具仍可使用。",
     "failed": "交互页面未能启用，请检查连接和插件版本后重试。"
+  },
+  "openLinkHost": "打开 {{host}}",
+  "prStatus": {
+    "checksFailed": "失败",
+    "checksPending": "进行中",
+    "checksPassed": "通过",
+    "checksSkipped": "跳过或中立",
+    "threadsOpen": "{{count}} 条未解决的 review 评论",
+    "threadsNone": "没有待处理意见",
+    "mergeReady": "可以合并",
+    "mergeConflict": "有冲突",
+    "mergeBehind": "需要同步目标分支",
+    "mergeApproval": "等待审批",
+    "mergeChanges": "需要修改",
+    "mergeWaiting": "等待合并",
+    "merged": "已合并",
+    "closed": "已关闭",
+    "draft": "草稿"
   }
 }

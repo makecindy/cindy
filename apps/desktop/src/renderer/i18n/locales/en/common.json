@@ -13874,6 +13874,18 @@
       "cancelTitle": "Stop waiting and remove this message"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "No open review threads",
+        "mergeReady": "Ready to merge",
+        "mergeConflict": "Has conflicts",
+        "mergeBehind": "Behind the base branch",
+        "mergeApproval": "Waiting for approval",
+        "mergeChanges": "Changes requested",
+        "mergeWaiting": "Waiting to merge",
+        "merged": "Merged",
+        "closed": "Closed",
+        "draft": "Draft"
+      },
       "verb": "Used plugin",
       "cardRunning": "Plugin is drawing",
       "cardDone": "Done",
@@ -13887,6 +13899,7 @@
       "collapseFields": "Collapse",
       "formSyncFailed": "Card edits have not synced. Check the connection and continue editing; the message has not been sent.",
       "linkOpenFailed": "Failed to open link",
+      "modelSelectFailed": "The model wasn't changed. Please choose again.",
       "mailPreview": "Email preview",
       "mailEnlarge": "Enlarge preview",
       "mailInsertImage": "Insert into message",
@@ -16033,7 +16046,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "View skill details",
-    "projectSkillNotLoaded": "This Pi task hasn't loaded this project Skill. New tasks will automatically try to load it."
+    "projectSkillNotLoaded": "This Pi task hasn't loaded this project Skill. New tasks will automatically try to load it.",
+    "pluginSkillSetup": {
+      "install": "Not installed",
+      "enable": "Disabled"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "Open a PR, fix CI and review feedback, and follow it to merge · Requires installing the GitHub plugin",
+        "enable": "Open a PR, fix CI and review feedback, and follow it to merge · Requires enabling the GitHub plugin"
+      }
+    }
   },
   "skillhub": {
     "remote": {

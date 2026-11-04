@@ -112,6 +112,8 @@ export interface MessageRenderNormalizedMessage<
   media?: readonly MessageRenderToolMediaLike[];
   files?: readonly { url: string; title: string }[];
   cardIds?: readonly string[];
+  /** cardIds 中声明排到本轮末尾的卡(tool_result 的 xdt_card_turn_end)。 */
+  turnEndCardIds?: readonly string[];
 }
 
 export interface MessageRenderOptions {
@@ -333,6 +335,18 @@ function buildLinearItems<
     pendingToolsEndMs = pendingToolsEndMs === null ? ms : Math.max(pendingToolsEndMs, ms);
   };
 
+  // 声明排到本轮末尾的插件卡(如「要发 PR 吗」):不跟所属工具组走,攒到下一条用户消息
+  // 之前(或列表末尾)再出,与桌面把它排在本轮最后同口径。
+  let pendingTurnEndTools: TMessage[] = [];
+  const flushTurnEndCards = () => {
+    if (pendingTurnEndTools.length === 0) return;
+    items.push({
+      type: 'tool_media',
+      key: `turn-end-media-${messageClientId(pendingTurnEndTools[0])}`,
+      tools: pendingTurnEndTools,
+    });
+    pendingTurnEndTools = [];
+  };
   const flushTools = () => {
     pendingToolsEndMs = null;
     if (pendingTools.length === 0) return;
@@ -345,7 +359,13 @@ function buildLinearItems<
     // 跳出折叠卡可见(对齐桌面 MessageStream flushSegment)。key 派生自组首 tool
     // 的 clientId(与 tool_group 同源、prefix 不同),流式中组内新增 tool 时稳定。
     const mediaTools = pendingTools.map((tool) => {
+      // Look the inline URLs up by the original message: splitting off the turn-end card copies it.
       const urls = inlineMediaByMessage.get(tool);
+      const turnEnd = tool.turnEndCardIds?.length ? new Set(tool.turnEndCardIds) : undefined;
+      if (turnEnd && tool.cardIds?.some((id) => turnEnd.has(id))) {
+        pendingTurnEndTools.push({ ...tool, media: [], files: [], cardIds: tool.cardIds.filter((id) => turnEnd.has(id)) });
+        tool = { ...tool, cardIds: tool.cardIds.filter((id) => !turnEnd.has(id)) };
+      }
       if (!urls?.size || !tool.media?.some(media => urls.has(media.url))) return tool;
       return { ...tool, media: tool.media.filter(media => !urls.has(media.url)) };
     }).filter((tool) => (tool.media?.length ?? 0) > 0 || (tool.files?.length ?? 0) > 0 || (tool.cardIds?.length ?? 0) > 0);
@@ -419,6 +439,7 @@ function buildLinearItems<
     }
 
     flushTools();
+    if (message.kind === 'user' && !isSteerUserRow(message.source)) flushTurnEndCards();
     if (message.kind === 'thinking') {
       const thinking = parseThinking(message.source);
       items.push({
@@ -438,6 +459,7 @@ function buildLinearItems<
     });
   }
   flushTools();
+  flushTurnEndCards();
   if (includeOrphanTaskUpdates) {
     appendOrphanAgentTasks(items, taskUpdates, renderedTaskKeys);
   }

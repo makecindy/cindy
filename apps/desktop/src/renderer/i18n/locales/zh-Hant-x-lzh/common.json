@@ -13799,6 +13799,18 @@
       "cancelTitle": "罷候並除此訊"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "無待理之意見",
+        "mergeReady": "可合併",
+        "mergeConflict": "有衝突",
+        "mergeBehind": "須同步目標分支",
+        "mergeApproval": "待批",
+        "mergeChanges": "須修改",
+        "mergeWaiting": "待合併",
+        "merged": "已合併",
+        "closed": "已閉",
+        "draft": "草稿"
+      },
       "verb": "呼法器",
       "cardRunning": "法器繪製",
       "cardDone": "已畢",
@@ -13812,6 +13824,7 @@
       "collapseFields": "收",
       "formSyncFailed": "卡之修改尚未同步，請察連線後續修；訊尚未遣。",
       "linkOpenFailed": "連結未能啟",
+      "modelSelectFailed": "模型未易，請復擇",
       "mailPreview": "郵件先覽",
       "mailEnlarge": "放大覽",
       "mailInsertImage": "插入文中",
@@ -15966,7 +15979,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "觀技藝之詳",
-    "projectSkillNotLoaded": "今之 Pi 差事尚未載此案之 Skill，新差事將自試載之"
+    "projectSkillNotLoaded": "今之 Pi 差事尚未載此案之 Skill，新差事將自試載之",
+    "pluginSkillSetup": {
+      "install": "未納",
+      "enable": "未啟"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "發 PR、修 CI 與評審、隨至合併 · 須先納 GitHub 法器",
+        "enable": "發 PR、修 CI 與評審、隨至合併 · 須先啟 GitHub 法器"
+      }
+    }
   },
   "skillhub": {
     "remote": {
