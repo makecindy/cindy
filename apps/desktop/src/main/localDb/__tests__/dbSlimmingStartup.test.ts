@@ -4,6 +4,12 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  DB_AUTO_CLEANUP_SETTINGS_FILE_NAME,
+  readDbAutoCleanupSettings,
+} from '../../db-auto-cleanup-settings';
+import { createBetterSqliteDatabase } from '../betterSqliteFactory';
+import { runDbSlimmingMaintenance } from '../dbSlimmingMaintenance';
 import { runPendingDbSlimmingAtStartup } from '../dbSlimmingStartup';
 import {
   DbSlimmingCancelledError,
@@ -60,6 +66,58 @@ const log = {
   error: vi.fn(),
   warn: vi.fn(),
 };
+
+const AUTO_NOW = 2_000_000_000_000;
+const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** Lowers the volume thresholds so a two-row fixture is enough to be worth cleaning. */
+function writeAutoCleanupSettings(overrides: Record<string, unknown> = {}): void {
+  fs.writeFileSync(
+    path.join(tmpDir, DB_AUTO_CLEANUP_SETTINGS_FILE_NAME),
+    JSON.stringify({
+      retentionDays: 30,
+      minMessageCount: 1,
+      minEstimatedMessageBytes: 1,
+      ...overrides,
+    }),
+    'utf8',
+  );
+}
+
+/**
+ * Both tasks sit past the 30-day retention window and share the exact cutoff, so
+ * only `targetStatuses` can keep the archived one alive.
+ */
+function createAutoCleanupFixture(): void {
+  const db = createBetterSqliteDatabase(dbFilePath);
+  db.exec(`
+    CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT NOT NULL, updated_at INTEGER NOT NULL);
+    CREATE TABLE messages (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL
+    );
+  `);
+  const expiredAt = AUTO_NOW - RETENTION_MS - 1;
+  for (const [id, status] of [
+    ['deleted-old', 'deleted'],
+    ['archived-old', 'archived'],
+  ] as const) {
+    db.prepare('INSERT INTO sessions (id, status, updated_at) VALUES (?, ?, ?)').run(
+      id,
+      status,
+      expiredAt,
+    );
+    db.prepare('INSERT INTO messages (id, session_id, role, content) VALUES (?, ?, ?, ?)').run(
+      `message-${id}`,
+      id,
+      'user',
+      'expired history',
+    );
+  }
+  db.close();
+}
 
 describe('runPendingDbSlimmingAtStartup', () => {
   it('discards a marker only when its JSON is confirmed invalid', async () => {
@@ -490,5 +548,90 @@ describe('runPendingDbSlimmingAtStartup', () => {
 
     expect(readDbSlimmingRequest(tmpDir)).toMatchObject({ id: pending.id, phase: 'scheduled' });
     expect(getDbSlimmingStartupProgress()).toBeNull();
+  });
+
+  it('purges expired soft-deleted history on its own and leaves archived tasks alone', async () => {
+    writeAutoCleanupSettings();
+    createAutoCleanupFixture();
+
+    const outcome = await runPendingDbSlimmingAtStartup({
+      userDataDir: tmpDir,
+      dbFilePath,
+      ownerId: 'owner-1',
+      leaseKind: 'writer',
+      loadVectorExtension: vi.fn(() => true),
+      log,
+      now: () => AUTO_NOW,
+      // The real maintenance: this is the whole chain the user sees, from the
+      // startup decision to the messages that disappear.
+      runMaintenance: runDbSlimmingMaintenance,
+    });
+
+    expect(outcome).toMatchObject({
+      handled: true,
+      originalDatabaseReady: true,
+      result: {
+        status: 'completed',
+        deletedTaskCount: 1,
+        archivedTaskCount: 0,
+        activeTaskCount: 0,
+        messageCount: 1,
+      },
+    });
+    expect(readDbSlimmingRequest(tmpDir)).toBeNull();
+
+    const db = createBetterSqliteDatabase(dbFilePath, { fileMustExist: true });
+    try {
+      // Session rows survive; only the expired deleted task lost its history.
+      expect(db.prepare('SELECT id FROM messages ORDER BY id').all()).toEqual([
+        { id: 'message-archived-old' },
+      ]);
+      expect(db.prepare('SELECT id, status FROM sessions ORDER BY id').all()).toEqual([
+        { id: 'archived-old', status: 'archived' },
+        { id: 'deleted-old', status: 'deleted' },
+      ]);
+    } finally {
+      db.close();
+    }
+
+    // The cooldown lives in its own file: the renderer deletes the result marker
+    // as soon as it shows the toast, so that file cannot carry the timestamp.
+    expect(readDbAutoCleanupSettings(tmpDir, log)).toMatchObject({ lastAutoRunAt: AUTO_NOW });
+
+    const secondRun = vi.fn();
+    await expect(
+      runPendingDbSlimmingAtStartup({
+        userDataDir: tmpDir,
+        dbFilePath,
+        ownerId: 'owner-1',
+        leaseKind: 'writer',
+        loadVectorExtension: vi.fn(() => true),
+        log,
+        now: () => AUTO_NOW + 24 * 60 * 60 * 1000,
+        runMaintenance: secondRun,
+      }),
+    ).resolves.toEqual({ handled: false, originalDatabaseReady: true });
+    expect(secondRun).not.toHaveBeenCalled();
+  });
+
+  it('does not synthesize an automatic request while a reader lease is held', async () => {
+    writeAutoCleanupSettings();
+    createAutoCleanupFixture();
+    const runMaintenance = vi.fn();
+
+    const outcome = await runPendingDbSlimmingAtStartup({
+      userDataDir: tmpDir,
+      dbFilePath,
+      ownerId: 'owner-1',
+      leaseKind: 'reader',
+      loadVectorExtension: vi.fn(() => true),
+      log,
+      now: () => AUTO_NOW,
+      runMaintenance,
+    });
+
+    expect(outcome).toEqual({ handled: false, originalDatabaseReady: true });
+    expect(runMaintenance).not.toHaveBeenCalled();
+    expect(readDbSlimmingRequest(tmpDir)).toBeNull();
   });
 });
