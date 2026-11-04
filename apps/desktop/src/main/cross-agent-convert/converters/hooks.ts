@@ -15,7 +15,7 @@
  *    Codex 原生 config.toml 的 hooks 双向只读参与覆盖判断；仅缺失内容追加进目标 JSON。
  *
  * 安全保证：
- *  - 已有事件保留，只追加尚未覆盖的 matcher / handler；原生 TOML 只读参与去重
+ *  - 已有同名事件整体跳过，不合并 matcher / handler；原生 TOML 只读参与事件去重
  *  - 脚本目录里同名文件 → 跳过
  *  - 任何子项（脚本 / 索引 entry）失败 → 该项失败但不阻塞其他
  */

@@ -99,7 +99,7 @@ describe('hooks migration — incremental detection (#8858)', () => {
     expect(await pendingHooks(agentKind)).toBeUndefined();
   });
 
-  it.each(['codex', 'claude-code'] as const)('to %s merges new events and handlers without replacing existing hooks', async (agentKind) => {
+  it.each(['codex', 'claude-code'] as const)('to %s adds missing events while keeping existing event arrays unchanged', async (agentKind) => {
     const source = { Stop: commandGroup('echo old', 'echo new'), SessionStart: commandGroup('echo start') };
     const target = { Stop: commandGroup('echo old', 'echo custom') };
     await writeConfig('.claude/settings.json', JSON.stringify({ permissions: 'keep', hooks: agentKind === 'codex' ? source : target }));
@@ -110,47 +110,60 @@ describe('hooks migration — incremental detection (#8858)', () => {
     expect((await convertHooks(item!)).status).toBe('success');
     const file = agentKind === 'codex' ? '.codex/hooks.json' : '.claude/settings.json';
     const result = JSON.parse(await fs.readFile(path.join(wd, file), 'utf8'));
-    expect(result.hooks.Stop.flatMap((group: { hooks: unknown[] }) => group.hooks)).toEqual([
-      ...target.Stop[0].hooks, ...commandGroup('echo new')[0].hooks,
-    ]);
+    expect(result.hooks.Stop).toEqual(target.Stop);
     expect(result.hooks.SessionStart).toEqual(source.SessionStart);
     expect(agentKind === 'codex' ? result.description : result.permissions).toBe('keep');
     expect(await pendingHooks(agentKind)).toBeUndefined();
   });
 
-  it('uses TOML coverage when importing only missing handlers into JSON', async () => {
+  it('keeps an existing TOML event unchanged and does not create JSON for different source handlers', async () => {
     const toml = '# keep\n[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "true"\n';
     await writeConfig('.codex/config.toml', toml);
     await writeConfig('.claude/settings.json', JSON.stringify({ hooks: { Stop: commandGroup('true', 'echo new') } }));
+    expect(await pendingHooks()).toBeUndefined();
+    expect((await convertHooks(toCodexItem())).status).toBe('skipped');
+    await expect(fs.stat(path.join(wd, '.codex', 'hooks.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(path.join(wd, '.codex', 'config.toml'), 'utf8')).toBe(toml);
+  });
+
+  it('adds only a missing event when the other event is already present in TOML', async () => {
+    const toml = '# keep\n[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "true"\n';
+    const sessionStart = commandGroup('echo start');
+    await writeConfig('.codex/config.toml', toml);
+    await writeConfig('.claude/settings.json', JSON.stringify({ hooks: { Stop: commandGroup('echo different'), SessionStart: sessionStart } }));
     const item = await pendingHooks();
     expect(item).toBeDefined();
     expect((await convertHooks(item!)).status).toBe('success');
     const result = JSON.parse(await fs.readFile(path.join(wd, '.codex', 'hooks.json'), 'utf8'));
-    expect(result.hooks.Stop).toEqual(commandGroup('echo new'));
+    expect(result.hooks).toEqual({ SessionStart: sessionStart });
     expect(await fs.readFile(path.join(wd, '.codex', 'config.toml'), 'utf8')).toBe(toml);
     expect(await pendingHooks()).toBeUndefined();
   });
 
-  it('recognizes the native TOML command_windows alias as the existing Windows handler', async () => {
-    await writeConfig('.claude/settings.json', JSON.stringify({ hooks: { Stop: [{ hooks: [{
-      type: 'command', command: 'true', commandWindows: 'echo done',
-    }] }] } }));
-    await writeConfig('.codex/config.toml', '[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "true"\ncommand_windows = "echo done"\n');
-    expect(await pendingHooks()).toBeUndefined();
-    expect((await convertHooks(toCodexItem())).status).toBe('skipped');
+  // PR #8862 的审阅复现：省略 matcher 和空 matcher 都表示无条件，不能重复安装同一命令。
+  // 保留原转换器的同名事件跳过契约后，含不同 matcher / 新 handler 的同名事件也不盲目合并。
+  it.each(['codex', 'claude-code'] as const)('to %s skips an existing event with omitted versus empty matcher', async (agentKind) => {
+    const source = { Stop: commandGroup('true') };
+    const target = { Stop: [{ matcher: '', hooks: commandGroup('true')[0].hooks }] };
+    const targetFile = agentKind === 'codex' ? '.codex/hooks.json' : '.claude/settings.json';
+    const contents = JSON.stringify({ hooks: target });
+    await writeConfig(agentKind === 'codex' ? '.claude/settings.json' : '.codex/hooks.json', JSON.stringify({ hooks: source }));
+    await writeConfig(targetFile, contents);
+
+    expect(await pendingHooks(agentKind)).toBeUndefined();
+    expect((await convertHooks(agentKind === 'codex' ? toCodexItem() : toClaudeItem())).status).toBe('skipped');
+    expect(await fs.readFile(path.join(wd, targetFile), 'utf8')).toBe(contents);
   });
 
-  it('retains a distinct matcher even when another matcher runs the same command', async () => {
+  it('preserves a target event whose matcher differs from the source', async () => {
     const group = { matcher: 'Bash', hooks: commandGroup('true')[0].hooks };
     const original = { ...group, matcher: 'Read' };
     await writeConfig('.claude/settings.json', JSON.stringify({ hooks: { PreToolUse: [group] } }));
-    await writeConfig('.codex/hooks.json', JSON.stringify({ hooks: { PreToolUse: [original] } }));
-    const item = await pendingHooks();
-    expect(item).toBeDefined();
-    expect((await convertHooks(item!)).status).toBe('success');
-    const result = JSON.parse(await fs.readFile(path.join(wd, '.codex', 'hooks.json'), 'utf8'));
-    expect(result.hooks.PreToolUse).toEqual([original, group]);
+    const contents = JSON.stringify({ hooks: { PreToolUse: [original] } });
+    await writeConfig('.codex/hooks.json', contents);
     expect(await pendingHooks()).toBeUndefined();
+    expect((await convertHooks(toCodexItem())).status).toBe('skipped');
+    expect(await fs.readFile(path.join(wd, '.codex', 'hooks.json'), 'utf8')).toBe(contents);
   });
 
   it('can import native TOML hooks into Claude without copying JSON metadata as events', async () => {
