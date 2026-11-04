@@ -23,7 +23,7 @@ const host = vi.hoisted(() => ({
 const listProviders = vi.hoisted(() => vi.fn());
 const identityCard = vi.hoisted(() => vi.fn());
 const remember = vi.hoisted(() => vi.fn());
-const usageStores = vi.hoisted(() => ({ ownHistory: vi.fn(), memberTokenSnapshot: vi.fn(), memberHistory: vi.fn(), pricing: vi.fn(), referencePricing: vi.fn(), datedReferencePrice: vi.fn(), priceOverrides: vi.fn(),
+const usageStores = vi.hoisted(() => ({ ownHistory: vi.fn(), memberTokenSnapshot: vi.fn(), memberHistory: vi.fn(), pricing: vi.fn(), referencePricing: vi.fn(), priceOverrides: vi.fn(),
   enqueueDirectCleanup: vi.fn(), listPendingDirectCleanup: vi.fn(), acknowledgeDirectCleanup: vi.fn(),
   actual: null as ReturnType<typeof import('../providerShareUsageStore').createProviderShareUsageStore> | null }));
 const memberNotes = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
@@ -60,7 +60,6 @@ vi.mock('../../usage/modelPricing.js', async () => ({
 }));
 vi.mock('../../usage/referenceModelPricing.js', () => ({
   getReferenceModelPricing: usageStores.referencePricing,
-  getCodexProviderSubscriptionValuePrice: usageStores.datedReferencePrice,
   readModelPriceOverridesSnapshot: usageStores.priceOverrides,
 }));
 vi.mock('../../usage/providerPartyUsageStore.js', () => ({
@@ -177,7 +176,6 @@ beforeEach(() => {
   usageStores.acknowledgeDirectCleanup.mockResolvedValue(undefined);
   usageStores.pricing.mockResolvedValue(null);
   usageStores.referencePricing.mockReturnValue({});
-  usageStores.datedReferencePrice.mockReturnValue(undefined);
   usageStores.priceOverrides.mockReturnValue({});
   startProviderShareRuntime(vi.fn());
 });
@@ -373,7 +371,7 @@ describe('provider share usage estimates', () => {
 
   it('falls back to SDK cost when reference pricing cannot be read', async () => {
     usageStores.referencePricing.mockImplementation(() => { throw new Error('pricing unavailable'); });
-    expect(await readEstimate('openai', 0.25)).toEqual({ amount: 0.25, currency: 'USD' });
+    expect(await readEstimate('deepseek', 0.25)).toEqual({ amount: 0.25, currency: 'USD' });
   });
 
   // PR #8489 review: aggregate buckets must not pick a long-context band from the
@@ -399,28 +397,49 @@ describe('provider share usage estimates', () => {
     expect(await read(1)).toBeCloseTo(1.215, 8);
   });
 
-  // PR #8489 review: history rows are valued with the tariff effective on their own day.
-  it('prices history rows with the reference quote effective on that day', async () => {
-    usageStores.referencePricing.mockReturnValue({ openai: { 'gpt-6.1-sol': quote } });
+  // PR #8489 review: history rows are valued with the catalog effective on their own day,
+  // using the same route-tariff rules as the range totals rather than subscription values.
+  it('prices history rows from the reference catalog effective on that day', async () => {
     const overrides = { snapshot: true };
     usageStores.priceOverrides.mockReturnValue(overrides);
-    usageStores.datedReferencePrice.mockImplementation((_provider, _model, _pricing, at) =>
-      at === '2026-10-17' ? { ...quote, inputPerMtok: 4 } : quote);
+    usageStores.referencePricing.mockImplementation((options?: { at?: string }) =>
+      options?.at === '2026-10-17' ? { openai: { 'gpt-6.1-sol': { ...quote, inputPerMtok: 4 } } } : { openai: { 'gpt-6.1-sol': quote } });
     expect((await readEstimate())?.amount).toBeCloseTo(0.0054, 8);
-    expect(usageStores.datedReferencePrice).toHaveBeenCalledWith(
-      'openai', 'gpt-6.1-sol', { openai: { 'gpt-6.1-sol': quote } }, '2026-10-17', overrides, 'codex');
+    expect(usageStores.referencePricing).toHaveBeenCalledWith({ at: '2026-10-17', overrides });
   });
 
-  it('does not borrow today\'s registry price for a day without an effective tariff', async () => {
+  it('resolves a tariff that is no longer effective today', async () => {
+    usageStores.referencePricing.mockImplementation((options?: { at?: string }) =>
+      options?.at === '2026-10-17' ? { openai: { 'gpt-6.1-sol': quote } } : {});
+    expect((await readEstimate())?.amount).toBeCloseTo(0.0034, 8);
+  });
+
+  it('does not borrow today\'s price for a day without an effective tariff', async () => {
+    usageStores.referencePricing.mockImplementation((options?: { at?: string }) =>
+      options?.at === undefined ? { openai: { 'gpt-6.1-sol': quote } } : {});
+    expect(await readEstimate()).toBeNull();
+  });
+
+  it('builds one reference catalog per day and reads overrides once per query', async () => {
     usageStores.referencePricing.mockReturnValue({ openai: { 'gpt-6.1-sol': quote } });
-    usageStores.datedReferencePrice.mockImplementation((_provider, _model, _pricing, at) => at === undefined ? quote : undefined);
-    expect(await readEstimate('openai', 0.25)).toEqual({ amount: 0.25, currency: 'USD' });
-    expect(await readEstimate('openai', 0)).toBeNull();
+    usageStores.ownHistory.mockReturnValue({ self: { lastUsedAt: null, days: [
+      row(), row(), { ...row(), day: '2026-10-16' },
+    ] }, relays: [] });
+    await executeProviderShareManagementCommand({ action: 'usage-history', providerId: 'openai' });
+    expect(usageStores.referencePricing.mock.calls.map(([options]) => options?.at)).toEqual(['2026-10-17', '2026-10-16']);
+    expect(usageStores.priceOverrides).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps connection prices without a registry reference for history rows', async () => {
-    usageStores.referencePricing.mockReturnValue({ custom: { 'gpt-6.1-sol': { ...quote, providerId: 'custom' } } });
-    expect((await readEstimate('custom'))?.amount).toBeCloseTo(0.0034, 8);
+  // PR #8489 review: ordinary provider APIs keep the SDK-reported amount, as local turn
+  // accounting does; only DeepSeek (whose SDK cost ignores cache-hit pricing) is recomputed.
+  it.each([
+    { providerId: 'anthropic', expected: 0.25 },
+    { providerId: 'deepseek', expected: 0.0034 },
+  ])('keeps SDK cost for token-bearing $providerId rows unless the route is recomputed', async ({ providerId, expected }) => {
+    usageStores.referencePricing.mockReturnValue({ [providerId]: { 'gpt-6.1-sol': { ...quote, providerId } } });
+    const amount = await readEstimate(providerId, 0.25);
+    expect(amount?.amount).toBeCloseTo(expected, 8);
+    expect(amount?.currency).toBe('USD');
   });
 
   // PR #8489 review: cost-only deltas are valid ledger rows; a found quote must not turn them into $0.
@@ -494,7 +513,8 @@ describe('provider share usage history wire budget', () => {
     expect(usageStores.memberHistory).toHaveBeenCalledWith(new Set(['s']), {
       maxRows: 5_001, memberKeys: new Set([JSON.stringify(['s', 'm1'])]),
     });
-    expect(usageStores.referencePricing).toHaveBeenCalledTimes(1);
+    // Provider API rows with SDK costs keep them without building any reference catalog.
+    expect(usageStores.referencePricing).not.toHaveBeenCalled();
     expect(result.self.days).toHaveLength(5_000);
     expect(result.self.days[0]?.amount).toEqual({ amount: 0.25, currency: 'USD' });
     expect(result.self.days[0]).not.toHaveProperty('sdkCostUsd');

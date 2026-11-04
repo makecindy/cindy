@@ -2,7 +2,7 @@ import { isProviderShareMemberBudget } from '../../shared/providerShareBudget.js
 import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../shared/controlledModelCatalog.js';
 import { readMemberBudgetStatus, supportsMemberBudget } from './providerShareBudgetRuntime.js';
 import { isRemoteAgentLimitsPatch } from '../../shared/remoteAgentLimits.js';
-import { isByokProviderId, supportsSubscriptionFastPolicy, unifiedModelKeyId, type AgentKind } from '@cindy/model-providers';
+import { supportsSubscriptionFastPolicy, unifiedModelKeyId } from '@cindy/model-providers';
 import { providerFastPolicy } from '../maker-host/provider-fast-policy-store.js';
 import { notifySubscriptionFastPolicyChanged } from '../maker-host/subscription-fast-policy.js';
 import { notifyProviderShareCatalogChanged } from './dispatch.js';
@@ -62,7 +62,6 @@ import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { getGatewayModelPricing, getModelPriceQuote } from '../usage/modelPricing.js';
 import {
-  getCodexProviderSubscriptionValuePrice,
   getReferenceModelPricing,
   readModelPriceOverridesSnapshot,
   type ModelPriceOverridesSnapshot,
@@ -597,37 +596,39 @@ function perTurnAverageMoney(row: ProviderShareUsageEstimateRow, price: ModelPri
   return money && { amount: money.amount * turns, currency: money.currency };
 }
 
-/** 每次查询复用报价与覆盖快照，避免为最多 5,000 行历史逐行重建参考价目录或重读覆盖文件。 */
+/**
+ * 每次查询复用报价与覆盖快照，避免为最多 5,000 行历史逐行重建参考价目录或重读覆盖文件。
+ * 按天的历史行用那一天生效的参考价目录(与今天的目录同一套取价规则)；按时间段的汇总行用今天的目录。
+ */
 function createUsageEstimator() {
   let gatewayPricing: ReturnType<typeof getGatewayModelPricing> | undefined;
-  let referencePricing: ReturnType<typeof getReferenceModelPricing> | undefined;
   let overrides: ModelPriceOverridesSnapshot | undefined;
-  /** 按天的历史行用当天生效的参考价，与设置 → 用量同一口径；目录里的报价只代表今天。 */
-  const referenceQuote = (row: ProviderShareUsageEstimateRow, model: string, agent: AgentKind | undefined) => {
-    const pricing = (referencePricing ??= getReferenceModelPricing());
-    const current = getModelPriceQuote(pricing, row.providerId, model, agent);
-    const providerId = row.providerId;
-    if (row.day === undefined || !current || !agent || !providerId || isByokProviderId(providerId)) return current;
-    overrides ??= readModelPriceOverridesSnapshot();
-    const dated = getCodexProviderSubscriptionValuePrice(providerId, model, pricing, row.day, overrides, agent);
-    if (dated) return dated;
-    // 没有注册表参考价的路由(自定义供应商的连接价)不随日期变化，沿用当前报价；
-    // 注册表在当天没有生效价时不拿今天的价补。
-    return getCodexProviderSubscriptionValuePrice(providerId, model, pricing, undefined, overrides, agent)
-      ? undefined
-      : current;
+  const referencePricing = new Map<string, ReturnType<typeof getReferenceModelPricing>>();
+  const referenceCatalog = (day: string | undefined) => {
+    const key = day ?? '';
+    let pricing = referencePricing.get(key);
+    if (!pricing) {
+      overrides ??= readModelPriceOverridesSnapshot();
+      pricing = getReferenceModelPricing({ at: day, overrides });
+      referencePricing.set(key, pricing);
+    }
+    return pricing;
   };
   return async (row: ProviderShareUsageEstimateRow): Promise<ProviderShareMoney | null> => {
     const sdkMoney: ProviderShareMoney | null = row.sdkCostUsd > 0 ? { amount: row.sdkCostUsd, currency: 'USD' } : null;
     // 只有 SDK 金额、没有 token 计数的行无从按单价估算，保留记录的金额而不是算成 0。
     if (row.inputTokens + row.outputTokens + row.cacheReadTokens + row.cacheCreateTokens <= 0) return sdkMoney;
+    // 与本机记账(resolveTurnCost)一致：普通供应商 API 优先用 SDK 记录的金额，只在缺失时按单价估算；
+    // DeepSeek 的 SDK 金额把缓存命中按普通输入计，按参考价重算。XD 只认 Gateway 报价。
+    if (sdkMoney && row.providerId !== 'xd' && row.providerId !== 'deepseek') return sdkMoney;
     try {
       const agent = row.kind === 'claude-code' || row.kind === 'codex' || row.kind === 'pi' ? row.kind : undefined;
       const model = normalizeModelIdForPricing(row.model);
       // XD 的实际报价与其他供应商的参考价独立，不能跨来源借价。
-      const price = row.providerId === 'xd'
-        ? getModelPriceQuote(await (gatewayPricing ??= getGatewayModelPricing()), row.providerId, model, agent)
-        : referenceQuote(row, model, agent);
+      const pricing = row.providerId === 'xd'
+        ? await (gatewayPricing ??= getGatewayModelPricing())
+        : referenceCatalog(row.day);
+      const price = getModelPriceQuote(pricing, row.providerId, model, agent);
       const money = perTurnAverageMoney(row, price);
       if (money) return money;
     } catch (error) {
