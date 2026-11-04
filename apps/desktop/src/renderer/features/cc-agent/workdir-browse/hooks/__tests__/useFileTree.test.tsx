@@ -81,6 +81,45 @@ describe('useFileTree refresh scheduling', () => {
     mocks.loadExpandedSet.mockImplementation(() => new Set<string>());
   });
 
+  // #8422: restored folders previously started all directory IPCs at once.
+  // Unit through the real hook: bounded outstanding reads, complete final tree,
+  // and no queued reads after leaving. Existing tests restore only a few folders.
+  it.each([false, true])('bounds restored reads and cancels pending restore on unmount=%s', async (leave) => {
+    const folders: DirEntry[] = Array.from({ length: 12 }, (_, i) => ({
+      name: `pkg${i}`, relPath: `pkg${i}`, type: 'directory', size: 0, mtimeMs: 1,
+    }));
+    mocks.loadExpandedSet.mockReturnValue(new Set(folders.map((e) => e.relPath)));
+    const pending: Array<{ path: string; request: Deferred<readonly DirEntry[]> }> = [];
+    let active = 0;
+    let peak = 0;
+    mocks.listDir.mockImplementation(({ relPath }: { relPath: string }) => {
+      const request = deferred<readonly DirEntry[]>();
+      pending.push({ path: relPath, request });
+      peak = Math.max(peak, ++active);
+      return request.promise.finally(() => { active--; });
+    });
+    const view = renderHook(() => useFileTree({ workdir: `/restore-budget-${leave}` }));
+    expect(pending[0].path).toBe('');
+    expect(pending.length).toBeLessThan(folders.length + 1);
+    const startedBeforeLeaving = pending.length;
+    if (leave) view.unmount();
+    for (let i = 0; i < pending.length; i++) {
+      await act(async () => {
+        const { path: relPath, request } = pending[i];
+        request.resolve(relPath === '' ? folders : []);
+      });
+    }
+    if (leave) {
+      expect(pending).toHaveLength(startedBeforeLeaving);
+    } else {
+      expect(peak).toBeLessThan(folders.length + 1);
+      expect(view.result.current.entries.size).toBe(folders.length + 1);
+      expect(view.result.current.loadingPaths.size).toBe(0);
+      expect(view.result.current.initialLoading).toBe(false);
+      view.unmount();
+    }
+  });
+
   it('limits a directory refresh to one trailing scan during a watcher storm', async () => {
     const entries: readonly DirEntry[] = [
       { name: 'src', relPath: 'src', type: 'directory', size: 0, mtimeMs: 1 },
