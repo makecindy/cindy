@@ -250,7 +250,11 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
   it('replays desktop subscriptions when a remote device becomes controllable again', () => {
     const deviceLinkHost = readFileSync(resolve(mainRoot, 'device-link/index.ts'), 'utf8');
 
-    expect(deviceLinkHost).toContain('const available = snap.online && snap.remoteControlEnabled;');
+    // Guard the host wiring; the production projection's offline/control-off
+    // outcomes are exercised in deviceLinkControllerPresenceDirectory.test.ts.
+    expect(deviceLinkHost).toMatch(
+      /resolveControllerPresence\(\s*snap,\s*hasOfflineDirectPath\(snap\.deviceId\),\s*wasAvailable,?\s*\)/,
+    );
     // `!== true` 而非 `=== false`:断线时 availability 视图整体清空,重连后首帧
     // presence(wasAvailable=undefined)同样必须触发重放,接续 DEVICE_OFFLINE
     // 结束的恢复轮次(#1520 review P1)。

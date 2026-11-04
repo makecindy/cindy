@@ -117,7 +117,7 @@ export async function applyProviderShareDelegation(ownerDeviceId: string, reques
   let current = false;
   try {
     approved = await check({ shareId: request.shareId, memberId: request.memberId,
-      guestDeviceId: request.guestDeviceId, executorDeviceId: getDeviceId()! });
+      guestDeviceId: request.guestDeviceId, executorDeviceId: getDeviceId()! }, request.generation);
   } finally {
     current = pending.get(key)?.mark === mark;
     if (current) pending.delete(key);

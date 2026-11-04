@@ -22,6 +22,7 @@ import { manageSessionPrs } from './manageSessionPrs';
 
 import { BrowserWindow, ipcMain } from 'electron';
 import { GithubClient } from '@cindy/github-client';
+import { prStatusKey } from '@cindy/maker-shared';
 import { eq } from 'drizzle-orm';
 
 import { createLogger } from '../logger.js';
@@ -54,6 +55,7 @@ import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import * as worktreeStore from '../worktree/worktreeStore.js';
 import {
+  ensurePrRefsBackfill,
   listAllPrRefs,
   listPrRefs,
   managePrRefs,
@@ -153,6 +155,7 @@ async function fetchPrRemote(token: string, q: PrStatusQuery): Promise<PrRemoteS
     review_decision: summary && summary.headOid === pr.head.sha ? (summary.reviewDecision ?? null) : null,
     unresolved_count: summary?.unresolved ?? null,
     checks: summary && summary.headOid === pr.head.sha ? summary.checks : null,
+    merge_state: summary && summary.headOid === pr.head.sha ? (summary.mergeState ?? null) : null,
   };
 }
 
@@ -326,6 +329,7 @@ export function registerGitContextIpc(): void {
 
   ipcMain.handle(GIT_CONTEXT_INVOKE.PR_REFS_LIST, async (_e, sessionId: unknown) => {
     const sid = requireString(sessionId, 'sessionId');
+    void ensurePrRefsBackfill();
     return listPrRefs(sid);
   });
 
@@ -333,6 +337,7 @@ export function registerGitContextIpc(): void {
     // PrRefsProvider 挂在 App 顶层,首次调用通常早于登录后的 db ensureReady。
     // 未就绪时返回 null 当"稍后再试"信号(renderer 定时重试),不抛错刷日志。
     if (getCurrentDbClientUserId() === null) return null;
+    void ensurePrRefsBackfill();
     return listAllPrRefs();
   });
 
@@ -441,6 +446,28 @@ export async function readSessionPrStatuses(
   return prStatusService.getStatuses(
     refs.map(({ owner, repo, prNumber }) => ({ owner, repo, prNumber })),
   );
+}
+
+/**
+ * 手机查看插件卡片的 PR 状态位用：只查该任务已记录的 PR(与远程 PR_STATUS 同一过滤),
+ * 走同一服务与缓存。查不到或失败返回 undefined,卡片保留插件写的快照。
+ */
+export async function readSessionPrStatus(
+  sessionId: string,
+  key: string,
+): Promise<PrStatusResult | undefined> {
+  if (!prStatusService) return undefined;
+  try {
+    const ref = (await listPrRefs(sessionId)).find((item) => prStatusKey(item) === key);
+    if (!ref) return undefined;
+    const [status] = await prStatusService.getStatuses(
+      [{ owner: ref.owner, repo: ref.repo, prNumber: ref.prNumber }],
+      { remote: true },
+    );
+    return status;
+  } catch {
+    return undefined;
+  }
 }
 
 /** 应用退出时清理 watcher 订阅。 */

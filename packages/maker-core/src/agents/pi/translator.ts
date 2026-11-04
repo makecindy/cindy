@@ -485,7 +485,11 @@ function applyUsage(
   ctx.turnMainOutput += output;
   ctx.turnCacheRead += cacheRead;
   ctx.turnCacheWrite += cacheWrite;
-  ctx.contextTokens = input + cacheRead + cacheWrite;
+  // Pi 给被打断的请求收尾时会补一条全 0 usage 的 aborted 消息(用户点 Stop)。
+  // 全 0 不是「上下文变成 0」, 不能覆盖上一次真实占用 —— 否则 Stop 后圆环归 0,
+  // 并把 0 当作 turn-end 快照落库。
+  const requestContextTokens = input + cacheRead + cacheWrite;
+  if (requestContextTokens > 0) ctx.contextTokens = requestContextTokens;
   const cost = usage.cost?.total;
   if (typeof cost === 'number' && Number.isFinite(cost)) ctx.costUsd += cost;
   ctx.requestUsageTracker.ingest({ model, inputTokens: input, outputTokens: output, cacheReadTokens: cacheRead, cacheCreateTokens: cacheWrite });

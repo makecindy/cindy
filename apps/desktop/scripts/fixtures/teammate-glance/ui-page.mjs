@@ -37,13 +37,14 @@ export default {
     menu: { about: 'Right-clicking a todo offers only Delete' },
     new: { about: 'Empty teammate: only Computers; no todo suggestions or outputs' },
     activity: { about: 'No todos, attributed recent tasks, unread result and true PR title' },
+    routines: { about: 'Never-run and paused routines mixed with ordinary tasks; direct timer icons in one list' },
   },
   async ready(page) {
     await page.getByTestId('bot-glance-button').waitFor();
   },
   async check(page, ui) {
     const button = page.getByTestId('bot-glance-button');
-    if (ui.case !== 'new' && ui.case !== 'activity') {
+    if (ui.case !== 'new' && ui.case !== 'activity' && ui.case !== 'routines') {
       await page.waitForFunction(() =>
         document.querySelector('[data-testid="bot-glance-button"] span[aria-hidden]') !== null,
       );
@@ -65,6 +66,14 @@ export default {
       assert.equal(await page.getByTestId('bot-glance-task').count(), 2);
       assert.equal(await page.getByTestId('bot-glance-pr').count(), 1);
       assert.equal(await page.getByTestId('bot-glance-check').count(), 0);
+      await ui.capture('open');
+      return;
+    }
+    if (ui.case === 'routines') {
+      await page.getByText('磁盘低空间自动清理', { exact: true }).waitFor();
+      assert.equal(await page.getByTestId('bot-glance-task').count(), 4, 'ordinary and routine tasks share the existing list');
+      assert.equal(await popover.locator('[data-automation-timer-icon]').count(), 2, 'only routines use timer icons');
+      assert.equal(await popover.locator('[data-automation-paused-indicator]').count(), 1, 'paused rule keeps its timer');
       await ui.capture('open');
       return;
     }

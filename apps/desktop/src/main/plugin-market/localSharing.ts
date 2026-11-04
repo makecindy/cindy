@@ -6,8 +6,8 @@ import { app } from 'electron';
 import {
   isLocalPluginSnapshotId, parseLocalPluginShareCheck, parseLocalPluginShareDownload, parseLocalPluginShareSnapshot, parseLocalPluginShareUpload, type LocalPluginShareSnapshot,
 } from '@cindy/plugin-protocol';
-import { ghostInstallApprovalToken, isGhostInstallApprovalToken, isUserInstallReservedGhostId } from '../../shared/ghost.js';
-import { findInstalledGhostByInstanceId } from '../../shared/pluginIdentity.js';
+import { ghostInstallApprovalToken, isGhostInstallApprovalToken } from '../../shared/ghost.js';
+import { findInstalledGhostByInstanceId, LOCAL_PLUGIN_NAMESPACE } from '../../shared/pluginIdentity.js';
 import type { LocalPluginShareBinding, SharePreparation, ShareOptions } from '../../shared/share.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import * as auth from '../authManager.js';
@@ -73,8 +73,8 @@ function accessForOwner() {
 function localInstallation(instanceId: string) {
   const ghost = findInstalledGhostByInstanceId(getGhostManager().list(), instanceId);
   if (!ghost) throwIpcError('NOT_FOUND', 'Local plugin not found');
-  if (ghost.builtin || isUserInstallReservedGhostId(ghost.manifest.id) || ghost.namespaceState !== 'confirmed' ||
-      ghost.namespace !== null || ghost.approval.state !== 'approved' || ghost.publishingSource?.kind !== 'local')
+  if (ghost.builtin || ghost.namespaceState !== 'confirmed' ||
+      (ghost.namespace !== null && ghost.namespace !== LOCAL_PLUGIN_NAMESPACE) || ghost.approval.state !== 'approved' || ghost.publishingSource?.kind !== 'local')
     throwIpcError('PERMISSION_DENIED', 'Only a verified local plugin can use local sharing');
   return ghost;
 }

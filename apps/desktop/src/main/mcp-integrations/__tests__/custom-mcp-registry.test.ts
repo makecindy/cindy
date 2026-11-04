@@ -14,6 +14,18 @@ import type { CustomMcpConfig } from '../../../shared/customMcp.js';
 
 const storeMock = vi.hoisted(() => ({ listCustomMcpServers: vi.fn() }));
 
+// This suite uses isolated SQLite fixtures; OS encryption is covered by the store suite.
+vi.mock('electron', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('electron')>();
+  return { ...actual, safeStorage: {
+    ...actual.safeStorage,
+    isEncryptionAvailable: () => true,
+    getSelectedStorageBackend: () => 'gnome_libsecret',
+    encryptString: (value: string) => Buffer.from(value, 'utf8'),
+    decryptString: (value: Buffer) => value.toString('utf8'),
+  } };
+});
+
 vi.mock('../../maker-host/custom-mcp-store.js', async () => {
   const actual = await vi.importActual<typeof import('../../maker-host/custom-mcp-store.js')>(
     '../../maker-host/custom-mcp-store.js',

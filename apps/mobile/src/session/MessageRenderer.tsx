@@ -130,8 +130,8 @@ import {
 } from '@cindy/maker-shared/chat-quotes';
 import { formatCompactTokens } from '@cindy/maker-shared/usage-format';
 import { QuoteCapsule } from '@/session/QuoteCapsule';
-import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
-import { motionDuration, motionEasing } from '@/theme/tokens';
+import { MessageListActionButton } from './MessageListActionButton';
+import { MessageScrollToBottomButton, SCROLL_TO_BOTTOM_FAB_SIZE } from './MessageScrollToBottomButton';
 import { mobileAgentLabelFromUnknown } from '@/session/sessionAgentSwitch';
 import {
   NativePullDownMenu,
@@ -167,6 +167,7 @@ import {
   MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT,
 } from '@/session/MobileComposerInputRow';
 import { MAX_FONT_SIZE_MULTIPLIER, Text } from '@/components/AppText';
+import { pluginCardPlainText } from '@/plugins/pluginCardText';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type {
   NormalizedAttachment,
@@ -438,6 +439,8 @@ import { i18n } from '@/i18n';
 import { formatLocalizedDuration } from '@/session/sessionDurationFormat';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import { mobileToolRowWording } from '@/i18n/toolWording';
+import { useStableValue } from '@/utils/useStableValue';
+import { mapContentEqual, sameArrayIdentity } from '@/utils/valueEquality';
 import type { HistoryWorkLine } from '@cindy/maker-shared/message-window';
 
 const MESSAGE_CONTROL_HIT_SLOP = { bottom: 10, left: 10, right: 10, top: 10 };
@@ -526,8 +529,6 @@ interface MobileHistoryPrependTransaction {
   userHandoffPending: boolean;
   verifyDeadlineAt: number;
 }
-// 「跳到底部」浮标直径:比 composer 里的语音按钮(28)大一档但不压过它,Telegram 同款层级感。
-const SCROLL_TO_BOTTOM_FAB_SIZE = 36;
 const stylesStatic = StyleSheet.create({
   compactActivityIndicator: {
     alignItems: 'center',
@@ -670,6 +671,15 @@ interface MessageActions {
   lastUserInputClientId?: string | null;
   /** 已加载窗口里最后一条用户消息(含 steer):只有它挂编辑入口。 */
   lastUserMessageClientId?: string | null;
+}
+
+/** Optional-Map content equality for useStableValue: both absent, or same keys with equal values. */
+function sameMapEntries<V>(
+  a: ReadonlyMap<string, V> | undefined,
+  b: ReadonlyMap<string, V> | undefined,
+  valueEqual: (x: V, y: V) => boolean,
+): boolean {
+  return a === b || (!!a && !!b && mapContentEqual(a, b, valueEqual));
 }
 
 export function MessageRenderer({
@@ -1748,22 +1758,32 @@ export function MessageRenderer({
     }
     if (shareSelectionActiveRef.current) scheduleStickyShareCheckRef.current?.(true);
   }, []);
-  const companionPluginWork = useMemo(() => companion ? companionPluginWorkEntries(items, companionPluginInvocations) : undefined, [companion, items, companionPluginInvocations]);
+  // `items` is rebuilt on every streaming flush, but these two maps only change when a turn,
+  // its plugin calls or its five-minute stamp changes. Keep the previous instance when the
+  // entries are equal: both sit in `actions` / `extraData`, so a fresh Map re-renders every row.
+  const companionPluginWork = useStableValue(
+    useMemo(() => companion ? companionPluginWorkEntries(items, companionPluginInvocations) : undefined, [companion, items, companionPluginInvocations]),
+    (previous, next) => sameMapEntries(previous, next, (a, b) =>
+      a.sessionId === b.sessionId && a.running === b.running && sameArrayIdentity(a.plugins, b.plugins)),
+  );
   // Desktop MessageStream groups the visible teammate conversation (not hidden work) into five-minute stamps.
   // Your own send is grouped by its send time from the moment its bubble appears, and its echo
   // (same key) keeps that time, so a phone/computer clock skew cannot add or move a stamp on
   // confirmation. Outbox rows carry the time across restarts.
   const pendingSentAtRef = useRef(new Map<string, number>());
-  const companionTimeGroups = useMemo(() => companion ? collectBotMessageTimeGroups(items.flatMap((item): BotTimelineMessage[] => {
-    if (item.type === 'pending_send') {
-      const sentAt = item.sentAt ?? localSendStartedAt(item.key);
-      if (sentAt === null) return [];
-      pendingSentAtRef.current.set(item.key, sentAt);
-      return [{ clientId: item.key, createdAt: sentAt }];
-    }
-    return item.type === 'message' && (item.message.kind === 'user' || item.message.kind === 'assistant' || item.message.companion)
-      ? [{ clientId: item.key, createdAt: pendingSentAtRef.current.get(item.key) ?? localSendStartedAt(item.key) ?? item.message.createdAt }] : [];
-  })) : undefined, [companion, items]);
+  const companionTimeGroups = useStableValue(
+    useMemo(() => companion ? collectBotMessageTimeGroups(items.flatMap((item): BotTimelineMessage[] => {
+      if (item.type === 'pending_send') {
+        const sentAt = item.sentAt ?? localSendStartedAt(item.key);
+        if (sentAt === null) return [];
+        pendingSentAtRef.current.set(item.key, sentAt);
+        return [{ clientId: item.key, createdAt: sentAt }];
+      }
+      return item.type === 'message' && (item.message.kind === 'user' || item.message.kind === 'assistant' || item.message.companion)
+        ? [{ clientId: item.key, createdAt: pendingSentAtRef.current.get(item.key) ?? localSendStartedAt(item.key) ?? item.message.createdAt }] : [];
+    })) : undefined, [companion, items]),
+    (previous, next) => sameMapEntries(previous, next, (a, b) => a === b),
+  );
   const quoteItemsRef = useRef(items);
   quoteItemsRef.current = items;
   const showCompanionReplyTargets = !!(companion && companionQuote?.showReplyTargets);
@@ -2824,8 +2844,13 @@ export function MessageRenderer({
       companionWorkingLabel,
       showPluginInvocations,
       companionPluginWork,
+      // Cross-row state a kept row reads through `actions`: which reply is the last for its message,
+      // and the five-minute stamps. Both keep their identity until they really change.
+      lastCompanionReplyKey,
+      companionTimeGroups,
     }),
-    [pendingSend?.selectedClientId, shareSelectionActive, companion, companionWorkingLabel, showPluginInvocations, companionPluginWork],
+    [pendingSend?.selectedClientId, shareSelectionActive, companion, companionWorkingLabel, showPluginInvocations, companionPluginWork,
+      lastCompanionReplyKey, companionTimeGroups],
   );
   // Keep production and regular DEV screens on keyed remounts. With Fabric,
   // recycling an Android container across heterogeneous message trees can race
@@ -2948,19 +2973,10 @@ export function MessageRenderer({
         </View>
       ) : null}
       {hasNewMessages || showJumpToLatest ? (
-        // 跳到底部浮标(Telegram 风):右下角半透明圆形 chevron,弱存在感;
-        // 有未读新消息时不换样式,只在圆标右上角加一颗 CTA 色小圆点提示。
-        <MessageListActionButton
-          accessibilityLabel={hasNewMessages ? t('message.renderer.newMessagesToBottom') : t('message.renderer.jumpToBottom')}
-          onPress={scrollToBottom}
-          style={[styles.scrollToBottomFab, { bottom: floatingBottomOffset, right: scrollToBottomFabRight }]}
+        <MessageScrollToBottomButton hasNewMessages={hasNewMessages} onPress={scrollToBottom}
+          style={{ position: 'absolute', bottom: floatingBottomOffset, right: scrollToBottomFabRight }}
           testID={hasNewMessages ? 'message.newMessageButton' : 'message.jumpToLatestButton'}
-        >
-          <ChevronDown color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} />
-          {hasNewMessages ? (
-                      <View style={styles.scrollToBottomDot} testID="message.newMessageDot" />
-                    ) : null}
-        </MessageListActionButton>
+          dotTestID="message.newMessageDot" />
       ) : null}
                 <PreviewCollectionContext.Provider
                   value={
@@ -3445,75 +3461,6 @@ function SyncingMessages() {
   );
 }
 
-const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
-
-function MessageListActionButton({
-  accessibilityLabel,
-  children,
-  disabled = false,
-  onPress,
-  style,
-  testID,
-}: {
-  accessibilityLabel: string;
-  children: ReactNode;
-  disabled?: boolean;
-  onPress?: () => void;
-  style?: StyleProp<ViewStyle>;
-  testID?: string;
-}) {
-  const styles = useThemedStyles(makeStyles);
-  const interactionDisabled = disabled || !onPress;
-  // mount 入场:150ms 淡入 + 0.92→1 轻缩放(浮标条件挂载,此前瞬间硬现)。
-  // 单 Value 同驱 opacity/scale,native driver 一次性动画;reduce-motion
-  // (含 null 未知态)从 1 起步不播。消失走 unmount 直接卸,不做 exit。
-  const reduceMotionEnabled = useReduceMotionEnabled();
-  const appear = useRef(new Animated.Value(reduceMotionEnabled === false ? 0 : 1)).current;
-  useEffect(() => {
-    if (reduceMotionEnabled !== false) {
-      appear.setValue(1);
-      return;
-    }
-    Animated.timing(appear, {
-      duration: motionDuration.fast,
-      easing: Easing.bezier(...motionEasing.out),
-      isInteraction: false,
-      toValue: 1,
-      useNativeDriver: true,
-    }).start();
-    // 仅 mount 播一次:reduceMotionEnabled 运行中翻转不重放入场。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  const appearStyle = {
-    opacity: appear,
-    transform: [{ scale: appear.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1] }) }],
-  };
-  // pressed 用受控 state 而非函数型 style:createAnimatedComponent 只解析
-  // 静态 props 里的 AnimatedNode,函数型 style 的返回值不会被解析,
-  // Animated.Value 会以原始对象漏进底层 View 的 style(非法 prop)。
-  const [pressed, setPressed] = useState(false);
-  return (
-    <AnimatedPressable
-      accessibilityLabel={accessibilityLabel}
-      accessibilityRole="button"
-      accessibilityState={{ disabled: interactionDisabled }}
-      disabled={interactionDisabled}
-      onPress={interactionDisabled ? undefined : onPress}
-      onPressIn={() => setPressed(true)}
-      onPressOut={() => setPressed(false)}
-      style={[
-        style,
-        appearStyle,
-        pressed && !interactionDisabled && styles.pressed,
-        interactionDisabled && styles.disabled,
-      ]}
-      testID={testID}
-    >
-      {children}
-    </AnimatedPressable>
-  );
-}
-
 function MessageBubble({
   item,
   actions,
@@ -3627,9 +3574,16 @@ function MessageBubble({
   const shareSelectionActive = actions.shareSelectionActive === true
     && shareableMessage;
   const isFirstUserMessage = item.message.kind === 'user' && clientId === actions.firstUserMessageClientId;
-  const rawCopyText = buildMobileMessageCopyText(item.message);
-  const copyText = item.message.kind === 'assistant' ? richAnswerText(rawCopyText) : rawCopyText;
   const canUseCompletedActions = !isStreamingAssistant;
+  // Copy / side-chat text is only reachable once the row has settled (every consumer below is
+  // gated on `canUseCompletedActions` or `showCompletedActionBar`). Skip the rich-answer re-parse
+  // while this row streams, and key the settled value on the message object (plus the UI language,
+  // which localizes the attachment prefix) so a re-render that did not change the row does not redo it.
+  const copyText = useMemo(() => {
+    if (isStreamingAssistant) return '';
+    const raw = buildMobileMessageCopyText(item.message);
+    return item.message.kind === 'assistant' ? richAnswerText(raw) : raw;
+  }, [isStreamingAssistant, item.message, i18nInstance.language]);
   // 操作行只挂在每轮收尾正文、且该行确实是一条发言(判据见
   // mobileMessageShowsActionBar):中间句不再逐条带复制/分叉/时间,系统边界卡整行
   // 不挂。分享态只保留与导出图片一致的消息内容,不显示操作图标、时间或费用。
@@ -3643,7 +3597,8 @@ function MessageBubble({
   const canCopy = showCompletedActionBar && copyText.trim().length > 0;
   const canSelectVisibleText = canUseCompletedActions && copyText.trim().length > 0;
   const relativeTime = showCompletedActionBar ? formatMessageRelativeTime(item.message.createdAt) : '';
-  const absoluteTime = formatMessageAbsoluteTime(item.message.createdAt);
+  // Locale-independent (fixed yyyy-MM-dd HH:mm:ss), so the timestamp alone is the key.
+  const absoluteTime = useMemo(() => formatMessageAbsoluteTime(item.message.createdAt), [item.message.createdAt]);
   const moneySplit = item.message.turnMoney ? splitUsageCost(item.message.turnMoney,
     (item.message.source.agentMeta?.turnUsageDetails as { additionalCosts?: unknown } | undefined)?.additionalCosts) : null;
   const turnCost = showCompletedActionBar && item.message.kind === 'assistant'
@@ -7086,11 +7041,19 @@ function PluginResultCard({ callId, sessionId, excludedUrls, actions }: {
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
   if (hidden) return null;
+  // Desktop draws every plugin card in a frame; mail cards already draw their own.
+  const mailCard = blocks?.some((block) => block.primitive === 'plugin-card-actions'
+    && !!((block.data as { mail?: unknown; legacyMail?: unknown } | undefined)?.mail || (block.data as { legacyMail?: unknown } | undefined)?.legacyMail));
+  // With live controls the card's text becomes their title and detail lines (Desktop's layout).
+  const controlsText = !mailCard && actions.remoteDeviceId && blocks?.some((block) => block.primitive === 'plugin-card-actions')
+    ? blocks.find((block) => block.id === 'text' && block.primitive === 'markdown') : undefined;
   return (
-    <View style={styles.toolMediaBlock} testID="message.pluginResultCard">
+    <View style={mailCard ? styles.toolMediaBlock : styles.pluginResultCard} testID="message.pluginResultCard">
     {blocks?.map((block) => {
+      if (block === controlsText) return null;
       if (block.primitive === 'plugin-card-actions') return (
             <PluginCardActions key={block.id} data={block.data} deviceId={actions.remoteDeviceId} sessionId={sessionId} callId={callId}
+        text={controlsText ? pluginCardPlainText(controlsText.fallbackMarkdown) : undefined}
         onOpenAttachment={actions.onOpenPayload ? (url, name) => actions.onOpenPayload!(buildMediaPayload({ kind: 'image', url, previewable: true }, name)) : undefined} />
           );
       const url = (block.data as { url?: unknown } | undefined)?.url;
@@ -7112,8 +7075,7 @@ function PluginResultCard({ callId, sessionId, excludedUrls, actions }: {
           );
         }
         return (
-          <MarkdownBody key={block.id} text={block.fallbackMarkdown} layout={layout} streaming={false} selectable
-        onOpenPayload={actions.onOpenPayload} onOpenSessionLink={actions.onOpenSessionLink} />
+          <Text key={block.id} selectable style={mailCard ? styles.messageText : styles.pluginResultCardText}>{pluginCardPlainText(block.fallbackMarkdown)}</Text>
         );
     })}
     {!blocks && !error ? (
@@ -9696,6 +9658,16 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   // tool 产出媒体独立块:agent 侧左对齐,逐个竖排(图片 attachment 帧自带圆角)。
   toolMediaBlock: { alignItems: 'flex-start', maxWidth: '100%' },
+  pluginResultCard: {
+    alignSelf: 'stretch',
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.container,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceElevated,
+  },
+  pluginResultCardText: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body },
   imagePreviewWrap: {
     backgroundColor: colors.surfaceChip,
     borderRadius: radius.container,
@@ -9815,27 +9787,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   pressed: { opacity: 0.72 },
   disabled: { opacity: 0.42 },
-  scrollToBottomFab: {
-    alignItems: 'center',
-    backgroundColor: colors.surfaceTranslucent,
-    borderColor: colors.borderTranslucent,
-    borderRadius: radius.pill,
-    borderWidth: StyleSheet.hairlineWidth,
-    height: SCROLL_TO_BOTTOM_FAB_SIZE,
-    justifyContent: 'center',
-    position: 'absolute',
-    width: SCROLL_TO_BOTTOM_FAB_SIZE,
-    zIndex: 20,
-  },
-  scrollToBottomDot: {
-    backgroundColor: colors.cta,
-    borderRadius: radius.pill,
-    height: 8,
-    position: 'absolute',
-    right: 3,
-    top: 3,
-    width: 8,
-  },
 
   forkOriginRow: {
     alignItems: 'center',

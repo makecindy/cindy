@@ -6,8 +6,8 @@ export default {
   viewport: { width: 800, height: 600 },
   real: 'AskUserQuestionPrompt, voice choice draft/confirmation, CompanionVoiceToolbar, question references, prompt shell and themes',
   notCovered: 'Actual microphone/ASR/TTS, task execution, host file contents, browser navigation and remote connectivity',
-  // The visual runner uses esbuild, which does not implement Vite ?url assets.
-  // Keep the real dictation hook/state UI; only the microphone and host are fake.
+  // Keep the real dictation hook/state UI; microphone capture and its worklet
+  // are outside this fixture, so only the microphone and host are fake.
   stubs: {
     'src/renderer/voice-input/workletUrl': 'export function getVoiceInputWorkletUrl() { return "/fixture-worklet.js"; }',
     'src/renderer/voice-input/captureSession': `export async function startVoiceInputCaptureSession(options) {

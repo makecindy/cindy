@@ -122,10 +122,14 @@ export function shouldSkipHighlightDiff(rows: readonly DiffRenderRow[]): boolean
   return false;
 }
 
+export function getCachedHighlight(language: string, content: string): string | undefined {
+  return highlightCache.get(`${language}\0${content}`);
+}
+
 export async function highlightLine(language: string, content: string): Promise<string | null> {
   if (shouldSkipHighlightLine(content)) return null;
   const cacheKey = `${language}\0${content}`;
-  const cached = highlightCache.get(cacheKey);
+  const cached = getCachedHighlight(language, content);
   if (cached !== undefined) return cached;
   const existing = pending.get(cacheKey);
   if (existing) return existing;
