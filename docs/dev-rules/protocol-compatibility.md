@@ -62,6 +62,13 @@ M 保存限定 O/C/组/供应商/Agent/模型的内存上下文并回 `{id, rema
 `continuity: {id, remainingMs, config}` 附在原 `pick` 成功结果。各跳从请求开始扣时，双时钟收口，
 重读/失败/业务流量不能续期。组设置和供应商权限变化发送精确 `continuity-revoke`，迟到 prepare 不得覆盖 revoke。
 
+O 再次交付已确认的上下文前，可用既有 `continuity-inspect` 核验 M 是否仍持有它；
+仅原签发者 O 可做这项只读核验，`continuity-admit` 仍只允许绑定的 C。健康上下文保留原 id
+与原双时钟期限，包括剩余不足 10 分钟时。M 重启丢失上下文时，只向 O 回 `{id, remainingMs: 0}`
+表示不存在；零值不是给 C 的正向 ACK，C 的现有解析继续拒绝。已记下的撤销或关闭仍返回拒绝，
+不能当成重启重新签发。只有明确不存在时 O 才重新 prepare 并取得 M ACK，继承旧剩余预算并扣传输预算；
+临时失败不续期，迟到的明确拒绝也清理对应上下文，不影响邻居。不新增帧、通道或协议字段。
+
 O 不可达时，C 只向已预备 M 发 `continuity-inspect` 读实时可用性/负载，并对选中 M 发
 `continuity-admit {id, ownerDeviceId, sessionId}`。M 校验真实来源 C、自身权限/模型和原期限，
 将既收 O 的 Fast 策略绑定到新任务，之后仍走现有 Agent open。C 不传策略值或修订号。

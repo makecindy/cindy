@@ -206,7 +206,75 @@ export function createGroupContinuityRuntime(readRunning: () => Promise<Readonly
       unsupported.set(supportKey, { wall: requestedWall + GROUP_CONTINUITY_MS, mono: requestedMono + GROUP_CONTINUITY_MS,
         current: captureProviderMetadataContinuityScope(member.agentDeviceId!) });
     };
-    if (!row || Math.min(row.wall - Date.now(), row.mono - performance.now()) < 10 * 60_000) {
+    let verified = false;
+    // Age alone does not end a healthy ACK; verify every still-valid row.
+    if (row) {
+      const self = getSelfDeviceId();
+      if (!self) {
+        // No local device identity: preserve the acknowledged row; a restart
+        // cannot be distinguished without contacting M.
+        verified = true;
+      } else {
+        let reply: Awaited<ReturnType<typeof remoteBackgroundInvoke>> | undefined;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const checked = row;
+        const verifyWall = Date.now(), verifyMono = performance.now();
+        const retireChecked = () => {
+          if (current() && prepared.get(key) === checked) invalidatePrepared(key, checked);
+        };
+        try {
+          const request = remoteBackgroundInvoke(member.agentDeviceId!, PROVIDER_GROUP_REMOTE_CHANNEL, [{
+            action: 'continuity-inspect', id: row.grant.id, ownerDeviceId: self,
+            sessionId: 'continuity-verify',
+          }], { preSend: () => { if (!current()) throw new Error('Group routing context changed'); } }).then(result => {
+            if (!result.ok && isProviderAccessDeniedError(replyError(result)!)) retireChecked();
+            return result;
+          }, error => {
+            if (isProviderAccessDeniedError(error)) retireChecked();
+            throw error;
+          });
+          // A failed verification must not delay the normal offline fallback by
+          // the full remote RPC timeout. Keep the acknowledged row on timeout.
+          void request.catch(() => undefined);
+          reply = await Promise.race([request, new Promise<undefined>(resolve => {
+            timer = setTimeout(() => resolve(undefined), 2_000);
+          })]);
+          if (!reply) verified = true;
+        } catch (error) {
+          if (!current()) return undefined;
+          if (transientFailure(error)) verified = true;
+          else { retireChecked(); return undefined; }
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+        if (!verified && reply) {
+          if (!current()) return undefined;
+          if (prepared.get(key) !== checked) return undefined;
+          if (!reply.ok) {
+            if (transientFailure(replyError(reply)!)) verified = true;
+            else { retireChecked(); return undefined; }
+          } else {
+            const ack = parseGroupContinuityAck(reply.result, checked.grant.id);
+            if (ack) {
+              checked.wall = Math.min(checked.wall, verifyWall + ack.remainingMs);
+              checked.mono = Math.min(checked.mono, verifyMono + ack.remainingMs);
+              verified = true;
+            } else {
+              // Only the issuer's missing-context response permits re-authorization.
+              const absent = reply.result as { id?: unknown; remainingMs?: unknown } | null;
+              if (absent?.id !== checked.grant.id || absent.remainingMs !== 0) {
+                retireChecked(); return undefined;
+              }
+            }
+          }
+        }
+      }
+    }
+    // M keeps continuity grants in memory. A still-fresh O row can therefore
+    // outlive a restarted M, so a reused row must be re-ACKed by M before it is
+    // handed to C. The old row remains the offline fallback when this attempt is
+    // transient; a successful replacement keeps the original wall/mono budget.
+    if (!verified) {
       let pending = preparing.get(key);
       if (!pending) {
         const flight: { group: string; promise: Promise<PrepareAttempt> } = {
@@ -214,7 +282,7 @@ export function createGroupContinuityRuntime(readRunning: () => Promise<Readonly
           promise: Promise.resolve<PrepareAttempt>({ transient: true }),
         };
         const createdFlight = (async (): Promise<PrepareAttempt> => {
-          if (!current() || prepared.size >= 512) return { transient: true };
+          if (!current() || (!previous && prepared.size >= 512)) return { transient: true };
           const requestedWall = Date.now(), requestedMono = performance.now();
           const owns = () => preparing.get(key) === flight;
           const fail = (error: unknown): PrepareAttempt => {
@@ -257,6 +325,8 @@ export function createGroupContinuityRuntime(readRunning: () => Promise<Readonly
           const remainingWindowMs = () => Math.min(
             requestedWall + GROUP_CONTINUITY_MS - Date.now(),
             requestedMono + GROUP_CONTINUITY_MS - performance.now(),
+            previous ? previous.wall - Date.now() : Infinity,
+            previous ? previous.mono - performance.now() : Infinity,
           );
           const initialRemainingMs = remainingWindowMs();
           if (initialRemainingMs <= GROUP_CONTINUITY_DELIVERY_BUDGET_MS) return { transient: true };
@@ -316,8 +386,8 @@ export function createGroupContinuityRuntime(readRunning: () => Promise<Readonly
           // Anchor the ack remaining at the final send, not at ack receipt: the return
           // trip must not lengthen O's prepared deadline beyond M's installed deadline.
           const created: Prepared = { owner, target: member.agentDeviceId!, grant, fingerprint,
-            wall: Math.min(requestedWall + GROUP_CONTINUITY_MS, sent.wall + ackRemainingMs),
-            mono: Math.min(requestedMono + GROUP_CONTINUITY_MS, sent.mono + ackRemainingMs), current };
+            wall: Math.min(previous?.wall ?? requestedWall + GROUP_CONTINUITY_MS, sent.wall + ackRemainingMs),
+            mono: Math.min(previous?.mono ?? requestedMono + GROUP_CONTINUITY_MS, sent.mono + ackRemainingMs), current };
           if (!ack || !current() || created.wall <= Date.now() || created.mono <= performance.now()) {
             revoke(created);
             return { transient: true };
@@ -328,6 +398,10 @@ export function createGroupContinuityRuntime(readRunning: () => Promise<Readonly
           const latest = prepared.get(key);
           if (latest && latest !== previous) { revoke(created); return { transient: true }; }
           prepared.set(key, created);
+          // The replacement is the only route C may keep. Retiring the old id
+          // also covers a previous pick already held by C; failure is bounded by
+          // that old row's original deadline.
+          if (previous && previous.grant.id !== created.grant.id) revoke(previous);
           return { row: created };
         })();
         flight.promise = createdFlight;

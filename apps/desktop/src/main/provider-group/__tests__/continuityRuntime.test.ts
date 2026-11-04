@@ -7,11 +7,17 @@ import { PROTOCOL_VERSION, PROVIDER_GROUP_REMOTE_CHANNEL, REMOTE_AGENT_CHANNEL, 
 import { normalizeProviderGroupConfig } from '../../../shared/providerGroup.js';
 import type { GroupContinuityRequest } from '../../../shared/providerGroupContinuity.js';
 
+// The continuity path only uses protocol/transport/channel constants. Keep those
+// real SDK modules, but do not load the package root's unexecuted client/relay/
+// direct/transfer assembly in this unit test.
+vi.mock('@cindy/device-link', async () => import('./deviceLinkTestFacade.js'));
+
 type PrepareWire = Extract<GroupContinuityRequest, { action: 'continuity-prepare' }>;
 
 const io = vi.hoisted(() => ({
   owner: 'account', realm: 'realm', epoch: 0, allowed: true, supported: true,
   remoteControl: true, revokedControllers: [] as string[], prepares: [] as unknown[],
+  self: 'M',
   group: undefined as unknown, changed: undefined as undefined | ((group: string) => void),
   invoke: vi.fn(), receive: vi.fn(async () => {}), received: vi.fn(),
   slowInspect: false, entered: undefined as undefined | (() => void), inspectGate: Promise.resolve(),
@@ -20,7 +26,7 @@ const io = vi.hoisted(() => ({
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => io.owner }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => io.realm }));
 vi.mock('../../device-link/index.js', () => ({ getRemoteLinkCloseEpoch: () => 0,
-  getSelfDeviceId: () => 'M', remoteBackgroundInvoke: io.invoke }));
+  getSelfDeviceId: () => io.self, remoteBackgroundInvoke: io.invoke }));
 vi.mock('../../device-link/settings-store.js', () => ({
   readDeviceLinkSettings: () => ({ remoteControlEnabled: io.remoteControl,
     revokedControllers: io.revokedControllers }),
@@ -51,7 +57,10 @@ vi.mock('../store.js', () => ({ readProviderGroup: () => io.group,
   onProviderGroupChanged: (listener: (group: string) => void) => { io.changed = listener; return () => {}; } }));
 vi.mock('../fastPolicyStore.js', () => ({ groupFastPolicyStore: { received: io.received, receive: io.receive } }));
 const { createGroupContinuityRuntime, GROUP_CONTINUITY_DELIVERY_BUDGET_MS } = await import('../continuityRuntime.js');
-const { bumpDeviceAccessGeneration, noteControllerAccessAllowed, syncRemoteControlAccessGeneration } = await import('../../device-link/remoteControlAccess.js');
+const { createGroupContinuityExecutor } = await import('../continuityExecutor.js');
+const { bumpDeviceAccessGeneration, deviceAccessGeneration, isControllerAccessAllowed,
+  noteControllerAccessAllowed, remoteControlAccessGeneration,
+  syncRemoteControlAccessGeneration } = await import('../../device-link/remoteControlAccess.js');
 
 function fixture() {
   const runtime = createGroupContinuityRuntime(async () => new Map([['openai', 2]]));
@@ -77,7 +86,7 @@ function setRemoteControl(enabled: boolean): void {
 }
 beforeEach(() => {
   vi.clearAllMocks(); io.owner = 'account'; io.realm = 'realm'; io.epoch = 0; io.allowed = true; io.supported = true;
-  io.remoteControl = true; io.revokedControllers = []; io.prepares.length = 0;
+  io.remoteControl = true; io.revokedControllers = []; io.prepares.length = 0; io.self = 'M';
   io.slowInspect = false; io.entered = undefined; io.inspectGate = Promise.resolve();
   io.inspectError = undefined;
   syncRemoteControlAccessGeneration();
@@ -87,6 +96,103 @@ beforeEach(() => {
 });
 
 describe('group continuity Main wiring', () => {
+  function makeMExecutor() {
+    return createGroupContinuityExecutor({
+      capture: (origin: string, controller: string) => {
+        const controlGeneration = remoteControlAccessGeneration();
+        const originAccess = deviceAccessGeneration(origin);
+        const controllerAccess = deviceAccessGeneration(controller);
+        return () => controlGeneration === remoteControlAccessGeneration()
+          && originAccess === deviceAccessGeneration(origin)
+          && controllerAccess === deviceAccessGeneration(controller)
+          && isControllerAccessAllowed(origin) && isControllerAccessAllowed(controller);
+      },
+      inspect: async () => ({ running: 0, fastPolicyRequired: false }),
+      bindFast: async () => {},
+      wall: Date.now,
+      mono: () => performance.now(),
+    });
+  }
+
+  it('re-ACKs a prepared scope after M restart instead of returning a lost grant', async () => {
+    const f = fixture();
+    io.self = 'O';
+    let executor = makeMExecutor();
+    io.invoke.mockImplementation(async (_target: string, channel: string, args: unknown[], options?: { preSend?: () => void }) => {
+      options?.preSend?.();
+      if (channel === REMOTE_AGENT_CHANNEL) return { ok: true, result: { version: 1,
+        agents: [{ kind: 'codex', available: true }], maxRuns: 16, uploadChunkBytes: 1024, maxPayloadBytes: 2048,
+        groupContinuity: true } };
+      const wireArgs = JSON.parse(JSON.stringify(args)) as unknown[];
+      const action = (wireArgs[0] as { action?: string } | undefined)?.action;
+      if (action === 'continuity-prepare' || action === 'continuity-revoke' || action === 'continuity-inspect') {
+        return { ok: true, result: await executor.handle('O', wireArgs[0]) };
+      }
+      throw new Error('unexpected transport request');
+    });
+    const first = await f.prepare();
+    expect(first).toBeDefined();
+    await expect(executor.handle('C', { action: 'continuity-inspect', id: first!.id,
+      ownerDeviceId: 'O', sessionId: 'before-restart' })).resolves.toMatchObject({ id: first!.id });
+
+    // M process restart: a new real executor has no in-memory entries.
+    executor = makeMExecutor();
+    const second = await f.prepare();
+    expect(second).toBeDefined();
+    expect(second!.remainingMs).toBeLessThanOrEqual(first!.remainingMs);
+    const inspected = await executor.handle('C', { action: 'continuity-inspect', id: second!.id,
+      ownerDeviceId: 'O', sessionId: 'after-restart' }) as { id: string; remainingMs: number };
+    expect(inspected).toMatchObject({ id: second!.id });
+    expect(inspected.remainingMs).toBeLessThanOrEqual(first!.remainingMs);
+    expect(io.invoke.mock.calls.some(call => call[2][0]?.action === 'continuity-revoke'
+      && call[2][0]?.id === first!.id)).toBe(true);
+    await expect(executor.handle('C', { action: 'continuity-admit', id: second!.id,
+      ownerDeviceId: 'O', sessionId: 'after-restart' })).resolves.toMatchObject({ id: second!.id });
+  });
+
+  // Both an initial ACK and one with <10min left must retain the original M context.
+  it.each([0, 20 * 60_000])('keeps a healthy ACK across a repeated O preparation after %ims', async elapsedMs => {
+    const clock = { now: 0 };
+    const date = vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    const mono = vi.spyOn(performance, 'now').mockImplementation(() => clock.now);
+    try {
+      io.self = 'O';
+      const f = fixture();
+      const executor = makeMExecutor();
+      io.invoke.mockImplementation(async (_target: string, channel: string, args: unknown[], options?: { preSend?: () => void }) => {
+        options?.preSend?.();
+        if (channel === REMOTE_AGENT_CHANNEL) return { ok: true, result: { version: 1,
+          agents: [{ kind: 'codex', available: true }], maxRuns: 16, uploadChunkBytes: 1024, maxPayloadBytes: 2048,
+          groupContinuity: true } };
+        const wireArgs = JSON.parse(JSON.stringify(args)) as unknown[];
+        const action = (wireArgs[0] as { action?: string } | undefined)?.action;
+        if (action === 'continuity-prepare' || action === 'continuity-revoke' || action === 'continuity-inspect') {
+          return { ok: true, result: await executor.handle('O', wireArgs[0]) };
+        }
+        throw new Error('unexpected transport request');
+      });
+      const first = await f.prepare();
+      expect(first).toBeDefined();
+      await expect(executor.handle('C', { action: 'continuity-admit', id: first!.id,
+        ownerDeviceId: 'O', sessionId: 'healthy-existing-task' })).resolves.toMatchObject({ id: first!.id });
+      const prepares = io.invoke.mock.calls.filter(call => call[2][0]?.action === 'continuity-prepare').length;
+      clock.now = elapsedMs;
+      const next = await f.prepare();
+      expect(next).toBeDefined();
+      expect(next!.id).toBe(first!.id);
+      expect(next!.remainingMs).toBe(first!.remainingMs - elapsedMs);
+      expect(io.invoke.mock.calls.filter(call => call[2][0]?.action === 'continuity-prepare')).toHaveLength(prepares);
+      expect(io.invoke.mock.calls.some(call => call[2][0]?.action === 'continuity-revoke')).toBe(false);
+      await expect(executor.handle('C', { action: 'continuity-inspect', id: first!.id,
+        ownerDeviceId: 'O', sessionId: 'healthy-existing-task' })).resolves.toMatchObject({ id: first!.id });
+      await expect(executor.handle('O', { action: 'continuity-admit', id: first!.id,
+        ownerDeviceId: 'O', sessionId: 'owner-cannot-admit' })).rejects.toThrow('ACCESS_REVOKED');
+    } finally {
+      date.mockRestore();
+      mono.mockRestore();
+    }
+  });
+
   it('binds the policy received from O to a distinct C task, with live M provider/model/load checks', async () => {
     const f = fixture(), grant = await f.prepare(); expect(grant?.remainingMs).toBeGreaterThan(0);
     const request = { action: 'continuity-admit', id: grant!.id, ownerDeviceId: 'O', sessionId: 'new-task' };
@@ -324,6 +430,7 @@ describe('group continuity Main wiring', () => {
     const date = vi.spyOn(Date, 'now').mockImplementation(() => clock.wall);
     const mono = vi.spyOn(performance, 'now').mockImplementation(() => clock.mono);
     try {
+      io.self = 'O';
       const f = fixture();
       const grant = await f.prepare();
       expect(grant).toBeDefined();
@@ -355,6 +462,7 @@ describe('group continuity Main wiring', () => {
     const date = vi.spyOn(Date, 'now').mockImplementation(() => clock.wall);
     const mono = vi.spyOn(performance, 'now').mockImplementation(() => clock.mono);
     try {
+      io.self = 'O';
       const f = fixture();
       const normal = io.invoke.getMockImplementation()!;
       let notReady = false;
@@ -378,11 +486,12 @@ describe('group continuity Main wiring', () => {
       mono.mockRestore();
     }
   });
-  it.each(['ACCESS_REVOKED', 'REMOTE_DISABLED'])('invalidates a near-expiry context after a caps %s result', async code => {
+  it.each(['ACCESS_REVOKED', 'REMOTE_DISABLED'])('invalidates a near-expiry context after a verification %s result', async code => {
     const clock = { wall: 0, mono: 0 };
     const date = vi.spyOn(Date, 'now').mockImplementation(() => clock.wall);
     const mono = vi.spyOn(performance, 'now').mockImplementation(() => clock.mono);
     try {
+      io.self = 'O';
       const f = fixture();
       await f.prepare();
       clock.wall = clock.mono = 20 * 60_000 + 1;
@@ -394,11 +503,46 @@ describe('group continuity Main wiring', () => {
       mono.mockRestore();
     }
   });
-  it('keeps the previous context when the caps probe throws NETWORK_ERROR', async () => {
+
+  it('retires only the checked ACK when owner verification denies after fallback', async () => {
+    io.self = 'O';
+    const f = fixture();
+    const first = await f.prepare();
+    const member = normalizeProviderGroupConfig(io.group, 'openai')!.members[0]!;
+    const neighbor = await f.runtime.prepare('D', { action: 'pick', providerId: 'openai',
+      agentKind: 'codex', model: 'model', sessionId: 'neighbor-task', exclude: [] }, member);
+    expect(first).toBeDefined(); expect(neighbor).toBeDefined();
+    const normal = io.invoke.getMockImplementation()!;
+    let reject!: (error: Error) => void;
+    io.invoke.mockImplementation(async (target, channel, args, options) => {
+      if (channel === PROVIDER_GROUP_REMOTE_CHANNEL
+        && (args[0] as { action?: string; id?: string })?.action === 'continuity-inspect'
+        && (args[0] as { id?: string }).id === first!.id) {
+        return new Promise<never>((_resolve, rejectRequest) => { reject = rejectRequest; });
+      }
+      return normal(target, channel, args, options);
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const pending = f.prepare();
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(pending).resolves.toMatchObject({ id: first!.id });
+      io.invoke.mockImplementation(normal);
+      reject(Object.assign(new Error('[ACCESS_REVOKED] executor stopped'), { code: 'ACCESS_REVOKED' }));
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(f.runtime.handle('C', { action: 'continuity-inspect', id: first!.id,
+        ownerDeviceId: 'O', sessionId: 'checked-task' })).rejects.toThrow('ACCESS_REVOKED');
+      await expect(f.runtime.handle('D', { action: 'continuity-inspect', id: neighbor!.id,
+        ownerDeviceId: 'O', sessionId: 'neighbor-task' })).resolves.toMatchObject({ id: neighbor!.id });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('keeps the previous context when verification throws NETWORK_ERROR', async () => {
     const clock = { wall: 0, mono: 0 };
     const date = vi.spyOn(Date, 'now').mockImplementation(() => clock.wall);
     const mono = vi.spyOn(performance, 'now').mockImplementation(() => clock.mono);
     try {
+      io.self = 'O';
       const f = fixture();
       const grant = await f.prepare();
       clock.wall = clock.mono = 20 * 60_000 + 1;
@@ -414,10 +558,14 @@ describe('group continuity Main wiring', () => {
     const date = vi.spyOn(Date, 'now').mockImplementation(() => clock.wall);
     const mono = vi.spyOn(performance, 'now').mockImplementation(() => clock.mono);
     try {
+      io.self = 'O';
       const f = fixture();
       const normal = io.invoke.getMockImplementation()!;
       let deny = false;
       io.invoke.mockImplementation(async (target, channel, args, options) => {
+        if (deny && channel === PROVIDER_GROUP_REMOTE_CHANNEL && (args[0] as { action?: string })?.action === 'continuity-inspect') {
+          return { ok: true, result: { id: (args[0] as { id: string }).id, remainingMs: 0 } };
+        }
         if (deny && channel === PROVIDER_GROUP_REMOTE_CHANNEL && (args[0] as { action?: unknown })?.action === 'continuity-prepare') {
           return { ok: false, error: { code: 'IPC_ERROR', message: '[ACCESS_REVOKED] executor stopped' } };
         }
@@ -438,10 +586,14 @@ describe('group continuity Main wiring', () => {
     const date = vi.spyOn(Date, 'now').mockImplementation(() => clock.wall);
     const mono = vi.spyOn(performance, 'now').mockImplementation(() => clock.mono);
     try {
+      io.self = 'O';
       const f = fixture();
       const normal = io.invoke.getMockImplementation()!;
       let fail = false;
       io.invoke.mockImplementation(async (target, channel, args, options) => {
+        if (fail && channel === PROVIDER_GROUP_REMOTE_CHANNEL && (args[0] as { action?: string })?.action === 'continuity-inspect') {
+          return { ok: true, result: { id: (args[0] as { id: string }).id, remainingMs: 0 } };
+        }
         if (fail && channel === PROVIDER_GROUP_REMOTE_CHANNEL && (args[0] as { action?: unknown })?.action === 'continuity-prepare') {
           throw Object.assign(new Error('[TIMEOUT] prepare timed out'), { code: 'TIMEOUT' });
         }
@@ -457,7 +609,8 @@ describe('group continuity Main wiring', () => {
     }
   });
   it('does not let a late legacy caps result poison a newer prepared context', async () => {
-    const f = fixture();
+    io.self = 'O';
+      const f = fixture();
     const normal = io.invoke.getMockImplementation()!;
     let release!: () => void;
     let firstCaps = true;
@@ -484,7 +637,8 @@ describe('group continuity Main wiring', () => {
     } finally { vi.useRealTimers(); }
   });
   it('does not send an old prepare after a newer context was prepared', async () => {
-    const f = fixture();
+    io.self = 'O';
+      const f = fixture();
     const normal = io.invoke.getMockImplementation()!;
     let release!: () => void;
     let firstCaps = true;
@@ -510,7 +664,10 @@ describe('group continuity Main wiring', () => {
       await Promise.resolve();
       await Promise.resolve();
       expect(io.invoke.mock.calls.filter(call => call[2][0]?.action === 'continuity-prepare')).toHaveLength(prepares);
+      // A late superseded flight cannot replace the newer acknowledged row.
       await expect(f.prepare()).resolves.toMatchObject({ id: second!.id });
+      expect(io.invoke.mock.calls.filter(call => call[2][0]?.action === 'continuity-prepare'))
+        .toHaveLength(prepares);
     } finally { vi.useRealTimers(); }
   });
   it('fences an in-flight probe across a group generation A to B to A', async () => {

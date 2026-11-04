@@ -490,6 +490,26 @@ describe('remote group continuity wiring', () => {
   });
 
   // Test value
+  // - Production entry: getProviderGroupRemoteGroups().readGroup (used by service.ts).
+  // - Rule: provider-groups.md short-outage section: a directory snapshot is not the owner's
+  //   current membership confirmation; a stale reply may predate a live-picked member.
+  // - Gap: readGroup used a stale fallback catalog as a live group config, so service's
+  //   binding reconciliation could release a never-run task for a member absent from the snapshot.
+  // - Minimal failing input: one stale provider-list reply which still carries the group summary.
+  // - Tier: unit (real runtime facade and directory read state; only transport mocked).
+  it('does not report a stale directory snapshot as the current group membership', async () => {
+    owner = 'stale-membership-owner';
+    const staleConfig = normalizeProviderGroupConfig({ strategy: 'least', autoSwitch: true, allowFast: false,
+      members: [{ kind: 'device', agentDeviceId: 'stale-executor', providerId: 'openai' }] }, 'openai')!;
+    io.catalogState.mockResolvedValueOnce({ views: [{
+      id: 'openai', name: 'OpenAI', agents: ['codex'], models: { codex: [] }, connected: true,
+      group: providerGroupSummaryForWire(staleConfig),
+    }], stale: true, remainingMs: 60_000 });
+    const groups = getProviderGroupRemoteGroups();
+
+    expect(await groups.readGroup('stale-membership-owner', 'openai')).toBeUndefined();
+  });
+  // Test value
   // - Production entry: getProviderGroupRemoteGroups + createProviderGroupService.assignBeforeStart.
   // - Rule: a live online owner pick must assign and persist M even when the offline metadata
   //   target registry is full; a later offline task must still fail closed.

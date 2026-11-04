@@ -335,7 +335,9 @@ export function getProviderGroupRemoteGroups(): ProviderGroupRemoteGroups {
         return null;
       }
       const config = readProviderGroupSummary((view as { group?: unknown }).group, providerId);
-      if (config) return config;
+      // A stale reply is a snapshot, not current membership: it may predate a
+      // member picked later, so it cannot authorize or release a binding.
+      if (config) return catalog.stale ? undefined : config;
       if (!catalog.freshRead || catalog.stale) return undefined;
       continuityClient?.forgetGroup(ownerDeviceId, providerId);
       return null;

@@ -184,7 +184,15 @@ export function createGroupContinuityExecutor(deps: GroupContinuityExecutorDeps)
       }
       const id = key(request.ownerDeviceId, request.id);
       const entry = entries.get(id);
-      if (!entry || entry.grant.controller !== origin || !valid(entry)) return denied();
+      // Only the issuer may distinguish a lost in-memory context from a denial.
+      // Zero is never a positive ACK for C, and remembered closures stay denied.
+      if (!entry && request.action === 'continuity-inspect' && origin === request.ownerDeviceId
+        && !revoked.has(id) && !closed.has(id)) return { id: request.id, remainingMs: 0 };
+      if (!entry || !valid(entry)) return denied();
+      // The group owner that installed this context may verify that M still
+      // holds it. This is read-only; admission remains controller-only.
+      const verifier = request.action === 'continuity-inspect' && entry.origin === origin;
+      if (entry.grant.controller !== origin && !verifier) return denied();
       const current = () => entries.get(id) === entry && valid(entry);
       const retireEntry = () => {
         if (entries.get(id) !== entry) return false;
