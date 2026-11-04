@@ -1,7 +1,6 @@
 import type { ModelImageInputCatalogModel } from '../../../shared/modelImageInputOverride.js';
 import {
   BUILTIN_PROVIDERS,
-  classifyVisionCapability,
   validModelMetadata,
   type ModelMetadata,
   type BaseModel,
@@ -457,12 +456,10 @@ function overlayFields(model: ModelImageInputCatalogModel, f: ModelCatalogOverri
     ...(f.supportsImageInput !== undefined ? {
       // Preserve the pre-override capability across root / bridge overlays, so
       // Settings can restore inheritance without mistaking the user's value for the default.
-      defaultSupportsImageInput: model.defaultSupportsImageInput !== undefined
-        ? model.defaultSupportsImageInput
-        : model.supportsImageInput ?? (model.modalities
-          ? model.modalities.input.includes('image')
-          : classifyVisionCapability(model.id) === 'unknown'
-            ? null : classifyVisionCapability(model.id) === 'vision'),
+      imageInputDefault: model.imageInputDefault ?? {
+        supportsImageInput: model.supportsImageInput,
+        modalities: model.modalities,
+      },
       supportsImageInput: f.supportsImageInput,
     } : {}),
     ...(f.status !== undefined

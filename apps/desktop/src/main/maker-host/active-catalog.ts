@@ -924,17 +924,17 @@ function applyLayeredConsumer(
       : overlaid;
   };
   const result = applyConsumer(model);
-  if (model.defaultSupportsImageInput === undefined) return result;
+  if (model.imageInputDefault === undefined) return result;
   // Resolve display provenance through the same consumer layers, without the
   // root's image override. A bridge may declare a different catalog default.
   const inherited = applyConsumer({
     ...model,
-    supportsImageInput: model.defaultSupportsImageInput ?? undefined,
+    supportsImageInput: model.imageInputDefault.supportsImageInput,
+    modalities: model.imageInputDefault.modalities,
   });
   return {
     ...result,
-    defaultSupportsImageInput: inherited.supportsImageInput ?? (inherited.modalities
-      ? inherited.modalities.input.includes('image') : model.defaultSupportsImageInput),
+    imageInputDefault: { supportsImageInput: inherited.supportsImageInput, modalities: inherited.modalities },
   };
 }
 

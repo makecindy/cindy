@@ -1,4 +1,4 @@
-import type { ModelImageInputCatalogModel } from '../../../shared/modelImageInputOverride';
+import { modelImageInputDefault } from '../../../shared/modelImageInputOverride';
 import { displayPricingComponent, isDisplayPricingTableRedundant } from '@/lib/displayPricingFormat';
 import { DisplayPricingDetails, DisplayPricingQuote } from '@/components/DisplayPricingDetails';
 import { Button } from '@/components/ui/button';
@@ -436,23 +436,14 @@ export function ModelAdvancedDrawer({
           ? 'vision'
           : 'no-vision'
         : classifyVisionCapability(primaryModel.id);
-  const imageInputModel: ModelImageInputCatalogModel = primaryModel;
-  const imageInputDefault = imageInputModel.defaultSupportsImageInput !== undefined
-    ? imageInputModel.defaultSupportsImageInput
-    : vision === 'unknown' ? null : vision === 'vision';
+  const imageInputDefault = modelImageInputDefault(primaryModel);
   // An undeclared catalog has no default option: both choices remain explicit overrides.
   const imageInputValue = imageInputOverride.value ?? (imageInputOverride.error
     ? vision === 'unknown' ? null : vision === 'vision'
     : imageInputDefault);
   const imageInputTargetDefaults = (contextTarget ? [contextTarget, ...contextTarget.relatedTargets] : []).map(({ agent }) => {
-    if (agent === primaryAgent) return imageInputDefault;
-    const candidate: ModelImageInputCatalogModel | undefined = row.byAgent[agent];
-    if (!candidate) return null;
-    if (candidate.defaultSupportsImageInput !== undefined) return candidate.defaultSupportsImageInput;
-    if (candidate.supportsImageInput !== undefined) return candidate.supportsImageInput;
-    if (candidate.modalities) return candidate.modalities.input.includes('image');
-    const capability = classifyVisionCapability(candidate.id);
-    return capability === 'unknown' ? null : capability === 'vision';
+    const candidate = row.byAgent[agent];
+    return candidate ? modelImageInputDefault(candidate) : null;
   });
   const imageDefaultsMatch = (value: boolean) => imageInputTargetDefaults.length > 0 &&
     imageInputTargetDefaults.every(defaultValue => defaultValue === value);

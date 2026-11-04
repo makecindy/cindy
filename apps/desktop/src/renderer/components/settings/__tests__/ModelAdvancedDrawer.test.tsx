@@ -873,7 +873,7 @@ describe('model advanced editor', () => {
   // an older explicit override already equals the current catalog value.
   it.each([true, false])('offers only two image-input choices with catalog default %s', async (catalogDefault) => {
     mocks.imageValue = !catalogDefault;
-    draw({ ...model, supportsImageInput: !catalogDefault, defaultSupportsImageInput: catalogDefault });
+    draw({ ...model, supportsImageInput: !catalogDefault, imageInputDefault: { supportsImageInput: catalogDefault } });
     const trigger = screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' });
     expect(trigger.textContent).toBe(`settings.providers.models.advanced.${catalogDefault ? 'unsupported' : 'supported'}`);
     fireEvent.keyDown(trigger, { key: 'ArrowDown' });
@@ -900,7 +900,7 @@ describe('model advanced editor', () => {
     mocks.imageValue = override;
     draw({ ...model, id: 'private-undeclared-model', modalities: undefined,
       supportsImageInput: override ?? undefined,
-      defaultSupportsImageInput: override === null ? undefined : null });
+      imageInputDefault: override === null ? undefined : {} });
     const trigger = screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' });
     expect(trigger.textContent).toBe(`settings.providers.models.advanced.${override === null ? 'undeclared' : override ? 'supported' : 'unsupported'}`);
     for (const supported of [true, false]) {
@@ -918,7 +918,7 @@ describe('model advanced editor', () => {
 
   it('clears an older explicit override that already matches the catalog default', async () => {
     mocks.imageValue = true;
-    draw({ ...model, supportsImageInput: true, defaultSupportsImageInput: true });
+    draw({ ...model, supportsImageInput: true, imageInputDefault: { supportsImageInput: true } });
     fireEvent.keyDown(screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' }), { key: 'ArrowDown' });
     const item = await screen.findByRole('menuitemradio', { name: 'settings.providers.models.advanced.imageInputDefault settings.providers.models.advanced.supported' });
     expect(item.getAttribute('aria-checked')).toBe('true');
@@ -934,7 +934,7 @@ describe('model advanced editor', () => {
 
   it.each([true, false])('keeps the loaded image capability %s when the override read fails', (supported) => {
     mocks.imageError = true;
-    draw({ ...model, supportsImageInput: supported, defaultSupportsImageInput: !supported });
+    draw({ ...model, supportsImageInput: supported, imageInputDefault: { supportsImageInput: !supported } });
     expect(screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' }).textContent)
       .toBe(`settings.providers.models.advanced.${supported ? 'supported' : 'unsupported'}`);
     expect(screen.getByRole('alert').textContent).toBe('settings.providers.custom.toast.saveFailed');
@@ -1163,8 +1163,8 @@ it('does not label an unverified working default as the upstream capacity', () =
 });
 
 it.each([true, false])('uses an explicit common image choice %s when engine defaults differ', async (supported) => {
-  const first = { ...model, supportsImageInput: true, defaultSupportsImageInput: true };
-  const second = { ...model, id: 'chatgpt/gpt-6', supportsImageInput: false, defaultSupportsImageInput: false };
+  const first = { ...model, supportsImageInput: true, imageInputDefault: { supportsImageInput: true } };
+  const second = { ...model, id: 'chatgpt/gpt-6', supportsImageInput: false, imageInputDefault: { supportsImageInput: false } };
   render(<ModelAdvancedDrawer provider={provider}
     row={{ id: model.id, name: model.name, avail: ['codex', 'claude-code'], byAgent: { codex: first, 'claude-code': second } }}
     open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
@@ -1177,4 +1177,39 @@ it.each([true, false])('uses an explicit common image choice %s when engine defa
   fireEvent.click(items[supported ? 0 : 1]);
   expect(mocks.imageSet).toHaveBeenLastCalledWith(supported);
   expect(mocks.imageSet).not.toHaveBeenCalledWith(null);
+});
+
+it.each([true, false, undefined])('uses chat default %s independently of a same-ID Images connection', async (supported) => {
+  const source = { ...buildUserProvider({ id: 'relay', name: 'Relay', auth: { method: 'apiKey' }, runtimes: {
+    pi: { baseUrl: 'https://chat.example.invalid/v1', models: [{
+      id: 'private-image', name: 'Image', supportsImageInput: supported,
+    }] },
+    codex: { baseUrl: 'https://images.example.invalid/v1', imageApi: 'openai-images', models: [{
+      id: 'private-image', name: 'Image', mode: 'image_generation',
+      modalities: { input: supported ? ['text'] : ['text', 'image'], output: ['image'] },
+    }] },
+  } }), connected: true } as ProviderView;
+  render(<ModelAdvancedDrawer provider={source} row={{ id: 'private-image', name: 'Image', avail: ['pi', 'codex'],
+    byAgent: { pi: source.models.pi![0], codex: source.models.codex![0] } }} open
+    onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+  const trigger = screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' });
+  expect(trigger.textContent).toBe('settings.providers.models.advanced.' +
+    (supported === undefined ? 'undeclared' : supported ? 'supported' : 'unsupported'));
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+  const items = await screen.findAllByRole('menuitemradio');
+  expect(items).toHaveLength(2);
+  if (supported === undefined) {
+    expect(items.every(item => !item.textContent?.includes('imageInputDefault'))).toBe(true);
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'settings.providers.models.advanced.supported' }));
+    expect(mocks.imageSet).toHaveBeenLastCalledWith(true);
+    return;
+  }
+  const defaultName = 'settings.providers.models.advanced.imageInputDefault settings.providers.models.advanced.' +
+    (supported ? 'supported' : 'unsupported');
+  fireEvent.click(screen.getByRole('menuitemradio', { name: defaultName }));
+  expect(mocks.imageSet).toHaveBeenLastCalledWith(null);
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+  fireEvent.click(await screen.findByRole('menuitemradio', { name: 'settings.providers.models.advanced.' +
+    (supported ? 'unsupported' : 'supported') }));
+  expect(mocks.imageSet).toHaveBeenLastCalledWith(!supported);
 });
