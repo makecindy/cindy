@@ -26,6 +26,23 @@ export default {
     'src/renderer/features/bots/BotDeleteDialog': 'export const BotDeleteDialog=()=>null;',
   },
   cases: {
+    ...Object.fromEntries(['other-computer-running', 'other-computer-running-mirror', 'local-working-remote-selected'].map(name => {
+      const localWorking = name === 'local-working-remote-selected';
+      return [name, {
+        about: 'Merged Cindy keeps background-computer work visible without a duplicate running dot or route change',
+        data: {
+          profiles: [{ ...profiles[0], id: 'cindy-default', templateId: 'cindy', avatar: 'cindy://avatar/preset/cindy', lastMessagePreview: '本机上一条消息' }],
+          remoteBots: [{ id: 'cindy-default', name: 'Cindy', deviceId: 'studio', deviceName: 'Studio',
+            avatar: 'cindy://avatar/preset/cindy', avatarColor: 'violet', online: true, sessionId: 'studio-chat', activityAt: 1,
+            preview: '远程上一条消息', ...(localWorking ? {} : name.endsWith('-mirror')
+              ? { teammateActivity: { phase: 'running' } }
+              : { generation: { phase: 'processing', startedAt: null } }),
+          }],
+          route: localWorking ? '/bots/remote/studio/cindy-default' : '/bots/cindy-default',
+          activities: localWorking ? [['chat-0', { sessionId: 'chat-0', phase: 'running', workingPhase: 'processing', startedAtMs: null }]] : [],
+        },
+      }];
+    })),
     'group-types': {
       about: 'Group and private rows retain their original avatars without type markers; running/unread status semantics remain',
       data: {
@@ -127,6 +144,22 @@ export default {
     },
   },
   async check(page, ui) {
+    if (['other-computer-running', 'other-computer-running-mirror', 'local-working-remote-selected'].includes(ui.case)) {
+      const localWorking = ui.case === 'local-working-remote-selected';
+      const row = page.getByTestId('cindy-device-row');
+      const workingDevice = localWorking ? await ui.t('bots.devicePicker.local') : 'Studio';
+      assert.ok((await row.innerText()).includes(`${workingDevice} · `));
+      assert.equal(await row.getByText(await ui.t('ccAgent.agentStatus.processing'), { exact: true }).count(), 1);
+      assert.equal(await row.locator('[data-teammate-status="running"]').count(), 0);
+      const selectedDevice = localWorking ? 'Studio' : await ui.t('bots.devicePicker.local');
+      assert.equal(await row.getByRole('button', { name: `Cindy · ${selectedDevice}`, exact: true }).getAttribute('aria-current'), 'page');
+      await ui.capture('other-computer-working');
+      await page.getByRole('button', { name: await ui.t('bots.title'), exact: true }).click();
+      await row.waitFor({ state: 'hidden' });
+      assert.equal(await page.locator('[data-teammate-status="running"]:visible').count(), 1);
+      await ui.capture('collapsed-working');
+      return;
+    }
     if (ui.case === 'group-types') {
       const section = page.locator('[data-sidebar-section="teammates"]');
       assert.equal(await section.locator('[data-bot-group-id]').count(), 2);

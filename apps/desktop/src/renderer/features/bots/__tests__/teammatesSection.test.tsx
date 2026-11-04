@@ -256,6 +256,50 @@ describe('one Cindy entry across devices', () => {
     expect(mocks.navigate).toHaveBeenLastCalledWith('/bots/cindy-default');
   });
 
+  it.each([
+    { generation: { phase: 'processing' as const, startedAt: 1 } },
+    { teammateActivity: { phase: 'running' as const } },
+  ])('shows another computer working without a duplicate running dot: %j', async (running) => {
+    mocks.profiles = [bot({ id: 'cindy-default', name: 'Cindy', lastMessagePreview: 'Local preview' })];
+    mocks.remoteBots = [remote('cloud', 'Cloud', running)];
+    const view = await renderSidebar();
+    const row = screen.getByTestId('cindy-device-row');
+    expect(row.textContent).toContain('Cloud · ');
+    expect(screen.getByText('ccAgent.agentStatus.processing')).toBeTruthy();
+    expect(screen.queryByText('Local preview')).toBeNull();
+    expect(row.querySelector('[data-teammate-status="running"]')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Cindy · bots.devicePicker.local' }));
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/cindy-default');
+
+    mocks.remoteBots = [remote('cloud', 'Cloud')];
+    view.rerender(<TeammatesSection />);
+    expect(screen.getByText('Local preview')).toBeTruthy();
+    expect(screen.queryByText('ccAgent.agentStatus.processing')).toBeNull();
+  });
+
+  it('shows local work while the selected remote computer is idle', async () => {
+    mocks.profiles = [bot({ id: 'cindy-default', name: 'Cindy' })];
+    mocks.remoteBots = [remote('cloud', 'Cloud')];
+    mocks.params = { botId: 'cindy-default', deviceId: 'cloud' };
+    mocks.islandActivity.set('cindy-default-chat', { sessionId: 'cindy-default-chat', phase: 'running' });
+    await renderSidebar();
+    expect(screen.getByTestId('cindy-device-row').textContent).toContain('bots.devicePicker.local · ');
+    expect(screen.getByText('ccAgent.agentStatus.processing')).toBeTruthy();
+    expect(screen.queryByText('Cloud preview')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Cindy · Cloud' }));
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/remote/cloud/cindy-default');
+  });
+
+  it('keeps the current computer summary when both computers are working', async () => {
+    mocks.profiles = [bot({ id: 'cindy-default', name: 'Cindy' })];
+    mocks.remoteBots = [remote('cloud', 'Cloud', { generation: { phase: 'thinking', startedAt: 1 } })];
+    mocks.islandActivity.set('cindy-default-chat', { sessionId: 'cindy-default-chat', phase: 'running' });
+    await renderSidebar();
+    expect(screen.getByText('ccAgent.agentStatus.processing')).toBeTruthy();
+    expect(screen.getByTestId('cindy-device-row').textContent).not.toContain('Cloud · ');
+    expect(screen.queryByText('ccAgent.agentStatus.thinking')).toBeNull();
+  });
+
   it('keeps remote unread discoverable without opening the chat or switching away from local', async () => {
     mocks.profiles = [bot({ id: 'cindy-default', name: 'Cindy' })];
     mocks.remoteBots = [remote('cloud', 'Cloud', { lastReplyAt: 20, readAt: 10, online: false })];
