@@ -2509,6 +2509,9 @@ describe('Chat Server result delivery and refresh', () => {
       expect(logged).not.toContain(secret);
     }
     expect(logged).not.toContain('not a field');
+    // The second refusal reports the payload actually retried: the locator is already gone, so the
+    // retry log must not claim a card was sent (and must not pair its details with that shape).
+    expect((logged.split('Group settlement refused again')[1] ?? '')).not.toContain('cindy.work-record');
     expect(deps.dispatch).toHaveBeenCalledOnce();
   });
 

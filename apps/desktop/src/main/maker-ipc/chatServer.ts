@@ -2215,17 +2215,18 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
    */
   async function settleRun(run: Running, action: string, pending: Settlement) {
     const payload = pending.payload!;
-    const blocks = payload.content;
     const attempt = () => updateExecution(run, action, payload).then(() => null, (error: unknown) => error);
     const refusal = await attempt();
     if (!refusal) return;
     if (!contentRefusal(action, refusal)) throw refusal;
-    reportRefusal(run, action, refusal, blocks, 1);
+    reportRefusal(run, action, refusal, payload.content, 1);
     if (!dropProcessLocator(payload)) throw new SettlementRefused(refusal);
     const retried = await attempt();
     if (!retried) return;
     if (!contentRefusal(action, retried)) throw retried;
-    reportRefusal(run, action, retried, blocks, 2);
+    // Describe the request that was actually refused this time: the locator is gone by now, so the
+    // second refusal must not be paired with the first attempt's block shapes.
+    reportRefusal(run, action, retried, payload.content, 2);
     throw new SettlementRefused(retried);
   }
   /** A 4xx the server means as "this content will never be accepted": not auth, permissions or the lease. */
