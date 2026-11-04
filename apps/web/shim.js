@@ -40,6 +40,44 @@
     },
     'auth.getState': () => rpc('/me'),
     // Renderer boot gates: answer with the host defaults instead of stalling.
+    'maker.send': async (args) => {
+      const [sessionId, message, createOpts] = args ?? [];
+      const prompt = typeof message === 'string' ? message : (message?.content ?? '');
+      const body = {
+        prompt: typeof prompt === 'string' ? prompt : JSON.stringify(prompt),
+        sessionId: typeof sessionId === 'string' ? sessionId : undefined,
+        workDir: createOpts?.workingDir,
+        model: createOpts?.model,
+      };
+      const response = await fetch('/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+        credentials: 'same-origin',
+      });
+      if (!response.ok || !response.body) return { accepted: false, reason: `HTTP_${response.status}` };
+      void (async () => {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let index;
+          while ((index = buffer.indexOf('\n\n')) !== -1) {
+            const chunk = buffer.slice(0, index);
+            buffer = buffer.slice(index + 2);
+            const line = chunk.split('\n').find((l) => l.startsWith('data: '));
+            if (!line) continue;
+            const payload = line.slice(6);
+            if (payload === '{}') continue;
+            try { emit('maker.onEvent', JSON.parse(payload)); } catch { /* ignore partial */ }
+          }
+        }
+      })();
+      return { accepted: true };
+    },
     'maker.memoryGetSettings': () => ({ maker: true, claudeCode: true, codex: true, pi: true }),
     'maker.memoryPreserveLegacyMakerDisabled': () => ({ maker: true, claudeCode: true, codex: true, pi: true }),
     'maker.gitSafetyGet': () => ({ mode: 'off' }),
@@ -81,7 +119,7 @@
     'getAnalyticsSettings': () => ({ allowed: false }),
     'voiceInput.setGlobalShortcut': () => ({ ok: false }),
     'worktreeListAll': () => [],
-    'localDb.bots.list': () => ({ bots: [] }),
+    'localDb.bots.list': () => [],
     'localDb.bots.getModelChainSettings': () => ({ chain: [] }),
     'maker.silentEncryptedRetryGet': () => ({ enabled: true }),
     'maker.chatEmbeddingGet': () => ({ enabled: false }),
@@ -94,11 +132,12 @@
     'modelFavoritesHost.ready': () => undefined,
     'modelFavoritesHost.changed': () => () => {},
     'gitContext.listAllPrRefs': () => [],
-    'layout.getStateSync': () => null,
-    'ghosts.listSync': () => [],
+    'layout.getStateSync': () => ({ layout: window.__cindyBoot?.layout ?? null }),
+    'ghosts.listSync': () => ({ ghosts: [] }),
+    'ghosts.recommendationsSync': () => ({ items: [] }),
     'sidebarSettings.loadSnapshot': () => ({ pinned: [], hidden: [], order: [] }),
     'maker.getCapabilities': () => ({ agents: ['claude-code'], models: [] }),
-    'maker.listActive': () => ({ sessions: [] }),
+    'maker.listActive': () => [],
     'remoteDesktop.state': () => ({ status: 'unavailable' }),
     'sidebarSettings.claimLegacyRendererOwner': () => ({ claimed: false }),
     'maker.claimLegacyModelVisibilityOwner': () => ({ claimed: false }),
@@ -136,6 +175,14 @@
     locale: 'en',
   };
 
+  /** Event listeners registered through `onX` members. */
+  const listeners = new Map();
+  function emit(channel, payload) {
+    for (const cb of listeners.get(channel) ?? []) {
+      try { cb(payload); } catch (error) { console.error('[cindy-web] listener failed', channel, error); }
+    }
+  }
+
   function makeNode(path) {
     const node = function shimCall(...args) {
       window.__cindyCalls?.push(path);
@@ -157,7 +204,13 @@
         }
         // Event registrations return an unsubscribe function, like the preload.
         if (prop.startsWith('on') && prop.length > 2 && prop[2] === prop[2].toUpperCase()) {
-          return () => () => {};
+          const channel = path ? `${path}.${String(prop)}` : String(prop);
+          return (callback) => {
+            const set = listeners.get(channel) ?? new Set();
+            set.add(callback);
+            listeners.set(channel, set);
+            return () => set.delete(callback);
+          };
         }
         return makeNode(path ? `${path}.${String(prop)}` : String(prop));
       },

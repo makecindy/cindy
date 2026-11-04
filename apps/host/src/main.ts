@@ -1,8 +1,10 @@
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { getDefaultVoiceInputSettings } from '../../desktop/src/shared/voiceInputData.ts';
+import { createDefaultLayout } from '../../desktop/src/shared/layoutTree.ts';
 
 const DEFAULT_VOICE_INPUT_SETTINGS = getDefaultVoiceInputSettings();
+const DEFAULT_LAYOUT = createDefaultLayout();
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
@@ -200,6 +202,7 @@ const server = createHostServer({
       ? { user: { id: runtime.owner ?? 'owner', name: runtime.owner ?? 'owner', email: null, avatar: null }, ownerId: runtime.owner }
       : {},
     appearance: {},
+    layout: DEFAULT_LAYOUT,
   }),
   webDir: process.env.CINDY_HOST_WEB_DIR?.trim() ? webDir : (existsSync(webDir) ? webDir : null),
   probe: async () => ({

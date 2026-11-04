@@ -119,7 +119,7 @@ export function createHostServer(deps) {
       }
 
       if (request.method === 'POST' && url.pathname === '/chat') {
-        if (!isAuthorized(request.headers.authorization, deps.token)) {
+        if (!isWebAuthorized(request, deps)) {
           send(response, 401, { error: 'unauthorized' }, { 'www-authenticate': 'Bearer' });
           return;
         }
