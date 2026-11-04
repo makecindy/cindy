@@ -933,14 +933,16 @@ describe('virtual workspace', () => {
       return JSON.parse(JSON.parse(Buffer.from(reply.body!, 'base64').toString()).result.content[0].text);
     };
     const localPrompt = '按 ' + skill + ' 跟进 PR，检出目录 ' + path.join(project, 'checkout') + '，说明里的 /api/v1 保持不变';
+    // 正文里的分隔符保持 Agent 写法（Windows 上存成 C:/...），所以只比较路径本身，不比较分隔符写法。
+    const sameSeparators = (text: string | undefined) => text?.replace(/\\/g, '/');
     try {
       expect(await call('schedule_create', { name: 'PR', prompt })).toEqual({ id: 's1', prompt });
-      expect(stored.get('s1')).toBe(localPrompt);
+      expect(sameSeparators(stored.get('s1'))).toBe(sameSeparators(localPrompt));
       // 本机任务执行时按 prompt 里的路径读 Skill。
       expect(fs.readFileSync(/^按 (.+) 跟进/.exec(stored.get('s1')!)![1], 'utf8')).toBe('# pr');
       expect(await call('schedule_get', { id: 's1' })).toEqual({ id: 's1', prompt });
       await call('schedule_update', JSON.stringify({ id: 's1', prompt: prompt + '。' }));
-      expect(stored.get('s1')).toBe(localPrompt + '。');
+      expect(sameSeparators(stored.get('s1'))).toBe(sameSeparators(localPrompt + '。'));
       expect(await call('schedule_get', { id: 's1' })).toEqual({ id: 's1', prompt: prompt + '。' });
     } finally {
       await executor.close();
