@@ -3110,9 +3110,24 @@ describe('Chat Server result delivery and refresh', () => {
       expect(stops.map(r => [Object.entries(ids).find(([, id]) => r.url.includes(id))![0], r.actor || undefined])).toEqual(expected);
     });
 
+    // A manager's human identity can stop everyone on the server. Missing metadata
+    // must not turn the default own-only action into the explicit all action.
+    it.each([
+      ['owner', undefined], ['admin', undefined], ['owner', 'all'], ['admin', 'all'],
+    ] as const)('keeps missing-requester work in the requested scope: %s %s', async (role, scope) => {
+      singleSpeaker(route => route === `/conversations/${roomId}/executions` ? { body: [
+        { ...execution, status: 'queued', bot_id: foreignBot, requester_id: undefined },
+      ] } : undefined, role);
+      const from = fixture.requests.length;
+      expect(await service.stopRound(roomId, scope)).toMatchObject(scope === 'all'
+        ? { ok: true } : { ok: false, errorCode: 'STOP_OWNERSHIP_UNKNOWN' });
+      const stops = fixture.requests.slice(from).filter(request => request.url.endsWith('/control'));
+      expect(stops).toHaveLength(scope === 'all' ? 1 : 0);
+      if (scope === 'all') expect(stops[0].actor).toBeUndefined();
+    });
+
     // #8045: exercise the production stop entry point, including server refusals and races.
     it.each([
-      ['missing requester', undefined, 'STOP_OWNERSHIP_UNKNOWN'],
       ['another requester', otherHuman, 'PERMISSION_DENIED'],
       ['no active work', null, 'NOTHING_TO_STOP'],
     ])('does not report a successful stop with %s', async (_label, requester, errorCode) => {
@@ -3121,6 +3136,33 @@ describe('Chat Server result delivery and refresh', () => {
       const from = fixture.requests.length;
       expect(await service.stopRound(roomId)).toMatchObject({ ok: false, errorCode });
       expect(fixture.requests.slice(from).filter(r => r.url.endsWith('/control'))).toEqual([]);
+    });
+
+    // #8045: production /executions omits requester_id. Source authors are not
+    // authority; stop as the signed-in human and observe the server's decision.
+    // Unit: the existing scope matrix only used complete execution metadata.
+    it.each([
+      ['accepted', 200, 'cancelled', true, 'member'],
+      ['denied', 403, 'queued', false, 'member'],
+      ['member with an admin teammate', 200, 'cancelled', true, 'admin'],
+    ] as const)('lets the server authorize missing-requester work: %s', async (_label, status, nextStatus, ok, botRole) => {
+      let controlled = false;
+      singleSpeaker(route => {
+        if (route.endsWith('/control')) {
+          controlled = true;
+          return status === 200 ? { body: {} } : { status, body: { error: { code: 'ROLE_REQUIRED' } } };
+        }
+        if (route === `/conversations/${roomId}/executions`) return { body: [
+          { ...execution, bot_id: foreignBot, requester_id: undefined, status: controlled ? nextStatus : 'queued' },
+        ] };
+      }, 'member', botRole);
+      const from = fixture.requests.length;
+      expect(await service.stopRound(roomId)).toMatchObject(ok ? { ok: true } : { ok: false, errorCode: 'PERMISSION_DENIED' });
+      const stops = fixture.requests.slice(from).filter(request => request.url.endsWith('/control'));
+      expect(stops).toHaveLength(1);
+      expect(stops[0].actor).toBeUndefined();
+      const detail = await service.getGroup(roomId);
+      expect(detail.ok && detail.group.round.status).toBe(ok ? 'idle' : 'running');
     });
 
     it.each([

@@ -3813,6 +3813,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const s = await recentSnapshot(room);
       // Owners and admins may be the account's own teammate; that member acts for everyone's work.
       const manager = managementActor(s);
+      const humanIsManager = s.members.some(m => m.id === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role));
       const everything = scopeInput === 'all' && !!manager;
       const asManager = manager === selfId ? undefined : manager;
       const ownBot = (botId: string) => !!localBot(botId) || s.members.some(m => m.id === botId && m.ownerActorId === selfId);
@@ -3833,10 +3834,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           // Your own teammate stops its work for others as itself; a request you made, as you.
           const asBot = !everything && e.requester_id !== selfId && ownBot(e.bot_id);
           if (!everything && !asBot && e.requester_id !== selfId) {
-            // A source message author is not proof of who requested this execution.
-            if (!e.requester_id) unknownRequester = true;
-            continue;
+            if (e.requester_id) continue;
+            // A manager's human identity could stop anyone on the server. Without
+            // ownership metadata, only an explicit all action may use that power.
+            if (humanIsManager) { unknownRequester = true; continue; }
           }
+          // Some servers omit requester_id. For an ordinary human, ask the server
+          // to authorize the stop; never infer ownership or use a foreign teammate.
           try { await api(`/conversations/${room}/executions/${e.id}/control`, 'POST', { operationId: randomUUID(), action: 'stop' }, asBot ? e.bot_id : everything && e.requester_id !== selfId ? asManager : undefined); }
           catch (error) { if (refused(error)) { refusedExecutions.set(e.id, error); continue; } throw error; }
           stopped = true;
