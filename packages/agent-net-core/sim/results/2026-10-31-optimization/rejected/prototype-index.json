@@ -1,0 +1,20 @@
+{
+  "baseline_core": "0207ddfd23a09577960e513f07be8a5dd73cc1f2",
+  "network_model": "shared-burst-rng-v1",
+  "experiments": [
+    "fast_rto400",
+    "fast_spare_force",
+    "fast_spare_rto",
+    "fast_spare_64",
+    "lean_conservative",
+    "fast_free_repair",
+    "fast_free_rto",
+    "fast_free_flush",
+    "fast_free_flush_rto",
+    "auto_warm_known",
+    "auto_warm_unknown",
+    "auto_free_flush",
+    "auto_warm_free"
+  ],
+  "note": "isolated global-parameter prototypes; not the adopted policy API. Burst comparisons have the legacy calendar limitation. Retained for review; not current performance claims."
+}

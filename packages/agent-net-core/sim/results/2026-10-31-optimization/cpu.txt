@@ -1,0 +1,54 @@
+POLICY=auto REPEAT=1 EXIT=0
+agent-net 策略 Auto；每场景 16 个种子
+单核 CPU 性能（内存直连，MiB/s，窗口 1024）：
+  无丢包: agent-net 5652  KCP 227
+  丢 1%: agent-net 4451  KCP 216
+
+POLICY=auto REPEAT=2 EXIT=0
+agent-net 策略 Auto；每场景 16 个种子
+单核 CPU 性能（内存直连，MiB/s，窗口 1024）：
+  无丢包: agent-net 4370  KCP 148
+  丢 1%: agent-net 2922  KCP 201
+
+POLICY=auto REPEAT=3 EXIT=0
+agent-net 策略 Auto；每场景 16 个种子
+单核 CPU 性能（内存直连，MiB/s，窗口 1024）：
+  无丢包: agent-net 4380  KCP 191
+  丢 1%: agent-net 3598  KCP 207
+
+POLICY=lean REPEAT=1 EXIT=0
+agent-net 策略 Lean；每场景 16 个种子
+单核 CPU 性能（内存直连，MiB/s，窗口 1024）：
+  无丢包: agent-net 5268  KCP 212
+  丢 1%: agent-net 3488  KCP 95
+
+POLICY=lean REPEAT=2 EXIT=0
+agent-net 策略 Lean；每场景 16 个种子
+单核 CPU 性能（内存直连，MiB/s，窗口 1024）：
+  无丢包: agent-net 981  KCP 88
+  丢 1%: agent-net 740  KCP 65
+
+POLICY=lean REPEAT=3 EXIT=0
+agent-net 策略 Lean；每场景 16 个种子
+单核 CPU 性能（内存直连，MiB/s，窗口 1024）：
+  无丢包: agent-net 1265  KCP 75
+  丢 1%: agent-net 717  KCP 70
+
+POLICY=fast REPEAT=1 EXIT=0
+agent-net 策略 Fast；每场景 16 个种子
+单核 CPU 性能（内存直连，MiB/s，窗口 1024）：
+  无丢包: agent-net 1210  KCP 76
+  丢 1%: agent-net 879  KCP 110
+
+POLICY=fast REPEAT=2 EXIT=0
+agent-net 策略 Fast；每场景 16 个种子
+单核 CPU 性能（内存直连，MiB/s，窗口 1024）：
+  无丢包: agent-net 1689  KCP 128
+  丢 1%: agent-net 1558  KCP 124
+
+POLICY=fast REPEAT=3 EXIT=0
+agent-net 策略 Fast；每场景 16 个种子
+单核 CPU 性能（内存直连，MiB/s，窗口 1024）：
+  无丢包: agent-net 2508  KCP 156
+  丢 1%: agent-net 3105  KCP 175
+

@@ -1,0 +1,17 @@
+[package]
+name = "agent-net-mobile-size"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# 只用来确认 iOS 能否编译并估算包体，功能上只绑定一个端点。
+[dependencies]
+iroh = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[profile.release]
+strip = true
+lto = "thin"
+opt-level = "s"
+
+[workspace]

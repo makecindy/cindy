@@ -1,0 +1,38 @@
+[
+  {
+    "policy": "auto",
+    "exit": 0,
+    "seconds": 81.59,
+    "model": "independent-burst-calendar-v2",
+    "seeds": 16,
+    "windows": [
+      128,
+      1024
+    ],
+    "scenarios": 32
+  },
+  {
+    "policy": "lean",
+    "exit": 0,
+    "seconds": 14.33,
+    "model": "independent-burst-calendar-v2",
+    "seeds": 16,
+    "windows": [
+      128,
+      1024
+    ],
+    "scenarios": 32
+  },
+  {
+    "policy": "fast",
+    "exit": 0,
+    "seconds": 214.33,
+    "model": "independent-burst-calendar-v2",
+    "seeds": 16,
+    "windows": [
+      128,
+      1024
+    ],
+    "scenarios": 32
+  }
+]

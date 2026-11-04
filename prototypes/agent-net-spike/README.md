@@ -1,0 +1,68 @@
+# agent-net 第 0 阶段验证脚本
+
+只用于验证方案，不进入产品构建，也不是 pnpm workspace 的一部分。结论见
+[`docs/agent-net-plan.md`](../../docs/agent-net-plan.md) §2。
+
+> 2026-10-30 路线改为自研传输，iroh 不进产品。这里的 iroh 代码只保留作性能参照；
+> `edgehub.ts` 和 `poc-edgehub.ts` 验证的接缝继续有效，第 6 步会换成自研传输。
+
+2026-10-30 在一台 macOS 26（arm64）上运行。除非注明，都是本机回环，**不是真实网络指标**。
+
+## 准备
+
+```sh
+npm install --ignore-scripts
+cd rust-bench && cargo build --release && cd ..
+```
+
+iOS 编译要固定 libc（`libc` 0.2.190 之后 `in6_ifreq` 只对 macOS 开放，`netdev` 编译失败）：
+
+```sh
+cd rust-bench/mobile-size
+cargo update -p libc --precise 0.2.189
+cargo build --release --target aarch64-apple-ios
+```
+
+## 脚本
+
+| 脚本 | 验证什么 | 结果 |
+| --- | --- | --- |
+| `npx tsx --tsconfig tsconfig.json poc-edgehub.ts` | 真实 `DeviceLinkClient` 经 EdgeHub 跑 QUIC，全程没有中转 | 12/12 通过 |
+| `node poc-lan.mjs` | 组播发现，账号派生轮换标签，其它账号的节点被忽略 | 2/2 通过，261 ms 发现 |
+| `node poc-relay.mjs` | 自建中继回退、回调准入、自动升级直连。要先启动 `iroh-relay` 和准入回调 | 5/5 通过 |
+| `node bench-quic.mjs <MiB>` | 官方 Node 绑定的开销 | 19.7 MiB/s |
+| `rust-bench` | 原生 QUIC 与模拟瓶颈 | 见下表 |
+| `node bench-wss.mjs <MiB>` | v1 形态的基线，`LINK` 和 `SHAPER` 环境变量可加瓶颈 | 见下表 |
+
+## 基准
+
+模拟链路：100 Mbit/s、单向 20 ms、队列 50 ms，由 `rust-bench` 的 `shape-udp` / `shape-tcp` 提供。
+QUIC 组要设 `STICKY_PATH=1`，否则 iroh 会自动找到更优路径绕过瓶颈。TCP 一侧无法注入丢包，这里只比较限速和时延。
+
+| | 空闲往返 | 满载交互 p50 | 满载交互 p95 | 吞吐 |
+| --- | ---: | ---: | ---: | ---: |
+| QUIC 原生（两次） | 44 ms | 51 / 74 ms | 54 / 79 ms | 10–11 MiB/s |
+| WSS 形态（Node，无 TLS） | 44 ms | 246 ms | 270 ms | 8.8 MiB/s |
+
+| 无瓶颈回环 | 建连 p50 | 吞吐 |
+| --- | ---: | ---: |
+| QUIC 原生 | 0.54 ms | 330 MiB/s |
+| QUIC 经官方 Node 绑定 | 0.71 ms | 19.7 MiB/s |
+| WSS 形态（无 TLS） | 0.36 ms | 328 MiB/s |
+
+## 包体
+
+| 平台 | 大小 |
+| --- | ---: |
+| iOS arm64（`opt-level=s`，strip） | 10.4 MB，gzip 4.0 MB |
+| macOS arm64 官方绑定 | 12.0 MB |
+| Windows x64 官方绑定 | 16.4 MB |
+| Android arm64 官方绑定 | 18.0 MB |
+| Linux x64 官方绑定 | 20.0 MB |
+| `iroh-relay` macOS arm64 | 11.0 MB |
+
+官方绑定是未压缩大小，且包含我们用不到的功能。自建核心的实际大小要到第 1 阶段才知道。
+
+## 没有覆盖
+
+两台真实设备、iOS / Android 真机、耗电、国内运营商、打洞成功率、经中继的吞吐、WSS 加密封装、EdgeHub 与上游 WSS 的合并。

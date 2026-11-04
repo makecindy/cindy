@@ -1,0 +1,18 @@
+{
+  "core": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"ok\":true,\"host\":\"aotu-dev\",\"exitCode\":0,\"stdout\":\"bc94b7e56a6d26a8264d0eb5629b032fb7035806  -\\nBUILD_OK\\n\",\"stderr\":\"   Compiling agent-net-sim v0.0.0 (/tmp/cindy-agent-net-verify.Iant1J/src-bc94b7e56a6d/sim)\\n   Compiling agent-net-core v0.0.0 (/tmp/cindy-agent-net-verify.Iant1J/src-bc94b7e56a6d)\\n    Finished `release` profile [optimized] target(s) in 7.17s\\n\"}"
+      }
+    ]
+  },
+  "netperf": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"ok\":true,\"host\":\"aotu-dev\",\"exitCode\":0,\"stdout\":\"ba59fbe27a43a93634a31607285f9e3004b3cc3d266494d78337db65a86d65b8  sim/src/bin/netperf.rs\\n\",\"stderr\":\"   Compiling agent-net-sim v0.0.0 (/tmp/cindy-agent-net-verify.Iant1J/src-bc94b7e56a6d/sim)\\n    Finished `release` profile [optimized] target(s) in 5.58s\\n\"}"
+      }
+    ]
+  }
+}

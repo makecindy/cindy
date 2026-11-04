@@ -1,0 +1,414 @@
+{
+  "network_model": "independent-burst-calendar-v2",
+  "original": {
+    "path": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+    "sha256": "06366a3e5adcf0e07a5342b39dbf23dcadf67431e69fdd6a8a1baedbb901b768"
+  },
+  "rerun": {
+    "path": "sim/results/2026-10-31-optimization/network-v2/kcp-rerun-raw.txt",
+    "sha256": "9a06ada287a0476cbc98149a630f5c076f6ae5dd0a5e941ddd530581f9bda775"
+  },
+  "control_validation": [
+    {
+      "window": 128,
+      "scenario": "无丢包 40ms",
+      "configurations_matching_exactly": 12
+    },
+    {
+      "window": 1024,
+      "scenario": "无丢包 40ms",
+      "configurations_matching_exactly": 12
+    }
+  ],
+  "reused_scenarios": 27,
+  "rerun_scenarios": 5,
+  "configurations": 12,
+  "seeds": 16,
+  "note": "Non-burst Link execution preserves its exact v1 random stream; all 54 Auto rows were also checked unchanged. No agent-net baseline rows are used.",
+  "rows": [
+    {
+      "window": 128,
+      "scenario": "无丢包 40ms",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "丢包 1%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "丢包 5%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "丢包 15%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "丢包 30%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "突发丢包",
+      "source": "sim/results/2026-10-31-optimization/network-v2/kcp-rerun-raw.txt",
+      "rerun_burst": true
+    },
+    {
+      "window": 128,
+      "scenario": "乱序 10%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "高延迟 300ms 丢包 5%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "弱网 2Mbit 80ms 丢包 5%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "千兆 2ms 丢包 0.1%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "50Mbit 20ms 丢包 2%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "手机 10Mbit 100ms 抖动 30ms 丢包 3%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "小队列 5Mbit 60ms 丢包 1%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "重复 5% 乱序 5% 丢包 3%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "低速 1Mbit 200ms 丢包 2%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "卫星 20Mbit 600ms 丢包 1%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "Wi-Fi 200Mbit 8ms 抖动 4ms 短突发",
+      "source": "sim/results/2026-10-31-optimization/network-v2/kcp-rerun-raw.txt",
+      "rerun_burst": true
+    },
+    {
+      "window": 128,
+      "scenario": "地铁 30Mbit 60ms 每 5 秒断 1 秒",
+      "source": "sim/results/2026-10-31-optimization/network-v2/kcp-rerun-raw.txt",
+      "rerun_burst": true
+    },
+    {
+      "window": 128,
+      "scenario": "跨境 50Mbit 180ms 丢包 8% 乱序 3%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "实测路径 下载 令牌桶 5.7Mbit",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "实测路径 上传 随机丢包 17%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "配额 20Mbit 40ms 短窗口",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "家宽 300Mbit 25ms 丢包 0.3%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "4G 20Mbit 70ms 抖动 20ms 丢包 1.5%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "跨洋 100Mbit 250ms 丢包 0.5%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "拥挤 Wi-Fi 30Mbit 15ms 抖动 10ms 丢包 6%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "山区 3Mbit 150ms 丢包 10% 突发",
+      "source": "sim/results/2026-10-31-optimization/network-v2/kcp-rerun-raw.txt",
+      "rerun_burst": true
+    },
+    {
+      "window": 128,
+      "scenario": "留出 校园网 40Mbit 30ms 丢包 0.8%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "留出 5G 100Mbit 35ms 抖动 15ms 丢包 0.5%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "留出 欧美 30Mbit 200ms 丢包 2%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "留出 令牌桶 10Mbit 60ms 突发 300KB",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 128,
+      "scenario": "留出 高铁 15Mbit 80ms 丢包 4% 短断网",
+      "source": "sim/results/2026-10-31-optimization/network-v2/kcp-rerun-raw.txt",
+      "rerun_burst": true
+    },
+    {
+      "window": 1024,
+      "scenario": "无丢包 40ms",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "丢包 1%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "丢包 5%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "丢包 15%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "丢包 30%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "突发丢包",
+      "source": "sim/results/2026-10-31-optimization/network-v2/kcp-rerun-raw.txt",
+      "rerun_burst": true
+    },
+    {
+      "window": 1024,
+      "scenario": "乱序 10%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "高延迟 300ms 丢包 5%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "弱网 2Mbit 80ms 丢包 5%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "千兆 2ms 丢包 0.1%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "50Mbit 20ms 丢包 2%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "手机 10Mbit 100ms 抖动 30ms 丢包 3%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "小队列 5Mbit 60ms 丢包 1%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "重复 5% 乱序 5% 丢包 3%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "低速 1Mbit 200ms 丢包 2%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "卫星 20Mbit 600ms 丢包 1%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "Wi-Fi 200Mbit 8ms 抖动 4ms 短突发",
+      "source": "sim/results/2026-10-31-optimization/network-v2/kcp-rerun-raw.txt",
+      "rerun_burst": true
+    },
+    {
+      "window": 1024,
+      "scenario": "地铁 30Mbit 60ms 每 5 秒断 1 秒",
+      "source": "sim/results/2026-10-31-optimization/network-v2/kcp-rerun-raw.txt",
+      "rerun_burst": true
+    },
+    {
+      "window": 1024,
+      "scenario": "跨境 50Mbit 180ms 丢包 8% 乱序 3%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "实测路径 下载 令牌桶 5.7Mbit",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "实测路径 上传 随机丢包 17%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "配额 20Mbit 40ms 短窗口",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "家宽 300Mbit 25ms 丢包 0.3%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "4G 20Mbit 70ms 抖动 20ms 丢包 1.5%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "跨洋 100Mbit 250ms 丢包 0.5%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "拥挤 Wi-Fi 30Mbit 15ms 抖动 10ms 丢包 6%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "山区 3Mbit 150ms 丢包 10% 突发",
+      "source": "sim/results/2026-10-31-optimization/network-v2/kcp-rerun-raw.txt",
+      "rerun_burst": true
+    },
+    {
+      "window": 1024,
+      "scenario": "留出 校园网 40Mbit 30ms 丢包 0.8%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "留出 5G 100Mbit 35ms 抖动 15ms 丢包 0.5%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "留出 欧美 30Mbit 200ms 丢包 2%",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "留出 令牌桶 10Mbit 60ms 突发 300KB",
+      "source": "sim/results/2026-10-31/simulation-kcp-baseline.txt",
+      "rerun_burst": false
+    },
+    {
+      "window": 1024,
+      "scenario": "留出 高铁 15Mbit 80ms 丢包 4% 短断网",
+      "source": "sim/results/2026-10-31-optimization/network-v2/kcp-rerun-raw.txt",
+      "rerun_burst": true
+    }
+  ]
+}

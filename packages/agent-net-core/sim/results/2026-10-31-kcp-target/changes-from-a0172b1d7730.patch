@@ -1,0 +1,194 @@
+diff -ru a/sim/tests/reliability.rs b/sim/tests/reliability.rs
+--- a/sim/tests/reliability.rs	2026-10-31 20:24:57
++++ b/sim/tests/reliability.rs	2026-10-31 20:24:57
+@@ -456,12 +456,14 @@
+ }
+ 
+ /// 校验的开销要跟着丢包率走，丢得重时一组修不过来也不能退回到逐个重传。
+-/// 窗口 128 时丢 5% 不能比干净网络慢太多，开销也不能到分组码常见的 60%。
++/// 2026-10-31 产品决定改为速度优先：窗口 128、路径还有余量时，自动策略要追上 KCP 最快配置
++/// （同条件下极速+FEC5/5 为 2036 ms、额外字节 160%，调优+FEC 为 2116 ms），流量仍要明显少于它。
++/// 原先的上限是 2190 ms、28%。
+ #[test]
+ fn parity_share_stays_close_to_the_loss_rate() {
+     let bytes = 8 << 20;
+     // 窗口 1024 时带宽才是瓶颈，校验包要挤掉数据，开销要低得多；丢得重时重传还要发两份，不然窗口卡住。
+-    for (window, loss, finish_limit, overhead_limit) in [(128, 0.05, 2_190_000, 0.28), (128, 0.30, 2_800_000, 1.30), (1024, 0.05, 1_100_000, 0.13), (1024, 0.30, 1_700_000, 1.20)] {
++    for (window, loss, finish_limit, overhead_limit) in [(128, 0.05, 2_110_000, 1.30), (128, 0.30, 2_800_000, 1.30), (1024, 0.05, 1_100_000, 0.13), (1024, 0.30, 1_700_000, 1.20)] {
+         let link = LinkProfile { loss, ..path(100_000_000, 20_000) };
+         let outcomes: Vec<_> = (1..=4).map(|seed| bulk(&link, window, bytes, seed)).collect();
+         let finish = outcomes.iter().map(|outcome| outcome.finish_us).sum::<u64>() / 4;
+diff -ru a/src/congestion.rs b/src/congestion.rs
+--- a/src/congestion.rs	2026-10-31 20:24:57
++++ b/src/congestion.rs	2026-10-31 20:24:57
+@@ -13,6 +13,9 @@
+ const WINDOW_LIMITED_CWND_CAP: u64 = 2000;
+ /// 超时或断网之后要连续这么多轮正常，才按上面放宽：刚恢复时窗口里全是丢掉的包，看起来也像被窗口限住。
+ const SPARE_WINDOW_CLEAN_ROUNDS: u32 = 2;
++/// 路径速率至少是窗口速率的 21/20，才算还有余量放下加密的校验。
++const ROOM_RATIO_NUMERATOR: u64 = 21;
++const ROOM_RATIO_DENOMINATOR: u64 = 20;
+ const PROBE_CYCLE: [u64; 8] = [1250, 750, 1000, 1000, 1000, 1000, 1000, 1000];
+ 
+ const BW_WINDOW_ROUNDS: usize = 10;
+@@ -33,6 +36,8 @@
+ /// 真断网时每次超时都重发整个窗口只是白费流量；但阈值不能太低：
+ /// 双向 90% 的突发丢包里，少量探测几乎拿不回确认，反而拖慢恢复。
+ const RECOVERY_TIMEOUTS: u32 = 4;
++/// 短中断时拥塞窗口保留这么多倍的下限，确认方向断开时新数据仍能发出。
++const SHORT_OUTAGE_CWND_FACTOR: u64 = 4;
+ /// 一轮里最小的 RTT 比历史最小值高出这么多，说明瓶颈有队列了。取一轮的最小值是为了滤掉抖动。
+ /// 启动阶段靠它尽早停下：等带宽不再增长才退出的话，再冲 3 个往返足够把队列挤爆。
+ const QUEUE_MARGIN_MIN_US: u64 = 4_000;
+@@ -127,6 +132,7 @@
+     window_hit: bool,
+     window_hit_last_round: bool,
+     recovering: bool,
++    long_outage: bool,
+     /// 上次超时或断网以来连续正常的轮数。
+     clean_rounds: u32,
+     round_min_rtt_us: u64,
+@@ -182,6 +188,7 @@
+             window_hit: false,
+             window_hit_last_round: false,
+             recovering: false,
++            long_outage: false,
+             clean_rounds: 0,
+             round_min_rtt_us: u64::MAX,
+             round_rtt_samples: 0,
+@@ -225,6 +232,15 @@
+         self.btl_bw > 0 && self.bdp().saturating_mul(10) >= self.max_cwnd.saturating_mul(9)
+     }
+ 
++    /// 已经过了启动阶段，测到的路径速率又明显高过窗口用掉的速率，并且没有排队：
++    /// 这时多发的校验包不会挤掉数据。路径速率只比窗口高一点时，瓶颈其实是链路，校验会把数据挤掉。
++    pub(crate) fn window_has_room(&self) -> bool {
++        self.mode == Mode::ProbeBw
++            && self.btl_bw > 0
++            && self.bdp().saturating_mul(ROOM_RATIO_DENOMINATOR) >= self.max_cwnd.saturating_mul(ROOM_RATIO_NUMERATOR)
++            && !self.queue_is_building()
++    }
++
+     /// 已经确认撞上限速。这时再多发冗余只会丢得更多。
+     pub(crate) fn is_rate_limited(&self) -> bool {
+         self.rate_cap > 0 && self.rate_cap_confirmed
+@@ -399,7 +415,12 @@
+ 
+     pub(crate) fn cwnd(&self) -> u64 {
+         if self.recovering {
+-            return self.min_cwnd / 2;
++            // 长时间断网只发少量探测省流量；短中断可能只是确认方向断了，数据照样能到，不能把新消息全卡住。
++            return if self.long_outage {
++                self.min_cwnd / 2
++            } else {
++                self.min_cwnd.saturating_mul(SHORT_OUTAGE_CWND_FACTOR).min(self.max_cwnd)
++            };
+         }
+         if self.btl_bw == 0 {
+             return self.initial_cwnd;
+@@ -640,7 +661,8 @@
+         self.cycle_started = now_us;
+     }
+ 
+-    pub(crate) fn on_timeout(&mut self, consecutive: u32) {
++    pub(crate) fn on_timeout(&mut self, consecutive: u32, long_outage: bool) {
++        self.long_outage = long_outage;
+         self.clean_rounds = 0;
+         self.recovering = consecutive >= RECOVERY_TIMEOUTS;
+         if consecutive >= PATH_CHANGE_TIMEOUTS {
+diff -ru a/src/connection.rs b/src/connection.rs
+--- a/src/connection.rs	2026-10-31 20:24:57
++++ b/src/connection.rs	2026-10-31 20:24:57
+@@ -29,6 +29,8 @@
+ /// 丢过一个包后，这么久之内都捎带。丢包率估计在两次丢包之间会掉到门槛以下，
+ /// 这时再丢一个，小消息要等一个往返，后面的消息全被堵住。
+ const BUNDLE_HOLD_US: u64 = 30_000_000;
++/// 这么久完全没有收到对端的包才算长断网：放慢重试、只发少量探测。更短的中断要尽快重连。
++const LONG_OUTAGE_US: u64 = 2_000_000;
+ /// 连接开头还没测过丢包率，这么多个包之内也捎带。第一个丢包要一个往返才发现，
+ /// 长 RTT 路径上这一个包能堵住十几条消息。满载的包没有空位，只有小消息花这点流量。
+ const BUNDLE_WARMUP_PACKETS: u32 = 128;
+@@ -53,6 +55,8 @@
+ /// 确认丢过包后，这么久之内校验至少按最低比例保持开启。丢包率估计在两次丢包之间会降到门槛以下，
+ /// 这时关掉的话，下一个丢包只能等重传，窗口整整卡一个往返。
+ const PARITY_FLOOR_HOLD_US: u64 = 5_000_000;
++/// 窗口不超过校验覆盖范围的这么多倍时，自动策略才按速度优先的余量发校验。
++const HEAVY_PARITY_COVERAGE_FACTOR: u64 = 4;
+ /// 丢的包里，紧挨着上一个丢包的比例达到这个值就算成片地丢。随机丢包时这个比例等于丢包率。
+ const PARITY_LOST_RUN_PPM: u32 = 500_000;
+ const LOST_RUN_SMOOTHING: u32 = 16;
+@@ -1173,12 +1177,19 @@
+         if self.consecutive_timeouts == 0 {
+             return Some(aged);
+         }
+-        Some(aged.max(self.last_timeout_at + self.rtt.timeout_us(self.consecutive_timeouts) + self.reorder_delay_us))
++        let backoff = self.rtt.timeout_us(self.consecutive_timeouts, self.long_outage(self.last_timeout_at));
++        Some(aged.max(self.last_timeout_at + backoff + self.reorder_delay_us))
+     }
+ 
++    /// 很久没有收到对端的包，或者还没测到 RTT，都按长断网处理：后者只是不知道往返多长，
++    /// 第一批确认还在路上，这时多重传只会添乱。
++    fn long_outage(&self, now_us: u64) -> bool {
++        self.rtt.srtt_us() == 0 || now_us.saturating_sub(self.last_heard) >= LONG_OUTAGE_US
++    }
++
+     /// 超时也要算上学到的乱序余量，否则乱序的包全被超时判丢，放宽判丢窗口也没用。
+     fn timeout_age_us(&self) -> u64 {
+-        self.rtt.timeout_us(0) + self.reorder_delay_us
++        self.rtt.timeout_us(0, false) + self.reorder_delay_us
+     }
+ 
+     fn loss_deadline(&self) -> Option<u64> {
+@@ -1236,7 +1247,7 @@
+             if lost_data {
+                 self.consecutive_timeouts += 1;
+                 self.last_timeout_at = now_us;
+-                self.congestion.on_timeout(self.consecutive_timeouts);
++                self.congestion.on_timeout(self.consecutive_timeouts, self.long_outage(now_us));
+             }
+         }
+         if self.window_blocked() && self.in_flight == 0 {
+@@ -1326,7 +1337,11 @@
+             return None;
+         }
+         let spare = warmup || self.congestion.window_is_the_limit();
+-        Some(if fast { parity::fast_repair_interval(holes, spare) } else { parity::repair_interval(holes, spare) })
++        // 窗口受限、路径还有余量时，自动策略按速度优先的余量发校验：这时校验不挤占数据，只多花流量。
++        // 一个校验包只覆盖最近 64 个分片，窗口比覆盖范围大很多时，大部分空洞修不到，多发也帮不上。
++        let coverable = self.config.send_window as u64 <= parity::MAX_COVERED * HEAVY_PARITY_COVERAGE_FACTOR;
++        let heavy = fast || (spare && coverable && self.congestion.window_has_room());
++        Some(if heavy { parity::fast_repair_interval(holes, spare) } else { parity::repair_interval(holes, spare) })
+     }
+ 
+     /// 校验包覆盖的范围：最近发出的、对端可能还缺的分片。
+diff -ru a/src/rtt.rs b/src/rtt.rs
+--- a/src/rtt.rs	2026-10-31 20:24:57
++++ b/src/rtt.rs	2026-10-31 20:24:57
+@@ -2,7 +2,8 @@
+ 
+ /// 短中断时退避不超过这么多档，网络一恢复很快就能重连上。
+ const SHORT_BACKOFF_STEPS: u32 = 2;
+-/// 连续超时这么多次还没恢复，就是长断网了，放慢探测省流量。
++/// 连续超时这么多次、并且已经长时间没有任何回应，才算长断网，放慢探测省流量。
++/// 只看次数的话，短中断里重试一快就会提前进入长断网，网络恢复后要多等好几百毫秒。
+ const LONG_OUTAGE_TIMEOUTS: u32 = 8;
+ const MAX_BACKOFF_STEPS: u32 = 4;
+ 
+@@ -57,13 +58,15 @@
+     }
+ 
+     /// 连续超时 n 次之后的超时时间。沿用 KCP 快速模式的 1.5 倍退避，不翻倍，丢包时恢复更快。
++    /// `long_outage` 由调用方按多久没收到对端的包判断。
+     /// 这时连接已经只发少量探测，继续退避省不了多少流量，只会让网络恢复后多等。
+-    pub(crate) fn timeout_us(&self, consecutive_timeouts: u32) -> u64 {
++    pub(crate) fn timeout_us(&self, consecutive_timeouts: u32, long_outage: bool) -> u64 {
+         let base = self.base_rto_us();
+         // 上限只约束退避，不能低于当前 RTT 的估算，否则高延迟链路上每个包都会被误判丢失。
+         let ceiling = self.max_rto_us.max(base);
+         let mut rto = base;
+-        let steps = if consecutive_timeouts < LONG_OUTAGE_TIMEOUTS { consecutive_timeouts.min(SHORT_BACKOFF_STEPS) } else { MAX_BACKOFF_STEPS };
++        let long = consecutive_timeouts >= LONG_OUTAGE_TIMEOUTS && long_outage;
++        let steps = if !long { consecutive_timeouts.min(SHORT_BACKOFF_STEPS) } else { MAX_BACKOFF_STEPS };
+         for _ in 0..steps {
+             rto += rto / 2;
+             if rto >= ceiling {

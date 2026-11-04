@@ -1,0 +1,32 @@
+agent-net 策略 Auto
+路径已打通，用时 16 ms
+公网 Auto 窗口1024 上传 agent-net  用时    3.31s [1.60-4.19] 开销   72.0% p50     NaN p95     NaN p99     NaNms 未完成 0 发送失败 0
+    dead=false unacked=false Stats { packets_sent: 8041, packets_received: 1927, wire_bytes_sent: 11240686, wire_bytes_received: 101423, retransmitted_segments: 1374, bundled_segments: 505, parity_packets: 109, recovered_segments: 0, timeout_losses: 32, fast_losses: 1480, spurious_losses: 20, duplicate_packets: 0, rejected_packets: 0, srtt_us: 70305, min_rtt_us: 68915, bandwidth: 14058185, random_loss_ppm: 141993, rate_cap: 0, pacing_rate: 32769394 }
+公网 Auto 窗口1024 上传 KCP 快速     用时    2.78s [2.62-3.08] 开销   77.8% p50     NaN p95     NaN p99     NaNms 未完成 0 发送失败 0
+    
+公网 Auto 窗口1024 上传 KCP 冲刷     用时    2.35s [2.16-2.71] 开销   75.4% p50     NaN p95     NaN p99     NaNms 未完成 0 发送失败 0
+    
+公网 Auto 窗口1024 上传 调优+FEC     用时    1.78s [1.65-1.91] 开销  110.9% p50     NaN p95     NaN p99     NaNms 未完成 0 发送失败 0
+    
+公网 Auto 窗口1024 上传 极速+FEC5/5  用时    1.41s [1.25-1.51] 开销  212.1% p50     NaN p95     NaN p99     NaNms 未完成 0 发送失败 0
+    
+公网 Auto 窗口1024 下载 agent-net  用时   11.39s [11.23-11.60] 开销   72.1% p50     NaN p95     NaN p99     NaNms 未完成 0 发送失败 0
+    dead=false unacked=false Stats { packets_sent: 3321, packets_received: 6073, wire_bytes_sent: 174365, wire_bytes_received: 8489204, retransmitted_segments: 0, bundled_segments: 0, parity_packets: 0, recovered_segments: 0, timeout_losses: 0, fast_losses: 0, spurious_losses: 0, duplicate_packets: 0, rejected_packets: 0, srtt_us: 0, min_rtt_us: 0, bandwidth: 0, random_loss_ppm: 0, rate_cap: 0, pacing_rate: 4000000 }
+公网 Auto 窗口1024 下载 KCP 快速     用时   13.20s [13.01-13.53] 开销  445.7% p50     NaN p95     NaN p99     NaNms 未完成 0 发送失败 0
+    
+公网 Auto 窗口1024 下载 KCP 冲刷     用时   13.84s [13.75-13.96] 开销  520.1% p50     NaN p95     NaN p99     NaNms 未完成 0 发送失败 0
+    
+公网 Auto 窗口1024 下载 调优+FEC     用时   16.97s [16.62-17.18] 开销  743.4% p50     NaN p95     NaN p99     NaNms 未完成 0 发送失败 0
+    
+公网 Auto 窗口1024 下载 极速+FEC5/5  用时   23.48s [22.97-24.07] 开销 1607.3% p50     NaN p95     NaN p99     NaNms 未完成 0 发送失败 0
+    
+公网 Auto 窗口1024 交互 agent-net  用时   10.08s [10.05-10.13] 开销    NaN% p50    70.8 p95   168.6 p99   234.2ms 未完成 0 发送失败 0
+    dead=false unacked=false Stats { packets_sent: 2080, packets_received: 1135, wire_bytes_sent: 462091, wire_bytes_received: 233600, retransmitted_segments: 42, bundled_segments: 1607, parity_packets: 0, recovered_segments: 0, timeout_losses: 155, fast_losses: 88, spurious_losses: 0, duplicate_packets: 0, rejected_packets: 0, srtt_us: 70594, min_rtt_us: 69013, bandwidth: 65439, random_loss_ppm: 149732, rate_cap: 0, pacing_rate: 3745613 }
+公网 Auto 窗口1024 交互 KCP 快速     用时   10.19s [10.09-10.24] 开销    NaN% p50    98.8 p95   268.9 p99   339.6ms 未完成 0 发送失败 0
+    
+公网 Auto 窗口1024 交互 KCP 冲刷     用时   10.18s [10.14-10.25] 开销    NaN% p50   104.7 p95   345.9 p99   727.1ms 未完成 0 发送失败 0
+    
+公网 Auto 窗口1024 交互 调优+FEC     用时   10.10s [10.05-10.14] 开销    NaN% p50    72.5 p95   195.9 p99   282.7ms 未完成 0 发送失败 0
+    
+公网 Auto 窗口1024 交互 极速+FEC5/5  用时   10.05s [10.05-10.05] 开销    NaN% p50    71.9 p95   113.7 p99   160.8ms 未完成 0 发送失败 0
+    

@@ -1,0 +1,197 @@
+{
+  "assumed_rounding_ms": 0.5,
+  "checks": [
+    {
+      "scene": "无丢包 40ms",
+      "ours_ms": 799.0,
+      "kcp_best_ms": 1058.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "丢包 1%",
+      "ours_ms": 814.0,
+      "kcp_best_ms": 1168.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "丢包 5%",
+      "ours_ms": 893.0,
+      "kcp_best_ms": 1230.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "丢包 15%",
+      "ours_ms": 1077.0,
+      "kcp_best_ms": 1438.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "丢包 30%",
+      "ours_ms": 1356.0,
+      "kcp_best_ms": 1787.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "突发丢包",
+      "ours_ms": 814.0,
+      "kcp_best_ms": 1155.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "乱序 10%",
+      "ours_ms": 801.0,
+      "kcp_best_ms": 1119.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "高延迟 300ms 丢包 5%",
+      "ours_ms": 3735.0,
+      "kcp_best_ms": 4993.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "弱网 2Mbit 80ms 丢包 5%",
+      "ours_ms": 34916.0,
+      "kcp_best_ms": 206455.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "千兆 2ms 丢包 0.1%",
+      "ours_ms": 74.0,
+      "kcp_best_ms": 99.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "50Mbit 20ms 丢包 2%",
+      "ours_ms": 1433.0,
+      "kcp_best_ms": 3344.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "手机 10Mbit 100ms 抖动 30ms 丢包 3%",
+      "ours_ms": 7304.0,
+      "kcp_best_ms": 16296.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "小队列 5Mbit 60ms 丢包 1%",
+      "ours_ms": 14925.0,
+      "kcp_best_ms": 101995.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "重复 5% 乱序 5% 丢包 3%",
+      "ours_ms": 3610.0,
+      "kcp_best_ms": 11074.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "低速 1Mbit 200ms 丢包 2%",
+      "ours_ms": 71127.0,
+      "kcp_best_ms": 264633.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "卫星 20Mbit 600ms 丢包 1%",
+      "ours_ms": 7632.0,
+      "kcp_best_ms": 9022.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "Wi-Fi 200Mbit 8ms 抖动 4ms 短突发",
+      "ours_ms": 385.0,
+      "kcp_best_ms": 524.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "地铁 30Mbit 60ms 每 5 秒断 1 秒",
+      "ours_ms": 3429.0,
+      "kcp_best_ms": 6288.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "跨境 50Mbit 180ms 丢包 8% 乱序 3%",
+      "ours_ms": 2986.0,
+      "kcp_best_ms": 3862.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "实测路径 下载 令牌桶 5.7Mbit",
+      "ours_ms": 11641.0,
+      "kcp_best_ms": 13599.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "实测路径 上传 随机丢包 17%",
+      "ours_ms": 1884.0,
+      "kcp_best_ms": 2103.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "配额 20Mbit 40ms 短窗口",
+      "ours_ms": 3580.0,
+      "kcp_best_ms": 4074.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "家宽 300Mbit 25ms 丢包 0.3%",
+      "ours_ms": 336.0,
+      "kcp_best_ms": 446.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "4G 20Mbit 70ms 抖动 20ms 丢包 1.5%",
+      "ours_ms": 3705.0,
+      "kcp_best_ms": 4963.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "跨洋 100Mbit 250ms 丢包 0.5%",
+      "ours_ms": 2102.0,
+      "kcp_best_ms": 2206.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "拥挤 Wi-Fi 30Mbit 15ms 抖动 10ms 丢包 6%",
+      "ours_ms": 2372.0,
+      "kcp_best_ms": 5063.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "山区 3Mbit 150ms 丢包 10% 突发",
+      "ours_ms": 24105.0,
+      "kcp_best_ms": 71634.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "留出 校园网 40Mbit 30ms 丢包 0.8%",
+      "ours_ms": 1805.0,
+      "kcp_best_ms": 3439.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "留出 5G 100Mbit 35ms 抖动 15ms 丢包 0.5%",
+      "ours_ms": 826.0,
+      "kcp_best_ms": 1140.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "留出 欧美 30Mbit 200ms 丢包 2%",
+      "ours_ms": 3623.0,
+      "kcp_best_ms": 5499.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "留出 令牌桶 10Mbit 60ms 突发 300KB",
+      "ours_ms": 6748.0,
+      "kcp_best_ms": 7773.0,
+      "robust_to_rounding": true
+    },
+    {
+      "scene": "留出 高铁 15Mbit 80ms 丢包 4% 短断网",
+      "ours_ms": 5464.0,
+      "kcp_best_ms": 12193.0,
+      "robust_to_rounding": true
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+[
+  {
+    "step": "check",
+    "command": [
+      "cargo",
+      "check",
+      "--profile",
+      "sim",
+      "--workspace",
+      "--all-targets",
+      "--features",
+      "agent-net-sim/kcp",
+      "--locked",
+      "--offline"
+    ],
+    "exit": 0,
+    "seconds": 0.26
+  },
+  {
+    "step": "tests",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "--workspace",
+      "--features",
+      "agent-net-sim/kcp",
+      "--locked",
+      "--offline"
+    ],
+    "exit": 0,
+    "seconds": 96.34
+  },
+  {
+    "step": "build",
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "-p",
+      "agent-net-sim",
+      "--features",
+      "kcp",
+      "--bin",
+      "compare"
+    ],
+    "exit": 0,
+    "seconds": 2.15
+  }
+]

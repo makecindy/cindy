@@ -2617,6 +2617,19 @@
       },
       "checkCase": false,
       "note": "Codex 模型的第三档速度；与推理深度 Ultra 独立。标准、快速、超快分别对应默认、Fast、Ultrafast。"
+    },
+    {
+      "id": "agent-network",
+      "status": "proposed",
+      "en": "Agent network",
+      "translations": {
+        "zh-CN": "Agent 网络",
+        "zh-TW": "Agent 網路",
+        "ja": "Agent ネットワーク",
+        "ko": "Agent 네트워크"
+      },
+      "checkCase": false,
+      "note": "agent-net 的产品名：所有用 Cindy 登录的 App 和硬件组成的互联网络。代码与文档里的 agent-net 是工程名，不出现在 UI 文案。"
     }
   ]
 }

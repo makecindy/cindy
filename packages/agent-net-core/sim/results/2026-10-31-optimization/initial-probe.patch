@@ -1,0 +1,22 @@
+--- before/src/connection.rs
++++ after/src/connection.rs
+@@ -1145,6 +1145,9 @@
+         if self.timeout_deadline().is_some_and(|at| at <= now_us) {
+             // 一次判完所有超龄的包。只判最老的几个的话，其余的要等退避，整个窗口好几秒才能恢复。
+             let age = self.timeout_age_us();
++            // 尚未测得 RTT 时，初始超时只是猜测，可能比真实往返还短。
++            // 第一回先探测一个数据包，保留其余包用于测量；仍无回应时再按整批超时处理。
++            let initial_probe = self.rtt.srtt_us() == 0 && self.consecutive_timeouts == 0;
+             let mut lost_data = false;
+             while let Some(&packet) = self.sent.front() {
+                 if packet.sent_at + age > now_us || self.parity_hold_until(&packet).is_some_and(|at| at > now_us) {
+@@ -1154,6 +1157,9 @@
+                 self.stats.timeout_losses += 1;
+                 lost_data |= packet.segment_count > 0;
+                 self.declare_lost(now_us, &packet);
++                if initial_probe && packet.segment_count > 0 {
++                    break;
++                }
+             }
+             if lost_data {
+                 self.consecutive_timeouts += 1;

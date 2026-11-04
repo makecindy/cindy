@@ -1,0 +1,172 @@
+diff -ru a/src/congestion.rs b/src/congestion.rs
+--- a/src/congestion.rs	2026-10-31 17:58:00
++++ b/src/congestion.rs	2026-10-31 17:58:00
+@@ -8,6 +8,11 @@
+ const STARTUP_GAIN: u64 = 2885;
+ const DRAIN_GAIN: u64 = 347;
+ const CWND_GAIN: u64 = 2000;
++/// 被窗口限住、离路径容量还远时，在途字节上限放宽到一个窗口的这么多倍。校验包、副本和等着校验结果的丢包
++/// 都占在途字节却不占窗口，上限正好卡在一个窗口的话，丢包率越高窗口空得越多。
++const WINDOW_LIMITED_CWND_CAP: u64 = 2000;
++/// 超时或断网之后要连续这么多轮正常，才按上面放宽：刚恢复时窗口里全是丢掉的包，看起来也像被窗口限住。
++const SPARE_WINDOW_CLEAN_ROUNDS: u32 = 2;
+ const PROBE_CYCLE: [u64; 8] = [1250, 750, 1000, 1000, 1000, 1000, 1000, 1000];
+ 
+ const BW_WINDOW_ROUNDS: usize = 10;
+@@ -42,6 +47,9 @@
+ const PERIOD_MIN_RTTS: u64 = 8;
+ /// 一段拖得比正常长这么多倍，说明中间断网了：确认都回不来，这段的丢包率什么也说明不了。
+ const PERIOD_STALE_FACTOR: u64 = 3;
++/// 确认中断超过这么多个往返（至少这么久），这一段的丢包按断网处理，不用来判断限速。
++const OUTAGE_SILENCE_RTTS: u64 = 3;
++const OUTAGE_SILENCE_MIN_US: u64 = 250_000;
+ /// 丢得比送达的还多时不用等满一段：这种丢法随机丢包到不了，多等一会儿就多浪费好几 MB。
+ const SEVERE_PERIOD_MIN_US: u64 = 200_000;
+ const SEVERE_PERIOD_MIN_RTTS: u64 = 4;
+@@ -119,6 +127,8 @@
+     window_hit: bool,
+     window_hit_last_round: bool,
+     recovering: bool,
++    /// 上次超时或断网以来连续正常的轮数。
++    clean_rounds: u32,
+     round_min_rtt_us: u64,
+     round_rtt_samples: u32,
+     last_round_min_rtt_us: u64,
+@@ -131,6 +141,9 @@
+     period_delivered: u64,
+     period_lost: u64,
+     period_idle: bool,
++    /// 这一段里确认中断过好几个往返：断网时的丢包说明不了限速。
++    period_outage: bool,
++    last_ack_at: u64,
+     period_calm_packets: u32,
+     last_period_rate: u64,
+     /// 第一批包的第一个确认到达时的时间和送达量。
+@@ -169,6 +182,7 @@
+             window_hit: false,
+             window_hit_last_round: false,
+             recovering: false,
++            clean_rounds: 0,
+             round_min_rtt_us: u64::MAX,
+             round_rtt_samples: 0,
+             last_round_min_rtt_us: u64::MAX,
+@@ -180,6 +194,8 @@
+             period_delivered: 0,
+             period_lost: 0,
+             period_idle: false,
++            period_outage: false,
++            last_ack_at: 0,
+             period_calm_packets: 0,
+             last_period_rate: 0,
+             train_start: None,
+@@ -248,12 +264,13 @@
+             self.period_delivered = delivered;
+             self.period_lost = 0;
+             self.period_idle = false;
++            self.period_outage = false;
+             self.period_calm_packets = 0;
+             self.last_period_rate = 0;
+             return;
+         }
+         let lost = core::mem::take(&mut self.period_lost);
+-        let idle = core::mem::take(&mut self.period_idle);
++        let idle = core::mem::take(&mut self.period_idle) | core::mem::take(&mut self.period_outage);
+         let calm_packets = core::mem::take(&mut self.period_calm_packets);
+         self.period_started = now_us;
+         self.period_delivered = delivered;
+@@ -391,7 +408,13 @@
+             return (self.bdp() / 2).max(self.min_cwnd / 4);
+         }
+         let gain = if self.mode == Mode::Startup { STARTUP_GAIN } else { CWND_GAIN };
+-        (self.bdp().saturating_mul(gain) / 1000).clamp(self.min_cwnd, self.max_cwnd)
++        // 窗口接近路径容量时不放宽：这时多出来的包会直接挤进瓶颈队列。
++        let spare_window = self.window_limited
++            && self.mode == Mode::ProbeBw
++            && self.window_is_the_limit()
++            && self.clean_rounds >= SPARE_WINDOW_CLEAN_ROUNDS;
++        let cap = if spare_window { self.max_cwnd.saturating_mul(WINDOW_LIMITED_CWND_CAP) / 1000 } else { self.max_cwnd };
++        (self.bdp().saturating_mul(gain) / 1000).clamp(self.min_cwnd, cap)
+     }
+ 
+     fn pacing_rate(&self) -> u64 {
+@@ -471,6 +494,15 @@
+             self.app_idle_estimate = sample.app_idle;
+         }
+         self.period_idle |= sample.app_idle;
++        // 限速器每个往返总会放行一部分，确认不会整段中断；中断好几个往返只能是断网。
++        let silence = now_us.saturating_sub(self.last_ack_at);
++        if self.last_ack_at > 0
++            && self.min_rtt_us > 0
++            && silence > (OUTAGE_SILENCE_RTTS * self.min_rtt_us).max(OUTAGE_SILENCE_MIN_US)
++        {
++            self.period_outage = true;
++        }
++        self.last_ack_at = now_us;
+         let delivery_rate = sample.delivery_rate.max(self.train_rate(now_us, sample, delivered));
+         self.sample_period(now_us, delivered);
+         self.release_unconfirmed_cap(now_us, delivered);
+@@ -487,6 +519,7 @@
+             // 丢得比送达的还多的一轮是突发丢包或断网，这时测到的速率不代表路径能力。
+             // 让它老化掉旧样本的话，半秒的突发就能把带宽估计压到十分之一，之后要爬好几秒。
+             let outage = self.round_lost > delivered.saturating_sub(self.round_start_delivered);
++            self.clean_rounds = if outage { 0 } else { self.clean_rounds.saturating_add(1) };
+             self.next_round_delivered = delivered;
+             self.round_start_delivered = delivered;
+             self.round_lost = 0;
+@@ -608,6 +641,7 @@
+     }
+ 
+     pub(crate) fn on_timeout(&mut self, consecutive: u32) {
++        self.clean_rounds = 0;
+         self.recovering = consecutive >= RECOVERY_TIMEOUTS;
+         if consecutive >= PATH_CHANGE_TIMEOUTS {
+             self.bw_samples = [0; BW_WINDOW_ROUNDS];
+diff -ru a/src/connection.rs b/src/connection.rs
+--- a/src/connection.rs	2026-10-31 17:58:00
++++ b/src/connection.rs	2026-10-31 17:58:00
+@@ -50,6 +50,9 @@
+ /// 丢包率在这个范围内才发校验包。太低不值得；太高时校验比数据还多，不如重传。
+ const PARITY_MIN_LOSS_PPM: u32 = 1_000;
+ const PARITY_MAX_LOSS_PPM: u32 = 400_000;
++/// 确认丢过包后，这么久之内校验至少按最低比例保持开启。丢包率估计在两次丢包之间会降到门槛以下，
++/// 这时关掉的话，下一个丢包只能等重传，窗口整整卡一个往返。
++const PARITY_FLOOR_HOLD_US: u64 = 5_000_000;
+ /// 丢的包里，紧挨着上一个丢包的比例达到这个值就算成片地丢。随机丢包时这个比例等于丢包率。
+ const PARITY_LOST_RUN_PPM: u32 = 500_000;
+ const LOST_RUN_SMOOTHING: u32 = 16;
+@@ -288,6 +291,8 @@
+     late_ppm: u32,
+     bundle_until: u64,
+     copy_backoff_until: u64,
++    /// 最近一次确认丢包后，保持最低校验比例到这个时刻。
++    parity_floor_until: u64,
+     /// 丢的包里紧挨着上一个丢包的比例，单位百万分之一。
+     lost_run_ppm: u32,
+     last_lost_packet: u64,
+@@ -383,6 +388,7 @@
+             late_ppm: 0,
+             bundle_until: 0,
+             copy_backoff_until: 0,
++            parity_floor_until: 0,
+             lost_run_ppm: 0,
+             last_lost_packet: 0,
+             peer_una: sequence,
+@@ -1059,6 +1065,8 @@
+         let expiry = 2 * self.rtt.srtt_us();
+         while self.lost.front().is_some_and(|lost| lost.declared_at + expiry < now_us) {
+             self.lost.pop_front();
++            // 判丢两个往返后仍没有确认，说明确实丢了，不是乱序。
++            self.parity_floor_until = now_us + PARITY_FLOOR_HOLD_US;
+         }
+         let delay = self.loss_delay_us();
+         while let Some(&packet) = self.sent.front() {
+@@ -1307,7 +1315,8 @@
+         // 晚到的包和丢掉的包一样堵窗口，校验包都能修。
+         let fast = self.config.recovery_policy == RecoveryPolicy::Fast;
+         let warmup = fast && self.loss_samples < BUNDLE_WARMUP_PACKETS;
+-        let holes = if warmup { 50_000 } else { self.loss_ppm + self.late_ppm };
++        let floor = if self.last_heard < self.parity_floor_until { PARITY_MIN_LOSS_PPM } else { 0 };
++        let holes = if warmup { 50_000 } else { (self.loss_ppm + self.late_ppm).max(floor) };
+         let useful = (PARITY_MIN_LOSS_PPM..=PARITY_MAX_LOSS_PPM).contains(&holes);
+         if (!warmup && !self.congestion.window_bound_path()) || !useful || self.congestion.is_rate_limited() {
+             return None;

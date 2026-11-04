@@ -1,0 +1,9 @@
+{
+  "unchanged_rows": {
+    "auto": 54,
+    "lean": 54,
+    "fast": 54
+  },
+  "precision": "exact equality of saved numeric output",
+  "network_model": "independent-burst-calendar-v2"
+}

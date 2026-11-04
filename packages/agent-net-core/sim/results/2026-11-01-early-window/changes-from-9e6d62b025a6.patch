@@ -1,0 +1,118 @@
+--- a/src/congestion.rs
++++ b/src/congestion.rs
+@@ -35,7 +35,7 @@
+ /// 连续超时这么多次（约 400 毫秒完全没有回应）就只发少量探测，等有确认回来再恢复。
+ /// 真断网时每次超时都重发整个窗口只是白费流量；但阈值不能太低：
+ /// 双向 90% 的突发丢包里，少量探测几乎拿不回确认，反而拖慢恢复。
+-const RECOVERY_TIMEOUTS: u32 = 4;
++pub(crate) const RECOVERY_TIMEOUTS: u32 = 4;
+ /// 短中断时拥塞窗口保留这么多倍的下限，确认方向断开时新数据仍能发出。
+ const SHORT_OUTAGE_CWND_FACTOR: u64 = 4;
+ /// 一轮里最小的 RTT 比历史最小值高出这么多，说明瓶颈有队列了。取一轮的最小值是为了滤掉抖动。
+@@ -86,6 +86,8 @@
+ const DELIVERY_ROUNDS: usize = 4;
+ /// 最近几轮平均送达速率至少是窗口能送速率的这么多百分比，才算真的被窗口限住。
+ const WINDOW_DELIVERY_PERCENT: u64 = 85;
++/// 启动刚结束时最近两轮丢包率都低于这个值，才跳过第一个降速阶段。
++const SKIP_CALM_MAX_LOSS_PPM: u64 = 100_000;
+ 
+ #[derive(Clone, Copy, PartialEq)]
+ enum Mode {
+@@ -125,6 +127,8 @@
+     round_rates: [u64; DELIVERY_ROUNDS],
+     /// 进入巡航以后过了几轮。
+     probe_bw_rounds: u32,
++    /// 最近两轮的丢包率，单位百万分之一。
++    round_loss_ppm: [u64; 2],
+     round_lost: u64,
+     btl_bw: u64,
+     min_rtt_us: u64,
+@@ -194,6 +198,7 @@
+             round_started_at: 0,
+             round_rates: [0; DELIVERY_ROUNDS],
+             probe_bw_rounds: 0,
++            round_loss_ppm: [0; 2],
+             round_lost: 0,
+             btl_bw: 0,
+             min_rtt_us: 0,
+@@ -648,6 +653,7 @@
+             self.clean_rounds = if outage { 0 } else { self.clean_rounds.saturating_add(1) };
+             let round_elapsed = now_us.saturating_sub(self.round_started_at);
+             if self.round_started_at > 0 && round_elapsed > 0 {
++                self.round_loss_ppm = [if round_total > 0 { self.round_lost.saturating_mul(1_000_000) / round_total } else { 0 }, self.round_loss_ppm[0]];
+                 self.probe_bw_rounds = if self.mode == Mode::ProbeBw { self.probe_bw_rounds.saturating_add(1) } else { 0 };
+                 self.round_rates.rotate_right(1);
+                 self.round_rates[0] = round_delivered.saturating_mul(1_000_000) / round_elapsed;
+@@ -689,7 +695,13 @@
+         }
+         if self.mode == Mode::Startup && self.queue_is_building() {
+             self.filled_pipe = true;
+-            self.mode = Mode::Drain;
++            // 被窗口限住时在途量最多一个窗口，排起来的队列有上限，不会越堆越长。
++            // 这时整体降到三分之一去排空，只会让窗口空转一个往返。
++            if self.window_limited {
++                self.enter_probe_bw(now_us);
++            } else {
++                self.mode = Mode::Drain;
++            }
+         }
+         // 被窗口限住时带宽不再增长也算到头了：继续留在启动阶段就没有降速阶段，测不出随机丢包率。
+         if self.mode == Mode::Startup && round_start && !sample.app_idle {
+@@ -700,7 +712,12 @@
+                 self.full_bw_rounds += 1;
+                 if self.full_bw_rounds >= FULL_BW_ROUNDS {
+                     self.filled_pipe = true;
+-                    self.mode = Mode::Drain;
++                    // 被窗口限住、没有排队时瓶颈上什么也没堆，不用排空，直接巡航。
++                    if self.window_limited && !self.queue_is_building() {
++                        self.enter_probe_bw(now_us);
++                    } else {
++                        self.mode = Mode::Drain;
++                    }
+                 }
+             }
+         }
+@@ -770,8 +787,13 @@
+ 
+     fn enter_probe_bw(&mut self, now_us: u64) {
+         self.mode = Mode::ProbeBw;
+-        // 从降速阶段开始，尽早测出随机丢包率。
+-        self.cycle_index = 1;
++        // 通常从降速阶段开始，尽早测出随机丢包率。
++        // 窗口本身不超过两个初始窗口时，被窗口限住是常态，启动一结束就降速，窗口要空转一个往返，占整段传输的比例不小。
++        // 这时如果最近两轮丢得不多（没冲过限速或配额），跳过第一个降速阶段，随机丢包率留给后面的降速阶段测。
++        // 窗口大的连接照旧：窗口和路径容量可能只差一点，不降速直接巡航会挤爆队列。
++        let calm_rounds = self.round_loss_ppm.iter().all(|&loss| loss < SKIP_CALM_MAX_LOSS_PPM);
++        let small_window = self.max_cwnd <= self.initial_cwnd.saturating_mul(2);
++        self.cycle_index = if small_window && self.window_limited && calm_rounds { 2 } else { 1 };
+         self.cycle_started = now_us;
+     }
+ 
+--- a/src/connection.rs
++++ b/src/connection.rs
+@@ -9,7 +9,7 @@
+ use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
+ use alloc::vec::Vec;
+ 
+-use crate::congestion::{Bbr, RateSample};
++use crate::congestion::{Bbr, RECOVERY_TIMEOUTS, RateSample};
+ use crate::parity::{self, MAX_UNKNOWNS};
+ use crate::rtt::RttEstimator;
+ use crate::wire::{self, Frame};
+@@ -1235,9 +1235,13 @@
+         if self.timeout_deadline().is_some_and(|at| at <= now_us) {
+             // 一次判完所有超龄的包。只判最老的几个的话，其余的要等退避，整个窗口好几秒才能恢复。
+             let age = self.timeout_age_us();
+-            // 尚未测得 RTT 时，初始超时只是猜测，可能比真实往返还短。
+-            // 第一回先探测一个数据包，保留其余包用于测量；仍无回应时再按整批超时处理。
+-            let initial_probe = self.rtt.srtt_us() == 0 && self.consecutive_timeouts == 0;
++            // 尚未测得 RTT 时，初始超时只是猜测，可能比真实往返还短。第一回先探测一个数据包，保留其余包用于测量。
++            // 还有数据等着发（批量传输）时，之后也只探测：600 毫秒的卫星链路上第一批确认还没回来，第二回就整批判丢的话，
++            // 整个初始窗口白重发一遍，误判的丢包还把第一轮带宽估计压到很低。只剩零散小消息时第二回起按整批超时处理：
++            // 重发它们很便宜，能少等。快要按断网恢复时也整批判丢：那时拥塞窗口收到很小，其余包还算在途的话，
++            // 连探测包都发不出去，连接会一直卡到判死。
++            let bulk_probe = self.snd_sent < self.snd_end && self.consecutive_timeouts + 1 < RECOVERY_TIMEOUTS;
++            let initial_probe = self.rtt.srtt_us() == 0 && (self.consecutive_timeouts == 0 || bulk_probe);
+             let mut lost_data = false;
+             while let Some(&packet) = self.sent.front() {
+                 if packet.sent_at + age > now_us || self.parity_hold_until(&packet).is_some_and(|at| at > now_us) {

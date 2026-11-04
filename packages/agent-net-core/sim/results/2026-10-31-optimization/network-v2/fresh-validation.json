@@ -1,0 +1,44 @@
+[
+  {
+    "test": "every_seed_delivers_an_intact_ordered_stream",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "-p",
+      "agent-net-sim",
+      "--test",
+      "reliability",
+      "every_seed_delivers_an_intact_ordered_stream",
+      "--locked",
+      "--offline"
+    ],
+    "exit": 0,
+    "seconds": 9.96,
+    "start": 300000,
+    "count": 1000,
+    "network_model": "independent-burst-calendar-v2"
+  },
+  {
+    "test": "recovery_policies_keep_streams_intact_and_make_progress",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "-p",
+      "agent-net-sim",
+      "--test",
+      "reliability",
+      "recovery_policies_keep_streams_intact_and_make_progress",
+      "--locked",
+      "--offline"
+    ],
+    "exit": 0,
+    "seconds": 26.12,
+    "start": 300000,
+    "count": 1000,
+    "network_model": "independent-burst-calendar-v2"
+  }
+]

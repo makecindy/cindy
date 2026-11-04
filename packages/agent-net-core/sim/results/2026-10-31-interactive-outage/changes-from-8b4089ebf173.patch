@@ -1,0 +1,304 @@
+diff -ru a/src/congestion.rs b/src/congestion.rs
+--- a/src/congestion.rs	2026-10-31 23:44:20
++++ b/src/congestion.rs	2026-10-31 23:44:20
+@@ -57,6 +57,9 @@
+ const OUTAGE_SILENCE_MIN_US: u64 = 250_000;
+ /// 丢得比送达的还多时不用等满一段：这种丢法随机丢包到不了，多等一会儿就多浪费好几 MB。
+ const SEVERE_PERIOD_MIN_US: u64 = 200_000;
++/// 一段里丢包超过这个比例、又至少有一半往返在丢，就直接确认上限。
++const STRONG_EXCESS_LOSS_PPM: u64 = 150_000;
++const SUSTAINED_MIN_ROUNDS: u32 = 4;
+ const SEVERE_PERIOD_MIN_RTTS: u64 = 4;
+ /// 总丢包率超过低速时丢包率的 1.25 倍再加这么多，再加两倍标准误，才算丢包随速率上涨。
+ /// 样本少时估计值波动大，门槛跟着放宽；样本多了门槛收紧，限速器也能更早认出来。
+@@ -149,8 +152,17 @@
+     period_idle: bool,
+     /// 这一段里确认中断过好几个往返：断网时的丢包说明不了限速。
+     period_outage: bool,
++    /// 这一段里有多少个往返、其中多少个往返丢包明显超过随机丢包。
++    period_rounds: u32,
++    /// 这一段里出现过排队：丢包可能是冲过了普通瓶颈，不能直接当限速。
++    period_unsettled: bool,
++    /// 这一段有一部分还在启动阶段。
++    period_startup: bool,
++    period_lossy_rounds: u32,
+     last_ack_at: u64,
+     period_calm_packets: u32,
++    /// 这一段里低速时发的包丢了几个。
++    period_calm_lost: u32,
+     last_period_rate: u64,
+     /// 第一批包的第一个确认到达时的时间和送达量。
+     train_start: Option<(u64, u64)>,
+@@ -202,8 +214,13 @@
+             period_lost: 0,
+             period_idle: false,
+             period_outage: false,
++            period_rounds: 0,
++            period_unsettled: false,
++            period_startup: false,
++            period_lossy_rounds: 0,
+             last_ack_at: 0,
+             period_calm_packets: 0,
++            period_calm_lost: 0,
+             last_period_rate: 0,
+             train_start: None,
+         }
+@@ -281,13 +298,19 @@
+             self.period_lost = 0;
+             self.period_idle = false;
+             self.period_outage = false;
++            self.period_rounds = 0;
++            self.period_lossy_rounds = 0;
++            self.period_unsettled = false;
++            self.period_startup = false;
+             self.period_calm_packets = 0;
++            self.period_calm_lost = 0;
+             self.last_period_rate = 0;
+             return;
+         }
+         let lost = core::mem::take(&mut self.period_lost);
+         let idle = core::mem::take(&mut self.period_idle) | core::mem::take(&mut self.period_outage);
+         let calm_packets = core::mem::take(&mut self.period_calm_packets);
++        let calm_lost = core::mem::take(&mut self.period_calm_lost);
+         self.period_started = now_us;
+         self.period_delivered = delivered;
+         let total = period_delivered + lost;
+@@ -299,7 +322,11 @@
+         // 只有丢得比送达的还多才能下结论，这种丢法随机丢包到不了。
+         let unmeasured = self.rate_cap == 0 && !severe && self.calm_samples < PERIOD_MIN_CALM_PACKETS;
+         // RTT 涨了说明是普通瓶颈的队列满了，带宽估计本来就管得住。
++        let unsettled = core::mem::take(&mut self.period_unsettled);
++        let startup = core::mem::take(&mut self.period_startup);
+         if unmeasured || idle || self.queue_is_building() || loss_ppm < self.excess_loss_threshold() {
++            self.period_rounds = 0;
++            self.period_lossy_rounds = 0;
+             self.last_period_rate = 0;
+             // 宽松的上限是猜的，这一段没撞上就说明猜错了，马上放开，不用等到期。
+             if !self.rate_cap_confirmed {
+@@ -313,7 +340,15 @@
+         }
+         // 只量到一次可能是偶然的突发，只设宽松的上限，判错了最多让速度减半、持续两秒。
+         // 连续两段速率一致才收紧到实测值。
+-        let confirmed = calm_packets >= PERIOD_MIN_CALM_PACKETS && self.last_period_rate.abs_diff(rate) <= self.last_period_rate / 8;
++        // 丢得远超随机丢包、并且大半个往返都在丢：这是一直卡着的上限，不是一阵突发，不用再等一段确认。
++        let lossy_rounds = core::mem::take(&mut self.period_lossy_rounds);
++        let rounds = core::mem::take(&mut self.period_rounds);
++        let sustained = rounds >= SUSTAINED_MIN_ROUNDS && lossy_rounds.saturating_mul(2) >= rounds;
++        // 低速发的包也丢得差不多多，说明丢包不随速率变化：是一阵突发或断网，不是上限。
++        let rate_dependent = (calm_lost as u64).saturating_mul(1_000_000) <= loss_ppm.saturating_mul(calm_packets as u64) / 2;
++        // 启动阶段还在往上爬，整段平均的送达速率偏低，不能直接当上限；丢得比送达还多时才例外：那是冲过了上限。
++        let strong = sustained && !unsettled && rate_dependent && (severe || !startup) && loss_ppm >= self.excess_loss_threshold().saturating_mul(2).max(STRONG_EXCESS_LOSS_PPM);
++        let confirmed = calm_packets >= PERIOD_MIN_CALM_PACKETS && (strong || self.last_period_rate.abs_diff(rate) <= self.last_period_rate / 8);
+         self.last_period_rate = rate;
+         self.rate_cap_raises = 0;
+         self.rate_cap_confirmed = confirmed;
+@@ -375,13 +410,16 @@
+ 
+     /// 宽松的上限还没确认时，降速阶段按的是放大过的上限，仍可能高过真实限速，
+     /// 这时的丢包混着限速造成的丢包，不能用来估计随机丢包率。令牌桶上能把估计值推到 76%。
+-    fn trusts_calm_samples(&self) -> bool {
++    /// 要在发送时判断：结果要晚一个往返才知道，那时上限可能刚好确认，按那时算会把限速丢包全收进来。
++    pub(crate) fn trusts_calm_samples(&self) -> bool {
+         self.rate_cap == 0 || self.rate_cap_confirmed
+     }
+ 
+-    pub(crate) fn on_calm_outcome(&mut self, lost: bool) {
++    /// `trusted` 是发送时 [`Self::trusts_calm_samples`] 的结果。
++    pub(crate) fn on_calm_outcome(&mut self, lost: bool, trusted: bool) {
+         self.period_calm_packets = self.period_calm_packets.saturating_add(1);
+-        if !self.trusts_calm_samples() {
++        self.period_calm_lost = self.period_calm_lost.saturating_add(lost as u32);
++        if !trusted {
+             return;
+         }
+         self.calm_samples += 1;
+@@ -393,12 +431,10 @@
+         self.update_random_loss();
+     }
+ 
+-    /// 之前算作丢失的包其实只是来晚了。
++    /// 之前算作丢失的包其实只是来晚了。只对当初算进去的包调用。
+     pub(crate) fn undo_calm_loss(&mut self) {
+-        if self.trusts_calm_samples() {
+-            self.calm_losses = self.calm_losses.saturating_sub(1);
+-            self.update_random_loss();
+-        }
++        self.calm_losses = self.calm_losses.saturating_sub(1);
++        self.update_random_loss();
+     }
+ 
+     fn excess_loss_threshold(&self) -> u64 {
+@@ -459,6 +495,10 @@
+         let boost = self.window_limited && self.mode != Mode::Drain && !self.is_below_capacity();
+         let gain = if boost { gain.max(WINDOW_LIMITED_GAIN) } else { gain };
+         let rate = (self.path_rate().saturating_mul(gain) / 1000).max(1);
++        // 已经确认限速时，任何增益都不能把节奏抬过上限：多出来的包只会被限速器丢掉。
++        // 只量到一次的宽松上限可能是突发丢包造成的，不在这里强压。
++        // 想知道上限有没有放宽，由 relax_rate_cap 定期放开一档去试。
++        let rate = if self.is_rate_limited() { rate.min(self.rate_cap) } else { rate };
+         // 稀疏消息测到的是应用发送速度，不能把它当作恢复积压时的路径上限。
+         // 仍受拥塞窗口限制；主动降速、排空、排队或已知限速时都不抬高，避免污染低速丢包样本。
+         if self.probe_sender_limited && self.app_idle_estimate && self.rate_cap == 0
+@@ -515,6 +555,8 @@
+             self.app_idle_estimate = sample.app_idle;
+         }
+         self.period_idle |= sample.app_idle;
++        self.period_unsettled |= self.queue_is_building();
++        self.period_startup |= self.mode == Mode::Startup;
+         // 限速器每个往返总会放行一部分，确认不会整段中断；中断好几个往返只能是断网。
+         let silence = now_us.saturating_sub(self.last_ack_at);
+         if self.last_ack_at > 0
+@@ -539,7 +581,15 @@
+             self.window_hit_last_round = core::mem::take(&mut self.window_hit);
+             // 丢得比送达的还多的一轮是突发丢包或断网，这时测到的速率不代表路径能力。
+             // 让它老化掉旧样本的话，半秒的突发就能把带宽估计压到十分之一，之后要爬好几秒。
+-            let outage = self.round_lost > delivered.saturating_sub(self.round_start_delivered);
++            let round_delivered = delivered.saturating_sub(self.round_start_delivered);
++            let outage = self.round_lost > round_delivered;
++            let round_total = round_delivered + self.round_lost;
++            if round_total > 0 {
++                self.period_rounds = self.period_rounds.saturating_add(1);
++                if self.round_lost.saturating_mul(1_000_000) >= self.excess_loss_threshold().saturating_mul(round_total) {
++                    self.period_lossy_rounds = self.period_lossy_rounds.saturating_add(1);
++                }
++            }
+             self.clean_rounds = if outage { 0 } else { self.clean_rounds.saturating_add(1) };
+             self.next_round_delivered = delivered;
+             self.round_start_delivered = delivered;
+@@ -592,7 +642,9 @@
+                 }
+             }
+         }
+-        if self.mode == Mode::Drain && bytes_in_flight <= self.bdp() {
++        // 窗口最低也有 min_cwnd，在途量降到这以下也不会更空。带宽估计偏低时（稀疏消息只测到应用速度），
++        // 只等降到估计的 BDP 会一直卡在排空阶段，按排空速度慢慢补发断网积压。
++        if self.mode == Mode::Drain && bytes_in_flight <= self.bdp().max(self.min_cwnd) {
+             self.enter_probe_bw(now_us);
+         }
+         if self.mode == Mode::ProbeBw && self.cycle_phase_done(now_us, sample, bytes_in_flight) {
+@@ -661,8 +713,15 @@
+         self.cycle_started = now_us;
+     }
+ 
+-    pub(crate) fn on_timeout(&mut self, consecutive: u32, long_outage: bool) {
++    pub(crate) fn on_timeout(&mut self, now_us: u64, consecutive: u32, long_outage: bool) {
+         self.long_outage = long_outage;
++        // 降速阶段要靠确认才能结束，超时说明确认断了，这一段什么也测不到。稀疏消息留在降速阶段的话，
++        // 整个断网期间和恢复后的头一个往返都不能提速补发，积压的消息全被拖住。
++        // 满负荷传输不动：限速路径上超时很常见，降速阶段是它测随机丢包率、找上限的依据。
++        if self.mode == Mode::ProbeBw && PROBE_CYCLE[self.cycle_index] < 1000 && self.app_idle_estimate {
++            self.cycle_index = (self.cycle_index + 1) % PROBE_CYCLE.len();
++            self.cycle_started = now_us;
++        }
+         self.clean_rounds = 0;
+         self.recovering = consecutive >= RECOVERY_TIMEOUTS;
+         if consecutive >= PATH_CHANGE_TIMEOUTS {
+diff -ru a/src/connection.rs b/src/connection.rs
+--- a/src/connection.rs	2026-10-31 23:44:20
++++ b/src/connection.rs	2026-10-31 23:44:20
+@@ -213,6 +213,8 @@
+     bundled: [u64; MAX_BUNDLED_SEGMENTS],
+     /// 发送时速率低于路径容量，这个包的结果可以用来估计随机丢包率。
+     below_capacity: bool,
++    /// 发送时随机丢包的估计不会被限速丢包污染，结果可以算进去。
++    calm_trusted: bool,
+     app_idle: bool,
+     // 发送时的送达进度，确认到达时用来计算实际送达速率。
+     delivered: u64,
+@@ -294,7 +296,6 @@
+     /// 晚到得足以堵住窗口的包占多少，单位百万分之一。
+     late_ppm: u32,
+     bundle_until: u64,
+-    copy_backoff_until: u64,
+     /// 最近一次确认丢包后，保持最低校验比例到这个时刻。
+     parity_floor_until: u64,
+     /// 丢的包里紧挨着上一个丢包的比例，单位百万分之一。
+@@ -391,7 +392,6 @@
+             loss_samples: 0,
+             late_ppm: 0,
+             bundle_until: 0,
+-            copy_backoff_until: 0,
+             parity_floor_until: 0,
+             lost_run_ppm: 0,
+             last_lost_packet: 0,
+@@ -967,7 +967,7 @@
+             // 要和算进去时的权重一样：开头样本少时权重大，只减一点的话，一次误判就让校验开好一阵。
+             self.loss_ppm = self.loss_ppm.saturating_sub(1_000_000 / self.loss_samples.max(1));
+             self.observe_lateness(self.is_slow(now_us, &lost.packet));
+-            if lost.packet.below_capacity {
++            if lost.packet.below_capacity && lost.packet.calm_trusted {
+                 self.congestion.undo_calm_loss();
+             }
+             let late = now_us.saturating_sub(lost.declared_at);
+@@ -997,7 +997,7 @@
+         // 丢包少时这个比例很久才更新一次。启动时溢出的那一片不能一直算数，否则校验要关好几秒。
+         self.lost_run_ppm -= self.lost_run_ppm / LOST_RUN_DECAY_PACKETS;
+         if packet.below_capacity {
+-            self.congestion.on_calm_outcome(lost);
++            self.congestion.on_calm_outcome(lost, packet.calm_trusted);
+         }
+     }
+ 
+@@ -1090,11 +1090,6 @@
+ 
+     fn declare_lost(&mut self, now_us: u64, packet: &SentPacket) {
+         self.bundle_until = now_us + BUNDLE_HOLD_US;
+-        // 多个往返都没有确认，说明是中断而非零散丢包。暂时停止主动复制新消息，
+-        // 让探测和最老数据先恢复；复用损失保护时长，避免间歇链路来回切换。
+-        if self.rtt.srtt_us() > 0 && now_us.saturating_sub(self.last_heard) > (3 * self.rtt.srtt_us()).max(250_000) {
+-            self.copy_backoff_until = now_us + BUNDLE_HOLD_US;
+-        }
+         let run = if packet.number == self.last_lost_packet + 1 { 1_000_000 } else { 0 };
+         self.lost_run_ppm = self.lost_run_ppm - self.lost_run_ppm / LOST_RUN_SMOOTHING + run / LOST_RUN_SMOOTHING;
+         self.last_lost_packet = packet.number;
+@@ -1247,7 +1242,7 @@
+             if lost_data {
+                 self.consecutive_timeouts += 1;
+                 self.last_timeout_at = now_us;
+-                self.congestion.on_timeout(self.consecutive_timeouts, self.long_outage(now_us));
++                self.congestion.on_timeout(now_us, self.consecutive_timeouts, self.long_outage(now_us));
+             }
+         }
+         if self.window_blocked() && self.in_flight == 0 {
+@@ -1531,7 +1526,9 @@
+             count += 1;
+         }
+         let bundling = self.loss_ppm >= BUNDLE_LOSS_PPM || now_us < self.bundle_until || self.loss_samples < BUNDLE_WARMUP_PACKETS;
+-        if self.config.recovery_policy != RecoveryPolicy::Lean && count > 0 && bundling && !small_copied {
++        // 副本和原件同一时刻发出，成片丢包时会一起丢；这时再在后面的包里捎带一份，把时间错开。
++        let burst_losses = self.lost_run_ppm >= PARITY_LOST_RUN_PPM;
++        if self.config.recovery_policy != RecoveryPolicy::Lean && count > 0 && bundling && (!small_copied || burst_losses) {
+             (used, bundled_count) = self.bundle_unacked(out, used, &segments[..count], &mut bundled, bundled_count);
+         }
+ 
+@@ -1568,6 +1565,7 @@
+                 bundled_count: bundled_count as u8,
+                 bundled,
+                 below_capacity,
++                calm_trusted: self.congestion.trusts_calm_samples(),
+                 app_idle,
+                 delivered: self.delivered,
+                 delivered_at: self.delivered_at,
+@@ -1581,17 +1579,17 @@
+     }
+ 
+     /// 稳定丢包时，把小消息的冗余分散到独立包中，不必等下一条消息才修复。
+-    /// 副本预算沿用原来的捎带份数；已经复制的原件不再捎带旧数据，避免叠加两套冗余。
++    /// 副本预算沿用原来的捎带份数；已经复制的原件平时不再捎带旧数据，避免叠加两套冗余，成片丢包时例外。
+     fn queue_small_message_copies(&mut self, now_us: u64, sn: u64) -> bool {
+         if self.config.recovery_policy == RecoveryPolicy::Lean
+             || self.segments[(sn - self.snd_una) as usize].data.len() > self.config.max_packet_size / 4
+             || (self.loss_ppm < BUNDLE_LOSS_PPM && now_us >= self.bundle_until)
+             || self.congestion.is_rate_limited()
+-            || now_us < self.copy_backoff_until
+-            || self.consecutive_timeouts > 0
+             || self.rtt.srtt_us() == 0
+-            || now_us.saturating_sub(self.last_heard) >= self.rtt.loss_delay_us()
+-            || self.lost_run_ppm >= PARITY_LOST_RUN_PPM
++            // 短时间收不到回应时照样复制：可能只是确认方向断了，数据照样能到，这时零散丢包没有确认就补不回来，
++            // 只能靠副本。成片丢包也照样复制：隔几秒断一次的链路上，断网后的保护期会把副本一直关掉。
++            // 长时间断网才停：那时只发少量探测省流量。
++            || now_us.saturating_sub(self.last_heard) >= LONG_OUTAGE_US
+         {
+             return false;
+         }

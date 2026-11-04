@@ -1,0 +1,96 @@
+--- <scratch>/base-s0/wire.rs	2026-11-01 23:02:26
++++ src/wire.rs	2026-11-01 23:02:26
+@@ -1,14 +1,16 @@
+ //! 线上格式。第 4 步之前可以随时调整，不做兼容承诺。
+ //!
+ //! 包：`[版本 3 位][逐包确认 1 位][包号低 20 位]`，共 3 字节，后跟若干帧。
+-//! DATA：`[1][分片序号 4][长度 2][内容]`
++//! DATA：`[1][分片序号 4][长度 2][内容]`，长度的最高位表示内容前面带流头（见 `stream.rs`）。
+ //! ACK： `[2][最大包号低 24 位 3][确认延迟 2][una 低 24 位 3][窗口 2][首段长度 2][段数 1]` 后跟 `[间隔 2][长度 2]`
+ //! PING：`[3]`
++//! CREDIT：`[5][流号 4][允许发到的流内序号低 32 位 4]`
+ //! PARITY：`[4][首分片序号低 16 位 2][覆盖分片数 1][校验包序号 1][长度校验 2][校验内容]`，内容一直到包尾，所以只能是最后一帧。
+ //!
+ //! 每次发送都用新包号，重传也不例外：这样 RTT 没有歧义，第 4 步也能用包号做加密 nonce。
+ 
+ use crate::parity::{MAX_COVERED, SYMBOLS};
++use crate::stream::{HEADED_LENGTH_BIT, STREAM_HEADER_LEN};
+ 
+ const VERSION_BITS: u8 = 0xA0;
+ const VERSION_MASK: u8 = 0xE0;
+@@ -40,6 +42,8 @@
+ const FRAME_ACK: u8 = 2;
+ const FRAME_PING: u8 = 3;
+ const FRAME_PARITY: u8 = 4;
++const FRAME_CREDIT: u8 = 5;
++pub(crate) const CREDIT_FRAME_LEN: usize = 9;
+ 
+ /// 确认延迟的单位。两字节能表示约 4.2 秒，再长就饱和。
+ const ACK_DELAY_UNIT_US: u64 = 64;
+@@ -63,10 +67,11 @@
+ }
+ 
+ pub(crate) enum Frame<'a> {
+-    Data { sn: u32, payload: &'a [u8] },
++    Data { sn: u32, payload: &'a [u8], headed: bool },
+     Ack(AckFrame<'a>),
+     Ping,
+     Parity { first: u32, count: u8, index: u8, length: u16, payload: &'a [u8] },
++    Credit { stream: u32, end: u32 },
+ }
+ 
+ fn take<'a>(packet: &'a [u8], pos: &mut usize, len: usize) -> Option<&'a [u8]> {
+@@ -99,11 +104,13 @@
+     match *take(packet, pos, 1)?.first()? {
+         FRAME_DATA => {
+             let sn = take_u32(packet, pos)?;
+-            let len = take_u16(packet, pos)? as usize;
+-            if len == 0 {
++            let coded = take_u16(packet, pos)?;
++            let headed = coded & HEADED_LENGTH_BIT != 0;
++            let len = (coded & !HEADED_LENGTH_BIT) as usize;
++            if len == 0 || (headed && len < STREAM_HEADER_LEN) {
+                 return None;
+             }
+-            Some(Frame::Data { sn, payload: take(packet, pos, len)? })
++            Some(Frame::Data { sn, payload: take(packet, pos, len)?, headed })
+         }
+         FRAME_ACK => {
+             let largest = take_u24(packet, pos)?;
+@@ -130,6 +137,7 @@
+             let payload = take(packet, pos, packet.len() - *pos)?;
+             Some(Frame::Parity { first, count, index, length, payload })
+         }
++        FRAME_CREDIT => Some(Frame::Credit { stream: take_u32(packet, pos)?, end: take_u32(packet, pos)? }),
+         _ => None,
+     }
+ }
+@@ -142,11 +150,12 @@
+     PACKET_HEADER_LEN
+ }
+ 
+-pub(crate) fn write_data(out: &mut [u8], used: usize, sn: u64, payload: &[u8]) -> usize {
++pub(crate) fn write_data(out: &mut [u8], used: usize, sn: u64, payload: &[u8], headed: bool) -> usize {
+     let end = used + DATA_HEADER_LEN;
+     out[used] = FRAME_DATA;
+     out[used + 1..used + 5].copy_from_slice(&(sn as u32).to_be_bytes());
+-    out[used + 5..end].copy_from_slice(&(payload.len() as u16).to_be_bytes());
++    let coded = payload.len() as u16 | if headed { HEADED_LENGTH_BIT } else { 0 };
++    out[used + 5..end].copy_from_slice(&coded.to_be_bytes());
+     out[end..end + payload.len()].copy_from_slice(payload);
+     end + payload.len()
+ }
+@@ -162,6 +171,13 @@
+     end + payload.len()
+ }
+ 
++pub(crate) fn write_credit(out: &mut [u8], used: usize, stream: u32, end: u64) -> usize {
++    out[used] = FRAME_CREDIT;
++    out[used + 1..used + 5].copy_from_slice(&stream.to_be_bytes());
++    out[used + 5..used + CREDIT_FRAME_LEN].copy_from_slice(&(end as u32).to_be_bytes());
++    used + CREDIT_FRAME_LEN
++}
++
+ pub(crate) fn write_ping(out: &mut [u8], used: usize) -> usize {
+     out[used] = FRAME_PING;
+     used + 1

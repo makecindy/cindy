@@ -1,0 +1,3 @@
+   Compiling agent-net-core v0.0.0 (<home>/Documents/Cindy/cindy/.cindy-worktrees/agent-net/packages/agent-net-core)
+   Compiling agent-net-sim v0.0.0 (<home>/Documents/Cindy/cindy/.cindy-worktrees/agent-net/packages/agent-net-core/sim)
+    Finished `release` profile [optimized] target(s) in 3.47s

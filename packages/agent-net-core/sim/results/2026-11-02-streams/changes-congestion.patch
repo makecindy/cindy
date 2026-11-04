@@ -1,0 +1,212 @@
+--- <scratch>/base-s0/congestion.rs	2026-11-01 23:02:26
++++ src/congestion.rs	2026-11-02 02:20:58
+@@ -17,6 +17,19 @@
+ const ROOM_RATIO_NUMERATOR: u64 = 21;
+ const ROOM_RATIO_DENOMINATOR: u64 = 20;
+ const PROBE_CYCLE: [u64; 8] = [1250, 750, 1000, 1000, 1000, 1000, 1000, 1000];
++/// 交互消息和大量数据同时在发时压低网络里的队列：在途量只留一点余量，巡航略低于带宽，加速探测也放轻。
++/// 大量数据慢一点点，换来交互消息不用在瓶颈排队。
++const LOW_QUEUE_CWND_GAIN: u64 = 1250;
++/// 启动时冲得越猛，确认回来之前多发的越多，排队区一满交互消息就要等半秒。
++const LOW_QUEUE_STARTUP_GAIN: u64 = 1350;
++const LOW_QUEUE_CRUISE_GAIN: u64 = 970;
++const LOW_QUEUE_PROBE_GAIN: u64 = 1050;
++/// 压低队列时，发送节奏最多补回这么多个包的迟到。按包算：高速路径上间隔很短，定时器迟到本来就影响不大，补多了就成了突发。
++const LOW_QUEUE_CATCH_UP_PACKETS: u64 = 2;
++/// 压低队列时，路径的基础往返时间取最近这么多轮的最小值。
++const RECENT_ROUNDS: usize = 8;
++/// 压低队列时连续这么多轮判断在排队、往返时间却没有降下来，说明不是自己排的队，以现在的值为基准。
++const QUEUE_CHECK_ROUNDS: u8 = 3;
+ 
+ const BW_WINDOW_ROUNDS: usize = 10;
+ const MIN_RTT_WINDOW_US: u64 = 10_000_000;
+@@ -140,6 +153,7 @@
+     initial_cwnd: u64,
+     initial_rate: u64,
+     probe_sender_limited: bool,
++    low_queue: bool,
+     app_idle_estimate: bool,
+     bw_samples: [u64; BW_WINDOW_ROUNDS],
+     round: usize,
+@@ -184,6 +198,10 @@
+     round_min_rtt_us: u64,
+     round_rtt_samples: u32,
+     last_round_min_rtt_us: u64,
++    recent_round_rtts: [u64; RECENT_ROUNDS],
++    recent_round_index: usize,
++    queue_check_rounds: u8,
++    queue_check_rtt: u64,
+     /// 限速器的上限，0 表示没有发现限速。
+     rate_cap: u64,
+     rate_cap_until: u64,
+@@ -229,6 +247,7 @@
+             initial_cwnd,
+             initial_rate: initial_rate.unwrap_or(INITIAL_RATE),
+             probe_sender_limited,
++            low_queue: false,
+             app_idle_estimate: false,
+             bw_samples: [0; BW_WINDOW_ROUNDS],
+             round: 0,
+@@ -265,6 +284,10 @@
+             round_min_rtt_us: u64::MAX,
+             round_rtt_samples: 0,
+             last_round_min_rtt_us: u64::MAX,
++            recent_round_rtts: [u64::MAX; RECENT_ROUNDS],
++            recent_round_index: 0,
++            queue_check_rounds: 0,
++            queue_check_rtt: 0,
+             rate_cap: 0,
+             rate_cap_until: 0,
+             rate_cap_confirmed: false,
+@@ -307,6 +330,11 @@
+     /// 还在启动阶段。
+     pub(crate) fn is_starting(&self) -> bool {
+         self.mode == Mode::Startup
++    }
++
++    /// 要不要把网络里的队列压低。
++    pub(crate) fn set_low_queue(&mut self, active: bool) {
++        self.low_queue = active;
+     }
+ 
+     pub(crate) fn window_bound_path(&self) -> bool {
+@@ -330,7 +358,13 @@
+ 
+     /// 巡航周期里当前阶段的增益。发现浅队列以后，加速探测只加 10%。
+     fn cycle_gain(&self) -> u64 {
+-        if self.cycle_index == 0 && self.gentle_probes > 0 { GENTLE_PROBE_GAIN } else { PROBE_CYCLE[self.cycle_index] }
++        if self.cycle_index == 0 && self.low_queue {
++            LOW_QUEUE_PROBE_GAIN
++        } else if self.cycle_index == 0 && self.gentle_probes > 0 {
++            GENTLE_PROBE_GAIN
++        } else {
++            PROBE_CYCLE[self.cycle_index]
++        }
+     }
+ 
+     /// 正处在加速探测阶段。
+@@ -522,9 +556,38 @@
+     }
+ 
+     fn bdp(&self) -> u64 {
+-        self.path_rate().saturating_mul(self.min_rtt_us) / 1_000_000
++        self.path_rate().saturating_mul(self.base_rtt()) / 1_000_000
++    }
++
++    /// 判断在排队时会主动降速，自己排的队这样几轮就排空了。往返时间不降，就是路径本身变慢了，继续降速只会越降越低。
++    fn check_queue_is_ours(&mut self) {
++        let floor = self.last_round_min_rtt_us;
++        if !self.low_queue || floor == u64::MAX || !self.queue_is_building() {
++            self.queue_check_rounds = 0;
++            return;
++        }
++        if self.queue_check_rounds == 0 {
++            self.queue_check_rtt = floor;
++        }
++        self.queue_check_rounds += 1;
++        if self.queue_check_rounds >= QUEUE_CHECK_ROUNDS {
++            self.queue_check_rounds = 0;
++            if floor.saturating_mul(32) >= self.queue_check_rtt.saturating_mul(31) {
++                self.recent_round_rtts = [floor; RECENT_ROUNDS];
++            }
++        }
+     }
+ 
++    /// 没有排队时的往返时间。真实路径的往返时间会整体漂移，窗口里偶尔碰到一次的最低值代表不了现在的路径。
++    /// 压低队列时拿它当基准的话，平常的往返时间就成了排队，只能一路降速，在途量也装不满路径，带宽估计越降越低。
++    fn base_rtt(&self) -> u64 {
++        if !self.low_queue {
++            return self.min_rtt_us;
++        }
++        let recent = self.recent_round_rtts.iter().copied().min().unwrap_or(u64::MAX);
++        if recent == u64::MAX { self.min_rtt_us } else { recent.max(self.min_rtt_us) }
++    }
++
+     /// 正在主动降速，现在发出去的包不可能挤爆瓶颈。这种包丢了只能是随机丢包，
+     /// 瓶颈溢出造成的丢包不会混进来，所以队列再小、遇到限速器也不会把拥塞当成随机丢包越补越快。
+     /// 被窗口限住不算：窗口对应的速率完全可能高过限速。
+@@ -618,7 +681,13 @@
+         if self.mode == Mode::ProbeRtt {
+             return (self.bdp() / 2).max(self.min_cwnd / 4);
+         }
+-        let gain = if self.mode == Mode::Startup { STARTUP_GAIN } else { CWND_GAIN };
++        let gain = if self.mode == Mode::Startup {
++            self.startup_gain()
++        } else if self.low_queue {
++            LOW_QUEUE_CWND_GAIN
++        } else {
++            CWND_GAIN
++        };
+         // 窗口接近路径容量时不放宽：这时多出来的包会直接挤进瓶颈队列。
+         let spare_window = self.window_limited
+             && self.mode == Mode::ProbeBw
+@@ -636,6 +705,7 @@
+             Mode::Startup => return self.startup_rate(),
+             Mode::Drain => DRAIN_GAIN,
+             Mode::ProbeBw if PROBE_CYCLE[self.cycle_index] == 1000 && self.queue_is_building() => QUEUE_DRAIN_GAIN,
++            Mode::ProbeBw if PROBE_CYCLE[self.cycle_index] == 1000 && self.low_queue => LOW_QUEUE_CRUISE_GAIN,
+             // 被窗口限住时瓶颈没有队列，这一轮只是要测随机丢包率，低于送达速率就够了，不用多降。
+             // 窗口对应的速率可能高过限速，所以要等样本攒够、确认过没有撞上容量。
+             // 窗口限住、路径有余量时任何阶段都低于容量，降速阶段照常按窗口发，不用白白慢下来。
+@@ -703,8 +773,9 @@
+     /// 启动时至少按“每个往返发完初始窗口”的速度走。低延迟链路上第一批确认很快回来，
+     /// 这时送达速率还没测准，只看它的话，2 毫秒的链路要爬十几个往返。
+     fn startup_rate(&self) -> u64 {
+-        let measured = self.path_rate().saturating_mul(STARTUP_GAIN) / 1000;
+-        let floor = self.initial_cwnd.saturating_mul(1_000_000).saturating_mul(STARTUP_GAIN) / 1000 / self.min_rtt_us.max(1);
++        let gain = self.startup_gain();
++        let measured = self.path_rate().saturating_mul(gain) / 1000;
++        let floor = self.initial_cwnd.saturating_mul(1_000_000).saturating_mul(gain) / 1000 / self.min_rtt_us.max(1);
+         let rate = measured.max(floor);
+         // 包列的确认间隔被自身发送节奏限制时，只能量到路径速率的下界。
+         // 仅在已经测得足够大的 BDP、没有排队时增加探测余量；仍受窗口与限速上限约束。
+@@ -714,6 +785,10 @@
+         if self.rate_cap > 0 { rate.min(self.rate_cap) } else { rate }
+     }
+ 
++    fn startup_gain(&self) -> u64 {
++        if self.low_queue { LOW_QUEUE_STARTUP_GAIN } else { STARTUP_GAIN }
++    }
++
+     pub(crate) fn can_send(&self, now_us: u64) -> bool {
+         self.next_send_at <= now_us + PACING_QUANTUM_US
+     }
+@@ -732,7 +807,10 @@
+             return;
+         }
+         let interval = bytes.saturating_mul(1_000_000) / self.pacing_rate();
+-        self.next_send_at = self.next_send_at.max(now_us) + interval;
++        // 定时器总会晚一点，低速时包的间隔和定时器精度差不多，迟到的时间作废的话实际只能发到节奏的六成，
++        // 压低队列时探测又轻，带宽估计补不回来，只会越测越低。
++        let earliest = if self.low_queue { now_us.saturating_sub(interval * LOW_QUEUE_CATCH_UP_PACKETS) } else { now_us };
++        self.next_send_at = self.next_send_at.max(earliest) + interval;
+     }
+ 
+     pub(crate) fn on_ack(&mut self, now_us: u64, sample: &RateSample, delivered: u64, bytes_in_flight: u64) {
+@@ -817,6 +895,9 @@
+ 
+         if round_start {
+             self.last_round_min_rtt_us = self.round_min_rtt_us;
++            self.recent_round_rtts[self.recent_round_index] = self.round_min_rtt_us;
++            self.recent_round_index = (self.recent_round_index + 1) % RECENT_ROUNDS;
++            self.check_queue_is_ours();
+             self.round_min_rtt_us = u64::MAX;
+             self.round_rtt_samples = 0;
+         }
+@@ -916,7 +997,7 @@
+         // 余量要盖过抖动：抖动小的链路上按往返的十六分之一算，10 毫秒的浅队列排到一半就能发现；
+         // 抖动大的链路上按抖动的三倍算，不把抖动当成排队。
+         let margin = (self.min_rtt_us / 16).max(self.rtt_jitter_us * 3).clamp(QUEUE_MARGIN_MIN_US, QUEUE_MARGIN_MAX_US);
+-        floor != u64::MAX && floor >= self.min_rtt_us.saturating_add(margin)
++        floor != u64::MAX && floor >= self.base_rtt().saturating_add(margin)
+     }
+ 
+     fn cycle_phase_done(&self, now_us: u64, sample: &RateSample, bytes_in_flight: u64) -> bool {
+@@ -970,6 +1051,7 @@
+             // 启动马上就退出，带宽要从很低的估计慢慢爬回来。
+             self.round_min_rtt_us = u64::MAX;
+             self.last_round_min_rtt_us = u64::MAX;
++            self.recent_round_rtts = [u64::MAX; RECENT_ROUNDS];
+             self.round_rtt_samples = 0;
+             self.full_bw = 0;
+             self.full_bw_rounds = 0;

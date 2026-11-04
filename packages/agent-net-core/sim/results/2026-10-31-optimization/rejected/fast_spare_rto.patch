@@ -1,0 +1,95 @@
+--- a/src/connection.rs
++++ b/src/connection.rs
+@@ -21,7 +21,7 @@
+ const UNPACED_SEGMENTS: u32 = 4;
+ /// 拥塞窗口的下限，单位是分片。
+ const MIN_CWND_SEGMENTS: u64 = 16;
+-const INITIAL_CWND_SEGMENTS: u64 = 64;
++const INITIAL_CWND_SEGMENTS: u64 = 128;
+ /// 丢包率估计的平滑系数。太短的话丢 1% 时估计值大起大落，四分之一的时间捎带是关着的。
+ const LOSS_SMOOTHING: u32 = 256;
+ /// 最近丢包率超过这个值才捎带，单位百万分之一。干净网络上不多花一个字节。
+@@ -108,13 +108,13 @@
+             send_window: 128,
+             recv_window: 128,
+             send_buffer_bytes: 1 << 20,
+-            initial_rto_us: 200_000,
++            initial_rto_us: 400_000,
+             min_rto_us: 30_000,
+             // 判死前要留够重试次数：30 秒内至少 15 次，双向重度丢包时才不会把活着的对端判死。
+             max_rto_us: 2_000_000,
+             reorder_threshold: 3,
+             ack_delay_us: 2_000,
+-            ack_every: 2,
++            ack_every: 1,
+             dead_after_us: 30_000_000,
+             probe_initial_us: 250_000,
+             probe_max_us: 5_000_000,
+@@ -1145,6 +1145,7 @@
+         if self.timeout_deadline().is_some_and(|at| at <= now_us) {
+             // 一次判完所有超龄的包。只判最老的几个的话，其余的要等退避，整个窗口好几秒才能恢复。
+             let age = self.timeout_age_us();
++            let initial_probe = self.rtt.srtt_us() == 0 && self.consecutive_timeouts < 1;
+             let mut lost_data = false;
+             while let Some(&packet) = self.sent.front() {
+                 if packet.sent_at + age > now_us || self.parity_hold_until(&packet).is_some_and(|at| at > now_us) {
+@@ -1154,6 +1155,7 @@
+                 self.stats.timeout_losses += 1;
+                 lost_data |= packet.segment_count > 0;
+                 self.declare_lost(now_us, &packet);
++                if initial_probe { break; }
+             }
+             if lost_data {
+                 self.consecutive_timeouts += 1;
+@@ -1232,16 +1234,17 @@
+     /// 带宽才是瓶颈时，校验包要占数据的位置，比重传贵。瓶颈溢出和限速时再多发只会丢得更多。
+     fn parity_interval(&self) -> Option<u32> {
+         // 晚到的包和丢掉的包一样堵窗口，校验包都能修。
+-        let holes = self.loss_ppm + self.late_ppm;
++        let warmup = self.loss_samples < BUNDLE_WARMUP_PACKETS;
++        let holes = if warmup { 50_000 } else { self.loss_ppm + self.late_ppm };
+         let useful = (PARITY_MIN_LOSS_PPM..=PARITY_MAX_LOSS_PPM).contains(&holes);
+-        if !self.congestion.window_bound_path() || !useful || self.congestion.is_rate_limited() {
++        if (!warmup && !self.congestion.window_bound_path()) || !useful || self.congestion.is_rate_limited() {
+             return None;
+         }
+         // 成片地丢是撞上了容量，这时多发只会丢得更多，校验也修不过来。随机丢包是零散的。
+         if self.lost_run_ppm >= PARITY_LOST_RUN_PPM {
+             return None;
+         }
+-        Some(parity::repair_interval(holes, self.congestion.window_is_the_limit()))
++        Some(if !warmup && holes <= 20_000 && self.congestion.spare_for_full_repair() { 1 } else { parity::repair_interval(holes, warmup || self.congestion.window_is_the_limit()) })
+     }
+ 
+     /// 校验包覆盖的范围：最近发出的、对端可能还缺的分片。
+--- a/src/parity.rs
++++ b/src/parity.rs
+@@ -19,7 +19,7 @@
+ pub(crate) const MAX_UNKNOWNS: usize = 32;
+ /// 校验占比 = 丢包率 × (1 + 这个比例) + 最小余量。速度卡在窗口上时校验包不占数据的位置，余量可以放宽：
+ /// 修得越快，窗口每轮被拖慢得越少。带宽是瓶颈时，每个校验包都要挤掉一个数据包，只留够用的。
+-const MARGIN_PERCENT: u64 = 100;
++const MARGIN_PERCENT: u64 = 1000;
+ const MIN_MARGIN_PPM: u64 = 25_000;
+ const LEAN_MARGIN_PERCENT: u64 = 25;
+ const LEAN_MIN_MARGIN_PPM: u64 = 10_000;
+--- a/src/congestion.rs
++++ b/src/congestion.rs
+@@ -16,7 +16,7 @@
+ const FULL_BW_GROWTH: u64 = 1250;
+ const FULL_BW_ROUNDS: u8 = 3;
+ /// 还没有测量值时的发送速率，约 8 Mbit/s。第一批确认到达后就换成实测值。
+-const INITIAL_RATE: u64 = 4_000_000;
++const INITIAL_RATE: u64 = 16_000_000;
+ /// 允许提前这么久发送，避免为每个包都单独起一次计时器。
+ const PACING_QUANTUM_US: u64 = 1_000;
+ /// 连续超时这么多次（约 20 个往返没有任何确认），旧的带宽估计就不能再信了。
+@@ -201,6 +201,8 @@
+     }
+ 
+     /// 已经确认撞上限速。这时再多发冗余只会丢得更多。
++    pub(crate) fn spare_for_full_repair(&self) -> bool { self.btl_bw > 0 && self.rate_cap == 0 && self.bdp() >= self.max_cwnd * 2 && !self.queue_is_building() }
++
+     pub(crate) fn is_rate_limited(&self) -> bool {
+         self.rate_cap > 0 && self.rate_cap_confirmed
+     }
