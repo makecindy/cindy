@@ -75,7 +75,18 @@ export function buildWorkLouderCodexPublishedTasks(
     ...remoteCatalogSessions.slice(0, remoteQuota),
   ];
 
-  return [...guaranteedVisible, ...visibleProjection, ...publishedCatalog].map((session) => {
+  const selectedActiveIds = new Set([
+    ...guaranteedVisible.map((session) => session.id),
+    ...publishedCatalog.map((session) => session.id),
+  ]);
+  // Keep the activity catalog in its original relative order; moving pinned
+  // visible rows to the front would change priority recentRank and implicit
+  // custom fallback. The sidebar order travels separately via sidebarOrder.
+  const orderedActiveCatalog = catalogSessions.filter((session) =>
+    selectedActiveIds.has(session.id),
+  );
+
+  return [...visibleProjection, ...orderedActiveCatalog].map((session) => {
     const pinnedAtMs = session.pinnedAt ? Date.parse(session.pinnedAt) : Number.NaN;
     const userSendAtMs = session.userSendAt ? Date.parse(session.userSendAt) : Number.NaN;
     const order = sidebarOrder.get(session.id);

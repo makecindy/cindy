@@ -157,11 +157,12 @@ describe('buildWorkLouderCodexPublishedTasks', () => {
     );
 
     expect(tasks).toHaveLength(WORKLOUDER_CODEX_TASK_OPTION_LIMIT);
-    expect(tasks.slice(0, 13).map((task) => task.id)).toEqual(renderedIds);
+    expect(renderedIds.every((id) => tasks.some((task) => task.id === id))).toBe(true);
     expect(tasks.find((task) => task.id === 'local-64')?.sidebarOrder).toBe(0);
     expect(
       tasks
         .filter((task) => task.sidebarOrder !== undefined && task.sidebarOrder < 13)
+        .toSorted((left, right) => (left.sidebarOrder ?? 0) - (right.sidebarOrder ?? 0))
         .map((task) => task.id),
     ).toEqual(renderedIds);
     expect(tasks.filter((task) => task.id.startsWith('local-'))).toHaveLength(64);

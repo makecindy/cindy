@@ -9,6 +9,8 @@ import {
 import { WorkLouderCodexLightingController } from '../WorkLouderCodexLightingController.js';
 import { __testing as settingsStoreTesting } from '../settingsStore.js';
 import { isWorkLouderCodexLightingFrameOff, WorkLouderLightingEffect } from '../protocol.js';
+import { buildWorkLouderCodexTaskCatalog } from '../taskSlots.js';
+import { buildWorkLouderCodexPublishedTasks } from '../../../renderer/features/cc-agent/lib/workLouderCodexTaskPublish.js';
 
 function settings(patch: Partial<WorkLouderCodexSettings>): WorkLouderCodexSettings {
   return { ...createWorkLouderCodexDefaultSettings(), ...patch };
@@ -1670,6 +1672,83 @@ describe('WorkLouderCodexLightingController', () => {
     hidRef.current?.({ key: 'AG12', act: 1 });
     expect(activateSession).not.toHaveBeenCalled();
     expect(dispatch).toHaveBeenCalledWith({ type: 'command', commandId: 'newTask' });
+  });
+
+  it('keeps priority recentRank and sidebar order stable after publisher selection', async () => {
+    const sessions = [
+      ...Array.from({ length: 6 }, (_, index) => ({
+        id: `new-${index}`,
+        title: `New ${index}`,
+        pinnedAt: null,
+        userSendAt: String(2_000 + index),
+        status: 'active' as const,
+      })),
+      {
+        id: 'pinned-old',
+        title: 'Pinned old',
+        pinnedAt: '2026-01-01T00:00:00.000Z',
+        userSendAt: '1000',
+        status: 'active' as const,
+      },
+    ];
+    const renderedIds = ['pinned-old', ...Array.from({ length: 6 }, (_, index) => `new-${index}`)];
+    const published = buildWorkLouderCodexPublishedTasks(sessions, sessions, renderedIds);
+    const catalog = buildWorkLouderCodexTaskCatalog(published, { publishedVisibleOrder: true });
+    expect(catalog.options.map((task) => task.id)).toEqual([
+      'new-0',
+      'new-1',
+      'new-2',
+      'new-3',
+      'new-4',
+      'new-5',
+      'pinned-old',
+    ]);
+    expect(catalog.sidebar.map((task) => task.id)).toEqual([
+      'pinned-old',
+      'new-0',
+      'new-1',
+      'new-2',
+      'new-3',
+      'new-4',
+      'new-5',
+    ]);
+
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn(),
+      dispose: vi.fn(async () => undefined),
+    };
+    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), async () => catalog);
+    controller.updateSessionActivity(
+      [...sessions].map((session) => ({
+        sessionId: session.id,
+        phase: 'running' as const,
+        compactDetail: '',
+        attention: false,
+      })),
+    );
+    controller.applySettings(settings({ agentSource: 'priority', deviceEnabled: true }));
+    await controller.resumeTaskSlots();
+    expect(controller.getState().agentSlots.map((slot) => slot.sessionId)).toEqual([
+      'new-0',
+      'new-1',
+      'new-2',
+      'new-3',
+      'new-4',
+      'new-5',
+    ]);
+
+    controller.applySettings(settings({ agentSource: 'sidebar', deviceEnabled: true }));
+    expect(controller.getState().agentSlots.map((slot) => slot.sessionId)).toEqual([
+      'pinned-old',
+      'new-0',
+      'new-1',
+      'new-2',
+      'new-3',
+      'new-4',
+    ]);
   });
 
   it('clears AG06-AG12 when a thirteen-key layout shrinks back to six keys', async () => {
