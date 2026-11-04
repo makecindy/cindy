@@ -220,8 +220,17 @@ export function PermissionPrompt({
       active instanceof Element &&
       !cardRef.current?.contains(active) &&
       (isEditableKeyboardTarget(active) || isInsideKeyboardLayer(active));
-    if (!keyboardOwnedElsewhere) button.focus({ preventScroll: true });
-    onAutoFocusHandled?.();
+    if (keyboardOwnedElsewhere) {
+      // The user is typing or in a menu elsewhere: leave focus there for this switch.
+      onAutoFocusHandled?.();
+      return;
+    }
+    // The card can briefly render into a detached node (e.g. the files route's
+    // prompt slot is still registered during navigation, then the card remounts
+    // inline). Keep the request until focus actually lands on a live button.
+    if (!button.isConnected) return;
+    button.focus({ preventScroll: true });
+    if (document.activeElement === button) onAutoFocusHandled?.();
   }, [autoFocus, onAutoFocusHandled, submitting]);
 
   // ── Render ──

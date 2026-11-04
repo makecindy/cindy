@@ -7,7 +7,7 @@
  * 描述不出来时退回原文案(而不是编一个范围),以及按钮的授权载荷一字不改地转发 agent
  * 建议 —— 文案怎么写都不该动实际授权内容。
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { PendingPermission } from '@/lib/makerChatStore';
@@ -33,6 +33,9 @@ vi.mock('@/components/ui/tooltip', () => ({
 }));
 
 import { PermissionPrompt } from '../PermissionPrompt';
+import { InteractionPromptHost } from '@/components/interaction-portal';
+import { setSlotElement } from '@/components/interaction-portal/store';
+import { useSessionSwitchFocusIntent } from '@/features/cc-agent/useSessionSwitchFocusIntent';
 
 afterEach(cleanup);
 
@@ -298,5 +301,38 @@ describe('PermissionPrompt 切换任务后聚焦「允许一次」', () => {
     );
     expect(document.activeElement).toBe(screen.getByRole('button', { name: /allowOnce/ }));
     expect(onAutoFocusHandled).toHaveBeenCalledTimes(1);
+  });
+});
+
+// 从文件页（/cc-agent/files/:id）切到等授权的任务：旧路由的 InteractionPromptSlot 在被动
+// cleanup 前仍登记着，新视图的卡片先被 portal 进一个已脱离文档的节点，聚焦不会生效；
+// 等 slot 注销、卡片回到行内重新挂载后，意图必须还在，焦点才能落到「允许一次」。
+describe('PermissionPrompt 经交互卡 portal 切换路由', () => {
+  function SwitchedView() {
+    const intent = useSessionSwitchFocusIntent('task-b', true);
+    return (
+      <InteractionPromptHost hasInteraction>
+        <PermissionPrompt
+          permission={permission()}
+          onRespond={vi.fn()}
+          autoFocus={intent.armed}
+          onAutoFocusHandled={intent.consume}
+        />
+      </InteractionPromptHost>
+    );
+  }
+
+  afterEach(() => setSlotElement(null));
+
+  it('卡片先渲染进已脱离的 slot 时保留意图，回到行内后聚焦「允许一次」', () => {
+    const staleSlot = document.createElement('div');
+    setSlotElement(staleSlot);
+    render(<SwitchedView />);
+    expect(staleSlot.isConnected).toBe(false);
+    expect(document.activeElement).toBe(document.body);
+
+    act(() => setSlotElement(null));
+
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /allowOnce/ }));
   });
 });
