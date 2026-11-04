@@ -23,7 +23,11 @@ async function connectInspector(port) {
       const complete = pending.get(m.id); pending.delete(m.id);
       if (typeof complete !== 'function') return;
       complete(m);
-    } else listeners.get(m.method)?.(m.params);
+    } else if (m.method === 'Debugger.paused') {
+      // This benchmark only consumes pause events; never dispatch by a remote name.
+      const onPaused = listeners.get('Debugger.paused');
+      if (typeof onPaused === 'function') onPaused(m.params);
+    }
   };
   const send = (method, params = {}) => new Promise((resolve, reject) => {
     const requestId = ++id;
