@@ -241,8 +241,10 @@ export function RemoteControlSection() {
         return copy;
       });
     });
+    const offHosts = window.electronAPI.remoteSsh.onHostsChanged?.((result) => setHosts(result.hosts));
     return () => {
       off();
+      offHosts?.();
     };
   }, [refreshHosts]);
 

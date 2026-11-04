@@ -188,11 +188,7 @@ export function McpServersSection() {
 
       {!loading && (
         <div
-          className="flex flex-col rounded-xl border"
-          style={{
-            backgroundColor: 'var(--settings-theme-card-bg)',
-            borderColor: 'var(--settings-theme-card-border)',
-          }}
+          className="flex flex-col rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]"
         >
           {servers.map((s, i) => (
             <Fragment key={s.id}>

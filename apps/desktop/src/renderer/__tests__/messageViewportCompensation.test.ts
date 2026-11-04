@@ -179,6 +179,7 @@ describe('restored reading position handoff through MessageStream.handleScroll',
       chipJumpGenerationRef: { current: null },
       chipJumpInProgressRef: { current: false },
       saveScrollSnapshot: vi.fn(), clearChipJumpSuppression: vi.fn(),
+      // CI 41649027355: handleScroll now delegates jump visibility to this hook.
       setIsNearBottom: vi.fn(), setUnreadKeys: vi.fn(), updateJumpDown: vi.fn(),
       setFirstVisibleItemKey: vi.fn(), setAnchoredForwardItems: vi.fn(),
       unpinAutoFollowForUserUpIntent: vi.fn(), bumpSendFollowCancelGeneration: vi.fn(),

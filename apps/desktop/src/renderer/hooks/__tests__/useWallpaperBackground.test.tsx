@@ -5,7 +5,6 @@ import { useWallpaperBackground } from '../useWallpaperBackground';
 
 const initial = {
   background: 'url("first.webp")' as string | undefined,
-  pending: false,
   visibility: 0.5,
   blur: 0,
   reducedMotion: false,
@@ -25,18 +24,18 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-// Regression: pending/failed selections must not expose their thumbnail and
-// replace the old scene twice. Only the ready original starts the transition.
-it('holds the displayed image through loading and starts a fade when the original is ready', () => {
+// #8591: official selections must transition to their preview immediately,
+// then to the decoded original. Unit tier; real canvas hook, no network.
+it('fades to the selected preview and then to its ready original', () => {
   const { rerender } = renderHook(useWallpaperBackground, { initialProps: initial });
-  rerender({ ...initial, background: 'url("thumbnail.webp")', pending: true });
-  expect(image()).toBe(initial.background);
-  expect(previousImage()).toBe('');
+  rerender({ ...initial, background: 'url("thumbnail.webp")' });
+  expect(image()).toBe('url("thumbnail.webp")');
+  expect(previousImage()).toBe(initial.background);
   act(() => vi.advanceTimersByTime(1000));
-  expect(image()).toBe(initial.background);
+  expect(image()).toBe('url("thumbnail.webp")');
   rerender({ ...initial, background: 'url("original.webp")' });
   expect(image()).toBe('url("original.webp")');
-  expect(previousImage()).toBe(initial.background);
+  expect(previousImage()).toBe('url("thumbnail.webp")');
   expect(root.dataset.wallpaperTransition).toBe('true');
   act(() => vi.runAllTimers());
   expect(previousImage()).toBe('');

@@ -947,6 +947,8 @@ describe('BotGroupChatView', () => {
     for (const button of within(header).getAllByRole('button')) {
       await user.click(trigger);
       const panel = screen.getByRole('complementary');
+      // 键盘模态：pointer 交互之后的程序化焦点不再弹提示（见 tooltip.tsx）。
+      fireEvent.keyDown(document.body, { key: 'Tab' });
       button.focus();
       expect(panel.parentElement?.contains(button)).toBe(false);
       // Header icon buttons with a tooltip: its Escape closes the tooltip first.
@@ -2787,7 +2789,8 @@ describe('BotGroupChatView', () => {
       const card = await screen.findByTestId('bot-group-arrangement');
       expect(card.closest('article')).toBeNull();
       expect(card.textContent).not.toContain('bots.groupChat.plan.intro');
-      expect(card.textContent).toContain('bots.groupChat.plan.talkTurn');
+      expect(card.textContent).toContain('bots.groupChat.plan.talkTitle');
+      expect(card.textContent).toContain('bots.groupChat.plan.queueWaiting');
       expect(card.querySelectorAll('li')).toHaveLength(shown);
       expect(screen.getByTestId('bot-group-plan-follow-up')).toBeTruthy();
       const fold = screen.queryByTestId('bot-group-plan-fold');
@@ -2798,11 +2801,12 @@ describe('BotGroupChatView', () => {
       }
     });
 
-    // Only the creator, an owner or an admin may change who speaks next in a waiting queue.
-    it.each([[true, 1], [false, 0]] as const)('offers reassigning a waiting queue turn only to a manager (canManage=%s)', async (canManage, menus) => {
+    // A waiting talk queue supports skipping, not reassigning (Plans.action only reassigns proposed plans).
+    // Unit: the real card must send the pending position and enforce the projected management permission.
+    it.each([[true, 1], [false, 0]] as const)('offers skipping a waiting queue turn only to a manager (canManage=%s)', async (canManage, buttons) => {
       const base = plan().steps;
       const queue = plan({
-        status: 'waiting', currentStep: 0, kind: 'talk', canManage,
+        status: 'waiting', currentStep: 0, kind: 'talk', canManage, supportsPendingSkip: true,
         steps: [{ ...base[0]!, task: '', status: 'done' }, { ...base[1]!, task: '', status: 'pending' }],
       });
       mocks.getBotGroup.mockResolvedValue({ ok: true, group: withPlan(queue) });
@@ -2810,7 +2814,15 @@ describe('BotGroupChatView', () => {
       const card = await screen.findByTestId('bot-group-arrangement');
       const pending = within(card).getAllByTestId('bot-group-plan-step')[1]!;
       fireEvent.pointerDown(pending, { button: 0, ctrlKey: false });
-      expect(screen.queryAllByRole('menu')).toHaveLength(menus);
+      expect(screen.queryAllByRole('menu')).toHaveLength(0);
+      const skips = within(pending).queryAllByRole('button', { name: /bots\.groupChat\.plan\.skipTurnLabel/ });
+      expect(skips).toHaveLength(buttons);
+      if (skips[0]) {
+        fireEvent.click(skips[0]);
+        await waitFor(() => expect(mocks.editBotGroupPlanStep).toHaveBeenCalledWith({
+          groupId: 'g1', planId: 'p1', position: 1, action: 'skip', executionId: undefined,
+        }));
+      } else expect(mocks.editBotGroupPlanStep).not.toHaveBeenCalled();
     });
 
     it('offers the next step after a hand-off and opens its files inside the work directory', async () => {

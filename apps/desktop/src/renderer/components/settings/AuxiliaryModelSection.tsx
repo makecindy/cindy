@@ -1,3 +1,4 @@
+import { useAppSettingsRevision } from '@/hooks/useAppSettingsRevision';
 /** Settings → Personalization: one ordered chain for short auxiliary text. */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -26,6 +27,7 @@ const SLOT_I18N = ['preferred', 'fallback1', 'fallback2'] as const;
 type AuxiliaryModelMode = 'automatic' | 'custom';
 
 export function AuxiliaryModelSection() {
+  const settingsRevision = useAppSettingsRevision('auxiliary-models');
   const { t } = useTranslation();
   const { mode: authMode } = useAuth();
   const { providers } = useProviders();
@@ -50,7 +52,7 @@ export function AuxiliaryModelSection() {
     return () => {
       disposed = true;
     };
-  }, []);
+  }, [settingsRevision]);
 
   const persistModels = useCallback(
     async (models: string[]): Promise<boolean> => {

@@ -20,6 +20,14 @@ import {
 import { CongestionSendBudget } from './congestionSendBudget.js';
 import { PUSH_FORWARD_ALLOWLIST, REMOTE_INVOKE_ALLOWLIST } from './allowlist.js';
 import {
+  BACKLOG_WARN_BYTES,
+  BACKLOG_WARN_MESSAGES,
+  BacklogWarnLimiter,
+  backlogLabel,
+  isBacklogChannel,
+  summarizeBacklog,
+} from './transportBacklog.js';
+import {
   PROTOCOL_VERSION,
   MAX_FRAME_BYTES,
   SERVER_CAPABILITY_NOTIFY,
@@ -77,6 +85,7 @@ import { DIRECT_LINK_CAPABILITY, DIRECT_LINK_SIGNAL, PROVIDER_SHARE_DIRECT_CAPAB
 import { MAKER_EVENT_BATCH_CHANNEL } from './topics.js';
 import {
   DIRECT_PATH_HIGH_WATER_BYTES,
+  DIRECT_PATH_SIGNALING_GRACE_MS,
   PROVIDER_SHARE_DIRECT_LEASE_MS,
   type DeviceLinkDirectChannel,
   type DeviceLinkDirectCloseReason,
@@ -286,6 +295,8 @@ export interface DeviceLinkClientOptions {
   directRuntime?: DirectRuntime;
   /** Host executions/outbox can outlive transport admission; keep their direct peer alive. */
   isPeerBusy?(peer: string): boolean;
+  /** Preserve existing same-account RPC paths during bounded signaling loss. No offline admission. */
+  retainDirectPathsOnRelayLoss?: boolean;
   /** relay 的完整 ws(s) URL,如 wss://host/api/device-link/ws */
   getWsUrl(): string;
   /** 每次(重)连前取新鲜 token;null = 当前无登录态,跳过本轮并按退避重试 */
@@ -641,6 +652,8 @@ interface PendingReliableMessage {
     | 'direct-buffer';
   /** 最近一次物理写出走的路径；直连失效时据此把仍未确认的帧改走 relay。 */
   path?: DeviceLinkPeerPath;
+  /** Backlog label (kind + allowlisted channel), diagnostics only; see transportBacklog.ts. */
+  diagChannel?: string;
 }
 
 type ReliableSendPhase = 'down' | 'awaiting-confirm' | 'ready';
@@ -934,6 +947,9 @@ export class DeviceLinkClient {
   /** Bounded anonymous diagnostic identities, never credentials, SDP or addresses. */
   private readonly directDiagnostics = new Map<string, {
     logged: Partial<Record<DirectDiagnosticReason, number>>; hash: Promise<string>;
+  }>();
+  private readonly sameAccountDirectGrace = new Map<string, {
+    wallUntil: number; monotonicUntil: number; timer: ReturnType<typeof setTimeout>; peerOffline: boolean;
   }>();
   /** Relay-authenticated provider-share path leases never survive process/account replacement. */
   private readonly providerShareDirectLeases = new Map<string, {
@@ -1245,6 +1261,7 @@ export class DeviceLinkClient {
     this.messageReuse.clear();
     this.invokeResultCache.clear();
     this.inboundInvokeTransfer.clear();
+    this.inboundInvokeChannels.clear();
     if (this.stopped) return;
     this.stopped = true;
     this.directDiagnostics.clear();
@@ -1306,9 +1323,9 @@ export class DeviceLinkClient {
     return !!peer?.reliable && !this.isPeerSendReady(peer);
   }
 
-  /** Mirror admission only: listing-only/legacy peers need no bidirectional link. */
+  /** Mirror admission uses the existing authorized path; reliable peers still need send readiness. */
   canSendPush(dst: string): boolean {
-    if (this.status !== 'online') return false;
+    if (this.status !== 'online' && !this.hasOfflineDirectPath(dst)) return false;
     const peer = this.peerTransport.get(dst);
     return !peer || !peer.reliable || this.isPeerSendReady(peer);
   }
@@ -1440,8 +1457,48 @@ export class DeviceLinkClient {
 
   /** Existing, leased data path usable while the relay is reconnecting. */
   hasOfflineDirectPath(deviceId: string): boolean {
-    return !!this.usableDirectPath(deviceId) && isProviderSharePeer(deviceId)
-      && this.isLinkReady(deviceId);
+    return !!this.usableDirectPath(deviceId) && this.isLinkReady(deviceId)
+      && (isProviderSharePeer(deviceId) || this.hasSameAccountDirectGrace(deviceId));
+  }
+
+  /** Repeated signaling loss cannot renew the original deadline. */
+  private retainDirectPathOnSignalingLoss(deviceId: string, peerOffline = false): boolean {
+    if (this.hasOfflineDirectPath(deviceId)) {
+      const grace = this.sameAccountDirectGrace.get(deviceId);
+      if (grace && peerOffline) grace.peerOffline = true;
+      return true;
+    }
+    if (!this.opts.retainDirectPathsOnRelayLoss || isScopedPeer(deviceId) || this.stopped
+      || !this.usableDirectPath(deviceId) || !this.isLinkReady(deviceId)) return false;
+    const wallUntil = Date.now() + DIRECT_PATH_SIGNALING_GRACE_MS;
+    const monotonicUntil = this.monotonicNow() + DIRECT_PATH_SIGNALING_GRACE_MS;
+    const timer = setTimeout(() => this.expireSameAccountDirectGrace(deviceId), DIRECT_PATH_SIGNALING_GRACE_MS);
+    (timer as { unref?: () => void }).unref?.();
+    this.sameAccountDirectGrace.set(deviceId, { wallUntil, monotonicUntil, timer, peerOffline });
+    return true;
+  }
+
+  private hasSameAccountDirectGrace(deviceId: string): boolean {
+    const grace = this.sameAccountDirectGrace.get(deviceId);
+    if (!grace) return false;
+    if (Date.now() < grace.wallUntil && this.monotonicNow() < grace.monotonicUntil) return true;
+    this.expireSameAccountDirectGrace(deviceId);
+    return false;
+  }
+
+  private clearSameAccountDirectGrace(deviceId: string): void {
+    const grace = this.sameAccountDirectGrace.get(deviceId);
+    if (grace) clearTimeout(grace.timer);
+    this.sameAccountDirectGrace.delete(deviceId);
+  }
+
+  private expireSameAccountDirectGrace(deviceId: string): void {
+    if (!this.sameAccountDirectGrace.has(deviceId)) return;
+    this.clearSameAccountDirectGrace(deviceId);
+    this.invokeScheduler.cancel(deviceId, new DeviceLinkError('NOT_CONNECTED', 'direct signaling grace expired'));
+    const peer = this.peerTransport.get(deviceId);
+    if (peer) this.markPeerLinkDown(peer);
+    this.notifyPeerRouteOffline(deviceId, this.getPeerLinkGeneration(deviceId));
   }
 
   private hasProviderShareDirectLease(deviceId: string): boolean {
@@ -1454,6 +1511,7 @@ export class DeviceLinkClient {
   }
 
   private usableDirectPath(deviceId: string): DeviceLinkDirectChannel | null {
+    if (this.sameAccountDirectGrace.has(deviceId) && !this.hasSameAccountDirectGrace(deviceId)) return null;
     if (isScopedPeer(deviceId) && !this.hasProviderShareDirectLease(deviceId)) return null;
     return this.directPaths.get(deviceId) ?? null;
   }
@@ -2171,9 +2229,9 @@ export class DeviceLinkClient {
   }
 
   private failNonReliablePending(err: DeviceLinkError): void {
-    this.invokeScheduler.clear(err);
+    this.invokeScheduler.clear(err, dst => this.hasOfflineDirectPath(dst));
     for (const [id, pending] of this.pending) {
-      if (pending.reliableDst && pending.hasWritten()) continue;
+      if (pending.reliableDst && (pending.hasWritten() || this.hasOfflineDirectPath(pending.reliableDst))) continue;
       this.pending.delete(id);
       if (pending.reliableDst) this.dropReliablePendingForRequest(pending.reliableDst, id);
       pending.reject(err);
@@ -2388,7 +2446,7 @@ export class DeviceLinkClient {
    * 若跳过这段,旧收发 ready 会让 host 侧误以为 link 仍在、跳过 openLink,
    * 随后用旧 stream 在新 socket 上发帧被对端当未建链帧丢弃(review P2)。
    */
-  private resetLinkStateForReconnect(): void {
+  private resetLinkStateForReconnect(allowOrdinaryDirectGrace = true): void {
     // hello 会从 host 读取完整最新状态；旧连接上尚未发出的覆盖型 patch 不跨世代重放。
     this.clearPendingPresence();
     // 旧 socket 的 relay-error 已被 connection epoch 守卫隔离，不可能再合法到达；
@@ -2397,8 +2455,10 @@ export class DeviceLinkClient {
     this.settledOutboundRouteGenerationByPeer.clear();
     this.providerShareSignalRouteIds.clear();
     for (const [deviceId, peer] of this.peerTransport) {
-      // An authenticated direct provider-share path has an independent, bounded lease.
-      if (this.hasOfflineDirectPath(deviceId)) continue;
+      // Scoped share leases remain independent. Ordinary paths only retain
+      // transient signaling loss, never an explicit identity/auth rejection.
+      if ((allowOrdinaryDirectGrace || isProviderSharePeer(deviceId))
+        && this.retainDirectPathOnSignalingLoss(deviceId)) continue;
       this.markPeerLinkDown(peer);
       peer.recoveryNeedsAck = true;
       peer.recoveryFramesSent = 0;
@@ -2423,7 +2483,9 @@ export class DeviceLinkClient {
     this.onlineSinceAt = null;
     this.clearTimers();
     this.ws = null;
-    this.resetLinkStateForReconnect();
+    const kind = classifyConnectionIssue(code, reason, this.lastSocketErrorMessage);
+    this.resetLinkStateForReconnect(kind !== 'auth-failed' && kind !== 'device-removed'
+      && kind !== 'replaced' && kind !== 'version-mismatch');
     this.failNonReliablePending(new DeviceLinkError('NOT_CONNECTED', 'relay connection lost'));
     if (this.stopped) return;
     if (code === 4410) {
@@ -2444,7 +2506,6 @@ export class DeviceLinkClient {
     }
     // 可分类的失败(鉴权/顶号/超限/版本)记为 issue 供 UI 展示原因;普通断线
     // 不产生也不清除 issue —— 401 重连风暴里穿插的网络失败不该把原因洗掉。
-    const kind = classifyConnectionIssue(code, reason, this.lastSocketErrorMessage);
     if (kind) {
       this.setConnectionIssue({
         kind,
@@ -2873,8 +2934,12 @@ export class DeviceLinkClient {
         return true;
       case 'presence-changed': {
         const snap = env.payload as PresenceSnapshot;
-        // 在线与账号归属以 relay 为准：对端离开 relay(含被移出账号)即撤下直连。
-        if (snap.online === false) this.detachDirectPath(snap.deviceId, 'peer-offline');
+        // A missing signaling route is not proof that the authenticated data path died.
+        if (snap.online === false) {
+          if (!this.retainDirectPathOnSignalingLoss(snap.deviceId, true)) this.detachDirectPath(snap.deviceId, 'peer-offline');
+        } else {
+          this.clearSameAccountDirectGrace(snap.deviceId);
+        }
         for (const cb of this.presenceHandlers) {
           try {
             cb(snap);
@@ -2958,10 +3023,6 @@ export class DeviceLinkClient {
           this.discardOutboundRouteAttemptsForId(payload.dst, env.id);
           return true;
         }
-        const terminalRouteFailure = (
-          payload.code === 'DEVICE_OFFLINE'
-          || payload.code === 'REMOTE_DISABLED'
-        );
         const pending = env.id ? this.pending.get(env.id) : undefined;
         if (pending && ((payload.dst !== undefined && payload.dst !== pending.dst)
           || (isSharedTaskPeer(pending.dst) && env.sharedTask === undefined)
@@ -2988,10 +3049,14 @@ export class DeviceLinkClient {
             releasedOrSettledRouteError
             || routeLinkGeneration < this.getPeerLinkGeneration(routeDeviceId)
           );
+        const retainedDirectRoute = payload.code === 'DEVICE_OFFLINE' && !!routeDeviceId
+          && !isScopedPeer(routeDeviceId) && !stalePeerRouteError && this.retainDirectPathOnSignalingLoss(routeDeviceId, true);
+        const terminalRouteFailure = payload.code === 'REMOTE_DISABLED'
+          || (payload.code === 'DEVICE_OFFLINE' && !retainedDirectRoute);
         // DEVICE_OFFLINE is a peer route transition, not merely a rejected
         // request. Emit it before the pending fast path so the host cannot
         // miss it when the relay error is paired with an in-flight request.
-        if (payload.code === 'DEVICE_OFFLINE' && routeDeviceId && !releasedOrSettledRouteError) {
+        if (payload.code === 'DEVICE_OFFLINE' && routeDeviceId && !releasedOrSettledRouteError && !retainedDirectRoute) {
           this.notifyPeerRouteOffline(routeDeviceId, routeLinkGeneration);
         }
         // 同一个可靠 invoke 会在 peer link 重开后用原 request id 重放。旧代物理发送的
@@ -3412,6 +3477,30 @@ export class DeviceLinkClient {
   private readonly messageReuse = new SessionMessageReuse();
   private readonly invokeResultCache: InvokeResultCache;
   private readonly inboundInvokeTransfer = new InboundInvokeTransferOptions();
+  /** Channel of each recent inbound invoke, so a queued reply can be labelled. Diagnostics only. */
+  private readonly inboundInvokeChannels = new Map<string, string>();
+  private readonly backlogWarnings = new BacklogWarnLimiter();
+
+  private rememberInboundInvokeChannel(env: Envelope): void {
+    const channel = (env.payload as { channel?: unknown } | undefined)?.channel;
+    // Peer-supplied text: keep only registered channels and normal-length ids, so
+    // retained bytes stay bounded. Anything else is labelled result:unknown anyway.
+    if (!isBacklogChannel(channel) || !env.src || !env.id || env.id.length > 128) return;
+    const key = `${env.src}\u0000${env.id}`;
+    this.inboundInvokeChannels.delete(key);
+    this.inboundInvokeChannels.set(key, channel);
+    while (this.inboundInvokeChannels.size > 512) {
+      this.inboundInvokeChannels.delete(this.inboundInvokeChannels.keys().next().value!);
+    }
+  }
+
+  /** Name what fills a peer's reliable queue; rate-limited, never changes sending. */
+  private warnSendBacklog(dst: string, peer: PeerTransportState, reason: 'high' | 'full'): void {
+    if (reason === 'high' && peer.pending.size < BACKLOG_WARN_MESSAGES && peer.pendingBytes < BACKLOG_WARN_BYTES) return;
+    // "full" keeps its own window: a recent "high" warning must not hide the overflow.
+    if (!this.backlogWarnings.shouldWarn(`${reason}\u0000${dst}`, this.monotonicNow())) return;
+    this.log.warn(summarizeBacklog(dst, this.peerTransport, reason));
+  }
 
   private emitFrame(env: Envelope): boolean | Promise<boolean> {
     if (env.kind === 'push' && (env.payload as { channel?: string })?.channel === DIRECT_LINK_SIGNAL) {
@@ -3422,6 +3511,7 @@ export class DeviceLinkClient {
       return true;
     }
     if (env.src) this.directNegotiator?.activity(env.src);
+    if (env.kind === 'invoke') this.rememberInboundInvokeChannel(env);
     if (env.kind === 'invoke' && env.src && env.id && !isScopedPeer(env.src)) {
       this.inboundInvokeTransfer.record(env.src, env.id, env.payload);
     }
@@ -3525,6 +3615,7 @@ export class DeviceLinkClient {
       && peer.receiveReady
       && peer.remoteStreamId === streamId
       && peer.receive.get(streamId) === stream
+      && (!this.sameAccountDirectGrace.has(src) || this.hasSameAccountDirectGrace(src))
     );
   }
 
@@ -3632,6 +3723,7 @@ export class DeviceLinkClient {
       }
     }
     if (!hasPendingCapacity()) {
+      this.warnSendBacklog(env.dst, peer, 'full');
       throw new DeviceLinkError(
         'BACKPRESSURE',
         `reliable transport buffer is full for peer ${env.dst.slice(0, 8)}`,
@@ -3651,10 +3743,15 @@ export class DeviceLinkClient {
       lastBlockedBy: willSendNow ? undefined : !this.isPeerSendReady(peer) ? 'link'
         : this.isOutsideReceiveWindow(peer, seq) ? 'receive-window'
         : this.shouldHoldRecoverySend(peer, additionalFrames) ? 'recovery-ack' : 'relay-budget',
+      diagChannel: backlogLabel(
+        routedEnv,
+        routedEnv.kind === 'invoke-result' && env.id ? this.inboundInvokeChannels.get(`${env.dst}\u0000${env.id}`) : undefined,
+      ),
     };
     peer.pending.set(seq, pending);
     peer.pendingBytes += reservedBytes;
     peer.nextSeq = seq + 1;
+    this.warnSendBacklog(env.dst, peer, 'high');
     if (willSendNow) {
       try {
         const sentFrames = this.sendReliableFrames(peer, pending);
@@ -3890,6 +3987,11 @@ export class DeviceLinkClient {
     const channel = this.directPaths.get(deviceId);
     if (!channel) return;
     this.directPaths.delete(deviceId);
+    const grace = this.sameAccountDirectGrace.get(deviceId);
+    // A local hello-ack may restore relay delivery without a fresh peer presence
+    // or handshake. Permit that fallback, but keep a known-offline peer closed.
+    const signalingLost = !!grace && (this.status !== 'online' || grace.peerOffline);
+    this.clearSameAccountDirectGrace(deviceId);
     this.closeDirectChannel(deviceId, channel, reason);
     const peer = this.peerTransport.get(deviceId);
     let resent = 0;
@@ -3912,6 +4014,11 @@ export class DeviceLinkClient {
     if (reason === 'ack-timeout' || reason === 'buffer-timeout' || reason === 'send-failed') this.log.warn(message);
     else this.log.info(message);
     this.emitPeerPathChanged({ deviceId, path: 'relay', reason, ...(resent > 0 ? { resent } : {}) });
+    if (signalingLost) {
+      this.invokeScheduler.cancel(deviceId, new DeviceLinkError('NOT_CONNECTED', 'direct path lost during signaling outage'));
+      if (peer) this.markPeerLinkDown(peer);
+      this.notifyPeerRouteOffline(deviceId, this.getPeerLinkGeneration(deviceId));
+    }
     if (resent === 0) return;
     // 调用方可能正处于 retryPending / sendPeerEnvelope 中：下一个微任务再重放，避免重入。
     // 只补发仍未发送的：调用方当轮已经改走 relay 发出的帧不再复制一份。
@@ -3953,6 +4060,7 @@ export class DeviceLinkClient {
    */
   private handleDirectFrame(deviceId: string, text: string): void {
     if (this.stopped) return;
+    if (this.sameAccountDirectGrace.has(deviceId) && !this.hasSameAccountDirectGrace(deviceId)) return;
     const self = this.selfDeviceId;
     const sharePeer = parseProviderSharePeer(deviceId);
     const localAddress = sharePeer && this.hasProviderShareDirectLease(deviceId)
@@ -4496,6 +4604,7 @@ export class DeviceLinkClient {
 
   private markPeerLinkDown(peer: PeerTransportState): void {
     for (const [id, state] of this.peerTransport) if (state === peer) {
+      this.clearSameAccountDirectGrace(id);
       this.detachDirectPath(id, 'link-closed');
       this.clearProviderShareDirectLease(id);
       this.providerShareLocalAddresses.delete(id);
@@ -4641,6 +4750,7 @@ export class DeviceLinkClient {
     source: 'inbound-open' | 'outbound-accept' = 'inbound-open',
   ): void {
     const peer = this.getPeerTransport(dst);
+    this.clearSameAccountDirectGrace(dst);
     if (source === 'outbound-accept') peer.supportsGithubRead = capabilities?.includes(DEVICE_LINK_CAPABILITY_GITHUB_READ_V1) === true;
     if (this.directNegotiator && capabilities?.includes(DIRECT_LINK_CAPABILITY)
       && (!isScopedPeer(dst) || (isProviderSharePeer(dst)
@@ -4745,17 +4855,21 @@ export class DeviceLinkClient {
     ackSeq: number,
     linkRequestId?: string,
   ): boolean {
-    const pendingConfirmation = this.peerTransport.get(dst)?.outboundLinkConfirmationAck;
+    const peer = this.peerTransport.get(dst);
+    // Explicit handshake confirmations remain relay-only. Once data arrives on
+    // the authenticated direct stream, its ordinary cumulative ACK must return
+    // there too; retained handshake retry metadata must not force it onto relay.
+    const direct = !linkRequestId && peer?.lastInboundPath === 'direct'
+      ? this.usableDirectPath(dst)
+      : undefined;
+    const pendingConfirmation = peer?.outboundLinkConfirmationAck;
     const effectiveLinkRequestId = linkRequestId ?? (
-      pendingConfirmation?.streamId === streamId
+      !direct && pendingConfirmation?.streamId === streamId
         ? pendingConfirmation.requestId
         : undefined
     );
     const ack = makeTransportAck(dst, streamId, ackSeq, effectiveLinkRequestId);
     // 累计 ACK 原路返回；链路确认 ACK 属于控制面，始终走 relay。
-    const direct = !effectiveLinkRequestId && this.peerTransport.get(dst)?.lastInboundPath === 'direct'
-      ? this.usableDirectPath(dst)
-      : undefined;
     if (direct) {
       try {
         direct.send(JSON.stringify(ack));
@@ -5829,6 +5943,7 @@ export class DeviceLinkClient {
   }
 
   private clearPeerTransport(): void {
+    for (const id of this.sameAccountDirectGrace.keys()) this.clearSameAccountDirectGrace(id);
     this.directNegotiator?.clear();
     this.directPeerSupport.clear();
     for (const id of this.providerShareDirectLeases.keys()) this.clearProviderShareDirectLease(id);
@@ -6004,9 +6119,12 @@ function isValidInboundEnvelope(value: Envelope): boolean {
       if (parsed.meta.segment) return true;
       try {
         const inner = decodeTransportJson(parsed.data);
-        return isRecord(inner)
+        // A cancelled request occupies its original sequence with a protocol
+        // skip. Direct ingress must admit it just like relay transport does,
+        // otherwise later group RPCs wait forever behind the missing sequence.
+        return isTransportSkipPayload(inner) || (isRecord(inner)
           && typeof inner.channel === 'string'
-          && Array.isArray(inner.args);
+          && Array.isArray(inner.args));
       } catch {
         return false;
       }
