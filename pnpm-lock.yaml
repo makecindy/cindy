@@ -663,6 +663,9 @@ importers:
       better-sqlite3:
         specifier: ^12.9.0
         version: 12.11.1
+      node-machine-id:
+        specifier: ^1.1.12
+        version: 1.1.12
     devDependencies:
       tsx:
         specifier: ^4.19.0
