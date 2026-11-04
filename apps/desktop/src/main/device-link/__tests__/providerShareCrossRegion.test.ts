@@ -121,7 +121,7 @@ import {
 } from '../providerShareCrossRegion';
 import { providerShareHostPeer } from '@cindy/device-link';
 import { sha256Hex } from '../providerShareApi';
-import { captureProviderShareGroupRecovery, getReceivedSharesSnapshot, isReceivedSharesReady, previewProviderShare, refreshReceivedShares, resolveRemoteAgentTargetWhenReady, sendProviderShareRequest, startProviderShareGuest, stopProviderShareGuest } from '../providerShareGuest';
+import { captureProviderShareGroupRecovery, getConfirmedReceivedShareIds, getReceivedSharesSnapshot, onProviderShareReceivedChanged, isReceivedSharesReady, previewProviderShare, refreshReceivedShares, resolveRemoteAgentTargetWhenReady, sendProviderShareRequest, startProviderShareGuest, stopProviderShareGuest } from '../providerShareGuest';
 import { createProviderGroupRemoteClient } from '../../provider-group/remoteClient';
 
 const share = {
@@ -226,19 +226,45 @@ describe('cross-region provider share', () => {
   // 2026-11-04: the received list is polled every minute and every poll notified,
   // even when nothing changed. Each notification is pushed to every controlling
   // computer as a model catalog change, so they re-read capabilities every minute.
-  it('notifies received-share listeners only when the list or its confirmation changes', async () => {
+  it('emits the outward change only when the list or its confirmation changes, keeping local cleanup every poll', async () => {
     const changed = vi.fn();
-    startProviderShareGuest({ changed, settled: vi.fn() });
+    // Provider-group cleanup relies on every poll to retry a failed removal (PR #8814 review).
+    const groupCleanup = vi.fn();
+    const offCleanup = onProviderShareReceivedChanged(groupCleanup);
+    try {
+      startProviderShareGuest({ changed, settled: vi.fn() });
+      await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+      await refreshReceivedShares('poll');
+      await refreshReceivedShares('poll');
+      expect(changed).toHaveBeenCalledOnce();
+      expect(groupCleanup).toHaveBeenCalledTimes(3);
+      state.localHasGroupShare = true;
+      await refreshReceivedShares('poll');
+      expect(changed).toHaveBeenCalledTimes(2);
+      expect(changed.mock.lastCall?.[0]).toHaveLength(2);
+    } finally {
+      offCleanup();
+      stopProviderShareGuest();
+    }
+  });
+
+  // PR #8814 review: with the list unchanged, the other region confirming its (empty)
+  // membership still changes what listeners may trust and must be emitted once.
+  it('emits once when only the cross-region confirmation completes', async () => {
+    const changed = vi.fn();
+    const peer = deferred<unknown>();
+    state.responses.set('/session', peer.promise);
+    startProviderShareGuest({ changed, settled: vi.fn() }, { userDataDir: dir });
+    const crossRegion = refreshProviderShareCrossRegion('global');
     await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
-    await refreshReceivedShares('poll');
-    await refreshReceivedShares('poll');
-    expect(state.localReceivedReads).toBeGreaterThanOrEqual(3);
-    expect(changed).toHaveBeenCalledOnce();
-    state.localHasGroupShare = true;
+    expect(getConfirmedReceivedShareIds()).toBeNull();
+    peer.resolve({ credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [] });
+    await crossRegion;
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(2));
+    expect(changed.mock.lastCall?.[0]).toHaveLength(1);
+    expect(getConfirmedReceivedShareIds()).not.toBeNull();
     await refreshReceivedShares('poll');
     expect(changed).toHaveBeenCalledTimes(2);
-    expect(changed.mock.lastCall?.[0]).toHaveLength(2);
-    stopProviderShareGuest();
   });
 
   it('automatically discovers a first share accepted on another computer after an empty startup', async () => {

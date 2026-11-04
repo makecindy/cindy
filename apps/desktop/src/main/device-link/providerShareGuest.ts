@@ -97,10 +97,10 @@ let runtime: Runtime | null = null;
 let receivedRevision = 0;
 let receivedFingerprint = '';
 /**
- * What listeners last heard: the list plus whether it is confirmed. The list is polled
- * every minute; an unchanged poll must not notify, because each notification is also
- * pushed to every controlling computer as a model catalog change and makes them
- * re-read capabilities and agent rosters.
+ * What the outward `changed` event last carried: the list plus whether it is confirmed.
+ * The list is polled every minute; an unchanged poll must not emit it, because each
+ * one is also pushed to every controlling computer as a model catalog change and makes
+ * them re-read capabilities and agent rosters. Local cleanup still runs every poll.
  */
 let notifiedFingerprint = '';
 /** 用于只读分享投影的在途校验；暂停后恢复也不能复用旧回包。 */
@@ -135,13 +135,16 @@ function emitChanged(rt: Runtime): Promise<void> | void {
   const fingerprint = JSON.stringify(received);
   if (fingerprint !== receivedFingerprint) { receivedFingerprint = fingerprint; receivedRevision++; }
   const notified = JSON.stringify([fingerprint, confirmedRegions(rt), isCrossRegionReceivedComplete()]);
-  if (notified === notifiedFingerprint) return;
-  notifiedFingerprint = notified;
   // 分享被分享者删除后，它在这台电脑上的本机偏好一起清掉；还没加载的区域不动。
   const pruning = pruneProviderShareGuestPrefs(new Set(received.map((share) => share.shareId)), confirmedRegions(rt));
   const notify = () => {
     if (!current(rt)) return;
-    rt.events.changed(received);
+    // Pref and provider-group cleanup above and below retry on every poll; only the
+    // outward event is skipped when nothing it carries has changed.
+    if (notified !== notifiedFingerprint) {
+      notifiedFingerprint = notified;
+      rt.events.changed(received);
+    }
     for (const listener of receivedListeners) {
       try {
         listener();
