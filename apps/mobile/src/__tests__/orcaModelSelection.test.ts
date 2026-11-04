@@ -30,7 +30,7 @@ function visit(node: ts.Node) {
 visit(source);
 
 function setup(orcaRole: 'lead' | 'worker' | null, supported = true, agentDeviceId: string | null = null,
-  windowState: { agent?: string; used?: number; current?: number; target?: number; hostGuard?: boolean; relocation?: boolean } = {}) {
+  windowState: { agent?: string; used?: number; current?: number; target?: number; hostGuard?: boolean; relocation?: boolean; relocateTo?: string | null } = {}) {
   const selection = { model: 'new-model', providerId: 'provider', effort: 'high', fastMode: true };
   const write = vi.fn(async (_intent: unknown) => true);
   const setModel = vi.fn(async () => true);
@@ -55,7 +55,11 @@ function setup(orcaRole: 'lead' | 'worker' | null, supported = true, agentDevice
     maker: { getCapabilities: vi.fn(), setEffort: vi.fn(), setFastMode: vi.fn() },
     executionMakerForDevice: vi.fn((_id: string) => ({ getCapabilities: remoteCapabilities })),
     isProviderShareAgentDeviceId: (id: unknown) => typeof id === 'string' && id.startsWith('share:'),
-    confirmAgentLocationForPick, intentChangesAgentLocation: () => false,
+    // relocateTo:模拟用户已在换电脑确认框里点了确认。
+    confirmAgentLocationForPick: windowState.relocateTo !== undefined
+      ? vi.fn(async () => ({ agentDeviceId: windowState.relocateTo }))
+      : confirmAgentLocationForPick,
+    intentChangesAgentLocation: () => false,
     confirmMobileSessionAgentSwitch: vi.fn(async () => true),
     shouldBlockLegacyRemoteModelWindowSwitch, showRemoteModelWindowUnsupported: vi.fn(),
     writeSessionAgentSwitchIntent: write, setComposerModel: setModel, runControlAction,
@@ -127,6 +131,17 @@ describe('Orca model-only selection', () => {
           }
         }
       }
+    }
+  });
+
+  it.each(['lead', 'worker'] as const)('does not apply the in-place window guard when %s moves to another computer', async role => {
+    // 换电脑在新位置重建会话再交接：已用 240k 也能换到另一台的 200k 模型。
+    for (const [name, input] of picks) {
+      const h = setup(role, true, null, { used: 240000, current: 1000000, relocation: true, relocateTo: 'other' });
+      await h.handlers[name](input, ...(name === 'selectUnifiedComposerModel' ? [{ deviceId: 'other' }] : []));
+      await vi.waitFor(() => expect(h.write).toHaveBeenCalledTimes(1));
+      expect(h.write.mock.calls[0][0]).toMatchObject({ agentDeviceId: 'other' });
+      expect(h.bindings.showRemoteModelWindowUnsupported).not.toHaveBeenCalled();
     }
   });
 
