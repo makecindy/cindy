@@ -1,4 +1,15 @@
 {
+  "pluginUi": {
+    "renderer": "Visualización",
+    "original": "Original",
+    "unavailable": "Los controles del complemento no están disponibles. Las acciones están desactivadas.",
+    "outcome-unknown": "El resultado no está confirmado. Consulta el estado actual del complemento.",
+    "rejected": "El complemento no ejecutó esta acción. Se conserva lo que escribiste.",
+    "draftChanged": "La entrada cambió. No se aplicó la modificación del complemento.",
+    "editorUnavailable": "Este campo no está disponible. No se aplicó la modificación del complemento.",
+    "more": "Más",
+    "close": "Cerrar"
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "Actualizar cuota",
@@ -7777,6 +7788,8 @@
         "skill": "Agrega la habilidad \"{{name}}\" a tus asistentes de IA",
         "skillDetail": "Una habilidad es un archivo de instrucciones que la IA carga y sigue como propio, con todos sus permisos, en Claude Code y Codex, en todos los proyectos; no se limita al entorno limitado de este complemento. Permanece disponible mientras el complemento está habilitado y se elimina cuando el complemento se deshabilita o desinstala; desactivar el complemento para una sola carpeta no lo oculta. No se puede obtener una vista previa del texto completo de la habilidad aquí; solo instale complementos en los que confíe.",
         "routineEvents": "Eventos de rutina",
+        "nativeUi": "Añadir controles a las tareas",
+        "nativeTabView": "Abrir la vista «{{title}}»",
         "mcpUi": "Mostrar páginas interactivas en la conversación",
         "mcpUiDomains": "Dominios de red de las páginas: {{domains}}",
         "mcpAppOnly": "Solo página",

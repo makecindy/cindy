@@ -1,4 +1,15 @@
 {
+  "pluginUi": {
+    "renderer": "顯示方式",
+    "original": "原始內容",
+    "unavailable": "插件介面暫時無法使用，目前操作已停用。",
+    "outcome-unknown": "插件操作結果尚未確認，請查看最新狀態。",
+    "rejected": "插件未執行這次操作，目前內容已保留。",
+    "draftChanged": "輸入已變更，未套用插件的輸入修改。",
+    "editorUnavailable": "目前輸入框無法使用，未套用插件的輸入修改。",
+    "more": "更多",
+    "close": "關閉"
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "重新整理配額",
@@ -7667,6 +7678,8 @@
         "skill": "為 AI 助手新增技能「{{name}}」",
         "skillDetail": "技能是一份指令檔案，AI 會把它當作自己的指令載入執行，擁有你的全部權限，對 Claude Code 與 Codex、所有專案都生效——不受本插件沙箱約束。插件啟用期間持續可用，停用或解除安裝即移除；僅對某個資料夾關閉本插件不會隱藏它。此處無法預覽技能全文——請只安裝你信任的插件。",
         "routineEvents": "例行任務事件",
+        "nativeUi": "在任務中加入控制項",
+        "nativeTabView": "可開啟獨立檢視「{{title}}」",
         "mcpUi": "可在對話中顯示互動頁面",
         "mcpUiDomains": "頁面可連線網域：{{domains}}",
         "mcpAppOnly": "僅頁面可用",

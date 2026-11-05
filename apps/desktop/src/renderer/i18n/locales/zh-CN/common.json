@@ -1,4 +1,15 @@
 {
+  "pluginUi": {
+    "renderer": "显示方式",
+    "original": "原始内容",
+    "unavailable": "插件界面暂不可用，当前操作已停用。",
+    "outcome-unknown": "插件操作结果尚未确认，请查看最新状态。",
+    "rejected": "插件未执行这次操作，当前内容已保留。",
+    "draftChanged": "输入已改变，插件的输入修改未应用。",
+    "editorUnavailable": "当前输入框不可用，插件的输入修改未应用。",
+    "more": "更多",
+    "close": "关闭"
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "刷新配额",
@@ -7667,6 +7678,8 @@
         "skill": "为 AI 助手添加技能「{{name}}」",
         "skillDetail": "技能是一份指令文件，AI 会把它当作自己的指令加载执行，拥有你的全部权限，对 Claude Code 与 Codex、所有项目都生效——不受本插件沙箱约束。插件启用期间持续可用，停用或卸载即移除；仅对某个文件夹关闭本插件不会隐藏它。此处无法预览技能全文——请只安装你信任的插件。",
         "routineEvents": "例行任务事件",
+        "nativeUi": "在任务中添加控件",
+        "nativeTabView": "可打开独立视图「{{title}}」",
         "mcpUi": "可在对话中显示交互页面",
         "mcpUiDomains": "页面可连接域名：{{domains}}",
         "mcpAppOnly": "仅页面可用",

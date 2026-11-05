@@ -1,4 +1,15 @@
 {
+  "pluginUi": {
+    "renderer": "Display",
+    "original": "Original",
+    "unavailable": "Plugin controls are unavailable. Actions are disabled.",
+    "outcome-unknown": "The result is unconfirmed. Check the plugin’s latest state.",
+    "rejected": "The plugin did not apply this action. Your input is retained.",
+    "draftChanged": "Your input changed. The plugin’s draft edit was not applied.",
+    "editorUnavailable": "This input is unavailable. The plugin’s draft edit was not applied.",
+    "more": "More",
+    "close": "Close"
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "Refresh quota",
@@ -7710,6 +7721,8 @@
         "skill": "Adds the skill \"{{name}}\" to your AI assistants",
         "skillDetail": "A skill is an instruction file the AI loads and follows as its own, with your full permissions, in Claude Code and Codex, across every project — it is not confined to this plugin's sandbox. It stays available while the plugin is enabled and is removed when the plugin is disabled or uninstalled; turning the plugin off for a single folder does not hide it. The full skill text cannot be previewed here — only install plugins you trust.",
         "routineEvents": "Routine Events",
+        "nativeUi": "Add Controls to Tasks",
+        "nativeTabView": "Open the “{{title}}” view",
         "mcpUi": "Display interactive pages in the conversation",
         "mcpUiDomains": "Page network domains: {{domains}}",
         "mcpAppOnly": "Page only",

@@ -1,4 +1,15 @@
 {
+  "pluginUi": {
+    "renderer": "Darstellung",
+    "original": "Original",
+    "unavailable": "Die Plugin-Steuerelemente sind nicht verfügbar. Aktionen sind deaktiviert.",
+    "outcome-unknown": "Das Ergebnis ist unbestätigt. Prüfe den aktuellen Zustand des Plugins.",
+    "rejected": "Das Plugin hat diese Aktion nicht ausgeführt. Deine Eingabe bleibt erhalten.",
+    "draftChanged": "Deine Eingabe hat sich geändert. Die Änderung des Plugins wurde nicht übernommen.",
+    "editorUnavailable": "Dieses Eingabefeld ist nicht verfügbar. Die Änderung des Plugins wurde nicht übernommen.",
+    "more": "Mehr",
+    "close": "Schließen"
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "Kontingent aktualisieren",
@@ -7710,6 +7721,8 @@
         "skill": "Fügt deinen KI-Assistenten den Skill „{{name}}“ hinzu",
         "skillDetail": "Ein Skill ist eine Anweisungsdatei, die die KI in Claude Code und Codex projektübergreifend lädt und wie eigene Anweisungen mit deinen vollen Berechtigungen befolgt – sie ist nicht auf die Sandbox dieses Plugins beschränkt. Der Skill bleibt verfügbar, solange das Plugin aktiviert ist, und wird beim Deaktivieren oder Deinstallieren entfernt. Wenn du das Plugin nur für einen einzelnen Ordner ausschaltest, wird der Skill nicht ausgeblendet. Der vollständige Skill-Text kann hier nicht als Vorschau angezeigt werden – installiere nur Plugins, denen du vertraust.",
         "routineEvents": "Routineereignisse",
+        "nativeUi": "Steuerelemente zu Aufgaben hinzufügen",
+        "nativeTabView": "Ansicht „{{title}}“ öffnen",
         "mcpUi": "Interaktive Seiten in der Unterhaltung anzeigen",
         "mcpUiDomains": "Netzwerkdomains der Seiten: {{domains}}",
         "mcpAppOnly": "Nur Seite",
