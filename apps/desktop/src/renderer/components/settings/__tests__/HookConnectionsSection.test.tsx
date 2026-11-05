@@ -336,7 +336,13 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     const row = { teamId: 'T1', teamName: 'Workspace', slackUserId: 'U1', slackUserName: 'tester', displaced: true, communicationsEnabled: enabled };
     const view: SlackHookView = { ...BASE_HOOK, enabled: true, status: 'connected', serverMultiTeam: true, serverSlackCommunications: true, bindings: [row] };
     ipc.get.mockResolvedValue({ hook: view });
-    ipc.setSlackCommunications.mockResolvedValue({ hook: { ...view, bindings: [{ ...row, communicationsEnabled: !enabled }] } });
+    // Unit regression (PR #8470 CI): an immediate IPC mock hid the interval
+    // between dispatch and completion. Exercise real controls while pending
+    // and after completion so the second action cannot race the first.
+    let finishCommunications!: (result: { hook: SlackHookView }) => void;
+    ipc.setSlackCommunications.mockReturnValue(new Promise<{ hook: SlackHookView }>((resolve) => {
+      finishCommunications = resolve;
+    }));
     render(<HookConnectionsSection />);
     await expandChannelCard(SLACK_CARD);
     const toggle = await screen.findByRole('switch', { name: 'settings.remoteControl.hook.multi.localCommunications' });
@@ -351,6 +357,14 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     fireEvent.click(toggle);
     await waitFor(() => expect(ipc.setSlackCommunications).toHaveBeenCalledWith('T1', !enabled));
     expect(masterToggle.getAttribute('aria-checked')).toBe('true');
+    expect((masterToggle as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(masterToggle);
+    expect(ipc.setEnabled).not.toHaveBeenCalled();
+    await act(async () => {
+      finishCommunications({ hook: { ...view, bindings: [{ ...row, communicationsEnabled: !enabled }] } });
+    });
+    await waitFor(() => expect((masterToggle as HTMLButtonElement).disabled).toBe(false));
+    expect(toggle.getAttribute('aria-checked')).toBe(String(!enabled));
     fireEvent.click(masterToggle);
     await waitFor(() => expect(ipc.setEnabled).toHaveBeenCalledWith(false));
     expect(ipc.rebindTeam).not.toHaveBeenCalled();
