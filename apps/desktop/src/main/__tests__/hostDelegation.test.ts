@@ -106,6 +106,14 @@ describe('host proxies', () => {
       body: { sessionId: 'task-1', clientId: 'c1' },
     });
 
+    await handlers.get('maker:list-agent-commands')!({} as IpcMainInvokeEvent, 'codex', {
+      sessionId: 'task-1',
+    });
+    expect(requests.at(-1)).toEqual({
+      path: '/api/agent-commands',
+      body: { agentKind: 'codex', sessionId: 'task-1' },
+    });
+
     // The legacy send path maps onto the queue and reports acceptance.
     const accepted = await handlers.get('maker:send')!({} as IpcMainInvokeEvent, 'task-1', 'hello', {
       model: 'm1',

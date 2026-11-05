@@ -108,6 +108,29 @@ export const PROXIED_CHANNELS: readonly ProxiedChannel[] = [
     body: ([sessionId]) => ({ sessionId }),
   },
   {
+    channel: 'maker:list-available-agents',
+    path: '/api/agents',
+    body: () => null,
+  },
+  {
+    channel: 'maker:list-agent-commands',
+    path: '/api/agent-commands',
+    body: ([agentKind, params]) => ({
+      agentKind,
+      sessionId: (params as { sessionId?: string } | undefined)?.sessionId,
+    }),
+  },
+  {
+    channel: 'maker:list-agent-skills',
+    path: '/api/agent-skills',
+    body: ([agentKind, params]) => ({
+      agentKind,
+      workingDir: (params as { workingDir?: string } | undefined)?.workingDir,
+      sessionId: (params as { sessionId?: string } | undefined)?.sessionId,
+      forceReload: (params as { forceReload?: boolean } | undefined)?.forceReload === true,
+    }),
+  },
+  {
     channel: 'maker:input:remove',
     path: '/api/input/remove',
     body: ([sessionId, clientId]) => ({ sessionId, clientId }),
