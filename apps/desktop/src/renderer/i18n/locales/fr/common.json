@@ -5364,6 +5364,15 @@
         "ariaLabel": "Utiliser {{shortcut}} pour envoyer les messages"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "Répertoire de travail par défaut des nouvelles tâches",
+      "label": "Répertoire par défaut sur cet ordinateur",
+      "hint": "Présélectionné pour les nouvelles tâches locales sans projet choisi. Un projet, une discussion ou un ordinateur distant choisi explicitement reste prioritaire.",
+      "unset": "Non défini (aucun répertoire présélectionné)",
+      "choose": "Choisir un répertoire",
+      "clear": "Effacer la valeur par défaut",
+      "failed": "Impossible d’enregistrer le répertoire de travail par défaut. Réessayez."
+    },
     "linkOpen": {
       "title": "Ouverture des liens",
       "description": "Choisissez où s'ouvrent les liens des messages. Faites un clic droit sur un lien pour utiliser une autre option pour ce lien uniquement.",
