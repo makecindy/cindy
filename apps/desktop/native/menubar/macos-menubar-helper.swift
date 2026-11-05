@@ -852,7 +852,8 @@ final class StatusController: NSObject, NSWindowDelegate {
   }
 
   // Cached status-bar state: skip redraw when content is unchanged (fixes redraw storm #9019).
-  private var lastStatusTitle = ""
+  // nil = never rendered yet; forces the first layout pass to run unconditionally.
+  private var lastStatusTitle: String?
   private var lastStatusDark: Bool?
   private var lastStatusControlled: Bool?
   private var lastStatusIcon: NSImage?
@@ -861,7 +862,9 @@ final class StatusController: NSObject, NSWindowDelegate {
     guard let button = statusItem.button else { return }
     updateStatusIcon()
     let text = store.view?.statusTitle ?? ""
-    guard text != lastStatusTitle else {
+    // Sentinel (nil) on first call: always run the full layout so the button switches
+    // from .imageLeading to .imageOnly when the title is empty on launch.
+    guard text != (lastStatusTitle ?? "__never__") else {
       // Content unchanged — update accessibility/tooltip without touching the visual tree.
       if let view = store.view {
         button.toolTip = view.headlinePrimary
