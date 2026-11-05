@@ -102,7 +102,9 @@ describe('live compact spine selection', () => {
 
   it('masks cloud keys, connection-string passwords and PEM blocks', () => {
     // 工具结果里最常见的是「跑一条命令把凭证打出来」,这几种形态必须一起打码。
-    const pem = '-----BEGIN FIXTURE KEY-----' + String.fromCharCode(10) + 'b3BlbnNzaC1rZXk' + String.fromCharCode(10) + '-----END FIXTURE KEY-----';
+    // 私钥块同样按扫描规则拼接:源码里不出现连续的 "-----BEGIN … PRIVATE KEY-----" 形态。
+    const pemEdge = (edge) => ['-----', edge, ' PRIVATE KEY-----'].join('');
+    const pem = [pemEdge('BEGIN OPENSSH'), 'b3BlbnNzaC1rZXk', pemEdge('END OPENSSH')].join(String.fromCharCode(10));
     const raw = [
       `AWS_ACCESS_KEY_ID=${FAKE_AWS_KEY}`,
       `google key ${FAKE_GOOGLE_KEY}`,
