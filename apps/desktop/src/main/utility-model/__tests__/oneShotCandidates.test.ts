@@ -1014,6 +1014,56 @@ describe('utility one-shot candidates', () => {
       expect(result).toMatchObject({ ok: true, text: '给这个页面加一个搜索框，搜索框要' });
     });
 
+    it('开启后:Responses SSE 以 error 事件或缺失终态收尾也被拒绝', async () => {
+      // 终态字段只在事件里带 `response` 时才看得到：error 事件没有，流也可能在
+      // `response.created` 之后直接 EOF。两种情况都不能当完整答案。
+      const cases = [
+        'data: {"type":"response.output_text.delta","delta":"给这个页面加一个"}\n'
+          + 'data: {"type":"error","error":{"message":"upstream reset"}}\n',
+        'data: {"type":"response.output_text.delta","delta":"给这个页面加一个"}\n'
+          + 'data: {"type":"response.created","response":{"status":"in_progress"}}\n',
+      ];
+
+      for (const body of cases) {
+        responsesRoute();
+        fetchMock.mockResolvedValueOnce({ ok: true, text: async () => body } as never);
+
+        const result = await requestUtilityText(makerMock(false), 'review', {
+          providerId: 'tapsvc',
+          agentKind: 'codex',
+          model: 'custom-mini',
+          maxTokens: 200,
+          requireCompleteOutput: true,
+        });
+
+        expect(result.ok).toBe(false);
+      }
+    });
+
+    it('开启后:default 链里的 codex profile 候选被跳过(profile 循环也要遵守严格模式)', async () => {
+      // 默认自动链走 `runDefaultProfileCandidates`,它直接执行候选；严格模式若不在这条
+      // 循环里生效，profile 引用会绕开「看不到终态就用」的限制。
+      chainState.refs = ['codex-gpt-5.4-mini'];
+      getProfiles.mockReturnValue([{
+        id: 'codex-gpt-5.4-mini',
+        model: 'gpt-5.4-mini',
+        transport: 'codex-responses',
+        auth: 'codex',
+        settingsTab: 'connections',
+        missingCredentialMessage: 'codex missing',
+      }]);
+      const maker = makerMock(true);
+
+      const result = await requestUtilityText(maker, 'hello', {
+        maxTokens: 200,
+        requireCompleteOutput: true,
+      });
+
+      expect(vi.mocked(maker.oneShot)).not.toHaveBeenCalled();
+      if (result.ok) throw new Error('expected the strict chain to refuse the profile route');
+      expect(result.attempts[0]).toMatchObject({ status: 'skipped', reason: 'unsupported_transport' });
+    });
+
     it('开启后:内置 xd 路由的截断正文同样被拒绝(严格开关要透传进内置适配器)', async () => {
       // 内置路由是默认自动链的线路。适配器若没把 requireCompleteOutput 透传下去，
       // 默认线路会在「看起来有正文」时放行半截改写。

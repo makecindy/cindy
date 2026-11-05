@@ -728,6 +728,19 @@ async function runDefaultProfileCandidates(
       attempts.push(skippedAttempt(candidate.profile, 'model_unavailable'));
       continue;
     }
+    // A strict caller turns the answer into user-visible state, so a route that
+    // cannot report the provider's terminal state is not usable for it. This
+    // loop executes profile candidates directly (the default automatic chain),
+    // so it needs the same rule as `executeCandidates` — otherwise a profile
+    // reference would bypass it entirely.
+    if (opts?.requireCompleteOutput && candidate.reportsTerminalState === false) {
+      log.debug('utility text candidate skipped: terminal state unobservable', {
+        providerId: candidate.providerId,
+        model: candidate.model,
+      });
+      attempts.push(skippedAttempt(candidate.profile, 'unsupported_transport'));
+      continue;
+    }
     // Profile candidates may spend time awaiting credential discovery before
     // they reach this loop (for example maker.getAgentAuthState for Codex).
     // Re-check the owning workflow immediately before invoking the candidate;
@@ -2135,7 +2148,8 @@ async function requestProviderHttpText(input: {
       input.requireCompleteOutput
       && text
       && (outputBudgetExhausted(step.wire, finalParsed)
-        || streamEndedWithoutCompletion(step.wire, finalParsed))
+        || streamEndedWithoutCompletion(step.wire, finalParsed)
+        || responsesStreamDidNotComplete(step.wire, raw))
     ) {
       // The provider stopped at the output budget, or the stream reported a
       // terminal failure: either way the text is the beginning of the answer,
@@ -2326,6 +2340,37 @@ function streamEndedWithoutCompletion(wire: ProviderWire, terminal: unknown): bo
   if (typeof terminal !== 'object' || terminal === null) return false;
   const status = (terminal as { status?: unknown }).status;
   return status === 'failed' || status === 'cancelled' || status === 'incomplete';
+}
+
+/**
+ * 严格模式下『这条 Responses SSE 流根本不完整』的判定。
+ *
+ * 终态字段只在事件里带 `response` 对象时才看得到：`{type:"error"}` 事件没有，
+ * 流也可能在 `response.created` 之后直接 EOF。调用方不消费增量时
+ * `readUtilityTextStream` 也没机会做这些检查，所以严格模式自己扫一遍事件：
+ * 出现错误事件，或者一路没有成功终态，都不当完整答案。
+ * 非 SSE 的缓冲响应（JSON）不适用这条，直接放行。
+ */
+function responsesStreamDidNotComplete(wire: ProviderWire, raw: string): boolean {
+  if (wire !== 'responses') return false;
+  const head = raw.trimStart();
+  if (!head.startsWith('data:') && !head.startsWith('event:')) return false;
+  let sawSuccessTerminal = false;
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.startsWith('data:')) continue;
+    const payload = line.slice(5).trim();
+    if (!payload) continue;
+    if (payload === '[DONE]') {
+      sawSuccessTerminal = true;
+      continue;
+    }
+    const event = safeJsonParse(payload) as { type?: unknown } | null;
+    if (event?.type === 'error') return true;
+    if (event?.type === 'response.completed' || event?.type === 'message_stop') {
+      sawSuccessTerminal = true;
+    }
+  }
+  return !sawSuccessTerminal;
 }
 
 function outputBudgetExhausted(wire: ProviderWire, parsed: unknown): boolean {
