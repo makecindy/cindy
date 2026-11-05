@@ -150,6 +150,11 @@ export function useDeviceProviderSubscriptionCard(
     undefined,
     deviceId,
   );
+  const kimi = useProviderAccountUsage(
+    deviceId && isKimiCodingProviderView(provider) ? provider : undefined,
+    undefined,
+    deviceId,
+  );
   if (opencodeGo.supported) {
     const snapshot = opencodeGo.result?.status === 'ready' ? opencodeGo.result.snapshot : null;
     const card = buildOpenCodeGoUsageCard(
@@ -164,7 +169,6 @@ export function useDeviceProviderSubscriptionCard(
     }
     return card;
   }
-  const kimi = useProviderAccountUsage(deviceId && isKimiCodingProviderView(provider) ? provider : undefined, undefined, deviceId);
   if (deviceId && kimi.supported) {
     const snapshot = kimi.result?.status === 'ready' ? kimi.result.snapshot : null;
     const card = buildKimiUsageCard(snapshot?.kind === 'kimi-coding-quota' ? snapshot : null, t);
