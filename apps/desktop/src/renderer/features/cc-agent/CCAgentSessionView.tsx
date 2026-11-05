@@ -6502,6 +6502,8 @@ function CCAgentSessionContent({
     // WorkdirBrowseRoute)本身也挂这个类,主会话内层再挂一层是冗余但无害(CSS 规则幂等)。
     <div
       ref={containerRef}
+      // PermissionPrompt 据此认出「本视图自己的输入框」，见 isOwnViewComposer。
+      data-cc-agent-session-view=""
       className={cn('relative h-full w-full', isCompact && 'chat-rail-compact')}
     >
       {/* TopRightChipStackProvider 必须包住 MessageStream(消费 slot 的后代)

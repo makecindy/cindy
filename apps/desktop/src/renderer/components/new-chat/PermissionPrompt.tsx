@@ -163,6 +163,19 @@ function isOwnPaneControl(active: Element, card: Element | null): boolean {
   return isForeignKeyboardControl(active);
 }
 
+/**
+ * Focus in this session view's own composer while the switch intent is still armed
+ * was put there by the view itself: the composer autofocuses on the task change, and
+ * a shared-task guest keeps the composer next to the card. Any genuine typing or
+ * click since the switch has already disarmed the intent, so this focus does not mean
+ * the user is typing and must not keep the card from taking focus. Text fields
+ * elsewhere (sidebar search, other panes) still keep it.
+ */
+function isOwnViewComposer(active: Element, card: Element | null): boolean {
+  const view = card?.closest('[data-cc-agent-session-view]');
+  return Boolean(view?.contains(active) && active.closest('[data-chat-input-root]'));
+}
+
 export function PermissionPrompt({
   permission,
   onRespond,
@@ -306,6 +319,7 @@ export function PermissionPrompt({
     const keyboardOwnedElsewhere =
       active instanceof Element &&
       !cardRef.current?.contains(active) &&
+      !isOwnViewComposer(active, cardRef.current) &&
       (isEditableKeyboardTarget(active) ||
         isInsideKeyboardLayer(active) ||
         isEmbeddedContentHost(active));

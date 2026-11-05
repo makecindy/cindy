@@ -630,6 +630,58 @@ describe('PermissionPrompt 按住 Esc 退出设置后不替用户拒绝', () => 
   });
 });
 
+// 共享任务访客：等授权时输入框仍和授权卡一起显示，切到任务时视图自己把焦点放进输入框
+// （本地挂起请求还没重建），随后授权卡才出现。这个焦点不是用户在打字，授权卡仍要接管；
+// 用户切换后真的在输入框里按过键时，意图已撤销，焦点留在输入框。
+describe('PermissionPrompt 本视图输入框的自动聚焦', () => {
+  function GuestView({ pending }: { pending: string | null }) {
+    const intent = useSessionSwitchFocusIntent('task-b', true, pending, () =>
+      Promise.resolve([{ requestId: 'req-1', pendingForMs: 60_000 }]),
+    );
+    return (
+      <div data-cc-agent-session-view="">
+        {pending ? (
+          <PermissionPrompt
+            permission={permission([bashRule])}
+            onRespond={vi.fn()}
+            autoFocus={intent.armed}
+            onAutoFocusHandled={intent.consume}
+          />
+        ) : null}
+        <div data-chat-input-root="">
+          <div contentEditable suppressContentEditableWarning aria-label="composer" tabIndex={0} />
+        </div>
+      </div>
+    );
+  }
+
+  // jsdom 没有实现 isContentEditable；真实输入框是 TipTap 的 contenteditable。
+  function composerElement() {
+    const composer = screen.getByLabelText('composer');
+    Object.defineProperty(composer, 'isContentEditable', { value: true });
+    return composer;
+  }
+
+  it('视图自动聚焦的输入框不挡授权卡接管焦点', async () => {
+    const { rerender } = render(<GuestView pending={null} />);
+    const composer = composerElement();
+    composer.focus();
+    await act(async () => {});
+    rerender(<GuestView pending="req-1" />);
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /allowOnce/ }));
+  });
+
+  it('用户切换后在输入框里按过键时焦点留在输入框', async () => {
+    const { rerender } = render(<GuestView pending={null} />);
+    const composer = composerElement();
+    composer.focus();
+    await act(async () => {});
+    fireEvent.keyDown(composer, { key: 'a' });
+    rerender(<GuestView pending="req-1" />);
+    expect(document.activeElement).toBe(composer);
+  });
+});
+
 describe('PermissionPrompt 键盘切换时不替按住的按键批准', () => {
   function SidebarSwitch({ onRespond }: { onRespond: (r: unknown) => void }) {
     const [switched, setSwitched] = useState(false);
