@@ -608,10 +608,48 @@ export interface FailedScheduleRunSnapshot {
   failureKind?: ScheduleFailureKind;
   /** Optional on older hosts; error content is only disclosed on demand. */
   errorMsg?: string;
+  /** The check script belongs to a plugin that is not installed or not enabled. */
+  missingPlugin?: ScheduleMissingPlugin;
+}
+
+/** Host diagnosis of a blocked check: its script belongs to an unavailable plugin. */
+export interface ScheduleMissingPlugin {
+  ghostId: string;
+  namespace?: string | null;
+  /** Market plugin id, when the plugin was installed from the market. */
+  pluginId?: string;
+  name?: string;
+  /** Installed but not enabled. */
+  installed?: boolean;
+}
+
+/** Accepts the host projection field or the stored check result; ignores malformed data. */
+export function scheduleRunMissingPlugin(run: {
+  missingPlugin?: unknown;
+  preRunHookResult?: { missingPlugin?: unknown };
+}): ScheduleMissingPlugin | undefined {
+  const raw = run.missingPlugin ?? run.preRunHookResult?.missingPlugin;
+  if (!isRecord(raw)) return undefined;
+  const ghostId = readString(raw, 'ghostId');
+  if (!ghostId) return undefined;
+  const namespace = readString(raw, 'namespace');
+  const pluginId = readString(raw, 'pluginId');
+  const name = readString(raw, 'name');
+  return {
+    ghostId,
+    ...(namespace ? { namespace } : {}),
+    ...(pluginId ? { pluginId } : {}),
+    ...(name ? { name } : {}),
+    ...(raw.installed === true ? { installed: true } : {}),
+  };
 }
 
 /** Old hosts can omit the classification; keep their warning generic. */
 export function scheduleFailureMessageKey(run: FailedScheduleRunSnapshot): string {
+  if (run.failureKind === 'precheck' && run.missingPlugin) {
+    const key = run.missingPlugin.installed ? 'pluginDisabled' : 'pluginMissing';
+    return run.missingPlugin.name ? key : `${key}Unnamed`;
+  }
   return run.failureKind === 'rate-limit' ? 'rateLimited'
     : run.failureKind === 'precheck' ? 'precheck' : 'text';
 }

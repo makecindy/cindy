@@ -146,7 +146,9 @@ export interface RemoteScheduleRun {
   /** Optional lightweight host projection; history and read receipts stay unchanged. */
   failureKind?: 'precheck' | 'rate-limit' | 'execution';
   failureRecovered?: boolean;
-  preRunHookResult?: { decision?: string; checkSucceeded?: boolean; stderr?: string };
+  /** Lightweight host projection of preRunHookResult.missingPlugin. */
+  missingPlugin?: unknown;
+  preRunHookResult?: { decision?: string; checkSucceeded?: boolean; stderr?: string; missingPlugin?: unknown };
   resultText?: string;
   costUsd?: number;
   estimatedValueUsd?: number;

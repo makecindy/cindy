@@ -8,6 +8,8 @@
  *   - 不带 "需新会话生效" 后缀: 嵌入开关立即生效 (下一条新消息即可)
  *   - 不带 confirm dialog: 关闭只是停止入队, 已嵌入的向量不删, 用户无可见副作用
  */
+import { additionalSettings } from './AdditionalSettings.settings-search';
+import { useSettingDefinition } from './useSettingDefinition';
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Database } from 'lucide-react';
@@ -23,6 +25,7 @@ import { DefaultOverrideControls } from './DefaultOverrideControls';
 const log = createLogger('ChatEmbeddingCell');
 
 export function ChatEmbeddingCell() {
+  const setting = useSettingDefinition(additionalSettings.chatEmbedding);
   const { t } = useTranslation();
   const { enabled, isCustomized, beginMutation, completeMutation, rollbackMutation } =
     useChatEmbedding();
@@ -80,7 +83,7 @@ export function ChatEmbeddingCell() {
   }, [beginMutation, completeMutation, rollbackMutation, t]);
 
   return (
-    <div className="flex items-center justify-between gap-3 px-4 py-[14px]">
+    <div {...setting.anchorProps} className="flex items-center justify-between gap-3 px-4 py-[14px]">
       <div className="flex items-center gap-3">
         <div
           className={cn(
@@ -92,10 +95,10 @@ export function ChatEmbeddingCell() {
         </div>
         <div className="flex flex-col gap-[8px]">
           <p className="text-14 font-medium leading-none text-[var(--settings-section-title)]">
-            {t('settings.chatEmbedding.cell.label')}
+            {setting.title}
           </p>
           <p className="text-12 leading-none text-[var(--settings-section-desc)]">
-            {t('settings.chatEmbedding.cell.description')}
+            {setting.description}
           </p>
         </div>
       </div>
@@ -106,6 +109,7 @@ export function ChatEmbeddingCell() {
           onReset={() => void handleReset()}
         />
         <Switch
+          {...setting.controlProps}
           checked={enabled}
           disabled={pending}
           onCheckedChange={(v) => void handleToggle(v)}

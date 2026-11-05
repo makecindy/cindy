@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import { exposePluginPageModelPicker } from './ghostPageModelPickerBridge';
 import type { PluginModelPickerOptions, PluginModelPickerResult } from '../shared/pluginModelPicker';
 import type { CindyPluginUi, PluginUiContributionHandler, PluginUiCommandHandler, PluginUiCapabilities } from '@cindy/maker-shared/plugin-ui';
 import type { PluginUiHostMessage } from '@cindy/maker-shared';
@@ -151,6 +152,7 @@ async function visibilityRequest<T>(request: Record<string, unknown>): Promise<T
 }
 
 if (process.argv.includes('--cindy-plugin-tab-view')) {
+  exposePluginPageModelPicker();
   const changed = new Set<(snapshot: PluginUiTabViewSnapshot) => void>();
   let latest: { snapshot: PluginUiTabViewSnapshot; sequence: number } | undefined;
   const received = (value: { snapshot: PluginUiTabViewSnapshot; sequence: number }) => {
