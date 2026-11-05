@@ -57,6 +57,8 @@ Use when implementing plugin code, calling host APIs or declaring access to reso
 Use for the UI surfaces and interactions the plugin actually exposes; mobile pages are optional.
 
 - [插件交互页面：生成首屏、SDK 交互与完整示例（§4.23）](references/plugin-interactive-pages.md)
+- [插件原生界面扩展（开发中）](references/plugin-native-ui.md)
+- [插件设置本机外观（开发中）](references/plugin-appearance.md)
 - [插件面板与主题适配（§5）](references/plugin-panels.md)
 - [插件一级主视图 mainView（§4.20）](references/plugin-main-view.md)
 - [插件跟对话的任务页 taskView（§4.22）](references/plugin-task-view.md)
@@ -79,15 +81,15 @@ Use when the plugin listens for events, supplies routine triggers or interacts w
 - [插件处理 Agent 回复的消息钩子（§4.6.1）](references/plugin-message-hooks.md)
 - [插件控制节点：自动化与例行任务运行前先问插件（§4.6.2）](references/plugin-control-points.md)
 - [给模型选择器提供模型 models（§4.6.3）](references/plugin-models.md)
-- [插件发起 Agent 任务与请求自动化（§4.11）](references/plugin-agent-tasks.md)
+- [插件发起 Agent 任务、请求自动化与查看伙伴（§4.11）](references/plugin-agent-tasks.md)
 - [插件读取当前任务上下文 sessionContext（§4.13）](references/plugin-session-context.md)
 - [插件创建工作区任务入口 workspace（§4.17）](references/plugin-workspace-sessions.md)
 
 ### 插件打包、发布与兼容
 
-Read packaging before implementation and delivery. Read publishing only for publication, and bundled Skills only when maintaining an older plugin.
+Read packaging before implementation and delivery. Read publishing only for publication, and bundled Skills when the plugin ships a slash-command workflow or local scripts.
 
 - [插件打包、安装与验证（§7）](references/plugin-packaging.md)
 - [插件发布签名与审核（§8）](references/plugin-publishing.md)
 - [插件版本兼容与拒装排查（§9）](references/plugin-compatibility.md)
-- [旧插件捆绑 Skill 的维护与迁移（§4.16）](references/plugin-bundled-skills-legacy.md)
+- [捆绑 Agent Skill，以及它与 Manual 的分工（§4.16）](references/plugin-bundled-skills.md)

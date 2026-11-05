@@ -1,3 +1,4 @@
+import { remoteControlSettings } from './RemoteControlSection.settings-search';
 /**
  * RemoteControlSection —— 统一的「远程控制」设置页。
  *
@@ -75,7 +76,7 @@ function CollapsibleSubSection({
 }) {
   return (
     <section id={id} className="flex flex-col gap-3">
-      <button
+      <button data-settings-search-action="Expand or collapse the remote-control section"
         type="button"
         onClick={onToggle}
         aria-expanded={open}
@@ -241,8 +242,10 @@ export function RemoteControlSection() {
         return copy;
       });
     });
+    const offHosts = window.electronAPI.remoteSsh.onHostsChanged?.((result) => setHosts(result.hosts));
     return () => {
       off();
+      offHosts?.();
     };
   }, [refreshHosts]);
 
@@ -271,8 +274,8 @@ export function RemoteControlSection() {
         {deviceLinkAvailable ? (
           <>
             <CollapsibleSubSection
-              id="settings-search-target-remote-devices"
-              title={t('settings.remoteControl.sections.myDevices')}
+              id={remoteControlSettings.devices.targetId}
+              title={t(remoteControlSettings.devices.titleKey)}
               summary={devSumText}
               dotColor={null}
               open={devicesOpen}
@@ -295,10 +298,10 @@ export function RemoteControlSection() {
               />
             </CollapsibleSubSection>
             {/* 设备之间经哪条线路连接:紧跟在「我的设备」下面直接展示,当前线路一眼可见,不再单独占一个入口。 */}
-            <section id="settings-search-target-remote-relay" className="flex flex-col gap-3">
+            <section id={remoteControlSettings.relay.targetId} className="flex flex-col gap-3">
               <div className="flex flex-col gap-0.5">
                 <h3 className="text-14 font-medium text-[var(--text-primary)]">
-                  {t('settings.remoteControl.relay.route.title')}
+                  {t(remoteControlSettings.relay.titleKey)}
                 </h3>
                 <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">
                   {t('settings.remoteControl.relay.route.hint')}
@@ -311,8 +314,8 @@ export function RemoteControlSection() {
         ) : null}
 
         <CollapsibleSubSection
-          id="settings-search-target-remote-ssh"
-          title={t('settings.remoteControl.sections.ssh')}
+          id={remoteControlSettings.ssh.targetId}
+          title={t(remoteControlSettings.ssh.titleKey)}
           summary={sshSum?.text ?? null}
           dotColor={sshSum?.dot ?? null}
           open={sshOpen}

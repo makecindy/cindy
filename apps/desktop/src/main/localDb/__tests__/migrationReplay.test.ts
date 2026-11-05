@@ -1,7 +1,7 @@
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
+import { setImmediate } from 'node:timers/promises';
 
 import type Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
@@ -17,11 +17,9 @@ import { initializeTaskTagPresets } from '../taskTagPresets';
 const canRunMigrationReplay = process.platform === 'win32' || process.platform === 'darwin';
 const describeMigrationReplay = canRunMigrationReplay ? describe : describe.skip;
 
-// Synchronous SQLite replays can starve Vitest's progress RPC acknowledgements
-// across consecutive cases on slower runners. Yield without relaxing timeouts.
-afterEach(async () => {
-  await yieldToEventLoop();
-});
+// Let Vitest receive result acknowledgements between synchronous SQLite replays.
+// A long sequence otherwise starves worker RPC even when every assertion passes.
+afterEach(async () => { await setImmediate(); });
 
 function desktopRoot(): string {
   return path.resolve(__dirname, '../../../..');
@@ -191,7 +189,8 @@ describeMigrationReplay('migration replay', () => {
         db.exec(readFileSync(path.join(drizzleDir(), '0045_living_namor.sql'), 'utf-8'));
         const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
         expect(result.applied.map((migration) => migration.seq)).toEqual([
-          125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144,
+          125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
+          143, 144, 145,
         ]);
         expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
         expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
@@ -218,7 +217,7 @@ describeMigrationReplay('migration replay', () => {
   // a pre-138 database already has some/all columns; the old ALTER SQL failed.
   // The existing fresh-schema test did not cover interrupted/replayed schemas.
   it.each(['none', 'partial', 'all'])(
-    'preserves PR associations when %s management columns already exist',
+    'preserves PR associations when %s management/provider columns already exist',
     (existing) => {
       const { db, cleanup } = createTempDb();
       try {
@@ -240,10 +239,12 @@ describeMigrationReplay('migration replay', () => {
         if (existing !== 'none') {
           db.exec('ALTER TABLE session_pr_refs ADD pinned integer DEFAULT false NOT NULL');
           db.exec('ALTER TABLE session_pr_refs ADD priority integer DEFAULT 0 NOT NULL');
+          db.exec("ALTER TABLE session_pr_refs ADD provider text DEFAULT 'github' NOT NULL");
         }
         if (existing === 'all') {
           db.exec('ALTER TABLE session_pr_refs ADD manually_added integer DEFAULT false NOT NULL');
           db.exec('ALTER TABLE session_pr_refs ADD removed_at integer');
+          db.exec("ALTER TABLE session_pr_refs ADD host text DEFAULT 'github.com' NOT NULL");
         }
         runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 137 });
         expect(db.prepare('SELECT * FROM session_pr_refs').get()).toEqual({
@@ -261,6 +262,8 @@ describeMigrationReplay('migration replay', () => {
           removed_at: null,
           association_source: 'explicit',
           association_origin: 'upgrade',
+          provider: 'github',
+          host: 'github.com',
         });
       } finally {
         cleanup();
@@ -365,7 +368,7 @@ describeMigrationReplay('migration replay', () => {
       db.exec(readFileSync(path.join(drizzleDir(), '0045_living_namor.sql'), 'utf-8'));
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 129 });
       expect(result.applied.map((migration) => migration.seq)).toEqual([
-        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144,
+        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145,
       ]);
       expect(columnNames(db, 'sessions')).toContain('notifications_muted');
       // 存量任务全部回填为「未静音」：升级不能替用户少发提醒。

@@ -13,6 +13,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { classifyMarkdownLinkTarget } from '@/lib/markdownTarget';
 
 import {
   resolveWorkspacePath,
@@ -170,6 +171,35 @@ describe('looksLikeDirectoryPath', () => {
 });
 
 describe('resolveLocalPath', () => {
+  // Directory classification removes the trailing slash: /E:/ reaches the
+  // resolver as /E:. It must remain a drive root, never drive-relative E:.
+  it.each([
+    ['C:/repo', 'E:/'],
+    ['/home/user', '/E:'],
+  ])('preserves the root identity of /E:/ for %s', (cwd, expected) => {
+    const target = classifyMarkdownLinkTarget('/E:/');
+    expect(target.kind).toBe('local-candidate');
+    if (target.kind === 'local-candidate') {
+      expect(resolveLocalPath(target.href, cwd)).toBe(expected);
+    }
+  });
+
+  // Regression: authored Markdown links such as [source](/E:/demo) must use
+  // the file owner's Windows path semantics, including in remote sessions.
+  it.each([
+    ['E:/repo', '/E:/demo', 'E:/demo'],
+    ['C:\\repo', '/E:\\demo\\a.ts', 'E:\\demo\\a.ts'],
+    ['\\\\server\\share', '/E:/demo', 'E:/demo'],
+    ['//server/share', '/E:/demo', 'E:/demo'],
+    ['/home/user', '/E:/demo', '/E:/demo'],
+    ['', '/E:/demo', '/E:/demo'],
+    ['C:/repo', '/home/a.ts', '/home/a.ts'],
+    ['C:/repo', '//server/share/a.ts', '//server/share/a.ts'],
+    ['C:/repo', '//E:/demo', '//E:/demo'],
+  ])('resolves %s + %s without changing other path identities', (cwd, href, expected) => {
+    expect(resolveLocalPath(href, cwd)).toBe(expected);
+  });
+
   it('returns POSIX absolute href as-is regardless of cwd', () => {
     expect(resolveLocalPath('/abs/x.tsx', 'C:\\proj')).toBe('/abs/x.tsx');
   });
@@ -221,6 +251,10 @@ describe('resolveLocalPath', () => {
 });
 
 describe('resolveToolFilePath (agent tool-input path absolutizer)', () => {
+  it('preserves literal absolute tool paths instead of applying Markdown drive compatibility', () => {
+    expect(resolveToolFilePath('/E:/demo/a.ts', 'E:/repo')).toBe('/E:/demo/a.ts');
+  });
+
   // Regression: a model (e.g. Kimi K3) may emit a RELATIVE Read file_path;
   // the runtime resolves it against the session cwd and the Read succeeds,
   // but the preview/reveal IPCs require absolute paths — the chip click used
@@ -287,6 +321,69 @@ describe('resolveLocalPathSmart', () => {
 describe('file URL decoding across renderer and main', () => {
   afterEach(() => {
     _clearSmartResolveCache();
+  });
+
+  // Real production lookup, including host allow-list checks. Windows CI
+  // exercises the malformed /C:/ spelling; POSIX keeps native paths intact.
+  it('resolves slash-prefixed drive directories in direct and batched lookups without bypassing permissions', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-drive-link-'));
+    const target = path.join(root, 'source');
+    fs.mkdirSync(target);
+    const href = process.platform === 'win32' ? `/${target.replace(/\\/g, '/')}` : target;
+    let allowed = true;
+    const isPathAllowed = vi.fn((_absPath: string) => allowed);
+    vi.stubGlobal('window', { electronAPI: {
+      resolvePath: ({ href: lookup, workingDir }: { href: string; workingDir: string }) =>
+        resolveWorkspacePath(lookup, workingDir, { isPathAllowed }),
+      resolvePathBatch: ({ hrefs, workingDir }: { hrefs: string[]; workingDir: string }) =>
+        resolveWorkspacePathBatch(hrefs, workingDir, { isPathAllowed }),
+    } });
+    try {
+      for (const canAccess of [true, false]) {
+        allowed = canAccess;
+        isPathAllowed.mockClear();
+        _clearSmartResolveCache();
+        const results = [
+          await resolveLocalPathSmart(href, root, { refresh: true }),
+          await resolveLocalPathSmartCached(href, root),
+        ];
+        for (const result of results) {
+          expect(result.status).toBe(canAccess ? 'unique' : 'none');
+          if (result.status === 'unique') {
+            expect(result.kind).toBe('directory');
+            expect(path.normalize(result.absPath)).toBe(target);
+          }
+        }
+        expect(isPathAllowed).toHaveBeenCalled();
+        for (const [candidate] of isPathAllowed.mock.calls) {
+          expect(path.normalize(candidate)).toBe(target);
+        }
+      }
+      // Stat the actual drive root on Windows; no files are created there.
+      if (process.platform === 'win32') {
+        allowed = true;
+        const driveRoot = path.parse(root).root;
+        const rootTarget = classifyMarkdownLinkTarget(`/${driveRoot.replace(/\\/g, '/')}`);
+        expect(rootTarget.kind).toBe('local-candidate');
+        if (rootTarget.kind === 'local-candidate') {
+          const results = [
+            await resolveLocalPathSmart(rootTarget.href, root),
+            await resolveLocalPathSmartCached(rootTarget.href, root),
+          ];
+          for (const result of results) {
+            expect(result.status).toBe('unique');
+            if (result.status === 'unique') {
+              expect(result.kind).toBe('directory');
+              expect(path.normalize(result.absPath)).toBe(driveRoot);
+            }
+          }
+        }
+      }
+      fs.rmdirSync(target);
+      await expect(resolveLocalPathSmart(href, root, { refresh: true })).resolves.toMatchObject({ status: 'none' });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   // F3: both IPC paths reach the production host decoder after file URL conversion.

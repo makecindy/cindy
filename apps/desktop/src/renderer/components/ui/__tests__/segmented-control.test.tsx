@@ -12,6 +12,12 @@ import { SegmentedControl } from '../segmented-control';
 
 afterEach(cleanup);
 
+it('associates the rendered options with the caller setting for search inspection', () => {
+  render(<SegmentedControl data-setting-id="appearance.theme" aria-label="Theme" value="light"
+    options={[{ value: 'light', label: 'Light' }]} onValueChange={() => {}} />);
+  expect(screen.getByRole('radio').closest('[data-setting-id]')?.getAttribute('data-setting-id')).toBe('appearance.theme');
+});
+
 const options = [
   { value: 'sidebar', label: 'Sidebar' },
   { value: 'external', label: 'External' },

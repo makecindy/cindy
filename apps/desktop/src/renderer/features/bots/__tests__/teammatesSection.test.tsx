@@ -256,6 +256,67 @@ describe('one Cindy entry across devices', () => {
     expect(mocks.navigate).toHaveBeenLastCalledWith('/bots/cindy-default');
   });
 
+  it.each([
+    { generation: { phase: 'processing' as const, startedAt: 1 } },
+    { teammateActivity: { phase: 'running' as const } },
+  ])('shows another computer working without a duplicate running dot: %j', async (running) => {
+    mocks.profiles = [bot({ id: 'cindy-default', name: 'Cindy', lastMessagePreview: 'Local preview' })];
+    mocks.remoteBots = [remote('cloud', 'Cloud', running)];
+    const view = await renderSidebar();
+    const row = screen.getByTestId('cindy-device-row');
+    expect(row.textContent).toContain('Cloud · ');
+    expect(screen.getByText('ccAgent.agentStatus.processing')).toBeTruthy();
+    expect(screen.queryByText('Local preview')).toBeNull();
+    expect(row.querySelector('[data-teammate-status="running"]')).toBeNull();
+    expect(row.querySelector('[data-teammate-running-preview] .session-status-breathing')).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Cindy · bots.devicePicker.local' }));
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/cindy-default');
+
+    mocks.remoteBots = [remote('cloud', 'Cloud')];
+    view.rerender(<TeammatesSection />);
+    expect(screen.getByText('Local preview')).toBeTruthy();
+    expect(screen.queryByText('ccAgent.agentStatus.processing')).toBeNull();
+    expect(row.querySelector('[data-teammate-running-preview]')).toBeNull();
+  });
+
+  // The selected remote Cindy can retain only its running snapshot after refresh.
+  // Other-computer coverage does not exercise this current-row fallback (unit).
+  it('keeps selected remote work visible with only a running snapshot', async () => {
+    mocks.profiles = [bot({ id: 'cindy-default', name: 'Cindy' })];
+    mocks.remoteBots = [remote('cloud', 'Cloud', { teammateActivity: { phase: 'running' } })];
+    mocks.params = { botId: 'cindy-default', deviceId: 'cloud' };
+    const view = await renderSidebar();
+    expect(screen.getByText('ccAgent.agentStatus.processing')).toBeTruthy();
+    expect(screen.queryByText('Cloud preview')).toBeNull();
+    expect(screen.getByTestId('cindy-device-row').querySelector('[data-teammate-status="running"]')).toBeNull();
+    mocks.remoteBots = [remote('cloud', 'Cloud')];
+    view.rerender(<TeammatesSection />);
+    expect(screen.getByText('Cloud preview')).toBeTruthy();
+  });
+
+  it('shows local work while the selected remote computer is idle', async () => {
+    mocks.profiles = [bot({ id: 'cindy-default', name: 'Cindy' })];
+    mocks.remoteBots = [remote('cloud', 'Cloud')];
+    mocks.params = { botId: 'cindy-default', deviceId: 'cloud' };
+    mocks.islandActivity.set('cindy-default-chat', { sessionId: 'cindy-default-chat', phase: 'running' });
+    await renderSidebar();
+    expect(screen.getByTestId('cindy-device-row').textContent).toContain('bots.devicePicker.local · ');
+    expect(screen.getByText('ccAgent.agentStatus.processing')).toBeTruthy();
+    expect(screen.queryByText('Cloud preview')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Cindy · Cloud' }));
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/remote/cloud/cindy-default');
+  });
+
+  it('keeps the current computer summary when both computers are working', async () => {
+    mocks.profiles = [bot({ id: 'cindy-default', name: 'Cindy' })];
+    mocks.remoteBots = [remote('cloud', 'Cloud', { generation: { phase: 'thinking', startedAt: 1 } })];
+    mocks.islandActivity.set('cindy-default-chat', { sessionId: 'cindy-default-chat', phase: 'running' });
+    await renderSidebar();
+    expect(screen.getByText('ccAgent.agentStatus.processing')).toBeTruthy();
+    expect(screen.getByTestId('cindy-device-row').textContent).not.toContain('Cloud · ');
+    expect(screen.queryByText('ccAgent.agentStatus.thinking')).toBeNull();
+  });
+
   it('keeps remote unread discoverable without opening the chat or switching away from local', async () => {
     mocks.profiles = [bot({ id: 'cindy-default', name: 'Cindy' })];
     mocks.remoteBots = [remote('cloud', 'Cloud', { lastReplyAt: 20, readAt: 10, online: false })];
@@ -304,6 +365,28 @@ describe('one Cindy entry across devices', () => {
 });
 
 describe('teammate host labels', () => {
+  // PR #8714: after a resource refresh fails, the remote activity snapshot remains
+  // running without generation details. The real row must still show work, then
+  // restore its message after completion (unit; prior cases only cover merged Cindy).
+  it('keeps standalone remote work visible when only the running snapshot remains', async () => {
+    mocks.remoteBots = [{ id: 'remote-bot', deviceId: 'studio', deviceName: 'Studio',
+      name: 'Writer', avatar: '🤖', avatarColor: 'violet', description: '', preview: 'Previous reply',
+      activityAt: 1, sessionId: 'remote-session', online: true,
+      teammateActivity: { phase: 'running' } }];
+    const view = await renderSidebar();
+    const working = screen.getByText('ccAgent.agentStatus.processing');
+    const row = working.closest('button')!;
+    expect(screen.queryByText('Previous reply')).toBeNull();
+    expect(row.querySelector('[data-teammate-status="running"]')).toBeNull();
+    expect(row.querySelector('[data-teammate-running-preview] .session-status-breathing')).not.toBeNull();
+    fireEvent.click(row);
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/remote/studio/remote-bot');
+    mocks.remoteBots = mocks.remoteBots.map(bot => ({ ...bot, teammateActivity: { phase: 'idle' } }));
+    view.rerender(<TeammatesSection />);
+    expect(screen.getByText('Previous reply')).toBeTruthy();
+    expect(screen.queryByText('ccAgent.agentStatus.processing')).toBeNull();
+  });
+
   it('shows only the remote device for same-name teammates and preserves remote routing', async () => {
     mocks.profiles = [bot({ id: 'local-bot', name: 'Cindy', lastMessagePreview: 'Local preview' })];
     mocks.devices = [{ deviceId: 'local-device', name: 'MBP-M5', isSelf: true }];
@@ -454,7 +537,7 @@ describe('TeammatesSection header', () => {
 
   it('keeps the collapsed row on one line and folds the rest into +N', async () => {
     const original = globalThis.ResizeObserver;
-    // 4 slots: 3 avatars + the +N chip (56px per slot, 8px gap).
+    // 5 slots: 4 avatars + the +N chip (40px target, 4px gap).
     globalThis.ResizeObserver = class {
       constructor(private readonly callback: ResizeObserverCallback) {}
       observe() { this.callback([{ contentRect: { width: 216 } } as ResizeObserverEntry], this as unknown as ResizeObserver); }
@@ -468,10 +551,10 @@ describe('TeammatesSection header', () => {
       await renderSidebar();
       fireEvent.click(header());
       const avatars = screen.getAllByRole('button', { name: /^Mate \d$/ });
-      expect(avatars).toHaveLength(3);
+      expect(avatars).toHaveLength(4);
       // The open chat keeps a slot even when it sorts past the cut.
       expect(screen.getByRole('button', { name: 'Mate 4' }).getAttribute('aria-current')).toBe('page');
-      const more = screen.getByRole('button', { name: 'bots.list.sectionExpand · +3' });
+      const more = screen.getByRole('button', { name: 'bots.list.sectionExpand · +2' });
       fireEvent.click(more);
       expect(header().getAttribute('aria-expanded')).toBe('true');
     } finally {
@@ -503,6 +586,39 @@ describe('TeammatesSection header', () => {
     mocks.unread = {};
     view.rerender(<TeammatesSection />);
     expect(view.container.querySelector('[data-teammate-status]')).toBeNull();
+  });
+
+  it('keeps a pending decision ahead of an error like the shared resolver, even after read acknowledgement', async () => {
+    mocks.profiles = [{ ...bot({ id: 'bot-1', name: 'Writer' }), needsAttention: true }];
+    mocks.unread = { 'bot-1': 1 };
+    mocks.islandActivity = new Map([['bot-1-chat', { sessionId: 'bot-1-chat', phase: 'needs-interaction' }]]);
+    const view = await renderSidebar();
+    expect(view.container.querySelector('[data-teammate-status="awaiting"]')).not.toBeNull();
+    mocks.unread = {};
+    view.rerender(<TeammatesSection />);
+    expect(view.container.querySelector('[data-teammate-status="awaiting"]')).not.toBeNull();
+    expect(view.container.querySelector('[data-teammate-status="error"]')).toBeNull();
+  });
+
+  it('keeps pending attention ahead of errors in the collapsed overflow', async () => {
+    const original = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe() { this.callback([{ contentRect: { width: 48 } } as ResizeObserverEntry], this as unknown as ResizeObserver); }
+      disconnect() {}
+      unobserve() {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      mocks.profiles = [bot({ id: 'waiting', name: 'Waiting' }), bot({ id: 'failed', name: 'Failed', needsAttention: true })];
+      mocks.islandActivity = new Map([['waiting-chat', { sessionId: 'waiting-chat', phase: 'needs-interaction' }]]);
+      await renderSidebar();
+      fireEvent.click(screen.getByRole('button', { name: 'bots.title' }));
+      const overflow = screen.getByRole('button', { name: 'bots.list.sectionExpand · +2' });
+      expect(overflow.querySelector('[data-teammate-status="awaiting"]')).not.toBeNull();
+      expect(overflow.querySelector('[data-teammate-status="error"]')).toBeNull();
+    } finally {
+      globalThis.ResizeObserver = original;
+    }
   });
 
   it('leaves session notifications to the task sidebar', async () => {
@@ -561,17 +677,17 @@ describe('TeammatesSection 「正在输入…」', () => {
     expect(view.container.textContent).toContain('Delivery steward');
   });
 
-  it('是斜体三级色的过程说明,即使有未读也不跟着提到一级', async () => {
+  it('uses the same orange breathing indicator as groups while running', async () => {
     mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
     mocks.unread = { 'bot-1': 4 };
     mocks.islandActivity = new Map([['bot-1-chat', { sessionId: 'bot-1-chat', phase: 'running' }]]);
     await renderSidebar();
 
-    const line = screen.getByText('ccAgent.agentStatus.processing').closest('span.italic') as HTMLElement;
+    const line = screen.getByText('ccAgent.agentStatus.processing').closest('[data-teammate-running-preview]') as HTMLElement;
     expect(line).toBeTruthy();
-    expect(line?.className).toContain('italic');
-    expect(line?.className).toContain('text-[var(--sidebar-list-muted)]');
-    expect(line?.className).not.toContain('font-medium');
+    expect(line.className).toContain('text-[var(--status-bar-accent)]');
+    expect(line.querySelector('.session-status-breathing svg')).not.toBeNull();
+    expect(line.closest('.italic')).toBeNull();
   });
 });
 
@@ -676,18 +792,14 @@ describe('TeammatesSection rows', () => {
     }
   });
 
-  it('paints the unread badge with the registered IM-unread blue, not the inverse CTA', async () => {
+  it('uses a green unread point without an inverse selection color', async () => {
     mocks.profiles = [bot({ id: 'bot-1', name: 'Busy' })];
     mocks.unread = { 'bot-1': 2 };
-
-    await renderSidebar();
-
-    const badge = screen.getByLabelText('bots.list.unread:{"count":2}');
-    // 反相 CTA 白底药丸落在选中行的浅灰选中态上会和选中态抢焦点;未读在 IM 里
-    // 本来就有一个所有人都认得的颜色。token 登记见 DESIGN.md §10。
-    expect(badge.className).toContain('bg-[var(--bot-unread-bg)]');
-    expect(badge.className).toContain('text-[var(--bot-unread-fg)]');
-    expect(badge.className).not.toContain('accent-cta-bg');
+    const view = await renderSidebar();
+    const point = view.container.querySelector('[data-teammate-status="unread"] > span') as HTMLElement;
+    expect(point.style.backgroundColor).toBe('var(--card-status-done)');
+    expect(point.closest('[data-teammate-row-status]')).not.toBeNull();
+    expect(view.container.querySelector('[data-teammate-status]')?.textContent).toBe('');
   });
 
   it('keeps settings and import out of each row while the row itself opens chat', async () => {
@@ -739,7 +851,7 @@ describe('TeammatesSection rows', () => {
     expect(screen.getByTestId('bot-delete-dialog').textContent).toBe('PR steward');
   });
 
-  it('shows an unread count only for Bots with unread replies, capped at 99+', async () => {
+  it('shows a single unread point for unread Bots regardless of count', async () => {
     mocks.profiles = [
       bot({ id: 'bot-read', name: 'Read', lastMessagePreview: 'Nothing new' }),
       bot({ id: 'bot-unread', name: 'Unread', lastMessagePreview: 'Fresh reply' }),
@@ -749,13 +861,13 @@ describe('TeammatesSection rows', () => {
 
     await renderSidebar();
 
-    expect(screen.getByLabelText('bots.list.unread:{"count":3}').textContent).toBe('3');
-    expect(screen.getByLabelText('bots.list.unread:{"count":100}').textContent).toBe('99+');
+    expect(screen.getAllByLabelText('bots.avatarStatus.unread')).toHaveLength(2);
+    expect(screen.queryByText('99+')).toBeNull();
     // A read Bot carries no badge at all — zero must never render as "0".
     expect(screen.queryByLabelText('bots.list.unread:{"count":0}')).toBeNull();
     expect(screen.getByText('Nothing new').className).not.toContain('font-medium');
     expect(screen.getByText('Fresh reply').className).not.toContain('font-medium');
-    expect(screen.getByLabelText('bots.list.unread:{"count":3}').className).toContain('tabular-nums');
+    expect(screen.getAllByLabelText('bots.avatarStatus.unread').every(point => point.textContent === '')).toBe(true);
     expect(screen.getByText('Read').className).not.toContain('font-medium');
     expect(screen.getByText('Unread').className).toContain('font-medium');
   });

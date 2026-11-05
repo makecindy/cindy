@@ -8,11 +8,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
+import { EventEmitter } from 'node:events';
+import type { WebContents } from 'electron';
+import { installGhostPageModelPicker } from '../ghostPageModelPicker.js';
 import type { ProviderView } from '@cindy/model-providers';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import type { PluginTaskRoute } from '../../../shared/pluginTasks.js';
 import type { PluginModelPickerRequest } from '../../../shared/pluginModelPicker.js';
-import { GhostModelPicker, readPluginModelRouteCatalog, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled, setPluginRouteAgentStatusProvider } from '../ghostModelPicker.js';
+import { GhostModelPicker, chooseModelPickerWindow, readPluginModelRouteCatalog, isGhostCardModelRouteAvailable, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled, setPluginRouteAgentStatusProvider } from '../ghostModelPicker.js';
 
 // Run the production routing entry without booting Electron or loading the IPC registry.
 const hostSource = ts.createSourceFile('index.ts', readFileSync(new URL('../index.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
@@ -72,6 +75,61 @@ function setup() {
   };
 }
 afterEach(() => vi.useRealTimers());
+
+// Test value: the approved page's real IPC handler must address its own host, default to all
+// sources and revoke in-flight requests on navigation. The logic-page tests don't cover guest
+// frame/anchor validation. Minimal input: one attached guest and a same-ID remote provider. Tier: unit.
+describe('plugin page picker bridge', () => {
+  function page() {
+    const h = setup();
+    const guest = Object.assign(new EventEmitter(), {
+      id: 42, ipc: Object.assign(new EventEmitter(), { handle: vi.fn() }),
+      mainFrame: {}, isDestroyed: () => false, getZoomFactor: () => 1, focus: vi.fn(),
+    });
+    const host = Object.assign(new EventEmitter(), { id: 8, isDestroyed: () => false, getZoomFactor: () => 1 });
+    const push = vi.fn();
+    installGhostPageModelPicker({ guest: guest as unknown as WebContents, host: host as unknown as WebContents,
+      instanceId: 'plugin', isCurrent: () => true, picker: () => h.picker, push });
+    const invoke = (options: unknown, frame = guest.mainFrame) => guest.ipc.handle.mock.calls[0][1](
+      { sender: guest, senderFrame: frame }, options,
+    ) as Promise<unknown>;
+    return { ...h, guest, host, push, invoke };
+  }
+  const anchor = { x: 12, y: 24, width: 140, height: 32 };
+  it('uses the originating host and returns the full remote route through the guest request', async () => {
+    const h = page();
+    const result = h.invoke({ anchor });
+    const presentation = h.push.mock.calls[0][1];
+    expect(presentation).toMatchObject({ allowRemote: true, pageAnchor: { guestId: 42, rect: anchor } });
+    expect(h.target).not.toHaveBeenCalled();
+    const selected = { ...route, agentDeviceId: 'share:demo' };
+    expect(await h.picker.resolve(7, presentation.requestId, selected)).toEqual({ handled: false, accepted: false });
+    expect(await h.picker.resolve(8, presentation.requestId, selected)).toEqual({ handled: true, accepted: true });
+    expect(await result).toEqual({ ok: true, route: selected });
+    expect(h.guest.focus).toHaveBeenCalledOnce();
+    expect(h.guest.listenerCount('did-start-navigation')).toBe(0);
+  });
+  it('rejects subframes, nonfinite anchors and arbitrary IPC options without showing a picker', async () => {
+    const h = page();
+    expect(await h.invoke({ anchor }, {})).toMatchObject({ errorCode: 'PERMISSION_DENIED' });
+    for (const value of [{ anchor: { ...anchor, x: NaN } }, { anchor, mobilePageId: 'another-page' },
+      { anchor, allowRemote: 'yes' }]) {
+      expect(await h.invoke(value)).toMatchObject({ errorCode: 'INVALID_REQUEST' });
+    }
+    expect(h.push).not.toHaveBeenCalled();
+  });
+  it.each(['guest-navigation', 'host-navigation', 'page-scroll'])(
+    'cancels %s without returning a route to a replacement document', async reason => {
+      const h = page();
+      const result = h.invoke({ anchor });
+      if (reason === 'page-scroll') h.guest.ipc.emit('ghost-page:cancel-model-picker', { sender: h.guest, senderFrame: h.guest.mainFrame });
+      else (reason === 'guest-navigation' ? h.guest : h.host).emit('did-start-navigation', {}, 'new-page', false, true);
+      expect(await result).toMatchObject({ errorCode: 'CANCELLED' });
+      expect(h.push).toHaveBeenLastCalledWith('ghosts:model-picker:dismissed', expect.anything());
+      expect(h.guest.focus).not.toHaveBeenCalled();
+    },
+  );
+});
 
 describe('Host plugin model picker', () => {
   it('returns a complete configuration only to the originating installation after its Host window answers', async () => {
@@ -139,7 +197,25 @@ describe('Host plugin model picker', () => {
     },
   );
 
-  it('rejects malformed and disabled requests, concurrent dialogs and immediate reopening', async () => {
+  // #8964: cancellation must win over an already-running remote availability check.
+  // Existing cancellation cases resolve before validation starts. Tier: unit, no real waiting.
+  it('discards a remote selection that finishes validation after cancellation', async () => {
+    const h = setup();
+    let finishValidation!: (value: boolean) => void;
+    h.available.mockImplementationOnce(() => new Promise((done) => { finishValidation = done; }));
+    const result = h.picker.request('plugin', { allowRemote: true });
+    const id = h.sent[0].requestId;
+    const selection = h.picker.resolve(7, id, { ...route, agentDeviceId: 'share:fixture' });
+    expect(await h.picker.resolve(7, id, null)).toEqual({ handled: true, accepted: true });
+    expect(await result).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    finishValidation(true);
+    expect(await selection).toEqual({ handled: false, accepted: false });
+    expect(h.dismiss).toHaveBeenCalledExactlyOnceWith(id);
+  });
+
+  // Regression: the inherited directory-picker cooldown blocked normal rapid close/reopen
+  // and switching between the page popover and dialog. Keep the clock fixed to catch it. Tier: unit.
+  it('rejects malformed, disabled and concurrent requests but allows immediate reopening', async () => {
     const h = setup();
     expect(
       await h.picker.request('plugin', { initial: { ...route, endpoint: 'private' } }),
@@ -151,8 +227,10 @@ describe('Host plugin model picker', () => {
     expect(await h.picker.request('other')).toMatchObject({ errorCode: 'BUSY' });
     h.picker.cancel();
     await pending;
-    expect(await h.picker.request('plugin')).toMatchObject({ errorCode: 'RATE_LIMITED' });
-    h.advance();
+    const reopened = h.picker.request('plugin');
+    expect(h.sent).toHaveLength(2);
+    await h.picker.resolve(7, h.sent[1].requestId, route);
+    expect(await reopened).toEqual({ ok: true, route });
     h.target.mockReturnValueOnce(null as never);
     expect(await h.picker.request('plugin')).toMatchObject({ errorCode: 'UNAVAILABLE' });
   });
@@ -199,6 +277,43 @@ it('validates effort and Fast against the exact connected model and available en
   expect(
     isPluginModelPickerRouteAvailable({ ...route, fastMode: false }, [provider], ['codex']),
   ).toBe(false);
+});
+
+// Rule: the card dropdown also offers other computers and shared providers. A remote pick must be a
+// location that is currently offered, and the model must be in that location's remotely callable catalog.
+it('checks a card model at its own location: local catalog, or the offered remote location', async () => {
+  const view = (models: string[]) => ({
+    id: 'mine', source: 'user', connected: true, agents: ['codex'], routing: { codex: { enabled: true } },
+    models: { codex: models.map((id) => ({ id, mode: 'chat', efforts: ['high'], supportsFastMode: true, supportsUltrafastMode: true })) },
+  }) as unknown as ProviderView;
+  const remoteViews = vi.fn(async (id: string) => [view(id === 'mac-mini' ? ['remote-model'] : [])]);
+  const sources = {
+    localViews: async () => [view(['model'])],
+    localAgents: () => ['codex'],
+    locations: async () => ({ locations: [{ agentDeviceId: 'mac-mini' }, { agentDeviceId: 'share:abc' }] }),
+    remoteViews,
+  };
+  expect(await isGhostCardModelRouteAvailable(route, sources)).toBe(true);
+  expect(await isGhostCardModelRouteAvailable({ ...route, model: 'remote-model', agentDeviceId: 'mac-mini' }, sources)).toBe(true);
+  // Remote engines are judged by the remote catalog, not by what is installed here.
+  expect(await isGhostCardModelRouteAvailable({ ...route, model: 'remote-model', agentDeviceId: 'mac-mini' }, { ...sources, localAgents: () => [] })).toBe(true);
+  expect(await isGhostCardModelRouteAvailable({ ...route, agentDeviceId: 'mac-mini' }, sources)).toBe(false);
+  expect(await isGhostCardModelRouteAvailable({ ...route, model: 'remote-model', agentDeviceId: 'offline-mac' }, sources)).toBe(false);
+  expect(remoteViews).not.toHaveBeenCalledWith('offline-mac');
+  expect(await isGhostCardModelRouteAvailable({ ...route, agentDeviceId: 'mac-mini' }, { ...sources, locations: null })).toBe(false);
+});
+
+// Unit: after a first successful pick, "choose a model" on a PR card stopped opening the picker.
+// The request went to a pre-warmed hidden app window (still an app window) and timed out unseen.
+describe('chooseModelPickerWindow', () => {
+  it('uses the focused window only when usable, otherwise the first visible app window', () => {
+    const hidden = { id: 'prewarmed', usable: false }, main = { id: 'main', usable: true };
+    const usable = (w: { usable: boolean }) => w.usable;
+    expect(chooseModelPickerWindow(hidden, [hidden, main], usable)).toBe(main);
+    expect(chooseModelPickerWindow(null, [hidden, main], usable)).toBe(main);
+    expect(chooseModelPickerWindow(main, [hidden, main], usable)).toBe(main);
+    expect(chooseModelPickerWindow(null, [hidden], usable)).toBeUndefined();
+  });
 });
 
 // Rule: a plugin model must never stop the message. A Harness that is not installed makes the send

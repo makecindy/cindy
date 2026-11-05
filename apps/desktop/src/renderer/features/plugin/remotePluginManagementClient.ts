@@ -42,17 +42,18 @@ export function boundedPluginResponse(
   );
 }
 export async function hasPluginManagement(deviceId: string): Promise<boolean> {
+  return (await pluginManagementActions(deviceId)).includes('management:snapshot');
+}
+export async function pluginManagementActions(deviceId: string): Promise<string[]> {
   const manifest = await window.electronAPI.deviceLink.invoke(
     deviceId,
     REMOTE_RESOURCE_MANIFEST_CHANNEL,
     [{ client: pluginManagementClient }],
   );
-  if (!boundedPluginResponse(manifest)) return false;
-  return !!(
+  if (!boundedPluginResponse(manifest)) return [];
+  return (
     manifest as { collections?: Array<{ id: string; actions?: Array<{ id: string }> }> }
-  ).collections?.some(
-    (c) => c.id === 'plugins' && c.actions?.some((a) => a.id === 'management:snapshot'),
-  );
+  ).collections?.find(c => c.id === 'plugins')?.actions?.map(a => a.id) ?? [];
 }
 export async function invokePluginManagement(
   deviceId: string,

@@ -97,6 +97,8 @@ export {
   type SqliteFactory,
 } from './memory/manager.js';
 export { isBotMcpServerAllowed } from './agents/shared/bot-runtime-policy.js';
+export { resolveAllowedManagedSkills, snapshotManagedSkillGrants } from './agents/shared/managed-skill-policy.js';
+export { isSkillDisabled } from './agents/shared/skill-activation.js';
 export {
   MemoryFlushController,
   DEFAULT_FLUSH_THRESHOLDS,
