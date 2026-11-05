@@ -56,6 +56,7 @@ export class SharedQuotaReader {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private dispose: (() => void) | null = null;
   private identity: string | null = null;
+  private directoryIdentity: string | null = null;
   private readings: SharedQuotaReading[] = [];
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
   constructor(private readonly deps: SharedQuotaDeps) {}
@@ -65,27 +66,46 @@ export class SharedQuotaReader {
       [share, this.deps.accessEpoch(share.shareId)])]);
   }
 
-  private isCurrentReading(reading: SharedQuotaReading): boolean {
+  private currentDirectoryIdentity(): string {
+    return JSON.stringify([this.deps.scope(), this.deps.shares()]);
+  }
+
+  private isCurrentReading(reading: Pick<SharedQuotaReading, 'share' | 'accessEpoch'>): boolean {
     const latest = this.deps.shares().find(share => share.shareId === reading.share.shareId);
     return this.deps.accessEpoch(reading.share.shareId) === reading.accessEpoch
       && latest !== undefined && JSON.stringify(latest) === JSON.stringify(reading.share);
+  }
+
+  private handleChange(): void {
+    const next = this.currentIdentity();
+    if (next === this.identity) return;
+    if (this.currentDirectoryIdentity() !== this.directoryIdentity) { this.refresh(); return; }
+    // An access refusal can be emitted synchronously by read(). Remove only invalidated
+    // shares; keep sibling reads and the bounded poll schedule rather than recursively read.
+    this.identity = next;
+    this.readings = this.readings.filter(reading => this.isCurrentReading(reading));
+    this.publishReadings();
+  }
+
+  private removeReading(shareId: string): void {
+    const remaining = this.readings.filter(reading => reading.share.shareId !== shareId);
+    if (remaining.length === this.readings.length) return;
+    this.readings = remaining;
+    this.publishReadings();
   }
 
   setOpen(open: boolean): void {
     if (this.open === open) return;
     this.open = open;
     if (open) {
-      this.dispose = this.deps.subscribe(() => {
-        const next = this.currentIdentity();
-        if (next === this.identity) return;
-        this.refresh();
-      });
+      this.dispose = this.deps.subscribe(() => this.handleChange());
       this.refresh();
     } else {
       this.dispose?.();
       this.dispose = null;
       this.clear();
       this.identity = null;
+      this.directoryIdentity = null;
     }
   }
 
@@ -118,6 +138,7 @@ export class SharedQuotaReader {
     // relationship change must still remove the old reading before its replacement arrives.
     if (identity !== this.identity) this.clearReadings();
     this.identity = identity;
+    this.directoryIdentity = this.currentDirectoryIdentity();
     void this.read(this.revision);
   }
 
@@ -130,20 +151,25 @@ export class SharedQuotaReader {
     // Bound network fanout; one failed share does not hide other suppliers.
     for (let offset = 0; offset < targets.length && current(); offset += 3) {
       await Promise.all(targets.slice(offset, offset + 3).map(async share => {
-        const accessEpoch = this.deps.accessEpoch(share.shareId);
+        const target = { share, accessEpoch: this.deps.accessEpoch(share.shareId) };
         try {
           const result = await this.deps.read(share.shareId);
           if (!current()) return;
-          const reading = { share, accessEpoch, raw: result };
+          const reading = { ...target, raw: result };
           if (!this.isCurrentReading(reading)) return;
+          if (!sharedSubscription(share, result, Date.now())) {
+            this.removeReading(share.shareId);
+            return;
+          }
           results.push(reading);
         } catch {
-          // Failed or revoked reads contribute no cached value.
+          // A confirmed negative result removes this share now, without waiting for siblings.
+          if (current() && this.isCurrentReading(target)) this.removeReading(share.shareId);
         }
       }));
     }
     if (!current()) return;
-    this.readings = results;
+    this.readings = results.filter(reading => this.isCurrentReading(reading));
     this.publishReadings();
     if (!current()) return;
     this.timer = setTimeout(() => {
@@ -158,7 +184,7 @@ export class SharedQuotaReader {
     if (!this.open) return;
     // Refusals can change the access epoch before the received DTO changes. Recheck at
     // publication too, including a fast result held while a sibling request was pending.
-    if (this.currentIdentity() !== this.identity) { this.refresh(); return; }
+    if (this.currentIdentity() !== this.identity) { this.handleChange(); return; }
     const now = Date.now();
     const sources = this.readings.flatMap(reading => {
       if (!this.isCurrentReading(reading)) return [];

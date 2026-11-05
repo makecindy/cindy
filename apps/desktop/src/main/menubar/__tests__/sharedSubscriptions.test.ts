@@ -135,10 +135,54 @@ it('clears a published quota on access refusal even while the received DTO is un
   await vi.advanceTimersByTimeAsync(0);
   expect(h.sources).toHaveLength(1);
   h.read.mockRejectedValue(new Error('access denied'));
+  const calls = h.read.mock.calls.length;
   h.refuseAccess();
   expect(h.sources).toEqual([]);
   await vi.advanceTimersByTimeAsync(0);
   expect(h.sources).toEqual([]);
+  expect(h.read).toHaveBeenCalledTimes(calls);
+  h.reader.setOpen(false);
+});
+
+it('bounds epoch-only refusal retries and lets healthy siblings publish', async () => {
+  const h = harness();
+  h.changeShares([share, { ...share, shareId: 'two' }]);
+  let refusals = 0;
+  h.read.mockImplementation((id: string) => {
+    if (id !== share.shareId) return Promise.resolve(quota());
+    // Cap the simulated notifications so the pre-fix recursive implementation fails fast.
+    if (++refusals <= 4) h.refuseAccess();
+    return Promise.reject(new Error('access denied'));
+  });
+  h.reader.setOpen(true);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.read).toHaveBeenCalledTimes(2);
+  expect(h.sources.map(source => source.id)).toEqual(['share:two']);
+  await vi.advanceTimersByTimeAsync(4_999);
+  expect(h.read).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(h.read).toHaveBeenCalledTimes(4);
+  expect(h.sources.map(source => source.id)).toEqual(['share:two']);
+  h.reader.setOpen(false);
+});
+
+it.each(['failed', 'permission'])('removes a share as soon as its read is %s while a sibling is pending', async kind => {
+  const h = harness();
+  h.changeShares([share, { ...share, shareId: 'two' }]);
+  h.reader.setOpen(true);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.sources).toHaveLength(2);
+  let finishSlow!: (value: unknown) => void;
+  h.read.mockImplementation((id: string) => id !== share.shareId
+    ? new Promise(done => { finishSlow = done; })
+    : kind === 'failed' ? Promise.reject(new Error('offline'))
+      : Promise.resolve({ ...quota(), capabilities: { quota: false, usage: false } }));
+  h.reader.refresh();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.sources.map(source => source.id)).toEqual(['share:two']);
+  finishSlow(quota());
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.sources.map(source => source.id)).toEqual(['share:two']);
   h.reader.setOpen(false);
 });
 
@@ -293,14 +337,14 @@ it.each(['close', 'owner', 'relationship', 'access'])('drops late responses afte
   if (kind === 'owner') h.changeOwner();
   if (kind === 'relationship') h.changeShares([{ ...share, status: 'paused' }]);
   if (kind === 'access') {
-    h.read.mockRejectedValueOnce(new Error('access denied'));
     h.refuseAccess();
   }
   await vi.advanceTimersByTimeAsync(0);
   const before = h.sources;
   resolve(quota());
   await vi.advanceTimersByTimeAsync(0);
-  expect(h.sources).toBe(before);
+  if (kind === 'access') expect(h.sources).toEqual(before);
+  else expect(h.sources).toBe(before);
   if (kind !== 'close') expect(h.sources).toEqual([]);
   h.reader.setOpen(false);
 });
