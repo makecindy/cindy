@@ -6755,8 +6755,6 @@
             "task": "Aufgabentaste",
             "action": "Aktionstaste"
           },
-          "lightingLimit": "Die Firmware kann die ersten 6 Aufgabentasten in der Reihenfolge der Platine unabhängig voneinander beleuchten. Zusätzliche Aufgabentasten wechseln weiterhin Aufgaben.",
-          "unlitKey": "Diese Taste folgt auf die ersten 6 und hat daher keine eigene Statusleuchte.",
           "taskHint": "Eine transparente Tastenkappe wird empfohlen, damit der Aufgabenstatus in verschiedenen Farben angezeigt werden kann."
         },
         "commandKeys": {
