@@ -148,3 +148,19 @@ Host 现已注册真实 Codex agent（本机 Codex CLI 登录 lane，未复制�
 ## 明确排除的参考实现
 
 `apps/cindy-headless` 是独立评测/任务执行器，具有自己的 `headless_sessions` 表、profile 和环境变量 API key 认证；它不是 Desktop Runtime 的 headless 启动方式。`feat/headless-server` 与 `feat/web-client` 仅按 issue #136 所列只读参考查看，不合并/摘取其实现，也不沿用其平行数据库、固定 provider、API key 登录或重写 SPA 决策。
+
+
+## 阶段 4 现状（实测，2026-11-05）
+
+浏览器侧复用同一份 renderer 构建产物，`/shim.js` 实现 preload 通道表；Host 已具备：
+
+| 领域 | 状态 | 证据 |
+|---|---|---|
+| 应用外壳、侧栏、任务列表 | 已验证 | 真实任务行来自共用 SQLite（13 条），`localDb.sessions.list()` 返回数组 |
+| 模型目录 | 已验证 | `/api/providers` 单一 `xd` provider，28 个网关对话模型，双 harness routing；`/api/capabilities` 与之一致 |
+| 模型选择器 | 已验证 | 可选列表可展开并选中 `anthropic/claude-sonnet-5-5` |
+| 任务创建 / 发送 / 流式 | 已验证（直连通道） | 通过 renderer 通道建任务后发送，SSE 依次得到 `session`、`status`、`text` 增量、`text(isFinal)`、`done` |
+| 任务详情页 | **阻断** | 打开任意任务抛 React #185（Maximum update depth exceeded），组件栈指向 `ChatInput`；props 在循环中完全不变，聚焦/扫描 effect 排除后仍复现 |
+| 停止、历史恢复、插件列表页 | 未验证 | 依赖详情页恢复 |
+
+`localDb.messages.list`、`localDb.messages.historyView`、`localDb.messages.estimatedSessionValue` 已有 Host 路由；windowed history reader 仍在 Electron IPC 内，非空任务的历史页显式报错（`history_view_not_implemented_on_host`），不返回空页冒充。
