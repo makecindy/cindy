@@ -1551,8 +1551,21 @@ struct AgentIslandCompactReminder: Codable {
   let until: Double
 }
 
+/// One plan's remaining quota; main decides every value (see `AgentIslandQuotaItem` in
+/// `shared/agentIsland.ts`), including the nominal `width` both sides reserve.
+struct AgentIslandQuotaItem: Codable, Equatable, Identifiable {
+  let id: String
+  let logoSvg: String
+  let text: String
+  let level: String
+  let stale: Bool
+  let accessibilityLabel: String
+  let width: Double
+}
+
 struct AgentIslandDisplayState: Codable {
   var compactReminder: AgentIslandCompactReminder? = nil
+  var quota: [AgentIslandQuotaItem]? = nil
   let visible: Bool
   let mode: String
   let notchStatus: String
@@ -1609,6 +1622,10 @@ struct AgentIslandDisplayState: Codable {
     strings ?? .fallback
   }
 
+  var displayQuota: [AgentIslandQuotaItem] {
+    quota ?? []
+  }
+
   var displaySoundSettings: AgentIslandSoundSettings {
     soundSettings ?? .fallback
   }
@@ -1661,6 +1678,9 @@ private let expandedIslandTopPadding: CGFloat = 7
 private let expandedIslandBodySpacing: CGFloat = 4
 private let expandedIslandBottomPadding: CGFloat = 16
 private let compactIslandBaseWidth: CGFloat = 210
+/// Idle pill without a notch: padding, the 16pt mascot and its gap. Mirrors
+/// `AGENT_ISLAND_COMPACT_IDLE_QUOTA_CHROME`.
+private let compactIdleQuotaChrome: CGFloat = 11 * 2 + 16 + 6
 private let compactIslandMinContentWidth: CGFloat = 80
 private let compactCollapseTrailingReservedWidth: CGFloat = 100
 private let compactIslandBadgeCollapseContentThreshold: CGFloat = 152
@@ -2123,13 +2143,17 @@ struct AgentIslandLayout: Equatable {
     let compactBadgeWidth = !expanded && layoutScreenMetrics.hasNotch && hasSession
       ? PillBadge.intrinsicWidth(pillSnapshot: state.pillSnapshot, compact: true)
       : 0
+    let idleQuotaWidth = !expanded && !hasSession
+      ? AgentIslandQuotaRow.compactReservedWidth(items: state.displayQuota, hasNotch: layoutScreenMetrics.hasNotch)
+      : 0
     let baseWidth = computeWidth(
       expanded: expanded,
       hasSession: hasSession,
       availableFrameWidth: availableFrameWidth,
       screenMetrics: layoutScreenMetrics,
       preferredContentWidth: preferredContentWidth,
-      compactBadgeWidth: compactBadgeWidth
+      compactBadgeWidth: compactBadgeWidth,
+      idleQuotaWidth: idleQuotaWidth
     )
     // A hidden island reveals only enough room for its existing icon and count.
     // Wider user preferences stay unchanged, and the saved width is never rewritten.
@@ -2167,7 +2191,8 @@ struct AgentIslandLayout: Equatable {
     availableFrameWidth: CGFloat,
     screenMetrics: AgentIslandScreenMetrics,
     preferredContentWidth: CGFloat?,
-    compactBadgeWidth: CGFloat
+    compactBadgeWidth: CGFloat,
+    idleQuotaWidth: CGFloat = 0
   ) -> CGFloat {
     let idleExpandedWidth: CGFloat = 340
     let carrierInset = expanded ? expandedIslandCarrierExpandedInset : compactIslandCarrierInset
@@ -2188,13 +2213,15 @@ struct AgentIslandLayout: Equatable {
         maxWidth: maxWidth,
         hasSession: hasSession,
         screenMetrics: screenMetrics,
-        compactBadgeWidth: compactBadgeWidth
+        compactBadgeWidth: compactBadgeWidth,
+        idleQuotaWidth: idleQuotaWidth
       )
     }
     let defaultWidth = defaultCompactWidth(
       hasSession: hasSession,
       screenMetrics: screenMetrics,
-      compactBadgeWidth: compactBadgeWidth
+      compactBadgeWidth: compactBadgeWidth,
+      idleQuotaWidth: idleQuotaWidth
     )
     return min(preferred ?? defaultWidth, availableWidth)
   }
@@ -2224,12 +2251,15 @@ struct AgentIslandLayout: Equatable {
     compactBadgeWidth + hardwareNotchBadgeReservedInset
   }
 
+  /// Mirrors `getAgentIslandDefaultContentWidth` in `shared/agentIsland.ts`.
   static func defaultCompactWidth(
     hasSession: Bool,
     screenMetrics: AgentIslandScreenMetrics,
-    compactBadgeWidth: CGFloat = 0
+    compactBadgeWidth: CGFloat = 0,
+    idleQuotaWidth: CGFloat = 0
   ) -> CGFloat {
     let notchWidth = CGFloat(screenMetrics.notchWidth)
+    let quotaWidth = hasSession ? 0 : idleQuotaWidth
     if screenMetrics.hasNotch {
       let baseExtra = hasSession
         ? AgentIslandScreenMetricsConfig.compactHardwareActiveExtraWidth
@@ -2239,11 +2269,16 @@ struct AgentIslandLayout: Equatable {
       let badgeExtra = hasSession
         ? hardwareNotchBadgeSideWidth(compactBadgeWidth: compactBadgeWidth) * 2
         : 0
-      let extra = max(baseExtra, badgeExtra)
+      // Idle quota sits on the trailing side, mirrored like the badge.
+      let quotaExtra = quotaWidth > 0
+        ? hardwareNotchBadgeSideWidth(compactBadgeWidth: quotaWidth) * 2
+        : 0
+      let extra = max(baseExtra, badgeExtra, quotaExtra)
       return max(compactIslandBaseWidth, notchWidth + extra)
     }
     let extra = hasSession ? AgentIslandScreenMetricsConfig.compactSimulatedActiveExtraWidth : 0
-    return max(compactIslandBaseWidth, notchWidth + extra)
+    let quotaContentWidth = quotaWidth > 0 ? quotaWidth + compactIdleQuotaChrome : 0
+    return max(compactIslandBaseWidth, notchWidth + extra, quotaContentWidth)
   }
 
   static func snappedCompactHardwareWidth(
@@ -2252,7 +2287,8 @@ struct AgentIslandLayout: Equatable {
     maxWidth: CGFloat,
     hasSession: Bool,
     screenMetrics: AgentIslandScreenMetrics,
-    compactBadgeWidth: CGFloat = 0
+    compactBadgeWidth: CGFloat = 0,
+    idleQuotaWidth: CGFloat = 0
   ) -> CGFloat {
     guard screenMetrics.hasNotch else {
       return clampedWidth
@@ -2272,7 +2308,8 @@ struct AgentIslandLayout: Equatable {
         defaultCompactWidth(
           hasSession: hasSession,
           screenMetrics: screenMetrics,
-          compactBadgeWidth: compactBadgeWidth
+          compactBadgeWidth: compactBadgeWidth,
+          idleQuotaWidth: idleQuotaWidth
         )
       )
     )
@@ -2516,6 +2553,7 @@ struct AgentIslandRootView: View {
         ExpandedSessionsView(
           current: current,
           sessions: model.state.sessions,
+          quota: model.state.displayQuota,
           displaySurface: model.state.displaySurface,
           totalCount: model.state.totalCount,
           updatedAt: model.state.updatedAt,
@@ -2541,6 +2579,7 @@ struct AgentIslandRootView: View {
     } else {
       IdleIslandView(
         layout: layout,
+        quota: model.state.displayQuota,
         strings: model.state.displayStrings,
         soundEnabled: model.state.displaySoundSettings.enabled,
         mascotSkin: model.state.displayMascotSkin,
@@ -2843,6 +2882,7 @@ struct CompactReminderView: View {
 
 struct IdleIslandView: View {
   let layout: AgentIslandLayout
+  let quota: [AgentIslandQuotaItem]
   let strings: AgentIslandStrings
   let soundEnabled: Bool
   let mascotSkin: String
@@ -2887,8 +2927,15 @@ struct IdleIslandView: View {
       Color.clear
     } else if layout.hasHardwareNotch {
       hardwareNotchBody
+    } else if !quota.isEmpty && layout.expanded {
+      // Quota takes the room left of the toolbar, aligned like a task's top bar.
+      idleMark(quotaWidth: layout.width - expandedIslandCardHorizontalPadding * 2
+        - ExpandedIslandToolbarControls.width - 8 - idleMascotWidth)
+        .padding(.horizontal, expandedIslandCardHorizontalPadding)
+        .frame(height: layout.menuBarZoneHeight)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     } else {
-      idleMark()
+      idleMark(quotaWidth: layout.width - compactIdleQuotaChrome)
         .frame(height: layout.expanded ? layout.menuBarZoneHeight : nil)
         .frame(
           maxWidth: .infinity,
@@ -2901,13 +2948,27 @@ struct IdleIslandView: View {
   private var hardwareNotchBody: some View {
     let sideWidth = max(0, (layout.width - layout.notchWidth) / 2)
     let textOpacity = hardwareNotchTextOpacity(sideWidth: sideWidth)
+    // Collapsed, quota sits on the trailing side like the task badge; expanded, the toolbar
+    // takes that side and quota follows the mascot.
+    let trailingQuota = !layout.expanded && !quota.isEmpty
     return HStack(spacing: 0) {
-      idleMark(textOpacity: textOpacity)
+      idleMark(
+        textOpacity: textOpacity,
+        quotaWidth: trailingQuota ? nil : sideWidth - idleMascotWidth
+      )
         .frame(width: sideWidth, alignment: .leading)
         .clipped()
       Spacer(minLength: layout.notchWidth)
-      Color.clear
-        .frame(width: sideWidth)
+      Group {
+        if trailingQuota {
+          AgentIslandQuotaRow(items: quota, maxWidth: sideWidth - hardwareNotchBadgeReservedInset)
+            .padding(.trailing, hardwareNotchBadgeReservedInset)
+        } else {
+          Color.clear
+        }
+      }
+      .frame(width: sideWidth, alignment: .trailing)
+      .clipped()
     }
     .frame(height: layout.expanded ? layout.menuBarZoneHeight : nil)
     .frame(
@@ -2917,16 +2978,24 @@ struct IdleIslandView: View {
     )
   }
 
-  private func idleMark(textOpacity: Double = 1) -> some View {
+  private var idleMascotWidth: CGFloat { 16 + 5 }
+
+  /// The mascot, then the quota when `quotaWidth` leaves room for it, otherwise the app name.
+  @ViewBuilder
+  private func idleMark(textOpacity: Double = 1, quotaWidth: CGFloat? = nil) -> some View {
     HStack(spacing: 5) {
       AgentIslandMascotView(skin: mascotSkin, state: .idle, size: 16)
         .frame(width: 16, height: 16)
-      Text(strings.displayAppName)
-        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-        .foregroundColor(Color.white.opacity(0.24))
-        .opacity(textOpacity)
-        .lineLimit(1)
-        .fixedSize(horizontal: true, vertical: false)
+      if let quotaWidth, !AgentIslandQuotaRow.fitting(items: quota, maxWidth: quotaWidth).isEmpty {
+        AgentIslandQuotaRow(items: quota, maxWidth: quotaWidth)
+      } else {
+        Text(strings.displayAppName)
+          .font(.system(size: 10, weight: .semibold, design: .monospaced))
+          .foregroundColor(Color.white.opacity(0.24))
+          .opacity(textOpacity)
+          .lineLimit(1)
+          .fixedSize(horizontal: true, vertical: false)
+      }
     }
   }
 
@@ -2995,6 +3064,7 @@ struct IdleCreateConversationRow: View {
 struct ExpandedIslandTopBar: View {
   var title: String? = nil
   let mascotState: AgentIslandMascotAnimationState?
+  var quota: [AgentIslandQuotaItem] = []
   let layout: AgentIslandLayout
   let strings: AgentIslandStrings
   let soundEnabled: Bool
@@ -3016,7 +3086,10 @@ struct ExpandedIslandTopBar: View {
 
   private var regularBody: some View {
     HStack(spacing: 8) {
-      leadingContent
+      leadingContent(
+        width: layout.width - expandedIslandCardHorizontalPadding * 2
+          - ExpandedIslandToolbarControls.width - 8
+      )
       Spacer(minLength: 8)
       ExpandedIslandToolbarControls(strings: strings, soundEnabled: soundEnabled, eventSink: eventSink)
     }
@@ -3028,7 +3101,7 @@ struct ExpandedIslandTopBar: View {
       let notchWidth = min(layout.notchWidth, max(0, proxy.size.width))
       let sideWidth = max(0, (proxy.size.width - notchWidth) / 2)
       HStack(spacing: 0) {
-        leadingContent
+        leadingContent(width: sideWidth)
           .frame(width: sideWidth, alignment: .leading)
           .clipped()
 
@@ -3049,9 +3122,11 @@ struct ExpandedIslandTopBar: View {
     )
   }
 
+  /// `width` is the room left of the toolbar (or beside the notch); quota fills what the
+  /// mascot leaves.
   @ViewBuilder
-  private var leadingContent: some View {
-    if mascotState != nil || title != nil {
+  private func leadingContent(width: CGFloat) -> some View {
+    if mascotState != nil || title != nil || !quota.isEmpty {
       HStack(spacing: 8) {
         if let mascotState {
           RunningMascotIcon(skin: mascotSkin, state: mascotState, size: 18, namespace: runningMascotNamespace)
@@ -3063,6 +3138,8 @@ struct ExpandedIslandTopBar: View {
             .foregroundColor(Color.white.opacity(0.34))
             .lineLimit(1)
             .truncationMode(.tail)
+        } else if !quota.isEmpty {
+          AgentIslandQuotaRow(items: quota, maxWidth: width - (mascotState != nil ? 18 + 8 : 0))
         }
       }
     }
@@ -3074,6 +3151,9 @@ struct ExpandedIslandToolbarControls: View {
   let soundEnabled: Bool
   let eventSink: ([String: Any]) -> Void
   @State private var controlsVisible = false
+
+  /// Three 23pt buttons with 5pt gaps.
+  static let width: CGFloat = 23 * 3 + 5 * 2
 
   var body: some View {
     HStack(spacing: 5) {
@@ -3144,6 +3224,96 @@ struct ExpandedIslandToolbarButton: View {
       withAnimation(.easeOut(duration: 0.12)) {
         isHovered = hovering
       }
+    }
+  }
+}
+
+enum AgentIslandQuotaLogos {
+  private static var cache: [String: NSImage] = [:]
+
+  static func image(_ svg: String) -> NSImage? {
+    if let cached = cache[svg] { return cached }
+    guard let data = svg.data(using: .utf8), let image = NSImage(data: data) else { return nil }
+    image.isTemplate = true
+    cache[svg] = image
+    return image
+  }
+}
+
+/// Remaining quota per plan: logo and amount, in the menu bar's order. Chips that do not fit
+/// `maxWidth` are left out from the end, using the nominal widths main sent.
+struct AgentIslandQuotaRow: View {
+  let items: [AgentIslandQuotaItem]
+  let maxWidth: CGFloat
+
+  // Mirrors the `AGENT_ISLAND_QUOTA_*` metrics in `shared/agentIsland.ts`.
+  static let logoSize: CGFloat = 10
+  static let logoGap: CGFloat = 3
+  static let chipSpacing: CGFloat = 8
+  static let compactMaxItems = 4
+  static let compactHardwareMaxItems = 2
+
+  /// Mirrors `getAgentIslandCompactQuotaWidth`: room the idle pill makes for its first chips.
+  static func compactReservedWidth(items: [AgentIslandQuotaItem], hasNotch: Bool) -> CGFloat {
+    let reserved = items.prefix(hasNotch ? compactHardwareMaxItems : compactMaxItems)
+    guard !reserved.isEmpty else { return 0 }
+    return reserved.reduce(CGFloat(0)) { $0 + CGFloat($1.width) }
+      + chipSpacing * CGFloat(reserved.count - 1)
+  }
+
+  static func fitting(items: [AgentIslandQuotaItem], maxWidth: CGFloat) -> [AgentIslandQuotaItem] {
+    var used: CGFloat = 0
+    var result: [AgentIslandQuotaItem] = []
+    for item in items {
+      let next = used + (result.isEmpty ? 0 : chipSpacing) + CGFloat(item.width)
+      if next > maxWidth + 0.5 { break }
+      used = next
+      result.append(item)
+    }
+    return result
+  }
+
+  var body: some View {
+    HStack(spacing: Self.chipSpacing) {
+      ForEach(Self.fitting(items: items, maxWidth: maxWidth)) { item in
+        chip(item)
+      }
+    }
+    .fixedSize()
+  }
+
+  private func chip(_ item: AgentIslandQuotaItem) -> some View {
+    HStack(spacing: Self.logoGap) {
+      Group {
+        if let image = AgentIslandQuotaLogos.image(item.logoSvg) {
+          Image(nsImage: image)
+            .renderingMode(.template)
+            .resizable()
+            .interpolation(.high)
+            .aspectRatio(contentMode: .fit)
+        } else {
+          Color.clear
+        }
+      }
+      .frame(width: Self.logoSize, height: Self.logoSize)
+      .foregroundColor(Color.white.opacity(0.5))
+
+      Text(item.text)
+        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+        .foregroundColor(textColor(item.level))
+        .lineLimit(1)
+    }
+    .opacity(item.stale ? 0.55 : 1)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(item.accessibilityLabel)
+    .help(item.accessibilityLabel)
+  }
+
+  private func textColor(_ level: String) -> Color {
+    switch level {
+    case "error": return agentIslandErrorRed
+    case "warn": return agentIslandOrange
+    default: return Color.white.opacity(0.62)
     }
   }
 }
@@ -3334,6 +3504,7 @@ struct AgentIslandWaveText: View {
 struct ExpandedSessionsView: View {
   let current: AgentIslandSession
   let sessions: [AgentIslandSession]
+  let quota: [AgentIslandQuotaItem]
   let displaySurface: String
   let totalCount: Int
   let updatedAt: Double
@@ -3369,6 +3540,7 @@ struct ExpandedSessionsView: View {
     VStack(spacing: expandedIslandBodySpacing) {
       ExpandedIslandTopBar(
         mascotState: currentMascotState,
+        quota: quota,
         layout: layout,
         strings: strings,
         soundEnabled: soundEnabled,
@@ -6189,7 +6361,8 @@ final class AgentIslandController {
         AgentIslandLayout.defaultCompactWidth(
           hasSession: model.state.totalCount > 0,
           screenMetrics: model.screenMetrics,
-          compactBadgeWidth: compactBadgeWidth
+          compactBadgeWidth: compactBadgeWidth,
+          idleQuotaWidth: compactIdleQuotaWidth
         )
       )
     )
@@ -6270,8 +6443,21 @@ final class AgentIslandController {
       maxWidth: maxWidth,
       hasSession: model.state.totalCount > 0,
       screenMetrics: model.screenMetrics,
-      compactBadgeWidth: compactBadgeWidth
+      compactBadgeWidth: compactBadgeWidth,
+      idleQuotaWidth: compactIdleQuotaWidth
     )
+  }
+
+  /// Width the idle hardware-notch pill reserves for quota; like the badge, only the
+  /// centered notch layout snaps to it.
+  private var compactIdleQuotaWidth: CGFloat {
+    guard model.hardwareNotchLayoutEnabled,
+      model.screenMetrics.hasNotch,
+      model.state.totalCount == 0
+    else {
+      return 0
+    }
+    return AgentIslandQuotaRow.compactReservedWidth(items: model.state.displayQuota, hasNotch: true)
   }
 
   /// Width reserved for the compact count badge in the current snapshot, used to keep
@@ -6306,7 +6492,8 @@ final class AgentIslandController {
     let badgeAwareBasicWidth = AgentIslandLayout.defaultCompactWidth(
       hasSession: hasSession,
       screenMetrics: model.screenMetrics,
-      compactBadgeWidth: compactBadgeWidth
+      compactBadgeWidth: compactBadgeWidth,
+      idleQuotaWidth: compactIdleQuotaWidth
     )
     guard abs(contentWidth - badgeAwareBasicWidth) <= compactWidthSnapTolerance else {
       return contentWidth
