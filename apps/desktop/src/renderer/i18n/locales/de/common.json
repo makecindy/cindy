@@ -15398,7 +15398,7 @@
       },
       "fields": {
         "title": "Titel",
-        "schedule": "Zeitplan",
+        "schedule": "Auslöser",
         "notify": "Benachrichtigen",
         "prompt": "Prompt",
         "once": "Einmalig",
@@ -15514,6 +15514,13 @@
         "preRunPluginRequired": "Wähle ein Plugin für die Vorabprüfung",
         "templateParamRequired": "{{label}} eingeben",
         "templateApplyFailed": "Vorlage konnte nicht angewendet werden. Prüfe die Parameter und versuche es erneut."
+      },
+      "layout": {
+        "content": "Auszuführender Inhalt",
+        "notifications": "Benachrichtigungen und stille Ausführung",
+        "contentTab": "Inhalt und Auslöser",
+        "optionsTab": "Ausführungsoptionen",
+        "sections": "Automatisierungseinstellungen"
       }
     },
     "chips": {
@@ -15714,6 +15721,13 @@
           "prompt": "Prüfe die Dokumente im Arbeitsverzeichnis und finde Inhalte, die aktualisiert werden müssen.\nVorgaben:\n- Suche nach veralteten Informationen (überholte Datumsangaben, defekte Links, veraltete Abläufe oder Tools), Widersprüchen und Dopplungen\n- Gib für jedes Problem Dateipfad und Fundstelle an und begründe deine Einschätzung\n- Ordne Vorschläge den Kategorien „Aktualisieren / Zusammenführen / Löschen“ zu und erstelle eine Überarbeitungscheckliste\n- Gib nur den Bericht aus; ändere die Dokumente nicht"
         }
       }
+    },
+    "deadline": {
+      "label": "Enddatum und Uhrzeit",
+      "clear": "Löschen",
+      "hint": "Für unbegrenzte Laufzeit leer lassen. Zeitzone: {{timezone}}. Danach starten keine automatischen Ausführungen mehr; bereits gestartete dürfen enden.",
+      "invalid": "Gültiges Datum und gültige Uhrzeit eingeben",
+      "expired": "Abgelaufen"
     }
   },
   "issueTracker": {

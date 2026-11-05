@@ -463,7 +463,8 @@ export interface CreateScheduleInput {
   /** 插件前置检查;update 时 null = 清除,省略 = 保留(旧客户端不认识该字段)。 */
   preRunPlugin?: PreRunPluginConfig | null;
   notify: ScheduleNotifyConfig;
-  expireAt?: number;
+  /** null explicitly clears the deadline across JSON transports. */
+  expireAt?: number | null;
 }
 
 export type UpdateScheduleInput = Partial<CreateScheduleInput>;

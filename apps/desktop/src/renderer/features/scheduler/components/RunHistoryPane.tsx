@@ -235,6 +235,12 @@ export function RunHistoryPane({
           <h2 className="truncate text-lg font-medium text-[var(--msg-assistant-text)]">
             {s.name}
           </h2>
+          {s.expireAt != null && (
+            <p className="text-xs text-[var(--text-secondary)]">
+              {t('scheduler.deadline.label')} · {new Date(s.expireAt).toLocaleString()} · {Intl.DateTimeFormat().resolvedOptions().timeZone}
+              {isExpired && s.expireAt <= Date.now() && <> · {t('scheduler.deadline.expired')}</>}
+            </p>
+          )}
           <p className="truncate text-xs text-[var(--cmd-palette-item-meta)]" title={titleText}>
             {cronText} · {agentText} ·{' '}
             {dest.workingDir ? (
