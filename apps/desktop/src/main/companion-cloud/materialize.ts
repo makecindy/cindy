@@ -14,7 +14,7 @@ import { readAllRoomMessages } from './room.js';
 import type { BotSkillFile } from '../maker-ipc/botSkillFiles.js';
 import { companionSkillFileFetch, parseCompanionSkillFiles } from './skillFiles.js';
 import type { CompanionBotState, CompanionCloudState } from './state.js';
-import { readCompanionRows, type CompanionStore } from './store.js';
+import { readCompanionRows, storedValueHash, type CompanionStore } from './store.js';
 import { errorCode, isTransientAttachmentFailure, type CompanionApi, type CompanionLog } from './types.js';
 import {
   COMPANION_CAPABILITIES_KEY, COMPANION_MEMORY_PREFIX, COMPANION_PROFILE_KEY, COMPANION_ROUTINE_PREFIX, COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_TODO_PREFIX,
@@ -150,8 +150,10 @@ export async function materializeCompanion(input: {
   const remember = (entry: CompanionBotState, key: string, value: { hash: string; revision: number }) => {
     // The other location's record is from before another computer changed the value: drop it, or a
     // later edit back to that old value would look already uploaded there (and be lost).
-    if (prefs.get(key)?.fromStore) {
-      entry.stored = { ...entry.stored, [key]: { ...value, local: true } };
+    const row = prefs.get(key);
+    if (row?.fromStore) {
+      const hash = value.hash === TOMBSTONE_HASH ? value.hash : storedValueHash(row.value, row.prefRevision ?? 0);
+      entry.stored = { ...entry.stored, [key]: { hash, revision: value.revision, local: true } };
       delete entry.prefs[key];
     } else {
       entry.prefs[key] = { ...value, local: true };

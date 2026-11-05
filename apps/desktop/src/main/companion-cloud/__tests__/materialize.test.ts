@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { materializeCompanion } from '../materialize.js';
-import { createCompanionStore } from '../store.js';
+import { createCompanionStore, storedValueHash } from '../store.js';
 import { valueHash } from '../uploader.js';
 import { fakeApi, fakeLocal, memoryState } from './fakes.js';
 
@@ -93,7 +93,7 @@ describe('materializeCompanion', () => {
     await materializeCompanion({ api, store, state, host: fakeLocal().host, actor, roomId: async () => ROOM });
     // Otherwise editing the skill back to s1 would look already uploaded, and the cloud would keep s2.
     expect(state.bot('bot_mia')?.prefs['companion.skill.v1:brew']).toBeUndefined();
-    expect(state.bot('bot_mia')?.stored?.['companion.skill.v1:brew']).toEqual({ hash: valueHash(big), revision: 2, local: true });
+    expect(state.bot('bot_mia')?.stored?.['companion.skill.v1:brew']).toEqual({ hash: storedValueHash(big, 0), revision: 2, local: true });
   });
 
   it('backs up a local copy that never synced before overwriting it', async () => {

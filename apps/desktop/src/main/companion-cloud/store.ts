@@ -21,6 +21,15 @@ import { chatRejection, type CompanionApi } from './types.js';
  */
 export type CompanionRow = { key: string; value: unknown; revision: number; fromStore?: true; prefRevision?: number };
 
+/**
+ * What this computer records for a live store value it wrote or restored: the value and the
+ * preference revision it supersedes, so a value written again over a newer preference row is
+ * not taken as already uploaded.
+ */
+export function storedValueHash(value: unknown, prefRevision: number) {
+  return createHash('sha256').update(`${prefRevision}\n${canonicalJson(value)}`).digest('hex');
+}
+
 /** How a value is kept in the store: with the preference revision it supersedes. */
 interface StoredValue { companionStore: 1; prefRevision: number; value: unknown }
 const wrap = (value: unknown, prefRevision: number): StoredValue => ({ companionStore: 1, prefRevision, value });

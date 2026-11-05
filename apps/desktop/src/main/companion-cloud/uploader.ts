@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import type { LocalBotSkillFile } from '../maker-ipc/botSkillFiles.js';
 import type { CompanionCloudState } from './state.js';
 import { chatRejection, errorCode, type CompanionApi, type CompanionLog } from './types.js';
-import { STORE_KEY_MAX_LENGTH, readPreferences, type CompanionStore } from './store.js';
+import { STORE_KEY_MAX_LENGTH, readPreferences, storedValueHash, type CompanionStore } from './store.js';
 
 export const COMPANION_PROFILE_KEY = 'companion.profile.v1';
 export const COMPANION_MEMORY_PREFIX = 'companion.memory.v1:';
@@ -196,6 +196,15 @@ export function createCompanionUploader(deps: {
     // store copy left uncleared there would win over the preferences on the receiving computer.
     if (options.requireAll) deps.store?.retryNow();
     let store = deps.store?.active() ? deps.store : undefined;
+    // Values only the store holds count as uploaded only if the store answers now: a store
+    // switched off since the last pass must fail a complete sync, not pass it unchanged.
+    const storeOnly = Object.entries(deps.state.bot(botId)?.stored ?? {}).find(([, entry]) => entry.local && entry.hash !== TOMBSTONE_HASH);
+    if (options.requireAll && store && storeOnly) {
+      try { await store.entry(actorId, storeOnly[0]); } catch (error) {
+        if (store.active()) throw error;
+        store = undefined;
+      }
+    }
     if (store && !deps.state.bot(botId)?.storeSeeded) {
       try { await seedStore(botId, actorId, store); } catch (error) {
         // Switched off on the server: the preferences alone, as before.
@@ -249,8 +258,9 @@ export function createCompanionUploader(deps: {
       // The store holds only what the preferences cannot (so nothing is read twice); a value
       // that fits them again leaves it.
       const priorStored = deps.state.bot(botId)?.stored?.[key];
+      const prefRevision = deps.state.bot(botId)?.prefs[key]?.revision ?? 0;
       const storeValue = inPreferences ? null : value;
-      const storeHash = inPreferences ? TOMBSTONE_HASH : hash;
+      const storeHash = inPreferences ? TOMBSTONE_HASH : storedValueHash(value, prefRevision);
       if (priorStored ? priorStored.hash === storeHash : storeValue === null) {
         if (priorStored && !priorStored.local && storeValue !== null) deps.state.update(botId, actorId, entry => { entry.stored = { ...entry.stored, [key]: { ...priorStored, local: true } }; });
         continue;
@@ -259,7 +269,7 @@ export function createCompanionUploader(deps: {
       writes += 1;
       let revision: number;
       try {
-        revision = await store.write(actorId, key, storeValue, priorStored?.revision ?? 0, deps.state.bot(botId)?.prefs[key]?.revision ?? 0);
+        revision = await store.write(actorId, key, storeValue, priorStored?.revision ?? 0, prefRevision);
       } catch (error) {
         // Switched off meanwhile, or a value the store can never take (no bucket, over its
         // limits): skipped as before, so a hand-over still refuses to leave it behind.
@@ -274,7 +284,7 @@ export function createCompanionUploader(deps: {
         }
         const conflict = chatRejection(error, 409, 'REVISION_CONFLICT');
         if (!conflict) throw error;
-        revision = await resolveStoreConflict(botId, actorId, store, key, storeValue, storeHash);
+        revision = await resolveStoreConflict(botId, actorId, store, key, storeValue, inPreferences ? TOMBSTONE_HASH : hash);
       }
       deps.state.update(botId, actorId, entry => { entry.stored = { ...entry.stored, [key]: { hash: storeHash, revision, local: true } }; });
     }
