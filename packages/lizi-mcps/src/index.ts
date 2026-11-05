@@ -54,3 +54,5 @@ export {
   TEAMMATE_SYSTEM_SKILL_IDS, TEAMMATE_SYSTEM_SKILLS, TEAMMATE_SYSTEM_SKILL_TOOLS, TEAMMATE_CORE_TOPICS,
   teammateDeniedTools, teammateSystemSkillsOff, type TeammateSystemSkillId,
 } from './xdt-helper/teammate_skills.js';
+
+export type { AppModelsRequest } from './xdt-helper/app_models.js';

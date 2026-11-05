@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  PROVIDER_METADATA_TRUST_MS,
   providerShareGuestPeer,
   providerShareHostPeer,
   type ProviderShareOwned,
@@ -20,6 +21,7 @@ const state = vi.hoisted(() => ({
   remoteOwned: [] as ProviderShareOwned[],
   received: [] as ProviderShareReceived[],
   receivedError: false,
+  receivedDenied: false,
   boundaryPending: false,
 }));
 
@@ -46,6 +48,7 @@ vi.mock('../providerShareApi.js', () => ({
       return state.owned;
     },
     listReceived: async () => {
+      if (state.receivedDenied) throw Object.assign(new Error('denied'), { code: 'PERMISSION_DENIED' });
       if (state.receivedError) throw new Error('offline');
       return state.received;
     },
@@ -94,6 +97,7 @@ import {
 import {
   isProviderShareRefusal,
   leaveProviderShare,
+  noteProviderShareAccessFailure,
   parseProviderShareAgentDeviceId,
   providerShareAgentDeviceId,
   resolveRemoteAgentTarget,
@@ -102,7 +106,9 @@ import {
   stopProviderShareGuest,
   getReceivedSharesSnapshot,
   refreshReceivedShares,
+  providerShareAccessEpoch,
 } from '../providerShareGuest';
+import { captureProviderMetadataContinuityScope } from '../providerMetadataContinuity';
 import {
   configureProviderShareGuestPrefs,
   flushProviderShareGuestPrefs,
@@ -143,6 +149,7 @@ beforeEach(() => {
     state.remoteOwned.filter((item) => item.hostDeviceId === hostDeviceId));
   state.received = [];
   state.receivedError = false;
+  state.receivedDenied = false;
   state.boundaryPending = false;
   vi.mocked(crossRegionLeave).mockReset().mockResolvedValue(false);
   vi.mocked(providerShareApi.leave).mockReset().mockImplementation(async (memberId) => {
@@ -156,6 +163,30 @@ afterEach(() => {
 });
 
 describe('delegated executor access', () => {
+  // Unit: query throttling must not turn an unavailable check into a renewal.
+  // Existing expiry coverage did not attempt a rate-limited renewal on the live task.
+  it('keeps the original lease deadline after a renewal is rate limited', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] });
+    try {
+      const peer = guest('m1');
+      const generation = '11111111-1111-4111-8111-111111111111';
+      const grant = { op: 'delegate' as const, action: 'grant' as const,
+        shareId: 'share-1', memberId: 'm1', guestDeviceId: 'laptop', providerId: 'anthropic',
+        sessionId: 'limited_task', model: 'model-one', generation };
+      const expiresAt = Date.now() + 30 * 60_000;
+      await applyProviderShareDelegation('owner-pc', grant, async () => ({ active: true,
+        ownerDeviceId: 'owner-pc', generation, expiresAt }));
+      vi.setSystemTime(Date.now() + 20 * 60_000);
+      await expect(applyProviderShareDelegation('owner-pc', grant, async () => {
+        throw Object.assign(new Error('rate limited'), { statusCode: 429, retryAt: Date.now() + 60_000 });
+      })).rejects.toThrow('rate limited');
+      expect(delegatedProviderShareSessionAllowed(peer, grant.sessionId)).toBe(true);
+      expect(delegatedProviderShareLeases()[0].lease.wallUntil).toBe(expiresAt);
+      vi.setSystemTime(expiresAt);
+      expect(delegatedProviderShareSessionAllowed(peer, grant.sessionId)).toBe(false);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('closes every old direct task immediately after owner deletion, then admits a fresh grant', async () => {
     const peer = guest('m1');
     const other = guest('m2');
@@ -786,6 +817,42 @@ describe('provider share guest routing', () => {
     expect(() => resolveRemoteAgentTarget('share:share-2')).toThrow(/REMOTE_AGENT_SHARE_REMOVED/);
   });
 
+  it('retires only the changed share metadata target, not its neighbour', async () => {
+    const other: ProviderShareReceived = { ...received('active'), shareId: 'share-2', memberId: 'm2',
+      providerId: 'other-provider', providerLabel: 'Other', hostDeviceId: 'other-mac' };
+    state.received = [received('active'), other];
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+    await refreshReceivedShares('test');
+    const changed = captureProviderMetadataContinuityScope(providerShareHostPeer('share-1', 'owner-mac'));
+    const neighbour = captureProviderMetadataContinuityScope(providerShareHostPeer('share-2', 'other-mac'));
+    expect(changed()).toBe(true);
+    expect(neighbour()).toBe(true);
+
+    state.received = [received('paused'), other];
+    await refreshReceivedShares('test');
+    expect(changed()).toBe(false);
+    expect(neighbour()).toBe(true);
+
+    noteProviderShareAccessFailure('share-2');
+    expect(neighbour()).toBe(false);
+    expect(changed()).toBe(false);
+  });
+
+  it('keeps an unchanged share access epoch when another share crosses the old capacity', async () => {
+    const many = (count: number) => Array.from({ length: count }, (_, index) => ({
+      ...received('active'), shareId: `share-${index}`, memberId: `member-${index}`,
+    }));
+    state.received = many(1024);
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+    await refreshReceivedShares('test');
+    const epoch = providerShareAccessEpoch('share-0');
+    expect(epoch).not.toBe(0);
+
+    state.received = many(1025);
+    await refreshReceivedShares('test');
+    expect(providerShareAccessEpoch('share-0')).toBe(epoch);
+  });
+
   it('reports a paused share instead of routing to it', async () => {
     state.received = [received('paused')];
     startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
@@ -906,4 +973,70 @@ describe('provider share guest routing', () => {
     expect(isProviderShareRefusal('DEVICE_OFFLINE', '')).toBe(false);
     expect(isProviderShareRefusal('TIMEOUT', '')).toBe(false);
   });
+  it('retires only the denied local list and restores it on a fresh confirmation', async () => {
+    state.received = [received('active')];
+    const changed = vi.fn();
+    startProviderShareGuest({ changed, settled: vi.fn() });
+    await refreshReceivedShares('test');
+    expect(getReceivedSharesSnapshot().received.map(item => item.shareId)).toEqual(['share-1']);
+
+    state.receivedDenied = true;
+    await refreshReceivedShares('denied');
+    const denied = getReceivedSharesSnapshot();
+    expect(denied.received).toEqual([]);
+    expect(denied.confirmedRegions).toContain('global');
+    expect(changed).toHaveBeenCalled();
+
+    state.receivedDenied = false;
+    await refreshReceivedShares('recovered');
+    expect(getReceivedSharesSnapshot().received.map(item => item.shareId)).toEqual(['share-1']);
+  });
+
+  it('keeps the local directory budget from the list request start and does not renew it after a failure', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+    try {
+      state.received = [received('active')];
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const list = vi.spyOn(providerShareApi, 'listReceived').mockImplementationOnce(async () => {
+        await gate;
+        return state.received;
+      });
+      startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      release();
+      await refreshReceivedShares('test');
+
+      const first = getReceivedSharesSnapshot().regionBudget?.global;
+      expect(first?.id).toBeTruthy();
+      // The ten minutes spent waiting for the response came out of the same
+      // request-start window; a completion timestamp would incorrectly leave 30.
+      expect(first?.remainingMs).toBeLessThanOrEqual(PROVIDER_METADATA_TRUST_MS - 10 * 60_000);
+      const repeated = getReceivedSharesSnapshot().regionBudget?.global;
+      expect(repeated?.id).toBe(first?.id);
+      expect(repeated?.remainingMs).toBeLessThanOrEqual(first?.remainingMs ?? 0);
+
+      // Confirmation order must come from Main's request chain, not wall time:
+      // a successful refresh after a wall-clock rollback is still the newer
+      // source even though generatedAt is lower.
+      const firstGeneratedAt = first?.generatedAt ?? Date.now();
+      const firstOrder = first?.order ?? 0;
+      vi.setSystemTime(firstGeneratedAt - 5 * 60_000);
+      await refreshReceivedShares('rollback');
+      const afterRollback = getReceivedSharesSnapshot().regionBudget?.global;
+      expect(afterRollback?.order).toBeGreaterThan(firstOrder);
+      expect(afterRollback?.generatedAt).toBeLessThan(firstGeneratedAt);
+
+      state.receivedError = true;
+      await refreshReceivedShares('failed');
+      const afterFailure = getReceivedSharesSnapshot().regionBudget?.global;
+      expect(afterFailure?.id).toBe(afterRollback?.id);
+      expect(afterFailure?.remainingMs).toBeLessThanOrEqual(afterRollback?.remainingMs ?? 0);
+      list.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
 });

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parse, type DefaultTreeAdapterTypes } from 'parse5';
 import { applyMailInlineEdits, hasMailExternalImages, mailInlineDocument, mailInlineRuns, mailTextParagraphs, safeMailDocument } from '../mailTextEdit';
 import {
+  ghostCardLinkOpensDirectly,
   parseGhostCardForm,
   parseGhostCardFormValues,
   readGhostCardForm,
@@ -269,4 +270,13 @@ describe("declarative card forms", () => {
       expect(parseGhostCardFormValues(values)).toBeNull();
     expect(readGhostCardForm('<div data-ghost-form="[]"></div>')).toBeNull();
   });
+});
+
+// Rule (owner, 2026-11-03): GitHub links on plugin cards open without the confirmation; anything that
+// only looks like GitHub still asks.
+it('opens only real https GitHub pages without the link confirmation', () => {
+  for (const url of ['https://github.com/o/r/pull/9', 'https://www.github.com/o'])
+    expect(ghostCardLinkOpensDirectly(url)).toBe(true);
+  for (const url of ['http://github.com/o', 'https://github.com.evil.io/o', 'https://evil.io/github.com', 'https://user@github.com/o', 'https://github.com:8443/o', 'https://gist.github.com/o', 'not a url'])
+    expect(ghostCardLinkOpensDirectly(url)).toBe(false);
 });

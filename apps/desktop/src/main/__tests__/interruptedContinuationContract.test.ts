@@ -60,26 +60,9 @@ describe('interrupted continuation enqueue contract', () => {
     expect(matchIndexes(acceptedHook, /ackSessionTurnEndedDurable\s*\(/)).toHaveLength(0);
   });
 
-  it('durable-acks continue prompts only after vendor dispatch is irreversible', () => {
-    const start = registerSource.indexOf('onDispatchedUserTurn:');
-    expect(start).toBeGreaterThan(-1);
-    const end = registerSource.indexOf('noteSessionClearBoundary', start);
-    expect(end).toBeGreaterThan(start);
-    const hook = registerSource.slice(start, end);
-
-    const classifyIndexes = matchIndexes(
-      hook,
-      /item\.originalSyntheticTrigger\s*!==\s*['"]continue['"]/,
-    );
-    const acknowledgeIndexes = matchIndexes(
-      hook,
-      /ackSessionTurnEndedDurable\(\s*sessionId\s*,\s*preVendorDispatchAt\s*\)/,
-    );
-    expect(classifyIndexes).toHaveLength(1);
-    expect(hook).not.toMatch(/syntheticTriggerKind\(\s*item\.text\s*\)/);
-    expect(acknowledgeIndexes).toHaveLength(1);
-    expect(acknowledgeIndexes[0]).toBeGreaterThan(classifyIndexes[0]!);
-
+  // Ack timing runs through the shared production send transaction in
+  // makerSendTransaction.test.ts; retain the cross-stage coordinator guard.
+  it('runs dispatched-user side effects only after vendor dispatch is irreversible', () => {
     // coordinator must invoke the hook only after isSendDispatched(result) is true.
     const dispatchedCall = coordinatorSource.indexOf(
       'await this.deps.onDispatchedUserTurn?.(sessionId, head, preVendorDispatchAt)',

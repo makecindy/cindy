@@ -15,6 +15,7 @@ export * from './dictionary-sync';
 export * from './streamingJson';
 export * from './refinementContext';
 export * from './pcmActivity';
+export { LEGACY_MANAGED_REFINE_REQUEST_LIMIT, resolveManagedRefineRequestLimit } from './pauseRefinement';
 
 export * from './VoiceConversationInput';
 export * from './conversationActivity';

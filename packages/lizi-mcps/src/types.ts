@@ -426,6 +426,7 @@ export interface LspMcpDeps {
 /** ConnectionPool.list() 返回的单主机快照子集。 */
 export interface SshHostSnapshotLike {
   config: {
+    displayName?: string;
     /** SSH alias（= ~/.ssh/config 的 Host 指令），也是 pool 的主键。 */
     id: string;
     hostname: string;
@@ -508,6 +509,10 @@ export interface SshMcpDeps {
   ensureReady(id: string): Promise<void>;
   /** 设置页同一添加流程：写入本机 SSH 配置并刷新连接池；失败以 `[CODE] message` 抛出。 */
   addHost(input: SshAddHostInput): Promise<void>;
+  /** Same settings mutations. Optional for older hosts. */
+  updateHost?(input: { id: string } & Partial<Omit<SshAddHostInput, 'id'>>): Promise<SshHostSnapshotLike>;
+  removeHost?(id: string): Promise<void>;
+  listHosts?(): Promise<SshHostSnapshotLike[]>;
   /** 设置页「重新读取 ~/.ssh/config」。读取失败时返回诊断类别，连接池保持上次成功的结果。 */
   reloadConfig(): Promise<{ diagnostic: string | null; warningCount: number }>;
   /** Host-owned synchronous boundary redactor. It must not retain its inputs. */

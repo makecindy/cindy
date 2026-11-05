@@ -221,6 +221,7 @@ export function isCcMgrUpgradeInFlight(sessionId: string | null | undefined): bo
 
 export const REMOTE_SSH_PUSH = {
   STATUS_CHANGED: 'maker:remote-ssh:status-changed',
+  HOSTS_CHANGED: 'maker:remote-ssh:hosts-changed',
   INSTALL_PROGRESS: 'maker:remote-ssh:install-progress',
   // Phase D — maker:send 触发的静默 install 状态推送 (粗粒度: started/progress/done/failed)。
   // 跟 INSTALL_PROGRESS 解耦: 后者是逐行 log (RemoteHostDetail 消费),
@@ -295,6 +296,11 @@ function getSharedHostKeyStore(): FileHostKeyStore {
     );
   }
   return sharedHostKeyStore;
+}
+
+/** New-computer setup reads and seeds trusted fingerprints through the same store the pool uses. */
+export function getRemoteSshHostKeyStore(): FileHostKeyStore {
+  return getSharedHostKeyStore();
 }
 
 const poolLogger = {
@@ -900,6 +906,12 @@ function withPrefs(snapshot: HostSnapshot): HostSnapshotWithPrefs {
   };
 }
 
+/** Settings and Agent readers share the persisted display names. */
+export async function listRemoteSshHostsForAgent() {
+  await ensureHydrated();
+  return getPool().list().map(withPrefs);
+}
+
 function currentRemoteSshListResult(): {
   hosts: HostSnapshotWithPrefs[];
   warningCount: number;
@@ -1244,6 +1256,171 @@ export async function reloadRemoteSshConfig(): Promise<ReturnType<typeof current
   return currentRemoteSshListResult();
 }
 
+/** Shared settings operation; caller identity is checked by the UI or Agent adapter. */
+export async function updateRemoteSshHost(rawHost: unknown, options: { patch?: boolean } = {}) {
+  await ensureHydrated();
+  return remoteHostHydrationQueue.run(async () => {
+    const raw = requireObject(rawHost, 'host');
+    const id = requireString(raw.id, 'id');
+    const existing = getPool().get(id);
+    if (!existing) throwIpcError('SSH_HOST_NOT_FOUND', `unknown host: ${id}`);
+    // Partial Agent edits preserve the current connection and private key without
+    // sending its path to the model. Merge inside the same mutation queue as UI edits.
+    const input = normalizeAddInput(options.patch ? {
+      id, hostname: existing.config.hostname, port: existing.config.port,
+      user: existing.config.user, authMethod: existing.config.authMethod,
+      displayName: getSshHostDisplayName(id),
+      ...(existing.config.identityFile && raw.identityFile === undefined ? { identityFileUnchanged: true } : {}),
+      ...raw,
+    } : raw, { allowIdentityFileUnchanged: true });
+    if (input.identityFileUnchanged && !existing.config.identityFile) {
+      throwIpcError('INVALID_PARAMS', 'host has no existing identityFile to preserve');
+    }
+    const cfg: HostConfig = {
+      id: input.id,
+      hostname: input.hostname,
+      port: input.port ?? 22,
+      user: input.user,
+      authMethod: input.authMethod ?? 'agent',
+      identityFile: input.identityFileUnchanged
+        ? existing.config.identityFile
+        : input.identityFile,
+      source: 'ssh-config',
+      managedByCindy: existing.config.managedByCindy,
+    };
+    const connectionFieldsChanged = editableConnectionFieldsChanged(existing.config, cfg);
+    let managedWriteToken: ManagedConfigWriteToken | undefined;
+    if (connectionFieldsChanged) {
+      const latest = await readLatestSshConfigOrThrow();
+      const latestHost = latest.hosts.find((host) => host.id === input.id);
+      if (!latestHost?.managedByCindy) {
+        throwIpcError(
+          'SSH_CONFIG_OWNERSHIP_REQUIRED',
+          'This SSH host is no longer uniquely managed by Cindy. Reload the SSH configuration before editing.',
+        );
+      }
+      if (remoteConnectionFieldsChanged(existing.config, latestHost)) {
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          `host "${input.id}" changed on disk; reload before editing`,
+        );
+      }
+      managedWriteToken = managedWriteTokenOrThrow(latest);
+      cfg.managedByCindy = true;
+    }
+    if (connectionFieldsChanged) await assertHostHasNoSessionReferences(input.id, '修改');
+
+    if (connectionFieldsChanged) {
+      let refreshError: unknown;
+      try {
+        await updateManagedHostFields(cfg, managedSshConfigPath, managedWriteToken!);
+      } catch (err) {
+        // The live connection remains untouched until the managed write has
+        // committed successfully.
+        throwManagedConfigWriteError('update', err);
+      }
+      try {
+        if (existing.getStatus() === 'ready') {
+          await cleanupRemotePiDaemonsOnHost(existing).catch(() => undefined);
+        }
+        await invalidateHostRuntimeState(input.id);
+        await hydrateRemoteHostsUnqueued(new Set([input.id]));
+      } catch (err) {
+        refreshError = err;
+      }
+      patchSshHostPrefOrThrow(cfg.id, {
+        displayName: input.displayName,
+        ...(input.agentProxy !== undefined ? { agentProxy: input.agentProxy } : {}),
+      });
+      if (refreshError !== undefined) throwReloadRequired('主机修改', refreshError);
+    } else {
+      patchSshHostPrefOrThrow(cfg.id, {
+        displayName: input.displayName,
+        ...(input.agentProxy !== undefined ? { agentProxy: input.agentProxy } : {}),
+      });
+    }
+    const refreshed = getPool().get(cfg.id);
+    if (!refreshed) throwReloadRequired('主机修改', new Error('host missing after refresh'));
+    if (!connectionFieldsChanged && input.agentProxy !== undefined && refreshed.getStatus() === 'ready') {
+      await applyAgentProxyForHost(refreshed);
+    }
+    broadcastStatus(refreshed.snapshot());
+    log.info('audit: remote ssh host updated', {
+      operation: 'remote_ssh_host_update',
+      hostId: cfg.id,
+      connectionFieldsChanged,
+      hostname: cfg.hostname,
+      user: cfg.user,
+      port: cfg.port,
+      authMethod: cfg.authMethod,
+    });
+    return { host: withPrefs(refreshed.snapshot()) };
+  });
+}
+
+/** Shared settings operation; caller identity is checked by the UI or Agent adapter. */
+export async function removeRemoteSshHost(args: unknown) {
+  const obj = requireObject(args);
+  const id = requireString(obj.id, 'id');
+  await ensureHydrated();
+  return remoteHostHydrationQueue.run(async () => {
+    const host = getPool().get(id);
+    if (!host) throwIpcError('SSH_HOST_NOT_FOUND', `unknown host: ${id}`);
+    const latest = await readLatestSshConfigOrThrow();
+    const latestHost = latest.hosts.find((candidate) => candidate.id === id);
+    if (!latestHost?.managedByCindy) {
+      throwIpcError(
+        'SSH_CONFIG_OWNERSHIP_REQUIRED',
+        'This SSH host is no longer uniquely managed by Cindy. Reload the SSH configuration before removing it.',
+      );
+    }
+    const managedWriteToken = managedWriteTokenOrThrow(latest);
+    await assertHostHasNoSessionReferences(id, '删除');
+    let refreshError: unknown;
+    try {
+      await removeManagedHost(id, managedSshConfigPath, managedWriteToken);
+    } catch (err) {
+      throwManagedConfigWriteError('remove', err);
+    }
+    try {
+      if (host.getStatus() === 'ready') {
+        await softClosePiSessionsForHost(id).catch(() => undefined);
+        await cleanupRemotePiDaemonsOnHost(host).catch(() => undefined);
+      }
+      await invalidateHostRuntimeState(id);
+      await hydrateRemoteHostsUnqueued(new Set([id]));
+    } catch (err) {
+      refreshError = err;
+    }
+    // Disk no longer contains Cindy's alias. Cleanup is alias-scoped and
+    // cannot be retried through REMOVE after the next reload, so always run
+    // every cleanup action before surfacing a refresh failure.
+    for (const cleanup of [
+      () => removeSshHostPref(id),
+      () => clearAgentProxyTunnelState(id),
+      () => removeRemoteMcpForwardPref(id),
+    ]) {
+      try {
+        cleanup();
+      } catch (error) {
+        log.warn('failed to clean removed SSH host local state', {
+          hostId: id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    if (refreshError !== undefined) throwReloadRequired('主机删除', refreshError);
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send(REMOTE_SSH_PUSH.HOSTS_CHANGED, currentRemoteSshListResult());
+    }
+    log.info('audit: remote ssh host removed', {
+      operation: 'remote_ssh_host_remove',
+      hostId: id,
+    });
+    return { ok: true as const };
+  });
+}
+
 export function registerRemoteSshIpc(): void {
   if (registered) return;
   registered = true;
@@ -1297,153 +1474,12 @@ export function registerRemoteSshIpc(): void {
 
   ipcMain.handle(REMOTE_SSH_INVOKE.UPDATE, async (event, rawHost: unknown) => {
     assertTrustedAppRendererEvent(event);
-    const input = normalizeAddInput(rawHost, { allowIdentityFileUnchanged: true });
-    await ensureHydrated();
-    return remoteHostHydrationQueue.run(async () => {
-      const existing = getPool().get(input.id);
-      if (!existing) throwIpcError('SSH_HOST_NOT_FOUND', `unknown host: ${input.id}`);
-      if (input.identityFileUnchanged && !existing.config.identityFile) {
-        throwIpcError('INVALID_PARAMS', 'host has no existing identityFile to preserve');
-      }
-      const cfg: HostConfig = {
-        id: input.id,
-        hostname: input.hostname,
-        port: input.port ?? 22,
-        user: input.user,
-        authMethod: input.authMethod ?? 'agent',
-        identityFile: input.identityFileUnchanged
-          ? existing.config.identityFile
-          : input.identityFile,
-        source: 'ssh-config',
-        managedByCindy: existing.config.managedByCindy,
-      };
-      const connectionFieldsChanged = editableConnectionFieldsChanged(existing.config, cfg);
-      let managedWriteToken: ManagedConfigWriteToken | undefined;
-      if (connectionFieldsChanged) {
-        const latest = await readLatestSshConfigOrThrow();
-        const latestHost = latest.hosts.find((host) => host.id === input.id);
-        if (!latestHost?.managedByCindy) {
-          throwIpcError(
-            'SSH_CONFIG_OWNERSHIP_REQUIRED',
-            'This SSH host is no longer uniquely managed by Cindy. Reload the SSH configuration before editing.',
-          );
-        }
-        if (remoteConnectionFieldsChanged(existing.config, latestHost)) {
-          throwIpcError(
-            'PRECONDITION_FAILED',
-            `host "${input.id}" changed on disk; reload before editing`,
-          );
-        }
-        managedWriteToken = managedWriteTokenOrThrow(latest);
-        cfg.managedByCindy = true;
-      }
-      if (connectionFieldsChanged) await assertHostHasNoSessionReferences(input.id, '修改');
-
-      if (connectionFieldsChanged) {
-        let refreshError: unknown;
-        try {
-          await updateManagedHostFields(cfg, managedSshConfigPath, managedWriteToken!);
-        } catch (err) {
-          // The live connection remains untouched until the managed write has
-          // committed successfully.
-          throwManagedConfigWriteError('update', err);
-        }
-        try {
-          if (existing.getStatus() === 'ready') {
-            await cleanupRemotePiDaemonsOnHost(existing).catch(() => undefined);
-          }
-          await invalidateHostRuntimeState(input.id);
-          await hydrateRemoteHostsUnqueued(new Set([input.id]));
-        } catch (err) {
-          refreshError = err;
-        }
-        patchSshHostPrefOrThrow(cfg.id, {
-          displayName: input.displayName,
-          ...(input.agentProxy !== undefined ? { agentProxy: input.agentProxy } : {}),
-        });
-        if (refreshError !== undefined) throwReloadRequired('主机修改', refreshError);
-      } else {
-        patchSshHostPrefOrThrow(cfg.id, {
-          displayName: input.displayName,
-          ...(input.agentProxy !== undefined ? { agentProxy: input.agentProxy } : {}),
-        });
-      }
-      const refreshed = getPool().get(cfg.id);
-      if (!refreshed) throwReloadRequired('主机修改', new Error('host missing after refresh'));
-      if (!connectionFieldsChanged && input.agentProxy !== undefined && refreshed.getStatus() === 'ready') {
-        await applyAgentProxyForHost(refreshed);
-      }
-      log.info('audit: remote ssh host updated', {
-        operation: 'remote_ssh_host_update',
-        hostId: cfg.id,
-        connectionFieldsChanged,
-        hostname: cfg.hostname,
-        user: cfg.user,
-        port: cfg.port,
-        authMethod: cfg.authMethod,
-      });
-      return { host: withPrefs(refreshed.snapshot()) };
-    });
+    return updateRemoteSshHost(rawHost);
   });
 
   ipcMain.handle(REMOTE_SSH_INVOKE.REMOVE, async (event, args: unknown) => {
     assertTrustedAppRendererEvent(event);
-    const obj = requireObject(args);
-    const id = requireString(obj.id, 'id');
-    await ensureHydrated();
-    return remoteHostHydrationQueue.run(async () => {
-      const host = getPool().get(id);
-      if (!host) throwIpcError('SSH_HOST_NOT_FOUND', `unknown host: ${id}`);
-      const latest = await readLatestSshConfigOrThrow();
-      const latestHost = latest.hosts.find((candidate) => candidate.id === id);
-      if (!latestHost?.managedByCindy) {
-        throwIpcError(
-          'SSH_CONFIG_OWNERSHIP_REQUIRED',
-          'This SSH host is no longer uniquely managed by Cindy. Reload the SSH configuration before removing it.',
-        );
-      }
-      const managedWriteToken = managedWriteTokenOrThrow(latest);
-      await assertHostHasNoSessionReferences(id, '删除');
-      let refreshError: unknown;
-      try {
-        await removeManagedHost(id, managedSshConfigPath, managedWriteToken);
-      } catch (err) {
-        throwManagedConfigWriteError('remove', err);
-      }
-      try {
-        if (host.getStatus() === 'ready') {
-          await softClosePiSessionsForHost(id).catch(() => undefined);
-          await cleanupRemotePiDaemonsOnHost(host).catch(() => undefined);
-        }
-        await invalidateHostRuntimeState(id);
-        await hydrateRemoteHostsUnqueued(new Set([id]));
-      } catch (err) {
-        refreshError = err;
-      }
-      // Disk no longer contains Cindy's alias. Cleanup is alias-scoped and
-      // cannot be retried through REMOVE after the next reload, so always run
-      // every cleanup action before surfacing a refresh failure.
-      for (const cleanup of [
-        () => removeSshHostPref(id),
-        () => clearAgentProxyTunnelState(id),
-        () => removeRemoteMcpForwardPref(id),
-      ]) {
-        try {
-          cleanup();
-        } catch (error) {
-          log.warn('failed to clean removed SSH host local state', {
-            hostId: id,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
-      if (refreshError !== undefined) throwReloadRequired('主机删除', refreshError);
-      log.info('audit: remote ssh host removed', {
-        operation: 'remote_ssh_host_remove',
-        hostId: id,
-      });
-      return { ok: true as const };
-    });
+    return removeRemoteSshHost(args);
   });
 
   // Local UI only: trust changes require a native confirmation with main-owned details.
