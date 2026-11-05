@@ -359,10 +359,13 @@ describe('SettingsView Escape', () => {
     fireEvent.click(result()!);
     expect(location()).toContain('tab=voice-input');
     expect(location()).toContain('section=voiceInput.customAsrWebsocketUrl');
-    await act(async () => resolveSelection({ selection: { serviceMode: 'cindy', asrProvider: 'custom-realtime-asr' } }));
     fireEvent.change(search, { target: { value: query } });
     fireEvent.click(screen.getByRole('button', { name: 'Use preset ASR' }));
     await waitFor(() => expect(result()).toBeNull());
+    // PR #8481/r4476725738: return-to-tab GET finishes after the user's SET.
+    // Its old custom-ASR snapshot must not restore the hidden search result.
+    await act(async () => resolveSelection({ selection: { serviceMode: 'cindy', asrProvider: 'custom-realtime-asr' } }));
+    expect(result()).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Use custom ASR' }));
     await waitFor(() => expect(result()).not.toBeNull());
     // One initial read plus one on entry; edits still share the same hook.
