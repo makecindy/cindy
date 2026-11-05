@@ -594,6 +594,20 @@ describe('companion store', () => {
     expect((await readCompanionRows(t.api, t.store, 'actor')).find(row => row.key === key)?.value).toBeNull();
   });
 
+  it('does not write an unchanged large value back over a late change from the previous home', async () => {
+    const t = storeSetup();
+    const key = 'companion.memory.v1:big.md';
+    const big = memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000));
+    t.setValues([profile('soul'), big]);
+    await t.uploader.syncBot('bot', 'actor');
+    // The previous home's late upload shrinks it: a newer small preference, the store copy cleared.
+    t.prefs.set(key, { key, value: { filename: 'big.md', content: 'late' }, revision: 3 });
+    t.entries.set(key, { ...t.entries.get(key)!, revision: 2, deleted: true, value: undefined });
+    t.state.update('bot', 'actor', entry => { entry.prefsSeeded = false; entry.storeSeeded = false; });
+    await t.uploader.syncBot('bot', 'actor');
+    expect(t.entries.get(key)?.deleted).toBe(true);
+  });
+
   it('passes a deletion of a value kept only in the store to the next restore', async () => {
     const t = storeSetup();
     const big = memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000));

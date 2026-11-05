@@ -272,7 +272,10 @@ export function createCompanionUploader(deps: {
       // The store holds only what the preferences cannot (so nothing is read twice); a value
       // that fits them again leaves it.
       const priorStored = deps.state.bot(botId)?.stored?.[key];
-      let prefRevision = deps.state.bot(botId)?.prefs[key]?.revision ?? 0;
+      // A preference revision another computer moved (a late upload) does not make an unchanged
+      // value here an edit: only this computer's own preference writes call for a rewrite.
+      const prefHere = deps.state.bot(botId)?.prefs[key];
+      let prefRevision = prefHere?.local ? prefHere.revision : priorStored?.prefRevision ?? prefHere?.revision ?? 0;
       const storeValue = inPreferences ? null : value;
       let storeHash = inPreferences ? TOMBSTONE_HASH : storedValueHash(value, prefRevision);
       // Only a store copy this computer wrote or took over is cleared here: another computer's
