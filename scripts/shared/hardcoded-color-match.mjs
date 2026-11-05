@@ -32,6 +32,40 @@ const COLOUR_WORDS = new Set(['color', 'background', 'border', 'fill', 'stroke',
 // style declaration seen in the client.
 const CONTEXT_WINDOW = 1024;
 
+// A single declaration (a long gradient stop list) can legitimately exceed
+// CONTEXT_WINDOW, so the backward context is found by scanning to the start
+// of the enclosing statement instead of truncating at a fixed offset. The
+// scan is bounded so a generated bundle with millions of characters before
+// the first boundary still costs at most MAX_DECLARATION_CONTEXT per
+// candidate, keeping the whole scan linear in practice.
+const MAX_DECLARATION_CONTEXT = 65536;
+
+/** Source text from the start of the enclosing statement (after the last
+ * `;`, `{` or `}`) up to `index`, so property names and wrapping functions
+ * survive even inside a very long declaration. Statement boundaries only —
+ * declarations legitimately span lines (`'--panel-shadow':\n  'inset …'`),
+ * and the context regexes stop at `;{}=:` themselves. */
+function declarationContext(source, index) {
+  let start = index;
+  const min = Math.max(0, index - MAX_DECLARATION_CONTEXT);
+  while (start > min) {
+    const ch = source[start - 1];
+    if (ch === ';' || ch === '{' || ch === '}') break;
+    start--;
+  }
+  return source.slice(start, index);
+}
+
+/** Index just past the last non-whitespace character, found by scanning
+ * backwards once. The previous `search(/\s*$/)` restarted the regex at
+ * every position of a long (comment-masked) whitespace run, which made
+ * large trailing whitespace quadratic. */
+function lastContentIndex(source) {
+  let end = source.length;
+  while (end > 0 && /\s/.test(source[end - 1])) end--;
+  return end;
+}
+
 /** A numeric colour function sits in a colour-bearing context when a style
  * property, CSS custom property or colour-ish assignment precedes it. Unlike
  * HEX, a bare quoted literal is not enough: prose and diagnostics routinely
@@ -51,9 +85,9 @@ export function findBareColors(text) {
   const source = maskColorComments(text);
   const hits = [];
   const firstContent = source.search(/\S|$/);
-  const lastContent = source.search(/\s*$/);
+  const lastContent = lastContentIndex(source);
   const isWholeSource = (start, end) => start === firstContent && end === lastContent;
-  const beforeContext = (index) => source.slice(Math.max(0, index - CONTEXT_WINDOW), index);
+  const beforeContext = (index) => declarationContext(source, index);
   const afterContext = (index) => source.slice(index, Math.min(source.length, index + CONTEXT_WINDOW));
   const add = (value, index, end = index + value.length) => hits.push({ value, index, end });
   for (const match of source.matchAll(/#[\da-f]+\b/gi)) {
