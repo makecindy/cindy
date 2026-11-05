@@ -1,5 +1,5 @@
 import { BotGroupProcessEntries } from './BotGroupProcess';
-import type { BotGroupProcessMessage } from '../../../shared/botGroupChat';
+import { isBotGroupProcessMessageVisible, type BotGroupProcessMessage } from '../../../shared/botGroupChat';
 import { useRemoteSessionSync } from '@/features/cc-agent/hooks/useRemoteSessionSync';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 /** Latest public progress in the current turn, including the note before a tool call.
@@ -52,21 +52,21 @@ export function BotGroupLivePreview({ sessionId, lines = 2, className }: { sessi
 }
 
 /** All public stage notes from this execution, kept in original order between tool calls. */
-export function BotGroupProcessNotes({ sessionId, since }: { sessionId: string; since: number }) {
+export function BotGroupProcessNotes({ sessionId, executionId, since }: { sessionId: string; executionId?: string; since: number }) {
   const subscribe = useCallback((listener: () => void) => makerChatStore.subscribe(sessionId, listener), [sessionId]);
   const read = useCallback(() => JSON.stringify(makerChatStore.getSnapshot(sessionId).messages
-    .filter(message => !message.botPrivateReply && !message.failedSamplingAttempt
+    .filter(message => isBotGroupProcessMessageVisible({ ...message, agentMeta: message })
       && !!message.createdAt && Date.parse(message.createdAt) >= since)
     .map(message => ({ clientId: message.clientId, role: message.role, createdAt: message.createdAt, toolUseId: message.toolUseId,
       content: message.role === 'tool_use' ? { toolName: message.toolName, input: message.toolInput } : message.role === 'thinking' ? '' : message.content,
       agentMeta: { assistantPhase: message.assistantPhase, turnCompleted: message.turnCompleted } }))), [sessionId, since]);
   const snapshot = useSyncExternalStore(subscribe, read, read);
   const messages = JSON.parse(snapshot) as BotGroupProcessMessage[];
-  return <BotGroupProcessEntries messages={messages} id={`group-live:${sessionId}`} running />;
+  return <BotGroupProcessEntries messages={messages} id={`group-process:${executionId ?? sessionId}`} running />;
 }
 
-export function BotGroupRemoteProcessNotes({ sessionId, deviceId, since }: { sessionId: string; deviceId: string; since: number }) {
+export function BotGroupRemoteProcessNotes({ sessionId, deviceId, executionId, since }: { sessionId: string; deviceId: string; executionId?: string; since: number }) {
   useLayoutEffect(() => { remoteProjectsStore.pinSessionOrigin(deviceId, sessionId); }, [deviceId, sessionId]);
   useRemoteSessionSync(sessionId, deviceId);
-  return <BotGroupProcessNotes sessionId={sessionId} since={since} />;
+  return <BotGroupProcessNotes sessionId={sessionId} executionId={executionId} since={since} />;
 }

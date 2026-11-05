@@ -10,6 +10,8 @@ import { resolveBotGroupMentions } from '@cindy/maker-shared/botGroupMentions';
 
 const h = vi.hoisted(() => ({
   processRead: vi.fn(),
+  processSubscribe: vi.fn(async () => {}),
+  processUnsubscribe: vi.fn(async () => {}),
   translate: null as null | ((key: string, options?: Record<string, unknown>) => string),
   chat: null as any, pngExport: vi.fn(async () => 'encoded'), sharedImage: vi.fn(async () => {}), exported: [] as any[],
   management: null as any,
@@ -146,7 +148,7 @@ vi.mock('@/theme', async () => {
   return { ...tokens, useThemedStyles: (makeStyles: any) => makeStyles(colors()),
     useTheme: () => ({ mode: h.themeMode, colors: colors() }), monoFont: 'mono' };
 });
-vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.processRead, getPresenceAvailability: () => true }) }));
+vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.processRead, subscribe: h.processSubscribe, unsubscribe: h.processUnsubscribe, getPresenceAvailability: () => true }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({
   user: { id: 'owner' }, accountGeneration: 1, getAccessToken: async () => 'token', apiFetch: async () => ({}),
 }) }));
@@ -271,6 +273,7 @@ vi.mock('@/session/ImageLightbox', () => ({
   },
 }));
 vi.mock('@/session/MessageRenderer', () => ({
+  WorkToolActivityRow: ({ activity }: any) => el('div', { 'data-testid': 'private-tool-row' }, activity.message.normalized.label, activity.toolResult),
   AttachmentStrip: ({ attachments, onOpen, onOpenFile, align }: any) => el('div', { 'data-testid': 'attachmentStrip', 'data-align': align },
     attachments.map((item: any, index: number) => el('button', {
       key: index, 'data-testid': `attachment.${item.kind}`, 'data-uri': item.uri ?? '',
@@ -2635,3 +2638,19 @@ vi.mock('@/session/ModelDocumentPreview', () => ({ ModelDocumentPreview: () => n
 vi.mock('@/session/BotGroupTextAttachmentPreview', () => ({ BotGroupTextAttachmentPreview: () => null, botGroupTextAttachmentPreviewKind: () => null }));
 vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null }));
 vi.mock('@/session/mediaPlayerWebView', () => ({ RemoteMediaPlayerWebView: () => null }));
+
+// Unit: final-only history used to leave an empty process section. Exercise the
+// production group timeline with the same absence-of-work rule as private chat.
+it('keeps the final answer without an empty historical process', async () => {
+  const process = { groupId: 'g1', executionId: 'empty', sessionId: 'lane', clientId: 'source' };
+  h.processRead.mockResolvedValue([{ clientId: 'source', role: 'user', content: 'Help' },
+    { clientId: 'seal', role: 'assistant', content: 'Final answer', agentMeta: { turnCompleted: true } }]);
+  h.chat.server = true;
+  await render(group({ plans: [], openPlan: null,
+    members: [{ ...group().members[0], isOwned: true, homeDeviceId: 'owner-mac' }],
+    messages: [message('result', 2, { authorBotId: 'mimi', content: 'Final answer', process })],
+  }), 'ready', undefined, '');
+  expect(h.processRead).toHaveBeenCalled();
+  expect(node.textContent).toContain('Final answer');
+  expect(node.querySelector('section')).toBeNull();
+});

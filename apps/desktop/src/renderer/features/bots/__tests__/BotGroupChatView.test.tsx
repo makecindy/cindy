@@ -15,7 +15,9 @@ import { botGroupAttachmentScope, botGroupThreadDraftKey } from '../botGroupAtta
 import { getBotGroupListSnapshot, refreshBotGroups, resetBotGroupStoreForTests } from '../botGroupStore';
 import { getBotGroupOutbox, getBotGroupOutboxPreviews, resetBotGroupOutboxForTests } from '../botGroupOutbox';
 import { resetCompanionCloudStoreForTests } from '../companionCloudStore';
-import { botGroupWorkPreview } from '../BotGroupLivePreview';
+import { botGroupWorkPreview, BotGroupProcessNotes } from '../BotGroupLivePreview';
+import { makerChatStore } from '@/lib/makerChatStore';
+import { WorkGroupBlock } from '@/components/chat/WorkGroupBlock';
 import { BotGroupChatView } from '../BotGroupChatView';
 import { BotGroupProcess } from '../BotGroupProcess';
 import { ControlledBanner, __resetControlledBannerForTests } from '../../remote-device/ControlledBanner';
@@ -327,6 +329,8 @@ beforeEach(() => {
     value: {
       deviceLink: {
         invoke: mocks.remoteInvoke,
+        subscribe: vi.fn(async () => ({ ok: true })),
+        unsubscribe: vi.fn(async () => ({ ok: true })),
         onRemotePush: () => () => {},
         getState: mocks.getControlledState,
         onControlledState: (callback: NonNullable<typeof mocks.controlledPush>) => {
@@ -4672,8 +4676,155 @@ it('reads historical group process from the execution computer after a home chan
     { clientId: 'seal', role: 'assistant', content: 'Final answer', agentMeta: { turnCompleted: true } }]);
   const view = render(<Tooltip.Provider><BotGroupProcess process={process}
     member={{ ...detail().members[0]!, isOwned: true, homeDeviceId: 'new-mac' }} /></Tooltip.Provider>);
+  await waitFor(() => expect(view.container.querySelector('[data-teammate-process] button')).not.toBeNull());
   fireEvent.click(view.container.querySelector('[data-teammate-process] button')!);
   await screen.findByText('Original computer progress');
   expect(mocks.remoteInvoke).toHaveBeenCalledWith('original-mac', 'local-db:messages:around-client-id', ['old-lane', 'source', { radius: 80 }]);
   expect(mocks.remoteInvoke.mock.calls.every(([device]) => device === 'original-mac')).toBe(true);
+});
+
+// 2026-11-05: a successful history read with only a final answer left an empty
+// clickable process. Use the real group disclosure, not a mocked shell (unit).
+it('never advertises a completed process before finding work, including final-only history', async () => {
+  const process = { groupId: 'g1', executionId: 'empty-process', sessionId: 'lane', clientId: 'source', deviceId: 'original-mac' };
+  let finish!: (rows: unknown[]) => void;
+  mocks.remoteInvoke.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  const rows = [{ clientId: 'source', role: 'user', content: 'Request' },
+    { clientId: 'final', role: 'assistant', content: 'Only the answer', agentMeta: { turnCompleted: true, botPrivateReply: true, botGroupLane: true } }];
+  const view = render(<Tooltip.Provider><BotGroupProcess process={process}
+    member={{ ...detail().members[0]!, isOwned: true, homeDeviceId: 'original-mac' }} /></Tooltip.Provider>);
+  expect(view.container.querySelector('[data-teammate-process]')).toBeNull();
+  expect(mocks.remoteInvoke).toHaveBeenCalled();
+  await act(async () => finish(rows));
+  await waitFor(() => expect(view.container.querySelector('[data-teammate-process]')).toBeNull());
+  expect(view.container.textContent).not.toContain('Only the answer');
+});
+
+// Unit: the same inspected tool segment must stay open across live -> history.
+// Existing disclosure tests kept one component mounted and missed the group swap.
+it('keeps inspected tool details open when group work becomes history', async () => {
+  const process = { groupId: 'g1', executionId: 'inspected', sessionId: 'inspected-lane', clientId: 'source', deviceId: 'original-mac' };
+  const original = makerChatStore.getSnapshot(process.sessionId);
+  const snapshot = { ...original, messages: [{ clientId: 'tool', role: 'tool_use' as const,
+    content: '', toolName: 'Read', toolInput: { file_path: '/repo/notes.md' }, botPrivateReply: true,
+    replyToClientId: 'bot-group:g1:inspected:bot', createdAt: new Date(1000).toISOString() }] };
+  const read = vi.spyOn(makerChatStore, 'getSnapshot').mockReturnValue(snapshot);
+  mocks.remoteInvoke.mockResolvedValue([{ clientId: 'source', role: 'user', content: 'Request' },
+    { clientId: 'tool', role: 'tool_use', content: { toolName: 'Read', input: { file_path: '/repo/notes.md' } } },
+    { clientId: 'final', role: 'assistant', content: 'Answer', agentMeta: { turnCompleted: true } }]);
+  try {
+    const view = render(<Tooltip.Provider><WorkGroupBlock journal isStreaming blockId={`group-process:${process.executionId}`}
+      childItems={[{ kind: 'rendered', key: 'notes', prose: false, renderNode: () =>
+        <BotGroupProcessNotes sessionId={process.sessionId} executionId={process.executionId} since={0} /> }]} /></Tooltip.Provider>);
+    const segment = () => view.container.querySelector('[data-teammate-segment] > button');
+    fireEvent.click(segment()!);
+    expect(segment()?.getAttribute('aria-expanded')).toBe('true');
+    view.rerender(<Tooltip.Provider><BotGroupProcess process={process}
+      member={{ ...detail().members[0]!, isOwned: true, homeDeviceId: 'original-mac' }} /></Tooltip.Provider>);
+    await waitFor(() => expect(segment()?.getAttribute('aria-expanded')).toBe('true'));
+  } finally { read.mockRestore(); }
+});
+
+// Interaction parity: inspection must not initiate a read or remove the control.
+it('keeps completed process and expansion across collapse and remount with group-lane metadata', async () => {
+  const process = { groupId: 'g1', executionId: 'reopen', sessionId: 'lane', clientId: 'source', deviceId: 'original-mac' };
+  const meta = { botPrivateReply: true, botGroupLane: true };
+  mocks.remoteInvoke.mockResolvedValue([{ clientId: 'source', role: 'user', content: 'Request' },
+    { clientId: 'note', role: 'assistant', content: 'Verified stage note', agentMeta: { ...meta, assistantPhase: 'commentary' } },
+    { clientId: 'final', role: 'assistant', content: 'Answer', agentMeta: { ...meta, turnCompleted: true } }]);
+  const tree = <Tooltip.Provider><BotGroupProcess process={process}
+    member={{ ...detail().members[0]!, isOwned: true, homeDeviceId: 'original-mac' }} /></Tooltip.Provider>;
+  const view = render(tree);
+  const heading = () => view.container.querySelector('[data-teammate-process] > button')!;
+  await waitFor(() => expect(heading()).not.toBeNull());
+  expect(heading().getAttribute('aria-expanded')).toBe('false');
+  const reads = mocks.remoteInvoke.mock.calls.length;
+  fireEvent.click(heading());
+  await screen.findByText('Verified stage note');
+  fireEvent.click(heading());
+  fireEvent.click(heading());
+  expect(heading().getAttribute('aria-expanded')).toBe('true');
+  expect(mocks.remoteInvoke).toHaveBeenCalledTimes(reads);
+  view.rerender(<></>);
+  view.rerender(tree);
+  await screen.findByText('Verified stage note');
+  expect(heading().getAttribute('aria-expanded')).toBe('true');
+});
+
+it('keeps unavailable history retryable instead of treating it as an empty process', async () => {
+  const process = { groupId: 'g1', executionId: 'retry-process', sessionId: 'lane', clientId: 'source', deviceId: 'original-mac' };
+  mocks.remoteInvoke.mockResolvedValueOnce([]);
+  const view = render(<Tooltip.Provider><BotGroupProcess process={process}
+    member={{ ...detail().members[0]!, isOwned: true, homeDeviceId: 'original-mac' }} /></Tooltip.Provider>);
+  const heading = () => view.container.querySelector('[data-teammate-process] > button');
+  await waitFor(() => expect(heading()).not.toBeNull());
+  fireEvent.click(heading()!);
+  const retry = await screen.findByRole('button', { name: 'chat.errorBanner.retry' });
+  mocks.remoteInvoke.mockResolvedValue([{ clientId: 'source', role: 'user', content: 'Request' },
+    { clientId: 'note', role: 'assistant', content: 'Recovered stage note', agentMeta: { assistantPhase: 'commentary' } },
+    { clientId: 'final', role: 'assistant', content: 'Answer', agentMeta: { turnCompleted: true } }]);
+  fireEvent.click(retry);
+  expect(heading()).not.toBeNull();
+  await screen.findByText('Recovered stage note');
+  expect(heading()?.getAttribute('aria-expanded')).toBe('true');
+});
+
+// Extended acceptance: the final receipt may reach the group before the last
+// persisted work record. An existing, expanded history must consume its push.
+it('refreshes already-open group history when a late persisted work record is pushed', async () => {
+  const process = { groupId: 'g1', executionId: 'late-after-read', sessionId: 'late-lane', clientId: 'source', deviceId: 'original-mac' };
+  const meta = { botPrivateReply: true, botGroupLane: true };
+  const rows: import('../../../../shared/botGroupChat').BotGroupProcessMessage[] = [
+    { clientId: 'source', role: 'user', content: 'Request' },
+    { clientId: 'note', role: 'assistant', content: 'Stage before completion', agentMeta: { ...meta, assistantPhase: 'commentary' } },
+    { clientId: 'final', role: 'assistant', content: 'Answer', agentMeta: { ...meta, turnCompleted: true } },
+  ];
+  mocks.remoteInvoke.mockImplementation(async () => [...rows]);
+  const listeners: Array<(push: unknown) => void> = [];
+  window.electronAPI.deviceLink.onRemotePush = ((listener: (push: unknown) => void) => {
+    listeners.push(listener);
+    return () => { const index = listeners.indexOf(listener); if (index >= 0) listeners.splice(index, 1); };
+  }) as typeof window.electronAPI.deviceLink.onRemotePush;
+  const view = render(<Tooltip.Provider><BotGroupProcess process={process}
+    member={{ ...detail().members[0]!, isOwned: true, homeDeviceId: 'original-mac' }} /></Tooltip.Provider>);
+  const heading = () => view.container.querySelector('[data-teammate-process] > button')!;
+  await waitFor(() => expect(heading()).not.toBeNull());
+  fireEvent.click(heading());
+  await screen.findByText('Stage before completion');
+  expect(view.container.querySelector('[data-teammate-segment]')).toBeNull();
+  rows.push({ clientId: 'late-thinking', role: 'thinking', content: 'Reasoning must remain hidden', agentMeta: meta });
+  await act(async () => listeners.forEach(listener => listener({ deviceId: 'original-mac',
+    channel: 'local-db:messages:created', payload: { sessionId: process.sessionId, clientId: 'late-thinking' } })));
+  await waitFor(() => expect(view.container.querySelector('[data-teammate-segment]')).not.toBeNull());
+  expect(heading().getAttribute('aria-expanded')).toBe('true');
+  expect(view.container.textContent).not.toContain('Reasoning must remain hidden');
+});
+
+// Product decision (2026-11-05): stopping without a final reply removes the
+// transient process entry to keep the group timeline clean.
+it('hides the process entry after a running group execution is stopped without a final reply', async () => {
+  const sessionId = 'stopped-lane';
+  const startedAt = Date.now() - 20_000;
+  const original = makerChatStore.getSnapshot(sessionId);
+  const snapshot = { ...original, messages: [{ clientId: 'stopped-note', role: 'assistant' as const,
+    content: 'Work produced before stop', assistantPhase: 'commentary' as const, botPrivateReply: true,
+    replyToClientId: 'bot-group:g1:stopped-work:mimi', createdAt: new Date(startedAt + 1).toISOString() }] };
+  const read = vi.spyOn(makerChatStore, 'getSnapshot').mockReturnValue(snapshot);
+  mocks.activity = { phase: 'running', compactDetail: 'Working', startedAtMs: startedAt };
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ speakingBotIds: ['mimi'], round: {
+    status: 'running', canContinue: false, speakers: [{ botId: 'mimi', activity: 'reply', executionId: 'stopped-work',
+      sessionId, executionStatus: 'running', startedAt }],
+  } }) });
+  try {
+    const view = renderView();
+    await screen.findByText('Work produced before stop');
+    mocks.activity = null;
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ speakingBotIds: [], round: {
+      status: 'idle', speakers: [], canContinue: false,
+    } }) });
+    await act(async () => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'round' })));
+    await waitFor(() => expect(screen.queryByTestId('bot-group-progress')).toBeNull());
+    expect(view.container.querySelector('[data-teammate-process]')).toBeNull();
+    expect(screen.queryByText('Work produced before stop')).toBeNull();
+  } finally { read.mockRestore(); }
 });

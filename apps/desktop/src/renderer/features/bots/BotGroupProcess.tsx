@@ -5,7 +5,7 @@ import { WorkGroupBlock, TeammateWorkSegment, type WorkGroupChild } from '@/comp
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
-import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { useBotProfiles } from './botStore';
 import { companionRunsHere } from './companionCloudPresentation';
 import { useCompanionCloud } from './companionCloudStore';
@@ -20,39 +20,68 @@ export function BotGroupProcess({ process, member }: { process: BotGroupProcessR
     ? process.deviceId === cloud.selfDeviceId ? undefined : process.deviceId
     : runsHere ? undefined : actor?.homeDeviceId ?? member.homeDeviceId ?? undefined;
   if (!process.deviceId && !runsHere && !deviceId) return null;
-  return <BotGroupProcessHistory process={process} deviceId={deviceId} />;
+  return <BotGroupProcessHistory key={`${deviceId ?? 'local'}:${process.sessionId}:${process.clientId}:${process.executionId}`} process={process} deviceId={deviceId} />;
 }
 function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProcessRef; deviceId?: string }) {
   const { t } = useTranslation();
   const [result, setResult] = useState<{ messages: BotGroupProcessMessage[]; failed: boolean }>();
   const [attempt, retry] = useState(0);
-  const [opened, setOpened] = useState(false);
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
-    if (!opened) return;
     let cancelled = false;
+    setLoading(true);
     const owner = getDataOwnerGeneration();
     const current = () => !cancelled && isDataOwnerGenerationCurrent(owner);
-    setResult(undefined);
     const read = (clientId: string) => deviceId
       ? window.electronAPI.deviceLink.invoke(deviceId, 'local-db:messages:around-client-id', [process.sessionId, clientId, { radius: 80 }]) as Promise<BotGroupProcessMessage[]>
       : window.electronAPI.localDb.messages.aroundClientId(process.sessionId, clientId, { radius: 80 });
-    void readBotGroupProcessMessages(process, read, () => !current()).then(messages => {
-      if (current()) setResult({ messages, failed: false });
-    }).catch(() => { if (current()) setResult({ messages: [], failed: true }); });
-    return () => { cancelled = true; };
-  }, [process.sessionId, process.clientId, deviceId, attempt, opened]);
+    let revision = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const refresh = () => {
+      const request = ++revision;
+      const active = () => current() && request === revision;
+      setLoading(true);
+      void readBotGroupProcessMessages(process, read, () => !active()).then(messages => {
+        if (active()) { setResult({ messages, failed: false }); setLoading(false); }
+      }).catch(() => {
+        if (active()) { setResult(previous => ({ messages: previous?.messages ?? [], failed: true })); setLoading(false); }
+      });
+    };
+    const changed = (sessionId: unknown) => {
+      if (!current() || sessionId !== process.sessionId) return;
+      // A persisted tool batch can contain several records. Read once after it settles.
+      clearTimeout(timer);
+      timer = setTimeout(refresh, 50);
+    };
+    const off = deviceId
+      ? window.electronAPI.deviceLink.onRemotePush((push, stamp) => {
+        if (isDataOwnerPushCurrent(stamp) && push.deviceId === deviceId
+          && push.channel === 'local-db:messages:created') changed((push.payload as { sessionId?: string } | null)?.sessionId);
+      })
+      : window.electronAPI.localDb.messages.onCreated(({ sessionId }, stamp) => {
+        if (isDataOwnerPushCurrent(stamp)) changed(sessionId);
+      });
+    const topics = [`session:${process.sessionId}`];
+    const subscription = deviceId ? window.electronAPI.deviceLink.subscribe(deviceId, topics) : undefined;
+    void subscription?.catch(() => undefined);
+    refresh();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      off();
+      if (deviceId) void subscription?.catch(() => undefined)
+        .then(() => window.electronAPI.deviceLink.unsubscribe(deviceId, topics)).catch(() => undefined);
+    };
+  }, [process.sessionId, process.clientId, deviceId, attempt]);
   const projection = projectBotGroupProcess(result?.messages ?? [], false);
+  // Resolve availability before advertising a disclosure, just like private chat.
+  if (!result || (!result.failed && !projection.segments.length)) return null;
   return <WorkGroupBlock blockId={`group-process:${process.executionId}`} journal durationMs={process.durationMs ?? projection.durationMs}
     childItems={[{ kind: 'rendered', key: process.executionId, prose: false, renderNode: () => <>
-      <MarkProcessVisible onVisible={() => setOpened(true)} />
-      {!result && <Spinner size={14} />}
-      {result?.failed && <Button variant="secondary" tone="quiet" size="sm" onClick={() => retry(v => v + 1)}>{t('chat.errorBanner.retry')}</Button>}
-      {result && <BotGroupProcessEntries messages={result.messages} id={process.executionId} />}
+      {loading && <Spinner size={14} />}
+      {result.failed && !loading && <Button variant="secondary" tone="quiet" size="sm" onClick={() => retry(v => v + 1)}>{t('chat.errorBanner.retry')}</Button>}
+      {result && <BotGroupProcessEntries messages={result.messages} id={`group-process:${process.executionId}`} />}
     </> }]} />;
-}
-function MarkProcessVisible({ onVisible }: { onVisible(): void }) {
-  useEffect(onVisible, []);
-  return null;
 }
 
 /** The same segment component as private chat; records never enter group messages. */
