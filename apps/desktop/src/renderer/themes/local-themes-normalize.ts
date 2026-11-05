@@ -16,10 +16,10 @@
  * 复制主题固化的 registry 默认别名同样按缺失处理。
  */
 
-import { parseCssColor, toHex, type Rgb } from '../../shared/theme-import/color';
+import { parseCssColor, relativeLuminance, toHex, type Rgb } from '../../shared/theme-import/color';
 import { deriveUncheckedSwitchTrack } from '../../shared/theme-import/palette';
 import { colorRegistry } from './color-registry';
-import { filledButtonPressed } from './filledButtonStates';
+import { filledButtonPressedFromHover } from './filledButtonStates';
 import { dropLegacyLoginDefaults } from './loginLegacyDefaults';
 import type { ThemeType } from './types';
 
@@ -115,19 +115,29 @@ function normalizeUncheckedSwitchColors(
 
 /**
  * `accent-hover` 曾同时是 CTA 与确认框主按钮的悬停色。填充按钮改由基础色算出后
- * (DESIGN.md §4),旧主题和外部导入显式写的值继续生效;按下从该悬停色接着算,保持同向。
+ * (DESIGN.md §4),旧主题和外部导入显式写的值继续生效;按下沿底色到悬停的方向接着走。
+ * 底色或悬停色读不出具体颜色时不猜方向,按最常见的变暗处理。
  */
+const LEGACY_ACCENT_HOVER_ALIAS = 'var(--accent-hover)';
 const LEGACY_ACCENT_HOVER_STATES = [
-  ['button-cta-hover', 'button-cta-pressed'],
-  ['confirm-btn-primary-hover', 'confirm-btn-primary-pressed'],
+  { base: 'accent-cta-bg-pure', hover: 'button-cta-hover', pressed: 'button-cta-pressed' },
+  { base: 'confirm-btn-primary-bg', hover: 'confirm-btn-primary-hover', pressed: 'confirm-btn-primary-pressed' },
 ] as const;
 
 function bridgeLegacyAccentHover(colors: Record<string, string>): Record<string, string> {
-  if (colors['accent-hover'] === undefined) return colors;
+  const accentHover = colors['accent-hover'];
+  if (accentHover === undefined) return colors;
   const bridged: Record<string, string> = {};
-  for (const [hover, pressed] of LEGACY_ACCENT_HOVER_STATES) {
-    if (colors[hover] === undefined) bridged[hover] = 'var(--accent-hover)';
-    if (colors[pressed] === undefined) bridged[pressed] = filledButtonPressed(`var(--${hover})`);
+  for (const { base, hover, pressed } of LEGACY_ACCENT_HOVER_STATES) {
+    const explicitHover = colors[hover];
+    if (explicitHover === undefined) bridged[hover] = LEGACY_ACCENT_HOVER_ALIAS;
+    if (colors[pressed] !== undefined) continue;
+    const baseRgb = parseCssColor(colors[base]);
+    const hoverRgb = parseCssColor(
+      explicitHover === undefined || explicitHover === LEGACY_ACCENT_HOVER_ALIAS ? accentHover : explicitHover,
+    );
+    const lighter = baseRgb && hoverRgb && relativeLuminance(hoverRgb) > relativeLuminance(baseRgb);
+    bridged[pressed] = filledButtonPressedFromHover(`var(--${hover})`, lighter ? 'lighter' : 'darker');
   }
   return Object.keys(bridged).length === 0 ? colors : { ...colors, ...bridged };
 }

@@ -19,3 +19,11 @@ export function filledButtonHover(base: string): string {
 export function filledButtonPressed(base: string): string {
   return filledButtonState(base, 0.085, 0.355);
 }
+
+/**
+ * 主题显式给了悬停色时，按下沿「底色到悬停」的方向再走一步，步长是规则里悬停到按下的差值。
+ * 不把悬停色当新底色套用阈值：接近黑色的悬停色会被抬亮，又变成悬停变暗、按下变亮。
+ */
+export function filledButtonPressedFromHover(hover: string, direction: 'darker' | 'lighter'): string {
+  return `oklch(from ${hover} calc(l ${direction === 'darker' ? '-' : '+'} 0.04) c h)`;
+}
