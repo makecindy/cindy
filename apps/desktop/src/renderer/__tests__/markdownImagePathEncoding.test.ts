@@ -84,6 +84,13 @@ describe('Markdown local image path encoding', () => {
     );
   });
 
+  it('normalizes hostless xdt-image paths with spaces to xdt-file URLs', () => {
+    const path = 'C:/Users/test/My Pictures/image.png';
+    expect(normalizeMarkdownImageSrc(`xdt-image:///${path}`, '/repo', true)).toBe(
+      `xdt-file://local/?path=${encodeURIComponent(path)}`,
+    );
+  });
+
   it('keeps legacy POSIX paths and cache-busting revisions intact', () => {
     const path = '/Users/test/My Pictures/image.png';
     expect(
