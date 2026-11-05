@@ -57,6 +57,7 @@ type Props = ViewProps & {
   ): void;
   onFocusChange(event: Event<{ focused: boolean }>): void;
   onContentHeight(event: Event<{ height: number }>): void;
+  onScrollEdge(event: Event<{ atTop: boolean; atBottom: boolean }>): void;
   onPasteText(
     event: Event<{
       text: string;
@@ -203,6 +204,9 @@ export const ComposerNativeInput = forwardRef<
         }
         onContentHeight={({ nativeEvent }) =>
           props.onHeightChange?.(nativeEvent.height)
+        }
+        onScrollEdge={({ nativeEvent }) =>
+          props.onScrollEdgeChange?.({ atTop: nativeEvent.atTop, atBottom: nativeEvent.atBottom })
         }
         onPasteText={({ nativeEvent }) => {
           const nodes = composerNodesForBoundedPlainTextPaste(nativeEvent.text);

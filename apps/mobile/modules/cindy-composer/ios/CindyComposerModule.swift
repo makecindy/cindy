@@ -6,7 +6,7 @@ public class CindyComposerModule: Module {
     Name("CindyComposer")
     Constant("available") { true }
     View(CindyComposerView.self) {
-      Events("onDocumentChange", "onSelectionChange", "onFocusChange", "onContentHeight", "onPasteText", "onPasteImages")
+      Events("onDocumentChange", "onSelectionChange", "onFocusChange", "onContentHeight", "onScrollEdge", "onPasteText", "onPasteImages")
       Prop("document") { (view: CindyComposerView, value: [String: Any]) in view.apply(value) }
       Prop("colorScheme") { (view: CindyComposerView, value: String) in
         view.overrideUserInterfaceStyle = value == "dark" ? .dark : .light
@@ -57,6 +57,19 @@ final class ComposerTextView: UITextView {
   private let history = UndoManager()
   override var undoManager: UndoManager? { history }
   weak var owner: CindyComposerView?
+  var atScrollTop: Bool { contentOffset.y <= -adjustedContentInset.top + 1 }
+  var atScrollBottom: Bool {
+    !isScrollEnabled || contentOffset.y >= contentSize.height + adjustedContentInset.bottom - bounds.height - 1
+  }
+  // Dragging past an edge resizes the composer (JS body drag). Not starting the
+  // pan here keeps UIKit's rubber band from claiming that touch first.
+  override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+    if gestureRecognizer === panGestureRecognizer, owner?.expandedController == nil {
+      let dy = panGestureRecognizer.translation(in: self).y
+      if (dy > 0 && atScrollTop) || (dy < 0 && atScrollBottom) { return false }
+    }
+    return super.gestureRecognizerShouldBegin(gestureRecognizer)
+  }
   override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
     if action == #selector(UIResponderStandardEditActions.paste(_:)) {
       guard isEditable, isSelectable, isUserInteractionEnabled, !isHidden, alpha > 0.01 else { return false }
@@ -108,6 +121,7 @@ final class CindyComposerView: ExpoView, UITextViewDelegate {
   let onSelectionChange = EventDispatcher()
   let onFocusChange = EventDispatcher()
   let onContentHeight = EventDispatcher()
+  let onScrollEdge = EventDispatcher()
   let onPasteText = EventDispatcher()
   let onPasteImages = EventDispatcher()
   let editor = ComposerTextView()
@@ -118,6 +132,7 @@ final class CindyComposerView: ExpoView, UITextViewDelegate {
   var chipColor = UIColor.secondarySystemFill
   private var applying = false
   private var lastHeight: CGFloat = 0
+  private var lastScrollEdge: (top: Bool, bottom: Bool)?
   private var deferred: [String: Any]?
   private var textFont: UIFont { UIFont.preferredFont(forTextStyle: .body) }
   private var typingStyle: [NSAttributedString.Key: Any] { [.font: textFont, .foregroundColor: foreground] }
@@ -276,6 +291,16 @@ final class CindyComposerView: ExpoView, UITextViewDelegate {
     if editor.markedTextRange == nil, let value = deferred { deferred = nil; apply(value) }
   }
   func textViewDidChangeSelection(_ textView: UITextView) { if !applying { emitSelection() } }
+  // Which end the text is scrolled to: JS decides from this whether a drag on the
+  // text scrolls it or resizes the composer.
+  func scrollViewDidScroll(_ scrollView: UIScrollView) { emitScrollEdge() }
+  private func emitScrollEdge() {
+    let top = editor.atScrollTop
+    let bottom = editor.atScrollBottom
+    if let last = lastScrollEdge, last.top == top, last.bottom == bottom { return }
+    lastScrollEdge = (top, bottom)
+    onScrollEdge(["atTop": top, "atBottom": bottom])
+  }
   func emitSelection() {
     onSelectionChange(["start": editor.selectedRange.location, "end": NSMaxRange(editor.selectedRange), "revision": revision])
   }
@@ -287,5 +312,6 @@ final class CindyComposerView: ExpoView, UITextViewDelegate {
     let height = ceil(editor.sizeThatFits(CGSize(width: bounds.width, height: .greatestFiniteMagnitude)).height)
     editor.isScrollEnabled = height > bounds.height + 1
     if height != lastHeight { lastHeight = height; onContentHeight(["height": height]) }
+    emitScrollEdge()
   }
 }
