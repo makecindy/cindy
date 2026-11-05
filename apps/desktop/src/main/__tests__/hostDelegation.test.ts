@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -124,6 +125,55 @@ describe('host proxies', () => {
     expect(send.path).toBe('/api/input/enqueue');
     expect(send.body.item.text).toBe('hello');
     expect(send.body.item.model).toBe('m1');
+  });
+});
+
+describe('host proxy round trip', () => {
+  it('reaches a real loopback server with the bearer and maps the reply', async () => {
+    const seen: Array<{ url?: string; auth?: string; body?: string }> = [];
+    const server = http.createServer((request, response) => {
+      let body = '';
+      request.on('data', (chunk) => { body += chunk; });
+      request.on('end', () => {
+        seen.push({ url: request.url, auth: request.headers.authorization, body });
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify([{ id: 'task-1', title: 'from host' }]));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    try {
+      const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>();
+      const ipcMain = {
+        removeHandler: () => {},
+        handle: (
+          channel: string,
+          listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown,
+        ) => {
+          handlers.set(channel, listener);
+        },
+      };
+      const client = createHostClient({ baseUrl: `http://127.0.0.1:${port}`, token: 'unit-token' });
+      registerHostDelegatedIpc({ client, ipcMain });
+
+      const sessions = await handlers.get('local-db:sessions:list')!({} as IpcMainInvokeEvent);
+      expect(sessions).toEqual([{ id: 'task-1', title: 'from host' }]);
+      expect(seen.at(-1)).toMatchObject({
+        url: '/api/sessions/list',
+        auth: 'Bearer unit-token',
+        body: 'null',
+      });
+
+      const projection = await handlers.get('maker:input:get-projection')!(
+        {} as IpcMainInvokeEvent,
+        'task-1',
+      );
+      expect(projection).toEqual([{ id: 'task-1', title: 'from host' }]);
+      expect(JSON.parse(seen.at(-1)!.body!)).toEqual({ sessionId: 'task-1' });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });
 
