@@ -2800,6 +2800,32 @@ export class DeviceLinkClient {
     // 其它已知 kind 的非法 payload 直接丢弃。
     if (!validForHeartbeat && env.kind !== 'invoke' && env.kind !== 'link-close') {
       this.log.warn(`dropping invalid device-link frame kind=${env.kind}`);
+      // 被控端收到自相矛盾的 link-open 时，控制端正卡在等 link-accept。
+      // 这里不发回包的话，控制端只能等满 requestTimeout，且无法区分
+      // 「对端拒绝」与「网络不通」——而目标设备就在线、链路也是通的。
+      //
+      // 用 link-close 而不是 relay-error：后者是 server→发送方 的帧，
+      // 不在 ROUTED_KINDS 里，设备之间发不出去。link-close 是路由帧，
+      // 且控制端按 dst 拒绝 pending（见 rejectPendingLinkOpen），不需要 id。
+      if (env.kind === 'link-open' && env.src) {
+        try {
+          this.sendEnvelope({
+            v: PROTOCOL_VERSION,
+            kind: 'link-close',
+            dst: env.src,
+            payload: { reason: 'protocol-error' },
+          });
+        } catch (err) {
+          // 回执是尽力而为:本端 socket 不在或背压满时不能因为「报错失败」
+          // 把整个分发路径抛断。控制端在那个情形下仍会走到自己的超时，
+          // 与改动前行为一致，不会倒退。
+          this.log.debug('link-close for a rejected link-open failed', err);
+        }
+        this.log.warn(
+          `rejected link-open from ${env.src.slice(0, 8)}: protocol-error `
+          + '(capabilities declared without transportStreamId)',
+        );
+      }
       return;
     }
     if (validForHeartbeat) {
@@ -3248,10 +3274,19 @@ export class DeviceLinkClient {
           this.pendingInboundLinkOffers.delete(env.src);
           this.rejectPendingLinkOpen(
             env.src,
-            close?.reason === 'revoked' ? 'ACCESS_REVOKED' : 'LINK_NOT_OPEN',
+            close?.reason === 'revoked'
+              ? 'ACCESS_REVOKED'
+              : close?.reason === 'protocol-error'
+                ? 'PROTOCOL_ERROR'
+                : 'LINK_NOT_OPEN',
             close?.reason === 'revoked'
               ? 'access revoked by target device'
-              : 'control link closed by peer',
+              : close?.reason === 'protocol-error'
+                // 被控端只在我们带了 capabilities 却缺 transportStreamId 时回这个。
+                // 带上可操作提示，避免控制端把这当成普通的「对端关链」。
+                ? 'target rejected link-open: protocol-error '
+                  + '(capabilities declared without transportStreamId)'
+                : 'control link closed by peer',
           );
           const peer = this.getPeerTransport(env.src);
           this.markPeerLinkDown(peer);
@@ -6003,7 +6038,7 @@ export class DeviceLinkClient {
 
   private rejectPendingLinkOpen(
     dst: string,
-    code: 'LINK_NOT_OPEN' | 'ACCESS_REVOKED',
+    code: 'LINK_NOT_OPEN' | 'ACCESS_REVOKED' | 'PROTOCOL_ERROR',
     message: string,
   ): void {
     for (const [id, pending] of this.pending) {
@@ -6253,7 +6288,15 @@ function isValidInboundEnvelope(value: Envelope): boolean {
         && typeof payload.controllerName === 'string'
         && typeof payload.protocolVersion === 'number'
         && Number.isFinite(payload.protocolVersion)
-        && typeof payload.appVersion === 'string';
+        && typeof payload.appVersion === 'string'
+        // 声明了能力集却没给传输身份 = 自相矛盾的帧。能力集本身就是后加字段，
+        // 只有新客户端才会传，所以不存在「新客户端忘了带 streamId」的合法情形；
+        // 旧客户端不传 capabilities，不受这条约束。
+        && !(
+          Array.isArray(payload.capabilities)
+          && payload.capabilities.length > 0
+          && typeof payload.transportStreamId !== 'string'
+        );
     case 'link-accept':
       return isRecord(payload)
         && typeof payload.appVersion === 'string'
