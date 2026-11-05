@@ -2296,6 +2296,49 @@
           "wireProtocol": "openai-chat"
         }
       }
+    },
+    {
+      "id": "llmtr",
+      "name": "LLMTR",
+      "docsUrl": "https://llmtr.com/docs/en/quickstart",
+      "regionHint": "global",
+      "models": [
+        {
+          "id": "qwen/qwen3.8-27b-free",
+          "name": "Qwen3.8 27B",
+          "contextWindow": 131042,
+          "supportsImageInput": true,
+          "maxOutputTokens": 16384,
+          "api": "openai-completions",
+          "efforts": []
+        },
+        {
+          "id": "llmtr/qwen3-8-27b",
+          "name": "Qwen 3.8 27B",
+          "contextWindow": 262144,
+          "supportsImageInput": false,
+          "maxOutputTokens": 262144,
+          "api": "openai-completions",
+          "efforts": []
+        }
+      ],
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://llmtr.com/v1",
+          "wireProtocol": "openai-chat",
+          "modelsUrl": "https://llmtr.com/v1/models"
+        },
+        "codex": {
+          "baseUrl": "https://llmtr.com/v1",
+          "wireProtocol": "openai-chat",
+          "modelsUrl": "https://llmtr.com/v1/models"
+        },
+        "pi": {
+          "baseUrl": "https://llmtr.com/v1",
+          "wireProtocol": "openai-chat",
+          "modelsUrl": "https://llmtr.com/v1/models"
+        }
+      }
     }
   ]
 }

@@ -143,6 +143,12 @@ Flash 上限按官方 512K 保守记为 512,000，2.5 Pro / Pro Beta 为 1,000,0
 身份、类型和官方文档，尚未添加 Agnes 专属媒体执行路径；3.0 Pro 的 coming-soon 身份不构成
 可用模型。新增供应商与接口模板由 Server 常规发布流程下发，不走型号变更的自动直提捷径。
 
+LLMTR 随包预设只走 Chat Completions。三个引擎的 base 都是 `https://llmtr.com/v1`，
+`wireProtocol` 为 `openai-chat`，模型发现为 `https://llmtr.com/v1/models`。
+公开目录里 `qwen/qwen3.8-27b-free` 的输出上限是 16,384，`llmtr/qwen3-8-27b` 是 262,144。
+`llmtr/` 是上游模型 ID 的一部分，不拿来改协议，也不按模型家族改成 Responses。
+这次只改客户端离线预设，没有改 Server 正本，也不能当成线上目录已经下发。
+
 ### 推荐引擎（`recommendedAgents`）
 
 推荐哪个引擎由 Server 正本 `source/registry/recommended-agents.json` 维护：每条规则是

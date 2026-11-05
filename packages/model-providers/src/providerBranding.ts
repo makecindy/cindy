@@ -12,6 +12,8 @@ export { CINDY_MARK_TRANSFORM, CINDY_MARK_PATH, CINDY_MARK_EARRING_PATH, CINDY_M
 
 // Additional supplier marks: Lobe Icons 5.14.0 (MIT; included in THIRD-PARTY-NOTICES).
 export const PROVIDER_LOGO_PATHS = {
+  // Compact LLMTR mark, scaled from https://llmtr.com/brand/llmtr-icon-mono.svg into this 24px slot.
+  llmtr: 'M 14.871 12 A 6.835 6.835 0 1 0 1.2 12 A 6.835 6.835 0 1 0 14.871 12 Z M 14.871 12 A 4.971 4.971 0 1 1 4.928 12 A 4.971 4.971 0 1 1 14.871 12 Z M 19.842 8.893 L 20.538 11.037 L 22.8 11.037 L 20.973 12.367 L 21.669 14.517 L 19.842 13.187 L 18.015 14.517 L 18.711 12.367 L 16.884 11.037 L 19.146 11.037 Z',
   // Agnes official foreground mark: https://platform.agnes-ai.com/images/biglogo.svg
   // Preserve its two paths, uniformly scaled from the 284px canvas to 24px.
   agnes: 'M3.60592 14.2175C3.60592 14.2175 2.17859 18.6203 4.8093 19.0639C7.44 19.5076 11.8014 18.2425 16.6225 9.01437C16.6225 9.01437 16.0276 11.9121 15.7039 13.5727C15.6059 14.078 15.1639 14.4439 14.6493 14.4482L14.0062 14.4524C13.8169 14.4541 13.7451 14.6958 13.9006 14.8039C14.5099 15.2256 15.2915 16.1392 15.4166 18.0752C15.4437 18.4885 15.878 18.7538 16.2558 18.5831C16.4248 18.507 16.5887 18.3752 16.7146 18.1538C16.8203 17.9687 16.8693 17.7558 16.8777 17.5428L16.7907 16.7358C16.7442 16.3082 17.0003 15.9101 17.4042 15.7639C17.9755 15.5569 18.747 15.1234 19.1248 14.2344C19.1696 14.1296 19.0656 14.0206 18.9583 14.0594C18.5763 14.1963 17.8504 14.4228 17.2192 14.4194C17.0315 14.4186 16.8896 14.2479 16.9166 14.062L17.793 7.93945C17.8437 7.58706 17.5766 7.26762 17.2208 7.26002C17.0231 7.25579 16.7839 7.2803 16.5093 7.36227C15.8949 7.54565 15.3135 7.85579 14.9949 8.46761C13.4907 11.3611 6.28732 20.0341 3.60592 14.2175Z M16.6766 6.02113C17.4943 6.02113 18.1572 5.35825 18.1572 4.54056C18.1572 3.72286 17.4943 3.06 16.6766 3.06C15.8589 3.06 15.1961 3.72286 15.1961 4.54056C15.1961 5.35825 15.8589 6.02113 16.6766 6.02113Z',
@@ -93,6 +95,7 @@ export type ProviderLogoRouting = Readonly<
 /** Bundled regional presets share a brand and never infer it from display names. */
 const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
   agnes: 'agnes',
+  llmtr: 'llmtr',
   sub2api: 'sub2api',
   "antgroup": "antgroup",
   "baseten": "baseten",
@@ -173,6 +176,7 @@ const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
 /** Renamed providers retain stable upstream hosts, matched only on DNS boundaries. */
 const PROVIDER_LOGO_KIND_BY_HOST: readonly (readonly [string, ProviderLogoKind])[] = [
   ['apihub.agnes-ai.com', 'agnes'],
+  ['llmtr.com', 'llmtr'],
   ["api.ant-ling.com", "antgroup"],
   ["inference.baseten.co", "baseten"],
   ["api.cerebras.ai", "cerebras"],
