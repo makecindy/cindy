@@ -3930,11 +3930,16 @@ function builtinSeedStoreInstall(id: string, installedDir: string): BuiltinStore
     return null;
   }
   const snapshot = readInstalledGhostManifestSnapshot(installedDir, GHOST_INSTALL_MANIFEST_MAX_BYTES);
+  // ghost.json 相同不代表目录里还是商店包(旧播种器允许同版本种子覆盖,只改代码不改清单)。
+  // 批准回执里的包摘要才是落位那一刻的包身份:商店安装 = Release sha256,播种发布 = 目录摘要。
+  const relId = path.relative(brainRootDir(), installedDir).split(path.sep).join('/');
+  const evidence = getGhostManager().approvedInstallEvidence(relId);
   return {
     version: record.version,
     ownsInstalledBytes:
       snapshot.ok &&
-      verifyInstalledMarketManifest(record, installedMarketManifestIdentity(snapshot.snapshot)),
+      verifyInstalledMarketManifest(record, installedMarketManifestIdentity(snapshot.snapshot)) &&
+      evidence?.packageSha256 === record.sha256,
   };
 }
 
