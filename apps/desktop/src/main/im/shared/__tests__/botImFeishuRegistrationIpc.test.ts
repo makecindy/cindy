@@ -83,6 +83,17 @@ describe('伙伴飞书扫码授权 IPC', () => {
     expect(mocks.request).not.toHaveBeenCalled();
   });
 
+  it('rejects with a decodable IPC error when the registration request fails', async () => {
+    mocks.request.mockRejectedValue(new Error('network down'));
+
+    await expect(
+      handler('botImConnection:feishu-registration-begin')(
+        {},
+        { botId: 'bot-1', service: 'feishu' },
+      ),
+    ).rejects.toThrow(/network down/);
+  });
+
   it('creates the partner connection in main and binds the scanning user as owner', async () => {
     mocks.poll.mockResolvedValue({
       status: 'success',

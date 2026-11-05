@@ -4,6 +4,7 @@ import * as QRCode from 'qrcode';
 
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
+import { extractIpcError } from '@/utils/ipcError';
 import { parseCssColorComposited, toHex } from '../../shared/theme-import/color';
 
 const log = createLogger('useFeishuBotRegistration');
@@ -263,7 +264,15 @@ export function useFeishuBotRegistration(
       } catch (err) {
         if (generationRef.current !== runId) return;
         clearLocalRegistration();
-        const msg = err instanceof Error ? err.message : String(err);
+        // 操作型 IPC 的失败统一以 IPC 错误协议 reject, 这里解码出真正的失败原因。
+        const msg =
+          extractIpcError(err)?.message ?? (err instanceof Error ? err.message : String(err));
+        // 被另一窗口取代的 begin 走 reject 通道回来时, 同样按 cancelled 收口。
+        if (msg.includes('CANCELLED')) {
+          setPhase('cancelled');
+          setErrorMessage(null);
+          return;
+        }
         log.error('registration begin failed:', msg);
         setPhase('error');
         setErrorMessage(msg);

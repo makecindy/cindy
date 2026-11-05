@@ -63,7 +63,7 @@ async function beginBotImFeishuRegistration(
   const ownerKey = activeOwnerScopeKey();
   const stillOwner = () => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === ownerKey;
 
-  return startFeishuConnectionRegistration({
+  const result = await startFeishuConnectionRegistration({
     service,
     request: (brand) => requestFeishuAppRegistration(postForm, brand),
     poll: (brand, deviceCode, interval) =>
@@ -92,6 +92,14 @@ async function beginBotImFeishuRegistration(
       throw new Error('CANCELLED');
     },
   });
+  if (!result.ok) {
+    // 领域内部仍用返回式轮次结果; 操作型 IPC 对外统一 reject, 不暴露第二种失败协议。
+    if (result.error === 'CANCELLED') {
+      throwIpcError('PRECONDITION_FAILED', 'CANCELLED');
+    }
+    throwIpcError('INTERNAL', result.error ?? 'FEISHU_REGISTRATION_BEGIN_FAILED');
+  }
+  return result;
 }
 
 function broadcastStatus(status: BotImFeishuRegistrationStatus): void {
