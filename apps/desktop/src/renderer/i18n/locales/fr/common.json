@@ -6081,7 +6081,7 @@
           "viewProgress": "Voir la progression",
           "resume": "Reprendre le déploiement",
           "rename": "Renommer",
-          "renameHint": "Change uniquement le nom affiché sur cet ordinateur. Le serveur et les appareils connectés gardent le nom d'origine.",
+          "renameHint": "Cela ne change que le nom affiché sur cet ordinateur. Le serveur et les appareils connectés gardent le nom d'origine.",
           "renameSave": "Enregistrer",
           "renameCancel": "Annuler",
           "statusChecking": "Vérification…",

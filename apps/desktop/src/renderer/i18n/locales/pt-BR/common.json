@@ -12211,7 +12211,7 @@
       "effortLabel": "Esforço de raciocínio",
       "thinking": "Pensando",
       "edit": "Editar",
-      "options": "Options",
+      "options": "Opções",
       "priceTip": "Entrada {{input}} · Saída {{output}} por 1M de tokens",
       "pricing": {
         "title": "Por 1 milhão de tokens",
