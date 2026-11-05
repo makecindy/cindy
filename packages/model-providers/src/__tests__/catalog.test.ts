@@ -1,3 +1,4 @@
+B=0a0d33dc64e1abf49d561bbcee72680ca3c2e83a
 import { buildUserProvider } from '../user-provider.js';
 import { expandedRegistryEntries } from "../modelMetadataLayers.js";
 /**
@@ -242,8 +243,22 @@ describe("bundled catalog validity (dynamic-first contract)", () => {
     });
   });
 
-  it("openai ships GPT Image 2.5 plus previous GPT Image 2", () => {
+  it("openai ships GPT Image 2.6, GPT Image 2.5, plus previous GPT Image 2", () => {
     expect(provider("openai").imageModels).toEqual([
+      {
+        id: "openai/gpt-image-2.6-sunburst",
+        name: "GPT Image 2.6 Sunburst",
+        mode: "image_generation",
+        nativeApi: "openai-images",
+        modalities: { input: ["text", "image"], output: ["image"] },
+      },
+      {
+        id: "openai/gpt-image-2.6-flare",
+        name: "GPT Image 2.6 Flare",
+        mode: "image_generation",
+        nativeApi: "openai-images",
+        modalities: { input: ["text", "image"], output: ["image"] },
+      },
       {
         id: "openai/gpt-image-2.5-sunburst",
         name: "GPT Image 2.5 Sunburst",
@@ -1196,3 +1211,4 @@ describe("媒体清单跨供应商契约(2026-07 图像多来源)", () => {
     }
   });
 });
+
