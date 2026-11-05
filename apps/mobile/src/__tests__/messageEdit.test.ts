@@ -37,6 +37,18 @@ describe('commitMessageEditRewind', () => {
     expect(rewindCommit).toHaveBeenLastCalledWith({ requireLatestUser: true, allowFileRestore: false });
   });
 
+  it('does not stop the turn when the edit was abandoned before the first rejection arrived', async () => {
+    const running = Object.assign(new Error('running'), { code: 'SESSION_RUNNING' });
+    const rewindCommit = vi.fn().mockRejectedValue(running);
+    const requestStop = vi.fn();
+
+    await expect(commitMessageEditRewind({
+      rewindCommit, requestStop, stillCurrent: () => false, sleep: async () => undefined,
+    })).rejects.toBe(running);
+    expect(requestStop).not.toHaveBeenCalled();
+    expect(rewindCommit).toHaveBeenCalledTimes(1);
+  });
+
   it('does not retry once the host says the message is no longer the latest', async () => {
     const error = new Error('[REWIND_TARGET_NOT_LATEST] newer user message');
     const rewindCommit = vi.fn().mockRejectedValue(error);

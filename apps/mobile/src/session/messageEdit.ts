@@ -95,6 +95,8 @@ export async function commitMessageEditRewind<T>(input: {
     } catch (err) {
       if (!isMessageEditErrorCode(err, 'SESSION_RUNNING') || attempt >= attempts) throw err;
       // 以被控端的运行判定为准(手机侧状态可能滞后),首次被拒时中断一次再等。
+      // 迟到的 SESSION_RUNNING 若已遇上切换任务 / 放弃编辑,不得再停掉旧任务。
+      if (input.stillCurrent && !input.stillCurrent()) throw err;
       if (attempt === 0) input.requestStop?.();
       await sleep(delayMs);
       if (input.stillCurrent && !input.stillCurrent()) throw err;
