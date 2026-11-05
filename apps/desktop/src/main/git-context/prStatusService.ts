@@ -59,6 +59,7 @@ export interface PrRemoteState {
   unresolved_count?: number | null;
   checks?: PrChecksSummary | null;
   merge_state?: string | null;
+  conflicts?: boolean | null;
   review_decision?: string | null;
   head_sha?: string;
   base_branch?: string;
@@ -266,6 +267,9 @@ export class PrStatusService {
         unresolvedCount: remote.unresolved_count ?? null,
         checks: remote.checks ?? null,
         mergeState: remote.merge_state ?? null,
+        conflicts:
+          remote.conflicts ??
+          (typeof remote.metadata?.mergeable === 'boolean' ? !remote.metadata.mergeable : null),
         reviewDecision: remote.review_decision ?? null,
         headSha: remote.head_sha,
         baseBranch: remote.base_branch,

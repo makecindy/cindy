@@ -4835,6 +4835,8 @@ device-link 操作、字段或白名单。远程打开在执行端判定：新�
 
 ## GitLab MR 关联状态
 
+PR/MR 状态结果新增可选 `conflicts: boolean | null`（2026-11-05）：GitHub 复用 REST `mergeable`，GitLab 在既有 GraphQL 查询读取 `conflicts`；`pr-status` / `mr-status` 原样透传。旧主机缺失字段按未知处理，旧客户端忽略；不新增请求、通道或 relay 适配，60 秒缓存与 90 秒刷新不变。
+
 关联与状态结果追加可选 `provider`（github / gitlab）和 `host`；缺省仍为公共 GitHub。
 新 Desktop / Mobile 的 GitLab 查询带完整 namespace / repo / number / provider / host，
 走同账号 `git-context:mr-status`；GitHub 继续使用原 `git-context:pr-status` 和旧参数形状。
