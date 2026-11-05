@@ -21,6 +21,7 @@ vi.mock('expo-router', () => ({ useRouter: () => ({ push: h.push }),
 }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
 vi.mock('@/chat/useClipboardChatInvite', () => ({ useClipboardChatInvite: vi.fn() }));
+vi.mock('@/chat/useWechatChatInvite', () => ({ useWechatChatInvite: vi.fn() }));
 vi.mock('@/chat/ChatInviteSheet', () => ({ ChatInviteSheet: (props: any) => {
   h.sheets.push(props);
   return createElement('div', { 'data-sheet': true, 'data-visible': props.visible });
