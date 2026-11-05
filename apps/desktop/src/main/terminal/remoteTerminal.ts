@@ -51,7 +51,7 @@ export function parseStoredRemoteConnection(raw: unknown): InternalRemoteTermina
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return throwIpcError('INVALID_PARAMS', 'Missing SSH connection');
   const value = raw as Record<string, unknown>;
   const host = text(value.host, 'SSH host', 253);
-  if (!/^[a-zA-Z0-9_:][a-zA-Z0-9_.:\-]*$/.test(host)) return throwIpcError('INVALID_PARAMS', 'Invalid SSH host');
+  if (!/^[a-zA-Z0-9_.:][a-zA-Z0-9_.:\-]*$/.test(host)) return throwIpcError('INVALID_PARAMS', 'Invalid SSH host');
   const user = value.user === undefined ? undefined : text(value.user, 'SSH user', 128);
   if (user && !/^[a-zA-Z0-9_][a-zA-Z0-9_.\-]*$/.test(user)) return throwIpcError('INVALID_PARAMS', 'Invalid SSH user');
   const port = value.port;

@@ -126,7 +126,7 @@ function ConnectionForm({ description, initialConnection, entry, draftKey, onCon
   const host = connection.host.trim();
   const user = connection.user?.trim() ?? '';
   // Main repeats validation before launching SSH. Do not accept option-like names or control characters.
-  const hostInvalid = host.length > 253 || !/^[a-zA-Z0-9_:][a-zA-Z0-9_.:\-]*$/.test(host);
+  const hostInvalid = host.length > 253 || !/^[a-zA-Z0-9_.:][a-zA-Z0-9_.:\-]*$/.test(host);
   const userInvalid = Boolean(user && (user.length > 128 || !/^[a-zA-Z0-9_][a-zA-Z0-9_.\-]*$/.test(user)));
 
   return (

@@ -451,6 +451,8 @@ describe('TerminalTabBody remote ownership', () => {
 
   // Remote ownership and first-create failure must not fall back to a local PTY
   // or restart a resource that was never created (remote-and-mobile-adaptation).
+  // PR8881 r4475914874 / unit: .work replaces the ordinary valid input to cover
+  // the missing leading-dot form submission through the real terminal component.
   it('accepts a manual host without candidates, validates it, and creates against the remote context', async () => {
     const ctx = makeContext({ deviceLinkDeviceId: 'device-1', remoteHostId: 'nested-host' });
     render(<TerminalTabBody state={{ created: false, exited: null, title: '', shellId: '', shellDisplayName: '' }} ctx={ctx} active />);
@@ -461,7 +463,7 @@ describe('TerminalTabBody remote ownership', () => {
     fireEvent.change(host, { target: { value: 'host!' } });
     fireEvent.click(screen.getByText('rightSidebar.terminal.remote.connect'));
     expect(screen.getByText('rightSidebar.terminal.remote.hostInvalid')).toBeTruthy();
-    fireEvent.change(host, { target: { value: 'example-host' } });
+    fireEvent.change(host, { target: { value: '.work' } });
     fireEvent.change(screen.getByLabelText('rightSidebar.terminal.remote.user'), { target: { value: 'user+name' } });
     fireEvent.click(screen.getByText('rightSidebar.terminal.remote.connect'));
     expect(screen.getByText('rightSidebar.terminal.remote.userInvalid')).toBeTruthy();
@@ -469,7 +471,7 @@ describe('TerminalTabBody remote ownership', () => {
     fireEvent.change(screen.getByLabelText('rightSidebar.terminal.remote.user'), { target: { value: 'alice' } });
     fireEvent.click(screen.getByText('rightSidebar.terminal.remote.connect'));
     await waitFor(() => expect(window.electronAPI.terminal.describeRemote).toHaveBeenCalledWith({
-      id: 'terminal-1', sessionId: 'session-1', deviceId: 'device-1', connection: { host: 'example-host', user: 'alice' },
+      id: 'terminal-1', sessionId: 'session-1', deviceId: 'device-1', connection: { host: '.work', user: 'alice' },
     }));
     await waitFor(() => expect(window.electronAPI.terminal.create).toHaveBeenCalledWith(expect.objectContaining({
       remote: { sessionId: 'session-1', deviceId: 'device-1', ticket: 'prepared-ticket' },

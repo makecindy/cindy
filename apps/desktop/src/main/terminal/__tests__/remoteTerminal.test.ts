@@ -85,12 +85,17 @@ describe('remote connection and launch validation', () => {
     expect(command).toContain('\\$');
   });
 
-  it('leaves Match/Include alias user, port and identity to system OpenSSH', async () => {
-    mocks.hosts = [{ id: 'nested', hostname: 'resolved-host', user: 'pool-default', port: 22, identityFile: '/pool/key', source: 'ssh-config' }];
+  // PR8881 r4475914874 / unit: existing alias coverage missed leading dots.
+  // Minimal input .work must describe the task and reach OpenSSH unchanged.
+  it.each(['nested', '.work'])('leaves Match/Include alias %s user, port and identity to system OpenSSH', async host => {
+    mocks.row = { ...mocks.row, remoteHostId: host };
+    mocks.hosts = [{ id: host, hostname: 'resolved-host', user: 'pool-default', port: 22, identityFile: '/pool/key', source: 'ssh-config' }];
     const runtime = createRemoteTerminalRuntime();
     const description = await runtime.describe({ sessionId: 'task' });
-    expect(description.connection).toEqual({ host: 'nested' });
+    expect(description.connection).toEqual({ host });
+    expect(description.candidates).toEqual([{ host }]);
     const args = (await runtime.prepare(description.connection!, description.target.cwd, description.target.key, mocks.scope, () => {})).launch!.args;
+    expect(args.slice(-3, -1)).toEqual(['--', host]);
     expect(args).not.toContain('-l');
     expect(args).not.toContain('-p');
     expect(args).not.toContain('-i');
