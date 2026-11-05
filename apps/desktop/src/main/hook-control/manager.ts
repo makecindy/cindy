@@ -109,7 +109,11 @@ import { parseTelegramConnectUrl } from './telegramDeepLink.js';
 import { parseXConnectUrl, xProfileUrlOrNull } from './xDeepLink.js';
 import { feishuBotUrlOrNull, parseFeishuConnectUrl } from './feishuDeepLink.js';
 import type { HookTransport, HookTransportOpts, HookTransportStatus } from './transport.js';
-import { providerForExternalKey, providerForTaskDispatch } from './providerRouting.js';
+import {
+  feishuLaneIdentityOf,
+  providerForExternalKey,
+  providerForTaskDispatch,
+} from './providerRouting.js';
 export { providerForExternalKey, providerForTaskDispatch } from './providerRouting.js';
 
 /** dispatcher / bindings 的 connectionId 基础键；运行时追加账号与 provider。 */
@@ -2631,6 +2635,17 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         telegramGroupLane !== null &&
         (lane?.binding?.state !== 'confirmed' ||
           lane.binding.principalId !== telegramGroupLane.principalId);
+      // 官方飞书服务由多个组织的应用共用: 只接这台电脑当前已确认绑定的应用与
+      // 飞书账号的派发。解绑、换绑或换应用之后迟到 / 重投的旧任务在这里被拒,
+      // 不进本地任务。
+      const feishuLane =
+        provider === 'feishu' ? feishuLaneIdentityOf(msg.payload.externalKey) : null;
+      const feishuBindingMismatch =
+        provider === 'feishu' &&
+        (feishuLane === null ||
+          lane?.binding?.state !== 'confirmed' ||
+          lane.binding.scopeId !== feishuLane.appId ||
+          lane.binding.principalId !== feishuLane.openId);
       // 接收日志: 复用已有会话的派发在 dispatcher 里是静默路径(只有新建才留
       // worktree 痕迹), 没有这条就无法区分「没收到」和「静默复用」。lane
       // key 含 IM 用户/聊天标识，不写日志。
@@ -2640,7 +2655,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       if (
         provider !== expectedProvider ||
         (lane !== null && !laneCapabilityReady(lane)) ||
-        telegramGroupPrincipalMismatch
+        telegramGroupPrincipalMismatch ||
+        feishuBindingMismatch
       ) {
         log.warn(
           `task.dispatch rejected for unsupported or mismatched provider: requestId=${msg.payload.requestId}`,

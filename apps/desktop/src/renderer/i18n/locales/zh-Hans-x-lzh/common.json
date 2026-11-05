@@ -6306,9 +6306,11 @@
           "unlinkConfirmTitle": "解绑飞书乎？",
           "unlinkConfirmDescription": "解绑之后，飞书不能再向此台设备派差事；本地之案与他渠道连接不受影响。",
           "unavailableHint": "君所属之组织尚未设飞书机器人，请洽组织管理员。",
+          "unavailableHintPersonal": "飞书机器人尚未向个人账号开放。",
           "status": {
             "checking": "方察服务器支持…",
             "unavailable": "组织未设",
+            "unavailablePersonal": "尚未开放",
             "disabled": "已停",
             "none": "未绑",
             "pending": "于浏览器中授权，或将关联码遣予飞书机器人",
@@ -6318,7 +6320,8 @@
             "expired": "授权已逾期",
             "failed": "关联未成",
             "revoked": "关联已解",
-            "superseded": "已关联至他台设备"
+            "superseded": "已关联至他台设备",
+            "appChanged": "飞书机器人已更易，请重为关联"
           },
           "bindCode": {
             "label": "关联码",

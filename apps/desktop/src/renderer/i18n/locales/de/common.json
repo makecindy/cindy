@@ -6349,9 +6349,11 @@
           "unlinkConfirmTitle": "Verknüpfung mit Feishu / Lark aufheben?",
           "unlinkConfirmDescription": "Nach dem Aufheben der Verknüpfung kann Feishu / Lark keine Aufgaben mehr an dieses Gerät senden; lokale Projekte und andere Kanäle sind davon nicht betroffen.",
           "unavailableHint": "Deine Organisation hat den Feishu-/Lark-Bot noch nicht eingerichtet. Wende dich an einen Admin deiner Organisation.",
+          "unavailableHintPersonal": "Der Feishu-/Lark-Bot ist für persönliche Konten noch nicht verfügbar.",
           "status": {
             "checking": "Serverunterstützung wird geprüft…",
             "unavailable": "Von deiner Organisation nicht eingerichtet",
+            "unavailablePersonal": "Noch nicht verfügbar",
             "disabled": "Deaktiviert",
             "none": "Nicht verknüpft",
             "pending": "Im Browser autorisieren oder den Verknüpfungscode an den Bot senden",
@@ -6361,7 +6363,8 @@
             "expired": "Autorisierung abgelaufen",
             "failed": "Verknüpfung fehlgeschlagen",
             "revoked": "Verknüpfung aufgehoben",
-            "superseded": "Auf einem anderen Gerät verknüpft"
+            "superseded": "Auf einem anderen Gerät verknüpft",
+            "appChanged": "Der Feishu-/Lark-Bot wurde gewechselt. Bitte erneut verknüpfen."
           },
           "bindCode": {
             "label": "Verknüpfungscode",

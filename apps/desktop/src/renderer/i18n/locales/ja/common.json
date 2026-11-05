@@ -6306,9 +6306,11 @@
           "unlinkConfirmTitle": "Feishu / Lark の連携を解除しますか？",
           "unlinkConfirmDescription": "解除すると Feishu / Lark からこのデバイスへタスクを送れなくなります。ローカルプロジェクトと他のチャンネルには影響しません。",
           "unavailableHint": "所属組織で Feishu / Lark bot がまだ設定されていません。組織の管理者にお問い合わせください。",
+          "unavailableHintPersonal": "Feishu / Lark bot は個人アカウントではまだご利用いただけません。",
           "status": {
             "checking": "サーバーの対応状況を確認中…",
             "unavailable": "組織で未設定",
+            "unavailablePersonal": "未提供",
             "disabled": "無効",
             "none": "未連携",
             "pending": "ブラウザで認証するか、連携コードを bot に送信してください",
@@ -6318,7 +6320,8 @@
             "expired": "認証の有効期限切れ",
             "failed": "連携に失敗しました",
             "revoked": "連携が解除されました",
-            "superseded": "別のデバイスで連携済み"
+            "superseded": "別のデバイスで連携済み",
+            "appChanged": "Feishu / Lark bot が変更されました。もう一度連携してください。"
           },
           "bindCode": {
             "label": "連携コード",

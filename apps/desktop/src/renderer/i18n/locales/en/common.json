@@ -6349,9 +6349,11 @@
           "unlinkConfirmTitle": "Unlink Feishu / Lark?",
           "unlinkConfirmDescription": "After unlinking, Feishu / Lark can no longer dispatch tasks to this device; local projects and other channels are unaffected.",
           "unavailableHint": "Your organization hasn't set up the Feishu / Lark bot yet. Contact your organization admin.",
+          "unavailableHintPersonal": "The Feishu / Lark bot isn't available for personal accounts yet.",
           "status": {
             "checking": "Checking server support…",
             "unavailable": "Not set up by your organization",
+            "unavailablePersonal": "Not available yet",
             "disabled": "Disabled",
             "none": "Not linked",
             "pending": "Authorize in the browser, or send the link code to the bot",
@@ -6361,7 +6363,8 @@
             "expired": "Authorization expired",
             "failed": "Linking failed",
             "revoked": "Unlinked",
-            "superseded": "Linked on another device"
+            "superseded": "Linked on another device",
+            "appChanged": "The Feishu / Lark bot was changed. Link it again."
           },
           "bindCode": {
             "label": "Link code",

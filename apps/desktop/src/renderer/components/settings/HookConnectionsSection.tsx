@@ -53,6 +53,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { useOptionalAuthUser } from '@/contexts/AuthContext';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
@@ -61,6 +62,7 @@ import { acknowledgeXUsage, isXUsageAcknowledged } from '@/state/xUsageNotice';
 import { XUsageGuide } from './XUsageGuide';
 import {
   HOOK_BIND_REASON_ALREADY_BOUND,
+  HOOK_BIND_REASON_APP_CHANGED,
   HOOK_BIND_REASON_NOT_INSTALLED,
   HOOK_CHAT_WORKSPACE_ALIAS,
   HOOK_WORKSPACE_ALIAS_RE,
@@ -459,6 +461,8 @@ export function workspaceRowsToMap(
 export function HookConnectionsSection({ companion }: { companion?: { id: string; name: string } } = {}) {
   const { t } = useTranslation();
   const { entry, activation } = useSettingsSearchNavigation();
+  /** 飞书不可用时的去向因身份而异: 组织成员找管理员, 个人账号没有管理员可找。 */
+  const personalAccount = useOptionalAuthUser()?.membershipKind === 'personal';
   const [hook, setHook] = useState<SlackHookView | null>(null);
   /** 工作目录行的本地编辑态(别名输入中不被状态推送打断, blur 时提交)。 */
   const [rows, setRows] = useState<Array<{ alias: string; dir: string }>>([]);
@@ -1115,7 +1119,11 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
           : !view.available
             ? {
                 tone: 'attention',
-                label: t(`settings.remoteControl.hook.${provider}.status.unavailable`),
+                label: t(
+                  provider === 'feishu' && personalAccount
+                    ? 'settings.remoteControl.hook.feishu.status.unavailablePersonal'
+                    : `settings.remoteControl.hook.${provider}.status.unavailable`,
+                ),
               }
             : {
                 tone: transportBadgeTone(view.status),
@@ -1129,7 +1137,12 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
               user: binding?.principalName ?? binding?.principalId ?? '',
               bot: binding?.scopeName ?? '',
             })
-          : t(`settings.remoteControl.hook.${provider}.status.${state}`)
+          : provider === 'feishu' &&
+              state === 'superseded' &&
+              binding?.reason === HOOK_BIND_REASON_APP_CHANGED
+            ? // 换的是飞书应用, 不是电脑: 通用的「已关联到另一台设备」会让人去找另一台电脑。
+              t('settings.remoteControl.hook.feishu.status.appChanged')
+            : t(`settings.remoteControl.hook.${provider}.status.${state}`)
         : null;
     const errorText =
       view.lastError === 'not logged in'
@@ -1490,15 +1503,20 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             <span className="text-11 leading-relaxed text-[var(--error-fg)]">{cs.errorText}</span>
           ) : null}
 
-          {/* 飞书服务已连上但没宣告 provider:feishu: 该账号所在组织还没配置飞书机器人,
-              徽章只放得下短词, 这里说清原因与去向。 */}
+          {/* 飞书服务已连上但没宣告 provider:feishu: 组织账号是组织还没配置(或停用了)
+              飞书机器人; 个人账号是 Cindy 全局应用尚未开放。徽章只放得下短词,
+              这里说清原因与去向。 */}
           {provider === 'feishu' &&
           view.enabled &&
           !view.capabilityPending &&
           !view.available &&
           view.status !== 'error' ? (
             <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
-              {t('settings.remoteControl.hook.feishu.unavailableHint')}
+              {t(
+                personalAccount
+                  ? 'settings.remoteControl.hook.feishu.unavailableHintPersonal'
+                  : 'settings.remoteControl.hook.feishu.unavailableHint',
+              )}
             </span>
           ) : null}
 

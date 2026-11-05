@@ -6411,9 +6411,11 @@
           "unlinkConfirmTitle": "Desvincular Feishu / Lark?",
           "unlinkConfirmDescription": "Após a desvinculação, o Feishu / Lark não poderá mais encaminhar tarefas a este dispositivo; os projetos locais e outros canais não serão afetados.",
           "unavailableHint": "Sua organização ainda não configurou o bot do Feishu / Lark. Fale com o administrador da sua organização.",
+          "unavailableHintPersonal": "O bot do Feishu / Lark ainda não está disponível para contas pessoais.",
           "status": {
             "checking": "Verificando suporte do servidor…",
             "unavailable": "Não configurado pela sua organização",
+            "unavailablePersonal": "Ainda não disponível",
             "disabled": "Desativado",
             "none": "Não vinculado",
             "pending": "Autorize no navegador ou envie o código de vinculação ao bot",
@@ -6423,7 +6425,8 @@
             "expired": "Autorização expirada",
             "failed": "Falha na vinculação",
             "revoked": "Desvinculado",
-            "superseded": "Vinculado em outro dispositivo"
+            "superseded": "Vinculado em outro dispositivo",
+            "appChanged": "O bot do Feishu / Lark foi trocado. Vincule novamente."
           },
           "bindCode": {
             "label": "Código de vinculação",

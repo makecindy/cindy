@@ -6306,9 +6306,11 @@
           "unlinkConfirmTitle": "解綁飛書？",
           "unlinkConfirmDescription": "解綁後飛書將不能再向這臺裝置派發任務；本地專案和其它渠道連線不受影響。",
           "unavailableHint": "你所在的組織還沒有設定飛書機器人，請聯絡組織管理員。",
+          "unavailableHintPersonal": "飛書機器人暫未向個人帳號開放。",
           "status": {
             "checking": "正在檢查伺服器支援…",
             "unavailable": "組織未設定",
+            "unavailablePersonal": "暫未開放",
             "disabled": "已停用",
             "none": "未繫結",
             "pending": "在瀏覽器裡授權，或把關聯碼傳給飛書機器人",
@@ -6318,7 +6320,8 @@
             "expired": "授權已過期",
             "failed": "關聯失敗",
             "revoked": "已解除關聯",
-            "superseded": "已關聯到另一臺裝置"
+            "superseded": "已關聯到另一臺裝置",
+            "appChanged": "飛書機器人已更換，請重新關聯"
           },
           "bindCode": {
             "label": "關聯碼",

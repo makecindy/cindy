@@ -230,6 +230,12 @@ export const HOOK_BIND_REASON_NOT_INSTALLED = 'not-installed';
 export const HOOK_BIND_REASON_SUPERSEDED = 'superseded';
 
 /**
+ * provider binding.reason 已知值(飞书 / Lark, state=superseded): 账号生效的飞书应用
+ * 换了(组织换了自建应用, 或 Cindy 全局应用更换), 绑定随旧应用失效 —— 不是换了电脑。
+ */
+export const HOOK_BIND_REASON_APP_CHANGED = 'app_changed';
+
+/**
  * (multi-team)本地合成的终止态 reason: 「添加 workspace」授权落在已绑定的
  * 活跃 team 上(用户没在 Slack 授权页右上角切换 workspace)。仅 desktop 本地
  * 使用, 不过网线; renderer 据此显示切换指引而非通用失败文案。

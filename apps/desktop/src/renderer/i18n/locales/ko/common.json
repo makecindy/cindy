@@ -6306,9 +6306,11 @@
           "unlinkConfirmTitle": "Feishu / Lark 연결을 해제할까요?",
           "unlinkConfirmDescription": "해제하면 Feishu / Lark에서 이 기기로 작업을 보낼 수 없습니다. 로컬 프로젝트와 다른 채널 연결에는 영향이 없습니다.",
           "unavailableHint": "소속 조직에서 아직 Feishu / Lark bot을 설정하지 않았습니다. 조직 관리자에게 문의하세요.",
+          "unavailableHintPersonal": "Feishu / Lark bot은 아직 개인 계정에서 사용할 수 없습니다.",
           "status": {
             "checking": "서버 지원 확인 중…",
             "unavailable": "조직에서 설정되지 않음",
+            "unavailablePersonal": "아직 사용할 수 없음",
             "disabled": "비활성화됨",
             "none": "연결되지 않음",
             "pending": "브라우저에서 인증하거나 연동 코드를 bot에게 보내세요",
@@ -6318,7 +6320,8 @@
             "expired": "인증이 만료되었습니다",
             "failed": "연결에 실패했습니다",
             "revoked": "연결이 해제되었습니다",
-            "superseded": "다른 기기에서 연결됨"
+            "superseded": "다른 기기에서 연결됨",
+            "appChanged": "Feishu / Lark bot이 변경되었습니다. 다시 연결하세요."
           },
           "bindCode": {
             "label": "연동 코드",

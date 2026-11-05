@@ -28,6 +28,10 @@ const ipc = vi.hoisted(() => ({
 const dialog = vi.hoisted(() => ({ confirm: vi.fn() }));
 const workspacePrefsEditor = vi.hoisted(() => ({ render: vi.fn() }));
 const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
+const authUser = vi.hoisted(() => ({
+  current: null as { membershipKind: 'personal' | 'org' } | null,
+}));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => authUser.current }));
 
 /** t 只回键名 —— 插值参数另存一份, 让"文案带没带上正确的值"也能断言。 */
 const tCalls: Array<{ key: string; vars?: Record<string, unknown> }> = [];
@@ -190,6 +194,7 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     localStorage.clear();
     prefsReload.mockClear();
     tCalls.length = 0;
+    authUser.current = null;
     resetXUsageNoticeMemoryState();
     ipc.onStatusChanged.mockReturnValue(() => {});
     ipc.setEnabled.mockResolvedValue({ hook: BASE_HOOK });
@@ -574,7 +579,12 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     await waitFor(() => expect(ipc.openProviderAction).toHaveBeenCalledWith('feishu', 'connect'));
   });
 
-  it('explains that the organization has not set up the Feishu bot when the server lacks provider:feishu', async () => {
+  it.each([
+    // 组织成员找管理员配置; 个人账号没有组织管理员可找(PR #8947 review)。
+    ['org', 'org' as const, 'unavailableHint', 'status.unavailable'],
+    ['personal', 'personal' as const, 'unavailableHintPersonal', 'status.unavailablePersonal'],
+  ])('explains why the Feishu bot is unavailable to a %s account when the server lacks provider:feishu', async (_label, membershipKind, hintKey, badgeKey) => {
+    authUser.current = { membershipKind };
     const hook: SlackHookView = {
       ...BASE_HOOK,
       feishu: {
@@ -593,11 +603,53 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     render(<HookConnectionsSection />);
     await expandChannelCard(FEISHU_CARD);
 
-    expect(await screen.findByText('settings.remoteControl.hook.feishu.unavailableHint')).toBeTruthy();
-    expect(screen.getByText('settings.remoteControl.hook.feishu.status.unavailable')).toBeTruthy();
+    expect(await screen.findByText(`settings.remoteControl.hook.feishu.${hintKey}`)).toBeTruthy();
+    expect(screen.getByText(`settings.remoteControl.hook.feishu.${badgeKey}`)).toBeTruthy();
     expect(
       screen.queryByRole('button', { name: 'settings.remoteControl.hook.feishu.connect' }),
     ).toBeNull();
+  });
+
+  it('says the Feishu bot was changed, not that another device took over, when the binding ends with app_changed', async () => {
+    const hook: SlackHookView = {
+      ...BASE_HOOK,
+      feishu: {
+        enabled: true,
+        url: 'ws://127.0.0.1:8794',
+        status: 'connected',
+        lastError: null,
+        available: true,
+        capabilityPending: false,
+        defaultWorkspace: null,
+        binding: {
+          provider: 'feishu',
+          state: 'superseded',
+          attemptId: null,
+          bindingId: 'binding-feishu-1',
+          principalId: 'ou_user',
+          principalName: 'Cindy User',
+          scopeId: 'cli_new_app',
+          scopeName: 'Cindy',
+          connectUrl: null,
+          bindCode: null,
+          expiresAt: null,
+          reason: 'app_changed',
+          remediationUrl: null,
+          actions: ['retry'],
+        },
+      },
+    };
+    ipc.get.mockResolvedValue({ hook });
+
+    render(<HookConnectionsSection />);
+    await expandChannelCard(FEISHU_CARD);
+
+    expect(
+      await screen.findByRole('button', { name: 'settings.remoteControl.hook.feishu.retry' }),
+    ).toBeTruthy();
+    // 收起行摘要与展开区的结果行都说「机器人已更换」, 不出现「已关联到另一台设备」。
+    expect(screen.getAllByText('settings.remoteControl.hook.feishu.status.appChanged')).toHaveLength(2);
+    expect(screen.queryByText('settings.remoteControl.hook.feishu.status.superseded')).toBeNull();
   });
 
   it('keeps the OAuth deep-link actions visible while X binding is pending', async () => {

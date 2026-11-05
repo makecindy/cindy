@@ -3166,6 +3166,19 @@ const FEISHU_PENDING: ProviderBindStatusPayload = {
   actions: ['open_connect_url', 'copy_connect_url', 'copy_bind_code', 'cancel'],
 };
 
+const FEISHU_CONFIRMED: ProviderBindStatusPayload = {
+  ...FEISHU_PENDING,
+  state: 'confirmed',
+  attemptId: null,
+  bindingId: 'binding-feishu-1',
+  principalId: 'ou_user',
+  principalName: 'Cindy User',
+  connectUrl: null,
+  bindCode: null,
+  expiresAt: null,
+  actions: ['revoke', 'open_provider'],
+};
+
 function stubDispatcher(): NonNullable<HookControlManagerDeps['dispatcher']> {
   return {
     handleDispatch: vi.fn(),
@@ -3261,12 +3274,78 @@ describe('官方飞书 / Lark provider lane', () => {
 
     opts.onWelcome?.({ serverName: 'feishu-hook', features: FEISHU_FEATURES });
     expect(manager.snapshot().feishu.available).toBe(true);
+    opts.onMessage(makeProviderBindState(FEISHU_CONFIRMED), () => true);
     opts.onMessage(dispatch, () => true);
     expect(dispatcher.handleDispatch).toHaveBeenCalledWith(
       expect.stringMatching(/:feishu$/),
       dispatch.payload,
       expect.any(Function),
     );
+  });
+
+  it('只接本机已确认绑定的飞书应用与账号的派发; 解绑后迟到的重投被拒', () => {
+    // 多个组织的应用共用同一个飞书服务: 别的应用、别的飞书账号、认不出的 lane,
+    // 以及解绑之后重连时重投的旧任务, 都不得在这台电脑上执行。
+    const dispatcher = stubDispatcher();
+    const { manager, transports } = feishuLaneHarness({ dispatcher }, { feishuEnabled: true });
+    manager.sync();
+    const opts = transports[0];
+    if (opts === undefined) throw new Error('Feishu transport was not created');
+    opts.onWelcome?.({ serverName: 'feishu-hook', features: FEISHU_FEATURES });
+    opts.onStatus('connected', null);
+    opts.onMessage(makeProviderBindState(FEISHU_CONFIRMED), () => true);
+
+    const ackOf = (externalKey: string): HookMessage[] => {
+      const replies: HookMessage[] = [];
+      opts.onMessage(
+        makeTaskDispatch({
+          requestId: `task-${externalKey}`,
+          externalKey,
+          workspace: 'chat',
+          prompt: 'hello',
+          source: { im: 'feishu' },
+        }),
+        (message) => {
+          replies.push(message);
+          return true;
+        },
+      );
+      return replies;
+    };
+    const rejected = (externalKey: string) => [
+      expect.objectContaining({
+        type: 'task.ack',
+        payload: expect.objectContaining({ requestId: `task-${externalKey}`, result: 'rejected', reason: 'invalid' }),
+      }),
+    ];
+
+    for (const externalKey of [
+      'feishu:dm:cli_other_org:ou_user:g0',
+      'feishu:topic:cli_other_org:oc_chat:om_root:ou_user:g0',
+      'feishu:dm:cli_app:ou_someone_else:g0',
+      'feishu:topic:cli_app:oc_chat:om_root:ou_someone_else:g0',
+      'feishu:dm:cli_app:ou_user',
+      'feishu:group:cli_app:oc_chat:ou_user:g0',
+    ]) {
+      expect(ackOf(externalKey), externalKey).toEqual(rejected(externalKey));
+    }
+    expect(dispatcher.handleDispatch).not.toHaveBeenCalled();
+
+    expect(ackOf('feishu:dm:cli_app:ou_user:g2')).toEqual([]);
+    expect(ackOf('feishu:topic:cli_app:oc_chat:om_root:ou_user:g0')).toEqual([]);
+    expect(dispatcher.handleDispatch).toHaveBeenCalledTimes(2);
+
+    opts.onMessage(
+      makeProviderBindUpdate({
+        ...FEISHU_CONFIRMED,
+        state: 'revoked',
+        reason: 'user-revoked',
+        actions: ['retry'],
+      }),
+      () => true,
+    );
+    expect(ackOf('feishu:dm:cli_app:ou_user:g2')).toEqual(rejected('feishu:dm:cli_app:ou_user:g2'));
+    expect(dispatcher.handleDispatch).toHaveBeenCalledTimes(2);
   });
 
   it.each([

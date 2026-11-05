@@ -57,7 +57,7 @@ import { TELEGRAM_DEFAULT_BEHAVIOR } from '@cindy/im';
 import path from 'node:path';
 
 import { ipcMain, BrowserWindow, dialog, type IpcMainEvent } from 'electron';
-import { and, eq, like, ne, sql } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current';
 import {
@@ -81,6 +81,7 @@ import {
   createBotWecomIM,
 } from './host';
 import { wireFeishuOrchestrator, type FeishuOrchestratorConfig } from './feishu';
+import { backfillPersonalFeishuSessions } from './feishu/legacySessionBackfill';
 import { wireDiscordOrchestrator } from './discord';
 import { wireTelegramOrchestrator } from './telegram';
 import { listTelegramKnownGroups } from './telegram/groupWindow';
@@ -625,19 +626,9 @@ async function initializeImConnection(): Promise<void> {
     const msg = err instanceof Error ? err.message : String(err);
     log.error(`bindingStore.preload failed (non-fatal): ${msg}`);
   }
-  // 存量 feishu 会话行补 workspaceKind='dialogue' —— 2026-07 起 feishu 会话
-  // 进侧边栏「对话」分组(sessionSource.ts 白名单 + feishu adapter 声明),
-  // 此前落库的行还是默认 'project', 不补会以 im-working-dir/{botAppId}
-  // 聚成一个假项目组。幂等一次性 UPDATE; 不 bump updatedAt(避免重排列表)。
-  try {
-    await getDbClient()
-      .drizzle.update(sessions)
-      .set({ workspaceKind: 'dialogue' })
-      .where(and(eq(sessions.source, 'feishu'), ne(sessions.workspaceKind, 'dialogue')));
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.warn(`feishu sessions workspaceKind backfill failed (non-fatal): ${msg}`);
-  }
+  // 存量个人飞书会话补「对话」分组与新标题; 官方飞书 hook 任务同为
+  // source='feishu', 由 helper 按 feishuBotAppId 排除。
+  await backfillPersonalFeishuSessions(getDbClient().drizzle, log);
   // Discord personal DM sessions use the same managed dialogue bucket as
   // Feishu/Telegram. Older Discord rows were created before the adapter
   // declared workspaceKind='dialogue' and otherwise remain grouped under the
@@ -651,16 +642,6 @@ async function initializeImConnection(): Promise<void> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.warn(`discord sessions workspaceKind backfill failed (non-fatal): ${msg}`);
-  }
-  // 存量 feishu 会话的旧默认标题 `飞书 · {后6位}` 迁到新风格 `[飞书·DM] {后6位}`。
-  try {
-    await getDbClient()
-      .drizzle.update(sessions)
-      .set({ title: sql`'[飞书·DM] ' || substr(${sessions.title}, 6)` })
-      .where(and(eq(sessions.source, 'feishu'), like(sessions.title, '飞书 · %')));
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.warn(`feishu sessions title backfill failed (non-fatal): ${msg}`);
   }
   activateImAccountBoundary();
   await im.init();
