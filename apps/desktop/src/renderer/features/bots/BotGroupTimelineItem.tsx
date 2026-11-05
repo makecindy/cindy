@@ -464,21 +464,24 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
       attachments={<BotGroupMessageAttachments attachments={share.attachments} align="start" />}
       onOpenThread={props.onOpenThread ? () => props.onOpenThread!(share.threadRootId, share.messageId) : undefined} />
   </> : null;
-  const actions = shareable && props.showActions !== false ? (
-    <ChatMessageHoverActions
-      groupId={props.reactionGroupId}
-      shareScope={shareScope}
-      message={message}
-      members={members}
-      align={self ? 'right' : 'left'}
-      besideReactions={hasReactions}
-      onQuote={props.onQuote ? () => props.onQuote!(message.id) : undefined}
-      onReply={props.onOpenThread ? () => props.onOpenThread!(message.id) : undefined}
-      onChanged={props.onChanged}
-      copyText={share ? share.status === 'available' ? share.content : '' : undefined}
-      replyCountShown={Boolean(threadPreview)}
-      menuActions={props.menuActions}
-    />
+  // Reserve the toolbar's actual height while awaiting the server message id.
+  const actions = message.kind === 'message' && props.showActions !== false ? (
+    <div className={cn('contents', message.pending && 'invisible')} inert={message.pending || undefined} aria-hidden={message.pending || undefined}>
+      <ChatMessageHoverActions
+        groupId={props.reactionGroupId}
+        shareScope={shareScope}
+        message={message}
+        members={members}
+        align={self ? 'right' : 'left'}
+        besideReactions={hasReactions}
+        onQuote={props.onQuote ? () => props.onQuote!(message.id) : undefined}
+        onReply={props.onOpenThread ? () => props.onOpenThread!(message.id) : undefined}
+        onChanged={props.onChanged}
+        copyText={share ? share.status === 'available' ? share.content : '' : undefined}
+        replyCountShown={Boolean(threadPreview)}
+        menuActions={props.menuActions}
+      />
+    </div>
   ) : null;
 
   if (message.kind === 'message' && self) {
