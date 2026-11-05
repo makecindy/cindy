@@ -353,6 +353,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   beforeAll(async () => {
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-agent-int-'));
     server = createServer((req, res) => {
+      req.setEncoding('utf8');
       let body = '';
       req.on('data', (c) => { body += c; });
       req.on('end', () => {
@@ -1711,6 +1712,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   // short titles and original step ids in persistence, review and execution.
   // The existing review cases only supplied long English titles. Integration
   // tier: real Pi + loopback gateway; minimal old failure is "1. 验证".
+  const largeUnnumberedPlan = '完整验收：' + '保留全部条件。'.repeat(10000);
   it.each([
     { name: 'mixed Chinese titles', plan: 'Plan:\n1. **读取项目文件**\n2. **实现交互**\n3. **验证**\n4. **交付**\n5. **检查移动端布局**',
       expected: ['读取项目文件', '实现交互', '验证', '交付', '检查移动端布局'], ids: [1, 2, 3, 4, 5] },
@@ -1721,6 +1723,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     { name: 'short English without a header', plan: '1. Go\n2. QA', expected: ['Go', 'QA'], ids: [1, 2] },
     { name: 'unparsed complete plan', plan: '先验证，再交付。\n验收细节必须完整保留。',
       expected: ['先验证，再交付。\n验收细节必须完整保留。'], ids: [1] },
+    { name: 'large unparsed plan and following ordinary turn', plan: largeUnnumberedPlan,
+      expected: [largeUnnumberedPlan], ids: [1], ordinary: true },
     { name: 'resumed short plan', plan: 'Plan:\n1. 验证\n2. 交付', expected: ['验证', '交付'], ids: [1, 2], resume: true },
     { name: 'edited sparse steps', plan: 'Plan:\n1. Read the project files.', expected: ['Read the project files.'], ids: [1],
       editedPlan: '计划：\n3. 验证\n7. 交付\n\n保留编辑后的完整验收细节。' },
@@ -1772,6 +1776,13 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       const ids = scenario.editedPlan ? [3, 7] : scenario.ids;
       expect(readTodos()).toEqual(expected.map((text, i) => ({ step: ids[i], text,
         completed: ids.length > 1 && ids[i] === completedStep })));
+      if (scenario.ordinary) {
+        const next = seenRequests.length;
+        await handle.send({ type: 'user', content: 'Continue with ordinary tools.' }, { planMode: false });
+        await vi.waitFor(() => expect(seenRequests.length).toBe(next + 1), { timeout: 10_000 });
+        await vi.waitFor(() => expect(handle!.isTurnRunning!()).toBe(false), { timeout: 10_000 });
+        expect(JSON.parse(seenRequests[next]!.body).tools.map((tool: { name: string }) => tool.name)).toContain('write');
+      }
     } finally {
       scriptedResponses.length = 0;
       await handle?.close();

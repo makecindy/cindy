@@ -40,4 +40,28 @@ describe('scanPiSessionJsonl', () => {
   it('returns null when the session file is missing', async () => {
     await expect(scanPiSessionJsonl(path.join(os.tmpdir(), 'missing-pi-session.jsonl'))).resolves.toBeNull();
   });
+
+  // #8976 review: full unnumbered plans exceed both the 64 KiB parse path
+  // and the stream's retained prefix. Old reads kept the previous plan flag.
+  // Unit tier; real production scanner, small isolated files, no real waits.
+  it.each([false, true])('reads enabled=%s from a large native plan-state entry', async enabled => {
+    const file = await sessionFile([
+      JSON.stringify({ type: 'custom', customType: 'plan-mode', data: { enabled: !enabled } }),
+      JSON.stringify({ type: 'custom', customType: 'plan-mode', data: {
+        notes: { enabled: !enabled }, enabled,
+        todos: [{ step: 1, text: '保留完整计划。'.repeat(10000), completed: false }],
+      } }),
+    ]);
+    expect((await scanPiSessionJsonl(file))?.lastPlanModeEnabled).toBe(enabled);
+  });
+
+  it('returns an unavailable scan rather than an old flag when metadata lies beyond the prefix', async () => {
+    const file = await sessionFile([
+      JSON.stringify({ type: 'custom', customType: 'plan-mode', data: { enabled: true } }),
+      JSON.stringify({ type: 'custom', customType: 'plan-mode', data: {
+        todos: [{ step: 1, text: 'x'.repeat(70000), completed: false }], enabled: false,
+      } }),
+    ]);
+    expect(await scanPiSessionJsonl(file)).toBeNull();
+  });
 });
