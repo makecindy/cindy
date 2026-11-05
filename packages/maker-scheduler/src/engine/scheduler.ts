@@ -677,6 +677,7 @@ export class Scheduler extends EventEmitter {
     if (now - this.lastDbSyncAt >= DB_SYNC_INTERVAL_MS) {
       this.lastDbSyncAt = now;
       try {
+        const dispatchSnapshots = new Map(this.automaticDispatchSchedules);
         const actives = await this.storage.listActive();
         if (this.tickHandle !== tickHandle) return;
         const previousSchedules = new Map(this.activeSchedules);
@@ -695,6 +696,18 @@ export class Scheduler extends EventEmitter {
             previous.manual !== sch.manual;
           const current = this.keepInvalidScheduleQuarantined(sch, now, cadenceChanged);
           this.activeSchedules.set(current.id, current);
+        }
+        // Other instances can edit the deadline while a claimed run waits in
+        // its runner. Include rows that have just left listActive after expiry.
+        const currentById = new Map(actives.map((sch) => [sch.id, sch]));
+        for (const [runId, previous] of dispatchSnapshots) {
+          const current = currentById.get(previous.id) ?? await this.storage.get(previous.id);
+          if (this.tickHandle !== tickHandle) return;
+          // An awaited read must not overwrite a newer local edit or reinsert
+          // a dispatch guard whose attempt has already finished.
+          if (current && this.automaticDispatchSchedules.get(runId) === previous) {
+            this.automaticDispatchSchedules.set(runId, current);
+          }
         }
       } catch (err) {
         this.logger?.warn?.('scheduler: active-schedule DB sync failed', err);

@@ -1222,6 +1222,34 @@ describe('Scheduler', () => {
     expect(dispatched).toBe(change === 'cleared');
   });
 
+  // PR #9059 / unit: local edits covered the guard, but DB synchronization did
+  // not. Change the shared row while a real automatic attempt waits to dispatch.
+  it.each(['shortened', 'cleared'] as const)('syncs another instance deadline into a queued dispatch (%s)', async (change) => {
+    let release!: () => void;
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => { entered = resolve; });
+    let dispatched = false;
+    const local = makeHarness({ runnerImpl: async (_schedule, ctx) => {
+      entered();
+      await new Promise<void>((resolve) => { release = resolve; });
+      dispatched = ctx.canDispatch?.() !== false;
+      return { sessionId: '', deferred: !dispatched };
+    } });
+    const expireAt = local.clock.now() + 120_000;
+    const sch = await local.scheduler.create({ ...baseInput, expireAt });
+    local.clock.setTo(sch.nextFireAt!);
+    const fire = local.scheduler.tick();
+    await ready;
+    await local.storage.update(sch.id, change === 'cleared'
+      ? { expireAt: undefined }
+      : { expireAt: local.clock.now(), status: 'expired' });
+    local.clock.setTo(change === 'cleared' ? expireAt : local.clock.now() + 30_000);
+    await local.scheduler.tick();
+    release();
+    await fire;
+    expect(dispatched).toBe(change === 'cleared');
+  });
+
   it.each([false, true])('bounds a deferred retry by the deadline (manual=%s)', async (manual) => {
     const local = makeHarness({ runnerImpl: async () => ({ sessionId: 'busy', deferred: true, deferRetryMs: 120_000 }) });
     const expireAt = local.clock.now() + 60_000;
