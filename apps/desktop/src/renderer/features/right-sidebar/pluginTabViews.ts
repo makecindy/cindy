@@ -7,11 +7,12 @@ import { pluginTabViewPositions as positions } from './pluginTabViewPositions';
 
 const listeners = new Map<string, Set<() => void>>();
 const newest = new Map<string, number>();
+let newestFocusSequence = 0;
 let owner = getDataOwnerGeneration();
 let initialized = false;
 function currentOwner() {
   const next = getDataOwnerGeneration();
-  if (!isDataOwnerGenerationCurrent(owner)) { positions.clear(); newest.clear(); owner = next; }
+  if (!isDataOwnerGenerationCurrent(owner)) { positions.clear(); newest.clear(); newestFocusSequence = 0; owner = next; }
   return next;
 }
 const publish = (id: string) => { for (const listener of listeners.get(id) ?? []) listener(); };
@@ -42,15 +43,19 @@ export function initPluginTabViewHost(): void {
     const key = JSON.stringify([instanceId, id, sessionId]);
     if (sequence < (newest.get(key) ?? 0)) { void api.opened(requestId, null).catch(() => {}); return; }
     newest.set(key, sequence);
+    newestFocusSequence = Math.max(newestFocusSequence, sequence);
     const expectedOwner = currentOwner();
+    const current = () => isDataOwnerGenerationCurrent(expectedOwner) && newest.get(key) === sequence;
     void (async () => {
       let tabId: string | null = null;
       let positioned: string | null = null;
       try {
-        tabId = await openPluginTabView(instanceId, id, sessionId, id => {
-          if (!isDataOwnerGenerationCurrent(expectedOwner) || newest.get(key) !== sequence) return;
-          positioned = id;
-          positions.set(id, { ...positions.get(id), params, sequence }); publish(id);
+        tabId = await openPluginTabView(instanceId, id, sessionId, {
+          beforeReveal: id => {
+            if (!current()) return;
+            positioned = id;
+            positions.set(id, { ...positions.get(id), params, sequence }); publish(id);
+          }, current, focus: () => newestFocusSequence === sequence,
         });
         if (!isDataOwnerGenerationCurrent(expectedOwner) || newest.get(key) !== sequence) { tabId = null; return; }
         // beforeReveal owns the position. A detached host may already have

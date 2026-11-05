@@ -5,7 +5,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { initPluginTabViewHost, mountPluginTabView } from '../pluginTabViews';
-import { _resetStore, closeTab } from '../store';
+import { _resetStore, closeTab, getBucket } from '../store';
 import { __resetGlobalTabsForTest, removeGlobalTab } from '../globalTabs';
 import { openPluginTabView } from '../lib/openPluginTabView';
 import type { PluginTabViewMountRequest } from '../../../../shared/pluginUi';
@@ -29,11 +29,29 @@ beforeEach(() => {
     opened, mount, update: async () => {}, release } } } } as unknown as Window['electronAPI'];
   initPluginTabViewHost();
 });
-const send = (sessionId: string | null, sequence = 1) => request({ requestId: `request-${sequence}`, instanceId: 'plugin', id: 'log',
+const send = (sessionId: string | null, sequence = 1, id = 'log') => request({ requestId: `request-${sequence}`, instanceId: 'plugin', id,
   sessionId, params: { item: `item-${sequence}` }, sequence, ownerStamp: { dataOwnerId: 'tab-owner', ownerGeneration: generation } });
 const body = (tabId: string, sessionId: string | null) => mountPluginTabView({ tabId, instanceId: 'plugin', id: 'log', sessionId, visible: true });
 
 describe('plugin tab owner', () => {
+  // PR #8909: different named views can finish creating out of intent order.
+  it.each(['request', 'native'] as const)('keeps the newer named view active when an older creation finishes last (%s)', async source => {
+    let finish!: () => void;
+    upsert.mockImplementationOnce(async () => new Promise<void>(resolve => { finish = resolve; }));
+    send('task', 10, 'log');
+    await vi.waitFor(() => expect(upsert).toHaveBeenCalledOnce());
+    let latest: string | null;
+    if (source === 'request') {
+      send('task', 11, 'preview');
+      await vi.waitFor(() => expect(opened).toHaveBeenCalledWith('request-11', expect.any(String)));
+      latest = opened.mock.calls.find(([id]) => id === 'request-11')![1];
+    } else latest = await openPluginTabView('plugin', 'preview', 'task');
+    expect(getBucket('task').activeTabId).toBe(latest);
+    finish();
+    await vi.waitFor(() => expect(opened).toHaveBeenCalledWith('request-10', expect.any(String)));
+    expect(getBucket('task').activeTabId).toBe(latest);
+    expect(getBucket('task').tabs).toHaveLength(2);
+  });
   it('keeps position across parking and clears it only after a successful task close', async () => {
     send('task'); await vi.waitFor(() => expect(opened).toHaveBeenCalled());
     const tabId = opened.mock.calls[0][1] as string;

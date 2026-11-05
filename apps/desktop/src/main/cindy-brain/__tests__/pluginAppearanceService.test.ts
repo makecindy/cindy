@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import sharp from 'sharp';
 import { PluginAppearanceService } from '../pluginAppearanceService.js';
+import * as appearanceResources from '../pluginAppearanceResources.js';
 import { DEFAULT_APPEARANCE_SETTINGS, normalizeAppearanceSettings, type AppearanceSettings } from '../../../shared/appearanceSettings.js';
 
 /* C11: real service calls must enforce declarations, locked rechecks and honest
@@ -14,23 +15,52 @@ function fixture(fields = ['uiFont', 'reading', 'theme']) {
   let iconBytes: Buffer | null = null;
   let ready = true;
   const nativeIcons: Array<Buffer | null> = [];
+  const saveWallpaper = vi.fn<ConstructorParameters<typeof PluginAppearanceService>[0]['saveWallpaper']>(async () => ({ url: '' }));
   const rendererApply = vi.fn(() => apply());
   let apply: () => Promise<{ status: 'applied' | 'saved' | 'failed'; reason?: string }> = async () => ({ status: 'saved', reason: 'NO_VIEWING_WINDOW' });
   const createService = () => new PluginAppearanceService({ ready: () => ready, current: id => instance?.id === id ? instance : null,
     files: { describe: async () => iconBytes ? { size: iconBytes.length, mimeType: 'image/png' } : null,
       read: async () => iconBytes ? new Response(new Uint8Array(iconBytes)) : new Response(null, { status: 404 }) },
     read: () => settings, update: async updater => { beforeUpdate(); settings = normalizeAppearanceSettings({ ...settings, ...updater(settings) }); return settings; },
-    saveWallpaper: async () => ({ url: '' }), revokeWallpaper: async () => false,
+    saveWallpaper, revokeWallpaper: async () => false,
     publish: () => {}, apply: rendererApply, applyAppIcon: bytes => { nativeIcons.push(bytes); },
   });
   const service = createService();
   return { service, get: () => settings, replace: (next: Partial<AppearanceSettings>) => { settings = normalizeAppearanceSettings({ ...settings, ...next }); },
     beforeUpdate: (fn: () => void) => { beforeUpdate = fn; }, setApply: (fn: typeof apply) => { apply = fn; }, revoke: () => { instance = null; },
     icon: (bytes: Buffer) => { iconBytes = bytes; }, nativeIcons, rendererApply, restart: createService,
-    ready: (value: boolean) => { ready = value; },
+    ready: (value: boolean) => { ready = value; }, saveWallpaper,
     replaceInstance: (id: string, key: string) => { instance = { id, key, token: 'replacement', dir: '/unused', ui: { version: 1, appearance: { fields } } }; } };
 }
 describe('plugin appearance calls', () => {
+  // PR #8909: a user's wallpaper choice while a plugin is acquiring the
+  // existing wallpaper lock must survive an older compare-and-set request.
+  it('checks the expected revision before publishing a prepared wallpaper', async () => {
+    const h = fixture(['wallpaper']);
+    const url = (hash: string) => `cindy-media://client-wallpaper/${hash.repeat(64)}.webp`;
+    h.replace({ wallpaperId: 'custom', customWallpaperUrl: url('a') });
+    const expected = h.service.read('example').revision;
+    vi.spyOn(appearanceResources, 'loadPluginAppearanceResource').mockResolvedValueOnce({
+      kind: 'image', bytes: Buffer.from('prepared'), mimeType: 'image/webp', hash: 'd'.repeat(64),
+    });
+    let entered!: () => void, unlock!: () => void;
+    const enteredLock = new Promise<void>(resolve => { entered = resolve; });
+    const lock = new Promise<void>(resolve => { unlock = resolve; });
+    h.saveWallpaper.mockImplementation(async (_bytes, options) => {
+      entered(); await lock;
+      options.assertCurrent();
+      h.replace({ customWallpaperUrl: url('c') });
+      return { url: url('c') };
+    });
+    const pending = h.service.handle('example', { kind: 'set', ifRevision: expected,
+      patch: { wallpaper: { resource: 'library:background.webp' } } });
+    await enteredLock;
+    h.replace({ customWallpaperUrl: url('b') }); unlock();
+    const result = await pending;
+    vi.mocked(appearanceResources.loadPluginAppearanceResource).mockRestore();
+    expect(result).toMatchObject({ ok: false, error: { code: 'APPEARANCE_CHANGED' } });
+    expect(h.get().customWallpaperUrl).toBe(url('b'));
+  });
   it('applies and resets a runtime app icon without waiting for a viewing page', async () => {
     const h = fixture(['appIcon']);
     h.icon(await sharp({ create: { width: 16, height: 16, channels: 4, background: '#123456' } }).png().toBuffer());

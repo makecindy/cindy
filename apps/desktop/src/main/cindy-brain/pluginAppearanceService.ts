@@ -110,7 +110,8 @@ export class PluginAppearanceService {
     if (patch.wallpaper?.fallbackResource) fallback = (await loadPluginAppearanceResource(resourceSource, patch.wallpaper.fallbackResource, 'image')).bytes;
     const icon = patch.appIcon ? await loadPluginAppearanceResource(resourceSource, patch.appIcon.resource, 'icon') : undefined;
     assertCurrent(); this.assertRevision(expected);
-    const media = wallpaper ? await this.deps.saveWallpaper(wallpaper.bytes, { fallback, pluginSource: source, assertCurrent }) : undefined;
+    const media = wallpaper ? await this.deps.saveWallpaper(wallpaper.bytes, { fallback, pluginSource: source,
+      assertCurrent: () => { assertCurrent(); this.assertRevision(expected); } }) : undefined;
     const settings = await this.deps.update(current => {
       assertCurrent();
       const latest = this.deps.read();
