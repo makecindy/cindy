@@ -125,9 +125,25 @@ let sharePermissionSequence = 0;
 /** Epoch is attached to the current share object, so a bounded list cannot evict
  * an unchanged share's token while an old call is still queued. */
 const sharePermissionEpochs = new WeakMap<ProviderShareReceived, number>();
+let hostOnlineSequence = 0;
+const shareHostOnline = new WeakMap<ProviderShareReceived, { sequence: number; online: boolean }>();
 
 function sharePermissionFingerprint(share: ProviderShareReceived): string {
   return JSON.stringify([share.shareId, share.memberId, share.providerId, share.hostDeviceId, share.status]);
+}
+
+function preserveNewerHostOnline(previous: readonly ProviderShareReceived[], next: ProviderShareReceived[],
+  requestedSequence: number): ProviderShareReceived[] {
+  const before = new Map(previous.map(share => [share.shareId, share]));
+  return next.map(share => {
+    const previousShare = before.get(share.shareId);
+    const live = previousShare ? shareHostOnline.get(previousShare) : undefined;
+    if (!previousShare || !live || live.sequence <= requestedSequence
+      || sharePermissionFingerprint(previousShare) !== sharePermissionFingerprint(share)) return share;
+    const updated = { ...share, hostOnline: live.online, hostCapable: live.online || share.hostCapable };
+    shareHostOnline.set(updated, live);
+    return updated;
+  });
 }
 
 function noteSharePermissions(previous: readonly ProviderShareReceived[], next: readonly ProviderShareReceived[]): void {
@@ -365,7 +381,8 @@ export async function crossRegionWithdraw(region: Region, requestId: string, req
 
 // ─── 分享连接 ────────────────────────────────────────────────────
 
-/** Live host evidence corrects the twelve-hour REST presence snapshot only.
+/** Live scoped host traffic proves presence and provider-share support, even
+ * when the twelve-hour REST snapshot reported both flags false while offline.
  * It must not refresh membership/trust budgets, rotate credentials, or let a
  * delegated executor stand in for the sharing owner's online state. */
 function noteHostOnline(rt: Runtime | null, state: RegionState, client: DeviceLinkClient,
@@ -375,9 +392,15 @@ function noteHostOnline(rt: Runtime | null, state: RegionState, client: DeviceLi
   if (peer?.role !== 'host') return;
   const share = state.shares.find(entry => entry.shareId === peer.shareId
     && entry.hostDeviceId === peer.deviceId && entry.status === 'active');
-  if (!share || (permissionEpoch !== undefined && crossRegionShareEpoch(share) !== permissionEpoch)
-    || share.hostOnline === online) return;
-  const next = state.shares.map(entry => entry === share ? { ...entry, hostOnline: online } : entry);
+  if (!share || (permissionEpoch !== undefined && crossRegionShareEpoch(share) !== permissionEpoch)) return;
+  // Even an unchanged value is newer evidence than an in-flight REST snapshot.
+  const live = { sequence: ++hostOnlineSequence, online };
+  shareHostOnline.set(share, live);
+  const hostCapable = online || share.hostCapable;
+  if (share.hostOnline === online && share.hostCapable === hostCapable) return;
+  const updated = { ...share, hostOnline: online, hostCapable };
+  shareHostOnline.set(updated, live);
+  const next = state.shares.map(entry => entry === share ? updated : entry);
   noteSharePermissions(state.shares, next);
   state.shares = next;
   rt.events.changed();
@@ -473,6 +496,7 @@ function refreshRegion(rt: Runtime, region: Region): Promise<void> {
       if (!isCurrent()) return;
       const identityCard = await fetchIdentityCard('share-session', sha256Hex(deviceId));
       if (!isCurrent()) return;
+      const requestedHostOnlineSequence = hostOnlineSequence;
       const value = await peerRequest(base, '/session', {
         identityCard,
         deviceId,
@@ -489,8 +513,8 @@ function refreshRegion(rt: Runtime, region: Region): Promise<void> {
       state.credential = credential;
       state.expiresAt = expiresAt;
       const previousShares = state.shares;
-      state.shares = shares;
-      noteSharePermissions(previousShares, shares);
+      state.shares = preserveNewerHostOnline(previousShares, shares, requestedHostOnlineSequence);
+      noteSharePermissions(previousShares, state.shares);
       state.loaded = true;
       if (shares.length === 0 || !credential) {
         state.client?.stop();
