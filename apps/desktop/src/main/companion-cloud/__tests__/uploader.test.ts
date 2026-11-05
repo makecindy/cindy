@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { resolveCompanionSkillFiles } from '../skillFiles.js';
 import { canonicalJson, COMPANION_VALUE_MAX_BYTES, createCompanionUploader, valueHash as canonicalHash, type CompanionPreferenceValue } from '../uploader.js';
-import { createCompanionStore, readCompanionRows, STORE_INLINE_MAX_BYTES } from '../store.js';
+import { createCompanionStore, readCompanionRows, readCompanionValue, STORE_INLINE_MAX_BYTES } from '../store.js';
 import { fakeApi, memoryState, rejection } from './fakes.js';
 
 const profile = (soul: string): CompanionPreferenceValue =>
@@ -503,6 +503,33 @@ describe('companion store', () => {
     await t.uploader.syncBot('bot', 'actor');
     options.off = true;
     await expect(t.uploader.syncBot('bot', 'actor', Number.POSITIVE_INFINITY, { requireAll: true })).rejects.toThrow('COMPANION_VALUE_TOO_LARGE');
+  });
+
+  it('rewrites a same-content store row that predates the current preference row after a conflict', async () => {
+    const t = storeSetup();
+    const key = 'companion.memory.v1:big.md';
+    const big = memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000));
+    // The store already holds this content, written over preference revision 0 (a lost response).
+    t.entries.set(key, { key, revision: 1, seq: 1, hash: 'h', size: 70_000, deleted: false, value: { companionStore: 1, prefRevision: 0, value: big.value } });
+    t.prefs.set(key, { key, value: { filename: 'big.md', content: 'small' }, revision: 2 });
+    // This computer never heard back from that write: it writes again and meets the conflict.
+    t.state.update('bot', 'actor', entry => { entry.storeSeeded = true; });
+    t.setValues([profile('soul'), big]);
+    await t.uploader.syncBot('bot', 'actor');
+    expect((await readCompanionRows(t.api, t.store, 'actor')).find(row => row.key === key)?.value).toEqual(big.value);
+  });
+
+  it('asks the store again for a take-over check, not for periodic reads', async () => {
+    const options = { off: false };
+    const t = storeSetup(options);
+    const big = memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000));
+    t.setValues([profile('soul'), big]);
+    await t.uploader.syncBot('bot', 'actor');
+    options.off = true;
+    expect(await readCompanionValue(t.api, t.store, 'actor', big.key)).toBeUndefined();
+    options.off = false;
+    expect(await readCompanionValue(t.api, t.store, 'actor', big.key)).toBeUndefined();
+    expect((await readCompanionValue(t.api, t.store, 'actor', big.key, { probe: true }))?.value).toEqual(big.value);
   });
 
   it('passes a deletion of a value kept only in the store to the next restore', async () => {

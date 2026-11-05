@@ -170,7 +170,9 @@ export function createCompanionUploader(deps: {
     }
     const prefRevision = deps.state.bot(botId)?.prefs[key]?.revision ?? 0;
     const server = await store.entry(actorId, key);
-    const same = !server.deleted && (server.blob ? server.hash === store.blobHash(value, prefRevision) : valueHash(server.value) === hash);
+    // The same value counts only if its store copy also supersedes the current preference row.
+    const same = !server.deleted && (server.blob ? server.hash === store.blobHash(value, prefRevision)
+      : valueHash(server.value) === hash && ((server as { prefRevision?: number }).prefRevision ?? 0) >= prefRevision);
     if (same || (server.deleted && value === null)) return server.revision;
     return store.write(actorId, key, value, server.revision, prefRevision);
   }

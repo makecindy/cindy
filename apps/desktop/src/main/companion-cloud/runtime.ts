@@ -709,7 +709,7 @@ export function startCompanionCloud(input: {
       // Never move the home before the companion's profile snapshot is in the cloud: without it
       // this copy could not be built, and the old home would already be demoted.
       try {
-        const profile = await readCompanionValue(input.api, store, actor.id, COMPANION_PROFILE_KEY);
+        const profile = await readCompanionValue(input.api, store, actor.id, COMPANION_PROFILE_KEY, { probe: true });
         if (!hasProfileSnapshot(profile ? [profile] : [])) return { ok: false, code: 'FAILED' };
       } catch (error) { return actionFailure(error); }
       // Always compare-and-set, even when the cached home already says "here": the cache may be

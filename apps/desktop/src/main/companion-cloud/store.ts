@@ -168,8 +168,11 @@ export function createCompanionStore(api: CompanionApi, options: { enabled: () =
 }
 
 /** One value: the preference row, or the store when the preferences cannot hold it. */
-export async function readCompanionValue(api: CompanionApi, store: CompanionStore | undefined, actorId: string, key: string): Promise<CompanionRow | undefined> {
+export async function readCompanionValue(api: CompanionApi, store: CompanionStore | undefined, actorId: string, key: string,
+  options: { probe?: boolean } = {}): Promise<CompanionRow | undefined> {
   const row = await readPreference(api, actorId, key);
+  // An explicit action (a take-over check) asks again; periodic reads keep the switch-off pause.
+  if (!row && options.probe) store?.retryNow();
   if (row || !store?.active()) return row;
   try { return await store.valueOf(actorId, key); } catch (error) {
     if (!store.active()) return undefined;
