@@ -51,6 +51,8 @@ export const imBotSettings = defineSettings({
     titleKey: 'settings.tina.prefs.providerFeishu',
     sectionKey: 'settings.imBot.groups.cindy',
     descriptionKey: 'settings.remoteControl.hook.feishu.description',
+    // 关联码只在关联中显示, 搜「关联码」也能找到这张卡。
+    keywordKeys: ['settings.remoteControl.hook.feishu.bindCode.label', 'settings.remoteControl.hook.feishu.bindCode.hint'],
     aliases: ['Feishu', 'Lark', '飞书', 'Feishu bot', 'Lark bot'],
   },
   cindyX: {
