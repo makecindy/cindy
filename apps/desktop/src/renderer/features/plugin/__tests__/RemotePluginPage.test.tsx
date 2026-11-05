@@ -1050,7 +1050,7 @@ describe('remote task interactive-page consent prompt', () => {
       return result;
     });
     let push: ((value: unknown) => void) | undefined;
-    window.electronAPI.deviceLink.onRemotePush = (listener => { push = listener; return () => {}; }) as never;
+    window.electronAPI.deviceLink.onRemotePush = ((listener: (value: unknown) => void) => { push = listener; return () => {}; }) as never;
     const reads = () => invoke.mock.calls.filter(c => c[2]?.[0]?.actionId === 'management:snapshot').length;
     const first = render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
     await waitFor(() => expect(reads()).toBe(1));

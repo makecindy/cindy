@@ -1,4 +1,5 @@
 import { ghostPermissionItems } from '../../../src/shared/ghost';
+import { registerHost, subscription } from '../../ui-page/harness/host';
 const manifest = { schemaVersion: 3, id: 'planner', name: 'Planner', version: '1.0.0', network: { hosts: ['planner.example'] },
   tools: [{ name: 'refresh_metrics', description: 'Refresh metrics', inputSchema: { type: 'object' } }, { name: 'save_plan', description: 'Save the plan', inputSchema: { type: 'object' } }],
   mcpApps: { ui: { resources: [{
@@ -26,3 +27,7 @@ export async function invokePluginManagement(_device: string, action: string, in
 }
 export const parsePluginManagementSnapshot = (value: unknown) => value;
 export const parsePluginManagementReceipt = (value: unknown) => value;
+registerHost({ deviceLink: {
+  onStatusChanged: subscription('device-link:status-changed'),
+  onPresenceChanged: subscription('device-link:presence-changed'),
+} });
