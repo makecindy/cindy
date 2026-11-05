@@ -3100,6 +3100,36 @@
       "modelRef": "xd/tencent-hy4-preview"
     },
     {
+      "id": "openai/gpt-image-2.6-sunburst",
+      "name": "GPT Image 2.6 Sunburst",
+      "modelRef": "openai/gpt-image-2.6-sunburst",
+      "mode": "image_generation",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "openai/gpt-image-2.6-sunburst",
+          "agents": []
+        }
+      ],
+      "nativeApi": "openai-images"
+    },
+    {
+      "id": "openai/gpt-image-2.6-flare",
+      "name": "GPT Image 2.6 Flare",
+      "modelRef": "openai/gpt-image-2.6-flare",
+      "mode": "image_generation",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "openai/gpt-image-2.6-flare",
+          "agents": []
+        }
+      ],
+      "nativeApi": "openai-images"
+    },
+    {
       "id": "openai/gpt-image-2.5-sunburst",
       "name": "GPT Image 2.5 Sunburst",
       "modelRef": "openai/gpt-image-2.5-sunburst",
@@ -8240,6 +8270,44 @@
       }
     },
     {
+      "id": "openai/gpt-image-2.6-sunburst",
+      "aliases": [
+        "gpt-image-2.6-sunburst"
+      ],
+      "defaults": {
+        "name": "GPT Image 2.6 Sunburst",
+        "mode": "image_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        }
+      }
+    },
+    {
+      "id": "openai/gpt-image-2.6-flare",
+      "aliases": [
+        "gpt-image-2.6-flare"
+      ],
+      "defaults": {
+        "name": "GPT Image 2.6 Flare",
+        "mode": "image_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        }
+      }
+    },
+    {
       "id": "openai/gpt-image-2.5-sunburst",
       "aliases": [
         "gpt-image-2.5-sunburst"
@@ -11481,3 +11549,4 @@
     }
   ]
 }
+
