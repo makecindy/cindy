@@ -194,8 +194,9 @@ export class QuotaPanelController {
     const owner = getActiveAppSession();
     const sources = this.panelOpen && !gate && !isAppSessionBoundaryPending()
       && this.sharedScope === `${owner.dataOwnerId}:${owner.generation}` ? this.sharedSources.map(source => ({
-      ...source, plan: build.input.t('shared.label'),
-      shared: { label: `${source.brand} · ${build.input.t('shared.label')}`, note: build.input.t('shared.note') },
+      ...source, plan: build.input.t(source.shared?.highestWeekly ? 'shared.highestWeekly' : 'shared.label'),
+      shared: { ...source.shared, label: source.shared?.label ?? source.brand,
+        note: build.input.t(source.shared?.highestWeekly ? 'shared.highestWeeklyNote' : 'shared.note') },
     })) : [];
     const view = sources.length ? buildMenubarView({ ...build.input, nowMs: Date.now(), sources: [...build.input.sources, ...sources] }) : build.view;
     this.show({ ...view, ...this.taskOverview(gate), ...controlState(gate) });

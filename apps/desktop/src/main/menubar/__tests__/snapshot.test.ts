@@ -410,3 +410,17 @@ it('shows the account-wide sharing notice and no local subscription management a
   expect(view.details[source.id]).toMatchObject({ plan: 'Shared', saySecondary: 'Account-wide allowance', action: { kind: 'open-app' } });
   expect(view.details[source.id].facts.some(fact => /credits|resets left/i.test(fact.label))).toBe(false);
 });
+
+// Equal provider labels must remain distinguishable by the names already present in the
+// received-share directory; anonymous quota account identity stays undisclosed.
+it('distinguishes shares of the same provider by their sharers', () => {
+  const sources = ['dash', 'Chris'].map(name => codex(`share:${name}`, 18, {
+    family: 'shared', account: null, brand: 'Anthropic', plan: 'Shared',
+    shared: { label: name, ownerName: name, note: 'Account-wide allowance' },
+  }));
+  const view = buildMenubarView(input(sources));
+  expect(view.sources.map(source => source.name)).toEqual(['dash', 'Chris']);
+  expect(view.details['share:dash'].title).toBe('dash · Anthropic');
+  expect(view.details['share:Chris'].title).toBe('Chris · Anthropic');
+  expect(view.details['share:dash'].facts).toContainEqual(expect.objectContaining({ label: 'Shared by dash' }));
+});

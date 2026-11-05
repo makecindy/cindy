@@ -6,12 +6,18 @@ import type { MenubarSubscriptionInput } from './snapshot.js';
 /** Shares have no disclosed account identity: never deduplicate them by similar percentages. */
 export function sharedSubscription(share: ProviderShareReceived, raw: unknown, nowMs: number): MenubarSubscriptionInput | null {
   const view = parseProviderShareInsights(raw);
-  if (!view?.capabilities.quota || view.status.quota !== 'ready' || view.quota?.group !== false
-    || view.quota.partial || view.quota.accounts.length !== 1) return null;
-  const account = view.quota.accounts[0]!;
-  if (account.state !== 'ready' || account.balance) return null;
-  const week = account.windows.find(window => window.kind === 'week');
-  if (!week || (week.resetsAt !== null && week.resetsAt <= nowMs)) return null;
+  if (!view?.capabilities.quota || view.status.quota !== 'ready' || !view.quota) return null;
+  // Pick one whole readable account, rather than adding percentages or mixing windows.
+  const candidates = view.quota.accounts.flatMap(account => {
+    if (account.state !== 'ready' || account.balance) return [];
+    const week = account.windows.find(window => window.kind === 'week');
+    if (!week || (week.resetsAt !== null && week.resetsAt <= nowMs)) return [];
+    return [{ account, remaining: week.remainingPercent }];
+  });
+  const best = candidates.reduce<(typeof candidates)[number] | null>((best, candidate) =>
+    !best || candidate.remaining > best.remaining ? candidate : best, null);
+  if (!best) return null;
+  const { account } = best;
   return {
     kind: 'subscription', id: `share:${share.shareId}`, providerId: share.providerId,
     family: 'shared', brand: share.providerLabel, logoSvg: providerLogo(share.providerId, share.providerLabel),
@@ -22,7 +28,9 @@ export function sharedSubscription(share: ProviderShareReceived, raw: unknown, n
         ? window.windowMinutes : window.kind === 'session' ? 300 : 10_080,
     })),
     updatedAtMs: account.updatedAt,
-    shared: { label: share.providerLabel, note: '' },
+    shared: { label: share.owner?.displayName?.trim() || share.providerLabel, note: '',
+      ownerName: share.owner?.displayName?.trim() || undefined,
+      highestWeekly: view.quota.group || view.quota.partial || view.quota.accounts.length > 1 },
   };
 }
 

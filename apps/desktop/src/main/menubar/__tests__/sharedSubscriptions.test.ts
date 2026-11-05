@@ -5,7 +5,7 @@ import type { ProviderShareInsights } from '../../../shared/providerShareInsight
 import type { MenubarSubscriptionInput } from '../snapshot';
 
 // Unit: the new visible-panel consumer must honor provider-sharing §7.5. Existing local
-// collection tests do not exercise share permission, group ambiguity or close/reopen races.
+// collection tests do not exercise share permission, multi-account selection or close/reopen races.
 // Minimal input is one received share with one weekly account; timers are virtual.
 const share: ProviderShareReceived = {
   shareId: 'one', memberId: 'member', providerId: 'anthropic', providerLabel: 'Claude',
@@ -22,18 +22,16 @@ afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
 it('maps authorized weekly allowance without leaking identities, balances or reset controls', () => {
   expect(sharedSubscription(share, quota(), Date.now())).toMatchObject({
     id: 'share:one', brand: 'Claude', account: null, credits: null,
+    shared: { label: 'Owner', ownerName: 'Owner' },
     windows: [{ kind: 'week', usedPercent: 54 }],
   });
   expect(sharedSubscription(share, quota(), Date.now())).not.toHaveProperty('device');
 });
 
-it.each(['disabled', 'group', 'partial', 'multiple', 'unavailable', 'expired', 'malformed', 'balance'])(
+it.each(['disabled', 'unavailable', 'expired', 'malformed', 'balance'])(
   'does not turn %s data into a single percentage', kind => {
     const value = quota();
     if (kind === 'disabled') value.capabilities.quota = false;
-    if (kind === 'group') value.quota!.group = true;
-    if (kind === 'partial') value.quota!.partial = true;
-    if (kind === 'multiple') value.quota!.accounts.push(value.quota!.accounts[0]!);
     if (kind === 'unavailable') value.quota!.accounts[0]!.state = 'offline';
     if (kind === 'expired') value.quota!.accounts[0]!.windows[0]!.resetsAt = Date.now();
     if (kind === 'malformed') value.quota!.accounts[0]!.windows[0]!.remainingPercent = NaN;
@@ -41,6 +39,40 @@ it.each(['disabled', 'group', 'partial', 'multiple', 'unavailable', 'expired', '
     expect(sharedSubscription(share, value, Date.now())).toBeNull();
   },
 );
+
+// User's 2026-11-05 example: 82% vs 28%. The winning account must supply every detail,
+// even when the other account has a higher short-window allowance or resets sooner.
+it.each([false, true])('selects the highest readable weekly account without mixing its details (partial=%s)', partial => {
+  const value = quota();
+  const first = value.quota!.accounts[0]!;
+  first.windows[0]!.remainingPercent = 28;
+  first.windows.push({ kind: 'session', remainingPercent: 99, resetsAt: Date.now() + 30_000, windowMinutes: 300, label: null });
+  const winner = { ...first, updatedAt: Date.now() - 1_000, windows: [
+    { ...first.windows[0]!, remainingPercent: 82, resetsAt: Date.now() + 120_000 },
+    { ...first.windows[1]!, remainingPercent: 90 },
+  ] };
+  value.quota = { group: true, partial, accounts: [first, winner] };
+  expect(sharedSubscription(share, value, Date.now())).toMatchObject({
+    updatedAtMs: winner.updatedAt, shared: { highestWeekly: true },
+    windows: [{ kind: 'week', usedPercent: 18, resetsAtMs: winner.windows[0]!.resetsAt },
+      { kind: 'session', usedPercent: 10 }],
+  });
+});
+
+it('ignores unavailable, expired and balance accounts even when their percentage is higher', () => {
+  const value = quota();
+  const account = value.quota!.accounts[0]!;
+  const high = { ...account, windows: [{ ...account.windows[0]!, remainingPercent: 99 }] };
+  value.quota = { group: true, partial: true, accounts: [
+    { ...high, state: 'offline' },
+    { ...high, windows: [{ ...high.windows[0]!, resetsAt: Date.now() }] },
+    { ...high, balance: { remaining: 99, total: 100, currency: 'USD', resetsAt: null, pools: [] } },
+    account,
+  ] };
+  expect(sharedSubscription(share, value, Date.now())?.windows[0]?.usedPercent).toBe(54);
+  value.quota.accounts.pop();
+  expect(sharedSubscription(share, value, Date.now())).toBeNull();
+});
 
 function harness() {
   vi.useFakeTimers();
@@ -83,6 +115,22 @@ it('reads only while open, removes revoked/failed quotas, and restores an author
   const count = h.read.mock.calls.length;
   await vi.advanceTimersByTimeAsync(10_000);
   expect(h.read).toHaveBeenCalledTimes(count);
+});
+
+it('reselects the weekly maximum on refresh without retaining the former account details', async () => {
+  const h = harness();
+  const value = quota();
+  const first = value.quota!.accounts[0]!;
+  const second = { ...first, windows: [{ ...first.windows[0]!, remainingPercent: 82, resetsAt: Date.now() + 120_000 }] };
+  value.quota = { group: true, partial: false, accounts: [first, second] };
+  h.read.mockResolvedValue(value);
+  h.reader.setOpen(true);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.sources[0]?.windows[0]).toMatchObject({ usedPercent: 18, resetsAtMs: second.windows[0]!.resetsAt });
+  second.windows[0]!.remainingPercent = 20;
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(h.sources[0]?.windows[0]).toMatchObject({ usedPercent: 54, resetsAtMs: first.windows[0]!.resetsAt });
+  h.reader.setOpen(false);
 });
 
 it.each(['close', 'owner', 'relationship'])('drops late responses after %s changes', async kind => {

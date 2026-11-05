@@ -1442,7 +1442,10 @@
   "menubar": {
     "shared": {
       "label": "Shared",
-      "note": "This allowance is shared by the account, not reserved for you."
+      "note": "This allowance is shared by the account, not reserved for you.",
+      "highestWeekly": "Shared · highest weekly",
+      "highestWeeklyNote": "Highest weekly allowance among readable accounts. Account-wide, not a combined or personal allowance.",
+      "from": "Shared by {{name}}"
     },
     "balance": {
       "name": "Cindy balance",

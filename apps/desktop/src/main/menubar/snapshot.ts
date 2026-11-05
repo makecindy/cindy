@@ -59,8 +59,8 @@ export interface MenubarSubscriptionInput {
   logoSvg: string;
   /** Brand shown as the detail title: Claude, Codex, Grok. */
   brand: string;
-  /** Received share label; never an account identity or a real device name. */
-  shared?: { label: string; note: string };
+  /** Sharer display name, falling back to the provider label; never an account email or device name. */
+  shared?: { label: string; note: string; ownerName?: string; highestWeekly?: boolean };
   /** Account email when the provider exposes one (Codex accounts). */
   account: string | null;
   plan: string | null;
@@ -894,7 +894,8 @@ class Builder {
       return {
         id: source.id,
         logoSvg: source.logoSvg,
-        title: source.brand,
+        title: source.shared?.ownerName
+          ? `${source.shared.ownerName} · ${source.brand}` : source.brand,
         plan: source.plan ?? '',
         rings: [{ fraction: 0, color: 'ink3' }],
         bigValue: '—',
@@ -1012,7 +1013,8 @@ class Builder {
     return {
       id: source.id,
       logoSvg: source.logoSvg,
-      title: source.brand,
+      title: source.shared?.ownerName
+        ? `${source.shared.ownerName} · ${source.brand}` : source.brand,
       plan: source.plan ?? '',
       rings,
       bigValue: String(Math.round(remaining)),
@@ -1037,7 +1039,8 @@ class Builder {
   private accountFacts(source: MenubarSubscriptionInput): MenubarFact[] {
     const updated = source.updatedAtMs ? this.t('fact.updatedAgo', { ago: this.ago(source.updatedAtMs) }) : '';
     const facts: MenubarFact[] = [];
-    if (source.shared) facts.push({ label: source.shared.label, value: updated, sub: '' });
+    if (source.shared) facts.push({ label: source.shared.ownerName
+      ? this.t('shared.from', { name: source.shared.ownerName }) : source.shared.label, value: updated, sub: '' });
     if (source.device) facts.push({ label: this.t('fact.device'), value: source.device.name, sub: this.t('fact.deviceSub') });
     if (source.account) facts.push({ label: this.t('fact.account'), value: this.email(source), sub: updated });
     else if (source.device) facts[0] = { ...facts[0]!, sub: updated || this.t('fact.deviceSub') };

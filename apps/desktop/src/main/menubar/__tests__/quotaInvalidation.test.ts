@@ -272,12 +272,16 @@ it('never serves a build read for the previous account', async () => {
 
 // Integration of the new reader with the actual panel controller: the panel gets the share,
 // while the reusable overview (also consumed by phone widgets) remains owner-only.
-it('adds received quotas to the open native panel and clears them on close', async () => {
-  mocks.sharedRead.mockResolvedValue({ version: 1, capabilities: { quota: true, usage: false },
+it('adds the highest shared weekly quota only to the open native panel and clears it on close', async () => {
+  const response = { version: 1, capabilities: { quota: true, usage: false },
     status: { quota: 'ready', usage: 'disabled' }, usage: null,
-    quota: { group: false, partial: false, accounts: [{ state: 'ready', updatedAt: Date.now(), balance: null,
+    quota: { group: true, partial: false, accounts: [{ state: 'ready', updatedAt: Date.now(), balance: null,
       windows: [{ kind: 'week', remainingPercent: 46, resetsAt: Date.now() + 60_000, windowMinutes: 10080, label: null }] }] },
-  });
+  };
+  response.quota.accounts.push({ ...response.quota.accounts[0], windows: [
+    { ...response.quota.accounts[0].windows[0], remainingPercent: 82 },
+  ] });
+  mocks.sharedRead.mockResolvedValue(response);
   mocks.collect.mockResolvedValue(emptyMenubarInputs(Date.now(), 'Fixture'));
   const service = new MenubarService({ openNewTask() {}, overview });
   service.init();
@@ -285,7 +289,10 @@ it('adds received quotas to the open native panel and clears them on close', asy
   mocks.onHelperMessage?.({ type: 'panel', open: true });
   await vi.dynamicImportSettled();
   await vi.advanceTimersByTimeAsync(0);
-  expect(mocks.publish.mock.lastCall?.[0].sources).toContainEqual(expect.objectContaining({ id: 'share:share-one', value: '46' }));
+  expect(mocks.publish.mock.lastCall?.[0].sources).toContainEqual(expect.objectContaining({ id: 'share:share-one', value: '82' }));
+  expect(mocks.publish.mock.lastCall?.[0].details['share:share-one']).toMatchObject({
+    plan: 'menubar.shared.highestWeekly', saySecondary: 'menubar.shared.highestWeeklyNote',
+  });
   expect(overview.latest()?.input.sources).toEqual([]);
   mocks.onHelperMessage?.({ type: 'panel', open: false });
   expect(mocks.publish.mock.lastCall?.[0].sources).toEqual([]);
