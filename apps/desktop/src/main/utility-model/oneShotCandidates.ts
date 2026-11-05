@@ -123,6 +123,15 @@ export type UtilityTextCandidate = {
   transport: UtilityModelTransport;
   profile: UtilityModelProfile;
   execute: (prompt: string, opts?: UtilityTextRequestOptions) => Promise<string>;
+  /**
+   * Whether this route can see the provider's terminal state.
+   *
+   * Direct HTTP routes parse `finish_reason` / `incomplete_details.reason` /
+   * `stop_reason` from the body they return, so they can honour
+   * `requireCompleteOutput`. A route that only yields a string cannot, and a
+   * strict caller must not treat it as complete by default.
+   */
+  reportsTerminalState?: boolean;
 };
 
 export type UtilityTextRequestOptions = {
@@ -146,6 +155,18 @@ export type UtilityTextRequestOptions = {
   responseInstructions?: string;
   /** Reject unusable output before selecting a winner, so the configured chain can continue. */
   validateResponse?: (text: string) => boolean;
+  /**
+   * Reject a response the provider cut short at its output budget.
+   *
+   * Off by default: most callers can live with a partial answer. The
+   * composer's enhance action turns the answer into the user's draft, so a
+   * truncated rewrite would silently drop the constraints at its end — that
+   * caller turns this on and the chain falls back to the next candidate.
+   *
+   * Only the routes that apply the caller's `maxTokens` can be cut short by
+   * it, and those are the routes whose terminal state is observable here.
+   */
+  requireCompleteOutput?: boolean;
   /** Final ownership/config guard immediately before an explicit HTTP dispatch. */
   beforeDispatch?: (route: UtilityTextDispatchRoute) => Promise<boolean>;
   /** 显式任务来源；存在时禁止跨来源 fallback。 */
@@ -600,6 +621,7 @@ export async function requestDedicatedAutoReviewCandidateText(
       // The Gateway alias is not a catalog model: keep its fixed Chat request
       // with no reasoning fields and let the Gateway apply the alias policy.
       execute: (text, requestOpts) => requestProviderHttpText({
+        requireCompleteOutput: requestOpts?.requireCompleteOutput,
         targets: {
           'chat-completions': {
             endpoint: joinProxyPath(baseUrl, '/v1/chat/completions'),
@@ -1142,6 +1164,7 @@ async function requestExplicitProviderText(
         systemPrompt: requestOpts?.systemPrompt,
         onText: requestOpts?.onText,
         responseInstructions: requestOpts?.responseInstructions,
+        requireCompleteOutput: requestOpts?.requireCompleteOutput,
         beforeDispatch: requestOpts?.beforeDispatch
           ? () => requestOpts.beforeDispatch!({ providerId: provider.id, agentKind, model })
           : undefined,
@@ -1276,6 +1299,7 @@ async function requestBuiltinProviderText(
       transport: 'litellm-chat-completions',
       profile,
       execute: (text, requestOpts) => requestProviderHttpText({
+        requireCompleteOutput: requestOpts?.requireCompleteOutput,
         targets: {
           'chat-completions': {
             endpoint: joinProxyPath(baseUrl, '/v1/chat/completions'),
@@ -1361,6 +1385,7 @@ async function requestBuiltinProviderText(
       transport: 'codex-responses',
       profile,
       execute: (text, requestOpts) => requestProviderHttpText({
+        requireCompleteOutput: requestOpts?.requireCompleteOutput,
         targets: {
           responses: {
             endpoint: joinProxyPath(routing.upstream, '/responses'),
@@ -1428,6 +1453,7 @@ async function requestBuiltinProviderText(
       transport: 'codex-responses',
       profile,
       execute: (text, requestOpts) => requestProviderHttpText({
+        requireCompleteOutput: requestOpts?.requireCompleteOutput,
         targets: {
           responses: {
             endpoint: joinProxyPath(routing.upstream, '/responses'),
@@ -1499,6 +1525,18 @@ async function executeCandidates(
         attempts.push(skippedAttempt(candidate.profile, 'model_unavailable'));
         continue;
       }
+    // A strict caller turns the answer into user-visible state, so a route that
+    // cannot report the provider's terminal state is not usable for it. Skip
+    // that candidate instead of dispatching: the chain then falls back to the
+    // models the user configured, never to a substitute.
+    if (opts?.requireCompleteOutput && candidate.reportsTerminalState === false) {
+      log.debug('utility text candidate skipped: terminal state unobservable', {
+        providerId: candidate.providerId,
+        model: candidate.model,
+      });
+      attempts.push(skippedAttempt(candidate.profile, 'unsupported_transport'));
+      continue;
+    }
     try {
       const text = (await candidate.execute(prompt, opts)).trim();
       validateUtilityResponse(text, opts);
@@ -1557,6 +1595,10 @@ async function resolveCodexCandidate(
       model: profile.model,
       transport: profile.transport,
       profile,
+      // `maker.oneShot` yields the text only: neither the transport nor this
+      // layer can tell whether the provider stopped at the output budget, so a
+      // strict caller skips this candidate instead of accepting a half answer.
+      reportsTerminalState: false,
       execute: (prompt, opts) => maker.oneShot(agentKind, prompt, {
         model: profile.model,
         maxTokens: opts?.maxTokens,
@@ -1606,6 +1648,7 @@ function resolveLiteLlmCandidate(profile: UtilityModelProfile): UtilityTextCandi
         systemPrompt: opts?.systemPrompt,
         onText: opts?.onText,
         responseInstructions: opts?.responseInstructions,
+        requireCompleteOutput: opts?.requireCompleteOutput,
         beforeDispatch: opts?.beforeDispatch
           ? () => opts.beforeDispatch!({
             providerId: utilityProfileRouteProviderId(profile),
@@ -1632,6 +1675,8 @@ async function requestLiteLlmText(input: {
   systemPrompt?: string;
   onText?: (text: string) => void;
   responseInstructions?: string;
+  /** Refuse text the provider cut short at the output budget. */
+  requireCompleteOutput?: boolean;
   /** Async final dispatch fence, including owner/settings checks. */
   beforeDispatch?: () => Promise<boolean>;
   /** Synchronous owner entitlement fence immediately before the HTTP request. */
@@ -1682,7 +1727,7 @@ async function requestLiteLlmText(input: {
         }),
       });
     };
-    let response = await send();
+    const response = await send();
     if (!response.ok) {
       // This path always carries the Cindy AI key to the Cindy gateway.
       if (response.status === 401) reportCindyGatewayKeyRejected(input.apiKey);
@@ -1716,6 +1761,14 @@ async function requestLiteLlmText(input: {
     if (!text) {
       log.warn('utility text chat-completions empty content', chatCompletionEmptyFingerprint(parsed));
       throw new UtilityTextExecutionError({ reason: 'empty_response' });
+    }
+    // `parsed` is the body behind `text`, including a budget retry, so its
+    // terminal state describes the answer that is about to be returned.
+    if (input.requireCompleteOutput && outputBudgetExhausted('chat-completions', parsed)) {
+      log.warn('utility text response cut short by the output budget', {
+        model: input.model,
+      });
+      throw new UtilityTextExecutionError({ reason: 'request_failed' });
     }
     return text;
   } catch (error) {
@@ -1833,6 +1886,14 @@ async function requestProviderHttpText(input: {
   onText?: (text: string) => void;
   /** Additional output-shape instructions. */
   responseInstructions?: string;
+  /**
+   * Refuse a body the provider cut short at the output budget.
+   *
+   * The terminal state is read from the body that produced the returned text,
+   * so a budget retry is judged on its own response and not on the one before
+   * it.
+   */
+  requireCompleteOutput?: boolean;
   /** Session/owner/config guard, evaluated immediately before each HTTP dispatch. */
   beforeDispatch?: () => Promise<boolean>;
   /** Re-read the credential captured by the request closure after the async guard. */
@@ -2063,6 +2124,20 @@ async function requestProviderHttpText(input: {
     // The step was accepted by the provider; remember it even when the model
     // produced no usable text, because the wording itself was not rejected.
     if (input.steps.length > 1) rememberUtilityStep(memoryKey, step);
+    // A budget retry replaced the body, so the terminal state has to be read
+    // from the body that produced the text below — not from the one before
+    // the retry.
+    const finalParsed = responseStructure(step.wire, raw);
+    if (input.requireCompleteOutput && text && outputBudgetExhausted(step.wire, finalParsed)) {
+      // The provider stopped at the output budget: the text is the beginning
+      // of the answer, not the answer. Refusing this candidate lets the chain
+      // fall back instead of handing a half answer to the caller.
+      log.warn('utility text response cut short by the output budget', {
+        wire: step.wire,
+        model: targetFor(step).model,
+      });
+      throw new UtilityTextExecutionError({ reason: 'request_failed' });
+    }
     log.info('utility text request accepted', {
       wire: step.wire,
       step: utilityRequestStepKey(step),
@@ -2337,6 +2412,7 @@ async function requestCustomProviderText(input: {
   beforeDispatch?: () => Promise<boolean>;
   credentialStillCurrent?: () => boolean | Promise<boolean>;
   routeStillCurrent?: () => boolean;
+  requireCompleteOutput?: boolean;
 }): Promise<string> {
   const headers: Record<string, string> = {
     ...(input.headers ?? {}),
@@ -2405,6 +2481,7 @@ async function requestCustomProviderText(input: {
     beforeDispatch: input.beforeDispatch,
     credentialStillCurrent: input.credentialStillCurrent,
     routeStillCurrent: input.routeStillCurrent,
+    requireCompleteOutput: input.requireCompleteOutput,
   });
 }
 

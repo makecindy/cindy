@@ -4,6 +4,8 @@ import { COMPOSER_ENHANCE_PROMPT_CHANNEL } from '../shared/composerPromptEnhance
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 import { enhanceComposerPrompt } from './composer-prompt-enhance.js';
+import { getMaker } from './maker-host/index.js';
+import { requestUtilityText } from './utility-model/oneShotCandidates.js';
 
 let registered = false;
 
@@ -23,13 +25,6 @@ export function registerComposerPromptEnhanceIpc(): void {
     if (typeof rawText !== 'string') {
       throwIpcError('INVALID_PARAMS', 'Prompt text must be a string');
     }
-    // Dynamic import: utility-model reads the electron app path at module top
-    // level, so a static import would pull that chain into every importer's
-    // unit tests (same pattern as the oneshot text route).
-    const [{ requestUtilityText }, { getMaker }] = await Promise.all([
-      import('./utility-model/oneShotCandidates.js'),
-      import('./maker-host/index.js'),
-    ]);
     return enhanceComposerPrompt(
       (prompt, options) => requestUtilityText(getMaker(), prompt, options),
       rawText,

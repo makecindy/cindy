@@ -143,7 +143,7 @@ const appCapabilities = vi.mocked(getAppCapabilities);
 const readKey = vi.mocked(readClaudeApiKey);
 const readCodexCreds = vi.mocked(getChatgptBridgeAuth);
 const readCodexDispatchAuth = vi.mocked(getChatgptBridgeAuthForDispatch);
-const codexAuthorizationCurrent = vi.fn((_providerId: string) => true);
+const codexAuthorizationCurrent = vi.fn<(providerId: string) => boolean>(() => true);
 const readGrokToken = vi.mocked(getGrokAccessToken);
 const grokCredentialGeneration = vi.mocked(getGrokOAuthCredentialGeneration);
 const readGenericOAuthToken = vi.mocked(readCachedGenericOAuthAccessToken);
@@ -885,6 +885,77 @@ describe('utility one-shot candidates', () => {
     const result = await requestUtilityText(makerMock(false), 'hello', { maxTokens: 10 });
     expect(result).toMatchObject({ ok: false, reason: 'empty_response' });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  describe('requireCompleteOutput(截断的正文不能当成功结果)', () => {
+    const truncatedChat = {
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: '给这个页面加一个搜索框，搜索框要' }, finish_reason: 'length' }],
+      }),
+    } as never;
+
+    it('默认关闭:截断的非空正文仍按旧行为返回', async () => {
+      readKey.mockReturnValue('proxy-key');
+      fetchMock.mockResolvedValueOnce(truncatedChat);
+
+      const result = await requestUtilityText(makerMock(false), 'hello', { maxTokens: 200 });
+      expect(result).toMatchObject({ ok: true, text: '给这个页面加一个搜索框，搜索框要' });
+    });
+
+    it('开启后:被输出预算截断的正文被拒绝,候选链可以回退', async () => {
+      readKey.mockReturnValue('proxy-key');
+      fetchMock.mockResolvedValueOnce(truncatedChat);
+
+      const result = await requestUtilityText(makerMock(false), 'hello', {
+        maxTokens: 200,
+        requireCompleteOutput: true,
+      });
+      expect(result).toMatchObject({ ok: false });
+      expect(result.ok).toBe(false);
+    });
+
+    it('开启后:完整正文照常返回', async () => {
+      readKey.mockReturnValue('proxy-key');
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: '给这个页面加一个搜索框' }, finish_reason: 'stop' }],
+        }),
+      } as never);
+
+      const result = await requestUtilityText(makerMock(false), 'hello', {
+        maxTokens: 200,
+        requireCompleteOutput: true,
+      });
+      expect(result).toMatchObject({ ok: true, text: '给这个页面加一个搜索框' });
+    });
+
+    it('预算重试后按重试那份响应的终态判定,不用重试前的', async () => {
+      readKey.mockReturnValue('proxy-key');
+      // 第一份:思考烧光预算且正文为空 → 触发放大预算重试
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: '', reasoning_content: '在想…' }, finish_reason: 'length' }],
+          usage: { completion_tokens: 800 },
+        }),
+      } as never);
+      // 第二份(放大预算后):正文有了,但仍被长度截断
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: '给这个页面加一个搜索框，搜索框要' }, finish_reason: 'length' }],
+        }),
+      } as never);
+
+      const result = await requestUtilityText(makerMock(false), 'hello', {
+        maxTokens: 800,
+        requireCompleteOutput: true,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(result.ok).toBe(false);
+    });
   });
 
   it('responses 的 SSE 终止事件被 max_output_tokens 截断 → 也放大预算重试', async () => {

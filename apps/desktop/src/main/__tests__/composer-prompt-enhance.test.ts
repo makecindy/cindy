@@ -112,6 +112,18 @@ describe('enhanceComposerPrompt', () => {
     expect(options.responseInstructions).toMatch(/exactly one rewrite/i);
   });
 
+  it('asks the utility route for a complete rewrite, never a truncated one', async () => {
+    let options: { requireCompleteOutput?: boolean } = {};
+    await enhanceComposerPrompt(async (_prompt, opts) => {
+      options = opts;
+      return okResponse('x');
+    }, 'hello');
+
+    // The rewrite becomes the user's draft: a body the provider cut short at
+    // the output budget would silently drop the constraints at its end.
+    expect(options.requireCompleteOutput).toBe(true);
+  });
+
   it('sizes the output budget from the draft and keeps it inside its bounds', async () => {
     const budgets: number[] = [];
     const request = async (_prompt: string, opts: { maxTokens: number; timeoutMs: number }) => {

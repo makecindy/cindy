@@ -10083,7 +10083,7 @@ export function ChatInput({
                 <ComposerEnhancePromptButton
                   editor={editor}
                   draftKey={storageKey}
-                  disabled={composerEditorLocked || settingsLocked || sharedGuest}
+                  disabled={composerMutationLocked || settingsLocked || sharedGuest}
                   disabledReason={t('newChat.composerEnhance.locked')}
                 />
                 {!hideRuntimeControls ? (

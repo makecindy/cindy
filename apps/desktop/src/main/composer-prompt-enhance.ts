@@ -78,6 +78,13 @@ export type ComposerEnhanceRequestOptions = {
   responseInstructions: string;
   maxTokens: number;
   timeoutMs: number;
+  /**
+   * Refuse a rewrite the provider cut short at its output budget.
+   *
+   * The rewrite becomes the user's draft, so a truncated one would silently
+   * drop the constraints at its end and still report success.
+   */
+  requireCompleteOutput: boolean;
 };
 
 /**
@@ -115,6 +122,7 @@ export async function enhanceComposerPrompt(
     responseInstructions: COMPOSER_ENHANCE_RESPONSE_INSTRUCTIONS,
     maxTokens: outputBudgetFor(draft),
     timeoutMs: COMPOSER_ENHANCE_TIMEOUT_MS,
+    requireCompleteOutput: true,
   });
 
   if (!result.ok) {
