@@ -4,6 +4,7 @@
  * Main owns discovery and filesystem access. Renderer batches visible requests, keeps bytes in a
  * bounded shared LRU, and treats customIconKey as a snapshot cache generation rather than a byte
  * content hash. Main verifies every materialized read; a refreshed projection gets a new key.
+ * Historical scaffold assets resolve to the same presentation as missing icons.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -14,6 +15,7 @@ import type {
   PluginMarketLocalIconRequest,
   PluginMarketLocalIconResult,
 } from '../../../../shared/pluginMarket';
+import { ghostPluginIconSource } from './ghostPluginViewModel';
 import {
   isPluginMarketCustomIconKey,
   pluginMarketCustomIconSourceToken,
@@ -452,12 +454,14 @@ export function usePluginMarketIcon(
 
   return {
     containerRef: setTarget,
-    iconDataUrl:
+    iconDataUrl: ghostPluginIconSource(
       request && current.status === 'loaded'
         ? current.dataUrl
         : request
           ? undefined
           : item.icon?.url,
+      request ? undefined : item.icon?.sha256,
+    ),
     onIconLoad,
     onIconLoadError,
   };

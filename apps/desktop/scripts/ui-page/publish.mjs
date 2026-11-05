@@ -1,21 +1,14 @@
 #!/usr/bin/env node
 // `pnpm ui:check:publish [<run dir>] [--remote <name>] [--branch <name>] [--dry-run]`
 // Publishes a run's screenshots for a PR description, the way this repo's PRs carry images:
-// an orphan-history `pr-assets/…` branch on the author's fork (never the upstream repo), linked
+// an orphan-history `pr-assets/…` branch on the chosen GitHub remote, linked
 // by commit SHA. The worktree, index and current branch are not touched. Prints the PR text.
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { root } from './build.mjs';
-
-const git = (args, input) =>
-  execFileSync('git', args, {
-    cwd: root,
-    encoding: 'utf8',
-    input,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  }).trim();
+import { fileURLToPath } from 'node:url';
+import { root as repositoryRoot } from './build.mjs';
 
 function parse(argv) {
   const options = {};
@@ -35,7 +28,7 @@ function githubRepo(url) {
   return /github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?$/.exec(url)?.[1] ?? null;
 }
 
-async function latestRun() {
+async function latestRun(root) {
   const base = path.join(root, 'artifacts/ui-check');
   const runs = await Promise.all(
     (await readdir(base, { withFileTypes: true }))
@@ -52,43 +45,36 @@ async function latestRun() {
   return run.dir;
 }
 
-async function main() {
-  const options = parse(process.argv.slice(2));
-  const run = options.run ?? (await latestRun());
+export async function publishScreenshots(argv, {
+  root = repositoryRoot,
+  git = (args, input) => execFileSync('git', args, {
+    cwd: root,
+    encoding: 'utf8',
+    input,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  }).trim(),
+  log = console.log,
+} = {}) {
+  const options = parse(argv);
+  const run = options.run ?? (await latestRun(root));
   const summary = JSON.parse(await readFile(path.join(run, 'summary.json'), 'utf8'));
   const images = summary.overviews ?? (summary.overview ? [summary.overview] : []);
   if (!images.length) throw new Error(`${run} has no overview images`);
 
-  // Images go to the author's fork, never to the repository PRs target: the project's own
-  // repository (package.json) and an `upstream` remote, if any. Checked against the URL git
-  // actually pushes to, which is also where the links point.
+  // Use the normal development remote, including the PR's own repository. Never silently
+  // select another repository. Links use the URL git actually pushes to.
   const remotes = git(['remote']).split('\n').filter(Boolean);
   const pushRepo = (name) => githubRepo(git(['remote', 'get-url', '--push', name]));
-  const project = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
-  // GitHub owner and repository names are case-insensitive.
-  const targets = new Set(
-    [
-      githubRepo(project.repository?.url ?? ''),
-      remotes.includes('upstream') && githubRepo(git(['remote', 'get-url', 'upstream'])),
-    ]
-      .filter(Boolean)
-      .map((name) => name.toLowerCase()),
-  );
-  const isTarget = (name) => targets.has(name.toLowerCase());
-  const remote =
-    options.remote ??
-    remotes.find((name) => {
-      const repo = pushRepo(name);
-      return repo && !isTarget(repo);
-    });
+  const remote = options.remote ?? (remotes.includes('origin') ? 'origin' : undefined);
   const repo = remote && pushRepo(remote);
   if (!repo)
-    throw new Error('Need a GitHub fork remote for screenshots (e.g. origin = <you>/cindy)');
-  if (isTarget(repo))
-    throw new Error(`${remote} pushes to ${repo}, the PR's target; publish to your fork instead`);
+    throw new Error('需要 GitHub origin 远端，或用 --remote 明确指定有写权限的 GitHub 远端');
 
   const current = git(['rev-parse', '--abbrev-ref', 'HEAD']);
   const branch = options.branch ?? `pr-assets/${current === 'HEAD' ? 'detached' : current}`;
+  if (!branch.startsWith('pr-assets/') || branch === 'pr-assets/')
+    throw new Error('截图只能发布到 pr-assets/ 下的专用分支');
+  git(['check-ref-format', `refs/heads/${branch}`]);
   const folder = path.basename(run);
 
   // One commit per run under its own folder; earlier runs stay reachable through the parent.
@@ -106,7 +92,8 @@ async function main() {
   } catch {
     parent = '';
   }
-  const message = `ui:check screenshots ${folder}\n\nNot for merging; referenced by PR descriptions.`;
+  const author = git(['var', 'GIT_AUTHOR_IDENT']).replace(/>.*$/, '>');
+  const message = `ui:check screenshots ${folder}\n\nNot for merging; referenced by PR descriptions.\n\nSigned-off-by: ${author}`;
   const commit = git(['commit-tree', tree, ...(parent ? ['-p', parent] : []), '-m', message]);
   if (!options.dryRun) git(['push', '--quiet', remote, `${commit}:refs/heads/${branch}`]);
 
@@ -118,13 +105,15 @@ async function main() {
   );
   const out = path.join(run, 'pr.published.md');
   await writeFile(out, text);
-  console.log(
+  log(
     `UI_PUBLISH${options.dryRun ? ' (dry run, not pushed)' : ''} ${repo}@${branch} ${commit.slice(0, 12)} · ${images.length} images\npr: ${out}\n`,
   );
-  console.log(text);
+  log(text);
 }
 
-main().catch((error) => {
-  console.error(`单页验证截图未能发布：${error.message.split('\n')[0]}`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  publishScreenshots(process.argv.slice(2)).catch((error) => {
+    console.error(`单页验证截图未能发布：${error.message.split('\n')[0]}`);
+    process.exitCode = 1;
+  });
+}
