@@ -1,0 +1,12 @@
+{
+  "files": [
+    {
+      "path": "docs/dev-rules/server-channel-review.md",
+      "description": "服务器通道调用的重点审查规则：用途、共享容量、累计压力、安全可靠性及仓库 P0/P1 证据口径。"
+    },
+    {
+      "path": "docs/dev-rules/development-workflow.md",
+      "description": "第 3 节定义仓库 P0/P1/P2 严重度；只报告有依据的 P0/P1。"
+    }
+  ]
+}
