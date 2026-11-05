@@ -294,6 +294,18 @@ it('adds the highest shared weekly quota only to the open native panel and clear
     plan: 'menubar.shared.highestWeekly', saySecondary: 'menubar.shared.highestWeeklyNote',
   });
   expect(overview.latest()?.input.sources).toEqual([]);
+  let finishRefresh!: (value: unknown) => void;
+  mocks.sharedRead.mockImplementationOnce(() => new Promise(done => { finishRefresh = done; }));
+  const beforeRefresh = mocks.publish.mock.calls.length;
+  mocks.onHelperMessage?.({ type: 'refresh' });
+  await vi.advanceTimersByTimeAsync(0);
+  // The helper resets .detail to .main if any intermediate publication removes this id.
+  for (const [view] of mocks.publish.mock.calls.slice(beforeRefresh)) {
+    expect(view.details['share:share-one']).toBeDefined();
+  }
+  finishRefresh(response);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(mocks.publish.mock.lastCall?.[0].details['share:share-one']).toBeDefined();
   mocks.onHelperMessage?.({ type: 'panel', open: false });
   expect(mocks.publish.mock.lastCall?.[0].sources).toEqual([]);
   const calls = mocks.sharedRead.mock.calls.length;

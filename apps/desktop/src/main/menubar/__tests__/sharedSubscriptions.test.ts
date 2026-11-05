@@ -133,6 +133,59 @@ it('reselects the weekly maximum on refresh without retaining the former account
   h.reader.setOpen(false);
 });
 
+// Regression: removing the source for even one publication makes the native detail page
+// return to main. A same-identity refresh must keep it until the new result is available.
+it('keeps the source during a manual refresh and replaces it when the read completes', async () => {
+  const h = harness();
+  h.reader.setOpen(true);
+  await vi.advanceTimersByTimeAsync(0);
+  const previous = h.sources;
+  let resolve!: (value: unknown) => void;
+  h.read.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  h.reader.refresh();
+  expect(h.sources).toBe(previous);
+  const next = quota();
+  next.quota!.accounts[0]!.windows[0]!.remainingPercent = 82;
+  resolve(next);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.sources[0]?.windows[0]?.usedPercent).toBe(18);
+  h.reader.setOpen(false);
+});
+
+it.each(['failed', 'permission'])('clears a preserved reading after a manual refresh is %s', async kind => {
+  const h = harness();
+  h.reader.setOpen(true);
+  await vi.advanceTimersByTimeAsync(0);
+  const previous = h.sources;
+  let resolve!: (value: unknown) => void;
+  let reject!: (reason: Error) => void;
+  h.read.mockImplementationOnce(() => new Promise((done, fail) => { resolve = done; reject = fail; }));
+  h.reader.refresh();
+  expect(h.sources).toBe(previous);
+  if (kind === 'failed') reject(new Error('offline'));
+  else resolve({ ...quota(), capabilities: { quota: false, usage: false } });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.sources).toEqual([]);
+  h.reader.setOpen(false);
+});
+
+it.each(['owner', 'relationship'])('clears a populated reading immediately on %s change during refresh', async kind => {
+  const h = harness();
+  h.reader.setOpen(true);
+  await vi.advanceTimersByTimeAsync(0);
+  let resolve!: (value: unknown) => void;
+  h.read.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  h.reader.refresh();
+  expect(h.sources).toHaveLength(1);
+  if (kind === 'owner') h.changeOwner();
+  else h.changeShares([{ ...share, status: 'paused' }]);
+  expect(h.sources).toEqual([]);
+  resolve(quota());
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.sources).toEqual([]);
+  h.reader.setOpen(false);
+});
+
 it.each(['close', 'owner', 'relationship'])('drops late responses after %s changes', async kind => {
   const h = harness();
   let resolve!: (value: unknown) => void;

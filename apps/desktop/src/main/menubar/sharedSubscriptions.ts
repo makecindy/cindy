@@ -48,17 +48,16 @@ export class SharedQuotaReader {
   private open = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private dispose: (() => void) | null = null;
+  private identity: string | null = null;
   constructor(private readonly deps: SharedQuotaDeps) {}
 
   setOpen(open: boolean): void {
     if (this.open === open) return;
     this.open = open;
     if (open) {
-      let identity = JSON.stringify([this.deps.scope(), this.deps.shares()]);
       this.dispose = this.deps.subscribe(() => {
         const next = JSON.stringify([this.deps.scope(), this.deps.shares()]);
-        if (next === identity) return;
-        identity = next;
+        if (next === this.identity) return;
         this.refresh();
       });
       this.refresh();
@@ -66,19 +65,32 @@ export class SharedQuotaReader {
       this.dispose?.();
       this.dispose = null;
       this.clear();
+      this.identity = null;
     }
   }
 
-  private clear(): void {
+  private invalidateRead(): void {
     this.revision++;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+  }
+
+  private clear(): void {
+    this.invalidateRead();
     this.deps.publish([]);
   }
 
   refresh(): void {
-    this.clear();
-    if (!this.open) return;
+    if (!this.open) {
+      this.clear();
+      return;
+    }
+    const identity = JSON.stringify([this.deps.scope(), this.deps.shares()]);
+    this.invalidateRead();
+    // Keep the detail source mounted during a same-identity manual refresh. A scope or
+    // relationship change must still remove the old reading before its replacement arrives.
+    if (identity !== this.identity) this.deps.publish([]);
+    this.identity = identity;
     void this.read(this.revision);
   }
 
