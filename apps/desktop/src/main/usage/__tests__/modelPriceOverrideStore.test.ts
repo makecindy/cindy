@@ -185,6 +185,32 @@ describe('model price override sparse persistence', () => {
     ).toBe(false);
   });
 
+  // Settings expose a single cache-write price. The 1h tariff must follow that
+  // edit (keeping the provider's 1h/5m ratio) and, being non-editable, must
+  // not turn an existing saved override into a "reference changed" conflict.
+  it('projects the 1h cache-write price with cache-write edits and keeps it out of conflicts', () => {
+    const target = { providerId: 'anthropic', agent: 'claude-code' as const, modelId: 'claude-opus-5-5' };
+    const reference = providerReferencePriceQuote(
+      'anthropic', 'claude-opus-5-5', BUNDLED_CATALOG.modelRegistry,
+      { agent: 'claude-code', at: '2026-11-05' },
+    )!;
+    expect(reference.cacheCreate1hPerMtok).toBe(8);
+    expect(__testing.mergedQuote(target, reference, { inputPerMtok: 3 })?.cacheCreate1hPerMtok).toBe(8);
+    expect(__testing.mergedQuote(target, reference, { cacheCreatePerMtok: 10 })?.cacheCreate1hPerMtok).toBe(16);
+    expect(__testing.mergedQuote(target, reference, { cacheCreatePerMtok: null })?.cacheCreate1hPerMtok)
+      .toBeUndefined();
+
+    const savedBeforeThisField = __testing.comparable({
+      ...reference,
+      inputTokenPriceBands: reference.inputTokenPriceBands?.map((band) => {
+        const { cacheCreate1hPerMtok, ...rest } = band;
+        void cacheCreate1hPerMtok;
+        return rest;
+      }),
+    });
+    expect(__testing.sameComparable(savedBeforeThisField, __testing.comparable(reference))).toBe(true);
+  });
+
   it('preserves remote long-context multipliers when applying a sparse local override', () => {
     const inputTokenPriceBands = [
       {

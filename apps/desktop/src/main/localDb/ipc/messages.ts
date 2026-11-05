@@ -261,6 +261,8 @@ export interface PriorUserRoundCost {
   money: RegionalMoney | null;
   costUsd: number;
   hasEstimatedValue: boolean;
+  /** 本轮是该任务（或 /clear 之后）第一条真实用户请求。 */
+  isFirstUserRound?: boolean;
 }
 
 const VALID_ROLES: ReadonlySet<MessageRole> = new Set([
@@ -2265,8 +2267,10 @@ export async function readPriorUserRoundCost(
       ),
     )
     .orderBy(desc(messages.createdAt), desc(messageRowid));
-  const boundary = userRows.find((row) => !isAutoResumeUserMessage(row.agentMeta));
+  const realUserRows = userRows.filter((row) => !isAutoResumeUserMessage(row.agentMeta));
+  const boundary = realUserRows[0];
   if (!boundary) return { money: null, costUsd: 0, hasEstimatedValue: false };
+  const isFirstUserRound = realUserRows.length === 1;
 
   const afterBoundary = or(
     gt(messages.createdAt, boundary.createdAt),
@@ -2326,6 +2330,7 @@ export async function readPriorUserRoundCost(
     costUsd: money?.currency === 'USD' ? money.amount : 0,
     hasEstimatedValue,
     ...(additionalCosts.length ? { additionalCosts } : {}),
+    ...(isFirstUserRound ? { isFirstUserRound } : {}),
   };
 }
 

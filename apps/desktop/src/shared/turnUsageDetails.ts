@@ -29,6 +29,11 @@ export interface TurnUsageDetails extends UsageBillingSource {
   turnDurationMs?: number;
   /** cacheRead / (input + cacheRead + cacheCreate)，无输入分母时为 null。 */
   cacheHitRate: number | null;
+  /**
+   * 本轮是任务（或 /clear 之后）的第一轮用户请求：此前没有可复用的 prompt cache，
+   * 命中率为 0 是必然而非缓存被打断。老消息无此字段。
+   */
+  firstUserRound?: true;
   /** 本轮主要模型；能确定时填写。 */
   model?: string;
   /** 本轮涉及多个模型时的分桶列表。 */
@@ -61,6 +66,7 @@ export interface BuildTurnUsageDetailsInput extends UsageBillingSource {
   >;
   durationMs?: number;
   turnDurationMs?: number;
+  firstUserRound?: boolean;
 }
 
 function sanitizeToken(value: unknown): number {
@@ -169,6 +175,7 @@ export function aggregateTurnUsageDetails(
     models: modelNames,
     perModelCost: perModel,
     additionalCosts: [...details].reverse().find(detail => detail.additionalCosts)?.additionalCosts,
+    firstUserRound: details.some((detail) => detail.firstUserRound === true),
   });
 }
 
@@ -232,6 +239,7 @@ export function buildTurnUsageDetails(input: BuildTurnUsageDetailsInput): TurnUs
     ...(model ? { model } : {}),
     ...(models ? { models } : {}),
     ...(perModelCost ? { perModelCost } : {}),
+    ...(input.firstUserRound === true ? { firstUserRound: true as const } : {}),
   };
 }
 
@@ -254,6 +262,7 @@ export function normalizeTurnUsageDetails(value: unknown): TurnUsageDetails | un
         : undefined,
       durationMs: typeof raw.durationMs === 'number' ? raw.durationMs : undefined,
       turnDurationMs: typeof raw.turnDurationMs === 'number' ? raw.turnDurationMs : undefined,
+      firstUserRound: raw.firstUserRound === true,
       perModelCost: Array.isArray(raw.perModelCost)
         ? raw.perModelCost.map((e) =>
             e && typeof e === 'object'
