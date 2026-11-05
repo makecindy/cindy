@@ -12,6 +12,16 @@ export function isOpenRouterModelsUrl(value: string): boolean {
   } catch { return false; }
 }
 
+/** Only the official, unfiltered OpenHubs endpoint is a complete account inventory. */
+export function isOpenHubsModelsUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.origin === 'https://openhubs.zhidemai.com'
+      && url.pathname.replace(/\/+$/, '') === '/v1/models'
+      && !url.search && !url.hash && !url.username && !url.password;
+  } catch { return false; }
+}
+
 /** Codex manifests use { effort, description }; Sub2API's Grok list uses { value, label }.
  * Missing/malformed lists remain unknown; an explicit empty or none-only list stays empty.
  */
@@ -39,6 +49,16 @@ export function parseModelsListResponse(
   json: unknown,
   sourceUrl?: string,
 ): DiscoveredModel[] | null {
+  // OpenHubs can return HTTP 200 with a business error and an empty data array.
+  // Such a failure must never clear the wizard's offline recommendations.
+  if (sourceUrl && isOpenHubsModelsUrl(sourceUrl)) {
+    if (!json || typeof json !== 'object' || Array.isArray(json)) return null;
+    const response = json as { data?: unknown; error?: unknown; error_code?: unknown };
+    if (!Array.isArray(response.data) || response.error != null
+      || (response.error_code !== undefined && response.error_code !== 0)) return null;
+    if (response.data.some(model => !model || typeof model !== 'object'
+      || typeof model.id !== 'string' || !model.id.trim())) return null;
+  }
   const list = (() => {
     if (Array.isArray(json)) return json;
     if (!json || typeof json !== "object") return null;
