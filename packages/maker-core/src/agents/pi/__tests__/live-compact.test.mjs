@@ -18,7 +18,7 @@ const FAKE_GOOGLE_KEY = ['AIza', 'FixturePlaceholder012345678901234567'].join(''
 const FAKE_DB_PASSWORD = ['fixture', 'db-password'].join('-');
 const FAKE_OPENAI_KEY_2 = ['sk', 'fixture-openai-key-0987654321'].join('-');
 
-const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, writeOwner } = await import(
+const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, writeOwner, orderedDrainDrafts } = await import(
   '../../../../extensions/live-compact/index.ts'
 );
 
@@ -93,6 +93,11 @@ describe('live compact spine selection', () => {
     expect(out).toContain('[REDACTED]');
     // 小于阈值的普通文本不能被误伤。
     expect(out).toContain('sk-short');
+    // JSON 形态:闭引号夹在键名与冒号之间,也要按同一套规则打码。
+    const json = redactSecrets('{"password":"example-password-value","api_key":"example-api-key-value"}');
+    expect(json).not.toContain('example-password-value');
+    expect(json).not.toContain('example-api-key-value');
+    expect(json).toContain('"password":"[REDACTED]"');
   });
 
   it('masks cloud keys, connection-string passwords and PEM blocks', () => {
@@ -496,6 +501,17 @@ describe('live compact 1.0.8: cache-safe drains, pointer-only spans, no cross-us
     expect(selectCutIndexes(items, { engine: 'cloud' })).toBeNull();
     expect(selectCutIndexes(items, { engine: 'cloud', totalTokens: 30000 })).toBeNull();
     expect(selectCutIndexes(items, { engine: 'local' })).toBeNull();
+  });
+
+  it('keeps drain cards in chronological order when one run cuts several spans', () => {
+    // pi 只能把卡片追加到尾巴上,而收尾是从新往旧切;不倒回来最老的摘要会落在最下面。
+    const newest = { type: 'custom_message', content: [{ type: 'text', text: 'newest span' }] };
+    const oldest = { type: 'custom_message', content: [{ type: 'text', text: 'oldest span' }] };
+    const edit = { type: 'context_edit', targetId: 'e9', replacement: null };
+    const out = orderedDrainDrafts([edit], [newest, oldest]);
+    expect(out.map((draft) => draft.type)).toEqual(['context_edit', 'custom_message', 'custom_message']);
+    expect(out[1]).toBe(oldest);
+    expect(out[2]).toBe(newest);
   });
 
   it('drains span after span once the predicted request passes the water line', () => {

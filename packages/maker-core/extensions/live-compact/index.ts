@@ -1140,7 +1140,8 @@ function estimateTokens(message: any): number {
 // shadow 会落盘成 .txt,而 toolResult 里可能含 `export KEY=sk-...` 这类命令;
 // 写入前对常见凭证形态打码 —— 卡片里的路径是给模型 read 的,读到打码版比读到明文密钥安全。
 const REDACT_RULES: Array<[RegExp, string]> = [
-  [/((?:api[_-]?key|access[_-]?token|secret|password|passwd|client[_-]?secret)\s*[=:]\s*)(["'`]?)([^\s"'`]{8,})/gi, "$1$2[REDACTED]"],
+  // 键名后允许再跟一个引号:JSON 形态 `{"password":"..."}` 的闭引号夹在键与冒号之间。
+  [/((?:api[_-]?key|access[_-]?token|secret|password|passwd|client[_-]?secret)["'`]?\s*[=:]\s*)(["'`]?)([^\s"'`]{8,})/gi, "$1$2[REDACTED]"],
   [/(?<![A-Za-z0-9])Bearer\s+[A-Za-z0-9._-]{16,}/gi, "Bearer [REDACTED]"],
   [/(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}/g, "[REDACTED]"],
   [/(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9]{20,}|xox[abps]-[A-Za-z0-9-]{10,})/g, "[REDACTED]"],
@@ -2122,7 +2123,8 @@ export default function (pi: ExtensionAPI) {  // Idle cut: pi fires agent_before
     growth.max = Math.max(growth.max, grown);
     const drain = resolved.engine !== "local" && totalTokens + growth.max > KEEP_ROUND_TOKENS;
 
-    const drafts: any[] = [];
+    const edits: any[] = [];
+    const cards: any[] = [];
     let working = entries;
     let simulated = totalTokens;
     try {
@@ -2130,7 +2132,7 @@ export default function (pi: ExtensionAPI) {  // Idle cut: pi fires agent_before
         if (drain && simulated <= KEEP_ROUND_TOKENS) break;
         const result = attemptCut({ state, entries: working, totalTokens: simulated, drain, engine: resolved.engine });
         if (result === null) break;
-        drafts.push(...result.drafts);
+        for (const draft of result.drafts) (draft.type === "custom_message" ? cards : edits).push(draft);
         working = result.entries;
         simulated = result.after;
         if (!drain) break;
@@ -2141,10 +2143,19 @@ export default function (pi: ExtensionAPI) {  // Idle cut: pi fires agent_before
       return undefined;
     }
     growth.last = simulated;
-    if (drafts.length === 0) return undefined;
-    return { entries: [...(event.entries ?? []), ...drafts] };
+    if (edits.length === 0 && cards.length === 0) return undefined;
+    return { entries: [...(event.entries ?? []), ...orderedDrainDrafts(edits, cards)] };
   });
 
+}
+
+/**
+ * 收尾会连切几刀,每刀各带一张卡片。pi 的 custom_message 只能追加到尾巴上,
+ * 直接按切口顺序发就会倒序(最老的摘要落在最下面);上游是原地替换,位置即时间序。
+ * 这里把卡片倒回来,让多次切割后的上下文顺序与上游一致。
+ */
+export function orderedDrainDrafts(edits: any[], cards: any[]): any[] {
+  return [...edits, ...cards.slice().reverse()];
 }
 
 /** 每会话的轮次增长基线:预测下一次请求会不会超过水位(1.0.8)。 */
