@@ -26,6 +26,14 @@ describe('quick-switch panel sizing', () => {
     expect(buildWideSessionNavLayout({ windowWidth: 744, preferredWidth: null }).drawerWidth).toBe(400);
     expect(buildWideSessionNavLayout({ windowWidth: 744, preferredWidth: Number.NaN }).drawerWidth).toBe(400);
   });
+  // Duo portrait: the status area shares the top row, so a settled drawer stops
+  // before it; only the drag on toward full screen passes under it.
+  it('keeps the settled drawer clear of a top trailing status area', () => {
+    expect(buildWideSessionNavLayout({ windowWidth: 669, trailingReserve: 140 }).resizeBounds).toEqual({ min: 300, max: 529 });
+    expect(buildWideSessionNavLayout({ windowWidth: 669, trailingReserve: 140, preferredWidth: 600 }).drawerWidth).toBe(529);
+    expect(buildWideSessionNavLayout({ windowWidth: 669, trailingReserve: 40 }).resizeBounds).toEqual({ min: 300, max: 573 });
+    expect(buildWideSessionNavLayout({ windowWidth: 669, trailingReserve: 0 }).resizeBounds).toEqual({ min: 300, max: 573 });
+  });
   it.each([undefined, Number.NaN, -1, 0, 280, 393, 599])('does not open before a valid layout (%s)', (windowWidth) => {
     const layout = buildWideSessionNavLayout({ windowWidth });
     expect(layout.enabled).toBe(false);

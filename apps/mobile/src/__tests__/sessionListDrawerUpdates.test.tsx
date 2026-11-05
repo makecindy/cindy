@@ -222,6 +222,30 @@ describe('shared Home drawer host', () => {
     await act(async () => root.render(<SessionListDrawer {...props} resize={resize} persistent />));
     expect(container.querySelector('[data-testid="session.paneDivider"]')).toBeNull();
   });
+  // User request 2026-11-06: dragging the edge on to full screen turns the list into
+  // Home. The list follows the finger, and leaving skips the slide-out.
+  it('widens the list while overdragging and leaves without a slide when it becomes Home', async () => {
+    native.reduceMotion = false;
+    const openHome = vi.fn();
+    const resize = { bounds: { min: 300, max: 529 }, onResize: vi.fn(), home: { width: 669, open: openHome } };
+    await act(async () => root.render(<SessionListDrawer {...props} resize={resize} />));
+    expect(native.divider.overdrag).toMatchObject({ limit: 669, commitAt: 621 });
+    await act(async () => native.divider.overdrag.onDrag(640));
+    expect(native.home?.width).toBe(640);
+    expect(native.divider).toMatchObject({ width: 640, left: 640 });
+    await act(async () => native.divider.overdrag.onDrag(null));
+    expect(native.home?.width).toBe(320);
+    await act(async () => { native.divider.overdrag.onDrag(669); native.divider.overdrag.onCommit(); });
+    expect(openHome).toHaveBeenCalledOnce();
+    // The host closes it (Android); there is no exit animation to wait for.
+    await act(async () => root.render(<SessionListDrawer {...props} resize={resize} open={false} />));
+    expect(container.querySelector('[data-testid="sessionDrawer.overlay"]')).toBeNull();
+    // Reopening starts from the stored width and animates normally again.
+    await act(async () => root.render(<SessionListDrawer {...props} resize={resize} />));
+    expect(native.home?.width).toBe(320);
+    await act(async () => root.render(<SessionListDrawer {...props} resize={resize} open={false} />));
+    expect(container.querySelector('[data-testid="sessionDrawer.overlay"]')).not.toBeNull();
+  });
   it('unmounts the invisible blocker even when the animation never calls completion', async () => {
     native.reduceMotion = false;
     await act(async () => root.render(<SessionListDrawer {...props} />));

@@ -5,7 +5,7 @@ import { useTheme } from '@/theme';
 import { navigationChrome, radius, spacing } from '@/theme/tokens';
 
 /** A dedicated edge target; vertical list scrolling never starts a resize. */
-export function SessionPaneDivider({ width, left, top, bottom, bounds, onResize, grip = true }: {
+export function SessionPaneDivider({ width, left, top, bottom, bounds, onResize, grip = true, overdrag }: {
   width: number;
   /** The floating drawer's edge is draggable without a visible grip. */
   grip?: boolean;
@@ -14,17 +14,43 @@ export function SessionPaneDivider({ width, left, top, bottom, bounds, onResize,
   bottom: number;
   bounds: { min: number; max: number };
   onResize(width: number): void;
+  /** Past bounds.max the edge keeps following the finger up to `limit`, shown
+   * through onDrag and never stored. Releasing at `commitAt` or beyond calls
+   * onCommit and keeps the width from before the drag. */
+  overdrag?: { limit: number; commitAt: number; onDrag(width: number | null): void; onCommit(): void };
 }) {
   const { colors } = useTheme();
   const { t } = useTranslation();
   const [dragging, setDragging] = useState(false);
-  const latest = useRef({ width, bounds, onResize });
-  latest.current = { width, bounds, onResize };
+  const latest = useRef({ width, bounds, onResize, overdrag });
+  latest.current = { width, bounds, onResize, overdrag };
   const responder = useMemo(() => {
     let initial = 0;
     const resize = (next: number) => {
       const current = latest.current;
       current.onResize(Math.round(Math.max(current.bounds.min, Math.min(current.bounds.max, next))));
+    };
+    const move = (next: number) => {
+      const { bounds: { max }, overdrag: over } = latest.current;
+      if (over && next > max) {
+        resize(max);
+        over.onDrag(Math.round(Math.min(over.limit, next)));
+        return;
+      }
+      over?.onDrag(null);
+      resize(next);
+    };
+    const release = (next: number) => {
+      const over = latest.current.overdrag;
+      if (over && next >= over.commitAt) {
+        over.onDrag(over.limit);
+        resize(initial);
+        over.onCommit();
+        return;
+      }
+      // Short of full screen the edge settles back within its range.
+      over?.onDrag(null);
+      resize(next);
     };
     const finish = () => {
       setDragging(false);
@@ -35,9 +61,9 @@ export function SessionPaneDivider({ width, left, top, bottom, bounds, onResize,
         initial = latest.current.width;
         setDragging(true);
       },
-      onPanResponderMove: (_event, gesture) => resize(initial + gesture.dx),
-      onPanResponderRelease: (_event, gesture) => { resize(initial + gesture.dx); finish(); },
-      onPanResponderTerminate: () => { resize(initial); finish(); },
+      onPanResponderMove: (_event, gesture) => move(initial + gesture.dx),
+      onPanResponderRelease: (_event, gesture) => { release(initial + gesture.dx); finish(); },
+      onPanResponderTerminate: () => { latest.current.overdrag?.onDrag(null); resize(initial); finish(); },
     });
   }, []);
   return <View {...responder.panHandlers} testID="session.paneDivider"

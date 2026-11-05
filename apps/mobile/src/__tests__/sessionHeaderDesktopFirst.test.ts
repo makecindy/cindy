@@ -192,6 +192,10 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('if (wideSessionNav.enabled) sessionListDrawerWidthRef.current = wideSessionNav.drawerWidth;');
     expect(layout).toContain('width={paneLayout.sidebarWidth}');
     expect(source).toContain('width={sessionListDrawerWidthRef.current}');
+    // 拖到满屏即返回首页:不播返回动画;iOS 抽屉在本路由内,随页面一起弹出,中间不露出任务;
+    // Android 抽屉画在路由之上,仍须先卸载再换页。
+    expect(source).toContain("navigation.setOptions({ animation: 'none' });");
+    expect(source).toContain("if (Platform.OS !== 'ios') { queueDrawerNavigation(goBackToHome); return; }");
     // 选任务失败路径:校验先于关闭动画——先关再弹 Alert 会让焦点归还抢走弹窗焦点。
     expect(source).toContain("Alert.alert(t('devices.list.error.sessionDeviceNotFound'));\n      return;\n    }\n    // 不派发 NativeStack REPLACE");
   });

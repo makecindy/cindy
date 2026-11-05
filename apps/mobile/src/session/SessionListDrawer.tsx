@@ -13,6 +13,8 @@ import { SessionPaneDivider } from './SessionPaneDivider';
 
 const DRAWER_CLOSE_DISTANCE_RATIO = 1 / 3;
 const DRAWER_CLOSE_VELOCITY = -800;
+/** Releasing the edge this close to full screen goes back to Home. */
+const DRAWER_HOME_SLOP = 48;
 
 /** Container only: Home owns every list row, search, group, menu and subscription. */
 export function SessionListDrawer({ currentSessionId, persistent = false, newSessionInSystemBar = false,
@@ -31,15 +33,25 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
   newSessionActionRef?: MutableRefObject<(() => void) | null>;
   open: boolean;
   width: number;
-  /** Floating drawer only: its right edge drags the shared task-list width. */
-  resize?: { bounds: { min: number; max: number }; onResize(width: number): void };
+  /** Floating drawer only: its right edge drags the shared task-list width.
+   * Dragging it on to full screen (`home.width`) turns the list into Home. */
+  resize?: {
+    bounds: { min: number; max: number };
+    onResize(width: number): void;
+    home?: { width: number; open(): void };
+  };
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
   const reduceMotion = useReduceMotionEnabled();
-  const panelWidth = Math.max(1, width + insets.left);
+  // Width while the edge is dragged past its range; never stored as the preference.
+  const [overdragWidth, setOverdragWidth] = useState<number | null>(null);
+  const shownWidth = overdragWidth ?? width;
+  const panelWidth = Math.max(1, shownWidth + insets.left);
+  // A full-screen list becoming Home leaves without the slide-out.
+  const dismissingRef = useRef(false);
   const [mounted, setMounted] = useState(open);
   const mountedRef = useRef(mounted);
   mountedRef.current = mounted;
@@ -54,6 +66,7 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
   // 则由父级在 accessibility 隔离解除后的 commit effect 中完成。
   const finishClose = useCallback(() => {
     if (openRef.current) return;
+    setOverdragWidth(null);
     setMounted(false);
   }, []);
   const previousPersistent = useRef(persistent);
@@ -91,9 +104,13 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
     return () => clearTimeout(timer);
   }, [open, persistent]);
 
+  // Only a new presentation clears it; width changes while open rerun the effect below.
+  useEffect(() => {
+    if (open) dismissingRef.current = false;
+  }, [open]);
   useEffect(() => {
     // reduce-motion 约定:只有 === false 才播动画,null(首帧未知)按不播降级。
-    const animate = reduceMotion === false && !persistent;
+    const animate = reduceMotion === false && !persistent && !dismissingRef.current;
     if (open) {
       setMounted(true);
       // 手势位移并回 progress,从当前视觉位置继续,不跳帧。
@@ -211,7 +228,7 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
             second selection cannot change preferences while its route is discarded. */}
         <View ref={homeContentRef} style={styles.content} pointerEvents={open ? 'auto' : 'none'}
           accessibilityElementsHidden={!open} importantForAccessibility={open ? 'auto' : 'no-hide-descendants'}>
-          <MobileHome newSessionActionRef={newSessionActionRef} width={width} currentSessionId={currentSessionId}
+          <MobileHome newSessionActionRef={newSessionActionRef} width={shownWidth} currentSessionId={currentSessionId}
             newSessionInSystemBar={newSessionInSystemBar} newSessionInHeader={!persistent}
             onSelectSession={onSelectSession} runNavigation={runNavigation} />
         </View>
@@ -222,8 +239,14 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
         It rides the panel's slide and stops taking touches once closing. */}
     {!persistent && resize ? <Animated.View pointerEvents={open ? 'box-none' : 'none'}
       style={[styles.edge, panelStyle]}>
-      <SessionPaneDivider grip={false} width={width} bounds={resize.bounds} onResize={resize.onResize}
-        left={panelWidth} top={topInset ?? insets.top} bottom={insets.bottom} />
+      <SessionPaneDivider grip={false} width={shownWidth} bounds={resize.bounds} onResize={resize.onResize}
+        left={panelWidth} top={topInset ?? insets.top} bottom={insets.bottom}
+        overdrag={resize.home ? {
+          limit: resize.home.width - insets.left,
+          commitAt: resize.home.width - insets.left - DRAWER_HOME_SLOP,
+          onDrag: setOverdragWidth,
+          onCommit: () => { dismissingRef.current = true; resize.home?.open(); },
+        } : undefined} />
     </Animated.View> : null}
   </View>;
 }

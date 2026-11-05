@@ -11,6 +11,9 @@ export interface WideSessionNavLayoutInput {
   windowHeight?: number;
   /** The shared task-list width the user dragged; null until then. */
   preferredWidth?: number | null;
+  /** Width kept clear at the top trailing corner (Duo's status area), so the
+   * drawer's header buttons never settle under it. */
+  trailingReserve?: number;
   /** Retained for existing callers; sizing is platform-independent. */
   platform?: string;
   /** Retained for existing callers; phone and tablet share this behavior. */
@@ -32,7 +35,8 @@ export function buildWideSessionNavLayout(
   const windowWidth = normalizeDimension(input.windowWidth);
   const enabled = windowWidth >= 600;
   if (!enabled) return { drawerWidth: 0, enabled, resizeBounds: null };
-  const max = Math.max(DRAWER_MIN_WIDTH, windowWidth - DRAWER_MIN_SCRIM);
+  const reserve = Math.max(DRAWER_MIN_SCRIM, normalizeDimension(input.trailingReserve));
+  const max = Math.max(DRAWER_MIN_WIDTH, windowWidth - reserve);
   const resizeBounds = { min: DRAWER_MIN_WIDTH, max };
   const preferred = input.preferredWidth;
   const requested = typeof preferred === 'number' && Number.isFinite(preferred) ? preferred : DRAWER_DEFAULT_WIDTH;
