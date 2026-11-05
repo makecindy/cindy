@@ -222,7 +222,7 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
         It rides the panel's slide and stops taking touches once closing. */}
     {!persistent && resize ? <Animated.View pointerEvents={open ? 'box-none' : 'none'}
       style={[styles.edge, panelStyle]}>
-      <SessionPaneDivider width={width} bounds={resize.bounds} onResize={resize.onResize}
+      <SessionPaneDivider grip={false} width={width} bounds={resize.bounds} onResize={resize.onResize}
         left={panelWidth} top={topInset ?? insets.top} bottom={insets.bottom} />
     </Animated.View> : null}
   </View>;

@@ -202,7 +202,7 @@ describe('shared Home drawer host', () => {
     }
   });
   // User request 2026-11-06: the floating drawer's edge drags the shared width like the
-  // side column. The handle is a sibling of the panel, never the close gesture's child.
+  // side column, without showing a grip. The handle is a sibling of the panel, never the close gesture's child.
   it('resizes the floating drawer from its edge and drops the handle when docked or closing', async () => {
     native.reduceMotion = false;
     const onResize = vi.fn();
@@ -211,7 +211,7 @@ describe('shared Home drawer host', () => {
     const divider = container.querySelector('[data-testid="session.paneDivider"]');
     expect(divider).not.toBeNull();
     expect(container.querySelector('[data-testid="sessionDrawer.panel"]')?.contains(divider)).toBe(false);
-    expect(native.divider).toMatchObject({ width: 320, left: 320, bounds: resize.bounds });
+    expect(native.divider).toMatchObject({ width: 320, left: 320, bounds: resize.bounds, grip: false });
     native.divider.onResize(480);
     expect(onResize).toHaveBeenCalledWith(480);
     expect(divider?.parentElement?.getAttribute('data-pointer-events')).toBe('box-none');
