@@ -157,4 +157,20 @@ describe('scanClaudePluginSkills', () => {
       'alpha:one',
     ]);
   });
+
+  it('ignores project-scoped installs so other projects are not offered their Skills', () => {
+    const configDir = tempRoot();
+    const projectPlugin = path.join(configDir, 'work', 'repo', '.claude', 'plugins', 'alpha');
+    writeSkill(path.join(projectPlugin, 'skills', 'one'), 'one');
+    writeJson(path.join(projectPlugin, '.claude-plugin', 'plugin.json'), { name: 'alpha' });
+    writeJson(path.join(configDir, 'plugins', 'installed_plugins.json'), {
+      plugins: {
+        'alpha@market': [{ scope: 'project', installPath: projectPlugin }],
+      },
+    });
+
+    // Claude only loads project-scoped plugins inside that project; a global
+    // Skill list must not advertise commands the session cannot resolve.
+    expect(scanClaudePluginSkills(configDir)).toEqual([]);
+  });
 });

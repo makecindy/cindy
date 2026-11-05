@@ -194,11 +194,20 @@ export function scanClaudePluginSkills(
     if (enabledPlugins[pluginKey] === false) continue;
     if (!Array.isArray(installs)) continue;
 
+    // Only user-scoped installs belong in a global Skill list. Project / local
+    // scoped plugins are loaded by Claude in that one project; advertising them
+    // everywhere would offer commands the running session cannot resolve.
+    // Records without a scope predate the field and are user-level.
+    const userInstalls = installs
+      .map((install) => asRecord(install))
+      .filter((record) => record && (typeof record.scope !== 'string' || record.scope === 'user'));
+    if (userInstalls.length === 0) continue;
+
     const directoryDir = resolveDirectoryPluginDir(pluginKey, marketplaces);
     const pluginDirs = directoryDir
       ? [directoryDir]
-      : installs
-          .map((install) => asRecord(install)?.installPath)
+      : userInstalls
+          .map((record) => record?.installPath)
           .filter((value): value is string => typeof value === 'string' && value.length > 0);
 
     for (const installPath of pluginDirs) {

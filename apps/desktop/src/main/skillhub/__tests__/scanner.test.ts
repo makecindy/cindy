@@ -170,6 +170,40 @@ describe('scanAllSkills', () => {
     });
   });
 
+  it('keeps the scanned plugin Skill name when the Skill folder is a symlink', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-plugin-symlink-'));
+    tempRoots.push(root);
+    const target = path.join(root, 'shared', 'browser-skill');
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(path.join(target, 'SKILL.md'), '---\nname: browser\n---\nBody\n', 'utf-8');
+    const skillDir = path.join(
+      root, '.claude', 'plugins', 'cache', 'alpha', '1.0.0', 'skills', 'browser',
+    );
+    fs.mkdirSync(path.dirname(skillDir), { recursive: true });
+    fs.symlinkSync(target, skillDir, 'dir');
+    const maker = {
+      listCustomizations: vi.fn(async () => ({
+        errors: [],
+        items: [{
+          engine: 'claude-code' as const,
+          kind: 'skill' as const,
+          scope: 'global' as const,
+          name: 'alpha:browser',
+          pluginName: 'alpha',
+          absolutePath: skillDir,
+          mdPath: path.join(skillDir, 'SKILL.md'),
+          files: [],
+        }],
+      })),
+    } as unknown as Maker;
+
+    const result = await scanAllSkills({}, maker);
+
+    // realPath 解析后指向 browser-skill；若用 basename(realPath) 重拼会得到
+    // alpha:browser-skill，与 `/` 菜单里的 alpha:browser 对不上。
+    expect(result.skills[0]).toMatchObject({ name: 'alpha:browser' });
+  });
+
   it('uses the nested skill root when excluding package files', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-nested-exclusion-'));
     tempRoots.push(root);

@@ -191,10 +191,13 @@ export function buildSkillList(input: SkillListProjectionInput): ScanResult {
     const projectHash = project?.hash;
     // skill 类型的 identity 始终是目录名（= market slug），不依赖 frontmatter name。
     // Codex RPC 可能从 frontmatter 取 name 导致与目录名不一致，统一用 basename(realPath)。
-    // Claude Code 插件 Skill 例外：它的可调用名带 `<plugin>:` 命名空间，两个插件
-    // 提供同名 Skill 时必须能区分来源，因此保留扫描阶段算好的完整名字。
+    // Claude Code 插件 Skill 例外：可调用名是扫描阶段算好的 `<plugin>:<skill>`。
+    // 直接用它而不是 realPath 的 basename —— 插件里的 Skill 目录可以是软链
+    // （`skills/browser -> ../shared/browser-skill`），realPath 会指向目标目录，
+    // 用 basename 重拼会得到 `alpha:browser-skill`，与 `/` 菜单的 `alpha:browser`
+    // 对不上，管理页条目也就找不到对应的运行命令。
     const canonicalName = c.kind === 'skill'
-      ? (c.pluginName ? `${c.pluginName}:${path.basename(realPath)}` : path.basename(realPath))
+      ? (c.pluginName ? c.name : path.basename(realPath))
       : c.name;
     // Codex RPC may return 'repo' scope for user-level skills when homedir is
     // used as fallback cwd. If the workingDir doesn't map to a tracked project,
