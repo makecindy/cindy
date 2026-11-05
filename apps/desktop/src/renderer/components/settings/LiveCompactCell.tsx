@@ -1,13 +1,13 @@
 /**
  * LiveCompactCell — Settings → 实验功能区块下的「边做边压 Live Compact」一行。
  *
- * 开关决定**新任务**是否加载内置的 Live Compact pi 扩展:
+ * 开关决定**之后启动的 Pi 任务**是否加载内置的 Live Compact pi 扩展:
  *   - 关闭(默认): 不写扩展、不 --extension,行为与没有该扩展时完全一致。
  *   - 开启: maker-core 把扩展写进会话 internal-extensions,每轮结束时把已完成的
  *     一段对话压成一张本地卡片(要点 + 完整原文的本地路径),上下文涨得更慢。
  *
- * 与 LSP Beta 同一口径: 只对新会话生效 —— pi 进程启动时一次性决定是否加载,
- * 已开 session 不变,toggle 后 toast 明示。
+ * 与 LSP Beta 同一口径: pi 进程启动时一次性决定是否加载 —— 新任务和重新打开的
+ * 历史任务都算「启动」,已在运行的 session 不变,toggle 后 toast 明示。
  *
  * 子行(影子原文): 扩展把被切走的原文写到 <agentHome>/compaction-spine/,这里报体积、
  * 提供打开目录与清理。放在开关下方而不是「存储空间」页:它只对这个功能有意义。
