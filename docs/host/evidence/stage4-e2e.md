@@ -50,3 +50,16 @@ FINAL OK                       just now
 | `pnpm --filter desktop run typecheck` | exit 0 |
 | `GET /health` | `runtime.state=ready`，`agents=["claude-code","codex"]` |
 | `POST /api/input/enqueue` → `/events` | `text`("QUEUE OK") → `done` |
+
+
+## 5. 权限确认（真实回合）
+
+`permissionMode=ask` + “创建文件并回复 DONE”：
+
+```
+事件：status → tool_use? → interaction_request → interaction_dismissed → tool_result_full → text → done
+应答：POST /api/interactions/respond → 200
+结果：/tmp 目标文件内容为 OK，最终回复 DONE
+```
+
+说明 Host 的交互 broker 在真实 Agent 回合中可用（发布请求、接收应答、继续执行）。
