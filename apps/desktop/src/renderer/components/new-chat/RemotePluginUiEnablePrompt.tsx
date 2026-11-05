@@ -34,6 +34,7 @@ function OwnerPrompt({ deviceId }: { deviceId: string }) {
   const [unknown, setUnknown] = useState(false);
   const [ready, setReady] = useState(false);
   const owner = useRef(getDataOwnerGeneration());
+  const wasOnline = useRef(false);
   const live = useRef({ active: true, online: directory.online });
   live.current.online = directory.online;
   const abort = useRef<AbortController | undefined>(undefined);
@@ -58,7 +59,15 @@ function OwnerPrompt({ deviceId }: { deviceId: string }) {
     };
   }, [deviceId]);
   useEffect(() => {
-    if (!directory.online) { abort.current?.abort(); invalidateRemotePluginUiConsent(deviceId); return; }
+    const disconnected = wasOnline.current && !directory.online;
+    wasOnline.current = directory.online;
+    if (!directory.online) {
+      abort.current?.abort();
+      // Each directory Hook starts offline while getState is pending. A new
+      // composer must not invalidate another composer's live shared entry.
+      if (disconnected) invalidateRemotePluginUiConsent(deviceId);
+      return;
+    }
     return subscribeRemotePluginUiConsent(deviceId, value => {
       if (current()) setSnapshot(value);
     });

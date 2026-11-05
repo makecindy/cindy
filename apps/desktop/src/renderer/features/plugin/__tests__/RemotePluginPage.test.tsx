@@ -6,13 +6,22 @@ import { RemotePluginPage } from '../RemotePluginPage';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { projectPluginUiConsent } from '../../../../shared/pluginUiConsent';
 import { ghostInstallApprovalToken } from '../../../../shared/ghost';
-const { invoke, confirm, localGhosts, notices } = vi.hoisted(() => ({
+const { invoke, confirm, localGhosts, notices, directoryMode } = vi.hoisted(() => ({
+  directoryMode: { real: false },
   notices: { success: vi.fn(), info: vi.fn(), error: vi.fn(), warning: vi.fn(), dismiss: vi.fn() },
   invoke: vi.fn(),
   confirm: vi.fn(async () => true),
   localGhosts: vi.fn(),
 }));
-vi.mock('../PluginDevicePicker', async importOriginal => ({ ...await importOriginal<typeof import('../PluginDevicePicker')>(), usePluginDeviceDirectory: () => ({ online: true, target: { name: 'Execution computer' } }) }));
+vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
+  useDeviceLinkDeviceList: () => [{ deviceId: 'computer-a', name: 'Execution computer',
+    online: true, controlEnabled: true, remoteControlEnabled: true, isSelf: false, platform: 'darwin' }],
+}));
+vi.mock('../PluginDevicePicker', async importOriginal => {
+  const original = await importOriginal<typeof import('../PluginDevicePicker')>();
+  return { ...original, usePluginDeviceDirectory: (selected: Parameters<typeof original.usePluginDeviceDirectory>[0]) =>
+    directoryMode.real ? original.usePluginDeviceDirectory(selected) : { online: true, target: { name: 'Execution computer' } } };
+});
 vi.mock('@/lib/toast', () => ({ toast: notices }));
 vi.mock('@/components/new-chat/AddRemoteProjectDialog', () => ({
   AddRemoteProjectDialog: ({ fixedDeviceId, onProjectAdded, onOpenChange }: {
@@ -157,6 +166,7 @@ const configurationResource = (state = 'configured', id = 'weather') => ({
 });
 beforeEach(() => {
   vi.clearAllMocks();
+  directoryMode.real = false;
   setDataOwnerGeneration('test-owner');
   window.electronAPI = {
     deviceLink: {
@@ -1023,6 +1033,59 @@ describe('remote task interactive-page consent prompt', () => {
     expect(notices.error).toHaveBeenCalledWith('settings.ghosts.remote.changed');
     expect(invoke.mock.calls.filter(c => c[2]?.[0]?.actionId === 'management:answer')).toHaveLength(1);
     expect(screen.queryByText('newChat.pluginUi.ready')).toBeNull();
+  });
+  // Unit: the real directory Hook initially reports offline until getState settles.
+  // A second composer used to destroy the first composer's live shared subscription.
+  it('preserves shared consent through directory initialization and refreshes after a real disconnect', async () => {
+    setup(true);
+    directoryMode.real = true;
+    const statusListeners = new Set<(state: { status: string }) => void>();
+    const getState = vi.fn(async () => ({ linkStatus: 'online' }));
+    window.electronAPI.deviceLink.getState = getState as never;
+    window.electronAPI.deviceLink.onStatusChanged = ((listener: (state: { status: string }) => void) => {
+      statusListeners.add(listener);
+      return () => { statusListeners.delete(listener); };
+    }) as never;
+    let push: ((value: unknown) => void) | undefined;
+    const subscribe = vi.fn(listener => { push = listener; return () => {}; });
+    window.electronAPI.deviceLink.onRemotePush = subscribe as never;
+    const first = render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    await screen.findByText('newChat.pluginUi.enable');
+    const reads = () => invoke.mock.calls.filter(c => c[2]?.[0]?.actionId === 'management:snapshot').length;
+    expect(reads()).toBe(1);
+    let resolveState!: (state: { linkStatus: string }) => void;
+    getState.mockImplementationOnce(() => new Promise(resolve => { resolveState = resolve; }));
+    const second = render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    await act(async () => { resolveState({ linkStatus: 'online' }); });
+    expect(screen.getAllByText('newChat.pluginUi.enable')).toHaveLength(2);
+    expect(reads()).toBe(1);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    const normal = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (device, channel, args) => {
+      const result = await normal(device, channel, args);
+      if (args?.[0]?.actionId === 'management:snapshot') result.result.ghosts = [];
+      return result;
+    });
+    vi.useFakeTimers();
+    await act(async () => {
+      push!({ deviceId: 'computer-a', channel: 'maker:remote-resources:changed', payload: { collectionId: 'plugins' } });
+      await vi.advanceTimersByTimeAsync(250);
+    });
+    expect(reads()).toBe(2);
+    expect(screen.queryByText('newChat.pluginUi.enable')).toBeNull();
+    await act(async () => { for (const listener of statusListeners) listener({ status: 'offline' }); });
+    await act(async () => { for (const listener of statusListeners) listener({ status: 'online' }); });
+    expect(reads()).toBe(3);
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    first.unmount();
+    second.unmount();
+    // All-composer route replacement also starts with the real Hook's offline value.
+    const switched = render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    await act(async () => {});
+    expect(reads()).toBe(3);
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    switched.unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
   });
   // Unit: two actual composers and 45 notifications previously caused 90 full reads.
   // Exercise capability negotiation, old Hosts and the shared production subscription.
