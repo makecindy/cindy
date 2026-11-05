@@ -31,13 +31,14 @@ import {
 } from '../../../shared/botGroupChat';
 import { GroupMaskSettings } from './GroupMaskSettings';
 import { GROUP_MASK_SETTINGS_PARAM, useGroupMask } from './groupMaskPresentation';
-import { ChatGroupSettings } from './ChatGroupSettings';
+import { ChatGroupSettings, chatGroupSettingsPageTitle, resolveChatGroupSettingsPage } from './ChatGroupSettings';
 import { BotAvatar } from './BotAvatar';
 import { BotGroupAvatarStack } from './BotGroupAvatars';
 import { BotGroupOrganizerTag } from './BotGroupPlan';
 import {
   BOT_GROUP_MAX_MEMBERS,
   BOT_GROUP_MIN_MEMBERS,
+  BOT_GROUP_SETTINGS_PAGE_PARAM,
   BOT_GROUP_SETTINGS_PARAM,
   botGroupErrorKey,
   botGroupPathBasename,
@@ -56,7 +57,15 @@ export function BotGroupSettingsDrawer() {
   const group = groups.find((candidate) => candidate.id === match?.params.groupId) ?? null;
   const mask = useGroupMask(group?.id);
   const maskOpen = !!mask && searchParams.get(GROUP_MASK_SETTINGS_PARAM) === '1';
-  const back = () => setSearchParams(current => { const next = new URLSearchParams(current); next.delete(GROUP_MASK_SETTINGS_PARAM); return next; }, { replace: true });
+  // A shared group's settings open further pages (群管理, 编辑群资料, …) over the main one.
+  const page = group && !maskOpen ? resolveChatGroupSettingsPage(group, searchParams.get(BOT_GROUP_SETTINGS_PAGE_PARAM)) : null;
+  const subpage = maskOpen || !!page;
+  const back = () => setSearchParams(current => {
+    const next = new URLSearchParams(current);
+    next.delete(GROUP_MASK_SETTINGS_PARAM);
+    next.delete(BOT_GROUP_SETTINGS_PAGE_PARAM);
+    return next;
+  }, { replace: true });
   const open = searchParams.get(BOT_GROUP_SETTINGS_PARAM) === '1' && group !== null;
 
   const close = () => {
@@ -65,6 +74,7 @@ export function BotGroupSettingsDrawer() {
         const next = new URLSearchParams(current);
         next.delete(BOT_GROUP_SETTINGS_PARAM);
         next.delete(GROUP_MASK_SETTINGS_PARAM);
+        next.delete(BOT_GROUP_SETTINGS_PAGE_PARAM);
         return next;
       },
       { replace: true },
@@ -84,18 +94,20 @@ export function BotGroupSettingsDrawer() {
             // CJK IME: Escape during composition only cancels the candidate.
             onEscapeKeyDown={(event) => {
               if (event.isComposing || event.keyCode === 229) event.preventDefault();
-              else if (maskOpen) { event.preventDefault(); back(); }
+              else if (subpage) { event.preventDefault(); back(); }
             }}
             className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-[var(--border-default)] bg-[var(--surface)] outline-none"
             // The header shares the window title strip; without no-drag the page's drag
             // regions underneath swallow the close button's clicks (see windowDrag.tsx).
             style={WINDOW_NO_DRAG_STYLE}
           >
-            <header className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--border-default)] px-5">
-              {maskOpen && <button type="button" onClick={back} aria-label={t('bots.groupChat.settings.title')}
-                className="mr-2 flex h-9 w-9 shrink-0 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"><ArrowLeft size={17} /></button>}
-              <Dialog.Title className="flex-1 text-15 font-medium text-[var(--text-primary)]">
-                {t(maskOpen ? 'bots.groupChat.mask.title' : 'bots.groupChat.settings.title')}
+            <header className={cn('flex h-14 shrink-0 items-center justify-between gap-1 border-b border-[var(--border-default)] pr-3', subpage ? 'pl-2.5' : 'pl-5')}>
+              {subpage && <Tip text={t('bots.groupChat.server.settings.back')}>
+                <button type="button" onClick={back} aria-label={t('bots.groupChat.server.settings.back')}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] outline-none hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"><ArrowLeft size={18} /></button>
+              </Tip>}
+              <Dialog.Title className="min-w-0 flex-1 truncate text-15 font-medium text-[var(--text-primary)]">
+                {maskOpen ? t('bots.groupChat.mask.title') : page ? chatGroupSettingsPageTitle(page, t) : t('bots.groupChat.settings.title')}
               </Dialog.Title>
               <Tip text={t('bots.close')}>
                 <Dialog.Close

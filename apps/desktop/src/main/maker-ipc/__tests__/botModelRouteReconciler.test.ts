@@ -21,6 +21,35 @@ function harness() {
 }
 
 describe('permanent Bot model selection', () => {
+  // Unit regression: ordinary sends/reopen must keep a verified group member
+  // after failover; the old fallback tests only covered runtime overrides.
+  it('keeps the selected group member across sends and reopen, but applies an explicit profile save', async () => {
+    const h = harness();
+    h.state.current = { agentKind: 'codex', model: 'luna', providerId: 'member-account',
+      agentDeviceId: 'member-device', effort: 'medium', fastMode: false };
+    h.state.chain[0]!.agentDeviceId = 'group-owner';
+    const deps = { ownerEpoch: () => 'owner', read: h.read, apply: h.apply,
+      readAppliedGroup: async () => ({ providerId: 'xd', groupDeviceId: 'group-owner' }) };
+    const reconcile = createBotModelRouteReconciler(deps);
+    await reconcile('canonical');
+    await reconcile('canonical');
+    await createBotModelRouteReconciler(deps)('canonical');
+    expect(h.apply).not.toHaveBeenCalled();
+    expect(await reconcile.preview('canonical')).toEqual(h.state.current);
+    await reconcile.profileChanged('canonical');
+    expect(h.apply).toHaveBeenCalledExactlyOnceWith('canonical', expect.objectContaining({
+      agentDeviceId: 'group-owner', providerId: 'xd',
+    }), h.state.current);
+  });
+  it.each(['model', 'group', 'unbound'] as const)('applies a changed %s instead of preserving an unrelated group member', async change => {
+    const h = harness();
+    h.state.current = { agentKind: 'codex', model: change === 'model' ? 'old-model' : 'luna',
+      providerId: 'member', agentDeviceId: 'device', effort: 'medium', fastMode: false };
+    const reconcile = createBotModelRouteReconciler({ ownerEpoch: () => 'owner', read: h.read, apply: h.apply,
+      readAppliedGroup: async () => change === 'unbound' ? null : { providerId: change === 'group' ? 'other' : 'xd', groupDeviceId: null } });
+    await reconcile('canonical');
+    expect(h.apply).toHaveBeenCalledExactlyOnceWith('canonical', expect.objectContaining({ model: 'luna', providerId: 'xd' }), h.state.current);
+  });
   // Real companion automation failed before queued dispatch because its ordinary
   // send reconciler switched back to the profile. Cover that consumer's decision,
   // including cold startup and companions following the global default (unit tier).

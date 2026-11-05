@@ -117,6 +117,10 @@ export async function readSharedGroupStatus(deps: SharedGroupStatusDeps, provide
     if (member.paused) return 'paused';
     const status = view?.members.find((item) => item.key === member.key);
     if (!status) return 'unknown';
+    // O may answer now while its member view is only a bounded snapshot.
+    // Do not publish those old busy/available states under O's fresh reply stamp.
+    if (view?.providerContinuity?.stale
+      || (view?.providerContinuity?.remainingMs !== undefined && view.providerContinuity.remainingMs <= 0)) return 'unknown';
     if (status.state !== 'available' && status.state !== 'full') return status.state;
     // 与实际分配一致：主人没同意过这个人的分享来的电脑不会分给他。
     const reshare = deps.reshareState?.(member) ?? null;

@@ -5,6 +5,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import type { TFunction } from 'i18next';
+
+// #8010: quota reads also consult the controller identity. These component
+// fixtures have no auth host; keep its app bootstrap outside the mocked i18n.
+vi.mock('@/contexts/AuthContext', () => ({
+  useOptionalAuthUser: () => null,
+  useOptionalAuthDeviceId: () => null,
+}));
 const mocks = vi.hoisted(() => ({
   rates: vi.fn(),
   account: vi.fn(),

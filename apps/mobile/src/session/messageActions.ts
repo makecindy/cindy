@@ -11,7 +11,7 @@ import {
 
 export type CopyMessageStatus = 'copied' | 'empty' | 'failed';
 
-export type MobileMessageControlActionId = 'copy' | 'delete' | 'rewind' | 'fork';
+export type MobileMessageControlActionId = 'copy' | 'delete' | 'edit' | 'rewind' | 'fork';
 
 export interface MobileMessageControlInput {
   canCopy: boolean;

@@ -1,5 +1,6 @@
 import { useProviderAccountUsage } from '@/hooks/useProviderAccountUsage';
 import { isKimiCodingProviderView } from '../../../shared/kimiCodingUsage';
+import { isOpenCodeGoProviderView } from '../../../shared/opencodeGoUsage';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -39,6 +40,7 @@ import {
 import { isXaiWeeklyUsageCurrent } from '../../../shared/xaiSubscriptionUsage';
 import { providerWeeklyQuotaSource } from '../new-chat/useProviderWeeklyQuota';
 import {
+  buildOpenCodeGoUsageCard,
   buildKimiUsageCard,
   buildClaudeUsageCard,
   buildCodexUsageCard,
@@ -230,12 +232,31 @@ export function useDeviceProviderSubscriptionCard(
   // Live mirrors observe epoch changes with the same cancellable lifecycle as
   // mount/resume. Native Codex retains its shared one-per-entry recovery probe.
   const { t } = useTranslation();
+  const opencodeGo = useProviderAccountUsage(
+    provider && isOpenCodeGoProviderView(provider) ? provider : undefined,
+    undefined,
+    deviceId,
+  );
   const kimi = useProviderAccountUsage(
     deviceId && isKimiCodingProviderView(provider) ? provider : undefined,
     undefined,
     deviceId,
     { live: options.live === true, active, refreshEpoch: epoch },
   );
+  if (opencodeGo.supported) {
+    const snapshot = opencodeGo.result?.status === 'ready' ? opencodeGo.result.snapshot : null;
+    const card = buildOpenCodeGoUsageCard(
+      snapshot?.kind === 'opencode-go-quota' ? snapshot : null,
+      t,
+    );
+    if (opencodeGo.result?.status === 'unavailable') {
+      card.emptyText = t(`providerAccountUsage.error.${opencodeGo.result.error}`);
+    }
+    if (opencodeGo.result?.status === 'ready' && opencodeGo.result.stale) {
+      card.notices = [{ text: t('providerAccountUsage.kimi.stale'), tone: 'warn' }];
+    }
+    return card;
+  }
   if (deviceId && kimi.supported) {
     const snapshot = kimi.result?.status === 'ready' ? kimi.result.snapshot : null;
     const card = buildKimiUsageCard(snapshot?.kind === 'kimi-coding-quota' ? snapshot : null, t);

@@ -28,6 +28,7 @@ export interface PluginManagementSnapshot {
   settingsPage?: true;
   /** The Host can install an authenticated immutable local-package share. */
   localShares?: true;
+  uiCapabilityApproval?: true;
 }
 export interface PluginManagementReceipt {
   operationId: string;

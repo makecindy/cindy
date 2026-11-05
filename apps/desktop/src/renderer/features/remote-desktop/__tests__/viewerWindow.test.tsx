@@ -602,6 +602,50 @@ it('reveals the fullscreen toolbar from the top edge and keeps it while macOS co
   move(200);
   expect(toolbar.hasAttribute('data-revealed')).toBe(false);
 });
+it('keeps the revealed fullscreen toolbar below the macOS menu bar and titlebar', async () => {
+  const geometry = { width: 1536, availTop: 30, screenY: 0, innerWidth: 1024 };
+  const screenSpy = vi
+    .spyOn(window, 'screen', 'get')
+    .mockImplementation(
+      () => ({ width: geometry.width, availTop: geometry.availTop }) as unknown as Screen,
+    );
+  const screenYSpy = vi.spyOn(window, 'screenY', 'get').mockImplementation(() => geometry.screenY);
+  const innerWidthSpy = vi
+    .spyOn(window, 'innerWidth', 'get')
+    .mockImplementation(() => geometry.innerWidth);
+  onTestFinished(() => {
+    screenSpy.mockRestore();
+    screenYSpy.mockRestore();
+    innerWidthSpy.mockRestore();
+  });
+  fullscreen.value = true;
+  Object.assign(window, {
+    electronAPI: {
+      remoteDesktopViewer: {
+        onActive: () => () => {},
+        onLocale: () => () => {},
+        onCloseRequested: () => () => {},
+        state: async () => ({ generation: 1 }),
+        rendererReady: async () => {},
+        presentationReady: async () => {},
+        inputFocus: async () => {},
+        close: async () => {},
+      },
+    },
+  });
+  const { container } = render(<RemoteDesktopViewerWindow />);
+  await act(async () => {});
+  const toolbar = container.querySelector<HTMLElement>('.remote-viewer-toolbar')!;
+  const inset = () => toolbar.style.getPropertyValue('--remote-viewer-system-inset');
+  // (30pt menu bar + 32pt titlebar) at 150% zoom.
+  expect(inset()).toBe('42px');
+  // A notched display starts fullscreen content below its menu bar.
+  geometry.screenY = 38;
+  geometry.availTop = 38;
+  geometry.innerWidth = 1536;
+  fireEvent(window, new Event('resize'));
+  expect(inset()).toBe('32px');
+});
 it('releases shortcut capture when the picture input loses focus programmatically', async () => {
   const inputFocus = vi.fn(async () => {});
   Object.assign(window, {

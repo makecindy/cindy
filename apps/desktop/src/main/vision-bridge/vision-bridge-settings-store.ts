@@ -20,6 +20,7 @@ import type { VisionBackendRef, VisionBridgeSettings } from '../../shared/vision
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import {
   createOverrideSettingsFile,
+  portableOverrideSettings,
   type OverrideSettingsState,
 } from '../maker-host/override-settings-file.js';
 
@@ -140,3 +141,6 @@ export function resetVisionBridgeSettings(): VisionBridgeSettings {
   cachedSnapshot = null;
   return value;
 }
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const visionBridgePortableSettings = portableOverrideSettings(store);

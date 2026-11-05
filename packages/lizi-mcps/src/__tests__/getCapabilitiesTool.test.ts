@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { RICH_ANSWER_GUIDE } from '@cindy/maker-shared/rich-answer-guide';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
@@ -81,6 +82,17 @@ describe('capabilities data source', () => {
     expect(entry!.detail).toContain('https://cindy.app');
   });
 
+  // 2026-10-31 沙箱实测:Computer Use 关着时 cindy_computer 整个不注册,模型只会说"没有工具";
+  // 这条让它知道能力存在、去哪开、开完怎么接上,并且不许用 shell 模拟按键代替。
+  it('computer-use 说明未开启时的判断方法、设置入口深链与开启后的接续', () => {
+    const entry = findCapability('computer-use');
+    expect(entry).toBeDefined();
+    expect(entry!.detail).toContain('cindy://settings/builtin-tools');
+    expect(entry!.detail).toContain('mcp__cindy_computer__');
+    expect(entry!.detail).toContain('osascript');
+    expect(entry!.detail).toContain('新建任务');
+  });
+
   it('issue-tracker 不套固定问卷,并说明自动附加环境含 Harness / 模型 ID', () => {
     const entry = findCapability('issue-tracker');
     expect(entry).toBeDefined();
@@ -115,6 +127,17 @@ describe('capabilities data source', () => {
 });
 
 describe('get_capabilities tool', () => {
+  // Pi uses this route for advanced syntax beyond its resident basic protocol.
+  // Verify the real public envelope returns the complete protocol.
+  it('serves the complete rich answer protocol through call_tool for Pi', async () => {
+    const h = await connect(createXdtHelperMcpServer({ logger: makeLogger() }, { ...sessionCtx, agentKind: 'pi' }));
+    try {
+      const payload = parsePayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_capabilities', args: { key: 'rich-answers' },
+      } }));
+      expect(payload).toMatchObject({ ok: true, capability: { key: 'rich-answers', detail: RICH_ANSWER_GUIDE } });
+    } finally { await h.cleanup(); }
+  });
   // Unit protocol regression: the public MCP schema must forward the page/filter
   // rather than silently stripping them and returning the same oversized page.
   it('forwards runtime tool search and pagination through the actual MCP entry', async () => {

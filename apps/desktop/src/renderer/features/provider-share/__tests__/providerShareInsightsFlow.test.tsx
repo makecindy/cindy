@@ -114,6 +114,7 @@ vi.mock('../../../../main/device-link/providerShareGuest.js', () => ({
     hostOnline: true,
   }),
   providerShareReceivedRevision: () => 1,
+  providerShareAccessEpoch: () => 1,
   refreshReceivedShares: async () => {},
   getReceivedShares: () => [],
 }));

@@ -7,6 +7,7 @@ import {
   composerDocumentProjectedText,
   composerCaretPosition,
   composerSelectionOffset,
+  displayComposerSlashRuntimeAliases,
   hydrateComposerMessageReferenceBodies,
   isLongComposerPaste,
   mentionComposerNode,
@@ -19,6 +20,7 @@ import {
   type ComposerDocument,
   removeComposerNode,
   replaceComposerTextRange,
+  restoreComposerSlashRuntimeAliases,
   serializeComposerDocument,
   sessionLinkComposerNode,
   slashCommandTextNode,
@@ -182,6 +184,45 @@ describe('mobile composer document', () => {
     const edited = replaceComposerTextRange(document, 7, 8, [{ type: 'text', text: 'x' }]);
     expect(serializeComposerDocument(edited).slashCommandRanges).toEqual([]);
     expect(serializeComposerDocument(edited).text).toBe('/compacx now');
+  });
+
+  it('edits sent runtime slash aliases by their label and resends the wire name', () => {
+    const wire = '/cindy-plugin-cindy-github:pr';
+    const sent = composerDocumentFromSerializedMessage(`${wire} 跟进`, {
+      slashCommandRanges: [{ start: 0, end: wire.length }],
+    });
+    const { document, aliases } = displayComposerSlashRuntimeAliases(sent);
+    expect(composerDocumentProjectedText(document)).toBe('/pr 跟进');
+
+    const edited = replaceComposerTextRange(document, 4, 6, [{ type: 'text', text: '看看' }]);
+    expect(serializeComposerDocument(restoreComposerSlashRuntimeAliases(edited, aliases))).toMatchObject({
+      text: `${wire} 看看`,
+      slashCommandRanges: [{ start: 0, end: wire.length }],
+    });
+    // Typing over the command drops its mark; whatever the user typed is sent as-is.
+    const retyped = replaceComposerTextRange(document, 1, 3, [{ type: 'text', text: 'help' }]);
+    expect(serializeComposerDocument(restoreComposerSlashRuntimeAliases(retyped, aliases)).text)
+      .toBe('/help 跟进');
+  });
+
+  it('keeps each same-named plugin command on its own wire name when editing', () => {
+    const first = '/cindy-plugin-a:pr';
+    const second = '/cindy-plugin-b:pr';
+    const text = `${first} then ${second}`;
+    const sent = composerDocumentFromSerializedMessage(text, {
+      slashCommandRanges: [
+        { start: 0, end: first.length },
+        { start: first.length + 6, end: text.length },
+      ],
+    });
+    const { document, aliases } = displayComposerSlashRuntimeAliases(sent);
+    expect(composerDocumentProjectedText(document)).toBe('/pr then /pr');
+    expect(serializeComposerDocument(restoreComposerSlashRuntimeAliases(document, aliases)).text).toBe(text);
+
+    // Removing one of two ambiguous `/pr` commands must not guess which plugin is left.
+    const removed = replaceComposerTextRange(document, 0, 3, [{ type: 'text', text: '' }]);
+    expect(composerDocumentProjectedText(restoreComposerSlashRuntimeAliases(removed, aliases)))
+      .toBe(' then /pr');
   });
 
   it('serializes long paste atoms with exact presentation ranges', () => {

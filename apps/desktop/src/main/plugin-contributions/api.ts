@@ -159,6 +159,9 @@ export class ContributionApi {
   operation(id: string) {
     return this.request(`/operations/${encodeURIComponent(id)}`, wire.contributionOperation);
   }
+  changes() {
+    return this.request('/changes', wire.contributionChanges);
+  }
   list(input: { query: string; filter: string; cursor?: string }) {
     const params = new URLSearchParams({
       query: input.query.trim(),

@@ -1,5 +1,5 @@
 import { teammateSelectionStyle } from './teammateSelection';
-import { TeammateStatusDot } from './TeammateStatusDot';
+import { TeammateRowStatus } from './TeammateStatusDot';
 import { groupTeammateStatus } from './teammateRosterStatus';
 /**
  * 统一伙伴列表里的群聊行，和伙伴私聊共同按最新消息排序。
@@ -37,7 +37,6 @@ import {
 } from './botGroupPresentation';
 import { botGroupMemberDisplayName } from './BotGroupTimelineModel';
 import { botGroupUnreadCount } from './botReadState';
-import { NavigationCountBadge } from '@/components/sidebar/NavigationCountBadge';
 import { formatBotListTimestamp } from './botListDisplay';
 import type { BotProfile } from './botStore';
 
@@ -113,10 +112,21 @@ export function BotGroupSidebarRow({
       {previewText(group, null)}
     </span>;
     // Several Bots may think at once in a broadcast round's first circle.
-    const speakers = group.speakingBotIds
+    const speakingIds = group.round?.speakers.filter(speaker => speaker.executionStatus !== 'queued').map(speaker => speaker.botId) ?? group.speakingBotIds;
+    const speakers = speakingIds
       .map((botId) => group.members.find((member) => member.botId === botId))
       .filter((member): member is BotGroupSummary['members'][number] => member !== undefined);
     const plan = botGroupSidebarPlanPreview(group);
+    const executions = group.round?.speakers.filter(speaker => speaker.activity !== 'planning');
+    const queued = executions?.find(speaker => speaker.executionStatus === 'queued');
+    const queuedStep = executions?.some(speaker => speaker.activity === 'step' && speaker.executionStatus === 'queued')
+      && !executions?.some(speaker => speaker.activity === 'step' && speaker.executionStatus !== 'queued');
+    if (queued && executions?.every(speaker => speaker.executionStatus === 'queued') && !group.planningBotId) {
+      const member = group.members.find(member => member.botId === queued.botId);
+      return <span data-testid="bot-group-running" className="min-w-0 flex-1 truncate text-12 leading-4 text-[var(--status-bar-accent)]">
+        {t('bots.groupChat.header.queued', { name: member ? botGroupMemberDisplayName(member) : '' })}
+      </span>;
+    }
     const activities = speakers.map((member) =>
       speakingLaneActivity(bots.find((bot) => bot.id === member.botId), islandActivity));
     const activity = activities[0];
@@ -125,7 +135,7 @@ export function BotGroupSidebarRow({
     // Planning and a step in progress read as one line; a step waiting for the user's
     // go-ahead keeps the confirmation hint below instead.
     const planLine =
-      !waiting && isRunningBotGroupSidebarPreview(plan)
+      !waiting && isRunningBotGroupSidebarPreview(plan) && !(plan.kind === 'running' && queuedStep)
         ? plan.kind === 'planning'
           ? t('bots.groupChat.sidebar.planPlanning', { name: plan.botName || names })
           : plan.step !== null && plan.total > 0
@@ -202,26 +212,26 @@ export function BotGroupSidebarRow({
       )}
     >
       <span className="relative shrink-0"><BotGroupSidebarAvatar members={group.members} selected={selected} />
-        <TeammateStatusDot status={groupTeammateStatus(group, bots, islandActivity, unread > 0)} />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex min-w-0 items-center gap-1.5">
           <span className="min-w-0 truncate text-14 leading-5" title={group.name}>{group.name}</span>
           {group.archived && <span className={cn('shrink-0 text-11 leading-4', mutedClass)}>{t('bots.archived')}</span>}
         </span>
-        <span className="flex min-w-0 items-center gap-2">{renderSubtitle(group, mutedClass)}</span>
+        <span className="flex min-w-0 items-center gap-2">
+          {renderSubtitle(group, mutedClass)}
+          <TeammateRowStatus status={groupTeammateStatus(group, bots, islandActivity, unread > 0)} groupUnread={unread} mentioned={unread > 0 && group.serverUnread?.mentioned === true} />
+        </span>
       </span>
       <span
+        data-teammate-timestamp
         className={cn(
           'min-w-10 shrink-0 self-start whitespace-nowrap pt-0.5 text-right text-11 tabular-nums',
           mutedClass,
         )}
       >
         {timestamp}
-        <span className="mt-1 flex items-center justify-end gap-1">
-          {unread > 0 && group.serverUnread?.mentioned && <span className="text-[var(--text-primary)]" title={t('bots.groupChat.server.thread.hintMentioned')}>@</span>}
-          <NavigationCountBadge count={unread} label={t('sidebar.teammateUnreadCount', { count: unread })} className="w-fit" />
-        </span>
+        <span aria-hidden className="mt-1 flex items-center justify-end gap-1" />
       </span>
     </button>
     {children}

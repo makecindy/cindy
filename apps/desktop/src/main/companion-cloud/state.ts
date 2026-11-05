@@ -10,6 +10,8 @@ import type { CompanionLog } from './types.js';
 const pref = z.object({
   hash: z.string(),
   revision: z.number().int().nonnegative(),
+  /** Store entries only: the preference revision the stored value supersedes. */
+  prefRevision: z.number().int().nonnegative().optional(),
   /**
    * This device had exactly this value locally (uploaded it, or applied it while taking over).
    * Only such keys may be tombstoned by the uploader or deleted locally by a cloud tombstone;
@@ -35,6 +37,9 @@ const bot = z.object({
   prefs: z.record(z.string(), pref).default({}),
   /** Revisions were read back from the server once (after a fresh or lost state file). */
   prefsSeeded: z.boolean().optional(),
+  /** The same per value for the companion store (store.ts), whose revisions are its own. */
+  stored: z.record(z.string(), pref).optional(),
+  storeSeeded: z.boolean().optional(),
   /** This computer gave the companion away; never re-register it as home here. */
   demoted: z.boolean().optional(),
   /** Cloud history was added while the canonical Session was busy; rebuild at the next idle point. */
@@ -46,6 +51,10 @@ const bot = z.object({
    * after the move, then cleared by the owner.
    */
   arrivalNotices: z.array(z.enum(['permissions', 'model'])).optional(),
+  /** Room file holding each skill file's content (by sha256), so unchanged files are not sent again. */
+  skillFileMedia: z.record(z.string(), z.string()).optional(),
+  /** Skill files the cloud does not have, learned at take-over; passed on until this computer has them. */
+  skillFileGaps: z.record(z.string(), z.object({ omitted: z.array(z.string()), truncated: z.boolean().optional(), stale: z.record(z.string(), z.string()).optional() })).optional(),
   /** Deleted here while this computer was the home; disable the cloud actor until it succeeds. */
   retirePending: z.boolean().optional(),
 });

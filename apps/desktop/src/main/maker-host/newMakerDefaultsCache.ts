@@ -1,3 +1,4 @@
+import { normalizeWorkerCreationSelection, type WorkerCreationSelection } from '../../shared/workerCreationSelection.js';
 import { normalizeBotModelChain, type BotModelRoute } from '../../shared/botModelChain.js';
 import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
 import {
@@ -60,6 +61,8 @@ export function subscribeNewMakerDefaults(listener: (confirmedRequestId?: string
 
 export interface WorkerCreationPrefsSnapshot {
   workerPermissionMode: OrcaWorkerPermissionMode;
+  selection?: WorkerCreationSelection | null;
+  ownerStamp?: DataOwnerPushStamp;
 }
 
 let workerCreationPrefsCache: WorkerCreationPrefsSnapshot | null = null;
@@ -117,6 +120,8 @@ export function syncNewMakerDraftCache(
 /** Renderer localStorage workerCreationPrefs 的 main 端内存镜像。 */
 export function setWorkerCreationPrefsCache(snapshot: WorkerCreationPrefsSnapshot): void {
   workerCreationPrefsCache = {
+    ...workerCreationPrefsCache,
+    ...snapshot,
     workerPermissionMode: resolveOrcaWorkerPermissionMode(snapshot.workerPermissionMode),
   };
 }
@@ -364,4 +369,11 @@ export function getNewMakerModelTuning(ownerScope: string, agent: 'claude-code' 
   const fastMode = preset?.fastByModel?.[model] ?? provider?.fastByModel?.[model] ?? cache.fastModeByModel[model];
   return { ...(typeof effort === 'string' ? { effort } : {}),
     ...((typeof fastMode === 'boolean' || fastMode === 'ultrafast') ? { fastMode } : {}) };
+}
+
+/** Route mirrors are owner/generation fenced; changing permission alone preserves them. */
+export function getWorkerCreationSelection(owner: DataOwnerPushStamp): WorkerCreationSelection | null {
+  const stamp = workerCreationPrefsCache?.ownerStamp;
+  return stamp?.dataOwnerId === owner.dataOwnerId && stamp?.ownerGeneration === owner.ownerGeneration
+    ? normalizeWorkerCreationSelection(workerCreationPrefsCache?.selection) : null;
 }

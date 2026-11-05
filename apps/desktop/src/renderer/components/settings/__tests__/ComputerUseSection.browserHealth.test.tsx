@@ -569,17 +569,25 @@ describe('ComputerUseSection browser backend health loading', () => {
     expect(api.successToast).toHaveBeenCalledWith('settings.ghosts.toast.installed');
   });
 
-  // Copying Chrome logins only serves the standalone browser, so the switch is hidden elsewhere,
-  // but a switch that is still on must stay reachable so the copied logins can be deleted.
-  it('shows the login copy switch on other browsers only while it is still on', async () => {
+  // Copying Chrome logins only serves the standalone browser, so the switch never shows elsewhere,
+  // even when it is on. Turning it off (and deleting the copy) happens after switching back.
+  it('shows the login copy switch only on the standalone browser', async () => {
     api.getBackendHealth.mockResolvedValue({ active: 'user-browser', status: 'ready', canRecover: false });
-    api.getBackendState.mockResolvedValue({ active: 'user-browser', useRealProfile: false });
+    api.getBackendState.mockResolvedValue({ active: 'user-browser', useRealProfile: true });
     const first = render(<ComputerUseSection workingDir="/tmp/project" />);
     await screen.findByRole('radio', { name: 'settings.computerUse.browserBackend.userBrowser.title' });
     expect(screen.queryByRole('switch', { name: 'settings.computerUse.realProfile.toggleAria' })).toBeNull();
     first.unmount();
 
-    api.getBackendState.mockResolvedValue({ active: 'user-browser', useRealProfile: true });
+    api.getBackendHealth.mockResolvedValue({ active: 'rsb-webview', status: 'ready', canRecover: false });
+    api.getBackendState.mockResolvedValue({ active: 'rsb-webview', useRealProfile: true });
+    const second = render(<ComputerUseSection workingDir="/tmp/project" />);
+    await screen.findByRole('radio', { name: 'settings.computerUse.browserBackend.userBrowser.title' });
+    expect(screen.queryByRole('switch', { name: 'settings.computerUse.realProfile.toggleAria' })).toBeNull();
+    second.unmount();
+
+    api.getBackendHealth.mockResolvedValue({ active: 'external', status: 'ready', canRecover: false });
+    api.getBackendState.mockResolvedValue({ active: 'external', useRealProfile: true });
     render(<ComputerUseSection workingDir="/tmp/project" />);
     expect(
       await screen.findByRole('switch', { name: 'settings.computerUse.realProfile.toggleAria' }),

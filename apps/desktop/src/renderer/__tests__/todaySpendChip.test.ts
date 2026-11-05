@@ -17,6 +17,7 @@ import {
 import {
   buildClaudeUsageCard,
   buildCodexUsageCard,
+  buildOpenCodeGoUsageCard,
   buildXaiUsageCard,
 } from '../components/status/usageCardModel';
 
@@ -272,6 +273,21 @@ const t = ((key: string, values?: Record<string, unknown>) =>
   `${key}${values ? ':' + JSON.stringify(values) : ''}`) as TFunction;
 const now = Date.UTC(2026, 8, 5);
 describe('shared usage-card provider projections', () => {
+  it('shows OpenCode Go rolling, weekly, and monthly meters without calling them weekly', () => {
+    const card = buildOpenCodeGoUsageCard({ kind: 'opencode-go-quota', fetchedAt: now, windows: [
+      { id: 'rolling', usedPercent: 20, limited: false, resetsAt: now + 3_600_000 },
+      { id: 'weekly', usedPercent: 30, limited: false, resetsAt: now + 86_400_000 },
+      { id: 'monthly', usedPercent: 100, limited: true, resetsAt: now + 1_800_000_000 },
+    ] }, t);
+    expect(card.title).toBe('OpenCode Go');
+    expect(card.windows.map(window => window.title)).toEqual([
+      'providerAccountUsage.kimi.limit_5h',
+      'providerAccountUsage.kimi.limit_7d',
+      'providerAccountUsage.kimi.limit_month_total',
+    ]);
+    expect(card.notices?.[0]?.text).toBe('quotaCard.limitRejected');
+  });
+
   it.each([
     [' ProLite ', 'ProLite', 'Pro Lite'],
     ['custom_plan', 'Custom_plan', 'Custom Plan'],

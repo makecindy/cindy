@@ -29,6 +29,25 @@ function channel(
 }
 
 describe('Codex standalone Images API', () => {
+  // #8673 / unit: use the standalone serializer, not public-API assumptions.
+  // Explicit native fields used to be dropped and background overwritten.
+  it('forwards native options for generation and editing over the subscription JSON protocol', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => response());
+    const nativeParameters = { background: 'transparent', output_format: 'png', future_option: { enabled: false, strength: 0 } };
+    const c = channel(fetch);
+    await c.generateImage({ ...params, nativeParameters });
+    const readFile = vi.spyOn(fs, 'readFile').mockResolvedValue(Buffer.from(image, 'base64'));
+    try {
+      await c.editImage({ ...params, imagePaths: ['/test/reference.png'], nativeParameters });
+    } finally {
+      readFile.mockRestore();
+    }
+    for (const [, init] of fetch.mock.calls) {
+      expect(JSON.parse(String(init?.body))).toMatchObject({ model: 'gpt-image-2', prompt: params.prompt, ...nativeParameters });
+    }
+    expect(JSON.parse(String(fetch.mock.calls[1]?.[1]?.body)).images).toEqual([{ image_url: 'data:image/png;base64,' + image }]);
+  });
+
   it('generates with the image model, without a Responses host or hosted tool', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(async () => response());
     const result = await channel(fetch).generateImage({

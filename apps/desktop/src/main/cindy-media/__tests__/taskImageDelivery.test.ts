@@ -147,13 +147,25 @@ describe('task image delivery', () => {
     expect(images.text).not.toContain(source);
   });
 
+  // These cases protect realpath-based alias reconciliation and containment.
+  // Like the existing escape fixture below, Windows uses a real directory
+  // Junction: creating a file symlink requires privileges absent in local QA.
+  async function linkedImage(source: string, alias: string): Promise<string> {
+    if (process.platform !== 'win32') {
+      await fs.symlink(source, alias);
+      return alias;
+    }
+    const directory = alias + '-dir';
+    await fs.symlink(path.dirname(source), directory, 'junction');
+    return path.join(directory, path.basename(source));
+  }
+
   it.each(['inline', 'reference'])('reconciles accepted in-task symlink image/file targets (%s)', async mode => {
     const aliases: string[] = [];
     for (let i = 0; i < 11; i++) {
       const source = path.join(work, `source-${i}.png`), alias = path.join(work, `latest-${i}.png`);
       await fs.writeFile(source, Buffer.concat([PNG, Buffer.from([i])]));
-      await fs.symlink(source, alias);
-      aliases.push(alias);
+      aliases.push(await linkedImage(source, alias));
     }
     const body = mode === 'inline'
       ? aliases.map(alias => `![preview](<${alias}>) [download](<${alias}>)`).join(' ')
@@ -216,8 +228,7 @@ describe('task image delivery', () => {
     const source = path.join(work, 'linked.png');
     await fs.writeFile(source, PNG);
     await fs.link(source, path.join(state.root, 'outside.png'));
-    const alias = mode === 'symlink' ? path.join(work, 'latest.png') : source;
-    if (mode === 'symlink') await fs.symlink(source, alias);
+    const alias = mode === 'symlink' ? await linkedImage(source, path.join(work, 'latest.png')) : source;
     const files = await prepareChatReplyFiles(`![preview](<${alias}>) [download](<${alias}>)`, 's', () => {});
     const images = await prepareChatReplyImages(files.text, 's', () => {}, files.attachments);
     const attachments = mergeChatReplyAttachments(images.attachments, files.attachments);
@@ -228,9 +239,9 @@ describe('task image delivery', () => {
   it('retains file containment when an image symlink points into the image-only scratchpad root', async () => {
     const scratch = claudeScratchpadPath({ workingDir: work, sdkSessionId: sdk, agentKind: 'cc' })!;
     await fs.mkdir(scratch, { recursive: true });
-    const source = path.join(scratch, 'scratch.png'), alias = path.join(work, 'latest.png');
+    const source = path.join(scratch, 'scratch.png');
     await fs.writeFile(source, PNG);
-    await fs.symlink(source, alias);
+    const alias = await linkedImage(source, path.join(work, 'latest.png'));
     const files = await prepareChatReplyFiles(`![preview](<${alias}>) [download](<${alias}>)`, 's', () => {});
     const images = await prepareChatReplyImages(files.text, 's', () => {}, files.attachments);
     const attachments = mergeChatReplyAttachments(images.attachments, files.attachments);
@@ -503,6 +514,27 @@ describe('task image delivery', () => {
     expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 1 });
   });
 
+  it('delivers a local image whose path has bare spaces through both channel collectors', async () => {
+    // 2026-11-03 Telegram: `![…](…/Application Support/…png)` is not a CommonMark image,
+    // so the reply carried the raw path with no attachment and no incomplete notice.
+    const folder = path.join(state.root, 'Application Support', 'generated images');
+    await fs.mkdir(folder, { recursive: true });
+    const source = path.join(folder, 'design.png');
+    await fs.writeFile(source, PNG);
+    const example = `\`![example](${source})\``;
+    const text = `Design:\n\n![Credits mockup](${source})\n\n${example}`;
+    const personal = await materializeLocalMarkdownImages({ text, workingDir: work, sessionId: 's' });
+    expect(personal.absPaths).toHaveLength(1);
+    expect(personal.text).toBe(`Design:\n\nCredits mockup\n\n${example}`);
+    const hook = await collectOutboundAttachments(await materializeTaskImageText('s', text), [], {
+      resolveImageUrl: resolveSafe,
+      log: { warn: vi.fn() },
+    });
+    expect(hook.skipped).toBe(0);
+    expect(hook.attachments).toHaveLength(1);
+    expect(hook.text).toContain(example);
+  });
+
   it('channel delivery accepts images outside the task directory; chat restore stays task-scoped', async () => {
     // 2026-10-26 Slack: previews saved outside the workdir showed on desktop but never reached the channel.
     const outside = path.join(state.root, 'elsewhere');
@@ -733,6 +765,40 @@ describe('Markdown image contract', () => {
     expect(rewriteTaskImageReferences(shared, replacements)).not.toContain('/tmp/a.png');
   });
 
+  it('recovers bare-space local destinations only from plain text, with original offsets', () => {
+    const local = '/Users/me/Library/Application Support/shot (1).png';
+    const text = `**Before** ![a](${local} "cap") and ![b](C:\\Users\\me\\My Pictures\\b.JPG)`;
+    const refs = taskImageReferences(text);
+    expect(refs.map(ref => [ref.url, ref.title ?? null, text.slice(ref.start, ref.end) === ref.raw])).toEqual([
+      [local, 'cap', true],
+      ['C:\\Users\\me\\My Pictures\\b.JPG', null, true],
+    ]);
+    expect(rewriteTaskImageReferences(text, new Map([[local, 'cindy-media://blobs/test.png']]))).toBe(
+      `**Before** ![a](cindy-media://blobs/test.png "cap") and ![b](C:\\Users\\me\\My Pictures\\b.JPG)`,
+    );
+  });
+
+  it('keys bare-space recovery to the source: entities elsewhere do not hide it, escapes keep it literal', () => {
+    const local = '/tmp/my shot.png';
+    const withEntity = `Design &amp; preview: ![pic](${local})`;
+    const [entityRef] = taskImageReferences(withEntity);
+    expect(entityRef.url).toBe(local);
+    expect(withEntity.slice(entityRef.start, entityRef.end)).toBe(`![pic](${local})`);
+    expect(taskImageReferences(`\\![example](${local})`)).toEqual([]);
+    // An escaped backslash does not escape the image.
+    expect(taskImageReferences(`\\\\![pic](${local})`).map(ref => ref.url)).toEqual([local]);
+  });
+
+  it.each([
+    ['relative path', '![a](docs/my shot.png)'],
+    ['non-image file', '![a](/tmp/my report.pdf)'],
+    ['remote URL', '![a](https://example.com/my shot.png)'],
+    ['inline code', '`![a](/tmp/my shot.png)`'],
+    ['code block', '```\n![a](/tmp/my shot.png)\n```'],
+  ])('leaves a bare-space %s alone', (_case, text) => {
+    expect(taskImageReferences(text)).toEqual([]);
+  });
+
   it('supports spaces, parentheses and duplicate destinations without changing surrounding text', () => {
     const text = 'before ![a](</tmp/a (1).png> "caption") after';
     const ref = taskImageReferences(text)[0];
@@ -752,7 +818,8 @@ it.each(['image/png', 'video/mp4'])('hook outbox manages %s through recovery and
     finalText: 'done', errorMessage: null, usage: { durationMs: 0 }, attachments };
   const store = createHookMediaStore();
   const media = await store.prepare(turn, () => {});
-  const { attachments: _, ...text } = turn;
+  const text = { ...turn };
+  delete text.attachments;
   const filePath = path.join(state.root, 'hook-ledger.json');
   const log = { warn: vi.fn() };
   const saved = { connectionId: 'x', requestId: 'r', ack: { requestId: 'r', result: 'accepted' as const,

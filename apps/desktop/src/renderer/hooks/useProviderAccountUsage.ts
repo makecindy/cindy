@@ -15,6 +15,7 @@
 import { isDeviceLinkRemotePushCurrent } from '../lib/remoteDataOwnerPushFence';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '../contexts/dataOwnerGeneration';
 import { isKimiCodingProviderView } from '../../shared/kimiCodingUsage';
+import { isOpenCodeGoProviderView } from '../../shared/opencodeGoUsage';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { AgentKind, ProviderView } from '@cindy/model-providers';
@@ -22,6 +23,7 @@ import type { AgentKind, ProviderView } from '@cindy/model-providers';
 import {
   PROVIDER_ACCOUNT_USAGE_AGENTS,
   parseKimiAccountUsageResult,
+  parseOpenCodeGoAccountUsageResult,
   type ProviderAccountUsageResult,
 } from '../../shared/providerAccountUsage';
 import {
@@ -51,10 +53,12 @@ export function useProviderAccountUsage(
   const owner = getDataOwnerGeneration();
   const [revision, setRevision] = useState(0);
   const kimi = isKimiCodingProviderView(provider, agent);
+  const opencodeGo = isOpenCodeGoProviderView(provider, agent);
+  const structuredQuota = kimi || opencodeGo;
   const supported =
-    !!provider && !provider.removed && !provider.suspended && (!kimi || provider.connected) &&
+    !!provider && !provider.removed && !provider.suspended && (!structuredQuota || provider.connected) &&
     (!deviceId?.startsWith('share:')) &&
-    (isKimiCodingProviderView(provider, agent)
+    (structuredQuota
       || (!deviceId && provider.auth?.method !== 'oauth' && (hasDeepSeekOfficialRouteView(provider) || isZhipuCodingPlanProviderView(provider))));
   const identity = JSON.stringify([
     owner,
@@ -104,10 +108,12 @@ export function useProviderAccountUsage(
           forceRefresh: forceRefresh || live,
           ...(agent ? { agent } : {}),
         };
+        const parseResult = opencodeGo ? parseOpenCodeGoAccountUsageResult : parseKimiAccountUsageResult;
+        const channel = opencodeGo ? 'maker:usage:opencode-go' : 'maker:usage:kimi-coding';
         const next = deviceId
-          ? parseKimiAccountUsageResult(await (scheduling
-              ? window.electronAPI.deviceLink.invoke(deviceId, 'maker:usage:kimi-coding', [input], scheduling)
-              : window.electronAPI.deviceLink.invoke(deviceId, 'maker:usage:kimi-coding', [input])))
+          ? parseResult(await (scheduling
+              ? window.electronAPI.deviceLink.invoke(deviceId, channel, [input], scheduling)
+              : window.electronAPI.deviceLink.invoke(deviceId, channel, [input])))
           : await window.electronAPI.maker.fetchProviderAccountUsage(input);
         if (id === requestId.current && isDataOwnerGenerationCurrent(owner)) setState({ identity, result: next, busy: false });
       } catch {
@@ -131,7 +137,7 @@ export function useProviderAccountUsage(
         }
       }
     },
-    [provider?.id, agent, identity, supported, deviceId, owner, live, lifecycle],
+    [provider?.id, agent, identity, supported, deviceId, owner, opencodeGo, live, lifecycle],
   );
 
   useEffect(() => {
@@ -145,7 +151,7 @@ export function useProviderAccountUsage(
   }, [lifecycle]);
 
   useEffect(() => {
-    if (!kimi) return;
+    if (!structuredQuota) return;
     const changed = () => {
       lifecycle.liveRefreshes.clear();
       requestId.current += 1;
@@ -156,7 +162,7 @@ export function useProviderAccountUsage(
         && isDeviceLinkRemotePushCurrent(push, stamp)) changed();
     });
     return window.electronAPI.maker.onProvidersChanged?.(changed);
-  }, [kimi, deviceId, lifecycle]);
+  }, [structuredQuota, deviceId, lifecycle]);
 
   useEffect(() => {
     if (!supported || !active) return;

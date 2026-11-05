@@ -3,14 +3,16 @@
  * message. Stored in messages.agent_meta so old DB schema stays unchanged.
  */
 
+import { groupUsageCostRows, normalizeUsageBillingSource, type UsageBillingSource } from '@cindy/maker-shared/usage-cost-details';
 import {
-  addCompatibleRegionalMoney,
   legacyUsdMoney,
   normalizeRegionalMoney,
   type RegionalMoney,
 } from './regionalMoney.js';
 
-export interface TurnUsageDetails {
+export interface TurnUsageDetails extends UsageBillingSource {
+  /** Snapshot for this user round; not an incremental segment charge. */
+  additionalCosts?: RegionalMoney[];
   /** 新输入 token：未命中缓存、按输入价计费的部分。 */
   inputTokens: number;
   /** 输出 token：Codex 路径沿用现有口径，包含 reasoning 合并量。 */
@@ -23,10 +25,18 @@ export interface TurnUsageDetails {
   totalTokens: number;
   /** 可证明的纯模型生成耗时；不含工具执行/用户等待，用于计算输出速率。 */
   durationMs?: number;
-  /** 整轮 wall-clock 耗时，仅供诊断展示；绝不用于计算输出速率。 */
+  /**
+   * 整轮 wall-clock 耗时。不能直接当输出速率的分母（含工具执行/用户等待）；
+   * 仅作为 durationMs 的上限，避免并行请求累加的生成耗时超过整轮实际耗时。
+   */
   turnDurationMs?: number;
   /** cacheRead / (input + cacheRead + cacheCreate)，无输入分母时为 null。 */
   cacheHitRate: number | null;
+  /**
+   * 本轮是任务（或 /clear 之后）的第一轮用户请求：此前没有可复用的 prompt cache，
+   * 命中率为 0 是必然而非缓存被打断。老消息无此字段。
+   */
+  firstUserRound?: true;
   /** 本轮主要模型；能确定时填写。 */
   model?: string;
   /** 本轮涉及多个模型时的分桶列表。 */
@@ -36,10 +46,11 @@ export interface TurnUsageDetails {
    * (来自 resolveClaudeTurnCostSinks 的 perModel)，含 subagent (如 Task 工具
    * 跑的 Haiku) —— tooltip 据此展示「按模型成本明细」。老消息无此字段。
    */
-  perModelCost?: Array<{ model: string; money: RegionalMoney }>;
+  perModelCost?: Array<{ model: string; money: RegionalMoney } & UsageBillingSource>;
 }
 
-export interface BuildTurnUsageDetailsInput {
+export interface BuildTurnUsageDetailsInput extends UsageBillingSource {
+  additionalCosts?: RegionalMoney[];
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;
@@ -47,17 +58,18 @@ export interface BuildTurnUsageDetailsInput {
   model?: string | null;
   models?: Array<string | null | undefined> | readonly (string | null | undefined)[];
   perModelCost?: ReadonlyArray<
-    | {
+    | (UsageBillingSource & {
         model?: string | null;
         money?: RegionalMoney | null;
         /** 旧消息兼容：历史事实始终是 USD。 */
         costUsd?: number | null;
-      }
+      })
     | null
     | undefined
   >;
   durationMs?: number;
   turnDurationMs?: number;
+  firstUserRound?: boolean;
 }
 
 function sanitizeToken(value: unknown): number {
@@ -88,9 +100,9 @@ function uniqueModels(models: BuildTurnUsageDetailsInput['models']): string[] | 
  */
 function sanitizePerModelCost(
   list: BuildTurnUsageDetailsInput['perModelCost'],
-): Array<{ model: string; money: RegionalMoney }> | undefined {
+): TurnUsageDetails['perModelCost'] {
   if (!list || !Array.isArray(list)) return undefined;
-  const byModel = new Map<string, RegionalMoney>();
+  const rows: NonNullable<TurnUsageDetails['perModelCost']> = [];
   for (const item of list) {
     if (!item || typeof item !== 'object') continue;
     const model = sanitizeModel(item.model);
@@ -101,20 +113,10 @@ function sanitizePerModelCost(
         : undefined;
     const money = structured ?? legacy;
     if (!model || !money || money.amount <= 0) continue;
-    const current = byModel.get(model);
-    byModel.set(
-      model,
-      current
-        ? (addCompatibleRegionalMoney([current, money]) ?? money)
-        : money,
-    );
+    rows.push({ model, money, ...normalizeUsageBillingSource(item) });
   }
-  return byModel.size > 0
-    ? [...byModel.entries()].map(([model, money]) => ({
-        model,
-        money,
-      }))
-    : undefined;
+  return rows.length ? groupUsageCostRows(rows.map(row => ({ ...row, category: 'conversation' })))
+    .map(row => ({ model: row.model, money: row.money, ...normalizeUsageBillingSource(row) })) : undefined;
 }
 
 /**
@@ -129,7 +131,7 @@ export function aggregateTurnUsageDetails(
 ): TurnUsageDetails | null {
   const details = detailsList.filter(
     (item): item is TurnUsageDetails =>
-      Boolean(item && (item.totalTokens > 0 || item.turnDurationMs !== undefined)),
+      Boolean(item && (item.totalTokens > 0 || item.turnDurationMs !== undefined || item.additionalCosts?.length)),
   );
   if (details.length === 0) return null;
 
@@ -137,18 +139,13 @@ export function aggregateTurnUsageDetails(
   const addModel = (model: string | undefined) => {
     if (model && !modelNames.includes(model)) modelNames.push(model);
   };
-  const perModel = new Map<string, RegionalMoney>();
+  const perModel: NonNullable<TurnUsageDetails['perModelCost']> = [];
   for (const detail of details) {
     addModel(detail.model);
     for (const model of detail.models ?? []) addModel(model);
     for (const item of detail.perModelCost ?? []) {
-      const current = perModel.get(item.model);
-      perModel.set(
-        item.model,
-        current
-          ? (addCompatibleRegionalMoney([current, item.money]) ?? item.money)
-          : item.money,
-      );
+      perModel.push({ ...(item.billingSource && item.billingSource !== detail.billingSource
+        ? {} : normalizeUsageBillingSource(detail)), ...item });
     }
   }
 
@@ -179,7 +176,9 @@ export function aggregateTurnUsageDetails(
     turnDurationMs,
     model: modelNames.length === 1 ? modelNames[0] : undefined,
     models: modelNames,
-    perModelCost: [...perModel.entries()].map(([model, money]) => ({ model, money })),
+    perModelCost: perModel,
+    additionalCosts: [...details].reverse().find(detail => detail.additionalCosts)?.additionalCosts,
+    firstUserRound: details.some((detail) => detail.firstUserRound === true),
   });
 }
 
@@ -220,7 +219,8 @@ export function buildTurnUsageDetails(input: BuildTurnUsageDetailsInput): TurnUs
   const totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheCreateTokens;
   const durationMs = sanitizeDuration(input.durationMs);
   const turnDurationMs = sanitizeDuration(input.turnDurationMs);
-  if (totalTokens <= 0 && turnDurationMs === undefined) return null;
+  const additionalCosts = input.additionalCosts?.map(normalizeRegionalMoney).filter((money): money is RegionalMoney => !!money);
+  if (totalTokens <= 0 && turnDurationMs === undefined && !additionalCosts?.length) return null;
 
   const cacheDenominator = inputTokens + cacheReadTokens + cacheCreateTokens;
   const cacheHitRate = cacheDenominator > 0 ? cacheReadTokens / cacheDenominator : null;
@@ -229,6 +229,8 @@ export function buildTurnUsageDetails(input: BuildTurnUsageDetailsInput): TurnUs
   const perModelCost = sanitizePerModelCost(input.perModelCost);
 
   return {
+    ...normalizeUsageBillingSource(input),
+    ...(additionalCosts?.length ? { additionalCosts } : {}),
     inputTokens,
     outputTokens,
     cacheReadTokens,
@@ -240,6 +242,7 @@ export function buildTurnUsageDetails(input: BuildTurnUsageDetailsInput): TurnUs
     ...(model ? { model } : {}),
     ...(models ? { models } : {}),
     ...(perModelCost ? { perModelCost } : {}),
+    ...(input.firstUserRound === true ? { firstUserRound: true as const } : {}),
   };
 }
 
@@ -249,6 +252,8 @@ export function normalizeTurnUsageDetails(value: unknown): TurnUsageDetails | un
   const raw = value as Record<string, unknown>;
   return (
     buildTurnUsageDetails({
+      ...normalizeUsageBillingSource(raw),
+      additionalCosts: Array.isArray(raw.additionalCosts) ? raw.additionalCosts as RegionalMoney[] : undefined,
       inputTokens: typeof raw.inputTokens === 'number' ? raw.inputTokens : undefined,
       outputTokens: typeof raw.outputTokens === 'number' ? raw.outputTokens : undefined,
       cacheReadTokens: typeof raw.cacheReadTokens === 'number' ? raw.cacheReadTokens : undefined,
@@ -260,10 +265,12 @@ export function normalizeTurnUsageDetails(value: unknown): TurnUsageDetails | un
         : undefined,
       durationMs: typeof raw.durationMs === 'number' ? raw.durationMs : undefined,
       turnDurationMs: typeof raw.turnDurationMs === 'number' ? raw.turnDurationMs : undefined,
+      firstUserRound: raw.firstUserRound === true,
       perModelCost: Array.isArray(raw.perModelCost)
         ? raw.perModelCost.map((e) =>
             e && typeof e === 'object'
               ? {
+                  ...normalizeUsageBillingSource(e),
                   model: (e as Record<string, unknown>).model as string | null | undefined,
                   money: (e as Record<string, unknown>).money as RegionalMoney | null | undefined,
                   costUsd: (e as Record<string, unknown>).costUsd as number | null | undefined,

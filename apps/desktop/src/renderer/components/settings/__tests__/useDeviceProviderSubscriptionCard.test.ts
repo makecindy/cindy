@@ -33,6 +33,8 @@ const mocks = vi.hoisted(() => ({
   presence: new Set<(snapshot: DeviceLinkPresenceSnapshot) => void>(),
   status: new Set<(snapshot: { status: 'stopped' | 'connecting' | 'online' }) => void>(),
   codexUsage: null as Record<string, unknown> | null,
+  providerAccountUsage: null as Record<string, unknown> | null,
+  providerAccountUsageCalls: [] as Array<[string | undefined, string | null]>,
 }));
 
 const snapshot = (fiveHour: number) => ({
@@ -76,6 +78,21 @@ vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', async (importOriginal) => {
     return mocks.realRemoteSubscription ? value : deviceId ? snapshot(13) : null;
   } };
 });
+vi.mock('@/hooks/useProviderAccountUsage', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/hooks/useProviderAccountUsage')>();
+  return {
+    ...actual,
+    useProviderAccountUsage: (...args: Parameters<typeof actual.useProviderAccountUsage>) => {
+      const [source, agent, deviceId = null, options] = args;
+      mocks.providerAccountUsageCalls.push([source?.id, deviceId]);
+      // Keep Kimi's real lifecycle coverage; only the upstream OpenCode Go card
+      // fixture supplies a snapshot, without enabling another account read.
+      const mocked = source?.id === 'opencode-go' && mocks.providerAccountUsage !== null;
+      const value = actual.useProviderAccountUsage(mocked ? undefined : source, agent, deviceId, options);
+      return mocked ? mocks.providerAccountUsage : value;
+    },
+  };
+});
 vi.mock('@/hooks/useRemoteDeviceUsage', async () => {
   const actual = await vi.importActual<typeof import('@/hooks/useRemoteDeviceUsage')>('@/hooks/useRemoteDeviceUsage');
   return {
@@ -95,7 +112,7 @@ vi.mock('@/hooks/useRemoteDeviceUsage', async () => {
   };
 });
 
-import { useDeviceProviderSubscriptionCard } from '../useProviderSubscriptionCard';
+import { useDeviceProviderSubscriptionCard, useProviderSubscriptionCard } from '../useProviderSubscriptionCard';
 import { resetRemoteDeviceUsageMirrorsForTest, useRemoteCodexAccountUsage, useRemoteXaiSubscriptionUsage } from '@/hooks/useRemoteDeviceUsage';
 import { resetRemoteClaudeSubscriptionUsageCacheForTest, useRemoteClaudeSubscriptionUsage } from '@/hooks/useRemoteClaudeSubscriptionUsage';
 import { useProviderUsageSnapshots, useProviderWeeklyQuota } from '../../new-chat/useProviderWeeklyQuota';
@@ -157,6 +174,8 @@ beforeEach(() => {
   mocks.remoteClaude.length = 0;
   mocks.remoteCodex.length = 0;
   mocks.remoteXai.length = 0;
+  mocks.providerAccountUsage = null;
+  mocks.providerAccountUsageCalls.length = 0;
 });
 afterEach(() => {
   cleanup();
@@ -1292,5 +1311,48 @@ describe('useDeviceProviderSubscriptionCard', () => {
     expect(result.current).toBeNull();
     expect(mocks.remoteClaude.every(([deviceId]) => deviceId === null)).toBe(true);
     expect(mocks.localClaude.every(([enabled]) => !enabled)).toBe(true);
+  });
+
+  it('keeps OpenCode Go on the account usage card at the selected computer', () => {
+    const opencode = {
+      ...provider('opencode-go', { method: 'api-key' }),
+      routing: {
+        codex: {
+          upstream: 'https://opencode.ai/zen/go/v1',
+          authStrategy: 'api-key-header',
+        },
+      },
+      opencodeGoUsageAgents: ['codex'],
+    } as ProviderView;
+    mocks.providerAccountUsage = {
+      supported: true,
+      busy: false,
+      refresh: vi.fn(),
+      result: {
+        status: 'ready',
+        stale: false,
+        snapshot: {
+          kind: 'opencode-go-quota',
+          fetchedAt: Date.now(),
+          windows: [
+            { id: 'rolling', usedPercent: 10, limited: false, resetsAt: null },
+            { id: 'weekly', usedPercent: 45, limited: false, resetsAt: null },
+            { id: 'monthly', usedPercent: 65, limited: false, resetsAt: null },
+          ],
+        },
+      },
+    };
+
+    const { result } = renderHook(() => ({
+      subscription: useProviderSubscriptionCard(opencode),
+      local: useDeviceProviderSubscriptionCard(opencode, null),
+      remote: useDeviceProviderSubscriptionCard(opencode, 'mini'),
+    }));
+
+    expect(result.current.subscription).toBeNull();
+    expect(result.current.local?.windows).toHaveLength(3);
+    expect(result.current.remote?.windows).toHaveLength(3);
+    expect(mocks.providerAccountUsageCalls).toContainEqual(['opencode-go', null]);
+    expect(mocks.providerAccountUsageCalls).toContainEqual(['opencode-go', 'mini']);
   });
 });

@@ -23,8 +23,18 @@ token）与 [`engineering-conventions.md`](engineering-conventions.md)（i18n）
 - 有定制价值但不值得占用 UI 注意力的选项进入配置文件、本地配置存储，或由 agent 通过
   自然语言修改。
 - 涉及产品语义、安全边界、数据契约或核心体验的不变量保留为内部常量。
+- 设置页只直接展示推荐用户了解的项（2026-10-02 裁决）：每个设置项分四档——直接展示 →
+  所在分类页底部默认折叠的「高级」→ 不做 GUI、跟 Cindy 说 → 内部常量。「高级」是每个分类
+  页里的折叠区，不做把整类设置堆进去的独立页面；分类沿用现有结构与名字，只合并明显重复的，
+  不为精简大幅压缩分类数；「只能跟 Cindy 说」的项保持少量；新增设置项不默认加可见开关。
 
 ## 2. 默认值与用户 override 分离
+
+截图翻译目标默认跟随当前界面语言，目标语言列表独立于界面支持的语言。
+用户在截图或长截图编辑器的 Cindy 菜单中改选语言后，按本机客户端保存显式覆盖；
+选择「跟随界面语言」删除覆盖。菜单展示本次目标，截图交接携带该目标快照，避免
+进入任务时被后续偏好变化改写。实现见 Desktop 的 `shared/screenshotTranslation.ts`
+与 `main/region-screenshot/translationPreferences.ts`。
 
 - 每个配置项都必须能判断是否被用户显式自定义。
 - 运行时以「系统默认值 + 用户 override」合并出有效值；持久化只记录 override 与必要的
@@ -108,6 +118,46 @@ Pi 使用逐模型 reserveTokens，Claude Code 同步原生环境与 host 判断
 - 隐藏配置必须有清晰 schema、字段说明、取值约束和安全边界，不能依赖零散分支或隐式
   约定。
 - agent 修改配置时，只有用户明确要求才写入 override，不得把当前默认值固化回用户配置。
+
+## 6. 设置搜索与页面定义
+
+设置页新增、改写设置控件时，使用 `defineSettings` 声明稳定 ID、分类、定位锚点、
+标题／说明 key、选项以及可见条件；静态定义放在设置目录的 `*.settings-search.ts`，
+以默认模块的 `entries: Object.values(命名定义集合)` 接入自动发现。
+页面通过 `useSettingDefinition` 复用文案与选项，将 `anchorProps` 放在实际设置行上、
+`controlProps` 交给对应控件。定义文件保持轻量，不加载 React 组件、IPC 或用户配置，
+未打开的页面同样可搜索。现有快捷键直接由 `APP_SHORTCUT_DEFINITIONS` 生成索引。
+
+复杂页面可直接引用命名定义的 `titleKey` / `descriptionKey` / `options`，保留已有的
+翻译参数、动态选项和控件组合；定位用 `id={definition.targetId}`，控件用
+`data-setting-id={definition.id}`。两种写法共用同一份静态定义，均由门禁检查。
+动态设备、账号、模型列表复用原有运行时数据源，搜索登记其所属设置入口；不把用户数据
+复制到静态索引。复用的选择器在调用处绑定对应定义，不用操作按钮豁免设置控件。
+
+`pnpm check:settings-search` 对照 Git HEAD 检查工作区；CI 用事件的可信 base SHA。
+新控件及改写过的控件必须绑定已接入索引的定义；已迁移文件检查全部控件。
+新增的设置标题、说明、选项标签翻译 key 也必须进入索引，避免复用旧控件时只改文案而漏登记。
+未迁移文件仅保留与基准完全相同的旧控件，不维护可被手工上调的豁免基线。
+取消、重试等普通操作可用 `data-settings-search-action` 说明具体理由，不得用它豁免设置项。
+检查覆盖设置目录及通用页引用的伙伴设置；新增外置设置组件或特殊控件时需同步扩展检查范围。
+静态检查不能判断文案语义或任意自定义控件，仍须 review 核对真实设置入口。
+已登记的自定义选择器还需将调用方的 `data-setting-id` 传到实际 DOM；门禁同时读取组件
+实现，检查参数转发，不能仅凭调用处绑定放行。新增自定义控件时同步登记此检查并验证真实渲染。
+
+现有非空设置索引模块已统一为命名的 `defineSettings` 集合；快捷键继续附加原有快捷键
+注册表生成的条目。常规行示例见 `AdditionalSettings.settings-search.ts`，复杂页面和选项
+示例见 `AppearanceSection.settings-search.ts`、`LanguageSection.settings-search.ts`。
+新增设置在所属集合声明后由页面复用，不另建手工索引副本。空的退役分类模块不制造设置。
+搜索词回归通过真实翻译调用生产搜索函数，
+定位回归验证异步挂载后的实际滚动；跨文件锚点合同进入 guard tier。
+
+页面补验用 `pnpm ui:check --page settings-search --case all --theme all`：挂载真实
+`SettingsView`，滚动长页面、展开折叠项，并通过侧栏搜索检查目标高亮与可见位置。
+账号和宿主响应为隔离数据；远程连接另有登录态场景，灵动岛模拟平台能力。
+这类检查不代表原生权限、持久化、真实连接或 macOS 原生行为已验收。
+
+可见性必须与页面一致；新增平台能力条件时同步扩展 `SettingsSearchContext`。
+已知常用别名作为定义的一部分维护，不把中文逐字 OR 匹配当作分词。
 
 ## Review 清单
 

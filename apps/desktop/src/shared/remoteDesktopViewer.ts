@@ -49,10 +49,10 @@ export interface RemoteViewerPreferences {
 }
 export const DEFAULT_VIEWER_PREFERENCES: RemoteViewerPreferences = {
   audio: true,
-  privacyScreen: false,
+  privacyScreen: true,
   hostMute: false,
   clipboardSync: false,
-  lockOnExit: false,
+  lockOnExit: true,
   idleTimeoutMinutes: REMOTE_DESKTOP_DEFAULT_IDLE_MINUTES,
 };
 export interface RemoteViewerSafety {

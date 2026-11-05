@@ -35,6 +35,10 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:review:start')).toBe(true);
   });
 
+  it('allows the read-only OpenCode Go quota query', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:usage:opencode-go')).toBe(true);
+  });
+
   it('allows the read-only task context-window bounds query but no generic session write', () => {
     // 只读边界查询：控制端据此才能在远程任务上给出「更大」的档位。
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:get-context-window-bounds')).toBe(true);
@@ -95,10 +99,11 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     }
   });
 
-  it('允许远程会话读取被控端 Git / GitHub 上下文', () => {
+  it('允许同账号远程任务读取 Git / GitHub 上下文并管理 PR 关联', () => {
     for (const ch of [
       'git-context:get-for-session',
       'git-context:pr-refs:list',
+      'git-context:pr-refs:manage',
       'git-context:pr-status',
     ]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(true);

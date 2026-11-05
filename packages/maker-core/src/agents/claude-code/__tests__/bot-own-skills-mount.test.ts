@@ -70,7 +70,6 @@ function createDeps(): AgentDeps {
     binaryPath: process.execPath,
     logger: createNoopLogger(),
     getGhostRosterPrompt: vi.fn(() => 'GLOBAL GHOST ROSTER'),
-    getContactsPromptState: vi.fn(() => 'enabled' as const),
   };
 }
 
@@ -213,8 +212,6 @@ it.each([false, true])('local client-only sessions expose only their own tools (
   const prompt = partner.systemPrompt?.append ?? '';
   expect(prompt).toContain('GLOBAL CINDY HOST PROMPT');
   expect(prompt).toContain('CINDY ANSWER DELIVERY FIXTURE');
-  // Existing enabled-but-unregistered Contacts semantics remain unchanged.
-  expect(prompt).not.toContain('Smart Contacts');
   if (hostedGuest) expect(prompt).not.toContain('GLOBAL GHOST ROSTER');
   else expect(prompt).toContain('GLOBAL GHOST ROSTER');
   expect(prompt).toContain('GLOBAL USER PROMPT');
@@ -294,7 +291,7 @@ describe('Claude Code mounts the Bot\'s own learned Skills', () => {
     expect(options.plugins).toEqual([{ type: 'local', path: OWN_SKILL_ROOT }]);
   });
 
-  it('keeps global Cindy identity, roster, contacts, and user prompt out of Bot context', async () => {
+  it('keeps global Cindy identity, roster, and user prompt out of Bot context', async () => {
     const options = await startBotSession({});
     const prompt = options.systemPrompt?.append ?? '';
     expect(prompt).toContain('BOT SOUL');
@@ -302,7 +299,6 @@ describe('Claude Code mounts the Bot\'s own learned Skills', () => {
     expect(prompt).not.toContain('GLOBAL CINDY HOST PROMPT');
     expect(prompt).not.toContain('GLOBAL GHOST ROSTER');
     expect(prompt).not.toContain('GLOBAL USER PROMPT');
-    expect(prompt).not.toContain('Smart Contacts');
   });
 });
 

@@ -33,6 +33,32 @@ describe('createGhostOauthBrokerClient', () => {
     }
   });
 
+  it('bootstrap:只有 feishu 向服务端取应用身份;回调地址回显不一致即拒绝', async () => {
+    const redirectUri = 'http://127.0.0.1:53684/callback';
+    const apiPost = vi.fn(async (path: string, body: Record<string, unknown>) => {
+      expect(path).toBe('/api/integrations/feishu/oauth/bootstrap');
+      expect(body).toEqual({ redirectUri });
+      return { clientId: 'cli-issued', transactionId: 'tx-1', redirectUri, expiresAt: '2026-10-30T00:10:00.000Z' };
+    });
+    const client = createGhostOauthBrokerClient({ apiPost, hasLoginToken: () => true });
+
+    await expect(client.bootstrap!('feishu', { redirectUri }))
+      .resolves.toEqual({ ok: true, clientId: 'cli-issued', transactionId: 'tx-1' });
+    await expect(client.bootstrap!('jira', { redirectUri })).resolves.toBeNull();
+    expect(apiPost).toHaveBeenCalledTimes(1);
+    await expect(client.bootstrap!('feishu', { redirectUri: 'http://127.0.0.1:1/callback' }))
+      .resolves.toMatchObject({ ok: false, error: 'EXCHANGE_FAILED' });
+  });
+
+  it('exchange 透传授权事务,服务端据此绑定当时的企业应用版本', async () => {
+    const apiPost = vi.fn(async () => ({ accessToken: 'at-1' }));
+    const client = createGhostOauthBrokerClient({ apiPost, hasLoginToken: () => true });
+    await client.exchange('feishu', { code: 'c1', redirectUri: 'http://127.0.0.1:53684/callback', transactionId: 'tx-1' });
+    expect(apiPost).toHaveBeenCalledWith('/api/integrations/feishu/oauth/exchange', {
+      code: 'c1', redirectUri: 'http://127.0.0.1:53684/callback', transactionId: 'tx-1',
+    });
+  });
+
   it('refresh:server 401 + 业务错误码(上游拒绝)→ invalidGrant:true', async () => {
     const client = createGhostOauthBrokerClient({
       apiPost: vi.fn(async () => {

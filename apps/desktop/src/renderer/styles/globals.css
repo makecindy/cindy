@@ -8,6 +8,26 @@
 /* biome-ignore lint/suspicious/noUnknownAtRules: Tailwind directives are expanded by PostCSS. */
 @tailwind utilities;
 
+/* Pin the existing PingFang fallback to its public faces. On macOS, resolving the
+   family name alone can mix PingFangSC-Regular with SFProPingFangSC-Medium, whose
+   glyph metrics shrink on 400 -> 500 (e.g. menu hover). Local PostScript names keep
+   the same family across weights; platforms without PingFang use the next fallback. */
+@font-face {
+  font-family: 'PingFang SC';
+  src: local('PingFangSC-Regular');
+  font-weight: 400;
+}
+@font-face {
+  font-family: 'PingFang SC';
+  src: local('PingFangSC-Medium');
+  font-weight: 500;
+}
+@font-face {
+  font-family: 'PingFang SC';
+  src: local('PingFangSC-Semibold');
+  font-weight: 600;
+}
+
 @layer base {
   /* Static defaults and quota bootstrap aliases: generated/tokens.css. */
   body {
@@ -2379,6 +2399,60 @@ html[data-wallpaper-active='true'] .wallpaper-composer-fade {
   mask-image: linear-gradient(transparent, currentColor);
 }
 
+/* In-page raised surfaces tint the wallpaper with their own token instead of
+   covering it. CINDY themes only: their text is translucent ink, so the
+   contrast floor below holds; other built-in themes use fixed text colors
+   calibrated against solid surfaces and keep them. Scoped to page containers, so portaled popovers, menus and
+   dialogs keep their readable surfaces; in-page floating roles and surfaces
+   positioned over other content (absolute / fixed / sticky) stay opaque too.
+   Higher wallpaper visibility raises the opacity to the contrast floor set by
+   useWallpaperBackground. Fill only: backdrop-filter would become the
+   containing block for the composer's fixed palettes. Keeps base-utility
+   specificity, so hover and state variants still win. Each token needs a fill
+   line and an entry in the target list. Left out on purpose: tokens that are
+   already translucent (selected-row ink tints), and any surface holding
+   syntax-highlighted code (code blocks, diffs), whose fixed palette needs a
+   solid surface. */
+html[data-wallpaper-active='true'] {
+  --wallpaper-glass-opacity: max(72%, var(--app-wallpaper-glass-floor, 0%));
+}
+html.dark[data-wallpaper-active='true'] {
+  --wallpaper-glass-opacity: max(64%, var(--app-wallpaper-glass-floor, 0%));
+}
+[class~='bg-[var(--chat-input-bg)]'] { --wallpaper-glass-fill: var(--chat-input-bg); }
+[class~='bg-[var(--msg-user-bg)]'] { --wallpaper-glass-fill: var(--msg-user-bg); }
+[class~='bg-[var(--msg-tool-card-bg)]'] { --wallpaper-glass-fill: var(--msg-tool-card-bg); }
+[class~='bg-[var(--msg-table-header-bg)]'] { --wallpaper-glass-fill: var(--msg-table-header-bg); }
+[class~='bg-[var(--surface-elevated)]'] { --wallpaper-glass-fill: var(--surface-elevated); }
+[class~='bg-[var(--settings-theme-card-bg)]'] { --wallpaper-glass-fill: var(--settings-theme-card-bg); }
+[class~='bg-[var(--settings-input-bg)]'] { --wallpaper-glass-fill: var(--settings-input-bg); }
+[class~='bg-[var(--settings-profile-card-bg)]'] { --wallpaper-glass-fill: var(--settings-profile-card-bg); }
+.bg-sidebar-item-active { --wallpaper-glass-fill: hsl(var(--sidebar-item-active)); }
+:where(html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-wallpaper-active='true'] :is(
+  .bg-content-area,
+  .app-wallpaper-surface,
+  aside.bg-sidebar:not([data-sidebar-peek-drawer]),
+  [class~='bg-[var(--panel-bg)]'],
+  [class~='bg-[var(--settings-bg)]']
+)) :is(
+  [class~='bg-[var(--chat-input-bg)]'],
+  [class~='bg-[var(--msg-user-bg)]'],
+  [class~='bg-[var(--msg-tool-card-bg)]'],
+  [class~='bg-[var(--msg-table-header-bg)]'],
+  [class~='bg-[var(--surface-elevated)]'],
+  [class~='bg-[var(--settings-theme-card-bg)]'],
+  [class~='bg-[var(--settings-input-bg)]'],
+  [class~='bg-[var(--settings-profile-card-bg)]'],
+  .bg-sidebar-item-active
+):where(:not(
+  .absolute, .fixed, .sticky,
+  :has(.hljs, [class^='hljs-']),
+  [role='dialog'], [role='alertdialog'], [role='menu'], [role='listbox'], [role='tooltip'],
+  :is([role='dialog'], [role='alertdialog'], [role='menu'], [role='listbox'], [role='tooltip']) *
+)) {
+  background-color: color-mix(in srgb, var(--wallpaper-glass-fill) var(--wallpaper-glass-opacity), transparent);
+}
+
 /* Keep the decoded old canvas above the new one and fade only its opacity.
    Fixed composer copies follow the same transition, preserving the crop and
    theme veil across the entire window without fading text or controls.
@@ -2463,3 +2537,12 @@ html[data-wallpaper-blur='true'] .app-wallpaper-video video {
   max-width: none;
   filter: blur(var(--app-wallpaper-blur));
 }
+
+/* Plugin visibility changes presentation only; critical interaction cards stay accessible. */
+html[data-plugin-ui-hidden~='workspace'] [data-plugin-ui-element='workspace'] { visibility: hidden; }
+html[data-plugin-ui-hidden~='workspace'] [data-plugin-ui-keep-visible] { visibility: visible; }
+html[data-plugin-ui-hidden~='sidebar'] [data-plugin-ui-element='sidebar'],
+html[data-plugin-ui-hidden~='header'] [data-plugin-ui-element='header'],
+html[data-plugin-ui-hidden~='messages'] [data-plugin-ui-element='messages'],
+html[data-plugin-ui-hidden~='composer'] [data-chat-input-root],
+html[data-plugin-ui-hidden~='windowControls'] [data-plugin-ui-element='windowControls'] { display: none !important; }
