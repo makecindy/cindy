@@ -2301,7 +2301,6 @@
       "id": "openhubs",
       "name": "OpenHubs",
       "docsUrl": "https://openhubs.zhidemai.com/docs",
-      "authMethod": "apiKey",
       "models": [
         {
           "id": "deepseek-v4-flash",
