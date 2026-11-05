@@ -40,7 +40,7 @@ class InMemoryStorage implements ScheduleStorage {
     const ex = this.schedules.get(id);
     if (!ex) return null;
     if (expected && (['lastFiredAt', 'nextFireAt', 'status', 'recurring', 'manual',
-      'cronExpr', 'timezone', 'intervalMs'] as const).some((key) => ex[key] !== expected[key])) return null;
+      'cronExpr', 'timezone', 'intervalMs', 'expireAt'] as const).some((key) => ex[key] !== expected[key])) return null;
     const merged: Schedule = { ...ex, ...patch };
     if (patch.lastFinishedAt !== undefined) {
       merged.lastFinishedAt = Math.max(ex.lastFinishedAt ?? patch.lastFinishedAt, patch.lastFinishedAt);
@@ -1138,6 +1138,54 @@ describe('Scheduler', () => {
     expect(runs).toHaveLength(1);
     expect(runs[0].status).toBe('success');
     expect(runs[0].sessionId).toBe(`sess-${sch.id}`);
+  });
+
+  // 测试价值（#8886）：生产入口是 Scheduler.tick()/start()/finishRunSchedule；此前
+  // expireAt 只落库、没有引擎测试。最小输入是每分钟循环任务 + 假时钟截止点，覆盖
+  // 截止前正常执行、运行后无合法下一槽位、已过期 tick、冷启动与并发延期 CAS；
+  // unit tier，无外部 I/O。
+  it('expires a recurring schedule after its last pre-expiry fire', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, expireAt: Date.UTC(2026, 0, 1, 0, 1, 30) });
+    h.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 5));
+    await h.scheduler.tick();
+    expect(h.runner.fire).toHaveBeenCalledTimes(1);
+    expect(await h.storage.get(sch.id)).toMatchObject({
+      status: 'expired', lastFiredAt: Date.UTC(2026, 0, 1, 0, 1, 5), nextFireAt: undefined,
+    });
+    h.clock.setTo(Date.UTC(2026, 0, 2, 0, 1, 5));
+    await h.scheduler.tick();
+    expect(h.runner.fire).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not fire a recurring schedule whose expireAt has passed', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, expireAt: Date.UTC(2026, 0, 1, 0, 0, 50) });
+    h.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 5));
+    await h.scheduler.tick();
+    expect(h.runner.fire).not.toHaveBeenCalled();
+    expect(await h.storage.get(sch.id)).toMatchObject({ status: 'expired', nextFireAt: undefined });
+  });
+
+  it('expires an already-ended recurring schedule during cold startup', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, expireAt: Date.UTC(2026, 0, 1, 0, 0, 50) });
+    h.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 5));
+    const restarted = makeHarness({ storage: h.storage, clock: h.clock });
+    await restarted.scheduler.start();
+    expect(restarted.runner.fire).not.toHaveBeenCalled();
+    expect(await h.storage.get(sch.id)).toMatchObject({ status: 'expired', nextFireAt: undefined });
+    await restarted.scheduler.stop();
+  });
+
+  it('keeps a concurrent expireAt extension when an engine holds a stale snapshot', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, expireAt: Date.UTC(2026, 0, 1, 0, 0, 50) });
+    await h.storage.update(sch.id, { expireAt: Date.UTC(2026, 0, 1, 0, 2, 0) });
+    h.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 5));
+
+    await h.scheduler.tick();
+
+    expect(h.runner.fire).toHaveBeenCalledTimes(1);
+    expect(await h.storage.get(sch.id)).toMatchObject({
+      expireAt: Date.UTC(2026, 0, 1, 0, 2, 0), status: 'expired', nextFireAt: undefined,
+    });
   });
 
   it('one-shot schedule moves to expired after fire', async () => {

@@ -524,6 +524,11 @@ export class Scheduler extends EventEmitter {
       // 节奏（cron 后续怎么改都不生效）。迁移已于 2026-05 上线并跑了一个月，存量
       // 老任务均已转换完，该逻辑只剩误伤，故移除。
       let current = sch;
+      if (isRecurringSchedulePastExpiry(current, now)) {
+        const fresh = await this.expireRecurringSchedule(current, now);
+        if (!fresh) continue;
+        current = fresh;
+      }
       let next: number | undefined;
       // A claimed Once with unfinished work waits for explicit Continue. Do
       // not recreate its initial prompt while preserving the active schedule
@@ -574,6 +579,35 @@ export class Scheduler extends EventEmitter {
   private async hasUnfinishedOnceClaim(schedule: Schedule): Promise<boolean> {
     return !schedule.manual && !schedule.recurring && schedule.nextFireAt === undefined &&
       schedule.lastFiredAt === undefined && await this.storage.hasUnfinishedRuns(schedule.id);
+  }
+
+  /** Persist expiry with a scheduling-snapshot CAS so a stale engine cannot
+   * overwrite a concurrent expireAt extension. Errors fail closed for this tick. */
+  private async expireRecurringSchedule(schedule: Schedule, now: number): Promise<Schedule | null> {
+    if (!isRecurringSchedulePastExpiry(schedule, now)) return schedule;
+    const expire = (snapshot: Schedule): Promise<Schedule | null> => this.storage.update(snapshot.id, {
+      status: 'expired', nextFireAt: undefined, updatedAt: now,
+    }, snapshot);
+    try {
+      let updated = await expire(schedule);
+      if (!updated) {
+        const fresh = await this.storage.get(schedule.id);
+        if (!fresh || fresh.status !== 'active') return null;
+        if (!isRecurringSchedulePastExpiry(fresh, now)) return fresh;
+        updated = await expire(fresh);
+        if (!updated) return null;
+      }
+      this.invalidScheduleIds.delete(schedule.id);
+      this.activeSchedules.delete(schedule.id);
+      this.emitEvent({ type: 'changed', scheduleId: schedule.id });
+      return null;
+    } catch (err) {
+      this.activeSchedules.delete(schedule.id);
+      this.logger?.warn?.('scheduler: failed to persist recurring schedule expiry', {
+        scheduleId: schedule.id, error: String(err),
+      });
+      return null;
+    }
   }
 
   async stop(options?: { interrupted?: boolean }): Promise<void> {
@@ -706,6 +740,12 @@ export class Scheduler extends EventEmitter {
     // 把它捞进 due,不必再等一整个 tick 间隔。
     await this.retryPendingReplans(now);
     if (this.tickHandle !== tickHandle) return;
+    for (const schedule of [...this.activeSchedules.values()]) {
+      if (!isRecurringSchedulePastExpiry(schedule, now)) continue;
+      const fresh = await this.expireRecurringSchedule(schedule, now);
+      if (this.tickHandle !== tickHandle) return;
+      if (fresh) this.activeSchedules.set(fresh.id, fresh);
+    }
     const due: Schedule[] = [];
     for (const sch of this.activeSchedules.values()) {
       if (sch.nextFireAt !== undefined && sch.nextFireAt <= now && !this.inflightByschedule.has(sch.id)) {
@@ -778,6 +818,11 @@ export class Scheduler extends EventEmitter {
   }
 
   private async fireOneInner(schedule: Schedule, runId: string): Promise<void> {
+    if (isRecurringSchedulePastExpiry(schedule, this.clock.now())) {
+      const fresh = await this.expireRecurringSchedule(schedule, this.clock.now());
+      if (fresh) this.activeSchedules.set(fresh.id, fresh);
+      return;
+    }
     // 跨进程互斥:先在 DB 对这次触发做原子认领(CAS:nextFireAt 必须仍等于本进程
     // 内存里看到的值)。dev / release 双开共用同一 DB 时两边引擎会同时判定"到点
     // 了",只有认领成功的一方真正执行;失败方刷新内存副本后放弃,保证同一次到点
@@ -811,6 +856,15 @@ export class Scheduler extends EventEmitter {
         return;
       }
       schedule = claimed;
+      if (isRecurringSchedulePastExpiry(schedule, this.clock.now())) {
+        const fresh = await this.expireRecurringSchedule(schedule, this.clock.now());
+        if (fresh) {
+          const next = computeNextFireAt(fresh, this.clock.now());
+          const replanned = await this.storage.update(fresh.id, { nextFireAt: next }, fresh);
+          if (replanned?.status === 'active') this.activeSchedules.set(replanned.id, replanned);
+        }
+        return;
+      }
       // The CAS protects the fire time, not the rest of the row. Another
       // instance can therefore change cron metadata while retaining the same
       // nextFireAt and still return its new row here. Validate the claimed
@@ -1096,9 +1150,10 @@ export class Scheduler extends EventEmitter {
     if (ownsSchedule) {
       patch.lastFiredAt = firedAt;
       if (current.recurring) {
-        patch.nextFireAt = current.intervalMs !== undefined
-          ? finishedAt + current.intervalMs
-          : nextCronOrMonthlyFire(current.cronExpr, finishedAt, current.timezone);
+        patch.nextFireAt = computeNextFireAt(current, finishedAt);
+        if (patch.nextFireAt === undefined && current.expireAt !== undefined && current.status !== 'paused') {
+          patch.status = 'expired';
+        }
       } else if (current.status !== 'paused') {
         patch.status = 'expired';
         patch.nextFireAt = undefined;
@@ -1643,7 +1698,8 @@ export class Scheduler extends EventEmitter {
     // 不会进入 activeSchedules，重启后 listActive() 同样加载不到。状态恢复集中在引擎
     // 层处理，让 desktop、device-link 与其它调用方共享一致行为。
     const shouldReactivateExpired =
-      existing.status === 'expired' && candidate.recurring && !candidate.manual;
+      existing.status === 'expired' && candidate.recurring && !candidate.manual &&
+      !isRecurringSchedulePastExpiry(candidate, now);
     if (shouldReactivateExpired) {
       updates.status = 'active';
     }
@@ -1765,6 +1821,16 @@ export class Scheduler extends EventEmitter {
     if (!existing) throw new Error(`Schedule not found: ${id}`);
     assertScheduleMutationGuard(expected, existing);
     const now = this.clock.now();
+    if (isRecurringSchedulePastExpiry(existing, now)) {
+      const updated = await this.storage.update(id, {
+        status: 'expired', nextFireAt: undefined, updatedAt: now,
+      });
+      if (!updated) throw new Error(`Schedule not found: ${id}`);
+      this.invalidScheduleIds.delete(id);
+      this.activeSchedules.delete(id);
+      this.emitEvent({ type: 'changed', scheduleId: id });
+      return updated;
+    }
     // 与 create/update 对齐：恢复 interval 任务前也验证它保留的 cron 元数据，不能
     // 重新激活一条未来清 interval 后必坏的记录。
     nextCronOrMonthlyFire(existing.cronExpr, now, existing.timezone);
@@ -3169,6 +3235,7 @@ function computeNextFireAt(schedule: Schedule, fromMs: number): number | undefin
   // manual schedule 永远不参与自动触发，跳过 cron 计算（runNow 是单独路径）
   if (schedule.manual) return undefined;
   if (!schedule.recurring && schedule.lastFiredAt !== undefined) return undefined;
+  if (isRecurringSchedulePastExpiry(schedule, fromMs)) return undefined;
   // interval schedules still persist cron metadata. Validate it before taking
   // the interval fast path so legacy rows accepted by older parsers cannot
   // evade startup/DB-sync quarantine and fire from a stale nextFireAt.
@@ -3176,13 +3243,19 @@ function computeNextFireAt(schedule: Schedule, fromMs: number): number | undefin
   if (schedule.intervalMs !== undefined) {
     // 冷启动：基线取 lastFinishedAt（跑过）或 createdAt（没跑过），再 max(base+N, now+N)
     // —— 漏掉的不补发，重新起 N 倒计时。
-    return nextIntervalFire(
+    const next = nextIntervalFire(
       schedule.lastFinishedAt ?? schedule.createdAt,
       schedule.intervalMs,
       fromMs,
     );
+    return schedule.expireAt !== undefined && next >= schedule.expireAt ? undefined : next;
   }
-  return nextCronOrMonthlyFire(schedule.cronExpr, fromMs, schedule.timezone);
+  const next = nextCronOrMonthlyFire(schedule.cronExpr, fromMs, schedule.timezone);
+  return schedule.expireAt !== undefined && next >= schedule.expireAt ? undefined : next;
+}
+
+function isRecurringSchedulePastExpiry(schedule: Schedule, now: number): boolean {
+  return schedule.recurring && !schedule.manual && schedule.expireAt !== undefined && now >= schedule.expireAt;
 }
 
 function defaultGenerateId(): string {

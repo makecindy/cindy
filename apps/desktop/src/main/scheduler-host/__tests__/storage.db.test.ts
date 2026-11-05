@@ -383,6 +383,21 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     } finally { harness.close(); }
   });
 
+  // #8886 / DB tier: production expires via update(snapshot). No prior CAS case covered
+  // expireAt, so one stale engine could overwrite a concurrent deadline extension.
+  // One row and two writes are the minimum SQLite input proving rejection.
+  it('guards schedule expiry against a concurrent expireAt extension', async () => {
+    const harness = createStorageHarness();
+    try {
+      const original = await harness.storage.insert(baseSchedule({ expireAt: 100 }));
+      const extended = await harness.storage.update(original.id, { expireAt: 500 });
+      expect(await harness.storage.update(original.id, {
+        status: 'expired', nextFireAt: undefined,
+      }, original)).toBeNull();
+      expect(await harness.storage.get(original.id)).toEqual(extended);
+    } finally { harness.close(); }
+  });
+
   it('round-trips schedule and run CRUD through SQLite', async () => {
     const harness = createStorageHarness();
     const schedule = baseSchedule({
