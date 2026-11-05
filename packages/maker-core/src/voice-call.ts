@@ -331,10 +331,20 @@ export class VoiceCallContext {
       } else throw new Error("invalid_call_actions");
       validated = true;
     } finally {
-      if (!reply.complete && published) {
-        reply.complete = true;
-        reply.failed = controller.signal.aborted || !validated;
-        this.publish();
+      if (!reply.complete) {
+        if (published) {
+          reply.complete = true;
+          reply.failed = controller.signal.aborted || !validated;
+          this.publish();
+        } else if (!validated && !this.stopped && !controller.signal.aborted) {
+          // Nothing was spoken. Publishing the empty failed reply is what tells
+          // clients the turn is over; without it the call waits in "thinking"
+          // for a sentence that will never arrive.
+          this.record.turns.push(reply);
+          reply.complete = true;
+          reply.failed = true;
+          this.publish();
+        }
       }
       if (this.active === controller) this.active = undefined;
     }

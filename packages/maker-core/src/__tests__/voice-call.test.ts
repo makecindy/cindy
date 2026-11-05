@@ -157,6 +157,11 @@ describe("independent voice call", () => {
     expect(
       call.record.turns.find((turn) => turn.role === "user")?.failed,
     ).toBeUndefined();
+    // Clients leave the thinking phase when the reply turn is flagged failed,
+    // so an unusable reply still has to be published.
+    expect(
+      call.record.turns.find((turn) => turn.role === "assistant")?.failed,
+    ).toBe(true);
     expect(await call.submit("u2", "Still there?")).toBe(true);
     expect(call.record.turns.at(-1)).toMatchObject({
       text: "Hello.",
