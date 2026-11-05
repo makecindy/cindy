@@ -3,6 +3,7 @@ import type { TurnUsageContext } from '../turnUsageContext.js';
 import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { handleSessionEvent, type SessionEventDependencies } from '../sessionEventPipeline.js';
+import { flushSessionPiTurnUsage } from '../piUsageReceipts.js';
 import { createBotCompactRuntimeRefreshCoordinator } from '../botCompactRuntimeRefresh.js';
 import { createContextOverflowRollover } from '../contextOverflowRollover.js';
 import { setMainLocale } from '../../i18n.js';
@@ -57,9 +58,15 @@ vi.mock('../../maker-host/auth-adapters.js', () => ({
   readClaudeApiKey: effects.fn('readClaudeApiKey'),
 }));
 vi.mock('../../sessionSpendBroadcaster.js', () => ({
+  broadcastSessionSpend: effects.fn('broadcastSessionSpend'),
+  broadcastSessionTokens: effects.fn('broadcastSessionTokens'),
   recordSessionTurnSpend: effects.fn('recordSessionTurnSpend'),
   recordSessionTurnTokens: effects.fn('recordSessionTurnTokens'),
   recordSessionContextSnapshot: effects.fn('recordSessionContextSnapshot'),
+}));
+vi.mock('../../localDb/client/current.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../../localDb/client/current.js')>(),
+  getDbClient: effects.fn('getDbClient'),
 }));
 vi.mock('../../turnCostBroadcaster.js', () => ({
   recordSchedulerTurnCost: effects.fn('recordSchedulerTurnCost'),
@@ -1898,6 +1905,78 @@ describe('usage through the production event pipeline', () => {
     effects.fn('piUsageToTokens').mockReturnValue(tokens);
     effects.fn('consumeLastAssistantPersistId').mockReturnValue('assistant-row');
   }
+
+  // #8887: production pipeline, unit tier. A request followed by a blocked
+  // price lookup must commit tokens now, retain its owner, and drain at teardown.
+  it('persists Pi requests before settlement and drains the captured owner while pricing waits', async () => {
+    const h = harness();
+    pricing(false);
+    const writes = vi.fn(async () => ({ changed: true }));
+    const otherWrites = vi.fn(async () => ({ changed: true }));
+    effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => ({ total: 130, legacy: 0.2, amount: 0.1, currency: 'USD', approximate: 0 }) });
+    let release!: (value: unknown) => void;
+    effects.fn('getGatewayModelPricingForModel').mockReturnValue(new Promise(resolve => { release = resolve; }));
+    const receiptUsage = { ...usage('pi'), settlementId: 'receipt-turn', receipts: [
+      { ...segment, recordedAt: Date.now(), id: 'pi:1' },
+    ] };
+    h.emit(event('account_usage', { type: 'pi/request_usage', usage: receiptUsage }, { source: 'pi' }));
+    await microtasks();
+    expect(writes).toHaveBeenCalledWith('usage.recordPiUsage', [expect.objectContaining({ amount: null, inputTokens: 100 })]);
+    expect(effects.fn('recordModelTurnUsage')).not.toHaveBeenCalled();
+    let drained = false;
+    const draining = flushSessionPiTurnUsage().then(() => { drained = true; });
+    effects.fn('getDbClient').mockReturnValue({ tx: otherWrites });
+    await microtasks();
+    expect(drained).toBe(false);
+    release({ xd: { 'test-model': effects.fn('getModelPriceQuote')() } });
+    await draining;
+    expect(otherWrites).not.toHaveBeenCalled();
+    expect(writes).toHaveBeenCalledTimes(2);
+    expect(writes.mock.calls[1]).toEqual(['usage.recordPiUsage', [expect.objectContaining({ amount: expect.any(Number) })]]);
+    expect(effects.fn('broadcastSessionSpend')).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: h.session.id, totalCostUsd: expect.closeTo(0.3),
+    }), expect.anything());
+    await h.dispose();
+  });
+
+  it('settles Pi error and done receipts without the legacy aggregate double-count path', async () => {
+    const h = harness();
+    pricing(false);
+    const writes = vi.fn(async () => ({ changed: true }));
+    effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => ({ total: 130 }) });
+    const receiptUsage = { ...usage('pi'), settlementId: 'paired-turn', receipts: [
+      { ...segment, recordedAt: Date.now(), id: 'pi:1' },
+    ] };
+    h.emit(event('error', { isTerminal: true, message: 'quota exceeded', usage: receiptUsage }, { source: 'pi' }));
+    h.emit(event('done', { status: 'failed', usage: receiptUsage }, { source: 'pi' }));
+    await flushSessionPiTurnUsage();
+    expect(writes).toHaveBeenCalled();
+    expect(effects.fn('recordModelTurnUsage')).not.toHaveBeenCalled();
+    expect(effects.fn('recordSessionTurnTokens')).not.toHaveBeenCalled();
+    expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+    expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledTimes(1);
+    await h.dispose();
+  });
+
+  it('leaves unavailable Pi pricing pending so terminal replay can finish it', async () => {
+    const h = harness();
+    pricing(false);
+    const quote = effects.fn('getModelPriceQuote')();
+    effects.fn('getGatewayModelPricingForModel').mockResolvedValue(null);
+    const writes = vi.fn(async () => ({ changed: true }));
+    effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => null });
+    const receiptUsage = { ...usage('pi'), settlementId: 'missing-quote', receipts: [
+      { ...segment, recordedAt: Date.now(), id: 'pi:1' },
+    ] };
+    h.emit(event('account_usage', { type: 'pi/request_usage', usage: receiptUsage }, { source: 'pi' }));
+    await flushSessionPiTurnUsage();
+    expect(writes.mock.calls[1]).toEqual(['usage.recordPiUsage', [expect.objectContaining({ amount: null })]]);
+    effects.fn('getGatewayModelPricingForModel').mockResolvedValue({ xd: { 'test-model': quote } });
+    h.emit(event('done', { usage: receiptUsage }, { source: 'pi' }));
+    await flushSessionPiTurnUsage();
+    expect(writes.mock.calls[3]).toEqual(['usage.recordPiUsage', [expect.objectContaining({ amount: expect.any(Number), actualCost: true })]]);
+    await h.dispose();
+  });
 
   it.each(['priced', 'missing-write-price', 'legacy-summary'] as const)(
     'preserves Codex cache writes without guessing cost (%s)', async (mode) => {

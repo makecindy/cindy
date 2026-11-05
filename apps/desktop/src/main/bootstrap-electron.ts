@@ -3,6 +3,7 @@ import { initializeRuntimeAppIcon } from './app-icon.js';
 import { z as settingsSchema } from 'zod';
 import { deliverRoutineResult, listRoutineDeliveryTargets } from './routines/delivery.js';
 import { flushPluginUsageLifecycle } from './plugin-usage/current.js';
+import { flushSessionPiTurnUsage } from './maker-ipc/piUsageReceipts.js';
 import { registerAccessibilitySupportIpc } from './accessibility-support-ipc.js';
 import { mcpAppSchemePrivilege, registerMcpAppProtocol } from './mcp-apps/sandboxProtocol.js';
 import { prepareImportedAutomation, finishImportedAutomation } from './bot-import/automationRuntime.js';
@@ -2216,6 +2217,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
       });
       await flushPluginTaskLifecycle();
       await flushPluginUsageLifecycle();
+      await flushSessionPiTurnUsage();
       await lifecycleDbClientManager.dispose(reason);
     } finally {
       releaseEndedSuppression();
@@ -2243,6 +2245,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   try {
     await flushPluginTaskLifecycle();
     await flushPluginUsageLifecycle();
+    await flushSessionPiTurnUsage();
     await lifecycleDbClientManager.dispose(reason);
   } finally {
     try {
@@ -10674,6 +10677,7 @@ onQuit('git-context', () => disposeGitContext(), 'async');
 onQuit('db-client', async () => {
   await flushPluginTaskLifecycle();
   await flushPluginUsageLifecycle();
+  await flushSessionPiTurnUsage();
   await lifecycleDbClientManager.dispose('quit');
 }, 'post-async');
 onQuit('local-db-close', () => localDbCloseDb(), 'post-async');

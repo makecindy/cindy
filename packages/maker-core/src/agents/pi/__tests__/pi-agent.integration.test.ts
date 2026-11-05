@@ -348,7 +348,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     body: string;
   }> = [];
   // 权限测试用的脚本化响应队列:非空时按序出队,空了回落默认 pong 文本。
-  const scriptedResponses: string[] = [];
+  const scriptedResponses: Array<string | { status: number }> = [];
 
   beforeAll(async () => {
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-agent-int-'));
@@ -364,6 +364,12 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           providerId: req.headers['x-cindy-pi-provider-id'] as string | undefined,
           body,
         });
+        const scripted = scriptedResponses.shift();
+        if (scripted && typeof scripted !== 'string') {
+          res.writeHead(scripted.status, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: { type: 'api_error', message: 'fixture temporarily unavailable' } }));
+          return;
+        }
         res.writeHead(200, {
           'content-type': 'text/event-stream',
           'cache-control': 'no-cache',
@@ -374,7 +380,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           : url.includes('/chat/completions')
             ? chatCompletionsStreamBody('pong from fake gateway', 'pi-test-model')
             : anthropicStreamBody('pong from fake gateway');
-        res.end(scriptedResponses.shift() ?? fallback);
+        res.end(scripted ?? fallback);
       });
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -434,6 +440,42 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       resolvePiGatewayModelApi: () => 'anthropic-messages',
     };
   }
+
+  // #8887, integration: the real runtime generates the retry lifecycle after
+  // a completed tool request, a real HTTP 502 and successful recovery.
+  it('preserves paid request usage across a real native 502 retry', { timeout: 60_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-usage-retry-'));
+    const fixtureFile = path.join(workingDir, 'fixture.txt');
+    writeFileSync(fixtureFile, 'fixture');
+    const startRequests = seenRequests.length;
+    let handle: AgentSessionHandle | undefined;
+    try {
+      scriptedResponses.push(anthropicToolUseBody('read', { path: fixtureFile }),
+        { status: 502 }, anthropicStreamBody('recovered'));
+      handle = await new PiAgent(buildDeps()).startSession({
+        sessionId: 'usage-native-retry', workingDir, model: 'pi-test-model', permissionMode: 'bypassPermissions',
+      });
+      const events: AgentEvent[] = [];
+      const collected = (async () => {
+        for await (const event of handle!.events()) {
+          events.push(event);
+          if (event.type === 'done') break;
+        }
+      })();
+      await handle.send({ type: 'user', content: 'Read fixture.txt and reply.' });
+      await collected;
+      expect(seenRequests.length - startRequests).toBe(3);
+      const usage = (events.find(e => e.type === 'done')!.data as { usage: { inputTokens: number; settlementId: string } }).usage;
+      expect(usage.inputTokens).toBe(84);
+      const live = events.filter(e => e.type === 'account_usage');
+      expect(live.length).toBeGreaterThanOrEqual(2);
+      expect(live.every(e => (e.data as { usage: { settlementId: string } }).usage.settlementId === usage.settlementId)).toBe(true);
+    } finally {
+      await handle?.close();
+      scriptedResponses.length = 0;
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
 
   it('reads native Fast from host RPC and ignores replayed preference files in Full Access', { timeout: 30_000 }, async () => {
     const deps = buildDeps();
