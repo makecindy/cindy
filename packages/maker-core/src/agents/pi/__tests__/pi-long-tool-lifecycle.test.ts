@@ -72,6 +72,12 @@ vi.mock('../transport.js', async (importOriginal) => {
             if (cmd.eof) endOutput();
             return;
           }
+          if (cmd.type === 'fixture_usage') {
+            output({ type: 'message_end', message: { role: 'assistant', model: 'm',
+              content: [{ type: 'text', text: 'Progress before failure.' }],
+              usage: { input: 100, output: 20, cacheRead: 3, cacheWrite: 2 } } });
+            return;
+          }
           if (cmd.type === 'fixture_eof_tail') return endOutput(JSON.stringify(cmd.frame));
           if (cmd.type === 'fixture_eof_on_abort') { eofOnAbort = true; return; }
           if (cmd.type === 'fixture_retry_exhausted_eof') {
@@ -212,6 +218,27 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
     await vi.waitFor(() => expect(events.some(event => event.type === 'tool_use')).toBe(true));
     return { events, transport, handle, nativeFrames };
   }
+
+  // #8887: translator unit coverage cannot exercise the actual RPC callbacks or
+  // Session's fenced close. Existing real stdio fixture verifies those exits.
+  it.each(['retry-exhausted', 'rpc-disconnected', 'process-exit', 'requested-close', 'requested-detach'] as const)(
+    'preserves already-reported request usage on %s', async outcome => {
+      const { events, transport, handle } = await start();
+      await transport.writeLine(JSON.stringify({ type: 'fixture_usage' }));
+      await vi.waitFor(() => expect(handle.getUsageSnapshot().tokenUsage).toBe(120));
+      if (outcome === 'requested-close') await session!.close();
+      else if (outcome === 'requested-detach') await session!.detach({ reason: 'app-quit' });
+      else await transport.writeLine(JSON.stringify({ type: outcome === 'retry-exhausted'
+        ? 'fixture_retry_exhausted_eof' : outcome === 'rpc-disconnected' ? 'fixture_lose_rpc' : 'fixture_exit' }));
+      await vi.waitFor(() => expect(events.some(event => event.type === 'error')).toBe(true));
+      const terminal = events.find(event => event.type === 'error')!;
+      expect(terminal.data).toMatchObject({ isTerminal: true, usage: {
+        settlementId: expect.any(String), inputTokens: 100, outputTokens: 20,
+        cacheReadTokens: 3, cacheCreationTokens: 2,
+      } });
+      expect(events.some(event => event.type === 'done' && (event.data as { status?: string }).status === 'completed')).toBe(false);
+    },
+  );
 
   it('keeps a quiet live tool running and delivers its result, usage and terminal without another send', async () => {
     const { events, transport, handle } = await start(true);

@@ -256,6 +256,7 @@ import {
   rollbackPiHostAbortRequest,
   rollbackPiHostTurnStart,
   translatePiEvent,
+  takePiTurnUsage,
   usageSnapshotOf,
   type PiTranslateContext,
 } from './translator.js';
@@ -5792,10 +5793,9 @@ export class PiAgent extends BaseAgent {
             proc.send({ type: 'extension_ui_response', id: event.id, value: JSON.stringify(receipt ?? {}) });
             return;
           }
-          // Native retries remain within one agent_start/settled lifecycle.
-          // A new start also recovers diagnostics if the previous turn omitted
-          // settled (abort/retry exhaustion), without changing turn execution.
-          if (event.type === 'agent_start') {
+          // Retries may emit another agent_start inside the same product turn.
+          if (event.type === 'agent_start' && (!ctx.isStreaming || ctx.turnSettled
+              || ctx.terminalAssistantErrorEmitted || ctx.pendingHostTurnStartToken !== null)) {
             providerRequestObservedAt = undefined;
             providerTurnObservedAt = undefined;
             providerFirstOutputLogged = false;
@@ -6035,13 +6035,15 @@ export class PiAgent extends BaseAgent {
           // agent_start. Its predecessor's retry error is not its terminal.
           const pendingNewTurn = !ctx.isStreaming && ctx.pendingHostTurnStartToken !== null;
           if (!closed && (pendingNewTurn || (ctx.isStreaming && !ctx.terminalAssistantErrorEmitted))) {
+            const usage = takePiTurnUsage(ctx);
             queue.push(isCurrentTurnHostAbortRequested(ctx, true) ? {
-              type: 'done', data: { status: 'cancelled' }, source: 'pi',
+              type: 'done', data: { status: 'cancelled', ...(usage ? { usage } : {}) }, source: 'pi',
             } : {
               type: 'error',
               data: {
                 message: `pi RPC disconnected (${reason}); tool outcome is unknown`,
                 reason: 'pi-rpc-disconnected', isTerminal: true,
+                ...(usage ? { usage } : {}),
               },
               source: 'pi',
             });
@@ -6059,6 +6061,7 @@ export class PiAgent extends BaseAgent {
         },
         onExit: ({ code, signal }) => {
           const hostAbortRequested = isCurrentTurnHostAbortRequested(ctx, true);
+          const usage = !closed && !rpcDisconnected ? takePiTurnUsage(ctx) : undefined;
           piProcessExited = true;
           clearPiSubagentRefreshTimer();
           void deferProxyDisposalForDetachedRuns();
@@ -6074,13 +6077,14 @@ export class PiAgent extends BaseAgent {
             // 非用户 close 的进程死亡:terminal error + 收尾,避免 UI 永久 running。
             if (!rpcDisconnected) queue.push(hostAbortRequested ? {
               type: 'done',
-              data: { status: 'cancelled' },
+              data: { status: 'cancelled', ...(usage ? { usage } : {}) },
               source: 'pi',
             } : {
               type: 'error',
               data: {
                 message: `pi process exited unexpectedly (code=${code}, signal=${signal})`,
                 isTerminal: true,
+                ...(usage ? { usage } : {}),
               },
               source: 'pi',
             });
@@ -8362,6 +8366,13 @@ export class PiAgent extends BaseAgent {
           ...usageSnapshotOf(ctx),
           ...(nativeAutoCompactNeedsRollover ? { needsRollover: true } : {}),
         };
+      },
+
+      takePendingTurnUsage() {
+        // Session fences the provider queue before synthesizing its close
+        // terminal. Reclaim a queued receipt under the same settlement identity.
+        return ctx.turnGeneration > 0 && ctx.pendingHostTurnStartToken === null
+          ? takePiTurnUsage(ctx, true) : undefined;
       },
 
       setInteractionResolver(resolver: InteractionResolver): void {

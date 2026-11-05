@@ -156,6 +156,9 @@ export interface PiTranslateContext {
   /** Price variants latched by message_start until their matching message_end. */
   pendingPriceVariants: Array<'standard' | 'priority'>;
   turnSettled: boolean;
+  /** Usage belongs to the product turn, and is claimed by its first terminal only. */
+  turnUsageReported: boolean;
+  turnUsageSettlementId: string;
   /** 最后一次 API call 的 context 占用(input + cacheRead + cacheWrite)。 */
   contextTokens: number;
   /** 跨 turn 累计成本。 */
@@ -261,6 +264,8 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     turnUsageSegmentSeq: 0,
     pendingPriceVariants: [],
     turnSettled: false,
+    turnUsageReported: false,
+    turnUsageSettlementId: randomUUID(),
     contextTokens: 0,
     costUsd: 0,
     isStreaming: false,
@@ -427,6 +432,30 @@ export function usageSnapshotOf(ctx: PiTranslateContext): UsageSnapshot {
       reliable: ctx.generationTimingReliable && ctx.generationHeartbeatReliable,
     },
   );
+}
+
+/** Claim authoritative request usage once, including failed/cancelled turns. */
+export function takePiTurnUsage(ctx: PiTranslateContext, includeReported = false) {
+  if (ctx.turnUsageReported && !includeReported) return undefined;
+  ctx.turnUsageReported = true;
+  return piTurnUsageOf(ctx);
+}
+
+function piTurnUsageOf(ctx: PiTranslateContext) {
+  // Generation time excludes tool/user waits; turn wall time remains separate.
+  return {
+    settlementId: ctx.turnUsageSettlementId,
+    inputTokens: ctx.turnInput,
+    outputTokens: ctx.turnOutput,
+    cacheReadTokens: ctx.turnCacheRead,
+    cacheCreationTokens: ctx.turnCacheWrite,
+    segments: ctx.turnUsageSegments.map(segment => ({ ...segment })),
+    segmentsComplete: ctx.turnUsageSegmentsComplete,
+    ...(ctx.generationTimingReliable && ctx.generationDurationMs > 0
+      ? { durationMs: ctx.generationDurationMs } : {}),
+    ...(ctx.turnWallClockStartedAt > 0
+      ? { turnDurationMs: Math.max(0, Date.now() - ctx.turnWallClockStartedAt) } : {}),
+  };
 }
 
 function pushStatus(
@@ -730,6 +759,16 @@ export function translatePiEvent(
 ): void {
   switch (event.type) {
     case 'agent_start': {
+      // Native retry/overflow/continuation can restart an agent within one Host
+      // turn. Keep its usage, request IDs, timing and accepted Stop ownership.
+      if (ctx.isStreaming && !ctx.turnSettled && !ctx.terminalAssistantErrorEmitted
+          && ctx.pendingHostTurnStartToken === null) {
+        ctx.pendingAssistantError = null;
+        ctx.finalAssistantText = '';
+        ctx.finalAssistantStopReason = null;
+        ctx.pendingPriceVariants = [];
+        return;
+      }
       ctx.turnGeneration += 1;
       ctx.cacheRecoveryHasOutput = false;
       ctx.cacheRecoveryHandled = false;
@@ -752,6 +791,8 @@ export function translatePiEvent(
       ctx.turnUsageSegmentSeq = 0;
       ctx.pendingPriceVariants = [];
       ctx.turnSettled = false;
+      ctx.turnUsageReported = false;
+      ctx.turnUsageSettlementId = randomUUID();
       ctx.finalAssistantText = '';
       ctx.finalAssistantStopReason = null;
       ctx.pendingAssistantError = null;
@@ -1089,23 +1130,8 @@ export function translatePiEvent(
       const outputLimited = !hostAbortRequested
         && !ctx.terminalAssistantErrorEmitted
         && ctx.finalAssistantStopReason === 'length';
-      const usage = {
-        inputTokens: ctx.turnInput,
-        outputTokens: ctx.turnOutput,
-        cacheReadTokens: ctx.turnCacheRead,
-        cacheCreationTokens: ctx.turnCacheWrite,
-        segments: ctx.turnUsageSegments.map((segment) => ({ ...segment })),
-        segmentsComplete: ctx.turnUsageSegmentsComplete,
-        // durationMs is deliberately generation-only. If Pi does not report a
-        // per-assistant generation duration, omit it instead of charging tool
-        // execution / user waits to TPS.
-        ...(ctx.generationTimingReliable && ctx.generationDurationMs > 0
-          ? { durationMs: ctx.generationDurationMs }
-          : {}),
-        ...(ctx.turnWallClockStartedAt > 0
-          ? { turnDurationMs: Math.max(0, Date.now() - ctx.turnWallClockStartedAt) }
-          : {}),
-      };
+      const usage = piTurnUsageOf(ctx);
+      ctx.turnUsageReported = true;
       const terminalError = pendingAssistantError ?? (outputLimited ? {
         message: 'Pi reached the model output limit. The response may be incomplete.',
         sdkError: 'Pi response stopped at the model output limit',
@@ -1114,7 +1140,7 @@ export function translatePiEvent(
         result: ctx.finalAssistantText,
         usage,
       } : null);
-      const outcome = terminalError
+      const outcome = terminalError || ctx.terminalAssistantErrorEmitted
         ? 'failed'
         : hostAbortRequested || ctx.finalAssistantStopReason === 'aborted'
           ? 'cancelled'
@@ -1126,6 +1152,7 @@ export function translatePiEvent(
           type: 'error',
           data: {
             ...terminalError,
+            usage,
             piCacheRecoverySafe: ctx.cacheRecoveryHasOutput === false,
             ...(ctx.cacheRecoveryHandled ? { piCacheRecoveryHandled: true } : {}),
             isTerminal: true,
@@ -1161,6 +1188,8 @@ export function translatePiEvent(
           ...(silentStop ? { silentStop: true } : {}),
           // ghost 订阅 did-turn-end 的 usage 上报(subscriptionGateway.normalizeTurnUsage
           // 认 camelCase);与 CC/Codex 的 done.usage 对齐,让插件能显示 pi turn 的用量。
+          // Keep the legacy done payload for older hosts; new hosts deduplicate
+          // the error/done pair by the runtime-owned settlementId.
           usage,
         },
         source: 'pi',
@@ -1255,6 +1284,7 @@ export function translatePiEvent(
         type: 'error',
         data: {
           ...finalError,
+          usage: takePiTurnUsage(ctx),
           ...(finalError.reason === UNSUPPORTED_REQUEST_OPTION_REASON ? {
             piCacheCompatibility: ctx.getCacheCompatibility?.(),
             piCacheRecoverySafe: ctx.cacheRecoveryHasOutput === false,

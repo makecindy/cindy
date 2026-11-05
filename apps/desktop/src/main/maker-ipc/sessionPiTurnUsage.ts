@@ -2,6 +2,7 @@ import { captureTurnUsageContext, turnBillingSource, type TurnUsageContext } fro
 import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.js';
 import { isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId } from '../maker-host/subscription-account-auth.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
+import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
 
 import { buildTurnUsageDetails } from '../../shared/turnUsageDetails.js';
 import { recordSessionTurnSpend, recordSessionTurnTokens } from '../sessionSpendBroadcaster.js';
@@ -52,6 +53,10 @@ export interface RecordSessionPiTurnUsageDeps {
   readonly unpricedSubscriptionValueMarker: () => RegionalMoney;
 }
 
+// A failed Pi turn can report usage on both its error and legacy paired done.
+// Scope identities to the Session and retain a bounded tail for delayed pairs.
+const recordedSettlements = new WeakMap<Session, Set<string>>();
+
 export function recordSessionPiTurnUsage(
   deps: RecordSessionPiTurnUsageDeps,
   session: Session,
@@ -63,7 +68,22 @@ export function recordSessionPiTurnUsage(
   //   openai / anthropic / xai → 用户订阅，显示剩余窗口 + 本对话价值；
   //   xd / 默认网关            → 实际 gateway cost。
   // usage 事实无论价格是否可解析都持久化，保证新模型也能看到 cache 命中明细。
-  if (event.type === 'done' && event.source === 'pi') {
+  if ((event.type === 'done' || isTerminalAgentErrorEvent(event)) && event.source === 'pi') {
+    const rawUsage = (event.data as { usage?: unknown } | undefined)?.usage;
+    // A paired done without usage must not claim a later turn's billing context.
+    if (!rawUsage || typeof rawUsage !== 'object') return;
+    const settlementId = (rawUsage as { settlementId?: unknown }).settlementId;
+    if (typeof settlementId === 'string' && settlementId.length > 0 && settlementId.length <= 128) {
+      const recorded = recordedSettlements.get(session) ?? new Set<string>();
+      if (recorded.has(settlementId)) return;
+      recorded.add(settlementId);
+      if (recorded.size > 16) recorded.delete(recorded.values().next().value!);
+      recordedSettlements.set(session, recorded);
+    } else if (event.type !== 'done') {
+      // Older Pi payloads may attach usage to both frames without an identity.
+      // Keep their existing done-only behavior rather than double-charge them.
+      return;
+    }
     const turnContext = deps.turnUsageContextBySession.get(session.id) ?? captureTurnUsageContext(session.id);
     const sessionProvider = turnContext.providerId;
     // New Pi payloads carry the tariff on every request segment. Keep the
@@ -77,7 +97,6 @@ export function recordSessionPiTurnUsage(
     const modelPromise =
       deps.turnModelPromiseBySession.get(session.id) ?? deps.readSessionModelForUsage(session.id);
     deps.turnModelPromiseBySession.delete(session.id);
-    const rawUsage = (event.data as { usage?: unknown } | undefined)?.usage;
     if (rawUsage && typeof rawUsage === 'object') {
       const tokens = piUsageToTokens(
         rawUsage as {

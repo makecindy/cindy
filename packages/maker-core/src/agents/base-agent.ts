@@ -2526,6 +2526,8 @@ export interface AgentSessionHandle {
 
   /** 当前 usage 快照 */
   getUsageSnapshot(): UsageSnapshot;
+  /** Claim unreported provider usage before a Host-synthesized close terminal. */
+  takePendingTurnUsage?(): Record<string, unknown> | undefined;
 
   /** Structured context usage breakdown. Only Claude Code implements this today. */
   getContextUsage?(): Promise<ContextUsageData>;

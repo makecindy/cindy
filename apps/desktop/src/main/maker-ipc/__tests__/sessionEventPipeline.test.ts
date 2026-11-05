@@ -1899,6 +1899,29 @@ describe('usage through the production event pipeline', () => {
     effects.fn('consumeLastAssistantPersistId').mockReturnValue('assistant-row');
   }
 
+  // #8887: real pipeline must bill a terminal Pi error without needing done,
+  // and its compatibility done/duplicate error must not bill again.
+  it.each([false, true])('records failed Pi usage once before a paired done (subscription=%s)', async subscription => {
+    const h = harness();
+    pricing(subscription);
+    const payload = { ...usage('pi'), settlementId: 'failed-pi-turn' };
+    h.emit(event('status', { isRunning: true }, { source: 'pi' }));
+    h.emit(event('error', { message: 'retrying', isTerminal: false, willRetry: true, usage: payload }, { source: 'pi' }));
+    expect(effects.fn('recordSessionTurnTokens')).not.toHaveBeenCalled();
+    h.emit(event('error', { message: 'retry exhausted', isTerminal: true, usage: payload }, { source: 'pi' }));
+    await microtasks();
+    expect(effects.fn('recordSessionTurnTokens')).toHaveBeenCalledTimes(1);
+    expect(effects.fn('recordSessionTurnTokens')).toHaveBeenCalledWith('task', 130);
+    const writes = effects.fn('recordModelTurnUsage').mock.calls.length;
+    expect(writes).toBeGreaterThan(0);
+    h.emit(event('done', { status: 'failed', usage: payload }, { source: 'pi' }));
+    h.emit(event('error', { message: 'process exited', isTerminal: true, usage: payload }, { source: 'pi' }));
+    await microtasks();
+    expect(effects.fn('recordSessionTurnTokens')).toHaveBeenCalledTimes(1);
+    expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledTimes(writes);
+    await h.dispose();
+  });
+
   it.each(['priced', 'missing-write-price', 'legacy-summary'] as const)(
     'preserves Codex cache writes without guessing cost (%s)', async (mode) => {
       const h = harness();

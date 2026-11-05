@@ -42,6 +42,50 @@ function makeQueue(): { queue: AsyncQueue<AgentEvent>; events: AgentEvent[] } {
 const ev = (e: Record<string, unknown>): PiRpcEvent => e as unknown as PiRpcEvent;
 
 describe('pi translator', () => {
+  // #8887: one product turn can contain multiple native agent_start runs.
+  // Unit regression through real translation; prior coverage only settled one run.
+  it.each(['success', 'exhausted', 'provider-error', 'stop'] as const)(
+    'retains retry usage with one settlement identity (%s)', outcome => {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue, events } = makeQueue();
+      const message = (input: number, output: number) => ev({ type: 'message_end', message: {
+        role: 'assistant', model: 'test-model', content: [{ type: 'text', text: 'answer' }],
+        usage: { input, output, cacheRead: 3, cacheWrite: 2 },
+      } });
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(message(100, 10), queue, ctx);
+      translatePiEvent(ev({ type: 'agent_end' }), queue, ctx);
+      if (outcome === 'stop') markPiHostAbortRequested(ctx);
+      translatePiEvent(ev({ type: 'auto_retry_start', attempt: 1, maxAttempts: 2 }), queue, ctx);
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(message(20, 5), queue, ctx);
+      if (outcome === 'exhausted') {
+        translatePiEvent(ev({ type: 'auto_retry_end', success: false, finalError: 'quota exhausted' }), queue, ctx);
+      } else if (outcome === 'provider-error') {
+        translatePiEvent(ev({ type: 'message_end', message: { role: 'assistant', content: [],
+          stopReason: 'error', errorMessage: 'provider rejected request' } }), queue, ctx);
+      }
+      translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+      translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+      const reported = events.filter(event => (event.data as { usage?: unknown }).usage !== undefined);
+      expect(reported).toHaveLength(outcome === 'exhausted' || outcome === 'provider-error' ? 2 : 1);
+      expect(new Set(reported.map(event => (event.data as { usage: { settlementId: string } }).usage.settlementId)).size).toBe(1);
+      expect(reported[0].type).toBe(outcome === 'exhausted' || outcome === 'provider-error' ? 'error' : 'done');
+      if (outcome === 'stop') expect(reported[0].data).toMatchObject({ status: 'cancelled' });
+      expect(reported[0].data).toMatchObject({ usage: {
+        inputTokens: 120, outputTokens: 15, cacheReadTokens: 6, cacheCreationTokens: 4,
+        segmentsComplete: true, segments: [
+          expect.objectContaining({ id: 'pi:1', inputTokens: 100 }),
+          expect.objectContaining({ id: 'pi:2', inputTokens: 20 }),
+        ],
+      } });
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      expect(ctx.turnInput).toBe(0);
+      expect(ctx.turnUsageSegments).toEqual([]);
+      disposePiTranslateContext(ctx);
+    },
+  );
+
   it('projects MCP gateway calls into ordinary tools while keeping result pairing intact', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
@@ -957,6 +1001,7 @@ describe('pi translator', () => {
 
     translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
     markPiHostAbortRequested(ctx);
+    markPiHostTurnStartPending(ctx); // Explicit Host input starts a new product turn.
     translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
     translatePiEvent(
       ev({

@@ -133,16 +133,22 @@ describe('Session close lifecycle', () => {
     expect(handle.close).toHaveBeenCalledOnce();
   });
 
-  it.each(['requested-close', 'process-exit'] as const)('settles an owned idle-without-terminal turn on %s', async (cause) => {
+  it.each(['requested-close', 'process-exit', 'requested-detach'] as const)('settles an owned idle-without-terminal turn on %s', async (cause) => {
     const { session, handle, queue, seen, idle } = liveTurn();
     await session.send('perform a side effect', { turnAttemptToken: 8 });
+    // #8887: Host close/stream end fences the provider queue; preserve its
+    // unreported usage on the real synthetic error rather than losing it.
+    handle.takePendingTurnUsage = vi.fn(() => ({ settlementId: 'close-turn', inputTokens: 120 }));
     idle();
     if (cause === 'requested-close') await session.close();
+    else if (cause === 'requested-detach') await session.detach({ reason: 'app-quit' });
     else queue.end();
     await vi.waitFor(() => expect(session.getStatus()).toBe('closed'));
     expect(seen).toHaveLength(1);
     expect(seen[0]).toMatchObject({ type: 'error', turnAttemptToken: 8,
-      data: { isTerminal: true, reason: 'session_event_loop_crashed' } });
+      data: { isTerminal: true, reason: 'session_event_loop_crashed',
+        usage: { settlementId: 'close-turn', inputTokens: 120 } } });
+    expect(handle.takePendingTurnUsage).toHaveBeenCalledOnce();
     expect(handle.send).toHaveBeenCalledOnce();
   });
 
