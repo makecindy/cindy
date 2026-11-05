@@ -328,7 +328,16 @@ export async function fetchProviderModels(
     if (!page.ok) { await page.body?.cancel(); throw new Error('catalog page failed'); }
     return JSON.parse(await readLimitedBody(page, spec.responseByteLimit ?? 8 * 1024 * 1024));
   });
-  if (!models || (models.length === 0 && !spec.allowEmpty)) {
+  // Ollama Cloud's public, unfiltered catalog can legitimately be empty. Keep
+  // that success distinct in every consumer (wizard, edit and saved refresh),
+  // without treating an error envelope as an empty catalog or an account grant.
+  const ollamaCloudCatalog = url === 'https://ollama.com/v1/models';
+  const ollamaCloudError = ollamaCloudCatalog && json !== null && typeof json === 'object'
+    && 'error' in json && json.error != null && json.error !== '';
+  // The parser can drop invalid members; only an originally empty data array is empty success.
+  const ollamaCloudEmpty = ollamaCloudCatalog && json !== null && typeof json === 'object'
+    && 'data' in json && Array.isArray(json.data) && json.data.length === 0;
+  if (!models || ollamaCloudError || (models.length === 0 && (ollamaCloudCatalog ? !ollamaCloudEmpty : !spec.allowEmpty))) {
     // 端点 200 但响应不是可识别的模型列表（或为空）——按「模型不存在」类引导用户手填。
     return {
       ok: false,

@@ -2349,6 +2349,29 @@
           "wireProtocol": "openai-chat"
         }
       }
+    },
+    {
+      "id": "ollama-cloud",
+      "name": "Ollama Cloud",
+      "docsUrl": "https://docs.ollama.com/cloud",
+      "models": [],
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://ollama.com",
+          "modelsUrl": "https://ollama.com/v1/models",
+          "wireProtocol": "anthropic-messages"
+        },
+        "codex": {
+          "baseUrl": "https://ollama.com/v1",
+          "modelsUrl": "https://ollama.com/v1/models",
+          "wireProtocol": "openai-chat"
+        },
+        "pi": {
+          "baseUrl": "https://ollama.com/v1",
+          "modelsUrl": "https://ollama.com/v1/models",
+          "wireProtocol": "openai-chat"
+        }
+      }
     }
   ]
 }
