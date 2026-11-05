@@ -86,6 +86,13 @@ export default {
       if (ui.case === 'artifacts-wide' || ui.case === 'artifacts-no-avatar')
         assert.equal(layout.sheetWidth, layout.maxSheetWidth, 'Wide cards keep their existing maximum width');
       assert.ok(layout.sheetRight <= layout.viewport, 'Sheet stays within the narrow column');
+      // Screenshot bug: a long learning row sized the footer to its text and ran past the column.
+      const footer = await page.locator('[data-bot-learning-footer]').evaluate(node => {
+        const box = node.getBoundingClientRect();
+        const text = node.querySelector('span');
+        return { x: box.x, right: box.right, columnRight: node.parentElement.getBoundingClientRect().right, truncated: text.scrollWidth > text.clientWidth };
+      });
+      assert.ok(Math.abs(footer.x - layout.replyX) <= 0.5 && footer.right <= footer.columnRight + 0.5 && footer.truncated, `Learning footer truncates inside the reply column: ${JSON.stringify(footer)}`);
       await related.click();
       const file = page.getByRole('button', { name: 'prepare.py', exact: true });
       await file.waitFor();
