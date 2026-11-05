@@ -17,13 +17,14 @@ import { kimiSource } from './collect.js';
 
 import type { ProviderView } from '@cindy/model-providers';
 import type { ClaudeSubscriptionUsageSnapshot, XaiSubscriptionUsageSnapshot } from '@cindy/maker-shared/subscription-usage';
+import { parseOpenCodeGoAccountUsageResult } from '../../shared/providerAccountUsage.js';
 
 import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
 import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
 import { readDeviceProviderViews } from '../remote-agent/controller/deviceCatalog.js';
 import { mayServeBackgroundRead } from '../usage/peerUsageSync.js';
 import type { CodexAccountUsagePayload } from '../usageBroadcaster.js';
-import { claudeSource, codexSource, xaiSource } from './collect.js';
+import { claudeSource, codexSource, opencodeGoSource, xaiSource } from './collect.js';
 import type { MenubarRemoteDevice, MenubarSubscriptionInput } from './snapshot.js';
 
 const MOBILE_PLATFORMS = new Set(['ios', 'android']);
@@ -111,6 +112,9 @@ async function readAccount(
   } else if (kind === 'xai') {
     const payload = await readUsage(deps, device.id, 'maker:usage:xai-subscription', [], provider.id, 'xai');
     source = payload ? xaiSource(provider, payload as unknown as XaiSubscriptionUsageSnapshot, deps.nowMs) : null;
+  } else if (kind === 'opencode-go') {
+    const response = await deps.invoke(device.id, 'maker:usage:opencode-go', [{ providerId: provider.id }]);
+    if (response.ok && isRecord(response.result)) source = opencodeGoSource(provider, parseOpenCodeGoAccountUsageResult(response.result), deps.nowMs);
   }
   if (!source) return null;
   return { ...source, id: `remote:${device.id}:${provider.id}`, device };
