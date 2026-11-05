@@ -85,6 +85,8 @@ export interface PrStatusServiceDeps {
   staleTtlMs?: number;
   now?: () => number;
   scope?: () => Promise<string>;
+  /** Every fresh, cached result (ok / not-found) as it lands; for prFollowWatch. Must not throw. */
+  onObserved?: (query: PrStatusQuery, result: PrStatusResult) => void;
 }
 
 /** 把远端字段映射为四态。merged 优先于 closed;draft 仅在 open 时有意义。 */
@@ -219,6 +221,11 @@ export class PrStatusService {
             expiresAt: fetchedAt + this.ttlMs,
             staleUntil: fetchedAt + this.ttlMs + this.staleTtlMs,
           });
+          try {
+            this.deps.onObserved?.(q, result);
+          } catch {
+            // Observers are best-effort and never fail a status read.
+          }
         }
         return result;
       })

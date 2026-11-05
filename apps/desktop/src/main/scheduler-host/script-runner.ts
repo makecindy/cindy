@@ -220,6 +220,7 @@ export class ScriptScheduleRunner {
           firedAt: ctx.firedAt,
           workingDir: schedule.workingDir,
           lastFinishedAt: schedule.lastFinishedAt,
+          ...(ctx.trigger ? { trigger: ctx.trigger } : {}),
         },
       }), schedule.preRunHook.command, this.deps.diagnosePreRunHookFailure);
       await ctx.onPreRunHookCompleted?.(hook);

@@ -445,6 +445,14 @@ describe('sanitizeGhostCardHtml · PR 状态位(data-ghost-pr-status)', () => {
     expect(ok('<div data-ghost-pr-status="octo/repo#0">a</div><div data-ghost-pr-status="octo/repo#1&quot; x=&quot;">b</div><span data-ghost-pr-status="octo/repo#1">c</span>'))
       .toBe('<div>a</div><div>b</div><span>c</span>');
   });
+
+  // Rule (2026-11-06): a card merged outside it kept saying "following" with live buttons; the host
+  // hides parts marked open-only. Minimal input: each allowed tag, a bad value and a disallowed tag.
+  it('放行 div / span / button 上的 data-ghost-pr-open-only,其它值和标签只丢属性', () => {
+    expect(ok('<div data-ghost-pr-open-only="o/r#9">a</div><span data-ghost-pr-open-only="o/r#9">b</span><button data-ghost-pr-open-only="o/r#9">c</button>'))
+      .toBe('<div data-ghost-pr-open-only="o/r#9">a</div><span data-ghost-pr-open-only="o/r#9">b</span><button data-ghost-pr-open-only="o/r#9" type="button">c</button>');
+    expect(ok('<div data-ghost-pr-open-only="o/r">a</div><p data-ghost-pr-open-only="o/r#9">b</p>')).toBe('<div>a</div><p>b</p>');
+  });
 });
 
 // 宿主按归一后的字面量判断卡片的位置和宽度,净化器只能放出这一种写法。

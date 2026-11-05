@@ -17,6 +17,7 @@ import type {
   PreRunHookRunResult,
   PreRunPluginConfig,
   ScheduleMutationGuard,
+  ScheduleRunTrigger,
 } from '../types.js';
 import { normalizePreRunPlugin, SCRIPT_CAPABILITIES } from '../types.js';
 import { isLegalPhaseTransition } from './attemptLifecycle.js';
@@ -1124,7 +1125,7 @@ export class Scheduler extends EventEmitter {
   //   这反而更贴合"Once"语义：用户手动跑过一次就视作用完。
   // Internal callers with their own durable queue may own the deferred retry.
   // This option is not exposed through schedule CRUD or public MCP arguments.
-  async runNow(id: string, options?: { deferToCaller?: boolean; internalRoutine?: true; canDispatch?: () => boolean; expectedSchedule?: ScheduleMutationGuard }): Promise<{ runId: string; deferred?: boolean; silenced?: boolean }> {
+  async runNow(id: string, options?: { deferToCaller?: boolean; internalRoutine?: true; canDispatch?: () => boolean; expectedSchedule?: ScheduleMutationGuard; trigger?: ScheduleRunTrigger }): Promise<{ runId: string; deferred?: boolean; silenced?: boolean }> {
     // 手动触发不受并发闸门拦截(用户显式动作要即时响应),但计入 in-flight 占用,
     // 会挤压后续自动触发的槽位。
     const runId = this.generateId();
@@ -1177,7 +1178,7 @@ export class Scheduler extends EventEmitter {
     }
   }
 
-  private async runNowInner(id: string, runId: string, options?: { deferToCaller?: boolean; internalRoutine?: true; canDispatch?: () => boolean; expectedSchedule?: ScheduleMutationGuard }, recovery?: ScheduleRun, runner: ScheduleRunner = this.runner): Promise<{ runId: string; deferred?: boolean; silenced?: boolean }> {
+  private async runNowInner(id: string, runId: string, options?: { deferToCaller?: boolean; internalRoutine?: true; canDispatch?: () => boolean; expectedSchedule?: ScheduleMutationGuard; trigger?: ScheduleRunTrigger }, recovery?: ScheduleRun, runner: ScheduleRunner = this.runner): Promise<{ runId: string; deferred?: boolean; silenced?: boolean }> {
     // The original turn's restored mapping is not acceptance of this Continue.
     // One owner covers both engine setup and host/queue preparation failures.
     let continuationAccepted = false;
@@ -1257,6 +1258,7 @@ export class Scheduler extends EventEmitter {
         deferToCaller: options?.deferToCaller,
         resumeSessionId: recovery?.sessionId,
         canDispatch: options?.canDispatch,
+        ...(options?.trigger ? { trigger: options.trigger } : {}),
         ...(options?.expectedSchedule?.effectiveWorkingDir
           ? { expectedPreRunWorkingDir: options.expectedSchedule.effectiveWorkingDir } : {}),
         signal: controller.signal,
@@ -1888,6 +1890,16 @@ export class Scheduler extends EventEmitter {
    * UI 在 delete/pause 前用它决定是否弹"有 N 次执行正在进行"二次确认。
    * 无 in-flight → 0(包括 schedule 已 paused / expired / 不存在的情况)。
    */
+  /** Passive instances leave automatic runs to another instance on the same data (manual run-now still works). */
+  isPassive(): boolean {
+    return this.passive;
+  }
+
+  /** A run started now would get a slot under maxConcurrentRuns (run-now itself never waits for one). */
+  hasFreeSlot(): boolean {
+    return this.countSlotsInUse() < this.maxConcurrentRuns;
+  }
+
   getInflightCount(id: string): number {
     return this.inflightByschedule.get(id)?.size ?? 0;
   }
