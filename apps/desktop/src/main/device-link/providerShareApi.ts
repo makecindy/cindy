@@ -17,6 +17,8 @@ import { getClientEndpoint } from '../clientEndpointsService.js';
 import { serverApiFetch } from '../serverApiClient.js';
 import type { IpcErrorCode } from '../../shared/ipc-errors.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { createProviderShareDelegationChecks, type DelegationCheckInput,
+  type DelegationCheckResult } from './providerShareDelegationChecks.js';
 
 /** 服务端错误码 → 本机 IPC 错误码(Renderer 据此给出可行动的提示)。 */
 const ACTIONABLE_CODES: Readonly<Record<string, IpcErrorCode>> = {
@@ -40,6 +42,7 @@ function captureScope() {
   const key = activeOwnerScopeKey();
   const endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
   return {
+    key: JSON.stringify([key, endpoint]),
     isCurrent: () => getAuthState().isAuthenticated && !isAppSessionBoundaryPending()
       && activeOwnerScopeKey() === key && getClientEndpoint('deviceLinkApiBaseUrl') === endpoint,
   };
@@ -117,27 +120,37 @@ export async function revokeProviderShareDelegation(input: {
 }
 
 /** M verifies that the server accepted O's delegation before trusting a cross-account guest. */
-export async function checkProviderShareDelegation(input: {
-  shareId: string; memberId: string; guestDeviceId: string; executorDeviceId: string;
-}): Promise<{ active: boolean; ownerDeviceId?: string; expiresAt?: number; generation?: string }> {
-  const scope = captureScope();
-  const value = await serverApiFetch<{ active?: unknown; ownerDeviceId?: unknown;
-    expiresAt?: unknown; generation?: unknown }>(
-    '/api/device-link/provider-shares/delegations/check', {
-      method: 'POST', body: input,
-      baseUrl: () => {
-        if (!scope.isCurrent()) throw new ProviderShareScopeChangedError();
-        return getClientEndpoint('deviceLinkApiBaseUrl');
-      },
-      timeoutMs: 15_000, cache: 'no-store',
-      logLabel: '/api/device-link/provider-shares/delegations/check',
-      redactErrorDetails: true, allowedRedactedErrorCodes: ALLOWED_REDACTED_CODES,
-    });
-  if (value.active !== true || typeof value.ownerDeviceId !== 'string'
-    || typeof value.generation !== 'string' || !/^[0-9a-f-]{36}$/.test(value.generation)
-    || !Number.isSafeInteger(value.expiresAt) || (value.expiresAt as number) <= Date.now()) return { active: false };
-  return { active: true, ownerDeviceId: value.ownerDeviceId,
-    expiresAt: value.expiresAt as number, generation: value.generation };
+const delegationChecks = createProviderShareDelegationChecks({
+  captureScope,
+  scopeChanged: () => new ProviderShareScopeChangedError(),
+  async request(input, scope, timeoutMs, signal) {
+    const value = await serverApiFetch<{ active?: unknown; ownerDeviceId?: unknown;
+      expiresAt?: unknown; generation?: unknown }>(
+      '/api/device-link/provider-shares/delegations/check', {
+        method: 'POST', body: input,
+        baseUrl: () => {
+          if (!scope.isCurrent()) throw new ProviderShareScopeChangedError();
+          return getClientEndpoint('deviceLinkApiBaseUrl');
+        },
+        timeoutMs, signal, cache: 'no-store',
+        logLabel: '/api/device-link/provider-shares/delegations/check',
+        redactErrorDetails: true, allowedRedactedErrorCodes: ALLOWED_REDACTED_CODES,
+      });
+    if (value.active !== true || typeof value.ownerDeviceId !== 'string'
+      || typeof value.generation !== 'string' || !/^[0-9a-f-]{36}$/.test(value.generation)
+      || !Number.isSafeInteger(value.expiresAt) || (value.expiresAt as number) <= Date.now()) return { active: false };
+    return { active: true, ownerDeviceId: value.ownerDeviceId,
+      expiresAt: value.expiresAt as number, generation: value.generation };
+  },
+});
+
+export function checkProviderShareDelegation(input: DelegationCheckInput,
+  generation?: string): Promise<DelegationCheckResult> {
+  return delegationChecks.check(input, generation);
+}
+
+export function clearProviderShareDelegationChecks(): void {
+  delegationChecks.clear();
 }
 
 /**

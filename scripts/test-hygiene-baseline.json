@@ -984,9 +984,6 @@
     "apps/mobile/src/__tests__/useBotGroupChat.test.tsx": {
       "realWaits": 2
     },
-    "apps/mobile/src/__tests__/useDeviceProviders.test.ts": {
-      "resetModules": 1
-    },
     "apps/mobile/src/__tests__/visualMock.test.ts": {
       "resetModules": 1
     },

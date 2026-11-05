@@ -101,6 +101,30 @@ Pi / Codex 的检测在任务所在电脑的 Session 上，用的是受邀者自
 回归见 `loop-guard.test.ts`、`tool-loop-review.test.ts`、`session.tool-loop.test.ts`、
 Claude Code 的 `upstream-idle-watchdog.test.ts` 与 desktop 的 `tool-loop-reviewer.test.ts`。
 
+## 宿主事件流暂停（`holdEventStream`）
+
+宿主要把 provider 产物落库后再让其它订阅方看到时（目前只有 Codex 原生生成图，见
+`media-storage-and-protocols.md`「Codex 原生生成图交付」），由监听方在处理该事件时调用
+`Session.holdEventStream(followUps)`，不要在各消费方另写等待。约定：
+
+- 只接受 runEventLoop 正在派发的当前 turn 非终态事件，同一事件只接受一次；看门狗合成、
+  后台、旧 generation、idle status 与终态事件一律返回 false，调用方的工作照常在后台完成。
+- 暂停发生在读下一条 provider 事件之前，算作“在等 provider”：`awaitingGeneration` 已提前
+  记下，暂停期间的 send 与阻塞在 `next()` 时的 send 同样处理，`done` 自然排在 followUps 之后。
+- followUps 带 `hostProjection: true`，沿用来源事件的 `turnOrigin`、`sessionTurnGeneration`、
+  `sessionInstanceId`、`turnAttemptToken`、`turnScope`，只发给监听方，不进 turn 控制、
+  工具循环计数与看门狗；终态事件会被丢弃，暂停不能结束 turn。发起暂停的宿主负责
+  落库和推界面，wire pipeline 跳过 `hostProjection`。
+- 发送栅栏：接受暂停起到循环读到下一条 provider 事件（通常是 `done`）为止，`isTurnRunning()`
+  恒为 true。provider 可能已把 handle 置 idle、`done` 还排在后面，没有栅栏时这段窗口内的
+  `send()` 会提前开出 N+1 轮并抢走 N 的 origin / generation。abort／close／detach 一并清除。
+- 最长 `EVENT_STREAM_HOLD_MS`（20 秒，`SessionOptions.eventStreamHoldMs` 可注入）；超时只放行，
+  不重试。`abort()`／`close()`／`detach()` 立即放行并丢弃未发出的 followUps——手动 Stop 的
+  复核宽限（15 秒）短于暂停上限，不能让 `done` 卡在暂停后面。
+- 指标影响：只有被接受的暂停才多一次 await，未使用时热路径只多一次空值判断。回归见
+  `session.origin.test.ts`「Session host event-stream hold」与 desktop
+  `sessionEventPipeline.test.ts`「Codex generated images through the production event pipeline」。
+
 ## 上下文已满时的引擎边界
 
 Claude Code 在同一模型上达到设置页自动压缩阈值且尚未满窗时，由 host 注入 `/compact`；

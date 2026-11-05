@@ -22,7 +22,7 @@ import type {
   MoneyCurrency,
 } from '../../shared/regionalMoney.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
-import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
+import { createOverrideSettingsFile, portableOverrideSettings } from '../maker-host/override-settings-file.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { currentLedgerCurrency } from './ledgerCurrency.js';
 
@@ -545,10 +545,14 @@ export function mergeStoredModelPriceOverride(
   return mergedQuote(record, reference, record.values, record.baseReference);
 }
 
+/**
+ * `at` 让覆盖的未覆盖字段跟随那一天的参考价(历史用量估价)；批量调用方传同一份 `entries` 快照。
+ */
 export function applyModelPriceOverrides(
   pricing: ModelPricingCatalog,
   registry: ModelRegistry | null | undefined,
   ledgerCurrency: MoneyCurrency = currentLedgerCurrency(),
+  options: { at?: string | Date; entries?: ModelPriceOverridesSnapshot } = {},
 ): ModelPricingCatalog {
   const next: ModelPricingCatalog = Object.fromEntries(
     Object.entries(pricing).map(([providerId, quotes]) => [
@@ -562,10 +566,11 @@ export function applyModelPriceOverrides(
       ),
     ]),
   );
-  for (const record of Object.values(readEntries())) {
+  for (const record of Object.values(options.entries ?? readEntries())) {
     if (record.providerId === 'xd') continue;
     const reference = providerReferencePriceQuote(record.providerId, record.modelId, registry, {
       agent: record.agent,
+      at: options.at,
     });
     const quote = mergedQuote(record, reference, record.values, record.baseReference);
     if (!quote || !currencyCanProjectToLedger(quote.currency, ledgerCurrency)) continue;
@@ -582,3 +587,6 @@ export const __testing = {
   mergedQuote,
   currencyCanProjectToLedger,
 };
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const modelPriceOverridePortableSettings = portableOverrideSettings(store);

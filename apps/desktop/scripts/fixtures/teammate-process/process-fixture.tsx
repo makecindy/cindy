@@ -81,7 +81,7 @@ function Subject({ done, retry, artifactCase }: { done: boolean; retry: boolean;
   return <div className="flex h-screen w-full min-w-0 flex-col bg-[var(--surface)]" data-ui-page-subject>
     <div className="self-end p-2"><Button onClick={() => setFinished(true)} data-testid="fixture-finish">Finish fixture</Button></div>
     <MessageStream workingDir="" historyLoaded messages={finished ? [...rows, { ...text('final_answer', '任务与 PR 的进展已整理。未处理完的事项和需要你判断的部分，已分别列出。', 'final_answer'), turnCompleted: true }] : rows}
-      assistantAvatar={<BotAvatar bot={{ id: "fixture", name: "Cindy", avatar: "cindy://avatar/preset/cindy" }} size="sm" />} simplifiedBotConversation isSessionStreaming={!finished} contentWidth={720} />
+      assistantAvatar={<span data-testid="fixture-partner-avatar"><BotAvatar bot={{ id: "fixture", name: "Cindy", avatar: "cindy://avatar/preset/cindy" }} size="sm" /></span>} simplifiedBotConversation isSessionStreaming={!finished} contentWidth={720} />
   </div>;
 }
 void mountPage({
