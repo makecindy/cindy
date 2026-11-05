@@ -790,6 +790,139 @@ export const botGroupPlanSteps = sqliteTable(
   }),
 );
 
+/**
+ * Group task layer for bot group chats (issue #8863 core slice).
+ * Tasks outlive single member sessions and belong to the group; display key is
+ * `PROJ-<number>`. Status transitions are constrained by the explicit table in
+ * `@cindy/maker-shared/groupTask` (enforced in groupTasksTx.ts, not in DDL).
+ */
+export const groupTasks = sqliteTable(
+  'group_tasks',
+  {
+    id: text('id').primaryKey(),
+    groupId: text('group_id')
+      .notNull()
+      .references(() => botGroups.id, { onDelete: 'cascade' }),
+    /** Per-group auto-increment; unique within the group. */
+    number: integer('number').notNull(),
+    title: text('title').notNull(),
+    description: text('description').notNull().default(''),
+    /** Seven-state machine; transitions validated in groupTasksTx.ts. */
+    status: text('status', {
+      enum: ['backlog', 'todo', 'in_progress', 'blocked', 'in_review', 'done', 'canceled'],
+    })
+      .notNull()
+      .default('todo'),
+    priority: text('priority', { enum: ['urgent', 'high', 'normal', 'low'] })
+      .notNull()
+      .default('normal'),
+    /** Not a foreign key: user, Lead or worker ids may predate their profiles. */
+    assigneeId: text('assignee_id'),
+    createdBy: text('created_by').notNull().default(''),
+    /** Parent task (same group); parent done never auto-closes children. */
+    parentTaskId: text('parent_task_id').references((): AnySQLiteColumn => groupTasks.id, {
+      onDelete: 'set null',
+    }),
+    /** Ordering among same-level siblings only. */
+    sortOrder: real('sort_order').notNull().default(0),
+    dueAt: integer('due_at'),
+    estimateHours: real('estimate_hours'),
+    labelsJson: text('labels_json').notNull().default('[]'),
+    /** Bumped on every entry into in_review; acceptance verdicts are scoped to it. */
+    deliverySeq: integer('delivery_seq').notNull().default(0),
+    revision: integer('revision').notNull().default(1),
+    completedAt: integer('completed_at'),
+    canceledAt: integer('canceled_at'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    uniqGroupNumber: uniqueIndex('uniq_group_tasks_group_number').on(t.groupId, t.number),
+    idxGroupStatus: index('idx_group_tasks_group_status').on(t.groupId, t.status),
+    idxParent: index('idx_group_tasks_parent').on(t.parentTaskId),
+  }),
+);
+
+/** Task comments delivered to the assignee's own session in later wiring. */
+export const groupTaskComments = sqliteTable(
+  'group_task_comments',
+  {
+    id: text('id').primaryKey(),
+    taskId: text('task_id')
+      .notNull()
+      .references(() => groupTasks.id, { onDelete: 'cascade' }),
+    author: text('author').notNull().default(''),
+    body: text('body').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    idxTaskCreated: index('idx_group_task_comments_task_created').on(t.taskId, t.createdAt),
+  }),
+);
+
+/** Dependency edges: taskId waits on dependsOnTaskId; same group only, gated by done/canceled. */
+export const groupTaskDependencies = sqliteTable(
+  'group_task_dependencies',
+  {
+    taskId: text('task_id')
+      .notNull()
+      .references(() => groupTasks.id, { onDelete: 'cascade' }),
+    dependsOnTaskId: text('depends_on_task_id')
+      .notNull()
+      .references(() => groupTasks.id, { onDelete: 'cascade' }),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.taskId, t.dependsOnTaskId] }),
+  }),
+);
+
+/** One execution round per dispatch; at most one active (queued/running) run per task. */
+export const groupTaskRuns = sqliteTable(
+  'group_task_runs',
+  {
+    id: text('id').primaryKey(),
+    taskId: text('task_id')
+      .notNull()
+      .references(() => groupTasks.id, { onDelete: 'cascade' }),
+    assigneeId: text('assignee_id').notNull().default(''),
+    status: text('status', { enum: ['queued', 'running', 'settled', 'canceled'] })
+      .notNull()
+      .default('queued'),
+    dispatchedAt: integer('dispatched_at').notNull(),
+    startedAt: integer('started_at'),
+    settledAt: integer('settled_at'),
+    /** Settled report summary; Orca wiring writes it in a later slice. */
+    outcome: text('outcome'),
+  },
+  (t) => ({
+    idxTaskStatus: index('idx_group_task_runs_task_status').on(t.taskId, t.status),
+    uniqActivePerTask: uniqueIndex('uniq_group_task_runs_active_per_task')
+      .on(t.taskId)
+      .where(sql`${t.status} IN ('queued', 'running')`),
+  }),
+);
+
+/** Acceptance verdicts, stored separately from worker status; scoped to one delivery. */
+export const groupTaskAcceptances = sqliteTable(
+  'group_task_acceptances',
+  {
+    id: text('id').primaryKey(),
+    taskId: text('task_id')
+      .notNull()
+      .references(() => groupTasks.id, { onDelete: 'cascade' }),
+    deliverySeq: integer('delivery_seq').notNull(),
+    action: text('action', { enum: ['accept', 'return'] }).notNull(),
+    /** Required for return; empty for accept. */
+    reason: text('reason').notNull().default(''),
+    reviewer: text('reviewer').notNull().default(''),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    idxTaskSeq: index('idx_group_task_acceptances_task_seq').on(t.taskId, t.deliverySeq),
+  }),
+);
+
 export const orcaTeams = sqliteTable(
   'orca_teams',
   {

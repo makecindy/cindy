@@ -47,6 +47,7 @@
     "./mail-message": "./src/mailMessage.ts",
     "./goal-command": "./src/goalCommand.ts",
     "./goal-verdict": "./src/goalVerdict.ts",
+    "./group-task": "./src/groupTask.ts",
     "./history-gap": "./src/historyGap.ts",
     "./image-annotation": "./src/imageAnnotation.ts",
     "./interaction": "./src/interaction.ts",
