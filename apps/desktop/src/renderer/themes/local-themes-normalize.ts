@@ -116,26 +116,38 @@ function normalizeUncheckedSwitchColors(
 /**
  * `accent-hover` 曾同时是 CTA 与确认框主按钮的悬停色。填充按钮改由基础色算出后
  * (DESIGN.md §4),旧主题和外部导入显式写的值继续生效;按下沿底色到悬停的方向接着走。
- * 底色或悬停色读不出具体颜色时不猜方向,按最常见的变暗处理。
+ * 读不出具体颜色(未知主题模式等)时不猜方向,按最常见的变暗处理。
  */
-const LEGACY_ACCENT_HOVER_ALIAS = 'var(--accent-hover)';
 const LEGACY_ACCENT_HOVER_STATES = [
   { base: 'accent-cta-bg-pure', hover: 'button-cta-hover', pressed: 'button-cta-pressed' },
   { base: 'confirm-btn-primary-bg', hover: 'confirm-btn-primary-hover', pressed: 'confirm-btn-primary-pressed' },
 ] as const;
 
-function bridgeLegacyAccentHover(colors: Record<string, string>): Record<string, string> {
-  const accentHover = colors['accent-hover'];
-  if (accentHover === undefined) return colors;
+/** 主题没写的 token 按模式取 registry 默认值,并沿 `var()` 别名解析到具体颜色。 */
+function resolveThemeRgb(
+  colors: Record<string, string>,
+  id: string,
+  type: ThemeType | undefined,
+  depth = 0,
+): Rgb | null {
+  const value = colors[id] ?? (type === undefined ? undefined : colorRegistry.resolveDefault(id, type));
+  const alias = value?.trim().match(/^var\(--([a-z0-9-]+)\)$/)?.[1];
+  if (alias && depth < 8) return resolveThemeRgb(colors, alias, type, depth + 1);
+  return parseCssColor(value);
+}
+
+function bridgeLegacyAccentHover(
+  colors: Record<string, string>,
+  type: ThemeType | undefined,
+): Record<string, string> {
+  if (colors['accent-hover'] === undefined) return colors;
   const bridged: Record<string, string> = {};
   for (const { base, hover, pressed } of LEGACY_ACCENT_HOVER_STATES) {
-    const explicitHover = colors[hover];
-    if (explicitHover === undefined) bridged[hover] = LEGACY_ACCENT_HOVER_ALIAS;
+    const hasHover = colors[hover] !== undefined;
+    if (!hasHover) bridged[hover] = 'var(--accent-hover)';
     if (colors[pressed] !== undefined) continue;
-    const baseRgb = parseCssColor(colors[base]);
-    const hoverRgb = parseCssColor(
-      explicitHover === undefined || explicitHover === LEGACY_ACCENT_HOVER_ALIAS ? accentHover : explicitHover,
-    );
+    const baseRgb = resolveThemeRgb(colors, base, type);
+    const hoverRgb = resolveThemeRgb(colors, hasHover ? hover : 'accent-hover', type);
     const lighter = baseRgb && hoverRgb && relativeLuminance(hoverRgb) > relativeLuminance(baseRgb);
     bridged[pressed] = filledButtonPressedFromHover(`var(--${hover})`, lighter ? 'lighter' : 'darker');
   }
@@ -181,7 +193,7 @@ export function normalizeLocalThemeColors(
     }
   }
 
-  const result = bridgeLegacyAccentHover(normalizeUncheckedSwitchColors(normalized));
+  const result = bridgeLegacyAccentHover(normalizeUncheckedSwitchColors(normalized), type);
   // 升级前的 login-* 默认值按主题模式比对;不知道模式时不猜,不迁移。
   return type === undefined ? result : dropLegacyLoginDefaults(result, type);
 }
