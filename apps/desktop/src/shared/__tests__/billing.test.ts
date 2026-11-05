@@ -40,7 +40,7 @@ describe.each(['xd-billing@xd.com', 'feedback@cindy.app'])('billing mailto polic
   it('rejects alternate recipients and malformed mailto URLs', () => {
     expect(isAllowedBillingMailto('mailto:other@example.com?subject=x')).toBe(false);
     expect(isAllowedBillingMailto(`mailto://${recipient}?subject=x`)).toBe(false);
-    expect(isAllowedBillingMailto(`mailto:${recipient.replace('@', '%40')}%FF?subject=x`)).toBe(false);
+    expect(isAllowedBillingMailto(`mailto:${encodeURIComponent(recipient)}%FF?subject=x`)).toBe(false);
   });
 
   it('requires a trusted sender in addition to the URL policy', () => {
