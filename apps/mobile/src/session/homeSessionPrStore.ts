@@ -46,6 +46,8 @@ interface Entry {
   fetchedAt: number;
   refreshKey: string | undefined;
   inflight: boolean;
+  /** 本次运行里有一次查询成功返回(含「没有 PR」)。查询失败留下的空值不算,读回仍可补上。 */
+  confirmed?: boolean;
   persist?: HomeSessionPrPersistTarget;
 }
 
@@ -104,6 +106,7 @@ export function refreshHomeSessionPr(
     refreshKey: options.refreshKey,
     value: entry?.value ?? null,
     persist: options.persist ?? entry?.persist,
+    confirmed: entry?.confirmed,
   };
   entries.delete(key);
   entries.set(key, next);
@@ -114,6 +117,7 @@ export function refreshHomeSessionPr(
       // 读回的上次结果可能在本次查询在途时才种入(冷启动已在线),load 拿到的 previous 里没有它:
       // 状态查询失败的这一轮不能用 null 覆盖已读回的状态。
       next.value = keepKnownStatus(value, next.value);
+      next.confirmed = true;
       if (next.persist) schedulePersist(next.persist.scope, next.persist.userId);
     })
     // 失败保留上次结果:网络抖动不该让已显示的 PR 号消失;下一个刷新周期再试。
@@ -236,8 +240,8 @@ export function hydrateHomeSessionPr(scope: string, userId: string): Promise<voi
       for (const row of parseStoredRows(raw).reverse()) {
         const key = homeSessionPrCacheKey(scope, row.deviceId, row.sessionId, row.related);
         const entry = entries.get(key);
-        // 已有结果(含查到「没有 PR」)以本次运行为准;只补还在等首查的任务。
-        if (entry && (entry.value || !entry.inflight)) continue;
+        // 已有结果(含查到「没有 PR」)以本次运行为准;首查还在途或失败过的任务才补上读回的结果。
+        if (entry && (entry.value || entry.confirmed)) continue;
         const persist = { scope, userId, deviceId: row.deviceId, sessionId: row.sessionId, related: row.related };
         if (entry) {
           // 在途的首查还没回来:先显示上次结果,查到后照常覆盖;查询失败则保留它。

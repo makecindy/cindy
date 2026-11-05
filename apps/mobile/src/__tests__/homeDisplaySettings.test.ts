@@ -451,6 +451,14 @@ describe('home PR cache', () => {
       await vi.waitFor(() => expect(readHomeSessionPr(raced)).toEqual({ ref, status: merged }));
       await vi.advanceTimersByTimeAsync(0);
 
+      // 首查整体失败(连引用都没取到)后读回:空值不是「确认没有 PR」,读回的结果要补上。
+      prStoreTesting.reset();
+      const failed = homeSessionPrCacheKey('5', 'd', 's');
+      refreshHomeSessionPr(failed, async () => { throw new Error('offline'); }, { now: 4_000, persist: { ...persist, scope: '5' } });
+      await vi.advanceTimersByTimeAsync(0);
+      await hydrateHomeSessionPr('5', 'u1');
+      expect(readHomeSessionPr(failed)).toEqual({ ref, status: merged });
+
       // 另一个账号读不到。
       prStoreTesting.reset();
       await hydrateHomeSessionPr('2', 'u2');
