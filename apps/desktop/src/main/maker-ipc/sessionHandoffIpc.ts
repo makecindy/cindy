@@ -129,6 +129,9 @@ export function createSessionHandoffHandler(deps: {
  * 不经 preload 暴露。只有已认证的同账号 device-link 隧道能派发；共享任务对端不可用。
  * 隐藏伙伴任务的可见性检查由 dispatch 在可见性查询就绪后执行，未就绪时这里直接拒绝。
  */
+/** plainRequestBody: this host accepts the agent's own text with a checked hand-off receipt (2026-11-05). */
+export const SESSION_HANDOFF_CAPABILITY = { taskActionVersion: 1, plainRequestBody: 1 } as const;
+
 export function registerSessionHandoffIpc(
   deps: Parameters<typeof createSessionHandoffHandler>[0],
 ): void {
@@ -141,7 +144,7 @@ export function registerSessionHandoffIpc(
     if (!hasRemoteBotSessionLookup())
       throwIpcError('PRECONDITION_FAILED', 'Task visibility is not ready');
     const request = requireObject(value, 'request');
-    if (request.action === 'task-action-capability') return { taskActionVersion: 1 };
+    if (request.action === 'task-action-capability') return SESSION_HANDOFF_CAPABILITY;
     if (request.action === 'validate-task-action') {
       const valid = await validateRemoteTaskActionReceipt(context!.controllerDeviceId, {
         receiptId: boundedString(request.receiptId, 'receiptId', 128),
