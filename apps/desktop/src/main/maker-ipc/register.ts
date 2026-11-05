@@ -5081,7 +5081,8 @@ export async function captureSessionAgentRequest(sessionId: string, supplement: 
   }) : null);
   const request = await captureRequest(sessionId, supplement, evidence,
     () => listMessagesForAgentHandoff(sessionId, 1, undefined, 'user'),
-    !!companion || ownerVerified || active?.delegatedRequest?.ownerVerified === true, ownerVerified,
+    !!companion || ownerVerified || active?.delegatedRequest?.ownerVerified === true
+      || active?.delegatedRequest?.delegatedText !== undefined, ownerVerified,
     { targetSessionId: target?.sessionId, authorize: () => authorizeSessionDelegation(sessionId, supplement, target?.sessionId) });
   if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new Error('Data owner changed before request capture');
   return request;

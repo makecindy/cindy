@@ -62,7 +62,7 @@ describe('cross-device send_to_session sender', () => {
     expect(matchesForwardedRequest(wire.requestSource, wire.message)).toBe(true);
     if (expected === 'plain') {
       expect(wire.message).toBe('Fix #12 and merge it.');
-      expect(wire.requestSource).toMatchObject({ delegatedText: 'Fix #12 and merge it.', ownerVerified: true });
+      expect(wire.requestSource).toEqual({ sessionId: 'me', clientId: 'owner-input', plainBody: true, delegatedText: 'Fix #12 and merge it.' });
     } else {
       expect(wire.message).toContain('修好就合进去');
       expect(wire.requestSource).toEqual({ userText: '修好就合进去', sessionId: 'me', clientId: 'owner-input', ownerVerified: true });

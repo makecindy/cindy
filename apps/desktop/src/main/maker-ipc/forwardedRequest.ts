@@ -108,7 +108,8 @@ export async function captureAgentRequest(
   const provenance: ForwardedRequestSource = { sessionId: source.sessionId, clientId: source.clientId, plainBody: true };
   // An accepted relay still names the same owner request. Only the current
   // input can carry that evidence; a historical fallback cannot revive it.
-  const verified = ownerVerified || active?.delegatedRequest?.ownerVerified === true;
+  const verified = ownerVerified || active?.delegatedRequest?.ownerVerified === true
+    || active?.delegatedRequest?.delegatedText !== undefined;
   // Older peers need the quoted owner words, available only while they are this task's own
   // input (or an older host's quotation). A relayed plain hand-off reaches them as plain text.
   const legacyRequest: ForwardedRequestSource | null = typeof source.userText === 'string'
@@ -126,7 +127,7 @@ export async function captureAgentRequest(
   if (decision.kind === 'blocked') return { ...plain, blocked: decision.reason };
   if (decision.kind !== 'authorized') return plain;
   return { message: supplement, legacy, autoReviewUserText: { kind: 'agent-request',
-    request: { ...provenance, ownerVerified: true, delegatedText: supplement } } };
+    request: { ...provenance, delegatedText: supplement } } };
 }
 
 /** Quote only a real owner request. Missing-source envelopes remain readable through the shared legacy validator. */
@@ -138,6 +139,6 @@ export function formatForwardedRequest(source: ForwardedRequestSource, supplemen
 /** A reply into the task the owner's request came from keeps provenance but never speaks for the owner. */
 export function withoutOwnerAuthority(receipt: AgentRequestReceipt): AgentRequestReceipt {
   const request = receipt.request;
-  if (!request?.plainBody || !request.ownerVerified) return receipt;
+  if (!request?.plainBody || request.delegatedText === undefined) return receipt;
   return { ...receipt, request: { sessionId: request.sessionId, clientId: request.clientId, plainBody: true } };
 }

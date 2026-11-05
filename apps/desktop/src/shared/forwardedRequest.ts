@@ -40,17 +40,17 @@ export interface ForwardedRequestSource {
   sessionId?: string;
   clientId?: string;
   /**
-   * The sending host admitted this relay as the owner's request or its accepted continuation.
-   * Only then does the receiver treat it as the owner's request for this task.
-   * Optional on the wire; older hosts drop or never send it.
+   * Older envelopes only: the sending host admitted this relay as the owner's request or its
+   * accepted continuation, so `userText` is the owner's request for this task. Optional on the
+   * wire; older hosts drop or never send it. Plain-body receipts use `delegatedText` instead.
    */
   ownerVerified?: true;
   /** The message body is the agent's own text, not the 用户原话 / Agent补充 envelope (2026-11-05). */
   plainBody?: true;
   /**
-   * The sending host checked that the owner asked for this hand-off (its Auto review,
-   * the owner's own confirmation, or Full Access) and the body is exactly this text.
-   * Only set with `ownerVerified`; the receiver reviews against it.
+   * The sending host checked, in a turn that spoke for the owner, that the owner asked for this
+   * hand-off (its Auto review, the owner's own confirmation, or Full Access); the body is exactly
+   * this text. Its presence is the owner authority; the receiver reviews against it.
    */
   delegatedText?: string;
 }
@@ -67,15 +67,14 @@ export function readForwardedRequestSource(value: unknown): ForwardedRequestSour
   if (source.userText === null) return { userText: null };
   if (typeof source.sessionId !== 'string' || !source.sessionId
     || typeof source.clientId !== 'string' || !source.clientId) return null;
-  const ownerVerified = source.ownerVerified === true;
   if (source.plainBody === true) {
     return { sessionId: source.sessionId, clientId: source.clientId, plainBody: true,
-      ...(ownerVerified && typeof source.delegatedText === 'string' && source.delegatedText.trim()
-        ? { ownerVerified: true as const, delegatedText: source.delegatedText } : {}) };
+      ...(typeof source.delegatedText === 'string' && source.delegatedText.trim()
+        ? { delegatedText: source.delegatedText } : {}) };
   }
   if (typeof source.userText !== 'string') return null;
   return { userText: source.userText, sessionId: source.sessionId, clientId: source.clientId,
-    ...(ownerVerified ? { ownerVerified: true as const } : {}) };
+    ...(source.ownerVerified === true ? { ownerVerified: true as const } : {}) };
 }
 
 /** JSON string quoting keeps an agent-written label inside the supplement. No trimming or summarizing. */

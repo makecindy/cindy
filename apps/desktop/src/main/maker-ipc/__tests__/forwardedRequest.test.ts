@@ -116,13 +116,15 @@ describe('host-owned forwarded request', () => {
     expect(authorize).toHaveBeenCalledTimes(1);
     expect(checked.message).toBe('Fix #12 and merge it after checks pass.');
     expect(checked.autoReviewUserText.request).toEqual({ sessionId: 'lead', clientId: 'u1',
-      ownerVerified: true, plainBody: true, delegatedText: 'Fix #12 and merge it after checks pass.' });
+      plainBody: true, delegatedText: 'Fix #12 and merge it after checks pass.' });
     expect(verifiedOwnerRequestText(checked.autoReviewUserText)).toBe('Fix #12 and merge it after checks pass.');
     // Same-account peers verify the exact body and parse the optional fields.
     const wire = readForwardedRequestSource(JSON.parse(JSON.stringify(checked.autoReviewUserText.request)))!;
     expect(matchesForwardedRequest(wire, checked.message)).toBe(true);
     expect(matchesForwardedRequest(wire, 'Fix #12 and deploy it.')).toBe(false);
-    expect(readForwardedRequestSource({ ...wire, ownerVerified: 'yes' })?.delegatedText).toBeUndefined();
+    // The checked text itself is the owner authority; a blank one carries none.
+    expect(readForwardedRequestSource({ ...wire, delegatedText: '  ' })?.delegatedText).toBeUndefined();
+    expect(verifiedOwnerRequestText({ kind: 'agent-request', request: { ...wire, delegatedText: '  ' } })).toBeUndefined();
     // Older receivers still get the original owner quotation and its mark.
     expect(checked.legacy!.autoReviewUserText.request).toEqual({ userText: '修好就合进去', sessionId: 'lead', clientId: 'u1', ownerVerified: true });
     expect(verifiedOwnerRequestText(checked.legacy!.autoReviewUserText)).toBe('修好就合进去');
@@ -147,7 +149,7 @@ describe('host-owned forwarded request', () => {
     const delegated = checked.autoReviewUserText.request;
     const grandchild = await captureAgentRequest('worker', 'Run the Windows build.', { clientId: 'w1', delegatedRequest: delegated },
       async () => [], true, false, { targetSessionId: 'builder', authorize });
-    expect(grandchild.autoReviewUserText.request).toEqual({ sessionId: 'lead', clientId: 'u1', ownerVerified: true,
+    expect(grandchild.autoReviewUserText.request).toEqual({ sessionId: 'lead', clientId: 'u1',
       plainBody: true, delegatedText: 'Run the Windows build.' });
     // A relayed hand-off has no owner words at hand, so an older peer gets plain text.
     expect(grandchild.legacy).toEqual({ message: 'Run the Windows build.', autoReviewUserText: { kind: 'agent-request' } });
@@ -179,7 +181,7 @@ describe('host-owned forwarded request', () => {
         { authorize: async () => ({ kind: 'authorized' }) });
       if (requesterIsOwner) {
         expect(result.autoReviewUserText.request).toEqual({ sessionId: 'lane', clientId: 'im-row',
-          ownerVerified: true, plainBody: true, delegatedText: 'background' });
+          plainBody: true, delegatedText: 'background' });
       } else {
         expect(read).not.toHaveBeenCalled();
         expect(result.autoReviewUserText.request).toEqual({ userText: null });

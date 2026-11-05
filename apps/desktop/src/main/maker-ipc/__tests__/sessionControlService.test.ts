@@ -340,12 +340,12 @@ describe('session control domain service', () => {
   it('re-checks an edited plain hand-off instead of carrying the old authority', () => {
     const queued = item({ kind: 'session', senderSessionId: 'caller', displayText: 'before' });
     const provenance = { sessionId: 'owner', clientId: 'human' };
-    queued.autoReviewUserText = { kind: 'agent-request', request: { ...provenance, ownerVerified: true,
+    queued.autoReviewUserText = { kind: 'agent-request', request: { ...provenance,
       plainBody: true, delegatedText: 'before' } };
     const unchecked = rebuildSessionQueueItem(queued, 'Also deploy it.');
     expect(unchecked.persistedContent).toBe('Also deploy it.');
     expect(unchecked.autoReviewUserText).toEqual({ kind: 'agent-request', request: { ...provenance, plainBody: true } });
-    const recheck = { ...provenance, ownerVerified: true as const, plainBody: true as const, delegatedText: 'Merge it after checks.' };
+    const recheck = { ...provenance, plainBody: true as const, delegatedText: 'Merge it after checks.' };
     const checked = rebuildSessionQueueItem(queued, 'Merge it after checks.', { kind: 'agent-request', request: recheck });
     expect(checked.persistedContent).toBe('Merge it after checks.');
     expect(checked.autoReviewUserText).toEqual({ kind: 'agent-request', request: recheck });

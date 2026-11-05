@@ -51,12 +51,12 @@ describe('buildWireMessageSourceNote', () => {
     const origin = { ...taskOrigin, senderBotId: 'filo' };
     const request = { sessionId: 's-1', clientId: 'u1', plainBody: true };
     const checked = buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request',
-      request: { ...request, ownerVerified: true, delegatedText: 'Fix #12 and merge it.' } } });
+      request: { ...request, delegatedText: 'Fix #12 and merge it.' } } });
     expect(checked).toContain('主人交给本任务的工作');
     expect(checked).not.toContain('用户原话');
     expect(buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request', request } }))
       .toBe(buildWireMessageSourceNote({ origin }));
-    // An owner mark without the checked text is not enough.
+    // The older owner mark alone does not make a plain relay speak for the owner.
     expect(buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request', request: { ...request, ownerVerified: true } } }))
       .toBe(buildWireMessageSourceNote({ origin }));
   });
