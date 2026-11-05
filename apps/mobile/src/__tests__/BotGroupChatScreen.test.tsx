@@ -2400,6 +2400,30 @@ describe('mobile group threads', () => {
     expect(h.markRead).not.toHaveBeenCalled();
   });
 
+  // #8955 P2 / unit: the plain-text root test missed fences cut at 600 characters.
+  // Only the expanded production body may copy code or open the complete diagram.
+  it.each(['typescript', 'mermaid'])('enables %s block actions only after expanding the complete thread root', async language => {
+    h.chat.server = true;
+    const source = language === 'mermaid' ? `flowchart LR\nA["${'a'.repeat(650)}"] --> B`
+      : `const value = "${'a'.repeat(650)}";\nconsole.log(value);`;
+    const content = `\`\`\`${language}\n${source}\n\`\`\``;
+    await render(threadGroup({ messages: [{ ...rootMessage(), authorKind: 'bot', authorBotId: 'mimi', content }] }), 'ready', rootId, '');
+    expect(byId('message.markdownCodeCopyButton')).toBeNull();
+    expect(byId('botGroup.openDiagram')).toBeNull();
+    await click('botGroup.thread.expandRoot');
+    if (language === 'mermaid') {
+      await click('botGroup.openDiagram');
+      expect(byId('diagramModal')?.getAttribute('data-source')).toBe(source);
+      await click('diagramModal.close');
+    } else {
+      await click('message.markdownCodeCopyButton');
+      expect((await import('expo-clipboard')).setStringAsync).toHaveBeenCalledWith(source);
+    }
+    await click('botGroup.thread.expandRoot');
+    expect(byId('message.markdownCodeCopyButton')).toBeNull();
+    expect(byId('botGroup.openDiagram')).toBeNull();
+  });
+
   it('keeps an empty thread writable, expands long roots, and disables replies when the root is unavailable', async () => {
     h.chat.server = true;
     const long = { ...rootMessage(), content: 'Long question '.repeat(80) + 'END OF QUESTION' };

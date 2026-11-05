@@ -970,7 +970,7 @@ export function BotGroupTimeline({
           <BotGroupThreadPosted messageId={message.id} shared={shared} onPress={revealShare} />
         : null}
         {actions}
-        </View>} topic={!!threadRootId} isRoot={isRoot} active={active} interactive={!selectedImages} onOpenDiagram={onOpenDiagram} onRetrySource={onRetrySource} message={displayMessage} continued={continued} member={message.authorBotId ? memberById.get(message.authorBotId) : undefined}
+        </View>} topic={!!threadRootId} isRoot={isRoot} active={active} interactive={!selectedImages && (!longRoot || expandedRoot)} onOpenDiagram={onOpenDiagram} onRetrySource={onRetrySource} message={displayMessage} continued={continued} member={message.authorBotId ? memberById.get(message.authorBotId) : undefined}
           quoteDisplay={message.quote ? resolveBotGroupQuote(message.quote, messages) : undefined}
           onLocateQuote={message.quote && onLocateMessage ? () => onLocateMessage(message.quote!.messageId) : undefined}
           members={group.members} deviceId={deviceId} online={online} identityFor={identityFor} mentionLabels={mentionLabels}
