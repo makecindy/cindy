@@ -1,4 +1,15 @@
 {
+  "pluginUi": {
+    "renderer": "Affichage",
+    "original": "Original",
+    "unavailable": "Les contrôles de l’extension sont indisponibles. Les actions sont désactivées.",
+    "outcome-unknown": "Le résultat n’est pas confirmé. Consultez l’état actuel de l’extension.",
+    "rejected": "L’extension n’a pas exécuté cette action. Votre saisie est conservée.",
+    "draftChanged": "Votre saisie a changé. La modification de l’extension n’a pas été appliquée.",
+    "editorUnavailable": "Ce champ est indisponible. La modification de l’extension n’a pas été appliquée.",
+    "more": "Plus",
+    "close": "Fermer"
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "Actualiser le quota",
@@ -2386,6 +2397,9 @@
     "agentIsland": {
       "title": "Agent Island",
       "unsupported": "Agent Island nécessite macOS 14 ou une version ultérieure.",
+      "subtleRemindersLabel": "Alertes discrètes",
+      "subtleRemindersHint": "Pour les nouveaux messages, les demandes de réponse ou les erreurs, l’icône change au lieu d’afficher une carte de notification sous l’îlot. Cliquez sur l’îlot pour voir la liste complète des tâches.",
+      "subtleRemindersFailed": "Impossible d’enregistrer les paramètres des alertes. Réessayez.",
       "enableLabel": "Afficher Agent Island",
       "enableHint": "Affiche en haut de l'écran les tâches en cours d'exécution, celles qui attendent une réponse et celles terminées non lues. L'activer désactive les notifications système équivalentes pour éviter les doubles alertes.",
       "enableAria": "Activer ou désactiver Agent Island",
@@ -4021,6 +4035,7 @@
             "hint": "S'applique à la connexion Images de {{agent}}. Déclarez uniquement les capacités réellement prises en charge par l'API. Rouvrez les détails Art après l'enregistrement."
           },
           "capabilityHint": "Utilise les capacités déclarées par ce fournisseur. Si elle n'est pas déclarée, la prise en charge des images est déduite du nom du modèle.",
+          "imageInputDefault": "{{value}} (par défaut)",
           "imageInput": "Images en entrée",
           "imageInputMixed": "Variable selon le moteur",
           "supported": "Pris en charge",
@@ -5726,6 +5741,7 @@
           "checking": "Recherche de mises à jour…",
           "upToDate": "À jour",
           "checkFailed": "Impossible de rechercher des mises à jour",
+          "rateLimited": "Vérifications limitées par GitHub",
           "lastChecked": "Dernière vérification : {{time}}",
           "check": "Rechercher des mises à jour",
           "retry": "Réessayer",
@@ -7774,6 +7790,8 @@
         "skill": "Ajoute la skill « {{name}} » à vos assistants IA",
         "skillDetail": "Une skill est un fichier d'instructions que l'IA charge et suit comme les siennes, avec toutes vos autorisations, dans Claude Code et Codex, dans tous les projets. Elle n'est pas confinée au bac à sable de ce plugin. Elle reste disponible tant que le plugin est activé et est retirée lorsque le plugin est désactivé ou désinstallé ; désactiver le plugin pour un seul dossier ne la masque pas. Le texte complet de la skill ne peut pas être prévisualisé ici : n'installez que des plugins de confiance.",
         "routineEvents": "Événements de routine",
+        "nativeUi": "Ajouter des contrôles aux tâches",
+        "nativeTabView": "Ouvrir la vue « {{title}} »",
         "mcpUi": "Afficher des pages interactives dans la conversation",
         "mcpUiDomains": "Domaines accessibles aux pages : {{domains}}",
         "mcpAppOnly": "Page uniquement",

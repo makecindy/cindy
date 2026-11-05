@@ -34,6 +34,11 @@ const log = createLogger('sidebar-tab-window-ipc');
 
 const MAX_ID_LENGTH = 512;
 const MAX_HANDOFF_TABS = 20;
+let tabOwner: ((tabId: string) => Electron.WebContents | null) | null = null;
+/** Read the existing native assignment; no plugin-owned placement registry. */
+export function getSidebarTabViewOwner(tabId: string): Electron.WebContents | null {
+  return tabOwner?.(tabId) ?? null;
+}
 
 function requireId(value: unknown, name: string): string {
   const id = requireString(value, name);
@@ -151,6 +156,7 @@ export function registerSidebarTabWindowIpc(opts: {
   getMainWindow: () => BrowserWindow | null;
 }): void {
   const { controller, getMainWindow } = opts;
+  tabOwner = tabId => controller.getWebContentsForTab(tabId);
 
   const isMainWindowSender = (sender: Electron.WebContents): boolean => {
     const main = getMainWindow();

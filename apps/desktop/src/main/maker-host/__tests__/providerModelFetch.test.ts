@@ -26,6 +26,20 @@ function fakeResponse(status: number, body: string): Response {
 }
 
 describe('import discovery limits', () => {
+  it('distinguishes an empty OpenHubs account inventory from HTTP 200 business failures', async () => {
+    const request = spec({ agent: 'pi', baseUrl: 'https://openhubs.zhidemai.com/v1',
+      modelsUrl: 'https://openhubs.zhidemai.com/v1/models', wireProtocol: 'openai-chat', allowEmpty: true });
+    for (const body of [{ error_code: 0, data: [] }, { error_code: 401, data: [] }, { error: { message: 'invalid key' }, data: [] }]) {
+      const result = await fetchProviderModels(request, async (_url, init) => {
+        const headers = new Headers(init?.headers);
+        expect(headers.get('authorization')).toBe('Bearer sk-test');
+        expect(headers.has('anthropic-version')).toBe(false);
+        return fakeResponse(200, JSON.stringify(body));
+      });
+      expect(result.ok).toBe(body.error_code === 0);
+      if (result.ok) expect(result.models).toEqual([]);
+    }
+  });
   it('passes redirect rejection with all credentials to the transport', async () => {
     const fetcher = vi.fn(async (_url, init) => {
       expect(init.redirect).toBe('error');

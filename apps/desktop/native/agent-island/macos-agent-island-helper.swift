@@ -1546,7 +1546,13 @@ enum AgentIslandSoundChoice: Codable {
   }
 }
 
+struct AgentIslandCompactReminder: Codable {
+  let phase: String
+  let until: Double
+}
+
 struct AgentIslandDisplayState: Codable {
+  var compactReminder: AgentIslandCompactReminder? = nil
   let visible: Bool
   let mode: String
   let notchStatus: String
@@ -2117,7 +2123,7 @@ struct AgentIslandLayout: Equatable {
     let compactBadgeWidth = !expanded && layoutScreenMetrics.hasNotch && hasSession
       ? PillBadge.intrinsicWidth(pillSnapshot: state.pillSnapshot, compact: true)
       : 0
-    let width = computeWidth(
+    let baseWidth = computeWidth(
       expanded: expanded,
       hasSession: hasSession,
       availableFrameWidth: availableFrameWidth,
@@ -2125,6 +2131,16 @@ struct AgentIslandLayout: Equatable {
       preferredContentWidth: preferredContentWidth,
       compactBadgeWidth: compactBadgeWidth
     )
+    // A hidden island reveals only enough room for its existing icon and count.
+    // Wider user preferences stay unchanged, and the saved width is never rewritten.
+    var width = baseWidth
+    if !expanded, state.compactReminder != nil {
+      let minimumReminderWidth = layoutScreenMetrics.hasNotch
+        ? defaultCompactWidth(hasSession: true, screenMetrics: layoutScreenMetrics, compactBadgeWidth: compactBadgeWidth)
+        : compactIslandStatusIconWidth + 14 + 22
+          + PillBadge.intrinsicWidth(pillSnapshot: state.pillSnapshot, compact: true)
+      width = min(max(baseWidth, minimumReminderWidth), max(1, availableFrameWidth - compactIslandCarrierInset * 2))
+    }
     let height = computeHeight(state: state, expanded: expanded, notchBaselineHeight: notchBaselineHeight)
     let shape = shapeForStatus(notchStatus)
     let shadow = shadowForStatus(notchStatus)
@@ -2515,6 +2531,7 @@ struct AgentIslandRootView: View {
         CompactSessionView(
           session: current,
           pillSnapshot: model.state.pillSnapshot,
+          reminder: model.state.compactReminder,
           layout: layout,
           mascotSkin: model.state.displayMascotSkin,
           runningMascotNamespace: runningMascotNamespace
@@ -2537,6 +2554,7 @@ struct AgentIslandRootView: View {
 struct CompactSessionView: View {
   let session: AgentIslandSession
   let pillSnapshot: AgentIslandPillSnapshot
+  let reminder: AgentIslandCompactReminder?
   let layout: AgentIslandLayout
   let mascotSkin: String
   let runningMascotNamespace: Namespace.ID
@@ -2544,6 +2562,8 @@ struct CompactSessionView: View {
   var body: some View {
     if layout.hardwareNotchHidden {
       Color.clear
+    } else if let reminder {
+      CompactReminderView(reminder: reminder, pillSnapshot: pillSnapshot, layout: layout, mascotSkin: mascotSkin, runningMascotNamespace: runningMascotNamespace)
     } else if layout.hasHardwareNotch && !layout.expanded {
       hardwareNotchBody
     } else {
@@ -2765,6 +2785,59 @@ struct CompactSessionView: View {
 
   private var compactTitle: String {
     pillSnapshot.priorityCompactTitle.isEmpty ? session.displayTitle : pillSnapshot.priorityCompactTitle
+  }
+}
+
+/// The notice describes new attention across tasks, so it must not borrow the
+/// current task's title, output preview, identity color, or running animation.
+struct CompactReminderView: View {
+  let reminder: AgentIslandCompactReminder
+  let pillSnapshot: AgentIslandPillSnapshot
+  let layout: AgentIslandLayout
+  let mascotSkin: String
+  let runningMascotNamespace: Namespace.ID
+
+  var body: some View {
+    if layout.hasHardwareNotch {
+      let sideWidth = max(0, (layout.width - layout.notchWidth) / 2)
+      HStack(spacing: 0) {
+        notice
+          .padding(.leading, max(7, (min(sideWidth, 40) - 18) / 2))
+          .frame(width: sideWidth, alignment: .leading)
+          .clipped()
+        Spacer(minLength: layout.notchWidth)
+        PillBadge(pillSnapshot: pillSnapshot, compact: true)
+          .padding(.trailing, max(7, (min(sideWidth, 40) - 22) / 2))
+          .frame(width: sideWidth, alignment: .trailing)
+          .clipped()
+      }
+    } else {
+      HStack(spacing: 7) {
+        notice
+          .layoutPriority(1)
+        Spacer(minLength: 0)
+        PillBadge(pillSnapshot: pillSnapshot, compact: true)
+          .fixedSize()
+      }
+      .padding(.horizontal, 11)
+    }
+  }
+
+  @ViewBuilder
+  private var notice: some View {
+    if let state = mascotAnimationState(for: reminder.phase) {
+      RunningMascotIcon(
+        skin: mascotSkin,
+        state: state,
+        size: compactIslandStatusIconWidth,
+        namespace: runningMascotNamespace
+      )
+    } else {
+      Image(systemName: "exclamationmark.triangle")
+        .font(.system(size: 10, weight: .semibold))
+        .foregroundColor(agentIslandErrorRed)
+        .frame(width: compactIslandStatusIconWidth, height: compactIslandStatusIconWidth)
+    }
   }
 }
 
@@ -4584,7 +4657,11 @@ struct AgentIslandMascotView: View {
 }
 
 private func mascotAnimationState(for session: AgentIslandSession) -> AgentIslandMascotAnimationState? {
-  switch session.phase {
+  mascotAnimationState(for: session.phase)
+}
+
+private func mascotAnimationState(for phase: String) -> AgentIslandMascotAnimationState? {
+  switch phase {
   case "needs-interaction":
     return .waitingApproval
   case "completed":
@@ -5061,6 +5138,7 @@ final class AgentIslandController {
   private var screenMetricsTimer: Timer?
   private var pendingScreenMetricsForceRefresh = false
   private var dragInteraction: PanelDragInteraction?
+  private var didApplyDragLayout = false
   private var pendingMoveInteraction: PanelDragInteraction?
   private var lastMoveTime: TimeInterval = 0
   private var lastLayoutEmitTime: TimeInterval = 0
@@ -5578,6 +5656,11 @@ final class AgentIslandController {
   }
 
   private func continueDrag(screenPoint: NSPoint, interaction: PanelDragInteraction) {
+    // The held-pointer poller also calls this without movement. A reminder can
+    // temporarily widen the island, but pressing its edge must not save that width.
+    guard didApplyDragLayout || screenPoint.x != interaction.startMouseX else {
+      return
+    }
     pushDragCursor(for: interaction)
     let nextFrame: NSRect
     let contentWidth: CGFloat
@@ -5627,6 +5710,7 @@ final class AgentIslandController {
       from: lastInteractiveSnapMode,
       to: nextSnapMode
     )
+    didApplyDragLayout = true
     applyInteractiveFrame(nextFrame, animatedSnap: shouldAnimateSnap)
     lastInteractiveSnapMode = nextSnapMode
     emitDragDebug(
@@ -5665,20 +5749,24 @@ final class AgentIslandController {
       screenPoint: screenPoint,
       force: true
     )
+    let shouldPersistLayout = didApplyDragLayout
     dragInteraction = nil
+    didApplyDragLayout = false
     model.layoutDragActive = false
     model.layoutDragMode = nil
     lastInteractiveSnapMode = .free
     popPushedCursor()
     eventSink(["type": "drag", "active": false])
-    emitLayoutPreference(
-      frame: panel.frame,
-      contentWidth: displayedContentWidth(),
-      force: true,
-      snapCenter: interaction.mode == .move
-    )
+    if shouldPersistLayout {
+      emitLayoutPreference(
+        frame: panel.frame,
+        contentWidth: displayedContentWidth(),
+        force: true,
+        snapCenter: interaction.mode == .move
+      )
+    }
     handleMouseMoved(screenPoint: screenPoint, force: true)
-    replayDeferredInteractionUpdateIfNeeded(preservingCurrentPanelFrame: true)
+    replayDeferredInteractionUpdateIfNeeded(preservingCurrentPanelFrame: shouldPersistLayout)
   }
 
   private func finishPendingMove(screenPoint: NSPoint) {
@@ -5719,6 +5807,7 @@ final class AgentIslandController {
   private func activateDragInteraction(_ interaction: PanelDragInteraction, screenPoint: NSPoint) {
     pendingMoveInteraction = nil
     dragInteraction = interaction
+    didApplyDragLayout = false
     model.layoutDragActive = true
     model.layoutDragMode = interaction.mode.eventName
     lastInteractiveSnapMode = compactWidthSnapMode(
@@ -7228,8 +7317,10 @@ final class AgentIslandAppDelegate: NSObject, NSApplicationDelegate {
   }
 }
 
+#if !AGENT_ISLAND_INTERACTION_TEST
 let app = NSApplication.shared
 let delegate = AgentIslandAppDelegate()
 app.delegate = delegate
 app.setActivationPolicy(.accessory)
 app.run()
+#endif

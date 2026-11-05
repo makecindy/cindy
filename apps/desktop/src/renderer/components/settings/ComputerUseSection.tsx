@@ -231,6 +231,10 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
   const [driverUpdate, setDriverUpdate] = useState<ComputerDriverUpdateCheck | null>(null);
   const [driverCheckPending, setDriverCheckPending] = useState(false);
   const [driverCheckFailed, setDriverCheckFailed] = useState(false);
+  // GitHub 未鉴权限额打满时 main 会标注原因:这种失败等配额重置就好,和真的要用户
+  // 排查的网络故障分开说。旧版本 main 不下发 checkError,继续按普通失败处理。
+  const driverCheckRateLimited =
+    driverCheckFailed && driverUpdate?.checkError?.kind === 'rate_limited';
   const [driverUpdatePending, setDriverUpdatePending] = useState(false);
   // main 侧采样广播的下载进度;null = 未开始/已结束(显示通用「更新中…」)。
   const [driverUpdateProgress, setDriverUpdateProgress] =
@@ -1845,11 +1849,13 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                                 ? driverUpdateProgress?.phase === 'installing'
                                   ? t('settings.computerUse.directControl.update.installing')
                                   : t('settings.computerUse.directControl.update.updating')
-                                : driverCheckFailed
-                                  ? t('settings.computerUse.directControl.update.checkFailed')
-                                  : driverUpdate
-                                    ? t('settings.computerUse.directControl.update.upToDate')
-                                    : t('settings.computerUse.directControl.update.notChecked')}
+                                : driverCheckRateLimited
+                                  ? t('settings.computerUse.directControl.update.rateLimited')
+                                  : driverCheckFailed
+                                    ? t('settings.computerUse.directControl.update.checkFailed')
+                                    : driverUpdate
+                                      ? t('settings.computerUse.directControl.update.upToDate')
+                                      : t('settings.computerUse.directControl.update.notChecked')}
                           </span>
                         </>
                       ) : null}
