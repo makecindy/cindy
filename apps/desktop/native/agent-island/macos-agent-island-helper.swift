@@ -2914,12 +2914,18 @@ struct IdleIslandView: View {
     } else if layout.hasHardwareNotch {
       hardwareNotchBody
     } else if hasQuota && layout.expanded {
-      // Quota takes the room left of the toolbar, aligned like a task's top bar.
-      idleMark(quotaWidth: layout.width - expandedIslandCardHorizontalPadding * 2
-        - ExpandedIslandToolbarControls.width - 8 - idleMascotWidth)
-        .padding(.horizontal, expandedIslandCardHorizontalPadding)
+      // Stays centered where the collapsed island showed it, so expanding only grows the
+      // island around it; it moves left only as far as the toolbar needs.
+      let leadingRoom = layout.width - expandedIslandCardHorizontalPadding * 2
+        - ExpandedIslandToolbarControls.width - 8
+      let quotaWidth = leadingRoom - idleMascotWidth
+      let markWidth = idleMascotWidth
+        + AgentIslandQuotaRow.selection(items: quota, maxWidth: quotaWidth).nominalWidth
+      let overflow = max(0, (layout.width + markWidth) / 2 - expandedIslandCardHorizontalPadding - leadingRoom)
+      idleMark(quotaWidth: quotaWidth)
+        .offset(x: -overflow)
         .frame(height: layout.menuBarZoneHeight)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     } else {
       idleMark(quotaWidth: layout.width - compactIdleQuotaChrome)
         .frame(height: layout.expanded ? layout.menuBarZoneHeight : nil)
@@ -3252,6 +3258,12 @@ struct AgentIslandQuotaRow: View {
     let items: [AgentIslandQuotaItem]
     /// Only the lowest plan's percentage fits.
     let logoHidden: Bool
+
+    var nominalWidth: CGFloat {
+      guard !items.isEmpty else { return 0 }
+      if logoHidden { return CGFloat(items[0].textWidth) }
+      return items.reduce(CGFloat(0)) { $0 + CGFloat($1.width) } + chipSpacing * CGFloat(items.count - 1)
+    }
   }
 
   static func selection(items: [AgentIslandQuotaItem], maxWidth: CGFloat) -> Selection {
