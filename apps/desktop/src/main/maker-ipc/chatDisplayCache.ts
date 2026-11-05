@@ -24,7 +24,32 @@ export function accessChatDisplayCache(input: unknown): unknown {
     const raw = readAtomicFileSync(file);
     return raw && Buffer.byteLength(raw) <= MAX_BYTES ? JSON.parse(raw) : null;
   }
-  const raw = JSON.stringify(request.action === 'remove' ? null : request.value);
+  let value = request.action === 'remove' ? null : request.value;
+  if (request.action === 'write' && request.key === 'cloud-homes' && value && typeof value === 'object'
+    && !Array.isArray(value)) {
+    // Multiple renderer windows share this snapshot. Preserve tombstones written by a
+    // newer window when an older window writes its stale full roster later.
+    const cachedRaw = readAtomicFileSync(file);
+    if (cachedRaw && Buffer.byteLength(cachedRaw) <= MAX_BYTES) {
+      try {
+        const cached = JSON.parse(cachedRaw) as { retiredBotIds?: unknown } | null;
+        const incoming = value as { actors?: unknown; retiredBotIds?: unknown };
+        const activeIds = new Set(Array.isArray(incoming.actors)
+          ? incoming.actors.flatMap(actor => actor && typeof actor === 'object' && typeof (actor as { externalId?: unknown }).externalId === 'string'
+            ? [(actor as { externalId: string }).externalId] : [])
+          : []);
+        const retired = new Set<string>([
+          ...(cached && Array.isArray(cached.retiredBotIds) ? cached.retiredBotIds.filter((id): id is string => typeof id === 'string') : []),
+          ...(Array.isArray(incoming.retiredBotIds) ? incoming.retiredBotIds.filter((id): id is string => typeof id === 'string') : []),
+        ]);
+        for (const id of activeIds) retired.delete(id);
+        value = { ...incoming, retiredBotIds: [...retired] };
+      } catch {
+        // An invalid or partially written old cache must not block the current snapshot.
+      }
+    }
+  }
+  const raw = JSON.stringify(value);
   if (!raw || Buffer.byteLength(raw) > MAX_BYTES) throw new Error('CACHE_TOO_LARGE');
   mkdirSync(root, { recursive: true, mode: 0o700 }); atomicWriteFileSync(file, raw);
   rmSync(`${file}.bak`, { force: true });
