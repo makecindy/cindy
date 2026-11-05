@@ -1443,8 +1443,9 @@ interface ElectronAPI {
     /** 「显示到任务列表」:清除后台隐藏,任务重新出现在任务列表。 */
     revealBackgroundTask: (id: string, taskId: string) => Promise<{ ok: true }>;
     /** 目录级禁用清单(插件页项目范围视图;sendSync 切换同帧渲染)。 */
-    workdirPrefsSync: (workdir: string) => { disabled: string[] };
-    workdirPrefs: (workdir: string) => Promise<{ disabled: string[] }>;
+    workdirPrefsSync: (workdir: string) => { disabled: string[]; workdirKey?: string };
+    workdirPrefs: (workdir: string) => Promise<{ disabled: string[]; workdirKey?: string }>;
+    onWorkdirPrefsChanged: (callback: (payload: { workdirKey: string; disabled: string[] }, ownerStamp?: unknown) => void) => () => void;
     /** 写/清一条目录级例外(disabled=false 即清除,回到跟随全局)。 */
     setWorkdirDisabled: (
       workdir: string,
