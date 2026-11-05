@@ -51,6 +51,7 @@ describe('默认态与持久化', () => {
       enabled: false,
       telegramEnabled: false,
       xEnabled: false,
+      feishuEnabled: false,
       xCompanionBotId: null,
       urlOverride: null,
       workspaces: {},
@@ -58,8 +59,10 @@ describe('默认态与持久化', () => {
       lifecycleAnnouncementOverride: null,
       telegramBindingCache: null,
       xBindingCache: null,
+      feishuBindingCache: null,
       xDefaultWorkspace: null,
       telegramDefaultWorkspace: null,
+      feishuDefaultWorkspace: null,
     });
     expect(store.effectiveUrl()).toBe(TEST_DEFAULT_URL);
   });
@@ -175,6 +178,7 @@ describe('旧多连接文件迁移', () => {
       enabled: false,
       telegramEnabled: false,
       xEnabled: false,
+      feishuEnabled: false,
       xCompanionBotId: null,
       urlOverride: null,
       workspaces: {},
@@ -182,8 +186,10 @@ describe('旧多连接文件迁移', () => {
       lifecycleAnnouncementOverride: null,
       telegramBindingCache: null,
       xBindingCache: null,
+      feishuBindingCache: null,
       xDefaultWorkspace: null,
       telegramDefaultWorkspace: null,
+      feishuDefaultWorkspace: null,
     });
   });
 });
@@ -253,32 +259,43 @@ describe('provider 与 Cindy 账号隔离', () => {
     scopeName: 'CindyBot',
   };
 
-  it('Slack/Telegram 开关独立，目录映射设备共享，绑定缓存按账号分区', () => {
+  it('Slack/Telegram/飞书开关独立，目录映射设备共享，绑定缓存按账号分区', () => {
     let fingerprint = 'account-one';
     const store = makeStore(undefined, () => fingerprint);
     const abs = path.join(dir, 'repo');
+    const feishuBinding = { ...telegramBinding, principalId: 'ou_user', scopeId: 'cli_app' };
 
     store.setEnabled(true);
     store.setProviderEnabled('telegram', true);
     store.setProviderBindingCache('telegram', telegramBinding);
+    store.setProviderEnabled('feishu', true);
+    store.setProviderBindingCache('feishu', feishuBinding);
     store.setWorkspaces({ cindy: abs });
 
     expect(store.anyProviderEnabled()).toBe(true);
     expect(store.get()).toMatchObject({
       enabled: true,
       telegramEnabled: true,
+      feishuEnabled: true,
       workspaces: { cindy: abs },
       telegramBindingCache: telegramBinding,
+      feishuBindingCache: feishuBinding,
     });
 
     fingerprint = 'account-two';
     expect(store.get()).toMatchObject({
       enabled: false,
       telegramEnabled: false,
+      feishuEnabled: false,
       workspaces: { cindy: abs },
       bindingsCache: [],
       telegramBindingCache: null,
+      feishuBindingCache: null,
     });
+    // 只开飞书也算有 provider 开着(决定是否需要建连)。
+    store.setProviderEnabled('feishu', true);
+    expect(store.anyProviderEnabled()).toBe(true);
+    store.setProviderEnabled('feishu', false);
 
     store.setProviderEnabled('telegram', true);
     fingerprint = 'account-one';
@@ -385,25 +402,33 @@ describe('provider 与 Cindy 账号隔离', () => {
       expect(reopened.get().xDefaultWorkspace).toBe('cindy');
     });
 
-    it('目录被删掉后两个 provider 的默认值都归零(存档层面也删掉)', () => {
+    it('目录被删掉后每个 provider 的默认值都归零(存档层面也删掉)', () => {
       const store = makeStore();
       store.setWorkspaces({ cindy: '/Users/dash/Code/cindy', other: '/tmp/other' });
       store.setProviderDefaultWorkspace('telegram', 'cindy');
       store.setProviderDefaultWorkspace('x', 'cindy');
+      store.setProviderDefaultWorkspace('feishu', 'cindy');
+      expect(store.get().feishuDefaultWorkspace).toBe('cindy');
 
       store.setWorkspaces({ other: '/tmp/other' });
       expect(store.get().telegramDefaultWorkspace).toBeNull();
       expect(store.get().xDefaultWorkspace).toBeNull();
+      expect(store.get().feishuDefaultWorkspace).toBeNull();
 
-      // 只清一个 provider 会让另一个的失效别名留在盘上, 用户重建同名别名时复活。
+      // 漏清一个 provider 会让它的失效别名留在盘上, 用户重建同名别名时复活。
       const raw = JSON.parse(fs.readFileSync(filePath(), 'utf-8')) as {
         accounts: Record<
           string,
-          { telegram: { defaultWorkspace: string | null }; x: { defaultWorkspace: string | null } }
+          {
+            telegram: { defaultWorkspace: string | null };
+            x: { defaultWorkspace: string | null };
+            feishu: { defaultWorkspace: string | null };
+          }
         >;
       };
       expect(raw.accounts['account-test'].telegram.defaultWorkspace).toBeNull();
       expect(raw.accounts['account-test'].x.defaultWorkspace).toBeNull();
+      expect(raw.accounts['account-test'].feishu.defaultWorkspace).toBeNull();
     });
 
     it('未配置的别名写入即拒(非法值会在下次握手时被协议拒收, 那时离操作已经很远)', () => {

@@ -688,14 +688,15 @@ interface PendingTurnEnd {
 /**
  * 渠道形态(dm / group)—— 只看 externalKey 的前缀形状, 不查任何状态。
  *
- * **唯一用途**: 官方 Telegram 群轮次在 send 时取 session turn lease, 把
+ * **唯一用途**: 官方 Telegram / 飞书群轮次在 send 时取 session turn lease, 把
  * 「前台 done → 后台任务续跑」这段空窗也算作本轮独占, 否则 Desktop 轮次会被
  * 放进来与它共享 session 事件流 / origin / 交互路由(codex review #1490)。
  * 与权限档**无关** —— 群轮次不再改用户配的权限模式(见 session-runner)。
  * execute() 与续跑观察共用同一判据, 分叉会让续跑轮丢掉这层独占。
+ * 官方飞书 / Lark 的群消息一律在话题里回复(`feishu:topic:…`), 同样是多人可见的群轮次。
  */
 function deriveLaneKind(externalKey: string): 'dm' | 'group' {
-  return /^telegram:(group|topic):/.test(externalKey) ? 'group' : 'dm';
+  return /^(?:telegram|feishu):(?:group|topic):/.test(externalKey) ? 'group' : 'dm';
 }
 
 interface PendingReopen {
@@ -2710,7 +2711,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           titleText,
           bareKey,
           payload.source?.teamName ??
-            (payload.source?.im === 'telegram' || payload.source?.im === 'x'
+            (payload.source?.im === 'telegram' ||
+            payload.source?.im === 'x' ||
+            payload.source?.im === 'feishu'
               ? payload.source.channelName
               : null),
         ),

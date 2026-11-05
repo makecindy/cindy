@@ -87,6 +87,10 @@ export const CLIENT_ENDPOINT_KEYS = [
   // that omits the key entirely) means X has not rolled out yet — the Settings
   // card stays hidden, which is the intended gradual-rollout switch.
   'xHookWsUrl',
+  // Official Feishu / Lark hook: one overseas deployment serves both regions,
+  // like Telegram. Empty (or omitted) keeps the Settings card hidden until the
+  // service rolls out — the same gradual-rollout switch as X.
+  'feishuHookWsUrl',
   'slackHookWsUrl',
   'websiteUrl',
   // model-access-server(登录后自动下发 LLM 网关凭据)的 API 基址。
@@ -161,6 +165,7 @@ const FIELD_PROTOCOLS: Record<ClientEndpointKey, readonly string[]> = {
   heartbeatUrl: ['https:'],
   telegramHookWsUrl: ['wss:'],
   xHookWsUrl: ['wss:'],
+  feishuHookWsUrl: ['wss:'],
   slackHookWsUrl: ['wss:'],
   websiteUrl: ['https:'],
   modelAccessApiBaseUrl: ['https:'],

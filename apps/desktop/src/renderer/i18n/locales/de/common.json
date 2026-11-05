@@ -6114,7 +6114,7 @@
         "hook": "Cindy-IM-Bots"
       },
       "hook": {
-        "description": "Verbinde Slack und Telegram mit derselben Cindy. Nachrichten werden an dieses Gerät weitergeleitet und nutzen dessen Projektliste und Sitzungsausführung; jeder Anbieter behält sein eigenes Konto und seine Einstellungen.",
+        "description": "Verbinde Slack, Telegram, Feishu / Lark und weitere Kanäle mit derselben Cindy. Nachrichten werden an dieses Gerät weitergeleitet und nutzen dessen Projektliste und Sitzungsausführung; jeder Anbieter behält sein eigenes Konto und seine Einstellungen.",
         "slackDescription": "Verknüpfe Slack-Workspaces und übergib Cindy Aufgaben aus Slack.",
         "slackDisabledHint": "Aktiviere den Schalter, um die Slack-Autorisierung zu starten. Nach der Verknüpfung kannst du Aufgaben aus Slack übermitteln.",
         "slackBoundHint": "Bindung abgeschlossen. Durch Ausschalten des Schalters wird die Bindung dieses Geräts aufgehoben; Um es wieder einzuschalten, ist eine erneute Autorisierung erforderlich.",
@@ -6335,6 +6335,40 @@
             "revoked": "Verknüpfung aufgehoben",
             "superseded": "Auf einem anderen Gerät verknüpft"
           }
+        },
+        "feishu": {
+          "description": "Verknüpfe dein Feishu- oder Lark-Konto und weise Aufgaben zu, indem du dem Cindy-Bot schreibst oder ihn in einer Gruppe erwähnst.",
+          "disabledHint": "Aktiviere den Schalter und autorisiere dann dein Feishu-/Lark-Konto im Browser oder sende den Verknüpfungscode an den Bot.",
+          "toggleAria": "Feishu-/Lark-Verbindung umschalten",
+          "connect": "Feishu / Lark verknüpfen",
+          "openApp": "Autorisierungsseite öffnen",
+          "cancel": "Verknüpfung abbrechen",
+          "retry": "Verknüpfung erneut versuchen",
+          "openBot": "Bot öffnen",
+          "unlink": "Verknüpfung mit Feishu / Lark aufheben",
+          "unlinkConfirmTitle": "Verknüpfung mit Feishu / Lark aufheben?",
+          "unlinkConfirmDescription": "Nach dem Aufheben der Verknüpfung kann Feishu / Lark keine Aufgaben mehr an dieses Gerät senden; lokale Projekte und andere Kanäle sind davon nicht betroffen.",
+          "unavailableHint": "Deine Organisation hat den Feishu-/Lark-Bot noch nicht eingerichtet. Wende dich an einen Admin deiner Organisation.",
+          "status": {
+            "checking": "Serverunterstützung wird geprüft…",
+            "unavailable": "Von deiner Organisation nicht eingerichtet",
+            "disabled": "Deaktiviert",
+            "none": "Nicht verknüpft",
+            "pending": "Im Browser autorisieren oder den Verknüpfungscode an den Bot senden",
+            "awaiting_confirmation": "Gerätewechsel in Feishu / Lark bestätigen",
+            "confirmed": "{{user}} mit dem Feishu-/Lark-Bot verknüpft",
+            "denied": "Autorisierung abgelehnt",
+            "expired": "Autorisierung abgelaufen",
+            "failed": "Verknüpfung fehlgeschlagen",
+            "revoked": "Verknüpfung aufgehoben",
+            "superseded": "Auf einem anderen Gerät verknüpft"
+          },
+          "bindCode": {
+            "label": "Verknüpfungscode",
+            "copy": "Code kopieren",
+            "copied": "Verknüpfungscode kopiert",
+            "hint": "Oder sende diesen Code in Feishu / Lark per Direktnachricht an den Cindy-Bot"
+          }
         }
       },
       "summary": {
@@ -6363,6 +6397,7 @@
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
         "providerX": "X",
+        "providerFeishu": "Feishu / Lark",
         "requireConnected": "Bearbeitbar, sobald {{provider}} verbunden ist (aktiviere den Schalter oben und warte auf die Verbindung).",
         "offlineLocal": "{{provider}} ist offline. Änderungen werden auf diesem Computer gespeichert und bei erneuter Verbindung mit der Chat-Modellkarte synchronisiert.",
         "requireBinding": "Schließe zuerst die Kontoverknüpfung mit {{provider}} ab.",

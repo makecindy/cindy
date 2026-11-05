@@ -54,6 +54,8 @@ export interface SlackHookConfigState {
   telegramEnabled: boolean;
   /** X (Twitter) provider 独立开关。 */
   xEnabled: boolean;
+  /** 官方飞书 / Lark provider 独立开关。 */
+  feishuEnabled: boolean;
   /** Explicit companion assignment; absent preserves ordinary X tasks. */
   xCompanionBotId?: string | null;
   /** 服务器地址覆写(高级/调试用, 无 UI 入口); null = 跟随内置默认。 */
@@ -69,6 +71,7 @@ export interface SlackHookConfigState {
   lifecycleAnnouncementOverride: boolean | null;
   telegramBindingCache: ProviderBindingCacheEntry | null;
   xBindingCache: ProviderBindingCacheEntry | null;
+  feishuBindingCache: ProviderBindingCacheEntry | null;
   /**
    * 该 provider 派发任务时使用的默认工作目录别名; null = 用内置「对话」伪目录。
    * 生效顺序恒为 **会话显式映射 > 默认工作目录 > 「对话」**(判定在 hook server)。
@@ -83,6 +86,8 @@ export interface SlackHookConfigState {
   xDefaultWorkspace: string | null;
   /** 同上, Telegram 侧(私聊 / 群 / 话题一律适用)。 */
   telegramDefaultWorkspace: string | null;
+  /** 同上, 官方飞书 / Lark 侧(私聊 / 群话题一律适用)。 */
+  feishuDefaultWorkspace: string | null;
 }
 
 export const DEFAULT_SLACK_LIFECYCLE_ANNOUNCEMENT = false;
@@ -173,15 +178,18 @@ export interface SlackHookStore {
   /** 实际生效的服务器地址(覆写优先, 否则内置默认)。 */
   effectiveUrl(): string;
   setEnabled(enabled: boolean): SlackHookConfigState;
-  setProviderEnabled(provider: 'slack' | 'telegram' | 'x', enabled: boolean): SlackHookConfigState;
+  setProviderEnabled(
+    provider: 'slack' | 'telegram' | 'x' | 'feishu',
+    enabled: boolean,
+  ): SlackHookConfigState;
   anyProviderEnabled(): boolean;
   setWorkspaces(workspaces: Record<string, string>): SlackHookConfigState;
   /** (multi-team)覆写本地绑定缓存(bind.state / 绑定行变化后由 manager 调用)。 */
   setBindingsCache(entries: HookBindingCacheEntry[]): SlackHookConfigState;
   setLifecycleAnnouncementOverride(enabled: boolean | null): SlackHookConfigState;
-  /** provider-neutral(Telegram / X)confirmed 绑定的本地影子写入。 */
+  /** provider-neutral(Telegram / X / 飞书)confirmed 绑定的本地影子写入。 */
   setProviderBindingCache(
-    provider: 'telegram' | 'x',
+    provider: 'telegram' | 'x' | 'feishu',
     entry: ProviderBindingCacheEntry | null,
   ): SlackHookConfigState;
   /**
@@ -190,7 +198,7 @@ export interface SlackHookStore {
    * 写进去的非法值会在下次握手时被协议拒收, 那时已经离用户操作很远了。
    */
   setProviderDefaultWorkspace(
-    provider: 'telegram' | 'x',
+    provider: 'telegram' | 'x' | 'feishu',
     alias: string | null,
   ): SlackHookConfigState;
   setXCompanionBotId(botId: string | null): SlackHookConfigState;
@@ -213,6 +221,12 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
     x: {
       enabled: boolean;
       companionBotId?: string | null;
+      bindingCache: ProviderBindingCacheEntry | null;
+      defaultWorkspace: string | null;
+    };
+    /** 官方飞书 / Lark; 旧配置文件没有这个键, 解析为全默认(关闭、无缓存)。 */
+    feishu: {
+      enabled: boolean;
       bindingCache: ProviderBindingCacheEntry | null;
       defaultWorkspace: string | null;
     };
@@ -253,14 +267,17 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
         enabled: source?.enabled === true,
         telegramEnabled: false,
         xEnabled: false,
+        feishuEnabled: false,
         urlOverride: null, // 旧 url 是自部署地址, 不迁移 —— 新形态用内置中心服务器
         workspaces,
         bindingsCache: [], // 旧多连接时代没有绑定缓存概念
         lifecycleAnnouncementOverride: null,
         telegramBindingCache: null,
         xBindingCache: null,
+        feishuBindingCache: null,
         xDefaultWorkspace: null,
         telegramDefaultWorkspace: null,
+        feishuDefaultWorkspace: null,
       };
       // 清理旧文件与旧 secret(best-effort, 失败只记日志)
       const legacyIds = rows.map((r) => (typeof r.id === 'string' ? r.id : '')).filter(Boolean);
@@ -292,6 +309,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
     },
     telegram: { enabled: false, bindingCache: null, defaultWorkspace: null },
     x: { enabled: false, bindingCache: null, defaultWorkspace: null },
+    feishu: { enabled: false, bindingCache: null, defaultWorkspace: null },
   });
 
   /** 绑定缓存条目形状校验(坏条目静默丢弃 —— 缓存是可再生数据, 不值得报错)。 */
@@ -352,6 +370,10 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
       row.x && typeof row.x === 'object' && !Array.isArray(row.x)
         ? (row.x as Record<string, unknown>)
         : {};
+    const feishu =
+      row.feishu && typeof row.feishu === 'object' && !Array.isArray(row.feishu)
+        ? (row.feishu as Record<string, unknown>)
+        : {};
     return {
       slack: {
         enabled: slack.enabled === true,
@@ -377,6 +399,13 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
         // 成员关系不在这里卡: 解析时 workspaces 还没读进来。留给 viewOf 复核,
         // 那里才同时握有两者。
         defaultWorkspace: typeof x.defaultWorkspace === 'string' ? x.defaultWorkspace : null,
+      },
+      feishu: {
+        enabled: feishu.enabled === true,
+        bindingCache: parseProviderBindingCache(feishu.bindingCache),
+        // 同 x: 成员关系留给 viewOf 复核。
+        defaultWorkspace:
+          typeof feishu.defaultWorkspace === 'string' ? feishu.defaultWorkspace : null,
       },
     };
   }
@@ -408,6 +437,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
         },
         telegram: { enabled: false, bindingCache: null, defaultWorkspace: null },
         x: { enabled: false, bindingCache: null, defaultWorkspace: null },
+        feishu: { enabled: false, bindingCache: null, defaultWorkspace: null },
       },
     };
   }
@@ -458,14 +488,17 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
         enabled: row.enabled === true,
         telegramEnabled: false,
         xEnabled: false,
+        feishuEnabled: false,
         urlOverride,
         workspaces,
         bindingsCache: parseBindingsCache(row.bindingsCache),
         lifecycleAnnouncementOverride: null,
         telegramBindingCache: null,
         xBindingCache: null,
+        feishuBindingCache: null,
         xDefaultWorkspace: null,
         telegramDefaultWorkspace: null,
+        feishuDefaultWorkspace: null,
       });
     } catch (err) {
       log.warn(
@@ -518,9 +551,9 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
     const accounts = [...Object.values(document.accounts), document.legacyAccount];
     for (const account of accounts) {
       if (account === undefined) continue;
-      // 两个 provider 都要清: 只清一个会让另一个的失效别名留在盘上, 用户之后
+      // 每个 provider 都要清: 漏清一个会让它的失效别名留在盘上, 用户之后
       // 重新添加同名别名(哪怕指向另一个目录)就把它无声复活。
-      for (const provider of ['telegram', 'x'] as const) {
+      for (const provider of ['telegram', 'x', 'feishu'] as const) {
         const alias = account[provider].defaultWorkspace;
         if (alias === null || alias === undefined) continue;
         if (isSelectableWorkspace(document, alias)) continue;
@@ -547,6 +580,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
       enabled: account.slack.enabled,
       telegramEnabled: account.telegram.enabled,
       xEnabled: account.x.enabled,
+      feishuEnabled: account.feishu.enabled,
       xCompanionBotId: account.x.companionBotId ?? null,
       urlOverride: document.urlOverride,
       workspaces: { ...document.workspaces },
@@ -556,6 +590,9 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
         ? { ...account.telegram.bindingCache }
         : null,
       xBindingCache: account.x.bindingCache ? { ...account.x.bindingCache } : null,
+      feishuBindingCache: account.feishu.bindingCache
+        ? { ...account.feishu.bindingCache }
+        : null,
       // 读侧兜底: 正常路径上 setWorkspaces 已把失效别名从存档里删了, 这里只兜
       // 手改配置文件、或将来新增了别的清单写入口的情况。代价不对称 —— 漏兜的
       // 后果是 hello 带上清单外别名被协议拒收, **该 provider 的连接**断在握手上
@@ -565,6 +602,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
         document,
         account.telegram.defaultWorkspace,
       ),
+      feishuDefaultWorkspace: selectableDefaultWorkspace(document, account.feishu.defaultWorkspace),
     };
   }
 
@@ -600,7 +638,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
     },
     anyProviderEnabled() {
       const state = read();
-      return state.enabled || state.telegramEnabled || state.xEnabled;
+      return state.enabled || state.telegramEnabled || state.xEnabled || state.feishuEnabled;
     },
     setWorkspaces(workspaces) {
       const current = currentDocument();

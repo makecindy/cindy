@@ -6071,7 +6071,7 @@
         "hook": "Cindy IM 봇"
       },
       "hook": {
-        "description": "Slack과 Telegram을 하나의 Cindy에 연결합니다. 메시지는 이 기기로 전달되며 프로젝트 목록과 세션 실행기를 공유합니다. 계정 연동과 설정은 제공자별로 분리됩니다.",
+        "description": "Slack, Telegram, Feishu / Lark 등을 하나의 Cindy에 연결합니다. 메시지는 이 기기로 전달되며 프로젝트 목록과 세션 실행기를 공유합니다. 계정 연동과 설정은 제공자별로 분리됩니다.",
         "slackDescription": "Slack 워크스페이스를 연결하고 Slack에서 Cindy에게 작업을 맡기세요.",
         "slackDisabledHint": "스위치를 켜면 Slack 인증이 시작됩니다. 연결이 완료되면 Slack에서 작업을 맡길 수 있습니다.",
         "slackBoundHint": "연결이 완료되었습니다. 스위치를 끄면 연결이 해제되며 다시 켜려면 재인증이 필요합니다.",
@@ -6292,6 +6292,40 @@
             "revoked": "연결이 해제되었습니다",
             "superseded": "다른 기기에서 연결됨"
           }
+        },
+        "feishu": {
+          "description": "Feishu 또는 Lark 계정을 연결하고 Cindy bot에게 메시지를 보내거나 그룹에서 멘션해 작업을 요청하세요.",
+          "disabledHint": "스위치를 켠 뒤 브라우저에서 Feishu / Lark 계정을 인증하거나 연동 코드를 bot에게 보내세요.",
+          "toggleAria": "Feishu / Lark 연결 전환",
+          "connect": "Feishu / Lark 연결",
+          "openApp": "인증 페이지 열기",
+          "cancel": "연결 취소",
+          "retry": "다시 연결",
+          "openBot": "봇 열기",
+          "unlink": "Feishu / Lark 연결 해제",
+          "unlinkConfirmTitle": "Feishu / Lark 연결을 해제할까요?",
+          "unlinkConfirmDescription": "해제하면 Feishu / Lark에서 이 기기로 작업을 보낼 수 없습니다. 로컬 프로젝트와 다른 채널 연결에는 영향이 없습니다.",
+          "unavailableHint": "소속 조직에서 아직 Feishu / Lark bot을 설정하지 않았습니다. 조직 관리자에게 문의하세요.",
+          "status": {
+            "checking": "서버 지원 확인 중…",
+            "unavailable": "조직에서 설정되지 않음",
+            "disabled": "비활성화됨",
+            "none": "연결되지 않음",
+            "pending": "브라우저에서 인증하거나 연동 코드를 bot에게 보내세요",
+            "awaiting_confirmation": "Feishu / Lark에서 기기 전환을 확인하세요",
+            "confirmed": "{{user}} 님이 Feishu / Lark bot과 연결됨",
+            "denied": "인증이 거부되었습니다",
+            "expired": "인증이 만료되었습니다",
+            "failed": "연결에 실패했습니다",
+            "revoked": "연결이 해제되었습니다",
+            "superseded": "다른 기기에서 연결됨"
+          },
+          "bindCode": {
+            "label": "연동 코드",
+            "copy": "코드 복사",
+            "copied": "연동 코드를 복사했습니다",
+            "hint": "또는 Feishu / Lark에서 Cindy bot에게 이 코드를 개인 메시지로 보내세요"
+          }
         }
       },
       "summary": {
@@ -6320,6 +6354,7 @@
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
         "providerX": "X",
+        "providerFeishu": "Feishu / Lark",
         "requireConnected": "{{provider}} 연결 후 편집할 수 있습니다(위의 스위치를 켜고 연결을 기다려 주세요).",
         "offlineLocal": "{{provider}}에 연결되지 않은 동안 변경 사항은 이 컴퓨터에 저장되며, 다시 연결되면 채팅의 모델 카드로 동기화됩니다.",
         "requireBinding": "먼저 {{provider}} 계정 연결을 완료해 주세요.",

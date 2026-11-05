@@ -6114,7 +6114,7 @@
         "hook": "Cindy IM bots"
       },
       "hook": {
-        "description": "Connect Slack and Telegram to the same Cindy. Messages are dispatched to this device and share its project list and session runner; each provider keeps its own account and preferences.",
+        "description": "Connect Slack, Telegram, Feishu / Lark and other channels to the same Cindy. Messages are dispatched to this device and share its project list and session runner; each provider keeps its own account and preferences.",
         "slackDescription": "Bind Slack workspaces and hand tasks to Cindy from Slack.",
         "slackDisabledHint": "Turn on the switch to start Slack authorization; once bound you can dispatch tasks from Slack.",
         "slackBoundHint": "Binding complete. Turning the switch off unbinds this device; turning it back on requires authorizing again.",
@@ -6335,6 +6335,40 @@
             "revoked": "Unlinked",
             "superseded": "Linked on another device"
           }
+        },
+        "feishu": {
+          "description": "Link your Feishu or Lark account and dispatch tasks by messaging the Cindy bot or mentioning it in a group.",
+          "disabledHint": "Turn on the switch, then authorize your Feishu / Lark account in the browser or send the link code to the bot.",
+          "toggleAria": "Toggle Feishu / Lark connection",
+          "connect": "Link Feishu / Lark",
+          "openApp": "Open authorization page",
+          "cancel": "Cancel linking",
+          "retry": "Retry linking",
+          "openBot": "Open bot",
+          "unlink": "Unlink Feishu / Lark",
+          "unlinkConfirmTitle": "Unlink Feishu / Lark?",
+          "unlinkConfirmDescription": "After unlinking, Feishu / Lark can no longer dispatch tasks to this device; local projects and other channels are unaffected.",
+          "unavailableHint": "Your organization hasn't set up the Feishu / Lark bot yet. Contact your organization admin.",
+          "status": {
+            "checking": "Checking server support…",
+            "unavailable": "Not set up by your organization",
+            "disabled": "Disabled",
+            "none": "Not linked",
+            "pending": "Authorize in the browser, or send the link code to the bot",
+            "awaiting_confirmation": "Confirm the device switch in Feishu / Lark",
+            "confirmed": "{{user}} linked to the Feishu / Lark bot",
+            "denied": "Authorization denied",
+            "expired": "Authorization expired",
+            "failed": "Linking failed",
+            "revoked": "Unlinked",
+            "superseded": "Linked on another device"
+          },
+          "bindCode": {
+            "label": "Link code",
+            "copy": "Copy code",
+            "copied": "Link code copied",
+            "hint": "Or send this code to the Cindy bot in a direct message in Feishu / Lark"
+          }
         }
       },
       "summary": {
@@ -6363,6 +6397,7 @@
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
         "providerX": "X",
+        "providerFeishu": "Feishu / Lark",
         "requireConnected": "Editable once {{provider}} is connected (enable its switch above and wait for the connection).",
         "offlineLocal": "{{provider}} is offline. Changes are saved on this computer and sync to the chat model card when it reconnects.",
         "requireBinding": "Complete {{provider}} account linking first.",

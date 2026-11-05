@@ -42,8 +42,11 @@ describe('workspacePrefsStore', () => {
   it('写读一条偏好；不同渠道/目录互不串', () => {
     setWorkspacePref('slack', null, 'chat', { model: 'claude-opus-4-8', agentKind: 'claude-code' });
     setWorkspacePref('telegram', null, 'chat', { model: 'gpt-5.5', agentKind: 'codex' });
+    // 官方飞书: 读侧渠道白名单漏登记会让写入在读回时被静默过滤。
+    setWorkspacePref('feishu', null, 'chat', { model: 'gpt-5.5-mini', agentKind: 'codex' });
     expect(getWorkspacePref('slack', null, 'chat').model).toBe('claude-opus-4-8');
     expect(getWorkspacePref('telegram', null, 'chat').model).toBe('gpt-5.5');
+    expect(getWorkspacePref('feishu', null, 'chat').model).toBe('gpt-5.5-mini');
     expect(getWorkspacePref('slack', null, 'repo').model).toBeNull();
   });
 

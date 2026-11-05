@@ -27,6 +27,7 @@ import {
   HOOK_FEATURE_SESSION_RESULT,
   HOOK_FEATURE_PROVIDER_BIND,
   HOOK_FEATURE_PROVIDER_BEHAVIOR,
+  HOOK_FEATURE_PROVIDER_FEISHU,
   HOOK_FEATURE_PROVIDER_PREFS,
   HOOK_FEATURE_PROVIDER_TELEGRAM,
   HOOK_FEATURE_PROVIDER_X,
@@ -106,6 +107,7 @@ import {
 } from './groupWindow.js';
 import { parseTelegramConnectUrl } from './telegramDeepLink.js';
 import { parseXConnectUrl, xProfileUrlOrNull } from './xDeepLink.js';
+import { feishuBotUrlOrNull, parseFeishuConnectUrl } from './feishuDeepLink.js';
 import type { HookTransport, HookTransportOpts, HookTransportStatus } from './transport.js';
 import { providerForExternalKey, providerForTaskDispatch } from './providerRouting.js';
 export { providerForExternalKey, providerForTaskDispatch } from './providerRouting.js';
@@ -146,6 +148,8 @@ export interface HookControlManagerDeps {
   getTelegramUrl: () => string;
   /** X (Twitter) 平级服务端点；空字符串表示当前环境尚未部署该服务。 */
   getXUrl: () => string;
+  /** 官方飞书 / Lark 平级服务端点；空字符串表示当前环境尚未部署该服务。 */
+  getFeishuUrl: () => string;
   /** 登录 accessToken 源(transport 每次建连实时取; null = 未登录)。 */
   getAuthToken: () => Promise<string | null>;
   /** upgrade 401 后强制刷新一次登录凭证；成功后 transport 立即重连。 */
@@ -169,11 +173,11 @@ export interface HookControlManagerDeps {
   notifyPrefs?: (view: HookPrefsView) => void;
   notifyProviderPrefs?: (view: ProviderPrefsView) => void;
   /**
-   * Slack / Telegram / X 进入「已连接 ∧ live 已绑定」时通知, 供本机偏好做一次
+   * Slack / Telegram / X / 飞书进入「已连接 ∧ live 已绑定」时通知, 供本机偏好做一次
    * 迁移导入并镜像到 /model 卡。只在权威绑定快照之后触发, 不用缓存身份在
    * welcome 时抢跑。可重入, 调用方自行去重。
    */
-  onHookReadyForPrefsMirror?: (provider: HookProvider) => void;
+  onHookReadyForPrefsMirror?: (provider: ClientHookProvider) => void;
   notifyTelegramBehavior?: (view: TelegramHookBehaviorState) => void;
   /** prefs 读写往返超时(默认 10s; 测试注短)。 */
   prefsTimeoutMs?: number;
@@ -212,6 +216,8 @@ export interface HookControlManagerDeps {
   openTelegramUrl?: (url: string) => void | Promise<void>;
   /** X URL 的 main 安全边界(语义同 openTelegramUrl, 校验走 validateXExternalUrl)。 */
   openXUrl?: (url: string) => void | Promise<void>;
+  /** 飞书 / Lark URL 的 main 安全边界(语义同上, 校验走 validateFeishuExternalUrl)。 */
+  openFeishuUrl?: (url: string) => void | Promise<void>;
   log: { info(msg: string): void; warn(msg: string): void };
 }
 
@@ -370,7 +376,9 @@ export class HookNotConnectedError extends Error {
         ? 'telegram provider connection is not connected'
         : provider === 'x'
           ? 'x provider connection is not connected'
-          : provider === 'slack'
+          : provider === 'feishu'
+            ? 'feishu provider connection is not connected'
+            : provider === 'slack'
             ? 'slack hook connection is not connected'
             : 'hook connection is not connected',
     );
@@ -391,7 +399,9 @@ export function hookNotConnectedIpcMessage(provider: HookProvider | null): strin
     ? 'Telegram provider is not connected'
     : provider === 'x'
       ? 'X provider is not connected'
-      : provider === 'slack'
+      : provider === 'feishu'
+        ? 'Feishu provider is not connected'
+        : provider === 'slack'
         ? 'slack hook is not connected'
         : 'hook is not connected';
 }
@@ -464,7 +474,7 @@ type ProviderBindRequest =
  * 从**客户端支持集**(IPC 契约的 ClientHookProvider)派生, 而不是协议全集:
  * 协议按 append-only 演进, 客户端尚未实现的 provider 不得漏进 renderer 可见
  * 类型。X 渠道已随 xConfig lane 与设置页落地(makecindy/cindy#691),
- * ClientHookProvider 已同步放宽为含 'x'。
+ * 官方飞书 / Lark 随 feishuConfig lane 落地, ClientHookProvider 已同步放宽。
  */
 export type NeutralHookProvider = Exclude<ClientHookProvider, 'slack'>;
 
@@ -475,11 +485,15 @@ export type NeutralHookProvider = Exclude<ClientHookProvider, 'slack'>;
  * `hello.defaultWorkspace` 本身是 provider 无关字段, 每条 lane 各带自己那份。
  */
 function defaultWorkspaceOf(
-  config: Pick<SlackHookConfigState, 'telegramDefaultWorkspace' | 'xDefaultWorkspace'>,
+  config: Pick<
+    SlackHookConfigState,
+    'telegramDefaultWorkspace' | 'xDefaultWorkspace' | 'feishuDefaultWorkspace'
+  >,
   provider: HookProvider | undefined,
 ): string | null {
   if (provider === 'telegram') return config.telegramDefaultWorkspace;
   if (provider === 'x') return config.xDefaultWorkspace;
+  if (provider === 'feishu') return config.feishuDefaultWorkspace;
   return null;
 }
 
@@ -576,6 +590,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     createTransport,
     getTelegramUrl,
     getXUrl,
+    getFeishuUrl,
     getAuthToken,
     refreshAuthToken,
     deviceInfo,
@@ -598,6 +613,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     openExternalUrl,
     openTelegramUrl,
     openXUrl,
+    openFeishuUrl,
     log,
   } = deps;
   const id = SLACK_HOOK_CONNECTION_ID;
@@ -623,7 +639,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   /** (multi-team)在途授权状态(添加/重绑 workspace 的 pending 与其终止态)。 */
   let pendingBind: HookPendingBindView | null = null;
 
-  // ── provider-neutral 连接线注册表(Telegram 与 X; 新 provider 在此追加) ────
+  // ── provider-neutral 连接线注册表(Telegram、X 与飞书; 新 provider 在此追加) ────
 
   // 服务端用客户端 hello.features 判定 provider 协商结果，因此客户端要求
   // 服务端具备的基础能力也必须全部自报；共用一份清单避免双向契约再次漂移。
@@ -675,6 +691,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         scopeId: cached.scopeId,
         scopeName: cached.scopeName,
         connectUrl: null,
+        bindCode: null,
         expiresAt: null,
         reason: null,
         remediationUrl: `https://t.me/${cached.scopeName}`,
@@ -750,6 +767,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         scopeId: cached.scopeId,
         scopeName: cached.scopeName,
         connectUrl: null,
+        bindCode: null,
         expiresAt: null,
         reason: null,
         // scopeName 是 bot handle(如 '@CindyBot'); 形状不合法时容错为 null,
@@ -779,6 +797,78 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     ...(openXUrl !== undefined ? { openUrl: openXUrl } : {}),
   };
 
+  // 官方飞书 / Lark(同一 provider, 品牌跟随组织的应用, 不随 Cindy 版本区域)。
+  // 第一里程碑由服务端排版: 进度 / 终稿 / 交互卡都走 legacy turn.progress /
+  // turn.end / interaction.request, 所以不声明 msg-op-v1 与任何 telegram-* 能力;
+  // 也没有群消息中继(群上下文随 task.dispatch 的 source.threadContext 下发)。
+  const feishuProviderFeatures = [
+    HOOK_FEATURE_PROVIDER_BIND,
+    HOOK_FEATURE_PROVIDER_PREFS,
+    HOOK_FEATURE_SESSION_PICKER,
+    HOOK_FEATURE_PROVIDER_FEISHU,
+  ] as const;
+
+  const feishuConfig: NeutralProviderConfig = {
+    provider: 'feishu',
+    label: 'Feishu',
+    getUrl: getFeishuUrl,
+    notConfiguredError: 'Feishu service endpoint is not configured',
+    requiredFeatures: feishuProviderFeatures,
+    // 与 Telegram 相同: 服务端按 hello.features 判定 provider 协商结果, 客户端
+    // 要求的基础能力必须全部自报。
+    helloFeatures: feishuProviderFeatures,
+    isEnabled: () => store.get().feishuEnabled,
+    setEnabled: (enabled) => {
+      store.setProviderEnabled('feishu', enabled);
+    },
+    restoreCachedBinding: () => {
+      const cached = store.get().feishuBindingCache;
+      if (cached === null) return null;
+      return {
+        provider: 'feishu',
+        state: 'confirmed',
+        attemptId: null,
+        bindingId: cached.bindingId,
+        principalId: cached.principalId,
+        principalName: cached.principalName,
+        scopeId: cached.scopeId,
+        scopeName: cached.scopeName,
+        connectUrl: null,
+        bindCode: null,
+        expiresAt: null,
+        reason: null,
+        // 打开机器人的 AppLink 区分飞书 / Lark 两个域名, 缓存里没有品牌, 不猜:
+        // 离线展示只给解绑, 连上后由服务端快照带回 remediationUrl 与 open_provider。
+        remediationUrl: null,
+        actions: ['revoke'],
+      };
+    },
+    writeBindingCache: (entry) => {
+      store.setProviderBindingCache('feishu', entry);
+    },
+    normalizePendingPayload: (payload) => {
+      // connectUrl 是应用的网页授权页 —— 主机(飞书 / Lark)/path/参数集精确校验;
+      // 关联码只在 pending 时透传(协议已校验形状), 其余状态由协议保证为空。
+      // scopeId 由服务端协商下发, 不与授权页的 client_id 互校(与 X 相同)。
+      const connectLink = parseFeishuConnectUrl(payload.connectUrl ?? '');
+      return {
+        ...payload,
+        connectUrl: connectLink.url,
+        remediationUrl: feishuBotUrlOrNull(payload.remediationUrl),
+      };
+    },
+    actionUrl: (action, bindingView) => {
+      if (action === 'connect' && bindingView.actions.includes('open_connect_url')) {
+        return bindingView.connectUrl;
+      }
+      if (action === 'provider' && bindingView.actions.includes('open_provider')) {
+        return feishuBotUrlOrNull(bindingView.remediationUrl);
+      }
+      return null; // 第一期不提供加群链接(群里 @ 机器人即可), add-to-group 恒不可用
+    },
+    ...(openFeishuUrl !== undefined ? { openUrl: openFeishuUrl } : {}),
+  };
+
   function createNeutralLane(config: NeutralProviderConfig): NeutralProviderLane {
     return {
       config,
@@ -800,8 +890,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
 
   const telegramLane = createNeutralLane(telegramConfig);
   const xLane = createNeutralLane(xConfig);
+  const feishuLane = createNeutralLane(feishuConfig);
   /** 全部 provider-neutral 线; 遍历顺序即启动 / hello 重发顺序。 */
-  const lanes: readonly NeutralProviderLane[] = [telegramLane, xLane];
+  const lanes: readonly NeutralProviderLane[] = [telegramLane, xLane, feishuLane];
   // key 收窄到 NeutralHookProvider: 'slack' 走 legacy 线, 在编译期就挡在本表外
   const laneByProvider = new Map<NeutralHookProvider, NeutralProviderLane>(
     lanes.map((lane) => [lane.config.provider, lane]),
@@ -810,8 +901,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
    * 协议全集的 provider → 客户端实际跑着的那条 lane。两类值在这里都归为 null,
    * 调用方按「没有这条线」处理:
    *   - 'slack': 走 legacy 专属帧, 本就不进本表;
-   *   - 协议按 append-only 先行加入、客户端尚未实现的 provider(当前是 'x',
-   *     见 makecindy/cindy#691) —— 没有 lane config, 也没有设置页入口。
+   *   - 协议按 append-only 先行加入、客户端尚未实现的 provider(历史上 'x'
+   *     与 'feishu' 都先于客户端进入协议) —— 没有 lane config, 也没有设置页入口。
    * 直接用 laneByProvider.get() 会因 key 已收窄而在这类入口处编译不过, 那正是
    * 本函数要收的边界: 收窄发生一次, 而不是在每个调用点各写一遍断言。
    */
@@ -1270,6 +1361,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       serverSlackCommunications: serverFeatures.includes('slack-communications'),
       telegram: laneView(telegramLane),
       x: laneView(xLane),
+      feishu: laneView(feishuLane),
     };
   }
 
@@ -1343,6 +1435,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         ...lane.binding,
         state: 'expired',
         connectUrl: null,
+        bindCode: null,
         expiresAt: null,
         reason: 'expired',
         actions: ['retry'],
@@ -1372,6 +1465,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       scopeId: payload.scopeId,
       scopeName: payload.scopeName,
       connectUrl: payload.connectUrl,
+      // 旧 server 不下发该可选字段; 协议已保证只在 pending 时非空。
+      bindCode: payload.bindCode ?? null,
       expiresAt: payload.expiresAt,
       reason: payload.reason,
       remediationUrl: payload.remediationUrl,
@@ -1397,8 +1492,11 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       } else if (view.state === 'revoked' || view.state === 'none' || view.state === 'superseded') {
         resetTelegramEmojiReactions();
       }
-    } else if (lane.config.provider === 'x' && view.state === 'confirmed') {
-      onHookReadyForPrefsMirror?.('x');
+    } else if (
+      (lane.config.provider === 'x' || lane.config.provider === 'feishu') &&
+      view.state === 'confirmed'
+    ) {
+      onHookReadyForPrefsMirror?.(lane.config.provider);
     }
     try {
       if (
@@ -1550,6 +1648,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       scopeId: null,
       scopeName: null,
       connectUrl: null,
+      bindCode: null,
       expiresAt: null,
       reason: null,
       remediationUrl: null,
@@ -1601,6 +1700,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           scopeId: payload.scopeId,
           scopeName: payload.scopeName,
           connectUrl: null,
+          bindCode: null,
           expiresAt: null,
           reason: 'invalid-connect-url',
           remediationUrl: null,
@@ -1870,7 +1970,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       ...(includeLifecycleAnnouncement
         ? { lifecycleAnnouncement: lifecycleAnnouncementEnabled() }
         : {}),
-      // 默认工作目录: X 与 Telegram 都有(Slack 的默认仍走它自己的卡)。
+      // 默认工作目录: X、Telegram 与飞书都有(Slack 的默认仍走它自己的卡)。
       // store 侧已保证读出来的别名仍在 workspaces 里(目录删掉即归零), 所以这里
       // 不再复核 —— 复核两遍反而会让"哪边是权威"变模糊。
       // 只算一次再复用: 判断与赋值必须是同一个值(将来这个函数变复杂也不会分叉)。
@@ -3142,6 +3242,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           ...current,
           state: 'failed',
           connectUrl: null,
+          bindCode: null,
           expiresAt: null,
           reason: 'cancelled',
           actions: ['retry'],

@@ -7,6 +7,7 @@
   "ossApiBaseUrl": "http://localhost:3340",
   "heartbeatUrl": "http://localhost:3338",
   "telegramHookWsUrl": "",
+  "feishuHookWsUrl": "",
   "slackHookWsUrl": "ws://localhost:3334",
   "websiteUrl": "http://localhost:3000",
   "modelAccessApiBaseUrl": "http://localhost:3339",

@@ -41,6 +41,18 @@ export const imBotSettings = defineSettings({
     descriptionKey: 'settings.remoteControl.hook.telegram.description',
     aliases: ['Telegram', 'Telegram bot'],
   },
+  cindyFeishu: {
+    // 官方飞书 / Lark 机器人; 卡片在端点下发前不渲染, 搜索落到「官方」分组兜底。
+    id: 'imBot.cindy.feishu',
+    isVisible: (identity) => identity.mode === 'cloud' && showCindyGroup(identity),
+    fallbackTargetId: 'im-bot-group-cindy',
+    tab: 'im-bot',
+    targetId: 'cindy-im-feishu',
+    titleKey: 'settings.tina.prefs.providerFeishu',
+    sectionKey: 'settings.imBot.groups.cindy',
+    descriptionKey: 'settings.remoteControl.hook.feishu.description',
+    aliases: ['Feishu', 'Lark', '飞书', 'Feishu bot', 'Lark bot'],
+  },
   cindyX: {
     id: 'imBot.cindy.x',
     isVisible: (identity) => identity.mode === 'cloud' && showCindyGroup(identity),

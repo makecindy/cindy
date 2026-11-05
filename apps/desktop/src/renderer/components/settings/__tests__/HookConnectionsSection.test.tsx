@@ -27,7 +27,7 @@ const ipc = vi.hoisted(() => ({
 }));
 const dialog = vi.hoisted(() => ({ confirm: vi.fn() }));
 const workspacePrefsEditor = vi.hoisted(() => ({ render: vi.fn() }));
-const toast = vi.hoisted(() => ({ error: vi.fn() }));
+const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
 
 /** t 只回键名 —— 插值参数另存一份, 让"文案带没带上正确的值"也能断言。 */
 const tCalls: Array<{ key: string; vars?: Record<string, unknown> }> = [];
@@ -125,6 +125,7 @@ async function expandChannelCard(titleKey: RegExp) {
 const SLACK_CARD = /settings\.tina\.prefs\.providerSlack/;
 const TELEGRAM_CARD = /settings\.tina\.prefs\.providerTelegram/;
 const X_CARD = /settings\.tina\.prefs\.providerX/;
+const FEISHU_CARD = /settings\.tina\.prefs\.providerFeishu/;
 
 const BASE_HOOK: SlackHookView = {
   enabled: false,
@@ -148,6 +149,16 @@ const BASE_HOOK: SlackHookView = {
     binding: null,
   },
   x: {
+    enabled: false,
+    url: '',
+    status: 'disabled',
+    lastError: null,
+    available: false,
+    capabilityPending: false,
+    defaultWorkspace: null,
+    binding: null,
+  },
+  feishu: {
     enabled: false,
     url: '',
     status: 'disabled',
@@ -468,6 +479,7 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
           scopeId: 'bot-1',
           scopeName: 'cindy_example_bot',
           connectUrl: 'https://t.me/cindy_example_bot?start=one-time-token',
+          bindCode: null,
           expiresAt: Date.now() + 60_000,
           reason: null,
           remediationUrl: null,
@@ -494,9 +506,9 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     await waitFor(() => expect(ipc.openProviderAction).toHaveBeenCalledWith('telegram', 'connect'));
   });
 
-  it('hides the X card entirely while the endpoint manifest leaves xHookWsUrl empty', async () => {
-    // BASE_HOOK 的 x.url 为空且未启用/不可用 —— 端点清单缺失即灰度关闭,
-    // 设置页不得出现 X 入口(providerCardState.visible 语义)。
+  it('hides the X and Feishu cards entirely while the endpoint manifest leaves their URLs empty', async () => {
+    // BASE_HOOK 的 x.url / feishu.url 为空且未启用/不可用 —— 端点清单缺失即灰度关闭,
+    // 设置页不得出现入口(providerCardState.visible 语义)。
     // 这一条必须用空 url 的 BASE_HOOK 本体, 不能换成 xUnboundHook()。
     ipc.get.mockResolvedValue({ hook: BASE_HOOK });
 
@@ -504,6 +516,88 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     await screen.findByRole('button', { name: TELEGRAM_CARD });
 
     expect(screen.queryByRole('button', { name: X_CARD })).toBeNull();
+    expect(screen.queryByRole('button', { name: FEISHU_CARD })).toBeNull();
+  });
+
+  it('shows the Feishu bind code with a copy action next to the authorize-page actions while pending', async () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const hook: SlackHookView = {
+      ...BASE_HOOK,
+      feishu: {
+        enabled: true,
+        url: 'ws://127.0.0.1:8794',
+        status: 'connected',
+        lastError: null,
+        available: true,
+        capabilityPending: false,
+        defaultWorkspace: null,
+        binding: {
+          provider: 'feishu',
+          state: 'pending',
+          attemptId: 'attempt-f1',
+          bindingId: null,
+          principalId: null,
+          principalName: null,
+          scopeId: 'cli_app',
+          scopeName: 'Cindy',
+          connectUrl:
+            'https://accounts.feishu.cn/open-apis/authen/v1/authorize?client_id=cli_app&redirect_uri=https%3A%2F%2Fexample.test%2Fcb&state=st',
+          bindCode: '7KQ4-M2XD',
+          expiresAt: Date.now() + 60_000,
+          reason: null,
+          remediationUrl: null,
+          actions: ['open_connect_url', 'copy_connect_url', 'copy_bind_code', 'cancel'],
+        },
+      },
+    };
+    ipc.get.mockResolvedValue({ hook });
+
+    render(<HookConnectionsSection />);
+    await expandChannelCard(FEISHU_CARD);
+
+    const openButton = await screen.findByRole('button', {
+      name: 'settings.remoteControl.hook.feishu.openApp',
+    });
+    expect(
+      screen.getByRole('button', { name: 'settings.remoteControl.hook.binding.copyLink' }),
+    ).toBeTruthy();
+    expect(screen.getByText('7KQ4-M2XD')).toBeTruthy();
+    expect(screen.getByText('settings.remoteControl.hook.feishu.bindCode.hint')).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.remoteControl.hook.feishu.bindCode.copy' }),
+    );
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('7KQ4-M2XD'));
+    expect(toast.success).toHaveBeenCalledWith('settings.remoteControl.hook.feishu.bindCode.copied');
+
+    fireEvent.click(openButton);
+    await waitFor(() => expect(ipc.openProviderAction).toHaveBeenCalledWith('feishu', 'connect'));
+  });
+
+  it('explains that the organization has not set up the Feishu bot when the server lacks provider:feishu', async () => {
+    const hook: SlackHookView = {
+      ...BASE_HOOK,
+      feishu: {
+        enabled: true,
+        url: 'ws://127.0.0.1:8794',
+        status: 'connected',
+        lastError: null,
+        available: false,
+        capabilityPending: false,
+        defaultWorkspace: null,
+        binding: null,
+      },
+    };
+    ipc.get.mockResolvedValue({ hook });
+
+    render(<HookConnectionsSection />);
+    await expandChannelCard(FEISHU_CARD);
+
+    expect(await screen.findByText('settings.remoteControl.hook.feishu.unavailableHint')).toBeTruthy();
+    expect(screen.getByText('settings.remoteControl.hook.feishu.status.unavailable')).toBeTruthy();
+    expect(
+      screen.queryByRole('button', { name: 'settings.remoteControl.hook.feishu.connect' }),
+    ).toBeNull();
   });
 
   it('keeps the OAuth deep-link actions visible while X binding is pending', async () => {
@@ -528,6 +622,7 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
           scopeName: 'CindyBot',
           connectUrl:
             'https://x.com/i/oauth2/authorize?response_type=code&client_id=c1&redirect_uri=r&scope=s&state=st&code_challenge=cc&code_challenge_method=S256',
+          bindCode: null,
           expiresAt: Date.now() + 60_000,
           reason: null,
           remediationUrl: null,
@@ -575,6 +670,7 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
           scopeId: 'bot-x',
           scopeName: 'CindyBot',
           connectUrl: null,
+          bindCode: null,
           expiresAt: null,
           reason: null,
           remediationUrl: 'https://x.com/CindyBot',
@@ -1376,6 +1472,7 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
             scopeId: 'bot-1',
             scopeName: 'cindy_example_bot',
             connectUrl: 'https://t.me/cindy_example_bot?start=one-time-token',
+            bindCode: null,
             expiresAt: Date.now() + 60_000,
             reason: null,
             remediationUrl: null,
@@ -1446,6 +1543,7 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
           scopeId: 'bot-1',
           scopeName: 'cindy_example_bot',
           connectUrl: 'https://t.me/cindy_example_bot?start=one-time-token',
+          bindCode: null,
           expiresAt: Date.now() + 60_000,
           reason: null,
           remediationUrl: null,
@@ -1505,6 +1603,7 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
           scopeId: 'bot-1',
           scopeName: 'cindy_example_bot',
           connectUrl: null,
+          bindCode: null,
           expiresAt: null,
           reason: null,
           remediationUrl: 'https://t.me/cindy_example_bot',
@@ -1551,6 +1650,7 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
             scopeId: 'bot-1',
             scopeName: 'cindy_example_bot',
             connectUrl: null,
+            bindCode: null,
             expiresAt: null,
             reason: null,
             remediationUrl: 'https://t.me/cindy_example_bot',
@@ -1590,6 +1690,7 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
             scopeId: 'bot-1',
             scopeName: 'cindy_example_bot',
             connectUrl: null,
+            bindCode: null,
             expiresAt: null,
             reason: null,
             remediationUrl: 'https://t.me/cindy_example_bot',
@@ -1859,8 +1960,8 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     await waitFor(() => expect(screen.queryByTestId('hook-legacy-global-defaults')).toBeNull());
   });
 
-  it('清掉存量 override 后, Telegram 与 X 两份生效值都重读', async () => {
-    // 两张卡的目录行都以 global scope 为解析源 —— 只刷新当前这张, 另一张会继续显示
+  it('清掉存量 override 后, Telegram、X 与飞书三份生效值都重读', async () => {
+    // 三张卡的目录行都以 global scope 为解析源 —— 只刷新当前这张, 其它卡会继续显示
     // 磁盘上已经不存在的旧默认。
     ipc.get.mockResolvedValue({ hook: hookWithWorkdirs(null) });
     ipc.imDefaultSettingsGet.mockResolvedValue(customizedGlobalDefaults());
@@ -1871,7 +1972,7 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     await screen.findByTestId('hook-legacy-global-defaults');
     prefsReload.mockClear();
     fireEvent.click(screen.getByTestId('hook-legacy-global-defaults-restore'));
-    await waitFor(() => expect(prefsReload).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(prefsReload).toHaveBeenCalledTimes(3));
   });
 
   /**
@@ -2013,6 +2114,7 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
           scopeId: 'bot-x',
           scopeName: 'CindyBot',
           connectUrl: null,
+          bindCode: null,
           expiresAt: null,
           reason: null,
           remediationUrl: 'https://x.com/CindyBot',

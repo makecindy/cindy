@@ -4,6 +4,8 @@ import type { HookProvider, TaskDispatchPayload } from '@cindy/slack-hook-protoc
 export function providerForExternalKey(externalKey: string): HookProvider | null {
   if (externalKey.startsWith('telegram:')) return 'telegram';
   if (externalKey.startsWith('x:')) return 'x';
+  // Official Feishu / Lark lanes: feishu:dm:… and feishu:topic:…; Lark shares the prefix.
+  if (externalKey.startsWith('feishu:')) return 'feishu';
   if (
     externalKey.startsWith('slack:') ||
     externalKey.startsWith('team-slack:') ||

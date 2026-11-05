@@ -5,7 +5,8 @@
  * 「连本地 server」的 local 模式改由本文件生成的 endpoint.local.json 承载——
  * auth / device-link / oss / model-access / voice / github / skillhub / plugin 指向 localhost
  * 八件套(oss / model-access / voice / github / skillhub / plugin 必须跟 auth 同侧:都用
- * AUTH_ISSUER 验签,本地 auth 签发的 token 过不了生产侧验签),
+ * AUTH_ISSUER 验签,本地 auth 签发的 token 过不了生产侧验签);官方飞书 hook 同理指向
+ * 本地 feishu-hook-server(ws://localhost:8794),它也按本地 auth 验桌面 token,
  * 其余字段(oauth broker / heartbeat / slack hook / website / 网关 / 更新链
  * CDN)照抄所选 region 正本(本地不起这些服务,沿用远程值,消费方各自的
  * "连不上就跳过"分支继续生效)。
@@ -27,6 +28,7 @@ const LOCAL_GITHUB_BASE_URL = 'http://localhost:3336';
 const LOCAL_SKILLHUB_BASE_URL = 'http://localhost:3341';
 const LOCAL_CINDY_SKILLHUB_BASE_URL = 'http://localhost:3345';
 const LOCAL_PLUGIN_BASE_URL = 'http://localhost:3343';
+const LOCAL_FEISHU_HOOK_WS_URL = 'ws://localhost:8794';
 
 /**
  * 从所选 region 正本生成 endpoint.local.json,返回生成文件的绝对路径。
@@ -79,6 +81,7 @@ export function generateEndpointLocalFile({ repoRoot, region = 'global' }) {
     skillhubApiBaseUrl: LOCAL_SKILLHUB_BASE_URL,
     cindySkillHubApiBaseUrl: LOCAL_CINDY_SKILLHUB_BASE_URL,
     pluginApiBaseUrl: LOCAL_PLUGIN_BASE_URL,
+    feishuHookWsUrl: LOCAL_FEISHU_HOOK_WS_URL,
   };
   fs.writeFileSync(targetPath, `${JSON.stringify(local, null, 2)}\n`);
   return targetPath;

@@ -64,6 +64,8 @@ test('localhost 八件套覆写,默认其余字段照抄 Global 正本,返回绝
   assert.equal(local.skillhubApiBaseUrl, 'http://localhost:3341');
   assert.equal(local.cindySkillHubApiBaseUrl, 'http://localhost:3345');
   assert.equal(local.pluginApiBaseUrl, 'http://localhost:3343');
+  // 官方飞书 hook 用本地 auth 验桌面 token,必须跟 auth 同侧
+  assert.equal(local.feishuHookWsUrl, 'ws://localhost:8794');
   // 其余字段与正本一致(oauth broker 等本地不起的服务沿用远程值)
   assert.equal(local.oauthBrokerApiBaseUrl, 'https://oauth.global.example.invalid');
   assert.equal(local.cdnBaseUrl, 'https://cdn.global.example.invalid/app');

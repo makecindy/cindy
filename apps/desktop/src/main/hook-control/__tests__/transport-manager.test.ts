@@ -19,9 +19,11 @@ import {
   HOOK_FEATURE_MULTI_TEAM,
   HOOK_FEATURE_PROVIDER_BIND,
   HOOK_FEATURE_PROVIDER_BEHAVIOR,
+  HOOK_FEATURE_PROVIDER_FEISHU,
   HOOK_FEATURE_PROVIDER_PREFS,
   HOOK_FEATURE_PROVIDER_TELEGRAM,
   HOOK_FEATURE_PROVIDER_X,
+  HOOK_FEATURE_MESSAGE_OPS,
   HOOK_FEATURE_SESSION_PICKER,
   HOOK_FEATURE_SESSION_NEW,
   HOOK_FEATURE_SESSION_RESULT,
@@ -70,6 +72,7 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
     enabled: initial.enabled ?? true,
     telegramEnabled: initial.telegramEnabled ?? false,
     xEnabled: initial.xEnabled ?? false,
+    feishuEnabled: initial.feishuEnabled ?? false,
     urlOverride: initial.url,
     workspaces: initial.workspaces ?? {},
     bindingsCache: initial.bindingsCache ?? [],
@@ -78,6 +81,8 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
     telegramDefaultWorkspace: initial.telegramDefaultWorkspace ?? null,
     xBindingCache: initial.xBindingCache ?? null,
     xDefaultWorkspace: initial.xDefaultWorkspace ?? null,
+    feishuBindingCache: initial.feishuBindingCache ?? null,
+    feishuDefaultWorkspace: initial.feishuDefaultWorkspace ?? null,
   };
   return {
     get: () => ({
@@ -86,6 +91,7 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
       bindingsCache: state.bindingsCache.map((e) => ({ ...e })),
       telegramBindingCache: state.telegramBindingCache ? { ...state.telegramBindingCache } : null,
       xBindingCache: state.xBindingCache ? { ...state.xBindingCache } : null,
+      feishuBindingCache: state.feishuBindingCache ? { ...state.feishuBindingCache } : null,
     }),
     effectiveUrl: () => state.urlOverride ?? 'wss://unused.example',
     setEnabled(enabled) {
@@ -98,11 +104,13 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
           ? { ...state, enabled }
           : provider === 'x'
             ? { ...state, xEnabled: enabled }
-            : { ...state, telegramEnabled: enabled };
+            : provider === 'feishu'
+              ? { ...state, feishuEnabled: enabled }
+              : { ...state, telegramEnabled: enabled };
       return state;
     },
     anyProviderEnabled() {
-      return state.enabled || state.telegramEnabled || state.xEnabled;
+      return state.enabled || state.telegramEnabled || state.xEnabled || state.feishuEnabled;
     },
     setWorkspaces(workspaces) {
       state = { ...state, workspaces };
@@ -120,18 +128,22 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
       state =
         provider === 'x'
           ? { ...state, xBindingCache: entry ? { ...entry } : null }
-          : { ...state, telegramBindingCache: entry ? { ...entry } : null };
+          : provider === 'feishu'
+            ? { ...state, feishuBindingCache: entry ? { ...entry } : null }
+            : { ...state, telegramBindingCache: entry ? { ...entry } : null };
       return state;
     },
     setXCompanionBotId(botId) {
       state = { ...state, xCompanionBotId: botId };
       return state;
     },
-    setProviderDefaultWorkspace(provider: 'telegram' | 'x', alias: string | null) {
+    setProviderDefaultWorkspace(provider: 'telegram' | 'x' | 'feishu', alias: string | null) {
       state =
         provider === 'x'
           ? { ...state, xDefaultWorkspace: alias }
-          : { ...state, telegramDefaultWorkspace: alias };
+          : provider === 'feishu'
+            ? { ...state, feishuDefaultWorkspace: alias }
+            : { ...state, telegramDefaultWorkspace: alias };
       return state;
     },
   };
@@ -145,8 +157,9 @@ function makeManager(
     store,
     createTransport: createHookTransport,
     getTelegramUrl: () => store.effectiveUrl(),
-    // X lane 默认不配端点(未部署形态), 相关用例用 overrides 显式注入。
+    // X / 飞书 lane 默认不配端点(未部署形态), 相关用例用 overrides 显式注入。
     getXUrl: () => '',
+    getFeishuUrl: () => '',
     getAuthToken: async () => 'jwt-token-1',
     refreshAuthToken: async () => false,
     deviceInfo: () => ({ deviceId: 'dev-1', deviceName: 'TestBox' }),
@@ -643,6 +656,22 @@ describe('provider dispatch boundary', () => {
     ).toBeNull();
   });
 
+  it('routes official Feishu dispatches only when source and lane key agree', () => {
+    // Lark 共用 'feishu' provider 与 lane 前缀; 个人飞书 bot 不经 hook, 不受影响。
+    for (const externalKey of [
+      'feishu:dm:cli_app:ou_user:g0',
+      'feishu:topic:cli_app:oc_chat:om_root:ou_user:g0',
+    ]) {
+      expect(providerForTaskDispatch({ externalKey, source: { im: 'feishu' } })).toBe('feishu');
+      expect(providerForTaskDispatch({ externalKey })).toBeNull();
+      expect(providerForTaskDispatch({ externalKey, source: { im: 'telegram' } })).toBeNull();
+    }
+    expect(
+      providerForTaskDispatch({ externalKey: 'telegram:dm:bot-1:user-1:g0', source: { im: 'feishu' } }),
+    ).toBeNull();
+    expect(providerForTaskDispatch({ externalKey: 'T1:C1:1.1', source: { im: 'feishu' } })).toBeNull();
+  });
+
   it('routes only known provider lane keys for session archive', () => {
     expect(providerForExternalKey('slack:dm:T1:U1:g2')).toBe('slack');
     expect(providerForExternalKey('dm:U1:g2')).toBe('slack');
@@ -651,6 +680,7 @@ describe('provider dispatch boundary', () => {
     expect(providerForExternalKey('T1:C1:1.1')).toBe('slack');
     expect(providerForExternalKey('telegram:dm:bot:user:g2')).toBe('telegram');
     expect(providerForExternalKey('x:conv:999:conv-1:111:g1')).toBe('x');
+    expect(providerForExternalKey('feishu:dm:cli_app:ou_user:g1')).toBe('feishu');
     expect(providerForExternalKey('discord:channel-1')).toBeNull();
     expect(providerForExternalKey('arbitrary')).toBeNull();
   });
@@ -1696,6 +1726,8 @@ describe('Telegram provider capability, binding and prefs', () => {
     };
     const binding = {
       ...TELEGRAM_CONFIRMED,
+      provider: 'telegram' as const,
+      bindCode: null,
       remediationUrl: null,
     };
 
@@ -3103,6 +3135,230 @@ describe('Telegram provider capability, binding and prefs', () => {
       )
       .toMatchObject({ payload: { ok: true, sessions: rows } });
     expect(reads).toBe(1);
+  });
+});
+
+const FEISHU_FEATURES = [
+  HOOK_FEATURE_PROVIDER_BIND,
+  HOOK_FEATURE_PROVIDER_PREFS,
+  HOOK_FEATURE_SESSION_PICKER,
+  HOOK_FEATURE_PROVIDER_FEISHU,
+];
+
+const FEISHU_CONNECT_URL =
+  'https://accounts.feishu.cn/open-apis/authen/v1/authorize?client_id=cli_app&redirect_uri=http%3A%2F%2Flocalhost%3A8794%2Ffeishu%2Foauth%2Fcallback&state=state-1';
+
+const FEISHU_PENDING: ProviderBindStatusPayload = {
+  provider: 'feishu',
+  replyTo: null,
+  state: 'pending',
+  attemptId: 'attempt-feishu-1',
+  bindingId: null,
+  principalId: null,
+  principalName: null,
+  scopeId: 'cli_app',
+  scopeName: 'Cindy',
+  connectUrl: FEISHU_CONNECT_URL,
+  bindCode: '7KQ4-M2XD',
+  expiresAt: Date.now() + 60_000,
+  reason: null,
+  remediationUrl: null,
+  actions: ['open_connect_url', 'copy_connect_url', 'copy_bind_code', 'cancel'],
+};
+
+function stubDispatcher(): NonNullable<HookControlManagerDeps['dispatcher']> {
+  return {
+    handleDispatch: vi.fn(),
+    createSession: vi.fn(),
+    onConnected: vi.fn(),
+    onDisconnected: vi.fn(),
+    onMessageOpResult: vi.fn(),
+    setEmojiReactionsMode: vi.fn(),
+    settleAckReactions: vi.fn(),
+    cancel: vi.fn(),
+    handleSessionArchive: vi.fn(),
+    handleInteractionDecision: vi.fn(),
+    handleTurnDelivery: vi.fn(),
+    handleXMediaResult: vi.fn(),
+    activateAccount: vi.fn(),
+    deactivateAccount: vi.fn(async () => undefined),
+    dispose: vi.fn(),
+  } as NonNullable<HookControlManagerDeps['dispatcher']>;
+}
+
+/** 官方飞书 lane 的进程内 harness: 记下 transport 参数与发出的帧, 不起真实 socket。 */
+function feishuLaneHarness(
+  overrides: Partial<HookControlManagerDeps> = {},
+  storeInit: Partial<SlackHookConfigState> = {},
+) {
+  const transports: HookTransportOpts[] = [];
+  const sent: HookMessage[] = [];
+  const manager = makeManager(
+    memoryStore({ url: 'wss://slack-hook.example.test', enabled: false, ...storeInit }),
+    {
+      getFeishuUrl: () => 'ws://127.0.0.1:8794',
+      createTransport: (opts) => {
+        transports.push(opts);
+        return {
+          send: (message) => {
+            sent.push(message);
+            return true;
+          },
+          dispose: () => {},
+        };
+      },
+      ...overrides,
+    },
+  );
+  cleanups.push(() => manager.dispose());
+  return { manager, transports, sent };
+}
+
+describe('官方飞书 / Lark provider lane', () => {
+  it('hello 只声明 provider 基础能力; 服务端未宣告 provider:feishu 时显示不可用并拒收派发', () => {
+    const dispatcher = stubDispatcher();
+    const { manager, transports } = feishuLaneHarness({ dispatcher }, { feishuEnabled: true });
+    manager.sync();
+    const opts = transports[0];
+    if (opts === undefined) throw new Error('Feishu transport was not created');
+    expect(opts.url).toBe('ws://127.0.0.1:8794');
+    // 第一里程碑由服务端排版: 不得声明 msg.op 或任何 Telegram 专属能力。
+    expect(opts.buildHello().features).toEqual(FEISHU_FEATURES);
+    expect(opts.buildHello().features).not.toContain(HOOK_FEATURE_MESSAGE_OPS);
+    expect(opts.buildHello().statusReactions).toBeUndefined();
+
+    const dispatch = makeTaskDispatch({
+      requestId: 'feishu-task-1',
+      externalKey: 'feishu:topic:cli_app:oc_chat:om_root:ou_user:g0',
+      workspace: 'chat',
+      prompt: 'hello',
+      source: { im: 'feishu' },
+    });
+    // 组织还没配置飞书机器人: welcome 不带 provider:feishu。
+    opts.onWelcome?.({
+      serverName: 'feishu-hook',
+      features: [HOOK_FEATURE_PROVIDER_BIND, HOOK_FEATURE_PROVIDER_PREFS, HOOK_FEATURE_SESSION_PICKER],
+    });
+    opts.onStatus('connected', null);
+    expect(manager.snapshot().feishu).toMatchObject({
+      enabled: true,
+      status: 'connected',
+      available: false,
+      capabilityPending: false,
+    });
+    const replies: HookMessage[] = [];
+    opts.onMessage(dispatch, (message) => {
+      replies.push(message);
+      return true;
+    });
+    expect(replies).toEqual([
+      expect.objectContaining({
+        type: 'task.ack',
+        payload: expect.objectContaining({ requestId: 'feishu-task-1', result: 'rejected', reason: 'invalid' }),
+      }),
+    ]);
+    expect(dispatcher.handleDispatch).not.toHaveBeenCalled();
+
+    opts.onWelcome?.({ serverName: 'feishu-hook', features: FEISHU_FEATURES });
+    expect(manager.snapshot().feishu.available).toBe(true);
+    opts.onMessage(dispatch, () => true);
+    expect(dispatcher.handleDispatch).toHaveBeenCalledWith(
+      expect.stringMatching(/:feishu$/),
+      dispatch.payload,
+      expect.any(Function),
+    );
+  });
+
+  it.each([
+    [
+      'Feishu authorize page',
+      FEISHU_CONNECT_URL,
+      { state: 'pending', bindCode: '7KQ4-M2XD', connectUrl: FEISHU_CONNECT_URL, reason: null },
+      [FEISHU_CONNECT_URL],
+    ],
+    [
+      'lookalike host',
+      FEISHU_CONNECT_URL.replace('accounts.feishu.cn', 'accounts.feishu.cn.evil.example'),
+      { state: 'failed', bindCode: null, connectUrl: null, reason: 'invalid-connect-url' },
+      [],
+    ],
+  ] as const)(
+    '本机发起的绑定(%s): 关联码只随校验通过的链接进入快照, 并只自动打开那一次',
+    async (_label, connectUrl, expectedBinding, expectedOpened) => {
+      const opened: string[] = [];
+      const { manager, transports, sent } = feishuLaneHarness({
+        openFeishuUrl: (url) => {
+          opened.push(url);
+        },
+      });
+      manager.setProviderEnabled('feishu', true);
+      const opts = transports[0];
+      if (opts === undefined) throw new Error('Feishu transport was not created');
+      opts.onWelcome?.({ serverName: 'feishu-hook', features: FEISHU_FEATURES });
+      opts.onStatus('connected', null);
+      opts.onMessage(
+        makeProviderBindState({
+          ...FEISHU_PENDING,
+          state: 'none',
+          attemptId: null,
+          scopeId: null,
+          scopeName: null,
+          connectUrl: null,
+          bindCode: null,
+          expiresAt: null,
+          actions: [],
+        }),
+        () => true,
+      );
+      const start = sent.find((message) => message.type === 'provider.bind.start');
+      if (start?.type !== 'provider.bind.start') throw new Error('bind start was not sent');
+      expect(start.payload.provider).toBe('feishu');
+
+      opts.onMessage(
+        makeProviderBindUpdate({ ...FEISHU_PENDING, replyTo: start.payload.requestId, connectUrl }),
+        () => true,
+      );
+      expect(manager.snapshot().feishu.binding).toMatchObject({ provider: 'feishu', ...expectedBinding });
+      await expect.poll(() => opened).toEqual(expectedOpened);
+    },
+  );
+
+  it('未配置端点时不建连; 离线缓存的绑定只给解绑(打开机器人的链接要等服务端快照)', () => {
+    const createTransport = vi.fn(() => {
+      throw new Error('transport must not be created without a Feishu endpoint');
+    }) as unknown as HookControlManagerDeps['createTransport'];
+    const manager = makeManager(
+      memoryStore({
+        url: 'wss://slack-hook.example.test',
+        enabled: false,
+        feishuBindingCache: {
+          bindingId: 'binding-feishu-1',
+          principalId: 'ou_user',
+          principalName: 'Cindy User',
+          scopeId: 'cli_app',
+          scopeName: 'Cindy',
+        },
+      }),
+      { createTransport },
+    );
+    cleanups.push(() => manager.dispose());
+    expect(manager.snapshot().feishu.binding).toMatchObject({
+      provider: 'feishu',
+      state: 'confirmed',
+      bindCode: null,
+      remediationUrl: null,
+      actions: ['revoke'],
+    });
+
+    manager.setProviderEnabled('feishu', true);
+    expect(manager.snapshot().feishu).toMatchObject({
+      enabled: true,
+      url: '',
+      status: 'error',
+      available: false,
+      lastError: 'Feishu service endpoint is not configured',
+    });
+    expect(createTransport).not.toHaveBeenCalled();
   });
 });
 

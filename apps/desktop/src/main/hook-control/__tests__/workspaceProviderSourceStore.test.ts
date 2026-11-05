@@ -43,9 +43,12 @@ describe('workspaceProviderSourceStore', () => {
     setWorkspaceProviderSource('telegram', null, 'chat', 'anthropic');
     setWorkspaceProviderSource('slack', null, 'chat', 'openai');
     setWorkspaceProviderSource('x', null, 'chat', 'google');
+    // 读侧白名单漏了渠道时, 写进去的条目会在读回时被静默过滤(X 接入时踩过)。
+    setWorkspaceProviderSource('feishu', null, 'chat', 'deepseek');
     expect(getWorkspaceProviderSource('telegram', null, 'chat')).toBe('anthropic');
     expect(getWorkspaceProviderSource('slack', null, 'chat')).toBe('openai');
     expect(getWorkspaceProviderSource('x', null, 'chat')).toBe('google');
+    expect(getWorkspaceProviderSource('feishu', null, 'chat')).toBe('deepseek');
     expect(getWorkspaceProviderSource('telegram', null, 'repo')).toBeNull();
     expect(getWorkspaceProviderSource('x', null, 'repo')).toBeNull();
   });

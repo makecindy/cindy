@@ -6071,7 +6071,7 @@
         "hook": "Cindy IM ボット"
       },
       "hook": {
-        "description": "Slack と Telegram を同じ Cindy に接続します。メッセージはこのデバイスに送られ、プロジェクト一覧とセッション実行基盤を共有します。アカウント連携と設定はプロバイダーごとに分離されます。",
+        "description": "Slack、Telegram、Feishu / Lark などを同じ Cindy に接続します。メッセージはこのデバイスに送られ、プロジェクト一覧とセッション実行基盤を共有します。アカウント連携と設定はプロバイダーごとに分離されます。",
         "slackDescription": "Slack ワークスペースを連携し、Slack から Cindy にタスクを依頼できます。",
         "slackDisabledHint": "スイッチをオンにすると Slack 認証が始まります。連携が完了すると Slack からタスクを依頼できます。",
         "slackBoundHint": "連携が完了しました。スイッチをオフにすると連携が解除され、再びオンにするには再認証が必要です。",
@@ -6292,6 +6292,40 @@
             "revoked": "連携が解除されました",
             "superseded": "別のデバイスで連携済み"
           }
+        },
+        "feishu": {
+          "description": "Feishu または Lark アカウントを連携し、Cindy bot へのメッセージやグループでのメンションでタスクを依頼できます。",
+          "disabledHint": "スイッチをオンにして、ブラウザで Feishu / Lark アカウントを認証するか、連携コードを bot に送信してください。",
+          "toggleAria": "Feishu / Lark 接続を切り替え",
+          "connect": "Feishu / Lark を連携",
+          "openApp": "認証ページを開く",
+          "cancel": "連携をキャンセル",
+          "retry": "再連携",
+          "openBot": "Bot を開く",
+          "unlink": "Feishu / Lark の連携を解除",
+          "unlinkConfirmTitle": "Feishu / Lark の連携を解除しますか？",
+          "unlinkConfirmDescription": "解除すると Feishu / Lark からこのデバイスへタスクを送れなくなります。ローカルプロジェクトと他のチャンネルには影響しません。",
+          "unavailableHint": "所属組織で Feishu / Lark bot がまだ設定されていません。組織の管理者にお問い合わせください。",
+          "status": {
+            "checking": "サーバーの対応状況を確認中…",
+            "unavailable": "組織で未設定",
+            "disabled": "無効",
+            "none": "未連携",
+            "pending": "ブラウザで認証するか、連携コードを bot に送信してください",
+            "awaiting_confirmation": "Feishu / Lark でデバイス切り替えを確認してください",
+            "confirmed": "{{user}} が Feishu / Lark bot と連携済み",
+            "denied": "認証が拒否されました",
+            "expired": "認証の有効期限切れ",
+            "failed": "連携に失敗しました",
+            "revoked": "連携が解除されました",
+            "superseded": "別のデバイスで連携済み"
+          },
+          "bindCode": {
+            "label": "連携コード",
+            "copy": "コードをコピー",
+            "copied": "連携コードをコピーしました",
+            "hint": "または Feishu / Lark で Cindy bot にこのコードをダイレクトメッセージで送信してください"
+          }
         }
       },
       "summary": {
@@ -6320,6 +6354,7 @@
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
         "providerX": "X",
+        "providerFeishu": "Feishu / Lark",
         "requireConnected": "{{provider}} 接続後に編集できます（上のスイッチをオンにして接続をお待ちください）。",
         "offlineLocal": "{{provider}} に接続できない間、変更はこのコンピュータに保存されます。再接続後にチャットのモデルカードへ同期します。",
         "requireBinding": "先に {{provider}} アカウントの連携を完了してください。",

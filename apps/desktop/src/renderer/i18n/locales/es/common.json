@@ -6172,7 +6172,7 @@
         "hook": "Bots de mensajería de Cindy"
       },
       "hook": {
-        "description": "Conecta Slack y Telegram al mismo Cindy. Los mensajes se envían a este dispositivo y comparten su lista de proyectos y su ejecutor de sesiones; cada proveedor conserva su propia cuenta y preferencias.",
+        "description": "Conecta Slack, Telegram, Feishu / Lark y otros canales al mismo Cindy. Los mensajes se envían a este dispositivo y comparten su lista de proyectos y su ejecutor de sesiones; cada proveedor conserva su propia cuenta y preferencias.",
         "slackDescription": "Vincula espacios de trabajo de Slack y asigna tareas a Cindy desde Slack.",
         "slackDisabledHint": "Activa el interruptor para iniciar la autorización de Slack; una vez vinculado, podrás enviar tareas desde Slack.",
         "slackBoundHint": "Vinculación completa. Al desactivar el interruptor se desvincula este dispositivo; al volver a activarlo tendrás que autorizar de nuevo.",
@@ -6397,6 +6397,40 @@
             "revoked": "Desvinculado",
             "superseded": "Vinculado en otro dispositivo"
           }
+        },
+        "feishu": {
+          "description": "Vincula tu cuenta de Feishu o Lark y envía tareas escribiendo al bot de Cindy o mencionándolo en un grupo.",
+          "disabledHint": "Activa el interruptor y autoriza tu cuenta de Feishu / Lark en el navegador o envía el código de vinculación al bot.",
+          "toggleAria": "Activar o desactivar la conexión de Feishu / Lark",
+          "connect": "Vincular Feishu / Lark",
+          "openApp": "Abrir página de autorización",
+          "cancel": "Cancelar vinculación",
+          "retry": "Reintentar vinculación",
+          "openBot": "Abrir bot",
+          "unlink": "Desvincular Feishu / Lark",
+          "unlinkConfirmTitle": "¿Desvincular Feishu / Lark?",
+          "unlinkConfirmDescription": "Después de desvincularlo, Feishu / Lark ya no podrá enviar tareas a este dispositivo; los proyectos locales y los demás canales no se verán afectados.",
+          "unavailableHint": "Tu organización aún no ha configurado el bot de Feishu / Lark. Contacta con el administrador de tu organización.",
+          "status": {
+            "checking": "Comprobando compatibilidad del servidor…",
+            "unavailable": "Tu organización no lo ha configurado",
+            "disabled": "Desactivado",
+            "none": "Sin vincular",
+            "pending": "Autoriza en el navegador o envía el código de vinculación al bot",
+            "awaiting_confirmation": "Confirma el cambio de dispositivo en Feishu / Lark",
+            "confirmed": "{{user}} vinculado al bot de Feishu / Lark",
+            "denied": "Autorización denegada",
+            "expired": "La autorización caducó",
+            "failed": "Error de vinculación",
+            "revoked": "Desvinculado",
+            "superseded": "Vinculado en otro dispositivo"
+          },
+          "bindCode": {
+            "label": "Código de vinculación",
+            "copy": "Copiar código",
+            "copied": "Código de vinculación copiado",
+            "hint": "O envía este código al bot de Cindy por mensaje directo en Feishu / Lark"
+          }
         }
       },
       "summary": {
@@ -6425,6 +6459,7 @@
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
         "providerX": "X",
+        "providerFeishu": "Feishu / Lark",
         "requireConnected": "Se puede editar cuando {{provider}} esté conectado (activa su interruptor arriba y espera a que se conecte).",
         "offlineLocal": "{{provider}} está sin conexión. Los cambios se guardan en esta computadora y se sincronizan con la tarjeta del modelo de chat cuando vuelva a conectarse.",
         "requireBinding": "Primero completa la vinculación de la cuenta de {{provider}}.",
