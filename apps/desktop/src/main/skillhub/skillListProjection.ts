@@ -171,10 +171,11 @@ export function buildSkillList(input: SkillListProjectionInput): ScanResult {
     const realKey = realPathOrNormalized(c.absolutePath);
     const normalizedScope = normalizeScope(c.engine, c.scope);
     const project = normalizedScope === 'project' ? projectForWorkingDir(c.workingDir) : undefined;
-    // 两个插件可以把各自的 Skill 目录软链到同一份物理文件。运行时按插件命名空间
-    // 分别暴露（alpha:browser / beta:browser），投影若只按 realPath 合并就会丢掉
-    // 除第一个之外的命名空间，导致 SkillHub 少条目而 `/` 菜单多条目。
-    const pluginKey = c.pluginName ? `\0plugin:${c.pluginName}` : '';
+    // 插件 Skill 的去重身份必须带命名空间和条目名：两个插件可以把各自的 Skill
+    // 目录软链到同一份物理文件（alpha:browser / beta:browser），同一个插件也可以
+    // 把同一目录挂成两个名字（alpha:browser / alpha:browse）。运行时这些名字都
+    // 独立可调用，只按 realPath 合并会让 SkillHub 少条目而 `/` 菜单多条目。
+    const pluginKey = c.pluginName ? `\0plugin:${c.pluginName}\0name:${c.name}` : '';
     const dedupeKey = (project ? `${realKey}\0project:${project.hash}` : realKey) + pluginKey;
     const existing = seenItems.get(dedupeKey);
     if (existing) {

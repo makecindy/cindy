@@ -111,8 +111,11 @@ function collectSkillsFromRoot(
 }
 
 function manifestSkillRoots(manifest: PluginManifest | null): string[] {
+  // Claude Code treats a declared `skills` path as an addition to the
+  // conventional `skills/` directory, not a replacement. Keeping both means a
+  // plugin that declares `./extra` still exposes `skills/foo`.
+  const roots = ['skills'];
   const declared = manifest?.skills;
-  const roots: string[] = [];
   if (typeof declared === 'string' && declared.trim()) {
     roots.push(declared.trim());
   } else if (Array.isArray(declared)) {
@@ -120,7 +123,7 @@ function manifestSkillRoots(manifest: PluginManifest | null): string[] {
       if (typeof item === 'string' && item.trim()) roots.push(item.trim());
     }
   }
-  return roots.length > 0 ? roots : ['skills'];
+  return [...new Set(roots)];
 }
 
 /**

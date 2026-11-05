@@ -173,4 +173,25 @@ describe('scanClaudePluginSkills', () => {
     // Skill list must not advertise commands the session cannot resolve.
     expect(scanClaudePluginSkills(configDir)).toEqual([]);
   });
+
+  it('keeps the conventional skills/ root when the manifest declares extra paths', () => {
+    const configDir = tempRoot();
+    const plugin = path.join(configDir, 'plugins', 'cache', 'delta');
+    writeSkill(path.join(plugin, 'skills', 'conventional'), 'conventional');
+    writeSkill(path.join(plugin, 'extra', 'declared'), 'declared');
+    writeJson(path.join(plugin, '.claude-plugin', 'plugin.json'), {
+      name: 'delta',
+      skills: './extra',
+    });
+    writeJson(path.join(configDir, 'plugins', 'installed_plugins.json'), {
+      plugins: { 'delta@market': [{ scope: 'user', installPath: plugin }] },
+    });
+
+    // Claude treats a declared skills path as a supplement, not a replacement;
+    // omitting skills/ here would hide Skills the running session still loads.
+    expect(scanClaudePluginSkills(configDir).map((skill) => skill.name)).toEqual([
+      'delta:conventional',
+      'delta:declared',
+    ]);
+  });
 });

@@ -204,6 +204,43 @@ describe('scanAllSkills', () => {
     expect(result.skills[0]).toMatchObject({ name: 'alpha:browser' });
   });
 
+  it('keeps two aliases of the same plugin Skill that share a physical target', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-plugin-alias-'));
+    tempRoots.push(root);
+    const target = path.join(root, 'shared', 'browser-skill');
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(path.join(target, 'SKILL.md'), '---\nname: browser\n---\nBody\n', 'utf-8');
+    const skillsRoot = path.join(root, '.claude', 'plugins', 'cache', 'alpha', '1.0.0', 'skills');
+    fs.mkdirSync(skillsRoot, { recursive: true });
+    const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+    fs.symlinkSync(target, path.join(skillsRoot, 'browser'), linkType);
+    fs.symlinkSync(target, path.join(skillsRoot, 'browse'), linkType);
+    const maker = {
+      listCustomizations: vi.fn(async () => ({
+        errors: [],
+        items: ['browser', 'browse'].map((alias) => ({
+          engine: 'claude-code' as const,
+          kind: 'skill' as const,
+          scope: 'global' as const,
+          name: `alpha:${alias}`,
+          pluginName: 'alpha',
+          absolutePath: path.join(skillsRoot, alias),
+          mdPath: path.join(skillsRoot, alias, 'SKILL.md'),
+          files: [],
+        })),
+      })),
+    } as unknown as Maker;
+
+    const result = await scanAllSkills({}, maker);
+
+    // 两个别名解析到同一物理目录，但运行时是两个独立可调用的命令；
+    // 只按 realPath 去重会让 SkillHub 少一个而 `/` 菜单仍是两个。
+    expect(result.skills.map((skill) => skill.name).sort()).toEqual([
+      'alpha:browse',
+      'alpha:browser',
+    ]);
+  });
+
   it('uses the nested skill root when excluding package files', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-nested-exclusion-'));
     tempRoots.push(root);

@@ -181,8 +181,10 @@ async function readRemoteJson(fileOps: RemoteAgentFileOps, file: string): Promis
 }
 
 function remoteManifestSkillRoots(manifest: Record<string, unknown> | null): string[] {
+  // Same rule as the local scanner: a declared `skills` path supplements the
+  // conventional `skills/` directory instead of replacing it.
+  const roots = ['skills'];
   const declared = manifest?.skills;
-  const roots: string[] = [];
   if (typeof declared === 'string' && declared.trim()) {
     roots.push(declared.trim());
   } else if (Array.isArray(declared)) {
@@ -190,7 +192,7 @@ function remoteManifestSkillRoots(manifest: Record<string, unknown> | null): str
       if (typeof item === 'string' && item.trim()) roots.push(item.trim());
     }
   }
-  return roots.length > 0 ? roots : ['skills'];
+  return [...new Set(roots)];
 }
 
 async function remoteDirectoryExists(
@@ -247,6 +249,22 @@ async function scanRemotePluginSkillRoot(
   root: string,
   pluginName: string,
 ): Promise<AgentSkillCommand[]> {
+  // A declared root can itself be a single Skill folder (`skills: "./x/skill"`).
+  // The local scanner recognizes that shape; the remote one has to as well or
+  // the SSH palette silently drops such plugins.
+  const rootSkillFile = await existingSkillFile(fileOps, root);
+  if (rootSkillFile) {
+    return [{
+      kind: 'agent-skill',
+      name: `${pluginName}:${path.posix.basename(root)}`,
+      description: await readDescription(fileOps, rootSkillFile),
+      source: 'skill',
+      path: rootSkillFile,
+      scope: 'global',
+      enabled: true,
+    }];
+  }
+
   const names = (await fileOps.listDir(root))
     .filter((name) => name && !name.startsWith('.') && !name.includes('/')
       && !/\.bak\.\d+$/.test(name))

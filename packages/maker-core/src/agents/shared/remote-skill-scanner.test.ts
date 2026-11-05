@@ -45,6 +45,23 @@ function fakeRemoteFiles(files: Record<string, string>): RemoteAgentFileOps {
   };
 }
 
+/**
+ * 测试价值（engineering-conventions §3.2）
+ *
+ * 保护的行为：SSH 会话的 Skill 清单必须与远端运行时实际加载的一致。
+ * `scanRemoteClaudeSkills` 要同时给出 commands 与 skills 两类来源、project 覆盖
+ * global；`scanRemotePiSkills` 只能在 Git 边界内向上回溯。插件三条用例额外保护
+ * 「远端只暴露 user scope 插件」「manifest 声明的 skills 路径补充而非替换
+ * `skills/`」「声明的 root 本身就是一个 Skill 目录时仍被发现」——任一条走错，
+ * `/` 菜单都会与远端运行时对不上，或者给出远端无法解析的命令。
+ *
+ * 最小失败输入：`installed_plugins.json` 里放一条 `scope: 'project'` 记录；
+ * manifest 声明 `skills: './extra'` 且只铺 `skills/`；manifest 把 root 指到
+ * 一个直接含 `SKILL.md` 的目录。旧实现分别会误报、漏报、返回空列表。
+ *
+ * tier：unit —— 进程内 fake `RemoteAgentFileOps`，无网络、无真实远端主机。
+ * 单跑耗时：~8ms（9 个用例），远低于 10s 上限。
+ */
 describe('remote Skill scanners', () => {
   it('discovers Claude global and project resources with project precedence', async () => {
     const fileOps = fakeRemoteFiles({
@@ -172,6 +189,43 @@ describe('remote Skill scanners', () => {
         source: 'skill',
         description: 'Browser skill',
       }),
+    ]);
+  });
+
+  it('keeps the conventional skills/ root when a remote manifest declares extra paths', async () => {
+    const fileOps = fakeRemoteFiles({
+      '$HOME/.claude/plugins/installed_plugins.json': JSON.stringify({
+        plugins: { 'delta@market': [{ scope: 'user', installPath: '$HOME/plugins/delta' }] },
+      }),
+      '$HOME/plugins/delta/.claude-plugin/plugin.json': JSON.stringify({
+        name: 'delta',
+        skills: './extra',
+      }),
+      '$HOME/plugins/delta/skills/conventional/SKILL.md': 'Conventional skill',
+      '$HOME/plugins/delta/extra/declared/SKILL.md': 'Declared skill',
+    });
+
+    const skills = await scanRemoteClaudePluginSkills(fileOps);
+
+    expect(skills.map((skill) => skill.name)).toEqual(['delta:conventional', 'delta:declared']);
+  });
+
+  it('recognizes a remote manifest root that is itself a Skill', async () => {
+    const fileOps = fakeRemoteFiles({
+      '$HOME/.claude/plugins/installed_plugins.json': JSON.stringify({
+        plugins: { 'solo@market': [{ scope: 'user', installPath: '$HOME/plugins/solo' }] },
+      }),
+      '$HOME/plugins/solo/.claude-plugin/plugin.json': JSON.stringify({
+        name: 'solo',
+        skills: './custom/browser',
+      }),
+      '$HOME/plugins/solo/custom/browser/SKILL.md': '---\ndescription: Single skill\n---',
+    });
+
+    const skills = await scanRemoteClaudePluginSkills(fileOps);
+
+    expect(skills).toEqual([
+      expect.objectContaining({ name: 'solo:browser', description: 'Single skill' }),
     ]);
   });
 });
