@@ -1860,7 +1860,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                   {hook.serverSlackCommunications ? (
                     <label className="flex basis-full items-center justify-between gap-2 text-12 text-[var(--text-secondary)]">
                       {t('settings.remoteControl.hook.multi.localCommunications')}
-                      <Switch data-setting-id={imBotSettings.cindy.id}
+                      <Switch data-setting-id={imBotSettings.cindySlack.id}
                         checked={b.communicationsEnabled === true}
                         disabled={hook.status !== 'connected' || slackAuthActionPending || hook.pendingBind?.state === 'pending'}
                         onCheckedChange={(enabled) => runSlackAuthAction(

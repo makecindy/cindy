@@ -340,6 +340,11 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     render(<HookConnectionsSection />);
     await expandChannelCard(SLACK_CARD);
     const toggle = await screen.findByRole('switch', { name: 'settings.remoteControl.hook.multi.localCommunications' });
+    // Unit regression (#8481): a bound Slack workspace is absent from the
+    // provider-switch fixture above; its search binding must resolve to Slack.
+    const entry = resolveSettingsSearchEntry('im-bot', toggle.getAttribute('data-setting-id'));
+    expect(entry?.id).toBe('imBot.cindy.slack');
+    expect(document.getElementById(entry!.targetId)?.contains(toggle)).toBe(true);
     const masterToggle = screen.getByRole('switch', { name: 'settings.remoteControl.hook.toggleAria' });
     expect(masterToggle.getAttribute('aria-checked')).toBe('true');
     expect(toggle.getAttribute('aria-checked')).toBe(String(enabled));
