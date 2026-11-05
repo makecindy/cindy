@@ -5,7 +5,7 @@
  * 折叠/展开/peek 重建或被裁切,是唯一一份常驻实例。
  *
  * 位置（Codex 风格:钉死在窗口左上角,不随侧栏状态移动）：
- *   - mac 非全屏：x = 78（红绿灯 70 + 呼吸 8），紧贴红绿灯右侧；
+ *   - mac 非全屏：x = 78 / windowZoom（原生红绿灯不随页面缩放），紧贴红绿灯右侧；
  *   - mac 全屏：x = 8（红绿灯隐藏,回收让位）；
  *   - Windows：恒定 x = 8（左上角无红绿灯）。
  *   侧栏关闭 / 打开 / peek 临时浮出,按钮簇位置一律不变 —— peek 的 hover
@@ -20,13 +20,11 @@
  * 收起侧栏后整行 chrome(红绿灯 → 本簇 → 标题 → 标题后图标)
  * 视觉重量一致(对齐 Codex 的小图标密度)。
  *
- * 垂直对齐：容器 h-[46px] —— 红绿灯由主进程钉在 trafficLightPosition
- * {x:12, y:16}(bootstrap-electron / secondary-windows / right-sidebar-window
- * 三处同值),灯径 12,灯心实测 23(y=16 + macOS 渲染偏移;理论 y+6=22,实测灯心比理论低约 1pt),本簇图标与红绿灯严格同轴。
- * 改行高必须同步:renderer 侧 ContentHeader / Sidebar 顶行 / MainLayout
- * 右上浮层 / RightSidebar 顶条 / SidebarWindowLayout,以及 main 侧的
- * trafficLightPosition y ≈ (行高-12)/2 - 1(经验公式:macOS 实际渲染
- * 比理论低约 1pt,2026-07 与 Codex 截图逐像素比对标定)。
+ * 垂直对齐：容器 h-[46px]，中心在 23 CSS px。主进程应用界面缩放时，
+ * 按 23 × windowZoom - 7 更新原生按钮的 y 坐标（100% 时为 16）。
+ * 改行高必须同步 ContentHeader / Sidebar 顶行 / MainLayout 右上浮层 /
+ * RightSidebar 顶条 / SidebarWindowLayout，以及 appearance-settings-ipc 的
+ * 原生按钮中心换算。原生按钮的直径与横向间距仍由 macOS 管理。
  *
  * ⚠️ 必须用 `left` 而不是 `transform` 做定位：Electron/Chromium 的
  * `-webkit-app-region` 命中区域按布局矩形计算，**不跟随 CSS transform**——
@@ -69,13 +67,14 @@ export function ChromeActions({
   peekTriggerProps,
 }: ChromeActionsProps) {
   const { t } = useTranslation();
-  const { isMac, isFullscreen } = useMacFullscreen();
+  const {
+    isMac,
+    isFullscreen,
+    trafficLightInset = CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft,
+  } = useMacFullscreen();
 
-  // 钉死左上角:mac 非全屏让位红绿灯(78),其余 8。不随侧栏状态变化。
-  const x =
-    isMac && !isFullscreen
-      ? CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft
-      : CHROME_ACTIONS_GEOMETRY.defaultLeft;
+  // mac 非全屏保留 78pt 原生安全区；其余 8 CSS px。不随侧栏状态变化。
+  const x = isMac && !isFullscreen ? trafficLightInset : CHROME_ACTIONS_GEOMETRY.defaultLeft;
   const sidebarToggleLabel = t(
     isSidebarCollapsed ? 'contentHeader.expandSidebar' : 'contentHeader.collapseSidebar',
   );

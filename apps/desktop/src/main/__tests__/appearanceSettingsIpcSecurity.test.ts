@@ -57,7 +57,12 @@ vi.mock('../appearance-settings-store.js', () => ({
   updateAppearanceSettingsAtomic: mocks.updateAppearanceSettingsAtomic,
 }));
 
-import { registerAppearanceSettingsIpc, installWindowZoomRestoration, __testing } from '../appearance-settings-ipc.js';
+import {
+  applyAppearanceToWindow,
+  registerAppearanceSettingsIpc,
+  installWindowZoomRestoration,
+  __testing,
+} from '../appearance-settings-ipc.js';
 import {
   normalizeAppearanceSettings,
   WALLPAPER_DOWNLOAD_PROGRESS_CHANNEL,
@@ -75,6 +80,29 @@ const persisted = {
 };
 
 describe('appearance settings IPC authorization', () => {
+  // #8656: changing native button coordinates is part of applying app zoom, not
+  // a new IPC capability. Existing tests only checked webContents zoom. A 0.6
+  // zoom must align native lights with the 46 CSS-pixel topbar (unit).
+  it('aligns macOS native buttons with the scaled app header', () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    try {
+      const win = {
+        isDestroyed: () => false,
+        webContents: { isDestroyed: () => false, setZoomFactor: vi.fn() },
+        setWindowButtonPosition: vi.fn(),
+      };
+      markAppContentWindow(win as never);
+      applyAppearanceToWindow(win as never, { windowZoom: 0.6 });
+      expect(win.webContents.setZoomFactor).toHaveBeenCalledWith(0.6);
+      expect(win.setWindowButtonPosition).toHaveBeenCalledWith({ x: 12, y: 7 });
+      applyAppearanceToWindow(win as never, { windowZoom: 1 });
+      expect(win.setWindowButtonPosition).toHaveBeenLastCalledWith({ x: 12, y: 16 });
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+    }
+  });
+
   it('validates literal visibility and accepts null only to reset its override', () => {
     for (const wallpaperBlur of [0, 8, 20, null]) {
       expect(__testing.parsePatch({ wallpaperBlur })).toEqual({ wallpaperBlur });

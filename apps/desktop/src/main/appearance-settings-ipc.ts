@@ -130,6 +130,14 @@ export function applyAppearanceToWindow(
 ): void {
   if (win.isDestroyed() || win.webContents.isDestroyed() || !isAppContentWindow(win)) return;
   win.webContents.setZoomFactor(settings.windowZoom);
+  if (process.platform === 'darwin' && typeof win.setWindowButtonPosition === 'function') {
+    // The header center is 23 CSS px from the top. AppKit's native button center
+    // is 7pt below trafficLightPosition.y and does not scale with webContents.
+    win.setWindowButtonPosition({
+      x: 12,
+      y: Math.max(0, Math.round(23 * settings.windowZoom - 7)),
+    });
+  }
 }
 
 export function applyAppearanceToWindows(settings = readAppearanceSettings()): void {
