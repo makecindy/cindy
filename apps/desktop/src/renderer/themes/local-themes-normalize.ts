@@ -19,6 +19,7 @@
 import { parseCssColor, toHex, type Rgb } from '../../shared/theme-import/color';
 import { deriveUncheckedSwitchTrack } from '../../shared/theme-import/palette';
 import { colorRegistry } from './color-registry';
+import { filledButtonPressed } from './filledButtonStates';
 import { dropLegacyLoginDefaults } from './loginLegacyDefaults';
 import type { ThemeType } from './types';
 
@@ -112,6 +113,25 @@ function normalizeUncheckedSwitchColors(
   }
 }
 
+/**
+ * `accent-hover` 曾同时是 CTA 与确认框主按钮的悬停色。填充按钮改由基础色算出后
+ * (DESIGN.md §4),旧主题和外部导入显式写的值继续生效;按下从该悬停色接着算,保持同向。
+ */
+const LEGACY_ACCENT_HOVER_STATES = [
+  ['button-cta-hover', 'button-cta-pressed'],
+  ['confirm-btn-primary-hover', 'confirm-btn-primary-pressed'],
+] as const;
+
+function bridgeLegacyAccentHover(colors: Record<string, string>): Record<string, string> {
+  if (colors['accent-hover'] === undefined) return colors;
+  const bridged: Record<string, string> = {};
+  for (const [hover, pressed] of LEGACY_ACCENT_HOVER_STATES) {
+    if (colors[hover] === undefined) bridged[hover] = 'var(--accent-hover)';
+    if (colors[pressed] === undefined) bridged[pressed] = filledButtonPressed(`var(--${hover})`);
+  }
+  return Object.keys(bridged).length === 0 ? colors : { ...colors, ...bridged };
+}
+
 export function normalizeLocalThemeColors(
   colors: Record<string, string>,
   type?: ThemeType,
@@ -151,7 +171,7 @@ export function normalizeLocalThemeColors(
     }
   }
 
-  const result = normalizeUncheckedSwitchColors(normalized);
+  const result = bridgeLegacyAccentHover(normalizeUncheckedSwitchColors(normalized));
   // 升级前的 login-* 默认值按主题模式比对;不知道模式时不猜,不迁移。
   return type === undefined ? result : dropLegacyLoginDefaults(result, type);
 }

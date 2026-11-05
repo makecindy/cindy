@@ -7,6 +7,7 @@ import {
 } from '../../shared/theme-import/color';
 import legacyTable from '../themes/loginLegacyDefaults.json';
 import { LEGACY_SNAPSHOT_MIN_MATCHES } from '../themes/loginLegacyDefaults';
+import { filledButtonPressed } from '../themes/filledButtonStates';
 import { normalizeLocalThemeColors } from '../themes/local-themes-normalize';
 
 function rgb(value: string | undefined): Rgb {
@@ -19,6 +20,30 @@ function rgb(value: string | undefined): Rgb {
 const SWITCH_DERIVATION_TARGET = 3.2;
 
 describe('normalizeLocalThemeColors', () => {
+  it('旧主题显式写的 accent-hover 继续作为 CTA 与确认框主按钮的悬停色', () => {
+    const out = normalizeLocalThemeColors({ 'accent-hover': '#6a5acd' });
+    expect(out['button-cta-hover']).toBe('var(--accent-hover)');
+    expect(out['confirm-btn-primary-hover']).toBe('var(--accent-hover)');
+    expect(out['button-cta-pressed']).toBe(filledButtonPressed('var(--button-cta-hover)'));
+    expect(out['confirm-btn-primary-pressed']).toBe(filledButtonPressed('var(--confirm-btn-primary-hover)'));
+    expect(normalizeLocalThemeColors(out)).toEqual(out);
+  });
+
+  it('显式状态色优先，没有 accent-hover 时仍由基础色算出', () => {
+    const explicit = normalizeLocalThemeColors({
+      'accent-hover': '#6a5acd',
+      'button-cta-hover': '#111111',
+      'button-cta-pressed': '#222222',
+    });
+    expect(explicit['button-cta-hover']).toBe('#111111');
+    expect(explicit['button-cta-pressed']).toBe('#222222');
+    expect(explicit['confirm-btn-primary-hover']).toBe('var(--accent-hover)');
+
+    const baseOnly = normalizeLocalThemeColors({ 'accent-cta-bg-pure': '#6a5acd' });
+    expect(baseOnly['button-cta-hover']).toBeUndefined();
+    expect(baseOnly['confirm-btn-primary-hover']).toBeUndefined();
+  });
+
   it('迁移旧 connected badge override 并保留原中性色给文字 token', () => {
     const out = normalizeLocalThemeColors({
       surface: '#111',

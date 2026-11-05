@@ -348,6 +348,7 @@ button/cta  (Black Pill — maximum emphasis)
 - Neutral buttons (`primary`, `secondary`, quiet) keep mixing toward `--text-primary` as specified above.
 - One registered exception: `danger-solid` in Dark keeps mixing toward `--text-primary`. It is dark text on a mid-lightness red, and darkening would drop text contrast below 4.5:1.
 - A theme may still override a state token explicitly; the override wins.
+- Compatibility: a local or imported theme that sets `accent-hover` keeps it as the hover of `cta` and confirmation primary (load-time only, `local-themes-normalize`); pressed continues from that hover by the same rule.
 
 **Compact settings actions (owner feedback, 2026-09-21).** Button adds an explicit 28px sm size alongside 32px md and 36px lg. Logs and compact automation actions use this shared size with their existing horizontal spacing. Contacts section actions retain their approved 24px target; appearance actions retain 36px or 32px targets. A 13px identity-removal icon keeps its visible size inside a 24px target. Destructive contacts actions retain semantic red hover/pressed feedback. The authorization-waiting Cancel action remains named and enabled; it is not a disabled loading button. The contacts discard/add-identity treatments are retained per this batch’s explicit keep-before decisions.
 
