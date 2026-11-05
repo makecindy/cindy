@@ -214,7 +214,7 @@ describe('model advanced editor', () => {
         // A queued pointer event can still reach Radix after the DOM trigger
         // becomes disabled. Its selection callback must keep the editor target.
         fireEvent.pointerDown(memberSelector, { button: 0, ctrlKey: false });
-        fireEvent.click(screen.getByRole('menuitemradio', { name: 'private', exact: true }));
+        fireEvent.click(screen.getByRole('menuitemradio', { name: /^private$/ }));
         expect(selectMember).not.toHaveBeenCalled();
         await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
       }

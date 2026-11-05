@@ -321,12 +321,14 @@ export function ModelAdvancedDrawer({
   const canEditName = canEditProtocol && !isOrganizationManagedProvider(provider) &&
     !!row?.avail.length && row.avail.every(agent =>
       provider.models[agent]?.some(model => model.id === row.byAgent[agent]?.id));
+  // Discovery can add a preferred engine to this same model row. That is not
+  // a new editing target and must not discard an alias typed during refresh.
   useEffect(() => {
     nameEditorVersionRef.current += 1;
     nameDirtyRef.current = false;
     setNameDraft(primaryModel?.name ?? '');
     return () => { nameEditorVersionRef.current += 1; };
-  }, [open, provider.id, primaryAgent, primaryModel?.id]);
+  }, [open, provider.id, row?.id]);
   useEffect(() => {
     if (!nameDirtyRef.current) setNameDraft(primaryModel?.name ?? '');
   }, [primaryModel?.name]);

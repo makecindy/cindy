@@ -244,12 +244,22 @@ describe('ProvidersSection — 双栏管理', () => {
   // discovery tests only cover completed refreshes. One pending fetch/readback
   // must block alias writes, keep the draft, then save against the refreshed config.
   it.each(['success', 'failed'] as const)('keeps a name draft across a %s refresh readback', async (outcome) => {
-    const initial = { id: 'refresh-rename', name: 'Relay', runtimes: { codex: { baseUrl: 'https://relay.example.invalid/v1', models: [{ id: 'private', name: 'Private', extra: { keep: true } }] } } };
+    // The successful read adds the same row under Pi, changing its primary
+    // engine without selecting another model. The old Codex-only input missed
+    // this draft-loss branch; reuse the existing unit case, no extra I/O/waits.
+    const initial = { id: 'refresh-rename', name: 'Relay', runtimes: {
+      codex: { baseUrl: 'https://relay.example.invalid/v1', models: [{ id: 'private', name: 'Private', extra: { keep: true } }] },
+      ...(outcome === 'success' ? { pi: { baseUrl: 'https://relay.example.invalid/v1', models: [] } } : {}),
+    } };
     let stored: CustomProviderConfig = initial;
     providerSnapshotState.customOverride = { ...buildUserProvider(stored), connected: true };
     providerSnapshotState.order = [stored.id];
     let finishFetch!: () => void;
-    const fetchModels = vi.fn(() => new Promise(resolve => { finishFetch = () => resolve({ ok: true, models: [{ id: 'private', name: 'Discovered' }, { id: 'new', name: 'New' }] }); }));
+    let discoveryReady = false;
+    const discovery = { ok: true, models: [{ id: 'private', name: 'Discovered' }, { id: 'new', name: 'New' }] };
+    const fetchModels = vi.fn(() => discoveryReady ? Promise.resolve(discovery) : new Promise(resolve => {
+      finishFetch = () => { discoveryReady = true; resolve(discovery); };
+    }));
     let finishReadback!: () => void;
     const readback = new Promise<void>(resolve => { finishReadback = resolve; });
     const persist = vi.fn(async (config: CustomProviderConfig) => { stored = structuredClone(config); return { ok: true as const }; });
@@ -283,6 +293,7 @@ describe('ProvidersSection — 双栏管理', () => {
       await waitFor(() => expect(refetchProvidersSpy).toHaveBeenCalledOnce());
       expect(save.disabled).toBe(true);
       expect(persist).toHaveBeenCalledOnce();
+      expect(fetchModels).toHaveBeenCalledTimes(Object.keys(initial.runtimes).length);
       const refreshed = structuredClone(stored);
       await act(async () => { finishReadback(); });
       if (outcome === 'failed') {
@@ -298,11 +309,18 @@ describe('ProvidersSection — 双栏管理', () => {
         });
         await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'settings.providers.catalogRecovery.retry' })); });
       }
-      await waitFor(() => expect(save.disabled).toBe(false));
       expect(input.value).toBe('Work Alias');
+      await waitFor(() => expect(save.disabled).toBe(false));
       fireEvent.click(save);
       await waitFor(() => expect(persist).toHaveBeenCalledTimes(2));
-      expect(stored).toEqual({ ...refreshed, runtimes: { ...refreshed.runtimes, codex: { ...refreshed.runtimes.codex, models: refreshed.runtimes.codex!.models.map(model => model.id === 'private' ? { ...model, name: 'Work Alias', nameExplicit: true } : model) } } });
+      const expected = structuredClone(refreshed);
+      for (const runtime of Object.values(expected.runtimes)) {
+        for (const model of runtime?.models ?? []) if (model.id === 'private') {
+          Object.assign(model, { name: 'Work Alias', nameExplicit: true });
+        }
+      }
+      expect(stored).toEqual(expected);
+      if (outcome === 'success') expect(stored.runtimes.pi!.models.find(model => model.id === 'private')).toMatchObject({ name: 'Work Alias', nameExplicit: true });
       expect(stored.runtimes.codex!.models.map(model => model.id).sort()).toEqual(['new', 'private']);
     } finally { finishReadback(); vi.mocked(updateCustomProvider).mockReset(); refetchProvidersSpy.mockReset(); }
   });
