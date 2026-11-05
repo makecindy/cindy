@@ -343,12 +343,14 @@ function GhostCardCanvas({
     [renderedCardHtml],
   );
 
+  // The outer card takes its width from static HTML, including while animation HTML runs.
+  const fullWidth = isFullWidthGhostCardHtml(html);
   const measureHeight = useCallback(() => {
     const doc = iframeRef.current?.contentDocument;
     const body = doc?.body;
     if (!doc || !body) return;
-    // scrollHeight is at least the iframe viewport height, so it cannot shrink a footer.
-    const h = Math.ceil(formFields ? body.getBoundingClientRect().height : body.scrollHeight);
+    // scrollHeight includes the old viewport height; responsive cards must also shrink.
+    const h = Math.ceil(formFields || fullWidth ? body.getBoundingClientRect().height : body.scrollHeight);
     if (h <= 0) return;
     const clamped = Math.min(GHOST_CARD_HEIGHT_MAX, Math.max(formFields ? 1 : GHOST_CARD_HEIGHT_MIN, h));
     const imagesPending = Array.from(doc.images).some((img) => !img.complete);
@@ -367,7 +369,22 @@ function GhostCardCanvas({
       noteCardMeasuredHeight(callId, clamped);
       window.electronAPI?.ghosts?.reportCardHeight?.(callId, clamped)?.catch(() => {});
     }
-  }, [callId, height, formFields]);
+  }, [callId, height, formFields, fullWidth]);
+
+  useEffect(() => {
+    const frame = iframeRef.current;
+    if (!fullWidth || !frame) return;
+    let previousWidth = 0;
+    const observer = new ResizeObserver(([entry]) => {
+      const width = entry.contentRect.width;
+      // Height updates trigger this observer too; only remeasure horizontal reflow.
+      if (width <= 0 || width === previousWidth) return;
+      previousWidth = width;
+      measureHeight();
+    });
+    observer.observe(frame);
+    return () => observer.disconnect();
+  }, [fullWidth, measureHeight]);
 
   /** data-ghost-audio 插槽装配:注入标准播放器行 + 双向接线(UI → audio 控制,
    *  audio 事件 → UI 刷新)。同 url 复用同一 <audio>(跨文档重载接续播放)。 */
