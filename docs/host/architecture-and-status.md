@@ -150,6 +150,8 @@ Host 现已注册真实 Codex agent（本机 Codex CLI 登录 lane，未复制�
 `apps/cindy-headless` 是独立评测/任务执行器，具有自己的 `headless_sessions` 表、profile 和环境变量 API key 认证；它不是 Desktop Runtime 的 headless 启动方式。`feat/headless-server` 与 `feat/web-client` 仅按 issue #136 所列只读参考查看，不合并/摘取其实现，也不沿用其平行数据库、固定 provider、API key 登录或重写 SPA 决策。
 
 
+逐项功能状态见 [功能保留清单](feature-parity.md)（阶段 7 台账，随验证更新）。
+
 ## 阶段 4 现状（实测，2026-11-05）
 
 浏览器侧复用同一份 renderer 构建产物，`/shim.js` 实现 preload 通道表；Host 已具备：

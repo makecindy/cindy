@@ -32,7 +32,7 @@
    * read makes React re-render forever (#185).
    */
   const STATIC = Object.freeze({
-    remoteDesktopState: Object.freeze({ status: 'unavailable' }),
+    remoteDesktopState: Object.freeze({ enabled: false, active: null }),
     ghosts: Object.freeze({ ghosts: [] }),
     ghostRecommendations: Object.freeze({ items: [] }),
     layout: Object.freeze({ layout: null }),
@@ -56,6 +56,9 @@
       providerModel: '', auth: 'api-key', settingsTab: 'api-keys', error: 'not_available_on_host',
     }),
     rightSidebarTabs: Object.freeze({ tabs: Object.freeze([]), activeTabId: null }),
+    localThemes: Object.freeze({ success: true, themes: Object.freeze([]), diagnostics: Object.freeze([]) }),
+    ghostsUnread: Object.freeze({ entries: Object.freeze([]) }),
+    ghostRecentUsage: Object.freeze({ ids: Object.freeze([]) }),
     voiceModelSelection: Object.freeze({ serviceMode: null, asrProvider: null, refinerProvider: null, refinerModel: null }),
     appShortcuts: Object.freeze({ overrides: Object.freeze({}), platform: 'linux', globalFailures: Object.freeze([]) }),
   });
@@ -175,7 +178,8 @@
     'appShortcuts.setOverride': () => ({ overrides: STATIC.emptyOverrides }),
     'appShortcuts.clearOverride': () => ({ overrides: STATIC.emptyOverrides }),
     'accessibilitySupport.getSync': () => false,
-    'ghosts.unreadSync': () => 0,
+    'ghosts.unreadSync': () => STATIC.ghostsUnread,
+    'ghosts.recentUsageSync': () => STATIC.ghostRecentUsage,
     'ghosts.noteSessionFocused': () => undefined,
     'ghosts.markUsed': () => undefined,
     'voiceInput.cancel': () => undefined,
@@ -238,7 +242,7 @@
         platform: 'linux',
       };
     },
-    'localThemes.listSync': () => STATIC.emptyList,
+    'localThemes.listSync': () => STATIC.localThemes,
     'authHasPersistedSessionHintSync': () => Boolean(window.__cindyBoot?.auth?.user),
     'appearanceSettings.getSync': () => window.__cindyBoot?.appearance ?? {},
     'appearanceSettings.get': () => Promise.resolve(window.__cindyBoot?.appearance ?? {}),
@@ -267,7 +271,7 @@
       ownerGeneration: 1,
     }),
     'maker.listActive': () => STATIC.emptyList,
-    'remoteDesktop.state': () => STATIC.remoteDesktopState,
+    'remoteDesktop.state': () => Promise.resolve(STATIC.remoteDesktopState),
     'sidebarSettings.claimLegacyRendererOwner': () => STATIC.claimDenied,
     'setUpdateRelaunchTheme': () => undefined,
     'theme.applyVibrancy': () => undefined,
@@ -303,6 +307,9 @@
     'sidebarSettings.loadSnapshot': true,
     'layout.getStateSync': true,
     'appearanceSettings.getSync': true,
+    'appShortcuts.getState': true,
+    'voiceInput.getReadinessCached': true,
+    'voiceInput.getSystemPermissionsCached': true,
   };
 
   function unsupported(path) {
