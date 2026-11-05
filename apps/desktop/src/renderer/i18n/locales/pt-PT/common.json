@@ -13510,7 +13510,7 @@
         "empty": "Nenhum comando disponível."
       },
       "cost": {
-        "title": "Custo da sessão",
+        "title": "Utilização da sessão",
         "tokensUsed": "Tokens utilizados (neste turno)"
       },
       "pwd": {

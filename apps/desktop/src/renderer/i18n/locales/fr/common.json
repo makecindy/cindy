@@ -13510,7 +13510,7 @@
         "empty": "Aucune commande disponible."
       },
       "cost": {
-        "title": "Coût de la session",
+        "title": "Consommation de la session",
         "tokensUsed": "Jetons utilisés (ce tour)"
       },
       "pwd": {
