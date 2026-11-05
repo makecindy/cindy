@@ -89,6 +89,13 @@ function isSafeHttpsUrl(v: unknown): v is string {
   }
 }
 
+/** One-time bind code: 4-32 uppercase letters or digits, inner hyphens allowed. */
+const PROVIDER_BIND_CODE_PATTERN = /^[A-Z0-9][A-Z0-9-]{2,30}[A-Z0-9]$/;
+
+function isProviderBindCode(v: unknown): v is string {
+  return typeof v === 'string' && PROVIDER_BIND_CODE_PATTERN.test(v);
+}
+
 function validateProvider(v: unknown, path: string): string | null {
   if (!HOOK_PROVIDERS.includes(v as never)) {
     return `${path} must be one of: ${HOOK_PROVIDERS.join(', ')}`;
@@ -891,6 +898,11 @@ function validateProviderBindStatus(
   if (p.connectUrl !== null && !isSafeHttpsUrl(p.connectUrl)) {
     return `${label}.connectUrl must be a safe HTTPS URL or null`;
   }
+  // Optional field: peers that predate it omit it entirely.
+  const bindCode = p.bindCode === undefined ? null : p.bindCode;
+  if (bindCode !== null && !isProviderBindCode(bindCode)) {
+    return `${label}.bindCode must be 4-32 uppercase letters, digits or inner hyphens, or null`;
+  }
   if (p.remediationUrl !== null && !isSafeHttpsUrl(p.remediationUrl)) {
     return `${label}.remediationUrl must be a safe HTTPS URL or null`;
   }
@@ -941,6 +953,9 @@ function validateProviderBindStatus(
   }
   if (state !== 'pending' && p.connectUrl !== null) {
     return `${label}.connectUrl must be null unless state is pending`;
+  }
+  if (state !== 'pending' && bindCode !== null) {
+    return `${label}.bindCode must be null unless state is pending`;
   }
   if (state === 'confirmed') {
     for (const field of ['bindingId', 'principalId', 'scopeId'] as const) {
