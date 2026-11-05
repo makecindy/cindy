@@ -244,7 +244,8 @@ export function BotGroupComposer({
   const [division, setDivision] = useState(false);
   const divisionRef = useRef(division);
   divisionRef.current = division;
-  const groupAttemptRef = useRef<{ clientId: string; signature: string } | null>(null);
+  const groupAttemptRef = useRef<{ clientId: string; signature: string; enqueueOperationId?: string;
+    editSource?: { groupId: string; clientId: string; revision: number } } | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -273,6 +274,12 @@ export function BotGroupComposer({
   const focusInputOnMenuCloseRef = useRef(false);
   const sendingRef = useRef(false);
   const stoppingRef = useRef(false);
+  const inputSnapshot = { text, files: attachmentState.attachments, division, quote: quoteView };
+  const inputVersion = useRef({ ...inputSnapshot, revision: 0 });
+  if (inputVersion.current.text !== text || inputVersion.current.files !== attachmentState.attachments
+    || inputVersion.current.division !== division || inputVersion.current.quote !== quoteView) {
+    inputVersion.current = { ...inputSnapshot, revision: inputVersion.current.revision + 1 };
+  }
 
   // A reply can settle in a different mounted composer after the panel was reopened.
   useEffect(() => {
@@ -421,9 +428,17 @@ export function BotGroupComposer({
   useEffect(
     () => thread ? undefined :
       registerBotGroupComposer(groupId, {
+        prepareRestore: () => {
+          if (textRef.current || attachmentsRef.current.length > 0 || divisionRef.current) return null;
+          const revision = inputVersion.current.revision;
+          return () => revision === inputVersion.current.revision && !textRef.current
+            && attachmentsRef.current.length === 0 && !divisionRef.current;
+        },
         restore: (entry) => {
           if (textRef.current || attachmentsRef.current.length > 0 || divisionRef.current) return false;
-          groupAttemptRef.current = { clientId: entry.input.clientId, signature: entry.signature };
+          groupAttemptRef.current = { clientId: entry.input.clientId, signature: entry.signature,
+            ...(entry.editHold ? { editSource: { groupId: entry.input.groupId, clientId: entry.input.clientId,
+              revision: entry.editHold.revision } } : {}) };
           textRef.current = entry.draft;
           setText(entry.draft);
           mention.setTracked([...entry.tracked]);
@@ -467,9 +482,15 @@ export function BotGroupComposer({
       ...(sentQuote ? { quote: { messageId: sentQuote.messageId } } : {}),
     };
     const signature = botGroupSendSignature({ ...fields, clientId: '' }, botGroupAttachmentSignature(files));
-    const clientId = groupAttemptRef.current?.signature === signature ? groupAttemptRef.current.clientId : crypto.randomUUID();
-    // The outbox owns this attempt now; a failure hands it back through `restore`.
-    groupAttemptRef.current = null;
+    const previous = groupAttemptRef.current;
+    const clientId = previous?.signature === signature ? previous.clientId : crypto.randomUUID();
+    const attempt = { clientId, signature,
+      enqueueOperationId: previous?.signature === signature && previous.enqueueOperationId ? previous.enqueueOperationId : crypto.randomUUID(),
+      ...(previous?.editSource ? { editSource: previous.editSource } : {}) };
+    // Retain the exact operation on an unknown/failed enqueue. A later retry is not a new send.
+    groupAttemptRef.current = attempt;
+    const owner = getDataOwnerGeneration();
+    const revision = inputVersion.current.revision;
     sendingRef.current = true; setSending(true);
     try { const saved = enqueueBotGroupSend({
       input: { ...fields, clientId },
@@ -479,15 +500,20 @@ export function BotGroupComposer({
       quote: sentQuote,
       files,
       attachmentScope,
+      enqueueOperationId: attempt.enqueueOperationId,
+      ...(attempt.editSource ? { editSource: attempt.editSource } : {}),
     });
-      if (botGroupApi()?.botGroupOutbox) await saved;
+      if (botGroupApi()?.botGroupOutboxCommand || botGroupApi()?.botGroupOutbox) await saved;
       else void saved.catch(() => undefined);
     } catch {
       toast.error(t('bots.groupChat.composer.sendFailed'));
       return;
     } finally { sendingRef.current = false; setSending(false); }
-    // Clear at once like any chat, so the next message can be written while this one
-    // goes out. The batch leaves the tray without deleting its files: the message has them.
+    if (groupAttemptRef.current === attempt) groupAttemptRef.current = null;
+    // A durable enqueue may return after another input/target/account has taken its place.
+    if (!isDataOwnerGenerationCurrent(owner) || !isDraftDiscardTokenCurrent(discardTokenRef.current)
+      || inputVersion.current.revision !== revision) return;
+    // Main now owns this snapshot. Clearing the tray does not delete its files.
     textRef.current = '';
     setText('');
     mention.reset();

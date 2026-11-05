@@ -17,9 +17,8 @@ import { useOrcaLeadWorkerAttention } from '@/features/cc-agent/lib/orcaLeadWork
 import { useBotProfiles, useBotUnreadCounts } from '@/features/bots/botStore';
 import { useBotGroupList } from '@/features/bots/botGroupStore';
 import { isBotGroupUnread, subscribeBotReadState, getBotLastReadAtMap } from '@/features/bots/botReadState';
-import { useBotUnreadSync } from '@/features/bots/useBotUnreadSync';
 import { useCompanionIslandChats } from '@/features/bots/useCompanionIslandChats';
-import { useRemoteBotSync, useRemoteBots } from '@/features/bots/useRemoteBots';
+import { useRemoteBots } from '@/features/bots/useRemoteBots';
 import { isRemoteBotUnread } from '@/features/bots/remoteBotRoster';
 import { useCompanionCloud } from '@/features/bots/companionCloudStore';
 import { cloudRemoteBots, withoutShadowedBots } from '@/features/bots/companionCloudPresentation';
@@ -30,8 +29,6 @@ const log = createLogger('AppBadgeAttentionSync');
 /** 主窗口常驻：设置/伙伴页也持续更新，独立订阅避免带动布局重渲染。 */
 export function AppBadgeAttentionSync() {
   useAuth();
-  useBotUnreadSync();
-  useRemoteBotSync();
   const cloud = useCompanionCloud();
   // Count each companion once, where it runs (same rows as the teammate list).
   const allBots = useBotProfiles();

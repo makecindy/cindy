@@ -5,6 +5,9 @@ import {
   type RemoteCollectionListRequest,
 } from '@cindy/device-link';
 import { useAuth } from '@/contexts/AuthContext';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { isSecondaryWindow } from '@/lib/secondaryWindow';
+import { acknowledgeRemoteBotRead, getBotReadStateSyncStatus, getRemoteBotReadAt, seedRemoteBotReadState, subscribeBotReadState } from './botReadState';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { revokedDevicesStore } from '@/features/device-link/revokedDevicesStore';
@@ -18,9 +21,17 @@ let cindyIds = new Set<string>();
 const listeners = new Set<() => void>();
 const publish = (next: RemoteBot[]) => {
   next = next.map(bot => cindyIds.has(bot.id) ? { ...bot, templateId: 'cindy' } : bot);
-  snapshot = next;
-  if (owner) {
-    try { const value = JSON.stringify(next.map((bot) => ({ ...bot, online: false })));
+  // A projection lookup is in memory. Never scan localStorage for each delegation result.
+  snapshot = next.map(bot => ({ ...bot, readAt: getRemoteBotReadAt(bot.deviceId, bot.id) }));
+  const readStatus = getBotReadStateSyncStatus();
+  if (owner && !isSecondaryWindow() && readStatus.phase === 'ready'
+    && !readStatus.corruptSources.includes(CACHE_PREFIX + owner)) {
+    // Display cache has no read authority: omitting readAt also prevents re-importing new seeds as legacy acks.
+    try { const value = JSON.stringify(snapshot.map(bot => {
+      const cached = { ...bot, online: false };
+      delete cached.readAt;
+      return cached;
+    }));
       if (value.length <= 256 * 1024) window.localStorage.setItem(CACHE_PREFIX + owner, value);
     } catch { /* display cache may be unavailable */ }
   }
@@ -53,12 +64,16 @@ export function useRemoteCindyIds(): ReadonlySet<string> {
 }
 const EMPTY_CINDY_IDS: ReadonlySet<string> = new Set();
 
-/** One subscription owner in the main window; a failed host cannot erase another host. */
+/** Each complete app window mirrors the roster; only the main window writes the display cache. */
 export function useRemoteBotSync(): void {
   const { dataOwnerId, isAuthenticated } = useAuth();
   const devices = useDeviceLinkDeviceList();
   const cloud = useCompanionCloud();
+  const dataOwner = getDataOwnerGeneration();
   const actorsKey = cloud.actors.map(actor => `${actor.externalId}:${actor.homeDeviceId ?? ''}`).join(',');
+  useEffect(() => subscribeBotReadState(() => {
+    if (owner === dataOwnerId && isDataOwnerGenerationCurrent(dataOwner)) publish(snapshot);
+  }), [dataOwnerId, dataOwner]);
   const revoked = useSyncExternalStore(
     revokedDevicesStore.subscribe,
     revokedDevicesStore.getSnapshot,
@@ -71,12 +86,12 @@ export function useRemoteBotSync(): void {
       let cached: RemoteBot[] = [];
       try {
         if (!nextOwner) {
-          for (const key of Object.keys(window.localStorage)) if (key.startsWith(CACHE_PREFIX)) window.localStorage.removeItem(key);
+          // Signing out clears this mirror, not other accounts' migration sources.
         } else {
           const raw = window.localStorage.getItem(CACHE_PREFIX + nextOwner);
           if (raw && raw.length <= 256 * 1024) {
             const rows = JSON.parse(raw);
-            if (Array.isArray(rows)) cached = rows.slice(0, 200).filter((bot) => bot && ['id', 'deviceId', 'deviceName', 'name', 'avatar', 'avatarColor', 'description', 'preview'].every((key) => typeof bot[key] === 'string') && Number.isFinite(bot.activityAt)).map((bot) => ({
+            if (Array.isArray(rows)) cached = rows.filter((bot) => bot && ['id', 'deviceId', 'deviceName', 'name', 'avatar', 'avatarColor', 'description', 'preview'].every((key) => typeof bot[key] === 'string') && Number.isFinite(bot.activityAt)).map((bot) => ({
               id: bot.id, deviceId: bot.deviceId, deviceName: bot.deviceName, name: bot.name,
               templateId: typeof bot.templateId === 'string' ? bot.templateId : undefined,
               avatar: bot.avatar, avatarColor: bot.avatarColor, description: bot.description, preview: bot.preview,
@@ -84,7 +99,7 @@ export function useRemoteBotSync(): void {
               delegatedSessionIds: Array.isArray(bot.delegatedSessionIds) ? bot.delegatedSessionIds.filter((id: unknown) => typeof id === 'string') : [],
               activityAt: bot.activityAt, sessionId: typeof bot.sessionId === 'string' ? bot.sessionId : null,
               lastReplyAt: Number.isFinite(bot.lastReplyAt) ? bot.lastReplyAt : undefined,
-              readAt: Number.isFinite(bot.readAt) ? bot.readAt : undefined, online: false, connectionKnown: false,
+              online: false, connectionKnown: false,
             }));
           }
         }
@@ -108,7 +123,7 @@ export function useRemoteBotSync(): void {
     const generations = new Map<string, number>();
     const timers = new Map<string, ReturnType<typeof setTimeout>>();
     const taskRefreshes = new Set<string>();
-    const current = () => !disposed && owner === nextOwner;
+    const current = () => !disposed && owner === nextOwner && isDataOwnerGenerationCurrent(dataOwner);
     async function refresh(deviceId: string, refreshTasks = true) {
       const host = byId.get(deviceId);
       if (!host?.online || !relayAvailable || !current()) return;
@@ -135,8 +150,8 @@ export function useRemoteBotSync(): void {
           ...bot,
           delegatedSessionIds: previous.get(bot.id)?.delegatedSessionIds,
           templateId: previous.get(bot.id)?.templateId,
-          readAt: snapshot.find((old) => old.deviceId === deviceId && old.id === bot.id)?.readAt ?? bot.lastReplyAt ?? 0,
         }));
+        for (const bot of bots) seedRemoteBotReadState(deviceId, bot.id, bot.lastReplyAt ?? 0);
         publish([...snapshot.filter((bot) => bot.deviceId !== deviceId), ...bots]);
         // Older released hosts already expose the task-card list, even when their
         // directory has no task links. Read serially per host; never per task row.
@@ -216,24 +231,23 @@ export function useRemoteBotSync(): void {
       offStatus();
       timers.forEach(clearTimeout);
     };
-  }, [dataOwnerId, isAuthenticated, devices, revoked]);
+  }, [dataOwnerId, isAuthenticated, devices, revoked, dataOwner]);
   useEffect(() => {
     const api = companionCloudApi();
     const requestOwner = isAuthenticated ? dataOwnerId : null;
     if (!requestOwner || !cloud.enabled || !api?.listCindyCopies) return;
     let live = true;
     void api.listCindyCopies().then(copies => {
-      if (!live || owner !== requestOwner) return;
+      if (!live || owner !== requestOwner || !isDataOwnerGenerationCurrent(dataOwner)) return;
       cindyIds = new Set(copies.map(copy => copy.botId));
       publish(snapshot);
     }).catch(() => { /* Cached template identity remains usable offline. */ });
     return () => { live = false; };
-  }, [dataOwnerId, isAuthenticated, cloud.enabled, actorsKey]);
+  }, [dataOwnerId, isAuthenticated, cloud.enabled, actorsKey, dataOwner]);
 
 }
 
 export function markRemoteBotRead(deviceId: string, botId: string, at: number): void {
   if (!Number.isFinite(at) || at < 0) return;
-  if (!snapshot.some((bot) => bot.deviceId === deviceId && bot.id === botId && (bot.readAt ?? -1) < at)) return;
-  publish(snapshot.map((bot) => bot.deviceId === deviceId && bot.id === botId ? { ...bot, readAt: Math.max(bot.readAt ?? 0, at) } : bot));
+  acknowledgeRemoteBotRead(deviceId, botId, at);
 }
