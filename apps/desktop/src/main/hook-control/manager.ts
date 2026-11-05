@@ -536,6 +536,11 @@ interface NeutralProviderConfig {
    * failed + invalid-connect-url, 被拒的链接不进任何 renderer 可见快照)。
    */
   normalizePendingPayload: (payload: ProviderBindStatusPayload) => ProviderBindStatusPayload;
+  /**
+   * 可选: 任何状态的帧进入 renderer 可见快照前的归一(如飞书「打开机器人」链接只认
+   * AppLink 主机, 不合规就连同动作一起去掉)。不抛错。
+   */
+  normalizeBindingPayload?: (payload: ProviderBindStatusPayload) => ProviderBindStatusPayload;
   /** renderer 动作 → 待打开的 provider URL(null = 该动作当前不可用)。 */
   actionUrl: (action: ProviderOpenAction, binding: ProviderBindingView) => string | null;
   /** main 安全边界内打开 provider URL(未注入 = 不支持自动打开, 仅剩复制链接)。 */
@@ -855,10 +860,16 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       // 关联码只在 pending 时透传(协议已校验形状), 其余状态由协议保证为空。
       // scopeId 由服务端协商下发, 不与授权页的 client_id 互校(与 X 相同)。
       const connectLink = parseFeishuConnectUrl(payload.connectUrl ?? '');
+      return { ...payload, connectUrl: connectLink.url };
+    },
+    normalizeBindingPayload: (payload) => {
+      // 「打开飞书机器人」在任何状态下(通常是 confirmed)都只认飞书 / Lark 的 AppLink;
+      // 不合规的链接连同 open_provider 动作一起去掉, 设置页不出现点了打不开的按钮。
+      const remediationUrl = feishuBotUrlOrNull(payload.remediationUrl);
       return {
         ...payload,
-        connectUrl: connectLink.url,
-        remediationUrl: feishuBotUrlOrNull(payload.remediationUrl),
+        remediationUrl,
+        actions: remediationUrl === null ? payload.actions.filter((action) => action !== 'open_provider') : payload.actions,
       };
     },
     actionUrl: (action, bindingView) => {
@@ -1714,6 +1725,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         notifyStatus(toView());
         return;
       }
+    }
+    if (lane.config.normalizeBindingPayload !== undefined) {
+      acceptedPayload = lane.config.normalizeBindingPayload(acceptedPayload);
     }
     // An update accepted after welcome is newer than the still-in-flight
     // initial snapshot; do not let that older snapshot roll it back.

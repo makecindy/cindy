@@ -3283,6 +3283,27 @@ describe('官方飞书 / Lark provider lane', () => {
     );
   });
 
+  it('任何绑定状态下「打开飞书机器人」都只认飞书 / Lark AppLink, 不合规时连按钮一起去掉', () => {
+    // confirmed 帧通常带 remediationUrl; 只在 pending 时校验会让任意 HTTPS 链接进快照,
+    // 设置页显示一个点了打不开的按钮(PR #8947 review)。
+    const { manager, transports } = feishuLaneHarness({}, { feishuEnabled: true });
+    manager.sync();
+    const opts = transports[0];
+    if (opts === undefined) throw new Error('Feishu transport was not created');
+    opts.onWelcome?.({ serverName: 'feishu-hook', features: FEISHU_FEATURES });
+    opts.onStatus('connected', null);
+
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, remediationUrl: 'https://bot.example.com/cindy' }), () => true);
+    expect(manager.snapshot().feishu.binding).toMatchObject({ remediationUrl: null, actions: ['revoke'] });
+
+    const appLink = 'https://applink.feishu.cn/client/bot/open?appId=cli_a1b2c3d4e5f6';
+    opts.onMessage(makeProviderBindUpdate({ ...FEISHU_CONFIRMED, remediationUrl: appLink }), () => true);
+    expect(manager.snapshot().feishu.binding).toMatchObject({
+      remediationUrl: appLink,
+      actions: ['revoke', 'open_provider'],
+    });
+  });
+
   it('只接本机已确认绑定的飞书应用与账号的派发; 解绑后迟到的重投被拒', () => {
     // 多个组织的应用共用同一个飞书服务: 别的应用、别的飞书账号、认不出的 lane,
     // 以及解绑之后重连时重投的旧任务, 都不得在这台电脑上执行。
