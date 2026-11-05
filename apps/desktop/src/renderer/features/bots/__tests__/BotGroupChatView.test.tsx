@@ -989,6 +989,21 @@ describe('BotGroupChatView', () => {
         expect(preview.contains(document.activeElement)).toBe(true);
       } else expect(preview.contains(document.activeElement)).toBe(true);
     }
+    // CI regression: FocusScope's programmatic entry focus does not guarantee
+    // an open tooltip after the preview finishes loading. Establish keyboard
+    // focus explicitly; still require tooltip -> preview -> thread Escape order.
+    if (kind === 'text-trigger' || kind === 'text-control') {
+      const focusedControl = document.activeElement;
+      await user.tab();
+      await user.tab({ shift: true });
+      expect(document.activeElement).toBe(focusedControl);
+      await screen.findByRole('tooltip');
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
+      expect(document.contains(preview)).toBe(true);
+      expect(screen.getByRole('complementary')).toBe(panel);
+      expect((within(panel).getByRole('textbox') as HTMLTextAreaElement).value).toBe('Unsent thread reply');
+    }
     await user.keyboard('{Escape}');
     expect(screen.getByRole('complementary')).toBe(panel);
     expect((within(panel).getByRole('textbox') as HTMLTextAreaElement).value).toBe('Unsent thread reply');

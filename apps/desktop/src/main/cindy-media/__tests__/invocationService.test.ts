@@ -889,6 +889,50 @@ describe('Cindy Core media invocation state and security boundary', () => {
     expect(mocks.providerInvoke).toHaveBeenCalledWith(expect.objectContaining(expected));
   });
 
+  // #8673 / unit: prepare/request must preserve native options absent from the
+  // convenience schema. Existing coverage only exercises four named options;
+  // one extra field used to be rejected before dispatch.
+  it.each([
+    ['openai', { background: 'transparent', output_format: 'png', output_compression: 0 }],
+    ['gemini', { generationConfig: { seed: 0, imageConfig: { imageSize: '2K' } } }],
+    ['xai', { future_option: { enabled: false, values: [0, 'native'] } }],
+  ] as const)('opens %s native parameters without adding each field to Cindy', async (imageProtocol, nativeParameters) => {
+    const model = { id: 'custom/image', name: 'Image', providerId: 'custom', mode: 'image_generation', imageProtocol,
+      modalities: { input: ['text'], output: ['image'] } };
+    mocks.models.mockResolvedValue([model]);
+    mocks.providerModel.mockReturnValue(model);
+    mocks.providerInvoke.mockResolvedValue({ buffer: PNG, mimeType: 'image/png' });
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
+    expect(prepared.input_schema).toMatchObject({ additionalProperties: true });
+    expect(parsePreparedMediaInvocationGuide(JSON.parse(JSON.stringify(mocks.rows.get(prepared.invocation_id as string)?.guide)))).toMatchObject({ ok: true });
+    const result = await callCindyMedia({ action: 'request', invocationId: prepared.invocation_id as string,
+      body: { prompt: 'image', ...nativeParameters } });
+    expect(result).toMatchObject({ ok: true, status: 'complete' });
+    expect(mocks.providerInvoke).toHaveBeenCalledWith(expect.objectContaining({
+      modelId: model.id, prompt: 'image', nativeParameters,
+    }));
+    expect(mocks.ingestMedia).toHaveBeenCalledWith(expect.objectContaining({ buffer: PNG, mimeType: 'image/png' }), mocks.db.drizzle);
+  });
+
+  it('keeps a native request editable when its result mode or body size is unsupported', async () => {
+    const model = { id: 'custom/image', name: 'Image', providerId: 'custom', mode: 'image_generation', imageProtocol: 'openai',
+      modalities: { input: ['text'], output: ['image'] } };
+    mocks.models.mockResolvedValue([model]);
+    mocks.providerModel.mockReturnValue(model);
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
+    const invocationId = prepared.invocation_id as string;
+    for (const native of [{ n: 2 }, { stream: true }, { images: ['unmanaged-reference'] }]) {
+      expect(await callCindyMedia({ action: 'request', invocationId, body: { prompt: 'image', ...native } })).toMatchObject({ errorCode: 'REQUEST_INVALID' });
+      expect(mocks.rows.get(invocationId)?.state).toBe('prepared');
+    }
+    // Exercise the actual prepared request budget without allocating a huge body.
+    const stored = mocks.rows.get(invocationId)!;
+    (stored.guide as { request: { maxRequestBytes: number } }).request.maxRequestBytes = 32;
+    expect(await callCindyMedia({ action: 'request', invocationId, body: { prompt: 'image', vendor_option: 'a'.repeat(33) } })).toMatchObject({ errorCode: 'REQUEST_TOO_LARGE' });
+    expect(mocks.providerInvoke).not.toHaveBeenCalled();
+    expect(mocks.rows.get(invocationId)?.state).toBe('prepared');
+  });
+
   it('invalid native size remains editable before claiming a paid invocation', async () => {
     const model = { id: 'openai/gpt-image-2.5-sunburst', name: 'Sunburst', providerId: 'openai', imageProtocol: 'openai',
       mode: 'image_generation', modalities: { input: ['text'], output: ['image'] } };

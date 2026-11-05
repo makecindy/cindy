@@ -4928,11 +4928,33 @@ describe('model context limit IPC', () => {
     const target = { ...primary, relatedTargets: [related] };
     await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, target, 500_000, stamp)).resolves.toMatchObject({ limit: 500_000, isCustomized: true, mixed: false });
     expect(deps.writeModelContextLimit).toHaveBeenCalledExactlyOnceWith([primary, related], 500_000);
+    expect(deps.broadcastChanged).toHaveBeenCalledTimes(1);
     await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, target, 400_000, { ...stamp, ownerGeneration: 0 })).rejects.toThrow();
     await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, { ...primary, relatedTargets: [primary] }, 400_000, stamp)).rejects.toThrow();
     await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, { ...primary, relatedTargets: [{ ...related, providerId: 'other' }] }, 400_000, stamp)).rejects.toThrow();
     expect(deps.writeModelContextLimit).toHaveBeenCalledTimes(1);
+    expect(deps.broadcastChanged).toHaveBeenCalledTimes(1);
+    await harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_RESET, target, stamp);
+    expect(deps.writeModelContextLimit).toHaveBeenLastCalledWith([primary, related], null);
+    expect(deps.broadcastChanged).toHaveBeenCalledTimes(2);
   });
+
+  it.each([MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, MAKER_INVOKE.MODEL_CONTEXT_LIMIT_RESET])(
+    'does not publish a changed projection after a failed context write: %s', async (channel) => {
+      const harness = new IpcHarness();
+      const deps = makeDeps({
+        currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+        listProviders: async () => [catalogView('openai', { codex: ['gpt-6'] })],
+        readModelContextLimit: () => ({ limit: null, isCustomized: false }),
+        writeModelContextLimit: vi.fn().mockRejectedValue(new Error('write failed')),
+      });
+      registerProviderHandlers(harness, deps);
+      const args = channel === MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET
+        ? [primary, 500_000, stamp] : [primary, stamp];
+      await expect(harness.invoke(channel, ...args)).rejects.toThrow();
+      expect(deps.broadcastChanged).not.toHaveBeenCalled();
+    },
+  );
 
   it('does not save a window when native catalog preparation fails', async () => {
     const harness = new IpcHarness();
