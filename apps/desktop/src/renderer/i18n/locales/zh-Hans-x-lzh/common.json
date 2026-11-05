@@ -17239,6 +17239,7 @@
     "sidebar": "余资与订阅",
     "settings": {
       "title": "耗用与计费",
+      "supportHint": "若有所困，可致函 {{email}} 求助。",
       "subscriptionCard": {
         "title": "今之套餐",
         "empty": "今无生效之订阅",
@@ -17333,6 +17334,18 @@
         "action": "录订单 ID {{id}}",
         "success": "订单 ID 已录",
         "failed": "录订单 ID 未成，请再试"
+      },
+      "refund": {
+        "action": "请退款",
+        "title": "请退款",
+        "description": "请将下列信息寄至客服信箱 {{email}}，以请退款。",
+        "emailSubject": "Cindy 退款之请 - {{orderId}}",
+        "sendAction": "寄退款之请",
+        "gmailFallbackDescription": "退款之请含订单信息。开 Gmail 则此信息将分享予 Google，续乎？",
+        "emailBody": "您好，欲请退还下列订单款项，烦请协助。\n\n订单号：{{orderId}}\n渠道交易号：{{providerTransactionId}}\n应用：{{application}}\n支付方式：{{paymentMethod}}\n实付金额：{{amount}}\n\n所遇之事：\n（请略述所遇之情）\n\n谨谢。",
+        "fields": {
+          "amount": "实付金额"
+        }
       },
       "invoice": {
         "action": "请开票",

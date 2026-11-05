@@ -8,9 +8,10 @@
 import type { ModelAccessBalance, ModelAccessCreditUsage } from './modelAccess';
 
 export const BILLING_SUPPORT_EMAIL = 'xd-billing@xd.com';
+export const BILLING_FEEDBACK_EMAIL = 'feedback@cindy.app';
 
 /**
- * Validates the only mailto URL that Desktop may hand to the system shell.
+ * Validates mailto URLs for the fixed billing and feedback inboxes.
  * Subject/body are display data from the renderer; recipient-affecting headers
  * must stay outside this capability boundary.
  */
@@ -18,6 +19,7 @@ export function isAllowedBillingMailto(value: unknown): value is string {
   if (typeof value !== 'string') return false;
   try {
     const parsed = new URL(value);
+    const recipient = decodeURIComponent(parsed.pathname).toLowerCase();
     const queryKeys = [...parsed.searchParams.keys()];
     const hasDuplicateQueryKey = new Set(queryKeys).size !== queryKeys.length;
     const subject = parsed.searchParams.get('subject');
@@ -25,7 +27,7 @@ export function isAllowedBillingMailto(value: unknown): value is string {
       subject !== null && /[\u0000-\u001f\u007f-\u009f]/u.test(subject);
     return (
       parsed.protocol === 'mailto:' &&
-      decodeURIComponent(parsed.pathname).toLowerCase() === BILLING_SUPPORT_EMAIL &&
+      (recipient === BILLING_SUPPORT_EMAIL || recipient === BILLING_FEEDBACK_EMAIL) &&
       !parsed.username &&
       !parsed.password &&
       !parsed.host &&

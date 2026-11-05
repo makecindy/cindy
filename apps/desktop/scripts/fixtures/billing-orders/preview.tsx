@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { mountPage, type UiPageContext } from '../../ui-page/harness';
-import { OrderHistoryCard } from '../../../src/renderer/features/billing/BillingPage';
+import { BillingSettingsSection, OrderHistoryCard } from '../../../src/renderer/features/billing/BillingPage';
 import type { BillingPaymentHistoryRecord } from '../../../src/shared/billing';
 
 const base: BillingPaymentHistoryRecord = {
@@ -23,6 +23,13 @@ function Preview({ ctx }: { ctx: UiPageContext }) {
   const { t } = useTranslation();
   const [page, setPage] = useState(1);
   const [error, setError] = useState(ctx.case === 'error');
+  if (ctx.case.startsWith('support-footer')) {
+    return (
+      <main data-ui-page-subject className="h-screen overflow-auto p-5">
+        <BillingSettingsSection accountId="billing-preview" />
+      </main>
+    );
+  }
   const records = ctx.case === 'legacy' ? [
       { ...topup, provider: null, paidAt: null, amount: null, amountPaidMinor: null,
         refundSummary: { status: null, refundedMinor: 100, refundedAmount: '1.00' } },
@@ -49,4 +56,23 @@ function Preview({ ctx }: { ctx: UiPageContext }) {
   );
 }
 
-void mountPage({ render: (ctx) => <Preview ctx={ctx} /> });
+void mountPage({
+  route: '/settings?tab=billing',
+  host: {
+    billing: {
+      getCatalog: async () => ({ products: [] }),
+      getCurrentSubscription: async () => ({ subscription: null }),
+      getCreditUsage: async () => ({
+        available: '20',
+        plan: { remaining: '0', used: '0', total: '0' },
+        purchased: { remaining: '0', used: '0', total: '0' },
+        promotional: { remaining: '20', used: '0', total: '20' },
+        promotionalGrants: [], promotionalGrantsComplete: true,
+        promotionalGrantConsistency: 'OBSERVED', ledgerUpdatedAt: null,
+        scale: 9, observedAt: '2026-11-05T08:00:00.000Z',
+      }),
+      listPaymentHistory: async () => ({ records: [base, topup], nextCursor: 'earlier_fixture' }),
+    },
+  },
+  render: (ctx) => <Preview ctx={ctx} />,
+});

@@ -17468,6 +17468,7 @@
     "sidebar": "Saldo e planos",
     "settings": {
       "title": "Uso e cobrança",
+      "supportHint": "Está com algum problema? Entre em contato pelo {{email}} para obter ajuda.",
       "subscriptionCard": {
         "title": "Plano atual",
         "empty": "Nenhuma assinatura ativa",
@@ -17562,6 +17563,18 @@
         "action": "Copiar ID do pedido {{id}}",
         "success": "ID do pedido copiado",
         "failed": "Não foi possível copiar o ID do pedido — tente novamente"
+      },
+      "refund": {
+        "action": "Solicitar reembolso",
+        "title": "Solicitar reembolso",
+        "description": "Envie as informações abaixo para {{email}} para solicitar um reembolso.",
+        "emailSubject": "Solicitação de reembolso Cindy - {{orderId}}",
+        "sendAction": "Enviar solicitação de reembolso",
+        "gmailFallbackDescription": "Sua solicitação de reembolso inclui dados do pedido. Abrir o Gmail compartilhará essas informações com o Google. Continuar?",
+        "emailBody": "Olá, gostaria de solicitar o reembolso do pedido abaixo. Vocês podem me ajudar com essa solicitação?\n\nID do pedido: {{orderId}}\nID da transação do provedor: {{providerTransactionId}}\nAplicativo: {{application}}\nForma de pagamento: {{paymentMethod}}\nValor pago: {{amount}}\n\nProblema encontrado:\n(Descreva brevemente o que aconteceu)\n\nObrigado.",
+        "fields": {
+          "amount": "Valor pago"
+        }
       },
       "invoice": {
         "action": "Solicitar nota fiscal",

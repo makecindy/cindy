@@ -32,6 +32,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
 import {
+  BILLING_FEEDBACK_EMAIL,
   BILLING_SUPPORT_EMAIL,
   BILLING_SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES,
   type BillingCatalog,
@@ -1061,6 +1062,21 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     setPlanChangeTargetOpen(true);
   };
 
+  const contactSupport = async () => {
+    let opened = false;
+    try {
+      opened = (await window.electronAPI.openExternal(`mailto:${BILLING_FEEDBACK_EMAIL}`)).success;
+    } catch {
+      // IPC rejection and a missing mail application use the same visible error below.
+    }
+    if (!opened) {
+      toast.error(t('billing.orders.invoice.sendFailed', { email: BILLING_FEEDBACK_EMAIL }));
+    }
+  };
+  const [supportHintBeforeEmail, supportHintAfterEmail] = t('billing.settings.supportHint', {
+    email: BILLING_FEEDBACK_EMAIL,
+  }).split(BILLING_FEEDBACK_EMAIL);
+
   return (
     <>
       <div>
@@ -1188,6 +1204,21 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
             />
           </BillingGroup>}
         </div>
+
+        <p className="mt-6 text-12 leading-5 text-[var(--text-secondary)]">
+          {supportHintBeforeEmail}
+          <a
+            href={`mailto:${BILLING_FEEDBACK_EMAIL}`}
+            onClick={(event) => {
+              event.preventDefault();
+              void contactSupport();
+            }}
+            className="break-all underline underline-offset-2 transition-colors hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          >
+            {BILLING_FEEDBACK_EMAIL}
+          </a>
+          {supportHintAfterEmail}
+        </p>
       </div>
 
       <BillingOfferDialog
@@ -1805,9 +1836,11 @@ function PromotionalGrantStatus({ state }: { state: ModelAccessPromotionalGrantS
  * 订单记录卡。行结构与 PromotionalGrantsCard 同一套(12px 容器 + 1px 分隔行 + 左列双行
  * 加右侧数列),因为它们在同一页里是同一类东西:一条条只读流水。
  */
-type InvoiceRequestOrder = Pick<BillingPaymentOrder, 'orderId' | 'amount' | 'currency'> & {
-  provider: string | null;
-  providerTransactionId: string | null;
+type BillingRequest = {
+  kind: 'invoice' | 'refund';
+  order: Pick<BillingPaymentHistoryRecord, 'amount' | 'currency' | 'provider' | 'providerTransactionId'> & {
+    orderId: string;
+  };
 };
 
 export function OrderHistoryCard({
@@ -1831,7 +1864,16 @@ export function OrderHistoryCard({
 }) {
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
-  const [invoiceOrder, setInvoiceOrder] = useState<InvoiceRequestOrder | null>(null);
+  const [request, setRequest] = useState<BillingRequest | null>(null);
+  const openRequest = (order: BillingPaymentHistoryRecord, kind: BillingRequest['kind']) => {
+    setRequest({
+      kind,
+      order: {
+        orderId: order.sourceId, amount: order.amount, currency: order.currency,
+        provider: order.provider, providerTransactionId: order.providerTransactionId,
+      },
+    });
+  };
   const copyOrderId = async (orderId: string) => {
     try {
       await navigator.clipboard.writeText(orderId);
@@ -1849,17 +1891,20 @@ export function OrderHistoryCard({
           <Button variant="secondary" disabled={loading} onClick={onRetry}>{t('billing.orders.history.retry')}</Button>
         </div>
       )}
-      {orders.length > 0 && <div className="divide-y divide-[var(--border-default)]" role="list">
+      {orders.length > 0 && <div
+        className={cn(
+          'grid gap-x-3 divide-y divide-[var(--border-default)]',
+          showPaymentMethod
+            ? 'grid-cols-3 lg:grid-cols-[minmax(0,1.4fr)_minmax(80px,0.7fr)_minmax(80px,0.8fr)_max-content]'
+            : 'grid-cols-2 lg:grid-cols-[minmax(0,1.4fr)_minmax(80px,0.7fr)_max-content]',
+        )}
+        role="list"
+      >
         {orders.map((order) => (
           <div
             key={order.recordId}
             role="listitem"
-            className={cn(
-              'grid gap-x-3 gap-y-2 px-5 py-3.5 lg:items-center',
-              showPaymentMethod
-                ? 'grid-cols-3 lg:grid-cols-[minmax(0,1.4fr)_minmax(80px,0.7fr)_minmax(80px,0.8fr)_minmax(76px,0.6fr)]'
-                : 'grid-cols-2 lg:grid-cols-[minmax(0,1.4fr)_minmax(80px,0.7fr)_minmax(76px,0.6fr)]',
-            )}
+            className="col-span-full grid grid-cols-subgrid gap-y-2 px-5 py-3.5 lg:items-center"
           >
             <div
               className={cn(
@@ -1884,7 +1929,7 @@ export function OrderHistoryCard({
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
                 )}
               >
-                <span className="min-w-0 break-all">
+                <span className="min-w-0 truncate" title={t('billing.orders.orderId', { id: maskedOrderId(order.sourceId) })}>
                   {t('billing.orders.orderId', { id: maskedOrderId(order.sourceId) })}
                 </span>
                 <Copy aria-hidden="true" size={11} className="shrink-0" />
@@ -1905,7 +1950,10 @@ export function OrderHistoryCard({
                   : '—'}
               </p>
             )}
-            <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
+            <div className={cn(
+              'flex flex-wrap items-center justify-end gap-x-3 gap-y-2 lg:col-span-1 lg:flex-nowrap',
+              showPaymentMethod ? 'col-span-3' : 'col-span-2',
+            )}>
               <span
                 className="shrink-0 whitespace-nowrap text-11 text-[var(--text-secondary)]"
               >
@@ -1917,17 +1965,19 @@ export function OrderHistoryCard({
               {order.amount !== null && (
                 <Button
                   variant="secondary"
-                  onClick={() => {
-                    if (order.amount !== null) setInvoiceOrder({
-                      orderId: order.sourceId, amount: order.amount, currency: order.currency,
-                      provider: order.provider, providerTransactionId: order.providerTransactionId,
-                    });
-                  }}
+                  onClick={() => openRequest(order, 'invoice')}
                   className="whitespace-nowrap px-3"
                 >
                   {t('billing.orders.invoice.action')}
                 </Button>
               )}
+              <Button
+                variant="secondary"
+                onClick={() => openRequest(order, 'refund')}
+                className="whitespace-nowrap px-3"
+              >
+                {t('billing.orders.refund.action')}
+              </Button>
             </div>
           </div>
         ))}
@@ -1941,60 +1991,67 @@ export function OrderHistoryCard({
           </div>
         </div>
       )}
-      <InvoiceRequestDialog order={invoiceOrder} onClose={() => setInvoiceOrder(null)} />
+      <BillingRequestDialog request={request} onClose={() => setRequest(null)} />
     </section>
   );
 }
 
-function InvoiceRequestDialog({
-  order,
+function BillingRequestDialog({
+  request,
   onClose,
 }: {
-  order: InvoiceRequestOrder | null;
+  request: BillingRequest | null;
   onClose: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const { confirm } = useConfirmDialog();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
-  const sendInvoiceLockRef = useRef(false);
+  const sendLockRef = useRef(false);
+  const order = request?.order;
+  const isRefund = request?.kind === 'refund';
+  const translationPrefix = isRefund ? 'billing.orders.refund' : 'billing.orders.invoice';
+  const recipient = isRefund ? BILLING_FEEDBACK_EMAIL : BILLING_SUPPORT_EMAIL;
   const paymentMethod = isSupportedBillingProvider(order?.provider ?? undefined)
     ? t(`billing.providers.${order?.provider}`) : t('billing.orders.invoice.notAvailable');
   const providerTransactionId = order?.providerTransactionId ?? t('billing.orders.invoice.notAvailable');
-  const buildInvoiceEmail = () => {
+  const amount = order?.amount == null
+    ? t('billing.orders.history.unknownAmount')
+    : formatMoney(order.amount, order.currency, billingLocale);
+  const buildRequestEmail = () => {
     if (!order) return null;
-    const subject = t('billing.orders.invoice.emailSubject', { orderId: order.orderId });
-    const body = t('billing.orders.invoice.emailBody', {
+    const subject = t(`${translationPrefix}.emailSubject`, { orderId: order.orderId });
+    const body = t(`${translationPrefix}.emailBody`, {
       orderId: order.orderId,
       providerTransactionId,
       application: 'Cindy',
       paymentMethod,
-      amount: formatMoney(order.amount, order.currency, billingLocale),
+      amount,
       invoiceTitleHint: t('billing.orders.invoice.invoiceTitleHint'),
     });
     return { subject, body };
   };
-  const invoiceEmail = buildInvoiceEmail();
-  const invoiceMailto =
-    invoiceEmail === null
+  const requestEmail = buildRequestEmail();
+  const requestMailto =
+    requestEmail === null
       ? ''
-      : `mailto:${BILLING_SUPPORT_EMAIL}?subject=${encodeURIComponent(
-          invoiceEmail.subject,
-        )}&body=${encodeURIComponent(invoiceEmail.body)}`;
+      : `mailto:${recipient}?subject=${encodeURIComponent(
+          requestEmail.subject,
+        )}&body=${encodeURIComponent(requestEmail.body)}`;
   const gmailComposeUrl =
-    invoiceEmail === null
+    requestEmail === null
       ? ''
       : `${GMAIL_COMPOSE_URL}&${new URLSearchParams({
-          to: BILLING_SUPPORT_EMAIL,
-          su: invoiceEmail.subject,
-          body: invoiceEmail.body,
+          to: recipient,
+          su: requestEmail.subject,
+          body: requestEmail.body,
         }).toString()}`;
-  const description = t('billing.orders.invoice.description', {
-    email: BILLING_SUPPORT_EMAIL,
+  const description = t(`${translationPrefix}.description`, {
+    email: recipient,
   });
-  const [descriptionBeforeEmail, descriptionAfterEmail] = description.split(BILLING_SUPPORT_EMAIL);
+  const [descriptionBeforeEmail, descriptionAfterEmail] = description.split(recipient);
   const copySupportEmail = async () => {
     try {
-      await navigator.clipboard.writeText(BILLING_SUPPORT_EMAIL);
+      await navigator.clipboard.writeText(recipient);
       toast.success(t('billing.orders.invoice.emailCopied'));
     } catch {
       toast.error(t('billing.orders.invoice.emailCopyFailed'));
@@ -2005,7 +2062,7 @@ function InvoiceRequestDialog({
     try {
       const confirmed = await confirm({
         title: t('billing.orders.invoice.gmailFallbackTitle'),
-        description: t('billing.orders.invoice.gmailFallbackDescription'),
+        description: t(`${translationPrefix}.gmailFallbackDescription`),
         confirmText: t('billing.orders.invoice.gmailFallbackConfirm'),
         cancelText: t('billing.actions.close'),
         autoFocusConfirm: true,
@@ -2018,13 +2075,13 @@ function InvoiceRequestDialog({
     }
   };
   const showSendFailed = () => {
-    toast.error(t('billing.orders.invoice.sendFailed', { email: BILLING_SUPPORT_EMAIL }));
+    toast.error(t('billing.orders.invoice.sendFailed', { email: recipient }));
   };
-  const sendInvoiceRequest = () => {
-    if (!order || !invoiceMailto || sendInvoiceLockRef.current) return;
-    sendInvoiceLockRef.current = true;
+  const sendRequest = () => {
+    if (!order || !requestMailto || sendLockRef.current) return;
+    sendLockRef.current = true;
     void window.electronAPI
-      .openExternal(invoiceMailto)
+      .openExternal(requestMailto)
       .then(async (result) => {
         if (result.success) {
           onClose();
@@ -2044,11 +2101,11 @@ function InvoiceRequestDialog({
         showSendFailed();
       })
       .finally(() => {
-        sendInvoiceLockRef.current = false;
+        sendLockRef.current = false;
       });
   };
 
-  const invoiceContent = order ? (
+  const requestContent = order ? (
     <div>
       <p className="text-12 leading-5 text-[var(--confirm-desc)]">
         {descriptionBeforeEmail}
@@ -2057,12 +2114,12 @@ function InvoiceRequestDialog({
           onClick={() => void copySupportEmail()}
           className="font-mono text-[var(--text-primary)] underline decoration-[var(--border-default)] underline-offset-2 transition-colors hover:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
         >
-          {BILLING_SUPPORT_EMAIL}
+          {recipient}
         </button>
         {descriptionAfterEmail}
       </p>
 
-      <p className="mt-3 text-12 leading-5 text-[var(--confirm-desc)]">
+      {!isRefund && <p className="mt-3 text-12 leading-5 text-[var(--confirm-desc)]">
         <Trans
           i18n={i18n}
           t={t}
@@ -2071,63 +2128,65 @@ function InvoiceRequestDialog({
             strong: <strong className="font-semibold text-[var(--confirm-title)]" />,
           }}
         />
-      </p>
+      </p>}
 
       <div className="mt-4 divide-y divide-[var(--border-default)] overflow-hidden rounded-xl border border-[var(--border-default)]">
-        <InvoiceInfoRow
+        <BillingRequestInfoRow
           label={t('billing.orders.invoice.fields.orderId')}
           value={order.orderId}
           mono
         />
-        <InvoiceInfoRow
+        <BillingRequestInfoRow
           label={t('billing.orders.invoice.fields.providerTransactionId')}
           value={providerTransactionId}
           mono
         />
-        <InvoiceInfoRow label={t('billing.orders.invoice.fields.application')} value="Cindy" />
-        <InvoiceInfoRow
+        <BillingRequestInfoRow label={t('billing.orders.invoice.fields.application')} value="Cindy" />
+        <BillingRequestInfoRow
           label={t('billing.orders.invoice.fields.paymentMethod')}
           value={paymentMethod}
         />
-        <InvoiceInfoRow
-          label={t('billing.orders.invoice.fields.amount')}
-          value={formatMoney(order.amount, order.currency, billingLocale)}
+        <BillingRequestInfoRow
+          label={t(`${translationPrefix}.fields.amount`)}
+          value={amount}
         />
       </div>
 
-      <div className="mt-4 py-3">
-        <p className="text-12 leading-5 text-[var(--confirm-title)]">
-          {t('billing.orders.invoice.requiredInfo')}
-        </p>
-        <ul className="mt-2 list-disc space-y-1 pl-5 text-12 leading-5 text-[var(--confirm-desc)]">
-          {INVOICE_REQUIRED_FIELDS.map((field) => (
-            <li key={field}>{t(`billing.orders.invoice.fields.${field}`)}</li>
-          ))}
-        </ul>
-      </div>
+      {!isRefund && (
+        <div className="mt-4 py-3">
+          <p className="text-12 leading-5 text-[var(--confirm-title)]">
+            {t('billing.orders.invoice.requiredInfo')}
+          </p>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-12 leading-5 text-[var(--confirm-desc)]">
+            {INVOICE_REQUIRED_FIELDS.map((field) => (
+              <li key={field}>{t(`billing.orders.invoice.fields.${field}`)}</li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   ) : null;
 
   return (
     <ConfirmDialog
-      open={order !== null}
+      open={request !== null}
       onOpenChange={(open) => {
-        if (open || sendInvoiceLockRef.current) return;
+        if (open || sendLockRef.current) return;
         onClose();
       }}
-      title={t('billing.orders.invoice.title')}
-      content={invoiceContent}
+      title={t(`${translationPrefix}.title`)}
+      content={requestContent}
       maxWidth={460}
-      confirmText={t('billing.orders.invoice.sendAction')}
+      confirmText={t(`${translationPrefix}.sendAction`)}
       cancelText={t('billing.actions.close')}
       autoFocusConfirm
       confirmIcon={<Mail className="h-3.5 w-3.5" strokeWidth={1.8} />}
-      onConfirm={sendInvoiceRequest}
+      onConfirm={sendRequest}
     />
   );
 }
 
-function InvoiceInfoRow({
+function BillingRequestInfoRow({
   label,
   value,
   mono = false,

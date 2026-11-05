@@ -17239,6 +17239,7 @@
     "sidebar": "残高とプラン",
     "settings": {
       "title": "使用量と請求",
+      "supportHint": "お困りの際は、{{email}} までお問い合わせください。",
       "subscriptionCard": {
         "title": "現在のプラン",
         "empty": "有効なサブスクリプションはありません",
@@ -17333,6 +17334,18 @@
         "action": "注文 ID {{id}} をコピー",
         "success": "注文 ID をコピーしました",
         "failed": "注文 ID をコピーできませんでした。もう一度お試しください。"
+      },
+      "refund": {
+        "action": "返金を申請",
+        "title": "返金を申請",
+        "description": "返金を申請するには、以下の情報を {{email}} までメールでお送りください。",
+        "emailSubject": "Cindy 返金申請 - {{orderId}}",
+        "sendAction": "返金申請を送信",
+        "gmailFallbackDescription": "返金申請には注文情報が含まれます。Gmailを開くと、この情報がGoogleに共有されます。続行しますか？",
+        "emailBody": "以下の注文の返金を申請したく、ご連絡しました。ご対応をお願いいたします。\n\n注文 ID：{{orderId}}\n決済取引ID：{{providerTransactionId}}\nアプリケーション：{{application}}\n支払い方法：{{paymentMethod}}\n支払金額：{{amount}}\n\nお困りのこと：\n（状況を簡単にご記入ください）\n\nよろしくお願いいたします。",
+        "fields": {
+          "amount": "支払金額"
+        }
       },
       "invoice": {
         "action": "請求書を申請",

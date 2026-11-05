@@ -818,6 +818,10 @@ Explicit user action that replaces the current remote desktop viewer; never used
 
 远程连接、任务与设备列表中的另一台设备；明确是电脑时优先说远程电脑。不要把本地浏览器内部控制器称为远程设备。
 
+### Request Refund
+
+订单行的邮件退款申请入口；由用户确认使用客服邮件处理，不代表自动退款。
+
 ### Activity Monitor
 
 独立窗口/兼容页签,展示本机进程 CPU/内存并可终止 Agent 进程。不可叫「任务管理器」——Session→任务 已 decided,会被读成管理左侧任务列表。不叫「用量」——会和 token / 账号 Usage→用量 混淆(#3183)。「资源监视器」是窗口标题,看的是本机资源占用,不是输入监控;输入监控权限仍用「监听权限」。

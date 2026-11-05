@@ -17468,6 +17468,7 @@
     "sidebar": "Solde et forfaits",
     "settings": {
       "title": "Consommation et facturation",
+      "supportHint": "Vous rencontrez un problème ? Contactez {{email}} pour obtenir de l’aide.",
       "subscriptionCard": {
         "title": "Forfait actuel",
         "empty": "Aucun abonnement actif",
@@ -17562,6 +17563,18 @@
         "action": "Copier l'ID de commande {{id}}",
         "success": "ID de commande copié",
         "failed": "L'ID de commande n'a pas été copié : réessayez"
+      },
+      "refund": {
+        "action": "Demander un remboursement",
+        "title": "Demander un remboursement",
+        "description": "Envoyez les informations suivantes à {{email}} pour demander un remboursement.",
+        "emailSubject": "Demande de remboursement Cindy - {{orderId}}",
+        "sendAction": "Envoyer la demande de remboursement",
+        "gmailFallbackDescription": "Votre demande de remboursement contient les détails de la commande. Ouvrir Gmail partagera ces informations avec Google. Continuer ?",
+        "emailBody": "Bonjour, je souhaite demander le remboursement de la commande ci-dessous. Pourriez-vous m’aider à traiter cette demande ?\n\nID de commande : {{orderId}}\nIdentifiant de transaction du prestataire : {{providerTransactionId}}\nApplication : {{application}}\nMoyen de paiement : {{paymentMethod}}\nMontant payé : {{amount}}\n\nProblème rencontré :\n(Décrivez brièvement la situation)\n\nMerci.",
+        "fields": {
+          "amount": "Montant payé"
+        }
       },
       "invoice": {
         "action": "Demander une facture",

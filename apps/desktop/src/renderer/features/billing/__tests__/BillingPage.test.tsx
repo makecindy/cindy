@@ -14,8 +14,19 @@ import ja from '../../../i18n/locales/ja/common.json';
 import ko from '../../../i18n/locales/ko/common.json';
 import zhCN from '../../../i18n/locales/zh-CN/common.json';
 import zhTW from '../../../i18n/locales/zh-TW/common.json';
+import de from '../../../i18n/locales/de/common.json';
+import es from '../../../i18n/locales/es/common.json';
+import fr from '../../../i18n/locales/fr/common.json';
+import ptBR from '../../../i18n/locales/pt-BR/common.json';
+import ptPT from '../../../i18n/locales/pt-PT/common.json';
+import zhHansLzh from '../../../i18n/locales/zh-Hans-x-lzh/common.json';
+import zhHantLzh from '../../../i18n/locales/zh-Hant-x-lzh/common.json';
 
 const invoiceLocales = { en, ja, ko, 'zh-CN': zhCN, 'zh-TW': zhTW };
+const billingLocales = {
+  ...invoiceLocales, de, es, fr, 'pt-BR': ptBR, 'pt-PT': ptPT,
+  'zh-Hans-x-lzh': zhHansLzh, 'zh-Hant-x-lzh': zhHantLzh,
+};
 // The page formats period ends in the machine's local time zone. Build the instants that
 // tests read back as a calendar date from local noon, so the date holds in every zone.
 const localNoon = (year: number, month: number, day: number) => new Date(year, month - 1, day, 12).toISOString();
@@ -26,7 +37,7 @@ void i18n.init({
   initAsync: false,
   interpolation: { escapeValue: false },
   resources: Object.fromEntries(
-    Object.entries(invoiceLocales).map(([locale, resource]) => [locale, { translation: resource }]),
+    Object.entries(billingLocales).map(([locale, resource]) => [locale, { translation: resource }]),
   ),
 });
 
@@ -82,10 +93,13 @@ vi.mock('react-i18next', async (importOriginal) => ({
       if (providerLabels[key]) return providerLabels[key];
       if (
         [
+          'billing.settings.supportHint',
           'billing.orders.invoice.personalInvoicePolicy',
           'billing.orders.invoice.invoiceTitleHint',
           'billing.orders.invoice.emailSubject',
           'billing.orders.invoice.emailBody',
+          'billing.orders.refund.emailSubject',
+          'billing.orders.refund.emailBody',
         ].includes(key)
       ) {
         return i18n.t(key, params);
@@ -3254,6 +3268,126 @@ describe('BillingPage order history', () => {
     return listPaymentHistory;
   };
 
+  const openBillingRequest = async (kind: 'invoice' | 'refund') => {
+    fireEvent.click(await screen.findByRole('button', { name: `billing.orders.${kind}.action` }));
+  };
+
+  // 用户要求帮助入口位于内容末尾且能打开反馈邮件；原用例只覆盖纯文本。
+  // 最小输入：无订单/一笔成功订单；unit/jsdom 验证真实页面，不启动邮件应用。
+  it.each([false, true])('opens feedback email from the page footer (has orders: %s)', async (hasOrders) => {
+    await i18n.changeLanguage('zh-CN');
+    install(hasOrders ? [order()] : []);
+
+    await act(async () => { render(<BillingPage />); });
+
+    const link = screen.getByRole('link', { name: 'feedback@cindy.app' });
+    expect(link.getAttribute('href')).toBe('mailto:feedback@cindy.app');
+    expect(link.parentElement?.textContent).toBe('遇到问题？可通过 feedback@cindy.app 寻求帮助。');
+    if (hasOrders) {
+      const lastOrder = screen.getAllByRole('listitem').at(-1)!;
+      expect(lastOrder.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    fireEvent.click(link);
+    await waitFor(() => expect(window.electronAPI.openExternal).toHaveBeenCalledWith('mailto:feedback@cindy.app'));
+  });
+
+  it.each(['unsuccessful', 'rejected'])('keeps the feedback address available when the email app cannot open (%s)', async (failure) => {
+    install([]);
+    if (failure === 'rejected') {
+      vi.mocked(window.electronAPI.openExternal).mockRejectedValueOnce(new Error('mail app unavailable'));
+    } else {
+      vi.mocked(window.electronAPI.openExternal).mockResolvedValueOnce({ success: false });
+    }
+    await act(async () => { render(<BillingPage />); });
+
+    fireEvent.click(screen.getByRole('link', { name: 'feedback@cindy.app' }));
+
+    await waitFor(() => expect(uiMocks.toastError).toHaveBeenCalledWith(
+      'billing.orders.invoice.sendFailed:{"email":"feedback@cindy.app"}',
+    ));
+  });
+
+  // 用户确认的退款入口必须生成反馈邮箱草稿；原开票测试未覆盖该收件人和友好问题提示。
+  // 最小输入：一笔成功充值，直接点击该行退款按钮；tier: unit/jsdom，无真实发信。
+  it('opens a refund draft for the feedback inbox with the friendly issue prompt', async () => {
+    await i18n.changeLanguage('zh-CN');
+    const history = install([order()]);
+    const fixture = (await history()).records[0]!;
+    history.mockResolvedValue({ records: [{ ...fixture, provider: 'alipay', providerTransactionId: 'alipay_refund_fixture' }], nextCursor: null });
+
+    render(<BillingPage />);
+    await openBillingRequest('refund');
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText('alipay_refund_fixture')).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: 'feedback@cindy.app' })).toBeTruthy();
+    expect(within(dialog).queryByText('遇到的问题：请在邮件中简单描述您遇到的情况。')).toBeNull();
+    expect(within(dialog).queryByText('billing.orders.invoice.fields.invoiceTitle')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'billing.orders.refund.sendAction' }));
+
+    await waitFor(() => expect(window.electronAPI.openExternal).toHaveBeenCalledTimes(1));
+    const mailto = new URL(vi.mocked(window.electronAPI.openExternal).mock.calls[0][0] as string);
+    expect(mailto.pathname).toBe('feedback@cindy.app');
+    expect(mailto.searchParams.get('subject')).toBe(`Cindy 退款申请 - ${fixture.sourceId}`);
+    const body = mailto.searchParams.get('body');
+    expect(body).toContain(`订单号：${fixture.sourceId}`);
+    expect(body).toContain('渠道交易号：alipay_refund_fixture');
+    expect(body).toContain('支付金额：¥33.00');
+    expect(body).toContain('遇到的问题：\n（请简单描述您遇到的情况）');
+    expect(body).not.toContain('退款原因');
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+  });
+
+  it.each(Object.entries(billingLocales).map(([locale, resources], index) => ({
+    locale, resources,
+    provider: index % 3 === 0 ? 'alipay' : 'stripe',
+    providerTransactionId: index % 3 === 0 ? '2026110522001400000000123456'
+      : index % 3 === 1 ? 'pi_refund_fixture' : 'ch_refund_fixture',
+    sourceType: index % 2 === 0 ? 'CREDIT_TOPUP' : 'SUBSCRIPTION_INVOICE',
+  })))(
+    '$locale: includes the paid $sourceType and $provider transaction in both refund drafts',
+    async ({ locale, resources, provider, providerTransactionId, sourceType }) => {
+      await i18n.changeLanguage(locale);
+      const history = install([order({ currency: 'usd' })]);
+      const fixture = (await history()).records[0]!;
+      history.mockResolvedValue({ records: [{ ...fixture, sourceType, provider, providerTransactionId }], nextCursor: null });
+      const openExternal = vi.mocked(window.electronAPI.openExternal);
+      openExternal.mockResolvedValueOnce({ success: false }).mockResolvedValueOnce({ success: true });
+      uiMocks.confirm.mockResolvedValueOnce(true);
+
+      render(<BillingPage />);
+      await openBillingRequest('refund');
+      const dialog = await screen.findByRole('alertdialog');
+      expect(within(dialog).getByText(providerTransactionId)).toBeTruthy();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'feedback@cindy.app' }));
+      await waitFor(() => expect(uiMocks.clipboardWriteText).toHaveBeenCalledWith('feedback@cindy.app'));
+      fireEvent.click(screen.getByRole('button', { name: 'billing.orders.refund.sendAction' }));
+
+      await waitFor(() => expect(openExternal).toHaveBeenCalledTimes(2));
+      const mailto = new URL(openExternal.mock.calls[0][0] as string);
+      const gmail = new URL(openExternal.mock.calls[1][0] as string);
+      expect(mailto.pathname).toBe('feedback@cindy.app');
+      expect(gmail.origin + gmail.pathname).toBe('https://mail.google.com/mail/');
+      expect(gmail.searchParams.get('to')).toBe('feedback@cindy.app');
+      const body = mailto.searchParams.get('body')!;
+      const { fields } = resources.billing.orders.invoice;
+      expect(body.split('\n').find((line) => line.startsWith(fields.orderId))).toContain(fixture.sourceId);
+      expect(body.split('\n').find((line) => line.startsWith(fields.providerTransactionId))).toContain(providerTransactionId);
+      expect(body.split('\n').find((line) => line.startsWith(fields.application))).toContain('Cindy');
+      expect(body.split('\n').find((line) => line.startsWith(fields.paymentMethod))).toContain(provider);
+      expect(body.split('\n').find((line) => line.startsWith(resources.billing.orders.refund.fields.amount)))
+        .toContain(new Intl.NumberFormat(locale, { style: 'currency', currency: 'USD', currencyDisplay: 'narrowSymbol' }).format(33));
+      expect(body).not.toMatch(/\{\{|billing\.orders\.|退款原因|Refund reason/);
+      expect(body.split('\n').some((line) => line.startsWith(fields.invoiceTitle))).toBe(false);
+      expect(mailto.searchParams.get('subject')).toContain(fixture.sourceId);
+      expect(gmail.searchParams.get('su')).toBe(mailto.searchParams.get('subject'));
+      expect(gmail.searchParams.get('body')).toBe(body);
+      expect(uiMocks.confirm).toHaveBeenCalledWith(expect.objectContaining({
+        description: 'billing.orders.refund.gmailFallbackDescription',
+      }));
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    },
+  );
+
   it('shows a paid invoice from an ended subscription even with no current subscription', async () => {
     const history = install([order()]);
     const fixture = (await history()).records[0]!;
@@ -3582,28 +3716,28 @@ describe('BillingPage order history', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 
-  it('does not open Gmail without explicit consent after the mail app fails', async () => {
+  it.each(['invoice', 'refund'] as const)('%s: does not open Gmail without explicit consent after the mail app fails', async (kind) => {
     install([order({ orderId: 'o-gmail-no-consent' })]);
     const openExternal = vi.mocked(window.electronAPI.openExternal);
     openExternal.mockResolvedValueOnce({ success: false });
     uiMocks.confirm.mockResolvedValueOnce(false);
 
     render(<BillingPage />);
-    fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
+    await openBillingRequest(kind);
     fireEvent.click(
-      await screen.findByRole('button', { name: 'billing.orders.invoice.sendAction' }),
+      await screen.findByRole('button', { name: `billing.orders.${kind}.sendAction` }),
     );
 
     await waitFor(() => expect(uiMocks.confirm).toHaveBeenCalledTimes(1));
     expect(openExternal).toHaveBeenCalledTimes(1);
     expect(uiMocks.toastError).toHaveBeenCalledWith(
-      'billing.orders.invoice.sendFailed:{"email":"xd-billing@xd.com"}',
+      `billing.orders.invoice.sendFailed:{"email":"${kind === 'invoice' ? 'xd-billing@xd.com' : 'feedback@cindy.app'}"}`,
     );
     expect(screen.getByRole('alertdialog')).toBeTruthy();
     expect(screen.getByText('o-gmail-no-consent')).toBeTruthy();
   });
 
-  it('ignores repeated send activations while the mail request is pending', async () => {
+  it.each(['invoice', 'refund'] as const)('%s: ignores repeated send activations while the mail request is pending', async (kind) => {
     install([order({ orderId: 'o-gmail-double-click' })]);
     const openExternal = vi.mocked(window.electronAPI.openExternal);
     let resolveOpenExternal: ((result: { success: boolean }) => void) | undefined;
@@ -3615,9 +3749,9 @@ describe('BillingPage order history', () => {
     );
 
     render(<BillingPage />);
-    fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
+    await openBillingRequest(kind);
     const sendButton = await screen.findByRole('button', {
-      name: 'billing.orders.invoice.sendAction',
+      name: `billing.orders.${kind}.sendAction`,
     });
     fireEvent.click(sendButton);
     fireEvent.click(sendButton);
@@ -3668,7 +3802,7 @@ describe('BillingPage order history', () => {
     await waitFor(() => expect(uiMocks.clipboardWriteText).toHaveBeenCalledWith(fullOrderId));
   });
 
-  it('masks short ids, distinguishes copy targets and keeps the control shrinkable', async () => {
+  it('masks short ids, distinguishes copy targets and keeps the truncated hint masked', async () => {
     const shortOrderId = 'ord_8f21c4de9a';
     const otherOrderId = '1234567890abcdefghi';
     install([order({ orderId: shortOrderId }), order({ orderId: otherOrderId })]);
@@ -3687,7 +3821,10 @@ describe('BillingPage order history', () => {
       }),
     ).toBeTruthy();
     expect(shortOrderButton.className).toContain('max-w-full');
-    expect(shortOrderButton.querySelector('span')?.className).toContain('break-all');
+    // 长订单号为同行的两个操作按钮让出空间；行高由真实 UI 场景核对，悬停提示继续脱敏。
+    expect(shortOrderButton.querySelector('span')?.getAttribute('title')).toBe(
+      'billing.orders.orderId:{"id":"ord_8f****c4de9a"}',
+    );
   });
 
   it('explains how to recover when copying an order id fails', async () => {

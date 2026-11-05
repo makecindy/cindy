@@ -17307,6 +17307,7 @@
     "sidebar": "Guthaben und Tarife",
     "settings": {
       "title": "Nutzung und Abrechnung",
+      "supportHint": "Gibt es ein Problem? Wende dich für Hilfe an {{email}}.",
       "subscriptionCard": {
         "title": "Aktueller Tarif",
         "empty": "Kein aktives Abo",
@@ -17401,6 +17402,18 @@
         "action": "Bestell-ID {{id}} kopieren",
         "success": "Bestell-ID kopiert",
         "failed": "Bestell-ID nicht kopiert – versuch es erneut"
+      },
+      "refund": {
+        "action": "Rückerstattung anfordern",
+        "title": "Rückerstattung anfordern",
+        "description": "Sende die folgenden Angaben an {{email}}, um eine Rückerstattung anzufordern.",
+        "emailSubject": "Cindy Rückerstattungsanfrage - {{orderId}}",
+        "sendAction": "Rückerstattungsanfrage senden",
+        "gmailFallbackDescription": "Deine Rückerstattungsanfrage enthält Bestelldetails. Wenn du Gmail öffnest, werden diese Informationen an Google weitergegeben. Fortfahren?",
+        "emailBody": "Hallo, ich möchte eine Rückerstattung für die folgende Bestellung anfordern. Könnt ihr mir dabei helfen?\n\nBestell-ID: {{orderId}}\nTransaktions-ID des Zahlungsanbieters: {{providerTransactionId}}\nAnwendung: {{application}}\nZahlungsmethode: {{paymentMethod}}\nGezahlter Betrag: {{amount}}\n\nAufgetretenes Problem:\n(Beschreibe kurz, was passiert ist)\n\nVielen Dank.",
+        "fields": {
+          "amount": "Gezahlter Betrag"
+        }
       },
       "invoice": {
         "action": "Rechnung anfordern",

@@ -17307,6 +17307,7 @@
     "sidebar": "Balance & Plans",
     "settings": {
       "title": "Usage and billing",
+      "supportHint": "Having trouble? Contact {{email}} for help.",
       "subscriptionCard": {
         "title": "Current plan",
         "empty": "No active subscription",
@@ -17401,6 +17402,18 @@
         "action": "Copy Order ID {{id}}",
         "success": "Order ID copied",
         "failed": "Order ID wasn’t copied — try again"
+      },
+      "refund": {
+        "action": "Request Refund",
+        "title": "Request a Refund",
+        "description": "Email the following information to {{email}} to request a refund.",
+        "emailSubject": "Cindy refund request - {{orderId}}",
+        "sendAction": "Send Refund Request",
+        "gmailFallbackDescription": "Your refund request includes order details. Opening Gmail will share this information with Google. Continue?",
+        "emailBody": "Hello, I would like to request a refund for the following order. Could you help me with this?\n\nOrder ID: {{orderId}}\nProvider transaction ID: {{providerTransactionId}}\nApplication: {{application}}\nPayment method: {{paymentMethod}}\nAmount paid: {{amount}}\n\nIssue encountered:\n(Briefly describe what happened)\n\nThank you.",
+        "fields": {
+          "amount": "Amount paid"
+        }
       },
       "invoice": {
         "action": "Request Invoice",
