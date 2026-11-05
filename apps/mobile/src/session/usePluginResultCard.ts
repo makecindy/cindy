@@ -83,9 +83,11 @@ export function useSessionPluginResource(deviceId: string | undefined, sessionId
           resolvedId = JSON.stringify([sessionId, next]);
           setState({ binding, callId: next, blocks: resource.blocks ?? [], title: typeof resource.display.title === 'string' ? resource.display.title : resource.display.title.fallback, error: kind === 'card' && !resource.blocks?.length });
           // Live PR state arrives either as a status slot or only on a PR link's `prState` (the title icon).
+          // A card the plugin moved is hidden, so nobody sees its status: stop refreshing it.
           pollsPrStatus = !!resource.blocks?.some(block => {
             if (block.primitive !== 'plugin-card-actions') return false;
-            const data = block.data as { prStatus?: unknown; items?: unknown } | undefined;
+            const data = block.data as { prStatus?: unknown; items?: unknown; supersededBy?: unknown } | undefined;
+            if (typeof data?.supersededBy === 'string') return false;
             return (Array.isArray(data?.prStatus) && data.prStatus.length > 0) ||
               (Array.isArray(data?.items) && data.items.some(item => !!item && typeof item === 'object' &&
                 ('prState' in item || (typeof (item as { url?: unknown }).url === 'string' && GITHUB_PR_URL.test((item as { url: string }).url)))));

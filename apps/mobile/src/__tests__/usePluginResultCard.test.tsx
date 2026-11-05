@@ -72,6 +72,14 @@ describe('plugin card lifecycle on Mobile', () => {
     await vi.advanceTimersByTimeAsync(120_000);
     expect(h.get).toHaveBeenCalledTimes(3);
   });
+  it('does not keep refreshing a hidden card that moved, even though it still carries PR status', async () => {
+    vi.useFakeTimers();
+    h.get.mockResolvedValue({ display: { title: 'GitHub' }, blocks: [{ id: 'actions', primitive: 'plugin-card-actions', fallbackMarkdown: '', data: { supersededBy: 'new', prStatus: [{ key: 'o/r#1', fallback: [] }] } }] });
+    await render();
+    expect(current.hidden).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+    expect(h.get).toHaveBeenCalledTimes(1);
+  });
   it('keeps refreshing PR status after one read fails, and stops once the card is gone', async () => {
     vi.useFakeTimers();
     const live = { display: { title: 'GitHub' }, blocks: [{ id: 'actions', primitive: 'plugin-card-actions', fallbackMarkdown: '', data: { prStatus: [{ key: 'o/r#1', fallback: [] }] } }] };

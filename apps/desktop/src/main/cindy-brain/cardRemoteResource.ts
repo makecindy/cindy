@@ -273,7 +273,7 @@ export function createGhostCardRemoteProvider(deps: {
         ? projectRichCardParts(card.html) : undefined;
       const textSource = rich?.textHtml ?? card.html;
       const blocks = supportsForms && (mail || legacyMail) ? [] : projectGhostCardBlocks(supportsForms ? omitGhostCardFormPreview(textSource) : textSource, { inlineLinks: externalLinks && linksAsActions });
-      const prStatus = rich ? await Promise.all(rich.prStatus.map(async (slot) => {
+      const prStatus = rich && !supersededBy ? await Promise.all(rich.prStatus.map(async (slot) => {
         const status = await deps.prStatus?.(card.sessionId!, slot.key).catch(() => undefined);
         return { ...slot, ...(status?.ok ? { status } : {}) };
       })) : undefined;
