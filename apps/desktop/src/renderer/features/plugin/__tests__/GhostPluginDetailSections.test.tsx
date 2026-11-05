@@ -57,7 +57,6 @@ vi.mock('../PluginReadmeSection', () => ({
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    i18n: { language: 'en', resolvedLanguage: 'en' },
     t: (key: string, options?: Record<string, unknown>) => {
       const labels: Record<string, string> = {
         'settings.ghosts.detail.openTool': `Open ${String(options?.name ?? '')}`,
