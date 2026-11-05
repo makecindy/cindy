@@ -31,6 +31,9 @@ node --import tsx --import ./apps/host/src/loaders/register-raw.mjs apps/host/sr
 pnpm --filter desktop exec vite build --config vite.renderer.config.ts
 open http://127.0.0.1:3456/
 
+# 注意：渲染产物 apps/desktop/.vite/renderer/main_window 会被 Desktop 构建清理；
+# Host 每收到请求时才解析该目录，重建后无需重启 Host。`pnpm dev:host` 会先补建它。
+
 # 3) Electron 作为客户端：自动加入已运行的 Host；没有就由脚本先拉起
 pnpm dev:host -- --mock
 #    也可以显式指定目标：

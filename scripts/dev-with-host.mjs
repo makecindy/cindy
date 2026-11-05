@@ -38,7 +38,27 @@ async function waitForEndpoint(timeoutMs) {
   return null;
 }
 
+/**
+ * The host serves the real renderer bundle, and a desktop build wipes it. Build
+ * it first so `pnpm dev:host` never serves a 404 to the browser client.
+ */
+async function ensureRendererBundle() {
+  const entry = path.join(repoRoot, 'apps/desktop/.vite/renderer/main_window/index.html');
+  if (fs.existsSync(entry)) return;
+  console.log('[dev:host] building the renderer bundle');
+  const build = spawn('pnpm', ['--filter', 'desktop', 'exec', 'vite', 'build', '--config', 'vite.renderer.config.ts'], {
+    cwd: repoRoot,
+    stdio: 'inherit',
+  });
+  const code = await new Promise((resolve) => build.on('exit', resolve));
+  if (code !== 0) {
+    console.error('[dev:host] renderer build failed');
+    process.exit(code ?? 1);
+  }
+}
+
 let host = null;
+await ensureRendererBundle();
 if (!runningEndpoint()) {
   console.log(`[dev:host] starting cindy-host for ${userDataDir}`);
   host = spawn(

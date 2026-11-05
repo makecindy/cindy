@@ -338,7 +338,8 @@ const server = createHostServer({
     appearance: {},
     layout: DEFAULT_LAYOUT,
   }),
-  webDir: process.env.CINDY_HOST_WEB_DIR?.trim() ? webDir : (existsSync(webDir) ? webDir : null),
+  // Resolved per request so a bundle built after startup is picked up.
+  webDir: () => (existsSync(path.join(webDir, 'index.html')) ? webDir : null),
   probe: async () => ({
     status: 'ok',
     service: 'cindy-host',

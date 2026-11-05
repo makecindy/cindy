@@ -77,7 +77,10 @@ export function createHostServer(deps) {
     try {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1');
 
-      if (deps.webDir && request.method === 'GET'
+      // Resolve the bundle per request: a desktop build can remove and rebuild it
+      // while the host keeps running, and a restart should not be required.
+      const webRoot = typeof deps.webDir === 'function' ? deps.webDir() : deps.webDir;
+      if (webRoot && request.method === 'GET'
         && (url.pathname === '/' || url.pathname === '/shim.js' || url.pathname.startsWith('/assets/'))) {
         if (url.pathname === '/shim.js') {
           if (!deps.shimPath || !fs.existsSync(deps.shimPath)) {
@@ -88,7 +91,7 @@ export function createHostServer(deps) {
           response.end(fs.readFileSync(deps.shimPath));
           return;
         }
-        serveWebApp(response, deps, url.pathname);
+        serveWebApp(response, { ...deps, webDir: webRoot }, url.pathname);
         return;
       }
 
