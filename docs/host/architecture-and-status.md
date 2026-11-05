@@ -163,4 +163,6 @@ Host 现已注册真实 Codex agent（本机 Codex CLI 登录 lane，未复制�
 | 任务详情页 | **阻断** | 打开任意任务抛 React #185（Maximum update depth exceeded），组件栈指向 `ChatInput`；props 在循环中完全不变，聚焦/扫描 effect 排除后仍复现 |
 | 停止、历史恢复、插件列表页 | 未验证 | 依赖详情页恢复 |
 
+崩溃机理的最新证据（React DevTools hook 探针，2026-11-05）：任务路由挂载期间 Radix 的 `Tooltip`/`Popper`/`Presence`/`DialogPortal` 被**重新挂载**（不是单纯重渲染）约 54 次即触发上限，每次挂载 `useId` 都变（`_r_33_` → `_r_2g_`）；父链为 `an > TooltipProvider > TooltipProviderProvider > ln`，说明循环里某个父组件在每帧重建子树。下一步应锁定 `an`/`ln` 对应的真实组件（在未压缩构建里按 displayName 反查），而不是继续补 Host 通道——该路由的 IPC 失败已清零。
+
 `localDb.messages.list`、`localDb.messages.historyView`、`localDb.messages.estimatedSessionValue` 已有 Host 路由；windowed history reader 仍在 Electron IPC 内，非空任务的历史页显式报错（`history_view_not_implemented_on_host`），不返回空页冒充。
