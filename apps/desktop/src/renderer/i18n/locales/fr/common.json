@@ -14986,7 +14986,9 @@
           "summaryAria": "Résumé de la MR !{{number}}",
           "urlPlaceholder": "Lien de PR GitHub ou de MR GitLab",
           "notFound": "MR introuvable, ou le compte actuel ne peut pas la consulter"
-        }
+        },
+        "merge": "Fusion",
+        "conflicts": "Conflits"
       }
     },
     "schedule": {

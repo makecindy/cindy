@@ -16,7 +16,8 @@ const vitestBin = (...args) => ({ type: 'packageBin', bin: 'vitest', args });
 //
 // Not everything moves. The heavy manual tiers (db, migration, git-integration)
 // stay on the default pool: they bootstrap runtime assets and drive real
-// Git/SQLite subprocesses, and none sits on the PR gate path. A workspace also
+// Git/SQLite subprocesses. CI selects DB/migration on database-related changes;
+// Git integration has its own job. A workspace also
 // opts out when its tests cannot survive a worker thread; the known blockers
 // are recorded at their call site below — desktop needs the webstorage flag on a
 // Node that installs those globals, and the flag cannot coexist with worker
@@ -405,7 +406,7 @@ export default {
         },
         db: {
           status: 'manual',
-          reason: 'Desktop DB tests remain an explicit DB tier because they bootstrap runtime assets and cover localDb behavior outside fast unit.',
+          reason: 'Desktop DB tests are outside fast unit; CI selects core and related tests for database-related changes.',
           coverage: 'allowlist',
           preflight: [
             { type: 'packageScript', script: 'ensure-deps' },
@@ -417,7 +418,7 @@ export default {
         },
         migration: {
           status: 'manual',
-          reason: 'Migration replay remains an explicit DB tier because it replays SQLite history fixtures outside fast unit.',
+          reason: 'Migration replay uses real SQLite history fixtures; CI selects this tier for database-related changes.',
           coverage: 'allowlist',
           preflight: [
             { type: 'packageScript', script: 'ensure-deps' },

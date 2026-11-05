@@ -14780,7 +14780,9 @@
           "summaryAria": "MR !{{number}} 概览",
           "urlPlaceholder": "GitHub PR 或 GitLab MR 链接",
           "notFound": "MR 不存，或今之名籍无权柄览之"
-        }
+        },
+        "merge": "合并",
+        "conflicts": "有冲突"
       }
     },
     "schedule": {
