@@ -9,6 +9,7 @@ import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { extractIpcError, mapIpcErrorToI18nKey } from '@/utils/ipcError';
+import { hasFocusMovedToInteractiveElement } from './useComposerSendFocusRestore';
 import { COMPOSER_ENHANCE_MAX_INPUT_CHARS } from '../../../shared/composerPromptEnhance';
 import {
   buildEnhancedDocument,
@@ -197,9 +198,18 @@ export function ComposerEnhancePromptButton({
       });
       // Leave the rewritten text selected so the user can read it and press
       // Enter to send, or keep editing (same contract as the rename and
-      // prompt-suggestion flows: fill back, never send).
-      editor.commands.focus();
-      editor.commands.selectAll();
+      // prompt-suggestion flows: fill back, never send). While the request was
+      // running the user may have moved to another control — the model
+      // selector's search field, for one. Focusing and selecting there would
+      // take the caret out of what they are typing into (and close the popover
+      // that owns it), so the rewrite is only selected while the composer still
+      // holds the user's attention.
+      const focusStayedInComposer = !editor.isDestroyed
+        && !hasFocusMovedToInteractiveElement(null, editor.view.dom);
+      if (focusStayedInComposer) {
+        editor.commands.focus();
+        editor.commands.selectAll();
+      }
       toast.success(t('newChat.composerEnhance.success'));
     } catch (error) {
       // An exhausted auxiliary chain is a configuration problem, not a
