@@ -3138,12 +3138,7 @@ describe('Telegram provider capability, binding and prefs', () => {
   });
 });
 
-const FEISHU_FEATURES = [
-  HOOK_FEATURE_PROVIDER_BIND,
-  HOOK_FEATURE_PROVIDER_PREFS,
-  HOOK_FEATURE_SESSION_PICKER,
-  HOOK_FEATURE_PROVIDER_FEISHU,
-];
+const FEISHU_FEATURES = [HOOK_FEATURE_PROVIDER_BIND, HOOK_FEATURE_PROVIDER_PREFS, HOOK_FEATURE_PROVIDER_FEISHU];
 
 const FEISHU_CONNECT_URL =
   'https://accounts.feishu.cn/open-apis/authen/v1/authorize?client_id=cli_app&redirect_uri=http%3A%2F%2Flocalhost%3A8794%2Ffeishu%2Foauth%2Fcallback&state=state-1';
@@ -3250,7 +3245,7 @@ describe('官方飞书 / Lark provider lane', () => {
     // 组织还没配置飞书机器人: welcome 不带 provider:feishu。
     opts.onWelcome?.({
       serverName: 'feishu-hook',
-      features: [HOOK_FEATURE_PROVIDER_BIND, HOOK_FEATURE_PROVIDER_PREFS, HOOK_FEATURE_SESSION_PICKER],
+      features: [HOOK_FEATURE_PROVIDER_BIND, HOOK_FEATURE_PROVIDER_PREFS],
     });
     opts.onStatus('connected', null);
     expect(manager.snapshot().feishu).toMatchObject({
@@ -3347,6 +3342,28 @@ describe('官方飞书 / Lark provider lane', () => {
       remediationUrl: appLink,
       actions: ['revoke', 'open_provider'],
     });
+  });
+
+  it('不交出本机任务列表: 飞书服务多组织共用, sessions 查询不带收件身份', async () => {
+    const listRecentSessions = vi.fn(() => [
+      { id: 'session-1', title: 'Release task', workspace: 'xdmaker', lastActiveAt: 1_800_000_000_000 },
+    ]);
+    const { manager, transports } = feishuLaneHarness({ listRecentSessions }, { feishuEnabled: true });
+    manager.sync();
+    const opts = transports[0];
+    if (opts === undefined) throw new Error('Feishu transport was not created');
+    // 服务端即使宣告了 session-picker-v1, 本机没声明就不算协商成功。
+    opts.onWelcome?.({ serverName: 'feishu-hook', features: [...FEISHU_FEATURES, HOOK_FEATURE_SESSION_PICKER] });
+    opts.onStatus('connected', null);
+    opts.onMessage(makeProviderBindState(FEISHU_CONFIRMED), () => true);
+    const replies: HookMessage[] = [];
+    opts.onMessage(makeQueryRequest({ queryId: 'q-sessions', kind: 'sessions' }), (message) => {
+      replies.push(message);
+      return true;
+    });
+    await vi.waitFor(() => expect(replies).toHaveLength(1));
+    expect(replies[0]).toMatchObject({ type: 'query.response', payload: { queryId: 'q-sessions', ok: false } });
+    expect(listRecentSessions).not.toHaveBeenCalled();
   });
 
   it('只接本机已确认绑定的飞书应用与账号的派发; 解绑后迟到的重投被拒', () => {

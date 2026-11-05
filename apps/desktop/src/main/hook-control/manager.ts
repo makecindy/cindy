@@ -810,10 +810,11 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   // 第一里程碑由服务端排版: 进度 / 终稿 / 交互卡都走 legacy turn.progress /
   // turn.end / interaction.request, 所以不声明 msg-op-v1 与任何 telegram-* 能力;
   // 也没有群消息中继(群上下文随 task.dispatch 的 source.threadContext 下发)。
+  // 不声明 session-picker-v1: 飞书服务由多个组织的应用共用, query.request 不带收件身份,
+  // 不能凭它交出本机任务列表(飞书侧也不查)。
   const feishuProviderFeatures = [
     HOOK_FEATURE_PROVIDER_BIND,
     HOOK_FEATURE_PROVIDER_PREFS,
-    HOOK_FEATURE_SESSION_PICKER,
     HOOK_FEATURE_PROVIDER_FEISHU,
   ] as const;
 
@@ -2555,9 +2556,13 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
               ...new Set([HOOK_CHAT_WORKSPACE_ALIAS, ...Object.keys(store.get().workspaces)]),
             ],
             listAgentModels: () => listAgentModels?.() ?? [],
+            // 双方都声明才算协商成功: 本机没声明的(如官方飞书), 服务端宣告了也不交出任务列表。
             listSessions: () =>
-              (lane !== null ? lane.serverFeatures : serverFeatures).includes(
-                HOOK_FEATURE_SESSION_PICKER,
+              (
+                lane !== null
+                  ? lane.config.helloFeatures.includes(HOOK_FEATURE_SESSION_PICKER) &&
+                    lane.serverFeatures.includes(HOOK_FEATURE_SESSION_PICKER)
+                  : serverFeatures.includes(HOOK_FEATURE_SESSION_PICKER)
               )
                 ? (listRecentSessions?.() ?? [])
                 : Promise.reject(new Error('session-picker-v1 was not negotiated')),

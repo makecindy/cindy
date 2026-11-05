@@ -36,8 +36,9 @@ Desktop 与 Mobile 明确标注估算和排除项。旧端忽略可选字段，�
 - 客户端端点清单新增 `feishuHookWsUrl`（`wss:`），登记为跨区域端点：服务只在海外部署一套，
   两份区域清单都指向 `cindy.app`。服务部署前正式清单不写该字段，入口不显示。
 
-客户端接线：desktop 的飞书线 hello 只声明 `provider-bind-v1`、`provider-prefs-v1`、`session-picker-v1`
-与 `provider:feishu`（不声明 `msg-op-v1` 及 `telegram-*`），welcome 同样须含这四项才启用；`pending` 的
+客户端接线：desktop 的飞书线 hello 只声明 `provider-bind-v1`、`provider-prefs-v1` 与 `provider:feishu`
+（不声明 `msg-op-v1` 及 `telegram-*`），welcome 同样须含这三项才启用。不声明 `session-picker-v1`：飞书服务由多个组织
+共用，`query.request(sessions)` 不带收件身份；会话列表查询要双方都声明才回答，服务端单方面宣告不算。`pending` 的
 `connectUrl` 与 `remediationUrl` 在进入设置页快照前按飞书 / Lark 精确主机白名单校验（`feishuDeepLink.ts`）。
 
 兼容：旧校验器不读取 `bindCode`；不认识 `feishu` 的旧端按未知 provider 拒绝该帧但不断连，也不会

@@ -253,8 +253,8 @@ inbound ──► admitted ──► queued? ──► dispatching ──► run
 
 - lane：私聊 `feishu:dm:…`，群消息一律在话题里回复 `feishu:topic:…`；`deriveLaneKind` 把话题 lane 视为群轮次，
   与官方 Telegram 群一样在 send 后持有 session turn lease（不改权限档）。
-- 出站：第一里程碑由服务端排版，客户端 hello 只声明 provider-bind / provider-prefs / session-picker /
-  `provider:feishu`，不声明 `msg-op-v1` 与任何 `telegram-*` 能力；进度、终稿与确认卡沿用 legacy
+- 出站：第一里程碑由服务端排版，客户端 hello 只声明 provider-bind / provider-prefs / `provider:feishu`，
+  不声明 `session-picker-v1`（查询不带收件身份，不交出本机任务列表）、`msg-op-v1` 与任何 `telegram-*` 能力；进度、终稿与确认卡沿用 legacy
   `turn.progress` / `turn.end` / `interaction.request`。后台轮次回传（`backgroundResults`）暂不覆盖飞书。
 - 会话：`sessions.source` 复用 `feishu`（个人飞书会话靠 `feishu_bot_app_id` 区分）；`vendorOptions.source`
   用 `feishu-hook`，让 `cindy_feishu_bot` 追加官方会话提示而不把它当个人渠道；模型说明为
