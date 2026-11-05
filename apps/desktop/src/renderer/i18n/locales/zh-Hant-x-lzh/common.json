@@ -15308,7 +15308,7 @@
       },
       "fields": {
         "title": "題",
-        "schedule": "期程",
+        "schedule": "觸發之式",
         "notify": "告",
         "prompt": "提示詞",
         "once": "一次",
@@ -15428,7 +15428,7 @@
       "layout": {
         "content": "所行之事",
         "notifications": "告知與靜行",
-        "contentTab": "內容與時序",
+        "contentTab": "內容與觸發",
         "optionsTab": "執行之設",
         "sections": "自動之設"
       }

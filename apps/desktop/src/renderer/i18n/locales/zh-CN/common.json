@@ -15308,7 +15308,7 @@
       },
       "fields": {
         "title": "标题",
-        "schedule": "计划",
+        "schedule": "触发方式",
         "notify": "通知",
         "prompt": "提示词",
         "once": "一次",
@@ -15428,7 +15428,7 @@
       "layout": {
         "content": "执行内容",
         "notifications": "通知与静默",
-        "contentTab": "内容与计划",
+        "contentTab": "内容与触发",
         "optionsTab": "运行选项",
         "sections": "自动化配置"
       }

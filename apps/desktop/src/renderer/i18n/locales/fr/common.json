@@ -15517,7 +15517,7 @@
       },
       "fields": {
         "title": "Titre",
-        "schedule": "Planification",
+        "schedule": "Déclenchement",
         "notify": "Notifier",
         "prompt": "Prompt",
         "once": "Une fois",
@@ -15637,7 +15637,7 @@
       "layout": {
         "content": "Contenu à exécuter",
         "notifications": "Notifications et exécution silencieuse",
-        "contentTab": "Contenu et planification",
+        "contentTab": "Contenu et déclenchement",
         "optionsTab": "Options d’exécution",
         "sections": "Paramètres de l’automatisation"
       }

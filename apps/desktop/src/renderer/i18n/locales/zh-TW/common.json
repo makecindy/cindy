@@ -15308,7 +15308,7 @@
       },
       "fields": {
         "title": "標題",
-        "schedule": "計劃",
+        "schedule": "觸發方式",
         "notify": "通知",
         "prompt": "提示詞",
         "once": "一次",
@@ -15428,7 +15428,7 @@
       "layout": {
         "content": "執行內容",
         "notifications": "通知與靜默",
-        "contentTab": "內容與排程",
+        "contentTab": "內容與觸發",
         "optionsTab": "執行選項",
         "sections": "自動化設定"
       }

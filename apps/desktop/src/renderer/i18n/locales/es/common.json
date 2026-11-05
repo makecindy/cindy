@@ -15517,7 +15517,7 @@
       },
       "fields": {
         "title": "Título",
-        "schedule": "Programación",
+        "schedule": "Activación",
         "notify": "Notificar",
         "prompt": "Prompt",
         "once": "Una vez",
@@ -15637,7 +15637,7 @@
       "layout": {
         "content": "Qué ejecutar",
         "notifications": "Notificaciones y ejecución silenciosa",
-        "contentTab": "Contenido y horario",
+        "contentTab": "Contenido y activación",
         "optionsTab": "Opciones de ejecución",
         "sections": "Configuración de automatización"
       }

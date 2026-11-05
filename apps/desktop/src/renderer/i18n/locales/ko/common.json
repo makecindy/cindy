@@ -15308,7 +15308,7 @@
       },
       "fields": {
         "title": "제목",
-        "schedule": "일정",
+        "schedule": "작동 방식",
         "notify": "알림",
         "prompt": "프롬프트",
         "once": "1회",
@@ -15428,7 +15428,7 @@
       "layout": {
         "content": "실행 내용",
         "notifications": "알림 및 조용한 실행",
-        "contentTab": "내용 및 일정",
+        "contentTab": "내용 및 작동 방식",
         "optionsTab": "실행 옵션",
         "sections": "자동화 설정"
       }

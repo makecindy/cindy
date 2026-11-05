@@ -15517,7 +15517,7 @@
       },
       "fields": {
         "title": "Título",
-        "schedule": "Agendamento",
+        "schedule": "Ativação",
         "notify": "Notificar",
         "prompt": "Prompt",
         "once": "Uma vez",
@@ -15637,7 +15637,7 @@
       "layout": {
         "content": "O que executar",
         "notifications": "Notificações e execução silenciosa",
-        "contentTab": "Conteúdo e agenda",
+        "contentTab": "Conteúdo e ativação",
         "optionsTab": "Opções de execução",
         "sections": "Definições de automação"
       }

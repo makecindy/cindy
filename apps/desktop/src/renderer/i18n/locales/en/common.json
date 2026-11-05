@@ -15374,7 +15374,7 @@
       },
       "fields": {
         "title": "Title",
-        "schedule": "Schedule",
+        "schedule": "Trigger",
         "notify": "Notify",
         "prompt": "Prompt",
         "once": "Once",
@@ -15494,7 +15494,7 @@
       "layout": {
         "content": "What to run",
         "notifications": "Notifications & quiet runs",
-        "contentTab": "Content & schedule",
+        "contentTab": "Content & Trigger",
         "optionsTab": "Run options",
         "sections": "Automation settings"
       }

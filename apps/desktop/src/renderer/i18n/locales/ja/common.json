@@ -15308,7 +15308,7 @@
       },
       "fields": {
         "title": "タイトル",
-        "schedule": "スケジュール",
+        "schedule": "起動方法",
         "notify": "通知",
         "prompt": "プロンプト",
         "once": "1回",
@@ -15428,7 +15428,7 @@
       "layout": {
         "content": "実行内容",
         "notifications": "通知と静かな実行",
-        "contentTab": "内容とスケジュール",
+        "contentTab": "内容と起動方法",
         "optionsTab": "実行オプション",
         "sections": "自動化の設定"
       }

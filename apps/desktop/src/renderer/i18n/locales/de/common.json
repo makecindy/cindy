@@ -15374,7 +15374,7 @@
       },
       "fields": {
         "title": "Titel",
-        "schedule": "Zeitplan",
+        "schedule": "Auslöser",
         "notify": "Benachrichtigen",
         "prompt": "Prompt",
         "once": "Einmalig",
@@ -15494,7 +15494,7 @@
       "layout": {
         "content": "Auszuführender Inhalt",
         "notifications": "Benachrichtigungen und stille Ausführung",
-        "contentTab": "Inhalt und Zeitplan",
+        "contentTab": "Inhalt und Auslöser",
         "optionsTab": "Ausführungsoptionen",
         "sections": "Automatisierungseinstellungen"
       }
