@@ -112,6 +112,7 @@ import {
 } from './ghostAgentModels.js';
 import { GhostModelPicker, chooseModelPickerWindow, readPluginModelRouteCatalog, getPluginModelPickerAgents, isGhostCardModelRouteAvailable, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled, type RemotePluginRouteAgentStatus } from './ghostModelPicker.js';
 import type { PluginModelPickerRoute } from '../../shared/pluginModelPicker.js';
+import { installGhostPageModelPicker } from './ghostPageModelPicker.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { PluginDownloadSlot } from './downloadSlot.js';
 import { createDownloader } from '../downloader/index.js';
@@ -4398,6 +4399,19 @@ export function getGhostConfirmSlot(): GhostConfirmSlot {
 }
 
 let modelPickerSingleton: GhostModelPicker | null = null;
+/** Only called after the Main-owned webview attach gate has approved this guest. */
+export function attachGhostPageModelPicker(host: WebContents, guest: WebContents, instanceId: string, isCurrent: () => boolean): void {
+  const ownerStamp = getGhostOwnerPushStamp();
+  installGhostPageModelPicker({
+    host, guest, instanceId,
+    isCurrent: () => {
+      const win = !host.isDestroyed() ? BrowserWindow.fromWebContents(host) : null;
+      return isCurrent() && isGhostOwnerStampCurrent(ownerStamp) && !!win && isTrustedAppRendererWindow(win);
+    },
+    picker: getGhostModelPicker,
+    push: (channel, payload) => sendGhostContentsPush(host, channel, payload, ownerStamp),
+  });
+}
 export function getGhostModelPicker(): GhostModelPicker {
   return modelPickerSingleton ??= new GhostModelPicker({
     getGhost: findGhostForInstanceId,
