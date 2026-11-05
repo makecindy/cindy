@@ -2157,6 +2157,9 @@ function ModelSelectorContentView({
       // 不按前缀落网关),不依赖 Cindy 登录/网关 key(#1568)。flat 列表(provider
       // 为 null,无供应商概念)与内置来源保持原前缀判定。
       if (isCustomRoutedProvider(provider)) return false;
+      // A modern directory already projects Main's connection verdict. Auxiliary windows
+      // share that catalog without receiving raw credentials; only legacy flat rows need the key gate.
+      if (provider?.id === 'xd') return !provider.connected;
       return isCodexGatewayWireModel(id) && !hasSavedKey;
     }
     if (remoteModelListStatus !== 'ready') return true;

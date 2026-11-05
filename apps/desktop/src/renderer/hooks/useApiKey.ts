@@ -47,6 +47,9 @@ let initialReconcileInFlight: Promise<ReconcileResult> | null = null;
 
 /** 本地 only —— 只读 Electron safeStorage(main 侧 model-access 下发写入同一份 .enc)。 */
 async function performReconcile(): Promise<ReconcileResult> {
+  // Read-only auxiliary renderers intentionally have no credential bridge. Their selectors
+  // use the Host's connected provider catalog, never a key read or a fabricated credential.
+  if (typeof window.electronAPI?.safeStorageRead !== 'function') return { savedKey: null };
   let localKey: string | null = null;
   try {
     localKey = await window.electronAPI.safeStorageRead(XD_STORAGE_KEY);
