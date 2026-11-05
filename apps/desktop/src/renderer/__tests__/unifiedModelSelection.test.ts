@@ -1376,4 +1376,18 @@ describe('alias identity and saved preferences', () => {
     expect(config.wireModelId).toBe('flash-old');
     expect(config.effort).toBe('high');
   });
+  it.each(['favorites', 'recent'] as const)('keeps old-ID %s visible through the real list resolver', (kind) => {
+    const entry = merged();
+    const favorite = favoriteOf({ providerId: entry.providerId, modelId: 'flash-old', agent: 'codex', effort: 'high' });
+    const recent = { ...favorite, usedAt: 1 };
+    const before = JSON.stringify({ favorite, recent });
+    const rows = buildUnifiedListSections({ entries: [entry], favorites: [favorite], recentModels: [recent],
+      query: '', rail: { kind } }).flatMap((section) => section.rows);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].entry).toBe(entry);
+    const config = resolveFavoriteRowConfig({ entry: rows[0].entry, item: rows[0].favorite ?? rows[0].recent! });
+    expect(config.wireModelId).toBe('flash-old');
+    expect(config.effort).toBe('high');
+    expect(JSON.stringify({ favorite, recent })).toBe(before);
+  });
 });

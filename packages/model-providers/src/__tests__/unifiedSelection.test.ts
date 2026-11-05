@@ -24,6 +24,7 @@ import {
   pickRecommendedAgent,
   recommendedAgentForModel,
   resolveAgentCapability,
+  resolveStoredModelEntry,
   resolveWireModelId,
   sortEntriesForAgent,
   unifiedModelEntries,
@@ -1361,5 +1362,12 @@ describe('admitted aliases in unified rows', () => {
     const rows = unifiedModelEntries({ providers, agents: ['claude-code'], aliasPreferences: () => ({}) });
     expect(rows).toHaveLength(1);
     expect(rows[0].capabilities.codex).toBeUndefined();
+  });
+  it('resolves old stored IDs to the merged row without a current old-ID task', () => {
+    const [row] = unifiedModelEntries({ providers: [aliases()], aliasPreferences: () => ({}) });
+    expect(row.capabilities.codex?.wireModelId).toBe('flash');
+    expect(resolveStoredModelEntry([row], 'example', 'flash-old')).toBe(row);
+    expect(resolveStoredModelEntry([row], 'another-provider', 'flash-old')).toBeUndefined();
+    expect(resolveStoredModelEntry([row], 'example', 'unknown')).toBeUndefined();
   });
 });

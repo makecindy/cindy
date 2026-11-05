@@ -969,7 +969,10 @@ export function resolveStoredModelEntry(
   if (legacy.length) return legacy.length === 1 && legacy[0].legacyEnginePreferenceId === modelId
     ? legacy[0] : undefined;
   return candidates.find(entry => entry.modelId === modelId)
-    ?? candidates.find(entry => Object.values(entry.capabilities).some(capability => capability?.wireModelId === modelId));
+    ?? candidates.find(entry => Object.values(entry.capabilities).some(capability => capability?.wireModelId === modelId))
+    // Stored shortcuts still name real members, even when a new pick uses the preferred ID.
+    ?? candidates.find(entry => entry.aliasEntries &&
+      resolveStoredModelEntry(entry.aliasEntries, providerId, modelId) !== undefined);
 }
 
 /** Display an offline shortcut without exposing its storage namespace. */
