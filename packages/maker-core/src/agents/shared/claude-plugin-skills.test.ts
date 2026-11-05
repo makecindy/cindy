@@ -194,4 +194,20 @@ describe('scanClaudePluginSkills', () => {
       'delta:declared',
     ]);
   });
+
+  it('keeps a direct Skill whose folder name looks like a build output', () => {
+    const configDir = tempRoot();
+    const plugin = path.join(configDir, 'plugins', 'cache', 'buildy');
+    writeSkill(path.join(plugin, 'skills', 'build'), 'build');
+    writeJson(path.join(plugin, '.claude-plugin', 'plugin.json'), { name: 'buildy' });
+    writeJson(path.join(configDir, 'plugins', 'installed_plugins.json'), {
+      plugins: { 'buildy@market': [{ scope: 'user', installPath: plugin }] },
+    });
+
+    // `build` 只在作为 namespace 下钻时才裁剪；目录本身是 Skill 时必须保留，
+    // 否则 Claude 能调用的 `/buildy:build` 不会出现在菜单里。
+    expect(scanClaudePluginSkills(configDir).map((skill) => skill.name)).toEqual([
+      'buildy:build',
+    ]);
+  });
 });

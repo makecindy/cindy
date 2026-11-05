@@ -346,7 +346,10 @@ async function scanClaudeSkillDirs(
   return results;
 }
 
-export async function scanClaudeSlashCommands(workingDir?: string): Promise<AgentSlashCommand[]> {
+export async function scanClaudeSlashCommands(
+  workingDir?: string,
+  opts?: { excludePluginSkills?: boolean },
+): Promise<AgentSlashCommand[]> {
   const home = os.homedir();
   const merged = new Map<string, AgentSlashCommand>();
   const discovered = [
@@ -363,14 +366,21 @@ export async function scanClaudeSlashCommands(workingDir?: string): Promise<Agen
   // Enabled Claude Code plugins expose their Skills with a `plugin:skill`
   // namespace. Claude Code's own runtime loads them; the Desktop palette used
   // to scan only user/project folders, so plugin Skills never showed up here.
-  for (const skill of scanClaudePluginSkills(path.join(home, '.claude'))) {
-    discovered.push({
-      name: skill.name,
-      description: await readMarkdownDescription(skill.mdPath),
-      source: 'skill',
-      path: skill.mdPath,
-      scope: 'global',
-    });
+  //
+  // Partner (bot) sessions are the exception: they run Claude with
+  // `settingSources: []` and mount only their own plugin roots, so these Skills
+  // would never load. Offering them in a partner catalog would be a choice that
+  // silently does nothing, so the host excludes them there.
+  if (!opts?.excludePluginSkills) {
+    for (const skill of scanClaudePluginSkills(path.join(home, '.claude'))) {
+      discovered.push({
+        name: skill.name,
+        description: await readMarkdownDescription(skill.mdPath),
+        source: 'skill',
+        path: skill.mdPath,
+        scope: 'global',
+      });
+    }
   }
 
   for (const cmd of discovered) {

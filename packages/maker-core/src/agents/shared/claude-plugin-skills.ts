@@ -104,9 +104,13 @@ function collectSkillsFromRoot(
 
   for (const entry of entries) {
     if (entry.name.startsWith('.') || /\.bak\.\d+$/.test(entry.name)) continue;
-    if (shouldPruneSkillScanDirectory(entry.name)) continue;
     if (!isDirectoryEntry(root, entry)) continue;
-    addSkill(out, pluginName, path.join(root, entry.name));
+    const folder = path.join(root, entry.name);
+    // Names like `build` / `dist` / `target` are only pruned when the directory
+    // is a namespace to walk into. A directory that is itself a Skill keeps its
+    // name: Claude still resolves `/plugin:build` for it.
+    if (shouldPruneSkillScanDirectory(entry.name) && !findSkillFile(folder)) continue;
+    addSkill(out, pluginName, folder);
   }
 }
 

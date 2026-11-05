@@ -211,6 +211,13 @@ describe('scanClaudeSlashCommands', () => {
         source: 'skill',
         scope: 'global',
       }));
+
+      // 伙伴会话不加载用户安装的插件，catalog 必须排除这些条目，
+      // 否则用户勾选后只会得到「显示已启用但并不生效」。
+      const partnerCommands = await scanClaudeSlashCommands(undefined, {
+        excludePluginSkills: true,
+      });
+      expect(partnerCommands.some((cmd) => cmd.name === 'alpha:browser')).toBe(false);
     } finally {
       vi.unstubAllEnvs();
       await rm(root, { recursive: true, force: true });

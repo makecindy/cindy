@@ -268,13 +268,17 @@ async function scanRemotePluginSkillRoot(
   const names = (await fileOps.listDir(root))
     .filter((name) => name && !name.startsWith('.') && !name.includes('/')
       && !/\.bak\.\d+$/.test(name))
-    .filter((name) => !shouldPruneSkillScanDirectory(name))
     .sort((a, b) => a.localeCompare(b));
 
   const found: AgentSkillCommand[] = [];
   for (const name of names) {
     const skillFile = await existingSkillFile(fileOps, path.posix.join(root, name));
-    if (!skillFile) continue;
+    // Prune names only apply to namespaces; a directory that is itself a Skill
+    // keeps its name (`build/SKILL.md` is `/plugin:build`).
+    if (!skillFile) {
+      if (shouldPruneSkillScanDirectory(name)) continue;
+      continue;
+    }
     found.push({
       kind: 'agent-skill',
       name: `${pluginName}:${name}`,
@@ -348,6 +352,8 @@ export async function scanRemoteClaudePluginSkills(
 export async function scanRemoteClaudeSkills(input: {
   fileOps: RemoteAgentFileOps;
   workingDir?: string;
+  /** Partner sessions never load the user's plugins; see ListAgentSkillsOptions. */
+  excludePluginSkills?: boolean;
 }): Promise<ListAgentSkillsResult> {
   const merged = new Map<string, AgentSkillCommand>();
   const sources = [
@@ -357,7 +363,7 @@ export async function scanRemoteClaudeSkills(input: {
       root: '$HOME/.claude/skills',
       scope: 'global',
     })),
-    ...(await scanRemoteClaudePluginSkills(input.fileOps)),
+    ...(input.excludePluginSkills ? [] : await scanRemoteClaudePluginSkills(input.fileOps)),
   ];
   if (input.workingDir && path.posix.isAbsolute(input.workingDir)) {
     sources.push(

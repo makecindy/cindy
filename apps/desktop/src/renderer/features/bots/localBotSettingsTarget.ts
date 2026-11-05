@@ -61,6 +61,8 @@ async function loadCatalog(
       forceReload: true,
       workingDir: session.workingDir ?? undefined,
       remoteHostId: session.remoteHostId ?? undefined,
+      // 伙伴会话不加载用户安装的 Claude Code 插件，见 botCapabilityService。
+      excludePluginSkills: true,
     }),
     maker.plugins.list(session.workingDir ?? undefined, true, {
       botId: bot.id,

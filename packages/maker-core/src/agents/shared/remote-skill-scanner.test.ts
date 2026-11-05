@@ -228,4 +228,18 @@ describe('remote Skill scanners', () => {
       expect.objectContaining({ name: 'solo:browser', description: 'Single skill' }),
     ]);
   });
+
+  it('keeps a remote direct Skill whose folder name looks like a build output', async () => {
+    const fileOps = fakeRemoteFiles({
+      '$HOME/.claude/plugins/installed_plugins.json': JSON.stringify({
+        plugins: { 'buildy@market': [{ scope: 'user', installPath: '$HOME/plugins/buildy' }] },
+      }),
+      '$HOME/plugins/buildy/.claude-plugin/plugin.json': JSON.stringify({ name: 'buildy' }),
+      '$HOME/plugins/buildy/skills/build/SKILL.md': 'Build skill',
+    });
+
+    const skills = await scanRemoteClaudePluginSkills(fileOps);
+
+    expect(skills.map((skill) => skill.name)).toEqual(['buildy:build']);
+  });
 });
