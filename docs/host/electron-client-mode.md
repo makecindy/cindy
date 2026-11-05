@@ -47,4 +47,4 @@ Orca 协同、记忆与文件工具等仍由 Desktop 内 Runtime 提供；客户
 |---|---|
 | `npx vitest run src/main/__tests__/hostDelegation.test.ts` | 7/7 |
 | `pnpm --filter desktop run typecheck` | exit 0 |
-| 真实 Electron 启动 + 全通道验收 | 未执行（需要图形环境；见上方 TODO） |
+| 真实 Electron 启动（`xvfb-run` + `XDT_USER_DATA_DIR` 指向 host profile） | 失败：Electron 启动阶段 `node::OOMErrorHandler` + 一个 Go 二进制报 `all goroutines are asleep - deadlock!`，与本次改动无关；需要交互式桌面环境复验 |
