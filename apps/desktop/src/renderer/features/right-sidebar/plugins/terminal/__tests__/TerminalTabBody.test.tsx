@@ -60,6 +60,7 @@ vi.mock('../lib/xtermPool', async (importOriginal) => ({
 }));
 
 import { TerminalTabBody } from '../TerminalTabBody';
+import { TERMINAL_RENDERER_INSTANCE_ID } from '../index';
 import { toast } from '@/lib/toast';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 import { getTabKind } from '../../../registry';
@@ -902,14 +903,29 @@ describe('TerminalTabBody remote ownership', () => {
     let completeCreate!: (value: { shellId: 'sh'; shellDisplayName: string; pid: number }) => void;
     vi.mocked(window.electronAPI.terminal.create).mockImplementationOnce(() => new Promise((resolve) => { completeCreate = resolve; }));
     const ctx = makeContext({ deviceLinkDeviceId: 'device-1' });
-    render(<TerminalTabBody state={{ created: false, exited: null, title: '', shellId: '', shellDisplayName: '' }} ctx={ctx} active />);
+    // Apply patches through React so an early created=true would cancel the
+    // pending create effect, duplicate attachment, and lose its shell metadata.
+    function Session() {
+      const [state, setState] = useState({ created: false, exited: null as { code: number | null; signal: string | null } | null, title: '', shellId: '', shellDisplayName: '' });
+      const patchState = useCallback((patch: unknown) => {
+        ctx.patchState(patch);
+        setState(previous => ({ ...previous, ...(patch as object) }));
+      }, []);
+      return <TerminalTabBody state={state} ctx={{ ...ctx, patchState }} active />;
+    }
+    render(<Session />);
     await waitFor(() => expect(window.electronAPI.terminal.create).toHaveBeenCalled());
     const onExit = vi.mocked(window.electronAPI.terminal.onExit).mock.calls[0][0];
-    onExit({ id: 'terminal-1', exit: { code: 255, signal: null } });
-    completeCreate({ shellId: 'sh', shellDisplayName: 'SSH', pid: 1 });
-    await waitFor(() => expect(ctx.patchState).toHaveBeenCalledWith(expect.objectContaining({ created: true })));
-    expect(ctx.patchState).toHaveBeenCalledWith({ exited: { code: 255, signal: null } });
-    expect(vi.mocked(ctx.patchState).mock.calls.at(-1)?.[0]).not.toHaveProperty('exited');
+    act(() => onExit({ id: 'terminal-1', exit: { code: 255, signal: null } }));
+    expect(window.electronAPI.terminal.create).toHaveBeenCalledOnce();
+    await act(async () => completeCreate({ shellId: 'sh', shellDisplayName: 'SSH', pid: 1 }));
+    expect(vi.mocked(ctx.patchState).mock.calls).toEqual([
+      [{ rendererInstanceId: TERMINAL_RENDERER_INSTANCE_ID, exited: { code: 255, signal: null } }],
+      [{ rendererInstanceId: TERMINAL_RENDERER_INSTANCE_ID, created: true, shellId: 'sh', shellDisplayName: 'SSH' }],
+    ]);
+    expect(screen.getByText('rightSidebar.terminal.processExited')).toBeTruthy();
+    expect(entry.ptyAttached).toBe(true);
+    expect(window.electronAPI.terminal.create).toHaveBeenCalledOnce();
   });
 
   it('disposes the exited PTY before editing and creating a new remote connection', async () => {

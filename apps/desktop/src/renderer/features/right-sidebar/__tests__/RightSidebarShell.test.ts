@@ -346,7 +346,13 @@ describe('RightSidebarShell empty state', () => {
   // created=true upsert. One SQLITE_BUSY rollback must not reattach a live body
   // or write created=true again. Real Shell/host/store; only IPC and xterm are
   // faked, in the unit tier. Defer rejection until the optimistic render commits.
-  it.each([false, true])('preserves terminal lifecycle through hydration (SQLITE_BUSY: %s)', async (busy) => {
+  // PR8881 discussion_r4476762727: continue after DB recovery through a real
+  // exit and explicit restart; remote restart also requires created=true.
+  it.each([
+    { busy: false, remoteHostId: null },
+    { busy: true, remoteHostId: null },
+    { busy: true, remoteHostId: 'ssh-host' },
+  ])('preserves terminal lifecycle through hydration ($busy, $remoteHostId)', async ({ busy, remoteHostId }) => {
     await import('../plugins/terminal');
     terminalPlugin ??= getTabKind('terminal');
     if (!getTabKind('terminal')) registerTabKind(terminalPlugin!);
@@ -356,23 +362,30 @@ describe('RightSidebarShell empty state', () => {
     let exitListener!: (event: { id: string; exit: { code: number | null; signal: string | null } }) => void;
     const create = vi.fn(async () => ({ shellId: 'sh', shellDisplayName: 'sh', pid: 1 }));
     const restart = vi.fn(async () => ({ shellId: 'sh', shellDisplayName: 'sh', pid: 2 }));
+    const describeRemote = vi.fn();
+    const exitListeners = new Set<typeof exitListener>();
     Object.assign(window.electronAPI, { terminal: {
-      create, restart, dispose: vi.fn(async () => undefined), write: vi.fn(async () => undefined), resize: vi.fn(async () => undefined),
+      create, restart, describeRemote, dispose: vi.fn(async () => undefined), write: vi.fn(async () => undefined), resize: vi.fn(async () => undefined),
       onData: vi.fn(() => vi.fn()),
-      onExit: vi.fn((listener: typeof exitListener) => { exitListener = listener; return vi.fn(); }),
+      onExit: vi.fn((listener: typeof exitListener) => {
+        exitListener = listener;
+        exitListeners.add(listener);
+        return () => { exitListeners.delete(listener); };
+      }),
     } });
     terminalEntry.ptyAttached = false;
     let rejectUpsert!: (error: Error) => void;
     if (busy) tabsIpc.upsert.mockImplementationOnce(() => new Promise((_, reject) => { rejectUpsert = reject; }));
     tabsIpc.list.mockResolvedValueOnce({
-      tabs: [{ id: 'terminal-live', kind: 'terminal', state: { rendererInstanceId: 'previous-renderer', created: true, exited: { code: 255, signal: null } } }],
+      tabs: [{ id: 'terminal-live', kind: 'terminal', state: { rendererInstanceId: 'previous-renderer', created: !remoteHostId, exited: { code: 255, signal: null } } }],
       activeTabId: 'terminal-live',
     });
     try {
-      render(createElement(RightSidebarShell, {
-        sessionId: 'terminal-task', workdir: '/workspace', remoteHostId: null, deviceLinkDeviceId: null,
+      const props = {
+        sessionId: 'terminal-task', workdir: '/workspace', remoteHostId, deviceLinkDeviceId: null,
         isMac: true, unifiedTopbar: true,
-      }));
+      };
+      const view = render(createElement(RightSidebarShell, props));
       await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
       await waitFor(() => expect((getBucket('terminal-task').tabs[0].state as { created: boolean }).created).toBe(true));
       if (busy) {
@@ -382,19 +395,36 @@ describe('RightSidebarShell empty state', () => {
         expect(tabsIpc.upsert).toHaveBeenCalledOnce();
         // Host hydration turns this restored old-renderer marker into false.
         expect(getBucket('terminal-task').tabs[0].state).toMatchObject({
-          rendererInstanceId: 'previous-renderer', created: true,
+          rendererInstanceId: 'previous-renderer', created: !remoteHostId,
         });
         expect(terminalEntry.ptyAttached).toBe(true);
-        return;
       }
+      expect(create).toHaveBeenCalledWith(expect.objectContaining(remoteHostId
+        ? { remote: { sessionId: 'terminal-task' } }
+        : { id: 'terminal-live' }));
+      const writesBeforeExit = tabsIpc.upsert.mock.calls.length;
+      act(() => exitListener({ id: 'another-terminal', exit: { code: 99, signal: null } }));
+      expect(tabsIpc.upsert).toHaveBeenCalledTimes(writesBeforeExit);
       act(() => exitListener({ id: 'terminal-live', exit: { code: 17, signal: null } }));
       expect(await screen.findByText('rightSidebar.terminal.processExited')).toBeTruthy();
       fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.terminal.restart' }));
       await waitFor(() => expect(restart).toHaveBeenCalledTimes(1));
       await waitFor(() => expect(screen.queryByText('rightSidebar.terminal.processExited')).toBeNull());
       expect(create).toHaveBeenCalledTimes(1);
+      expect(describeRemote).not.toHaveBeenCalled();
+      // A changed host context replaces the subscription. A queued callback
+      // from the old subscription must not stamp the current renderer identity.
+      const staleExit = exitListener;
+      view.rerender(createElement(RightSidebarShell, { ...props, workdir: '/workspace/next' }));
+      expect(exitListeners.size).toBe(1);
+      expect(exitListeners.has(staleExit)).toBe(false);
+      const writesAfterRestart = tabsIpc.upsert.mock.calls.length;
+      act(() => staleExit({ id: 'terminal-live', exit: { code: 99, signal: null } }));
+      expect(tabsIpc.upsert).toHaveBeenCalledTimes(writesAfterRestart);
+      expect(screen.queryByText('rightSidebar.terminal.processExited')).toBeNull();
     } finally {
       cleanup();
+      expect(exitListeners.size).toBe(0);
       unregisterTabKind('terminal');
       vi.unstubAllGlobals();
     }

@@ -138,17 +138,26 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
       });
     });
 
+    // A cleaned-up subscription must stay inactive even if this body's next
+    // layout effect makes aliveRef true again.
+    let subscribed = true;
     // 订阅 main 推过来的 PTY 输出 / 退出,按 tabId filter
     const offData = window.electronAPI.terminal.onData((evt: unknown) => {
       const data = evt as TerminalDataEvent;
-      if (!aliveRef.current || data.id !== tabId) return;
+      if (!subscribed || !aliveRef.current || data.id !== tabId) return;
       entry.terminal.write(data.chunk);
     });
     const offExit = window.electronAPI.terminal.onExit((evt: unknown) => {
       const ex = evt as TerminalExitEvent;
-      if (aliveRef.current && ex.id === tabId) {
+      if (subscribed && aliveRef.current && ex.id === tabId) {
         exitRevisionRef.current += 1;
-        patchState({ exited: ex.exit });
+        patchState({
+          rendererInstanceId: TERMINAL_RENDERER_INSTANCE_ID,
+          // Persistence rollback does not undo this body's completed attach.
+          // Leave created to an in-flight create so its effect is not cancelled.
+          ...(entry.ptyAttached && attachedEntryRef.current === entry ? { created: true } : {}),
+          exited: ex.exit,
+        });
       }
     });
 
@@ -162,6 +171,7 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
     if (activeRef.current !== false && shellVisibleRef.current) fitNow(entry, slot);
 
     return () => {
+      subscribed = false;
       aliveRef.current = false;
       fontControllerRef.current?.dispose();
       fontControllerRef.current = null;
