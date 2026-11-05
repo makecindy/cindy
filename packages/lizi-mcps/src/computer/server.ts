@@ -24,7 +24,7 @@ import {
 } from "./tools.js";
 import { logToolResultErrorCode } from "../tool-error-telemetry.js";
 import { WindowSnapshotTracker } from "./snapshot-tracker.js";
-import { computerResultOutcome, isUnavailableWindowObservation } from "./result.js";
+import { computerResultOutcome, isUnavailableWindowObservation, normalizeInputFailureAdvice } from "./result.js";
 import {
   canLocateRunningApp,
   exactInstalledAppBundle,
@@ -762,7 +762,7 @@ export function createComputerMcpServer(
           ...outcome,
           tool: name,
           ...(snapshotId ? { snapshot_id: snapshotId } : {}),
-          data: withoutDuplicateElements(name, data),
+          data: normalizeInputFailureAdvice(name, outcome.ok ? undefined : outcome.errorCode, withoutDuplicateElements(name, data)),
           ...(recovery ? { recovery } : {}),
           ...(postcheck ? { postcheck } : {}),
           ...(observation ? { observation } : {}),
@@ -945,7 +945,7 @@ export function createComputerMcpServer(
                 },
               }
             : {}),
-          data: {
+          data: normalizeInputFailureAdvice(name, errorCode, {
             message: err instanceof Error ? err.message : String(err),
             ...((err as { inputProgress?: unknown })?.inputProgress
               ? { input_progress: (err as { inputProgress: unknown }).inputProgress }
@@ -960,7 +960,7 @@ export function createComputerMcpServer(
                     ?? "Rediscover the target PID/window, then take fresh get_window_state before acting. Do not reuse old element references or automatically switch to a similar window.",
                 }
               : {}),
-          },
+          }),
         },
         true,
       );
