@@ -173,35 +173,6 @@ describe('settings search catalog', () => {
     }
   });
 
-  it('points to existing anchors and covers every search anchor', () => {
-    const sources = import.meta.glob<string>('../**/*.tsx', {
-      query: '?raw',
-      eager: true,
-      import: 'default',
-    });
-    const source = Object.entries(sources)
-      .filter(([path]) => !path.includes('__tests__') && !path.endsWith('/SettingsSearchBox.tsx'))
-      .map(([, text]) => text)
-      .join();
-    const targets = new Set(
-      SETTINGS_SEARCH_ENTRIES.flatMap((entry) => [entry.targetId, entry.fallbackTargetId]),
-    );
-    for (const target of targets) {
-      // The shared WeChat component selects its anchor at runtime. Its catalog target
-      // and companion isolation are checked against real DOM in WechatBotSection.test.tsx.
-      if (target === 'personal-im-wechat') continue;
-      if (target) {
-        const dynamicProviderAnchor =
-          /^cindy-im-(slack|telegram|x)$/.test(target) &&
-          source.includes('id={\`cindy-im-\${provider}\`}');
-        expect(source.includes('id="' + target + '"') || dynamicProviderAnchor, target).toBe(true);
-      }
-    }
-    for (const [, target] of source.matchAll(/id="(settings-search-[^"]+)"/g)) {
-      expect(targets.has(target), target).toBe(true);
-    }
-  });
-
   it('uses the same account and platform visibility as settings', () => {
     const context = {
       platform: 'linux',

@@ -36,3 +36,9 @@ export function getTextPreviewSearchHost(): HTMLElement | null {
   const roots = document.querySelectorAll<HTMLElement>('[data-text-lightbox-search-host]');
   return roots.item(roots.length - 1);
 }
+
+/** Background shortcuts yield to the document in both rendered and source modes. */
+export function getTextPreviewHost(): HTMLElement | null {
+  const roots = document.querySelectorAll<HTMLElement>('[data-text-lightbox-card]');
+  return roots.item(roots.length - 1);
+}

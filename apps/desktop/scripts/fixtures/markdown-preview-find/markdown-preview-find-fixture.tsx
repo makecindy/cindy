@@ -140,5 +140,5 @@ mountPage({
     deviceLink: { onRemotePush: subscription('remote-push') },
     ghosts: { listSync: () => ({ ghosts: [] }) },
   }),
-  render: ctx => <Fixture editor={['background-editor', 'loading-editor'].includes(ctx.case)} projectSearch={ctx.case === 'background-project-search'} voice={ctx.case === 'background-voice'} video={ctx.case === 'fullscreen-video'} askVoice={ctx.case === 'background-ask-voice'} />,
+  render: ctx => <Fixture editor={['background-editor', 'loading-editor', 'source-background-editor'].includes(ctx.case)} projectSearch={ctx.case === 'background-project-search'} voice={ctx.case === 'background-voice'} video={ctx.case === 'fullscreen-video'} askVoice={ctx.case === 'background-ask-voice'} />,
 });

@@ -7004,7 +7004,7 @@ interface ElectronAPI {
       sessionId: string;
       completionRevision: number;
       cancel: true;
-    }) => Promise<{ prompt: string | null }>;
+    }) => Promise<{ prompt: string | null; retryable?: boolean }>;
     helpAsk: (
       request: import('../shared/helpTypes').HelpAskRequest,
     ) => Promise<import('../shared/helpTypes').HelpAnswerResult>;
