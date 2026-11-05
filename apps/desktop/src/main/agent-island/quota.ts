@@ -29,15 +29,22 @@ const CINDY_LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="24" heigh
 export function buildAgentIslandQuota(view: MenubarView | null): AgentIslandQuotaItem[] {
   if (!view || view.gate) return [];
   const lowestText = view.statusTextByMode.lowest;
-  let lowestMarked = false;
-  const items: AgentIslandQuotaItem[] = [];
-  for (const cell of view.sources) {
-    if (cell.kind === 'payg' || cell.fill === null) continue;
+  const readings = view.sources.flatMap((cell) => {
+    if (cell.kind === 'payg' || cell.fill === null) return [];
     const text = cell.value !== null ? `${cell.value}${cell.valueUnit ?? ''}` : (cell.valueLabel ?? '');
-    if (!text) continue;
-    // Plans at the same percentage read alike; the first in the user's order stands for them.
-    const lowest = !lowestMarked && cell.kind === 'subscription' && cell.value !== null && text === lowestText;
-    if (lowest) lowestMarked = true;
+    return text ? [{ cell, text }] : [];
+  });
+  // Plans at the same percentage read alike; the first in the user's order stands for them.
+  // When every subscription is used up the menu bar says "0%" while plans that only have extra
+  // credits left show a label, so the first of those stands for it instead.
+  const lowestCell = lowestText
+    ? (readings.find(({ cell, text }) => cell.kind === 'subscription' && cell.value !== null && text === lowestText)
+      ?? readings.find(({ cell }) => cell.kind === 'subscription' && cell.reserve))?.cell
+    : undefined;
+  const items: AgentIslandQuotaItem[] = [];
+  for (const { cell, text } of readings) {
+    const lowest = cell === lowestCell;
+    const compactText = lowest && lowestText ? lowestText : undefined;
     items.push({
       id: cell.id,
       logoSvg: cell.logoSvg === MENUBAR_CINDY_LOGO ? CINDY_LOGO_SVG : cell.logoSvg,
@@ -46,8 +53,9 @@ export function buildAgentIslandQuota(view: MenubarView | null): AgentIslandQuot
       stale: cell.stale === true,
       accessibilityLabel: cell.accessibilityLabel,
       lowest,
+      ...(compactText ? { compactText } : {}),
       width: getAgentIslandQuotaChipWidth(text),
-      textWidth: getAgentIslandQuotaTextWidth(text),
+      textWidth: getAgentIslandQuotaTextWidth(compactText ?? text),
     });
   }
   return items;

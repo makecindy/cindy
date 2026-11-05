@@ -1561,6 +1561,7 @@ struct AgentIslandQuotaItem: Codable, Equatable, Identifiable {
   let stale: Bool
   let accessibilityLabel: String
   let lowest: Bool
+  var compactText: String? = nil
   let width: Double
   let textWidth: Double
 }
@@ -3334,7 +3335,7 @@ struct AgentIslandQuotaRow: View {
         .transition(.opacity.combined(with: .scale(scale: 0.5, anchor: .trailing)))
       }
 
-      Text(item.text)
+      Text(showsLogo ? item.text : (item.compactText ?? item.text))
         .font(.system(size: 10, weight: .semibold, design: .monospaced))
         .foregroundColor(textColor(item.level))
         .lineLimit(1)

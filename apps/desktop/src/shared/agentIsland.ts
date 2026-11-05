@@ -624,6 +624,11 @@ export interface AgentIslandQuotaItem {
    */
   lowest: boolean;
   /**
+   * What the lowest plan shows when only its bare reading fits: the menu bar's own text, which
+   * can differ from `text` (extra credits left, the menu bar says "0%"). Set on that plan only.
+   */
+  compactText?: string;
+  /**
    * Nominal upper-bound widths of the chip and of its text alone. The island never widens
    * for quota (its width is the user's); the helper picks what fits from these, without
    * measuring fonts.

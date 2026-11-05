@@ -1047,6 +1047,10 @@ export class AgentIslandService {
     this.enabled = false;
     this.enabledSynced = this.headless;
     this.hiddenPublished = true;
+    // The previous account's quota must not survive into the next one: drop it and let the
+    // quota bridge release the overview, so turning the island back on reads the new account.
+    this.quota = [];
+    this.notifyEnabledChange();
     if (this.nativeHost.suspend) {
       this.nativeHost.suspend();
     } else {
@@ -3128,6 +3132,7 @@ function sameAgentIslandQuota(a: readonly AgentIslandQuotaItem[], b: readonly Ag
     return item.id === other.id && item.logoSvg === other.logoSvg && item.text === other.text
       && item.level === other.level && item.stale === other.stale
       && item.accessibilityLabel === other.accessibilityLabel && item.lowest === other.lowest
+      && item.compactText === other.compactText
       && item.width === other.width && item.textWidth === other.textWidth;
   });
 }

@@ -76,4 +76,16 @@ describe('buildAgentIslandQuota', () => {
     expect(lowestOf('18%')).toEqual(['codex-a']);
     expect(lowestOf(null)).toEqual([]);
   });
+
+  it('订阅额度全部用完、只剩额外 credits 时,菜单栏的 0% 仍落在一个套餐上并带折叠读数', () => {
+    const items = buildAgentIslandQuota(view([
+      cell({ id: 'claude', value: null, valueLabel: 'credits', fill: 0, reserve: true }),
+      cell({ id: 'codex', value: null, valueLabel: 'credits', fill: 0, reserve: true }),
+    ], undefined, '0%'));
+    expect(items.map(({ id, lowest, compactText }) => ({ id, lowest, compactText }))).toEqual([
+      { id: 'claude', lowest: true, compactText: '0%' },
+      { id: 'codex', lowest: false, compactText: undefined },
+    ]);
+    expect(items[0]!.textWidth).toBeLessThan(items[0]!.width);
+  });
 });
