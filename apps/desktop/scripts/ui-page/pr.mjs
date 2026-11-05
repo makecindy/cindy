@@ -23,7 +23,7 @@ export function prSnippet(summary, argv) {
     ? `Electron ${summary.versions.electron}（Chromium ${summary.versions.chrome}，与 Cindy 同一渲染内核）`
     : `Chromium ${summary.versions?.chrome ?? '?'}`;
   const lines = [
-    '<!-- 由 pnpm ui:check 生成；pnpm ui:check:publish 把截图发到 pr-assets 专用分支并换上图片链接 -->',
+    '<!-- 由 pnpm ui:check 生成；pnpm ui:check:publish 把截图发到作者 fork 并换上图片链接 -->',
     `- 截图来源：单页验证 \`pnpm ui:check ${argv.map(shellArg).join(' ')}\`，${PLATFORM[process.platform] ?? process.platform} · ${runtime}；` +
       '真实组件与主题，场景数据，不是登录账号下的完整 Cindy',
     `- 版本：\`${summary.commit?.slice(0, 12) ?? '未知'}\`${summary.worktreeDirty ? '（含未提交改动）' : ''}`,

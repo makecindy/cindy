@@ -80,13 +80,12 @@ FAIL group-chat.no-sidebar.dark.zh-CN.1280x800
 
 发 PR 前运行 `pnpm ui:check:publish`（默认取最近一次运行，也可以传运行目录）：
 
-- 把该次运行的 `overview*.png` 作为一个提交推到当前仓库的 `pr-assets/<当前分支>`。提交只含
+- 把该次运行的 `overview*.png` 作为一个提交推到作者 fork 的 `pr-assets/<当前分支>`。提交只含
   截图、不与产品历史相连；同一分支多次发布时依次追加，旧链接继续有效。不改工作区、索引和
-  当前分支，截图不会进入产品代码分支；支持直接发到 PR 所在仓库，不需要 fork。
+  当前分支，截图不会进入上游仓库；目标远端就是 PR 的目标仓库时直接拒绝。
 - 输出 `pr.published.md`：`pr.md` 加上按提交 SHA 固定的图片链接，原样写进 PR 正文「UI 变化」。
-- 默认推到 `origin` 的实际 push URL，可用 `--remote` 显式指定有写权限的 GitHub 远端；没有
-  `origin` 时要求明确选择，不自动换仓库。`--branch` 只能指定 `pr-assets/` 下的分支；
-  `--dry-run` 只生成内容不推送。
+- 默认推到第一个不是上游仓库的 GitHub 远端（通常是 `origin`），可用 `--remote`／`--branch`
+  指定；`--dry-run` 只生成内容不推送。
 
 普通界面改动用这些截图即可。登录、发送、跨设备等单页验证覆盖不到的变化，仍附完整 Cindy
 截图；设计系统 PR 的证据要求见

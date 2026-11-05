@@ -47,7 +47,7 @@ function report(summary) {
   lines.push(`summary:  ${path.join(summary.evidence, 'summary.json')}`);
   if (summary.pr)
     lines.push(
-      `pr:       ${summary.pr} — 发 PR 前运行 pnpm ui:check:publish，把截图发到当前仓库的专用分支并生成带图的「UI 变化」`,
+      `pr:       ${summary.pr} — 发 PR 前运行 pnpm ui:check:publish，把截图发到你的 fork 并生成带图的「UI 变化」`,
     );
   for (const page of summary.pages) {
     const replaced = Object.entries(page.replaced);
