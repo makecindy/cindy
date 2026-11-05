@@ -1303,6 +1303,25 @@ export function rotateShadow(options: {
   return { ok: used + options.incomingBytes <= cap, deleted, freed, used, cap, oversize: false };
 }
 
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 会话目录里的 owner 记着写它的 pi 进程号;还活着就不能回收。 */
+function directoryOwnerAlive(dir: string): boolean {
+  try {
+    const pid = Number(readFileSync(join(dir, "owner"), "utf8").trim());
+    return Number.isInteger(pid) && pid > 0 && processAlive(pid);
+  } catch {
+    return false;
+  }
+}
+
 /** Keep only the newest SHADOW_MAX_SESSIONS session directories. */
 export function pruneShadowSessions(root: string): void {
   try {
@@ -1320,7 +1339,9 @@ export function pruneShadowSessions(root: string): void {
       })
       .filter((item): item is { full: string; mtime: number } => item !== null)
       .sort((left, right) => right.mtime - left.mtime);
-    dirs.slice(SHADOW_MAX_SESSIONS).filter((item) => item.mtime < cutoff).forEach((item) => {
+    // 够旧也不够:owner 进程还在跑的话,目录里的原文仍是它卡片的备份,删了就读不回来。
+    // 长期低于 MIN_PRESSURE 的会话不会产生新文件,目录 mtime 会一直停在很久以前。
+    dirs.slice(SHADOW_MAX_SESSIONS).filter((item) => item.mtime < cutoff && !directoryOwnerAlive(item.full)).forEach((item) => {
       try {
         rmSync(item.full, { recursive: true, force: true });
       } catch {}

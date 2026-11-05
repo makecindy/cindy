@@ -246,6 +246,33 @@ describe('live compact card roles and tool excerpts (1.0.3-1.0.5)', () => {
     }
   });
 
+  it('keeps a stale session dir whose owner process is still running', () => {
+    // 长期低于水位、一直没切过的会话:目录 mtime 很旧,但 owner 进程还活着,
+    // 里面的原文仍是它卡片的备份 —— 不能按「够旧」直接回收。
+    const root = mkdtempSync(join(tmpdir(), 'spine-live-owner-'));
+    try {
+      const stale = new Date(2026, 0, 1);
+      for (let i = 0; i < 25; i += 1) {
+        const dir = join(root, `session-${i}`);
+        mkdirSync(dir);
+        writeFileSync(join(dir, 'raw-deadbeef.txt'), 'x'.repeat(10));
+        // session-0 的 owner 就是当前进程(活着);session-1 的 owner 是个不可能的 pid。
+        if (i === 0) writeFileSync(join(dir, 'owner'), String(process.pid));
+        if (i === 1) writeFileSync(join(dir, 'owner'), '999999');
+        // 时间递增:session-0 最旧、session-24 最新,超出保留数的就是前面几个。
+        // 必须放在写文件之后 —— 新建文件会把父目录 mtime 刷新成现在。
+        const stamp = new Date(stale.getTime() + i * 60_000);
+        utimesSync(dir, stamp, stamp);
+      }
+      pruneShadowSessions(root);
+      const names = readdirSync(root);
+      expect(names).toContain('session-0');
+      expect(names).not.toContain('session-1');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('never puts the shadow root on a relative path', () => {
     const previous = process.env.SPINE_SHADOW_DIR;
     try {
