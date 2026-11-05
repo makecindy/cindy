@@ -49,7 +49,7 @@ describe('buildWireMessageSourceNote', () => {
   // speaks for the owner; a plain relay without that check is an ordinary task message.
   it('speaks for the owner only for a checked plain hand-off', () => {
     const origin = { ...taskOrigin, senderBotId: 'filo' };
-    const request = { userText: '修好就合进去', sessionId: 's-1', clientId: 'u1', plainBody: true };
+    const request = { sessionId: 's-1', clientId: 'u1', plainBody: true };
     const checked = buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request',
       request: { ...request, ownerVerified: true, delegatedText: 'Fix #12 and merge it.' } } });
     expect(checked).toContain('主人交给本任务的工作');

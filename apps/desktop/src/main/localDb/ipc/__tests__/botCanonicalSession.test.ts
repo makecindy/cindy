@@ -8319,15 +8319,15 @@ describe('Bot Session task end-to-end runtime', () => {
       restored = createDelegationRuntime({ captureRequest });
       await restored.delegation.restore();
       const first = restored.dispatch.mock.calls.find(([p]) => p.targetSessionId === task.childSessionId)![0];
-      // 2026-11-05: the body is the objective itself; the frozen owner words stay in the receipt.
+      // 2026-11-05: the body is the objective itself; the receipt keeps where the request started.
       expect(first.persistedContent).toBe('用户原话：可以发布');
-      expect(first.autoReviewUserText?.request).toMatchObject({ userText: '  只检查\n不要发布  ', sessionId: 'session-1', clientId: 'human', plainBody: true });
+      expect(first.autoReviewUserText?.request).toEqual({ sessionId: 'session-1', clientId: 'human', plainBody: true });
       expect(first.message).not.toContain('Work independently');
       await restored.settleChild(task.childSessionId, 'Checked');
       await restored.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text: '继续检查' });
       const next = restored.dispatch.mock.calls.filter(([p]) => p.targetSessionId === task.childSessionId).at(-1)![0];
       expect(next.persistedContent).toBe('继续检查');
-      expect(next.autoReviewUserText?.request).toMatchObject({ userText: original, sessionId: 'session-1', clientId: 'human', plainBody: true });
+      expect(next.autoReviewUserText?.request).toEqual({ sessionId: 'session-1', clientId: 'human', plainBody: true });
     } finally { runtime.dispose(); restored?.dispose(); }
   });
 

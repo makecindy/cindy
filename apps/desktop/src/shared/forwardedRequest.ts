@@ -31,24 +31,26 @@ const FORWARDED_REQUEST_COPY = {
 
 /** Host-owned source evidence. It describes authorship, never execution permission. */
 export interface ForwardedRequestSource {
-  userText: string | null;
+  /**
+   * The owner's words, quoted by the pre-2026-11-05 envelope. Plain-body receipts omit it:
+   * where the request started is the ids below, and what was asked is `delegatedText`.
+   */
+  userText?: string | null;
+  /** The task and accepted input where the owner's request started. */
   sessionId?: string;
   clientId?: string;
   /**
    * The sending host admitted this relay as the owner's request or its accepted continuation.
-   * Only then does the receiver treat userText as the owner's
-   * request for this task. Optional on the wire; older hosts drop or never send it.
+   * Only then does the receiver treat it as the owner's request for this task.
+   * Optional on the wire; older hosts drop or never send it.
    */
   ownerVerified?: true;
-  /**
-   * The message body is the agent's own text, not the 用户原话 / Agent补充 envelope
-   * (2026-11-05). `userText` stays the owner's words for provenance only.
-   */
+  /** The message body is the agent's own text, not the 用户原话 / Agent补充 envelope (2026-11-05). */
   plainBody?: true;
   /**
    * The sending host checked that the owner asked for this hand-off (its Auto review,
    * the owner's own confirmation, or Full Access) and the body is exactly this text.
-   * Only set with `ownerVerified`; the receiver reviews against it instead of `userText`.
+   * Only set with `ownerVerified`; the receiver reviews against it.
    */
   delegatedText?: string;
 }
@@ -63,14 +65,17 @@ export function readForwardedRequestSource(value: unknown): ForwardedRequestSour
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const source = value as Record<string, unknown>;
   if (source.userText === null) return { userText: null };
-  if (typeof source.userText !== 'string' || typeof source.sessionId !== 'string'
-    || !source.sessionId || typeof source.clientId !== 'string' || !source.clientId) return null;
+  if (typeof source.sessionId !== 'string' || !source.sessionId
+    || typeof source.clientId !== 'string' || !source.clientId) return null;
   const ownerVerified = source.ownerVerified === true;
+  if (source.plainBody === true) {
+    return { sessionId: source.sessionId, clientId: source.clientId, plainBody: true,
+      ...(ownerVerified && typeof source.delegatedText === 'string' && source.delegatedText.trim()
+        ? { ownerVerified: true as const, delegatedText: source.delegatedText } : {}) };
+  }
+  if (typeof source.userText !== 'string') return null;
   return { userText: source.userText, sessionId: source.sessionId, clientId: source.clientId,
-    ...(ownerVerified ? { ownerVerified: true as const } : {}),
-    ...(source.plainBody === true ? { plainBody: true as const } : {}),
-    ...(ownerVerified && source.plainBody === true && typeof source.delegatedText === 'string' && source.delegatedText.trim()
-      ? { delegatedText: source.delegatedText } : {}) };
+    ...(ownerVerified ? { ownerVerified: true as const } : {}) };
 }
 
 /** JSON string quoting keeps an agent-written label inside the supplement. No trimming or summarizing. */

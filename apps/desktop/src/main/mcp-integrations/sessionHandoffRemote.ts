@@ -186,7 +186,7 @@ export function createRemoteSessionHandoff(deps: {
         sessionId: target.sessionId,
         message: body,
         // A plain body sends only a checked hand-off; its provenance stays on this computer.
-        ...(source?.userText != null && (!source.plainBody || source.delegatedText !== undefined)
+        ...(source && (source.plainBody ? source.delegatedText !== undefined : source.userText != null)
           ? { requestSource: source } : {}),
         sender,
         taskActionReceipt,

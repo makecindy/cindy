@@ -425,7 +425,7 @@ export function rebuildSessionQueueItem(
   // owner only if the editor's own request re-checked the new text; otherwise it keeps provenance.
   const plainRequest = !request?.plainBody ? undefined
     : captured?.request?.delegatedText === message ? captured.request
-      : { userText: request.userText, sessionId: request.sessionId, clientId: request.clientId, plainBody: true as const };
+      : { sessionId: request.sessionId, clientId: request.clientId, plainBody: true as const };
   const nextRequest = plainRequest ?? request;
   if (item.origin?.kind === 'session') message = formatForwardedRequest(nextRequest ?? { userText: null }, message);
   const updated = updateQueuedMessageText(item, message);

@@ -30,8 +30,9 @@ describe('host-owned forwarded request', () => {
     const result = await captureAgentRequest('caller', supplement, { clientId: 'accepted', authoredText: original }, pending, true);
     expect(pending).not.toHaveBeenCalled();
     expect(result.message).toBe(supplement);
+    // Where the request started, not the words: nothing downstream needs the owner's text.
     expect(result.autoReviewUserText).toEqual({ kind: 'agent-request',
-      request: { userText: original, sessionId: 'caller', clientId: 'accepted', plainBody: true } });
+      request: { sessionId: 'caller', clientId: 'accepted', plainBody: true } });
     expect(verifiedOwnerRequestText(result.autoReviewUserText)).toBeUndefined();
     const lines = result.legacy!.message.split('\n');
     expect(lines).toHaveLength(3);
@@ -114,7 +115,7 @@ describe('host-owned forwarded request', () => {
       { targetSessionId: 'worker', authorize });
     expect(authorize).toHaveBeenCalledTimes(1);
     expect(checked.message).toBe('Fix #12 and merge it after checks pass.');
-    expect(checked.autoReviewUserText.request).toEqual({ userText: '修好就合进去', sessionId: 'lead', clientId: 'u1',
+    expect(checked.autoReviewUserText.request).toEqual({ sessionId: 'lead', clientId: 'u1',
       ownerVerified: true, plainBody: true, delegatedText: 'Fix #12 and merge it after checks pass.' });
     expect(verifiedOwnerRequestText(checked.autoReviewUserText)).toBe('Fix #12 and merge it after checks pass.');
     // Same-account peers verify the exact body and parse the optional fields.
@@ -146,7 +147,10 @@ describe('host-owned forwarded request', () => {
     const delegated = checked.autoReviewUserText.request;
     const grandchild = await captureAgentRequest('worker', 'Run the Windows build.', { clientId: 'w1', delegatedRequest: delegated },
       async () => [], true, false, { targetSessionId: 'builder', authorize });
-    expect(grandchild.autoReviewUserText.request).toMatchObject({ userText: '修好就合进去', sessionId: 'lead', delegatedText: 'Run the Windows build.' });
+    expect(grandchild.autoReviewUserText.request).toEqual({ sessionId: 'lead', clientId: 'u1', ownerVerified: true,
+      plainBody: true, delegatedText: 'Run the Windows build.' });
+    // A relayed hand-off has no owner words at hand, so an older peer gets plain text.
+    expect(grandchild.legacy).toEqual({ message: 'Run the Windows build.', autoReviewUserText: { kind: 'agent-request' } });
     const reportCheck = vi.fn(async () => ({ kind: 'authorized' as const }));
     const report = await captureAgentRequest('worker', 'Merged #12.', { clientId: 'w1', delegatedRequest: delegated },
       async () => [], true, false, { targetSessionId: 'lead', authorize: reportCheck });
@@ -162,16 +166,6 @@ describe('host-owned forwarded request', () => {
     expect(missing.autoReviewUserText.request).toEqual({ userText: null });
   });
 
-  // A hand-off longer than the review budget could not establish authorization; the receiver
-  // keeps reviewing against the owner's words exactly as before 2026-11-05.
-  it('falls back to the owner words when the hand-off exceeds the review budget', async () => {
-    const long = 'step '.repeat(500);
-    const result = await captureAgentRequest('lead', long, { clientId: 'u1', authoredText: '按计划做' }, async () => [], true, true,
-      { authorize: async () => ({ kind: 'authorized' }) });
-    expect(result.autoReviewUserText.request?.delegatedText).toBe(long);
-    expect(verifiedOwnerRequestText(result.autoReviewUserText)).toBe('按计划做');
-  });
-
   // PR #6936 review: IM turns bypass the input coordinator and persist no receipt, so a verified
   // owner relay from IM carried no original words. The IM runner's per-turn lease names the row.
   it.each([true, false])('captures the persisted IM input of the turn requester (owner=%s)', async requesterIsOwner => {
@@ -184,7 +178,7 @@ describe('host-owned forwarded request', () => {
       const result = await captureAgentRequest('lane', 'background', evidence, async () => [], true, true,
         { authorize: async () => ({ kind: 'authorized' }) });
       if (requesterIsOwner) {
-        expect(result.autoReviewUserText.request).toEqual({ userText: '可以提交 pr', sessionId: 'lane', clientId: 'im-row',
+        expect(result.autoReviewUserText.request).toEqual({ sessionId: 'lane', clientId: 'im-row',
           ownerVerified: true, plainBody: true, delegatedText: 'background' });
       } else {
         expect(read).not.toHaveBeenCalled();

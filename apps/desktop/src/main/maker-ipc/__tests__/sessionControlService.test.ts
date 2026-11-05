@@ -339,7 +339,7 @@ describe('session control domain service', () => {
   // own request checked exactly that text; otherwise the item keeps its provenance only.
   it('re-checks an edited plain hand-off instead of carrying the old authority', () => {
     const queued = item({ kind: 'session', senderSessionId: 'caller', displayText: 'before' });
-    const provenance = { userText: '修好就合进去', sessionId: 'owner', clientId: 'human' };
+    const provenance = { sessionId: 'owner', clientId: 'human' };
     queued.autoReviewUserText = { kind: 'agent-request', request: { ...provenance, ownerVerified: true,
       plainBody: true, delegatedText: 'before' } };
     const unchecked = rebuildSessionQueueItem(queued, 'Also deploy it.');

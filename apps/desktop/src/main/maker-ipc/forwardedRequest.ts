@@ -18,8 +18,8 @@ export interface CapturedAgentRequest {
    */
   blocked?: string;
   /**
-   * The pre-2026-11-05 envelope for a peer that only verifies the quoted format.
-   * Cross-computer senders fall back to it when the receiving host is older.
+   * What an older peer, which only verifies the quoted format, receives instead: the
+   * pre-2026-11-05 envelope when the owner's words are at hand, otherwise plain text.
    */
   legacy?: { message: string; autoReviewUserText: AgentRequestReceipt };
 }
@@ -102,17 +102,23 @@ export async function captureAgentRequest(
       ...(delegated ? { delegatedRequest: delegated } : {}),
     }) : { userText: null };
   }
-  if (source.userText === null) return { message: supplement, autoReviewUserText: { kind: 'agent-request', request: { userText: null } } };
-  // Provenance only: the owner's words that started this chain, never an earlier hop's hand-off.
-  const provenance: ForwardedRequestSource = { userText: source.userText, sessionId: source.sessionId, clientId: source.clientId };
+  if (source.userText === null || !source.sessionId || !source.clientId)
+    return { message: supplement, autoReviewUserText: { kind: 'agent-request', request: { userText: null } } };
+  // Where the owner's request started; the words themselves are not carried forward.
+  const provenance: ForwardedRequestSource = { sessionId: source.sessionId, clientId: source.clientId, plainBody: true };
   // An accepted relay still names the same owner request. Only the current
   // input can carry that evidence; a historical fallback cannot revive it.
   const verified = ownerVerified || active?.delegatedRequest?.ownerVerified === true;
-  const legacyRequest: ForwardedRequestSource = { ...provenance, ...(verified ? { ownerVerified: true as const } : {}) };
-  const legacy = { message: formatForwardedRequest(legacyRequest, supplement),
-    autoReviewUserText: { kind: 'agent-request' as const, request: legacyRequest } };
+  // Older peers need the quoted owner words, available only while they are this task's own
+  // input (or an older host's quotation). A relayed plain hand-off reaches them as plain text.
+  const legacyRequest: ForwardedRequestSource | null = typeof source.userText === 'string'
+    ? { userText: source.userText, sessionId: source.sessionId, clientId: source.clientId,
+      ...(verified ? { ownerVerified: true as const } : {}) } : null;
+  const legacy = legacyRequest ? { message: formatForwardedRequest(legacyRequest, supplement),
+    autoReviewUserText: { kind: 'agent-request' as const, request: legacyRequest } }
+    : { message: supplement, autoReviewUserText: { kind: 'agent-request' as const } };
   const plain: CapturedAgentRequest = { message: supplement,
-    autoReviewUserText: { kind: 'agent-request', request: { ...provenance, plainBody: true } }, legacy };
+    autoReviewUserText: { kind: 'agent-request', request: provenance }, legacy };
   // A result or question back to where the request came from is not a new request.
   if (!verified || !delegation || (delegation.targetSessionId && delegation.targetSessionId === provenance.sessionId))
     return plain;
@@ -120,12 +126,12 @@ export async function captureAgentRequest(
   if (decision.kind === 'blocked') return { ...plain, blocked: decision.reason };
   if (decision.kind !== 'authorized') return plain;
   return { message: supplement, legacy, autoReviewUserText: { kind: 'agent-request',
-    request: { ...provenance, ownerVerified: true, plainBody: true, delegatedText: supplement } } };
+    request: { ...provenance, ownerVerified: true, delegatedText: supplement } } };
 }
 
 /** Quote only a real owner request. Missing-source envelopes remain readable through the shared legacy validator. */
 export function formatForwardedRequest(source: ForwardedRequestSource, supplement: string): string {
-  return source.userText === null || source.plainBody ? supplement
+  return source.plainBody || source.userText == null ? supplement
     : formatLocalizedForwardedRequest(source, supplement, getResolvedMainLocale());
 }
 
@@ -133,6 +139,5 @@ export function formatForwardedRequest(source: ForwardedRequestSource, supplemen
 export function withoutOwnerAuthority(receipt: AgentRequestReceipt): AgentRequestReceipt {
   const request = receipt.request;
   if (!request?.plainBody || !request.ownerVerified) return receipt;
-  return { ...receipt, request: { userText: request.userText, sessionId: request.sessionId,
-    clientId: request.clientId, plainBody: true } };
+  return { ...receipt, request: { sessionId: request.sessionId, clientId: request.clientId, plainBody: true } };
 }

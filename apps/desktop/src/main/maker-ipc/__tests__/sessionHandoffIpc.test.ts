@@ -71,7 +71,7 @@ describe('maker:session:handoff (receiving computer)', () => {
   it('accepts a plain checked hand-off only with its exact text and advertises the capability', async () => {
     const s = setup();
     expect(SESSION_HANDOFF_CAPABILITY).toEqual({ taskActionVersion: 1, plainRequestBody: 1 });
-    const source = { userText: '修好就合进去', sessionId: 'source', clientId: 'human', ownerVerified: true,
+    const source = { sessionId: 'source', clientId: 'human', ownerVerified: true,
       plainBody: true, delegatedText: 'Fix #12 and merge it.' };
     await s.handle('device-A', { ...request, message: 'Fix #12 and merge it.', requestSource: source });
     expect(s.send).toHaveBeenCalledWith(expect.objectContaining({ message: 'Fix #12 and merge it.',

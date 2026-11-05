@@ -135,12 +135,13 @@ describe('botDirectMessageService', () => {
       .toMatchObject({ ok: true });
     const delivered = dispatch.mock.calls[0]![0];
     expect(verifiedOwnerRequestText(delivered.autoReviewUserText)).toBe('Please handle the fixtures.');
-    expect(delivered.autoReviewUserText.request).toMatchObject({ userText: original, sessionId: 'a-main' });
+    expect(delivered.autoReviewUserText.request).toEqual({ sessionId: 'a-main', clientId: 'owner-input',
+      ownerVerified: true, plainBody: true, delegatedText: 'Please handle the fixtures.' });
     expect(sqlite.prepare('SELECT content FROM bot_direct_messages').get()).toEqual({ content: 'Please handle the fixtures.' });
     const next = await captureAgentRequest('b-main', 'Keep coverage', {
       clientId: delivered.clientId, delegatedRequest: delivered.autoReviewUserText.request,
     }, async () => [], true, false, { targetSessionId: 'c-main', authorize });
-    expect(next.autoReviewUserText.request).toMatchObject({ userText: original, sessionId: 'a-main', delegatedText: 'Keep coverage' });
+    expect(next.autoReviewUserText.request).toMatchObject({ sessionId: 'a-main', delegatedText: 'Keep coverage' });
     // The peer's answer into the task the owner spoke in keeps provenance only.
     const reply = createBotDirectMessageService({ dispatch, captureRequest: (sessionId, message) => captureAgentRequest(sessionId, message,
       { clientId: delivered.clientId, delegatedRequest: delivered.autoReviewUserText.request }, async () => [], true, false, { authorize }) });

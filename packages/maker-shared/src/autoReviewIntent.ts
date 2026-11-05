@@ -86,17 +86,15 @@ export function createAutoReviewIntentProjection() {
     const source = receipt.request;
     if (!source || typeof source !== "object" || !("ownerVerified" in source) || source.ownerVerified !== true ||
       !("sessionId" in source) || typeof source.sessionId !== "string" || !source.sessionId ||
-      !("clientId" in source) || typeof source.clientId !== "string" || !source.clientId ||
-      !("userText" in source) || typeof source.userText !== "string" || !source.userText.trim()) return undefined;
-    // A host-checked hand-off (2026-11-05) is reviewed by the delegated work itself; the
-    // owner's words remain provenance. Older receipts keep the owner's words as intent, and so
-    // does a hand-off too long for the review budget (it could not establish authorization).
+      !("clientId" in source) || typeof source.clientId !== "string" || !source.clientId) return undefined;
+    // A host-checked hand-off (2026-11-05) is reviewed by the delegated work itself.
     if ("plainBody" in source && source.plainBody === true) {
-      if (!("delegatedText" in source) || typeof source.delegatedText !== "string" || !source.delegatedText.trim())
-        return undefined;
-      if (source.delegatedText.trim().length <= MAX_USER_INTENT_CHARS) return source.delegatedText;
+      return "delegatedText" in source && typeof source.delegatedText === "string" && source.delegatedText.trim()
+        ? source.delegatedText : undefined;
     }
-    return source.userText;
+    // Older receipts carry the owner's words as intent.
+    return "userText" in source && typeof source.userText === "string" && source.userText.trim()
+      ? source.userText : undefined;
   }
 
   function compactCurrentUserIntent(
