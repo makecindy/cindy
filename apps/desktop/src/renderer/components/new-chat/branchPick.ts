@@ -3,7 +3,8 @@
  *
  * worktree 勾选状态只由 checkbox 本体和显式「改用 worktree」按钮控制；
  * 两者共用偏好写入路径。系统/环境因素无权改动勾选状态。
- * 未勾时选择分支 = 切换主目录并记住源分支；勾选时只改源分支。
+ * 未勾时选择分支只切换主目录，切换和撤销均不写 worktree 源分支记忆。
+ * 勾选时选分支才写源分支；菜单「改用 worktree」只勾选，弹框按钮则记住所选目标。
  */
 
 export interface BranchPickState {
@@ -19,8 +20,8 @@ export type BranchPickEffect =
   { kind: 'noop' } | { kind: 'set-source'; branch: string } | { kind: 'checkout'; branch: string };
 
 export function resolveBranchPick(state: BranchPickState, picked: string): BranchPickEffect {
-  if (!state.worktreeEnabled && picked !== state.currentBranch)
-    return { kind: 'checkout', branch: picked };
+  if (!state.worktreeEnabled)
+    return picked === state.currentBranch ? { kind: 'noop' } : { kind: 'checkout', branch: picked };
   if (picked === state.sourceBranch) return { kind: 'noop' };
   return { kind: 'set-source', branch: picked };
 }

@@ -364,7 +364,10 @@ function setupCheckout(supportsCheckout = true, overrides = {}) {
   });
   return checkout;
 }
-function CheckoutRow({ deviceId }: { deviceId?: string } = {}) {
+function CheckoutRow({
+  deviceId,
+  onSourceChange,
+}: { deviceId?: string; onSourceChange?: (branch: string) => void } = {}) {
   const [enabled, setEnabled] = React.useState(false);
   const [source, setSource] = React.useState('remembered-source');
   return (
@@ -374,7 +377,10 @@ function CheckoutRow({ deviceId }: { deviceId?: string } = {}) {
       enabled={enabled}
       onEnabledChange={setEnabled}
       sourceBranch={source}
-      onSourceBranchChange={setSource}
+      onSourceBranchChange={(branch) => {
+        onSourceChange?.(branch);
+        setSource(branch);
+      }}
       variant="advancedOnly"
     />
   );
@@ -448,6 +454,7 @@ it('disables checkout choices while a task is running; explicit worktree keeps t
     fireEvent.click(screen.getByRole('button', { name: 'newChat.checkout.useWorktree' }));
   });
   expect(screen.getByRole('listbox')).toBeTruthy();
+  expect(branchButton().textContent).toBe('remembered-source');
   expect(screen.getByTestId('create-agent-worktree-chip').getAttribute('aria-pressed')).toBe(
     'true',
   );
@@ -524,7 +531,8 @@ it('keeps an old execution host read-only and never invokes the new channel', as
 });
 
 // Regression: a lost mutation/result response must recover the same operation's
-// receipt and preference, with bounded read retries and no second Git write.
+// receipt, with bounded read retries and no second Git write. Checkout and undo
+// must leave worktree preferences untouched (user rule B); old tests expected writes.
 it.each(['direct', 'lost-write', 'lost-result', 'unreachable'])(
   'recovers checkout and undo through the execution computer: %s',
   async (mode) => {
@@ -569,7 +577,8 @@ it.each(['direct', 'lost-write', 'lost-result', 'unreachable'])(
         return window.electronAPI.worktreeSuggestName(args[0]);
       return baseStatus;
     });
-    render(<CheckoutRow deviceId="execution-pc" />);
+    const onSourceChange = vi.fn();
+    render(<CheckoutRow deviceId="execution-pc" onSourceChange={onSourceChange} />);
     await waitFor(() => expect(branchButton().textContent).toBe('main'));
     await act(async () => {
       fireEvent.click(branchButton());
@@ -600,7 +609,8 @@ it.each(['direct', 'lost-write', 'lost-result', 'unreachable'])(
       expect(checkout.mock.calls.at(-1)?.[0].action).toBe('status');
       return;
     }
-    expect(branchButton().textContent).toBe('feature');
+    expect(branchButton().textContent).toBe('remembered-source');
+    expect(onSourceChange).not.toHaveBeenCalled();
     await act(async () => {
       fireEvent.click(screen.getByTestId('create-agent-worktree-chip'));
     });
@@ -613,6 +623,7 @@ it.each(['direct', 'lost-write', 'lost-result', 'unreachable'])(
     });
     await waitFor(() => expect(branchButton().textContent).toBe('main'));
     expect(mocks.success).toHaveBeenLastCalledWith('newChat.checkout.undone');
+    expect(onSourceChange).not.toHaveBeenCalled();
     await act(async () => {
       fireEvent.click(screen.getByTestId('create-agent-worktree-chip'));
     });

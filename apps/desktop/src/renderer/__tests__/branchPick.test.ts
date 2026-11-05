@@ -33,12 +33,18 @@ describe('resolveBranchPick', () => {
       { currentBranch: null, picked: 'feat/y' },
     ]) {
       expect(
-        resolveBranchPick(
-          { worktreeEnabled: false, currentBranch, sourceBranch: '' },
-          picked,
-        ),
+        resolveBranchPick({ worktreeEnabled: false, currentBranch, sourceBranch: '' }, picked),
       ).toEqual({ kind: 'checkout', branch: picked });
     }
+  });
+
+  it('worktree OFF: picking the current branch never writes the source preference', () => {
+    expect(
+      resolveBranchPick(
+        { worktreeEnabled: false, currentBranch: 'main', sourceBranch: 'feat/x' },
+        'main',
+      ),
+    ).toEqual({ kind: 'noop' });
   });
 
   it('worktree OFF: the remembered source must still switch the current checkout', () => {

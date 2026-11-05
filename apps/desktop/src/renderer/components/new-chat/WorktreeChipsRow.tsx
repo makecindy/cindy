@@ -10,7 +10,7 @@
  *   - 系统/环境因素(切项目、探测结果、播种)永远不改 checkbox;资格不满足只是
  *     在 OFF 时禁用开启;
  *   - 用户点击 checkbox 本体或显式「改用 worktree」按钮，写入同一勾选记忆;
- *   - 未勾时分支选择切换主目录并记住源分支；已勾时只改源分支，不联动 checkbox。
+ *   - 未勾时分支选择只切换主目录；已勾时才写源分支记忆，不联动 checkbox。
  *
  * 2026-08-07 用户裁决(取代 2026-07-29「已 ON 保留关闭入口 + fail-closed」形态):
  * 勾选记忆**只对具备 worktree 资格的目录生效**——
@@ -259,8 +259,6 @@ export function WorktreeChipsRow({
     baseRepo,
     deviceLinkDeviceId,
     detect.data?.supportsCheckout === true,
-    onSourceBranchChange,
-    sourceBranch,
     onCheckoutBusyChange,
   );
   const actualBranch = checkout.status?.current || branches.current || currentBranch || 'HEAD';

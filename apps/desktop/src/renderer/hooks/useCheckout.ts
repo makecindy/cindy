@@ -34,8 +34,6 @@ export function useCheckout(
   repo: string | null,
   deviceId: string | null | undefined,
   supported: boolean,
-  onSourceChange: (branch: string) => void,
-  source: string,
   onBusyChange?: (busy: boolean) => void,
 ) {
   const { t } = useTranslation();
@@ -49,7 +47,6 @@ export function useCheckout(
     error?: string;
     dialog?: { branch: string; status: CheckoutStatus };
     receipt?: CheckoutReceipt;
-    previousSource?: string;
   }>({ key });
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -200,7 +197,6 @@ export function useCheckout(
   const performSwitch = useCallback(
     async (branch: string, status: CheckoutStatus, strategy: 'carry' | 'stash') => {
       if (!repo) return;
-      const previousSource = source || status.current;
       const reply = await mutate({
         action: 'switch',
         baseRepo: repo,
@@ -218,8 +214,7 @@ export function useCheckout(
         });
         return;
       }
-      onSourceChange(branch);
-      update({ dialog: undefined, receipt: reply.receipt, previousSource });
+      update({ dialog: undefined, receipt: reply.receipt });
       // A new switch retires the previous undo prompt, even when this one needs no toast.
       if (undoToast.current) toast.dismiss(undoToast.current);
       undoToast.current = undefined;
@@ -258,7 +253,7 @@ export function useCheckout(
         });
       }
     },
-    [repo, source, mutate, onSourceChange, update, key, t],
+    [repo, mutate, update, key, t],
   );
   const picking = useRef(false);
   const pick = useCallback(
@@ -301,14 +296,13 @@ export function useCheckout(
         operationId: crypto.randomUUID(),
       });
       if (reply && (reply.undoApplied || !reply.blocked)) {
-        onSourceChange(previous.previousSource!);
         update({ receipt: undefined });
         if (undoToast.current) toast.dismiss(undoToast.current);
         undoToast.current = undefined;
         if (!reply.blocked) toast.success(t('newChat.checkout.undone'));
       }
     },
-    [repo, key, mutate, onSourceChange, update, t],
+    [repo, key, mutate, update, t],
   );
   const restore = useCallback(
     async (stashId: string) => {
