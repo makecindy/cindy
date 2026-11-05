@@ -233,6 +233,15 @@
     'maker.gitSafetySet': () => STATIC.gitSafetyOff,
     // The host already opened and migrated the owner database before serving.
     'localDb.ensureReady': () => ({ ready: true }),
+    // Local mode is the host's own profile: no cloud account, same local data.
+    'authEnterLocal': () => {
+      const state = routes['authInitialize']();
+      return { ...state, mode: state.user ? 'cloud' : 'local', canEnterApp: true };
+    },
+    'authExitLocal': () => routes['authInitialize'](),
+    // The host exposes no cloud login surface; the entry step still offers the
+    // local profile, which is what the desktop client shows when signed out.
+    'authGetLoginState': () => ({ success: true, state: { step: 'entry' } }),
     'authInitialize': () => {
       const boot = window.__cindyBoot?.auth ?? {};
       return {

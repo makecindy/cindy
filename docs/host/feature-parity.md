@@ -38,6 +38,7 @@
 
 | 能力 | 状态 | 证据 / 缺口 |
 |---|---|---|
+| 本地模式（无账号） | 部分 | 登录页可进入本地模式（`authGetLoginState`/`authEnterLocal` 已实现），但随后停在 “Waking Cindy…” 启动门；Host 侧尚无本地 owner 命名空间 |
 | 复用现有登录 | 部分 | 登录入口真实可达（含 PKCE/托管回调），重启后 `authenticated:true` 复用现有会话（`evidence/stage2-login.md`）；**真实浏览器完成一次授权未验证**（需要用户本人凭证） |
 | 复用现有存储 | 已验证 | 打开同一 owner 库（145 条 migration / 87 表），无平行数据库 |
 | 单 Runtime 锁 | 已验证 | 第二个 Host 报 `runtime.state=blocked`、`storage=unopened` |
