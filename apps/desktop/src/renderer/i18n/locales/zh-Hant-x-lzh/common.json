@@ -1,4 +1,15 @@
 {
+  "pluginUi": {
+    "renderer": "顯示方式",
+    "original": "原文",
+    "unavailable": "法器界面暫不可用，操作已停。",
+    "outcome-unknown": "法器操作之果未明，請察新況。",
+    "rejected": "法器未行此操作，所填已留。",
+    "draftChanged": "輸入已改，法器之改未行。",
+    "editorUnavailable": "輸入框不可用，法器之改未行。",
+    "more": "更多",
+    "close": "關閉"
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "重察限額",
@@ -2321,6 +2332,9 @@
     "agentIsland": {
       "title": "靈動島",
       "unsupported": "靈動島須 macOS 14 或更高之版。",
+      "subtleRemindersLabel": "輕提醒",
+      "subtleRemindersHint": "新訊至、待答或有誤時，不向下彈出通知卡片，以圖示變化相告。點靈動島可閱任務全表。",
+      "subtleRemindersFailed": "提醒設定未存，請重試。",
       "enableLabel": "顯靈動島",
       "enableHint": "於螢幕之巔顯方行、待應及未讀已畢之差事。啟之則抑同類系統之告，免重複相擾。",
       "enableAria": "啟閉靈動島",
@@ -3928,6 +3942,7 @@
             "hint": "施於 {{agent}} 之圖連線。唯宣介面實所支援之能，存後重啟 Art 詳情。"
           },
           "capabilityHint": "先用今供方所宣之能；未宣者，圖之能參酌模型之名。",
+          "imageInputDefault": "{{value}}（預設）",
           "imageInput": "圖輸入",
           "imageInputMixed": "諸引擎各異",
           "supported": "可",
@@ -5628,6 +5643,7 @@
           "checking": "方察更新…",
           "upToDate": "已是最新",
           "checkFailed": "察更新未成",
+          "rateLimited": "GitHub 更源已限流，稍遲再察",
           "lastChecked": "前番察於 {{time}}",
           "check": "察更新",
           "retry": "再試",
@@ -7644,6 +7660,8 @@
         "skill": "為 AI 助手增技藝「{{name}}」",
         "skillDetail": "技藝乃一份指令檔案，AI 將視為己之指令載入而行，具君之全部權柄，於 Claude Code 與 Codex、一切案中皆生效——不受本法器沙箱所約。法器啟用期間持續可用，停用或卸除即移除；僅對某卷匣關閉本法器，不能隱之。此處不能先覽技藝全文——請僅納君所信之法器。",
         "routineEvents": "例行差事事件",
+        "nativeUi": "於任務中置控制項",
+        "nativeTabView": "可啟獨立視圖「{{title}}」",
         "mcpUi": "可於言談中示互動頁面",
         "mcpUiDomains": "頁面可連之網域：{{domains}}",
         "mcpAppOnly": "唯頁面可用",
@@ -13070,6 +13088,12 @@
       "text": "前有自運未成。",
       "precheck": "自動查驗暫受阻。",
       "rateLimited": "自動查驗暫受阻：請求限流。",
+      "pluginMissing": "自動查驗暫受阻：「{{name}}」法器未裝，裝畢自復。",
+      "pluginMissingUnnamed": "自動查驗暫受阻：所需法器未裝，裝畢自復。",
+      "pluginDisabled": "自動查驗暫受阻：「{{name}}」法器未啟，啟之自復。",
+      "pluginDisabledUnnamed": "自動查驗暫受阻：所需法器未啟，啟之自復。",
+      "installPlugin": "裝法器",
+      "openPlugin": "觀法器",
       "dismissTitle": "闔往昔未成之示"
     },
     "worktreeRestoreBanner": {
@@ -17289,6 +17313,7 @@
     "sidebar": "餘資與訂閱",
     "settings": {
       "title": "耗用與計費",
+      "supportHint": "若有所困，可致函 {{email}} 求助。",
       "subscriptionCard": {
         "title": "今之套餐",
         "empty": "今無生效之訂閱",
@@ -17363,14 +17388,38 @@
     },
     "orders": {
       "title": "訂單錄",
-      "description": "唯示於 Cindy 內所發之儲值與訂閱訂單。待付之訂單逾時則自罷。",
+      "description": "顯示已付款的儲值訂單與已結清的訂閱帳單。",
+      "history": {
+        "loadFailed": "無法載入訂單記錄",
+        "retry": "重新載入訂單",
+        "unknownPaidAt": "付款時間不明",
+        "unknownAmount": "金額不明",
+        "refundedAmount": "已退 {{amount}}",
+        "refunded": "已退款",
+        "partiallyRefunded": "部分退款",
+        "noPayment": "無需付款",
+        "page": "第 {{page}} 頁",
+        "previous": "上一頁",
+        "next": "下一頁"
+      },
       "count": "{{count}} 筆",
-      "incomplete": "訂單之記甚多，今唯示最近 {{count}} 筆。",
       "orderId": "NO. {{id}}",
       "copy": {
         "action": "錄訂單 ID {{id}}",
         "success": "訂單 ID 已錄",
         "failed": "錄訂單 ID 未成，請再試"
+      },
+      "refund": {
+        "action": "請退款",
+        "title": "請退款",
+        "description": "請將下列資訊寄至客服信箱 {{email}}，以請退款。",
+        "emailSubject": "Cindy 退款之請 - {{orderId}}",
+        "sendAction": "寄退款之請",
+        "gmailFallbackDescription": "退款之請含訂單資訊。開 Gmail 則此資訊將分享予 Google，續乎？",
+        "emailBody": "您好，欲請退還下列訂單款項，煩請協助。\n\n訂單號：{{orderId}}\n渠道交易號：{{providerTransactionId}}\n應用程式：{{application}}\n付款方式：{{paymentMethod}}\n實付金額：{{amount}}\n\n所遇之事：\n（請略述所遇之情）\n\n謹謝。",
+        "fields": {
+          "amount": "實付金額"
+        }
       },
       "invoice": {
         "action": "請開票",
@@ -17380,7 +17429,7 @@
         "emailSubject": "請開訂單 {{orderId}} 之發票",
         "personalInvoicePolicy": "Cindy 個人版儲值，預設開立<strong>個人抬頭發票</strong>，抬頭可書姓名或「個人」。如需企業抬頭發票以供公司報銷，請具<strong>加蓋公司公章之報銷說明</strong>，並於說明中註明開票抬頭。",
         "invoiceTitleHint": "填寫說明：個人抬頭請書姓名或「個人」；如需企業抬頭以供公司報銷，請隨郵件附加蓋公司公章、註明開票抬頭之報銷說明。",
-        "emailBody": "敬啟者：\n\n欲請開立下列訂單之發票：\n\n────────────────────\n訂單號：{{orderId}}\n應用程式：{{application}}\n付款方式：{{paymentMethod}}\n開票金額：{{amount}}\n發票抬頭：\n{{invoiceTitleHint}}\n\n聯絡人：\n聯絡電話：\n信箱：\n────────────────────\n\n謹謝。",
+        "emailBody": "敬啟者：\n\n欲請開立下列訂單之發票：\n\n────────────────────\n訂單號：{{orderId}}\n渠道交易號：{{providerTransactionId}}\n應用程式：{{application}}\n付款方式：{{paymentMethod}}\n開票金額：{{amount}}\n發票抬頭：\n{{invoiceTitleHint}}\n\n聯絡人：\n聯絡電話：\n信箱：\n────────────────────\n\n謹謝。",
         "sendAction": "寄開票之請",
         "emailCopied": "客服信箱已錄",
         "emailCopyFailed": "錄客服信箱未成，請再試",
@@ -17391,6 +17440,7 @@
         "notAvailable": "暫無其資",
         "fields": {
           "orderId": "訂單號",
+          "providerTransactionId": "渠道交易號",
           "application": "應用程式",
           "paymentMethod": "付款方式",
           "amount": "開票金額",

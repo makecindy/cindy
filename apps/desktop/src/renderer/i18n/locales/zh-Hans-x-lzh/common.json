@@ -1,4 +1,15 @@
 {
+  "pluginUi": {
+    "renderer": "显示方式",
+    "original": "原文",
+    "unavailable": "法器界面暂不可用，操作已停。",
+    "outcome-unknown": "法器操作之果未明，请察新况。",
+    "rejected": "法器未行此操作，所填已留。",
+    "draftChanged": "输入已改，法器之改未行。",
+    "editorUnavailable": "输入框不可用，法器之改未行。",
+    "more": "更多",
+    "close": "关闭"
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "重察限额",
@@ -2321,6 +2332,9 @@
     "agentIsland": {
       "title": "灵动岛",
       "unsupported": "灵动岛须 macOS 14 或更高之版。",
+      "subtleRemindersLabel": "轻提醒",
+      "subtleRemindersHint": "新讯至、待答或有误时，不向下弹出通知卡片，以图示变化相告。点灵动岛可阅任务全表。",
+      "subtleRemindersFailed": "提醒设定未存，请重试。",
       "enableLabel": "显灵动岛",
       "enableHint": "于屏幕之巅显方行、待应及未读已毕之差事。启之则抑同类系统之告，免重复相扰。",
       "enableAria": "启闭灵动岛",
@@ -3928,6 +3942,7 @@
             "hint": "施于 {{agent}} 之图连接。唯宣界面实所支持之能，存后重启 Art 详情。"
           },
           "capabilityHint": "先用今供方所宣之能；未宣者，图之能参酌模型之名。",
+          "imageInputDefault": "{{value}}（默认）",
           "imageInput": "图输入",
           "imageInputMixed": "诸引擎各异",
           "supported": "可",
@@ -5628,6 +5643,7 @@
           "checking": "方察更新…",
           "upToDate": "已是最新",
           "checkFailed": "察更新未成",
+          "rateLimited": "GitHub 更源已限流，稍遲再察",
           "lastChecked": "前番察于 {{time}}",
           "check": "察更新",
           "retry": "再试",
@@ -7644,6 +7660,8 @@
         "skill": "为 AI 助手增技艺「{{name}}」",
         "skillDetail": "技艺乃一份指令文件，AI 将视为己之指令加载而行，具君之全部权柄，于 Claude Code 与 Codex、一切案中皆生效——不受本法器沙箱所约。法器激活期间持续可用，禁用或卸除即移除；仅对某卷匣关闭本法器，不能隐之。此处不能先览技艺全文——请仅纳君所信之法器。",
         "routineEvents": "例行差事事件",
+        "nativeUi": "于任务中置控件",
+        "nativeTabView": "可启独立视图「{{title}}」",
         "mcpUi": "可于言谈中示交互页面",
         "mcpUiDomains": "页面可连之网域：{{domains}}",
         "mcpAppOnly": "唯页面可用",
@@ -13070,6 +13088,12 @@
       "text": "前有自运未成。",
       "precheck": "自动查验暂受阻。",
       "rateLimited": "自动查验暂受阻：请求限流。",
+      "pluginMissing": "自动查验暂受阻：「{{name}}」法器未装，装毕自复。",
+      "pluginMissingUnnamed": "自动查验暂受阻：所需法器未装，装毕自复。",
+      "pluginDisabled": "自动查验暂受阻：「{{name}}」法器未启，启之自复。",
+      "pluginDisabledUnnamed": "自动查验暂受阻：所需法器未启，启之自复。",
+      "installPlugin": "装法器",
+      "openPlugin": "观法器",
       "dismissTitle": "阖往昔未成之示"
     },
     "worktreeRestoreBanner": {
@@ -17289,6 +17313,7 @@
     "sidebar": "余资与订阅",
     "settings": {
       "title": "耗用与计费",
+      "supportHint": "若有所困，可致函 {{email}} 求助。",
       "subscriptionCard": {
         "title": "今之套餐",
         "empty": "今无生效之订阅",
@@ -17363,14 +17388,38 @@
     },
     "orders": {
       "title": "订单录",
-      "description": "唯示于 Cindy 内所发之储值与订阅订单。待付之订单逾时则自罢。",
+      "description": "显示已付款的储值订单与已结清的订阅账单。",
+      "history": {
+        "loadFailed": "订单记录未能加载",
+        "retry": "重新加载订单",
+        "unknownPaidAt": "付款时间未知",
+        "unknownAmount": "金额未知",
+        "refundedAmount": "已退 {{amount}}",
+        "refunded": "已退款",
+        "partiallyRefunded": "部分退款",
+        "noPayment": "无需付款",
+        "page": "第 {{page}} 页",
+        "previous": "上一页",
+        "next": "下一页"
+      },
       "count": "{{count}} 笔",
-      "incomplete": "订单之记甚多，今唯示最近 {{count}} 笔。",
       "orderId": "NO. {{id}}",
       "copy": {
         "action": "录订单 ID {{id}}",
         "success": "订单 ID 已录",
         "failed": "录订单 ID 未成，请再试"
+      },
+      "refund": {
+        "action": "请退款",
+        "title": "请退款",
+        "description": "请将下列信息寄至客服信箱 {{email}}，以请退款。",
+        "emailSubject": "Cindy 退款之请 - {{orderId}}",
+        "sendAction": "寄退款之请",
+        "gmailFallbackDescription": "退款之请含订单信息。开 Gmail 则此信息将分享予 Google，续乎？",
+        "emailBody": "您好，欲请退还下列订单款项，烦请协助。\n\n订单号：{{orderId}}\n渠道交易号：{{providerTransactionId}}\n应用：{{application}}\n支付方式：{{paymentMethod}}\n实付金额：{{amount}}\n\n所遇之事：\n（请略述所遇之情）\n\n谨谢。",
+        "fields": {
+          "amount": "实付金额"
+        }
       },
       "invoice": {
         "action": "请开票",
@@ -17380,7 +17429,7 @@
         "emailSubject": "请开订单 {{orderId}} 之发票",
         "personalInvoicePolicy": "Cindy 个人版储值，预设开立<strong>个人抬头发票</strong>，抬头可书姓名或「个人」。如需企业抬头发票以供公司报销，请具<strong>加盖公司公章之报销说明</strong>，并于说明中注明开票抬头。",
         "invoiceTitleHint": "填写说明：个人抬头请书姓名或「个人」；如需企业抬头以供公司报销，请随邮件附加盖公司公章、注明开票抬头之报销说明。",
-        "emailBody": "敬启者：\n\n欲请开立下列订单之发票：\n\n────────────────────\n订单号：{{orderId}}\n应用程序：{{application}}\n付款方式：{{paymentMethod}}\n开票金额：{{amount}}\n发票抬头：\n{{invoiceTitleHint}}\n\n联系人：\n联系电话：\n信箱：\n────────────────────\n\n谨谢。",
+        "emailBody": "敬启者：\n\n欲请开立下列订单之发票：\n\n────────────────────\n订单号：{{orderId}}\n渠道交易号：{{providerTransactionId}}\n应用程序：{{application}}\n付款方式：{{paymentMethod}}\n开票金额：{{amount}}\n发票抬头：\n{{invoiceTitleHint}}\n\n联系人：\n联系电话：\n信箱：\n────────────────────\n\n谨谢。",
         "sendAction": "寄开票之请",
         "emailCopied": "客服信箱已录",
         "emailCopyFailed": "录客服信箱未成，请再试",
@@ -17391,6 +17440,7 @@
         "notAvailable": "暂无其资",
         "fields": {
           "orderId": "订单号",
+          "providerTransactionId": "渠道交易号",
           "application": "应用",
           "paymentMethod": "支付方式",
           "amount": "开票金额",

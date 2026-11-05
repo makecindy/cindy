@@ -1,5 +1,14 @@
 import { APP_PREFERENCE_REQUEST, APP_PREFERENCE_REPLY, APP_SETTINGS_CHANGED, type AppPreferenceControlBridge } from '../shared/appPreferenceControl.js';
 import type { VoiceConversationApi } from '../shared/voiceConversation';
+import { PLUGIN_UI_VISIBILITY_GET, PLUGIN_UI_VISIBILITY_RELEASE, PLUGIN_UI_VISIBILITY_APPLY, PLUGIN_UI_VISIBILITY_APPLIED, type PluginUiVisibilityApplication } from '../shared/pluginUiVisibility';
+import type { PluginUiVisibilityValues } from '@cindy/maker-shared/plugin-ui';
+import { PLUGIN_APPEARANCE_FONT, PLUGIN_APPEARANCE_APPLY, PLUGIN_APPEARANCE_APPLIED,
+  type PluginAppearanceApplication } from '../shared/pluginAppearance';
+import { PLUGIN_UI_READ, PLUGIN_UI_INVOKE, PLUGIN_UI_CHOOSE_RENDERER, PLUGIN_UI_PAGE_OPEN, PLUGIN_UI_PAGE_CLOSE, PLUGIN_UI_RELEASE, PLUGIN_UI_CHANGED, PLUGIN_UI_INSPECT,
+  type PluginUiReadRequest, type PluginUiReadResult, type PluginUiInvokeRequest, type PluginUiInvokeResult, type PluginUiChooseRendererRequest, type PluginUiPageOpenRequest } from '../shared/pluginUi';
+import { PLUGIN_TAB_VIEW_HOST, PLUGIN_TAB_VIEW_NAVIGATE, PLUGIN_TAB_VIEW_REQUEST, PLUGIN_TAB_VIEW_OPENED,
+  PLUGIN_TAB_VIEW_MOUNT, PLUGIN_TAB_VIEW_UPDATE, PLUGIN_TAB_VIEW_RELEASE,
+  type PluginTabViewMountRequest, type PluginTabViewMountResult } from '../shared/pluginUi';
 import { PERFORMANCE_TRACE_CHANNEL, PERFORMANCE_TRACE_EVENTS_CHANNEL, PERFORMANCE_TRACE_STATE_CHANNEL, type PerformanceTraceAPI, type PerformanceTraceState } from '../shared/performanceTrace';
 import { createAccessibilitySupportBridge } from './accessibilitySupport';
 import { createMicrophonePermissionSnapshot } from './microphonePermissionSnapshot';
@@ -97,6 +106,7 @@ import {
   AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL,
   AGENT_ISLAND_SET_ENABLED_CHANNEL,
   AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL,
+  AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL,
   AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL,
   AGENT_ISLAND_SET_COMPANION_CHATS_CHANNEL,
   AGENT_ISLAND_READ_COMPANION_CHAT_CHANNEL,
@@ -661,6 +671,8 @@ const fanOutDeepLinkNavigate = createIpcFanOut('deep-link:navigate');
 // main 端 webview-security setWindowOpenHandler 把 popup URL 推到这里,renderer
 // 端 RightSidebarShell 订阅 → store.addTab 开新 web-browser tab。
 const fanOutRsbBrowserPopup = createIpcFanOut('rsb:browser-popup');
+const fanOutPluginAppearanceApply = createIpcFanOut(PLUGIN_APPEARANCE_APPLY);
+const fanOutPluginUiVisibilityApply = createIpcFanOut(PLUGIN_UI_VISIBILITY_APPLY);
 const fanOutRsbNativePopupEvent = createIpcFanOut(RSB_NATIVE_POPUP_EVENT_CHANNEL);
 // RSB terminal plugin: main 端 PTY onData / onExit 推过来,renderer 按 id filter。
 // 每个 tab 自己订阅,fanOut 内部去重 ipcRenderer.on 绑定。
@@ -740,6 +752,8 @@ const fanOutLayoutChanged = createIpcFanOut('layout:changed');
 // 见 main/cindy-brain/index.ts)。
 const fanOutRetirementOpen = createIpcFanOut('ghosts:retirement-open');
 const fanOutGhostsChanged = createIpcFanOut('ghosts:changed');
+const fanOutPluginUiChanged = createIpcFanOut(PLUGIN_UI_CHANGED);
+const fanOutPluginTabViewRequest = createIpcFanOut(PLUGIN_TAB_VIEW_REQUEST);
 const fanOutPluginPublisherProgress = createIpcFanOut('plugin-publisher:progress');
 const fanOutPluginPublisherConfirm = createIpcFanOut('plugin-publisher:confirm');
 const fanOutGhostSetupNavigate = createIpcFanOut('maker:plugin-setup:navigate');
@@ -1100,6 +1114,7 @@ interface ComputerDriverUpdateCheck {
   updating: boolean;
   checkStatus?: 'success' | 'error';
   checkedAt?: number;
+  checkError?: { kind: 'rate_limited' | 'network' };
 }
 
 const appDisplayVersionInfo = ipcRenderer.sendSync('get-app-display-version-info') as {
@@ -1289,7 +1304,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   pageZoomOut: (): Promise<{ ok: true; zoomFactor: number }> => ipcRenderer.invoke('page-zoom:out'),
   pageZoomReset: (): Promise<{ ok: true; zoomFactor: number }> =>
     ipcRenderer.invoke('page-zoom:reset'),
+  pluginUiVisibility: {
+    get: (): Promise<PluginUiVisibilityValues> => ipcRenderer.invoke(PLUGIN_UI_VISIBILITY_GET),
+    release: (): Promise<void> => ipcRenderer.invoke(PLUGIN_UI_VISIBILITY_RELEASE),
+    onApply: (callback: (request: PluginUiVisibilityApplication) => void) =>
+      fanOutPluginUiVisibilityApply(request => callback(request as PluginUiVisibilityApplication)),
+    applied: (requestId: string): Promise<void> => ipcRenderer.invoke(PLUGIN_UI_VISIBILITY_APPLIED, { requestId }),
+  },
   appearanceSettings: {
+    loadPluginFont: (role: 'uiFont' | 'codeFont' | 'bodyFont'): Promise<{ family: string; base64: string }> => ipcRenderer.invoke(PLUGIN_APPEARANCE_FONT, role),
+    onPluginApply: (callback: (request: PluginAppearanceApplication) => void) =>
+      fanOutPluginAppearanceApply(request => callback(request as PluginAppearanceApplication)),
+    pluginApplied: (requestId: string, status: 'applied' | 'saved' | 'failed'): Promise<void> => ipcRenderer.invoke(PLUGIN_APPEARANCE_APPLIED, { requestId, status }),
     importWallpaper: () => ipcRenderer.invoke('appearance-settings:import-wallpaper'),
     ...createWallpaperAssetsBridge(),
     removeWallpaper: () => ipcRenderer.invoke('appearance-settings:remove-wallpaper'),
@@ -1384,6 +1410,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       overrides: Record<string, unknown>;
       platform: string;
       globalFailures?: unknown;
+      pluginShortcuts?: unknown;
     } => ipcRenderer.sendSync('app-shortcuts:get'),
     setOverride: (id: string, combo: unknown): Promise<{ overrides: Record<string, unknown> }> =>
       ipcRenderer.invoke('app-shortcuts:set-override', id, combo),
@@ -1678,6 +1705,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
       : ipcRenderer.invoke('ghosts:resolve-panel-media', uri, purpose, instanceId),
     runtimeStates: (): Promise<{ states: Record<string, string> }> =>
       ipcRenderer.invoke('ghosts:runtime-states'),
+    ui: {
+      tabViews: {
+        ready: (): Promise<void> => ipcRenderer.invoke(PLUGIN_TAB_VIEW_HOST),
+        navigate: (requestId: string): Promise<import('@cindy/maker-shared/plugin-ui').PluginUiNavigationResult> => ipcRenderer.invoke(PLUGIN_TAB_VIEW_NAVIGATE, { requestId }),
+        onRequest: fanOutPluginTabViewRequest,
+        opened: (requestId: string, tabId: string | null): Promise<void> => ipcRenderer.invoke(PLUGIN_TAB_VIEW_OPENED, { requestId, tabId }),
+        mount: (input: PluginTabViewMountRequest): Promise<PluginTabViewMountResult> => ipcRenderer.invoke(PLUGIN_TAB_VIEW_MOUNT, input),
+        update: (input: { token: string; params: import('@cindy/maker-shared/plugin-ui').PluginUiValues; sequence: number; visible: boolean }): Promise<void> => ipcRenderer.invoke(PLUGIN_TAB_VIEW_UPDATE, input),
+        release: (token: string, moving: boolean): Promise<void> => ipcRenderer.invoke(PLUGIN_TAB_VIEW_RELEASE, { token, moving }),
+      },
+      read: (request: PluginUiReadRequest): Promise<PluginUiReadResult> => ipcRenderer.invoke(PLUGIN_UI_READ, request),
+      invoke: (request: PluginUiInvokeRequest): Promise<PluginUiInvokeResult> => ipcRenderer.invoke(PLUGIN_UI_INVOKE, request),
+      chooseRenderer: (request: PluginUiChooseRendererRequest): Promise<void> => ipcRenderer.invoke(PLUGIN_UI_CHOOSE_RENDERER, request),
+      openPage: (request: PluginUiPageOpenRequest): Promise<string> => ipcRenderer.invoke(PLUGIN_UI_PAGE_OPEN, request),
+      closePage: (request: { pageId: string }): Promise<void> => ipcRenderer.invoke(PLUGIN_UI_PAGE_CLOSE, request),
+      release: (request: { subscriptionId: string }): Promise<void> => ipcRenderer.invoke(PLUGIN_UI_RELEASE, request),
+      onChanged: fanOutPluginUiChanged,
+      inspect: (): Promise<unknown> => ipcRenderer.invoke(PLUGIN_UI_INSPECT),
+    },
     reload: (id: string): Promise<{ state: string }> => ipcRenderer.invoke('ghosts:reload', id),
     // Library(持久作品库)设置面:概览/选位置(宿主弹原生选择器)/绑定/
     // 迁移/回默认/解绑/删除。删除的破坏性确认在 Renderer 完成。
@@ -2301,6 +2347,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke(AGENT_ISLAND_SET_SOUND_SETTINGS_CHANNEL, settings),
     setMascotSkin: (skin: AgentIslandMascotSkin): Promise<{ ok: true }> =>
       ipcRenderer.invoke(AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL, skin),
+    setSubtleReminders: (enabled: boolean): Promise<{ ok: true }> =>
+      ipcRenderer.invoke(AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL, enabled),
     setDisplayTarget: (target: AgentIslandDisplayTarget): Promise<{ ok: true }> =>
       ipcRenderer.invoke(AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL, target),
     getDisplayOptions: (): Promise<{
@@ -3073,6 +3121,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getCreditUsage: () => ipcRenderer.invoke(BILLING_INVOKE.GET_CREDIT_USAGE),
     getCatalog: () => ipcRenderer.invoke(BILLING_INVOKE.GET_CATALOG),
     listOrders: (payload) => ipcRenderer.invoke(BILLING_INVOKE.LIST_ORDERS, payload),
+    listPaymentHistory: (payload) => ipcRenderer.invoke(BILLING_INVOKE.LIST_PAYMENT_HISTORY, payload),
     getOrder: (payload) => ipcRenderer.invoke(BILLING_INVOKE.GET_ORDER, payload),
     createTopup: (payload) => ipcRenderer.invoke(BILLING_INVOKE.CREATE_TOPUP, payload),
     refreshTopup: (payload) => ipcRenderer.invoke(BILLING_INVOKE.REFRESH_TOPUP, payload),

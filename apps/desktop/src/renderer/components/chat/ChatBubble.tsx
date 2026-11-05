@@ -10,7 +10,7 @@ export function ChatBubble({ speaker = 'assistant', bare = false, className, ...
   /** Ordinary task replies and an empty stream have no bubble surface. */
   bare?: boolean;
 }) {
-  return <div {...props} className={cn(
+  return <div {...props} data-plugin-appearance-region="message" data-plugin-appearance-speaker={speaker} className={cn(
     CHAT_BODY_CLASS,
     bare ? 'w-full min-w-0' : 'relative min-w-0 max-w-full rounded-xl border',
     speaker === 'user'

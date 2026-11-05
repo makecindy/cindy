@@ -1,4 +1,15 @@
 {
+  "pluginUi": {
+    "renderer": "Exibição",
+    "original": "Original",
+    "unavailable": "Os controles do plugin estão indisponíveis. As ações estão desativadas.",
+    "outcome-unknown": "O resultado não foi confirmado. Confira o estado atual do plugin.",
+    "rejected": "O plugin não executou esta ação. Sua entrada foi mantida.",
+    "draftChanged": "Sua entrada mudou. A alteração do plugin não foi aplicada.",
+    "editorUnavailable": "Este campo está indisponível. A alteração do plugin não foi aplicada.",
+    "more": "Mais",
+    "close": "Fechar"
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "Atualizar cota",
@@ -2386,6 +2397,9 @@
     "agentIsland": {
       "title": "Agent Island",
       "unsupported": "O Agent Island requer macOS 14 ou posterior.",
+      "subtleRemindersLabel": "Avisos discretos",
+      "subtleRemindersHint": "Quando houver novas mensagens, pedidos de resposta ou erros, o ícone muda em vez de mostrar um cartão de notificação abaixo da ilha. Clique na ilha para ver a lista completa de tarefas.",
+      "subtleRemindersFailed": "Não foi possível salvar as configurações dos avisos. Tente novamente.",
       "enableLabel": "Mostrar Agent Island",
       "enableHint": "Mostra tarefas em execução, que precisam de resposta e concluídas não lidas no topo da tela. Ao ativar, as notificações equivalentes do sistema são suprimidas para evitar alertas duplicados.",
       "enableAria": "Ativar ou desativar Agent Island",
@@ -3554,7 +3568,7 @@
         "formatIdentity": "Obrigatório. Defina kind como \"custom\" e name como o nome do provedor que deseja exibir.",
         "formatAuth": "Obrigatório. Neste exemplo, defina method como \"apiKey\" e substitua apiKey pela chave do seu provedor.",
         "formatEndpoint": "Obrigatório para cada endpoint. protocol aceita \"openai-chat\", \"openai-responses\", \"anthropic-messages\" e \"google-generative-ai\". Defina baseUrl como a URL HTTP(S) completa do endpoint; HTTPS é recomendado.",
-        "formatTargets": "Array engine opcional: \"claude-code\", \"codex\" ou \"pi\". Omita-o para associar engines por protocolo ou especifique as engines explicitamente. Claude Code também oferece suporte aos protocolos OpenAI e Google. O exemplo habilita apenas Pi.",
+        "formatTargets": "Lista opcional de mecanismos: \"claude-code\", \"codex\" ou \"pi\". Omita-a para associar mecanismos por protocolo ou especifique os mecanismos explicitamente. O Claude Code também oferece suporte aos protocolos OpenAI e Google. O exemplo habilita apenas o Pi.",
         "formatModels": "Opcional. Use strings de ID de modelo ou objetos com id (name é opcional). Omita a lista ou deixe-a vazia para buscar modelos após a confirmação. Uma lista não vazia pula a busca automática.",
         "formatMetadata": "Campos opcionais de modelo: group é o grupo do modelo, contextWindow é o tamanho do contexto e maxOutputTokens é o limite de saída (ambos em tokens). Os números do exemplo são ilustrativos; use as capacidades reais do modelo.",
         "formatEffort": "Campos opcionais de modelo: efforts lista os níveis de esforço aceitos; defaultEffort seleciona um deles como padrão. Remova ambos os campos se não tiver certeza.",
@@ -4021,6 +4035,7 @@
             "hint": "Aplica-se à conexão de Images de {{agent}}. Declare apenas capacidades realmente compatíveis com a API. Reabra os detalhes de Art após salvar."
           },
           "capabilityHint": "Usa as capacidades declaradas por este provedor. Quando não declarado, o suporte a imagens é inferido pelo nome do modelo.",
+          "imageInputDefault": "{{value}} (padrão)",
           "imageInput": "Entrada de imagem",
           "imageInputMixed": "Varia conforme o mecanismo",
           "supported": "Compatível",
@@ -5726,6 +5741,7 @@
           "checking": "Verificando atualizações…",
           "upToDate": "Atualizado",
           "checkFailed": "Não foi possível verificar atualizações",
+          "rateLimited": "O GitHub está limitando as verificações",
           "lastChecked": "Última verificação: {{time}}",
           "check": "Verificar atualizações",
           "retry": "Tentar novamente",
@@ -7774,6 +7790,8 @@
         "skill": "Adiciona a Skill \"{{name}}\" aos seus assistentes de IA",
         "skillDetail": "Uma Skill é um arquivo de instruções que a IA carrega e segue como suas próprias instruções, com todas as suas permissões, no Claude Code e no Codex, em todos os projetos — ela não fica restrita à sandbox deste plugin. Permanece disponível enquanto o plugin está ativado e é removida quando ele é desativado ou desinstalado; desativar o plugin para uma única pasta não a oculta. O texto completo da Skill não pode ser visualizado aqui — instale apenas plugins em que você confia.",
         "routineEvents": "Eventos de rotina",
+        "nativeUi": "Adicionar controles às tarefas",
+        "nativeTabView": "Abrir a visualização “{{title}}”",
         "mcpUi": "Exibir páginas interativas na conversa",
         "mcpUiDomains": "Domínios de rede da página: {{domains}}",
         "mcpAppOnly": "Somente página",
@@ -13218,6 +13236,12 @@
       "text": "Uma execução automática falhou.",
       "precheck": "As verificações automáticas estão temporariamente bloqueadas.",
       "rateLimited": "As verificações automáticas estão temporariamente bloqueadas por um limite de frequência de solicitações.",
+      "pluginMissing": "As verificações automáticas estão bloqueadas: o plugin {{name}} não está instalado. Elas serão retomadas após a instalação.",
+      "pluginMissingUnnamed": "As verificações automáticas estão bloqueadas: um plugin necessário não está instalado. Elas serão retomadas após a instalação.",
+      "pluginDisabled": "As verificações automáticas estão bloqueadas: o plugin {{name}} está desativado. Elas serão retomadas após a ativação.",
+      "pluginDisabledUnnamed": "As verificações automáticas estão bloqueadas: um plugin necessário está desativado. Elas serão retomadas após a ativação.",
+      "installPlugin": "Instalar plugin",
+      "openPlugin": "Abrir plugin",
       "dismissTitle": "Dispensar aviso de falha anterior"
     },
     "worktreeRestoreBanner": {
@@ -17518,6 +17542,7 @@
     "sidebar": "Saldo e planos",
     "settings": {
       "title": "Uso e cobrança",
+      "supportHint": "Está com algum problema? Entre em contato pelo {{email}} para obter ajuda.",
       "subscriptionCard": {
         "title": "Plano atual",
         "empty": "Nenhuma assinatura ativa",
@@ -17592,14 +17617,38 @@
     },
     "orders": {
       "title": "Histórico de pedidos",
-      "description": "São listados apenas pedidos de recarga e assinatura iniciados no Cindy. Pedidos aguardando pagamento são cancelados automaticamente quando o prazo expira.",
+      "description": "Recargas pagas e faturas de assinatura quitadas.",
+      "history": {
+        "loadFailed": "Não foi possível carregar o histórico de pedidos",
+        "retry": "Recarregar pedidos",
+        "unknownPaidAt": "Data de pagamento indisponível",
+        "unknownAmount": "Valor indisponível",
+        "refundedAmount": "Reembolsado: {{amount}}",
+        "refunded": "Reembolsado",
+        "partiallyRefunded": "Reembolso parcial",
+        "noPayment": "Nenhum pagamento necessário",
+        "page": "Página {{page}}",
+        "previous": "Página anterior",
+        "next": "Próxima página"
+      },
       "count": "{{count}} pedidos",
-      "incomplete": "Há muitos registros de pedidos. Apenas os {{count}} mais recentes são exibidos.",
       "orderId": "Nº {{id}}",
       "copy": {
         "action": "Copiar ID do pedido {{id}}",
         "success": "ID do pedido copiado",
         "failed": "Não foi possível copiar o ID do pedido — tente novamente"
+      },
+      "refund": {
+        "action": "Solicitar reembolso",
+        "title": "Solicitar reembolso",
+        "description": "Envie as informações abaixo para {{email}} para solicitar um reembolso.",
+        "emailSubject": "Solicitação de reembolso Cindy - {{orderId}}",
+        "sendAction": "Enviar solicitação de reembolso",
+        "gmailFallbackDescription": "Sua solicitação de reembolso inclui dados do pedido. Abrir o Gmail compartilhará essas informações com o Google. Continuar?",
+        "emailBody": "Olá, gostaria de solicitar o reembolso do pedido abaixo. Vocês podem me ajudar com essa solicitação?\n\nID do pedido: {{orderId}}\nID da transação do provedor: {{providerTransactionId}}\nAplicativo: {{application}}\nForma de pagamento: {{paymentMethod}}\nValor pago: {{amount}}\n\nProblema encontrado:\n(Descreva brevemente o que aconteceu)\n\nObrigado.",
+        "fields": {
+          "amount": "Valor pago"
+        }
       },
       "invoice": {
         "action": "Solicitar nota fiscal",
@@ -17609,7 +17658,7 @@
         "emailSubject": "Solicitação de nota fiscal para o pedido {{orderId}}",
         "personalInvoicePolicy": "As notas fiscais de recargas do Cindy Personal são emitidas <strong>em nome de uma pessoa física</strong> por padrão. Você pode usar seu nome ou “Pessoa física” como nome do destinatário da nota. Se precisar de uma nota fiscal em nome da sua empresa para reembolso de despesas, forneça <strong>uma declaração de reembolso com o carimbo oficial da empresa</strong> e especificando o nome do destinatário da nota.",
         "invoiceTitleHint": "Instruções: Para uma nota fiscal de pessoa física, informe seu nome ou “Pessoa física”. Para uma nota fiscal em nome da sua empresa para reembolso de despesas, anexe uma declaração de reembolso com o carimbo oficial da empresa e especificando o nome do destinatário da nota.",
-        "emailBody": "Olá,\n\nGostaria de solicitar uma nota fiscal para o seguinte pedido:\n\n────────────────────\nID do pedido: {{orderId}}\nAplicativo: {{application}}\nForma de pagamento: {{paymentMethod}}\nValor da nota fiscal: {{amount}}\nNome do destinatário da nota: \n{{invoiceTitleHint}}\n\nPessoa de contato: \nTelefone: \nE-mail: \n────────────────────\n\nAgradeço.",
+        "emailBody": "Olá,\n\nGostaria de solicitar uma nota fiscal para o seguinte pedido:\n\n────────────────────\nID do pedido: {{orderId}}\nID da transação do provedor: {{providerTransactionId}}\nAplicativo: {{application}}\nForma de pagamento: {{paymentMethod}}\nValor da nota fiscal: {{amount}}\nNome do destinatário da nota: \n{{invoiceTitleHint}}\n\nPessoa de contato: \nTelefone: \nE-mail: \n────────────────────\n\nAgradeço.",
         "sendAction": "Enviar solicitação de nota fiscal",
         "emailCopied": "E-mail de suporte copiado",
         "emailCopyFailed": "Não foi possível copiar o e-mail de suporte — tente novamente",
@@ -17620,6 +17669,7 @@
         "notAvailable": "Indisponível",
         "fields": {
           "orderId": "ID do pedido",
+          "providerTransactionId": "ID da transação do provedor",
           "application": "Aplicativo",
           "paymentMethod": "Forma de pagamento",
           "amount": "Valor da nota fiscal",

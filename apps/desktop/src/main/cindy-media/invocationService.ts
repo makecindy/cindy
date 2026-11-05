@@ -212,7 +212,7 @@ function providerImageGuide(
     schemaVersion: MODEL_ACCESS_INVOCATION_GUIDE_SCHEMA_VERSION,
     guideId: CLIENT_PROVIDER_IMAGE_GUIDE_ID,
     modelId: model.id,
-    revision: '3',
+    revision: '4',
     connection: { providerId: model.providerId },
     capability,
     request: {
@@ -230,16 +230,19 @@ function providerImageGuide(
         { path: ['image'], encoding: 'base64', kind: 'image' },
       ],
     },
-    instructions: edit
+    instructions: (edit
       ? '必填 prompt 和 image。image 可传一条 Cindy 本地媒体引用或引用数组。尺寸与质量参数见 inputSchema；不要丢弃用户的明确要求。'
-      : '必填 prompt。尺寸与质量参数见 inputSchema；不指定时由上游决定。model 与凭证由 Cindy 注入。',
+      : '必填 prompt。尺寸与质量参数见 inputSchema；不指定时由上游决定。model 与凭证由 Cindy 注入。') +
+      (model.imageProtocol
+        ? ` 可在 body 中直接添加 ${model.imageProtocol} 协议的原生参数，字段名和嵌套结构遵循 official_docs，不受上述便捷参数清单限制；由上游校验支持情况并返回错误。原生参数不改变 Cindy 选择的模型、连接、鉴权或参考图处理。当前调用只交付单张最终图片，不接收批量或流式结果。`
+        : ''),
     exampleBody: {
       prompt: edit ? '描述希望如何修改图片' : '描述希望生成的图片',
       ...(edit ? { image: 'cindy-media://blobs/<hash>.png' } : {}),
     },
     inputSchema: {
       type: 'object',
-      additionalProperties: false,
+      additionalProperties: Boolean(model.imageProtocol),
       required: edit ? ['prompt', 'image'] : ['prompt'],
       properties: {
         prompt: { type: 'string', minLength: 1 },
@@ -791,20 +794,28 @@ async function providerImageRequest(
   }
   let options: ImageParameters;
   try {
-    const fields = new Set(['model', 'prompt', 'image', 'aspect_ratio', 'size', 'resolution', 'quality']);
-    for (const key of Object.keys(body)) {
-      if (!fields.has(key)) throw new Error(`Unsupported image parameter: ${key}; use prepare.input_schema.`);
-    }
+    const nativeParameters = { ...body };
+    // These fields already have a host-owned path. Every other body field is
+    // a native option; upstream additions do not require another allowlist edit.
+    for (const key of ['model', 'prompt', 'image', 'aspect_ratio', 'size', 'resolution', 'quality'])
+      delete nativeParameters[key];
     options = normalizeImageParameters(model.imageProtocol, model.id, {
       aspectRatio: body.aspect_ratio as string | undefined,
       size: body.size as string | undefined,
       resolution: body.resolution as string | undefined,
       quality: body.quality as string | undefined,
+      nativeParameters,
     });
   } catch (error) {
     throw new MediaInvocationError('REQUEST_INVALID', (error as Error).message);
   }
   const imagePaths: string[] = [];
+  const state = { nodes: 0, localInputs: 0, localBytes: 0 };
+  if (options.nativeParameters) {
+    options.nativeParameters = await expandLocalMediaRefs(
+      options.nativeParameters, state,
+    ) as Record<string, unknown>;
+  }
   if (invocation.capability === 'image.edit') {
     const raw = body.image;
     const refs = typeof raw === 'string' ? [raw] : Array.isArray(raw) ? raw : [];
@@ -814,8 +825,13 @@ async function providerImageRequest(
     ) {
       throw new MediaInvocationError('REQUEST_INVALID', 'image.edit 必须提供本地图片引用');
     }
-    const state = { localInputs: 0, localBytes: 0 };
     for (const ref of refs as string[]) imagePaths.push(await localImagePath(ref, state));
+  }
+  const requestBytes = Buffer.byteLength(JSON.stringify({
+    ...body, ...options.nativeParameters, model: model.id,
+  }), 'utf8');
+  if (requestBytes > invocation.guide.request.maxRequestBytes) {
+    throw new MediaInvocationError('REQUEST_TOO_LARGE', `请求 body 超过 ${invocation.guide.request.maxRequestBytes} 字节限制`);
   }
   return {
     prompt,

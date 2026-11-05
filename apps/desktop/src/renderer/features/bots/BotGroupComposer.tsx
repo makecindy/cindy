@@ -62,6 +62,7 @@ import {
   getDraft,
   isDraftDiscardTokenCurrent,
   saveDraft,
+  subscribeDraftContent,
 } from '@/lib/composerDraftStore';
 import type { AttachedFile } from '@/lib/fileTypes';
 import { isAnnotationBurnInError, materializeAnnotatedAttachmentsForSend } from '@/lib/annotationBurnIn';
@@ -244,8 +245,12 @@ export function BotGroupComposer({
   const [division, setDivision] = useState(false);
   const divisionRef = useRef(division);
   divisionRef.current = division;
+  const savedEdit = thread ? undefined : getDraft(draftKey)?.botGroupEdit;
   const groupAttemptRef = useRef<{ clientId: string; signature: string; enqueueOperationId?: string;
-    editSource?: { groupId: string; clientId: string; revision: number } } | null>(null);
+    editSource?: { groupId: string; clientId: string; revision: number } } | null>(
+      savedEdit?.source.groupId === groupId
+        ? { clientId: savedEdit.clientId, signature: savedEdit.signature, editSource: savedEdit.source,
+            enqueueOperationId: savedEdit.enqueueOperationId } : null);
   const [menuOpen, setMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -316,10 +321,21 @@ export function BotGroupComposer({
     if (!existing && !value) return;
     saveDraft(
       draftKey,
-      { ...existing, attachments: existing?.attachments ?? [], text: value ? botGroupDraftDoc(value) : null },
+      { ...existing, attachments: existing?.attachments ?? [], text: value ? botGroupDraftDoc(value) : null,
+        botGroupEdit: groupAttemptRef.current?.editSource
+          ? { source: groupAttemptRef.current.editSource, signature: groupAttemptRef.current.signature,
+              clientId: groupAttemptRef.current.clientId, enqueueOperationId: groupAttemptRef.current.enqueueOperationId } : undefined },
       { silent: true },
     );
   }).current;
+  useEffect(() => {
+    if (thread) return;
+    const owner = getDataOwnerGeneration();
+    return subscribeDraftContent(draftKey, () => {
+      if (isDataOwnerGenerationCurrent(owner) && groupAttemptRef.current?.editSource
+        && !getDraft(draftKey)?.botGroupEdit) groupAttemptRef.current = null;
+    });
+  }, [draftKey, thread]);
   useEffect(() => {
     const timer = window.setTimeout(() => persistDraft(text), DRAFT_SAVE_DELAY_MS);
     return () => window.clearTimeout(timer);
@@ -451,6 +467,7 @@ export function BotGroupComposer({
             onQuoteChangeRef.current?.(entry.quote);
           }
           if (entry.files.length > 0) attachmentsRef.current = restoreAttachmentsRef.current(entry.files);
+          persistDraft(entry.draft);
           return true;
         },
         notifyFailed: (errorKey) => toast.error(tRef.current(errorKey)),
@@ -510,6 +527,17 @@ export function BotGroupComposer({
       return;
     } finally { sendingRef.current = false; setSending(false); }
     if (groupAttemptRef.current === attempt) groupAttemptRef.current = null;
+    // A remounted composer may already hold newer text. Consume only this edit's
+    // metadata; its live subscriber also retires the restored attempt.
+    if (attempt.editSource && isDataOwnerGenerationCurrent(owner)
+      && isDraftDiscardTokenCurrent(discardTokenRef.current)) {
+      const saved = getDraft(draftKey);
+      const source = saved?.botGroupEdit?.source;
+      if (saved && source?.groupId === attempt.editSource.groupId
+        && source.clientId === attempt.editSource.clientId && source.revision === attempt.editSource.revision) {
+        saveDraft(draftKey, { ...saved, botGroupEdit: undefined }, { silent: true });
+      }
+    }
     // A durable enqueue may return after another input/target/account has taken its place.
     if (!isDataOwnerGenerationCurrent(owner) || !isDraftDiscardTokenCurrent(discardTokenRef.current)
       || inputVersion.current.revision !== revision) return;

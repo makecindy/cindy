@@ -11,7 +11,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { captureDraftDiscardToken, clearDraft, getAllDraftAttachmentUrls, getDraft, isDraftDiscardTokenCurrent, saveDraft } from '@/lib/composerDraftStore';
 import { FeatureSidebarSlotProvider, useFeatureContentHeader } from '../../feature-context';
 import { markBotRead, getBotLastReadAt, botGroupReadKey, resetBotReadStateForTests } from '../botReadState';
-import { botGroupAttachmentScope, botGroupThreadDraftKey } from '../botGroupAttachments';
+import { botGroupAttachmentScope, botGroupDraftDoc, botGroupThreadDraftKey } from '../botGroupAttachments';
 import { getBotGroupListSnapshot, refreshBotGroups, resetBotGroupStoreForTests } from '../botGroupStore';
 import { botGroupSendSignature, enqueueBotGroupSend, getBotGroupOutbox, getBotGroupOutboxPreviews, resetBotGroupOutboxForTests } from '../botGroupOutbox';
 import type { BotGroupOutboxCommandRequest, BotGroupOutboxCommandResult, BotGroupOutboxStoredEntry } from '../../../../shared/botGroupOutboxStorage';
@@ -397,6 +397,81 @@ describe('BotGroupChatView', () => {
     expect(attempts[1]!.entry.input.clientId).toBe(attempts[0]!.entry.input.clientId);
     expect(attempts[1]!.entry.files).toEqual(attempts[0]!.entry.files);
     expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+  });
+
+  it.each(['unchanged', 'changed', 'attachment', 'lost-reply', 'late-reply'])('keeps the failed edit source across composer remount (%s)', async mode => {
+    const enqueues: Extract<BotGroupOutboxCommandRequest, { action: 'enqueue' }>[] = [];
+    let stored: BotGroupOutboxStoredEntry[] = [];
+    let revision = 0;
+    let releaseReply!: () => void;
+    window.electronAPI.maker.botGroupOutbox = async () => [];
+    window.electronAPI.maker.botGroupOutboxCommand = async request => {
+      if (request.action === 'enqueue') {
+        enqueues.push(request);
+        if (mode === 'lost-reply' && enqueues.length === 3) {
+          return { ...localResult(request, stored), revision, accepted: true };
+        }
+        const source = request.editSource;
+        if (source) stored = stored.filter(row => row.input.clientId !== source.clientId);
+        stored = [...stored, { ...request.entry, entryRevision: ++revision, queueOrdinal: revision,
+          status: 'failed', retryable: false }];
+        if (mode === 'lost-reply' && enqueues.length === 2) throw new Error('committed reply lost');
+        if (mode === 'late-reply' && enqueues.length === 2) await new Promise<void>(resolve => { releaseReply = resolve; });
+        return { ...localResult(request, stored), revision, accepted: true };
+      }
+      if (request.action === 'edit') {
+        stored = [{ ...stored[0]!, entryRevision: ++revision,
+          editHold: { operationId: request.operationId, revision } }];
+      }
+      return { ...localResult(request, stored), revision };
+    };
+    const input = { groupId: 'g1', clientId: 'edited-original', text: 'original failed draft',
+      mentions: { all: false, botIds: [] } };
+    await enqueueBotGroupSend({ input, signature: botGroupSendSignature(input, '[]'), draft: input.text,
+      tracked: [], files: [], attachmentScope: botGroupAttachmentScope('g1'), enqueueOperationId: 'original-edit' });
+    const first = renderView();
+    await screen.findByRole('textbox');
+    fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.outbox.edit' }));
+    await waitFor(() => expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe(input.text));
+    const text = mode === 'changed' || mode === 'lost-reply' || mode === 'late-reply' ? 'edited draft after navigation' : input.text;
+    if (text !== input.text) fireEvent.change(screen.getByRole('textbox'), { target: { value: text } });
+    if (mode === 'attachment') {
+      pickFiles([diskFile('edited-note.txt', 'text/plain')]);
+      await waitFor(() => expect(getDraft(botGroupAttachmentScope('g1'))?.attachments).toHaveLength(1));
+    }
+    first.unmount();
+    const second = renderView();
+    const restored = await screen.findByRole('textbox') as HTMLTextAreaElement;
+    expect(restored.value).toBe(text);
+    fireEvent.keyDown(restored, { key: 'Enter' });
+    await waitFor(() => expect(enqueues).toHaveLength(2));
+    expect(enqueues[1]!.editSource).toEqual({ groupId: 'g1', clientId: input.clientId, revision: 2 });
+    expect(enqueues[1]!.entry.input.clientId === input.clientId).toBe(mode === 'unchanged');
+    expect(stored.filter(row => row.editHold)).toHaveLength(0);
+    if (mode === 'late-reply') {
+      second.unmount();
+      renderView();
+      fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'newer draft while saving' } });
+      await waitFor(() => expect(getDraft(botGroupAttachmentScope('g1'))?.text).toEqual(botGroupDraftDoc('newer draft while saving')));
+      releaseReply();
+      await waitFor(() => expect(getDraft(botGroupAttachmentScope('g1'))?.botGroupEdit).toBeUndefined());
+      expect(getDraft(botGroupAttachmentScope('g1'))?.text).toEqual(botGroupDraftDoc('newer draft while saving'));
+      fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+      await waitFor(() => expect(enqueues).toHaveLength(3));
+      expect(enqueues[2]!.editSource).toBeUndefined();
+    }
+    if (mode === 'lost-reply') {
+      await waitFor(() => expect(mocks.toastError).toHaveBeenCalled());
+      second.unmount();
+      renderView();
+      const retry = await screen.findByRole('textbox') as HTMLTextAreaElement;
+      expect(retry.value).toBe(text);
+      fireEvent.keyDown(retry, { key: 'Enter' });
+      await waitFor(() => expect(enqueues).toHaveLength(3));
+      expect(enqueues[2]!.entry.input.clientId).toBe(enqueues[1]!.entry.input.clientId);
+      expect(enqueues[2]!.enqueueOperationId).toBe(enqueues[1]!.enqueueOperationId);
+      expect(enqueues[2]!.editSource).toEqual(enqueues[1]!.editSource);
+    }
   });
 
   it('does not overwrite newer input after an edit hold commits asynchronously', async () => {
@@ -1052,6 +1127,21 @@ describe('BotGroupChatView', () => {
         await user.click(screen.getByText('Preview note content'));
         expect(preview.contains(document.activeElement)).toBe(true);
       } else expect(preview.contains(document.activeElement)).toBe(true);
+    }
+    // CI regression: FocusScope's programmatic entry focus does not guarantee
+    // an open tooltip after the preview finishes loading. Establish keyboard
+    // focus explicitly; still require tooltip -> preview -> thread Escape order.
+    if (kind === 'text-trigger' || kind === 'text-control') {
+      const focusedControl = document.activeElement;
+      await user.tab();
+      await user.tab({ shift: true });
+      expect(document.activeElement).toBe(focusedControl);
+      await screen.findByRole('tooltip');
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
+      expect(document.contains(preview)).toBe(true);
+      expect(screen.getByRole('complementary')).toBe(panel);
+      expect((within(panel).getByRole('textbox') as HTMLTextAreaElement).value).toBe('Unsent thread reply');
     }
     await user.keyboard('{Escape}');
     expect(screen.getByRole('complementary')).toBe(panel);

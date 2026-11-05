@@ -798,9 +798,6 @@
     "apps/desktop/src/renderer/components/settings/__tests__/RemoteSection.addFormOrder.test.ts": {
       "sourceReads": 1
     },
-    "apps/desktop/src/renderer/components/settings/__tests__/settingsSearchCatalog.test.ts": {
-      "sourceReads": 1
-    },
     "apps/desktop/src/renderer/components/settings/usage/__tests__/usageHistoryDevices.test.tsx": {
       "sourceReads": 1
     },

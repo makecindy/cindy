@@ -1,4 +1,15 @@
 {
+  "pluginUi": {
+    "renderer": "表示方法",
+    "original": "元の内容",
+    "unavailable": "プラグインの画面を利用できません。操作は無効になっています。",
+    "outcome-unknown": "操作結果を確認できていません。プラグインの最新の状態を確認してください。",
+    "rejected": "プラグインはこの操作を実行していません。入力内容は保持されています。",
+    "draftChanged": "入力が変更されたため、プラグインによる入力の変更は適用されませんでした。",
+    "editorUnavailable": "現在の入力欄を利用できないため、プラグインによる入力の変更は適用されませんでした。",
+    "more": "その他",
+    "close": "閉じる"
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "クォータを更新",
@@ -2321,6 +2332,9 @@
     "agentIsland": {
       "title": "Agent Island",
       "unsupported": "Agent Island を利用するには macOS 14 以降が必要です。",
+      "subtleRemindersLabel": "控えめな通知",
+      "subtleRemindersHint": "新着メッセージ、返答が必要な項目、エラーは、アイランドの下に通知カードを表示せず、アイコンの変化で知らせます。アイランドをクリックすると、タスク一覧を確認できます。",
+      "subtleRemindersFailed": "通知設定を保存できませんでした。もう一度お試しください。",
       "enableLabel": "Agent Island を表示",
       "enableHint": "実行中、返信が必要、未読の完了タスクを画面上部に表示します。オンにすると同種のシステム通知を抑制し、二重通知を防ぎます。",
       "enableAria": "Agent Island を切り替え",
@@ -3928,6 +3942,7 @@
             "hint": "{{agent}} の画像接続に適用します。API が実際に対応する機能のみを指定してください。保存後に Art の詳細を開き直してください。"
           },
           "capabilityHint": "このプロバイダーが宣言した機能を優先します。画像対応が未宣言の場合はモデル名から推定します。",
+          "imageInputDefault": "{{value}}（デフォルト）",
           "imageInput": "画像入力",
           "imageInputMixed": "エンジンごとに異なる",
           "supported": "対応",
@@ -5628,6 +5643,7 @@
           "checking": "更新を確認中…",
           "upToDate": "最新バージョンです",
           "checkFailed": "更新を確認できませんでした",
+          "rateLimited": "GitHub によるレート制限中です",
           "lastChecked": "前回の確認: {{time}}",
           "check": "更新を確認",
           "retry": "再試行",
@@ -7664,6 +7680,8 @@
         "skill": "AI アシスタントにスキル「{{name}}」を追加します",
         "skillDetail": "スキルは AI が自分の指示として読み込んで実行する指示ファイルです。あなたの全権限で、Claude Code と Codex のすべてのプロジェクトに適用され、このプラグインのサンドボックスには制限されません。プラグインが有効な間は利用可能で、無効化またはアンインストールすると削除されます。特定のフォルダーだけでプラグインをオフにしても非表示にはなりません。ここではスキルの全文をプレビューできません——信頼できるプラグインのみをインストールしてください。",
         "routineEvents": "ルーティンイベント",
+        "nativeUi": "タスクにコントロールを追加",
+        "nativeTabView": "独立ビュー「{{title}}」を開く",
         "mcpUi": "会話にインタラクティブなページを表示",
         "mcpUiDomains": "ページが接続できるドメイン：{{domains}}",
         "mcpAppOnly": "ページ専用",
@@ -13079,6 +13097,12 @@
       "text": "自動実行に失敗した記録があります。",
       "precheck": "自動チェックが一時的に停止しています。",
       "rateLimited": "リクエスト制限により自動チェックが一時的に停止しています。",
+      "pluginMissing": "自動チェックが停止しています：「{{name}}」プラグインがインストールされていません。インストールすると自動で再開します。",
+      "pluginMissingUnnamed": "自動チェックが停止しています：必要なプラグインがインストールされていません。インストールすると自動で再開します。",
+      "pluginDisabled": "自動チェックが停止しています：「{{name}}」プラグインが有効になっていません。有効にすると自動で再開します。",
+      "pluginDisabledUnnamed": "自動チェックが停止しています：必要なプラグインが有効になっていません。有効にすると自動で再開します。",
+      "installPlugin": "プラグインをインストール",
+      "openPlugin": "プラグインを開く",
       "dismissTitle": "過去の失敗通知を閉じる"
     },
     "worktreeRestoreBanner": {
@@ -17289,6 +17313,7 @@
     "sidebar": "残高とプラン",
     "settings": {
       "title": "使用量と請求",
+      "supportHint": "お困りの際は、{{email}} までお問い合わせください。",
       "subscriptionCard": {
         "title": "現在のプラン",
         "empty": "有効なサブスクリプションはありません",
@@ -17363,14 +17388,38 @@
     },
     "orders": {
       "title": "注文履歴",
-      "description": "Cindy 内で開始した残高チャージとサブスクリプションの注文のみを表示します。支払い待ちの注文は、期限を過ぎると自動的にキャンセルされます。",
+      "description": "支払い済みのチャージ注文と決済済みのサブスクリプション請求書を表示します。",
+      "history": {
+        "loadFailed": "注文履歴を読み込めませんでした",
+        "retry": "注文を再読み込み",
+        "unknownPaidAt": "支払日時不明",
+        "unknownAmount": "金額不明",
+        "refundedAmount": "返金済み {{amount}}",
+        "refunded": "返金済み",
+        "partiallyRefunded": "一部返金済み",
+        "noPayment": "支払い不要",
+        "page": "{{page}} ページ",
+        "previous": "前のページ",
+        "next": "次のページ"
+      },
       "count": "{{count}}件",
-      "incomplete": "注文履歴が多いため、最新の{{count}}件のみ表示しています。",
       "orderId": "NO. {{id}}",
       "copy": {
         "action": "注文 ID {{id}} をコピー",
         "success": "注文 ID をコピーしました",
         "failed": "注文 ID をコピーできませんでした。もう一度お試しください。"
+      },
+      "refund": {
+        "action": "返金を申請",
+        "title": "返金を申請",
+        "description": "返金を申請するには、以下の情報を {{email}} までメールでお送りください。",
+        "emailSubject": "Cindy 返金申請 - {{orderId}}",
+        "sendAction": "返金申請を送信",
+        "gmailFallbackDescription": "返金申請には注文情報が含まれます。Gmailを開くと、この情報がGoogleに共有されます。続行しますか？",
+        "emailBody": "以下の注文の返金を申請したく、ご連絡しました。ご対応をお願いいたします。\n\n注文 ID：{{orderId}}\n決済取引ID：{{providerTransactionId}}\nアプリケーション：{{application}}\n支払い方法：{{paymentMethod}}\n支払金額：{{amount}}\n\nお困りのこと：\n（状況を簡単にご記入ください）\n\nよろしくお願いいたします。",
+        "fields": {
+          "amount": "支払金額"
+        }
       },
       "invoice": {
         "action": "請求書を申請",
@@ -17380,7 +17429,7 @@
         "emailSubject": "注文 {{orderId}} の請求書発行申請",
         "personalInvoicePolicy": "Cindy個人版へのチャージでは、原則として<strong>個人宛ての請求書</strong>を発行します。宛名には氏名または「個人」を記載できます。会社の経費精算のために企業名義の請求書が必要な場合は、<strong>会社の公印を押印した経費精算説明書</strong>をご提出いただき、説明書に請求書の宛名を明記してください。",
         "invoiceTitleHint": "記入方法：個人宛ての場合は、氏名または「個人」を記載してください。会社の経費精算のために企業名義で発行する場合は、会社の公印を押印し、請求書の宛名を明記した経費精算説明書をメールに添付してください。",
-        "emailBody": "こんにちは。\n\n以下の注文について請求書の発行を申請します。\n\n────────────────────\n注文 ID：{{orderId}}\nアプリケーション：{{application}}\n支払い方法：{{paymentMethod}}\n請求金額：{{amount}}\n請求書宛名：\n{{invoiceTitleHint}}\n\n担当者名：\n電話番号：\nメールアドレス：\n────────────────────\n\nよろしくお願いいたします。",
+        "emailBody": "こんにちは。\n\n以下の注文について請求書の発行を申請します。\n\n────────────────────\n注文 ID：{{orderId}}\n決済取引ID：{{providerTransactionId}}\nアプリケーション：{{application}}\n支払い方法：{{paymentMethod}}\n請求金額：{{amount}}\n請求書宛名：\n{{invoiceTitleHint}}\n\n担当者名：\n電話番号：\nメールアドレス：\n────────────────────\n\nよろしくお願いいたします。",
         "sendAction": "請求書の申請を送信",
         "emailCopied": "サポートメールアドレスをコピーしました",
         "emailCopyFailed": "サポートメールアドレスをコピーできませんでした。もう一度お試しください。",
@@ -17391,6 +17440,7 @@
         "notAvailable": "情報なし",
         "fields": {
           "orderId": "注文 ID",
+          "providerTransactionId": "決済取引ID",
           "application": "アプリケーション",
           "paymentMethod": "支払い方法",
           "amount": "請求金額",

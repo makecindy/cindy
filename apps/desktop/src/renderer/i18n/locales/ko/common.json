@@ -1,4 +1,15 @@
 {
+  "pluginUi": {
+    "renderer": "표시 방식",
+    "original": "원본 내용",
+    "unavailable": "플러그인 화면을 사용할 수 없어 작업이 비활성화되었습니다.",
+    "outcome-unknown": "작업 결과가 확인되지 않았습니다. 플러그인의 최신 상태를 확인하세요.",
+    "rejected": "플러그인이 이 작업을 실행하지 않았습니다. 입력 내용은 유지됩니다.",
+    "draftChanged": "입력이 변경되어 플러그인의 입력 수정이 적용되지 않았습니다.",
+    "editorUnavailable": "현재 입력란을 사용할 수 없어 플러그인의 입력 수정이 적용되지 않았습니다.",
+    "more": "더 보기",
+    "close": "닫기"
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "할당량 새로 고침",
@@ -2321,6 +2332,9 @@
     "agentIsland": {
       "title": "Agent Island",
       "unsupported": "Agent Island를 사용하려면 macOS 14 이상이 필요합니다.",
+      "subtleRemindersLabel": "은은한 알림",
+      "subtleRemindersHint": "새 메시지, 응답이 필요한 항목, 오류가 있으면 아일랜드 아래로 알림 카드를 띄우지 않고 아이콘의 변화로 알려줍니다. 아일랜드를 클릭하면 전체 작업 목록을 볼 수 있습니다.",
+      "subtleRemindersFailed": "알림 설정을 저장하지 못했습니다. 다시 시도해 주세요.",
       "enableLabel": "Agent Island 표시",
       "enableHint": "실행 중, 응답 필요, 읽지 않은 완료 작업을 화면 상단에 표시합니다. 사용 설정 시 동종의 시스템 알림을 억제해 이중 알림을 방지합니다.",
       "enableAria": "Agent Island 전환",
@@ -3928,6 +3942,7 @@
             "hint": "{{agent}}의 이미지 연결에 적용됩니다. API가 실제로 지원하는 기능만 지정하세요. 저장 후 Art 상세 페이지를 다시 여세요."
           },
           "capabilityHint": "이 공급업체가 명시한 기능을 우선합니다. 이미지 지원 정보가 없으면 모델 이름으로 추정합니다.",
+          "imageInputDefault": "{{value}} (기본값)",
           "imageInput": "이미지 입력",
           "imageInputMixed": "엔진별로 다름",
           "supported": "지원",
@@ -5628,6 +5643,7 @@
           "checking": "업데이트 확인 중…",
           "upToDate": "최신 버전입니다",
           "checkFailed": "업데이트를 확인하지 못했습니다",
+          "rateLimited": "GitHub 요청 한도에 걸렸습니다",
           "lastChecked": "마지막 확인: {{time}}",
           "check": "업데이트 확인",
           "retry": "다시 시도",
@@ -7664,6 +7680,8 @@
         "skill": "AI 어시스턴트에 스킬 \"{{name}}\"을(를) 추가합니다",
         "skillDetail": "스킬은 AI가 자신의 지시로 읽어들여 실행하는 지시 파일입니다. 사용자의 전체 권한으로 Claude Code와 Codex의 모든 프로젝트에 적용되며, 이 플러그인의 샌드박스에 제한되지 않습니다. 플러그인이 활성화된 동안 계속 사용 가능하며, 비활성화하거나 제거하면 삭제됩니다. 특정 폴더에서만 플러그인을 끄더라도 숨겨지지 않습니다. 여기서는 스킬 전문을 미리 볼 수 없습니다 — 신뢰할 수 있는 플러그인만 설치하세요.",
         "routineEvents": "루틴 이벤트",
+        "nativeUi": "작업에 컨트롤 추가",
+        "nativeTabView": "독립 보기 ‘{{title}}’ 열기",
         "mcpUi": "대화에 인터랙티브 페이지 표시",
         "mcpUiDomains": "페이지 연결 도메인: {{domains}}",
         "mcpAppOnly": "페이지 전용",
@@ -13079,6 +13097,12 @@
       "text": "실패한 자동 실행이 있습니다.",
       "precheck": "자동 확인이 일시적으로 차단되었습니다.",
       "rateLimited": "요청 한도 초과로 자동 확인이 일시적으로 차단되었습니다.",
+      "pluginMissing": "자동 확인이 차단되었습니다: '{{name}}' 플러그인이 설치되어 있지 않습니다. 설치하면 자동으로 재개됩니다.",
+      "pluginMissingUnnamed": "자동 확인이 차단되었습니다: 필요한 플러그인이 설치되어 있지 않습니다. 설치하면 자동으로 재개됩니다.",
+      "pluginDisabled": "자동 확인이 차단되었습니다: '{{name}}' 플러그인이 비활성화되어 있습니다. 활성화하면 자동으로 재개됩니다.",
+      "pluginDisabledUnnamed": "자동 확인이 차단되었습니다: 필요한 플러그인이 비활성화되어 있습니다. 활성화하면 자동으로 재개됩니다.",
+      "installPlugin": "플러그인 설치",
+      "openPlugin": "플러그인 열기",
       "dismissTitle": "이전 실패 알림 닫기"
     },
     "worktreeRestoreBanner": {
@@ -17289,6 +17313,7 @@
     "sidebar": "잔액 및 요금제",
     "settings": {
       "title": "사용량 및 결제",
+      "supportHint": "문제가 있나요? {{email}}로 문의해 도움을 받으세요.",
       "subscriptionCard": {
         "title": "현재 요금제",
         "empty": "활성 구독이 없습니다",
@@ -17363,14 +17388,38 @@
     },
     "orders": {
       "title": "주문 내역",
-      "description": "Cindy에서 시작한 잔액 충전 및 구독 주문만 표시합니다. 결제 대기 중인 주문은 시간이 지나면 자동으로 취소됩니다.",
+      "description": "결제된 충전 주문과 정산된 구독 청구서를 표시합니다.",
+      "history": {
+        "loadFailed": "주문 내역을 불러오지 못했습니다",
+        "retry": "주문 다시 불러오기",
+        "unknownPaidAt": "결제 일시 정보 없음",
+        "unknownAmount": "금액 정보 없음",
+        "refundedAmount": "환불액 {{amount}}",
+        "refunded": "환불됨",
+        "partiallyRefunded": "부분 환불됨",
+        "noPayment": "결제 불필요",
+        "page": "{{page}}페이지",
+        "previous": "이전 페이지",
+        "next": "다음 페이지"
+      },
       "count": "{{count}}건",
-      "incomplete": "주문 내역이 많아 최근 {{count}}건만 표시합니다.",
       "orderId": "NO. {{id}}",
       "copy": {
         "action": "주문 ID {{id}} 복사",
         "success": "주문 ID를 복사했습니다",
         "failed": "주문 ID를 복사하지 못했습니다. 다시 시도해 주세요."
+      },
+      "refund": {
+        "action": "환불 신청",
+        "title": "환불 신청",
+        "description": "환불을 신청하려면 다음 정보를 {{email}}로 보내 주세요.",
+        "emailSubject": "Cindy 환불 신청 - {{orderId}}",
+        "sendAction": "환불 신청 보내기",
+        "gmailFallbackDescription": "환불 신청에는 주문 정보가 포함됩니다. Gmail을 열면 이 정보가 Google에 공유됩니다. 계속하시겠어요?",
+        "emailBody": "안녕하세요. 아래 주문에 대한 환불을 신청하고 싶습니다. 확인 후 도움 부탁드립니다.\n\n주문 ID: {{orderId}}\n결제 거래 ID: {{providerTransactionId}}\n애플리케이션: {{application}}\n결제 수단: {{paymentMethod}}\n결제 금액: {{amount}}\n\n겪으신 문제:\n(어떤 상황이었는지 간단히 알려 주세요)\n\n감사합니다.",
+        "fields": {
+          "amount": "결제 금액"
+        }
       },
       "invoice": {
         "action": "세금계산서 신청",
@@ -17380,7 +17429,7 @@
         "emailSubject": "주문 {{orderId}} 세금계산서 발급 신청",
         "personalInvoicePolicy": "Cindy 개인용 충전 시 기본적으로 <strong>개인 명의의 세금계산서</strong>가 발급됩니다. 발급 명의는 성명 또는 “개인”으로 기재할 수 있습니다. 회사 경비 정산을 위해 기업 명의의 세금계산서가 필요한 경우, <strong>회사 직인이 날인된 경비 정산 설명서</strong>를 제출하고 설명서에 발급 명의를 명시해 주세요.",
         "invoiceTitleHint": "작성 안내: 개인 명의의 경우 성명 또는 “개인”을 기재해 주세요. 회사 경비 정산을 위해 기업 명의로 발급받으려면, 회사 직인이 날인되고 발급 명의가 명시된 경비 정산 설명서를 이메일에 첨부해 주세요.",
-        "emailBody": "안녕하세요.\n\n다음 주문에 대한 세금계산서 발급을 신청합니다.\n\n────────────────────\n주문 ID: {{orderId}}\n애플리케이션: {{application}}\n결제 수단: {{paymentMethod}}\n발행 금액: {{amount}}\n청구서 제목: \n{{invoiceTitleHint}}\n\n담당자: \n전화번호: \n이메일: \n────────────────────\n\n감사합니다.",
+        "emailBody": "안녕하세요.\n\n다음 주문에 대한 세금계산서 발급을 신청합니다.\n\n────────────────────\n주문 ID: {{orderId}}\n결제 거래 ID: {{providerTransactionId}}\n애플리케이션: {{application}}\n결제 수단: {{paymentMethod}}\n발행 금액: {{amount}}\n청구서 제목: \n{{invoiceTitleHint}}\n\n담당자: \n전화번호: \n이메일: \n────────────────────\n\n감사합니다.",
         "sendAction": "세금계산서 신청 보내기",
         "emailCopied": "고객센터 이메일을 복사했습니다",
         "emailCopyFailed": "고객센터 이메일을 복사하지 못했습니다. 다시 시도해 주세요.",
@@ -17391,6 +17440,7 @@
         "notAvailable": "정보 없음",
         "fields": {
           "orderId": "주문 ID",
+          "providerTransactionId": "결제 거래 ID",
           "application": "애플리케이션",
           "paymentMethod": "결제 수단",
           "amount": "발행 금액",
