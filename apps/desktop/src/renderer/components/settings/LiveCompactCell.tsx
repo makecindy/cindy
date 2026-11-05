@@ -23,6 +23,8 @@ import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
 import { formatBytes } from '@/features/cc-agent/workdir-browse/lib/fileMeta';
+import { liveCompactSettings } from './LiveCompactCell.settings-search';
+import { useSettingDefinition } from './useSettingDefinition';
 
 const log = createLogger('LiveCompactCell');
 
@@ -31,6 +33,8 @@ const UPSTREAM_URL = 'https://github.com/MerkyorLynn/dsh-live-compact';
 
 export function LiveCompactCell() {
   const { t } = useTranslation();
+  const setting = useSettingDefinition(liveCompactSettings.enable);
+  const shadowSetting = useSettingDefinition(liveCompactSettings.shadow);
   const [enabled, setEnabled] = useState(false);
   const [pending, setPending] = useState(false);
   // 首屏拉取期间禁用:避免「读到之前一律显示关闭」误导用户动手点。
@@ -129,19 +133,20 @@ export function LiveCompactCell() {
   }, [t]);
 
   return (
-    <div className="flex flex-col gap-3 px-4 py-4">
+    <div {...setting.anchorProps} className="flex flex-col gap-3 px-4 py-4">
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
           <p
             className="text-13 font-medium text-[var(--settings-section-sublabel)]"
             style={{ letterSpacing: '0.12px' }}
           >
-            {t('settings.liveCompact.cell.title')}
+            {setting.title}
           </p>
           <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {t('settings.liveCompact.cell.description')}{' '}
+            {setting.description}{' '}
             <button
               className="inline text-inherit underline decoration-dotted underline-offset-2 transition-colors hover:text-[var(--text-primary)] focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]"
+              data-settings-search-action="opens the upstream project page"
               onClick={() => void handleOpenUpstream()}
               title={UPSTREAM_URL}
               type="button"
@@ -152,6 +157,7 @@ export function LiveCompactCell() {
         </div>
 
         <Switch
+          {...setting.controlProps}
           checked={enabled}
           disabled={pending || loading}
           onCheckedChange={(v) => void handleToggle(v)}
@@ -163,15 +169,15 @@ export function LiveCompactCell() {
           字号与其它行一致,从属关系只靠缩进表达。 */}
       <div className="mt-3">
         <div aria-hidden className="mx-4 h-px bg-[var(--settings-theme-card-border)]" />
-        <div className="mt-3 flex items-center justify-between gap-3 pl-4">
+        <div className="mt-3 flex items-center justify-between gap-3 pl-4" {...shadowSetting.anchorProps}>
           <div className="flex min-w-0 flex-col gap-1">
             <span className="text-12 text-[var(--text-secondary)]">
-              {t('settings.liveCompact.shadow.label')}
+              {shadowSetting.title}
               {' · '}
               {shadowBytes === null ? t('settings.about.storage.unknown') : formatBytes(shadowBytes)}
             </span>
             <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t('settings.liveCompact.shadow.description')}
+              {shadowSetting.description}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -180,6 +186,7 @@ export function LiveCompactCell() {
               size="sm"
               compact
               type="button"
+              data-settings-search-action="opens the shadow directory in the file manager"
               onClick={() => void handleOpenShadowDir()}
             >
               {t('settings.liveCompact.shadow.openButton')}
@@ -189,6 +196,7 @@ export function LiveCompactCell() {
               size="sm"
               compact
               type="button"
+              data-settings-search-action="deletes the stored shadow snapshots"
               onClick={() => void handleClearShadow()}
               disabled={shadowBusy}
               aria-busy={shadowBusy || undefined}
