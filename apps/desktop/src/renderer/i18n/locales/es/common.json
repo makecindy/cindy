@@ -12792,7 +12792,7 @@
       "locked": "El cuadro de entrada no se puede editar ahora",
       "noAuxiliaryModel": "No hay ningún modelo auxiliar disponible. Configura uno en Ajustes para mejorar los prompts.",
       "openSettings": "Abrir ajustes",
-      "tooLong": "El límite para mejorar un borrador es de {max} caracteres. Acórtalo o divídelo en varias peticiones más pequeñas."
+      "tooLong": "El límite para mejorar un borrador es de {{max}} caracteres. Acórtalo o divídelo en varias peticiones más pequeñas."
     }
   },
   "onboarding": {

@@ -12792,7 +12792,7 @@
       "locked": "Le champ de saisie n'est pas modifiable pour le moment",
       "noAuxiliaryModel": "Aucun modèle auxiliaire disponible. Configurez-en un dans les réglages pour améliorer les prompts.",
       "openSettings": "Ouvrir les réglages",
-      "tooLong": "{max} caractères est la limite pour améliorer un brouillon. Raccourcissez-le ou divisez-le en plusieurs demandes plus petites."
+      "tooLong": "{{max}} caractères est la limite pour améliorer un brouillon. Raccourcissez-le ou divisez-le en plusieurs demandes plus petites."
     }
   },
   "onboarding": {

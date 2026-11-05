@@ -12690,7 +12690,7 @@
       "locked": "Die Eingabe ist derzeit nicht bearbeitbar",
       "noAuxiliaryModel": "Es ist kein Hilfsmodell verfügbar. Richte eines in den Einstellungen ein, um Prompts zu verbessern.",
       "openSettings": "Einstellungen öffnen",
-      "tooLong": "{max} Zeichen ist das Limit für die Verbesserung eines Entwurfs. Kürze ihn oder teile ihn in mehrere kleinere Aufgaben."
+      "tooLong": "{{max}} Zeichen ist das Limit für die Verbesserung eines Entwurfs. Kürze ihn oder teile ihn in mehrere kleinere Aufgaben."
     }
   },
   "onboarding": {

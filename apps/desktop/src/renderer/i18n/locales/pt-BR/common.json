@@ -12792,7 +12792,7 @@
       "locked": "A caixa de entrada não pode ser editada agora",
       "noAuxiliaryModel": "Nenhum modelo auxiliar disponível. Configure um nas configurações para melhorar os prompts.",
       "openSettings": "Abrir configurações",
-      "tooLong": "O limite para melhorar um rascunho é de {max} caracteres. Encurte-o ou divida-o em várias solicitações menores."
+      "tooLong": "O limite para melhorar um rascunho é de {{max}} caracteres. Encurte-o ou divida-o em várias solicitações menores."
     }
   },
   "onboarding": {
