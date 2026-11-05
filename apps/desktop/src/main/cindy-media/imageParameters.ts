@@ -34,8 +34,13 @@ const XAI_RATIOS = [
 const SIZE_RULE =
   'size must have edges divisible by 16, each <= 3840, aspect ratio <= 3:1, and 655360–8294400 total pixels. Use a supported generation size, then resize separately if exact final dimensions are needed.';
 const modelName = (model: string) => model.slice(model.lastIndexOf('/') + 1);
-const customSizes = (model: string) => /^gpt-image-2(?:$|\.)/.test(modelName(model));
+const gptImage26 = (model: string) => /^gpt-image-2\.6-(?:sunburst|flare)$/.test(modelName(model));
+const customSizes = (model: string) =>
+  !gptImage26(model) && /^gpt-image-2(?:$|\.)/.test(modelName(model));
 const oldGptImage = (model: string) => /^gpt-image-1(?:$|[.-])/.test(modelName(model));
+// The Images API documents standard sizes for 2.6, but does not yet state its
+// arbitrary-size limits. Do not assume the 2/2.5 limits apply to 2.6.
+const standardSizesOnly = (model: string) => oldGptImage(model) || gptImage26(model);
 
 function choices(values: string[], description?: string): Record<string, unknown> {
   return { type: 'string', enum: values, ...(description ? { description } : {}) };
@@ -54,7 +59,7 @@ export function imageParameterSchema(
         description:
           'Optional width:height ratio. Prefer size for exact dimensions; do not combine conflicting size and ratio.',
       },
-      size: oldGptImage(model)
+      size: standardSizesOnly(model)
         ? choices(['auto', ...Object.values(LEGACY_SIZES)])
         : {
             type: 'string',
@@ -63,7 +68,7 @@ export function imageParameterSchema(
               : 'auto or WIDTHxHEIGHT, subject to the selected model limits.',
           },
       quality: choices(
-        /^gpt-image-2\.5(?:-|$)/.test(modelName(model))
+        /^gpt-image-2\.5(?:-|$)/.test(modelName(model)) || gptImage26(model)
           ? ['auto', 'low', 'medium', 'high', 'xhigh', 'max']
           : ['auto', 'low', 'medium', 'high'],
         'draft → low; standard → medium; best → highest supported quality. Omit when unspecified.',
@@ -121,9 +126,9 @@ function validateSize(model: string, size: string): void {
 function aspectSize(model: string, aspect: string): string {
   if (aspect === 'auto') return 'auto';
   if (LEGACY_SIZES[aspect]) return LEGACY_SIZES[aspect];
-  if (oldGptImage(model))
+  if (standardSizesOnly(model))
     throw new Error(
-      'This model supports only 1:1, 3:2 and 2:3; choose another model for this aspect ratio.',
+      'This client accepts only 1:1, 3:2 and 2:3 for this model; choose another model for this aspect ratio.',
     );
   if (!/^\d{1,5}(?:\.\d{1,2})?:\d{1,5}(?:\.\d{1,2})?$/.test(aspect))
     throw new Error('aspect_ratio must be width:height');
