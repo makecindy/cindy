@@ -535,7 +535,7 @@ async function prepareAndStartRemoteAgentSession(
         cwd: workspace.workingDir,
         workspace,
         authorize: (action) => executor.check(action),
-        confirm: (action: ExecutorAction) => executor.confirm(action),
+        confirm: (action: ExecutorAction, signal: AbortSignal) => executor.confirm(action, signal),
         push: async (frames) => {
           await active?.push(frames);
         },
