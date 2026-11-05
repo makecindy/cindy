@@ -246,6 +246,14 @@ main 日志里 scope 为 `memory-usage` 的行是各进程内存采样（正式�
 `getAppMetrics()` 的 GPU 数字不含 IOSurface 等显存，macOS 上要看 GPU 进程真实占用用
 `footprint -p <pid>`。
 
+确认主进程在涨、要找是谁在涨时，在开发版日志目录的 `log-config.json` 写
+`"mainHeapSampling": true`（与 `level` 并列），重启后主进程常驻 V8 采样式堆分析（实现见
+`src/main/process-monitor/heap-sampling.ts`），每 30 分钟写一份到 `logs/heap-sampling/`，
+保留最近 48 份：`.heapprofile` 可在 Chrome DevTools 的 Memory 面板载入，`.summary.txt` 按
+「最近一帧应用代码」和「分配帧」两种口径列出仍存活的采样内存。对比前后几份摘要，持续
+变大的那几行就是泄漏点。不要在用户正在用的 GB 级主进程上拍完整堆快照：会冻结一两分钟
+并额外占用同等内存。正式版不读这个开关。
+
 ## 分层验证
 
 工作目录误报缺失或切到备用目录时，参见[工作目录异常日志判读](../working-directory-diagnostics.md)，
