@@ -261,6 +261,9 @@
     'localDb.sessions.get': (args) => rpc('/sessions/get', { sessionId: args?.[0] }),
     'localDb.sessions.list': () => rpc('/sessions/list'),
     'localDb.sessions.messages': async (args) => rpc('/sessions/messages', args),
+    'localDb.messages.list': (args) => rpc('/messages/list', { sessionId: args?.[0], limit: args?.[1]?.limit }),
+    'localDb.messages.estimatedSessionValue': (args) => rpc('/messages/estimated-value', { sessionId: args?.[0] }),
+    'localDb.messages.historyView': (args) => rpc('/messages/history-view', { sessionId: args?.[0], before: args?.[1]?.before ?? null }),
     'pluginMarket.listInstalled': () => rpc('/plugins/list'),
     'logToMain': (args) => {
       const [, scope, message] = args ?? [];

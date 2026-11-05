@@ -403,6 +403,27 @@ const server = createHostServer({
       availableModels,
     };
   },
+  // Usage totals come from the same session row the task list reads; the
+  // per-message breakdown stays with the windowed reader (host TODO).
+  estimatedSessionValue: async (sessionId: string) => {
+    const rows = await getDbClient().drizzle.select().from(sessionTable)
+      .where(eq(sessionTable.id, sessionId)).limit(1);
+    const row = rows[0];
+    if (!row) throw new Error('session not found');
+    return { totalValueUsd: row.totalCostUsd, entries: [] };
+  },
+  // The windowed history reader still lives behind Electron IPC; until it is
+  // ported the host answers only what it can prove: a task with no stored
+  // messages. A non-empty task fails loudly instead of showing an empty chat.
+  historyView: async (sessionId: string) => {
+    const { getMessagesForHistory } = await import('../../desktop/src/main/localDb/chatHistoryReader.ts');
+    const page = await getMessagesForHistory({
+      sessionIds: [sessionId], workdir: null, fromMs: null, toMs: null,
+      agentKind: null, roles: null, includeRewound: false, limit: 1, cursor: null, order: 'asc',
+    });
+    if (page.items.length > 0) throw new Error('history_view_not_implemented_on_host');
+    return { version: 1, items: [], nextCursor: null, hasMore: false };
+  },
   history: async (sessionId: string, limit: number) => {
     const { getMessagesForHistory } = await import('../../desktop/src/main/localDb/chatHistoryReader.ts');
     const page = await getMessagesForHistory({

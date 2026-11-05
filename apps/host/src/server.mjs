@@ -113,6 +113,19 @@ export function createHostServer(deps) {
           send(response, 200, { messages: await deps.history(String(body.sessionId ?? ''), Number(body.limit ?? 200)) });
           return;
         }
+        if (url.pathname === '/api/messages/estimated-value') {
+          send(response, 200, await deps.estimatedSessionValue(String(body.sessionId ?? '')));
+          return;
+        }
+        if (url.pathname === '/api/messages/history-view') {
+          send(response, 200, await deps.historyView(String(body.sessionId ?? ''), body.before ?? null));
+          return;
+        }
+        // The preload contract for `localDb.messages.list()` is a bare array.
+        if (url.pathname === '/api/messages/list') {
+          send(response, 200, await deps.history(String(body.sessionId ?? ''), Number(body.limit ?? 200)));
+          return;
+        }
         if (url.pathname === '/api/plugins/list') { send(response, 200, deps.listPlugins()); return; }
         if (url.pathname === '/api/providers') { send(response, 200, await deps.providers()); return; }
         if (url.pathname === '/api/model-access') { send(response, 200, deps.modelAccess()); return; }
