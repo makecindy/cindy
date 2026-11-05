@@ -1,6 +1,7 @@
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { setImmediate } from 'node:timers/promises';
 
 import type Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
@@ -16,10 +17,9 @@ import { initializeTaskTagPresets } from '../taskTagPresets';
 const canRunMigrationReplay = process.platform === 'win32' || process.platform === 'darwin';
 const describeMigrationReplay = canRunMigrationReplay ? describe : describe.skip;
 
-afterEach(async () => {
-  // Let Vitest process pending RPC replies between synchronous SQLite replays.
-  await new Promise<void>((resolve) => setImmediate(resolve));
-});
+// Let Vitest receive result acknowledgements between synchronous SQLite replays.
+// A long sequence otherwise starves worker RPC even when every assertion passes.
+afterEach(async () => { await setImmediate(); });
 
 function desktopRoot(): string {
   return path.resolve(__dirname, '../../../..');
