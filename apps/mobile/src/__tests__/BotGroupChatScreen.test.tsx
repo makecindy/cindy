@@ -459,6 +459,47 @@ describe('group timeline', () => {
     expect(byId('diagramModal')?.getAttribute('data-source')).toBe(source);
   });
 
+  function diagramPostFixture() {
+    const source = 'flowchart LR\nA --> B';
+    const share = { messageId: 'source', threadRootId: 'thread-root', status: 'available' as const,
+      authorKind: 'bot' as const, authorBotId: 'mimi', authorName: 'Bot', sharedByAuthor: false,
+      content: '```mermaid\n' + source + '\n```', attachments: [], createdAt: 1000, edited: false };
+    const posted = message('posted-diagram', 1, { threadShare: share });
+    return { source, share, posted, data: group({ serverBacked: true, messages: [posted] }) };
+  }
+
+  // #8955 P2 / unit: unavailable coverage missed hydration's temporary loading projection.
+  it('temporarily hides a posted diagram during source loading and restores the unchanged viewer', async () => {
+    h.chat.server = true;
+    const { source, share, posted, data } = diagramPostFixture();
+    await render(data, 'ready', undefined, '');
+    await click('botGroup.openDiagram');
+    await render({ ...data, messages: [{ ...posted, threadShare: { ...share, status: 'loading', content: '' } }] }, 'ready', undefined, '');
+    expect(byId('diagramModal')).toBeNull();
+    await render(data, 'ready', undefined, '');
+    expect(byId('diagramModal')?.getAttribute('data-source')).toBe(source);
+  });
+
+  // #8955 P2 / unit: stable source IDs do not prove the displayed content is still current.
+  it.each(['edited', 'removed'])('clears a posted diagram when the source Mermaid is %s', async change => {
+    h.chat.server = true;
+    const { share, posted, data } = diagramPostFixture();
+    await render(data, 'ready', undefined, '');
+    await click('botGroup.openDiagram');
+    const nextSource = 'flowchart LR\nA --> C';
+    const updated = { ...data, messages: [{ ...posted, threadShare: { ...share, edited: true,
+      content: change === 'edited' ? '```mermaid\n' + nextSource + '\n```' : 'Diagram removed' } }] };
+    await render(updated, 'ready', undefined, '');
+    expect(byId('diagramModal')).toBeNull();
+    await render(data, 'ready', undefined, '');
+    expect(byId('diagramModal')).toBeNull();
+    await render(updated, 'ready', undefined, '');
+    if (change === 'edited') {
+      await click('botGroup.openDiagram');
+      expect(byId('diagramModal')?.getAttribute('data-source')).toBe(nextSource);
+    } else expect(byId('botGroup.openDiagram')).toBeNull();
+  });
+
   // PR #8818 / component: the identity matcher cannot reject a complete foreign
   // broadcast if the real Timeline splits it at a shorter member name first.
   // French send parser + English Screen: @Tous is personal, the longer broadcast is not.

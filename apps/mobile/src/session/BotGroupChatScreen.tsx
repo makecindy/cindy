@@ -242,19 +242,23 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     focused && foreground,
   );
   const viewportOwner = `${user?.id ?? ''}:${accountGeneration}:${deviceId}:${groupId}:${threadRootId ?? 'main'}`;
-  const [diagram, setDiagram] = useState<{ owner: string; messageId: string; sourceMessageId: string; payload: MessagePayload } | null>(null);
+  const [diagram, setDiagram] = useState<{ owner: string; messageId: string; sourceMessageId: string; sourceContent: string; payload: MessagePayload } | null>(null);
   const openDiagram = useCallback((source: string, message: BotGroupMessageView) => setDiagram({
-    owner: viewportOwner, messageId: message.id, sourceMessageId: message.threadShare?.messageId ?? message.id, payload: buildMermaidPayload(source),
+    owner: viewportOwner, messageId: message.id, sourceMessageId: message.threadShare?.messageId ?? message.id,
+    sourceContent: message.threadShare?.content ?? message.content, payload: buildMermaidPayload(source),
   }), [viewportOwner]);
   const closeDiagram = useCallback(() => setDiagram(null), []);
   const diagramMessage = diagram ? group?.messages.find(message => message.id === diagram.messageId) : undefined;
-  const diagramAvailable = !!diagramMessage && !diagramMessage.deleted
-    && (!diagramMessage.threadShare || diagramMessage.threadShare.status === 'available')
-    && (diagramMessage.threadShare?.messageId ?? diagramMessage.id) === diagram?.sourceMessageId;
-  useEffect(() => { if (!diagramAvailable) closeDiagram(); }, [diagramAvailable, closeDiagram]);
+  const sourceResolved = !!diagramMessage && (!diagramMessage.threadShare || diagramMessage.threadShare.status === 'available');
+  const diagramInvalid = !!diagram && (chat.state.kind === 'missing' || !!diagramMessage && (diagramMessage.deleted
+    || diagramMessage.threadShare?.status === 'unavailable'
+    || (diagramMessage.threadShare?.messageId ?? diagramMessage.id) !== diagram.sourceMessageId
+    || sourceResolved && (diagramMessage.threadShare?.content ?? diagramMessage.content) !== diagram.sourceContent));
+  const diagramAvailable = sourceResolved && !diagramInvalid;
+  useEffect(() => { if (diagramInvalid) closeDiagram(); }, [diagramInvalid, closeDiagram]);
   const richContent = useMemo(() => Platform.OS === 'android' ? new RichContentRuntime() : null, [viewportOwner]);
   useEffect(() => () => richContent?.clear(), [richContent]);
-  useEffect(closeDiagram, [focused, foreground, viewportOwner, chat.state.kind, closeDiagram]);
+  useEffect(closeDiagram, [focused, foreground, viewportOwner, closeDiagram]);
   const [awayFromBottom, setAwayFromBottom] = useState<{ owner: string; value: boolean } | null>(null);
   const isAwayFromBottom = awayFromBottom?.owner === viewportOwner && awayFromBottom.value;
   const updateAwayFromBottom = (value: boolean) => setAwayFromBottom(previous =>
