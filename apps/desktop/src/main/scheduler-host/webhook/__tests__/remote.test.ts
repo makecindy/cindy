@@ -450,8 +450,20 @@ describe('ScheduleWebhookHost 服务器通道', () => {
     await vi.waitFor(() => expect(host.status(schedule('s1'))?.connected).toBe(true));
     server.sockets[0]?.close(4409, 'replaced');
     await vi.waitFor(() => expect(host.status(schedule('s1'))?.connected).toBe(false));
+    // PR #8470: the old test only waited; normal status/scheduler refreshes
+    // must also leave the replacement connection alone (real HTTP/WS fixture).
+    await host.refreshStatus();
+    scheduler.emit('changed');
+    await host.refreshStatus();
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(server.upgrades).toBe(1);
+    signedIn = false;
+    host.authChanged(true);
+    await vi.waitFor(() => expect(host.status(schedule('s1'))?.receiver).toBe('signed-out'));
+    signedIn = true;
+    host.authChanged(true);
+    await vi.waitFor(() => expect(host.status(schedule('s1'))?.connected).toBe(true));
+    expect(server.upgrades).toBe(2);
   });
 
   it('地址数超限只影响超出的任务', async () => {

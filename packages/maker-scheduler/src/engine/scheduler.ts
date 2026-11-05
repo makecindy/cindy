@@ -64,6 +64,8 @@ export interface RunNowOptions {
   canDispatch?: () => boolean;
   expectedSchedule?: ScheduleMutationGuard;
   webhook?: FireContext['webhook'];
+  /** Internal durable-queue handoff. Awaited after insertRun, before any runner side effects. */
+  onRunCreated?: () => Promise<void>;
 }
 
 /** Colons allow resource:action names such as Bitbucket's pullrequest:created. */
@@ -1168,6 +1170,10 @@ export class Scheduler extends EventEmitter {
     // 手动触发不受并发闸门拦截(用户显式动作要即时响应),但计入 in-flight 占用,
     // 会挤压后续自动触发的槽位。
     const runId = this.generateId();
+    // Webhook is automatic work, even though it shares the run-now execution path.
+    // Check and reserve synchronously: simultaneous arrivals cannot all pass one slot.
+    if (options?.webhook && (this.inflightByschedule.has(id)
+      || this.countSlotsInUse() >= this.maxConcurrentRuns)) return { runId, deferred: true };
     this.beginInflightAttempt({
       scheduleId: id,
       runId,
@@ -1242,6 +1248,15 @@ export class Scheduler extends EventEmitter {
       ...(options?.webhook ? { triggerSource: 'webhook' as const } : {}),
     };
     if (!recovery) await this.storage.insertRun(initialRun);
+    if (!recovery && options?.onRunCreated) {
+      try {
+        await options.onRunCreated();
+      } catch (error) {
+        // Nothing has reached the runner. The durable caller still owns this batch.
+        await this.storage.deleteRun(runId).catch(() => undefined);
+        throw error;
+      }
+    }
     // 立刻把 lastFiredAt 落到 schedule row —— 不等 finished，让 UI 列表立刻反映
     // "刚跑了一次"。同时若 activeSchedules 里有这条，同步内存副本。
     if (!recovery) await this.storage.update(schedule.id, { lastFiredAt: firedAt });

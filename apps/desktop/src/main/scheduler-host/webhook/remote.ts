@@ -135,6 +135,7 @@ export class ScheduleWebhookRemote {
   private readonly releases = new Map<string, string>();
   private running = false;
   private suspended = false;
+  private replaced = false;
   private exhausted: RemoteWebhookQuota | null = null;
   private work: Promise<void> = Promise.resolve();
   private socket: WebSocket | null = null;
@@ -169,6 +170,7 @@ export class ScheduleWebhookRemote {
     this.running = false;
     this.loaded = false;
     this.suspended = false;
+    this.replaced = false;
     this.exhausted = null;
     this.views.clear();
     this.problems.clear();
@@ -407,12 +409,12 @@ export class ScheduleWebhookRemote {
 
   /** 只有需要接收事件时才保持连接。 */
   private updateConnection(): void {
-    if (this.running && this.wanted.size > 0 && !this.suspended) void this.connect();
+    if (this.running && this.wanted.size > 0 && !this.suspended && !this.replaced) void this.connect();
     else this.closeSocket();
   }
 
   private async connect(): Promise<void> {
-    if (this.socket || this.connecting || this.reconnectTimer || !this.deps.baseUrl()) return;
+    if (this.replaced || this.socket || this.connecting || this.reconnectTimer || !this.deps.baseUrl()) return;
     this.connecting = true;
     const generation = this.generation;
     try {
@@ -451,6 +453,7 @@ export class ScheduleWebhookRemote {
       this.socket = null;
       const wasConnected = this.connected;
       this.connected = false;
+      if (code === CLOSE_REPLACED) this.replaced = true;
       if (wasConnected) this.deps.onChanged?.();
       void this.onClosed(code, rejected);
     });
@@ -481,7 +484,7 @@ export class ScheduleWebhookRemote {
   }
 
   private scheduleReconnect(): void {
-    if (!this.running || this.reconnectTimer) return;
+    if (!this.running || this.replaced || this.reconnectTimer) return;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.updateConnection();

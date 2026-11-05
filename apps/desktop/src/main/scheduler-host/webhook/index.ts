@@ -164,7 +164,7 @@ export class ScheduleWebhookHost {
       save: async (state) => writeAtomically(dataPath('state.json'), JSON.stringify(state)),
       getSchedule: (id) => scheduler.get(id),
       isBusy: (id) => scheduler.getInflightCount(id) > 0,
-      fire: async (id, webhook) => {
+      fire: async (id, webhook, onRunCreated) => {
         if (this.remote && !this.options.local) {
           // Offline disk backlog must observe account release before starting a new run.
           await this.remote.refresh();
@@ -172,7 +172,7 @@ export class ScheduleWebhookHost {
           if (!this.remote.canDeliver(id)) return { deferred: true };
         }
         if (this.stopped) return { deferred: true };
-        return scheduler.runNow(id, { deferToCaller: true, webhook });
+        return scheduler.runNow(id, { deferToCaller: true, webhook, onRunCreated });
       },
       now: () => Date.now(),
       onError: (message, detail) => logger.warn?.(`[schedule-webhook] ${message}`, detail),

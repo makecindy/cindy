@@ -20,7 +20,10 @@ const event = (deliveryId: string, name = 'check_suite'): ScheduleWebhookEvent =
 function setup(initial?: ScheduleWebhookQueueState) {
   let saved: ScheduleWebhookQueueState = initial ?? { endpoints: {} };
   let schedule: Schedule | null = { id: 's1', status: 'active', webhookTrigger: { endpointId: 'e1' } } as Schedule;
-  const fire = vi.fn<ScheduleWebhookQueueDeps['fire']>(async () => ({}));
+  const fire = vi.fn<ScheduleWebhookQueueDeps['fire']>(async (_id, _batch, onRunCreated) => {
+    await onRunCreated();
+    return {};
+  });
   const save = vi.fn<ScheduleWebhookQueueDeps['save']>(async (state) => { saved = state; });
   const isBusy = vi.fn(() => false);
   const queue = new ScheduleWebhookQueue({
@@ -62,7 +65,10 @@ describe('ScheduleWebhookQueue', () => {
   it('merges events arriving during a run into exactly one following run', async () => {
     const h = setup();
     let finish!: () => void;
-    h.fire.mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve({}); }));
+    h.fire.mockImplementationOnce(async (_id, _batch, onRunCreated) => {
+      await onRunCreated();
+      return new Promise((resolve) => { finish = () => resolve({}); });
+    });
     await h.queue.start();
     await h.queue.accept('s1', event('a'));
     await vi.advanceTimersByTimeAsync(LIMITS.debounceMs);
@@ -129,6 +135,60 @@ describe('ScheduleWebhookQueue', () => {
     expect(await h.queue.accept('s1', event('a'))).toBe('queued');
   });
 
+  // PR #8470: preparation can hang/throw before insertRun. Existing restart coverage
+  // only stopped an already-started run. Unit: restart from the last durable snapshot.
+  it('recovers an acknowledged batch when preparation never creates a run', async () => {
+    const first = setup();
+    first.fire.mockImplementationOnce(() => new Promise(() => {}));
+    await first.queue.start();
+    await first.queue.accept('s1', event('waiting'));
+    await vi.advanceTimersByTimeAsync(LIMITS.debounceMs);
+    first.queue.stop();
+    const second = setup(first.saved());
+    await second.queue.start();
+    await vi.advanceTimersByTimeAsync(LIMITS.minGapMs);
+    expect(second.fire).toHaveBeenCalledTimes(1);
+    expect(second.fire.mock.calls[0]![1].events.map(e => e.deliveryId)).toEqual(['waiting']);
+    second.queue.stop();
+  });
+
+  // PR #8470: a failed pump write must not let a later accept persist an empty
+  // batch. Unit: one failed save followed by a new event and a successful retry.
+  it('keeps the original batch and timing after a pump save fails', async () => {
+    const h = setup();
+    await h.queue.start();
+    await h.queue.accept('s1', event('a'));
+    const firstPendingAt = h.saved().endpoints.s1!.firstPendingAt;
+    h.save.mockRejectedValueOnce(new Error('disk full'));
+    await vi.advanceTimersByTimeAsync(LIMITS.debounceMs);
+    expect(h.fire).not.toHaveBeenCalled();
+    await h.queue.accept('s1', event('b'));
+    expect(h.saved().endpoints.s1!.firstPendingAt).toBe(firstPendingAt);
+    await vi.advanceTimersByTimeAsync(LIMITS.retryMs);
+    expect(h.fire.mock.calls[0]![1].events.map(e => e.deliveryId)).toEqual(['a', 'b']);
+    h.queue.stop();
+  });
+
+  // Unit: handoff and deferred restoration are two distinct durability boundaries;
+  // failure at either must retain the batch, including an event arriving meanwhile.
+  it.each(['handoff', 'deferred restore'] as const)('retries after a failed %s write without losing newer events', async (phase) => {
+    const h = setup();
+    h.fire.mockImplementationOnce(async (_id, _batch, onRunCreated) => {
+      if (phase === 'handoff') h.save.mockRejectedValueOnce(new Error('disk full'));
+      await onRunCreated();
+      h.save.mockRejectedValueOnce(new Error('disk full'));
+      return { deferred: true };
+    });
+    await h.queue.start();
+    await h.queue.accept('s1', event('a'));
+    await vi.advanceTimersByTimeAsync(LIMITS.debounceMs);
+    await h.queue.accept('s1', event('b'));
+    await vi.advanceTimersByTimeAsync(LIMITS.retryMs);
+    expect(h.fire).toHaveBeenCalledTimes(2);
+    expect(h.fire.mock.calls[1]![1].events.map(e => e.deliveryId)).toEqual(['a', 'b']);
+    h.queue.stop();
+  });
+
   it('ignores events for a paused or expired schedule, including ones already queued', async () => {
     const h = setup();
     await h.queue.start();
@@ -161,7 +221,10 @@ describe('ScheduleWebhookQueue', () => {
   it('resumes queued events after restart, but never replays a batch whose run already started', async () => {
     const first = setup();
     let finish!: () => void;
-    first.fire.mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve({}); }));
+    first.fire.mockImplementationOnce(async (_id, _batch, onRunCreated) => {
+      await onRunCreated();
+      return new Promise((resolve) => { finish = () => resolve({}); });
+    });
     await first.queue.start();
     await first.queue.accept('s1', event('started'));
     await vi.advanceTimersByTimeAsync(LIMITS.debounceMs);

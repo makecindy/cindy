@@ -1235,7 +1235,12 @@ describe('Scheduler', () => {
   it('passes webhook events to the runner, marks the run, and leaves retries to the caller', async () => {
     const sch = await h.scheduler.create({ ...baseInput, webhookTrigger: {} });
     const webhook = { events: [{ deliveryId: 'd1', event: 'issues', receivedAt: 1 }], omitted: 0 };
-    await h.scheduler.runNow(sch.id, { deferToCaller: true, webhook });
+    const onRunCreated = vi.fn(async () => {
+      expect((await h.storage.listRuns(sch.id))[0]).toMatchObject({ status: 'running', triggerSource: 'webhook' });
+      expect(h.runner.fire).not.toHaveBeenCalled();
+    });
+    await h.scheduler.runNow(sch.id, { deferToCaller: true, webhook, onRunCreated });
+    expect(onRunCreated).toHaveBeenCalledOnce();
     expect(h.runner.fire.mock.calls[0]![1].webhook).toEqual(webhook);
     expect((await h.storage.listRuns(sch.id))[0]?.triggerSource).toBe('webhook');
 
@@ -1245,6 +1250,44 @@ describe('Scheduler', () => {
     expect(result.deferred).toBe(true);
     expect((await h.storage.get(sch.id))?.nextFireAt).toBe(before);
     expect(await h.storage.listRuns(sch.id)).toHaveLength(1);
+  });
+
+  // PR #8470: a durable-queue handoff failure must prevent runner effects. Unit:
+  // insertRun failure never hands off; handoff failure removes the unused run.
+  it.each(['insert', 'handoff'] as const)('does not dispatch a webhook after %s fails', async (phase) => {
+    const sch = await h.scheduler.create({ ...baseInput, manual: true, webhookTrigger: {} });
+    const webhook = { events: [{ deliveryId: 'd1', event: 'issues', receivedAt: 1 }], omitted: 0 };
+    const onRunCreated = vi.fn(async () => { throw new Error('handoff failed'); });
+    if (phase === 'insert') vi.spyOn(h.storage, 'insertRun').mockRejectedValueOnce(new Error('insert failed'));
+    await expect(h.scheduler.runNow(sch.id, { webhook, onRunCreated })).rejects.toThrow(`${phase} failed`);
+    expect(onRunCreated).toHaveBeenCalledTimes(phase === 'insert' ? 0 : 1);
+    expect(h.runner.fire).not.toHaveBeenCalled();
+    expect(await h.storage.listRuns(sch.id)).toHaveLength(0);
+    await h.scheduler.runNow(sch.id, { webhook });
+    expect(h.runner.fire).toHaveBeenCalledOnce();
+  });
+
+  // PR #8470: automatic Webhook calls used manual admission. Unit: one occupied
+  // slot, then two simultaneous Webhook calls; only explicit manual calls bypass.
+  it('gates webhook runs with the shared slots before the first storage await', async () => {
+    const gated = makeHarness({ maxConcurrentRuns: 1 });
+    const a = await gated.scheduler.create({ ...baseInput, manual: true, webhookTrigger: {} });
+    const b = await gated.scheduler.create({ ...baseInput, manual: true, webhookTrigger: {} });
+    const webhook = { events: [{ deliveryId: 'd1', event: 'issues', receivedAt: 1 }], omitted: 0 };
+    let finish!: () => void;
+    gated.runner.fire.mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve({ sessionId: '' }); }));
+    const running = gated.scheduler.runNow(a.id, { webhook, deferToCaller: true });
+    const blocked = await gated.scheduler.runNow(b.id, { webhook, deferToCaller: true });
+    expect(blocked.deferred).toBe(true);
+    expect(await gated.storage.listRuns(b.id)).toHaveLength(0);
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    await gated.scheduler.runNow(b.id);
+    expect(gated.runner.fire).toHaveBeenCalledTimes(2);
+    finish();
+    await running;
+    await gated.scheduler.runNow(b.id, { webhook, deferToCaller: true });
+    expect(gated.runner.fire).toHaveBeenCalledTimes(3);
+    await gated.scheduler.stop();
   });
 
   it('rechecks an approved resume inside the serialized schedule mutation', async () => {
