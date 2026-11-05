@@ -806,4 +806,32 @@ describe('builtinGhostProvisioner 与同名商店安装按版本取新', () => {
     expect(fs.existsSync(path.join(storeDir, 'ghost.json'))).toBe(true);
     expect(readSeeded(repoRoot)).toEqual(['other-seed']);
   });
+  // 补充依据：Codex review（#9078）——商店账本记录损坏时，lookup 抛错，孤儿回收不能把商店安装当种子删掉。
+  it('商店账本读不了时本轮不删除种子已撤的台账 id，并保持可重试', async () => {
+    const { seedRoot, repoRoot, storeDir } = await storeInstalledLayout('2.0.0');
+    await provisionBuiltinGhosts({
+      seedRootDirs: [seedRoot],
+      repoRootDir: repoRoot,
+      storeInstall: () => ({ version: '1.0.0', ownsInstalledBytes: true }),
+    });
+    await fs.promises.rm(path.join(seedRoot, 'builtin-test'), { recursive: true });
+    await writeMinimalSeed(seedRoot, 'other-seed');
+    const beforeRemove = vi.fn();
+
+    const outcome = await provisionBuiltinGhosts({
+      seedRootDirs: [seedRoot],
+      repoRootDir: repoRoot,
+      beforeRemove,
+      storeInstall: (id) => {
+        if (id === 'builtin-test') throw new Error('Plugin market ledger is unreadable');
+        return null;
+      },
+    });
+
+    expect(outcome.removed).toEqual([]);
+    expect(outcome.retryPending).toBe(true);
+    expect(beforeRemove).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(storeDir, 'ghost.json'))).toBe(true);
+    expect(readSeeded(repoRoot)).toContain('builtin-test');
+  });
 });

@@ -3917,10 +3917,16 @@ export async function diagnoseScheduleHookPluginForActiveOwner(
 
 /**
  * 内置种子对照的同 id 商店安装(builtinGhostProvisioner 的 storeInstall):只认服务端市场
- * 已装的根 namespace 记录。账本读不了时抛错,播种把该种子按本轮失败处理、不动已装字节。
+ * 已装的根 namespace 记录。账本或该记录损坏时抛错,播种把该种子按本轮失败处理、不动已装字节。
  */
 function builtinSeedStoreInstall(id: string, installedDir: string): BuiltinStoreInstallFact | null {
-  const record = getPluginMarketLedger().installationForPlugin({ ghostId: id, namespace: null });
+  // 严格查询：账本文件或该插件的记录损坏时不能当成「没有商店来源」（那会让孤儿回收
+  // 把真实的商店安装当种子删掉），抛错让播种跳过本轮。
+  const lookup = getPluginMarketLedger().lookupInstallationForAuthorization({ ghostId: id, namespace: null });
+  if (lookup.kind === 'invalid') {
+    throw new Error('Plugin market ledger is unreadable');
+  }
+  const record = lookup.kind === 'found' ? lookup.record : null;
   if (
     !record?.installed ||
     record.ghostId !== id ||
