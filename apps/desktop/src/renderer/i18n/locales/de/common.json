@@ -3811,7 +3811,12 @@
           "stop": "Test stoppen"
         },
         "fetch": {
-          "button": "Modellliste abrufen",
+          "selectedCount": "{{count}} Modelle ausgewählt",
+          "availableCount": "{{count}} verfügbare Modelle abgerufen",
+          "notFetched": "Modellliste noch nicht abgerufen",
+          "failedRetry": "Modellliste konnte nicht abgerufen werden. Erneut versuchen.",
+          "retryFailed": "Dieser Abruf ist fehlgeschlagen. Erneut versuchen.",
+          "button": "Modelle abrufen und auswählen",
           "fetching": "Modelle werden abgerufen…",
           "needBaseUrl": "Zuerst die Basis-URL eingeben",
           "failed": "Modellliste konnte nicht abgerufen werden",
@@ -7807,6 +7812,7 @@
         "customSlotAsleep": "Dieses Plugin ist deaktiviert. Aktiviere es, um hier seine Einstellungen zu sehen.",
         "descriptionExpand": "Mehr anzeigen",
         "descriptionCollapse": "Weniger anzeigen",
+        "readmeTitle": "Über",
         "useAction": "Plugin verwenden",
         "chatAction": "Chat",
         "enabledLabel": "Aktiviert",

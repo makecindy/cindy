@@ -3770,7 +3770,12 @@
           "stop": "テストを停止"
         },
         "fetch": {
-          "button": "モデル一覧を取得",
+          "selectedCount": "{{count}} 個のモデルを選択済み",
+          "availableCount": "選択可能なモデルを {{count}} 個取得済み",
+          "notFetched": "モデル一覧はまだ取得していません",
+          "failedRetry": "モデル一覧を取得できませんでした。再試行してください",
+          "retryFailed": "今回の取得に失敗しました。再試行してください",
+          "button": "モデルを取得して選択",
           "fetching": "モデルを取得中…",
           "needBaseUrl": "先にベース URL を入力してください",
           "failed": "モデル一覧の取得に失敗しました",
@@ -7764,6 +7769,7 @@
         "customSlotAsleep": "このプラグインは無効です。有効化すると、ここに設定画面が表示されます。",
         "descriptionExpand": "もっと見る",
         "descriptionCollapse": "折りたたむ",
+        "readmeTitle": "紹介",
         "useAction": "Plugin を使用",
         "chatAction": "会話",
         "enabledLabel": "有効",

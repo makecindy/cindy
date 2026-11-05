@@ -3768,7 +3768,12 @@
           "stop": "止试"
         },
         "fetch": {
-          "button": "取模型清单",
+          "selectedCount": "已选 {{count}} 模型",
+          "availableCount": "已得 {{count}} 可选模型",
+          "notFetched": "尚未取模型清单",
+          "failedRetry": "取模型清单未成，请重试",
+          "retryFailed": "此番未成，请重试",
+          "button": "取并选模型",
           "fetching": "方取模型…",
           "needBaseUrl": "请先填基础 URL",
           "failed": "模型清单取之未成",
@@ -7750,6 +7755,7 @@
         "customSlotAsleep": "法器未生效；生效后，此处将示其设置界面。",
         "descriptionExpand": "展",
         "descriptionCollapse": "收",
+        "readmeTitle": "介绍",
         "useAction": "用",
         "chatAction": "言谈",
         "enabledLabel": "已启",

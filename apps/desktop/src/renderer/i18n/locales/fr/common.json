@@ -3857,7 +3857,12 @@
           "stop": "Arrêter le test"
         },
         "fetch": {
-          "button": "Récupérer la liste des modèles",
+          "selectedCount": "{{count}} modèles sélectionnés",
+          "availableCount": "{{count}} modèles disponibles récupérés",
+          "notFetched": "La liste des modèles n’a pas encore été récupérée",
+          "failedRetry": "Impossible de récupérer la liste des modèles. Réessayez.",
+          "retryFailed": "La dernière récupération a échoué. Réessayez.",
+          "button": "Récupérer et sélectionner les modèles",
           "fetching": "Récupération des modèles…",
           "needBaseUrl": "Renseignez d'abord l'URL de base",
           "failed": "Impossible de récupérer la liste des modèles",
@@ -7874,6 +7879,7 @@
         "customSlotAsleep": "Ce plugin est désactivé. Activez-le pour voir ici son interface de paramètres.",
         "descriptionExpand": "Afficher plus",
         "descriptionCollapse": "Afficher moins",
+        "readmeTitle": "À propos",
         "useAction": "Utiliser le plugin",
         "chatAction": "Discuter",
         "enabledLabel": "Activé",

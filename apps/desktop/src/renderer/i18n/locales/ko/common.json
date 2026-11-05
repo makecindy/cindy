@@ -3770,7 +3770,12 @@
           "stop": "테스트 중지"
         },
         "fetch": {
-          "button": "모델 목록 가져오기",
+          "selectedCount": "모델 {{count}}개 선택됨",
+          "availableCount": "선택 가능한 모델 {{count}}개를 가져왔습니다",
+          "notFetched": "아직 모델 목록을 가져오지 않았습니다",
+          "failedRetry": "모델 목록을 가져오지 못했습니다. 다시 시도하세요",
+          "retryFailed": "이번에 목록을 가져오지 못했습니다. 다시 시도하세요",
+          "button": "모델 가져오기 및 선택",
           "fetching": "모델 가져오는 중…",
           "needBaseUrl": "먼저 기본 URL을 입력해 주세요",
           "failed": "모델 목록을 가져오지 못했습니다",
@@ -7764,6 +7769,7 @@
         "customSlotAsleep": "이 플러그인은 비활성 상태입니다. 활성화하면 여기에 설정 화면이 표시됩니다.",
         "descriptionExpand": "더 보기",
         "descriptionCollapse": "접기",
+        "readmeTitle": "소개",
         "useAction": "Plugin 사용",
         "chatAction": "대화",
         "enabledLabel": "사용 중",

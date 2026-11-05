@@ -3770,7 +3770,12 @@
           "stop": "停止測試"
         },
         "fetch": {
-          "button": "獲取模型列表",
+          "selectedCount": "已選 {{count}} 個模型",
+          "availableCount": "已取得 {{count}} 個可選模型",
+          "notFetched": "尚未取得模型清單",
+          "failedRetry": "取得模型清單失敗，請重試",
+          "retryFailed": "本次取得失敗，請重試",
+          "button": "取得並選擇模型",
           "fetching": "正在獲取模型…",
           "needBaseUrl": "請先填寫基礎 URL",
           "failed": "獲取模型列表失敗",
@@ -7764,6 +7769,7 @@
         "customSlotAsleep": "插件未生效，生效後這裡將顯示它的設定介面。",
         "descriptionExpand": "展開",
         "descriptionCollapse": "收起",
+        "readmeTitle": "介紹",
         "useAction": "使用",
         "chatAction": "對話",
         "enabledLabel": "已啟用",

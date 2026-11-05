@@ -3857,7 +3857,12 @@
           "stop": "detener la prueba"
         },
         "fetch": {
-          "button": "Obtener lista de modelos",
+          "selectedCount": "{{count}} modelos seleccionados",
+          "availableCount": "{{count}} modelos disponibles obtenidos",
+          "notFetched": "Aún no se ha obtenido la lista de modelos",
+          "failedRetry": "No se pudo obtener la lista de modelos. Inténtalo de nuevo.",
+          "retryFailed": "La última consulta falló. Inténtalo de nuevo.",
+          "button": "Obtener y seleccionar modelos",
           "fetching": "Recuperando modelos…",
           "needBaseUrl": "Complete primero la base URL",
           "failed": "No se pudo recuperar la lista de modelos",
@@ -7874,6 +7879,7 @@
         "customSlotAsleep": "Este complemento está desactivado. Actívalo para ver aquí su interfaz de configuración.",
         "descriptionExpand": "Mostrar más",
         "descriptionCollapse": "Mostrar menos",
+        "readmeTitle": "Acerca de",
         "useAction": "Usar complemento",
         "chatAction": "Conversación",
         "enabledLabel": "Activado",

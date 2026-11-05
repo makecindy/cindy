@@ -132,6 +132,9 @@
   "detail": {
     "useItIn": "Utiliser dans",
     "openPlugin": "Ouvrir le plugin",
+    "readme": "À propos",
+    "readmeLoadFailed": "Impossible de charger la présentation. Réessayez.",
+    "readmeUnavailable": "Aucune présentation disponible.",
     "computerSettings": "Pour configurer ce plugin, ouvrez ses détails dans Cindy → Plugins sur votre ordinateur.",
     "runtimeIssue": "Le plugin s'est arrêté de manière inattendue. Essayez de l'ouvrir à nouveau ou de l'utiliser dans une tâche.",
     "runtimeFused": "Le plugin s'est arrêté après des échecs répétés. Désactivez-le puis réactivez-le pour réessayer.",

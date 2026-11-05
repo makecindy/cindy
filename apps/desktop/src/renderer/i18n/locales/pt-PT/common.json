@@ -3857,7 +3857,12 @@
           "stop": "Parar teste"
         },
         "fetch": {
-          "button": "Obter lista de modelos",
+          "selectedCount": "{{count}} modelos selecionados",
+          "availableCount": "{{count}} modelos disponíveis obtidos",
+          "notFetched": "A lista de modelos ainda não foi obtida",
+          "failedRetry": "Não foi possível obter a lista de modelos. Tente novamente.",
+          "retryFailed": "Esta consulta falhou. Tente novamente.",
+          "button": "Obter e selecionar modelos",
           "fetching": "A obter modelos…",
           "needBaseUrl": "Preencha primeiro o URL base",
           "failed": "Não foi possível obter a lista de modelos",
@@ -7874,6 +7879,7 @@
         "customSlotAsleep": "Este plugin está desativado. Ative-o para ver aqui a interface de definições.",
         "descriptionExpand": "Mostrar mais",
         "descriptionCollapse": "Mostrar menos",
+        "readmeTitle": "Sobre",
         "useAction": "Usar plugin",
         "chatAction": "Conversa",
         "enabledLabel": "Ativado",
