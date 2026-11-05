@@ -93,6 +93,15 @@ const captureName = (file) => path.basename(file, '.png').replace(/\.focus$/, ''
 // `--focus` crops when the run made them, so the changed element is legible in the PR.
 const shotsOf = (variant) =>
   variant?.focus?.length ? variant.focus.map((item) => item.file) : (variant?.screenshots ?? []);
+// One capture of a before/after pair. The crop is used only when both sides have it: the
+// element may exist on one side only, and a crop next to a full page is not comparable.
+const pairedShots = (before, after, name) => {
+  const crop = (variant) => variant.focus?.find((item) => item.capture === name)?.file;
+  const full = (variant) => variant.screenshots.find((file) => captureName(file) === name);
+  const [b, a] =
+    crop(before) && crop(after) ? [crop(before), crop(after)] : [full(before), full(after)];
+  return { before: b ?? null, after: a };
+};
 
 /**
  * Captures for the PR description, as rows of side-by-side columns. With `--compare`: every
@@ -113,9 +122,9 @@ export async function prShots(summary, dir, { cases } = {}) {
       );
       // No pre-change render: nothing this page loads changed since the ref.
       if (!before) continue;
-      for (const file of shotsOf(variant)) {
-        const name = captureName(file);
-        const pair = shotsOf(before).find((other) => captureName(other) === name);
+      for (const name of variant.screenshots.map(captureName)) {
+        const { before: pair, after: file } = pairedShots(before, variant, name);
+        if (!file) continue;
         if (pair && (await bytes(pair)).equals(await bytes(file))) continue;
         rows.push({
           title: `${variant.case} · ${name}`,

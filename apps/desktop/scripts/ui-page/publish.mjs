@@ -61,8 +61,10 @@ async function main() {
   const summary = JSON.parse(await readFile(path.join(run, 'summary.json'), 'utf8'));
   const images = summary.overviews ?? (summary.overview ? [summary.overview] : []);
   if (!images.length) throw new Error(`${run} has no overview images`);
-  if (options.cases && !summary.variants.some((variant) => options.cases.includes(variant.case)))
-    throw new Error(`no scenario named ${options.cases.join(', ')} in ${run}`);
+  const unknown = options.cases?.filter(
+    (name) => !summary.variants.some((variant) => variant.case === name),
+  );
+  if (unknown?.length) throw new Error(`no scenario named ${unknown.join(', ')} in ${run}`);
   const rows = await prShots(summary, run, { cases: options.cases });
 
   // Images go to the author's fork, never to the repository PRs target: the project's own

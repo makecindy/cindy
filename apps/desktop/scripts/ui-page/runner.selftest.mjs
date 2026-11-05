@@ -401,6 +401,18 @@ test('PR screenshots keep only changed captures as before/after pairs', async ()
     rows[1].columns.map((column) => column.file),
     ['p.b.light.zh-CN.720x600/before/final.png', 'p.b.light.zh-CN.720x600/final.png'],
   );
+  // A crop that exists on one side only must not be paired with the other side's full page.
+  const mixed = structuredClone(variants);
+  const lone = mixed.find((v) => v.role === 'after' && v.case === 'b' && v.theme === 'light');
+  lone.focus = [{ capture: 'final', file: 'p.b.light.zh-CN.720x600/final.focus.png' }];
+  await writeFile(path.join(evidence, lone.focus[0].file), 'crop');
+  const final = (await prShots({ ...summary, variants: mixed }, evidence)).find(
+    (row) => row.title === 'b · final' && row.subtitle.startsWith('light'),
+  );
+  assert.deepEqual(
+    final.columns.map((column) => column.file),
+    ['p.b.light.zh-CN.720x600/before/final.png', 'p.b.light.zh-CN.720x600/final.png'],
+  );
   const plain = await prShots({ variants }, evidence, { cases: ['a'] });
   assert.deepEqual(
     plain.map((row) => row.columns.map((column) => column.label)),
