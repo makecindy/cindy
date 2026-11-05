@@ -209,6 +209,21 @@ export interface PreRunHookRunResult {
   spawnError?: string;
   /** spawn 失败或未形成有效退出结果时的诊断信息。 */
   error?: string;
+  /** 检查失败时，脚本所属的插件未安装或未启用（插件技能目录随之撤下）。 */
+  missingPlugin?: PreRunHookMissingPlugin;
+}
+
+/** 检查脚本放在插件技能目录里，而该插件当前不可用。界面据此提示安装或启用。 */
+export interface PreRunHookMissingPlugin {
+  ghostId: string;
+  /** 企业插件的 orgSlug；公共插件为 null 或缺省。 */
+  namespace?: string | null;
+  /** 曾从市场安装时的 pluginId，用于打开市场详情；拿不到时缺省。 */
+  pluginId?: string;
+  /** 插件显示名；拿不到时缺省，界面用通用说法。 */
+  name?: string;
+  /** true = 插件仍已安装，只是未启用。 */
+  installed?: boolean;
 }
 
 export interface Schedule {
