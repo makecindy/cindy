@@ -261,7 +261,7 @@ import { recordTurnModelChange, type TurnModelIdentity } from './turnModelChange
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import { accessChatDisplayCache } from './chatDisplayCache.js';
 import { accessBotGroupOutbox, commandBotGroupOutbox, sendCoordinatedBotGroupMessage, setBotGroupOutboxPublisher } from './botGroupOutboxStorage.js';
-import { createBotReadStateIpc, createBotWindowAccess } from './botReadStateIpc.js';
+import { createBotReadStateIpc, createBotWindowAccess } from './botReadStateLocalIpc.js';
 import { isSecondaryAppWindow } from '../secondary-windows.js';
 import { createBotGroupOutboxIpc } from './botGroupOutboxIpc.js';
 import {

@@ -5091,6 +5091,19 @@ interface ElectronAPI {
         welcomeContext?: import('../shared/botWelcomeContext').BotWelcomeContext;
         locale?: import('../shared/locale').SupportedLocale;
       }) => Promise<unknown[]>;
+      /** Host-side companion read positions shared with the phone and other Macs. */
+      readState?: {
+        get: () => Promise<{ ownerId: string | null; positions: Record<string, number>; acknowledgedPositions?: Record<string, number> }>;
+        update: (body: {
+          ownerId: string;
+          mark?: Record<string, number>;
+          seed?: Record<string, number>;
+          prune?: { botIds?: string[]; groupIds?: string[] };
+        }) => Promise<{ ownerId: string | null; positions: Record<string, number>; acknowledgedPositions?: Record<string, number> }>;
+        onChanged: (
+          callback: (payload: unknown, ownerStamp?: unknown) => void,
+        ) => () => void;
+      };
       get: (botId: string) => Promise<unknown>;
       generateDraft: (
         body: import('../shared/botCreation').BotCreationRequest,

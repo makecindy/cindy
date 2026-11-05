@@ -69,6 +69,7 @@ import {
   type AgentIslandDisplayOption,
   type AgentIslandDisplayState,
   type AgentIslandPillSnapshot,
+  type AgentIslandQuotaItem,
   type AgentIslandRemoteSessionInput,
   type AgentIslandCompanionSnapshot,
   type AgentIslandSessionActivity,
@@ -416,6 +417,8 @@ export class AgentIslandService {
   private nativePreferredDisplayId: number | null = null;
   private soundSettings: AgentIslandSoundSettings = createDefaultAgentIslandDisplayConfig().soundSettings;
   private mascotSkin: AgentIslandMascotSkin = DEFAULT_AGENT_ISLAND_MASCOT_SKIN;
+  private quota: AgentIslandQuotaItem[] = [];
+  private readonly enabledListeners = new Set<(enabled: boolean) => void>();
   private displayTarget: AgentIslandDisplayTarget = DEFAULT_AGENT_ISLAND_DISPLAY_TARGET;
   private lastSoundDisplayState: AgentIslandDisplayState | null = null;
   private readonly soundCooldownUntilByEvent = new Map<AgentIslandSoundEvent, number>();
@@ -780,12 +783,36 @@ export class AgentIslandService {
       this.hiddenPublished = true;
       // Windows / headless 永远走这条:岛 UI 关着,但远程未读 TTL 仍要自己触发。
       this.publish();
+      this.notifyEnabledChange();
       return;
     }
     if (enabled) {
       this.syncAppContentFocusState(now);
     }
     this.publish();
+    this.notifyEnabledChange();
+  }
+
+  /** Called with the new value whenever the island is switched on or off. */
+  subscribeEnabled(listener: (enabled: boolean) => void): () => void {
+    this.enabledListeners.add(listener);
+    return () => this.enabledListeners.delete(listener);
+  }
+
+  private notifyEnabledChange(): void {
+    const enabled = this.isEnabled();
+    for (const listener of this.enabledListeners) {
+      try { listener(enabled); } catch (error) {
+        log.warn('agent island enabled listener failed', { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+  }
+
+  /** Remaining quota from the menu bar overview, already ordered and filtered. */
+  setQuota(items: readonly AgentIslandQuotaItem[]): void {
+    if (sameAgentIslandQuota(this.quota, items)) return;
+    this.quota = [...items];
+    if (this.isEnabled()) this.publish();
   }
 
   /** Main-process consumers use this to avoid duplicating Agent Island completion UI. */
@@ -1020,6 +1047,10 @@ export class AgentIslandService {
     this.enabled = false;
     this.enabledSynced = this.headless;
     this.hiddenPublished = true;
+    // The previous account's quota must not survive into the next one: drop it and let the
+    // quota bridge release the overview, so turning the island back on reads the new account.
+    this.quota = [];
+    this.notifyEnabledChange();
     if (this.nativeHost.suspend) {
       this.nativeHost.suspend();
     } else {
@@ -2145,12 +2176,12 @@ export class AgentIslandService {
     // Sounds follow real runtime transitions. Chat read/visibility filters only own
     // the rendered unread projection and must neither mute a fresh turn nor replay history.
     const soundDisplayState = withAgentIslandConfig(
-      buildAgentIslandDisplayState(this.state, now), this.soundSettings, this.mascotSkin,
+      buildAgentIslandDisplayState(this.state, now), this.soundSettings, this.mascotSkin, this.quota,
     );
     const chatDisplayState = this.companionChats.size > 0
       ? withAgentIslandConfig(
         buildAgentIslandDisplayState(this.state, now, this.companionChatProjections()),
-        this.soundSettings, this.mascotSkin,
+        this.soundSettings, this.mascotSkin, this.quota,
       )
       : soundDisplayState;
     if (!this.enabled) {
@@ -3084,13 +3115,26 @@ function withAgentIslandConfig(
   displayState: AgentIslandDisplayState,
   soundSettings: AgentIslandSoundSettings,
   mascotSkin: AgentIslandMascotSkin,
+  quota: readonly AgentIslandQuotaItem[] = [],
 ): AgentIslandDisplayState {
   return {
     ...displayState,
+    ...(quota.length > 0 ? { quota: [...quota] } : {}),
     strings: buildAgentIslandStrings(),
     soundSettings: cloneAgentIslandSoundSettings(soundSettings),
     mascotSkin,
   };
+}
+
+function sameAgentIslandQuota(a: readonly AgentIslandQuotaItem[], b: readonly AgentIslandQuotaItem[]): boolean {
+  return a.length === b.length && a.every((item, index) => {
+    const other = b[index]!;
+    return item.id === other.id && item.logoSvg === other.logoSvg && item.text === other.text
+      && item.level === other.level && item.stale === other.stale
+      && item.accessibilityLabel === other.accessibilityLabel && item.lowest === other.lowest
+      && item.compactText === other.compactText
+      && item.width === other.width && item.textWidth === other.textWidth;
+  });
 }
 
 function collapseManualExpandedStateForInactiveDisplay(displayState: AgentIslandDisplayState): AgentIslandDisplayState {

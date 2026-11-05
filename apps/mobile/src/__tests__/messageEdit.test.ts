@@ -17,19 +17,36 @@ import {
 // retrying a non-running failure would re-run a non-idempotent rewind; reusing a
 // message's host references as phone uploads would make the outbox demand local bytes.
 describe('commitMessageEditRewind', () => {
-  it('waits out the stop tail and binds the latest-message guard plus a conversation-only preview', async () => {
+  it('stops the running turn only at send time, waits it out and binds the latest-message guard', async () => {
+    const running = Object.assign(new Error('turn still running'), { code: 'SESSION_RUNNING' });
     const rewindCommit = vi.fn()
-      .mockRejectedValueOnce(Object.assign(new Error('turn still running'), { code: 'SESSION_RUNNING' }))
+      .mockRejectedValueOnce(running)
+      .mockRejectedValueOnce(running)
       .mockResolvedValueOnce({ id: 's1' });
+    const requestStop = vi.fn();
 
     await expect(commitMessageEditRewind({
       rewindCommit,
+      requestStop,
       allowFileRestore: false,
       sleep: async () => undefined,
     })).resolves.toEqual({ id: 's1' });
 
-    expect(rewindCommit).toHaveBeenCalledTimes(2);
+    expect(requestStop).toHaveBeenCalledTimes(1);
+    expect(rewindCommit).toHaveBeenCalledTimes(3);
     expect(rewindCommit).toHaveBeenLastCalledWith({ requireLatestUser: true, allowFileRestore: false });
+  });
+
+  it('does not stop the turn when the edit was abandoned before the first rejection arrived', async () => {
+    const running = Object.assign(new Error('running'), { code: 'SESSION_RUNNING' });
+    const rewindCommit = vi.fn().mockRejectedValue(running);
+    const requestStop = vi.fn();
+
+    await expect(commitMessageEditRewind({
+      rewindCommit, requestStop, stillCurrent: () => false, sleep: async () => undefined,
+    })).rejects.toBe(running);
+    expect(requestStop).not.toHaveBeenCalled();
+    expect(rewindCommit).toHaveBeenCalledTimes(1);
   });
 
   it('does not retry once the host says the message is no longer the latest', async () => {

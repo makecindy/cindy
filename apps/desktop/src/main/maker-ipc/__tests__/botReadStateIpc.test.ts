@@ -10,7 +10,7 @@ vi.mock('electron', () => ({ BrowserWindow: { fromWebContents: electron.from } }
 import { markAppContentWindow } from '../../windowFocusClassifier';
 import { isTrustedAppRendererEventForLocation, isTrustedAppRendererWindowForLocation } from '../../security/trustedAppRenderer';
 import { throwIpcError } from '../../utils/ipcValidate';
-import { createBotReadStateIpc, createBotWindowAccess } from '../botReadStateIpc';
+import { createBotReadStateIpc, createBotWindowAccess } from '../botReadStateLocalIpc';
 
 const location = { devServerUrl: 'http://localhost:5173', packagedRendererFile: '/unused/index.html' };
 let root: string;

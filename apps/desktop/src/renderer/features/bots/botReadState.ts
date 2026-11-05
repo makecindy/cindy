@@ -1,13 +1,71 @@
 /** Synchronous unread consumers read a Main-owned, account-scoped in-memory projection. */
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import type { BotGroupSummary } from '../../../shared/botGroupChat';
 import { botReadStateProjection, localBotReadIdentity } from './botReadStateSync';
-export { startBotReadStateSync, getBotReadStateSyncStatus } from './botReadStateSync';
+import { startBotReadStateSync as startLocalReadSync, getBotReadStateSyncStatus } from './botReadStateSync';
+export { getBotReadStateSyncStatus };
+
+
+type HostReadState = { ownerId: string | null; positions: Record<string, number>; acknowledgedPositions?: Record<string, number> };
+type HostReadApi = NonNullable<Window['electronAPI']['localDb']['bots']['readState']>;
+let hostOwner = getDataOwnerGeneration();
+let hostOff: (() => void) | undefined;
+let projectionOff: (() => void) | undefined;
+let hostUsers = 0;
+let seededHost = false;
+const hostApi = (): HostReadApi | undefined => window.electronAPI?.localDb?.bots?.readState;
+function applyHostState(state: HostReadState | undefined): void {
+  if (!state || state.ownerId !== hostOwner.dataOwnerId || !isDataOwnerGenerationCurrent(hostOwner)) return;
+  // A host seed is not a user acknowledgement. Older hosts lack this distinction;
+  // their already-existing positions retain the same legacy-floor semantics as migration.
+  for (const [key, at] of Object.entries(state.acknowledgedPositions ?? state.positions)) {
+    if (Number.isSafeInteger(at) && at > 0) botReadStateProjection.ack(localBotReadIdentity(key), at);
+  }
+}
+function reportToHost(body: { mark?: Record<string, number>; seed?: Record<string, number> }): void {
+  const api = hostApi(); const requestOwner = getDataOwnerGeneration();
+  if (!api || !requestOwner.dataOwnerId) return;
+  void api.update({ ownerId: requestOwner.dataOwnerId, ...body }).then(state => {
+    if (isDataOwnerGenerationCurrent(requestOwner)) applyHostState(state);
+  }, () => undefined);
+}
+function bindHost(): void {
+  const current = getDataOwnerGeneration();
+  if (!isDataOwnerGenerationCurrent(hostOwner)) {
+    hostOff?.(); hostOff = undefined; seededHost = false; hostOwner = current;
+  }
+  const api = hostApi();
+  if (!api || !current.dataOwnerId) return;
+  if (!hostOff) {
+    hostOff = api.onChanged((payload, stamp) => {
+      if (isDataOwnerPushCurrent(stamp)) applyHostState(payload as HostReadState);
+    });
+    const requestOwner = current;
+    void api.get().then(state => {
+      if (isDataOwnerGenerationCurrent(requestOwner)) applyHostState(state);
+    }, () => undefined);
+  }
+  if (!seededHost && getBotReadStateSyncStatus().phase === 'ready') {
+    seededHost = true;
+    reportToHost({ seed: botReadStateProjection.localMap() });
+  }
+}
+export function startBotReadStateSync(): () => void {
+  const stop = startLocalReadSync();
+  if (hostUsers++ === 0) projectionOff = botReadStateProjection.subscribe(bindHost);
+  bindHost();
+  return () => {
+    stop();
+    if (--hostUsers === 0) { hostOff?.(); hostOff = undefined; projectionOff?.(); projectionOff = undefined; seededHost = false; }
+  };
+}
 
 /** AuthContext has already committed the data-owner generation before this callback. */
 export function setBotReadStateOwner(ownerId: string | null): void {
   // The caller's label is not a second owner authority; use the committed auth fence.
   void ownerId;
   botReadStateProjection.ensureOwner();
+  bindHost();
 }
 export const getBotLastReadAtMap = () => botReadStateProjection.localMap();
 export const getBotLastReadAt = (botId: string): number | null => botReadStateProjection.read(localBotReadIdentity(botId)) ?? null;
@@ -15,18 +73,25 @@ export const getBotLastReadAt = (botId: string): number | null => botReadStatePr
 /** Returns a projection change, not a claim that persistence has already succeeded. */
 export function markBotRead(botId: string, at: number = Date.now()): boolean {
   if (!botId || !Number.isFinite(at) || at <= 0) return false;
-  return botReadStateProjection.ack(localBotReadIdentity(botId), Math.floor(at));
+  const changed = botReadStateProjection.ack(localBotReadIdentity(botId), Math.floor(at));
+  reportToHost({ mark: { [botId]: Math.floor(at) } });
+  return changed;
 }
 export function seedMissingBotReadState(botIds: readonly string[], at: number = Date.now()): boolean {
   if (!Number.isFinite(at) || at <= 0) return false;
   let changed = false;
   for (const id of botIds) if (id) changed = botReadStateProjection.seed(localBotReadIdentity(id), Math.floor(at)) || changed;
+  reportToHost({ seed: Object.fromEntries(botIds.filter(Boolean).map(id => [id, Math.floor(at)])) });
   return changed;
 }
 /** A partial, hidden or stale roster is never authoritative evidence of deletion. */
 export function pruneBotReadState(botIds: readonly string[]): boolean { void botIds; return false; }
 export const subscribeBotReadState = (listener: () => void): (() => void) => botReadStateProjection.subscribe(listener);
-export const resetBotReadStateForTests = () => botReadStateProjection.reset();
+export const resetBotReadStateForTests = () => {
+  hostOff?.(); hostOff = undefined; seededHost = false;
+  hostOwner = getDataOwnerGeneration();
+  botReadStateProjection.reset();
+};
 
 export const getRemoteBotReadAt = (deviceId: string, botId: string): number | undefined =>
   botReadStateProjection.read({ kind: 'remote-bot', deviceId, botId });
@@ -77,6 +142,7 @@ export function isBotGroupUnread(group: GroupReadSummary): boolean {
   return botGroupUnreadCount(group) > 0;
 }
 export function seedBotGroupReadState(groups: readonly GroupReadSummary[]): void {
+  reportToHost({ seed: Object.fromEntries(groups.map(group => [botGroupReadKey(group.id), Math.max(1, latestGroupReplyAt(group))])) });
   for (const group of groups) {
     botReadStateProjection.seed(localBotReadIdentity(botGroupReadKey(group.id)), Math.max(1, latestGroupReplyAt(group)));
   }

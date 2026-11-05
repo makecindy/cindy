@@ -237,4 +237,56 @@ describe('Bot read positions', () => {
     const release = startBotReadStateSync(); expect(fixture.listenerCount()).toBe(1);
     release(); expect(fixture.listenerCount()).toBe(1); stop(); expect(fixture.listenerCount()).toBe(0);
   });
+
+  // The computer's main keeps the one position every device advances (phone, other Macs).
+  it('hands local positions to the host as seeds, reports reads, and folds host positions in forward', async () => {
+    let push: ((payload: unknown, stamp?: unknown) => void) | undefined;
+    const host = { 'bot-1': 9_000, 'bot-2': 1_000 };
+    const update = vi.fn(async (body: { ownerId: string }) => ({ ownerId: body.ownerId, positions: host }));
+    (window as unknown as { electronAPI: unknown }).electronAPI = { maker: fixture.bridge, localDb: { bots: { readState: {
+      get: vi.fn(async () => ({ ownerId: 'owner-1', positions: host })), update, onChanged: (callback: typeof push) => { push = callback; return () => { push = undefined; }; },
+    } } } };
+    try {
+      window.localStorage.setItem('cindy.bots.readState.v1.owner-1', JSON.stringify({ 'bot-1': 5_000, 'bot-2': 3_000 }));
+      stop(); resetBotReadStateForTests(); stop = startBotReadStateSync(); await ready();
+      setBotReadStateOwner('owner-1');
+      // Upgrade migration: the host only takes what it has no position for.
+      await vi.waitFor(() => expect(update).toHaveBeenCalledWith({ ownerId: 'owner-1', seed: expect.objectContaining({ 'bot-2': 3_000 }) }));
+      await vi.waitFor(() => expect(getBotLastReadAt('bot-1')).toBe(9_000));
+      expect(getBotLastReadAt('bot-2')).toBe(3_000);
+      markBotRead('bot-2', 4_000);
+      expect(update).toHaveBeenLastCalledWith({ ownerId: 'owner-1', mark: { 'bot-2': 4_000 } });
+      // Read on the phone: the host pushes; another account's push is ignored.
+      push?.({ ownerId: 'owner-2', positions: { 'bot-2': 99_000 } });
+      push?.({ ownerId: 'owner-1', positions: { 'bot-2': 8_000 } });
+      expect(getBotLastReadAt('bot-2')).toBe(8_000);
+    } finally {
+      window.electronAPI = { maker: fixture.bridge } as unknown as Window['electronAPI'];
+    }
+  });
+  // Merge compatibility: upstream host initialization must not promote an automatic
+  // seed into a user's read acknowledgement in the multi-window projection.
+  it('keeps host seeds distinct from actual reads and rejects late old-generation host replies', async () => {
+    let push: ((payload: unknown, stamp?: unknown) => void) | undefined;
+    let finish!: (state: { ownerId: string; positions: Record<string, number> }) => void;
+    const state = { ownerId: 'owner-1', positions: {}, acknowledgedPositions: {} };
+    window.electronAPI = { maker: fixture.bridge, localDb: { bots: { readState: {
+      get: () => new Promise(resolve => { finish = resolve; }),
+      update: vi.fn(async () => state),
+      onChanged: (callback: typeof push) => { push = callback; return () => { push = undefined; }; },
+    } } } } as unknown as Window['electronAPI'];
+    stop(); resetBotReadStateForTests(); stop = startBotReadStateSync(); await ready();
+    seedBotGroupReadState([{ id: 'g', lastReplyAt: 100 }]);
+    push?.({ ownerId: 'owner-1', positions: { 'group:g': 200 }, acknowledgedPositions: {} });
+    expect(getBotLastReadAt('group:g')).toBe(100);
+    expect(isBotGroupUnread({ id: 'g', lastReplyAt: 200 })).toBe(true);
+    push?.({ ownerId: 'owner-1', positions: { 'group:g': 200 }, acknowledgedPositions: { 'group:g': 150 } });
+    expect(getBotLastReadAt('group:g')).toBe(150);
+    const oldFinish = finish;
+    setDataOwnerGeneration('owner-1', 2); setBotReadStateOwner('owner-1'); await ready();
+    oldFinish({ ownerId: 'owner-1', positions: { 'group:g': 99_000 } });
+    await Promise.resolve();
+    expect(getBotLastReadAt('group:g')).toBe(150);
+  });
+
 });

@@ -416,6 +416,7 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
     supportsMemberRemoval: record.supportsMemberRemoval === true,
     supportsSettingsManagement: record.supportsSettingsManagement === true,
     supportsReadReceipts: record.supportsReadReceipts === true,
+    ...(record.supportsLocalReadSync === true ? { supportsLocalReadSync: true } : {}),
     supportsPersonalMask: record.supportsPersonalMask === true,
     replyMode: record.replyMode === 'mentioned' ? 'mentioned' : 'all',
     speakingMode: record.speakingMode === 'sequential' ? 'sequential' : 'auto',
