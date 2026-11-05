@@ -12,6 +12,7 @@
  * - 第一次看到某个 PR 只记基线,不触发(启动后的首轮刷新不该把所有跟进都叫一遍);
  * - 只触发 active、按计划重复且此刻没有在跑的任务(提前跑会用掉一次性任务,手动任务不该被别人启动);
  *   同一任务两次触发至少间隔 MIN_RETRIGGER_MS;
+ * - 被动调度实例(与另一实例共库,自动触发让位给对方)不触发;
  * - 没有空闲的并发名额时不抢(run-now 本身不排队):这个 PR 记为待触发,下一次状态刷新再试,计划本身也会兜底;
  * - 只看确定的结果(ok),失败或查不到不算变化,也不清掉基线;
  * - 全部是尽力而为:出错只记日志,不影响状态查询本身。
@@ -33,6 +34,8 @@ export interface PrFollowWatchDeps {
   listActive(): Promise<Schedule[]>;
   /** Runs of this schedule in flight right now. */
   inflight(id: string): number;
+  /** False on a passive instance: automatic runs belong to another instance sharing the data. */
+  autoRunAllowed(): boolean;
   /** The scheduler has a free concurrency slot right now. */
   hasCapacity(): boolean;
   runNow(id: string, trigger: ScheduleRunTrigger): Promise<unknown>;
@@ -106,7 +109,7 @@ export class PrFollowWatch {
   }
 
   private async trigger(url: string): Promise<void> {
-    if (!url) return;
+    if (!url || !this.deps.autoRunAllowed()) return;
     const schedules = (await this.deps.listActive()).filter((schedule) => watchesPr(schedule, url));
     const now = this.now();
     for (const schedule of schedules) {

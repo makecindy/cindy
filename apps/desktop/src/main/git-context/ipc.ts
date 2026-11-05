@@ -169,6 +169,8 @@ let prStatusService: PrStatusService | null = null;
 let githubReadService: GithubReadService | null = null;
 /** Runs the schedules that follow a PR as soon as a status refresh sees that PR change. */
 const prFollowWatch = new PrFollowWatch({
+  // A passive instance (dev beside a release build on the same data) never starts runs by itself.
+  autoRunAllowed: () => getSchedulerIfInitialized()?.isPassive() === false,
   listActive: async () => (await getSchedulerIfInitialized()?.list({ status: 'active' })) ?? [],
   inflight: (id) => getSchedulerIfInitialized()?.getInflightCount(id) ?? 0,
   hasCapacity: () => getSchedulerIfInitialized()?.hasFreeSlot() ?? false,

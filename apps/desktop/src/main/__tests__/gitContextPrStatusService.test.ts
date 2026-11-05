@@ -604,6 +604,7 @@ describe('PR follow watch', () => {
     const runNow = vi.fn(async () => ({ runId: 'r' }));
     const inflight = vi.fn(() => 0);
     const hasCapacity = vi.fn(() => true);
+    const autoRunAllowed = vi.fn(() => true);
     const watch = new PrFollowWatch({
       listActive: async () => [
         schedule('follow-85', 'https://github.com/MakeCindy/cindy/pull/85'),
@@ -614,6 +615,7 @@ describe('PR follow watch', () => {
       ],
       inflight,
       hasCapacity,
+      autoRunAllowed,
       runNow,
       now: () => now,
     });
@@ -631,7 +633,7 @@ describe('PR follow watch', () => {
       await svc.getStatuses([Q], { waitForFresh: true });
       await new Promise((resolve) => setImmediate(resolve));
     };
-    return { look, runNow, inflight, hasCapacity };
+    return { look, runNow, inflight, hasCapacity, autoRunAllowed };
   }
 
   it('runs only recurring schedules naming this PR, once per change, skipping in-flight and recent ones', async () => {
@@ -667,12 +669,22 @@ describe('PR follow watch', () => {
     expect(runNow).toHaveBeenCalledTimes(1);
   });
 
+  // Review (Codex P2 on #9022): a passive instance shares data with another one that owns automatic runs.
+  it('never starts runs on a passive scheduler instance', async () => {
+    const { look, runNow, autoRunAllowed } = setup();
+    autoRunAllowed.mockReturnValue(false);
+    await look(10);
+    await look(100_000, 'b2');
+    expect(runNow).not.toHaveBeenCalled();
+  });
+
   it('treats failed reads as no news and keeps the baseline', async () => {
     const runNow = vi.fn(async () => null);
     const watch = new PrFollowWatch({
       listActive: async () => [schedule('follow-85', 'https://github.com/makecindy/cindy/pull/85')],
       inflight: () => 0,
       hasCapacity: () => true,
+      autoRunAllowed: () => true,
       runNow,
     });
     const ok = (headSha: string) => ({ ok: true, status: 'open', prNumber: 85, headSha }) as never;

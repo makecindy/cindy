@@ -2877,6 +2877,10 @@ describe('Scheduler cross-instance dedupe', () => {
 
 // ── 被动模式(双开时 dev 端让出自动触发)──────────────────────────────────
 describe('Scheduler passive mode', () => {
+  it('reports passive mode so host triggers can stay out', () => {
+    expect(makeHarness({ passive: true }).scheduler.isPassive()).toBe(true);
+    expect(makeHarness().scheduler.isPassive()).toBe(false);
+  });
   it('start() 不清僵尸、不加载 actives、不装时钟;runNow 照常可用', async () => {
     const storage = new InMemoryStorage();
     const h = makeHarness({ storage, passive: true });
