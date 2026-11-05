@@ -1,3 +1,4 @@
+import { personalizationDetailsSettings } from './PersonalizationDetails.settings-search';
 import { useAppSettingsRevision } from '@/hooks/useAppSettingsRevision';
 /**
  * MemorySection — Settings → Personalization 下的 Memory 控制面板。
@@ -310,21 +311,21 @@ export function MemorySection() {
             </div>
             <div className="flex flex-col gap-[8px]">
               <p className="text-14 font-medium leading-none text-[var(--settings-section-title)]">
-                {t('settings.memory.maker.label')}
+                {t(personalizationDetailsSettings.memoryMakerLabel.titleKey)}
               </p>
               <p className="text-12 leading-none text-[var(--settings-section-desc)]">
-                {t('settings.memory.maker.description')}
+                {t(personalizationDetailsSettings.memoryMakerLabel.descriptionKey)}
               </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Switch
+            <Switch data-setting-id={personalizationDetailsSettings.memoryMakerLabel.id}
               checked={makerEnabled}
               disabled={makerResetPending || makerTogglePending}
               onCheckedChange={(v) => void handleMakerToggle(v)}
               aria-label={t('settings.memory.maker.toggleAria')}
             />
-            <button
+            <button data-setting-id={personalizationDetailsSettings.memoryMakerLabel.id}
               type="button"
               onClick={() => void handleMakerReset()}
               disabled={makerResetPending || makerTogglePending}
@@ -351,8 +352,9 @@ export function MemorySection() {
             || !supported || slot.pending || loading;
           // Agent label/description 来自 i18n 表 (品牌名 Claude / Codex 也走 i18n
           // —— 各语种都保留品牌原文，只方便统一管理)。
-          const label = t(`settings.memory.agents.${agent.kind}.label`);
-          const description = t(`settings.memory.agents.${agent.kind}.description`);
+          const definition = agent.kind === 'claude-code' ? personalizationDetailsSettings.memoryAgentsClaudeCodeLabel : agent.kind === 'codex' ? personalizationDetailsSettings.memoryAgentsCodexLabel : personalizationDetailsSettings.memoryAgentsPiLabel;
+          const label = t(definition.titleKey);
+          const description = t(definition.descriptionKey);
           return (
             <div
               key={agent.kind}
@@ -382,13 +384,13 @@ export function MemorySection() {
               </div>
 
               <div className="flex items-center gap-2">
-                <Switch
+                <Switch data-setting-id={definition.id}
                   checked={checked}
                   disabled={disabled}
                   onCheckedChange={(v) => void handleToggle(agent.kind, v, label)}
                   aria-label={t('settings.memory.agent.toggleAria', { label })}
                 />
-                <button
+                <button data-settings-search-action="Restore the selected memory preference"
                   type="button"
                   onClick={() => void handleReset(agent.kind, label)}
                   disabled={disabled}
