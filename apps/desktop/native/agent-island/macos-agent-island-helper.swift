@@ -5449,7 +5449,16 @@ final class AgentIslandController {
     if state.mode == "expanded" {
       cancelPendingCarrierFrame()
     }
-    let shouldResizeCarrierBeforeState = state.mode == "expanded" && lastCocoaFrame != cocoaFrame
+    // A carrier that only grows around the current panel (the shared size coming back after a
+    // resize drag) is set before the animated state change. Set afterwards, the panel would jump
+    // to the new size while the island's offset inside it springs across, so the island would
+    // swing sideways on screen and back.
+    let carrierGrowsAroundPanel = lastCocoaFrame != nil
+      && cocoaFrame.minX <= panel.frame.minX + 0.5
+      && cocoaFrame.maxX >= panel.frame.maxX - 0.5
+      && cocoaFrame.height >= panel.frame.height - 0.5
+    let shouldResizeCarrierBeforeState = (state.mode == "expanded" || carrierGrowsAroundPanel)
+      && lastCocoaFrame != cocoaFrame
     let shouldDelayCarrierShrink = state.visible
       && model.state.mode == "expanded"
       && state.mode != "expanded"
