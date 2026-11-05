@@ -9,6 +9,11 @@ import { setDataOwnerGeneration } from '../../../src/renderer/contexts/dataOwner
 const referenceQuote = { providerId: 'openai', modelId: 'gpt-6.1-sol', currency: 'USD' as const,
   source: 'provider-reference' as const, approximate: false,
   inputPerMtok: 2, outputPerMtok: 10, cacheReadPerMtok: 0.1, cacheCreatePerMtok: 2.5 };
+let pricingControls = false;
+const settlePriceMutation = subscription('settlePriceMutation');
+const waitForPriceSettlement = () => pricingControls ? new Promise<void>(resolve => {
+  const off = settlePriceMutation(() => { off(); resolve(); });
+}) : Promise.resolve();
 const priceOverrides = new Map<string, ModelPriceOverrideDesiredQuote>();
 const priceKey = (target: ModelPriceOverrideTarget) => `${target.agent}:${target.modelId}`;
 const priceView = (target: ModelPriceOverrideTarget): ModelPriceOverrideView => {
@@ -18,7 +23,7 @@ const priceView = (target: ModelPriceOverrideTarget): ModelPriceOverrideView => 
     effective: override ? { ...reference, ...override,
       cacheReadPerMtok: override.cacheReadPerMtok ?? undefined,
       cacheCreatePerMtok: override.cacheCreatePerMtok ?? undefined } : reference,
-    conflict: false, registryUpdatedAt: '2026-10-31', allowedCurrencies: ['USD'] };
+    conflict: false, registryUpdatedAt: '2026-10-31', allowedCurrencies: pricingControls ? ['USD', 'CNY'] : ['USD'] };
 };
 
 let imageInput: boolean | null = null;
@@ -34,6 +39,7 @@ const contextView = () => ({ limit: 272000, isCustomized: false,
 
 void mountPage({
   host: ctx => {
+    pricingControls = ctx.case.startsWith('pricing-controls');
     if (ctx.case === 'owner-repair') setDataOwnerGeneration('fixture-owner', 1);
     return {
       onAuthStateChange: (listener: (state: unknown) => void) => authChanges(state => {
@@ -45,10 +51,12 @@ void mountPage({
       maker: {
     getModelPriceOverride: async (target: ModelPriceOverrideTarget) => priceView(target),
     setModelPriceOverride: async (target: ModelPriceOverrideTarget, quote: ModelPriceOverrideDesiredQuote) => {
+      await waitForPriceSettlement();
       priceOverrides.set(priceKey(target), quote);
       return priceView(target);
     },
     resetModelPriceOverride: async (target: ModelPriceOverrideTarget) => {
+      await waitForPriceSettlement();
       priceOverrides.delete(priceKey(target));
       return priceView(target);
     },
@@ -71,7 +79,7 @@ void mountPage({
     } };
   },
   render: ctx => {
-    const id = ['sol', 'pricing', 'pricing-narrow'].includes(ctx.case) ? 'gpt-6.1-sol' : ctx.case === 'legacy-sol' ? 'gpt-6-sol' : 'gpt-6-astra';
+    const id = (ctx.case === 'sol' || ctx.case.startsWith('pricing')) ? 'gpt-6.1-sol' : ctx.case === 'legacy-sol' ? 'gpt-6-sol' : 'gpt-6-astra';
     const models = Object.fromEntries((['codex', 'claude-code', 'pi'] as const).map(agent => {
       const meta = resolveModelMetadata(BUNDLED_CATALOG.modelRegistry, 'openai', id, undefined, undefined, agent);
       const model: CatalogModel = {

@@ -229,6 +229,10 @@ export function ModelAdvancedDrawer({
     const model = row?.byAgent[agent];
     return model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' });
   }), [row, provider.source]);
+  const priceRow = useMemo<UnionModelRow | null>(() => row && chatAgents.length ? {
+    ...row, avail: chatAgents,
+    byAgent: Object.fromEntries(chatAgents.map(agent => [agent, row.byAgent[agent]])),
+  } : null, [row, chatAgents]);
   const primaryCandidates = chatAgents?.length ? chatAgents : row?.avail;
   const primaryAgent =
     primaryCandidates?.find((agent) =>
@@ -1161,11 +1165,11 @@ export function ModelAdvancedDrawer({
                     </Row>
                   </Section>
 
-                  {conversational && provider.id !== 'xd' && !isOrganizationManagedProvider(provider) && !paymentRequired ? (
+                  {priceRow && provider.id !== 'xd' && !isOrganizationManagedProvider(provider) && !paymentRequired ? (
                     <ModelPriceOverrideDialog
                       key={`${provider.id}:${row.id}`}
                       provider={provider}
-                      row={row}
+                      row={priceRow}
                       open={open}
                       onOpenChange={onOpenChange}
                       presentation="inline"

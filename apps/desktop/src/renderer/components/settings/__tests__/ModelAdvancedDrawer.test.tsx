@@ -1246,3 +1246,19 @@ it.each(['repeat', 'ctrlKey', 'shiftKey', 'altKey', 'metaKey', 'isComposing'])(
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape', [flag]: true });
     expect(close).not.toHaveBeenCalled();
   });
+
+
+it.each([false, true])('restricts mixed chat/media pricing targets regardless of row order: media first %s', (mediaFirst) => {
+  const media = { ...model, mode: 'image_generation', id: 'media-wire' } as CatalogModel;
+  const avail: ('codex' | 'claude-code')[] = mediaFirst ? ['claude-code', 'codex'] : ['codex', 'claude-code'];
+  const mixed = { id: model.id, name: model.name, avail, byAgent: { codex: model, 'claude-code': media } };
+  const props = { provider, row: mixed, open: true, onOpenChange: vi.fn(), pricePresentationOf: () => null,
+    onDisable: vi.fn(), disabled: false, paymentRequired: false };
+  const ui = render(<ModelAdvancedDrawer {...props} />);
+  expect(mocks.price.mock.lastCall![0].row.avail).toEqual(['codex']);
+  expect(mocks.price.mock.lastCall![0].row.byAgent['claude-code']).toBeUndefined();
+  expect(mocks.price.mock.lastCall![0].initialAgent).toBe('codex');
+  mocks.price.mockClear();
+  ui.rerender(<ModelAdvancedDrawer {...props} row={{ ...mixed, byAgent: { codex: media, 'claude-code': media } }} />);
+  expect(mocks.price).not.toHaveBeenCalled();
+});

@@ -4,6 +4,8 @@ export default {
   real:'ModelAdvancedDrawer, buildUnionRows, bundled per-engine reasoning metadata, preference writes, themes and translations',
   notCovered:'Account entitlement and live model calls; host context, speed availability and price read/write responses are in-memory fixture inputs; no real persistence or billing',
   cases:{
+    'pricing-controls':{about:'Native currency and reset focus during deferred saves'},
+    'pricing-controls-narrow':{about:'Currency and reset focus at 320px',viewport:{width:320,height:800}},
     pricing:{about:'Inline token prices, invalid required values revert, zero saves, reset restores reference'},
     'pricing-narrow':{about:'Inline token pricing at 320px width',viewport:{width:320,height:800}},
     default:{about:'GPT-6 Astra with Codex Ultrafast entitlement'},
@@ -21,6 +23,31 @@ export default {
       const pricing = input.locator('xpath=ancestor::section[1]');
       await pricing.scrollIntoViewIfNeeded();
       await ui.capture('pricing-reference', { locator: pricing });
+      if (ui.case.startsWith('pricing-controls')) {
+        const currency = pricing.getByRole('combobox');
+        await currency.focus();
+        await currency.selectOption('CNY');
+        await page.waitForFunction(() => document.querySelector('section[aria-busy]')?.getAttribute('aria-busy') === 'true');
+        if (!await currency.evaluate(el => !el.disabled && document.activeElement === el)) throw Error('Currency lost focus during save');
+        await page.keyboard.press('Tab');
+        if (!await input.evaluate(el => document.activeElement === el)) throw Error('Tab did not reach price input during currency save');
+        await page.keyboard.press('Shift+Tab');
+        if (!await currency.evaluate(el => document.activeElement === el)) throw Error('Shift+Tab did not return to currency during save');
+        await ui.capture('currency-saving', { locator: pricing });
+        await page.evaluate(() => window.__uiPage.emit('settlePriceMutation'));
+        await page.waitForFunction(() => document.querySelector('section[aria-busy]')?.getAttribute('aria-busy') === 'false');
+        if (!await currency.evaluate(el => document.activeElement === el)) throw Error('Currency lost focus after save');
+        const reset = pricing.getByRole('button', { name: await ui.t('settings.providers.models.priceOverride.resetShort'), exact: true });
+        await reset.click();
+        if (!await reset.evaluate(el => !el.disabled && document.activeElement === el)) throw Error('Reset lost focus during pending work');
+        await ui.capture('reset-pending', { locator: pricing });
+        await page.evaluate(() => window.__uiPage.emit('settlePriceMutation'));
+        await page.waitForFunction(() => document.querySelector('section[aria-busy]')?.getAttribute('aria-busy') === 'false');
+        if (!await input.evaluate(el => document.activeElement === el && el.value === '2')) throw Error('Reset did not settle focus on the price input');
+        await ui.capture('controls-settled', { locator: pricing });
+        return;
+      }
+
       await input.fill('');
       await input.press('Enter');
       if (await input.inputValue() !== '' || !await input.evaluate(el => document.activeElement === el)) throw Error('Enter submitted the Settings draft');

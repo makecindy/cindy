@@ -16,6 +16,7 @@ import type {
 } from '../../../shared/modelPriceOverride';
 import type { UnionModelRow } from './UnifiedModelList';
 import type { ModelPriceQuote } from '../../../shared/regionalMoney';
+import { getModelPriceQuote } from '../../../shared/modelPriceQuote';
 
 const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
@@ -114,6 +115,10 @@ export function ModelPriceOverrideDialog({
     setFormState(resolved);
   };
 
+  const primaryInputRef = useRef<HTMLInputElement | null>(null);
+  const resetButtonRef = useRef<HTMLButtonElement | null>(null);
+  const fallbackSignature = JSON.stringify(fallbackQuoteOf?.(agent) ?? null);
+
   const model = row.byAgent[agent];
   const modelId = model?.id;
   const target = useMemo(
@@ -125,8 +130,14 @@ export function ModelPriceOverrideDialog({
   // only when the override API has no quote, without changing its edit permissions.
   const fallbackQuoteOfRef = useRef(fallbackQuoteOf);
   fallbackQuoteOfRef.current = fallbackQuoteOf;
-  const resolveView = (next: ModelPriceOverrideView) => {
-    const fallback = fallbackQuoteOfRef.current?.(next.target.agent);
+  const resolveView = async (next: ModelPriceOverrideView) => {
+    if (next.effective || next.reference) return next;
+    const readPricing = window.electronAPI.maker.usage?.getReferenceModelPricing;
+    // Provider-only discovery/configuration broadcasts do not update the parent's
+    // pricing cache. Read the existing authoritative projection for cost-only models.
+    const fallback = readPricing
+      ? getModelPriceQuote(await readPricing.call(window.electronAPI.maker.usage), next.target.providerId, next.target.modelId, next.target.agent)
+      : fallbackQuoteOfRef.current?.(next.target.agent);
     const effective = !next.effective && !next.reference &&
       fallback?.source === 'provider-reference' &&
       fallback.providerId === next.target.providerId && fallback.modelId === next.target.modelId &&
@@ -135,7 +146,7 @@ export function ModelPriceOverrideDialog({
     return effective === next.effective ? next : { ...next, effective };
   };
   const applyView = (next: ModelPriceOverrideView, preserveDraft = false) => {
-    const resolved = resolveView(next);
+    const resolved = next;
     const previous = viewRef.current && formFromView(viewRef.current);
     const latest = formFromView(resolved);
     const current = formRef.current;
@@ -150,11 +161,12 @@ export function ModelPriceOverrideDialog({
     viewRef.current = resolved;
     setForm(nextForm);
     setView(resolved);
+    // A completed reset can make its button unavailable. Move only its current
+    // focus to the price field; never steal focus after the user has tabbed away.
+    if (inline && resolved.editable && !resolved.override && resetButtonRef.current &&
+        document.activeElement === resetButtonRef.current) primaryInputRef.current?.focus();
     return true;
   };
-
-  // DESIGN.md §4:弹窗打开时焦点落主输入,而不是 Radix 默认的首个可聚焦元素(关闭按钮)。
-  const primaryInputRef = useRef<HTMLInputElement | null>(null);
 
   // 弹窗关闭或目标切换后,在途 save/reset 的迟到响应必须整体作废:旧实例捕获的
   // setView/onOpenChange(false) 会覆盖新目标的表单、甚至直接关掉刚打开的弹窗。
@@ -201,6 +213,7 @@ export function ModelPriceOverrideDialog({
     const current = viewRef.current?.target;
     const sameTarget = current?.providerId === target.providerId &&
       current.agent === target.agent && current.modelId === target.modelId;
+    if (sameTarget) refreshQueuedRef.current = true;
     if (!sameTarget) {
       setLoading(true);
       viewRef.current = null;
@@ -209,6 +222,7 @@ export function ModelPriceOverrideDialog({
     }
     void window.electronAPI.maker
       .getModelPriceOverride(target)
+      .then(resolveView)
       .then((next) => {
         if (cancelled || generation !== refreshGenerationRef.current) return;
         if (pendingMutationRef.current) { refreshQueuedRef.current = true; return; }
@@ -223,19 +237,29 @@ export function ModelPriceOverrideDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, target, t, pricingRevision]);
+  }, [open, target, t, pricingRevision, fallbackSignature]);
 
   useEffect(() => {
     if (!inline || !open || !target) return;
     // Same-target quote broadcasts do not change target identity. Refresh when
     // idle; a mutation keeps its epoch/close guard and drains the refresh later.
+    const changed = () => {
+      refreshQueuedRef.current = true;
+      const generation = ++refreshGenerationRef.current;
+      if (!pendingMutationRef.current) setPricingRevision(generation);
+    };
+    const unsubscribers: (() => void)[] = [];
+    // Each optional bridge is independent: an older/projected preload may expose
+    // either channel. Both feed the same mutation-preserving refresh queue.
     try {
-      return window.electronAPI.maker.usage?.onReferenceModelPricingChanged?.(() => {
-        refreshQueuedRef.current = true;
-        const generation = ++refreshGenerationRef.current;
-        if (!pendingMutationRef.current) setPricingRevision(generation);
-      });
-    } catch { /* Older/projected preload: the existing quote read remains usable. */ }
+      const off = window.electronAPI.maker.usage?.onReferenceModelPricingChanged?.(changed);
+      if (off) unsubscribers.push(off);
+    } catch { /* Existing quote reads remain usable. */ }
+    try {
+      const off = window.electronAPI.maker.onProvidersChanged?.(changed);
+      if (off) unsubscribers.push(off);
+    } catch { /* Existing quote reads remain usable. */ }
+    return () => { unsubscribers.forEach(off => off()); };
   }, [inline, open, target]);
 
   const save = async (draft = formRef.current) => {
@@ -290,7 +314,7 @@ export function ModelPriceOverrideDialog({
     try {
       if (inline && refreshQueuedRef.current) {
         const generation = refreshGenerationRef.current;
-        const latest = resolveView(await window.electronAPI.maker.getModelPriceOverride(target));
+        const latest = await resolveView(await window.electronAPI.maker.getModelPriceOverride(target));
         if (mutationEpochRef.current !== epoch) return;
         if (generation !== refreshGenerationRef.current) throw new Error('price changed while rereading');
         const previous = formFromView(view);
@@ -309,7 +333,7 @@ export function ModelPriceOverrideDialog({
         desired = { currency: rebased.currency, inputPerMtok: input, outputPerMtok: output,
           cacheReadPerMtok: read, cacheCreatePerMtok: create };
       }
-      const next = await window.electronAPI.maker.setModelPriceOverride(target, desired);
+      const next = await resolveView(await window.electronAPI.maker.setModelPriceOverride(target, desired));
       if (mutationEpochRef.current !== epoch) return;
       applyView(next);
       toast.success(t('settings.providers.models.priceOverride.saved'));
@@ -333,7 +357,7 @@ export function ModelPriceOverrideDialog({
     setMutationPending(true);
     const epoch = mutationEpochRef.current;
     try {
-      const next = await window.electronAPI.maker.resetModelPriceOverride(target);
+      const next = await resolveView(await window.electronAPI.maker.resetModelPriceOverride(target));
       if (mutationEpochRef.current !== epoch) return;
       applyView(next);
       toast.success(t('settings.providers.models.priceOverride.resetDone'));
@@ -358,7 +382,6 @@ export function ModelPriceOverrideDialog({
 
   if (inline) {
     const inputUnavailable = loading || !view?.editable;
-    const blocked = inputUnavailable || saving;
     const details = typeof referenceDetails === 'function' ? referenceDetails(agent) : referenceDetails;
     return (
       <section className="pt-5" aria-label={t('settings.providers.models.advanced.pricing')} aria-busy={saving}>
@@ -366,9 +389,9 @@ export function ModelPriceOverrideDialog({
           <h4 className="text-12 font-medium text-[var(--text-secondary)]">
             {t('settings.providers.models.advanced.pricing')}
           </h4>
-          <Button variant="secondary" onClick={() => void reset()}
+          <Button ref={resetButtonRef} variant="secondary" onClick={() => void reset()}
             data-model-price-deferred-action onBlur={() => void save()}
-            disabled={blocked || !view?.override} className="px-3"
+            disabled={inputUnavailable || !view?.override} aria-disabled={saving || undefined} className="px-3 aria-disabled:opacity-60"
             title={t('settings.providers.models.priceOverride.reset')}>
             {t('settings.providers.models.priceOverride.resetShort')}
           </Button>
@@ -387,9 +410,14 @@ export function ModelPriceOverrideDialog({
           {(view?.allowedCurrencies.length ?? 0) > 1 && (
             <label className="mb-2 flex items-center justify-between gap-4 text-12 text-[var(--text-secondary)]">
               {t('settings.providers.models.priceOverride.currency')}
-              <select value={form.currency} disabled={blocked}
+              <select value={form.currency} disabled={inputUnavailable} aria-disabled={saving || undefined}
                 data-model-price-deferred-action onBlur={() => void save()}
+                onKeyDown={(event) => {
+                  if (pendingMutationRef.current && event.key !== 'Tab' && event.key !== 'Escape') event.preventDefault();
+                }}
+                onPointerDown={(event) => { if (pendingMutationRef.current) event.preventDefault(); }}
                 onChange={(event) => {
+                  if (pendingMutationRef.current) return;
                   const next = { ...formRef.current, currency: event.target.value as FormState['currency'] };
                   setForm(next);
                   void save(next);
@@ -417,7 +445,7 @@ export function ModelPriceOverrideDialog({
               <span className="min-w-0 text-right text-13">
                 <span className="-my-2 inline-flex h-8 items-center rounded-full border border-transparent px-1 text-[var(--text-primary)] hover:border-[var(--border-default)] focus-within:border-[var(--settings-input-border-focus)] focus-within:ring-2 focus-within:ring-[var(--focus-ring-soft)]">
                   <span aria-hidden>{form.currency === 'CNY' ? '¥' : '$'}</span>
-                  <input id={`price-${agent}-${field}`} data-model-price-input type="text" inputMode="decimal"
+                  <input ref={field === 'input' ? primaryInputRef : undefined} id={`price-${agent}-${field}`} data-model-price-input type="text" inputMode="decimal"
                     value={form[field]} disabled={inputUnavailable} readOnly={saving}
                     placeholder="—"
                     aria-label={t(`settings.providers.models.priceOverride.${label}`)}

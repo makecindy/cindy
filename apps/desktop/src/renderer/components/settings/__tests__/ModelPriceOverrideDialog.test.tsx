@@ -81,16 +81,20 @@ describe('ModelPriceOverrideDialog', () => {
   const setModelPriceOverride = vi.fn();
   const resetModelPriceOverride = vi.fn();
   const pricingListeners = new Set<() => void>();
+  const providerListeners = new Set<() => void>();
+  const broadcastProvider = () => act(() => { providerListeners.forEach(listener => listener()); });
   const broadcastPricing = () => act(() => { pricingListeners.forEach(listener => listener()); });
 
   beforeEach(() => {
     vi.clearAllMocks();
     pricingListeners.clear();
+    providerListeners.clear();
     getModelPriceOverride.mockReset();
     setModelPriceOverride.mockReset();
     resetModelPriceOverride.mockReset();
     (window as unknown as { electronAPI: unknown }).electronAPI = {
       maker: {
+        onProvidersChanged: (listener: () => void) => { providerListeners.add(listener); return () => { providerListeners.delete(listener); }; },
         getModelPriceOverride,
         setModelPriceOverride,
         resetModelPriceOverride,
@@ -1024,5 +1028,153 @@ describe('ModelPriceOverrideDialog', () => {
       expect(input.value).toBe('7');
       expect(setModelPriceOverride).not.toHaveBeenCalled();
     });
+
+  it('refreshes changed fallback values without treating callback identity changes as new edits', async () => {
+    const empty = { ...priceView('model-a'), effective: null, reference: null };
+    getModelPriceOverride.mockResolvedValue(empty);
+    const show = (amount: number) => <ModelPriceOverrideDialog provider={provider} row={row('model-a')} open
+      onOpenChange={vi.fn()} presentation="inline" fallbackQuoteOf={() => ({ ...priceView('model-a').reference!, outputPerMtok: amount })} />;
+    const ui = render(show(4));
+    const input = ui.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+    const output = ui.getByLabelText('settings.providers.models.priceOverride.output') as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe('1'));
+    fireEvent.change(input, { target: { value: '7' } });
+    ui.rerender(show(9));
+    await waitFor(() => expect(output.value).toBe('9'));
+    expect(input.value).toBe('7');
+    const reads = getModelPriceOverride.mock.calls.length;
+    ui.rerender(show(9));
+    await act(async () => {});
+    expect(getModelPriceOverride).toHaveBeenCalledTimes(reads);
+  });
+
+  it('reads fresh connection-local pricing on provider-only notifications before parent snapshots arrive', async () => {
+    const empty = { ...priceView('model-a'), effective: null, reference: null };
+    let quote = priceView('model-a').reference!;
+    const currentPricing = vi.fn(async () => ({ openrouter: { ['model-a\u0000codex']: quote } }));
+    Object.assign(window.electronAPI.maker.usage, { getReferenceModelPricing: currentPricing });
+    getModelPriceOverride.mockResolvedValue(empty);
+    setModelPriceOverride.mockResolvedValue(refreshedPrice(7));
+    const ui = render(<ModelPriceOverrideDialog provider={provider} row={row('model-a')} open
+      onOpenChange={vi.fn()} presentation="inline" fallbackQuoteOf={() => priceView('model-a').reference!} />);
+    const input = ui.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+    const output = ui.getByLabelText('settings.providers.models.priceOverride.output') as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe('1'));
+    input.focus();
+    fireEvent.change(input, { target: { value: '7' } });
+    quote = { ...quote, outputPerMtok: 9 };
+    broadcastProvider();
+    await waitFor(() => expect(output.value).toBe('9'));
+    expect(input.value).toBe('7');
+    fireEvent.blur(input);
+    await waitFor(() => expect(setModelPriceOverride).toHaveBeenCalledWith(empty.target,
+      expect.objectContaining({ inputPerMtok: 7, outputPerMtok: 9 })));
+  });
+
+  it.each(['save success', 'save failure', 'reset'] as const)('queues provider-only refresh during %s', async (kind) => {
+    let finish!: (view: ModelPriceOverrideView) => void;
+    let fail!: (error: Error) => void;
+    getModelPriceOverride.mockResolvedValueOnce(priceView('model-a', 'codex', true)).mockResolvedValue(refreshedPrice());
+    const operation = new Promise<ModelPriceOverrideView>((resolve, reject) => { finish = resolve; fail = reject; });
+    if (kind === 'reset') resetModelPriceOverride.mockReturnValue(operation);
+    else setModelPriceOverride.mockReturnValue(operation);
+    const pending = vi.fn();
+    const ui = render(<ModelPriceOverrideDialog provider={provider} row={row('model-a')} open
+      onOpenChange={vi.fn()} onPendingChange={pending} presentation="inline" />);
+    const input = ui.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+    const output = ui.getByLabelText('settings.providers.models.priceOverride.output') as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe('1'));
+    if (kind === 'reset') fireEvent.click(ui.getByRole('button', { name: 'settings.providers.models.priceOverride.resetShort' }));
+    else { fireEvent.change(input, { target: { value: '7' } }); fireEvent.blur(input); }
+    broadcastProvider();
+    expect(pending).toHaveBeenLastCalledWith(true);
+    await act(async () => { if (kind === 'save failure') fail(new Error('offline')); else finish(priceView('model-a')); });
+    await waitFor(() => expect(output.value).toBe('9'));
+    expect(input.value).toBe(kind === 'save failure' ? '7' : '1');
+    expect(pending).toHaveBeenLastCalledWith(false);
+    ui.unmount();
+    expect(providerListeners.size).toBe(0);
+  });
+
+  it.each(['success', 'failure'] as const)('keeps currency focus and rejects repeated changes during save %s', async (kind) => {
+    const initial = priceView('model-a'); initial.allowedCurrencies = ['USD', 'CNY'];
+    getModelPriceOverride.mockResolvedValue(initial);
+    let finish!: (view: ModelPriceOverrideView) => void;
+    let fail!: (error: Error) => void;
+    setModelPriceOverride.mockReturnValue(new Promise((resolve, reject) => { finish = resolve; fail = reject; }));
+    const user = userEvent.setup();
+    const ui = render(inline());
+    const currency = await ui.findByLabelText('settings.providers.models.priceOverride.currency') as HTMLSelectElement;
+    currency.focus();
+    fireEvent.change(currency, { target: { value: 'CNY' } });
+    expect(currency.disabled).toBe(false);
+    expect(document.activeElement).toBe(currency);
+    fireEvent.change(currency, { target: { value: 'USD' } });
+    expect(currency.value).toBe('CNY');
+    expect(setModelPriceOverride).toHaveBeenCalledOnce();
+    await user.tab();
+    const input = ui.getByLabelText('settings.providers.models.priceOverride.input');
+    expect(document.activeElement).toBe(input);
+    await user.tab({ shift: true });
+    expect(document.activeElement).toBe(currency);
+    await act(async () => {
+      if (kind === 'failure') fail(new Error('offline'));
+      else finish({ ...initial, effective: { ...initial.effective!, currency: 'CNY' } });
+    });
+    expect(document.activeElement).toBe(currency);
+  });
+
+  it.each(['success', 'failure', 'left'] as const)('keeps reset focus during pending work and settles it safely: %s', async (kind) => {
+    getModelPriceOverride.mockResolvedValue(priceView('model-a', 'codex', true));
+    let finish!: (view: ModelPriceOverrideView) => void;
+    let fail!: (error: Error) => void;
+    resetModelPriceOverride.mockReturnValue(new Promise((resolve, reject) => { finish = resolve; fail = reject; }));
+    const ui = render(inline());
+    const input = ui.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe('1'));
+    const button = ui.getByRole('button', { name: 'settings.providers.models.priceOverride.resetShort' }) as HTMLButtonElement;
+    button.focus(); fireEvent.click(button);
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    expect(resetModelPriceOverride).toHaveBeenCalledOnce();
+    const other = ui.getByLabelText('settings.providers.models.priceOverride.output');
+    if (kind === 'left') other.focus();
+    await act(async () => { if (kind === 'failure') fail(new Error('offline')); else finish(priceView('model-a')); });
+    expect(document.activeElement).toBe(kind === 'left' ? other : kind === 'failure' ? button : input);
+  });
+
+  it('retains drafts and refuses stale writes when the fresh connection quote cannot be read', async () => {
+    const empty = { ...priceView('model-a'), effective: null, reference: null };
+    const pricing = vi.fn().mockResolvedValueOnce({ openrouter: { ['model-a\u0000codex']: priceView('model-a').reference! } })
+      .mockRejectedValue(new Error('quote unavailable'));
+    Object.assign(window.electronAPI.maker.usage, { getReferenceModelPricing: pricing });
+    getModelPriceOverride.mockResolvedValue(empty);
+    const ui = render(inline());
+    const input = ui.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe('1'));
+    fireEvent.change(input, { target: { value: '7' } });
+    broadcastProvider();
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('settings.providers.models.priceOverride.loadFailed'));
+    fireEvent.blur(input);
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('settings.providers.models.priceOverride.saveFailed'));
+    expect(input.value).toBe('7');
+    expect(setModelPriceOverride).not.toHaveBeenCalled();
+  });
+
+  it('ignores a late connection quote after switching the real target', async () => {
+    let finish!: (value: unknown) => void;
+    const pricing = vi.fn().mockReturnValueOnce(new Promise(resolve => { finish = resolve; }))
+      .mockResolvedValue({ openrouter: { ['model-b\u0000codex']: { ...priceView('model-b').reference!, inputPerMtok: 5 } } });
+    Object.assign(window.electronAPI.maker.usage, { getReferenceModelPricing: pricing });
+    getModelPriceOverride.mockImplementation(async target => ({ ...priceView(target.modelId), effective: null, reference: null }));
+    const ui = render(inline());
+    await waitFor(() => expect(pricing).toHaveBeenCalledOnce());
+    ui.rerender(inline('model-b'));
+    const input = ui.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe('5'));
+    await act(async () => { finish({ openrouter: { ['model-a\u0000codex']: priceView('model-a').reference! } }); });
+    expect(input.value).toBe('5');
+    expect(setModelPriceOverride).not.toHaveBeenCalled();
+  });
 
 });
