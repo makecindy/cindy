@@ -32,6 +32,14 @@ CINDY_HOST_API=http://127.0.0.1:3456 pnpm --filter desktop dev
 | `maker:input:get-projection` / `enqueue` / `stop` / `steer` / `resume` | `POST /api/input/*` |
 | 事件流 | `GET /events` → `maker:event` |
 
+## 实测发现并修掉的问题
+
+- 代理安装若早于 Desktop 自身的 `maker:*` 注册，会让后者抛 `Attempted to register a second handler`
+  并**跳过其后所有注册**（remote-ssh、project-automation 等 handler 缺失）。已把代理安装
+  移到注册之后。
+- 原生绑定 ABI：为 Electron 安装的 `better-sqlite3` 会让同一进程树里的 Host 无法启动，
+  反之亦然；这是验证环境限制，不是代码问题。
+
 ## 安全边界
 
 - 只接受 loopback（`127.0.0.1` / `localhost` / `::1`）目标；非 loopback 直接拒绝启动，
@@ -55,4 +63,5 @@ Orca 协同、记忆与文件工具等仍由 Desktop 内 Runtime 提供；客户
 | `pnpm --filter desktop run typecheck` | exit 0 |
 | `electron-forge start`（dev，`xvfb-run`） | 失败：主进程打包阶段 V8 堆上限 4GB OOM（本机内存受限），未进入应用启动 |
 | 打包产物 `out/Cindy-linux-x64/Cindy`（`--no-sandbox --mock`） | 失败：打包缺 `sharp` 的 linux-x64 原生依赖（`libvips-cpp.so`），属既有打包问题 |
-| 真实 Electron 启动 + 全通道验收 | **未完成**：上述两条路径都受环境限制；需要内存充足且有图形会话的机器复验 |
+| `electron-forge start`（dev，8GB 堆，xvfb，修复原生依赖后） | **主进程成功以客户端模式启动**：日志出现 `client mode: delegating to http://127.0.0.1:3456` 与 `client mode proxies: …`（18 个通道），随后 renderer 通过代理读取任务/供应商/能力 |
+| 全通道真机验收 | **未完成**：本机同一 `node_modules` 只能有一份 `better-sqlite3` 原生绑定——Host 需要 Node ABI、Electron 需要 Electron ABI，二者不能同时运行；需要独立 checkout 或预编译双份绑定后复验 |

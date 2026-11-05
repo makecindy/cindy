@@ -6757,6 +6757,31 @@ const registerIpcHandlers = () => {
       // 不阻塞启动 —— 老链路仍可用; 下次 splash retry 再尝试。
     }
 
+    // Client mode: install the host proxies only after the desktop finished its
+    // own registrations. Installing earlier makes those registrations throw and
+    // silently skip every later channel.
+    const clientDelegation = hostDelegation();
+    if (clientDelegation) {
+      const hostClient = createHostClient(clientDelegation);
+      const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain });
+      console.log(`[bootstrap-electron] client mode proxies: ${installed.join(', ')}`);
+      startHostEventBridge({
+        baseUrl: clientDelegation.baseUrl,
+        token: clientDelegation.token,
+        broadcast: (payload) => {
+          for (const win of BrowserWindow.getAllWindows()) {
+            if (!win.isDestroyed()) win.webContents.send(MAKER_PUSH.EVENT, payload);
+          }
+        },
+        onError: (error) => {
+          console.warn(
+            '[bootstrap-electron] host event bridge disconnected:',
+            error instanceof Error ? error.message : String(error),
+          );
+        },
+      });
+    }
+
     startReadyWorktreeMaintenance();
     // 删除 worktree 时因拿不到全局 safe.directory 锁而落盘的残留路径, 启动期补清。
     void reconcilePendingSafeDirectoryCleanups().catch((err) => {
@@ -10101,28 +10126,6 @@ app.on('ready', async () => {
       logStartupPhase('post-db-hooks-scheduled');
     },
   });
-  // Client mode: replace the covered channels with host proxies and relay the
-  // runtime event stream. Must run after every other registration so the proxy
-  // wins (one handler per channel).
-  const delegation = hostDelegation();
-  if (delegation) {
-    const hostClient = createHostClient(delegation);
-    const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain });
-    console.log(`[bootstrap-electron] client mode proxies: ${installed.join(', ')}`);
-    startHostEventBridge({
-      baseUrl: delegation.baseUrl,
-      token: delegation.token,
-      broadcast: (payload) => {
-        for (const win of BrowserWindow.getAllWindows()) {
-          if (!win.isDestroyed()) win.webContents.send(MAKER_PUSH.EVENT, payload);
-        }
-      },
-      onError: (error) => {
-        console.warn('[bootstrap-electron] host event bridge disconnected:', error instanceof Error ? error.message : String(error));
-      },
-    });
-  }
-
   // dev-only IPC for embedding-host smoke testing (status + sync embed). 安全:
   // 内部自带 app.isPackaged 守卫, packaged build 下 register 是 no-op。
   registerDevEmbeddingIpc();
