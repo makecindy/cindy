@@ -557,6 +557,39 @@ describe('pi translator', () => {
     ]);
   });
 
+  it.each([131064, 1000, undefined])('preserves normalized Pi reasoning usage (%s) without double counting', (reasoning) => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    // Earlier tool round must contribute to billing but not the final-request warning.
+    translatePiEvent(ev({ type: 'message_end', message: {
+      role: 'assistant', stopReason: 'toolUse', content: [],
+      usage: { input: 10, output: 100, reasoning: 50 },
+    } }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_end', message: {
+      role: 'assistant', stopReason: 'length', content: [],
+      usage: { input: 657000, output: 131072, ...(reasoning === undefined ? {} : { reasoning }) },
+    } }), queue, ctx);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+    const error = events.find((event) => event.type === 'error')?.data;
+    expect(error).toMatchObject({
+      reason: 'output-limit', isTerminal: true,
+      outputLimit: { outputTokens: 131072, ...(reasoning === undefined ? {} : { reasoningTokens: reasoning }) },
+      usage: { outputTokens: 131172, reasoningTokens: 50 + (reasoning ?? 0) },
+    });
+    expect(ctx.turnTokens).toBe(657010 + 131172);
+    expect(ctx.turnUsageSegments.at(-1)).toMatchObject({ outputTokens: 131072 });
+    if (reasoning === undefined) {
+      expect((error as { outputLimit: object }).outputLimit).not.toHaveProperty('reasoningTokens');
+    } else {
+      expect(ctx.turnUsageSegments.at(-1)).toHaveProperty('reasoningTokens', reasoning);
+    }
+    // Next turn must not reuse either the warning or the reasoning subtotal.
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    expect(ctx.turnReasoning).toBeUndefined();
+    expect(ctx.finalAssistantUsage).toBeUndefined();
+  });
+
   it.each(['DeepSeek-V4-Flash-0731', 'claude-sonnet-4-6'])('preserves length-limited text and usage for %s', (model) => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();

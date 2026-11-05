@@ -576,6 +576,7 @@ import {
 import { initNotificationService, showDeviceSessionDesktopEvent } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
+import { startAgentIslandQuota } from './agent-island/quota.js';
 import { setCompanionAvatarResolver } from './agent-island/companionIdentity.js';
 import { companionAvatarCache } from './companion-cloud/avatarCacheHost.js';
 import { attachWorkLouderCodexWindowReveal } from './worklouder-codex/index.js';
@@ -1178,6 +1179,7 @@ import {
   getGhostBrowserExtensionSlot,
   screenGhostControlPoint,
   resolveGhostControlPointPlugin,
+  diagnoseScheduleHookPluginForActiveOwner,
   getLiveScreenHost,
 } from './cindy-brain/index.js';
 import { setCodexImageAuthBinding } from './cindy-brain/codexImageAuthBinding.js';
@@ -1383,6 +1385,9 @@ async function attemptStartSchedulerOnce(): Promise<void> {
       ...automationGitBaselineHooks,
       screenControlPoint: screenGhostControlPoint,
       resolvePreRunPlugin: (pluginId) => resolveGhostControlPointPlugin('will-schedule-run', pluginId),
+      diagnosePreRunHookFailure: (command) =>
+        diagnoseScheduleHookPluginForActiveOwner(command, async (pluginId) =>
+          (await getPluginMarketService().detail(pluginId)).name || undefined),
     });
     // startScheduler fences resets while its async startup is in flight. Keep
     // the boundary check immediately before listener publication as a second
@@ -4698,6 +4703,9 @@ const registerIpcHandlers = () => {
     },
   });
   app.once('will-quit', stopMenubarService);
+  // 灵动岛余量:与菜单栏同一份余量概览(顺序、显示与隐私设置都跟菜单栏),岛开着时才读取。
+  const agentIsland = getAgentIslandService();
+  if (agentIsland) app.once('will-quit', startAgentIslandQuota(agentIsland, getQuotaOverviewService()));
 
   // 全局框选截图快捷键 (键盘快捷键设置里可改)，支持复制、保存、贴图与新任务。
   initRegionScreenshot();

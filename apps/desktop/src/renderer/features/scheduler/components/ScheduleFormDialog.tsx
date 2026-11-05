@@ -15,9 +15,13 @@ import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
+import { useAvailableAgents } from '@/hooks/useAvailableAgents';
+import { useModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
 import { useProviders } from '@/hooks/useProviders';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import {
+  effectiveSourceIdForModel,
+  getModel,
   sessionModelSupportsFastMode,
 } from '@cindy/model-providers';
 import type { UtilityTextAttemptReason, UtilityTextFailure } from '../../../../shared/utilityTextResult';
@@ -30,6 +34,7 @@ import { ScriptCapabilityMultiSelect } from './ScriptCapabilityMultiSelect';
 
 import {
   getScheduleDefaultRoute,
+  isEffortValue,
   rememberScheduleFormPrefs,
   useScheduleForm,
   deriveRunMode,
@@ -155,10 +160,15 @@ export function ScheduleFormDialog({
   const selectedAgentDeviceId = form.modelAgentDeviceId !== undefined
     ? form.modelAgentDeviceId || null
     : isBound ? boundAgentDeviceId : form.agentDeviceId || null;
+  const { availableVendors, loaded: agentsLoaded, loading: agentsLoading } = useAvailableAgents(selectedAgentDeviceId);
+  const modelVisibilityVersion = useModelVisibilityVersion();
   const caps = useAgentCapabilities(form.agentKind, selectedAgentDeviceId ?? undefined);
   const localProviders = useProviders();
   const deviceProviders = useDeviceProviders(selectedAgentDeviceId ?? undefined);
   const { providers, loading: providersLoading } = selectedAgentDeviceId ? deviceProviders : localProviders;
+  // Old peers explicitly lacking provider:list still expose their model capabilities.
+  // An ordinary lookup error or an empty modern catalog must not take this fallback.
+  const legacyRemoteCatalog = !!selectedAgentDeviceId && deviceProviders.unsupported;
   // Do not calibrate saved choices against a provisional local or loading snapshot.
   const modelCatalogReady = (!isBound || form.modelAgentDeviceId !== undefined || !!boundSessionReference) && !caps.loading && !providersLoading;
   const hideWorkspaceFields = runMode === 'bound' || isBound;
@@ -417,6 +427,7 @@ export function ScheduleFormDialog({
 
   // Must run after the open/reset effect above so template fields override fresh defaults.
   const appliedInitialTemplate = useRef<string | null>(null);
+  const initialTemplatePending = !!initialTemplate && appliedInitialTemplate.current !== initialTemplate.id;
   useEffect(() => {
     if (!open || !initialTemplate || isEdit || isProjectAutomationMode) {
       appliedInitialTemplate.current = null;
@@ -487,30 +498,73 @@ export function ScheduleFormDialog({
     });
   }, [currentModel, form.agentKind, form.model, form.providerId, providers]);
 
-  // form.model 为空时回填默认模型（三级回退,所见即所存）。
-  // 覆盖历史遗留的空 model 任务（编辑打开时回填）；第三级(新建任务默认)要等供应商
-  // 清单到位才能算出,算不出时保持留空,runner 按同一口径实时解析。
-  // ⚠️ heartbeat 跟随模式(targetSessionId 非空且无显式 Harness)必须跳过:
-  // 空 model = "跟随会话"是有效语义,回填会把 MCP 建的跟随任务静默落成
-  // 显式模型,下次 fire runner setModel 反向改掉绑定会话的模型。
-  useEffect(() => {
-    if (form.targetSessionId.trim() && !form.modelAgentKind) return;
-    // Local recent-model preferences do not describe another computer's catalog.
-    if (selectedAgentDeviceId) return;
-    if (form.model) return;
-    // 默认路由限定在表单已选的来源内,模型与来源成对回填(已选来源保持不变)。
-    const route = getScheduleDefaultRoute(
-      form.agentKind,
-      providersLoading ? undefined : providers,
-      form.providerId,
-    );
-    if (!route.model) return;
-    setField('model', route.model);
-    if (route.providerId && !form.providerId.trim()) setField('providerId', route.providerId);
-  }, [form.model, form.modelAgentKind, form.agentKind, form.targetSessionId, form.providerId, setField, providers, providersLoading, selectedAgentDeviceId]);
+  // Only implicit local defaults may fall back. Subscribe to every eligible
+  // Agent's capabilities so a rejected preferred route can advance without
+  // switching the form back and forth just to discover the next Agent's models.
+  const resolvesImplicitDefault = open && !isEdit && !editProjectSchedule && !isScriptMode
+    && !form.modelAgentKind && !initialTemplatePending && !selectedTemplate?.model?.trim()
+    && !initialValues?.model && !form.targetSessionId.trim() && !selectedAgentDeviceId;
+  const requiredDefaultAgent = initialValues?.agentKind
+    ?? (selectedTemplate?.providerId?.trim() ? selectedTemplate.agentKind : undefined);
+  const preferredDefaultAgent = selectedTemplate?.agentKind ?? form.agentKind;
+  const defaultAgents = useMemo(() => (requiredDefaultAgent ? [requiredDefaultAgent]
+    : [preferredDefaultAgent, ...(['claude-code', 'codex', 'pi'] as const).filter((agent) => agent !== preferredDefaultAgent)])
+    .filter((agent) => !agentsLoaded || availableVendors.has(agent === 'claude-code' ? 'cc' : agent)),
+  [requiredDefaultAgent, preferredDefaultAgent, agentsLoaded, availableVendors]);
+  const claudeDefaultCaps = useAgentCapabilities(resolvesImplicitDefault && form.agentKind !== 'claude-code'
+    && defaultAgents.includes('claude-code') ? 'claude-code' : null);
+  const codexDefaultCaps = useAgentCapabilities(resolvesImplicitDefault && form.agentKind !== 'codex'
+    && defaultAgents.includes('codex') ? 'codex' : null);
+  const piDefaultCaps = useAgentCapabilities(resolvesImplicitDefault && form.agentKind !== 'pi'
+    && defaultAgents.includes('pi') ? 'pi' : null);
+  const defaultCapabilitiesLoading = resolvesImplicitDefault && (caps.loading
+    || claudeDefaultCaps.loading || codexDefaultCaps.loading || piDefaultCaps.loading);
 
-  // 绑定任务的显式模型属于任务所在电脑的目录。读到任务位置后让表单与之成对,之后切到
-  // 「每次新建任务」时模型与运行位置仍然一致。
+  useEffect(() => {
+    if (!resolvesImplicitDefault || defaultCapabilitiesLoading || providersLoading || (!agentsLoaded && agentsLoading)) return;
+    // A model-less, source-less template supplies a preferred Agent, not a route.
+    // Keep an explicit source/Agent constraint, but let generic templates work
+    // when their preferred Agent has no models visible in the picker.
+    const requiredProvider = selectedTemplate?.providerId ?? initialValues?.providerId;
+    void modelVisibilityVersion;
+    for (const agent of defaultAgents) {
+      // A failed roster lookup is unknown, not proof that every runtime is absent.
+      // Keep catalog validation and let the host enforce runtime availability.
+      const capability = agent === form.agentKind ? caps.capabilities
+        : agent === 'claude-code' ? claudeDefaultCaps.capabilities
+          : agent === 'codex' ? codexDefaultCaps.capabilities : piDefaultCaps.capabilities;
+      // Filter before resolving history AND recommendation fallback; rejecting
+      // only the first result would strand a usable second model in the catalog.
+      const candidates = providers.map((provider) => ({ ...provider,
+        models: { ...provider.models, [agent]: (provider.models[agent] ?? []).filter((model) =>
+          !isExplicitScheduleModelUnavailable(model.id, capability?.availableModels)) },
+      }));
+      const route = getScheduleDefaultRoute(agent, candidates, requiredProvider);
+      if (!route.model) continue;
+      if (form.agentKind !== agent) setField('agentKind', agent);
+      if (form.model !== route.model) setField('model', route.model);
+      if (form.providerId !== (route.providerId ?? '')) setField('providerId', route.providerId ?? '');
+      return;
+    }
+    // No usable combination: leave the picker empty rather than retaining a
+    // misleading historic value. Submission asks the user to select one.
+    if (form.model) setField('model', '');
+    if (form.providerId !== (requiredProvider ?? '')) setField('providerId', requiredProvider ?? '');
+    if (form.effort) setField('effort', '');
+  }, [resolvesImplicitDefault, defaultCapabilitiesLoading, defaultAgents, selectedTemplate, initialValues,
+    providersLoading, agentsLoaded, agentsLoading, providers, modelVisibilityVersion,
+    caps.capabilities, claudeDefaultCaps.capabilities, codexDefaultCaps.capabilities, piDefaultCaps.capabilities,
+    form.agentKind, form.model, form.providerId, form.effort, setField]);
+
+  const modelUnavailable = !isScriptMode && modelCatalogReady && (
+    (!!form.model.trim() && (
+      (agentsLoaded && !availableVendors.has(form.agentKind === 'claude-code' ? 'cc' : form.agentKind))
+      || (!legacyRemoteCatalog && !effectiveSourceIdForModel(providers, form.providerId || null, form.model, form.agentKind))
+      || isExplicitScheduleModelUnavailable(form.model, caps.capabilities?.availableModels)
+    )) || (!isEdit && !isBound && !agentsLoading && !form.model.trim())
+  );
+
+  // Keep a bound model paired with its execution computer when switching run modes.
   useEffect(() => {
     if (!isBound || !boundSessionReference || !form.model.trim() || form.modelAgentDeviceId !== undefined) return;
     const location = boundSessionReference.agentDeviceId ?? '';
@@ -518,10 +572,16 @@ export function ScheduleFormDialog({
   }, [isBound, boundSessionReference, form.model, form.agentDeviceId, form.modelAgentDeviceId, setField]);
 
   useEffect(() => {
-    if (!modelCatalogReady || form.modelAgentKind || !currentModelEfforts || !form.effort) return;
+    if (isEdit || editProjectSchedule || !modelCatalogReady || form.modelAgentKind || !currentModelEfforts) return;
     const allowed = currentModelEfforts as readonly string[];
-    if (!allowed.includes(form.effort)) setField('effort', '');
-  }, [modelCatalogReady, form.modelAgentKind, currentModelEfforts, form.effort, setField]);
+    if (!allowed.includes(form.effort)) {
+      const sourceId = effectiveSourceIdForModel(providers, form.providerId || null, form.model, form.agentKind);
+      const source = providers.find((provider) => provider.id === sourceId);
+      const recommended = source ? getModel(source, form.model, form.agentKind)?.defaultEffort : null;
+      const effort = recommended && isEffortValue(recommended) && allowed.includes(recommended) ? recommended : '';
+      if (effort !== form.effort) setField('effort', effort);
+    }
+  }, [isEdit, editProjectSchedule, providers, form.providerId, form.model, form.agentKind, modelCatalogReady, form.modelAgentKind, currentModelEfforts, form.effort, setField]);
 
   // Fast 模式门控：agent 级 hasFastMode × 该 (生效来源, 模型) 的 supportsFastMode（per-provider，
   // 唯一真相）。生效来源按 form.providerId 解析（空则该模型的默认来源）。Claude 当前 hasFastMode
@@ -535,12 +595,16 @@ export function ScheduleFormDialog({
   // 切到 Claude / 不支持 fast 的模型时，清掉表单里残留的 fast 态，
   // 杜绝脏值经 toInput 流向 createSession（与上面 effort 失配自动清除同思路）。
   useEffect(() => {
-    if (modelCatalogReady && !form.modelAgentKind && providers.length > 0 && form.fastMode && !showFastModeToggle) {
+    if (!isEdit && !editProjectSchedule && modelCatalogReady && !form.modelAgentKind && providers.length > 0 && form.fastMode && !showFastModeToggle) {
       setField('fastMode', false);
     }
-  }, [modelCatalogReady, form.modelAgentKind, providers.length, form.fastMode, showFastModeToggle, setField]);
+  }, [isEdit, editProjectSchedule, modelCatalogReady, form.modelAgentKind, providers.length, form.fastMode, showFastModeToggle, setField]);
+
+  const awaitingNewModelCatalog = !isEdit && !editProjectSchedule && !isScriptMode && !isBound
+    && (!modelCatalogReady || defaultCapabilitiesLoading || (!agentsLoaded && agentsLoading));
 
   const handleSubmit = async () => {
+    if (awaitingNewModelCatalog) return;
     setSubmitError(null);
     const err = validate();
     if (err) {
@@ -557,13 +621,7 @@ export function ScheduleFormDialog({
       ));
       return;
     }
-    if (
-      (form.executionMode ?? 'agent') === 'agent'
-      && isExplicitScheduleModelUnavailable(
-        form.model,
-        caps.capabilities?.availableModels,
-      )
-    ) {
+    if (modelUnavailable) {
       toast.warning(t('scheduler.editor.validation.modelUnavailable', { model: form.model }));
       return;
     }
@@ -701,6 +759,9 @@ export function ScheduleFormDialog({
           // overflow-y-auto:内容超过弹窗 max-h 时整体滚动;
           // 提示词编辑框是固定高度,不会被可展开区块挤压。
           <div className="flex min-h-0 flex-1 flex-col gap-[18px] overflow-y-auto pt-[18px] pr-6 pb-[22px] pl-6">
+            {modelUnavailable && (
+              <ErrorNotice message={t('scheduler.editor.validation.modelUnavailable', { model: form.model })} />
+            )}
             {submitError && (
               <ErrorNotice
                 message={t(`chat.remoteError.${parseAgentErrorCode(submitError)?.code}`)}
@@ -1388,7 +1449,7 @@ export function ScheduleFormDialog({
                         : t('scheduler.editor.promptDialog.createAria')
                     }
                     onClick={() => void handleSubmit()}
-                    disabled={submitting}
+                    disabled={submitting || awaitingNewModelCatalog}
                     className="min-w-[68px] shrink-0"
                   >
                     {submitLabel}
@@ -1488,7 +1549,7 @@ export function ScheduleFormDialog({
                             : t('scheduler.editor.promptDialog.createAria')
                         }
                         onClick={() => void handleSubmit()}
-                        disabled={submitting}
+                        disabled={submitting || awaitingNewModelCatalog}
                         className="min-w-[68px] shrink-0"
                       >
                         {submitLabel}

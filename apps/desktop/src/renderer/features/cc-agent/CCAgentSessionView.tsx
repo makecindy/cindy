@@ -1873,6 +1873,7 @@ function CCAgentSessionContent({
     continueAfterSilentStop,
     errorReason,
     toolLoop,
+    outputLimit,
     insertSystemCard,
     updateSystemCardData,
     error,
@@ -5802,6 +5803,7 @@ function CCAgentSessionContent({
                   dismissOnEscape={viewVisible && ownsHardwareTaskActions}
                   errorReason={errorTailMsg?.errorReason}
                   toolLoop={errorTailMsg?.toolLoop}
+                  outputLimit={errorTailMsg?.outputLimit}
                   onContinue={handleErrorTailContinue}
                   onDismiss={handleErrorTailDismiss}
                   onSilentStopContinue={handleSilentStopContinue}
@@ -5856,6 +5858,7 @@ function CCAgentSessionContent({
                   dataOwnerId={dataOwnerId}
                   sessionId={sessionId}
                   latestFailedRun={scheduleSessionInfo.latestFailedRun}
+                  remote={rightSidebarDeviceLinkDeviceId !== null}
                   onDiagnose={canDiagnoseError ? handleDiagnoseError : undefined}
                   style={{ width: inputWidth }}
                   className="py-1"
@@ -5875,6 +5878,7 @@ function CCAgentSessionContent({
                 dismissOnEscape={viewVisible && ownsHardwareTaskActions}
                 errorReason={errorReason}
                 toolLoop={toolLoop}
+                outputLimit={outputLimit}
                 isRecoverable={errorIsRecoverable}
                 retryText={errorRetryText}
                 onRetry={handleRetry}

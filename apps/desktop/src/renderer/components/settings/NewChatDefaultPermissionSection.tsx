@@ -1,3 +1,4 @@
+import { generalSettings } from './GeneralSettings.settings-search';
 import { useTranslation } from 'react-i18next';
 import { TriangleAlert } from 'lucide-react';
 import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
@@ -37,14 +38,14 @@ export function NewChatDefaultPermissionSection() {
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between gap-3">
         <h3 className="text-14 font-medium text-[var(--settings-section-title)]">
-          {t('settings.newChatDefaults.title')}
+          {t(generalSettings.newChatPermission.titleKey)}
         </h3>
         <DefaultOverrideControls isCustomized={override != null}
           onReset={() => setNewChatDefaultPermissionMode(null)} />
       </div>
       <PermissionSelector permissionMode={override ?? 'auto'}
         vendorKey="cc" triggerVariant="field" allowedModes={DEFAULT_MODES}
-        ariaContext={t('settings.newChatDefaults.title')}
+        ariaContext={t(generalSettings.newChatPermission.titleKey)}
         onPermissionModeChange={changePermissionMode} />
     </div>
   );

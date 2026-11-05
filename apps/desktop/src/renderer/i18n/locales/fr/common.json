@@ -90,7 +90,7 @@
     "requestNotReplayed": "Cette requête n'a pas été répétée. Vérifiez le résultat de l'opération d'origine dans l'app.",
     "storageUnavailable": "Impossible de lire ou d'enregistrer les données de connexion des apps locales. Les autorisations existantes ont été conservées.",
     "stopUnconfirmed": "Les nouveaux messages vers cette exécution sont bloqués, mais l'arrêt du processus n'a pas été confirmé.",
-    "interactionUnavailable": "Le Harness requiert une interaction que cette app ne peut pas recevoir.",
+    "interactionUnavailable": "Le moteur requiert une interaction que cette app ne peut pas recevoir.",
     "interrupted": "Cet envoi a été interrompu.",
     "toolTimeout": "Le délai de l'outil de l'app a expiré. Il n'a pas été relancé automatiquement.",
     "connectResult": "Revenez à l'app demandeuse pour connaître le résultat de la connexion. L'autorisation se décide dans la fenêtre de confirmation de Cindy.",
@@ -206,7 +206,7 @@
       "MIGRATION_REQUIRES_REPOSITORY_ROOT": "Pour les projets Git, le répertoire de la tâche doit être la racine du dépôt.",
       "MIGRATION_SUBMODULE_UNSUPPORTED": "Les projets avec des sous-modules Git ne peuvent pas encore être copiés.",
       "MIGRATION_NO_SPACE": "Espace insuffisant sur l'ordinateur de destination.",
-      "MIGRATION_TARGET_MODEL_UNAVAILABLE": "La destination n'a aucun modèle disponible pour le Harness de cette tâche. Connectez-y d'abord un fournisseur.",
+      "MIGRATION_TARGET_MODEL_UNAVAILABLE": "La destination n'a aucun modèle disponible pour le moteur de cette tâche. Connectez-y d'abord un fournisseur.",
       "MIGRATION_UNSUPPORTED": "Mettez à jour les deux ordinateurs vers une version qui prend en charge la copie de tâches.",
       "MIGRATION_TASK_QUEUED": "Cette tâche a des messages en file d'attente. Terminez-les ou supprimez-les avant de la copier.",
       "MIGRATION_SOURCE_CHANGED": "La tâche source a changé pendant la préparation. Relancez la copie.",
@@ -4054,14 +4054,14 @@
           "contextLimitAria": "Limite de contexte (jetons, K ou M)",
           "compaction": {
             "title": "Compactage automatique",
-            "hint": "Compacter le contexte au pourcentage d'utilisation sélectionné. Une valeur plus basse compacte plus tôt ; les limites du Harness s'appliquent toujours.",
+            "hint": "Compacter le contexte au pourcentage d'utilisation sélectionné. Une valeur plus basse compacte plus tôt ; les limites du moteur s'appliquent toujours.",
             "default": "{{pct}} % (par défaut)",
-            "timing": "S'applique à tous les Harness disponibles pour ce modèle et cette source lors des exécutions suivantes, sans interrompre une réponse."
+            "timing": "S'applique à tous les moteurs disponibles pour ce modèle et cette source lors des exécutions suivantes, sans interrompre une réponse."
           },
           "contextLimitRoute": "Actuellement {{tokens}} jetons",
           "contextLimitOverWindow": "Supérieur à la fenêtre déclarée par le fournisseur ; les requêtes peuvent échouer.",
           "restoreDefault": "Réinitialiser",
-          "engines": "Prise en charge des Harness",
+          "engines": "Prise en charge des moteurs",
           "enginesHint": "Le mode de compatibilité convertit les requêtes localement dans Cindy. Il est désactivé par défaut et peut être activé au besoin.",
           "engineUnsupported": "Non pris en charge",
           "engineNotConfigured": "Non configuré",
@@ -4097,7 +4097,7 @@
             "video": "Vidéo",
             "file": "Fichier"
           },
-          "effortMixed": "L'effort diffère selon le Harness. Une sélection s'applique aux Harness qui prennent en charge ce niveau.",
+          "effortMixed": "L'effort diffère selon le moteur. Une sélection s'applique aux moteurs qui prennent en charge ce niveau.",
           "protocol": {
             "reference": "API native",
             "compatibility": "Mode de compatibilité",
@@ -5350,7 +5350,7 @@
         "custom": "Combinaison personnalisée. Ajustez directement les champs ci-dessous."
       },
       "maxConcurrent": "Limite de commandes simultanées",
-      "maxConcurrentHint": "Nombre maximal de commandes que le Harness Claude Code peut exécuter simultanément ; les commandes supplémentaires attendent dans une file. 0 signifie illimité. Les commandes Codex s'exécutent dans leur propre sandbox sans hook par commande et sont couvertes à la place par les niveaux de priorité et de plafond de threads.",
+      "maxConcurrentHint": "Nombre maximal de commandes que le moteur Claude Code peut exécuter simultanément ; les commandes supplémentaires attendent dans une file. 0 signifie illimité. Les commandes Codex s'exécutent dans leur propre sandbox sans hook par commande et sont couvertes à la place par les niveaux de priorité et de plafond de threads.",
       "priority": "Priorité des processus",
       "priorityHint": "Réduisez-la pour que les Agents n'utilisent que la capacité inactive et que les applications au premier plan restent réactives. La réduction s'applique aux Agents en cours d'exécution en 15 secondes environ ; le retour à Normale ne s'applique qu'aux Agents nouvellement démarrés.",
       "priorityOptions": {
@@ -5741,6 +5741,7 @@
           "checking": "Recherche de mises à jour…",
           "upToDate": "À jour",
           "checkFailed": "Impossible de rechercher des mises à jour",
+          "rateLimited": "Vérifications limitées par GitHub",
           "lastChecked": "Dernière vérification : {{time}}",
           "check": "Rechercher des mises à jour",
           "retry": "Réessayer",
@@ -12332,7 +12333,7 @@
         "effortEndFast": "Plus rapide",
         "effortEndSmart": "Plus intelligent",
         "railSameEngine": "{{agent}} uniquement",
-        "crossEngineWarning": "Changer de Harness reconstruit le contexte et peut entraîner une perte de contenu",
+        "crossEngineWarning": "Changer de moteur reconstruit le contexte et peut entraîner une perte de contenu",
         "favoritesSyncFailed": "Impossible de synchroniser les favoris. Rouvrez le sélecteur pour réessayer ; l'ordinateur distant a peut-être besoin d'une mise à jour.",
         "favoritesSyncFailedUnreachable": "Les favoris ne sont pas encore synchronisés : cet ordinateur est injoignable. Rouvrez le sélecteur une fois la connexion rétablie.",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
@@ -12613,12 +12614,12 @@
         "cancelSwitch": "Conserver ce modèle"
       },
       "agentSwitch": {
-        "engineNotReady": "Harness changé, mais le nouveau Harness n'a pas pu démarrer ; une nouvelle tentative aura lieu à l'envoi d'un message",
-        "failed": "Échec du changement de Harness ; non appliqué",
+        "engineNotReady": "Le moteur a été changé, mais le nouveau moteur n'a pas pu démarrer ; une nouvelle tentative aura lieu à l'envoi d'un message",
+        "failed": "Échec du changement de moteur ; non appliqué",
         "deferred": "Changement programmé : passage à {{agent}} · {{model}} à l'envoi de votre prochain message",
         "confirmation": {
           "title": "Changer d'Agent ?",
-          "description": "Le nouveau Harness de l'Agent reprend à partir d'un résumé de transfert : le raisonnement et d'autres contenus ne sont donc pas garantis d'être parfaitement conservés. Revenir en arrière vous permet toujours de poursuivre la session du Harness d'origine. Le changement interrompt aussi une fois le cache du prompt et peut augmenter la consommation de jetons.",
+          "description": "Le nouveau moteur de l'Agent reprend à partir d'un résumé de transfert : le raisonnement et d'autres contenus ne sont donc pas garantis d'être parfaitement conservés. Revenir en arrière vous permet toujours de poursuivre la session du moteur d'origine. Le changement interrompt aussi une fois le cache du prompt et peut augmenter la consommation de jetons.",
           "confirm": "Changer d'Agent",
           "cancel": "Conserver l'Agent actuel",
           "dontShowAgain": "Ne plus me le rappeler"
@@ -12634,9 +12635,9 @@
       }
     },
     "agentSelect": {
-      "label": "Harness",
+      "label": "Moteur",
       "trigger": {
-        "aria": "Sélectionner le Harness : {{agent}}"
+        "aria": "Sélectionner le moteur : {{agent}}"
       }
     },
     "atMention": {
@@ -13235,6 +13236,12 @@
       "text": "Une exécution automatique a échoué.",
       "precheck": "Les vérifications automatiques sont temporairement bloquées.",
       "rateLimited": "Les vérifications automatiques sont temporairement bloquées par une limite de débit des requêtes.",
+      "pluginMissing": "Les vérifications automatiques sont bloquées : le plugin {{name}} n'est pas installé. Elles reprendront une fois le plugin installé.",
+      "pluginMissingUnnamed": "Les vérifications automatiques sont bloquées : un plugin requis n'est pas installé. Elles reprendront une fois le plugin installé.",
+      "pluginDisabled": "Les vérifications automatiques sont bloquées : le plugin {{name}} est désactivé. Elles reprendront une fois le plugin activé.",
+      "pluginDisabledUnnamed": "Les vérifications automatiques sont bloquées : un plugin requis est désactivé. Elles reprendront une fois le plugin activé.",
+      "installPlugin": "Installer le plugin",
+      "openPlugin": "Ouvrir le plugin",
       "dismissTitle": "Fermer l'avis d'échec passé"
     },
     "worktreeRestoreBanner": {
@@ -13645,8 +13652,8 @@
       "agentSwitch": {
         "label": "Passage de {{from}} à {{to}}",
         "toggleHint": "Voir le contexte de transfert",
-        "handoffTitle": "Transfert : le résumé du contexte envoyé au nouveau Harness lors du changement (ne fait pas partie de la transcription de la conversation ; affiché uniquement ici)",
-        "handoffTitleEnglishSource": "Transfert : le résumé du contexte envoyé au nouveau Harness lors du changement (ne fait pas partie de la transcription de la conversation ; affiché uniquement ici)",
+        "handoffTitle": "Transfert : le résumé du contexte envoyé au nouveau moteur lors du changement (ne fait pas partie de la transcription de la conversation ; affiché uniquement ici)",
+        "handoffTitleEnglishSource": "Transfert : le résumé du contexte envoyé au nouveau moteur lors du changement (ne fait pas partie de la transcription de la conversation ; affiché uniquement ici)",
         "fallbackBadge": "Repris à partir du résumé",
         "resumedBadge": "session reprise",
         "relocatedHere": "L'Agent s'exécute désormais sur cet ordinateur",
@@ -17050,7 +17057,10 @@
       "registrationFailed": "Échec de la création, veuillez réessayer plus tard",
       "silentStopExhausted": "Le modèle a renvoyé des réponses vides à plusieurs reprises ; la reprise automatique est en pause. Cliquez sur « Continuer » pour reprendre la tâche.",
       "executionResultUnavailable": "Impossible de récupérer le résultat de l'exécution. La poursuite automatique s'est arrêtée. Demandez à l'assistant de vérifier le résultat d'exécution existant.",
-      "outputLimit": "Le modèle a atteint sa limite de sortie, cette réponse est donc peut-être incomplète. Envoyez le message suivant pour continuer.",
+      "outputLimit": "Le modèle a atteint sa limite de sortie ; cette réponse peut être incomplète. Envoyez un nouveau message pour continuer. Si cela se répète, réduisez l’effort de raisonnement ou compactez d’abord l’historique de la conversation.",
+      "outputLimitReasoning": "Le raisonnement a consommé la majeure partie du budget de sortie de cette requête ; la réponse peut être incomplète. Réduisez l’effort de raisonnement ou compactez l’historique de la conversation avant de continuer.",
+      "outputLimitUsage": "Cette requête au modèle a utilisé {{outputTokens}} tokens de sortie, dont {{reasoningTokens}} tokens de raisonnement.",
+      "outputLimitOutputUsage": "Cette requête au modèle a utilisé {{outputTokens}} tokens de sortie.",
       "permissionTightenInterruptFailed": "Impossible d'arrêter la tâche en cours lors du durcissement des autorisations ; elle risque de continuer sans demande d'approbation jusqu'à la fin. Arrêtez-la manuellement si nécessaire.",
       "codexAutoReviewUnavailable": "La revue automatique est temporairement indisponible. L'action en cours a été bloquée et les autorisations sont repassées sur Par défaut. Relancez la requête ; Cindy vous demandera si nécessaire.",
       "hostShellCommandBlocked": "Cindy a bloqué cette commande shell. Vérifiez la commande et utilisez un outil ou une commande disponible pour continuer.",
@@ -17535,6 +17545,7 @@
     "sidebar": "Solde et forfaits",
     "settings": {
       "title": "Consommation et facturation",
+      "supportHint": "Vous rencontrez un problème ? Contactez {{email}} pour obtenir de l’aide.",
       "subscriptionCard": {
         "title": "Forfait actuel",
         "empty": "Aucun abonnement actif",
@@ -17609,14 +17620,38 @@
     },
     "orders": {
       "title": "Historique des commandes",
-      "description": "Seules les commandes de recharge et d'abonnement effectuées dans Cindy sont listées. Les commandes en attente de paiement sont annulées automatiquement à expiration du délai.",
+      "description": "Recharges payées et factures d’abonnement réglées.",
+      "history": {
+        "loadFailed": "Impossible de charger l’historique des commandes",
+        "retry": "Recharger les commandes",
+        "unknownPaidAt": "Date de paiement indisponible",
+        "unknownAmount": "Montant indisponible",
+        "refundedAmount": "Remboursé : {{amount}}",
+        "refunded": "Remboursé",
+        "partiallyRefunded": "Partiellement remboursé",
+        "noPayment": "Aucun paiement requis",
+        "page": "Page {{page}}",
+        "previous": "Page précédente",
+        "next": "Page suivante"
+      },
       "count": "{{count}} commandes",
-      "incomplete": "Il existe de nombreuses commandes. Seules les {{count}} plus récentes sont affichées.",
       "orderId": "N° {{id}}",
       "copy": {
         "action": "Copier l'ID de commande {{id}}",
         "success": "ID de commande copié",
         "failed": "L'ID de commande n'a pas été copié : réessayez"
+      },
+      "refund": {
+        "action": "Demander un remboursement",
+        "title": "Demander un remboursement",
+        "description": "Envoyez les informations suivantes à {{email}} pour demander un remboursement.",
+        "emailSubject": "Demande de remboursement Cindy - {{orderId}}",
+        "sendAction": "Envoyer la demande de remboursement",
+        "gmailFallbackDescription": "Votre demande de remboursement contient les détails de la commande. Ouvrir Gmail partagera ces informations avec Google. Continuer ?",
+        "emailBody": "Bonjour, je souhaite demander le remboursement de la commande ci-dessous. Pourriez-vous m’aider à traiter cette demande ?\n\nID de commande : {{orderId}}\nIdentifiant de transaction du prestataire : {{providerTransactionId}}\nApplication : {{application}}\nMoyen de paiement : {{paymentMethod}}\nMontant payé : {{amount}}\n\nProblème rencontré :\n(Décrivez brièvement la situation)\n\nMerci.",
+        "fields": {
+          "amount": "Montant payé"
+        }
       },
       "invoice": {
         "action": "Demander une facture",
@@ -17626,7 +17661,7 @@
         "emailSubject": "Demande de facture pour la commande {{orderId}}",
         "personalInvoicePolicy": "Les factures des recharges Cindy Personal sont émises par défaut <strong>au nom d'un particulier</strong>. Vous pouvez indiquer votre nom ou « Particulier » comme intitulé de facture. Si vous avez besoin d'une facture au nom de votre entreprise pour un remboursement de frais, fournissez <strong>une attestation de remboursement portant le cachet officiel de l'entreprise</strong> et précisant l'intitulé de la facture.",
         "invoiceTitleHint": "Instructions : pour une facture au nom d'un particulier, indiquez votre nom ou « Particulier ». Pour une facture au nom de votre entreprise en vue d'un remboursement de frais, joignez une attestation de remboursement portant le cachet officiel de l'entreprise et précisant l'intitulé de la facture.",
-        "emailBody": "Bonjour,\n\nJe souhaite demander une facture pour la commande suivante :\n\n────────────────────\nID de commande : {{orderId}}\nApplication : {{application}}\nMoyen de paiement : {{paymentMethod}}\nMontant de la facture : {{amount}}\nIntitulé de la facture : \n{{invoiceTitleHint}}\n\nPersonne à contacter : \nNuméro de téléphone : \nE-mail : \n────────────────────\n\nMerci.",
+        "emailBody": "Bonjour,\n\nJe souhaite demander une facture pour la commande suivante :\n\n────────────────────\nID de commande : {{orderId}}\nIdentifiant de transaction du prestataire : {{providerTransactionId}}\nApplication : {{application}}\nMoyen de paiement : {{paymentMethod}}\nMontant de la facture : {{amount}}\nIntitulé de la facture : \n{{invoiceTitleHint}}\n\nPersonne à contacter : \nNuméro de téléphone : \nE-mail : \n────────────────────\n\nMerci.",
         "sendAction": "Envoyer la demande de facture",
         "emailCopied": "E-mail du support copié",
         "emailCopyFailed": "L'e-mail du support n'a pas été copié : réessayez",
@@ -17637,6 +17672,7 @@
         "notAvailable": "Non disponible",
         "fields": {
           "orderId": "ID de commande",
+          "providerTransactionId": "Identifiant de transaction du prestataire",
           "application": "Application",
           "paymentMethod": "Moyen de paiement",
           "amount": "Montant de la facture",

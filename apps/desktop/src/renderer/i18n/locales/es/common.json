@@ -5741,6 +5741,7 @@
           "checking": "Buscando actualizaciones…",
           "upToDate": "Actualizado",
           "checkFailed": "No se pudieron buscar actualizaciones",
+          "rateLimited": "GitHub está limitando las comprobaciones",
           "lastChecked": "Última comprobación: {{time}}",
           "check": "Buscar actualizaciones",
           "retry": "Reintentar",
@@ -13235,6 +13236,12 @@
       "text": "Error en la ejecución automática.",
       "precheck": "Los controles automáticos están bloqueados temporalmente.",
       "rateLimited": "Los controles automáticos están bloqueados temporalmente por un límite de tasa de solicitud.",
+      "pluginMissing": "Los controles automáticos están bloqueados: el complemento {{name}} no está instalado. Se reanudarán al instalarlo.",
+      "pluginMissingUnnamed": "Los controles automáticos están bloqueados: un complemento necesario no está instalado. Se reanudarán al instalarlo.",
+      "pluginDisabled": "Los controles automáticos están bloqueados: el complemento {{name}} está desactivado. Se reanudarán al activarlo.",
+      "pluginDisabledUnnamed": "Los controles automáticos están bloqueados: un complemento necesario está desactivado. Se reanudarán al activarlo.",
+      "installPlugin": "Instalar complemento",
+      "openPlugin": "Abrir complemento",
       "dismissTitle": "Descartar aviso de falla anterior"
     },
     "worktreeRestoreBanner": {
@@ -17050,7 +17057,10 @@
       "registrationFailed": "No se pudo crear, inténtalo de nuevo más tarde",
       "silentStopExhausted": "El modelo devolvió respuestas vacías repetidamente; la reanudación automática está en pausa. Haz clic en \"Continuar\" para reanudar la tarea.",
       "executionResultUnavailable": "No se puede recuperar el resultado de la ejecución. La continuación automática se ha detenido. Pídale al asistente que verifique el resultado de la ejecución existente.",
-      "outputLimit": "El modelo alcanzó su límite de producción, por lo que esta respuesta puede estar incompleta. Envía el siguiente mensaje para continuar.",
+      "outputLimit": "El modelo alcanzó su límite de salida, por lo que esta respuesta puede estar incompleta. Envía un nuevo mensaje para continuar. Si se repite, reduce el esfuerzo de razonamiento o compacta primero el historial de la conversación.",
+      "outputLimitReasoning": "El razonamiento consumió la mayor parte del presupuesto de salida de esta solicitud, por lo que la respuesta puede estar incompleta. Reduce el esfuerzo de razonamiento o compacta el historial de la conversación antes de continuar.",
+      "outputLimitUsage": "Esta solicitud al modelo utilizó {{outputTokens}} tokens de salida, incluidos {{reasoningTokens}} tokens de razonamiento.",
+      "outputLimitOutputUsage": "Esta solicitud al modelo utilizó {{outputTokens}} tokens de salida.",
       "permissionTightenInterruptFailed": "No se pudo detener la tarea en ejecución al restringir los permisos; podría seguir ejecutándose sin solicitar aprobación hasta que termine. Detenla manualmente si es necesario.",
       "codexAutoReviewUnavailable": "La revisión automática no está disponible temporalmente. Se bloqueó la acción actual y los permisos cambiaron a Predeterminado. Reintenta la solicitud; Cindy te preguntará cuando sea necesario.",
       "hostShellCommandBlocked": "Cindy bloqueó este comando de shell. Revisa el comando y usa una herramienta o un comando disponible para continuar.",
@@ -17535,6 +17545,7 @@
     "sidebar": "Saldo y planes",
     "settings": {
       "title": "Uso y facturación",
+      "supportHint": "¿Tienes algún problema? Escribe a {{email}} para obtener ayuda.",
       "subscriptionCard": {
         "title": "Plan actual",
         "empty": "Sin suscripción activa",
@@ -17609,14 +17620,38 @@
     },
     "orders": {
       "title": "Historial de pedidos",
-      "description": "Solo se muestran los pedidos de recarga y suscripción iniciados dentro de Cindy. Los pedidos pendientes de pago se cancelan automáticamente cuando vence su plazo.",
+      "description": "Recargas pagadas y facturas de suscripción liquidadas.",
+      "history": {
+        "loadFailed": "No se pudo cargar el historial de pedidos",
+        "retry": "Volver a cargar pedidos",
+        "unknownPaidAt": "Fecha de pago no disponible",
+        "unknownAmount": "Importe no disponible",
+        "refundedAmount": "Reembolsado: {{amount}}",
+        "refunded": "Reembolsado",
+        "partiallyRefunded": "Reembolso parcial",
+        "noPayment": "No requiere pago",
+        "page": "Página {{page}}",
+        "previous": "Página anterior",
+        "next": "Página siguiente"
+      },
       "count": "{{count}} pedidos",
-      "incomplete": "Hay muchos registros de pedidos. Solo se muestran los últimos {{count}}.",
       "orderId": "N.º {{id}}",
       "copy": {
         "action": "Copiar ID del pedido {{id}}",
         "success": "ID del pedido copiado",
         "failed": "No se pudo copiar el ID del pedido. Inténtalo de nuevo"
+      },
+      "refund": {
+        "action": "Solicitar reembolso",
+        "title": "Solicitar un reembolso",
+        "description": "Envía la siguiente información a {{email}} para solicitar un reembolso.",
+        "emailSubject": "Solicitud de reembolso de Cindy - {{orderId}}",
+        "sendAction": "Enviar solicitud de reembolso",
+        "gmailFallbackDescription": "Tu solicitud de reembolso incluye los detalles del pedido. Al abrir Gmail, se compartirá esta información con Google. ¿Quieres continuar?",
+        "emailBody": "Hola, quisiera solicitar el reembolso del siguiente pedido. ¿Podrían ayudarme a tramitarlo?\n\nID del pedido: {{orderId}}\nID de transacción del proveedor: {{providerTransactionId}}\nAplicación: {{application}}\nMétodo de pago: {{paymentMethod}}\nImporte pagado: {{amount}}\n\nProblema encontrado:\n(Describe brevemente lo ocurrido)\n\nGracias.",
+        "fields": {
+          "amount": "Importe pagado"
+        }
       },
       "invoice": {
         "action": "Solicitar factura",
@@ -17626,7 +17661,7 @@
         "emailSubject": "Solicitud de factura para el pedido {{orderId}}",
         "personalInvoicePolicy": "Las facturas de las recargas de Cindy Personal se emiten a <strong>nombre de una persona</strong> de forma predeterminada. Puedes usar tu nombre o “Persona física” como nombre de facturación. Si necesitas una factura a nombre de tu empresa para el reembolso de gastos, proporciona <strong>una declaración de reembolso con el sello oficial de la empresa</strong> que especifique el nombre de facturación.",
         "invoiceTitleHint": "Instrucciones: Para una factura personal, ingresa tu nombre o “Persona física”. Para una factura a nombre de tu empresa para el reembolso de gastos, adjunta una declaración de reembolso con el sello oficial de la empresa que especifique el nombre de facturación.",
-        "emailBody": "Hola:\n\nQuisiera solicitar una factura para el siguiente pedido:\n\n────────────────────\nID del pedido: {{orderId}}\nAplicación: {{application}}\nMétodo de pago: {{paymentMethod}}\nImporte de la factura: {{amount}}\nNombre de facturación: \n{{invoiceTitleHint}}\n\nPersona de contacto: \nNúmero de teléfono: \nCorreo electrónico: \n────────────────────\n\nGracias.",
+        "emailBody": "Hola:\n\nQuisiera solicitar una factura para el siguiente pedido:\n\n────────────────────\nID del pedido: {{orderId}}\nID de transacción del proveedor: {{providerTransactionId}}\nAplicación: {{application}}\nMétodo de pago: {{paymentMethod}}\nImporte de la factura: {{amount}}\nNombre de facturación: \n{{invoiceTitleHint}}\n\nPersona de contacto: \nNúmero de teléfono: \nCorreo electrónico: \n────────────────────\n\nGracias.",
         "sendAction": "Enviar solicitud de factura",
         "emailCopied": "Correo de soporte copiado",
         "emailCopyFailed": "No se pudo copiar el correo de soporte. Inténtalo de nuevo",
@@ -17637,6 +17672,7 @@
         "notAvailable": "No disponible",
         "fields": {
           "orderId": "ID del pedido",
+          "providerTransactionId": "ID de transacción del proveedor",
           "application": "Aplicación",
           "paymentMethod": "Método de pago",
           "amount": "Importe de la factura",

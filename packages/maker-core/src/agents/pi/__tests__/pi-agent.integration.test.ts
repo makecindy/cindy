@@ -603,6 +603,52 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     },
   );
 
+  it('reports reasoning exhaustion from the real Pi OpenAI-compatible runtime', { timeout: 60_000 }, async () => {
+    const deps = buildDeps();
+    deps.resolvePiNativeProviders = async () => ({
+      providers: [{ id: 'limit-test', name: 'Limit Test', baseUrl: endpoint,
+        api: 'openai-completions', apiKeyEnvVar: 'CINDY_PI_LIMIT_TEST_KEY',
+        models: [{ id: 'limit-reasoner', name: 'Limit Reasoner', reasoning: true, contextWindow: 1_000_000 }],
+      }],
+      env: { CINDY_PI_LIMIT_TEST_KEY: 'test-only-key' },
+    });
+    const chunks = [
+      { choices: [{ index: 0, delta: { role: 'assistant', reasoning_content: 'still thinking' }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: {}, finish_reason: 'length' }], usage: {
+        prompt_tokens: 657000, completion_tokens: 131072, total_tokens: 788072,
+        completion_tokens_details: { reasoning_tokens: 131064 },
+      } },
+    ].map((chunk) => `data: ${JSON.stringify({ id: 'limit-test', object: 'chat.completion.chunk', created: 1, model: 'limit-reasoner', ...chunk })}\n\n`).join('') + 'data: [DONE]\n\n';
+    scriptedResponses.push(chunks);
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-output-limit-'));
+    let handle: AgentSessionHandle | null = null;
+    try {
+      handle = await new PiAgent(deps).startSession({ sessionId: 'reasoning-limit', workingDir,
+        model: 'limit-reasoner', providerId: 'limit-test', effort: 'high' });
+      const events: AgentEvent[] = [];
+      const collected = (async () => {
+        for await (const event of handle!.events()) {
+          events.push(event);
+          if (event.type === 'done') break;
+        }
+      })();
+      const requestsBefore = seenRequests.length;
+      await handle.send({ type: 'user', content: 'test output exhaustion' });
+      await collected;
+      expect(events.find((event) => event.type === 'error')?.data).toMatchObject({
+        reason: 'output-limit', outputLimit: { outputTokens: 131072, reasoningTokens: 131064 },
+        usage: { outputTokens: 131072, reasoningTokens: 131064 },
+      });
+      expect(events.find((event) => event.type === 'done')?.data).toMatchObject({ status: 'failed' });
+      expect(seenRequests.length - requestsBefore).toBe(1);
+      expect(handle.getUsageSnapshot().tokenUsage).toBe(788072);
+    } finally {
+      await handle?.close();
+      scriptedResponses.length = 0;
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
   it(
     'startSession → send → streams text and settles → usage/cost tracked → close',
     { timeout: 60_000 },

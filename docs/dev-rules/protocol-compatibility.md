@@ -1,5 +1,45 @@
 # 跨端协议兼容
 
+## 伙伴已读跨设备同步（2026-11-05，未发布）
+
+伙伴的远程资源（`teammates` 集合的 `bot` 行）在 `display` 中可选追加 `lastReadAt`，即电脑保存的已读时刻
+（电脑时间，0 表示还没有）。带这个字段的电脑接受既有 `maker:remote-resources:invoke` 的 `read` 动作：
+`resourceRef` 指向该伙伴，`input: { at }` 为设备实际显示到的消息时间；电脑校验伙伴可见性与账号代次，
+读位只前进，且不晚于这台电脑上该私聊的最新消息，回包 `{ effects: [], lastReadAt }`。早期本机群
+（`bot-groups`，非服务器群）同样在行上追加 `lastReadAt`，群详情追加 `supportsLocalReadSync: true`，
+`read` 动作对本机群接受 `input: { at }`；服务器群的 `read`（`messageId`，转交 Chat Server）不变。
+读位变化后电脑发出既有的远程资源变更推送，手机和其他电脑重读列表。
+`read` 的 `input` 可选追加 `threadSessionId`：该伙伴的私聊话题 Session，电脑核对它属于这位伙伴、
+未归档且是话题后，只推进 `thread:<Session>` 的读位（不晚于电脑当前时间，回包 `lastReadAt` 为话题读位），
+不改主聊天读位；不属于该伙伴或已归档的话题返回 `NOT_FOUND`。手机只在读完话题时上报，话题未读点
+目前只显示在伙伴所在电脑上，手机不新增话题未读界面。
+
+手机与桌面控制端把 `lastReadAt` 与本地读位取较新者合并，看过后先记本地再上报；上报是否成功与本地读位
+分开记录：没被电脑确认的读位在再次显示同一条回复时重发，桌面控制端另在每次名册读成功（含重连）后补发，
+电脑已有更新的读位或不支持时丢弃。只有电脑声明了 `lastReadAt` 才发 `read`，旧电脑保持各端独立的本地读位，旧控制端忽略新字段。不新增 IPC 白名单、
+帧、能力位或 relay 行为，官方与自建中转只透传既有 invoke／push，无需适配；不改服务端。电脑侧读位
+按账号保存在 `owners/<账号>/bot-read-state.json`，本机窗口经仅限可信页面的
+`local-db:bots:read-state:get` / `update` 与推送 `local-db:bots:read-state:changed` 读写，请求带
+账号 id，账号切换中或不匹配时不写入。回归入口：`botRemoteResourceProvider.test.ts`、
+`botReadStateStore.test.ts`、Renderer `botReadState.test.ts` 与 Mobile `remoteResourceCache.test.ts`。
+
+## 远程输入框的轻量插件授权查询（2026-11-05，未发布）
+
+`plugins` 集合新增只读 action `management:ui-consent`，返回 `{version:1, uiCapabilityApproval?, item?}`。
+`item` 仅含待确认实例的 `instanceKey`、`name`、`approvalToken`，不含图标、市场、项目或完整 manifest。
+控制端按集合 actions 协商；旧主机未声明时仍读原 `management:snapshot` 并在本机投影。
+同一 renderer、账号代次与远程电脑共用读取，插件通知（含角标变化）250ms 合并、在途不并发。
+最后一个输入框卸载后保留轻量缓存与失效监听 30 秒，期间不发起读取；切换回来复用缓存，若有变化则合并刷新。
+离线立即作废缓存，重连重新协商；闲置到期释放订阅，账号代次变化隔离旧结果。
+保留期间由共享层监听 relay 与目标 presence；断线前在途结果不回填。查询失败保留待刷新状态，
+下次订阅或通知补读，不因失败自动循环重试。
+读取期间已排队的新通知在该读取失败后仍合并补读一次；没有新通知的失败不自行循环重试。
+relay 换代时清除旧的目标离线结论，不依赖新连接重放增量 presence。
+目标 peer 的 reset/reopened 同样使缓存及旧在途结果失效；其他设备的 peer 事件不触发读取。
+普通任务、新任务和伙伴输入框共用此逻辑；非插件集合变化不触发。批准、稍后提示、版本复验沿用原事务。
+旧控制端继续使用原快照，存量插件批准与数据不变。未新增 channel、权限或传输帧；官方/自建中转均透传原
+remote-resource invoke，无需服务端或中转升级。
+
 ## Pi 上下文来源估算（2026-11-05，未发布）
 
 `maker:get-context-usage` 沿用原通道，仅增加可选 `textEstimate`：
@@ -14,6 +54,33 @@ Desktop 与 Mobile 明确标注估算和排除项。旧端忽略可选字段，�
 Desktop 和 Mobile 共用 shared parser，仅认可未删除的伙伴作者消息、单个完整 card、已知版本及白名单类别；普通人或未知／混合内容继续普通消息展示。Desktop 发往手机的既有消息视图可选追加 `capabilityNoticeCode`，手机 Remote Resource 解析仅保留未删除的伙伴 notice 上的白名单类别，content 保留 fallback，旧手机忽略新字段仍可读；手机直连自行投影，新手机连旧电脑仍用旧内容。旧桌面／手机直连把未知卡片显示为伙伴消息的 fallback，不丢失提示。
 
 不改服务端接口、权限档、原生配置、schema 或数据库 migration。提示只有原因，没有原始工具参数、路径或错误正文。回滚客户端后沿用 fallback，不修改已有历史。
+## Anthropic 兼容网关的工具引用恢复（#8593）
+
+Desktop 的 Anthropic loopback 代理在上游 400/422 明确报出
+`content type tool_reference requires a native Anthropic Messages target` 时，
+仅将 `messages[].content[]` 中 `tool_result.content[]` 的工具引用转换为保留工具名的文本，
+沿现有恢复规则最多重试一次。工具定义、调用参数、结果对应关系和本地历史均不修改；
+上游接受的原生引用不触发转换，未知错误照常返回。Tool Search 默认策略与用户显式配置不变。
+没有设备协议、relay 或服务端变更；回退该恢复规则即可回到原来的上游错误行为。
+
+## OpenCode Go 配额查询（2026-11-04）
+
+同账号只读 invoke 白名单新增 `maker:usage:opencode-go`，请求只接受 `providerId`、可选
+`agent` 及 `forceRefresh`，不接受端点或凭证。执行端按真实路由只认官方
+`https://opencode.ai/zen/go/v1`，执行地址对控制端剥离；返回规范化的滚动、每周、每月
+窗口比例、重置时间及查询状态，控制端再次校验字段。不开放供应商分享、共享任务或未连接
+设备权限，不改变推理请求、计费、凭据配置及限额自动继续规则。
+
+新控制端连接旧执行端时该 channel 不受支持，返回 `CHANNEL_NOT_ALLOWED`，界面按查询
+不可用处理且不回退到本机账号；旧控制端不发送此请求，新执行端的既有通道保持不变。
+查询失败只影响该连接的配额显示，不重启共享链路、不重放任务写操作；无需 server、协议
+版本、数据库迁移或新增能力协商。
+
+自建中转沿用 `packages/device-link-relay/src/hub.ts` 的通用 envelope 转发：`invoke`
+的 channel、args 与响应 payload 不由中转解析，因此无需修改中转内核、升级 `RELAY_VERSION`
+或新增能力协商；旧中转也可转发，是否支持查询仍由执行端决定。验证包括共享客户端与
+自建中转单测，以及 `pnpm --filter @cindy/device-link-relay run interop` 的真实客户端
+加入／签名通信／重连；这些验证不替代真实 OpenCode Go 账号与两台实机的端到端验收。
 
 ## 群聊代答的工作记录兼容（2026-11-03）
 

@@ -589,6 +589,7 @@ function createIpcFanOut(channel: string): FanOut {
 // Stage 2 C1: cc-agent:* push channel fanout 全部退役 (renderer 已切到 maker:event 等),
 // 老 7 个 fanOut + fanOutUserMessagePersisted 一起拿掉。
 const fanOutUpdateStatus = createIpcFanOut('update-status');
+const fanOutBotReadStateChanged = createIpcFanOut('local-db:bots:read-state:changed');
 const fanOutSkillhubLocalStateChanged = createIpcFanOut('skillhub:local-state-changed');
 const fanOutDatabaseSizeWarningChanged = createIpcFanOut('database-size-warning:changed');
 const fanOutDbSlimmingStartupProgress = createIpcFanOut(
@@ -752,6 +753,7 @@ const fanOutLayoutChanged = createIpcFanOut('layout:changed');
 // 见 main/cindy-brain/index.ts)。
 const fanOutRetirementOpen = createIpcFanOut('ghosts:retirement-open');
 const fanOutGhostsChanged = createIpcFanOut('ghosts:changed');
+const fanOutGhostWorkdirPrefsChanged = createIpcFanOut('ghosts:workdir-prefs-changed');
 const fanOutPluginUiChanged = createIpcFanOut(PLUGIN_UI_CHANGED);
 const fanOutPluginTabViewRequest = createIpcFanOut(PLUGIN_TAB_VIEW_REQUEST);
 const fanOutPluginPublisherProgress = createIpcFanOut('plugin-publisher:progress');
@@ -1112,6 +1114,7 @@ interface ComputerDriverUpdateCheck {
   updating: boolean;
   checkStatus?: 'success' | 'error';
   checkedAt?: number;
+  checkError?: { kind: 'rate_limited' | 'network' };
 }
 
 const appDisplayVersionInfo = ipcRenderer.sendSync('get-app-display-version-info') as {
@@ -1572,9 +1575,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     revealBackgroundTask: (id: string, taskId: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('ghosts:background-tasks:reveal', id, taskId),
     /** 目录级禁用清单(插件页项目范围视图;sendSync 保证切换同帧渲染)。 */
-    workdirPrefsSync: (workdir: string): { disabled: string[] } =>
+    workdirPrefsSync: (workdir: string): { disabled: string[]; workdirKey?: string } =>
       ipcRenderer.sendSync('ghosts:workdir-prefs', workdir),
-    workdirPrefs: (workdir: string): Promise<{ disabled: string[] }> =>
+    workdirPrefs: (workdir: string): Promise<{ disabled: string[]; workdirKey?: string }> =>
       ipcRenderer.invoke('ghosts:workdir-prefs', workdir),
     setWorkdirDisabled: (
       workdir: string,
@@ -1585,6 +1588,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     takePendingInstall: (): Promise<{ filePath: string | null }> =>
       ipcRenderer.invoke('ghosts:take-pending-install'),
     onChanged: fanOutGhostsChanged,
+    onWorkdirPrefsChanged: fanOutGhostWorkdirPrefsChanged,
     onSetupNavigate: (
       callback: (
         payload:
@@ -3118,6 +3122,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getCreditUsage: () => ipcRenderer.invoke(BILLING_INVOKE.GET_CREDIT_USAGE),
     getCatalog: () => ipcRenderer.invoke(BILLING_INVOKE.GET_CATALOG),
     listOrders: (payload) => ipcRenderer.invoke(BILLING_INVOKE.LIST_ORDERS, payload),
+    listPaymentHistory: (payload) => ipcRenderer.invoke(BILLING_INVOKE.LIST_PAYMENT_HISTORY, payload),
     getOrder: (payload) => ipcRenderer.invoke(BILLING_INVOKE.GET_ORDER, payload),
     createTopup: (payload) => ipcRenderer.invoke(BILLING_INVOKE.CREATE_TOPUP, payload),
     refreshTopup: (payload) => ipcRenderer.invoke(BILLING_INVOKE.REFRESH_TOPUP, payload),
@@ -6120,6 +6125,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
         welcomeContext?: import('../shared/botWelcomeContext').BotWelcomeContext;
         locale?: import('../shared/locale').SupportedLocale;
       }): Promise<unknown[]> => ipcRenderer.invoke('local-db:bots:list', body),
+      readState: {
+        get: (): Promise<{ ownerId: string | null; positions: Record<string, number> }> =>
+          ipcRenderer.invoke('local-db:bots:read-state:get'),
+        update: (body: {
+          ownerId: string;
+          mark?: Record<string, number>;
+          seed?: Record<string, number>;
+          prune?: { botIds?: string[]; groupIds?: string[] };
+        }): Promise<{ ownerId: string | null; positions: Record<string, number> }> =>
+          ipcRenderer.invoke('local-db:bots:read-state:update', body),
+        onChanged: fanOutBotReadStateChanged,
+      },
       get: (botId: string): Promise<unknown> => ipcRenderer.invoke('local-db:bots:get', botId),
       chooseAvatarSource: (): Promise<{ canceled: boolean; previewDataUrl?: string }> =>
         ipcRenderer.invoke('local-db:bots:choose-avatar-source'),
@@ -6818,6 +6835,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     fetchProviderAccountUsage: (input: {
       providerId: string;
       forceRefresh?: boolean;
+      agent?: 'claude-code' | 'codex' | 'pi';
     }): Promise<
       import('../shared/providerAccountUsage').ProviderAccountUsageResult
     > => ipcRenderer.invoke('maker:provider:account-usage', input),
