@@ -345,6 +345,16 @@ export type ScheduleMutationGuard = Readonly<Schedule> & {
   effectiveWorkingDir?: string;
 };
 
+/**
+ * An early run started by host code instead of the cron or a user. `kind: 'watch'`: something the
+ * schedule watches changed (`source` names the watcher, `detail` the watched object, such as a PR URL).
+ */
+export interface ScheduleRunTrigger {
+  kind: 'watch';
+  source: string;
+  detail?: string;
+}
+
 export interface ScheduleRun {
   id: string;
   scheduleId: string;
