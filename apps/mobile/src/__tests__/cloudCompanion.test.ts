@@ -171,6 +171,12 @@ describe('Chat Server client for companions', () => {
       throw Object.assign(new Error('NOT_FOUND'), { status: 404 });
     });
     await expect(client.hasProfileSnapshot(id(1))).resolves.toBe(false);
+    // A failed read is not "no profile": callers keep what they knew.
+    request.mockImplementation(async (path: string) => {
+      if (path.startsWith('/preferences')) return [];
+      throw Object.assign(new Error('UNAVAILABLE'), { status: 503 });
+    });
+    await expect(client.hasProfileSnapshot(id(1))).rejects.toThrow('UNAVAILABLE');
   });
 
   it('sends compare-and-set and returns a typed conflict', async () => {

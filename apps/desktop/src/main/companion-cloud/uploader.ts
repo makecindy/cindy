@@ -173,6 +173,9 @@ export function createCompanionUploader(deps: {
     for (const { key, value } of values) desired.set(key, value);
     // Only keys this device itself had are tombstoned; never what merely exists on the server,
     // nor anything under a part that could not be read this time.
+    // A hand-over must not trust a pause from an earlier switch-off: the server may be back, and a
+    // store copy left uncleared there would win over the preferences on the receiving computer.
+    if (options.requireAll) deps.store?.retryNow();
     let store = deps.store?.active() ? deps.store : undefined;
     if (store && !deps.state.bot(botId)?.storeSeeded) {
       try { await seedStore(botId, actorId, store); } catch (error) {

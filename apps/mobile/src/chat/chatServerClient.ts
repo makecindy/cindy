@@ -472,7 +472,11 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       const entry = await request<{ deleted?: unknown; value?: unknown; blob?: unknown } | null>(PROFILE_STORED, 'GET', undefined, chatId(actorId));
       if (!entry || typeof entry !== 'object' || Array.isArray(entry) || entry.deleted !== false) return undefined;
       return entry.blob === true ? PROFILE_IN_BUCKET : entry.value;
-    } catch { return undefined; }
+    } catch (error) {
+      // 404: an older server or the store switched off. Anything else is a failed read, not "no profile".
+      if (error && typeof error === 'object' && 'status' in error && error.status === 404) return undefined;
+      throw error;
+    }
   }
   async function readPlans(room: string, messages: readonly ChatMessage[]): Promise<ChatPlan[] | undefined> {
     const ids = [...new Set(messages.map(messagePlanId).filter((id): id is string => id !== null))];

@@ -387,6 +387,22 @@ describe('companion store', () => {
     expect(t.prefs.get(key)?.value).toEqual(memory('big.md', 'small now').value);
   });
 
+  it('clears a store copy left behind while the store was off before handing over', async () => {
+    const options = { off: false };
+    const t = storeSetup(options);
+    const key = 'companion.memory.v1:big.md';
+    t.setValues([profile('soul'), memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000))]);
+    await t.uploader.syncBot('bot', 'actor');
+    options.off = true;
+    t.setValues([profile('soul')]);
+    await t.uploader.syncBot('bot', 'actor');
+    expect(t.entries.get(key)?.deleted).toBe(false);
+    // Back on, but this client would still be pausing: the hand-over asks again and clears it.
+    options.off = false;
+    await t.uploader.syncBot('bot', 'actor', Number.POSITIVE_INFINITY, { requireAll: true });
+    expect(t.entries.get(key)?.deleted).toBe(true);
+  });
+
   it('passes a deletion of a value kept only in the store to the next restore', async () => {
     const t = storeSetup();
     const big = memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000));

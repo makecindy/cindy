@@ -76,6 +76,8 @@ export function createCompanionStore(api: CompanionApi, options: { enabled: () =
 
   return {
     active,
+    /** Ask the server again now instead of waiting out the switch-off pause (before a hand-over). */
+    retryNow() { offUntil = 0; },
     /** Current store revision of every key (metadata only), for the uploader's compare-and-set. */
     async revisions(actorId: string): Promise<Map<string, { revision: number; hash: string }>> {
       const out = new Map<string, { revision: number; hash: string }>();
