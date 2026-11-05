@@ -803,9 +803,12 @@ export class Scheduler extends EventEmitter {
       slotWaitMs: Math.max(0, now - (schedule.nextFireAt ?? now)),
       phase: 'claiming',
     });
+    // Track edits across claim/persistence awaits, before runner.fire exists.
+    this.automaticDispatchSchedules.set(runId, schedule);
     try {
       await this.fireOneInner(schedule, runId);
     } finally {
+      this.automaticDispatchSchedules.delete(runId);
       this.finishInflightAttempt(runId);
     }
   }
@@ -842,6 +845,9 @@ export class Scheduler extends EventEmitter {
           scheduleId: schedule.id,
         });
         return;
+      }
+      if (this.automaticDispatchSchedules.get(runId) === schedule) {
+        this.automaticDispatchSchedules.set(runId, claimed);
       }
       schedule = claimed;
       if (await this.expireSchedule(schedule, this.clock.now())) return;
@@ -918,7 +924,6 @@ export class Scheduler extends EventEmitter {
     let skipped = false;
     // unregisterInflight 会清掉 session 映射,终态 emit 必须用 finally 之前捕获的值。
     let knownSessionId: string | undefined;
-    this.automaticDispatchSchedules.set(runId, schedule);
     this.updateInflightAttempt(runId, 'running');
     try {
       if (schedule.targetSessionId) {
@@ -947,7 +952,6 @@ export class Scheduler extends EventEmitter {
       runError = err instanceof Error ? err.message : String(err);
       this.logger?.warn?.('schedule fire failed', { scheduleId: schedule.id, runId, error: runError });
     } finally {
-      this.automaticDispatchSchedules.delete(runId);
       knownSessionId = this.resolveTerminalSessionId(runId, sessionId, schedule.targetSessionId);
       this.unregisterInflight(schedule.id, runId);
       this.updateInflightAttempt(runId, 'finalizing');
@@ -984,14 +988,13 @@ export class Scheduler extends EventEmitter {
       }
       this.silencedRuns.delete(runId);
       const retryAt = finishedAt + (deferRetryMs ?? 60_000);
-      const current = (await this.storage.get(schedule.id)) ?? schedule;
-      const updated = await this.storage.update(schedule.id, {
+      const updated = await this.updateSchedulingSnapshot(schedule.id, (current) => ({
         nextFireAt: beforeDeadline(current, retryAt),
         ...(current.status === 'active' && hasExpired(current, finishedAt) ? { status: 'expired' as const } : {}),
-      });
+      }));
       if (updated && updated.status === 'active') {
         this.activeSchedules.set(updated.id, updated);
-      }
+      } else this.activeSchedules.delete(schedule.id);
       // 'deferred' 配对先前的 'fired',让 UI 清掉 ephemeral running 态(不留可见 run);
       // 'changed' 让列表 revalidate 新的 nextFireAt。
       this.emitEvent({ type: 'deferred', scheduleId: schedule.id, runId });
@@ -1114,6 +1117,20 @@ export class Scheduler extends EventEmitter {
     this.emitEvent({ type: 'changed', scheduleId: schedule.id });
   }
 
+  /** A scheduling patch is derived from a row snapshot. Re-read and recompute
+   * after a concurrent claim/edit/completion instead of overwriting it. */
+  private async updateSchedulingSnapshot(
+    id: string,
+    buildPatch: (current: Schedule) => Partial<Schedule>,
+  ): Promise<Schedule | null> {
+    for (;;) {
+      const current = await this.storage.get(id);
+      if (!current) return null;
+      const updated = await this.storage.update(id, buildPatch(current), current);
+      if (updated) return updated;
+    }
+  }
+
   private async finishRunSchedule(
     schedule: Schedule,
     firedAt: number,
@@ -1126,36 +1143,30 @@ export class Scheduler extends EventEmitter {
     //
     // 重排前必须重读 DB 行：run 进行中 schedule 可能已被 update()（典型：任务内
     // agent 调 schedule_update 自适应降档改 cron）。用 fire 时刻的快照重排会把
-    // 刚改好的新节奏覆盖回旧值。行已不存在时回退快照（storage.update 是 no-op）。
-    const current = (await this.storage.get(schedule.id)) ?? schedule;
-    // Decide recovery ownership from this same fresh row, after runner/lock
-    // waits. runNow records its fire before dispatch; automatic fire records
-    // it on completion. A recorded or newer fire retains its schedule slot.
-    const ownsSchedule = source === 'automatic' || (source === 'recovery' &&
-      !current.manual && (current.lastFiredAt === undefined || current.lastFiredAt < firedAt));
-    const patch: Partial<Schedule> = { lastFinishedAt: finishedAt };
-    if (ownsSchedule) {
-      patch.lastFiredAt = firedAt;
-      if (current.recurring) {
-        patch.nextFireAt = beforeDeadline(current, current.intervalMs !== undefined
-          ? finishedAt + current.intervalMs
-          : nextCronOrMonthlyFire(current.cronExpr, finishedAt, current.timezone));
-      } else if (current.status !== 'paused') {
+    // 刚改好的新节奏覆盖回旧值。快照冲突后重新判定归属及 Once 消费状态。
+    const updated = await this.updateSchedulingSnapshot(schedule.id, (current) => {
+      // runNow records its fire before dispatch; automatic fire records it on
+      // completion. Recovery must yield ownership to a recorded or newer fire.
+      const ownsSchedule = source === 'automatic' || (source === 'recovery' &&
+        !current.manual && (current.lastFiredAt === undefined || current.lastFiredAt < firedAt));
+      const patch: Partial<Schedule> = { lastFinishedAt: finishedAt };
+      if (ownsSchedule) {
+        patch.lastFiredAt = firedAt;
+        if (current.recurring) {
+          patch.nextFireAt = beforeDeadline(current, current.intervalMs !== undefined
+            ? finishedAt + current.intervalMs
+            : nextCronOrMonthlyFire(current.cronExpr, finishedAt, current.timezone));
+        } else if (current.status !== 'paused') {
+          patch.status = 'expired';
+          patch.nextFireAt = undefined;
+        }
+      }
+      if (current.status === 'expired' || (current.status === 'active' && hasExpired(current, finishedAt))) {
         patch.status = 'expired';
         patch.nextFireAt = undefined;
       }
-    }
-    if (current.status === 'expired' || (current.status === 'active' && hasExpired(current, finishedAt))) {
-      patch.status = 'expired';
-      patch.nextFireAt = undefined;
-    }
-    // Recovery may race another process after the read. Match the scheduling
-    // snapshot inside UPDATE; losing ownership only updates completion time.
-    const expected = (source === 'recovery' && ownsSchedule) || current.expireAt !== undefined ? current : undefined;
-    let updated = await this.storage.update(schedule.id, patch, expected);
-    if (!updated && expected) {
-      updated = await this.storage.update(schedule.id, { lastFinishedAt: finishedAt });
-    }
+      return patch;
+    });
     if (updated?.status === 'active') this.activeSchedules.set(updated.id, updated);
     else this.activeSchedules.delete(schedule.id);
   }
@@ -1366,15 +1377,14 @@ export class Scheduler extends EventEmitter {
       // schedule.lastFiredAt。否则:① 顺延却显示成"已触发",违背"顺延不留可见记录";
       // ② 对 recurring=false 的 Once 任务,lastFiredAt 一旦落地,重启时
       // computeNextFireAt 会因 lastFiredAt 已设而返回 undefined → 顺延的重试被吞掉。
-      const current = (await this.storage.get(schedule.id)) ?? schedule;
-      const updated = await this.storage.update(schedule.id, {
+      const updated = await this.updateSchedulingSnapshot(schedule.id, (current) => ({
         nextFireAt: beforeDeadline(current, options?.deferToCaller ? current.nextFireAt : retryAt),
         ...(current.status === 'active' && hasExpired(current, finishedAt) ? { status: 'expired' as const } : {}),
-        lastFiredAt: schedule.lastFiredAt,
-      });
+        ...(current.lastFiredAt === firedAt ? { lastFiredAt: schedule.lastFiredAt } : {}),
+      }));
       if (updated && updated.status === 'active') {
         this.activeSchedules.set(updated.id, updated);
-      }
+      } else this.activeSchedules.delete(schedule.id);
       // 'deferred' 配对先前的 'fired'(清 UI running 态、不留可见 run);'changed' revalidate。
       this.emitEvent({ type: 'deferred', scheduleId: schedule.id, runId });
       this.emitEvent({ type: 'changed', scheduleId: schedule.id });
@@ -1760,13 +1770,17 @@ export class Scheduler extends EventEmitter {
       recomputeFromTo = { from: existing.nextFireAt, to: updates.nextFireAt };
     }
     const nextSchedule = { ...existing, ...updates };
-    updates.nextFireAt = beforeDeadline(nextSchedule, nextSchedule.nextFireAt);
+    if (needsRecompute || expiryChanged) {
+      updates.nextFireAt = beforeDeadline(nextSchedule, nextSchedule.nextFireAt);
+    }
     if (hasExpired(nextSchedule, now)) {
       updates.nextFireAt = undefined;
       if (nextSchedule.status === 'active') updates.status = 'expired';
     }
-    const updated = await this.storage.update(id, updates);
-    if (!updated) throw new Error(`Schedule not found: ${id}`);
+    const updated = await this.storage.update(id, updates, existing);
+    // Do not reuse scheduling or validation decisions after a concurrent write.
+    // A deleted row or stale approval guard is rejected by the fresh read.
+    if (!updated) return this.updateUnlocked(id, patch, expected);
     this.refreshAutomaticDispatchSchedules(updated);
     if (updated.status === 'active') {
       this.activeSchedules.set(id, this.keepInvalidScheduleQuarantined(updated, now));

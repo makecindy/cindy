@@ -1274,6 +1274,115 @@ describe('Scheduler', () => {
     expect(cleared.nextFireAt).toBeGreaterThan(h.clock.now());
   });
 
+  // PR #9059 / unit: queued-run tests only edited after runner.fire. Hold the
+  // earlier run persistence boundary and observe the actual dispatch decision.
+  it.each(['shortened', 'cleared'] as const)('tracks deadline edits during insertRun (%s)', async (change) => {
+    let dispatched = false;
+    const local = makeHarness({ runnerImpl: async (_schedule, ctx) => {
+      dispatched = ctx.canDispatch?.() !== false;
+      return { sessionId: '', deferred: !dispatched };
+    } });
+    const expireAt = local.clock.now() + 120_000;
+    const sch = await local.scheduler.create({ ...baseInput, expireAt });
+    const insertRun = local.storage.insertRun.bind(local.storage);
+    vi.spyOn(local.storage, 'insertRun').mockImplementationOnce(async (run) => {
+      if (change === 'cleared') local.clock.setTo(expireAt);
+      await local.scheduler.update(sch.id, { expireAt: change === 'cleared' ? null : local.clock.now() });
+      return insertRun(run);
+    });
+    local.clock.setTo(sch.nextFireAt!);
+    await local.scheduler.tick();
+    expect(dispatched).toBe(change === 'cleared');
+  });
+
+  // A rename can read either the due time or the cleared in-flight claim.
+  // Finish a real automatic run before that read returns; neither snapshot may
+  // overwrite its new cadence. Existing rename tests had no concurrent fire.
+  it.each([false, true])('preserves completion scheduling during a rename (claimed=%s)', async (claimed) => {
+    let release!: () => void;
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => { entered = resolve; });
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const local = makeHarness({ runnerImpl: async () => {
+      entered();
+      if (claimed) await held;
+      return { sessionId: 'completed' };
+    } });
+    const sch = await local.scheduler.create(baseInput);
+    local.clock.setTo(sch.nextFireAt!);
+    const fire = claimed ? local.scheduler.tick() : undefined;
+    if (claimed) await ready;
+    const get = local.storage.get.bind(local.storage);
+    let completed!: Schedule;
+    vi.spyOn(local.storage, 'get').mockImplementationOnce(async (id) => {
+      const snapshot = await get(id);
+      release();
+      await (fire ?? local.scheduler.tick());
+      completed = (await get(id))!;
+      return snapshot;
+    });
+    await local.scheduler.update(sch.id, { name: 'renamed' });
+    expect(await local.scheduler.get(sch.id)).toMatchObject({
+      name: 'renamed', nextFireAt: completed.nextFireAt, lastFiredAt: completed.lastFiredAt,
+    });
+    await local.scheduler.tick();
+    expect(local.fireCalls).toHaveLength(1);
+  });
+
+  // PR #9059 / unit: the prior retry tests never changed the deadline between
+  // the read and UPDATE. Simulate another process extending/clearing that row.
+  it.each([false, true])('recalculates a deferred retry after a deadline edit (manual=%s)', async (manual) => {
+    const local = makeHarness({ runnerImpl: async () => {
+      local.clock.setTo(expireAt);
+      return { sessionId: '', deferred: true };
+    } });
+    const expireAt = local.clock.now() + 120_000;
+    const sch = await local.scheduler.create({ ...baseInput, expireAt });
+    const renewed = manual ? undefined : expireAt + 180_000;
+    const update = local.storage.update.bind(local.storage);
+    let raced = false;
+    vi.spyOn(local.storage, 'update').mockImplementation(async (id, patch, expected) => {
+      if (!raced && patch.status === 'expired') {
+        raced = true;
+        await update(id, { expireAt: renewed });
+      }
+      return update(id, patch, expected);
+    });
+    local.clock.setTo(sch.nextFireAt!);
+    if (manual) await local.scheduler.runNow(sch.id);
+    else await local.scheduler.tick();
+    expect(raced).toBe(true);
+    const after = await local.scheduler.get(sch.id);
+    expect(after).toMatchObject({
+      status: 'active', expireAt: renewed, nextFireAt: expireAt + 60_000,
+    });
+    expect(after?.lastFiredAt).toBeUndefined();
+  });
+
+  // PR #9059 / unit: completion CAS failure used to discard the Once-consumed
+  // state. Clear its deadline through update exactly before the terminal write.
+  it('consumes a one-shot even when its deadline changes during completion', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, recurring: false, expireAt: h.clock.now() + 120_000 });
+    const update = h.storage.update.bind(h.storage);
+    let raced = false;
+    vi.spyOn(h.storage, 'update').mockImplementation(async (id, patch, expected) => {
+      if (!raced && patch.lastFinishedAt !== undefined) {
+        raced = true;
+        await h.scheduler.update(id, { expireAt: null });
+      }
+      return update(id, patch, expected);
+    });
+    h.clock.setTo(sch.nextFireAt!);
+    await h.scheduler.tick();
+    expect(raced).toBe(true);
+    expect(await h.scheduler.get(sch.id)).toMatchObject({
+      status: 'expired', nextFireAt: undefined, lastFiredAt: sch.nextFireAt, expireAt: undefined,
+    });
+    h.clock.advance(180_000);
+    await h.scheduler.tick();
+    expect(h.fireCalls).toHaveLength(1);
+  });
+
   it('recurring fire updates lastFiredAt and recomputes nextFireAt', async () => {
     const sch = await h.scheduler.create({ ...baseInput });
     h.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 5));
@@ -1335,15 +1444,19 @@ describe('Scheduler', () => {
     if (!approved) throw new Error('missing schedule');
     let releaseUpdate!: () => void;
     const updateReleased = new Promise<void>((resolve) => { releaseUpdate = resolve; });
+    let enterUpdate!: () => void;
+    const updateEntered = new Promise<void>((resolve) => { enterUpdate = resolve; });
     const originalUpdate = h.storage.update.bind(h.storage);
-    const update = vi.fn(async (id: string, patch: Partial<Schedule>) => {
-      if (patch.prompt === 'replacement') await updateReleased;
-      return originalUpdate(id, patch);
+    vi.spyOn(h.storage, 'update').mockImplementation(async (id, patch, expected) => {
+      if (patch.prompt === 'replacement') {
+        enterUpdate();
+        await updateReleased;
+      }
+      return originalUpdate(id, patch, expected);
     });
-    h.storage.update = update;
 
     const updatePromise = h.scheduler.update(sch.id, { prompt: 'replacement' });
-    await vi.waitFor(() => expect(update).toHaveBeenCalledWith(sch.id, expect.objectContaining({ prompt: 'replacement' })));
+    await updateEntered;
     const resumePromise = h.scheduler.resume(sch.id, approved);
     releaseUpdate();
     await updatePromise;

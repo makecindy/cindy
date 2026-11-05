@@ -1069,7 +1069,7 @@ export function ScheduleFormDialog({
                               aria-checked={!form.recurring}
                               onClick={() => setField('recurring', !form.recurring)}
                               className={cn(
-                                'inline-flex h-[34px] items-center gap-2 rounded-md px-1.5',
+                                'inline-flex h-[34px] items-center gap-2 rounded-full px-1.5',
                                 'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
                                 'transition-colors hover:bg-[var(--surface-hover)]',
                                 'focus:outline-none',
@@ -1077,7 +1077,7 @@ export function ScheduleFormDialog({
                             >
                               <span
                                 className={cn(
-                                  'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-[3px] border-[1.5px] transition-colors',
+                                  'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-lg border-[1.5px] transition-colors',
                                   !form.recurring
                                     ? 'border-[var(--lightbox-cta-bg)] bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]'
                                     : 'border-[var(--cmd-palette-item-meta)] bg-transparent dark:border-[var(--settings-section-desc)]',
@@ -1228,7 +1228,7 @@ export function ScheduleFormDialog({
                             aria-checked={form.silentWhenIdle}
                             onClick={() => setField('silentWhenIdle', !form.silentWhenIdle)}
                             className={cn(
-                              'inline-flex h-full items-center gap-2 rounded-md px-1.5',
+                              'inline-flex h-full items-center gap-2 rounded-full px-1.5',
                               'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
                               'transition-colors hover:bg-[var(--surface-hover)]',
                               'focus:outline-none',
@@ -1236,7 +1236,7 @@ export function ScheduleFormDialog({
                           >
                             <span
                               className={cn(
-                                'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-[3px] border-[1.5px] transition-colors',
+                                'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-lg border-[1.5px] transition-colors',
                                 form.silentWhenIdle
                                   ? 'border-[var(--lightbox-cta-bg)] bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]'
                                   : 'border-[var(--cmd-palette-item-meta)] bg-transparent dark:border-[var(--settings-section-desc)]',
@@ -1275,7 +1275,7 @@ export function ScheduleFormDialog({
                             aria-checked={form.notifyFeishu}
                             onClick={() => setField('notifyFeishu', !form.notifyFeishu)}
                             className={cn(
-                              'inline-flex h-[34px] items-center gap-2 rounded-md px-1.5',
+                              'inline-flex h-[34px] items-center gap-2 rounded-full px-1.5',
                               'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
                               'transition-colors hover:bg-[var(--surface-hover)]',
                               'focus:outline-none',
@@ -1283,7 +1283,7 @@ export function ScheduleFormDialog({
                           >
                             <span
                               className={cn(
-                                'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-[3px] border-[1.5px] transition-colors',
+                                'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-lg border-[1.5px] transition-colors',
                                 form.notifyFeishu
                                   ? 'border-[var(--lightbox-cta-bg)] bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]'
                                   : 'border-[var(--cmd-palette-item-meta)] bg-transparent dark:border-[var(--settings-section-desc)]',
@@ -1309,7 +1309,7 @@ export function ScheduleFormDialog({
                             type="button"
                             onClick={goConfigFeishuBot}
                             className={cn(
-                              'inline-flex h-[34px] items-center rounded-md px-2',
+                              'inline-flex h-[34px] items-center rounded-full px-2',
                               'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
                               'transition-colors hover:bg-[var(--surface-hover)]',
                               'focus:outline-none underline-offset-2 hover:underline',
@@ -1327,14 +1327,14 @@ export function ScheduleFormDialog({
                               setField('notifyWecomGroup', form.notifyWecomGroup !== true)
                             }
                             className={cn(
-                              'inline-flex h-[34px] items-center gap-2 rounded-md px-1.5',
+                              'inline-flex h-[34px] items-center gap-2 rounded-full px-1.5',
                               'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
                               'transition-colors hover:bg-[var(--surface-hover)] focus:outline-none',
                             )}
                           >
                             <span
                               className={cn(
-                                'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-[3px] border-[1.5px] transition-colors',
+                                'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-lg border-[1.5px] transition-colors',
                                 form.notifyWecomGroup
                                   ? 'border-[var(--lightbox-cta-bg)] bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]'
                                   : 'border-[var(--cmd-palette-item-meta)] bg-transparent dark:border-[var(--settings-section-desc)]',
@@ -1352,7 +1352,7 @@ export function ScheduleFormDialog({
                             type="button"
                             onClick={goConfigWecomGroup}
                             className={cn(
-                              'inline-flex h-[34px] items-center rounded-md px-2',
+                              'inline-flex h-[34px] items-center rounded-full px-2',
                               'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
                               'transition-colors hover:bg-[var(--surface-hover)]',
                               'focus:outline-none underline-offset-2 hover:underline',
@@ -1379,7 +1379,7 @@ export function ScheduleFormDialog({
                                 setField('preRunHookEnabled', !form.preRunHookEnabled);
                               }}
                               className={cn(
-                                'inline-flex h-[34px] items-center gap-2 rounded-md px-1.5',
+                                'inline-flex h-[34px] items-center gap-2 rounded-full px-1.5',
                                 'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
                                 'transition-colors hover:bg-[var(--surface-hover)]',
                                 'focus:outline-none',
@@ -1387,7 +1387,7 @@ export function ScheduleFormDialog({
                             >
                               <span
                                 className={cn(
-                                  'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-[3px] border-[1.5px] transition-colors',
+                                  'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-lg border-[1.5px] transition-colors',
                                   form.preRunHookEnabled
                                     ? 'border-[var(--lightbox-cta-bg)] bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]'
                                     : 'border-[var(--cmd-palette-item-meta)] bg-transparent dark:border-[var(--settings-section-desc)]',
