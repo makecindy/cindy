@@ -5,7 +5,7 @@ import { providerPresetOAuth } from '@cindy/model-providers';
  * 覆盖（存储 / fetch / 时钟注入，不联网、不触电 Electron）：
  *   - blob 缓存读写、has/logout 语义；
  *   - 临期单飞刷新：refresh_token 交换、登出竞态不回写、并发只刷一次；
- *   - readCachedGenericOAuthAccessToken 同步返回 + 临期触发后台刷新；
+ *   - cached status reads and awaited routing-token refresh;
  *   - discoverGenericOAuthModels 解析 OpenAI /models 形状 + 失败回 null；
  *   - buildRouteDecision 的 oauth-token 分支（Bearer 覆盖、cc 抹 x-api-key、codex 抹 OpenAI
  *     账号元数据头、无 token passthrough）；
@@ -26,6 +26,7 @@ import {
   hasGenericOAuthLogin,
   logoutGenericOAuth,
   removeGenericOAuthCredentialsReversibly,
+  readGenericOAuthAccessToken,
   readCachedGenericOAuthAccessToken,
   refreshGenericOAuthIfNeeded,
   discoverGenericOAuthModels,
@@ -35,6 +36,7 @@ import {
 } from '../generic-oauth.js';
 import {
   buildRouteDecision,
+  beginProviderRouteMutation,
   isHostInjectedAuthSession,
   setOAuthTokenReader,
   resolveSessionRouteDecision,
@@ -83,7 +85,7 @@ function memStorage(): GenericOAuthStorage & { map: Map<string, string> } {
 let storage = memStorage();
 let nowMs = 1_000_000;
 let fetchCalls: { url: string; body?: string; headers?: Record<string, string> }[] = [];
-let fetchResponder: (url: string) => Response = () => new Response('{}', { status: 500 });
+let fetchResponder: (url: string) => Response | Promise<Response> = () => new Response('{}', { status: 500 });
 let openedUrls: string[] = [];
 
 beforeEach(() => {
@@ -339,6 +341,13 @@ describe('blob 读写 / has / logout', () => {
 });
 
 describe('临期刷新（单飞）', () => {
+  // 测试价值
+  // - 生产入口与可观察结果：readGenericOAuthAccessToken 只把完成刷新的 token 交给路由。
+  // - Bug 依据：#7942；原同步 reader 在刷新尚未完成时就把旧 Bearer 交给当前请求。
+  // - 现有覆盖缺口：旧用例只确认后台刷新最终成功，没有断言首个请求等待、失败共享或重登录保护。
+  // - 最小失败输入：一个临期缓存 token；刷新挂起、返回 503，或登出后以同一 refresh token 重登。
+  // - tier：unit；使用内存存储与注入 fetch，不访问真实凭证、网络或 Electron。
+  // - 实测耗时：既有测试文件全量运行约 10 秒，复用它避免增加一次模块收集成本。
   it('临期 + refresh_token → 交换新 token 并落盘', async () => {
     seedBlob('acme', { access_token: 'old', refresh_token: 'rt-1', expires_at: nowMs + 1_000 });
     fetchResponder = () =>
@@ -372,13 +381,92 @@ describe('临期刷新（单飞）', () => {
     expect(hasGenericOAuthLogin('acme')).toBe(false);
   });
 
-  it('readCachedGenericOAuthAccessToken：临期时同步返回旧 token 并后台触发刷新', async () => {
+  it('awaits an expiring token refresh before returning a token for routing', async () => {
     seedBlob('acme', { access_token: 'old', refresh_token: 'rt-1', expires_at: nowMs + 1_000 });
-    fetchResponder = () =>
-      new Response(JSON.stringify({ access_token: 'new', expires_in: 3600 }), { status: 200 });
-    expect(readCachedGenericOAuthAccessToken('acme', OAUTH)).toBe('old'); // 不阻塞
-    await refreshGenericOAuthIfNeeded('acme', OAUTH); // 排队等后台那次完成（单飞去重）
-    expect(readCachedGenericOAuthAccessToken('acme', OAUTH)).toBe('new');
+    let release!: (response: Response) => void;
+    const response = new Promise<Response>((resolve) => { release = resolve; });
+    fetchResponder = () => response;
+
+    let settled = false;
+    const tokenPromise = readGenericOAuthAccessToken('acme', OAUTH).then((token) => {
+      settled = true;
+      return token;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(fetchCalls).toHaveLength(1);
+
+    release(new Response(JSON.stringify({ access_token: 'new', expires_in: 3600 }), { status: 200 }));
+    await expect(tokenPromise).resolves.toBe('new');
+  });
+
+  it('invalidates a route whose credential refresh overlaps a provider mutation', async () => {
+    setActiveCatalog({
+      version: 't',
+      providers: [{
+        id: 'acme',
+        name: 'Acme',
+        source: 'builtin',
+        agents: ['claude-code'],
+        auth: { method: 'oauth', oauth: OAUTH },
+        routing: {
+          'claude-code': { upstream: 'https://api.acme.example', authStrategy: 'oauth-token' },
+        },
+        models: {
+          'claude-code': [{ id: 'acme-1', name: 'A1', contextWindow: 1000, efforts: [], defaultEffort: null }],
+        },
+      }],
+    });
+    setSessionProvider('sess-1', 'acme');
+    let releaseToken!: (token: string) => void;
+    setOAuthTokenReader(() => new Promise((resolve) => { releaseToken = resolve; }));
+
+    const decisionPromise = resolveSessionRouteDecision('sess-1', 'claude-code', null);
+    await vi.waitFor(() => expect(releaseToken).toBeTypeOf('function'));
+    const finishMutation = beginProviderRouteMutation('acme');
+    finishMutation.commit();
+    finishMutation();
+    releaseToken('new-token');
+
+    const decision = await decisionPromise;
+    expect(decision).toEqual({ localHandler: expect.any(Function) });
+  });
+
+  it('shares one failed refresh among concurrent reads and never returns the stale token', async () => {
+    seedBlob('acme', { access_token: 'old', refresh_token: 'rt-1', expires_at: nowMs - 1 });
+    let release!: (response: Response) => void;
+    const response = new Promise<Response>((resolve) => { release = resolve; });
+    fetchResponder = () => response;
+
+    const tokenPromises = Array.from({ length: 8 }, () => readGenericOAuthAccessToken('acme', OAUTH));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fetchCalls).toHaveLength(1);
+
+    release(new Response('{}', { status: 503 }));
+    const results = await Promise.allSettled(tokenPromises);
+    expect(results).toHaveLength(8);
+    expect(results.every((result) => result.status === 'rejected')).toBe(true);
+    expect(fetchCalls).toHaveLength(1);
+  });
+
+  it('does not let a delayed refresh overwrite a new login with the same refresh token', async () => {
+    seedBlob('acme', { access_token: 'old', refresh_token: 'rt-1', expires_at: nowMs + 1_000 });
+    let release!: (response: Response) => void;
+    const response = new Promise<Response>((resolve) => { release = resolve; });
+    fetchResponder = () => response;
+
+    const tokenPromise = readGenericOAuthAccessToken('acme', OAUTH);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fetchCalls).toHaveLength(1);
+    expect(logoutGenericOAuth('acme')).toBe(true);
+    seedBlob('acme', { access_token: 'new-login', refresh_token: 'rt-1', expires_at: nowMs + 3600_000 });
+
+    release(new Response(JSON.stringify({ access_token: 'late-refresh', expires_in: 3600 }), { status: 200 }));
+    await expect(tokenPromise).resolves.toBe('new-login');
+    expect(JSON.parse(storage.map.get('acme')!).access_token).toBe('new-login');
   });
 });
 
@@ -887,11 +975,24 @@ describe('oauth-token 路由分支', () => {
       ],
     });
     setSessionProvider('sess-1', 'acme');
-    setOAuthTokenReader((id) => (id === 'acme' ? 'at-x' : null));
-    // oauth-token 分支同步返回；await 兼容联合返回类型（provider-oauth-header 分支才是 Promise）。
+    setOAuthTokenReader((id) => Promise.resolve(id === 'acme' ? 'at-x' : null));
     const d = await resolveSessionRouteDecision('sess-1', 'claude-code', null);
     expect(d?.headerOverride?.authorization).toBe('Bearer at-x');
     expect(d?.upstreamOverride).toBe('https://api.acme.example');
+
+    setOAuthTokenReader(() => Promise.reject(new Error('provider_oauth_refresh_failed')));
+    const failed = await resolveSessionRouteDecision('sess-1', 'claude-code', null);
+    expect(failed).toEqual({ localHandler: expect.any(Function) });
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    await failed!.localHandler!({
+      rawBody: Buffer.from('{}'),
+      parsedBody: { model: 'acme-1' },
+      ctx: { reqId: 1, method: 'POST', url: '/messages', headers: {} },
+      res: { writeHead, end } as never,
+    });
+    expect(writeHead).toHaveBeenCalledWith(503, expect.objectContaining({ 'cache-control': 'no-store' }));
+    expect(end.mock.calls[0]?.[0]).toContain('provider_oauth_refresh_failed');
   });
 });
 
