@@ -13,6 +13,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { classifyMarkdownLinkTarget } from '@/lib/markdownTarget';
 
 import {
   resolveWorkspacePath,
@@ -170,6 +171,19 @@ describe('looksLikeDirectoryPath', () => {
 });
 
 describe('resolveLocalPath', () => {
+  // Directory classification removes the trailing slash: /E:/ reaches the
+  // resolver as /E:. It must remain a drive root, never drive-relative E:.
+  it.each([
+    ['C:/repo', 'E:/'],
+    ['/home/user', '/E:'],
+  ])('preserves the root identity of /E:/ for %s', (cwd, expected) => {
+    const target = classifyMarkdownLinkTarget('/E:/');
+    expect(target.kind).toBe('local-candidate');
+    if (target.kind === 'local-candidate') {
+      expect(resolveLocalPath(target.href, cwd)).toBe(expected);
+    }
+  });
+
   // Regression: authored Markdown links such as [source](/E:/demo) must use
   // the file owner's Windows path semantics, including in remote sessions.
   it.each([
@@ -343,6 +357,26 @@ describe('file URL decoding across renderer and main', () => {
         expect(isPathAllowed).toHaveBeenCalled();
         for (const [candidate] of isPathAllowed.mock.calls) {
           expect(path.normalize(candidate)).toBe(target);
+        }
+      }
+      // Stat the actual drive root on Windows; no files are created there.
+      if (process.platform === 'win32') {
+        allowed = true;
+        const driveRoot = path.parse(root).root;
+        const rootTarget = classifyMarkdownLinkTarget(`/${driveRoot.replace(/\\/g, '/')}`);
+        expect(rootTarget.kind).toBe('local-candidate');
+        if (rootTarget.kind === 'local-candidate') {
+          const results = [
+            await resolveLocalPathSmart(rootTarget.href, root),
+            await resolveLocalPathSmartCached(rootTarget.href, root),
+          ];
+          for (const result of results) {
+            expect(result.status).toBe('unique');
+            if (result.status === 'unique') {
+              expect(result.kind).toBe('directory');
+              expect(path.normalize(result.absPath)).toBe(driveRoot);
+            }
+          }
         }
       }
       fs.rmdirSync(target);

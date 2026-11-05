@@ -331,9 +331,11 @@ export type SmartResolveResult =
 /** Model-authored /C:/ links name a drive only for a Windows file owner.
  * Use the task's cwd, never the viewing device's OS: /C: is legal on POSIX. */
 function normalizeWindowsDriveHref(href: string, workingDir: string): string {
-  return isWindowsPathLike(workingDir) && /^\/[A-Za-z]:[\\/]/.test(href)
-    ? href.slice(1)
-    : href;
+  if (!isWindowsPathLike(workingDir)) return href;
+  // Directory classification strips /C:/ to /C:. Keep the drive-root slash:
+  // C: alone names the drive's current directory, not its root.
+  if (/^\/[A-Za-z]:$/.test(href)) return `${href.slice(1)}/`;
+  return /^\/[A-Za-z]:[\\/]/.test(href) ? href.slice(1) : href;
 }
 
 function toMainLookupHref(href: string, workingDir: string): string {

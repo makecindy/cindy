@@ -309,6 +309,8 @@ export function resolveChatAbsPath(href: string, workdir: string): string {
   // Match Desktop's model-authored /C:/ compatibility using the file owner's
   // workdir, not the phone OS. POSIX hosts may have a literal /C: directory.
   const windowsWorkdir = WIN_ABS_RE.test(workdir) || workdir.startsWith('\\\\') || workdir.startsWith('//');
+  // Directory classification strips /C:/ to /C:; C: alone would be drive-relative.
+  if (windowsWorkdir && /^\/[A-Za-z]:$/.test(href)) return `${href.slice(1)}/`;
   if (windowsWorkdir && /^\/[A-Za-z]:[\\/]/.test(href)) return href.slice(1);
   if (href.startsWith('/')) return href;
   if (WIN_ABS_RE.test(href)) return href;

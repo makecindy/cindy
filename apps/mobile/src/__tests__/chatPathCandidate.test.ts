@@ -237,6 +237,15 @@ describe('classifyChatPathLinkTarget', () => {
 });
 
 describe('resolveChatAbsPath', () => {
+  it.each([
+    ['C:/repo', 'E:/'],
+    ['/home/user', '/E:'],
+  ])('保留盘根链接 /E:/ 经目录分类后的身份（%s）', (workdir, expected) => {
+    const candidate = classifyChatPathLinkTarget('/E:/');
+    expect(candidate).not.toBeNull();
+    if (candidate) expect(resolveChatAbsPath(candidate.href, workdir)).toBe(expected);
+  });
+
   // Target-workdir semantics: a phone must not reinterpret a POSIX host's
   // literal /E: directory as a Windows drive, or keep the extra slash on Windows.
   it.each([
