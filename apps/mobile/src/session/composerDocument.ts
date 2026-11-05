@@ -420,18 +420,44 @@ export function displayComposerSlashRuntimeAliases(document: ComposerDocument): 
     : { document, aliases };
 }
 
-/** Put the wire form back on slash commands still confirmed with their display label. */
+/**
+ * Put the wire form back on slash commands still confirmed with their display
+ * label. Aliases are matched per node, in document order: two plugins can both
+ * show `/pr` while sending different commands. When their wires differ and the
+ * number of `/pr` nodes no longer matches what was sent, the mapping is
+ * ambiguous, so the label is left as typed instead of guessing.
+ */
 export function restoreComposerSlashRuntimeAliases(
   document: ComposerDocument,
   aliases: readonly ComposerSlashRuntimeAlias[],
 ): ComposerDocument {
   if (aliases.length === 0) return document;
-  const wireByDisplay = new Map(aliases.map((alias) => [alias.display.toLowerCase(), alias.wire]));
+  const wiresByDisplay = new Map<string, string[]>();
+  for (const alias of aliases) {
+    const key = alias.display.toLowerCase();
+    wiresByDisplay.set(key, [...(wiresByDisplay.get(key) ?? []), alias.wire]);
+  }
+  const isSlashNode = (node: ComposerNode): node is ComposerTextNode =>
+    node.type === 'text' && !!node.slashCommand && node.slashCommand === node.text;
+  const nodeCounts = new Map<string, number>();
+  for (const node of document.nodes) {
+    if (isSlashNode(node)) {
+      const key = node.text.toLowerCase();
+      nodeCounts.set(key, (nodeCounts.get(key) ?? 0) + 1);
+    }
+  }
+  const seen = new Map<string, number>();
   let changed = false;
   const nodes = document.nodes.map((node): ComposerNode => {
-    if (node.type !== 'text' || !node.slashCommand || node.slashCommand !== node.text) return node;
-    const wire = wireByDisplay.get(node.text.toLowerCase());
-    if (!wire) return node;
+    if (!isSlashNode(node)) return node;
+    const key = node.text.toLowerCase();
+    const wires = wiresByDisplay.get(key);
+    if (!wires) return node;
+    const index = seen.get(key) ?? 0;
+    seen.set(key, index + 1);
+    const sameWire = wires.every((wire) => wire === wires[0]);
+    if (!sameWire && nodeCounts.get(key) !== wires.length) return node;
+    const wire = sameWire ? wires[0] : wires[index];
     changed = true;
     return { type: 'text', text: wire, slashCommand: wire };
   });

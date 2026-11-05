@@ -205,6 +205,26 @@ describe('mobile composer document', () => {
       .toBe('/help 跟进');
   });
 
+  it('keeps each same-named plugin command on its own wire name when editing', () => {
+    const first = '/cindy-plugin-a:pr';
+    const second = '/cindy-plugin-b:pr';
+    const text = `${first} then ${second}`;
+    const sent = composerDocumentFromSerializedMessage(text, {
+      slashCommandRanges: [
+        { start: 0, end: first.length },
+        { start: first.length + 6, end: text.length },
+      ],
+    });
+    const { document, aliases } = displayComposerSlashRuntimeAliases(sent);
+    expect(composerDocumentProjectedText(document)).toBe('/pr then /pr');
+    expect(serializeComposerDocument(restoreComposerSlashRuntimeAliases(document, aliases)).text).toBe(text);
+
+    // Removing one of two ambiguous `/pr` commands must not guess which plugin is left.
+    const removed = replaceComposerTextRange(document, 0, 3, [{ type: 'text', text: '' }]);
+    expect(composerDocumentProjectedText(restoreComposerSlashRuntimeAliases(removed, aliases)))
+      .toBe(' then /pr');
+  });
+
   it('serializes long paste atoms with exact presentation ranges', () => {
     let document = textComposerDocument('before ');
     document = appendComposerNode(document, pastedTextComposerNode('first\nsecond'));
