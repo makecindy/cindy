@@ -10,7 +10,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import { InvokeScheduler } from '../../../../../../../packages/device-link/src/invokeScheduler';
 import { resolveInvokePriority } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 vi.mock('react-i18next', () => ({
   initReactI18next: { type: '3rdParty', init: () => undefined },
@@ -195,6 +195,19 @@ const structuredQuotaCases = [
   { source: 'opencode-go', title: 'OpenCode Go', upstream: 'https://opencode.ai/zen/go/v1',
     kind: 'opencode-go-quota', window: 'weekly', channel: 'maker:usage:opencode-go' },
 ] as const;
+
+function openCodeLiveFixture(deviceId: string | null) {
+  const account = Object.assign(provider('opencode-pending', { method: 'apiKey' }), {
+    routing: { codex: { upstream: 'https://opencode.ai/zen/go/v1' } },
+  });
+  const quota = (usedPercent: number) => ({ status: 'ready', stale: false, snapshot: {
+    kind: 'opencode-go-quota', fetchedAt: Date.now(),
+    windows: [{ id: 'weekly', usedPercent, limited: false, resetsAt: null }],
+  } });
+  window.electronAPI.maker.fetchProviderAccountUsage = invoke;
+  const mount = () => renderHook(() => useDeviceProviderSubscriptionCard(account, deviceId, { live: true }));
+  return { account, quota, mount };
+}
 
 describe('useDeviceProviderSubscriptionCard', () => {
   // Unit / upstream 94b7271fc9 + provider-settings §4: Kimi's new quota source
@@ -404,6 +417,95 @@ describe('useDeviceProviderSubscriptionCard', () => {
       expect(invoke).toHaveBeenCalledTimes(2);
     }
     if (change !== 'unmount') expect(remaining(hook.result.current)).toEqual([[source.window, 76]]);
+  });
+
+  // Unit r4480935567 / §10: a row unmount loses its hook-local pending read.
+  // Reopening must share the first RPC and own exactly one cancellable reread;
+  // initial simultaneous observers, explicit invalidation and manual reads differ.
+  it.each([null, 'mini'].flatMap(deviceId => [true, false].map(succeeds => ({ deviceId, succeeds }))))(
+    'retains a remounted OpenCode read on $deviceId with first success=$succeeds', async ({ deviceId, succeeds }) => {
+    const { quota, mount } = openCodeLiveFixture(deviceId);
+    let finish!: (value: unknown) => void;
+    let fail!: (error: Error) => void;
+    invoke.mockImplementationOnce(() => new Promise((resolve, reject) => { finish = resolve; fail = reject; }));
+    if (succeeds) invoke.mockRejectedValueOnce(new Error('trailing read failed'));
+    else invoke.mockResolvedValueOnce(quota(76));
+    const first = mount();
+    await act(async () => {});
+    first.unmount();
+    const reopened = mount();
+    await act(async () => {});
+    expect(invoke).toHaveBeenCalledTimes(1);
+    await act(async () => { if (succeeds) finish(quota(38)); else fail(new Error('first read failed')); });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(remaining(reopened.result.current)).toEqual([['weekly', succeeds ? 38 : 76]]);
+    if (succeeds) expect(reopened.result.current?.notices).toEqual([{ text: 'providerAccountUsage.kimi.stale', tone: 'warn' }]);
+    invoke.mockResolvedValue(quota(91));
+    await act(async () => vi.advanceTimersByTime(15_000));
+    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(remaining(reopened.result.current)).toEqual([['weekly', 91]]);
+  });
+
+  it.each([null, 'mini'])('shares an initial OpenCode pending read without a trailing RPC on %s', async deviceId => {
+    const { quota, mount } = openCodeLiveFixture(deviceId);
+    let finish!: (value: unknown) => void;
+    invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const first = mount();
+    const second = mount();
+    await act(async () => {});
+    expect(invoke).toHaveBeenCalledTimes(1);
+    await act(async () => finish(quota(38)));
+    expect(remaining(first.result.current)).toEqual([['weekly', 38]]);
+    expect(remaining(second.result.current)).toEqual([['weekly', 38]]);
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([null, 'mini'])('cancels the remounted OpenCode trailing read when closed again on %s', async deviceId => {
+    const { quota, mount } = openCodeLiveFixture(deviceId);
+    let finish!: (value: unknown) => void;
+    invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; })).mockResolvedValue(quota(76));
+    const first = mount();
+    await act(async () => {});
+    first.unmount();
+    const reopened = mount();
+    await act(async () => {});
+    expect(invoke).toHaveBeenCalledTimes(1);
+    reopened.unmount();
+    await act(async () => finish(quota(38)));
+    expect(invoke).toHaveBeenCalledTimes(1);
+    const fresh = mount();
+    await act(async () => {});
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(remaining(fresh.result.current)).toEqual([['weekly', 76]]);
+  });
+
+  it.each([null, 'mini'].flatMap(deviceId => ['credentials', 'owner', 'provider', 'disable'].map(change => ({ deviceId, change }))))(
+    'does not reuse a pending OpenCode identity after $change on $deviceId', async ({ deviceId, change }) => {
+    const { account, quota } = openCodeLiveFixture(deviceId);
+    const changed = new Set<() => void>();
+    window.electronAPI.maker.onProvidersChanged = callback => { changed.add(callback); return () => changed.delete(callback); };
+    window.electronAPI.deviceLink.onRemotePush = callback => {
+      const emit = () => callback({ deviceId: 'mini', channel: 'maker:provider:changed', payload: {} }, undefined);
+      changed.add(emit); return () => changed.delete(emit);
+    };
+    let finish!: (value: unknown) => void;
+    invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; })).mockResolvedValue(quota(76));
+    const mount = (source: ProviderView) => renderHook(({ active }) => useDeviceProviderSubscriptionCard(active ? source : undefined, deviceId, { live: true }), {
+      initialProps: { active: true },
+    });
+    const first = mount(account);
+    await act(async () => {});
+    if (change === 'disable') first.rerender({ active: false });
+    first.unmount();
+    if (change === 'credentials') act(() => changed.forEach(emit => emit()));
+    if (change === 'owner') setDataOwnerGeneration('owner-b', getDataOwnerGeneration().generation + 1);
+    const next = mount(change === 'provider' ? { ...account, id: 'other-opencode' } : account);
+    await act(async () => {});
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(remaining(next.result.current)).toEqual([['weekly', 76]]);
+    await act(async () => finish(quota(38)));
+    expect(remaining(next.result.current)).toEqual([['weekly', 76]]);
+    expect(invoke).toHaveBeenCalledTimes(2);
   });
 
   // Unit r4389934308 / §10: another ordinary subscriber keeps the mirror alive

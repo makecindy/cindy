@@ -41,6 +41,57 @@ export interface ProviderAccountUsageState {
 
 const REFRESH_INTERVAL_MS = 60_000;
 
+interface PendingOpenCodeRead {
+  promise: Promise<ProviderAccountUsageResult>;
+  observers: Set<object>;
+  invalidated: boolean;
+  invalidate: () => void;
+}
+let pendingOpenCodeOwner: ReturnType<typeof getDataOwnerGeneration> | undefined;
+const pendingOpenCodeReads = new Map<string, PendingOpenCodeRead>();
+
+/** Only share live automatic reads while pending, including an unmounted row.
+ * No settled cache or retry loop: the reopened observer owns its trailing read.
+ * Keep credential invalidation subscribed during the gap, then release it.
+ */
+function observePendingOpenCodeRead(
+  owner: ReturnType<typeof getDataOwnerGeneration>,
+  key: string,
+  observer: object,
+  read: () => Promise<ProviderAccountUsageResult>,
+  subscribe: (invalidate: () => void) => (() => void) | undefined,
+) {
+  if (pendingOpenCodeOwner !== owner) {
+    for (const pending of pendingOpenCodeReads.values()) pending.invalidate();
+    pendingOpenCodeOwner = owner;
+  }
+  let pending = pendingOpenCodeReads.get(key);
+  const resumed = !!pending && pending.observers.size === 0;
+  if (!pending) {
+    let unsubscribe: (() => void) | undefined;
+    const release = () => { unsubscribe?.(); unsubscribe = undefined; };
+    const entry: PendingOpenCodeRead = {
+      observers: new Set(),
+      invalidated: false,
+      invalidate: () => {
+        entry.invalidated = true;
+        if (pendingOpenCodeReads.get(key) === entry) pendingOpenCodeReads.delete(key);
+        release();
+      },
+      promise: Promise.resolve().then(read),
+    };
+    entry.promise = entry.promise.finally(() => {
+      if (pendingOpenCodeReads.get(key) === entry) pendingOpenCodeReads.delete(key);
+      release();
+    });
+    pendingOpenCodeReads.set(key, entry);
+    unsubscribe = subscribe(entry.invalidate);
+    pending = entry;
+  }
+  pending.observers.add(observer);
+  return { pending, resumed };
+}
+
 export function useProviderAccountUsage(
   provider: ProviderView | undefined,
   agent?: AgentKind,
@@ -60,9 +111,8 @@ export function useProviderAccountUsage(
     (!deviceId?.startsWith('share:')) &&
     (structuredQuota
       || (!deviceId && provider.auth?.method !== 'oauth' && (hasDeepSeekOfficialRouteView(provider) || isZhipuCodingPlanProviderView(provider))));
-  const identity = JSON.stringify([
+  const queryIdentity = JSON.stringify([
     owner,
-    revision,
     deviceId,
     provider?.id,
     provider?.connected,
@@ -72,6 +122,11 @@ export function useProviderAccountUsage(
       (runtime) => provider?.routing[runtime],
     ),
   ]);
+  // Revision is hook-local; it must not prevent a newly mounted observer from
+  // sharing a current query whose credential-change fence already advanced.
+  const identity = JSON.stringify([queryIdentity, revision]);
+  const currentQuery = useRef({ queryIdentity, supported, live });
+  currentQuery.current = { queryIdentity, supported, live };
   const [state, setState] = useState<{
     identity: string;
     result: ProviderAccountUsageResult | null;
@@ -86,15 +141,18 @@ export function useProviderAccountUsage(
     pending: 0,
     observed: false,
     liveRefreshes: new Set<object>(),
+    recovery: null as object | null,
+    sharedRead: null as PendingOpenCodeRead | null,
   }), [identity, supported, live]);
 
   const load = useCallback(
     async (forceRefresh: boolean, scheduling?: { background?: boolean }): Promise<void> => {
-      if (!supported || !provider?.id) return;
+      if (!supported || !provider?.id || !isDataOwnerGenerationCurrent(owner)) return;
       if (live && !forceRefresh && lifecycle.pending > 0) return;
       if (forceRefresh) lifecycle.liveRefreshes.clear();
       const id = ++requestId.current;
       lifecycle.pending++;
+      let sharedRead: PendingOpenCodeRead | null = null;
       setState((previous) => ({
         identity,
         result: previous.identity === identity ? previous.result : null,
@@ -110,15 +168,29 @@ export function useProviderAccountUsage(
         };
         const parseResult = opencodeGo ? parseOpenCodeGoAccountUsageResult : parseKimiAccountUsageResult;
         const channel = opencodeGo ? 'maker:usage:opencode-go' : 'maker:usage:kimi-coding';
-        const next = deviceId
+        const read = async () => deviceId
           ? parseResult(await (scheduling
               ? window.electronAPI.deviceLink.invoke(deviceId, channel, [input], scheduling)
               : window.electronAPI.deviceLink.invoke(deviceId, channel, [input])))
           : await window.electronAPI.maker.fetchProviderAccountUsage(input);
-        if (id === requestId.current && isDataOwnerGenerationCurrent(owner)) setState({ identity, result: next, busy: false });
+        let next: ProviderAccountUsageResult;
+        if (live && opencodeGo && !forceRefresh) {
+          const observed = observePendingOpenCodeRead(owner, queryIdentity, lifecycle, read, invalidate => {
+            if (deviceId) return window.electronAPI.deviceLink.onRemotePush?.((push, stamp) => {
+              if (push.deviceId === deviceId && push.channel === 'maker:provider:changed'
+                && isDeviceLinkRemotePushCurrent(push, stamp)) invalidate();
+            });
+            return window.electronAPI.maker.onProvidersChanged?.(invalidate);
+          });
+          sharedRead = observed.pending;
+          lifecycle.sharedRead = sharedRead;
+          if (observed.resumed && lifecycle.recovery) lifecycle.liveRefreshes.add(lifecycle.recovery);
+          next = await sharedRead.promise;
+        } else next = await read();
+        if (!sharedRead?.invalidated && id === requestId.current && isDataOwnerGenerationCurrent(owner)) setState({ identity, result: next, busy: false });
       } catch {
         // IPC 异常也结束等待；只保留同一查询身份的已有快照。
-        if (id === requestId.current && isDataOwnerGenerationCurrent(owner))
+        if (!sharedRead?.invalidated && id === requestId.current && isDataOwnerGenerationCurrent(owner))
           setState((previous) => ({
             identity,
             result:
@@ -137,7 +209,7 @@ export function useProviderAccountUsage(
         }
       }
     },
-    [provider?.id, agent, identity, supported, deviceId, owner, opencodeGo, live, lifecycle],
+    [provider?.id, agent, identity, queryIdentity, supported, deviceId, owner, opencodeGo, live, lifecycle],
   );
 
   useEffect(() => {
@@ -145,10 +217,14 @@ export function useProviderAccountUsage(
     return () => {
       lifecycle.mounted = false;
       lifecycle.liveRefreshes.clear();
+      const shared = lifecycle.sharedRead;
+      if (shared?.observers.size === 1 && (currentQuery.current.queryIdentity !== queryIdentity ||
+        !currentQuery.current.supported || !currentQuery.current.live)) shared.invalidate();
+      shared?.observers.delete(lifecycle);
       // Identity changes and unmount still invalidate every late reply.
       requestId.current += 1;
     };
-  }, [lifecycle]);
+  }, [lifecycle, queryIdentity]);
 
   useEffect(() => {
     if (!structuredQuota) return;
@@ -167,6 +243,7 @@ export function useProviderAccountUsage(
   useEffect(() => {
     if (!supported || !active) return;
     const recovery = {};
+    lifecycle.recovery = recovery;
     if (live && lifecycle.observed && lifecycle.pending > 0) lifecycle.liveRefreshes.add(recovery);
     lifecycle.observed = true;
     void load(false);
@@ -176,6 +253,7 @@ export function useProviderAccountUsage(
     return () => {
       window.clearInterval(timer);
       lifecycle.liveRefreshes.delete(recovery);
+      if (lifecycle.recovery === recovery) lifecycle.recovery = null;
       if (!live) requestId.current += 1;
     };
   }, [supported, provider?.id, load, live, active, refreshEpoch, lifecycle]);
