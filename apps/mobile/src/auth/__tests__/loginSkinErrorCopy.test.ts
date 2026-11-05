@@ -35,6 +35,7 @@ const LOCALE_TAGS: Record<LoginLocale, string> = {
   de: "de-AT",
   "pt-PT": "pt-PT",
   "pt-BR": "pt-BR",
+  tr: "tr-TR",
   // 文言只能手动选择:系统 tag 解析到 zh-TW / zh-CN,由 selectLocale 走手动 override。
   "zh-Hant-x-lzh": "zh-Hant-TW",
   "zh-Hans-x-lzh": "zh-Hans-CN",

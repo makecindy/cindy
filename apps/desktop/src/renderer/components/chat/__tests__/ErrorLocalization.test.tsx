@@ -16,6 +16,7 @@ import zhCN from '@/i18n/locales/zh-CN/common.json';
 import zhTW from '@/i18n/locales/zh-TW/common.json';
 import ja from '@/i18n/locales/ja/common.json';
 import ko from '@/i18n/locales/ko/common.json';
+import tr from '@/i18n/locales/tr/common.json';
 
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: vi.fn() }) }));
 vi.mock('@/hooks/useCodexRuntimeRoute', () => ({ useCodexRuntimeRoute: () => ({ authInjection: 'env-key' }) }));
@@ -31,7 +32,7 @@ import { clearDraft, getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/com
 import { NEW_MAKER_DRAFT_KEY } from '@/features/cc-agent/newMakerDraftKeys';
 import { getDraft as getNewMakerDraft, patchDraft } from '@/state/newMakerDraft';
 
-const locales = { en, 'zh-CN': zhCN, 'zh-TW': zhTW, ja, ko, es, fr, de, 'pt-PT': ptPT, 'pt-BR': ptBR, 'zh-Hant-x-lzh': lzh, 'zh-Hans-x-lzh': lzhHans };
+const locales = { en, 'zh-CN': zhCN, 'zh-TW': zhTW, ja, ko, es, fr, de, 'pt-PT': ptPT, 'pt-BR': ptBR, 'zh-Hant-x-lzh': lzh, 'zh-Hans-x-lzh': lzhHans, tr };
 const raw = JSON.stringify({ error: {
   message: 'X-OpenAI-Internal-Codex-Responses-Lite requires `parallel_tool_calls` to be false.',
   type: 'invalid_request_error', code: 'unsupported_value', param: 'parallel_tool_calls',

@@ -41,7 +41,11 @@ export function getRemoteOAuthCallbackCopy(lang: OAuthResultPageLang): { title: 
   },
     'zh-Hant-x-lzh': { title: '授權回呼已至', body: '請歸 Cindy，察遠端裝置之授權結果。' },
     'zh-Hans-x-lzh': { title: '授权回调已至', body: '请归 Cindy，察远程设备之授权结果。' },
-}[lang];
+    tr: {
+      title: 'Yetkilendirme geri çağrısı alındı',
+      body: 'Uzak cihazdaki yetkilendirme sonucunu kontrol etmek için Cindy\'ye dönün.',
+    },
+  }[lang];
 }
 export type OAuthResultPageVariant = 'success' | 'warning' | 'error';
 export type OAuthResultPageTheme = 'light' | 'dark';
@@ -102,6 +106,7 @@ export const OAUTH_RESULT_HTML_LANG: Record<OAuthResultPageLang, string> = {
   "pt-BR": "pt-BR",
   'zh-Hant-x-lzh': 'zh-Hant-x-lzh',
   'zh-Hans-x-lzh': 'zh-Hans-x-lzh',
+  tr: 'tr',
 };
 
 /** Selects the first supported language in browser preference order. */
@@ -124,6 +129,7 @@ export function pickOAuthResultPageLang(acceptLanguage: string | undefined): OAu
     if (primary.startsWith('ja')) return 'ja';
     if (primary.startsWith('ko')) return 'ko';
     if (primary.startsWith('en')) return 'en';
+    if (primary.startsWith('tr')) return 'tr';
     if (['es', 'fr', 'de', 'pt'].includes(primary.split('-')[0])) {
       return resolveSystemLocale(primary) as Exclude<SupportedLocale, 'zh-CN'>;
     }
@@ -157,6 +163,8 @@ function returnLabel(lang: OAuthResultPageLang, brandName: string): string {
       return `${brandName} に戻る`;
     case 'ko':
       return `${brandName}(으)로 돌아가기`;
+    case 'tr':
+      return `${brandName}'e Dön`;
   }
 }
 
@@ -286,6 +294,15 @@ export function getProviderOAuthResultCopy(
         missingCodeBody: `${providerName} 인증 코드를 받지 못했습니다. ${brandName}(으)로 돌아가 다시 시도하세요.`,
         invalidStateBody: `인증 검증에 실패했습니다. ${brandName}(으)로 돌아가 연결을 다시 시작하세요.`,
         exchangeFailedBody: `${providerName} 연결 중 오류가 발생했습니다. ${brandName}(으)로 돌아가 다시 시도하세요.`,
+      };
+    case 'tr':
+      return {
+        successTitle: 'Yetkilendirme tamamlandı',
+        successBody: `${providerName} artık ${brandName} uygulamasına bağlı. Devam etmek için uygulamaya dönebilirsiniz.`,
+        errorTitle: 'Yetkilendirme tamamlanamadı',
+        missingCodeBody: `${providerName} servisinden yetkilendirme kodu alınamadı. ${brandName} uygulamasına dönüp tekrar deneyin.`,
+        invalidStateBody: `Yetkilendirme doğrulaması başarısız oldu. ${brandName} uygulamasına dönün ve bağlantıyı tekrar başlatın.`,
+        exchangeFailedBody: `${providerName} bağlanırken bir hata oluştu. ${brandName} uygulamasına dönüp tekrar deneyin.`,
       };
     default:
       return {
@@ -442,6 +459,18 @@ const GHOST_OAUTH_PAGE_STRINGS: Record<OAuthResultPageLang, GhostOAuthResultCopy
       internal: '处理回调时生谬误，请归 {brand} 再试。',
     },
   },
+  tr: {
+    successTitle: 'Yetkilendirme başarılı',
+    successBody: 'Bu sayfayı kapatıp {brand} uygulamasına dönebilirsiniz.',
+    errorTitle: 'Yetkilendirme başarısız oldu',
+    errors: {
+      'provider-error': 'Yetkilendirme sunucusu bir hata döndürdü: {detail}',
+      'invalid-callback':
+        'Geri çağırma eksik veya doğrulanamadı. Lütfen {brand} uygulamasına dönüp tekrar deneyin.',
+      internal:
+        'Geri çağırma işlenirken bir sorun oluştu. Lütfen {brand} uygulamasına dönüp tekrar deneyin.',
+    },
+  },
 };
 
 /** Ghost OAuth 回调页文案(占位符原样返回,替换责任在调用方)。 */
@@ -504,6 +533,11 @@ export function getOAuthNeutralResultCopy(
       return {
         title: '추가 작업 필요',
         body: `${brandName}로 돌아가 현재 워크스페이스 설치를 완료하세요.`,
+      };
+    case 'tr':
+      return {
+        title: 'İşlem gerekiyor',
+        body: `${brandName} uygulamasına dönün ve geçerli çalışma alanındaki yüklemeyi tamamlayın.`,
       };
     default:
       return {

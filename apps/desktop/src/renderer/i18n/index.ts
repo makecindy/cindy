@@ -37,6 +37,8 @@ import jaCommon from './locales/ja/common.json';
 import jaAiRename from './locales/ja/aiRename.json';
 import koCommon from './locales/ko/common.json';
 import koAiRename from './locales/ko/aiRename.json';
+import trCommon from './locales/tr/common.json';
+import trAiRename from './locales/tr/aiRename.json';
 import { GHOST_OFFICIAL_ID_PREFIX } from '../../shared/ghost';
 import { DEFAULT_LOCALE } from '../../shared/locale';
 import { getEffectiveLocale } from '../lib/localePreference';
@@ -57,6 +59,7 @@ const resources = {
   'de': { common: deCommon, aiRename: deAiRename },
   'pt-PT': { common: ptPTCommon, aiRename: ptPTAiRename },
   'pt-BR': { common: ptBRCommon, aiRename: ptBRAiRename },
+  tr: { common: trCommon, aiRename: trAiRename },
   'zh-Hant-x-lzh': {
     common: {
       ...lzhCommon,

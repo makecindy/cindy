@@ -1061,7 +1061,15 @@
       "stopScroll": "Stop Scrolling",
       "edit": "Düzenle",
       "autoUnavailable": "Auto scrolling stopped. You can scroll manually in the selection.",
-      "autoPermission": "Auto scrolling needs Accessibility permission. Allow Cindy in System Settings and try again, or scroll manually in the selection."
+      "autoPermission": "Auto scrolling needs Accessibility permission. Allow Cindy in System Settings and try again, or scroll manually in the selection.",
+      "systemAudio": "Hoparlör",
+      "microphone": "Mikrofon",
+      "audioHint": "Ses kaynaklarını seçin, ardından kayda başlayın.",
+      "preparingAudio": "Ses hazırlanıyor…",
+      "systemAudioFailed": "Hoparlör sesi kullanılamıyor. Sistem izinlerini kontrol edin veya sesi kapatın.",
+      "microphoneFailed": "Mikrofon kullanılamıyor. İzinleri ve giriş aygıtını kontrol edin veya sesi kapatın.",
+      "audioFailed": "Ses başlatılamadı. Cihazlarınızı kontrol edin veya sesi kapatın.",
+      "audioInterrupted": "Ses durdu. Yakalanan kısmı kaydetmek için kaydı sonlandırın."
     }
   },
   "privacyExit": {
@@ -1973,7 +1981,9 @@
         "agentProxyRemotePortInvalid": "Port must be an integer between 1 and 65535",
         "agentProxyUrl": "Remote-reachable Proxy URL",
         "agentProxyUrlHint": "Resolved on the remote host: a Proxy on the remote itself (e.g. your own autossh -R tunnel), a LAN Proxy, etc. Supports http / https / socks5.",
-        "agentProxyUrlInvalid": "Must be an http(s):// or socks5:// URL without spaces or quotes"
+        "agentProxyUrlInvalid": "Must be an http(s):// or socks5:// URL without spaces or quotes",
+        "aliasHint": "1–128 karakter kullanın: İngilizce harfler, rakamlar veya . _ @ : -. Türkçe veya diğer karakterler için Görünen ad alanını kullanın.",
+        "aliasInvalid": "Takma ad desteklenmeyen karakterler içeriyor veya 128 karakteri aşıyor. Yukarıdaki kurallara uyun."
       },
       "detail": {
         "agentSetupTitle": "Agent setup",
@@ -2422,7 +2432,10 @@
         "secret-chime": "Secret chime",
         "custom": "Local file…",
         "customSelected": "Local file: {{name}}"
-      }
+      },
+      "subtleRemindersLabel": "Hafif hatırlatıcılar",
+      "subtleRemindersHint": "Yeni iletiler, giriş istekleri veya hatalar için ada altında bir bildirim kartı göstermek yerine simgedeki değişikliklerle belirtin. Tüm görev listesini görüntülemek için adaya tıklayın.",
+      "subtleRemindersFailed": "Hatırlatıcı ayarları kaydedilemedi. Lütfen tekrar deneyin."
     },
     "language": {
       "title": "Dil",
@@ -4038,7 +4051,8 @@
           },
           "codexContextUnknown": "CLI configuration unavailable",
           "codexContextValues": "Total {{total}} · Usable {{usable}} · Auto-compact {{compact}} tokens",
-          "contextLimitGptHint": "GPT defaults to at most 272K; you can set it to 1M here. Codex applies the window and automatic compaction threshold together, retaining 5% headroom. Actual capacity depends on the model service."
+          "contextLimitGptHint": "GPT defaults to at most 272K; you can set it to 1M here. Codex applies the window and automatic compaction threshold together, retaining 5% headroom. Actual capacity depends on the model service.",
+          "imageInputDefault": "{{value}} (Varsayılan)"
         },
         "kindFilter": {
           "all": "Tümü",
@@ -5674,7 +5688,8 @@
           "toast": {
             "success": "cua-driver updated to the latest version",
             "failed": "Failed to update cua-driver. Please try again later."
-          }
+          },
+          "rateLimited": "GitHub güncelleme denetimlerini hız sınırına tabi tutuyor"
         },
         "toast": {
           "enabled": "Direct computer control enabled",
@@ -6068,12 +6083,14 @@
       "accessRevokedByPeer": "Access revoked — the other device must restore it in its settings",
       "deviceControlToggleAria": "Toggle control for {{name}}",
       "myDevices": {
-        "controlIt": "I control it",
-        "allowInbound": "Let it control this device",
+        "controlIt": "Cihazı kontrol et",
         "allowInboundAria": "Toggle whether {{name}} can control this device",
         "peerControlOff": "Remote control not enabled on that device",
         "masterOffHint": "Turn on the master switch above first",
-        "controllingThisMac": "Connected to Cindy"
+        "controllingThisMac": "Connected to Cindy",
+        "iCan": "Kontrol edebilirim",
+        "itCan": "Kontrol edebilir",
+        "controlThisDevice": "Bu cihazı kontrol et"
       },
       "toast": {
         "revoked": "Access revoked for this device",
@@ -7694,7 +7711,14 @@
         "mcpUi": "Display interactive pages in the conversation",
         "mcpUiDomains": "Page network domains: {{domains}}",
         "mcpAppOnly": "Page only",
-        "uiPageAccess": "Pages: {{pages}}; domains: {{domains}}; tools available to pages: {{tools}}"
+        "uiPageAccess": "Pages: {{pages}}; domains: {{domains}}; tools available to pages: {{tools}}",
+        "agentCompanions": "Takım arkadaşlarınızı, durumlarını ve son sohbetlerini görüntüleyebilir",
+        "agentCompanionsDetail": "Diğer bilgisayarlarınızda çalışanlar dahil tüm takım arkadaşlarınızı görüntüleyebilir: ad, açıklama, profil resmi, durum (çalışıyor, sizi bekliyor, boşta, çevrimdışı), her birinin hangi adımda olduğu (düşünme veya araç çalıştırma gibi), kartlarının gösterdiği şekilde sizi bekleyen istekler (sorular, çalıştırılacak komutlar, planlar) ve her takım arkadaşının ana sohbetindeki son konuşmalar (araç adımları hariç, 50 adede kadar iletiniz ve yanıtları); ayrıca ana pencerede bir takım arkadaşının konuşmasını açabilir. Mesaj iletim izniyle birlikte eklentide verdiğiniz yanıtları da iletebilir: soruları yanıtlama, istekleri reddetme ve planlar hakkında geri bildirim verme. Bir adıma izin vermek yine de Cindy'nin kendi onay penceresindeki tıklamanızı gerektirir. Dosyaları, araç adımlarını veya düşünme sürecini okuyamaz.",
+        "agentCompanionsRequest": "Takım arkadaşı görüntüleme iznini inceleyin",
+        "liveScreen": "Telefonunuzda cihaz ekranlarını görüntüleyin ve kontrol edin",
+        "liveScreenDetail": "Uzak masaüstü aracılığıyla telefonunuz, sağladığı cihaz ekranlarını (simülatörler gibi) gösterebilir ve bunlara dokunma, düğme ve metin gönderebilir. Yalnızca telefonunuzdan açtığınızda bağlanır ve bu bilgisayarda başka hiçbir şey göstermez.",
+        "nativeUi": "Görevlere Denetimler Ekle",
+        "nativeTabView": "“{{title}}” görünümünü aç"
       },
       "connections": {
         "confirmTitle": "Add connection address",
@@ -10592,6 +10616,11 @@
           "NETWORK_ERROR": "{{name}} could not reply: the network connection failed.\nCheck your network or Proxy, then send your message again.",
           "RUNTIME_TIMEOUT": "{{name}} did not reply before the timeout.\nSend your message again, or choose another available model.",
           "RUNTIME_ERROR": "{{name}} could not reply this time.\nSend your message again. If it still fails, check the logs and report the issue."
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} bu aracı çalıştıramadı: grup yetkilendirmesinin süresi doldu veya bu eyleme izin vermiyor. Takım arkadaşının sahibi bu grupta isteği tekrar yapabilir.",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}} için grup yetkilendirmesi doğrulanamadı, bu nedenle bu araç çalıştırılmadı. Bağlantı düzeldikten sonra tekrar deneyin.",
+          "ATTACHMENTS_UNAVAILABLE": "İndirme hatası veya ek sınırı nedeniyle bazı ekler {{name}} adlı takım arkadaşına teslim edilemedi. Bu istek için gereken ekleri yeniden gönderin."
         }
       },
       "settings": {
@@ -10661,7 +10690,8 @@
         "lifecycleUnavailable": "Geçerli sunucu veya bilgisayar henüz bu eylemi desteklemiyor.",
         "groupDissolved": "Bu grup feshedildi. Mevcut geçmişi yine de okuyabilirsiniz.",
         "lastOwner": "Ayrılmadan önce sahipliği devredin veya bu grubu feshedin.",
-        "allBotsMentionDisabled": "Grup sahibi @tüm yol arkadaşlarını etkinleştirmedi."
+        "allBotsMentionDisabled": "Grup sahibi @tüm yol arkadaşlarını etkinleştirmedi.",
+        "turnAlreadyStarted": "Bu takım arkadaşı zaten başladı ve atlanamaz"
       },
       "organizer": "Düzenleyici",
       "plan": {
@@ -10692,7 +10722,17 @@
         "stepSpoken": "Bitti",
         "allTurns_one": "All {{count}} teammate",
         "allTurns_other": "All {{count}} teammates",
-        "foldTurns": "Show fewer"
+        "foldTurns": "Show fewer",
+        "stepQueued": "Başlamak İçin Bekliyor",
+        "stepExecuting": "Çalışıyor",
+        "stepSkipped": "Atlandı",
+        "skippingTurn": "Atlanıyor…",
+        "queueWaiting": "Devam etmeniz bekleniyor",
+        "skipTurnLabel": "{{name}} Atla",
+        "queueEnded": "Tur sona erdi",
+        "talkTitle": "Sırayla herkesten dinleyin",
+        "talkPending": "Başlamadı",
+        "skipTurn": "Atla"
       },
       "speaking": {
         "planning": "İş bölüştürülüyor…"
@@ -11655,7 +11695,8 @@
       "unavailable": "Directory unavailable",
       "failed": "Could not update projects. Reload to check the saved state.",
       "noAvailable": "Add more projects from the project list first."
-    }
+    },
+    "profileSaveOffline": "Takım arkadaşının bilgisayarına bağlanılamıyor. Yeniden bağlanın ve ardından tekrar kaydedin."
   },
   "common": {
     "dismiss": "Kapat"
@@ -11953,12 +11994,12 @@
       }
     },
     "createAgent": {
-      "quickStart": "Quick start",
+      "quickStart": "Hızlı Başlangıç",
       "quickStarts": {
-        "explore": "Explore and understand code",
-        "build": "Build a feature, app, or tool",
-        "review": "Review code and suggest changes",
-        "fix": "Fix issues and failures"
+        "explore": "Kodu keşfet ve anla",
+        "build": "Yeni özellik, uygulama veya araç oluştur",
+        "review": "Kodu incele ve değişiklik öner",
+        "fix": "Sorunları ve hataları düzelt"
       },
       "sidebar": {
         "new": "Yeni",
@@ -12743,7 +12784,7 @@
     "reloginRiskTitle": "Still sign in through Cindy?",
     "reloginRiskDescription": "Cindy will create a new OpenAI OAuth authorization. The ChatGPT App is usually unaffected; if it still shares credentials with system Codex, those apps may ask you to sign in again.",
     "reloginRiskConfirm": "Accept Risk and Continue",
-    "devWriteBlocked": "Development builds use this computer’s ChatGPT sign-in read-only by default and cannot start OAuth or change its credentials. To test OAuth, use an isolated sandbox and explicitly set XDT_ALLOW_DEV_OAUTH_WRITE=1.",
+    "devWriteBlocked": "Geliştirme derlemeleri bu bilgisayarın ChatGPT oturumunu varsayılan olarak salt okunur kullanır; OAuth başlatamaz veya kimlik bilgilerini değiştiremez. OAuth'u test etmek için şunu çalıştırın: pnpm restart:desktop:remote -- --isolated-auth --isolated. Yeniden başlatma komut dosyası, yalnızca yalıtılmış alanı (sandbox) doğruladıktan sonra yazmaya izin verir.",
     "devReadOnly": "Read-only in Development",
     "checking": "Kontrol ediliyor…",
     "recheck": "Tekrar Kontrol Et",
@@ -13103,7 +13144,13 @@
       "text": "Otomatik bir çalışma başarısız oldu.",
       "precheck": "Otomatik kontroller geçici olarak engellendi.",
       "rateLimited": "Otomatik kontroller bir istek hızı sınırı nedeniyle geçici olarak engellendi.",
-      "dismissTitle": "Geçmiş arıza bildirimini kapat"
+      "dismissTitle": "Geçmiş arıza bildirimini kapat",
+      "pluginMissing": "Otomatik denetimler engellendi: {{name}} eklentisi yüklü değil. Eklenti yüklendiğinde devam edecektir.",
+      "pluginMissingUnnamed": "Otomatik denetimler engellendi: gerekli bir eklenti yüklü değil. Eklenti yüklendiğinde devam edecektir.",
+      "pluginDisabled": "Otomatik denetimler engellendi: {{name}} eklentisi devre dışı. Eklenti etkinleştirildiğinde devam edecektir.",
+      "pluginDisabledUnnamed": "Otomatik denetimler engellendi: gerekli bir eklenti devre dışı. Eklenti etkinleştirildiğinde devam edecektir.",
+      "installPlugin": "Eklentiyi yükle",
+      "openPlugin": "Eklentiyi aç"
     },
     "worktreeRestoreBanner": {
       "text": "This session's worktree has been cleaned up (directory missing).",
@@ -13451,6 +13498,24 @@
           "autocompactBuffer": "Autocompact buffer",
           "compactBuffer": "Compact buffer",
           "freeSpace": "Free space"
+        },
+        "estimate": {
+          "title": "Metin tahminleri",
+          "delivery": "Yanıt teslimi",
+          "host": "Cindy talimatları",
+          "plugins": "Eklenti kataloğu",
+          "memoryRules": "Bellek talimatları",
+          "memoryIndex": "Bellek dizini",
+          "profile": "Takım arkadaşı profili",
+          "user": "Kullanıcı talimatları",
+          "directories": "Ek dizinler",
+          "native": "Pi talimatları",
+          "skills": "Beceri kataloğu",
+          "project": "Proje talimatları",
+          "tools": "Araç tanımları",
+          "messages": "Sohbet metni",
+          "other": "Diğer talimatlar",
+          "note": "Model belirteçleştirmesinden değil, geçerli metinden tahmin edilmiştir. Resimleri ve sağlayıcı biçimlendirmesini hariç tutar; yerel toplama eklenmez."
         }
       },
       "compact": {
@@ -13884,7 +13949,20 @@
       "mailAttach": "Ek ekle",
       "mailRemoveAttachment": "{{name}} kaldır",
       "mailUpdated": "Taslak güncellendi (salt okunur)",
-      "mailLegacy": "Taslak geçmişi (salt okunur)"
+      "mailLegacy": "Taslak geçmişi (salt okunur)",
+      "prStatus": {
+        "threadsNone": "Açık inceleme ileti dizisi yok",
+        "mergeReady": "Birleştirmeye hazır",
+        "mergeConflict": "Çakışmalar var",
+        "mergeBehind": "Temel dalın gerisinde",
+        "mergeApproval": "Onay bekleniyor",
+        "mergeChanges": "Değişiklik istendi",
+        "mergeWaiting": "Birleştirmek için bekleniyor",
+        "merged": "Birleştirildi",
+        "closed": "Kapatıldı",
+        "draft": "Taslak"
+      },
+      "modelSelectFailed": "Model değiştirilmedi. Lütfen tekrar seçin."
     },
     "ghostHook": {
       "blockedFallback": "Message blocked by a plugin; not sent",
@@ -14758,7 +14836,18 @@
             "unsupported": "Bu bilgisayarın sürümü PR bağlantılarını yönetmeyi desteklemiyor",
             "failed": "PR bağlantıları güncellenemedi"
           }
-        }
+        },
+        "gitlab": {
+          "missing": "GitLab CLI (glab) bulunamadı. MR durumunu görmek için glab yükleyin ve oturum açın.",
+          "notLoggedIn": "Yerel glab {{host}} üzerinde oturum açmamış. MR durumunu görmek için terminalde glab auth login çalıştırın.",
+          "unsupported": "Bu bilgisayar henüz GitLab MR durumunu desteklemiyor",
+          "openAria": "MR !{{number}} tarayıcıda aç",
+          "summaryAria": "MR !{{number}} özeti",
+          "urlPlaceholder": "GitHub PR veya GitLab MR URL'si",
+          "notFound": "MR bulunamadı veya geçerli hesap bunu görüntüleyemiyor"
+        },
+        "merge": "Birleştir",
+        "conflicts": "Çakışmalar"
       }
     },
     "schedule": {
@@ -16024,7 +16113,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "View skill details",
-    "projectSkillNotLoaded": "This Pi task hasn't loaded this project Skill. New tasks will automatically try to load it."
+    "projectSkillNotLoaded": "This Pi task hasn't loaded this project Skill. New tasks will automatically try to load it.",
+    "pluginSkillSetup": {
+      "install": "Yüklü değil",
+      "enable": "Devre dışı"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "Bir PR açın, CI ve inceleme geri bildirimlerini düzeltin ve birleştirmeye kadar takip edin · GitHub eklentisinin yüklenmesini gerektirir",
+        "enable": "Bir PR açın, CI ve inceleme geri bildirimlerini düzeltin ve birleştirmeye kadar takip edin · GitHub eklentisinin etkinleştirilmesini gerektirir"
+      }
+    }
   },
   "skillhub": {
     "remote": {
@@ -17013,13 +17112,20 @@
     "sectionTitle": "Directories",
     "empty": "No reference directories yet",
     "add": "Add directory…",
-    "addReadOnly": "Add read-only directory…",
     "atLimit": "Limit reached ({{max}})",
     "remove": "{{name}} kaldır",
     "writableParentConfirmTitle": "Allow read-write access to a parent directory?",
     "writableParentConfirmDescription": "The selected directory is a parent or ancestor of the current working directory. The Agent will be able to read, create, modify, and delete files inside it.\n\nAllow it anyway?\n\n{{path}}",
     "parentConfirmAccept": "Add anyway",
-    "parentConfirmCancel": "İptal"
+    "parentConfirmCancel": "İptal",
+    "back": "Geri",
+    "addTitle": "Dizin ekle",
+    "writableHint": "Agent okuyabilir ve yazabilir",
+    "writableHintDetail": "Agent bu dizinlerdeki dosyaları okuyabilir, oluşturabilir, değiştirebilir ve silebilir.",
+    "searchRecent": "Dizinleri ara",
+    "noRecent": "Henüz son dizin yok",
+    "noMatchingRecent": "Eşleşen dizin yok",
+    "addFailed": "Bu dizin eklenemedi. Tekrar deneyin veya farklı bir klasör seçin."
   },
   "commands": {
     "toast": {
@@ -18943,5 +19049,322 @@
     "rendered": "Belgeyi görüntüle",
     "wrap": "Satırları kaydır",
     "lineNumbers": "Satır numaraları"
+  },
+  "setupMigration": {
+    "title": "Geçiş Yardımcısı",
+    "back": "← Geri",
+    "cancel": "İptal",
+    "listSeparator": ", ",
+    "steps": {
+      "label": "Kurulum adımları",
+      "source": "Bilgisayar",
+      "review": "İçerik",
+      "apply": "Aktar"
+    },
+    "source": {
+      "description": "Bu hesaba bağlı bir bilgisayar seçin. Eklentileri, becerileri, ayarları ve bağlantıları burada da aynı şekilde ayarlanır; anahtarlar yalnızca orada izin verdikten sonra kopyalanır ve oturum açma bilgileri asla o bilgisayardan ayrılmaz.",
+      "loading": "Diğer bilgisayarlarınız aranıyor…",
+      "empty": "Bu hesap için başka bilgisayar bulunamadı. Başka bir bilgisayarda Cindy'ye giriş yapın, ardından bunu tekrar açın",
+      "loadFailed": "Bilgisayarlarınız yüklenemedi",
+      "reload": "Bilgisayarları Yeniden Yükle",
+      "ready": "Çevrim içi, aktarmaya hazır",
+      "next": "Ayarları Oku",
+      "readAgain": "Tekrar Oku",
+      "unavailable": {
+        "offline": "Çevrimdışı. Buraya aktarmak için o bilgisayarda Cindy'yi açın",
+        "remote-control-off": "Önce o bilgisayarda “Aynı hesaptaki cihazların bu makineyi kontrol etmesine izin ver” seçeneğini etkinleştirin",
+        "control-disabled": "O bilgisayarın kontrolü burada devre dışı bırakıldı. Uzaktan Bağlantı ayarlarından tekrar etkinleştirin"
+      }
+    },
+    "reading": "“{{name}}” üzerindeki ayarlar okunuyor…",
+    "errors": {
+      "SETUP_SOURCE_OUTDATED": "“{{name}}” üzerindeki Cindy aktarım yapmak için çok eski. O bilgisayardaki Cindy'yi güncelleyin, ardından tekrar deneyin",
+      "SETUP_SOURCE_UNAVAILABLE": "“{{name}}” üzerindeki ayarlar okunamadı. O bilgisayarın çevrim içi olması ve “Aynı hesaptaki cihazların bu makineyi kontrol etmesine izin ver” seçeneğinin açık olması gerekir",
+      "SETUP_SNAPSHOT_INVALID": "“{{name}}” üzerindeki ayarlar okunamadı. Bu durum iki bilgisayar farklı Cindy sürümleri çalıştırdığında meydana gelir; her ikisini de aynı sürüme güncelleyin, ardından tekrar deneyin",
+      "SETUP_PLAN_EXPIRED": "Bu listenin süresi doldu. “{{name}}” üzerindeki ayarları tekrar okuyun",
+      "GENERIC": "“{{name}}” üzerindeki ayarlar okunamadı"
+    },
+    "review": {
+      "description": "“{{name}}” bilgisayarından bu bilgisayara ne aktarılacağını seçin. Bu bilgisayarda önceden değiştirdiğiniz ayarlar korunur.",
+      "partial": "O bilgisayardaki bazı içerikler bu sefer okunamadı. Yalnızca okunanlar aşağıda listelenmiştir.",
+      "groupCount": "{{selected}} / {{total}} seçildi",
+      "present_one": "Burada {{count}} öğe zaten aynı",
+      "present_other": "Burada {{count}} öğe zaten aynı",
+      "start_one": "{{count}} Öğeyi Aktarmaya Başla",
+      "start_other": "{{count}} Öğeyi Aktarmaya Başla",
+      "continue": "Aktarmayı Başlat",
+      "version": "Sürüm: {{version}}",
+      "pluginDisabled": "Kurulduktan sonra devre dışı bırak",
+      "pluginConsentLater": "İzinler ilk kullanımda istenir",
+      "skillTeam": "Yalnızca bu takım arkadaşına bağlı",
+      "settingsChanges_one": "{{count}} ayar değiştirilecek",
+      "settingsChanges_other": "{{count}} ayar değiştirilecek",
+      "settingsKept_one": "{{count}} yerel ayar korundu",
+      "settingsKept_other": "{{count}} yerel ayar korundu",
+      "settingsChangesKept_one": "{{count}} ayar değiştirilecek, {{kept}} ayar korundu",
+      "settingsChangesKept_other": "{{count}} ayar değiştirilecek, {{kept}} ayar korundu",
+      "kept": "korundu",
+      "rendererPrefs": "Arayüz tercihleri",
+      "rendererPrefsHint": "Yalnızca bu bilgisayarda henüz değiştirmediğiniz tercihler güncellenir",
+      "toolOn": "Açık",
+      "toolOff": "Kapalı",
+      "mcp": "Gerekli MCP sunucuları eklenir",
+      "mcpToken": "Token yapılandırması gerektirir",
+      "checklistTitle": "Gereken eylemler",
+      "checklistDescription": "Aktarımdan sonra bunları bu bilgisayarda yapılandırmanız gerekecektir.",
+      "groups": {
+        "plugins": "Eklentiler",
+        "skills": "Beceriler",
+        "settings": "Ayarlar",
+        "connections": "Bağlantılar",
+        "access": "Erişim izinleri",
+        "secrets": "API anahtarları ve gizli anahtarlar",
+        "ssh": "SSH anahtarları"
+      },
+      "reason": {
+        "not-in-catalog": "Katalogda bulunamadı",
+        "source-not-added": "Kaynak eklenmedi",
+        "local-only": "Yalnızca yerel",
+        "needs-sign-in": "Oturum açma gerekir",
+        "platform": "Desteklenmeyen platform",
+        "invalid": "Geçersiz yapılandırma"
+      },
+      "providerAuth": {
+        "apiKey": "API anahtarı",
+        "oauth": "OAuth oturumu",
+        "native": "Yerel oturum",
+        "none": "Kimlik doğrulama yok",
+        "apiKeyCopy": "API anahtarı diğer bilgisayardan kopyalanacaktır"
+      },
+      "access": {
+        "remote-control": "Uzaktan kontrol izni",
+        "remote-controlHint": "Diğer cihazların bu bilgisayarı kontrol etmesine izin ver",
+        "keep-awake": "Uyanık kalma",
+        "keep-awakeHint": "Görevler çalışırken sistemin uykuya geçmesini engelle"
+      },
+      "secrets": {
+        "title_one": "{{count}} Gizli Anahtar",
+        "title_other": "{{count}} Gizli Anahtar",
+        "description": "API anahtarları ve şifreler yalnızca diğer bilgisayarda onayladıktan sonra tek seferlik güvenli olarak aktarılır."
+      },
+      "sshDescription": "SSH anahtarları diğer bilgisayarda onaylandıktan sonra güvenli biçimde buraya kopyalanır.",
+      "sshHost": "SSH Ana Bilgisayarı",
+      "mcpTokenCopy": "Token diğer bilgisayardan kopyalanacaktır",
+      "checklistDescriptionWithKeys": "Anahtarlar aktarılacak, ancak bazı eklentiler yerel olarak oturum açmanızı gerektirebilir."
+    },
+    "permissions": {
+      "title": "İzin Gereksinimleri",
+      "description_one": "{{count}} eklenti özel izin gerektiriyor.",
+      "description_other": "{{count}} eklenti özel izin gerektiriyor.",
+      "pluginTitle": "Eklenti İzinleri",
+      "confirm_one": "{{count}} İzni Onayla",
+      "confirm_other": "{{count}} İzni Onayla"
+    },
+    "running": {
+      "progress": "Ayarlar ve veriler aktarılıyor…",
+      "label": "Aktarım Sürüyor",
+      "confirm": "Lütfen “{{name}}” bilgisayarında aktarımı onaylayın",
+      "confirmCode": "Onay Kodu: {{code}}"
+    },
+    "done": {
+      "summary_one": "{{count}} öğe başarıyla aktarıldı.",
+      "summary_other": "{{count}} öğe başarıyla aktarıldı.",
+      "applyFailed": "Bazı ayarlar aktarılamadı.",
+      "failedTitle_one": "{{count}} öğe aktarılamadı",
+      "failedTitle_other": "{{count}} öğe aktarılamadı",
+      "checklistTitle": "Kalan Kurulum Adımları",
+      "checklistEmpty": "Tüm kurulum adımları tamamlandı!",
+      "checklistDescription": "Aşağıdaki adımları tamamlayarak kurulumu bitirin.",
+      "restartHint": "Değişikliklerin tam etkili olması için Cindy'yi yeniden başlatmanız önerilir.",
+      "finish": "Bitti",
+      "finishReload": "Yeniden Başlat ve Bitir"
+    },
+    "failure": {
+      "generic": "Aktarım başarısız oldu",
+      "SOURCE_NOT_ADDED": "Kaynak bilgisayar bulunamadı",
+      "MUTATION_CANCELLED": "Aktarım iptal edildi",
+      "PRECONDITION_FAILED": "Ön koşul karşılanamadı",
+      "PERMISSION_DENIED": "İzin reddedildi",
+      "NOT_FOUND": "Kaynak bulunamadı",
+      "ALREADY_EXISTS": "Zaten mevcut",
+      "SETUP_PLAN_EXPIRED": "Kurulum planının süresi doldu",
+      "SETUP_TRANSFER_DECLINED": "Diğer bilgisayarda aktarım reddedildi",
+      "SETUP_TRANSFER_BUSY": "Diğer bilgisayar şu anda meşgul",
+      "SETUP_TRANSFER_INVALID": "Aktarım verileri geçersiz",
+      "SETUP_SOURCE_OUTDATED": "Kaynak bilgisayardaki sürüm çok eski",
+      "SETUP_SOURCE_UNAVAILABLE": "Kaynak bilgisayara ulaşılamıyor",
+      "SSH_AUTHORIZE_FAILED": "SSH yetkilendirmesi başarısız oldu",
+      "SSH_KEYGEN_FAILED": "SSH anahtarı oluşturulamadı",
+      "SSH_HOST_NOT_FOUND": "SSH ana bilgisayarı bulunamadı",
+      "SSH_AUTH_FAILED": "SSH kimlik doğrulaması başarısız oldu",
+      "SSH_CONNECT_FAILED": "SSH bağlantısı kurulamadı",
+      "SSH_KEY_FILE_NOT_FOUND": "SSH anahtar dosyası bulunamadı"
+    },
+    "checklist": {
+      "done": "Tamamlandı",
+      "markDone": "Tamamlandı olarak işaretle",
+      "needs": "Gereken:",
+      "voiceAsrName": "Ses tanıma modeli",
+      "plugin-setup": {
+        "title": "Eklenti kurulumunu tamamlayın",
+        "action": "Yapılandır"
+      },
+      "plugin-manual": {
+        "title": "Eklenti talimatları",
+        "detail": "Bu eklenti ek adımlar gerektirebilir.",
+        "action": "Görüntüle"
+      },
+      "market-source": {
+        "title": "Pazaryeri kaynağı",
+        "detail": "Özel eklenti pazar yeri kaynağını yapılandırın.",
+        "action": "Ayarla"
+      },
+      "skill-manual": {
+        "title": "Beceri talimatları",
+        "detail": "Bu beceri için ek yapılandırma gerekebilir.",
+        "action": "Görüntüle"
+      },
+      "provider-key": {
+        "title": "Sağlayıcı API anahtarı",
+        "action": "Anahtar Ekle"
+      },
+      "provider-connection": {
+        "title": "Sağlayıcı bağlantısı",
+        "detail": "Sağlayıcı bağlantı ayarlarını yapılandırın.",
+        "action": "Yapılandır"
+      },
+      "provider-sign-in": {
+        "title": "Sağlayıcıda oturum açın",
+        "action": "Giriş Yap"
+      },
+      "local-model": {
+        "title": "Yerel model",
+        "detail": "Gerekli yerel model ağırlıklarını indirin.",
+        "action": "İndir"
+      },
+      "mcp-token": {
+        "title": "MCP belirteci (token)",
+        "action": "Token Girin"
+      },
+      "builtin-key": {
+        "title": "Yerleşik anahtar",
+        "action": "Anahtar Girin"
+      },
+      "im-channel": {
+        "title": "Anlık mesajlaşma kanalı",
+        "detail": "Mesajlaşma botu kimlik bilgilerini doğrulayın.",
+        "action": "Bağla"
+      },
+      "computer-use": {
+        "title": "Otomatik bilgisayar kullanımı",
+        "detail": "Sistem erişim izinlerini doğrulayın.",
+        "action": "İzin Ver"
+      },
+      "remote-desktop": {
+        "title": "Uzak masaüstü",
+        "detail": "Uzak masaüstü erişim izinlerini ayarlayın.",
+        "action": "Ayarla"
+      },
+      "ssh": {
+        "title_one": "{{count}} SSH anahtarı",
+        "title_other": "{{count}} SSH anahtarı",
+        "detail": "SSH anahtar izinlerini kontrol edin.",
+        "action": "Yapılandır"
+      },
+      "ssh-host": {
+        "title": "SSH ana bilgisayarı",
+        "detail": "SSH ana bilgisayar bağlantısını test edin.",
+        "action": "Bağlan"
+      },
+      "startAll_one": "{{count}} Adımı Başlat",
+      "startAll_other": "{{count}} Adımı Başlat"
+    },
+    "settingsGroups": {
+      "appearance": "Görünüm",
+      "windowBehavior": "Pencere davranışı",
+      "menubar": "Menü çubuğu kullanımı",
+      "collaboration": "İş birliği",
+      "agentResource": "Agent kaynak kullanımı",
+      "gitSafety": "Git güvenliği",
+      "goal": "Hedef modu",
+      "memory": "Bellek",
+      "compaction": "Bağlam sıkıştırma",
+      "silentEncryptedRetry": "Protokol şifreli içeriği sessizce at ve yeniden dene",
+      "silentStopAutoResume": "Beklenmeyen bir duraklamadan sonra devam et",
+      "sessionRuntimeFallback": "Görevler için otomatik model geri dönüşü",
+      "subagentModels": "Subagent modelleri",
+      "auxiliaryModels": "Yardımcı modeller",
+      "visionBridge": "Vision Bridge",
+      "modelVisibility": "Gösterilen ve gizlenen modeller",
+      "providerOrder": "Sağlayıcı sırası",
+      "modelCatalogOverrides": "Değiştirilen model parametreleri",
+      "modelPriceOverrides": "Model fiyatları",
+      "autoUpdate": "Boştayken güncellemeleri yükle",
+      "updateChannel": "Beta kanalı"
+    },
+    "settings": {
+      "title": "Geçiş Yardımcısı",
+      "description": "Eklentileri, becerileri ve ayarları başka bir bilgisayardan buraya aktarın.",
+      "start": "Geçişi Başlat…",
+      "pending_one": "{{count}} bekleyen kurulum adımı",
+      "pending_other": "{{count}} bekleyen kurulum adımı",
+      "allDone": "Tüm adımlar tamamlandı",
+      "from": "Kaynak: {{name}}",
+      "closeChecklist": "Listeyi Kapat"
+    },
+    "suggestion": {
+      "title": "Başka bir bilgisayardan geçiş yapılsın mı?",
+      "description": "“{{name}}” bilgisayarındaki eklentilerinizi, becerilerinizi ve ayarlarınızı buraya kolayca aktarabilirsiniz.",
+      "confirm": "Ayarları İncele…",
+      "later": "Daha Sonra"
+    },
+    "walkthrough": {
+      "progress": "{{current}} / {{total}}",
+      "open": "Aç",
+      "skip": "Atla",
+      "next": "İleri",
+      "stop": "Durdur",
+      "allDone": "Tüm adımlar tamamlandı!"
+    },
+    "transfer": {
+      "prompt": {
+        "title": "Geçiş İsteği",
+        "message": "“{{name}}” adlı bilgisayar, ayarlarınızı ve eklentilerinizi buraya aktarmak istiyor.",
+        "secrets": "API anahtarları ve şifreler güvenli bir şekilde aktarılacak.",
+        "ssh": "SSH anahtarları",
+        "sshKey": "SSH anahtarı kopyalanacak",
+        "code": "Onay Kodu: {{code}}",
+        "notice": "Yalnızca bu işlemi siz başlattıysanız onaylayın.",
+        "more": "Ayrıntılar",
+        "allow": "İzin Ver",
+        "deny": "Reddet"
+      }
+    }
+  },
+  "pluginUi": {
+    "renderer": "Görünüm",
+    "original": "Orijinal",
+    "unavailable": "Eklenti denetimleri kullanılamıyor. Eylemler devre dışı bırakıldı.",
+    "outcome-unknown": "Sonuç doğrulanamadı. Eklentinin en son durumunu kontrol edin.",
+    "rejected": "Eklenti bu eylemi uygulamadı. Girdiniz korundu.",
+    "draftChanged": "Girdiniz değişti. Eklentinin taslak düzenlemesi uygulanmadı.",
+    "editorUnavailable": "Bu girdi kullanılamıyor. Eklentinin taslak düzenlemesi uygulanmadı.",
+    "more": "Daha Fazla",
+    "close": "Kapat"
+  },
+  "pluginCompanionAnswer": {
+    "title": "İzni onayla",
+    "planMessage": "{{companion}} bu plan üzerinde çalışmaya başlasın mı?",
+    "permissionMessage": {
+      "command": "{{companion}} bu komutu çalıştırsın mı?",
+      "file-read": "{{companion}} bu dosyaları okusun mu?",
+      "file-write": "{{companion}} bu dosyaları değiştirsin mi?",
+      "browser": "{{companion}} bu tarayıcı adımını atsın mı?",
+      "plugin": "{{companion}} “{{tool}}” eklentisini kullansın mı?",
+      "tool": "{{companion}} {{tool}} aracını kullansın mı?"
+    },
+    "source": "“{{plugin}}” eklentisinde İzin Ver'i seçtiniz. {{appName}} burada bir kez daha sorar; izin verdikten sonra takım arkadaşı devam eder.",
+    "allow": "İzin Ver",
+    "cancel": "İptal"
   }
 }
