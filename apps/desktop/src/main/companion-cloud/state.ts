@@ -35,6 +35,9 @@ const bot = z.object({
   prefs: z.record(z.string(), pref).default({}),
   /** Revisions were read back from the server once (after a fresh or lost state file). */
   prefsSeeded: z.boolean().optional(),
+  /** The same per value for the companion store (store.ts), whose revisions are its own. */
+  stored: z.record(z.string(), pref).optional(),
+  storeSeeded: z.boolean().optional(),
   /** This computer gave the companion away; never re-register it as home here. */
   demoted: z.boolean().optional(),
   /** Cloud history was added while the canonical Session was busy; rebuild at the next idle point. */

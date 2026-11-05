@@ -25,6 +25,7 @@ import { isCindyCompanion, mergeCompanionsInto, readProfileSnapshot } from './me
 import { importCloudHistory } from './materialize.js';
 import type { CompanionCloudState } from './state.js';
 import { chatRejection, errorCode, isUnreachable, type CompanionApi, type CompanionLog } from './types.js';
+import { createCompanionStore, readCompanionValue, readPreference, type CompanionStoreTransfer } from './store.js';
 import { COMPANION_PROFILE_KEY, COMPANION_READ_INCOMPLETE, COMPANION_VALUE_TOO_LARGE, canonicalJson, createCompanionUploader, isCompanionProfileSnapshot, type CompanionPreferenceValue } from './uploader.js';
 
 /** Electron/database side of the feature, wired in register.ts. */
@@ -204,6 +205,8 @@ export function startCompanionCloud(input: {
   syncProfile?: (botId: string) => Promise<void>;
   /** Room files (chatServerMedia): the mirror uploads the owner's attachments; readers download them. */
   media?: { upload: CompanionMediaUpload; download: CompanionRoomDownload };
+  /** The server's companion store (capability `companionStore`); without it only preferences are used. */
+  store?: { enabled: () => boolean; transfer?: CompanionStoreTransfer };
   log?: CompanionLog;
   uploadIntervalMs?: number;
   mirrorIntervalMs?: number;
@@ -214,7 +217,8 @@ export function startCompanionCloud(input: {
   const refreshForeground = input.refreshForeground ?? input.refresh;
   const state = input.host.openState(input.endpoint, input.humanActorId, input.current);
   const roomName = (botId: string) => input.bots().find(bot => bot.botId === botId)?.name ?? '';
-  const uploader = createCompanionUploader({ api: input.api, state, log: input.log,
+  const store = input.store ? createCompanionStore(input.api, input.store) : undefined;
+  const uploader = createCompanionUploader({ api: input.api, state, log: input.log, store,
     readValues: async (botId, actorId) => resolveCompanionSkillFiles(await input.host.readValues(botId), {
       known: sha256 => state.bot(botId)?.skillFileMedia?.[sha256],
       gaps: state.bot(botId)?.skillFileGaps ?? {},
@@ -330,7 +334,7 @@ export function startCompanionCloud(input: {
   const profileOf = async (actorId: string) => {
     const cached = profiles.get(actorId);
     if (cached && Date.now() - cached.at < PROFILE_CACHE_MS) return cached.value;
-    const value = await readProfileSnapshot(input.api, actorId);
+    const value = await readProfileSnapshot(input.api, actorId, store);
     profiles.set(actorId, { at: Date.now(), value });
     return value;
   };
@@ -359,7 +363,7 @@ export function startCompanionCloud(input: {
     const devices = await input.host.listDevices?.().catch(() => []) ?? [];
     const labelled = from.map(actor => ({ ...actor, label: devices.find(device => device.deviceId === actor.homeDeviceId)?.name?.trim() || '' }));
     try {
-      const summary = await mergeCompanionsInto({ api: input.api, host: materializer, keep: keepActor, from: labelled, humanActorId: input.humanActorId,
+      const summary = await mergeCompanionsInto({ api: input.api, store, host: materializer, keep: keepActor, from: labelled, humanActorId: input.humanActorId,
         roomOf, fence, ...(input.media ? { media: input.media } : {}), ...(input.log ? { log: input.log } : {}),
         beforeRetire: async () => {
           for (const actor of from) {
@@ -404,7 +408,7 @@ export function startCompanionCloud(input: {
     const botId = actor.externalId;
     const pending = materializing.get(botId);
     if (pending) return pending;
-    const run = materializeCompanion({ api: input.api, state, log: input.log, fence, onDemoted: publish, host: { ...materializer, latestRows: input.host.latestRows },
+    const run = materializeCompanion({ api: input.api, store, state, log: input.log, fence, onDemoted: publish, host: { ...materializer, latestRows: input.host.latestRows },
       ...(input.media ? { download: input.media.download } : {}),
       actor: { id: actor.id, externalId: botId, name: actor.name, avatar: actor.avatar ?? null },
       roomId: () => mirror.ensureRoom(botId, actor.id, actor.name) })
@@ -420,8 +424,7 @@ export function startCompanionCloud(input: {
    */
   async function claimInstall(actor: CompanionRuntimeActor, mode: 'check' | 'handed' | 'takeover', api: CompanionApi): Promise<InstallOwner> {
     if (!installId) return 'mine';
-    const rows = await api<Array<{ key: string; value: unknown; revision: number }>>('/preferences', 'GET', undefined, actor.id);
-    const row = (Array.isArray(rows) ? rows : []).find(candidate => candidate.key === COMPANION_INSTALL_KEY);
+    const row = await readPreference(api, actor.id, COMPANION_INSTALL_KEY);
     const record = row?.value && typeof row.value === 'object' ? row.value as { installationId?: unknown; deviceId?: unknown } : {};
     const current = record.installationId;
     let owner: InstallOwner = current === installId ? 'mine'
@@ -698,8 +701,8 @@ export function startCompanionCloud(input: {
       // Never move the home before the companion's profile snapshot is in the cloud: without it
       // this copy could not be built, and the old home would already be demoted.
       try {
-        const rows = await input.api<Array<{ key: string; value: unknown }>>('/preferences', 'GET', undefined, actor.id);
-        if (!hasProfileSnapshot(rows)) return { ok: false, code: 'FAILED' };
+        const profile = await readCompanionValue(input.api, store, actor.id, COMPANION_PROFILE_KEY);
+        if (!hasProfileSnapshot(profile ? [profile] : [])) return { ok: false, code: 'FAILED' };
       } catch (error) { return actionFailure(error); }
       // Always compare-and-set, even when the cached home already says "here": the cache may be
       // stale (another computer took over while this one was offline). Unchanged homes are a no-op.

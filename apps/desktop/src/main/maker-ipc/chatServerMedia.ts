@@ -38,6 +38,23 @@ export function createChatMedia(api: ChatApi, current: () => boolean, endpoint: 
   };
   return {
     get cacheGeneration() { return remoteMediaCacheGeneration(); },
+    /** Signed private-bucket transfers of the companion store, under the same URL rules as room files. */
+    companionTransfer: {
+      async putBlob(url: string, type: string, bytes: Buffer) {
+        check();
+        const response = await net.fetch(signedUrl(url), { method: 'PUT', redirect: 'error',
+          headers: { 'Content-Type': type }, body: new Uint8Array(bytes), signal: AbortSignal.timeout(60000) });
+        if (!response.ok) throw Object.assign(new Error('MEDIA_UPLOAD_FAILED'), { status: response.status });
+      },
+      async getBlob(url: string, size: number) {
+        check();
+        const response = await net.fetch(signedUrl(url), { redirect: 'error', signal: AbortSignal.timeout(60000) });
+        if (!response.ok) throw Object.assign(new Error('MEDIA_DOWNLOAD_FAILED'), { status: response.status });
+        const bytes = Buffer.from(await response.arrayBuffer());
+        if (bytes.length !== size) throw new Error('INVALID_MEDIA_SIZE');
+        return bytes;
+      },
+    },
     /**
      * Uploads a send's files a few at a time (prepare → PUT → complete each), keeping the
      * blocks in the files' order. Every file settles before a failure is reported, so no

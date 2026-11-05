@@ -147,7 +147,7 @@ describe('Chat Server client for companions', () => {
       value: { name: 'Cindy', description: '', soul: '', systemPrompt: '', user: '' } }]);
     const client = createChatServerClient(request as never);
     await expect(client.hasProfileSnapshot(id(1))).resolves.toBe(true);
-    expect(request).toHaveBeenLastCalledWith('/preferences', 'GET', undefined, id(1));
+    expect(request).toHaveBeenLastCalledWith('/preferences?key=companion.profile.v1', 'GET', undefined, id(1));
     request.mockResolvedValueOnce([{ key: 'companion.memory.v1:a.md', value: { content: 'x' } }]);
     await expect(client.hasProfileSnapshot(id(1))).resolves.toBe(false);
     request.mockResolvedValueOnce([{ key: 'companion.profile.v1', value: null }]);

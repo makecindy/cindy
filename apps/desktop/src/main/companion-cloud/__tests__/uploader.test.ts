@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { resolveCompanionSkillFiles } from '../skillFiles.js';
 import { canonicalJson, COMPANION_VALUE_MAX_BYTES, createCompanionUploader, valueHash as canonicalHash, type CompanionPreferenceValue } from '../uploader.js';
+import { createCompanionStore, readCompanionRows, STORE_INLINE_MAX_BYTES } from '../store.js';
 import { fakeApi, memoryState, rejection } from './fakes.js';
 
 const profile = (soul: string): CompanionPreferenceValue =>
@@ -272,5 +273,128 @@ describe('skill files', () => {
     expect(Buffer.byteLength(canonicalJson(value))).toBeLessThanOrEqual(COMPANION_VALUE_MAX_BYTES);
     expect(value.omitted.length).toBeGreaterThan(0);
     expect(value.files.length + value.omitted.length === 800 || value.truncated === true).toBe(true);
+  });
+});
+
+describe('companion store', () => {
+  /** Preferences and the companion store of one actor, with the store's change cursor and private bucket. */
+  function storeSetup(options: { off?: boolean; noBucket?: boolean } = {}) {
+    const prefs = new Map<string, { key: string; value: unknown; revision: number }>();
+    const entries = new Map<string, { key: string; revision: number; seq: number; hash: string; size: number; deleted: boolean; value?: unknown; blob?: Buffer }>();
+    const bucket = new Map<string, Buffer>();
+    const pending = new Map<string, { key: string; expectedRevision: number; hash: string; size: number }>();
+    let seq = 0;
+    const put = (key: string, expectedRevision: number, next: { value?: unknown; blob?: Buffer; hash: string; size: number }) => {
+      const current = entries.get(key)?.revision ?? 0;
+      if (current !== expectedRevision) throw rejection(409, 'REVISION_CONFLICT', { revision: current });
+      entries.set(key, { key, revision: current + 1, seq: ++seq, deleted: next.value === null && !next.blob, ...next });
+      return { revision: current + 1 };
+    };
+    const { api, calls } = fakeApi((route, method, data) => {
+      if (route.startsWith('/companion-store') && options.off) throw rejection(404, 'COMPANION_STORE_DISABLED');
+      const query = new URL(`https://chat.invalid${route}`).searchParams;
+      const body = data as Record<string, any>;
+      if (route === '/preferences') {
+        if (method === 'GET') return [...prefs.values()];
+        const current = prefs.get(body.key)?.revision ?? 0;
+        if (current !== body.expectedRevision) throw rejection(409, 'REVISION_CONFLICT', { revision: current });
+        prefs.set(body.key, { key: body.key, value: body.value, revision: current + 1 });
+        return { revision: current + 1 };
+      }
+      if (route.startsWith('/companion-store/changes')) {
+        const after = Number(query.get('after'));
+        const list = [...entries.values()].filter(entry => entry.seq > after).sort((a, b) => a.seq - b.seq);
+        return { entries: list.map(({ blob, value, seq: at, ...entry }) => ({ ...entry, cursor: String(at),
+          ...(blob ? { blob: true } : query.get('values') ? { value } : {}) })), cursor: String(list.at(-1)?.seq ?? after), hasMore: false };
+      }
+      if (route.startsWith('/companion-store/entry') && method === 'GET') {
+        const entry = entries.get(query.get('key')!);
+        return entry ? { ...entry, blob: entry.blob ? true : undefined } : { key: query.get('key'), revision: 0, deleted: true };
+      }
+      if (route === '/companion-store/entry') {
+        const json = canonicalJson(body.value);
+        return put(body.key, body.expectedRevision, { value: body.value, hash: canonicalHash(body.value), size: json.length });
+      }
+      if (route === '/companion-store/blob' && options.noBucket) throw rejection(503, 'MEDIA_STORAGE_UNAVAILABLE');
+      if (route === '/companion-store/blob') {
+        pending.set('u1', { key: body.key, expectedRevision: body.expectedRevision, hash: body.hash, size: body.size });
+        return { uploadId: 'u1', uploadUrl: 'https://bucket.invalid/u1' };
+      }
+      if (route === '/companion-store/blob/complete') {
+        const upload = pending.get(body.uploadId)!;
+        return put(upload.key, upload.expectedRevision, { blob: bucket.get('https://bucket.invalid/u1'), hash: upload.hash, size: upload.size });
+      }
+      if (route.startsWith('/companion-store/blob')) {
+        const entry = entries.get(query.get('key')!)!;
+        bucket.set('https://bucket.invalid/get', entry.blob!);
+        return { url: 'https://bucket.invalid/get', size: entry.size, hash: entry.hash, revision: entry.revision };
+      }
+      throw new Error(`unexpected ${method} ${route}`);
+    });
+    const transfer = {
+      putBlob: vi.fn(async (url: string, _type: string, bytes: Buffer) => { bucket.set(url, bytes); }),
+      getBlob: vi.fn(async (url: string) => bucket.get(url)!),
+    };
+    const store = createCompanionStore(api, { enabled: () => true, transfer });
+    const { state } = memoryState();
+    let values: CompanionPreferenceValue[] = [];
+    const log = { warn: vi.fn() };
+    const uploader = createCompanionUploader({ api, state, readValues: async () => values, log, store });
+    const posts = () => calls.filter(call => call.method === 'POST').map(call => `${call.route} ${(call.data as { key?: string }).key ?? ''}`);
+    return { api, store, uploader, prefs, entries, transfer, log, posts, setValues: (next: CompanionPreferenceValue[]) => { values = next; } };
+  }
+
+  it('keeps a memory too large for the preferences in the store, and a restore reads it back', async () => {
+    const t = storeSetup();
+    const big = memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000));
+    t.setValues([profile('soul'), big]);
+    await t.uploader.syncBot('bot', 'actor', Number.POSITIVE_INFINITY, { requireAll: true });
+    // Older versions read only the preferences: every value they can hold stays there too.
+    expect([...t.prefs.keys()]).toEqual(['companion.profile.v1']);
+    expect([...t.entries.keys()]).toEqual(['companion.memory.v1:big.md']);
+    const restored = await readCompanionRows(t.api, t.store, 'actor');
+    expect(restored.map(row => [row.key, row.value])).toEqual([[profile('soul').key, profile('soul').value], [big.key, big.value]]);
+    // Nothing changed: no writes.
+    const before = t.posts().length;
+    await t.uploader.syncBot('bot', 'actor');
+    expect(t.posts()).toHaveLength(before);
+    // Shrunk back under the preferences limit: it moves there and leaves the store.
+    t.setValues([profile('soul'), memory('big.md', 'small again')]);
+    await t.uploader.syncBot('bot', 'actor');
+    expect(t.entries.get(big.key)?.deleted).toBe(true);
+    expect((await readCompanionRows(t.api, t.store, 'actor')).find(row => row.key === big.key)?.value).toEqual(memory('big.md', 'small again').value);
+  });
+
+  it('sends a value over the inline limit through the bucket and checks it on the way back', async () => {
+    const t = storeSetup();
+    const huge = memory('huge.md', 'y'.repeat(STORE_INLINE_MAX_BYTES + 10_000));
+    t.setValues([huge]);
+    await t.uploader.syncBot('bot', 'actor');
+    expect(t.posts()).toEqual(['/companion-store/blob companion.memory.v1:huge.md', '/companion-store/blob/complete ']);
+    expect((await readCompanionRows(t.api, t.store, 'actor')).map(row => row.value)).toEqual([huge.value]);
+    t.entries.get(huge.key)!.blob = Buffer.from(canonicalJson({ ...huge.value as object, content: 'tampered' }));
+    t.entries.get(huge.key)!.size = t.entries.get(huge.key)!.blob!.length;
+    await expect(readCompanionRows(t.api, t.store, 'actor')).rejects.toThrow('COMPANION_BLOB_MISMATCH');
+  });
+
+  it('skips a value the store can never take, once, and still refuses a hand-over without it', async () => {
+    const t = storeSetup({ noBucket: true });
+    t.setValues([profile('soul'), memory('huge.md', 'y'.repeat(STORE_INLINE_MAX_BYTES + 10_000))]);
+    await t.uploader.syncBot('bot', 'actor');
+    expect(t.log.warn).toHaveBeenCalledWith('Companion value too large to upload; skipped', expect.objectContaining({ code: 'MEDIA_STORAGE_UNAVAILABLE' }));
+    const asked = t.posts().length;
+    await t.uploader.syncBot('bot', 'actor');
+    expect(t.posts()).toHaveLength(asked);
+    await expect(t.uploader.syncBot('bot', 'actor', Number.POSITIVE_INFINITY, { requireAll: true })).rejects.toThrow('COMPANION_VALUE_TOO_LARGE');
+  });
+
+  it('carries on with preferences only when the server has the store switched off', async () => {
+    const t = storeSetup({ off: true });
+    t.setValues([profile('soul'), memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000))]);
+    await t.uploader.syncBot('bot', 'actor');
+    expect(t.store.active()).toBe(false);
+    expect([...t.prefs.keys()]).toEqual(['companion.profile.v1']);
+    expect(t.log.warn).toHaveBeenCalledWith('Companion value too large to upload; skipped', expect.anything());
+    expect((await readCompanionRows(t.api, t.store, 'actor')).map(row => row.key)).toEqual(['companion.profile.v1']);
   });
 });

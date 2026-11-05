@@ -745,7 +745,7 @@ it('reads Cindy preset identity without inferring from names and retains known I
   const actors = [1, 2, 3, 4].map(n => ({ id: id(n), externalId: `bot-${n}`, kind: 'bot', name: 'Cindy', avatar: null, homeDeviceId: 'mac' }));
   const ids = await createChatServerClient(request as any).cindyCompanionIds(actors, ['bot-4']);
   expect(ids).toEqual(['bot-1', 'bot-2', 'bot-4']);
-  expect(request.mock.calls.every(call => call[0] === '/preferences' && call[1] === 'GET')).toBe(true);
+  expect(request.mock.calls.every(call => call[0] === '/preferences?key=companion.profile.v1' && call[1] === 'GET')).toBe(true);
 });
 
 // Unit: group and thread projections retain the optional process locator while

@@ -119,6 +119,8 @@ const SETTINGS_ROUTES: Record<Exclude<ChatGroupSettingsAction['type'], 'notifica
 
 export interface ChatInviteLink { link: string; expiresAt: string | null; reusable?: boolean }
 const INVITE_TOKEN = /^[A-Za-z0-9_-]{43}$/;
+/** Only a companion's profile row; an older server ignores `key` and returns every row, picked the same way. */
+const PROFILE_ONLY = `/preferences?key=${encodeURIComponent('companion.profile.v1')}`;
 
 /** Prefer an owned owner, then the human's admin role, as on Desktop. */
 export function chatGroupManager(snapshot: ChatSnapshot, self: string) {
@@ -681,7 +683,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         if (actor.kind !== 'bot') continue;
         if (actor.externalId === 'cindy-default') { ids.push(actor.externalId); continue; }
         try {
-          const rows = await request<Array<{ key?: unknown; value?: unknown }>>('/preferences', 'GET', undefined, chatId(actor.id));
+          const rows = await request<Array<{ key?: unknown; value?: unknown }>>(PROFILE_ONLY, 'GET', undefined, chatId(actor.id));
           const profile = rows?.find(row => row.key === 'companion.profile.v1')?.value as { templateId?: unknown; soul?: unknown } | undefined;
           if (profile?.templateId === 'cindy' || (typeof profile?.soul === 'string' && inferBotTemplatePresetId(profile.soul) === 'cindy')) ids.push(actor.externalId);
         } catch { if (previous.includes(actor.externalId)) ids.push(actor.externalId); }
@@ -690,7 +692,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
     },
     /** The main computer has uploaded the profile snapshot another computer builds the companion from. */
     async hasProfileSnapshot(actorId: string): Promise<boolean> {
-      const rows = await request<Array<{ key?: unknown; value?: unknown }>>('/preferences', 'GET', undefined, chatId(actorId));
+      const rows = await request<Array<{ key?: unknown; value?: unknown }>>(PROFILE_ONLY, 'GET', undefined, chatId(actorId));
       const row = (Array.isArray(rows) ? rows : []).find(candidate => candidate?.key === 'companion.profile.v1');
       // Same check as Desktop (companion-cloud/uploader.ts isCompanionProfileSnapshot): a complete profile.
       const value = row?.value as Record<string, unknown> | null | undefined;

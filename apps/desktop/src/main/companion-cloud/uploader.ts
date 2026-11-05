@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import type { LocalBotSkillFile } from '../maker-ipc/botSkillFiles.js';
 import type { CompanionCloudState } from './state.js';
 import { chatRejection, errorCode, type CompanionApi, type CompanionLog } from './types.js';
+import { STORE_KEY_MAX_LENGTH, readPreferences, type CompanionStore } from './store.js';
 
 export const COMPANION_PROFILE_KEY = 'companion.profile.v1';
 export const COMPANION_MEMORY_PREFIX = 'companion.memory.v1:';
@@ -27,6 +28,8 @@ const MAX_KEY_LENGTH = 160;
 export const COMPANION_VALUE_MAX_BYTES = 60 * 1024;
 /** A value over the size limit was not uploaded (thrown only when every value is required). */
 export const COMPANION_VALUE_TOO_LARGE = 'COMPANION_VALUE_TOO_LARGE';
+/** Companion store answers that do not change on a retry. */
+const STORE_REFUSALS = new Set(['MEDIA_STORAGE_UNAVAILABLE', 'VALUE_TOO_LARGE', 'COMPANION_STORE_QUOTA', 'UNSUPPORTED_TYPE']);
 
 /**
  * One value to upload. `unread` marks a key prefix that could not be read this cycle (e.g. the
@@ -82,14 +85,15 @@ export function createCompanionUploader(deps: {
   onLostHome?: () => void;
   log?: CompanionLog;
   maxValueBytes?: number;
+  /** Values too large for the preferences go to the companion store when the server offers it (store.ts). */
+  store?: CompanionStore;
 }) {
   const maxBytes = deps.maxValueBytes ?? COMPANION_VALUE_MAX_BYTES;
   const owned = (key: string) => OWNED_PREFIXES.some(prefix => key === prefix || (prefix.endsWith(':') && key.startsWith(prefix)));
   type Row = { key: string; value: unknown; revision: number };
-  const readRows = async (actorId: string) => {
-    const rows = await deps.api<Row[]>('/preferences', 'GET', undefined, actorId);
-    return Array.isArray(rows) ? rows : [];
-  };
+  const readRows = (actorId: string): Promise<Row[]> => readPreferences(deps.api, actorId);
+  /** Values the store refused for good (`${actorId}\n${key}` → hash): not asked again until they change. */
+  const refused = new Map<string, string>();
 
   async function write(actorId: string, key: string, value: unknown, json: string, expectedRevision: number) {
     const operationId = `cpref:${sha256(`${key}\n${expectedRevision}\n${json}`).slice(0, 48)}`;
@@ -126,6 +130,32 @@ export function createCompanionUploader(deps: {
     return write(actorId, key, value, json, server?.revision ?? fallbackRevision);
   }
 
+  /** Store revisions once per state file, like `seed`; keys this device holds stay its own. */
+  async function seedStore(botId: string, actorId: string, store: CompanionStore) {
+    const server = await store.revisions(actorId);
+    deps.state.update(botId, actorId, entry => {
+      const stored = entry.stored ?? {};
+      for (const [key, row] of server) {
+        if (!owned(key)) continue;
+        const known = stored[key];
+        stored[key] = known?.local ? { ...known, revision: row.revision } : { hash: row.hash, revision: row.revision };
+      }
+      entry.stored = stored;
+      entry.storeSeeded = true;
+    });
+  }
+
+  async function resolveStoreConflict(botId: string, actorId: string, store: CompanionStore, key: string, value: unknown, hash: string) {
+    if (deps.confirmHome && !(await deps.confirmHome(botId, actorId))) {
+      deps.onLostHome?.();
+      throw new CompanionLostHomeError();
+    }
+    const server = await store.entry(actorId, key);
+    const same = !server.deleted && (server.blob ? server.hash === store.blobHash(value) : valueHash(server.value) === hash);
+    if (same || (server.deleted && value === null)) return server.revision;
+    return store.write(actorId, key, value, server.revision);
+  }
+
   /**
    * Upload what changed; returns the number of writes made (bounded by `budget`). With
    * `requireAll` (before a hand-over) an oversized value fails the sync instead of being skipped.
@@ -141,7 +171,15 @@ export function createCompanionUploader(deps: {
     for (const { key, value } of values) desired.set(key, value);
     // Only keys this device itself had are tombstoned; never what merely exists on the server,
     // nor anything under a part that could not be read this time.
-    for (const [key, entry] of Object.entries(deps.state.bot(botId)?.prefs ?? {})) {
+    let store = deps.store?.active() ? deps.store : undefined;
+    if (store && !deps.state.bot(botId)?.storeSeeded) {
+      try { await seedStore(botId, actorId, store); } catch (error) {
+        // Switched off on the server: the preferences alone, as before.
+        if (store.active()) throw error;
+        store = undefined;
+      }
+    }
+    for (const [key, entry] of [...Object.entries(deps.state.bot(botId)?.prefs ?? {}), ...Object.entries(store ? deps.state.bot(botId)?.stored ?? {} : {})]) {
       if (unread.some(prefix => key.startsWith(prefix))) continue;
       if (!desired.has(key) && entry.local && entry.hash !== TOMBSTONE_HASH) desired.set(key, null);
     }
@@ -149,28 +187,63 @@ export function createCompanionUploader(deps: {
     let skipped = 0;
     for (const [key, value] of desired) {
       const json = canonicalJson(value);
-      if (key.length > MAX_KEY_LENGTH || Buffer.byteLength(json) > maxBytes) {
+      const inPreferences = key.length <= MAX_KEY_LENGTH && Buffer.byteLength(json) <= maxBytes;
+      const hash = sha256(json);
+      const inStore = !!store && key.length <= STORE_KEY_MAX_LENGTH && refused.get(`${actorId}\n${key}`) !== hash;
+      if (!inPreferences && !inStore) {
         deps.log?.warn('Companion value too large to upload; skipped', { actorId, keyKind: key.split(':')[0], bytes: Buffer.byteLength(json) });
         skipped += 1;
         continue;
       }
-      const hash = sha256(json);
-      const prior = deps.state.bot(botId)?.prefs[key];
-      if (prior ? prior.hash === hash : value === null) {
-        if (prior && !prior.local && value !== null) deps.state.update(botId, actorId, entry => { entry.prefs[key] = { ...prior, local: true }; });
+      // Preferences stay complete for every value they can hold: older versions read only them.
+      if (inPreferences) {
+        const prior = deps.state.bot(botId)?.prefs[key];
+        if (prior ? prior.hash === hash : value === null) {
+          if (prior && !prior.local && value !== null) deps.state.update(botId, actorId, entry => { entry.prefs[key] = { ...prior, local: true }; });
+        } else {
+          if (writes >= budget) break;
+          writes += 1;
+          let revision: number;
+          try {
+            revision = await write(actorId, key, value, json, prior?.revision ?? 0);
+          } catch (error) {
+            const conflict = chatRejection(error, 409, 'REVISION_CONFLICT');
+            if (!conflict || typeof conflict.revision !== 'number') throw error;
+            revision = await resolveConflict(botId, actorId, key, value, json, hash, conflict.revision);
+          }
+          deps.state.update(botId, actorId, entry => { entry.prefs[key] = { hash, revision, local: true }; });
+        }
+      }
+      if (!inStore || !store?.active()) continue;
+      // The store holds only what the preferences cannot (so nothing is read twice); a value
+      // that fits them again leaves it.
+      const priorStored = deps.state.bot(botId)?.stored?.[key];
+      const storeValue = inPreferences ? null : value;
+      const storeHash = inPreferences ? TOMBSTONE_HASH : hash;
+      if (priorStored ? priorStored.hash === storeHash : storeValue === null) {
+        if (priorStored && !priorStored.local && storeValue !== null) deps.state.update(botId, actorId, entry => { entry.stored = { ...entry.stored, [key]: { ...priorStored, local: true } }; });
         continue;
       }
       if (writes >= budget) break;
       writes += 1;
       let revision: number;
       try {
-        revision = await write(actorId, key, value, json, prior?.revision ?? 0);
+        revision = await store.write(actorId, key, storeValue, priorStored?.revision ?? 0);
       } catch (error) {
+        // Switched off meanwhile, or a value the store can never take (no bucket, over its
+        // limits): skipped as before, so a hand-over still refuses to leave it behind.
+        if (!store.active() || STORE_REFUSALS.has(errorCode(error))) {
+          if (inPreferences) continue;
+          if (store.active()) refused.set(`${actorId}\n${key}`, hash);
+          deps.log?.warn('Companion value too large to upload; skipped', { actorId, keyKind: key.split(':')[0], bytes: Buffer.byteLength(json), code: errorCode(error) });
+          skipped += 1;
+          continue;
+        }
         const conflict = chatRejection(error, 409, 'REVISION_CONFLICT');
-        if (!conflict || typeof conflict.revision !== 'number') throw error;
-        revision = await resolveConflict(botId, actorId, key, value, json, hash, conflict.revision);
+        if (!conflict) throw error;
+        revision = await resolveStoreConflict(botId, actorId, store, key, storeValue, storeHash);
       }
-      deps.state.update(botId, actorId, entry => { entry.prefs[key] = { hash, revision, local: true }; });
+      deps.state.update(botId, actorId, entry => { entry.stored = { ...entry.stored, [key]: { hash: storeHash, revision, local: true } }; });
     }
     if (skipped > 0 && options.requireAll) throw new Error(COMPANION_VALUE_TOO_LARGE);
     return writes;
