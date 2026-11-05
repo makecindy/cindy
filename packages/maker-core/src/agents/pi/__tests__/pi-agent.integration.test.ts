@@ -1707,6 +1707,78 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     },
   );
 
+  // #8933: production start/send with the real bundled extension must retain
+  // short titles and original step ids in persistence, review and execution.
+  // The existing review cases only supplied long English titles. Integration
+  // tier: real Pi + loopback gateway; minimal old failure is "1. 验证".
+  it.each([
+    { name: 'mixed Chinese titles', plan: 'Plan:\n1. **读取项目文件**\n2. **实现交互**\n3. **验证**\n4. **交付**\n5. **检查移动端布局**',
+      expected: ['读取项目文件', '实现交互', '验证', '交付', '检查移动端布局'], ids: [1, 2, 3, 4, 5] },
+    { name: 'only short titles', plan: 'Plan:\n1. 实现交互\n2. 验证\n3. 交付',
+      expected: ['实现交互', '验证', '交付'], ids: [1, 2, 3] },
+    { name: 'Chinese header and sparse ids', plan: '## 计划\n2）**实现**\n5) Verify\n9. `deploy`',
+      expected: ['实现', 'Verify', 'deploy'], ids: [2, 5, 9] },
+    { name: 'short English without a header', plan: '1. Go\n2. QA', expected: ['Go', 'QA'], ids: [1, 2] },
+    { name: 'unparsed complete plan', plan: '先验证，再交付。\n验收细节必须完整保留。',
+      expected: ['先验证，再交付。\n验收细节必须完整保留。'], ids: [1] },
+    { name: 'resumed short plan', plan: 'Plan:\n1. 验证\n2. 交付', expected: ['验证', '交付'], ids: [1, 2], resume: true },
+    { name: 'edited sparse steps', plan: 'Plan:\n1. Read the project files.', expected: ['Read the project files.'], ids: [1],
+      editedPlan: '计划：\n3. 验证\n7. 交付\n\n保留编辑后的完整验收细节。' },
+  ])('preserves $name through Pi plan review', { timeout: 45_000 }, async scenario => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-plan-items-'));
+    let handle: AgentSessionHandle | undefined;
+    try {
+      const deps = buildDeps();
+      handle = await new PiAgent(deps).startSession({
+        sessionId: 'plan-items', workingDir, model: 'pi-test-model', planMode: true,
+      });
+      if (scenario.resume) {
+        const resumeSessionId = handle.id;
+        await handle.close();
+        handle = await new PiAgent(deps).startSession({
+          sessionId: 'plan-items', workingDir, model: 'pi-test-model', resumeSessionId,
+        });
+      }
+      const readTodos = (): Array<{ step: number; text: string; completed: boolean }> => {
+        const entries = readFileSync(handle!.id, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+        return entries.reverse().find(entry => entry.customType === 'plan-mode')?.data.todos ?? [];
+      };
+      let approve!: () => void;
+      const approved = new Promise<void>(resolve => { approve = resolve; });
+      const resolver = vi.fn(async () => {
+        await approved;
+        return { kind: 'plan_review' as const, behavior: 'allow' as const,
+          ...(scenario.editedPlan ? { editedPlan: scenario.editedPlan } : {}) };
+      });
+      handle.setInteractionResolver!(resolver);
+      const completedStep = scenario.editedPlan ? 7 : scenario.ids[scenario.ids.length - 1]!;
+      // Leave one-step fallback plans incomplete so their stored tracker remains inspectable.
+      scriptedResponses.push(anthropicStreamBody(scenario.plan), anthropicStreamBody(
+        scenario.ids.length > 1 || scenario.editedPlan ? `[DONE:${completedStep}]` : 'Implementation in progress.',
+      ));
+      const before = seenRequests.length;
+      await handle.send({ type: 'user', content: 'Prepare a plan for review.' }, { planMode: true });
+      await vi.waitFor(() => expect(resolver).toHaveBeenCalled(), { timeout: 10_000 });
+      try {
+        expect(resolver).toHaveBeenCalledWith(expect.objectContaining({ kind: 'plan_review', plan: scenario.plan }));
+        expect(readTodos()).toEqual(scenario.expected.map((text, i) => ({ step: scenario.ids[i], text, completed: false })));
+        expect(seenRequests).toHaveLength(before + 1);
+        expect(JSON.parse(seenRequests[before]!.body).tools.map((tool: { name: string }) => tool.name)).not.toContain('write');
+      } finally { approve(); }
+      await vi.waitFor(() => expect(seenRequests.length).toBe(before + 2), { timeout: 10_000 });
+      await vi.waitFor(() => expect(handle!.isTurnRunning!()).toBe(false), { timeout: 10_000 });
+      expect(seenRequests[before + 1]!.body).toContain(jsonStringContent(scenario.editedPlan ?? scenario.plan));
+      const expected = scenario.editedPlan ? ['验证', '交付'] : scenario.expected;
+      const ids = scenario.editedPlan ? [3, 7] : scenario.ids;
+      expect(readTodos()).toEqual(expected.map((text, i) => ({ step: ids[i], text,
+        completed: ids.length > 1 && ids[i] === completedStep })));
+    } finally {
+      scriptedResponses.length = 0;
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
   it.each(['anthropic-messages', 'openai-completions'] as const)(
     'keeps native plan notifications separate from replies using %s',
     { timeout: 60_000 },
