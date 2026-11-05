@@ -349,8 +349,8 @@ function GhostCardCanvas({
     const doc = iframeRef.current?.contentDocument;
     const body = doc?.body;
     if (!doc || !body) return;
-    // scrollHeight includes the old viewport height; responsive cards must also shrink.
-    const h = Math.ceil(formFields || fullWidth ? body.getBoundingClientRect().height : body.scrollHeight);
+    // Preserve visible overflow in plugin posters; editable footers use their layout height.
+    const h = Math.ceil(formFields ? body.getBoundingClientRect().height : body.scrollHeight);
     if (h <= 0) return;
     const clamped = Math.min(GHOST_CARD_HEIGHT_MAX, Math.max(formFields ? 1 : GHOST_CARD_HEIGHT_MIN, h));
     const imagesPending = Array.from(doc.images).some((img) => !img.complete);
@@ -369,7 +369,7 @@ function GhostCardCanvas({
       noteCardMeasuredHeight(callId, clamped);
       window.electronAPI?.ghosts?.reportCardHeight?.(callId, clamped)?.catch(() => {});
     }
-  }, [callId, height, formFields, fullWidth]);
+  }, [callId, height, formFields]);
 
   useEffect(() => {
     const frame = iframeRef.current;

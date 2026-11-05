@@ -10,6 +10,7 @@ export default {
   cases: {
     default: { about: 'Full-width report shrinks and grows with the conversation' },
     animated: { about: 'Static width declaration also governs the running animation document' },
+    overflow: { about: 'Visible overflow below a fixed-height container keeps the footer visible' },
     narrow: { about: 'Phone-sized conversation without horizontal overflow', viewport: { width: 320, height: 1000 } },
     poster: { about: 'Unmarked posters retain their existing width limit' },
   },
@@ -19,7 +20,7 @@ export default {
       const frame = document.querySelector('iframe');
       const body = frame.contentDocument.body;
       const last = body.querySelector('button').getBoundingClientRect();
-      return Math.abs(frame.getBoundingClientRect().height - Math.ceil(body.getBoundingClientRect().height)) <= 2
+      return Math.abs(frame.getBoundingClientRect().height - Math.ceil(Math.max(body.getBoundingClientRect().height, body.scrollHeight))) <= 2
         && last.bottom <= frame.clientHeight + 1;
     }, null, { timeout: 3000 });
     const width = await page.locator('iframe').evaluate(frame => frame.getBoundingClientRect().width);
@@ -30,7 +31,7 @@ export default {
     }
     if (Math.abs(width - available) > 1) throw new Error('Full-width card did not fill the message column');
     await fit();
-    if (ui.case === 'narrow') return;
+    if (ui.case === 'narrow' || ui.case === 'overflow') return;
     await page.locator('[data-card-container]').evaluate(el => { el.style.width = '300px'; });
     await fit();
     const narrowHeight = await page.locator('iframe').evaluate(el => el.clientHeight);
