@@ -86,7 +86,7 @@ import { BrowserTabBody } from '../plugins/web-browser/BrowserTabBody';
 import type { WebBrowserState } from '../plugins/web-browser';
 import type { TabKindBodyProps } from '../types';
 import { browserWebviewPool } from '../lib/browserWebviewPool';
-import { registerTabKind, unregisterTabKind } from '../registry';
+import { getTabKind, registerTabKind, unregisterTabKind } from '../registry';
 import { _resetRsbBrowserBridgeForTests } from '../lib/rsbBrowserBridge';
 import { _resetPopupRouterForTests } from '../lib/popupRouter';
 import { _resetNativePopupTabsForTests } from '../lib/nativePopupTabs';
@@ -303,6 +303,7 @@ function dispatchShortcut(
 
 describe('RightSidebarShell empty state', () => {
   let tabsIpc: RightSidebarTabsIpcStub;
+  let terminalPlugin: ReturnType<typeof getTabKind>;
 
   beforeEach(() => {
     Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
@@ -341,8 +342,14 @@ describe('RightSidebarShell empty state', () => {
   // repeated render-time hydration used to erase created/exited patches. A stale
   // renderer marker must still require a fresh attach after restart. Unit tier;
   // minimal input is one persisted terminal followed by a live exit event.
-  it('preserves terminal lifecycle patches through real host hydration while rejecting stale renderer state', async () => {
+  // PR8881 discussion_r4476561074: the existing hydration case misses a failed
+  // created=true upsert. One SQLITE_BUSY rollback must not reattach a live body
+  // or write created=true again. Real Shell/host/store; only IPC and xterm are
+  // faked, in the unit tier. Defer rejection until the optimistic render commits.
+  it.each([false, true])('preserves terminal lifecycle through hydration (SQLITE_BUSY: %s)', async (busy) => {
     await import('../plugins/terminal');
+    terminalPlugin ??= getTabKind('terminal');
+    if (!getTabKind('terminal')) registerTabKind(terminalPlugin!);
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { callback(0); return 1; });
     vi.stubGlobal('cancelAnimationFrame', vi.fn());
@@ -355,6 +362,8 @@ describe('RightSidebarShell empty state', () => {
       onExit: vi.fn((listener: typeof exitListener) => { exitListener = listener; return vi.fn(); }),
     } });
     terminalEntry.ptyAttached = false;
+    let rejectUpsert!: (error: Error) => void;
+    if (busy) tabsIpc.upsert.mockImplementationOnce(() => new Promise((_, reject) => { rejectUpsert = reject; }));
     tabsIpc.list.mockResolvedValueOnce({
       tabs: [{ id: 'terminal-live', kind: 'terminal', state: { rendererInstanceId: 'previous-renderer', created: true, exited: { code: 255, signal: null } } }],
       activeTabId: 'terminal-live',
@@ -366,6 +375,18 @@ describe('RightSidebarShell empty state', () => {
       }));
       await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
       await waitFor(() => expect((getBucket('terminal-task').tabs[0].state as { created: boolean }).created).toBe(true));
+      if (busy) {
+        expect(tabsIpc.upsert).toHaveBeenCalledOnce();
+        await act(async () => { rejectUpsert(new Error('SQLITE_BUSY: database is locked')); });
+        expect(create).toHaveBeenCalledOnce();
+        expect(tabsIpc.upsert).toHaveBeenCalledOnce();
+        // Host hydration turns this restored old-renderer marker into false.
+        expect(getBucket('terminal-task').tabs[0].state).toMatchObject({
+          rendererInstanceId: 'previous-renderer', created: true,
+        });
+        expect(terminalEntry.ptyAttached).toBe(true);
+        return;
+      }
       act(() => exitListener({ id: 'terminal-live', exit: { code: 17, signal: null } }));
       expect(await screen.findByText('rightSidebar.terminal.processExited')).toBeTruthy();
       fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.terminal.restart' }));

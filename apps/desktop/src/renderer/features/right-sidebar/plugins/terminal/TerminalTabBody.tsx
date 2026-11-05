@@ -179,9 +179,8 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
   }, [terminalFamily, terminalSize, tabId, patchState]);
 
   // ─── 2. PTY 创建 / 跨窗口 re-attach ───
-  // 两种进入条件:
-  //   a) state.created === false:首次创建 PTY
-  //   b) state.created === true 但本 body 尚未 attach，或 pool 已失去 attachment:
+  // 本 body 尚未 attach，或 pool 已失去 attachment 时创建 / re-attach:
+  //      state.created 仅用于判断成功后的状态补写，持久化回滚不代表 attachment 失效。
   //      切回任务时补收退出状态；侧边栏宿主在"内嵌 ↔ 独立子窗口"间迁移时,
   //      PTY 在 main 仍活着但输出 sink 绑在旧窗口的 webContents 上。
   //      ptyManager.create 是幂等 attach、可换 owner —— 再调一次把 sink 切到本窗口,
@@ -194,7 +193,7 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
     let needsAttach = true;
     const attach = () => {
       if (cancelled || entry.closing || pending || !needsAttach) return;
-      if (state.created && entry.ptyAttached && attachedEntryRef.current === entry) {
+      if (entry.ptyAttached && attachedEntryRef.current === entry) {
         if (isRemote) setCreating(false);
         return;
       }
