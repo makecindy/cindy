@@ -956,6 +956,35 @@ describe('utility one-shot candidates', () => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(result.ok).toBe(false);
     });
+
+    it('开启后:只给字符串的 profile 路线被跳过,不拿它当完整结果', async () => {
+      // 默认链走到 codex profile 时,正文由 maker.oneShot 返回,拿不到 provider
+      // 终态 —— 严格调用方不能把它当完整结果,也不能换用用户没配的模型。
+      chainState.refs = ['codex-gpt-5.4-mini'];
+      getProfiles.mockReturnValue([{
+        id: 'codex-gpt-5.4-mini',
+        model: 'gpt-5.4-mini',
+        transport: 'codex-responses',
+        auth: 'codex',
+        settingsTab: 'connections',
+        missingCredentialMessage: 'codex missing',
+      }]);
+      const maker = makerMock(true);
+
+      const result = await requestUtilityText(maker, 'hello', {
+        maxTokens: 200,
+        requireCompleteOutput: true,
+      });
+
+      expect(vi.mocked(maker.oneShot)).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+      if (result.ok) throw new Error('expected the strict chain to refuse the string-only route');
+      expect(result.attempts).toHaveLength(1);
+      expect(result.attempts[0]).toMatchObject({
+        status: 'skipped',
+        reason: 'unsupported_transport',
+      });
+    });
   });
 
   it('responses 的 SSE 终止事件被 max_output_tokens 截断 → 也放大预算重试', async () => {

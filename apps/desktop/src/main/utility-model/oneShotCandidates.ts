@@ -728,6 +728,18 @@ async function runDefaultProfileCandidates(
       attempts.push(skippedAttempt(candidate.profile, 'model_unavailable'));
       continue;
     }
+    // A strict caller turns the answer into user-visible state, so a route that
+    // cannot report the provider's terminal state is not usable for it. Skip
+    // that candidate instead of dispatching: the chain then falls back to the
+    // models the user configured, never to a substitute.
+    if (opts?.requireCompleteOutput && candidate.reportsTerminalState === false) {
+      log.debug('utility text candidate skipped: terminal state unobservable', {
+        providerId: candidate.providerId,
+        model: candidate.model,
+      });
+      attempts.push(skippedAttempt(candidate.profile, 'unsupported_transport'));
+      continue;
+    }
     // Profile candidates may spend time awaiting credential discovery before
     // they reach this loop (for example maker.getAgentAuthState for Codex).
     // Re-check the owning workflow immediately before invoking the candidate;
