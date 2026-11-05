@@ -2934,8 +2934,25 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
       expect(outcome.finalText).not.toContain('shot.png');
     } else expect(outcome.finalText).toBe(reason === 'output-limit' ? text : '');
     expect(outcome.errorMessage).toBe(reason === 'output-limit'
-      ? '模型已达到输出长度上限，本轮回复可能不完整。可以直接发送下一条消息继续。'
+      ? '模型已达到输出长度上限，本轮回复可能不完整。可以发送新消息继续；若反复触发，请降低推理强度或先压缩对话记录。'
       : 'provider failure');
+  });
+
+  it('official Telegram carries reasoning exhaustion details into its terminal notice', async () => {
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) => makeManualSession(opts.id ?? 'sess-x'));
+    const runner = createMakerHookSessionRunner({ log });
+    const pending = runner.run(baseReq({ source: { im: 'telegram', userText: 'hello' } }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    h.eventCbs.get('sess-new')!({ type: 'error', source: 'pi', data: {
+      reason: 'output-limit', message: 'limit', isTerminal: true,
+      outputLimit: { outputTokens: 131072, reasoningTokens: 131064 },
+    } });
+    const outcome = await pending;
+    expect(outcome.status).toBe('error');
+    expect(outcome.errorMessage).toContain('131064');
+    expect(outcome.errorMessage).toContain('131072');
+    expect(outcome.errorMessage).toContain('降低推理强度');
+    expect(outcome.errorMessage).not.toContain('可以发送新消息继续');
   });
 
   it('工具循环终态在官方 bot 也走共享安全文案, 不透出内部分类', async () => {
@@ -4315,7 +4332,7 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
       expect(ends[0]?.finalText).not.toContain('shot.png');
     } else expect(ends[0]?.finalText).toBe(reason === 'output-limit' ? text : '');
     expect(ends[0]?.errorMessage).toBe(reason === 'output-limit'
-      ? '模型已达到输出长度上限，本轮回复可能不完整。可以直接发送下一条消息继续。'
+      ? '模型已达到输出长度上限，本轮回复可能不完整。可以发送新消息继续；若反复触发，请降低推理强度或先压缩对话记录。'
       : 'provider failure');
   });
 

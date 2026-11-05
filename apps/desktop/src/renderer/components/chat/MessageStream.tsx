@@ -7283,6 +7283,7 @@ const MessageItem = memo(function MessageItem({
           reason={message.errorReason}
           providerId={message.errorProviderId}
           toolLoop={message.toolLoop}
+          outputLimit={message.outputLimit}
           sessionSource={sessionSource}
           onDiagnose={onDiagnoseError}
         />
