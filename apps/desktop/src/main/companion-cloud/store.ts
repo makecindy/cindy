@@ -185,15 +185,17 @@ export async function readCompanionValue(api: CompanionApi, store: CompanionStor
  * the preferences could not hold (absent there, or too large for them).
  */
 export async function readCompanionRows(api: CompanionApi, store: CompanionStore | undefined, actorId: string): Promise<CompanionRow[]> {
-  const rows = await readPreferences(api, actorId);
   // A restore is complete or fails: never let a switch-off pause decide what it reads.
   store?.retryNow();
-  if (!store?.active()) return rows;
+  if (!store?.active()) return readPreferences(api, actorId);
+  // The store first: an upload writes the preference row before the store deletion it leaves
+  // behind, so a value shrinking back meanwhile is never read as that deletion alone.
   let stored: CompanionRow[];
   try { stored = await store.values(actorId); } catch (error) {
-    if (!store.active()) return rows;
+    if (!store.active()) return readPreferences(api, actorId);
     throw error;
   }
+  const rows = await readPreferences(api, actorId);
   // A store deletion counts only for a key the preferences do not have: a value that shrank back
   // into the preferences leaves a deletion in the store, and the preference row wins.
   // A large store value wins over its preference row unless that row is newer than the value

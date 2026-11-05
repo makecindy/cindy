@@ -649,6 +649,47 @@ describe('companion store', () => {
       .resolves.toBeGreaterThanOrEqual(0);
   });
 
+  it('does not read a value shrinking back into the preferences during a restore as deleted', async () => {
+    const t = storeSetup();
+    const key = 'companion.memory.v1:big.md';
+    const big = 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000);
+    t.entries.set(key, { key, revision: 1, seq: 1, hash: 'big', size: big.length, deleted: false, value: { companionStore: 1, prefRevision: 0, value: { content: big } } });
+    // The previous home's upload lands between the restore's two reads: preference row, then store deletion.
+    let raced = false;
+    const racing = (async (...args: Parameters<typeof t.api>) => {
+      const result = await t.api(...args);
+      if (!raced) {
+        raced = true;
+        t.prefs.set(key, { key, value: { content: 'small' }, revision: 1 });
+        t.entries.set(key, { key, revision: 2, seq: 2, hash: 'deleted', size: 0, deleted: true });
+      }
+      return result;
+    }) as typeof t.api;
+    const store = createCompanionStore(racing, { enabled: () => true, transfer: t.transfer });
+    const rows = await readCompanionRows(racing, store, 'actor');
+    expect(rows.find(row => row.key === key)?.value).toEqual({ content: 'small' });
+  });
+
+  it('claims a bucket copy a newer preference here overtook, so a later hand-over is not blocked', async () => {
+    const t = storeSetup();
+    const key = 'companion.memory.v1:big.md';
+    t.setValues([profile('soul'), memory('big.md', 'x'.repeat(STORE_INLINE_MAX_BYTES + 1000))]);
+    await t.uploader.syncBot('bot', 'actor');
+    expect(t.entries.get(key)?.blob).toBeDefined();
+    // Restored elsewhere, then shrunk into the preferences while the copy could not be cleared.
+    const markForeign = () => t.state.update('bot', 'actor', entry => {
+      entry.stored = { ...entry.stored, [key]: { ...entry.stored![key]!, local: undefined } };
+      entry.storeSeeded = false;
+    });
+    markForeign();
+    t.setValues([profile('soul'), memory('big.md', 'small')]);
+    await t.uploader.syncBot('bot', 'actor');
+    markForeign();
+    await expect(t.uploader.syncBot('bot', 'actor', Number.POSITIVE_INFINITY, { requireAll: true, preferencesOnly: true }))
+      .resolves.toBeGreaterThanOrEqual(0);
+    expect(t.entries.get(key)?.deleted).toBe(true);
+  });
+
   it('passes a deletion of a value kept only in the store to the next restore', async () => {
     const t = storeSetup();
     const big = memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000));

@@ -155,7 +155,10 @@ export function createCompanionUploader(deps: {
     for (const [key, row] of server) {
       const pref = before?.prefs[key];
       if (!owned(key) || row.hash === TOMBSTONE_HASH || before?.stored?.[key]?.local || !pref?.local) continue;
-      const current = await store.entry(actorId, key) as { prefRevision?: number };
+      let current = await store.entry(actorId, key) as { prefRevision?: number; blob?: unknown } | undefined;
+      // A large value keeps its ordering revision inside the bucket file.
+      if (current?.blob) current = await store.valueOf(actorId, key);
+      if (!current) continue;
       if (current.prefRevision === undefined) continue;
       if (pref.revision > current.prefRevision) superseded.add(key);
       else kept.set(key, current.prefRevision);
