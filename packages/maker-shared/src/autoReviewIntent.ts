@@ -88,6 +88,14 @@ export function createAutoReviewIntentProjection() {
       !("sessionId" in source) || typeof source.sessionId !== "string" || !source.sessionId ||
       !("clientId" in source) || typeof source.clientId !== "string" || !source.clientId ||
       !("userText" in source) || typeof source.userText !== "string" || !source.userText.trim()) return undefined;
+    // A host-checked hand-off (2026-11-05) is reviewed by the delegated work itself; the
+    // owner's words remain provenance. Older receipts keep the owner's words as intent, and so
+    // does a hand-off too long for the review budget (it could not establish authorization).
+    if ("plainBody" in source && source.plainBody === true) {
+      if (!("delegatedText" in source) || typeof source.delegatedText !== "string" || !source.delegatedText.trim())
+        return undefined;
+      if (source.delegatedText.trim().length <= MAX_USER_INTENT_CHARS) return source.delegatedText;
+    }
     return source.userText;
   }
 

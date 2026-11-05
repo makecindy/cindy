@@ -55,6 +55,34 @@ Agent 用 `send_to_session` 把消息发给另一台电脑上的既有任务时�
 对端，按不可信文本清洗。它同样只用于归属展示，不是权限判据。
 来源任务不在查看者能直接打开的位置，标签只显示来源与 id，不提供跳转。
 
+## 跨任务委派：发送端判断，正文是原文（2026-11-05）
+
+本节取代下一节里「正文使用『用户原话 / Agent补充』两栏」「接收端以原话为审核意图」的部分；
+下一节其余内容（原话来源、旧格式的显示与校验、历史消息不改写）继续有效。
+
+- **正文是 Agent 写的原文。** `send_to_session`、插话、排队编辑、后台任务的启动与追问、本机
+  `send_to_agent` 都直接发送 Agent 写的内容，不再拼三行包装。主人原话只留在宿主回执里作来源记录
+  （`requestSource.userText`），语音通话找回后台结果仍靠它。语音通话转给伙伴主任务的那一步不变。
+- **主人授权在发送端判断。** 只有本轮是主人本人或已核实的主人代办时，宿主才判断这次转交是不是主人要的
+  （参照 Claude Code 在委派时的检查）：Auto 由发送任务自己的审核模型结合整段对话判断；Ask 下这类任务工具
+  每次都由主人看着参数确认；完全访问已把这个任务交给 Agent 自行处理，直接算主人授权。Plan 或权限正在变化时
+  只发普通消息。Auto 审核没有确认时**不发送**，把原因返回给发送方 Agent。
+- **接收端审核的是委派内容本身。** 判断通过后回执带 `ownerVerified`、`plainBody` 和 `delegatedText`
+  （与正文逐字相同），接收任务的 Auto 审核以这段委派内容为主人意图；超过审核预算（2000 字）的委派
+  退回以主人原话为意图，与改动前一致。发给模型的 `[消息来源]` 只说明「这是发送方宿主已核实的主人委派」。
+- **回到原话所在任务的消息不带授权。** 子任务向主任务汇报、伙伴回复发起方时，目标就是原话所在任务，
+  只保留来源记录。没经判断的消息同样只是普通的跨任务消息。
+- **编辑排队中的委派**：编辑后的文字是一次新的转交，由编辑方当前的请求重新判断；没通过判断就只保留来源。
+  旧格式的排队消息编辑后仍按旧格式引用原话。
+- **跨电脑**：`send_to_session` 发送前的能力探测返回 `plainRequestBody: 1` 时才发原文与回执，旧接收端照旧
+  收到三行包装与原话，行为完全不变。伙伴跨电脑私信的接收端要按发送端存下的正文核对发件人，暂时继续发旧格式。
+  详见[协议兼容](../dev-rules/protocol-compatibility.md)「跨任务委派的原文正文」。
+- 实现：`apps/desktop/src/main/maker-ipc/forwardedRequest.ts`（`captureAgentRequest`）、`register.ts`
+  （`authorizeSessionDelegation`）、`packages/maker-shared/src/autoReviewIntent.ts`（`verifiedOwnerRequestText`）、
+  `messageSourceNote.ts`；回归见 `forwardedRequest.test.ts`、`messageSourceNote.test.ts`、
+  `sessionControlService.test.ts`、`sessionHandoffIpc.test.ts`、`sessionHandoffRemote.test.ts`、
+  `botDirectMessageService.test.ts`。
+
 ## 跨任务请求与伙伴通话的原话（2026-10-20，2026-10-21 收窄）
 
 > 2026-11-05：固定三行格式与「伙伴的工作方式属于伙伴」方向冲突，方向是授权来源改为结构化数据、措辞交给伙伴规则，

@@ -335,6 +335,22 @@ describe('session control domain service', () => {
     expect(updated.autoReviewUserText).toEqual(queued.autoReviewUserText);
   });
 
+  // 2026-11-05: edited text is a new hand-off. It speaks for the owner only when the editor's
+  // own request checked exactly that text; otherwise the item keeps its provenance only.
+  it('re-checks an edited plain hand-off instead of carrying the old authority', () => {
+    const queued = item({ kind: 'session', senderSessionId: 'caller', displayText: 'before' });
+    const provenance = { userText: '修好就合进去', sessionId: 'owner', clientId: 'human' };
+    queued.autoReviewUserText = { kind: 'agent-request', request: { ...provenance, ownerVerified: true,
+      plainBody: true, delegatedText: 'before' } };
+    const unchecked = rebuildSessionQueueItem(queued, 'Also deploy it.');
+    expect(unchecked.persistedContent).toBe('Also deploy it.');
+    expect(unchecked.autoReviewUserText).toEqual({ kind: 'agent-request', request: { ...provenance, plainBody: true } });
+    const recheck = { ...provenance, ownerVerified: true as const, plainBody: true as const, delegatedText: 'Merge it after checks.' };
+    const checked = rebuildSessionQueueItem(queued, 'Merge it after checks.', { kind: 'agent-request', request: recheck });
+    expect(checked.persistedContent).toBe('Merge it after checks.');
+    expect(checked.autoReviewUserText).toEqual({ kind: 'agent-request', request: recheck });
+  });
+
   it('keeps renderer composer envelopes intact when rebuilding a non-session queue item', () => {
     const queued = item();
     queued.persistedContent = JSON.stringify({

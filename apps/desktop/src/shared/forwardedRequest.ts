@@ -40,6 +40,17 @@ export interface ForwardedRequestSource {
    * request for this task. Optional on the wire; older hosts drop or never send it.
    */
   ownerVerified?: true;
+  /**
+   * The message body is the agent's own text, not the 用户原话 / Agent补充 envelope
+   * (2026-11-05). `userText` stays the owner's words for provenance only.
+   */
+  plainBody?: true;
+  /**
+   * The sending host checked that the owner asked for this hand-off (its Auto review,
+   * the owner's own confirmation, or Full Access) and the body is exactly this text.
+   * Only set with `ownerVerified`; the receiver reviews against it instead of `userText`.
+   */
+  delegatedText?: string;
 }
 
 /** Kept under the existing protected, non-human input receipt. */
@@ -54,12 +65,17 @@ export function readForwardedRequestSource(value: unknown): ForwardedRequestSour
   if (source.userText === null) return { userText: null };
   if (typeof source.userText !== 'string' || typeof source.sessionId !== 'string'
     || !source.sessionId || typeof source.clientId !== 'string' || !source.clientId) return null;
+  const ownerVerified = source.ownerVerified === true;
   return { userText: source.userText, sessionId: source.sessionId, clientId: source.clientId,
-    ...(source.ownerVerified === true ? { ownerVerified: true as const } : {}) };
+    ...(ownerVerified ? { ownerVerified: true as const } : {}),
+    ...(source.plainBody === true ? { plainBody: true as const } : {}),
+    ...(ownerVerified && source.plainBody === true && typeof source.delegatedText === 'string' && source.delegatedText.trim()
+      ? { delegatedText: source.delegatedText } : {}) };
 }
 
 /** JSON string quoting keeps an agent-written label inside the supplement. No trimming or summarizing. */
 export function formatForwardedRequest(source: ForwardedRequestSource, supplement: string, locale: SupportedLocale = DEFAULT_LOCALE): string {
+  if (source.plainBody) return supplement;
   // New UI languages must also reach receivers released before those catalogs.
   // Until the wire negotiates dialect support, emit an existing English envelope.
   const wireLocale = locale === 'es' || locale === 'fr' || locale === 'de' || locale === 'pt-PT' || locale === 'pt-BR'
@@ -78,6 +94,8 @@ function formatReceiptDialect(source: ForwardedRequestSource, supplement: string
 
 /** Validate the sender's locale independently of this computer's language. Includes the original Chinese format. */
 export function matchesForwardedRequest(source: ForwardedRequestSource, body: string): boolean {
+  // A plain body carries no quotation to compare; only a checked hand-off names its exact text.
+  if (source.plainBody) return source.delegatedText !== undefined && source.delegatedText === body;
   const lines = body.split('\n');
   if (lines.length !== 3) return false;
   return SUPPORTED_LOCALES.some(locale => {
