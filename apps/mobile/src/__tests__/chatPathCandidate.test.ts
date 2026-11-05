@@ -237,6 +237,22 @@ describe('classifyChatPathLinkTarget', () => {
 });
 
 describe('resolveChatAbsPath', () => {
+  // Target-workdir semantics: a phone must not reinterpret a POSIX host's
+  // literal /E: directory as a Windows drive, or keep the extra slash on Windows.
+  it.each([
+    ['E:/repo', '/E:/demo', 'E:/demo'],
+    ['C:\\repo', '/E:\\demo\\a.ts', 'E:\\demo\\a.ts'],
+    ['\\\\server\\share', '/E:/demo', 'E:/demo'],
+    ['//server/share', '/E:/demo', 'E:/demo'],
+    ['/home/user', '/E:/demo', '/E:/demo'],
+    ['', '/E:/demo', '/E:/demo'],
+    ['C:/repo', '/home/a.ts', '/home/a.ts'],
+    ['C:/repo', '//server/share/a.ts', '//server/share/a.ts'],
+    ['C:/repo', '//E:/demo', '//E:/demo'],
+  ])('按目标工作目录 %s 解析 %s', (workdir, href, expected) => {
+    expect(resolveChatAbsPath(href, workdir)).toBe(expected);
+  });
+
   it('POSIX workdir join 相对路径', () => {
     expect(resolveChatAbsPath('src/App.tsx', '/w/proj')).toBe('/w/proj/src/App.tsx');
     expect(resolveChatAbsPath('./a.md', '/w/proj/')).toBe('/w/proj/./a.md');
