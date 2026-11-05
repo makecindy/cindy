@@ -50,7 +50,12 @@
     emptyOverrides: Object.freeze({}),
     emptyRecord: Object.freeze({}),
     botGroupsEmpty: Object.freeze({ ok: true, groups: Object.freeze([]) }),
-    deviceLinkState: Object.freeze({ status: 'unavailable', devices: Object.freeze([]) }),
+    deviceLinkState: Object.freeze({
+      remoteControlEnabled: false, keepAwake: false, linkStatus: 'stopped',
+      connectionIssue: null, standby: false,
+      controlledBy: Object.freeze([]), revokedControllers: Object.freeze([]),
+      disabledControlDeviceIds: Object.freeze([]), unresponsiveDeviceIds: Object.freeze([]),
+    }),
     voiceNotReady: Object.freeze({
       ok: false, serviceMode: Object.freeze({}), provider: 'openai-realtime-whisper',
       providerModel: '', auth: 'api-key', settingsTab: 'api-keys', error: 'not_available_on_host',
