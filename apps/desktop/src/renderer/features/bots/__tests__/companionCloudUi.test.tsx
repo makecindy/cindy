@@ -390,7 +390,7 @@ describe('companionCloudStore', () => {
       avatarColor: 'violet', description: '', preview: '', activityAt: 0, sessionId: null, online: false, connectionKnown: true }])).toEqual([]);
     restarted.unmount();
   });
-
+ 
   it('waits for cached identities before accepting a startup cloud push', async () => {
     const { renderHook } = await import('@testing-library/react');
     resetCompanionCloudStoreForTests();
