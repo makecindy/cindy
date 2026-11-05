@@ -43,6 +43,9 @@ const LAYER_SELECTOR = [
   '[role="dialog"]',
   '[role="alertdialog"]',
   '[data-radix-popper-content-wrapper]',
+  // MorphPopover 面板（输入框的 + / 权限菜单、模型选择器）：role="group"，在 document
+  // capture 里自己用 Esc 收起，且不 preventDefault。
+  '[data-morph-side]',
 ].join(',');
 
 /**

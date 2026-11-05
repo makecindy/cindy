@@ -86,8 +86,14 @@ describe('shouldCardShortcutYield', () => {
     const plain = document.createElement('div');
     menu.append(plain);
     const outsideButton = document.createElement('button');
-    document.body.append(menu, outsideButton);
+    // MorphPopover 面板是 role="group"，靠 data-morph-side 认出它是浮层。
+    const morph = document.createElement('div');
+    morph.setAttribute('role', 'group');
+    morph.setAttribute('data-morph-side', 'top');
+    document.body.append(menu, outsideButton, morph);
     expect(shouldCardShortcutYield(event(plain, {key: 'Escape'}), 'dismiss', owner)).toBe(true);
+    expect(shouldCardShortcutYield(event(morph, {key: 'Escape'}), 'dismiss', owner)).toBe(true);
+    expect(shouldCardShortcutYield(event(morph, {key: 'Enter'}), 'activate', owner)).toBe(true);
     expect(shouldCardShortcutYield(event(outsideButton, {key: 'Escape'}), 'dismiss', owner)).toBe(true);
     expect(shouldCardShortcutYield(event(outsideButton, {key: '1'}), 'character', owner)).toBe(true);
   });

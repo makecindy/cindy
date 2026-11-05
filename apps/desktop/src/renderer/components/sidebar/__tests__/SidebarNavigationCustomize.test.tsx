@@ -368,6 +368,14 @@ describe('sidebar navigation customization', () => {
     document.body.appendChild(lightbox);
     escape(document.body);
     lightbox.remove();
+    // An open composer MorphPopover (focus on its panel surface) closes first.
+    const morph = document.createElement('div');
+    morph.setAttribute('role', 'group');
+    morph.setAttribute('data-morph-side', 'top');
+    morph.tabIndex = -1;
+    document.body.appendChild(morph);
+    escape(morph);
+    morph.remove();
     input.remove();
     expect(onDone).not.toHaveBeenCalled();
     // Esc on the panel's own checkbox still closes it.
