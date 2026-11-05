@@ -3084,15 +3084,33 @@ struct ExpandedIslandTopBar: View {
   }
 
   private var regularBody: some View {
-    HStack(spacing: 8) {
-      leadingContent(
-        width: layout.width - expandedIslandCardHorizontalPadding * 2
-          - ExpandedIslandToolbarControls.width - 8
-      )
-      Spacer(minLength: 8)
-      ExpandedIslandToolbarControls(strings: strings, soundEnabled: soundEnabled, eventSink: eventSink)
+    ZStack {
+      HStack(spacing: 8) {
+        leadingContent(width: 0, includesQuota: false)
+        Spacer(minLength: 8)
+        ExpandedIslandToolbarControls(strings: strings, soundEnabled: soundEnabled, eventSink: eventSink)
+      }
+      if title == nil && !quota.isEmpty {
+        centeredQuota
+      }
     }
     .frame(maxWidth: .infinity, minHeight: expandedIslandTopBarHeight, alignment: .center)
+  }
+
+  /// Centered in the bar, where the idle island shows it too, so the expanded top bar reads
+  /// the same with or without tasks; it moves aside only as far as the mascot or the toolbar
+  /// needs.
+  private var centeredQuota: some View {
+    let barWidth = layout.width - expandedIslandCardHorizontalPadding * 2
+    let leadingReserve: CGFloat = mascotState != nil ? 18 + 8 : 0
+    let trailingReserve = ExpandedIslandToolbarControls.width + 8
+    let quotaWidth = barWidth - leadingReserve - trailingReserve
+    let rowWidth = AgentIslandQuotaRow.selection(items: quota, maxWidth: quotaWidth).nominalWidth
+    let leftEdge = (barWidth - rowWidth) / 2
+    let shiftRight = max(0, leadingReserve - leftEdge)
+    let shiftLeft = max(0, leftEdge + rowWidth - (barWidth - trailingReserve))
+    return AgentIslandQuotaRow(items: quota, maxWidth: quotaWidth)
+      .offset(x: shiftRight - shiftLeft)
   }
 
   private var hardwareNotchBody: some View {
@@ -3100,7 +3118,7 @@ struct ExpandedIslandTopBar: View {
       let notchWidth = min(layout.notchWidth, max(0, proxy.size.width))
       let sideWidth = max(0, (proxy.size.width - notchWidth) / 2)
       HStack(spacing: 0) {
-        leadingContent(width: sideWidth)
+        leadingContent(width: sideWidth, includesQuota: true)
           .frame(width: sideWidth, alignment: .leading)
           .clipped()
 
@@ -3121,11 +3139,11 @@ struct ExpandedIslandTopBar: View {
     )
   }
 
-  /// `width` is the room left of the toolbar (or beside the notch); quota fills what the
-  /// mascot leaves.
+  /// Beside a hardware notch the center is taken, so quota follows the mascot and fills
+  /// what it leaves of `width`.
   @ViewBuilder
-  private func leadingContent(width: CGFloat) -> some View {
-    if mascotState != nil || title != nil || !quota.isEmpty {
+  private func leadingContent(width: CGFloat, includesQuota: Bool) -> some View {
+    if mascotState != nil || title != nil || (includesQuota && !quota.isEmpty) {
       HStack(spacing: 8) {
         if let mascotState {
           RunningMascotIcon(skin: mascotSkin, state: mascotState, size: 18, namespace: runningMascotNamespace)
@@ -3137,7 +3155,7 @@ struct ExpandedIslandTopBar: View {
             .foregroundColor(Color.white.opacity(0.34))
             .lineLimit(1)
             .truncationMode(.tail)
-        } else {
+        } else if includesQuota {
           AgentIslandQuotaRow(items: quota, maxWidth: width - (mascotState != nil ? 18 + 8 : 0))
         }
       }

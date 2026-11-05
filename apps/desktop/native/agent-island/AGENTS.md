@@ -71,6 +71,7 @@ pnpm --filter desktop preview:island-mascots
 **灵动岛宽度由用户决定，不为余量加宽**：放得下几个显示几个。菜单栏「最低余量」对应的套餐
 （`AgentIslandQuotaItem.lowest`，与菜单栏图标旁的数字同源）先占位，其余按菜单栏顺序补，显示仍按菜单栏顺序；
 连它的完整芯片都放不下时（如刘海屏默认宽度）收成只有百分比。这样拉宽过程只会在它周围增加套餐，不会把它换掉。
-空闲展开时余量留在收起时的居中位置，只在会碰到右侧工具按钮时左移。芯片的标称宽度由 main 算好随 `AgentIslandQuotaItem.width` 下发，helper 用它判断
+展开时余量一律在顶栏居中（空闲时连同角色一起居中，与收起时同位；有任务时角色在最左），只在会碰到
+角色或右侧工具按钮时让开；刘海屏展开时中间被刘海占住，余量跟在左侧角色后面。芯片的标称宽度由 main 算好随 `AgentIslandQuotaItem.width` 下发，helper 用它判断
 放得下几个、不测字体；改芯片字号、logo 尺寸或间距时，同步 `shared/agentIsland.ts` 的 `AGENT_ISLAND_QUOTA_*`
 与 `AgentIslandQuotaRow` 的常量，并重新实测「标称 ≥ 实绘」（见 `agentIslandCompactBadgeWidth.test.ts`）。
