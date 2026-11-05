@@ -11,8 +11,16 @@ name = "agent-net-sim"
 version = "0.0.0"
 dependencies = [
  "agent-net-core",
+ "agent-net-udp",
  "ring",
  "x25519-dalek",
+]
+
+[[package]]
+name = "agent-net-udp"
+version = "0.0.0"
+dependencies = [
+ "agent-net-core",
 ]
 
 [[package]]

@@ -1,0 +1,396 @@
+## old 下载 不换 第1轮 14:44:03
+client 0.0.0.0:56018 -> <上海云主机>:47812: down 15000000, notice=false, rebind at []
+established after 0.006s
+t=1.0s sent=0 received=1815250 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3996 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=440 packets_received=1327
+t=2.0s sent=0 received=2492030 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3996 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=808 packets_received=1824
+t=3.0s sent=0 received=3177030 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3996 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=1151 packets_received=2325
+t=4.0s sent=0 received=3857920 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3996 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=1510 packets_received=2828
+t=5.0s sent=0 received=4530590 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3996 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=1857 packets_received=3325
+t=6.0s sent=0 received=5219700 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3996 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=2204 packets_received=3824
+t=7.0s sent=0 received=5925250 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3996 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=2540 packets_received=4326
+t=8.0s sent=0 received=6595180 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3996 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=2878 packets_received=4820
+t=9.0s sent=0 received=7280180 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3996 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=3227 packets_received=5321
+t=10.0s sent=0 received=7952850 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3996 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=3556 packets_received=5820
+t=11.0s sent=0 received=8633740 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3996 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=3816 packets_received=6304
+t=12.0s sent=0 received=9324220 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3996 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=3972 packets_received=6807
+t=13.0s sent=0 received=10003740 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3996 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=4118 packets_received=7303
+t=14.0s sent=0 received=10688740 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3996 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=4281 packets_received=7803
+t=15.0s sent=0 received=11379220 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3996 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=4448 packets_received=8307
+t=16.0s sent=0 received=12061480 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3996 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=4617 packets_received=8806
+t=17.0s sent=0 received=12731410 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3996 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=4784 packets_received=9294
+t=18.0s sent=0 received=13426000 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3996 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=4934 packets_received=9801
+t=19.0s sent=0 received=14101410 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3996 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=5090 packets_received=10294
+t=20.0s sent=0 received=14786410 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3996 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=5240 packets_received=10794
+done: delivered=15000000 seconds=20.32 mbps_per_second=[14.5 5.4 5.5 5.4 5.4 5.5 5.6 5.4 5.5 5.4 5.4 5.5 5.4 5.5 5.5 5.5 5.4 5.6 5.4 5.5 1.7] longest_gaps=[] path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3996 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=5282 packets_received=10950 error=None
+client stats: EndpointStats { datagrams_received: 10951, datagrams_sent: 5284, bytes_received: 15329907, bytes_sent: 353877, unknown_destination: 0, rejected_initiations: 0, send_errors: 0, rebinds: 0 }
+exit 0
+## old 下载 换端口 不知道 第1轮 14:44:53
+client 0.0.0.0:57575 -> <上海云主机>:47812: down 15000000, notice=false, rebind at [3.0, 6.0]
+established after 0.007s
+t=1.0s sent=0 received=1661810 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5400 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=455 packets_received=1229
+t=2.0s sent=0 received=2353660 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5400 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=826 packets_received=1731
+t=3.0s sent=0 received=3045510 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5400 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=1205 packets_received=2227
+rebound at 3.00s: 0.0.0.0:57575 -> 0.0.0.0:57600
+t=4.0s sent=0 received=3045510 path_challenges=0 migrations=0 path_failures=0 silence_pings=1 srtt_us=5400 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=1206 packets_received=2227
+t=5.0s sent=0 received=3842850 path_challenges=0 migrations=0 path_failures=0 silence_pings=1 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=1607 packets_received=2814
+t=6.0s sent=0 received=4549770 path_challenges=0 migrations=0 path_failures=0 silence_pings=1 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=2023 packets_received=3331
+rebound at 6.00s: 0.0.0.0:57600 -> 0.0.0.0:57625
+t=7.0s sent=0 received=5185450 path_challenges=0 migrations=0 path_failures=0 silence_pings=1 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=2340 packets_received=3790
+t=8.0s sent=0 received=5867710 path_challenges=0 migrations=0 path_failures=0 silence_pings=1 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=2704 packets_received=4289
+t=9.0s sent=0 received=6523940 path_challenges=0 migrations=0 path_failures=0 silence_pings=1 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=3076 packets_received=4781
+t=10.0s sent=0 received=7222640 path_challenges=0 migrations=0 path_failures=0 silence_pings=1 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=3472 packets_received=5278
+t=11.0s sent=0 received=7904900 path_challenges=0 migrations=0 path_failures=0 silence_pings=1 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=3854 packets_received=5780
+t=12.0s sent=0 received=8589900 path_challenges=0 migrations=0 path_failures=0 silence_pings=1 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=4251 packets_received=6276
+t=13.0s sent=0 received=9244760 path_challenges=0 migrations=0 path_failures=0 silence_pings=1 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=4656 packets_received=6775
+t=14.0s sent=0 received=9954420 path_challenges=0 migrations=0 path_failures=0 silence_pings=1 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=5056 packets_received=7274
+t=15.0s sent=0 received=10636680 path_challenges=0 migrations=0 path_failures=0 silence_pings=1 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=5457 packets_received=7771
+t=16.0s sent=0 received=11310720 path_challenges=0 migrations=0 path_failures=0 silence_pings=1 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=5863 packets_received=8273
+t=17.0s sent=0 received=12005310 path_challenges=0 migrations=0 path_failures=0 silence_pings=1 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=6279 packets_received=8773
+t=18.0s sent=0 received=12697160 path_challenges=0 migrations=0 path_failures=0 silence_pings=1 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=6683 packets_received=9274
+t=19.0s sent=0 received=13380790 path_challenges=0 migrations=0 path_failures=0 silence_pings=1 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=7096 packets_received=9774
+t=20.0s sent=0 received=14067160 path_challenges=0 migrations=0 path_failures=0 silence_pings=1 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=7511 packets_received=10272
+t=21.0s sent=0 received=14732980 path_challenges=0 migrations=0 path_failures=0 silence_pings=1 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=7848 packets_received=10768
+done: delivered=15000000 seconds=21.38 mbps_per_second=[13.3 5.5 5.5 0.0 6.4 5.7 5.1 5.5 5.2 5.6 5.5 5.5 5.2 5.7 5.5 5.4 5.6 5.5 5.5 5.5 5.3 2.1] longest_gaps=[3.0s+1.0s 6.0s+0.2s 5.1s+0.1s] path_challenges=0 migrations=0 path_failures=0 silence_pings=1 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=7999 packets_received=10954 error=None
+client stats: EndpointStats { datagrams_received: 10955, datagrams_sent: 8001, bytes_received: 15332795, bytes_sent: 554283, unknown_destination: 0, rejected_initiations: 0, send_errors: 0, rebinds: 2 }
+exit 0
+## old 下载 换端口 知道 第1轮 14:45:45
+client 0.0.0.0:53201 -> <上海云主机>:47812: down 15000000, notice=true, rebind at [3.0, 6.0]
+established after 0.007s
+t=1.0s sent=0 received=1446720 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5742 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=457 packets_received=1067
+t=2.0s sent=0 received=2150900 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5742 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=823 packets_received=1571
+t=3.0s sent=0 received=2827680 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5742 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=1176 packets_received=2070
+rebound at 3.00s: 0.0.0.0:53201 -> 0.0.0.0:51488
+t=4.0s sent=0 received=3519530 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=1 packets_sent=1538 packets_received=2571
+t=5.0s sent=0 received=4185350 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=1 packets_sent=1944 packets_received=3073
+t=6.0s sent=0 received=4890900 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=1 packets_sent=2352 packets_received=3573
+rebound at 6.00s: 0.0.0.0:51488 -> 0.0.0.0:56227
+t=7.0s sent=0 received=5564940 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=2712 packets_received=4065
+t=8.0s sent=0 received=6243090 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=3086 packets_received=4561
+t=9.0s sent=0 received=6923980 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=3434 packets_received=5059
+t=10.0s sent=0 received=7596650 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=3813 packets_received=5557
+t=11.0s sent=0 received=8287130 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=4193 packets_received=6055
+t=12.0s sent=0 received=8969390 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=4580 packets_received=6554
+t=13.0s sent=0 received=9648910 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=4973 packets_received=7053
+t=14.0s sent=0 received=10343500 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=5362 packets_received=7553
+t=15.0s sent=0 received=11023020 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=5772 packets_received=8053
+t=16.0s sent=0 received=11706650 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=6172 packets_received=8554
+t=17.0s sent=0 received=12394390 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=6571 packets_received=9051
+t=18.0s sent=0 received=13065690 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=6973 packets_received=9546
+t=19.0s sent=0 received=13753430 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=7363 packets_received=10044
+t=20.0s sent=0 received=14428840 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=7764 packets_received=10545
+done: delivered=15000000 seconds=20.81 mbps_per_second=[11.6 5.6 5.4 5.5 5.3 5.6 5.4 5.4 5.4 5.4 5.5 5.5 5.4 5.6 5.4 5.5 5.5 5.4 5.5 5.4 4.6] longest_gaps=[] path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=8091 packets_received=10952 error=None
+client stats: EndpointStats { datagrams_received: 10953, datagrams_sent: 8093, bytes_received: 15329979, bytes_sent: 560266, unknown_destination: 0, rejected_initiations: 0, send_errors: 0, rebinds: 2 }
+exit 0
+## old 上传 不换 第1轮 14:46:35
+client 0.0.0.0:55005 -> <上海云主机>:47812: up 120000000, notice=false, rebind at []
+established after 0.006s
+t=1.0s sent=26389992 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4718 bandwidth_mbps=111.3 retransmitted=8325 timeouts=0 packets_sent=30118 packets_received=2370
+t=2.0s sent=38893982 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4789 bandwidth_mbps=116.9 retransmitted=8596 timeouts=0 packets_sent=39474 packets_received=4348
+t=3.0s sent=51297962 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4771 bandwidth_mbps=121.6 retransmitted=8868 timeouts=0 packets_sent=48854 packets_received=6311
+t=4.0s sent=63812912 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4930 bandwidth_mbps=109.7 retransmitted=9090 timeouts=0 packets_sent=58160 packets_received=8252
+t=5.0s sent=76242922 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4933 bandwidth_mbps=122.6 retransmitted=9378 timeouts=0 packets_sent=67530 packets_received=10224
+t=6.0s sent=88704442 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4891 bandwidth_mbps=111.2 retransmitted=9650 timeouts=0 packets_sent=76885 packets_received=12179
+t=7.0s sent=101161852 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4773 bandwidth_mbps=113.5 retransmitted=9897 timeouts=0 packets_sent=86238 packets_received=14158
+t=8.0s sent=113586382 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4789 bandwidth_mbps=117.6 retransmitted=10099 timeouts=0 packets_sent=95509 packets_received=16156
+done: delivered=0 seconds=8.68 mbps_per_second=[] longest_gaps=[] path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4982 bandwidth_mbps=116.2 retransmitted=10260 timeouts=0 packets_sent=101826 packets_received=17494 error=None
+client stats: EndpointStats { datagrams_received: 17496, datagrams_sent: 101689, bytes_received: 794618, bytes_sent: 142359781, unknown_destination: 0, rejected_initiations: 0, send_errors: 139, rebinds: 0 }
+exit 0
+## old 上传 换端口 不知道 第1轮 14:47:01
+client 0.0.0.0:50388 -> <上海云主机>:47812: up 120000000, notice=false, rebind at [3.0, 6.0]
+established after 0.007s
+t=1.0s sent=26374922 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5601 bandwidth_mbps=109.1 retransmitted=7438 timeouts=0 packets_sent=28619 packets_received=2359
+t=2.0s sent=38824112 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5623 bandwidth_mbps=113.2 retransmitted=7708 timeouts=0 packets_sent=37984 packets_received=4305
+t=3.0s sent=51143152 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5685 bandwidth_mbps=111.3 retransmitted=7971 timeouts=0 packets_sent=47334 packets_received=6243
+rebound at 3.00s: 0.0.0.0:50388 -> 0.0.0.0:50413
+t=4.0s sent=63617002 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4331 bandwidth_mbps=114.0 retransmitted=8820 timeouts=0 packets_sent=57176 packets_received=8124
+t=5.0s sent=76040162 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4440 bandwidth_mbps=116.3 retransmitted=9131 timeouts=0 packets_sent=66591 packets_received=10075
+t=6.0s sent=88514012 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4421 bandwidth_mbps=110.4 retransmitted=9453 timeouts=0 packets_sent=75984 packets_received=12070
+rebound at 6.00s: 0.0.0.0:50413 -> 0.0.0.0:50438
+t=7.0s sent=100927582 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4883 bandwidth_mbps=115.5 retransmitted=9848 timeouts=0 packets_sent=85448 packets_received=13978
+t=8.0s sent=113343892 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4861 bandwidth_mbps=112.9 retransmitted=10126 timeouts=0 packets_sent=94821 packets_received=15925
+done: delivered=0 seconds=8.70 mbps_per_second=[] longest_gaps=[] path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4891 bandwidth_mbps=111.6 retransmitted=10289 timeouts=0 packets_sent=101292 packets_received=17317 error=None
+client stats: EndpointStats { datagrams_received: 17318, datagrams_sent: 101260, bytes_received: 792159, bytes_sent: 141759168, unknown_destination: 0, rejected_initiations: 0, send_errors: 34, rebinds: 2 }
+exit 0
+## old 上传 换端口 知道 第1轮 14:47:26
+client 0.0.0.0:62965 -> <上海云主机>:47812: up 120000000, notice=true, rebind at [3.0, 6.0]
+established after 0.007s
+t=1.0s sent=26453012 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4824 bandwidth_mbps=124.3 retransmitted=7349 timeouts=0 packets_sent=29196 packets_received=2404
+t=2.0s sent=38854252 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4931 bandwidth_mbps=116.7 retransmitted=7653 timeouts=0 packets_sent=38577 packets_received=4309
+t=3.0s sent=51351392 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4939 bandwidth_mbps=118.0 retransmitted=7943 timeouts=0 packets_sent=47968 packets_received=6240
+rebound at 3.00s: 0.0.0.0:62965 -> 0.0.0.0:63542
+t=4.0s sent=63364922 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5040 bandwidth_mbps=108.3 retransmitted=15909 timeouts=0 packets_sent=68434 packets_received=7936
+t=5.0s sent=75805892 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4989 bandwidth_mbps=114.7 retransmitted=16148 timeouts=0 packets_sent=77751 packets_received=9928
+t=6.0s sent=88281112 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5080 bandwidth_mbps=115.6 retransmitted=16450 timeouts=0 packets_sent=87160 packets_received=11901
+rebound at 6.00s: 0.0.0.0:63542 -> 0.0.0.0:63669
+t=7.0s sent=100091882 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5588 bandwidth_mbps=117.5 retransmitted=24974 timeouts=0 packets_sent=108368 packets_received=13596
+t=8.0s sent=112642452 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5632 bandwidth_mbps=108.3 retransmitted=25329 timeouts=0 packets_sent=117791 packets_received=15496
+done: delivered=0 seconds=8.76 mbps_per_second=[] longest_gaps=[] path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5645 bandwidth_mbps=114.1 retransmitted=25501 timeouts=0 packets_sent=124815 packets_received=16999 error=None
+client stats: EndpointStats { datagrams_received: 17001, datagrams_sent: 124510, bytes_received: 839922, bytes_sent: 174307792, unknown_destination: 0, rejected_initiations: 0, send_errors: 306, rebinds: 2 }
+exit 0
+## old 下载 不换 第2轮 14:48:17
+client 0.0.0.0:53435 -> <上海云主机>:47812: down 15000000, notice=false, rebind at []
+established after 0.007s
+t=1.0s sent=0 received=1352190 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=6362 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=365 packets_received=993
+t=2.0s sent=0 received=2061850 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=6362 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=729 packets_received=1506
+t=3.0s sent=0 received=2750960 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=6362 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=1070 packets_received=2009
+t=4.0s sent=0 received=3426370 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=6362 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=1405 packets_received=2511
+t=5.0s sent=0 received=4118220 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=6362 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=1736 packets_received=3007
+t=6.0s sent=0 received=4797740 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=6362 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=2016 packets_received=3507
+t=7.0s sent=0 received=5475890 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=6362 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=2320 packets_received=4005
+t=8.0s sent=0 received=6163630 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=6362 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=2645 packets_received=4505
+t=9.0s sent=0 received=6843150 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=6362 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=2974 packets_received=5002
+t=10.0s sent=0 received=7513080 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=6362 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=3180 packets_received=5486
+t=11.0s sent=0 received=8204930 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=6362 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=3333 packets_received=5991
+t=12.0s sent=0 received=8868010 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=6362 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=3469 packets_received=6475
+t=13.0s sent=0 received=9563970 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=6362 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=3625 packets_received=6988
+t=14.0s sent=0 received=10228420 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=6362 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=3768 packets_received=7474
+t=15.0s sent=0 received=10907940 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=6362 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=3909 packets_received=7972
+t=16.0s sent=0 received=11598420 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=6362 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=4058 packets_received=8474
+t=17.0s sent=0 received=12297120 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=6362 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=4205 packets_received=8984
+t=18.0s sent=0 received=12971160 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=6362 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=4346 packets_received=9476
+t=19.0s sent=0 received=13663010 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=6362 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=4513 packets_received=9981
+t=20.0s sent=0 received=14335680 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=6362 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=4661 packets_received=10472
+done: delivered=15000000 seconds=20.97 mbps_per_second=[10.8 5.7 5.5 5.4 5.5 5.4 5.4 5.5 5.4 5.4 5.5 5.3 5.6 5.3 5.4 5.5 5.6 5.4 5.5 5.4 5.3] longest_gaps=[] path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=6362 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=4872 packets_received=10959 error=None
+client stats: EndpointStats { datagrams_received: 10960, datagrams_sent: 4874, bytes_received: 15342377, bytes_sent: 308299, unknown_destination: 0, rejected_initiations: 0, send_errors: 0, rebinds: 0 }
+exit 0
+## old 下载 换端口 不知道 第2轮 14:49:08
+client 0.0.0.0:61646 -> <上海云主机>:47812: down 15000000, notice=false, rebind at [3.0, 6.0]
+established after 0.006s
+t=1.0s sent=0 received=1423430 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5120 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=401 packets_received=1050
+t=2.0s sent=0 received=2202960 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5120 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=816 packets_received=1610
+t=3.0s sent=0 received=2887960 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5120 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=1161 packets_received=2109
+rebound at 3.00s: 0.0.0.0:61646 -> 0.0.0.0:52223
+t=4.0s sent=0 received=2887960 path_challenges=0 migrations=0 path_failures=0 silence_pings=1 srtt_us=5120 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=1162 packets_received=2109
+t=5.0s sent=0 received=3701740 path_challenges=0 migrations=0 path_failures=0 silence_pings=1 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=1565 packets_received=2709
+t=6.0s sent=0 received=4386740 path_challenges=0 migrations=0 path_failures=0 silence_pings=1 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=1936 packets_received=3209
+rebound at 6.00s: 0.0.0.0:52223 -> 0.0.0.0:59115
+t=7.0s sent=0 received=4386740 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=1937 packets_received=3209
+t=8.0s sent=0 received=5203260 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=1 packets_sent=2335 packets_received=3808
+t=9.0s sent=0 received=5886890 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=1 packets_sent=2720 packets_received=4307
+t=10.0s sent=0 received=6573260 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=1 packets_sent=3078 packets_received=4804
+t=11.0s sent=0 received=7258260 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=1 packets_sent=3434 packets_received=5304
+t=12.0s sent=0 received=7937780 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=1 packets_sent=3781 packets_received=5798
+t=13.0s sent=0 received=8620040 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=1 packets_sent=4126 packets_received=6300
+t=14.0s sent=0 received=9291340 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=1 packets_sent=4471 packets_received=6789
+t=15.0s sent=0 received=9988670 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=1 packets_sent=4831 packets_received=7294
+t=16.0s sent=0 received=10665450 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=1 packets_sent=4974 packets_received=7788
+t=17.0s sent=0 received=11335380 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=1 packets_sent=5134 packets_received=8277
+t=18.0s sent=0 received=12027230 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=1 packets_sent=5293 packets_received=8782
+t=19.0s sent=0 received=12706750 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=1 packets_sent=5449 packets_received=9278
+t=20.0s sent=0 received=13373940 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=1 packets_sent=5601 packets_received=9765
+t=21.0s sent=0 received=14075380 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=1 packets_sent=5766 packets_received=10277
+t=22.0s sent=0 received=14753530 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=1 packets_sent=5922 packets_received=10772
+done: delivered=15000000 seconds=22.35 mbps_per_second=[11.4 6.2 5.5 0.0 6.5 5.5 0.0 6.5 5.5 5.5 5.5 5.4 5.5 5.4 5.6 5.4 5.4 5.5 5.4 5.3 5.6 5.4 2.0] longest_gaps=[3.0s+1.0s 6.0s+1.0s] path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=1 packets_sent=5983 packets_received=10952 error=None
+client stats: EndpointStats { datagrams_received: 10953, datagrams_sent: 5985, bytes_received: 15329979, bytes_sent: 406382, unknown_destination: 0, rejected_initiations: 0, send_errors: 0, rebinds: 2 }
+exit 0
+## old 下载 换端口 知道 第2轮 14:49:59
+client 0.0.0.0:52820 -> <上海云主机>:47812: down 15000000, notice=true, rebind at [3.0, 6.0]
+established after 0.007s
+t=1.0s sent=0 received=1430280 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5220 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=435 packets_received=1061
+t=2.0s sent=0 received=2128980 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5220 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=812 packets_received=1555
+t=3.0s sent=0 received=2804390 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5220 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=1178 packets_received=2052
+rebound at 3.00s: 0.0.0.0:52820 -> 0.0.0.0:52845
+t=4.0s sent=0 received=3468840 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=1 packets_sent=1551 packets_received=2543
+t=5.0s sent=0 received=4145620 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=1 packets_sent=1931 packets_received=3035
+t=6.0s sent=0 received=4825140 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=1 packets_sent=2349 packets_received=3533
+rebound at 6.00s: 0.0.0.0:52845 -> 0.0.0.0:51215
+t=7.0s sent=0 received=5510140 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=2709 packets_received=4026
+t=8.0s sent=0 received=6185550 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=3108 packets_received=4521
+t=9.0s sent=0 received=6870550 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=3501 packets_received=5021
+t=10.0s sent=0 received=7541850 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=3904 packets_received=5518
+t=11.0s sent=0 received=8228220 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=4288 packets_received=6015
+t=12.0s sent=0 received=8906370 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=4689 packets_received=6515
+t=13.0s sent=0 received=9599590 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=5091 packets_received=7011
+t=14.0s sent=0 received=10275000 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=5488 packets_received=7509
+t=15.0s sent=0 received=10958630 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=5890 packets_received=8005
+t=16.0s sent=0 received=11640890 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=6292 packets_received=8504
+t=17.0s sent=0 received=12321780 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=6684 packets_received=9002
+t=18.0s sent=0 received=13002670 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=7094 packets_received=9504
+t=19.0s sent=0 received=13689040 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=7501 packets_received=10001
+t=20.0s sent=0 received=14375410 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=7895 packets_received=10501
+done: delivered=15000000 seconds=20.91 mbps_per_second=[11.4 5.6 5.4 5.3 5.4 5.4 5.5 5.4 5.5 5.4 5.5 5.4 5.5 5.4 5.5 5.5 5.4 5.4 5.5 5.5 5.0] longest_gaps=[] path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=8243 packets_received=10952 error=None
+client stats: EndpointStats { datagrams_received: 10953, datagrams_sent: 8245, bytes_received: 15329979, bytes_sent: 571206, unknown_destination: 0, rejected_initiations: 0, send_errors: 0, rebinds: 2 }
+exit 0
+## old 上传 不换 第2轮 14:50:37
+client 0.0.0.0:58559 -> <上海云主机>:47812: up 120000000, notice=false, rebind at []
+established after 0.006s
+t=1.0s sent=26496852 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4212 bandwidth_mbps=112.0 retransmitted=7280 timeouts=0 packets_sent=28862 packets_received=2350
+t=2.0s sent=38947412 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4188 bandwidth_mbps=114.9 retransmitted=7592 timeouts=0 packets_sent=38257 packets_received=4336
+t=3.0s sent=51387012 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4122 bandwidth_mbps=109.8 retransmitted=7978 timeouts=0 packets_sent=47714 packets_received=6218
+t=4.0s sent=63682762 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4335 bandwidth_mbps=108.1 retransmitted=8375 timeouts=0 packets_sent=57216 packets_received=8055
+t=5.0s sent=76241552 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4130 bandwidth_mbps=123.4 retransmitted=8621 timeouts=0 packets_sent=66558 packets_received=9947
+t=6.0s sent=88757872 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4103 bandwidth_mbps=113.1 retransmitted=8974 timeouts=0 packets_sent=75995 packets_received=11902
+t=7.0s sent=101186512 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4300 bandwidth_mbps=107.1 retransmitted=9358 timeouts=0 packets_sent=85455 packets_received=13804
+t=8.0s sent=113648032 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4055 bandwidth_mbps=111.0 retransmitted=9674 timeouts=0 packets_sent=94861 packets_received=15660
+done: delivered=0 seconds=8.68 mbps_per_second=[] longest_gaps=[] path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4146 bandwidth_mbps=123.9 retransmitted=10020 timeouts=0 packets_sent=101334 packets_received=16924 error=None
+client stats: EndpointStats { datagrams_received: 16925, datagrams_sent: 101198, bytes_received: 782464, bytes_sent: 141672368, unknown_destination: 0, rejected_initiations: 0, send_errors: 138, rebinds: 0 }
+exit 0
+## old 上传 换端口 不知道 第2轮 14:51:03
+client 0.0.0.0:53977 -> <上海云主机>:47812: up 120000000, notice=false, rebind at [3.0, 6.0]
+established after 0.007s
+t=1.0s sent=26533842 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5448 bandwidth_mbps=114.1 retransmitted=6919 timeouts=0 packets_sent=27483 packets_received=2457
+t=2.0s sent=38822742 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5363 bandwidth_mbps=113.8 retransmitted=7141 timeouts=0 packets_sent=36687 packets_received=4392
+t=3.0s sent=51207542 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5307 bandwidth_mbps=112.5 retransmitted=7450 timeouts=0 packets_sent=46027 packets_received=6304
+rebound at 3.00s: 0.0.0.0:53977 -> 0.0.0.0:52145
+t=4.0s sent=63518362 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4274 bandwidth_mbps=125.4 retransmitted=8276 timeouts=0 packets_sent=55831 packets_received=8202
+t=5.0s sent=75603132 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4466 bandwidth_mbps=103.2 retransmitted=8547 timeouts=0 packets_sent=64921 packets_received=10056
+t=6.0s sent=87883812 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4458 bandwidth_mbps=116.5 retransmitted=8868 timeouts=0 packets_sent=74231 packets_received=11995
+rebound at 6.00s: 0.0.0.0:52145 -> 0.0.0.0:59967
+t=7.0s sent=100130242 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4368 bandwidth_mbps=110.0 retransmitted=9301 timeouts=0 packets_sent=83578 packets_received=13925
+t=8.0s sent=112221862 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4371 bandwidth_mbps=122.7 retransmitted=9712 timeouts=0 packets_sent=92858 packets_received=15907
+done: delivered=0 seconds=8.82 mbps_per_second=[] longest_gaps=[] path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4270 bandwidth_mbps=107.7 retransmitted=9968 timeouts=0 packets_sent=100238 packets_received=17494 error=None
+client stats: EndpointStats { datagrams_received: 17495, datagrams_sent: 100139, bytes_received: 792980, bytes_sent: 140189768, unknown_destination: 0, rejected_initiations: 0, send_errors: 101, rebinds: 2 }
+exit 0
+## old 上传 换端口 知道 第2轮 14:51:29
+client 0.0.0.0:50951 -> <上海云主机>:47812: up 120000000, notice=true, rebind at [3.0, 6.0]
+established after 0.007s
+t=1.0s sent=26377662 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5207 bandwidth_mbps=124.6 retransmitted=7021 timeouts=0 packets_sent=28699 packets_received=2414
+t=2.0s sent=38707662 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5199 bandwidth_mbps=104.3 retransmitted=7341 timeouts=0 packets_sent=38012 packets_received=4394
+t=3.0s sent=50658172 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5217 bandwidth_mbps=116.4 retransmitted=7557 timeouts=0 packets_sent=46954 packets_received=6325
+rebound at 3.00s: 0.0.0.0:50951 -> 0.0.0.0:54987
+t=4.0s sent=62973102 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4009 bandwidth_mbps=115.7 retransmitted=10050 timeouts=0 packets_sent=58427 packets_received=8196
+t=5.0s sent=75304472 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3998 bandwidth_mbps=107.5 retransmitted=10335 timeouts=0 packets_sent=67714 packets_received=10114
+t=6.0s sent=87575562 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3882 bandwidth_mbps=108.3 retransmitted=10685 timeouts=0 packets_sent=77042 packets_received=12085
+rebound at 6.00s: 0.0.0.0:54987 -> 0.0.0.0:61407
+t=7.0s sent=99694582 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3926 bandwidth_mbps=106.5 retransmitted=11649 timeouts=0 packets_sent=86831 packets_received=13973
+t=8.0s sent=111860182 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4118 bandwidth_mbps=115.2 retransmitted=11943 timeouts=0 packets_sent=96013 packets_received=15925
+done: delivered=0 seconds=8.84 mbps_per_second=[] longest_gaps=[] path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4014 bandwidth_mbps=106.8 retransmitted=12173 timeouts=0 packets_sent=103669 packets_received=17571 error=None
+client stats: EndpointStats { datagrams_received: 17572, datagrams_sent: 103604, bytes_received: 816393, bytes_sent: 145036976, unknown_destination: 0, rejected_initiations: 0, send_errors: 67, rebinds: 2 }
+exit 0
+## old 下载 不换 第3轮 14:51:42
+client 0.0.0.0:64963 -> <上海云主机>:47812: down 15000000, notice=false, rebind at []
+established after 0.005s
+t=1.0s sent=0 received=538410 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=253 packets_received=394
+t=2.0s sent=0 received=1046680 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=383 packets_received=766
+t=3.0s sent=0 received=1476860 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=508 packets_received=1079
+t=4.0s sent=0 received=1886490 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=663 packets_received=1378
+t=5.0s sent=0 received=2430380 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=837 packets_received=1775
+t=6.0s sent=0 received=2968790 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=1042 packets_received=2169
+t=7.0s sent=0 received=3544190 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=1257 packets_received=2593
+t=8.0s sent=0 received=4129180 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=1498 packets_received=3016
+t=9.0s sent=0 received=4777190 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=1742 packets_received=3490
+t=10.0s sent=0 received=5397800 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=1985 packets_received=3945
+t=11.0s sent=0 received=6040330 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=2304 packets_received=4432
+t=12.0s sent=0 received=6623950 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=2472 packets_received=4836
+t=13.0s sent=0 received=7162360 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=2595 packets_received=5231
+t=14.0s sent=0 received=7596650 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=2717 packets_received=5546
+t=15.0s sent=0 received=8236440 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=2878 packets_received=6013
+t=16.0s sent=0 received=8906370 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=3029 packets_received=6502
+t=17.0s sent=0 received=9392720 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=3134 packets_received=6857
+t=18.0s sent=0 received=9990040 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=3350 packets_received=7295
+t=19.0s sent=0 received=10576400 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=3560 packets_received=7723
+t=20.0s sent=0 received=11221670 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=3796 packets_received=8192
+t=21.0s sent=0 received=11835430 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=4060 packets_received=8652
+t=22.0s sent=0 received=12517690 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=4381 packets_received=9140
+t=23.0s sent=0 received=13132820 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=4515 packets_received=9587
+t=24.0s sent=0 received=13573960 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=4625 packets_received=9911
+t=25.0s sent=0 received=14082230 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=4757 packets_received=10280
+t=26.0s sent=0 received=14469940 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=4873 packets_received=10564
+t=27.0s sent=0 received=14939850 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=5077 packets_received=10906
+done: delivered=15000000 seconds=27.12 mbps_per_second=[4.3 4.1 3.4 3.3 4.4 4.3 4.6 4.7 5.2 5.0 5.1 4.7 4.3 3.5 5.1 5.4 3.9 4.8 4.7 5.2 4.9 5.5 4.9 3.5 4.1 3.1 3.8 0.5] longest_gaps=[24.7s+0.1s] path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=3550 bandwidth_mbps=0.1 retransmitted=0 timeouts=0 packets_sent=5102 packets_received=10950 error=None
+client stats: EndpointStats { datagrams_received: 10951, datagrams_sent: 5105, bytes_received: 15329907, bytes_sent: 345362, unknown_destination: 0, rejected_initiations: 0, send_errors: 0, rebinds: 0 }
+exit 0
+## old 下载 换端口 不知道 第3轮 14:52:40
+client 0.0.0.0:59972 -> <上海云主机>:47812: down 15000000, notice=false, rebind at [3.0, 6.0]
+established after 0.006s
+t=1.0s sent=0 received=1530290 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5189 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=386 packets_received=1121
+t=2.0s sent=0 received=2216660 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5189 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=721 packets_received=1619
+t=3.0s sent=0 received=2882480 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5189 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=1064 packets_received=2116
+rebound at 3.00s: 0.0.0.0:59972 -> 0.0.0.0:61255
+t=4.0s sent=0 received=2882480 path_challenges=0 migrations=0 path_failures=0 silence_pings=1 srtt_us=5189 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=1065 packets_received=2116
+t=5.0s sent=0 received=3694890 path_challenges=0 migrations=0 path_failures=0 silence_pings=1 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=1448 packets_received=2700
+t=6.0s sent=0 received=4349750 path_challenges=0 migrations=0 path_failures=0 silence_pings=1 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=1832 packets_received=3199
+rebound at 6.00s: 0.0.0.0:61255 -> 0.0.0.0:59761
+t=7.0s sent=0 received=4349750 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=1833 packets_received=3199
+t=8.0s sent=0 received=5178600 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=2250 packets_received=3783
+t=9.0s sent=0 received=5863600 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=2624 packets_received=4287
+t=10.0s sent=0 received=6545860 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=2948 packets_received=4781
+t=11.0s sent=0 received=7233600 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=3291 packets_received=5284
+t=12.0s sent=0 received=7914490 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=3647 packets_received=5782
+t=13.0s sent=0 received=8596750 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=3998 packets_received=6282
+t=14.0s sent=0 received=9283120 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=4374 packets_received=6780
+t=15.0s sent=0 received=9968120 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=4751 packets_received=7280
+t=16.0s sent=0 received=10639420 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=5139 packets_received=7780
+t=17.0s sent=0 received=11335380 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=5529 packets_received=8280
+t=18.0s sent=0 received=12019010 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=5929 packets_received=8779
+t=19.0s sent=0 received=12695790 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=6329 packets_received=9279
+t=20.0s sent=0 received=13389010 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=6733 packets_received=9779
+t=21.0s sent=0 received=14076750 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=7135 packets_received=10278
+t=22.0s sent=0 received=14743940 path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=7536 packets_received=10769
+done: delivered=15000000 seconds=22.38 mbps_per_second=[12.2 5.5 5.3 0.0 6.5 5.2 0.0 6.6 5.5 5.5 5.5 5.4 5.5 5.5 5.5 5.4 5.6 5.5 5.4 5.5 5.5 5.3 2.0] longest_gaps=[3.0s+1.0s 6.0s+1.0s 4.1s+0.1s] path_challenges=0 migrations=0 path_failures=0 silence_pings=2 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=7685 packets_received=10955 error=None
+client stats: EndpointStats { datagrams_received: 10956, datagrams_sent: 7687, bytes_received: 15334179, bytes_sent: 531904, unknown_destination: 0, rejected_initiations: 0, send_errors: 0, rebinds: 2 }
+exit 0
+## old 下载 换端口 知道 第3轮 14:53:32
+client 0.0.0.0:52265 -> <上海云主机>:47812: down 15000000, notice=true, rebind at [3.0, 6.0]
+established after 0.007s
+t=1.0s sent=0 received=1359040 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5151 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=396 packets_received=1007
+t=2.0s sent=0 received=2061850 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5151 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=762 packets_received=1508
+t=3.0s sent=0 received=2741370 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5151 bandwidth_mbps=0.0 retransmitted=0 timeouts=0 packets_sent=1125 packets_received=2006
+rebound at 3.00s: 0.0.0.0:52265 -> 0.0.0.0:61395
+t=4.0s sent=0 received=3416780 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=1 packets_sent=1482 packets_received=2499
+t=5.0s sent=0 received=4094930 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=1 packets_sent=1880 packets_received=2998
+t=6.0s sent=0 received=4764860 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=1 packets_sent=2278 packets_received=3499
+rebound at 6.00s: 0.0.0.0:61395 -> 0.0.0.0:63266
+t=7.0s sent=0 received=5453970 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=2641 packets_received=3990
+t=8.0s sent=0 received=6133490 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=3048 packets_received=4491
+t=9.0s sent=0 received=6819860 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=3470 packets_received=4993
+t=10.0s sent=0 received=7517190 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=3884 packets_received=5491
+t=11.0s sent=0 received=8176160 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=4304 packets_received=5990
+t=12.0s sent=0 received=8888560 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=4714 packets_received=6491
+t=13.0s sent=0 received=9558490 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=5130 packets_received=6986
+t=14.0s sent=0 received=10246230 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=5554 packets_received=7487
+t=15.0s sent=0 received=10923010 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=5971 packets_received=7985
+t=16.0s sent=0 received=11608010 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=6379 packets_received=8482
+t=17.0s sent=0 received=12297120 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=6785 packets_received=8981
+t=18.0s sent=0 received=12980750 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=7204 packets_received=9482
+t=19.0s sent=0 received=13650680 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=7616 packets_received=9980
+t=20.0s sent=0 received=14332940 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=8036 packets_received=10480
+done: delivered=15000000 seconds=20.98 mbps_per_second=[10.9 5.6 5.4 5.4 5.4 5.4 5.5 5.4 5.5 5.6 5.3 5.7 5.4 5.5 5.4 5.5 5.5 5.5 5.4 5.5 5.3] longest_gaps=[] path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=0 bandwidth_mbps=0.0 retransmitted=0 timeouts=2 packets_sent=8439 packets_received=10954 error=None
+client stats: EndpointStats { datagrams_received: 10955, datagrams_sent: 8441, bytes_received: 15332779, bytes_sent: 584830, unknown_destination: 0, rejected_initiations: 0, send_errors: 0, rebinds: 2 }
+exit 0
+## old 上传 不换 第3轮 14:54:22
+client 0.0.0.0:62587 -> <上海云主机>:47812: up 120000000, notice=false, rebind at []
+established after 0.006s
+t=1.0s sent=26517402 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4426 bandwidth_mbps=116.6 retransmitted=7174 timeouts=0 packets_sent=28460 packets_received=2357
+t=2.0s sent=38962482 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4422 bandwidth_mbps=116.3 retransmitted=7470 timeouts=0 packets_sent=37839 packets_received=4349
+t=3.0s sent=51406192 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4512 bandwidth_mbps=123.2 retransmitted=7696 timeouts=0 packets_sent=47153 packets_received=6313
+t=4.0s sent=63834832 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4571 bandwidth_mbps=108.9 retransmitted=7949 timeouts=0 packets_sent=56499 packets_received=8265
+t=5.0s sent=76331972 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4468 bandwidth_mbps=112.9 retransmitted=8231 timeouts=0 packets_sent=65882 packets_received=10188
+t=6.0s sent=88777052 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4325 bandwidth_mbps=110.8 retransmitted=8448 timeouts=0 packets_sent=75173 packets_received=12157
+t=7.0s sent=101233092 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4449 bandwidth_mbps=109.4 retransmitted=8682 timeouts=0 packets_sent=84499 packets_received=14104
+t=8.0s sent=113671322 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4426 bandwidth_mbps=130.1 retransmitted=8905 timeouts=0 packets_sent=93823 packets_received=16072
+done: delivered=0 seconds=8.68 mbps_per_second=[] longest_gaps=[] path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4523 bandwidth_mbps=111.9 retransmitted=9142 timeouts=0 packets_sent=100148 packets_received=17393 error=None
+client stats: EndpointStats { datagrams_received: 17395, datagrams_sent: 99945, bytes_received: 778826, bytes_sent: 139919544, unknown_destination: 0, rejected_initiations: 0, send_errors: 204, rebinds: 0 }
+exit 0
+## old 上传 换端口 不知道 第3轮 14:54:48
+client 0.0.0.0:65312 -> <上海云主机>:47812: up 120000000, notice=false, rebind at [3.0, 6.0]
+established after 0.007s
+t=1.0s sent=26509182 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5261 bandwidth_mbps=108.5 retransmitted=6843 timeouts=0 packets_sent=28067 packets_received=2458
+t=2.0s sent=38983032 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5220 bandwidth_mbps=114.0 retransmitted=7077 timeouts=0 packets_sent=37412 packets_received=4463
+t=3.0s sent=51404822 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5386 bandwidth_mbps=113.9 retransmitted=7305 timeouts=0 packets_sent=46718 packets_received=6465
+rebound at 3.00s: 0.0.0.0:65312 -> 0.0.0.0:52795
+t=4.0s sent=63804692 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4591 bandwidth_mbps=114.8 retransmitted=8120 timeouts=0 packets_sent=56566 packets_received=8383
+t=5.0s sent=76251142 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4676 bandwidth_mbps=117.2 retransmitted=8341 timeouts=0 packets_sent=65872 packets_received=10346
+t=6.0s sent=88642792 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4750 bandwidth_mbps=116.6 retransmitted=8592 timeouts=0 packets_sent=75214 packets_received=12300
+rebound at 6.00s: 0.0.0.0:52795 -> 0.0.0.0:50062
+t=7.0s sent=101097462 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5541 bandwidth_mbps=117.5 retransmitted=10107 timeouts=0 packets_sent=85786 packets_received=14161
+t=8.0s sent=113543912 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5606 bandwidth_mbps=115.6 retransmitted=10369 timeouts=0 packets_sent=95139 packets_received=16103
+done: delivered=0 seconds=8.69 mbps_per_second=[] longest_gaps=[] path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5526 bandwidth_mbps=116.4 retransmitted=10583 timeouts=0 packets_sent=101534 packets_received=17446 error=None
+client stats: EndpointStats { datagrams_received: 17448, datagrams_sent: 101473, bytes_received: 787168, bytes_sent: 142057397, unknown_destination: 0, rejected_initiations: 0, send_errors: 63, rebinds: 2 }
+exit 0
+## old 上传 换端口 知道 第3轮 14:55:14
+client 0.0.0.0:50061 -> <上海云主机>:47812: up 120000000, notice=true, rebind at [3.0, 6.0]
+established after 0.006s
+t=1.0s sent=26485892 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4858 bandwidth_mbps=113.3 retransmitted=7714 timeouts=0 packets_sent=29364 packets_received=2350
+t=2.0s sent=38930972 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4932 bandwidth_mbps=119.6 retransmitted=7927 timeouts=0 packets_sent=38656 packets_received=4323
+t=3.0s sent=51378792 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=4920 bandwidth_mbps=105.9 retransmitted=8176 timeouts=0 packets_sent=47980 packets_received=6300
+rebound at 3.00s: 0.0.0.0:50061 -> 0.0.0.0:55980
+t=4.0s sent=63063522 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5503 bandwidth_mbps=121.6 retransmitted=17589 timeouts=0 packets_sent=71616 packets_received=8020
+t=5.0s sent=75505862 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5580 bandwidth_mbps=114.5 retransmitted=17869 timeouts=0 packets_sent=80966 packets_received=9973
+t=6.0s sent=87946832 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5532 bandwidth_mbps=111.9 retransmitted=18152 timeouts=0 packets_sent=90338 packets_received=11880
+rebound at 6.00s: 0.0.0.0:55980 -> 0.0.0.0:60044
+t=7.0s sent=99789112 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5826 bandwidth_mbps=113.9 retransmitted=25621 timeouts=0 packets_sent=110526 packets_received=13594
+t=8.0s sent=112286252 received=0 path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5816 bandwidth_mbps=107.5 retransmitted=26043 timeouts=0 packets_sent=120008 packets_received=15517
+done: delivered=0 seconds=8.79 mbps_per_second=[] longest_gaps=[] path_challenges=0 migrations=0 path_failures=0 silence_pings=0 srtt_us=5780 bandwidth_mbps=120.7 retransmitted=26258 timeouts=0 packets_sent=127332 packets_received=17060 error=None
+client stats: EndpointStats { datagrams_received: 17061, datagrams_sent: 126880, bytes_received: 846402, bytes_sent: 177624416, unknown_destination: 0, rejected_initiations: 0, send_errors: 454, rebinds: 2 }
+exit 0

@@ -251,11 +251,14 @@ impl<S: Suite> SecurePeer<S> {
         let initiator = build(seed.wrapping_mul(2).wrapping_add(1));
         let responder = build(seed.wrapping_mul(2).wrapping_add(2));
         let remote = responder.public();
-        let connection = SecureConnection::connect(initiator, config.clone(), PROLOGUE, &remote, &[], created_us).expect("connect");
+        // 两端的连接号不同：写错成自己的号会被对端拒收。
+        let (initiator_config, responder_config) =
+            (Config { connection_id: seed as u32 ^ 0x5EED_0001, ..config.clone() }, Config { connection_id: seed as u32 ^ 0x5EED_0002, ..config.clone() });
+        let connection = SecureConnection::connect(initiator, initiator_config.clone(), PROLOGUE, &remote, &[], created_us).expect("connect");
         let buffer = vec![0; config.max_packet_size];
         (
-            Self { state: SecureState::Open(Box::new(connection)), config: config.clone(), buffer: buffer.clone(), check_invariants: checked, established_at: None },
-            Self { state: SecureState::Listening(Some(responder)), config, buffer, check_invariants: checked, established_at: None },
+            Self { state: SecureState::Open(Box::new(connection)), config: initiator_config, buffer: buffer.clone(), check_invariants: checked, established_at: None },
+            Self { state: SecureState::Listening(Some(responder)), config: responder_config, buffer, check_invariants: checked, established_at: None },
         )
     }
 

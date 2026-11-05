@@ -1,0 +1,23 @@
+    Finished `sim` profile [optimized] target(s) in 0.03s
+     Running tests\secure.rs (target\sim\deps\secure-c8d35f5e24e8e60f.exe)
+
+running 16 tests
+test handshake_gives_up_when_nobody_answers ... ok
+test low_order_public_keys_are_rejected ... ok
+test wrong_key_or_prologue_is_rejected ... ok
+test responses_never_outgrow_requests ... ok
+test tampered_handshakes_are_rejected_and_recover ... ok
+test responder_can_talk_first ... ok
+test simultaneous_open_settles_on_one_handshake ... ok
+test handshake_matches_the_noise_test_vectors ... ok
+test replayed_initiations_do_not_amplify ... ok
+test stolen_static_keys_do_not_decrypt_recorded_traffic ... ok
+test replayed_packets_are_rejected ... ok
+test nothing_readable_on_the_wire ... ok
+test tampered_packets_are_rejected_without_side_effects ... ok
+test encrypted_seeds_deliver_intact_streams ... ok
+test shifting_the_clock_changes_nothing ... ok
+test keys_rotate_across_the_packet_number_boundary ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.72s
+

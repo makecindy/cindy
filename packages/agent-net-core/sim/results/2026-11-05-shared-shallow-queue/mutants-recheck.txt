@@ -1,0 +1,6 @@
+caught    共享：看不出的排队里降速丢包照常算  hidden_queue_is_not_read_as_random_loss, result:
+caught    共享：看不出的排队里限速门槛按清理后的估计算  hidden_queue_is_not_read_as_random_loss, result:
+caught    共享：别人的队列按排队判断的余量认  hidden_queue_is_not_read_as_random_loss, result:
+caught    断网时不捎带最老的分片  repeated_outages_recover_fast, result:
+caught    共享：持续满发时按 20% 封顶补偿（上一版）  hidden_queue_is_not_read_as_random_loss, misread_loss_stays_bounded_on_shallow_queues, res
+caught    持续满发时完全不补偿  random_loss_does_not_collapse_the_rate, result:

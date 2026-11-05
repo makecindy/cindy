@@ -1,0 +1,220 @@
+   Compiling agent-net-core v0.0.0 (<repo>\packages\agent-net-core)
+   Compiling agent-net-udp v0.0.0 (<repo>\packages\agent-net-core\udp)
+   Compiling ring v0.17.14
+   Compiling agent-net-sim v0.0.0 (<repo>\packages\agent-net-core\sim)
+    Finished `sim` profile [optimized] target(s) in 5.75s
+     Running unittests src\lib.rs (target\sim\deps\agent_net_core-27408be45b8d9ffd.exe)
+
+running 3 tests
+test parity::tests::repair_share_stays_just_above_the_loss_rate ... ok
+test parity::tests::overlapping_parity_solves_what_it_can ... ok
+test parity::tests::any_lost_segments_can_be_rebuilt_from_any_parity_subset ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running unittests src\lib.rs (target\sim\deps\agent_net_sim-62fa1c7a2b5b5754.exe)
+
+running 1 test
+test link_tests::burst_calendar_is_independent_of_packet_count ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\bin\compare\main.rs (target\sim\deps\compare-76f68eef31129eec.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\bin\diagnose.rs (target\sim\deps\diagnose-5a1e3a6374d6ec84.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\bin\migrate.rs (target\sim\deps\migrate-0f46103460a842c4.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\bin\muxperf.rs (target\sim\deps\muxperf-6d60b4b924d41c44.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\bin\share.rs (target\sim\deps\share-6fe810414485f778.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\migration.rs (target\sim\deps\migration-6aaa36ac414f7f9c.exe)
+
+running 10 tests
+test every_packet_names_its_receiver ... ok
+test idle_connections_only_keep_alive ... ok
+test validation_of_a_spoofed_address_is_abandoned ... ok
+test forged_and_replayed_packets_from_elsewhere_change_nothing ... ok
+test spoofed_copies_cannot_amplify_or_hijack ... ok
+test copies_of_every_packet_do_not_strand_a_moved_client ... ok
+test the_new_path_is_measured_from_scratch ... ok
+test port_only_changes_keep_the_estimates ... ok
+test switching_networks_keeps_the_connection ... ok
+test random_moves_deliver_intact_streams ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.33s
+
+     Running tests\reliability.rs (target\sim\deps\reliability-e650928dd03e5967.exe)
+
+running 47 tests
+test acknowledgement_of_unsent_data_is_rejected ... ok
+test profile_slowest_seeds ... ignored
+test packets_of_another_version_are_rejected ... ok
+test parity_with_an_impossible_length_is_ignored ... ok
+test reopened_window_is_announced_immediately ... ok
+test initial_timeout_keeps_the_first_flight_available_for_measurement ... ok
+test outages_recover_or_give_up_within_the_deadline ... ok
+test same_seed_replays_the_same_run ... ok
+test crafted_flood_cannot_grow_receive_buffers ... ok
+test segments_beyond_the_window_are_retried_not_lost ... ok
+test hostile_packets_never_panic_or_grow_memory ... ok
+test queue_overflow_is_not_mistaken_for_random_loss ... ok
+test long_paths_keep_sending_before_the_first_ack ... ok
+test different_recovery_policies_interoperate ... ok
+test lost_messages_do_not_wait_for_the_next_one ... ok
+test rtt_is_relearned_when_the_path_gets_longer ... ok
+test slow_reader_stalls_the_sender_and_recovers ... ok
+test clean_paths_carry_no_redundancy ... ok
+test outage_during_startup_is_not_read_as_a_rate_limit ... ok
+test outages_cost_little_traffic_and_recover_quickly ... ok
+test parity_is_not_starved_by_piggybacked_acks ... ok
+test reordering_is_learned_and_stops_being_retransmitted ... ok
+test window_probe_waits_when_an_ack_fills_the_packet ... ok
+test rate_limited_loss_is_not_read_as_random ... ok
+test timeouts_do_not_resend_the_whole_window ... ok
+test short_outages_recover_within_a_few_round_trips ... ok
+test startup_stops_before_overflowing_the_queue ... ok
+test rate_limiters_are_found_without_any_rtt_signal ... ok
+test rtt_is_learned_even_when_every_packet_times_out_first ... ok
+test small_messages_stay_covered_on_long_paths ... ok
+test bulk_transfers_do_not_keep_the_queue_full ... ok
+test forged_parity_never_panics_or_grows_memory ... ok
+test idle_before_the_first_send_does_not_slow_the_transfer ... ok
+test jitter_is_not_counted_as_holes ... ok
+test repeated_outages_recover_fast ... ok
+test late_packets_are_repaired_like_lost_ones ... ok
+test blocked_windows_are_not_held_up_by_a_lost_retransmission ... ok
+test first_flight_measures_the_path ... ok
+test every_seed_delivers_an_intact_ordered_stream ... ok
+test late_packets_get_acknowledged ... ok
+test parity_recovers_losses_without_a_round_trip ... ok
+test random_loss_does_not_collapse_the_rate ... ok
+test window_limited_transfers_refill_immediately ... ok
+test own_queue_does_not_hide_random_loss ... ok
+test recovery_policies_keep_streams_intact_and_make_progress ... ok
+test shifting_the_clock_changes_nothing ... ok
+test parity_share_stays_close_to_the_loss_rate ... ok
+
+test result: ok. 46 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 8.56s
+
+     Running tests\secure.rs (target\sim\deps\secure-c8d35f5e24e8e60f.exe)
+
+running 16 tests
+test handshake_gives_up_when_nobody_answers ... ok
+test wrong_key_or_prologue_is_rejected ... ok
+test low_order_public_keys_are_rejected ... ok
+test responses_never_outgrow_requests ... ok
+test responder_can_talk_first ... ok
+test simultaneous_open_settles_on_one_handshake ... ok
+test tampered_handshakes_are_rejected_and_recover ... ok
+test handshake_matches_the_noise_test_vectors ... ok
+test replayed_initiations_do_not_amplify ... ok
+test stolen_static_keys_do_not_decrypt_recorded_traffic ... ok
+test replayed_packets_are_rejected ... ok
+test nothing_readable_on_the_wire ... ok
+test tampered_packets_are_rejected_without_side_effects ... ok
+test encrypted_seeds_deliver_intact_streams ... ok
+test shifting_the_clock_changes_nothing ... ok
+test keys_rotate_across_the_packet_number_boundary ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.85s
+
+     Running tests\sharing.rs (target\sim\deps\sharing-b0cf3aa9ac543727.exe)
+
+running 15 tests
+test bursty_limiter_is_not_read_as_a_hidden_queue ... ok
+test fair_share_takes_an_empty_line_right_away ... ok
+test probing_does_not_get_stuck_on_a_rate_limiter ... ok
+test fair_share_does_not_take_timeouts_for_congestion ... ok
+test fair_share_window_floor_does_not_shrink_with_the_packet ... ok
+test coarse_timers_do_not_cap_the_rate ... ok
+test fair_share_survives_beside_a_full_speed_connection ... ok
+test fair_share_fills_an_empty_line_and_full_is_the_default ... ok
+test fair_share_splits_the_line_with_tcp ... ok
+test hidden_queue_is_not_read_as_random_loss ... ok
+test several_connections_do_not_collapse_the_bottleneck ... ok
+test late_joiners_do_not_keep_overshooting ... ok
+test misread_loss_stays_bounded_on_shallow_queues ... ok
+test two_connections_share_evenly ... ok
+test tcp_and_agent_net_both_get_a_share ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.13s
+
+     Running tests\streams.rs (target\sim\deps\streams-b4d874483bbe3257.exe)
+
+running 17 tests
+test a_full_window_keeps_room_for_interactive_messages ... ok
+test headerless_segments_wait_for_their_header ... ok
+test a_lost_packet_only_holds_up_its_own_stream ... ok
+test interactive_messages_go_ahead_of_retransmissions ... ok
+test finished_streams_release_their_slots ... ok
+test lost_credit_is_sent_again ... ok
+test a_flood_of_tiny_messages_cannot_overrun_the_path ... ok
+test small_interactive_messages_skip_the_pacing_queue ... ok
+test an_unread_stream_only_stalls_itself ... ok
+test a_lone_stream_does_not_repeat_its_header ... ok
+test priorities_share_the_link ... ok
+test a_lone_interactive_stream_runs_at_full_speed ... ok
+test forged_stream_headers_stay_within_bounds ... ok
+test bulk_data_marked_interactive_is_still_paced ... ok
+test interactive_messages_stay_fast_beside_a_full_file ... ok
+test credit_keeps_up_with_fast_paths ... ok
+test every_seed_delivers_every_stream_intact ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.73s
+
+     Running tests\udp.rs (target\sim\deps\udp-799d085759a8aa92.exe)
+
+running 2 tests
+test connections_share_one_port ... ok
+test a_rebound_client_is_followed ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.11s
+
+     Running unittests src\lib.rs (target\sim\deps\agent_net_udp-c9e5c7a13794dc79.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests agent_net_core
+
+running 1 test
+test src\secure.rs - secure::SecureConnection (line 587) ... ignored
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.35s; merged doctests compilation took 0.29s
+   Doc-tests agent_net_sim
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests agent_net_udp
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -18,9 +18,19 @@
 - `noise.rs` 读完握手回复后清掉发起方的一次性私钥：`SecureConnection` 紧接着调用 `finish`，整个握手状态连同私钥一起丢掉，
   去掉这一行从外部看不出差别。保留它是为了直接使用 `Handshake` 的调用方。
 - `secure.rs` 认证失败超过 2^36 个包就放弃连接：测试里造不出这么多包，只能靠代码审查。
+- `secure.rs` 发回数据路径的路径验证回复填满到 `max_packet_size`：模拟器的链路不限包长，看不出差别。
+  它顺便确认新路径这个方向能过满长度的包，过不了就验证不通过、数据留在原路径上，QUIC 也要求验证包填满。
+- `secure.rs` 安静时只收到确认就当对端空闲：对端回过以后每 15 秒还会一来一回，两种写法只差传完后第一秒那一次探测，
+  只有恰好在那一秒里悄悄换了地址才看得出。2026-11-05 加上 15 秒保活以前它能让连接失联，之后全量变异里不再变红。
 - 最小 RTT 的记录时刻、发送节奏、上次超时时刻、交互流的轮次从建连时刻算起：第一次读到之前都会被覆盖，
   从 0 算起和从建连算起没有差别，所以代码里没有为它们设起点。
 - `RECENT_ROUNDS` 从 8 改成 16：连续几轮排空不见效就重设基准，这个判断已经兜住了基准看得太久的问题，模拟器里只差在手机路径的延迟上。
+- 降速阶段结束时不看开始时有没有排队，一律当成别人的队列：每轮开始时队列没在排就会清掉这个标记，差别只剩降速阶段里新排起来的队。
+  2026-11-05 量过：守着它的 `own_queue_does_not_hide_random_loss` 从 54.04 秒变成 54.08 秒，共享矩阵 13 行有差别、方向不一
+  （对 CUBIC 公平指数 0.89 → 0.94，四条 100M 12ms 0.95 → 0.93），上一版的代码上同样不变红；2026-11-03 记的“抓到”是超时。
+- 认出看不出的排队时不收回补偿、收回后立刻放开：2026-11-05 持续满发时随机丢包 16% 以内不再补偿以后，认出时多半已经没有补偿可收。
+  不收回时对比矩阵三种策略、共享矩阵两种定时器的差别都在 0.3% 以内，浅队列扫描 144 种组合只有一种差 1.8 个百分点（6.45% → 8.20%）；
+  立刻放开介于两者之间。代码留着：没满发、或随机丢包超过 16% 时还用得上。
 """
 import os
 import pathlib
@@ -87,7 +97,7 @@ MUTANTS = [
     ("不按节奏发送", "src/connection.rs",
      "} else if self.in_flight < UNPACED_SEGMENTS || self.congestion.can_send(now_us) {", "} else {"),
     ("随机丢包不补偿速率", "src/congestion.rs",
-     "let kept = 1_000_000 - self.random_loss_ppm.min(limit) as u64;", "let kept = 1_000_000 - 0 * limit as u64;"),
+     "let kept = 1_000_000 - compensated;", "let kept = 1_000_000 - 0 * compensated;"),
     ("把所有包都算成低于容量", "src/congestion.rs",
      "self.mode == Mode::ProbeBw && PROBE_CYCLE[self.cycle_index] < 1000\n", "true\n"),
     ("窗口受限也算低于容量", "src/connection.rs",
@@ -263,8 +273,17 @@ MUTANTS = [
      "        if !self.within_flight_limits() {\n            self.congestion.stop_pacing_catch_up();\n        } else if", "        if !self.within_flight_limits() {\n        } else if"),
     ("共享：排队时的丢包也算随机丢包", "src/congestion.rs",
      "(self.low_queue || !self.queue_is_building())", "true"),
-    ("共享：持续满发时补偿不收紧", "src/congestion.rs",
-     "const SATURATED_MAX_RANDOM_LOSS_PPM: u32 = 200_000;", "const SATURATED_MAX_RANDOM_LOSS_PPM: u32 = 500_000;"),
+    ("共享：持续满发时照样补偿", "src/congestion.rs",
+     "let random = if self.saturated_rounds >= SATURATED_ROUNDS {", "let random = if false {"),
+    ("共享：持续满发时按 20% 封顶补偿（上一版）", "src/congestion.rs",
+     "{ saturated_compensation(random) } else { random };", "{ random.min(SATURATED_MAX_COMPENSATION_PPM) } else { random };"),
+    ("持续满发时完全不补偿", "src/congestion.rs",
+     "    (random_ppm.saturating_sub(SATURATED_FREE_LOSS_PPM) * 5 / 4).min(SATURATED_MAX_COMPENSATION_PPM)\n", "    0 * random_ppm\n"),
+    ("共享：别人的队列按排队判断的余量认", "src/congestion.rs",
+     "        (self.min_rtt_us / 32).max(self.rtt_jitter_us * 3).clamp(FOREIGN_MARGIN_MIN_US, QUEUE_MARGIN_MAX_US)\n",
+     "        self.queue_margin_us()\n"),
+    ("共享：别人的队列里降速丢的包也当随机丢包", "src/congestion.rs",
+     "            && !self.overflowing\n            && !self.queue_is_foreign()\n", "            && !self.overflowing\n"),
     ("共享：探测撞到丢包后不留余量", "src/congestion.rs",
      "            Mode::ProbeBw if PROBE_CYCLE[self.cycle_index] == 1000 && self.gentle_probes > 0 => HEADROOM_CRUISE_GAIN,\n", ""),
     ("流：单独的交互流也压低队列", "src/connection.rs",
@@ -280,17 +299,11 @@ MUTANTS = [
      "        if self.btl_bw == 0 && self.first_flight_sent == 0 {\n            self.period_started = now_us;\n        }\n", ""),
     ("丢得比送达多时带宽样本一直不老化", "src/congestion.rs",
      "(!outage || self.outage_rounds > OUTAGE_HOLD_ROUNDS)", "!outage"),
-    ("降速开始时没排队也当成别人的队列", "src/congestion.rs",
-     "            self.foreign_queue = self.calm_entry_queue_us >= self.queue_margin_us();", "            self.foreign_queue = true;"),
     ("排着的队都当成别人的", "src/congestion.rs",
-     "(self.foreign_queue && self.queue_is_building())", "self.queue_is_building()"),
-    ("共享：看不出的排队里补偿不收回", "src/congestion.rs",
-     "                self.compensation = self.compensation * COMPENSATION_CUT / 1000;\n", ""),
-    ("共享：看不出的排队里补偿立刻放开", "src/congestion.rs",
-     "let step = (1000 * self.min_rtt_us / COMPENSATION_RESTORE_US).max(1);", "let step = 1000;"),
+     "(self.foreign_queue && self.queue_above(self.foreign_margin_us()))", "self.queue_above(self.foreign_margin_us())"),
     ("共享：看不出的排队里降速丢包照常算", "src/congestion.rs",
-     [("(self.low_queue || !self.queue_is_building()) && !self.overflowing", "(self.low_queue || !self.queue_is_building())"),
-      ("(self.foreign_queue && self.queue_is_building()) || self.overflowing", "self.foreign_queue && self.queue_is_building()")]),
+     [("            && !self.overflowing\n            && !self.queue_is_foreign()\n", "            && !self.queue_is_foreign()\n"),
+      ("(self.foreign_queue && self.queue_above(self.foreign_margin_us())) || self.overflowing", "self.foreign_queue && self.queue_above(self.foreign_margin_us())")]),
     ("共享：看不出的排队里限速门槛按清理后的估计算", "src/congestion.rs",
      "let p = if self.overflowing { (self.random_loss_ppm as u64).max(calm) } else { self.random_loss_ppm as u64 };",
      "let p = self.random_loss_ppm as u64;"),
@@ -303,7 +316,7 @@ MUTANTS = [
     ("别人的队列里送达的包也不算", "src/congestion.rs",
      "        if !trusted && !(foreign && !lost) {", "        if !trusted {"),
     ("加密：不查重放窗口", "src/secure.rs",
-     "        if !self.replay.is_fresh(number) {\n            return Err(PacketError::Replayed);\n        }\n", ""),
+     "        let duplicate = !self.replay.is_fresh(number);", "        let duplicate = false;"),
     ("加密：认证前就记入重放窗口", "src/secure.rs",
      "        let Some(slot) = keys.recv.slot(&self.crypto, number) else {",
      "        self.replay.mark(number);\n        let Some(slot) = keys.recv.slot(&self.crypto, number) else {"),
@@ -320,12 +333,12 @@ MUTANTS = [
     ("加密：回复按自己的包长填充", "src/secure.rs",
      "let total = config.max_packet_size.min(initiation.len());", "let total = config.max_packet_size;"),
     ("加密：握手完成不发探测", "src/secure.rs",
-     "        self.connection.ping();\n", ""),
+     "        // 响应方要见到这一端的数据包才确认，没有数据要发时也要让它尽快确认。\n        self.connection.ping();\n", ""),
     ("加密：重发的请求不再回复", "src/secure.rs",
-     "            response.due = true;\n            return Ok(());", "            return Ok(());"),
+     "            response.due = true;\n", ""),
     ("加密：伪造的回复打断握手", "src/secure.rs",
-     "        handshake.read_second(&self.crypto, &packet[1..], &mut plain).map_err(packet_error)?;",
-     "        if let Err(error) = handshake.read_second(&self.crypto, &packet[1..], &mut plain) {\n            self.dead = true;\n            return Err(packet_error(error));\n        }"),
+     "        handshake.read_second(&self.crypto, packet.get(RESPONSE_PREFIX..).unwrap_or(&[]), &mut plain).map_err(packet_error)?;",
+     "        if let Err(error) = handshake.read_second(&self.crypto, packet.get(RESPONSE_PREFIX..).unwrap_or(&[]), &mut plain) {\n            self.dead = true;\n            return Err(packet_error(error));\n        }"),
     ("加密：同时发起时双方都让", "src/secure.rs",
      "        if self.local_static > self.remote_static {", "        if false {"),
     ("加密：迟到的同时发起请求当成新连接", "src/secure.rs",
@@ -339,6 +352,65 @@ MUTANTS = [
     ("加密：不检查握手超时", "src/secure.rs",
      "            Some(since) if now_us.saturating_sub(since) >= self.config.dead_after_us => self.dead = true,",
      "            Some(since) if false && now_us.saturating_sub(since) >= self.config.dead_after_us => self.dead = true,"),
+    ("连接号：数据包里写自己的号", "src/secure.rs",
+     "        out[wire::PACKET_HEADER_LEN..DATA_PREFIX].copy_from_slice(&self.remote_id.to_be_bytes());",
+     "        out[wire::PACKET_HEADER_LEN..DATA_PREFIX].copy_from_slice(&self.config.connection_id.to_be_bytes());"),
+    ("连接号：握手时不告诉对端", "src/secure.rs",
+     "        handshake.write_first(&crypto, &padded(config.connection_id, payload,", "        handshake.write_first(&crypto, &padded(0, payload,"),
+    ("换路径：不验证就把数据换过去", "src/secure.rs",
+     "        if result.is_ok() && newest && self.paths.observe(now_us, path, self.config.initial_rto_us, same_route) {",
+     "        if result.is_ok() && newest && path != self.paths.active {\n            self.paths.active = path;\n            self.connection.on_path_change(now_us);\n        }\n        if result.is_ok() && newest && self.paths.observe(now_us, path, self.config.initial_rto_us, same_route) {"),
+    ("换路径：只能同时验证一条", "src/secure.rs",
+     "        if self.candidates.len() == MAX_CANDIDATES {", "        if !self.candidates.is_empty() {"),
+    ("换路径：降速阶段的节奏能压到零", "src/congestion.rs",
+     "recent >= MIN_LIMITER_EVIDENCE_RATE && recent < self.btl_bw / 2", "recent < self.btl_bw / 2"),
+    ("换路径：不守放大限制", "src/secure.rs",
+     "        let room = candidate.received.saturating_mul(AMPLIFICATION_FACTOR).saturating_sub(candidate.sent);",
+     "        let room = u64::MAX / 2;"),
+    ("换路径：验证通过不重量往返和带宽", "src/secure.rs",
+     "                } else {\n                    self.connection.on_path_change(now_us);\n                }\n                self.stats.migrations += 1;",
+     "                } else {\n                }\n                self.stats.migrations += 1;"),
+    ("换路径：原路径的包不取消验证", "src/secure.rs",
+     "        if path == self.active {\n            self.candidates.clear();\n            return false;", "        if path == self.active {\n            return false;"),
+    ("换路径：验证超时不放弃", "src/secure.rs",
+     "        self.candidates.retain(|candidate| candidate.deadline > now_us);", "        let _ = now_us;"),
+    ("换路径：验证包不重发", "src/secure.rs",
+     "candidate.challenges < MAX_CHALLENGES && candidate.due_at <= now_us", "candidate.challenges < 1 && candidate.due_at <= now_us"),
+    ("换路径：被验证的一端不重量往返和带宽", "src/secure.rs",
+     "                    self.moved_at = Some(now_us);\n                    self.connection.on_path_change(now_us);\n", "                    self.moved_at = Some(now_us);\n"),
+    ("换路径：知道换了网络也不马上发包", "src/secure.rs",
+     "            self.connection.on_path_change(now_us);\n            self.ping();\n", "            self.connection.on_path_change(now_us);\n"),
+    ("换路径：只含验证的包也交给可靠层", "src/secure.rs",
+     "        if wire::is_path_frame(frames) {", "        if false && wire::is_path_frame(frames) {"),
+    ("换路径：只换端口也从头量", "src/secure.rs",
+     "                if same_route {\n                    self.connection.on_port_change();", "                if false {\n                    self.connection.on_port_change();"),
+    ("换路径：只换端口时不补确认", "src/secure.rs",
+     "                    self.connection.ack_now(now_us);\n", ""),
+    ("换路径：被验证时不看只换端口的标记", "src/secure.rs",
+     "                if same_route && path == self.paths.active {", "                if false && path == self.paths.active {"),
+    ("换路径：被验证时不暂缓超时", "src/secure.rs",
+     "                    self.connection.hold_timeouts(now_us + 2 * self.connection.srtt_us());\n", ""),
+    ("换路径：只换端口的验证不带标记", "src/wire.rs",
+     "        PathFrame::Challenge { same_route: true } => FRAME_PATH_CHALLENGE_SAME_ROUTE,", "        PathFrame::Challenge { same_route: true } => FRAME_PATH_CHALLENGE,"),
+    ("驱动：同一个 IP 换了端口也当成换了网络", "udp/src/lib.rs",
+     "active.ip() == from.ip() && active.port() != from.port()", "false && active.port() != from.port()"),
+    ("换路径：最新包的重复从别处来也不验证", "src/secure.rs",
+     "        if duplicate && (self.replay.largest != Some(number) || path == self.paths.active) {", "        if duplicate {"),
+    ("换路径：任何重复包从别处来都去验证", "src/secure.rs",
+     "        if duplicate && (self.replay.largest != Some(number) || path == self.paths.active) {", "        if duplicate && path == self.paths.active {"),
+    ("安静探测：从不探测", "src/secure.rs",
+     "        if self.connection.bytes_in_flight() > 0 {\n            return None;\n        }\n        let heard", "        if true {\n            return None;\n        }\n        let heard"),
+    ("安静探测：对端回过一次就再也不探测", "src/secure.rs",
+     "            return Some(heard + self.config.dead_after_us / 2);", "            return None;"),
+    ("安静探测：对端回了也一直探测", "src/secure.rs",
+     "let answered = self.silence_sent_at.is_some_and(|sent| heard > sent && self.connection.last_data_at() <= sent);",
+     "let answered = false && self.silence_sent_at.is_some_and(|sent| heard > sent && self.connection.last_data_at() <= sent);"),
+    ("安静探测：重试间隔翻倍、最多 4 倍（上一版）", "src/secure.rs",
+     "        let at = last + base;", "        let at = last + base * ((last - heard) / base).clamp(1, 4);"),
+    ("安静探测：重试间隔翻倍、最多 2 倍", "src/secure.rs",
+     "        let at = last + base;", "        let at = last + base * ((last - heard) / base).clamp(1, 2);"),
+    ("往返：判丢后才到的确认不采样", "src/connection.rs",
+     "        } else if let Some(sent_at) = late_sample {", "        } else if let Some(sent_at) = late_sample.filter(|_| false) {"),
     ("加密：回复里漏掉 se", "src/noise.rs",
      "            let se = checked_dh(crypto.dh_ephemeral(&ephemeral, &self.remote_static))?;\n            state.mix_key(crypto, &se.0);\n",
      "            let se = checked_dh(crypto.dh_ephemeral(&ephemeral, &self.remote_static))?;\n            let _ = se;\n"),
@@ -352,6 +424,12 @@ MUTANTS = [
 def test_targets(name):
     if name.startswith("加密："):
         return ["--test", "secure"]
+    if name.startswith("连接号："):
+        return ["--test", "secure", "--test", "migration"]
+    if name.startswith(("换路径：", "安静探测：")):
+        return ["--test", "migration"]
+    if name.startswith("驱动："):
+        return ["--test", "udp"]
     if name.startswith("流："):
         return ["--test", "streams"]
     if name.startswith("共享："):
@@ -376,12 +454,16 @@ def run_mutant(name, relative, before, after, shared_target):
         process = subprocess.Popen(
             ["cargo", "test", "--profile", "sim", "-p", "agent-net-sim", *test_targets(name)],
             cwd=copy, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            start_new_session=True,
+            start_new_session=os.name != "nt",
         )
         try:
             output, _ = process.communicate(timeout=300)
         except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
+            # Windows 没有进程组，用 taskkill 连子进程一起结束。
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)], capture_output=True)
+            else:
+                os.killpg(process.pid, signal.SIGKILL)
             process.communicate()
             return "caught", "hang detected"
         if process.returncode == 0:

@@ -6,6 +6,7 @@ pub mod fec;
 #[cfg(feature = "kcp")]
 pub mod kcp;
 pub mod crypto;
+pub mod migration;
 pub mod share;
 
 use std::cmp::Reverse;
@@ -366,7 +367,7 @@ pub struct Outcome {
     pub established_at: [Option<u64>; 2],
 }
 
-fn stream_byte(stream: u64, index: u64) -> u8 {
+pub(crate) fn stream_byte(stream: u64, index: u64) -> u8 {
     let mixed = (index ^ stream).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     (mixed >> 56) as u8
 }
@@ -685,7 +686,7 @@ pub struct Case {
     pub workload: Workload,
 }
 
-fn random_link(rng: &mut Rng, outages: &[(u64, u64)]) -> LinkProfile {
+pub(crate) fn random_link(rng: &mut Rng, outages: &[(u64, u64)]) -> LinkProfile {
     let delay_us = rng.pick(&[100, 1_000, 5_000, 20_000, 50_000, 150_000, 300_000]);
     let bursty = rng.chance(0.25);
     let quota = rng.chance(0.2);

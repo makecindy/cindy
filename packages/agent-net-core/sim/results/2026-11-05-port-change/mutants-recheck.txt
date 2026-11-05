@@ -1,0 +1,3 @@
+caught    加密：不查重放窗口  replayed_packets_are_rejected, result:
+exit 0
+seconds 30

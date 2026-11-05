@@ -246,13 +246,15 @@ fn random_loss_does_not_collapse_the_rate() {
     assert!(outcome.final_stats[0].expect("stats").bandwidth > 1_000_000);
 }
 
-/// 自己排的队不能当成别人的。深队列的慢线路上队列常常是自己排的，这时只算送达不算丢包的话，随机丢包率被压低，
-/// 补得不够：2026-11-03 试过排队时一律这样算，这条线路窗口 1024 时对比矩阵里慢 23%。
+/// 自己排的队不能当成别人的。有随机丢包的长往返线路上队列常常是自己排的，这时只算送达不算丢包的话，随机丢包率被压低，
+/// 补得不够：2026-11-03 试过排队时一律这样算，山区那条线路窗口 1024 时对比矩阵里慢 23%。
+/// 2026-11-05 持续满发时随机丢 16% 以内不再补偿，山区线路上几乎不再自己排队，两种算法差不到 1%，改看跨境线路：
+/// 4 个种子各传 16 MiB 共 20.7 秒、随机丢包率估计 10.0%；排队时一律只算送达是 29.8 秒、6.8%。
 #[test]
 fn own_queue_does_not_hide_random_loss() {
-    let scenario = agent_net_sim::scenarios().into_iter().find(|scenario| scenario.label.starts_with("山区")).expect("scenario");
-    let config = Config { send_window: 1024, recv_window: 1024, send_buffer_bytes: 4 << 20, ..Config::default() };
-    let workload = Workload { a_to_b_bytes: 4 << 20, write_chunk: 4096, ..Workload::default() };
+    let scenario = agent_net_sim::scenarios().into_iter().find(|scenario| scenario.label.starts_with("跨境")).expect("scenario");
+    let config = Config { send_window: 1024, recv_window: 1024, send_buffer_bytes: 16 << 20, ..Config::default() };
+    let workload = Workload { a_to_b_bytes: 16 << 20, write_chunk: 4096, ..Workload::default() };
     let (mut total, mut estimate) = (0, 0);
     for seed in 1..=4 {
         let outcome = run(CorePeer::new(config.clone()), CorePeer::new(config.clone()), scenario.link.clone(), scenario.back.clone(), &workload, seed);
@@ -260,9 +262,8 @@ fn own_queue_does_not_hide_random_loss() {
         total += outcome.finish_us;
         estimate += outcome.final_stats[0].expect("stats").random_loss_ppm as u64;
     }
-    // 2026-11-03：现在 4 个种子共 54.0 秒、随机丢包率估计 16.5%；排队时一律只算送达是 58.9 秒、10.1%。
-    assert!(estimate / 4 >= 130_000, "random loss read as {} ppm", estimate / 4);
-    assert!(total <= 55_500_000, "took {total}us in total");
+    assert!(estimate / 4 >= 85_000, "random loss read as {} ppm", estimate / 4);
+    assert!(total <= 24_000_000, "took {total}us in total");
 }
 
 /// 瓶颈溢出不能算成随机丢包，否则越丢越快。这条链路除了队列溢出没有别的丢包。
@@ -403,7 +404,9 @@ fn repeated_outages_recover_fast() {
         assert_eq!(report.delivered, report.sent);
         merged.samples_us.extend(report.samples_us);
     }
-    assert!(merged.percentile_ms(99.0) < 660.0, "p99 {}", merged.percentile_ms(99.0));
+    // 2026-11-05 持续满发时随机丢 16% 以内不再补偿，653.9 → 661.3 毫秒；不补偿的代价，用户选了浅队列上少丢包。
+    // 断网时不捎带最老的分片是 667.8：这个机制只救最慢的那一点消息，p95 反而略好。
+    assert!(merged.percentile_ms(99.0) < 665.0, "p99 {}", merged.percentile_ms(99.0));
 }
 
 /// 大传输不能把瓶颈队列一直顶满，否则同一连接上的交互全部多等一个往返。
@@ -523,6 +526,20 @@ fn rtt_is_learned_even_when_every_packet_times_out_first() {
     assert!(stats.srtt_us > 500_000, "srtt {}", stats.srtt_us);
     assert!(stats.timeout_losses < 200, "{} timeouts", stats.timeout_losses);
     assert!(outcome.finish_us < 12_000_000, "took {}us", outcome.finish_us);
+}
+
+/// 断网一秒、恢复后往返从 20 毫秒变成 140 毫秒（换了路由或网络，自己不知道）：重传超时比新的往返短，
+/// 每个包都先被超时判丢、再被确认。判丢后才到的确认也要算往返样本，否则超时永远追不上，每个确认还把退避清零。
+/// 2026-11-05 换网模拟里查出来：修好之前这里要 9.7 秒、775 次超时判丢；加密连接换网时还会叠上别的问题，上传要 76 秒。
+#[test]
+fn rtt_is_relearned_when_the_path_gets_longer() {
+    // 延迟漂移的周期取得很长就是一次跳变：开头十六分之一（2 秒）是基础延迟，之后单程多 60 毫秒。
+    let link = LinkProfile { wander_us: 60_000, wander_period_us: 32_000_000, outages: vec![(1_000_000, 2_000_000)], ..path(20_000_000, 10_000) };
+    let outcome = bulk(&link, 1024, 8 << 20, 27);
+    assert!(outcome.finished, "{outcome:?}");
+    let stats = outcome.final_stats[0].expect("stats");
+    assert!(stats.srtt_us > 130_000, "srtt {}", stats.srtt_us);
+    assert!(outcome.finish_us < 8_000_000, "took {}us, {} timeouts, {} spurious", outcome.finish_us, stats.timeout_losses, stats.spurious_losses);
 }
 
 /// 未测得 RTT 时，250 ms 的干净路径会先碰到 200 ms 初始超时。

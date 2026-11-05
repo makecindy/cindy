@@ -82,6 +82,8 @@ const SHORT_OUTAGE_CWND_FACTOR: u64 = 4;
 /// 启动阶段靠它尽早停下：等带宽不再增长才退出的话，再冲 3 个往返足够把队列挤爆。
 const QUEUE_MARGIN_MIN_US: u64 = 4_000;
 const QUEUE_MARGIN_MAX_US: u64 = 16_000;
+/// 认别人的队列时余量的下限，见 [`Bbr::foreign_margin_us`]。
+const FOREIGN_MARGIN_MIN_US: u64 = 500;
 /// 一轮至少要有这么多 RTT 样本，才算数。
 const ROUND_RTT_SAMPLES: u32 = 8;
 /// 巡航时发现有队列，略微降速把它排空。带宽估计常有 1～2% 的高估，不纠正的话
@@ -120,11 +122,23 @@ const WINDOW_ROOM_GAIN: u64 = 8000;
 const WINDOW_LIMITED_CALM_GAIN: u64 = 900;
 /// 补偿的上限：随机丢包再高，发送速率也只放大到送达速率的两倍。
 const MAX_RANDOM_LOSS_PPM: u32 = 500_000;
-/// 连续这么多轮都有数据等着发，就是持续满发。这时补偿的上限收到 1.25 倍，这也是判错时的损失上限：
-/// 浅队列上看不出排队，别的流挤掉的包会被当成随机丢包，放大两倍时几条流一起能丢掉六成。
+/// 连续这么多轮都有数据等着发，就是持续满发。这时只补加速探测补不回来的那部分随机丢包，见 [`saturated_compensation`]。
+/// 几条连接挤满一个浅队列时队列一直不空，最小往返里已经含着排队，看不出是别人挤掉的包；单看一条连接，
+/// 这和线路本身随机丢包一模一样，补偿只会让大家一起多发、一起多丢。2026-11-05 扫了 144 种浅队列组合，
+/// 原来满发时按 20% 封顶补偿，平均丢 9.15%、43 种超过 10%；改成这样以后 5.95%、23 种。代价是单条连接在低速、
+/// 高丢包的线路上慢一些（3 Mbit/s、往返 150 毫秒、突发丢 10% 时慢 38%），用户 2026-11-05 选了整体的网络体验。
 /// 零散的小消息不受影响，断网恢复时它们还要靠补偿尽快发完积压。
 const SATURATED_ROUNDS: u32 = 8;
-const SATURATED_MAX_RANDOM_LOSS_PPM: u32 = 200_000;
+/// 持续满发时随机丢包在这以内不补偿：加速探测多发 25%，丢 16% 时送到的仍比原来多 5%，带宽估计涨得上去。
+const SATURATED_FREE_LOSS_PPM: u64 = 160_000;
+/// 持续满发时最多补这么多，和原来的封顶一样，判错时的损失上限、满发时扛得住的随机丢包（约 36%）都不变。
+const SATURATED_MAX_COMPENSATION_PPM: u64 = 200_000;
+/// 持续满发时按多少随机丢包补偿：超出 [`SATURATED_FREE_LOSS_PPM`] 的部分乘 1.25，补到探测时送到的比原来多 5%。
+/// 丢 30% 时补 17.5%。完全不补的话，大窗口满发会越传越慢：丢 30% 时 64 MiB 从 8 秒变成 348 秒
+/// （`random_loss_does_not_collapse_the_rate`）。
+fn saturated_compensation(random_ppm: u64) -> u64 {
+    (random_ppm.saturating_sub(SATURATED_FREE_LOSS_PPM) * 5 / 4).min(SATURATED_MAX_COMPENSATION_PPM)
+}
 /// 随机丢包率按“丢了几个 / 一共几个”计算，样本攒到这么多就各减半，旧样本逐渐淡出。
 /// 不用逐个样本的指数平滑：同一批包里确认先到、判丢后到，平滑值总是被最后到的丢包拉高，
 /// 丢 9% 时能估成 18%。
@@ -206,6 +220,10 @@ pub(crate) struct RateSample {
     /// 这批包从发第一个到发这一个用了多久。到达速率不可能超过发送速率。
     pub(crate) send_span_us: u64,
 }
+
+/// 最近几轮平均送达低于这个速率（字节每秒）时，不当作路径上有限速的证据。正常传输远高于它，
+/// 低于它的只有断网、换路径时几乎什么都没送到的轮次。
+const MIN_LIMITER_EVIDENCE_RATE: u64 = 1_000;
 
 pub(crate) struct Bbr {
     mode: Mode,
@@ -437,10 +455,12 @@ impl Bbr {
     }
 
     /// 送达速率不含丢掉的部分，直接拿来当发送速率会越传越慢：
-    /// 丢 30% 时每轮只剩 70%，再怎么探测也追不回来。这里换算回路径真正承载的速率。
+    /// 丢 30% 时每轮只剩 70%，再怎么探测也追不回来。这里换算回路径真正承载的速率。持续满发时不换算，见 [`SATURATED_ROUNDS`]。
     fn path_rate(&self) -> u64 {
-        let limit = if self.saturated_rounds >= SATURATED_ROUNDS { SATURATED_MAX_RANDOM_LOSS_PPM } else { MAX_RANDOM_LOSS_PPM };
-        let kept = 1_000_000 - self.random_loss_ppm.min(limit) as u64 * self.compensation / 1000;
+        let random = self.random_loss_ppm.min(MAX_RANDOM_LOSS_PPM) as u64;
+        let random = if self.saturated_rounds >= SATURATED_ROUNDS { saturated_compensation(random) } else { random };
+        let compensated = random * self.compensation / 1000;
+        let kept = 1_000_000 - compensated;
         let rate = self.btl_bw.saturating_mul(1_000_000) / kept;
         if self.rate_cap > 0 { rate.min(self.rate_cap) } else { rate }
     }
@@ -767,8 +787,13 @@ impl Bbr {
     /// 大家都按丢包率多发，发得越多丢得越多，几条流一起就是拥塞崩溃。
     /// 压低队列时除外：那时的基准往返时间取最近几轮，抖动一点就算排队，样本攒不够，真正的随机丢包率测不出来。
     /// 队列浅到往返时间看不出来、但丢包跟着速率涨时同样不算，见 [`Self::compare_phases`]。
+    /// 降速时还有比排队判断浅的队列在排，也是别人的，不算，见 [`Self::queue_is_foreign`]。
     pub(crate) fn trusts_calm_samples(&self) -> bool {
-        self.fair_packet == 0 && (self.rate_cap == 0 || self.rate_cap_confirmed) && (self.low_queue || !self.queue_is_building()) && !self.overflowing
+        self.fair_packet == 0
+            && (self.rate_cap == 0 || self.rate_cap_confirmed)
+            && (self.low_queue || !self.queue_is_building())
+            && !self.overflowing
+            && !self.queue_is_foreign()
     }
 
     /// 正在巡航，按带宽估计全速发。
@@ -904,6 +929,15 @@ impl Bbr {
         self.fair_packet = packet_bytes.max(FAIR_UNIT_BYTES);
     }
 
+    /// 换了路径：量到的带宽、往返、排队和限速都不再适用，从启动阶段重新量。连接定下的设置和计数保留。
+    pub(crate) fn restart(&mut self) {
+        let mut fresh = Self::new(self.initial_cwnd, self.min_cwnd, self.max_cwnd, Some(self.initial_rate), self.probe_sender_limited);
+        fresh.fair_packet = self.fair_packet;
+        fresh.low_queue = self.low_queue;
+        fresh.rate_limits_found = self.rate_limits_found;
+        *self = fresh;
+    }
+
     /// 让路模式每轮算一次窗口。第一次丢包才接管：没见过丢包就没和别人抢，线路卡一下启动就结束了，这时量到的容量还差得远。
     fn update_fair_window(&mut self, now_us: u64, bytes_in_flight: u64, app_limited: bool) {
         if self.fair_packet == 0 {
@@ -1018,7 +1052,8 @@ impl Bbr {
         // 随机丢包率已经测稳的窗口受限阶段也不压，那时降速只比窗口速率低一点，再压就白白慢了。
         let recent = self.round_rates.iter().sum::<u64>() / DELIVERY_ROUNDS as u64;
         let window_rate = self.max_cwnd.saturating_mul(1_000_000) / self.min_rtt_us.max(1);
-        let limited_elsewhere = recent < self.btl_bw / 2 && recent < window_rate / 2;
+        // 断网、换路径时有几轮几乎什么都没送到，平均只有每秒几个字节，那不是限速的证据：按它打折，节奏会被压成 0。
+        let limited_elsewhere = recent >= MIN_LIMITER_EVIDENCE_RATE && recent < self.btl_bw / 2 && recent < window_rate / 2;
         let delivering = match (limited_elsewhere, self.app_idle_estimate) {
             (false, _) => u64::MAX,
             (true, true) => self.btl_bw / 2,
@@ -1212,7 +1247,7 @@ impl Bbr {
             self.recent_round_rtts[self.recent_round_index] = self.round_min_rtt_us;
             self.recent_round_index = (self.recent_round_index + 1) % RECENT_ROUNDS;
             self.check_queue_is_ours();
-            if !self.queue_is_building() {
+            if !self.queue_above(self.foreign_margin_us()) {
                 self.foreign_queue = false;
             }
             self.round_min_rtt_us = u64::MAX;
@@ -1314,8 +1349,13 @@ impl Bbr {
     }
 
     fn queue_is_building(&self) -> bool {
+        self.queue_above(self.queue_margin_us())
+    }
+
+    /// 一轮里最小的往返比基准高出 `margin_us`。
+    fn queue_above(&self, margin_us: u64) -> bool {
         let floor = if self.round_rtt_samples >= ROUND_RTT_SAMPLES { self.round_min_rtt_us } else { self.last_round_min_rtt_us };
-        floor != u64::MAX && floor >= self.base_rtt().saturating_add(self.queue_margin_us())
+        floor != u64::MAX && floor >= self.base_rtt().saturating_add(margin_us)
     }
 
     /// 余量要盖过抖动：抖动小的链路上按往返的十六分之一算，10 毫秒的浅队列排到一半就能发现；
@@ -1327,8 +1367,16 @@ impl Bbr {
     /// 队列在排，而且上一次降速开始时就在排：是别的流排的。巡航时发现排队会主动降速，自己排的队到降速阶段开始前已经排空了。
     /// 2026-11-03 试过再看降速期间队列有没有回落，对比矩阵和共享矩阵里结果几乎一样，没留。
     /// 丢包跟着速率涨时也按这样算：降速时丢的包分不清是随机丢的还是被挤掉的，送到的照样算，估高的随机丢包率才降得下来。
+    /// 余量用 [`Self::foreign_margin_us`]，比排队判断的小。
     pub(crate) fn queue_is_foreign(&self) -> bool {
-        (self.foreign_queue && self.queue_is_building()) || self.overflowing
+        (self.foreign_queue && self.queue_above(self.foreign_margin_us())) || self.overflowing
+    }
+
+    /// 认别人的队列用的余量，只影响随机丢包率的样本。排队判断至少要 4 毫秒，几条连接挤满 3 毫秒的队列时
+    /// 永远到不了；这里按一轮的最小往返比，抖动已经滤掉一层，再留抖动的三倍、往返的 1/32，至少 0.5 毫秒。
+    /// 2026-11-05：下限 0.25、0.5、1 毫秒在浅队列扫描里结果一样；去掉它，浅队列扫描平均丢包 5.95% → 7.07%。
+    fn foreign_margin_us(&self) -> u64 {
+        (self.min_rtt_us / 32).max(self.rtt_jitter_us * 3).clamp(FOREIGN_MARGIN_MIN_US, QUEUE_MARGIN_MAX_US)
     }
 
     fn start_calm_watch(&mut self) {
@@ -1341,7 +1389,7 @@ impl Bbr {
     /// 降速阶段结束时才更新，这一段降速发的包仍按上一段的结论算。
     fn finish_calm_watch(&mut self) {
         if core::mem::take(&mut self.calm_watch) {
-            self.foreign_queue = self.calm_entry_queue_us >= self.queue_margin_us();
+            self.foreign_queue = self.calm_entry_queue_us >= self.foreign_margin_us();
         }
     }
 

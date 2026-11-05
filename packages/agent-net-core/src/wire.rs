@@ -6,6 +6,8 @@
 //! PING：`[3]`
 //! CREDIT：`[5][流号 4][允许发到的流内序号低 32 位 4]`
 //! PARITY：`[4][首分片序号低 16 位 2][覆盖分片数 1][校验包序号 1][长度校验 2][校验内容]`，内容一直到包尾，所以只能是最后一帧。
+//! PATH_CHALLENGE / PATH_RESPONSE：`[6、8 或 7][值 8]`，只用在加密连接的路径验证里，单独成包，后面全是填充的零，见 `secure.rs`。
+//! 8 是验证一个只换了端口的地址（来源 IP 和数据路径相同），被验证的一端不用从头量往返和带宽。
 //!
 //! 每次发送都用新包号，重传也不例外：这样 RTT 没有歧义，第 4 步也能用包号做加密 nonce。
 
@@ -43,7 +45,11 @@ const FRAME_ACK: u8 = 2;
 const FRAME_PING: u8 = 3;
 const FRAME_PARITY: u8 = 4;
 const FRAME_CREDIT: u8 = 5;
+const FRAME_PATH_CHALLENGE: u8 = 6;
+const FRAME_PATH_RESPONSE: u8 = 7;
+const FRAME_PATH_CHALLENGE_SAME_ROUTE: u8 = 8;
 pub(crate) const CREDIT_FRAME_LEN: usize = 9;
+pub(crate) const PATH_FRAME_LEN: usize = 9;
 
 /// 确认延迟的单位。两字节能表示约 4.2 秒，再长就饱和。
 const ACK_DELAY_UNIT_US: u64 = 64;
@@ -181,6 +187,43 @@ pub(crate) fn write_credit(out: &mut [u8], used: usize, stream: u32, end: u64) -
 pub(crate) fn write_ping(out: &mut [u8], used: usize) -> usize {
     out[used] = FRAME_PING;
     used + 1
+}
+
+/// 路径验证帧占满 `out`：帧后面填零，填充让验证包本身也测一测这条路径能过多长的包。
+pub(crate) fn write_path_frame(out: &mut [u8], frame: PathFrame, value: u64) {
+    out[0] = match frame {
+        PathFrame::Challenge { same_route: false } => FRAME_PATH_CHALLENGE,
+        PathFrame::Challenge { same_route: true } => FRAME_PATH_CHALLENGE_SAME_ROUTE,
+        PathFrame::Response => FRAME_PATH_RESPONSE,
+    };
+    out[1..PATH_FRAME_LEN].copy_from_slice(&value.to_be_bytes());
+    out[PATH_FRAME_LEN..].fill(0);
+}
+
+/// 包头之后是不是路径验证帧。
+pub(crate) fn is_path_frame(frames: &[u8]) -> bool {
+    matches!(frames.first(), Some(&FRAME_PATH_CHALLENGE | &FRAME_PATH_RESPONSE | &FRAME_PATH_CHALLENGE_SAME_ROUTE))
+}
+
+/// 路径验证帧的种类。`same_route` 是验证方看出来新地址只换了端口。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PathFrame {
+    Challenge { same_route: bool },
+    Response,
+}
+
+/// 解出路径验证帧：种类、值。填充不全是零时格式不对。
+pub(crate) fn parse_path_frame(frames: &[u8]) -> Option<(PathFrame, u64)> {
+    let value = u64::from_be_bytes(frames.get(1..PATH_FRAME_LEN)?.try_into().ok()?);
+    if frames[PATH_FRAME_LEN..].iter().any(|&byte| byte != 0) {
+        return None;
+    }
+    let frame = match frames[0] {
+        FRAME_PATH_RESPONSE => PathFrame::Response,
+        FRAME_PATH_CHALLENGE_SAME_ROUTE => PathFrame::Challenge { same_route: true },
+        _ => PathFrame::Challenge { same_route: false },
+    };
+    Some((frame, value))
 }
 
 /// 已收到的包号区间，升序、闭区间。写入时优先保留最新的区间。

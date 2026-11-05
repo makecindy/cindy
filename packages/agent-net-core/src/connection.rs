@@ -3,8 +3,8 @@
 //! - 保留：`una` 累计确认加逐包确认、快速重传、1.5 倍退避、窗口探测、未读数据计入接收窗口、最老分片优先重传。
 //! - 改动：重传使用新包号；确认按包号区间表达，比 KCP 每分片 24 字节的确认更省。
 //! - 新增：带宽估计和发送节奏（见 `congestion.rs`）、按时间判丢、从误判中学习乱序程度、
-//!   丢包时捎带小消息、窗口被卡住时重传发两份、按丢包率调整的校验包（见 `parity.rs`）。
-//! - 尚未包含：多路流（第 2 步）、加密（第 4 步）。
+//!   丢包时捎带小消息、窗口被卡住时重传发两份、按丢包率调整的校验包（见 `parity.rs`）、多路流（见 `stream.rs`）。
+//! - 不在这里：加密、连接号和换地址都在 `secure.rs`，明文连接没有认证，不能跟着来源地址换路径。
 
 use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
 use alloc::vec::Vec;
@@ -175,6 +175,9 @@ pub struct Config {
     /// 起始序号。测试用来覆盖 32 位回绕，正常使用保持 0。
     pub initial_sequence: u64,
     pub initial_packet_number: u64,
+    /// 加密连接：对端发给这一端的每个数据包都带着这个号，调用方按它找到连接，地址变了也找得到。
+    /// 由这一端自己选，同一个端口上的连接各不相同。明文连接不用。
+    pub connection_id: u32,
 }
 
 impl Default for Config {
@@ -199,6 +202,7 @@ impl Default for Config {
             probe_max_us: 5_000_000,
             initial_sequence: 0,
             initial_packet_number: 0,
+            connection_id: 0,
         }
     }
 }
@@ -414,6 +418,8 @@ pub struct Connection {
     first_sent_at: u64,
     consecutive_timeouts: u32,
     last_timeout_at: u64,
+    /// 这之前不判超时，见 [`Self::hold_timeouts`]。
+    timeouts_held_until: u64,
     loss_ppm: u32,
     loss_samples: u32,
     /// 晚到得足以堵住窗口的包占多少，单位百万分之一。
@@ -470,6 +476,8 @@ pub struct Connection {
     /// 收到的包之间的平均间隔。
     arrival_gap_us: u64,
     last_arrival_at: u64,
+    /// 最后一次收到带数据（分片或校验）的包的时间。
+    last_data_at: u64,
     /// 最近收到的包的包号和到达时间，用来算晚到的包比后发的包晚了多久。
     recent_arrivals: [(u64, u64); RECENT_ARRIVALS],
     recent_cursor: usize,
@@ -554,6 +562,7 @@ impl Connection {
             first_sent_at: now_us,
             consecutive_timeouts: 0,
             last_timeout_at: 0,
+            timeouts_held_until: 0,
             loss_ppm: 0,
             loss_samples: 0,
             late_ppm: 0,
@@ -594,6 +603,7 @@ impl Connection {
             unacked_packets: 0,
             arrival_gap_us: u64::MAX,
             last_arrival_at: 0,
+            last_data_at: 0,
             recent_arrivals: [(0, 0); RECENT_ARRIVALS],
             recent_cursor: 0,
             late_arrival_us: 0,
@@ -1020,6 +1030,99 @@ impl Connection {
         self.next_packet - 1
     }
 
+    /// 外层自己写的包（路径验证）要用的包号。这个包不进待确认队列，对端也不交给可靠层，只计入流量。
+    pub(crate) fn take_packet_number(&mut self, wire_bytes: usize) -> u64 {
+        let number = self.next_packet;
+        self.next_packet += 1;
+        self.stats.packets_sent += 1;
+        self.stats.wire_bytes_sent += wire_bytes as u64;
+        number
+    }
+
+    /// 外层自己处理掉的包（路径验证），只计入流量。不算收到对端的消息：对端在验证这一端的新地址，
+    /// 不说明它的数据和确认能送到这里，这一端照样要按安静处理、接着探测。
+    pub(crate) fn on_probe_received(&mut self, wire_bytes: usize) {
+        self.stats.packets_received += 1;
+        self.stats.wire_bytes_received += wire_bytes as u64;
+    }
+
+    /// 最后一次收到对端任何有效包的时间。
+    pub(crate) fn last_heard(&self) -> u64 {
+        self.last_heard
+    }
+
+    /// 最后一次收到对端数据（分片或校验）的时间。
+    pub(crate) fn last_data_at(&self) -> u64 {
+        self.last_data_at
+    }
+
+    pub(crate) fn bytes_in_flight(&self) -> u64 {
+        self.bytes_in_flight
+    }
+
+    pub(crate) fn srtt_us(&self) -> u64 {
+        self.rtt.srtt_us()
+    }
+
+    /// 换了路径：在途的包多半跟着旧路径丢了，全部放回待重传；往返、带宽、丢包和乱序都按新路径从头量。
+    /// 序号、包号和流都不受影响，对端照常确认。
+    pub(crate) fn on_path_change(&mut self, now_us: u64) {
+        self.requeue_in_flight();
+        // 旧路径上判丢的包再被确认，说明不了新路径的乱序。
+        self.lost.clear();
+        self.rtt = RttEstimator::new(self.config.initial_rto_us, self.config.min_rto_us, self.config.max_rto_us, self.config.ack_delay_us);
+        self.congestion.restart();
+        self.packet_threshold = self.config.reorder_threshold;
+        self.reorder_delay_us = 0;
+        self.reorder_decay_at = now_us;
+        self.consecutive_timeouts = 0;
+        self.loss_ppm = 0;
+        self.loss_samples = 0;
+        self.late_ppm = 0;
+        self.jitter_late_ppm = 0;
+        self.jitter_parity_ppm = 0;
+        self.jitter_parity_round = 0;
+        self.jitter_parity_ceiling = 1_000_000;
+        self.bundle_until = 0;
+        self.parity_floor_until = 0;
+        self.lost_run_ppm = 0;
+        self.arrival_gap_us = u64::MAX;
+        self.late_arrival_us = 0;
+        self.late_arrival_ppm = 0;
+        self.delivered_at = now_us;
+        self.first_sent_at = now_us;
+    }
+
+    /// 只换了端口、走的还是同一条路（NAT 换了外部端口）：发往旧端口的包多半丢了，放回待重传，不算丢包；
+    /// 往返、带宽和丢包率都还适用，照旧。连续超时清零：新端口已经验证通过了。
+    pub(crate) fn on_port_change(&mut self) {
+        self.requeue_in_flight();
+        self.consecutive_timeouts = 0;
+    }
+
+    /// 马上发一个确认。加密层验证通过、换到对端的新地址时用：验证期间的确认都发往了旧地址，对端没收到，
+    /// 它在途的包等不到确认、窗口又满着，要等超时把它们全判丢才动。2026-11-05 模拟里换一次端口卡了 50 毫秒、白重传 189 个包。
+    pub(crate) fn ack_now(&mut self, now_us: u64) {
+        self.request_ack(now_us);
+    }
+
+    /// 在途的包全部放回待重传，不算丢包。
+    fn requeue_in_flight(&mut self) {
+        while let Some(packet) = self.sent.pop_front() {
+            self.bytes_in_flight -= packet.bytes as u64;
+            for &sn in &packet.segments[..packet.segment_count as usize] {
+                let Some(segment) = self.segment_mut(sn) else { continue };
+                if segment.acked {
+                    continue;
+                }
+                segment.in_flight = false;
+                let urgent = segment.urgent;
+                self.in_flight -= 1;
+                self.retransmit.insert((!urgent, sn));
+            }
+        }
+    }
+
     /// 握手完成时调用：连接在握手期间就建好了，创建时记下的时间已经过时。只能在收发任何包之前调用。
     pub(crate) fn reset_clock(&mut self, now_us: u64) {
         debug_assert!(self.stats.packets_sent == 0 && self.stats.packets_received == 0);
@@ -1069,6 +1172,7 @@ impl Connection {
         }
 
         let mut ack_eliciting = false;
+        let mut carries_data = false;
         let mut urgent = false;
         let mut accepted = true;
         let rcv_next_before = self.rcv_next;
@@ -1077,6 +1181,7 @@ impl Connection {
             match wire::parse_frame(packet, &mut pos).ok_or(PacketError::Malformed)? {
                 Frame::Data { sn, payload, headed } => {
                     ack_eliciting = true;
+                    carries_data = true;
                     accepted &= self.accept_segment(wire::expand(sn, self.rcv_next, wire::SEQUENCE_BITS), payload, headed);
                 }
                 Frame::Ack(ack) => self.apply_ack(now_us, &ack),
@@ -1095,12 +1200,16 @@ impl Connection {
                 }
                 Frame::Parity { first, count, index, length, payload } => {
                     ack_eliciting = true;
+                    carries_data = true;
                     self.on_parity(now_us, wire::expand(first, self.rcv_next, wire::PARITY_FIRST_BITS), count, index, length, payload);
                 }
             }
         }
         if core::mem::take(&mut self.parity_dirty) {
             self.try_recover();
+        }
+        if carries_data {
+            self.last_data_at = now_us;
         }
         // 有分片超出窗口时不能确认这个包：确认等于承诺收下了里面所有数据，否则就是丢数据。
         if !accepted {
@@ -1179,6 +1288,14 @@ impl Connection {
 
     fn apply_ack(&mut self, now_us: u64, ack: &wire::AckFrame<'_>) {
         let largest = wire::expand(ack.largest, self.next_packet.saturating_sub(1), wire::ACK_NUMBER_BITS);
+        // 这个确认里最新的包早被超时判丢了：往返突然变长（换了网络、路由变了），超时比往返还短，在途的包都先被判丢、再被确认。
+        // 每次发送都用新包号，它的往返照样准；不采样的话超时永远追不上，每个确认还会把退避清零，连接卡在误判里出不来。
+        // 只取这个确认里最新的包：确认延迟说的就是它，旧确认丢了、被后面的确认带上的包不会是最新的那个。
+        let late_sample = (self.rtt.srtt_us() > 0)
+            .then(|| self.lost.binary_search_by_key(&largest, |lost| lost.packet.number).ok())
+            .flatten()
+            .map(|index| self.lost[index].packet.sent_at)
+            .filter(|_| self.largest_acked.is_none_or(|value| largest > value));
         let mut newest = None;
         let mut high = largest;
         let mut low = high + 1 - ack.first_run as u64;
@@ -1214,6 +1331,9 @@ impl Connection {
             };
             self.congestion.on_ack(now_us, &sample, self.delivered, self.bytes_in_flight);
             self.adjust_jitter_parity();
+        } else if let Some(sent_at) = late_sample {
+            let elapsed = now_us.saturating_sub(sent_at);
+            self.rtt.observe(elapsed.saturating_sub(ack.delay_us.min(elapsed / 2)));
         }
         if self.largest_acked.is_none_or(|value| largest > value) {
             self.largest_acked = Some(largest);
@@ -1674,7 +1794,7 @@ impl Connection {
     /// 按包算的话一次断网就能把退避和连续超时次数刷到顶。
     fn timeout_deadline(&self) -> Option<u64> {
         let front = self.sent.front()?;
-        let aged = (front.sent_at + self.timeout_age_us()).max(self.parity_hold_until(front).unwrap_or(0));
+        let aged = (front.sent_at + self.timeout_age_us()).max(self.parity_hold_until(front).unwrap_or(0)).max(self.timeouts_held_until);
         if self.consecutive_timeouts == 0 {
             return Some(aged);
         }
@@ -1682,6 +1802,12 @@ impl Connection {
         let sparse = self.snd_sent - self.snd_una + pending.div_ceil(self.max_segment) as u64 <= SPARSE_BACKLOG_SEGMENTS;
         let backoff = self.rtt.timeout_us(self.consecutive_timeouts, self.long_outage(self.last_timeout_at), sparse);
         Some(aged.max(self.last_timeout_at + backoff + self.reorder_delay_us))
+    }
+
+    /// 到 `until_us` 之前收不到确认也不判超时。对端在验证这一端只换了端口的新地址时用：
+    /// 验证通过之前它的确认都发往旧端口，这一端在途的包其实都送到了。
+    pub(crate) fn hold_timeouts(&mut self, until_us: u64) {
+        self.timeouts_held_until = self.timeouts_held_until.max(until_us);
     }
 
     /// 很久没有收到对端的包，或者还没测到 RTT，都按长断网处理：后者只是不知道往返多长，

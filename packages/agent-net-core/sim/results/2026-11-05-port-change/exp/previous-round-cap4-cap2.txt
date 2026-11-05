@@ -1,0 +1,13 @@
+== cap 4 14:04:34
+84:const SILENCE_PING_MAX_BACKOFF: u64 = 4;
+RESULT loss 0: runs 410 dead 0 mean 1.97s p50 1.90s p90 3.66s p99 4.15s max 4.16s
+RESULT loss 0.1: runs 410 dead 0 mean 2.49s p50 2.15s p90 4.33s p99 8.91s max 12.15s
+RESULT loss 0.3: runs 410 dead 4 mean 4.81s p50 3.35s p90 11.52s p99 18.75s max 26.86s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 204.20s
+== cap 2 14:08:02
+84:const SILENCE_PING_MAX_BACKOFF: u64 = 2;
+RESULT loss 0: runs 410 dead 0 mean 1.19s p50 1.15s p90 2.15s p99 2.16s max 2.16s
+RESULT loss 0.1: runs 410 dead 0 mean 1.50s p50 1.34s p90 2.65s p99 4.91s max 6.15s
+RESULT loss 0.3: runs 410 dead 0 mean 2.92s p50 2.10s p90 6.41s p99 12.00s max 16.50s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 189.36s
+done

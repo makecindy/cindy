@@ -1,0 +1,4 @@
+   Compiling agent-net-core v0.0.0 (<repo>\packages\agent-net-core)
+   Compiling agent-net-udp v0.0.0 (<repo>\packages\agent-net-core\udp)
+   Compiling agent-net-sim v0.0.0 (<repo>\packages\agent-net-core\sim)
+    Finished `release` profile [optimized] target(s) in 6.49s
