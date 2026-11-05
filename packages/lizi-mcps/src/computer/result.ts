@@ -91,6 +91,15 @@ export function normalizeInputFailureAdvice(name: string, code: string | undefin
     return data;
   }
   // Replace conflicting recovery prose, not the error code, progress or uncertainty.
-  const { hint: _hint, next_call: _nextCall, summary: _summary, escalation: _escalation, ...evidence } = data as Record<string, unknown>;
-  return { ...evidence, message };
+  const { lastResult, ...evidence } = withoutRecoveryAdvice(data as Record<string, unknown>);
+  // Chunked type_text nests the raw refused chunk result, which carries the same prose.
+  const nested = lastResult && typeof lastResult === 'object' && !Array.isArray(lastResult)
+    ? { lastResult: withoutRecoveryAdvice(lastResult as Record<string, unknown>) }
+    : lastResult === undefined ? {} : { lastResult };
+  return { ...evidence, ...nested, message };
+}
+
+function withoutRecoveryAdvice(value: Record<string, unknown>): Record<string, unknown> {
+  const { message: _message, hint: _hint, next_call: _nextCall, summary: _summary, escalation: _escalation, ...rest } = value;
+  return rest;
 }

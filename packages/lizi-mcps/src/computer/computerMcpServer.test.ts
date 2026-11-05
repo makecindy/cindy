@@ -512,9 +512,11 @@ describe('createComputerMcpServer', () => {
         if (mode === 'throw') throw Object.assign(new Error(rawMessage), {
           code, outcomeUnknown: true, inputProgress: progress,
         });
-        return { ok: false, code, message: rawMessage, hint: rawMessage,
+        const refusal = { ok: false, code, message: rawMessage, hint: rawMessage,
           next_call: { tool: 'type_text', arguments: { x: 1, y: 2 } },
           outcome_unknown: true, input_progress: progress };
+        // Chunked long text nests the raw refused chunk under lastResult.
+        return { ...refusal, lastResult: refusal };
       }) };
       const h = await makeHarness(deps);
       try {
@@ -528,6 +530,7 @@ describe('createComputerMcpServer', () => {
         expect(payload.data.message).toContain(code === 'background_unavailable' ? 'set_value' : 'Do not resend');
         expect(JSON.stringify(payload)).not.toContain(rawMessage);
         expect(payload.data).not.toHaveProperty('next_call');
+        if (mode === 'return') expect(payload.data).toMatchObject({ lastResult: { code, outcome_unknown: true, input_progress: progress } });
         const calls = vi.mocked(deps.callTool).mock.calls;
         expect(calls.filter(([name]) => name === 'type_text')).toHaveLength(1);
         expect(calls.map(([name]) => name)).toEqual(mode === 'throw' ? ['type_text', 'list_windows'] : ['type_text']);
