@@ -3942,6 +3942,7 @@
             "hint": "{{agent}}의 이미지 연결에 적용됩니다. API가 실제로 지원하는 기능만 지정하세요. 저장 후 Art 상세 페이지를 다시 여세요."
           },
           "capabilityHint": "이 공급업체가 명시한 기능을 우선합니다. 이미지 지원 정보가 없으면 모델 이름으로 추정합니다.",
+          "imageInputDefault": "{{value}} (기본값)",
           "imageInput": "이미지 입력",
           "imageInputMixed": "엔진별로 다름",
           "supported": "지원",

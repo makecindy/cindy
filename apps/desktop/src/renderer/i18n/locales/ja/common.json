@@ -3942,6 +3942,7 @@
             "hint": "{{agent}} の画像接続に適用します。API が実際に対応する機能のみを指定してください。保存後に Art の詳細を開き直してください。"
           },
           "capabilityHint": "このプロバイダーが宣言した機能を優先します。画像対応が未宣言の場合はモデル名から推定します。",
+          "imageInputDefault": "{{value}}（デフォルト）",
           "imageInput": "画像入力",
           "imageInputMixed": "エンジンごとに異なる",
           "supported": "対応",

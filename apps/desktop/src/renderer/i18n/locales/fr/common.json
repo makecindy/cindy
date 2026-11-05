@@ -4035,6 +4035,7 @@
             "hint": "S'applique à la connexion Images de {{agent}}. Déclarez uniquement les capacités réellement prises en charge par l'API. Rouvrez les détails Art après l'enregistrement."
           },
           "capabilityHint": "Utilise les capacités déclarées par ce fournisseur. Si elle n'est pas déclarée, la prise en charge des images est déduite du nom du modèle.",
+          "imageInputDefault": "{{value}} (par défaut)",
           "imageInput": "Images en entrée",
           "imageInputMixed": "Variable selon le moteur",
           "supported": "Pris en charge",

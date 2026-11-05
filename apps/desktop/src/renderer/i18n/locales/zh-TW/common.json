@@ -3942,6 +3942,7 @@
             "hint": "套用於 {{agent}} 的圖片連線。僅宣告介面實際支援的能力，儲存後重新開啟 Art 詳情。"
           },
           "capabilityHint": "優先使用目前供應商宣告的能力；未宣告時，圖片能力參考模型名稱。",
+          "imageInputDefault": "{{value}}（預設）",
           "imageInput": "圖片輸入",
           "imageInputMixed": "各引擎不同",
           "supported": "支援",

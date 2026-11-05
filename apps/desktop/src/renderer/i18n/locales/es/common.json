@@ -4035,6 +4035,7 @@
             "hint": "Aplica para la conexión de Imágenes {{agent}}. Declare únicamente las capacidades que realmente admite el API. Vuelva a abrir los detalles del arte después de guardar."
           },
           "capabilityHint": "Utiliza capacidades declaradas por este proveedor. El soporte de imágenes recurre a la denominación de modelos cuando no se declara.",
+          "imageInputDefault": "{{value}} (predeterminado)",
           "imageInput": "Entrada de imagen",
           "imageInputMixed": "Varía según el motor.",
           "supported": "Apoyado",

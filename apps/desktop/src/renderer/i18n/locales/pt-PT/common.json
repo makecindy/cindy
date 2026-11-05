@@ -4035,6 +4035,7 @@
             "hint": "Aplica-se à ligação de Images de {{agent}}. Declare apenas capacidades efetivamente suportadas pela API. Volte a abrir os detalhes de Art após guardar."
           },
           "capabilityHint": "Usa as capacidades declaradas por este fornecedor. Quando não há declaração, o suporte de imagens é inferido a partir do nome do modelo.",
+          "imageInputDefault": "{{value}} (predefinição)",
           "imageInput": "Entrada de imagens",
           "imageInputMixed": "Varia consoante o motor",
           "supported": "Suportado",
