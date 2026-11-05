@@ -317,6 +317,8 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
         // A failed first spawn has no registered PTY. Try restart first because
         // hydrated state.created can also be false for an existing exited PTY.
         if (remote || extractIpcError(err)?.code !== 'TERMINAL_NOT_FOUND') throw err;
+        // Close can finish while restart is pending; never recreate its disposed PTY.
+        if (!aliveRef.current || !entry || entry.closing || entryRef.current !== entry) throw err;
         return window.electronAPI.terminal.create({
           id: tabId,
           cwd: workdir || (typeof process !== 'undefined' && process.env?.HOME) || '/',

@@ -201,6 +201,67 @@ describe('TerminalTabBody sidebar visibility', () => {
   });
 });
 
+describe('TerminalTabBody local restart fallback', () => {
+  // PR8881 discussion_r4476372739 / unit: first create fails, then a deferred
+  // restart reports NOT_FOUND after close/unmount. Existing attach/prepare races
+  // miss this fallback, which must not launch an orphan shell. Exercise the real
+  // component and close hook; rollback must preserve explicit retry without respawn.
+  it.each(['open', 'closed', 'unmounted', 'rollback-before', 'rollback-after'] as const)(
+    'checks the local retry lifetime (%s)', async ordering => {
+      entry.ptyAttached = false;
+      const api = window.electronAPI.terminal;
+      vi.mocked(api.create).mockRejectedValueOnce(new Error('[TERMINAL_SPAWN_FAILED] spawn failed'));
+      let rejectRestart!: (error: Error) => void;
+      vi.mocked(api.restart).mockImplementationOnce(() => new Promise((_, reject) => { rejectRestart = reject; }));
+      let rejectDispose!: (error: Error) => void;
+      if (ordering.startsWith('rollback')) {
+        vi.mocked(api.dispose).mockImplementationOnce(() => new Promise((_, reject) => { rejectDispose = reject; }));
+      }
+      const ctx = makeContext();
+      const state = { created: false, exited: null, title: '', shellId: '', shellDisplayName: '' };
+      const view = render(<TerminalTabBody state={state} ctx={ctx} active />);
+      fireEvent.click(await screen.findByText('rightSidebar.terminal.restart'));
+      expect(api.restart).toHaveBeenCalledWith(ctx.tabId);
+      let closing: void | boolean | Promise<void | boolean>;
+      if (ordering === 'closed' || ordering.startsWith('rollback')) {
+        await act(async () => {
+          closing = getTabKind('terminal')!.onBeforeClose!(state, { tabId: ctx.tabId, sessionId: ctx.sessionId });
+          if (ordering === 'closed') await closing;
+        });
+        expect(api.dispose).toHaveBeenCalledOnce();
+        expect(entry.closing).toBe(true);
+      } else if (ordering === 'unmounted') {
+        view.unmount();
+      }
+      const rollback = async () => {
+        await act(async () => {
+          rejectDispose(new Error('offline'));
+          expect(await closing).toBe(false);
+        });
+        expect(entry.closing).toBe(false);
+      };
+      if (ordering === 'rollback-before') await rollback();
+      await act(async () => { rejectRestart(new Error('[TERMINAL_NOT_FOUND] missing')); });
+      if (ordering === 'open' || ordering === 'rollback-before') {
+        expect(api.create).toHaveBeenCalledTimes(2);
+        expect(api.create).toHaveBeenLastCalledWith({ id: ctx.tabId, cwd: ctx.workdir, cols: 80, rows: 24 });
+        expect(ctx.patchState).toHaveBeenCalledWith(expect.objectContaining({ created: true }));
+      } else {
+        expect(api.create).toHaveBeenCalledOnce();
+        expect(ctx.patchState).not.toHaveBeenCalled();
+      }
+      if (ordering === 'rollback-after') {
+        await rollback();
+        expect(api.create).toHaveBeenCalledOnce();
+        vi.mocked(api.restart).mockRejectedValueOnce(new Error('[TERMINAL_NOT_FOUND] missing'));
+        await act(async () => { fireEvent.click(screen.getByText('rightSidebar.terminal.restart')); });
+        expect(api.create).toHaveBeenCalledTimes(2);
+        expect(ctx.patchState).toHaveBeenCalledWith(expect.objectContaining({ created: true }));
+      }
+    },
+  );
+});
+
 describe('TerminalTabBody remote ownership', () => {
   // Production close hook / unit tier: main-window closeAll must identify a PTY
   // owned by a popped-out renderer. Existing close tests only covered cancellation,
