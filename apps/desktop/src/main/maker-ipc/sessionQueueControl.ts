@@ -180,20 +180,27 @@ export function createSessionQueueControlService(deps: SessionQueueControlDeps) 
       await params.beforeMutation?.();
       // 其它条目不得跨过停点:否则停点会把一条本该执行的消息静默降到不执行
       // 的一侧。停点前后各自区间内的排序仍然可用,停点条目自身也可以移动。
+      // 必须在**实际移动**这一步按最新队列判定:权限复核是异步的,期间用户可能刚设好
+      // 或移动了停点,用复核前的副本会放行一次真正越界的移动。
       if (resolved.item.held !== true) {
-        const queue = resolved.queue;
+        const queue = (await deps.getSnapshot(params.sessionId)).pendingQueue;
         const stopIndex = queue.findIndex((candidate) => candidate.held === true);
         const movingIndex = queue.findIndex(
           (candidate) => candidate.clientId === params.queuedMessageId,
         );
         if (stopIndex >= 0 && movingIndex >= 0) {
-          // 与 coordinator.move 的插入下标修正保持一致:先夹到长度,再从后移方向减一。
-          const clamped = Math.max(0, Math.min(params.position, queue.length));
-          const insertIndex = movingIndex < clamped ? clamped - 1 : clamped;
-          const stopIndexAfterRemoval = movingIndex < stopIndex ? stopIndex - 1 : stopIndex;
+          // `position` 是移动后的最终下标(适配器再换算成 coordinator 的插入下标),
+          // 这里直接按同一语义模拟落点,避免两套下标语义混用。
+          const others = queue.filter((candidate) => candidate.clientId !== params.queuedMessageId);
+          const insertAt = Math.max(0, Math.min(params.position, others.length));
+          const simulated = [
+            ...others.slice(0, insertAt),
+            resolved.item,
+            ...others.slice(insertAt),
+          ];
+          const finalStopIndex = simulated.findIndex((candidate) => candidate.held === true);
           const startsBeforeStop = movingIndex < stopIndex;
-          // 插到停点当前位置之前(含同位)才算「停在停点前面」。
-          const endsBeforeStop = insertIndex <= stopIndexAfterRemoval;
+          const endsBeforeStop = insertAt < finalStopIndex;
           if (startsBeforeStop !== endsBeforeStop) {
             return {
               ok: false,

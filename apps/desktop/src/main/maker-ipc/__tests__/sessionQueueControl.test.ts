@@ -169,7 +169,9 @@ describe('session queue control service', () => {
       .resolves.toEqual({ ok: true, queuedMessageId: item.clientId, position: 2 });
 
     moveQueuedMessage.mockReturnValueOnce(null);
+    // resolve 读一次,停点边界在实际移动前再读一次最新队列,最后 classifyLostRace 读一次。
     getSnapshot.mockResolvedValueOnce({ pendingQueue: [item], consumingClientIds: [] })
+      .mockResolvedValueOnce({ pendingQueue: [item], consumingClientIds: [] })
       .mockResolvedValueOnce({ pendingQueue: [], consumingClientIds: [item.clientId] });
     await expect(service.move({ ...params, position: 0 }))
       .resolves.toMatchObject({ ok: false, errorCode: 'MESSAGE_CONSUMING' });

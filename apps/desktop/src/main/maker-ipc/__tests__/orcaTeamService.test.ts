@@ -4158,24 +4158,85 @@ describe('Orca worker queue stop point', () => {
         position,
       });
 
-    // 从停点之后移到停点之前:会静默改变是否执行,拒绝。
-    await expect(move('q-after', 0)).resolves.toMatchObject({
+    // position 是移动后的最终下标:[first, held, after, last] 里把 first 移到 1,
+    // 落点是 [held, first, after, last] —— first 跑到停点之后,拒绝。
+    await expect(move('q-first', 1)).resolves.toMatchObject({
       ok: false,
       errorCode: 'QUEUE_HELD_BOUNDARY',
     });
-    // 从停点之前移到停点之后:同样跨侧。
-    await expect(move('q-first', 3)).resolves.toMatchObject({
+    // 从停点之后移到停点之前:同样跨侧。
+    await expect(move('q-after', 0)).resolves.toMatchObject({
       ok: false,
       errorCode: 'QUEUE_HELD_BOUNDARY',
     });
     expect(moveQueuedMessage).not.toHaveBeenCalled();
 
-    // 停点之前 / 之后各自区间内的排序不受影响。
-    await expect(move('q-first', 1)).resolves.toMatchObject({ ok: true });
+    // 停点之后区间内的排序不受影响(在停点后的两条之间互换)。
     await expect(move('q-last', 2)).resolves.toMatchObject({ ok: true });
-
     // 停点条目自身可以移动。
-    await expect(move('q-held', 0)).resolves.toMatchObject({ ok: true, position: 2 });
+    await expect(move('q-held', 3)).resolves.toMatchObject({ ok: true, position: 2 });
+  });
+
+  it('keeps prefix ordering that does not cross the stop point', async () => {
+    const moveQueuedMessage = vi.fn(() => 0);
+    const { service } = createDeps({
+      getSessionQueueSnapshot: vi.fn(async () => ({
+        pendingQueue: [
+          queuedItem('q-first', leadOrigin),
+          queuedItem('q-second', leadOrigin),
+          heldItem('q-held', leadOrigin),
+        ],
+        steeringClientIds: [],
+        consumingClientIds: [],
+        isWorking: false,
+        willQueue: true,
+        queuePaused: false,
+      })),
+      moveQueuedMessage,
+    });
+
+    // [first, second, held] 里把 second 移到 0:仍在停点之前,不跨侧。
+    await expect(
+      service.moveWorkerQueuedMessage({
+        callerLeadSessionId: 'lead-1',
+        workerRef: 'worker-1',
+        queuedMessageId: 'q-second',
+        position: 0,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(moveQueuedMessage).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a move that would cross a stop point set during the authority check', async () => {
+    let settled = false;
+    const moveQueuedMessage = vi.fn(() => 0);
+    const { service } = createDeps({
+      // 复核前的快照还没有停点;复核返回时用户已经挂起了 q-second。
+      getSessionQueueSnapshot: vi.fn(async () => ({
+        pendingQueue: settled
+          ? [queuedItem('q-first', leadOrigin), heldItem('q-second', leadOrigin), queuedItem('q-third', leadOrigin)]
+          : [queuedItem('q-first', leadOrigin), queuedItem('q-second', leadOrigin), queuedItem('q-third', leadOrigin)],
+        steeringClientIds: [],
+        consumingClientIds: [],
+        isWorking: false,
+        willQueue: true,
+        queuePaused: false,
+      })),
+      captureControlAuthority: async () => async () => {
+        settled = true;
+      },
+      moveQueuedMessage,
+    });
+
+    await expect(
+      service.moveWorkerQueuedMessage({
+        callerLeadSessionId: 'lead-1',
+        workerRef: 'worker-1',
+        queuedMessageId: 'q-third',
+        position: 0,
+      }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'QUEUE_HELD_BOUNDARY' });
+    expect(moveQueuedMessage).not.toHaveBeenCalled();
   });
 
   it('marks a queued dispatch receipt when the target queue has a stop point', async () => {
