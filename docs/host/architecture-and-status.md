@@ -174,6 +174,9 @@ Host 现已注册真实 Codex agent（本机 Codex CLI 登录 lane，未复制�
 - 同 profile 放入第二个账号库 → `runtime.state=uninitialized`，
   `detail="profile has 2 accounts; name one with CINDY_HOST_OWNER"`，不猜测、不打开任何库。
 
+回合内工具（Bash / 文件读写）在 Host 内真实执行：`POST /chat` 现在挂上交互代理，
+工具审批经 `/api/interactions/respond` 放行后，`proof.txt` 被真实写出并回显内容。
+
 已知缺口（均为 Host 侧未迁移，客户端模式下显式失败）：插件执行沙箱、MCP 执行、scheduler、
-device-link、记忆/文件工具；`historyView` 为单页返回（未分页）。
+device-link、Memory、文件选择对话框；`historyView` 为单页返回（未分页）。
 

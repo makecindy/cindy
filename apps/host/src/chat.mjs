@@ -97,6 +97,10 @@ export function createChatHandler(deps) {
         providerId: stored?.providerId ?? undefined,
         title: typeof payload.title === 'string' ? payload.title : undefined,
       });
+      // Tool calls need a resolver: without one the session denies every request
+      // as `no_listener_attached`. The broker publishes it on the event stream and
+      // resolves it from `POST /api/interactions/respond`.
+      deps.interactions?.attach(session, session.id);
       write({ type: 'session', sessionId: session.id });
 
       let finished = false;

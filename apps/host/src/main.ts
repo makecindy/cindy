@@ -490,6 +490,7 @@ const server = createHostServer({
     },
     defaultWorkDir: resolveHostDataDir(),
     defaultModel: process.env.CINDY_HOST_MODEL?.trim() || 'claude-sonnet-4-6',
+    interactions: interactionBroker,
     onSessionSent: (sessionId: string) => provisionalSessionIds.delete(sessionId),
   }),
   providers: () => listProviders({ gateway: gatewayCredentials, ownerId: runtime.owner }),

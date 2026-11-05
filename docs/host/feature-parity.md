@@ -44,7 +44,9 @@
 | 复用现有存储 | 已验证 | 打开同一 owner 库（145 条 migration / 87 表），无平行数据库 |
 | 单 Runtime 锁 | 已验证 | 第二个 Host 报 `runtime.state=blocked`、`storage=unopened` |
 | 插件列表 | 已验证（读） | Host 复用 Desktop `GhostManager` 列出已装插件（`/api/ghosts`，单测 + 实跑 `[]`）；`#/plugins` 页明暗两种模式正常；插件**执行**未迁移 |
-| Memory / 文件访问 | 禁用 + TODO | Host 未暴露对应通道；客户端模式下显式失败 |
+| 文件访问（回合内工具） | 已验证 | Host 回合内 Bash/文件工具真实执行：`/chat` 回合经 `/api/interactions/respond` 批准后写出 `proof.txt`，回复回显内容 |
+| 文件选择 / 目录浏览 UI | 禁用 + TODO | 依赖 Electron `dialog`；浏览器端改用路径输入 |
+| Memory | 禁用 + TODO | Host 未暴露记忆相关通道；未验证行为一致 |
 | MCP 服务器配置 | 禁用 + TODO | `custom-mcp-store` 无 Electron 依赖，可复用；尚未接线到 Host |
 | 定时任务（scheduler） | 禁用 + TODO | 仍在 Electron main；Host 侧未实现 |
 | device-link / 手机端 | 部分 | 迁移期仍由 Desktop 承担；客户端模式下相关通道显式失败 |
