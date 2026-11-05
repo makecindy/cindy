@@ -137,7 +137,11 @@ function InfoMetaContent({
             <SessionRelativeTime lastActivityAt={item.lastActivityAt} style={textStyle} />
           ) : piece.key === 'pr' && pr ? (
             <PrPiece
-              color={prStatusVisual(pr.status?.ok ? pr.status.status : null, colors)}
+              color={prStatusVisual(
+                pr.status?.ok ? pr.status.status : null,
+                colors,
+                pr.status?.ok ? pr.status.conflicts : null,
+              )}
               label={`${prNumberLabel(pr.ref)}`}
               testID={`home.sessionInfo.pr.${session.id}`}
               textStyle={textStyle}

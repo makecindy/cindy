@@ -398,6 +398,38 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
 
 describe('group timeline', () => {
+  // PR #8818 / component: the identity matcher cannot reject a complete foreign
+  // broadcast if the real Timeline splits it at a shorter member name first.
+  // French send parser + English Screen: @Tous is personal, the longer broadcast is not.
+  it.each([true, false])('keeps a French broadcast whole beside a shorter personal mention (own=%s)', async own => {
+    h.translate = (key, options) => i18n.t(key, { ...options, lng: 'en' });
+    const name = 'Tous';
+    const broadcastLabel = i18n.t('groupChat.mention.allBots', { lng: 'fr' });
+    const content = `@${name} @${broadcastLabel}`;
+    const mentions = resolveBotGroupMentions(content, { members: [{ botId: 'mimi', name }],
+      allLabels: [i18n.t('groupChat.mention.all', { lng: 'fr' })], allBotLabels: [broadcastLabel] });
+    expect(mentions).toEqual({ all: false, allBots: true, botIds: ['mimi'] });
+    const data = group({ serverBacked: true, messages: [message('prefix-broadcast', 1, {
+      authorKind: 'user', isSelf: own, content, mentions,
+    })] });
+    data.members[0] = { ...data.members[0]!, name };
+    await render(data);
+    const spans = () => [...node.querySelectorAll('span')];
+    const broadcast = spans().find(span => span.textContent === `@${broadcastLabel}`)!;
+    expect(broadcast).toBeDefined();
+    expect(spans().filter(span => span.textContent === '@Tous')).toHaveLength(1);
+    await act(async () => broadcast.click());
+    expect(byId('botGroup.mention.identity')).toBeNull();
+    await act(async () => spans().find(span => span.textContent === '@Tous')!.click());
+    expect(byId('botGroup.mention.identity')?.textContent).toContain(name);
+    await click('botGroup.mention.identity.close');
+    data.messages[0]!.mentions = { all: false, botIds: [] };
+    await render(data);
+    await act(async () => spans().find(span => span.textContent === `@${broadcastLabel}`)!.click());
+    expect(byId('botGroup.mention.identity')).toBeNull();
+    expect(h.chat.act).not.toHaveBeenCalled();
+  });
+
   // PR #8818 / component: Chinese-only broadcast coverage missed localized
   // labels colliding with a member name. Use the real send parser and Timeline:
   // a sender-locale broadcast must stay inert in English, while its qualified @ can open.

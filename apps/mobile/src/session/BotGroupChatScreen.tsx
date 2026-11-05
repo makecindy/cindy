@@ -890,8 +890,8 @@ export function BotGroupTimeline({
     all: [allLabel, ...SUPPORTED_LOCALES.map(lng => appI18n.t('groupChat.mention.all', { lng }))],
     bots: [allBotsLabel, ...SUPPORTED_LOCALES.map(lng => appI18n.t('groupChat.mention.allBots', { lng }))],
   }), [allLabel, allBotsLabel]);
-  const mentionLabels = useMemo(() => [allLabel, allBotsLabel, ...group.members.flatMap(member =>
-    [member.name, botGroupMentionDisplayName(member), member.nickname || member.displayName || member.name])], [allLabel, allBotsLabel, group.members]);
+  const mentionLabels = useMemo(() => [...broadcastLabels.all, ...broadcastLabels.bots, ...group.members.flatMap(member =>
+    [member.name, botGroupMentionDisplayName(member), member.nickname || member.displayName || member.name])], [broadcastLabels, group.members]);
   const [mentioned, setMentioned] = useState<{ groupId: string; botId: string; anchor: BotGroupMentionPoint } | null>(null);
   const mentionedMember = mentioned?.groupId === group.id ? group.members.find(member => member.botId === mentioned.botId) ?? null : null;
   useEffect(() => { if (mentioned && !mentionedMember) setMentioned(null); }, [mentioned, mentionedMember]);
