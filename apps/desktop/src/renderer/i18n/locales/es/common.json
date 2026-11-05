@@ -13,7 +13,7 @@
       "unknown": "No se ha indicado la etapa que falló."
     },
     "reason": {
-      "offline": "El ejecutor original se ha indicado como desconectado. Otras sesiones pueden usar otros ordenadores.",
+      "offline": "El ordenador contactado en esta etapa se ha indicado como desconectado. Otras tareas pueden ejecutarse en otros ordenadores.",
       "timeout": "La solicitud agotó el tiempo de espera. La etapa que falló indica el servicio contactado; no se ha confirmado un fallo de la conexión directa ni del relé.",
       "relay": "La conexión device-link no está lista o se ha cerrado. Si solo falla la conexión directa, normalmente se usa el relé automáticamente.",
       "denied": "Se ha denegado el acceso o desactivado el control remoto. Reintentar no permite eludir esta restricción.",

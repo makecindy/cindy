@@ -13,7 +13,7 @@
       "unknown": "The failing stage was not reported."
     },
     "reason": {
-      "offline": "The original executor was reported offline. Other tasks may be using different computers.",
+      "offline": "The computer contacted at this stage was reported offline. Other tasks may be running on different computers.",
       "timeout": "The request timed out. The failing stage identifies the service being contacted; neither direct-path nor relay failure has been confirmed.",
       "relay": "The device-link connection is not ready or was closed. A failed direct path alone normally falls back to the relay.",
       "denied": "Access was denied or remote control was disabled. Retrying cannot bypass this restriction.",

@@ -13,7 +13,7 @@
       "unknown": "L’étape en échec n’a pas été indiquée."
     },
     "reason": {
-      "offline": "L’exécuteur d’origine a été signalé hors ligne. D’autres sessions peuvent utiliser d’autres ordinateurs.",
+      "offline": "L’ordinateur contacté à cette étape a été signalé hors ligne. D’autres tâches peuvent s’exécuter sur d’autres ordinateurs.",
       "timeout": "La requête a expiré. L’étape en échec indique le service contacté ; aucune panne de la liaison directe ou du relais n’est confirmée.",
       "relay": "La connexion device-link n’est pas prête ou a été fermée. Un échec de la liaison directe seule bascule normalement sur le relais.",
       "denied": "L’accès a été refusé ou le contrôle à distance désactivé. Réessayer ne contourne pas cette restriction.",

@@ -13,7 +13,7 @@
       "unknown": "A etapa que falhou não foi indicada."
     },
     "reason": {
-      "offline": "O executor original foi indicado como offline. Outras sessões podem usar outros computadores.",
+      "offline": "O computador contactado nesta etapa foi indicado como offline. Outras tarefas podem estar a ser executadas noutros computadores.",
       "timeout": "O pedido excedeu o tempo limite. A etapa que falhou indica o serviço contactado; não foi confirmada uma falha da ligação direta ou do relay.",
       "relay": "A ligação device-link não está pronta ou foi fechada. Se apenas a ligação direta falhar, normalmente é usado o relay automaticamente.",
       "denied": "O acesso foi negado ou o controlo remoto foi desativado. Tentar novamente não contorna esta restrição.",

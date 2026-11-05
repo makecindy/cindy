@@ -13,7 +13,7 @@
       "unknown": "Der fehlgeschlagene Schritt wurde nicht gemeldet."
     },
     "reason": {
-      "offline": "Der ursprüngliche Ausführungscomputer wurde als offline gemeldet. Andere Sitzungen können andere Computer verwenden.",
+      "offline": "Der in diesem Schritt kontaktierte Computer wurde als offline gemeldet. Andere Aufgaben können auf anderen Computern laufen.",
       "timeout": "Die Anfrage hat das Zeitlimit überschritten. Der fehlgeschlagene Schritt zeigt den kontaktierten Dienst; ein Ausfall der Direktverbindung oder des Relays ist nicht bestätigt.",
       "relay": "Die device-link-Verbindung ist noch nicht bereit oder wurde geschlossen. Bei Ausfall nur der Direktverbindung wird normalerweise automatisch das Relay genutzt.",
       "denied": "Der Zugriff wurde verweigert oder die Fernsteuerung deaktiviert. Erneutes Versuchen umgeht diese Einschränkung nicht.",
