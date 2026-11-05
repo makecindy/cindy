@@ -377,7 +377,7 @@ import {
 } from '@/lib/providerModels';
 import {
   clearProviderModelEffort,
-  clearProviderModelFast,
+  clearProviderModelFast, editProviderModelMemoryBatch,
   getProviderModelEffort,
   setProviderModelChoice,
   setProviderModelEffort,
@@ -969,6 +969,7 @@ interface ChatInputProps {
 
 /** 本机模型全局预设的读写器(本机目录的选择器共用一份,引用稳定)。 */
 const LOCAL_MODEL_MEMORY: ModelMemoryAccessors = {
+  editMany: editProviderModelMemoryBatch,
   getEffort: getProviderModelEffort,
   setEffort: setProviderModelEffort,
   setChoice: setProviderModelChoice,

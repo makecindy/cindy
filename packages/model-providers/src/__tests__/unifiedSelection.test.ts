@@ -1337,3 +1337,29 @@ describe('uniqueRenamedSessionModelId', () => {
     expect(uniqueRenamedSessionModelId(provider, 'gpt-6-luna', 'codex')).toBeNull();
   });
 });
+
+describe('admitted aliases in unified rows', () => {
+  const aliases = () => view({ id: 'example', source: 'user', models: {
+    'claude-code': [m('flash', { selectionAliasKey: 'flash' })],
+    codex: [m('flash-old', { selectionAliasKey: 'flash' }), m('flash', { selectionAliasKey: 'flash' })],
+  } });
+  it('combines display identity but keeps the exact historical wire ID', () => {
+    const providers = [aliases()];
+    const [row] = unifiedModelEntries({ providers, aliasPreferences: () => ({}),
+      keepModel: { providerId: 'example', agent: 'codex', modelId: 'flash-old' } });
+    expect(row.modelId).toBe('flash');
+    expect(row.capabilities.codex?.wireModelId).toBe('flash-old');
+    expect(row.capabilities['claude-code']?.wireModelId).toBe('flash');
+    expect(row.aliasEntries).toHaveLength(2);
+    expect(unifiedModelEntries({ providers, aliasPreferences: () => ({}) })).toHaveLength(1);
+    expect(unifiedModelEntries({ providers, aliasPreferences: () => ({}) })[0].capabilities.codex?.wireModelId).toBe('flash');
+  });
+  it('requires inspected preferences and preserves conflicts, scope, and missing members', () => {
+    const providers = [aliases()];
+    expect(unifiedModelEntries({ providers })).toHaveLength(2);
+    expect(unifiedModelEntries({ providers, aliasPreferences: (_, __, id) => ({ effort: id === 'flash' ? 'high' : 'low' }) })).toHaveLength(2);
+    const rows = unifiedModelEntries({ providers, agents: ['claude-code'], aliasPreferences: () => ({}) });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].capabilities.codex).toBeUndefined();
+  });
+});
