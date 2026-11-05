@@ -1,3 +1,5 @@
+import { localizeOutputLimit } from './outputLimitI18n';
+import { type OutputLimitDetails } from '@cindy/maker-shared';
 import { isMemberBudgetPaused } from '../../../shared/providerShareBudget';
 import { remoteAgentLimitErrorKey } from '../../../shared/remoteAgentLimits';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
@@ -74,6 +76,7 @@ interface ErrorBannerProps {
   errorReason?: string | null;
   /** Structured details for a tool-loop terminal error (optional for legacy rows). */
   toolLoop?: ToolLoopErrorDetails | null;
+  outputLimit?: OutputLimitDetails | null;
   retryText?: string | null;
   onRetry: (text: string) => void;
   /** 已停止且有任务上下文，但无原始恢复记录：发送现有隐藏续跑指令。 */
@@ -140,6 +143,7 @@ export function ErrorBanner({
   error,
   errorReason,
   toolLoop,
+  outputLimit,
   retryText,
   onRetry,
   onContinueAfterError,
@@ -361,11 +365,13 @@ export function ErrorBanner({
   const toolLoopI18nKey =
     errorReason === 'tool_use_loop_detected' ? getToolLoopI18nKey(toolLoop) : undefined;
   const localizedReasonError =
-    toolLoopI18nKey && toolLoop
-      ? t(toolLoopI18nKey, { count: toolLoop.count })
-      : errorReasonI18nKey
-        ? t(errorReasonI18nKey)
-        : undefined;
+    errorReason === 'output-limit'
+      ? localizeOutputLimit(t, outputLimit)
+      : toolLoopI18nKey && toolLoop
+        ? t(toolLoopI18nKey, { count: toolLoop.count })
+        : errorReasonI18nKey
+          ? t(errorReasonI18nKey)
+          : undefined;
   const remoteErrorCode = parseAgentErrorCode(error)?.code;
   const isAttachmentAccessDenied = remoteErrorCode === 'DEVICE_LINK_MEDIA_ACCESS_DENIED';
   const remoteErrorKey = (isMemberBudgetPaused(error) ? 'providerShare.memberBudget.paused' : null) ?? remoteAgentLimitErrorKey(error) ?? chatRemoteErrorGuidanceKey(remoteErrorCode, sessionSource);

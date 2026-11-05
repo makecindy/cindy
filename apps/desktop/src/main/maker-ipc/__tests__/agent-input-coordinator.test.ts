@@ -8079,6 +8079,25 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(projection.errorRetryText).toBeNull();
   });
 
+  it('projects output-limit details, preserves them through paired done, and clears on a new turn', async () => {
+    const h = createHarness();
+    const sid = 'output-limit-details';
+    h.coordinator.enqueue(sid, makeItem('limited', 'work'));
+    await flush();
+    h.coordinator.onTurnEvent(sid, 'error', 'limit', {
+      reason: 'output-limit', outputLimit: { outputTokens: 131072, reasoningTokens: 131064 },
+    });
+    await flush();
+    expect(latestProjection(h.projections).outputLimit).toEqual({ outputTokens: 131072, reasoningTokens: 131064 });
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+    expect(latestProjection(h.projections).outputLimit).toEqual({ outputTokens: 131072, reasoningTokens: 131064 });
+    h.coordinator.enqueue(sid, makeItem('next', 'new work'));
+    await flush();
+    expect(latestProjection(h.projections).outputLimit).toBeUndefined();
+  });
+
   it('does not expose active-turn retry when terminal error follows failed steer persistence', async () => {
     const h = createHarness();
     h.setAgentKind('codex');

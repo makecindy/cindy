@@ -1,3 +1,4 @@
+import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 import { nativeToolMediaFields } from '@cindy/maker-shared/tool-process-media';
 /**
  * pi RPC 事件 → AgentEvent 翻译层。
@@ -62,6 +63,8 @@ import {
 } from './subagent-progress.js';
 
 interface PiUsage {
+  /** Pi-normalized reasoning usage, included in output. */
+  reasoning?: number;
   input?: number;
   output?: number;
   cacheRead?: number;
@@ -122,6 +125,8 @@ export interface PiTranslateContext {
   /** 产品 turn 内 usage 累计；仅新 Host turn 重置，原生 retry 的 agent_start 保留。 */
   turnInput: number;
   turnOutput: number;
+  turnReasoning: number | undefined;
+  finalAssistantUsage: OutputLimitDetails | undefined;
   /**
    * 本 turn 里**父模型自己**上报的 output 累计(不含委派给子代理的用量)。
    * 子代理在工具执行期间跑,不属于父代理的生成,绝不能进 tokenSpeed 的 token 数。
@@ -258,6 +263,8 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     turnTokens: 0,
     turnInput: 0,
     turnOutput: 0,
+    turnReasoning: undefined,
+    finalAssistantUsage: undefined,
     turnMainOutput: 0,
     turnMainOutputUsageComplete: true,
     unreportedEstimatedOutput: 0,
@@ -494,6 +501,10 @@ function applyUsage(
   ctx.turnTokens += input + output;
   ctx.turnInput += input;
   ctx.turnOutput += output;
+  const reasoning = parseOutputLimitDetails({
+    outputTokens: output, reasoningTokens: usage.reasoning,
+  })?.reasoningTokens;
+  if (reasoning !== undefined) ctx.turnReasoning = (ctx.turnReasoning ?? 0) + reasoning;
   ctx.turnMainOutput += output;
   ctx.turnCacheRead += cacheRead;
   ctx.turnCacheWrite += cacheWrite;
@@ -510,6 +521,7 @@ function applyUsage(
     ...(model ? { model } : {}),
     inputTokens: input,
     outputTokens: output,
+    ...(reasoning !== undefined ? { reasoningTokens: reasoning } : {}),
     cacheReadTokens: cacheRead,
     cacheCreateTokens: cacheWrite,
     ...(typeof cost === 'number' && Number.isFinite(cost) ? { costUsd: cost } : {}),
@@ -523,6 +535,7 @@ export function piTurnUsageOf(ctx: PiTranslateContext) {
   return {
     settlementId: ctx.usageSettlementId,
     inputTokens: ctx.turnInput, outputTokens: ctx.turnOutput,
+    ...(ctx.turnReasoning !== undefined ? { reasoningTokens: ctx.turnReasoning } : {}),
     cacheReadTokens: ctx.turnCacheRead, cacheCreationTokens: ctx.turnCacheWrite,
     segments: ctx.turnUsageSegments.map(segment => ({ ...segment })),
     segmentsComplete: ctx.turnUsageSegmentsComplete,
@@ -812,6 +825,8 @@ export function translatePiEvent(
       ctx.turnTokens = 0;
       ctx.turnInput = 0;
       ctx.turnOutput = 0;
+      ctx.turnReasoning = undefined;
+      ctx.finalAssistantUsage = undefined;
       ctx.turnMainOutput = 0;
       ctx.turnMainOutputUsageComplete = true;
       ctx.unreportedEstimatedOutput = 0;
@@ -916,6 +931,9 @@ export function translatePiEvent(
         // denominator partial. Keep token/cost accounting, but do not publish it.
         ctx.generationTimingReliable = false;
       }
+      ctx.finalAssistantUsage = parseOutputLimitDetails({
+        outputTokens: message.usage?.output, reasoningTokens: message.usage?.reasoning,
+      });
       const fullText = assistantTextOf(message);
       if (fullText.length > 0 || message.content?.some((block) => block.type === 'thinking' || block.type === 'toolCall')) ctx.cacheRecoveryHasOutput = true;
       ctx.finalAssistantStopReason = typeof message.stopReason === 'string'
@@ -1181,6 +1199,7 @@ export function translatePiEvent(
         message: 'Pi reached the model output limit. The response may be incomplete.',
         sdkError: 'Pi response stopped at the model output limit',
         reason: 'output-limit',
+        ...(ctx.finalAssistantUsage ? { outputLimit: ctx.finalAssistantUsage } : {}),
         // Consumers may settle on this error and ignore the paired done.
         result: ctx.finalAssistantText,
         usage,

@@ -1,4 +1,5 @@
 import { kimiUsageWindowMinutes } from '../../../shared/kimiCodingUsage';
+import { opencodeGoUsageWindowMinutes } from '../../../shared/opencodeGoUsage';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ProviderView } from '@cindy/model-providers';
@@ -48,13 +49,13 @@ function SourceUsageProvider({
   children: ReactNode;
 }) {
   const parent = useContext(UsageContext);
-  const { source, codex, claude, xai, kimi } = useProviderUsageSnapshots(provider, scope, { web: true });
+  const { source, codex, claude, xai, kimi, opencodeGo } = useProviderUsageSnapshots(provider, scope, { web: true });
   const value = useMemo(() => {
     if (!source) return parent;
     const next = new Map(parent);
-    next.set(usageKey, { source, codex, claude, xai, kimi });
+    next.set(usageKey, { source, codex, claude, xai, kimi, opencodeGo });
     return next;
-  }, [parent, usageKey, source, codex, claude, xai, kimi]);
+  }, [parent, usageKey, source, codex, claude, xai, kimi, opencodeGo]);
   return <UsageContext.Provider value={value}>{children}</UsageContext.Provider>;
 }
 
@@ -95,8 +96,8 @@ export function ModelSourceUsageProvider({
         const provider = group?.kind === 'running' && group.usage ? group.usage.provider : row;
         const readerDeviceId =
           group?.kind === 'running' && group.usage ? group.usage.scope.deviceId : deviceId;
-        if (provider.auth?.method !== 'oauth' && providerWeeklyQuotaSource(provider) !== 'kimi') return content;
         const source = providerWeeklyQuotaSource(provider);
+        if (provider.auth?.method !== 'oauth' && source !== 'kimi' && source !== 'opencode-go') return content;
         if (!source || provider.subscriptionAccount?.reconnectRequired) return content;
         return (
           <SourceUsageProvider
@@ -142,6 +143,19 @@ function modelSourceQuota(
     windows: usage.kimi?.windows.map(w => ({
       labelKey: `providerAccountUsage.kimi.${w.id}`,
       usedPercent: w.usedPercent, resetsAt: w.resetsAt === null ? null : w.resetsAt / 1000, windowMinutes: kimiUsageWindowMinutes(w.id),
+    })) ?? [],
+  };
+  if (usage.source === 'opencode-go') return {
+    plan: null,
+    windows: usage.opencodeGo?.windows.map(window => ({
+      labelKey: window.id === 'rolling'
+        ? 'providerAccountUsage.kimi.limit_5h'
+        : window.id === 'weekly'
+          ? 'providerAccountUsage.kimi.limit_7d'
+          : 'providerAccountUsage.kimi.limit_month_total',
+      usedPercent: window.usedPercent,
+      resetsAt: window.resetsAt === null ? null : window.resetsAt / 1000,
+      windowMinutes: opencodeGoUsageWindowMinutes(window.id),
     })) ?? [],
   };
   if (usage.source === 'codex') {

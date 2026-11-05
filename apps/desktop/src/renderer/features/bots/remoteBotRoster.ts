@@ -18,6 +18,8 @@ export interface RemoteBot {
   generation?: { phase: WorkingPhase; startedAt: number | null };
   lastReplyAt?: number;
   readAt?: number;
+  /** Read position the home computer keeps (any device's reading). Absent: older host, no `read` action. */
+  hostReadAt?: number;
   followingSessionIds?: string[];
   delegatedSessionIds?: string[];
 }
@@ -97,6 +99,7 @@ export function parseRemoteBots(value: unknown, deviceId: string, deviceName: st
       activityAt: typeof display.timestamp === 'number' ? display.timestamp : 0,
       sessionId: typeof sessionId === 'string' && sessionId ? sessionId : null,
       lastReplyAt: typeof display.lastReplyAt === 'number' && Number.isFinite(display.lastReplyAt) && display.lastReplyAt >= 0 ? display.lastReplyAt : undefined,
+      hostReadAt: typeof display.lastReadAt === 'number' && Number.isFinite(display.lastReadAt) && display.lastReadAt >= 0 ? display.lastReadAt : undefined,
       followingSessionIds: remoteBotTaskIds(item.links, 'following'),
       teammateActivity: typeof record(display.teammateActivity).phase === 'string'
         ? { phase: record(display.teammateActivity).phase as string } : undefined,
