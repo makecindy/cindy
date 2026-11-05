@@ -19,6 +19,7 @@ import { cn } from '@/lib/utils';
 import type { ProviderGroupMember } from '../../../shared/providerGroup';
 import type { ProviderView } from '@cindy/model-providers';
 import { isKimiCodingProviderView } from '../../../shared/kimiCodingUsage';
+import { isOpenCodeGoProviderView } from '../../../shared/opencodeGoUsage';
 
 /** 这台电脑的额度从哪读。 */
 export type GroupMemberQuotaTarget =
@@ -230,30 +231,30 @@ export function GroupMemberQuota({
         : target.kind === 'device' && remoteDeviceId
           ? deviceCatalog.providers.find((entry) => entry.id === target.providerId)
           : undefined;
-  // A liveness gate pauses Kimi observation without replacing an already
+  // A liveness gate pauses structured-quota observation without replacing an already
   // authorized query identity. Provider-list reads still stop while offline.
   // Retain through catalog recovery loading/errors, then use its fresh
   // identity (or removal). Explicit permission revocation cancels retention.
-  const retainedKimi = useRef<{ owner: typeof owner; deviceId: string; provider: ProviderView } | null>(null);
+  const retainedStructuredQuota = useRef<{ owner: typeof owner; deviceId: string; provider: ProviderView } | null>(null);
   const controlDenied = targetDeviceId !== null && (
     (control?.owner === owner ? control.disabledDeviceIds.includes(targetDeviceId)
       : directoryRequest.status === 'ready' && device?.controlEnabled === false) ||
     (currentPresence?.remoteControlEnabled ?? device?.remoteControlEnabled) === false ||
     (directoryRequest.status === 'ready' && devices !== null && !device)
   );
-  const pausedKimi = target.kind === 'device' && !controlDenied && !provider &&
-    (quotaOffline || deviceCatalog.loading || deviceCatalog.error) && retainedKimi.current?.owner === owner &&
-    retainedKimi.current.deviceId === target.deviceId && retainedKimi.current.provider.id === target.providerId
-      ? retainedKimi.current : null;
+  const pausedStructuredQuota = target.kind === 'device' && !controlDenied && !provider &&
+    (quotaOffline || deviceCatalog.loading || deviceCatalog.error) && retainedStructuredQuota.current?.owner === owner &&
+    retainedStructuredQuota.current.deviceId === target.deviceId && retainedStructuredQuota.current.provider.id === target.providerId
+      ? retainedStructuredQuota.current : null;
   useLayoutEffect(() => {
-    if (target.kind === 'device' && provider && isKimiCodingProviderView(provider) &&
+    if (target.kind === 'device' && provider && (isKimiCodingProviderView(provider) || isOpenCodeGoProviderView(provider)) &&
       provider.connected && !provider.removed && !provider.suspended) {
-      retainedKimi.current = { owner, deviceId: target.deviceId, provider };
-    } else if (!pausedKimi) retainedKimi.current = null;
-  }, [owner, target, provider, pausedKimi]);
+      retainedStructuredQuota.current = { owner, deviceId: target.deviceId, provider };
+    } else if (!pausedStructuredQuota) retainedStructuredQuota.current = null;
+  }, [owner, target, provider, pausedStructuredQuota]);
   const card = useDeviceProviderSubscriptionCard(
-    provider ?? pausedKimi?.provider,
-    pausedKimi?.deviceId ?? remoteDeviceId,
+    provider ?? pausedStructuredQuota?.provider,
+    pausedStructuredQuota?.deviceId ?? remoteDeviceId,
     { live: true, active: !quotaOffline && !!provider },
   );
   const [waitedOut, setWaitedOut] = useState(false);

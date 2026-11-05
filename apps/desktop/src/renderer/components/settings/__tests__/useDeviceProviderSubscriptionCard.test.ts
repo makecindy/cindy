@@ -187,6 +187,15 @@ afterEach(() => {
 const remaining = (card: ReturnType<typeof useDeviceProviderSubscriptionCard>) =>
   card?.windows.map((window) => [window.key, window.window.utilization]);
 
+// Unit r4480725235: both structured sources must use the actual card/account
+// lifecycle; OpenCode Go's upstream snapshot fixture did not cover live reads.
+const structuredQuotaCases = [
+  { source: 'kimi', title: 'Kimi Code', upstream: 'https://api.kimi.com/coding/v1',
+    kind: 'kimi-coding-quota', window: 'limit_7d', channel: 'maker:usage:kimi-coding' },
+  { source: 'opencode-go', title: 'OpenCode Go', upstream: 'https://opencode.ai/zen/go/v1',
+    kind: 'opencode-go-quota', window: 'weekly', channel: 'maker:usage:opencode-go' },
+] as const;
+
 describe('useDeviceProviderSubscriptionCard', () => {
   // Unit / upstream 94b7271fc9 + provider-settings §4: Kimi's new quota source
   // shares this entry with live group cards. Existing OAuth cases cannot detect
@@ -194,29 +203,30 @@ describe('useDeviceProviderSubscriptionCard', () => {
   // without sending an xAI query. Unit r4421724529 / §10: the earlier case
   // incorrectly kept the minute interval for live cards too. Separate ordinary
   // minute reads from live 15s reads, including a pending periodic request.
-  it.each([false, true])('keeps Kimi reads on its endpoint with live=%s cadence', async live => {
+  it.each(structuredQuotaCases.flatMap(source => [false, true].map(live => ({ ...source, live }))))(
+    'keeps $source reads on its endpoint with live=$live cadence', async ({ live, ...source }) => {
     const kimi = Object.assign(provider('kimi-code', { method: 'apiKey' }), {
-      routing: { codex: { upstream: 'https://api.kimi.com/coding/v1' } },
+      routing: { codex: { upstream: source.upstream } },
     });
     const quota = (usedPercent: number) => ({
       status: 'ready',
       stale: false,
       snapshot: {
-        kind: 'kimi-coding-quota',
+        kind: source.kind,
         fetchedAt: Date.now(),
-        windows: [{ id: 'limit_7d', usedPercent, resetsAt: null }],
+        windows: [{ id: source.window, limited: false, usedPercent, resetsAt: null }],
       },
     });
     invoke.mockResolvedValue(quota(38));
     const card = renderHook(() => useDeviceProviderSubscriptionCard(kimi, 'mini', { live }));
     await act(async () => {});
-    expect(card.result.current?.title).toBe('Kimi Code');
-    expect(remaining(card.result.current)).toEqual([['limit_7d', 38]]);
+    expect(card.result.current?.title).toBe(source.title);
+    expect(remaining(card.result.current)).toEqual([[source.window, 38]]);
     await act(async () => vi.advanceTimersByTime(14_999));
     expect(invoke).toHaveBeenCalledTimes(1);
     invoke.mockResolvedValue(quota(76));
     await act(async () => vi.advanceTimersByTime(1));
-    expect(remaining(card.result.current)).toEqual([['limit_7d', live ? 76 : 38]]);
+    expect(remaining(card.result.current)).toEqual([[source.window, live ? 76 : 38]]);
     // The host keeps successful snapshots for five minutes. Live polling must
     // request fresh data via its existing throttled path; ordinary reads cache.
     expect(invoke.mock.calls.at(-1)?.[2]).toEqual([{ providerId: kimi.id, forceRefresh: live }]);
@@ -228,17 +238,17 @@ describe('useDeviceProviderSubscriptionCard', () => {
       await act(async () => vi.advanceTimersByTime(45_000));
       expect(invoke).toHaveBeenCalledTimes(3); // Periodic ticks share the pending read.
       await act(async () => finish(quota(84)));
-      expect(remaining(card.result.current)).toEqual([['limit_7d', 84]]);
+      expect(remaining(card.result.current)).toEqual([[source.window, 84]]);
       invoke.mockResolvedValue(quota(91));
       await act(async () => vi.advanceTimersByTime(15_000));
-      expect(remaining(card.result.current)).toEqual([['limit_7d', 91]]);
+      expect(remaining(card.result.current)).toEqual([[source.window, 91]]);
     } else {
       await act(async () => vi.advanceTimersByTime(45_000));
-      expect(remaining(card.result.current)).toEqual([['limit_7d', 76]]);
+      expect(remaining(card.result.current)).toEqual([[source.window, 76]]);
     }
     const reads = live ? 4 : 2;
     expect(invoke.mock.calls.map(([device, channel]) => [device, channel])).toEqual(
-      Array.from({ length: reads }, () => ['mini', 'maker:usage:kimi-coding']),
+      Array.from({ length: reads }, () => ['mini', source.channel]),
     );
     card.unmount();
     await act(async () => vi.advanceTimersByTime(60_000));
@@ -249,15 +259,18 @@ describe('useDeviceProviderSubscriptionCard', () => {
   // exercise the separate Kimi reader. Through the real card/account hook and
   // host gate, initial hiding must prevent reads, hiding must stop its polling
   // timer, and restoration must immediately show the newly queried quota.
-  it.each(['document', 'native'] as const)('pauses Kimi live reads while %s visibility is hidden', async mode => {
+  it.each(structuredQuotaCases.flatMap(source => (['document', 'native'] as const).flatMap(mode =>
+    (source.source === 'opencode-go' ? [null, 'mini'] : ['mini']).map(deviceId => ({ ...source, mode, deviceId })))))(
+    'pauses $source live reads on $deviceId while $mode visibility is hidden', async ({ mode, deviceId, ...source }) => {
     const kimi = Object.assign(provider('kimi-visible', { method: 'apiKey' }), {
-      routing: { codex: { upstream: 'https://api.kimi.com/coding/v1' } },
+      routing: { codex: { upstream: source.upstream } },
     });
+    window.electronAPI.maker.fetchProviderAccountUsage = invoke;
     const quota = (usedPercent: number) => ({
       status: 'ready', stale: false,
       snapshot: {
-        kind: 'kimi-coding-quota', fetchedAt: Date.now(),
-        windows: [{ id: 'limit_7d', usedPercent, resetsAt: null }],
+        kind: source.kind, fetchedAt: Date.now(),
+        windows: [{ id: source.window, limited: false, usedPercent, resetsAt: null }],
       },
     });
     let nativeHidden!: (hidden: boolean) => void;
@@ -274,24 +287,31 @@ describe('useDeviceProviderSubscriptionCard', () => {
     try {
       invoke.mockResolvedValue(quota(38));
       await hide(true);
-      const hook = renderHook(() => useDeviceProviderSubscriptionCard(kimi, 'mini', { live: true }));
+      const hook = renderHook(() => useDeviceProviderSubscriptionCard(kimi, deviceId, { live: true }));
       await act(async () => {});
       expect(invoke).not.toHaveBeenCalled();
       expect(hook.result.current).toBeNull();
       await hide(false);
       expect(invoke).toHaveBeenCalledTimes(1);
-      expect(remaining(hook.result.current)).toEqual([['limit_7d', 38]]);
+      expect(remaining(hook.result.current)).toEqual([[source.window, 38]]);
       await hide(true);
       expect(hook.result.current).toBeNull();
       await act(async () => vi.advanceTimersByTime(60_000));
       expect(invoke).toHaveBeenCalledTimes(1);
       invoke.mockResolvedValue(quota(76));
       await hide(false);
-      expect(remaining(hook.result.current)).toEqual([['limit_7d', 76]]);
-      expect(invoke.mock.calls.map(([device, channel]) => [device, channel])).toEqual([
-        ['mini', 'maker:usage:kimi-coding'],
-        ['mini', 'maker:usage:kimi-coding'],
-      ]);
+      expect(remaining(hook.result.current)).toEqual([[source.window, 76]]);
+      if (deviceId === null) {
+        expect(invoke.mock.calls).toEqual([
+          [{ providerId: kimi.id, forceRefresh: true }],
+          [{ providerId: kimi.id, forceRefresh: true }],
+        ]);
+      } else {
+        expect(invoke.mock.calls.map(([device, channel]) => [device, channel])).toEqual([
+          [deviceId, source.channel],
+          [deviceId, source.channel],
+        ]);
+      }
       hook.unmount();
     } finally { disposeGate(); }
   });
@@ -299,9 +319,10 @@ describe('useDeviceProviderSubscriptionCard', () => {
   // Unit r4421407152 / provider-groups §10: the Kimi reader has its own
   // request lifecycle. Settled visibility coverage missed recovery during a
   // pending read, lost peer-only reconnects, and cancellation of that reread.
-  it.each(['foreground', 'reconnect'] as const)('retains pending Kimi quota through %s recovery', async recovery => {
+  it.each(structuredQuotaCases.flatMap(source => (['foreground', 'reconnect'] as const).map(recovery => ({ ...source, recovery }))))(
+    'retains pending $source quota through $recovery recovery', async ({ recovery, ...source }) => {
     const kimi = Object.assign(provider('kimi-pending', { method: 'apiKey' }), {
-      routing: { codex: { upstream: 'https://api.kimi.com/coding/v1' } },
+      routing: { codex: { upstream: source.upstream } },
     });
     let finish!: (value: unknown) => void;
     invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
@@ -319,22 +340,22 @@ describe('useDeviceProviderSubscriptionCard', () => {
     }
     expect(invoke).toHaveBeenCalledTimes(1);
     await act(async () => finish({ status: 'ready', stale: false, snapshot: {
-      kind: 'kimi-coding-quota', fetchedAt: Date.now(),
-      windows: [{ id: 'limit_7d', usedPercent: 38, resetsAt: null }],
+      kind: source.kind, fetchedAt: Date.now(),
+      windows: [{ id: source.window, limited: false, usedPercent: 38, resetsAt: null }],
     } }));
     expect(invoke).toHaveBeenCalledTimes(2);
-    expect(remaining(hook.result.current)).toEqual([['limit_7d', 38]]);
+    expect(remaining(hook.result.current)).toEqual([[source.window, 38]]);
     expect(hook.result.current?.notices).toEqual([{ text: 'providerAccountUsage.kimi.stale', tone: 'warn' }]);
     expect(invoke.mock.calls.map(call => call[3])).toEqual([undefined, undefined]);
   });
 
-  it('refreshes settled Kimi quota on the target peer reconnect without waiting a minute', async () => {
+  it.each(structuredQuotaCases)('refreshes settled $source quota on the target peer reconnect without waiting a minute', async source => {
     const kimi = Object.assign(provider('kimi-reconnect', { method: 'apiKey' }), {
-      routing: { codex: { upstream: 'https://api.kimi.com/coding/v1' } },
+      routing: { codex: { upstream: source.upstream } },
     });
     const quota = (usedPercent: number) => ({ status: 'ready', stale: false, snapshot: {
-      kind: 'kimi-coding-quota', fetchedAt: Date.now(),
-      windows: [{ id: 'limit_7d', usedPercent, resetsAt: null }],
+      kind: source.kind, fetchedAt: Date.now(),
+      windows: [{ id: source.window, limited: false, usedPercent, resetsAt: null }],
     } });
     invoke.mockResolvedValue(quota(38));
     const hook = renderHook(() => useDeviceProviderSubscriptionCard(kimi, 'mini', { live: true }));
@@ -344,16 +365,17 @@ describe('useDeviceProviderSubscriptionCard', () => {
     expect(invoke).toHaveBeenCalledTimes(1);
     await act(async () => mocks.reopened.forEach(listener => listener({ deviceId: 'mini' })));
     expect(invoke).toHaveBeenCalledTimes(2);
-    expect(remaining(hook.result.current)).toEqual([['limit_7d', 76]]);
+    expect(remaining(hook.result.current)).toEqual([[source.window, 76]]);
   });
 
-  it.each(['hidden', 'unmount', 'owner', 'provider'] as const)('cancels queued Kimi recovery on %s', async change => {
+  it.each(structuredQuotaCases.flatMap(source => (['hidden', 'unmount', 'owner', 'provider'] as const).map(change => ({ ...source, change }))))(
+    'cancels queued $source recovery on $change', async ({ change, ...source }) => {
     const kimi = Object.assign(provider('kimi-cancel', { method: 'apiKey' }), {
-      routing: { codex: { upstream: 'https://api.kimi.com/coding/v1' } },
+      routing: { codex: { upstream: source.upstream } },
     });
     const quota = (usedPercent: number) => ({ status: 'ready', stale: false, snapshot: {
-      kind: 'kimi-coding-quota', fetchedAt: Date.now(),
-      windows: [{ id: 'limit_7d', usedPercent, resetsAt: null }],
+      kind: source.kind, fetchedAt: Date.now(),
+      windows: [{ id: source.window, limited: false, usedPercent, resetsAt: null }],
     } });
     let finish!: (value: unknown) => void;
     invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
@@ -381,7 +403,7 @@ describe('useDeviceProviderSubscriptionCard', () => {
       await act(async () => document.dispatchEvent(new Event('visibilitychange')));
       expect(invoke).toHaveBeenCalledTimes(2);
     }
-    if (change !== 'unmount') expect(remaining(hook.result.current)).toEqual([['limit_7d', 76]]);
+    if (change !== 'unmount') expect(remaining(hook.result.current)).toEqual([[source.window, 76]]);
   });
 
   // Unit r4389934308 / §10: another ordinary subscriber keeps the mirror alive
@@ -764,12 +786,12 @@ describe('useDeviceProviderSubscriptionCard', () => {
   // immediately without waiting for any of those reads to finish.
   // r4421913789 adds Kimi's separate reader: twelve slow accounts would fill
   // foreground capacity. Keep the same visible-result/admission regression.
-  it.each(['codex', 'kimi'] as const)('keeps periodic quota reads in background slots for %s so another account opens', async source => {
+  it.each(['codex', 'kimi', 'opencode-go'] as const)('keeps periodic quota reads in background slots for %s so another account opens', async source => {
     const scheduler = new InvokeScheduler();
     const makeProvider = (id: string) => source === 'codex'
       ? provider(id, { method: 'oauth', native: 'codex' })
       : Object.assign(provider(id, { method: 'apiKey' }), {
-        routing: { codex: { upstream: 'https://api.kimi.com/coding/v1' } },
+        routing: { codex: { upstream: source === 'kimi' ? 'https://api.kimi.com/coding/v1' : 'https://opencode.ai/zen/go/v1' } },
       });
     const accounts = Array.from({ length: source === 'codex' ? 6 : 12 }, (_, index) => makeProvider(`account-${index}`));
     const automaticIds = new Set(accounts.map(account => account.id));
@@ -778,16 +800,16 @@ describe('useDeviceProviderSubscriptionCard', () => {
     let started = 0;
     mocks.invoke.mockImplementation((deviceId, channel, args, scheduling?: { background?: boolean }) =>
       scheduler.run(deviceId, resolveInvokePriority(channel, scheduling?.background), 30_000, async () => {
-        const providerId = channel === 'maker:usage:kimi-coding' ? args[0].providerId
+        const providerId = (channel === 'maker:usage:kimi-coding' || channel === 'maker:usage:opencode-go') ? args[0].providerId
           : args[channel === 'maker:usage:account' ? 1 : 0];
         if (polling && automaticIds.has(providerId)) {
           started++;
           await new Promise<void>(resolve => releases.push(resolve));
         }
-        if (channel === 'maker:usage:kimi-coding') return {
+        if ((channel === 'maker:usage:kimi-coding' || channel === 'maker:usage:opencode-go')) return {
           status: 'ready', stale: false, snapshot: {
-            kind: 'kimi-coding-quota', fetchedAt: Date.now(),
-            windows: [{ id: 'limit_7d', usedPercent: 91, resetsAt: null }],
+            kind: source === 'kimi' ? 'kimi-coding-quota' : 'opencode-go-quota', fetchedAt: Date.now(),
+            windows: [{ id: source === 'kimi' ? 'limit_7d' : 'weekly', limited: false, usedPercent: 91, resetsAt: null }],
           },
         };
         const quota = { primary: { usedPercent: 91, windowMinutes: 300 } };
@@ -804,7 +826,7 @@ describe('useDeviceProviderSubscriptionCard', () => {
     const opened = renderHook(() => useDeviceProviderSubscriptionCard(
       makeProvider('account-opened'), 'mini', { live: true }));
     await act(async () => {});
-    expect(remaining(opened.result.current)).toEqual([[source === 'codex' ? 'primary' : 'limit_7d', 91]]);
+    expect(remaining(opened.result.current)).toEqual([[source === 'codex' ? 'primary' : source === 'kimi' ? 'limit_7d' : 'weekly', 91]]);
     polling = false;
     await act(async () => { releases.forEach(resolve => resolve()); });
   });

@@ -236,6 +236,7 @@ export function useDeviceProviderSubscriptionCard(
     provider && isOpenCodeGoProviderView(provider) ? provider : undefined,
     undefined,
     deviceId,
+    { live: options.live === true, active, refreshEpoch: epoch },
   );
   const kimi = useProviderAccountUsage(
     deviceId && isKimiCodingProviderView(provider) ? provider : undefined,

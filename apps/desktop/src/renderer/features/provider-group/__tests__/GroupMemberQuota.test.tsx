@@ -119,23 +119,29 @@ afterEach(() => {
 describe('GroupMemberQuota', () => {
   // Unit r4422287440 / §10: the old group tests replaced the card hook, so
   // they missed its pending Kimi identity being destroyed by a new offline poll.
+  // r4480725246 adds the OpenCode Go source introduced in the synced parent.
   // Real group/card/account hooks must retain the first result and queue one
   // reread on member recovery; explicit control revocation must still cancel it.
-  it.each(['presence', 'directory', 'catalog', 'revocation'] as const)('retains pending Kimi quota through group recovery via %s', async recovery => {
+  it.each(['kimi', 'opencode-go'].flatMap(source =>
+    (['presence', 'directory', 'catalog', 'revocation'] as const).map(recovery => ({ source, recovery }))))(
+    'retains pending $source quota through group recovery via $recovery', async ({ source, recovery }) => {
+    const opencode = source === 'opencode-go';
+    const providerId = opencode ? 'opencode-go' : 'kimi-code';
+    const channel = opencode ? 'maker:usage:opencode-go' : 'maker:usage:kimi-coding';
     vi.useFakeTimers();
     mocks.realCard = true;
     mocks.getState.mockResolvedValue({ linkStatus: 'online', disabledControlDeviceIds: [] });
-    mocks.byDevice.mini = [{ ...apiKey('kimi-code'), auth: { method: 'apiKey' },
-      routing: { codex: { upstream: 'https://api.kimi.com/coding/v1' } } }];
+    mocks.byDevice.mini = [{ ...apiKey(providerId), auth: { method: 'apiKey' },
+      routing: { codex: { upstream: opencode ? 'https://opencode.ai/zen/go/v1' : 'https://api.kimi.com/coding/v1' } } }];
     const value = (usedPercent: number) => ({ status: 'ready', stale: false, snapshot: {
-      kind: 'kimi-coding-quota', fetchedAt: Date.now(), windows: [{ id: 'limit_7d', usedPercent, resetsAt: null }],
+      kind: opencode ? 'opencode-go-quota' : 'kimi-coding-quota', fetchedAt: Date.now(), windows: [{ id: opencode ? 'weekly' : 'limit_7d', limited: false, usedPercent, resetsAt: null }],
     } });
     let finish!: (result: ReturnType<typeof value>) => void;
     const invoke = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
       .mockRejectedValue(new Error('recovery reread failed'));
     Object.assign(window.electronAPI.deviceLink, { invoke });
     let offline = false;
-    const view = () => <GroupMemberQuota id="quota" target={{ kind: 'device', deviceId: 'mini', providerId: 'kimi-code' }} offline={offline} />;
+    const view = () => <GroupMemberQuota id="quota" target={{ kind: 'device', deviceId: 'mini', providerId }} offline={offline} />;
     const mounted = await mountQuota(view());
     expect(invoke).toHaveBeenCalledTimes(1);
     offline = true;
@@ -186,7 +192,7 @@ describe('GroupMemberQuota', () => {
       expect(invoke).toHaveBeenCalledTimes(3);
     }
     expect(screen.getByTestId('quota-card').getAttribute('data-usage')).toBe('[76]');
-    expect(invoke.mock.calls.every(call => call[0] === 'mini' && call[1] === 'maker:usage:kimi-coding')).toBe(true);
+    expect(invoke.mock.calls.every(call => call[0] === 'mini' && call[1] === channel)).toBe(true);
   });
 
   // Unit r4389934292: the row was collapsed during reconnect, so no local
