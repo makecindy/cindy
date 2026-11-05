@@ -31,7 +31,7 @@ function entry(role, text, extra = {}) {
 
 describe('live compact spine selection', () => {
   it('never separates a tool call from its result', () => {
-    // 1.0.7 去掉保留区预算:最后 3 个已结束的工具轮固定保留,所以要 4 轮才留得下可切的旧轮。
+    // 1.0.8: 云端平时不切,这里用收尾模式驱动一次真实选段(保留区仍是最近 3 轮)。
     const big = (tag) => `${tag} `.repeat(1200);
     const huge = (tag) => `${tag} `.repeat(8000);
     const entries = [
@@ -50,7 +50,7 @@ describe('live compact spine selection', () => {
       entry('toolResult', big('result-three'), { results: ['c3'] }),
     ];
 
-    const chunk = selectNewestChunk(entries);
+    const chunk = selectNewestChunk(entries, undefined, { drain: true, totalTokens: 60000 });
     expect(chunk).not.toBeNull();
 
     const callInSpan = entries.slice(chunk.start, chunk.end + 1).some((e) => e.calls.length > 0);
@@ -304,6 +304,9 @@ describe('live compact 1.0.6: kept tool rounds, evidence and raw pointers', () =
       expect(existsSync(planned.path)).toBe(false);
       expect(planned.body).not.toContain('fixture-openai-placeholder-2');
       expect(verifiedRaw(planned).ok).toBe(true);
+      // 指针里的字节数必须是数字:把 Buffer 塞进去会把整段正文带进卡片。
+      expect(typeof verifiedRaw(planned).bytes).toBe('number');
+      expect(pointerFor(verifiedRaw(planned))).not.toContain('line two');
       const committed = commitRawEntry(planned);
       expect(committed.pending).toBeUndefined();
       expect(verifiedRaw(committed).ok).toBe(true);
@@ -335,7 +338,7 @@ describe('live compact 1.0.6: kept tool rounds, evidence and raw pointers', () =
   });
 });
 
-describe('live compact 1.0.7: cloud cuts across earlier users, pointer-only spans', () => {
+describe('live compact 1.0.8: cache-safe drains, pointer-only spans, no cross-user padding', () => {
   const cut = (spec) =>
     spec.map(([type, tokens]) => ({ type, tokens, checkpoint: false, balancedBefore: true, balancedAfter: true }));
 
@@ -350,8 +353,9 @@ describe('live compact 1.0.7: cloud cuts across earlier users, pointer-only span
     expect(resolveEngine({ env: {} })).toEqual({ engine: 'local', source: 'unknown' });
   });
 
-  it('lets a cloud cut span earlier user messages but keeps the newest user out', () => {
-    // 最新一段(assistant+tool 两轮)不到 CHUNK_MIN,要跨过 user 才能凑够 1000。
+  it('does not walk across an earlier user to manufacture CHUNK_MIN, and does not cut below the water line', () => {
+    // 最新一段(assistant+tool 两轮)不到 CHUNK_MIN。1.0.8 不会回头跨过 user 去凑,
+    // 而是直接跳过;平时(总量没到水位)也不切。
     const items = cut([
       ['system', 100],
       ['user', 50],
@@ -364,16 +368,44 @@ describe('live compact 1.0.7: cloud cuts across earlier users, pointer-only span
       ['assistant', 300],
       ['tool', 600],
     ]);
-    const cloud = selectCutIndexes(items, { engine: 'cloud' });
-    expect(cloud).not.toBeNull();
-    // 下限是首个 user 之后一格,所以一直扩到 index 2。
-    expect(cloud.start).toBe(2);
-    expect(cloud.end).toBe(6);
-    // 段内可以带较早的 user,但不能带最后一条。
-    expect(items.slice(cloud.start, cloud.end + 1).some((item) => item.type === 'user')).toBe(true);
-    expect(items[cloud.end + 1].type).toBe('user');
-    // 本地切法一步也不越最后一条 user。
+    expect(selectCutIndexes(items, { engine: 'cloud' })).toBeNull();
+    expect(selectCutIndexes(items, { engine: 'cloud', totalTokens: 30000 })).toBeNull();
     expect(selectCutIndexes(items, { engine: 'local' })).toBeNull();
+  });
+
+  it('drains span after span once the predicted request passes the water line', () => {
+    const items = cut([
+      ['user', 50],
+      ['assistant', 300],
+      ['tool', 5000],
+      ['user', 50],
+      ['assistant', 300],
+      ['tool', 5000],
+      ['user', 50],
+      ['assistant', 300],
+      ['tool', 5000],
+    ]);
+    // 平时(总量没到紧急线):云端只处理超大结果,不改前缀。
+    expect(selectCutIndexes(items, { engine: 'cloud', totalTokens: 40000, maxEnd: 2 })).toBeNull();
+    // 低于水位且没在收尾:一律不切。
+    expect(selectCutIndexes(items, { engine: 'cloud', totalTokens: 30000, maxEnd: 2 })).toBeNull();
+    // 收尾模式:尽管已经从 40000 往下切,还是要继续切。
+    expect(selectCutIndexes(items, { engine: 'cloud', totalTokens: 40000, drain: true, maxEnd: 2 })).toMatchObject({
+      start: 1,
+      end: 2,
+    });
+    // 过了紧急线(48000)即使没标 drain 也进入批量切。
+    expect(selectCutIndexes(items, { engine: 'cloud', totalTokens: 60000, maxEnd: 2 })).not.toBeNull();
+  });
+
+  it('honours SPINE_POINTER_TOKENS separately from the span cap', () => {
+    const items = cut([
+      ['user', 50],
+      ['assistant', 100],
+      ['tool', 9000],
+    ]);
+    expect(selectCutIndexes(items, { engine: 'local', pointerMax: 8000 })).toMatchObject({ start: 2, end: 2, pointerOnly: true });
+    expect(selectCutIndexes(items, { engine: 'local' })?.pointerOnly).toBeUndefined();
   });
 
   it('leaves an oversized tool result as a pointer instead of refusing the cut', () => {
