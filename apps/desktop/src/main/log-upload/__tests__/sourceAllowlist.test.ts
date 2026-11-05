@@ -20,6 +20,15 @@ describe('working directory diagnostics scope', () => {
   });
 });
 
+describe('memory usage scope', () => {
+  it('allows only the numeric sample scope, not future children', () => {
+    expect(isAllowedScope('memory-usage')).toBe(true);
+    for (const scope of ['memory-usage:titles', 'memory-usage/heap', 'r:memory-usage', 'memory']) {
+      expect(isAllowedScope(scope)).toBe(false);
+    }
+  });
+});
+
 describe('放行：基础设施来源', () => {
   it.each([
     ['lifecycle', '退出编排与 render-process-gone'],

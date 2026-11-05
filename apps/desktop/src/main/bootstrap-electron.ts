@@ -569,6 +569,8 @@ import { reapClaudeOrphansSync } from './claude-orphan-reaper';
 import { reapCodexToolTreesSync } from './codex-tool-tree-reaper';
 import { startAgentProcessPriorityWatcher } from './agent-process-priority';
 import { registerProcessMonitorIpc } from './process-monitor/ipc.js';
+import { readMainHeapSamplingFlag, startMainHeapSampling } from './process-monitor/heap-sampling.js';
+import { startMemoryLog } from './process-monitor/memory-log.js';
 import { disposeWindowsProcessScanWorkers } from './process-monitor/windowsProcessScanWorkerClient.js';
 import {
   initAppBadgeService,
@@ -1693,6 +1695,7 @@ import {
   keepRecentSync,
   keepRecentSessionCcDebugSync,
   createLogger,
+  getLogDir,
   setCcDebugTailingEnabled,
   type LogLevel,
 } from './logger.js';
@@ -10255,17 +10258,22 @@ app.on('ready', async () => {
   );
   authCredentialRecovery.request();
 
-  // Memory diagnostics — dev only, log per-process memory every 30s
-  if (!app.isPackaged) {
-    setInterval(() => {
-      const parts = app
-        .getAppMetrics()
-        .map(
-          (m) =>
-            `${m.type}:${(m.memory.workingSetSize / 1024).toFixed(0)}MB/${m.cpu.percentCPUUsage.toFixed(1)}%`,
-        );
-      console.log(`[mem] ${parts.join(' | ')}`);
-    }, 30_000);
+  // 各进程内存采样进 main 日志(scope memory-usage):正式版 10 分钟一次,dev 保持 30s。
+  const stopMemoryLog = startMemoryLog({
+    getMetrics: () => app.getAppMetrics(),
+    memoryUsage: () => process.memoryUsage(),
+    log: createLogger('memory-usage'),
+    intervalMs: app.isPackaged ? 10 * 60_000 : 30_000,
+  });
+  onQuit('memory-usage-log', stopMemoryLog, 'sync');
+  // 主进程堆采样:只在开发版、日志目录 log-config.json 写了 mainHeapSampling 时运行。
+  if (!app.isPackaged && readMainHeapSamplingFlag(getLogDir())) {
+    const stopHeapSampling = startMainHeapSampling({
+      dir: path.join(getLogDir(), 'heap-sampling'),
+      intervalMs: 30 * 60_000,
+      log: createLogger('heap-sampling'),
+    });
+    onQuit('main-heap-sampling', stopHeapSampling, 'sync');
   }
 });
 
