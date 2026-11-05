@@ -1986,6 +1986,37 @@ describe('usage through the production event pipeline', () => {
     await h.dispose();
   });
 
+  // #9030 review P2, unit: a resolved managed-provider reference estimate is
+  // intentionally message-only, whereas a missing quote must remain recoverable.
+  it.each(['estimate', 'missing'] as const)('finalizes only resolved managed-provider receipts (%s)', async mode => {
+    const h = harness();
+    pricing(false);
+    effects.fn('getSessionProvider').mockReturnValue('managed-provider');
+    effects.fn('isUserProviderSession').mockReturnValue(true);
+    effects.fn('getActiveCatalog').mockReturnValue({ providers: [
+      { id: 'managed-provider', auth: { method: 'api-key' }, access: { kind: 'managed' } },
+    ] });
+    const quote = {
+      providerId: 'managed-provider', modelId: 'test-model', currency: 'USD',
+      source: 'provider-reference', inputPerMtok: 1, outputPerMtok: 2, cacheReadPerMtok: 0.1,
+    };
+    effects.fn('getReferenceModelPricing').mockReturnValue(mode === 'missing' ? {} : {
+      'managed-provider': { 'test-model': quote },
+    });
+    const writes = vi.fn(async (_name: string, _rows: PiUsageWrite[]) => ({ changed: true }));
+    effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => null });
+    h.emit(event('account_usage', { usage: { settlementId: 'managed-turn', receipts: [
+      { ...segment, recordedAt: Date.now(), id: 'pi:managed' },
+    ] } }, { source: 'pi' }));
+    await flushSessionPiTurnUsage();
+    expect(writes).toHaveBeenCalledTimes(mode === 'estimate' ? 2 : 1);
+    expect(writes).toHaveBeenLastCalledWith('usage.recordPiUsage', [expect.objectContaining({
+      amount: mode === 'estimate' ? 0 : null, actualCost: false,
+    })]);
+    expect(effects.fn('broadcastSessionSpend')).not.toHaveBeenCalled();
+    await h.dispose();
+  });
+
   // #9030 review P1, unit: the existing price-delay test keeps USD throughout.
   // Use the production pipeline to prove that currency recovery does not freeze
   // fallback USD into a receipt, either within a write or across product turns.

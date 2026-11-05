@@ -132,9 +132,9 @@ async function persistPiUsageReceipts(owner: PiUsageOwner, sessionId: string, us
           region: CURRENT_CINDY_REGION, accessKind: context.accessKind }, segments }).money;
     // BYOM reference estimates stay message-only, as in the legacy turn path.
     const ledgerMoney = money?.kind === 'actual-cost' || subscription ? money : null;
-    // An unavailable quote is not a zero-cost receipt. Terminal replay can
-    // finish pricing after the catalog becomes available.
-    return { ...row, amount: ledgerMoney?.amount ?? null, currency: ledgerMoney?.currency ?? currency,
+    // A resolved message-only estimate is final without ledger spend. Only a
+    // missing quote stays pending for replay after the catalog becomes available.
+    return { ...row, amount: ledgerMoney?.amount ?? (money ? 0 : null), currency: ledgerMoney?.currency ?? currency,
       approximate: ledgerMoney?.approximate ?? subscription, actualCost: ledgerMoney?.kind === 'actual-cost' };
   });
   if (!priced.some(row => row.amount !== null)) return;

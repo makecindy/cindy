@@ -48,6 +48,24 @@ describe('Pi request usage transaction', () => {
       .toEqual({ input_tokens: 100, cost_amount: 0.2 });
   });
 
+  // #9030 P2, db: resolving a message-only estimate must leave the pending
+  // queue, including after restart, without adding spend or repeating tokens.
+  it('finalizes a non-ledgerable estimate without retaining pending data or spend', () => {
+    const pending = receipt({ pricingPayload: '{"version":1}' });
+    write(pending);
+    const finalized = { ...pending, amount: 0 };
+    write(finalized);
+    const checkpoint = db.serialize();
+    db.close();
+    db = new Database(checkpoint);
+    write(pending, finalized);
+    expect(total()).toEqual({ tokens: 154, cost: 0 });
+    expect(db.prepare('SELECT priced, pricing_payload FROM pi_usage_receipts').get())
+      .toEqual({ priced: 1, pricing_payload: null });
+    expect(db.prepare('SELECT COUNT(*) AS n FROM daily_spend').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT cost_amount FROM daily_model_usage').get()).toEqual({ cost_amount: 0 });
+  });
+
   it('keeps request models, days, turns and sessions independent', () => {
     write(receipt(), receipt({ receiptId: 'pi:2', model: 'model-b', day: '2026-11-06' }),
       receipt({ settlementId: 'turn-2' }), receipt({ sessionId: 'worker' }));
