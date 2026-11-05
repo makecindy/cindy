@@ -141,6 +141,14 @@ export function createHostServer(deps) {
         if (url.pathname === '/api/usage/model-pricing') { send(response, 200, await deps.modelPricing()); return; }
         if (url.pathname === '/api/usage/reference-model-pricing') { send(response, 200, deps.referenceModelPricing()); return; }
         if (url.pathname === '/api/agents') { send(response, 200, deps.agents()); return; }
+        if (url.pathname === '/api/interactions/pending') { send(response, 200, deps.interactions.pending(String(body.sessionId ?? ''))); return; }
+        if (url.pathname === '/api/interactions/respond') {
+          const accepted = deps.interactions.respond(
+            String(body.sessionId ?? ''), String(body.requestId ?? ''), body.decision,
+          );
+          send(response, accepted ? 200 : 404, { ok: accepted });
+          return;
+        }
         if (url.pathname === '/api/input/projection') { send(response, 200, deps.input.projection(String(body.sessionId ?? ''))); return; }
         if (url.pathname === '/api/input/enqueue') {
           send(response, 200, await deps.input.enqueue(String(body.sessionId ?? ''), body.item ?? {}));

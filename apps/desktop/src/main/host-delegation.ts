@@ -113,6 +113,16 @@ export const PROXIED_CHANNELS: readonly ProxiedChannel[] = [
     body: ([sessionId]) => ({ sessionId }),
   },
   {
+    channel: 'maker:get-pending-interactions',
+    path: '/api/interactions/pending',
+    body: ([sessionId]) => ({ sessionId }),
+  },
+  {
+    channel: 'maker:resolve-interaction',
+    path: '/api/interactions/respond',
+    body: ([sessionId, requestId, decision]) => ({ sessionId, requestId, decision }),
+  },
+  {
     channel: 'maker:list-available-agents',
     path: '/api/agents',
     body: () => null,

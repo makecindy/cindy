@@ -28,6 +28,7 @@ CINDY_HOST_API=http://127.0.0.1:3456 pnpm --filter desktop dev
 | `model-access:get-status` | `POST /api/model-access` |
 | `maker:usage:model-pricing` / `-v2` / `reference-model-pricing` | `POST /api/usage/*` |
 | `maker:model-visibility:legacy-owner-claim-sync` | `POST /api/model-visibility/claim`（启动时预取，同步回放） |
+| `maker:get-pending-interactions` / `maker:resolve-interaction` | `POST /api/interactions/*` |
 | `maker:list-available-agents` | `POST /api/agents` |
 | `maker:list-agent-commands` | `POST /api/agent-commands` |
 | `maker:list-agent-skills` | `POST /api/agent-skills` |

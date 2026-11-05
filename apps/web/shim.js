@@ -388,7 +388,19 @@
                 const parsed = JSON.parse(line.slice(6));
                 (window.__hostEvents ??= []).push(parsed);
                 if (window.__hostEvents.length > 200) window.__hostEvents.shift();
-                emit('maker.onEvent', parsed);
+                // Interaction traffic has its own preload channels; everything
+                // else stays on the shared event stream.
+                if (parsed.type === 'interaction_request') {
+                  emit('maker.onInteractionRequest', { sessionId: parsed.sessionId, request: parsed.request });
+                } else if (parsed.type === 'interaction_dismissed') {
+                  emit('maker.onInteractionDismissed', {
+                    sessionId: parsed.sessionId,
+                    requestId: parsed.requestId,
+                    reason: parsed.reason,
+                  });
+                } else {
+                  emit('maker.onEvent', parsed);
+                }
               } catch { /* ignore partial */ }
             }
           }

@@ -84,6 +84,10 @@ export function createInputQueue(deps) {
       providerId: stored.providerId ?? undefined,
     });
 
+    // Permission prompts and questions must reach a client before the turn can
+    // continue; the broker owns that handshake.
+    deps.interactions?.attach(session, sessionId);
+
     state.running = true;
 
     state.unsubscribe?.();

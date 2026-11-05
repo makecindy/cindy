@@ -16,6 +16,7 @@
 | 新建任务（草稿 → 落库 → 转正） | 已验证 | `POST /api/sessions/create` 写会话行；`localDb.sessions.create` 走同一路由；`provisional` 标记与 `discard/commit` 路由存在 |
 | 发送消息（真实 Agent 回合） | 已验证 | 通过 renderer 通道发送后，SSE 依次收到 `session`、`status`、`text` 增量、`text(isFinal)`、`done`（`stop_reason: end_turn`） |
 | 流式回复呈现 | 已验证 | 浏览器内用户气泡 + 助手回复 `FINAL OK`；事件流 `status → session_id → text → done` |
+| 权限确认 / 提问交互 | 部分 | Host 侧 broker 已实现（事件流发布 + HTTP 应答 + abort 拒绝，单测覆盖），客户端通道已接；未在真实回合里触发一次确认卡 |
 | 停止生成 | 已验证 | 「Stop generating」后 `turnInProgress=false`，用户消息保留，已产出的部分文本落库 |
 | 打开历史任务 / 恢复会话 | 已验证 | 新标签页/刷新后仍显示同一轮问答（见 `evidence/stage4-e2e.md`） |
 | 历史消息窗口 | 已验证 | Host 在回台中落库 user/assistant 行；`historyView` 用共享投影器生成页面（单页返回，未分页） |

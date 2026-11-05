@@ -32,6 +32,7 @@ import { createHostServer } from './server.mjs';
 import { createChatHandler } from './chat.mjs';
 import { createEventHub } from './events.mjs';
 import { createInputQueue } from './agent/input-queue.mjs';
+import { createInteractionBroker } from './agent/interactions.mjs';
 import { messageToCamel, sessionToCamel } from '../../desktop/src/main/localDb/mapper.ts';
 import { messages as messageTable, sessions as sessionTable } from '../../desktop/src/main/localDb/schema.js';
 import { eq } from 'drizzle-orm';
@@ -235,7 +236,9 @@ const readSessionForRun = async (sessionId: string) => {
     providerId: row.providerId,
   };
 };
+const interactionBroker = createInteractionBroker({ hub: eventHub });
 const inputQueue = createInputQueue({
+  interactions: interactionBroker,
   getMaker: () => {
     if (!agentGraph) throw new Error('agent runtime is not ready');
     return agentGraph.maker;
@@ -492,6 +495,7 @@ const server = createHostServer({
   agents: () => agentGraph?.agents ?? [],
   events: eventHub,
   input: inputQueue,
+  interactions: interactionBroker,
   agentCommands: async (input: { agentKind?: string }) => {
     const agent = agentGraph?.instances?.[String(input.agentKind ?? '')];
     if (!agent) return { success: false, error: `Agent '${String(input.agentKind ?? '')}' is not registered` };
