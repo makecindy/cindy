@@ -12635,7 +12635,9 @@
       "undoUnavailable": "內容已改，無法復原",
       "unsupported": "草稿含暫不支援之格式（@提及、引用、清單）",
       "empty": "先輸入草稿方可增強",
-      "locked": "輸入框現不可編輯"
+      "locked": "輸入框現不可編輯",
+      "noAuxiliaryModel": "未有可用之輔佐模型。請在設定中設定一條輔佐模型鏈，方可使用提示詞增強。",
+      "openSettings": "開啟設定"
     }
   },
   "onboarding": {

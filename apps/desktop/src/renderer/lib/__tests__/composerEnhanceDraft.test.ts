@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildEnhancedDocument,
+  canApplyEnhanceResult,
+  canUndoEnhanceResult,
   documentFingerprint,
   documentHasStructuredNodes,
   editorIsComposing,
+  type EnhanceLiveState,
+  type EnhanceRequestOrigin,
+  type EnhanceUndoRecord,
 } from '../composerEnhanceDraft';
 
 const plainDoc = {
@@ -12,6 +18,31 @@ const plainDoc = {
     { type: 'paragraph', content: [{ type: 'text', text: 'add a search box' }] },
   ],
 };
+
+const editorInstance = { name: 'editor' };
+const otherEditor = { name: 'other-editor' };
+
+function liveState(overrides: Partial<EnhanceLiveState> = {}): EnhanceLiveState {
+  return {
+    editor: editorInstance,
+    draftKey: 'draft-1',
+    fingerprint: documentFingerprint(plainDoc),
+    disabled: false,
+    mounted: true,
+    destroyed: false,
+    composing: false,
+    ...overrides,
+  };
+}
+
+function origin(overrides: Partial<EnhanceRequestOrigin> = {}): EnhanceRequestOrigin {
+  return {
+    editor: editorInstance,
+    draftKey: 'draft-1',
+    fingerprint: documentFingerprint(plainDoc),
+    ...overrides,
+  };
+}
 
 describe('documentHasStructuredNodes', () => {
   it('accepts a draft that a plain-text rewrite can reproduce', () => {
@@ -115,5 +146,103 @@ describe('editorIsComposing', () => {
   it('reports no composition otherwise', () => {
     expect(editorIsComposing({ view: { composing: false } })).toBe(false);
     expect(editorIsComposing({ view: null })).toBe(false);
+  });
+});
+
+describe('canApplyEnhanceResult', () => {
+  it('applies the answer when the composer still shows the same draft', () => {
+    expect(canApplyEnhanceResult(origin(), liveState())).toBe(true);
+  });
+
+  it('drops the answer when the user edited the draft in the meantime', () => {
+    const edited = liveState({ fingerprint: documentFingerprint({
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'add a search box!' }] }],
+    }) });
+    expect(canApplyEnhanceResult(origin(), edited)).toBe(false);
+  });
+
+  it('drops the answer when the composer switched to another draft', () => {
+    expect(canApplyEnhanceResult(origin(), liveState({ draftKey: 'draft-2' }))).toBe(false);
+  });
+
+  it('drops the answer when the composer moved to another editor instance', () => {
+    expect(canApplyEnhanceResult(origin(), liveState({ editor: otherEditor }))).toBe(false);
+  });
+
+  it('drops the answer while an IME composition is in progress', () => {
+    expect(canApplyEnhanceResult(origin(), liveState({ composing: true }))).toBe(false);
+  });
+
+  it('drops the answer when the composer is locked', () => {
+    expect(canApplyEnhanceResult(origin(), liveState({ disabled: true }))).toBe(false);
+  });
+
+  it('drops the answer when the component was unmounted or the editor torn down', () => {
+    expect(canApplyEnhanceResult(origin(), liveState({ mounted: false }))).toBe(false);
+    expect(canApplyEnhanceResult(origin(), liveState({ destroyed: true }))).toBe(false);
+  });
+});
+
+describe('canUndoEnhanceResult', () => {
+  const record: EnhanceUndoRecord = {
+    editor: editorInstance,
+    draftKey: 'draft-1',
+    original: plainDoc as never,
+    applied: documentFingerprint(plainDoc),
+  };
+
+  it('allows the undo while the rewrite result is still in the editor', () => {
+    expect(canUndoEnhanceResult(record, liveState())).toBe(true);
+  });
+
+  it('allows the undo even when the rewrite produced a list', () => {
+    // The rewrite's own document may be structured; undo restores a full
+    // document, so the structured-node rule must not block it.
+    const listDoc = {
+      type: 'doc',
+      content: [{ type: 'orderedList', content: [] }],
+    };
+    const recordWithList: EnhanceUndoRecord = {
+      ...record,
+      applied: documentFingerprint(listDoc),
+    };
+    expect(canUndoEnhanceResult(recordWithList, liveState({ fingerprint: documentFingerprint(listDoc) }))).toBe(true);
+  });
+
+  it('blocks the undo once the user changed the content', () => {
+    expect(canUndoEnhanceResult(record, liveState({ fingerprint: 'changed' }))).toBe(false);
+  });
+
+  it('blocks the undo when the composer switched to another draft', () => {
+    expect(canUndoEnhanceResult(record, liveState({ draftKey: 'draft-2' }))).toBe(false);
+  });
+
+  it('blocks the undo while a request is running or the composer is locked', () => {
+    expect(canUndoEnhanceResult(record, liveState(), { busy: true })).toBe(false);
+    expect(canUndoEnhanceResult(record, liveState({ disabled: true }))).toBe(false);
+  });
+
+  it('blocks the undo while an IME composition is in progress', () => {
+    expect(canUndoEnhanceResult(record, liveState({ composing: true }))).toBe(false);
+  });
+
+  it('has nothing to undo without a record', () => {
+    expect(canUndoEnhanceResult(null, liveState())).toBe(false);
+  });
+});
+
+describe('buildEnhancedDocument', () => {
+  it('fills the rewrite back as plain text, not parsed markup', () => {
+    const doc = buildEnhancedDocument('add <div class="x">a search box</div>');
+    const text = JSON.stringify(doc);
+    // The markup stays text: setContent(string) would have parsed it as HTML.
+    expect(text).toContain('<div class=\\"x\\">');
+    expect(doc.type).toBe('doc');
+  });
+
+  it('keeps the rewritten text in the document', () => {
+    const doc = buildEnhancedDocument('add a search box to the page');
+    expect(JSON.stringify(doc)).toContain('add a search box to the page');
   });
 });

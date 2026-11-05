@@ -12635,7 +12635,9 @@
       "undoUnavailable": "内容已修改，无法撤销",
       "unsupported": "草稿含暂不支持的格式（@提及、引用、列表）",
       "empty": "先输入草稿才能增强",
-      "locked": "输入框当前不可编辑"
+      "locked": "输入框当前不可编辑",
+      "noAuxiliaryModel": "没有可用的辅助模型。请在设置中配置一条辅助模型链，才能使用提示词增强。",
+      "openSettings": "打开设置"
     }
   },
   "onboarding": {

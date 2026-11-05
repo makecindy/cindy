@@ -119,12 +119,15 @@ export async function enhanceComposerPrompt(
 
   if (!result.ok) {
     // The auxiliary chain is the only route this feature uses, so an exhausted
-    // chain is a configuration problem the user can act on.
+    // chain is a configuration problem the user can act on. It gets its own
+    // code so the renderer can point at Settings instead of reporting a
+    // generic "unavailable in the current state".
+    if (result.reason === 'timeout') {
+      throwIpcError('PRECONDITION_FAILED', 'Prompt enhancement timed out');
+    }
     throwIpcError(
-      'PRECONDITION_FAILED',
-      result.reason === 'timeout'
-        ? 'Prompt enhancement timed out'
-        : 'No auxiliary model is available to enhance the prompt',
+      'AUXILIARY_MODEL_UNAVAILABLE',
+      'No auxiliary model is available to enhance the prompt',
     );
   }
 

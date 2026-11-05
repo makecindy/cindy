@@ -12789,7 +12789,9 @@
       "undoUnavailable": "O conteúdo mudou, não é possível desfazer",
       "unsupported": "Este rascunho usa um formato que ainda não pode ser melhorado (menções, citações, listas)",
       "empty": "Digite um rascunho para aprimorá-lo",
-      "locked": "A caixa de entrada não pode ser editada agora"
+      "locked": "A caixa de entrada não pode ser editada agora",
+      "noAuxiliaryModel": "Nenhum modelo auxiliar disponível. Configure um nas configurações para melhorar os prompts.",
+      "openSettings": "Abrir configurações"
     }
   },
   "onboarding": {

@@ -12687,7 +12687,9 @@
       "undoUnavailable": "Der Inhalt hat sich geändert, Rückgängig ist nicht möglich",
       "unsupported": "Dieser Entwurf nutzt ein noch nicht unterstütztes Format (@-Erwähnungen, Zitate, Listen)",
       "empty": "Erst einen Entwurf eingeben, dann verbessern",
-      "locked": "Die Eingabe ist derzeit nicht bearbeitbar"
+      "locked": "Die Eingabe ist derzeit nicht bearbeitbar",
+      "noAuxiliaryModel": "Es ist kein Hilfsmodell verfügbar. Richte eines in den Einstellungen ein, um Prompts zu verbessern.",
+      "openSettings": "Einstellungen öffnen"
     }
   },
   "onboarding": {

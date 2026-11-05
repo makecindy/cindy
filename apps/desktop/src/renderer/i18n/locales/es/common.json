@@ -12789,7 +12789,9 @@
       "undoUnavailable": "El contenido cambió, no se puede deshacer",
       "unsupported": "Este borrador usa un formato que aún no se puede mejorar (menciones, citas, listas)",
       "empty": "Escribe un borrador para mejorarlo",
-      "locked": "El cuadro de entrada no se puede editar ahora"
+      "locked": "El cuadro de entrada no se puede editar ahora",
+      "noAuxiliaryModel": "No hay ningún modelo auxiliar disponible. Configura uno en Ajustes para mejorar los prompts.",
+      "openSettings": "Abrir ajustes"
     }
   },
   "onboarding": {

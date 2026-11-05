@@ -59,10 +59,24 @@ describe('enhanceComposerPrompt', () => {
     ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
   });
 
-  it('maps an exhausted auxiliary chain to a precondition failure', async () => {
+  it('maps an exhausted auxiliary chain to a code the renderer can act on', async () => {
     const request = async (): Promise<UtilityTextResult> => ({
       ok: false,
       reason: 'no_candidate',
+      attempts: [],
+    });
+
+    // The renderer uses this code to offer a link to the auxiliary-model
+    // setting, so it must not fall back to a generic "unavailable" code.
+    await expect(enhanceComposerPrompt(request, 'hello')).rejects.toMatchObject({
+      code: 'AUXILIARY_MODEL_UNAVAILABLE',
+    });
+  });
+
+  it('maps a timeout to a precondition failure', async () => {
+    const request = async (): Promise<UtilityTextResult> => ({
+      ok: false,
+      reason: 'timeout',
       attempts: [],
     });
 

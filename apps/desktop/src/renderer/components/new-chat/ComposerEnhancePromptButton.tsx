@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { Sparkles, Undo2 } from 'lucide-react';
 import type { Editor, JSONContent } from '@tiptap/core';
 
@@ -7,12 +8,15 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
-import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
-import { plainTextToComposerDocument } from '@/lib/composerListDocument';
+import { extractIpcError, mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import {
+  buildEnhancedDocument,
+  canApplyEnhanceResult,
+  canUndoEnhanceResult,
   documentFingerprint,
   documentHasStructuredNodes,
   editorIsComposing,
+  type EnhanceLiveState,
 } from '@/lib/composerEnhanceDraft';
 
 interface ComposerEnhancePromptButtonProps {
@@ -64,6 +68,7 @@ export function ComposerEnhancePromptButton({
   disabledReason,
 }: ComposerEnhancePromptButtonProps) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const [hasDraft, setHasDraft] = useState(false);
   const [structured, setStructured] = useState(false);
@@ -128,6 +133,26 @@ export function ComposerEnhancePromptButton({
     return null;
   }, [disabled, disabledReason, hasDraft, structured, t]);
 
+  /**
+   * The live composer state, read when an answer comes back.
+   *
+   * It is built from the latest committed props and the editor itself, never
+   * from the values captured when the request was dispatched.
+   */
+  const readLiveState = useCallback((): EnhanceLiveState => {
+    const current = latest.current;
+    const currentEditor = current.editor;
+    return {
+      editor: currentEditor,
+      draftKey: current.draftKey,
+      fingerprint: currentEditor ? documentFingerprint(currentEditor.getJSON()) : '',
+      disabled: current.disabled,
+      mounted: mounted.current,
+      destroyed: currentEditor ? currentEditor.isDestroyed : true,
+      composing: currentEditor ? editorIsComposing(currentEditor) : false,
+    };
+  }, []);
+
   const enhance = useCallback(async () => {
     if (!editor || busy || enhanceUnavailableReason) return;
     const originalDoc = editor.getJSON();
@@ -137,26 +162,22 @@ export function ComposerEnhancePromptButton({
       toast.warning(t('newChat.composerEnhance.unsupported'));
       return;
     }
-    const originalFingerprint = documentFingerprint(originalDoc);
     const draft = editor.getText().trim();
     if (!draft) return;
     const requestKey = draftKey;
     setBusy(true);
     try {
       const result = await window.electronAPI.composer.enhancePrompt(draft);
-      const current = latest.current;
-      const stillSameDraft =
-        mounted.current &&
-        current.editor === editor &&
-        current.draftKey === requestKey &&
-        !current.disabled &&
-        !editor.isDestroyed &&
-        documentFingerprint(editor.getJSON()) === originalFingerprint;
-      if (!stillSameDraft || editorIsComposing(editor)) {
+      const origin = {
+        editor,
+        draftKey: requestKey,
+        fingerprint: documentFingerprint(originalDoc),
+      };
+      if (!canApplyEnhanceResult(origin, readLiveState())) {
         toast.warning(t('newChat.composerEnhance.stale'));
         return;
       }
-      editor.commands.setContent(plainTextToComposerDocument(result.text));
+      editor.commands.setContent(buildEnhancedDocument(result.text));
       setUndoState({
         original: originalDoc,
         applied: documentFingerprint(editor.getJSON()),
@@ -170,23 +191,29 @@ export function ComposerEnhancePromptButton({
       editor.commands.selectAll();
       toast.success(t('newChat.composerEnhance.success'));
     } catch (error) {
+      // An exhausted auxiliary chain is a configuration problem, not a
+      // transient failure: point the user at the setting that fixes it.
+      if (extractIpcError(error)?.code === 'AUXILIARY_MODEL_UNAVAILABLE') {
+        toast.error(t('newChat.composerEnhance.noAuxiliaryModel'), {
+          action: {
+            label: t('newChat.composerEnhance.openSettings'),
+            onClick: () => navigate('/settings?tab=personalization&section=auxiliaryModels'),
+          },
+        });
+        return;
+      }
       const key = mapIpcErrorToI18nKey(error, { namespace: 'ipcError' });
       toast.error(t(key, { defaultValue: t('newChat.composerEnhance.failed') }));
     } finally {
       setBusy(false);
     }
-  }, [busy, draftKey, editor, enhanceUnavailableReason, t]);
+  }, [busy, draftKey, editor, enhanceUnavailableReason, navigate, readLiveState, t]);
 
   const undo = useCallback(() => {
-    if (!editor || undoState === null || busy || disabled) return;
-    if (!mounted.current || latest.current.disabled) return;
-    if (undoState.editor !== editor) return;
-    // The undo record belongs to the draft it was created for. Clearing it on a
-    // draft change is a convenience, not the guard: assert the identity here.
-    if (undoState.draftKey !== latest.current.draftKey) return;
-    if (latest.current.editor !== editor) return;
-    if (editor.isDestroyed || editorIsComposing(editor)) return;
-    if (documentFingerprint(editor.getJSON()) !== undoState.applied) {
+    if (!editor || undoState === null) return;
+    // The undo record belongs to the draft it was created for, and the live
+    // document must still be the one the rewrite produced.
+    if (!canUndoEnhanceResult(undoState, readLiveState(), { busy })) {
       toast.warning(t('newChat.composerEnhance.undoUnavailable'));
       return;
     }
@@ -194,7 +221,7 @@ export function ComposerEnhancePromptButton({
     setUndoState(null);
     editor.commands.focus();
     editor.commands.selectAll();
-  }, [busy, disabled, editor, t, undoState]);
+  }, [busy, editor, readLiveState, t, undoState]);
 
   if (!editor) return null;
 
