@@ -22,7 +22,7 @@ vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
 }));
 vi.mock('@/lib/remoteDataOwnerPushFence', () => ({ isDeviceLinkRemotePushCurrent: () => true }));
 import { useRemoteBotSync, useRemoteBots, useRemoteCindyIds, markRemoteBotRead } from '../useRemoteBots';
-import { parseRemoteCollectionListRequest, REMOTE_RESOURCE_LIST_CHANNEL, REMOTE_RESOURCE_CHANGED_CHANNEL } from '@cindy/device-link';
+import { parseRemoteCollectionListRequest, REMOTE_RESOURCE_INVOKE_CHANNEL, REMOTE_RESOURCE_LIST_CHANNEL, REMOTE_RESOURCE_CHANGED_CHANNEL } from '@cindy/device-link';
 import { parseRemoteBots, remoteBotKey, isRemoteBotUnread } from '../remoteBotRoster';
 const host = (deviceId: string, online = true) => ({
   deviceId,
@@ -156,6 +156,40 @@ it('keeps cached companions offline on reconnect and preserves device-qualified 
   act(() => markRemoteBotRead('a', 'same-bot', 200));
   expect(isRemoteBotUnread(result.current.find((bot) => bot.deviceId === 'a')!)).toBe(false);
   expect(isRemoteBotUnread(result.current.find((bot) => bot.deviceId === 'b')!)).toBe(true);
+});
+
+// Reading while the home computer is unreachable (or a request fails) advances the local read
+// position first. The computer must still hear about it: showing the same reply again, or the
+// next reconnect, sends it, and once the computer has it nothing is sent again.
+it('re-sends a read position the home computer has not acknowledged, on the next read and on reconnect', async () => {
+  let hostRead = 100;
+  let failing = true;
+  const published = () => { const value = collection(); Object.assign(value.items[0].display, { lastReplyAt: 200, lastReadAt: hostRead }); return value; };
+  h.invoke.mockImplementation(async (_device, channel) => {
+    if (channel === REMOTE_RESOURCE_LIST_CHANNEL) return published();
+    if (channel === REMOTE_RESOURCE_INVOKE_CHANNEL) { if (failing) throw new Error('offline'); return { effects: [], lastReadAt: 200 }; }
+    return { ok: true, delegations: [] };
+  });
+  const reads = () => h.invoke.mock.calls.filter(call => call[0] === 'a' && call[1] === REMOTE_RESOURCE_INVOKE_CHANNEL);
+  const { result } = renderHook(useRoster);
+  await waitFor(() => expect(result.current).toHaveLength(2));
+  await act(async () => markRemoteBotRead('a', 'same-bot', 200));
+  expect(reads()).toHaveLength(1);
+  expect(reads()[0][2][0]).toMatchObject({ actionId: 'read', resourceRef: { id: 'same-bot' }, input: { at: 200 } });
+  await act(async () => markRemoteBotRead('a', 'same-bot', 200)); // same reply shown again
+  expect(reads()).toHaveLength(2);
+  const lists = () => h.invoke.mock.calls.filter(call => call[1] === REMOTE_RESOURCE_LIST_CHANNEL).length;
+  failing = false;
+  let before = lists();
+  act(() => h.status({ status: 'online' })); // reconnect: the roster read carries the position
+  await waitFor(() => expect(reads()).toHaveLength(3));
+  hostRead = 200; // the computer now has it
+  before = lists();
+  act(() => h.status({ status: 'online' }));
+  await waitFor(() => expect(lists()).toBeGreaterThan(before));
+  expect(reads()).toHaveLength(3);
+  expect(isRemoteBotUnread(result.current.find((bot) => bot.deviceId === 'a')!)).toBe(false);
+  expect(reads().every(call => call[0] === 'a')).toBe(true);
 });
 
 it('does not reinterpret a resource read error as device disconnection', async () => {

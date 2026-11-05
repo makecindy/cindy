@@ -29,7 +29,7 @@ const ActionSheet = executeSheet(sheetFunction.getText(sheetSource).replace('exp
   View: native, Text: native, Pressable: native,
   useThemedStyles: () => ({}), makeStyles: icon, useTheme: () => ({ colors: {} }),
   useSafeAreaInsets: () => ({ bottom: 0 }), spacing: { md: 16 }, iconSize, iconStroke: { regular: 1.5 },
-  BlurBackdrop: icon, ACTION_ICONS: { 'add-to-chat': icon, 'copy-link': icon, rewind: icon, delete: icon },
+  BlurBackdrop: icon, ACTION_ICONS: { 'add-to-chat': icon, 'copy-link': icon, edit: icon, rewind: icon, delete: icon },
   SheetModal: (props: any) => { sheet.props = props; return React.createElement('div', null, props.children); },
 });
 
@@ -53,8 +53,15 @@ describe('mobile message action menu', () => {
     ]);
   });
 
+  // 任务运行中编辑收进菜单:位置与桌面 More 菜单一致(复制链接之后、回到此处之前)。
+  it('lists edit before rewind while the task is running', () => {
+    expect(buildMobileMessageMenu({
+      canAddToChat: false, canCopyLink: true, canDelete: false, canEditInMenu: true, canRewind: true,
+    }).map((item) => item.id)).toEqual(['copy-link', 'edit', 'rewind']);
+  });
+
   it('ships each native menu image as a template at every iOS scale', () => {
-    const items = buildMobileMessageMenu({ canAddToChat: true, canCopyLink: true, canDelete: true, canRewind: true });
+    const items = buildMobileMessageMenu({ canAddToChat: true, canCopyLink: true, canDelete: true, canEditInMenu: true, canRewind: true });
     for (const item of items) {
       const directory = resolve(process.cwd(), 'assets/message-menu', `${item.image}.imageset`);
       const fingerprintConfig = require('../../fingerprint.config.cjs');

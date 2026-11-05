@@ -198,6 +198,9 @@ export const cacheRemoteResourceItems = (userId: string, collectionId: string, i
   for (const row of items) {
     const key = remoteResourceReadKey(row.host.deviceId, row.item.ref.id);
     if ((row.item.ref.kind === 'bot' || row.item.ref.kind === 'bot-group') && s.read[key] === undefined) s.read[key] = row.item.display.lastReplyAt ?? 0;
+    // The computer's own read position (read there or on another device) moves this one forward.
+    const hostRead = row.item.display.lastReadAt;
+    if (typeof hostRead === 'number' && hostRead > (s.read[key] ?? 0)) s.read[key] = hostRead;
   }
 });
 export const markRemoteResourceRead = (userId: string, deviceId: string, resourceId: string, at: number, sequence?: string) => update(userId, (s) => {
