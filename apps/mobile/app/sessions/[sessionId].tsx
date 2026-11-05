@@ -394,7 +394,10 @@ import {
   todoReferenceComposerNode,
   slashCommandTextNode,
   textComposerDocument,
+  displayComposerSlashRuntimeAliases,
+  restoreComposerSlashRuntimeAliases,
   type ComposerDocument,
+  type ComposerSlashRuntimeAlias,
   type ComposerVoiceDraftUpdate,
 } from '@/session/composerDocument';
 import { boundAgentReferenceText } from '@cindy/maker-shared/agent-input-projection';
@@ -847,6 +850,8 @@ interface MessageEditingState {
   stashedAttachments: RemoteSerializedAttachment[];
   /** null = 预览尚未返回或失败(不提示、不阻塞发送)。 */
   rollbackHint: MessageEditRollbackHint;
+  /** 编辑时只显示 `/pr`;重发前换回原消息里的线路名(`/cindy-plugin-…:pr`、`/skill:git`)。 */
+  slashRuntimeAliases: ComposerSlashRuntimeAlias[];
 }
 
 /**
@@ -8153,22 +8158,25 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       void maker.input.stop(sessionId).catch(() => undefined);
     }
     const previous = messageEditingRef.current;
+    const { document: editDocument, aliases: slashRuntimeAliases } =
+      displayComposerSlashRuntimeAliases(draft.document);
     const next: MessageEditingState = {
       clientId,
       stashedDocument: previous?.stashedDocument ?? composerDocumentRef.current,
       stashedAttachments: previous ? previous.stashedAttachments : [...attachmentsRef.current],
       rollbackHint: null,
+      slashRuntimeAliases,
     };
     messageEditSeqRef.current += 1;
     messageEditingRef.current = next;
     setMessageEditing(next);
     setError(null);
-    applyComposerDocument(draft.document, { persist: false });
+    applyComposerDocument(editDocument, { persist: false });
     const files = buildMessageEditAttachments(draft.attachments, `message-edit:${clientId}`);
     attachmentsRef.current = files;
     setAttachments(files);
     setAttachmentError(null);
-    composerInputRef.current?.applyDocumentAndSetSelectionToEnd(draft.document);
+    composerInputRef.current?.applyDocumentAndSetSelectionToEnd(editDocument);
   }, [applyComposerDocument, canUseComposer, deviceId, getPendingUploadCount, maker, sessionId, t]);
 
   // 静默预览文件回滚影响(桌面编辑框同款提示);运行中会被拒绝,等停下后再跑一次。
@@ -8235,6 +8243,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       }
       if (!stillCurrent()) return;
     }
+    // 重发用线路名文档(`/cindy-plugin-…:pr`):离场草稿、重发失败恢复也都用它,别名表不随草稿保存。
+    const resendDocument = restoreComposerSlashRuntimeAliases(document, editing.slashRuntimeAliases);
     // 空文本 + 无附件的重发会变成「只回退不重发」,那是「回到此处」不是编辑。
     if (!composerDocumentHasContent(document) && attachmentsRef.current.length === 0 && getPendingUploadCount() === 0) {
       return;
@@ -8269,7 +8279,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       if (!stillCurrent()) {
         // 旧回合已在被控端软删,用户在提交途中离开了任务:替代消息与暂存草稿都要落到
         // 该任务自己的草稿里(回来时可见),不能因页面不在前台就丢掉。
-        persistMessageEditDraft(sessionId, { stash: editing.stashedDocument, replacement: document });
+        persistMessageEditDraft(sessionId, { stash: editing.stashedDocument, replacement: resendDocument });
         remoteSessionStore.invalidateSessionMessageWindow(sessionId, deviceId);
         return;
       }
@@ -8279,14 +8289,19 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       setMessageEditing(null);
       // 旧回合已在被控端软删:先让替代消息进入持久发件箱,再刷新消息窗口;
       // 同步只是尽力而为,失败不得打断重发与草稿恢复。
-      const accepted = await send({ documentOverride: document, messageEditResend: true });
+      // send 靠「输入框内容 == 发送文档」判断成功后是否清空,先把输入框换成同一份文档。
+      if (resendDocument !== document) {
+        composerInputRef.current?.applyDocumentAndSetSelectionToEnd(resendDocument);
+        applyComposerDocument(resendDocument, { persist: false });
+      }
+      const accepted = await send({ documentOverride: resendDocument, messageEditResend: true });
       await requestSync({ reason: 'rewind-commit', replaceMessages: true }).catch(() => undefined);
       if (outboxSessionAliveRef.current !== sessionId) {
         // 离开任务后 send 已清空该任务的草稿:把暂存草稿写回它自己的存储。
         // 重发没来得及受理时,编辑内容也一并留在该任务草稿里。
         persistMessageEditDraft(sessionId, {
           stash: editing.stashedDocument,
-          replacement: accepted === true ? null : document,
+          replacement: accepted === true ? null : resendDocument,
         });
         return;
       }

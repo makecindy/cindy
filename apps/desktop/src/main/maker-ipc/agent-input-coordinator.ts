@@ -882,6 +882,8 @@ interface SessionInputState {
 interface PendingAutoResumeRecovery {
   sessionId: string;
   stateRef: SessionInputState;
+  /** The continuation entry owns cancellation; activity metadata is presentation only. */
+  recoveryOwner: 'interrupted' | 'quota-reset' | 'provider-group';
   recovery: Extract<AgentInputRecovery, { kind: 'active-turn' }>;
   error: string | null;
   errorReason: string | null;
@@ -1217,12 +1219,16 @@ function isUiContinuationItem(item: AgentInputQueuedMessage): boolean {
     && item.originalSyntheticTrigger === 'continue';
 }
 
-function isActiveTurnBeforeVendorDispatch(active: ActiveTurn): boolean {
+function isActiveTurnBeforeVendorDispatch(
+  active: ActiveTurn,
+  options?: { allowUnreservedHostSend?: boolean },
+): boolean {
   return (
     !isActiveTurnDispatched(active) &&
     (!active.sendStarted ||
       active.persisting ||
-      active.dispatchLifecycle === 'awaiting-dispatch-hooks')
+      active.dispatchLifecycle === 'awaiting-dispatch-hooks' ||
+      (options?.allowUnreservedHostSend === true && !active.persisted && active.vendorTurnGeneration === null))
   );
 }
 
@@ -1402,6 +1408,35 @@ export class AgentInputCoordinator {
 
   private activeInputHasOwnerAuthor(sessionId: string, allowContinuation: boolean): boolean {
     const item = this.states.get(sessionId)?.activeTurn?.item;
+    return this.inputHasOwnerAuthor(item, allowContinuation);
+  }
+
+  /** Only the exact input held by this coordinator may use companion group recovery. */
+  ownsCompanionProviderGroupInput(
+    sessionId: string,
+    context: { kind: 'failure'; token: number; lease?: object | null } | { kind: 'before-send'; clientId?: string; scheduled?: boolean },
+  ): boolean {
+    const state = this.states.get(sessionId);
+    if (!state || this.isExecutionPaused(sessionId)) return false;
+    let item: AgentInputQueuedMessage | null | undefined;
+    if (context.kind === 'failure') {
+      // A native close cancels the wait token while the group still owns its
+      // captured recovery lease. User intervention invalidates that lease too.
+      const current = isUsageLimitCandidateCurrent(state, context.token)
+        || (context.lease != null && this.isUsageLimitRecoveryLeaseCurrent(sessionId, context.lease));
+      if (state.activeTurn || state.autoResumePending || !current) return false;
+      const recovery = state.recovery;
+      item = recovery?.kind === 'active-turn' ? recovery.item
+        : recovery?.kind === 'queue-head' ? state.pendingQueue.find(queued => queued.clientId === recovery.clientId) : undefined;
+    } else {
+      if (context.scheduled || !context.clientId) return false;
+      item = state.activeTurn?.item;
+      if (item?.clientId !== context.clientId) return false;
+    }
+    return this.inputHasOwnerAuthor(item, true);
+  }
+
+  private inputHasOwnerAuthor(item: AgentInputQueuedMessage | null | undefined, allowContinuation: boolean): boolean {
     // A trusted Desktop receipt (`origin.kind === 'desktop'`) is still owner input.
     const originKind = (item?.origin as { kind?: unknown } | undefined)?.kind;
     if (!item || (originKind !== undefined && originKind !== 'desktop')) return false;
@@ -3236,8 +3271,8 @@ export class AgentInputCoordinator {
     opts?: {
       auto?: boolean;
       attemptToken?: number;
-      /** 额度重置后自动继续（`continueAfterUsageLimitReset`），以等待令牌复核用户未接手。 */
-      usageLimitWait?: { token: number; info: AutoResumeInfo };
+      /** Quota/group continuation shares the wait token, but retains its actual recovery owner. */
+      usageLimitWait?: { token: number; info: AutoResumeInfo; recoveryOwner: 'quota-reset' | 'provider-group' };
     },
   ): Promise<{ projection: AgentInputProjection; outcome: AutoRetryOutcome }> {
     const state = this.getState(sessionId);
@@ -3512,6 +3547,7 @@ export class AgentInputCoordinator {
         this.pendingAutoResumeRecoveries.set(item.clientId, {
           sessionId,
           stateRef: state,
+          recoveryOwner: usageWait?.recoveryOwner ?? 'interrupted',
           recovery,
           error: previousError,
           errorReason: previousErrorReason,
@@ -6148,9 +6184,10 @@ export class AgentInputCoordinator {
     sessionId: string,
     state: SessionInputState,
     preserveQueue: boolean,
+    options?: { allowUnreservedHostSend?: boolean },
   ): void {
     const active = state.activeTurn;
-    if (!active || !isActiveTurnBeforeVendorDispatch(active)) return;
+    if (!active || !isActiveTurnBeforeVendorDispatch(active, options)) return;
     this.abortInputBoundary(sessionId);
     state.generation += 1;
     state.activeTurn = null;
@@ -7186,6 +7223,35 @@ export class AgentInputCoordinator {
     return this.getProjection(sessionId);
   }
 
+  /** A saved companion model supersedes group recovery until vendor dispatch. */
+  cancelProviderGroupRecovery(sessionId: string): AgentInputProjection {
+    this.cancelUsageLimitWait(sessionId);
+    const state = this.getState(sessionId);
+    const restore = (item: AgentInputQueuedMessage | null | undefined): boolean => {
+      if (!item) return false;
+      const pending = this.pendingAutoResumeRecoveries.get(item.clientId);
+      if (pending?.recoveryOwner !== 'provider-group'
+        || !this.restoreAutoResumeRecovery(sessionId, item.clientId, pending.attemptToken)) return false;
+      this.autoResumeDispatchAttempts.delete(item.clientId);
+      return true;
+    };
+    const active = state.activeTurn;
+    // The model save holds the send lock. A host send may still be waiting for
+    // that lock before Session reservation; its signal/generation can be revoked.
+    // A reservation is not proof of dispatch, but an unclassified sending turn
+    // after that boundary must not be cancelled as if it had never reached vendor.
+    const options = { allowUnreservedHostSend: true };
+    if (active && isActiveTurnBeforeVendorDispatch(active, options) && restore(active.item)) {
+      this.cancelPreSendActiveTurn(sessionId, state, false, options);
+      this.emit(sessionId);
+      this.scheduleDrain(sessionId, 'provider-group-recovery-cancelled');
+    }
+    for (const item of [...state.pendingQueue]) {
+      if (restore(item)) this.remove(sessionId, item.clientId);
+    }
+    return this.getProjection(sessionId);
+  }
+
   /** End a scheduled quota claim while preserving an ordinary manual Retry. */
   releaseScheduledUsageLimitRecovery(sessionId: string, runId: string, retryClientId?: string): void {
     const state = this.getState(sessionId);
@@ -7216,7 +7282,19 @@ export class AgentInputCoordinator {
     info: AutoResumeInfo,
   ): Promise<AutoRetryOutcome> {
     const { outcome } = await this.performRetryLastError(sessionId, {
-      usageLimitWait: { token, info },
+      usageLimitWait: { token, info, recoveryOwner: 'quota-reset' },
+    });
+    return outcome;
+  }
+
+  /** Group switching and reconnecting share the retry path, with explicit cancellation ownership. */
+  async continueAfterProviderGroupRecovery(
+    sessionId: string,
+    token: number,
+    info: AutoResumeInfo,
+  ): Promise<AutoRetryOutcome> {
+    const { outcome } = await this.performRetryLastError(sessionId, {
+      usageLimitWait: { token, info, recoveryOwner: 'provider-group' },
     });
     return outcome;
   }
