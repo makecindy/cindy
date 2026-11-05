@@ -12637,7 +12637,8 @@
       "empty": "先输入草稿方可增强",
       "locked": "输入框现不可编辑",
       "noAuxiliaryModel": "未有可用之辅佐模型。请在设定中设定一条辅佐模型链，方可使用提示词增强。",
-      "openSettings": "开启设定"
+      "openSettings": "开启设定",
+      "tooLong": "草稿超过 {max} 个字符无法增强。请精简草稿，或拆成多条分别增强。"
     }
   },
   "onboarding": {

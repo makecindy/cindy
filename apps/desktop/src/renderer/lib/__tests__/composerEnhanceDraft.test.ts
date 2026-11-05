@@ -6,11 +6,13 @@ import {
   canUndoEnhanceResult,
   documentFingerprint,
   documentHasStructuredNodes,
+  draftExceedsEnhanceInputLimit,
   editorIsComposing,
   type EnhanceLiveState,
   type EnhanceRequestOrigin,
   type EnhanceUndoRecord,
 } from '../composerEnhanceDraft';
+import { COMPOSER_ENHANCE_MAX_INPUT_CHARS } from '../../../shared/composerPromptEnhance';
 
 const plainDoc = {
   type: 'doc',
@@ -244,5 +246,29 @@ describe('buildEnhancedDocument', () => {
   it('keeps the rewritten text in the document', () => {
     const doc = buildEnhancedDocument('add a search box to the page');
     expect(JSON.stringify(doc)).toContain('add a search box to the page');
+  });
+});
+
+describe('draftExceedsEnhanceInputLimit', () => {
+  it('accepts a draft inside the main-side budget', () => {
+    expect(draftExceedsEnhanceInputLimit('a'.repeat(COMPOSER_ENHANCE_MAX_INPUT_CHARS))).toBe(false);
+  });
+
+  it('refuses a draft over the budget, the case main rejects with INVALID_PARAMS', () => {
+    expect(draftExceedsEnhanceInputLimit('a'.repeat(COMPOSER_ENHANCE_MAX_INPUT_CHARS + 1))).toBe(true);
+  });
+
+  it('measures the trimmed draft, the same text main receives', () => {
+    const atLimit = 'a'.repeat(COMPOSER_ENHANCE_MAX_INPUT_CHARS);
+    expect(draftExceedsEnhanceInputLimit(`   ${atLimit}   `)).toBe(false);
+    expect(draftExceedsEnhanceInputLimit(`   ${atLimit}a   `)).toBe(true);
+  });
+
+  it('uses the shared main-side limit rather than a second copy of it', () => {
+    // A drifted copy of the budget would let the button stay enabled for a
+    // draft main refuses.
+    expect(draftExceedsEnhanceInputLimit('a'.repeat(10), 10)).toBe(false);
+    expect(draftExceedsEnhanceInputLimit('a'.repeat(11), 10)).toBe(true);
+    expect(COMPOSER_ENHANCE_MAX_INPUT_CHARS).toBe(1500);
   });
 });

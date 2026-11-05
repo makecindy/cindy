@@ -9,12 +9,14 @@ import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { extractIpcError, mapIpcErrorToI18nKey } from '@/utils/ipcError';
+import { COMPOSER_ENHANCE_MAX_INPUT_CHARS } from '../../../shared/composerPromptEnhance';
 import {
   buildEnhancedDocument,
   canApplyEnhanceResult,
   canUndoEnhanceResult,
   documentFingerprint,
   documentHasStructuredNodes,
+  draftExceedsEnhanceInputLimit,
   editorIsComposing,
   type EnhanceLiveState,
 } from '@/lib/composerEnhanceDraft';
@@ -72,6 +74,7 @@ export function ComposerEnhancePromptButton({
   const [busy, setBusy] = useState(false);
   const [hasDraft, setHasDraft] = useState(false);
   const [structured, setStructured] = useState(false);
+  const [tooLong, setTooLong] = useState(false);
   const [undoState, setUndoState] = useState<{
     original: JSONContent;
     applied: string;
@@ -100,12 +103,15 @@ export function ComposerEnhancePromptButton({
     if (!editor) {
       setHasDraft(false);
       setStructured(false);
+      setTooLong(false);
       return;
     }
     const sync = () => {
       const doc = editor.getJSON();
-      setHasDraft(editor.getText().trim().length > 0);
+      const text = editor.getText().trim();
+      setHasDraft(text.length > 0);
       setStructured(documentHasStructuredNodes(doc));
+      setTooLong(draftExceedsEnhanceInputLimit(text));
     };
     sync();
     editor.on('update', sync);
@@ -129,9 +135,14 @@ export function ComposerEnhancePromptButton({
   const enhanceUnavailableReason = useMemo(() => {
     if (disabled) return disabledReason ?? t('newChat.composerEnhance.locked');
     if (structured) return t('newChat.composerEnhance.unsupported');
+    // A draft over the input budget is refused by main. Saying so here beats
+    // letting the user click into a generic "invalid input" error.
+    if (tooLong) {
+      return t('newChat.composerEnhance.tooLong', { max: COMPOSER_ENHANCE_MAX_INPUT_CHARS });
+    }
     if (!hasDraft) return t('newChat.composerEnhance.empty');
     return null;
-  }, [disabled, disabledReason, hasDraft, structured, t]);
+  }, [disabled, disabledReason, hasDraft, structured, t, tooLong]);
 
   /**
    * The live composer state, read when an answer comes back.

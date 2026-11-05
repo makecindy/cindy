@@ -12689,7 +12689,8 @@
       "empty": "Type a draft to enhance it",
       "locked": "The composer is not editable right now",
       "noAuxiliaryModel": "No auxiliary model is available. Configure one in Settings to enhance prompts.",
-      "openSettings": "Open settings"
+      "openSettings": "Open settings",
+      "tooLong": "{max} characters is the limit for enhancing a draft. Shorten it, or split it into smaller requests."
     }
   },
   "onboarding": {

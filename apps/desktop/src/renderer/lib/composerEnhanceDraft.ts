@@ -1,6 +1,22 @@
 import type { JSONContent } from '@tiptap/core';
 
+import { COMPOSER_ENHANCE_MAX_INPUT_CHARS } from '../../shared/composerPromptEnhance';
 import { plainTextToComposerDocument } from './composerListDocument';
+
+/**
+ * True when the draft is longer than the input budget the main side accepts.
+ *
+ * The renderer reuses the main-side constant on purpose: a draft over the
+ * budget is refused by main with INVALID_PARAMS, which reaches the user as a
+ * generic "invalid input" with no way to recover. Checking it here lets the
+ * control say what is actually wrong and name the limit.
+ */
+export function draftExceedsEnhanceInputLimit(
+  text: string,
+  limit: number = COMPOSER_ENHANCE_MAX_INPUT_CHARS,
+): boolean {
+  return text.trim().length > limit;
+}
 
 /**
  * Node types a plain-text rewrite can reproduce faithfully.
