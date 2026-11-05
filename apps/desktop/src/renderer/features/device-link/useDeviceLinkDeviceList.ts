@@ -30,6 +30,18 @@ export interface DeviceLinkDeviceListRequestState {
 }
 let requestState: DeviceLinkDeviceListRequestState = { status: 'loading', error: null };
 let refreshImpl: (() => void) | null = null;
+let directoryExpiryTimer: ReturnType<typeof setTimeout> | null = null;
+let directoryExpiryToken = 0;
+let directoryRefreshInFlight = 0;
+/** Absolute source deadlines; kept beside the list so a render can observe them. */
+let directoryWallUntil: number | null = null;
+let directoryMonoUntil: number | null = null;
+/** Sticky once either clock is observed past its deadline; only a new source clears it. */
+let directoryExpired = false;
+let directoryRetired = false;
+let directoryRetireScheduled = false;
+let directoryRetireReplayPending = false;
+const EXPIRED_REQUEST_STATE: DeviceLinkDeviceListRequestState = { status: 'loading', error: null };
 /**
  * 设备目录是否已进入终态 —— 上层(shouldWaitForRemoteSessionBootstrap)据此决定还要不要等。
  * 两种终态:最新一次 listDevices 已 resolve / reject(见 setDevices / markRequestFailed),
@@ -176,16 +188,29 @@ export function applyDeviceRename(
   return next;
 }
 
-function setDevices(next: DeviceLinkDeviceView[]): void {
+function setDevices(
+  next: DeviceLinkDeviceView[],
+  budget: { requestedAt: { wall: number; mono: number }; remainingMs: number } | undefined,
+  authoritative: boolean,
+): boolean {
   // 按 deviceId 稳定排序,避免服务端返回顺序抖动触发无谓重渲染。
   const sorted = [...next].sort((a, b) => a.deviceId.localeCompare(b.deviceId));
+  if (budget) {
+    if (!armDirectoryExpiry(budget.requestedAt, budget.remainingMs, authoritative)) {
+      // Expired on arrival: never publish these rows as ready and then wait for
+      // a 0ms callback. Enter the same unknown/loading state as an observation.
+      retireDirectoryAtExpiry();
+      return false;
+    }
+  } else clearDirectoryExpiry();
   const devicesChanged = !relevantEqual(devices, sorted);
   const settledChanged = !initialRequestSettled;
   const requestChanged = setRequestState('ready', null);
-  if (!devicesChanged && !settledChanged && !requestChanged) return;
+  if (!devicesChanged && !settledChanged && !requestChanged) return true;
   devices = sorted;
   initialRequestSettled = true;
   subs.forEach((fn) => fn());
+  return true;
 }
 
 /**
@@ -200,6 +225,7 @@ function setDevices(next: DeviceLinkDeviceView[]): void {
  * 主动退回 loading,远程设备首快照的等待行为保持原样。
  */
 function clearDevices(): void {
+  clearDirectoryExpiry();
   loadGeneration += 1; // 作废所有在途 listDevices 响应(见 loadGeneration 注释)。
   const requestChanged = setRequestState('ready', null);
   const changed = devices !== null || !initialRequestSettled || requestChanged;
@@ -207,6 +233,81 @@ function clearDevices(): void {
   devices = null;
   initialRequestSettled = true;
   subs.forEach((fn) => fn());
+}
+
+function clearDirectoryExpiry(): void {
+  if (directoryExpiryTimer !== null) clearTimeout(directoryExpiryTimer);
+  directoryExpiryTimer = null;
+  directoryExpiryToken += 1;
+  directoryWallUntil = null;
+  directoryMonoUntil = null;
+  directoryExpired = false;
+  directoryRetired = false;
+  directoryRetireScheduled = false;
+  directoryRetireReplayPending = false;
+}
+
+function armDirectoryExpiry(
+  requestedAt: { wall: number; mono: number },
+  remainingMs: number,
+  authoritative: boolean,
+): boolean {
+  const wasExpired = directoryExpired;
+  const wasRetired = directoryRetired;
+  clearDirectoryExpiry();
+  const wallUntil = requestedAt.wall + remainingMs;
+  const monoUntil = requestedAt.mono + remainingMs;
+  directoryWallUntil = wallUntil;
+  directoryMonoUntil = monoUntil;
+  const remaining = Math.min(wallUntil - Date.now(), monoUntil - performance.now());
+  // A stale fallback cannot revive a source already observed past its budget;
+  // an explicit zero (including wake/clock jumps) is expired on arrival.
+  if (!(remainingMs > 0) || remaining <= 0 || (!authoritative && wasExpired)) {
+    directoryExpired = true;
+    directoryRetired = !authoritative && wasExpired && wasRetired;
+    return false;
+  }
+  const token = directoryExpiryToken;
+  directoryExpiryTimer = setTimeout(() => {
+    if (token !== directoryExpiryToken) return;
+    directoryExpiryTimer = null;
+    directoryExpired = true;
+    retireDirectoryAtExpiry();
+  }, remaining);
+  return true;
+}
+
+function scheduleDirectoryRetire(): void {
+  if (directoryRetired || directoryRetireScheduled) return;
+  const token = directoryExpiryToken;
+  directoryRetireScheduled = true;
+  // Observation happens during render/getSnapshot. Latch the source now and
+  // defer the notification, state update and re-read until after this render.
+  queueMicrotask(() => {
+    if (token !== directoryExpiryToken) return;
+    directoryRetireScheduled = false;
+    if (!directoryExpired) return;
+    retireDirectoryAtExpiry();
+  });
+}
+
+function retireDirectoryAtExpiry(): void {
+  if (directoryRetired) return;
+  directoryRetired = true;
+  // The mounted rows are past their original directory budget. Treat absence as
+  // unknown, not as a confirmed deletion: clear the display and let the existing
+  // read path revalidate; in-flight reads keep their own generation.
+  const hadRows = devices !== null;
+  const wasSettled = initialRequestSettled;
+  devices = null;
+  initialRequestSettled = false;
+  const requestChanged = setRequestState('loading', null);
+  if (hadRows || wasSettled || requestChanged) subs.forEach((fn) => fn());
+  directoryRetireReplayPending = true;
+  if (directoryRefreshInFlight === 0) {
+    directoryRetireReplayPending = false;
+    refreshImpl?.();
+  }
 }
 
 function markRequestFailed(error: unknown): void {
@@ -264,6 +365,7 @@ function ensureStarted(): void {
   let backgroundRetryReplayActive = false;
 
   const finishRefresh = (gen: number, background: boolean): void => {
+    if (directoryRefreshInFlight > 0) directoryRefreshInFlight -= 1;
     // A foreground refresh can supersede a background retry. In that case the old
     // retry must not consume a presence queued for the newer operation; the
     // current operation will replay it when it settles.
@@ -272,7 +374,9 @@ function ensureStarted(): void {
       backgroundRetryGeneration = null;
     }
     if (gen !== loadGeneration) return;
-    const shouldRefresh = backgroundRetryRefreshPending && linkStatus !== 'stopped';
+    const retireReplay = directoryRetireReplayPending;
+    directoryRetireReplayPending = false;
+    const shouldRefresh = (backgroundRetryRefreshPending || retireReplay) && linkStatus !== 'stopped';
     backgroundRetryRefreshPending = false;
     backgroundRetryReplayActive = false;
     if (shouldRefresh) refresh(false, true);
@@ -309,6 +413,7 @@ function ensureStarted(): void {
     // getState 与 listDevices 共用同一个 operation generation。stop、状态 push、手动重试或
     // 更晚的 refresh 都会令旧操作失效，迟到的状态快照和目录快照都不得落地。
     loadGeneration += 1;
+    directoryRefreshInFlight += 1;
     const gen = loadGeneration;
     const statusRevisionAtStart = linkStatusRevision;
     if (background) backgroundRetryGeneration = gen;
@@ -348,6 +453,7 @@ function ensureStarted(): void {
     }
 
     try {
+      const requestedAt = { wall: Date.now(), mono: performance.now() };
       const result = await window.electronAPI.deviceLink.listDevices();
       // 期间发生过清空(stop / 登出)或更晚的 refresh → 本次响应已陈旧,丢弃。
       if (gen !== loadGeneration) {
@@ -360,7 +466,12 @@ function ensureStarted(): void {
       }
       clearRetryTimer();
       retryDelayMs = 0;
-      setDevices(list);
+      const displayed = setDevices(list, result?.displayBudget
+        ? { requestedAt, remainingMs: result.displayBudget.remainingMs } : undefined,
+      result?.stale !== true);
+      // A source already retired cannot be refreshed into validity by another
+      // stale answer. Keep the normal retry cadence instead of a tight loop.
+      if (!displayed && !directoryRetireReplayPending) scheduleRetry();
     } catch (error) {
       // 只有最新请求的失败才算本轮首拉已经结算；更晚的 refresh 仍在途时继续等待它。
       if (gen !== loadGeneration) {
@@ -427,6 +538,17 @@ function ensureStarted(): void {
     // 若 REST 仍可达可直接拿到目录；不可达则明确落 error，而不是误装成空列表。
     refresh();
   });
+  // A late 401/403 after the two-second fallback is not a temporary directory
+  // outage. The cloud snapshot is gone; drop mounted rows until a later real
+  // presence/status event can rebuild them.
+  window.electronAPI.deviceLink.onDeviceDirectoryInvalidated?.(() => {
+    clearRetryTimer();
+    retryDelayMs = 0;
+    backgroundRetryGeneration = null;
+    backgroundRetryRefreshPending = false;
+    backgroundRetryReplayActive = false;
+    clearDevices();
+  });
   // 关掉「我控制它」(本地 opt-out)只广播 control-target-changed、不发 presence;listDevices 的
   // controlEnabled 已据 disabledControlDeviceIds 计算,故重拉即可让被 opt-out 的设备立刻退出切换栏。
   window.electronAPI.deviceLink.onControlTargetChanged(() => refresh());
@@ -444,7 +566,21 @@ function subscribe(fn: () => void): () => void {
   };
 }
 
+function observeDirectoryExpiry(): boolean {
+  if (directoryExpired) return true;
+  if (directoryWallUntil === null || directoryMonoUntil === null) return false;
+  if (Date.now() < directoryWallUntil && performance.now() < directoryMonoUntil) return false;
+  // Pure observation: keep the source sticky, but do not notify from getSnapshot.
+  directoryExpired = true;
+  return true;
+}
+
 function getSnapshot(): DeviceLinkDeviceView[] | null {
+  if (devices === null) return null;
+  if (observeDirectoryExpiry()) {
+    scheduleDirectoryRetire();
+    return null;
+  }
   return devices;
 }
 
@@ -454,6 +590,10 @@ export function useDeviceLinkDeviceList(): DeviceLinkDeviceView[] | null {
 }
 
 function getInitialRequestSettledSnapshot(): boolean {
+  if (observeDirectoryExpiry() && requestState.status !== 'error') {
+    scheduleDirectoryRetire();
+    return false;
+  }
   return initialRequestSettled;
 }
 
@@ -463,6 +603,11 @@ export function useDeviceLinkDeviceListSettled(): boolean {
 }
 
 function getRequestStateSnapshot(): DeviceLinkDeviceListRequestState {
+  if (observeDirectoryExpiry()) {
+    scheduleDirectoryRetire();
+    // An already-failed re-read is an error, not an endless loading state.
+    return requestState.status === 'error' ? requestState : EXPIRED_REQUEST_STATE;
+  }
   return requestState;
 }
 

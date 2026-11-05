@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import {
   isSharedTaskPeer,
   isProviderSharePeer,
+  PLUGIN_COLLECTION,
   REMOTE_RESOURCE_CHANGED_CHANNEL,
 } from '@cindy/device-link';
 import { Button } from '@/components/ui/button';
@@ -75,6 +76,9 @@ function OwnerPrompt({ deviceId }: { deviceId: string }) {
     if (directory.online) void refresh();
     else abort.current?.abort();
   }, [directory.online]);
+  // Hosts push plugin changes (install, enable, approval, badge) as the "plugins"
+  // collection. Teammate, group and card pushes arrive constantly while a teammate
+  // works; re-reading the ~1 MB snapshot for each of them saturated the link.
   useEffect(
     () =>
       window.electronAPI.deviceLink.onRemotePush((push, stamp) => {
@@ -82,7 +86,8 @@ function OwnerPrompt({ deviceId }: { deviceId: string }) {
           current() &&
           push.deviceId === deviceId &&
           push.channel === REMOTE_RESOURCE_CHANGED_CHANNEL &&
-          isDeviceLinkRemotePushCurrent(push, stamp)
+          isDeviceLinkRemotePushCurrent(push, stamp) &&
+          (push.payload as { collectionId?: unknown } | null)?.collectionId === PLUGIN_COLLECTION
         )
           void refresh();
       }),

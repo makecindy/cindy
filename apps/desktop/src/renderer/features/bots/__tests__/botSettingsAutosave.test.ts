@@ -444,6 +444,18 @@ describe('createBotSettingsAutosave flush & failure', () => {
 
 
 describe('settings changes preserve independently joined capabilities', () => {
+  // Unit regression: a concurrent read must not replace the location of a
+  // pending explicit re-selection, even if the route itself was unchanged.
+  it('retains the remote primary mirror while retrying an unchanged selection', () => {
+    const local = payload();
+    const route = { ...local.capabilities.modelChain[0]!, agentDeviceId: 'share:one' };
+    const saved = payload({ capabilities: capabilities({ ...route, modelChain: [route], modelChainOverride: [route] }) });
+    const next = reconcileBotSettingsDraft(saved, saved, local, true);
+    expect(next.capabilities.agentDeviceId).toBe('share:one');
+    expect(botSettingsChanges(saved, saved, false, true).capabilities?.agentDeviceId).toBe('share:one');
+    expect(botSettingsChanges(local, local, false, true).capabilities).not.toHaveProperty('agentDeviceId');
+  });
+
   it('preserves an unacknowledged same-model choice while adopting unrelated host edits', () => {
     const saved = payload();
     const incoming = payload({ name: 'Host name', skills: ['host-skill'],

@@ -47,6 +47,7 @@ export function BotDmThreadPanel({ bot, rootSessionId, rootClientId, state, ment
   replyCount?: number;
   onRetry: () => void;
   onClose: () => void;
+  /** Drag and arrow-key sizing supplied by the host, shared with group topics. */
   resize?: ThreadPanelResize;
 }) {
   const { t, i18n } = useTranslation();
@@ -113,7 +114,7 @@ export function BotDmThreadPanel({ bot, rootSessionId, rootClientId, state, ment
       )}
   </ThreadPanelRoot>;
   return (
-    <ThreadPanel panelRef={panelRef} rootClientId={rootClientId} resize={resize} onClose={onClose}>
+    <ThreadPanel panelRef={panelRef} rootClientId={rootClientId} onClose={onClose} resize={resize}>
       <div className="flex min-h-0 flex-1 flex-col">
         {state.kind === 'ready' ? (
           <CCAgentSessionView

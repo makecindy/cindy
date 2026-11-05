@@ -17,17 +17,19 @@ import { BotDmThreadPanel, type BotDmThreadPanelState } from './BotDmThreadViews
 import { isBotDmThreadUnread, useBotDmThreadList } from './botDmThreads';
 import { BotDmThreadsProvider, type BotDmThreadsValue } from './botDmThreadsContext';
 import { useBotProfiles } from './botStore';
-import { BOT_DM_THREAD_PARAM } from './botDmThreadRoute';
 import { useThreadPanelResize } from './useThreadPanelResize';
+import { BOT_DM_THREAD_PARAM } from './botDmThreadRoute';
 
 
 const TITLE_LIMIT = 60;
-const NO_OPENING_MOTION = () => {};
 
 function topicTitle(text: string | undefined): string {
   const line = text?.replace(/\s+/g, ' ').trim() ?? '';
   return line.length > TITLE_LIMIT ? `${line.slice(0, TITLE_LIMIT - 1)}…` : line;
 }
+
+/** Group topics animate the panel open; the private chat renders it as soon as it is ready. */
+const NO_THREAD_OPEN_ANIMATION = () => {};
 
 export function BotDmThreadHost({ enabled, bot, rootSessionId, mentions, children }: {
   /** False for read-only copies, history and channel routes: no topics there. */
@@ -47,9 +49,10 @@ export function BotDmThreadHost({ enabled, bot, rootSessionId, mentions, childre
   const { threads, reload, readVersion } = useBotDmThreadList(enabled ? bot.id : null, enabled ? rootSessionId : null, topicSessionIds);
 
   const [open, setOpen] = useState<{ rootClientId: string; state: BotDmThreadPanelState } | null>(null);
-  // Same divider as group topics; the chosen width survives switching and reopening topics here.
-  const layoutRef = useRef<HTMLDivElement>(null);
-  const resize = useThreadPanelResize(layoutRef, enabled ? open?.rootClientId ?? null : null, NO_OPENING_MOTION);
+  // Same drag handle and arrow-key sizing as group topics. A private topic opens without a
+  // width animation, so there is nothing to cancel when the reader starts dragging.
+  const threadLayoutRef = useRef<HTMLDivElement>(null);
+  const threadResize = useThreadPanelResize(threadLayoutRef, enabled ? open?.rootClientId ?? null : null, NO_THREAD_OPEN_ANIMATION);
   const attempt = useRef(0);
   const ensure = useCallback((rootClientId: string) => {
     const request = ++attempt.current;
@@ -122,7 +125,7 @@ export function BotDmThreadHost({ enabled, bot, rootSessionId, mentions, childre
   const openThread = open ? threads.get(open.rootClientId) : undefined;
   return (
     <BotDmThreadsProvider value={value}>
-      <div ref={layoutRef} className={cn('flex h-full min-w-0 flex-1', resize.isDragging && 'select-none [&_*]:cursor-col-resize')}>
+      <div ref={threadLayoutRef} className={cn('flex h-full min-w-0 flex-1', threadResize.isDragging && 'select-none [&_*]:cursor-col-resize')}>
         <div className="flex min-w-0 flex-1 flex-col">{children}</div>
         {enabled && open ? (
           <BotDmThreadPanel
@@ -136,7 +139,7 @@ export function BotDmThreadHost({ enabled, bot, rootSessionId, mentions, childre
             replyCount={openThread?.replyCount}
             onRetry={() => ensure(open.rootClientId)}
             onClose={close}
-            resize={resize}
+            resize={threadResize}
           />
         ) : null}
       </div>

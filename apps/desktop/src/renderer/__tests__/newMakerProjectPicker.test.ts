@@ -1115,15 +1115,8 @@ describe('Shared create project picker', () => {
 
   // #807 review 第三轮:能力缓存命中时必须清掉上一目标遗留的 loading —— 漏了会让
   // capabilitiesLoading 永久为 true,而创建页的 send / goal guard 正是看它。
-  it('clears inherited loading state when the capability cache hits', () => {
-    const hookSource = agentCapabilitiesHookSource.slice(
-      agentCapabilitiesHookSource.indexOf('export function useAgentCapabilities('),
-    );
-    const cachedBranch = hookSource.slice(hookSource.indexOf('const cached = cache.get(key);'));
-    const untilReturn = cachedBranch.slice(0, cachedBranch.indexOf('return;'));
-    expect(untilReturn).toContain('setLoading(false);');
-    expect(untilReturn).toContain('setError(null);');
-  });
+  // 该行为由 deviceProvidersPermanentFailure.test.tsx 的 mounted cache-hit 用例
+  // 通过真实 hook 覆盖；实现已改用 getCachedCapabilities，不再断言源码字面量。
 
   // #807 review 第十四轮:被控端 maker:create-session 一返回 sessionId 就是**提交点**。原来两处
   // 远程分支手写 invoke('local-db:sessions:list') + setDeviceSessions 做镜像回流,隧道一抖(被控端
@@ -1408,7 +1401,7 @@ describe('Shared create project picker', () => {
     expect(addedHead).toContain('prefetchDeviceGitSafetySettings(target.deviceId)');
     // ③ 「设备已不可用」类的 evict 不需要配对 —— 那几处刻意不 prefetch,别被这条规则误改。
     //    这里只锁「本仓存在那个正确范例」,它是这条规则的出处。
-    expect(deviceLinkRemoteProjectsSource).toContain('void refreshRemoteCatalogSnapshot(push.deviceId);');
+    expect(deviceLinkRemoteProjectsSource).toContain('void refreshRemoteCatalogSnapshot(push.deviceId, push.payload);');
     const refreshSource = readSource('lib', 'remoteCatalogSnapshot.ts');
     const evictAt = refreshSource.search(/evictDeviceProviders\(deviceId(?:,|\))/);
     expect(evictAt).toBeGreaterThan(-1);
@@ -1492,10 +1485,18 @@ describe('Shared create project picker', () => {
       chatInputSource.indexOf("id: 'add-extra-dir'"),
       chatInputSource.indexOf('if (remoteComposerGhosts.failed)'),
     );
-    expect(directoryAction).toContain('extraDirs: currentWritableDirs');
-    expect(directoryAction).toContain('otherDirs: currentExtraDirs');
-    expect(directoryAction).toContain('writableGrantScope,');
-    expect(directoryAction).toContain('onChange: onWritableDirsChange');
+    // The gated action only opens the add-directory page; both of its add paths (recent list
+    // and system picker) write the writable group with the task-bound grant scope.
+    expect(directoryAction).toContain('run: () => openAddDirectoryViewRef.current()');
+    const directoryHandlers = chatInputSource.slice(
+      chatInputSource.indexOf('const handleAddRecentDir = useCallback('),
+      chatInputSource.indexOf('// ── Send / Stop wiring'),
+    );
+    expect(directoryHandlers).toContain('writableDirs: writableDirs ?? []');
+    expect(directoryHandlers).toContain('extraDirs: writableDirs ?? []');
+    expect(directoryHandlers.match(/otherDirs: extraDirs \?\? \[\]/g)).toHaveLength(2);
+    expect(directoryHandlers.match(/writableGrantScope,/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(directoryHandlers.match(/onChange: onWritableDirsChange/g)).toHaveLength(2);
     expect(chatInputSource).not.toContain("id: 'add-writable-dir'");
     expect(chatInputSource).toMatch(
       /hasReferenceDirs=\{\s*!settingsLocked\s*&&\s*\(onExtraDirsChange !== undefined \|\| onWritableDirsChange !== undefined\)\s*\}/,

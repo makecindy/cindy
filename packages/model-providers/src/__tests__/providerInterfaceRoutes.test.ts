@@ -241,13 +241,19 @@ describe('V6 remote interface bindings', () => {
   it('follows new defaults, keeps explicit selections and preserves the Coding limit', () => {
     const registry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
     const options = { modelRegistry: registry, presets: BUNDLED_CATALOG.presets };
-    const automatic = buildUserProvider(connection(), options).models.codex![0];
+    const savedAutomatic = JSON.parse(JSON.stringify(connection()));
+    const savedExplicit = JSON.parse(JSON.stringify(connection({ interfaceId: 'moonshot-kimi-code-openai-completions' })));
+    const before = JSON.stringify({ savedAutomatic, savedExplicit });
+    expect(buildUserProvider(savedExplicit, options).models.codex![0].api).toBe('openai-completions');
+    const automatic = buildUserProvider(savedAutomatic, options).models.codex![0];
     expect(automatic).toMatchObject({ api: 'openai-responses', contextWindow: 262144, maxOutput: 262144 });
     expect(automatic.availableInterfaces).toHaveLength(3);
     expect(automatic.userModelConfig).not.toHaveProperty('api');
     const route = registry.models.flatMap(e => e.routes).find(r => r.providerId === 'moonshot-kimi-code' && r.modelId === 'k3.1-pro')!;
     route.preferredInterfaces!.codex = ['moonshot-kimi-code-anthropic-messages'];
-    expect(buildUserProvider(connection(), options).models.codex![0].api).toBe('anthropic-messages');
+    expect(buildUserProvider(savedAutomatic, options).models.codex![0].api).toBe('anthropic-messages');
+    expect(buildUserProvider(savedExplicit, options).models.codex![0].api).toBe('openai-completions');
+    expect(JSON.stringify({ savedAutomatic, savedExplicit })).toBe(before);
     expect(buildUserProvider(connection({ interfaceId: 'moonshot-kimi-code-openai-completions' }), options).models.codex![0].api).toBe('openai-completions');
     expect(buildUserProvider(connection({ route: { baseUrl: 'https://api.kimi.com/coding/v1', wireProtocol: 'openai-chat' } }), options).models.codex![0].api).toBe('openai-completions');
     expect(buildUserProvider(connection({ api: 'openai-completions', contextWindow: 64000 }), options).models.codex![0])

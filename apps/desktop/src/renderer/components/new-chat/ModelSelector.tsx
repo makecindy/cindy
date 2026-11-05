@@ -719,7 +719,27 @@ export interface RemoteAgentSelectorOptions {
   readProviderGroup?: () => Promise<RemoteProviderGroupEntry | null>;
 }
 
-interface ModelSelectorProps {
+/**
+ * 只限本机的原因是封闭清单：不能把模型放到别的电脑运行的入口才用它，
+ * 规则见 docs/product-rules/model-selector-unified.md。
+ */
+export type ModelSelectorLocalOnlyReason =
+  | 'subagent-in-parent-task'
+  | 'vision-bridge-local-proxy'
+  | 'one-shot-local-request'
+  | 'plugin-task-local-route';
+
+/**
+ * 每个入口都必须声明模型来源，漏传不能再静默变成只有本机。
+ * remoteAgent 为 undefined 只表示此刻不可用（SSH、旧版被控电脑等）。
+ */
+export type ModelSelectorSource =
+  | { remoteAgent: RemoteAgentSelectorOptions | undefined; localOnlyReason?: never }
+  | { remoteAgent?: never; localOnlyReason: ModelSelectorLocalOnlyReason };
+
+export type ModelSelectorProps = ModelSelectorBaseProps & ModelSelectorSource;
+
+export interface ModelSelectorBaseProps {
   /** 语义同 ModelSelectorContentProps.pluginModels。 */
   pluginModels?: PluginModelsPickerProps;
   /** Authoritative surface-specific allowlist (e.g. one-shot or vision routes). */
@@ -797,8 +817,6 @@ interface ModelSelectorProps {
   agentIdentity?: ModelSelectorAgentIdentity;
   /** device-link 远程会话所属被控端 id;非空 = 列被控端的模型 + 退化为纯列表(不分供应商段)。 */
   deviceId?: string;
-  /** 远程 Agent 选择入口(语义见 RemoteAgentSelectorOptions;传了它 deviceId 不再生效)。 */
-  remoteAgent?: RemoteAgentSelectorOptions;
   /**
    * 任务的 Agent 在另一台电脑运行:trigger 的来源图标换成带信号波纹的远程供应商 Logo,
    * 读屏 / 悬停名带上那台电脑。只影响展示。
@@ -936,7 +954,9 @@ interface ModelSelectorProps {
   };
 }
 
-interface ModelSelectorContentProps {
+export type ModelSelectorContentProps = ModelSelectorContentBaseProps & ModelSelectorSource;
+
+export interface ModelSelectorContentBaseProps {
   /** 新任务的「让插件选」；只有草稿传(已有任务、伙伴对话不传)。 */
   pluginModels?: PluginModelsPickerProps;
   providersOverride?: ProviderView[];
@@ -965,8 +985,6 @@ interface ModelSelectorContentProps {
   vendorKey?: 'cc' | 'codex' | 'pi';
   /** device-link 远程会话所属被控端 id(列被控端模型)。 */
   deviceId?: string;
-  /** 远程 Agent 选择入口(语义同 ModelSelectorProps.remoteAgent)。 */
-  remoteAgent?: RemoteAgentSelectorOptions;
   /** SSH 远程会话隐藏订阅直连模型(语义同 ModelSelectorProps 同名字段)。 */
   excludeSubscriptionDirect?: boolean;
   /** SSH 远程会话隐藏 Chat 桥接的 Codex 供应商模型(语义同 ModelSelectorProps 同名字段)。 */
@@ -1312,8 +1330,9 @@ function ModelSelectorContentView({
   /** 正在浏览的就是草稿当前落点的目录 —— 选中态、档位记忆与引擎集合只对它成立。 */
   const browsingSelectedCatalog =
     !remoteAgent || (remoteBrowse?.deviceId ?? null) === remoteAgentDeviceId;
-  const modelMemory =
-    !remoteAgent || browsingSelectedCatalog
+  const modelMemory = preferenceStore?.memoryForLocation
+    ? preferenceStore.memoryForLocation(remoteBrowse?.deviceId ?? null)
+    : !remoteAgent || browsingSelectedCatalog
       ? (preferenceStore?.memory ?? modelMemoryProp)
       : remoteBrowse
         ? remoteAgent.deviceModelMemory?.(remoteBrowse.deviceId)
@@ -4952,7 +4971,7 @@ export function ModelSelector({
       modelMemory={modelMemory}
       vendorKey={vendorKey}
       deviceId={deviceId}
-      {...(remoteAgent ? { remoteAgent } : {})}
+      {...(remoteAgent ? { remoteAgent } : { remoteAgent: undefined })}
       excludeSubscriptionDirect={excludeSubscriptionDirect}
       excludeChatBridgedCodex={excludeChatBridgedCodex}
       onDismiss={() => setOpenWithoutAutoRefresh(false)}

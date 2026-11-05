@@ -39,6 +39,8 @@ export interface BotCapabilities {
   /** Only present when the user explicitly chose a model for this Bot. */
   modelOverride?: BotModelOverride | null;
   providerId?: string | null;
+  /** Mirror of the primary route; null/absence means the teammate's computer. */
+  agentDeviceId?: string | null;
   effort: string;
   fastMode: boolean | 'ultrafast';
   harness: 'claude' | 'codex' | 'pi';

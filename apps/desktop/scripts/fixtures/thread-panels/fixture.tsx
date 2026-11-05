@@ -62,7 +62,7 @@ function Scenario({ kind }: { kind: string }) {
   const [wallpaperEnabled, setWallpaperEnabled] = useState(false);
   useWallpaperBackground({
     background: wallpaperEnabled ? `url("${wallpaper}")` : undefined,
-    pending: false, visibility: 0.65, blur: 0, reducedMotion: true,
+    visibility: 0.65, blur: 0, reducedMotion: true,
   });
   if (kind === 'resized') return <div className="flex h-screen" data-ui-page-subject>
     <BotDmThreadHost enabled bot={bot} rootSessionId="fixture-main" mentions={[]}><OpenTopic /></BotDmThreadHost>

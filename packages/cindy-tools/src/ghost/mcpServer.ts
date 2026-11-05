@@ -143,6 +143,7 @@ const D_GHOST_FORGE_GUIDE = [
   "读取内置 cindy-plugin-creator Skill 中的插件编写参考资料，随当前主机版本发布。",
   "创建、修改、调试、打包或发布 Cindy 插件时使用该 Skill；本工具保留按章读取同一份资料的兼容入口。",
   '不传参数返回目录，传 section（章号如 "4.7" 或标题关键词如 "network"）返回单章正文。',
+  'section "pages" 返回 MCP Apps 页面生成手册。',
   "本工具只读文档，不安装或发布插件。",
   "发布前另读 §2 的 releaseNotes、§7.3 个人发布和 §7.4 平台署名。",
 ].join("\n");
@@ -174,9 +175,9 @@ const D_GHOST_FORGE_PACK = [
 ].join("\n");
 
 const D_GHOST_FORGE_INSTALL = [
-  "把当前源码目录重新校验、打包，并立即安装到 Cindy；同 id 已安装时原位更新。",
+  "把当前源码目录重新校验、打包，并立即安装到 Cindy；同 id 的目标实例已安装时原位更新。",
   "只有用户明确要求安装或更新当前插件时才调用。不要因为 scaffold 或 pack 成功就自动调用。",
-  "新装默认个人范围(namespace:null)，不会因登录组织而新建组织副本；已有个人实例优先更新，唯一的旧组织实例原位更新。只有用户明确要求组织安装时传当前组织 namespace，不能从登录身份推断安装归属。",
+  "缺省安装到本地开发副本(namespace:\"local\")，仅更新同 id 的 local 实例，不覆盖个人或组织市场实例。企业身份自测须显式传当前组织 namespace；local 不获得企业 OIDC 或 Broker。不能从登录身份推断安装归属。",
   "首次安装后直接启用；同来源更新保留启用状态、配置、数据与面板位置；换源会隔离旧账号与数据，需要重新连接。",
   "遇到 INSTALL_TARGET_REQUIRED，向用户展示 targets 的身份与版本，让用户选择更新已有实例(target_instance_id)，或另装一份(install_copy:true)。不得替用户默认另装或迁移账号。",
   "dir 传插件源码目录绝对路径(工作目录外走与 pack 相同的会话权限)。成功返回本次真实执行的是 installed 还是 updated；",
@@ -884,6 +885,10 @@ const AUDIO_IN_CARD_HOIST_KEY = "xdt_audio_in_card";
  *  永远收不到生成图,只能追问一次让模型手动补发。 */
 const IMAGES_IN_CARD_HOIST_KEY = "xdt_images_in_card";
 
+/** 卡片排到本轮末尾的令牌(布尔 true 才上提;host 按卡片声明注入):手机端据此
+ *  把卡片排到本轮最后,桌面渲染层直接读卡片 html,不看它。 */
+const CARD_TURN_END_HOIST_KEY = "xdt_card_turn_end";
+
 function hoistMediaFields(result: unknown): Record<string, unknown> {
   if (!result || typeof result !== "object" || Array.isArray(result)) return {};
   const out: Record<string, unknown> = {};
@@ -904,7 +909,7 @@ function hoistMediaFields(result: unknown): Record<string, unknown> {
   if (audioTracks) out[AUDIO_TRACKS_HOIST_KEY] = audioTracks;
   // 入卡令牌(布尔;意识把媒体画进了自己的卡片时置 true):桌面渲染层据此
   // 跳过基座渲染防双份;手机端无卡片体系,忽略令牌照常渲染基座。
-  for (const key of [AUDIO_IN_CARD_HOIST_KEY, IMAGES_IN_CARD_HOIST_KEY]) {
+  for (const key of [AUDIO_IN_CARD_HOIST_KEY, IMAGES_IN_CARD_HOIST_KEY, CARD_TURN_END_HOIST_KEY]) {
     if ((result as Record<string, unknown>)[key] === true) {
       out[key] = true;
     }
@@ -1070,6 +1075,10 @@ export async function handleGhostCall(
   }
 }
 
+const FORGE_GUIDE_PAGES_SECTION = "pages";
+const FORGE_GUIDE_PAGES_HINT =
+  '写 MCP Apps 页面前传 {"section":"pages"} 读《Cindy MCP Apps 页面生成手册》。';
+
 /** ghost_forge_guide 的 handler 主体(导出供单测)。 */
 export async function handleForgeGuide(
   deps: CindyGhostsMcpDeps,
@@ -1080,7 +1089,14 @@ export async function handleForgeGuide(
     // 空串/纯空白与未传等价:与工具描述"不传返回目录"一致
     const section = input?.section?.trim();
     if (!section) {
-      return { content: [{ type: "text", text: buildForgeGuideToc(guide) }] };
+      const toc = buildForgeGuideToc(guide);
+      return {
+        content: [{ type: "text", text: deps.forgePageManual ? `${toc}\n${FORGE_GUIDE_PAGES_HINT}` : toc }],
+      };
+    }
+    // 页面手册是独立文件,自带多个 ## 小节:精确匹配后整份返回,不进分章逻辑
+    if (section === FORGE_GUIDE_PAGES_SECTION && deps.forgePageManual) {
+      return { content: [{ type: "text", text: await deps.forgePageManual() }] };
     }
     const hit = extractForgeGuideSection(guide, section);
     if (hit.ok) {
@@ -1510,7 +1526,7 @@ export function createCindyGhostsMcpServer(
     {
       dir: z.string().describe("插件源码目录的绝对路径(目录里须有 ghost.json)"),
       target_instance_id: z.string().max(256).optional().describe("用户选择更新的已有实例 ID，来自 INSTALL_TARGET_REQUIRED.targets；不能与 install_copy:true 同用"),
-      namespace: z.string().min(1).max(128).nullable().optional().describe("仅用户明确选择安装范围时传；null 为个人，字符串仅允许当前组织。新装默认个人，更新保留已有实例；不能与 target_instance_id 同用"),
+      namespace: z.string().min(1).max(128).nullable().optional().describe("省略为本地开发副本 local；字符串允许 local 或当前组织 namespace，null 为个人范围(root)。企业 OIDC/Broker 自测须显式传当前组织；不能与 target_instance_id 同用"),
       install_copy: z.boolean().optional().describe("仅用户明确另装一份时传 true；不覆盖或停用其它身份的插件，需要独立连接账号"),
       icon_source: z
         .string()
