@@ -1711,12 +1711,11 @@ export class Scheduler extends EventEmitter {
     if (candidate.targetSessionId) {
       await this.validateTargetSession?.(candidate.targetSessionId, 'update', candidate);
     }
-    // expired 是一次性任务已消费的终态。编辑后的配置若已经表达为“循环且非手动”，
-    // 继续保留 expired 会让持久化状态与排期语义冲突：即使算出了 nextFireAt，任务也
-    // 不会进入 activeSchedules，重启后 listActive() 同样加载不到。状态恢复集中在引擎
-    // 层处理，让 desktop、device-link 与其它调用方共享一致行为。
+    // 到期但尚未执行的 Once 可以通过修改截止时间恢复；已经消费的 Once 保持终态。
+    // 改成循环任务也可恢复。状态恢复集中在引擎层，让各调用方共享相同语义。
     const shouldReactivateExpired =
-      existing.status === 'expired' && candidate.recurring && !candidate.manual && !hasExpired(candidate, now);
+      existing.status === 'expired' && !candidate.manual && !hasExpired(candidate, now) &&
+      (candidate.recurring || (expiryChanged && existing.expireAt !== undefined && existing.lastFiredAt === undefined));
     if (shouldReactivateExpired) {
       updates.status = 'active';
     }
@@ -1786,7 +1785,7 @@ export class Scheduler extends EventEmitter {
     if (needsRecompute || expiryChanged) {
       updates.nextFireAt = beforeDeadline(nextSchedule, nextSchedule.nextFireAt);
     }
-    if (hasExpired(nextSchedule, now)) {
+    if (nextSchedule.status === 'expired' || hasExpired(nextSchedule, now)) {
       updates.nextFireAt = undefined;
       if (nextSchedule.status === 'active') updates.status = 'expired';
     }

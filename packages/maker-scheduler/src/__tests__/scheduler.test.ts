@@ -1163,6 +1163,27 @@ describe('Scheduler', () => {
     expect(renewed.nextFireAt).toBeGreaterThan(h.clock.now());
   });
 
+  // PR #9059 / unit: reactivation covered recurring schedules only. A deadline
+  // before the first Once fire must be reversible, while a consumed Once stays terminal.
+  it.each([
+    { consumed: false, clear: false }, { consumed: false, clear: true },
+    { consumed: true, clear: false }, { consumed: true, clear: true },
+  ])('reactivates only an unconsumed one-shot after a deadline edit (%j)', async ({ consumed, clear }) => {
+    const expireAt = h.clock.now() + (consumed ? 120_000 : 20_000);
+    const sch = await h.scheduler.create({ ...baseInput, recurring: false, expireAt });
+    h.clock.setTo(consumed ? sch.nextFireAt! : expireAt);
+    await h.scheduler.tick();
+    expect((await h.scheduler.get(sch.id))?.status).toBe('expired');
+    const updated = await h.scheduler.update(sch.id, { expireAt: clear ? null : h.clock.now() + 120_000 });
+    expect(updated.status).toBe(consumed ? 'expired' : 'active');
+    if (!consumed) expect(updated.nextFireAt).toBeGreaterThan(h.clock.now());
+    else expect(updated.nextFireAt).toBeUndefined();
+    h.clock.setTo(updated.nextFireAt ?? h.clock.now() + 60_000);
+    await h.scheduler.tick();
+    expect(h.fireCalls).toHaveLength(1);
+    expect((await h.scheduler.get(sch.id))?.status).toBe('expired');
+  });
+
   it('checks wall time after a due fire waited past its deadline', async () => {
     const sch = await h.scheduler.create({ ...baseInput, expireAt: h.clock.now() + 60_000 });
     h.clock.advance(120_000);
