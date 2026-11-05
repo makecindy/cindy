@@ -439,6 +439,8 @@ function createRunnerHarness(
     prepareModelPreferences?: MakerScheduleRunnerDeps['prepareModelPreferences'];
     resolveModelSelection?: MakerScheduleRunnerDeps['resolveModelSelection'];
     applyPiModelSelectionUnderLock?: MakerScheduleRunnerDeps['applyPiModelSelectionUnderLock'];
+    /** Host-level Cindy memory setting used by fresh scheduler sessions. */
+    makerMemoryEnabled?: boolean;
   } = {},
 ) {
   const logger = createLogger();
@@ -449,6 +451,7 @@ function createRunnerHarness(
   const makerListeners = new Set<MakerEventListener>();
   const maker = {
     createSession: vi.fn(async () => liveSession),
+    makerMemory: { isEnabled: vi.fn(() => opts.makerMemoryEnabled ?? false) },
     getSession: vi.fn(() => liveSession),
     getSessionMeta: vi.fn(async () => ({
       id: SESSION_ID,
@@ -828,6 +831,35 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     await expect(result).resolves.toMatchObject({ sessionId: SESSION_ID });
     expect(latestNotifiedRun(notifier).status).toBe('success');
     expect(schedule).toEqual(saved);
+  });
+
+  // Issue #8921 / unit: scheduled Codex sessions skip the regular maker IPC
+  // fallback, so the first turn must carry the host memory setting itself.
+  it.each([true, false])('passes the host memory setting to a fresh scheduled session (%s)', async (enabled) => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    Object.assign(h.session, { agentKind: 'codex', model: 'shared-model' });
+    const queue = createQueueHarness({ busy: false });
+    const { runner, maker } = createRunnerHarness(h.session, queue.deps, {
+      makerMemoryEnabled: enabled,
+      metaModel: 'shared-model',
+      checkModelRoute: async () => ({ kind: 'pass' }),
+    });
+    vi.mocked(maker.isSessionAlive).mockReturnValue(false);
+    const fire = runner.fire(
+      heartbeatSchedule({
+        targetSessionId: undefined,
+        workingDir: '/work',
+        agentKind: 'codex',
+        model: 'shared-model',
+        providerId: 'test-provider',
+      }),
+      createFireContext(),
+    );
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    expect(maker.createSession).toHaveBeenCalledWith(expect.objectContaining({ makerMemoryEnabled: enabled }));
+    await queue.accept();
+    h.emit({ type: 'done', data: {}, source: 'codex' });
+    await expect(fire).resolves.toMatchObject({ sessionId: SESSION_ID });
   });
 
   it.each([
