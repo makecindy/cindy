@@ -84,7 +84,10 @@ vi.mock('@/hooks/useAgentCapabilities', () => ({
     error: null,
   }),
 }));
-vi.mock('@/hooks/useApiKey', () => ({ useApiKey: () => ({ hasSavedKey: true }) }));
+const keyPresence = vi.hoisted(() => ({ available: true, canReadKey: true }));
+vi.mock('@/hooks/useApiKey', () => ({ useApiKey: () => ({
+  hasSavedKey: keyPresence.available, canReadKey: keyPresence.canReadKey,
+}) }));
 vi.mock('@/hooks/useAvailableAgents', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/hooks/useAvailableAgents')>()),
   useModelPickerAgents: () => ['claude-code', 'codex'],
@@ -343,6 +346,8 @@ async function openFlyoutForRow(row: HTMLElement): Promise<HTMLElement> {
 }
 
 beforeEach(() => {
+  keyPresence.available = true;
+  keyPresence.canReadKey = true;
   onProviderChange.mockClear();
   resetEnginePrefs();
   resetFavorites();
@@ -446,6 +451,19 @@ describe('统一面板 · 打折 GPT-5.6 与 GPT-6 包月互切', () => {
       { from: routes[2]!, to: discounted, fast },
     ]),
   );
+  // Test value: a detached plugin panel deliberately cannot read raw gateway keys. Its connected
+  // Main catalog must still permit the same XD row. Existing tests always supplied a key.
+  // Minimal input: one connected XD provider, missing credential bridge; tier: unit.
+  it('selects a connected gateway model without a renderer credential read', async () => {
+    keyPresence.available = false;
+    keyPresence.canReadKey = false;
+    const onUnifiedSelect = vi.fn(() => true);
+    renderPanel({ vendorKey: 'codex', currentProviderId: 'openai', modelId: 'gpt-6-astra', onUnifiedSelect });
+    fireEvent.click(screen.getByText('Discount Sol'));
+    await waitFor(() => expect(onUnifiedSelect).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'xd', modelId: 'codex/gpt-5.6-sol', engine: 'codex',
+    })));
+  });
   it.each(cases)(
     '$from.modelId → $to.modelId，Fast=$fast，失败可重试且不误报成功',
     async ({ from, to, fast }) => {
