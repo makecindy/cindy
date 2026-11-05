@@ -14765,7 +14765,9 @@
           "summaryAria": "MR !{{number}} の概要",
           "urlPlaceholder": "GitHub PR または GitLab MR のリンク",
           "notFound": "MR が存在しないか、現在のアカウントでは閲覧できません"
-        }
+        },
+        "merge": "マージ",
+        "conflicts": "コンフリクトあり"
       }
     },
     "schedule": {

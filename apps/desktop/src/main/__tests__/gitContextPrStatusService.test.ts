@@ -357,6 +357,20 @@ describe('PrStatusService', () => {
   });
 });
 
+// Unit: REST mergeable already reaches metadata, but a passing CI summary hid conflicts.
+it.each([
+  [false, true],
+  [true, false],
+  [null, null],
+  [undefined, null],
+] as const)('projects GitHub mergeable %s into conflicts %s', async (mergeable, conflicts) => {
+  const service = new PrStatusService({
+    readToken: TOKEN_OK,
+    fetchPr: async () => remote({ metadata: { mergeable } }),
+  });
+  expect((await service.getStatuses([Q]))[0]).toMatchObject({ ok: true, conflicts });
+});
+
 // Unit: production MR fetch + shared status service, not a copied mapper.
 // GitHub fixtures cannot detect SHA/paging mismatches or credentials crossing hosts.
 describe('GitLab MR status', () => {
@@ -384,6 +398,28 @@ describe('GitLab MR status', () => {
         pageInfo: { hasNextPage: false },
       },
     },
+  });
+  // Unit: use the same GraphQL response; omitted fields from older hosts remain unknown.
+  it.each([true, false, null, undefined])('projects GitLab conflicts %s', async (conflicts) => {
+    const fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: { project: { mergeRequest: { ...mr(), conflicts } } },
+          }),
+        ),
+    );
+    const service = new PrStatusService({
+      readToken: TOKEN_OK,
+      readGitlabToken: async () => ({ ok: true, token: 'fake' }),
+      fetchPr: vi.fn(),
+      fetchGitlab: (token, query) => fetchGitlabMr(token, query, fetch),
+    });
+    expect((await service.getStatuses([q]))[0]).toMatchObject({
+      ok: true,
+      conflicts: conflicts ?? null,
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
   it('queries the MR host once, counts discussions and conservatively summarizes complete current-head jobs', async () => {
     const value = mr();

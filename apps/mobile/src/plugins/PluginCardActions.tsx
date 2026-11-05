@@ -97,6 +97,7 @@ function parsePrStatus(value: unknown): PrStatusSlot["status"] {
     ok: true, owner: "", repo: "", prNumber: 0, title: "", htmlUrl: "", branch: "",
     status: v.status as "open" | "draft" | "merged" | "closed",
     unresolvedCount: isCount(v.unresolvedCount) ? v.unresolvedCount : null,
+    conflicts: typeof v.conflicts === "boolean" ? v.conflicts : null,
     checks: validChecks ? (checks as unknown as NonNullable<Extract<PrStatusResult, { ok: true }>["checks"]>) : null,
     ...("mergeState" in v ? { mergeState: text(v.mergeState) } : {}),
     ...("reviewDecision" in v ? { reviewDecision: text(v.reviewDecision) } : {}),
@@ -238,9 +239,24 @@ function CardControls({
   const titleHost = titleLink?.url ? linkHost(titleLink.url) : undefined;
   // A PR link leads with the app's own PR icon in its status colour (as on the home task row);
   // other links end with a quiet external-link mark.
-  const titlePr = titleLink?.url && /^https:\/\/(?:www\.)?github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(titleLink.url)
-    ? prStatusVisual(titleLink.prState ?? prStatus.find((slot) => slot.key === githubPrKeyOfUrl(titleLink.url!))?.status?.status ?? null, colors) : undefined;
-  const buttons = (history ? [] : items).filter((action) => !action.toggle && action !== titleLink);
+  const titlePrStatus = titleLink?.url
+    ? prStatus.find((slot) => slot.key === githubPrKeyOfUrl(titleLink.url!))
+        ?.status
+    : undefined;
+  const titlePr =
+    titleLink?.url &&
+    /^https:\/\/(?:www\.)?github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(
+      titleLink.url,
+    )
+      ? prStatusVisual(
+          titleLink.prState ?? titlePrStatus?.status ?? null,
+          colors,
+          titlePrStatus?.conflicts,
+        )
+      : undefined;
+  const buttons = (history ? [] : items).filter(
+    (action) => !action.toggle && action !== titleLink,
+  );
   const { getAccessToken } = useAuth();
   const readonly = history || ['sent', 'sending', 'unconfirmed', 'deleting', 'deleted'].includes(mail?.state ?? '');
   const [countdownNow, setCountdownNow] = useState(Date.now);

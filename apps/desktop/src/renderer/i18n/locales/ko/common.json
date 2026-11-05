@@ -14765,7 +14765,9 @@
           "summaryAria": "MR !{{number}} 요약",
           "urlPlaceholder": "GitHub PR 또는 GitLab MR 링크",
           "notFound": "MR이 없거나 현재 계정으로는 볼 수 없습니다"
-        }
+        },
+        "merge": "병합",
+        "conflicts": "충돌 있음"
       }
     },
     "schedule": {
