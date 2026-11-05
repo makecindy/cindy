@@ -14494,6 +14494,7 @@
       "switched": "Zu {{branch}} gewechselt",
       "stashed": " · Änderungen zwischengespeichert",
       "carried": " · Änderungen übernommen",
+      "fetched": "{{count}} neue Commits von {{branch}} abgerufen",
       "sessionsContinue": "{{names}} wird beim nächsten Mal ebenfalls auf {{branch}} fortgesetzt.",
       "undo": "Rückgängig",
       "savedChanges": "Für {{branch}} sind zwischengespeicherte Änderungen verfügbar.",
@@ -14510,7 +14511,7 @@
       "errors": {
         "busy": "In diesem Verzeichnis läuft eine Sitzung oder eine Hintergrundaktivität. Warte auf das Ende oder verwende worktree.",
         "operation": "Beende zuerst den Merge, Rebase oder anderen Git-Vorgang.",
-        "occupied": "Bereits in einem anderen worktree geöffnet",
+        "occupied": "{{branch}} ist bereits in einem anderen Worktree geöffnet und kann nicht zusätzlich im Hauptverzeichnis des Repositorys geöffnet werden",
         "changed": "Der Branch oder die Änderungen haben sich geändert. Prüfe das Verzeichnis. Rückgängig ist nur möglich, solange du auf dem Zielbranch bleibst.",
         "conflict": "Diese Änderungen kollidieren mit dem Zielbranch. Speichere sie zwischen oder verwende worktree.",
         "ignored": "Beim Wechsel zu {{branch}} würden von Git ignorierte lokale Dateien oder Ordner überschrieben, darunter {{file}} (insgesamt {{count}}). Der Wechsel wurde gestoppt.",

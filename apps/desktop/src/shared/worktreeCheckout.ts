@@ -33,6 +33,8 @@ export interface CheckoutReceipt {
   to: string;
   strategy: 'carry' | 'stash';
   hadChanges: boolean;
+  /** New commits fetched from the selected remote ref; older peers omit this display detail. */
+  fetchedCommits?: number;
   sessions: CheckoutSession[];
 }
 export type CheckoutRequest =

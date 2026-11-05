@@ -9,7 +9,16 @@ import type {
   CheckoutReceipt,
 } from '../../shared/worktreeCheckout';
 
-export function formatCheckoutError(t: TFunction, code: string, status?: CheckoutStatus): string {
+export function formatCheckoutError(
+  t: TFunction,
+  code: string,
+  status?: CheckoutStatus,
+  branch?: string,
+): string {
+  if (code === 'occupied')
+    return t('newChat.checkout.errors.occupied', {
+      branch: branch?.replace(/^refs\/remotes\//, ''),
+    });
   const collision = code === 'conflict' ? status?.ignoredCollision : undefined;
   return collision
     ? t('newChat.checkout.errors.ignored', {
@@ -80,10 +89,10 @@ export function useCheckout(
     [key],
   );
   const reportError = useCallback(
-    (code: string, status?: CheckoutStatus) => {
+    (code: string, status?: CheckoutStatus, branch?: string) => {
       if (!mounted.current || currentKey.current !== key) return;
       update({ error: code });
-      toast.error(formatCheckoutError(t, code, status));
+      toast.error(formatCheckoutError(t, code, status, branch));
     },
     [key, t, update],
   );
@@ -158,7 +167,16 @@ export function useCheckout(
         }
         if ('pending' in reply || currentKey.current !== key || !mounted.current) return;
         update({ status: reply.status, error: reply.blocked });
-        if (reply.blocked) reportError(reply.blocked, reply.status);
+        if (reply.blocked)
+          reportError(
+            reply.blocked,
+            reply.status,
+            req.action === 'switch'
+              ? req.branch
+              : req.action === 'undo'
+                ? stateRef.current.receipt?.from
+                : undefined,
+          );
         return reply;
       } catch {
         reportError('git');
@@ -202,21 +220,32 @@ export function useCheckout(
       }
       onSourceChange(branch);
       update({ dialog: undefined, receipt: reply.receipt, previousSource });
+      // A new switch retires the previous undo prompt, even when this one needs no toast.
+      if (undoToast.current) toast.dismiss(undoToast.current);
+      undoToast.current = undefined;
       if (reply.receipt) {
         const receipt = reply.receipt;
         const idle = receipt.sessions
           .filter((session) => !session.running)
           .map((session) => session.name)
           .join(', ');
+        const fetched = receipt.fetchedCommits ?? 0;
+        if (!receipt.hadChanges && !idle && !fetched) return;
         const message =
           t('newChat.checkout.switched', { branch: receipt.to }) +
           (receipt.hadChanges
             ? t(`newChat.checkout.${receipt.strategy === 'stash' ? 'stashed' : 'carried'}`)
             : '') +
+          (fetched
+            ? '\n' +
+              t('newChat.checkout.fetched', {
+                branch: branch.replace(/^refs\/remotes\//, ''),
+                count: fetched,
+              })
+            : '') +
           (idle
             ? '\n' + t('newChat.checkout.sessionsContinue', { names: idle, branch: receipt.to })
             : '');
-        if (undoToast.current) toast.dismiss(undoToast.current);
         undoToast.current = toast.success(message, {
           duration: 8000,
           action: {
@@ -242,7 +271,7 @@ export function useCheckout(
         const status = await refresh(branch);
         if (!status || currentKey.current !== key) return;
         if (status.blocked) {
-          reportError(status.blocked, status);
+          reportError(status.blocked, status, branch);
           return;
         }
         if (status.files.length) update({ dialog: { branch, status } });

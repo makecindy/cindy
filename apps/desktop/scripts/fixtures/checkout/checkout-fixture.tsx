@@ -78,7 +78,10 @@ void mountPage({
       worktreeCheckout: async (req: { action: string; branch?: string }) => {
         // Hold only this in-memory reply so the real row stays in its pending state.
         if (req.action === 'switch' && ctx.case === 'switching') return new Promise(() => {});
-        if (req.action === 'switch' && ['success', 'saved'].includes(ctx.case)) {
+        if (
+          req.action === 'switch' &&
+          ['success', 'saved', 'ordinary', 'carried'].includes(ctx.case)
+        ) {
           current = req.branch!;
           saved = ctx.case === 'saved';
         } else if (req.action !== 'status') return forbid('unexpected fixture mutation')();
@@ -90,8 +93,10 @@ void mountPage({
                   from: 'main',
                   to: current,
                   strategy: 'carry',
-                  hadChanges: false,
-                  sessions: [{ id: 'idle', name: '修复登录页面', running: false }],
+                  hadChanges: ctx.case === 'carried',
+                  sessions: ['success', 'saved'].includes(ctx.case)
+                    ? [{ id: 'idle', name: '修复登录页面', running: false }]
+                    : [],
                 },
               }
             : {}),
@@ -99,9 +104,11 @@ void mountPage({
             current,
             head: 'fixture-head',
             fingerprint: 'fixture-fingerprint',
-            files: ['dirty', 'conflict'].includes(ctx.case)
-              ? Array.from({ length: 30 }, (_, i) => `src/components/example-${i}.tsx`)
-              : [],
+            files:
+              ['dirty', 'conflict'].includes(ctx.case) ||
+              (ctx.case === 'carried' && current === 'main')
+                ? Array.from({ length: 30 }, (_, i) => `src/components/example-${i}.tsx`)
+                : [],
             sessions: ['busy', 'idle', 'dirty', 'worktree'].includes(ctx.case)
               ? [
                   {
@@ -115,6 +122,7 @@ void mountPage({
             carryAllowed: ctx.case !== 'conflict',
             stashes: saved ? [{ id: 'saved', branch: current }] : [],
             ...(['busy', 'worktree'].includes(ctx.case) ? { blocked: 'busy' } : {}),
+            ...(ctx.case === 'occupied' && req.branch === 'release' ? { blocked: 'occupied' } : {}),
             ...(ctx.case === 'ignored' && req.branch === 'feature'
               ? {
                   blocked: 'conflict',

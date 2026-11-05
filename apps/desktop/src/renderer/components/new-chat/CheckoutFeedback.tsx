@@ -21,9 +21,17 @@ export function UseWorktreeButton({
 }
 
 /** The same conflict detail appears in feedback, the dialog and the branch menu. */
-export function CheckoutError({ code, status }: { code: string; status?: CheckoutStatus }) {
+export function CheckoutError({
+  code,
+  status,
+  branch,
+}: {
+  code: string;
+  status?: CheckoutStatus;
+  branch?: string;
+}) {
   const { t } = useTranslation();
-  return <span className="break-words">{formatCheckoutError(t, code, status)}</span>;
+  return <span className="break-words">{formatCheckoutError(t, code, status, branch)}</span>;
 }
 
 /** Persistent recovery lives in the popover, never in the controls row. */
@@ -102,7 +110,7 @@ export function CheckoutDialog({
               )}
               {checkout.error && (
                 <p className="mt-2 text-muted-foreground">
-                  <CheckoutError code={checkout.error} status={status} />
+                  <CheckoutError code={checkout.error} status={status} branch={dialog?.branch} />
                 </p>
               )}
               {onUseWorktree && (

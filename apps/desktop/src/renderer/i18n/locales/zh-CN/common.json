@@ -14434,6 +14434,7 @@
       "switched": "已切到 {{branch}}",
       "stashed": " · 改动已暂存",
       "carried": " · 改动已带过来",
+      "fetched": "已从 {{branch}} 拉取 {{count}} 个新提交",
       "sessionsContinue": "{{names}} 下次继续时也会在 {{branch}} 上",
       "undo": "撤销",
       "savedChanges": "{{branch}} 上有之前收起来的改动",
@@ -14450,7 +14451,7 @@
       "errors": {
         "busy": "这个目录有任务正在回复或有后台活动。请等它结束，或改用 worktree",
         "operation": "仓库正在合并、变基或进行其他 Git 操作，请完成后再切换",
-        "occupied": "已在其他 worktree 打开",
+        "occupied": "{{branch}} 已在其他 worktree 打开，不能在主仓目录再打开",
         "changed": "分支或改动已经变化，请检查目录后再试。只有仍停在切过去的分支时才能撤销",
         "conflict": "这些改动与目标分支冲突，不能一起带过去。请先收起来，或改用 worktree",
         "ignored": "切到 {{branch}} 会覆盖被 Git 忽略的本地文件或目录 {{file}}（共 {{count}} 项），已停止切换",

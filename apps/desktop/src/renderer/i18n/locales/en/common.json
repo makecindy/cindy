@@ -14494,6 +14494,7 @@
       "switched": "Switched to {{branch}}",
       "stashed": " · Changes saved in stash",
       "carried": " · Changes brought along",
+      "fetched": "Fetched {{count}} new commits from {{branch}}",
       "sessionsContinue": "{{names}} will also continue on {{branch}} next time.",
       "undo": "Undo",
       "savedChanges": "Saved changes are available for {{branch}}.",
@@ -14510,7 +14511,7 @@
       "errors": {
         "busy": "A session in this directory is running or has background activity. Wait for it to finish or use worktree.",
         "operation": "Finish the merge, rebase or other Git operation before switching.",
-        "occupied": "Already open in another worktree",
+        "occupied": "{{branch}} is already open in another worktree and cannot also be opened in the main repository directory",
         "changed": "The branch or changes have changed. Check the directory before trying again. Undo is only available while still on the branch you switched to.",
         "conflict": "These changes overlap with the target branch and cannot be brought along. Save them first or use worktree.",
         "ignored": "Switching to {{branch}} would overwrite Git-ignored local files or folders, including {{file}} ({{count}} in total). The switch was stopped.",

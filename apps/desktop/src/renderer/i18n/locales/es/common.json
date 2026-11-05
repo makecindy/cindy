@@ -14616,6 +14616,7 @@
       "switched": "Se cambió a {{branch}}",
       "stashed": " · Cambios guardados temporalmente",
       "carried": " · Cambios trasladados",
+      "fetched": "Se obtuvieron {{count}} commits nuevos de {{branch}}",
       "sessionsContinue": "{{names}} también continuará en {{branch}} la próxima vez.",
       "undo": "Deshacer",
       "savedChanges": "Hay cambios guardados para {{branch}}.",
@@ -14632,7 +14633,7 @@
       "errors": {
         "busy": "Hay una sesión en ejecución o con actividad en segundo plano en este directorio. Espera o usa worktree.",
         "operation": "Completa la fusión, el rebase u otra operación de Git antes de cambiar.",
-        "occupied": "Ya está abierta en otro worktree",
+        "occupied": "{{branch}} ya está abierta en otro worktree y no se puede abrir también en el directorio del repositorio principal",
         "changed": "La rama o los cambios han cambiado. Revisa el directorio. Solo puedes deshacer mientras sigas en la rama de destino.",
         "conflict": "Los cambios entran en conflicto con la rama de destino. Guárdalos primero o usa worktree.",
         "ignored": "Cambiar a {{branch}} sobrescribiría archivos o carpetas locales ignorados por Git, como {{file}} ({{count}} en total). Se ha detenido el cambio.",

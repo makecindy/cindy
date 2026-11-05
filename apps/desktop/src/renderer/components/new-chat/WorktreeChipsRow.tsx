@@ -336,8 +336,6 @@ export function WorktreeChipsRow({
                   if (!menuStatus) return t('newChat.worktree.detecting');
                   if (menuStatus.blocked === 'busy' || menuStatus.blocked === 'operation')
                     return t(`newChat.checkout.errors.${menuStatus.blocked}`);
-                  if (menuStatus.occupied.includes(branch.replace(/^refs\/remotes\/origin\//, '')))
-                    return t('newChat.checkout.errors.occupied');
                   return undefined;
                 }
           }
@@ -346,7 +344,7 @@ export function WorktreeChipsRow({
               <CheckoutStashes checkout={checkout} />
               {!effectiveWorktreeEnabled && (
                 <div className="max-w-[320px] space-y-2 px-3 py-2 text-12 text-muted-foreground">
-                  {menuStatus?.blocked && (
+                  {menuStatus?.blocked && menuStatus.blocked !== 'occupied' && (
                     <p>
                       <CheckoutError code={menuStatus.blocked} status={menuStatus} />
                     </p>

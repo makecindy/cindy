@@ -425,7 +425,7 @@ it('shows actual checkout when off and the remembered source when on; toggles ne
   expect(branchButton().textContent).toBe('main');
   expect(checkout.mock.calls.every(([req]) => req.action === 'status')).toBe(true);
 });
-it('disables occupied branches and all checkout choices while a task is running; explicit worktree keeps the menu open', async () => {
+it('disables checkout choices while a task is running; explicit worktree keeps the menu open', async () => {
   const checkout = setupCheckout(true, {
     blocked: 'busy',
     sessions: [{ id: 'a', name: 'Active', running: true }],
@@ -540,7 +540,7 @@ it.each(['direct', 'lost-write', 'lost-result', 'unreachable'])(
         to: current,
         strategy: 'carry',
         hadChanges: false,
-        sessions: [],
+        sessions: [{ id: 'idle', name: 'Idle task', running: false }],
       },
     });
     checkout.mockImplementation(async (req) => {
@@ -663,3 +663,102 @@ it('dismisses the recovery toast and ignores its action after leaving the checko
   });
   expect(checkout.mock.calls.every(([req]) => req.action === 'status')).toBe(true);
 });
+
+// Occupancy remains a write preflight rule, but no longer decorates or disables
+// the option. The clicked branch must be named, with no mutation on rejection.
+it('allows picking an occupied branch and reports its name only after preflight', async () => {
+  const checkout = setupCheckout();
+  checkout.mockImplementation(async (req) => ({
+    status: {
+      ...checkoutStatus,
+      occupied: ['feature'],
+      ...(req.branch === 'feature' ? { blocked: 'occupied' } : {}),
+    },
+  }));
+  render(<CheckoutRow />);
+  await waitFor(() => expect(branchButton().textContent).toBe('main'));
+  await act(async () => {
+    fireEvent.click(branchButton());
+  });
+  const option = await screen.findByRole('option', { name: 'feature' });
+  expect(option.getAttribute('aria-disabled')).toBe('false');
+  expect(mocks.toast).not.toHaveBeenCalled();
+  await act(async () => {
+    fireEvent.click(option);
+  });
+  expect(mocks.toast).toHaveBeenCalledWith('newChat.checkout.errors.occupied{"branch":"feature"}');
+  expect(branchButton().textContent).toBe('main');
+  expect(checkout.mock.calls.every(([req]) => req.action === 'status')).toBe(true);
+});
+
+// Toasts are reserved for information beyond the branch name itself, including
+// the optional fetch count in newer host receipts. A plain/older receipt stays quiet.
+it.each(['plain', 'carry', 'stash', 'idle', 'fetched'])(
+  'only shows a success toast when checkout has extra information: %s',
+  async (mode) => {
+    const checkout = setupCheckout();
+    let current = 'main';
+    const hadChanges = mode === 'carry' || mode === 'stash';
+    const target = mode === 'fetched' ? 'refs/remotes/origin/main' : 'feature';
+    checkout.mockImplementation(async (req) => {
+      if (req.action === 'switch') {
+        const from = current;
+        current = req.branch.replace(/^refs\/remotes\/origin\//, '');
+        return {
+          status: { ...checkoutStatus, current },
+          receipt: {
+            id: 'extra-info',
+            from,
+            to: current,
+            strategy: req.strategy,
+            hadChanges,
+            sessions: mode === 'idle' ? [{ id: 'idle', name: 'Idle task', running: false }] : [],
+            ...(mode === 'fetched' ? { fetchedCommits: 2 } : {}),
+          },
+        };
+      }
+      return { status: { ...checkoutStatus, current, files: hadChanges ? ['changed.txt'] : [] } };
+    });
+    render(<CheckoutRow />);
+    await waitFor(() => expect(branchButton().textContent).toBe('main'));
+    await act(async () => {
+      fireEvent.click(branchButton());
+    });
+    await act(async () => {
+      fireEvent.click(
+        await screen.findByRole('option', {
+          name: mode === 'fetched' ? 'origin/main' : target,
+        }),
+      );
+    });
+    if (hadChanges) {
+      await screen.findByRole('dialog');
+      const choice =
+        mode === 'stash'
+          ? 'newChat.checkout.stash{"branch":"main"}'
+          : 'newChat.checkout.carry{"branch":"feature"}';
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: choice }));
+      });
+    }
+    await waitFor(() =>
+      expect(checkout.mock.calls.filter(([req]) => req.action === 'switch')).toHaveLength(1),
+    );
+    if (mode === 'plain') {
+      expect(branchButton().textContent).toBe('feature');
+      expect(mocks.success).not.toHaveBeenCalled();
+      expect(screen.queryByRole('button', { name: 'newChat.checkout.undo' })).toBeNull();
+    } else {
+      const [message, options] = mocks.success.mock.calls.at(-1)!;
+      const reason = {
+        carry: 'carried',
+        stash: 'stashed',
+        idle: 'sessionsContinue',
+        fetched: 'fetched',
+      }[mode];
+      expect(message).toContain(`newChat.checkout.${reason}`);
+      if (mode === 'fetched') expect(message).toContain('"branch":"origin/main","count":2');
+      expect(options.action.label).toBe('newChat.checkout.undo');
+    }
+  },
+);

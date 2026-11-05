@@ -14434,6 +14434,7 @@
       "switched": "已切換到 {{branch}}",
       "stashed": " · 變更已暫存",
       "carried": " · 變更已一併帶過來",
+      "fetched": "已從 {{branch}} 擷取 {{count}} 個新提交",
       "sessionsContinue": "{{names}} 下次繼續時也會在 {{branch}} 上",
       "undo": "復原",
       "savedChanges": "{{branch}} 上有之前收起來的變更",
@@ -14450,7 +14451,7 @@
       "errors": {
         "busy": "這個目錄有任務正在回覆或有背景活動。請等它結束，或改用 worktree",
         "operation": "儲存庫正在合併、重定基底或進行其他 Git 操作，請完成後再切換",
-        "occupied": "已在其他 worktree 開啟",
+        "occupied": "{{branch}} 已在其他 worktree 開啟，無法在主儲存庫目錄再次開啟",
         "changed": "分支或變更已經改變，請檢查目錄後再試。只有仍停在切換後的分支時才能復原",
         "conflict": "這些變更與目標分支衝突，無法一起帶過去。請先收起來，或改用 worktree",
         "ignored": "切換到 {{branch}} 會覆蓋被 Git 忽略的本機檔案或資料夾 {{file}}（共 {{count}} 項），已停止切換",

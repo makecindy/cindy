@@ -14616,6 +14616,7 @@
       "switched": "Mudou para {{branch}}",
       "stashed": " · Alterações guardadas temporariamente",
       "carried": " · Alterações transferidas",
+      "fetched": "{{count}} novos commits obtidos de {{branch}}",
       "sessionsContinue": "{{names}} também continuará em {{branch}} da próxima vez.",
       "undo": "Anular",
       "savedChanges": "Há alterações guardadas para {{branch}}.",
@@ -14632,7 +14633,7 @@
       "errors": {
         "busy": "Há uma sessão em execução ou com atividade em segundo plano neste diretório. Aguarde ou use worktree.",
         "operation": "Conclua a integração, o rebase ou outra operação Git antes de mudar.",
-        "occupied": "Já está aberto noutro worktree",
+        "occupied": "{{branch}} já está aberta noutro worktree e não pode ser aberta também no diretório do repositório principal",
         "changed": "O ramo ou as alterações mudaram. Verifique o diretório. Só pode anular enquanto estiver no ramo de destino.",
         "conflict": "Estas alterações entram em conflito com o ramo de destino. Guarde-as primeiro ou use worktree.",
         "ignored": "Mudar para {{branch}} substituiria ficheiros ou pastas locais ignorados pelo Git, incluindo {{file}} ({{count}} no total). A mudança foi interrompida.",

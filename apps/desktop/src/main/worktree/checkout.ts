@@ -257,10 +257,12 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
         if (before.current !== expected || before.fingerprint !== fingerprint)
           return { status: before, blocked: 'changed' };
         const target = localBranch(branch);
+        let fetchedCommits = 0;
         if (branch.startsWith('refs/remotes/origin/')) {
           assertScope();
           const fetched = await fetchCheckoutSource({ baseRepo: repo, branch });
           if (fetched.status.blocked) return { status: before, blocked: 'git' };
+          fetchedCommits = fetched.updated;
           const local = await optional(
             repo,
             'rev-parse',
@@ -350,6 +352,7 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
           to: target,
           strategy,
           hadChanges: !!before.files.length,
+          ...(fetchedCommits ? { fetchedCommits } : {}),
           stash,
           sessions: before.sessions,
         };

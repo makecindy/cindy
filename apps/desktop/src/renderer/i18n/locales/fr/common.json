@@ -14616,6 +14616,7 @@
       "switched": "Passage à {{branch}} effectué",
       "stashed": " · Modifications mises de côté",
       "carried": " · Modifications transférées",
+      "fetched": "{{count}} nouveaux commits récupérés depuis {{branch}}",
       "sessionsContinue": "{{names}} continuera aussi sur {{branch}} la prochaine fois.",
       "undo": "Annuler",
       "savedChanges": "Des modifications sont mises de côté pour {{branch}}.",
@@ -14632,7 +14633,7 @@
       "errors": {
         "busy": "Une session est en cours ou active en arrière-plan dans ce dossier. Attendez la fin ou utilisez worktree.",
         "operation": "Terminez la fusion, le rebase ou toute autre opération Git avant de changer de branche.",
-        "occupied": "Déjà ouverte dans un autre worktree",
+        "occupied": "{{branch}} est déjà ouverte dans un autre worktree et ne peut pas être ouverte dans le répertoire du dépôt principal",
         "changed": "La branche ou les modifications ont changé. Vérifiez le dossier. Vous ne pouvez annuler que si vous êtes encore sur la branche de destination.",
         "conflict": "Ces modifications sont en conflit avec la branche de destination. Mettez-les de côté ou utilisez worktree.",
         "ignored": "Passer à {{branch}} écraserait des fichiers ou dossiers locaux ignorés par Git, dont {{file}} ({{count}} au total). Le changement a été arrêté.",

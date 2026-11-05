@@ -14,6 +14,11 @@ export default {
     dirty: { about: 'Scrollable dirty file list with fixed actions and worktree alternative' },
     conflict: { about: 'Carry option disabled for overlapping changes' },
     ignored: { about: 'Clean checkout names ignored files that prevent switching' },
+    ordinary: { about: 'A plain checkout updates the branch without a success toast' },
+    carried: { about: 'Carried changes produce a success toast with undo' },
+    occupied: {
+      about: 'An occupied branch is clickable and explains the rejection after preflight',
+    },
     success: { about: 'Successful checkout toast with undo leaves the controls aligned' },
     switching: {
       about: 'Pending checkout keeps the right-aligned branch button width and position',
@@ -49,7 +54,40 @@ export default {
     await ui.capture('before-feedback');
     await page.getByTestId('create-agent-branch-chip').click();
     await page.getByRole('option', { name: /^feature/ }).waitFor();
-    if (ui.case === 'switching') {
+    if (ui.case === 'ordinary') {
+      await page.getByRole('option', { name: 'feature', exact: true }).click();
+      await page.getByTestId('create-agent-branch-chip').filter({ hasText: 'feature' }).waitFor();
+      assert.equal(await page.locator('[data-toast-id]').count(), 0);
+    } else if (ui.case === 'carried') {
+      await page.getByRole('option', { name: 'feature', exact: true }).click();
+      await page.getByRole('dialog').waitFor();
+      await page
+        .getByRole('button', {
+          name: await ui.t('newChat.checkout.carry', { branch: 'feature' }),
+          exact: true,
+        })
+        .click();
+      const feedback = page.getByRole('status');
+      await feedback.waitFor();
+      assert.ok((await feedback.innerText()).includes(await ui.t('newChat.checkout.carried')));
+      assert.equal(
+        await feedback
+          .getByRole('button', { name: await ui.t('newChat.checkout.undo'), exact: true })
+          .count(),
+        1,
+      );
+    } else if (ui.case === 'occupied') {
+      const option = page.getByRole('option', { name: 'release', exact: true });
+      assert.equal(await option.getAttribute('aria-disabled'), 'false');
+      await option.click();
+      const feedback = page.getByRole('alert');
+      await feedback.waitFor();
+      assert.equal(
+        await feedback.innerText(),
+        await ui.t('newChat.checkout.errors.occupied', { branch: 'release' }),
+      );
+      assert.equal(await page.getByTestId('create-agent-branch-chip').innerText(), 'main');
+    } else if (ui.case === 'switching') {
       await page.getByRole('option', { name: 'feature', exact: true }).click();
       await page.locator('[data-testid="create-agent-branch-chip"][aria-busy="true"]').waitFor();
       assert.equal(await page.getByTestId('create-agent-branch-chip').innerText(), 'main');
@@ -116,7 +154,7 @@ export default {
       );
       assert.equal(
         await page.getByRole('option', { name: /^release/ }).getAttribute('aria-disabled'),
-        'true',
+        String(ui.case === 'busy'),
       );
     }
     const after = await geometry();

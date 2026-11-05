@@ -225,10 +225,13 @@ it('fetches origin/main, fast-forwards local main, and undo retains fetched comm
   git(seed, 'push', 'origin', 'main');
   git(f.repo, 'switch', 'feature');
   const result = await switchTo(f, 'refs/remotes/origin/main');
+  expect(result.receipt?.fetchedCommits).toBe(1);
   expect(result.status.current).toBe('main');
   const fetched = git(seed, 'rev-parse', 'HEAD');
   expect(git(f.repo, 'rev-parse', 'main')).toBe(fetched);
   await f.service.undo(f.repo, result.receipt!.id);
   expect(git(f.repo, 'rev-parse', 'main')).toBe(fetched);
   expect(git(f.repo, 'branch', '--show-current')).toBe('feature');
+  const unchanged = await switchTo(f, 'refs/remotes/origin/main');
+  expect(unchanged.receipt?.fetchedCommits ?? 0).toBe(0);
 });
