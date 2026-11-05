@@ -1,7 +1,9 @@
+import type { ModelImageInputCatalogModel } from '../../shared/modelImageInputOverride.js';
 import { effectiveGatewayModelCost } from '../../shared/modelPriceQuote.js';
+import { projectCurrentModelSources } from './model-source-snapshots.js';
 import type { ModelDisplayPricing } from '@cindy/model-providers';
 import {
-  projectProviderMediaModels,
+  projectProviderMediaModels, projectSelectionAliases,
   isCustomRoutedProvider,
   isOrganizationManagedProvider,
   stripCodexGatewayWirePrefix,
@@ -899,26 +901,47 @@ function assembleRoot(
 
 /** Registry / local override 只能补账号已返回的条目，不能重新实体化账号没有的成员。 */
 function applyLayeredConsumer(
-  model: CatalogModel,
+  model: ModelImageInputCatalogModel,
   providerId: string,
   agent: RootAgentKind,
   plan: ModelPlaneRegistryPlan,
-): CatalogModel {
-  const overlaid = applyRegistryConsumerOverlay(model, providerId, agent, model.id, plan);
+): ModelImageInputCatalogModel {
   const registry = (base ?? BUNDLED_CATALOG).modelRegistry;
-  return (registry?.schemaVersion ?? 0) >= 4
-    ? applyModelMetadata(
-        overlaid,
-        resolveModelMetadata(
-          registry,
-          providerId,
-          model.id,
-          model.discoveredMetadata,
-          model.userModelConfig ? runtimeUserModelMetadata(model.userModelConfig) : undefined,
-          agent,
-        ),
-      )
-    : overlaid;
+  const applyConsumer = (source: CatalogModel): CatalogModel => {
+    const overlaid = applyRegistryConsumerOverlay(source, providerId, agent, source.id, plan);
+    return (registry?.schemaVersion ?? 0) >= 4
+      ? applyModelMetadata(
+          overlaid,
+          resolveModelMetadata(
+            registry,
+            providerId,
+            source.id,
+            source.discoveredMetadata,
+            source.userModelConfig ? runtimeUserModelMetadata(source.userModelConfig) : undefined,
+            agent,
+          ),
+        )
+      : overlaid;
+  };
+  return projectImageInputDefault(model, applyConsumer);
+}
+
+/** Keep the removable image flag's source in step with retained metadata layers. */
+function projectImageInputDefault(
+  model: ModelImageInputCatalogModel,
+  project: (source: CatalogModel) => CatalogModel,
+): ModelImageInputCatalogModel {
+  const result = project(model);
+  if (model.imageInputDefault === undefined) return result;
+  const inherited = project({
+    ...model,
+    supportsImageInput: model.imageInputDefault.supportsImageInput,
+    modalities: model.imageInputDefault.modalities,
+  });
+  return {
+    ...result,
+    imageInputDefault: { supportsImageInput: inherited.supportsImageInput, modalities: inherited.modalities },
+  };
 }
 
 function xaiCatalogModelById(
@@ -1717,19 +1740,19 @@ function computeMerged(): Catalog {
             (!isCustomRoutedProvider(provider) || !!provider.auth.native) &&
             (provider.id === 'xd' || agent === 'pi')
           ) {
-            next = applyModelMetadata(
-              model,
+            next = projectImageInputDefault(model, source => applyModelMetadata(
+              source,
               resolveModelMetadata(
                 b.modelRegistry,
                 metadataProviderId,
                 model.id,
-                agent === 'pi' ? model.discoveredMetadata : model.discoveredMetadata ?? catalogModelMetadata(model),
+                agent === 'pi' ? source.discoveredMetadata : source.discoveredMetadata ?? catalogModelMetadata(source),
                 model.userModelConfig ? runtimeUserModelMetadata(model.userModelConfig) : undefined,
                 agent,
                 undefined,
                 agent === 'pi' ? model.reasoningDefaultEffort : undefined,
               ),
-            );
+            ));
           }
           const identity =
             findModelRegistryRoute(
@@ -1748,9 +1771,9 @@ function computeMerged(): Catalog {
             findBaseModel(b.modelRegistry, model.id)?.id;
           const publicPatch = identity ? localOverrides.baseModels?.[identity] : undefined;
           if (publicPatch) {
-            next = applyModelMetadata(
-              next,
-              resolveModelMetadata(undefined, provider.id, model.id, catalogModelMetadata(next), {
+            next = projectImageInputDefault(next, source => applyModelMetadata(
+              source,
+              resolveModelMetadata(undefined, provider.id, model.id, catalogModelMetadata(source), {
                 ...publicPatch,
                 // Managed Ollama fields are generated import facts, not form edits.
                 ...(provider.source === 'user' &&
@@ -1759,7 +1782,7 @@ function computeMerged(): Catalog {
                   ? runtimeUserModelMetadata(model.userModelConfig)
                   : {}),
               }),
-            );
+            ));
           }
           return applyExistingModelLocalPatch(
             provider.id,
@@ -1933,6 +1956,18 @@ function computeMerged(): Catalog {
       }),
     ])) };
   });
+  providers = providers.map((provider) => projectSelectionAliases(provider, modelRegistry, {
+    hasUserMetadata: (agent, model) => {
+      const catalogId = providerCatalogId(provider);
+      const identity = findModelRegistryRoute(modelRegistry, catalogId, model.id)?.entry.modelRef ??
+        findBaseModel(modelRegistry, model.id)?.id;
+      const key = `${encodeURIComponent(provider.id)}:${model.id}`;
+      return !!(identity && localOverrides.baseModels?.[identity]) ||
+        !!localOverrides.additions[key] ||
+        !!(localOverrides.patches[key] && (!localOverrides.patches[key].agents ||
+          localOverrides.patches[key].agents?.includes(agent)));
+    },
+  }));
   return { ...b, modelRegistry, providers };
 }
 
@@ -1967,7 +2002,10 @@ export function getActiveLocalModelCatalog() {
  * (安全兜底,绝不抛)。消费方(路由 / 标题 / 能力派生 / 注册表)统一走这里。
  */
 export function getActiveCatalog(): Catalog {
-  if (!merged) merged = computeMerged();
+  if (!merged) {
+    const catalog = computeMerged();
+    merged = { ...catalog, providers: catalog.providers.map(projectCurrentModelSources) };
+  }
   return merged;
 }
 

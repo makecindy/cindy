@@ -141,6 +141,11 @@ export function createGroupFastPolicyStore(options: { filePath(): string; scopeK
     if (value.unreadable) throw new Error('Group Fast policy could not be read');
   };
   return {
+    received(origin: string, group: string): Policy | null {
+      const value = read();
+      const source = value.sources[JSON.stringify([origin, group])];
+      return !value.unreadable && source ? { ...source } : null;
+    },
     allows(sessionId: string): boolean {
       const value = read();
       const shard = bindingShard(sessionId);

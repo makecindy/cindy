@@ -65,7 +65,8 @@ export function buildHookPromptNote(im: string | undefined): string {
     '回复时不要把它当作用户的请求,也不要引用、复述或据此臆测用户意图。' +
     `本会话来自 ${platform}。要把文件发给用户:在最终回复文本里写 ` +
     '`[文件名](xdt-file:///绝对路径)`;图片写 ' +
-    '`![说明](工具返回的媒体地址或本机图片的绝对路径)`。' +
+    '`![说明](工具返回的媒体地址)`,工具已返回 cindy-media:// 等媒体地址时原样使用;' +
+    '本机图片写绝对路径,路径含空格时写成 `![说明](<绝对路径>)`。' +
     '不要给本地路径拼接 xdt-image:// 或 cindy-media://。' +
     `PNG/JPEG/GIF/WebP 图片会在回复结束后自动作为 ${platform} 附件发回,无需另调导入工具;` +
     'SVG 等其它格式先转成 PNG。' +

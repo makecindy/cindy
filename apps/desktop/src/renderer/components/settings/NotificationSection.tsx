@@ -1,3 +1,4 @@
+import { notificationSettings } from './NotificationSection.settings-search';
 /**
  * NotificationSection — Settings 页"系统通知"区块。
  *
@@ -33,18 +34,18 @@ export function NotificationSection() {
         )}
       >
         <div className="flex min-w-0 flex-col gap-1">
-          <p id="settings-search-settings-notifications-sessionDoneLabel"
+          <p id={notificationSettings.notificationsSessionDoneLabel.targetId}
             className="text-13 font-medium text-[var(--settings-section-sublabel)]"
             style={{ letterSpacing: '0.12px' }}
           >
-            {t('settings.notifications.sessionDoneLabel')}
+            {t(notificationSettings.notificationsSessionDoneLabel.titleKey)}
           </p>
           <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {t('settings.notifications.sessionDoneHint')}
+            {t(notificationSettings.notificationsSessionDoneLabel.descriptionKey)}
           </p>
         </div>
 
-        <Switch
+        <Switch data-setting-id={notificationSettings.notificationsSessionDoneLabel.id}
           checked={enabled}
           onCheckedChange={setEnabled}
           aria-label={t('settings.notifications.sessionDoneAria')}

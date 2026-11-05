@@ -66,6 +66,7 @@ import {
   List,
   ListTodo,
   Monitor,
+  Smartphone,
   Menu,
   MessagesSquare,
   Mic,
@@ -87,6 +88,8 @@ import {
 } from 'expo-audio';
 import { renderConversationShareHtmlToPng } from 'xdt-screenshot-monitor';
 import { Stack, useFocusEffect, useIsFocused, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { useTaskLiveScreens } from '@/remote-desktop/useTaskLiveScreens';
+import { liveScreenParam } from '@/remote-desktop/liveScreen';
 import { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import {
   ActivityIndicator,
@@ -2750,20 +2753,23 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const orcaModelSelectionUsesIntent = !!currentSession?.orcaRole && sessionAgentSwitchSupported;
   // 远程 Agent:模型列表在被控电脑自己的供应商之外,另列同账号其他电脑上开放了远程调用的供应商
   // (与桌面同一套,2026-10-07 产品裁决)。选另一台电脑的模型 = 把 Agent 挪过去,先二次确认;
-  // 同一台电脑内换模型直接切。共享任务访客与 Orca 成员不能换电脑，SSH 不支持切换;
+  // 同一台电脑内换模型直接切。共享任务访客与运行设备 Worker 不能换电脑，SSH 不支持切换;
   // 旧被控端不投影 agentDeviceId 字段、也不认换位置参数,这些情况维持原有调用与展示。
+  // Orca Lead / 本机 Worker 要被控电脑声明 supportsOrcaAgentRelocation 才能换电脑(旧版会拒绝)。
+  const orcaAgentLocationLocked = !!currentSession?.orcaRole
+    && capabilities?.supportsOrcaAgentRelocation !== true;
   const agentLocationMovable = sessionAgentSwitchSupported
     && !isSharedTaskPeer(deviceId)
     && !!currentSession
-    && !currentSession.orcaRole
+    && !orcaAgentLocationLocked
     && !currentSession.orcaRemoteLead
     && Object.prototype.hasOwnProperty.call(currentSession, 'agentDeviceId');
   /** Agent 现在所在的电脑(null = 被控电脑)。 */
   const currentAgentDeviceId = sessionAgentRunsOnOtherComputer(currentSession)
     ? currentSession!.agentDeviceId!
     : null;
-  // Orca 只禁换位置；Agent 已在其他电脑时，仍保留那台电脑的目录供原地选模。
-  const orcaRemoteAgentDeviceId = currentSession?.orcaRole ? currentAgentDeviceId : null;
+  // 不能换位置的 Orca 任务：Agent 已在其他电脑时，仍保留那台电脑的目录供原地选模。
+  const orcaRemoteAgentDeviceId = orcaAgentLocationLocked ? currentAgentDeviceId : null;
   /** 下一条消息时 Agent 所在的电脑(挂着换位置的意图就按意图)。 */
   const nextAgentDeviceId = effectiveAgentDeviceId(currentSession, agentSwitchIntent);
   const remoteAgentKeepDeviceIds = useMemo(
@@ -3242,6 +3248,21 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 前进导航防连点:快速双击「新建」会把 /sessions/new 压栈两层(返回要退两次),
   // 与首页各入口同一把 guardedPush 锁。
   const guardedPush = useGuardedPush();
+  // 电脑侧边栏里手机能打开的入口:插件实时屏幕(如模拟器)，绑定本任务且在运行的。
+  const liveScreensFocused = useIsFocused();
+  const taskLiveScreens = useTaskLiveScreens(
+    deviceId,
+    sessionId,
+    liveScreensFocused && !!currentSession && currentSession.orcaRole !== 'worker'
+      && currentSession.source !== 'side-chat',
+  );
+  const openTaskLiveScreen = (screen: (typeof taskLiveScreens)[number]) => {
+    if (!deviceId) return;
+    guardedPush({
+      pathname: '/devices/desktop/[deviceId]',
+      params: { deviceId, deviceName, liveScreen: liveScreenParam(screen) },
+    });
+  };
   const homeNewSessionActionRef = newSessionActionRef;
   const handleDrawerNewSession = useCallback(() => {
     if (homeNewSessionActionRef.current) { homeNewSessionActionRef.current(); return; }
@@ -5753,6 +5774,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           connectionProvider: (providerId: string) => voiceContext.createAsrConnection(providerId),
           refinerTargetProvider: (providerId: string, options?: { refreshAccessToken?: boolean }) =>
             voiceContext.createRefinerTarget(providerId, options),
+          refineRequestBudget: () => voiceContext.refineRequestBudget(),
           warmRefiner: (input: { system: string; user: unknown; promptCacheKey: string;
           }) =>
             voiceContext.warmRefiner(input),
@@ -9026,8 +9048,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     targetAgentKind: MobileSessionAgentKind,
     targetContextWindow: number | undefined,
     hostGuardSupported: boolean,
+    relocates: boolean,
   ): boolean => {
-    if (!orcaModelSelectionUsesIntent || targetAgentKind !== sessionAgentKind) return true;
+    // 换电脑是在新位置重建会话再交接，旧窗口带不过去，不做原地缩窗检查(与桌面同一口径)。
+    if (relocates || !orcaModelSelectionUsesIntent || targetAgentKind !== sessionAgentKind) return true;
     const contextTokens = currentSession?.contextTokens;
     const currentContextWindow = currentSession?.contextWindow;
     const pressuredShrink =
@@ -9124,7 +9148,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       if (!location) return;
       if (orcaModelSelectionUsesIntent || modelSheetAgentKind !== sessionAgentKind || location.agentDeviceId !== undefined) {
         if (!canStageOrcaModelSelection(modelSheetAgentKind, row.model.contextWindow,
-          modelSheetCapabilities?.supportsModelWindowSwitchGuard === true)) return;
+          modelSheetCapabilities?.supportsModelWindowSwitchGuard === true,
+          location.agentDeviceId !== undefined)) return;
         await writeSessionAgentSwitchIntent({
           targetAgentKind: modelSheetAgentKind,
           model: next.model,
@@ -9227,7 +9252,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     if (relocates || orcaModelSelectionUsesIntent) {
       // 同引擎换电脑或 Orca 换模型均走下一条消息生效的切换意图。
       if (!canStageOrcaModelSelection(config.agent, capability.contextWindow,
-        targetCapabilities.supportsModelWindowSwitchGuard === true)) return false;
+        targetCapabilities.supportsModelWindowSwitchGuard === true, relocates)) return false;
       const applied = await writeSessionAgentSwitchIntent({
         targetAgentKind: config.agent,
         model: config.modelId,
@@ -9285,7 +9310,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       if (!location) return;
       if (location.agentDeviceId !== undefined || orcaModelSelectionUsesIntent) {
         if (!canStageOrcaModelSelection(sessionAgentKind, option.contextWindow,
-          modelSheetCapabilities?.supportsModelWindowSwitchGuard === true)) return;
+          modelSheetCapabilities?.supportsModelWindowSwitchGuard === true,
+          location.agentDeviceId !== undefined)) return;
         await writeSessionAgentSwitchIntent({
           targetAgentKind: sessionAgentKind,
           model: option.id,
@@ -10292,6 +10318,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                   params: { deviceId, deviceName },
                 });
               }}
+              liveScreen={taskLiveScreens[0] ? {
+                label: taskLiveScreens[0].name,
+                onPress: () => openTaskLiveScreen(taskLiveScreens[0]),
+              } : undefined}
               onToggleSearch={() => {
                 if (searchOpen) closeSearch();
                 else setSearchOpen(true);
@@ -10385,6 +10415,36 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         <MountOnFirstOpen open={settingsOpen}>{() =>
               currentSession ? (
           <SessionMenuSheet
+            openEntries={currentSession && deviceId ? [
+              {
+                id: 'remoteDesktop',
+                label: t('remoteDesktop.title'),
+                icon: Monitor,
+                onPress: () => {
+                  setSettingsOpen(false);
+                  guardedPush({ pathname: '/devices/desktop/[deviceId]', params: { deviceId, deviceName } });
+                },
+              },
+              ...taskLiveScreens.map((screen) => ({
+                id: `screen-${screen.plugin}-${screen.id}`,
+                label: screen.name,
+                icon: Smartphone,
+                onPress: () => {
+                  setSettingsOpen(false);
+                  openTaskLiveScreen(screen);
+                },
+              })),
+              {
+                id: 'files',
+                label: t('session.presentation.overview.actions.files.a11y'),
+                icon: Folder,
+                disabled: !currentSession.workingDir,
+                onPress: () => {
+                  setSettingsOpen(false);
+                  guardedPush({ pathname: '/files/[sessionId]', params: { sessionId, deviceId, deviceName } });
+                },
+              },
+            ] : undefined}
             onOpenSideChats={canUseSideChats ? () => {
               setSideChatsPendingOpen(true);
               setSettingsOpen(false);
@@ -11667,6 +11727,7 @@ function SessionHeaderBar({
   onOpenSettings,
   onOpenUsage,
   onOpenRemoteDesktop,
+  liveScreen,
   onTitleDoubleTap,
   onToggleSearch,
   pendingCount,
@@ -11700,6 +11761,11 @@ function SessionHeaderBar({
   onOpenSettings(): void;
   onOpenUsage(): void;
   onOpenRemoteDesktop(): void;
+  /**
+   * 电脑侧边栏里第一个手机能打开的入口(本任务在运行的模拟器等);有它时占第二个位置,
+   * 文件移到「更多 → 打开」。远程桌面始终在最左。
+   */
+  liveScreen?: { label: string; onPress(): void };
   /** 双击标题直接打开重命名;不可重命名时不传。 */
   onTitleDoubleTap?: () => void;
   onToggleSearch(): void;
@@ -11732,7 +11798,7 @@ function SessionHeaderBar({
   const workerHeader = currentSession?.orcaRole === 'worker' || currentSession?.source === 'side-chat';
   const headerActions = (actionProjection?.primaryActions ?? [])
     .filter((action) => action.id === 'files');
-  const visibleHeaderActions = workerHeader ? [] : headerActions;
+  const visibleHeaderActions = workerHeader || liveScreen ? [] : headerActions;
   const actionHandlers = {
     files: onOpenFiles,
     queue: () => undefined,
@@ -11801,6 +11867,7 @@ function SessionHeaderBar({
             filesLabel={t('session.presentation.overview.actions.files.a11y')}
             moreLabel={t('session.menu.details')} files={files} detailsOnly={workerHeader}
             onDetails={onOpenSettings} onDesktop={onOpenRemoteDesktop}
+            screen={liveScreen}
             onAction={(id) => actionHandlers[id]()} />
         </Stack.Toolbar.View>
       </Stack.Toolbar>
@@ -11834,7 +11901,10 @@ function SessionHeaderBar({
             <Stack.Toolbar.Button icon={require('../../assets/navigation/monitor.png')} iconRenderingMode="template"
           accessibilityLabel={t('remoteDesktop.title')} disabled={!currentSession} onPress={onOpenRemoteDesktop} />
           )}
-        {workerHeader ? null : (
+        {workerHeader ? null : liveScreen ? (
+            <Stack.Toolbar.Button icon="iphone" accessibilityLabel={liveScreen.label}
+              disabled={!currentSession} onPress={liveScreen.onPress} />
+          ) : (
             <Stack.Toolbar.Button icon={require('../../assets/navigation/folder.png')} iconRenderingMode="template"
           accessibilityLabel={t('session.presentation.overview.actions.files.a11y')}
           disabled={!currentSession || !overview?.actions.some(
@@ -11905,6 +11975,7 @@ function SessionHeaderBar({
           detailsOnly={workerHeader}
           onDetails={onOpenSettings}
           onDesktop={onOpenRemoteDesktop}
+          screen={liveScreen}
           onAction={(id) => actionHandlers[id]()}
         />
       ) : (
@@ -11919,6 +11990,16 @@ function SessionHeaderBar({
             testID="session.remoteDesktop"
           />
         )}
+        {liveScreen && !workerHeader ? (
+          <SessionHeaderIconButton
+            accessibilityLabel={liveScreen.label}
+            active={false}
+            disabled={!currentSession}
+            icon={Smartphone}
+            onPress={currentSession ? liveScreen.onPress : undefined}
+            testID="session.liveScreen"
+          />
+        ) : null}
         {visibleHeaderActions.map((action) => (
           <SessionHeaderIconButton
             accessibilityHint={action.disabledReason ?? undefined}

@@ -37,7 +37,7 @@ export default {
     'loading-editor': { about: 'The foreground document owns find and Escape before its file read completes' },
     'focus-restore': { about: 'Closing find restores the document toolbar opener for keyboard navigation' },
     'ime-escape': { about: 'An IME-cancelling Escape and its repeats keep search open until a new press' },
-    'outside-focus': { about: 'Escape closes find first even after Tab reaches the backdrop or covered page' },
+    'outside-focus': { about: 'Focus stays in the preview; Escape closes find first from the document body' },
     'background-project-search': { about: 'The covered project-search sidebar retains its mode and query until the document closes' },
     'background-ask-voice': { about: 'Preview Escape preserves question-card dictation and its answer draft' },
     'background-voice': { about: 'Preview Escape leaves the real composer voice-cancel handler untouched until the document closes' },
@@ -142,8 +142,18 @@ export default {
       await page.keyboard.press(findKey);
       assert.equal(await input.count(), 0);
       assert.equal(await video.evaluate(player => document.activeElement === player), true);
-      await page.evaluate(() => document.exitFullscreen());
+      // Regression #8481: with find closed, the native fullscreen exit may
+      // precede delivery of that same Escape. Keep the actual preview mounted.
+      await video.evaluate(async player => {
+        const changed = new Promise(resolve => document.addEventListener('fullscreenchange', resolve, { once: true }));
+        await document.exitFullscreen();
+        await changed;
+        player.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+        player.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', bubbles: true }));
+      });
       await page.waitForFunction(() => !document.fullscreenElement);
+      assert.equal(await card.isVisible(), true);
+      await ui.capture('fullscreen-exit-keeps-document-with-find-closed');
       await page.keyboard.press(findKey);
       await input.fill('苹果');
       await card.getByText('1/2', { exact: true }).waitFor();
@@ -269,12 +279,21 @@ export default {
     await page.keyboard.press('Shift+Enter');
     await card.getByText('1/2', { exact: true }).waitFor();
     if (ui.case === 'outside-focus') {
-      for (const target of [page.locator('[data-text-lightbox-overlay] > button'), page.getByTestId('open-preview')]) {
-        await input.focus();
-        for (let tab = 0; tab < 20 && !await target.evaluate(el => document.activeElement === el); tab += 1) {
-          await page.keyboard.press('Tab');
-        }
-        assert.equal(await target.evaluate(el => document.activeElement === el), true);
+      // The production FocusScope now traps Tab inside the preview. Verify the
+      // actual boundary instead of expecting access to the covered page.
+      await input.focus();
+      for (let tab = 0; tab < 20; tab += 1) {
+        await page.keyboard.press('Tab');
+        assert.equal(await page.locator('[data-text-lightbox-overlay]').evaluate(
+          el => el.contains(document.activeElement),
+        ), true);
+      }
+      {
+        // The backdrop is intentionally aria-hidden and not focusable. Move into
+        // the readable document instead of requiring an inaccessible Tab stop.
+        await body.click({ position: { x: 20, y: 120 } });
+        await page.locator('[role="tooltip"]').waitFor({ state: 'detached' });
+        assert.equal(await input.evaluate(el => document.activeElement === el), false);
         await page.keyboard.press('Escape');
         await input.waitFor({ state: 'detached' });
         assert.equal(await card.count(), 1);

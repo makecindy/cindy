@@ -24,6 +24,7 @@ import {
   createImageGenerationIdRecoveryRule,
   createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
+  createToolReferenceRecoveryRule,
   createVllmResponsesCompatibilityRule,
   dedupeDuplicateToolUseIds,
   repairToolExchangeAdjacency,
@@ -974,6 +975,71 @@ describe('anthropic-compat-proxy tool_use provider field compatibility', () => {
 
     expect(r.status).toBe(200);
     expect(upstream.bodies).toHaveLength(2);
+  });
+});
+
+describe('unsupported native tool references (#8593)', () => {
+  const request = {
+    model: 'opencode-go/glm-5.3-flash', max_tokens: 128,
+    tools: [{ name: 'lookup', input_schema: { type: 'object' } }],
+    messages: [
+      { role: 'user', content: 'Find the lookup tool' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'search-1', name: 'ToolSearch', input: { query: 'lookup' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'search-1',
+        content: [{ type: 'tool_reference', tool_name: 'lookup' }, { type: 'text', text: 'found' }] }] },
+    ],
+  };
+  it.each(['encrypted', 'empty-thinking'] as const)('preserves native tool references when %s recovery retries', async kind => {
+    const error = kind === 'encrypted' ? ENC_ERROR_BODY
+      : JSON.stringify({ error: { message: 'each thinking block must contain thinking' } });
+    const upstream = await startFakeUpstream((index, _raw, res) => {
+      res.writeHead(index === 0 ? 400 : 200, { 'content-type': 'application/json' });
+      res.end(index === 0 ? error : JSON.stringify({ ok: true }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformRequest: [],
+      recoveryRules: [createEncryptedContentRecoveryRule({ enabled: () => true }), createEmptyThinkingRecoveryRule(),
+        createToolReferenceRecoveryRule()] });
+    const input = kind === 'encrypted' ? { ...request, encrypted_content: 'ciphertext' }
+      : { ...request, messages: [{ role: 'assistant', content: [{ type: 'thinking', thinking: '' },
+        ...request.messages[1]!.content] }, request.messages[2]] };
+    const response = await post(proxy.url, input);
+    expect(response.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(2);
+    const retried = JSON.parse(upstream.bodies[1]!);
+    expect(retried.encrypted_content).toBeUndefined();
+    expect(retried.messages).toEqual(kind === 'encrypted' ? request.messages
+      : [{ role: 'assistant', content: request.messages[1]!.content }, request.messages[2]]);
+    expect(retried.tools).toEqual(request.tools);
+  });
+  it.each(['unsupported', 'supported', 'unrelated-error'] as const)('%s upstream preserves the retry boundary', async mode => {
+    const upstream = await startFakeUpstream((_idx, raw, res) => {
+      const body = JSON.parse(raw);
+      const content = body.messages.at(-1).content[0].content;
+      const rejected = mode === 'unrelated-error' || mode === 'unsupported' && content[0].type === 'tool_reference';
+      res.writeHead(rejected ? 400 : 200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(rejected ? { error: { message: mode === 'unrelated-error'
+        ? 'invalid API key' : 'messages[6].content[0].content[0].type: content type tool_reference requires a native Anthropic Messages target' } }
+        : { ok: true }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url,
+      transformRequest: [repairToolExchangeAdjacency, dedupeDuplicateToolUseIds],
+      recoveryRules: [createToolReferenceRecoveryRule()] });
+    // Reuse the original persisted history on both turns; recovery must not require editing it.
+    for (let turn = 0; turn < 2; turn++) {
+      const response = await fetch(`${proxy.url}/v1/messages`, { method: 'POST',
+        headers: { 'content-type': 'application/json' }, body: JSON.stringify(request) });
+      expect(response.status).toBe(mode === 'unrelated-error' ? 400 : 200);
+      await response.text();
+    }
+    expect(upstream.bodies).toHaveLength(mode === 'unsupported' ? 4 : 2);
+    if (mode === 'unsupported') {
+      const retried = JSON.parse(upstream.bodies[1]!);
+      expect(retried.messages.at(-1).content[0]).toEqual({ type: 'tool_result', tool_use_id: 'search-1',
+        content: [{ type: 'text', text: 'Available tool: lookup' }, { type: 'text', text: 'found' }] });
+      expect(retried.tools).toEqual(request.tools);
+    } else expect(JSON.parse(upstream.bodies[0]!)).toEqual(request);
   });
 });
 

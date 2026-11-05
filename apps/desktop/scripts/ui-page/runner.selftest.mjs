@@ -100,12 +100,13 @@ mountPage({ render: () => <div>Worker finished</div> });`);
 
 // PDF preview blocked every changed-page scan: ?url parsed the worker as JS,
 // with no default export. Existing ?worker coverage bundles source, not URL assets.
-// Exercise scan/build/watch/compare and a real PDF module worker through the CLI.
+// Exercise scan/build/watch/compare, a real PDF module worker and a relative URL
+// worker's message round trip through the CLI.
 // Minimal input: pdfjs-dist's ?url import. Explicit Electron integration tier.
 test('loads PDF URL assets as real workers and tracks URL asset changes', async () => {
   const asset = path.join(dir, 'url-asset.mjs');
-  const original = 'export const value = 17;';
-  const changed = 'export const value = 18;';
+  const original = 'export const value = 17; self.onmessage = () => self.postMessage(value);';
+  const changed = 'export const value = 18; self.onmessage = () => self.postMessage(value);';
   await writeFile(asset, original);
   // A self-contained blank page with a valid xref; no font or network dependencies.
   let pdf = '%PDF-1.4\n';
@@ -124,6 +125,16 @@ test('loads PDF URL assets as real workers and tracks URL asset changes', async 
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import assetUrl from './url-asset.mjs?url';
 if ((await import(assetUrl)).value !== 17) throw new Error('URL asset failed to load');
+const relativeWorker = new Worker(assetUrl, { type: 'module' });
+try {
+  await new Promise<void>((resolve, reject) => {
+    relativeWorker.onerror = reject;
+    relativeWorker.onmessage = ({ data }) => data === 17 ? resolve() : reject(new Error('Wrong URL worker result'));
+    relativeWorker.postMessage(null);
+  });
+} finally {
+  relativeWorker.terminate();
+}
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 const worker = new pdfjs.PDFWorker();
 await worker.promise;
@@ -161,6 +172,39 @@ mountPage({ render: () => <div>PDF worker finished</div> });`);
   assert.equal(result.code, 0, result.stderr + result.stdout);
   await writeFile(asset, changed);
   assert.equal(await inputsChanged(bundle.fingerprints), true);
+});
+
+// E2E: the real settings route previously crashed on import.meta.glob. Verify
+// executed catalog imports, input discovery, and the older revision's membership.
+test('loads eager default globs and preserves compare membership', async () => {
+  const first = path.join(dir, 'one.settings-search.ts');
+  const added = path.join(dir, 'two.settings-search.ts');
+  // A historical module may already be deleted from the worktree; resolving it
+  // must reach the revision overlay before esbuild checks the current filesystem.
+  const deleted = path.join(dir, 'deleted.settings-search.ts');
+  await writeFile(first, 'export default { title: "First" };');
+  await writeFile(added, 'export default { title: "Second" };');
+  const file = await entry('eager-glob', `
+type Entry = { title: string };
+const modules = import.meta.glob<Entry>('./**/*.settings-search.ts', { eager: true, import: 'default' });
+if (Object.values(modules).map(item => item.title).join(',') !== 'First,Second') throw new Error('Glob catalog mismatch');
+mountPage({ render: () => <div>{Object.values(modules).map(item => item.title).join(',')}</div> });`);
+  const definition = adhocPage(file);
+  const scanned = await scanPage(definition);
+  assert.ok(scanned.inputs.includes(first));
+  assert.ok(scanned.inputs.includes(added));
+  const before = await buildPage(definition, {
+    atRef: new Set([file, first, deleted]),
+    has: candidate => candidate === first || candidate === deleted,
+    get: candidate => candidate === first ? 'export default { title: "Original" };'
+      : candidate === deleted ? 'export default { title: "Deleted" };' : undefined,
+    resolve: candidate => candidate === deleted ? deleted : undefined,
+  });
+  assert.ok(before.fingerprints.has(first));
+  assert.ok(before.fingerprints.has(deleted));
+  assert.equal(before.fingerprints.has(added), false);
+  const result = await run(['--entry', file, '--theme', 'light', '--json']);
+  assert.equal(result.code, 0, result.stdout + result.stderr);
 });
 
 test('one run reports each failure kind on its own variant', async () => {

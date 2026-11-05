@@ -63,6 +63,7 @@ import {
 
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
+import { MORPH_CONTENT_RESIZE_EVENT } from '@/components/ui/morph-popover';
 import { GhostPluginIcon } from '@/features/plugin/GhostPluginIcon';
 import type { AtResourceItem } from '@/lib/atResourceService';
 import {
@@ -185,6 +186,12 @@ export function AtMentionPanel({
     if (!onSearchChange) return;
     searchRef.current?.focus();
   }, [onSearchChange]);
+  // 从「添加目录」二级页切回时，请「+」弹层按本面板重量尺寸(内容变高会被弹层高度钳住)。
+  // 首次打开时弹层尚未完成开场形变，会忽略这次请求。
+  useLayoutEffect(() => {
+    if (!embedded) return;
+    rootRef.current?.dispatchEvent(new CustomEvent(MORPH_CONTENT_RESIZE_EVENT, { bubbles: true }));
+  }, [embedded]);
   const [panelScroll, setPanelScroll] = useState(0);
   const [tooltipMeasure, setTooltipMeasure] = useState<TooltipMeasure>({
     key: null,

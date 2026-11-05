@@ -40,6 +40,23 @@ it('uses shared-peer health without inheriting primary relay status or issues', 
 });
 
 describe('deriveRemoteConnectionStatus', () => {
+  it('keeps the retained direct target writable without treating the other peer or relay as online', async () => {
+    type Status = { status: 'connecting' | 'online' | 'stopped'; directDataDeviceIds?: string[]; dataPathChangedDeviceId?: string };
+    const listeners = new Set<(status: Status) => void>();
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { deviceLink: {
+      getState: async () => ({ linkStatus: 'online', directDataDeviceIds: ['M'] }),
+      onStatusChanged: (cb: (status: Status) => void) => { listeners.add(cb); return () => listeners.delete(cb); },
+    } } });
+    const row = { id: 'task', status: 'active' } as Session;
+    remoteProjectsStore.setDeviceSessions('M', 'M', [row]);
+    remoteProjectsStore.setDeviceSessions('other', 'Other', [row]);
+    const hook = renderHook(() => ({ m: useRemoteSessionConnection('M'), other: useRemoteSessionConnection('other') }));
+    await act(async () => {});
+    await act(async () => { for (const cb of listeners) cb({ status: 'connecting', directDataDeviceIds: ['M'] }); });
+    expect(hook.result.current).toEqual({ m: 'connected', other: 'reconnecting' });
+    await act(async () => { for (const cb of listeners) cb({ status: 'connecting', directDataDeviceIds: [], dataPathChangedDeviceId: 'M' }); });
+    expect(hook.result.current).toEqual({ m: 'reconnecting', other: 'reconnecting' });
+  });
   it('本机链路非 online → reconnecting(优先级最高,与被控端在线与否无关)', () => {
     expect(deriveRemoteConnectionStatus('connecting', true)).toBe('reconnecting');
     expect(deriveRemoteConnectionStatus('stopped', true)).toBe('reconnecting');

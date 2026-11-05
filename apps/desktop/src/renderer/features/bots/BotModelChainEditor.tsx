@@ -35,6 +35,7 @@ function agentKindFor(vendor: 'cc' | 'codex' | 'pi'): AgentKind {
 }
 
 export function BotModelChainEditor({
+  'data-setting-id': settingId,
   value,
   onChange: onValueChange,
   disabled = false,
@@ -48,6 +49,7 @@ export function BotModelChainEditor({
   layout = 'inline',
   settingsRows,
 }: {
+  'data-setting-id'?: string;
   value: BotModelRoute[];
   onChange: (next: BotModelRoute[]) => void;
   disabled?: boolean;
@@ -234,7 +236,7 @@ export function BotModelChainEditor({
   if (layout === 'settings' && settingsRows) {
     const listItems = [...fallbackRows, ...(pendingRow ? [pendingRow] : [])];
     return (
-      <div className="min-w-0" data-testid="bot-model-chain-editor">
+      <div className="min-w-0" data-testid="bot-model-chain-editor" data-setting-id={settingId}>
         <div className={cn(SETTINGS_ROW_CLASS, 'cindy-segmented-row flex-wrap')}>
           <div className="flex min-w-0 flex-col gap-1">
             <p className={SETTINGS_ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
@@ -292,7 +294,7 @@ export function BotModelChainEditor({
   }
 
   return (
-    <div className="min-w-0" data-testid="bot-model-chain-editor">
+    <div className="min-w-0" data-testid="bot-model-chain-editor" data-setting-id={settingId}>
       <div className="flex min-w-0 items-start gap-3">
         {label ? (
           <span className="shrink-0 pt-1 text-12 leading-5 text-[var(--text-secondary)]">{label}</span>

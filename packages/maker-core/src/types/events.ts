@@ -216,6 +216,13 @@ export interface AgentEvent {
    */
   runtimeRecovery?: true;
   /**
+   * Host-only. Session fans this out after a listener-requested stream hold
+   * (`Session.holdEventStream`); the requesting host already persisted and
+   * published it. Translators never produce it, and it never crosses a
+   * renderer or device boundary.
+   */
+  hostProjection?: true;
+  /**
    * A complete extension notice, independent of model text assembly and turn
    * settlement. Hosts deliver it as its own durable message, never as a delta
    * or a full-text replacement for the currently streaming assistant reply.

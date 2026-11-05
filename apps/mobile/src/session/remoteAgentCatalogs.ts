@@ -88,7 +88,8 @@ export function providerShareRemoteCatalogs(input: {
     if (seen.has(share.agentDeviceId)) continue;
     seen.add(share.agentDeviceId);
     const kept = keep.delete(share.agentDeviceId);
-    const reachable = share.status === 'active' && share.hostOnline;
+    const reachable = share.status === 'active' && (share.hostOnline
+      || (share.payload?.providerContinuity?.remainingMs ?? 0) > 0);
     if (!kept && (input.keepOnly || !reachable)) continue;
     const payload = share.payload;
     catalogs.push({
