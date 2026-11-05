@@ -19267,5 +19267,23 @@
     "rendered": "查看文稿",
     "wrap": "自动换行",
     "lineNumbers": "行号"
+  },
+  "cliProxyQuota": {
+    "title": "Antigravity 配额",
+    "connectHint": "使用本机 CLI Proxy 管理密钥连接，密钥将在本机加密保存。",
+    "key": "管理密钥",
+    "connect": "连接配额",
+    "failed": "配额读取失败，请检查Proxy服务和管理密钥。",
+    "refresh": "刷新配额",
+    "disconnect": "断开配额",
+    "empty": "未找到 Antigravity 账号。",
+    "disabled": "账号已停用",
+    "unavailable": "配额暂不可用",
+    "fiveHour": "5 小时限额",
+    "weekly": "周限额",
+    "notApplicable": "当前不适用",
+    "remaining": "剩余 {{percent}}%",
+    "reset": "重置时间：{{time}}",
+    "updated": "更新时间：{{time}}"
   }
 }

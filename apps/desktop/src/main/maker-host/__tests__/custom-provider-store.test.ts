@@ -15,6 +15,7 @@ import {
   createCustomProvider,
   deleteCustomProvider,
   getCustomProvider,
+  getCustomProviderCreationTime,
   listCustomProviders,
   revokeCodexAccountUltrafast,
   updateCustomProvider,
@@ -80,6 +81,15 @@ afterEach(() => {
 });
 
 describe('custom provider updates through the runtime database proxy', () => {
+  it('changes the quota credential incarnation when the same provider slug is recreated', async () => {
+    mountDb();
+    expect(await getCustomProviderCreationTime(valid.id)).toBeNull();
+    await createCustomProvider(valid, 100);
+    expect(await getCustomProviderCreationTime(valid.id)).toBe(100);
+    await deleteCustomProvider(valid.id);
+    await createCustomProvider(valid, 200);
+    expect(await getCustomProviderCreationTime(valid.id)).toBe(200);
+  });
   // Regression: account model/list -> storage normalization -> reload used to drop
   // Ultrafast. Exercise real CRUD/CAS and catalog projection, including revocation.
   it('persists native account speed discovery without granting another account or engine access', async () => {

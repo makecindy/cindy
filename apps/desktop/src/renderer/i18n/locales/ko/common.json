@@ -19267,5 +19267,23 @@
     "rendered": "문서 보기",
     "wrap": "자동 줄 바꿈",
     "lineNumbers": "줄 번호"
+  },
+  "cliProxyQuota": {
+    "title": "Antigravity 할당량",
+    "connectHint": "로컬 CLI proxy 관리 키로 연결합니다. 키는 이 컴퓨터에 암호화되어 저장됩니다.",
+    "key": "관리 키",
+    "connect": "한도 연결",
+    "failed": "한도를 읽지 못했습니다. 프록시와 관리 키를 확인하세요.",
+    "refresh": "한도 새로고침",
+    "disconnect": "한도 연결 해제",
+    "empty": "Antigravity 계정이 없습니다.",
+    "disabled": "계정 비활성화됨",
+    "unavailable": "한도를 사용할 수 없음",
+    "fiveHour": "5시간 한도",
+    "weekly": "주간 한도",
+    "notApplicable": "현재 적용되지 않음",
+    "remaining": "{{percent}}% 남음",
+    "reset": "초기화: {{time}}",
+    "updated": "업데이트: {{time}}"
   }
 }

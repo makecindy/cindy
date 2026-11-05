@@ -6,6 +6,9 @@
  * handler 时拉起 Electron / runtime config 副作用。
  */
 
+import { registerCliProxyQuotaHandlers } from './cliProxyQuotaHandlers.js';
+import { getCustomProvider, getCustomProviderCreationTime } from '../maker-host/custom-provider-store.js';
+import { cliProxyQuotaSecretIo } from '../secrets/providerSecretStore.js';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import type { XaiSubscriptionUsageSnapshot } from '../../shared/xaiSubscriptionUsage.js';
 import { createHash } from 'node:crypto';
@@ -272,6 +275,27 @@ export function onCodexAutoResetRestored(listener: (providerId: string) => Promi
 }
 
 export function registerMakerUsageIpc(maker: Maker): void {
+  // Local settings only: no device-link invoke registration or credential export.
+  const identities = new Map<string, string>();
+  registerCliProxyQuotaHandlers(createElectronIpcHandlerRegistry(), {
+    assertTrusted: event => assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),
+    scope: activeOwnerScopeKey,
+    isBoundaryPending: isAppSessionBoundaryPending,
+    baseUrl: async id => {
+      const config = await getCustomProvider(id);
+      const createdAt = await getCustomProviderCreationTime(id);
+      const urls = [...new Set(Object.values(config?.runtimes ?? {}).flatMap(runtime => runtime?.baseUrl ? [runtime.baseUrl] : []))];
+      if (!config || createdAt === null || urls.length !== 1) return null;
+      // Bind the key to this connection address, not just a reusable slug.
+      identities.set(`${activeOwnerScopeKey()}:${id}`, createHash('sha256').update(JSON.stringify([id, createdAt, urls[0]])).digest('hex'));
+      return urls[0];
+    },
+    identity: id => identities.get(`${activeOwnerScopeKey()}:${id}`)!,
+    readKey: id => cliProxyQuotaSecretIo.read(id),
+    writeKey: (id, key) => cliProxyQuotaSecretIo.write(id, key),
+    removeKey: id => cliProxyQuotaSecretIo.remove(id),
+    fetch: (url, init) => fetch(url, init),
+  });
   log.info('registering maker:usage:* IPC handlers');
 
   const resetServices = new Map<string, ReturnType<typeof createCodexRateLimitResetService>>();

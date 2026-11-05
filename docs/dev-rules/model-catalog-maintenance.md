@@ -1,5 +1,28 @@
 # 模型配置与下发：架构及维护入口
 
+## 本机 CLIProxyAPI 的 Antigravity 额度
+
+自定义供应商的各引擎指向同一个回环地址时，供应商详情页提供独立的
+Antigravity 额度连接入口。用户输入 CLIProxyAPI **管理密钥**，验证后按当前 Cindy
+数据所有者、供应商 ID、创建时间与端点地址加密保存；不复用推理 API key，不更改模型路由。
+删除后重新创建同名供应商或改变端点不会继承原额度连接。断开额度只移除管理密钥。
+
+打开页面只读取连接状态，连接和手动刷新才调用 `/v8/management/credentials`、
+`/credentials/download` 和 `/requests/api-call`。后者代用 proxy 保存的登录凭据，向
+Antigravity 的 `retrieveUserQuotaSummary` 查询额度。凭证文件只在 Main 内使用；Renderer
+只收到经过筛选的账号名、分组、窗口、剩余比例、停用状态和重置时间。
+没有数据库 migration，也没有凭证或额度数据上传至 Cindy 服务端。
+
+额度按账号与模型组分别展示，不合并多个账号；上游停用的窗口显示「当前不适用」，
+未知、失败或已过重置时间的数据不当作可用额度。此数据只供展示，不参与调度或模型准入。
+每次刷新最多查询 20 个账号，单请求 15 秒、整次刷新 60 秒超时。
+
+首期只用于本机 Desktop 设置页，不开放 device-link 调用，不接入供应商组或手机额度镜像；
+远程来源不能借用本机回环地址的凭据。旧版本没有该入口。上游内部接口可能变化，失败时
+显示不可用并保留显式刷新／断开入口。实现见
+`main/usage/cliProxyQuota.ts`、`main/maker-ipc/cliProxyQuotaHandlers.ts` 与
+`renderer/components/settings/CliProxyQuotaSection.tsx`（均位于 `apps/desktop/src/`）。
+
 > 权威入口：先读本页，再按问题打开专题。Server 为独立仓库，文档不代表已部署。
 > 心动部署的 AI Gateway（模型路由与计费服务端）源码在内部仓库 `xindong/ai-gateway` 与
 > `xindong/litellm`（2026-10-28 确认）；排查网关行为先查这两处。

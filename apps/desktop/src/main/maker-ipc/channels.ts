@@ -377,6 +377,7 @@ export const MAKER_INVOKE = {
   PI_KERNEL_STATE: 'maker:agent:pi-kernel-state',
   PI_KERNEL_INSTALL: 'maker:agent:pi-kernel-install',
   // Agent 今日累计 (取代老 codex:usage:today) —— 走 host 的 readAgentTodayUsage
+  USAGE_CLI_PROXY: 'maker:usage:cli-proxy',
   USAGE_TODAY: 'maker:usage:today',
   USAGE_ACCOUNT: 'maker:usage:account',
   // Codex app-server 官方控制面:完整额度/reset 次数读取 + desktop 预签发幂等 offer 消耗。

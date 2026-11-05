@@ -1,3 +1,4 @@
+import { CliProxyQuotaSection } from './CliProxyQuotaSection';
 import { AddSpeechModelsDialog } from './AddSpeechModelsDialog';
 import { providerSpeechSetup } from '../../../shared/speechProviderSetup';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
@@ -915,6 +916,7 @@ function DetailHeader({
           ) : (
             <ProviderAccountUsageModule provider={provider} />
           ))}
+        {provider && <CliProxyQuotaSection provider={provider} />}
         {children}
       </div>
     </div>

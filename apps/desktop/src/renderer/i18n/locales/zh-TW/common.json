@@ -19267,5 +19267,23 @@
     "rendered": "查看文件",
     "wrap": "自動換行",
     "lineNumbers": "行號"
+  },
+  "cliProxyQuota": {
+    "title": "Antigravity 配額",
+    "connectHint": "使用本機 CLI Proxy 管理金鑰連線，金鑰將在本機加密儲存。",
+    "key": "管理金鑰",
+    "connect": "連線配額",
+    "failed": "無法讀取配額，請檢查Proxy服務和管理金鑰。",
+    "refresh": "重新整理配額",
+    "disconnect": "中斷配額連線",
+    "empty": "找不到 Antigravity 帳號。",
+    "disabled": "帳號已停用",
+    "unavailable": "配額暫時無法使用",
+    "fiveHour": "5 小時上限",
+    "weekly": "每週上限",
+    "notApplicable": "目前不適用",
+    "remaining": "剩餘 {{percent}}%",
+    "reset": "重設時間：{{time}}",
+    "updated": "更新時間：{{time}}"
   }
 }

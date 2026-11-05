@@ -7135,6 +7135,7 @@ interface ElectronAPI {
 
     /* ── Agent 今日累计 (取代老 codex.usage.* + onUsageTodaySpendChanged) ── */
     usage: {
+      getCliProxyQuota(providerId: string, managementKey?: string, refresh?: boolean): Promise<import('../shared/cliProxyQuota').CliProxyQuotaSnapshot>;
       getToday: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<{
         day: string;
         money?: import('../shared/regionalMoney').RegionalMoney;

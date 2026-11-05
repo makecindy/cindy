@@ -19339,5 +19339,23 @@
     "rendered": "Dokument anzeigen",
     "wrap": "Zeilenumbruch",
     "lineNumbers": "Zeilennummern"
+  },
+  "cliProxyQuota": {
+    "title": "Antigravity-Kontingent",
+    "connectHint": "Mit dem Verwaltungsschlüssel des lokalen CLI-Proxys verbinden. Der Schlüssel wird auf diesem Computer verschlüsselt gespeichert.",
+    "key": "Verwaltungsschlüssel",
+    "connect": "Kontingent verbinden",
+    "failed": "Kontingent konnte nicht gelesen werden. Proxy und Verwaltungsschlüssel prüfen.",
+    "refresh": "Kontingent aktualisieren",
+    "disconnect": "Kontingent trennen",
+    "empty": "Keine Antigravity-Konten gefunden.",
+    "disabled": "Konto deaktiviert",
+    "unavailable": "Kontingent nicht verfügbar",
+    "fiveHour": "5-Stunden-Limit",
+    "weekly": "Wochenlimit",
+    "notApplicable": "Derzeit nicht anwendbar",
+    "remaining": "{{percent}}% verbleibend",
+    "reset": "Zurücksetzung: {{time}}",
+    "updated": "Aktualisiert: {{time}}"
   }
 }

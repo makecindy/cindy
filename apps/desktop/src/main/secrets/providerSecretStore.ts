@@ -95,6 +95,7 @@ const DYNAMIC_SECRET_PREFIXES = [
   CUSTOM_PROVIDER_HEADER_SECRET_PREFIX,
   'provider_key_',
   'provider_oauth_',
+  'provider_quota_',
   GHOST_SECRET_PREFIX,
   GHOST_SECRET_HINT_PREFIX,
 ] as const;
@@ -1171,3 +1172,16 @@ function companionSecretScope(key: string, assertCurrent: () => void = () => {})
   };
   assertOwner(); return { scoped: scoped!, assertOwner };
 }
+
+/** Owner-scoped management credentials, never exposed by generic safeStorage IPC. */
+export const cliProxyQuotaSecretIo = {
+  read(identity: string): string | null {
+    try { return electronSecretIo.read(`provider_quota_${identity}`); } catch { return null; }
+  },
+  write(identity: string, key: string): boolean {
+    try { return electronSecretIo.write(`provider_quota_${identity}`, key); } catch { return false; }
+  },
+  remove(identity: string): boolean {
+    try { return electronSecretIo.remove(`provider_quota_${identity}`).success; } catch { return false; }
+  },
+};
