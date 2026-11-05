@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RemotePluginUiEnablePrompt } from '@/components/new-chat/RemotePluginUiEnablePrompt';
 import { RemotePluginPage } from '../RemotePluginPage';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { projectPluginUiConsent } from '../../../../shared/pluginUiConsent';
 import { ghostInstallApprovalToken } from '../../../../shared/ghost';
 const { invoke, confirm, localGhosts, notices } = vi.hoisted(() => ({
   notices: { success: vi.fn(), info: vi.fn(), error: vi.fn(), warning: vi.fn(), dismiss: vi.fn() },
@@ -1023,6 +1024,55 @@ describe('remote task interactive-page consent prompt', () => {
     expect(invoke.mock.calls.filter(c => c[2]?.[0]?.actionId === 'management:answer')).toHaveLength(1);
     expect(screen.queryByText('newChat.pluginUi.ready')).toBeNull();
   });
+  // Unit: two actual composers and 45 notifications previously caused 90 full reads.
+  // Exercise capability negotiation, old Hosts and the shared production subscription.
+  it.each([true, false])('shares and coalesces consent reads (compact Host: %s)', async compact => {
+    setup(true);
+    const normal = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (device, channel, args) => {
+      if (args?.[0]?.actionId === 'management:ui-consent') {
+        const legacy = await normal(device, channel, [{ ...args[0], actionId: 'management:snapshot' }]);
+        return { effects: [], result: projectPluginUiConsent(legacy.result.ghosts, true) };
+      }
+      const result = await normal(device, channel, args);
+      if (compact && channel.endsWith(':manifest')) {
+        result.collections.find((c: { id: string }) => c.id === 'plugins').actions.push({ id: 'management:ui-consent' });
+      }
+      return result;
+    });
+    let push: ((value: unknown) => void) | undefined;
+    window.electronAPI.deviceLink.onRemotePush = vi.fn(listener => { push = listener; return () => {}; }) as never;
+    const ui = render(<><RemotePluginUiEnablePrompt deviceId="computer-a" /><RemotePluginUiEnablePrompt deviceId="computer-a" /></>);
+    await waitFor(() => expect(screen.getAllByText('newChat.pluginUi.enable')).toHaveLength(2));
+    const reads = () => invoke.mock.calls.filter(c => c[2]?.[0]?.actionId === (compact ? 'management:ui-consent' : 'management:snapshot')).length;
+    expect(reads()).toBe(1);
+    expect(window.electronAPI.deviceLink.onRemotePush).toHaveBeenCalledTimes(1);
+    if (compact) expect(invoke.mock.calls.some(c => c[2]?.[0]?.actionId === 'management:snapshot')).toBe(false);
+    vi.useFakeTimers();
+    await act(async () => {
+      for (let i = 0; i < 45; i++) push!({ deviceId: 'computer-a', channel: 'maker:remote-resources:changed', payload: { collectionId: 'plugins' } });
+      await vi.advanceTimersByTimeAsync(250);
+    });
+    expect(reads()).toBe(2);
+    ui.unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    const switched = render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    expect(screen.getByText('newChat.pluginUi.enable')).toBeTruthy();
+    expect(reads()).toBe(2);
+    expect(window.electronAPI.deviceLink.onRemotePush).toHaveBeenCalledTimes(1);
+    switched.unmount();
+    await act(async () => {
+      for (let i = 0; i < 45; i++) push!({ deviceId: 'computer-a', channel: 'maker:remote-resources:changed', payload: { collectionId: 'plugins' } });
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(reads()).toBe(2);
+    const changedWhileAway = render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    expect(reads()).toBe(3);
+    changedWhileAway.unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    vi.useRealTimers();
+  });
   // Unit, real prompt + push listener. Every remote task composer mounts this prompt; a
   // working teammate's status pushes re-read the ~1 MB plugin snapshot each time and
   // starved the link to that computer (2026-11-03: 86 snapshots, 129.5 MB). Plugin
@@ -1044,9 +1094,12 @@ describe('remote task interactive-page consent prompt', () => {
     await screen.findByText('newChat.pluginUi.enable');
     const snapshots = () => invoke.mock.calls.filter(c => c[2]?.[0]?.actionId === 'management:snapshot').length;
     const before = snapshots();
+    vi.useFakeTimers();
     await act(async () => {
       push!({ deviceId: 'computer-a', channel: 'maker:remote-resources:changed', payload: { collectionId } });
+      await vi.advanceTimersByTimeAsync(250);
     });
+    vi.useRealTimers();
     await waitFor(() => expect(snapshots()).toBe(before + rereads));
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
     expect(snapshots()).toBe(before + rereads);

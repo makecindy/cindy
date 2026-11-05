@@ -9,7 +9,12 @@ const manifest = { schemaVersion: 3, id: 'planner', name: 'Planner', version: '1
 };
 let approved = false;
 export async function hasPluginManagement() { return true; }
+export async function pluginManagementActions() { return ['management:snapshot', 'management:ui-consent']; }
+export const boundedPluginResponse = () => true;
 export async function invokePluginManagement(_device: string, action: string, input: { operationId?: string; confirmed?: boolean } = {}) {
+  if (action === 'ui-consent') return { version: 1, uiCapabilityApproval: true, ...(!approved ? { item: {
+    instanceKey: 'planner', name: manifest.name, approvalToken: 'approved:00000000-0000-4000-8000-000000000001',
+  } } : {}) };
   if (action === 'snapshot') return { version: 1, uiCapabilityApproval: true, market: { items: [] }, ghosts: [{ manifest, instanceKey: 'planner', enabled: true,
     approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' }, uiCapabilityApproved: approved }] };
   if (action === 'answer') approved = input.confirmed === true;
