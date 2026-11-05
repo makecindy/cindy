@@ -4189,6 +4189,7 @@ class CindyMcpGateway {
           ], description: 'Final delivery defaults to companion/direct without a model call. process wakes the companion only when requested; im uses routine_delivery_targets.id; none keeps the independent task. Omission preserves saved choices.' },
           sessionMode: { type: 'string', enum: ['persistent', 'fresh'], description: 'persistent reuses this routine task and context; fresh starts a new task each trigger. Omission preserves the saved mode. Read back with routine_list.' },
           silentWhenIdle: { type: 'boolean', description: 'Set true for checks with no-change reporting suppressed. Set false for reminders/scheduled delivery. Omitted defaults to false; preserve user choices.' },
+          requireOwnerActivity: { type: 'boolean', description: "true skips scheduled and event runs, without calling a model, when the owner has not talked with you since this routine's last successful run (manual runs always proceed); run data then carries previousSuccessAt. Omission preserves the saved choice." },
           preRunHook: { anyOf: [{ type: 'null' }, { type: 'object', properties: {
             command: { type: 'string', minLength: 1, maxLength: 32000 },
             timeoutMs: { type: 'integer', minimum: 1 },

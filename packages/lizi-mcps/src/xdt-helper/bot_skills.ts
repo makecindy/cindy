@@ -47,6 +47,13 @@ export interface BotSkillCallbacks {
     offset?: number;
     limit?: number;
   }): Promise<ControlResult<{ skills: BotSkillSummaryWire[]; total?: number; nextOffset?: number }, string>>;
+  /** Optional: hosts without it simply do not offer `set_teammate_skill_enabled`. */
+  setEnabled?(params: {
+    callerSessionId: string;
+    callerSessionInstanceId?: string;
+    slug: string;
+    enabled: boolean;
+  }): Promise<ControlResult<{ slug: string; enabled: boolean; effective: 'next-turn' | 'next-session' }, string>>;
 }
 
 export interface BotSkillToolDeps {
@@ -150,4 +157,25 @@ export function registerBotSkillTools(
   });
   registry.registerAlias('save_bot_skill', 'save_teammate_skill');
   registry.registerAlias('list_bot_skills', 'list_teammate_skills');
+
+  const setEnabled = deps.callbacks.setEnabled;
+  if (setEnabled) registry.register({
+    name: 'set_teammate_skill_enabled',
+    category: 'bots',
+    description:
+      '启用或停用当前伙伴自己的一个技能(slug 来自 list_teammate_skills)。停用只是不再加载,文件保留,主人可在设置页重新打开。'
+      + '用于合并重复技能后停用多余的那条,或停用明显过时的技能;不要停用主人刚要求保存的技能。',
+    inputShape: {
+      slug: z.string().min(1).max(64).describe('技能目录名,来自 list_teammate_skills'),
+      enabled: z.boolean().describe('true = 启用;false = 停用'),
+    },
+    handler: async ({ slug, enabled }) => {
+      const sessionId = callerSessionId(deps);
+      if (!sessionId) return missingSession();
+      const result = await setEnabled({ callerSessionId: sessionId, ...callerSessionInstanceId(deps), slug, enabled });
+      return result.ok
+        ? okPayload({ slug: result.slug, enabled: result.enabled, effective: result.effective })
+        : errorPayload(result.errorCode, result.message);
+    },
+  });
 }

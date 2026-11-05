@@ -26,7 +26,6 @@ mountPage({
         sources: async () => [{ id: 'plugin:git', name: 'GitHub', status: 'listening', events: [{ type: 'pr.changed', name: 'Pull request updated', fields: [] }] }],
         history: async () => [{ id: 'failed', routineId: 'timer', status: 'failed', createdAt: 1792800000000, events: [], error: 'Service unavailable' }],
         onChanged: subscription('routines'),
-        nightlyLearning: { get: async () => null },
         save: async (_bot: string, input: Routine, id: string) => {
           if (fail) { fail = false; throw new Error('Fixture write failed'); }
           records = records.map((item) => item.id === id ? { ...item, ...input } : item);

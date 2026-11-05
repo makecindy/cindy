@@ -18,6 +18,7 @@ import {
   listBotSkillsForSession,
   readBotSkillForBot,
   saveBotSkillForSession,
+  setBotSkillEnabledForSession,
 } from '../botSkillService';
 import {
   beginChannelToolScope,
@@ -155,6 +156,31 @@ describe('saveBotSkillForSession', () => {
   it('turns a store rejection into an errorCode instead of throwing at the MCP boundary', async () => {
     const result = await saveBotSkillForSession({ ...SAVE, name: '周报怎么写' }, depsFor('bot-1'));
     expect(result).toMatchObject({ ok: false, errorCode: 'SKILL_NAME_UNUSABLE' });
+  });
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：setBotSkillEnabledForSession（set_teammate_skill_enabled 的宿主实现）停用后，
+ *   设置页读到的同一条技能 enabled=false、内容不变，并请求主任务刷新挂载；不存在的技能返回 NOT_FOUND。
+ * - Bug／规则依据：docs/product-rules/agent-user-parity.md（设置页能停用技能，伙伴也要能）；夜间学习改为普通
+ *   例行任务后靠它停用合并掉的重复技能。
+ * - 现有覆盖缺口：此前伙伴只有保存 / 列出技能，没有会话侧的停用入口。
+ * - 最小失败输入：伙伴停用一条自己已保存的技能；停用一个不存在的 slug。
+ * - tier：unit（临时目录里的真实技能存储，归属解析由 deps 注入）。
+ */
+describe('setBotSkillEnabledForSession', () => {
+  it('turns a Skill off the same way the settings switch does, and reports a missing one', async () => {
+    await saveBotSkillForSession(SAVE, depsFor('bot-1'));
+    const requestRefresh = vi.fn(async () => true);
+    const deps = { ...depsFor('bot-1'), requestRefresh };
+    expect(await setBotSkillEnabledForSession({ callerSessionId: 'session-1', slug: 'weekly-report', enabled: false }, deps))
+      .toEqual({ ok: true, slug: 'weekly-report', enabled: false, effective: 'next-turn' });
+    const skill = await readBotSkillForBot('bot-1', 'weekly-report', { userDataDir });
+    expect(skill).toMatchObject({ enabled: false, body: SAVE.body });
+    expect(requestRefresh).toHaveBeenCalledExactlyOnceWith('session-1', 'resource');
+    expect(await setBotSkillEnabledForSession({ callerSessionId: 'session-1', slug: 'not-there', enabled: false }, deps))
+      .toMatchObject({ ok: false, errorCode: 'NOT_FOUND' });
   });
 });
 

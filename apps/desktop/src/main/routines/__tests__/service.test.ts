@@ -59,6 +59,8 @@ vi.mock('../../localDb/client/current.js', () => ({
     client: { drizzle: { select: () => ({ from: mock.readProfiles }) } },
   } : null,
 }));
+const ownerActivity = vi.hoisted(() => ({ hasOwnerActivitySince: vi.fn(async (_botId: string, _after: number) => false) }));
+vi.mock('../../bot-autonomy/ownerActivity.js', () => ownerActivity);
 vi.mock('../store.js', () => ({
   RoutineFileStore: class {
     load = mock.load;
@@ -464,6 +466,43 @@ it('disables a previously exhausted import without dispatching, while ordinary m
   expect(mock.scheduler.runNow).not.toHaveBeenCalled();
   expect(mock.storage.insert).not.toHaveBeenCalled();
 });
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：routineTools.save + 定时触发 / runNow 走 service.execute；没有主人新对话时这次运行记为跳过、
+ *   不派发模型；手动运行照常派发；派发给模型的数据块带上次成功运行时间 previousSuccessAt。
+ * - Bug／规则依据：docs/product-rules/bot-routines.md「只在主人有新对话时运行」（夜间学习改为普通例行任务时保留的空闲跳过）。
+ * - 现有覆盖缺口：通用前置条件是新增的；夜间学习原来的计数器跳过随专用实现一起删除。
+ * - 最小失败输入：requireOwnerActivity=true 的规则在上次成功运行之后没有主人对话时到点触发。
+ * - tier：unit（服务层，调度器与数据库查询均为内存 fake）。
+ */
+it('skips a scheduled run without owner activity since the last success, but runs by hand and passes that time on', async () => {
+  vi.useFakeTimers();
+  await getRoutineEngine();
+  const routine = await routineTools.save('bot', {
+    name: 'Tidy', prompt: 'Tidy memories', enabled: true, requireOwnerActivity: true,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60_000 }],
+  });
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]?.status).toBe('success'));
+  expect(mock.scheduler.runNow).toHaveBeenCalledOnce();
+  const firstPrompt = mock.storage.insert.mock.calls[0]![0].prompt;
+  expect(firstPrompt).not.toContain('previousSuccessAt');
+  const succeededAt = (await routineTools.history('bot', routine.id))[0]!.finishedAt!;
+
+  await vi.advanceTimersByTimeAsync(60_000);
+  await vi.waitFor(async () => expect(await routineTools.history('bot', routine.id)).toHaveLength(2));
+  expect((await routineTools.history('bot', routine.id))[0]).toMatchObject({ status: 'skipped' });
+  expect(ownerActivity.hasOwnerActivitySince).toHaveBeenLastCalledWith('bot', succeededAt);
+  expect(mock.scheduler.runNow).toHaveBeenCalledOnce();
+
+  ownerActivity.hasOwnerActivitySince.mockResolvedValueOnce(true);
+  await vi.advanceTimersByTimeAsync(60_000);
+  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]?.status).toBe('success'));
+  expect(mock.scheduler.runNow).toHaveBeenCalledTimes(2);
+  expect(mock.storage.update.mock.calls.at(-1)?.[1] ?? mock.storage.insert.mock.calls.at(-1)?.[0])
+    .toMatchObject({ prompt: expect.stringContaining(`"previousSuccessAt":"${new Date(succeededAt).toISOString()}"`) });
+});
+
 it('disables a one-shot reminder after it fires and is delivered, leaving no pending time', async () => {
   vi.useFakeTimers();
   await getRoutineEngine();

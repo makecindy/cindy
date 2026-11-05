@@ -832,6 +832,35 @@ describe('routine check configuration', () => {
     } finally { await f.engine.stop(); }
   });
 
+  /*
+   * 测试价值
+   * - 生产入口与可观察结果：RoutineEngine.ensureBuiltin 把旧版「夜间学习」对齐到新模板：主人从没选过的运行方式
+   *   跟随模板（fresh），主人选过的保留；主人可以给夜间学习单独选模型，requireOwnerActivity 随模板落盘。
+   * - Bug／规则依据：docs/product-rules/bot-routines.md「内置夜间学习」改为普通 Agent 例行任务；旧规则从未保存
+   *   sessionMode，若照搬「保留主人选择」会让升级后的夜间学习永远停在持久专线。
+   * - 现有覆盖缺口：上一用例只覆盖跟进规则，且没有覆盖模板自带运行方式、主人未作选择的组合。
+   * - 最小失败输入：没有 sessionMode 的 v1 夜间学习规则被 v2 模板（sessionMode: fresh）对齐；随后 put 选模型。
+   * - tier：unit（内存 load/save fake，无真实等待）。
+   */
+  it('lets a built-in template supply a run mode the owner never chose, and lets the owner pick a model for nightly learning', async () => {
+    const f = await fixture();
+    const id = 'builtin-nightly-learning-bot';
+    try {
+      const legacy = await f.engine.ensureBuiltin('bot', 'nightly-learning', input, id, 1);
+      expect(legacy?.sessionMode).toBeUndefined();
+      const template = { ...input, prompt: 'v2', sessionMode: 'fresh' as const, requireOwnerActivity: true };
+      const upgraded = await f.engine.ensureBuiltin('bot', 'nightly-learning', template, id, 2);
+      expect(upgraded).toMatchObject({ prompt: 'v2', sessionMode: 'fresh', requireOwnerActivity: true, builtinVersion: 2 });
+      const modelOverride = { agentKind: 'claude-code' as const, model: 'strong-model' };
+      const chosen = await f.engine.put('bot', { ...template, modelOverride, sessionMode: 'persistent' }, id);
+      expect(chosen).toMatchObject({ modelOverride, sessionMode: 'persistent' });
+      await expect(f.engine.put('bot', { ...template, requireOwnerActivity: false }, id)).rejects.toThrow('BUILTIN_ROUTINE');
+      expect(await f.engine.ensureBuiltin('bot', 'nightly-learning', { ...template, prompt: 'v3' }, id, 3))
+        .toMatchObject({ prompt: 'v3', modelOverride, sessionMode: 'persistent' });
+      expect(() => parseRoutineInput({ ...input, requireOwnerActivity: 'yes' })).toThrow('requireOwnerActivity must be boolean');
+    } finally { await f.engine.stop(); }
+  });
+
   it('persists the explicit routine session mode and defaults legacy rules to persistent at runtime', async () => {
     const f = await fixture();
     try {

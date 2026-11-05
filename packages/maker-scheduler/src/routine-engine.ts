@@ -348,10 +348,11 @@ export class RoutineEngine {
         // A newly created, unclassified reminder must retain delivery.
         ...(!existing && parsed.silentWhenIdle === undefined ? { silentWhenIdle: false } : {}),
         // Host realign of a built-in rule keeps the owner's latest pause choice.
+        // A choice the owner never made (e.g. a rule saved before the template set it) follows the template.
         ...(options.builtin && existing ? {
           enabled: existing.enabled,
           modelOverride: existing.modelOverride,
-          sessionMode: existing.sessionMode,
+          sessionMode: existing.sessionMode ?? parsed.sessionMode,
           delivery: existing.delivery,
         } : {}),
       });
@@ -360,7 +361,7 @@ export class RoutineEngine {
       // Host-owned instructions and triggers stay fixed; callers may pause or choose the execution model.
       if (existing?.builtin && !options.builtin &&
         JSON.stringify(parseRoutineInput({ ...existing, enabled: input.enabled,
-          ...(existing.builtin !== 'nightly-learning' ? { modelOverride: input.modelOverride } : {}),
+          modelOverride: input.modelOverride,
           sessionMode: input.sessionMode })) !== JSON.stringify(input))
         throw new Error(`${BUILTIN_ROUTINE_ERROR}: built-in instructions and triggers cannot be edited`);
       const builtin = options.builtin ?? existing?.builtin;
