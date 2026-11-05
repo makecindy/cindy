@@ -321,7 +321,8 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
   const isTruncated = content.kind === 'text' && content.truncated;
   // 可编辑条件:文本 + 未截断 + 有 relPath。Truncated 文件保存会把后半段截掉,
   // 直接禁掉编辑入口,避免数据丢失陷阱。
-  const canEdit = allowEdit && relPath !== null && isText && !isTruncated;
+  const canEdit = allowEdit && relPath !== null && isText && !isTruncated &&
+    !isOfficePreviewSupported(relPath);
   // markdown / 其它文本 / 代码文件都走"永远编辑态",
   // 省掉 Pencil/Check 按钮。
   // 这两个 flag 在多个 effect 和 render 分支里共用,统一在这里推一次。

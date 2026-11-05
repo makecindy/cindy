@@ -19,6 +19,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createLogger } from '@/lib/logger';
 import { observeFileTransferProgress } from '@/lib/fileTransferProgress';
 import { fileBrowserApiFor, onFileTreeEventFor } from '@/lib/fileBrowserTransport';
+import { isOfficePreviewSupported } from '@/lib/officePreview';
 import {
   getCachedFileContent,
   invalidateCachedFile,
@@ -150,7 +151,10 @@ export function useFileContent(
     // 切 tab 来回点的"瞬切"体验全靠这条; refresh()/chokidar evict 后会回退
     // 到 miss 路径, 触发真 IPC 拿最新。
     const cached = getCachedFileContent(contentCacheScope, relPath);
-    if (cached) {
+    // XML .xls can be classified as text. Office readers need the original
+    // authorized bytes, not an old inline-text cache entry from this endpoint.
+    const remoteOffice = Boolean(remoteHostId || deviceId) && isOfficePreviewSupported(relPath);
+    if (cached && !remoteOffice) {
       setState({ workdir, relPath, content: cached });
       return;
     }
@@ -166,7 +170,7 @@ export function useFileContent(
         const startBigFetch = async (
           size: number,
           mtimeMs: number,
-          fallback: FileContent,
+          fallback: FileContent | null,
         ): Promise<void> => {
           setState({ workdir, relPath, content: { kind: 'fetching', received: 0, total: size } });
           const progress = observeFileTransferProgress((e) => {
@@ -203,8 +207,17 @@ export function useFileContent(
                 },
               });
             } else {
-              log.warn('fetchRemote failed, falling back', { relPath, message: res.message });
-              setState({ workdir, relPath, content: fallback });
+              if (fallback) log.warn('fetchRemote failed, falling back', { relPath, message: res.message });
+              setState({
+                workdir,
+                relPath,
+                content: fallback ?? { kind: 'error', message: res.message ?? 'read failed' },
+              });
+            }
+          } catch (error) {
+            if (fallback) throw error;
+            if (!cancelled) {
+              setState({ workdir, relPath, content: { kind: 'error', message: String(error) } });
             }
           } finally {
             progress.dispose();
@@ -214,6 +227,13 @@ export function useFileContent(
         const result = await fileBrowserApiFor(deviceId).readFile({ workdir, relPath, remoteHostId });
         if (cancelled) return;
         if (result.ok) {
+          if (remoteOffice) {
+            // Fetch exact bytes (including original encoding) through the same
+            // local-cache pipeline as binary Office files. Never expose XML as
+            // editable source if this copy cannot be obtained.
+            await startBigFetch(result.data.size, result.data.mtimeMs, null);
+            return;
+          }
           if (result.data.truncated && (remoteHostId || deviceId)) {
             // 远程截断文本:自动取回完整文件(本地会话维持原截断视图,不取)。
             await startBigFetch(result.data.size, result.data.mtimeMs, {
@@ -375,6 +395,12 @@ export function useFileContent(
       }
       if (contentMayHaveChanged && event.relPath === relPathRef.current) {
         const targetRelPath = event.relPath;
+        if (isOfficePreviewSupported(targetRelPath)) {
+          // Re-enter the normal read/cache pipeline; silent text re-reads would
+          // replace a remote Office preview with XML source on the next change.
+          setRefreshTick((value) => value + 1);
+          return;
+        }
         void (async () => {
           try {
             const result = await fileBrowserApiFor(deviceId).readFile({

@@ -27,8 +27,13 @@ const MAX_OUTPUT_CHARACTERS = 2_000_000;
 // Stream in small chunks so a forged ZIP size cannot allocate an unbounded inflate
 // buffer. Rebuild from the checked entries: parsers must not reinterpret a different
 // central directory (or duplicate filename) from the untrusted original archive.
-async function boundedOfficeBytes(bytes: Uint8Array): Promise<Uint8Array> {
-  if (bytes[0] !== 0x50 || bytes[1] !== 0x4b) return bytes;
+async function boundedOfficeBytes(bytes: Uint8Array, requireZip: boolean): Promise<Uint8Array> {
+  if (bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
+    // Mammoth's JSZip accepts leading bytes before a ZIP. DOCX/XLSX must never
+    // reach a tolerant parser without bounded decompression and normalization.
+    if (requireZip) throw new Error('Invalid Office archive');
+    return bytes;
+  }
   const { Unzip, UnzipInflate, zipSync } = await import('fflate');
   const entries: Record<string, Uint8Array> = Object.create(null);
   let total = 0;
@@ -171,7 +176,7 @@ export async function parseOfficeDocument(
   const read = await window.electronAPI.readFileBytes({ filePath, maxSize: OFFICE_PREVIEW_LIMIT });
   if (read.bytes.length > OFFICE_PREVIEW_LIMIT)
     throw new Error('Office file exceeds preview capacity');
-  const bytes = await boundedOfficeBytes(read.bytes);
+  const bytes = await boundedOfficeBytes(read.bytes, kind === 'word' || /\.xlsx$/i.test(formatPath));
   if (kind === 'word') {
     const mammoth = (await import('mammoth/mammoth.browser')).default;
     let imageCharacters = 0;

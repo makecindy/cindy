@@ -121,6 +121,16 @@ describe('officePreviewKind / isOfficePreviewSupported', () => {
 });
 
 describe('parseOfficeDocument', () => {
+  it('rejects prefixed DOCX rather than allowing tolerant ZIP parsing to bypass expansion checks', async () => {
+    // PR #8810 security review: JSZip accepts a leading NUL before a valid ZIP.
+    // A tiny valid document proves the bypass without inflating a bomb in tests.
+    const zip = await buildDocx('Must not reach the unchecked parser');
+    const bytes = new Uint8Array(zip.length + 1);
+    bytes.set(zip, 1);
+    stubReadFileBytes(async () => ({ bytes, size: bytes.length }));
+    await expect(parseOfficeDocument('/tmp/prefixed.docx')).rejects.toThrow('Invalid Office archive');
+  });
+
   it('rejects a compressed archive exceeding the actual expansion budget', async () => {
     const zip = new JSZip();
     zip.file('word/document.xml', 'x'.repeat(20 * 1024 * 1024 + 1));
