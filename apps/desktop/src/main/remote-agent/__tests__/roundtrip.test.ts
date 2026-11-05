@@ -20,7 +20,7 @@ import type {
 } from '@cindy/maker-core';
 import { LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, Session } from '@cindy/maker-core';
 import { createServer } from 'node:http';
-import { providerShareHostPeer } from '@cindy/device-link';
+import { isProviderSharePeer, providerShareHostPeer } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RemoteAgentPoller } from '../controller/poller';
@@ -31,10 +31,13 @@ import { createDeviceAgentStarter, liveDirectGuestSession } from '../controller/
 import { credentialGrantFor, forgetCredentialGrants } from '../executor/credentialGrants';
 import { cancelPendingRemoteStart, startRemoteAgentSession, type StartRemoteAgentDeps } from '../controller/startRemote';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
+import { hostedStartOptions } from '../host/service';
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/providerShareCredentialConsent';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
 import { installDesktopInteractionHandler } from '../../maker-ipc/interactionRouter';
-import { authorizeSharedTaskExecutor, authorizeSharedTaskHistory, liveSharedTaskTarget } from '../controller/providerShareTaskLocation';
+import { authorizeSharedTaskExecutor, authorizeSharedTaskHistory, liveSharedTaskTarget,
+  forgetSharedTaskAuthorization } from '../controller/providerShareTaskLocation';
+vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://continuity.test.invalid' }));
 
 const payloadCompression = vi.hoisted(() => ({ enabled: false, paused: false, calls: 0, finish: undefined as (() => void) | undefined }));
 // Controlled gzip completion exercises production payload cancellation without compression load or sockets.
@@ -66,15 +69,19 @@ vi.mock('../../device-link/providerShareCrossRegion.js', () => ({
   isCrossRegionProviderShareTarget: () => historyCrossRegion(),
   renewCrossRegionProviderShareLink: (...args: unknown[]) => historyOpenLink(...args),
 }));
+const guestPermission = vi.hoisted(() => ({ epoch: 0, status: 'active', listeners: new Set<() => void>() }));
 vi.mock('../../device-link/providerShareGuest.js', () => ({
   parseProviderShareAgentDeviceId: (device: string) => device.startsWith('share:') ? device.slice(6) : null,
-  findReceivedShare: () => ({ status: 'active' }),
+  findReceivedShare: () => ({ status: guestPermission.status }),
+  providerShareAccessEpoch: () => guestPermission.epoch,
+  onProviderShareReceivedChanged: (listener: () => void) => { guestPermission.listeners.add(listener); return () => { guestPermission.listeners.delete(listener); }; },
 }));
 vi.mock('../../logger.js', () => ({ createLogger: () => historyLogger }));
 // The production starter collects only this fixture's supplied project, never the user's home.
+const collectPersonalConfig = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => []));
 vi.mock('../controller/projectFiles', () => ({
   collectAncestorInstructionFiles: async () => [], collectAncestorMarkers: async () => [],
-  collectInstructionImports: async () => [], collectPersonalConfig: async () => [],
+  collectInstructionImports: async () => [], collectPersonalConfig,
   collectProjectInstructionFiles: async () => [],
 }));
 
@@ -219,6 +226,7 @@ function makeDeps(host: ReturnType<typeof createRemoteAgentHost>, controller = C
 }
 
 beforeEach(() => {
+  guestPermission.epoch++; guestPermission.status = 'active'; guestPermission.listeners.clear();
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-ra-')));
   project = path.join(root, 'project');
   hostRoot = path.join(root, 'host');
@@ -321,11 +329,11 @@ describe('remote agent round trip', () => {
   // Unit: #7783 keeps M's grant only in memory. Restart recovery must regain
   // that task's grant through O, never use O's health as M's readiness. Existing
   // lease tests do not lose M's in-memory authorization during a poll outage.
-  it.each(['idle', 'busy', 'revoked', 'expired'] as const)('recovers the pinned direct executor after restart: %s', async mode => {
+  it.each(['idle', 'busy', 'revoked', 'expired', 'o-offline-recovery', 'reissued-open-transient', 'unconfirmed-no-renew'] as const)('recovers the pinned direct executor after restart: %s', async mode => {
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
     const ownerRoute = 'share:restart-share';
-    let offline = false, granted = false, allowed = true;
-    let allocations = 0, sends = 0, offlineReads = 0;
+    let offline = false, ownerOffline = false, granted = false, allowed = true;
+    let allocations = 0, sends = 0, offlineReads = 0, failNextOpenAfterGrant = 0;
     const disposed: string[] = [];
     const seen: AgentEvent[] = [];
     const nativeIds: Array<string | undefined> = [];
@@ -346,15 +354,27 @@ describe('remote agent round trip', () => {
       controllerTrust: () => 'guest', isControllerAuthorized: () => true,
       providerAccess: { resolve: async () => 'shared-provider', isAllowed: () => granted },
       bindGuestProviderRoute: async () => ({ providerId: 'shared-provider', routeToken: 'fixture', modelIds: ['m'], release() {} }),
+      // The restarted host is alive and answers caps, but its in-memory task
+      // grant is gone. Only a task-scoped open can prove that.
+      directGuestExecution: {
+        ownerScope: () => 'account', locate: async () => null, allocate: async () => null,
+        status: () => undefined, release: async () => undefined, switch: async () => ({}),
+        usage: () => undefined, sessionAllowed: () => granted, sessionDelegated: () => granted,
+        delegate: async () => { granted = true; return true; }, forget: () => true,
+      },
       captureOwner: () => 'owner', isOwnerCurrent: () => true, runsRoot: hostRoot,
     });
     let member = makeMember();
     historyInvoke.mockImplementation(async (device, _channel, [request]) => {
       if (device === ownerRoute) {
+        if (ownerOffline) throw Object.assign(new Error('owner offline'), { code: 'NOT_CONNECTED' });
         if (request.op === 'allocate') {
           allocations++;
           if (!allowed) return { ok: false, error: { code: 'ACCESS_REVOKED', message: 'share revoked' } };
           granted = true;
+          if ((mode === 'reissued-open-transient' || mode === 'unconfirmed-no-renew') && allocations === 2) {
+            failNextOpenAfterGrant = 1;
+          }
           return { ok: true, result: { deviceId: 'executor-m', generation: '11111111-1111-4111-8111-111111111111',
             leaseDurationMs: mode === 'expired' ? 3_000 : 30 * 60_000 } };
         }
@@ -362,9 +382,12 @@ describe('remote agent round trip', () => {
       }
       const requireAccess = () => {
         if (offline) { offlineReads++; throw Object.assign(new Error('device offline'), { code: 'DEVICE_OFFLINE' }); }
-        if (!granted) throw Object.assign(new Error('share unavailable'), { code: 'ACCESS_REVOKED' });
       };
       requireAccess();
+      if (request.op === 'open' && failNextOpenAfterGrant > 0) {
+        failNextOpenAfterGrant -= 1;
+        return { ok: false, error: { code: 'TIMEOUT', message: 'temporary open failure' } };
+      }
       const result = await member.handle(CONTROLLER, JSON.parse(JSON.stringify(request)));
       requireAccess();
       return { ok: true, result: request.op === 'caps' ? { ...result as object, directGuestExecution: true } : result };
@@ -401,9 +424,51 @@ describe('remote agent round trip', () => {
         await expect(handle.send({ type: 'user', content: 'must not run' })).rejects.toThrow();
         expect(nativeIds).toEqual([undefined]);
         if (mode === 'expired') expect(allocations).toBe(1);
-      } else {
+      } else if (mode === 'reissued-open-transient') {
         await vi.advanceTimersByTimeAsync(10_000);
-        expect(seen.filter(event => event.type === 'error')).toEqual(mode === 'busy'
+        // O issues a replacement, but the next M open fails transiently. The
+        // grant is already real, so the next ordinary open must confirm it
+        // without asking O again.
+        await expect(handle.send({ type: 'user', content: 'reissued attempt' })).rejects.toThrow();
+        expect(allocations).toBe(2);
+        expect(nativeIds).toEqual([undefined]);
+        await handle.send({ type: 'user', content: 'continue' });
+        expect(nativeIds).toEqual([undefined, 'native-original']);
+        expect(allocations).toBe(2);
+        // Confirming the replacement clears the one-reissue state; a second
+        // independent M restart may ask O for another grant.
+        const beforeSecondRestart = offlineReads;
+        offline = true;
+        member.dispose();
+        await vi.waitFor(() => expect(offlineReads).toBeGreaterThan(beforeSecondRestart));
+        await vi.advanceTimersByTimeAsync(1_000);
+        granted = false;
+        member = makeMember();
+        offline = false;
+        await vi.advanceTimersByTimeAsync(10_000);
+        await handle.send({ type: 'user', content: 'after second restart' });
+        expect(nativeIds).toEqual([undefined, 'native-original', 'native-original']);
+        expect(allocations).toBe(3);
+        expect(sends).toBe(4);
+      } else if (mode === 'unconfirmed-no-renew') {
+        await vi.advanceTimersByTimeAsync(10_000);
+        await expect(handle.send({ type: 'user', content: 'reissued attempt' })).rejects.toThrow();
+        expect(allocations).toBe(2);
+        // No background renewal while M has not confirmed the replacement.
+        await vi.advanceTimersByTimeAsync(20 * 60_000);
+        expect(allocations).toBe(2);
+        expect(nativeIds).toEqual([undefined]);
+      } else {
+        if (mode === 'o-offline-recovery') ownerOffline = true;
+        await vi.advanceTimersByTimeAsync(10_000);
+        if (mode === 'o-offline-recovery') {
+          await expect(handle.send({ type: 'user', content: 'must not run' }))
+            .rejects.toThrow(/NOT_CONNECTED|owner offline/);
+          expect(allocations).toBe(1);
+          expect(nativeIds).toEqual([undefined]);
+          ownerOffline = false;
+        }
+        expect(seen.filter(event => event.type === 'error')).toEqual(mode === 'busy' || mode === 'o-offline-recovery'
           ? [expect.objectContaining({ data: expect.objectContaining({ reason: 'remote_agent_restarted' }) })] : []);
         expect(await liveDirectGuestSession('restart-task')!.probeReconnect!()).toBe('ok');
         await handle.send({ type: 'user', content: 'continue' });
@@ -412,7 +477,7 @@ describe('remote agent round trip', () => {
         expect(sends).toBe(mode === 'idle' ? 2 : 3);
       }
     } finally {
-      offline = false; granted = true;
+      offline = false; ownerOffline = false; granted = true;
       const closing = handle?.close({ reason: 'account-boundary' });
       await vi.advanceTimersByTimeAsync(5_000);
       await closing;
@@ -1237,6 +1302,81 @@ describe('remote agent round trip', () => {
   });
 
   // #6420: a new remote run carries the task Host clear epoch, independent of source clocks.
+  // 插件工具经隧道回到本机：花名册按本机真实工作目录现算，经 open 带到 Agent 的启动选项。
+  // 空花名册也要带到，否则对方会回退到它自己的插件。
+  it('brings this computer\'s plugin roster, even an empty one, to the agent computer', async () => {
+    const host = createHost();
+    const invoke = makeDeps(host).invoke;
+    const log = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return this; } };
+    try {
+      for (const roster of ['TASK COMPUTER GHOST ROSTER', '']) {
+        const ghostRosterPrompt = vi.fn(() => roster);
+        const start = createDeviceAgentStarter({
+          remoteInvoke: async (_deviceId, _channel, args) => ({ ok: true, result: await invoke(args) }),
+          rgPath: () => RG, mcpProviders: () => [], prepareMcpBridge: async () => null, makerMemory: () => undefined,
+          ghostRosterPrompt, captureKnownFileBefore: async () => {}, noteOpaqueTurnChange: () => {}, logger: log,
+        });
+        const handle = await start({ agentKind: 'claude-code', deviceId: 'agent-computer', options: {
+          sessionId: `roster-${roster.length}`, workingDir: project, model: 'm',
+        } });
+        expect(ghostRosterPrompt).toHaveBeenCalledWith(project);
+        expect(hostedStartOptions(hostInputs.at(-1)!).ghostRosterSnapshot).toBe(roster);
+        await handle.close({ reason: 'navigation' });
+      }
+    } finally { await host.dispose(); }
+  });
+
+  // 内置与插件带的 Skill 以任务所在电脑为准：本机停用的不带；对方的 Claude Code 把带来的挂成插件(保持 cindy:pr)，
+  // 不在项目 Skill 里再出现一次。
+  it('mounts this computer\'s enabled managed skills as plugins on the agent computer', async () => {
+    const host = createHost();
+    const invoke = makeDeps(host).invoke;
+    const log = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return this; } };
+    const skill = (name: string) => {
+      const file = path.join(root, 'bundle', name, 'SKILL.md');
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, name);
+      return { kind: 'agent-skill' as const, name, path: file, source: 'skill' as const, enabled: true, claudeCommandName: `cindy:${name}` };
+    };
+    const pr = skill('pr');
+    const learn = skill('learn');
+    // 收集器本身见 mirror.test.ts：这里按收到的托管 Skill 原样产出同步内容。
+    collectPersonalConfig.mockImplementationOnce(async (...args: unknown[]) => {
+      const { managedSkills = [] } = args[2] as { managedSkills?: Array<{ command: string; dir: string }> };
+      return {
+        personal: {
+          files: managedSkills.map(({ command }) => ({
+            path: `.claude/skills/${command.replace(':', '-')}/SKILL.md`, data: Buffer.from(command).toString('base64'),
+          })),
+          managedSkills: managedSkills.map(({ command }) => ({ command, dir: `.claude/skills/${command.replace(':', '-')}` })),
+        },
+        roots: [],
+      };
+    });
+    try {
+      const start = createDeviceAgentStarter({
+        remoteInvoke: async (_deviceId, _channel, args) => ({ ok: true, result: await invoke(args) }),
+        rgPath: () => RG, mcpProviders: () => [], prepareMcpBridge: async () => null, makerMemory: () => undefined,
+        managedSkills: async () => [pr, learn], disabledSkillPaths: () => [learn.path],
+        captureKnownFileBefore: async () => {}, noteOpaqueTurnChange: () => {}, logger: log,
+      });
+      const handle = await start({ agentKind: 'claude-code', deviceId: 'agent-computer', options: {
+        sessionId: 'managed-skills', workingDir: project, model: 'm',
+      } });
+      expect(collectPersonalConfig.mock.calls.at(-1)?.[2]).toMatchObject({
+        disabledSkillPaths: [learn.path],
+        managedSkills: [{ command: 'cindy:pr', dir: fs.realpathSync(path.dirname(pr.path)) }],
+      });
+      const input = hostInputs.at(-1)!;
+      const pluginRoot = path.join(input.shadowDir, '.cindy', 'managed-skills', 'cindy');
+      expect(input.controllerManagedSkills).toEqual({ claudePluginRoots: [pluginRoot] });
+      expect(fs.readFileSync(path.join(pluginRoot, 'skills', 'pr', 'SKILL.md'), 'utf8')).toBe('cindy:pr');
+      expect(JSON.parse(fs.readFileSync(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), 'utf8')).name).toBe('cindy');
+      expect(fs.existsSync(path.join(input.shadowDir, '.claude', 'skills', 'cindy-pr'))).toBe(false);
+      await handle.close({ reason: 'navigation' });
+    } finally { await host.dispose(); }
+  });
+
   it('sends the persisted image clear generation when opening a remote run', async () => {
     const host = createHost();
     const base = makeDeps(host);
@@ -1317,7 +1457,8 @@ describe('shared startup lease budget', () => {
     const prepare = deferred();
     const allocation = deferred();
     let allocations = 0;
-    const state = { device: 'executor-m' as unknown, duration: 2000 as unknown, delayCaps: 0, ready: false, blockClose: false, blockPrepare: false, blockAllocation: false };
+    const state = { device: 'executor-m' as unknown, duration: 2000 as unknown, delayCaps: 0, ready: false,
+      blockClose: false, blockPrepare: false, blockAllocation: false, ownerOffline: false, loseGrantOnOpen: false };
     const emit = (run: Run, value: unknown) => run.onData(Buffer.from(JSON.stringify(value) + '\n'), false);
     const started = (run: Run) => emit(run, { t: 'started', handle: { id: 'sdk-' + run.runId, model: 'm', shadowDir: '', methods: ['setModel'], state: {} } });
     vi.spyOn(RemoteAgentPoller.prototype, 'register').mockImplementation(run => {
@@ -1328,6 +1469,7 @@ describe('shared startup lease budget', () => {
     const remoteInvoke = vi.fn(async (device: string, _channel: string, args: unknown[]) => {
       const request = args[0] as { op: string; sessionId?: string; generation?: string; runId?: string; callId?: string; payload?: { json?: { sessionId: string } } };
       calls.push({ device, ...request });
+      if (device === owner && state.ownerOffline) throw Object.assign(new Error('owner offline'), { code: 'NOT_CONNECTED' });
       if (request.op === 'direct-locate') return { ok: true, result: { deviceId: 'executor-m', agentKind: 'codex' } };
       if (request.op === 'allocate') {
         const grant = ++allocations === 1 ? generation : '22222222-2222-4222-8222-222222222222';
@@ -1340,7 +1482,14 @@ describe('shared startup lease budget', () => {
         return { ok: true, result: { version: 1, maxRuns: 10, uploadChunkBytes: 65536, maxPayloadBytes: 1000000,
           virtualWorkspace: true, directGuestExecution: true, agents: [{ kind: 'codex', available: true }] } };
       }
-      if (request.op === 'open') sessions.set(request.runId!, request.payload!.json!.sessionId);
+      if (request.op === 'open') {
+        if (state.loseGrantOnOpen) {
+          state.loseGrantOnOpen = false;
+          return { ok: false, error: { code: 'IPC_ERROR',
+            message: '[REMOTE_AGENT_INVALID] this shared task is not authorized on this computer' } };
+        }
+        sessions.set(request.runId!, request.payload!.json!.sessionId);
+      }
       if (request.op === 'close') {
         if (state.blockClose) await pendingClose.promise;
         const run = runs.get(request.runId!);
@@ -1372,12 +1521,234 @@ describe('shared startup lease budget', () => {
         options: { sessionId, workingDir: project, model, ...(resumeSessionId ? { resumeSessionId } : {}) } }) };
   }
   beforeEach(() => {
+    for (const id of ['pending', 'history', 'legacy', 'historical', 'sibling', 'history-renew', 'history-transient',
+      'history-renew-model', 'history-send-old', 'history-lost']) {
+      forgetSharedTaskAuthorization('share:startup-budget', id);
+    }
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
   });
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); historyInvoke.mockReset(); historyOpenLink.mockReset(); });
 
   // Unit, F6: terminal cancellation must cross the create -> starter composition boundary.
   // Real starter + startRemote + runClient; native and transport IO use the existing fixture.
+  it('reopens native history on its original M during an O outage without renewing the original grant', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 10 * 60_000;
+    const first = await f.open('historical');
+    await first.close({ reason: 'navigation' });
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    f.state.ownerOffline = true;
+    const before = f.calls.length;
+    const resumed = await f.open('historical', f.owner, 'm', 'native-only-on-m');
+    expect(f.calls.slice(before).some(call => call.device === f.owner)).toBe(false);
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    expect(f.calls.filter(call => call.op === 'open').map(call => call.device)).toEqual([f.target, f.target]);
+    await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+    expect(liveSharedTaskTarget('historical', f.owner)).toBeNull();
+    expect(f.disposed).toEqual(['historical', 'historical']);
+    await resumed.close();
+  });
+
+  it('does not renew a reused historical grant after its original renewal window', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
+    const first = await f.open('history-renew'); await first.close({ reason: 'navigation' });
+    await vi.advanceTimersByTimeAsync(25 * 60_000);
+    const resumed = await f.open('history-renew', f.owner, 'm', 'native-only-on-m');
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    await resumed.close();
+  });
+
+  it('keeps a historical grant through a transient M probe failure', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
+    const first = await f.open('history-transient'); await first.close({ reason: 'navigation' });
+    historyInvoke.mockRejectedValueOnce(Object.assign(new Error('offline'), { code: 'DEVICE_OFFLINE' }));
+    await expect(f.open('history-transient', f.owner, 'm', 'native-only-on-m')).rejects.toThrow('offline');
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    f.state.ownerOffline = true;
+    const resumed = await f.open('history-transient', f.owner, 'm', 'native-only-on-m');
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    await resumed.close();
+  });
+
+  // Unit: a real restarted M rejects the scoped link before it can answer caps.
+  // The old fixture only lost the task grant after caps had already succeeded.
+  it.each(['INVOKE_TIMEOUT', 'TIMEOUT', 'DEVICE_UNRESPONSIVE'])(
+    'reauthorizes the original historical executor after a %s caps failure without extending retention', async code => {
+      const f = fixture(); f.state.ready = true; f.state.duration = 10 * 60_000;
+      const first = await f.open('historical'); await first.close({ reason: 'navigation' });
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
+      f.state.duration = 30 * 60_000;
+      historyInvoke.mockRejectedValueOnce(Object.assign(new Error('no link-accept within 30000ms'), { code }));
+      // The failed caps RPC already started recovery before O installed the
+      // new grant. The first explicit open joins that pre-grant flight.
+      const opensBefore = historyOpenLink.mock.calls.length;
+      historyOpenLink.mockRejectedValueOnce(Object.assign(new Error('pre-grant handshake timed out'), { code: 'TIMEOUT' }));
+      const resumed = await f.open('historical', f.owner, 'm', 'native-only-on-m');
+      expect(historyOpenLink.mock.calls.length - opensBefore).toBe(2);
+      expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
+      expect(f.calls.filter(call => call.op === 'allocate').at(-1)).toMatchObject({
+        device: f.owner, preferredExecutorDeviceId: 'executor-m', sessionId: 'historical', model: 'm',
+      });
+      expect(f.calls.filter(call => call.op === 'open').map(call => call.device)).toEqual([f.target, f.target]);
+      expect(f.calls.filter(call => call.op === 'open').at(-1)).toMatchObject({
+        payload: { json: { options: { resumeSessionId: 'native-only-on-m' } } },
+      });
+      await vi.advanceTimersByTimeAsync(8 * 60_000 + 1);
+      expect(liveSharedTaskTarget('historical', f.owner)).toBeNull();
+      expect(f.disposed).toEqual(['historical', 'historical']);
+      await resumed.close();
+    },
+  );
+
+  it.each(['ACCESS_REVOKED', 'REMOTE_DISABLED'])('does not reauthorize historical caps denial %s', async code => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 10 * 60_000;
+    const first = await f.open('historical'); await first.close({ reason: 'navigation' });
+    historyInvoke.mockRejectedValueOnce(Object.assign(new Error('explicit permission denial'), { code }));
+    await expect(f.open('historical', f.owner, 'm', 'native-only-on-m')).rejects.toThrow('explicit permission denial');
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    expect(f.calls.filter(call => call.op === 'open')).toHaveLength(1);
+  });
+
+  it('re-arms renewal after an online model change on a reused history route', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
+    const first = await f.open('history-renew-model'); await first.close({ reason: 'navigation' });
+    await vi.advanceTimersByTimeAsync(25 * 60_000);
+    const resumed = await f.open('history-renew-model', f.owner, 'm', 'native-only-on-m');
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    await resumed.setModel!('m2');
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(20 * 60_000);
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(3);
+    await resumed.close();
+  });
+
+  it('does not extend a reused history grant through a send at its old boundary', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
+    const first = await f.open('history-send-old'); await first.close({ reason: 'navigation' });
+    await vi.advanceTimersByTimeAsync(28 * 60_000);
+    const resumed = await f.open('history-send-old', f.owner, 'm', 'native-only-on-m');
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await resumed.send({ type: 'user', content: 'must not renew' });
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(60_000 + 1);
+    expect(liveSharedTaskTarget('history-send-old', f.owner)).toBeNull();
+    await resumed.close();
+  });
+
+  // Unit: caps can succeed through another task's grant while this history's
+  // task-scoped open is denied. Both restart paths must keep the original window.
+  it('does not re-arm renewal when O restores a reused historical grant to the original executor', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
+    const first = await f.open('history-lost'); await first.close({ reason: 'navigation' });
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    f.state.loseGrantOnOpen = true;
+    const resumed = await f.open('history-lost', f.owner, 'm', 'native-only-on-m');
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(20 * 60_000);
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(8 * 60_000 + 1);
+    expect(liveSharedTaskTarget('history-lost', f.owner)).toBeNull();
+    await resumed.close();
+  });
+
+  // Unit: a second M restart after a history handle is live must not turn
+  // recovery into renewal; exercise the real released -> ensure -> open path.
+  it('keeps the original history window when its live handle reconnects after another M restart', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
+    const first = await f.open('historical'); await first.close({ reason: 'navigation' });
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    const resumed = await f.open('historical', f.owner, 'm', 'native-only-on-m');
+    const liveRun = [...f.runs.values()].at(-1)!;
+    f.emit(liveRun, { t: 'closed', reason: 'provider-restarting' });
+    f.state.loseGrantOnOpen = true;
+    await resumed.send({ type: 'user', content: 'resume on the original executor' });
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
+    const disposedBeforeExpiry = f.disposed.length;
+    await vi.advanceTimersByTimeAsync(28 * 60_000 + 1);
+    expect(f.disposed).toHaveLength(disposedBeforeExpiry + 1);
+    expect(liveSharedTaskTarget('historical', f.owner)).toBeNull();
+    await resumed.close();
+  });
+
+  it('ends an already running direct task on a known pause and requires fresh authorization after resume', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
+    const handle = await f.open('historical');
+    guestPermission.status = 'paused'; guestPermission.epoch++;
+    for (const listener of guestPermission.listeners) listener();
+    await flush();
+    expect(liveSharedTaskTarget('historical', f.owner)).toBeNull();
+    expect(f.disposed).toEqual(['historical']);
+    guestPermission.status = 'active'; guestPermission.epoch++; f.state.ownerOffline = true;
+    await expect(f.open('historical', f.owner, 'm', 'native-original')).rejects.toThrow('owner offline');
+    expect(f.calls.filter(call => call.op === 'open')).toHaveLength(1);
+    await handle.close();
+  });
+
+  it.each(['send', 'setModel'] as const)('ends the original grant on wall-clock expiry before %s even if the monotonic clock did not advance', async action => {
+    const f = fixture(); f.state.ready = true;
+    const handle = await f.open('historical');
+    vi.setSystemTime(Date.now() + 2001);
+    await expect(action === 'send' ? handle.send({ type: 'user', content: 'must not run' })
+      : handle.setModel!('other-model')).rejects.toThrow('REMOTE_AGENT_EXPIRED');
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    expect(liveSharedTaskTarget('historical', f.owner)).toBeNull();
+    await handle.close();
+  });
+
+  it('re-authorizes only the original executor when its cached task grant was lost in an M restart', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 60_000;
+    const first = await f.open('historical'); await first.close({ reason: 'navigation' });
+    await vi.advanceTimersByTimeAsync(20_000);
+    f.state.duration = 30 * 60_000;
+    f.state.loseGrantOnOpen = true;
+    const resumed = await f.open('historical', f.owner, 'm', 'native-only-on-m');
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
+    expect(f.calls.filter(call => call.op === 'direct-locate')).toHaveLength(0);
+    expect(f.calls.filter(call => call.op === 'open').map(call => call.device)).toEqual([f.target, f.target, f.target]);
+    expect(liveSharedTaskTarget('historical', f.owner)).toBe(f.target);
+    const disposedBeforeExpiry = f.disposed.length;
+    await vi.advanceTimersByTimeAsync(40_000 + 1);
+    expect(liveSharedTaskTarget('historical', f.owner)).toBeNull();
+    expect(f.disposed).toHaveLength(disposedBeforeExpiry + 1);
+    await resumed.close();
+  });
+
+  it('cannot return a cached grant after it was explicitly released while the live M probe was in flight', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 60_000;
+    const first = await f.open('historical'); await first.close({ reason: 'navigation' });
+    const gate = deferred(), invoke = historyInvoke.getMockImplementation()!;
+    historyInvoke.mockImplementationOnce(async (...args: unknown[]) => { await gate.promise; return invoke(...args); });
+    const pending = authorizeSharedTaskHistory(f.owner, 'historical', 'codex', 'm'); void pending.catch(() => undefined);
+    await flush(); forgetSharedTaskAuthorization(f.owner, 'historical'); gate.resolve();
+    await expect(pending).rejects.toThrow('original shared executor authorization');
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+  });
+
+  it('does not reopen historical M after its retained window is released during O reauthorization', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 10 * 60_000;
+    const first = await f.open('historical'); await first.close({ reason: 'navigation' });
+    f.state.loseGrantOnOpen = true; f.state.blockAllocation = true;
+    const pending = f.open('historical', f.owner, 'm', 'native-only-on-m'); void pending.catch(() => undefined);
+    try {
+      await vi.waitFor(() => expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2));
+      forgetSharedTaskAuthorization(f.owner, 'historical');
+    } finally { f.allocation.resolve(); }
+    await expect(pending).rejects.toThrow('original shared executor authorization');
+    expect(f.calls.filter(call => call.op === 'open')).toHaveLength(2);
+  });
+
+  it.each(['model', 'task', 'explicit-link-close', 'wall-expiry'] as const)('never reuses a historical grant across %s during O outage', async boundary => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
+    const first = await f.open('historical'); await first.close({ reason: 'navigation' });
+    f.state.ownerOffline = true;
+    if (boundary === 'explicit-link-close') historyCloseEpoch.mockReturnValue(1);
+    if (boundary === 'wall-expiry') vi.setSystemTime(Date.now() + 30 * 60_000);
+    const before = f.calls.filter(call => call.op === 'open').length;
+    await expect(f.open(boundary === 'task' ? 'unrelated' : 'historical', f.owner,
+      boundary === 'model' ? 'other-model' : 'm', 'native-only-on-m')).rejects.toThrow('owner offline');
+    expect(f.calls.filter(call => call.op === 'open')).toHaveLength(before);
+  });
+
   it.each(['allocate', 'MCP', 'started', 'ordinary'] as const)('cancels the exact creation during %s without late fallback/open', async stage => {
     const f = fixture(), owner = {};
     f.state.blockAllocation = stage === 'allocate';
@@ -1648,6 +2019,179 @@ describe('shared startup lease budget', () => {
     expect(f.disposed).toEqual(['ordinary']);
     await next.close();
     expect(f.disposed).toEqual(['ordinary', 'ordinary']);
+  });
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：createDeviceAgentStarter → 真实 createRemoteAgentHost/runHost；M 重启丢许可后同一任务经 O 重授权并在原 M 恢复。
+ * - Bug／规则依据：provider-sharing-direct-execution「M 重启丢失许可时，必须经 O 为同一 M 重新授权」。
+ * - 现有覆盖缺口：旧 roundtrip 把 caps 失败当成丢许可，真实 caps 不读任务 grant。
+ * - 最小失败输入／tier：M 持原 grant 打开一次 → 清空 M 内存 grant 并重启 host → 同任务 resume；unit（真实 host.handle）。
+ */
+describe('shared direct task lost-grant recovery', () => {
+  const OWNER = 'group-owner-mac';
+  const SHARE_ID = 'share-lost-grant';
+  const OWNER_ROUTE = `share:${SHARE_ID}`;
+  const MEMBER_ID = 'member-lost-grant';
+  const GUEST_DEVICE = 'guest-lost-grant';
+  const SESSION = 'lost-grant-task';
+  const NATIVE_ID = 'native-lost-grant';
+  const TARGET = providerShareHostPeer(SHARE_ID, 'executor-m');
+  const generation = (n: number) => `11111111-1111-4111-8111-${String(n).padStart(12, '0')}`;
+
+  function directHost(granted: Set<string>) {
+    const started: HostedStartInput[] = [];
+    const host = createRemoteAgentHost({
+      readLimits: () => DEFAULT_REMOTE_AGENT_LIMITS,
+      isAgentAvailable: () => true,
+      startHosted: async (input) => {
+        started.push(input);
+        const events = queue();
+        return {
+          id: NATIVE_ID,
+          agentKind: input.kind,
+          model: input.options.model,
+          async send() {},
+          async steer() {},
+          async setModel() {},
+          async abort() {},
+          async close() { events.end(); },
+          events: () => events,
+          getUsageSnapshot: () => ({ tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 }),
+          setInteractionResolver() {},
+          isTurnRunning: () => false,
+        } satisfies AgentSessionHandle;
+      },
+      isControllerAuthorized: (controller) => controller === OWNER || isProviderSharePeer(controller),
+      controllerTrust: (controller) => isProviderSharePeer(controller) ? 'guest' : 'owner',
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: path.join(root, 'lost-grant-m'),
+      providerAccess: {
+        resolve: async () => 'shared-provider',
+        isAllowed: () => true,
+      },
+      bindGuestProviderRoute: async () => ({ routeToken: 'route', modelIds: ['m'], release() {} }),
+      directGuestExecution: {
+        ownerScope: () => 'account',
+        locate: async () => null,
+        allocate: async () => null,
+        status: () => undefined,
+        release: async () => undefined,
+        switch: async () => ({}),
+        usage: () => undefined,
+        sessionAllowed: (_controller, sessionId) => granted.has(sessionId),
+        sessionDelegated: (_controller, sessionId) => granted.has(sessionId),
+        delegate: async (_owner, request) => {
+          if (request.action == 'grant') granted.add(request.sessionId);
+          else granted.delete(request.sessionId);
+          return true;
+        },
+        forget: () => true,
+      },
+    });
+    return { host, started };
+  }
+
+  function harness() {
+    let ownerOffline = false;
+    let allocationCount = 0;
+    let locateCount = 0;
+    let openCount = 0;
+    let host = directHost(new Set([SESSION]));
+    const remoteInvoke = vi.fn(async (device: string, _channel: string, args: unknown[]) => {
+      const request = JSON.parse(JSON.stringify(args[0])) as {
+        op?: string; sessionId?: string; model?: string;
+      };
+      if (device === OWNER_ROUTE) {
+        if (ownerOffline) throw Object.assign(new Error('owner offline'), { code: 'NOT_CONNECTED' });
+        if (request.op === 'direct-locate') {
+          locateCount += 1;
+          return { ok: true, result: { deviceId: 'executor-m', agentKind: 'codex' } };
+        }
+        if (request.op === 'allocate') {
+          allocationCount += 1;
+          const next = generation(allocationCount);
+          try {
+            await host.host.handle(OWNER, { op: 'delegate', action: 'grant', shareId: SHARE_ID,
+              memberId: MEMBER_ID, guestDeviceId: GUEST_DEVICE, sessionId: request.sessionId,
+              providerId: 'shared-provider', model: request.model, generation: next, cleanupEpoch: 1 });
+          } catch (error) {
+            return { ok: false, error: { code: 'IPC_ERROR', message: error instanceof Error ? error.message : String(error) } };
+          }
+          return { ok: true, result: { deviceId: 'executor-m', generation: next, leaseDurationMs: 30 * 60_000 } };
+        }
+        return { ok: true, result: {} };
+      }
+      if (device === TARGET) {
+        if (request.op === 'open') openCount += 1;
+        try {
+          const result = await host.host.handle(device, request);
+          return { ok: true, result: result === undefined ? null : JSON.parse(JSON.stringify(result)) };
+        } catch (error) {
+          return { ok: false, error: { code: 'IPC_ERROR', message: error instanceof Error ? error.message : String(error) } };
+        }
+      }
+      throw new Error(`unexpected device ${device}`);
+    });
+    historyInvoke.mockImplementation(remoteInvoke);
+    historyOpenLink.mockResolvedValue(undefined);
+    historyCrossRegion.mockReturnValue(false);
+    historyCloseEpoch.mockReturnValue(0);
+    const start = createDeviceAgentStarter({
+      remoteInvoke,
+      renewSharedProviderLink: async () => undefined,
+      rgPath: () => RG,
+      codexPath: () => 'fixture-never-spawned',
+      mcpProviders: () => [],
+      prepareMcpBridge: async () => ({ mcpBridge: { servers: [] }, disposeSessionCtx: () => undefined } as never),
+      makerMemory: () => undefined,
+      captureKnownFileBefore: async () => undefined,
+      noteOpaqueTurnChange() {},
+      logger: historyLogger,
+    });
+    const open = (resumeSessionId?: string) => start({ agentKind: 'codex', deviceId: OWNER_ROUTE,
+      options: { sessionId: SESSION, workingDir: project, model: 'm',
+        ...(resumeSessionId ? { resumeSessionId } : {}) } });
+    return { start, open, remoteInvoke,
+      get host() { return host; },
+      restart() { host = directHost(new Set()); },
+      set ownerOffline(value: boolean) { ownerOffline = value; },
+      get counts() { return { allocations: allocationCount, locates: locateCount, opens: openCount }; },
+    };
+  }
+
+  beforeEach(() => forgetSharedTaskAuthorization(OWNER_ROUTE, SESSION));
+  afterEach(() => forgetSharedTaskAuthorization(OWNER_ROUTE, SESSION));
+
+  it('reauthorizes only the original M when caps succeeds but the task grant was lost', async () => {
+    const f = harness();
+    const first = await f.open();
+    expect(f.counts).toMatchObject({ allocations: 1, locates: 0, opens: 1 });
+    await first.close({ reason: 'navigation' });
+    await f.host.host.dispose();
+    f.restart();
+    const resumed = await f.open(NATIVE_ID);
+    expect(f.counts).toMatchObject({ allocations: 2, locates: 0, opens: 3 });
+    expect(f.host.started).toHaveLength(1);
+    expect(f.host.started[0].options.resumeSessionId).toBe(NATIVE_ID);
+    await resumed.close({ reason: 'navigation' });
+  });
+
+  it('keeps the original M affinity when O is unreachable during lost-grant recovery', async () => {
+    const f = harness();
+    const first = await f.open();
+    await first.close({ reason: 'navigation' });
+    await f.host.host.dispose();
+    f.restart();
+    f.ownerOffline = true;
+    await expect(f.open(NATIVE_ID)).rejects.toThrow(/NOT_CONNECTED|owner offline/);
+    expect(f.counts).toMatchObject({ allocations: 1, locates: 0 });
+    f.ownerOffline = false;
+    const resumed = await f.open(NATIVE_ID);
+    expect(f.counts).toMatchObject({ allocations: 2, locates: 0 });
+    await resumed.close({ reason: 'navigation' });
   });
 });
 

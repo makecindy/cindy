@@ -138,6 +138,7 @@ export const myPluginSummary = z.object({
   description: z.string().nullable(),
   icon,
   market: z.object({
+    reason: z.string().nullable().optional(),
     pluginStatus: z.enum(['active', 'disabled', 'archived']),
     currentRelease: z
       .object({
@@ -158,6 +159,7 @@ export const myPluginSummary = z.object({
   actions: z.object({ canSubmit: z.boolean(), canViewMarket: z.boolean() }),
 });
 export const authorHistoryEvent = z.object({
+  pluginStatus: z.literal('archived').optional(),
   eventId: id,
   type: z.enum([
     'submitted',
@@ -178,6 +180,8 @@ export const authorHistoryEvent = z.object({
   reason: z.string().nullable(),
 });
 const envelope = z.object({ subject: contributionSubject, queriedAt: date });
+export const contributionChanges = envelope.extend({ changedAt: date.nullable(), eventCount: z.number().int().nonnegative() });
+export type ContributionChanges = z.infer<typeof contributionChanges>;
 export const contributionPreflight = envelope.extend({
   policyVersion: z.literal(2),
   target: z.object({

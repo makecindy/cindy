@@ -348,6 +348,7 @@ export function layoutConversationShareRichBody(
             top,
             available,
           ),
+        message.images,
       );
       textBlocks.push(...layout.textBlocks);
       rectangles.push(...layout.rectangles);

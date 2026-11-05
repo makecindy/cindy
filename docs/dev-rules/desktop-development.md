@@ -180,6 +180,37 @@ checkout 的启动器顶掉）。因此并行多开的标准姿势是：**每个
 Agent 自身仍只走 restart 命令，不直接调 human-only 的 `dev:desktop*`。共享同一 userData
 多开时，非 primary 实例用 `--passive` 让出定时任务调度（见上）。
 
+### 开发深链与系统关联
+
+未打包的 Desktop（`app.isPackaged === false`）不注册 `cindy://` 或历史
+`xdt-maker://` 的 OS 默认处理程序，也不改写 Windows 协议显示名。这与区域、
+`--isolated`、`--shared`、`--passive` 以及 `process.defaultApp` 是否存在无关。
+隔离 userData 不能隔离系统 URL 关联；临时 checkout 退出或删除后，系统关联仍会保留。
+
+macOS 的 `setAsDefaultProtocolClient` 不保存 `path` / `args`（这两个参数仅适用于
+Windows）。把默认处理程序设为 stock `Electron.app` 后，冷启动它没有项目入口，可能
+只显示 Electron 欢迎页。Windows 虽能保存入口命令，也不能让临时 checkout 接管正式链接。
+不在退出时调用 `removeAsDefaultProtocolClient` 来“恢复”：该 API 只移除当前默认处理程序，
+不承诺还原之前的应用，异常退出也不会执行清理。参见
+[Electron 协议注册 API](https://www.electronjs.org/docs/latest/api/app#appsetasdefaultprotocolclientprotocol-path-args)。
+
+开发验证分两层：
+
+- URL / argv 解析、登录前 pending 和导航分发继续使用既有入口；本次只跳过 OS 注册，
+  `open-url`、`second-instance` 和冷启动 argv 接收不变。用现有深链定向测试验证这些行为。
+- 浏览器点击、冷启动和运行中唤起须用 packaged macOS / Windows 验证。运行 dev 时直接
+  点击系统链接仍交给原有安装版，不能把它当作当前 checkout 的验收。
+
+已被旧开发版覆盖关联时，先正常关闭那份旧 dev。保存正式版中的工作后，从安装位置
+（macOS 通常为 `/Applications/Cindy.app`，按实际区域/版本选择）正常退出并重新启动
+对应的打包版，再重试链接；打包版启动会重新注册其协议。仅切换到已经运行的窗口不会
+重新执行注册。Windows 若仍未恢复，在系统“默认应用”中检查这两个协议的目标应用。
+不要批量注销所有 Electron 应用、删除用户 profile 或重置整个 LaunchServices 数据库。
+
+实现与回归见 [deepLink.ts](../../apps/desktop/src/main/deepLink.ts) 和
+[deepLink.test.ts](../../apps/desktop/src/main/__tests__/deepLink.test.ts)。该修复防止新的
+开发实例覆盖关联，不会扫描或自动修复旧 checkout 留下的系统记录。
+
 ### 使用统计（TapDB）在 dev 下不上报
 
 dev 构建**默认不初始化 TapDB**，与用户是否同意《隐私政策》、统计开关是否打开无关。闸在
@@ -256,6 +287,23 @@ pnpm ui:check:selftest
 - 场景数据、宿主模拟、多语言和对比模式的写法见
   [单页验证说明](../../apps/desktop/scripts/ui-page/README.md)。
 
+### 局部 UI 的默认迭代流程
+
+局部样式、排版与交互问题优先沿用上述组件窗口完成复现、修复和人工试用：
+
+- 复用已有 fixture；缺少覆盖时直接挂载真实生产组件，沿用共享样式、字体、主题和翻译，
+  不复制 JSX／CSS 做一份外观相似的页面。模拟只补与本次验证无关的宿主依赖；被替换模块
+  写入 `stubs`，未覆盖行为写入 `notCovered`。
+- 修 bug 先留下失败场景，再用相同输入验证修复。尺寸、换行或抖动问题测实际浏览器布局；
+  涉及过渡动画时采样中间帧，不能只比较 CSS 字符串或动画结束后的截图。
+- 覆盖 Light／Dark 和受影响的鼠标、键盘状态；排版改动补相关语言与长文案，修改共享组件
+  或字体时检查相邻消费者。执行适用的 `--changed` 检查并目检 overview，明确报告失败和缺口。
+- 给用户试用时打开 `ui:preview`，说明所用分支和场景；等待用户验收期间保留窗口，不因
+  助手回复结束就关闭。验收结束后只收尾本轮拥有的预览进程。
+- 组件窗口不加载完整客户端及其用户数据，不需要抢占或重启已有完整客户端验收实例。
+  涉及真实宿主、登录、发送、持久化、跨设备或原生窗口行为时，按下表升级验证；构建失败
+  或 fixture 通过都不能作为这些行为已经验证的证据。
+
 ### 按改动选择验证方式
 
 | 改动 | 先做 | 何时升级 |
@@ -293,9 +341,13 @@ Linux 主窗口创建时注册 Electron Tray，提供显示主窗口、打开日
 实现见 `main/linuxTrayLifecycle.ts` 与 `bootstrap-electron.ts`，回归见
 `main/__tests__/linuxTrayLifecycle.test.ts`。
 
-图标创建成功不代表桌面面板一定显示它，因此关闭主窗口仍保留 Linux 原有的
-「最小化／退出」选择，不自动隐藏到托盘，也不迁移用户已有偏好。无托盘宿主或初始化失败
-不阻止主窗口使用。托盘实际显示、激活、菜单与退出须在 Linux 桌面验证；macOS 上的
+关闭主窗口仍保留 Linux 原有的「最小化／退出」选择，不迁移用户已有偏好。
+Hyprland（包括 Omarchy）没有原生最小化能力，因此主窗口的「最小化」及关闭时的
+「最小化」选择统一隐藏到 Linux 托盘；其他桌面与副窗口仍使用原生最小化。
+策略与回归见 `main/mainWindowCloseBehavior.ts`、`main/__tests__/mainWindowCloseBehavior.test.ts`。
+托盘初始化失败时提示并保留窗口。图标创建成功不代表桌面面板一定显示它；自定义 Hyprland
+配置未启用托盘宿主时，可再次打开同一安装、同一配置的 Cindy，经已有 single-instance
+入口恢复窗口。托盘实际显示、激活、菜单与退出须在 Linux 桌面验证；macOS 上的
 单测不能替代 Omarchy/Hyprland、GNOME 或 KDE 的实机验收。
 
 ## Windows 窗口恢复实验
@@ -331,3 +383,15 @@ pnpm --filter desktop exec vitest run scripts/installer-directory-messages.test.
 还需在普通权限 Windows 环境走查：默认目录、自定义受保护目录、允许／取消授权、使用
 另一管理员账号、旧版覆盖安装，以及静默安装失败时旧版仍在。原生对话框的 Light／Dark
 外观由 Windows 提供，自动测试不代表两种模式已完成目检。
+
+远程桌面 helper 的 CRT 链接验收另运行：
+
+```bash
+node apps/desktop/scripts/check-windows-remote-desktop-runtime.mjs
+```
+
+这是显式 Windows x64 原生集成验收：编译两个 EXE 与 `.node`，检查 PE 依赖，对照
+动态／静态链接在临时目录中遇到不可用 VC++ DLL 时的结果，并以随机测试产品身份实跑
+生产 NSIS 钩子的当前用户安装、覆盖安装和卸载。它不改系统 DLL、不安装服务、不操作
+正式 Cindy 的安装。该故障注入不能代替干净 Windows 虚拟机、「所有用户」安装或已注册
+远程桌面服务的真实验收；编译与安装器子进程不进入默认单测。

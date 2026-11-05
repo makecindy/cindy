@@ -129,9 +129,12 @@ export class InvokeScheduler {
     this.drain(deviceId, state);
   }
 
-  clear(error: DeviceLinkError): void {
+  clear(error: DeviceLinkError, keep?: (peerId: string) => boolean): void {
     for (const [deviceId, state] of this.peers) {
-      for (const job of state.jobs.splice(0)) job.cancel(error);
+      for (const job of state.jobs.splice(0)) {
+        if (keep?.(job.peerId)) state.jobs.push(job);
+        else job.cancel(error);
+      }
       this.drain(deviceId, state);
     }
   }

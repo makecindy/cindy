@@ -395,15 +395,39 @@ export async function runPlan(plan, options, externalSignal) {
       }
     });
 
+    let usedElectronWindow = false;
+    const freshElectronPage = async (size) => {
+      if (usedElectronWindow) {
+        // A new target clears both Chromium emulation and Playwright's cached
+        // viewport/fullscreen state, even after a failed scenario. Reuse the same
+        // isolated process/session and the host's one secure window factory.
+        const ready = app.waitForEvent('window', { timeout: options.timeout });
+        await app.evaluate(({ app, BrowserWindow }, viewport) => {
+          const old = BrowserWindow.getAllWindows();
+          app.emit('ui-check:create-window', viewport);
+          for (const window of old) window.destroy();
+        }, size);
+        electronPage = await ready;
+        electronPage.on('requestfailed', (request) => {
+          if (new URL(request.url()).origin !== origin) current.blocked.push(request.url());
+        });
+      }
+      usedElectronWindow = true;
+      // Windows may clamp a newly created native window to the display work area.
+      // Size it after creation, as for the first window; the renderer assertion
+      // below remains exact, including tall screenshot fixtures.
+      await app.evaluate(({ BrowserWindow }, viewport) => {
+        BrowserWindow.getAllWindows()[0].setContentSize(viewport.width, viewport.height);
+      }, size);
+      return electronPage;
+    };
+
     // Resources go into `opened` as soon as they exist, so a variant that fails to start is
     // still screenshotted, its listeners removed and its context closed by the caller.
     const openVariant = async (variant, bundle, definition, opened = {}) => {
       let page, context;
       if (app) {
-        page = electronPage;
-        await app.evaluate(({ BrowserWindow }, size) => {
-          BrowserWindow.getAllWindows()[0].setContentSize(size.width, size.height);
-        }, variant.viewport);
+        page = await freshElectronPage(variant.viewport);
       } else {
         context = await browser.newContext({
           viewport: variant.viewport,
@@ -693,8 +717,8 @@ export async function runPlan(plan, options, externalSignal) {
           ]);
           if (!settled)
             summary.strandedScenarios = [...(summary.strandedScenarios ?? []), variant.id];
-          // Electron shares one window between variants: a scenario that keeps running would act
-          // on the next variant's page, so stop the run instead of recording polluted results.
+          // A stranded scenario still owns callbacks into shared runner/report state.
+          // Stop rather than allow it to contaminate the following variants.
           if (!settled && app && !interrupted) {
             const error = new Error(
               `${variant.id} was still running after its timeout; stopped the run so it cannot affect later variants`,
@@ -797,15 +821,12 @@ export async function runPlan(plan, options, externalSignal) {
         }
       }
       await measure('overviewMs', async () => {
+        if (app) await freshElectronPage({ width: 1600, height: 900 });
         const context = app
           ? electronPage.context()
           : await browser.newContext({ viewport: { width: 1600, height: 900 } });
         if (!app) await routePage(context);
         const page = app ? electronPage : await context.newPage();
-        if (app)
-          await app.evaluate(({ BrowserWindow }) =>
-            BrowserWindow.getAllWindows()[0].setContentSize(1600, 900),
-          );
         // A few rows per image keeps each overview readable when opened at screen size.
         summary.overviews = [];
         for (let start = 0; start < rows.length; start += OVERVIEW_ROWS) {

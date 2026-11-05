@@ -37,6 +37,7 @@ const loaderFor = (file) =>
           : 'ts';
 const CONTENT_TYPES = {
   '.js': 'text/javascript',
+  '.mjs': 'text/javascript',
   '.css': 'text/css',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
@@ -137,7 +138,34 @@ function boundaries(stubs, replaced, overlay) {
   };
 }
 
-const sourcePath = (file) => path.resolve(root, file.replace(/ with \{[^}]*\}$/, ''));
+const sourcePath = (file) =>
+  path.resolve(root, file.replace(/^ui-url:/, '').replace(/ with \{[^}]*\}$/, ''));
+
+// Vite ?url imports emit the original bytes as an asset, even for JavaScript
+// (PDF workers / AudioWorklets). Resolve through esbuild for package exports,
+// aliases and compare overlays, then use its file loader instead of parsing JS.
+function urlAssets(overlay) {
+  return {
+    name: 'ui-page-url-assets',
+    setup(build) {
+      build.onResolve({ filter: /\?url$/ }, async (args) => {
+        const resolved = await build.resolve(args.path.slice(0, -4), {
+          kind: args.kind,
+          importer: args.importer,
+          resolveDir: args.resolveDir,
+        });
+        return resolved.errors.length || resolved.external
+          ? resolved
+          : { path: resolved.path, namespace: 'ui-url', warnings: resolved.warnings };
+      });
+      build.onLoad({ filter: /.*/, namespace: 'ui-url' }, async (args) => ({
+        contents: overlay?.get(args.path) ?? await readFile(args.path),
+        loader: 'file',
+        watchFiles: [args.path],
+      }));
+    },
+  };
+}
 
 // Bundle Vite's ?worker imports as real module workers, including --compare
 // sources. Keep their inputs in the page fingerprint and affected-page scan.
@@ -150,7 +178,7 @@ function workerModules(definition, overlay, inputs, outputs) {
       }));
       build.onLoad({ filter: /.*/, namespace: 'ui-worker' }, async args => {
         const result = await esbuild.build({
-          ...common(definition, [boundaries(new Map(), {}, overlay)]),
+          ...common(definition, [boundaries(new Map(), {}, overlay)], overlay),
           entryPoints: [args.path], entryNames: 'worker-[hash]',
         });
         for (const file of Object.keys(result.metafile.inputs)) inputs.add(sourcePath(file));
@@ -172,7 +200,7 @@ function entryContents(definition) {
   };
 }
 
-const common = (definition, plugins) => ({
+const common = (definition, plugins, overlay) => ({
   absWorkingDir: root,
   bundle: true,
   write: false,
@@ -194,7 +222,7 @@ const common = (definition, plugins) => ({
     'process.env.NODE_ENV': '"production"',
   },
   logLevel: 'silent',
-  plugins,
+  plugins: [urlAssets(overlay), ...plugins],
 });
 
 const globalsPath = path.join(renderer, 'styles/globals.css');
@@ -261,7 +289,7 @@ export async function buildPage(definition, overlay) {
   const workerOutputs = [];
   const { contents, entry } = entryContents(definition);
   const result = await esbuild.build({
-    ...common(definition, [workerModules(definition, overlay, workerInputs, workerOutputs), boundaries(stubTable(definition), replaced, overlay)]),
+    ...common(definition, [workerModules(definition, overlay, workerInputs, workerOutputs), boundaries(stubTable(definition), replaced, overlay)], overlay),
     stdin: { contents, resolveDir: root, sourcefile: 'ui-page-entry.ts', loader: 'ts' },
     entryNames: 'page',
   });
@@ -284,7 +312,7 @@ export async function buildPage(definition, overlay) {
     { from: globalsPath },
   );
   const styles = await esbuild.build({
-    ...common(definition, overlay ? [boundaries(new Map(), {}, overlay)] : []),
+    ...common(definition, overlay ? [boundaries(new Map(), {}, overlay)] : [], overlay),
     stdin: { contents: globals.css, loader: 'css', resolveDir: path.dirname(globalsPath) },
     entryNames: 'styles',
   });

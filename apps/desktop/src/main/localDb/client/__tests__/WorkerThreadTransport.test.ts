@@ -193,6 +193,8 @@ describe('WorkerThreadTransport', () => {
           id TEXT PRIMARY KEY,
           title TEXT NOT NULL,
           working_dir TEXT,
+          project_dir TEXT,
+          agent_device_id TEXT,
           model TEXT NOT NULL,
           scheduled_model_baseline TEXT,
           provider_id TEXT,

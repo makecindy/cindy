@@ -25,6 +25,8 @@ export interface GhostPluginListItem {
   id: string;
   /** Logical plugin id from the manifest. */
   ghostId: string;
+  installationLabelKey?: 'localDevelopment' | 'publicInstall' | 'organizationInstall';
+  installationNamespace?: string;
   name: string;
   description: string;
   publisherKind?: PluginMarketItem['publisherKind'];
@@ -287,6 +289,13 @@ export function toGhostPluginListItem(
   return {
     id: installedGhostStoragePart(ghost),
     ghostId: manifest.id,
+    ...(ghost.namespaceState === 'confirmed' ? {
+      installationLabelKey: ghost.namespace === 'local' || ghost.publishingSource?.kind === 'local'
+        ? 'localDevelopment' as const : typeof ghost.namespace === 'string'
+          ? 'organizationInstall' as const : ghost.publishingSource?.kind === 'public-market'
+            ? 'publicInstall' as const : undefined,
+      installationNamespace: typeof ghost.namespace === 'string' ? ghost.namespace : undefined,
+    } : {}),
     name: display.name,
     description: display.description,
     publisherKind: presentation?.publisherKind,

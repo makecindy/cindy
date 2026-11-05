@@ -10,6 +10,8 @@ export interface ChildRunInput {
 export interface FireContext {
   runId: string;
   firedAt: number;
+  /** Continue the interrupted conversation, without replaying the initial prompt or precheck. */
+  resumeSessionId?: string;
   /** Host caller owns deferred retries; never schedule a cron replay for this attempt. */
   deferToCaller?: boolean;
   /** Internal caller validity, checked at the accepted -> vendor-dispatch boundary. Never persisted. */

@@ -527,6 +527,20 @@ export async function listErrorTailPendingSessionIds(): Promise<string[]> {
  * 运行中的会话在任何时刻都不会被它算进来。
  */
 
+// SQL counterpart of isEmptyModelChangeMarker: exclude only a known divider,
+// before COUNT/LIMIT. Invalid metadata and nonempty assistant output remain progress.
+function notEmptyModelChangeMarker() {
+  return sql`CASE
+    WHEN ${messages.role} = 'assistant' AND ${messages.content} IN ('', '""')
+      AND json_valid(${messages.agentMeta})
+    THEN CASE WHEN json_type(${messages.agentMeta}, '$.modelChange') = 'object'
+      AND json_type(${messages.agentMeta}, '$.modelChange.fromModel') = 'text'
+      AND json_type(${messages.agentMeta}, '$.modelChange.toModel') = 'text'
+      AND json_type(${messages.agentMeta}, '$.modelChange.modelOnly') = 'true'
+    THEN 0 ELSE 1 END
+    ELSE 1 END`;
+}
+
 /**
  * 错误重试续跑判定(agent-input-coordinator 的 hasAssistantProgressAfter dep):
  * 某条已派发 user 消息之后,agent 是否已产出内容(assistant / tool_use / thinking /
@@ -553,6 +567,7 @@ export async function hasAssistantProgressAfterMessage(
       and(
         eq(messages.sessionId, sessionId),
         inArray(messages.role, ['assistant', 'tool_use', 'thinking', 'ask_user', 'plan_review']),
+        notEmptyModelChangeMarker(),
         isNull(messages.rewindAt),
         sql`EXISTS (
           SELECT 1 FROM messages u
@@ -599,6 +614,7 @@ export async function getRecoveryContextSnapshot(
   const visibleProgress = and(
     eq(messages.sessionId, sessionId),
     inArray(messages.role, progressRoles),
+    notEmptyModelChangeMarker(),
     isNull(messages.rewindAt),
     afterUser,
   );

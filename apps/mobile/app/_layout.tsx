@@ -9,6 +9,7 @@ import { PeerFileTransport } from '@/device-link/peerFileTransport';
 import { startLocalDiagnostics } from '@/debug/localDiagnostics';
 import { MobileOutboxBridge } from '@/session/MobileOutboxBridge';
 import { RemoteHistoryPrefetchBridge } from '@/session/RemoteHistoryPrefetchBridge';
+import { UsageWidgetBridge } from '@/widgets/UsageWidgetBridge';
 import {
   DarkTheme as NavigationDarkTheme,
   DefaultTheme as NavigationLightTheme,
@@ -87,6 +88,7 @@ import { usePendingRelayJoinIntent } from '@/device-link/relayJoinIntent';
 import { removeLegacyClipboardInvitationHistory } from '@/device-link/legacyClipboardInvitationHistory';
 import { useHomeStartupSplashRelease } from '@/session/useHomeMode';
 import { RemoteDesktopHost } from '@/remote-desktop/RemoteDesktopHost';
+import { ChatInviteHost } from '@/chat/ChatInviteHost';
 
 const holdSplash = () => undefined;
 
@@ -198,7 +200,7 @@ function NavigationGate() {
             // react-native-screens 让滚动优先识别,不会被返回手势抢走。
           }}
         >
-          <Stack.Screen name="sessions/[sessionId]" getId={({ params }) => recentTaskKey(params ?? {})} options={{
+          <Stack.Screen name="sessions/[sessionId]" dangerouslySingular={(_name, params) => recentTaskKey(params)} options={{
             headerShown: sessionHeaderShown,
             headerTransparent: true,
             headerShadowVisible: false,
@@ -219,6 +221,8 @@ function NavigationGate() {
         </RecentMessageHistoriesProvider>
         </McpAppViewsProvider>
       </RemoteDesktopHost>
+      <ChatInviteHost ready={auth.initialized && auth.isAuthenticated
+        && segments[0] !== '(auth)' && segments[0] !== 'add-account'} />
     </NavigationThemeProvider>
   );
 }
@@ -390,6 +394,7 @@ function RootAfterUpdateChannel({ channel }: { channel: UpdateChannel }) {
         <PrecreatedWorktreeRecoveryBridge />
         <MobileOutboxBridge />
         <RemoteHistoryPrefetchBridge />
+        <UsageWidgetBridge />
         <NavigationGate />
       </DeviceLinkProvider>
     </AuthProvider>

@@ -105,8 +105,8 @@ export function resolveSessionTailBanner(input: ResolveSessionTailBannerInput): 
 
   const tail = findErrorTailMessage(input.messages);
   if (tail && !input.hiddenErrorClientIds.has(tail.clientId)) {
-    const nonRetryableGuidance = describeNonRetryableAgentError(tail.text);
-    const agentErrorGuidance = localizeAgentError(tail.reason, tail.toolLoop);
+    const nonRetryableGuidance = describeNonRetryableAgentError(tail.text, tail.reason);
+    const agentErrorGuidance = localizeAgentError(tail.reason, tail.toolLoop, tail.text);
     return {
       kind: 'error-tail',
       clientId: tail.clientId,

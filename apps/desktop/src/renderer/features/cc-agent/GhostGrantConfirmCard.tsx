@@ -88,7 +88,9 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
                     : pending.operation === 'write'
                       ? 'ghostGrant.confirm.descriptionOutsideWrite'
                       : 'ghostGrant.confirm.descriptionOutsideWorkdir'
-                  : 'ghostGrant.confirm.descriptionSaveDir';
+                  : pending.lane === 'handoff'
+                    ? 'ghostGrant.confirm.descriptionHandoff'
+                    : 'ghostGrant.confirm.descriptionSaveDir';
 
   return (
     <div

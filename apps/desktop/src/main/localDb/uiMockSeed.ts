@@ -99,6 +99,7 @@ export async function seedUiMockData({
         role: row.role,
         content: JSON.stringify(row.content),
         toolUseId: row.toolUseId,
+        ...(row.agentMeta ? { agentMeta: JSON.stringify(row.agentMeta) } : {}),
         createdAt: row.createdAt,
       })))
       .onConflictDoNothing();

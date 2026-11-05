@@ -91,6 +91,8 @@ vi.mock('@/session/BotGroupAvatars', () => ({
   useBotGroupIdentities: () => (botId: string, fallbackName = '') => ({ botId, name: fallbackName || botId }),
 }));
 vi.mock('@/session/useHostTeammates', () => ({ useHostTeammates: () => h.teammates }));
+// This suite exercises host-backed creation; cloud roster behavior is covered by BotGroupCreateSheet.test.tsx.
+vi.mock('@/session/useBotGroupSettingsManagement', () => ({ useCloudGroupCandidates: () => ({ rows: [], loading: false, failed: false }) }));
 vi.mock('@/session/useTeammateRoster', () => ({ TEAMMATE_COLLECTION_ID: 'teammates' }));
 
 import { BotGroupListRow } from '@/session/BotGroupList';

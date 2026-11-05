@@ -50,6 +50,20 @@ export interface ExternalChromeBackendOptions {
   ) => Pick<BrowserProxyAuthCoordinator, 'start' | 'dispose'>;
   /** Test seam for closing a process the vendored runtime did not launch. */
   closeAdoptedBrowser?: (cdpHttpUrl: string, expectedUserDataDir: string) => Promise<boolean>;
+  /**
+   * Terminates the browser that owns the CDP port at the OS level, when the
+   * runtime no longer owns a live PID for it.
+   *
+   * Injected by the host rather than defaulted here: the default path kills a
+   * process tree, and a test that exercised it against the real CDP port
+   * would terminate the browser the user is actually using. No implementation
+   * means no OS-level termination, so an unconfigured backend stays fail-closed.
+   */
+  terminateManagedPortOwner?: (params: {
+    cdpHttpUrl: string;
+    cdpPort: number;
+    userDataDir: string;
+  }) => Promise<boolean>;
   /** Non-destructive liveness probe; must not close the browser. */
   isBrowserGone?: (cdpHttpUrl: string, managedUserDataDir?: string) => Promise<boolean>;
   /**
@@ -537,12 +551,22 @@ export class ExternalChromeBackend implements BrowserBackend {
         expectedUserDataDir,
       );
       if (!closed) {
-        return {
-          ok: false,
-          action: 'start',
-          errorCode: 'BROWSER_RUNTIME_ACTION_FAILED',
-          message: 'cannot apply browser proxy route because the pre-existing managed browser could not be stopped',
-        };
+        // The adopted close proves ownership through a CDP handshake. When the
+        // browser outlived its launcher the handshake still works, but the
+        // browser can refuse to exit — and on Windows the launcher is gone, so
+        // the runtime has no PID to signal either. Fall back to an OS-level
+        // termination that re-proves profile and port before signalling, so a
+        // survivor from a previous run is reclaimed instead of blocking every
+        // later launch.
+        const terminated = await this.terminateManagedPortOwner();
+        if (!terminated) {
+          return {
+            ok: false,
+            action: 'start',
+            errorCode: 'BROWSER_RUNTIME_ACTION_FAILED',
+            message: 'cannot apply browser proxy route because the pre-existing managed browser could not be stopped',
+          };
+        }
       }
       await this.disposeAuth();
       this.route = undefined;
@@ -664,9 +688,19 @@ export class ExternalChromeBackend implements BrowserBackend {
     // alive) cannot be terminated by the vendored stop: its ownership state is
     // in-memory and empty, so `stop` reports ok with stopped:false forever.
     // Fall back to the same verified CDP close `start` uses, otherwise the
-    // backend is stuck until the user closes Chrome by hand.
-    if (!stoppedSafely && !this.route) {
+    // backend is stuck until the user closes Chrome by hand. The close is
+    // identity-checked (this profile AND this CDP port), so it only ever
+    // reaches the browser Cindy owns — which is exactly what a stop asked for.
+    if (!stoppedSafely) {
       stoppedSafely = await this.closeAdoptedBrowserIfManaged();
+    }
+    // The CDP close can still fail to take effect: on Windows the spawned
+    // `msedge.exe` is a short-lived launcher, so once it exits the runtime
+    // has no PID left to signal while the real browser keeps the port. Terminate
+    // the port owner at the OS level as the last resort, again only after
+    // re-proving profile and port.
+    if (!stoppedSafely) {
+      stoppedSafely = await this.terminateManagedPortOwner();
     }
     if (stoppedSafely) {
       await this.disposeAuth();
@@ -736,6 +770,36 @@ export class ExternalChromeBackend implements BrowserBackend {
       );
     } catch (err) {
       this.logger.warn('managed browser adopted close failed', redactBrowserProxyText(err));
+      return false;
+    }
+  }
+
+  /**
+   * Terminate the browser that owns the managed CDP port at the OS level.
+   *
+   * Only reached when the runtime lost ownership of the process — on Windows
+   * the spawned browser is a short-lived launcher that exits immediately,
+   * leaving the real browser holding the port with no PID the runtime can
+   * signal. Identity (profile AND debug port) is re-proved before signalling,
+   * so the user's own browser is never touched. Returns true when the port is
+   * free afterwards.
+   */
+  private async terminateManagedPortOwner(): Promise<boolean> {
+    const expectedUserDataDir = this.resolveManagedUserDataDir();
+    if (!expectedUserDataDir) return false;
+    const cdpHttpUrl = this.resolveCdpHttpUrl();
+    let cdpPort: number;
+    try {
+      cdpPort = Number(new URL(cdpHttpUrl).port || 80);
+    } catch {
+      return false;
+    }
+    const terminate = this.options.terminateManagedPortOwner;
+    if (!terminate) return false;
+    try {
+      return await terminate({ cdpHttpUrl, cdpPort, userDataDir: expectedUserDataDir });
+    } catch (err) {
+      this.logger.warn('managed browser termination failed', redactBrowserProxyText(err));
       return false;
     }
   }

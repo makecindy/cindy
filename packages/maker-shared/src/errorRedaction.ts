@@ -1,3 +1,16 @@
+export const REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON = 'remote-compact-encrypted-content';
+
+/**
+ * Raw failures require explicit ciphertext evidence. For persisted UI errors,
+ * the old overflow reason plus the exact bare wrapper recovers details that an
+ * older translator discarded. Concrete error details must keep their meaning.
+ */
+export function isRemoteCompactEncryptedContentError(message: string, reason?: unknown): boolean {
+  if (reason === REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON || /\bCINDY_ENCRYPTED_COMPACTION_INCOMPATIBLE\b/.test(message)) return true;
+  return (/remote compact/i.test(message) && /invalid_encrypted_content/i.test(message))
+    || (reason === 'context-overflow' && /^Error running remote compact task$/i.test(message.trim()));
+}
+
 /**
  * Remove credentials and credential-like values from user-visible or persisted
  * error text while keeping the surrounding diagnostic context.
@@ -72,6 +85,8 @@ export interface NonSecretErrorSignals {
 }
 
 const DETERMINISTIC_USAGE_EXHAUSTION_PATTERNS = [
+  // #8705: LiteLLM may retain only the structured error type in the message.
+  /\binsufficient_balance_error\b/i,
   /\binsufficient[-_ ]?quota\b/i,
   /\binsufficient.{0,12}\b(?:balance|credit|funds)\b/i,
   /\bquota\b.{0,24}\b(?:exhausted|exceeded)\b/i,

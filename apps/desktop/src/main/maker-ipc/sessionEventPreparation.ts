@@ -52,11 +52,6 @@ import {
 import type { UsageLimitAutoResume } from './usageLimitAutoResume.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 
-/** Group-lane output belongs in its group. A DM input is hidden, but its answer belongs to the owner. */
-function isBotPrivateInput(clientId: string): boolean {
-  return isBotGroupClientId(clientId);
-}
-
 interface DismissedInteraction {
   kind: InteractionRequest['kind'];
   resolve: (decision: InteractionDecision) => void;
@@ -90,7 +85,8 @@ export interface PrepareSessionEventDeps {
     decision: InteractionDecision | Record<string, unknown>,
   ) => void;
   readonly broadcastToAllWindows: (channel: string, payload: unknown) => void;
-  readonly broadcastCodexImageAsToolResult: (sessionId: string, event: AgentEvent) => Promise<void>;
+  /** Starts live delivery; resolves with the tool events it published (never rejects). */
+  readonly deliverCodexGeneratedImage: (sessionId: string, event: AgentEvent) => Promise<readonly AgentEvent[]>;
   readonly autoResumeBookkeeping: Pick<
     AutoResumeBookkeeping,
     'discardReplacementProvenByProviderEvent' | 'clearFailedTurnCompletionTail' | 'settleOutcome'
@@ -149,6 +145,9 @@ export function prepareSessionEvent(
   session: Session,
   event: AgentEvent,
 ) {
+  // Host projections (Session.holdEventStream follow-ups) were already persisted
+  // and published to renderers by the host that requested the hold.
+  if (event.hostProjection) return;
   // Exact patches are main-owned durable data. They have a dedicated summary push and
   // on-demand detail IPC; forwarding the raw diff through maker:event would duplicate a
   // potentially multi-megabyte payload to every renderer and device-link controller.
@@ -200,7 +199,12 @@ export function prepareSessionEvent(
     const inputId = deps.agentInputCoordinatorHolder?.getActiveInputClientId(session.id, event.sessionTurnGeneration);
     // Private-message visibility is still owned by the accepted input, even
     // though the notice is independent of the model's reply/usage state.
-    const privateReply = inputId ? isBotPrivateInput(inputId) : event.agentMeta?.botPrivateReply;
+    const inputProvenance = deps.agentInputCoordinatorHolder?.getAcceptedInputProvenance(session.id);
+    const replyInputId = inputId && inputProvenance?.clientId === inputId && inputProvenance.autoResume
+      ? inputProvenance.retrySourceClientId ?? inputId : inputId;
+    const privateReply = inputId
+      ? isBotGroupClientId(inputId) || (!!replyInputId?.startsWith('bot-dm:') && !event.runtimeRecovery)
+      : event.agentMeta?.botPrivateReply;
     if (typeof text === 'string') {
       onStandaloneTextEvent(session.id, text,
         typeof privateReply === 'boolean' ? { botPrivateReply: privateReply } : null);
@@ -234,8 +238,11 @@ export function prepareSessionEvent(
         ...event,
         agentMeta: {
           ...event.agentMeta,
-          // Coordination hides the incoming report, not the teammate's reply.
-          botPrivateReply: isBotPrivateInput(activeInputId),
+          // B2B is internal even when it carries a verified owner request: visibility
+          // must not change that request's authority. Errors/recovery still reach the owner.
+          // Task coordination retains its separate, visible reply contract.
+          botPrivateReply: isBotGroupClientId(activeInputId)
+            || (!!groupLaneInputClientId?.startsWith('bot-dm:') && event.type !== 'error' && !event.runtimeRecovery),
           // Retain provenance for the existing quiet completion notification policy.
           botTaskCoordination: taskCoordination && !event.runtimeRecovery,
           // The user input this turn answers; companion chats can show it above the reply
@@ -301,7 +308,12 @@ export function prepareSessionEvent(
     return;
   }
   if (event.type === 'image' && event.source === 'codex') {
-    if (!isQuietScheduledOutput(event)) void deps.broadcastCodexImageAsToolResult(session.id, event);
+    if (!isQuietScheduledOutput(event)) {
+      // Hold the stream until the stored result is published so IM / hook
+      // listeners receive it before this turn's done. A refused hold (not the
+      // loop's current event) leaves delivery running in the background as before.
+      session.holdEventStream(deps.deliverCodexGeneratedImage(session.id, event));
+    }
     return;
   }
   // turn 结束的 status event (isRunning=false + status='Done') 携带 endSnapshot。

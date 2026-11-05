@@ -617,7 +617,7 @@ describe("new subscription families cannot be skipped", () => {
     expect(Object.values(SUBSCRIPTION_USAGE_CHANNELS).sort()).toEqual(exposed.sort());
   });
 
-  it.each(["en", "ja", "ko", "zh-CN", "zh-TW"])(
+  it.each(["en", "ja", "ko", "zh-CN", "zh-TW", "es", "fr", "de", "pt-PT", "pt-BR"])(
     "labels every subscription source in %s",
     async (locale) => {
       const { default: strings } = await import(`../i18n/locales/${locale}/session.json`);

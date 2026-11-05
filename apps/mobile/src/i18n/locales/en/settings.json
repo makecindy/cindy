@@ -63,7 +63,35 @@
       "zh-TW": "繁體中文",
       "en": "English",
       "ja": "日本語",
-      "ko": "한국어"
+      "ko": "한국어",
+      "es": "Español",
+      "fr": "Français",
+      "de": "Deutsch",
+      "pt-PT": "Português (Portugal)",
+      "pt-BR": "Português (Brasil)",
+      "classical": "文言"
+    },
+    "classical": {
+      "label": "Script and style",
+      "hint": "AI replies in the chosen style. “Usual replies” keeps the Classical Chinese interface while replies follow your language.",
+      "scriptAriaLabel": "Classical Chinese script",
+      "styleAriaLabel": "AI reply style",
+      "script": {
+        "hans": "简体",
+        "hant": "繁體"
+      },
+      "styles": {
+        "prose": "Classical prose (default)",
+        "tang-poetry": "Tang poetry",
+        "song-ci": "Song ci",
+        "yuan-qu": "Yuan qu",
+        "chu-ci": "Chu ci",
+        "parallel-prose": "Parallel prose",
+        "pre-qin": "Pre-Qin masters",
+        "historian": "Grand Historian style",
+        "ming-qing-essay": "Ming–Qing essays",
+        "plain": "Usual replies"
+      }
     }
   },
   "version": {

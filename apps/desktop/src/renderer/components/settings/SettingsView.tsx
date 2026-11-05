@@ -58,8 +58,8 @@ import { NewChatDefaultPermissionSection } from './NewChatDefaultPermissionSecti
 import { AgentResourceSection } from './AgentResourceSection';
 import { PiPackagesSection } from './PiPackagesSection';
 import { CollaborationSection } from './CollaborationSection';
+import { SetupMigrationSection } from './SetupMigrationSection';
 import { BuiltinToolsSection } from './BuiltinToolsSection';
-import { ContactsSection } from './contacts/ContactsSection';
 import { ComputerUseSection } from './ComputerUseSection';
 import { useAuth } from '@/contexts/AuthContext';
 import { SettingsCatalogPanel } from './SettingsCatalogPanel';
@@ -360,6 +360,11 @@ export function SettingsView() {
                       <UserProfileCard />
                     </section>
 
+                    {/* Section — 新电脑设置：从同账号另一台电脑迁移，并保留一次性配置清单。 */}
+                    <section id="settings-setup-migration" className="py-[18px]" aria-label={t('setupMigration.settings.title')}>
+                      <SetupMigrationSection />
+                    </section>
+
                     {/* Section — Language (py 18) */}
                     <section id="settings-search-target-general-language" className="py-[18px]" aria-label={t('settings.sections.language')}>
                       <LanguageSection />
@@ -535,14 +540,6 @@ export function SettingsView() {
                 </section>
                 <section id="settings-search-target-personalization-vision-bridge" className="pb-[18px]" aria-label={t('settings.sections.visionBridge')}>
                   <VisionBridgeSection key={`vision-bridge:${mode}:${dataOwnerId ?? 'none'}`} />
-                </section>
-                {/* 通讯录是本机全局库(数据与开关都不依赖云端账号),local 模式同样可用 */}
-                <section
-                  id="settings-contacts"
-                  className="pb-[18px]"
-                  aria-label={t('settings.contacts.title')}
-                >
-                  <ContactsSection key={`contacts:${dataOwnerId ?? 'none'}`} />
                 </section>
                 {/* RSB 默认终端 shell —— 改默认只影响新建 tab,已有 tab 不动 */}
                 <section id="settings-search-target-personalization-terminal-shell" className="pb-[18px]" aria-label={t('settings.sections.terminalShell')}>

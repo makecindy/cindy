@@ -32,6 +32,23 @@ describe('shared session usage summaries', () => {
     });
   });
 
+  it('carries a rounded token count into the next unit instead of printing 1000k', () => {
+    const detail = (totalTokenUsage: number) => summarizeSessionSpend({ totalTokenUsage }).detail;
+    expect(detail(999_949)).toBe('999.9k tokens');
+    expect(detail(999_950)).toBe('1M tokens');
+    expect(detail(999_999)).toBe('1M tokens');
+    expect(detail(1_000_000)).toBe('1M tokens');
+    expect(detail(1_500_000)).toBe('1.5M tokens');
+    expect(detail(999_999_999)).toBe('1B tokens');
+    expect(detail(1_500_000_000)).toBe('1.5B tokens');
+  });
+
+  it('applies the same carry rule to the context window pair', () => {
+    expect(summarizeSessionSpend({ contextTokens: 999_950, contextWindow: 999_999 }).detail).toBe(
+      '上下文 1M / 1M · 100%',
+    );
+  });
+
   it('summarizes context usage payloads with graceful fallbacks', () => {
     expect(summarizeContextUsage(null)).toEqual({
       title: 'Context usage',
@@ -46,6 +63,21 @@ describe('shared session usage summaries', () => {
       title: 'Context usage',
       detail: '90,000 / 200,000 tokens · 45%',
     });
+  });
+
+  // Cross-device contract: a diagnostic text estimate must not alter native totals
+  // or masquerade as exact category usage, including payloads from newer hosts.
+  it('labels estimated sources independently and ignores unknown estimate methods', () => {
+    const base = { totalTokens: 100, maxTokens: 1000 };
+    const textEstimate = { method: 'text-heuristic', items: [{ source: 'tools', tokens: 300 }] };
+    const result = summarizeContextUsage({ ...base, textEstimate });
+    expect(result.detail).toBe('100 / 1,000 tokens · 10%');
+    expect(result.rows).toContainEqual({ label: 'Tool definitions', value: '≈ 300 tokens' });
+    expect(summarizeContextUsage({ ...base, textEstimate: { ...textEstimate, method: 'future' } }).rows).toEqual([]);
+    const translated = summarizeContextUsage({ ...base, textEstimate }, {
+      translate: (key, fallback) => key.endsWith('.tools') ? '工具定义' : fallback,
+    });
+    expect(translated.rows).toContainEqual({ label: '工具定义', value: '≈ 300 tokens' });
   });
 });
 

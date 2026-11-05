@@ -29,6 +29,9 @@ import {
   TELEGRAM_REPLY_QUOTE_DM,
   TELEGRAM_REPLY_QUOTE_GROUP,
   TURN_DELIVERY_STATES,
+  X_MEDIA_SEGMENT_MAX_BYTES,
+  X_MEDIA_STEPS,
+  type XMediaStep,
   TURN_END_STATUSES,
   type BindUpdatePayload,
   type HookMessage,
@@ -219,6 +222,8 @@ function validateDispatchOptions(v: unknown): string | null {
 
 /** 附件数组上限(粗防御, 精细限额在生产端)。 */
 const MAX_ATTACHMENTS = 16;
+const MAX_X_MEDIA_IDS = 4;
+const X_MEDIA_ID_RE = /^\d{1,19}$/;
 
 /** 附件数组校验(入站 task.dispatch 与出站 turn.end 共用, label 定位错误)。 */
 function validateAttachments(v: unknown, label: string): string | null {
@@ -376,7 +381,70 @@ function validateTurnEnd(p: Record<string, unknown>): string | null {
       return 'turn.end.clientFinal must be { complete: boolean }';
     }
   }
+  if (p.xMediaIds !== undefined) {
+    if (!Array.isArray(p.xMediaIds) || p.xMediaIds.length > MAX_X_MEDIA_IDS
+      || !p.xMediaIds.every((id) => typeof id === 'string' && X_MEDIA_ID_RE.test(id))) {
+      return `turn.end.xMediaIds must be at most ${MAX_X_MEDIA_IDS} numeric media ids`;
+    }
+  }
   return validateAttachments(p.attachments, 'turn.end');
+}
+
+function validateXMediaTarget(p: Record<string, unknown>, label: string): string | null {
+  if (!isNonEmptyString(p.uploadId) || p.uploadId.length > 128) {
+    return `${label}.uploadId must be a non-empty string of at most 128 characters`;
+  }
+  return isNonEmptyString(p.requestId) ? null : `${label}.requestId must be a non-empty string`;
+}
+
+function validateXMediaInit(p: Record<string, unknown>): string | null {
+  const target = validateXMediaTarget(p, 'x.media.init');
+  if (target) return target;
+  if (!isNonEmptyString(p.mimeType)) return 'x.media.init.mimeType must be a non-empty string';
+  if (!Number.isSafeInteger(p.totalBytes) || (p.totalBytes as number) <= 0) {
+    return 'x.media.init.totalBytes must be a positive safe integer';
+  }
+  return null;
+}
+
+function validateXMediaAppend(p: Record<string, unknown>): string | null {
+  const target = validateXMediaTarget(p, 'x.media.append');
+  if (target) return target;
+  if (!Number.isSafeInteger(p.segmentIndex) || (p.segmentIndex as number) < 0) {
+    return 'x.media.append.segmentIndex must be a non-negative safe integer';
+  }
+  if (!isNonEmptyString(p.dataBase64)) return 'x.media.append.dataBase64 must be a non-empty string';
+  const encoded = p.dataBase64;
+  if (encoded.length > Math.ceil(X_MEDIA_SEGMENT_MAX_BYTES / 3) * 4) {
+    return 'x.media.append.dataBase64 exceeds the segment byte limit';
+  }
+  const padding = encoded.endsWith('==') ? 2 : encoded.endsWith('=') ? 1 : 0;
+  if (encoded.length % 4 !== 0 || /[^A-Za-z0-9+/]/.test(encoded.slice(0, encoded.length - padding))) {
+    return 'x.media.append.dataBase64 must be valid padded base64';
+  }
+  if (encoded.length / 4 * 3 - padding > X_MEDIA_SEGMENT_MAX_BYTES) {
+    return 'x.media.append.dataBase64 exceeds the segment byte limit';
+  }
+  return null;
+}
+
+function validateXMediaResult(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.uploadId)) return 'x.media.result.uploadId must be a non-empty string';
+  if (!X_MEDIA_STEPS.includes(p.step as XMediaStep)) {
+    return `x.media.result.step must be one of: ${X_MEDIA_STEPS.join(', ')}`;
+  }
+  if (p.segmentIndex !== null && (!Number.isSafeInteger(p.segmentIndex) || (p.segmentIndex as number) < 0)) {
+    return 'x.media.result.segmentIndex must be null or a non-negative safe integer';
+  }
+  if (p.mediaId !== null && (typeof p.mediaId !== 'string' || !X_MEDIA_ID_RE.test(p.mediaId))) {
+    return 'x.media.result.mediaId must be null or a numeric media id';
+  }
+  if (p.error === null) return null;
+  if (!isPlainObject(p.error) || !isNonEmptyString(p.error.code) || typeof p.error.message !== 'string'
+    || typeof p.error.retryable !== 'boolean') {
+    return 'x.media.result.error must be null or { code, message, retryable }';
+  }
+  return null;
 }
 
 function validateTurnDelivery(p: Record<string, unknown>): string | null {
@@ -1557,6 +1625,11 @@ const PAYLOAD_VALIDATORS: Record<HookMessageType, (p: Record<string, unknown>) =
   'task.ack': validateAck,
   'turn.end': validateTurnEnd,
   'turn.delivery': validateTurnDelivery,
+  'x.media.init': validateXMediaInit,
+  'x.media.append': validateXMediaAppend,
+  'x.media.finalize': (p) => validateXMediaTarget(p, 'x.media.finalize'),
+  'x.media.abort': (p) => validateXMediaTarget(p, 'x.media.abort'),
+  'x.media.result': validateXMediaResult,
   'turn.progress': validateTurnProgress,
   'turn.reopen': validateTurnReopen,
   'msg.op': validateMessageOp,

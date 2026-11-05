@@ -1123,6 +1123,18 @@ describe('normalizeRemoteMessages', () => {
     expect(items[0]).toMatchObject({ kind: 'system', label: 'error', body: i18n.t('session.tail.outputLimit') });
   });
 
+  // Legacy hosts persisted the overflow reason but lost the encrypted-content
+  // code in additionalDetails. The actual history normalizer must recover copy.
+  it('localizes a legacy compact error whose details were discarded', () => {
+    const [item] = normalizeRemoteMessages([message({
+      id: 'compact', role: 'error',
+      content: JSON.stringify({ message: 'Error running remote compact task', reason: 'context-overflow' }),
+    })]);
+    expect(item).toMatchObject({
+      kind: 'system', label: 'error', body: i18n.t('session.tail.remoteCompactEncryptedContent'),
+    });
+  });
+
   it('localizes persisted tool-loop errors from reason and bounded details', () => {
     const items = normalizeRemoteMessages([
       message({

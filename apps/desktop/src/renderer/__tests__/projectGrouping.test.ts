@@ -50,6 +50,7 @@ function s(partial: Partial<Session>): Session {
     userId: 'u',
     title: partial.title ?? `t${id}`,
     workingDir: partial.workingDir ?? null,
+    projectDir: partial.projectDir,
     workspaceKind: partial.workspaceKind ?? 'project',
     model: 'm',
     effort: 'medium' as Session['effort'],
@@ -80,6 +81,21 @@ function s(partial: Partial<Session>): Session {
 /* ============================== normalizeWorkingDir ============================== */
 
 describe('host project alias display', () => {
+  // Unit: arbitrary sibling worktrees used to grow separate sidebar projects.
+  // Membership must also drive aliases and remote controller grouping.
+  it.each([undefined, 'remote-device'])('keeps execution directories under the selected project (%s)', deviceLinkDeviceId => {
+    const sessions = [
+      s({ id: 'one', projectDir: '/product', workingDir: '/tmp/checkout-one', deviceLinkDeviceId }),
+      s({ id: 'two', projectDir: '/product', workingDir: '/repo/.cindy-worktrees/two', deviceLinkDeviceId }),
+      s({ id: 'legacy', workingDir: '/product', deviceLinkDeviceId }),
+    ];
+    const key = deviceLinkDeviceId ? `device:${deviceLinkDeviceId}:/product` : 'local:/product';
+    const groups = groupSessions(sessions, { projectAliases: new Map([[key, 'Product']]) });
+    expect(groups.projects).toHaveLength(1);
+    expect(groups.projects[0]).toMatchObject({ workingDir: '/product', displayName: 'Product' });
+    expect(groups.projects[0].sessions.map(item => item.id).sort()).toEqual(['legacy', 'one', 'two']);
+    expect(sessions[0].workingDir).toBe('/tmp/checkout-one');
+  });
   it('mirrors each host independently and keeps controller-local overrides first', () => {
     const sessions = [
       s({ workingDir: '/repo', deviceLinkDeviceId: 'a' }),

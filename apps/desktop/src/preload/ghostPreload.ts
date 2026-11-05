@@ -80,6 +80,20 @@ contextBridge.exposeInMainWorld('cindy', {
       throw Object.assign(new Error(result?.error?.message ?? 'Target request failed'), { code: result?.error?.code ?? 'HOST_NOT_READY' });
     },
   ])),
+  observe: Object.fromEntries([['projectTasks', 'project-tasks'], ['openTask', 'open-task']].map(([name, kind]) => [name,
+    async (req: Record<string, unknown> = {}): Promise<unknown> => {
+      const result = await ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'observe-request', kind });
+      if (result?.ok === true) return result.data;
+      throw Object.assign(new Error(result?.error?.message ?? 'Observe request failed'), { code: result?.error?.code ?? 'HOST_NOT_READY' });
+    },
+  ])),
+  companions: Object.fromEntries(['capabilities', 'list', 'avatar', 'reply', 'history', 'open', 'interaction', 'answer', 'watch', 'unwatch'].map(kind => [kind,
+    async (req: Record<string, unknown> = {}): Promise<unknown> => {
+      const result = await ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'companions-request', kind });
+      if (result?.ok === true) return result.data;
+      throw Object.assign(new Error(result?.error?.message ?? 'Companion request failed'), { code: result?.error?.code ?? 'HOST_NOT_READY' });
+    },
+  ])),
   tasks: Object.fromEntries(
     ['capabilities', 'models', 'setModel', 'requestWriteAccess', 'startTeam', 'getTeam', 'setTeamPlan', 'releaseWorker', 'create', 'list', 'get', 'send', 'getRun', 'listRuns', 'cancel', 'readMessages', 'setHidden', 'archive'].map(kind => [
       kind, async (req: Record<string, unknown> = {}): Promise<unknown> => {

@@ -59,9 +59,11 @@ export default {
       assert.equal(await page.getByRole('alert').count(), 0);
     }
     if (ui.case === 'default') {
-      await page.getByRole('button', { name: await ui.t('bots.groupChat.settings.title'), exact: true }).click();
-      const name = page.getByRole('textbox', { name: await ui.t('bots.groupChat.server.settings.name'), exact: true });
-      assert.equal(await name.isDisabled(), true, 'a member cannot edit shared settings');
+      // AI 代答 is a page of the settings drawer; Back lands on the member's settings.
+      await page.getByRole('button', { name: await ui.t('bots.groupChat.server.settings.back'), exact: true }).click();
+      // Members see their own settings only: no 群管理 and no 群介绍 editing.
+      assert.equal(await page.getByRole('button', { name: new RegExp(`^${await ui.t('bots.groupChat.server.settings.manage')}`) }).count(), 0, 'a member cannot manage shared settings');
+      assert.equal(await page.getByRole('button', { name: await ui.t('bots.groupChat.server.settings.edit'), exact: true }).count(), 0);
       await page.getByTestId('group-mask-settings-entry').scrollIntoViewIfNeeded();
       await ui.capture('member-settings');
       await page.getByRole('button', { name: await ui.t('bots.close'), exact: true }).click();
