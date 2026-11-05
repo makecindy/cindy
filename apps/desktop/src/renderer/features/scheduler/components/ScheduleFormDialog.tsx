@@ -498,27 +498,48 @@ export function ScheduleFormDialog({
     });
   }, [currentModel, form.agentKind, form.model, form.providerId, providers]);
 
-  // Only implicit defaults for a new local automation may fall back. Saved models,
-  // explicit template routes and in-dialog selections are preserved.
+  // Only implicit local defaults may fall back. Subscribe to every eligible
+  // Agent's capabilities so a rejected preferred route can advance without
+  // switching the form back and forth just to discover the next Agent's models.
+  const resolvesImplicitDefault = open && !isEdit && !editProjectSchedule && !isScriptMode
+    && !form.modelAgentKind && !initialTemplatePending && !selectedTemplate?.model?.trim()
+    && !initialValues?.model && !form.targetSessionId.trim() && !selectedAgentDeviceId;
+  const requiredDefaultAgent = initialValues?.agentKind
+    ?? (selectedTemplate?.providerId?.trim() ? selectedTemplate.agentKind : undefined);
+  const preferredDefaultAgent = selectedTemplate?.agentKind ?? form.agentKind;
+  const defaultAgents = useMemo(() => (requiredDefaultAgent ? [requiredDefaultAgent]
+    : [preferredDefaultAgent, ...(['claude-code', 'codex', 'pi'] as const).filter((agent) => agent !== preferredDefaultAgent)])
+    .filter((agent) => !agentsLoaded || availableVendors.has(agent === 'claude-code' ? 'cc' : agent)),
+  [requiredDefaultAgent, preferredDefaultAgent, agentsLoaded, availableVendors]);
+  const claudeDefaultCaps = useAgentCapabilities(resolvesImplicitDefault && form.agentKind !== 'claude-code'
+    && defaultAgents.includes('claude-code') ? 'claude-code' : null);
+  const codexDefaultCaps = useAgentCapabilities(resolvesImplicitDefault && form.agentKind !== 'codex'
+    && defaultAgents.includes('codex') ? 'codex' : null);
+  const piDefaultCaps = useAgentCapabilities(resolvesImplicitDefault && form.agentKind !== 'pi'
+    && defaultAgents.includes('pi') ? 'pi' : null);
+  const defaultCapabilitiesLoading = resolvesImplicitDefault && (caps.loading
+    || claudeDefaultCaps.loading || codexDefaultCaps.loading || piDefaultCaps.loading);
+
   useEffect(() => {
-    if (!open || isEdit || editProjectSchedule || isScriptMode || form.modelAgentKind
-      || initialTemplatePending || selectedTemplate?.model?.trim() || initialValues?.model || form.targetSessionId.trim()
-      || selectedAgentDeviceId || providersLoading || (!agentsLoaded && agentsLoading)) return;
+    if (!resolvesImplicitDefault || defaultCapabilitiesLoading || providersLoading || (!agentsLoaded && agentsLoading)) return;
     // A model-less, source-less template supplies a preferred Agent, not a route.
     // Keep an explicit source/Agent constraint, but let generic templates work
     // when their preferred Agent has no models visible in the picker.
-    const requiredAgent = initialValues?.agentKind
-      ?? (selectedTemplate?.providerId?.trim() ? selectedTemplate.agentKind : undefined);
-    const preferredAgent = selectedTemplate?.agentKind ?? form.agentKind;
     const requiredProvider = selectedTemplate?.providerId ?? initialValues?.providerId;
-    const agents = requiredAgent ? [requiredAgent] : [preferredAgent, ...(['claude-code', 'codex', 'pi'] as const)
-      .filter((agent) => agent !== preferredAgent)];
     void modelVisibilityVersion;
-    for (const agent of agents) {
+    for (const agent of defaultAgents) {
       // A failed roster lookup is unknown, not proof that every runtime is absent.
       // Keep catalog validation and let the host enforce runtime availability.
-      if (agentsLoaded && !availableVendors.has(agent === 'claude-code' ? 'cc' : agent)) continue;
-      const route = getScheduleDefaultRoute(agent, providers, requiredProvider);
+      const capability = agent === form.agentKind ? caps.capabilities
+        : agent === 'claude-code' ? claudeDefaultCaps.capabilities
+          : agent === 'codex' ? codexDefaultCaps.capabilities : piDefaultCaps.capabilities;
+      // Filter before resolving history AND recommendation fallback; rejecting
+      // only the first result would strand a usable second model in the catalog.
+      const candidates = providers.map((provider) => ({ ...provider,
+        models: { ...provider.models, [agent]: (provider.models[agent] ?? []).filter((model) =>
+          !isExplicitScheduleModelUnavailable(model.id, capability?.availableModels)) },
+      }));
+      const route = getScheduleDefaultRoute(agent, candidates, requiredProvider);
       if (!route.model) continue;
       if (form.agentKind !== agent) setField('agentKind', agent);
       if (form.model !== route.model) setField('model', route.model);
@@ -530,9 +551,10 @@ export function ScheduleFormDialog({
     if (form.model) setField('model', '');
     if (form.providerId !== (requiredProvider ?? '')) setField('providerId', requiredProvider ?? '');
     if (form.effort) setField('effort', '');
-  }, [open, isEdit, editProjectSchedule, isScriptMode, form.modelAgentKind, initialTemplatePending, selectedTemplate, initialValues,
-    form.targetSessionId, selectedAgentDeviceId, providersLoading, agentsLoaded, agentsLoading,
-    availableVendors, providers, modelVisibilityVersion, form.agentKind, form.model, form.providerId, form.effort, setField]);
+  }, [resolvesImplicitDefault, defaultCapabilitiesLoading, defaultAgents, selectedTemplate, initialValues,
+    providersLoading, agentsLoaded, agentsLoading, providers, modelVisibilityVersion,
+    caps.capabilities, claudeDefaultCaps.capabilities, codexDefaultCaps.capabilities, piDefaultCaps.capabilities,
+    form.agentKind, form.model, form.providerId, form.effort, setField]);
 
   const modelUnavailable = !isScriptMode && modelCatalogReady && (
     (!!form.model.trim() && (
@@ -579,7 +601,7 @@ export function ScheduleFormDialog({
   }, [isEdit, editProjectSchedule, modelCatalogReady, form.modelAgentKind, providers.length, form.fastMode, showFastModeToggle, setField]);
 
   const awaitingNewModelCatalog = !isEdit && !editProjectSchedule && !isScriptMode && !isBound
-    && (!modelCatalogReady || (!agentsLoaded && agentsLoading));
+    && (!modelCatalogReady || defaultCapabilitiesLoading || (!agentsLoaded && agentsLoading));
 
   const handleSubmit = async () => {
     if (awaitingNewModelCatalog) return;

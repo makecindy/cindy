@@ -20,6 +20,8 @@ const state = vi.hoisted(() => ({
   localLoading: false,
   rosterLoading: false,
   rosterFailed: false,
+  localCapabilities: {} as Record<string, { id: string; efforts: string[]; defaultEffort?: string }[]>,
+  pendingCapabilities: new Set<string>(),
   hiddenModels: new Set<string>(),
   claudeModels: [] as { id: string; defaultEnabled: boolean; efforts: string[] }[],
   alternativeProviders: [] as ProviderView[],
@@ -37,9 +39,10 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => k
 vi.mock('@/lib/toast', () => ({ toast: { warning: state.warning, success: vi.fn(), error: state.error } }));
 vi.mock('@/hooks/useAgentCapabilities', () => ({
   getCachedCapabilities: () => null,
-  useAgentCapabilities: (_agent: string, device?: string) => ({
-    capabilities: { availableModels: device && !state.loading ? state.remoteModels : state.localModels, hasFastMode: true },
-    loading: !!device && state.loading,
+  useAgentCapabilities: (agent: string | null, device?: string) => ({
+    capabilities: { availableModels: device && !state.loading ? state.remoteModels
+      : state.localCapabilities[agent ?? ''] ?? state.localModels, hasFastMode: true },
+    loading: device ? state.loading : !!agent && state.pendingCapabilities.has(agent),
   }),
 }));
 vi.mock('@/hooks/useAvailableAgents', () => ({
@@ -130,6 +133,8 @@ beforeEach(() => {
   state.localLoading = false;
   state.rosterLoading = false;
   state.rosterFailed = false;
+  state.localCapabilities = {};
+  state.pendingCapabilities.clear();
   state.vendors = new Set(['cc', 'codex', 'pi']);
   localStorage.clear();
   resetDraft();
@@ -306,6 +311,54 @@ it('preserves a saved invalid source and effort while showing the failure before
   expect(screen.getByText('scheduler.editor.validation.modelUnavailable')).toBeTruthy();
   const selection = JSON.parse(screen.getByTestId('model-selection').getAttribute('data-selection')!);
   expect(selection).toMatchObject({ providerId: 'removed-source', modelValue: 'shared', effortValue: 'high' });
+});
+
+// PR #8950 P1: provider membership alone can pick a model rejected by the settled
+// Harness capabilities. Earlier fixtures used identical catalog/capability lists.
+// Unit/jsdom: exercise real default calibration and submit after capability loading.
+// Standalone run: 26 cases, 5.12s Vitest / 634ms test execution.
+it.each([true, false])('filters stale catalog defaults through capabilities (remembered=%s)', async (remembered) => {
+  state.localModels.push({ id: 'supported', efforts: ['low'], defaultEffort: 'low', supportsFastMode: false });
+  state.localCapabilities.codex = [{ id: 'shared', efforts: ['high'] }];
+  state.pendingCapabilities.add('codex');
+  localStorage.setItem('xdt:scheduleFormPrefs:v1', JSON.stringify({ agentKind: 'codex',
+    lastByAgent: { codex: { model: remembered ? 'shared' : '', providerId: 'source', effort: 'high' } },
+  }));
+  const onSubmit = vi.fn(async () => {});
+  const initialValues = { name: 'New', prompt: 'Check' };
+  const element = () => <ScheduleFormDialog open initial={null} initialValues={initialValues}
+    onOpenChange={() => {}} onSubmit={onSubmit} />;
+  const view = render(element());
+  fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.promptDialog.createAria' }));
+  expect(onSubmit).not.toHaveBeenCalled();
+  state.localCapabilities.codex = [{ id: 'supported', efforts: ['low'], defaultEffort: 'low' }];
+  state.pendingCapabilities.clear();
+  view.rerender(element());
+  fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.promptDialog.createAria' }));
+  await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+    agentKind: 'codex', model: 'supported', providerId: 'source', effort: 'low',
+  }), false));
+});
+
+it.each([true, false])('tries another Agent when all preferred models lack capabilities (alternative=%s)', async (alternative) => {
+  state.localCapabilities.codex = [];
+  state.localCapabilities['claude-code'] = [{ id: 'claude-supported', efforts: ['low'] }];
+  if (alternative) state.claudeModels = [{ id: 'claude-supported', defaultEnabled: true, efforts: ['low'] }];
+  localStorage.setItem('xdt:scheduleFormPrefs:v1', JSON.stringify({ agentKind: 'codex',
+    lastByAgent: { codex: { model: 'shared', providerId: 'source' } },
+  }));
+  const onSubmit = vi.fn(async () => {});
+  render(<ScheduleFormDialog open initial={null} initialValues={{ name: 'New', prompt: 'Check' }}
+    onOpenChange={() => {}} onSubmit={onSubmit} />);
+  const selection = JSON.parse(screen.getByTestId('model-selection').getAttribute('data-selection')!);
+  expect(selection).toMatchObject(alternative
+    ? { agentKind: 'claude-code', modelValue: 'claude-supported' }
+    : { modelValue: '' });
+  fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.promptDialog.createAria' }));
+  if (alternative) await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+    agentKind: 'claude-code', model: 'claude-supported', providerId: 'source',
+  }), false));
+  else expect(onSubmit).not.toHaveBeenCalled();
 });
 
 it('clears an implicit default when no runtime is available, but preserves an explicit remote choice', () => {
