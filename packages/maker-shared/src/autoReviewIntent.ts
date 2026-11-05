@@ -236,7 +236,8 @@ export function createAutoReviewIntentProjection() {
     )
       return candidate;
     // Keep only the newest contiguous messages so a kept grant never outlives a dropped later
-    // restriction; flag the gap and never sample the latest text.
+    // restriction; flag the gap and never sample the latest text. Trimming down to half the
+    // budget leaves later appends prefix-stable, so reviewer prompt caches survive many turns.
     const omitted = {
       earlierUserMessages: [] as string[],
       currentUserMessage,
@@ -248,7 +249,7 @@ export function createAutoReviewIntentProjection() {
     const kept: string[] = [];
     for (let index = intent.earlierUserMessages.length - 1; index >= 0; index--) {
       const added = JSON.stringify(intent.earlierUserMessages[index]).length + (kept.length > 0 ? 1 : 0);
-      if (size + added > MAX_USER_INTENT_CHARS) break;
+      if (size + added > MAX_USER_INTENT_CHARS / 2) break;
       size += added;
       kept.push(intent.earlierUserMessages[index]!);
     }

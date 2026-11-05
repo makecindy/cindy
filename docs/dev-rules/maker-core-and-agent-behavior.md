@@ -732,7 +732,9 @@ Cindy 在返回拒绝前，通过已有 `turn/steer` 向对应 thread 和 expect
 的限制不延伸到新任务；同任务限制、撤权与明确长期限制仍须保留。用户原话合计预算为
 30000 字符（`autoReviewIntent.ts` 的 `MAX_USER_INTENT_CHARS`，数据库投影校验同源），
 与 Claude Code、Codex 原生审核的几万字量级一致。预算不足时从最旧的消息开始整条省略并标记
-`historyOmitted`，只保留最新的连续消息，不能只留下旧授权、丢掉后续限制；当前消息整条
+`historyOmitted`，一次省略到只剩一半预算，只保留最新的连续消息，不能只留下旧授权、丢掉后续限制。
+审阅 prompt 中用户原话紧跟固定规则，一次省略到一半可让之后的消息只在末尾追加，前缀不变，
+审阅模型的前缀缓存在多条消息间持续有效，而不是每来一条新消息就失效一次；当前消息整条
 保留，只有它自身超出预算时才整条作废，不截取中段。宿主实际拒绝的动作可作为下一条
 同一身份用户补充的指代线索；动作参数与助手解释都不是用户授权。相关行为回归见
 `agents/shared/auto-review-decision.test.ts` 与 `scripts/eval-auto-approval.mts`。

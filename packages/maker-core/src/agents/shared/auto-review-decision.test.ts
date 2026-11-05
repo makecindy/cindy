@@ -745,15 +745,27 @@ describe('flat authorization and observed denied actions', () => {
     });
   });
 
-  it('retains a standing restriction across task changes and drops the oldest messages first over budget', () => {
+  it('retains a standing restriction across task changes, trims to half the budget, then appends prefix-stably', () => {
     let intent = appendAutoReviewUserIntent('Never install plugins in any task.', 'Write a poem.');
     intent = appendAutoReviewUserIntent(intent, 'New task: search the web.');
     expect(intent).toMatchObject({ earlierUserMessages: ['Never install plugins in any task.', 'Write a poem.'] });
-    // Room for exactly one earlier message: the newest one survives, the standing restriction does not.
-    const latest = 'r'.repeat(MAX_INTENT - 110);
-    intent = appendAutoReviewUserIntent(intent, latest);
-    expect(intent).toEqual({ earlierUserMessages: ['New task: search the web.'], currentUserMessage: latest, historyOmitted: true });
-    expect(appendAutoReviewUserIntent(intent, 'Continue.')).toMatchObject({ historyOmitted: true });
+    const sizes: number[] = [];
+    for (let index = 0; typeof intent === 'string' || !intent.historyOmitted; index++) {
+      intent = appendAutoReviewUserIntent(intent, `step ${index} ` + 'r'.repeat(MAX_INTENT / 10));
+      sizes.push(intentText(intent).length);
+    }
+    // The newest contiguous messages survive; the oldest, including the standing restriction, are flagged as gone.
+    expect(intentText(intent)).not.toContain('Never install plugins');
+    expect(intentText(intent).length).toBeLessThanOrEqual(MAX_INTENT / 2);
+    expect(sizes.at(-2)).toBeGreaterThan(MAX_INTENT * 0.85);
+    // Until the budget fills again, a new message only extends the tail of the trimmed intent.
+    const trimmed = intent as Exclude<typeof intent, string>;
+    const next = appendAutoReviewUserIntent(trimmed, 'Continue.');
+    expect(next).toEqual({
+      earlierUserMessages: [...trimmed.earlierUserMessages, trimmed.currentUserMessage],
+      currentUserMessage: 'Continue.',
+      historyOmitted: true,
+    });
   });
 
   it('associates only observed blocked actions with the next same-owner input, not a grant or stale explanation', () => {
