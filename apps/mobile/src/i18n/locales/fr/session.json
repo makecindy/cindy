@@ -73,6 +73,10 @@
     "text": "Une exécution automatique a échoué.",
     "precheck": "Les vérifications automatiques sont temporairement bloquées.",
     "rateLimited": "Les vérifications automatiques sont temporairement bloquées par une limite de débit des requêtes.",
+    "pluginMissing": "Les vérifications automatiques sont bloquées : le plugin {{name}} n'est pas installé. Elles reprendront une fois le plugin installé sur votre ordinateur.",
+    "pluginMissingUnnamed": "Les vérifications automatiques sont bloquées : un plugin requis n'est pas installé. Elles reprendront une fois le plugin installé sur votre ordinateur.",
+    "pluginDisabled": "Les vérifications automatiques sont bloquées : le plugin {{name}} est désactivé. Elles reprendront une fois le plugin activé sur votre ordinateur.",
+    "pluginDisabledUnnamed": "Les vérifications automatiques sont bloquées : un plugin requis est désactivé. Elles reprendront une fois le plugin activé sur votre ordinateur.",
     "dismissTitle": "Fermer l'avis d'échec passé"
   },
   "common": {

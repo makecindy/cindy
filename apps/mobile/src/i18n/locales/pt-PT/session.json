@@ -73,6 +73,10 @@
     "text": "Uma execução automática falhou.",
     "precheck": "As verificações automáticas estão temporariamente bloqueadas.",
     "rateLimited": "As verificações automáticas estão temporariamente bloqueadas por um limite de frequência de pedidos.",
+    "pluginMissing": "As verificações automáticas estão bloqueadas: o plugin {{name}} não está instalado. Elas serão retomadas após a instalação no computador.",
+    "pluginMissingUnnamed": "As verificações automáticas estão bloqueadas: um plugin necessário não está instalado. Elas serão retomadas após a instalação no computador.",
+    "pluginDisabled": "As verificações automáticas estão bloqueadas: o plugin {{name}} está desativado. Elas serão retomadas após a ativação no computador.",
+    "pluginDisabledUnnamed": "As verificações automáticas estão bloqueadas: um plugin necessário está desativado. Elas serão retomadas após a ativação no computador.",
     "dismissTitle": "Dispensar aviso de falha anterior"
   },
   "common": {

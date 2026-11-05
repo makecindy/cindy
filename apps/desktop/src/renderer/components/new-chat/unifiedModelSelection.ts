@@ -77,6 +77,23 @@ export function wireModelIdOf(entry: UnifiedModelEntry, agent: AgentKind): strin
   return entry.capabilities[agent]?.wireModelId ?? entry.modelId;
 }
 
+/** Every actual member key for one engine; existing bridge rows keep their old single-key path. */
+export function entryWireIds(entry: UnifiedModelEntry, agent: AgentKind): string[] {
+  return [...new Set((entry.aliasEntries ?? [entry]).flatMap((member) =>
+    member.capabilities[agent] ? [member.capabilities[agent]!.wireModelId] : []))];
+}
+
+export function entryModelIds(entry: UnifiedModelEntry): string[] {
+  return [...new Set((entry.aliasEntries ?? [entry]).map((member) => member.modelId))];
+}
+
+/** Single-sided preferences inherit without persisting defaults or choosing a conflict winner. */
+export function readEntryPreference<T>(entry: UnifiedModelEntry, ids: readonly string[],
+  read: (providerId: string, modelId: string) => T | undefined): T | undefined {
+  const values = [...new Set(ids.map((id) => read(entry.providerId, id)).filter((value) => value !== undefined))];
+  return values.length === 1 ? values[0] : undefined;
+}
+
 /**
  * 外部给的 model id 是不是**这一行**。
  *
@@ -90,6 +107,7 @@ export function entryMatchesModelId(
 ): boolean {
   if (!modelId) return false;
   if (entry.modelId === modelId || entry.enginePreferenceId === modelId) return true;
+  if (entry.aliasEntries?.some((member) => entryMatchesModelId(member, modelId))) return true;
   return Object.values(entry.capabilities).some(
     (capability) => capability?.wireModelId === modelId,
   );
@@ -249,7 +267,8 @@ export function resolveFavoriteRowConfig(args: {
   item: ModelConfigCopy;
   agentFastModeCapable?: (agent: AgentKind) => boolean;
 }): UnifiedRowConfig {
-  const { entry, item, agentFastModeCapable } = args;
+  const { item, agentFastModeCapable } = args;
+  const entry = args.entry.aliasEntries?.find((member) => entryMatchesModelId(member, item.modelId)) ?? args.entry;
   const candidateEngines = entry.candidates.map(engineOfAgentKind);
   const engine = candidateEngines.includes(item.agent)
     ? item.agent

@@ -47,13 +47,13 @@ import { ModelCompactionSettings } from './ModelCompactionSettings';
 import { modelPriceDetailRows, type ModelPricePresentation } from '@/lib/modelPriceFormat';
 import {
   isModelEnabled,
-  setModelVisibility,
+  setModelVisibility, setModelVisibilities,
   isModelVisibilityCustomized,
   resetModelVisibilities,
   useModelVisibilityVersion,
 } from '@/state/modelVisibilityPrefs';
 import {
-  clearProviderModelEffort,
+  clearProviderModelEffort, editProviderModelMemoryBatch,
   getProviderModelEffort,
   setProviderModelEffort,
   useProviderModelMemoryVersion,
@@ -184,6 +184,8 @@ function Section({
 }
 
 interface Props {
+  selectedMemberId?: string;
+  onSelectMember?: (row: UnionModelRow) => void;
   provider: ProviderView;
   row: UnionModelRow | null;
   open: boolean;
@@ -202,7 +204,9 @@ interface Props {
 
 export function ModelAdvancedDrawer({
   provider,
-  row,
+  row: groupRow,
+  selectedMemberId,
+  onSelectMember,
   open,
   onOpenChange,
   pricePresentationOf,
@@ -211,6 +215,13 @@ export function ModelAdvancedDrawer({
   disabled,
   paymentRequired,
 }: Props) {
+  const row = groupRow?.aliasRows?.find((member) => member.id === selectedMemberId)
+    ?? groupRow?.aliasRows?.find((member) => member.id === groupRow.id) ?? groupRow;
+  const memberRows = groupRow?.aliasRows ?? (row ? [row] : []);
+  const memberTargets = memberRows.flatMap((member) => member.avail.flatMap((agent) => {
+    const model = member.byAgent[agent];
+    return model ? [{ agent, modelId: model.id, model }] : [];
+  }));
   const { t, i18n } = useTranslation();
   const selectionAvailable = provider.connected && !provider.suspended;
   const locale = i18n.resolvedLanguage ?? i18n.language ?? 'en';
@@ -483,6 +494,7 @@ export function ModelAdvancedDrawer({
     const model = row.byAgent[agent];
     return model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' }) ? [{ agent, modelId: model.id }] : [];
   });
+  if (groupRow?.aliasRows) visibilityTargets.splice(0, visibilityTargets.length, ...memberTargets.map(({ agent, modelId }) => ({ agent, modelId })));
   const visibilityCustomized = visibilityTargets.some(({ agent, modelId }) =>
     isModelVisibilityCustomized(agent, provider.id, modelId),
   );
@@ -510,14 +522,22 @@ export function ModelAdvancedDrawer({
   const efforts = EFFORT_ORDER.filter((effort) =>
     chatAgents.some((a) => row.byAgent[a]?.efforts.includes(effort)),
   );
+  const rememberedEffort = (agent: AgentKind, modelId: string) => {
+    const ids = groupRow?.aliasRows
+      ? memberTargets.filter((target) => target.agent === agent).map((target) => target.modelId)
+      : [modelId];
+    const values = [...new Set(ids.map((id) => getProviderModelEffort(agent, provider.id, id))
+      .filter((value) => value !== undefined))];
+    return values.length === 1 ? values[0] : undefined;
+  };
   const commonEfforts = efforts.filter((intent) => chatAgents.every((agent) => {
     const model = row.byAgent[agent];
     return !model?.efforts.length ||
       clampEffortToSupported(intent, model.efforts) ===
-        (getProviderModelEffort(agent, provider.id, model.id) ?? model.defaultEffort);
+        (rememberedEffort(agent, model.id) ?? model.defaultEffort);
   }));
   const preferredEffort = conversational
-    ? getProviderModelEffort(primaryAgent, provider.id, primaryModel.id) ?? primaryModel.defaultEffort
+    ? rememberedEffort(primaryAgent, primaryModel.id) ?? primaryModel.defaultEffort
     : null;
   const effortMixed = efforts.length > 0 && commonEfforts.length === 0;
   const currentEffort = preferredEffort ?? commonEfforts[0] ?? null;
@@ -537,6 +557,14 @@ export function ModelAdvancedDrawer({
    */
   const applyEffort = (effort: Effort) => {
     if (!efforts.includes(effort)) return;
+    if (groupRow?.aliasRows) {
+      const ok = editProviderModelMemoryBatch(memberTargets.filter((target) => target.model.efforts.length).map((target) => ({
+        kind: 'set-effort' as const, agent: target.agent, providerId: provider.id, model: target.modelId,
+        effort: clampEffortToSupported(effort, target.model.efforts) as Effort,
+      })));
+      if (!ok) toast.error(t('settings.providers.models.visibilityWriteFailed'));
+      return;
+    }
     for (const agent of chatAgents) {
       const model = row.byAgent[agent];
       if (!model) continue;
@@ -571,6 +599,23 @@ export function ModelAdvancedDrawer({
           >
             <header className="flex shrink-0 items-start gap-3 border-b border-[var(--settings-theme-card-border)] px-5 pb-3 pt-4">
               <div className="min-w-0 flex-1">
+                {groupRow?.aliasRows && <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button type="button" disabled={ctx.loading || protocolSaving} aria-label={t('settings.providers.models.advanced.modelId')}
+                      className="mb-2 flex max-w-full items-center gap-1 rounded-full px-2 py-1 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-chip)]">
+                      <span className="truncate">{row.id}</span><ChevronDown size={12} />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent className="z-[10003]" align="start">
+                    <DropdownMenuRadioGroup value={row.id} onValueChange={(id) => {
+                      if (ctx.loading || ctxDirtyRef.current || protocolSaving) return;
+                      const member = memberRows.find((candidate) => candidate.id === id);
+                      if (member) onSelectMember?.(member);
+                    }}>
+                      {memberRows.map((member) => <DropdownMenuRadioItem key={member.id} value={member.id}>{member.id}</DropdownMenuRadioItem>)}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>}
                 <Dialog.Title
                   ref={titleRef}
                   tabIndex={-1}
@@ -731,7 +776,9 @@ export function ModelAdvancedDrawer({
                                 onCheckedChange={async (next) => {
                                   if (!model || !selectionAvailable) return;
                                   if (
-                                    await setModelVisibility(agent, provider.id, model.id, next) === false
+                                    (groupRow?.aliasRows
+                                      ? await setModelVisibilities(provider.id, memberTargets.filter((m) => m.agent === agent), next)
+                                      : await setModelVisibility(agent, provider.id, model.id, next)) === false
                                   ) {
                                     toast.error(
                                       t('settings.providers.models.visibilityWriteFailed'),
@@ -798,7 +845,7 @@ export function ModelAdvancedDrawer({
                       )}
                       {chatAgents.some(
                         (a) =>
-                          getProviderModelEffort(a, provider.id, row.byAgent[a]!.id) !== undefined,
+                          rememberedEffort(a, row.byAgent[a]!.id) !== undefined,
                       ) && (
                         <Button
                           variant="secondary"
@@ -808,6 +855,11 @@ export function ModelAdvancedDrawer({
                           type="button"
                           disabled={paymentRequired}
                           onClick={() => {
+                            if (groupRow?.aliasRows) {
+                              if (!editProviderModelMemoryBatch(memberTargets.map((target) => ({ kind: 'clear-effort' as const,
+                                agent: target.agent, providerId: provider.id, model: target.modelId })))) toast.error(t('settings.providers.models.visibilityWriteFailed'));
+                              return;
+                            }
                             for (const a of chatAgents)
                               clearProviderModelEffort(a, provider.id, row.byAgent[a]!.id);
                           }}
@@ -1212,7 +1264,7 @@ export function ModelAdvancedDrawer({
                   compact
                   type="button"
                   disabled={disabled && !selectionAvailable}
-                  onClick={() => onDisable(row)}
+                  onClick={() => onDisable(groupRow ?? row)}
                 >
                   {disabled
                     ? t('settings.providers.models.enableModel')

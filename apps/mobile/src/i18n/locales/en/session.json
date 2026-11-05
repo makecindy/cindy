@@ -73,6 +73,10 @@
     "text": "An automatic run failed.",
     "precheck": "Automatic checks are temporarily blocked.",
     "rateLimited": "Automatic checks are temporarily blocked by a request rate limit.",
+    "pluginMissing": "Automatic checks are blocked: the {{name}} plugin is not installed. They resume once it is installed on your computer.",
+    "pluginMissingUnnamed": "Automatic checks are blocked: a required plugin is not installed. They resume once it is installed on your computer.",
+    "pluginDisabled": "Automatic checks are blocked: the {{name}} plugin is disabled. They resume once it is enabled on your computer.",
+    "pluginDisabledUnnamed": "Automatic checks are blocked: a required plugin is disabled. They resume once it is enabled on your computer.",
     "dismissTitle": "Dismiss past failure notice"
   },
   "common": {
