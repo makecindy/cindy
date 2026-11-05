@@ -18,12 +18,13 @@ export function createRemoteSessionSubscription(deviceId: string, sessionId: str
   };
   return {
     // New owners share the current ACK, including after it settles. Repeating
-    // subscribe on an existing owner is recovery and needs a fresh remote ACK.
-    subscribe() {
+    // subscribe on an existing owner normally needs a fresh remote ACK. History
+    // can reuse a held ACK while reacquiring one cleared by an earlier failure.
+    subscribe({ reuse = false }: { reuse?: boolean } = {}) {
       if (released) return Promise.resolve();
       const entry: Subscription = subscriptions.get(key) ?? { owners: new Set<symbol>(), pending: 0 };
       subscriptions.set(key, entry);
-      const recovering = entry.owners.has(token);
+      const recovering = !reuse && entry.owners.has(token);
       entry.owners.add(token);
       if (!recovering && entry.ack) return entry.ack;
       entry.pending++;

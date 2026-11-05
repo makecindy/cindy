@@ -4959,3 +4959,41 @@ it.each(['onStatusChanged', 'onPresenceChanged', 'onPeerLinkReset', 'onResponsiv
     expect([...listeners.values()].every(callbacks => callbacks.size === 0)).toBe(true);
   } finally { view.unmount(); vi.useRealTimers(); }
 });
+
+// PR #8979 / unit: initial offline failure leaves Main no topic to replay.
+// Recovery must acquire an ACK before reading, then keep future pushes working.
+it('reacquires a failed group history subscription before recovering its snapshot', async () => {
+  vi.useFakeTimers();
+  const process = { groupId: 'g1', executionId: 'failed-subscription', sessionId: 'offline-lane', clientId: 'source', deviceId: 'original-mac' };
+  const rows: import('../../../../shared/botGroupChat').BotGroupProcessMessage[] = [
+    { clientId: 'source', role: 'user', content: 'Request' },
+    { clientId: 'note', role: 'assistant', content: 'Recovered snapshot', agentMeta: { assistantPhase: 'commentary' } },
+    { clientId: 'final', role: 'assistant', content: 'Answer', agentMeta: { turnCompleted: true } },
+  ];
+  let ack!: (value: { ok: true }) => void;
+  const subscribe = vi.fn().mockRejectedValueOnce(new Error('offline'))
+    .mockImplementationOnce(() => new Promise(resolve => { ack = resolve; }));
+  const recoveries = new Set<(payload: any) => void>();
+  const pushes = new Set<(payload: any) => void>();
+  Object.assign(window.electronAPI.deviceLink, { subscribe,
+    onPeerLinkReset: (cb: (payload: any) => void) => { recoveries.add(cb); return () => { recoveries.delete(cb); }; },
+    onRemotePush: (cb: (payload: any) => void) => { pushes.add(cb); return () => { pushes.delete(cb); }; },
+  });
+  mocks.remoteInvoke.mockRejectedValueOnce(new Error('offline')).mockImplementation(async () => [...rows]);
+  const view = render(<Tooltip.Provider><BotGroupProcess process={process} member={{ ...detail().members[0]!, isOwned: true }} /></Tooltip.Provider>);
+  try {
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const reads = mocks.remoteInvoke.mock.calls.length;
+    await act(async () => { for (let i = 0; i < 3; i++) recoveries.forEach(cb => cb({ deviceId: 'original-mac' })); await vi.advanceTimersByTimeAsync(50); });
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    expect(mocks.remoteInvoke).toHaveBeenCalledTimes(reads);
+    await act(async () => { ack({ ok: true }); await vi.advanceTimersByTimeAsync(50); });
+    fireEvent.click(view.container.querySelector('[data-teammate-process] > button')!);
+    expect(view.container.textContent).toContain('Recovered snapshot');
+    expect(view.container.textContent).not.toContain('chat.errorBanner.retry');
+    rows.push({ clientId: 'late-thinking', role: 'thinking', content: 'Hidden reasoning' });
+    await act(async () => { pushes.forEach(cb => cb({ deviceId: 'original-mac', channel: 'local-db:messages:created', payload: { sessionId: process.sessionId } })); await vi.advanceTimersByTimeAsync(50); });
+    expect(view.container.querySelector('[data-teammate-segment]')).not.toBeNull();
+    expect(subscribe).toHaveBeenCalledTimes(2);
+  } finally { view.unmount(); ack?.({ ok: true }); vi.useRealTimers(); }
+});

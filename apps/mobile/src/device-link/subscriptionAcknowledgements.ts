@@ -1,8 +1,12 @@
 import type { Topic } from '@cindy/device-link';
 
+const pendingAcks = new WeakMap<object, Map<string, Promise<boolean>>>();
+
 /** An ACK from an invalidated subscription cannot complete a still-held owner's
  * request. Re-evaluate ownership and obtain a fresh ACK, without reopening links. */
 export async function confirmTrackedSubscription(deps: {
+  /** Client identity isolates accounts/connections; generations isolate recovery. */
+  share?: { scope: object; deviceId: string };
   isCurrent(): boolean;
   generation(): string;
   missing(): Topic[];
@@ -13,7 +17,22 @@ export async function confirmTrackedSubscription(deps: {
     const generation = deps.generation();
     const topics = deps.missing();
     if (topics.length === 0) return;
-    const sent = await deps.send(topics);
+    let task: Promise<boolean>;
+    if (deps.share) {
+      const { scope, deviceId } = deps.share;
+      const pending = pendingAcks.get(scope) ?? new Map<string, Promise<boolean>>();
+      pendingAcks.set(scope, pending);
+      const key = JSON.stringify([deviceId, generation, [...topics].sort()]);
+      const existing = pending.get(key);
+      if (existing) task = existing;
+      else {
+        task = deps.send(topics).finally(() => {
+          if (pending.get(key) === task) pending.delete(key);
+        });
+        pending.set(key, task);
+      }
+    } else task = deps.send(topics);
+    const sent = await task;
     if (!deps.isCurrent()) return;
     if (!sent || deps.generation() !== generation) continue;
     deps.acknowledge(topics);
@@ -37,6 +56,11 @@ export class SubscriptionAcknowledgements extends Map<string, Set<Topic>> {
     return held && topics.every((topic) => held.has(topic))
       ? (this.revisions.get(deviceId) ?? null)
       : null;
+  }
+
+  /** Releasing a not-yet-ACKed topic must also fence its pending acquisition. */
+  invalidate(deviceId: string): void {
+    this.invalidations.set(deviceId, ++this.revision);
   }
 
   generation(deviceId: string): number {

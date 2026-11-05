@@ -77,19 +77,32 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
       });
     // Replayed subscriptions restore future pushes, not records whose push was
     // lost during a disconnect. Reconcile this bounded turn on peer recovery.
+    const recover = () => {
+      if (!current() || closed) return;
+      // Failed first subscriptions leave Main no topic to replay. Share an
+      // existing ACK or reacquire it before recovering the bounded snapshot.
+      void subscription?.subscribe({ reuse: true }).then(() => {
+        changed(process.sessionId);
+      }).catch(() => {
+        if (current() && !closed) {
+          setResult(previous => ({ messages: previous?.messages ?? [], failed: true }));
+          setLoading(false);
+        }
+      });
+    };
     const recoveryOffs = deviceId ? [
       window.electronAPI.deviceLink.onPeerLinkReset?.(p => {
-        if (p.deviceId === deviceId) changed(process.sessionId);
+        if (p.deviceId === deviceId) recover();
       }),
       window.electronAPI.deviceLink.onPresenceChanged?.(p => {
-        if (p.deviceId === deviceId && p.online && p.remoteControlEnabled) changed(process.sessionId);
+        if (p.deviceId === deviceId && p.online && p.remoteControlEnabled) recover();
       }),
       window.electronAPI.deviceLink.onResponsivenessChanged?.(p => {
-        if (p.deviceId === deviceId && !p.unresponsive && p.recovered !== false) changed(process.sessionId);
+        if (p.deviceId === deviceId && !p.unresponsive && p.recovered !== false) recover();
       }),
       window.electronAPI.deviceLink.onStatusChanged?.(p => {
         if (p.dataPathChangedDeviceId && p.dataPathChangedDeviceId !== deviceId) return;
-        if (p.status === 'online' || p.directDataDeviceIds?.includes(deviceId)) changed(process.sessionId);
+        if (p.status === 'online' || p.directDataDeviceIds?.includes(deviceId)) recover();
       }),
     ] : [];
     void subscription?.subscribe().catch(() => undefined);
