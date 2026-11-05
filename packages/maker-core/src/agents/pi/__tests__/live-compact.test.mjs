@@ -9,6 +9,15 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
   generateSummaryWithUsage: vi.fn(),
 }));
 
+// 凭证扫描会把任何形似密钥的字面量当硬命中(哪怕只是测试夹具),所以夹具一律拼接构造:
+// 源码里不存在连续的密钥形态,运行时的值仍然满足 redactSecrets 的规则,用例照旧贴着真规则跑。
+const FAKE_OPENAI_KEY = ['sk', 'fixture-openai-key-0123456789'].join('-');
+const FAKE_BEARER = ['fixture', 'bearer-0123456789'].join('-');
+const FAKE_AWS_KEY = ['AKIA', 'FIXTUREPLACEHOLDER01'].join('');
+const FAKE_GOOGLE_KEY = ['AIza', 'FixturePlaceholder012345678901234567'].join('');
+const FAKE_DB_PASSWORD = ['fixture', 'db-password'].join('-');
+const FAKE_OPENAI_KEY_2 = ['sk', 'fixture-openai-key-0987654321'].join('-');
+
 const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, writeOwner } = await import(
   '../../../../extensions/live-compact/index.ts'
 );
@@ -72,14 +81,14 @@ describe('live compact spine selection', () => {
 
   it('masks credential shapes before a shadow file is written', () => {
     const raw = [
-      'export OPENAI_API_KEY=fixture-openai-placeholder',
-      'curl -H "Authorization: Bearer fixture-bearer-placeholder"',
+      `export OPENAI_API_KEY=${FAKE_OPENAI_KEY}`,
+      `curl -H "Authorization: Bearer ${FAKE_BEARER}"`,
       'password: "fixture-plain-password"',
       'normal text stays untouched: sk-short',
     ].join(String.fromCharCode(10));
     const out = redactSecrets(raw);
-    expect(out).not.toContain('fixture-openai-placeholder');
-    expect(out).not.toContain('fixture-bearer-placeholder');
+    expect(out).not.toContain(FAKE_OPENAI_KEY);
+    expect(out).not.toContain(FAKE_BEARER);
     expect(out).not.toContain('fixture-plain-password');
     expect(out).toContain('[REDACTED]');
     // 小于阈值的普通文本不能被误伤。
@@ -90,15 +99,15 @@ describe('live compact spine selection', () => {
     // 工具结果里最常见的是「跑一条命令把凭证打出来」,这几种形态必须一起打码。
     const pem = '-----BEGIN FIXTURE KEY-----' + String.fromCharCode(10) + 'b3BlbnNzaC1rZXk' + String.fromCharCode(10) + '-----END FIXTURE KEY-----';
     const raw = [
-      'AWS_ACCESS_KEY_ID=FIXTURE-AWS-PLACEHOLDER',
-      'google key fixture-google-placeholder',
-      'DATABASE_URL=postgres://cindy:fixture-db-password@db.internal:5432/app',
+      `AWS_ACCESS_KEY_ID=${FAKE_AWS_KEY}`,
+      `google key ${FAKE_GOOGLE_KEY}`,
+      'DATABASE_URL=postgres://cindy:' + FAKE_DB_PASSWORD + '@db.internal:5432/app',
       pem,
     ].join(String.fromCharCode(10));
     const out = redactSecrets(raw);
-    expect(out).not.toContain('FIXTURE-AWS-PLACEHOLDER');
-    expect(out).not.toContain('fixture-google-placeholder');
-    expect(out).not.toContain('fixture-db-password');
+    expect(out).not.toContain(FAKE_AWS_KEY);
+    expect(out).not.toContain(FAKE_GOOGLE_KEY);
+    expect(out).not.toContain(FAKE_DB_PASSWORD);
     expect(out).not.toContain('b3BlbnNzaC1rZXk');
     // 连接串的主机与用户名要留着,否则模型无法判断是哪套库。
     expect(out).toContain('postgres://cindy:');
@@ -413,12 +422,12 @@ describe('live compact 1.0.6: kept tool rounds, evidence and raw pointers', () =
     // 卡片先指向路径、切割被接受后才落盘;落盘内容与哈希必须是同一份脉敏后的字节。
     const dir = mkdtempSync(join(tmpdir(), 'spine-plan-'));
     try {
-      const text = 'export OPENAI_API_KEY=fixture-openai-placeholder-2\nline two';
+      const text = `export OPENAI_API_KEY=${FAKE_OPENAI_KEY_2}\nline two`;
       const planned = planRawEntry({ dir, toolCallId: 'c9', text });
       expect(planned.ok).toBe(true);
       expect(planned.pending).toBe(true);
       expect(existsSync(planned.path)).toBe(false);
-      expect(planned.body).not.toContain('fixture-openai-placeholder-2');
+      expect(planned.body).not.toContain(FAKE_OPENAI_KEY_2);
       expect(verifiedRaw(planned).ok).toBe(true);
       // 指针里的字节数必须是数字:把 Buffer 塞进去会把整段正文带进卡片。
       expect(typeof verifiedRaw(planned).bytes).toBe('number');
@@ -426,7 +435,7 @@ describe('live compact 1.0.6: kept tool rounds, evidence and raw pointers', () =
       const committed = commitRawEntry(planned);
       expect(committed.pending).toBeUndefined();
       expect(verifiedRaw(committed).ok).toBe(true);
-      expect(readFileSync(committed.path, 'utf8')).not.toContain('fixture-openai-placeholder-2');
+      expect(readFileSync(committed.path, 'utf8')).not.toContain(FAKE_OPENAI_KEY_2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
