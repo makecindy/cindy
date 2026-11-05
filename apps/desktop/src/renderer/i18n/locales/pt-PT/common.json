@@ -12211,7 +12211,7 @@
       "effortLabel": "Esforço de raciocínio",
       "thinking": "A pensar",
       "edit": "Editar",
-      "options": "Options",
+      "options": "Opções",
       "priceTip": "Entrada {{input}} · Saída {{output}} por 1M de tokens",
       "pricing": {
         "title": "Por 1 M de tokens",
@@ -13510,7 +13510,7 @@
         "empty": "Nenhum comando disponível."
       },
       "cost": {
-        "title": "Custo da sessão",
+        "title": "Utilização da sessão",
         "tokensUsed": "Tokens utilizados (neste turno)"
       },
       "pwd": {
@@ -14830,7 +14830,7 @@
       "branchTooltip": "Branch atual: {{branch}}",
       "pr": {
         "status": {
-          "open": "Abrir",
+          "open": "Aberto",
           "draft": "Rascunho",
           "merged": "Integrado",
           "closed": "Fechado"
@@ -14971,7 +14971,9 @@
           "summaryAria": "Resumo do MR !{{number}}",
           "urlPlaceholder": "Ligação de PR do GitHub ou MR do GitLab",
           "notFound": "MR não encontrado ou a conta atual não o pode ver"
-        }
+        },
+        "merge": "Integração",
+        "conflicts": "Com conflitos"
       }
     },
     "schedule": {

@@ -57,7 +57,7 @@ const DEEPSEEK_FLASH_IDS = new Set(['deepseek-flash', 'deepseek-v4-flash']);
 function hasExplicitMetadata(model: CatalogModel): boolean {
   const raw = model.userModelConfig;
   return model.contextWindowExplicit === true || model.nameExplicit === true || !!raw &&
-    ['contextWindow', 'mode', 'modalities', 'supportsImageInput', 'reasoning',
+    ['contextWindow', 'maxOutputTokens', 'mode', 'modalities', 'supportsImageInput', 'reasoning',
       'reasoningDefaultEffort', 'route', 'api', 'piApi'].some((key) =>
       raw[key as keyof typeof raw] !== undefined);
 }

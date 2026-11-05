@@ -295,6 +295,13 @@ describe('verified official DeepSeek alias projection', () => {
     expect(p).toEqual(before);
     expect(rows[1].userModelConfig).toEqual(p.models.codex![1].userModelConfig);
   });
+  it('preserves an explicit output limit instead of normalizing it', () => {
+    const p = official();
+    p.models.codex![1].userModelConfig!.maxOutputTokens = 384_000;
+    const projected = projectSelectionAliases(p, accepted);
+    expect(projected.models.codex![1]).toEqual(p.models.codex![1]);
+    expect(markedSelectionAliasGroups(projected, () => ({}))).toEqual([]);
+  });
   it.each(['contextWindow', 'supportsImageInput', 'modalities', 'route'] as const)('preserves explicit %s and does not merge', (field) => {
     const p = official();
     Object.assign(p.models.codex![1].userModelConfig!, {

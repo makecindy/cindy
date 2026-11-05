@@ -23,7 +23,7 @@ import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { SessionQuickSendProvider } from '@/components/chat/SessionQuickSendContext';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { usePrActions, usePrRefsForSession, usePrStatuses } from '@/contexts/PrRefsContext';
-import { PR_STATUS_COLOR, PR_STATUS_ICON } from '@/features/cc-agent/gitContextPrVisuals';
+import { prStatusColor, PR_STATUS_ICON } from '@/features/cc-agent/gitContextPrVisuals';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { makerApiForSticky } from '@/lib/makerTransport';
 import * as sessionService from '@/lib/sessionService';
@@ -412,7 +412,7 @@ export function BotTaskCard({
       <Icon
         size={12}
         aria-hidden="true"
-        style={{ color: kind ? PR_STATUS_COLOR[kind] : 'var(--text-tertiary)' }}
+        style={{ color: prStatusColor(kind ?? null, confirmed?.ok ? confirmed.conflicts : null) }}
       />
     );
   };

@@ -677,7 +677,7 @@
       "idleHint": "Tras este tiempo de inactividad, la computadora detiene el Agent de la sesión y libera su plaza. El siguiente mensaje retoma la misma conversación. Las sesiones en ejecución nunca se interrumpen por este motivo. Usa 0 para no liberar plazas automáticamente.",
       "idleInvalid": "Introduzca un número entero del 0 al {{max}}.",
       "usage": "Sesiones {{used}} / {{total}} realizadas por dispositivos {{devices}}; el dispositivo más ocupado tiene {{largest}}.",
-      "applyHint": "Los cambios se aplican inmediatamente. Reducir un límite solo bloquea nuevas sesiones; Las sesiones existentes continúan. Los relés de grupo cuentan para el dispositivo conectado directamente.",
+      "applyHint": "Los cambios se aplican inmediatamente. Reducir un límite solo bloquea nuevas sesiones; las sesiones existentes continúan. El uso retransmitido del grupo cuenta para el dispositivo conectado directamente.",
       "save": "Guardar",
       "reset": "Restaurar valores predeterminados",
       "saved": "Límites de sesión remota guardados",
@@ -12211,7 +12211,7 @@
       "effortLabel": "Intensidad de razonamiento",
       "thinking": "Pensando",
       "edit": "Editar",
-      "options": "Options",
+      "options": "Opciones",
       "priceTip": "Entrada {{input}} · Salida {{output}} por 1M de tokens",
       "pricing": {
         "title": "Por 1 millón de tokens",
@@ -13510,7 +13510,7 @@
         "empty": "No hay comandos disponibles."
       },
       "cost": {
-        "title": "Costo de la sesión",
+        "title": "Uso de la sesión",
         "tokensUsed": "Tokens usados (este turno)"
       },
       "pwd": {
@@ -13590,8 +13590,8 @@
       },
       "compact": {
         "savedTokens": "tokens {{tokens}} guardados",
-        "manual": "compacto manual",
-        "auto": "Auto compacto",
+        "manual": "Compactación manual",
+        "auto": "Compactación automática",
         "aria": "Chat compactado"
       },
       "autoResume": {
@@ -14971,7 +14971,9 @@
           "summaryAria": "Resumen de MR !{{number}}",
           "urlPlaceholder": "Enlace de PR de GitHub o MR de GitLab",
           "notFound": "No se encontró el MR o la cuenta actual no tiene permiso para verlo"
-        }
+        },
+        "merge": "Fusión",
+        "conflicts": "Con conflictos"
       }
     },
     "schedule": {
