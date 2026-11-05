@@ -1,4 +1,4 @@
-import { sharedTaskGuestPeer } from '@cindy/device-link';
+import { providerShareHostPeer, sharedTaskGuestPeer } from '@cindy/device-link';
 /**
  * dispatchWeakNetwork.test.ts — 被控端弱网收尾行为契约。
  * -------------------------------------------------------------------------
@@ -77,7 +77,6 @@ import {
   setControllerDisplayName,
   setControllerFallbackDisplayName,
   deactivateAllControllers,
-  deactivateController,
   flushRemoteInvokeResultOutboxOnReconnect,
   handleControllerOffline,
   setControllersChangedListener,
@@ -327,6 +326,14 @@ describe('[1] link-accept 发送失败的有限重试', () => {
     tapRemoteModelCatalogChange('source-c', 'maker:agents:changed', true);
     tapRemoteModelCatalogChange(sharedTaskGuestPeer('task', 'guest', 'pc'), 'maker:agents:changed', false);
     expect(client.sendPush).not.toHaveBeenCalled();
+    // PR #8814 review: once the minute-by-minute received poll stopped re-announcing
+    // catalogs, a same-region share host's real catalog change must reach controllers
+    // that read it through B; an inactive or unknown share still does not.
+    const shareHost = providerShareHostPeer('share-1', 'owner-pc');
+    tapRemoteModelCatalogChange(shareHost, 'maker:provider:changed', false);
+    expect(client.sendPush).not.toHaveBeenCalled();
+    tapRemoteModelCatalogChange(shareHost, 'maker:provider:changed', false, true);
+    expect(client.sendPush.mock.calls).toEqual([['controller-a', 'maker:model-catalog:changed', {}]]);
   });
 
   it('notifies only the successfully accepted ordinary peer after a failed inbound open', () => {

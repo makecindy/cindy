@@ -5,7 +5,7 @@ import { groupSettingsVisualFixture } from './groupSettingsVisualFixture';
 import { groupMentionVisualFixture } from './groupMentionVisualFixture';
 import { sessionImportVisualFixture } from './sessionImportVisualFixture';
 import { SHARED_REMOTE_CONTROL_FIXTURE } from '@cindy/maker-shared/fixtures';
-import { buildUiMockRows, UI_MOCK_SHOWCASE_PROJECTS, type UiMockSessionRow } from '@cindy/maker-shared/ui-mock';
+import { buildUiMockRows, UI_MOCK_PI_CONTEXT_USAGE, UI_MOCK_SHOWCASE_PROJECTS, type UiMockSessionRow } from '@cindy/maker-shared/ui-mock';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
 import { TASK_TAG_COLORS, type TaskTagRequest, type TaskTagResult } from '@cindy/maker-shared';
 import { BOT_GROUP_CHAT_PRIMITIVE, BOT_GROUP_REMOTE_COLLECTION_ID, BOT_GROUP_REMOTE_RESOURCE_KIND } from '@cindy/maker-shared/botGroupChat';
@@ -191,6 +191,7 @@ export function createVisualMockDeviceLinkContext(): DeviceLinkContextValue {
     connectionIssue: null,
     presenceVersion: 1,
     connectionEpoch: 1,
+    rosterVersion: 0,
     getSubscriptionIdentity: () => 1,
     lastPresenceSnapshot: {
       deviceId,
@@ -319,6 +320,8 @@ async function visualMockInvoke<T = unknown>(
     }
   }
   switch (channel) {
+    case 'maker:get-context-usage':
+      return UI_MOCK_PI_CONTEXT_USAGE as T;
     case 'maker:regenerate-title':
       return { title: 'Visual rename draft' } as T;
     case 'maker:predict-prompt':
@@ -381,6 +384,9 @@ async function visualMockInvoke<T = unknown>(
           { label: 'weekly', used: 180, limit: 500 },
         ],
       } as T;
+    case 'maker:usage:codex-rate-limits':
+      return { account: {}, rateLimits: {}, rateLimitsByLimitId: null,
+        rateLimitResetCredits: null, resetOffer: null } as T;
     case 'maker:schedule:list':
       return visualMockSchedules() as T;
     case 'maker:schedule:get':

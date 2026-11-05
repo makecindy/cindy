@@ -3202,10 +3202,18 @@ const RenderItemView = memo(function RenderItemView({
   }
   const groupTimestamp = actions.companion && (item.type === 'message' || item.type === 'pending_send')
     ? actions.companionTimeGroups?.get(item.key) : undefined;
-  // Cards and work groups share the reply text column, leaving the avatar slot empty.
+  // Each outer process group owns a portrait, just like the final reply.
+  // Nested details clear companionAvatar, so expanding them cannot repeat it.
+  const processAvatar = actions.companion && item.type === 'work_group' ? actions.companionAvatar : undefined;
+  // Cards still share the reply text column without repeating the portrait.
   const alignWithReplies = !!actions.companionAvatar && actions.companion
-    && (item.type === 'work_group' || (item.type === 'message' && !!item.message.companion));
-  const aligned = alignWithReplies ? (
+    && item.type === 'message' && !!item.message.companion;
+  const aligned = processAvatar ? (
+    <View style={styles.companionAvatarRow} testID="companion.processRow">
+      <View style={styles.companionAvatarSlot}>{processAvatar}</View>
+      <View style={styles.companionAvatarContent}>{node}</View>
+    </View>
+  ) : alignWithReplies ? (
     <View style={styles.companionAvatarInset}>{node}</View>
   ) : (
     node
@@ -5381,6 +5389,8 @@ function SubagentCard({
   const [expanded, toggleExpanded] = useFoldableExpandedState(item.key, false);
   const deferred = item.deferred;
   useEffect(() => deferred?.setVisible?.(expanded, false), [deferred?.owner, deferred?.key, expanded]);
+  // Subagent work is detail content, not another reply from the main partner.
+  const childActions = useMemo(() => ({ ...actions, companionAvatar: undefined }), [actions]);
   const title = item.header.subagentType
     ? t('message.renderer.subagentTyped', { type: item.header.subagentType })
     : t('message.renderer.subagent');
@@ -5417,7 +5427,7 @@ function SubagentCard({
           ) : null}
           {/* 两级展开(与 WorkGroupCard 同规则):内层子卡保持各自折叠头行,按需下钻。 */}
           {item.childItems.map((child) => (
-            <RenderItemView key={child.key} item={child} actions={actions} />
+            <RenderItemView key={child.key} item={child} actions={childActions} />
           ))}
           {item.summary ? (
             <View style={styles.stackSmall}>

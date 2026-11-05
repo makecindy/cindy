@@ -24,6 +24,8 @@ import {
   DeviceLinkError,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
+  isProviderSharePeer,
+  REMOTE_AGENT_CHANNEL,
   type DeviceLinkErrorCode,
 } from '@cindy/device-link';
 
@@ -52,6 +54,13 @@ export const DEVICE_RESPONSIVENESS_PROBE_CHANNEL = 'local-db:sessions:list';
 
 export function buildDeviceResponsivenessProbeArgs(): unknown[] {
   return [1, 'all', { includePinned: false }];
+}
+
+/** Shared provider peers cannot enumerate the owner's database. A live Agent
+ * caps request checks the authorized service, never a metadata cache or a new grant. */
+export function deviceResponsivenessProbe(deviceId: string): { channel: string; args: unknown[] } {
+  return isProviderSharePeer(deviceId) ? { channel: REMOTE_AGENT_CHANNEL, args: [{ op: 'caps' }] }
+    : { channel: DEVICE_RESPONSIVENESS_PROBE_CHANNEL, args: buildDeviceResponsivenessProbeArgs() };
 }
 
 export interface DeviceResponsivenessProbeEligibility {
@@ -169,7 +178,8 @@ export function classifyDeviceSendFailure(error: unknown): BreakerSettleOutcome 
  * 特判通道不定论,其余为真实恢复证据。
  */
 export function classifyDeviceSendSuccess(channel: string, wasProbe = false): BreakerSettleOutcome {
-  if (wasProbe && channel !== DEVICE_RESPONSIVENESS_PROBE_CHANNEL) return 'inconclusive';
+  if (wasProbe) return channel === DEVICE_RESPONSIVENESS_PROBE_CHANNEL || channel === REMOTE_AGENT_CHANNEL
+    ? 'responded' : 'inconclusive';
   return BREAKER_NEUTRAL_INVOKE_CHANNELS.has(channel) ? 'inconclusive' : 'responded';
 }
 
@@ -346,10 +356,11 @@ export function createResponsivenessTracker(
       if (slot.decision !== 'probe') continue;
       let probePromise: Promise<unknown>;
       try {
+        const probe = deviceResponsivenessProbe(deviceId);
         probePromise = deps.probeInvoke(
           deviceId,
-          DEVICE_RESPONSIVENESS_PROBE_CHANNEL,
-          buildDeviceResponsivenessProbeArgs(),
+          probe.channel,
+          probe.args,
         );
       } catch (err) {
         probePromise = Promise.reject(err);

@@ -222,10 +222,11 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       && isModelSelectableForNewRoute(found, { userProvider: resolved.view.source === 'user' });
   }
 
-  /** 能接这个模型的任务：提供模型、不在冷却、配额没用完。 */
+  /** 能接这个模型的任务：提供模型、不在冷却、配额没用完，且目录预算尚未到期。 */
   function usableFor(input: Pick<ProviderGroupPickInput, 'providerId' | 'agentKind' | 'model'>) {
     return (r: ResolvedProviderGroupMember) =>
-      offersModel(r, input.agentKind, input.model) && coolingUntil(input.providerId, r.member.key, input.model) === null
+      (r.providerContinuity === undefined || r.providerContinuity.remainingMs > 0)
+      && offersModel(r, input.agentKind, input.model) && coolingUntil(input.providerId, r.member.key, input.model) === null
       && !providerGroupMemberUsageState(r, input.model, deps.now(), input.agentKind).limited;
   }
 
@@ -335,6 +336,12 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       const viewOptions = typeof options === 'string' ? { model: options } : options;
       const model = viewOptions?.model;
       const readSupport = viewOptions?.includeGuestSupport ? guestSupportReader : null;
+      const providerContinuity = (() => {
+        const stamps = resolved.flatMap((entry) => entry.providerContinuity ? [entry.providerContinuity] : []);
+        if (!stamps.length) return undefined;
+        return { stale: stamps.some((stamp) => stamp.stale),
+          remainingMs: Math.min(...stamps.map((stamp) => stamp.remainingMs)) };
+      })();
       return {
         providerId,
         config,
@@ -379,6 +386,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
             ...(quota.quota && quota.fiveHourTight ? { fiveHourTight: true as const } : {}),
           };
         })),
+        ...(providerContinuity ? { providerContinuity } : {}),
         ...(model ? { model } : {}),
       };
     },

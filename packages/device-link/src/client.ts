@@ -948,6 +948,8 @@ export class DeviceLinkClient {
   private readonly directDiagnostics = new Map<string, {
     logged: Partial<Record<DirectDiagnosticReason, number>>; hash: Promise<string>;
   }>();
+  /** Last explicit same-account control status; blocks new outbound RPCs only. */
+  private readonly remoteControlDisabled = new Set<string>();
   private readonly sameAccountDirectGrace = new Map<string, {
     wallUntil: number; monotonicUntil: number; timer: ReturnType<typeof setTimeout>; peerOffline: boolean;
   }>();
@@ -970,7 +972,8 @@ export class DeviceLinkClient {
       isBusy: (id) => {
         const peer = this.peerTransport.get(id);
         return this.opts.isPeerBusy?.(id) === true || !!peer?.pending.size || [...this.pending.values()].some(p => p.dst === id)
-          || !!peer && [...peer.receive.values()].some(s => s.deliveringSeq !== null || s.bufferedBytes > 0);
+          || !!peer && [...peer.receive.values()].some(s => s.deliveringSeq !== null || s.bufferedBytes > 0)
+          || this.isOfflineRetainedDirectPath(id);
       },
       diagnostic: (id, event) => this.logDirectDiagnostic(id, event),
       canSignal: (peer) => this.status === 'online'
@@ -1455,10 +1458,55 @@ export class DeviceLinkClient {
     return this.usableDirectPath(deviceId) ? 'direct' : 'relay';
   }
 
+  /** Fresh, current authority says the peer accepts outbound control again. */
+  noteRemoteControlEnabled(deviceId: string): void {
+    if (!isScopedPeer(deviceId)) this.remoteControlDisabled.delete(deviceId);
+  }
+
+  /** Fresh, current authority says the peer refuses outbound control. */
+  noteRemoteControlDisabled(deviceId: string): void {
+    if (!isScopedPeer(deviceId)) this.remoteControlDisabled.add(deviceId);
+  }
+
   /** Existing, leased data path usable while the relay is reconnecting. */
   hasOfflineDirectPath(deviceId: string): boolean {
     return !!this.usableDirectPath(deviceId) && this.isLinkReady(deviceId)
       && (isProviderSharePeer(deviceId) || this.hasSameAccountDirectGrace(deviceId));
+  }
+
+  /**
+   * Read-only twin of hasOfflineDirectPath for render-time readiness probes.
+   * It never expires, detaches, clears pending work or emits peer path changes;
+   * the actual send/subscribe paths still perform their own fail-closed checks.
+   */
+  peekOfflineDirectPath(deviceId: string): boolean {
+    return this.hasRetainedDirectPathReadOnly(deviceId);
+  }
+
+  /**
+   * Read-only proof that a direct path and its retention lease/grace are still
+   * within both clocks. Unlike usableDirectPath this never expires or detaches.
+   */
+  private hasRetainedDirectPathReadOnly(deviceId: string): boolean {
+    if (this.stopped || !this.directPaths.has(deviceId) || !this.isLinkReady(deviceId)) return false;
+    if (isProviderSharePeer(deviceId)) {
+      const lease = this.providerShareDirectLeases.get(deviceId);
+      return !!lease && Date.now() < lease.wallUntil && this.monotonicNow() < lease.monotonicUntil;
+    }
+    const grace = this.sameAccountDirectGrace.get(deviceId);
+    return !!grace && Date.now() < grace.wallUntil && this.monotonicNow() < grace.monotonicUntil;
+  }
+
+  /**
+   * A healthy data path retained while signaling to this peer is unavailable.
+   * Read-only: unlike usableDirectPath/hasSameAccountDirectGrace it never
+   * expires or detaches during a capacity scan, so isBusy has no re-entrancy.
+   */
+  private isOfflineRetainedDirectPath(deviceId: string): boolean {
+    if (!this.hasRetainedDirectPathReadOnly(deviceId)) return false;
+    if (isProviderSharePeer(deviceId)) return this.status !== 'online';
+    const grace = this.sameAccountDirectGrace.get(deviceId);
+    return !!grace && (this.status !== 'online' || grace.peerOffline);
   }
 
   /** Repeated signaling loss cannot renew the original deadline. */
@@ -1493,12 +1541,23 @@ export class DeviceLinkClient {
   }
 
   private expireSameAccountDirectGrace(deviceId: string): void {
-    if (!this.sameAccountDirectGrace.has(deviceId)) return;
+    const grace = this.sameAccountDirectGrace.get(deviceId);
+    if (!grace) return;
+    // The 30-minute budget releases the retained path even after local relay
+    // recovery, but a healthy relay must not be reported as a lost peer. Let
+    // detachDirectPath apply the same signaling-loss criteria; it keeps the
+    // peer link ready and falls back to relay when only the grace expired.
+    if (this.directPaths.has(deviceId)) {
+      this.detachDirectPath(deviceId, 'link-closed');
+      return;
+    }
     this.clearSameAccountDirectGrace(deviceId);
-    this.invokeScheduler.cancel(deviceId, new DeviceLinkError('NOT_CONNECTED', 'direct signaling grace expired'));
-    const peer = this.peerTransport.get(deviceId);
-    if (peer) this.markPeerLinkDown(peer);
-    this.notifyPeerRouteOffline(deviceId, this.getPeerLinkGeneration(deviceId));
+    if (this.status !== 'online' || grace.peerOffline) {
+      this.invokeScheduler.cancel(deviceId, new DeviceLinkError('NOT_CONNECTED', 'direct signaling grace expired'));
+      const peer = this.peerTransport.get(deviceId);
+      if (peer) this.markPeerLinkDown(peer);
+      this.notifyPeerRouteOffline(deviceId, this.getPeerLinkGeneration(deviceId));
+    }
   }
 
   private hasProviderShareDirectLease(deviceId: string): boolean {
@@ -2063,6 +2122,9 @@ export class DeviceLinkClient {
     timeoutMs?: number,
     allowPeerResetRetry = true,
   ): Promise<Envelope> {
+    if (env.dst && this.remoteControlDisabled.has(env.dst)) {
+      return Promise.reject(new DeviceLinkError('REMOTE_DISABLED', 'remote control is disabled by the target'));
+    }
     if (this.status !== 'online' && !(env.kind === 'invoke' && env.dst && this.hasOfflineDirectPath(env.dst))) {
       return Promise.reject(new DeviceLinkError('NOT_CONNECTED', 'not connected to relay'));
     }
@@ -2934,6 +2996,16 @@ export class DeviceLinkClient {
         return true;
       case 'presence-changed': {
         const snap = env.payload as PresenceSnapshot;
+        if (!isScopedPeer(snap.deviceId) && snap.online === true) {
+          // Presence describes the peer as a control target, not its own outbound
+          // control of this device. Keep the shared path for reverse traffic, but
+          // fail closed before any new outbound RPC while control is refused.
+          // Offline presence is masked to remoteControlEnabled=false by the relay;
+          // that is signaling loss, not an explicit refusal. Only an online
+          // snapshot may arm or clear the outbound gate.
+          if (snap.remoteControlEnabled === false) this.remoteControlDisabled.add(snap.deviceId);
+          else this.remoteControlDisabled.delete(snap.deviceId);
+        }
         // A missing signaling route is not proof that the authenticated data path died.
         if (snap.online === false) {
           if (!this.retainDirectPathOnSignalingLoss(snap.deviceId, true)) this.detachDirectPath(snap.deviceId, 'peer-offline');
@@ -5943,6 +6015,7 @@ export class DeviceLinkClient {
   }
 
   private clearPeerTransport(): void {
+    this.remoteControlDisabled.clear();
     for (const id of this.sameAccountDirectGrace.keys()) this.clearSameAccountDirectGrace(id);
     this.directNegotiator?.clear();
     this.directPeerSupport.clear();

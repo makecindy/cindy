@@ -14,6 +14,7 @@ import { useEffect, useState } from 'react';
 import { invokeModelCatalog } from '@/lib/invokeModelCatalog';
 import { parseModelCatalogKey } from '../../shared/controlledModelCatalog';
 
+import { MetadataSnapshotExpiry } from '@cindy/device-link';
 import { createLogger } from '@/lib/logger';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 
@@ -137,6 +138,11 @@ export interface AgentCapabilities {
    * 老被控端无此字段 → undefined：Worker 面板不列远程供应商、不发这个字段(老端会静默丢掉)。
    */
   supportsOrcaWorkerAgentDevice?: boolean;
+  /**
+   * 被控端接受给它上面的协同 Lead / 本机 Worker 换 Agent 所在电脑。
+   * 老被控端无此字段 → undefined：控制端对这类任务不列其他电脑与分享(v0.1.104–v0.1.110 会拒绝)。
+   */
+  supportsOrcaAgentRelocation?: boolean;
   /**
    * 手动压缩会话上下文能力(pi 原生 compact)。与 maker-core Capabilities.manualCompact
    * 同形；device-link 老被控端序列化的 capabilities 无此字段 → undefined = 不支持。
@@ -306,6 +312,7 @@ function parseAgentCapabilities(value: unknown): AgentCapabilities {
     !isOptionalBoolean(value.supportsOrcaWorkerUpdate) ||
     !isOptionalBoolean(value.supportsDeferredOrcaUiAssignment) ||
     !isOptionalBoolean(value.supportsOrcaWorkerAgentDevice) ||
+    !isOptionalBoolean(value.supportsOrcaAgentRelocation) ||
     !isOptionalCapabilityStatus(value.writableDirs) ||
     !isOptionalCapabilityStatus(value.manualCompact)
   ) {
@@ -349,6 +356,8 @@ function cacheKey(agentKind: AgentKind, deviceId?: string): CacheKey {
 }
 
 const cache = new Map<CacheKey, AgentCapabilities>();
+/** Remote snapshots inherit the host's bounded directory budget. */
+const expiry = new MetadataSnapshotExpiry();
 const inflight = new Map<CacheKey, Promise<AgentCapabilities | null>>();
 /** 本地能力刷新代际；使刷新前的在途 IPC 结果无法回写旧快照。 */
 let localGen = 0;
@@ -371,6 +380,23 @@ const remoteListeners = new Map<CacheKey, Set<(event: DeviceCapabilitiesEvent) =
  * 本机用 localGen 处理目录热刷新；远端继续按 deviceGen 隔离。
  */
 const deviceGen = new Map<string, number>();
+
+/** Retire exactly one (device, agentKind) cache key and its mounted consumers. */
+function retireDeviceCapabilityKey(deviceId: string, agentKind: AgentKind, deferNotify = false): void {
+  const key = cacheKey(agentKind, deviceId);
+  cache.delete(key);
+  expiry.forget(key);
+  inflight.delete(key);
+  const event: DeviceCapabilitiesEvent = { status: 'error',
+    error: '[MODEL_VISIBILITY_NOT_READY] Agent capabilities snapshot expired' };
+  // A synchronous getter may discover expiry during render; retire immediately
+  // but deliver the terminal event after the render.
+  if (deferNotify) {
+    queueMicrotask(() => {
+      if (!cache.has(key)) notifyRemoteCapabilities(deviceId, agentKind, event);
+    });
+  } else notifyRemoteCapabilities(deviceId, agentKind, event);
+}
 
 function notifyRemoteCapabilities(
   deviceId: string,
@@ -401,7 +427,7 @@ async function fetchCapabilities(
   deviceId?: string,
 ): Promise<AgentCapabilities | null> {
   const key = cacheKey(agentKind, deviceId);
-  const cached = cache.get(key);
+  const cached = expiry.valid(key) ? cache.get(key) : undefined;
   if (cached) return cached;
   const ip = inflight.get(key);
   if (ip) return ip;
@@ -409,11 +435,13 @@ async function fetchCapabilities(
   // 捕获发起时的设备代际;回调里若代际已变(被 evict)则认为本次请求作废。
   const startGen = deviceId ? (deviceGen.get(deviceId) ?? 0) : localGen;
   const startLocalSnapshotRevision = localSnapshotRevision;
+  const requestRef: { promise?: Promise<AgentCapabilities | null> } = {};
   const isCurrent = (): boolean =>
     deviceId
-      ? (deviceGen.get(deviceId) ?? 0) === startGen
+      ? (deviceGen.get(deviceId) ?? 0) === startGen && inflight.get(key) === requestRef.promise
       : localGen === startGen && localSnapshotRevision === startLocalSnapshotRevision;
 
+  const requestedAt = deviceId ? { wall: Date.now(), mono: performance.now() } : null;
   let raw: Promise<AgentCapabilities>;
   if (deviceId) {
     // 远程:隧道到被控端的 maker:get-capabilities(已在 allowlist)。
@@ -431,6 +459,15 @@ async function fetchCapabilities(
       const caps = parseAgentCapabilities(value);
       // 在途期间设备被驱逐(下线 / 断链)→ 丢弃结果,不回写 cache、不动 inflight。
       if (isCurrent()) {
+        if (deviceId && requestedAt && !expiry.remember(key, caps, requestedAt, () => {
+          // Only this (device, agentKind) cache key expired. Other kinds and
+          // routed aliases keep their independently measured budgets and
+          // in-flight responses; no prefetch is started here.
+          retireDeviceCapabilityKey(deviceId, agentKind, true);
+        })) {
+          cache.delete(key);
+          throw new Error('[MODEL_VISIBILITY_NOT_READY] Agent capabilities snapshot expired');
+        }
         cache.set(key, caps);
         inflight.delete(key);
         if (deviceId)
@@ -458,9 +495,17 @@ async function fetchCapabilities(
             error: e instanceof Error ? e.message : String(e),
           });
         }
+        throw e;
       }
+      // A retired / superseded remote request no longer owns this cache key:
+      // its invalidation path already delivered the terminal state, and a newer
+      // request may have succeeded since. Do not hand the late failure back to
+      // the old consumer or it would overwrite that fresh mounted state (null is
+      // an allowed result here). Local requests keep their original error path.
+      if (deviceId) return null;
       throw e;
     });
+  requestRef.promise = p;
   inflight.set(key, p);
   return p;
 }
@@ -476,7 +521,7 @@ export function useAgentCapabilities(
   deviceId?: string,
 ): UseAgentCapabilitiesResult {
   const selectedKey = agentKind ? cacheKey(agentKind, deviceId) : null;
-  const initialCapabilities = selectedKey ? cache.get(selectedKey) : undefined;
+  const initialCapabilities = agentKind ? getCachedCapabilities(agentKind, deviceId) ?? undefined : undefined;
   const [ownerKey, setOwnerKey] = useState<CacheKey | null>(
     initialCapabilities ? selectedKey : null,
   );
@@ -536,7 +581,7 @@ export function useAgentCapabilities(
       return;
     }
     const key = cacheKey(agentKind, deviceId);
-    const cached = cache.get(key);
+    const cached = getCachedCapabilities(agentKind, deviceId);
     if (cached) {
       setOwnerKey(key);
       setCapabilities(cached);
@@ -595,7 +640,8 @@ export function getCachedCapabilities(
   agentKind: AgentKind,
   deviceId?: string,
 ): AgentCapabilities | null {
-  return cache.get(cacheKey(agentKind, deviceId)) ?? null;
+  const key = cacheKey(agentKind, deviceId);
+  return expiry.valid(key) ? cache.get(key) ?? null : null;
 }
 
 /**
@@ -624,18 +670,27 @@ export function refreshControlledDeviceCapabilities(taskDeviceId: string): void 
 /** device-link:被控设备下线 / 断链时驱逐其能力缓存(只清该设备的 key)。 */
 export function evictDeviceCapabilities(
   deviceId: string,
-  options?: { retainDisplaySnapshot?: boolean },
+  options?: { retainDisplaySnapshot?: boolean; directOnly?: boolean },
 ): void {
-  const scopedDevices = new Set([...cache.keys(), ...inflight.keys(), ...remoteListeners.keys()]
-    .map(key => key.slice(0, key.lastIndexOf(':'))));
-  for (const key of scopedDevices) {
-    const route = parseModelCatalogKey(key);
-    if (route && (route.taskDeviceId === deviceId || route.agentDeviceId === deviceId)) {
-      evictDeviceCapabilities(key, options);
+  // A provisional direct target must not evict the host's healthy routed aliases.
+  if (!options?.directOnly) {
+    const scopedDevices = new Set([...cache.keys(), ...inflight.keys(), ...remoteListeners.keys()]
+      .map(key => key.slice(0, key.lastIndexOf(':'))));
+    for (const key of scopedDevices) {
+      const route = parseModelCatalogKey(key);
+      if (route && (route.taskDeviceId === deviceId || route.agentDeviceId === deviceId)) {
+        evictDeviceCapabilities(key, options);
+      }
     }
   }
   const prefix = `${deviceId}:`;
-  for (const k of [...cache.keys()]) if (k.startsWith(prefix)) cache.delete(k);
+  for (const k of [...cache.keys()]) if (k.startsWith(prefix)) {
+    cache.delete(k);
+    // A retained refresh preserves the mounted display payload, so its host
+    // deadline must survive too. Dropping it would let a hung refresh keep the
+    // old capabilities past the forwarded trust window.
+    if (!options?.retainDisplaySnapshot) expiry.forget(k);
+  }
   for (const k of [...inflight.keys()]) if (k.startsWith(prefix)) inflight.delete(k);
   // 代际自增:作废该设备所有在途 fetch 的回写(防其 .then 把陈旧能力复活回 cache)。
   deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);

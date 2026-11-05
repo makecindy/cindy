@@ -1,3 +1,4 @@
+import { prNumberLabel, prKindLabel } from '@cindy/maker-shared';
 import { useEffect, useId, useState, type ReactNode } from 'react';
 import {
   ChevronDown,
@@ -564,8 +565,8 @@ export function BotTaskCard({
         {pullRequests.map((pr) => (
           <Chip key={pr.url} onClick={() => openPr(sessionPrUrl(pr))}>
             {prIcon(pr)}
-            <span className="truncate" title={`${pr.owner}/${pr.repo} #${pr.prNumber}`}>
-              PR #{pr.prNumber}
+            <span className="truncate" title={`${pr.owner}/${pr.repo} ${prNumberLabel(pr)}`}>
+              {prKindLabel(pr)} {prNumberLabel(pr)}
             </span>
           </Chip>
         ))}
