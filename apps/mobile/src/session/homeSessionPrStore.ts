@@ -111,7 +111,9 @@ export function refreshHomeSessionPr(
   void load(next.value)
     .then((value) => {
       if (entries.get(key) !== next) return;
-      next.value = value;
+      // 读回的上次结果可能在本次查询在途时才种入(冷启动已在线),load 拿到的 previous 里没有它:
+      // 状态查询失败的这一轮不能用 null 覆盖已读回的状态。
+      next.value = keepKnownStatus(value, next.value);
       if (next.persist) schedulePersist(next.persist.scope, next.persist.userId);
     })
     // 失败保留上次结果:网络抖动不该让已显示的 PR 号消失;下一个刷新周期再试。
@@ -121,6 +123,20 @@ export function refreshHomeSessionPr(
       listeners.get(key)?.forEach((listener) => listener());
     });
   return 0;
+}
+
+/** 同一 PR 这一轮没拿到状态时沿用已有状态(含 additional 里的各条);换了 PR 则不沿用。 */
+function keepKnownStatus(value: HomeSessionPrInfo | null, known: HomeSessionPrInfo | null): HomeSessionPrInfo | null {
+  if (!value || !known) return value;
+  const knownRows = [known, ...(known.additional ?? [])];
+  const fill = (row: HomeSessionPrInfo): HomeSessionPrInfo => {
+    if (row.status) return row;
+    const status = knownRows.find((item) => prStatusKey(item.ref) === prStatusKey(row.ref))?.status ?? null;
+    return status ? { ...row, status } : row;
+  };
+  const filled = fill(value);
+  if (!value.additional) return filled;
+  return { ...filled, additional: value.additional.map(fill) };
 }
 
 export async function loadHomeSessionPr(

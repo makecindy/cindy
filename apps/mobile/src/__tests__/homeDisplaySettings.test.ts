@@ -443,6 +443,14 @@ describe('home PR cache', () => {
       expect(refreshHomeSessionPr(key, load, { now: 2_000, persist: { ...persist, scope: '1' } })).toBe(0);
       expect(load).toHaveBeenCalledWith({ ref, status: merged });
 
+      // 冷启动已在线:首查在读回之前就开始,状态查询失败也不能把读回的状态覆盖成空。
+      prStoreTesting.reset();
+      const raced = homeSessionPrCacheKey('4', 'd', 's');
+      const hydrating = hydrateHomeSessionPr('4', 'u1');
+      refreshHomeSessionPr(raced, async () => { await hydrating; return { ref, status: null }; }, { now: 3_000, persist: { ...persist, scope: '4' } });
+      await vi.waitFor(() => expect(readHomeSessionPr(raced)).toEqual({ ref, status: merged }));
+      await vi.advanceTimersByTimeAsync(0);
+
       // 另一个账号读不到。
       prStoreTesting.reset();
       await hydrateHomeSessionPr('2', 'u2');
