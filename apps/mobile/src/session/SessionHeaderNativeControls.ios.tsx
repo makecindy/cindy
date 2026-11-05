@@ -53,9 +53,10 @@ import type {
  * headerBlurLayers; the composer keeps one layer (see edgeBlurMask).
  */
 export function SessionHeaderNativeBlur({ height: chromeHeight, edge = 'top', inset = 0, fadeInside }: { height: number; edge?: 'top' | 'bottom'; inset?: number; fadeInside?: number }) {
+  const { colors } = useTheme();
   const layers = edge === 'top'
-    ? headerBlurLayers(chromeHeight, fadeInside).map((mask) => ({ mask, intensity: HEADER_BLUR_LAYER_INTENSITY }))
-    : [{ mask: edgeBlurMask(chromeHeight, edge, fadeInside), intensity: FLOATING_CHROME_BLUR_INTENSITY }];
+    ? headerBlurLayers(chromeHeight, fadeInside).map((mask) => ({ mask, intensity: HEADER_BLUR_LAYER_INTENSITY, shade: colors.edgeBlurShadeLayered }))
+    : [{ mask: edgeBlurMask(chromeHeight, edge, fadeInside), intensity: FLOATING_CHROME_BLUR_INTENSITY, shade: colors.edgeBlurShade }];
   return (
     <View
       pointerEvents="none"
@@ -69,19 +70,20 @@ export function SessionHeaderNativeBlur({ height: chromeHeight, edge = 'top', in
         zIndex: 9,
       }}
     >
-      {layers.map(({ mask, intensity }, index) => <MaskedBlur key={index} mask={mask} intensity={intensity} />)}
+      {layers.map(({ mask, intensity, shade }, index) => <MaskedBlur key={index} mask={mask} intensity={intensity} shade={shade} />)}
     </View>
   );
 }
 
-function MaskedBlur({ mask, intensity }: { mask: EdgeBlurMask; intensity: number }) {
+/** `shade` sits on the blur under the same mask, see edgeBlurShade. */
+function MaskedBlur({ mask, intensity, shade }: { mask: EdgeBlurMask; intensity: number; shade: string }) {
   const { mode } = useTheme();
   return (
     <Host colorScheme={mode} ignoreSafeArea="all" style={StyleSheet.absoluteFill}>
       <Mask modifiers={[frame({ maxWidth: Infinity, maxHeight: Infinity })]}>
         <RNHostView>
           <View style={{ flex: 1 }}>
-            <BlurBackdrop intensity={intensity} overlayColor="transparent" />
+            <BlurBackdrop intensity={intensity} overlayColor={shade} />
           </View>
         </RNHostView>
         <Mask.Content>
