@@ -118,6 +118,17 @@ it('does not run when saving fails, keeps edited text, and allows retry', async 
   await waitFor(() => expect(api.runNow).toHaveBeenCalledOnce());
   expect(api.save).toHaveBeenLastCalledWith('bot', expect.objectContaining({ prompt: 'New instructions' }), 'daily');
 });
+it('rolls back the enabled switch when saving an edited routine is rejected', async () => {
+  const api = setup();
+  api.save.mockRejectedValueOnce(new Error('one-shot time has passed'));
+  render(<BotRoutines botId="bot" />);
+  fireEvent.click(await screen.findByText('Daily report'));
+  fireEvent.click(screen.getByRole('switch', { name: 'routines.enabled' }));
+  expect(screen.getByRole('switch', { name: 'routines.enabled' }).getAttribute('aria-checked')).toBe('false');
+  fireEvent.click(screen.getByRole('button', { name: 'routines.save' }));
+  await screen.findByRole('alert');
+  expect(screen.getByRole('switch', { name: 'routines.enabled' }).getAttribute('aria-checked')).toBe('true');
+});
 it('blocks duplicate execution and leaving while a save is pending', async () => {
   const api = setup();
   let finish!: (value: Routine) => void;
