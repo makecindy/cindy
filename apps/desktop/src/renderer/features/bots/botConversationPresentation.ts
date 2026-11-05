@@ -236,6 +236,14 @@ export function tailReplyClientIds(messages: readonly ChatMessage[]): ReadonlySe
   let superseded = false;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]!;
+    // 历史恢复时被过滤掉的隐藏 thinking 行(redacted / omitted 占位)在映射阶段已经
+    // 从 `displayMessages` 消失,但主进程仍把 thinking 行算作后续活动;边界以相邻
+    // 消息上的标记保留(`mapServerMessages`),这里按同样的语义处理。
+    if (message.hiddenThinkingAfter) {
+      activityAfter = true;
+      continue;
+    }
+    const hiddenBefore = message.hiddenThinkingBefore === true;
     if (message.role === 'user') {
       if (isContinuationMessage(message)) {
         superseded = true;
@@ -243,18 +251,21 @@ export function tailReplyClientIds(messages: readonly ChatMessage[]): ReadonlySe
         activityAfter = false;
         superseded = false;
       }
+      if (hiddenBefore) activityAfter = true;
       continue;
     }
     if (message.role === 'thinking' || message.role === 'tool_use' || message.role === 'tool_result') {
       activityAfter = true;
       continue;
     }
-    if (message.role !== 'assistant' || activityAfter || superseded) continue;
-    if (message.parentToolUseId || message.botPrivateReply || message.systemCardType) continue;
-    if (!message.content.trim() || message.failedSamplingAttempt) continue;
-    if (message.assistantPhase === 'commentary' && !message.explicitDelivery
-      && !hasRichAnswer(message.content)) continue;
-    ids.add(message.clientId);
+    if (message.role === 'assistant' && !activityAfter && !superseded
+      && !message.parentToolUseId && !message.botPrivateReply && !message.systemCardType
+      && message.content.trim() && !message.failedSamplingAttempt
+      && !(message.assistantPhase === 'commentary' && !message.explicitDelivery
+        && !hasRichAnswer(message.content))) {
+      ids.add(message.clientId);
+    }
+    if (hiddenBefore) activityAfter = true;
   }
   return ids;
 }

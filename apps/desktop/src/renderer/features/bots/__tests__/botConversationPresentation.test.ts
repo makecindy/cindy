@@ -575,6 +575,33 @@ describe('companion closing reply and read position', () => {
     expect(proseIds(windowLocal)).toEqual(['wake', 'narration']);
   });
 
+  // 隐藏 thinking 行在历史恢复时被映射层删掉,但主进程仍把它算作后续活动;
+  // 边界由 mapServerMessages 挂在相邻消息上(#8655 review P2)。
+  it('keeps prose before a dropped thinking placeholder folded', () => {
+    const at = (minute: number) => new Date(Date.UTC(2026, 10, 5, 0, minute)).toISOString();
+    const rows: RenderItem[] = [
+      message('u', 'user', 'Check the inbox', { createdAt: at(0) }),
+      message('wake', 'assistant', 'Woke up: inbox empty', { turnCompleted: true, createdAt: at(1) }),
+      { type: 'work_group', key: 'work-progress', isStreaming: false,
+        children: [message('prose', 'assistant', 'Opening the second mailbox', { createdAt: at(2) })] } as RenderItem,
+    ];
+    const messages: ChatMessage[] = [
+      message('u', 'user').message,
+      message('wake', 'assistant').message,
+      message('prose', 'assistant').message,
+      // 映射层已经删掉了空 thinking 行,只留下边界标记(与生产 displayMessages 一致)。
+      { clientId: 'error', role: 'error', content: 'Usage limit reached', hiddenThinkingBefore: true } as ChatMessage,
+    ];
+    const projected = projectBot(rows, messages);
+    expect(proseIds(projected)).toEqual(['wake']);
+    expect(allKeys(projected)).toContain('msg-prose');
+    expect(latestSettledAssistantMs(projected)).toBe(Date.parse(at(1)));
+    // 去掉边界标记时同一段正文会被提升成收尾回复,证明结论来自这条边界。
+    const withoutBoundary = messages.filter(m => m.clientId !== 'error');
+    expect(proseIds(projectBot(rows, withoutBoundary))).toEqual(['wake', 'prose']);
+  });
+
+
   // 续跑（recovery）开启的是新一次尝试:它之前的正文已被 groupWorkRuns 的 resumed 分支
   // 折进工作过程,不能因为后面没有工具就重新提升成正式回复（codex review P2）。
   it('keeps a superseded attempt folded when the recovery answers directly', () => {
