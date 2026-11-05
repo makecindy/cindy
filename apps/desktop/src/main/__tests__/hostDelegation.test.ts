@@ -32,6 +32,27 @@ describe('resolveHostDelegation', () => {
     expect(resolveHostDelegation({ env: {}, userDataDir: profileWithToken('t') })).toBeNull();
   });
 
+  it('joins a running host discovered from the profile endpoint file', () => {
+    const userDataDir = profileWithToken('unit-test-token');
+    fs.writeFileSync(
+      path.join(userDataDir, 'host-endpoint.json'),
+      JSON.stringify({ pid: process.pid, baseUrl: 'http://127.0.0.1:3456' }),
+    );
+    expect(resolveHostDelegation({ env: {}, userDataDir })).toEqual({
+      baseUrl: 'http://127.0.0.1:3456',
+      token: 'unit-test-token',
+    });
+  });
+
+  it('ignores an endpoint file whose process is gone', () => {
+    const userDataDir = profileWithToken('unit-test-token');
+    fs.writeFileSync(
+      path.join(userDataDir, 'host-endpoint.json'),
+      JSON.stringify({ pid: 999_999_999, baseUrl: 'http://127.0.0.1:3456' }),
+    );
+    expect(resolveHostDelegation({ env: {}, userDataDir })).toBeNull();
+  });
+
   it('reads the loopback target and the profile token', () => {
     const userDataDir = profileWithToken('unit-test-token');
     expect(

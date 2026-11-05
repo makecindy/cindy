@@ -29,11 +29,35 @@ export const HOST_DELEGATION_ENV = 'CINDY_HOST_API';
  * enabled but incomplete — a misconfigured client must not boot a second
  * runtime by accident.
  */
+/**
+ * A running host writes `host-endpoint.json` next to its token. When the pid is
+ * alive the desktop joins that runtime instead of building its own — the same
+ * rule as the explicit environment variable, without requiring configuration.
+ */
+function discoverRunningHost(userDataDir: string): string | null {
+  try {
+    const raw = fs.readFileSync(path.join(userDataDir, 'host-endpoint.json'), 'utf-8');
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    const { pid, baseUrl } = parsed as { pid?: unknown; baseUrl?: unknown };
+    if (typeof pid !== 'number' || typeof baseUrl !== 'string') return null;
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return null;
+    }
+    return baseUrl;
+  } catch {
+    return null;
+  }
+}
+
 export function resolveHostDelegation(input: {
   env: NodeJS.ProcessEnv;
   userDataDir: string;
 }): HostDelegationConfig | null {
-  const raw = input.env[HOST_DELEGATION_ENV]?.trim();
+  const raw = input.env[HOST_DELEGATION_ENV]?.trim()
+    || discoverRunningHost(input.userDataDir);
   if (!raw) return null;
   let url: URL;
   try {
@@ -273,6 +297,37 @@ export const PROXIED_CHANNELS: readonly ProxiedChannel[] = [
     body: ([sessionId]) => ({ sessionId }),
   },
 ];
+
+/**
+ * Keep the host's proxies authoritative: the desktop registers some channels
+ * outside the runtime block, and a duplicate `ipcMain.handle` would throw. In
+ * client mode those registrations are dropped for proxied channels.
+ */
+/**
+ * Keep the host's proxies authoritative: the desktop registers some channels
+ * outside the runtime block, and a duplicate `ipcMain.handle` would throw. In
+ * client mode those registrations are dropped for proxied channels.
+ *
+ * Takes `unknown` so the Electron `IpcMain` type is assignable; the shape is
+ * validated by the first call.
+ */
+export function claimProxiedChannels(ipcMain: unknown, log: (channel: string) => void): void {
+  const target = ipcMain as {
+    handle(channel: string, listener: (...args: never[]) => unknown): void;
+  };
+  const proxied = new Set(PROXIED_CHANNELS.map((entry) => entry.channel));
+  const original = target.handle.bind(target);
+  (target as unknown as { handle: unknown }).handle = (
+    channel: string,
+    listener: (...args: never[]) => unknown,
+  ): void => {
+    if (proxied.has(channel)) {
+      log(channel);
+      return;
+    }
+    original(channel, listener);
+  };
+}
 
 export interface HostDelegatedIpcDeps {
   readonly client: HostClient;

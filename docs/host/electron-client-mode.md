@@ -1,6 +1,10 @@
 # Electron 客户端模式（阶段 5 进行中）
 
-设置 `CINDY_HOST_API` 后，Desktop 不再装配自己的 Runtime，而是把已迁移的 renderer
+默认行为：**本机有 Host 在跑时自动进入客户端模式**（Host 在启动时写 `host-endpoint.json`，
+Desktop 校验 pid 存活即接管），无需任何环境变量；`CINDY_HOST_API` 仍可显式指定目标。
+Host 未运行时回退到内嵌 Runtime（自动拉起 Host 仍为 TODO）。
+
+设置 `CINDY_HOST_API`（或自动发现）后，Desktop 不再装配自己的 Runtime，而是把已迁移的 renderer
 通道转发到 `cindy-host`，并把宿主的事件流回灌到同一 push 通道。
 
 ```bash

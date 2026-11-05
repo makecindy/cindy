@@ -4,6 +4,7 @@ import { getDefaultVoiceInputSettings } from '../../desktop/src/shared/voiceInpu
 import { createDefaultLayout } from '../../desktop/src/shared/layoutTree.ts';
 
 import { randomBytes } from 'node:crypto';
+import { writeFileSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.js';
@@ -584,6 +585,20 @@ server.on('error', (error) => {
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`cindy-host listening on http://127.0.0.1:${PORT}`);
+  // Endpoint discovery for clients on this machine: a pid plus the loopback URL.
+  // The desktop uses it to enter client mode without any environment variable.
+  try {
+    writeFileSync(
+      path.join(resolveHostDataDir(), 'host-endpoint.json'),
+      JSON.stringify({ pid: process.pid, baseUrl: `http://127.0.0.1:${PORT}` }),
+      { mode: 0o600 },
+    );
+    const cleanup = () => {
+      try { rmSync(path.join(resolveHostDataDir(), 'host-endpoint.json'), { force: true }); } catch { /* ignore */ }
+    };
+    process.once('exit', cleanup);
+    process.once('SIGTERM', () => { cleanup(); process.exit(0); });
+  } catch { /* discovery is best-effort */ }
   void readAdoptedSessionState({
     userDataDir: resolveHostDataDir(),
     keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,

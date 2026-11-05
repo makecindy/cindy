@@ -461,6 +461,7 @@ import { fetchReleaseNotes, fetchReleaseNotesIndex } from './releaseNotesService
 import { resolveWorkspacePathCached, resolveWorkspacePathBatchCached } from './pathResolver';
 import { registerLocalDbIpc } from './localDb/ipc/registerAll';
 import {
+  claimProxiedChannels,
   createHostClient,
   registerHostDelegatedIpc,
   registerHostDelegatedSync,
@@ -1252,10 +1253,6 @@ import { registerLearnIpc, broadcastLearnEvent } from './learn-host/registerIpc.
 import { registerGoalHandlers, broadcastGoalStatus } from './maker-ipc/goal.js';
 import { createLogger as createSchedulerLogger } from './logger.js';
 
-if (hostDelegation()) {
-  console.log('[bootstrap-electron] client mode requested at startup');
-}
-
 let makerProviderRefreshConfigured = false;
 
 /** Resolved once: client mode is a process-lifetime decision. */
@@ -1269,6 +1266,58 @@ function hostDelegation(): HostDelegationConfig | null {
   }
   return hostDelegationConfig;
 }
+
+const hostClientMode = hostDelegation() !== null;
+if (hostClientMode) {
+  console.log('[bootstrap-electron] client mode requested at startup');
+}
+
+/** Client mode: the host owns every runtime channel; install its proxies now. */
+function installHostClientMode(): boolean {
+  const delegation = hostDelegation();
+  if (!delegation) return false;
+  setMakerClientMode(true);
+  // Registered outside the runtime block by other modules; drop those so the
+  // host stays authoritative instead of throwing on a duplicate handler.
+  claimProxiedChannels(ipcMain, (channel) => {
+    console.log(`[bootstrap-electron] client mode keeps the host handler for ${channel}`);
+  });
+  const hostClient = createHostClient(delegation);
+  const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain });
+  console.log(`[bootstrap-electron] client mode: delegating to ${delegation.baseUrl}`);
+  console.log(`[bootstrap-electron] client mode proxies: ${installed.join(', ')}`);
+  void registerHostDelegatedSync({
+    channel: 'ghosts:list',
+    path: '/api/ghosts',
+    client: hostClient,
+    map: (response) => ({ ghosts: Array.isArray(response) ? response : [] }),
+    ipcMain,
+  });
+  void registerHostDelegatedSync({
+    channel: 'maker:model-visibility:legacy-owner-claim-sync',
+    path: '/api/model-visibility/claim',
+    client: hostClient,
+    ipcMain,
+  });
+  startHostEventBridge({
+    baseUrl: delegation.baseUrl,
+    token: delegation.token,
+    broadcast: (payload) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.send(MAKER_PUSH.EVENT, payload);
+      }
+    },
+    onError: (error) => {
+      console.warn(
+        '[bootstrap-electron] host event bridge disconnected:',
+        error instanceof Error ? error.message : String(error),
+      );
+    },
+  });
+  return true;
+}
+
+if (hostClientMode) installHostClientMode();
 
 let startPendingAccountProviderReadiness: { ownerId: string; start: () => void } | null = null;
 
@@ -6551,6 +6600,12 @@ const registerIpcHandlers = () => {
   disposePiRuntimeRecovery = () => piRuntimeRecovery.dispose();
   const registerMakerIpcsAfterSplash = async (): Promise<void> => {
     if (makerIpcsRegistered) return;
+    // Client mode already installed the host proxies; the desktop runtime must
+    // never register competing handlers.
+    if (hostClientMode) {
+      makerIpcsRegistered = true;
+      return;
+    }
     // Compose here: IM runtime and hook IPC depend on maker-host, so the host
     // receives a reader instead of importing those modules during tool calls.
     setBotConversationConnectionsReader(async (botId) => {
@@ -6607,29 +6662,14 @@ const registerIpcHandlers = () => {
       registerRelaunchBusyActivityIpc(readRelaunchActivitySources, {
         describeTurns: () => describeRelaunchTurns(() => listInTurnSessionIds(getMakerIfReady())),
       });
-      // Client mode (CINDY_HOST_API): cindy-host owns the runtime, so this
-      // process must not assemble a second one. Channels outside the proxied
-      // allowlist fail loudly until they are migrated.
-      const delegation = hostDelegation();
-      if (delegation) {
-        // Structural guarantee: no code path may assemble a runtime here.
-        setMakerClientMode(true);
-        console.log(`[bootstrap-electron] client mode: delegating to ${delegation.baseUrl}`);
-      } else {
-        // getMakerCore() 首次调用触发 Maker 构造，同时发起自定义 MCP 初始加载。
-        // await 确保第一个会话的 mcpProviders 数组已填入已保存的自定义 MCP（P2 冷启动竞态修复）。
-        getMakerCore();
-        await waitForInitialCustomMcpRefresh();
-      }
+      // Client mode returned above and never reaches the runtime assembly.
+      // getMakerCore() 首次调用触发 Maker 构造，同时发起自定义 MCP 初始加载。
+      // await 确保第一个会话的 mcpProviders 数组已填入已保存的自定义 MCP（P2 冷启动竞态修复）。
+      getMakerCore();
+      await waitForInitialCustomMcpRefresh();
       // IPC handlers live for the whole process, while the concrete Maker is
       // replaced at every data-owner boundary. The facade resolves it lazily.
       const ipcMaker = createDynamicMaker(() => {
-        if (hostDelegation()) {
-          throwIpcError(
-            'UNSUPPORTED_CAPABILITY',
-            'cindy-host owns this profile; this channel is not proxied yet',
-          );
-        }
         if (isAppSessionBoundaryPending()) {
           throwIpcError(
             'PRECONDITION_FAILED',
@@ -6774,54 +6814,6 @@ const registerIpcHandlers = () => {
         win.webContents.send(MAKER_PUSH.TURN_CHANGE_SET_UPDATED, payload, ownerStamp);
       }
     });
-
-    // Client mode: install the host proxies only after the desktop finished its
-    // own registrations. Installing earlier makes those registrations throw and
-    // silently skip every later channel.
-    const clientDelegation = hostDelegation();
-    if (clientDelegation) {
-      const hostClient = createHostClient(clientDelegation);
-      const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain });
-      console.log(`[bootstrap-electron] client mode proxies: ${installed.join(', ')}`);
-      void registerHostDelegatedSync({
-        channel: 'ghosts:list',
-        path: '/api/ghosts',
-        client: hostClient,
-        map: (response) => ({ ghosts: Array.isArray(response) ? response : [] }),
-        ipcMain,
-      }).catch((error: unknown) => {
-        console.warn(
-          '[bootstrap-electron] client mode plugin list failed:',
-          error instanceof Error ? error.message : String(error),
-        );
-      });
-      void registerHostDelegatedSync({
-        channel: 'maker:model-visibility:legacy-owner-claim-sync',
-        path: '/api/model-visibility/claim',
-        client: hostClient,
-        ipcMain,
-      }).catch((error: unknown) => {
-        console.warn(
-          '[bootstrap-electron] client mode visibility claim failed:',
-          error instanceof Error ? error.message : String(error),
-        );
-      });
-      startHostEventBridge({
-        baseUrl: clientDelegation.baseUrl,
-        token: clientDelegation.token,
-        broadcast: (payload) => {
-          for (const win of BrowserWindow.getAllWindows()) {
-            if (!win.isDestroyed()) win.webContents.send(MAKER_PUSH.EVENT, payload);
-          }
-        },
-        onError: (error) => {
-          console.warn(
-            '[bootstrap-electron] host event bridge disconnected:',
-            error instanceof Error ? error.message : String(error),
-          );
-        },
-      });
-    }
 
     startReadyWorktreeMaintenance();
     // 删除 worktree 时因拿不到全局 safe.directory 锁而落盘的残留路径, 启动期补清。
