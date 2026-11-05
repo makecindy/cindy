@@ -354,6 +354,32 @@ const server = createHostServer({
       activity: row.activity ?? null,
     }));
   },
+  updateSession: async (sessionId: string, patch: Record<string, unknown>) => {
+    const allowed: Record<string, true> = {
+      title: true, status: true, pinnedAt: true, notificationsMuted: true, model: true,
+      effort: true, permissionMode: true, fastMode: true, planModeEnabled: true,
+    };
+    if (Object.keys(patch).some((key) => allowed[key] !== true)) {
+      throw new Error('unsupported session field');
+    }
+    const update: Record<string, unknown> = { updatedAt: Date.now() };
+    if (typeof patch.title === 'string') update.title = patch.title;
+    if (patch.status === 'active' || patch.status === 'archived') update.status = patch.status;
+    if (patch.pinnedAt === null) update.pinnedAt = null;
+    else if (typeof patch.pinnedAt === 'string') update.pinnedAt = Date.parse(patch.pinnedAt) || null;
+    if (typeof patch.notificationsMuted === 'boolean') update.notificationsMuted = patch.notificationsMuted;
+    if (typeof patch.model === 'string') update.model = patch.model;
+    if (typeof patch.effort === 'string') update.effort = patch.effort;
+    if (typeof patch.permissionMode === 'string') update.permissionMode = patch.permissionMode;
+    if (typeof patch.fastMode === 'boolean' || patch.fastMode === 'ultrafast') update.fastMode = patch.fastMode;
+    if (typeof patch.planModeEnabled === 'boolean') update.planModeEnabled = patch.planModeEnabled;
+    await getDbClient().drizzle.update(sessionTable).set(update).where(eq(sessionTable.id, sessionId));
+    const rows = await getDbClient().drizzle.select().from(sessionTable)
+      .where(eq(sessionTable.id, sessionId)).limit(1);
+    const row = rows[0];
+    if (!row) throw new Error('session not found');
+    return sessionToCamel({ ...row, messageCount: 0 });
+  },
   getSession: async (sessionId: string) => {
     const rows = await getDbClient().drizzle.select().from(sessionTable)
       .where(eq(sessionTable.id, sessionId)).limit(1);

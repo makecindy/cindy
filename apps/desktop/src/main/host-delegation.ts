@@ -98,6 +98,11 @@ export const PROXIED_CHANNELS: readonly ProxiedChannel[] = [
     body: ([sessionId]) => ({ sessionId }),
   },
   {
+    channel: 'local-db:sessions:update',
+    path: '/api/sessions/update',
+    body: ([sessionId, patch]) => ({ sessionId, patch: patch ?? {} }),
+  },
+  {
     channel: 'local-db:sessions:create',
     path: '/api/sessions/create',
     body: ([body]) => body ?? {},

@@ -311,6 +311,7 @@
     'setClassicalReplyStyle': () => undefined,
     'setApplicationMenuLocale': () => undefined,
     'localDb.sessions.create': (args) => rpc('/sessions/create', args?.[0] ?? {}),
+    'localDb.sessions.update': (args) => rpc('/sessions/update', { sessionId: args?.[0], patch: args?.[1] ?? {} }),
     'localDb.sessions.get': (args) => rpc('/sessions/get', { sessionId: args?.[0] }),
     'localDb.sessions.list': () => rpc('/sessions/list'),
     'localDb.sessions.messages': async (args) => rpc('/sessions/messages', args),

@@ -22,6 +22,7 @@ CINDY_HOST_API=http://127.0.0.1:3456 pnpm --filter desktop dev
 | `local-db:messages:view` | `POST /api/messages/history-view` |
 | `local-db:messages:create` | `POST /api/messages/create` |
 | `local-db:sessions:create` | `POST /api/sessions/create` |
+| `local-db:sessions:update` | `POST /api/sessions/update`（title/status/pinnedAt/… 白名单） |
 | `local-db:messages:estimated-value` | `POST /api/messages/estimated-value` |
 | `maker:input:remove` | `POST /api/input/remove` |
 | `model-access:get-status` | `POST /api/model-access` |
