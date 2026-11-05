@@ -1288,6 +1288,12 @@ export function rotateShadow(options: {
     used -= file.size;
     freed += file.size;
     deleted += 1;
+    // 原文的 .meta.json 要跟着正文一起回收;它不进容量统计(上游同样只算列出的备份文件)。
+    if (basename(file.path).startsWith("raw-")) {
+      try {
+        unlinkSync(`${file.path}.meta.json`);
+      } catch {}
+    }
   }
   return { ok: used + options.incomingBytes <= cap, deleted, freed, used, cap, oversize: false };
 }

@@ -198,6 +198,25 @@ describe('live compact card roles and tool excerpts (1.0.3-1.0.5)', () => {
     }
   });
 
+  it('drops the raw snapshot record together with the snapshot it describes', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spine-meta-'));
+    try {
+      const raw = join(dir, 'raw-0123456789abcdef.txt');
+      writeFileSync(raw, 'x'.repeat(600));
+      writeFileSync(`${raw}.meta.json`, JSON.stringify({ sha256: 'x'.repeat(64), bytes: 600 }));
+      const older = new Date(2026, 0, 1);
+      utimesSync(raw, older, older);
+      utimesSync(`${raw}.meta.json`, older, older);
+      writeFileSync(join(dir, 'newer.txt'), 'y'.repeat(100));
+      // 上限装不下两份:最旧的原文被回收时,它的 meta 也要一起走,否则记录会一直堆着。
+      const result = rotateShadow({ dir, incomingBytes: 500, cap: 1000 });
+      expect(result.deleted).toBe(1);
+      expect(readdirSync(dir).sort()).toEqual(['newer.txt']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('refuses a backup that is larger than the cap instead of deleting every older one', () => {
     // 删光旧备份也装不下时,必须放弃这一刀(旧备份全部保留),而不是净损失。
     const dir = mkdtempSync(join(tmpdir(), 'spine-oversize-'));
