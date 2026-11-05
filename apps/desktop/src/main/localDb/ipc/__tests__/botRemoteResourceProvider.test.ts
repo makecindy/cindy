@@ -216,3 +216,31 @@ it('advances the host read position from a device, never past the newest message
   await expect(read({ at: 'soon' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
   await expect(read({ at: 300 }, 'bad id')).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
 });
+
+// A topic keeps its own position: only the teammate's own live topics can be read, and the
+// main chat's position never moves with it.
+it('reads a private-chat topic on its own position, only for the teammate\'s own live topics', async () => {
+  sqlite.exec(`INSERT INTO bot_session_links VALUES
+    ('l-topic', 'bot-1', 'topic-1', 'thread', NULL, 1),
+    ('l-archived', 'bot-1', 'topic-gone', 'thread', 5, 1),
+    ('l-foreign', 'bot-2', 'topic-2', 'thread', NULL, 1),
+    ('l-canonical', 'bot-1', 'session-9', 'canonical', NULL, 1)`);
+  db.get.mockImplementation(async () => ({
+    id: 'bot-1', name: 'Sora', description: '', avatar: '', avatarColor: 'teal', status: 'active',
+    canonicalSessionId: 'session-1', lastMessagePreview: null, lastMessageAt: 500, lastMessageRole: 'user', lastReplyAt: 400,
+    needsAttention: false, hiddenAt: null, pinnedAt: null, activityAt: 500, currentVersion: 1, updatedAt: 1,
+  }));
+  registerBotRemoteResourceProvider();
+  const mainBefore = readState.positions['bot-1'];
+  const read = (input: Record<string, unknown>) => remoteResourceRegistry.invoke({ controllerDeviceId: 'phone' }, {
+    client: { protocolVersion: 1, primitives: [] }, collectionId: 'teammates', actionId: 'read',
+    resourceRef: { collectionId: 'teammates', kind: 'bot', id: 'bot-1' }, input,
+  });
+  await expect(read({ at: 300, threadSessionId: 'topic-1' })).resolves.toEqual({ effects: [], lastReadAt: 300 });
+  const future = await read({ at: Date.now() + 86_400_000, threadSessionId: 'topic-1' }) as unknown as { lastReadAt: number };
+  expect(future.lastReadAt).toBeLessThanOrEqual(Date.now());
+  for (const threadSessionId of ['topic-gone', 'topic-2', 'session-9', 'missing'])
+    await expect(read({ at: 300, threadSessionId })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  await expect(read({ at: 300, threadSessionId: 'bad id' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+  expect(readState.positions['bot-1']).toBe(mainBefore);
+});
