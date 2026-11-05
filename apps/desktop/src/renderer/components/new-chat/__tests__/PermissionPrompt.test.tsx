@@ -9,7 +9,7 @@
  */
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PendingPermission } from '@/lib/makerChatStore';
@@ -39,6 +39,8 @@ import { InteractionPromptHost } from '@/components/interaction-portal';
 import { setSlotElement } from '@/components/interaction-portal/store';
 import { useSessionSwitchFocusIntent } from '@/features/cc-agent/useSessionSwitchFocusIntent';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { useSettingsEscape } from '@/components/settings/useSettingsEscape';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 
 afterEach(cleanup);
 
@@ -524,6 +526,51 @@ describe('PermissionPrompt 焦点已在卡片控件上时不改道', () => {
     expect(document.activeElement).toBe(deny);
     await user.keyboard('{Enter}');
     expect(onRespond).toHaveBeenCalledTimes(1);
+    expect(onRespond).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'deny' }));
+  });
+});
+
+// 按住 Esc 退出设置：设置页只认首个 keydown（连发被它忽略），导航回到等授权的任务后，
+// 同一次按住的连发会落到授权卡的 Esc 快捷键上。经真实 useSettingsEscape 与路由切换验证
+// 这些连发不会替用户拒绝。
+describe('PermissionPrompt 按住 Esc 退出设置后不替用户拒绝', () => {
+  function SettingsPage() {
+    const ref = useRef<HTMLDivElement | null>(null);
+    const navigate = useNavigate();
+    useSettingsEscape(ref, true, () => navigate('/task-b'));
+    return <div ref={ref}>settings</div>;
+  }
+
+  function TaskPage({ onRespond }: { onRespond: (r: unknown) => void }) {
+    const intent = useSessionSwitchFocusIntent('task-b', true, 'req-1', noHostQuery);
+    return (
+      <PermissionPrompt
+        permission={permission([bashRule])}
+        onRespond={onRespond}
+        autoFocus={intent.armed}
+        onAutoFocusHandled={intent.consume}
+      />
+    );
+  }
+
+  it('连发的 Esc 不拒绝；松开后再按一次才拒绝', async () => {
+    const user = userEvent.setup();
+    const onRespond = vi.fn();
+    render(
+      <MemoryRouter initialEntries={['/settings']}>
+        <Routes>
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/task-b" element={<TaskPage onRespond={onRespond} />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.keyboard('{Escape>4}');
+    expect(screen.getByRole('button', { name: /allowOnce/ })).toBeTruthy();
+    await user.keyboard('{/Escape}');
+    expect(onRespond).not.toHaveBeenCalled();
+
+    await user.keyboard('{Escape}');
     expect(onRespond).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'deny' }));
   });
 });

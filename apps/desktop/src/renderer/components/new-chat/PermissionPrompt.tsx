@@ -236,6 +236,10 @@ export function PermissionPrompt({
       // 按键已有归属时不替用户做授权决定：输入法组字、正在打字、刚被菜单处理的 Esc、
       // 焦点在「拒绝」等按钮上的回车（交给按钮本身激活）都让位。
       if (e.key !== 'Enter' && e.key !== 'Escape') return;
+      // Esc 连发不是新的一下（与设置页 Esc 同一规则）：按住 Esc 退出设置、回到等授权的
+      // 任务时，首个 keydown 已被设置页用掉，接着的连发不能替用户拒绝。卡片在场时首个
+      // keydown 已经拒绝并收起卡片，忽略连发不改变正常按 Esc 的结果。
+      if (e.key === 'Escape' && e.repeat) return;
       const shortcutKind =
         e.key === 'Escape' ? 'dismiss' : e.ctrlKey || e.metaKey ? 'modifiedActivate' : 'activate';
       if (shouldCardShortcutYield(e, shortcutKind, cardRef.current)) return;
