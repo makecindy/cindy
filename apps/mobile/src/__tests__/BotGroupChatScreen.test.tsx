@@ -438,6 +438,27 @@ describe('group timeline', () => {
     expect(byId('diagramModal')?.getAttribute('data-source')).toBe(source);
   });
 
+  // #8955 P1 / unit: source denial keeps the group ready, unlike whole-group revocation.
+  it.each(['deleted', 'unavailable'] as const)('closes a posted-reply diagram when its source is %s while the group stays ready', async status => {
+    h.chat.server = true;
+    const source = 'flowchart LR\nA --> B';
+    const share = { messageId: 'source', threadRootId: 'thread-root', status: 'available' as const,
+      authorKind: 'bot' as const, authorBotId: 'mimi', authorName: 'Bot', sharedByAuthor: false,
+      content: '```mermaid\n' + source + '\n```', attachments: [], createdAt: 1000, edited: false };
+    const posted = message('posted-diagram', 1, { threadShare: share });
+    const data = group({ serverBacked: true, messages: [posted] });
+    await render(data, 'ready', undefined, '');
+    await click('botGroup.openDiagram');
+    expect(byId('diagramModal')?.getAttribute('data-source')).toBe(source);
+    await render({ ...data, messages: [status === 'deleted' ? { ...posted, deleted: true }
+      : { ...posted, threadShare: { ...share, status: 'unavailable', content: '' } }] }, 'ready', undefined, '');
+    expect(byId('diagramModal')).toBeNull();
+    await render(data, 'ready', undefined, '');
+    expect(byId('diagramModal')).toBeNull();
+    await click('botGroup.openDiagram');
+    expect(byId('diagramModal')?.getAttribute('data-source')).toBe(source);
+  });
+
   // PR #8818 / component: the identity matcher cannot reject a complete foreign
   // broadcast if the real Timeline splits it at a shorter member name first.
   // French send parser + English Screen: @Tous is personal, the longer broadcast is not.

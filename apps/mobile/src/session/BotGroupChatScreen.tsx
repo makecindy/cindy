@@ -242,9 +242,16 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     focused && foreground,
   );
   const viewportOwner = `${user?.id ?? ''}:${accountGeneration}:${deviceId}:${groupId}:${threadRootId ?? 'main'}`;
-  const [diagram, setDiagram] = useState<{ owner: string; payload: MessagePayload } | null>(null);
-  const openDiagram = useCallback((source: string) => setDiagram({ owner: viewportOwner, payload: buildMermaidPayload(source) }), [viewportOwner]);
+  const [diagram, setDiagram] = useState<{ owner: string; messageId: string; sourceMessageId: string; payload: MessagePayload } | null>(null);
+  const openDiagram = useCallback((source: string, message: BotGroupMessageView) => setDiagram({
+    owner: viewportOwner, messageId: message.id, sourceMessageId: message.threadShare?.messageId ?? message.id, payload: buildMermaidPayload(source),
+  }), [viewportOwner]);
   const closeDiagram = useCallback(() => setDiagram(null), []);
+  const diagramMessage = diagram ? group?.messages.find(message => message.id === diagram.messageId) : undefined;
+  const diagramAvailable = !!diagramMessage && !diagramMessage.deleted
+    && (!diagramMessage.threadShare || diagramMessage.threadShare.status === 'available')
+    && (diagramMessage.threadShare?.messageId ?? diagramMessage.id) === diagram?.sourceMessageId;
+  useEffect(() => { if (!diagramAvailable) closeDiagram(); }, [diagramAvailable, closeDiagram]);
   const richContent = useMemo(() => Platform.OS === 'android' ? new RichContentRuntime() : null, [viewportOwner]);
   useEffect(() => () => richContent?.clear(), [richContent]);
   useEffect(closeDiagram, [focused, foreground, viewportOwner, chat.state.kind, closeDiagram]);
@@ -827,7 +834,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
         else router.push({ pathname: '/companions/groups/[groupId]', params: { groupId, deviceId, deviceName,
           messageId: mention.messageId, ...(mention.threadRootId ? { threadRootId: mention.threadRootId } : {}) } } as never);
       }} />
-      <MessagePayloadModal payload={group && focused && foreground && diagram?.owner === viewportOwner ? diagram.payload : null} onClose={closeDiagram} />
+      <MessagePayloadModal payload={diagramAvailable && focused && foreground && diagram?.owner === viewportOwner ? diagram.payload : null} onClose={closeDiagram} />
   </SafeAreaView></RichContentContext.Provider>;
 }
 
@@ -865,7 +872,7 @@ export function BotGroupTimeline({
   highlightId?: string;
   onReply?: (message: BotGroupMessageView) => void;
   onOpenThread?: (message: BotGroupMessageView) => void;
-  onOpenDiagram?: (source: string) => void;
+  onOpenDiagram?: (source: string, message: BotGroupMessageView) => void;
   active?: boolean;
   threadRootId?: string;
   onOpenTopic?: (rootId: string, messageId?: string) => void;
@@ -970,7 +977,7 @@ export function BotGroupTimeline({
           <BotGroupThreadPosted messageId={message.id} shared={shared} onPress={revealShare} />
         : null}
         {actions}
-        </View>} topic={!!threadRootId} isRoot={isRoot} active={active} interactive={!selectedImages && (!longRoot || expandedRoot)} onOpenDiagram={onOpenDiagram} onRetrySource={onRetrySource} message={displayMessage} continued={continued} member={message.authorBotId ? memberById.get(message.authorBotId) : undefined}
+        </View>} topic={!!threadRootId} isRoot={isRoot} active={active} interactive={!selectedImages && (!longRoot || expandedRoot)} onOpenDiagram={onOpenDiagram ? source => onOpenDiagram(source, message) : undefined} onRetrySource={onRetrySource} message={displayMessage} continued={continued} member={message.authorBotId ? memberById.get(message.authorBotId) : undefined}
           quoteDisplay={message.quote ? resolveBotGroupQuote(message.quote, messages) : undefined}
           onLocateQuote={message.quote && onLocateMessage ? () => onLocateMessage(message.quote!.messageId) : undefined}
           members={group.members} deviceId={deviceId} online={online} identityFor={identityFor} mentionLabels={mentionLabels}
