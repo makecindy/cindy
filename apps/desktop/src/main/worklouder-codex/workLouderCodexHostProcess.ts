@@ -27,6 +27,7 @@ import {
   readWorkLouderDeviceStatusOrThrow,
   unwrapWorkLouderKeymapText,
   isCindyExclusiveAgentKeymap,
+  shouldSaveCreatorKeymapSession,
   WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT,
   WORKLOUDER_DEVICE_KEYMAP_FILE,
   workLouderFirmwareIdlesHidRead,
@@ -144,6 +145,8 @@ let creatorKeymapRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let creatorKeymapRetryAt = 0;
 let creatorKeymap: readonly (readonly string[])[] = CREATOR_MICRO_2_AGENT_KEYMAP;
 let creatorKeymapGeneration = 0;
+/** The SDK offers no file RPC, so the board keeps its factory keymap. */
+let keymapUnsupported = false;
 
 if (parentPort) {
   parentPort.on('message', (event) => {
@@ -673,6 +676,8 @@ async function restoreCreatorKeymap(deviceApi: WorkLouderApi): Promise<void> {
   }
   creatorKeymapBound = false;
   creatorKeymapWritten = false;
+  // A snapshot that outlives its restore would overwrite the next, unrelated layout.
+  await fs.rm(sessionPath, { force: true });
   hostLog('info', 'Work Louder pre-occupancy keymap restored');
 }
 
@@ -702,12 +707,34 @@ async function backupCreatorKeymap(
   }
   // Snapshot the whole document, but decide from the layer Cindy is about to
   // overwrite. A stale Cindy map on another layer must not skip this capture.
-  if (!isCindyExclusiveAgentKeymap(liveText, profileIndex, layerIndex)) {
-    await writeKeymapSnapshot(
-      path.join(keymapBackupDir, creatorMicro2KeymapSessionFileName(connectedDevice?.backupId)),
-      liveText,
-    );
+  const sessionPath = path.join(
+    keymapBackupDir,
+    creatorMicro2KeymapSessionFileName(connectedDevice?.backupId),
+  );
+  const sessionExists = await fs.access(sessionPath).then(
+    () => true,
+    () => false,
+  );
+  if (
+    shouldSaveCreatorKeymapSession(
+      isCindyExclusiveAgentKeymap(liveText, profileIndex, layerIndex),
+      sessionExists,
+    )
+  ) {
+    await writeKeymapSnapshot(sessionPath, liveText);
   }
+}
+
+async function hasKeymapSession(): Promise<boolean> {
+  if (!keymapBackupDir) return false;
+  return fs
+    .access(
+      path.join(keymapBackupDir, creatorMicro2KeymapSessionFileName(connectedDevice?.backupId)),
+    )
+    .then(
+      () => true,
+      () => false,
+    );
 }
 
 async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
@@ -717,7 +744,13 @@ async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
   const generation = creatorKeymapGeneration;
   const fsApi = loadWorkLouderFsApi(deviceApi, comm);
   if (!fsApi) {
-    hostLog('warn', 'Work Louder keymap bind could not load WLRPCApi');
+    // Optional in the SDK contract. Stay on the factory keymap and say so, instead of
+    // leaving the bind loop to spin on a board that can never be rewritten.
+    hostLog('warn', 'Work Louder keymap bind could not load WLRPCApi; keeping factory keymap');
+    keymapUnsupported = true;
+    creatorKeymapBound = true;
+    clearCreatorKeymapRetry();
+    await postDeviceStatus(deviceApi, connectedDevice.deviceType, connectedDevice.isUsb);
     return;
   }
   const liveResult = await fsApi.readFile(WORKLOUDER_DEVICE_KEYMAP_FILE);
@@ -741,7 +774,9 @@ async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
   const next = applyCreatorMicro2AgentLayer(document, layerIndex, creatorKeymap, profileIndex);
   if (!next.changed) {
     creatorKeymapBound = true;
-    if (next.alreadyBound) creatorKeymapWritten = true;
+    // Nothing was changed, so there is nothing to hand back, unless an earlier
+    // occupancy was never released and its snapshot is still waiting.
+    if (next.alreadyBound && (await hasKeymapSession())) creatorKeymapWritten = true;
     clearCreatorKeymapRetry();
     hostLog(
       'info',
@@ -934,6 +969,7 @@ function postDeviceState(
           : null,
       isCharging: typeof status.isCharging === 'boolean' ? status.isCharging : null,
       inputMonitoringPermission: process.platform === 'darwin' ? 'unknown' : 'not-required',
+      ...(keymapUnsupported ? { factoryKeymap: true } : {}),
     },
   });
 }
@@ -1026,6 +1062,7 @@ async function disconnect(): Promise<void> {
   creatorKeymapBound = false;
   creatorKeymapWritten = false;
   creatorKeymapBinding = null;
+  keymapUnsupported = false;
   const unsubscribe = unsubscribeHid;
   unsubscribeHid = null;
   if (unsubscribe) {

@@ -127,6 +127,14 @@ pub fn backup_files(serial: Option<&str>) -> (String, String) {
     )
 }
 
+/// Whether to snapshot the live document before rewriting it. A snapshot still on disk
+/// belongs to an occupancy that was never released, so it is kept when the layer already
+/// looks like Cindy's grid. Codex Micro's factory layer looks the same, so without a
+/// leftover snapshot the live document is the layout to hand back.
+pub fn should_save_session(live_layer_is_cindy: bool, session_exists: bool) -> bool {
+    !live_layer_is_cindy || !session_exists
+}
+
 /// A layer of `KV_OAI_*` codes, as the main process sends it.
 pub fn requested(value: &Value) -> Option<Value> {
     let rows = value.as_array().filter(|rows| !rows.is_empty())?;
@@ -268,6 +276,14 @@ mod tests {
         );
         assert_eq!(backup_files(None).0, "keymap-backup-codex-micro.json");
         assert_eq!(backup_files(Some("")).1, "keymap-session-codex-micro.json");
+    }
+
+    #[test]
+    fn keeps_a_leftover_snapshot_but_saves_the_factory_layout_when_none_exists() {
+        assert!(should_save_session(false, true));
+        assert!(should_save_session(false, false));
+        assert!(should_save_session(true, false));
+        assert!(!should_save_session(true, true));
     }
 
     #[test]

@@ -506,6 +506,19 @@ export function isCindyExclusiveAgentLayer(layer: WorkLouderKeymapLayer | undefi
   );
 }
 
+/**
+ * Whether to snapshot the live document before Cindy rewrites it. A snapshot that is
+ * still on disk belongs to an occupancy that was never released; keep it when the
+ * layer already looks like Cindy's grid. Codex Micro's factory layer looks the same,
+ * so without a leftover snapshot the live document is the layout to hand back.
+ */
+export function shouldSaveCreatorKeymapSession(
+  liveLayerIsCindy: boolean,
+  sessionExists: boolean,
+): boolean {
+  return !liveLayerIsCindy || !sessionExists;
+}
+
 export function isCindyExclusiveAgentKeymap(
   text: string,
   profileIndex = 0,
@@ -788,7 +801,8 @@ function isWorkLouderCodexDeviceState(value: unknown): value is WorkLouderCodexD
     (device.inputMonitoringPermission === 'granted' ||
       device.inputMonitoringPermission === 'denied' ||
       device.inputMonitoringPermission === 'unknown' ||
-      device.inputMonitoringPermission === 'not-required')
+      device.inputMonitoringPermission === 'not-required') &&
+    (device.factoryKeymap === undefined || typeof device.factoryKeymap === 'boolean')
   );
 }
 

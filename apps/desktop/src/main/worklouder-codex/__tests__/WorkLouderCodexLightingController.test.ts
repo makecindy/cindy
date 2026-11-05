@@ -489,6 +489,65 @@ describe('WorkLouderCodexLightingController', () => {
     expect(activateSession).toHaveBeenCalledWith('task-6', true);
   });
 
+  it('keeps factory routing and six lights when the host could not rewrite the keymap', async () => {
+    const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
+      current: null,
+    };
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn(),
+      setDeviceStateHandler: vi.fn(),
+      setHidInputHandler: vi.fn((handler: typeof hidRef.current) => {
+        hidRef.current = handler;
+      }),
+      rebindCreatorKeymap: vi.fn(),
+      dispose: vi.fn(async () => undefined),
+    };
+    const activateSession = vi.fn();
+    const settings = createWorkLouderCodexDefaultSettings('codex-micro');
+    settings.agentSource = 'sidebar';
+    settings.deviceEnabled = true;
+    settings.layout.taskKeys = ['AG01', 'AG02', 'AG03', 'AG04', 'AG05', 'ACT07'];
+    const options = Array.from({ length: 6 }, (_, index) => ({
+      id: `task-${index}`,
+      title: `Task ${index}`,
+      pinned: false,
+    }));
+    const controller = new WorkLouderCodexLightingController(sink, activateSession, async () => ({
+      sidebar: options,
+      lastSent: options,
+      options,
+    }));
+    controller.applySettings(settings);
+    await controller.resumeTaskSlots();
+    sink.setDeviceStateHandler.mock.calls.at(-1)?.[0]?.({
+      deviceType: 'codex-micro',
+      isUsbConnection: true,
+      firmwareVersion: null,
+      batteryPercentage: null,
+      isCharging: false,
+      inputMonitoringPermission: 'granted',
+      factoryKeymap: true,
+    });
+    sink.update.mockClear();
+    controller.updateSessionActivity([
+      { sessionId: 'task-0', phase: 'completed', compactDetail: '', attention: true },
+    ]);
+
+    // The board still sends its physical key names: AG01 is the first task key, AG00 is a command.
+    const frame = sink.update.mock.lastCall?.[0];
+    expect(frame?.threads).toHaveLength(6);
+    expect(frame?.threads[1]?.brightness).toBeGreaterThan(0);
+    expect(frame?.threads[0]?.brightness).toBe(0);
+    hidRef.current?.({ key: 'AG01', act: 1 });
+    expect(activateSession).toHaveBeenCalledWith('task-0', true);
+    activateSession.mockClear();
+    hidRef.current?.({ key: 'AG00', act: 1 });
+    expect(activateSession).not.toHaveBeenCalled();
+  });
+
   it('uses the published assignment for the current press and refreshes only later presses', async () => {
     let resolveRefresh: ((value: readonly string[]) => void) | undefined;
     const keyHandlerRef: { current: ((slot: number) => void) | null } = { current: null };

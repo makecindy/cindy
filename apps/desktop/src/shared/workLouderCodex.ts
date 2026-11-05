@@ -468,6 +468,11 @@ export interface WorkLouderCodexDeviceState {
   batteryPercentage: number | null;
   isCharging: boolean | null;
   inputMonitoringPermission: 'granted' | 'denied' | 'unknown' | 'not-required';
+  /**
+   * The host could not rewrite this board's keymap (no file RPC), so it keeps its
+   * factory codes: the HID key name is the physical key, and only AG00–AG05 light.
+   */
+  factoryKeymap?: boolean;
 }
 
 export interface WorkLouderCodexTaskOption {
@@ -872,6 +877,34 @@ export function resolveCreatorHidRole(
     if (physical) return { role: 'task', slot, physical };
   }
   return null;
+}
+
+export function workLouderUsesFactoryKeymap(
+  device: Pick<WorkLouderCodexDeviceState, 'factoryKeymap'> | null | undefined,
+): boolean {
+  return device?.factoryKeymap === true;
+}
+
+/** Factory keymap: the HID key name is the physical key. */
+export function resolveFactoryHidRole(
+  hidKey: string,
+  taskKeys: readonly WorkLouderCreatorProgrammableKey[],
+): CreatorHidRole | null {
+  if (!isWorkLouderCreatorProgrammableKey(hidKey)) return null;
+  const slot = normalizeWorkLouderCreatorTaskKeys(taskKeys).indexOf(hidKey);
+  if (slot >= 0) return { role: 'task', slot, physical: hidKey };
+  return { role: 'command', physical: hidKey };
+}
+
+/** Routes a HID report by whichever keymap is actually on the board. */
+export function resolveWorkLouderHidRole(
+  hidKey: string,
+  taskKeys: readonly WorkLouderCreatorProgrammableKey[],
+  device?: Pick<WorkLouderCodexDeviceState, 'factoryKeymap'> | null,
+): CreatorHidRole | null {
+  return workLouderUsesFactoryKeymap(device)
+    ? resolveFactoryHidRole(hidKey, taskKeys)
+    : resolveCreatorHidRole(hidKey, taskKeys);
 }
 
 const DEFAULT_CREATOR_COMMAND_ASSIGNMENT: WorkLouderCodexKeyAssignment = {

@@ -160,6 +160,8 @@ struct Micro {
     keymap_bound: bool,
     keymap_written: bool,
     keymap_ready_at: Option<Instant>,
+    /// Firmware without file RPCs keeps its factory keymap; main routes HID by it.
+    factory_keymap: bool,
 }
 
 impl Micro {
@@ -240,7 +242,8 @@ impl Micro {
             "firmwareVersion":status.get("version").and_then(Value::as_str),
             "batteryPercentage":status.get("battery").and_then(Value::as_f64).map(|n| n.clamp(0.0,100.0)),
             "isCharging":status.get("is_charging").and_then(Value::as_bool),
-            "inputMonitoringPermission":"not-required"
+            "inputMonitoringPermission":"not-required",
+            "factoryKeymap":self.factory_keymap
         }}))?;
         emit(json!({"kind":"state","status":"connected"}))
     }
@@ -260,10 +263,13 @@ impl Micro {
                     .downcast_ref::<RpcFailure>()
                     .is_some_and(RpcFailure::unsupported_method) =>
             {
-                // Firmware without file RPCs keeps its factory keymap.
+                // Firmware without file RPCs keeps its factory keymap; tell main so it
+                // routes keys and lights by the factory codes, not the rewritten ones.
                 self.keymap_bound = true;
+                self.factory_keymap = true;
                 emit(json!({"kind":"log","level":"warn",
                     "message":"Codex Micro firmware cannot rewrite its keymap"}))?;
+                self.status()?;
                 return Ok(false);
             }
             other => other?,
@@ -276,7 +282,9 @@ impl Micro {
         let next = match keymap::bind(&document, profile, layer, &desired) {
             keymap::Bind::AlreadyBound => {
                 self.keymap_bound = true;
-                self.keymap_written = true;
+                // Nothing was changed, so nothing to hand back, unless an earlier
+                // occupancy was never released and its snapshot is still waiting.
+                self.keymap_written = self.session_path().is_some_and(|path| path.exists());
                 return Ok(false);
             }
             keymap::Bind::Unchanged => {
@@ -306,10 +314,18 @@ impl Micro {
         if !factory.exists() {
             write_atomic(&factory, live)?;
         }
-        if !keymap::is_cindy_keymap(live, profile, layer) {
-            write_atomic(&dir.join(session), live)?;
+        let session = dir.join(session);
+        if keymap::should_save_session(
+            keymap::is_cindy_keymap(live, profile, layer),
+            session.exists(),
+        ) {
+            write_atomic(&session, live)?;
         }
         Ok(())
+    }
+    fn session_path(&self) -> Option<PathBuf> {
+        let dir = self.backup_dir.as_ref()?;
+        Some(dir.join(keymap::backup_files(self.serial.as_deref()).1))
     }
     fn restore_keymap(&mut self) -> Result<()> {
         if !self.keymap_written || self.device.is_none() {
@@ -319,7 +335,7 @@ impl Micro {
             return Ok(());
         };
         let (factory, session) = keymap::backup_files(self.serial.as_deref());
-        let Ok(saved) = fs::read_to_string(dir.join(session))
+        let Ok(saved) = fs::read_to_string(dir.join(&session))
             .or_else(|_| fs::read_to_string(dir.join(factory)))
         else {
             return Ok(());
@@ -328,6 +344,8 @@ impl Micro {
         self.rpc_within(write, RESTORE_TIMEOUT)?;
         self.keymap_bound = false;
         self.keymap_written = false;
+        // A snapshot that outlives its restore would overwrite the next, unrelated layout.
+        let _ = fs::remove_file(dir.join(session));
         Ok(())
     }
     /// Lighting waits for the firmware to reload a freshly written keymap.
@@ -354,6 +372,7 @@ impl Micro {
         self.keymap_bound = false;
         self.keymap_written = false;
         self.keymap_ready_at = None;
+        self.factory_keymap = false;
         // Do not pretend a transport failure proves physical absence.
         emit(json!({"kind":"state","status":"error","reason":"connection-failed"}))
     }
@@ -399,6 +418,7 @@ fn run() -> Result<()> {
         keymap_bound: false,
         keymap_written: false,
         keymap_ready_at: None,
+        factory_keymap: false,
     };
     let mut wanted = false;
     let mut latest_frame = None;

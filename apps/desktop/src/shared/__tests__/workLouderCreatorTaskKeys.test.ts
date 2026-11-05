@@ -9,6 +9,7 @@ import {
   normalizeWorkLouderCreatorTaskKeys,
   normalizeWorkLouderMerges,
   resolveCreatorHidRole,
+  resolveWorkLouderHidRole,
   workLouderAvailableMergeDirections,
   workLouderMergeNeighbor,
   workLouderShouldMuteKeyZone,
@@ -60,6 +61,26 @@ describe('Creator Micro 2 task keys', () => {
       role: 'command',
       physical: 'AG01',
     });
+  });
+
+  it('routes HID by the factory key names when the board keeps its factory keymap', () => {
+    const taskKeys = ['ACT06'] as const;
+    expect(resolveWorkLouderHidRole('ACT06', taskKeys, { factoryKeymap: true })).toEqual({
+      role: 'task',
+      slot: 0,
+      physical: 'ACT06',
+    });
+    expect(resolveWorkLouderHidRole('AG00', taskKeys, { factoryKeymap: true })).toEqual({
+      role: 'command',
+      physical: 'AG00',
+    });
+    for (const device of [{}, { factoryKeymap: false }, null]) {
+      expect(resolveWorkLouderHidRole('AG00', taskKeys, device)).toEqual({
+        role: 'task',
+        slot: 0,
+        physical: 'ACT06',
+      });
+    }
   });
 
   it('lets leftover AG codes sit on extra command keys when there are fewer than six tasks', () => {
