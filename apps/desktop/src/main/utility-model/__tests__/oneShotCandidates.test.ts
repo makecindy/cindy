@@ -1098,6 +1098,71 @@ describe('utility one-shot candidates', () => {
 
       expect(result.ok).toBe(false);
     });
+
+    it('开启后:被内容过滤的正文在 LiteLLM 线路被拒绝', async () => {
+      // `content_filter` 不是预算耗尽,放大预算也解不开 —— 但它同样意味着
+      // 「这不是完整答案」,严格模式必须拒,否则半截改写会覆盖完整草稿。
+      readKey.mockReturnValue('proxy-key');
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: '给这个页面加一个搜索框，搜索框要' }, finish_reason: 'content_filter' }],
+        }),
+      } as never);
+
+      const result = await requestUtilityText(makerMock(false), 'hello', {
+        maxTokens: 200,
+        requireCompleteOutput: true,
+      });
+
+      expect(result.ok).toBe(false);
+    });
+
+    it('默认关闭:被内容过滤的正文仍按旧行为返回(钉住影响面)', async () => {
+      readKey.mockReturnValue('proxy-key');
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: '给这个页面加一个搜索框，搜索框要' }, finish_reason: 'content_filter' }],
+        }),
+      } as never);
+
+      const result = await requestUtilityText(makerMock(false), 'hello', { maxTokens: 200 });
+      expect(result).toMatchObject({ ok: true, text: '给这个页面加一个搜索框，搜索框要' });
+    });
+
+    it('开启后:被内容过滤的正文在内置 xd 线路同样被拒绝', async () => {
+      activeCatalog.mockReturnValue({
+        providers: [{
+          id: 'xd',
+          name: 'Cindy AI',
+          source: 'builtin',
+          agents: ['codex'],
+          auth: { method: 'apiKey' },
+          routing: {
+            codex: { upstream: 'https://gateway.example/v1', authStrategy: 'api-key-header' },
+          },
+          models: { codex: [{ id: 'xd-mini', name: 'XD Mini', contextWindow: 100_000 }] },
+        }],
+      } as never);
+      readKey.mockReturnValue('xd-key');
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        text: async () => JSON.stringify({
+          choices: [{ message: { content: '给这个页面加一个搜索框，搜索框要' }, finish_reason: 'content_filter' }],
+        }),
+      } as never);
+
+      const result = await requestUtilityText(makerMock(false), 'hello', {
+        providerId: 'xd',
+        agentKind: 'codex',
+        model: 'xd-mini',
+        maxTokens: 200,
+        requireCompleteOutput: true,
+      });
+
+      expect(result.ok).toBe(false);
+    });
   });
 
   it('responses 的 SSE 终止事件被 max_output_tokens 截断 → 也放大预算重试', async () => {

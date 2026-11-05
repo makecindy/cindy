@@ -1780,8 +1780,8 @@ async function requestLiteLlmText(input: {
     }
     // `parsed` is the body behind `text`, including a budget retry, so its
     // terminal state describes the answer that is about to be returned.
-    if (input.requireCompleteOutput && outputBudgetExhausted('chat-completions', parsed)) {
-      log.warn('utility text response cut short by the output budget', {
+    if (input.requireCompleteOutput && answerIncompleteByProvider('chat-completions', parsed)) {
+      log.warn('utility text response did not complete', {
         model: input.model,
       });
       throw new UtilityTextExecutionError({ reason: 'request_failed' });
@@ -2147,14 +2147,15 @@ async function requestProviderHttpText(input: {
     if (
       input.requireCompleteOutput
       && text
-      && (outputBudgetExhausted(step.wire, finalParsed)
+      && (answerIncompleteByProvider(step.wire, finalParsed)
         || streamEndedWithoutCompletion(step.wire, finalParsed)
         || responsesStreamDidNotComplete(step.wire, raw))
     ) {
-      // The provider stopped at the output budget, or the stream reported a
-      // terminal failure: either way the text is the beginning of the answer,
-      // not the answer. Refusing this candidate lets the chain fall back
-      // instead of handing a half answer to the caller.
+      // The provider stopped early — at the output budget, or because it
+      // filtered the content, or the stream reported a terminal failure:
+      // either way the text is the beginning of the answer, not the answer.
+      // Refusing this candidate lets the chain fall back instead of handing a
+      // half answer to the caller.
       log.warn('utility text response did not complete', {
         wire: step.wire,
         model: targetFor(step).model,
@@ -2383,6 +2384,33 @@ function outputBudgetExhausted(wire: ProviderWire, parsed: unknown): boolean {
     return (parsed as { stop_reason?: unknown }).stop_reason === 'max_tokens';
   }
   return chatCompletionEmptyFingerprint(parsed).finishReason === 'length';
+}
+
+/**
+ * True when the provider's terminal state says this is not the whole answer.
+ *
+ * Wider than outputBudgetExhausted on purpose: that one also decides whether
+ * a bigger budget is worth another attempt, and a filtered answer must not
+ * trigger that retry — a bigger budget cannot un-filter content. This one is
+ * only consulted when a caller asked for a complete output, where any
+ * "the provider stopped early" reason has to refuse the candidate instead of
+ * handing a fragment to the caller.
+ *
+ * `content_filter` is classified the same way the Responses↔Chat bridge
+ * classifies it (packages/responses-chat-bridge/src/chat-sse-translator.ts):
+ * the body carries a fragment, not the answer.
+ */
+function answerIncompleteByProvider(wire: ProviderWire, parsed: unknown): boolean {
+  if (typeof parsed !== 'object' || parsed === null) return false;
+  if (wire === 'responses') {
+    const reason = (parsed as { incomplete_details?: { reason?: unknown } }).incomplete_details?.reason;
+    return reason === 'max_output_tokens' || reason === 'content_filter';
+  }
+  if (wire === 'anthropic-messages') {
+    return (parsed as { stop_reason?: unknown }).stop_reason === 'max_tokens';
+  }
+  const finishReason = chatCompletionEmptyFingerprint(parsed).finishReason;
+  return finishReason === 'length' || finishReason === 'content_filter';
 }
 
 /**
