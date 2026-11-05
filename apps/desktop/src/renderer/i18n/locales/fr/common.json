@@ -5726,6 +5726,7 @@
           "checking": "Recherche de mises à jour…",
           "upToDate": "À jour",
           "checkFailed": "Impossible de rechercher des mises à jour",
+          "rateLimited": "Vérifications limitées par GitHub",
           "lastChecked": "Dernière vérification : {{time}}",
           "check": "Rechercher des mises à jour",
           "retry": "Réessayer",

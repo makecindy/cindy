@@ -5628,6 +5628,7 @@
           "checking": "方察更新…",
           "upToDate": "已是最新",
           "checkFailed": "察更新未成",
+          "rateLimited": "GitHub 更源已限流，稍遲再察",
           "lastChecked": "前番察於 {{time}}",
           "check": "察更新",
           "retry": "再試",

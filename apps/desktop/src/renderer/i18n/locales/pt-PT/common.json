@@ -5726,6 +5726,7 @@
           "checking": "A procurar atualizações…",
           "upToDate": "Atualizado",
           "checkFailed": "Não foi possível procurar atualizações",
+          "rateLimited": "O GitHub está a limitar as verificações",
           "lastChecked": "Última verificação: {{time}}",
           "check": "Procurar atualizações",
           "retry": "Tentar novamente",
