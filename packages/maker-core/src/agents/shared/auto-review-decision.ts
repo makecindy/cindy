@@ -73,13 +73,14 @@ export function isAutoReviewUnavailableNotice(message: unknown): boolean {
  */
 export function createAutoReviewUnavailableNotice(
   emit: (message: string) => void,
-): { notify(): void; reset(): void } {
+): { notify(reason?: string): void; reset(): void } {
   let sent = false;
   return {
-    notify(): void {
+    notify(reason?: string): void {
       if (sent) return;
       sent = true;
-      emit(`[${AUTO_REVIEW_UNAVAILABLE_CODE}] ${AUTO_REVIEW_UNAVAILABLE_FALLBACK_TEXT}`);
+      const detail = reason?.trim().slice(0, MAX_AUTO_REVIEW_REASON_CHARS);
+      emit(`[${AUTO_REVIEW_UNAVAILABLE_CODE}] ${detail ?? AUTO_REVIEW_UNAVAILABLE_FALLBACK_TEXT}`);
     },
     reset(): void {
       sent = false;
@@ -222,13 +223,17 @@ export function annotatePermissionRequestForUnavailableReview<
     description?: string;
     metadata?: Record<string, unknown>;
   },
->(req: T): T {
+>(req: T, reason?: string): T {
+  const detail = reason?.trim().slice(0, MAX_AUTO_REVIEW_REASON_CHARS);
   return {
     ...req,
-    description: AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
+    description: detail
+      ? `${AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT} ${detail}`
+      : AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
     metadata: {
       ...req.metadata,
       [AUTO_REVIEW_UNAVAILABLE_METADATA_KEY]: true,
+      ...(detail ? { [AUTO_REVIEW_REASON_METADATA_KEY]: detail } : {}),
     },
   };
 }
@@ -254,7 +259,7 @@ export function annotatePermissionRequestForAutoReview<
     metadata?: Record<string, unknown>;
   },
 >(req: T, review: { unavailable?: boolean; reason?: string } | undefined): T {
-  if (review?.unavailable) return annotatePermissionRequestForUnavailableReview(req);
+  if (review?.unavailable) return annotatePermissionRequestForUnavailableReview(req, review.reason);
   const reason = review?.reason?.trim().slice(0, MAX_AUTO_REVIEW_REASON_CHARS);
   if (!reason) return req;
   return { ...req, metadata: { ...req.metadata, [AUTO_REVIEW_REASON_METADATA_KEY]: reason } };
@@ -696,3 +701,4 @@ export function composeAutoReviewIntentWithClarification(
   if (lines.length === 0) return normalizeAutoReviewUserIntent(currentUserIntent);
   return appendAutoReviewUserIntent(currentUserIntent, `Clarifications:\n${lines.join('\n')}`);
 }
+
