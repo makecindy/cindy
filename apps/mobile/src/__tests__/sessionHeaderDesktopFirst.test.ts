@@ -137,7 +137,7 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('session.sessionListButton');
     expect(source).toContain('{sessionListButton ? <Stack.Toolbar.View hidesSharedBackground>{sessionListButton}</Stack.Toolbar.View> : null}');
     expect(source).toContain("import { buildWideSessionNavLayout } from '@/session/wideSessionNav';");
-    expect(source).toContain("import { SessionListDrawer } from '@/session/SessionListDrawer';");
+    expect(source).toContain("import { SessionListDrawer, useSessionListDrawerMotion, useSessionListDrawerOpenGesture } from '@/session/SessionListDrawer';");
     expect(source).toContain('switchDrawerSessionInPlace,');
     expect(source).toContain("from '@/session/sessionDrawerNavigation';");
     // 同一宽度计算兼容现有调用参数。
@@ -196,6 +196,10 @@ describe('mobile session header desktop-first surface', () => {
     // Android 抽屉画在路由之上,仍须先卸载再换页。
     expect(source).toContain("navigation.setOptions({ animation: 'none' });");
     expect(source).toContain("if (Platform.OS !== 'ios') { queueDrawerNavigation(goBackToHome); return; }");
+    // 悬浮模式下右滑任务页拉出任务栏,不再触发系统返回;拉动期间手势保持启用,否则会被取消。
+    expect(source).toContain('gestureEnabled: !sessionListDrawerOverlayMounted && !sessionListDrawerFloating');
+    expect(source).toContain('<GestureDetector gesture={sessionListDrawerPullGesture}>');
+    expect(source).toContain('enabled: sessionListDrawerFloating && (!sessionListDrawerOverlayMounted || sessionListDrawerPulling)');
     // 选任务失败路径:校验先于关闭动画——先关再弹 Alert 会让焦点归还抢走弹窗焦点。
     expect(source).toContain("Alert.alert(t('devices.list.error.sessionDeviceNotFound'));\n      return;\n    }\n    // 不派发 NativeStack REPLACE");
   });

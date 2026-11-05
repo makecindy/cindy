@@ -656,7 +656,8 @@ import { markSessionScheduleRunsRead, unreadRunIdFromProjection } from '@/sessio
 import { useRemoteScheduleEventSnapshot } from '@/scheduler/remoteScheduleEvents';
 import { buildSessionNativeShellLayout } from '@/session/mobileNativeShellLayout';
 import { buildWideSessionNavLayout } from '@/session/wideSessionNav';
-import { SessionListDrawer } from '@/session/SessionListDrawer';
+import { SessionListDrawer, useSessionListDrawerMotion, useSessionListDrawerOpenGesture } from '@/session/SessionListDrawer';
+import { GestureDetector } from '@/platform/gestureHandler';
 import {
   switchDrawerSessionInPlace,
   type SessionRouteParamsNavigation,
@@ -3173,11 +3174,38 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // pending 只能拦住「首击本身就是导航」的连点;遮罩/back/左滑/当前任务先关闭时 pending
   // 仍为空。closing 从任一关闭入口同步置 true,完整覆盖退场 commit 前的快速二次点击。
   const sessionListDrawerClosingRef = useRef(false);
+  // overlayMounted for gesture callbacks that can arrive before it renders.
+  const sessionListDrawerShownRef = useRef(false);
   const openSessionListDrawer = useCallback(() => {
     if (!wideSessionNav.enabled || paneLayout.persistent || sessionListDrawerClosingRef.current) return;
+    sessionListDrawerShownRef.current = true;
     setSessionListDrawerOverlayMounted(true);
     setSessionListDrawerOpen(true);
   }, [paneLayout.persistent, wideSessionNav.enabled]);
+  // Floating mode: a rightward swipe on the task pulls the list out instead of
+  // going back; let go too early and it slides back.
+  const sessionListDrawerFloating = wideSessionNav.enabled && !paneLayout.persistent;
+  const sessionListDrawerMotion = useSessionListDrawerMotion();
+  const settleSessionListDrawerPull = useCallback(() => {
+    if (!sessionListDrawerShownRef.current || sessionListDrawerClosingRef.current) return;
+    sessionListDrawerClosingRef.current = true;
+    setSessionListDrawerOpen(false);
+  }, []);
+  // Stays enabled while the finger that opened the list is still down.
+  const [sessionListDrawerPulling, setSessionListDrawerPulling] = useState(false);
+  const pullSessionListDrawer = useCallback(() => {
+    setSessionListDrawerPulling(true);
+    openSessionListDrawer();
+  }, [openSessionListDrawer]);
+  const endSessionListDrawerPull = useCallback(() => setSessionListDrawerPulling(false), []);
+  const sessionListDrawerPullGesture = useSessionListDrawerOpenGesture({
+    motion: sessionListDrawerMotion,
+    enabled: sessionListDrawerFloating && (!sessionListDrawerOverlayMounted || sessionListDrawerPulling),
+    width: sessionListDrawerWidthRef.current,
+    onOpen: pullSessionListDrawer,
+    onCancel: settleSessionListDrawerPull,
+    onSettle: endSessionListDrawerPull,
+  });
   const closeSessionListDrawer = useCallback(() => {
     if (!sessionListDrawerOverlayMounted) return;
     if (sessionListDrawerClosingRef.current) return;
@@ -3209,6 +3237,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     const action = pendingDrawerNavigationRef.current;
     sessionListDrawerClosingRef.current = false;
     setSessionListDrawerOverlayMounted(false);
+    sessionListDrawerShownRef.current = false;
     if (!action) return;
     pendingDrawerNavigationRef.current = null;
     action();
@@ -10296,7 +10325,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const companionHeaderShown = companionChat && !!companionResource && !shareSelectionActive;
   const headerNode = (
     <>
-    <Stack.Screen options={{ gestureEnabled: !sessionListDrawerOverlayMounted }} />
+    <Stack.Screen options={{ gestureEnabled: !sessionListDrawerOverlayMounted && !sessionListDrawerFloating }} />
     {companionHeaderShown ? (
         <>
       {horizontalSystemHeader ? null : (
@@ -10390,6 +10419,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     </>
   );
   return (
+    <GestureDetector gesture={sessionListDrawerPullGesture}>
     <View style={styles.safeArea} testID="session.screen">
       <PaneViewportProvider value={detailViewport}>
       <ComposerKeyboardAvoidingView
@@ -11703,10 +11733,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           topInset={sessionListDrawerTopInset}
           width={sessionListDrawerWidthRef.current}
           resize={paneLayout.persistent ? undefined : sessionListDrawerResize}
+          motion={sessionListDrawerMotion}
         />
         ) : null}
       </MessageHistoryOverlay>
     </View>
+    </GestureDetector>
   );
 }
 
