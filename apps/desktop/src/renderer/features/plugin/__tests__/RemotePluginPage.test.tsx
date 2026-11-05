@@ -1071,6 +1071,43 @@ describe('remote task interactive-page consent prompt', () => {
     second.unmount();
     await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
   });
+  // Unit: notifications arriving during a failing read must get one follow-up,
+  // even when the composer stays mounted and no further events arrive.
+  it('keeps a coalesced refresh queued during a failed consent read', async () => {
+    setup(true);
+    const normal = invoke.getMockImplementation()!;
+    let reads = 0;
+    let rejectRead!: (error: Error) => void;
+    invoke.mockImplementation(async (device, channel, args) => {
+      if (args?.[0]?.actionId === 'management:snapshot') {
+        reads++;
+        if (reads === 2) return new Promise((_resolve, reject) => { rejectRead = reject; });
+        const result = await normal(device, channel, args);
+        if (reads === 1) result.result.ghosts = [];
+        return result;
+      }
+      return normal(device, channel, args);
+    });
+    let push!: (value: unknown) => void;
+    window.electronAPI.deviceLink.onRemotePush = ((listener: typeof push) => { push = listener; return () => {}; }) as never;
+    const ui = render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    await waitFor(() => expect(reads).toBe(1));
+    vi.useFakeTimers();
+    const notification = { deviceId: 'computer-a', channel: 'maker:remote-resources:changed', payload: { collectionId: 'plugins' } };
+    await act(async () => { push(notification); await vi.advanceTimersByTimeAsync(250); });
+    expect(reads).toBe(2);
+    await act(async () => {
+      for (let i = 0; i < 45; i++) push(notification);
+      rejectRead(new Error('temporary failure'));
+      await vi.advanceTimersByTimeAsync(250);
+    });
+    expect(reads).toBe(3);
+    expect(screen.getByText('newChat.pluginUi.enable')).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(reads).toBe(3);
+    ui.unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+  });
   // Unit: neither relay nor target disconnects replay missed plugin notifications.
   // Exercise the retained production entry with no mounted consumers, then remount.
   it.each(['relay', 'target', 'target-before-relay', 'peer-reset', 'peer-reopened'])('invalidates retained discovery across a %s disconnect without consumers', async source => {

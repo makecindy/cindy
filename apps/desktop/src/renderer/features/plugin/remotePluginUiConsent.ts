@@ -41,6 +41,7 @@ function createEntry(deviceId: string) {
     dirty = false;
     const revision = connectionRevision;
     let failed = false;
+    let refreshQueued = false;
     try {
       const discovered = actions ?? await pluginManagementActions(deviceId);
       if (!current() || revision !== connectionRevision) return;
@@ -61,6 +62,7 @@ function createEntry(deviceId: string) {
       snapshot = next;
       for (const listener of listeners) listener(next);
     } catch {
+      refreshQueued = dirty;
       // Retain the last good prompt, but let the next subscription/notification retry.
       // Do not turn a failed read into an automatic 250ms retry loop.
       dirty = true;
@@ -68,7 +70,7 @@ function createEntry(deviceId: string) {
     }
     finally {
       loading = false;
-      if (dirty && (!failed || revision !== connectionRevision) && current()) schedule();
+      if (dirty && (!failed || refreshQueued || revision !== connectionRevision) && current()) schedule();
     }
   };
   const schedule = () => {
