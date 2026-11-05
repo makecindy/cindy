@@ -405,6 +405,26 @@ describe('sidebar navigation customization', () => {
     expect(onDone).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps an Esc pressed in the panel from reaching background window shortcuts', () => {
+    // Like leaving right-sidebar maximize: registered first, and it neither checks nor
+    // sets defaultPrevented.
+    const background = vi.fn();
+    window.addEventListener('keydown', background);
+    try {
+      const onDone = vi.fn();
+      render(<SidebarNavigationCustomize onDone={onDone} />);
+      fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+      expect(onDone).toHaveBeenCalledTimes(1);
+      expect(background).not.toHaveBeenCalled();
+      // Keys the panel does not take still reach them.
+      fireEvent.keyDown(document.activeElement!, { key: 'Escape', shiftKey: true });
+      expect(background).toHaveBeenCalledTimes(1);
+      expect(onDone).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener('keydown', background);
+    }
+  });
+
   it('toggles from anywhere in the row except the drag handle', () => {
     render(<SidebarNavigationCustomize onDone={() => {}} />);
     const plugins = screen.getByRole('checkbox', { name: 'sidebar.navigation.items.plugins' });

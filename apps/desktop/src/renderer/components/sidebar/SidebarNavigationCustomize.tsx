@@ -43,6 +43,36 @@ interface CustomizeDraft {
 }
 
 /**
+ * Discards and closes on an unclaimed Esc; returns whether it did. Editable fields,
+ * menus / dialogs / controls elsewhere, IME composition, modified Esc and key
+ * auto-repeat keep the key; an open preview closes first.
+ */
+function dismissOnUnclaimedEscape(
+  event: KeyboardEvent,
+  root: HTMLElement | null,
+  onDone: () => void,
+): boolean {
+  if (
+    event.key !== 'Escape' ||
+    event.repeat ||
+    event.keyCode === 229 ||
+    event.altKey ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.shiftKey
+  ) {
+    return false;
+  }
+  if (shouldCardShortcutYield(event, 'dismiss', root)) return false;
+  // Previews close on a document-level Esc without preventDefault and stay mounted while
+  // they fade out; that press belongs to them.
+  if (document.querySelector('[data-lightbox-layer]')) return false;
+  event.preventDefault();
+  onDone();
+  return true;
+}
+
+/**
  * 管理一级入口(含带主视图的插件)的勾选与顺序；草稿在“完成”时一次性提交，
  * 按 Esc 放弃草稿并关闭，不会改偏好。勾选只决定入口在最外层还是收进「更多」；插件是否进侧边栏
  * 由插件自己的「在侧边栏显示」开关决定，关掉的插件不会出现在这里。
@@ -74,29 +104,14 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
     rootRef.current?.querySelector<HTMLElement>("[role='checkbox']")?.focus();
   }, []);
 
-  // Esc discards the draft and closes. Listen on window so the press still works after
-  // focus leaves for the body, and act only when it is unclaimed: editable fields,
-  // menus / dialogs / controls elsewhere, IME composition, modified Esc and key
-  // auto-repeat keep the key; an open preview closes first.
+  // Esc discards the draft and closes, but only when it is unclaimed (see
+  // dismissOnUnclaimedEscape). Pressed inside the panel, the root's onKeyDown claims it
+  // after the panel's own controls had their turn and stops it there, so background
+  // window shortcuts (such as leaving right-sidebar maximize) don't also fire and one
+  // press dismisses one layer. The window listener covers focus that left for the body.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (
-        event.key !== 'Escape' ||
-        event.repeat ||
-        event.keyCode === 229 ||
-        event.altKey ||
-        event.ctrlKey ||
-        event.metaKey ||
-        event.shiftKey
-      ) {
-        return;
-      }
-      if (shouldCardShortcutYield(event, 'dismiss', rootRef.current)) return;
-      // Previews close on a document-level Esc without preventDefault and stay mounted
-      // while they fade out; that press belongs to them.
-      if (document.querySelector('[data-lightbox-layer]')) return;
-      event.preventDefault();
-      onDone();
+      dismissOnUnclaimedEscape(event, rootRef.current, onDone);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
@@ -205,6 +220,11 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
       ref={rootRef}
       role="dialog"
       aria-label={t('sidebar.navigation.customize.title')}
+      onKeyDown={(event) => {
+        if (dismissOnUnclaimedEscape(event.nativeEvent, rootRef.current, onDone)) {
+          event.stopPropagation();
+        }
+      }}
       className="mx-2 mb-2 rounded-xl border border-sidebar-border bg-[var(--surface-elevated)] p-3 shadow-[shadow:var(--shadow-menu)]"
     >
       <div className="mb-2 flex items-center justify-between gap-2 px-1">
