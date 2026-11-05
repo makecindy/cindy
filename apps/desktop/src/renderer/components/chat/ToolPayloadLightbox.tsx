@@ -1,4 +1,4 @@
-import { PreviewHeader, PreviewButton } from './PreviewChrome';
+import { PREVIEW_PANEL_CLASS, PREVIEW_PANEL_STYLE, PreviewHeader, PreviewButton, PreviewScrim } from './PreviewChrome';
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
 /**
@@ -46,6 +46,7 @@ import { isRemoteFileOrigin } from '@/lib/sessionFileOrigin';
 import { resolveToolFilePath } from '@/lib/localPathResolver';
 import { downloadRemoteChatEntry } from '@/lib/remoteFileOpen';
 import { useChatSessionFile } from './ChatSessionFileContext';
+import { PluginUiRendererView } from '@/cindy-brain/PluginUiRendererView';
 
 export type ToolDiffSegment =
   | {
@@ -102,6 +103,7 @@ export interface ToolPayloadTextEditConfig {
 
 interface ToolPayloadLightboxProps {
   payload: ToolPayloadMode;
+  renderer?: { sessionId: string; toolUseId: string };
   /** Focus return target — usually the chip / chevron that opened us. */
   triggerRef?: React.RefObject<HTMLElement | null>;
   /** Opt-in editor for text payloads. Diff / JSON and ordinary text stay read-only. */
@@ -111,6 +113,7 @@ interface ToolPayloadLightboxProps {
 
 export function ToolPayloadLightbox({
   payload,
+  renderer,
   triggerRef,
   textEdit,
   onClose,
@@ -287,7 +290,6 @@ export function ToolPayloadLightbox({
         position: 'fixed',
         inset: 0,
         zIndex: 9999,
-        background: 'var(--overlay-lightbox)',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
@@ -297,33 +299,12 @@ export function ToolPayloadLightbox({
         cursor: 'default',
       }}
     >
-      <button
-        type="button"
-        tabIndex={-1}
-        aria-hidden="true"
-        style={{
-          position: 'absolute',
-          inset: 0,
-          border: 0,
-          padding: 0,
-          background: 'transparent',
-          cursor: 'default',
-        }}
-        onClick={handleClose}
-      />
+      {/* 遮罩在根节点的层叠上下文里,压在预览窗(zIndex 1)之下。 */}
+      <PreviewScrim onClose={handleClose} zIndex={0} />
       <div
         data-tool-payload-lightbox-card
-        className={cn(
-          'cursor-auto flex flex-col overflow-hidden pt-16',
-          'border border-[var(--msg-tool-card-border)]',
-          'bg-[var(--msg-tool-card-bg)]',
-        )}
-        style={{
-          width: '100vw',
-          height: '100vh',
-          position: 'relative',
-          zIndex: 1,
-        }}
+        className={cn('cursor-auto flex flex-col pt-16', PREVIEW_PANEL_CLASS)}
+        style={{ ...PREVIEW_PANEL_STYLE, zIndex: 1 }}
       >
         <PreviewHeader
           name={displayName}
@@ -355,6 +336,8 @@ export function ToolPayloadLightbox({
             'text-[var(--msg-tool-card-text)]',
           )}
         >
+          <PluginUiRendererView sessionId={renderer?.sessionId ?? ''} point="tool.body"
+            target={{ kind: 'tool', id: renderer?.toolUseId ?? '' }} active={!!renderer && payload.kind !== 'text'}>
           {payload.kind === 'diff' && (
             <div className="flex flex-col gap-3">
               {payload.files.map((file) => (
@@ -472,6 +455,7 @@ export function ToolPayloadLightbox({
               )}
             </div>
           )}
+          </PluginUiRendererView>
         </div>
 
         {isEditingText && textEdit && (
@@ -489,22 +473,6 @@ export function ToolPayloadLightbox({
             </Button>
           </div>
         )}
-      </div>
-
-      <div
-        className="mt-5 flex items-center gap-2 select-none"
-        style={{ position: 'relative', zIndex: 1 }}
-      >
-        <span
-          className={cn(
-            'rounded-[4px] border px-1.5 py-[2px]',
-            'text-11 font-medium',
-            'text-white/60 border-white/40',
-          )}
-        >
-          Esc
-        </span>
-        <span className="text-12 text-white/40">{t('chat.textLightbox.closeHint')}</span>
       </div>
     </div>
   );

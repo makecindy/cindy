@@ -161,7 +161,12 @@
         "details": "請再遣訊；若仍未成，請察記錄並回報其事。"
       }
     },
-    "runtimeFailureSetupHint": "如須調模型或設定，請於同僚所屬之機上為之。"
+    "runtimeFailureSetupHint": "如須調模型或設定，請於同僚所屬之機上為之。",
+    "capability": {
+      "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具呼叫未執行：群內授權已失效或不允許此操作。請由夥伴主人在目前群組重新發起。",
+      "GROUP_AUTHORIZATION_UNAVAILABLE": "暫時無法核驗 {{name}} 的群聊授權，這次工具呼叫未執行。請在連線恢復後重試。",
+      "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。"
+    }
   },
   "plan": {
     "intro_one": "此事分 {{count}} 步，吾如是分職：",
@@ -192,7 +197,21 @@
     "awaitingStart": "候君發令",
     "progressRunning": "方為 {{current}} / {{total}}",
     "progressDone": "已畢 {{done}} / {{total}}",
-    "allDone": "皆畢矣"
+    "allDone": "皆畢矣",
+    "stepQueued": "待啟",
+    "stepExecuting": "行中",
+    "stepSkipped": "已略",
+    "skippingTurn": "略過中…",
+    "queueWaiting": "待君續行",
+    "skipTurnLabel": "略過 {{name}}",
+    "stepSpoken": "言畢",
+    "allTurns_one": "凡 {{count}} 位",
+    "allTurns_other": "凡 {{count}} 位",
+    "foldTurns": "收",
+    "talkTitle": "依次陳議",
+    "talkPending": "未始",
+    "skipTurn": "略過",
+    "queueEnded": "此輪已終"
   },
   "speaking": {
     "queued": "待次",
@@ -304,7 +323,8 @@
     "lifecycleUnavailable": "今之伺服器或機尚不支援此舉。",
     "groupDissolved": "群議已散，仍可觀有權存取之舊訊。",
     "lastOwner": "請先讓渡群主或解散群議，然後退出。",
-    "allBotsMentionDisabled": "群主未啟 @所有夥伴。"
+    "allBotsMentionDisabled": "群主未啟 @所有夥伴。",
+    "turnAlreadyStarted": "此同伴已啟，不可略過"
   },
   "followUp": {
     "next": "分職 · 次步",
@@ -500,6 +520,7 @@
     "searchMembers": "尋成員",
     "membersNoMatch": "尋不得「{{query}}」",
     "you": "君",
+    "companionOf": "{{name}} 之同僚",
     "teammateTag": "同僚",
     "paused": "已暫止",
     "accessNone": "唯主人可用",

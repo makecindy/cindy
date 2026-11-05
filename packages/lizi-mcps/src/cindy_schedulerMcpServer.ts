@@ -103,13 +103,21 @@ function registerListToolsEntry(
     'list_tools',
     D_LIST_TOOLS,
     {
+      name: z.string().optional().describe('已发现的工具名；只读返回完整参数 schema，不执行操作。'),
       category: z
         .enum(CATEGORY_ENUM)
         .optional()
         .describe('工具类目。不传时返回类目概览。'),
     },
     { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    async ({ category }) => withAccountDataAccess(access, getSessionContext().sessionId, async () => {
+    async ({ category, name }) => withAccountDataAccess(access, getSessionContext().sessionId, async () => {
+      if (name) {
+        const tool = registry.get(name);
+        const value = tool ? { ok: true, tool: { name: tool.name, description: tool.description,
+          inputSchema: z.toJSONSchema(z.strictObject(tool.inputShape)) } }
+          : { ok: false, errorCode: 'UNKNOWN_TOOL' };
+        return { content: [{ type: 'text' as const, text: JSON.stringify(value) }] };
+      }
       if (category) {
         const tools = registry.list(category);
         return {

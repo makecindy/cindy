@@ -126,12 +126,45 @@ describe('task digest assembly', () => {
   });
 
   it('turns stored session rows and PR results into the digest vocabulary', () => {
-    expect(sessionFactsFromRow({ title: 't', status: 'active', agentKind: 'cc', model: 'claude-opus-5-5', providerId: null, effort: 'max', fastMode: true }))
-      .toEqual({ title: 't', status: 'active', route: { harness: 'claude-code', model: 'claude-opus-5-5', provider_id: null, effort: 'max', fast: true } });
-    expect(formatPrStatuses([
-      { ok: true, prNumber: 12, repo: 'cindy', status: 'open', unresolvedCount: 3 },
-      { ok: false, prNumber: 9, repo: 'cindy' },
-    ])).toBe('PR cindy#12 open,3 条评审未解决,CI 未知;PR cindy#9 状态未知');
+    expect(
+      sessionFactsFromRow({
+        title: 't',
+        status: 'active',
+        agentKind: 'cc',
+        model: 'claude-opus-5-5',
+        providerId: null,
+        effort: 'max',
+        fastMode: true,
+      }),
+    ).toEqual({
+      title: 't',
+      status: 'active',
+      route: {
+        harness: 'claude-code',
+        model: 'claude-opus-5-5',
+        provider_id: null,
+        effort: 'max',
+        fast: true,
+      },
+    });
+    expect(
+      formatPrStatuses([
+        { ok: true, prNumber: 12, repo: 'cindy', status: 'open', unresolvedCount: 3 },
+        { ok: false, prNumber: 9, repo: 'cindy' },
+      ]),
+    ).toBe('PR cindy#12 open,3 条评审未解决,CI 未知;PR cindy#9 状态未知');
+    expect(
+      formatPrStatuses([
+        {
+          ok: false,
+          provider: 'gitlab',
+          host: 'git.example.com',
+          owner: 'team/subgroup',
+          repo: 'project',
+          prNumber: 7,
+        },
+      ]),
+    ).toBe('MR git.example.com/team/subgroup/project!7 状态未知');
     expect(formatPrStatuses([])).toBeNull();
   });
 });

@@ -1,12 +1,13 @@
 import { ipcMain } from 'electron';
 import { createDirectRuntimeBridge, type DirectRuntime, type DirectRuntimeSession,
-  type DirectRuntimeEvents } from '@cindy/device-link';
+  type DirectRuntimeEvents, DIRECT_LINK_DESKTOP_MAX_PEERS, DIRECT_LINK_DESKTOP_RESERVED_PEERS } from '@cindy/device-link';
 import { DIRECT_LINK_LOCAL } from '../../shared/directLink';
 import { DesktopCaptureWindow } from '../remote-desktop/captureWindow';
 import { createLogger } from '../logger';
 
 const log = createLogger('device-link:direct');
-const bridge = createDirectRuntimeBridge();
+const bridge = createDirectRuntimeBridge({ maxPeers: DIRECT_LINK_DESKTOP_MAX_PEERS,
+  reservedPeers: DIRECT_LINK_DESKTOP_RESERVED_PEERS });
 let detach: (() => void) | undefined;
 let starting: Promise<void> | undefined;
 let epoch = 0;
@@ -61,14 +62,16 @@ function ensureStarted(): Promise<void> {
 
 /** Startup is deferred until a capable, authorized peer actually needs a LAN path. */
 export const desktopDirectRuntime: DirectRuntime = {
-  create(id: string, events: DirectRuntimeEvents): DirectRuntimeSession {
+  capacity: bridge.runtime.capacity,
+  create(id: string, events: DirectRuntimeEvents, options): DirectRuntimeSession {
     const generation = epoch;
-    let session: DirectRuntimeSession | undefined;
+    // Capacity wake callbacks synchronously claim their slot once the process exists.
+    let session: DirectRuntimeSession | undefined = detach ? bridge.runtime.create(id, events, options) : undefined;
     let closed = false;
     const get = async () => {
       await ensureStarted();
       if (closed || generation !== epoch) throw new Error('DIRECT_RUNTIME_CLOSED');
-      return session ??= bridge.runtime.create(id, events);
+      return session ??= bridge.runtime.create(id, events, options);
     };
     return {
       offer: async () => (await get()).offer(),

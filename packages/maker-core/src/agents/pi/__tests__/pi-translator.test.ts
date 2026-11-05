@@ -1010,6 +1010,49 @@ describe('pi translator', () => {
     });
   });
 
+  it('keeps the last known context when a stopped request finalizes with zero usage', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'partial answer' }],
+          stopReason: 'stop',
+          usage: { input: 120, output: 30, cacheRead: 4_800, cacheWrite: 0 },
+        },
+      }),
+      queue,
+      ctx,
+    );
+    // Pi closes an aborted request with an all-zero usage message (Stop mid-turn).
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [],
+          stopReason: 'aborted',
+          errorMessage: 'Request aborted',
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    const doneStatus = [...events].reverse().find((event) => event.type === 'status');
+    expect(doneStatus?.data).toMatchObject({
+      status: 'Done',
+      isRunning: false,
+      contextTokens: 4_920,
+    });
+  });
+
   it('notifies Pi network auto-retries with the shared Reconnecting progress line', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();

@@ -84,7 +84,10 @@ vi.mock('@/hooks/useAgentCapabilities', () => ({
     error: null,
   }),
 }));
-vi.mock('@/hooks/useApiKey', () => ({ useApiKey: () => ({ hasSavedKey: true }) }));
+const keyPresence = vi.hoisted(() => ({ available: true, canReadKey: true }));
+vi.mock('@/hooks/useApiKey', () => ({ useApiKey: () => ({
+  hasSavedKey: keyPresence.available, canReadKey: keyPresence.canReadKey,
+}) }));
 vi.mock('@/hooks/useAvailableAgents', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/hooks/useAvailableAgents')>()),
   useModelPickerAgents: () => ['claude-code', 'codex'],
@@ -343,6 +346,8 @@ async function openFlyoutForRow(row: HTMLElement): Promise<HTMLElement> {
 }
 
 beforeEach(() => {
+  keyPresence.available = true;
+  keyPresence.canReadKey = true;
   onProviderChange.mockClear();
   resetEnginePrefs();
   resetFavorites();
@@ -446,6 +451,19 @@ describe('统一面板 · 打折 GPT-5.6 与 GPT-6 包月互切', () => {
       { from: routes[2]!, to: discounted, fast },
     ]),
   );
+  // Test value: a detached plugin panel deliberately cannot read raw gateway keys. Its connected
+  // Main catalog must still permit the same XD row. Existing tests always supplied a key.
+  // Minimal input: one connected XD provider, missing credential bridge; tier: unit.
+  it('selects a connected gateway model without a renderer credential read', async () => {
+    keyPresence.available = false;
+    keyPresence.canReadKey = false;
+    const onUnifiedSelect = vi.fn(() => true);
+    renderPanel({ vendorKey: 'codex', currentProviderId: 'openai', modelId: 'gpt-6-astra', onUnifiedSelect });
+    fireEvent.click(screen.getByText('Discount Sol'));
+    await waitFor(() => expect(onUnifiedSelect).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'xd', modelId: 'codex/gpt-5.6-sol', engine: 'codex',
+    })));
+  });
   it.each(cases)(
     '$from.modelId → $to.modelId，Fast=$fast，失败可重试且不误报成功',
     async ({ from, to, fast }) => {
@@ -3615,14 +3633,15 @@ describe('统一面板 · 合并行与 wire id', () => {
     expect(getEffort.mock.calls).not.toContainEqual(['claude-code', 'openai', 'gpt-5.6']);
   });
 
-  it('全部模型优先显示来源，Cindy AI 保留单行本地简介', () => {
+  it('全部模型保留来源，Cindy AI 在原描述行显示供应商', () => {
     renderPanel();
     const row = rowFor('GPT-5.6');
     expect(row.textContent).not.toContain('A very long English');
     expect(row.querySelector('[data-model-source-details]')?.textContent).toBe('OpenAI');
     expect(within(row).queryByText('用于编写代码、排查错误与改进程序。')).toBeNull();
-    const desc = within(rowFor('GPT-5.5')).getByText('用于编写代码、排查错误与改进程序。');
-    expect(desc.getAttribute('title')).toBe('用于编写代码、排查错误与改进程序。');
+    const desc = within(rowFor('GPT-5.5')).getByText('Cindy AI');
+    expect(within(rowFor('GPT-5.5')).queryByText('用于编写代码、排查错误与改进程序。')).toBeNull();
+    expect(desc.getAttribute('title')).toBe('Cindy AI');
     expect(desc).toBeTruthy();
     expect(desc.className).toContain('truncate');
     const name = within(row).getByText('GPT-5.6');
@@ -3657,7 +3676,7 @@ describe('统一面板 · 合并行与 wire id', () => {
     }
   });
 
-  it('收藏保持来源第二行，切到单供应商分栏恢复简介', () => {
+  it('收藏保持来源第二行，单供应商分栏在原描述行显示供应商', () => {
     renderPanel();
     fireEvent.click(within(rowFor('GPT-5.6')).getByRole('button', { name: '存为收藏' }));
     fireEvent.click(document.querySelector('[data-rail-item="favorites"]')!);
@@ -3667,7 +3686,8 @@ describe('统一面板 · 合并行与 wire id', () => {
     for (const name of providerRows) {
       const row = name.closest('[data-unified-anchor]') as HTMLElement;
       expect(row.querySelector('[data-model-source-details]')).toBeNull();
-      expect(within(row).getByText('用于编写代码、排查错误与改进程序。')).toBeTruthy();
+      expect(within(row).getByText('OpenAI')).toBeTruthy();
+      expect(within(row).queryByText('用于编写代码、排查错误与改进程序。')).toBeNull();
     }
   });
 

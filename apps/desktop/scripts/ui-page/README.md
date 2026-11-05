@@ -5,6 +5,11 @@ Vite、main、登录、数据库、模型或插件，也不碰正式 Cindy 的�
 自检，以及人工快速看一个页面。何时用它、何时必须回到完整 Desktop，见
 [`desktop-development.md`「按改动选择验证方式」](../../../../docs/dev-rules/desktop-development.md)。
 
+构建保留 `?worker` 的真实 Worker 和 `?url` 的原始资源。设置搜索目录使用的
+`import.meta.glob('./**/*.settings-search.ts', { eager: true, import: 'default' })`
+会展开为真实静态导入，参与受影响页面扫描与指纹计算；`--compare` 按各自 Git 版本的
+文件集合展开，不能把当前新增定义混进旧版。其它 glob 形式会明确报错，不静默漏项。
+
 ```sh
 pnpm ui:check --changed --theme all                      # 本分支改动涉及的页面，全部场景
 pnpm ui:check --page device-picker --locale all          # 五种语言
@@ -201,6 +206,9 @@ Tailwind 配置由 Tailwind 直接从磁盘加载，两侧都用当前版本；�
 
 ## 运行方式
 
+- 构建器支持 Vite 的 `?worker` 与 `?url` 导入：前者构建真实 worker，后者把文件原样
+  输出为资源 URL（包括 PDF.js 的预构建 `.mjs` worker）。两者的源文件都参与改动扫描与
+  对照指纹；`.mjs` 在 Electron 和 Chromium 检查模式中按 JavaScript 提供，不以替身绕过加载。
 - 默认 `--engine electron`：仓库里的 Electron，与 Cindy 同一个 Chromium。每次运行使用新的
   临时 profile、拒绝权限与下载、只允许访问测试源，运行完删除临时数据；后台检查不显示窗口、
   不占 Dock。

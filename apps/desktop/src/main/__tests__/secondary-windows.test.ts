@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ loadURL: vi.fn(), loadFile: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  loadURL: vi.fn(),
+  loadFile: vi.fn(),
+  installWindowZoomRestoration: vi.fn(),
+}));
 vi.mock('electron', () => ({
   BrowserWindow: class {
     webContents = { on: vi.fn(), once: vi.fn(), setWindowOpenHandler: vi.fn() };
@@ -26,7 +30,10 @@ vi.mock('../window-behavior-settings-store.js', () => ({
 }));
 vi.mock('../vibrancyConfig.js', () => ({ resolveVibrancyConfig: () => ({}) }));
 vi.mock('../selection-context-menu.js', () => ({ installSelectionContextMenu: vi.fn() }));
-vi.mock('../appearance-settings-ipc.js', () => ({ applyAppearanceToWindow: vi.fn() }));
+vi.mock('../appearance-settings-ipc.js', () => ({
+  applyAppearanceToWindow: vi.fn(),
+  installWindowZoomRestoration: mocks.installWindowZoomRestoration,
+}));
 vi.mock('../mainWindowFullscreenStartup.js', () => ({
   installWindowFullscreenStateBroadcast: vi.fn(),
 }));
@@ -69,5 +76,14 @@ describe('session window link targets', () => {
       secondaryWindow: '1',
       bootSession: 'local-task',
     });
+  });
+
+  // 副窗从 /cc-agent/boot 导航到 canonical route（以及后续切换任务）都是页面内
+  // hash 导航，不会触发 did-finish-load。漏装这个 hook 的后果是副窗切任务后
+  // 缩放掉回该 URL 的旧记录，用户看到字体变小。
+  it('installs zoom restoration for the boot-route in-page navigation', () => {
+    vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', undefined);
+    openSessionInNewWindow('task', null);
+    expect(mocks.installWindowZoomRestoration).toHaveBeenCalledOnce();
   });
 });

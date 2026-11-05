@@ -22,27 +22,87 @@ import type {
 import { providerShareComputerName, useProviderShareOwnerNameOf } from '../provider-share/providerShareNames';
 import { GroupMemberQuota, groupMemberQuotaTarget } from './GroupMemberQuota';
 import { GroupMemberDetailsButton, GroupMemberVersion } from './GroupMemberVersion';
-import { memberStatusText } from './ProviderGroupSection';
 import {
   groupProviderGroupItems,
+  memberStatusText,
   providerGroupAccountName,
   providerGroupDeviceVersion,
 } from './providerGroupPresentation';
 
 const REFRESH_INTERVAL_MS = 15_000;
 
+interface ViewRequestStart {
+  wall: number;
+  mono: number;
+}
+
+interface ViewBudget {
+  wallUntil: number;
+  monoUntil: number;
+}
+
+/**
+ * A view carries the optional host display budget. The fixed deadlines start
+ * at the request start; a missing stamp keeps the old-host lifecycle.
+ */
+function viewBudget(view: ProviderGroupView, startedAt: ViewRequestStart): ViewBudget | undefined {
+  const remaining = view.providerContinuity?.remainingMs;
+  if (typeof remaining !== 'number' || !Number.isFinite(remaining)) return undefined;
+  return {
+    wallUntil: startedAt.wall + remaining,
+    monoUntil: startedAt.mono + remaining,
+  };
+}
+
+function budgetRemainingMs(budget: ViewBudget): number {
+  return Math.max(0, Math.min(budget.wallUntil - Date.now(), budget.monoUntil - performance.now()));
+}
+
+function budgetExpired(budget: ViewBudget): boolean {
+  return Date.now() >= budget.wallUntil || performance.now() >= budget.monoUntil;
+}
+
 function useRemoteProviderGroupView(deviceId: string, providerId: string) {
   const [view, setView] = useState<ProviderGroupView | null>(null);
+  /** The last acknowledged view budget is over; never let it outlive it. */
+  const [retired, setRetired] = useState(false);
   const [versions, setVersions] = useState<ReadonlyMap<string, string>>(() => new Map());
   const [failed, setFailed] = useState(false);
   const seq = useRef(0);
+  const expiry = useRef<{
+    token: number;
+    timer: ReturnType<typeof setTimeout> | null;
+    wallUntil: number | null;
+    monoUntil: number | null;
+    expired: boolean;
+  }>({ token: 0, timer: null, wallUntil: null, monoUntil: null, expired: false });
+
+  const clearExpiry = useCallback(() => {
+    expiry.current.token += 1;
+    if (expiry.current.timer !== null) clearTimeout(expiry.current.timer);
+    expiry.current.timer = null;
+    expiry.current.wallUntil = null;
+    expiry.current.monoUntil = null;
+    expiry.current.expired = false;
+  }, []);
+
+  const viewExpired = () => {
+    const row = expiry.current;
+    if (row.expired) return true;
+    if (row.wallUntil === null || row.monoUntil === null) return false;
+    if (Date.now() < row.wallUntil && performance.now() < row.monoUntil) return false;
+    // Latch a boundary observed on either clock; a later wall rollback must not
+    // revive the same source. This is a ref latch, not React state or a read
+    // notification.
+    row.expired = true;
+    return true;
+  };
 
   const reload = useCallback(async () => {
     const current = ++seq.current;
     const owner = getDataOwnerGeneration();
+    const requestedAt = { wall: Date.now(), mono: performance.now() };
     const canApply = () => current === seq.current && isDataOwnerGenerationCurrent(owner);
-    // 旧组所在电脑不回 appVersion；查看端已有的同账号设备目录仍能提供版本。
-    // 与状态独立读取，设备目录慢或失败时不挡住组状态，也不为此增加一套轮询。
     const readVersions = async () => {
       try {
         const { devices } = await window.electronAPI.deviceLink.listDevices();
@@ -63,25 +123,54 @@ function useRemoteProviderGroupView(deviceId: string, providerId: string) {
       if (!canApply()) return;
       setView(next);
       setFailed(false);
+      clearExpiry();
+      const budget = viewBudget(next, requestedAt);
+      if (budget) {
+        expiry.current.wallUntil = budget.wallUntil;
+        expiry.current.monoUntil = budget.monoUntil;
+        expiry.current.expired = budgetExpired(budget);
+        setRetired(expiry.current.expired);
+        const remainingMs = budgetRemainingMs(budget);
+        if (!expiry.current.expired && remainingMs > 0) {
+          const token = expiry.current.token;
+          expiry.current.timer = setTimeout(() => {
+            if (expiry.current.token !== token || !isDataOwnerGenerationCurrent(owner)) return;
+            expiry.current.timer = null;
+            expiry.current.expired = true;
+            setRetired(true);
+          }, remainingMs);
+        }
+      } else {
+        setRetired(false);
+      }
     } catch {
       if (!canApply()) return;
+      // A failed re-read is not live status evidence. Mark the last snapshot
+      // stale so running/cooling/quota are not presented as current; a later
+      // successful live read replaces it with a fresh source. Keep the original
+      // deadline: repeated failures must not renew or shorten it, and an old
+      // host without a stamp keeps its original lifecycle.
       setFailed(true);
     }
-  }, [deviceId, providerId]);
+  }, [deviceId, providerId, clearExpiry]);
 
   useEffect(() => {
+    clearExpiry();
     setView(null);
+    setRetired(false);
     setVersions(new Map());
     setFailed(false);
     void reload();
     const timer = window.setInterval(() => void reload(), REFRESH_INTERVAL_MS);
     return () => {
       window.clearInterval(timer);
+      clearExpiry();
       seq.current += 1;
     };
-  }, [reload]);
+  }, [reload, clearExpiry]);
 
-  return { view, versions, failed };
+  const expired = retired || viewExpired();
+  return { view, versions, failed, expired };
 }
 
 export function RemoteProviderGroupMembers({
@@ -95,9 +184,17 @@ export function RemoteProviderGroupMembers({
   config: ProviderGroupConfig;
 }) {
   const { t } = useTranslation();
-  const { view, versions, failed } = useRemoteProviderGroupView(deviceId, providerId);
-  const members = view?.config?.members ?? config.members;
-  const statusOf = (member: ProviderGroupMember) => view?.members.find((m) => m.key === member.key);
+  const { view, versions, failed, expired } = useRemoteProviderGroupView(deviceId, providerId);
+  // While the view is still inside its own budget, its config is the last
+  // acknowledged group-owner snapshot. Once that budget ends, keep the
+  // navigation/config fallback from the current catalog prop instead.
+  const members = expired ? config.members : view?.config?.members ?? config.members;
+  // 目录续期快照只能证明上次读到的状态；下线/冷却/运行数可能已变化，
+  // 不能把它当成实时组状态展示。失败或自身预算到期都只保留加载态。
+  const staleView = failed || expired || view?.providerContinuity?.stale === true;
+  const statusOf = (member: ProviderGroupMember) => staleView
+    ? undefined
+    : view?.members.find((m) => m.key === member.key);
   // local 指组所在电脑，不是查看端；分享来源不能按同账号设备查版本。
   const appVersionOf = (member: ProviderGroupMember) => member.kind === 'local' ? versions.get(deviceId)
     : member.kind === 'device' && member.agentDeviceId ? versions.get(member.agentDeviceId) : undefined;
