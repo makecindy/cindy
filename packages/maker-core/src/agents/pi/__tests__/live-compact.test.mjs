@@ -9,7 +9,7 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
   generateSummaryWithUsage: vi.fn(),
 }));
 
-const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries } = await import(
+const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, writeOwner } = await import(
   '../../../../extensions/live-compact/index.ts'
 );
 
@@ -268,6 +268,24 @@ describe('live compact card roles and tool excerpts (1.0.3-1.0.5)', () => {
       const names = readdirSync(root);
       expect(names).toContain('session-0');
       expect(names).not.toContain('session-1');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('re-registers the owner when a restored task writes from a new process', () => {
+    // 任务恢复到新进程后,目录里的 owner 还是旧 pid:回收会把它当死会话。
+    const root = mkdtempSync(join(tmpdir(), 'spine-owner-'));
+    try {
+      const dir = join(root, 'session-restored');
+      mkdirSync(dir);
+      writeFileSync(join(dir, 'owner'), '999999');
+      writeOwner(dir);
+      expect(readFileSync(join(dir, 'owner'), 'utf8').trim()).toBe(String(process.pid));
+      // 目录不存在时什么都不做(这个会话还没有备份,不该凭空建目录)。
+      const absent = join(root, 'session-new');
+      writeOwner(absent);
+      expect(existsSync(absent)).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

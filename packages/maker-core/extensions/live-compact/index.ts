@@ -30,11 +30,11 @@
  *     CHUNK_MIN is skipped rather than padded by walking back over earlier users.
  *   - Oversized tool results (1.0.8): a single result above SPINE_POINTER_TOKENS
  *     (default RAIL) becomes a pointer and is replaced together with its call.
- *   - Thunder path (SPINE_THUNDER=1): when pi's stock threshold compaction finally
- *     fires, decideThunder() compares shared prefix ratio; "send-less" re-summarizes
- *     a slimmed input via pi's own generateSummaryWithUsage instead of the full span.
- *
- * 1.0.5/1.0.7 中不适用于本仓的部分:gate.js / shell.js / bin 是 DSH 插件预设换引擎与 CLI 的
+
+ * 1.0.5/1.0.8 中不适用于本仓的部分:thunder(SPINE_THUNDER=1)挂的是 DSH 的
+ * SpineCompactionEngine(summarize 覆写),pi 扩展这一层没有可覆盖的压缩入口 —— 本仓的切割
+ * 完全在 agent_before_settle 里自己产出 drafts,不经过 pi 的压缩机制,所以这条没有对应实现
+ * (此前 docblock 把它写成"已对齐",是文档错误);gate.js / shell.js / bin 是 DSH 插件预设换引擎与 CLI 的
  * 外壳逻辑,pi 侧没有这层;变长指针:上游 1.0.7 把卡片指针换成会话日志事件号(DSH 可回查),
  * pi 没有这种回查通道,所以仍用本地原文文件路径 + 哈希指针;备份仍按会话分目录。
  * 1.0.8 的 `spine-checkpoint` 事件种类同理:pi 的卡片是 custom_message,不会被官方摘要二次压;
@@ -66,8 +66,8 @@
  *     compaction machinery.
  *
  * Env knobs (upstream-compatible): SPINE_MIN_TOKENS, SPINE_SHADOW_DIR, SPINE_SHADOW_MAX_BYTES,
- * SPINE_ENGINE (cloud|local), SPINE_KEEP_ROUNDS, SPINE_THUNDER,
- * SPINE_THUNDER_MODEL ("27b" | "flash").
+ * SPINE_ENGINE (cloud|local), SPINE_KEEP_ROUNDS, SPINE_KEEP_ROUND_TOKENS, SPINE_POINTER_TOKENS,
+ * SPINE_SHADOW_MAX_SESSIONS.
  * Logging: stderr lines prefixed "[pi-live-compact]" (grep "spine cut"), plus an
  * append-only spine.log next to the shadow directory for test verification.
  */
@@ -1381,13 +1381,24 @@ function tightenShadow(dir: string): void {
   } catch {}
 }
 
+/** 把会话目录的 owner 记成本进程。目录不存在时什么都不做(这个会话还没有备份)。 */
+export function writeOwner(dir: string): void {
+  try {
+    if (!existsSync(dir)) return;
+    const owner = join(dir, "owner");
+    const pid = String(process.pid);
+    try {
+      if (readFileSync(owner, "utf8").trim() === pid) return;
+    } catch {}
+    writeFileSync(owner, pid, { mode: 0o600 });
+  } catch {}
+}
+
 function saveShadow(state: SpineState, dir: string, file: string, body: string, incomingExtra = 0, protectPaths: string[] = []): void {
   const id = state.key || DEFAULT_KEY;
   // 1.0.6: 会话目录带 owner,别的进程看得出这份备份是否还在用。
-  try {
-    const owner = join(dir, "owner");
-    if (!existsSync(owner)) writeFileSync(owner, String(process.pid), { mode: 0o600 });
-  } catch {}
+  // 上游每次写备份都覆盖成当前进程号:任务恢复到新进程后,旧 pid 会误导回收逻辑。
+  writeOwner(dir);
   // 本次切割还要写出的原文快照也计入待写入量,否则轮换放行后总量会突破上限。
   const incoming = Buffer.byteLength(body) + incomingExtra;
   const temp = `${file}.tmp`;
@@ -1837,12 +1848,23 @@ export function selectNewestChunk(
     };
   });
 
-  let end = walkOffTail(items, nodes.length - 1, first);
+  // 尾部走位与上游 index.js 同形:assistant 与短 user 都不算尾巴,checkpoint 与
+  // 「切掉后后缀不平衡」的位置逐格后退。这里不用 plan.js 的 walkOffTail ——
+  // 那个函数还会额外剥掉尾部 user,而上游算保留区时把那条 user 留在 visible 里。
+  let end = nodes.length - 1;
+  while (end >= first) {
+    const entry = entries[end];
+    const shortTail = entry.role === "assistant" || (isUser(entry) && entry.est < 400);
+    if (!shortTail) break;
+    end -= 1;
+  }
+  while (end >= first && isCheckpoint(entries[end])) end -= 1;
   while (end >= first && !cutOk(() => suffixClean(end))) end -= 1;
 
   // 1.0.6/1.0.8: 最近 KEEP_ROUNDS 轮已完成的工具结果尽量原地保留(受 KEEP_ROUND_TOKENS 预算约束),
   // 普通轮次的切点最多站在保留区前面;收尾时这条边界会被越过(见 selectCutIndexes)。
-  const rounds = keptToolRounds(entries, KEEP_ROUNDS);
+  // 上游用的是 visible(= 到 end 为止)里的轮次;尾巴上还没结束的轮不该算进保留区。
+  const rounds = keptToolRounds(entries.slice(0, end + 1), KEEP_ROUNDS);
   const kept = chooseKeptSpan(
     rounds,
     (from, to) => {
@@ -1862,7 +1884,7 @@ export function selectNewestChunk(
     while (end >= first && (isCheckpoint(entries[end]) || isUser(entries[end]))) end -= 1;
     while (end >= first && !cutOk(() => suffixClean(end))) end -= 1;
   }
-  if (end < first) return warn(`end<first (tail all shortTail/checkpoint)`);
+  if (end < first || isCheckpoint(entries[end])) return warn(`end<first or checkpoint (tail all shortTail/checkpoint)`);
 
   const picked = selectCutIndexes(items, {
     engine,
@@ -1980,6 +2002,18 @@ function observedProvider(contextEntries: any[]): string {
 // 同一个会话只记一次引擎判定:每轮都刷一行的日志没人看。
 const engineLogged = new Map<string, string>();
 
+/** 上游 MAX_TRACKED_SESSIONS:长命 pi 进程里跑过很多会话时,跟踪表要有上限。 */
+const MAX_TRACKED_SESSIONS = 64;
+
+function rememberTracked<T>(map: Map<string, T>, key: string, value: T): void {
+  map.set(key, value);
+  while (map.size > MAX_TRACKED_SESSIONS) {
+    const oldest = map.keys().next().value;
+    if (oldest === undefined || oldest === key) break;
+    map.delete(oldest);
+  }
+}
+
 /**
  * 1.0.7 的累计节省。多会话(多 pi 进程)同时写会丢一次计数,
  * shortcut: 只做展示用的累计,不做并发安全,需要准确核算时合并会话读 spine.log。
@@ -2010,13 +2044,15 @@ export default function (pi: ExtensionAPI) {  // Idle cut: pi fires agent_before
   pi.on("agent_before_settle", (event: any, ctx: any) => {
     if (event.outcome !== "completed") return undefined;
     const state = stateFor(ctx);
+    // 任务恢复到新进程后 owner 还是旧 pid:每个 settle 都重新登记,回收才不会误删。
+    writeOwner(shadowDirectory(state.key));
     const entries = spineEntries(event.context?.contextEntries ?? []);
     if (entries.length === 0) return undefined;
     // 1.0.7: 云端/本地分开切。pi 不把 baseURL 交给扩展,只能按 provider 名推断。
     const resolved = resolveEngine({ provider: observedProvider(event.context?.contextEntries) });
     const engineTag = `${resolved.engine}/${resolved.source}`;
     if (engineLogged.get(state.key) !== engineTag) {
-      engineLogged.set(state.key, engineTag);
+      rememberTracked(engineLogged, state.key, engineTag);
       logLine(state, `spine engine=${resolved.engine} source=${resolved.source}`);
     }
 
@@ -2070,7 +2106,7 @@ function turnGrowthFor(key: string): { last: number | null; max: number } {
   const found = turnGrowth.get(key);
   if (found) return found;
   const fresh = { last: null, max: 0 };
-  turnGrowth.set(key, fresh);
+  rememberTracked(turnGrowth, key, fresh);
   return fresh;
 }
 
