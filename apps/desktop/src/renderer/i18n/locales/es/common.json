@@ -7872,6 +7872,7 @@
         "customSlotAsleep": "Este complemento está desactivado. Actívalo para ver aquí su interfaz de configuración.",
         "descriptionExpand": "Mostrar más",
         "descriptionCollapse": "Mostrar menos",
+        "readmeTitle": "Acerca de",
         "useAction": "Usar complemento",
         "chatAction": "Conversación",
         "enabledLabel": "Activado",

@@ -10,16 +10,21 @@ import {
   PLUGIN_PREFIX_PATTERN,
   type OrganizationPluginAccessError,
   type PluginCurrentOrganization,
+  type GhostReadmeContent,
+  type PluginReadmeDelivery,
   type PluginRemovalNotice,
   type VisiblePluginDetail,
   type VisiblePluginSummary,
 } from '@cindy/plugin-protocol';
+import { getResolvedMainLocale } from '../i18n.js';
+import { readGhostReadmeFromDir } from '../cindy-brain/ghostReadme.js';
 import { app, dialog } from 'electron';
 
 import {
   GHOST_ICON_MAX_BYTES,
   ghostInstallApprovalToken,
   ghostIconMimeType,
+  ghostReadmeLocale,
   isSafeGhostRelativePath,
   isOfficialGhostId,
   isValidGhostId,
@@ -1474,12 +1479,15 @@ export class PluginMarketService {
   }
 
   /** 未登录只读公开插件详情；安装仍必须走 owner 门禁。 */
-  private async detailPublicCatalogWithoutOwner(pluginId: string): Promise<PluginMarketDetail> {
+  private async detailPublicCatalogWithoutOwner(
+    pluginId: string,
+    includeReadme: boolean,
+  ): Promise<PluginMarketDetail> {
     const catalog = await this.api.listAll();
     const requested = catalog.plugins.find(
       (plugin) => plugin.id === pluginId && plugin.scope === 'public',
     );
-    const plugin = await this.api.detail(pluginId);
+    const plugin = await this.api.detail(pluginId, ...readmeRequestArgs(includeReadme));
     // Plugin Server resolves canonical/historical IDs into the active regional view.
     const summary = requested ?? catalog.plugins.find(
       (item) => item.id === plugin.id && item.scope === 'public',
@@ -1499,6 +1507,7 @@ export class PluginMarketService {
     return {
       ...this.toItem(plugin, EMPTY_LOCAL_INSTALL_SNAPSHOT),
       manifest: compatible.manifest,
+      ...serverReadmeField(plugin, includeReadme),
     };
   }
 
@@ -1519,10 +1528,17 @@ export class PluginMarketService {
     }
   }
 
-  async detail(pluginId: string): Promise<PluginMarketDetail> {
+  /**
+   * `includeReadme` 只给详情页用：官方市场随详情响应带回（不额外请求），自定义市场
+   * 从本地副本读取。其余调用方（名称查询、迁移等）不读介绍。
+   */
+  async detail(
+    pluginId: string,
+    options?: { includeReadme?: boolean },
+  ): Promise<PluginMarketDetail> {
     // 自定义市场插件走本地发现，不要求服务端可用，也不受 CUID 形状约束。
     const customRef = parseCustomMarketPluginId(pluginId);
-    if (customRef) return this.customDetail(customRef);
+    if (customRef) return this.customDetail(customRef, options?.includeReadme === true);
     if (!isValidPluginResourceId(pluginId)) {
       throwIpcError('INVALID_PARAMS', 'Invalid Plugin ID');
     }
@@ -1531,7 +1547,7 @@ export class PluginMarketService {
       if (isAppSessionBoundaryPending()) {
         throwIpcError('PRECONDITION_FAILED', 'Plugin market requires a stable app session');
       }
-      return this.detailPublicCatalogWithoutOwner(pluginId);
+      return this.detailPublicCatalogWithoutOwner(pluginId, options?.includeReadme === true);
     }
     return this.runForOwner(async (owner) => {
       // 本地(免账号)模式只对 public 插件暴露详情;目录 summary 也是 detail 身份
@@ -1544,7 +1560,7 @@ export class PluginMarketService {
       if (!requested && listed.organizationAccessError) {
         throwListedPluginUnavailable(listed.organizationAccessError);
       }
-      const plugin = await this.api.detail(pluginId);
+      const plugin = await this.api.detail(pluginId, ...readmeRequestArgs(options?.includeReadme === true));
       requireSameMarketOwner(owner);
       const summary = requested ?? catalog.find((candidate) => candidate.id === plugin.id);
       if (!summary) throwListedPluginUnavailable(listed.organizationAccessError);
@@ -1557,6 +1573,7 @@ export class PluginMarketService {
       return {
         ...this.toItem(plugin, this.localInstallSnapshot(this.ledgerForOwner(owner))),
         manifest: compatible.manifest,
+        ...serverReadmeField(plugin, options?.includeReadme === true),
       };
     });
   }
@@ -1944,10 +1961,13 @@ export class PluginMarketService {
   }
 
   /** 自定义市场插件详情：本地发现现查，不要求服务端市场可用。 */
-  private async customDetail(ref: {
-    marketName: string;
-    ghostId: string;
-  }): Promise<PluginMarketDetail> {
+  private async customDetail(
+    ref: {
+      marketName: string;
+      ghostId: string;
+    },
+    includeReadme = false,
+  ): Promise<PluginMarketDetail> {
     return this.runForOwner(async (owner) => {
       const iconProjectionGeneration = this.customIconProjectionGeneration;
       const manager = this.sourceManagerForOwner(owner);
@@ -1976,6 +1996,14 @@ export class PluginMarketService {
             this.localInstallSnapshot(this.ledgerForOwner(owner)),
           ),
           manifest: plugin.manifest,
+          // 在发现租约内读完：plugin.dir 是 Git 源的缓存版本目录，租约外可能被清理。
+          ...(includeReadme
+            ? {
+                readme: plugin.manifest.readme
+                  ? await readGhostReadmeFromDir(plugin.dir, plugin.manifest, getResolvedMainLocale())
+                  : null,
+              }
+            : {}),
         };
       });
     });
@@ -4139,6 +4167,27 @@ export class PluginMarketService {
     void current.then(cleanup, cleanup);
     return current;
   }
+}
+
+/** 详情页才请求介绍；服务端据此按界面语言选介绍文件。 */
+function readmeRequestArgs(includeReadme: boolean): [] | [{ readmeLocale: string }] {
+  return includeReadme ? [{ readmeLocale: ghostReadmeLocale(getResolvedMainLocale()) }] : [];
+}
+
+/** 服务端介绍投影成界面用的形状；图片地址是服务端签发的短期地址。旧服务端缺字段时不显示。 */
+function serverReadmeField(
+  plugin: { readme?: PluginReadmeDelivery | null },
+  includeReadme: boolean,
+): { readme?: GhostReadmeContent | null } {
+  if (!includeReadme) return {};
+  if (!plugin.readme) return { readme: null };
+  return {
+    readme: {
+      path: plugin.readme.path,
+      markdown: plugin.readme.markdown,
+      images: Object.fromEntries(plugin.readme.images.map((image) => [image.path, image.url])),
+    },
+  };
 }
 
 let serviceSingleton: PluginMarketService | null = null;

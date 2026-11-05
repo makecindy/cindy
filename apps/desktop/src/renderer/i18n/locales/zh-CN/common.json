@@ -7762,6 +7762,7 @@
         "customSlotAsleep": "插件已停用，启用后这里将显示它的设置界面。",
         "descriptionExpand": "展开",
         "descriptionCollapse": "收起",
+        "readmeTitle": "介绍",
         "useAction": "使用",
         "chatAction": "对话",
         "enabledLabel": "已启用",

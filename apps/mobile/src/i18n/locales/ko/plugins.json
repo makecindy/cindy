@@ -130,6 +130,9 @@
   "detail": {
     "useItIn": "사용 방법",
     "openPlugin": "플러그인 열기",
+    "readme": "소개",
+    "readmeLoadFailed": "소개를 불러오지 못했습니다. 다시 시도하세요.",
+    "readmeUnavailable": "소개가 없습니다.",
     "computerSettings": "컴퓨터의 Cindy에서 플러그인 메뉴를 열고 이 플러그인의 세부 정보에서 구성하세요.",
     "runtimeIssue": "플러그인이 예기치 않게 중지되었습니다. 다시 열거나 작업에서 다시 시도하세요.",
     "runtimeFused": "플러그인에 오류가 반복되었습니다. 껐다가 다시 켠 후 시도하세요.",

@@ -7805,6 +7805,7 @@
         "customSlotAsleep": "Dieses Plugin ist deaktiviert. Aktiviere es, um hier seine Einstellungen zu sehen.",
         "descriptionExpand": "Mehr anzeigen",
         "descriptionCollapse": "Weniger anzeigen",
+        "readmeTitle": "Über",
         "useAction": "Plugin verwenden",
         "chatAction": "Chat",
         "enabledLabel": "Aktiviert",
