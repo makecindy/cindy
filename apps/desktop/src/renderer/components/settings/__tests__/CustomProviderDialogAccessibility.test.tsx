@@ -2235,12 +2235,32 @@ describe('new-connection identification', () => {
     return { onDetected, fetchProviderModels };
   }
   it('keeps identified model catalogs unselected until the user chooses them', async () => {
-    await openIdentification(preset, 'https://api.deepseek.com', 'fake-key', false);
-    expect(screen.getByText('settings.providers.custom.fetch.notFetched')).toBeTruthy();
+    const { fetchProviderModels } = await openIdentification(preset, 'https://api.deepseek.com', 'fake-key', false);
+    expect(screen.getByText('settings.providers.custom.fetch.selectedCount:0')).toBeTruthy();
+    expect(screen.getByText('settings.providers.custom.fetch.availableCount:1')).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' })).toBeNull();
     expect(screen.queryByText('private-model')).toBeNull();
     await selectDiscoveredModels();
     expect(screen.getByText('settings.providers.custom.fetch.selectedCount:1')).toBeTruthy();
     expect(screen.getByText('settings.providers.custom.fetch.availableCount:1')).toBeTruthy();
+    expect(fetchProviderModels).toHaveBeenCalledOnce();
+  });
+  it('shows the automatically discovered count for a changed connection without selecting or refetching models', async () => {
+    const { fetchProviderModels } = await openIdentification(preset, 'https://api.deepseek.com', 'fake-key', false);
+    const models = Array.from({ length: 84 }, (_, i) => ({ id: `auto-${i}`, name: `Auto ${i}` }));
+    window.electronAPI.maker.detectProvider = vi.fn(async () => ({ candidates: [], reason: 'insufficient_evidence', catalog: { ok: true, models } })) as any;
+    fireEvent.change(screen.getByPlaceholderText('settings.providers.custom.fields.baseUrlPlaceholder'), { target: { value: 'https://unknown.example/v1' } });
+    expect(screen.queryByText('settings.providers.custom.fetch.availableCount:1')).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    expect(screen.getByText('settings.providers.custom.fetch.selectedCount:0')).toBeTruthy();
+    expect(screen.getByText('settings.providers.custom.fetch.availableCount:84')).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' })).toBeNull();
+    expect(screen.queryByText('auto-0')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' }));
+    await act(async () => {});
+    expect(screen.getAllByRole('checkbox')).toHaveLength(84);
+    expect(screen.getAllByRole('checkbox').every(row => row.getAttribute('aria-checked') === 'false')).toBe(true);
+    expect(fetchProviderModels).toHaveBeenCalledOnce();
   });
   it.each([
     ['http://127.0.0.1:1234/v1', '', 'none'],
@@ -2420,6 +2440,33 @@ describe('new-connection identification', () => {
     expect(onDetected.mock.calls[0][0]).toMatchObject({ apiKey: 'fake-key', agent: 'pi', config: { runtimes: { pi: { baseUrl: 'https://api.deepseek.com', models: [{ id: 'private-model' }] } } } });
     expect(fetchProviderModels).toHaveBeenCalledOnce();
     expect(customProviderMocks.createCustomProvider).not.toHaveBeenCalled();
+  });
+  it('lets a failed-discovery connection remove a manual typo and save its replacement without fetching', async () => {
+    await openIdentification(preset, 'https://api.deepseek.com', 'fake-key', false);
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.detection.keepCustom' }));
+    const fetch = vi.fn(async () => ({ ok: false, code: 'TIMEOUT' }));
+    window.electronAPI.maker.fetchProviderModels = fetch as any;
+    window.electronAPI.maker.detectProvider = vi.fn(async () => ({ candidates: [], reason: 'insufficient_evidence', catalog: { ok: false, code: 'TIMEOUT' } })) as any;
+    fireEvent.change(screen.getByPlaceholderText('settings.providers.custom.fields.baseUrlPlaceholder'), { target: { value: 'https://no-catalog.example/v1' } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' }));
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.connection.manualAdd' }));
+    const input = screen.getByLabelText('settings.providers.connection.manualId');
+    fireEvent.change(input, { target: { value: 'wrong-model' } });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fields.addModel' }));
+    expect(screen.getByText('wrong-model')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.connection.removeModel wrong-model' }));
+    expect(screen.queryByText('wrong-model')).toBeNull();
+    expect(screen.queryByText('settings.providers.custom.fetch.selectedCount:1')).toBeNull();
+    fireEvent.change(input, { target: { value: 'correct-model' } });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fields.addModel' }));
+    fireEvent.change(screen.getByPlaceholderText('settings.providers.custom.fields.namePlaceholder'), { target: { value: 'Corrected custom' } });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.connection.saveProvider' }));
+    await act(async () => {});
+    expect(customProviderMocks.createCustomProvider).toHaveBeenCalledOnce();
+    expect(customProviderMocks.createCustomProvider.mock.calls[0][0].runtimes.pi.models).toEqual([expect.objectContaining({ id: 'correct-model' })]);
+    expect(fetch).toHaveBeenCalledOnce();
   });
   it('uses the HTML add layout and saves only Pi for the shared custom connection', async () => {
     await openIdentification(preset, 'https://api.deepseek.com', 'fake-key', false);
@@ -2690,6 +2737,8 @@ describe('new-connection identification', () => {
     const onReturnDetection = vi.fn();
     render(<ProviderConnectionDialog draft={draft} focusAgent="pi" onDetected={onReturnDetection} onClose={vi.fn()} onSaved={vi.fn()} />);
     await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(screen.getByText('settings.providers.custom.fetch.availableCount:1')).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' }));
     await act(async () => {});
     expect(fetchProviderModels).not.toHaveBeenCalled();
@@ -2930,6 +2979,23 @@ describe('model summary and explicit model selection', () => {
     expect(screen.queryByRole('checkbox', { name: /summary-0$/ })).toBeNull();
   });
 
+  it('allows clearing the selection and choosing again from the fetched catalog', async () => {
+    await openSummary(true);
+    fireEvent.click(fetchButton());
+    const picker = await screen.findByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' });
+    fireEvent.click(within(picker).getByRole('button', { name: 'settings.providers.custom.fetch.clearAll' }));
+    fireEvent.click(within(picker).getByRole('button', { name: 'settings.providers.custom.fetch.confirm' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' })).toBeNull());
+    expect(screen.getByText(`${selectedLabel}:0`)).toBeTruthy();
+    expect(screen.getByText(`${availableLabel}:84`)).toBeTruthy();
+    fireEvent.click(fetchButton());
+    const reopened = await screen.findByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' });
+    expect(within(reopened).getAllByRole('checkbox').every(row => row.getAttribute('aria-checked') === 'false')).toBe(true);
+    fireEvent.click(within(reopened).getByRole('checkbox', { name: /summary-1$/ }));
+    fireEvent.click(within(reopened).getByRole('button', { name: 'settings.providers.custom.fetch.confirm' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' })).toBeNull());
+    expect(screen.getByText(`${selectedLabel}:1`)).toBeTruthy();
+  });
   it.each(['response', 'exception'])('preserves selected models after a %s failure and cancel of a retry', async kind => {
     const fetch = vi.mocked(await openSummary(true));
     if (kind === 'response') fetch.mockResolvedValueOnce({ ok: false, code: 'TIMEOUT' });

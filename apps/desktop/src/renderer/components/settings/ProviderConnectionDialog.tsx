@@ -619,7 +619,13 @@ export function ProviderConnectionDialog({
     signature: string;
     status: 'loading' | 'success' | 'error';
     count?: number;
-  }>>>({});
+  }>>>(() => draft?.catalog?.ok && draft.catalog.models ? {
+    [draft.agent]: {
+      signature: providerModelFetchRequestSignature(rt[draft.agent], authMode),
+      status: 'success',
+      count: new Set(draft.catalog.models.map(model => model.id)).size,
+    },
+  } : {});
   // 拉取成功后的勾选弹层：行集合 = 拉取结果 ∪ 表单已填（后者默认勾选、保留用户显示名）。
   const [runtimeFill, setRuntimeFill] = useState<RuntimeFillDialogState | null>(null);
   const picker = childLayer?.kind === 'model-picker' ? childLayer.value : null;
@@ -1129,6 +1135,11 @@ export function ProviderConnectionDialog({
       void work.then(({ preset, catalog, ambiguous }) => {
         if (!live || detectionContext.current.signature !== signature) return;
         if (catalog?.ok && catalog.models) {
+          const requestSig = providerModelFetchRequestSignature(fields, authMode);
+          setModelFetchSummary(previous => previous[agent]?.signature === requestSig ? previous : {
+            ...previous,
+            [agent]: { signature: requestSig, status: 'success', count: new Set(catalog.models!.map(model => model.id)).size },
+          });
           setRtSynced(prev => ({ ...prev, [agent]: { ...prev[agent], models: [
             ...prev[agent].models.filter(m => m.id.trim()).map(model => {
               const fresh = catalog.models!.find(m => m.id === model.id);
@@ -1831,7 +1842,6 @@ export function ProviderConnectionDialog({
   const applyPicker = useCallback(() => {
     if (!picker) return;
     const chosen = picker.models.filter((m) => picker.selected.has(m.id));
-    if (chosen.length === 0) return;
     const pickerIds = new Set(picker.models.map((m) => m.id));
     // 重映射靠 id 而不是行号:picker 确认会任意增删/重排该 runtime 的行,旧行号
     // 不能直接套到新数组。合并结果必须同步算出一份普通数组,同时喂给状态更新和
@@ -2794,6 +2804,16 @@ export function ProviderConnectionDialog({
                       {t('settings.providers.connection.manualAdd')}
                     </button>
                   {manualOpen && <div id={fieldId('manual-fields')} className="flex flex-col gap-3 pl-5">
+                  {simpleAdding && f.models.filter(model => model.id.trim()).map(model => (
+                    <div key={model.id} className="flex items-center justify-between gap-2 border-b border-[var(--border-default)] py-2">
+                      <span className="min-w-0 break-words text-[var(--text-primary)]">{model.id}</span>
+                      <Button type="button" variant="secondary" size="sm" className="shrink-0"
+                        aria-label={`${t('settings.providers.connection.removeModel')} ${model.id}`}
+                        onClick={() => patch(activeTab, value => ({ ...value, models: value.models.filter(row => row.id !== model.id) }))}>
+                        {t('settings.providers.connection.removeModel')}
+                      </Button>
+                    </div>
+                  ))}
                   <FormField id={fieldId(`${activeTab}:manualModel`)} label={t(simpleAdding ? 'settings.providers.connection.manualId' : 'settings.providers.connection.manualModel')} error={errorFor(`${activeTab}:manualModel`)}>
                         {(control) => (
                           <SettingsTextInput {...control} surface="ivory" value={manualModel}
@@ -3643,7 +3663,6 @@ export function ModelPickerOverlay({
               ref={primaryButtonRef}
               type="button"
               onClick={onConfirm}
-              disabled={picker.selected.size === 0}
             >
               {t('settings.providers.custom.fetch.confirm', { count: picker.selected.size })}
             </Button>
