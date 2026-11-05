@@ -98,6 +98,24 @@ afterEach(() => {
 });
 
 describe('mcp:custom:* CRUD handlers', () => {
+  // #8902, unit: the production IPC validates choices, detects stale candidates,
+  // and broadcasts only after persistence; existing CRUD tests have no such path.
+  it('validates duplicate choices and reports configuration drift without broadcasting success', async () => {
+    const harness = new IpcHarness();
+    const chooseDuplicate = vi.fn(async () => true);
+    const deps = makeDeps({ chooseDuplicate, listDuplicates: async () => ({ connections: [], complete: true }) });
+    registerMcpHandlers(harness, deps);
+    expect(await harness.invoke(MAKER_INVOKE.MCP_DUPLICATES_LIST)).toEqual({ connections: [], complete: true });
+    await expect(harness.invoke(MAKER_INVOKE.MCP_DUPLICATES_CHOOSE, { id: '../config', choice: 'cindy' })).rejects.toThrow(/INVALID_PARAMS/);
+    expect(chooseDuplicate).not.toHaveBeenCalled();
+    const input = { id: 'a'.repeat(64), choice: 'claude' };
+    expect(await harness.invoke(MAKER_INVOKE.MCP_DUPLICATES_CHOOSE, input)).toEqual({ ok: true });
+    expect(chooseDuplicate).toHaveBeenCalledWith(input.id, 'claude');
+    expect(deps.broadcastChanged).toHaveBeenCalledOnce();
+    chooseDuplicate.mockResolvedValue(false);
+    await expect(harness.invoke(MAKER_INVOKE.MCP_DUPLICATES_CHOOSE, input)).rejects.toThrow(/NOT_FOUND/);
+    expect(deps.broadcastChanged).toHaveBeenCalledOnce();
+  });
   it.each(['claude-code', 'codex', 'pi'] as const)(
     'projects registered MCP availability for %s while preserving the configuration list',
     async (agentKind) => {

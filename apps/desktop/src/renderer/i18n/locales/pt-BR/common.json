@@ -8439,6 +8439,26 @@
         "title": "Excluir \"{{name}}\"?",
         "message": "Novas Sessões não carregarão mais este MCP.",
         "confirm": "Excluir"
+      },
+      "duplicates": {
+        "title": "Possíveis conexões MCP duplicadas",
+        "description": "A Cindy e a configuração de usuário do Claude Code têm conexões iguais ou semelhantes que podem carregar ferramentas duas vezes. Escolha a origem a manter ou mantenha ambas em caso de dúvida.",
+        "scope": "Aplica-se apenas às tarefas normais do Claude Code na Cindy neste computador, a partir da próxima sessão do agente. A configuração do Claude Code não é alterada. As conexões duplicadas relacionadas compartilham a escolha.",
+        "unavailable": "Não foi possível ler parte da configuração. As conexões não foram alteradas. Ao reabrir esta página, será feita uma nova verificação.",
+        "endpoint": "Mesmo endereço de conexão",
+        "similar": "Endereços de conexão semelhantes",
+        "keep": {
+          "both": "Manter ambas as origens deste grupo"
+        },
+        "selected": {
+          "cindy": "Conexão da Cindy selecionada",
+          "claude": "Conexão do Claude Code selecionada",
+          "both": "Ambas as origens deste grupo serão mantidas"
+        },
+        "reset": "Escolher novamente",
+        "saveFailed": "Não foi possível salvar. As conexões podem ter mudado. Escolha novamente na lista atual.",
+        "keepThis": "Manter esta conexão",
+        "keepThese": "Manter estas conexões"
       }
     },
     "remotePermission": {

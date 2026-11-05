@@ -98,6 +98,7 @@ async function makeTempDir(): Promise<string> {
 const OWN_SKILL_ROOT = '/userdata/bot-skills/bot-1';
 
 async function startBotSession(input: {
+  duplicateResolver?: AgentDeps['resolveLocalMcpDuplicateChoices'];
   ownSkillPluginRoots?: string[];
   reviewMode?: boolean;
   remote?: boolean;
@@ -115,6 +116,12 @@ async function startBotSession(input: {
   sdkMock.query.mockReturnValue(createFakeQuery());
 
   const deps = createDeps();
+  if (input.duplicateResolver) {
+    deps.resolveLocalMcpDuplicateChoices = input.duplicateResolver;
+    deps.mcpProviders = ['custom_magpie', 'other'].map(name => ({ name,
+      toClaudeSdkConfig: () => ({ type: 'http', url: 'http://localhost:3425/mcp' }),
+    }));
+  }
   if (input.managed) {
     await fs.mkdir(`${configDir}/managed/learn`, { recursive: true });
     await fs.writeFile(`${configDir}/managed/learn/SKILL.md`, '---\nname: learn\ndescription: Fixture\n---\nBody');
@@ -188,7 +195,7 @@ async function startBotSession(input: {
         settingSources?: string[];
         disallowedTools?: string[];
         strictMcpConfig?: boolean;
-        settings?: { autoMemoryEnabled?: boolean; autoDreamEnabled?: boolean; skillOverrides?: Record<string, string> };
+        settings?: { autoMemoryEnabled?: boolean; autoDreamEnabled?: boolean; skillOverrides?: Record<string, string>; deniedMcpServers?: Array<{serverName: string}> };
         systemPrompt?: { append?: string };
       }
     | undefined;
@@ -248,6 +255,26 @@ afterEach(async () => {
 });
 
 describe('Claude Code mounts the Bot\'s own learned Skills', () => {
+  // #8902: the public startSession must change the actual SDK tool/config inputs,
+  // while preserving native user settings and excluding nonlocal/strict runtimes.
+  it.each(['cindy', 'claude'] as const)('applies the explicit %s source choice to ordinary local sessions', async choice => {
+    const duplicateResolver = vi.fn(async () => ({
+      skipHostServers: choice === 'claude' ? ['custom_magpie'] : [],
+      denyNativeServers: choice === 'cindy' ? ['magpie'] : [],
+    }));
+    const options = await startBotSession({ ordinary: true, duplicateResolver });
+    expect(Object.keys(options.mcpServers ?? {})).toEqual(choice === 'claude' ? ['other'] : ['custom_magpie', 'other']);
+    expect(options.settings?.deniedMcpServers ?? []).toEqual(choice === 'cindy' ? [{ serverName: 'magpie' }] : []);
+    expect(options.settingSources).toEqual(['user', 'project', 'local']);
+    expect(options.strictMcpConfig).toBeUndefined();
+  });
+  it.each([{ ordinary: false }, { ordinary: true, remote: true }, { ordinary: true, reviewMode: true }, { ordinary: true, localHostOnly: true }])(
+    'does not apply local duplicate choices in isolated/remote runtimes: %j', async context => {
+      const duplicateResolver = vi.fn(async () => ({ skipHostServers: ['custom_magpie'], denyNativeServers: ['magpie'] }));
+      await startBotSession({ ...context, duplicateResolver });
+      expect(duplicateResolver).not.toHaveBeenCalled();
+    },
+  );
   it('passes the per-Bot skill root as a local plugin', async () => {
     const options = await startBotSession({ ownSkillPluginRoots: [OWN_SKILL_ROOT] });
     expect(options.plugins).toEqual([{ type: 'local', path: OWN_SKILL_ROOT }]);

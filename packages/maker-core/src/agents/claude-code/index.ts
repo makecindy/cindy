@@ -1915,6 +1915,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
       if (currentQ === q) nonHarnessMcpServerNames = fallbackNames;
     };
+    let duplicateMcpChoices: { skipHostServers: string[]; denyNativeServers: string[] } = { skipHostServers: [], denyNativeServers: [] };
     const buildMcpServers = (): Record<string, McpServerConfig> | undefined => {
       const client = opts[LOCAL_AGENT_CLIENT];
       if (client && (!hosted || client.hostToolsOnly)) {
@@ -1966,6 +1967,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 普通字符串键。
       const out: Record<string, McpServerConfig> = Object.create(null);
       for (const provider of providers) {
+        if (duplicateMcpChoices.skipHostServers.includes(provider.name)) continue;
         // cindy_memory: per-session flag 关 → 不注册; remote → in-process sdk 实例
         // 不可序列化, 这里跳过, 由 host 的 remoteCcQueryFactory 按同一 flag 以
         // http 形态经 bridge 注入 (见 cc-remote-mcp.ts)。
@@ -2938,6 +2940,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         botSkillPolicy: reviewMode ? undefined : opts.botRuntimeProfile?.skillPolicy,
         capabilityRouting: reviewMode ? undefined : capabilityRouting,
       });
+      if (duplicateMcpChoices.denyNativeServers.length) {
+        settings.deniedMcpServers = [...(settings.deniedMcpServers ?? []),
+          ...duplicateMcpChoices.denyNativeServers.map(serverName => ({ serverName }))];
+      }
       if (Object.keys(disabledSkillOverrides).length > 0) {
         settings.skillOverrides = { ...settings.skillOverrides, ...disabledSkillOverrides };
       }
@@ -3715,6 +3721,20 @@ export class ClaudeCodeAgent extends BaseAgent {
       const baseFork = vo.forkSession as boolean | undefined;
       const finalResumeAt = extra?.fresh ? undefined : (extra?.resumeSessionAt ?? baseResumeAt);
       const finalFork = extra?.fresh ? false : (extra?.forkSession ?? baseFork);
+      duplicateMcpChoices = { skipHostServers: [], denyNativeServers: [] };
+      if (!reviewMode && !opts.botRuntimeProfile && !opts.remoteHostId && !hosted && !opts[LOCAL_AGENT_CLIENT]) {
+        try {
+          duplicateMcpChoices = await this.deps.resolveLocalMcpDuplicateChoices?.({ workingDir: opts.workingDir, env })
+            ?? duplicateMcpChoices;
+          // A native name can also be a registered host name. A native preference
+          // must never disable an injected builtin or another host connection.
+          duplicateMcpChoices.denyNativeServers = duplicateMcpChoices.denyNativeServers
+            .filter(name => !mcpProviders.some(provider => provider.name === name));
+        } catch {
+          // Diagnostic/preferences failure must not make native MCPs unavailable.
+          log.warn('MCP duplicate preferences unavailable; preserving configured connections');
+        }
+      }
       const mcpServers = buildMcpServers();
       // A prebound request id is not a resume source until its input is accepted.
       let resumeSdkSid = durableSdkSessionId ?? configuredResumeSessionId;

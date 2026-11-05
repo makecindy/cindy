@@ -8372,6 +8372,26 @@
         "title": "Delete \"{{name}}\"?",
         "message": "New sessions will no longer load this MCP.",
         "confirm": "Delete"
+      },
+      "duplicates": {
+        "title": "Possibly duplicate MCP connections",
+        "description": "Cindy and your Claude Code user configuration have matching or similar connections that may load tools twice. Choose which source to keep, or keep both if unsure.",
+        "scope": "Only affects ordinary Claude Code tasks in Cindy on this computer, when the agent next starts. Your Claude Code configuration stays unchanged. Related duplicates share the same choice.",
+        "unavailable": "Some configuration could not be read. Connections are unchanged. Reopening this page checks again.",
+        "endpoint": "Same connection address",
+        "similar": "Similar connection addresses",
+        "keep": {
+          "both": "Keep both sources in this group"
+        },
+        "selected": {
+          "cindy": "Cindy connection selected",
+          "claude": "Claude Code connection selected",
+          "both": "Keeping both sources in this group"
+        },
+        "reset": "Choose again",
+        "saveFailed": "Could not save. The connections may have changed. Choose again from the current list.",
+        "keepThis": "Keep this connection",
+        "keepThese": "Keep these connections"
       }
     },
     "remotePermission": {

@@ -1230,6 +1230,7 @@ import { registerProviderHandlers } from './providerHandlers.js';
 import { readModelImageInputOverride, writeModelImageInputOverride } from '../maker-host/model-catalog-override-store.js';
 import { createLocalCliScanDeps, scanLocalCliAuth } from './localCliDetect.js';
 import { registerMcpHandlers } from './mcpHandlers.js';
+import { listMcpDuplicates, saveMcpDuplicateChoice } from '../maker-host/mcp-duplicate-preferences.js';
 import {
   getBuiltinMcpServerNames,
   refreshCustomMcpProviders,
@@ -8231,6 +8232,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       invalidatePiEnvironment();
     };
   registerMcpHandlers(createElectronIpcHandlerRegistry(), {
+    listDuplicates: () => listMcpDuplicates(),
+    chooseDuplicate: saveMcpDuplicateChoice,
     listMcpServers: listBotRuntimeMcpServers,
     resolveBotContext: async (sessionId, chain) => {
       const route = await reconcileBotModelRoute.preview(sessionId, chain);

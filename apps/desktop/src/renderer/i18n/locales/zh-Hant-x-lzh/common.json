@@ -8329,6 +8329,26 @@
         "title": "刪 “{{name}}” 乎？",
         "message": "刪之，則新開或重啟之 Agent 差事不再載此 MCP。",
         "confirm": "刪"
+      },
+      "duplicates": {
+        "title": "疑似重複的 MCP 連線",
+        "description": "Cindy 與 Claude Code 的使用者設定中有相同或相近的連線，可能重複載入工具。請選擇保留的來源；不確定時可以都保留。",
+        "scope": "僅影響這台電腦上 Cindy 的一般 Claude Code 任務，下次 Agent 啟動時生效。不會修改 Claude Code 設定。相互關聯的重複連線共用選擇。",
+        "unavailable": "未能完整讀取設定，暫未變更連線。返回此頁面時會重新檢查。",
+        "endpoint": "連線位址相同",
+        "similar": "連線位址相近",
+        "keep": {
+          "both": "本組皆留"
+        },
+        "selected": {
+          "cindy": "已選擇保留 Cindy 連線",
+          "claude": "已選擇保留 Claude Code 連線",
+          "both": "本組兩側連線皆已保留"
+        },
+        "reset": "重新選擇",
+        "saveFailed": "未能儲存，連線可能已變更。請依目前清單重新選擇。",
+        "keepThis": "保留此連線",
+        "keepThese": "保留這些連線"
       }
     },
     "remotePermission": {

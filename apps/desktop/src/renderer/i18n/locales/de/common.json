@@ -8372,6 +8372,26 @@
         "title": "„{{name}}“ löschen?",
         "message": "Neue Sitzungen laden diesen MCP nicht mehr.",
         "confirm": "Löschen"
+      },
+      "duplicates": {
+        "title": "Möglicherweise doppelte MCP-Verbindungen",
+        "description": "Cindy und deine Claude-Code-Benutzerkonfiguration enthalten gleiche oder ähnliche Verbindungen, die Werkzeuge doppelt laden könnten. Wähle die gewünschte Quelle oder behalte im Zweifel beide.",
+        "scope": "Gilt nur für normale Claude-Code-Aufgaben in Cindy auf diesem Computer, ab der nächsten Agent-Sitzung. Deine Claude-Code-Konfiguration bleibt unverändert. Zusammenhängende Duplikate verwenden dieselbe Auswahl.",
+        "unavailable": "Ein Teil der Konfiguration konnte nicht gelesen werden. Die Verbindungen bleiben unverändert. Beim erneuten Öffnen dieser Seite wird nochmals geprüft.",
+        "endpoint": "Gleiche Verbindungsadresse",
+        "similar": "Ähnliche Verbindungsadressen",
+        "keep": {
+          "both": "Beide Quellen dieser Gruppe behalten"
+        },
+        "selected": {
+          "cindy": "Cindy-Verbindung ausgewählt",
+          "claude": "Claude-Code-Verbindung ausgewählt",
+          "both": "Beide Quellen dieser Gruppe werden beibehalten"
+        },
+        "reset": "Erneut wählen",
+        "saveFailed": "Speichern fehlgeschlagen. Die Verbindungen könnten sich geändert haben. Wähle erneut aus der aktuellen Liste.",
+        "keepThis": "Diese Verbindung behalten",
+        "keepThese": "Diese Verbindungen behalten"
       }
     },
     "remotePermission": {

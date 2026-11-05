@@ -8329,6 +8329,26 @@
         "title": "删除 “{{name}}”？",
         "message": "删除后新建或重启的 Agent 会话将不再加载该 MCP。",
         "confirm": "删除"
+      },
+      "duplicates": {
+        "title": "疑似重复的 MCP 连接",
+        "description": "Cindy 与 Claude Code 的用户配置中有相同或相近的连接，可能重复加载工具。请选择保留的来源；不确定时可以都保留。",
+        "scope": "仅影响这台电脑上 Cindy 的普通 Claude Code 任务，下次 Agent 启动时生效。不会修改 Claude Code 配置。相互关联的重复连接共用选择。",
+        "unavailable": "未能完整读取配置，暂未更改连接。返回此页面时会重新检查。",
+        "endpoint": "连接地址相同",
+        "similar": "连接地址相近",
+        "keep": {
+          "both": "本组都保留"
+        },
+        "selected": {
+          "cindy": "已选择保留 Cindy 连接",
+          "claude": "已选择保留 Claude Code 连接",
+          "both": "已保留本组两边的连接"
+        },
+        "reset": "重新选择",
+        "saveFailed": "未能保存，连接可能已变化。请根据当前列表重新选择。",
+        "keepThis": "保留此连接",
+        "keepThese": "保留这些连接"
       }
     },
     "remotePermission": {
