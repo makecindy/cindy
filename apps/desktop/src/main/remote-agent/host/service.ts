@@ -31,7 +31,7 @@ import { remoteModelAccess } from '../../device-link/remoteModelAccess.js';
 import { handleProviderShareReshare, providerShareReshareAllows } from '../../device-link/providerShareReshare.js';
 import { createProviderGroupGuestRelay } from '../../provider-group/guestRelay.js';
 import { providerGroupReshare } from '../../provider-group/reshareRuntime.js';
-import { getProviderGroupOwnerScope } from '../../provider-group/runtime.js';
+import { getProviderGroupOwnerScope, hasProviderGroupContinuityHandler } from '../../provider-group/runtime.js';
 import { onProviderGroupChanged, readProviderGroup } from '../../provider-group/store.js';
 import { bindGroupFastPolicy, bindLocalHostedGroupFastPolicy, receiveGroupFastPolicy, startGroupFastPolicySync } from '../../provider-group/fastPolicyRuntime.js';
 import { groupFastPolicyStore } from '../../provider-group/fastPolicyStore.js';
@@ -997,6 +997,7 @@ export function installRemoteAgentHost(options: {
     recordOwnerUsage: (controller, sample) => recordDeviceUsage(controller, sample, 'device'),
     // 供应商组(本机是组所在电脑)：受邀者的任务按组分给组内电脑，本机中转(provider-groups.md §4)。
     groupRelay,
+    groupContinuity: hasProviderGroupContinuityHandler,
     directGuestExecution: {
       ownerScope: providerShareOwnerKey,
       async locate(controller, request) {

@@ -29,6 +29,10 @@ const names = new Set([
   'writeResourceSessionToVault',
   'initialize',
   'refresh',
+  'scheduleRefresh',
+  'scheduleRefreshRetry',
+  'scheduleRefreshRetryAfterTransientFailure',
+  'getRefreshErrorCode',
   'runColdStartRefreshFlow',
   'runAuthRefreshWithReplacementRetry',
   'waitForColdStartRetry',
@@ -43,9 +47,11 @@ let coldStartAuthInFlight = null, coldStartRetryWait = null, refreshTimer = null
 let coldStartRecoveryStopped = false, coldStartRetryState = null;
 let lastAcceptedRefreshToken = null, persistedRefreshTokenNeedsIdentityCheck = false;
 let foreignDeviceLocalSignOut = false;
+let refreshPromise = null;
+const refreshBackoff = new AuthRefreshBackoff();
 const passiveLocalSignOut = false, settledLoginCommitCount = 0;
 const API_FETCH_TIMEOUT_MS = 15000;
-const AUTH_REGION = 'global', RUNTIME_REFRESH_RETRY_MS = 60000;
+const AUTH_REGION = 'global';
 const COLD_START_AUTH_GATE_TIMEOUT_MS = 20000;
 const LEGACY_RESOURCE_REFRESH_TOKEN_KEY = 'legacy-resource';
 const LEGACY_REFRESH_TOKEN_KEY = 'legacy', LEGACY_ACCOUNT_REFRESH_TOKEN_KEY = 'legacy-account';
@@ -75,6 +81,8 @@ return {
   fetch: apiFetch, start: initialize, runtimeRefresh: refresh, reset: () => runLoginAction({ type: 'reset' }),
   manualLogin: () => runLoginAction({ type: 'discover', identifier: 'test@example.invalid' }),
   state: snapshotAuthState,
+  activateRuntime: () => { accessToken = 'test-expired'; currentUser = { id: 'original' }; },
+  backoff: refreshBackoff,
   fallback: () => { coldStartTimeoutFallbacks.record(authStateEpoch, authStateEpoch + 1); authStateEpoch++; loginFlowEpoch++; },
   changeOwner: () => {
     authStateEpoch++; accessToken = 'test-new-login'; currentUser = { id: 'other' };
@@ -155,7 +163,7 @@ function setup(random = 0) {
     loadClientEndpointsForRealm: vi.fn(async () => {}),
     loadLoginProviders: loadProviders,
     createAuthClient: () => ({ discover: vi.fn() }),
-    log: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
+    log: { debug: vi.fn(), warn: vi.fn(), info: vi.fn(), error: vi.fn() },
     readActiveVaultRefreshCandidate: () => null,
     clearConfirmedDeadRefreshTokens: clear,
     resetActiveAuthRealmToBuild: vi.fn(),
@@ -175,7 +183,8 @@ function setup(random = 0) {
     migrateLocalProviderBindingsAfterCloudCommit: vi.fn(async () => {}),
     scheduleCanaryFlagSync: vi.fn(),
     scheduleXdOrgBetaDefault: vi.fn(),
-    scheduleRefresh: vi.fn(),
+    notifyAccessTokenRefreshed: vi.fn(),
+    mergeMembershipWithExisting: (membership: unknown) => membership,
     getProviderSecretStore: () => ({ reconcileOwner: vi.fn() }),
     notifyRenderer: vi.fn(),
     notifyAuthListeners: vi.fn(),
@@ -512,4 +521,82 @@ describe('saved login recovery after startup network failure', () => {
       expect(h.clear).toHaveBeenCalledTimes(code === 'REFRESH_TOKEN_EXPIRED' ? 1 : 0);
     },
   );
+});
+
+// Unit regression: runtime refresh + its real timer must recover within 3 seconds
+// after three transport failures and a trusted 401 (2026-11-04 outage). Existing
+// cold-start tests and admission-only backoff tests never ran this timer path.
+// Each quick attempt now needs evidence received after the previous launch;
+// without it the original long deadline must resume (2026-11-04 follow-up).
+describe('runtime token rejection after an offline backoff', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
+
+  it('requires fresh 401 evidence for every quick attempt and retains its tier across an offline wait', async () => {
+    const h = setup(0.5);
+    h.activateRuntime();
+    await h.runtimeRefresh();
+    await vi.advanceTimersByTimeAsync(90_000);
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(h.request).toHaveBeenCalledTimes(3);
+    const longDeadline = Date.now() + h.backoff.remaining(0);
+    await h.runtimeRefresh({ serverRejectedToken: true });
+    await vi.advanceTimersByTimeAsync(1_000);
+    for (let i = 0; i < 4; i++) await h.runtimeRefresh({ serverRejectedToken: true });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.request).toHaveBeenCalledTimes(4);
+    expect(Date.now() + h.backoff.remaining(0)).toBe(longDeadline);
+
+    // No new evidence: the timer returns to the original long deadline, even
+    // though the quick tier's earliest retry time has already passed.
+    await vi.advanceTimersByTimeAsync(65_000);
+    expect(h.request).toHaveBeenCalledTimes(4);
+    expect(Date.now() + h.backoff.runtimeRemaining(0)).toBe(longDeadline);
+    await h.runtimeRefresh({ serverRejectedToken: true });
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(h.request).toHaveBeenCalledTimes(5);
+    expect(Date.now() + h.backoff.remaining(0)).toBe(longDeadline);
+
+    let finish!: (result: unknown) => void;
+    h.request.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    await h.runtimeRefresh({ serverRejectedToken: true });
+    // Tier retained across the 65s outage: the next floor is 3s, not 1.5s.
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(h.request).toHaveBeenCalledTimes(5);
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(h.request).toHaveBeenCalledTimes(6);
+    // Evidence received after launch (even while in flight) may authorize the
+    // following attempt, but never a concurrent request or a second deadline.
+    const concurrent = [h.runtimeRefresh(), h.runtimeRefresh({ serverRejectedToken: true })];
+    finish({ ok: false, status: 0, data: null });
+    await expect(Promise.all(concurrent)).resolves.toEqual([false, false]);
+    h.request.mockResolvedValue(h.ok);
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(h.request).toHaveBeenCalledTimes(7);
+    expect(h.saved.session.refreshToken).toBe('test-rotated');
+    expect(h.backoff.remaining(0)).toBe(0);
+    expect(h.deps.notifyAccessTokenRefreshed).toHaveBeenCalled();
+    expect(h.clear).not.toHaveBeenCalled();
+  });
+
+  it.each([503, 0])('keeps Retry-After despite 401s after leaving the quick retry path (status=%s)', async status => {
+    const h = setup(0.5);
+    h.activateRuntime();
+    await h.runtimeRefresh();
+    await h.runtimeRefresh({ serverRejectedToken: true });
+    await vi.advanceTimersByTimeAsync(1_500); // One quick transport failure.
+    const retryAt = Date.now() + 600_000;
+    h.request.mockResolvedValue({ ok: false, status, retryAt, data: null });
+    await h.runtimeRefresh({ serverRejectedToken: true });
+    await vi.advanceTimersByTimeAsync(2_250);
+    expect(h.request).toHaveBeenCalledTimes(3);
+    // The failed quick request consumes only the next long tier (2–4m).
+    const deadline = retryAt + 60_000;
+    expect(Date.now() + h.backoff.remaining(0)).toBe(deadline);
+    for (let i = 0; i < 5; i++) await h.runtimeRefresh({ serverRejectedToken: true });
+    await vi.advanceTimersByTimeAsync(deadline - Date.now() - 1);
+    expect(h.request).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.request).toHaveBeenCalledTimes(4);
+  });
 });

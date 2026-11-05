@@ -92,7 +92,8 @@ describe('ChatInput:换位置进切换事务', () => {
   it('只对本机任务、或支持远程 Agent 的被控端任务开放,且要能走切换事务', () => {
     expect(chatInputSource).toContain(
       'if (!sessionId || !agentLocationAware || remoteHostId || !sessionEngineFilter ||\n' +
-        '        sessionOrcaRole === undefined || (sessionOrcaRole !== null && deviceLinkDeviceId) ||\n' +
+        '        sessionOrcaRole === undefined ||\n' +
+        '        (sessionOrcaRole !== null && deviceLinkDeviceId && !hostSupportsOrcaAgentRelocation) ||\n' +
         '        sessionOrcaRemoteWorker) return undefined;',
     );
     expect(chatInputSource).toContain('agentDeviceId: selection.agentDevice?.deviceId ?? null,');
