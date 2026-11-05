@@ -40,7 +40,7 @@ class InMemoryStorage implements ScheduleStorage {
     const ex = this.schedules.get(id);
     if (!ex) return null;
     if (expected && (['lastFiredAt', 'nextFireAt', 'status', 'recurring', 'manual',
-      'cronExpr', 'timezone', 'intervalMs'] as const).some((key) => ex[key] !== expected[key])) return null;
+      'cronExpr', 'timezone', 'intervalMs', 'expireAt'] as const).some((key) => ex[key] !== expected[key])) return null;
     const merged: Schedule = { ...ex, ...patch };
     if (patch.lastFinishedAt !== undefined) {
       merged.lastFinishedAt = Math.max(ex.lastFinishedAt ?? patch.lastFinishedAt, patch.lastFinishedAt);
@@ -740,6 +740,31 @@ describe('Scheduler', () => {
     expect(list).toHaveLength(1);
   });
 
+  it('create() stores a schedule as expired when its boundary has already passed', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, expireAt: h.clock.now() - 1 });
+    expect(sch).toMatchObject({ status: 'expired', nextFireAt: undefined });
+    expect(await h.scheduler.list({ status: 'active' })).toHaveLength(0);
+  });
+
+  it('update() stops an active recurring schedule when expireAt is moved into the past', async () => {
+    const sch = await h.scheduler.create({ ...baseInput });
+    const updated = await h.scheduler.update(sch.id, { expireAt: h.clock.now() - 1 });
+    expect(updated).toMatchObject({ status: 'expired', nextFireAt: undefined });
+    expect(await h.storage.get(sch.id)).toMatchObject({ status: 'expired', nextFireAt: undefined });
+  });
+
+  it('resume() keeps a paused schedule expired after its boundary has passed', async () => {
+    const saved = await h.scheduler.create({ ...baseInput, expireAt: h.clock.now() + 60_000 });
+    h.storage.schedules.set(saved.id, {
+      ...saved,
+      status: 'paused',
+      nextFireAt: undefined,
+      expireAt: h.clock.now() - 1,
+    });
+    const resumed = await h.scheduler.resume(saved.id);
+    expect(resumed).toMatchObject({ status: 'expired', nextFireAt: undefined });
+  });
+
   // 测试价值
   // - 生产入口与可观察结果：Scheduler.tick 认领到期任务、运行 runner 并重排 nextFireAt；下一合法槽位前不得重复调用。
   // - Bug／规则依据：#5924；重排结果必须严格晚于完成时刻。
@@ -1138,6 +1163,41 @@ describe('Scheduler', () => {
     expect(runs).toHaveLength(1);
     expect(runs[0].status).toBe('success');
     expect(runs[0].sessionId).toBe(`sess-${sch.id}`);
+  });
+
+  it('expires a recurring schedule when expireAt has passed before its next cron fire', async () => {
+    const sch = await h.scheduler.create({
+      ...baseInput,
+      expireAt: Date.UTC(2026, 0, 1, 0, 1, 30),
+    });
+    h.clock.setTo(Date.UTC(2026, 0, 1, 0, 2, 5));
+
+    await h.scheduler.tick();
+
+    expect(h.runner.fire).not.toHaveBeenCalled();
+    expect(await h.storage.get(sch.id)).toMatchObject({
+      status: 'expired',
+      nextFireAt: undefined,
+    });
+  });
+
+  it('expires recurring schedules during startup recovery after expireAt', async () => {
+    const saved = await h.scheduler.create({ ...baseInput, expireAt: h.clock.now() + 60_000 });
+    h.storage.schedules.set(saved.id, {
+      ...saved,
+      status: 'active',
+      nextFireAt: Date.UTC(2026, 0, 1, 0, 5, 0),
+      expireAt: Date.UTC(2026, 0, 1, 0, 1, 30),
+    });
+    h.clock.setTo(Date.UTC(2026, 0, 1, 0, 2, 5));
+
+    await h.scheduler.start();
+
+    expect(await h.storage.get(saved.id)).toMatchObject({
+      status: 'expired',
+      nextFireAt: undefined,
+    });
+    await h.scheduler.stop();
   });
 
   it('one-shot schedule moves to expired after fire', async () => {
