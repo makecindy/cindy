@@ -148,8 +148,15 @@ export async function materializeCompanion(input: {
   const profile = isCompanionProfileSnapshot(profileValue) ? profileValue : null;
   /** A restored value is recorded under the revisions of where it came from. */
   const remember = (entry: CompanionBotState, key: string, value: { hash: string; revision: number }) => {
-    if (prefs.get(key)?.fromStore) entry.stored = { ...entry.stored, [key]: { ...value, local: true } };
-    else entry.prefs[key] = { ...value, local: true };
+    // The other location's record is from before another computer changed the value: drop it, or a
+    // later edit back to that old value would look already uploaded there (and be lost).
+    if (prefs.get(key)?.fromStore) {
+      entry.stored = { ...entry.stored, [key]: { ...value, local: true } };
+      delete entry.prefs[key];
+    } else {
+      entry.prefs[key] = { ...value, local: true };
+      if (entry.stored?.[key]) { const { [key]: _old, ...rest } = entry.stored; entry.stored = rest; }
+    }
   };
   const known = state.bot(botId);
   const knownPrefs = known?.actorId === actor.id ? known.prefs : {};
