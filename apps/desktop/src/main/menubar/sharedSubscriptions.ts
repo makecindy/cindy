@@ -99,7 +99,7 @@ export class SharedQuotaReader {
     const current = () => this.open && this.revision === revision && scope !== null && this.deps.scope() === scope;
     if (!current()) return;
     const targets = this.deps.shares().filter(share => share.status === 'active' && share.hostOnline && share.hostCapable);
-    const sources: MenubarSubscriptionInput[] = [];
+    const results: Array<{ share: ProviderShareReceived; raw: unknown }> = [];
     // Bound network fanout; one failed share does not hide other suppliers.
     for (let offset = 0; offset < targets.length && current(); offset += 3) {
       await Promise.all(targets.slice(offset, offset + 3).map(async share => {
@@ -108,14 +108,20 @@ export class SharedQuotaReader {
           if (!current()) return;
           const latest = this.deps.shares().find(item => item.shareId === share.shareId);
           if (!latest || JSON.stringify(latest) !== JSON.stringify(share)) return;
-          const source = sharedSubscription(share, result, Date.now());
-          if (source) sources.push(source);
+          results.push({ share, raw: result });
         } catch {
           // Failed or revoked reads contribute no cached value.
         }
       }));
     }
     if (!current()) return;
+    // Another share may have kept this batch waiting past a reset. Select the account and
+    // its live windows at publication time, not when each individual response arrived.
+    const now = Date.now();
+    const sources = results.flatMap(({ share, raw }) => {
+      const source = sharedSubscription(share, raw, now);
+      return source ? [source] : [];
+    });
     this.deps.publish(sources.sort((a, b) => a.id.localeCompare(b.id)));
     this.timer = setTimeout(() => {
       this.timer = null;

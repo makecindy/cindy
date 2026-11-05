@@ -65,6 +65,7 @@ beforeEach(() => {
   overview = new QuotaOverviewService();
   mocks.app.isPackaged = true;
   vi.useFakeTimers(); mocks.revision = 0; mocks.listeners.clear(); mocks.refresh.mockReset(); mocks.collect.mockReset();
+  mocks.sharedRead.mockReset(); mocks.sharedChanged = null;
   mocks.activities = []; mocks.attentionListeners.clear(); mocks.publish.mockReset();
   mocks.openOverviewSession.mockReset(); mocks.openLocalSession.mockReset();
   mocks.openRemoteSettings.mockReset(); mocks.onHelperMessage = null;
@@ -286,8 +287,9 @@ it('adds the highest shared weekly quota only to the open native panel and clear
   const service = new MenubarService({ openNewTask() {}, overview });
   service.init();
   await vi.advanceTimersByTimeAsync(0);
+  expect(mocks.sharedRead).not.toHaveBeenCalled();
+  expect(mocks.sharedChanged).toBeNull();
   mocks.onHelperMessage?.({ type: 'panel', open: true });
-  await vi.dynamicImportSettled();
   await vi.advanceTimersByTimeAsync(0);
   expect(mocks.publish.mock.lastCall?.[0].sources).toContainEqual(expect.objectContaining({ id: 'share:share-one', value: '82' }));
   expect(mocks.publish.mock.lastCall?.[0].details['share:share-one']).toMatchObject({
@@ -307,6 +309,7 @@ it('adds the highest shared weekly quota only to the open native panel and clear
   await vi.advanceTimersByTimeAsync(0);
   expect(mocks.publish.mock.lastCall?.[0].details['share:share-one']).toBeDefined();
   mocks.onHelperMessage?.({ type: 'panel', open: false });
+  expect(mocks.sharedChanged).toBeNull();
   expect(mocks.publish.mock.lastCall?.[0].sources).toEqual([]);
   const calls = mocks.sharedRead.mock.calls.length;
   await vi.advanceTimersByTimeAsync(5000);

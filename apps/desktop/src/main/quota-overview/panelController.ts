@@ -19,6 +19,7 @@ import type {
 } from '../../shared/menubarQuota.js';
 import { getAgentIslandService } from '../agent-island/service.js';
 import { getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
+import { onAuthStateChange } from '../authManager.js';
 import {
   focusMainWindow,
   openMainWindowBillingTopUp,
@@ -27,6 +28,8 @@ import {
   openMainWindowVoiceSettings,
 } from '../deepLink.js';
 import { getActiveControllers } from '../device-link/dispatch.js';
+import { getReceivedShares, onProviderShareReceivedChanged } from '../device-link/providerShareGuest.js';
+import { readReceivedProviderShareQuota } from '../device-link/providerShareRuntime.js';
 import { getResolvedMainLocale, rawMainString } from '../i18n.js';
 import { createLogger } from '../logger.js';
 import { inspectAppDefaultModel } from '../maker-ipc/appDefaultModelControl.js';
@@ -75,7 +78,6 @@ export class QuotaPanelController {
   private sharedSources: MenubarSubscriptionInput[] = [];
   private sharedScope: string | null = null;
   private sharedReader: SharedQuotaReader | null = null;
-  private sharedLoading: Promise<void> | null = null;
   private lastView: MenubarView | null = null;
   /** Null until the first build, so launching while low does not notify. */
   private wasLow: boolean | null = null;
@@ -151,7 +153,7 @@ export class QuotaPanelController {
         if (this.started) {
           this.panelOpen = command.open;
           this.overview.setInteractive(command.open);
-          void this.setSharedOpen();
+          this.setSharedOpen();
         }
         return;
       case 'refresh':
@@ -208,41 +210,29 @@ export class QuotaPanelController {
     this.updateLowAlert(isLowOnEverything(build.input), build.input);
   }
 
-  private async setSharedOpen(): Promise<void> {
+  private setSharedOpen(): void {
     if (!this.panelOpen) { this.sharedReader?.setOpen(false); return; }
-    if (!this.sharedReader) {
-      // Keep the sharing runtime out of panel startup; loading it does not start an Agent.
-      this.sharedLoading ??= Promise.all([
-        import('../device-link/providerShareGuest.js'),
-        import('../device-link/providerShareRuntime.js'),
-        import('../authManager.js'),
-      ]).then(([guest, runtime, auth]) => {
-        this.sharedReader = new SharedQuotaReader({
-          scope: () => {
-            const scope = getActiveAppSession();
-            return isAppSessionBoundaryPending() || !scope.dataOwnerId ? null : `${scope.dataOwnerId}:${scope.generation}`;
-          },
-          shares: () => guest.getReceivedShares(),
-          read: shareId => runtime.readReceivedProviderShareQuota(shareId),
-          subscribe: changed => {
-            const offShares = guest.onProviderShareReceivedChanged(changed);
-            const offAuth = auth.onAuthStateChange(changed);
-            return () => { offShares(); offAuth(); };
-          },
-          publish: sources => {
-            this.sharedSources = sources;
-            const owner = getActiveAppSession();
-            this.sharedScope = `${owner.dataOwnerId}:${owner.generation}`;
-            const build = this.overview.latest();
-            if (this.started && build) this.publish(build);
-          },
-        });
-      }).catch(error => {
-        log.warn('shared quota reader unavailable', { error: errorMessage(error) });
-      }).finally(() => { this.sharedLoading = null; });
-      await this.sharedLoading;
-    }
-    this.sharedReader?.setOpen(this.started && this.panelOpen);
+    this.sharedReader ??= new SharedQuotaReader({
+      scope: () => {
+        const scope = getActiveAppSession();
+        return isAppSessionBoundaryPending() || !scope.dataOwnerId ? null : `${scope.dataOwnerId}:${scope.generation}`;
+      },
+      shares: getReceivedShares,
+      read: readReceivedProviderShareQuota,
+      subscribe: changed => {
+        const offShares = onProviderShareReceivedChanged(changed);
+        const offAuth = onAuthStateChange(changed);
+        return () => { offShares(); offAuth(); };
+      },
+      publish: sources => {
+        this.sharedSources = sources;
+        const owner = getActiveAppSession();
+        this.sharedScope = `${owner.dataOwnerId}:${owner.generation}`;
+        const build = this.overview.latest();
+        if (this.started && build) this.publish(build);
+      },
+    });
+    this.sharedReader.setOpen(this.started && this.panelOpen);
   }
 
   /** Unread changes must not wait for quota/history/network reads to finish. */

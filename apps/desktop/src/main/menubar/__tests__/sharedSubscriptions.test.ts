@@ -91,6 +91,37 @@ function harness() {
   };
 }
 
+// One fast share can expire while a sibling read is pending. Projection must use the
+// final publication time, including reselecting a still-live account from a group.
+it.each([false, true])('rechecks weekly validity after the whole batch finishes (fallback=%s)', async fallback => {
+  const h = harness();
+  const secondShare = { ...share, shareId: 'two' };
+  h.changeShares([share, secondShare]);
+  const first = quota();
+  first.quota!.accounts[0]!.windows[0]!.remainingPercent = 82;
+  first.quota!.accounts[0]!.windows[0]!.resetsAt = Date.now() + 1_000;
+  if (fallback) {
+    first.quota!.group = true;
+    first.quota!.accounts.push(quota().quota!.accounts[0]!);
+  }
+  let finishSlow!: (value: unknown) => void;
+  h.read.mockImplementation((id: string) => id === share.shareId
+    ? Promise.resolve(first) : new Promise(done => { finishSlow = done; }));
+  h.reader.setOpen(true);
+  await vi.advanceTimersByTimeAsync(0);
+  await vi.advanceTimersByTimeAsync(2_000);
+  finishSlow(quota());
+  await vi.advanceTimersByTimeAsync(0);
+  const firstSource = h.sources.find(source => source.id === 'share:one');
+  if (fallback) expect(firstSource?.windows[0]?.usedPercent).toBe(54);
+  else expect(firstSource).toBeUndefined();
+  expect(h.sources.find(source => source.id === 'share:two')).toBeDefined();
+  for (const source of h.sources) for (const window of source.windows) {
+    expect(window.resetsAtMs === null || window.resetsAtMs > Date.now()).toBe(true);
+  }
+  h.reader.setOpen(false);
+});
+
 it('reads only while open, removes revoked/failed quotas, and restores an authorized read', async () => {
   const h = harness();
   await vi.advanceTimersByTimeAsync(10_000);
