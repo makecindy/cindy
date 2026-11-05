@@ -5714,7 +5714,7 @@ assertRouteCurrent();
     // 关掉抹平 → fail-closed(不把远端 /private/tmp 误当 /tmp 区内)。本地用真实 process.platform。
     // 定义在此(startSession 作用域,opts=session)以避开 awaitApprovalDecision 内层 opts 的遮蔽。
     const sessionReviewPlatform: NodeJS.Platform = opts.remoteHostId ? 'linux' : hosted ? hosted.platform : process.platform;
-    const reviewAutoAction = (action: ReviewableAction, hostAutoApprove = false, hostShortcutOnly = false): Promise<AutoReviewDecision> => {
+    const reviewAutoAction = (action: ReviewableAction, hostAutoApprove = false, hostShortcutOnly = false, subagentCall = false): Promise<AutoReviewDecision> => {
       const directoryGeneration = autoReviewDirectoryGeneration;
       const request = {
         sessionId: opts.sessionId,
@@ -5726,7 +5726,7 @@ assertRouteCurrent();
         model: mutableCatalogModel ?? mutableModel,
         userIntent: currentAutoReviewIntent,
         precedingBlockedActions: autoReviewActionContext.precedingBlockedActions,
-        ...((agentContext) => agentContext ? { agentContext } : {})(autoReviewAgentText.snapshot()),
+        ...((agentContext) => agentContext ? { agentContext } : {})(autoReviewAgentText.snapshot(undefined, !subagentCall)),
         ...(currentAutoReviewAuthority ? { authorizationContext: currentAutoReviewAuthority } : {}),
         action,
         workspaceRoots: runtimeWorkspaceRoots().filter(
@@ -8126,6 +8126,8 @@ assertRouteCurrent();
                 : opts.autoReviewAction,
               opts?.hostAutoApprove === true && !forcePrompt,
               reviewPermissionMode !== 'auto',
+              // A subagent's call must not borrow the main agent's explanation.
+              descendant,
             );
           } finally {
             if (pendingApprovals.get(requestId) === reviewEntry) pendingApprovals.delete(requestId);
