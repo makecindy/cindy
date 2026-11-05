@@ -9,7 +9,7 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
   generateSummaryWithUsage: vi.fn(),
 }));
 
-const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot } = await import(
+const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, verifiedRaw } = await import(
   '../../../../extensions/live-compact/index.ts'
 );
 
@@ -31,13 +31,20 @@ function entry(role, text, extra = {}) {
 
 describe('live compact spine selection', () => {
   it('never separates a tool call from its result', () => {
-    // 5KB 的 toolResult 让每一段都够大,于是唯一挡刀的就是配对平衡。
+    // 1.0.6 起最近几轮工具结果原地保留(KEEP_ROUND_TOKENS 32K),
+    // 所以夹具里要先有超过保留预算的旧轮次,才轮得到更早的段落被切。
     const big = (tag) => `${tag} `.repeat(1200);
+    // 每轮约 24K token:两轮旧结果合起来超过 KEEP_ROUND_TOKENS(32K),
+    // 保留区才会停在最后几轮,更早的段落才可切。
+    const huge = (tag) => `${tag} `.repeat(8000);
     const entries = [
       entry('system', 'sys'),
       entry('user', 'read the file'),
+      entry('assistant', 'call', { calls: ['c0'] }),
+      entry('toolResult', huge('result-zero'), { results: ['c0'] }),
+      entry('user', 'read another'),
       entry('assistant', 'call', { calls: ['c1'] }),
-      entry('toolResult', big('result-one'), { results: ['c1'] }),
+      entry('toolResult', huge('result-one'), { results: ['c1'] }),
       entry('user', 'now summarise'),
       entry('assistant', 'call', { calls: ['c2'] }),
       entry('toolResult', big('result-two'), { results: ['c2'] }),
@@ -46,14 +53,10 @@ describe('live compact spine selection', () => {
     const chunk = selectNewestChunk(entries);
     expect(chunk).not.toBeNull();
 
-    const inSpan = new Set(
-      entries.slice(chunk.start, chunk.end + 1).flatMap((e) => [...e.calls, ...e.results]),
-    );
     const callInSpan = entries.slice(chunk.start, chunk.end + 1).some((e) => e.calls.length > 0);
     const resultInSpan = entries.slice(chunk.start, chunk.end + 1).some((e) => e.results.length > 0);
     // 切走 call 就必须同时切走它的 result,反之亦然。
     expect(callInSpan).toBe(resultInSpan);
-    if (callInSpan) expect(inSpan.has('c1') || inSpan.has('c2')).toBe(true);
   });
 
   it('marks a range balanced only when every call is answered inside it', () => {
@@ -112,9 +115,10 @@ describe('live compact spine selection', () => {
 
   it('points at the backup when budget dropped covered lines', () => {
     // deferred 行只在备份里:卡片必须给出路径,否则模型被告知有丢弃却无从取回。
+    // 1.0.6 起助手自己的叙述不进 kept lines,所以可 deferred 的是用户/工具段落。
     const spans = [
       { role: 'user', text: 'reference', isError: false },
-      { role: 'assistant', text: Array.from({ length: 60 }, (_, i) => `const alpha${i} = beta${i}();`).join(String.fromCharCode(10)), isError: false },
+      { role: 'user', text: Array.from({ length: 60 }, (_, i) => `const alpha${i} = beta${i}();`).join(String.fromCharCode(10)), isError: false },
     ];
     const card = buildCard('', '', 200, spans);
     expect(card.ok).toBe(true);
@@ -232,6 +236,60 @@ describe('live compact card roles and tool excerpts (1.0.3-1.0.5)', () => {
     } finally {
       if (previous === undefined) delete process.env.SPINE_SHADOW_DIR;
       else process.env.SPINE_SHADOW_DIR = previous;
+    }
+  });
+});
+
+describe('live compact 1.0.6: kept tool rounds, evidence and raw pointers', () => {
+  it('keeps the newest finished tool rounds and ignores the open one', () => {
+    const entries = [
+      entry('assistant', 'a', { calls: ['c1'] }),
+      entry('toolResult', 'r1', { results: ['c1'] }),
+      entry('assistant', 'a', { calls: ['c2'] }),
+      entry('toolResult', 'r2', { results: ['c2'] }),
+      entry('assistant', 'a', { calls: ['c3'] }),
+      // c3 还没回来:这一轮不算完成,不能被当成保留区。
+    ];
+    expect(keptToolRounds(entries, 2)).toEqual([{ start: 0, end: 1 }, { start: 2, end: 3 }]);
+    const rounds = keptToolRounds(entries, 1);
+    expect(rounds).toEqual([{ start: 2, end: 3 }]);
+    expect(reservedCutEnd(rounds[0].start, 0)).toBe(1);
+    // 保留区从 first 开始就没有可切的地方。
+    expect(reservedCutEnd(0, 0)).toBeNull();
+  });
+
+  it('stops extending the kept span once the budget is exceeded', () => {
+    const rounds = [{ start: 0, end: 1 }, { start: 2, end: 3 }, { start: 4, end: 5 }];
+    const spanTokens = (from, to) => to - from + 1;
+    expect(chooseKeptSpan(rounds, spanTokens, 2)).toEqual({ start: 4, end: 5 });
+    expect(chooseKeptSpan(rounds, spanTokens, 99)).toEqual({ start: 0, end: 5 });
+    expect(chooseKeptSpan([], spanTokens, 99)).toBeNull();
+  });
+
+  it('writes tool evidence only from tool results that carry a call id', () => {
+    expect(toolEvidenceLine({ role: 'tool', text: 'ok', isError: false })).toBe('');
+    expect(toolEvidenceLine({ role: 'tool', text: 'ok', isError: false, toolCallId: 'c1', turn: 4, command: 'pnpm test' })).toBe(
+      '第 4 轮 `pnpm test` 完成 [c1]',
+    );
+    expect(
+      toolEvidenceLine({ role: 'tool', text: '[exit code: 2]', isError: false, toolCallId: 'c2', turn: 5, command: 'pnpm test' }),
+    ).toBe('第 5 轮 `pnpm test` 失败 [c2]');
+  });
+
+  it('round-trips a captured tool result and refuses a pruned body', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spine-raw-'));
+    try {
+      const saved = captureToolResult({ dir, toolCallId: 'c1', text: 'full output', turn: 3, name: 'read' });
+      expect(saved.ok).toBe(true);
+      expect(saved.bytes).toBe(Buffer.byteLength('full output'));
+      expect(verifiedRaw(saved).ok).toBe(true);
+      expect(pointerFor(saved)).toContain('sha256:');
+      // 剪过的表面文本不能写成「完整备份」。
+      const pruned = captureToolResult({ dir, toolCallId: 'c2', text: '[... tool result middle pruned ...]' });
+      expect(pruned.ok).toBe(false);
+      expect(pointerFor(pruned)).toBe('无完整备份 [c2]');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
