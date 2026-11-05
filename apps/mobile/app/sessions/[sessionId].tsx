@@ -25,7 +25,7 @@ import { keyboardControlRegion, sharedStatusRowDrawerTop, type LayoutRect } from
 import { useAdaptiveWindow, PaneViewportProvider } from '@/platform/AdaptiveWindowContext';
 import { useSessionHeaderHeight } from '@/session/useSessionHeaderHeight';
 import { useDoubleTap } from '@/session/useDoubleTap';
-import { useSessionPaneLayout } from '@/session/ResidentHomeList';
+import { useSessionPaneLayout, useSessionSidebarWidthPreference } from '@/session/ResidentHomeList';
 import { ComposerExpandButton } from '@/session/ComposerExpandButton';
 import { nativeComposerAvailable } from '@/session/ComposerNativeInput';
 import { getActiveMobileSessionRealm } from '@/config/env';
@@ -3133,12 +3133,18 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     ...(composerDock.enabled ? { composerPaddingHorizontal: composerGeometry.horizontalInset } : {}),
   }), [detailViewport.width, composerDock.enabled]);
   // Wide nonpersistent windows offer quick switching separately from back navigation.
+  // Its width is the same preference as the side column's.
+  const sidebarWidthPreference = useSessionSidebarWidthPreference();
   const wideSessionNav = useMemo(() => buildWideSessionNavLayout({
     iosPad: Platform.OS === 'ios' && Platform.isPad,
     platform: Platform.OS,
+    preferredWidth: sidebarWidthPreference.width,
     windowHeight: windowDimensions.height,
     windowWidth: windowDimensions.width,
-  }), [windowDimensions.height, windowDimensions.width]);
+  }), [sidebarWidthPreference.width, windowDimensions.height, windowDimensions.width]);
+  const sessionListDrawerResize = useMemo(() => wideSessionNav.resizeBounds
+    ? { bounds: wideSessionNav.resizeBounds, onResize: sidebarWidthPreference.setWidth } : undefined,
+  [sidebarWidthPreference.setWidth, wideSessionNav.resizeBounds]);
   const [sessionListDrawerOpen, setSessionListDrawerOpen] = useState(false);
   // 父级镜像 overlay 的真实存续期:打开时立即 true,退场动画完成 + native 子树卸载后的
   // onClosed 才 false。它同时保证退场期 TalkBack 背景隔离,以及旋转/收窄退出宽屏时
@@ -11671,6 +11677,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           open={sessionListDrawerOpen}
           topInset={sessionListDrawerTopInset}
           width={sessionListDrawerWidthRef.current}
+          resize={paneLayout.persistent ? undefined : sessionListDrawerResize}
         />
         ) : null}
       </MessageHistoryOverlay>

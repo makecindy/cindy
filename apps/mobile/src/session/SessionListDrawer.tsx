@@ -9,13 +9,14 @@ import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { motionDuration, motionEasing } from '@/theme/tokens';
 import type { RemoteSessionListItem } from './sessionList';
 import { MobileHome } from './HomeSurface';
+import { SessionPaneDivider } from './SessionPaneDivider';
 
 const DRAWER_CLOSE_DISTANCE_RATIO = 1 / 3;
 const DRAWER_CLOSE_VELOCITY = -800;
 
 /** Container only: Home owns every list row, search, group, menu and subscription. */
 export function SessionListDrawer({ currentSessionId, persistent = false, newSessionInSystemBar = false,
-  onClose, onClosed, onSelectSession, runNavigation, newSessionActionRef, open, width, topInset,
+  onClose, onClosed, onSelectSession, runNavigation, newSessionActionRef, open, width, topInset, resize,
 }: {
   currentSessionId: string;
   /** Overrides the safe-area top where the task bar sits inside the status area (Duo). */
@@ -30,6 +31,8 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
   newSessionActionRef?: MutableRefObject<(() => void) | null>;
   open: boolean;
   width: number;
+  /** Floating drawer only: its right edge drags the shared task-list width. */
+  resize?: { bounds: { min: number; max: number }; onResize(width: number): void };
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
@@ -215,6 +218,13 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
 
       </Animated.View>
     </GestureDetector>
+    {/* A sibling of the panel, so an edge drag never reaches the close gesture.
+        It rides the panel's slide and stops taking touches once closing. */}
+    {!persistent && resize ? <Animated.View pointerEvents={open ? 'box-none' : 'none'}
+      style={[styles.edge, panelStyle]}>
+      <SessionPaneDivider width={width} bounds={resize.bounds} onResize={resize.onResize}
+        left={panelWidth} top={topInset ?? insets.top} bottom={insets.bottom} />
+    </Animated.View> : null}
   </View>;
 }
 
@@ -225,4 +235,5 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   panel: { backgroundColor: colors.surface, borderRightColor: colors.border, borderRightWidth: StyleSheet.hairlineWidth,
     position: 'absolute', top: 0, bottom: 0, left: 0 },
   content: { flex: 1, minHeight: 0 },
+  edge: { ...StyleSheet.absoluteFill },
 });

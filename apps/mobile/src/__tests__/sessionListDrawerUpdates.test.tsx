@@ -9,7 +9,7 @@ import { SessionListDrawer } from '@/session/SessionListDrawer';
 import { motionDuration } from '@/theme/tokens';
 import type { MobileHomeProps } from '@/session/HomeSurface';
 const native = vi.hoisted(() => ({ home: null as MobileHomeProps | null, mounts: 0, unmounts: 0, reduceMotion: true,
-  values: [] as { value: number }[], gesture: {} as Record<string, (event?: any) => void>, cancel: vi.fn() }));
+  values: [] as { value: number }[], divider: null as any, gesture: {} as Record<string, (event?: any) => void>, cancel: vi.fn() }));
 vi.mock('@/session/HomeSurface', async () => {
   const { useEffect } = await import('react');
   return { MobileHome: (props: MobileHomeProps) => {
@@ -18,6 +18,10 @@ vi.mock('@/session/HomeSurface', async () => {
     return null;
   } };
 });
+vi.mock('@/session/SessionPaneDivider', () => ({ SessionPaneDivider: (props: any) => {
+  native.divider = props;
+  return <div data-testid="session.paneDivider" />;
+} }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock("react-native", async () => {
   const { createElement } = await import("react");
@@ -140,7 +144,7 @@ describe('shared Home drawer host', () => {
   beforeEach(() => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     native.home = null; native.mounts = 0; native.unmounts = 0;
-    native.values = []; native.gesture = {};
+    native.values = []; native.gesture = {}; native.divider = null;
     native.reduceMotion = true;
     vi.clearAllMocks();
     vi.useFakeTimers();
@@ -196,6 +200,27 @@ describe('shared Home drawer host', () => {
       expect(progress!.value).toBe(1);
       expect(dragX!.value).toBe(0);
     }
+  });
+  // User request 2026-11-06: the floating drawer's edge drags the shared width like the
+  // side column. The handle is a sibling of the panel, never the close gesture's child.
+  it('resizes the floating drawer from its edge and drops the handle when docked or closing', async () => {
+    native.reduceMotion = false;
+    const onResize = vi.fn();
+    const resize = { bounds: { min: 300, max: 648 }, onResize };
+    await act(async () => root.render(<SessionListDrawer {...props} resize={resize} />));
+    const divider = container.querySelector('[data-testid="session.paneDivider"]');
+    expect(divider).not.toBeNull();
+    expect(container.querySelector('[data-testid="sessionDrawer.panel"]')?.contains(divider)).toBe(false);
+    expect(native.divider).toMatchObject({ width: 320, left: 320, bounds: resize.bounds });
+    native.divider.onResize(480);
+    expect(onResize).toHaveBeenCalledWith(480);
+    expect(divider?.parentElement?.getAttribute('data-pointer-events')).toBe('box-none');
+    // Mid-exit the drawer is still mounted; its edge must not take a new drag.
+    await act(async () => root.render(<SessionListDrawer {...props} resize={resize} open={false} />));
+    expect(container.querySelector('[data-testid="session.paneDivider"]')?.parentElement
+      ?.getAttribute('data-pointer-events')).toBe('none');
+    await act(async () => root.render(<SessionListDrawer {...props} resize={resize} persistent />));
+    expect(container.querySelector('[data-testid="session.paneDivider"]')).toBeNull();
   });
   it('unmounts the invisible blocker even when the animation never calls completion', async () => {
     native.reduceMotion = false;
