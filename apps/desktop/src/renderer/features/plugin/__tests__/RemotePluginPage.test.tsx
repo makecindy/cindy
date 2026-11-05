@@ -1073,7 +1073,7 @@ describe('remote task interactive-page consent prompt', () => {
   });
   // Unit: neither relay nor target disconnects replay missed plugin notifications.
   // Exercise the retained production entry with no mounted consumers, then remount.
-  it.each(['relay', 'target', 'target-before-relay'])('invalidates retained discovery across a %s disconnect without consumers', async source => {
+  it.each(['relay', 'target', 'target-before-relay', 'peer-reset', 'peer-reopened'])('invalidates retained discovery across a %s disconnect without consumers', async source => {
     setup(true);
     const normal = invoke.getMockImplementation()!;
     let pending = false;
@@ -1085,6 +1085,11 @@ describe('remote task interactive-page consent prompt', () => {
     let status!: Parameters<typeof window.electronAPI.deviceLink.onStatusChanged>[0];
     let presence!: Parameters<typeof window.electronAPI.deviceLink.onPresenceChanged>[0];
     const offStatus = vi.fn(), offPresence = vi.fn();
+    let peerReset!: (event: { deviceId: string }) => void;
+    let peerReopened!: (event: { deviceId: string }) => void;
+    const offPeerReset = vi.fn(), offPeerReopened = vi.fn();
+    window.electronAPI.deviceLink.onPeerLinkReset = listener => { peerReset = listener; return offPeerReset; };
+    window.electronAPI.deviceLink.onPeerLinkReopened = listener => { peerReopened = listener; return offPeerReopened; };
     window.electronAPI.deviceLink.onStatusChanged = listener => { status = listener; return offStatus; };
     window.electronAPI.deviceLink.onPresenceChanged = listener => { presence = listener; return offPresence; };
     const reads = () => invoke.mock.calls.filter(c => c[2]?.[0]?.actionId === 'management:snapshot').length;
@@ -1093,13 +1098,26 @@ describe('remote task interactive-page consent prompt', () => {
     first.unmount();
     vi.useFakeTimers();
     await act(async () => {
-      if (source !== 'relay') presence({ deviceId: 'computer-a', online: false } as never);
-      if (source !== 'target') status({ status: 'connecting' });
+      peerReset({ deviceId: 'other-computer' });
+      peerReopened({ deviceId: 'other-computer' });
+      await vi.advanceTimersByTimeAsync(250);
+    });
+    const unchanged = render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    expect(reads()).toBe(1);
+    unchanged.unmount();
+    await act(async () => {
       pending = true;
-      if (source === 'target') presence({ deviceId: 'computer-a', online: true } as never);
-      // A new relay connection never replays target presence. The directory can
-      // confirm online on remount even though this entry saw the old offline push.
-      else status({ status: 'online' });
+      if (source === 'peer-reset') peerReset({ deviceId: 'computer-a' });
+      else if (source === 'peer-reopened') peerReopened({ deviceId: 'computer-a' });
+      else {
+        if (source !== 'relay') presence({ deviceId: 'computer-a', online: false } as never);
+        if (source !== 'target') status({ status: 'connecting' });
+        if (source === 'target') presence({ deviceId: 'computer-a', online: true } as never);
+        // A new relay connection never replays target presence. The directory can
+        // confirm online on remount even though this entry saw the old offline push.
+        else status({ status: 'online' });
+      }
       await vi.advanceTimersByTimeAsync(1000);
     });
     expect(reads()).toBe(1);
@@ -1111,6 +1129,8 @@ describe('remote task interactive-page consent prompt', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
     expect(offStatus).toHaveBeenCalledOnce();
     expect(offPresence).toHaveBeenCalledOnce();
+    expect(offPeerReset).toHaveBeenCalledOnce();
+    expect(offPeerReopened).toHaveBeenCalledOnce();
   });
   // Unit: the real directory Hook initially reports offline until getState settles.
   // A second composer used to destroy the first composer's live shared subscription.

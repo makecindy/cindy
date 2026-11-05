@@ -30,4 +30,6 @@ export const parsePluginManagementReceipt = (value: unknown) => value;
 registerHost({ deviceLink: {
   onStatusChanged: subscription('device-link:status-changed'),
   onPresenceChanged: subscription('device-link:presence-changed'),
+  onPeerLinkReset: subscription('device-link:peer-link-reset'),
+  onPeerLinkReopened: subscription('device-link:peer-link-reopened'),
 } });

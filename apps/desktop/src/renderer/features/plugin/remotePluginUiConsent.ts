@@ -107,6 +107,13 @@ function createEntry(deviceId: string) {
     targetOnline = state.online;
     connectionChanged();
   });
+  // A single peer can reset while relay and presence remain online. Its missed
+  // plugin pushes are not replayed; use the same snapshot and in-flight fence.
+  const peerChanged = (event: { deviceId: string }) => {
+    if (event.deviceId === deviceId) connectionChanged();
+  };
+  const unlistenPeerReset = window.electronAPI.deviceLink.onPeerLinkReset?.(peerChanged);
+  const unlistenPeerReopened = window.electronAPI.deviceLink.onPeerLinkReopened?.(peerChanged);
   return {
     owner, listeners, refresh,
     subscribe(listener: Listener) {
@@ -131,6 +138,8 @@ function createEntry(deviceId: string) {
       unlisten();
       unlistenStatus();
       unlistenPresence();
+      unlistenPeerReset?.();
+      unlistenPeerReopened?.();
       listeners.clear();
     },
   };
