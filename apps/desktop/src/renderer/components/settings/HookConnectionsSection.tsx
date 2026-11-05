@@ -1626,6 +1626,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                 </span>
                 {cs.actions.includes('copy_bind_code') ? (
                   <Button
+                    data-settings-search-action="Copy the Feishu bind code"
                     variant="secondary"
                     size="xs"
                     compact
