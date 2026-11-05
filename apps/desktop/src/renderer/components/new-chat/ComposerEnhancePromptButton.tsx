@@ -37,6 +37,12 @@ interface ComposerEnhancePromptButtonProps {
  * model), so enhancing never spends the quota of the model the conversation is
  * about to use.
  *
+ * Chrome follows the composer's bare toolbar tier (`docs/design-rules/
+ * container-transform.md`): no outline or fill at rest, the pill appears on
+ * hover only, like the `+` / permission / model triggers it sits next to. The
+ * control keeps its slot while there is no draft, disabled, so typing the
+ * first character does not shift the rest of the toolbar.
+ *
  * Two rules keep the user's text safe:
  *
  * - A draft is only rewritten when a plain-text round trip can reproduce it.
@@ -118,8 +124,9 @@ export function ComposerEnhancePromptButton({
   const enhanceUnavailableReason = useMemo(() => {
     if (disabled) return disabledReason ?? t('newChat.composerEnhance.locked');
     if (structured) return t('newChat.composerEnhance.unsupported');
+    if (!hasDraft) return t('newChat.composerEnhance.empty');
     return null;
-  }, [disabled, disabledReason, structured, t]);
+  }, [disabled, disabledReason, hasDraft, structured, t]);
 
   const enhance = useCallback(async () => {
     if (!editor || busy || enhanceUnavailableReason) return;
@@ -189,26 +196,31 @@ export function ComposerEnhancePromptButton({
     editor.commands.selectAll();
   }, [busy, disabled, editor, t, undoState]);
 
-  if (!editor || !hasDraft) return null;
+  if (!editor) return null;
 
   const controlClass = cn(
     'flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full',
-    'border border-[var(--border-default)] bg-[var(--composer-pill-bg)] text-[var(--composer-pill-icon)]',
-    'transition-[background-color,transform] duration-[var(--motion-fast,150ms)] ease-[var(--motion-ease-out)]',
+    // 裸态工具条(2026-07-22 用户定稿):默认无框无底,hover 才浮现胶囊外框。
+    // 与 +/权限/模型 同一档;右侧 voice/send 的常驻描边档不适用。
+    'border border-transparent bg-transparent text-[var(--composer-pill-icon)]',
+    'transition-[background-color,border-color,transform] duration-[var(--motion-fast,150ms)] ease-[var(--motion-ease-out)]',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--chat-input-bg)]',
   );
+
+  const hoverClass =
+    'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg)] dark:hover:bg-[var(--composer-pill-bg)] active:scale-[0.98]';
 
   // The enhance and undo controls have separate eligibility, so they also have
   // separate state styling: an undo that is available must not look disabled.
   const enhanceControlClass = cn(
     controlClass,
-    !enhanceUnavailableReason && !busy && 'hover:bg-[var(--model-trigger-hover)] active:scale-[0.98]',
+    !enhanceUnavailableReason && !busy && hoverClass,
     (enhanceUnavailableReason || busy) && 'cursor-not-allowed opacity-40',
   );
 
   const undoControlClass = cn(
     controlClass,
-    !busy && !disabled && 'hover:bg-[var(--model-trigger-hover)] active:scale-[0.98]',
+    !busy && !disabled && hoverClass,
     (busy || disabled) && 'cursor-not-allowed opacity-40',
   );
 

@@ -17,27 +17,55 @@ export const COMPOSER_ENHANCE_SYSTEM_PROMPT = [
   'You rewrite a draft request into a stronger, more explicit request for an AI assistant.',
   'Rules:',
   "- Preserve the author's intent, their language, and every concrete detail they wrote.",
+  '- Write the rewrite in the language of the draft. Never translate the draft, and ignore the language of these instructions or of the interface around it.',
   '- Add only the structure the draft already implies: an explicit goal, a concrete scope, the constraints, and what "done" looks like.',
   '- Never invent facts, names, numbers, or requirements that the draft does not mention.',
   '- Never answer the request. You only rewrite the request.',
   '- Never drop an instruction the author wrote, even when it looks redundant.',
 ].join('\n');
 
-/** Output shape: the rewritten request only, no commentary around it. */
-export const COMPOSER_ENHANCE_RESPONSE_INSTRUCTIONS =
-  'Reply with the rewritten request only. No preamble, no commentary, no markdown code fences.';
+/**
+ * Output shape: the rewritten request only, as plain text.
+ *
+ * The answer is filled back into the composer, so wrapper chrome would become
+ * part of the user's draft and have to be deleted by hand.
+ */
+export const COMPOSER_ENHANCE_RESPONSE_INSTRUCTIONS = [
+  'Reply with the rewritten request only, as plain text.',
+  '- No preamble, no closing remarks, no headings or labels such as "Improved prompt:".',
+  '- No explanation, critique or summary of what you changed.',
+  '- Exactly one rewrite: never offer variants, options or follow-up questions.',
+  '- Do not wrap the whole answer in quotes, blockquotes or backticks.',
+  '- No code fences, and no markdown the draft did not already use.',
+].join('\n');
 
 /**
- * Output budget.
+ * Output budget bounds.
  *
- * Sized against COMPOSER_ENHANCE_MAX_INPUT_CHARS so a rewrite of the longest
- * accepted draft still fits: a rewrite may expand the draft, so the budget
- * leaves room instead of silently truncating the answer.
+ * The budget scales with the draft (see outputBudgetFor) and stays inside
+ * these bounds: the floor covers a short draft that gets restructured, the
+ * ceiling stops a runaway answer from producing an unusable draft.
  */
+export const COMPOSER_ENHANCE_MIN_OUTPUT_TOKENS = 384;
 export const COMPOSER_ENHANCE_MAX_OUTPUT_TOKENS = 2048;
 
+/**
+ * Output budget for one draft.
+ *
+ * A rewrite restates the draft with more structure, so it grows but not
+ * unboundedly: roughly twice the draft plus a small margin covers it while
+ * staying far below the ceiling for ordinary drafts.
+ */
+export function outputBudgetFor(draft: string): number {
+  const scaled = Math.ceil(draft.length * 2) + 96;
+  return Math.min(
+    COMPOSER_ENHANCE_MAX_OUTPUT_TOKENS,
+    Math.max(COMPOSER_ENHANCE_MIN_OUTPUT_TOKENS, scaled),
+  );
+}
+
 /** Per-candidate budget handed to the utility-model chain. */
-export const COMPOSER_ENHANCE_TIMEOUT_MS = 60_000;
+export const COMPOSER_ENHANCE_TIMEOUT_MS = 30_000;
 
 /** Wraps the author's draft in the instruction the utility model receives. */
 export function buildEnhancePrompt(userText: string): string {
@@ -85,7 +113,7 @@ export async function enhanceComposerPrompt(
   const result = await request(buildEnhancePrompt(draft), {
     systemPrompt: COMPOSER_ENHANCE_SYSTEM_PROMPT,
     responseInstructions: COMPOSER_ENHANCE_RESPONSE_INSTRUCTIONS,
-    maxTokens: COMPOSER_ENHANCE_MAX_OUTPUT_TOKENS,
+    maxTokens: outputBudgetFor(draft),
     timeoutMs: COMPOSER_ENHANCE_TIMEOUT_MS,
   });
 
@@ -110,4 +138,4 @@ export async function enhanceComposerPrompt(
   return { text: enhanced, model: `${result.providerId}/${result.model}` };
 }
 
-export const __testing = { buildEnhancePrompt };
+export const __testing = { buildEnhancePrompt, outputBudgetFor };

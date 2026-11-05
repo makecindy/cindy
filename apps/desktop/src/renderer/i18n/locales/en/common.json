@@ -12686,6 +12686,7 @@
       "stale": "The draft changed, so the enhancement was not applied",
       "undoUnavailable": "The content changed, so it cannot be undone",
       "unsupported": "This draft uses a format that cannot be enhanced yet (@mentions, quotes, lists)",
+      "empty": "Type a draft to enhance it",
       "locked": "The composer is not editable right now"
     }
   },

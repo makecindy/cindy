@@ -3,6 +3,12 @@ import { describe, expect, it } from 'vitest';
 import {
   buildEnhancePrompt,
   enhanceComposerPrompt,
+  outputBudgetFor,
+  COMPOSER_ENHANCE_MAX_OUTPUT_TOKENS,
+  COMPOSER_ENHANCE_MIN_OUTPUT_TOKENS,
+  COMPOSER_ENHANCE_RESPONSE_INSTRUCTIONS,
+  COMPOSER_ENHANCE_SYSTEM_PROMPT,
+  COMPOSER_ENHANCE_TIMEOUT_MS,
 } from '../composer-prompt-enhance.js';
 import { COMPOSER_ENHANCE_MAX_INPUT_CHARS } from '../../shared/composerPromptEnhance.js';
 import type { UtilityTextResult } from '../../shared/utilityTextResult.js';
@@ -70,6 +76,60 @@ describe('enhanceComposerPrompt', () => {
     await expect(enhanceComposerPrompt(request, 'hello')).rejects.toMatchObject({
       code: 'INTERNAL',
     });
+  });
+
+  it('asks the model to keep the draft language and to answer in plain text only', async () => {
+    let options: { systemPrompt?: string; responseInstructions?: string } = {};
+    await enhanceComposerPrompt(async (_prompt, opts) => {
+      options = opts;
+      return okResponse('x');
+    }, 'hello');
+
+    expect(options.systemPrompt).toBe(COMPOSER_ENHANCE_SYSTEM_PROMPT);
+    expect(options.responseInstructions).toBe(COMPOSER_ENHANCE_RESPONSE_INSTRUCTIONS);
+    // Language alignment: a multilingual UI must not turn a Chinese draft into
+    // an English rewrite.
+    expect(options.systemPrompt).toMatch(/language of the draft/i);
+    expect(options.systemPrompt).toMatch(/never translate/i);
+    // Plain-text output: no commentary the user would have to delete.
+    expect(options.responseInstructions).toMatch(/plain text/i);
+    expect(options.responseInstructions).toMatch(/no preamble/i);
+    expect(options.responseInstructions).toMatch(/no code fences/i);
+    expect(options.responseInstructions).toMatch(/exactly one rewrite/i);
+  });
+
+  it('sizes the output budget from the draft and keeps it inside its bounds', async () => {
+    const budgets: number[] = [];
+    const request = async (_prompt: string, opts: { maxTokens: number; timeoutMs: number }) => {
+      budgets.push(opts.maxTokens);
+      expect(opts.timeoutMs).toBe(COMPOSER_ENHANCE_TIMEOUT_MS);
+      return okResponse('x');
+    };
+
+    await enhanceComposerPrompt(request, 'a');
+    await enhanceComposerPrompt(request, 'a'.repeat(400));
+    await enhanceComposerPrompt(request, 'a'.repeat(COMPOSER_ENHANCE_MAX_INPUT_CHARS));
+
+    // A short draft gets the floor, a long one grows, and nothing exceeds the ceiling.
+    expect(budgets[0]).toBe(COMPOSER_ENHANCE_MIN_OUTPUT_TOKENS);
+    expect(budgets[1]).toBe(400 * 2 + 96);
+    expect(budgets[2]).toBe(COMPOSER_ENHANCE_MAX_OUTPUT_TOKENS);
+    for (const budget of budgets) {
+      expect(budget).toBeGreaterThanOrEqual(COMPOSER_ENHANCE_MIN_OUTPUT_TOKENS);
+      expect(budget).toBeLessThanOrEqual(COMPOSER_ENHANCE_MAX_OUTPUT_TOKENS);
+    }
+  });
+});
+
+describe('outputBudgetFor', () => {
+  it('scales with the draft between the floor and the ceiling', () => {
+    expect(outputBudgetFor('')).toBe(COMPOSER_ENHANCE_MIN_OUTPUT_TOKENS);
+    expect(outputBudgetFor('x'.repeat(300))).toBeGreaterThan(
+      COMPOSER_ENHANCE_MIN_OUTPUT_TOKENS,
+    );
+    expect(outputBudgetFor('x'.repeat(COMPOSER_ENHANCE_MAX_INPUT_CHARS))).toBe(
+      COMPOSER_ENHANCE_MAX_OUTPUT_TOKENS,
+    );
   });
 });
 

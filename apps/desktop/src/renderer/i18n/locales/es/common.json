@@ -12788,6 +12788,7 @@
       "stale": "El borrador cambió, así que no se aplicó la mejora",
       "undoUnavailable": "El contenido cambió, no se puede deshacer",
       "unsupported": "Este borrador usa un formato que aún no se puede mejorar (menciones, citas, listas)",
+      "empty": "Escribe un borrador para mejorarlo",
       "locked": "El cuadro de entrada no se puede editar ahora"
     }
   },

@@ -12788,6 +12788,7 @@
       "stale": "Le brouillon a changé, l'amélioration n'a pas été appliquée",
       "undoUnavailable": "Le contenu a changé, impossible de l'annuler",
       "unsupported": "Ce brouillon utilise un format encore non améliorable (mentions, citations, listes)",
+      "empty": "Saisissez d’abord un brouillon à améliorer",
       "locked": "Le champ de saisie n'est pas modifiable pour le moment"
     }
   },

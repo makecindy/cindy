@@ -12686,6 +12686,7 @@
       "stale": "Der Entwurf hat sich geändert, die Verbesserung wurde nicht angewendet",
       "undoUnavailable": "Der Inhalt hat sich geändert, Rückgängig ist nicht möglich",
       "unsupported": "Dieser Entwurf nutzt ein noch nicht unterstütztes Format (@-Erwähnungen, Zitate, Listen)",
+      "empty": "Erst einen Entwurf eingeben, dann verbessern",
       "locked": "Die Eingabe ist derzeit nicht bearbeitbar"
     }
   },

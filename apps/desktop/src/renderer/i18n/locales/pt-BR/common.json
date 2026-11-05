@@ -12788,6 +12788,7 @@
       "stale": "O rascunho mudou, por isso a melhoria não foi aplicada",
       "undoUnavailable": "O conteúdo mudou, não é possível desfazer",
       "unsupported": "Este rascunho usa um formato que ainda não pode ser melhorado (menções, citações, listas)",
+      "empty": "Digite um rascunho para aprimorá-lo",
       "locked": "A caixa de entrada não pode ser editada agora"
     }
   },
