@@ -1,6 +1,10 @@
 import { withSpeechApiPresets } from '../../../shared/speechProviderSetup';
 import { ProviderNameSearch } from './ProviderNameSearch';
 import { providerSearchChoices, type ProviderSearchTarget } from './providerSearch';
+import {
+  credentialGuidanceKind,
+  missingCredentialRuntime,
+} from './customProviderCredentialGuard';
 import { useDialogExit } from '@/hooks/useDialogExit';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { providerEndpointBindings, canonicalProviderEndpoint, BUNDLED_CATALOG, mergeModelMetadata } from '@cindy/model-providers';
@@ -2115,6 +2119,32 @@ export function ProviderConnectionDialog({
       reportFieldError(
         `${activeTab}:baseUrl`,
         t('settings.providers.custom.errors.runtimeRequired'),
+      );
+      return;
+    }
+    // apiKey 形态留空会存出不带 `auth` 的配置，下游按 apiKey 处理后因缺凭据静默
+    // 跳过该 Provider，界面只剩一个没有解释的灰置开关（#8693 / #7646）。在保存前挡住。
+    const credentialGap = missingCredentialRuntime(
+      authMode,
+      Object.keys(runtimes).map((key) => {
+        const a = key as DialogAgentKind;
+        return {
+          agent: a,
+          apiKey: rt[a].apiKey,
+          headers: rt[a].headers,
+          baseUrl: runtimes[a]?.baseUrl ?? '',
+          keyEdited: !editing || keyEditRevisionRef.current[a] > 0,
+          hasStoredKey: (loadedKeyRef.current[a] ?? '').trim().length > 0,
+        };
+      }),
+    );
+    if (credentialGap) {
+      setActiveTab(credentialGap);
+      reportFieldError(
+        `${credentialGap}:apiKey`,
+        credentialGuidanceKind(runtimes[credentialGap]?.baseUrl ?? '') === 'loopback'
+          ? t('settings.providers.custom.errors.apiKeyRequiredLoopback')
+          : t('settings.providers.custom.errors.apiKeyRequiredRemote'),
       );
       return;
     }
