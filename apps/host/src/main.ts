@@ -58,7 +58,25 @@ function parsePermissionMode(value: unknown): PermissionMode | undefined {
 }
 
 const command = process.argv[2];
-if (command === 'login') {
+if (command === 'status') {
+  // Sanitized login state for scripts and for the operator: never tokens.
+  try {
+    const state = await readAdoptedSessionState({
+      userDataDir: resolveHostDataDir(),
+      keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
+    });
+    const json = process.argv.includes('--json');
+    if (json) {
+      console.log(JSON.stringify(state));
+    } else {
+      console.log(`authenticated: ${state.authenticated}`);
+      console.log(`realm: ${state.realm ?? 'none'}`);
+    }
+  } catch (error) {
+    console.error(`cindy-host status failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  }
+} else if (command === 'login') {
   try {
     await runLoginCommand(process.argv.slice(3));
   } catch (error) {
@@ -66,7 +84,9 @@ if (command === 'login') {
     process.exitCode = 1;
   }
 } else if (command !== undefined && command !== 'serve') {
-  console.error(`unknown command: ${command}\nusage: cindy-host [serve|login [--region=cn|global] [--method=<id>]]`);
+  console.error(
+    `unknown command: ${command}\nusage: cindy-host [serve|login [--region=cn|global] [--method=<id>]|status [--json]]`,
+  );
   process.exitCode = 2;
 } else {
 const PORT = 3456;

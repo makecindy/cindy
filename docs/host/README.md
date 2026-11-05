@@ -24,6 +24,9 @@ CINDY_HOST_DATA_DIR=<profile> CINDY_HOST_OWNER=<owner> pnpm start-host
 #   单独登录：
 node --import tsx --import ./apps/host/src/loaders/register-raw.mjs apps/host/src/main.ts login --method=google
 
+# 登录状态（脱敏，只输出 authenticated / realm）
+node --import tsx --import ./apps/host/src/loaders/register-raw.mjs apps/host/src/main.ts status --json
+
 # 2) 浏览器客户端（Host 直接托管现有 renderer 构建产物）
 pnpm --filter desktop exec vite build --config vite.renderer.config.ts
 open http://127.0.0.1:3456/

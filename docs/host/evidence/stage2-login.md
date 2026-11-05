@@ -38,7 +38,16 @@ $ curl -s http://127.0.0.1:3456/health
 监听，覆盖：PKCE S256 校验（challenge 与 verifier 一致）、`state` 校验、code 兑换、
 `safe-storage` 记录写入。另一个用例证明 `state` 不匹配时**拒绝**且不落盘。
 
-## 4. 未验证项（需要用户本人凭证）
+## 4. 一键读取（脱敏）
+
+```bash
+CINDY_HOST_DATA_DIR=<profile> CINDY_HOST_KEYRING_APPLICATION=Cindy \
+  node --import tsx --import ./apps/host/src/loaders/register-raw.mjs apps/host/src/main.ts status --json
+```
+
+只输出 `{"authenticated":…,"realm":…}`，不含任何令牌。
+
+## 5. 未验证项（需要用户本人凭证）
 
 - 在真实浏览器完成一次 Google/Apple 授权并让 `code` 兑换写入 `safe-storage`。
   这一步必须由账号持有人操作，自动化无法代替，也不能用手工构造的 code 冒充。
