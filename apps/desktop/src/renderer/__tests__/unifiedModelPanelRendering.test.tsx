@@ -84,7 +84,10 @@ vi.mock('@/hooks/useAgentCapabilities', () => ({
     error: null,
   }),
 }));
-vi.mock('@/hooks/useApiKey', () => ({ useApiKey: () => ({ hasSavedKey: true }) }));
+const keyPresence = vi.hoisted(() => ({ available: true, canReadKey: true }));
+vi.mock('@/hooks/useApiKey', () => ({ useApiKey: () => ({
+  hasSavedKey: keyPresence.available, canReadKey: keyPresence.canReadKey,
+}) }));
 vi.mock('@/hooks/useAvailableAgents', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/hooks/useAvailableAgents')>()),
   useModelPickerAgents: () => ['claude-code', 'codex'],
@@ -343,6 +346,8 @@ async function openFlyoutForRow(row: HTMLElement): Promise<HTMLElement> {
 }
 
 beforeEach(() => {
+  keyPresence.available = true;
+  keyPresence.canReadKey = true;
   onProviderChange.mockClear();
   resetEnginePrefs();
   resetFavorites();
@@ -446,6 +451,19 @@ describe('统一面板 · 打折 GPT-5.6 与 GPT-6 包月互切', () => {
       { from: routes[2]!, to: discounted, fast },
     ]),
   );
+  // Test value: a detached plugin panel deliberately cannot read raw gateway keys. Its connected
+  // Main catalog must still permit the same XD row. Existing tests always supplied a key.
+  // Minimal input: one connected XD provider, missing credential bridge; tier: unit.
+  it('selects a connected gateway model without a renderer credential read', async () => {
+    keyPresence.available = false;
+    keyPresence.canReadKey = false;
+    const onUnifiedSelect = vi.fn(() => true);
+    renderPanel({ vendorKey: 'codex', currentProviderId: 'openai', modelId: 'gpt-6-astra', onUnifiedSelect });
+    fireEvent.click(screen.getByText('Discount Sol'));
+    await waitFor(() => expect(onUnifiedSelect).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'xd', modelId: 'codex/gpt-5.6-sol', engine: 'codex',
+    })));
+  });
   it.each(cases)(
     '$from.modelId → $to.modelId，Fast=$fast，失败可重试且不误报成功',
     async ({ from, to, fast }) => {
@@ -4969,5 +4987,36 @@ describe('模态对话框滚动锁下的面板滚轮放行', () => {
     } finally {
       document.removeEventListener('wheel', reachedDocument);
     }
+  });
+});
+
+describe('verified DeepSeek aliases in the actual model panel', () => {
+  const originalProviders = providersRef.providers;
+  afterEach(() => { providersRef.providers = originalProviders; });
+  const models = () => ['deepseek-flash', 'deepseek-v4-flash'].map((id) => ({
+    id, name: 'DeepSeek V4.1 Flash', selectionAliasKey: 'deepseek-flash',
+    contextWindow: id === 'deepseek-flash' ? 1_048_576 : 1_000_000,
+    efforts: ['low', 'high'], defaultEffort: 'high', supportsImageInput: true,
+  }));
+  it('renders one row, inherits the legacy effort, and selects a real canonical wire ID', async () => {
+    providersRef.providers = [{ id: 'direct-ds', name: 'DeepSeek', source: 'user', agents: ['codex'], auth: { method: 'api-key' },
+      routing: { codex: { upstream: 'https://api.deepseek.com', wireProtocol: 'openai-chat' } }, connected: true, models: { codex: models() } }];
+    const change = vi.fn();
+    renderPanel({ vendorKey: 'codex', currentProviderId: 'other', modelId: 'other', onProviderChange: change,
+      modelMemory: { getEffort: (_, __, id) => id === 'deepseek-v4-flash' ? 'low' : undefined,
+        getFast: () => undefined, setEffort: vi.fn(), setFast: vi.fn(), editMany: () => true } });
+    expect(within(screen.getByRole('listbox')).getAllByText('DeepSeek V4.1 Flash')).toHaveLength(1);
+    await act(async () => { fireEvent.click(rowFor('DeepSeek V4.1 Flash')); });
+    expect(change).toHaveBeenCalledWith('direct-ds', 'deepseek-flash', 'low', false);
+  });
+  it('retains the exact old ID when the existing task is already using it', async () => {
+    providersRef.providers = [{ id: 'direct-ds', name: 'DeepSeek', source: 'user', agents: ['codex'], auth: { method: 'api-key' },
+      routing: { codex: {} }, connected: true, models: { codex: models() } }];
+    const change = vi.fn();
+    renderPanel({ actualRoute: true, vendorKey: 'codex', currentProviderId: 'direct-ds', modelId: 'deepseek-v4-flash', onProviderChange: change,
+      modelMemory: { getEffort: () => undefined, getFast: () => undefined, setEffort: vi.fn(), setFast: vi.fn(), editMany: () => true } });
+    expect(within(screen.getByRole('listbox')).getAllByText('DeepSeek V4.1 Flash')).toHaveLength(1);
+    await act(async () => { fireEvent.click(rowFor('DeepSeek V4.1 Flash')); });
+    expect(change).toHaveBeenCalledWith('direct-ds', 'deepseek-v4-flash', expect.any(String), false);
   });
 });

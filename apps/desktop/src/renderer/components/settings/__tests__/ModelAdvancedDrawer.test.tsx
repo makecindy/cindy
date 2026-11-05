@@ -1427,3 +1427,39 @@ it('uses the union row identity to infer an undeclared bridge image default', as
   fireEvent.click(screen.getByRole('menuitemradio', { name: 'settings.providers.models.advanced.imageInputDefault settings.providers.models.advanced.supported' }));
   expect(mocks.imageSet).toHaveBeenCalledWith(null);
 });
+
+
+it('keeps the upstream alias-group disable target and guards it during a price write', () => {
+  const original = drawer();
+  const first = original.props.row;
+  const second = { ...first, id: 'other-member', name: 'Other member', byAgent: { codex: { ...model, id: 'other-member' } }, avail: ['codex'] as ('codex')[] };
+  const group = { ...first, aliasRows: [first, second] };
+  const disable = vi.fn();
+  render(<ModelAdvancedDrawer {...original.props} row={group} selectedMemberId={second.id} onDisable={disable} />);
+  const pending = mocks.price.mock.lastCall![0].onPendingChange;
+  pending(true);
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.disableModel' }));
+  expect(disable).not.toHaveBeenCalled();
+  pending(false);
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.disableModel' }));
+  expect(disable).toHaveBeenCalledWith(group);
+});
+
+it('does not switch alias members while the selected price is being saved', async () => {
+  const original = drawer();
+  const first = original.props.row;
+  const second = { ...first, id: 'other-member', name: 'Other member', byAgent: { codex: { ...model, id: 'other-member' } }, avail: ['codex'] as ('codex')[] };
+  const group = { ...first, aliasRows: [first, second] };
+  const select = vi.fn();
+  render(<ModelAdvancedDrawer {...original.props} row={group} selectedMemberId={first.id} onSelectMember={select} />);
+  const pending = mocks.price.mock.lastCall![0].onPendingChange;
+  const trigger = screen.getByRole('button', { name: 'settings.providers.models.advanced.modelId' });
+  pending(true);
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+  fireEvent.click(await screen.findByRole('menuitemradio', { name: second.id }));
+  expect(select).not.toHaveBeenCalled();
+  pending(false);
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+  fireEvent.click(await screen.findByRole('menuitemradio', { name: second.id }));
+  expect(select).toHaveBeenCalledWith(second);
+});

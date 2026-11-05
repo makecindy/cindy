@@ -5644,6 +5644,7 @@
           "checking": "正在檢查更新…",
           "upToDate": "已是最新版本",
           "checkFailed": "檢查更新失敗",
+          "rateLimited": "GitHub 更新介面已限流，稍後再試",
           "lastChecked": "上次檢查 {{time}}",
           "check": "檢查更新",
           "retry": "重試",

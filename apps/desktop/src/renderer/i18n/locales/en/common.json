@@ -5687,6 +5687,7 @@
           "checking": "Checking for updates…",
           "upToDate": "Up to date",
           "checkFailed": "Could not check for updates",
+          "rateLimited": "GitHub is rate-limiting update checks",
           "lastChecked": "Last checked {{time}}",
           "check": "Check for updates",
           "retry": "Retry",

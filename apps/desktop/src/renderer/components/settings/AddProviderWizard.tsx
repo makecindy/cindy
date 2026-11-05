@@ -1599,7 +1599,7 @@ export function AddProviderWizard({
             {wizardTitle}
           </h3></Dialog.Title>
           {step === 1 ? (
-            <button
+            <button data-settings-search-action="Open the custom provider connection form"
               type="button"
               disabled={saving}
               onClick={() => { if (!savingRef.current) onOpenCustomForm(); }}
