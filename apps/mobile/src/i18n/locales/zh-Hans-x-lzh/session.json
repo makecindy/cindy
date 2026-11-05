@@ -73,6 +73,10 @@
     "text": "先前曾有自运未成。",
     "precheck": "自动检查暂受阻。",
     "rateLimited": "自动检查暂受阻：请求遭限流。",
+    "pluginMissing": "自动检查暂受阻：「{{name}}」法器未装，于电脑装毕自复。",
+    "pluginMissingUnnamed": "自动检查暂受阻：所需法器未装，于电脑装毕自复。",
+    "pluginDisabled": "自动检查暂受阻：「{{name}}」法器未启，于电脑启之自复。",
+    "pluginDisabledUnnamed": "自动检查暂受阻：所需法器未启，于电脑启之自复。",
     "dismissTitle": "阖旧时未成之告"
   },
   "common": {
