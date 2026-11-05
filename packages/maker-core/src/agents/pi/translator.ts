@@ -74,6 +74,11 @@ interface PiUsage {
   service_tier?: string;
 }
 
+interface PiUsageReceipt extends UsageSegment {
+  recordedAt: number;
+  unpriced?: boolean;
+}
+
 interface PiAssistantMessage {
   cindyCacheRecoveryHandled?: boolean;
   role: 'assistant';
@@ -117,7 +122,7 @@ export interface PiTranslateContext {
   workingContextWindow?: number;
   /** turn 内累计 input+output;turn 结束 reset。 */
   turnTokens: number;
-  /** turn 内 usage 分量累计(did-turn-end / ghost 订阅上报用);agent_start reset。 */
+  /** 产品 turn 内 usage 累计；仅新 Host turn 重置，原生 retry 的 agent_start 保留。 */
   turnInput: number;
   turnOutput: number;
   turnReasoning: number | undefined;
@@ -161,6 +166,10 @@ export interface PiTranslateContext {
   /** Price variants latched by message_start until their matching message_end. */
   pendingPriceVariants: Array<'standard' | 'priority'>;
   turnSettled: boolean;
+  /** Stable through native retries; receipts survive until the next Host turn. */
+  usageSettlementId: string;
+  usageReceipts: PiUsageReceipt[];
+  usageReceiptCursor: number;
   /** 最后一次 API call 的 context 占用(input + cacheRead + cacheWrite)。 */
   contextTokens: number;
   /** 跨 turn 累计成本。 */
@@ -268,6 +277,9 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     turnUsageSegmentSeq: 0,
     pendingPriceVariants: [],
     turnSettled: false,
+    usageSettlementId: randomUUID(),
+    usageReceipts: [],
+    usageReceiptCursor: 0,
     contextTokens: 0,
     costUsd: 0,
     isStreaming: false,
@@ -515,6 +527,37 @@ function applyUsage(
     ...(typeof cost === 'number' && Number.isFinite(cost) ? { costUsd: cost } : {}),
     ...(priceVariant ? { priceVariant } : {}),
   });
+  ctx.usageReceipts.push({ ...ctx.turnUsageSegments.at(-1)!, recordedAt: Date.now() });
+}
+
+/** Pure snapshot: reading it never consumes usage, so Host teardown can retry. */
+export function piTurnUsageOf(ctx: PiTranslateContext) {
+  return {
+    settlementId: ctx.usageSettlementId,
+    inputTokens: ctx.turnInput, outputTokens: ctx.turnOutput,
+    ...(ctx.turnReasoning !== undefined ? { reasoningTokens: ctx.turnReasoning } : {}),
+    cacheReadTokens: ctx.turnCacheRead, cacheCreationTokens: ctx.turnCacheWrite,
+    segments: ctx.turnUsageSegments.map(segment => ({ ...segment })),
+    segmentsComplete: ctx.turnUsageSegmentsComplete,
+    receipts: ctx.usageReceipts.map(receipt => ({ ...receipt })),
+  };
+}
+
+function publishUsageReceipts(queue: AsyncQueue<AgentEvent>, ctx: PiTranslateContext): void {
+  const receipts = ctx.usageReceipts.slice(ctx.usageReceiptCursor);
+  if (!receipts.length) return;
+  ctx.usageReceiptCursor = ctx.usageReceipts.length;
+  queue.push({ type: 'account_usage', source: 'pi', data: {
+    type: 'pi/request_usage', usage: {
+      settlementId: ctx.usageSettlementId, receipts,
+      inputTokens: receipts.reduce((sum, r) => sum + r.inputTokens, 0),
+      outputTokens: receipts.reduce((sum, r) => sum + r.outputTokens, 0),
+      cacheReadTokens: receipts.reduce((sum, r) => sum + (r.cacheReadTokens ?? 0), 0),
+      cacheCreationTokens: receipts.reduce((sum, r) => sum + (r.cacheCreateTokens ?? 0), 0),
+      segments: receipts.filter(r => !r.unpriced),
+      segmentsComplete: receipts.every(r => !r.unpriced),
+    },
+  } });
 }
 
 function priceVariantFromServiceTier(value: unknown): 'standard' | 'priority' | undefined {
@@ -566,6 +609,14 @@ function applyDelegatedUsage(
       const identity = `${taskId}:${segment.id}`;
       if (ctx.delegatedUsageSegmentIds.has(identity)) continue;
       ctx.delegatedUsageSegmentIds.add(identity);
+      const previous = ctx.delegatedUsage.get(taskId);
+      ctx.delegatedUsage.set(taskId, {
+        input: (previous?.input ?? 0) + segment.input,
+        output: (previous?.output ?? 0) + segment.output,
+        cacheRead: (previous?.cacheRead ?? 0) + segment.cacheRead,
+        cacheWrite: (previous?.cacheWrite ?? 0) + segment.cacheWrite,
+        cost: (previous?.cost ?? 0) + segment.cost,
+      });
       ctx.turnTokens += segment.input + segment.output;
       ctx.turnInput += segment.input;
       ctx.turnOutput += segment.output;
@@ -582,9 +633,9 @@ function applyDelegatedUsage(
         cacheCreateTokens: segment.cacheWrite,
         ...(segment.cost > 0 ? { costUsd: segment.cost } : {}),
       });
+      ctx.usageReceipts.push({ ...ctx.turnUsageSegments.at(-1)!, recordedAt: Date.now() });
       if (segment.output > 0) ctx.generationTimingReliable = false;
     }
-    if (cumulative) ctx.delegatedUsage.set(taskId, cumulative);
     return;
   }
   if (segments?.length && !segmentsMatchCumulative) {
@@ -604,7 +655,13 @@ function applyDelegatedUsage(
     cost: Math.max(0, cumulative.cost - (previous?.cost ?? 0)),
   };
   ctx.requestUsageTracker.ingest({ inputTokens: delta.input, outputTokens: delta.output, cacheReadTokens: delta.cacheRead, cacheCreateTokens: delta.cacheWrite });
-  ctx.delegatedUsage.set(taskId, cumulative);
+  ctx.delegatedUsage.set(taskId, {
+    input: (previous?.input ?? 0) + delta.input,
+    output: (previous?.output ?? 0) + delta.output,
+    cacheRead: (previous?.cacheRead ?? 0) + delta.cacheRead,
+    cacheWrite: (previous?.cacheWrite ?? 0) + delta.cacheWrite,
+    cost: (previous?.cost ?? 0) + delta.cost,
+  });
   ctx.turnTokens += delta.input + delta.output;
   ctx.turnInput += delta.input;
   ctx.turnOutput += delta.output;
@@ -615,6 +672,13 @@ function applyDelegatedUsage(
     // Older runner payloads expose only a cumulative task total. Preserve token
     // accounting, but do not pretend that this delta is one provider request.
     ctx.turnUsageSegmentsComplete = false;
+    ctx.delegatedUsageIncompleteTaskIds.add(taskId);
+    ctx.usageReceipts.push({
+      id: `pi-unattributed:${ctx.usageReceipts.length}`, model: 'unknown', unpriced: true,
+      inputTokens: delta.input, outputTokens: delta.output,
+      cacheReadTokens: delta.cacheRead, cacheCreateTokens: delta.cacheWrite,
+      recordedAt: Date.now(),
+    });
   }
   // Child progress exposes wall-clock card duration, not generation-only time.
   // Once child output joins the numerator, parent-only timing cannot produce a
@@ -742,6 +806,14 @@ export function translatePiEvent(
 ): void {
   switch (event.type) {
     case 'agent_start': {
+      if (ctx.isStreaming && !ctx.turnSettled && !ctx.terminalAssistantErrorEmitted
+          && ctx.pendingHostTurnStartToken === null) {
+        ctx.pendingAssistantError = null;
+        ctx.finalAssistantText = '';
+        ctx.finalAssistantStopReason = null;
+        ctx.pendingPriceVariants = [];
+        return;
+      }
       ctx.turnGeneration += 1;
       ctx.cacheRecoveryHasOutput = false;
       ctx.cacheRecoveryHandled = false;
@@ -766,6 +838,9 @@ export function translatePiEvent(
       ctx.turnUsageSegmentSeq = 0;
       ctx.pendingPriceVariants = [];
       ctx.turnSettled = false;
+      ctx.usageSettlementId = randomUUID();
+      ctx.usageReceipts = [];
+      ctx.usageReceiptCursor = 0;
       ctx.finalAssistantText = '';
       ctx.finalAssistantStopReason = null;
       ctx.pendingAssistantError = null;
@@ -833,6 +908,7 @@ export function translatePiEvent(
       const priceVariant =
         executionPriceVariant ?? pendingPriceVariant ?? reportedPriceVariant ?? ctx.getPriceVariant?.() ?? 'standard';
       applyUsage(ctx, message.usage, message.model, priceVariant);
+      publishUsageReceipts(queue, ctx);
       const hadGenerationHeartbeat = ctx.generationHeartbeatAt > 0;
       samplePiGenerationHeartbeat(ctx);
       const messageDurationMs =
@@ -1018,6 +1094,7 @@ export function translatePiEvent(
           progress.delegatedUsage,
           progress.delegatedUsageSegments,
         );
+        publishUsageReceipts(queue, ctx);
         queue.push({ type: 'agent_task_update', data: update, source: 'pi' });
       }
       return;
@@ -1107,13 +1184,7 @@ export function translatePiEvent(
         && !ctx.terminalAssistantErrorEmitted
         && ctx.finalAssistantStopReason === 'length';
       const usage = {
-        inputTokens: ctx.turnInput,
-        outputTokens: ctx.turnOutput,
-        ...(ctx.turnReasoning !== undefined ? { reasoningTokens: ctx.turnReasoning } : {}),
-        cacheReadTokens: ctx.turnCacheRead,
-        cacheCreationTokens: ctx.turnCacheWrite,
-        segments: ctx.turnUsageSegments.map((segment) => ({ ...segment })),
-        segmentsComplete: ctx.turnUsageSegmentsComplete,
+        ...piTurnUsageOf(ctx),
         // durationMs is deliberately generation-only. If Pi does not report a
         // per-assistant generation duration, omit it instead of charging tool
         // execution / user waits to TPS.
@@ -1133,7 +1204,7 @@ export function translatePiEvent(
         result: ctx.finalAssistantText,
         usage,
       } : null);
-      const outcome = terminalError
+      const outcome = terminalError || ctx.terminalAssistantErrorEmitted
         ? 'failed'
         : hostAbortRequested || ctx.finalAssistantStopReason === 'aborted'
           ? 'cancelled'
@@ -1145,6 +1216,7 @@ export function translatePiEvent(
           type: 'error',
           data: {
             ...terminalError,
+            usage,
             piCacheRecoverySafe: ctx.cacheRecoveryHasOutput === false,
             ...(ctx.cacheRecoveryHandled ? { piCacheRecoveryHandled: true } : {}),
             isTerminal: true,
@@ -1274,6 +1346,7 @@ export function translatePiEvent(
         type: 'error',
         data: {
           ...finalError,
+          usage: piTurnUsageOf(ctx),
           ...(finalError.reason === UNSUPPORTED_REQUEST_OPTION_REASON ? {
             piCacheCompatibility: ctx.getCacheCompatibility?.(),
             piCacheRecoverySafe: ctx.cacheRecoveryHasOutput === false,
