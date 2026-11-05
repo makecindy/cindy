@@ -13,16 +13,21 @@ describe("plugin detailed introduction", () => {
         "![remote](https://example.com/track.png)",
         "![escape](../../outside.png)",
         "![missing](missing.png)",
+        "![ref][ref-shot]",
+        "[ref-shot]: ref.png",
       ].join("\n\n"),
       images: {
         "docs/shot.png": "data:image/png;base64,AAAA",
+        "docs/ref.png": "data:image/png;base64,BBBB",
         "docs/missing.png": "https://example.com/not-a-data-url.png",
       },
     })!;
     const sources = pluginReadmeImageSources(content);
-    expect([...sources.keys()]).toEqual(["shot.png"]);
+    // Reference-style images are rewritten inline so lookup and rendering see the same text.
+    expect([...sources.keys()]).toEqual(["shot.png", "ref.png"]);
     const html = buildSelectableMarkdownHtml(content.markdown, { imageSources: sources });
     expect(html).toContain('<img src="data:image/png;base64,AAAA"');
+    expect(html).toContain('<img src="data:image/png;base64,BBBB"');
     expect(html).not.toMatch(/<img[^>]+example\.com/);
   });
 

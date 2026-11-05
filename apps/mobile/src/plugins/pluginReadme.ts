@@ -4,6 +4,7 @@ import {
   type RemoteActionInvokeResponse,
 } from "@cindy/device-link";
 import {
+  inlineGhostReadmeReferenceImages,
   resolveGhostReadmeAssetPath,
   type GhostReadmeContent,
 } from "@cindy/plugin-protocol";
@@ -35,7 +36,8 @@ export function parsePluginReadme(value: unknown): GhostReadmeContent | null {
   const images: Record<string, string> = {};
   for (const [path, uri] of Object.entries(raw.images))
     if (typeof uri === "string" && uri.startsWith("data:image/")) images[path] = uri;
-  return { path: raw.path, markdown: raw.markdown, images };
+  // 手机的 Markdown 解析器只认行内图片：引用式图片先改写成行内，图片查表和渲染用同一份正文。
+  return { path: raw.path, markdown: inlineGhostReadmeReferenceImages(raw.markdown), images };
 }
 
 /**

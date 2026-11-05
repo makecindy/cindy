@@ -127,25 +127,75 @@ export function resolveGhostReadmeAssetPath(readmePath: string, src: string): st
 }
 
 const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})/;
-const INLINE_IMAGE_RE = /!\[[^\]]*\]\(\s*<?([^)\s>]+)/g;
-const REFERENCE_IMAGE_RE = /!\[([^\]]*)\]\[([^\]]*)\]/g;
-const SHORTCUT_IMAGE_RE = /!\[([^\]]+)\](?![[(])/g;
-const DEFINITION_RE = /^ {0,3}\[([^\]]+)\]:\s*<?([^\s>]+)>?/;
+// 图片说明与目标都有长度上界：未闭合的 `![` 很多时，每个起点最多扫描固定长度，
+// 扫描总量与正文长度成线性（介绍正文最大 128 KB，运行在 Electron Main 里）。
+const INLINE_IMAGE_RE = /!\[[^\]]{0,300}\]\(\s*<?([^)\s>]{1,256})/g;
+const REFERENCE_IMAGE_RE = /!\[([^\]]{0,300})\]\[([^\]]{0,300})\]/g;
+const SHORTCUT_IMAGE_RE = /!\[([^\]]{1,300})\](?![[(])/g;
+const DEFINITION_RE = /^ {0,3}\[([^\]]{1,300})\]:\s*<?([^\s>]{1,256})>?/;
+const CODE_SPAN_RE = /(`+[^`]*`+)/;
 
-/** 去掉围栏代码块和行内代码，示例里写的图片语法不是真正的图片。 */
-function stripCode(markdown: string): string {
-  const lines: string[] = [];
+/**
+ * 逐行处理正文里"不是代码"的部分：围栏代码块整体跳过，行内代码不参与。
+ * `fn` 收到一段非代码文本，返回替换后的文本；返回 null 的整行（仅在没有行内代码时）被丢弃。
+ */
+function mapOutsideCode(markdown: string, fn: (text: string) => string | null): string {
+  const out: string[] = [];
   let fence: string | null = null;
   for (const line of markdown.split(/\r?\n/)) {
     const open = FENCE_OPEN_RE.exec(line);
-    if (fence === null) {
-      if (open) fence = open[1]![0]!.repeat(open[1]!.length);
-      else lines.push(line.replace(/`+[^`]*`+/g, ''));
-    } else if (open && open[1]![0] === fence[0] && open[1]!.length >= fence.length) {
-      fence = null;
+    if (fence !== null) {
+      out.push(line);
+      if (open && open[1]![0] === fence[0] && open[1]!.length >= fence.length) fence = null;
+      continue;
     }
+    if (open) {
+      fence = open[1]!;
+      out.push(line);
+      continue;
+    }
+    const parts = line.split(CODE_SPAN_RE);
+    if (parts.length === 1) {
+      const mapped = fn(line);
+      if (mapped !== null) out.push(mapped);
+      continue;
+    }
+    out.push(parts.map((part, i) => (i % 2 === 1 ? part : (fn(part) ?? ''))).join(''));
   }
-  return lines.join('\n');
+  return out.join('\n');
+}
+
+function collectDefinitions(markdown: string): Map<string, string> {
+  const definitions = new Map<string, string>();
+  mapOutsideCode(markdown, (text) => {
+    const match = DEFINITION_RE.exec(text);
+    if (match) definitions.set(match[1]!.trim().toLowerCase(), match[2]!);
+    return text;
+  });
+  return definitions;
+}
+
+/**
+ * 把引用式、简写引用式图片改写成行内图片，并去掉引用定义行。手机端的 Markdown 解析器
+ * 只认行内图片，宿主读图（collectGhostReadmeImagePaths）认引用式；手机用这份规范化
+ * 正文既做图片查表也做渲染，两边才一致。代码里的示例原样保留。
+ */
+export function inlineGhostReadmeReferenceImages(markdown: string): string {
+  const definitions = collectDefinitions(markdown);
+  if (definitions.size === 0) return markdown;
+  const inline = (alt: string, url: string | undefined, original: string) =>
+    url && !/[()]/.test(url) ? `![${alt}](${url})` : original;
+  return mapOutsideCode(markdown, (text) => {
+    const definition = DEFINITION_RE.exec(text);
+    if (definition) return null;
+    return text
+      .replace(REFERENCE_IMAGE_RE, (all, alt: string, ref: string) =>
+        inline(alt, definitions.get((ref || alt).trim().toLowerCase()), all),
+      )
+      .replace(SHORTCUT_IMAGE_RE, (all, alt: string) =>
+        inline(alt, definitions.get(alt.trim().toLowerCase()), all),
+      );
+  });
 }
 
 /**
@@ -154,22 +204,20 @@ function stripCode(markdown: string): string {
  * Forge 打包检查共用这一个结果。
  */
 export function collectGhostReadmeImagePaths(markdown: string, readmePath: string): string[] {
-  const text = stripCode(markdown);
-  const definitions = new Map<string, string>();
-  for (const line of text.split('\n')) {
-    const match = DEFINITION_RE.exec(line);
-    if (match) definitions.set(match[1]!.trim().toLowerCase(), match[2]!);
-  }
+  const definitions = collectDefinitions(markdown);
   const targets: string[] = [];
-  for (const match of text.matchAll(INLINE_IMAGE_RE)) targets.push(match[1]!);
-  for (const match of text.matchAll(REFERENCE_IMAGE_RE)) {
-    const url = definitions.get((match[2] || match[1]!).trim().toLowerCase());
-    if (url) targets.push(url);
-  }
-  for (const match of text.matchAll(SHORTCUT_IMAGE_RE)) {
-    const url = definitions.get(match[1]!.trim().toLowerCase());
-    if (url) targets.push(url);
-  }
+  mapOutsideCode(markdown, (text) => {
+    for (const match of text.matchAll(INLINE_IMAGE_RE)) targets.push(match[1]!);
+    for (const match of text.matchAll(REFERENCE_IMAGE_RE)) {
+      const url = definitions.get((match[2] || match[1]!).trim().toLowerCase());
+      if (url) targets.push(url);
+    }
+    for (const match of text.matchAll(SHORTCUT_IMAGE_RE)) {
+      const url = definitions.get(match[1]!.trim().toLowerCase());
+      if (url) targets.push(url);
+    }
+    return text;
+  });
   const paths: string[] = [];
   const seen = new Set<string>();
   for (const target of targets) {
