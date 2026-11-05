@@ -1676,7 +1676,10 @@ export function selectNewestChunk(
   const rounds = keptToolRounds(entries, KEEP_ROUNDS);
   const cutEnd = rounds.length ? reservedCutEnd(rounds[0].start, first) : null;
   if (rounds.length && cutEnd === null) return warn(`keep span starts at first=${first}`);
+  // 1.0.7: 尾部判据只算「保留区之外」的部分(原仓 tailBeyondKept),保留区本身不算尾巴。
+  let keptTokens = 0;
   if (cutEnd !== null) {
+    for (let index = rounds[0].start; index <= rounds[rounds.length - 1].end; index += 1) keptTokens += entries[index].est;
     end = cutEnd;
     while (end >= first && (isCheckpoint(entries[end]) || isUser(entries[end]))) end -= 1;
     while (end >= first && !cutOk(() => suffixClean(end))) end -= 1;
@@ -1769,7 +1772,7 @@ export function selectNewestChunk(
   for (let index = 0; index < start; index += 1) prefix += entries[index].est;
   let after = 0;
   for (let index = spanEnd + 1; index < entries.length; index++) after += entries[index].est;
-  return { start, end: spanEnd, tokens, after, prefix, card, entries };
+  return { start, end: spanEnd, tokens, after, keptTokens, prefix, card, entries };
 }
 
 /** 1.0.7: 云端/本地判定要 provider;pi 把 provider 记在消息上(扩展拿不到 baseURL)。 */
@@ -1854,9 +1857,10 @@ export default function (pi: ExtensionAPI) {  // Idle cut: pi fires agent_before
       logLine(state, "spine cut skipped: span contains an entry without id");
       return undefined;
     }
-    if (chunk.after > MAX_TAIL && totalTokens < URGENT_TOKENS) {
-      // 尾部太大且总量不急:本轮放弃。留痕,否则「上下文涨了却没切」查不出原因。
-      logLine(state, `spine skip: after=${chunk.after}>MAX_TAIL and total=${totalTokens}<URGENT span=${chunk.start}..${chunk.end}`);
+    const tailBeyondKept = chunk.after - (chunk.keptTokens || 0);
+    if (tailBeyondKept > MAX_TAIL && totalTokens < URGENT_TOKENS) {
+      // 保留区之外还留着一大截尾巴且总量不急:本轮放弃。留痕,否则「上下文涨了却没切」查不出原因。
+      logLine(state, `spine skip: tail=${tailBeyondKept}>MAX_TAIL and total=${totalTokens}<URGENT span=${chunk.start}..${chunk.end}`);
       return undefined;
     }
 

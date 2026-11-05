@@ -28,7 +28,7 @@ const root = path.resolve(here, '..');
 const sourcePath = path.join(root, 'extensions', 'live-compact', 'index.ts');
 const outputPath = path.join(root, 'src', 'agents', 'pi', 'live-compact-source.ts');
 
-const source = readFileSync(sourcePath, 'utf8');
+const source = readFileSync(sourcePath, 'utf8').replace(/\r\n/g, '\n');
 
 // 只查语法(不做类型检查):真源 import 的 pi 包不在本仓依赖里,类型查不了。
 const parsed = ts.transpileModule(source, {
