@@ -70,6 +70,10 @@ vi.mock('../lib/rsbBrowserBridge', async () => {
 });
 
 import { RightSidebarShell } from '../RightSidebarShell';
+import { tabGroupPanelComponent } from '../TabGroupPanel';
+import { TabGroupHostProvider } from '../tabGroupHost';
+import { openPluginTabView } from '../lib/openPluginTabView';
+import { __resetPanelRegistryForTest, registerPanelKind, setPanelKindParked } from '@/panels/registry';
 import '../plugins/plugin-task';
 import { BrowserTabBody } from '../plugins/web-browser/BrowserTabBody';
 import type { WebBrowserState } from '../plugins/web-browser';
@@ -93,10 +97,11 @@ import {
 import {
   __resetGlobalTabsForTest,
   addGlobalPluginTab,
+  addGlobalPluginTabView,
   getActiveGlobalTabId,
   requestRevealSessionTab,
 } from '../globalTabs';
-import { __resetTabGroupsForTest, getTabGroup } from '../tabGroups';
+import { __resetTabGroupsForTest, getTabGroup, setTabGroup } from '../tabGroups';
 import { toast } from '@/lib/toast';
 import { writePanelCollapsed } from '@/layout/collapsePrefs';
 import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
@@ -293,6 +298,16 @@ function dispatchShortcut(
 describe('RightSidebarShell empty state', () => {
   let tabsIpc: RightSidebarTabsIpcStub;
 
+  function registerNamedView(scope: 'session' | 'global', TabBody: (props: TabKindBodyProps) => ReturnType<typeof createElement>) {
+    installedGhostsMock.list = [{ manifest: { id: 'alpha', name: 'Alpha', ui: { version: 1,
+      tabViews: [{ id: 'log', title: 'Log', scope, page: 'views/log.html' }] } }, enabled: true }];
+    registerTabKind({ kind: 'plugin-tab-view',
+      menu: { kind: 'plugin-tab-view', labelKey: 'Log', icon: Globe, order: 90, enabled: true, hiddenFromMenu: true },
+      TabPillTitle: () => createElement('span', null, 'Log'), TabBody,
+      defaultState: () => ({ instanceId: 'alpha', id: 'log', scope }),
+    });
+  }
+
   beforeEach(() => {
     Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
       configurable: true,
@@ -324,6 +339,55 @@ describe('RightSidebarShell empty state', () => {
     window.localStorage.clear();
     installedGhostsMock.list = [];
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  });
+
+  // PR #8909: real Shell reconciliation can select the optimistic first tab
+  // before its create IPC completes. That same-tab update must still reveal it.
+  it('reveals the first named view after the collapsed shell reconciles its active tab', async () => {
+    registerNamedView('session', () => createElement('div', null, 'Named view'));
+    let finish!: () => void;
+    tabsIpc.upsert.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+    const reveal = vi.fn();
+    const off = onRequestRightSidebarVisibility(reveal);
+    try {
+      render(createElement(RightSidebarShell, { sessionId: 's1', workdir: '/tmp/repo', remoteHostId: null,
+        isMac: true, shellVisible: false, subagentsAvailable: false }));
+      await waitFor(() => expect(getBucket('s1').hydrated).toBe(true));
+      let pending!: Promise<string>;
+      act(() => { pending = openPluginTabView('alpha', 'log', 's1'); });
+      await waitFor(() => expect(tabsIpc.upsert).toHaveBeenCalledOnce());
+      await waitFor(() => expect(getBucket('s1').activeTabId).toBe(getBucket('s1').tabs[0].id));
+      await act(async () => { finish(); await pending; });
+      expect(reveal).toHaveBeenCalledWith('open', { sessionId: 's1' });
+    } finally { off(); cleanup(); unregisterTabKind('plugin-tab-view'); }
+  });
+
+  // PR #8909: exercise the real pane -> Shell -> TabBody visibility path.
+  // A parked group must keep its body and report hidden through the same bridge.
+  it.each(['left', 'top', 'bottom'] as const)('updates %s named-view visibility while preserving its body', async group => {
+    const mounted = vi.fn(), unmounted = vi.fn();
+    function Body(props: TabKindBodyProps) {
+      useEffect(() => { mounted(); return () => { unmounted(); }; }, []);
+      return createElement('div', { 'data-testid': 'named-view-body', 'data-visible': String(props.shellVisible) });
+    }
+    registerNamedView('global', Body);
+    const tab = addGlobalPluginTabView('alpha', 'log')!;
+    setTabGroup(tab.id, group);
+    const Panel = tabGroupPanelComponent(group), kind = `tab-group:${group}` as const;
+    registerPanelKind({ kind, Component: Panel, collapseMemory: 'none' });
+    try {
+      render(createElement(TabGroupHostProvider, { value: { sessionId: null, workdir: '/tmp/repo', remoteHostId: null,
+        isMac: true, sidebarCollapsed: false, hasRailChromeActions: false, subagentsAvailable: false } },
+        createElement(Panel, { paneId: `pane-${group}` })));
+      const body = await screen.findByTestId('named-view-body');
+      expect(body.dataset.visible).toBe('true');
+      act(() => setPanelKindParked(kind, true));
+      expect(body.dataset.visible).toBe('false');
+      act(() => setPanelKindParked(kind, false));
+      expect(screen.getByTestId('named-view-body')).toBe(body);
+      expect(body.dataset.visible).toBe('true');
+      expect(mounted).toHaveBeenCalledOnce(); expect(unmounted).not.toHaveBeenCalled();
+    } finally { cleanup(); unregisterTabKind('plugin-tab-view'); __resetPanelRegistryForTest(); }
   });
 
   // 测试价值

@@ -38,6 +38,8 @@ import {
   importCustomWallpaper,
   removeCustomWallpaper,
   prepareWallpaperImage,
+  setCustomWallpaperBytes,
+  revokePluginWallpaper,
 } from '../custom-wallpaper';
 import {
   customWallpaperStore,
@@ -78,6 +80,22 @@ async function selectImage(color = 'blue') {
 const parent = {} as never;
 
 describe('client-owned custom wallpaper lifecycle', () => {
+  // C11: a plugin video owns both media references; replacing it manually
+  // clears plugin provenance, so disabling the plugin cannot remove user media.
+  it('keeps a plugin video fallback and protects a subsequent native selection', async () => {
+    const png = await selectImage();
+    const video = Buffer.from('000000186674797069736f6d0000000069736f6d6d703432', 'hex');
+    const resource = await setCustomWallpaperBytes(video, { fallback: png,
+      pluginSource: { instanceId: 'example', key: 'a'.repeat(64) }, assertCurrent: () => {} });
+    expect(readReferencedClientWallpaperUrls()).toEqual(expect.arrayContaining([resource.url, resource.fallbackUrl]));
+    await expect(readClientWallpaperFile(resource.fallbackUrl!)).resolves.toBeDefined();
+    await selectImage('red');
+    await importCustomWallpaper(parent);
+    const manualUrl = readCustomWallpaperUrl();
+    expect(customWallpaperStore.read().fallbackUrl).toBeUndefined();
+    expect(await revokePluginWallpaper(() => false)).toBe(false);
+    expect(readCustomWallpaperUrl()).toBe(manualUrl);
+  });
   it('rejects a 20–100 MB image after only the header, even with an MP4 filename', async () => {
     const png = await selectImage();
     const file = path.join(h.dir, 'oversized.mp4');

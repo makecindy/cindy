@@ -1,4 +1,3 @@
-B=0a0d33dc64e1abf49d561bbcee72680ca3c2e83a
 import { buildUserProvider } from '../user-provider.js';
 import { expandedRegistryEntries } from "../modelMetadataLayers.js";
 /**
@@ -1211,4 +1210,3 @@ describe("媒体清单跨供应商契约(2026-07 图像多来源)", () => {
     }
   });
 });
-

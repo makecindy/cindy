@@ -2537,3 +2537,12 @@ html[data-wallpaper-blur='true'] .app-wallpaper-video video {
   max-width: none;
   filter: blur(var(--app-wallpaper-blur));
 }
+
+/* Plugin visibility changes presentation only; critical interaction cards stay accessible. */
+html[data-plugin-ui-hidden~='workspace'] [data-plugin-ui-element='workspace'] { visibility: hidden; }
+html[data-plugin-ui-hidden~='workspace'] [data-plugin-ui-keep-visible] { visibility: visible; }
+html[data-plugin-ui-hidden~='sidebar'] [data-plugin-ui-element='sidebar'],
+html[data-plugin-ui-hidden~='header'] [data-plugin-ui-element='header'],
+html[data-plugin-ui-hidden~='messages'] [data-plugin-ui-element='messages'],
+html[data-plugin-ui-hidden~='composer'] [data-chat-input-root],
+html[data-plugin-ui-hidden~='windowControls'] [data-plugin-ui-element='windowControls'] { display: none !important; }

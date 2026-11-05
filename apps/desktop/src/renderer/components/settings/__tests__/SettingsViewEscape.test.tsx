@@ -21,6 +21,7 @@ vi.mock('@/lib/useCindyVersions', () => ({
 }));
 
 const { Stub } = vi.hoisted(() => ({ Stub: () => null }));
+vi.mock('@/cindy-brain/PluginUiControls', () => ({ PluginUiContributionControls: Stub }));
 vi.mock('../UserProfileCard', () => ({ UserProfileCard: Stub }));
 vi.mock('../VoiceInputSection', () => ({ VoiceInputSection: Stub }));
 vi.mock('../AppearanceSection', () => ({ AppearanceSection: Stub }));

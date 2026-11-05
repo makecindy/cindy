@@ -617,4 +617,3 @@ it('keeps decision after embedding and outside all chat selection paths', () => 
     expect(isModelSelectableForNewRoute(value)).toBe(false);
   }
 });
-
