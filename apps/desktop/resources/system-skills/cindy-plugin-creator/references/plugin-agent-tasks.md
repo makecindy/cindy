@@ -257,6 +257,17 @@ autoTitle 与 title 互斥，task/bot
 项目名称。新模式参与幂等摘要；旧字段组合的摘要及重放行为保持，不需要重新批准或配置。
 旧 Host 未宣告支持时，应明确提示所需客户端能力，不能静默丢弃资料或假称已经自动命名。
 
+### 在独立 worktree 里新建任务（可选）
+
+先检查 `targets.capabilities().projectWorktree === true`。project 的 `targets.send` 可传 `worktree: true`，
+新任务的工作目录就是 Host 为它新建的托管 worktree（`<repo>/.cindy-worktrees/<name>`，分支 `cindy/<name>`，
+从刚 fetch 的远端默认分支切出；取不到时用当前分支），和用户在新任务界面勾选 worktree 同类，归档时回收目录、保留分支。
+同时开多个任务时，互相不会改到对方的文件。task/bot 目标不接受该参数。
+
+不是 git 仓库、位于未登记的 worktree 内或创建失败时返回 `WORKTREE_UNAVAILABLE`，不创建任务，也不退回共享工作树；
+是否改为普通投递由插件决定，并须换新的 requestKey。该参数参与幂等摘要，同键修改返回冲突。
+目录是仓库子目录时，任务工作目录是 worktree 根，不是对应子目录。
+
 ### 新建任务的权限选择（可选）
 
 先检查 `tasks.capabilities().createPermissionMode === true`。`tasks.create` 和 project 的
