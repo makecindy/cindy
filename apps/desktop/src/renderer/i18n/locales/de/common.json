@@ -14693,7 +14693,7 @@
       "branchTooltip": "Aktueller Branch: {{branch}}",
       "pr": {
         "status": {
-          "open": "Öffnen",
+          "open": "Offen",
           "draft": "Entwurf",
           "merged": "Zusammengeführt",
           "closed": "Geschlossen"
@@ -14834,7 +14834,9 @@
           "summaryAria": "Zusammenfassung von MR !{{number}}",
           "urlPlaceholder": "GitHub-PR- oder GitLab-MR-Link",
           "notFound": "MR nicht gefunden oder für das aktuelle Konto nicht sichtbar"
-        }
+        },
+        "merge": "Zusammenführung",
+        "conflicts": "Konflikte"
       }
     },
     "schedule": {

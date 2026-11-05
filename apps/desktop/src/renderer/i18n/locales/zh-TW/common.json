@@ -14768,7 +14768,9 @@
           "summaryAria": "MR !{{number}} 摘要",
           "urlPlaceholder": "GitHub PR 或 GitLab MR 連結",
           "notFound": "MR 不存在，或目前帳號無權限檢視"
-        }
+        },
+        "merge": "合併",
+        "conflicts": "有衝突"
       }
     },
     "schedule": {

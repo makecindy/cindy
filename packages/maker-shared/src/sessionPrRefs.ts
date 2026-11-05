@@ -128,6 +128,8 @@ export type PrStatusResult =
       checks?: PrChecksSummary | null;
       /** GitHub mergeStateStatus (CLEAN / DIRTY / BEHIND / BLOCKED …). Missing on older hosts. */
       mergeState?: string | null;
+      /** Merge conflict; missing on older hosts or while the provider is still calculating. */
+      conflicts?: boolean | null;
       /** GitHub reviewDecision (APPROVED / CHANGES_REQUESTED / REVIEW_REQUIRED). Missing on older hosts. */
       reviewDecision?: string | null;
       headSha?: string;
