@@ -261,6 +261,15 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
   const accessGeneration = useRef(0);
   const freshRead = useRef(false);
   const olderPending = useRef<Promise<void> | null>(null);
+  const planAction = useRef<{ identity: string; key: string; operationId: string; pending: boolean; controller: AbortController } | null>(null);
+  if (!enabled || !focused || planAction.current?.identity !== identity) {
+    planAction.current?.controller.abort();
+    planAction.current = null;
+  }
+  useFocusEffect(useCallback(() => () => {
+    planAction.current?.controller.abort();
+    planAction.current = null;
+  }, [identity, enabled]));
   const valid = () => api.current() && active.current === identity;
   const loseAccess = () => {
     accessGeneration.current++; freshRead.current = false; page.current = null;
@@ -400,6 +409,39 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     return olderPending.current;
   };
   const act = async (action: BotGroupRemoteActionId, input?: Record<string, unknown>): Promise<RemoteActionInvokeResponse> => {
+    if (['plan-start', 'plan-dismiss', 'plan-continue', 'plan-retry', 'plan-edit'].includes(action)) {
+      if (!enabled || !focused || !valid() || threadRootId) throw new Error('OWNER_CHANGED');
+      const latest = page.current;
+      const plan = latest?.identity === identity ? latest.page.plans?.find(plan => plan.id === input?.planId) : undefined;
+      if (!plan || !freshRead.current) throw new Error('CHAT_READ_FAILED');
+      if (input?.expectedRevision !== plan.revision) { reload(); throw new Error('REVISION_CONFLICT'); }
+      if (planAction.current?.identity === identity && planAction.current.pending) throw new Error('PLAN_OPEN');
+      const edit = action === 'plan-edit';
+      if (edit && (!['remove','reassign','skip'].includes(String(input?.action)) || !Number.isInteger(input?.position))) throw new Error('INVALID_PARAMS');
+      if (edit && input?.action === 'skip' && input.executionId !== undefined && typeof input.executionId !== 'string') throw new Error('INVALID_PARAMS');
+      const command: import('./chatServerClient').ChatPlanAction = edit
+        ? input!.action === 'skip'
+          ? { action: 'skip', position: input!.position as number, ...(typeof input!.executionId === 'string' ? { executionId: input!.executionId } : {}) }
+          : { action: input!.action as 'remove' | 'reassign', position: input!.position as number, ...(typeof input!.botId === 'string' ? { botId: input!.botId } : {}) }
+        : { action: action.slice(5) as 'start' | 'dismiss' | 'continue' | 'retry' };
+      const key = JSON.stringify([plan.id, plan.revision, command]);
+      const previous = planAction.current;
+      const attempt = { identity, key, pending: true, controller: new AbortController(),
+        operationId: previous?.identity === identity && previous.key === key ? previous.operationId : '' };
+      planAction.current = attempt;
+      const generation = accessGeneration.current;
+      const current = () => valid() && accessGeneration.current === generation && planAction.current === attempt;
+      try {
+        attempt.operationId ||= (await import('expo-crypto')).randomUUID();
+        await api.client.actPlan(groupId, plan, command, attempt.operationId, current, attempt.controller.signal);
+        if (!current()) throw new Error('OWNER_CHANGED');
+        return { effects: [] };
+      } finally {
+        attempt.pending = false;
+        // A rejection/conflict also needs a fresh role and plan, never an optimistic step advance.
+        if (current()) reload();
+      }
+    }
     if (action === 'stop') {
       const operationId = (await import('expo-crypto')).randomUUID();
       try { await api.client.stop(groupId, operationId); } finally { if (valid()) reload(); }
@@ -424,10 +466,10 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     if (!latest || latest.identity !== identity) throw new Error('CHAT_READ_FAILED');
     const owner = getMobileAuthOwner();
     if (!valid() || owner.accountId !== api.userId || mobileDurableOutbox.getAccountId() !== owner.accountKey) throw new Error('OWNER_CHANGED');
-    const mentions = input.mentions as { all: boolean; botIds: string[] };
+    const mentions = input.mentions as import('@cindy/maker-shared/botGroupChat').BotGroupMention;
     const root = threadRootId ? latest.page.messages.find(message => message.id === threadRootId) : undefined;
     const recipients = [...mentions.botIds];
-    if (root && latest.page.snapshot.members.some(member => member.id === root.authorId && member.kind === 'bot' && member.state === 'joined')) recipients.push(root.authorId);
+    if (!mentions.all && !mentions.allBots && root && latest.page.snapshot.members.some(member => member.id === root.authorId && member.kind === 'bot' && member.state === 'joined')) recipients.push(root.authorId);
     await enqueueChatMessage(mobileDurableOutbox, owner.accountKey, groupId, {
       ...(latest.page.snapshot.room.kind === 'direct' ? { conversationKind: 'direct' as const } : {}),
       clientId: String(input.clientId), text: String(input.text), threadRootId,
@@ -435,7 +477,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       attachments: input.attachments as RemoteSerializedAttachment[] | undefined,
       ...(input.quote && typeof input.quote === 'object' && 'messageId' in input.quote
         ? { quote: { messageId: String(input.quote.messageId) } } : {}),
-      mentions: { all: mentions.all, botIds: [...new Set(recipients)] },
+      mentions: { ...mentions, botIds: [...new Set(recipients)] },
     }, latest.page.messages.length, input.quote as import('@cindy/maker-shared/botGroupChat').BotGroupQuoteView | undefined,
     latest.page.messages.reduce<string | undefined>((seq, message) => !seq || BigInt(message.seq) > BigInt(seq) ? message.seq : seq, undefined));
     if (!isMobileAuthOwnerCurrent(owner)) throw new Error('OWNER_CHANGED');

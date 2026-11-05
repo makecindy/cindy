@@ -32,6 +32,8 @@ import {
   GHOST_CARD_REOPEN_WINDOW_MS,
   GHOST_CARD_WORKING_WINDOW_MS,
   GHOST_CARD_ID_KEY,
+  GHOST_CARD_TURN_END_KEY,
+  isTurnEndGhostCardHtml,
   type GhostToolCallResult,
 } from '../../shared/ghost.js';
 import type { SanitizeCardResult } from './cardSanitizer.js';
@@ -48,15 +50,17 @@ export function withCardToken(
   result: GhostToolCallResult,
   hasCard: boolean,
   callId: string,
+  turnEnd = false,
 ): GhostToolCallResult {
   if (!hasCard || !result.ok) return result;
+  const token = { [GHOST_CARD_ID_KEY]: callId, ...(turnEnd ? { [GHOST_CARD_TURN_END_KEY]: true } : {}) };
   if (result.result === null || result.result === undefined) {
-    return { ok: true, result: { [GHOST_CARD_ID_KEY]: callId } };
+    return { ok: true, result: token };
   }
   if (typeof result.result === 'object' && !Array.isArray(result.result)) {
     return {
       ok: true,
-      result: { ...(result.result as Record<string, unknown>), [GHOST_CARD_ID_KEY]: callId },
+      result: { ...(result.result as Record<string, unknown>), ...token },
     };
   }
   return result;
@@ -156,6 +160,8 @@ const SWEEP_MIN_INTERVAL_MS = 30_000;
 interface CallEntry {
   ghostId: string;
   logicalGhostId?: string;
+  /** 被调用的插件工具名(ghost_call 登记时提供；其它通道省略)。 */
+  tool?: string;
   toolUseId: string | null;
   sessionId: string | null;
   sessionInstanceId?: string;
@@ -184,6 +190,8 @@ interface CallEntry {
    */
   scriptWritePath: string | null;
   hasCard: boolean;
+  /** 最新一版卡片声明了排到本轮末尾。 */
+  turnEnd?: boolean;
   lastAcceptedAt: number | null;
   settledAt: number | null;
   /**
@@ -244,6 +252,8 @@ export class GhostCardService {
     info: {
       ghostId: string;
       logicalGhostId?: string;
+      /** 被调用的插件工具名；networkSlot 据此判断是否带 MCP Apps 手册头。 */
+      tool?: string;
       toolUseId: string | null;
       sessionId: string | null;
       sessionInstanceId?: string;
@@ -261,6 +271,7 @@ export class GhostCardService {
     this.calls.set(callId, {
       ghostId: info.ghostId,
       ...(info.logicalGhostId !== undefined ? { logicalGhostId: info.logicalGhostId } : {}),
+      ...(info.tool !== undefined ? { tool: info.tool } : {}),
       toolUseId: info.toolUseId,
       sessionId: info.sessionId,
       sessionInstanceId: info.sessionInstanceId,
@@ -285,6 +296,11 @@ export class GhostCardService {
     if (!entry) return false;
     entry.settledAt = this.now();
     return entry.hasCard;
+  }
+
+  /** 该单最新一版卡片是否声明排到本轮末尾。 */
+  isTurnEnd(callId: string): boolean {
+    return this.calls.get(callId)?.turnEnd === true;
   }
 
   /** 该单当前是否已有卡(finalize 前后皆可查)。 */
@@ -331,10 +347,10 @@ export class GhostCardService {
    * 结束后继续充当"目录授权上下文"——否则插件记住一个旧 callId 就能跨
    * 调用复用当时会话的 workdir 自动放行。
    */
-  inFlightCallInfoOf(callId: string): { ghostId: string; sessionId: string | null; sessionInstanceId?: string; remoteHostId: string | null | undefined; scriptWorkdir: string | null; scriptWritePath: string | null; channel: 'session' | 'script' } | null {
+  inFlightCallInfoOf(callId: string): { ghostId: string; sessionId: string | null; sessionInstanceId?: string; remoteHostId: string | null | undefined; scriptWorkdir: string | null; scriptWritePath: string | null; channel: 'session' | 'script'; tool?: string } | null {
     const e = this.calls.get(callId);
     if (!e || e.settledAt !== null || e.reopenedAt !== null) return null;
-    return { ghostId: e.ghostId, sessionId: e.sessionId, ...(e.sessionInstanceId ? { sessionInstanceId: e.sessionInstanceId } : {}), remoteHostId: e.remoteHostId, scriptWorkdir: e.scriptWorkdir, scriptWritePath: e.scriptWritePath, channel: e.channel };
+    return { ghostId: e.ghostId, sessionId: e.sessionId, ...(e.sessionInstanceId ? { sessionInstanceId: e.sessionInstanceId } : {}), remoteHostId: e.remoteHostId, scriptWorkdir: e.scriptWorkdir, scriptWritePath: e.scriptWritePath, channel: e.channel, ...(e.tool !== undefined ? { tool: e.tool } : {}) };
   }
 
   /** An active tool may update its own earlier card in the same task. */
@@ -459,6 +475,7 @@ export class GhostCardService {
     if (!sanitized.ok) return reject(`sanitize:${sanitized.reason}`, { callId: p.callId });
 
     entry.hasCard = true;
+    entry.turnEnd = isTurnEndGhostCardHtml(sanitized.html);
     entry.lastAcceptedAt = now;
     // working 窗口记账:首个 working 开窗(固定起点),done 关窗(回到
     // settle 宽限语义,后续更新按旧规则判 too-late)。

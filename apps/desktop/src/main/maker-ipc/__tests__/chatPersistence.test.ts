@@ -69,3 +69,25 @@ it('restores independent queued messages and holds media until a durable removal
   await expect(accessBotGroupOutbox({ action: 'put', owner, entry })).rejects.toThrow('OUTBOX_OWNER_CHANGED');
   expect(await accessBotGroupOutbox({ action: 'list', owner: state.owner })).toEqual([]);
 });
+
+// PR #8146: nested mention validation used to strip allBots on both put and list.
+// Existing persistence cases only stored ordinary sends. Unit tier with real atomic files:
+// one companion broadcast must restore byte-equivalent input for the same receipt retry.
+it('restores a companion broadcast unchanged for a lost-receipt retry', async () => {
+  const owner = state.owner;
+  const input = { groupId: 'room', clientId: 'broadcast-a', text: '@All teammates hello',
+    mentions: { all: false, allBots: true, botIds: [] } };
+  const entry = { input, createdAt: 1, draft: input.text, signature: 'broadcast-signature',
+    attachmentScope: 'room', after: 0, tracked: [], attachments: [], status: 'sending' as const, files: [] };
+  await accessBotGroupOutbox({ action: 'put', owner, entry });
+  const journal = chatSendJournal<{ input: typeof input }>('https://chat.example', () => state.owner === owner);
+  journal.save(input.clientId, entry.signature, { input });
+  // Only the restored disk record supplies the retry, as after a window/app restart.
+  const [restored] = await accessBotGroupOutbox({ action: 'list', owner });
+  expect(restored!.input).toEqual(input);
+  const restarted = chatSendJournal<{ input: typeof input }>('https://chat.example', () => state.owner === owner);
+  expect(restarted.read(restored!.input.clientId, restored!.signature as string)?.intent?.input).toEqual(restored!.input);
+  restarted.confirm(restored!.input.clientId, restored!.signature as string, 'broadcast-receipt');
+  expect(chatSendJournal('https://chat.example', () => state.owner === owner)
+    .read(restored!.input.clientId, restored!.signature as string)).toMatchObject({ receipt: 'broadcast-receipt' });
+});

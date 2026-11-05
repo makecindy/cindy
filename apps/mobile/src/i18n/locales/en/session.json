@@ -1,4 +1,32 @@
 {
+  "githubPrs": {
+    "title": "Manage PR Links",
+    "hint": "Up to 3 in the header; pinned PRs appear first",
+    "empty": "Paste a GitHub PR or GitLab MR URL to add it",
+    "removed": "Removed: {{count}}",
+    "legacy": "Unconfirmed references: {{count}}",
+    "addLabel": "Add PR Link",
+    "add": "Add PR",
+    "loading": "Loading…",
+    "restore": "Restore PR",
+    "pin": "Pin to Header",
+    "unpin": "Unpin PR / MR",
+    "pinLimit": "Pin up to 3 PRs",
+    "reorderHint": "Use Alt+↑/↓ to reorder within the pinned or unpinned group.",
+    "dragHandle": "Drag to reorder {{repo}} #{{number}}",
+    "remove": "Remove PR",
+    "errors": {
+      "duplicate": "This PR is already linked; restore removed links from the list",
+      "notFound": "PR not found or access denied",
+      "invalidUrl": "Enter a valid GitHub PR or GitLab MR URL",
+      "reorderFailed": "The order was not saved. Please try again.",
+      "verifyFailed": "Could not verify the PR; check GitHub or GitLab sign-in and access",
+      "unsupported": "This computer’s version does not support managing PR links",
+      "failed": "Could not update PR links"
+    },
+    "urlPlaceholder": "GitHub PR or GitLab MR URL",
+    "moveUp": "Move up"
+  },
   "paneResize": {
     "label": "Column width",
     "hint": "Drag left or right to adjust the column widths"
@@ -185,7 +213,7 @@
       },
       "actionCopy": {
         "pending": "Handle the pending request first; the input area will be restored afterward.",
-        "archived": "This session is archived. Restore it before sending more messages.",
+        "archived": "This session is archived. Sending a message unarchives it.",
         "deleted": "This session is deleted and can't be changed.",
         "queuePaused": "The queue is paused. Resume it from the queue panel."
       }
@@ -200,7 +228,25 @@
       },
       "context": {
         "title": "Context usage",
-        "unavailable": "No context data"
+        "unavailable": "No context data",
+        "estimate": {
+          "title": "Text estimates",
+          "delivery": "Answer delivery",
+          "host": "Cindy instructions",
+          "plugins": "Plugin catalogue",
+          "memoryRules": "Memory instructions",
+          "memoryIndex": "Memory index",
+          "profile": "Teammate profile",
+          "user": "User instructions",
+          "directories": "Additional directories",
+          "native": "Pi instructions",
+          "skills": "Skill catalogue",
+          "project": "Project instructions",
+          "tools": "Tool definitions",
+          "messages": "Conversation text",
+          "other": "Other instructions",
+          "note": "Estimated from current text, not model tokenization. Excludes images and provider formatting; does not add up to the native total."
+        }
       },
       "rateLimit": {
         "plan": "Plan",
@@ -424,11 +470,12 @@
     "chipArchived": "Archived",
     "titleFallback": "Remote session",
     "unnamedTitle": "Untitled session",
+    "openSection": "Open",
     "renameAction": "Rename Session",
     "copyLinkAction": "Copy Session Link",
     "unpin": "Unpin",
     "pin": "Pin",
-    "restore": "Restore",
+    "restore": "Unarchive",
     "archive": "Archive",
     "deleteAction": "Delete Session",
     "deleteConversation": "Delete Session",
@@ -620,7 +667,7 @@
     "REMOTE_PROVIDER_UPDATING": "This model provider’s credentials are updating. Try again in a moment.",
     "REMOTE_WORKDIR_UNAVAILABLE": "The remote working directory is unavailable. Check that the folder still exists on that computer, then try again.",
     "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "The computer cannot yet confirm whether this message was sent. Wait a moment and try again. Do not send the same message twice.",
-    "REMOTE_AGENT_UNAVAILABLE": "Can't reach the computer running the Agent. Make sure it's online and allows remote control, then try again.",
+    "REMOTE_AGENT_UNAVAILABLE": "The connection to the computer running the Agent dropped. Try again. If it keeps happening, make sure that computer is online and allows remote control.",
     "REMOTE_AGENT_PEER_TOO_OLD": "Cindy on the other computer is too old to run the Agent for this one. Update Cindy there first.",
     "REMOTE_AGENT_EXPIRED": "This session already ended on the computer running the Agent. Send your message again.",
     "REMOTE_AGENT_NOT_FOUND": "This session already ended on the computer running the Agent. Send your message again.",
@@ -763,5 +810,17 @@
     "confirm": "Switch",
     "remember": "Switch, and do it automatically from now on (this task only)",
     "cancel": "Cancel"
+  },
+  "messageEdit": {
+    "editing": "Editing message",
+    "discard": "Discard message edit",
+    "stopTimeout": "Timed out waiting for the task to stop — please try again",
+    "queueNotEmpty": "This session has queued messages — send or remove them before editing",
+    "notLast": "A newer message exists in this session — this one is no longer the latest and cannot be edited",
+    "failed": "Failed to edit and resend, please try again",
+    "noPriorAssistant": "There is no AI reply before this message, and the Cindy version on the computer can't edit it yet. Update Cindy on the computer and try again.",
+    "uploadsPending": "Attachments are still uploading. Wait for them to finish before editing the message.",
+    "rollbackHint": "Sending will undo changes to {{count}} file(s) from the last turn",
+    "conversationOnlyHint": "Sending will not restore project files; previous file changes will remain"
   }
 }

@@ -4,6 +4,19 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const pluginMenuMock = vi.hoisted(() => ({
+  views: [] as import('@cindy/maker-shared').PluginUiView[],
+  invoke: vi.fn(),
+  input: null as unknown,
+}));
+vi.mock('@/cindy-brain/PluginUiCommandMenu', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/cindy-brain/PluginUiCommandMenu')>()),
+  usePluginUiCommandMenu: (input: unknown) => {
+    pluginMenuMock.input = input;
+    return { views: pluginMenuMock.views, disabled: false, pending: new Set(), invoke: pluginMenuMock.invoke };
+  },
+}));
+
 vi.mock('react-i18next', async () => {
   const { default: en } = await import('@/i18n/locales/en/common.json');
   const voice: Record<string, unknown> = en.bots.voiceMode;
@@ -106,10 +119,47 @@ describe('MessageActionBar', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    pluginMenuMock.views = [];
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
       value: { writeText },
     });
+  });
+
+  it('places a plugin command in the existing message menu with the exact target', () => {
+    const view: import('@cindy/maker-shared').PluginUiView = {
+      version: 1, viewId: 'view', revision: '1', point: 'message.actions', contributionId: 'format',
+      command: { shortcutId: `plugin:${'a'.repeat(64)}` }, controls: [],
+      actions: [{ id: 'run', label: 'Format' }], blocks: [], fallbackMarkdown: 'Format',
+    };
+    pluginMenuMock.views = [view];
+    render(<MessageActionBar copyText="message" align="left" hovered
+      pluginUiTarget={{ sessionId: 'task', id: 'message' }} />);
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'chat.messageActionBar.moreActions' }), { button: 0, ctrlKey: false });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Format' }));
+    expect(pluginMenuMock.invoke).toHaveBeenCalledWith(view, 'run', {});
+    expect(pluginMenuMock.input).toMatchObject({ sessionId: 'task', target: { kind: 'message', id: 'message' } });
+  });
+
+  it('keeps companion quote and copy visible and opens a topic from More with a persistent focus target', async () => {
+    const onAddToChat = vi.fn();
+    let opener: Element | null = null;
+    const openTopic = vi.fn(() => { opener = document.activeElement; });
+    render(<MessageActionBar copyText="private reply" align="left" hovered={false}
+      simplifiedBotConversation companionFooter onAddToChat={onAddToChat}
+      replyAction={{ label: 'Open topic', count: 3, onClick: openTopic }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'chat.messageActionBar.reply' }));
+    expect(onAddToChat).toHaveBeenCalledOnce();
+    expect(openTopic).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'chat.messageActionBar.copy' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('private reply'));
+    expect(screen.queryByRole('button', { name: 'Open topic' })).toBeNull();
+    const more = screen.getByRole('button', { name: 'chat.messageActionBar.moreActions' });
+    fireEvent.pointerDown(more, { button: 0, ctrlKey: false });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open topic' }));
+    await waitFor(() => expect(openTopic).toHaveBeenCalledOnce());
+    expect(opener).toBe(more);
+    expect(screen.queryByRole('menu')).toBeNull();
   });
 
   it('keeps fork beside copy and groups the remaining actions under ellipsis', async () => {
@@ -448,6 +498,7 @@ describe('MessageActionBar', () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole('button', { name: '¥2.00' }));
     const tooltip = screen.getByText(
       (_, element) =>
         element?.classList.contains('whitespace-pre-line') === true &&

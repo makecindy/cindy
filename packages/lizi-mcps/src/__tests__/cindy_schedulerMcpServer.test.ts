@@ -105,6 +105,10 @@ class InMemoryStorage implements ScheduleStorage {
       (r) => r.status === 'running' && (scheduleId === undefined || r.scheduleId === scheduleId),
     );
   }
+  async hasUnfinishedRuns(scheduleId: string): Promise<boolean> {
+    return [...this.runs.values()].some((r) => r.scheduleId === scheduleId &&
+      (r.status === 'running' || r.status === 'interrupted'));
+  }
   // 与真实现相同的 CAS 语义:active 且 nextFireAt 精确匹配才认领(置空),否则 null。
   async claimDueFire(id: string, expectedNextFireAt: number): Promise<Schedule | null> {
     const ex = this.schedules.get(id);
@@ -251,7 +255,7 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     expect(payload.ok).toBe(true);
     // 类目概览要在第一步就写明用途与作用范围(本机 / 可跨电脑)。
     expect(payload.categories).toEqual([
-      { name: 'scheduler', tool_count: 11, description: expect.stringMatching(/各自的电脑.*device.*只在本机/) },
+      { name: 'scheduler', tool_count: 11, description: expect.stringMatching(/各自的电脑.*schedule_create.*只在本机/) },
     ]);
     await h.cleanup();
   });
@@ -263,6 +267,17 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
         readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false,
       });
       expect(tools.find((tool) => tool.name === 'call_tool')?.annotations?.readOnlyHint).not.toBe(true);
+    } finally { await h.cleanup(); }
+  });
+
+  // Unit: schema lookup is read-only even for destructive scheduler operations.
+  it('describes a nested operation without creating or changing a schedule', async () => {
+    try {
+      const result = await h.client.callTool({ name: 'list_tools', arguments: { name: 'schedule_create' } });
+      const metadata = JSON.parse((result.content as Array<{ text: string }>)[0].text);
+      expect(metadata).toMatchObject({ ok: true, tool: { name: 'schedule_create', inputSchema: { type: 'object' } } });
+      expect(metadata.tool.inputSchema.properties).toHaveProperty('timezone');
+      expect(await h.storage.list()).toEqual([]);
     } finally { await h.cleanup(); }
   });
 

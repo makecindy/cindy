@@ -1,4 +1,12 @@
-import { createContext, Fragment, useCallback, useContext, useEffect, useSyncExternalStore } from 'react';
+import { prNumberLabel } from '@cindy/maker-shared';
+import {
+  createContext,
+  Fragment,
+  useCallback,
+  useContext,
+  useEffect,
+  useSyncExternalStore,
+} from 'react';
 import { AppState, StyleSheet, View, type StyleProp, type TextStyle } from 'react-native';
 import { PR_STATUS_REFRESH_INTERVAL_MS } from '@cindy/maker-shared';
 import { useAuth } from '@/auth/AuthContext';
@@ -129,8 +137,12 @@ function InfoMetaContent({
             <SessionRelativeTime lastActivityAt={item.lastActivityAt} style={textStyle} />
           ) : piece.key === 'pr' && pr ? (
             <PrPiece
-              color={prStatusVisual(pr.status?.ok ? pr.status.status : null, colors)}
-              label={`#${pr.ref.prNumber}`}
+              color={prStatusVisual(
+                pr.status?.ok ? pr.status.status : null,
+                colors,
+                pr.status?.ok ? pr.status.conflicts : null,
+              )}
+              label={`${prNumberLabel(pr.ref)}`}
               testID={`home.sessionInfo.pr.${session.id}`}
               textStyle={textStyle}
             />

@@ -75,8 +75,8 @@ const existing: Routine = {
   revision: 1, createdAt: 1, updatedAt: 1,
   triggers: [{ id: 'timer', kind: 'interval', intervalMs: 3_600_000 }],
 };
-function setup() {
-  let records = [structuredClone(existing)];
+function setup(seed: Partial<Routine> = {}) {
+  let records = [{ ...structuredClone(existing), ...seed }];
   const api = {
     list: vi.fn(async () => records), sources: vi.fn(async () => []),
     history: vi.fn(async () => []), onChanged: vi.fn(() => () => {}),
@@ -87,7 +87,10 @@ function setup() {
     }),
     runNow: vi.fn(async () => {}), remove: vi.fn(async () => { records = []; }),
   };
-  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { routines: api } });
+  Object.defineProperty(window, 'electronAPI', {
+    configurable: true,
+    value: { routines: api, ghosts: { listControlPointCandidates: vi.fn(async () => [{ pluginId: 'gate', name: 'Gate' }]), onChanged: vi.fn(() => () => {}) } },
+  });
   return api;
 }
 it('retries a failed initial load instead of showing a false empty state', async () => {
@@ -199,6 +202,24 @@ it('saves advanced quiet and pre-run settings without executing a check on open'
   fireEvent.click(screen.getByRole('button', { name: 'routines.save' }));
   await waitFor(() => expect(api.save).toHaveBeenCalledWith('bot', expect.objectContaining({ silentWhenIdle: false, preRunHook: { command: 'node check.mjs', timeoutMs: 3000 } }), 'daily'));
   expect(api.runNow).not.toHaveBeenCalled();
+});
+
+// Review of the plugin pre-run check: a routine with both a script and a plugin (set by an Agent) opens on the plugin.
+// Saving an unrelated edit must keep the hidden script; choosing the script drops the plugin instead.
+it('keeps a script check set alongside a plugin until the check source is changed', async () => {
+  const both = { preRunHook: { command: 'node check.mjs' }, preRunPlugin: { pluginId: 'gate', onFailure: 'allow' as const } };
+  const api = setup(both);
+  render(<BotRoutines botId="bot" />);
+  fireEvent.click(await screen.findByText('Daily report'));
+  fireEvent.change(screen.getByLabelText('routines.instructions'), { target: { value: 'Edited' } });
+  fireEvent.click(screen.getByRole('button', { name: 'routines.save' }));
+  await waitFor(() => expect(api.save).toHaveBeenLastCalledWith('bot', expect.objectContaining({ prompt: 'Edited', ...both }), 'daily'));
+
+  fireEvent.click(screen.getByText('routines.advancedSettings'));
+  fireEvent.click(await screen.findByText('scheduler.editor.preRunPlugin.source.script'));
+  fireEvent.change(screen.getByLabelText('routines.instructions'), { target: { value: 'Edited again' } });
+  fireEvent.click(screen.getByRole('button', { name: 'routines.save' }));
+  await waitFor(() => expect(api.save).toHaveBeenLastCalledWith('bot', expect.objectContaining({ preRunHook: both.preRunHook, preRunPlugin: null }), 'daily'));
 });
 
 it('starts a new unclassified routine with delivery enabled', async () => {

@@ -2,6 +2,9 @@ export * from './agentCapabilities.js';
 export * from './agentInputProjection.js';
 export * from './agentTask.js';
 export * from './branding.js';
+export * from './pluginUi.js';
+export * from './pluginAppearance.js';
+export * from './pluginUiComposer.js';
 export * from './brandIdentity.js';
 export * from './commandIntent.js';
 export * from './commandDisplay.js';
@@ -63,6 +66,7 @@ export * from './urlTextBoundary.js';
 export * from './workActivityProjection.js';
 export * from './worktreePaths.js';
 export * from './sessionPrRefs.js';
+export * from './githubRead.js';
 export * from './taskTags';
 
 export * from './workingStatus.js';

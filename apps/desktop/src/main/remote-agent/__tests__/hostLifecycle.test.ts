@@ -127,13 +127,15 @@ describe('hosted shadow workspace cleanup', () => {
       return { revision: command.revision, allowFast: command.allowFast };
     });
     const host = createRemoteAgentHost({ isAgentAvailable: () => true, startHosted: async input => idleHandle(input),
-      isControllerAuthorized: () => allowed, captureOwner: () => 'owner', isOwnerCurrent: () => true, runsRoot, fastPolicy });
+      isControllerAuthorized: () => allowed, captureOwner: () => 'owner', isOwnerCurrent: () => true, runsRoot, fastPolicy,
+      groupContinuity: () => allowed });
     try {
       const command = { op: 'fast-policy', group: 'openai', revision: 2, allowFast: false };
       await expect(host.handle('controller-1', command)).rejects.toThrow();
       expect(fastPolicy).not.toHaveBeenCalled();
       allowed = true;
       expect(await host.handle('controller-1', { op: 'caps' })).toHaveProperty('subscriptionFastPolicy', true);
+      expect(await host.handle('controller-1', { op: 'caps' })).toHaveProperty('groupContinuity', true);
       let acknowledged = false;
       const pending = host.handle('controller-1', command).then(value => { acknowledged = true; return value; });
       await vi.waitFor(() => expect(fastPolicy).toHaveBeenCalledOnce());

@@ -2,6 +2,9 @@
  * 供应商组的界面按物理电脑聚合(2026-10-15 用户要求)：同一台电脑上登录了几个同品牌账号时，
  * 底层仍是几个独立的组内账号(各自的上限、暂停与冷却)，界面上收在同一台电脑下面；只有一个账号的电脑不分两层。
  */
+import { formatQuotaResetAt } from '@/components/status/usageCardModel';
+import type { useTranslation } from 'react-i18next';
+
 import {
   providerGroupPhysicalDeviceKey,
   type ProviderGroupMember,
@@ -51,4 +54,36 @@ export function providerGroupDeviceVersion(
     ? 'needs-update' as const
     : known[0].guestSupport;
   return { ...(appVersion ? { appVersion } : {}), ...(guestSupport ? { guestSupport } : {}) };
+}
+
+export function memberStatusText(
+  t: ReturnType<typeof useTranslation>['t'],
+  status: ProviderGroupMemberStatus | undefined,
+  locale: string,
+  nowMs: number = Date.now(),
+): string {
+  if (!status) return t('providerGroup.member.status.checking');
+  switch (status.state) {
+    case 'available':
+      // 「可用」不报负载，整列空着时就看不出每台跑了几个；状态词直接承载运行数。
+      return status.running > 0
+        ? t('providerGroup.member.runningCount', { count: status.running })
+        : t('providerGroup.member.status.idle');
+    case 'full':
+      return t('providerGroup.member.status.full');
+    case 'paused':
+      return t('providerGroup.member.status.paused');
+    case 'cooling': {
+      // 不在今天恢复的(周上限等)带上日期，不让「约 16:00 恢复」看起来像今天就能用。
+      const time = status.coolingUntil ? formatQuotaResetAt(status.coolingUntil / 1000, nowMs, locale) : null;
+      return time
+        ? t('providerGroup.member.status.coolingUntil', { time })
+        : t('providerGroup.member.status.cooling');
+    }
+    case 'offline':
+      return t('providerGroup.member.status.offline');
+    case 'unavailable':
+    default:
+      return t(`providerGroup.member.status.unavailable.${status.reason ?? 'disconnected'}`);
+  }
 }

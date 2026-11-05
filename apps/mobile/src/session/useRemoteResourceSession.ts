@@ -57,7 +57,10 @@ export function useRemoteResourceSession(deviceId: string, deviceName: string, s
   const ready = !transcriptEntry && (!threadEntry || (required && verified === binding)) && (!required || (focused && AppState.currentState === 'active' && status === 'online' && verified === binding && metadataVerified));
   const markReadThrough = useCallback((at: number) => {
     if (!threadEntry && !transcriptEntry && current.current === binding && AppState.currentState === 'active' && ready && canMarkRead && resourceKind === 'bot' && resource && Number.isFinite(at) && at > 0) {
-      void markRemoteResourceRead(user?.id ?? '', deviceId, resourceId, Math.min(at, resource.display.lastReplyAt ?? 0));
+      // The synchronized, visible message is the read boundary. The independent
+      // resource lookup can predate it; capping at that snapshot leaves a reply
+      // unread even after the user has reached it in the chat.
+      void markRemoteResourceRead(user?.id ?? '', deviceId, resourceId, at);
     }
   }, [binding, canMarkRead, deviceId, ready, resource, resourceId, resourceKind, user?.id, transcriptEntry, threadEntry]);
   useFocusEffect(useCallback(() => {

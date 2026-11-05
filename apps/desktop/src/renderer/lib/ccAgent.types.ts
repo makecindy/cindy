@@ -17,7 +17,11 @@ import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 
 export type SessionStatus = 'active' | 'archived' | 'deleted';
 export type WorkspaceKind = 'project' | 'dialogue';
-export type DeviceLinkConnectionStatus = 'connected' | 'disconnected';
+/**
+ * 远端设备在本窗口侧栏里的连接态。`connecting` = 还没拿到权威快照(冷启动的缓存种入、
+ * relay 瞬时重连):画成「检测中」而不是离线,但写操作与 `disconnected` 一样被挡住。
+ */
+export type DeviceLinkConnectionStatus = 'connected' | 'connecting' | 'disconnected';
 
 /**
  * 当前 session 接的是哪个 agent。决定 message.agentMeta 的 JSON 形态。
@@ -90,6 +94,17 @@ export type StoredMessageOrigin =
   | (MessageSessionOrigin & { displayText?: string })
   | { kind: 'orca'; senderLabel?: string; displayText?: string; senderSessionId?: string };
 
+/** 新任务「让插件选」的结果记录(第一条消息下方的一行说明)。 */
+export interface PluginModelRouteNote {
+  pluginName: string;
+  outcome: 'routed' | 'kept';
+  /** routed：插件选的模型显示名与推理强度；kept：实际沿用的模型显示名。 */
+  modelName: string;
+  effort?: string;
+  reason?: string;
+  why?: 'no-opinion' | 'failed' | 'unavailable-route';
+}
+
 /**
  * Claude Code SDK 元信息——按消息类型不同填不同子集。
  *
@@ -101,6 +116,8 @@ export type StoredMessageOrigin =
  * 只接受 SDK 自己分配的 uuid，所以这是 fork 的唯一主键。
  */
 export interface CcMeta {
+  /** 新任务「让插件选」的结果(宿主写入，非模型回复)。 */
+  pluginModelRoute?: PluginModelRouteNote;
   /** Model boundary recorded by the host when the next input is dispatched. */
   modelChange?: { fromModel: string; toModel: string; modelOnly: true };
   /** Host-authored official MCP App snapshot; not an assistant prose reply. */
@@ -110,6 +127,8 @@ export interface CcMeta {
   assistantPhase?: string;
   /** Native text item identity, used to reconcile streamed and imported history. */
   agentMessageId?: string;
+  /** Codex item text is durable but its sampling request has not yet been accepted. */
+  samplingAttemptPending?: false | { runtimeId: string };
   /** Exact native sampling attempt that failed before response completion. Original text is retained. */
   failedSamplingAttempt?: { threadId: string; turnId: string; attempt: number; itemId: string; error?: string };
   uuid?: string;

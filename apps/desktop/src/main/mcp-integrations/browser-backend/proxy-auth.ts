@@ -49,6 +49,24 @@ const NETWORK_CAPABLE_TARGET_TYPES = new Set([
   'worklet',
 ]);
 
+/**
+ * Child targets whose failed setup is contained to that target. Chromium does
+ * not expose every domain on workers (e.g. Fetch / Target can answer "method
+ * not found"), and a background worker failing to prepare must not take the
+ * whole managed browser down. Pages and frames stay whole-browser fail-closed.
+ */
+const WORKER_TARGET_TYPES = new Set([
+  'service_worker',
+  'shared_worker',
+  'worker',
+  'shared_storage_worklet',
+  'worklet',
+]);
+
+function isWorkerTargetType(type: unknown): boolean {
+  return typeof type === 'string' && WORKER_TARGET_TYPES.has(type);
+}
+
 function isNetworkCapableTargetType(type: unknown): boolean {
   return typeof type === 'string' && NETWORK_CAPABLE_TARGET_TYPES.has(type);
 }
@@ -570,6 +588,7 @@ export class BrowserProxyAuthCoordinator {
   private readonly authAttempts = new Map<string, number>();
   private readonly sessions = new Set<string>();
   private readonly targetSetups = new Map<string, Promise<void>>();
+  private readonly workerClosures = new Map<string, Promise<void>>();
   private readonly sessionTargets = new Map<string, string>();
   private readonly eventTasks = new Set<Promise<void>>();
   private closing = false;
@@ -659,7 +678,15 @@ export class BrowserProxyAuthCoordinator {
     };
     for (const target of targets.targetInfos ?? []) {
       if (target.targetId && isNetworkCapableTargetType(target.type)) {
-        await this.attach(target.targetId);
+        try {
+          await this.attach(target.targetId);
+        } catch (error) {
+          // Same containment as the live attach path: a worker that cannot be
+          // gated is closed alone; startup only fails if that also fails.
+          if (!isWorkerTargetType(target.type)) throw error;
+          this.logger.warn('browser proxy authentication could not prepare a new browser target');
+          await this.closeWorkerTarget(target.targetId);
+        }
       }
     }
     // CDP messages are ordered on the browser WebSocket. A final command acts
@@ -692,8 +719,38 @@ export class BrowserProxyAuthCoordinator {
     this.sessions.clear();
     this.authAttempts.clear();
     this.targetSetups.clear();
+    this.workerClosures.clear();
     this.sessionTargets.clear();
     this.eventTasks.clear();
+  }
+
+  /**
+   * Closes a worker that could not be gated. Concurrent callers (the live
+   * attach event and the startup discovery loop can observe the same failing
+   * setup) share one in-flight close; the record is dropped once it settles so
+   * short-lived workers cannot grow the map without bound. A close that fails
+   * because the worker already exited ("No target with given id") is a success:
+   * after a failure we recheck Target.getTargets and only rethrow when the
+   * target is still alive, so whole-browser teardown stays reserved for a
+   * worker that really cannot be contained.
+   */
+  private closeWorkerTarget(targetId: string): Promise<void> {
+    const inFlight = this.workerClosures.get(targetId);
+    if (inFlight) return inFlight;
+    const closing = (async () => {
+      try {
+        await this.command('Target.closeTarget', { targetId });
+      } catch (error) {
+        const targets = await this.command('Target.getTargets') as {
+          targetInfos?: Array<{ targetId?: string }>;
+        };
+        if ((targets.targetInfos ?? []).some((info) => info.targetId === targetId)) throw error;
+      }
+    })().finally(() => {
+      if (this.workerClosures.get(targetId) === closing) this.workerClosures.delete(targetId);
+    });
+    this.workerClosures.set(targetId, closing);
+    return closing;
   }
 
   private async attach(targetId: string): Promise<void> {
@@ -812,6 +869,17 @@ export class BrowserProxyAuthCoordinator {
           }
         } catch {
           this.logger.warn('browser proxy authentication could not prepare a new browser target');
+          // A worker that cannot be gated is closed on its own: it never runs
+          // ungated, and the page that owns it keeps working. Only when that
+          // containment fails (or for pages/frames) is the browser torn down.
+          if (isWorkerTargetType(targetInfo?.type) && targetInfo?.targetId) {
+            try {
+              await this.closeWorkerTarget(targetInfo.targetId);
+              return;
+            } catch {
+              // fall through to whole-browser fail-closed
+            }
+          }
           // Through the shared task, not failClosed() directly. During startup
           // this is awaited by start(); afterwards it runs as a loose event
           // task, so a teardown begun here must be visible to dispose() —

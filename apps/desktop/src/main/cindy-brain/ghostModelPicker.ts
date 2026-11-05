@@ -9,8 +9,25 @@ import {
   isPluginModelPickerRoute,
   type PluginModelPickerRequest,
   type PluginModelPickerResult,
+  type PluginModelPickerRoute,
 } from '../../shared/pluginModelPicker.js';
-import type { PluginTaskRoute } from '../../shared/pluginTasks.js';
+import { GHOST_REMOTE_AGENT_MODELS } from './ghostAgentModels.js';
+
+/** Read the exact execution location; an unavailable remote source never borrows local models. */
+export async function readPluginModelRouteCatalog(
+  route: { agentDeviceId?: string },
+  sources: {
+    local(): Promise<ProviderView[]>;
+    remote?: ((agentDeviceId: string) => Promise<ProviderView[]>) | null;
+    localAgents(): readonly string[];
+  },
+): Promise<{ views: ProviderView[]; agents: readonly string[] }> {
+  if (route.agentDeviceId) {
+    const views = await sources.remote?.(route.agentDeviceId) ?? [];
+    return { views, agents: GHOST_REMOTE_AGENT_MODELS };
+  }
+  return { views: await sources.local(), agents: sources.localAgents() };
+}
 
 // The host supplies a live reader without making the plugin module load Maker.
 // Read on confirmation, so an account reset or disabled engine is reflected.
@@ -22,8 +39,52 @@ export function getPluginModelPickerAgents(): readonly string[] {
   return agentProvider();
 }
 
+/**
+ * 选择器只发给用户看得见的应用窗口:优先当前聚焦的那个。预热的隐藏窗口也是应用窗口,
+ * 发给它们时选择器看不见,插件只能等到超时(表现为「点了没反应」)。
+ */
+export function chooseModelPickerWindow<W>(
+  focused: W | null,
+  all: readonly W[],
+  usable: (win: W) => boolean,
+): W | undefined {
+  return focused && usable(focused) ? focused : all.find(usable);
+}
+
+type AgentBinaryStatus = (agent: string) => Promise<{ binaryReady?: boolean } | null | undefined>;
+export type RemotePluginRouteAgentStatus = (agentDeviceId: string, agent: string) => ReturnType<AgentBinaryStatus>;
+let agentBinaryStatus: AgentBinaryStatus = async () => null;
+
+export function setPluginRouteAgentStatusProvider(provider: AgentBinaryStatus): void {
+  agentBinaryStatus = provider;
+}
+
+/**
+ * A plugin may route to another Harness. If that Harness is not installed the send gate would stop the
+ * message with a dialog, so the route must fall back instead. Only a definite "missing" counts: when the
+ * check itself fails, the send gate still has the final say. Local Claude Code ships with the app;
+ * a remote route must query its own execution source and never use the plugin computer's status.
+ */
+export async function isPluginRouteHarnessInstalled(
+  agent: string,
+  agentDeviceId?: string,
+  readRemoteStatus?: RemotePluginRouteAgentStatus | null,
+): Promise<boolean> {
+  if (!agentDeviceId && agent === 'claude-code') return true;
+  try {
+    const status = agentDeviceId
+      ? await readRemoteStatus?.(agentDeviceId, agent)
+      : await agentBinaryStatus(agent);
+    return status?.binaryReady !== false;
+  } catch {
+    return true;
+  }
+}
+
 export interface PluginModelPickerTarget {
   id: string | number;
+  /** Captured from this controller's page-open declaration; absent means a legacy picker. */
+  supportsRemoteRoutes?: boolean;
   isCurrent?(): boolean;
   send(request: PluginModelPickerRequest, cancel: () => void): boolean;
   dismiss(requestId: string): void;
@@ -31,7 +92,7 @@ export interface PluginModelPickerTarget {
 
 /** Recheck the exact route without discovery, credential claims or inference. */
 export function isPluginModelPickerRouteAvailable(
-  route: PluginTaskRoute,
+  route: PluginModelPickerRoute,
   views: ProviderView[],
   agents: readonly string[],
 ): boolean {
@@ -51,6 +112,28 @@ export function isPluginModelPickerRouteAvailable(
   );
 }
 
+/**
+ * 卡内模型下拉框选中的模型当前是否可用:本机的按本机目录;带运行位置(另一台电脑或分享来的供应商)的,
+ * 那个位置必须是现在可选的,模型也必须在那里允许远程调用的目录里。执行时那台电脑还会再校验一次。
+ */
+export async function isGhostCardModelRouteAvailable(
+  route: PluginModelPickerRoute,
+  sources: {
+    localViews(): Promise<ProviderView[]>;
+    localAgents(): readonly string[];
+    locations?: (() => Promise<{ locations: readonly { agentDeviceId: string }[] }>) | null;
+    remoteViews?: ((agentDeviceId: string) => Promise<ProviderView[]>) | null;
+  },
+): Promise<boolean> {
+  const { agentDeviceId, ...base } = route;
+  if (!agentDeviceId) return isPluginModelPickerRouteAvailable(base, await sources.localViews(), sources.localAgents());
+  if (!sources.locations || !sources.remoteViews) return false;
+  const { locations } = await sources.locations();
+  if (!locations.some((location) => location.agentDeviceId === agentDeviceId)) return false;
+  // 远程位置上的引擎是否就绪由那里的目录决定,这里不按本机安装情况过滤。
+  return isPluginModelPickerRouteAvailable(base, await sources.remoteViews(agentDeviceId), GHOST_REMOTE_AGENT_MODELS);
+}
+
 interface Pending {
   request: PluginModelPickerRequest;
   target: PluginModelPickerTarget;
@@ -68,7 +151,7 @@ export class GhostModelPicker {
       getGhost(id: string): InstalledGhost | null;
       installation(id: string): string | null;
       target(ghostId: string, mobilePageId?: string): PluginModelPickerTarget | null;
-      available(route: PluginTaskRoute): Promise<boolean>;
+      available(route: PluginModelPickerRoute): Promise<boolean>;
       timeoutMs?: number;
       now?(): number;
     },
@@ -98,8 +181,10 @@ export class GhostModelPicker {
       return fail('INVALID_REQUEST', 'Invalid model picker options');
     const options = raw as Record<string, unknown>;
     if (
-      Object.keys(options).some((k) => !['type', 'initial', 'mobilePageId'].includes(k)) ||
+      Object.keys(options).some((k) => !['type', 'initial', 'mobilePageId', 'allowRemote'].includes(k)) ||
+      (options.allowRemote !== undefined && typeof options.allowRemote !== 'boolean') ||
       (options.initial !== undefined && !isPluginModelPickerRoute(options.initial)) ||
+      (!!(options.initial as PluginModelPickerRoute | undefined)?.agentDeviceId && options.allowRemote !== true) ||
       (options.mobilePageId !== undefined &&
         (typeof options.mobilePageId !== 'string' ||
           !options.mobilePageId ||
@@ -119,12 +204,17 @@ export class GhostModelPicker {
       target = null;
     }
     if (!target) return fail('UNAVAILABLE', 'No active Host page is available');
+    // A legacy controller reconstructs a source-less answer from initial. A local namesake
+    // would then pass availability, so do not deliver the remote initial to that controller.
+    if ((options.initial as PluginModelPickerRoute | undefined)?.agentDeviceId && target.supportsRemoteRoutes !== true)
+      return fail('UNAVAILABLE', 'Update Cindy on the controller to edit a remote model selection');
     const requestCurrent = () => current() && (target.isCurrent?.() ?? true);
     const request: PluginModelPickerRequest = {
       requestId: randomUUID(),
       ghostId,
       ghostName: ghost.manifest.name,
-      ...(options.initial ? { initial: { ...(options.initial as PluginTaskRoute) } } : {}),
+      ...(options.allowRemote === true ? { allowRemote: true } : {}),
+      ...(options.initial ? { initial: { ...(options.initial as PluginModelPickerRoute) } } : {}),
       expiresAt: now + (this.deps.timeoutMs ?? 90_000),
     };
     return new Promise((resolve) => {
@@ -179,6 +269,7 @@ export class GhostModelPicker {
       return { handled: true, accepted: true };
     }
     if (!isPluginModelPickerRoute(route)) return { handled: true, accepted: false };
+    if (route.agentDeviceId && !pending.request.allowRemote) return { handled: true, accepted: false };
     const selection = { ...route };
     let available = false;
     try {

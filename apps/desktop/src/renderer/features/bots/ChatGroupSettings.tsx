@@ -25,6 +25,7 @@ import type { BotGroupMemberView, BotGroupSummary, ChatGroupAction } from '../..
 import { GroupMaskAvatar, useOpenGroupMask } from './GroupMaskControls';
 import { useGroupMask } from './groupMaskPresentation';
 import { ChatBotAccessField } from './ChatBotAccessField';
+import { ChatGroupNotificationSettings } from './ChatGroupNotificationSettings';
 import { ChatGroupInviteMenu } from './ChatGroupInviteMenu';
 import { ACCESS_LABELS, ChatGroupMembersTab, type MemberActions } from './ChatGroupMembersTab';
 import { SETTINGS_HINT, SettingsCard, SettingsNotice, SettingsRow, SettingsRowIcon, SettingsSection } from './ChatGroupSettingsRows';
@@ -248,6 +249,11 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
             trailing={<Select label={t(shared('replyMode'))} value={replyMode} disabled={busy} className="h-8 max-w-[220px]"
               options={(['mentioned', 'all'] as const).map(value => ({ value, label: t(REPLY_MODE_LABELS[value]) }))}
               onValueChange={value => void saveRules({ replyMode: value as typeof replyMode })} />} />
+          {group.supportsMentionAudiences && owner && <SettingsRow wrap title={t(shared('allowMentionAllBots'))} hint={t(shared('allowMentionAllBotsHint'))}
+            trailing={<Switch aria-label={t(shared('allowMentionAllBots'))} checked={group.allowMentionAllBots === true}
+              disabled={busy || group.revision === undefined} onCheckedChange={allowMentionAllBots => {
+                if (group.revision !== undefined) void mutate({ type: 'update', name: group.name, topic: group.topic ?? '', description: group.description ?? '', expectedRevision: group.revision, allowMentionAllBots });
+              }} />} />}
           {/* Single-speaker servers always answer one teammate at a time, so there is no speaking mode. */}
           {!group.singleSpeaker && <SettingsRow wrap title={t(shared('speakingMode'))}
             hint={t(shared(speakingMode === 'auto' ? 'speakingModeAutoNote' : 'speakingModeSequentialNote'))}
@@ -360,6 +366,8 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
                     : <SettingsRowIcon><Reply size={16} aria-hidden /></SettingsRowIcon>}
                   title={t('bots.groupChat.mask.title')} hint={t(key('maskHint'))} value={t(`bots.groupChat.mask.status.${mask.status}`)} chevron
                   onClick={() => { if (scroller.current) homeScroll.current = scroller.current.scrollTop; openMask(); }} />}
+                {group.supportsNotificationSettings && group.notificationMode && <ChatGroupNotificationSettings key={group.id}
+                  groupId={group.id} mode={group.notificationMode} disabled={busy || !!group.archived} />}
               </SettingsCard>
             </SettingsSection>}
             {!dissolved && !group.archived && ownBots.length > 0 && <SettingsSection title={t(key('myTeammates'))} caption={t(key('myTeammatesCaption'))}>

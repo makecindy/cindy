@@ -308,15 +308,15 @@ describe('MessageRenderer bounded long-message native behavior', () => {
   });
 
   it.each([
-    { codeCopyEnabled: true, text: 'const answer = 42;', hasCopy: true, padding: 0 },
-    { codeCopyEnabled: false, text: 'const answer = 42;', hasCopy: false, padding: null },
-    { codeCopyEnabled: true, text: '', hasCopy: false, padding: null },
-  ])('reserves copy-button space only for codeCopyEnabled=$codeCopyEnabled with text=$text', ({ codeCopyEnabled, text, hasCopy, padding }) => {
+    { codeCopyEnabled: true, text: 'const answer = 42;', hasCopy: true },
+    { codeCopyEnabled: false, text: 'const answer = 42;', hasCopy: false },
+    { codeCopyEnabled: true, text: '', hasCopy: false },
+  ])('keeps code at the top for codeCopyEnabled=$codeCopyEnabled with text=$text', ({ codeCopyEnabled, text, hasCopy }) => {
     const layout = buildMessageContentLayout({ screenWidth: 402 });
     act(() => root.render(React.createElement(MarkdownHarness, { text, code: true, codeCopyEnabled, layout })));
     const content = host.querySelector('code')!.parentElement!;
     const style = JSON.parse(content.getAttribute('data-style')!);
-    expect(style.at(-1).paddingTop).toBe(padding ?? layout.codePaddingVertical);
+    expect(style.find((entry: any) => entry?.paddingTop !== undefined).paddingTop).toBe(layout.codePaddingVertical);
     expect(host.querySelector('[data-testid="code-copy-stub"]') !== null).toBe(hasCopy);
   });
 });

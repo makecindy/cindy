@@ -1082,8 +1082,8 @@ describe('subscription value and usage details', () => {
       models: ['claude-opus-4-8', 'claude-haiku-4-5'],
     });
     expect(details?.perModelCost).toEqual([
-      { model: 'claude-opus-4-8', money: usdMoney(0.94) },
-      { model: 'claude-haiku-4-5', money: usdMoney(0.8) },
+      { model: 'claude-opus-4-8', money: usdMoney(0.94), billingSource: 'subscription' },
+      { model: 'claude-haiku-4-5', money: usdMoney(0.8), billingSource: 'subscription' },
     ]);
   });
 

@@ -16,6 +16,7 @@ import {
   AGENT_ISLAND_COMPLETION_DWELL_MS,
   AGENT_ISLAND_COMPLETION_REVEAL_DWELL_MS,
   AGENT_ISLAND_MESSAGE_PREVIEW_MIN_DWELL_MS,
+  AGENT_ISLAND_COMPLETED_RETENTION_MS,
   AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS,
   buildAgentIslandDisplayState,
   buildAgentIslandTaskOverview,
@@ -40,6 +41,145 @@ import {
   setAgentIslandVisibleSession,
   type AgentIslandCompanionChatProjection,
 } from '../state.js';
+
+// Unit: the user requested compact reminders with unchanged manual list access.
+// Existing tests only cover automatic cards. One terminal event / interaction is
+// enough to expose an unintended expansion, missing unread entry, or endless pulse.
+describe('subtle island reminders', () => {
+  it.each(['completed', 'error', 'needs-interaction'] as const)('keeps %s compact, then opens the full list on click', (phase) => {
+    const state = createAgentIslandState();
+    state.subtleReminders = true;
+    applyAgentIslandEvent(state, { sessionId: 'running' }, statusEvent(true, 'Working'), 900);
+    const meta = { sessionId: 'new' };
+    if (phase === 'needs-interaction') {
+      applyAgentIslandInteractionRequest(state, meta, permissionRequest('p'), 1_000);
+    } else {
+      applyAgentIslandEvent(state, meta, phase === 'completed' ? doneEvent() : terminalErrorEvent('Failed'), 1_000);
+    }
+    const compact = buildAgentIslandDisplayState(state, 1_100);
+    expect(compact).toMatchObject({ mode: 'compact', displaySurface: 'collapsed', compactReminder: { phase, until: 4_000 } });
+    expect(compact.pillSnapshot.attentionCount).toBe(1);
+
+    requestAgentIslandManualExpand(state, 7);
+    const expanded = buildAgentIslandDisplayState(state, 1_200);
+    expect(expanded).toMatchObject({ mode: 'expanded', displaySurface: 'sessionList', expandedDisplayId: 7 });
+    expect(expanded.sessions.map(session => session.sessionId).sort()).toEqual(['new', 'running']);
+    expect(expanded.compactReminder).toBeUndefined();
+    requestAgentIslandManualCollapse(state, 2_500);
+
+    const settled = buildAgentIslandDisplayState(state, 4_100);
+    expect(settled.mode).toBe('compact');
+    expect(settled.compactReminder).toBeUndefined();
+    expect(settled.pillSnapshot.attentionCount).toBe(1);
+
+  });
+
+  it('continues showing new completion hints while another task awaits input', () => {
+    const state = createAgentIslandState();
+    state.subtleReminders = true;
+    applyAgentIslandInteractionRequest(state, { sessionId: 'waiting' }, permissionRequest('p'), 1_000);
+    applyAgentIslandEvent(state, { sessionId: 'one' }, doneEvent(), 5_000);
+    applyAgentIslandEvent(state, { sessionId: 'two' }, doneEvent(), 5_100);
+    expect(buildAgentIslandDisplayState(state, 5_200).compactReminder?.phase).toBe('completed');
+    const next = buildAgentIslandDisplayState(state, 8_100);
+    expect(next).toMatchObject({ mode: 'compact', compactReminder: { phase: 'completed', until: 11_100 } });
+    expect(next.pillSnapshot.attentionCount).toBe(3);
+  });
+
+  // Review #8848: the old waiting-first list order consumed a newer completion's
+  // reminder interval. The previous case starts only after the waiting hint expires.
+  // Unit regression through real events/display output, including equal-clock events.
+  it.each([
+    { phase: 'completed', delay: 100 },
+    { phase: 'completed', delay: 0 },
+    { phase: 'error', delay: 100 },
+    { phase: 'error', delay: 0 },
+  ] as const)('shows the overlapping $phase reminder immediately (delay=$delay)', ({ phase, delay }) => {
+    const state = createAgentIslandState();
+    state.subtleReminders = true;
+    applyAgentIslandInteractionRequest(state, { sessionId: 'waiting' }, permissionRequest('p'), 1_000);
+    expect(buildAgentIslandDisplayState(state, 1_000).compactReminder?.phase).toBe('needs-interaction');
+
+    const eventAt = 1_000 + delay;
+    const until = eventAt + 3_000;
+    applyAgentIslandEvent(state, { sessionId: 'new' }, phase === 'completed' ? doneEvent() : terminalErrorEvent('Failed'), eventAt);
+    for (const now of [eventAt, 3_999, until - 1]) {
+      expect(buildAgentIslandDisplayState(state, now)).toMatchObject({
+        mode: 'compact', displaySurface: 'collapsed', compactReminder: { phase, until },
+      });
+    }
+    const settled = buildAgentIslandDisplayState(state, until);
+    expect(settled.compactReminder).toBeUndefined();
+    expect(settled.pillSnapshot.attentionCount).toBe(2);
+  });
+
+  it('lets a newer interaction hint replace an older completion hint', () => {
+    const state = createAgentIslandState();
+    state.subtleReminders = true;
+    applyAgentIslandEvent(state, { sessionId: 'done' }, doneEvent(), 1_000);
+    expect(buildAgentIslandDisplayState(state, 1_000).compactReminder?.phase).toBe('completed');
+    applyAgentIslandInteractionRequest(state, { sessionId: 'waiting' }, permissionRequest('p'), 1_100);
+    expect(buildAgentIslandDisplayState(state, 1_100).compactReminder).toEqual({ phase: 'needs-interaction', until: 4_100 });
+    expect(buildAgentIslandDisplayState(state, 4_099).compactReminder?.phase).toBe('needs-interaction');
+    expect(buildAgentIslandDisplayState(state, 4_100).compactReminder).toBeUndefined();
+  });
+
+  it('does not let an older card duration win after enabling subtle reminders', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandInteractionRequest(state, { sessionId: 'waiting' }, permissionRequest('p'), 1_000);
+    state.subtleReminders = true;
+    applyAgentIslandEvent(state, { sessionId: 'done' }, doneEvent(), 1_100);
+    expect(buildAgentIslandDisplayState(state, 1_100).compactReminder).toEqual({ phase: 'completed', until: 4_100 });
+    expect(buildAgentIslandDisplayState(state, 4_099).compactReminder?.phase).toBe('completed');
+  });
+
+  it('gives a newly promoted hint its compact interval after the mode changes', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'first' }, doneEvent(), 1_000);
+    applyAgentIslandEvent(state, { sessionId: 'queued' }, doneEvent(), 1_050);
+    applyAgentIslandInteractionRequest(state, { sessionId: 'waiting' }, permissionRequest('p'), 1_100);
+    state.subtleReminders = true;
+    expect(buildAgentIslandDisplayState(state, 1_100).compactReminder?.phase).toBe('needs-interaction');
+    expect(buildAgentIslandDisplayState(state, 4_100).compactReminder).toEqual({ phase: 'completed', until: 7_100 });
+    expect(buildAgentIslandDisplayState(state, 7_099).compactReminder?.phase).toBe('completed');
+    expect(buildAgentIslandDisplayState(state, 7_100).compactReminder).toBeUndefined();
+  });
+
+  // Review #8848: card-hover suppression must not block the collapsed island's
+  // deliberate hover. Existing subtle-reminder cases only exercise clicking.
+  it.each([
+    { phase: 'needs-interaction', hoverAt: 4_100 },
+    { phase: 'completed', hoverAt: 1_100 },
+  ] as const)('opens the list on hover for $phase in subtle mode', ({ phase, hoverAt }) => {
+    const state = createAgentIslandState();
+    state.subtleReminders = true;
+    if (phase === 'needs-interaction') {
+      applyAgentIslandInteractionRequest(state, { sessionId: 'task' }, permissionRequest('p'), 1_000);
+    } else {
+      applyAgentIslandEvent(state, { sessionId: 'task' }, doneEvent(), 1_000);
+    }
+
+    setAgentIslandHovered(state, true, hoverAt);
+    expect(buildAgentIslandDisplayState(state, hoverAt + 400).mode).toBe('compact');
+    const expanded = buildAgentIslandDisplayState(state, hoverAt + 510);
+    expect(expanded).toMatchObject({ mode: 'expanded', displaySurface: 'sessionList' });
+    expect(expanded.sessions.map(session => session.sessionId)).toEqual(['task']);
+    expect(expanded.compactReminder).toBeUndefined();
+  });
+
+  it.each(['visible', 'muted'] as const)('does not pulse for a %s task', (suppression) => {
+    const state = createAgentIslandState();
+    state.subtleReminders = true;
+    if (suppression === 'visible') {
+      setAgentIslandAppFocused(state, true, 900);
+      setAgentIslandVisibleSession(state, 'task', 900);
+    } else {
+      setAgentIslandSessionDisplaySuppressed(state, 'task', true);
+    }
+    applyAgentIslandEvent(state, { sessionId: 'task' }, doneEvent(), 1_000);
+    expect(buildAgentIslandDisplayState(state, 1_100).compactReminder).toBeUndefined();
+  });
+});
 
 // Unit regression: the menu re-sorted the island overview on every output event.
 // Existing island ordering tests did not exercise the menu adapter. Two running
@@ -2983,14 +3123,14 @@ describe('Agent Island error read semantics (已读以 App 内真实展示为准
   });
 });
 
-describe('Agent Island 未读驻留 TTL(避免几小时前完成的任务无限期霸占展开列表)', () => {
+describe('Agent Island 终态驻留 TTL(完成最多保留一天,报错沿用短 TTL)', () => {
   it('preserves silent completion policy in the unread ledger after expiry and clears it on the next turn', () => {
     const state = createAgentIslandState();
     const meta = { sessionId: 'silent', title: 'Schedule' };
     applyAgentIslandEvent(state, meta, doneEvent(), 2_000);
     applyAgentIslandUserPrompt(state, meta, 'Scheduled check', 3_000);
     applyAgentIslandEvent(state, meta, doneEvent(), 4_000, { suppressCompletionAttention: true, preserveCompletionAttention: true });
-    const afterExpiryAt = 4_000 + AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 1_000;
+    const afterExpiryAt = 4_000 + AGENT_ISLAND_COMPLETED_RETENTION_MS + 1_000;
     buildAgentIslandDisplayState(state, afterExpiryAt);
     expect(state.sessions.has('silent')).toBe(false);
     expect(buildAllSessionActivitySnapshots(state)).toEqual([
@@ -3003,24 +3143,36 @@ describe('Agent Island 未读驻留 TTL(避免几小时前完成的任务无限�
     expect(buildAllSessionActivitySnapshots(state)[0].completionNotification).toBeUndefined();
   });
 
-  it('unread completed 条目在 TTL 内仍然可见', () => {
+  it('unread completed 条目在一天内仍然可见', () => {
     const state = createAgentIslandState();
     applyAgentIslandEvent(state, { sessionId: 'done', title: 'Schedule' }, doneEvent(), 2_000);
 
-    // TTL 边界前 1 秒:仍然算未读驻留期,条目在列表里。
-    const beforeExpiry = buildAgentIslandDisplayState(state, 2_000 + AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS - 1_000);
+    // 保留期边界前 1 秒:仍然算未读驻留期,条目在列表里。
+    const beforeExpiry = buildAgentIslandDisplayState(state, 2_000 + AGENT_ISLAND_COMPLETED_RETENTION_MS - 1_000);
     expect(beforeExpiry.totalCount).toBe(1);
     expect(beforeExpiry.sessions[0]).toMatchObject({ sessionId: 'done', phase: 'completed' });
-    // dwell / reveal 走完后,下一次 publish 必须排到岛面 TTL,否则 4h 到点不会自己隐藏。
+    // dwell / reveal 走完后,下一次 publish 必须排到完成保留期,否则一天到点不会自己隐藏。
     const afterDwell = 2_000 + AGENT_ISLAND_COMPLETION_REVEAL_DWELL_MS + 1;
-    expect(getNextAgentIslandTimerAt(state, afterDwell)).toBe(2_000 + AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS);
+    expect(getNextAgentIslandTimerAt(state, afterDwell)).toBe(2_000 + AGENT_ISLAND_COMPLETED_RETENTION_MS);
   });
 
-  it('unread completed 超过 TTL 后离开岛面,独立账本仍在,远程快照继续带 attention', () => {
+  it('已读完成条目也会排到一天后的截止刷新,不会靠后续事件才消失', () => {
+    const state = createAgentIslandState();
+    setAgentIslandVisibleSession(state, 'done', 1_900);
+    setAgentIslandAppFocused(state, true, 1_950);
+    applyAgentIslandEvent(state, { sessionId: 'done', title: 'Schedule' }, doneEvent(), 2_000);
+
+    // 用户正看着该会话:完成不挂未读,只走短暂 dwell。dwell 结束后仍必须有一个
+    // 一天后的定时器,否则停在岛内的已读卡片可能一直留着。
+    const afterDwell = 2_000 + AGENT_ISLAND_COMPLETION_DWELL_MS + 1;
+    expect(getNextAgentIslandTimerAt(state, afterDwell)).toBe(2_000 + AGENT_ISLAND_COMPLETED_RETENTION_MS);
+  });
+
+  it('unread completed 超过一天后离开岛面,独立账本仍在,远程快照继续带 attention', () => {
     const state = createAgentIslandState();
     applyAgentIslandEvent(state, { sessionId: 'done', title: 'Schedule' }, doneEvent(), 2_000);
 
-    const afterExpiryAt = 2_000 + AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 1_000;
+    const afterExpiryAt = 2_000 + AGENT_ISLAND_COMPLETED_RETENTION_MS + 1_000;
     const afterExpiry = buildAgentIslandDisplayState(state, afterExpiryAt);
     expect(afterExpiry.totalCount).toBe(0);
     expect(state.sessions.has('done')).toBe(false);
@@ -3029,6 +3181,21 @@ describe('Agent Island 未读驻留 TTL(避免几小时前完成的任务无限�
     ]);
     expect(acknowledgeAgentIslandSessionRead(state, 'done', afterExpiryAt, { source: 'passive' })).toBe('cleared');
     expect(buildAllSessionActivitySnapshots(state)).toEqual([]);
+  });
+
+  it('完成后的迟到活动事件不会把保留期往后顺延', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'done', title: 'Schedule' }, doneEvent(), 2_000);
+    applyAgentIslandEvent(
+      state,
+      { sessionId: 'done', title: 'Schedule' },
+      { type: 'text', source: 'codex', data: { text: 'late tail' } } as AgentEvent,
+      2_000 + 60 * 60 * 1_000,
+    );
+
+    const afterExpiryAt = 2_000 + AGENT_ISLAND_COMPLETED_RETENTION_MS + 1_000;
+    expect(buildAgentIslandDisplayState(state, afterExpiryAt).totalCount).toBe(0);
+    expect(state.sessions.has('done')).toBe(false);
   });
 
   it('unread error 超过 TTL 后也离开岛面,账本仍在且 passive 仍免疫', () => {
@@ -3048,8 +3215,8 @@ describe('Agent Island 未读驻留 TTL(避免几小时前完成的任务无限�
     const state = createAgentIslandState();
     applyAgentIslandEvent(state, { sessionId: 'done', title: 'Schedule' }, doneEvent(), 2_000);
 
-    // 模拟 TTL 后用户悬停打开灵动岛展开列表
-    const afterExpiry = 2_000 + AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 5_000;
+    // 模拟完成保留期后用户悬停打开灵动岛展开列表
+    const afterExpiry = 2_000 + AGENT_ISLAND_COMPLETED_RETENTION_MS + 5_000;
     setAgentIslandHovered(state, true, afterExpiry);
 
     // preserveExpiredTransient=true 时也不应把 TTL 过期的 unread 条目捞回岛面
@@ -3079,7 +3246,7 @@ describe('Agent Island 未读驻留 TTL(避免几小时前完成的任务无限�
   it('TTL prune 后再 process-close 不得清掉独立未读账本', () => {
     const state = createAgentIslandState();
     applyAgentIslandEvent(state, { sessionId: 'done', title: 'Schedule' }, doneEvent(), 2_000);
-    const afterExpiryAt = 2_000 + AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 1_000;
+    const afterExpiryAt = 2_000 + AGENT_ISLAND_COMPLETED_RETENTION_MS + 1_000;
     buildAgentIslandDisplayState(state, afterExpiryAt);
     expect(state.sessions.has('done')).toBe(false);
 

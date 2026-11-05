@@ -23,6 +23,20 @@ export function historyViewEndMs<T extends HistoryMessageSource>(snapshot: Pick<
 
 const EMPTY = new Set<string>();
 
+function bodyText(content: unknown): string | null {
+  if (typeof content === 'string') return content;
+  const text = content && typeof content === 'object' ? (content as { text?: unknown }).text : undefined;
+  return typeof text === 'string' ? text : null;
+}
+
+/** True when a saved body is a strictly shorter start of the live body. */
+function savedBodyIsPrefixOf(saved: unknown, live: unknown): boolean {
+  const savedText = bodyText(saved);
+  const liveText = bodyText(live);
+  return savedText !== null && liveText !== null
+    && savedText.length < liveText.length && liveText.startsWith(savedText);
+}
+
 /** View-local identities only; message bodies remain in the existing raw store.
  * A finalized live row stays visible until history takes over. Removing it from
  * the raw store (delete/rewind/clear) cancels the handoff rather than reviving it.
@@ -61,7 +75,14 @@ export class HistoryViewHandoff<T extends HistoryMessageSource> {
       if (row.role !== 'assistant') continue;
       if (supersededByEmptyRead(row)) this.pending.delete(row.clientId);
       else if (this.streaming(row)) this.pending.add(row.clientId);
-      else if (history.has(row.clientId) && !this.streaming(history.get(row.clientId)!)) this.pending.delete(row.clientId);
+      else {
+        const saved = history.get(row.clientId);
+        // The Host may save a reply before its final text drains and complete the
+        // same row later. A read between those writes is not a takeover.
+        if (saved && !this.streaming(saved) && !savedBodyIsPrefixOf(saved.content, row.content)) {
+          this.pending.delete(row.clientId);
+        }
+      }
     }
     const pending = new Set(this.pending);
     if (!snapshot.ready) return { messages: raw, pending, tail: EMPTY };

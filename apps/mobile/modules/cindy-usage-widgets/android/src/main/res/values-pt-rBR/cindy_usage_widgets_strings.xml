@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated from assets/usage-widgets/text.json (the picker reads these). -->
+<resources>
+  <string name="cindy_widget_quota_label">Cota das assinaturas</string>
+  <string name="cindy_widget_quota_description">Quanto resta em cada assinatura e quando ela renova.</string>
+  <string name="cindy_widget_usage_label">Uso diário</string>
+  <string name="cindy_widget_usage_description">O uso de hoje e a tendência dos últimos dias.</string>
+</resources>

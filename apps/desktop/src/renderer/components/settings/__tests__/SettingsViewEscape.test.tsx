@@ -21,6 +21,7 @@ vi.mock('@/lib/useCindyVersions', () => ({
 }));
 
 const { Stub } = vi.hoisted(() => ({ Stub: () => null }));
+vi.mock('@/cindy-brain/PluginUiControls', () => ({ PluginUiContributionControls: Stub }));
 vi.mock('../UserProfileCard', () => ({ UserProfileCard: Stub }));
 vi.mock('../VoiceInputSection', () => ({ VoiceInputSection: Stub }));
 vi.mock('../AppearanceSection', () => ({ AppearanceSection: Stub }));
@@ -57,7 +58,6 @@ vi.mock('../CollaborationSection', () => ({ CollaborationSection: Stub }));
 // this page-level test isolates section contents and exercises only Escape routing.
 vi.mock('../NewChatDefaultPermissionSection', () => ({ NewChatDefaultPermissionSection: Stub }));
 vi.mock('../BuiltinToolsSection', () => ({ BuiltinToolsSection: Stub }));
-vi.mock('../contacts/ContactsSection', () => ({ ContactsSection: Stub }));
 vi.mock('../ComputerUseSection', () => ({ ComputerUseSection: Stub }));
 vi.mock('../CindyMakeSection', () => ({ CindyMakeSection: Stub }));
 vi.mock('../SettingsCatalogPanel', () => ({ SettingsCatalogPanel: Stub }));

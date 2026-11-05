@@ -53,21 +53,22 @@ describe('消息流的头像挂载', () => {
     expect(helper).toContain('if (!avatar) return bubble;');
   });
 
-  it('只有 assistant 分支挂头像', () => {
+  it('回复和过程区挂头像，卡片保留占位', () => {
     expect(messageStream).toContain('return withAssistantAvatar(\n        assistantAvatar,');
-    // Assistant text shows the avatar; task and teammate-message cards plus the
-    // work fold reserve the same space invisibly. User messages bypass it.
-    expect(messageStream.match(/withAssistantAvatar\(/g)?.length).toBe(4);
+    // Assistant text and work folds show avatars; task and teammate-message
+    // cards and generated artifacts reserve the same space invisibly.
+    // User messages bypass it; fixture geometry covers pending/empty artifacts.
+    expect(messageStream.match(/withAssistantAvatar\(/g)?.length).toBe(5);
     expect(messageStream).toMatch(/simplifiedBotConversation\s*&&\s*\(message\.systemCardType === 'bot-session-task'\s*\|\|\s*message\.systemCardType === 'bot-session-task-result'\s*\|\|\s*message\.systemCardType === 'bot-session-task-message'\s*\|\|\s*message\.systemCardType === 'bot-direct-message'\)\s*\? withAssistantAvatar\(/);
     expect(messageStream).toMatch(/<span aria-hidden="true" className="invisible">\s*\{assistantAvatar\}\s*<\/span>/);
-    expect(messageStream).toContain('{replyColumnSpacer ? withAssistantAvatar(replyColumnSpacer, block) : block}');
+    expect(messageStream).toContain('{companionAvatar ? withAssistantAvatar(companionAvatar, block) : block}');
   });
 });
 
 describe('伙伴输入框只保留对话动作', () => {
   it('语音对话入口接入输入框，并传递可用与通话状态', () => {
     expect(sessionView).toContain('onStartVoiceConversation={voiceModeAvailable ? startVoiceMode : undefined}');
-    expect(sessionView).toContain('voiceConversationDisabled={voiceModeBlocked}');
+    expect(sessionView).toContain('voiceConversationDisabled={voiceModeBlocked || voiceCall.open}');
     expect(sessionView).toContain('voiceConversationActive={voiceModeOpen}');
     const voiceGate = sessionView.match(/const voiceModeBlocked = Boolean\([\s\S]*?\);/)?.[0];
     expect(voiceGate).toContain('pendingInputHandoff');
@@ -102,15 +103,15 @@ describe('伙伴设置包含独立能力选择入口', () => {
   });
 });
 
-describe('伙伴消息流与普通任务同一套工作过程', () => {
-  it('工作组按普通任务渲染，输入框上方只保留普通状态栏', () => {
+describe('伙伴消息流复用工作组件并保留独立过程分组', () => {
+  it('伙伴过程使用伙伴分组入口，输入框上方仍保留普通状态栏', () => {
     expect(sessionView).toContain('simplifiedBotConversation={Boolean(botChatIdentity)}');
-    expect(messageStream).toContain('simplifyBotRenderItems(grouped, isSessionStreaming, visibleGeneratedFileKeys)');
+    expect(messageStream).toContain('botProcessItems(grouped, isSessionStreaming)');
     // Text/tool grouping is covered by botConversationPresentation behavioral tests.
     expect(messageStream).toContain("from '@/features/bots/botConversationPresentation'");
     expect(messageStream).toContain('compact={false}');
     expect(messageStream).not.toContain('compact={simplifiedBotConversation}');
-    expect(messageStream).toContain('replyColumnSpacer={botReplyColumnSpacer}');
+    expect(messageStream).toContain('companionAvatar={simplifiedBotConversation ? assistantAvatar : undefined}');
     expect(messageStream).not.toContain('data-testid="bot-thinking-indicator"');
     expect(sessionView).not.toContain('<BotWorkingStatus');
     expect(sessionView).toContain('<RunningStatusBar');
@@ -133,7 +134,7 @@ describe('伙伴消息流与普通任务同一套工作过程', () => {
 
   it('伙伴消息操作栏常显，外显回复，并隐藏费用与 Fork', () => {
     expect(messageStream).toContain('simplifiedBotConversation={simplifiedBotConversation}');
-    expect(messageActionBar).toContain('const replyBtn = (replyAction || (simplifiedBotConversation && onAddToChat))');
+    expect(messageActionBar).toContain('const replyBtn = (inlineReplyAction || (simplifiedBotConversation && onAddToChat))');
     expect(messageActionBar).toContain('const forkBtn = !simplifiedBotConversation');
     expect(messageActionBar).toContain('simplifiedBotConversation ? null : costText || tokensText');
     expect(messageActionBar).toContain('simplifiedBotConversation || visible || menuOpen');
