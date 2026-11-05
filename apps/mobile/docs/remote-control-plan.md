@@ -1598,8 +1598,8 @@ V2 完成标准:
   临时文件正常关闭时删除，进程异常退出的残留在下次预览时回收。
 - 手机端只承诺应用内预览；切到系统浏览器会使 App 进入后台，不承诺外置浏览器可持续访问。
   不运行项目的后端、开发服务器或动态构建，也不自动访问快照目录外的资源。
-- 此功能新增原生模块，改变 iOS/Android runtime fingerprint，现有安装包需冷更；合并仍遵守
-  `docs/dev-rules/mobile-development.md` 的冷更确认门。服务端不需要新增接口。
+- 此功能新增原生模块，改变 iOS/Android runtime fingerprint，现有安装包需冷更；冷更说明见
+  `docs/dev-rules/mobile-development.md` 的冷更边界。服务端不需要新增接口。
 
 定向行为测试为 `htmlDirectorySnapshot.test.ts`、`mobileHtmlPreview.test.ts` 及既有预览/链接
 测试；macOS 可运行 `node apps/mobile/scripts/test-html-preview-native.mjs --on-demand` 验证生产 Swift
