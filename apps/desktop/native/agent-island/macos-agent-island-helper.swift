@@ -5138,6 +5138,7 @@ final class AgentIslandController {
   private var screenMetricsTimer: Timer?
   private var pendingScreenMetricsForceRefresh = false
   private var dragInteraction: PanelDragInteraction?
+  private var didApplyDragLayout = false
   private var pendingMoveInteraction: PanelDragInteraction?
   private var lastMoveTime: TimeInterval = 0
   private var lastLayoutEmitTime: TimeInterval = 0
@@ -5655,6 +5656,11 @@ final class AgentIslandController {
   }
 
   private func continueDrag(screenPoint: NSPoint, interaction: PanelDragInteraction) {
+    // The held-pointer poller also calls this without movement. A reminder can
+    // temporarily widen the island, but pressing its edge must not save that width.
+    guard didApplyDragLayout || screenPoint.x != interaction.startMouseX else {
+      return
+    }
     pushDragCursor(for: interaction)
     let nextFrame: NSRect
     let contentWidth: CGFloat
@@ -5704,6 +5710,7 @@ final class AgentIslandController {
       from: lastInteractiveSnapMode,
       to: nextSnapMode
     )
+    didApplyDragLayout = true
     applyInteractiveFrame(nextFrame, animatedSnap: shouldAnimateSnap)
     lastInteractiveSnapMode = nextSnapMode
     emitDragDebug(
@@ -5742,20 +5749,24 @@ final class AgentIslandController {
       screenPoint: screenPoint,
       force: true
     )
+    let shouldPersistLayout = didApplyDragLayout
     dragInteraction = nil
+    didApplyDragLayout = false
     model.layoutDragActive = false
     model.layoutDragMode = nil
     lastInteractiveSnapMode = .free
     popPushedCursor()
     eventSink(["type": "drag", "active": false])
-    emitLayoutPreference(
-      frame: panel.frame,
-      contentWidth: displayedContentWidth(),
-      force: true,
-      snapCenter: interaction.mode == .move
-    )
+    if shouldPersistLayout {
+      emitLayoutPreference(
+        frame: panel.frame,
+        contentWidth: displayedContentWidth(),
+        force: true,
+        snapCenter: interaction.mode == .move
+      )
+    }
     handleMouseMoved(screenPoint: screenPoint, force: true)
-    replayDeferredInteractionUpdateIfNeeded(preservingCurrentPanelFrame: true)
+    replayDeferredInteractionUpdateIfNeeded(preservingCurrentPanelFrame: shouldPersistLayout)
   }
 
   private func finishPendingMove(screenPoint: NSPoint) {
@@ -5796,6 +5807,7 @@ final class AgentIslandController {
   private func activateDragInteraction(_ interaction: PanelDragInteraction, screenPoint: NSPoint) {
     pendingMoveInteraction = nil
     dragInteraction = interaction
+    didApplyDragLayout = false
     model.layoutDragActive = true
     model.layoutDragMode = interaction.mode.eventName
     lastInteractiveSnapMode = compactWidthSnapMode(
@@ -7305,8 +7317,10 @@ final class AgentIslandAppDelegate: NSObject, NSApplicationDelegate {
   }
 }
 
+#if !AGENT_ISLAND_INTERACTION_TEST
 let app = NSApplication.shared
 let delegate = AgentIslandAppDelegate()
 app.delegate = delegate
 app.setActivationPolicy(.accessory)
 app.run()
+#endif
