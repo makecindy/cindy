@@ -491,6 +491,27 @@ describe('composer body drag (press anywhere on the card)', () => {
     expect(harness.result.contentHeight.value === 120).toBe(!claims);
   });
 
+  it('stays out of a grabber drag so the frame keeps following the finger', () => {
+    const harness = mountComposer({ ...composerInput(), bodyDragEnabled: true });
+    const grabber = gestureOf(harness.result.gesture);
+    const body = harness.result.bodyGesture as unknown as BodyGesture;
+    const drag = bodyDrag(harness.result.bodyGesture);
+    // The grabber sits above the text frame; both gestures see this touch.
+    drag.down(390);
+    grabber.begin({ translationY: 0 });
+    drag.move(380);
+    expect(drag.manager.activate).not.toHaveBeenCalled();
+    expect(drag.manager.fail).toHaveBeenCalledOnce();
+    body.cancelled({}, drag.manager);
+    body.finalizeManual();
+    grabber.update({ translationY: -50 });
+    expect(harness.result.active.value).toBe(true);
+    expect(harness.result.contentHeight.value).toBe(110);
+    grabber.finalize({ translationY: -50 }, true);
+    flushJS();
+    expect(harness.result.visibleContentHeight).toBe(110);
+  });
+
   it('a second finger during a body drag still settles it', () => {
     const input = { ...composerInput(), bodyDragEnabled: true };
     const harness = mountComposer(input);

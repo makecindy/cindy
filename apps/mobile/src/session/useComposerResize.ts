@@ -146,12 +146,16 @@ export function useComposerResize(input: UseComposerResizeInput) {
   }, [active, awaitingCollapse, begin, dismissedGestureId, dragHeight, dragTranslation, finish, geometry, gestureId, startAbsoluteY, startHeight]);
 
   const scrollGesture = useMemo(() => Gesture.Native(), []);
+  // 顶边把手按着时整张卡片的体拖让位：两者共用同一次调高，体拖若半途接手又被系统
+  // 挤掉，它的取消收尾会把把手正在跟手的高度撤回，直到松手才结算。
+  const grabberTouching = useSharedValue(false);
   const gesture = useMemo(() => Gesture.Pan()
     // Dedicated grabber: own the touch before the keyboard's ancestor ScrollView.
     .minDistance(0)
     .blocksExternalGesture(scrollGesture)
     .onBegin((event) => {
       'worklet';
+      grabberTouching.value = true;
       drag.beginAt(event.absoluteY);
     })
     .onUpdate((event) => {
@@ -164,10 +168,11 @@ export function useComposerResize(input: UseComposerResizeInput) {
     })
     .onFinalize((event, successful) => {
       'worklet';
+      grabberTouching.value = false;
       drag.finalize(Number.isFinite(event.absoluteY)
         ? event.absoluteY - startAbsoluteY.value
         : event.translationY, successful);
-    }), [drag, scrollGesture, startAbsoluteY]);
+    }), [drag, grabberTouching, scrollGesture, startAbsoluteY]);
 
   // 按在卡片任意处上下拖动调高。Manual 而非 Pan：待定期间不装一个与之竞争的
   // UIPanGestureRecognizer，不拖住 iOS 侧滑返回和视频控件（同 composerPullThrough）；
@@ -217,6 +222,11 @@ export function useComposerResize(input: UseComposerResizeInput) {
           return;
         }
         if (bodyPhase.value === BODY_DRAG_PENDING) {
+          if (grabberTouching.value) {
+            bodyPhase.value = BODY_DRAG_IDLE;
+            manager.fail();
+            return;
+          }
           const decision = resolveComposerBodyDrag({
             inText: bodyInText.value,
             edge: textScrollEdge.value,
@@ -263,7 +273,7 @@ export function useComposerResize(input: UseComposerResizeInput) {
         // 被其它手势（顶边把手、编辑器滚动）挤掉时不会再收到抬手：按取消收尾。
         cancel();
       });
-  }, [bodyDragGate, bodyInText, bodyPhase, bodyStartTime, bodyStartX, bodyStartY, drag, dragTranslation, startAbsoluteY, textFrameRef, textScrollEdge]);
+  }, [bodyDragGate, bodyInText, bodyPhase, bodyStartTime, bodyStartX, bodyStartY, drag, grabberTouching, dragTranslation, startAbsoluteY, textFrameRef, textScrollEdge]);
 
   // 列表侧接手：event 每次都带完整位置，同一帧内合并的 begin / move / end 也能按状态补齐。
   const pullThroughEvent = input.pullThrough?.event;
