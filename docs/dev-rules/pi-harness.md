@@ -214,11 +214,16 @@ Claude Code、Codex 共用同一模型比例，各自适配原生参数。env:`C
 分支；确认后续只有空的错误响应及模型／推理档位变更记录，再通过原生树导航回到输入之前重发。
 导航只回退消息，保留当前模型和推理档位；重新打开任务时仍由 Cindy 已保存的选择恢复设置。
 回归见 `session-tree.test.ts` 与 `pi-provider-routing.test.ts`。旧失败分支完整保留，
-不按文本去重，也不重放已有工具结果。若该轮明确遇到请求体超限拒收（HTTP 413，或网关以 400
-`BadRequest.TooLarge` / `Exceeded limit on max bytes to request body` 拒收），用户这次重试在重发前
+不按文本去重，也不重放已有工具结果。若该轮明确遇到「请求本身过大」拒收——HTTP 413，网关以 400
+`BadRequest.TooLarge` / `Exceeded limit on max bytes to request body` 拒收请求体字节数，或以 400
+`too many images in request` 拒收单请求图片数量——用户这次重试在重发前
 调用一次原生 compact；压缩失败（包括 RPC 超时、普通错误或无法压缩）时，沿用原请求的
-字节超限证据，本机锁存下一次发送前换窗，并在持久错误中记录专用恢复失败标记，关闭运行时后
+请求过大证据，本机锁存下一次发送前换窗，并在持久错误中记录专用恢复失败标记，关闭运行时后
 仍能恢复。用户取消不触发换窗，SSH 保留错误。
+判定只认「数量/体积超限」专属措辞：`invalid_media` 这类通用媒体错误码可能来自损坏或不支持的附件，
+按它触发压缩会白压一次健康历史并误锁换窗（#8724 评审结论）。
+恢复失败标记 `PI_REQUEST_BODY_RECOVERY_EXHAUSTED` 的名字保持原样：它是跨模块消费的持久字符串
+（`contextOverflowRollover.ts` 据此判定），改名属于协议面变更，不在缺陷修复里顺手做。
 这一恢复由用户重试触发，不改变正常轮次由 Pi 自己管理自动压缩的约定。
 
 Pi 同样消费 `AgentRuntimeConfig.behaviorFlags`（静态对象或按来源、凭证形态、执行位置求值）。
