@@ -1228,6 +1228,7 @@ export function UserMessage({
   // 原语,点编辑就停会让「误点 / 改主意取消」白白丢掉这轮工作。中断推迟到
   // 编辑框点「发送」:EditBox 经 onRequestStop 中断并等 sessionRunning 翻 false
   // 再提交(含超时兜底);取消编辑对运行中的 turn 零影响。
+  // 运行中编辑按钮不外显、收进 More 菜单(editInMenu),停下后回到操作行。
   //
   // 队列门槛:有排队中的消息时拒绝进入编辑(toast 说明)。排队消息是针对
   // rewind 前的旧上下文写的,而编辑重发只会追加到 paused 队列尾部——Continue
@@ -1307,6 +1308,7 @@ export function UserMessage({
       onShareAsImage={handleShareAsImage}
       onDelete={!sharedGuest && !isBlocked && sessionId && messageClientId ? handleDelete : undefined}
       onEdit={canEdit ? handleEdit : undefined}
+      editInMenu={sessionRunning === true}
       onRewind={!isBlocked && canRewind ? handleRewind : undefined}
       rewindInFlight={rewindOpen}
     />
