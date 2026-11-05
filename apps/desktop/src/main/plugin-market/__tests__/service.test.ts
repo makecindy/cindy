@@ -3471,6 +3471,47 @@ describe('PluginMarketService migration and defaultInstall', () => {
     }
   });
 
+  // 补充依据：Codex review（#9078）——同版本、清单相同但代码不同的种子覆盖商店安装。
+  // 最小失败输入：账本已是当前 Release 且清单一致，批准回执的包摘要不是 Release sha256，实例在播种台账内。
+  it.each([
+    { seed: '2.0.0' as string | undefined, evidenceSha: 'b'.repeat(64), updates: true },
+    { seed: '2.0.0', evidenceSha: null, updates: false },
+    { seed: undefined, evidenceSha: 'b'.repeat(64), updates: false },
+  ])('same-release install shadowed by a seed (seed $seed, receipt $evidenceSha) reinstalls: $updates', async ({ seed, evidenceSha, updates }) => {
+    const item = summary({
+      currentRelease: { ...summary().currentRelease, id: 'release-2', version: '2.0.0' },
+    });
+    const installedManifest = manifest(item.ghostId, '2.0.0', ['notify']);
+    const installedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-shadowed-ghost-'));
+    roots.push(installedDir);
+    fs.writeFileSync(path.join(installedDir, 'ghost.json'), JSON.stringify(installedManifest));
+    runtime.ghosts = [{ manifest: installedManifest, dir: installedDir, enabled: true }];
+    if (seed !== undefined) runtime.hostSeedVersions.set(item.ghostId, seed);
+    runtime.approvedInstallEvidence.mockReturnValue({
+      packageSha256: evidenceSha,
+      approvedManifest: installedManifest as unknown as GhostManifest,
+      legacyMigrated: false,
+    });
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      ...recordForTest(item),
+      manifestDigest: ghostManifestDigest(installedManifest),
+    });
+    runtime.install.mockImplementationOnce(async () => ({
+      manifest: installedManifest,
+      dir: installedDir,
+      enabled: true,
+    }));
+
+    const items = (await h.service.snapshot()).items;
+    if (updates) {
+      expect(runtime.install).toHaveBeenCalledTimes(1);
+    } else {
+      expect(runtime.install).not.toHaveBeenCalled();
+      expect(items[0]?.installState).toBe('installed');
+    }
+  });
+
   it('updates a legacy record without treating server metadata as a package cap', async () => {
     const item = summary({
       currentRelease: { ...summary().currentRelease, id: 'release-2', version: '2.0.0' },

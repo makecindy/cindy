@@ -785,6 +785,25 @@ function seededBuiltinYieldsToRelease(
   );
 }
 
+/**
+ * manifest 与账本一致（同版本种子只改了代码）时，市场只比对清单会误判为已安装。批准回执的
+ * 包摘要才是落位时的包身份：商店安装 = Release sha256，播种发布 = 目录摘要。当前 Release
+ * 已装入账本、回执摘要却对不上，且实例归播种管理并可交还商店时，视为被种子覆盖，需重装商店包。
+ */
+function seedShadowsInstalledRelease(
+  plugin: VisiblePluginSummary,
+  ghost: InstalledGhost | null | undefined,
+  record: PluginMarketInstallationRecord | null | undefined,
+): boolean {
+  if (!ghost || !record || record.releaseId !== plugin.currentRelease.id) return false;
+  const evidence = getGhostManager().approvedInstallEvidence(installedGhostPhysicalRelId(ghost));
+  return Boolean(
+    evidence?.packageSha256 &&
+    evidence.packageSha256 !== record.sha256 &&
+    seededBuiltinYieldsToRelease(plugin, ghost, record),
+  );
+}
+
 /** 账本是否仍指向当前服务端目录项；release 变化是升级，不属于路由漂移。 */
 function serverRecordMatchesSummaryRoute(
   plugin: VisiblePluginSummary,
@@ -2932,7 +2951,9 @@ export class PluginMarketService {
       && serverRecordMatchesDelivery(plugin, ghost, record ?? null, identity)
       && serverRecordMatchesSummaryRoute(plugin, record ?? null),
     );
-    const seedYield = !matchesDelivery && seededBuiltinYieldsToRelease(plugin, ghost, record);
+    const seedYield = matchesDelivery
+      ? seedShadowsInstalledRelease(plugin, ghost, record)
+      : seededBuiltinYieldsToRelease(plugin, ghost, record);
     const matchesUpdateRoute = matchesDelivery || seedYield;
     const conflict = Boolean((ghost && !matchesUpdateRoute) ||
       (!hasDeliveryNamespace(plugin) && plugin.scope === 'organization' &&
