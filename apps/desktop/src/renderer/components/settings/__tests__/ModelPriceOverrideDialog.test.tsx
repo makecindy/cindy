@@ -1177,4 +1177,131 @@ describe('ModelPriceOverrideDialog', () => {
     expect(setModelPriceOverride).not.toHaveBeenCalled();
   });
 
+  it.each(['outside', 'engine'] as const)('validates and restores an incomplete new quote when leaving for %s', async (destination) => {
+    getModelPriceOverride.mockImplementation(async target => ({ ...priceView(target.modelId, target.agent), effective: null, reference: null }));
+    const two = row('model-a'); two.avail = ['codex', 'claude-code']; two.byAgent['claude-code'] = two.byAgent.codex;
+    const user = userEvent.setup();
+    const leave = vi.fn();
+    const ui = render(<><ModelPriceOverrideDialog provider={provider} row={two} open
+      onOpenChange={vi.fn()} presentation="inline" /><button onClick={leave}>Leave editor</button></>);
+    const input = ui.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    input.focus(); fireEvent.change(input, { target: { value: '7' } });
+    await user.tab();
+    expect(input.value).toBe('7');
+    expect(toast.error).not.toHaveBeenCalled();
+    if (destination === 'outside') await user.click(ui.getByRole('button', { name: 'Leave editor' }));
+    else await user.click(ui.getByRole('radio', { name: 'Claude Code' }));
+    expect(toast.error).toHaveBeenCalledWith('settings.providers.models.priceOverride.invalid');
+    expect((ui.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement).value).toBe('');
+    expect(setModelPriceOverride).not.toHaveBeenCalled();
+    if (destination === 'outside') expect(leave).toHaveBeenCalledOnce();
+  });
+
+  it('does not treat an untouched empty new quote as an invalid edit on blur', async () => {
+    getModelPriceOverride.mockResolvedValue({ ...priceView('model-a'), effective: null, reference: null });
+    const ui = render(inline());
+    const input = ui.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    fireEvent.blur(input);
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(setModelPriceOverride).not.toHaveBeenCalled();
+  });
+
+  it.each(['7', '-1', ''])('locally resets a %s draft with no persisted override and no save toast', async (draft) => {
+    getModelPriceOverride.mockResolvedValue(priceView('model-a'));
+    const user = userEvent.setup();
+    const ui = render(inline());
+    const input = ui.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe('1'));
+    input.focus(); fireEvent.change(input, { target: { value: draft } });
+    const button = ui.getByRole('button', { name: 'settings.providers.models.priceOverride.resetShort' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    await user.click(button);
+    expect(input.value).toBe('1');
+    expect(document.activeElement).toBe(input);
+    expect(setModelPriceOverride).not.toHaveBeenCalled();
+    expect(resetModelPriceOverride).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('lets Reset discard a valid failed-save draft without another write', async () => {
+    getModelPriceOverride.mockResolvedValue(priceView('model-a'));
+    setModelPriceOverride.mockRejectedValue(new Error('offline'));
+    const user = userEvent.setup();
+    const ui = render(inline());
+    const input = ui.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe('1'));
+    fireEvent.change(input, { target: { value: '7' } }); fireEvent.blur(input);
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('settings.providers.models.priceOverride.saveFailed'));
+    await user.click(ui.getByRole('button', { name: 'settings.providers.models.priceOverride.resetShort' }));
+    expect(input.value).toBe('1');
+    expect(setModelPriceOverride).toHaveBeenCalledOnce();
+    expect(resetModelPriceOverride).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('can discard an incomplete unknown-price draft with local Reset', async () => {
+    getModelPriceOverride.mockResolvedValue({ ...priceView('model-a'), effective: null, reference: null });
+    const user = userEvent.setup();
+    const ui = render(inline());
+    const input = ui.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    input.focus(); fireEvent.change(input, { target: { value: '7' } });
+    await user.click(ui.getByRole('button', { name: 'settings.providers.models.priceOverride.resetShort' }));
+    expect(input.value).toBe('');
+    expect(setModelPriceOverride).not.toHaveBeenCalled();
+    expect(resetModelPriceOverride).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('keeps a committed reset cleared when only the auxiliary quote read fails', async () => {
+    getModelPriceOverride.mockResolvedValue(priceView('model-a', 'codex', true));
+    resetModelPriceOverride.mockResolvedValue({ ...priceView('model-a'), effective: null, reference: null });
+    Object.assign(window.electronAPI.maker.usage, { getReferenceModelPricing: vi.fn().mockRejectedValue(new Error('pricing unavailable')) });
+    const ui = render(inline());
+    const input = ui.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe('1'));
+    const reset = ui.getByRole('button', { name: 'settings.providers.models.priceOverride.resetShort' }) as HTMLButtonElement;
+    fireEvent.click(reset);
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('settings.providers.models.priceOverride.resetDone'));
+    expect(toast.error).toHaveBeenCalledWith('settings.providers.models.priceOverride.loadFailed');
+    expect(toast.error).not.toHaveBeenCalledWith('settings.providers.models.priceOverride.saveFailed');
+    await waitFor(() => expect(input.readOnly).toBe(false));
+    expect(input.value).toBe('');
+    expect(reset.disabled).toBe(true);
+  });
+
+  it('ignores auxiliary reset-read failure after switching to a new target', async () => {
+    let fail!: (error: Error) => void;
+    Object.assign(window.electronAPI.maker.usage, { getReferenceModelPricing: vi.fn(() => new Promise((_resolve, reject) => { fail = reject; })) });
+    getModelPriceOverride.mockImplementation(async target => priceView(target.modelId, target.agent, true));
+    resetModelPriceOverride.mockResolvedValue({ ...priceView('model-a'), effective: null, reference: null });
+    const ui = render(inline());
+    await waitFor(() => expect((ui.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement).value).toBe('1'));
+    fireEvent.click(ui.getByRole('button', { name: 'settings.providers.models.priceOverride.resetShort' }));
+    await waitFor(() => expect(fail).toBeDefined());
+    ui.rerender(inline('model-b'));
+    await waitFor(() => expect(ui.getByLabelText('settings.providers.models.priceOverride.input').hasAttribute('readonly')).toBe(false));
+    await act(async () => { fail(new Error('old quote unavailable')); });
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('keeps an incomplete quote while tabbing through Reset without activating it', async () => {
+    getModelPriceOverride.mockResolvedValue({ ...priceView('model-a'), effective: null, reference: null });
+    const user = userEvent.setup();
+    const ui = render(inline());
+    const input = ui.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    input.focus(); fireEvent.change(input, { target: { value: '7' } });
+    await user.tab({ shift: true });
+    expect(document.activeElement).toBe(ui.getByRole('button', { name: 'settings.providers.models.priceOverride.resetShort' }));
+    await user.tab();
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe('7');
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(setModelPriceOverride).not.toHaveBeenCalled();
+  });
+
 });

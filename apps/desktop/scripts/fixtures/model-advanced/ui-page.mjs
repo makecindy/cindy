@@ -27,6 +27,13 @@ export default {
       const pricing = input.locator('xpath=ancestor::section[1]');
       await pricing.scrollIntoViewIfNeeded();
       await ui.capture('pricing-reference', { locator: pricing });
+      const reset = pricing.getByRole('button', { name: await ui.t('settings.providers.models.priceOverride.resetShort'), exact: true });
+      await input.fill('9');
+      await reset.click();
+      await page.waitForFunction(() => document.querySelector('[data-model-price-input]')?.value === '2');
+      if (!await input.evaluate(el => document.activeElement === el) || !await reset.evaluate(el => el.disabled)) throw Error('Local reset did not restore the reference and input focus');
+      if (await page.getByText(await ui.t('settings.providers.models.priceOverride.saved'), { exact: true }).count()) throw Error('Local reset emitted a misleading save notification');
+      await ui.capture('pricing-local-reset', { locator: pricing });
       if (ui.case.startsWith('pricing-controls')) {
         const currency = pricing.getByRole('combobox');
         await currency.focus();
@@ -41,8 +48,7 @@ export default {
         await page.evaluate(() => window.__uiPage.emit('settlePriceMutation'));
         await page.waitForFunction(() => document.querySelector('section[aria-busy]')?.getAttribute('aria-busy') === 'false');
         if (!await currency.evaluate(el => document.activeElement === el)) throw Error('Currency lost focus after save');
-        const reset = pricing.getByRole('button', { name: await ui.t('settings.providers.models.priceOverride.resetShort'), exact: true });
-        await reset.click();
+          await reset.click();
         if (!await reset.evaluate(el => !el.disabled && document.activeElement === el)) throw Error('Reset lost focus during pending work');
         await ui.capture('reset-pending', { locator: pricing });
         await page.evaluate(() => window.__uiPage.emit('settlePriceMutation'));
@@ -60,7 +66,6 @@ export default {
       await ui.capture('pricing-invalid-restored', { locator: pricing });
       await input.fill('0');
       await input.press('Tab');
-      const reset = pricing.getByRole('button', { name: await ui.t('settings.providers.models.priceOverride.resetShort'), exact: true });
       await page.waitForFunction(() => document.querySelector('section[aria-busy]')?.getAttribute('aria-busy') === 'false');
       if (await reset.isDisabled()) throw Error('Valid zero did not enable reset');
       await ui.capture('pricing-custom-zero', { locator: pricing });

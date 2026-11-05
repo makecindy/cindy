@@ -76,6 +76,18 @@ function sameFormValue(key: keyof FormState, left: string, right: string): boole
   return a !== null && b !== null && a === b;
 }
 
+function hasDraft(view: ModelPriceOverrideView | null, draft: FormState): boolean {
+  if (!view) return false;
+  const previous = formFromView(view);
+  return FORM_FIELDS.some(key => !sameFormValue(key, draft[key], previous[key]));
+}
+
+function staysInQuoteFields(from: HTMLElement, next: EventTarget | null): boolean {
+  return next instanceof HTMLElement && next.closest('section') === from.closest('section') &&
+    (next.hasAttribute('data-model-price-input') ||
+      (next instanceof HTMLSelectElement && next.hasAttribute('data-model-price-deferred-action')));
+}
+
 function mergeDraft(previous: FormState, draft: FormState, latest: FormState): FormState {
   const value = <K extends keyof FormState>(key: K) =>
     sameFormValue(key, draft[key], previous[key]) ? latest[key] : draft[key];
@@ -262,11 +274,31 @@ export function ModelPriceOverrideDialog({
     return () => { unsubscribers.forEach(off => off()); };
   }, [inline, open, target]);
 
-  const save = async (draft = formRef.current) => {
+  const applyCommittedView = async (next: ModelPriceOverrideView, epoch: number, message: 'saved' | 'resetDone') => {
+    // The write receipt is authoritative even if its separate fallback read fails.
+    applyView(next);
+    toast.success(t(`settings.providers.models.priceOverride.${message}`));
+    if (next.effective || next.reference) return;
+    try {
+      const resolved = await resolveView(next);
+      if (mutationEpochRef.current === epoch) applyView(resolved);
+    } catch {
+      if (mutationEpochRef.current === epoch) toast.error(t('settings.providers.models.priceOverride.loadFailed'));
+    }
+  };
+
+  const save = async (draft = formRef.current, allowIncomplete = false) => {
     const view = viewRef.current;
     if (!target || !view || loading || pendingMutationRef.current || (inline && !view.editable)) return;
-    // A new estimate has two required fields: tabbing to fill the second is not a validation error.
-    if (inline && !view.effective && !view.reference && (!draft.input.trim() || !draft.output.trim())) return;
+    // Continue constructing a new quote within its fields. On actual exit, use
+    // the owner's invalid-input contract: restore the previous default, not a close trap.
+    if (inline && !view.effective && !view.reference && (!draft.input.trim() || !draft.output.trim())) {
+      const entered = [draft.input, draft.output, draft.cacheRead, draft.cacheCreate].some(value => value.trim().length > 0);
+      if (allowIncomplete || !entered) return;
+      applyView(view);
+      toast.error(t('settings.providers.models.priceOverride.invalid'));
+      return;
+    }
     const inputPerMtok = parseRequiredPrice(draft.input);
     const outputPerMtok = parseRequiredPrice(draft.output);
     const cacheReadPerMtok = parseOptionalPrice(draft.cacheRead);
@@ -333,10 +365,10 @@ export function ModelPriceOverrideDialog({
         desired = { currency: rebased.currency, inputPerMtok: input, outputPerMtok: output,
           cacheReadPerMtok: read, cacheCreatePerMtok: create };
       }
-      const next = await resolveView(await window.electronAPI.maker.setModelPriceOverride(target, desired));
+      const next = await window.electronAPI.maker.setModelPriceOverride(target, desired);
       if (mutationEpochRef.current !== epoch) return;
-      applyView(next);
-      toast.success(t('settings.providers.models.priceOverride.saved'));
+      await applyCommittedView(next, epoch, 'saved');
+      if (mutationEpochRef.current !== epoch) return;
       if (requestedAgentRef.current) setAgent(requestedAgentRef.current);
       requestedAgentRef.current = null;
       if (!inline) onOpenChange(false);
@@ -353,14 +385,19 @@ export function ModelPriceOverrideDialog({
 
   const reset = async () => {
     const view = viewRef.current;
-    if (!target || pendingMutationRef.current || (inline && (!view?.editable || !view.override))) return;
+    if (!target || pendingMutationRef.current || (inline && (!view?.editable || (!view.override && !hasDraft(view, formRef.current))))) return;
+    if (inline && view && !view.override) {
+      // Resetting an unsaved draft needs no persistence operation or save toast.
+      applyView(view);
+      return;
+    }
     setMutationPending(true);
     const epoch = mutationEpochRef.current;
     try {
-      const next = await resolveView(await window.electronAPI.maker.resetModelPriceOverride(target));
+      const next = await window.electronAPI.maker.resetModelPriceOverride(target);
       if (mutationEpochRef.current !== epoch) return;
-      applyView(next);
-      toast.success(t('settings.providers.models.priceOverride.resetDone'));
+      await applyCommittedView(next, epoch, 'resetDone');
+      if (mutationEpochRef.current !== epoch) return;
       if (requestedAgentRef.current) setAgent(requestedAgentRef.current);
       requestedAgentRef.current = null;
     } catch {
@@ -390,8 +427,8 @@ export function ModelPriceOverrideDialog({
             {t('settings.providers.models.advanced.pricing')}
           </h4>
           <Button ref={resetButtonRef} variant="secondary" onClick={() => void reset()}
-            data-model-price-deferred-action onBlur={() => void save()}
-            disabled={inputUnavailable || !view?.override} aria-disabled={saving || undefined} className="px-3 aria-disabled:opacity-60"
+            data-model-price-deferred-action onBlur={(event) => void save(undefined, staysInQuoteFields(event.currentTarget, event.relatedTarget))}
+            disabled={inputUnavailable || (!view?.override && !hasDraft(view, form))} aria-disabled={saving || undefined} className="px-3 aria-disabled:opacity-60"
             title={t('settings.providers.models.priceOverride.reset')}>
             {t('settings.providers.models.priceOverride.resetShort')}
           </Button>
@@ -411,7 +448,7 @@ export function ModelPriceOverrideDialog({
             <label className="mb-2 flex items-center justify-between gap-4 text-12 text-[var(--text-secondary)]">
               {t('settings.providers.models.priceOverride.currency')}
               <select value={form.currency} disabled={inputUnavailable} aria-disabled={saving || undefined}
-                data-model-price-deferred-action onBlur={() => void save()}
+                data-model-price-deferred-action onBlur={(event) => void save(undefined, staysInQuoteFields(event.currentTarget, event.relatedTarget))}
                 onKeyDown={(event) => {
                   if (pendingMutationRef.current && event.key !== 'Tab' && event.key !== 'Escape') event.preventDefault();
                 }}
@@ -420,7 +457,7 @@ export function ModelPriceOverrideDialog({
                   if (pendingMutationRef.current) return;
                   const next = { ...formRef.current, currency: event.target.value as FormState['currency'] };
                   setForm(next);
-                  void save(next);
+                  void save(next, true);
                 }}
                 className="h-8 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-12">
                 {view?.allowedCurrencies.map((currency) => <option key={currency}>{currency}</option>)}
@@ -456,7 +493,7 @@ export function ModelPriceOverrideDialog({
                       // Reset/currency owns the next action. Do not disable it before its click/change.
                       if (event.relatedTarget instanceof HTMLElement &&
                           event.relatedTarget.closest('[data-model-price-deferred-action]')) return;
-                      void save();
+                      void save(undefined, staysInQuoteFields(event.currentTarget, event.relatedTarget));
                     }}
                     onKeyDown={(event) => {
                       if (event.nativeEvent.isComposing) return;
