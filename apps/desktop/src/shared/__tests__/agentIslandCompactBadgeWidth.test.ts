@@ -12,6 +12,8 @@ import {
   getAgentIslandCompactBadgeSegments,
   getAgentIslandCompactBadgeWidth,
   getAgentIslandDefaultContentWidth,
+  getAgentIslandQuotaChipWidth,
+  getAgentIslandQuotaTextWidth,
   snapAgentIslandCompactHardwareContentWidth,
 } from '../agentIsland';
 
@@ -455,5 +457,28 @@ describe('snapAgentIslandCompactHardwareContentWidth', () => {
         screenMetrics,
       })).toBe(expected);
     }
+  });
+});
+
+/**
+ * 灵动岛余量芯片由 native 绘制,宽度不为余量加宽(用户自己设的),helper 用 main 下发的标称宽度
+ * (`AgentIslandQuotaItem.width`)判断放得下几个。标称值若小于实绘,最后一个芯片会被裁掉一截。
+ * renderedWidth 是 SwiftUI 实绘宽度(NSHostingView 实测,10pt logo + 3pt 间距 + 10pt 等宽字)。
+ */
+describe('getAgentIslandQuotaChipWidth', () => {
+  it('标称宽度覆盖 SwiftUI 实绘宽度,含中日文标签', () => {
+    const rendered: Array<[string, number]> = [
+      ['0%', 26], ['100%', 38], ['$12.30', 51], ['¥1,234.56', 69], ['credits', 57], ['额度', 33], ['クレジット', 61],
+    ];
+    for (const [text, width] of rendered) {
+      expect(getAgentIslandQuotaChipWidth(text), text).toBeGreaterThanOrEqual(width);
+    }
+  });
+
+  it('只显示最低百分比时同样覆盖实绘,且两位数放得进刘海屏默认宽度的一侧(32pt 减最小 inset 7)', () => {
+    for (const [text, width] of [['9%', 13], ['72%', 19], ['100%', 25]] as const) {
+      expect(getAgentIslandQuotaTextWidth(text), text).toBeGreaterThanOrEqual(width);
+    }
+    expect(getAgentIslandQuotaTextWidth('72%')).toBeLessThanOrEqual(32 - 7);
   });
 });
