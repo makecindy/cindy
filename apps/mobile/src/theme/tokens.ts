@@ -114,6 +114,8 @@ export interface ThemeColors {
   borderStrong: string;
   /** 主标题 / 主正文 */
   textPrimary: string;
+  /** 群聊正文点名专用；对齐 Desktop CINDY msg-link，不用于普通链接或状态。 */
+  groupMentionText: string;
   /** 次要文字 / 图标 */
   textSecondary: string;
   /** 三级文字 / metadata(时间、计数等真实信息) */
@@ -464,6 +466,7 @@ export const lightColors: ThemeColors = {
   borderTranslucent: 'rgba(204, 204, 200, 0.62)',
   borderStrong: '#858581',
   textPrimary: '#0F0F0F',
+  groupMentionText: '#1D4ED8',
   textSecondary: '#4D4D4A',
   textTertiary: '#686864',
   textPlaceholder: '#858581',
@@ -561,6 +564,7 @@ export const darkColors: ThemeColors = {
   borderTranslucent: 'rgba(56, 56, 56, 0.62)',
   borderStrong: '#8A8A8A',
   textPrimary: '#EDEDED',
+  groupMentionText: '#93C5FD',
   textSecondary: '#BDBDBD',
   textTertiary: '#999999',
   textPlaceholder: '#757575',

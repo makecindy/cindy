@@ -280,8 +280,8 @@
     },
     "compact": {
       "savedTokens": "tokens {{tokens}} guardados",
-      "manual": "compacto manual",
-      "auto": "Auto compacto",
+      "manual": "Compactación manual",
+      "auto": "Compactación automática",
       "aria": "Chat compactado"
     },
     "goalComplete": "Objetivo alcanzado · {{turns}} turnos · {{duration}}",

@@ -67,6 +67,8 @@ function harness(options: {
   unusableModel?: Record<string, Record<string, unknown>>;
   usage?: Record<string, ClaudeSubscriptionUsageSnapshot>;
   codexUsage?: Record<string, ProviderGroupCodexUsageSnapshot>;
+  /** 这些组内电脑按「那台用不了」报；stale 表示这条判定来自有界快照，不是现读。 */
+  cachedUnavailable?: { members: string[]; stale: boolean };
 } = {}) {
   let now = 1_000_000;
   const config: ProviderGroupConfig = {
@@ -89,8 +91,11 @@ function harness(options: {
     async resolveMembers(_providerId, current) {
       return current.members.map((m): ResolvedProviderGroupMember => offline.has(m.key)
         ? { member: m, label: m.key, state: 'offline' }
-        : { member: m, label: `${m.key}-name`, state: 'ok', view: view(m.providerId, options.unusableModel?.[m.key]),
-          claudeUsage: options.usage?.[m.key], codexUsage: options.codexUsage?.[m.key] });
+        : options.cachedUnavailable?.members.includes(m.key)
+          ? { member: m, label: `${m.key}-name`, state: 'unavailable',
+            ...(options.cachedUnavailable.stale ? { providerContinuity: { stale: true, remainingMs: 600_000 } } : {}) }
+          : { member: m, label: `${m.key}-name`, state: 'ok', view: view(m.providerId, options.unusableModel?.[m.key]),
+            claudeUsage: options.usage?.[m.key], codexUsage: options.codexUsage?.[m.key] });
     },
     async listCandidates() {
       return [];
@@ -1118,6 +1123,36 @@ describe('beforeSend', () => {
     expect(h.probe).toHaveBeenCalledTimes(1);
     expect(progress).not.toHaveBeenCalled();
     expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+  });
+
+  // Test value
+  // - Production entry: createProviderGroupService().beforeSend → localSource.shouldMoveAway →
+  //   the checkFresh live probe → switchAgentLocation (a real move of a running task).
+  // - Rule: provider-groups.md「短暂失联时的目录与已有任务」——有界快照供展示与新任务分配，
+  //   缓存的可用/忙闲不能单独把正在运行的任务换电脑；remote-and-mobile-adaptation.md——确认必须实时触达。
+  // - Gap: the remote-group branch already skipped a stale view (`source.shouldMoveAway`), but the
+  //   local-group branch decided「那台用不了」straight from resolveMembers and moved with no live read.
+  // - Minimal failing input: MINI reports {state:'unavailable'} from a bounded snapshot; a live probe says ok.
+  // - Tier: unit (real service + router; only directory data and probe results are set).
+  it('confirms a cached "that computer cannot be used" freshly before moving a running task', async () => {
+    const options = { members: [MINI, STUDIO], cachedUnavailable: { members: [MINI.key], stale: true },
+      row: { agentDeviceId: 'mini', providerId: MINI.providerId, sdkSessionId: 'native' } };
+    // 现读确认确实用不了：照常换下一台。
+    const moves = harness(options);
+    moves.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    moves.probe.mockResolvedValue('unavailable');
+    await moves.service.beforeSend('s1');
+    expect(moves.probe).toHaveBeenCalledWith('mini', MINI.providerId);
+    expect(moves.bindings.get('s1')?.memberKey).toBe(STUDIO.key);
+
+    // 快照说用不了、现读那台其实能用：留在原电脑，不凭缓存挪走运行中的任务。
+    const stays = harness(options);
+    stays.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    stays.probe.mockResolvedValue('ok');
+    await stays.service.beforeSend('s1');
+    expect(stays.probe).toHaveBeenCalledWith('mini', MINI.providerId);
+    expect(stays.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(stays.bindings.get('s1')?.memberKey).toBe(MINI.key);
   });
 
   it('checks the computer freshly when the send has to reopen the session there', async () => {

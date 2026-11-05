@@ -44,6 +44,11 @@ describe('provider branding', () => {
     expect(resolveProviderLogoKind('xai')).toBe('xai');
     expect(PROVIDER_LOGO_PATHS.xai).not.toBe(PROVIDER_LOGO_PATHS.openrouter);
   });
+  it('keeps the OpenHubs mark on renamed official connections without matching lookalike domains', () => {
+    expect(resolveProviderLogoKind('openhubs')).toBe('openhubs');
+    expect(resolveProviderLogoKind('my-account', { pi: { upstream: 'https://openhubs.zhidemai.com/v1' } })).toBe('openhubs');
+    expect(resolveProviderLogoKind('my-account', { pi: { upstream: 'https://openhubs.zhidemai.com.evil.example/v1' } })).toBeNull();
+  });
 
   it.each([
     ['ollama', 'ollama'],

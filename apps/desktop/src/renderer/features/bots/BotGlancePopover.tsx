@@ -25,7 +25,7 @@ import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { usePrActions, usePrRefsForSessions, usePrStatuses } from '@/contexts/PrRefsContext';
 import { prStatusKey, sessionPrUrl, type SessionPrRef } from '@cindy/maker-shared';
-import { PR_STATUS_ICON, PR_STATUS_COLOR } from '@/features/cc-agent/gitContextPrVisuals';
+import { PR_STATUS_ICON, prStatusColor } from '@/features/cc-agent/gitContextPrVisuals';
 import { sessionActivityMs } from '@/features/cc-agent/lib/dateSessionGrouping';
 import { AutomationTimerIcon } from '@/features/cc-agent/sidebar/AutomationTimerIcon';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
@@ -779,9 +779,19 @@ function PrOutput({ pr }: { pr: SessionPrRef }) {
   const status = result?.ok ? result : successfulStatuses.get(prStatusKey(pr));
   const kind = status?.ok ? status.status : null;
   const Icon = kind ? PR_STATUS_ICON[kind] : GitPullRequest;
-  return <Row testId="bot-glance-pr" title={(status?.ok ? status.title?.trim() : undefined) || `${pr.owner}/${pr.repo}`}
-    icon={<Icon size={16} style={{ color: kind ? PR_STATUS_COLOR[kind] : 'var(--text-tertiary)' }} />}
-    onClick={() => void window.electronAPI.openExternal(sessionPrUrl(pr))} />;
+  return (
+    <Row
+      testId="bot-glance-pr"
+      title={(status?.ok ? status.title?.trim() : undefined) || `${pr.owner}/${pr.repo}`}
+      icon={
+        <Icon
+          size={16}
+          style={{ color: prStatusColor(kind, status?.ok ? status.conflicts : null) }}
+        />
+      }
+      onClick={() => void window.electronAPI.openExternal(sessionPrUrl(pr))}
+    />
+  );
 }
 
 // ---------------------------------------------------------------- 入口

@@ -528,6 +528,7 @@
     "searchMembers": "Buscar membros",
     "membersNoMatch": "Nenhum membro corresponde a “{{query}}”",
     "you": "Você",
+    "companionOf": "Companheiro de {{name}}",
     "teammateTag": "Colega",
     "paused": "Pausado",
     "accessNone": "Somente o proprietário",

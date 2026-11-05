@@ -112,6 +112,22 @@ export function mergeDeviceViewsWithFreshPresence(
   return merged;
 }
 
+/**
+ * A stale REST roster is a bounded display fallback, not proof that a device
+ * absent from it was removed. Keep every current row, using presence-updated
+ * fields where available, until a fresh roster or an explicit permission event.
+ */
+export function mergeDeviceViewsForStaleDirectory(
+  serverDevices: readonly DeviceView[],
+  currentDevices: readonly DeviceView[],
+): DeviceView[] {
+  return mergeDeviceViewsWithFreshPresence(
+    serverDevices,
+    currentDevices,
+    new Set(currentDevices.map(device => device.deviceId)),
+  );
+}
+
 function deviceViewFromPresence(
   snapshot: PresenceSnapshot,
   selfDeviceId: string | null | undefined,

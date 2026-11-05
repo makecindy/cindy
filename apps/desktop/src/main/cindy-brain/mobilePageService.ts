@@ -691,7 +691,10 @@ export class MobilePluginPages {
         title: { fallback: 'Plugins', translations: { 'zh-CN': '插件' } },
         icon: { name: 'puzzle', fallbackText: 'P' },
         ...(this.deps.management
-          ? { actions: [{ id: 'management:snapshot', label: 'Manage plugins' }] }
+          ? { actions: [
+            { id: 'management:snapshot', label: 'Manage plugins' },
+            { id: 'management:ui-consent', label: 'Read pending page consent' },
+          ] }
           : {}),
       },
       list: async (_ctx, request) => {

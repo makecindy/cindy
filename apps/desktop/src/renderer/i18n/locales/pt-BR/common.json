@@ -1,4 +1,15 @@
 {
+  "pluginUi": {
+    "renderer": "Exibição",
+    "original": "Original",
+    "unavailable": "Os controles do plugin estão indisponíveis. As ações estão desativadas.",
+    "outcome-unknown": "O resultado não foi confirmado. Confira o estado atual do plugin.",
+    "rejected": "O plugin não executou esta ação. Sua entrada foi mantida.",
+    "draftChanged": "Sua entrada mudou. A alteração do plugin não foi aplicada.",
+    "editorUnavailable": "Este campo está indisponível. A alteração do plugin não foi aplicada.",
+    "more": "Mais",
+    "close": "Fechar"
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "Atualizar cota",
@@ -1047,11 +1058,19 @@
       "copied": "Copiado",
       "copyFailed": "Não foi possível copiar. Tente novamente ou salve o arquivo.",
       "scrollHint": "Role para cima ou para baixo na seleção ou escolha Rolagem automática.",
-      "recordHint": "Desenhe na prévia para anotar a gravação. Sem áudio.",
+      "recordHint": "Desenhe na prévia para anotar a gravação.",
       "format": "Formato",
       "videoFormat": "Vídeo (WebM)",
-      "prepareHint": "Começa após uma contagem regressiva de 3 segundos. Sem áudio.",
+      "prepareHint": "Começa após uma contagem regressiva de 3 segundos.",
       "countdown": "A gravação começa em {{count}}",
+      "systemAudio": "Alto-falante",
+      "microphone": "Microfone",
+      "audioHint": "Escolha as fontes de áudio e comece a gravar.",
+      "preparingAudio": "Preparando áudio…",
+      "systemAudioFailed": "Áudio do alto-falante indisponível. Verifique as permissões do sistema ou desative-o.",
+      "microphoneFailed": "Microfone indisponível. Verifique as permissões e o dispositivo de entrada ou desative-o.",
+      "audioFailed": "Não foi possível iniciar o áudio. Verifique os dispositivos ou desative o áudio.",
+      "audioInterrupted": "O áudio foi interrompido. Encerre a gravação para salvar a parte capturada.",
       "countdownHint": "Começando em instantes. Pressione Esc para cancelar.",
       "annotate": "Anotar",
       "finishing": "Finalizando…",
@@ -2378,6 +2397,9 @@
     "agentIsland": {
       "title": "Agent Island",
       "unsupported": "O Agent Island requer macOS 14 ou posterior.",
+      "subtleRemindersLabel": "Avisos discretos",
+      "subtleRemindersHint": "Quando houver novas mensagens, pedidos de resposta ou erros, o ícone muda em vez de mostrar um cartão de notificação abaixo da ilha. Clique na ilha para ver a lista completa de tarefas.",
+      "subtleRemindersFailed": "Não foi possível salvar as configurações dos avisos. Tente novamente.",
       "enableLabel": "Mostrar Agent Island",
       "enableHint": "Mostra tarefas em execução, que precisam de resposta e concluídas não lidas no topo da tela. Ao ativar, as notificações equivalentes do sistema são suprimidas para evitar alertas duplicados.",
       "enableAria": "Ativar ou desativar Agent Island",
@@ -3546,7 +3568,7 @@
         "formatIdentity": "Obrigatório. Defina kind como \"custom\" e name como o nome do provedor que deseja exibir.",
         "formatAuth": "Obrigatório. Neste exemplo, defina method como \"apiKey\" e substitua apiKey pela chave do seu provedor.",
         "formatEndpoint": "Obrigatório para cada endpoint. protocol aceita \"openai-chat\", \"openai-responses\", \"anthropic-messages\" e \"google-generative-ai\". Defina baseUrl como a URL HTTP(S) completa do endpoint; HTTPS é recomendado.",
-        "formatTargets": "Array engine opcional: \"claude-code\", \"codex\" ou \"pi\". Omita-o para associar engines por protocolo ou especifique as engines explicitamente. Claude Code também oferece suporte aos protocolos OpenAI e Google. O exemplo habilita apenas Pi.",
+        "formatTargets": "Lista opcional de mecanismos: \"claude-code\", \"codex\" ou \"pi\". Omita-a para associar mecanismos por protocolo ou especifique os mecanismos explicitamente. O Claude Code também oferece suporte aos protocolos OpenAI e Google. O exemplo habilita apenas o Pi.",
         "formatModels": "Opcional. Use strings de ID de modelo ou objetos com id (name é opcional). Omita a lista ou deixe-a vazia para buscar modelos após a confirmação. Uma lista não vazia pula a busca automática.",
         "formatMetadata": "Campos opcionais de modelo: group é o grupo do modelo, contextWindow é o tamanho do contexto e maxOutputTokens é o limite de saída (ambos em tokens). Os números do exemplo são ilustrativos; use as capacidades reais do modelo.",
         "formatEffort": "Campos opcionais de modelo: efforts lista os níveis de esforço aceitos; defaultEffort seleciona um deles como padrão. Remova ambos os campos se não tiver certeza.",
@@ -4013,6 +4035,7 @@
             "hint": "Aplica-se à conexão de Images de {{agent}}. Declare apenas capacidades realmente compatíveis com a API. Reabra os detalhes de Art após salvar."
           },
           "capabilityHint": "Usa as capacidades declaradas por este provedor. Quando não declarado, o suporte a imagens é inferido pelo nome do modelo.",
+          "imageInputDefault": "{{value}} (padrão)",
           "imageInput": "Entrada de imagem",
           "imageInputMixed": "Varia conforme o mecanismo",
           "supported": "Compatível",
@@ -5718,6 +5741,7 @@
           "checking": "Verificando atualizações…",
           "upToDate": "Atualizado",
           "checkFailed": "Não foi possível verificar atualizações",
+          "rateLimited": "O GitHub está limitando as verificações",
           "lastChecked": "Última verificação: {{time}}",
           "check": "Verificar atualizações",
           "retry": "Tentar novamente",
@@ -6127,8 +6151,10 @@
       "accessRevokedByPeer": "Acesso revogado — o outro dispositivo precisa restaurá-lo nas configurações",
       "deviceControlToggleAria": "Alternar controle de {{name}}",
       "myDevices": {
-        "controlIt": "Eu o controlo",
-        "allowInbound": "Permitir que ele controle este dispositivo",
+        "iCan": "Eu posso",
+        "itCan": "Ele pode",
+        "controlIt": "Controlá-lo",
+        "controlThisDevice": "Controlar este dispositivo",
         "allowInboundAria": "Alternar permissão para {{name}} controlar este dispositivo",
         "peerControlOff": "Controle remoto não ativado nesse dispositivo",
         "masterOffHint": "Primeiro, ative a opção principal acima",
@@ -7764,6 +7790,8 @@
         "skill": "Adiciona a Skill \"{{name}}\" aos seus assistentes de IA",
         "skillDetail": "Uma Skill é um arquivo de instruções que a IA carrega e segue como suas próprias instruções, com todas as suas permissões, no Claude Code e no Codex, em todos os projetos — ela não fica restrita à sandbox deste plugin. Permanece disponível enquanto o plugin está ativado e é removida quando ele é desativado ou desinstalado; desativar o plugin para uma única pasta não a oculta. O texto completo da Skill não pode ser visualizado aqui — instale apenas plugins em que você confia.",
         "routineEvents": "Eventos de rotina",
+        "nativeUi": "Adicionar controles às tarefas",
+        "nativeTabView": "Abrir a visualização “{{title}}”",
         "mcpUi": "Exibir páginas interativas na conversa",
         "mcpUiDomains": "Domínios de rede da página: {{domains}}",
         "mcpAppOnly": "Somente página",
@@ -12201,7 +12229,7 @@
       "effortLabel": "Esforço de raciocínio",
       "thinking": "Pensando",
       "edit": "Editar",
-      "options": "Options",
+      "options": "Opções",
       "priceTip": "Entrada {{input}} · Saída {{output}} por 1M de tokens",
       "pricing": {
         "title": "Por 1 milhão de tokens",
@@ -13500,7 +13528,7 @@
         "empty": "Nenhum comando disponível."
       },
       "cost": {
-        "title": "Custo da Sessão",
+        "title": "Uso da sessão",
         "tokensUsed": "Tokens usados (neste turno)"
       },
       "pwd": {
@@ -13508,7 +13536,7 @@
         "notSet": "(não definido)"
       },
       "status": {
-        "title": "Status da Sessão",
+        "title": "Status da sessão",
         "agent": "Agent",
         "model": "Modelo",
         "effort": "Esforço",
@@ -13558,6 +13586,24 @@
           "autocompactBuffer": "Reserva para compactação automática",
           "compactBuffer": "Reserva para compactação",
           "freeSpace": "Espaço livre"
+        },
+        "estimate": {
+          "title": "Estimativas de texto",
+          "delivery": "Apresentação das respostas",
+          "host": "Instruções da Cindy",
+          "plugins": "Catálogo de plugins",
+          "memoryRules": "Instruções de memória",
+          "memoryIndex": "Índice de memória",
+          "profile": "Perfil do colega",
+          "user": "Instruções do usuário",
+          "directories": "Diretórios adicionais",
+          "native": "Instruções do Pi",
+          "skills": "Catálogo de Skills",
+          "project": "Instruções do projeto",
+          "tools": "Definições das ferramentas",
+          "messages": "Texto da conversa",
+          "other": "Outras instruções",
+          "note": "Estimativa do texto atual, sem a tokenização do modelo. Exclui imagens e formatação do fornecedor; a soma difere do total nativo."
         }
       },
       "compact": {
@@ -14802,7 +14848,7 @@
       "branchTooltip": "Branch atual: {{branch}}",
       "pr": {
         "status": {
-          "open": "Abrir",
+          "open": "Aberto",
           "draft": "Rascunho",
           "merged": "Mesclado",
           "closed": "Fechado"
@@ -14912,7 +14958,7 @@
         "manage": {
           "title": "Gerenciar links de PRs",
           "hint": "Até 3 no cabeçalho; PRs fixados aparecem primeiro",
-          "empty": "Cole um link de PR do GitHub para adicioná-lo",
+          "empty": "Cole um link de PR do GitHub ou MR do GitLab para adicioná-lo",
           "removed": "Removidos: {{count}}",
           "legacy": "Referências não confirmadas: {{count}}",
           "addLabel": "Adicionar link de PR",
@@ -14923,18 +14969,29 @@
           "unpin": "Desafixar PR",
           "pinLimit": "Fixar até 3 PRs",
           "reorderHint": "Use Alt+↑/↓ para reordenar dentro do grupo de fixados ou não fixados.",
-          "dragHandle": "Arraste para reordenar {{repo}} #{{number}}",
+          "dragHandle": "Arraste para reordenar {{repo}} {{numberLabel}}",
           "remove": "Remover PR",
           "errors": {
             "duplicate": "Este PR já está vinculado; restaure os links removidos pela lista",
             "notFound": "PR não encontrado ou acesso negado",
-            "invalidUrl": "Insira um link válido de PR do GitHub",
+            "invalidUrl": "Insira um link válido de PR do GitHub ou MR do GitLab",
             "reorderFailed": "A ordem não foi salva. Tente novamente.",
-            "verifyFailed": "Não foi possível verificar o PR; confira o login e o acesso ao GitHub",
+            "verifyFailed": "Não foi possível verificar o PR; confira o login e o acesso ao GitHub ou GitLab",
             "unsupported": "A versão deste computador não permite gerenciar links de PRs",
             "failed": "Não foi possível atualizar os links de PRs"
           }
-        }
+        },
+        "gitlab": {
+          "missing": "GitLab CLI (glab) não foi encontrado. Instale o glab e entre na conta para ver o status dos MRs.",
+          "notLoggedIn": "O glab local não está conectado a {{host}}. Execute glab auth login no terminal para ver o status dos MRs.",
+          "unsupported": "Este computador ainda não oferece suporte ao status dos MRs do GitLab",
+          "openAria": "Abrir MR !{{number}} no navegador",
+          "summaryAria": "Resumo do MR !{{number}}",
+          "urlPlaceholder": "Link de PR do GitHub ou MR do GitLab",
+          "notFound": "MR não encontrado ou a conta atual não tem permissão para visualizá-lo"
+        },
+        "merge": "Mesclagem",
+        "conflicts": "Com conflitos"
       }
     },
     "schedule": {

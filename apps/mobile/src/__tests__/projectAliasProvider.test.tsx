@@ -51,6 +51,7 @@ const transport = vi.hoisted(() => {
   class Client {
     invoke = vi.fn<(_device: string, request: InvokePayload) => Promise<InvokeResultPayload>>();
     openLink = vi.fn(async (): Promise<LinkAcceptPayload> => ({ appVersion: 'test', allowlistHash: 'test' }));
+    noteRemoteControlEnabled = vi.fn();
     start = vi.fn();
     stop = vi.fn();
     connectNow = vi.fn();
@@ -63,6 +64,9 @@ const transport = vi.hoisted(() => {
     onStatusChange = () => () => {};
     onPresenceChanged = () => () => {};
     onPeerTransportReset = () => () => {};
+    onPeerPathChanged = () => () => {};
+    hasOfflineDirectPath = () => false;
+    peekOfflineDirectPath = () => false;
     onConnectionIssue = () => () => {};
     frame: (envelope: Envelope) => void = () => {};
     onFrame(listener: Client['frame']) { this.frame = listener; return () => {}; }

@@ -21,7 +21,7 @@ export default {
       partial: `export const useBotProfiles=()=>${data}.case==='new'?[]:[{id:'cindy-default',name:'Cindy',templateId:'cindy',status:'active',sessionId:'chat-1'}];export const useBotUnreadCounts=()=>({});`,
     },
     'src/renderer/features/bots/useRemoteBots': `export const useRemoteCindyIds=()=>new Set(); export const useRemoteBots=()=>${data}.case==='new'?[]:[
-      {id:'cindy-default',name:'Cindy',deviceId:'mini',deviceName:'Mac-mini',online:true,sessionId:'r1',avatar:'',status:'active'},
+      {id:'cindy-default',name:'Cindy',deviceId:'mini',deviceName:'Mac-mini',online:true,sessionId:'r1',avatar:'',status:'active',lastReplyAt:20,readAt:10},
       {id:'cindy-default',name:'Cindy',deviceId:'mbp',deviceName:'Chris-MBP-M5',online:false,sessionId:'r2',avatar:'',status:'active'},
       {id:'cindy-default',name:'Cindy',deviceId:'imac',deviceName:'Office iMac',online:false,sessionId:'r3',avatar:'',status:'active'}];`,
     'src/renderer/features/device-link/useDeviceLinkDeviceList':
@@ -53,6 +53,19 @@ export default {
     await button.click();
     const popover = page.getByTestId('bot-glance-popover');
     await popover.waitFor();
+    if (ui.case !== 'new') {
+      const unread = page.getByTestId('bot-glance-computer').getByLabel(await ui.t('bots.devicePicker.unread'));
+      assert.equal(await unread.count(), 1, 'remote computer exposes one unread indicator');
+      const colors = await unread.evaluate(node => {
+        const probe = document.createElement('span');
+        probe.style.backgroundColor = 'var(--bot-unread-bg)';
+        node.append(probe);
+        const result = [getComputedStyle(node).backgroundColor, getComputedStyle(probe).backgroundColor];
+        probe.remove();
+        return result;
+      });
+      assert.equal(colors[0], colors[1], 'computer unread retains the production blue');
+    }
     if (ui.case === 'new') {
       assert.equal(await page.getByTestId('bot-glance-todo').count(), 0, 'no todo rows');
       assert.equal(await page.getByTestId('bot-glance-check').count(), 0, 'no check prompt when empty');
