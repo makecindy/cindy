@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Envelope, InvokeResultPayload } from '@cindy/device-link';
 
 const TOKEN = 'a'.repeat(43);
 const CREDENTIAL = 'c'.repeat(43);
@@ -17,7 +18,7 @@ const PEER = 'https://device-link.cindy.app';
 const state = vi.hoisted(() => ({
   calls: [] as Array<{ path: string; opts: Record<string, unknown> }>,
   responses: new Map<string, unknown>(),
-  clients: [] as Array<{ opts: Record<string, unknown>; started: boolean; stopped: boolean }>,
+  clients: [] as Array<{ opts: Record<string, unknown>; started: boolean; stopped: boolean; onFrame?: (frame: Envelope) => void }>,
   localReceivedError: false,
   localHasGroupShare: false,
   localReceivedReads: 0,
@@ -32,6 +33,8 @@ const state = vi.hoisted(() => ({
   invokes: [] as Array<{ target: string; channel: string }>,
   invokeGate: null as Promise<void> | null,
   invokeEntered: null as null | (() => void),
+  invokeError: null as Error | null,
+  invokeResult: null as InvokeResultPayload | null,
 }));
 
 vi.mock('electron', () => ({ app: { getVersion: () => '0.0.0-test' } }));
@@ -90,13 +93,14 @@ vi.mock('../providerShareApi.js', () => ({
 vi.mock('@cindy/device-link', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@cindy/device-link')>()),
   DeviceLinkClient: class {
-    record: { opts: Record<string, unknown>; started: boolean; stopped: boolean };
+    record: { opts: Record<string, unknown>; started: boolean; stopped: boolean; onFrame?: (frame: Envelope) => void };
     constructor(opts: Record<string, unknown>) {
       this.record = { opts, started: false, stopped: false };
       state.clients.push(this.record);
     }
     start() { this.record.started = true; }
     stop() { this.record.stopped = true; }
+    onFrame(callback: (frame: Envelope) => void) { this.record.onFrame = callback; }
     async waitUntilOnline() {}
     hasOfflineDirectPath() { return false; }
     isLinkReady() { return false; }
@@ -106,7 +110,8 @@ vi.mock('@cindy/device-link', async (importOriginal) => ({
       await state.invokeGate;
       options?.preSend?.();
       state.invokes.push({ target, channel: request.channel });
-      return { ok: true, result: { providers: [{ id: 'openai' }], providerContinuity: { stale: false, remainingMs: 30 * 60_000 } } };
+      if (state.invokeError) throw state.invokeError;
+      return state.invokeResult ?? { ok: true, result: { providers: [{ id: 'openai' }], providerContinuity: { stale: false, remainingMs: 30 * 60_000 } } };
     }
   },
 }));
@@ -127,7 +132,7 @@ import {
   startProviderShareCrossRegion,
   stopProviderShareCrossRegion,
 } from '../providerShareCrossRegion';
-import { PROVIDER_METADATA_TRUST_MS, providerShareHostPeer } from '@cindy/device-link';
+import { DeviceLinkError, PROVIDER_METADATA_TRUST_MS, providerShareHostPeer } from '@cindy/device-link';
 import { sha256Hex } from '../providerShareApi';
 import { captureProviderShareGroupRecovery, getConfirmedReceivedShareIds, getReceivedSharesSnapshot, onProviderShareReceivedChanged, isReceivedSharesReady, previewProviderShare, refreshReceivedShares, resolveRemoteAgentTargetWhenReady, sendProviderShareRequest, startProviderShareGuest, stopProviderShareGuest } from '../providerShareGuest';
 import { createProviderGroupRemoteClient } from '../../provider-group/remoteClient';
@@ -194,6 +199,8 @@ beforeEach(() => {
   state.invokes = [];
   state.invokeGate = null;
   state.invokeEntered = null;
+  state.invokeError = null;
+  state.invokeResult = null;
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -1047,6 +1054,164 @@ describe('cross-region provider share', () => {
       { code: 'PROVIDER_SHARE_CROSS_REGION_DISABLED' }));
     await refreshProviderShareCrossRegion('global');
     expect(getCrossRegionReceived().map(item => item.shareId)).toEqual(['share-x']);
+  });
+
+  // Unit regression 2026-11-05: a /session offline snapshot survived for twelve
+  // hours even after real host traffic succeeded. Existing discovery/permission
+  // cases never checked the published online flag after a live invoke or push.
+  // Keep credential rotation, directory trust and membership separate from this
+  // display correction; changing only reachability must not revoke queued work.
+  it.each([false, true])('publishes live owner reachability without renewing credentials, directory trust or queued permissions (initiallyOnline=%s)', async (hostOnline) => {
+    const offline = { ...share, hostOnline, hostCapable: false };
+    const other = { ...offline, shareId: 'share-other', memberId: 'member-other' };
+    state.responses.set('/session', {
+      credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [offline, other],
+    });
+    const changed = vi.fn();
+    startProviderShareCrossRegion({ changed }, { userDataDir: dir });
+    await refreshProviderShareCrossRegion('global');
+    const previous = getCrossRegionReceived();
+    const budget = getConfirmedCrossRegionRegionBudgets().global;
+    changed.mockClear();
+    const peer = providerShareHostPeer(share.shareId, share.hostDeviceId);
+    const entered = deferred();
+    const release = deferred();
+    state.invokeEntered = () => entered.resolve();
+    state.invokeGate = release.promise;
+    const queued = crossRegionInvoke(peer, 'maker:provider:list', [], undefined, { liveProviderMetadata: true });
+    await entered.promise;
+    state.invokeGate = null;
+    await crossRegionInvoke(peer, 'maker:provider:list', [], undefined, { liveProviderMetadata: true });
+    release.resolve();
+    await expect(queued).resolves.toMatchObject({ ok: true });
+    expect(getCrossRegionReceived()).toEqual([{ ...offline, hostOnline: true, hostCapable: true }, other]);
+    expect(previous).toEqual([offline, other]);
+    expect(changed).toHaveBeenCalledOnce();
+    expect(getConfirmedCrossRegionRegionBudgets().global?.id).toBe(budget?.id);
+    // A delegated executor being reachable does not prove the sharing owner is.
+    await crossRegionInvoke(providerShareHostPeer(other.shareId, 'delegate-pc'), 'maker:provider:list', [], undefined, { liveProviderMetadata: true });
+    expect(getCrossRegionReceived()[1]).toEqual(other);
+    expect(state.calls.filter(call => call.path.endsWith('/session'))).toHaveLength(1);
+    expect(state.clients).toHaveLength(1);
+    expect(state.clients[0].stopped).toBe(false);
+  });
+
+  it('uses current owner pushes to correct offline display without reviving paused or retired shares', async () => {
+    const offline = { ...share, hostOnline: false, hostCapable: false };
+    const paused = { ...offline, shareId: 'paused', memberId: 'paused-member', status: 'paused' };
+    state.responses.set('/session', {
+      credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [offline, paused],
+    });
+    const changed = vi.fn();
+    const catalogChanged = vi.fn();
+    startProviderShareCrossRegion({ changed, catalogChanged }, { userDataDir: dir });
+    await refreshProviderShareCrossRegion('global');
+    changed.mockClear();
+    const push = (shareId: string, deviceId = share.hostDeviceId): Envelope => ({
+      v: 1, kind: 'push', src: providerShareHostPeer(shareId, deviceId),
+      payload: { channel: 'maker:provider:changed', payload: {} },
+    });
+    const oldPush = state.clients[0].onFrame!;
+    oldPush(push('unknown'));
+    oldPush(push(paused.shareId));
+    oldPush(push(share.shareId, 'delegate-pc'));
+    expect(changed).not.toHaveBeenCalled();
+    oldPush(push(share.shareId));
+    expect(getCrossRegionReceived()).toEqual([{ ...offline, hostOnline: true, hostCapable: true }, paused]);
+    expect(changed).toHaveBeenCalledOnce();
+    expect(catalogChanged).toHaveBeenCalledExactlyOnceWith('share:share-x');
+    stopProviderShareCrossRegion();
+    startProviderShareCrossRegion({ changed }, { userDataDir: dir });
+    await refreshProviderShareCrossRegion('global');
+    changed.mockClear();
+    oldPush(push(share.shareId));
+    expect(changed).not.toHaveBeenCalled();
+    expect(getCrossRegionReceived()).toEqual([offline, paused]);
+  });
+
+  it.each(['offline-error', 'offline-result', 'timeout'] as const)('only explicit host-offline evidence changes display on %s', async (failure) => {
+    state.responses.set('/session', {
+      credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [share],
+    });
+    const changed = vi.fn();
+    startProviderShareCrossRegion({ changed }, { userDataDir: dir });
+    await refreshProviderShareCrossRegion('global');
+    changed.mockClear();
+    if (failure === 'offline-result') state.invokeResult = { ok: false, error: { code: 'DEVICE_OFFLINE', message: 'offline' } };
+    else state.invokeError = new DeviceLinkError(failure === 'offline-error' ? 'DEVICE_OFFLINE' : 'INVOKE_TIMEOUT', 'test transport failure');
+    const peer = providerShareHostPeer(share.shareId, share.hostDeviceId);
+    await crossRegionInvoke(peer, 'maker:provider:list', [], undefined, { liveProviderMetadata: true }).catch(() => undefined);
+    expect(getCrossRegionReceived()).toEqual([{ ...share, hostOnline: failure === 'timeout' }]);
+    expect(changed).toHaveBeenCalledTimes(failure === 'timeout' ? 0 : 1);
+    state.invokeError = null;
+    state.invokeResult = null;
+    await crossRegionInvoke(peer, 'maker:provider:list', [], undefined, { liveProviderMetadata: true });
+    expect(getCrossRegionReceived()).toEqual([share]);
+  });
+
+  it('keeps a cached model list from claiming the offline host is online', async () => {
+    state.responses.set('/session', {
+      credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [share],
+    });
+    startProviderShareCrossRegion({ changed: vi.fn() }, { userDataDir: dir });
+    await refreshProviderShareCrossRegion('global');
+    const peer = providerShareHostPeer(share.shareId, share.hostDeviceId);
+    await crossRegionInvoke(peer, 'maker:provider:list', []);
+    state.invokeError = new DeviceLinkError('DEVICE_OFFLINE', 'offline');
+    await expect(crossRegionInvoke(peer, 'maker:provider:list', [])).resolves.toMatchObject({
+      ok: true, result: { providerContinuity: { stale: true } },
+    });
+    expect(getCrossRegionReceived()).toEqual([{ ...share, hostOnline: false }]);
+  });
+
+  // Review regression: an older /session response must not erase live presence
+  // received while it was pending, including a success while already online.
+  // Membership changes remain authoritative even when that live call succeeded.
+  it.each([
+    { membership: 'same', initiallyOnline: false },
+    { membership: 'same', initiallyOnline: true },
+    { membership: 'paused', initiallyOnline: false },
+    { membership: 'replaced', initiallyOnline: false },
+    { membership: 'removed', initiallyOnline: false },
+  ])('merges live presence behind an older list (membership=$membership, initiallyOnline=$initiallyOnline)', async ({ membership, initiallyOnline }) => {
+    state.responses.set('/session', {
+      credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+      shares: [{ ...share, hostOnline: initiallyOnline, hostCapable: initiallyOnline }],
+    });
+    startProviderShareCrossRegion({ changed: vi.fn() }, { userDataDir: dir });
+    await refreshProviderShareCrossRegion('global');
+    const response = deferred<unknown>();
+    state.responses.set('/session', response.promise);
+    const refreshing = refreshProviderShareCrossRegion('global');
+    await vi.waitFor(() => expect(state.calls.filter(call => call.path.endsWith('/session'))).toHaveLength(2));
+    await crossRegionInvoke(providerShareHostPeer(share.shareId, share.hostDeviceId), 'maker:provider:list', [], undefined, { liveProviderMetadata: true });
+    const received = membership === 'removed' ? [] : [{
+      ...share, hostOnline: false, hostCapable: false,
+      ...(membership === 'paused' ? { status: 'paused' } : {}),
+      ...(membership === 'replaced' ? { memberId: 'replacement' } : {}),
+    }];
+    response.resolve({ credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: received });
+    await refreshing;
+    expect(getCrossRegionReceived()).toEqual(membership === 'same' ? [{ ...share, hostOnline: true }] : received);
+  });
+
+  it('lets a list requested after live presence replace that older observation', async () => {
+    state.responses.set('/session', {
+      credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [{ ...share, hostOnline: false, hostCapable: false }],
+    });
+    startProviderShareCrossRegion({ changed: vi.fn() }, { userDataDir: dir });
+    await refreshProviderShareCrossRegion('global');
+    const entered = deferred();
+    const release = deferred();
+    state.identityHook = async () => { entered.resolve(); await release.promise; };
+    const refreshing = refreshProviderShareCrossRegion('global');
+    await entered.promise;
+    await crossRegionInvoke(providerShareHostPeer(share.shareId, share.hostDeviceId), 'maker:provider:list', [], undefined, { liveProviderMetadata: true });
+    expect(getCrossRegionReceived()[0].hostOnline).toBe(true);
+    expect(state.calls.filter(call => call.path.endsWith('/session'))).toHaveLength(1);
+    release.resolve();
+    await refreshing;
+    expect(getCrossRegionReceived()[0].hostOnline).toBe(false);
   });
 
   it('only accepts the two official regions', async () => {
