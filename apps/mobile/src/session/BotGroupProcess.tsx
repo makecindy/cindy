@@ -60,7 +60,7 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
       const active = () => !cancelled;
       setLoading(true);
       void readBotGroupProcessMessages(process, clientId => invoke<BotGroupProcessMessage[]>(deviceId,
-        'local-db:messages:around-client-id', [process.sessionId, clientId, { radius: 80 }]), () => !active(), () => { if (active()) stopUpdates(); })
+        'local-db:messages:around-client-id', [process.sessionId, clientId, { radius: 80 }], { background: true }), () => !active(), () => { if (active()) stopUpdates(); })
         .then(messages => { if (active()) { setResult({ messages, failed: false }); setLoading(false); } })
         .catch(() => { if (active()) { setResult(previous => ({ messages: previous?.messages ?? [], failed: true })); setLoading(false); } })
         .finally(() => {
@@ -69,13 +69,17 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
         });
     };
     let messages = remoteSessionStore.getMessages(process.sessionId);
+    let invalidation = remoteSessionStore.getHistoryInvalidationToken(process.sessionId);
     const off = remoteSessionStore.subscribe(() => {
       const next = remoteSessionStore.getMessages(process.sessionId);
+      const nextInvalidation = remoteSessionStore.getHistoryInvalidationToken(process.sessionId);
+      const invalidated = nextInvalidation !== undefined && nextInvalidation !== invalidation;
       const origin = remoteSessionStore.getSessionDeviceId(process.sessionId);
       // Hidden group lanes may not be in the task list. The mirror only invalidates;
       // every record is still re-read from this process's explicit execution device.
-      if (cancelled || closed || next === messages || origin && origin !== deviceId) return;
+      if (cancelled || closed || (next === messages && !invalidated) || (origin && origin !== deviceId)) return;
       messages = next;
+      invalidation = nextInvalidation;
       // Keep one read in flight; changes during it become one trailing read.
       if (reading) { refreshPending = true; return; }
       clearTimeout(timer);

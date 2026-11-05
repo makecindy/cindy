@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { resolveInvokePriority } from '../../../../../../../packages/device-link/src/invokePolicy';
+import { InvokeScheduler } from '../../../../../../../packages/device-link/src/invokeScheduler';
 
 import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Tooltip } from '@/components/ui/tooltip';
@@ -4694,7 +4696,7 @@ it('reads historical group process from the execution computer after a home chan
   await waitFor(() => expect(view.container.querySelector('[data-teammate-process] button')).not.toBeNull());
   fireEvent.click(view.container.querySelector('[data-teammate-process] button')!);
   await screen.findByText('Original computer progress');
-  expect(mocks.remoteInvoke).toHaveBeenCalledWith('original-mac', 'local-db:messages:around-client-id', ['old-lane', 'source', { radius: 80 }]);
+  expect(mocks.remoteInvoke).toHaveBeenCalledWith('original-mac', 'local-db:messages:around-client-id', ['old-lane', 'source', { radius: 80 }], { background: true });
   expect(mocks.remoteInvoke.mock.calls.every(([device]) => device === 'original-mac')).toBe(true);
 });
 
@@ -4996,4 +4998,30 @@ it('reacquires a failed group history subscription before recovering its snapsho
     expect(view.container.querySelector('[data-teammate-segment]')).not.toBeNull();
     expect(subscribe).toHaveBeenCalledTimes(2);
   } finally { view.unmount(); ack?.({ ok: true }); vi.useRealTimers(); }
+});
+
+// PR #8979 / unit: real history effect with the production invoke scheduler.
+// Twelve mounted collapsed histories previously took every foreground slot;
+// the next task history read must start without waiting for their replies.
+it('keeps foreground capacity available while collapsed group histories prefetch', async () => {
+  const scheduler = new InvokeScheduler();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let started = 0;
+  let foregroundStarted = false;
+  mocks.remoteInvoke.mockImplementation((device, channel, _args, options) => scheduler.run(device,
+    resolveInvokePriority(channel, options?.background), 10_000, async () => { started++; await gate; return []; }));
+  const view = render(<Tooltip.Provider>{Array.from({ length: 12 }, (_, i) => <BotGroupProcess key={i}
+    process={{ groupId: 'g1', executionId: `hidden-${i}`, sessionId: 'hidden-lane', clientId: `source-${i}`, deviceId: 'original-mac' }}
+    member={{ ...detail().members[0]!, isOwned: true }} />)}</Tooltip.Provider>);
+  let foreground: Promise<unknown> | undefined;
+  try {
+    foreground = scheduler.run('original-mac', resolveInvokePriority('local-db:messages:around-client-id'), 10_000,
+      async () => { foregroundStarted = true; return []; });
+    expect(foregroundStarted).toBe(true);
+    expect(started).toBeLessThanOrEqual(4);
+  } finally {
+    view.unmount();
+    await act(async () => { release(); await foreground; });
+  }
 });

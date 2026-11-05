@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { resolveInvokePriority } from '../../../../packages/device-link/src/invokePolicy';
+import { InvokeScheduler } from '../../../../packages/device-link/src/invokeScheduler';
 import { act, createElement as el, useEffect, useState, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
@@ -55,6 +57,7 @@ vi.mock('@/session/MessageRenderer', async () => {
     MessagePayloadModal: ({ payload, onClose }: any) => payload ? el('div', { role: 'dialog' }, payload.body, el('button', { onClick: onClose }, 'Close output')) : null,
   };
 });
+import { SESSION_SYNC_CHANNEL } from '@cindy/device-link';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { BotGroupProcess, BotGroupProcessEntries } from '@/session/BotGroupProcess';
 import { TeammateProcess } from '@/session/TeammateProcess';
@@ -292,9 +295,10 @@ it.each(['AskUserQuestion', 'ExitPlanMode'])('retains %s call, input and result 
 });
 
 // PR #8979 / unit: real focused history and reader, native rendering adapted.
-// Existing pushes resolved immediately; a slow read plus spaced notifications
+// Existing created pushes resolved immediately; dirty signals leave the mirror
+// array unchanged. A slow read plus spaced invalidations
 // must keep one request and one trailing refresh, including failure/blur cleanup.
-it.each(['success', 'failure', 'unmount'])('coalesces in-flight group history refreshes (%s)', async outcome => {
+it.each(['created', 'invalidation'].flatMap(signal => ['success', 'failure', 'unmount'].map(outcome => ({ signal, outcome }))))('coalesces in-flight group history refreshes ($signal, $outcome)', async ({ signal, outcome }) => {
   vi.useFakeTimers();
   const latest = [source, { clientId: 'new-note', role: 'assistant', content: 'Newest persisted progress', agentMeta: { ...meta, assistantPhase: 'commentary' } }];
   const pending: Array<{ resolve(rows: unknown[]): void; reject(error: Error): void }> = [];
@@ -309,8 +313,12 @@ it.each(['success', 'failure', 'unmount'])('coalesces in-flight group history re
   try {
     await act(async () => {
       for (let i = 0; i < 10; i++) {
-        remoteSessionStore.applyRemotePush('mac', 'local-db:messages:created', { sessionId: process.sessionId,
-          message: { id: `slow-${i}`, clientId: `slow-${i}`, sessionId: process.sessionId, role: 'thinking', content: '', createdAt: new Date().toISOString() } });
+        if (signal === 'invalidation') {
+          remoteSessionStore.applyRemotePush('mac', SESSION_SYNC_CHANNEL, { sessionId: process.sessionId, resyncRequired: true });
+        } else {
+          remoteSessionStore.applyRemotePush('mac', 'local-db:messages:created', { sessionId: process.sessionId,
+            message: { id: `slow-${i}`, clientId: `slow-${i}`, sessionId: process.sessionId, role: 'thinking', content: '', createdAt: new Date().toISOString() } });
+        }
         await vi.advanceTimersByTimeAsync(60);
       }
     });
@@ -369,4 +377,69 @@ it.each(['image', 'video'] as const)('routes group tool %s through the execution
   await act(async () => Array.from(node.querySelectorAll('button')).find(button => button.textContent === 'Close media')!.click());
   expect(node.querySelector('[data-testid="process-lightbox"]')).toBeNull();
   expect(node.querySelector('[data-message-id="capture"]')).not.toBeNull();
+});
+
+// PR #8979 / unit: a dropped created push sends resyncRequired without changing
+// the mirror array. Earlier tests only used created pushes. Both mounted turns
+// must see each dirty signal without consuming the task page's pending refresh.
+it('refreshes every group history on repeated invalidations without a created push', async () => {
+  vi.useFakeTimers();
+  let note = 'Before lost push';
+  history.invoke.mockImplementation(async () => [source,
+    { clientId: 'note', role: 'assistant', content: note, agentMeta: { ...meta, assistantPhase: 'commentary' } }, final]);
+  await act(async () => root.render(el('div', null, group(), el(BotGroupProcess, {
+    process: { ...process, executionId: 'second-history' }, owned: true, deviceId: 'mac',
+  }))));
+  const mirror = remoteSessionStore.getMessages(process.sessionId);
+  let reads = history.invoke.mock.calls.length;
+  await act(async () => {
+    remoteSessionStore.applyRemotePush('mac', SESSION_SYNC_CHANNEL, { sessionId: 'other-lane', resyncRequired: true });
+    await vi.advanceTimersByTimeAsync(50);
+  });
+  expect(history.invoke).toHaveBeenCalledTimes(reads);
+  for (const updated of ['First lost update', 'Second lost update']) {
+    note = updated;
+    await act(async () => {
+      remoteSessionStore.applyRemotePush('mac', SESSION_SYNC_CHANNEL, { sessionId: process.sessionId, resyncRequired: true });
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    expect(remoteSessionStore.getMessages(process.sessionId)).toBe(mirror);
+    expect(remoteSessionStore.hasPendingRefresh(process.sessionId)).toBe(true);
+    expect(history.invoke.mock.calls.length).toBeGreaterThan(reads);
+    reads = history.invoke.mock.calls.length;
+    if (updated === 'First lost update') {
+      await act(async () => Array.from(node.querySelectorAll('button[aria-expanded="false"]')).forEach(button => (button as HTMLButtonElement).click()));
+    }
+    expect(node.textContent?.split(updated)).toHaveLength(3);
+    await act(async () => {
+      remoteSessionStore.applyRemotePush('mac', SESSION_SYNC_CHANNEL, { sessionId: 'other-lane', resyncRequired: true });
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    expect(history.invoke).toHaveBeenCalledTimes(reads);
+  }
+});
+
+// PR #8979 / unit: real group mounts + production invoke policy/scheduler.
+// Twelve pending hidden reads used to fill every foreground slot. A task read
+// must start before any hidden read returns; no real network or timer wait.
+it('keeps foreground capacity available while collapsed group histories prefetch', async () => {
+  const scheduler = new InvokeScheduler();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let started = 0;
+  let foregroundStarted = false;
+  history.invoke.mockImplementation((device, channel, _args, options) => scheduler.run(device,
+    resolveInvokePriority(channel, options?.background), 10_000, async () => { started++; await gate; return []; }));
+  let foreground: Promise<unknown> | undefined;
+  try {
+    await act(async () => root.render(el('div', null, ...Array.from({ length: 12 }, (_, i) => el(BotGroupProcess, {
+      key: i, process: { ...process, executionId: `hidden-${i}`, clientId: `source-${i}` }, owned: true, deviceId: 'mac',
+    })))));
+    foreground = scheduler.run('mac', resolveInvokePriority('local-db:messages:around-client-id'), 10_000,
+      async () => { foregroundStarted = true; return []; });
+    expect(foregroundStarted).toBe(true);
+    expect(started).toBeLessThanOrEqual(4);
+  } finally {
+    await act(async () => { root.render(null); release(); await foreground; });
+  }
 });

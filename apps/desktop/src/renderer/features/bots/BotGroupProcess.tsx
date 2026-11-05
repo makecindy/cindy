@@ -34,7 +34,7 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
     const owner = getDataOwnerGeneration();
     const current = () => !cancelled && isDataOwnerGenerationCurrent(owner);
     const read = (clientId: string) => deviceId
-      ? window.electronAPI.deviceLink.invoke(deviceId, 'local-db:messages:around-client-id', [process.sessionId, clientId, { radius: 80 }]) as Promise<BotGroupProcessMessage[]>
+      ? window.electronAPI.deviceLink.invoke(deviceId, 'local-db:messages:around-client-id', [process.sessionId, clientId, { radius: 80 }], { background: true }) as Promise<BotGroupProcessMessage[]>
       : window.electronAPI.localDb.messages.aroundClientId(process.sessionId, clientId, { radius: 80 });
     let reading = false;
     let refreshPending = false;
