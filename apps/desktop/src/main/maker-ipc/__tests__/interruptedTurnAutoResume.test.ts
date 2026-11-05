@@ -347,20 +347,24 @@ describe('isInterruptedTurnError', () => {
     );
   });
 
-  it('does not auto-resume when the inference gateway has no available OAuth accounts', () => {
+  // Regression (2026-11-05): the gateway also omits "OAuth". The old matcher
+  // retried the same unavailable pool and hid the failure behind running state.
+  // Production classifier, unit tier; existing coverage only used OAuth wording.
+  it.each(['OAuth accounts', 'accounts'])('does not auto-resume when the inference gateway has no available %s', (accounts) => {
     const exact =
-      'API Error: 503 {"error":"No available OAuth accounts in pool","detail":"No available OAuth accounts: 12 cooling down."}';
+      `API Error: 503 No available ${accounts}: no available ${accounts}.`;
     expect(isInterruptedTurnError({ message: exact, errorStatus: 503 })).toBe(false);
+    expect(isInterruptedTurnError({ message: exact, sdkError: 'server_error' })).toBe(false);
     expect(
       isInterruptedTurnError({
-        message: '503 Service Unavailable: No available OAuth accounts: 12 cooling down.',
+        message: `API Error: 503 {"error":"No available ${accounts} in pool","detail":"No available ${accounts}: 12 cooling down."}`,
       }),
     ).toBe(false);
     // A stable reason must not override this non-retryable provider signal.
     expect(
       isInterruptedTurnError({
         reason: 'upstream-overload',
-        message: 'No available OAuth accounts in pool',
+        message: `No available ${accounts} in pool`,
         errorStatus: 503,
       }),
     ).toBe(false);

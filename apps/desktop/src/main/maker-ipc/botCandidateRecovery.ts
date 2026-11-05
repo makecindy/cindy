@@ -31,7 +31,7 @@ export function isBotCandidateUnavailable(signals: InterruptedTurnErrorSignals):
   // A known input/control error must not be reclassified from this text alone.
   const sessionLimit = (!tag || tag === 'unknown') && /\byou['’]ve hit your session limit\b/i.test(message);
   return sessionLimit || isNetworkishErrorMessage(message) || isOverloadErrorMessage(message, signals.errorStatus)
-    || /invalid api key|missing bearer token|no available oauth accounts|credit balance too low|rate.limit exceeded|model.{0,80}(?:not found|does not exist|unavailable)|(?:failed to (?:start|spawn)|could not start) (?:the )?(?:agent|pi|codex|claude)/i.test(message);
+    || /invalid api key|missing bearer token|\bno available (?:oauth )?accounts\b|credit balance too low|rate.limit exceeded|model.{0,80}(?:not found|does not exist|unavailable)|(?:failed to (?:start|spawn)|could not start) (?:the )?(?:agent|pi|codex|claude)/i.test(message);
 }
 
 /** The Session reference is only a teardown lease, never proof that a route changed. */

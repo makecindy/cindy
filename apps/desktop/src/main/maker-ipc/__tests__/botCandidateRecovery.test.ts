@@ -104,6 +104,7 @@ describe('Bot candidate recovery', () => {
     { reason: 'turn-failed', errorStatus: 403, message: 'Permission denied' },
     { errorStatus: 401 }, { errorStatus: 402 }, { errorStatus: 429 }, { errorStatus: 503 },
     { sdkError: 'authentication_failed' }, { sdkError: 'billing_error' },
+    { message: 'No available accounts' },
     { message: 'model deepseek does not exist' }, { message: 'Failed to start agent' },
     { message: 'Selected model is at capacity. Please try a different model.' },
   ])('allows a different candidate for %j', (signals) => {
@@ -256,6 +257,22 @@ describe('Bot candidate recovery', () => {
   });
 
   const overload = { reason: 'upstream-overload', message: 'Selected model is at capacity. Please try a different model.' };
+  // Regression (2026-11-05), unit: execute the registered recovery callbacks.
+  // Existing server-error coverage missed a single-route Bot returning unchanged:
+  // "No available accounts" must surface the failure, not retry the same pool.
+  it.each(['switched', 'unchanged', 'exhausted', 'failed', 'superseded'])(
+    'only resumes an unavailable account pool after switching routes (%s)', async (outcome) => {
+      const h = harness();
+      const signals = { sdkError: 'server_error', message: 'API Error: 503 No available accounts: no available accounts.' };
+      h.fallback.mockResolvedValue({ session: null, outcome });
+      expect(h.onResumableTurnError('s', signals, h.item)).not.toBeNull();
+      await h.run();
+      expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function));
+      expect(h.resume).toHaveBeenCalledTimes(outcome === 'switched' ? 1 : 0);
+      if (outcome !== 'switched') expect(h.finalize).toHaveBeenCalledWith('s', 1, { surfaceBanner: true });
+    },
+  );
+
   it('keeps the ordinary same-route retry for a Bot that has no other route', async () => {
     const h = harness();
     h.fallback.mockResolvedValue({ session: null, outcome: 'unchanged' });
