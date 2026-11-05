@@ -172,6 +172,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       onPayload(DEVICE_LINK_PUSH.PRESENCE_CHANGED, cb),
     onStatusChanged: (cb: (payload: unknown) => void): (() => void) =>
       onPayload(DEVICE_LINK_PUSH.STATUS_CHANGED, cb),
+    onDeviceDirectoryInvalidated: (cb: () => void): (() => void) =>
+      onPayload(DEVICE_LINK_PUSH.DEVICE_DIRECTORY_INVALIDATED, cb),
     onRemotePush: (cb: (payload: unknown, localOwnerStamp?: unknown) => void): (() => void) =>
       onPayloadWithMetadata(DEVICE_LINK_PUSH.REMOTE_PUSH, cb),
     onAccessRevoked: (cb: (payload: unknown) => void): (() => void) =>

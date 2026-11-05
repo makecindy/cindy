@@ -2,8 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
 import { providerReferencePriceQuote, getModelPriceQuote, modelPricingKey } from '../../../shared/modelPriceQuote.js';
 
-vi.mock('../../maker-host/active-catalog.js', () => ({
-  getActiveCatalog: () => ({ ...BUNDLED_CATALOG, providers: [buildUserProvider({
+// Match the production catalog's stable snapshot: rebuilding these providers on every
+// lookup makes each historical projection pay for the same account expansion repeatedly.
+const accountCatalog = { ...BUNDLED_CATALOG, providers: [buildUserProvider({
     id: 'openai-account', name: 'Account', auth: { method: 'oauth', native: 'codex' },
     runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', models: [{ id: 'gpt-5.6-luna', name: 'Luna' }] } },
   }), buildUserProvider({ id: 'router-account', name: 'Router', runtimes: {
@@ -32,7 +33,10 @@ vi.mock('../../maker-host/active-catalog.js', () => ({
     // The active catalog fills Claude membership from account discovery.
     if (native === 'claude') provider.models.codex = [{ id: 'claude-sonnet-4-6', name: 'Sonnet', contextWindow: 200000, efforts: [], defaultEffort: null }];
     return provider;
-  })] }),
+  })] };
+
+vi.mock('../../maker-host/active-catalog.js', () => ({
+  getActiveCatalog: () => accountCatalog,
 }));
 vi.mock('../modelPriceOverrideStore.js', () => ({
   applyModelPriceOverrides: (pricing: unknown) => pricing,

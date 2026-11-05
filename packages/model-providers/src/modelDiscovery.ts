@@ -90,6 +90,7 @@ export function parseModelsListResponse(
             max_context_length?: unknown;
             max_input_tokens?: unknown;
             max_context_window?: unknown;
+            limit?: { context?: unknown; output?: unknown };
           })
         : null;
     const name = google && typeof google.displayName === 'string' ? google.displayName :
@@ -98,6 +99,12 @@ export function parseModelsListResponse(
         : rec && typeof rec.name === "string" && rec.name.length > 0
           ? rec.name
           : id;
+    // OpenCode-compatible catalogs report token limits in a nested object (#8867).
+    // Validate each field before using it as a fallback for existing flat formats.
+    const nestedLimits = pickModelMetadata({
+      contextWindow: rec?.limit?.context,
+      maxOutputTokens: rec?.limit?.output,
+    });
     const rawWindow = rec
       ? [
           rec.context_length,
@@ -176,7 +183,7 @@ export function parseModelsListResponse(
     const openRouterSpeech = sourceUrl !== undefined && isOpenRouterModelsUrl(sourceUrl)
       && Array.isArray(architecture?.output_modalities)
       && architecture.output_modalities.includes('speech');
-    const discoveredMetadata = { ...pickModelMetadata(record), ...pickModelMetadata({
+    const discoveredMetadata = { ...nestedLimits, ...pickModelMetadata(record), ...pickModelMetadata({
       nativeApi: record.nativeApi !== undefined ? record.nativeApi : record.native_api,
       ...([rec?.display_name, rec?.name, google?.displayName].some(
         (value) => typeof value === "string" && value.trim().length > 0,
@@ -276,8 +283,8 @@ export function parseModelsListResponse(
       discoveredMetadata,
       ...(Object.keys(discoveredCost).length ? { discoveredCost } : {}),
       name,
-      ...(typeof rawWindow === "number"
-        ? { contextWindow: Math.floor(rawWindow) }
+      ...(discoveredMetadata.contextWindow !== undefined
+        ? { contextWindow: discoveredMetadata.contextWindow }
         : {}),
     });
   }

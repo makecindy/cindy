@@ -1,3 +1,4 @@
+import { remotePrStatuses, prStatusQuery, type PrIdentity } from '@cindy/maker-shared';
 /**
  * get_task_digest 的 Desktop 数据源:把 `taskDigest.ts` 的纯组装接到本机数据库、会话控制、
  * 观察层与跨电脑只读通路上。跨电脑只走已有、已在被控端白名单里的读通道
@@ -266,7 +267,11 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
         return result.ok ? lastExchange(result.items) : { lastUserAsk: null, lastAssistantLine: null };
       },
       prStatus: async (deviceId, sessionId) => {
-        const refs = (await unwrap(host.invokeRemote, deviceId, 'git-context:pr-refs:list', [sessionId])) as Array<{
+        const refs = (await unwrap(host.invokeRemote, deviceId, 'git-context:pr-refs:list', [
+          sessionId,
+        ])) as Array<{
+          provider?: unknown;
+          host?: unknown;
           owner?: unknown;
           repo?: unknown;
           prNumber?: unknown;
@@ -274,10 +279,14 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
         const queries = (Array.isArray(refs) ? refs : [])
           .filter((ref) => typeof ref.owner === 'string' && typeof ref.repo === 'string' && typeof ref.prNumber === 'number')
           .slice(0, 3)
-          .map((ref) => ({ owner: ref.owner, repo: ref.repo, prNumber: ref.prNumber }));
+          .map((ref) => prStatusQuery(ref as PrIdentity));
         if (queries.length === 0) return null;
-        const statuses = await unwrap(host.invokeRemote, deviceId, 'git-context:pr-status', [{ sessionId, queries }]);
-        return Array.isArray(statuses) ? formatPrStatuses(statuses as Parameters<typeof formatPrStatuses>[0]) : null;
+        const statuses = await remotePrStatuses(queries, sessionId, (channel, args) =>
+          unwrap(host.invokeRemote, deviceId, channel, args),
+        );
+        return Array.isArray(statuses)
+          ? formatPrStatuses(statuses as Parameters<typeof formatPrStatuses>[0])
+          : null;
       },
     },
   };

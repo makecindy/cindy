@@ -83,6 +83,7 @@ function createDb(): void {
       id TEXT PRIMARY KEY NOT NULL,
       title TEXT NOT NULL DEFAULT 'New CCS',
       working_dir TEXT,
+      project_dir TEXT,
       model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
       scheduled_model_baseline TEXT,
       effort TEXT NOT NULL DEFAULT 'high',
