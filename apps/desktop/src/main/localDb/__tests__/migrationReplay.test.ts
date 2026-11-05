@@ -1,10 +1,11 @@
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 
 import type Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { listAllPrRefs, listPrRefs, managePrRefs } from '../../git-context/prRefsStore';
 import { createBetterSqliteDatabase } from '../betterSqliteFactory';
@@ -15,6 +16,12 @@ import { initializeTaskTagPresets } from '../taskTagPresets';
 
 const canRunMigrationReplay = process.platform === 'win32' || process.platform === 'darwin';
 const describeMigrationReplay = canRunMigrationReplay ? describe : describe.skip;
+
+// Synchronous SQLite replays can starve Vitest's progress RPC acknowledgements
+// across consecutive cases on slower runners. Yield without relaxing timeouts.
+afterEach(async () => {
+  await yieldToEventLoop();
+});
 
 function desktopRoot(): string {
   return path.resolve(__dirname, '../../../..');
