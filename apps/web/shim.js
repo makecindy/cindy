@@ -36,7 +36,12 @@
     ghosts: Object.freeze({ ghosts: [] }),
     ghostRecommendations: Object.freeze({ items: [] }),
     layout: Object.freeze({ layout: null }),
-    sidebarSettings: Object.freeze({ pinned: [], hidden: [], order: [] }),
+    sidebarSettings: Object.freeze({
+      dataOwnerId: null, ownerGeneration: 0,
+      pinnedOrderIsAuthoritative: false,
+      pinnedOrder: Object.freeze([]), hiddenProjectKeys: Object.freeze([]),
+      hiddenMainViewGhostIds: Object.freeze([]),
+    }),
     pluginRuns: Object.freeze({ runs: [] }),
     emptyList: Object.freeze([]),
     memorySettings: Object.freeze({ maker: true, claudeCode: true, codex: true, pi: true }),
@@ -256,7 +261,11 @@
     'layout.getStateSync': () => ({ layout: window.__cindyBoot?.layout ?? null }),
     'ghosts.listSync': () => STATIC.ghosts,
     'ghosts.recommendationsSync': () => STATIC.ghostRecommendations,
-    'sidebarSettings.loadSnapshot': () => STATIC.sidebarSettings,
+    'sidebarSettings.loadSnapshot': () => ({
+      ...STATIC.sidebarSettings,
+      dataOwnerId: window.__cindyBoot?.auth?.ownerId ?? null,
+      ownerGeneration: 1,
+    }),
     'maker.listActive': () => STATIC.emptyList,
     'remoteDesktop.state': () => STATIC.remoteDesktopState,
     'sidebarSettings.claimLegacyRendererOwner': () => STATIC.claimDenied,
@@ -284,7 +293,17 @@
     },
   };
 
+  /**
+   * Channels the preload answers synchronously (sendSync or an in-memory read).
+   * Getting this wrong hands the renderer a Promise where it expects a value,
+   * which makes snapshot stores re-render forever.
+   */
   const SYNC_CHANNEL = /(Sync$|getSync$|listSync$|getDataSnapshot$)/;
+  const SYNC_CHANNELS = {
+    'sidebarSettings.loadSnapshot': true,
+    'layout.getStateSync': true,
+    'appearanceSettings.getSync': true,
+  };
 
   function unsupported(path) {
     const error = new Error(`host channel not implemented: ${path}`);
@@ -330,7 +349,8 @@
       window.__cindyCalls?.push(path);
       const handler = routes[path];
       if (!handler) return unsupported(path);
-      const sync = SYNC_CHANNEL.test(path) || path === 'maker.claimLegacyModelVisibilityOwner';
+      const sync = SYNC_CHANNEL.test(path) || SYNC_CHANNELS[path] === true
+        || path === 'maker.claimLegacyModelVisibilityOwner';
       const cacheKey = sync ? `${path}\u0000${JSON.stringify(args)}` : null;
       if (cacheKey !== null && syncSnapshots.has(cacheKey)) return syncSnapshots.get(cacheKey);
       let value;
