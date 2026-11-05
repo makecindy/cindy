@@ -1,4 +1,15 @@
 {
+  "pluginUi": {
+    "renderer": "显示方式",
+    "original": "原始内容",
+    "unavailable": "插件界面暂不可用，当前操作已停用。",
+    "outcome-unknown": "插件操作结果尚未确认，请查看最新状态。",
+    "rejected": "插件未执行这次操作，当前内容已保留。",
+    "draftChanged": "输入已改变，插件的输入修改未应用。",
+    "editorUnavailable": "当前输入框不可用，插件的输入修改未应用。",
+    "more": "更多",
+    "close": "关闭"
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "刷新配额",
@@ -2321,6 +2332,9 @@
     "agentIsland": {
       "title": "灵动岛",
       "unsupported": "灵动岛需要 macOS 14 或更高版本。",
+      "subtleRemindersLabel": "轻提醒",
+      "subtleRemindersHint": "有新消息、待回复事项或错误时，不向下弹出通知卡片，通过图标变化提示。点击灵动岛可查看完整任务列表。",
+      "subtleRemindersFailed": "未能保存提醒设置，请重试。",
       "enableLabel": "显示灵动岛",
       "enableHint": "在屏幕顶部显示正在运行、待交互和未读完成的任务。启用后会抑制同类系统通知，避免重复打扰。",
       "enableAria": "切换灵动岛",
@@ -3928,6 +3942,7 @@
             "hint": "应用于 {{agent}} 的图片连接。仅声明接口实际支持的能力，保存后重新打开 Art 详情。"
           },
           "capabilityHint": "优先使用当前供应商声明的能力；未声明时，图片能力参考模型名称。",
+          "imageInputDefault": "{{value}}（默认）",
           "imageInput": "图片输入",
           "imageInputMixed": "各引擎不同",
           "supported": "支持",
@@ -6034,8 +6049,10 @@
       "accessRevokedByPeer": "访问权限已被撤销，需对方在选项中恢复",
       "deviceControlToggleAria": "切换是否控制 {{name}}",
       "myDevices": {
-        "controlIt": "我控制它",
-        "allowInbound": "允许它控制本机",
+        "iCan": "我可以",
+        "itCan": "它可以",
+        "controlIt": "控制它",
+        "controlThisDevice": "控制本机",
         "allowInboundAria": "切换是否允许 {{name}} 控制本机",
         "peerControlOff": "对方未允许远程控制",
         "masterOffHint": "需先开启上方总开关",
@@ -7662,6 +7679,8 @@
         "skill": "为 AI 助手添加技能「{{name}}」",
         "skillDetail": "技能是一份指令文件，AI 会把它当作自己的指令加载执行，拥有你的全部权限，对 Claude Code 与 Codex、所有项目都生效——不受本插件沙箱约束。插件启用期间持续可用，停用或卸载即移除；仅对某个文件夹关闭本插件不会隐藏它。此处无法预览技能全文——请只安装你信任的插件。",
         "routineEvents": "例行任务事件",
+        "nativeUi": "在任务中添加控件",
+        "nativeTabView": "可打开独立视图「{{title}}」",
         "mcpUi": "可在对话中显示交互页面",
         "mcpUiDomains": "页面可连接域名：{{domains}}",
         "mcpAppOnly": "仅页面可用",
@@ -13425,6 +13444,24 @@
           "autocompactBuffer": "自动压缩缓冲",
           "compactBuffer": "压缩缓冲",
           "freeSpace": "剩余可用"
+        },
+        "estimate": {
+          "title": "文本估算",
+          "delivery": "答案交付",
+          "host": "Cindy 规则",
+          "plugins": "插件目录",
+          "memoryRules": "记忆规则",
+          "memoryIndex": "记忆索引",
+          "profile": "伙伴资料",
+          "user": "用户指令",
+          "directories": "附加目录",
+          "native": "Pi 原生规则",
+          "skills": "技能目录",
+          "project": "项目指令",
+          "tools": "工具定义",
+          "messages": "对话正文",
+          "other": "其他指令",
+          "note": "按当前文本粗估，并非模型分词结果。不含图片与供应商格式开销，分项之和不等于原生总量。"
         }
       },
       "compact": {
@@ -14745,7 +14782,9 @@
           "summaryAria": "MR !{{number}} 汇总",
           "urlPlaceholder": "GitHub PR 或 GitLab MR 链接",
           "notFound": "MR 不存在，或当前账号无权限查看"
-        }
+        },
+        "merge": "合并",
+        "conflicts": "有冲突"
       }
     },
     "schedule": {

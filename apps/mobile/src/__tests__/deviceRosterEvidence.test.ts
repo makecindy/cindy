@@ -15,7 +15,7 @@ function fixture() {
   };
   visit(source);
   if (!expression) throw new Error('Missing roster consumer');
-  const client = { getStatus: () => 'online' };
+  const client = { getStatus: () => 'online', noteRemoteControlEnabled: vi.fn(), noteRemoteControlDisabled: vi.fn() };
   const bindings = { client, clientRef: { current: client }, connectionEpochRef: { current: 1 },
     presenceAvailabilityEpochsRef: { current: { next: 0, byDevice: new Map<string, number>() } },
     remoteResponseEvidenceEpochs: { next: 0, byDevice: new Map<string, number>() },
@@ -32,7 +32,7 @@ const device = { deviceId: 'host', name: 'Computer', online: false, remoteContro
 it('seeds an already offline host and does not reset unchanged online links', () => {
   const f = fixture();
   f.apply([device]);
-  expect(f.applyPresence).toHaveBeenCalledWith(expect.objectContaining({ deviceId: 'host', online: false }));
+  expect(f.applyPresence).toHaveBeenCalledWith(expect.objectContaining({ deviceId: 'host', online: false }), 'roster');
   f.applyPresence.mockClear();
   f.presenceAvailableByDeviceRef.current.set('host', true);
   f.apply([{ ...device, online: true }]);
@@ -45,7 +45,8 @@ it('keeps remote-disabled distinct from offline even after a recent response', (
   f.presenceUnavailableVerdictsRef.current.set('host', { kind: 'presence' });
   f.remoteResponseEvidenceEpochs.byDevice.set('host', 1);
   f.apply([{ ...device, online: true, remoteControlEnabled: false }]);
-  expect(f.applyPresence).toHaveBeenCalledWith(expect.objectContaining({ online: true, remoteControlEnabled: false }));
+  expect(f.applyPresence).toHaveBeenCalledWith(expect.objectContaining({ online: true, remoteControlEnabled: false }), 'roster');
+  expect(f.client.noteRemoteControlDisabled).toHaveBeenCalledWith('host');
 });
 
 it('rejects stale offline REST evidence after a response, presence update or connection change', () => {

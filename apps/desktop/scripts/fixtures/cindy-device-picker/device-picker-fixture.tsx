@@ -40,6 +40,7 @@ function DevicePickerPage({ data }: { data: Record<string, unknown> }) {
             current={current}
             options={options}
             selected={roster.selected}
+            status={current.unread ? 'unread' : 'idle'}
             subtitle={t('bots.list.startChat')}
             timestamp="13:56"
             onOpen={() => setOpens((count) => count + 1)}

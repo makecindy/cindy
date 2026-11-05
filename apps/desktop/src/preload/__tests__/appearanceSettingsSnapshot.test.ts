@@ -93,7 +93,8 @@ describe.each(['main', 'sidebar'] as const)('%s preload appearance snapshot', (k
     } else {
       expect(Object.keys(bridge).sort()).toEqual([
         'ensureWallpaperImage', 'ensureWallpaperVideo', 'get', 'getSync', 'importWallpaper',
-        'onChanged', 'onWallpaperDownloadProgress', 'removeWallpaper', 'reset', 'setPatch',
+        'loadPluginFont', 'onChanged', 'onPluginApply', 'onWallpaperDownloadProgress',
+        'pluginApplied', 'removeWallpaper', 'reset', 'setPatch',
       ]);
     }
   });

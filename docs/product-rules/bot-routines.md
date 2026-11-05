@@ -152,6 +152,9 @@ const receipt = await cindy.routines.request({
 
 ## 内置跟进例行任务
 
+> 2026-11-05：例行任务整体有并入定时任务的方向，内置跟进「不能删、不能改指令」与「伙伴的工作方式属于伙伴」
+> 冲突，均待裁决，见 [伙伴专属能力台账](teammate-capability-ledger.md) §4、§5；裁决前本节照常有效。
+
 每个在用、且本机是主力电脑的伙伴有一条宿主内置规则（`builtin: 'follow-up'`，id 固定为 `builtin-follow-up-<伙伴 id>`；伙伴 id 过长或含引擎不接受的字符时改为前缀 + 伙伴 id 的 sha256 前 40 位，同样幂等，不要从 id 反推伙伴 id）：
 
 - 用户自己创建的任务只在明确选择跟进伙伴后才有跟进者；默认关闭及首次聊天邀请见 `cindy-bots-runtime.md` §6.3。伙伴已受托创建的任务仍按原归属跟进。

@@ -1,4 +1,15 @@
 {
+  "pluginUi": {
+    "renderer": "Visualización",
+    "original": "Original",
+    "unavailable": "Los controles del complemento no están disponibles. Las acciones están desactivadas.",
+    "outcome-unknown": "El resultado no está confirmado. Consulta el estado actual del complemento.",
+    "rejected": "El complemento no ejecutó esta acción. Se conserva lo que escribiste.",
+    "draftChanged": "La entrada cambió. No se aplicó la modificación del complemento.",
+    "editorUnavailable": "Este campo no está disponible. No se aplicó la modificación del complemento.",
+    "more": "Más",
+    "close": "Cerrar"
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "Actualizar cuota",
@@ -677,7 +688,7 @@
       "idleHint": "Tras este tiempo de inactividad, la computadora detiene el Agent de la sesión y libera su plaza. El siguiente mensaje retoma la misma conversación. Las sesiones en ejecución nunca se interrumpen por este motivo. Usa 0 para no liberar plazas automáticamente.",
       "idleInvalid": "Introduzca un número entero del 0 al {{max}}.",
       "usage": "Sesiones {{used}} / {{total}} realizadas por dispositivos {{devices}}; el dispositivo más ocupado tiene {{largest}}.",
-      "applyHint": "Los cambios se aplican inmediatamente. Reducir un límite solo bloquea nuevas sesiones; Las sesiones existentes continúan. Los relés de grupo cuentan para el dispositivo conectado directamente.",
+      "applyHint": "Los cambios se aplican inmediatamente. Reducir un límite solo bloquea nuevas sesiones; las sesiones existentes continúan. El uso retransmitido del grupo cuenta para el dispositivo conectado directamente.",
       "save": "Guardar",
       "reset": "Restaurar valores predeterminados",
       "saved": "Límites de sesión remota guardados",
@@ -2386,6 +2397,9 @@
     "agentIsland": {
       "title": "Isla Agent",
       "unsupported": "La isla Agent requiere macOS 14 o posterior.",
+      "subtleRemindersLabel": "Avisos discretos",
+      "subtleRemindersHint": "Cuando haya mensajes nuevos, solicitudes de respuesta o errores, el icono cambia en lugar de mostrar una tarjeta de notificación debajo de la isla. Haz clic en la isla para ver la lista completa de tareas.",
+      "subtleRemindersFailed": "No se han podido guardar los ajustes de avisos. Inténtalo de nuevo.",
       "enableLabel": "Mostrar isla Agent",
       "enableHint": "Muestra las tareas en ejecución, que necesitan respuesta y completadas no leídas en la parte superior de la pantalla. Habilitar suprime las notificaciones equivalentes del sistema para evitar alertas dobles.",
       "enableAria": "Alternar isla Agent",
@@ -4021,6 +4035,7 @@
             "hint": "Aplica para la conexión de Imágenes {{agent}}. Declare únicamente las capacidades que realmente admite el API. Vuelva a abrir los detalles del arte después de guardar."
           },
           "capabilityHint": "Utiliza capacidades declaradas por este proveedor. El soporte de imágenes recurre a la denominación de modelos cuando no se declara.",
+          "imageInputDefault": "{{value}} (predeterminado)",
           "imageInput": "Entrada de imagen",
           "imageInputMixed": "Varía según el motor.",
           "supported": "Apoyado",
@@ -6135,8 +6150,10 @@
       "accessRevokedByPeer": "Acceso revocado: el otro dispositivo debe restaurarlo en su configuración",
       "deviceControlToggleAria": "Activar o desactivar el control de {{name}}",
       "myDevices": {
-        "controlIt": "Lo controlo",
-        "allowInbound": "Permitir que controle este dispositivo",
+        "iCan": "Yo puedo",
+        "itCan": "Puede",
+        "controlIt": "Controlarlo",
+        "controlThisDevice": "Controlar este dispositivo",
         "allowInboundAria": "Activar o desactivar el permiso de {{name}} para controlar este dispositivo",
         "peerControlOff": "El control remoto no está habilitado en ese dispositivo",
         "masterOffHint": "Primero activa el interruptor principal de arriba",
@@ -7772,6 +7789,8 @@
         "skill": "Agrega la habilidad \"{{name}}\" a tus asistentes de IA",
         "skillDetail": "Una habilidad es un archivo de instrucciones que la IA carga y sigue como propio, con todos sus permisos, en Claude Code y Codex, en todos los proyectos; no se limita al entorno limitado de este complemento. Permanece disponible mientras el complemento está habilitado y se elimina cuando el complemento se deshabilita o desinstala; desactivar el complemento para una sola carpeta no lo oculta. No se puede obtener una vista previa del texto completo de la habilidad aquí; solo instale complementos en los que confíe.",
         "routineEvents": "Eventos de rutina",
+        "nativeUi": "Añadir controles a las tareas",
+        "nativeTabView": "Abrir la vista «{{title}}»",
         "mcpUi": "Mostrar páginas interactivas en la conversación",
         "mcpUiDomains": "Dominios de red de las páginas: {{domains}}",
         "mcpAppOnly": "Solo página",
@@ -12209,7 +12228,7 @@
       "effortLabel": "Intensidad de razonamiento",
       "thinking": "Pensando",
       "edit": "Editar",
-      "options": "Options",
+      "options": "Opciones",
       "priceTip": "Entrada {{input}} · Salida {{output}} por 1M de tokens",
       "pricing": {
         "title": "Por 1 millón de tokens",
@@ -13508,7 +13527,7 @@
         "empty": "No hay comandos disponibles."
       },
       "cost": {
-        "title": "Costo de la sesión",
+        "title": "Uso de la sesión",
         "tokensUsed": "Tokens usados (este turno)"
       },
       "pwd": {
@@ -13566,12 +13585,30 @@
           "autocompactBuffer": "Reserva para compactación automática",
           "compactBuffer": "Reserva para compactación",
           "freeSpace": "Espacio libre"
+        },
+        "estimate": {
+          "title": "Estimaciones de texto",
+          "delivery": "Presentación de respuestas",
+          "host": "Instrucciones de Cindy",
+          "plugins": "Catálogo de complementos",
+          "memoryRules": "Instrucciones de memoria",
+          "memoryIndex": "Índice de memoria",
+          "profile": "Perfil del compañero",
+          "user": "Instrucciones del usuario",
+          "directories": "Directorios adicionales",
+          "native": "Instrucciones de Pi",
+          "skills": "Catálogo de habilidades",
+          "project": "Instrucciones del proyecto",
+          "tools": "Definiciones de herramientas",
+          "messages": "Texto de la conversación",
+          "other": "Otras instrucciones",
+          "note": "Estimación del texto actual, sin la tokenización del modelo. Excluye imágenes y formato del proveedor; la suma difiere del total nativo."
         }
       },
       "compact": {
         "savedTokens": "tokens {{tokens}} guardados",
-        "manual": "compacto manual",
-        "auto": "Auto compacto",
+        "manual": "Compactación manual",
+        "auto": "Compactación automática",
         "aria": "Chat compactado"
       },
       "autoResume": {
@@ -14951,7 +14988,9 @@
           "summaryAria": "Resumen de MR !{{number}}",
           "urlPlaceholder": "Enlace de PR de GitHub o MR de GitLab",
           "notFound": "No se encontró el MR o la cuenta actual no tiene permiso para verlo"
-        }
+        },
+        "merge": "Fusión",
+        "conflicts": "Con conflictos"
       }
     },
     "schedule": {

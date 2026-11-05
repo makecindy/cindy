@@ -27,6 +27,9 @@ describe('subscription Fast policy wire compatibility', () => {
     expect(parseRemoteAgentCaps(caps).subscriptionFastPolicy).toBeUndefined();
     expect(parseRemoteAgentCaps({ ...caps, subscriptionFastPolicy: true }).subscriptionFastPolicy).toBe(true);
     expect(parseRemoteAgentCaps({ ...caps, subscriptionFastPolicy: 'true' }).subscriptionFastPolicy).toBeUndefined();
+    expect(parseRemoteAgentCaps(caps).groupContinuity).toBeUndefined();
+    expect(parseRemoteAgentCaps({ ...caps, groupContinuity: true }).groupContinuity).toBe(true);
+    expect(parseRemoteAgentCaps({ ...caps, groupContinuity: 'true' }).groupContinuity).toBeUndefined();
   });
   it('parses a narrow registration without trusting arbitrary execution options', () => {
     const command = { op: 'fast-policy', group: 'openai-account', revision: 2, allowFast: false,

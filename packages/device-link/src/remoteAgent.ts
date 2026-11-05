@@ -299,6 +299,8 @@ export interface RemoteAgentCaps {
   nativeHistoryTransfer?: boolean;
   /** Executor accepts bounded same-account group-owner delegation for a shared guest. */
   directGuestExecution?: boolean;
+  /** Same-account M supports an explicit bounded group routing context. */
+  groupContinuity?: true;
   subscriptionFastPolicy?: true;
   nativeFork?: boolean;
   imageRecovery?: boolean;
@@ -811,6 +813,7 @@ export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
     ...(v.imageRecoveryRelay === true ? { imageRecoveryRelay: true } : {}),
     ...(v.guestRelay === true ? { guestRelay: true } : {}),
     ...(v.directGuestExecution === true ? { directGuestExecution: true } : {}),
+    ...(v.groupContinuity === true ? { groupContinuity: true as const } : {}),
     ...(v.relayModelAccess === true ? { relayModelAccess: true } : {}),
     ...(v.reshareConsent === true ? { reshareConsent: true } : {}),
     ...(v.reshareBatch === true ? { reshareBatch: true } : {}),

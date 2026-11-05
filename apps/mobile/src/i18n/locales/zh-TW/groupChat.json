@@ -520,6 +520,7 @@
     "searchMembers": "搜尋成員",
     "membersNoMatch": "找不到「{{query}}」",
     "you": "你",
+    "companionOf": "{{name}} 的夥伴",
     "teammateTag": "夥伴",
     "paused": "已暫停",
     "accessNone": "僅主人可用",

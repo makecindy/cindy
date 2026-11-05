@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SetupMigrationPlan, SetupMigrationProgress } from '../../../../shared/setupMigration';
 import { applyRendererItems, rendererApplyCount } from '../applyRendererItems';
 import { getSwallowActivationClickEnabled } from '../../../hooks/useSwallowActivationClickSettings';
+import { getAgentIslandSubtleReminders } from '../../../hooks/useAgentIslandSettings';
 import { applyPortableRendererPrefs, readPortableRendererPrefs } from '../rendererPrefs';
 
 class MemoryStorage implements Storage {
@@ -150,6 +151,31 @@ describe('applyRendererItems', () => {
 });
 
 describe('portable renderer preferences', () => {
+  // PR #8848: the new reminder override was dropped during setup migration.
+  // Unit: export/import a saved boolean, read the production preference, and keep a target override.
+  // Existing cases cover generic preferences but did not include this newly added setting.
+  it.each([true, false])('moves the subtle-reminder override %s without replacing the target choice', (enabled) => {
+    const key = 'notifications.agentIslandSubtleReminders';
+    const source = new MemoryStorage();
+    source.setItem(key, String(enabled));
+    const values = readPortableRendererPrefs(source, null);
+    expect(values).toEqual({ [key]: String(enabled) });
+
+    const target = new MemoryStorage();
+    vi.stubGlobal('localStorage', target);
+    try {
+      expect(applyPortableRendererPrefs(values, target, null)).toBe(1);
+      expect(target.getItem(key)).toBe(String(enabled));
+      expect(getAgentIslandSubtleReminders()).toBe(enabled);
+
+      target.setItem(key, String(!enabled));
+      expect(applyPortableRendererPrefs(values, target, null)).toBe(0);
+      expect(getAgentIslandSubtleReminders()).toBe(!enabled);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('reads only the whitelist and the signed-in account\'s own prompt', () => {
     const storage = new MemoryStorage();
     storage.setItem('theme', 'dark');

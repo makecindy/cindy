@@ -1,4 +1,15 @@
 {
+  "pluginUi": {
+    "renderer": "顯示方式",
+    "original": "原文",
+    "unavailable": "法器界面暫不可用，操作已停。",
+    "outcome-unknown": "法器操作之果未明，請察新況。",
+    "rejected": "法器未行此操作，所填已留。",
+    "draftChanged": "輸入已改，法器之改未行。",
+    "editorUnavailable": "輸入框不可用，法器之改未行。",
+    "more": "更多",
+    "close": "關閉"
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "重察限額",
@@ -2321,6 +2332,9 @@
     "agentIsland": {
       "title": "靈動島",
       "unsupported": "靈動島須 macOS 14 或更高之版。",
+      "subtleRemindersLabel": "輕提醒",
+      "subtleRemindersHint": "新訊至、待答或有誤時，不向下彈出通知卡片，以圖示變化相告。點靈動島可閱任務全表。",
+      "subtleRemindersFailed": "提醒設定未存，請重試。",
       "enableLabel": "顯靈動島",
       "enableHint": "於螢幕之巔顯方行、待應及未讀已畢之差事。啟之則抑同類系統之告，免重複相擾。",
       "enableAria": "啟閉靈動島",
@@ -3928,6 +3942,7 @@
             "hint": "施於 {{agent}} 之圖連線。唯宣介面實所支援之能，存後重啟 Art 詳情。"
           },
           "capabilityHint": "先用今供方所宣之能；未宣者，圖之能參酌模型之名。",
+          "imageInputDefault": "{{value}}（預設）",
           "imageInput": "圖輸入",
           "imageInputMixed": "諸引擎各異",
           "supported": "可",
@@ -6034,8 +6049,10 @@
       "accessRevokedByPeer": "存取之權已遭撤銷，須對方於選項中恢復",
       "deviceControlToggleAria": "切換是否操控 {{name}}",
       "myDevices": {
-        "controlIt": "我控之",
-        "allowInbound": "許其控此機",
+        "iCan": "吾可",
+        "itCan": "彼可",
+        "controlIt": "控之",
+        "controlThisDevice": "控此機",
         "allowInboundAria": "切換是否許 {{name}} 控此機",
         "peerControlOff": "對方未許遠端操控",
         "masterOffHint": "須先開上方總開關",
@@ -7642,6 +7659,8 @@
         "skill": "為 AI 助手增技藝「{{name}}」",
         "skillDetail": "技藝乃一份指令檔案，AI 將視為己之指令載入而行，具君之全部權柄，於 Claude Code 與 Codex、一切案中皆生效——不受本法器沙箱所約。法器啟用期間持續可用，停用或卸除即移除；僅對某卷匣關閉本法器，不能隱之。此處不能先覽技藝全文——請僅納君所信之法器。",
         "routineEvents": "例行差事事件",
+        "nativeUi": "於任務中置控制項",
+        "nativeTabView": "可啟獨立視圖「{{title}}」",
         "mcpUi": "可於言談中示互動頁面",
         "mcpUiDomains": "頁面可連之網域：{{domains}}",
         "mcpAppOnly": "唯頁面可用",
@@ -13416,6 +13435,24 @@
           "autocompactBuffer": "自動壓縮緩衝",
           "compactBuffer": "壓縮緩衝",
           "freeSpace": "餘地"
+        },
+        "estimate": {
+          "title": "文字估數",
+          "delivery": "答覆呈式",
+          "host": "Cindy 規約",
+          "plugins": "法器目錄",
+          "memoryRules": "記憶規約",
+          "memoryIndex": "記憶索引",
+          "profile": "同伴資料",
+          "user": "主人指令",
+          "directories": "附加目錄",
+          "native": "Pi 原生規約",
+          "skills": "技藝目錄",
+          "project": "專案指令",
+          "tools": "工具定義",
+          "messages": "交談正文",
+          "other": "其餘指令",
+          "note": "依當前文字粗估，非模型分詞之數。不計圖片與供方格式耗用，分項之和不等於原生總數。"
         }
       },
       "compact": {
@@ -14745,7 +14782,9 @@
           "summaryAria": "MR !{{number}} 概覽",
           "urlPlaceholder": "GitHub PR 或 GitLab MR 連結",
           "notFound": "MR 不存，或今之名籍無權柄覽之"
-        }
+        },
+        "merge": "合併",
+        "conflicts": "有衝突"
       }
     },
     "schedule": {

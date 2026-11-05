@@ -5,7 +5,7 @@ import type { PrRemoteState, PrStatusQuery } from './prStatusService';
 export const GITLAB_MR_QUERY = `query MrStatus($path: ID!, $iid: String!) {
   project(fullPath: $path) {
     mergeRequest(iid: $iid) {
-      state draft title webUrl sourceBranch diffHeadSha
+      state draft title webUrl sourceBranch diffHeadSha conflicts
       resolvableDiscussionsCount resolvedDiscussionsCount
       headPipeline { status sha jobs(first: 100) { count nodes { status } pageInfo { hasNextPage } } }
     }
@@ -15,6 +15,7 @@ export const GITLAB_MR_QUERY = `query MrStatus($path: ID!, $iid: String!) {
 type MergeRequest = {
   state: string;
   draft: boolean;
+  conflicts?: boolean | null;
   title: string;
   sourceBranch: string;
   diffHeadSha: string;
@@ -118,6 +119,7 @@ export async function fetchGitlabMr(
     state: mr.state === 'opened' ? 'open' : 'closed',
     merged: mr.state === 'merged',
     draft: mr.draft,
+    conflicts: typeof mr.conflicts === 'boolean' ? mr.conflicts : null,
     title: mr.title,
     html_url: sessionPrUrl(q),
     branch: mr.sourceBranch,

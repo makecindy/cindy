@@ -74,6 +74,12 @@ export function summarizeSessionSpend(session: Pick<
   return { title, detail: parts.join(' · '), available: true };
 }
 
+/** Optional diagnostic estimate. Never reconciled to the native context total. */
+export interface ContextTextEstimate {
+  method: 'text-heuristic';
+  items: Array<{ source: string; tokens: number }>;
+}
+
 export function summarizeContextUsage(value: unknown, localizer?: PresentationLocalizer): {
   title: string;
   detail: string;
@@ -115,10 +121,39 @@ export function summarizeContextUsage(value: unknown, localizer?: PresentationLo
     parts.push(`$${costUsd.toFixed(4)}`);
   }
   const rows = buildContextUsageRows(record, maxContextTokens);
+  rows.push(...summarizeContextTextEstimate(record.textEstimate, localizer));
   if (parts.length > 0) {
     return { title, detail: parts.join(' · '), rows };
   }
   return { title, detail: messageContentToPreview(value), rows };
+}
+
+/** Shared Desktop / Mobile presentation; unknown diagnostics from future hosts are ignored. */
+export function summarizeContextTextEstimate(value: unknown, localizer?: PresentationLocalizer): Array<{ label: string; value: string }> {
+  const estimate = readRecord(value);
+  if (estimate?.method !== 'text-heuristic') return [];
+  const labels: Record<string, string> = {
+    delivery: 'Answer delivery', host: 'Cindy instructions', plugins: 'Plugin catalogue',
+    memoryRules: 'Memory instructions', memoryIndex: 'Memory index', profile: 'Teammate profile',
+    user: 'User instructions', directories: 'Additional directories', native: 'Pi instructions',
+    skills: 'Skill catalogue', project: 'Project instructions', tools: 'Tool definitions',
+    messages: 'Conversation text', other: 'Other instructions',
+  };
+  const rows = readRecordArray(estimate.items).flatMap((item) => {
+    const source = readString(item.source);
+    const tokens = readNumber(item.tokens);
+    if (!source || !Object.hasOwn(labels, source) || tokens === null || tokens <= 0) return [];
+    return [{
+      label: presentationText(localizer, `session.presentation.controls.context.estimate.${source}`, labels[source]),
+      value: `≈ ${formatNumber(tokens)} tokens`,
+    }];
+  });
+  if (!rows.length) return [];
+  return [{
+    label: presentationText(localizer, 'session.presentation.controls.context.estimate.title', 'Text estimates'),
+    value: presentationText(localizer, 'session.presentation.controls.context.estimate.note',
+      'Estimated from current text, not model tokenization. Excludes images and provider formatting; does not add up to the native total.'),
+  }, ...rows];
 }
 
 /**

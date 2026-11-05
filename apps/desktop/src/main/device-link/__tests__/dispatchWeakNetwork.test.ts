@@ -77,7 +77,6 @@ import {
   setControllerDisplayName,
   setControllerFallbackDisplayName,
   deactivateAllControllers,
-  deactivateController,
   flushRemoteInvokeResultOutboxOnReconnect,
   handleControllerOffline,
   setControllersChangedListener,
