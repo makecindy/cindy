@@ -1,3 +1,4 @@
+import { estimatePiContext, type PiPromptSource } from './context-estimate.js';
 import { getPiExtensionUiCapability } from './extension-ui-capabilities.js';
 import { createPiCacheInputTracker } from './cache-input.js';
 import { parsePiManagementArgs, parsePiManagementText } from './managed-command.js';
@@ -3875,20 +3876,22 @@ export class PiAgent extends BaseAgent {
       : hosted
         ? deviceHostedGhostRoster(hosted, opts.ghostRosterSnapshot, localGhostRoster)
         : localGhostRoster();
-    const appendSections = [
-      reviewMode ? undefined : this.deps.runtimeConfig.answerDeliveryPrompt?.trim(),
-      reviewMode ? undefined : opts.botProfilePrompt?.trim(),
-      opts.botRuntimeProfile ? undefined : this.deps.runtimeConfig.systemPrompt?.trim(),
-      ghostRosterPrompt.trim(),
-      reviewMode ? undefined : opts.botProfileContextPrompt?.trim(),
-      makerMemoryPromptEnabled && !opts.makerMemoryScopeKey?.startsWith('bot:')
-        ? MAKER_MEMORY_RULES
-        : undefined,
-      makerMemoryIndex.trim(),
-      reviewMode ? undefined : opts.botUserProfilePrompt?.trim(),
-      reviewMode || opts.botRuntimeProfile ? undefined : opts.userPrompt?.trim(),
-      piExtraDirsPrompt(mutableExtraDirs, mutableWritableDirs),
-    ].filter((s): s is string => !!s && s.length > 0);
+    const promptSourceEntries: Array<[string, string | undefined]> = [
+      ['delivery', reviewMode ? undefined : this.deps.runtimeConfig.answerDeliveryPrompt?.trim()],
+      ['profile', reviewMode ? undefined : opts.botProfilePrompt?.trim()],
+      ['host', opts.botRuntimeProfile ? undefined : this.deps.runtimeConfig.systemPrompt?.trim()],
+      ['plugins', ghostRosterPrompt.trim()],
+      ['profile', reviewMode ? undefined : opts.botProfileContextPrompt?.trim()],
+      ['memoryRules', makerMemoryPromptEnabled && !opts.makerMemoryScopeKey?.startsWith('bot:')
+        ? MAKER_MEMORY_RULES : undefined],
+      ['memoryIndex', makerMemoryIndex.trim()],
+      ['user', reviewMode ? undefined : opts.botUserProfilePrompt?.trim()],
+      ['user', reviewMode || opts.botRuntimeProfile ? undefined : opts.userPrompt?.trim()],
+      ['directories', piExtraDirsPrompt(mutableExtraDirs, mutableWritableDirs)],
+    ];
+    const promptSources: PiPromptSource[] = promptSourceEntries.flatMap(([source, text]) =>
+      text ? [{ source, text }] : []);
+    const appendSections = promptSources.map(({ text }) => text);
     const appendSystemPrompt = appendSections.join('\n\n');
 
     // 远端会话先 resolve 远端 pi 二进制路径(probe;plan-mode 扩展路径 / subagent
@@ -8718,8 +8721,21 @@ export class PiAgent extends BaseAgent {
         const maxTokens = ctx.workingContextWindow && ctx.workingContextWindow > 0
           ? Math.min(ctx.workingContextWindow, nativeCapacity) : nativeCapacity;
         const percentage = maxTokens > 0 ? Math.min(100, (totalTokens / maxTokens) * 100) : 0;
+        // Optional, read-only and on demand. Native totals remain available on older
+        // runtimes and if a large transcript or an RPC timeout prevents diagnostics.
+        let textEstimate;
+        try {
+          const snapshot = await proc.request({ type: 'get_messages' }, { timeoutMs: 5_000 });
+          if (snapshot.success) {
+            textEstimate = estimatePiContext(
+              (snapshot.data as { messages?: unknown } | undefined)?.messages, promptSources,
+            );
+          }
+        } catch { /* Native totals do not depend on diagnostic availability. */ }
         return {
-          categories: [{ name: 'Messages', tokens: totalTokens, color: '#8b8b8b' }],
+          ...(textEstimate ? { textEstimate } : {}),
+          // Pi reports a whole-context total, not a measured Messages category.
+          categories: [],
           totalTokens,
           maxTokens,
           // Context cards and shared summaries use rawMaxTokens as their denominator.

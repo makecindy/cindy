@@ -449,12 +449,20 @@ describe('codex gateway config', () => {
     expect(args).toContain('features.enable_request_compression=false');
   });
 
-  it('env-key / provider-oauth 只定义 Cindy Codex 远程压缩 identity', async () => {
+  it('env-key / provider-oauth 声明不被选中的 cindy_openai 占位(#8670: 老 thread resume 校验)', async () => {
     const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
 
     for (const mode of ['env-key', 'provider-oauth'] as const) {
       const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', mode);
-      expect(args.some((arg) => arg.includes('cindy_openai'))).toBe(false);
+      // 占位仅供引用 cindy_openai 的老 thread 通过原生配置校验、拿到结构化
+      // modelProviderMismatch;不带订阅身份,也绝不发起订阅 WS upgrade。
+      expect(args).toContain('model_providers.cindy_openai.name="OpenAI"');
+      expect(args).toContain('model_providers.cindy_openai.base_url="http://127.0.0.1:12345"');
+      expect(args).toContain('model_providers.cindy_openai.wire_api="responses"');
+      expect(args).toContain('model_providers.cindy_openai.env_key="XDT_CODEX_API_KEY"');
+      expect(args).toContain('model_providers.cindy_openai.supports_websockets=false');
+      expect(args).not.toContain('model_providers.cindy_openai.requires_openai_auth=true');
+      expect(args).not.toContain('model_providers.cindy_openai.supports_websockets=true');
       expect(args).toContain('model_providers.cindy_codex.name="OpenAI"');
       expect(args).toContain('model_providers.cindy_codex.env_key="XDT_CODEX_API_KEY"');
       expect(args).toContain('model_providers.cindy_codex.supports_websockets=false');

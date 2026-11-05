@@ -122,7 +122,10 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
 vi.mock('../../device-link/dispatch.js', () => ({ setRemoteAgentHandler(handler: typeof state.hostHandler) { state.hostHandler = handler; } }));
 vi.mock('../../device-link/providerShareReshare.js', () => ({ handleProviderShareReshare() {}, providerShareReshareAllows() {} }));
 vi.mock('../reshareRuntime.js', () => ({ providerGroupReshare: {} }));
-vi.mock('../runtime.js', () => ({ getProviderGroupOwnerScope: () => state.owner }));
+vi.mock('../runtime.js', () => ({
+  getProviderGroupOwnerScope: () => state.owner,
+  hasProviderGroupContinuityHandler: () => false,
+}));
 vi.mock('../../remote-agent/host/limitsStore.js', () => ({ readRemoteAgentLimitsState: () => ({ value: {} }) }));
 vi.mock('../../remote-agent/host/providerAccess', () => ({ createGuestProviderRouteBinder: () => vi.fn() }));
 vi.mock('../../remote-agent/host/transcripts', () => ({}));
