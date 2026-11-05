@@ -1,5 +1,5 @@
 import type { Schedule } from '@cindy/maker-scheduler';
-import { ctx, forbid, mountPage } from '../../ui-page/harness';
+import { ctx, forbid, mountPage, subscription } from '../../ui-page/harness';
 import { ScheduleFormDialog } from '../../../src/renderer/features/scheduler/components/ScheduleFormDialog';
 
 const schedule: Schedule = {
@@ -13,7 +13,10 @@ const schedule: Schedule = {
 
 void mountPage({
   route: '/cc-agent/scheduled',
-  host: { maker: { schedule: {
+  host: { maker: {
+    listAvailableAgents: async () => ['codex'],
+    onAgentsChanged: subscription('agentsChanged'),
+    schedule: {
     webhookReceiver: async () => 'cloud',
     webhookAccount: async () => ({ used: 1, limit: 10, endpoints: [] }),
     scriptCapabilityStatus: async () => ({ statuses: [] }),

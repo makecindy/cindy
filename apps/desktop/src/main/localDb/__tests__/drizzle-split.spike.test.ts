@@ -124,7 +124,6 @@ async function runMigrationStatement(target: DbClient, statement: string): Promi
 
 function applyMigrationScriptSync(db: Sqlite, fileName: string): void {
   if (fileName === '0138_talented_blacklash.sql') {
-    // Migration 0141 reads these columns, which 0138 adds in its companion script.
     ensureColumnSync(db, 'session_pr_refs', 'pinned', 'integer DEFAULT false NOT NULL');
     ensureColumnSync(db, 'session_pr_refs', 'priority', 'integer DEFAULT 0 NOT NULL');
     ensureColumnSync(db, 'session_pr_refs', 'manually_added', 'integer DEFAULT false NOT NULL');
@@ -242,7 +241,6 @@ function applyMigrationScriptSync(db: Sqlite, fileName: string): void {
 
 async function applyMigrationScript(target: DbClient, fileName: string): Promise<void> {
   if (fileName === '0138_talented_blacklash.sql') {
-    // Keep the worker fixture aligned with the in-process companion replay above.
     await ensureColumn(target, 'session_pr_refs', 'pinned', 'integer DEFAULT false NOT NULL');
     await ensureColumn(target, 'session_pr_refs', 'priority', 'integer DEFAULT 0 NOT NULL');
     await ensureColumn(target, 'session_pr_refs', 'manually_added', 'integer DEFAULT false NOT NULL');
