@@ -14825,7 +14825,7 @@
           "unpin": "PR Sabitlemesini Kaldır",
           "pinLimit": "En fazla 3 PR sabitleyin",
           "reorderHint": "Sabitlenen veya sabitlenmeyen grup içinde yeniden sıralamak için Alt+↑/↓ tuşlarını kullanın.",
-          "dragHandle": "{{repo}} #{{number}} yeniden sıralamak için sürükleyin",
+          "dragHandle": "{{repo}} {{numberLabel}} yeniden sıralamak için sürükleyin",
           "remove": "PR'ı Kaldır",
           "errors": {
             "duplicate": "Bu PR zaten bağlı; kaldırılan bağlantıları listeden geri yükleyin",
@@ -19147,7 +19147,7 @@
         "title_other": "{{count}} Gizli Anahtar",
         "description": "API anahtarları ve şifreler yalnızca diğer bilgisayarda onayladıktan sonra tek seferlik güvenli olarak aktarılır."
       },
-      "sshDescription": "SSH anahtarları diğer bilgisayarda onaylandıktan sonra güvenli biçimde buraya kopyalanır.",
+      "sshDescription": "Bu bilgisayar yeni bir SSH anahtarı oluşturur; orada izin verildikten sonra “{{name}}” bu anahtarı bu sunuculara ekler ve ardından her sunucu test edilir. Özel anahtarlar asla kendi bilgisayarlarından ayrılmaz.",
       "sshHost": "SSH Ana Bilgisayarı",
       "mcpTokenCopy": "Token diğer bilgisayardan kopyalanacaktır",
       "checklistDescriptionWithKeys": "Anahtarlar aktarılacak, ancak bazı eklentiler yerel olarak oturum açmanızı gerektirebilir."

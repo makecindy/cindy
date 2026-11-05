@@ -21,7 +21,7 @@ export function stageMacPermissionLocales(resourcesPath: string): void {
     // Keep their names/resources; OS language matching can select them directly.
     if (fs.existsSync(target)) {
       for (const entry of fs.readdirSync(target, { withFileTypes: true })) {
-        if (!entry.isDirectory() || !/^(?:zh|en|ja|ko|es|fr|de|pt)(?:[-_][\w-]+)?\.lproj$/.test(entry.name)) continue;
+        if (!entry.isDirectory() || !/^(?:zh|en|ja|ko|es|fr|de|pt|tr)(?:[-_][\w-]+)?\.lproj$/.test(entry.name)) continue;
         const tag = entry.name.slice(0, -'.lproj'.length);
         const resolved = modernLocaleOf(resolveSystemLocale(tag));
         const key = resolved === 'zh-CN' ? 'zh-Hans' : resolved === 'zh-TW' ? 'zh-Hant' : resolved;
