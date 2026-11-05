@@ -10,6 +10,7 @@ import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { pluginUiComposerAccess, pluginUiComposerKey } from '../pluginUiComposerActions';
 import { PluginUiStatusBar } from '../PluginUiStatusBar';
 import { PluginUiRendererView } from '../PluginUiRendererView';
+import { PluginUiContributionControls } from '../PluginUiControls';
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 /* C1-C4: exercise production adapters/hooks, rather than echoing wire literals.
  * Minimal regression: a remote task falls back to this computer, or a switched owner
@@ -30,6 +31,37 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 describe('plugin UI viewing clients', () => {
+  // R9: the real contribution hook disables stale actions while rereading, but
+  // must not discard an open page's DOM/input. One deferred read reproduces the
+  // missing lifecycle coverage; DOM unit tier, no real waits.
+  it('preserves an open contribution page during a background refresh and closes it on removal', async () => {
+    const pageView: PluginUiView = { ...view, page: true };
+    read.mockResolvedValue({ views: [pageView], revision: 'aggregate' });
+    const openPage = vi.fn().mockResolvedValue('98a39be7-0e86-4bb4-a3ad-57b04035bc57');
+    const closePage = vi.fn().mockResolvedValue(undefined);
+    window.electronAPI.ghosts.ui.openPage = openPage;
+    window.electronAPI.ghosts.ui.closePage = closePage;
+    let changed!: (event: { sessionId?: string }) => void;
+    window.electronAPI.ghosts.ui.onChanged = handler => { changed = handler; return () => {}; };
+    const page = render(createElement(PluginUiContributionControls, target));
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
+    const frame = await screen.findByTitle('format');
+    let finish!: (value: unknown) => void;
+    read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    act(() => changed({}));
+    expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByTitle('format')).toBe(frame);
+    expect(closePage).not.toHaveBeenCalled();
+    await act(async () => finish({ views: [pageView], revision: 'aggregate' }));
+    expect(screen.getByTitle('format')).toBe(frame);
+    expect(openPage).toHaveBeenCalledOnce();
+    expect(closePage).not.toHaveBeenCalled();
+    read.mockResolvedValue({ views: [], revision: 'removed' });
+    act(() => changed({ sessionId: 'task' }));
+    await waitFor(() => expect(screen.queryByTitle('format')).toBeNull());
+    expect(closePage).toHaveBeenCalledExactlyOnceWith({ pageId: '98a39be7-0e86-4bb4-a3ad-57b04035bc57' });
+    page.unmount();
+  });
   // User report: a plugin update briefly replaced saved-record content with the
   // original. Existing tests cover removal, not an in-flight reread. Exercise
   // the real renderer/hook with one deferred read; DOM tier, no real waits.

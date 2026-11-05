@@ -58,7 +58,9 @@ function PluginUiPageTrigger({ sessionId, view, disabled, pending, onAction }: {
 }) {
   const [open, setOpen] = useState(false);
   const visibility = usePluginUiVisibilityValues();
-  const available = !disabled && visibility.workspace;
+  // Refreshing disables stale actions, not an already open page. The parent
+  // unmounts this trigger when its contribution or viewing scope disappears.
+  const available = visibility.workspace;
   useEffect(() => { if (!available) setOpen(false); }, [available]);
   const label = view.controls.find(control => control.kind === 'button')?.label ?? view.actions[0]?.label ?? view.contributionId;
   return <Popover open={open && available} onOpenChange={setOpen}>

@@ -24,7 +24,7 @@ it('opens a plugin page only on demand and closes it when the contribution becom
   expect(openPage).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Open plugin' }));
   expect(await screen.findByTitle('settings')).toBeTruthy();
-  state.current = { ...state.current, disabled: true };
+  state.current = { ...state.current, views: [], disabled: true };
   rerender(<PluginUiContributionControls sessionId="task" point="composer.tools" />);
   await waitFor(() => expect(closePage).toHaveBeenCalledExactlyOnceWith({ pageId: '98a39be7-0e86-4bb4-a3ad-57b04035bc57' }));
   expect(screen.queryByTitle('settings')).toBeNull();
