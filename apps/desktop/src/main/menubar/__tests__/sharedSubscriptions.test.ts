@@ -80,14 +80,21 @@ function harness() {
   let shares = [share];
   let changed = () => {};
   let sources: MenubarSubscriptionInput[] = [];
+  const publications: MenubarSubscriptionInput[][] = [];
+  const accessEpochs = new Map<string, number>();
   const read = vi.fn().mockResolvedValue(quota());
   const reader = new SharedQuotaReader({ scope: () => owner, shares: () => shares, read,
+    accessEpoch: id => accessEpochs.get(id) ?? 0,
     subscribe: callback => { changed = callback; return () => { changed = () => {}; }; },
-    publish: value => { sources = value; },
+    publish: value => { sources = value; publications.push(value); },
   });
-  return { reader, read, get sources() { return sources; },
+  return { reader, read, publications, get sources() { return sources; },
     changeShares(value: ProviderShareReceived[]) { shares = value; changed(); },
     changeOwner() { owner = 'owner:2'; shares = []; changed(); },
+    refuseAccess(id = share.shareId, notify = true) {
+      accessEpochs.set(id, (accessEpochs.get(id) ?? 0) + 1);
+      if (notify) changed();
+    },
   };
 }
 
@@ -120,6 +127,66 @@ it.each([false, true])('rechecks weekly validity after the whole batch finishes 
     expect(window.resetsAtMs === null || window.resetsAtMs > Date.now()).toBe(true);
   }
   h.reader.setOpen(false);
+});
+
+it('clears a published quota on access refusal even while the received DTO is unchanged', async () => {
+  const h = harness();
+  h.reader.setOpen(true);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.sources).toHaveLength(1);
+  h.read.mockRejectedValue(new Error('access denied'));
+  h.refuseAccess();
+  expect(h.sources).toEqual([]);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.sources).toEqual([]);
+  h.reader.setOpen(false);
+});
+
+it('rechecks access epochs before publishing a fast result held by a slow sibling', async () => {
+  const h = harness();
+  h.changeShares([share, { ...share, shareId: 'two' }]);
+  let denied = false;
+  let finishSlow!: (value: unknown) => void;
+  const slow = new Promise(done => { finishSlow = done; });
+  h.read.mockImplementation((id: string) => id === share.shareId
+    ? denied ? Promise.reject(new Error('access denied')) : Promise.resolve(quota()) : slow);
+  h.reader.setOpen(true);
+  await vi.advanceTimersByTimeAsync(0);
+  denied = true;
+  // Omit the notification to independently verify the final-publication guard.
+  h.refuseAccess(share.shareId, false);
+  finishSlow(quota());
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.sources.map(source => source.id)).toEqual(['share:two']);
+  expect(h.publications.flat().some(source => source.id === 'share:one')).toBe(false);
+  h.reader.setOpen(false);
+});
+
+it.each([false, true])('invalidates published windows locally during a pending refresh (fallback=%s)', async fallback => {
+  const h = harness();
+  const value = quota();
+  value.quota!.accounts[0]!.windows[0]!.remainingPercent = 82;
+  value.quota!.accounts[0]!.windows[0]!.resetsAt = Date.now() + 1_000;
+  if (fallback) {
+    value.quota!.group = true;
+    value.quota!.accounts.push(quota().quota!.accounts[0]!);
+  }
+  h.read.mockResolvedValue(value);
+  h.reader.setOpen(true);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.sources[0]?.windows[0]?.usedPercent).toBe(18);
+  let finish!: (value: unknown) => void;
+  h.read.mockImplementationOnce(() => new Promise(done => { finish = done; }));
+  h.reader.refresh();
+  await vi.advanceTimersByTimeAsync(1_000);
+  if (fallback) expect(h.sources[0]?.windows[0]?.usedPercent).toBe(54);
+  else expect(h.sources).toEqual([]);
+  expect(h.read).toHaveBeenCalledTimes(2);
+  h.reader.setOpen(false);
+  finish(value);
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(h.sources).toEqual([]);
+  expect(h.read).toHaveBeenCalledTimes(2);
 });
 
 it('reads only while open, removes revoked/failed quotas, and restores an authorized read', async () => {
@@ -217,7 +284,7 @@ it.each(['owner', 'relationship'])('clears a populated reading immediately on %s
   h.reader.setOpen(false);
 });
 
-it.each(['close', 'owner', 'relationship'])('drops late responses after %s changes', async kind => {
+it.each(['close', 'owner', 'relationship', 'access'])('drops late responses after %s changes', async kind => {
   const h = harness();
   let resolve!: (value: unknown) => void;
   h.read.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
@@ -225,6 +292,10 @@ it.each(['close', 'owner', 'relationship'])('drops late responses after %s chang
   if (kind === 'close') { h.reader.setOpen(false); h.reader.setOpen(true); }
   if (kind === 'owner') h.changeOwner();
   if (kind === 'relationship') h.changeShares([{ ...share, status: 'paused' }]);
+  if (kind === 'access') {
+    h.read.mockRejectedValueOnce(new Error('access denied'));
+    h.refuseAccess();
+  }
   await vi.advanceTimersByTimeAsync(0);
   const before = h.sources;
   resolve(quota());

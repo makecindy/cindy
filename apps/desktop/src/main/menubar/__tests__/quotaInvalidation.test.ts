@@ -6,7 +6,7 @@ import type { AgentIslandSessionSnapshot } from '../../../shared/agentIsland';
 const mocks = vi.hoisted(() => ({
   app: { isPackaged: true },
   auth: { mode: 'cloud', dataOwnerId: 'owner', ownerGeneration: 1, user: { id: 'member', membershipKind: 'org' } },
-  sharedRead: vi.fn(), sharedChanged: null as null | (() => void),
+  sharedRead: vi.fn(), sharedChanged: null as null | (() => void), sharedAccessEpoch: 0,
   revision: 0, listeners: new Set<() => void>(), refresh: vi.fn(), collect: vi.fn(),
   quota: null as null | { spend: number; maxBudget: number; currency: string; fetchedAt: number; todaySpend: null },
   activities: [] as AgentIslandSessionSnapshot[], attentionListeners: new Set<() => void>(), publish: vi.fn(),
@@ -30,6 +30,7 @@ vi.mock('../../billing/projection.js', () => ({}));
 vi.mock('../../clientEndpointsService.js', () => ({}));
 vi.mock('../../deepLink.js', () => ({ openMainWindowRemoteControlSettings: mocks.openRemoteSettings, openMainWindowSession: mocks.openLocalSession }));
 vi.mock('../../device-link/providerShareGuest.js', () => ({
+  providerShareAccessEpoch: () => mocks.sharedAccessEpoch,
   getReceivedShares: () => [{ shareId: 'share-one', memberId: 'member', providerId: 'anthropic', providerLabel: 'Claude', status: 'active', hostOnline: true, hostCapable: true }],
   onProviderShareReceivedChanged: (callback: () => void) => { mocks.sharedChanged = callback; return () => { mocks.sharedChanged = null; }; },
 }));
@@ -65,7 +66,7 @@ beforeEach(() => {
   overview = new QuotaOverviewService();
   mocks.app.isPackaged = true;
   vi.useFakeTimers(); mocks.revision = 0; mocks.listeners.clear(); mocks.refresh.mockReset(); mocks.collect.mockReset();
-  mocks.sharedRead.mockReset(); mocks.sharedChanged = null;
+  mocks.sharedRead.mockReset(); mocks.sharedChanged = null; mocks.sharedAccessEpoch = 0;
   mocks.activities = []; mocks.attentionListeners.clear(); mocks.publish.mockReset();
   mocks.openOverviewSession.mockReset(); mocks.openLocalSession.mockReset();
   mocks.openRemoteSettings.mockReset(); mocks.onHelperMessage = null;
@@ -308,6 +309,11 @@ it('adds the highest shared weekly quota only to the open native panel and clear
   finishRefresh(response);
   await vi.advanceTimersByTimeAsync(0);
   expect(mocks.publish.mock.lastCall?.[0].details['share:share-one']).toBeDefined();
+  mocks.sharedRead.mockRejectedValueOnce(new Error('access denied'));
+  mocks.sharedAccessEpoch++;
+  mocks.sharedChanged?.();
+  expect(mocks.publish.mock.lastCall?.[0].details['share:share-one']).toBeUndefined();
+  await vi.advanceTimersByTimeAsync(0);
   mocks.onHelperMessage?.({ type: 'panel', open: false });
   expect(mocks.sharedChanged).toBeNull();
   expect(mocks.publish.mock.lastCall?.[0].sources).toEqual([]);

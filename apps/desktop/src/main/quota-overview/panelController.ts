@@ -28,7 +28,7 @@ import {
   openMainWindowVoiceSettings,
 } from '../deepLink.js';
 import { getActiveControllers } from '../device-link/dispatch.js';
-import { getReceivedShares, onProviderShareReceivedChanged } from '../device-link/providerShareGuest.js';
+import { getReceivedShares, onProviderShareReceivedChanged, providerShareAccessEpoch } from '../device-link/providerShareGuest.js';
 import { readReceivedProviderShareQuota } from '../device-link/providerShareRuntime.js';
 import { getResolvedMainLocale, rawMainString } from '../i18n.js';
 import { createLogger } from '../logger.js';
@@ -218,6 +218,7 @@ export class QuotaPanelController {
         return isAppSessionBoundaryPending() || !scope.dataOwnerId ? null : `${scope.dataOwnerId}:${scope.generation}`;
       },
       shares: getReceivedShares,
+      accessEpoch: providerShareAccessEpoch,
       read: readReceivedProviderShareQuota,
       subscribe: changed => {
         const offShares = onProviderShareReceivedChanged(changed);

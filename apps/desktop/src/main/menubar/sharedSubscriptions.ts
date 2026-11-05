@@ -37,9 +37,16 @@ export function sharedSubscription(share: ProviderShareReceived, raw: unknown, n
 export interface SharedQuotaDeps {
   scope(): string | null;
   shares(): readonly ProviderShareReceived[];
+  accessEpoch(shareId: string): number;
   read(shareId: string): Promise<unknown>;
   subscribe(changed: () => void): () => void;
   publish(sources: MenubarSubscriptionInput[]): void;
+}
+
+interface SharedQuotaReading {
+  share: ProviderShareReceived;
+  accessEpoch: number;
+  raw: unknown;
 }
 
 /** Visible-panel lease. Closing/revocation clears immediately and rejects every late response. */
@@ -49,14 +56,27 @@ export class SharedQuotaReader {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private dispose: (() => void) | null = null;
   private identity: string | null = null;
+  private readings: SharedQuotaReading[] = [];
+  private expiryTimer: ReturnType<typeof setTimeout> | null = null;
   constructor(private readonly deps: SharedQuotaDeps) {}
+
+  private currentIdentity(): string {
+    return JSON.stringify([this.deps.scope(), this.deps.shares().map(share =>
+      [share, this.deps.accessEpoch(share.shareId)])]);
+  }
+
+  private isCurrentReading(reading: SharedQuotaReading): boolean {
+    const latest = this.deps.shares().find(share => share.shareId === reading.share.shareId);
+    return this.deps.accessEpoch(reading.share.shareId) === reading.accessEpoch
+      && latest !== undefined && JSON.stringify(latest) === JSON.stringify(reading.share);
+  }
 
   setOpen(open: boolean): void {
     if (this.open === open) return;
     this.open = open;
     if (open) {
       this.dispose = this.deps.subscribe(() => {
-        const next = JSON.stringify([this.deps.scope(), this.deps.shares()]);
+        const next = this.currentIdentity();
         if (next === this.identity) return;
         this.refresh();
       });
@@ -77,6 +97,13 @@ export class SharedQuotaReader {
 
   private clear(): void {
     this.invalidateRead();
+    this.clearReadings();
+  }
+
+  private clearReadings(): void {
+    if (this.expiryTimer) clearTimeout(this.expiryTimer);
+    this.expiryTimer = null;
+    this.readings = [];
     this.deps.publish([]);
   }
 
@@ -85,11 +112,11 @@ export class SharedQuotaReader {
       this.clear();
       return;
     }
-    const identity = JSON.stringify([this.deps.scope(), this.deps.shares()]);
+    const identity = this.currentIdentity();
     this.invalidateRead();
     // Keep the detail source mounted during a same-identity manual refresh. A scope or
     // relationship change must still remove the old reading before its replacement arrives.
-    if (identity !== this.identity) this.deps.publish([]);
+    if (identity !== this.identity) this.clearReadings();
     this.identity = identity;
     void this.read(this.revision);
   }
@@ -99,33 +126,53 @@ export class SharedQuotaReader {
     const current = () => this.open && this.revision === revision && scope !== null && this.deps.scope() === scope;
     if (!current()) return;
     const targets = this.deps.shares().filter(share => share.status === 'active' && share.hostOnline && share.hostCapable);
-    const results: Array<{ share: ProviderShareReceived; raw: unknown }> = [];
+    const results: SharedQuotaReading[] = [];
     // Bound network fanout; one failed share does not hide other suppliers.
     for (let offset = 0; offset < targets.length && current(); offset += 3) {
       await Promise.all(targets.slice(offset, offset + 3).map(async share => {
+        const accessEpoch = this.deps.accessEpoch(share.shareId);
         try {
           const result = await this.deps.read(share.shareId);
           if (!current()) return;
-          const latest = this.deps.shares().find(item => item.shareId === share.shareId);
-          if (!latest || JSON.stringify(latest) !== JSON.stringify(share)) return;
-          results.push({ share, raw: result });
+          const reading = { share, accessEpoch, raw: result };
+          if (!this.isCurrentReading(reading)) return;
+          results.push(reading);
         } catch {
           // Failed or revoked reads contribute no cached value.
         }
       }));
     }
     if (!current()) return;
-    // Another share may have kept this batch waiting past a reset. Select the account and
-    // its live windows at publication time, not when each individual response arrived.
-    const now = Date.now();
-    const sources = results.flatMap(({ share, raw }) => {
-      const source = sharedSubscription(share, raw, now);
-      return source ? [source] : [];
-    });
-    this.deps.publish(sources.sort((a, b) => a.id.localeCompare(b.id)));
+    this.readings = results;
+    this.publishReadings();
+    if (!current()) return;
     this.timer = setTimeout(() => {
       this.timer = null;
       void this.read(revision);
     }, 5_000);
+  }
+
+  private publishReadings(): void {
+    if (this.expiryTimer) clearTimeout(this.expiryTimer);
+    this.expiryTimer = null;
+    if (!this.open) return;
+    // Refusals can change the access epoch before the received DTO changes. Recheck at
+    // publication too, including a fast result held while a sibling request was pending.
+    if (this.currentIdentity() !== this.identity) { this.refresh(); return; }
+    const now = Date.now();
+    const sources = this.readings.flatMap(reading => {
+      if (!this.isCurrentReading(reading)) return [];
+      const source = sharedSubscription(reading.share, reading.raw, now);
+      return source ? [source] : [];
+    });
+    this.deps.publish(sources.sort((a, b) => a.id.localeCompare(b.id)));
+    // This timer is independent of network polling/manual refresh, so a slow replacement
+    // cannot keep an expired value visible. Reprojection can select a live group fallback.
+    const resets = sources.flatMap(source => source.windows.flatMap(window =>
+      window.resetsAtMs !== null ? [window.resetsAtMs] : []));
+    if (resets.length) this.expiryTimer = setTimeout(() => {
+      this.expiryTimer = null;
+      this.publishReadings();
+    }, Math.min(Math.min(...resets) - now, 2_147_483_647));
   }
 }
