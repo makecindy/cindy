@@ -311,6 +311,24 @@ iOS 的系统选图器在确认后立即把选中项交给现有附件队列。�
 实现见 `src/session/messageCacheStorage.ts`、`mobileSessionMessageCache.ts`、
 `homeViewPreferenceStore.ts`，回归见 `src/__tests__/` 下对应测试。
 
+### 微信网页群邀请接收
+
+`modules/xdt-wechat-login` 的 iOS `LaunchFromWXReq` 与 Android `ShowMessageFromWX.Req` 接收
+开放标签的 `messageExt`，只接受完整的 32 位分享编号。iOS 从构建时 Info.plist 的公开 AppID 和
+Universal Link 初始化 SDK，覆盖从未在当前进程登录过微信的冷启动。Android 的生成入口在接收后
+将既有主 Activity 带回前台；登录响应仍走原独立分支。
+
+原生层只在进程内暂存最多两个不同编号（首个邀请与另一邀请提示），JS 监听就绪后一次取走；
+已启动的请求使用同一通知与取件入口，不持久化编号或口令。`useWechatChatInvite` 仅在 cn/dev 的
+iOS/Android 运行，Global 和 Web 不加载原生桥。编号交给原有 `chatInviteIntent`，使用当前环境的
+分享端点，随后由 `ChatInviteHost` 在登录就绪时展示同一确认面板。微信 SDK 专用 AppID Scheme 的
+传输链接只交给 SDK，不进入页面导航或凭据解析。
+
+本次修改原生模块和 config plugin，iOS/Android runtime fingerprint 会变化；必须发新原生包，
+不能通过 OTA 给旧安装包补齐接收能力，合并仍遵循下方冷更确认门。既有微信登录依赖和授权 scope 不变。
+定向回归见 `src/__tests__/wechatChatInvite.test.tsx`、`nativeAppConfig.test.ts`、`nativeIntent.test.ts`；
+真机仍须覆盖冷启动、已启动、未登录后续接、不同邀请并发和原微信登录。
+
 ### 中国大陆版微信个人登录
 
 - 仅 iOS 中国大陆版登录页恢复微信入口；开关位于

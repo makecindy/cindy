@@ -11,9 +11,11 @@ import { botGroupRoute } from '@/session/botGroupNavigation';
 import { ChatInviteSheet } from './ChatInviteSheet';
 import { closeChatInvite, getChatInviteIntent, setManualChatInviteLink, useChatInviteIntent } from './chatInviteIntent';
 import { useClipboardChatInvite } from './useClipboardChatInvite';
+import { useWechatChatInvite } from './useWechatChatInvite';
 
 /** Single presentation owner for both the Home action and external links. */
 export function ChatInviteHost({ ready }: { ready: boolean }) {
+  useWechatChatInvite();
   const auth = useAuth();
   const invitation = useChatInviteIntent();
   const owner = useSyncExternalStore(subscribeMobileAuthOwner, getMobileAuthOwner, getMobileAuthOwner);

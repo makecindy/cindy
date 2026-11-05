@@ -4,6 +4,25 @@ import ExpoModulesCore
 public class XdtWechatLoginModule: Module {
   public func definition() -> ModuleDefinition {
     Name("XdtWechatLogin")
+    Events("onWechatLaunch")
+
+    OnStartObserving("onWechatLaunch") {
+      DispatchQueue.main.async {
+        XdtWechatAuthCoordinator.shared.onLaunch = { [weak self] in
+          self?.sendEvent("onWechatLaunch", [:])
+        }
+      }
+    }
+
+    OnStopObserving("onWechatLaunch") {
+      DispatchQueue.main.async { XdtWechatAuthCoordinator.shared.onLaunch = nil }
+    }
+
+    AsyncFunction("consumeWechatLaunchInfos") { (promise: Promise) in
+      DispatchQueue.main.async {
+        promise.resolve(XdtWechatAuthCoordinator.shared.consumeLaunchInfos())
+      }
+    }
 
     AsyncFunction("isWechatInstalled") { () -> Bool in
       XdtWechatAuthCoordinator.shared.isInstalled()

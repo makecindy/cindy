@@ -91,6 +91,26 @@ describe('mobile native app config', () => {
       { CFBundleURLSchemes: ['cindycn'] },
       { CFBundleURLName: 'wx-test-mobile', CFBundleURLSchemes: ['wx-test-mobile'] },
     ]);
+    expect(result.modResults.CindyWechatAppId).toBe('wx-test-mobile');
+    expect(result.modResults.CindyWechatUniversalLink).toBe('https://login.example.com/app/');
+  });
+
+  it('generates an Android WeChat entry that forwards invitations and brings Cindy forward', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'cindy-wechat-entry-'));
+    temporaryDirs.push(directory);
+    const withWechatLogin = require(resolve(process.cwd(), 'modules/xdt-wechat-login/plugin/index.js'));
+    const config = withWechatLogin({ name: 'Test app', slug: 'test-app', android: { package: 'com.example.cindy' } }, {
+      appId: 'wx-test-mobile', universalLink: 'https://login.example.com/app/',
+    });
+    await config.mods.android.dangerous({
+      ...config, modResults: {},
+      modRequest: { platform: 'android', modName: 'dangerous', platformProjectRoot: directory },
+    });
+    const entry = readFileSync(join(directory, 'app/src/main/java/com/example/cindy/wxapi/WXEntryActivity.kt'), 'utf8');
+    expect(entry).toContain('XdtWechatAuthCoordinator.handleRequest(request)');
+    expect(entry).toContain('startActivity(launch)');
+    expect(entry).toContain('XdtWechatAuthCoordinator.handleResponse(response)');
+    expect(entry).toContain('WXAPIFactory.createWXAPI(this, "wx-test-mobile", false).handleIntent(intent, this)');
   });
 
   it('enables the existing WeChat SDK plugin only for configured CN builds', () => {

@@ -24,16 +24,18 @@ function withWechatLogin(config, options = {}) {
   ) {
     throw new Error('xdt-wechat-login universalLink must be an https URL');
   }
-  config = withWechatInfoPlist(config, appId);
+  config = withWechatInfoPlist(config, appId, universalLink);
   config = withWechatEntitlements(config, parsedUniversalLink.hostname);
   config = withWechatAndroidManifest(config);
   config = withWechatEntryActivity(config, appId);
   return config;
 }
 
-function withWechatInfoPlist(config, appId) {
+function withWechatInfoPlist(config, appId, universalLink) {
   return withInfoPlist(config, (config) => {
     const info = config.modResults;
+    info.CindyWechatAppId = appId;
+    info.CindyWechatUniversalLink = universalLink;
     info.LSApplicationQueriesSchemes = unique([
       ...(info.LSApplicationQueriesSchemes || []),
       'weixin',
@@ -138,7 +140,15 @@ class WXEntryActivity : Activity(), IWXAPIEventHandler {
     WXAPIFactory.createWXAPI(this, ${kotlinAppId}, false).handleIntent(intent, this)
   }
 
-  override fun onReq(request: BaseReq) { finish() }
+  override fun onReq(request: BaseReq) {
+    if (XdtWechatAuthCoordinator.handleRequest(request)) {
+      packageManager.getLaunchIntentForPackage(packageName)?.let { launch ->
+        launch.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        startActivity(launch)
+      }
+    }
+    finish()
+  }
 
   override fun onResp(response: BaseResp) {
     XdtWechatAuthCoordinator.handleResponse(response)

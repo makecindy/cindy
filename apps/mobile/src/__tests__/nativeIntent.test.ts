@@ -34,6 +34,12 @@ beforeEach(() => { vi.useFakeTimers(); clearSharedTaskInvitationIntent(); clearP
 afterEach(() => { clearSharedTaskInvitationIntent(); clearProviderShareLinkIntent(); clearRelayJoinIntent(); clearChatInvite(); vi.useRealTimers(); });
 
 describe('mobile native deep-link redirects', () => {
+  it.each([true, false])('keeps WeChat launch transport URLs out of page navigation (initial=%s)', initial => {
+    expect(redirectSystemPath({ path: 'wx-test-mobile://showmessage?payload=opaque-fixture', initial })).toBe('/');
+    expect(getChatInviteIntent()).toBeNull();
+    const unrelated = 'wx-other-mobile://showmessage?payload=opaque-fixture';
+    expect(redirectSystemPath({ path: unrelated, initial })).toBe(unrelated);
+  });
   // A2 contract: the actual native entry must redact the invite before routing,
   // preserve it across login, and never replace an active confirmation. Existing
   // shared-task/provider tests do not cover group invitations. Unit tier: one

@@ -6,6 +6,7 @@ export function isWechatSdkCallback(
   const isCallbackPath = (value: string) =>
     /^(?:oauth|refreshToken)\/?$/.test(value);
   try {
+    if (config.appId && path.toLowerCase().startsWith(`${config.appId.toLowerCase()}://`)) return true;
     // Expo Router may already have replaced the incoming wx<AppID> scheme with
     // Cindy's scheme, or reduced the URL to a path. Neither is a navigable page.
     const customPath = path.replace(/^[a-zA-Z][\w+.-]*:\/\//, '/');

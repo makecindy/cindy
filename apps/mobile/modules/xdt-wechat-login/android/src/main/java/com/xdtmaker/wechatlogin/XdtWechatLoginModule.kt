@@ -1,7 +1,9 @@
 package com.xdtmaker.wechatlogin
 
 import com.tencent.mm.opensdk.modelbase.BaseResp
+import com.tencent.mm.opensdk.modelbase.BaseReq
 import com.tencent.mm.opensdk.modelmsg.SendAuth
+import com.tencent.mm.opensdk.modelmsg.ShowMessageFromWX
 import com.tencent.mm.opensdk.openapi.IWXAPI
 import com.tencent.mm.opensdk.openapi.WXAPIFactory
 import expo.modules.kotlin.Promise
@@ -12,6 +14,24 @@ import expo.modules.kotlin.modules.ModuleDefinition
 object XdtWechatAuthCoordinator {
   private var pendingPromise: Promise? = null
   private var expectedState: String? = null
+  private val launchInfos = mutableListOf<String>()
+  @Volatile var onLaunch: (() -> Unit)? = null
+
+  @Synchronized
+  fun consumeLaunchInfos(): List<String> {
+    val pending = launchInfos.toList()
+    launchInfos.clear()
+    return pending
+  }
+
+  @Synchronized
+  fun handleRequest(request: BaseReq): Boolean {
+    val info = (request as? ShowMessageFromWX.Req)?.message?.messageExt ?: return false
+    if (!Regex("[A-Za-z0-9_-]{32}").matches(info)) return false
+    if (!launchInfos.contains(info) && launchInfos.size < 2) launchInfos.add(info)
+    onLaunch?.invoke()
+    return true
+  }
 
   fun begin(promise: Promise, state: String): Boolean {
     if (pendingPromise != null) return false
@@ -59,6 +79,16 @@ class XdtWechatLoginModule : Module() {
 
   override fun definition() = ModuleDefinition {
     Name("XdtWechatLogin")
+    Events("onWechatLaunch")
+
+    OnCreate {
+      XdtWechatAuthCoordinator.onLaunch = { sendEvent("onWechatLaunch", emptyMap<String, Any>()) }
+    }
+    OnDestroy { XdtWechatAuthCoordinator.onLaunch = null }
+
+    AsyncFunction("consumeWechatLaunchInfos") {
+      XdtWechatAuthCoordinator.consumeLaunchInfos()
+    }
 
     AsyncFunction("isWechatInstalled") {
       val context = appContext.reactContext ?: return@AsyncFunction false

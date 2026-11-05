@@ -1,4 +1,4 @@
-import { requireNativeModule } from 'expo-modules-core';
+import { requireNativeModule, type EventSubscription } from 'expo-modules-core';
 
 export interface WechatAuthOptions {
   appId: string;
@@ -17,6 +17,8 @@ interface XdtWechatLoginModule {
     options: WechatAuthOptions,
   ): Promise<WechatAuthCodeResult>;
   cancelWechatAuthRequest(): Promise<void>;
+  consumeWechatLaunchInfos(): Promise<string[]>;
+  addListener(event: 'onWechatLaunch', listener: () => void): EventSubscription;
 }
 
 const nativeModule =
@@ -35,4 +37,12 @@ export function requestWechatAuthCode(
 /** Releases a native request whose JavaScript-side foreground timeout already fired. */
 export function cancelWechatAuthRequest(): Promise<void> {
   return nativeModule.cancelWechatAuthRequest();
+}
+
+export function addWechatLaunchListener(listener: () => void): EventSubscription {
+  return nativeModule.addListener('onWechatLaunch', listener);
+}
+
+export function consumeWechatLaunchInfos(): Promise<string[]> {
+  return nativeModule.consumeWechatLaunchInfos();
 }

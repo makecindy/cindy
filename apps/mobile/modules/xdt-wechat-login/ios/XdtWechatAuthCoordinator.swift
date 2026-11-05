@@ -7,6 +7,9 @@ import ExpoModulesCore
  */
 final class XdtWechatAuthCoordinator {
   static let shared = XdtWechatAuthCoordinator()
+  var onLaunch: (() -> Void)?
+
+  func consumeLaunchInfos() -> [String] { return [] }
 
   func isInstalled() -> Bool {
     return false
@@ -38,6 +41,23 @@ final class XdtWechatAuthCoordinator: NSObject, WXApiDelegate {
 
   private var pendingPromise: Promise?
   private var expectedState: String?
+  private var registered = false
+  private var launchInfos: [String] = []
+  var onLaunch: (() -> Void)?
+
+  func consumeLaunchInfos() -> [String] {
+    let pending = launchInfos
+    launchInfos.removeAll()
+    return pending
+  }
+
+  private func registerFromBundle() {
+    guard !registered,
+      let appId = Bundle.main.object(forInfoDictionaryKey: "CindyWechatAppId") as? String,
+      let universalLink = Bundle.main.object(forInfoDictionaryKey: "CindyWechatUniversalLink") as? String
+    else { return }
+    registered = WXApi.registerApp(appId, universalLink: universalLink)
+  }
 
   func isInstalled() -> Bool {
     return WXApi.isWXAppInstalled()
@@ -64,6 +84,7 @@ final class XdtWechatAuthCoordinator: NSObject, WXApiDelegate {
       promise.reject("ERR_WECHAT_REGISTER_FAILED", "Could not register the WeChat application.")
       return
     }
+    registered = true
 
     pendingPromise = promise
     expectedState = state
@@ -78,10 +99,12 @@ final class XdtWechatAuthCoordinator: NSObject, WXApiDelegate {
   }
 
   func handleOpen(_ url: URL) -> Bool {
+    registerFromBundle()
     return WXApi.handleOpen(url, delegate: self)
   }
 
   func handleUniversalLink(_ userActivity: NSUserActivity) -> Bool {
+    registerFromBundle()
     return WXApi.handleOpenUniversalLink(userActivity, delegate: self)
   }
 
@@ -92,7 +115,13 @@ final class XdtWechatAuthCoordinator: NSObject, WXApiDelegate {
     )
   }
 
-  func onReq(_ request: BaseReq) {}
+  func onReq(_ request: BaseReq) {
+    guard let launch = request as? LaunchFromWXReq, let info = launch.message.messageExt,
+      info.count == 32, info.range(of: "^[A-Za-z0-9_-]{32}$", options: .regularExpression) != nil
+    else { return }
+    if !launchInfos.contains(info) && launchInfos.count < 2 { launchInfos.append(info) }
+    onLaunch?()
+  }
 
   func onResp(_ response: BaseResp) {
     guard let auth = response as? SendAuthResp else { return }
