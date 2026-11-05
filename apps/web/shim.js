@@ -45,6 +45,11 @@
     emptyOverrides: Object.freeze({}),
     botGroupsEmpty: Object.freeze({ ok: true, groups: Object.freeze([]) }),
     deviceLinkState: Object.freeze({ status: 'unavailable', devices: Object.freeze([]) }),
+    voiceNotReady: Object.freeze({
+      ok: false, serviceMode: Object.freeze({}), provider: 'openai-realtime-whisper',
+      providerModel: '', auth: 'api-key', settingsTab: 'api-keys', error: 'not_available_on_host',
+    }),
+    voiceModelSelection: Object.freeze({ serviceMode: null, asrProvider: null, refinerProvider: null, refinerModel: null }),
     appShortcuts: Object.freeze({ overrides: Object.freeze({}), platform: 'linux', globalFailures: Object.freeze([]) }),
   });
 
@@ -127,9 +132,12 @@
       }
     },
     'maker.getCapabilities': (args) => {
-      window.__cindyCapsCalls = window.__cindyCapsCalls ?? [];
-      window.__cindyCapsCalls.push(args?.[0] ?? null);
-      return rpc('/capabilities', { agentKind: args?.[0] ?? null });
+      // Store consumers compare the descriptor by identity; a fresh object on
+      // every read can keep a subscribing component re-rendering forever.
+      const key = String(args?.[0] ?? '');
+      capabilitiesCache ??= new Map();
+      if (!capabilitiesCache.has(key)) capabilitiesCache.set(key, rpc('/capabilities', { agentKind: key }));
+      return capabilitiesCache.get(key);
     },
     'maker.listAvailableAgents': () => rpc('/agents'),
     'maker.listAgentCommands': (args) => rpc('/agent-commands', { agentKind: args?.[0], sessionId: args?.[1]?.sessionId }),
@@ -150,6 +158,12 @@
     'ghosts.listPickerModels': () => STATIC.emptyList,
     'maker.memoryGetSettings': () => STATIC.memorySettings,
     'maker.memoryPreserveLegacyMakerDisabled': () => STATIC.memorySettings,
+    'voiceInput.getReadinessCached': () => STATIC.voiceNotReady,
+    'voiceInput.getReadiness': () => STATIC.voiceNotReady,
+    'voiceInput.getHistory': () => STATIC.emptyList,
+    'voiceInput.getHistoryForRefinement': () => STATIC.emptyList,
+    'voiceInput.getModelSelection': () => STATIC.voiceModelSelection,
+    'voiceInput.onDataChanged': () => () => {},
     'appShortcuts.getState': () => STATIC.appShortcuts,
     'appShortcuts.setOverride': () => ({ overrides: STATIC.emptyOverrides }),
     'appShortcuts.clearOverride': () => ({ overrides: STATIC.emptyOverrides }),
@@ -286,6 +300,7 @@
    * first value they produced for the same channel and arguments.
    */
   const syncSnapshots = new Map();
+  let capabilitiesCache = null;
 
   /** Non-function members the preload exposes as plain values. */
   const VALUE_CHANNELS = Object.freeze({
