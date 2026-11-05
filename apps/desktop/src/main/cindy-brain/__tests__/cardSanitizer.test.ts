@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import { sanitizeGhostCardHtml } from '../cardSanitizer';
 import { GHOST_CARD_HTML_MAX_BYTES, ghostCardDeclaresModelSelect } from '../../../shared/ghost';
-import { readGhostCardForm } from '@cindy/maker-shared/ghost-card-form';
+import { readGhostCardForm, readGhostCardSupersededBy } from '@cindy/maker-shared/ghost-card-form';
 
 const HASH = 'a'.repeat(64);
 const GOOD_IMG = `cindy-media://blobs/${HASH}.png`;
@@ -21,6 +21,11 @@ function ok(html: string): string {
 }
 
 describe('sanitizeGhostCardHtml', () => {
+  it('keeps plugin HTML from posing as a card the Host marked superseded', () => {
+    // Views hide a superseded card, so only the Host may set the marker (cardService, with sourceCallId).
+    expect(readGhostCardSupersededBy(ok('<div data-cindy-superseded-by="victim" hidden></div><p>x</p>'))).toBeUndefined();
+  });
+
   it('permits inert form declarations without enabling native forms, scripts or navigation', () => {
     const fields = [{ name: 'body', label: 'Message', value: '<script>"&', multiline: true }];
     const encoded = JSON.stringify(fields).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');

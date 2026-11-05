@@ -21,8 +21,10 @@ const PR_STATUS_REFRESH_MS = 60_000;
  * replace a recycled row or another account's card. */
 export function usePluginResultCard(deviceId: string | undefined, sessionId: string, callId: string, followMailReplacement = false) {
   const resource = useSessionPluginResource(deviceId, sessionId, callId, 'plugin-results', 'card', followMailReplacement);
+  // A card the plugin moved to a newer call (or a replaced mail view) is shown only at its new place.
   const hidden = resource.blocks?.some(block => block.primitive === 'plugin-card-actions' &&
-    !!parseMailCard((block.data as { mail?: unknown } | undefined)?.mail)?.supersededBy) ?? false;
+    (typeof (block.data as { supersededBy?: unknown } | undefined)?.supersededBy === 'string' ||
+      !!parseMailCard((block.data as { mail?: unknown } | undefined)?.mail)?.supersededBy)) ?? false;
   return { ...resource, hidden };
 }
 

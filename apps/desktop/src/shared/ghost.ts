@@ -7745,6 +7745,11 @@ export interface GhostPipeCardUpdate {
   type: 'card-update';
   /** Active tool call in the same task, when refreshing an earlier owned card. */
   sourceCallId?: string;
+  /**
+   * Only with sourceCallId, and equal to it: this earlier card moved to the active call's card.
+   * Views that know the marker hide it; older views show this update's html instead.
+   */
+  supersededBy?: string;
   /** 归因号:tool-call 下发的 callId 原样带回(主机验"这单是不是派给你的")。 */
   callId: string;
   /** 卡片正文(静态 HTML+CSS;≤ GHOST_CARD_HTML_MAX_BYTES,超限整条拒)。 */
@@ -7783,8 +7788,8 @@ export const GHOST_CARD_WORKING_WINDOW_MS = 30 * 60_000;
 
 /** 卡片 html 字节上限(UTF-8;与 manifest tools[].parameters 16KB 同精神,卡片放宽一倍)。 */
 export const GHOST_CARD_HTML_MAX_BYTES = 32 * 1024;
-/** 卡片渲染高度下限 px。 */
-export const GHOST_CARD_HEIGHT_MIN = 120;
+/** 卡片渲染高度下限 px:卡片按实测内容高度显示,这里只挡掉非正数。 */
+export const GHOST_CARD_HEIGHT_MIN = 1;
 /** 卡片渲染高度上限 px(容 ~460 宽通栏竖图 9:16 + 题注;与 generic 图卡的
  *  "高图可以很高"口径对齐,再高截断)。 */
 export const GHOST_CARD_HEIGHT_MAX = 900;

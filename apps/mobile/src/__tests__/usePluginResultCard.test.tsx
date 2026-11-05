@@ -155,6 +155,13 @@ describe('plugin card lifecycle on Mobile', () => {
     await render({ card: 'old-history' }); expect(current.hidden).toBe(true);
     h.get.mockResolvedValue(card()); await render({ card: 'new' }); expect(current.hidden).toBe(false);
   });
+  it('hides a plugin card that moved to a newer call', async () => {
+    h.get.mockResolvedValue({ display: { title: 'PR' }, blocks: [
+      { id: 'text', primitive: 'markdown', fallbackMarkdown: 'octo/repo · Latest status is below' },
+      { id: 'actions', primitive: 'plugin-card-actions', fallbackMarkdown: '', data: { pluginId: 'cindy-github', supersededBy: 'new', items: [] } },
+    ] });
+    await render(); expect(current.hidden).toBe(true);
+  });
   it('loads history and refreshes on card change, foreground and reconnect', async () => {
     vi.useFakeTimers(); await render();
     expect(current.blocks?.[0].fallbackMarkdown).toBe('done');

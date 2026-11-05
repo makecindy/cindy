@@ -862,6 +862,11 @@ form 和 items[].submit，既有 invoke 的 input 可选追加 formValues。手�
 发送聊天消息前等待该任务已发起的编辑事件送达，避免远程输入被模型工具超越。
 card-update 可选 sourceCallId：只接受当前在途、同插件同任务的工具调用，用于更新较早的卡片；
 旧调用、跨任务、跨插件和脚本调用不能重开。旧 Host 忽略此字段，可能不更新超出宽限窗的旧卡，业务工具仍返回回执。
+card-update 可选 supersededBy：只能与 sourceCallId 同时出现且取值相同，表示这张旧卡已挪到当前调用的新卡。
+Host 在净化后的 html 前加宿主标记 `data-cindy-superseded-by`（插件 html 带不进这个属性），落库并推送；
+桌面隐藏整张旧卡及其工具行，远程 `plugin-card-actions` 投影可选追加 supersededBy、不再投影按钮并拒绝点击，
+新手机据此隐藏。旧 Host 忽略此字段，旧手机忽略新字段，都显示这次更新的 html，所以插件应同时给一段
+指向新位置的简短文字。卡片高度按实测内容显示，下限只挡非正数。
 没有新 channel、服务端 schema、数据库迁移或 Mobile 原生 fingerprint 变化。
 
 `ghosts:card-updated` 可选携带 Host 注册调用时确定的 `sessionId`，桌面实时卡匹配只使用

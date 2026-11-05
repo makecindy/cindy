@@ -131,6 +131,14 @@ describe('native mobile card actions', () => {
     html = '<p>Changed</p>';
     await expect(provider.invoke!(context, base)).rejects.toThrow();
     expect(dispatch).toHaveBeenCalledTimes(1);
+    // A card moved to a newer call: older phones keep its fallback text, newer phones get supersededBy
+    // to hide it, and none can press its buttons any more.
+    html = '<div data-cindy-superseded-by="new" hidden></div><p>Latest status is below</p><button data-ghost-action="edit">Edit</button>';
+    const moved = await provider.get!(context, { ...request, client: { protocolVersion: 1, primitives: ['plugin-card-actions'] } });
+    expect(moved.blocks?.[0].fallbackMarkdown).toContain('Latest status is below');
+    expect(moved.blocks?.find(b => b.primitive === 'plugin-card-actions')?.data).toMatchObject({ supersededBy: 'new', items: [] });
+    await expect(provider.invoke!(context, { ...base, input: { ...base.input, revision: moved.revision } })).rejects.toThrow();
+    expect(dispatch).toHaveBeenCalledTimes(1);
   });
 });
 

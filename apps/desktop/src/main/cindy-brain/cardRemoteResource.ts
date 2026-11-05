@@ -1,5 +1,5 @@
 import { GHOST_CARD_ACTION_ID_RE, isGhostCardLinkAllowed } from '../../shared/ghost.js';
-import { readMailCard, isLegacyMailCard, readGhostCardFormChange, readGhostCardForm, parseGhostCardFormValues, omitGhostCardFormPreview } from '@cindy/maker-shared/ghost-card-form';
+import { readMailCard, readGhostCardSupersededBy, isLegacyMailCard, readGhostCardFormChange, readGhostCardForm, parseGhostCardFormValues, omitGhostCardFormPreview } from '@cindy/maker-shared/ghost-card-form';
 import type { GhostCardRow } from './cardService.js';
 import { createHash } from 'node:crypto';
 import { REMOTE_RESOURCE_CHANGED_CHANNEL, type RemoteResourceBlock } from '@cindy/device-link';
@@ -265,7 +265,9 @@ export function createGhostCardRemoteProvider(deps: {
       // without that primitive keeps the address in the text.
       const linksAsActions = Boolean(deps.interactions) && request.client.primitives.includes('plugin-card-actions');
       const mail = readMailCard(card.html), legacyMail = isLegacyMailCard(card.html);
-      const obsolete = !!mail?.supersededBy || legacyMail;
+      // A replaced card keeps its fallback text for older phones; newer phones hide it through supersededBy.
+      const supersededBy = readGhostCardSupersededBy(card.html);
+      const obsolete = !!supersededBy || legacyMail;
       const externalLinks = deps.interactions?.externalLinks(card.ghostId) ?? false;
       const rich = Boolean(deps.interactions) && request.client.primitives.includes('plugin-card-actions') && request.client.primitives.includes('plugin-card-rich')
         ? projectRichCardParts(card.html) : undefined;
@@ -283,7 +285,7 @@ export function createGhostCardRemoteProvider(deps: {
       }));
       if (deps.interactions && request.client.primitives.includes('plugin-card-actions')) blocks.push({
         id: 'actions', primitive: 'plugin-card-actions', fallbackMarkdown: '',
-        data: { pluginId: card.ghostId, revision, mail, legacyMail, mailUpload: supportsForms && !!mailUploadAction(card.html), changeAction: supportsForms && !obsolete ? readGhostCardFormChange(card.html) : undefined, form: supportsForms ? readGhostCardForm(card.html) : null,
+        data: { pluginId: card.ghostId, revision, mail, legacyMail, ...(supersededBy && !mail ? { supersededBy } : {}), mailUpload: supportsForms && !!mailUploadAction(card.html), changeAction: supportsForms && !obsolete ? readGhostCardFormChange(card.html) : undefined, form: supportsForms ? readGhostCardForm(card.html) : null,
           items,
           ...(rich?.live ? { live: rich.live } : {}),
           ...(prStatus?.length ? { prStatus } : {}) },
@@ -293,7 +295,7 @@ export function createGhostCardRemoteProvider(deps: {
     async invoke(context, request) {
       if (!deps.interactions || !request.resourceRef) throw new RemoteResourceRegistryError('UNSUPPORTED_CAPABILITY', 'Card actions unavailable');
       const { card, callId, valid, revision } = await read(request.resourceRef.id);
-      if (isLegacyMailCard(card.html) || readMailCard(card.html)?.supersededBy) throw new RemoteResourceRegistryError('INVALID_PARAMS', 'Mail view has been replaced');
+      if (isLegacyMailCard(card.html) || readGhostCardSupersededBy(card.html)) throw new RemoteResourceRegistryError('INVALID_PARAMS', 'Card has been replaced');
       const change = request.input?.formChange === true;
       const uploadAction = !change ? mailUploadAction(card.html) : undefined;
       const attaching = uploadAction?.id === request.actionId;
