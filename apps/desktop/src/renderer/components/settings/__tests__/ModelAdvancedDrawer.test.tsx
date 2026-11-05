@@ -227,6 +227,7 @@ describe('model advanced editor', () => {
       fireEvent.click(toggle);
       expect(disable).toHaveBeenCalledOnce();
       expect(disable).toHaveBeenCalledWith(groupRow);
+      await waitFor(() => expect(toggle.disabled).toBe(false));
       expect(input.value).toBe('Private Alias');
       expect(close).not.toHaveBeenCalled();
       fireEvent.click(save);

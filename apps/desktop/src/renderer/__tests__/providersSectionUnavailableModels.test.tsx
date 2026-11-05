@@ -325,6 +325,54 @@ describe('ProvidersSection — 双栏管理', () => {
     } finally { finishReadback(); vi.mocked(updateCustomProvider).mockReset(); refetchProvidersSpy.mockReset(); }
   });
 
+  // #6601 inverse-order review: unit, real provider -> list -> drawer. The
+  // name-save-first tests cannot expose a slow footer closing a later rename.
+  // One deferred admission IPC distinguishes success (close) from failure
+  // (retain the draft and permit retry), with no network or timed sleeps.
+  it.each(['success', 'failed'] as const)('serializes a %s footer request before a name save', async outcome => {
+    const config = { id: 'footer-rename', name: 'Relay', runtimes: { codex: {
+      baseUrl: 'https://relay.example.invalid/v1', models: [{ id: 'private', name: 'Private' }],
+    } } };
+    providerSnapshotState.customOverride = { ...buildUserProvider(config), connected: true };
+    providerSnapshotState.order = [config.id];
+    refetchProvidersSpy.mockResolvedValue(true);
+    let finish: (() => void) | undefined;
+    const toggle = vi.fn<typeof window.electronAPI.maker.setModelDisable>(() => new Promise<{ ok: true }>((resolve, reject) => {
+      finish = () => outcome === 'success' ? resolve({ ok: true }) : reject(new Error('admission failed'));
+    }));
+    window.electronAPI.maker.setModelDisable = toggle;
+    render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    try {
+      fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.advanced.openAria' }));
+      const input = screen.getByRole('textbox', { name: 'settings.providers.models.advanced.displayName' }) as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'Work Alias' } });
+      const save = screen.getByRole('button', { name: 'settings.providers.models.advanced.saveName' }) as HTMLButtonElement;
+      expect(save.disabled).toBe(false);
+      // A queued name click must also be blocked before React renders the lock.
+      act(() => {
+        fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.disableModel' }));
+        fireEvent.click(save);
+      });
+      expect(toggle).toHaveBeenCalledOnce();
+      expect(updateCustomProvider).not.toHaveBeenCalled();
+      expect(input.disabled).toBe(true);
+      expect(save.disabled).toBe(true);
+      await act(async () => { finish!(); });
+      if (outcome === 'success') {
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+        expect(updateCustomProvider).not.toHaveBeenCalled();
+      } else {
+        await waitFor(() => expect(save.disabled).toBe(false));
+        expect(input.value).toBe('Work Alias');
+        fireEvent.click(save);
+        await waitFor(() => expect(updateCustomProvider).toHaveBeenCalledOnce());
+        expect(vi.mocked(updateCustomProvider).mock.calls[0]![0]).toMatchObject({ runtimes: { codex: {
+          models: [{ id: 'private', name: 'Work Alias', nameExplicit: true }],
+        } } });
+      }
+    } finally { finish?.(); }
+  });
+
   // Renderer unit: click the real provider refresh/menu, inspect the persisted
   // config and visible dialog. Earlier refresh cases only used chat-only proxies;
   // a MiniMax API connection with no speech is the minimal missing-default case.

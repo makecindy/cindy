@@ -197,7 +197,7 @@ interface Props {
   /** 该行的报价展示（与列表同一份派生结果，避免抽屉自己再算一遍算出别的）。 */
   pricePresentationOf: (agent: AgentKind, model: CatalogModel) => ModelPricePresentation | null;
   /** 准入轴:停用此模型（main 侧 model-disable-store）。 */
-  onDisable: (row: UnionModelRow) => void;
+  onDisable: (row: UnionModelRow) => void | Promise<void>;
   /** 本机 Ollama 专有:删除磁盘上的模型文件。 */
   onDeleteLocal?: (row: UnionModelRow) => void;
   /** 该行当前是否已被停用（用于底部动作区的方向）。 */
@@ -249,6 +249,8 @@ export function ModelAdvancedDrawer({
   const [nameDraft, setNameDraft] = useState('');
   const [nameSaving, setNameSaving] = useState(false);
   const nameSavingRef = useRef(false);
+  const [toggleSaving, setToggleSaving] = useState(false);
+  const toggleSavingRef = useRef(false);
   const nameDirtyRef = useRef(false);
   const nameEditorVersionRef = useRef(0);
   const titleRef = useRef<HTMLHeadingElement>(null);
@@ -332,10 +334,20 @@ export function ModelAdvancedDrawer({
   useEffect(() => {
     if (!nameDirtyRef.current) setNameDraft(primaryModel?.name ?? '');
   }, [primaryModel?.name]);
+  const toggleModel = async () => {
+    if (!row || nameSavingRef.current || toggleSavingRef.current) return;
+    if (!canEditName) { void onDisable(groupRow ?? row); return; }
+    // The parent may close the drawer after its admission IPC settles. A new
+    // rename must not start while that earlier close request is still pending.
+    toggleSavingRef.current = true;
+    setToggleSaving(true);
+    try { await onDisable(groupRow ?? row); }
+    finally { toggleSavingRef.current = false; setToggleSaving(false); }
+  };
   const saveModelName = async () => {
     const name = nameDraft.trim();
     if (!canEditName || !row || !name || name.length > 256 || !nameDirtyRef.current ||
-        configurationBlocked || nameSavingRef.current || protocolSaving || imageCapabilitySaving) return;
+        configurationBlocked || nameSavingRef.current || toggleSavingRef.current || protocolSaving || imageCapabilitySaving) return;
     const config = providerViewToCustomProviderConfig(provider);
     // A union row can contain different IDs on each engine. Never match by its
     // canonical ID or display name, and preserve the original per-model config.
@@ -1313,10 +1325,10 @@ export function ModelAdvancedDrawer({
                         {(control) => (
                           <div className="flex flex-wrap items-center gap-2">
                             <SettingsTextInput data-setting-id={providersSettings.providers.id} {...control} size="sm" className="min-w-[120px] flex-1"
-                              value={nameDraft} disabled={nameSaving} maxLength={256}
+                              value={nameDraft} disabled={nameSaving || toggleSaving} maxLength={256}
                               onChange={(value) => { nameDirtyRef.current = true; setNameDraft(value); }} />
                             <Button data-setting-id={providersSettings.providers.id} type="button" variant="secondary" size="md" compact loading={nameSaving}
-                              disabled={configurationBlocked || nameDraft.trim().length > 256 || !nameDraft.trim() || !nameDirtyRef.current || protocolSaving || imageCapabilitySaving}
+                              disabled={configurationBlocked || toggleSaving || nameDraft.trim().length > 256 || !nameDraft.trim() || !nameDirtyRef.current || protocolSaving || imageCapabilitySaving}
                               onClick={() => void saveModelName()}>
                               {t('settings.providers.models.advanced.saveName')}
                             </Button>
@@ -1355,8 +1367,9 @@ export function ModelAdvancedDrawer({
                   size="md"
                   compact
                   type="button"
-                  disabled={nameSaving || (disabled && !selectionAvailable)}
-                  onClick={() => { if (!nameSavingRef.current) onDisable(groupRow ?? row); }}
+                  loading={toggleSaving}
+                  disabled={nameSaving || toggleSaving || (disabled && !selectionAvailable)}
+                  onClick={() => void toggleModel()}
                 >
                   {disabled
                     ? t('settings.providers.models.enableModel')
