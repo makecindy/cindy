@@ -98,6 +98,14 @@ describe('host proxies', () => {
       body: { sessionId: 'task-1', item: { clientId: 'c1', text: 'hi' } },
     });
 
+    await handlers.get('local-db:sessions:create')!({} as IpcMainInvokeEvent, { model: 'm' });
+    expect(requests.at(-1)).toEqual({ path: '/api/sessions/create', body: { model: 'm' } });
+    await handlers.get('maker:input:remove')!({} as IpcMainInvokeEvent, 'task-1', 'c1');
+    expect(requests.at(-1)).toEqual({
+      path: '/api/input/remove',
+      body: { sessionId: 'task-1', clientId: 'c1' },
+    });
+
     // The legacy send path maps onto the queue and reports acceptance.
     const accepted = await handlers.get('maker:send')!({} as IpcMainInvokeEvent, 'task-1', 'hello', {
       model: 'm1',

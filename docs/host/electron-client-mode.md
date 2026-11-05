@@ -21,6 +21,12 @@ CINDY_HOST_API=http://127.0.0.1:3456 pnpm --filter desktop dev
 | `local-db:messages:list` | `POST /api/messages/list` |
 | `local-db:messages:view` | `POST /api/messages/history-view` |
 | `local-db:messages:create` | `POST /api/messages/create` |
+| `local-db:sessions:create` | `POST /api/sessions/create` |
+| `local-db:messages:estimated-value` | `POST /api/messages/estimated-value` |
+| `maker:input:remove` | `POST /api/input/remove` |
+| `model-access:get-status` | `POST /api/model-access` |
+| `maker:send` | `POST /api/input/enqueue`（返回 `{accepted:true}`） |
+| `maker:list-active` | `POST /api/sessions/list` |
 | `maker:provider:list` | `POST /api/providers` |
 | `maker:get-capabilities` | `POST /api/capabilities` |
 | `maker:input:get-projection` / `enqueue` / `stop` / `steer` / `resume` | `POST /api/input/*` |

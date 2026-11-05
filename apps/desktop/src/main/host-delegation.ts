@@ -98,6 +98,26 @@ export const PROXIED_CHANNELS: readonly ProxiedChannel[] = [
     body: ([sessionId]) => ({ sessionId }),
   },
   {
+    channel: 'local-db:sessions:create',
+    path: '/api/sessions/create',
+    body: ([body]) => body ?? {},
+  },
+  {
+    channel: 'local-db:messages:estimated-value',
+    path: '/api/messages/estimated-value',
+    body: ([sessionId]) => ({ sessionId }),
+  },
+  {
+    channel: 'maker:input:remove',
+    path: '/api/input/remove',
+    body: ([sessionId, clientId]) => ({ sessionId, clientId }),
+  },
+  {
+    channel: 'model-access:get-status',
+    path: '/api/model-access',
+    body: () => null,
+  },
+  {
     channel: 'local-db:messages:list',
     path: '/api/messages/list',
     body: ([sessionId, opts]) => ({
