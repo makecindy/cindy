@@ -4682,6 +4682,7 @@ interface ElectronAPI {
     startGithubSetup: () => Promise<import('../shared/githubSetup').GithubSetupState>;
     cancelGithubSetup: () => Promise<import('../shared/githubSetup').GithubSetupState>;
     onGithubConnected: (cb: () => void) => () => void;
+    onGithubSetupOpen?: (cb: () => void) => () => void;
     get: (workdir: string) => Promise<import('@/lib/gitContext.types').GitContextSnapshot>;
     getForSession: (input: {
       sessionId: string;

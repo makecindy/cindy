@@ -11,7 +11,10 @@ const mocks = vi.hoisted(() => ({
   readToken: vi.fn(),
   disposers: [] as Array<() => void>,
   connected: undefined as undefined | (() => void),
+  focused: null as null | { isDestroyed(): boolean; webContents: { send(channel: string): void } },
+  main: null as null | { isDestroyed(): boolean; webContents: { send(channel: string): void } },
 }));
+vi.mock('../deepLink', () => ({ getDeepLinkMainWindow: () => mocks.main }));
 vi.mock('electron', () => ({
   app: { getPath: () => '/test/userData', once: (_event: string, dispose: () => void) => mocks.disposers.push(dispose) },
   ipcMain: {
@@ -19,6 +22,7 @@ vi.mock('electron', () => ({
   },
   BrowserWindow: {
     getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: mocks.send } }],
+    getFocusedWindow: () => mocks.focused,
   },
 }));
 vi.mock('../security/trustedAppRenderer', () => ({ assertTrustedAppRendererEvent: mocks.guard }));
@@ -32,7 +36,7 @@ vi.mock('../git-context/githubSetup', () => ({
     return { start: mocks.start, snapshot: () => ({ phase: 'idle' }), cancel: vi.fn() };
   },
 }));
-import { registerGithubSetupIpc } from '../git-context/githubSetupIpc';
+import { openGithubSignIn, registerGithubSetupIpc } from '../git-context/githubSetupIpc';
 import { readGhostSecret } from '../secrets/providerSecretStore';
 import { outboundFetch } from '../maker-host/outbound-fetch';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus';
@@ -94,4 +98,20 @@ describe('GitHub setup IPC boundary', () => {
       mocks.send.mock.invocationCallOrder[0],
     );
   });
+});
+
+// Rule (2026-11-06, plan D): connect_account for the GitHub plugin opens Cindy's sign-in in the window
+// the user is looking at, else the main window; with no window it reports that nothing opened (unit).
+it('opens the GitHub sign-in in the focused window, then the main window', () => {
+  const focusedSend = vi.fn();
+  const mainSend = vi.fn();
+  mocks.main = { isDestroyed: () => false, webContents: { send: mainSend } };
+  mocks.focused = { isDestroyed: () => false, webContents: { send: focusedSend } };
+  expect(openGithubSignIn()).toBe(true);
+  expect(focusedSend).toHaveBeenCalledWith('git-context:github-setup:open');
+  mocks.focused = null;
+  expect(openGithubSignIn()).toBe(true);
+  expect(mainSend).toHaveBeenCalledWith('git-context:github-setup:open');
+  mocks.main = null;
+  expect(openGithubSignIn()).toBe(false);
 });

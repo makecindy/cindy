@@ -121,6 +121,11 @@ const cardRegisterMock = vi.hoisted(() => vi.fn());
 const resolvedAttachmentOrigins: Array<'user' | 'tool' | undefined> = [];
 
 vi.mock('electron', () => ({ app: { getPath: () => tmpUserData } }));
+const githubSignIn = vi.hoisted(() => ({ read: vi.fn(), open: vi.fn(() => true) }));
+vi.mock('../../git-context/githubSetupIpc.js', () => ({
+  readGithubConnection: githubSignIn.read,
+  openGithubSignIn: githubSignIn.open,
+}));
 vi.mock('../../appSessionState.js', () => ({
   ownerScopedUserDataPath: (...parts: string[]) => path.join(tmpUserData, ...parts),
   getActiveAppSession: () => ({ mode: 'cloud', dataOwnerId: 'member-1', generation: 7 }),
@@ -1342,6 +1347,27 @@ describe('connect_account ordinary task entry', () => {
     expect(ensureReadyMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();
     expect(grantAttachmentsMock).not.toHaveBeenCalled();
+  });
+  // Rule (Dash, 2026-11-06, plan D): when this computer is not signed in to GitHub, connecting the
+  // GitHub plugin from a task should lead to Cindy's own GitHub sign-in instead of "no setup action".
+  // Minimal input: a gh-cli plugin, signed out → signed in → explicit reconnect (unit).
+  it('opens Cindy\'s GitHub sign-in for a gh-cli plugin and reports ready once signed in', async () => {
+    listMock.mockReturnValue([chipGhost('cindy-github', ['tool'], {
+      network: { secrets: [{ key: 'github_pat', label: 'GitHub', source: 'gh-cli' }] },
+    })]);
+    githubSignIn.read.mockResolvedValueOnce({ status: 'missing' });
+    expect(await makeDeps().connectAccount!({ kind: 'plugin', id: 'cindy-github' }))
+      .toMatchObject({ ok: false, errorCode: 'GITHUB_SIGN_IN_REQUIRED', signInOpened: true, connection: 'missing' });
+    expect(githubSignIn.open).toHaveBeenCalledTimes(1);
+    githubSignIn.read.mockResolvedValue({ status: 'connected', login: 'octo', source: 'gh-cli' });
+    expect(await makeDeps().connectAccount!({ kind: 'plugin', id: 'cindy-github' }))
+      .toMatchObject({ ok: true, status: 'ready', login: 'octo' });
+    expect(githubSignIn.open).toHaveBeenCalledTimes(1);
+    expect(await makeDeps().connectAccount!({ kind: 'plugin', id: 'cindy-github', reauthorize: true }))
+      .toMatchObject({ ok: false, errorCode: 'GITHUB_SIGN_IN_REQUIRED', signInOpened: true });
+    expect(githubSignIn.open).toHaveBeenCalledTimes(2);
+    expect(ensureReadyMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
   });
   it('blocks disabled GitHub before offering its existing connection method', async () => {
     listMock.mockReturnValue([chipGhost('cindy-github')]);
