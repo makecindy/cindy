@@ -11,7 +11,7 @@ import { AcceptedCallbackDispatchCancelled } from './acceptedCallbackRunner.js';
 import { and, asc, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current.js';
-import { broadcastMessageRow, createMessage } from '../localDb/ipc/messages.js';
+import { broadcastMessageDeleted, broadcastMessageRow, createMessage } from '../localDb/ipc/messages.js';
 import type { DataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
 import {
   botDirectMessages,
@@ -271,13 +271,17 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     preview: string;
     createdAt: number;
     ownerScope: DataOwnerBroadcastScope | undefined;
-  }): Promise<void> => {
+  }): Promise<boolean> => {
     assertProjectionOwner(params.ownerScope);
     const clientId = BOT_DIRECT_MESSAGE_CLIENT_ID.timelineAnchor(
       params.threadId,
       params.deliveryId,
       params.sessionId,
     );
+    const [before] = await getDbClient().drizzle.select({ id: messages.id, agentMeta: messages.agentMeta })
+      .from(messages)
+      .where(and(eq(messages.sessionId, params.sessionId), eq(messages.clientId, clientId), isNull(messages.rewindAt)))
+      .limit(1);
     const deliveryStatus = params.deliveryStatus ?? 'delivered';
     const agentMeta = {
       botDirectMessage: {
@@ -300,6 +304,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       createdAt: params.createdAt,
       agentMeta,
     }, { broadcastOwnerScope: params.ownerScope });
+    let changed = !before;
     const existingMeta = anchor.agentMeta as { botDirectMessage?: { deliveryStatus?: string } } | null;
     if (existingMeta?.botDirectMessage?.deliveryStatus !== deliveryStatus) {
       const serializedMeta = JSON.stringify(agentMeta);
@@ -324,10 +329,12 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
         if (JSON.stringify(projectedMeta) !== JSON.stringify(anchor.agentMeta)) {
           assertProjectionOwner(params.ownerScope);
           broadcastMessageRow(params.sessionId, { ...anchor, agentMeta: projectedMeta }, params.ownerScope);
+          changed = true;
         }
       }
     }
     assertProjectionOwner(params.ownerScope);
+    return changed;
   };
 
   const persistDeliveryAnchors = async (
@@ -336,7 +343,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     recipientName: string,
     ownerScope: DataOwnerBroadcastScope | undefined,
     deliveryStatus: BotDirectMessageMeta['deliveryStatus'] = 'delivered',
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     const anchors = await Promise.allSettled([
       ...(row.senderSessionId ? [persistTimelineAnchor({
         threadId: row.threadId, deliveryId: row.id, sequence: row.sequence,
@@ -356,22 +363,23 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     // Settle both writes before rollback so a late write cannot recreate an orphan.
     const rejected = anchors.find((anchor) => anchor.status === 'rejected');
     if (rejected?.status === 'rejected') throw rejected.reason;
+    return anchors.some((anchor) => anchor.status === 'fulfilled' && anchor.value);
   };
 
   const persistFailedTimelineAnchor = async (
     db: ReturnType<typeof getDbClient>['drizzle'],
     row: typeof botDirectMessages.$inferSelect,
     ownerScope: DataOwnerBroadcastScope | undefined,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     const sessionId = row.senderSessionId ?? row.recipientSessionId;
-    if (!sessionId) return;
+    if (!sessionId) return false;
     const senderView = sessionId === row.senderSessionId;
     const clientId = BOT_DIRECT_MESSAGE_CLIENT_ID.timelineAnchor(row.threadId, row.id, sessionId);
     const [existing] = await db.select({ id: messages.id }).from(messages)
       .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId), isNull(messages.rewindAt)))
       .limit(1);
-    if (existing) return;
-    await persistTimelineAnchor({
+    if (existing) return false;
+    return persistTimelineAnchor({
       threadId: row.threadId,
       deliveryId: row.id,
       sequence: row.sequence,
@@ -420,6 +428,36 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
         eq(messages.role, 'user'), isNull(messages.rewindAt)))
       .limit(1);
     return receipt;
+  };
+
+  type TimelineAnchorSource = Pick<typeof botDirectMessages.$inferSelect,
+    'id' | 'threadId' | 'senderSessionId' | 'recipientSessionId'>;
+
+  const deleteTimelineAnchors = async (
+    db: ReturnType<typeof getDbClient>['drizzle'],
+    row: TimelineAnchorSource,
+    ownerScope: DataOwnerBroadcastScope | undefined,
+    includeDeliveryClient = false,
+  ): Promise<void> => {
+    const anchorClientIds = [row.senderSessionId, row.recipientSessionId]
+      .filter((id): id is string => !!id)
+      .map((id) => BOT_DIRECT_MESSAGE_CLIENT_ID.timelineAnchor(row.threadId, row.id, id));
+    if (anchorClientIds.length === 0) return;
+    const existingAnchors = await db.select({ sessionId: messages.sessionId, clientId: messages.clientId })
+      .from(messages)
+      .where(and(inArray(messages.clientId, anchorClientIds), isNull(messages.rewindAt), ne(messages.role, 'message_tombstone')));
+    const clientIds = includeDeliveryClient
+      ? [`bot-dm:${row.threadId}:${row.id}`, ...anchorClientIds]
+      : anchorClientIds;
+    await db.delete(messages).where(and(inArray(messages.clientId, clientIds), ne(messages.role, 'message_tombstone')));
+    for (const anchor of existingAnchors) {
+      assertProjectionOwner(ownerScope);
+      broadcastMessageDeleted({
+        sessionId: anchor.sessionId,
+        clientId: anchor.clientId,
+        clientIds: [anchor.clientId],
+      }, ownerScope);
+    }
   };
 
   /** Reconcile receipts after restart without replaying uncertain model/tool work. */
@@ -478,17 +516,15 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
           }
           if (!receipt) {
             // Never delete the tombstone itself: it is the durable replay fence.
-            await db.delete(messages).where(and(inArray(messages.clientId,
-              [clientId, row.senderSessionId, row.recipientSessionId].filter((id): id is string => !!id)
-                .map((id) => id === clientId ? id : BOT_DIRECT_MESSAGE_CLIENT_ID.timelineAnchor(row.threadId, row.id, id))),
-              ne(messages.role, 'message_tombstone')));
+            await deleteTimelineAnchors(db, row, owner, true);
           }
         }
+        let projectionChanged = false;
         if (receipt || queued) {
           const names = await db.select({ id: botProfiles.id, name: botProfiles.displayName }).from(botProfiles)
             .where(inArray(botProfiles.id, [row.senderBotId, row.recipientBotId]));
           assertOwner();
-          await persistDeliveryAnchors(row,
+          projectionChanged = await persistDeliveryAnchors(row,
             names.find((item) => item.id === row.senderBotId)?.name ?? row.senderName ?? row.senderBotId,
             names.find((item) => item.id === row.recipientBotId)?.name ?? row.recipientName ?? row.recipientBotId,
             owner, receipt ? 'delivered' : 'queued');
@@ -509,11 +545,13 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
         assertOwner();
         // Finish last: a crash while repairing anchors/counts leaves a pending row
         // that the next restore can reconcile again without replaying the delivery.
-        if (!receipt && !queued) await persistFailedTimelineAnchor(db, row, owner);
+        if (!receipt && !queued) projectionChanged = await persistFailedTimelineAnchor(db, row, owner);
         await db.update(botDirectMessages).set({ deliveryStatus: receipt ? 'delivered' : queued ? 'pending' : 'failed' })
           .where(and(eq(botDirectMessages.id, row.id), eq(botDirectMessages.deliveryStatus, 'pending')));
         assertOwner();
-        deps.onChanged?.({ threadId: row.threadId, participantBotIds: [row.senderBotId, row.recipientBotId] }, owner);
+        if (projectionChanged || receipt || !queued) {
+          deps.onChanged?.({ threadId: row.threadId, participantBotIds: [row.senderBotId, row.recipientBotId] }, owner);
+        }
       });
     }
   };
@@ -566,10 +604,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       if (receipt) {
         await persistDeliveryAnchors(row, row.senderName ?? row.senderBotId, row.recipientName ?? row.recipientBotId, owner);
       } else {
-        const anchorIds = [row.senderSessionId, row.recipientSessionId]
-          .filter((id): id is string => !!id)
-          .map((id) => BOT_DIRECT_MESSAGE_CLIENT_ID.timelineAnchor(row.threadId, row.id, id));
-        if (anchorIds.length > 0) await db.delete(messages).where(inArray(messages.clientId, anchorIds));
+        await deleteTimelineAnchors(db, row, owner);
       }
 
       const [thread] = await db.select().from(botDirectMessageThreads)
@@ -995,23 +1030,12 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
         // write (or the final delivery-status update) fails, remove any partial
         // projection so neither Bot sees a conversation entry that never
         // became an accepted delivery.
-        await db
-          .delete(messages)
-          .where(
-            inArray(messages.clientId, [
-              BOT_DIRECT_MESSAGE_CLIENT_ID.timelineAnchor(
-                thread.id,
-                deliveryId,
-                input.callerSessionId,
-              ),
-              BOT_DIRECT_MESSAGE_CLIENT_ID.timelineAnchor(
-                thread.id,
-                deliveryId,
-                targetSessionId ?? '',
-              ),
-            ]),
-          )
-          .catch(() => undefined);
+        await deleteTimelineAnchors(db, {
+          id: deliveryId,
+          threadId: thread.id,
+          senderSessionId: remoteTarget ? null : input.callerSessionId,
+          recipientSessionId: targetSessionId,
+        }, ownerScope).catch(() => undefined);
         const liveReservations = await db
           .select({ id: botDirectMessages.id })
           .from(botDirectMessages)

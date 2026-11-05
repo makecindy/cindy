@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   resolveDb: null as (() => ReturnType<typeof drizzle> | undefined) | null,
   createMessage: vi.fn(async (..._args: Parameters<typeof import('../../localDb/ipc/messages.js').createMessage>) => ({ id: 'anchor' })),
   broadcastMessageRow: vi.fn(),
+  broadcastMessageDeleted: vi.fn(),
 }));
 
 vi.mock('../../localDb/client/current.js', () => ({
@@ -21,6 +22,7 @@ vi.mock('../../localDb/client/current.js', () => ({
 vi.mock('../../localDb/ipc/messages.js', () => ({
   createMessage: h.createMessage,
   broadcastMessageRow: h.broadcastMessageRow,
+  broadcastMessageDeleted: h.broadcastMessageDeleted,
 }));
 
 import { createBotDirectMessageService } from '../botDirectMessageService.js';
@@ -493,6 +495,7 @@ describe('botDirectMessageService', () => {
     h.db = drizzle(sqlite);
     h.createMessage.mockClear();
     h.broadcastMessageRow.mockClear();
+    h.broadcastMessageDeleted.mockClear();
     dispatch = vi.fn(async (params: { targetSessionId?: string; clientId?: string; onAccepted?: () => void | Promise<void> }) => {
       if (params.targetSessionId && params.clientId) {
         sqlite.prepare(`INSERT INTO messages (id, session_id, client_id, role, content, created_at, rewind_at)
@@ -856,6 +859,68 @@ describe('botDirectMessageService', () => {
     expect(sqlite.prepare(`SELECT count(*) AS count FROM messages
       WHERE role='assistant' AND json_extract(agent_meta, '$.botDirectMessage.deliveryStatus')='delivered'`).get()).toEqual({ count: 2 });
     expect(h.broadcastMessageRow).toHaveBeenCalled();
+  });
+
+  it('does not rebroadcast an unchanged queue-owned pending thread on every read', async () => {
+    dispatch.mockImplementationOnce(async () => ({ ok: true as const, targetSessionId: 'b-main', wakeKind: 'queued' as const }));
+    const onChanged = vi.fn();
+    const service = createBotDirectMessageService({
+      dispatch,
+      hasQueuedDelivery: async () => true,
+      onChanged,
+      createId: () => 'stable-queued-read',
+    });
+    const sent = await service.messageAgent({ callerSessionId: 'a-main', targetBotId: 'bot-b', message: 'Keep this queued.' });
+    if (!sent.ok) throw new Error(sent.errorCode);
+
+    await service.getThread(sent.threadId, 'bot-a');
+    onChanged.mockClear();
+    await service.getThread(sent.threadId, 'bot-a');
+
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  it('notifies the receiver when its queued timeline anchor is deleted', async () => {
+    let queueOwnsDelivery = true;
+    const queuedDispatch = vi.fn(async () => ({
+      ok: true as const,
+      targetSessionId: 'b-main',
+      wakeKind: 'queued' as const,
+    }));
+    h.createMessage.mockImplementation(async (sessionId, body) => {
+      const id = `anchor-${body.clientId}`;
+      sqlite.prepare(`INSERT INTO messages (id, session_id, client_id, role, content, agent_meta, created_at, rewind_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, NULL) ON CONFLICT(session_id, client_id) DO NOTHING`)
+        .run(id, sessionId, body.clientId, body.role, body.content, JSON.stringify(body.agentMeta), body.createdAt ?? 1);
+      const row = sqlite.prepare('SELECT * FROM messages WHERE session_id = ? AND client_id = ?').get(sessionId, body.clientId) as {
+        id: string; session_id: string; client_id: string; role: string; content: string; agent_meta: string; created_at: number; rewind_at: number | null;
+      };
+      return { id: row.id, sessionId: row.session_id, clientId: row.client_id, role: row.role, content: row.content,
+        agentMeta: JSON.parse(row.agent_meta), createdAt: row.created_at, rewindAt: row.rewind_at } as never;
+    });
+    const service = createBotDirectMessageService({
+      dispatch: queuedDispatch,
+      hasQueuedDelivery: async () => queueOwnsDelivery,
+      createId: () => 'receiver-anchor-delete',
+    });
+    const sent = await service.messageAgent({ callerSessionId: 'a-main', targetBotId: 'bot-b', message: 'Remove this queued card.' });
+    if (!sent.ok) throw new Error(sent.errorCode);
+    await service.getThread(sent.threadId, 'bot-a');
+    expect(sqlite.prepare(`SELECT count(*) AS count FROM messages
+      WHERE role='assistant' AND json_extract(agent_meta, '$.botDirectMessage.deliveryStatus')='queued'`).get()).toEqual({ count: 2 });
+
+    queueOwnsDelivery = false;
+    await service.settleDiscardedQueuedDelivery('b-main', `bot-dm:${sent.threadId}:${sent.messageId}`);
+
+    expect(h.broadcastMessageDeleted).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'b-main',
+      clientId: `bot-dm-thread:${sent.threadId}:${sent.messageId}:b-main`,
+      clientIds: [`bot-dm-thread:${sent.threadId}:${sent.messageId}:b-main`],
+    }), undefined);
+    await expect(service.getThread(sent.threadId, 'bot-a')).resolves.toMatchObject({
+      ok: true,
+      thread: { messages: [{ content: 'Remove this queued card.', deliveryStatus: 'failed' }] },
+    });
   });
 
   it('keeps a pending reservation while the live queue or recovery still owns it', async () => {
