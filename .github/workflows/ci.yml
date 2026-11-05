@@ -201,22 +201,40 @@ jobs:
         if: matrix.shard == 1
         run: pnpm --filter desktop exec vitest run src/main/localDb/ipc/__tests__/botCanonicalSession.test.ts src/main/localDb/ipc/__tests__/botRemoteResourceProvider.test.ts
 
-  # 保留原 required check 名 verify；检查 job 或任一 Linux 分片失败、取消都阻断。
+  # AppKit behavior cannot be covered by the Linux/Windows unit shards.
+  macos-menubar:
+    name: macOS menu bar integration
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout client
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Check native status button updates
+        run: node apps/desktop/native/menubar/test.mjs
+
+  # 保留原 required check 名 verify；检查 job、原生测试或任一 Linux 分片失败、取消都阻断。
   verify:
     name: verify
     if: ${{ always() }}
     needs:
       - verify-checks
       - linux-unit-shards
+      - macos-menubar
     runs-on: ubuntu-latest
     steps:
-      - name: Require checks and every Linux unit shard
+      - name: Require checks, native tests and every Linux unit shard
         env:
           VERIFY_CHECKS_RESULT: ${{ needs.verify-checks.result }}
           LINUX_UNIT_SHARDS_RESULT: ${{ needs.linux-unit-shards.result }}
+          MACOS_MENUBAR_RESULT: ${{ needs.macos-menubar.result }}
         run: |
           test "$VERIFY_CHECKS_RESULT" = "success"
           test "$LINUX_UNIT_SHARDS_RESULT" = "success"
+          test "$MACOS_MENUBAR_RESULT" = "success"
 
   # Linux 全绿不能覆盖 path separator、盘符、大小写和文件系统能力差异。四个
   # Windows 分片并行运行，分片并集仍完整覆盖 test:unit，不能缩成少量 smoke。
