@@ -3,6 +3,7 @@ import { ProviderNameSearch } from './ProviderNameSearch';
 import { providerSearchChoices, type ProviderSearchTarget } from './providerSearch';
 import {
   credentialGuidanceKind,
+  mergedHeaderNames,
   missingCredentialRuntime,
 } from './customProviderCredentialGuard';
 import { useDialogExit } from '@/hooks/useDialogExit';
@@ -2124,25 +2125,37 @@ export function ProviderConnectionDialog({
     }
     // apiKey 形态留空会存出不带 `auth` 的配置，下游按 apiKey 处理后因缺凭据静默
     // 跳过该 Provider，界面只剩一个没有解释的灰置开关（#8693 / #7646）。在保存前挡住。
-    const credentialGap = missingCredentialRuntime(
-      authMode,
-      Object.keys(runtimes).map((key) => {
-        const a = key as DialogAgentKind;
-        return {
-          agent: a,
-          apiKey: rt[a].apiKey,
-          headers: rt[a].headers,
-          baseUrl: runtimes[a]?.baseUrl ?? '',
-          keyEdited: !editing || keyEditRevisionRef.current[a] > 0,
-          hasStoredKey: (loadedKeyRef.current[a] ?? '').trim().length > 0,
-        };
-      }),
-    );
+    const credentialDrafts = Object.keys(runtimes).map((key) => {
+      const a = key as DialogAgentKind;
+      const saved = runtimes[a];
+      const previous = initial?.runtimes[a];
+      const norm = (value: string | null | undefined) => (value ?? '').trim();
+      // main 侧保留既存密文鉴权头的条件(planProviderHeaderMutations 'update' 分支):
+      // runtime 仍在、仍是 apiKey 鉴权、本次未显式带 headers、且端点(baseUrl /
+      // modelsUrl)未变。只用表单已知的事实判断,不回读头凭证的值。
+      const preservesStoredHeaderCredential =
+        editing
+        && !!previous
+        && Object.keys(mergedHeaderNames(rt[a].headers)).length === 0
+        && norm(previous.baseUrl) === norm(saved?.baseUrl)
+        && norm(previous.modelsUrl) === norm(saved?.modelsUrl);
+      return {
+        agent: a,
+        apiKey: rt[a].apiKey,
+        headers: rt[a].headers,
+        baseUrl: saved?.baseUrl ?? '',
+        ...(saved?.modelsUrl ? { modelsUrl: saved.modelsUrl } : {}),
+        keyEdited: !editing || keyEditRevisionRef.current[a] > 0,
+        hasStoredKey: (loadedKeyRef.current[a] ?? '').trim().length > 0,
+        preservesStoredHeaderCredential,
+      };
+    });
+    const credentialGap = missingCredentialRuntime(authMode, credentialDrafts);
     if (credentialGap) {
       setActiveTab(credentialGap);
       reportFieldError(
         `${credentialGap}:apiKey`,
-        credentialGuidanceKind(runtimes[credentialGap]?.baseUrl ?? '') === 'loopback'
+        credentialGuidanceKind(credentialDrafts) === 'loopback'
           ? t('settings.providers.custom.errors.apiKeyRequiredLoopback')
           : t('settings.providers.custom.errors.apiKeyRequiredRemote'),
       );
