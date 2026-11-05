@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildBotGroupCapabilityNotice, BOT_GROUP_RUNTIME_FAILURE_CODES, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 import { chatGroupView, chatRoomRow, createChatServerClient, type ChatMessage, type ChatPage } from '@/chat/chatServerClient';
 import { shareSelectionStore } from '@/session/shareSelectionStore';
-import { i18n } from '@/i18n';
+import { i18n, SUPPORTED_LOCALES } from '@/i18n';
 import { resolveBotGroupMentions } from '@cindy/maker-shared/botGroupMentions';
 
 const h = vi.hoisted(() => ({
@@ -140,9 +140,12 @@ vi.mock('lucide-react-native', () => Object.fromEntries(
     'Minus', 'ChevronUp', 'CircleMinus', 'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown', 'Reply', 'SlidersHorizontal', 'UserPlus']
     .map((name) => [name, () => null]),
 ));
-vi.mock('@/theme', async () => ({
-  ...await import('@/theme/tokens'), useThemedStyles: (makeStyles: any) => makeStyles({}), useTheme: () => ({ mode: h.themeMode, colors: {} }), monoFont: 'mono',
-}));
+vi.mock('@/theme', async () => {
+  const tokens = await import('@/theme/tokens');
+  const colors = () => tokens.palettes[h.themeMode as keyof typeof tokens.palettes];
+  return { ...tokens, useThemedStyles: (makeStyles: any) => makeStyles(colors()),
+    useTheme: () => ({ mode: h.themeMode, colors: colors() }), monoFont: 'mono' };
+});
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.processRead, getPresenceAvailability: () => true }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({
   user: { id: 'owner' }, accountGeneration: 1, getAccessToken: async () => 'token', apiFetch: async () => ({}),
@@ -397,11 +400,11 @@ afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(
 describe('group timeline', () => {
   // PR #8818 / component: Chinese-only broadcast coverage missed localized
   // labels colliding with a member name. Use the real send parser and Timeline:
-  // a Spanish broadcast must not open Ana's teammate, while its qualified @ can.
-  it('keeps localized teammate broadcasts out of personal identity', async () => {
-    h.translate = (key, options) => i18n.t(key, { ...options, lng: 'es' });
-    const name = i18n.t('groupChat.mention.allBots', { lng: 'es' });
-    const allLabel = i18n.t('groupChat.mention.all', { lng: 'es' });
+  // a sender-locale broadcast must stay inert in English, while its qualified @ can open.
+  it.each([['es', 'es'], ...SUPPORTED_LOCALES.map(lng => [lng, 'en'])])('keeps %s teammate broadcasts out of personal identity when read in %s', async (senderLocale, readerLocale) => {
+    h.translate = (key, options) => i18n.t(key, { ...options, lng: readerLocale });
+    const name = i18n.t('groupChat.mention.allBots', { lng: senderLocale });
+    const allLabel = i18n.t('groupChat.mention.all', { lng: senderLocale });
     const qualified = `${name} (Ana)`;
     const content = `@${qualified} @${name}`;
     const mentions = resolveBotGroupMentions(content, {
@@ -2203,10 +2206,10 @@ describe('mobile group threads', () => {
   // PR #8818 / component: the displayed reply must use its own mention IDs,
   // not the main share's self-addressed delivery metadata. Earlier share tests
   // had no mentions. Minimal failure: sharer and target both named Ann.
-  it('opens the source mention from an authored share without mistaking the sharer for its namesake', async () => {
+  it.each([true, false])('opens the source mention from a share without mistaking the sharer for its namesake (authored=%s)', async sharedByAuthor => {
     h.chat.server = true;
     const share = { messageId: 'source', threadRootId: rootId, status: 'available' as const, authorKind: 'user' as const,
-      authorBotId: 'self', authorName: 'Ann', sharedByAuthor: true, content: '@Ann 看看原回复',
+      authorBotId: 'self', authorName: 'Ann', sharedByAuthor, content: '@Ann 看看原回复',
       mentions: { all: false, botIds: ['abu'] }, attachments: [], createdAt: 1000, edited: false };
     const posted = message('posted', 2, { authorKind: 'user', isSelf: true, content: '',
       mentions: { all: false, botIds: ['self'] }, threadShare: share });
@@ -2215,11 +2218,21 @@ describe('mobile group threads', () => {
     const data = threadGroup({ serverBacked: true, members, messages: [posted] });
     await render(data, 'ready', undefined, '');
     const mention = [...node.querySelectorAll('span')].find(span => span.textContent === '@Ann' && span.getAttribute('data-style'))!;
+    expect(mention).toBeDefined();
+    const { palettes } = await import('@/theme/tokens');
+    expect(JSON.parse(mention.getAttribute('data-style')!).color).toBe(palettes.light.groupMentionText);
     await act(async () => {
       const touch = new Event('touchstart', { bubbles: true });
       Object.defineProperties(touch, { pageX: { value: 108 }, pageY: { value: 246 } });
       mention.dispatchEvent(touch); mention.click();
     });
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('Target');
+    await click('botGroup.mention.identity.close');
+    h.themeMode = 'dark';
+    await render(data, 'ready', undefined, '');
+    const darkMention = [...node.querySelectorAll('span')].find(span => span.textContent === '@Ann' && span.getAttribute('data-style'))!;
+    expect(JSON.parse(darkMention.getAttribute('data-style')!).color).toBe(palettes.dark.groupMentionText);
+    await act(async () => darkMention.click());
     expect(byId('botGroup.mention.identity')?.textContent).toContain('Target');
     await click('botGroup.mention.identity.close');
     await render({ ...data, messages: [{ ...posted, threadShare: { ...share, mentions: undefined } }] }, 'ready', undefined, '');

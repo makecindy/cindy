@@ -196,7 +196,7 @@ it.each([['ios', 'light'], ['ios', 'dark'], ['android', 'light'], ['android', 'd
   const reserved = member('all', '所有人');
   const onPress = vi.fn();
   const context = { members: [ann, other, reserved], mentions: { all: false, botIds: ['ann-1'] },
-    serverBacked: false, allLabel: '所有人', allBotsLabel: '所有伙伴', labels: ['Ann', '所有人', '所有伙伴'], onPress };
+    serverBacked: false, allLabels: ['所有人'], allBotsLabels: ['所有伙伴'], labels: ['Ann', '所有人', '所有伙伴'], onPress };
   const renderBody = async (content: string, changes = {}) => {
     const nextContext = { ...context, ...changes };
     await act(async () => root.render(createElement(BotGroupUserText, {
@@ -233,7 +233,7 @@ it.each([['ios', 'light'], ['ios', 'dark'], ['android', 'light'], ['android', 'd
     await renderBody('@所有人', { mentions: { all: false, botIds: ['all'] } });
     expect(links()).toHaveLength(1); // Explicitly picked namesake is a person, as on PC.
     // Localized teammate broadcast with a colliding member name (PR #8818).
-    const spanish = { members: [member('todos', 'Todos los compañeros')], allBotsLabel: 'Todos los compañeros',
+    const spanish = { members: [member('todos', 'Todos los compañeros')], allBotsLabels: ['Todos los compañeros'],
       labels: ['Todos los compañeros'], mentions: { all: false, allBots: true, botIds: ['todos'] } };
     await renderBody('@Todos los compañeros', spanish);
     expect(links()).toHaveLength(0);
@@ -256,7 +256,7 @@ it.each(['ios', 'android'])('matches complete rendered words across formatting o
   Platform.OS = platform as typeof Platform.OS;
   const ann = { botId: 'ann', name: 'Ann', avatar: '', avatarColor: '', status: 'active' as const };
   const context = { members: [ann], mentions: { all: false, botIds: [] }, serverBacked: true,
-    allLabel: '所有人', allBotsLabel: '所有伙伴', labels: ['Ann'], onPress: vi.fn() };
+    allLabels: ['所有人'], allBotsLabels: ['所有伙伴'], labels: ['Ann'], onPress: vi.fn() };
   try {
     await act(async () => root.render(createElement(BotGroupMarkdownText, {
       content: '**@Ann**a mail**@Ann**.test @**Ann**', mentionContext: context,
