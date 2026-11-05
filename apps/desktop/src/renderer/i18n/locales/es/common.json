@@ -6824,8 +6824,6 @@
             "task": "Tecla de tarea",
             "action": "Tecla de acción"
           },
-          "lightingLimit": "El firmware puede iluminar de forma independiente las primeras 6 teclas de tarea en el orden del tablero. Las teclas de tarea adicionales también permiten cambiar de tarea.",
-          "unlitKey": "Esta tecla está después de las primeras 6, por lo que no tiene una luz de estado independiente.",
           "taskHint": "Se recomienda una cubierta transparente para mostrar el estado de la tarea en distintos colores."
         },
         "commandKeys": {

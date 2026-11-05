@@ -6824,8 +6824,6 @@
             "task": "Tecla de tarefa",
             "action": "Tecla de ação"
           },
-          "lightingLimit": "O firmware pode iluminar de forma independente as primeiras 6 teclas de tarefa pela ordem do teclado. As teclas de tarefa adicionais continuam a mudar de tarefa.",
-          "unlitKey": "Esta tecla está após as primeiras 6, pelo que não tem luz de estado independente.",
           "taskHint": "Recomenda-se uma capa de tecla transparente para que o estado da tarefa possa ser mostrado em cores diferentes."
         },
         "commandKeys": {

@@ -6762,8 +6762,6 @@
             "task": "Task key",
             "action": "Action key"
           },
-          "lightingLimit": "Firmware can independently light the first 6 task keys in board order. Extra task keys still switch tasks.",
-          "unlitKey": "This key is after the first 6, so it has no independent status light.",
           "taskHint": "A clear keycap is recommended so task status can show in different colors."
         },
         "commandKeys": {

@@ -6824,8 +6824,6 @@
             "task": "Touche de tâche",
             "action": "Touche d'action"
           },
-          "lightingLimit": "Le firmware peut éclairer indépendamment les 6 premières touches de tâche dans l'ordre du clavier. Les touches de tâche supplémentaires changent quand même de tâche.",
-          "unlitKey": "Cette touche se trouve après les 6 premières : elle n'a donc pas de voyant de statut indépendant.",
           "taskHint": "Un keycap transparent est recommandé pour que le statut des tâches s'affiche en différentes couleurs."
         },
         "commandKeys": {
