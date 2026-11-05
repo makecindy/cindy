@@ -752,6 +752,18 @@ describe('Plugins joining the sidebar', () => {
     expect(getSidebarNavigationPrefs('owner-2').visible).toEqual(['automations']);
     expect(getSidebarNavigationPrefs(OWNER).visible).toEqual(['automations', 'plugins', 'search']);
   });
+
+  it('keeps focus in Customize after the More menu finishes closing', async () => {
+    renderNav();
+    openMore();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'sidebar.navigation.customize.title' }));
+    // The closing menu returns focus on a later tick; it must not pull focus back out.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(document.activeElement)
+      .toBe(screen.getByRole('dialog', { name: 'sidebar.navigation.customize.title' }));
+  });
 });
 
 // Sidebar/rail must show the same result semantics as the author's detail, using

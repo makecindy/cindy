@@ -64,9 +64,16 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
   const [resetting, setResetting] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
-  // Esc discards the draft and closes. The panel opens from the More menu, whose
-  // trigger unmounts meanwhile, so focus usually sits on the body rather than in the
-  // panel: listen on window and act only on an unclaimed press. Editable fields,
+  // The More menu and its trigger unmount when the panel opens, which would leave focus
+  // on the body. Take focus instead: decision cards (permission, plan review, question)
+  // keep window-level Esc listeners registered earlier than this one, and they treat a
+  // body-targeted Esc as theirs; with focus in this dialog they yield it.
+  useEffect(() => {
+    rootRef.current?.focus();
+  }, []);
+
+  // Esc discards the draft and closes. Listen on window so the press still works after
+  // focus leaves for the body, and act only when it is unclaimed: editable fields,
   // menus / dialogs / controls elsewhere, IME composition, modified Esc and key
   // auto-repeat keep the key; an open preview closes first.
   useEffect(() => {
@@ -196,7 +203,9 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
       ref={rootRef}
       role="dialog"
       aria-label={t('sidebar.navigation.customize.title')}
-      className="mx-2 mb-2 rounded-xl border border-sidebar-border bg-[var(--surface-elevated)] p-3 shadow-[shadow:var(--shadow-menu)]"
+      // Focusable only by script, as the landing spot when the panel opens.
+      tabIndex={-1}
+      className="mx-2 mb-2 rounded-xl outline-none border border-sidebar-border bg-[var(--surface-elevated)] p-3 shadow-[shadow:var(--shadow-menu)]"
     >
       <div className="mb-2 flex items-center justify-between gap-2 px-1">
         <h2 className="text-sm font-medium text-[var(--text-primary)]">

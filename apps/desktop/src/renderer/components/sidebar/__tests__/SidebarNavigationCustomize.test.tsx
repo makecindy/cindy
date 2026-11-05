@@ -3,6 +3,8 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { PermissionPrompt } from '@/components/new-chat/PermissionPrompt';
+
 import { SidebarNavigationCustomize } from '../SidebarNavigationCustomize';
 import {
   __testing as navigationTesting,
@@ -383,6 +385,24 @@ describe('sidebar navigation customization', () => {
       );
     });
     expect(onDone).not.toHaveBeenCalled();
+  });
+
+  it('takes focus on open so an earlier decision card yields Esc to it', () => {
+    // A permission card mounted first registers its window Esc (deny) before the panel.
+    const onRespond = vi.fn();
+    render(
+      <PermissionPrompt
+        permission={{ requestId: 'req-1', toolName: 'Bash', input: { command: 'ls' } }}
+        onRespond={onRespond}
+      />,
+    );
+    const onDone = vi.fn();
+    render(<SidebarNavigationCustomize onDone={onDone} />);
+    // A real press targets the focused element; before the fix that was the body,
+    // and the card denied the request.
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    expect(onRespond).not.toHaveBeenCalled();
+    expect(onDone).toHaveBeenCalledTimes(1);
   });
 
   it('toggles from anywhere in the row except the drag handle', () => {
