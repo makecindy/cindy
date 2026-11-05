@@ -923,7 +923,9 @@ export function RightSidebarShell({
             <div
               aria-hidden
               data-testid="right-sidebar-rail-chrome-actions-hit-hole"
-              className="absolute left-0 top-0 h-full"
+              // The floating chrome occupies only the first row. A full-height
+              // absolute hole would intercept controls wrapped onto later rows.
+              className="absolute left-0 top-0 h-[46px]"
               style={
                 {
                   width: overflowChromeActionsSpacerWidth,
