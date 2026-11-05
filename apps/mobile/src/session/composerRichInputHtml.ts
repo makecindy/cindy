@@ -198,6 +198,8 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     applying = false;
     lastSignature = JSON.stringify(readDocument());
     reportHeight();
+    // A replacement can keep the box size and scrollTop while the text edge changes.
+    reportScrollEdge();
     if (focusAfter) placeCaretAtEnd();
   };
   const pushText = (nodes, text, slashCommand) => {
@@ -631,7 +633,7 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     insertNode(node) { insertAtSelection(node); },
     commitPaste(requestId, nodes) { commitPaste(requestId, nodes); },
     resolveSessionLink(href, label) { resolveSessionLink(href, label); },
-    setConfig(value) { applyConfig(value || {}); reportHeight(); },
+    setConfig(value) { applyConfig(value || {}); reportHeight(); reportScrollEdge(); },
   };
   new ResizeObserver(() => { reportHeight(); reportScrollEdge(); }).observe(root);
   render(config.document, false);

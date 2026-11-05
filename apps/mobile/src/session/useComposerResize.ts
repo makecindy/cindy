@@ -191,7 +191,8 @@ export function useComposerResize(input: UseComposerResizeInput) {
     return Gesture.Manual()
       .onTouchesDown((touches, manager) => {
         'worklet';
-        bodyPhase.value = BODY_DRAG_IDLE;
+        // A second finger (or a stale phase) must still settle a drag in progress.
+        cancel();
         const touch = touches.allTouches[0];
         if (touches.numberOfTouches !== 1 || touch === undefined || !bodyDragGate.value.enabled) {
           manager.fail();
