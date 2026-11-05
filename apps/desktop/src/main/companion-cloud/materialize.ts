@@ -153,7 +153,7 @@ export async function materializeCompanion(input: {
     const row = prefs.get(key);
     if (row?.fromStore) {
       const hash = value.hash === TOMBSTONE_HASH ? value.hash : storedValueHash(row.value, row.prefRevision ?? 0);
-      entry.stored = { ...entry.stored, [key]: { hash, revision: value.revision, local: true } };
+      entry.stored = { ...entry.stored, [key]: { hash, revision: value.revision, local: true, ...(row.prefRevision !== undefined ? { prefRevision: row.prefRevision } : {}) } };
       delete entry.prefs[key];
     } else {
       entry.prefs[key] = { ...value, local: true };

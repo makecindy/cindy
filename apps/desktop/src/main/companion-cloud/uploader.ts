@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import type { LocalBotSkillFile } from '../maker-ipc/botSkillFiles.js';
 import type { CompanionCloudState } from './state.js';
 import { chatRejection, errorCode, type CompanionApi, type CompanionLog } from './types.js';
-import { STORE_KEY_MAX_LENGTH, readPreferences, storedValueHash, type CompanionStore } from './store.js';
+import { STORE_KEY_MAX_LENGTH, readPreference, readPreferences, storedValueHash, type CompanionStore } from './store.js';
 
 export const COMPANION_PROFILE_KEY = 'companion.profile.v1';
 export const COMPANION_MEMORY_PREFIX = 'companion.memory.v1:';
@@ -248,7 +248,11 @@ export function createCompanionUploader(deps: {
         // A deleted value this computer kept in the store gets a tombstone here too, though the
         // preferences never had the key: a reader without the store (switched off) must see it.
         const storeDeletionPending = value === null && !!storedHere?.local;
-        if (prior ? prior.hash === hash : value === null && !storeDeletionPending) {
+        // Back from the store with the very value the preferences still hold: write it again, so
+        // the preference row is newer than the store copy even while that copy cannot be cleared.
+        const storeCopyAhead = value !== null && !!prior && !!storedHere?.local && storedHere.hash !== TOMBSTONE_HASH
+          && storedHere.prefRevision !== undefined && prior.revision <= storedHere.prefRevision;
+        if (prior ? prior.hash === hash && !storeCopyAhead : value === null && !storeDeletionPending) {
           if (prior && !prior.local && value !== null) deps.state.update(botId, actorId, entry => { entry.prefs[key] = { ...prior, local: true }; });
         } else {
           if (writes >= budget) break;
@@ -260,15 +264,28 @@ export function createCompanionUploader(deps: {
       // The store holds only what the preferences cannot (so nothing is read twice); a value
       // that fits them again leaves it.
       const priorStored = deps.state.bot(botId)?.stored?.[key];
-      const prefRevision = deps.state.bot(botId)?.prefs[key]?.revision ?? 0;
+      let prefRevision = deps.state.bot(botId)?.prefs[key]?.revision ?? 0;
       const storeValue = inPreferences ? null : value;
-      const storeHash = inPreferences ? TOMBSTONE_HASH : storedValueHash(value, prefRevision);
+      let storeHash = inPreferences ? TOMBSTONE_HASH : storedValueHash(value, prefRevision);
       if (priorStored ? priorStored.hash === storeHash : storeValue === null) {
         if (priorStored && !priorStored.local && storeValue !== null) deps.state.update(botId, actorId, entry => { entry.stored = { ...entry.stored, [key]: { ...priorStored, local: true } }; });
         continue;
       }
       if (writes >= budget) break;
       writes += 1;
+      if (storeValue !== null) {
+        // The preference row may have moved since the seed (a late upload of the previous home):
+        // the store copy must supersede the row as it is now.
+        const current = await readPreference(deps.api, actorId, key);
+        if (current && current.revision > prefRevision) {
+          prefRevision = current.revision;
+          storeHash = storedValueHash(value, prefRevision);
+          deps.state.update(botId, actorId, entry => {
+            const known = entry.prefs[key];
+            entry.prefs[key] = known ? { ...known, revision: current.revision } : { hash: valueHash(current.value), revision: current.revision };
+          });
+        }
+      }
       let revision: number;
       try {
         revision = await store.write(actorId, key, storeValue, priorStored?.revision ?? 0, prefRevision);
@@ -288,7 +305,7 @@ export function createCompanionUploader(deps: {
         if (!conflict) throw error;
         revision = await resolveStoreConflict(botId, actorId, store, key, storeValue, inPreferences ? TOMBSTONE_HASH : hash);
       }
-      deps.state.update(botId, actorId, entry => { entry.stored = { ...entry.stored, [key]: { hash: storeHash, revision, local: true } }; });
+      deps.state.update(botId, actorId, entry => { entry.stored = { ...entry.stored, [key]: { hash: storeHash, revision, local: true, ...(storeValue !== null ? { prefRevision } : {}) } }; });
     }
     if (skipped > 0 && options.requireAll) throw new Error(COMPANION_VALUE_TOO_LARGE);
     return writes;

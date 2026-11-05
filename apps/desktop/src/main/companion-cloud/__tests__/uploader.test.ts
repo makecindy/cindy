@@ -532,6 +532,36 @@ describe('companion store', () => {
     expect((await readCompanionValue(t.api, t.store, 'actor', big.key, { probe: true }))?.value).toEqual(big.value);
   });
 
+  it('rewrites the original small value when it comes back from the store while the store is off', async () => {
+    const options = { off: false };
+    const t = storeSetup(options);
+    const small = memory('big.md', 'small');
+    const big = memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000));
+    t.setValues([profile('soul'), small]);
+    await t.uploader.syncBot('bot', 'actor');
+    t.setValues([profile('soul'), big]);
+    await t.uploader.syncBot('bot', 'actor');
+    options.off = true;
+    t.setValues([profile('soul'), small]);
+    await t.uploader.syncBot('bot', 'actor', Number.POSITIVE_INFINITY, { requireAll: true });
+    await expect(t.uploader.syncBot('bot', 'actor', Number.POSITIVE_INFINITY, { requireAll: true })).resolves.toBe(0);
+    options.off = false;
+    expect((await readCompanionRows(t.api, t.store, 'actor')).find(row => row.key === small.key)?.value).toEqual(small.value);
+  });
+
+  it('writes a large value over the preference row as it is now, not as first seen', async () => {
+    const t = storeSetup();
+    const key = 'companion.memory.v1:big.md';
+    t.setValues([profile('soul'), memory('big.md', 'small')]);
+    await t.uploader.syncBot('bot', 'actor');
+    // The previous home's late upload moves the preference row after this computer's seed.
+    t.prefs.set(key, { key, value: { filename: 'big.md', content: 'late' }, revision: 5 });
+    const big = memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000));
+    t.setValues([profile('soul'), big]);
+    await t.uploader.syncBot('bot', 'actor');
+    expect((await readCompanionRows(t.api, t.store, 'actor')).find(row => row.key === key)?.value).toEqual(big.value);
+  });
+
   it('passes a deletion of a value kept only in the store to the next restore', async () => {
     const t = storeSetup();
     const big = memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000));

@@ -10,6 +10,8 @@ import type { CompanionLog } from './types.js';
 const pref = z.object({
   hash: z.string(),
   revision: z.number().int().nonnegative(),
+  /** Store entries only: the preference revision the stored value supersedes. */
+  prefRevision: z.number().int().nonnegative().optional(),
   /**
    * This device had exactly this value locally (uploaded it, or applied it while taking over).
    * Only such keys may be tombstoned by the uploader or deleted locally by a cloud tombstone;
