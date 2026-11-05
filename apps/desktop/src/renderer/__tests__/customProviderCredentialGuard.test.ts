@@ -105,6 +105,25 @@ describe('missingCredentialRuntime', () => {
   });
 
   /**
+   * PR #9034 review 第二轮 (P1, codex):`preservesStoredHeaderCredential` 必须由
+   * main 侧的存在信号推出,不能只看「端点未变 + 未带 headers」。一个以
+   * `auth.method: 'none'` 保存、本就没有任何凭证的 Provider,切到 API Key 而不填
+   * Key 时那两个条件都成立,会放行出正是本 PR 要挡的无凭据配置 —— 因为
+   * none / oauth 模式下头凭证一律被清除,main 侧无凭证可留。
+   *
+   * 调用方的判据因此加了 `headersState === 'configured'` 与「上次保存就是 apiKey」
+   * 两个条件（与 activeHeadersCanRemainSaved 同口径）。本判据只消费那个布尔,
+   * 所以这里断言的是:条件不成立时必须命中。
+   */
+  it('flags a provider switched from none to apiKey with nothing stored', () => {
+    expect(
+      missingCredentialRuntime('apiKey', [
+        runtime({ preservesStoredHeaderCredential: undefined }),
+      ]),
+    ).toBe('pi');
+  });
+
+  /**
    * PR #9034 review (P2, greptile):保存时同名请求头由后一行覆盖,所以判据要看
    * 合并后的结果。先填有效 Authorization、再填一行同名空值时,最终落库的凭据是空的。
    */

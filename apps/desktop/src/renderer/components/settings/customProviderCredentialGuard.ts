@@ -33,14 +33,18 @@ export interface CredentialRuntimeDraft<TAgent extends string = string> {
   /** 该 runtime 在保存前已经存有 Key。 */
   hasStoredKey: boolean;
   /**
-   * 编辑既有 Provider 时,main 侧会保留该 runtime 既存的密文鉴权头:条件是
-   * runtime 仍在、仍是 apiKey 鉴权、本次未显式带 headers、且端点未变
+   * 编辑既有 Provider 时,main 侧会保留该 runtime 既存的密文鉴权头
    * (`planProviderHeaderMutations` 的 'update' 分支 + `endpointChangedForAgent`)。
    *
    * 头凭证是 main-only 密文,`provider:list` 经 `withoutProviderHeaderCredentials`
    * 把 `headerOverride` 整个剔除,renderer **从不回读其值**。所以这里只接受一个
-   * 「保留条件是否成立」的布尔,不含任何凭据内容:只用表单自己知道的事实
-   * (是否改过请求头、端点是否变过)判断,不去探测密文是否存在。
+   * 「保留条件是否成立」的布尔,不含任何凭据内容。
+   *
+   * 调用方必须由 main 给的**存在信号**推出它,而不是只看端点有没有变:
+   * `headersState === 'configured'`(不含值的 transient 标记)说明确实存着头凭证,
+   * 且上次保存就得是 apiKey 鉴权 —— none / oauth 模式下头凭证一律被清除,
+   * 此时无凭证可留,只看「端点未变 + 未带 headers」会放行出无凭据的配置
+   * (PR #9034 review P1)。口径与 `activeHeadersCanRemainSaved` 一致。
    */
   preservesStoredHeaderCredential?: boolean;
 }

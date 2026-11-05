@@ -2132,10 +2132,17 @@ export function ProviderConnectionDialog({
       const norm = (value: string | null | undefined) => (value ?? '').trim();
       // main 侧保留既存密文鉴权头的条件(planProviderHeaderMutations 'update' 分支):
       // runtime 仍在、仍是 apiKey 鉴权、本次未显式带 headers、且端点(baseUrl /
-      // modelsUrl)未变。只用表单已知的事实判断,不回读头凭证的值。
+      // modelsUrl)未变。判据与上面「已存密文头徽标」(activeHeadersCanRemainSaved)
+      // 同口径,其中 headersState 是 main 给的不含值的存在信号:
+      //   - 'configured' 才表示确实存着头凭证;
+      //   - 上次保存就是 apiKey 才可能留存 —— none / oauth 下头凭证一律被清除
+      //     (planProviderHeaderMutations 开头的 usesApiKey 注释),所以从 none 切到
+      //     apiKey 时 main 侧无凭证可保留,不能放行(PR #9034 review P1)。
       const preservesStoredHeaderCredential =
         editing
-        && !!previous
+        && previous?.headersState === 'configured'
+        && authMode === 'apiKey'
+        && (!initial?.auth || initial.auth.method === 'apiKey')
         && Object.keys(mergedHeaderNames(rt[a].headers)).length === 0
         && norm(previous.baseUrl) === norm(saved?.baseUrl)
         && norm(previous.modelsUrl) === norm(saved?.modelsUrl);
