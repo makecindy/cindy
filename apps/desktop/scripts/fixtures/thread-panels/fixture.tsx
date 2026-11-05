@@ -46,7 +46,7 @@ function Scenario({ kind }: { kind: string }) {
   const [wallpaperEnabled, setWallpaperEnabled] = useState(false);
   useWallpaperBackground({
     background: wallpaperEnabled ? `url("${wallpaper}")` : undefined,
-    pending: false, visibility: 0.65, blur: 0, reducedMotion: true,
+    visibility: 0.65, blur: 0, reducedMotion: true,
   });
   return <div className="flex h-screen" data-ui-page-subject>
     <div className="min-w-0 flex-1 p-4">

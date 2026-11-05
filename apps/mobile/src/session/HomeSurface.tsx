@@ -93,6 +93,7 @@ import { HomeGlassMenuPanel, HomeMenuScrim } from '@/session/HomeGlassMenuPanel'
 import { FilterReminderDot } from '@/components/FilterReminderDot';
 import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
 import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
+import { sharedStatusRowTrailingReserve } from '@/platform/windowGeometry';
 import { useBalancedTitle } from '@/platform/chrome/balancedTitle';
 import { HomeSearchBar } from '@/session/HomeSearchBar';
 import { HomeProjectMachineLabel } from '@/session/HomeProjectMachineLabel';
@@ -149,12 +150,13 @@ import {
   reconcileDeviceIdentities,
   saveDeviceIdentityCache,
 } from '@/device-link/deviceIdentityStore';
-import { toDeviceListItems } from '@/device-link/devices';
+import { observeDirectoryBudgetExpiry, scheduleDirectoryBudgetRetirement, toDeviceListItems } from '@/device-link/devices';
 import {
   collectFreshPresenceDeviceIds,
   createPresenceFreshnessTracker,
   deviceMirrorCleanupDisposition,
   markPresenceFresh,
+  mergeDeviceViewsForStaleDirectory,
   mergeDeviceViewsWithFreshPresence,
   patchDeviceViewsWithPresence,
 } from '@/device-link/presenceDevices';
@@ -317,6 +319,7 @@ const LIST_LIMIT = 200;
 // computers. This does not change the 200-row server limit; it only bounds the
 // number of device snapshots processed at once.
 const HOME_DEVICE_HYDRATE_CONCURRENCY = 2;
+const EMPTY_DEVICES: DeviceView[] = [];
 // 项目组与自动化组展开后的子列表共用同一个预览限量(设备详情页也 import 复用,避免两处漂移)。
 export const PROJECT_PREVIEW_LIMIT = 5;
 const PROJECT_CHILD_WINDOW_THRESHOLD = 20;
@@ -558,6 +561,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     presenceVersion,
     recoveringDeviceIds,
     readDeviceList,
+    rosterVersion = 0,
     status,
     subscribe,
     unsubscribe,
@@ -571,6 +575,18 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const homePendingCacheRef = useRef(new Map<string, { pending: readonly unknown[]; count: number }>());
   const homeLiveActivityIndexRef = useRef(new Map<string, RemoteSessionLiveActivity>());
   const devicesRef = useRef<DeviceView[]>([]);
+  const directoryBudgetRef = useRef<{
+    token: number;
+    owner: number;
+    timer: ReturnType<typeof setTimeout> | null;
+    expired: boolean;
+    retired: boolean;
+    retireScheduled: boolean;
+    wallUntil?: number;
+    monoUntil?: number;
+  }>({ token: 0, owner: accountGeneration, timer: null, expired: false, retired: false, retireScheduled: false });
+  const rosterVersionRef = useRef(rosterVersion);
+  rosterVersionRef.current = rosterVersion;
   // HomeScreen stays mounted while switching saved accounts. Keep an owner generation beside every
   // local projection so requests started by the previous account cannot repopulate the new screen.
   const homeAccountGenerationRef = useRef(accountGeneration);
@@ -642,6 +658,54 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<HomeConnectionError>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
+  const clearDirectoryBudget = useCallback(() => {
+    const budget = directoryBudgetRef.current;
+    if (budget.timer !== null) clearTimeout(budget.timer);
+    budget.timer = null;
+    budget.token += 1;
+    budget.expired = false;
+    budget.retired = false;
+    budget.retireScheduled = false;
+    budget.wallUntil = undefined;
+    budget.monoUntil = undefined;
+  }, []);
+  const retireDirectoryBudget = useCallback((token: number, owner: number) => {
+    const budget = directoryBudgetRef.current;
+    if (budget.token !== token || homeAccountGenerationRef.current !== owner) return;
+    if (budget.retired) return;
+    budget.retired = true;
+    budget.expired = true;
+    budget.timer = null;
+    // Expiry is unknown, not a confirmed removal. Hide the mounted rows and let
+    // the normal read path revalidate; do not run ghost/mirror cleanup here.
+    devicesRef.current = [];
+    setDevices([]);
+    lastSyncedAtRef.current = null;
+    setLastSyncedAt(null);
+    setRefreshing(true);
+    void loadHomeRef.current({ visible: true });
+  }, []);
+  const armDirectoryBudget = useCallback((requestedAt: { wall: number; mono: number }, remainingMs: number,
+    authoritative: boolean) => {
+    const wasExpired = directoryBudgetRef.current.expired;
+    clearDirectoryBudget();
+    const budget = directoryBudgetRef.current;
+    budget.owner = accountGeneration;
+    budget.wallUntil = requestedAt.wall + remainingMs;
+    budget.monoUntil = requestedAt.mono + remainingMs;
+    const { token, owner } = budget;
+    const remaining = Math.min(budget.wallUntil - Date.now(), budget.monoUntil - performance.now());
+    // A stale fallback cannot revive an already-expired source; an explicit
+    // zero is expired on arrival, never a legacy "no stamp" row.
+    if (!(remainingMs > 0) || remaining <= 0 || (!authoritative && wasExpired)) {
+      budget.expired = true;
+      budget.timer = setTimeout(() => retireDirectoryBudget(token, owner), 0);
+      return budget.token;
+    }
+    budget.timer = setTimeout(() => retireDirectoryBudget(token, owner), remaining);
+    return budget.token;
+  }, [accountGeneration, clearDirectoryBudget, retireDirectoryBudget]);
+  useEffect(() => () => clearDirectoryBudget(), [clearDirectoryBudget]);
   const [selectedDeviceId, setSelectedDeviceId] = useRetainedHomeState<string | null>(viewSession, 'selectedDeviceId', null);
   const [remoteHomeCollections, setRemoteHomeCollections] = useState<RemoteHomeCollection[]>([]);
   const [resourceCacheAccount, setResourceCacheAccount] = useState<number | null>(null);
@@ -1197,6 +1261,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   }, [accountGeneration, invoke]);
 
   const loadHome = useCallback(async (options: { visible?: boolean } = {}) => {
+    const rosterVersionAtStart = rosterVersionRef.current;
     const accountGenerationAtStart = accountGeneration;
     if (homeAccountGenerationRef.current !== accountGenerationAtStart) return;
     if (!deviceIdentityCacheReady) return;
@@ -1229,6 +1294,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       // WS hydrate 已有瞬时重试——闸门自己也必须重试,否则一次弱网抖动就把首页
       // 卡在「同步失败」等手动下拉。maxAttempts 收敛到 3:它前置于全部 hydrate,
       // 不值得为它烧满 6 次退避。
+      const directoryRequestedAt = { wall: Date.now(), mono: performance.now() };
       const res = await withTransientRemoteRetry(
         () => {
           if (homeAccountGenerationRef.current !== accountGenerationAtStart) {
@@ -1242,9 +1308,30 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         { maxAttempts: 3 },
       );
       if (homeAccountGenerationRef.current !== accountGenerationAtStart) return;
+      if (rosterVersionRef.current !== rosterVersionAtStart) return;
       if (!screenFocusedRef.current) return;
       const now = Date.now();
-      const serverDevices = mergeFreshPresence(reconcileDeviceViews(res.devices).devices);
+      const staleDirectory = res.stale === true;
+      let budgetToken = 0;
+      if (res.displayBudget) {
+        budgetToken = armDirectoryBudget(directoryRequestedAt, res.displayBudget.remainingMs, res.stale !== true);
+      }
+      else clearDirectoryBudget();
+      const budgetAllowsDisplay = budgetToken === 0
+        || (directoryBudgetRef.current.token === budgetToken && !directoryBudgetRef.current.expired);
+      if (!budgetAllowsDisplay) {
+        // The source budget ended before this response could become visible.
+        // Do not run absence/mirror cleanup from an expired directory; the
+        // expiry timer will trigger a live re-read.
+        devicesRef.current = [];
+        setDevices([]);
+        setRefreshing(true);
+        return;
+      }
+      const listedDevices = reconcileDeviceViews(res.devices).devices;
+      const serverDevices = staleDirectory
+        ? mergeDeviceViewsForStaleDirectory(listedDevices, devicesRef.current)
+        : mergeFreshPresence(listedDevices);
       const deviceRows = toDeviceListItems(serverDevices, now, revokedDevices);
       const availableRows = deviceRows.filter((item) => item.canOpen);
       const syncDeviceIds = resolveHomeDeviceSyncIds(
@@ -1281,17 +1368,19 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       // 整表对账:REST 全量清单对“设备是否仍绑定”是权威。冷启动从缓存种入、
       // 随后被解绑(完全不在清单里)的设备不会出现在状态分类里,按差集硬清 shard;
       // 这与短暂 offline 不同,否则幽灵项会被快照回写无限续存。
-      const knownDeviceIds = new Set(deviceRows.map((item) => item.device.deviceId));
-      const ghostDeviceIds = new Set<string>();
-      for (const session of remoteSessionStore.getSessions()) {
-        const shardId = session.deviceLinkDeviceId;
-        if (shardId && !isSharedTaskPeer(shardId) && !knownDeviceIds.has(shardId)) ghostDeviceIds.add(shardId);
-      }
-      for (const deviceId of ghostDeviceIds) {
-        invalidateScheduleIndexForDevice(deviceId);
-        remoteScheduleEventStore.clearDevice(deviceId);
-        remoteScheduleEventStore.clearDeviceMirrorInvalidation(deviceId);
-        remoteSessionStore.removeDevice(deviceId);
+      if (!staleDirectory) {
+        const knownDeviceIds = new Set(deviceRows.map((item) => item.device.deviceId));
+        const ghostDeviceIds = new Set<string>();
+        for (const session of remoteSessionStore.getSessions()) {
+          const shardId = session.deviceLinkDeviceId;
+          if (shardId && !isSharedTaskPeer(shardId) && !knownDeviceIds.has(shardId)) ghostDeviceIds.add(shardId);
+        }
+        for (const deviceId of ghostDeviceIds) {
+          invalidateScheduleIndexForDevice(deviceId);
+          remoteScheduleEventStore.clearDevice(deviceId);
+          remoteScheduleEventStore.clearDeviceMirrorInvalidation(deviceId);
+          remoteSessionStore.removeDevice(deviceId);
+        }
       }
 
       const failures: HomeDeviceFailure[] = [];
@@ -1313,17 +1402,27 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
           invalidateOfflineScheduleIndexFailureFor(deviceId);
         }
       }
-      if (homeAccountGenerationRef.current !== accountGenerationAtStart) return;
+      if (homeAccountGenerationRef.current !== accountGenerationAtStart
+        || rosterVersionRef.current !== rosterVersionAtStart) return;
 
       // 收尾再合并一次:hydrate 阶段(可能持续数秒)里新到的 presence 补丁同样不能被覆盖掉。
       const nextDevices = reconcileDeviceViews(
         mergeFreshPresence(markDeviceViewsOffline(serverDevices, offlineDeviceIds)),
       ).devices;
-      devicesRef.current = nextDevices;
-      setDevices(nextDevices);
-      lastSyncedAtRef.current = now;
-      setLastSyncedAt(now);
-      if (homeFullReloadOnFocusRef.current === fullReloadRequestAtStart) homeFullReloadOnFocusRef.current = null;
+      const finalBudgetAllowsDisplay = budgetToken === 0
+        || (directoryBudgetRef.current.token === budgetToken && !directoryBudgetRef.current.expired);
+      if (finalBudgetAllowsDisplay) {
+        devicesRef.current = nextDevices;
+        setDevices(nextDevices);
+        if (!staleDirectory) {
+          lastSyncedAtRef.current = now;
+          setLastSyncedAt(now);
+          if (homeFullReloadOnFocusRef.current === fullReloadRequestAtStart) homeFullReloadOnFocusRef.current = null;
+        }
+      } else {
+        devicesRef.current = [];
+        setDevices([]);
+      }
       if (selectedDeviceIdRef.current === selectedDeviceIdAtSyncStart) {
         setError(failures.length > 0 ? failures : null);
       }
@@ -1351,7 +1450,9 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     return task.finally(() => {
       if (visible && homeAccountGenerationRef.current === accountGenerationAtStart) setRefreshing(false);
     });
-  }, [accountGeneration, readDeviceList, deviceIdentityCacheReady, homeCacheUserId, hydrateDeviceSessions, reconcileDeviceViews, reconcileHomeDeviceSyncScope, revokedDevices, softInvalidateDeviceMirror]);
+  }, [accountGeneration, armDirectoryBudget, clearDirectoryBudget, readDeviceList, deviceIdentityCacheReady,
+    homeCacheUserId, hydrateDeviceSessions, reconcileDeviceViews, reconcileHomeDeviceSyncScope,
+    revokedDevices, softInvalidateDeviceMirror]);
   // A manual refresh also recovers the teammate section: roster, group chats and cloud companions.
   const homeRoster = teammatesSectionContext.shared;
   const refreshHome = useCallback(() => {
@@ -1664,6 +1765,18 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     }, [refillStaleHomeDevices, refreshHomeScheduleIndexes, startSilentHomeSync]),
   );
 
+  // A late roster denial clears only the account device projection; provider/group
+  // catalogs and healthy direct links are separate authorities. The sync effect
+  // below deliberately does not depend on rosterVersion: a retry from the denial
+  // itself would recreate the 403 -> notification -> read feedback loop. Reconnect,
+  // foreground and manual refresh remain the legitimate triggers.
+  useEffect(() => {
+    if (rosterVersion === 0) return;
+    devicesRef.current = [];
+    setDevices([]);
+    setDeviceConnectionStates({});
+  }, [rosterVersion]);
+
   useEffect(() => {
     startSilentHomeSync();
     const subscription = AppState.addEventListener('change', (nextState) => {
@@ -1781,9 +1894,15 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     setHeaderFrosted((current) => (current === next ? current : next));
   }, [homeScrollY, viewSession]);
 
+  const directoryBudget = directoryBudgetRef.current;
+  const directoryBudgetObservedExpired = observeDirectoryBudgetExpiry(
+    directoryBudget, Date.now(), performance.now(),
+  );
+  if (directoryBudgetObservedExpired) scheduleDirectoryBudgetRetirement(directoryBudget, retireDirectoryBudget);
+  const visibleDevices = directoryBudgetObservedExpired ? EMPTY_DEVICES : devices;
   const deviceRows = useMemo(
-    () => toDeviceListItems(devices, Date.now(), revokedDevices),
-    [devices, i18nInstance.resolvedLanguage, revokedDevices],
+    () => toDeviceListItems(visibleDevices, Date.now(), revokedDevices),
+    [visibleDevices, i18nInstance.resolvedLanguage, revokedDevices],
   );
   // 不随首页失焦清空：被任务页等盖住时保留订阅与镜像，增量补丁照常到达；
   // 不可见 / 不可用的设备仍由 resolveHomeDeviceSyncIds 排除并 release。
@@ -3033,6 +3152,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const nativeHomeHeader = !embedded && usesNativeStackHeader();
   const homeGeometry = useAdaptiveWindow();
   const keepMenuTopLeft = nativeHomeHeader && homeGeometry.barEdge !== 'none';
+  const homeStatusRowReserve = sharedStatusRowTrailingReserve(homeGeometry);
   const nativeHeaderHeight = useOptionalHeaderHeight();
   const chromeHeight = nativeHomeHeader
     ? nativeHeaderHeight + (headerHeight ?? 0)
@@ -3294,6 +3414,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       {nativeHomeHeader && active ? (
         <HomeNativeStackHeader
           keepMenuTopLeft={keepMenuTopLeft}
+          statusRowReserve={homeStatusRowReserve}
           syncing={quietSyncing}
           displayA11y={displayA11y}
           displayActions={stableDisplayActions}
@@ -3400,6 +3521,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
             filterA11y={searchFilterA11y}
             filterActions={searchFilterMenu.filterActions}
             filterActive={indexedSearch.activeFilterCount > 0}
+            searching={indexedSearch.status === 'searching'}
             onChangeQuery={indexedSearch.setQuery}
             onFilterAction={searchFilterMenu.onFilterAction}
             onOpenFilter={() => setSearchFilterOpen(true)}

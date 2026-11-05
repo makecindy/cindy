@@ -2,7 +2,7 @@
   "githubPrs": {
     "title": "Manage PR Links",
     "hint": "Up to 3 in the header; pinned PRs appear first",
-    "empty": "Paste a GitHub PR link to add it",
+    "empty": "Paste a GitHub PR or GitLab MR URL to add it",
     "removed": "Removed: {{count}}",
     "legacy": "Unconfirmed references: {{count}}",
     "addLabel": "Add PR Link",
@@ -10,7 +10,7 @@
     "loading": "Loading…",
     "restore": "Restore PR",
     "pin": "Pin to Header",
-    "unpin": "Unpin PR",
+    "unpin": "Unpin PR / MR",
     "pinLimit": "Pin up to 3 PRs",
     "reorderHint": "Use Alt+↑/↓ to reorder within the pinned or unpinned group.",
     "dragHandle": "Drag to reorder {{repo}} #{{number}}",
@@ -18,12 +18,13 @@
     "errors": {
       "duplicate": "This PR is already linked; restore removed links from the list",
       "notFound": "PR not found or access denied",
-      "invalidUrl": "Enter a valid GitHub PR link",
+      "invalidUrl": "Enter a valid GitHub PR or GitLab MR URL",
       "reorderFailed": "The order was not saved. Please try again.",
-      "verifyFailed": "Could not verify the PR; check GitHub sign-in and access",
+      "verifyFailed": "Could not verify the PR; check GitHub or GitLab sign-in and access",
       "unsupported": "This computer’s version does not support managing PR links",
       "failed": "Could not update PR links"
     },
+    "urlPlaceholder": "GitHub PR or GitLab MR URL",
     "moveUp": "Move up"
   },
   "paneResize": {
@@ -72,6 +73,10 @@
     "text": "An automatic run failed.",
     "precheck": "Automatic checks are temporarily blocked.",
     "rateLimited": "Automatic checks are temporarily blocked by a request rate limit.",
+    "pluginMissing": "Automatic checks are blocked: the {{name}} plugin is not installed. They resume once it is installed on your computer.",
+    "pluginMissingUnnamed": "Automatic checks are blocked: a required plugin is not installed. They resume once it is installed on your computer.",
+    "pluginDisabled": "Automatic checks are blocked: the {{name}} plugin is disabled. They resume once it is enabled on your computer.",
+    "pluginDisabledUnnamed": "Automatic checks are blocked: a required plugin is disabled. They resume once it is enabled on your computer.",
     "dismissTitle": "Dismiss past failure notice"
   },
   "common": {
@@ -227,7 +232,25 @@
       },
       "context": {
         "title": "Context usage",
-        "unavailable": "No context data"
+        "unavailable": "No context data",
+        "estimate": {
+          "title": "Text estimates",
+          "delivery": "Answer delivery",
+          "host": "Cindy instructions",
+          "plugins": "Plugin catalogue",
+          "memoryRules": "Memory instructions",
+          "memoryIndex": "Memory index",
+          "profile": "Teammate profile",
+          "user": "User instructions",
+          "directories": "Additional directories",
+          "native": "Pi instructions",
+          "skills": "Skill catalogue",
+          "project": "Project instructions",
+          "tools": "Tool definitions",
+          "messages": "Conversation text",
+          "other": "Other instructions",
+          "note": "Estimated from current text, not model tokenization. Excludes images and provider formatting; does not add up to the native total."
+        }
       },
       "rateLimit": {
         "plan": "Plan",
@@ -451,6 +474,7 @@
     "chipArchived": "Archived",
     "titleFallback": "Remote session",
     "unnamedTitle": "Untitled session",
+    "openSection": "Open",
     "renameAction": "Rename Session",
     "copyLinkAction": "Copy Session Link",
     "unpin": "Unpin",
@@ -586,7 +610,10 @@
     "dismissNotice": "Dismiss notice",
     "ignore": "Ignore",
     "executionResultUnavailable": "Unable to retrieve the execution result. Automatic continuation has stopped. Ask the assistant to check the existing execution result.",
-    "outputLimit": "The model reached its output limit, so this response may be incomplete. Send the next message to continue.",
+    "outputLimit": "The model reached its output limit, so this response may be incomplete. Send a new message to continue; if this repeats, lower the reasoning effort or compact the conversation history first.",
+    "outputLimitReasoning": "Reasoning consumed most of this request’s output budget, so the response may be incomplete. Lower the reasoning effort or compact the conversation history before continuing.",
+    "outputLimitUsage": "This model request used {{outputTokens}} output tokens, including {{reasoningTokens}} reasoning tokens.",
+    "outputLimitOutputUsage": "This model request used {{outputTokens}} output tokens.",
     "toolUseLoopDetected": "The model repeated a tool call too many times, so Cindy stopped this turn to prevent an infinite loop. Send a new message to continue.",
     "toolUseLoopDetectedWithCount": "The model kept repeating invalid tool calls, so Cindy stopped this turn after {{count}} failures to prevent an infinite loop. Send a new message to continue.",
     "toolUseLoopDetectedConsecutiveWithCount": "The model repeated the same tool call {{count}} times, so Cindy stopped this turn to prevent an infinite loop. Send a new message to continue.",
@@ -647,7 +674,7 @@
     "REMOTE_PROVIDER_UPDATING": "This model provider’s credentials are updating. Try again in a moment.",
     "REMOTE_WORKDIR_UNAVAILABLE": "The remote working directory is unavailable. Check that the folder still exists on that computer, then try again.",
     "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "The computer cannot yet confirm whether this message was sent. Wait a moment and try again. Do not send the same message twice.",
-    "REMOTE_AGENT_UNAVAILABLE": "Can't reach the computer running the Agent. Make sure it's online and allows remote control, then try again.",
+    "REMOTE_AGENT_UNAVAILABLE": "The connection to the computer running the Agent dropped. Try again. If it keeps happening, make sure that computer is online and allows remote control.",
     "REMOTE_AGENT_PEER_TOO_OLD": "Cindy on the other computer is too old to run the Agent for this one. Update Cindy there first.",
     "REMOTE_AGENT_EXPIRED": "This session already ended on the computer running the Agent. Send your message again.",
     "REMOTE_AGENT_NOT_FOUND": "This session already ended on the computer running the Agent. Send your message again.",

@@ -7,7 +7,7 @@
   "name": "我的插件",           // 展示名
   "description": "一句话说清这个插件是干嘛的(给人看:插件详情页)",  // 1–300 字
   "whenToUse": "需要生成图片、插画、配图、修图、P 图、改图时找我",  // 1–300 字,给模型看:进 agent 会话的插件花名册,是"用户不点名时 AI 能不能想起你"的关键。写成场景枚举,可反复调优;花名册会折叠连续空白,异常数据会截断;缺省时花名册回落用 description
-  "icon": "assets/icon.png",   // 建议:插件图标(包内相对路径;扩展名限 png/jpg/jpeg/webp/gif,不收 svg——svg 可携带脚本,虽经 <img> 渲染不执行,仍不给这个面)。不配则面板与消息身份头显示默认拼图占位符;官方插件仓惯例放 assets/icon.png
+  "icon": "assets/icon.png",   // 建议:插件图标(包内相对路径;扩展名限 png/jpg/jpeg/webp/gif,不收 svg——svg 可携带脚本,虽经 <img> 渲染不执行,仍不给这个面)。图片由用户提供或同意后生成，禁止用纯色占位图；未设置时省略此字段，客户端显示默认符号；官方插件仓惯例放 assets/icon.png
   "locales": {                 // 可选:插件只跟随宿主语言;不支持/缺失语言固定回退 en
     "en": "locales/en.json",
     "zh-CN": "locales/zh-CN.json",
@@ -26,6 +26,10 @@
   // 否则请始终声明一个 command。
   "tools": [ /* 见 §3；下方 open_view 必须在此声明 */ ],
   // 可选交互页面，完整示例见 §4.23；需要 minCindyVersion >= 0.1.122-beta
+  // 原生位置的贡献与多个独立视图另用 ui；开发中，完整契约见 plugin-native-ui.md。
+  // "ui": { "version": 1, "contributions": [{ "id": "format", "point": "composer.tools", "scope": "session" }] },
+  // 可并列 tabViews: [{ "id": "logs", "title": "日志", "scope": "session", "page": "views/logs.html" }]。
+  // 只登记可打开的页面，不自动打开；不替代 mainView / panel / taskView。
   "mcpApps": { "ui": {
     "resources": [{ "uri": "ui://records/v1", "file": "ui/page.html" }],
     "tools": { "open_view": { "resourceUri": "ui://records/v1" } }
@@ -166,7 +170,7 @@ node secretBindings key、setup kv key——都不能使用 `__proto__`、`const
 v3 直接用顶层字段声明插件贡献项与自主 Host 能力，不再有 `slots`。带详单的字段是 `tools`、`cindy`、
 `agent`、`panel`、`mainView`、`taskView`、`card`、`subscribe`、`network`、`node`、`preview`、
 `browserExtension`、`skill`；布尔能力写成字面量 `true`：`notify`、`badge`、`confirm`、`fs`、
-`library`、`deviceSync`、`sessionContext`、`pick`、`workspace`。不用的字段直接省略。
+`library`、`deviceSync`、`sessionContext`、`pick`、`workspace`、`liveScreen`(需同时声明 `node`,见 [§4.22.1](plugin-task-view.md#4221-在手机上查看与操作设备画面livescreen-能力))。不用的字段直接省略。
 `deviceSync` 的声明与调用约定见 [§4.10.2 资料同步](plugin-files-and-library.md#4102-同账号电脑间的插件资料同步)。
 邮件插件声明 `mail: true`，调用 Cindy 内置 `cindyMail.register(adapter)`
 （version 1），不生成卡片 HTML、不打包公共流程；纯邮件插件不需要 `card`。

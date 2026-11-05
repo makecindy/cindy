@@ -1,3 +1,4 @@
+import { voiceInputSettings } from './VoiceInputSection.settings-search';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -114,19 +115,19 @@ export function VoiceSpeakerFilterCard({
       <div className="flex items-center justify-between gap-5">
         <div className="flex min-w-0 flex-col gap-1">
           <p
-            id="settings-search-settings-voiceInput-speakerFilter-label"
+            id={voiceInputSettings.speakerFilterLabel.targetId}
             className="text-13 font-medium text-[var(--settings-section-title)]"
             style={{ letterSpacing: '0.12px' }}
           >
-            {t('settings.voiceInput.speakerFilter.label')}
+            {t(voiceInputSettings.speakerFilterLabel.titleKey)}
           </p>
           <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
             {supported
-              ? t('settings.voiceInput.speakerFilter.hint')
+              ? t(voiceInputSettings.speakerFilterLabel.descriptionKey)
               : t('settings.voiceInput.speakerFilter.unsupported')}
           </p>
         </div>
-        <Switch
+        <Switch data-setting-id={voiceInputSettings.speakerFilterLabel.id}
           checked={enabled && supported}
           disabled={!supported || status === null}
           onCheckedChange={toggle}
@@ -164,7 +165,7 @@ export function VoiceSpeakerFilterCard({
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 {status.enrolled ? (
-                  <Button
+                  <Button data-setting-id={voiceInputSettings.speakerFilterLabel.id}
                     variant="secondary"
                     size="md"
                     compact
@@ -177,7 +178,7 @@ export function VoiceSpeakerFilterCard({
                     {t('settings.voiceInput.speakerFilter.profile.delete')}
                   </Button>
                 ) : null}
-                <Button variant="secondary" size="md" compact type="button" onClick={() => setEnrolling(true)}>
+                <Button data-setting-id={voiceInputSettings.speakerFilterLabel.id} variant="secondary" size="md" compact type="button" onClick={() => setEnrolling(true)}>
                   {t(
                     status.enrolled
                       ? 'settings.voiceInput.speakerFilter.profile.reenroll'
@@ -191,7 +192,7 @@ export function VoiceSpeakerFilterCard({
               <p className="text-13 font-medium text-[var(--settings-section-title)]">
                 {t('settings.voiceInput.speakerFilter.profile.enrolled')}
               </p>
-              <Button
+              <Button data-setting-id={voiceInputSettings.speakerFilterLabel.id}
                 variant="secondary"
                 size="md"
                 compact
@@ -225,7 +226,7 @@ export function VoiceSpeakerFilterCard({
                     });
                   }}
                 />
-                <SegmentedControl
+                <SegmentedControl data-setting-id={voiceInputSettings.speakerFilterLabel.id}
                   aria-label={t('settings.voiceInput.speakerFilter.strictness.label')}
                   value={strictness}
                   onValueChange={onStrictnessChange}
@@ -270,7 +271,7 @@ function ModelRow({ status, onDownload }: { status: VoiceSpeakerFilterStatus; on
             total,
           })}
         </p>
-        <Button
+        <Button data-settings-search-action="Download or cancel the speaker-filter model download"
           variant="secondary"
           size="md"
           compact
@@ -299,7 +300,7 @@ function ModelRow({ status, onDownload }: { status: VoiceSpeakerFilterStatus; on
           ? t(`settings.voiceInput.speakerFilter.model.failed.${status.downloadError ?? 'network'}`)
           : t('settings.voiceInput.speakerFilter.model.needed', { size: total })}
       </p>
-      <Button variant="secondary" size="md" compact type="button" onClick={onDownload}>
+      <Button data-settings-search-action="Download or cancel the speaker-filter model download" variant="secondary" size="md" compact type="button" onClick={onDownload}>
         {t(failed ? 'settings.voiceInput.speakerFilter.model.retry' : 'settings.voiceInput.speakerFilter.model.download')}
       </Button>
     </div>

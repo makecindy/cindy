@@ -7,7 +7,22 @@
 
 ## 日常模拟器入口
 
-普通开发使用根脚本维护 Metro、区域配置和 worktree 归属：
+macOS 上启动手机版只需要一条命令，可重复运行（比如设备闲置关机后）：
+
+```bash
+pnpm mobile:sim:up            # 只看界面加 -- --mock
+```
+
+它依次选设备、开机、准备 Metro、安装匹配的原生包、启动 App 并核对身份。进度写 stderr，stdout
+最后一行是结果 JSON：`ok`、`code`、`step`、`udid`、`port`、`bundleVerified`、`foreground`，以及下一步 `next`。
+`pageVerified` 始终是 `false`，页面仍要截图目检。原生层变化时会完整编译，可能要 20–30 分钟，放后台
+运行并等完成通知，不要重复启动。失败时按 `next` 处理，再看
+[`simulator-debugging.md`](../../apps/mobile/docs/simulator-debugging.md#截图与当前版本测试)。
+
+判断手机版无法启动或编译，须以本轮运行返回的 `code` 为据；之前的对话、其他任务的结论、手动运行
+`pod --version` 都不算证据（Agent 进程的 `PATH` 常常不含已安装的 CocoaPods）。
+
+需要单独控制某一步时使用根脚本，它们维护 Metro、区域配置和 worktree 归属：
 
 ```bash
 pnpm mobile:sim:start
@@ -128,6 +143,7 @@ pnpm --filter mobile test:smoke
 
 - TypeScript 改动至少运行 typecheck 和相关定向测试。
 - 修改跨端协议、Device Link、导航主流程或原生边界时，追加 scope、smoke 或相应 E2E。
+- 用模拟器验证后运行 `pnpm mobile:sim:logcheck` 并汇报结果：`ERROR` 要修复或说明与本次改动无关，新 `WARN` 要写进汇报，无法判定不算通过。详见[模拟器调试手册](../../apps/mobile/docs/simulator-debugging.md#logs)。
 - 视觉改动同时遵守 [Cindy 设计规范](../design-rules/cindy-design-system.md) 与
   [Mobile 设计规范](../../apps/mobile/docs/mobile-design-guide.md)。
 - 记录实际执行和结果；未执行的高相关检查必须说明原因。
@@ -151,6 +167,24 @@ DOM，保留输入法组字与光标。点击发送后，在发送防重锁内�
 回归：`composerRichInputLifecycle.test.tsx`、`composerRichInputHtml.test.ts`。Android 模拟器
 可用 mock 模式配合 CDP `Input.imeSetComposition` 检查点击原生发送按钮后的完整文本；
 它不替代三星真机键盘或真实跨设备送达验收。
+
+### iOS 键盘坐标异常（画中画后）
+
+iPhone Duo（iOS 27）在远程桌面返回并进入画中画后，系统发来的键盘通知坐标会改按另一块屏幕的
+坐标系（如 `{192,524} 274×154` 落在 466×678 的右下角，或整宽却悬在屏幕中间），键盘实际仍停靠在
+窗口底部；画中画结束、切后台都不恢复，直到冷启动。错的坐标就是画中画小窗的位置（16:9，随小窗动画变化）。
+系统原始通知本身就是错的，不是 RN 换算问题：出错与正常时第一响应者（我们的输入框）、所在窗口、
+`UITextEffectsWindow` 与屏幕完全相同；改按宿主窗口换算、让隐藏的远程桌面 WebView 放弃键盘焦点都无效，
+只有私有键盘视图位置正确（不可依赖）。判定为 iOS 缺陷（双屏设备 + 画中画，约三分之一的进入小窗会触发）。
+`keyboardOverlap.ts` 因此在 iPhone（非 iPad，没有悬浮键盘）上把「显示中却不整宽或不贴底」的
+坐标视为异常，改用「同窗口宽度下见过的最高完整停靠高度」与「按窗口高度估算（竖屏 38%、横屏 42% 且不低于
+220pt）」中较大者：转屏中途和换输入法会出现更矮的整宽帧，沿用偏矮会盖住输入框；转屏后 1 秒内的整宽帧也不记录（过渡帧偏高，记下后会一直抬得过高）；记录持久化在本机，
+冷启动后直接进远程桌面也能用（记录异步读出，读完后两个 hook 会重算已显示的键盘占位），并记 `keyboard` scope 的
+`implausible frame replaced`。复现：开「后台运行」、等远程画面出来后返回进入小窗、点输入框，多试几次；
+冷启动后不先打字、从首页直接进远程桌面最容易触发；
+看 Debug 日志里 `frame received` 的 `frame` 是否整宽贴底。输入卡片（`useMobileKeyboardState`）与浮动输入框（新建任务页的 `useComposerDockKeyboardHeight`）必须共用这一判据，
+只修一条会出现「任务页正常、新建页仍被盖住」。RN 自带 `KeyboardAvoidingView`（群聊、共享任务、部分弹窗）
+在这种状态下会抬得过高，尚未处理。回归：`composerKeyboard.test.tsx`、`composerDockKeyboard.test.tsx`。
 
 ### 相册选图与 iCloud 原图
 

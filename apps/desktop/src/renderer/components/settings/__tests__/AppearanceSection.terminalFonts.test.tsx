@@ -106,6 +106,8 @@ describe('AppearanceSection terminal fonts', () => {
     renderSettings();
     const terminalPicker = screen.getByRole('button', { name: '选择终端字体' });
     const codePicker = screen.getByRole('button', { name: '选择代码字体' });
+    expect(terminalPicker.getAttribute('data-setting-id')).toBe('settings.appearance.font.terminalFamily.label');
+    expect(codePicker.getAttribute('data-setting-id')).toBe('settings.appearance.font.codeFamily.label');
 
     fireEvent.click(terminalPicker);
     fireEvent.change(screen.getByPlaceholderText(zhCN.settings.appearance.font.customPlaceholder), {

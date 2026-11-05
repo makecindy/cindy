@@ -456,11 +456,12 @@ export function useRemoteSessionSync(
     });
     const offStatus = window.electronAPI.deviceLink.onStatusChanged((p) => {
       if (isSharedTaskPeer(deviceId)) return;
-      const online = p.status === 'online';
+      if (p.dataPathChangedDeviceId && p.dataPathChangedDeviceId !== deviceId) return;
+      const online = p.status === 'online' || p.directDataDeviceIds?.includes(deviceId) === true;
       const changed = relayAvailable !== online;
       relayAvailable = online;
       if (changed) recovery.invalidate(canRead());
-      if (p.status !== 'online') return;
+      if (!online || (p.dataPathChangedDeviceId && !changed)) return;
       engine.handleOnline();
     });
     const offPresence = window.electronAPI.deviceLink.onPresenceChanged((snap) => {

@@ -29,6 +29,7 @@ import {
   scheduleSessionLatestRuns,
   sessions,
 } from '../localDb/schema';
+import { scheduleRunMissingPlugin, type ScheduleMissingPlugin } from '@cindy/maker-shared/schedule-model';
 import {
   scheduleToCamel,
   scheduleCreateToRow,
@@ -60,6 +61,17 @@ function failureKindSql(alias: 'failed' | 'schedule_runs') {
           THEN 'rate-limit' ELSE 'precheck' END
     WHEN substr(${row}.error_msg, 1, 12) = 'pre-run hook' THEN 'precheck'
     ELSE 'execution' END`;
+}
+
+/** pre_run_hook_result.missingPlugin is stored JSON; malformed rows simply omit it. */
+function missingPluginField(raw: string | null): { missingPlugin?: ScheduleMissingPlugin } {
+  if (!raw) return {};
+  try {
+    const missingPlugin = scheduleRunMissingPlugin({ missingPlugin: JSON.parse(raw) });
+    return missingPlugin ? { missingPlugin } : {};
+  } catch {
+    return {};
+  }
 }
 
 /** A success only recovers failures belonging to the same automation. */
@@ -96,6 +108,7 @@ export interface ScheduleSidebarIndexRun {
   failureKind?: 'precheck' | 'rate-limit' | 'execution';
   errorMsg?: string;
   failureRecovered?: boolean;
+  missingPlugin?: ScheduleMissingPlugin;
 }
 
 export interface ScheduleCostSummary {
@@ -779,6 +792,8 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       failureRecovered: failureRecoveredSql('schedule_runs'),
       failureKind: failureKindSql('schedule_runs'),
       errorMsg: scheduleRuns.errorMsg,
+      missingPlugin: sql<string | null>`CASE WHEN json_valid(schedule_runs.pre_run_hook_result)
+        THEN json_extract(schedule_runs.pre_run_hook_result, '$.missingPlugin') END`,
     };
     const [latestSessionRows, unreadRows, runningRows, latestFailedRows] = await Promise.all([
       db
@@ -850,6 +865,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         failureRecovered: Boolean(row.failureRecovered),
         failureKind: row.failureKind,
         errorMsg: row.errorMsg ?? undefined,
+        ...missingPluginField(row.missingPlugin),
       } : {}),
     }));
 

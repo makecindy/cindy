@@ -2,7 +2,7 @@
   "githubPrs": {
     "title": "Gérer les liens de PR",
     "hint": "Jusqu’à 3 dans l’en-tête ; les PR épinglées apparaissent en premier",
-    "empty": "Collez un lien de PR GitHub pour l’ajouter",
+    "empty": "Collez un lien de PR GitHub ou de MR GitLab pour l’ajouter",
     "removed": "Supprimées : {{count}}",
     "legacy": "Références non confirmées : {{count}}",
     "addLabel": "Ajouter un lien de PR",
@@ -10,20 +10,21 @@
     "loading": "Chargement…",
     "restore": "Restaurer la PR",
     "pin": "Épingler dans l’en-tête",
-    "unpin": "Désépingler la PR",
+    "unpin": "Désépingler la PR / MR",
     "pinLimit": "Épingler jusqu’à 3 PR",
-    "reorderHint": "Utilisez Alt+↑/↓ pour réorganiser les PR au sein du groupe épinglé ou non épinglé.",
+    "reorderHint": "Utilisez Alt+↑/↓ pour réorganiser les PR / MR au sein du groupe épinglé ou non épinglé.",
     "dragHandle": "Faire glisser pour réorganiser {{repo}} #{{number}}",
     "remove": "Supprimer la PR",
     "errors": {
       "duplicate": "Cette PR est déjà liée ; restaurez les liens supprimés depuis la liste",
       "notFound": "PR introuvable ou accès refusé",
-      "invalidUrl": "Saisissez un lien de PR GitHub valide",
+      "invalidUrl": "Saisissez un lien valide de PR GitHub ou de MR GitLab",
       "reorderFailed": "L’ordre n’a pas été enregistré. Réessayez.",
-      "verifyFailed": "Impossible de vérifier la PR ; vérifiez la connexion à GitHub et les droits d’accès",
+      "verifyFailed": "Impossible de vérifier la PR ; vérifiez la connexion à GitHub ou GitLab et les droits d’accès",
       "unsupported": "La version installée sur cet ordinateur ne permet pas de gérer les liens de PR",
       "failed": "Impossible de mettre à jour les liens de PR"
     },
+    "urlPlaceholder": "Lien de PR GitHub ou de MR GitLab",
     "moveUp": "Monter"
   },
   "paneResize": {
@@ -72,6 +73,10 @@
     "text": "Une exécution automatique a échoué.",
     "precheck": "Les vérifications automatiques sont temporairement bloquées.",
     "rateLimited": "Les vérifications automatiques sont temporairement bloquées par une limite de débit des requêtes.",
+    "pluginMissing": "Les vérifications automatiques sont bloquées : le plugin {{name}} n'est pas installé. Elles reprendront une fois le plugin installé sur votre ordinateur.",
+    "pluginMissingUnnamed": "Les vérifications automatiques sont bloquées : un plugin requis n'est pas installé. Elles reprendront une fois le plugin installé sur votre ordinateur.",
+    "pluginDisabled": "Les vérifications automatiques sont bloquées : le plugin {{name}} est désactivé. Elles reprendront une fois le plugin activé sur votre ordinateur.",
+    "pluginDisabledUnnamed": "Les vérifications automatiques sont bloquées : un plugin requis est désactivé. Elles reprendront une fois le plugin activé sur votre ordinateur.",
     "dismissTitle": "Fermer l'avis d'échec passé"
   },
   "common": {
@@ -239,7 +244,25 @@
       },
       "context": {
         "title": "Utilisation du contexte",
-        "unavailable": "Aucune donnée de contexte"
+        "unavailable": "Aucune donnée de contexte",
+        "estimate": {
+          "title": "Estimations du texte",
+          "delivery": "Présentation des réponses",
+          "host": "Instructions Cindy",
+          "plugins": "Catalogue des plugins",
+          "memoryRules": "Instructions de mémoire",
+          "memoryIndex": "Index de mémoire",
+          "profile": "Profil du coéquipier",
+          "user": "Instructions utilisateur",
+          "directories": "Répertoires supplémentaires",
+          "native": "Instructions Pi",
+          "skills": "Catalogue des skills",
+          "project": "Instructions du projet",
+          "tools": "Définitions des outils",
+          "messages": "Texte de la conversation",
+          "other": "Autres instructions",
+          "note": "Estimation du texte actuel, sans tokenisation du modèle. Hors images et formatage du fournisseur ; la somme diffère du total natif."
+        }
       },
       "rateLimit": {
         "plan": "Forfait",
@@ -464,6 +487,7 @@
     "chipArchived": "Archivée",
     "titleFallback": "Session distante",
     "unnamedTitle": "Session sans titre",
+    "openSection": "Ouvrir",
     "renameAction": "Renommer la session",
     "copyLinkAction": "Copier le lien",
     "unpin": "Désépingler",
@@ -601,7 +625,10 @@
     "dismissNotice": "Fermer l'avis",
     "ignore": "Ignorer",
     "executionResultUnavailable": "Impossible de récupérer le résultat de l'exécution. La poursuite automatique s'est arrêtée. Demandez à l'assistant de vérifier le résultat d'exécution existant.",
-    "outputLimit": "Le modèle a atteint sa limite de sortie, cette réponse est donc peut-être incomplète. Envoyez le message suivant pour continuer.",
+    "outputLimit": "Le modèle a atteint sa limite de sortie ; cette réponse peut être incomplète. Envoyez un nouveau message pour continuer. Si cela se répète, réduisez l’effort de raisonnement ou compactez d’abord l’historique de la conversation.",
+    "outputLimitReasoning": "Le raisonnement a consommé la majeure partie du budget de sortie de cette requête ; la réponse peut être incomplète. Réduisez l’effort de raisonnement ou compactez l’historique de la conversation avant de continuer.",
+    "outputLimitUsage": "Cette requête au modèle a utilisé {{outputTokens}} tokens de sortie, dont {{reasoningTokens}} tokens de raisonnement.",
+    "outputLimitOutputUsage": "Cette requête au modèle a utilisé {{outputTokens}} tokens de sortie.",
     "toolUseLoopDetected": "Le modèle a répété un appel d'outil trop de fois, Cindy a donc arrêté ce tour pour éviter une boucle infinie. Envoyez un nouveau message pour continuer.",
     "toolUseLoopDetectedWithCount": "Le modèle a répété des appels d'outils invalides, Cindy a donc arrêté ce tour après {{count}} échecs pour éviter une boucle infinie. Envoyez un nouveau message pour continuer.",
     "toolUseLoopDetectedConsecutiveWithCount": "Le modèle a répété le même appel d'outil {{count}} fois, Cindy a donc arrêté ce tour pour éviter une boucle infinie. Envoyez un nouveau message pour continuer.",
@@ -662,7 +689,7 @@
     "REMOTE_PROVIDER_UPDATING": "Les identifiants de ce fournisseur de modèles sont en cours de mise à jour. Réessayez dans un instant.",
     "REMOTE_WORKDIR_UNAVAILABLE": "Le répertoire de travail distant est indisponible. Vérifiez que le dossier existe toujours sur cet ordinateur, puis réessayez.",
     "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "L'ordinateur ne peut pas encore confirmer si ce message a été envoyé. Patientez un instant et réessayez. N'envoyez pas deux fois le même message.",
-    "REMOTE_AGENT_UNAVAILABLE": "Impossible de joindre l'ordinateur qui exécute l'Agent. Assurez-vous qu'il est en ligne et autorise le contrôle à distance, puis réessayez.",
+    "REMOTE_AGENT_UNAVAILABLE": "La connexion avec l'ordinateur qui exécute l'Agent a été interrompue. Réessayez. Si cela se reproduit, assurez-vous qu'il est en ligne et autorise le contrôle à distance.",
     "REMOTE_AGENT_PEER_TOO_OLD": "La version de Cindy sur l'autre ordinateur est trop ancienne pour exécuter l'Agent de celui-ci. Mettez d'abord Cindy à jour sur cet ordinateur.",
     "REMOTE_AGENT_EXPIRED": "Cette session est déjà terminée sur l'ordinateur qui exécute l'Agent. Renvoyez votre message.",
     "REMOTE_AGENT_NOT_FOUND": "Cette session est déjà terminée sur l'ordinateur qui exécute l'Agent. Renvoyez votre message.",

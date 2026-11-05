@@ -2,7 +2,9 @@
  * Task attention and PR state are read-only projections of the ordinary task list stores.
  */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
-import { Check, ChevronDown, LayoutGrid, Monitor, ScanSearch, MessageCircle, GitPullRequest, X } from 'lucide-react';
+import { Check, ChevronDown, CircleAlert, LayoutGrid, Monitor, ScanSearch, MessageCircle, GitPullRequest, X } from 'lucide-react';
+import type { Routine } from '@cindy/maker-scheduler';
+import { REMOTE_RESOURCE_CHANGED_CHANNEL, parseRemoteResourceChangedPayload } from '@cindy/device-link';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -23,8 +25,10 @@ import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { usePrActions, usePrRefsForSessions, usePrStatuses } from '@/contexts/PrRefsContext';
 import { prStatusKey, sessionPrUrl, type SessionPrRef } from '@cindy/maker-shared';
-import { PR_STATUS_ICON, PR_STATUS_COLOR } from '@/features/cc-agent/gitContextPrVisuals';
+import { PR_STATUS_ICON, prStatusColor } from '@/features/cc-agent/gitContextPrVisuals';
 import { sessionActivityMs } from '@/features/cc-agent/lib/dateSessionGrouping';
+import { AutomationTimerIcon } from '@/features/cc-agent/sidebar/AutomationTimerIcon';
+import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { matchesTaskCreators, useTaskCreatorIndex } from './botFollowScopes';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import type { Session } from '@/lib/ccAgent.types';
@@ -58,6 +62,8 @@ import {
   type GlanceTodoHost,
 } from './botGlanceTodos';
 import { useRemoteBots, useRemoteCindyIds } from './useRemoteBots';
+import { invokeBotSettings } from './remoteBotSettingsClient';
+import { TODO_CHECK_ROUTINE_PREFIX } from '../../../shared/botAutonomy';
 
 /** 每块先列几条，其余收进「显示更多」。 */
 const TODO_PREVIEW = 2;
@@ -633,10 +639,50 @@ function Outputs({ sessionId, botId, onClose, prs }: { sessionId: string; botId:
   );
 }
 
-// ---------------------------------------------------------------- 近期任务与 PR：只投影已有任务、归属及未读缓存。
+/** 只读伙伴所在电脑的规则；打开近况才订阅，不等待第一次运行生成任务。 */
+function useGlanceRoutines(botId: string, deviceId?: string) {
+  const [routines, setRoutines] = useState<Routine[]>([]);
+  const [failed, setFailed] = useState(false);
+  const [reload, setReload] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    let request = 0;
+    setRoutines([]);
+    setFailed(false);
+    const load = () => {
+      const current = ++request;
+      const owner = getDataOwnerGeneration();
+      void (deviceId
+        ? invokeBotSettings<Routine[]>(deviceId, 'routines.list', botId)
+        : window.electronAPI.routines.list(botId))
+        .then(items => {
+          if (!alive || current !== request || !isDataOwnerGenerationCurrent(owner)) return;
+          // 内置跟进、学习和每天查待办已有各自入口，不重复占近期任务。
+          setRoutines(items.filter(item => !item.builtin && !item.id.startsWith(TODO_CHECK_ROUTINE_PREFIX)));
+          setFailed(false);
+        })
+        .catch(() => {
+          if (alive && current === request && isDataOwnerGenerationCurrent(owner)) setFailed(true);
+        });
+    };
+    load();
+    const off = deviceId
+      ? window.electronAPI.deviceLink.onRemotePush((push, stamp) => {
+          if (push.deviceId !== deviceId || push.channel !== REMOTE_RESOURCE_CHANGED_CHANNEL
+            || !isDeviceLinkRemotePushCurrent(push, stamp)) return;
+          if (parseRemoteResourceChangedPayload(push.payload)?.collectionId === 'routines') load();
+        })
+      : window.electronAPI.routines.onChanged(load);
+    return () => { alive = false; off(); };
+  }, [botId, deviceId, reload]);
+  return { routines, failed, retry: () => setReload(value => value + 1) };
+}
+
+// ---------------------------------------------------------------- 近期任务（含未运行的例行任务）与 PR。
 function Activity({ bot, onClose }: { bot: BotChatIdentity; onClose(): void }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { routines, failed, retry } = useGlanceRoutines(bot.id, bot.deviceId);
   const { sessions: local } = useCCSessions({ includeArchived: 'all' });
   const remote = useRemoteProjectSessions();
   const creators = useTaskCreatorIndex();
@@ -658,13 +704,15 @@ function Activity({ bot, onClose }: { bot: BotChatIdentity; onClose(): void }) {
     .filter(task => task.id !== bot.sessionId && task.orcaRole !== 'worker'
       && (task.status === 'active' || task.status === 'archived')
       && matchesTaskCreators(task, [key], creators))
-    .sort((a, b) => sessionActivityMs(b) - sessionActivityMs(a)).slice(0, OUTPUT_LIMIT), [local, remote, creators, key, bot.sessionId]);
-  const ids = useMemo(() => tasks.map(task => task.id), [tasks]);
+    .sort((a, b) => sessionActivityMs(b) - sessionActivityMs(a)), [local, remote, creators, key, bot.sessionId]);
+  // PR discovery keeps its original budget; activity groups all runs before applying its limit.
+  const prTasks = useMemo(() => tasks.slice(0, OUTPUT_LIMIT), [tasks]);
+  const ids = useMemo(() => prTasks.map(task => task.id), [prTasks]);
   const { registerPrConsumer } = usePrActions();
   useEffect(() => {
-    const stops = tasks.map(task => registerPrConsumer(task.id, task.deviceLinkDeviceId));
+    const stops = prTasks.map(task => registerPrConsumer(task.id, task.deviceLinkDeviceId));
     return () => stops.forEach(stop => stop());
-  }, [tasks, registerPrConsumer]);
+  }, [prTasks, registerPrConsumer]);
   const refs = usePrRefsForSessions(ids);
   const prs = useMemo(() => {
     const unique = new Map<string, SessionPrRef>();
@@ -674,26 +722,55 @@ function Activity({ bot, onClose }: { bot: BotChatIdentity; onClose(): void }) {
     return [...unique.values()];
   }, [refs]);
   const [allTasks, toggleTasks] = useToggle();
+  const entries = useMemo(() => {
+    const latest = new Map<string, Session>();
+    const routineIds = new Set(routines.map(routine => routine.id));
+    const ordinary = tasks.filter(task => {
+      const companion = task.companion;
+      if ((task.deviceLinkDeviceId ?? undefined) !== bot.deviceId || companion?.id !== bot.id
+        || companion.role !== 'routine' || !companion.routineId || !routineIds.has(companion.routineId)) return true;
+      if (!latest.has(companion.routineId)) latest.set(companion.routineId, task);
+      return false;
+    }).map(task => ({ key: `task:${task.deviceLinkDeviceId ?? ''}:${task.id}`, task, routine: null, at: sessionActivityMs(task) }));
+    return [...ordinary, ...routines.map(routine => {
+      const task = latest.get(routine.id);
+      return { key: `routine:${routine.id}`, routine, task, at: task ? sessionActivityMs(task) : routine.createdAt };
+    })].sort((a, b) => b.at - a.at).slice(0, OUTPUT_LIMIT);
+  }, [tasks, routines, bot.id, bot.deviceId]);
+  const openRoutines = () => {
+    onClose();
+    const base = bot.deviceId ? `/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}` : `/bots/${encodeURIComponent(bot.id)}`;
+    navigate(`${base}?settings=1&settingsPage=routines`);
+  };
   const openTask = async (task: Session) => {
     if (task.deviceLinkDeviceId) remoteProjectsStore.pinSessionOrigin(task.deviceLinkDeviceId, task.id);
     onClose();
     navigate(await resolveSessionRoute(task.id));
   };
   return <>
-    {tasks.length > 0 ? <Section label={t('bots.glance.recentTasks')}>
-      {(allTasks ? tasks : tasks.slice(0, TASK_PREVIEW)).map(task => <RecentTask key={task.id} task={task} onOpen={() => void openTask(task)} />)}
-      {tasks.length > TASK_PREVIEW ? <FoldRow indent open={allTasks} onClick={toggleTasks} label={t(allTasks ? 'bots.glance.showLess' : 'bots.glance.showMore')} /> : null}
+    {entries.length > 0 || failed ? <Section label={t('bots.glance.recentTasks')}>
+      {(allTasks ? entries : entries.slice(0, TASK_PREVIEW)).map(entry => entry.routine
+        ? <RecentTask key={entry.key} task={entry.task} routine={entry.routine} onOpen={openRoutines} />
+        : <RecentTask key={entry.key} task={entry.task!} onOpen={() => void openTask(entry.task!)} />)}
+      {failed ? <Row testId="bot-glance-routines-retry" icon={<CircleAlert size={16} />} title={t('routines.title')} trailing={t('commonUi.retry')} onClick={retry} /> : null}
+      {entries.length > TASK_PREVIEW ? <FoldRow indent open={allTasks} onClick={toggleTasks} label={t(allTasks ? 'bots.glance.showLess' : 'bots.glance.showMore')} /> : null}
     </Section> : null}
     <Outputs sessionId={bot.sessionId ?? ''} botId={bot.id} onClose={onClose} prs={prs} />
   </>;
 }
 
-function RecentTask({ task, onOpen }: { task: Session; onOpen(): void }) {
-  const attention = useSessionAttentionKind(task.id);
+function RecentTask({ task, routine, onOpen }: { task?: Session; routine?: Routine; onOpen(): void }) {
+  const attention = useSessionAttentionKind(task?.id ?? '');
   const { t } = useTranslation();
-  return <Row testId="bot-glance-task" icon={<MessageCircle size={16} />} title={task.title}
+  const automatic = routine || task?.companion?.role === 'routine' || task?.source === 'scheduler';
+  return <Row testId="bot-glance-task" icon={automatic
+    ? <span role="img" aria-label={t('routines.title')}>
+        <AutomationTimerIcon size={16} className="size-5" paused={routine?.enabled === false} running={routine?.activity === 'running'} />
+      </span>
+    : <MessageCircle size={16} />} title={routine?.name ?? task?.title ?? ''}
     onClick={onOpen}
-    trailing={attention === 'done' ? <span className="flex items-center" role="img" aria-label={t('bots.glance.unread')}><AttentionDot tone="done" /></span> : undefined} />;
+    trailing={routine?.enabled === false || attention === 'done' ? <>{routine?.enabled === false ? <span>{t('routines.paused')}</span> : null}
+      {attention === 'done' ? <span className="flex items-center" role="img" aria-label={t('bots.glance.unread')}><AttentionDot tone="done" /></span> : null}</> : undefined} />;
 }
 
 function PrOutput({ pr }: { pr: SessionPrRef }) {
@@ -702,9 +779,19 @@ function PrOutput({ pr }: { pr: SessionPrRef }) {
   const status = result?.ok ? result : successfulStatuses.get(prStatusKey(pr));
   const kind = status?.ok ? status.status : null;
   const Icon = kind ? PR_STATUS_ICON[kind] : GitPullRequest;
-  return <Row testId="bot-glance-pr" title={(status?.ok ? status.title?.trim() : undefined) || `${pr.owner}/${pr.repo}`}
-    icon={<Icon size={16} style={{ color: kind ? PR_STATUS_COLOR[kind] : 'var(--text-tertiary)' }} />}
-    onClick={() => void window.electronAPI.openExternal(sessionPrUrl(pr))} />;
+  return (
+    <Row
+      testId="bot-glance-pr"
+      title={(status?.ok ? status.title?.trim() : undefined) || `${pr.owner}/${pr.repo}`}
+      icon={
+        <Icon
+          size={16}
+          style={{ color: prStatusColor(kind, status?.ok ? status.conflicts : null) }}
+        />
+      }
+      onClick={() => void window.electronAPI.openExternal(sessionPrUrl(pr))}
+    />
+  );
 }
 
 // ---------------------------------------------------------------- 入口

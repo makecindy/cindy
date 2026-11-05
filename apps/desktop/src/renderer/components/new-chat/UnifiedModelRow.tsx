@@ -10,7 +10,8 @@ import type { ProviderView, UnifiedModelEntry } from '@cindy/model-providers';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import { cn } from '@/lib/utils';
 import { COMPOSER_MENU_ROW, menuRowAttrs } from '@/components/ui/menu-row';
-import { providerAccountLabel } from '@/lib/providerDisplayName';
+import { providerAccountLabel, providerDisplayName } from '@/lib/providerDisplayName';
+import { modelSupplierLabel } from '@cindy/model-providers';
 import type { Effort } from '@/lib/userPreferences.types';
 
 import { PriceFreeBadge, PriceTierMarks, type UnifiedRowPriceDisplay } from './priceTierMarks';
@@ -31,6 +32,26 @@ export type { UnifiedRowPriceDisplay } from './priceTierMarks';
 /** 整格点亮(classic,Chris 2026-08-14 第二版):亮几格 = round(实付比例 × 格数),至少 1 格。 */
 const litWholeMarks = (paidPct: number, tier: 1 | 2 | 3): number =>
   Math.min(tier, Math.max(1, Math.round((paidPct / 100) * tier)));
+
+// Catalog provider snapshots are immutable. Resolve duplicate display labels once
+// per snapshot rather than scanning the entire gateway catalog for every row.
+const supplierOwners = new WeakMap<ProviderView, Map<string, Set<string>>>();
+function hasDuplicateSupplier(provider: ProviderView | undefined, label: string | undefined): boolean {
+  if (!provider || !label) return false;
+  let owners = supplierOwners.get(provider);
+  if (!owners) {
+    owners = new Map();
+    for (const models of Object.values(provider.models)) for (const model of models ?? []) {
+      const supplier = modelSupplierLabel(model.discoveredSource);
+      if (!supplier || !model.discoveredSource) continue;
+      const ids = owners.get(supplier) ?? new Set<string>();
+      ids.add(model.discoveredSource.providerId);
+      owners.set(supplier, ids);
+    }
+    supplierOwners.set(provider, owners);
+  }
+  return (owners.get(label)?.size ?? 0) > 1;
+}
 /** 单行(双行布局):L1 图标 · 名称 · ☆ · 三元组 · 勾;L2 一句描述。 */
 export function UnifiedModelRow({
   entry,
@@ -95,6 +116,20 @@ export function UnifiedModelRow({
   const displayName = localizedModelName(entry.displayName, t);
   const description = localizedModelDescription({ id: entry.modelId, group: entry.group }, t);
   const provider = providers.find((item) => item.id === entry.providerId);
+  // Read the effective engine's exact wire entry, never the recommended sibling's source.
+  const source = entry.capabilities[config.agent]?.discoveredSource;
+  const supplier = modelSupplierLabel(source);
+  const duplicateSupplier = hasDuplicateSupplier(provider, supplier);
+  const supplierLabel = duplicateSupplier ? `${supplier} (${source!.providerId})` : supplier;
+  const connectionLabel = provider ? providerDisplayName(provider, t) : entry.providerId;
+  const descriptionLabel = supplierLabel ?? connectionLabel;
+  // Remote rows append device/group/unavailability information to this exact
+  // connection label. Replace only that prefix; keep the rest of the source.
+  const sourceDisplayLabel = supplierLabel && sourceLabel
+    ? sourceLabel === connectionLabel ? supplierLabel
+      : sourceLabel.startsWith(`${connectionLabel} · `)
+        ? supplierLabel + sourceLabel.slice(connectionLabel.length) : sourceLabel
+    : sourceLabel;
   const priceSymbol = priceDisplay?.symbol ?? '$';
   const engineOption = agentOptionOf(config.engine);
   const openConfig = (element: HTMLElement, toggle = false) => {
@@ -314,7 +349,7 @@ export function UnifiedModelRow({
         <ModelSourceDetails
           providerId={entry.providerId}
           label={providerAccountLabel(
-            sourceLabel,
+            sourceDisplayLabel ?? sourceLabel,
             provider?.openAiAccount?.identity?.trim() ||
               provider?.subscriptionAccount?.identity?.trim(),
           )}
@@ -326,10 +361,10 @@ export function UnifiedModelRow({
         // 颜色按旧选择器恢复用 --text-secondary(同日裁决:tertiary 太淡看不清;
         // 与名字的区分靠名字的 14px/medium,不靠把描述压淡)。
         <div
-          title={description}
+          title={descriptionLabel}
           className="min-w-0 max-w-[30ch] truncate pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]"
         >
-          {description}
+          {descriptionLabel}
         </div>
       ) : null}
     </div>

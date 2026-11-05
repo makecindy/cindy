@@ -4,6 +4,7 @@ import {
   projectBillingCatalog,
   projectBillingCurrentSubscription,
   projectBillingOrderList,
+  projectBillingPaymentHistory,
   projectBillingPaymentOrder,
   projectBillingPlanChange,
   projectModelAccessBalance,
@@ -11,6 +12,51 @@ import {
 } from '../projection.js';
 
 const now = '2026-07-23T12:00:00.000Z';
+
+function historyRecord(overrides: Record<string, unknown> = {}) {
+  return {
+    recordId: 'SUBSCRIPTION_INVOICE:invoice_1', sourceType: 'SUBSCRIPTION_INVOICE', sourceId: 'invoice_1',
+    subscriptionId: 'ended-subscription', productName: 'Plus', billingReason: 'subscription_cycle',
+    amountPaidMinor: 1100, amount: '11.00', currency: 'usd', provider: 'stripe', providerTransactionId: 'pi_fixture',
+    paidAt: now, createdAt: now, periodStartAt: now, periodEndAt: '2026-08-23T12:00:00.000Z',
+    refundSummary: { status: 'PARTIALLY_REFUNDED', refundedMinor: 100, refundedAmount: '1.00' },
+    ...overrides,
+  };
+}
+
+describe('paid history projection', () => {
+  it('projects settled invoice data and removes private provider fields', () => {
+    const record = historyRecord();
+    expect(projectBillingPaymentHistory({ records: [{ ...record, providerSnapshot: { private: true } }], nextCursor: 'next_page' }))
+      .toEqual({ records: [record], nextCursor: 'next_page' });
+  });
+
+  it('preserves legacy unknown amounts and payment times', () => {
+    const record = historyRecord({
+      amountPaidMinor: null, amount: null, paidAt: null, productName: null,
+      refundSummary: { status: null, refundedMinor: 100, refundedAmount: '1.00' },
+    });
+    expect(projectBillingPaymentHistory({ records: [record], nextCursor: null }).records).toEqual([record]);
+  });
+
+  it('accepts older history responses without a transaction reference', () => {
+    const record = historyRecord({ providerTransactionId: undefined });
+    expect(projectBillingPaymentHistory({ records: [record], nextCursor: null }).records[0])
+      .toMatchObject({ providerTransactionId: null });
+  });
+
+  it.each([
+    { sourceType: 'UNKNOWN' }, { recordId: 'different-record' }, { paidAt: 'yesterday' },
+    { amount: null }, { amountPaidMinor: -1 }, { providerTransactionId: 123 }, { providerTransactionId: 'x'.repeat(256) },
+    { refundSummary: { status: 'REFUNDED', refundedMinor: -1, refundedAmount: '0' } },
+  ])('fails the entire page rather than silently dropping a malformed paid record: %j', (overrides) => {
+    expect(() => projectBillingPaymentHistory({ records: [historyRecord(), historyRecord(overrides)], nextCursor: null })).toThrow();
+  });
+
+  it('rejects unbounded cursors at the main-process boundary', () => {
+    expect(() => projectBillingPaymentHistory({ records: [], nextCursor: 'x'.repeat(1025) })).toThrow();
+  });
+});
 
 function order(overrides: Record<string, unknown> = {}) {
   return {

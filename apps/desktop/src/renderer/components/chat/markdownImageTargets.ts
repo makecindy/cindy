@@ -30,7 +30,8 @@ export function extractRenderedMarkdownImageTargets(markdown: string): string[] 
   if (!markdown.includes('![') && !/<img/i.test(markdown)) return [];
 
   const normalized = normalizeMarkdownRendererContent(markdown);
-  const tree = markdownImageParser.runSync(markdownImageParser.parse(normalized)) as Root;
+  // Pass the source as the file, as react-markdown does: source-span plugins read it.
+  const tree = markdownImageParser.runSync(markdownImageParser.parse(normalized), normalized) as Root;
   const urls: string[] = [];
   const seen = new Set<string>();
   visit(tree, 'image', (node: Image) => {

@@ -8,11 +8,11 @@
  * 两处必须与 main 同判,否则会出现"胶囊亮了 / 指令展开了,调用却被
  * GHOST_DISABLED_IN_WORKDIR 拒绝"的裂缝。
  *
- * 禁用清单经 sendSync 现查(ghosts:workdir-prefs,文件读带 mtime 缓存,
- * 极小):调用点都在低频路径(roster 变更 / 发送时刻),不进 keystroke
- * 热路径。目录键归一化在 main 侧统一做,这里传原始 workdir 即可。
+ * 展示用清单异步读取，避免 main 忙于其它工作时阻塞输入框渲染。
+ * 发送时仍现查策略；目录键归一化在 main 侧统一做。
  */
 
+import { useEffect, useState } from 'react';
 import type { InstalledGhost } from '../../shared/ghost';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity';
 
@@ -35,8 +35,35 @@ export function filterGhostsForWorkdir(
   ghosts: InstalledGhost[],
   workdir: string | null | undefined,
 ): InstalledGhost[] {
+  if (ghosts.length === 0) return ghosts;
   const disabled = getWorkdirDisabledGhostIds(workdir);
   if (disabled.size === 0) return ghosts;
   const filtered = ghosts.filter((g) => !disabled.has(installedGhostStoragePart(g)));
   return filtered.length === ghosts.length ? ghosts : filtered;
+}
+
+const NO_DISABLED_GHOSTS = new Set<string>();
+
+/** Display-only projection. Sending still checks current policy at the host. */
+export function useWorkdirDisabledGhostIds(
+  workdir: string | null | undefined,
+  ghosts: InstalledGhost[],
+  enabled = true,
+): Set<string> | null {
+  const [snapshot, setSnapshot] = useState<{
+    workdir: typeof workdir; ghosts: InstalledGhost[]; disabled: Set<string>;
+  } | null>(null);
+  useEffect(() => {
+    if (!enabled || !workdir?.trim() || ghosts.length === 0) return;
+    let current = true;
+    void Promise.resolve().then(() => window.electronAPI.ghosts.workdirPrefs(workdir)).then(({ disabled }) => {
+      if (current) setSnapshot({ workdir, ghosts, disabled: new Set(disabled) });
+    }).catch(() => {
+      // Unknown policy must not expose a previously enabled directory's commands.
+      if (current) setSnapshot(null);
+    });
+    return () => { current = false; };
+  }, [workdir, ghosts, enabled]);
+  if (!enabled || !workdir?.trim() || ghosts.length === 0) return NO_DISABLED_GHOSTS;
+  return snapshot?.workdir === workdir && snapshot.ghosts === ghosts ? snapshot.disabled : null;
 }

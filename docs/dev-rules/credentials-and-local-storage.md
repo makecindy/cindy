@@ -37,6 +37,12 @@
   只写已声明的单个 user Secret，不读回、不批量同步、不开放账号 vault。值只短暂存在于
   输入组件/Main 调用中，不进入 Renderer store、Agent、普通远控、日志或历史。CLI PKCE
   的私有回调也只交给发起的可信 Node RPC，不能返回沙箱 main.js 或业务 stdout。
+- 新电脑设置的「密钥」一步（[产品规则](../product-rules/new-device-setup-migration.md)）是
+  上一条「不批量同步」之外唯一的例外：只在新电脑勾选、原电脑的人在本机弹窗允许后，一次性复制
+  所选连接与插件里由用户填写的 API Key / PAT。原电脑按自己的数据列名、只读不改；值以本次请求的临时
+  X25519 公钥加密，新电脑只在 Main 内存中解开并写入各自原有的存储，不经 Renderer，也不覆盖新电脑上
+  已有的值。OAuth 账号与刷新令牌、登录派生与主机托管凭证、IM 凭证和 SSH 私钥不在此列。实现见
+  [transfer.ts](../../apps/desktop/src/main/setup-migration/transfer.ts)。
 - 代输入（[产品规则](../product-rules/input-handoff.md)）复用同一签名输入桥：每一步按
   (requestId, revision) 绑定，主人填写的**所有**值（不只密码）只在 Main 执行输入那一下存在，
   提交对象用后逐键删除；不进 Renderer store、续接消息、任务记录、数据库、日志、IM 或推送。
@@ -48,6 +54,17 @@
   包含凭证明文、完整鉴权头或可直接复用的授权材料。
 - 测试只使用明显无效的假凭证，不读取或复制开发者真实的 `HOME`、Agent home、
   Electron userData 或系统凭证目录。
+
+### 自定义 MCP 请求头
+
+`custom_mcp_servers.headers` 的非空请求头整体使用系统 `safeStorage` 加密，保存为
+`safe-storage:v1:<base64 密文>`；空映射仍为 `{}`。密文和其余配置在同一条数据库写入中
+原子提交，加密不可用（含 Linux `basic_text` / 未知后端）时拒绝写入，不降级明文。
+读取旧版 JSON 行时先加密、再以原行内容和 `updatedAt` 作条件更新；失败保留原行并报错，
+不覆盖并发修改、不改变运行期代次。密文读不出时不返回空值，错误不含明文。
+此转换不会擦除既有备份、历史 WAL 或 SQLite 旧页。回退不支持此格式的旧客户端会读不到
+请求头；应前滚修复，不把密文转回明文来恢复兼容。实现与回归：`maker-host/custom-mcp-store.ts`
+及同名测试。Bearer token 继续走现有独立安全存储。
 
 ## Claude 订阅只经 Claude Code 自己的登录
 
@@ -70,8 +87,12 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   端口，它对每个目标重新按系统代理 / PAC 决定直连或走代理（env 作用于整棵进程树，含 Bash
   工具里的 git / npm，内网例外必须照旧直连），明文 HTTP 不下发代理。都是 TCP 隧道，TLS
   端到端，代理、转发端口与 Cindy 都看不到凭证。
-- 订阅会话不设 host 接管标记；Cindy 的所有 Claude 会话统一使用 `claude-desktop` 入口，
-  CLI 会启用 Desktop 宿主的项目级上游 / 鉴权环境过滤。入口身份不改变凭证来源，普通项目
+- 订阅会话不设 host 接管标记，并保留 `claude-desktop` 入口，
+  CLI 会启用 Desktop 宿主的项目级上游 / 鉴权环境过滤。OAuth token 路径同样保留该入口
+  的刷新回调白名单；API Key 路径使用 SDK 原生 `sdk-ts`，避免 Individual API 额度被
+  Desktop 身份误拒（[上游报告](https://github.com/anthropics/claude-code/issues/106458)）。
+  API 路径仍通过 `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1` 锁定上游和认证，远端在
+  route materialization 后按最终认证形态重选入口。入口身份不改变凭证来源，普通项目
   设置、权限与 hooks 仍由 CLI 加载。SDK 模式仍没有终端的工作区信任确认，因此继续对
   CLI 实际加载的项目级设置（工作目录的两份文件，加上主仓库根目录的 `settings.local.json`）
   设闸作为纵深防御（maker-core `workspace-settings-guard`），不依赖上游过滤替代宿主检查：
@@ -208,13 +229,38 @@ Desktop 冷启动恢复与运行时 refresh 共用随机指数退避策略：连
 冷启动画面超时转后台不能重置失败次数。冷启动的等待期限和失败次数归属于当前保存的
 凭证，返回／取消再恢复沿用原期限，取消后的迟到限流响应也必须保留期限；手动重试释放
 纯网络错误的等待时不清零失败次数。恢复停止期间的启动超时不能清除手动登录进度。
-网络变化、resume 或 relay 恢复信号均不能跳过等待或清零失败次数；在途请求仍复用同一个
-promise，恢复信号不能在旧请求结束后追加立即续期。只有用户主动点击登录页重试，且
-此前失败没有服务端响应、没有服务端等待期限时，才能提前结束冷启动等待。
+网络变化、resume 或普通 relay 恢复信号均不能跳过等待或清零失败次数；在途请求仍复用
+同一个 promise，恢复信号不能在旧请求结束后追加立即续期。只有用户主动点击登录页重试，
+且此前失败没有服务端响应、没有服务端等待期限时，才能提前结束冷启动等待。
+
+运行时的唯一自动例外是：当前等待源于纯网络失败（`status=0` 且无 `retryAt`），随后收到
+官方 relay 鉴权失败（含跨账号连接，排除自建中转）或 `serverApiClient` 按既有
+`isRefreshableUnauthorizedCode` 认可的 401，才能启用小基数快速重试。其它调用方不提供
+这一证据；5xx／429／503 或带服务器等待期限的失败仍遵守原来的长等待，401 不能提前。
+relay 客户端对同类 issue 去重，只在连接刚转为 auth-failed 时通知一次；断网也不会清除
+该 issue。因此 relay 只在这次通知时提供证据，节流窗后的延迟自救只复查 issue 仍在，不再
+提供证据；持续的新证据来自 `serverApiClient` 的 401。
+每次快速尝试都必须有上一次快速尝试发起之后收到的新可信 401 证据（可在上次请求在途时
+收到）。发起尝试即消费已有证据；纯网络失败只推进快速档位并记录该档最早可再试时间，
+不自动排下一次快速请求。没有新证据时，`authManager` 的计时器回到原来的长等待期限，
+快速失败不增加长等待的失败次数或推后原期限；普通长等待到期后的失败仍按原策略推进。
+快速档位在同一登录代次内跨断网及普通长等待重试保留，不因缺少证据回到第一档。
+
+第一次在 `[0, 3s)` 内随机；快速失败后的 equal jitter 上界依次为 3、6、12、24、48、60 秒，
+每次在上界的一半至上界之间取值作为最早可再试时间，封顶后仍随机。新证据到达时，快速
+时间点取「该档最早可再试时间」与「收到证据的时刻 + `[0, 3s)` 随机」中较晚的一个，
+避免服务器恢复后集中请求；最早可再试时间已过时也重新加这段随机，单次等待不超过 60 秒。
+仅当这一时间点早于原长期限时才提前计时器；已经排上的快速时间点和在途请求继续合并，
+重复 401 不重新取值、不推后。由 `authManager` 统一计时，不依赖调用方再次轮询。
+有服务器回应或本地状态异常时退出快速通道并清零快速档位，沿用长等待及 `Retry-After`；
+确定性失效走现有过期出口。成功续期／登录及登录代次变化使快速状态失效。
+relay 原有 60 秒主动续期节流保持不变。
+快速计时器续期成功也通知当前持有连接的实例，只立即重连仍有鉴权失败的官方连接，不打断
+已在线连接或自建中转。
 续期完成后的立即重连须复验 client、owner 与持有权，不能唤醒旧实例。
 确定性失效和同机 token 替换恢复继续沿用原有判定。状态只留在进程内存中。
 实现见 `main/authRefreshBackoff.ts`、`main/authManager.ts`；回归见
-`main/__tests__/authRefreshBackoff.test.ts`。
+`main/__tests__/authRefreshBackoff.test.ts`、`main/__tests__/authColdStartRecovery.test.ts`。
 
 ## 路径与生命周期
 
@@ -254,6 +300,7 @@ promise，恢复信号不能在旧请求结束后追加立即续期。只有用�
 | macOS 菜单栏余量设置 | `userData/menubar-settings.json`，本机偏好：是否显示、来源顺序与显隐、菜单栏文字、快见底通知、隐藏个人信息、统计范围；只含供应商 id，不含凭证或用量数值 |
 | macOS 菜单栏 Cindy 余额样本 | `userData/owners/<账号>/menubar-credit-samples.json`，只记录观测到的余额数值与时间（按区域与币种分组），用于估算日均消耗；保留 30 天、原子替换写入，不含凭证或账号标识 |
 | 云端伙伴同步状态 | `userData/owners/<账号>/companion-cloud/<sha256(端点\n主人 actor id)>.json`，只记伙伴的云端 actor id、1:1 房间 id、对话导入游标（本机消息时间与 id）、已上传资料的内容哈希与版本号、是否已交出主力电脑（本机副本隐藏、不跑例行任务）、接管后待重建上下文的标记；原子替换写入，读不出时从空开始并向服务器重新核对，不含凭证、消息正文或资料正文。见 `main/companion-cloud/state.ts` |
+| 伙伴已读位置 | `userData/owners/<账号>/bot-read-state.json`（electron-store），只存这台电脑上伙伴私聊（伙伴 id）、早期本机群（`group:<群 id>`）与私聊话题（`thread:<Session id>`）的已读时刻，最多 2000 条；只前进不后退，读不出时从空开始，不含消息正文或凭证。本机窗口、手机与其他电脑经远程资源 `read` 推进同一份；Renderer 另在 localStorage `cindy.bots.readState.v1.<账号>` 留副本供首帧读取。见 `main/maker-ipc/botReadStateStore.ts` |
 | macOS 菜单栏 helper（开发构建） | `userData/menubar/`，开发时由 `swiftc` 编译的 helper 及其 wordmark 图片和源码哈希；打包版改用 `resources/tools/menubar/`，不在 userData 落盘 |
 | 供应商分享：受邀者会话登记 | `userData/remote-agent/guest-sessions.json`（控制端摘要 → 本机侧任务与原生会话 id），只用来限制受邀者只能恢复自己的会话，并在分享删除时精确清理影子工作区、附件与会话记录 |
 | 供应商分享：跨区域标记 | `userData/remote-agent/provider-share-regions.json`，账号摘要 → 对方区域；**不含凭证**。跨区连接凭证只在内存里，用新身份名片重新换取；没有标记的账号从不联系对方区域 |
@@ -262,6 +309,8 @@ promise，恢复信号不能在旧请求结束后追加立即续期。只有用�
 | 语音输入声纹识别模型 | `userData/voice-models/<哈希前缀>-<文件名>.onnx`，按内容哈希从区域 CDN 下载并在可见前校验 SHA-256；不含个人数据，本机所有账号共用。新版本模型下载完成后删除旧版本文件 |
 | Mobile 语音输入声纹（生物特征） | SecureStore（iOS 钥匙串 / Android Keystore）键 `xdt.voiceSpeakerProfile.v1.<账号 key 的 SHA-256 前 32 位>`，内容同 Desktop：声纹向量、录入时间与模型哈希；开关与灵敏度 override 在 AsyncStorage `cindy.mobile.voice-speaker-filter.v1.<账号 key>`。只在本机，不同步、不上传、不进日志；退出登录时随该账号的其他本机数据一起删除（模型文件保留）。删除前写 AsyncStorage `cindy.mobile.voice-speaker-filter.cleanup.v1.<账号 key>` 重试标记，不含声纹；失败时保留标记，启动、回到前台及该账号下次读写前重试，全部删除成功后才移除。标记落盘也失败时保留进程内重试，无法保证进程终止后的恢复；不因声纹删除失败阻止退出凭证清除。朗读音频只在内存中处理 |
 | Mobile 语音输入声纹识别模型 | `cacheDirectory/voice-models/`，与 Desktop 同一组按内容哈希下载、校验 SHA-256 后才可见的文件；放缓存目录以免进入 iCloud / Android 备份。系统清理缓存后，下次语音输入发现缺失会在后台重新下载，本次不过滤 |
+| Mobile iOS 键盘停靠高度 | AsyncStorage `cindy.mobile.keyboard-docked-height.v2`（设备级，不分账号）：`{ 窗口宽度: 键盘高度 }` 两个整数，只在 iOS 正常停靠键盘、且不在转屏后 1 秒内时更新（取最高），供系统发来异常键盘坐标时沿用（见 `docs/dev-rules/mobile-development.md`「iOS 键盘坐标异常」）。不含用户内容，退出登录不清除。见 `apps/mobile/src/session/keyboardOverlap.ts` |
+| 新电脑设置：上次迁移记录 | `userData/owners/<账号>/setup-migration-state.json`，只记上次迁移来源电脑的名称、完成时间、一次性清单（类别、显示名称、插件实例键或供应商 / MCP id、完成标记）与是否已关闭首次建议；不含密钥、令牌、凭证或设置值。复用设置文件跨进程锁与原子替换，账号切换按目录隔离，用户「关闭清单」后清空。快照只带「是否已配置」的布尔提示。用户勾选「密钥」且原电脑的人允许后，API Key / PAT 以一次性加密传来，在 Main 内存中解开后写入各自原有的 safeStorage 存储，不落其他文件（`docs/product-rules/new-device-setup-migration.md`） |
 | iOS 桌面小组件数据 | App Group `group.<bundle id>`（与 expo-sharing 共用）里的 `usage-widget-snapshot.json`：每台电脑最近一次的余量与用量快照（已按电脑上「隐藏个人信息」打码，含账号名或邮箱前缀、余量、近 30 天用量与模型名）、「自动」所选电脑 id 与电脑名列表；不含凭证。同一 App Group 的 UserDefaults 键 `usageWidgetPins` 只记组件选中的电脑 id 与时间，超过 2 天的丢弃。App 在前台时整份原子替换写入；切换或退出账号时删除快照文件。见 `apps/mobile/modules/cindy-usage-widgets` 与 `plugins/usage-widgets` |
 | Android 桌面小组件数据 | 应用私有 `noBackupFilesDir/usage-widget-snapshot.json`（不进 Android 自动备份），内容与 iOS 的 App Group 文件相同（已打码的余量与用量快照、「自动」所选电脑 id 与电脑名列表，不含凭证）；SharedPreferences `cindy-usage-widgets` 里 `computer.<组件 id>` 记组件选中的电脑，`usageWidgetPins` 记固定电脑 id 与时间（超过 2 天丢弃），删除组件时清理。切换或退出账号时删除快照文件，并清掉所有 `computer.` / `pinned.` / `hidden.` 与 `usageWidgetPins`（它们含上一个账号的电脑 id 与账号名），再重绘组件。见 `apps/mobile/modules/cindy-usage-widgets/android` |
 | Windows 锁屏控制的系统服务程序 | `%ProgramFiles%\Cindy Remote Desktop\<安装目录哈希>\`,由「授权开启」的管理员提权步骤写入:两个原生 helper 与记录所属安装目录的 `install.txt`。目录与文件的所有者是 Administrators,只有 Administrators 与 SYSTEM 可写——SYSTEM 服务不能从用户可写的安装目录启动,否则本机任何普通进程都能换掉它。不含凭证、账号或对话。源码运行的开发版另将构建缓存放在 `userData/remote-desktop/development/<安装身份哈希>/`，只含本机编译产物与源码摘要；它仍复制到上述受保护目录后才注册服务。只有设置页的「移除服务」(同样需要管理员确认)会删除它;按安装目录分子目录,多份安装互不影响。见 `native/remote-desktop/windows-host/src/staging.rs`、`apps/desktop/src/main/remote-desktop/windowsHost.ts` 与 [`../remote-desktop.md`](../remote-desktop.md) |

@@ -1,4 +1,5 @@
 import { deviceDisplayName } from '@/lib/deviceName';
+import { pluginUiComposerAccess, pluginUiComposerKey } from '@/cindy-brain/pluginUiComposerActions';
 import {
   useCallback,
   useEffect,
@@ -202,7 +203,7 @@ import {
 import { PendingQueuePanel } from './PendingQueuePanel';
 import { resolveSoleSteerableQueuedMessage } from './pendingQueueRowPresentation';
 import { SendButton } from './SendButton';
-import { FolderPickerPopover, addRecentFolder } from './FolderPickerPopover';
+import { FolderPickerPopover, addRecentFolder, type FolderPickerOption } from './FolderPickerPopover';
 import { SlashCommandPalette } from './SlashCommandPalette';
 import {
   expandGhostCommand,
@@ -211,7 +212,7 @@ import {
   parseGhostCommandToken,
 } from '@/cindy-brain/ghostCommand';
 import { findInstalledGhostByInstanceId, installedGhostStoragePart } from '../../../shared/pluginIdentity';
-import { filterGhostsForWorkdir, getWorkdirDisabledGhostIds } from '@/cindy-brain/ghostWorkdirFilter';
+import { filterGhostsForWorkdir, useWorkdirDisabledGhostIds } from '@/cindy-brain/ghostWorkdirFilter';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { useRemoteComposerGhosts } from '@/cindy-brain/useRemoteComposerGhosts';
 import { projectGhostComposerEntries, type GhostCommandSource } from '../../../shared/ghostComposer';
@@ -269,6 +270,7 @@ import {
 } from '@/components/cindy-make/CindyMakePreflightDialog';
 import { getModelById, getModelsForVendor } from '@/lib/modelDefinitions';
 import {
+  addPluginSkillSetupCommands,
   beginSlashCommandRosterLoad,
   EMPTY_SLASH_COMMANDS,
   failSlashCommandRosterLoad,
@@ -281,9 +283,11 @@ import {
   loadAllCommands,
   nextAvailableSlashCommandIndex,
   PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+  pluginSkillSetupName,
   rewriteBuiltInSkillDraftForSend,
   leadingSlashInvocation,
   rebaseInlineRangesAfterSlashCommandRewrite,
+  type PluginSkillSetupPaletteEntry,
   type SlashCommandRosterState,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
@@ -305,7 +309,13 @@ import {
   type ComposerSuggestionAction,
   type ComposerSuggestionEntry,
 } from '@/lib/composerSuggestion';
-import { countUserExtraDirs, MAX_EXTRA_DIRS, pickAndAddExtraDir } from './extraDirsActions';
+import {
+  addRecentWritableDir,
+  countUserExtraDirs,
+  MAX_EXTRA_DIRS,
+  pickAndAddExtraDir,
+} from './extraDirsActions';
+import { AddDirectoryPanel } from './AddDirectoryPanel';
 import { applyListBackspace } from '@/lib/composerListContinuation';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import { getAppShortcutCombos } from '@/lib/appShortcutStore';
@@ -368,7 +378,7 @@ import {
 } from '@/lib/providerModels';
 import {
   clearProviderModelEffort,
-  clearProviderModelFast,
+  clearProviderModelFast, editProviderModelMemoryBatch,
   getProviderModelEffort,
   setProviderModelChoice,
   setProviderModelEffort,
@@ -633,6 +643,14 @@ interface ChatInputProps {
    * 草稿 patchVendorPrefs)。未提供 = 不显示计划模式入口。
    */
   onPlanModeChange?: (enabled: boolean) => void | Promise<void>;
+  /**
+   * Plugin Skills the `/` palette offers while their plugin is missing or disabled
+   * here. Picking one clears the typed `/query` and calls onSelect; nothing is inserted.
+   */
+  pluginSkillSetup?: {
+    entries: readonly PluginSkillSetupPaletteEntry[];
+    onSelect: (skillName: string) => void;
+  };
   /** Current Fast Mode state from the session store. */
   fastMode?: boolean | 'ultrafast';
   /** Called when the Fast Mode toggle changes. Captured device ID pins remote routing. */
@@ -952,6 +970,7 @@ interface ChatInputProps {
 
 /** 本机模型全局预设的读写器(本机目录的选择器共用一份,引用稳定)。 */
 const LOCAL_MODEL_MEMORY: ModelMemoryAccessors = {
+  editMany: editProviderModelMemoryBatch,
   getEffort: getProviderModelEffort,
   setEffort: setProviderModelEffort,
   setChoice: setProviderModelChoice,
@@ -1321,6 +1340,7 @@ export function ChatInput({
   initialPermissionMode,
   planModeEnabled = false,
   onPlanModeChange,
+  pluginSkillSetup,
   fastMode = false,
   onFastModeChange,
   onWorkingDirChange,
@@ -1472,7 +1492,7 @@ export function ChatInput({
   const onComposerTypingRef = useRef(onComposerTyping);
   onComposerTypingRef.current = onComposerTyping;
   // session 切换时 ChatInput/Editor 会复用；推荐资格必须等目标草稿完成水合后再判断。
-  const [, setComposerHydrationGeneration] = useState(0);
+  const [composerHydrationGeneration, setComposerHydrationGeneration] = useState(0);
   // 完整输入框空判断:不仅检查 ProseMirror 文档是否为空,还检查附件、浏览器评论和语音稿。
   // 避免在用户放好了附件/评论/语音稿但正文为空时,仍发起付费的 predictNextPrompt 调用。
   const voiceDraftTextRef = useRef('');
@@ -1780,6 +1800,9 @@ export function ChatInput({
   // 合成「+」面板自带搜索框（「+」面板浮在输入框上方、盖住了输入框,在看不见的
   // 输入框里盲打是死路）。面板形态下查询词只认这个框。
   const [atPanelSearch, setAtPanelSearch] = useState('');
+  // 「+」面板当前显示「添加目录」二级页(只在面板打开期间有效，面板一关就复位)。
+  const [addDirViewOpen, setAddDirViewOpen] = useState(false);
+  const openAddDirectoryViewRef = useRef<() => void>(() => {});
   const setSyntheticAtAnchor = useCallback((next: number | null) => {
     const previous = syntheticAtAnchorRef.current;
     syntheticAtAnchorRef.current = next;
@@ -2039,6 +2062,11 @@ export function ChatInput({
   const remoteAtomicModelSelectionSupported =
     hostCcCaps.capabilities?.supportsSessionAgentSwitchCas === true ||
     hostCodexCaps.capabilities?.supportsSessionAgentSwitchCas === true;
+  // 被控电脑上的协同 Lead / 本机 Worker 能不能换 Agent 所在电脑，由被控端声明(host 级能力，两个
+  // 引擎的快照都带)。v0.1.104–v0.1.110 的被控端会拒绝，缺这一位时不列其他电脑与分享。
+  const hostSupportsOrcaAgentRelocation =
+    hostCcCaps.capabilities?.supportsOrcaAgentRelocation === true ||
+    hostCodexCaps.capabilities?.supportsOrcaAgentRelocation === true;
   // Orca Lead/Worker keeps its workflow identity in the session row and vendor
   // options; it can therefore use the same deferred handoff transaction as a
   // normal session. Remote sessions remain gated by their host capabilities.
@@ -3320,13 +3348,14 @@ export function ChatInput({
       (trigger.kind === 'slash' && trigger.sigil === '$'),
     remoteReconnectEpoch,
   );
+  const localDisabledGhostIds = useWorkdirDisabledGhostIds(workingDir, installedGhosts, deviceLinkDeviceId === null);
   const pluginsForMenu = useMemo(
     () => deviceLinkDeviceId
       ? remoteComposerGhosts.ghosts
-      : deviceLinkDeviceId === null
-        ? projectGhostComposerEntries(installedGhosts, [...getWorkdirDisabledGhostIds(workingDir)])
+      : deviceLinkDeviceId === null && localDisabledGhostIds
+        ? projectGhostComposerEntries(installedGhosts, [...localDisabledGhostIds])
         : [],
-    [deviceLinkDeviceId, remoteComposerGhosts.ghosts, installedGhosts, workingDir],
+    [deviceLinkDeviceId, remoteComposerGhosts.ghosts, installedGhosts, localDisabledGhostIds],
   );
   const composerGhostsRef = useRef(pluginsForMenu);
   composerGhostsRef.current = pluginsForMenu;
@@ -4814,8 +4843,17 @@ export function ChatInput({
         } as UnifiedCommand;
       });
   }, [ghostSourceLabels, ghostsForCommand, isGhostSigil, t]);
+  // 插件技能的安装/启用入口只进 / 面板,不进胶囊 roster 与发送期分派。
+  const pluginSkillSetupEntries = pluginSkillSetup?.entries;
+  const slashPaletteCommands = useMemo(
+    () =>
+      slashCommandsReady && pluginSkillSetupEntries
+        ? addPluginSkillSetupCommands(composerSlashCommands, pluginSkillSetupEntries)
+        : composerSlashCommands,
+    [composerSlashCommands, pluginSkillSetupEntries, slashCommandsReady],
+  );
   // 面板显示与键盘导航共用同一份命令源:$ 只列意识,/ 只列技能/命令。
-  const paletteCommands = isGhostSigil ? ghostCommandItems : composerSlashCommands;
+  const paletteCommands = isGhostSigil ? ghostCommandItems : slashPaletteCommands;
   const filteredCommands = useMemo(
     () => (trigger.kind === 'slash' ? filterSlashCommands(paletteCommands, trigger.query) : []),
     [paletteCommands, trigger],
@@ -5027,22 +5065,9 @@ export function ChatInput({
             ? t('extraDirs.atLimit', { max: MAX_EXTRA_DIRS })
             : t('extraDirs.add'),
         disabled: composerMutationLocked || totalDirs >= MAX_EXTRA_DIRS,
-        run: () => {
-          void pickAndAddExtraDir({
-            extraDirs: currentWritableDirs,
-            otherDirs: currentExtraDirs,
-            workingDir,
-            writableGrantScope,
-            onChange: onWritableDirsChange,
-            confirm: confirmDialog,
-            parentDirectoryConfirm: {
-              title: t('extraDirs.writableParentConfirmTitle'),
-              description: (path) => t('extraDirs.writableParentConfirmDescription', { path }),
-              confirmText: t('extraDirs.parentConfirmAccept'),
-              cancelText: t('extraDirs.parentConfirmCancel'),
-            },
-          });
-        },
+        // 先进「添加目录」二级页选最近目录，二级页底部再开系统选择器。
+        opensPanelPage: true,
+        run: () => openAddDirectoryViewRef.current(),
       });
     }
     if (remoteComposerGhosts.failed) {
@@ -5056,7 +5081,6 @@ export function ChatInput({
   }, [
     collaboration,
     composerMutationLocked,
-    confirmDialog,
     extraDirs,
     inSessionGoalEnabled,
     localAttachmentPickerEnabled,
@@ -5072,7 +5096,6 @@ export function ChatInput({
     deviceLinkDeviceId,
     writableDirs,
     writableGrantScope,
-    workingDir,
   ]);
 
   const atResources = useMemo(
@@ -5350,6 +5373,19 @@ export function ChatInput({
         }
         runEnd = parentStart + childOffset + text.length;
       });
+      const setupSkillName = pluginSkillSetupName(cmd);
+      if (setupSkillName) {
+        if (trigger.sigil !== '/' || !pluginSkillSetup) return;
+        // 安装/启用入口:删掉已键入的 `/query`、先落草稿再交给父组件走安装引导,
+        // 装好后由父组件把 `/技能 ` 填回这个输入框。
+        editor.chain().command(({ tr }) => {
+          tr.delete(from, runEnd);
+          return true;
+        }).run();
+        draftSaveSchedulerRef.current?.flush();
+        pluginSkillSetup.onSelect(setupSkillName);
+        return;
+      }
       let planModeCommandConsumed = false;
       const applied = editor
         .chain()
@@ -5378,7 +5414,7 @@ export function ChatInput({
         planModeEntry?.onToggle(!planModeEntry.enabled);
       }
     },
-    [editor, planModeCommandAvailable, planModeEntry, trigger],
+    [editor, planModeCommandAvailable, planModeEntry, pluginSkillSetup, trigger],
   );
 
   const resolveEffectiveAtRange = useCallback((): { from: number; to: number } | null => {
@@ -5536,9 +5572,10 @@ export function ChatInput({
       if (!editor) return;
       const range = resolveEffectiveAtRange();
       if (!range) return;
-      editor
-        .chain()
-        .focus()
+      // 打开面板下一级页面的动作不把焦点还给编辑器：TipTap 的 focus 延后执行，焦点落回
+      // 编辑器时「+」弹层按焦点离开收起，刚打开的下一级页面会随之关掉。
+      const chain = entry.action.opensPanelPage ? editor.chain() : editor.chain().focus();
+      chain
         .command(({ tr }) => {
           tr.delete(range.from, range.to);
           return true;
@@ -5587,6 +5624,57 @@ export function ChatInput({
     if (!editor || editor.isDestroyed) return null;
     return editor.view.dom;
   }, [editor]);
+
+  useEffect(() => {
+    if (!syntheticAtOpen) setAddDirViewOpen(false);
+  }, [syntheticAtOpen]);
+  // 「添加目录…」从 @ 或「+」触发都落到「+」面板的二级页：选中动作已收起原面板，这里在同一轮重新打开。
+  openAddDirectoryViewRef.current = () => {
+    handleComposerSuggestionOpenChange(true);
+    setAddDirViewOpen(true);
+  };
+  const handleAddRecentDir = useCallback(
+    async (option: FolderPickerOption) => {
+      if (!onWritableDirsChange || !writableGrantScope) return;
+      await addRecentWritableDir({
+        path: option.path,
+        writableDirs: writableDirs ?? [],
+        otherDirs: extraDirs ?? [],
+        writableGrantScope,
+        onChange: onWritableDirsChange,
+      });
+      closeComposerSuggestionPanel();
+    },
+    [closeComposerSuggestionPanel, extraDirs, onWritableDirsChange, writableDirs, writableGrantScope],
+  );
+  const handleBrowseExtraDir = useCallback(async () => {
+    if (!onWritableDirsChange || !writableGrantScope) return;
+    const added = await pickAndAddExtraDir({
+      extraDirs: writableDirs ?? [],
+      otherDirs: extraDirs ?? [],
+      workingDir,
+      writableGrantScope,
+      onChange: onWritableDirsChange,
+      confirm: confirmDialog,
+      parentDirectoryConfirm: {
+        title: t('extraDirs.writableParentConfirmTitle'),
+        description: (path) => t('extraDirs.writableParentConfirmDescription', { path }),
+        confirmText: t('extraDirs.parentConfirmAccept'),
+        cancelText: t('extraDirs.parentConfirmCancel'),
+      },
+    });
+    // 取消或未加入时留在二级页，用户可以改选最近目录。
+    if (added) closeComposerSuggestionPanel();
+  }, [
+    closeComposerSuggestionPanel,
+    confirmDialog,
+    extraDirs,
+    onWritableDirsChange,
+    t,
+    workingDir,
+    writableDirs,
+    writableGrantScope,
+  ]);
 
   // ── Send / Stop wiring ─────────────────────────────────────────────
   const dispatchSendInFlightKeysRef = useRef(new Set<string>());
@@ -7851,9 +7939,11 @@ export function ChatInput({
   );
   const sessionRemoteAgentOptions = useMemo<RemoteAgentSelectorOptions | undefined>(() => {
     // 本机或能力已确认的被控端任务可换电脑；SSH 与运行设备 Worker 不开放位置选择。协同的 Lead / Worker
-    // 任务在本机，换 Agent 位置与普通任务同一套(2026-10-16)；被控电脑上的协同任务旧版会拒绝，先不开放。
+    // 任务在本机，换 Agent 位置与普通任务同一套(2026-10-16)；被控电脑上的协同任务要被控端声明
+    // supportsOrcaAgentRelocation 才开放(旧版被控端会拒绝)。
     if (!sessionId || !agentLocationAware || remoteHostId || !sessionEngineFilter ||
-        sessionOrcaRole === undefined || (sessionOrcaRole !== null && deviceLinkDeviceId) ||
+        sessionOrcaRole === undefined ||
+        (sessionOrcaRole !== null && deviceLinkDeviceId && !hostSupportsOrcaAgentRelocation) ||
         sessionOrcaRemoteWorker) return undefined;
     if (!remoteAgentDevices || (remoteAgentDevices.length === 0 && !effectiveAgentDeviceId)) {
       return undefined;
@@ -7893,6 +7983,7 @@ export function ChatInput({
     sessionEngineFilter,
     sessionOrcaRole,
     sessionOrcaRemoteWorker,
+    hostSupportsOrcaAgentRelocation,
     remoteAgentDevices,
     catalogHostDeviceId,
     effectiveAgentDeviceId,
@@ -8523,6 +8614,47 @@ export function ChatInput({
       }
     };
   }, []);
+
+  // Bind the actual visible editor. No draft copy is stored by the plugin UI.
+  const pluginComposerScopeRef = useRef({ sessionId, storageKey, ownsHardwareComposerActions, queueEditingClientId });
+  pluginComposerScopeRef.current = { sessionId, storageKey, ownsHardwareComposerActions, queueEditingClientId };
+  const pluginComposerOwner = getDataOwnerGeneration();
+  useEffect(() => {
+    if (!editor || !sessionId || deviceLinkDeviceId || !ownsHardwareComposerActions || queueEditingClientId || composerMutationLocked) return;
+    const draftKey = crypto.randomUUID();
+    let revision = 0;
+    const current = () => !editor.isDestroyed && editor.isEditable && !editor.view.composing &&
+      isDataOwnerGenerationCurrent(pluginComposerOwner) && isDataOwnerIdCurrent(editorDataOwnerRef.current) &&
+      pluginComposerScopeRef.current.sessionId === sessionId && pluginComposerScopeRef.current.storageKey === storageKey &&
+      pluginComposerScopeRef.current.ownsHardwareComposerActions && !pluginComposerScopeRef.current.queueEditingClientId &&
+      hasHydratedRef.current && storageKeyForDraftRef.current === storageKey && !isRestoringRef.current &&
+      !composerMutationLockedRef.current && document.visibilityState !== 'hidden';
+    const changed = ({ transaction }: { transaction: { docChanged: boolean; selectionSet: boolean } }) => {
+      if (transaction.docChanged || transaction.selectionSet) revision++;
+    };
+    editor.on('transaction', changed);
+    const off = pluginUiComposerAccess.register(pluginUiComposerKey({ sessionId }), {
+      current,
+      snapshot: () => {
+        const { from, to } = editor.state.selection;
+        return { draftKey, revision: String(revision), selection: { start: from, end: to },
+          selectedText: editor.state.doc.textBetween(from, to, '\n', '\uFFFC') };
+      },
+      apply: effect => {
+        if (!current()) throw new Error('EDITOR_UNAVAILABLE');
+        const from = effect.operation === 'append' ? Selection.atEnd(editor.state.doc).from : effect.selection.start;
+        const to = effect.operation === 'append' ? from : effect.selection.end;
+        const content: JSONContent[] = [];
+        effect.text.split('\n').forEach((text, index) => {
+          if (index) content.push({ type: 'hardBreak' });
+          if (text) content.push({ type: 'text', text });
+        });
+        return editor.commands.insertContentAt({ from, to }, content);
+      },
+    });
+    return () => { off(); editor.off('transaction', changed); };
+  }, [editor, sessionId, storageKey, deviceLinkDeviceId, ownsHardwareComposerActions, queueEditingClientId,
+    composerMutationLocked, composerHydrationGeneration, pluginComposerOwner]);
 
   useEffect(() => {
     if (!ownsHardwareComposerActions) {
@@ -9898,48 +10030,59 @@ export function ChatInput({
                   open={syntheticAtOpen}
                   onOpenChange={handleComposerSuggestionOpenChange}
                   panel={
-                    <AtMentionPanel
-                      embedded
-                      searchValue={atPanelSearch}
-                      onSearchChange={setAtPanelSearch}
-                      query={atQuery}
-                      state={atState}
-                      entries={filteredAt}
-                      focusedIndex={atFocus}
-                      onFocusedIndexChange={setAtFocus}
-                      onSelect={handleComposerSuggestionSelect}
-                      onClose={closeComposerSuggestionPanel}
-                      onRetry={() => runAtScan(atQuery)}
-                      referenceDirs={
-                        !settingsLocked && onExtraDirsChange
-                          ? {
-                              dirs: extraDirs ?? [],
-                              onRemove: (path) => {
-                                void onExtraDirsChange(
-                                  (extraDirs ?? []).filter((item) => item !== path),
-                                );
-                              },
-                            }
-                          : null
-                      }
-                      writableDirs={
-                        !settingsLocked && onWritableDirsChange
-                          ? {
-                              dirs: writableDirs ?? [],
-                              onRemove: (path) => {
-                                if (onWritableDirRemove) {
-                                  void onWritableDirRemove(path);
-                                } else {
-                                  void onWritableDirsChange(
-                                    (writableDirs ?? []).filter((item) => item !== path),
+                    addDirViewOpen ? (
+                      <AddDirectoryPanel
+                        addedDirs={[...(extraDirs ?? []), ...(writableDirs ?? [])]}
+                        workingDir={workingDir}
+                        onBack={() => setAddDirViewOpen(false)}
+                        onSelectRecent={handleAddRecentDir}
+                        onBrowse={handleBrowseExtraDir}
+                        maxHeight={paletteMaxHeight}
+                      />
+                    ) : (
+                      <AtMentionPanel
+                        embedded
+                        searchValue={atPanelSearch}
+                        onSearchChange={setAtPanelSearch}
+                        query={atQuery}
+                        state={atState}
+                        entries={filteredAt}
+                        focusedIndex={atFocus}
+                        onFocusedIndexChange={setAtFocus}
+                        onSelect={handleComposerSuggestionSelect}
+                        onClose={closeComposerSuggestionPanel}
+                        onRetry={() => runAtScan(atQuery)}
+                        referenceDirs={
+                          !settingsLocked && onExtraDirsChange
+                            ? {
+                                dirs: extraDirs ?? [],
+                                onRemove: (path) => {
+                                  void onExtraDirsChange(
+                                    (extraDirs ?? []).filter((item) => item !== path),
                                   );
-                                }
-                              },
-                            }
-                          : null
-                      }
-                      maxHeight={paletteMaxHeight}
-                    />
+                                },
+                              }
+                            : null
+                        }
+                        writableDirs={
+                          !settingsLocked && onWritableDirsChange
+                            ? {
+                                dirs: writableDirs ?? [],
+                                onRemove: (path) => {
+                                  if (onWritableDirRemove) {
+                                    void onWritableDirRemove(path);
+                                  } else {
+                                    void onWritableDirsChange(
+                                      (writableDirs ?? []).filter((item) => item !== path),
+                                    );
+                                  }
+                                },
+                              }
+                            : null
+                        }
+                        maxHeight={paletteMaxHeight}
+                      />
+                    )
                   }
                   disabled={composerMutationLocked}
                   dense={effectiveDenseToolbar}

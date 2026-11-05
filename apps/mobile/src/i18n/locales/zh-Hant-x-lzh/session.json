@@ -2,7 +2,7 @@
   "githubPrs": {
     "title": "掌 PR 連結",
     "hint": "頂列至多示 3 個，固定之 PR 居先",
-    "empty": "貼 GitHub PR 連結即可增之",
+    "empty": "貼 GitHub PR 或 GitLab MR 連結即可增之",
     "removed": "已除 {{count}} 個",
     "legacy": "待認舊引：{{count}}",
     "addLabel": "增 PR 連結",
@@ -18,12 +18,13 @@
     "errors": {
       "duplicate": "此 PR 已關聯；已除之連結可於清單中復之",
       "notFound": "尋此 PR 不得，或無存取之權柄",
-      "invalidUrl": "請輸有效之 GitHub PR 連結",
+      "invalidUrl": "請輸入有效之 GitHub PR 或 GitLab MR 連結",
       "reorderFailed": "順序未存，請再試",
-      "verifyFailed": "不能驗 PR，請察 GitHub 登入與存取權柄",
+      "verifyFailed": "不能驗 PR，請察 GitHub 或 GitLab 登入與存取權柄",
       "unsupported": "此機之版本暫不支援掌 PR 連結",
       "failed": "不能更 PR 連結"
     },
+    "urlPlaceholder": "GitHub PR 或 GitLab MR 連結",
     "moveUp": "上移"
   },
   "paneResize": {
@@ -72,6 +73,10 @@
     "text": "先前曾有自運未成。",
     "precheck": "自動檢查暫受阻。",
     "rateLimited": "自動檢查暫受阻：請求遭限流。",
+    "pluginMissing": "自動檢查暫受阻：「{{name}}」法器未裝，於電腦裝畢自復。",
+    "pluginMissingUnnamed": "自動檢查暫受阻：所需法器未裝，於電腦裝畢自復。",
+    "pluginDisabled": "自動檢查暫受阻：「{{name}}」法器未啟，於電腦啟之自復。",
+    "pluginDisabledUnnamed": "自動檢查暫受阻：所需法器未啟，於電腦啟之自復。",
     "dismissTitle": "闔舊時未成之告"
   },
   "common": {
@@ -239,7 +244,25 @@
       },
       "context": {
         "title": "上下文耗用",
-        "unavailable": "暫無上下文之資料"
+        "unavailable": "暫無上下文之資料",
+        "estimate": {
+          "title": "文字估數",
+          "delivery": "答覆呈式",
+          "host": "Cindy 規約",
+          "plugins": "法器目錄",
+          "memoryRules": "記憶規約",
+          "memoryIndex": "記憶索引",
+          "profile": "同伴資料",
+          "user": "主人指令",
+          "directories": "附加目錄",
+          "native": "Pi 原生規約",
+          "skills": "技藝目錄",
+          "project": "專案指令",
+          "tools": "工具定義",
+          "messages": "交談正文",
+          "other": "其餘指令",
+          "note": "依當前文字粗估，非模型分詞之數。不計圖片與供方格式耗用，分項之和不等於原生總數。"
+        }
       },
       "rateLimit": {
         "plan": "約",
@@ -463,6 +486,7 @@
     "chipArchived": "已封存",
     "titleFallback": "遠端差事",
     "unnamedTitle": "無名差事",
+    "openSection": "開",
     "renameAction": "差事易名",
     "copyLinkAction": "錄差事連結",
     "unpin": "去置頂",
@@ -598,7 +622,10 @@
     "dismissNotice": "闔提示",
     "ignore": "略之",
     "executionResultUnavailable": "未能取得行之結果，已停自動接續。可請助手察既有之結果。",
-    "outputLimit": "模型已達輸出長度上限，此輪回覆或有不全。可徑遣下一則訊以續。",
+    "outputLimit": "模型已達輸出之限，此答或有不全。可遣新訊以續；若屢至此限，宜降推理強度，或先壓縮對話記錄。",
+    "outputLimitReasoning": "思考已耗本次輸出預算之大半，此答或有不全。宜降推理強度，或先壓縮對話記錄，而後續之。",
+    "outputLimitUsage": "本次模型請求已輸出 {{outputTokens}} tokens，其中 {{reasoningTokens}} tokens 用於思考。",
+    "outputLimitOutputUsage": "本次模型請求已輸出 {{outputTokens}} tokens。",
     "toolUseLoopDetected": "模型重複呼叫工具過多，Cindy 已止此輪，以免無限迴圈。可遣新訊以續。",
     "toolUseLoopDetectedWithCount": "模型連觸無效之工具呼叫，Cindy 於 {{count}} 次未成後已止此輪，以免無限迴圈。可遣新訊以續。",
     "toolUseLoopDetectedConsecutiveWithCount": "模型重複呼叫同一工具 {{count}} 次，Cindy 已止此輪，以免無限迴圈。可遣新訊以續。",
@@ -659,7 +686,7 @@
     "REMOTE_PROVIDER_UPDATING": "此模型供方之憑證方更新。請稍後再試。",
     "REMOTE_WORKDIR_UNAVAILABLE": "遠端工作目錄今不可用。請確認彼機上之目錄尚在，然後再試。",
     "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "電腦端暫不能確認此訊是否已遣出。請稍後再試，勿重遣同一則。",
-    "REMOTE_AGENT_UNAVAILABLE": "暫連不上行 Agent 之機。請確認彼機在線且允許遠端操控，再試。",
+    "REMOTE_AGENT_UNAVAILABLE": "與行 Agent 之機斷連。請再試；若屢見，再確認彼機在線且許遠端控制。",
     "REMOTE_AGENT_PEER_TOO_OLD": "彼機之 Cindy 版本過舊，尚不能代此機行 Agent。請先於彼機更新 Cindy。",
     "REMOTE_AGENT_EXPIRED": "此差事於行 Agent 之機上已畢。請重遣。",
     "REMOTE_AGENT_NOT_FOUND": "此差事於行 Agent 之機上已畢。請重遣。",

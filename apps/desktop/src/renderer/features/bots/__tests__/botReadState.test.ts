@@ -174,4 +174,30 @@ describe('Bot read positions', () => {
     expect(botGroupUnreadCount(group)).toBe(0);
     expect(isBotGroupUnread(group)).toBe(false);
   });
+
+  // The computer's main keeps the one position every device advances (phone, other Macs).
+  it('hands local positions to the host as seeds, reports reads, and folds host positions in forward', async () => {
+    let push: ((payload: unknown, stamp?: unknown) => void) | undefined;
+    const host = { 'bot-1': 9_000, 'bot-2': 1_000 };
+    const update = vi.fn(async (body: { ownerId: string }) => ({ ownerId: body.ownerId, positions: host }));
+    (window as unknown as { electronAPI: unknown }).electronAPI = { localDb: { bots: { readState: {
+      get: vi.fn(), update, onChanged: (callback: typeof push) => { push = callback; return () => { push = undefined; }; },
+    } } } };
+    try {
+      window.localStorage.setItem('cindy.bots.readState.v1.owner-1', JSON.stringify({ 'bot-1': 5_000, 'bot-2': 3_000 }));
+      setBotReadStateOwner('owner-1');
+      // Upgrade migration: the host only takes what it has no position for.
+      expect(update).toHaveBeenCalledWith({ ownerId: 'owner-1', seed: { 'bot-1': 5_000, 'bot-2': 3_000 } });
+      await vi.waitFor(() => expect(getBotLastReadAt('bot-1')).toBe(9_000));
+      expect(getBotLastReadAt('bot-2')).toBe(3_000);
+      markBotRead('bot-2', 4_000);
+      expect(update).toHaveBeenLastCalledWith({ ownerId: 'owner-1', mark: { 'bot-2': 4_000 } });
+      // Read on the phone: the host pushes; another account's push is ignored.
+      push?.({ ownerId: 'owner-2', positions: { 'bot-2': 99_000 } });
+      push?.({ ownerId: 'owner-1', positions: { 'bot-2': 8_000 } });
+      expect(getBotLastReadAt('bot-2')).toBe(8_000);
+    } finally {
+      delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+    }
+  });
 });

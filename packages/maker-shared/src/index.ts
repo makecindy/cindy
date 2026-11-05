@@ -2,6 +2,9 @@ export * from './agentCapabilities.js';
 export * from './agentInputProjection.js';
 export * from './agentTask.js';
 export * from './branding.js';
+export * from './pluginUi.js';
+export * from './pluginAppearance.js';
+export * from './pluginUiComposer.js';
 export * from './brandIdentity.js';
 export * from './commandIntent.js';
 export * from './commandDisplay.js';
@@ -71,3 +74,5 @@ export * from './runningTokenRateHistory.js';
 export * from './userBubbleAppearance.js';
 
 export type { BotDmThreadSummary } from './botDmThread.js';
+
+export { parseOutputLimitDetails, isReasoningDominatedOutputLimit, type OutputLimitDetails } from './outputLimitError.js';

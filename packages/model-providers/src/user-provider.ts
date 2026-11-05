@@ -315,6 +315,8 @@ function toCatalogModel(
     userModelConfig: { ...m },
     id: m.id,
     discoveredMetadata: m.discoveredMetadata,
+    ...(m.discoveredSource ? { discoveredSource: m.discoveredSource } : {}),
+    ...(m.opaqueModelId ? { opaqueModelId: true as const } : {}),
     ...(m.discoveredCost ? { cost: m.discoveredCost } : {}),
     nameExplicit: m.nameExplicit,
     name: m.name,
@@ -371,7 +373,7 @@ function toCatalogModel(
   return effortsDeclared ? projected : { ...projected, effortsUnknown: true };
 }
 
-function defaultWireProtocol(agent: AgentKind): ProviderWireProtocol {
+export function defaultWireProtocol(agent: AgentKind): ProviderWireProtocol {
   // pi 默认 openai-chat:BYOM 本地端点(Ollama/vLLM 的 /v1/chat/completions)最常见。
   // 注:pi 走原生 provider 直连,routing.pi 不被 native 路径消费——此默认仅影响(未用的)
   // 路由描述符里是否显式记 wireProtocol,pi 实际 api 由 pi-host resolvePiNativeProviders 定。

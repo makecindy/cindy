@@ -703,7 +703,15 @@
       "running": "作業中",
       "done": "完了",
       "unread": "未読"
-    }
+    },
+    "viewMr": "MR を見る",
+    "viewPrMr": "PR を見る",
+    "mrCount": "MR {{count}} 件",
+    "prMrCount": "PR {{count}} 件",
+    "mrCount_one": "MR {{count}} 件",
+    "prMrCount_one": "PR {{count}} 件",
+    "mrCount_other": "MR {{count}} 件",
+    "prMrCount_other": "PR {{count}} 件"
   },
   "companionProfile": {
     "avatar": "アバター",

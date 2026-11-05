@@ -258,6 +258,7 @@ function referenceQuote(
     outputPerMtok: number;
     cacheReadPerMtok?: number;
     cacheCreatePerMtok?: number;
+    cacheCreate1hPerMtok?: number;
     inputTokenPriceBands?: ModelPriceQuote['inputTokenPriceBands'];
   },
 ): ModelPriceQuote {
@@ -301,10 +302,16 @@ export function providerReferencePriceQuote(
     referencePriceQuoteForVariant(providerId, modelId, registry, { ...options, variant: 'fast' }) ??
     referencePriceQuoteForVariant(providerId, modelId, registry, { ...options, variant: 'priority' });
   if (!fast || fast.currency !== quote.currency) return quote;
-  const { inputPerMtok, outputPerMtok, cacheReadPerMtok, cacheCreatePerMtok, inputTokenPriceBands } = fast;
+  const {
+    inputPerMtok, outputPerMtok, cacheReadPerMtok, cacheCreatePerMtok, cacheCreate1hPerMtok,
+    inputTokenPriceBands,
+  } = fast;
   return {
     ...quote,
-    priority: { inputPerMtok, outputPerMtok, cacheReadPerMtok, cacheCreatePerMtok, inputTokenPriceBands },
+    priority: {
+      inputPerMtok, outputPerMtok, cacheReadPerMtok, cacheCreatePerMtok, cacheCreate1hPerMtok,
+      inputTokenPriceBands,
+    },
   };
 }
 
@@ -344,6 +351,9 @@ function referencePriceQuoteForVariant(
       ...(price.cacheWritePerMtok !== undefined
         ? { cacheCreatePerMtok: price.cacheWritePerMtok }
         : {}),
+      ...(price.cacheWrite1hPerMtok !== undefined
+        ? { cacheCreate1hPerMtok: price.cacheWrite1hPerMtok }
+        : {}),
     }))
     .sort((a, b) => a.minInputTokens - b.minInputTokens);
   return referenceQuote(providerId, modelId, {
@@ -356,14 +366,19 @@ function referencePriceQuoteForVariant(
     ...(resolved.price.cacheWritePerMtok !== undefined
       ? { cacheCreatePerMtok: resolved.price.cacheWritePerMtok }
       : {}),
+    ...(resolved.price.cacheWrite1hPerMtok !== undefined
+      ? { cacheCreate1hPerMtok: resolved.price.cacheWrite1hPerMtok }
+      : {}),
     ...(inputTokenPriceBands && inputTokenPriceBands.length > 0
       ? { inputTokenPriceBands }
       : {}),
   });
 }
 
+/** `at` 解析某一天生效的路由参考价(历史用量估价)；省略为今天。 */
 export function registryPricingCatalog(
   registry: ModelRegistry | null | undefined,
+  at?: string | Date,
 ): ModelPricingCatalog {
   const catalog: ModelPricingCatalog = {};
   if (!registry) return catalog;
@@ -372,7 +387,7 @@ export function registryPricingCatalog(
       // XD/Cindy AI 的售价只认登录账号对应的 Gateway /models 响应。公共 registry
       // 只提供用户自带 API/OAuth 的参考价，绝不能在 Gateway 离线时伪装成 XD 售价。
       if (route.providerId === 'xd') continue;
-      const quote = providerReferencePriceQuote(route.providerId, route.modelId, registry);
+      const quote = providerReferencePriceQuote(route.providerId, route.modelId, registry, { at });
       if (!quote) continue;
       (catalog[route.providerId] ??= {})[route.modelId] = quote;
     }

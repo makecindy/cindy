@@ -3602,9 +3602,10 @@ async function createCodexProxyHandle(
      * 像 HTTP 路径那样按 model 推导(upgrade 也没有 body 可供推导)。
      *
      * 非 oauth-bearer 态返回 null → proxy 回 426 → codex 退回 HTTP transport:
-     * 该 provider 只在 oauth spawn 时定义(见 buildCodexProxySpawnArgs), env-key /
-     * provider-oauth 进程本不该有 upgrade 进来; 真收到就让它降级, 而不是拿一个凭据
-     * 形态不匹配的连接去打订阅后端。
+     * 该 provider 的 supports_websockets 只在 oauth spawn 打开(见
+     * buildCodexProxySpawnArgs), env-key / provider-oauth 进程即使声明了
+     * cindy_openai 占位(#8670, 供老 thread resume 校验)也不发出 upgrade;
+     * 真收到就让它降级, 而不是拿一个凭据形态不匹配的连接去打订阅后端。
      *
      * WS 内首次命中 body recovery 错误后，maker-core 调 armCodexHttpRecovery 登记
      * thread；下一次 upgrade 在这里回 426，Codex 原生 transport 按 session 级稳定
