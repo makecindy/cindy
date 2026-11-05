@@ -24,7 +24,8 @@
       "unsupported": "This De'wI'’s juv does not support managing PR Hemey",
       "failed": "Could not choHqa' PR Hemey"
     },
-    "moveUp": "Move up"
+    "moveUp": "Move up",
+    "urlPlaceholder": "GitHub PR or GitLab MR URL"
   },
   "paneResize": {
     "label": "Column width",
@@ -239,7 +240,25 @@
       },
       "context": {
         "title": "Dav lo'",
-        "unavailable": "Qo' Dav data"
+        "unavailable": "Qo' Dav data",
+        "estimate": {
+          "title": "Text estimates",
+          "delivery": "Answer delivery",
+          "host": "Cindy instructions",
+          "plugins": "Plugin catalogue",
+          "memoryRules": "Memory instructions",
+          "memoryIndex": "Memory index",
+          "profile": "Teammate profile",
+          "user": "User instructions",
+          "directories": "Additional directories",
+          "native": "Pi instructions",
+          "skills": "Skill catalogue",
+          "project": "Project instructions",
+          "tools": "Tool definitions",
+          "messages": "Conversation text",
+          "other": "Other instructions",
+          "note": "Estimated from current text, not model tokenization. Excludes images and provider formatting; does not add up to the native total."
+        }
       },
       "rateLimit": {
         "plan": "plan",

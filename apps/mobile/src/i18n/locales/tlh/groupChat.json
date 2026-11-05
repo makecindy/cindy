@@ -155,7 +155,12 @@
         "details": "ngeH your QIn again. If it still fails, check the De' QIn and report the Issue."
       }
     },
-    "runtimeFailureSetupHint": "To choH the model or SeHlaw', use the De'wI' where this teammate runs."
+    "runtimeFailureSetupHint": "To choH the model or SeHlaw', use the De'wI' where this teammate runs.",
+    "capability": {
+      "GROUP_AUTHORIZATION_REQUIRED": "{{name}} could not run this tool: group authorization has expired or does not allow this action. The teammate’s owner can make the request again in this group.",
+      "GROUP_AUTHORIZATION_UNAVAILABLE": "Group authorization for {{name}} could not be verified, so this tool did not run. Try again after the connection recovers.",
+      "ATTACHMENTS_UNAVAILABLE": "Some attachments were not delivered to {{name}} because of a download failure or attachment limit. Resend the attachments needed for this request."
+    }
   },
   "plan": {
     "intro_one": "This takes {{count}} step. Here’s who does it:",
@@ -186,7 +191,21 @@
     "awaitingStart": "Waiting for you",
     "progressRunning": "SengtaH {{current}} / {{total}}",
     "progressDone": "rIn {{done}} / {{total}}",
-    "allDone": "naQ rIn"
+    "allDone": "naQ rIn",
+    "stepQueued": "Waiting to Start",
+    "stepExecuting": "Running",
+    "stepSkipped": "Skipped",
+    "skippingTurn": "Skipping…",
+    "queueWaiting": "Waiting for you to continue",
+    "skipTurnLabel": "Skip {{name}}",
+    "stepSpoken": "Done",
+    "allTurns_one": "All {{count}} teammate",
+    "allTurns_other": "All {{count}} teammates",
+    "foldTurns": "Show fewer",
+    "talkTitle": "Hear from everyone in turn",
+    "talkPending": "Not started",
+    "skipTurn": "Skip",
+    "queueEnded": "Round ended"
   },
   "speaking": {
     "stopping": "Stopping…",
@@ -298,7 +317,8 @@
     "lifecycleUnavailable": "The current server or De'wI' does not support this action yet.",
     "groupDissolved": "This ghun has been dissolved. You can still read the DuH history.",
     "lastOwner": "Transfer ownership or dissolve this ghun before leaving.",
-    "allBotsMentionDisabled": "The ghun owner has not chu'lu' @all teammates."
+    "allBotsMentionDisabled": "The ghun owner has not chu'lu' @all teammates.",
+    "turnAlreadyStarted": "This teammate has already started and cannot be skipped"
   },
   "followUp": {
     "next": "plan · ghIq step",

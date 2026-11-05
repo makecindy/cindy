@@ -343,5 +343,23 @@
     "purpose": "bej interactive page chawmey",
     "updateHost": "choHqa' Cindy chu' the execution De'wI' to vang here. Hol tools remain DuH.",
     "failed": "Could not enable interactive pages. Check the rar and Plugin juv, then try again."
+  },
+  "openLinkHost": "Open {{host}}",
+  "prStatus": {
+    "checksFailed": "Failed",
+    "checksPending": "Pending",
+    "checksPassed": "Passed",
+    "checksSkipped": "Skipped or neutral",
+    "threadsOpen": "Unresolved review threads: {{count}}",
+    "threadsNone": "No open review threads",
+    "mergeReady": "Ready to merge",
+    "mergeConflict": "Has conflicts",
+    "mergeBehind": "Behind the base branch",
+    "mergeApproval": "Waiting for approval",
+    "mergeChanges": "Changes requested",
+    "mergeWaiting": "Waiting to merge",
+    "merged": "Merged",
+    "closed": "Closed",
+    "draft": "Draft"
   }
 }
