@@ -3485,6 +3485,27 @@
       },
       "checkCase": false,
       "note": "GitHub PR / GitLab MR 的合并冲突。数据行标签为 Merge / 合并，状态值为 Conflicts / 有冲突；与检查失败及应用崩溃区分。"
+    },
+    {
+      "id": "enhance-prompt",
+      "status": "proposed",
+      "en": "Enhance prompt",
+      "translations": {
+        "zh-CN": "增强提示词",
+        "zh-TW": "增強提示詞",
+        "en": "Enhance prompt",
+        "ja": "プロンプトを改善",
+        "ko": "프롬프트 다듬기",
+        "es": "Mejorar el prompt",
+        "fr": "Améliorer le prompt",
+        "de": "Prompt verbessern",
+        "pt-PT": "Melhorar o prompt",
+        "pt-BR": "Melhorar o prompt",
+        "zh-Hant-x-lzh": "增強提示詞",
+        "zh-Hans-x-lzh": "增强提示词"
+      },
+      "checkCase": false,
+      "note": "输入框内把用户已输入的指令补全为更完整、可执行的提示词。与语音转写的「润色」、模型推荐的「输入建议」是三件不同的事，勿混用。"
     }
   ]
 }

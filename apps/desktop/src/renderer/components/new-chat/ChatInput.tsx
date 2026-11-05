@@ -130,6 +130,7 @@ import {
 } from '@/lib/composerActionsBus';
 import { resolveComposerModelSelection } from './composerModelSelection';
 import type { SessionRuntimeProfileProjection, SessionRuntimePendingProjection } from '@/lib/ccAgent.types';
+import { ComposerEnhancePromptButton } from './ComposerEnhancePromptButton';
 import {
   ModelSelector,
   resolveRemoteModelListStatus,
@@ -10122,6 +10123,12 @@ export function ChatInput({
                   ))}
                 {/* 伙伴的模型链在设置中统一管理，并由宿主自动 fallback。对话输入框不再
                     暴露单次任务的模型切换，避免会话态覆盖伙伴长期配置。 */}
+                <ComposerEnhancePromptButton
+                  editor={editor}
+                  draftKey={storageKey}
+                  disabled={composerMutationLocked || settingsLocked || sharedGuest}
+                  disabledReason={t('newChat.composerEnhance.locked')}
+                />
                 {!hideRuntimeControls ? (
                 <div
                   data-session-model-slot={sessionId ? '' : undefined}

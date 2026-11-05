@@ -1,5 +1,9 @@
 import { APP_PREFERENCE_REQUEST, APP_PREFERENCE_REPLY, APP_SETTINGS_CHANGED, type AppPreferenceControlBridge } from '../shared/appPreferenceControl.js';
 import type { VoiceConversationApi } from '../shared/voiceConversation';
+import {
+  COMPOSER_ENHANCE_PROMPT_CHANNEL,
+  type ComposerEnhancePromptSuccess,
+} from '../shared/composerPromptEnhance';
 import { PLUGIN_UI_VISIBILITY_GET, PLUGIN_UI_VISIBILITY_RELEASE, PLUGIN_UI_VISIBILITY_APPLY, PLUGIN_UI_VISIBILITY_APPLIED, type PluginUiVisibilityApplication } from '../shared/pluginUiVisibility';
 import type { PluginUiVisibilityValues } from '@cindy/maker-shared/plugin-ui';
 import { PLUGIN_APPEARANCE_FONT, PLUGIN_APPEARANCE_APPLY, PLUGIN_APPEARANCE_APPLIED,
@@ -9,6 +13,7 @@ import { PLUGIN_UI_READ, PLUGIN_UI_INVOKE, PLUGIN_UI_CHOOSE_RENDERER, PLUGIN_UI_
 import { PLUGIN_TAB_VIEW_HOST, PLUGIN_TAB_VIEW_NAVIGATE, PLUGIN_TAB_VIEW_REQUEST, PLUGIN_TAB_VIEW_OPENED,
   PLUGIN_TAB_VIEW_MOUNT, PLUGIN_TAB_VIEW_UPDATE, PLUGIN_TAB_VIEW_RELEASE,
   type PluginTabViewMountRequest, type PluginTabViewMountResult } from '../shared/pluginUi';
+
 import { PERFORMANCE_TRACE_CHANNEL, PERFORMANCE_TRACE_EVENTS_CHANNEL, PERFORMANCE_TRACE_STATE_CHANNEL, type PerformanceTraceAPI, type PerformanceTraceState } from '../shared/performanceTrace';
 import { createAccessibilitySupportBridge } from './accessibilitySupport';
 import { createMicrophonePermissionSnapshot } from './microphonePermissionSnapshot';
@@ -8748,6 +8753,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:computer:update-driver', opts),
       onUpdateProgress: fanOutComputerDriverUpdateProgress,
     },
+  },
+
+  // ── 对话输入框：增强提示词 ────────────────────────────────────────
+  composer: {
+    enhancePrompt: (text: string): Promise<ComposerEnhancePromptSuccess> =>
+      ipcRenderer.invoke(COMPOSER_ENHANCE_PROMPT_CHANNEL, text),
   },
 
   // ── 剪贴板历史快捷面板 ────────────────────────────────────────────
