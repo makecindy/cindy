@@ -91,13 +91,15 @@ function setupDb(): void {
       origin_kind TEXT, origin_id TEXT, label TEXT, created_at INTEGER NOT NULL
     );
     CREATE TABLE session_pr_refs (
-      id TEXT PRIMARY KEY, session_id TEXT NOT NULL, owner TEXT NOT NULL,
+      id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+      provider TEXT NOT NULL DEFAULT 'github', host TEXT NOT NULL DEFAULT 'github.com',
+      owner TEXT NOT NULL,
       repo TEXT NOT NULL, pr_number INTEGER NOT NULL, url TEXT NOT NULL,
       first_seen_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL,
       pinned INTEGER NOT NULL DEFAULT 0, priority INTEGER NOT NULL DEFAULT 0,
       manually_added INTEGER NOT NULL DEFAULT 0, removed_at INTEGER,
       association_source TEXT NOT NULL DEFAULT 'legacy', association_origin TEXT,
-      UNIQUE(session_id, owner, repo, pr_number)
+      UNIQUE(session_id, provider, host, owner, repo, pr_number)
     );
   `);
   sqlite.prepare("INSERT INTO sessions (id, cleared_at, status) VALUES ('s1', NULL, 'active')").run();

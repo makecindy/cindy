@@ -63,6 +63,7 @@ export class GithubReadService {
       ...(method === 'get_pr_changes' ? { metadata: status.metadata ?? null } : {}),
       head_branch: status.branch,
       state: status.status,
+      conflicts: status.conflicts ?? null,
       head_sha: status.headSha ?? null,
       base_branch: status.baseBranch ?? null,
       checks: status.checks ?? null,

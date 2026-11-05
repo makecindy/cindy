@@ -332,6 +332,8 @@ export interface BotGroupThreadShareView {
   authorName: string;
   /** The sharer wrote the reply themselves (sent to the thread and the main chat). */
   sharedByAuthor: boolean;
+  /** Original reply's targets, paired with its content. Older projections omit this. */
+  mentions?: BotGroupMention;
   content: string;
   attachments: BotGroupAttachment[];
   createdAt: number | null;

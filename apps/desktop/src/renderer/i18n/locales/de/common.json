@@ -13002,7 +13002,7 @@
       "codexUsageLimit": "Das verbundene Codex-Konto hat sein Nutzungslimit erreicht. Warte, bis das Limit zurückgesetzt wird, oder wechsle vor dem erneuten Versuch zu einem anderen verfügbaren Konto.",
       "gatewayQuotaExhausted": "Dein Cindy AI-Guthaben ist aufgebraucht. Lade Guthaben auf, um fortzufahren.",
       "viewBalance": "Guthaben anzeigen",
-      "viewBalanceTitle": "Öffne „Nutzung & Abrechnung“, um dein Guthaben zu prüfen und aufzuladen",
+      "viewBalanceTitle": "Öffne „Nutzung und Abrechnung“, um dein Guthaben zu prüfen und aufzuladen",
       "credentialSwitchBusy": "Eine andere Codex-Aufgabe läuft noch. Daher kann der Anbieter für diese Sitzung noch nicht angewendet werden (der gemeinsam genutzte Codex-Prozess muss neu gestartet werden). Versuch es erneut, sobald diese Aufgaben abgeschlossen sind.",
       "accountBoundaryPending": "Cindy stellt den Kontostatus noch um. Daher kann diese Aufgabe noch nicht starten. Warte kurz und klicke dann auf „Erneut versuchen“. Falls das weiterhin passiert, starte Cindy neu.",
       "codexThreadStale": "Der Codex-Authentifizierungsmodus wurde geändert – diese Sitzung kann nicht fortgesetzt werden. Starte eine neue Sitzung, um ihn anzuwenden.",
@@ -13391,7 +13391,7 @@
         "empty": "Keine Befehle verfügbar."
       },
       "cost": {
-        "title": "Sitzungskosten",
+        "title": "Sitzungsnutzung",
         "tokensUsed": "Verwendete Tokens (dieser Dialogschritt)"
       },
       "pwd": {
@@ -14690,7 +14690,7 @@
       "branchTooltip": "Aktueller Branch: {{branch}}",
       "pr": {
         "status": {
-          "open": "Öffnen",
+          "open": "Offen",
           "draft": "Entwurf",
           "merged": "Zusammengeführt",
           "closed": "Geschlossen"
@@ -14831,7 +14831,9 @@
           "summaryAria": "Zusammenfassung von MR !{{number}}",
           "urlPlaceholder": "GitHub-PR- oder GitLab-MR-Link",
           "notFound": "MR nicht gefunden oder für das aktuelle Konto nicht sichtbar"
-        }
+        },
+        "merge": "Zusammenführung",
+        "conflicts": "Konflikte"
       }
     },
     "schedule": {

@@ -13037,7 +13037,7 @@
       "codexUsageLimit": "The connected Codex account has reached its usage limit. Wait for the limit to reset, or switch to another available account before retrying.",
       "gatewayQuotaExhausted": "Your Cindy AI balance is used up. Add funds to continue.",
       "viewBalance": "View balance",
-      "viewBalanceTitle": "Open Usage & Billing to check your balance and add funds",
+      "viewBalanceTitle": "Open Usage and billing to check your balance and add funds",
       "credentialSwitchBusy": "Another Codex task is still running, so the provider for this session can't be applied yet (the shared Codex process needs a restart). Retry after those tasks finish.",
       "accountBoundaryPending": "Cindy is still switching account state, so this task can't start yet. Wait a moment, then press Retry. If this keeps happening, restart Cindy.",
       "codexThreadStale": "Codex auth mode changed — this session can't continue. Start a new session to apply it.",
@@ -13426,7 +13426,7 @@
         "empty": "No commands available."
       },
       "cost": {
-        "title": "Session Cost",
+        "title": "Session Usage",
         "tokensUsed": "Tokens Used (This Turn)"
       },
       "pwd": {
@@ -14831,7 +14831,9 @@
           "summaryAria": "MR !{{number}} summary",
           "urlPlaceholder": "GitHub PR or GitLab MR URL",
           "notFound": "MR not found, or the current account cannot view it"
-        }
+        },
+        "merge": "Merge",
+        "conflicts": "Conflicts"
       }
     },
     "schedule": {

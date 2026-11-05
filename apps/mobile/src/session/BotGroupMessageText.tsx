@@ -3,11 +3,15 @@
  */
 import { botGroupBodyParts } from '@cindy/maker-shared/botGroupPresentation';
 import type { BotGroupAuthorKind } from '@cindy/maker-shared/botGroupChat';
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
-import { Linking, Platform, Pressable, ScrollView, StyleSheet, View, useWindowDimensions, type LayoutChangeEvent } from 'react-native';
+import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Linking, Pressable, Platform, ScrollView, StyleSheet, View, useWindowDimensions, type GestureResponderEvent, type LayoutChangeEvent, type StyleProp, type TextStyle } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { latexToUnicodeApproximation } from '@cindy/maker-shared/math-markdown';
-import { splitBotGroupMentionSegments } from '@cindy/maker-shared/botGroupMentions';
+import { HighlightedCodeText } from './HighlightedCodeText';
+import { MarkdownCodeCopyButton } from './MarkdownCodeCopyButton';
+import { MermaidDiagramWebView } from './mermaidWebView';
+import { MathFormulaWebView } from './mathWebView';
+import { splitBotGroupMentionSegments, type BotGroupTextSegment } from '@cindy/maker-shared/botGroupMentions';
 import { Text } from '@/components/AppText';
 import { MarkdownSelectableText, MarkdownSelectableSpan } from './MarkdownSelectableText';
 import { fontWeight, monoFont, useThemedStyles, type ThemeColors } from '@/theme';
@@ -15,10 +19,7 @@ import { lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import { parseMobileMarkdown, type MobileMarkdownBlock, type MobileMarkdownInline } from './messageMarkdown';
 import { buildMessageContentLayout } from './messageContentLayout';
 import { buildMobileMarkdownTableColumnWidths } from './messageTableLayout';
-import { HighlightedCodeText } from './HighlightedCodeText';
-import { MarkdownCodeCopyButton } from './MarkdownCodeCopyButton';
-import { MermaidDiagramWebView } from './mermaidWebView';
-import { MathFormulaWebView } from './mathWebView';
+import { botGroupMentionMember, type BotGroupMentionContext, type BotGroupMentionPoint } from './botGroupMentions';
 
 type Styles = ReturnType<typeof makeStyles>;
 type BodyOptions = {
@@ -29,38 +30,90 @@ type BodyOptions = {
   onOpenDiagram?: (source: string) => void;
 };
 
-function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles, options: BodyOptions): ReactNode[] {
-  const Span = Platform.OS === 'ios' ? MarkdownSelectableSpan : Text;
-  return inlines.map((inline, index) => {
-    if (inline.marks?.length) {
-      const markStyles = { strong: styles.strong, emphasis: styles.emphasis, strikethrough: styles.strike };
-      return (
-        <Span key={index} style={inline.marks.map((mark) => markStyles[mark])}>
-          {inline.type === 'link' && !options.richContent ? inline.text : renderInlines([{ ...inline, marks: undefined }], styles, options)}
-        </Span>
-      );
-    }
-    switch (inline.type) {
-      case 'strong': return <Span key={index} style={styles.strong}>{inline.text}</Span>;
-      case 'emphasis': return <Span key={index} style={styles.emphasis}>{inline.text}</Span>;
-      case 'strikethrough': return <Span key={index} style={styles.strike}>{inline.text}</Span>;
-      case 'code': return <Span key={index} style={styles.inlineCode}>{inline.text}</Span>;
-      case 'link': {
-        const clickable = options.richContent && options.interactive !== false && /^https?:\/\//i.test(inline.url);
-        return <Span key={index} style={clickable ? styles.link : undefined}
-          onPress={clickable ? () => { void Linking.openURL(inline.url).catch(() => undefined); } : undefined}>{inline.text}</Span>;
+
+/** Observe touches without claiming the responder or changing the native text tree. */
+function useMentionTouchContext(context?: BotGroupMentionContext) {
+  const touch = useRef<BotGroupMentionPoint | undefined>(undefined);
+  const body = useRef<View>(null);
+  return {
+    ref: body,
+    onTouchStart: (event: GestureResponderEvent) => {
+      const { pageX, pageY } = event.nativeEvent;
+      touch.current = Number.isFinite(pageX) && Number.isFinite(pageY) ? { x: pageX, y: pageY } : undefined;
+    },
+    context: context ? { ...context, onPress: (member, anchor) => {
+      const point = touch.current ?? anchor;
+      touch.current = undefined;
+      if (point) context.onPress(member, point);
+      else {
+        // Accessibility activation has no finger position. Anchor to the
+        // measured sent-text bounds instead of dropping the link activation.
+        const target = body.current;
+        target?.measureInWindow((x, y, width, height) => {
+          if (body.current === target && width > 0 && height > 0) {
+            context.onPress(member, { x: x + width / 2, y: y + height / 2 });
+          }
+        });
       }
-      case 'math': return <Span key={index}>{options.richContent ? latexToUnicodeApproximation(inline.text) : inline.text}</Span>;
-      case 'image': return <Span key={index}>{inline.alt ? `[${inline.alt}]` : ''}</Span>;
-      default: return <Span key={index}>{inline.text}</Span>;
-    }
+    } } as BotGroupMentionContext : undefined,
+  };
+}
+
+function renderMentionSegments(segments: readonly (BotGroupTextSegment & { label?: string })[], styles: Styles, context?: BotGroupMentionContext, textStyle?: StyleProp<TextStyle>): ReactNode {
+  const Span = Platform.OS === 'ios' ? MarkdownSelectableSpan : Text;
+  return segments.map((segment, index) => {
+    const member = segment.mention && context ? botGroupMentionMember(segment.label ?? segment.text, context) : undefined;
+    return <Span key={index} style={[textStyle, segment.mention && styles.mention]}
+      accessibilityRole={member ? 'link' : undefined}
+      onPress={member ? event => { event.stopPropagation(); context?.onPress(member); } : undefined}>{segment.text}</Span>;
   });
 }
 
-function BotGroupMarkdownTable({ block, styles, options }: {
+function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles, options: BodyOptions, context?: BotGroupMentionContext): ReactNode[] {
+  const Span = Platform.OS === 'ios' ? MarkdownSelectableSpan : Text;
+  const markStyles = { strong: styles.strong, emphasis: styles.emphasis, strikethrough: styles.strike };
+  let offset = 0;
+  const runs = inlines.map(inline => {
+    const text = inline.type === 'image' ? inline.alt ? `[${inline.alt}]` : ''
+      : inline.type === 'math' && options.richContent ? latexToUnicodeApproximation(inline.text) : inline.text;
+    const start = offset;
+    offset += text.length;
+    return { inline, text, start, end: offset, excluded: ['code', 'link', 'image'].includes(inline.type) };
+  });
+  offset = 0;
+  // Match the whole visible word before mapping back to styled native runs:
+  // **@Ann**a is @Anna, and mail**@Ann**.test is still an email address.
+  const segments = splitBotGroupMentionSegments(runs.map(run => run.text).join(''), context?.labels ?? []).map(segment => {
+    const start = offset;
+    offset += segment.text.length;
+    return { ...segment, start, end: offset, label: segment.text,
+      mention: segment.mention && !runs.some(run => run.excluded && run.start < offset && run.end > start) };
+  });
+  return runs.map(({ inline, text, start, end, excluded }, index) => {
+    const textStyle = [...(inline.marks?.map(mark => markStyles[mark]) ?? []),
+      inline.type === 'strong' ? styles.strong : inline.type === 'emphasis' ? styles.emphasis
+        : inline.type === 'strikethrough' ? styles.strike : inline.type === 'code' ? styles.inlineCode : undefined];
+    if (inline.type === 'link') {
+      const clickable = options.richContent && options.interactive !== false && /^https?:\/\//i.test(inline.url);
+      return <Span key={index} style={[textStyle, clickable && styles.link]}
+        onPress={clickable ? () => { void Linking.openURL(inline.url).catch(() => undefined); } : undefined}>{text}</Span>;
+    }
+    // UITextView children inherit the root's style, not an enclosing span's.
+    // Keep formatting on each actual text run when splitting it around a mention.
+    // Code and existing links retain their original hierarchy and are never identity targets.
+    return <Span key={index} style={textStyle}>{excluded || !context ? text : renderMentionSegments(segments.flatMap(segment => {
+      const from = Math.max(start, segment.start);
+      const to = Math.min(end, segment.end);
+      return from < to ? [{ text: segment.text.slice(from - segment.start, to - segment.start), mention: segment.mention, label: segment.label }] : [];
+    }), styles, context, textStyle)}</Span>;
+  });
+}
+
+function BotGroupMarkdownTable({ block, styles, options, context }: {
   block: Extract<MobileMarkdownBlock, { type: 'table' }>;
   styles: Styles;
   options: BodyOptions;
+  context?: BotGroupMentionContext;
 }) {
   const { width: screenWidth } = useWindowDimensions();
   const [availableWidth, setAvailableWidth] = useState(0);
@@ -82,7 +135,7 @@ function BotGroupMarkdownTable({ block, styles, options }: {
       {widths.map((width, index) => (
         <View key={index} style={[styles.tableCell, { width }]}>
           <MarkdownSelectableText selectable style={[styles.tableText, header && styles.tableHeaderText]}>
-            {renderInlines(cells[index] ?? [], styles, options)}
+            {renderInlines(cells[index] ?? [], styles, options, context)}
           </MarkdownSelectableText>
         </View>
       ))}
@@ -96,18 +149,18 @@ function BotGroupMarkdownTable({ block, styles, options }: {
   </ScrollView>;
 }
 
-function renderBlock(block: MobileMarkdownBlock, styles: Styles, options: BodyOptions, diagramLabel: string): ReactNode {
+function renderBlock(block: MobileMarkdownBlock, styles: Styles, options: BodyOptions, diagramLabel: string, context?: BotGroupMentionContext): ReactNode {
   switch (block.type) {
     case 'heading':
-      return <MarkdownSelectableText key={block.key} selectable style={[styles.text, styles.heading]}>{renderInlines(block.inlines, styles, options)}</MarkdownSelectableText>;
+      return <MarkdownSelectableText key={block.key} selectable style={[styles.text, styles.heading]}>{renderInlines(block.inlines, styles, options, context)}</MarkdownSelectableText>;
     case 'blockquote':
       return <View key={block.key} style={styles.quote}>
-        <MarkdownSelectableText selectable style={[styles.text, styles.quoteText]}>{renderInlines(block.inlines, styles, options)}</MarkdownSelectableText>
+        <MarkdownSelectableText selectable style={[styles.text, styles.quoteText]}>{renderInlines(block.inlines, styles, options, context)}</MarkdownSelectableText>
       </View>;
     case 'list_item':
       return <View key={block.key} style={styles.listItem}>
         <Text style={styles.text}>{block.checked === undefined ? (block.ordered ? block.marker : '•') : block.checked ? '☑' : '☐'}</Text>
-        <MarkdownSelectableText selectable style={[styles.text, styles.listText]}>{renderInlines(block.inlines, styles, options)}</MarkdownSelectableText>
+        <MarkdownSelectableText selectable style={[styles.text, styles.listText]}>{renderInlines(block.inlines, styles, options, context)}</MarkdownSelectableText>
       </View>;
     case 'code':
       if (options.richContent) {
@@ -131,9 +184,9 @@ function renderBlock(block: MobileMarkdownBlock, styles: Styles, options: BodyOp
       if (options.richContent) return <MathFormulaWebView active={options.active} key={block.key} source={block.text} testID="botGroup.mathFormula" />;
       return renderSourceBlock(block, styles);
     case 'table':
-      return <BotGroupMarkdownTable key={block.key} block={block} styles={styles} options={options} />;
+      return <BotGroupMarkdownTable key={block.key} block={block} styles={styles} options={options} context={context} />;
     default:
-      return <MarkdownSelectableText key={block.key} selectable style={styles.text}>{renderInlines(block.inlines, styles, options)}</MarkdownSelectableText>;
+      return <MarkdownSelectableText key={block.key} selectable style={styles.text}>{renderInlines(block.inlines, styles, options, context)}</MarkdownSelectableText>;
   }
 }
 
@@ -143,29 +196,27 @@ function renderSourceBlock(block: { key: string; text: string }, styles: Styles)
   </View>;
 }
 
-export function BotGroupMarkdownText({ content, authorKind, richContent = false, interactive = true, active = true, onOpenDiagram }: {
-  content: string; authorKind?: BotGroupAuthorKind;
+export function BotGroupMarkdownText({ content, authorKind, mentionContext, richContent = false, interactive = true, active = true, onOpenDiagram }: {
+  content: string; authorKind?: BotGroupAuthorKind; mentionContext?: BotGroupMentionContext;
 } & BodyOptions) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
+  const touch = useMentionTouchContext(mentionContext);
   const blocks = useMemo(() => botGroupBodyParts(content, authorKind).flatMap((part, index): MobileMarkdownBlock[] => part.kind === 'markdown'
     ? parseMobileMarkdown(part.content).map(block => ({ ...block, key: `${index}:${block.key}` }))
     : [{ type: 'paragraph', key: String(index), inlines: [{ type: 'text', text: part.content }] }]), [content, authorKind]);
   const options = { richContent, interactive, active, onOpenDiagram };
   const diagramLabel = t('message.renderer.openDiagramDetail');
-  return <View style={styles.body}>{blocks.map((block) => renderBlock(block, styles, options, diagramLabel))}</View>;
+  return <View ref={touch.ref} collapsable={false} style={styles.body} onTouchStart={touch.onTouchStart}>{blocks.map((block) => renderBlock(block, styles, options, diagramLabel, touch.context))}</View>;
 }
 
 /** The user's own words: plain text with `@name` shown as a mention mark. */
-export function BotGroupUserText({ content, mentionLabels }: { content: string; mentionLabels: readonly string[] }) {
-  const Span = Platform.OS === 'ios' ? MarkdownSelectableSpan : Text;
+export function BotGroupUserText({ content, mentionLabels, mentionContext }: { content: string; mentionLabels: readonly string[]; mentionContext?: BotGroupMentionContext }) {
   const styles = useThemedStyles(makeStyles);
-  const segments = useMemo(() => splitBotGroupMentionSegments(content, mentionLabels), [content, mentionLabels]);
-  return <MarkdownSelectableText selectable style={styles.text}>
-    {segments.map((segment, index) => segment.mention
-      ? <Span key={index} style={styles.mention}>{segment.text}</Span>
-      : <Span key={index}>{segment.text}</Span>)}
-  </MarkdownSelectableText>;
+  const touch = useMentionTouchContext(mentionContext);
+  return <View ref={touch.ref} collapsable={false} onTouchStart={touch.onTouchStart}><MarkdownSelectableText selectable style={styles.text}>
+    {renderMentionSegments(splitBotGroupMentionSegments(content, mentionLabels), styles, touch.context)}
+  </MarkdownSelectableText></View>;
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
@@ -202,6 +253,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
   tableText: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
   tableHeaderText: { color: colors.textSecondary, fontWeight: fontWeight.medium },
-  // Match desktop's text-only mention highlight without a chip fill.
-  mention: { fontWeight: fontWeight.medium },
+  // Same as PC @ ranges: link color only; preserve authored weight and decorations.
+  mention: { color: colors.groupMentionText },
 });
