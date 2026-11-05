@@ -6449,7 +6449,7 @@
     "tina": {
       "chat": {
         "title": "Conversation",
-        "description": "Conversations simples sans dépôt ; sélectionnez « chat » depuis Slack, Telegram ou X, une session par fil de conversation."
+        "description": "Conversations simples sans dépôt ; sélectionnez « chat » depuis Slack, Telegram, X ou Feishu / Lark, une session par fil de conversation."
       },
       "prefs": {
         "agentLabel": "Agent",

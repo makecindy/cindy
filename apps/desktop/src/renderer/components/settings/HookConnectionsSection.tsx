@@ -1306,7 +1306,10 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
               <span className="w-36 shrink-0 px-2.5 py-1.5 text-13 font-medium text-[var(--text-primary)]">
                 {t('settings.tina.chat.title')}
               </span>
-              <span className="min-w-0 flex-1 truncate text-12 text-[var(--text-tertiary)]">
+              <span
+                className="min-w-0 flex-1 truncate text-12 text-[var(--text-tertiary)]"
+                title={t('settings.tina.chat.description')}
+              >
                 {t('settings.tina.chat.description')}
               </span>
             </div>

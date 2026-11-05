@@ -6449,7 +6449,7 @@
     "tina": {
       "chat": {
         "title": "Conversa",
-        "description": "Conversas simples sem repositório; selecione \"chat\" no Slack, Telegram ou X, com uma sessão por fluxo de conversa."
+        "description": "Conversas simples sem repositório; selecione \"chat\" no Slack, Telegram, X ou Feishu / Lark, com uma sessão por fluxo de conversa."
       },
       "prefs": {
         "agentLabel": "Agent",

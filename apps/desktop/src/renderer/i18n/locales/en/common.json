@@ -6387,7 +6387,7 @@
     "tina": {
       "chat": {
         "title": "Chat",
-        "description": "Plain conversations without any repository; select \"chat\" from Slack, Telegram, or X, one session per conversation lane."
+        "description": "Plain conversations without any repository; select \"chat\" from Slack, Telegram, X, or Feishu / Lark, one session per conversation lane."
       },
       "prefs": {
         "agentLabel": "Agent",

@@ -6387,7 +6387,7 @@
     "tina": {
       "chat": {
         "title": "Chat",
-        "description": "Einfache Unterhaltungen ohne Repository; wähle „chat“ in Slack, Telegram oder X, mit einer Sitzung pro Unterhaltungsstrang."
+        "description": "Einfache Unterhaltungen ohne Repository; wähle „chat“ in Slack, Telegram, X oder Feishu / Lark, mit einer Sitzung pro Unterhaltungsstrang."
       },
       "prefs": {
         "agentLabel": "Agent",

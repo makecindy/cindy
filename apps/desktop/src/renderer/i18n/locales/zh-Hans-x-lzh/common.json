@@ -6344,7 +6344,7 @@
     "tina": {
       "chat": {
         "title": "言谈",
-        "description": "不落任何仓库之纯言谈；于 Slack、Telegram 或 X 中选 chat 即可用之，每条言谈 lane 各对应一差事。"
+        "description": "不落任何仓库之纯言谈；于 Slack、Telegram、X 或飞书 / Lark 中选 chat 即可用之，每条言谈 lane 各对应一差事。"
       },
       "prefs": {
         "agentLabel": "Agent",
