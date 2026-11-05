@@ -248,6 +248,21 @@ describe('ComputerUseSection driver update completion', () => {
     },
   );
 
+  it('explains a rate-limited check instead of a generic failure', async () => {
+    const { computer } = installApi();
+    computer.checkUpdate.mockReset().mockResolvedValueOnce({
+      ...offer,
+      latestVersion: null,
+      updateAvailable: false,
+      checkStatus: 'error',
+      checkError: { kind: 'rate_limited' },
+    });
+    render(<ComputerUseSection />);
+    await screen.findByText(`${updateKey}.rateLimited`);
+    expect(screen.queryByText(`${updateKey}.checkFailed`)).toBeNull();
+    expect(screen.getByRole('button', { name: `${updateKey}.retry` })).toBeTruthy();
+  });
+
   it('keeps manual checking available when up to date and displays a newly found update', async () => {
     const { computer } = installApi();
     computer.checkUpdate.mockReset().mockResolvedValueOnce(upToDate).mockResolvedValue(offer);

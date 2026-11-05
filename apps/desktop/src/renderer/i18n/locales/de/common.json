@@ -5686,6 +5686,7 @@
           "checking": "Nach Updates wird gesucht…",
           "upToDate": "Auf dem neuesten Stand",
           "checkFailed": "Suche nach Updates fehlgeschlagen",
+          "rateLimited": "GitHub begrenzt gerade die Update-Abfragen",
           "lastChecked": "Zuletzt geprüft: {{time}}",
           "check": "Nach Updates suchen",
           "retry": "Erneut versuchen",

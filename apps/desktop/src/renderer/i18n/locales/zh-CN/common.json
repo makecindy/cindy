@@ -5643,6 +5643,7 @@
           "checking": "正在检查更新…",
           "upToDate": "已是最新版本",
           "checkFailed": "检查更新失败",
+          "rateLimited": "GitHub 更新接口已限流，稍后再试",
           "lastChecked": "上次检查 {{time}}",
           "check": "检查更新",
           "retry": "重试",

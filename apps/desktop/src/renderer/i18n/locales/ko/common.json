@@ -5643,6 +5643,7 @@
           "checking": "업데이트 확인 중…",
           "upToDate": "최신 버전입니다",
           "checkFailed": "업데이트를 확인하지 못했습니다",
+          "rateLimited": "GitHub 요청 한도에 걸렸습니다",
           "lastChecked": "마지막 확인: {{time}}",
           "check": "업데이트 확인",
           "retry": "다시 시도",

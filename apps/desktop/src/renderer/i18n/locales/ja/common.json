@@ -5643,6 +5643,7 @@
           "checking": "更新を確認中…",
           "upToDate": "最新バージョンです",
           "checkFailed": "更新を確認できませんでした",
+          "rateLimited": "GitHub によるレート制限中です",
           "lastChecked": "前回の確認: {{time}}",
           "check": "更新を確認",
           "retry": "再試行",
