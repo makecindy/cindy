@@ -43,6 +43,7 @@
     gitSafetyOff: Object.freeze({ mode: 'off' }),
     claimDenied: Object.freeze({ claimed: false }),
     emptyOverrides: Object.freeze({}),
+    emptyRecord: Object.freeze({}),
     botGroupsEmpty: Object.freeze({ ok: true, groups: Object.freeze([]) }),
     deviceLinkState: Object.freeze({ status: 'unavailable', devices: Object.freeze([]) }),
     voiceNotReady: Object.freeze({
@@ -177,6 +178,15 @@
     'notificationSetDesktopEnabled': () => undefined,
     'takePendingDeepLink': () => null,
     'safeStorageRead': () => null,
+    'providerGroup.command': (args) => {
+      const action = args?.[0]?.action ?? '';
+      if (action === 'list') return STATIC.emptyRecord;
+      if (action === 'candidates') return STATIC.emptyList;
+      if (action === 'session-group') return null;
+      const error = new Error(`provider groups are not available on cindy-host yet (${action})`);
+      error.code = 'HOST_CHANNEL_UNSUPPORTED';
+      return Promise.reject(error);
+    },
     'maker.listBotGroups': () => STATIC.botGroupsEmpty,
     'maker.botGroupOutbox': () => STATIC.emptyList,
     'maker.schedule.listSidebarIndexRuns': () => STATIC.emptyList,
