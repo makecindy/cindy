@@ -566,12 +566,12 @@ export function startCompanionCloud(input: {
   }
 
   /** Everything of a companion homed here reaches the server, without moving it. */
-  async function flushOwn(botId: string): Promise<CompanionCloudActionResult> {
+  async function flushOwn(botId: string, options: { preferencesOnly?: boolean } = {}): Promise<CompanionCloudActionResult> {
     if (!input.selfDeviceId || actorOf(botId)?.homeDeviceId !== input.selfDeviceId) return { ok: false, code: 'HOME_CONFLICT' };
     if (input.paused?.(botId)) return { ok: false, code: 'PAUSED' };
     if (await input.host.isBotBusy?.(botId)) return { ok: false, code: 'BUSY' };
     try {
-      await flush(botId);
+      await flush(botId, options);
       // A turn that started during the flush keeps producing: not settled yet (as before a hand-over).
       if (await input.host.isBotBusy?.(botId)) return { ok: false, code: 'BUSY' };
       return { ok: true };
@@ -896,7 +896,9 @@ export function startCompanionCloud(input: {
 
     async flushHere(botId) {
       if (!input.selfDeviceId || !live()) return { ok: false, code: 'NOT_ENABLED' };
-      return flushOwn(botId);
+      // Asked by another computer merging Cindy: it may be an older version that reads only the
+      // preferences (the request does not say), so a value only the store holds still refuses.
+      return flushOwn(botId, { preferencesOnly: true });
     },
 
     arrivalNotices: botId => state.bot(botId)?.arrivalNotices ?? [],

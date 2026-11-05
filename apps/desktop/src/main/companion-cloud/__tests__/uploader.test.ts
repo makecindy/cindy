@@ -375,6 +375,18 @@ describe('companion store', () => {
     await expect(t.uploader.syncBot('bot', 'actor', Number.POSITIVE_INFINITY, { requireAll: true })).resolves.toBe(0);
   });
 
+  it('still clears the store copy of a shrunk value during a hand-over limited to the preferences', async () => {
+    const t = storeSetup();
+    const key = 'companion.memory.v1:big.md';
+    t.setValues([profile('soul'), memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000))]);
+    await t.uploader.syncBot('bot', 'actor');
+    t.setValues([profile('soul'), memory('big.md', 'small now')]);
+    await t.uploader.syncBot('bot', 'actor', Number.POSITIVE_INFINITY, { requireAll: true, preferencesOnly: true });
+    // Left live, the old large copy would win over the small preference on the next restore.
+    expect(t.entries.get(key)?.deleted).toBe(true);
+    expect(t.prefs.get(key)?.value).toEqual(memory('big.md', 'small now').value);
+  });
+
   it('passes a deletion of a value kept only in the store to the next restore', async () => {
     const t = storeSetup();
     const big = memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000));

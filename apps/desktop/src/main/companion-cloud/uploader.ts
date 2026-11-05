@@ -191,7 +191,10 @@ export function createCompanionUploader(deps: {
       const json = canonicalJson(value);
       const inPreferences = key.length <= MAX_KEY_LENGTH && Buffer.byteLength(json) <= maxBytes;
       const hash = sha256(json);
-      const inStore = !!store && !options.preferencesOnly && key.length <= STORE_KEY_MAX_LENGTH && refused.get(`${actorId}\n${key}`) !== hash;
+      const storeUsable = !!store && key.length <= STORE_KEY_MAX_LENGTH && refused.get(`${actorId}\n${key}`) !== hash;
+      // `preferencesOnly` only stops a value the reader could not see from counting as uploaded;
+      // clearing the store copy of a value that shrank or was deleted must still happen.
+      const inStore = storeUsable && (inPreferences || !options.preferencesOnly);
       if (!inPreferences && !inStore) {
         deps.log?.warn('Companion value too large to upload; skipped', { actorId, keyKind: key.split(':')[0], bytes: Buffer.byteLength(json) });
         skipped += 1;
