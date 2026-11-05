@@ -13116,6 +13116,12 @@
       "text": "前有自運未成。",
       "precheck": "自動查驗暫受阻。",
       "rateLimited": "自動查驗暫受阻：請求限流。",
+      "pluginMissing": "自動查驗暫受阻：「{{name}}」法器未裝，裝畢自復。",
+      "pluginMissingUnnamed": "自動查驗暫受阻：所需法器未裝，裝畢自復。",
+      "pluginDisabled": "自動查驗暫受阻：「{{name}}」法器未啟，啟之自復。",
+      "pluginDisabledUnnamed": "自動查驗暫受阻：所需法器未啟，啟之自復。",
+      "installPlugin": "裝法器",
+      "openPlugin": "觀法器",
       "dismissTitle": "闔往昔未成之示"
     },
     "worktreeRestoreBanner": {

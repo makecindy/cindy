@@ -13125,6 +13125,12 @@
       "text": "此前有自动运行失败。",
       "precheck": "自动检查暂时受阻。",
       "rateLimited": "自动检查暂时受阻：请求限流。",
+      "pluginMissing": "自动检查暂时受阻：「{{name}}」插件未安装，装好后自动恢复。",
+      "pluginMissingUnnamed": "自动检查暂时受阻：需要的插件未安装，装好后自动恢复。",
+      "pluginDisabled": "自动检查暂时受阻：「{{name}}」插件未启用，启用后自动恢复。",
+      "pluginDisabledUnnamed": "自动检查暂时受阻：需要的插件未启用，启用后自动恢复。",
+      "installPlugin": "安装插件",
+      "openPlugin": "查看插件",
       "dismissTitle": "关闭历史失败提示"
     },
     "worktreeRestoreBanner": {

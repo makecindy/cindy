@@ -90,7 +90,7 @@
     "requestNotReplayed": "Cette requête n'a pas été répétée. Vérifiez le résultat de l'opération d'origine dans l'app.",
     "storageUnavailable": "Impossible de lire ou d'enregistrer les données de connexion des apps locales. Les autorisations existantes ont été conservées.",
     "stopUnconfirmed": "Les nouveaux messages vers cette exécution sont bloqués, mais l'arrêt du processus n'a pas été confirmé.",
-    "interactionUnavailable": "Le Harness requiert une interaction que cette app ne peut pas recevoir.",
+    "interactionUnavailable": "Le moteur requiert une interaction que cette app ne peut pas recevoir.",
     "interrupted": "Cet envoi a été interrompu.",
     "toolTimeout": "Le délai de l'outil de l'app a expiré. Il n'a pas été relancé automatiquement.",
     "connectResult": "Revenez à l'app demandeuse pour connaître le résultat de la connexion. L'autorisation se décide dans la fenêtre de confirmation de Cindy.",
@@ -206,7 +206,7 @@
       "MIGRATION_REQUIRES_REPOSITORY_ROOT": "Pour les projets Git, le répertoire de la tâche doit être la racine du dépôt.",
       "MIGRATION_SUBMODULE_UNSUPPORTED": "Les projets avec des sous-modules Git ne peuvent pas encore être copiés.",
       "MIGRATION_NO_SPACE": "Espace insuffisant sur l'ordinateur de destination.",
-      "MIGRATION_TARGET_MODEL_UNAVAILABLE": "La destination n'a aucun modèle disponible pour le Harness de cette tâche. Connectez-y d'abord un fournisseur.",
+      "MIGRATION_TARGET_MODEL_UNAVAILABLE": "La destination n'a aucun modèle disponible pour le moteur de cette tâche. Connectez-y d'abord un fournisseur.",
       "MIGRATION_UNSUPPORTED": "Mettez à jour les deux ordinateurs vers une version qui prend en charge la copie de tâches.",
       "MIGRATION_TASK_QUEUED": "Cette tâche a des messages en file d'attente. Terminez-les ou supprimez-les avant de la copier.",
       "MIGRATION_SOURCE_CHANGED": "La tâche source a changé pendant la préparation. Relancez la copie.",
@@ -4054,14 +4054,14 @@
           "contextLimitAria": "Limite de contexte (jetons, K ou M)",
           "compaction": {
             "title": "Compactage automatique",
-            "hint": "Compacter le contexte au pourcentage d'utilisation sélectionné. Une valeur plus basse compacte plus tôt ; les limites du Harness s'appliquent toujours.",
+            "hint": "Compacter le contexte au pourcentage d'utilisation sélectionné. Une valeur plus basse compacte plus tôt ; les limites du moteur s'appliquent toujours.",
             "default": "{{pct}} % (par défaut)",
-            "timing": "S'applique à tous les Harness disponibles pour ce modèle et cette source lors des exécutions suivantes, sans interrompre une réponse."
+            "timing": "S'applique à tous les moteurs disponibles pour ce modèle et cette source lors des exécutions suivantes, sans interrompre une réponse."
           },
           "contextLimitRoute": "Actuellement {{tokens}} jetons",
           "contextLimitOverWindow": "Supérieur à la fenêtre déclarée par le fournisseur ; les requêtes peuvent échouer.",
           "restoreDefault": "Réinitialiser",
-          "engines": "Prise en charge des Harness",
+          "engines": "Prise en charge des moteurs",
           "enginesHint": "Le mode de compatibilité convertit les requêtes localement dans Cindy. Il est désactivé par défaut et peut être activé au besoin.",
           "engineUnsupported": "Non pris en charge",
           "engineNotConfigured": "Non configuré",
@@ -4097,7 +4097,7 @@
             "video": "Vidéo",
             "file": "Fichier"
           },
-          "effortMixed": "L'effort diffère selon le Harness. Une sélection s'applique aux Harness qui prennent en charge ce niveau.",
+          "effortMixed": "L'effort diffère selon le moteur. Une sélection s'applique aux moteurs qui prennent en charge ce niveau.",
           "protocol": {
             "reference": "API native",
             "compatibility": "Mode de compatibilité",
@@ -5378,7 +5378,7 @@
         "custom": "Combinaison personnalisée. Ajustez directement les champs ci-dessous."
       },
       "maxConcurrent": "Limite de commandes simultanées",
-      "maxConcurrentHint": "Nombre maximal de commandes que le Harness Claude Code peut exécuter simultanément ; les commandes supplémentaires attendent dans une file. 0 signifie illimité. Les commandes Codex s'exécutent dans leur propre sandbox sans hook par commande et sont couvertes à la place par les niveaux de priorité et de plafond de threads.",
+      "maxConcurrentHint": "Nombre maximal de commandes que le moteur Claude Code peut exécuter simultanément ; les commandes supplémentaires attendent dans une file. 0 signifie illimité. Les commandes Codex s'exécutent dans leur propre sandbox sans hook par commande et sont couvertes à la place par les niveaux de priorité et de plafond de threads.",
       "priority": "Priorité des processus",
       "priorityHint": "Réduisez-la pour que les Agents n'utilisent que la capacité inactive et que les applications au premier plan restent réactives. La réduction s'applique aux Agents en cours d'exécution en 15 secondes environ ; le retour à Normale ne s'applique qu'aux Agents nouvellement démarrés.",
       "priorityOptions": {
@@ -12361,7 +12361,7 @@
         "effortEndFast": "Plus rapide",
         "effortEndSmart": "Plus intelligent",
         "railSameEngine": "{{agent}} uniquement",
-        "crossEngineWarning": "Changer de Harness reconstruit le contexte et peut entraîner une perte de contenu",
+        "crossEngineWarning": "Changer de moteur reconstruit le contexte et peut entraîner une perte de contenu",
         "favoritesSyncFailed": "Impossible de synchroniser les favoris. Rouvrez le sélecteur pour réessayer ; l'ordinateur distant a peut-être besoin d'une mise à jour.",
         "favoritesSyncFailedUnreachable": "Les favoris ne sont pas encore synchronisés : cet ordinateur est injoignable. Rouvrez le sélecteur une fois la connexion rétablie.",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
@@ -12642,12 +12642,12 @@
         "cancelSwitch": "Conserver ce modèle"
       },
       "agentSwitch": {
-        "engineNotReady": "Harness changé, mais le nouveau Harness n'a pas pu démarrer ; une nouvelle tentative aura lieu à l'envoi d'un message",
-        "failed": "Échec du changement de Harness ; non appliqué",
+        "engineNotReady": "Le moteur a été changé, mais le nouveau moteur n'a pas pu démarrer ; une nouvelle tentative aura lieu à l'envoi d'un message",
+        "failed": "Échec du changement de moteur ; non appliqué",
         "deferred": "Changement programmé : passage à {{agent}} · {{model}} à l'envoi de votre prochain message",
         "confirmation": {
           "title": "Changer d'Agent ?",
-          "description": "Le nouveau Harness de l'Agent reprend à partir d'un résumé de transfert : le raisonnement et d'autres contenus ne sont donc pas garantis d'être parfaitement conservés. Revenir en arrière vous permet toujours de poursuivre la session du Harness d'origine. Le changement interrompt aussi une fois le cache du prompt et peut augmenter la consommation de jetons.",
+          "description": "Le nouveau moteur de l'Agent reprend à partir d'un résumé de transfert : le raisonnement et d'autres contenus ne sont donc pas garantis d'être parfaitement conservés. Revenir en arrière vous permet toujours de poursuivre la session du moteur d'origine. Le changement interrompt aussi une fois le cache du prompt et peut augmenter la consommation de jetons.",
           "confirm": "Changer d'Agent",
           "cancel": "Conserver l'Agent actuel",
           "dontShowAgain": "Ne plus me le rappeler"
@@ -12663,9 +12663,9 @@
       }
     },
     "agentSelect": {
-      "label": "Harness",
+      "label": "Moteur",
       "trigger": {
-        "aria": "Sélectionner le Harness : {{agent}}"
+        "aria": "Sélectionner le moteur : {{agent}}"
       }
     },
     "atMention": {
@@ -13264,6 +13264,12 @@
       "text": "Une exécution automatique a échoué.",
       "precheck": "Les vérifications automatiques sont temporairement bloquées.",
       "rateLimited": "Les vérifications automatiques sont temporairement bloquées par une limite de débit des requêtes.",
+      "pluginMissing": "Les vérifications automatiques sont bloquées : le plugin {{name}} n'est pas installé. Elles reprendront une fois le plugin installé.",
+      "pluginMissingUnnamed": "Les vérifications automatiques sont bloquées : un plugin requis n'est pas installé. Elles reprendront une fois le plugin installé.",
+      "pluginDisabled": "Les vérifications automatiques sont bloquées : le plugin {{name}} est désactivé. Elles reprendront une fois le plugin activé.",
+      "pluginDisabledUnnamed": "Les vérifications automatiques sont bloquées : un plugin requis est désactivé. Elles reprendront une fois le plugin activé.",
+      "installPlugin": "Installer le plugin",
+      "openPlugin": "Ouvrir le plugin",
       "dismissTitle": "Fermer l'avis d'échec passé"
     },
     "worktreeRestoreBanner": {
@@ -13674,8 +13680,8 @@
       "agentSwitch": {
         "label": "Passage de {{from}} à {{to}}",
         "toggleHint": "Voir le contexte de transfert",
-        "handoffTitle": "Transfert : le résumé du contexte envoyé au nouveau Harness lors du changement (ne fait pas partie de la transcription de la conversation ; affiché uniquement ici)",
-        "handoffTitleEnglishSource": "Transfert : le résumé du contexte envoyé au nouveau Harness lors du changement (ne fait pas partie de la transcription de la conversation ; affiché uniquement ici)",
+        "handoffTitle": "Transfert : le résumé du contexte envoyé au nouveau moteur lors du changement (ne fait pas partie de la transcription de la conversation ; affiché uniquement ici)",
+        "handoffTitleEnglishSource": "Transfert : le résumé du contexte envoyé au nouveau moteur lors du changement (ne fait pas partie de la transcription de la conversation ; affiché uniquement ici)",
         "fallbackBadge": "Repris à partir du résumé",
         "resumedBadge": "session reprise",
         "relocatedHere": "L'Agent s'exécute désormais sur cet ordinateur",

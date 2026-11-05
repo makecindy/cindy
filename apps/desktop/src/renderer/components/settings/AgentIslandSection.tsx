@@ -1,3 +1,4 @@
+import { agentIslandSettings } from './AgentIslandSection.settings-search';
 /**
  * AgentIslandSection — macOS Agent Island settings.
  *
@@ -295,15 +296,15 @@ export function AgentIslandSection() {
 
       <SettingsCard className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <p id="settings-search-settings-agentIsland-enableLabel" className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-            {t('settings.agentIsland.enableLabel')}
+          <p id={agentIslandSettings.enableLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+            {t(agentIslandSettings.enableLabel.titleKey)}
           </p>
           <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {t('settings.agentIsland.enableHint')}
+            {t(agentIslandSettings.enableLabel.descriptionKey)}
           </p>
         </div>
 
-        <Switch
+        <Switch data-setting-id={agentIslandSettings.enableLabel.id}
           checked={enabled}
           onCheckedChange={setEnabled}
           aria-label={t('settings.agentIsland.enableAria')}
@@ -314,11 +315,11 @@ export function AgentIslandSection() {
         <>
           <SettingsCard className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 flex-col gap-1">
-              <p id="settings-search-settings-agentIsland-subtleRemindersLabel" className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-                {t('settings.agentIsland.subtleRemindersLabel')}
+              <p id={agentIslandSettings.subtleRemindersLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+                {t(agentIslandSettings.subtleRemindersLabel.titleKey)}
               </p>
               <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                {t('settings.agentIsland.subtleRemindersHint')}
+                {t(agentIslandSettings.subtleRemindersLabel.descriptionKey)}
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-2">
@@ -328,6 +329,7 @@ export function AgentIslandSection() {
                 onReset={() => void handleResetSubtleReminders()}
               />
               <Switch
+                data-setting-id={agentIslandSettings.subtleRemindersLabel.id}
                 checked={subtleReminders}
                 disabled={subtleRemindersPending}
                 onCheckedChange={handleSubtleRemindersChange}
@@ -337,15 +339,15 @@ export function AgentIslandSection() {
           </SettingsCard>
           <SettingsCard className="flex flex-col gap-3">
             <div className="flex min-w-0 flex-col gap-1">
-              <p id="settings-search-settings-agentIsland-displayLabel" className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-                {t('settings.agentIsland.displayLabel')}
+              <p id={agentIslandSettings.displayLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+                {t(agentIslandSettings.displayLabel.titleKey)}
               </p>
               <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                {t('settings.agentIsland.displayHint')}
+                {t(agentIslandSettings.displayLabel.descriptionKey)}
               </p>
             </div>
             <div className="relative min-w-0">
-              <select
+              <select data-setting-id={agentIslandSettings.displayLabel.id}
                 value={displayTargetToOptionValue(displayTarget)}
                 onChange={(event) => setDisplayTarget(displayTargetFromOptionValue(event.target.value))}
                 className={cn(
@@ -382,11 +384,11 @@ export function AgentIslandSection() {
 
           <SettingsCard className="flex flex-col gap-4">
             <div className="flex min-w-0 flex-col gap-1">
-              <p id="settings-search-settings-agentIsland-skinLabel" className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-                {t('settings.agentIsland.skinLabel')}
+              <p id={agentIslandSettings.skinLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+                {t(agentIslandSettings.skinLabel.titleKey)}
               </p>
               <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                {t('settings.agentIsland.skinHint')}
+                {t(agentIslandSettings.skinLabel.descriptionKey)}
               </p>
             </div>
 
@@ -407,11 +409,11 @@ export function AgentIslandSection() {
           <SettingsCard className="flex flex-col gap-3">
             <div className="flex items-center justify-between gap-3">
               <div className="flex min-w-0 flex-col gap-1">
-                <p id="settings-search-settings-agentIsland-soundLabel" className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-                  {t('settings.agentIsland.soundLabel')}
+                <p id={agentIslandSettings.soundLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+                  {t(agentIslandSettings.soundLabel.titleKey)}
                 </p>
                 <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                  {t('settings.agentIsland.soundHint')}
+                  {t(agentIslandSettings.soundLabel.descriptionKey)}
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-2">
@@ -420,7 +422,7 @@ export function AgentIslandSection() {
                   disabled={soundResetPending}
                   onReset={() => void handleResetSoundSettings()}
                 />
-                <Switch
+                <Switch data-setting-id={agentIslandSettings.soundLabel.id}
                   checked={soundSettings.enabled}
                   disabled={soundResetPending}
                   onCheckedChange={setSoundEnabled}
@@ -499,6 +501,7 @@ function AgentIslandSkinRow({
   return (
     <div
       role="button"
+      data-setting-id={agentIslandSettings.skinLabel.id}
       tabIndex={0}
       onClick={() => onSelect(skin)}
       onKeyDown={handleRowKeyDown}
@@ -511,7 +514,7 @@ function AgentIslandSkinRow({
       )}
       aria-pressed={selected}
     >
-      <button
+      <button data-settings-search-action="Preview the next mascot animation"
         type="button"
         onClick={handlePreviewClick}
         className={cn(
@@ -767,7 +770,7 @@ function AgentIslandSoundRow({
         {t(`settings.agentIsland.soundEvents.${event}`)}
       </label>
       <div className="relative min-w-0">
-        <select
+        <select data-setting-id={agentIslandSettings.soundLabel.id}
           id={`agent-island-sound-${event}`}
           value={selectValue}
           onChange={async (e) => {
@@ -805,7 +808,7 @@ function AgentIslandSoundRow({
           aria-hidden="true"
         />
       </div>
-      <button
+      <button data-settings-search-action="Preview the selected notification sound"
         type="button"
         className={cn(
           'flex h-8 w-8 items-center justify-center rounded-full border transition-colors',

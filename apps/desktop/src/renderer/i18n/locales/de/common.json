@@ -13147,6 +13147,12 @@
       "text": "Ein automatischer Durchlauf ist fehlgeschlagen.",
       "precheck": "Automatische Prüfungen sind vorübergehend blockiert.",
       "rateLimited": "Automatische Prüfungen sind wegen eines Anfragelimits vorübergehend blockiert.",
+      "pluginMissing": "Automatische Prüfungen sind blockiert: Das Plugin „{{name}}“ ist nicht installiert. Nach der Installation laufen sie automatisch weiter.",
+      "pluginMissingUnnamed": "Automatische Prüfungen sind blockiert: Ein benötigtes Plugin ist nicht installiert. Nach der Installation laufen sie automatisch weiter.",
+      "pluginDisabled": "Automatische Prüfungen sind blockiert: Das Plugin „{{name}}“ ist deaktiviert. Nach dem Aktivieren laufen sie automatisch weiter.",
+      "pluginDisabledUnnamed": "Automatische Prüfungen sind blockiert: Ein benötigtes Plugin ist deaktiviert. Nach dem Aktivieren laufen sie automatisch weiter.",
+      "installPlugin": "Plugin installieren",
+      "openPlugin": "Plugin öffnen",
       "dismissTitle": "Hinweis auf früheren Fehler schließen"
     },
     "worktreeRestoreBanner": {

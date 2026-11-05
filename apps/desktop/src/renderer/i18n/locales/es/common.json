@@ -13264,6 +13264,12 @@
       "text": "Error en la ejecución automática.",
       "precheck": "Los controles automáticos están bloqueados temporalmente.",
       "rateLimited": "Los controles automáticos están bloqueados temporalmente por un límite de tasa de solicitud.",
+      "pluginMissing": "Los controles automáticos están bloqueados: el complemento {{name}} no está instalado. Se reanudarán al instalarlo.",
+      "pluginMissingUnnamed": "Los controles automáticos están bloqueados: un complemento necesario no está instalado. Se reanudarán al instalarlo.",
+      "pluginDisabled": "Los controles automáticos están bloqueados: el complemento {{name}} está desactivado. Se reanudarán al activarlo.",
+      "pluginDisabledUnnamed": "Los controles automáticos están bloqueados: un complemento necesario está desactivado. Se reanudarán al activarlo.",
+      "installPlugin": "Instalar complemento",
+      "openPlugin": "Abrir complemento",
       "dismissTitle": "Descartar aviso de falla anterior"
     },
     "worktreeRestoreBanner": {

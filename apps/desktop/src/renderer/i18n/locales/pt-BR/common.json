@@ -3568,7 +3568,7 @@
         "formatIdentity": "Obrigatório. Defina kind como \"custom\" e name como o nome do provedor que deseja exibir.",
         "formatAuth": "Obrigatório. Neste exemplo, defina method como \"apiKey\" e substitua apiKey pela chave do seu provedor.",
         "formatEndpoint": "Obrigatório para cada endpoint. protocol aceita \"openai-chat\", \"openai-responses\", \"anthropic-messages\" e \"google-generative-ai\". Defina baseUrl como a URL HTTP(S) completa do endpoint; HTTPS é recomendado.",
-        "formatTargets": "Array engine opcional: \"claude-code\", \"codex\" ou \"pi\". Omita-o para associar engines por protocolo ou especifique as engines explicitamente. Claude Code também oferece suporte aos protocolos OpenAI e Google. O exemplo habilita apenas Pi.",
+        "formatTargets": "Lista opcional de mecanismos: \"claude-code\", \"codex\" ou \"pi\". Omita-a para associar mecanismos por protocolo ou especifique os mecanismos explicitamente. O Claude Code também oferece suporte aos protocolos OpenAI e Google. O exemplo habilita apenas o Pi.",
         "formatModels": "Opcional. Use strings de ID de modelo ou objetos com id (name é opcional). Omita a lista ou deixe-a vazia para buscar modelos após a confirmação. Uma lista não vazia pula a busca automática.",
         "formatMetadata": "Campos opcionais de modelo: group é o grupo do modelo, contextWindow é o tamanho do contexto e maxOutputTokens é o limite de saída (ambos em tokens). Os números do exemplo são ilustrativos; use as capacidades reais do modelo.",
         "formatEffort": "Campos opcionais de modelo: efforts lista os níveis de esforço aceitos; defaultEffort seleciona um deles como padrão. Remova ambos os campos se não tiver certeza.",
@@ -13264,6 +13264,12 @@
       "text": "Uma execução automática falhou.",
       "precheck": "As verificações automáticas estão temporariamente bloqueadas.",
       "rateLimited": "As verificações automáticas estão temporariamente bloqueadas por um limite de frequência de solicitações.",
+      "pluginMissing": "As verificações automáticas estão bloqueadas: o plugin {{name}} não está instalado. Elas serão retomadas após a instalação.",
+      "pluginMissingUnnamed": "As verificações automáticas estão bloqueadas: um plugin necessário não está instalado. Elas serão retomadas após a instalação.",
+      "pluginDisabled": "As verificações automáticas estão bloqueadas: o plugin {{name}} está desativado. Elas serão retomadas após a ativação.",
+      "pluginDisabledUnnamed": "As verificações automáticas estão bloqueadas: um plugin necessário está desativado. Elas serão retomadas após a ativação.",
+      "installPlugin": "Instalar plugin",
+      "openPlugin": "Abrir plugin",
       "dismissTitle": "Dispensar aviso de falha anterior"
     },
     "worktreeRestoreBanner": {

@@ -41,6 +41,9 @@ vi.mock('../contexts/AuthContext', () => ({
   AuthProvider: ({ children }: { children: ReactNode }) => children,
 }));
 vi.mock('../cindy-brain/ghostPanels', () => ({ ensureGhostPanelsRegistered: vi.fn() }));
+// This fixture exercises wallpaper boot/live updates with a theme stub. The picker has its
+// own real Host tests; loading its model UI here would consume the intentionally empty theme.
+vi.mock('../cindy-brain/PluginModelPickerHost', () => ({ PluginModelPickerHost: () => null }));
 vi.mock('../components/layout/SidebarWindowLayout', () => ({
   SidebarWindowLayout: () => <div>sidebar host</div>,
 }));
