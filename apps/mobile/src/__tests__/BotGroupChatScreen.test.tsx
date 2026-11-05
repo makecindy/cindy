@@ -421,6 +421,23 @@ describe('group timeline', () => {
     expect(byId('diagramModal')).toBeNull();
   });
 
+  // #8955 P1 / unit: §8.4 revocation must clear the viewer too; blur coverage never loses access.
+  it('clears an open diagram on group access loss without reopening it when access returns', async () => {
+    h.chat.server = true;
+    const source = 'flowchart LR\nA --> B';
+    const data = group({ serverBacked: true, messages: [message('diagram', 1, { authorBotId: 'mimi', content: '```mermaid\n' + source + '\n```' })] });
+    await render(data, 'ready', undefined, '');
+    await click('botGroup.openDiagram');
+    expect(byId('diagramModal')?.getAttribute('data-source')).toBe(source);
+    await render(null, 'missing', undefined, '');
+    expect(byId('botGroup.unavailable')).not.toBeNull();
+    expect(byId('diagramModal')).toBeNull();
+    await render(data, 'ready', undefined, '');
+    expect(byId('diagramModal')).toBeNull();
+    await click('botGroup.openDiagram');
+    expect(byId('diagramModal')?.getAttribute('data-source')).toBe(source);
+  });
+
   // PR #8818 / component: the identity matcher cannot reject a complete foreign
   // broadcast if the real Timeline splits it at a shorter member name first.
   // French send parser + English Screen: @Tous is personal, the longer broadcast is not.

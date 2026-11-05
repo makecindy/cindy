@@ -247,7 +247,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const closeDiagram = useCallback(() => setDiagram(null), []);
   const richContent = useMemo(() => Platform.OS === 'android' ? new RichContentRuntime() : null, [viewportOwner]);
   useEffect(() => () => richContent?.clear(), [richContent]);
-  useEffect(closeDiagram, [focused, foreground, viewportOwner, closeDiagram]);
+  useEffect(closeDiagram, [focused, foreground, viewportOwner, chat.state.kind, closeDiagram]);
   const [awayFromBottom, setAwayFromBottom] = useState<{ owner: string; value: boolean } | null>(null);
   const isAwayFromBottom = awayFromBottom?.owner === viewportOwner && awayFromBottom.value;
   const updateAwayFromBottom = (value: boolean) => setAwayFromBottom(previous =>
@@ -827,7 +827,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
         else router.push({ pathname: '/companions/groups/[groupId]', params: { groupId, deviceId, deviceName,
           messageId: mention.messageId, ...(mention.threadRootId ? { threadRootId: mention.threadRootId } : {}) } } as never);
       }} />
-      <MessagePayloadModal payload={focused && foreground && diagram?.owner === viewportOwner ? diagram.payload : null} onClose={closeDiagram} />
+      <MessagePayloadModal payload={group && focused && foreground && diagram?.owner === viewportOwner ? diagram.payload : null} onClose={closeDiagram} />
   </SafeAreaView></RichContentContext.Provider>;
 }
 
