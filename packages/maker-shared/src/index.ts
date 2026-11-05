@@ -74,3 +74,5 @@ export * from './runningTokenRateHistory.js';
 export * from './userBubbleAppearance.js';
 
 export type { BotDmThreadSummary } from './botDmThread.js';
+
+export { parseOutputLimitDetails, isReasoningDominatedOutputLimit, type OutputLimitDetails } from './outputLimitError.js';
