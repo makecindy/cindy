@@ -2386,6 +2386,9 @@
     "agentIsland": {
       "title": "Agent Island",
       "unsupported": "Agent Island nécessite macOS 14 ou une version ultérieure.",
+      "subtleRemindersLabel": "Alertes discrètes",
+      "subtleRemindersHint": "Pour les nouveaux messages, les demandes de réponse ou les erreurs, l’icône change au lieu d’afficher une carte de notification sous l’îlot. Cliquez sur l’îlot pour voir la liste complète des tâches.",
+      "subtleRemindersFailed": "Impossible d’enregistrer les paramètres des alertes. Réessayez.",
       "enableLabel": "Afficher Agent Island",
       "enableHint": "Affiche en haut de l'écran les tâches en cours d'exécution, celles qui attendent une réponse et celles terminées non lues. L'activer désactive les notifications système équivalentes pour éviter les doubles alertes.",
       "enableAria": "Activer ou désactiver Agent Island",

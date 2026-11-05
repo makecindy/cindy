@@ -2351,6 +2351,9 @@
     "agentIsland": {
       "title": "Agent Island",
       "unsupported": "Agent Island erfordert macOS 14 oder neuer.",
+      "subtleRemindersLabel": "Dezente Hinweise",
+      "subtleRemindersHint": "Bei neuen Nachrichten, Rückfragen oder Fehlern ändert sich das Symbol, statt eine Benachrichtigungskarte unter der Insel einzublenden. Per Klick auf die Insel öffnet sich die vollständige Aufgabenliste.",
+      "subtleRemindersFailed": "Die Hinweiseinstellungen konnten nicht gespeichert werden. Bitte versuche es erneut.",
       "enableLabel": "Agent Island anzeigen",
       "enableHint": "Zeigt laufende, zu beantwortende und ungelesene erledigte Aufgaben oben im Display an. Durch die Aktivierung werden die entsprechenden Systembenachrichtigungen unterdrückt, um doppelte Warnungen zu vermeiden.",
       "enableAria": "Agent Island ein-/ausschalten",
