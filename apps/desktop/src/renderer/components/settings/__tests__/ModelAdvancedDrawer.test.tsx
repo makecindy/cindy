@@ -170,7 +170,16 @@ describe('model advanced editor', () => {
   });
 
   it.each(['rejected', 'thrown'])('retains a manual model name after a %s save and allows retry', async (failure) => {
-    const source = { ...buildUserProvider({ id: 'manual', name: 'Manual', runtimes: { codex: { baseUrl: 'https://manual.example.invalid/v1', models: [{ id: 'private', name: 'private' }] } } }), connected: true } as ProviderView;
+    // #6601/main merge: unit, a grouped row with another selected member plus a
+    // deferred save. The old singleton case could not detect enabling only the
+    // selected alias after the save lock releases; no extra test cases or I/O.
+    const grouped = failure === 'rejected';
+    const source = { ...buildUserProvider({ id: 'manual', name: 'Manual', runtimes: { codex: { baseUrl: 'https://manual.example.invalid/v1', models: [
+      { id: 'private', name: 'private' }, ...(grouped ? [{ id: 'alternate', name: 'alternate' }] : []),
+    ] } } }), connected: true } as ProviderView;
+    const rows = buildUnionRows(source);
+    const groupRow = grouped ? { ...rows[0]!, aliasRows: rows } : rows[0]!;
+    const selectedId = grouped ? 'alternate' : 'private';
     const update = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
     let failFirst!: () => void;
     update.mockImplementationOnce(() => new Promise((resolve, reject) => {
@@ -182,7 +191,7 @@ describe('model advanced editor', () => {
       const close = vi.fn();
       const disable = vi.fn();
       const disabled = failure === 'thrown';
-      render(<ModelAdvancedDrawer provider={source} row={buildUnionRows(source)[0]} open onOpenChange={close} pricePresentationOf={() => null} onDisable={disable} disabled={disabled} paymentRequired={false} />);
+      render(<ModelAdvancedDrawer provider={source} row={groupRow} selectedMemberId={selectedId} open onOpenChange={close} pricePresentationOf={() => null} onDisable={disable} disabled={disabled} paymentRequired={false} />);
       const input = screen.getByRole('textbox', { name: 'settings.providers.models.advanced.displayName' }) as HTMLInputElement;
       const save = screen.getByRole('button', { name: 'settings.providers.models.advanced.saveName' }) as HTMLButtonElement;
       fireEvent.change(input, { target: { value: '   ' } });
@@ -203,11 +212,17 @@ describe('model advanced editor', () => {
       failFirst();
       await waitFor(() => expect(save.disabled).toBe(false));
       expect(toggle.disabled).toBe(false);
+      fireEvent.click(toggle);
+      expect(disable).toHaveBeenCalledOnce();
+      expect(disable).toHaveBeenCalledWith(groupRow);
       expect(input.value).toBe('Private Alias');
       expect(close).not.toHaveBeenCalled();
       fireEvent.click(save);
       await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
-      expect(update.mock.calls[1]![0]).toMatchObject({ runtimes: { codex: { models: [{ id: 'private', name: 'Private Alias', nameExplicit: true }] } } });
+      expect(update.mock.calls[1]![0]).toMatchObject({ runtimes: { codex: { models: expect.arrayContaining([expect.objectContaining({ id: selectedId, name: 'Private Alias', nameExplicit: true })]) } } });
+      if (grouped) expect(update.mock.calls[1]![0]).toMatchObject({ runtimes: { codex: { models:
+        expect.arrayContaining([expect.objectContaining({ id: 'private', name: 'private' })]),
+      } } });
     } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
   });
 

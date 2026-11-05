@@ -1,3 +1,4 @@
+import { appearanceSettings } from './AppearanceSection.settings-search';
 /**
  * StreamFadeSection — Settings → 外观 下的「回复动效」开关。
  *
@@ -39,14 +40,14 @@ export function StreamFadeSection() {
             className="text-13 font-medium text-[var(--settings-section-sublabel)]"
             style={{ letterSpacing: '0.12px' }}
           >
-            {t('settings.streamFade.label')}
+            {t(appearanceSettings.streamFadeLabel.titleKey)}
           </p>
           <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {t('settings.streamFade.hint')}
+            {t(appearanceSettings.streamFadeLabel.descriptionKey)}
           </p>
         </div>
 
-        <Switch
+        <Switch data-setting-id={appearanceSettings.streamFadeLabel.id}
           checked={enabled}
           onCheckedChange={(next) => setPreference(next ? 'on' : 'off')}
           aria-label={t('settings.streamFade.toggleAria')}

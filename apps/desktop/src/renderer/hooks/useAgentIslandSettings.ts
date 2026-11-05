@@ -42,6 +42,16 @@ function notifySubscribers(): void {
   for (const cb of subscribers) cb();
 }
 
+/** Observe preferences without syncing native state or loading display options. */
+export function subscribeAgentIslandSettings(onChange: () => void): () => void {
+  subscribers.add(onChange);
+  window.addEventListener('storage', onChange);
+  return () => {
+    subscribers.delete(onChange);
+    window.removeEventListener('storage', onChange);
+  };
+}
+
 function persistAgentIslandDisplayTargetLocally(target: AgentIslandDisplayTarget): void {
   if (sameAgentIslandDisplayTarget(getAgentIslandDisplayTarget(), target)) return;
   try {
@@ -533,12 +543,7 @@ export function useAgentIslandSettings(): {
       setMascotSkinState(getAgentIslandMascotSkin());
       setDisplayTargetState(getAgentIslandDisplayTarget());
     };
-    subscribers.add(onChange);
-    window.addEventListener('storage', onChange);
-    return () => {
-      subscribers.delete(onChange);
-      window.removeEventListener('storage', onChange);
-    };
+    return subscribeAgentIslandSettings(onChange);
   }, []);
 
   return {

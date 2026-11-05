@@ -15,6 +15,7 @@ export interface SegmentedOption<T extends string> {
 }
 
 interface SegmentedControlProps<T extends string> {
+  'data-setting-id'?: string;
   value: T | null;
   options: readonly SegmentedOption<T>[];
   onValueChange: (value: T) => void;
@@ -35,6 +36,7 @@ interface SegmentedControlProps<T extends string> {
 
 /** Desktop single selection. Business effects and panel ownership stay with the caller. */
 export function SegmentedControl<T extends string>({
+  'data-setting-id': settingId,
   value,
   options,
   onValueChange,
@@ -95,6 +97,7 @@ export function SegmentedControl<T extends string>({
 
   return (
     <div
+      data-setting-id={settingId}
       ref={root}
       role={role}
       aria-label={ariaLabel}
