@@ -67,6 +67,7 @@ export const generalSettings = defineSettings({
     titleKey: 'settings.defaultNewTaskWorkingDir.title',
     sectionKey: 'settings.tabs.general',
     descriptionKey: 'settings.defaultNewTaskWorkingDir.hint',
+    keywordKeys: ['settings.defaultNewTaskWorkingDir.label'],
   },
   collaboration: {
     id: 'general.collaboration',

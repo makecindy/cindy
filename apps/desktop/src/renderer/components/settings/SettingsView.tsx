@@ -493,9 +493,9 @@ function SettingsViewContent() {
                     </section>
 
                     <section
-                      id="settings-default-new-task-working-dir"
+                      id={generalSettings.defaultNewTaskWorkingDir.targetId}
                       className="py-[18px]"
-                      aria-label={t('settings.defaultNewTaskWorkingDir.title')}
+                      aria-label={t(generalSettings.defaultNewTaskWorkingDir.titleKey)}
                     >
                       <DefaultNewTaskWorkingDirSection ownerId={dataOwnerId} />
                     </section>
