@@ -435,7 +435,11 @@ function PrOutput({ pr }: { pr: HomeSessionPrInfo }) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const [failed, setFailed] = useState(false);
-  const visual = prStatusVisual(pr.status?.ok ? pr.status.status : null, colors);
+  const visual = prStatusVisual(
+    pr.status?.ok ? pr.status.status : null,
+    colors,
+    pr.status?.ok ? pr.status.conflicts : null,
+  );
   return (
     <>
       <Row

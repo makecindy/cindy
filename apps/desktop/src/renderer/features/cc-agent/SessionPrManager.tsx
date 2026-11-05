@@ -12,7 +12,7 @@ import {
 } from '@cindy/maker-shared';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
-import { PR_STATUS_ICON, PR_STATUS_COLOR } from './gitContextPrVisuals';
+import { PR_STATUS_ICON, prStatusColor } from './gitContextPrVisuals';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -283,7 +283,7 @@ export function SessionPrManager({
             <Icon
               size={12}
               className="shrink-0"
-              style={{ color: kind ? PR_STATUS_COLOR[kind] : 'var(--text-tertiary)' }}
+              style={{ color: prStatusColor(kind, status?.ok ? status.conflicts : null) }}
             />
           )}
           <div className="min-w-0">
