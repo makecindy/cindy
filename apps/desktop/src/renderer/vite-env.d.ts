@@ -1297,6 +1297,7 @@ interface ElectronAPI {
 
   /** 意识仓库 —— 数据模型与校验见 shared/ghost.ts,main 端见 main/cindy-brain/。 */
   ghosts: {
+    activateBrowser: (id: string) => Promise<{ ok: boolean }>;
     mailPreview: (sessionId: string, url: string, read: boolean, opened?: boolean, providerId?: string) => Promise<import('@cindy/maker-shared/mail-message').MailPreviewResult>;
     openRemoteSettings: (target: import('../shared/remotePluginSettings').RemotePluginSettingsTarget) => Promise<import('../shared/remotePluginSettings').RemotePluginSettingsView>;
     closeRemoteSettings: (id: string) => Promise<void>;
@@ -1410,6 +1411,7 @@ interface ElectronAPI {
     revealBackgroundTask: (id: string, taskId: string) => Promise<{ ok: true }>;
     /** 目录级禁用清单(插件页项目范围视图;sendSync 切换同帧渲染)。 */
     workdirPrefsSync: (workdir: string) => { disabled: string[] };
+    workdirPrefs: (workdir: string) => Promise<{ disabled: string[] }>;
     /** 写/清一条目录级例外(disabled=false 即清除,回到跟随全局)。 */
     setWorkdirDisabled: (
       workdir: string,
@@ -3950,6 +3952,18 @@ interface ElectronAPI {
     choose(): Promise<import('../shared/dialogueWorkspaceSettings').DialogueWorkspaceSettingsState>;
     reset(): Promise<import('../shared/dialogueWorkspaceSettings').DialogueWorkspaceSettingsState>;
   };
+  projectsRoot: {
+    get(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
+    choose(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
+    reset(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
+  };
+  createProjectFromTask: {
+    prepare(sessionId: string): Promise<import('../shared/projectsRoot').PreparedProjectFromTask>;
+    chooseParent(): Promise<string | null>;
+    create(
+      input: import('../shared/projectsRoot').CreateProjectFromTaskInput,
+    ): Promise<import('../shared/projectsRoot').CreateProjectFromTaskResult>;
+  };
 
   cindyMediaStorage: {
     /** 本窗口草稿附件 URL 变化时上报(fire-and-forget;多窗口防误删取证)。 */
@@ -5541,6 +5555,11 @@ interface ElectronAPI {
       success: boolean;
       path: string | null;
     }>;
+    /** 把最近项目列表里的目录授权为当前任务的可写目录（只认列表里原样保存的路径）。 */
+    authorizeRecentWritableDirectory: (params: {
+      directory: string;
+      writableGrantScope: string;
+    }) => Promise<{ success: true }>;
     /** 打开系统文件选择对话框，返回用户选中的文件路径（取消时 path=null）。 */
     showOpenFile: (params?: {
       defaultPath?: string;
@@ -5785,6 +5804,7 @@ interface ElectronAPI {
     /** 自定义供应商创建模板（目录 presets 段，纯 UI 模板数据）。 */
     listProviderPresets: () => Promise<{
       presets: import('@cindy/model-providers').ProviderPreset[];
+      modelRegistry?: import('@cindy/model-providers').ModelRegistry;
     }>;
     /** 供应商「测试连接」—— 与真实会话同路由口径的最小探测请求（结构化结果，code 走 providerError.* i18n）。 */
     testProviderConnection: (
@@ -6529,6 +6549,8 @@ interface ElectronAPI {
       requestId: string,
       revision: number,
     ) => Promise<import('@cindy/device-link').InputHandoffPicture | null>;
+    /** 代输入 sign-in on this computer: bring its window to the front (trusted frame only). */
+    raiseInputHandoff: (requestId: string) => Promise<boolean>;
     /** 代输入 screenshot step on another computer (sealed offer, this window only). */
     openRemoteInputHandoffPicture: (
       request: import('../shared/pluginOauth').LocalInputHandoffPictureRequest,

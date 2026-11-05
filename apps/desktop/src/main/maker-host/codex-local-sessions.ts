@@ -334,6 +334,54 @@ export function readCodexThreadStorageForArchive(threadId: string): {
   // tasks without a location record must still resolve their original storage.
   const thread = findThreadByIdInHome(getDesktopCodexHome(), threadId)
     ?? findExternalThreadById(threadId);
+  return archiveStorageForThread(thread);
+}
+
+/** Read-only discovery yields between directories and stats only matching IDs. */
+export async function readCodexThreadStorageForArchiveAsync(threadId: string): Promise<{
+  historyHome: string; sqliteHome: string; rolloutPath: string;
+} | undefined> {
+  if (!isLikelyThreadId(threadId)) return;
+  const currentHome = getDesktopCodexHome();
+  const externalHomes = discoverExternalCodexHomesSync();
+  const find = async (home: string): Promise<CodexThreadSummary | null> => {
+    const indexed = findThreadByIdInDatabase(home, threadId);
+    if (indexed) return indexed;
+    const candidates: Array<{ file: string; mtime: number }> = [];
+    const visit = async (dir: string, depth: number): Promise<void> => {
+      if (depth > 6) return;
+      let entries: fs.Dirent[];
+      try { entries = await fsp.readdir(dir, { withFileTypes: true }); }
+      catch { return; }
+      for (const entry of entries) {
+        if (entry.isDirectory()) await visit(path.join(dir, entry.name), depth + 1);
+        else if (entry.isFile() && entry.name.endsWith('.jsonl') &&
+          entry.name.includes('rollout-') && !isCindyRolloutArtifactFileName(entry.name) &&
+          threadIdFromRolloutPath(entry.name) === threadId) {
+          const file = path.join(dir, entry.name);
+          try { candidates.push({ file, mtime: (await fsp.stat(file)).mtimeMs }); }
+          catch { /* disappeared during discovery */ }
+        }
+      }
+    };
+    await visit(path.join(home, 'sessions'), 0);
+    await visit(path.join(home, 'archived_sessions'), 0);
+    candidates.sort((a, b) => b.mtime - a.mtime);
+    return candidates[0] ? normalizeRolloutFile(home, candidates[0].file, readSessionIndex(home)) : null;
+  };
+  const current = await find(currentHome);
+  if (current) return archiveStorageForThread(current);
+  let best: CodexThreadSummary | null = null;
+  for (const home of externalHomes) {
+    const found = await find(home);
+    if (found && (!best || best.updatedAt < found.updatedAt)) best = found;
+  }
+  return archiveStorageForThread(best);
+}
+
+function archiveStorageForThread(thread: CodexThreadSummary | null): {
+  historyHome: string; sqliteHome: string; rolloutPath: string;
+} | undefined {
   if (!thread) return;
   // An actual thread row establishes storage ownership even if config changed
   // afterward. Consult current config only for the pure rollout fallback.
@@ -4139,6 +4187,7 @@ function collectRolloutFiles(
   home: string,
   includeCindyArtifacts = false,
   includeCompressed = false,
+  onlyThreadId?: string,
 ): string[] {
   const roots = [path.join(home, 'sessions'), path.join(home, 'archived_sessions')];
   const files: Array<{ file: string; mtime: number }> = [];
@@ -4159,6 +4208,7 @@ function collectRolloutFiles(
         && (entry.name.endsWith('.jsonl') || (includeCompressed && entry.name.endsWith('.jsonl.zst')))
         && entry.name.includes('rollout-')
         && (includeCindyArtifacts || !isCindyRolloutArtifactFileName(entry.name))
+        && (!onlyThreadId || threadIdFromRolloutPath(entry.name) === onlyThreadId)
       ) {
         try {
           files.push({ file: full, mtime: fs.statSync(full).mtimeMs });
@@ -4834,19 +4884,22 @@ function assertExternalEmptyObservationsUnchanged(
 }
 
 function findThreadByIdInHome(home: string, threadId: string): CodexThreadSummary | null {
+  return findThreadByIdInDatabase(home, threadId) ?? findExternalThreadByIdFromRollouts(home, threadId);
+}
+
+function findThreadByIdInDatabase(home: string, threadId: string): CodexThreadSummary | null {
   const dbPath = findLatestStateDb(home);
   const projectlessThreadIds = readProjectlessThreadIds(home);
-  if (!dbPath) return findExternalThreadByIdFromRollouts(home, threadId);
+  if (!dbPath) return null;
   let db: Database.Database | null = null;
   try {
     db = openReadonlyDb(dbPath);
-    if (!tableExists(db, 'threads')) return findExternalThreadByIdFromRollouts(home, threadId);
+    if (!tableExists(db, 'threads')) return null;
     const row = db.prepare('SELECT * FROM threads WHERE id = ? LIMIT 1').get(threadId) as SqlRow | undefined;
-    if (!row || !isTopLevelThreadRow(row)) return findExternalThreadByIdFromRollouts(home, threadId);
-    return normalizeThreadRow(home, dbPath, row, projectlessThreadIds, readSessionIndex(home))
-      ?? findExternalThreadByIdFromRollouts(home, threadId);
+    if (!row || !isTopLevelThreadRow(row)) return null;
+    return normalizeThreadRow(home, dbPath, row, projectlessThreadIds, readSessionIndex(home));
   } catch {
-    return findExternalThreadByIdFromRollouts(home, threadId);
+    return null;
   } finally {
     closeDbQuietly(db);
   }
@@ -4855,7 +4908,7 @@ function findThreadByIdInHome(home: string, threadId: string): CodexThreadSummar
 function findExternalThreadByIdFromRollouts(home: string, threadId: string): CodexThreadSummary | null {
   const index = readSessionIndex(home);
   const projectlessThreadIds = readProjectlessThreadIds(home);
-  const file = collectRolloutFiles(home).find((candidate) => threadIdFromRolloutPath(candidate) === threadId);
+  const file = collectRolloutFiles(home, false, false, threadId)[0];
   if (!file) return null;
   return normalizeRolloutFile(home, file, index, projectlessThreadIds);
 }

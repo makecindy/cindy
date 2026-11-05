@@ -5990,7 +5990,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                 hostDeviceId: selectedDeviceId,
               },
             }
-            : {}),
+            : { remote: undefined }),
         }}
         activeModelId={remoteAgentPick?.model ?? draft.model}
         activePermissionMode={displayPermissionMode}
@@ -6052,7 +6052,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                     selectedDeviceId: collabForm.form.agentDeviceId ?? null,
                   },
                 }
-              : {}),
+              : { remote: undefined }),
           }}
           activeModelId={collabForm.form.model?.id ?? ''}
           activePermissionMode=""

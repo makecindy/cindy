@@ -264,7 +264,7 @@ export interface StartGhostOauthFlowOptions {
   brandName?: string;
   /**
    * 可选:钉死端口(redirectPort)被外部进程占用时的回收器。listen 失败时
-   * 引擎调它一次(生产注入 portReclaim:查占用 PID 并强杀,护栏见该模块),
+   * 引擎调它一次(生产注入 portReclaim:展示占用程序并经用户确认后结束,护栏见该模块),
    * 返回 true 表示值得重试 listen;未注入或回收失败按 LISTEN_FAILED 收场。
    * 自家上一单的僵尸监听不走这里——引擎在 listen 前就等它关完了。
    */
@@ -1121,32 +1121,82 @@ function extractIdentityUrlValue(parsed: unknown, path: string): string | null {
 const AVATAR_MAX_BYTES = 256 * 1024;
 /** 头像可接受的图片 mime(data URL 直出给沙箱 <img>,只认常见位图)。 */
 const AVATAR_ALLOWED_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+/** 整次头像下载(含全部跳转)的时间上限。 */
+const AVATAR_TIMEOUT_MS = 10_000;
+const AVATAR_MAX_REDIRECTS = 3;
 
 /**
- * 下载账号头像并转 data URL。地址来自身份响应(服务商自报的 CDN),**绝不
- * 带 Authorization**——头像域名不在凭证注入白名单里,带令牌出去就是泄露。
- * 任何失败(非 https / 非图片 / 超限 / 网络)一律 null,纯 best-effort。
+ * 单跳受防护请求(生产注入 `guardedOutboundFetch`):每一跳都做 DNS/IP 级别的
+ * 内网、回环拦截,且不自动跟随跳转。release 归还连接,读完或放弃 body 后必须调用。
+ */
+export type GhostOauthAvatarHop = (
+  url: string,
+  init: RequestInit,
+) => Promise<{ response: Response; release: () => Promise<void> }>;
+
+/**
+ * 下载账号头像并转 data URL。地址来自身份响应(服务商自报的 CDN),对任何插件都
+ * 开放,因此整条链路按不可信地址处理:每一跳(含跳转)都走注入的受防护单跳请求,
+ * 跳转在这里手动复核 https;body 流式读取,超过上限立即放弃;整次下载有总时限。
+ * **绝不带 Authorization**——头像域名不在凭证注入白名单里,带令牌出去就是泄露。
+ * 任何失败一律 null,纯 best-effort。
  */
 export async function fetchGhostOauthAvatar(opts: {
   url: string;
-  fetchImpl: typeof fetch;
+  fetchHop: GhostOauthAvatarHop;
+  timeoutMs?: number;
 }): Promise<string | null> {
   if (!isSafeHttpsUrl(opts.url)) return null;
-  let res: Response;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? AVATAR_TIMEOUT_MS);
+  timer.unref?.();
   try {
-    res = await opts.fetchImpl(opts.url, { method: 'GET', headers: { Accept: 'image/*' } });
+    let url = opts.url;
+    for (let hop = 0; hop <= AVATAR_MAX_REDIRECTS; hop++) {
+      const { response, release } = await opts.fetchHop(url, {
+        method: 'GET',
+        headers: { Accept: 'image/*' },
+        redirect: 'manual',
+        signal: controller.signal,
+      });
+      try {
+        if ([301, 302, 303, 307, 308].includes(response.status)) {
+          const location = response.headers.get('location');
+          if (!location) return null;
+          const next = new URL(location, url).href;
+          if (!isSafeHttpsUrl(next)) return null;
+          url = next;
+          continue;
+        }
+        if (!response.ok) return null;
+        const mime = (response.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
+        if (!AVATAR_ALLOWED_MIMES.has(mime)) return null;
+        const reader = response.body?.getReader();
+        if (!reader) return null;
+        const chunks: Uint8Array[] = [];
+        let total = 0;
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            total += value.byteLength;
+            if (total > AVATAR_MAX_BYTES) return null;
+            chunks.push(value);
+          }
+        } finally {
+          reader.releaseLock();
+        }
+        if (total === 0) return null;
+        return `data:${mime};base64,${Buffer.concat(chunks).toString('base64')}`;
+      } finally {
+        await response.body?.cancel().catch(() => undefined);
+        await release();
+      }
+    }
+    return null;
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
-  if (!res.ok) return null;
-  const mime = (res.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
-  if (!AVATAR_ALLOWED_MIMES.has(mime)) return null;
-  let bytes: Buffer;
-  try {
-    bytes = Buffer.from(await res.arrayBuffer());
-  } catch {
-    return null;
-  }
-  if (bytes.byteLength === 0 || bytes.byteLength > AVATAR_MAX_BYTES) return null;
-  return `data:${mime};base64,${bytes.toString('base64')}`;
 }

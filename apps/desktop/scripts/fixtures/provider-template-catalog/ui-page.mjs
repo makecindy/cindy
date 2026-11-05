@@ -3,7 +3,7 @@ import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 // Load the same production catalog in Node and in the browser, without a stale ID snapshot.
 const bundled = await build({ entryPoints: [fileURLToPath(new URL('./cases.ts', import.meta.url))], bundle: true, platform: 'node', format: 'esm', write: false });
-const { cases, presets, bindInput } = await import(`data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString('base64')}`);
+const { cases, presets, bindInput, retainedPreset } = await import(`data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString('base64')}`);
 export default {
   name: 'provider-template-catalog', entry: './fixture.tsx', viewport: { width: 1000, height: 900 },
   real: 'Every bundled preset, real custom dialog and wizard, simulated clicks through identification and save',
@@ -13,7 +13,8 @@ export default {
   async check(page, ui) {
     assert.deepEqual(await page.evaluate(() => window.templateIds), presets.map(p => p.id));
     const item = cases.find(c => c.id === ui.case) ?? cases[0];
-    const preset = presets.find(p => p.id === item.providerId);
+    const retained = item.id === 'wizard-deepseek-retained';
+    const preset = retained ? retainedPreset : presets.find(p => p.id === item.providerId);
     if (item.kind === 'address') {
       await page.getByPlaceholder(await ui.t('settings.providers.custom.fields.namePlaceholder')).fill(`Review ${item.providerId}`);
       await page.getByPlaceholder(await ui.t('settings.providers.custom.fields.apiKeyPlaceholder')).fill('fake-ui-key');
@@ -50,7 +51,10 @@ export default {
     await finish.waitFor();
     // The catalog response is fixed; selecting it uses the real model picker, not state injection.
     let selectedModelId = 'ui-catalog-probe';
-    if (item.kind === 'wizard' && preset.id === 'opencode-go') {
+    if (retained) {
+      selectedModelId = 'deepseek-v4-flash-vision-exp';
+      await page.getByText('DeepSeek V4 Flash Vision Exp', { exact: true }).click();
+    } else if (item.kind === 'wizard' && preset.id === 'opencode-go') {
       // Go retains its curated plan members; arbitrary discovered IDs are not plan models.
       const model = preset.runtimes.pi.models.find(m => Object.values(preset.runtimes).every(rt => rt.models.some(row => row.id === m.id)));
       assert.ok(model);

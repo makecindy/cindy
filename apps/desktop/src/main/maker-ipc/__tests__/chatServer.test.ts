@@ -621,6 +621,264 @@ describe('Chat Server result delivery and refresh', () => {
       .resolves.toEqual({ ok: false, errorCode: 'INVALID_INPUT' });
     expect(fixture.handle.mock.calls.some(([route]) => String(route).includes('/reactions'))).toBe(false);
   });
+  describe('message read receipts', () => {
+    const peer = '30000000-0000-4000-8000-000000000002';
+    const message = (seq: string, authorId = selfId, threadRootId: string | null = null) => ({
+      id: `50000000-0000-4000-8000-${seq.padStart(12, '0')}`, seq, authorId, author: { kind: 'human', name: authorId === selfId ? 'Me' : 'Peer' },
+      content: [{ type: 'text', text: `Message ${seq}` }], createdAt: '2026-10-03T00:00:00Z', deleted: false, threadRootId });
+    const members = [{ id: selfId, kind: 'human', name: 'Me', state: 'joined', role: 'owner', ownerActorId: selfId },
+      { id: peer, kind: 'human', name: 'Peer', state: 'joined', role: 'member', ownerActorId: peer }];
+    const snapshot = (othersRead?: Array<{ thread_key: string; read_seq: string }>) => ({
+      room: room(roomId), members, messages: [message('9', peer), message('7'), message('3')], cursor: '9', ...(othersRead ? { othersRead } : {}) });
+    function serve(value: ReturnType<typeof snapshot>, messageReaders: number | undefined = 1) {
+      fixture.handle.mockImplementation(route => {
+        if (route === '/me') return { body: { actor: { id: selfId }, ...(messageReaders ? { capabilities: { messageReaders } } : {}) } };
+        if (route.endsWith('/snapshot')) return { body: value };
+        if (route.startsWith('/changes?')) return { body: { cursor: value.cursor, changes: [], hasMore: false } };
+        if (route.includes('/messages?')) return { body: value.messages };
+        return response(route);
+      });
+    }
+    async function open() {
+      const result = await service.getGroup(roomId);
+      if (!result.ok) throw new Error(result.errorCode);
+      await vi.advanceTimersByTimeAsync(2000);
+      const socket = fixture.sockets[0];
+      Object.defineProperty(socket, 'readyState', { value: 1 });
+      socket.emit('message', JSON.stringify({ type: 'ready' }));
+      await vi.advanceTimersByTimeAsync(300);
+      // The reconnect starts positions over; the open view reads again.
+      const reread = await service.getGroup(roomId);
+      if (!reread.ok) throw new Error(reread.errorCode);
+      return { socket, group: reread.group };
+    }
+    // The server sends a read receipt to the author's private channel only.
+    const receipt = (data: Record<string, unknown>, extra: Record<string, unknown> = {}) => JSON.stringify({ type: 'ephemeral', scope: `actor:${selfId}`, actorId: peer, kind: 'receipt',
+      data: JSON.stringify({ conversationId: roomId, threadRootId: null, ...data }), ...extra });
+    const snapshotReads = () => fixture.handle.mock.calls.filter(([route]) => String(route).endsWith('/snapshot')).length;
+
+    it('marks only my own messages that another member has read, from sequences', async () => {
+      serve(snapshot([{ thread_key: 'main', read_seq: '5' }]));
+      const { group } = await open();
+      expect(group.supportsMessageReaders).toBe(true);
+      expect(group.messages.map(m => [m.serverSequence, m.readByOthers])).toEqual([['3', true], ['7', false], ['9', undefined]]);
+    });
+    it('counts a 面具 message as mine, and a teammate speaking as itself as not', async () => {
+      const attribution = { self: { id: selfId, name: 'Me', avatarUrl: null }, companion: { id: botId, name: 'Cindy', avatarUrl: null }, sourceMessageId: message('9', peer).id };
+      // The server stores a mask reply under my own author ID as a human, with the attribution beside it.
+      const masked = { ...message('4'), maskAttribution: attribution };
+      const asBot = { ...message('8', botId), author: { kind: 'bot', name: 'Cindy' } };
+      serve({ ...snapshot([{ thread_key: 'main', read_seq: '5' }]),
+        members: [...members, { id: botId, kind: 'bot', name: 'Cindy', state: 'joined', role: 'member', ownerActorId: selfId }],
+        messages: [asBot, message('7'), masked, message('3', peer)] });
+      const { group } = await open();
+      expect(group.messages.map(m => [m.serverSequence, m.isSelf, m.maskAttribution ? 'mask' : '-', m.readByOthers])).toEqual([
+        ['3', false, '-', undefined], ['4', true, 'mask', true], ['7', true, '-', false], ['8', false, '-', undefined]]);
+    });
+    it('shows nothing without the server capability or its positions', async () => {
+      serve(snapshot([{ thread_key: 'main', read_seq: '5' }]), 0);
+      const { group } = await open();
+      expect(group).not.toHaveProperty('supportsMessageReaders');
+      expect(group.messages.some(m => 'readByOthers' in m)).toBe(false);
+    });
+    it('moves the check on a live receipt without reading anything or acknowledging it', async () => {
+      // The warm history projection is what the app uses: its snapshot is not read again.
+      let saved: unknown;
+      service.dispose();
+      deps.chatHistoryStore = () => ({ read: async () => saved as undefined, write: async (_room, state) => { saved = state ?? undefined; } });
+      service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+      serve(snapshot([{ thread_key: 'main', read_seq: '5' }]));
+      const { socket } = await open();
+      vi.mocked(deps.onChanged!).mockClear(); vi.mocked(socket.send).mockClear();
+      const reads = snapshotReads();
+      // A receipt that reads nothing of mine, one for a group this client does not follow, and the old
+      // public form on the group's channel change nothing.
+      socket.emit('message', receipt({ readSeq: '6' }));
+      socket.emit('message', receipt({ conversationId: '10000000-0000-4000-8000-0000000000ff', readSeq: '9' }));
+      socket.emit('message', receipt({ readSeq: '9' }, { scope: `conversation:${roomId}` }));
+      await vi.advanceTimersByTimeAsync(300);
+      expect(deps.onChanged).not.toHaveBeenCalled();
+      socket.emit('message', receipt({ readSeq: '8' }));
+      await vi.advanceTimersByTimeAsync(300);
+      expect(deps.onChanged).toHaveBeenCalledTimes(1);
+      expect(deps.onChanged).toHaveBeenCalledWith({ groupId: roomId, change: 'messages' }, undefined);
+      const group = await service.getGroup(roomId);
+      if (!group.ok) throw new Error(group.errorCode);
+      expect(group.group.messages.map(m => m.readByOthers)).toEqual([true, true, undefined]);
+      expect(socket.send).not.toHaveBeenCalled();
+      expect(snapshotReads()).toBe(reads);
+    });
+    it('refreshes a message shown from an older page that the snapshot window no longer holds', async () => {
+      let saved: unknown;
+      service.dispose();
+      deps.chatHistoryStore = () => ({ read: async () => saved as undefined, write: async (_room, state) => { saved = state ?? undefined; } });
+      service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+      const value = snapshot([{ thread_key: 'main', read_seq: '5' }]);
+      // The snapshot's newest messages hold only the peer's; my messages 3 and 7 come from the page being shown.
+      serve({ ...value, messages: [message('9', peer)] });
+      const original = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => route.includes('/messages?') ? { body: [message('9', peer), message('7'), message('3')] } : original(route, method, body));
+      const { socket, group } = await open();
+      expect(group.messages.map(m => [m.serverSequence, m.readByOthers])).toEqual([['3', true], ['7', false], ['9', undefined]]);
+      vi.mocked(deps.onChanged!).mockClear();
+      socket.emit('message', receipt({ readSeq: '8' }));
+      await vi.advanceTimersByTimeAsync(300);
+      expect(deps.onChanged).toHaveBeenCalledTimes(1);
+    });
+    it('reads the snapshot again after a while when my messages are still unread, so a lost receipt is made up for', async () => {
+      let saved: unknown;
+      service.dispose();
+      deps.chatHistoryStore = () => ({ read: async () => saved as undefined, write: async (_room, state) => { saved = state ?? undefined; } });
+      service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+      serve(snapshot([{ thread_key: 'main', read_seq: '5' }]));
+      await open();
+      const reads = snapshotReads();
+      // Soon after, the cached snapshot is trusted.
+      await service.getGroup(roomId);
+      expect(snapshotReads()).toBe(reads);
+      // Later, with message 7 of mine still unread, it is read once more; the next read within the interval is not.
+      await vi.advanceTimersByTimeAsync(31_000);
+      await service.getGroup(roomId);
+      expect(snapshotReads()).toBe(reads + 1);
+      await service.getGroup(roomId);
+      expect(snapshotReads()).toBe(reads + 1);
+    });
+    it('does not read the snapshot again when everything of mine is already read', async () => {
+      let saved: unknown;
+      service.dispose();
+      deps.chatHistoryStore = () => ({ read: async () => saved as undefined, write: async (_room, state) => { saved = state ?? undefined; } });
+      service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+      serve(snapshot([{ thread_key: 'main', read_seq: '9' }]));
+      await open();
+      const reads = snapshotReads();
+      await vi.advanceTimersByTimeAsync(31_000);
+      await service.getGroup(roomId);
+      expect(snapshotReads()).toBe(reads);
+    });
+    it('keeps a receipt that arrives after a replacement snapshot is in hand while the rest of the read is awaited', async () => {
+      let saved: unknown;
+      service.dispose();
+      deps.chatHistoryStore = () => ({ read: async () => saved as undefined, write: async (_room, state) => { saved = state ?? undefined; } });
+      service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+      serve(snapshot([{ thread_key: 'main', read_seq: '5' }]));
+      const { socket } = await open();
+      // A membership change replaces the cached snapshot (a new object, same positions) on the next read; that read waits on executions.
+      let release!: () => void;
+      const executions = new Promise<void>(resolve => { release = resolve; });
+      const original = fixture.handle.getMockImplementation()!;
+      serve(snapshot([{ thread_key: 'main', read_seq: '5' }]));
+      const served = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => route.endsWith('/executions') ? executions.then(() => ({ body: [] })) : (served ?? original)(route, method, body));
+      socket.emit('message', JSON.stringify({ type: 'changes', scope: `conversation:${roomId}`, cursor: '10', changes: [{ type: 'membership.changed', entityId: peer }] }));
+      await vi.advanceTimersByTimeAsync(50);
+      const reading = service.getGroup(roomId);
+      await vi.advanceTimersByTimeAsync(50);
+      // The receipt for my message 7 comes before the read finishes.
+      socket.emit('message', receipt({ readSeq: '8' }));
+      release();
+      await vi.advanceTimersByTimeAsync(300);
+      const group = await reading;
+      if (!group.ok) throw new Error(group.errorCode);
+      expect(group.group.messages.map(m => [m.serverSequence, m.readByOthers])).toEqual([['3', true], ['7', true], ['9', undefined]]);
+    });
+    it('keeps a received receipt when the readers list is opened, which reads a snapshot the history cache does not adopt', async () => {
+      let saved: unknown;
+      service.dispose();
+      deps.chatHistoryStore = () => ({ read: async () => saved as undefined, write: async (_room, state) => { saved = state ?? undefined; } });
+      service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+      serve(snapshot([{ thread_key: 'main', read_seq: '5' }]));
+      const target = message('7').id;
+      const original = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => route.endsWith('/readers')
+        ? { body: { messageId: target, eligibleCount: 1, readers: [{ actorId: peer, readAt: '2026-10-03T00:00:05Z' }] } }
+        : original(route, method, body));
+      const { socket } = await open();
+      socket.emit('message', receipt({ readSeq: '8' }));
+      await vi.advanceTimersByTimeAsync(300);
+      // Opening the list reads a fresh snapshot on the side; the cache keeps the one it has.
+      await service.chatServer!.readers({ groupId: roomId, messageId: target });
+      const group = await service.getGroup(roomId);
+      if (!group.ok) throw new Error(group.errorCode);
+      expect(group.group.messages.map(m => [m.serverSequence, m.readByOthers])).toEqual([['3', true], ['7', true], ['9', undefined]]);
+    });
+    it('shows the check on a message of mine as soon as it is pushed, without a full read of the room', async () => {
+      let saved: unknown;
+      service.dispose();
+      deps.chatHistoryStore = () => ({ read: async () => saved as undefined, write: async (_room, state) => { saved = state ?? undefined; } });
+      service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+      serve(snapshot([{ thread_key: 'main', read_seq: '5' }]));
+      const { socket } = await open();
+      vi.mocked(deps.onChanged!).mockClear();
+      const mine = message('11'), theirs = message('12', peer);
+      for (const created of [mine, theirs])
+        socket.emit('message', JSON.stringify({ type: 'changes', scope: `conversation:${roomId}`, cursor: created.seq, changes: [{ type: 'message.created', entityId: created.id, data: { message: created } }] }));
+      await vi.advanceTimersByTimeAsync(300);
+      const pushed = vi.mocked(deps.onChanged!).mock.calls.flatMap(([event]) => (event as { messages?: Array<{ id: string; readByOthers?: boolean }> }).messages ?? []);
+      // Mine is pushed with a single check; someone else's has none. Neither waits for executions or plans.
+      expect(pushed.find(m => m.id === mine.id)?.readByOthers).toBe(false);
+      expect(pushed.find(m => m.id === theirs.id)).toBeDefined();
+      expect(pushed.find(m => m.id === theirs.id)?.readByOthers).toBeUndefined();
+    });
+    it('lets a newer snapshot replace positions received before it', async () => {
+      const value = snapshot([{ thread_key: 'main', read_seq: '5' }]);
+      serve(value);
+      const { socket } = await open();
+      socket.emit('message', receipt({ readSeq: '8' }));
+      // A member left: the maximum over current members went down.
+      serve({ ...value, othersRead: [{ thread_key: 'main', read_seq: '2' }] });
+      socket.emit('message', JSON.stringify({ type: 'changes', scope: `conversation:${roomId}`, cursor: '10', changes: [{ type: 'membership.changed', entityId: peer }] }));
+      await vi.advanceTimersByTimeAsync(300);
+      const group = await service.getGroup(roomId);
+      if (!group.ok) throw new Error(group.errorCode);
+      expect(group.group.messages.map(m => m.readByOthers)).toEqual([false, false, undefined]);
+    });
+    it('lists human readers by actor ID, caches them per message and drops them on a receipt', async () => {
+      serve(snapshot([{ thread_key: 'main', read_seq: '5' }]));
+      const bot = botId, former = '30000000-0000-4000-8000-000000000003';
+      const target = message('7').id;
+      fixture.handle.mockImplementation(((previous) => (route: string, method: string, body: unknown) => {
+        if (route === `/conversations/${roomId}/messages/${target}/readers`) return { body: { messageId: target, eligibleCount: 3,
+          readers: [{ actorId: peer, readAt: '2026-10-03T00:00:05Z' }, { actorId: bot, readAt: '2026-10-03T00:00:06Z' }, { actorId: former, readAt: null }],
+          unread: [{ actorId: bot }, { actorId: selfId }] } };
+        if (route === `/conversations/${roomId}/members`) return { body: [...members, { id: bot, kind: 'bot', name: 'Cindy', ownerName: 'Me', state: 'joined' },
+          { id: former, kind: 'human', name: 'Ada', ownerName: 'Ada', state: 'left' }] };
+        return previous(route, method, body);
+      })(fixture.handle.getMockImplementation()!));
+      const { socket } = await open();
+      const result = await service.chatServer!.readers({ groupId: roomId, messageId: target });
+      if (!result.ok) throw new Error(result.errorCode);
+      // Only readers are given on; the server's unread list is ignored, and a bot is never a reader.
+      expect(result.readers).toEqual({ messageId: target, eligibleCount: 3, readCount: 2, listed: true,
+        readers: [{ actorId: peer, name: 'Peer', readAt: Date.parse('2026-10-03T00:00:05Z'), formerMember: false },
+          { actorId: former, name: 'Ada', readAt: null, formerMember: true }] });
+      const reads = () => fixture.handle.mock.calls.filter(([route]) => String(route).endsWith('/readers')).length;
+      await service.chatServer!.readers({ groupId: roomId, messageId: target });
+      expect(reads()).toBe(1);
+      socket.emit('message', receipt({ readSeq: '9' }));
+      await service.chatServer!.readers({ groupId: roomId, messageId: target });
+      expect(reads()).toBe(2);
+    });
+    it('gives just the counts for a group the server does not list', async () => {
+      serve(snapshot([{ thread_key: 'main', read_seq: '5' }]));
+      const target = message('7').id;
+      const original = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => route.endsWith('/readers')
+        ? { body: { messageId: target, eligibleCount: 180, readCount: 37, listed: false, readers: [], unread: [] } } : original(route, method, body));
+      await open();
+      await expect(service.chatServer!.readers({ groupId: roomId, messageId: target })).resolves.toEqual({
+        ok: true, readers: { messageId: target, eligibleCount: 180, readCount: 37, listed: false, readers: [] } });
+    });
+    it('reports a group too large to list and refuses a server without the capability', async () => {
+      serve(snapshot([{ thread_key: 'main', read_seq: '5' }]));
+      const target = message('7').id;
+      const original = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => route.endsWith('/readers')
+        ? { status: 409, body: { error: { code: 'GROUP_TOO_LARGE', message: 'x' } } } : original(route, method, body));
+      await open();
+      await expect(service.chatServer!.readers({ groupId: roomId, messageId: target })).resolves.toEqual({ ok: false, errorCode: 'GROUP_TOO_LARGE' });
+      await expect(service.chatServer!.readers({ groupId: roomId, messageId: 'nope' })).resolves.toEqual({ ok: false, errorCode: 'INVALID_INPUT' });
+    });
+  });
   it('an additive invite preserves people and all previously joined companions', async () => {
     const other = '60000000-0000-4000-8000-000000000002';
     fixture.handle.mockImplementation(route => route.endsWith('/snapshot') ? { body: { room: room(roomId), messages: [], cursor: '1', members: [
