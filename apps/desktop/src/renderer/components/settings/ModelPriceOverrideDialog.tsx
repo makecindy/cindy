@@ -64,6 +64,15 @@ function formFromView(view: ModelPriceOverrideView): FormState {
     : EMPTY_FORM;
 }
 
+const FORM_FIELDS = ['currency', 'input', 'output', 'cacheRead', 'cacheCreate'] as const;
+
+function mergeDraft(previous: FormState, draft: FormState, latest: FormState): FormState {
+  const value = <K extends keyof FormState>(key: K) =>
+    draft[key] === previous[key] ? latest[key] : draft[key];
+  return { currency: value('currency'), input: value('input'), output: value('output'),
+    cacheRead: value('cacheRead'), cacheCreate: value('cacheCreate') };
+}
+
 function parseRequiredPrice(value: string): number | null {
   if (!/^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value.trim())) return null;
   const parsed = Number(value);
@@ -82,9 +91,19 @@ export function ModelPriceOverrideDialog({
   const { t } = useTranslation();
   const [agent, setAgent] = useState<AgentKind>(initialAgent ?? row.avail[0]);
   const [view, setView] = useState<ModelPriceOverrideView | null>(null);
-  const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const [form, setFormState] = useState<FormState>(EMPTY_FORM);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [pricingRevision, setPricingRevision] = useState(0);
+  const refreshQueuedRef = useRef(false);
+  const refreshGenerationRef = useRef(0);
+  const viewRef = useRef(view);
+  const formRef = useRef(form);
+  const setForm = (next: FormState | ((current: FormState) => FormState)) => {
+    const resolved = typeof next === 'function' ? next(formRef.current) : next;
+    formRef.current = resolved;
+    setFormState(resolved);
+  };
 
   const model = row.byAgent[agent];
   const modelId = model?.id;
@@ -97,16 +116,32 @@ export function ModelPriceOverrideDialog({
   // only when the override API has no quote, without changing its edit permissions.
   const fallbackQuoteOfRef = useRef(fallbackQuoteOf);
   fallbackQuoteOfRef.current = fallbackQuoteOf;
-  const applyView = (next: ModelPriceOverrideView) => {
+  const resolveView = (next: ModelPriceOverrideView) => {
     const fallback = fallbackQuoteOfRef.current?.(next.target.agent);
     const effective = !next.effective && !next.reference &&
       fallback?.source === 'provider-reference' &&
       fallback.providerId === next.target.providerId && fallback.modelId === next.target.modelId &&
       next.allowedCurrencies.includes(fallback.currency)
         ? fallback : next.effective;
-    const resolved = effective === next.effective ? next : { ...next, effective };
+    return effective === next.effective ? next : { ...next, effective };
+  };
+  const applyView = (next: ModelPriceOverrideView, preserveDraft = false) => {
+    const resolved = resolveView(next);
+    const previous = viewRef.current && formFromView(viewRef.current);
+    const latest = formFromView(resolved);
+    const current = formRef.current;
+    if (preserveDraft && previous && previous.currency !== latest.currency &&
+        FORM_FIELDS.some(key => current[key] !== previous[key])) {
+      // Do not reinterpret an unsaved amount in another window's new currency.
+      refreshQueuedRef.current = true;
+      toast.error(t('settings.providers.models.priceOverride.loadFailed'));
+      return false;
+    }
+    const nextForm = preserveDraft && previous ? mergeDraft(previous, current, latest) : latest;
+    viewRef.current = resolved;
+    setForm(nextForm);
     setView(resolved);
-    setForm(formFromView(resolved));
+    return true;
   };
 
   // DESIGN.md §4:弹窗打开时焦点落主输入,而不是 Radix 默认的首个可聚焦元素(关闭按钮)。
@@ -117,15 +152,21 @@ export function ModelPriceOverrideDialog({
   const mutationEpochRef = useRef(0);
   const pendingMutationRef = useRef(false);
   const requestedAgentRef = useRef<AgentKind | null>(null);
-  const cancelledFieldRef = useRef<keyof FormState | null>(null);
   const setMutationPending = (pending: boolean) => {
     pendingMutationRef.current = pending;
     setSaving(pending);
     onPendingChange?.(pending);
+    if (!pending && refreshQueuedRef.current) setPricingRevision(++refreshGenerationRef.current);
   };
   useEffect(() => {
     mutationEpochRef.current += 1;
     requestedAgentRef.current = null;
+    refreshQueuedRef.current = false;
+    if (!open) {
+      viewRef.current = null;
+      setView(null);
+      setForm(EMPTY_FORM);
+    }
     setMutationPending(false);
   }, [open, target]);
   // UnifiedModelList 按行条件渲染本弹窗:换行会卸载重挂、换新实例,但旧实例的
@@ -147,27 +188,49 @@ export function ModelPriceOverrideDialog({
   useEffect(() => {
     if (!open || !target) return;
     let cancelled = false;
-    setLoading(true);
-    setView(null);
-    setForm(EMPTY_FORM);
+    const generation = refreshGenerationRef.current;
+    const current = viewRef.current?.target;
+    const sameTarget = current?.providerId === target.providerId &&
+      current.agent === target.agent && current.modelId === target.modelId;
+    if (!sameTarget) {
+      setLoading(true);
+      viewRef.current = null;
+      setView(null);
+      setForm(EMPTY_FORM);
+    }
     void window.electronAPI.maker
       .getModelPriceOverride(target)
       .then((next) => {
-        if (cancelled) return;
-        applyView(next);
+        if (cancelled || generation !== refreshGenerationRef.current) return;
+        if (pendingMutationRef.current) { refreshQueuedRef.current = true; return; }
+        if (applyView(next, sameTarget)) refreshQueuedRef.current = false;
       })
       .catch(() => {
-        if (!cancelled) toast.error(t('settings.providers.models.priceOverride.loadFailed'));
+        if (!cancelled && generation === refreshGenerationRef.current) toast.error(t('settings.providers.models.priceOverride.loadFailed'));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && generation === refreshGenerationRef.current) setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [open, target, t]);
+  }, [open, target, t, pricingRevision]);
 
-  const save = async (draft = form) => {
+  useEffect(() => {
+    if (!inline || !open || !target) return;
+    // Same-target quote broadcasts do not change target identity. Refresh when
+    // idle; a mutation keeps its epoch/close guard and drains the refresh later.
+    try {
+      return window.electronAPI.maker.usage?.onReferenceModelPricingChanged?.(() => {
+        refreshQueuedRef.current = true;
+        const generation = ++refreshGenerationRef.current;
+        if (!pendingMutationRef.current) setPricingRevision(generation);
+      });
+    } catch { /* Older/projected preload: the existing quote read remains usable. */ }
+  }, [inline, open, target]);
+
+  const save = async (draft = formRef.current) => {
+    const view = viewRef.current;
     if (!target || !view || loading || pendingMutationRef.current || (inline && !view.editable)) return;
     // A new estimate has two required fields: tabbing to fill the second is not a validation error.
     if (inline && !view.effective && !view.reference && (!draft.input.trim() || !draft.output.trim())) return;
@@ -194,7 +257,7 @@ export function ModelPriceOverrideDialog({
       toast.error(t('settings.providers.models.priceOverride.invalid'));
       return;
     }
-    const desired: ModelPriceOverrideDesiredQuote = {
+    let desired: ModelPriceOverrideDesiredQuote = {
       currency: draft.currency,
       inputPerMtok,
       outputPerMtok,
@@ -207,11 +270,36 @@ export function ModelPriceOverrideDialog({
           inputPerMtok === parseRequiredPrice(current.input) &&
           outputPerMtok === parseRequiredPrice(current.output) &&
           cacheReadPerMtok === parseOptionalPrice(current.cacheRead) &&
-          cacheCreatePerMtok === parseOptionalPrice(current.cacheCreate)) return;
+          cacheCreatePerMtok === parseOptionalPrice(current.cacheCreate)) {
+        // A no-op blur settles formatting too; it is no longer an unsaved draft.
+        applyView(view);
+        return;
+      }
     }
     setMutationPending(true);
     const epoch = mutationEpochRef.current;
     try {
+      if (inline && refreshQueuedRef.current) {
+        const generation = refreshGenerationRef.current;
+        const latest = resolveView(await window.electronAPI.maker.getModelPriceOverride(target));
+        if (mutationEpochRef.current !== epoch) return;
+        if (generation !== refreshGenerationRef.current) throw new Error('price changed while rereading');
+        const previous = formFromView(view);
+        const latestForm = formFromView(latest);
+        if (!latest.editable || (latestForm.currency !== previous.currency && draft.currency === previous.currency)) {
+          throw new Error('price changed while editing');
+        }
+        const rebased = mergeDraft(previous, draft, latestForm);
+        const input = parseRequiredPrice(rebased.input);
+        const output = parseRequiredPrice(rebased.output);
+        const read = parseOptionalPrice(rebased.cacheRead);
+        const create = parseOptionalPrice(rebased.cacheCreate);
+        if (input === null || output === null || read === 'invalid' || create === 'invalid') {
+          throw new Error('latest price is incomplete');
+        }
+        desired = { currency: rebased.currency, inputPerMtok: input, outputPerMtok: output,
+          cacheReadPerMtok: read, cacheCreatePerMtok: create };
+      }
       const next = await window.electronAPI.maker.setModelPriceOverride(target, desired);
       if (mutationEpochRef.current !== epoch) return;
       applyView(next);
@@ -231,6 +319,7 @@ export function ModelPriceOverrideDialog({
   };
 
   const reset = async () => {
+    const view = viewRef.current;
     if (!target || pendingMutationRef.current || (inline && (!view?.editable || !view.override))) return;
     setMutationPending(true);
     const epoch = mutationEpochRef.current;
@@ -292,7 +381,7 @@ export function ModelPriceOverrideDialog({
               <select value={form.currency} disabled={blocked}
                 data-model-price-deferred-action onBlur={() => void save()}
                 onChange={(event) => {
-                  const next = { ...form, currency: event.target.value as FormState['currency'] };
+                  const next = { ...formRef.current, currency: event.target.value as FormState['currency'] };
                   setForm(next);
                   void save(next);
                 }}
@@ -327,7 +416,6 @@ export function ModelPriceOverrideDialog({
                     className="min-w-0 bg-transparent text-right text-13 tabular-nums text-[var(--text-primary)] outline-none placeholder:text-[var(--text-placeholder)] disabled:opacity-60"
                     onChange={(event) => setForm((current) => ({ ...current, [field]: event.target.value }))}
                     onBlur={(event) => {
-                      if (cancelledFieldRef.current === field) { cancelledFieldRef.current = null; return; }
                       // Reset/currency owns the next action. Do not disable it before its click/change.
                       if (event.relatedTarget instanceof HTMLElement &&
                           event.relatedTarget.closest('[data-model-price-deferred-action]')) return;
@@ -338,12 +426,9 @@ export function ModelPriceOverrideDialog({
                       if (event.key === 'Escape') {
                         event.preventDefault();
                         event.stopPropagation();
-                        cancelledFieldRef.current = field;
-                        if (view) setForm((current) => ({ ...current, [field]: formFromView(view)[field] }));
                         event.currentTarget.blur();
                       } else if (event.key === 'Enter') {
                         event.preventDefault();
-                        event.currentTarget.blur();
                       }
                     }} />
                 </span>
