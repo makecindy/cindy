@@ -334,7 +334,7 @@ export interface BotGroupTimelineItemProps {
   planDoneAt?: ReadonlyMap<number, number>;
   onPlanAction?: (action: 'start' | 'dismiss', planId: string) => void;
   readOnly?: boolean;
-  onEditStep?: (planId: string, step: BotGroupPlanStepView, action: 'reassign' | 'remove', botId?: string) => void;
+  onEditStep?: (planId: string, step: BotGroupPlanStepView, action: 'reassign' | 'remove' | 'skip', botId?: string) => void;
   /** Present on the open 分工 card for whoever may press 继续 (§7.4). */
   onPlanAutoContinue?: (planId: string, on: boolean) => void;
 }
@@ -533,12 +533,13 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
       <Row {...rowProps} block="author">
         <div className="flex min-w-0 gap-2.5">
           <span aria-hidden className="w-7 shrink-0" />
-          <div data-testid="bot-group-arrangement" className={cn('min-w-0', CHAT_BUBBLE_COLUMN_CLASS)}>
-            <div className="w-fit min-w-0 max-w-full">
+          <div data-testid="bot-group-arrangement" className={cn('w-full min-w-0', CHAT_BUBBLE_COLUMN_CLASS)}>
+            <div className="w-full min-w-0 max-w-full">
               <BotGroupPlanCard
                 plan={props.plan}
                 members={members}
                 actionable={false}
+                readOnly={props.readOnly}
                 // Only the creator, an owner or an admin may change who speaks next.
                 reassignable={(props.planReassignable ?? false) && props.plan.canManage !== false}
                 pending={props.planPending ?? null}

@@ -25,7 +25,7 @@
  * 2026-10-13 伙伴从整栏切换改为任务侧栏里的「伙伴」段(TeammatesSection):行几何不变,
  * 段头改与置顶 / 全部任务段头同款。
  * 2026-10-29 头像几何按 DESIGN.md「Mobile task home teammate section」统一为
- * 列表 44px / 收起 48px；本文件保留跨文件间距合同，不再锁定旧 40px 头像。
+ * 列表 44px；2026-11-04 收起沿用 36px 头像、40px 点击区与 4px 间距。
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -82,18 +82,18 @@ describe('伙伴行的间距基线', () => {
     expect(source).toContain("'min-w-0 flex-1 truncate text-14 leading-5',");
     expect(source).toContain("cn('min-h-4 text-11 tabular-nums', mutedClass)");
     expect(source).toContain("'min-w-0 flex-1 truncate text-12 leading-4',");
-    // 徽标 16×16,左右各 4px，数字变化不抖动。
-    expect(source).toContain(
-      'flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-[var(--bot-unread-bg)] px-1 text-10 font-medium tabular-nums leading-none text-[var(--bot-unread-fg)]',
-    );
+    // 未读由行尾状态点表达，时间列占位仍与 main 一致。
+    expect(source).toContain('<BotAvatar bot={bot} size="row" />');
   });
 
-  it('时间与未读共用右列,较长的相对时间不折行', () => {
+  it('时间保留 main 的右列布局，较长的相对时间不折行', () => {
     const start = source.indexOf(
       '<span className="flex min-w-10 shrink-0 self-stretch flex-col items-end justify-between whitespace-nowrap py-0.5">',
     );
     const metaColumn = source.slice(start, source.indexOf('</button>', start));
-    expect(metaColumn).toContain("aria-label={t('bots.list.unread', { count: unread })}");
+    expect(metaColumn).toContain('flex min-h-4 items-center justify-end');
+    const subtitle = source.slice(source.indexOf('{showRunning ? <TeammateRunningPreview>{subtitleText}'), start);
+    expect(subtitle).toContain('<TeammateRowStatus status={status} />');
     expect(metaColumn).toContain("cn('min-h-4 text-11 tabular-nums', mutedClass)");
   });
 
@@ -128,7 +128,7 @@ describe('伙伴行的间距基线', () => {
       '<div className="group/sidebar-header flex h-6 items-center justify-between pr-3 pl-6">',
     );
     // 头像行起点 = 列表容器 12px + 行内边距 10px。
-    expect(source).toContain('<div ref={avatarRowRef} className="flex flex-nowrap items-center gap-2 overflow-hidden py-1 pr-0 pl-[22px]">');
+    expect(source).toContain('<div ref={avatarRowRef} className="flex flex-nowrap items-center gap-1 overflow-hidden py-1 pr-0 pl-[22px]">');
     // 段头动作是 20px 图标钮,与其它段头动作同尺寸。
     expect(source).toContain('<BotCreateMenu variant="header" />');
     // 加入群聊收进「+」菜单的「输入邀请链接…」(#6013),段头不再有单独的加群按钮。

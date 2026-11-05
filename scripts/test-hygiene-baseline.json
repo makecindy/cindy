@@ -822,12 +822,6 @@
     "apps/desktop/src/renderer/features/bots/__tests__/botNavigation.test.ts": {
       "sourceReads": 5
     },
-    "apps/desktop/src/renderer/features/bots/__tests__/botStore.lifecycle.test.ts": {
-      "resetModules": 2
-    },
-    "apps/desktop/src/renderer/features/bots/__tests__/botStore.modelSettings.test.ts": {
-      "resetModules": 1
-    },
     "apps/desktop/src/renderer/features/bots/__tests__/chatInviteBrowserHandoff.test.tsx": {
       "sourceReads": 1
     },
@@ -983,9 +977,6 @@
     },
     "apps/mobile/src/__tests__/useBotGroupChat.test.tsx": {
       "realWaits": 2
-    },
-    "apps/mobile/src/__tests__/useDeviceProviders.test.ts": {
-      "resetModules": 1
     },
     "apps/mobile/src/__tests__/visualMock.test.ts": {
       "resetModules": 1

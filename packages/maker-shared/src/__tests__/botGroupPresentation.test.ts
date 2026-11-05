@@ -5,6 +5,8 @@ import {
   botGroupErrorVariant,
   botGroupNoticeVariant,
   botGroupPlanFollowUp,
+  botGroupPlanStepState,
+  canSkipBotGroupPlanStep,
   isBotGroupDivisionBlocked,
   mergeBotGroupMessages,
   projectBotGroupExecutionFailures,
@@ -340,5 +342,46 @@ describe('group body component display', () => {
       { kind: 'text', content: 'Summary' }, { kind: 'text', content: 'Updated' },
       { kind: 'text', content: 'Diagram' },
     ]);
+  });
+});
+
+// An assigned talk turn may still be waiting for its device. Both UIs use these facts.
+describe('unclaimed talk turn controls', () => {
+  it('allows future pending turns only on capable hosts and leaves running turns protected', () => {
+    const current = { position: 0, botId: 'a', botName: 'A', task: '', status: 'running' as const, executionId: 'run', executionStatus: 'running' };
+    const future = { position: 1, botId: 'b', botName: 'B', task: '', status: 'pending' as const };
+    const value = plan({ kind: 'talk', status: 'running', currentStep: 0, canManage: true, supportsPendingSkip: true, steps: [current, future] });
+    expect(canSkipBotGroupPlanStep(value, current)).toBe(false);
+    expect(canSkipBotGroupPlanStep(value, future)).toBe(true);
+    expect(canSkipBotGroupPlanStep({ ...value, status: 'waiting' }, future)).toBe(true);
+    for (const overrides of [{ supportsPendingSkip: undefined }, { kind: 'work' as const }, { canManage: false }, { status: 'stopped' as const }]) {
+      expect(canSkipBotGroupPlanStep({ ...value, ...overrides }, future)).toBe(false);
+    }
+    expect(canSkipBotGroupPlanStep(value, { ...future, status: 'skipped' })).toBe(false);
+  });
+  const queued = () => plan({ kind: 'talk', status: 'running', canManage: true,
+    steps: [{ position: 0, botId: 'a', botName: 'A', task: '', status: 'running', executionId: 'run', executionStatus: 'queued' }],
+  });
+  it('labels queued work without claiming that the device started it', () => {
+    const value = queued();
+    expect(botGroupPlanStepState(value, value.steps[0])).toBe('queued');
+    expect(canSkipBotGroupPlanStep(value, value.steps[0])).toBe(true);
+    expect(botGroupPlanStepState({ ...value, status: 'stopped' }, value.steps[0])).toBe('stopped');
+    expect(botGroupPlanStepState(value, { ...value.steps[0], executionStatus: 'running' })).toBe('running');
+  });
+  it('offers no skip for legacy snapshots, running devices, work plans or viewers', () => {
+    const value = queued();
+    for (const overrides of [{ kind: 'work' as const }, { canManage: false }, { status: 'stopped' as const }, { currentStep: 1 }]) {
+      expect(canSkipBotGroupPlanStep({ ...value, ...overrides }, value.steps[0])).toBe(false);
+    }
+    for (const overrides of [{ executionId: undefined }, { executionStatus: undefined }, { executionStatus: 'running' }]) {
+      expect(canSkipBotGroupPlanStep(value, { ...value.steps[0], ...overrides })).toBe(false);
+    }
+  });
+  it('continues a skipped talk turn without treating a work dependency as complete', () => {
+    const value = plan({ kind: 'talk' });
+    value.steps[0].status = 'skipped';
+    expect(botGroupPlanFollowUp(value)?.kind).toBe('continue');
+    expect(botGroupPlanFollowUp({ ...value, kind: 'work' })).toBeNull();
   });
 });
