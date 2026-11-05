@@ -421,7 +421,52 @@ describe('live compact 1.0.8: cache-safe drains, pointer-only spans, no cross-us
     expect(selectCutIndexes(items, { engine: 'local' })?.pointerOnly).toBeUndefined();
   });
 
-  it('leaves an oversized tool result as a pointer instead of refusing the cut', () => {
+  it('does not drain while the whole cuttable history is inside the kept rounds', () => {
+    // 前面只有 user,可切的全部历史都在保留区内时,上游同样返回 null(切点退到 user、再退就越界)。
+    // 一旦多出一轮、有旧段落落到保留区之外,切割就恢复 —— 这里把两个状态都钉住。
+    const user = 'u '.repeat(24000);
+    const round = (id) => [
+      entry('assistant', 'call', { calls: [id] }),
+      entry('toolResult', 'r '.repeat(16000), { results: [id] }),
+    ];
+    const entries = [entry('system', 'sys'), entry('user', user), ...round('c0'), ...round('c1'), ...round('c2')];
+    expect(selectNewestChunk(entries, undefined, { drain: true, totalTokens: 36000 })).toBeNull();
+
+    const withOlderRound = [entry('system', 'sys'), entry('user', user), ...round('c9'), ...round('c0'), ...round('c1'), ...round('c2')];
+    expect(selectNewestChunk(withOlderRound, undefined, { drain: true, totalTokens: 44000 })).not.toBeNull();
+  });
+
+  it('refuses a pointer cut that would orphan a sibling tool result', () => {
+    // 一条 assistant 消息发了两个调用:先返回的结果超大(走指针),后一个很小。
+    // 只换掉前一个,后一个就变成没有调用的孤儿 —— 与普通切法用同一条平衡判据拦下。
+    const huge = 'big '.repeat(36000);
+    const entries = [
+      entry('system', 'sys'),
+      entry('user', 'older'),
+      entry('assistant', 'call', { calls: ['c9'] }),
+      entry('toolResult', 'older result '.repeat(400), { results: ['c9'] }),
+      entry('user', 'read two things'),
+      entry('assistant', 'calls', { calls: ['c0', 'c1'] }),
+      entry('toolResult', huge, { results: ['c0'] }),
+      entry('toolResult', 'tiny', { results: ['c1'] }),
+    ];
+    expect(selectNewestChunk(entries, undefined, { drain: true, totalTokens: 60000 })).toBeNull();
+
+    // 对照:同一个超大结果独占一条调用消息时,指针切法照旧成立。
+    const control = [
+      entry('system', 'sys'),
+      entry('user', 'older'),
+      entry('assistant', 'call', { calls: ['c9'] }),
+      entry('toolResult', 'older result '.repeat(400), { results: ['c9'] }),
+      entry('user', 'read one thing'),
+      entry('assistant', 'call', { calls: ['c0'] }),
+      entry('toolResult', huge, { results: ['c0'] }),
+    ];
+    const pointerCut = selectNewestChunk(control, undefined, { drain: true, totalTokens: 60000 });
+    expect(pointerCut).toMatchObject({ start: 5, end: 6 });
+  });
+
+  it('keeps an oversized tool result as a pointer instead of refusing the cut', () => {
     const items = cut([
       ['user', 50],
       ['assistant', 100],

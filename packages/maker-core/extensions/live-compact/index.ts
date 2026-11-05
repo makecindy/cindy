@@ -1908,9 +1908,12 @@ export function selectNewestChunk(
     }
     // 切割后 prefix 是 [0..start-1],所以平衡判据要取 start-1(原仓 toolPairingBalancedBefore)。
     if (!cutOk(() => start <= 0 || prefixBalanced[start - 1])) return warn(`prefix not balanced at start=${start}`);
-    if (!cutOk(() => suffixClean(spanEnd))) return warn(`suffix not clean at end=${spanEnd}`);
     if (isCheckpoint(entries[start])) return warn(`start=${start} is checkpoint`);
   }
+  // 1.0.8: 平衡判据盖住两种切法。上游的 toolPairingBalancedAfter 写在 pointerOnly/普通两支之后,
+  // 指针段同样要对:一条 assistant 发两个调用、只把超大的那个结果换成指针时,
+  // 后一个结果会变成没有调用的孤儿。
+  if (!cutOk(() => suffixClean(spanEnd))) return warn(`suffix not clean at end=${spanEnd}`);
   let prefix = 0;
   for (let index = 0; index < start; index += 1) prefix += entries[index].est;
   let after = 0;
