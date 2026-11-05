@@ -1207,7 +1207,16 @@ interface ElectronAPI {
   pageZoomReset: () => Promise<{ ok: true; zoomFactor: number }>;
   accessibilitySupport: import('../shared/accessibilitySupport').AccessibilitySupportBridge;
   appPreferenceControl?: import('../shared/appPreferenceControl').AppPreferenceControlBridge;
+  pluginUiVisibility?: {
+    get: () => Promise<import('@cindy/maker-shared/plugin-ui').PluginUiVisibilityValues>;
+    release: () => Promise<void>;
+    onApply: (callback: (request: import('../shared/pluginUiVisibility').PluginUiVisibilityApplication) => void) => () => void;
+    applied: (requestId: string) => Promise<void>;
+  };
   appearanceSettings: {
+    loadPluginFont?: (role: 'uiFont' | 'codeFont' | 'bodyFont') => Promise<{ family: string; base64: string }>;
+    onPluginApply?: (callback: (request: import('../shared/pluginAppearance').PluginAppearanceApplication) => void) => () => void;
+    pluginApplied?: (requestId: string, status: 'applied' | 'saved' | 'failed') => Promise<void>;
     importWallpaper: () => Promise<import('../shared/appearanceSettings').AppearanceSettings | null>;
     ensureWallpaperVideo?: (id: import('../shared/appearanceSettings').WallpaperId) => Promise<string | null>;
     ensureWallpaperImage?: (id: import('../shared/appearanceSettings').WallpaperId) => Promise<string | null>;
@@ -1263,13 +1272,14 @@ interface ElectronAPI {
       platform: string;
       /** 运行态: 注册失败 (多为被其它应用占用) 的全局快捷键 id。 */
       globalFailures?: unknown;
+      pluginShortcuts?: import('../shared/appShortcuts').PluginShortcutDefinition[];
     };
     setOverride: (
-      id: import('../shared/appShortcuts').AppShortcutId,
+      id: import('../shared/appShortcuts').ShortcutId,
       combo: import('../shared/appShortcuts').AppShortcutCombo | null,
     ) => Promise<{ overrides: import('../shared/appShortcuts').AppShortcutOverrides }>;
     clearOverride: (
-      id: import('../shared/appShortcuts').AppShortcutId,
+      id: import('../shared/appShortcuts').ShortcutId,
     ) => Promise<{ overrides: import('../shared/appShortcuts').AppShortcutOverrides }>;
     resetAll: () => Promise<{ overrides: import('../shared/appShortcuts').AppShortcutOverrides }>;
     setRecording: (active: boolean) => void;
@@ -1277,6 +1287,7 @@ interface ElectronAPI {
       callback: (payload: {
         overrides: import('../shared/appShortcuts').AppShortcutOverrides;
         globalFailures?: unknown;
+        pluginShortcuts?: import('../shared/appShortcuts').PluginShortcutDefinition[];
       }) => void,
     ) => () => void;
   };
@@ -1300,6 +1311,25 @@ interface ElectronAPI {
   /** 意识仓库 —— 数据模型与校验见 shared/ghost.ts,main 端见 main/cindy-brain/。 */
   ghosts: {
     activateBrowser: (id: string) => Promise<{ ok: boolean }>;
+    ui: {
+      tabViews: {
+        ready(): Promise<void>;
+        navigate(requestId: string): Promise<import('@cindy/maker-shared').PluginUiNavigationResult>;
+        onRequest(callback: (input: unknown) => void): () => void;
+        opened(requestId: string, tabId: string | null): Promise<void>;
+        mount(input: import('../shared/pluginUi').PluginTabViewMountRequest): Promise<import('../shared/pluginUi').PluginTabViewMountResult>;
+        update(input: { token: string; params: import('@cindy/maker-shared').PluginUiValues; sequence: number; visible: boolean }): Promise<void>;
+        release(token: string, moving: boolean): Promise<void>;
+      };
+      read: (request: import('../shared/pluginUi').PluginUiReadRequest) => Promise<import('../shared/pluginUi').PluginUiReadResult>;
+      invoke: (request: import('../shared/pluginUi').PluginUiInvokeRequest) => Promise<import('../shared/pluginUi').PluginUiInvokeResult>;
+      chooseRenderer: (request: import('../shared/pluginUi').PluginUiChooseRendererRequest) => Promise<void>;
+      openPage: (request: import('../shared/pluginUi').PluginUiPageOpenRequest) => Promise<string>;
+      closePage: (request: { pageId: string }) => Promise<void>;
+      release: (request: { subscriptionId: string }) => Promise<void>;
+      onChanged: (callback: (value: import('../shared/pluginUi').PluginUiChanged) => void) => () => void;
+      inspect: () => Promise<unknown>;
+    };
     mailPreview: (sessionId: string, url: string, read: boolean, opened?: boolean, providerId?: string) => Promise<import('@cindy/maker-shared/mail-message').MailPreviewResult>;
     openRemoteSettings: (target: import('../shared/remotePluginSettings').RemotePluginSettingsTarget) => Promise<import('../shared/remotePluginSettings').RemotePluginSettingsView>;
     closeRemoteSettings: (id: string) => Promise<void>;
@@ -2167,6 +2197,7 @@ interface ElectronAPI {
     setRemoteSessions: (sessions: AgentIslandRemoteSessionInput[]) => Promise<{ ok: true }>;
     setSoundSettings: (settings: AgentIslandSoundSettings) => Promise<{ ok: true }>;
     setMascotSkin: (skin: AgentIslandMascotSkin) => Promise<{ ok: true }>;
+    setSubtleReminders: (enabled: boolean) => Promise<{ ok: true }>;
     setDisplayTarget: (target: AgentIslandDisplayTarget) => Promise<{ ok: true }>;
     getDisplayOptions: () => Promise<{
       ok: true;

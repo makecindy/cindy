@@ -1,4 +1,15 @@
 {
+  "pluginUi": {
+    "renderer": "Apresentação",
+    "original": "Original",
+    "unavailable": "Os controlos da extensão estão indisponíveis. As ações estão desativadas.",
+    "outcome-unknown": "O resultado não foi confirmado. Consulte o estado atual da extensão.",
+    "rejected": "A extensão não executou esta ação. O conteúdo introduzido foi mantido.",
+    "draftChanged": "O conteúdo introduzido mudou. A alteração da extensão não foi aplicada.",
+    "editorUnavailable": "Este campo está indisponível. A alteração da extensão não foi aplicada.",
+    "more": "Mais",
+    "close": "Fechar"
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "Atualizar quota",
@@ -2386,6 +2397,9 @@
     "agentIsland": {
       "title": "Agent Island",
       "unsupported": "O Agent Island requer o macOS 14 ou posterior.",
+      "subtleRemindersLabel": "Avisos discretos",
+      "subtleRemindersHint": "Quando há novas mensagens, pedidos de resposta ou erros, o ícone muda em vez de mostrar um cartão de notificação por baixo da ilha. Clica na ilha para ver a lista completa de tarefas.",
+      "subtleRemindersFailed": "Não foi possível guardar as definições dos avisos. Tenta novamente.",
       "enableLabel": "Mostrar Agent Island",
       "enableHint": "Mostra as tarefas em execução, que precisam de resposta e concluídas não lidas no topo do ecrã. Ao ativar, suprime as notificações equivalentes do sistema para evitar alertas duplicados.",
       "enableAria": "Ativar ou desativar o Agent Island",
@@ -7774,6 +7788,8 @@
         "skill": "Adiciona a Skill \"{{name}}\" aos seus assistentes de IA",
         "skillDetail": "Uma Skill é um ficheiro de instruções que a IA carrega e segue como suas, com todas as suas permissões, no Claude Code e no Codex, em todos os projetos — não está limitada à sandbox deste plugin. Permanece disponível enquanto o plugin está ativo e é removida quando o plugin é desativado ou desinstalado; desativar o plugin para uma única pasta não a oculta. Não é possível pré-visualizar aqui o texto completo da Skill — instale apenas plugins em que confia.",
         "routineEvents": "Eventos de rotina",
+        "nativeUi": "Adicionar controlos às tarefas",
+        "nativeTabView": "Abrir a vista «{{title}}»",
         "mcpUi": "Apresentar páginas interativas na conversa",
         "mcpUiDomains": "Domínios de rede da página: {{domains}}",
         "mcpAppOnly": "Apenas a página",
