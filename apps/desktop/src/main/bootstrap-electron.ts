@@ -1252,6 +1252,10 @@ import { registerLearnIpc, broadcastLearnEvent } from './learn-host/registerIpc.
 import { registerGoalHandlers, broadcastGoalStatus } from './maker-ipc/goal.js';
 import { createLogger as createSchedulerLogger } from './logger.js';
 
+if (hostDelegation()) {
+  console.log('[bootstrap-electron] client mode requested at startup');
+}
+
 let makerProviderRefreshConfigured = false;
 
 /** Resolved once: client mode is a process-lifetime decision. */
