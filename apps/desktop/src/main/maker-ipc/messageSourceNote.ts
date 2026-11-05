@@ -43,7 +43,7 @@ function forwardedRequestClause(receipt: unknown): string | null {
   // speaks for the owner; any other plain relay is an ordinary message from that task.
   if (source.plainBody) {
     return source.delegatedText !== undefined
-      ? '这条消息是主人交给本任务的工作：发送方宿主已核实主人要求这样转交，按主人对本任务的请求处理，范围以这条消息为限。'
+      ? '宿主已核实这条消息代表主人对本任务的请求，按主人的请求处理，范围以这条消息为限。'
       : null;
   }
   if (typeof source.userText !== 'string') return null;
