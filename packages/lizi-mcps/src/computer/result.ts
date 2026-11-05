@@ -78,3 +78,19 @@ export function computerResultOutcome(
   }
   return { ok: true };
 }
+
+/** Driver recovery prose may advertise parameters/routes the Cindy MCP does not expose. */
+export function normalizeInputFailureAdvice(name: string, code: string | undefined, data: unknown): unknown {
+  if (name !== 'type_text' || !data || typeof data !== 'object' || Array.isArray(data)) return data;
+  let message: string;
+  if (code === 'background_unavailable') {
+    message = 'Background text input was refused. Stop and report the refusal; do not switch to foreground or shell-simulated input to bypass it. For Electron/browser/web-content fields, use get_window_state to inspect the target; set_value with a fresh element_token is the supported text route when continuing is appropriate. Cindy type_text does not accept x/y.';
+  } else if (code === 'type_text_incomplete') {
+    message = 'Text input did not complete; some characters may already have been delivered. Do not resend the text or its suffix, switch delivery modes, or use shell-simulated input. Stop and report the incomplete input. Use get_window_state to inspect the current field before deciding how to continue; a successful observation does not mean the input completed.';
+  } else {
+    return data;
+  }
+  // Replace conflicting recovery prose, not the error code, progress or uncertainty.
+  const { hint: _hint, next_call: _nextCall, summary: _summary, escalation: _escalation, ...evidence } = data as Record<string, unknown>;
+  return { ...evidence, message };
+}
