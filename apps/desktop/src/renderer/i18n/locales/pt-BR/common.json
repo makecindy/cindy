@@ -1,4 +1,15 @@
 {
+  "pluginUi": {
+    "renderer": "Exibição",
+    "original": "Original",
+    "unavailable": "Os controles do plugin estão indisponíveis. As ações estão desativadas.",
+    "outcome-unknown": "O resultado não foi confirmado. Confira o estado atual do plugin.",
+    "rejected": "O plugin não executou esta ação. Sua entrada foi mantida.",
+    "draftChanged": "Sua entrada mudou. A alteração do plugin não foi aplicada.",
+    "editorUnavailable": "Este campo está indisponível. A alteração do plugin não foi aplicada.",
+    "more": "Mais",
+    "close": "Fechar"
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "Atualizar cota",
@@ -2386,6 +2397,9 @@
     "agentIsland": {
       "title": "Agent Island",
       "unsupported": "O Agent Island requer macOS 14 ou posterior.",
+      "subtleRemindersLabel": "Avisos discretos",
+      "subtleRemindersHint": "Quando houver novas mensagens, pedidos de resposta ou erros, o ícone muda em vez de mostrar um cartão de notificação abaixo da ilha. Clique na ilha para ver a lista completa de tarefas.",
+      "subtleRemindersFailed": "Não foi possível salvar as configurações dos avisos. Tente novamente.",
       "enableLabel": "Mostrar Agent Island",
       "enableHint": "Mostra tarefas em execução, que precisam de resposta e concluídas não lidas no topo da tela. Ao ativar, as notificações equivalentes do sistema são suprimidas para evitar alertas duplicados.",
       "enableAria": "Ativar ou desativar Agent Island",
@@ -4021,6 +4035,7 @@
             "hint": "Aplica-se à conexão de Images de {{agent}}. Declare apenas capacidades realmente compatíveis com a API. Reabra os detalhes de Art após salvar."
           },
           "capabilityHint": "Usa as capacidades declaradas por este provedor. Quando não declarado, o suporte a imagens é inferido pelo nome do modelo.",
+          "imageInputDefault": "{{value}} (padrão)",
           "imageInput": "Entrada de imagem",
           "imageInputMixed": "Varia conforme o mecanismo",
           "supported": "Compatível",
@@ -7774,6 +7789,8 @@
         "skill": "Adiciona a Skill \"{{name}}\" aos seus assistentes de IA",
         "skillDetail": "Uma Skill é um arquivo de instruções que a IA carrega e segue como suas próprias instruções, com todas as suas permissões, no Claude Code e no Codex, em todos os projetos — ela não fica restrita à sandbox deste plugin. Permanece disponível enquanto o plugin está ativado e é removida quando ele é desativado ou desinstalado; desativar o plugin para uma única pasta não a oculta. O texto completo da Skill não pode ser visualizado aqui — instale apenas plugins em que você confia.",
         "routineEvents": "Eventos de rotina",
+        "nativeUi": "Adicionar controles às tarefas",
+        "nativeTabView": "Abrir a visualização “{{title}}”",
         "mcpUi": "Exibir páginas interativas na conversa",
         "mcpUiDomains": "Domínios de rede da página: {{domains}}",
         "mcpAppOnly": "Somente página",
@@ -12211,7 +12228,7 @@
       "effortLabel": "Esforço de raciocínio",
       "thinking": "Pensando",
       "edit": "Editar",
-      "options": "Options",
+      "options": "Opções",
       "priceTip": "Entrada {{input}} · Saída {{output}} por 1M de tokens",
       "pricing": {
         "title": "Por 1 milhão de tokens",
@@ -13510,7 +13527,7 @@
         "empty": "Nenhum comando disponível."
       },
       "cost": {
-        "title": "Custo da Sessão",
+        "title": "Uso da sessão",
         "tokensUsed": "Tokens usados (neste turno)"
       },
       "pwd": {
@@ -13518,7 +13535,7 @@
         "notSet": "(não definido)"
       },
       "status": {
-        "title": "Status da Sessão",
+        "title": "Status da sessão",
         "agent": "Agent",
         "model": "Modelo",
         "effort": "Esforço",
@@ -14830,7 +14847,7 @@
       "branchTooltip": "Branch atual: {{branch}}",
       "pr": {
         "status": {
-          "open": "Abrir",
+          "open": "Aberto",
           "draft": "Rascunho",
           "merged": "Mesclado",
           "closed": "Fechado"
@@ -14971,7 +14988,9 @@
           "summaryAria": "Resumo do MR !{{number}}",
           "urlPlaceholder": "Link de PR do GitHub ou MR do GitLab",
           "notFound": "MR não encontrado ou a conta atual não tem permissão para visualizá-lo"
-        }
+        },
+        "merge": "Mesclagem",
+        "conflicts": "Com conflitos"
       }
     },
     "schedule": {

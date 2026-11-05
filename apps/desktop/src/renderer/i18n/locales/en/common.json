@@ -1,4 +1,15 @@
 {
+  "pluginUi": {
+    "renderer": "Display",
+    "original": "Original",
+    "unavailable": "Plugin controls are unavailable. Actions are disabled.",
+    "outcome-unknown": "The result is unconfirmed. Check the plugin’s latest state.",
+    "rejected": "The plugin did not apply this action. Your input is retained.",
+    "draftChanged": "Your input changed. The plugin’s draft edit was not applied.",
+    "editorUnavailable": "This input is unavailable. The plugin’s draft edit was not applied.",
+    "more": "More",
+    "close": "Close"
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "Refresh quota",
@@ -2351,6 +2362,9 @@
     "agentIsland": {
       "title": "Agent Island",
       "unsupported": "Agent Island requires macOS 14 or later.",
+      "subtleRemindersLabel": "Subtle reminders",
+      "subtleRemindersHint": "For new messages, requests for input, or errors, show changes in the icon instead of a notification card below the island. Click the island to view the full task list.",
+      "subtleRemindersFailed": "Could not save reminder settings. Please try again.",
       "enableLabel": "Show Agent Island",
       "enableHint": "Shows running, needs-reply, and unread completed tasks at the top of the display. Enabling suppresses the equivalent system notifications to avoid double alerts.",
       "enableAria": "Toggle Agent Island",
@@ -3970,6 +3984,7 @@
             "hint": "Applies to the {{agent}} Images connection. Only declare capabilities the API actually supports. Reopen Art details after saving."
           },
           "capabilityHint": "Uses capabilities declared by this provider. Image support falls back to model naming when undeclared.",
+          "imageInputDefault": "{{value}} (Default)",
           "imageInput": "Image input",
           "imageInputMixed": "Varies by engine",
           "supported": "Supported",
@@ -7707,6 +7722,8 @@
         "skill": "Adds the skill \"{{name}}\" to your AI assistants",
         "skillDetail": "A skill is an instruction file the AI loads and follows as its own, with your full permissions, in Claude Code and Codex, across every project — it is not confined to this plugin's sandbox. It stays available while the plugin is enabled and is removed when the plugin is disabled or uninstalled; turning the plugin off for a single folder does not hide it. The full skill text cannot be previewed here — only install plugins you trust.",
         "routineEvents": "Routine Events",
+        "nativeUi": "Add Controls to Tasks",
+        "nativeTabView": "Open the “{{title}}” view",
         "mcpUi": "Display interactive pages in the conversation",
         "mcpUiDomains": "Page network domains: {{domains}}",
         "mcpAppOnly": "Page only",
@@ -13037,7 +13054,7 @@
       "codexUsageLimit": "The connected Codex account has reached its usage limit. Wait for the limit to reset, or switch to another available account before retrying.",
       "gatewayQuotaExhausted": "Your Cindy AI balance is used up. Add funds to continue.",
       "viewBalance": "View balance",
-      "viewBalanceTitle": "Open Usage & Billing to check your balance and add funds",
+      "viewBalanceTitle": "Open Usage and billing to check your balance and add funds",
       "credentialSwitchBusy": "Another Codex task is still running, so the provider for this session can't be applied yet (the shared Codex process needs a restart). Retry after those tasks finish.",
       "accountBoundaryPending": "Cindy is still switching account state, so this task can't start yet. Wait a moment, then press Retry. If this keeps happening, restart Cindy.",
       "codexThreadStale": "Codex auth mode changed — this session can't continue. Start a new session to apply it.",
@@ -13426,7 +13443,7 @@
         "empty": "No commands available."
       },
       "cost": {
-        "title": "Session Cost",
+        "title": "Session Usage",
         "tokensUsed": "Tokens Used (This Turn)"
       },
       "pwd": {
@@ -14831,7 +14848,9 @@
           "summaryAria": "MR !{{number}} summary",
           "urlPlaceholder": "GitHub PR or GitLab MR URL",
           "notFound": "MR not found, or the current account cannot view it"
-        }
+        },
+        "merge": "Merge",
+        "conflicts": "Conflicts"
       }
     },
     "schedule": {

@@ -5,6 +5,7 @@ export default {
   id: 'agent-island',
   order: 10,
   entries: [
+    { id: 'settings.agentIsland.subtleRemindersLabel', fallbackTargetId: 'settings-panel-agent-island', tab: 'agent-island', targetId: 'settings-search-settings-agentIsland-subtleRemindersLabel', titleKey: 'settings.agentIsland.subtleRemindersLabel', sectionKey: 'settings.tabs.agentIsland', descriptionKey: 'settings.agentIsland.subtleRemindersHint' },
     { id: 'agentIsland', tab: 'agent-island', targetId: 'settings-panel-agent-island', titleKey: 'settings.tabs.agentIsland', sectionKey: 'settings.sections.agentIsland' },
     { id: 'settings.agentIsland.enableLabel', fallbackTargetId: 'settings-panel-agent-island', tab: 'agent-island', targetId: 'settings-search-settings-agentIsland-enableLabel', titleKey: 'settings.agentIsland.enableLabel', sectionKey: 'settings.tabs.agentIsland', descriptionKey: 'settings.agentIsland.enableHint' },
     { id: 'settings.agentIsland.displayLabel', fallbackTargetId: 'settings-panel-agent-island', tab: 'agent-island', targetId: 'settings-search-settings-agentIsland-displayLabel', titleKey: 'settings.agentIsland.displayLabel', sectionKey: 'settings.tabs.agentIsland', descriptionKey: 'settings.agentIsland.displayHint' },

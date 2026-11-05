@@ -270,7 +270,11 @@ export function CompanionTaskCard({
     const result = Array.isArray(prStatuses.value)
       ? prStatuses.value.find((s) => prStatusKey(s) === prStatusKey(ref))
       : undefined;
-    const { Icon, color } = prStatusVisual(result?.ok ? result.status : null, colors);
+    const { Icon, color } = prStatusVisual(
+      result?.ok ? result.status : null,
+      colors,
+      result?.ok ? result.conflicts : null,
+    );
     return <Icon size={iconSize.sm} color={color} />;
   };
   const openPr = (url: string) => {

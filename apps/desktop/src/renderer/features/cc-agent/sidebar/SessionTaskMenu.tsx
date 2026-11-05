@@ -54,6 +54,7 @@ interface Props {
   tags: ReactNode;
   copy: ReactNode;
   exportShare: ReactNode;
+  pluginCommands?: ReactNode;
 }
 
 type SharingDialog =
@@ -86,6 +87,7 @@ function ActiveSessionTaskMenu({
   tags,
   copy,
   exportShare,
+  pluginCommands,
   dialog,
   setDialog,
 }: Props & {
@@ -254,6 +256,7 @@ function ActiveSessionTaskMenu({
             {copy}
           </>
         )}
+        {pluginCommands}
         {session.status === 'active' &&
           (hosted && !guest ? (
             <DropdownMenuSub>
