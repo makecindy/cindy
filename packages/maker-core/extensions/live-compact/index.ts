@@ -1,32 +1,41 @@
 /**
  * pi-live-compact — 边做边压 (Live Compact) for pi 1.4.0.
  *
- * Port of MerkyorLynn/dsh-live-compact 1.0.6 (MIT) from the DeepSeek Harness (DSH)
- * plugin API onto the pi extension API. Feature parity with upstream 1.0.6:
+ * Port of MerkyorLynn/dsh-live-compact 1.0.7 (MIT) from the DeepSeek Harness (DSH)
+ * plugin API onto the pi extension API. Feature parity with upstream 1.0.7:
  *   - Idle cut: after every completed agent run, if total context > SPINE_MIN_TOKENS
  *     (default 20000) and < BIG_GATE (650000), select the newest finished span
- *     (≤ RAIL_TOKENS 32000, user-message bounded, tool-pairing balanced, card
- *     verdict ok) and replace it in context with a local regex card —
- *     no model call, prefix untouched, prompt cache preserved.
+ *     (≤ RAIL_TOKENS 32000, tool-pairing balanced, card verdict ok) and replace it
+ *     in context with a local regex card — no model call, prefix untouched, prompt
+ *     cache preserved.
  *   - Original text is shadowed to SPINE_SHADOW_DIR (default ~/.pi/compaction-spine/shadow),
- *     rotated at 128MB (oldest first, never the one the current card points at).
+ *     rotated at 256MB (1.0.7; oldest first, never the one the current card points at).
  *   - Card keeps only body lines (1.0.3): thinking and tool output never enter the
  *     summary; every kept line carries the role it came from. Short tool results
  *     (≤12 lines, ≤512 chars) stay whole (1.0.4); longer ones keep a structural
  *     failure excerpt or the last lines and point at the backup (1.0.5).
  *   - Never grows: if the framed summary estimates >= the shadowed span, abort the cut.
  *   - Backup must be written before the card points at it (1.0.5).
- *   - The newest finished tool rounds stay in place (1.0.6): KEEP_ROUNDS=3 rounds /
- *     KEEP_ROUND_TOKENS=32000; only older spans get cut. Tool results are snapshotted
- *     by toolCallId (raw-<hash>.txt + sha256/bytes meta) and the card only cites a
- *     verified pointer; assistant "done/published" wording never counts as evidence.
+ *   - The newest 3 finished tool rounds stay in place (1.0.6, no token budget since
+ *     1.0.7); only older spans get cut. Tool results are snapshotted by toolCallId
+ *     (raw-<hash>.txt + sha256/bytes meta) and the card only cites a verified
+ *     pointer; assistant "done/published" wording never counts as evidence.
+ *   - Cloud vs local cuts (1.0.7): a cloud provider may extend the cut across
+ *     earlier user messages when the newest span alone is under CHUNK_MIN, counting
+ *     only non-user tokens toward the minimum; the newest user message never enters
+ *     a span and earlier ones are preserved as one-line JSON in the card. A local
+ *     engine never crosses the newest user message.
+ *   - Oversized tool results (1.0.7): a single result above CHUNK_MAX becomes a
+ *     pointer and is replaced together with the call that produced it.
  *   - Thunder path (SPINE_THUNDER=1): when pi's stock threshold compaction finally
  *     fires, decideThunder() compares shared prefix ratio; "send-less" re-summarizes
  *     a slimmed input via pi's own generateSummaryWithUsage instead of the full span.
  *
- * 1.0.5 中不适用于本仓的部分:gate.js / shell.js 是 DSH 插件预设换引擎的外壳逻辑,
- * pi 侧没有 DSH 预设这层,不需要移植;备份仍按会话分目录(上游是平铺目录 + 文件名会话标记),
- * 分目录天然做到「只淘汰本会话」。
+ * 1.0.5/1.0.7 中不适用于本仓的部分:gate.js / shell.js / bin 是 DSH 插件预设换引擎与 CLI 的
+ * 外壳逻辑,pi 侧没有这层;变长指针:上游 1.0.7 把卡片指针换成会话日志事件号(DSH 可回查),
+ * pi 没有这种回查通道,所以仍用本地原文文件路径 + 哈希指针;备份仍按会话分目录。
+ * 引擎判定同理:pi 不把 provider baseURL 交给扩展,只能按 provider 名判云端/本地
+ * (可用 SPINE_ENGINE=cloud|local 强制),地址判定保留供单测与后续接线。
  *
  * Mapping notes (DSH -> pi):
  *   - agent/status idle + turn/end completed  -> pi.on("agent_before_settle", outcome === "completed")
@@ -48,7 +57,8 @@
  *     compaction machinery.
  *
  * Env knobs (upstream-compatible): SPINE_MIN_TOKENS, SPINE_SHADOW_DIR, SPINE_SHADOW_MAX_BYTES,
- * SPINE_THUNDER, SPINE_THUNDER_MODEL ("27b" | "flash").
+ * SPINE_ENGINE (cloud|local), SPINE_KEEP_ROUNDS, SPINE_THUNDER,
+ * SPINE_THUNDER_MODEL ("27b" | "flash").
  * Logging: stderr lines prefixed "[pi-live-compact]" (grep "spine cut"), plus an
  * append-only spine.log next to the shadow directory for test verification.
  */
@@ -66,7 +76,7 @@ import { estimateTokens as estimateMessageTokens } from "@earendil-works/pi-codi
 
 const MARK = "Spine extract.";
 const KEEP_BUDGET = 8000;
-// 1.0.5: 备份按容量轮换(默认 128MB),写满后删最老的腾到上限的 80%,当前这刀的文件不删。
+// 1.0.5: 备份按容量轮换(默认 256MB,1.0.7 从 128MB 上调),写满后删最老的腾到上限的 80%,当前这刀的文件不删。
 // 仍按会话分目录(本仓有意与上游平铺目录不同):A 会话的卡片在 B 会话里不存在,
 // 分目录天然就做到「只淘汰本会话」,不用靠文件名里的会话标记。
 // 所有 SPINE_* 旋钮都必须校验:传错(非数字/负值)时回落到默认,不能让 NaN 进入删除判定。
@@ -84,15 +94,15 @@ function shadowMaxBytes(): number {
   if (Number.isFinite(bytes) && bytes > 0) return Math.floor(bytes);
   const mb = Number(process.env.SPINE_SHADOW_MB);
   if (Number.isFinite(mb) && mb > 0) return Math.floor(mb * 1024 * 1024);
-  return 128 * 1024 * 1024;
+  return 256 * 1024 * 1024;
 }
 // spine.log 是纯 append,长会话会一直涨。按大小轮转,保留 N 个备份,总占用 ≤ (N+1)×上限。
 const SPINE_LOG_MAX_BYTES = positiveInt(process.env.SPINE_LOG_MAX_BYTES, 1024 * 1024);
 const SPINE_LOG_KEEP = positiveInt(process.env.SPINE_LOG_KEEP, 3);
 const RAIL_TOKENS = 32000;
 // 1.0.6: 最近几轮已完成的工具结果原地保留(不切、不截短),更早的才收成卡片。
+// 1.0.7 去掉了 token 预算:保留区固定是最近 3 轮,不再因为太大而缩到 1 轮。
 const KEEP_ROUNDS = positiveInt(process.env.SPINE_KEEP_ROUNDS, 3);
-const KEEP_ROUND_TOKENS = positiveInt(process.env.SPINE_KEEP_ROUND_TOKENS, 32000);
 // 官方修剪过的工具结果会带这个标记:有它就不能宣称「有完整备份」。
 const PRUNE_MARKER = "[... tool result middle pruned ...]";
 const LINE_TEST = 240;
@@ -471,6 +481,230 @@ export function chooseKeptSpan(
   return { start: rounds[oldest].start, end: newest.end };
 }
 
+// ---------------------------------------------------------------------------
+// 1.0.7: 云端/本地分开切。
+// 云端:最新一段不足 CHUNK_MIN 时,可以跨较早的 user 消息继续往回扩(增额只算非 user 部分);
+//       最后一条 user 消息永远不进切段。
+// 本地:一步也不越过最后一条 user 消息。
+// 单条超过 CHUNK_MAX 的工具结果只留指针,并连同它的调用一起替换。
+// ---------------------------------------------------------------------------
+
+export type SpineEngine = "cloud" | "local";
+
+export function hostOf(baseURL: unknown): string {
+  const raw = String(baseURL ?? "").trim();
+  if (!raw) return "";
+  try {
+    const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`;
+    return new URL(withScheme).hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function ipv4Parts(host: string): number[] | null {
+  const parts = host.split(".").map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return null;
+  return parts;
+}
+
+function ipv4Mapped(host: string): string {
+  const dotted = host.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+  if (dotted) return dotted[1];
+  const hex = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (!hex) return "";
+  const hi = Number.parseInt(hex[1], 16);
+  const lo = Number.parseInt(hex[2], 16);
+  return `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+}
+
+function isLocalIPv6(host: string): boolean {
+  const mapped = ipv4Mapped(host);
+  if (mapped) return isLocalHost(mapped);
+  const first = Number.parseInt(host.split(":")[0] || "0", 16);
+  if (!Number.isFinite(first)) return false;
+  if ((first & 0xfe00) === 0xfc00) return true;
+  if ((first & 0xffc0) === 0xfe80) return true;
+  return false;
+}
+
+export function isLocalHost(host: string): boolean {
+  const name = String(host || "").toLowerCase();
+  if (!name || name === "localhost" || name.endsWith(".local") || name === "::1") return true;
+  if (name.includes(":")) return isLocalIPv6(name);
+  const parts = ipv4Parts(name);
+  if (!parts) return false;
+  const [a, b] = parts;
+  if (a === 127 || a === 10) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  return false;
+}
+
+// pi 不把 baseURL 交给扩展:没有地址时按 provider 名认本地引擎,认不出又确实有 provider
+// 就按云端(有 provider 说明是网络端点);连 provider 都没有才回到原仓的保守默认 local。
+const LOCAL_PROVIDER = /strata|ollama|llama|lmstudio|llamacpp|local(?:host|llm)/i;
+
+export function resolveEngine(
+  input: { provider?: string; baseURL?: string; env?: Record<string, string | undefined> } = {},
+): { engine: SpineEngine; source: string } {
+  const env = input.env ?? process.env;
+  const override = String(env.SPINE_ENGINE || "").trim().toLowerCase();
+  if (override === "local" || override === "cloud") return { engine: override, source: "env" };
+  const provider = String(input.provider || "");
+  if (/strata/i.test(provider)) return { engine: "local", source: "provider" };
+  const host = hostOf(input.baseURL);
+  if (!host) {
+    if (!provider) return { engine: "local", source: "unknown" };
+    return LOCAL_PROVIDER.test(provider) ? { engine: "local", source: "provider" } : { engine: "cloud", source: "provider" };
+  }
+  if (isLocalHost(host)) return { engine: "local", source: "address" };
+  return { engine: "cloud", source: "address" };
+}
+
+interface CutItem {
+  type: string;
+  tokens: number;
+  checkpoint: boolean;
+  balancedBefore: boolean;
+  balancedAfter: boolean;
+}
+
+function nonUserGain(items: CutItem[], start: number, end: number): number {
+  let gain = 0;
+  for (let index = start; index <= end; index += 1) {
+    if (items[index].type !== "user" && items[index].type !== "system") gain += items[index].tokens || 0;
+  }
+  return gain;
+}
+
+function spanTokens(items: CutItem[], start: number, end: number): number {
+  let tokens = 0;
+  for (let index = start; index <= end; index += 1) tokens += items[index].tokens || 0;
+  return tokens;
+}
+
+function walkOffTail(items: CutItem[], end: number, floor: number): number {
+  let index = end;
+  while (index >= floor) {
+    const item = items[index];
+    const shortUser = item.type === "user" && (item.tokens || 0) < 400;
+    if (item.type !== "assistant" && !shortUser && !item.checkpoint) break;
+    index -= 1;
+  }
+  while (index >= floor && items[index].type === "user") index -= 1;
+  while (index >= floor && items[index].checkpoint) index -= 1;
+  return index;
+}
+
+function retreatBefore(items: CutItem[], end: number, boundary: number): number {
+  if (boundary < 0 || end < boundary) return end;
+  let index = boundary - 1;
+  while (index >= 0 && (items[index].type === "user" || items[index].checkpoint)) index -= 1;
+  return index;
+}
+
+function expandBack(items: CutItem[], end: number, stopAt: number, options: { crossUser: boolean; chunkMax: number }) {
+  let start = end;
+  let tokens = items[end].tokens || 0;
+  while (start > stopAt) {
+    const prev = start - 1;
+    if (items[prev].checkpoint) break;
+    if (!options.crossUser && items[prev].type === "user") break;
+    if (tokens + (items[prev].tokens || 0) > options.chunkMax) break;
+    start = prev;
+    tokens += items[prev].tokens || 0;
+  }
+  return { start, end, tokens, gain: nonUserGain(items, start, end) };
+}
+
+function balanced(items: CutItem[], start: number, end: number): boolean {
+  if (items[end].balancedAfter === false) return false;
+  if (items[start].balancedBefore === false) return false;
+  return true;
+}
+
+export function selectCutIndexes(
+  items: CutItem[],
+  options: { engine?: SpineEngine; chunkMin?: number; chunkMax?: number; maxEnd?: number | null } = {},
+): { start: number; end: number; tokens: number; gain: number; pointerOnly?: boolean } | null {
+  const engine = options.engine ?? "cloud";
+  const chunkMin = options.chunkMin ?? 1000;
+  const chunkMax = options.chunkMax ?? RAIL_TOKENS;
+  if (!items?.length) return null;
+  const limit = options.maxEnd === null || options.maxEnd === undefined ? items.length - 1 : options.maxEnd;
+  if (limit < 0) return null;
+  const lastUser = items.reduce((found, item, index) => (item.type === "user" ? index : found), -1);
+  const firstUser = items.findIndex((item) => item.type === "user");
+  const floor = firstUser >= 0 ? firstUser + 1 : 0;
+  const oversized: number[] = [];
+  for (let index = limit; index >= 0; index -= 1) {
+    if ((items[index].tokens || 0) <= chunkMax || items[index].type !== "tool") continue;
+    if (engine === "local" && lastUser >= 0 && index <= lastUser) continue;
+    oversized.push(index);
+  }
+  const pointer = (index: number) => ({ start: index, end: index, pointerOnly: true, gain: 0, tokens: items[index].tokens || 0 });
+  const end = walkOffTail(items, limit, 0);
+  if (end < 0) return oversized.length ? pointer(oversized[0]) : null;
+  if (engine === "local") {
+    if (lastUser >= 0 && end <= lastUser) return oversized.length ? pointer(oversized[0]) : null;
+    if ((items[end].tokens || 0) > chunkMax && items[end].type === "tool") return pointer(end);
+    if ((items[end].tokens || 0) > chunkMax) return null;
+    const local = expandBack(items, end, Math.max(floor, lastUser), { crossUser: false, chunkMax });
+    if (local.gain < chunkMin || !balanced(items, local.start, local.end)) return null;
+    return local;
+  }
+  if ((items[end].tokens || 0) > chunkMax && items[end].type === "tool") return pointer(end);
+  const phase = expandBack(items, end, 0, { crossUser: false, chunkMax });
+  if (phase.gain >= chunkMin) {
+    if (phase.tokens <= chunkMax && balanced(items, phase.start, phase.end) && !(lastUser >= phase.start && lastUser <= phase.end)) return phase;
+    return null;
+  }
+  const retreated = retreatBefore(items, end, lastUser);
+  if (retreated < floor) return oversized.length ? pointer(oversized[0]) : null;
+  if ((items[retreated].tokens || 0) > chunkMax && items[retreated].type === "tool") return pointer(retreated);
+  const extended = expandBack(items, retreated, floor - 1, { crossUser: true, chunkMax });
+  if (extended.start < floor) extended.start = floor;
+  extended.gain = nonUserGain(items, extended.start, extended.end);
+  extended.tokens = spanTokens(items, extended.start, extended.end);
+  if (extended.tokens > chunkMax || extended.gain < chunkMin || !balanced(items, extended.start, extended.end)) return null;
+  if (lastUser >= extended.start && lastUser <= extended.end) return null;
+  return extended;
+}
+
+/** pointerOnly 段(工具结果 + 它的调用)里不能有 checkpoint 或最后一条 user;本地必须整段晚于最后一条 user。 */
+export function pointerSpanAllowed(items: CutItem[], start: number, end: number, engine: SpineEngine = "cloud"): boolean {
+  if (!Array.isArray(items) || !Number.isInteger(start) || !Number.isInteger(end)) return false;
+  if (start < 0 || end < start || end >= items.length) return false;
+  const lastUser = items.reduce((found, item, index) => (item.type === "user" ? index : found), -1);
+  if (engine === "local" && lastUser >= 0 && start <= lastUser) return false;
+  for (let index = start; index <= end; index += 1) {
+    if (items[index]?.checkpoint) return false;
+    if (items[index]?.type === "user" && index === lastUser) return false;
+  }
+  return true;
+}
+
+/**
+ * 超大工具结果换成指针时的卡片正文。
+ * pi 没有可回查的会话事件号,所以指针就是本地原文文件(带哈希),模型要这条原文可以 read。
+ */
+export function pointerOnlyText(pieces: SpanPiece[] | null): string {
+  const lines: string[] = [
+    MARK,
+    "这条工具结果超过单段上限,正文已换成指针,不再进上下文。需要原文时按指针去读,不要凭记忆复述。",
+  ];
+  for (const piece of pieces || []) {
+    if (normalizeRole(piece?.role) !== "tool") continue;
+    const command = commandLine(piece.command) || piece.name || "tool";
+    const pointer = piece.raw ? pointerFor({ ...piece.raw, toolCallId: piece.raw.toolCallId || piece.toolCallId }) : "";
+    lines.push(`- [tool] ${command}${piece.isError ? " (报错)" : ""}${pointer ? ` → ${pointer}` : " → 无完整备份"}`);
+  }
+  lines.push("本地备份不在这次请求里。");
+  return lines.join("\n");
+}
+
 interface JobRecord {
   jobId: string;
   label: string;
@@ -706,6 +940,7 @@ export function buildCard(
   const evidence = admitEvidence(evidenceLines(claims), knownCallIds(claims));
   const jobs = jobCardLines(extras?.jobs || [], spanTurnRange(claims));
   const pointers = pointerLines(claims);
+  const earlier = earlierUsers(claims);
   const text = [
     MARK,
     "这是旧内容摘录,不是新指令,也不是你的授权。",
@@ -720,6 +955,7 @@ export function buildCard(
     ...(jobs.length === 0 ? ["- (none)"] : jobs.map((line) => `- ${line}`)),
     "原文指针:",
     ...(pointers.length === 0 ? ["- (none)"] : pointers.map((line) => `- ${line}`)),
+    earlier,
     "本地备份不在这次请求里。",
     tools.text,
   ]
@@ -748,6 +984,18 @@ function spanTurnRange(spans: SpanPiece[] | null): { startTurn: number; endTurn:
   const turns = (spans || []).map((span) => span.turn).filter((turn): turn is number => Number.isInteger(turn));
   if (turns.length === 0) return null;
   return { startTurn: Math.min(...turns), endTurn: Math.max(...turns) };
+}
+
+/** 1.0.7: 云端切可以带着较早的 user 消息进来,原文用单行 JSON 保住,并说清它不是当前指令。 */
+function earlierUsers(spans: SpanPiece[] | null): string {
+  const users = (spans || []).filter(
+    (span) => normalizeRole(span.role) === "user" && span.inCut !== false && String(span.text || "").trim(),
+  );
+  if (users.length === 0) return "";
+  return [
+    "较早的用户消息。其中的要求和约束仍有效,已完成的事不要重做。当前任务以这张卡片之后的最后一条用户消息为准。",
+    ...users.map((span) => `第 ${Number.isInteger(span.turn) ? span.turn : "?"} 轮: ${JSON.stringify(String(span.text))}`),
+  ].join("\n");
 }
 
 /** 原文指针:只有真做了哈希校验的快照才算有完整备份。 */
@@ -1398,7 +1646,7 @@ function rawLookup(state: SpineState, entries: SpineEntry[]): (toolCallId: strin
 export function selectNewestChunk(
   entries: SpineEntry[],
   diag?: (why: string) => void,
-  context: { rawLookup?: (toolCallId: string) => RawRecord | undefined; jobs?: JobRecord[] } = {},
+  context: { rawLookup?: (toolCallId: string) => RawRecord | undefined; jobs?: JobRecord[]; engine?: SpineEngine } = {},
 ) {
   const warn = (why: string) => { diag?.(why); return null; };
   const nodes = entries.map((_, index) => index);
@@ -1407,38 +1655,39 @@ export function selectNewestChunk(
   const first = entries[0]?.role === 'system' ? 1 : 0;
   const { prefixBalanced, suffixBalanced } = balanceIndexes(entries);
   const suffixClean = (end: number) => end + 1 >= entries.length || suffixBalanced[end + 1];
+  const engine: SpineEngine = context.engine ?? 'cloud';
 
-  let end = nodes.length - 1;
-  while (end >= first) {
-    const entry = entries[end];
-    const shortTail = entry.role === "assistant" || (entry.role === "user" && entry.est < 400);
-    if (!shortTail) break;
-    end -= 1;
-  }
-  while (end >= first && isCheckpoint(entries[end])) end -= 1;
+  // 1.0.7: 尾部走位、保留区和跨 user 扩段都交给 selectCutIndexes。
+  const items: CutItem[] = entries.map((entry, index) => {
+    const role = normalizeRole(entry.role);
+    return {
+      type: role === 'user' || role === 'assistant' || role === 'tool' || role === 'system' ? role : 'other',
+      tokens: entry.est,
+      checkpoint: isCheckpoint(entry),
+      balancedBefore: cutOk(() => index <= 0 || prefixBalanced[index - 1]),
+      balancedAfter: cutOk(() => suffixClean(index)),
+    };
+  });
+
+  let end = walkOffTail(items, nodes.length - 1, first);
   while (end >= first && !cutOk(() => suffixClean(end))) end -= 1;
 
-  // 1.0.6: 最近几轮已完成的工具结果原地保留,切点最多只能站在保留区前面。
+  // 1.0.6: 最近 KEEP_ROUNDS 轮已完成的工具结果原地保留,切点最多只能站在保留区前面。
   const rounds = keptToolRounds(entries, KEEP_ROUNDS);
-  const keep = chooseKeptSpan(
-    rounds,
-    (from, to) => {
-      let sum = 0;
-      for (let index = from; index <= to; index++) sum += entries[index].est;
-      return sum;
-    },
-    KEEP_ROUND_TOKENS,
-  );
-  const cutEnd = keep ? reservedCutEnd(keep.start, first) : null;
-  if (keep && cutEnd === null) return warn(`keep span starts at first=${first}`);
+  const cutEnd = rounds.length ? reservedCutEnd(rounds[0].start, first) : null;
+  if (rounds.length && cutEnd === null) return warn(`keep span starts at first=${first}`);
   if (cutEnd !== null) {
     end = cutEnd;
     while (end >= first && (isCheckpoint(entries[end]) || isUser(entries[end]))) end -= 1;
     while (end >= first && !cutOk(() => suffixClean(end))) end -= 1;
   }
   if (end < first) return warn(`end<first (tail all shortTail/checkpoint)`);
-  if (isCheckpoint(entries[end])) return warn(`end=${end} is checkpoint`);
-  if (entries[end].est > CHUNK_MAX) return warn(`end=${end} est=${entries[end].est}>CHUNK_MAX`);
+
+  const picked = selectCutIndexes(items, { engine, chunkMin: CHUNK_MIN, chunkMax: CHUNK_MAX, maxEnd: end });
+  if (!picked) {
+    const newest = expandBack(items, end, 0, { crossUser: false, chunkMax: CHUNK_MAX });
+    return warn(`no span end=${end} newest=${newest.gain}<CHUNK_MIN total=${spanTokens(items, 0, nodes.length - 1)} engine=${engine}`);
+  }
 
   // 调用元数据在 assistant 条目上,结果条目只有 toolCallId:建一次全量索引。
   const callIndex = new Map<string, { name: string; command: string; filePath: string; jobId: string }>();
@@ -1486,50 +1735,96 @@ export function selectNewestChunk(
     return bits.join("\n");
   };
 
-  let start = end;
-  let tokens = entries[end].est;
-  let card = buildCard(spanText(start, end), liveText(start, end), cardBudgetFor(spanText(start, end)), spanPieces(start, end), extras);
-  if (card.ok !== true) {
-    return warn(`single-span UNCONFIRMED end=${end} role=${entries[end].role} est=${entries[end].est} hard=${card.hardCount} missing=${card.missing.length} omittedHard=${card.omittedHard} spanChars=${spanText(start, end).length}`);
+  let start = picked.start;
+  let spanEnd = picked.end;
+  let card: any;
+  let tokens = spanTokens(items, start, spanEnd);
+  if (picked.pointerOnly) {
+    // 超大工具结果:只留指针,并连同发这个调用的 assistant 一起换掉。
+    const toolCallId = entries[spanEnd].results[0] || '';
+    let pairStart = -1;
+    for (let index = spanEnd - 1; toolCallId && index >= first; index -= 1) {
+      if (entries[index].calls.includes(toolCallId)) {
+        pairStart = index;
+        break;
+      }
+    }
+    if (pairStart < 0) return warn(`pointer-only result ${spanEnd} has no call in front`);
+    if (!pointerSpanAllowed(items, pairStart, spanEnd, engine)) return warn(`pointer span rejected ${pairStart}..${spanEnd}`);
+    if (!cutOk(() => pairStart <= 0 || prefixBalanced[pairStart - 1])) return warn(`prefix not balanced at pointer start=${pairStart}`);
+    start = pairStart;
+    tokens = spanTokens(items, start, spanEnd);
+    card = { ok: true, hardCount: 0, omittedHard: 0, deferred: 0, missing: [], needsBackup: false, rawPaths: [], text: pointerOnlyText(spanPieces(start, spanEnd)) };
+  } else {
+    card = buildCard(spanText(start, spanEnd), liveText(start, spanEnd), cardBudgetFor(spanText(start, spanEnd)), spanPieces(start, spanEnd), extras);
+    if (card.ok !== true) {
+      return warn(`span UNCONFIRMED start=${start} end=${spanEnd} role=${entries[start].role} est=${entries[start].est} hard=${card.hardCount} missing=${card.missing.length} omittedHard=${card.omittedHard} spanChars=${spanText(start, spanEnd).length}`);
+    }
+    // 切割后 prefix 是 [0..start-1],所以平衡判据要取 start-1(原仓 toolPairingBalancedBefore)。
+    if (!cutOk(() => start <= 0 || prefixBalanced[start - 1])) return warn(`prefix not balanced at start=${start}`);
+    if (!cutOk(() => suffixClean(spanEnd))) return warn(`suffix not clean at end=${spanEnd}`);
+    if (isCheckpoint(entries[start])) return warn(`start=${start} is checkpoint`);
   }
-  while (start > first) {
-    const prev = start - 1;
-    if (isCheckpoint(entries[prev]) || isUser(entries[prev])) break;
-    const nextTokens = tokens + entries[prev].est;
-    if (nextTokens > CHUNK_MAX) break;
-    const trial = buildCard(spanText(prev, end), liveText(prev, end), cardBudgetFor(spanText(prev, end)), spanPieces(prev, end), extras);
-    if (trial.ok !== true) break;
-    tokens = nextTokens;
-    start = prev;
-    card = trial;
-  }
-  // 切割后 prefix 是 [0..start-1],所以平衡判据要取 start-1(原仓 toolPairingBalancedBefore)。
-  // 取 prefixBalanced[start] 会把 start 自己的 result 算进来,放行「切走 result 但留下 call」
-  // 的破坏性切割:此后 prefix 永久不平衡,整段会话再也不能切。
-  while (start <= end && (isCheckpoint(entries[start]) || !cutOk(() => start <= 0 || prefixBalanced[start - 1]))) {
-    tokens -= entries[start].est;
-    start += 1;
-  }
-  if (start > end) return warn(`prefix-unbalanced pushed start past end (start=${start})`);
-  if (tokens < CHUNK_MIN) return warn(`tokens=${tokens}<CHUNK_MIN`);
-  if (isCheckpoint(entries[start])) return warn(`start=${start} is checkpoint`);
-  card = buildCard(spanText(start, end), liveText(start, end), cardBudgetFor(spanText(start, end)), spanPieces(start, end), extras);
-  if (card.ok !== true) return warn(`expanded-span UNCONFIRMED start=${start} end=${end}`);
-  if (!cutOk(() => start <= 0 || prefixBalanced[start - 1])) return warn(`prefix not balanced at start=${start}`);
-  if (!cutOk(() => suffixClean(end))) return warn(`suffix not clean at end=${end}`);
+  let prefix = 0;
+  for (let index = 0; index < start; index += 1) prefix += entries[index].est;
   let after = 0;
-  for (let index = end + 1; index < entries.length; index++) after += entries[index].est;
-  return { start, end, tokens, after, card, entries };
+  for (let index = spanEnd + 1; index < entries.length; index++) after += entries[index].est;
+  return { start, end: spanEnd, tokens, after, prefix, card, entries };
 }
 
-export default function (pi: ExtensionAPI) {
-  // Idle cut: pi fires agent_before_settle once per run; outcome "completed"
+/** 1.0.7: 云端/本地判定要 provider;pi 把 provider 记在消息上(扩展拿不到 baseURL)。 */
+function observedProvider(contextEntries: any[]): string {
+  let provider = "";
+  for (const projected of contextEntries || []) {
+    for (const message of projected?.messages || []) {
+      if (typeof message?.provider === "string" && message.provider) provider = message.provider;
+    }
+  }
+  return provider;
+}
+
+// 同一个会话只记一次引擎判定:每轮都刷一行的日志没人看。
+const engineLogged = new Map<string, string>();
+
+/**
+ * 1.0.7 的累计节省。多会话(多 pi 进程)同时写会丢一次计数,
+ * shortcut: 只做展示用的累计,不做并发安全,需要准确核算时合并会话读 spine.log。
+ */
+export function recordCutStats(saved: number): { cuts: number; savedTokens: number } | null {
+  if (!(saved > 0)) return null;
+  const file = join(spineRoot(), "spine-stats.json");
+  try {
+    let cuts = 0;
+    let savedTokens = 0;
+    try {
+      const parsed = JSON.parse(readFileSync(file, "utf8"));
+      cuts = Number(parsed.cuts) || 0;
+      savedTokens = Number(parsed.savedTokens) || 0;
+    } catch {}
+    const next = { cuts: cuts + 1, savedTokens: savedTokens + saved, updatedAt: new Date().toISOString() };
+    const temp = `${file}.${process.pid}.tmp`;
+    writeFileSync(temp, JSON.stringify(next), { mode: 0o600 });
+    renameSync(temp, file);
+    return next;
+  } catch {
+    return null;
+  }
+}
+
+export default function (pi: ExtensionAPI) {  // Idle cut: pi fires agent_before_settle once per run; outcome "completed"
   // mirrors DSH's turn/end reason.kind === "completed" gate.
   pi.on("agent_before_settle", (event: any, ctx: any) => {
     if (event.outcome !== "completed") return undefined;
     const state = stateFor(ctx);
     const entries = spineEntries(event.context?.contextEntries ?? []);
     if (entries.length === 0) return undefined;
+    // 1.0.7: 云端/本地分开切。pi 不把 baseURL 交给扩展,只能按 provider 名推断。
+    const resolved = resolveEngine({ provider: observedProvider(event.context?.contextEntries) });
+    const engineTag = `${resolved.engine}/${resolved.source}`;
+    if (engineLogged.get(state.key) !== engineTag) {
+      engineLogged.set(state.key, engineTag);
+      logLine(state, `spine engine=${resolved.engine} source=${resolved.source}`);
+    }
 
     let totalTokens = ctx.getContextUsage?.()?.tokens ?? null;
     if (typeof totalTokens !== "number" || totalTokens === null) {
@@ -1551,7 +1846,7 @@ export default function (pi: ExtensionAPI) {
     const chunk = selectNewestChunk(
       entries,
       (why) => logLine(state, `spine skip: ${why} | total=${totalTokens} n=${entries.length} :: ${describeEntries(entries)}`),
-      { rawLookup: rawLookup(state, entries), jobs: collectJobs(entries) },
+      { rawLookup: rawLookup(state, entries), jobs: collectJobs(entries), engine: resolved.engine },
     );
     if (chunk === null) return undefined;
     if (chunk.entries.slice(chunk.start, chunk.end + 1).some((entry) => !entry.id)) {
@@ -1627,8 +1922,11 @@ export default function (pi: ExtensionAPI) {
       const estimatedAfter = before - chunk.tokens + (typeof framedTokens === "number" ? framedTokens : 0);
       // 二次防御:上面 framedTokens >= chunk.tokens 已 throw,这里只在 est 口径意外变化时兜底。
       reduced = estimatedAfter < before;
+      // 1.0.7: 累计节省(stats)。pi 拿不到切后实测值,存的是 before − chunk + framed 的估算。
+      const saved = Math.max(0, before - estimatedAfter);
+      const stats = recordCutStats(saved);
       // est.: pi 扩展拿不到切割后的实测 token,这里只是 before - chunk + framed 的推算。
-      logLine(state, `spine cut ${Date.now() - started}ms ${before} -> est.${estimatedAfter} chunk=${chunk.tokens} span=${chunk.start}..${chunk.end}/${entries.length}`);
+      logLine(state, `spine cut ${Date.now() - started}ms ${before} -> est.${estimatedAfter} chunk=${chunk.tokens} span=${chunk.start}..${chunk.end}/${entries.length} saved=${saved} total=${stats ? stats.savedTokens : "unknown"}`);
       if (!reduced) {
         // 防御式阻断:正常流程 framed < chunk.tokens 保证恒 reduced,但护栏不能只写在日志里。
         logLine(state, `spine cut would not reduce ${before}; aborting`);

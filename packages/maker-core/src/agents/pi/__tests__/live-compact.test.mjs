@@ -9,7 +9,7 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
   generateSummaryWithUsage: vi.fn(),
 }));
 
-const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, verifiedRaw } = await import(
+const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, verifiedRaw, resolveEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText } = await import(
   '../../../../extensions/live-compact/index.ts'
 );
 
@@ -31,11 +31,8 @@ function entry(role, text, extra = {}) {
 
 describe('live compact spine selection', () => {
   it('never separates a tool call from its result', () => {
-    // 1.0.6 起最近几轮工具结果原地保留(KEEP_ROUND_TOKENS 32K),
-    // 所以夹具里要先有超过保留预算的旧轮次,才轮得到更早的段落被切。
+    // 1.0.7 去掉保留区预算:最后 3 个已结束的工具轮固定保留,所以要 4 轮才留得下可切的旧轮。
     const big = (tag) => `${tag} `.repeat(1200);
-    // 每轮约 24K token:两轮旧结果合起来超过 KEEP_ROUND_TOKENS(32K),
-    // 保留区才会停在最后几轮,更早的段落才可切。
     const huge = (tag) => `${tag} `.repeat(8000);
     const entries = [
       entry('system', 'sys'),
@@ -48,6 +45,9 @@ describe('live compact spine selection', () => {
       entry('user', 'now summarise'),
       entry('assistant', 'call', { calls: ['c2'] }),
       entry('toolResult', big('result-two'), { results: ['c2'] }),
+      entry('user', 'and once more'),
+      entry('assistant', 'call', { calls: ['c3'] }),
+      entry('toolResult', big('result-three'), { results: ['c3'] }),
     ];
 
     const chunk = selectNewestChunk(entries);
@@ -291,5 +291,85 @@ describe('live compact 1.0.6: kept tool rounds, evidence and raw pointers', () =
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('live compact 1.0.7: cloud cuts across earlier users, pointer-only spans', () => {
+  const cut = (spec) =>
+    spec.map(([type, tokens]) => ({ type, tokens, checkpoint: false, balancedBefore: true, balancedAfter: true }));
+
+  it('resolves the engine from the env override, the provider name or the address', () => {
+    expect(resolveEngine({ provider: 'minimax', env: { SPINE_ENGINE: 'local' } })).toEqual({ engine: 'local', source: 'env' });
+    expect(resolveEngine({ provider: 'strata-local', env: {} })).toEqual({ engine: 'local', source: 'provider' });
+    expect(resolveEngine({ provider: 'ollama', env: {} })).toEqual({ engine: 'local', source: 'provider' });
+    expect(resolveEngine({ provider: 'minimax', env: {} })).toEqual({ engine: 'cloud', source: 'provider' });
+    expect(resolveEngine({ provider: 'x', baseURL: 'http://127.0.0.1:8080/v1', env: {} })).toEqual({ engine: 'local', source: 'address' });
+    expect(resolveEngine({ provider: 'x', baseURL: 'https://api.example.com', env: {} })).toEqual({ engine: 'cloud', source: 'address' });
+    // 没有任何证据时按原仓的保守默认:不跨 user。
+    expect(resolveEngine({ env: {} })).toEqual({ engine: 'local', source: 'unknown' });
+  });
+
+  it('lets a cloud cut span earlier user messages but keeps the newest user out', () => {
+    // 最新一段(assistant+tool 两轮)不到 CHUNK_MIN,要跨过 user 才能凑够 1000。
+    const items = cut([
+      ['system', 100],
+      ['user', 50],
+      ['assistant', 300],
+      ['tool', 600],
+      ['user', 50],
+      ['assistant', 300],
+      ['tool', 600],
+      ['user', 50],
+      ['assistant', 300],
+      ['tool', 600],
+    ]);
+    const cloud = selectCutIndexes(items, { engine: 'cloud' });
+    expect(cloud).not.toBeNull();
+    // 下限是首个 user 之后一格,所以一直扩到 index 2。
+    expect(cloud.start).toBe(2);
+    expect(cloud.end).toBe(6);
+    // 段内可以带较早的 user,但不能带最后一条。
+    expect(items.slice(cloud.start, cloud.end + 1).some((item) => item.type === 'user')).toBe(true);
+    expect(items[cloud.end + 1].type).toBe('user');
+    // 本地切法一步也不越最后一条 user。
+    expect(selectCutIndexes(items, { engine: 'local' })).toBeNull();
+  });
+
+  it('leaves an oversized tool result as a pointer instead of refusing the cut', () => {
+    const items = cut([
+      ['user', 50],
+      ['assistant', 100],
+      ['tool', 40000],
+      ['user', 50],
+      ['assistant', 100],
+      ['tool', 500],
+    ]);
+    const picked = selectCutIndexes(items, { engine: 'cloud', chunkMax: 32000 });
+    expect(picked).toMatchObject({ start: 2, end: 2, pointerOnly: true });
+    // 指针段不能带最后一条 user。
+    expect(pointerSpanAllowed(items, 2, 2, 'cloud')).toBe(true);
+    expect(pointerSpanAllowed(items, 1, 2, 'cloud')).toBe(true);
+    expect(pointerSpanAllowed(items, 2, 3, 'cloud')).toBe(false);
+    // 本地切法整段必须在最后一条 user 之后:这条超大的在它前面,不能动。
+    expect(selectCutIndexes(items, { engine: 'local', chunkMax: 32000 })).toBeNull();
+  });
+
+  it('keeps an earlier user message as one-line JSON inside the card', () => {
+    const card = buildCard('u1\nline kept\n', '', 4000, [
+      { role: 'user', text: '只改 A 文件', turn: 2 },
+      { role: 'assistant', text: 'line kept', turn: 3 },
+    ]);
+    expect(card.ok).toBe(true);
+    expect(card.text).toContain('较早的用户消息');
+    expect(card.text).toContain('第 2 轮: "只改 A 文件"');
+  });
+
+  it('describes a pointer-only span with the backup file instead of the body', () => {
+    const withRaw = pointerOnlyText([
+      { role: 'tool', text: 'x', name: 'read', command: 'read big.txt', toolCallId: 'c9', raw: { ok: true, path: 'C:/tmp/raw-c9.txt', sha256: 'a'.repeat(64), bytes: 12, toolCallId: 'c9' } },
+    ]);
+    expect(withRaw).toContain('read big.txt');
+    expect(withRaw).toContain('raw-c9.txt');
+    expect(pointerOnlyText([{ role: 'tool', text: 'x', name: 'read', toolCallId: 'c8', raw: { ok: false, toolCallId: 'c8' } }])).toContain('无完整备份');
   });
 });
