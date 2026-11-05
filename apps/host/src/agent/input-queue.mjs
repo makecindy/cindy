@@ -25,7 +25,7 @@ export function createInputQueue(deps) {
   function stateFor(sessionId) {
     let state = sessions.get(sessionId);
     if (!state) {
-      state = { items: [], running: false, unsubscribe: null };
+      state = { items: [], active: null, running: false, unsubscribe: null };
       sessions.set(sessionId, state);
     }
     return state;
@@ -64,8 +64,11 @@ export function createInputQueue(deps) {
   async function dispatch(sessionId) {
     const state = stateFor(sessionId);
     if (state.running) return;
-    const next = state.items[0];
+    // The running message leaves the queue: the projection's pendingQueue is
+    // what is still waiting, matching the desktop renderer's expectation.
+    const next = state.items.shift();
     if (!next) return;
+    state.active = next;
 
     const stored = await deps.readSession(sessionId);
     const maker = deps.getMaker();
@@ -91,7 +94,7 @@ export function createInputQueue(deps) {
       state.running = false;
       state.unsubscribe?.();
       state.unsubscribe = null;
-      state.items.shift();
+      state.active = null;
       // A turn stopped before its final event still leaves what the user saw.
       if (!finalTextPersisted && assistantText.trim() && deps.persistMessage) {
         void deps.persistMessage(sessionId, {
