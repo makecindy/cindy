@@ -80,5 +80,7 @@ export async function resolveLocalMcpDuplicateChoices(input: { env: NodeJS.Proce
   const owner = activeOwnerScopeKey();
   const report = await listMcpDuplicates(input);
   if (owner !== activeOwnerScopeKey()) return { skipHostServers: [], denyNativeServers: [] };
-  return resolveMcpDuplicateChoices(report);
+  const choices = resolveMcpDuplicateChoices(report);
+  return { ...choices, nativeServersToKeep: [...new Set(report.connections
+    .filter(pair => choices.skipHostServers.includes(pair.cindyId)).map(pair => pair.claudeName))] };
 }

@@ -738,6 +738,8 @@ export interface AgentDeps {
   resolveLocalMcpDuplicateChoices?: (input: { workingDir: string; env: NodeJS.ProcessEnv }) => Promise<{
     skipHostServers: string[];
     denyNativeServers: string[];
+    /** Confirm these native connections in the live CLI before omitting any host. */
+    nativeServersToKeep?: string[];
   }>;
 
   /**

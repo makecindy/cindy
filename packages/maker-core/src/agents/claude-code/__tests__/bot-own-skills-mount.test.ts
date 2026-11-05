@@ -82,7 +82,8 @@ function createFakeQuery() {
     setPermissionMode: vi.fn(async () => {}),
     setModel: vi.fn(async () => {}),
     applyFlagSettings: vi.fn(async () => {}),
-    mcpServerStatus: vi.fn(async () => []),
+    mcpServerStatus: vi.fn(async (): Promise<Array<{ name: string; status: string }>> => []),
+    setMcpServers: vi.fn(async (servers: Record<string, unknown>) => ({ added: [], removed: servers.custom_magpie ? [] : ['custom_magpie'], errors: {} })),
     interrupt: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
     rewindFiles: vi.fn(async () => ({ canRewind: false })),
@@ -98,6 +99,7 @@ async function makeTempDir(): Promise<string> {
 const OWN_SKILL_ROOT = '/userdata/bot-skills/bot-1';
 
 async function startBotSession(input: {
+  query?: ReturnType<typeof createFakeQuery>;
   duplicateResolver?: AgentDeps['resolveLocalMcpDuplicateChoices'];
   ownSkillPluginRoots?: string[];
   reviewMode?: boolean;
@@ -113,7 +115,7 @@ async function startBotSession(input: {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
   const workingDir = await makeTempDir();
-  sdkMock.query.mockReturnValue(createFakeQuery());
+  sdkMock.query.mockReturnValue(input.query ?? createFakeQuery());
 
   const deps = createDeps();
   if (input.duplicateResolver) {
@@ -261,12 +263,40 @@ describe('Claude Code mounts the Bot\'s own learned Skills', () => {
     const duplicateResolver = vi.fn(async () => ({
       skipHostServers: choice === 'claude' ? ['custom_magpie'] : [],
       denyNativeServers: choice === 'cindy' ? ['magpie'] : [],
+      nativeServersToKeep: choice === 'claude' ? ['magpie'] : [],
     }));
-    const options = await startBotSession({ ordinary: true, duplicateResolver });
-    expect(Object.keys(options.mcpServers ?? {})).toEqual(choice === 'claude' ? ['other'] : ['custom_magpie', 'other']);
+    const query = createFakeQuery();
+    query.mcpServerStatus.mockResolvedValue([{ name: 'magpie', status: 'connected' }]);
+    const options = await startBotSession({ ordinary: true, duplicateResolver, query });
+    expect(Object.keys(options.mcpServers ?? {})).toEqual(['custom_magpie', 'other']);
+    if (choice === 'claude') {
+      expect(query.setMcpServers).toHaveBeenNthCalledWith(1, options.mcpServers);
+      expect(query.setMcpServers).toHaveBeenNthCalledWith(2, { other: options.mcpServers!.other });
+      expect(query.setMcpServers.mock.calls[1]![0].other).toBe(options.mcpServers!.other);
+    } else expect(query.setMcpServers).not.toHaveBeenCalled();
     expect(options.settings?.deniedMcpServers ?? []).toEqual(choice === 'cindy' ? [{ serverName: 'magpie' }] : []);
     expect(options.settingSources).toEqual(['user', 'project', 'local']);
     expect(options.strictMcpConfig).toBeUndefined();
+  });
+  // PR #9055: files cannot reflect managed policy. Exercise the real startSession
+  // assembly with native status absent, disconnected or unreadable; unit, no CLI.
+  it.each(['missing', 'failed', 'pending', 'error', 'update-error'])('keeps available connections when native selection is %s', async status => {
+    const query = createFakeQuery();
+    if (status === 'error') query.mcpServerStatus.mockRejectedValue(new Error('status unavailable'));
+    else query.mcpServerStatus.mockResolvedValue(status === 'missing' ? [] : [{ name: 'magpie', status: status === 'update-error' ? 'connected' : status }]);
+    if (status === 'update-error') query.setMcpServers.mockResolvedValueOnce({ added: [], removed: [], errors: {} })
+      .mockRejectedValueOnce(new Error('update unavailable'));
+    const options = await startBotSession({ ordinary: true, query,
+      duplicateResolver: async () => ({ skipHostServers: ['custom_magpie'], denyNativeServers: [], nativeServersToKeep: ['magpie'] }),
+    });
+    expect(options.mcpServers).toHaveProperty('custom_magpie');
+    expect(query.setMcpServers).toHaveBeenNthCalledWith(1, options.mcpServers);
+    expect(query.setMcpServers).toHaveBeenCalledTimes(status === 'update-error' ? 2 : 1);
+    // Failed diagnostics must release the input gate, not strand the first turn.
+    const prompt = sdkMock.query.mock.calls.at(-1)![0].prompt as AsyncIterable<unknown>;
+    const next = prompt[Symbol.asyncIterator]().next();
+    await liveHandles.at(-1)!.send({ type: 'user', content: 'use the connection' });
+    expect((await next).value).toMatchObject({ type: 'user' });
   });
   it.each([{ ordinary: false }, { ordinary: true, remote: true }, { ordinary: true, reviewMode: true }, { ordinary: true, localHostOnly: true }])(
     'does not apply local duplicate choices in isolated/remote runtimes: %j', async context => {

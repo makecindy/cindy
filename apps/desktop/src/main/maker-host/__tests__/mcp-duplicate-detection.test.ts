@@ -96,6 +96,14 @@ describe('MCP duplicate suggestions and explicit choices', () => {
     expect(await detectMcpDuplicates(f.deps, { env: {} })).toEqual({ connections: [], complete: false });
   });
 
+  // PR #9055: URL-only entries are rejected by the CLI, not HTTP defaults.
+  // Unit regression through the diagnostic entry; earlier fixtures always had a type.
+  it.each([undefined, 'stdio', 'sse'])('only suggests an explicit remote transport: %s', async type => {
+    const f = fixture();
+    f.files.set(path.join(f.home, '.claude.json'), { mcpServers: { magpie: { ...f.native.magpie, type } } });
+    expect((await detectMcpDuplicates(f.deps, { env: {} })).connections).toHaveLength(type === 'sse' ? 1 : 0);
+  });
+
   // PR #9055: a native denial added after choosing Claude must not remove the last
   // available connection. Unit tier; existing disabledMcpServers case misses settings files.
   it.each(['user', 'custom-config', 'project', 'local'] as const)('rechecks %s settings after a source choice', async scope => {
@@ -154,5 +162,25 @@ describe('MCP duplicate suggestions and explicit choices', () => {
       .toEqual({ skipHostServers: [], denyNativeServers: [] });
     f.deps.workspaceSettingsFiles = async () => { throw new Error('cannot resolve workspace'); };
     expect(await detectMcpDuplicates(f.deps, input)).toEqual({ complete: false, connections: [] });
+  });
+
+  // PR #9055: canonical settings files alone do not cover .claude.json project
+  // keys or ancestor .mcp.json overrides. One linked path + one saved choice; unit.
+  it.each(['disabled', 'local', 'ancestor'] as const)('preserves Cindy for canonical %s overrides', async source => {
+    const f = fixture();
+    const workingDir = path.resolve('external-link');
+    const canonical = path.resolve('canonical-repo', 'app');
+    f.deps.workspaceSettingsFiles = async () => [path.join(canonical, '.claude', 'settings.json')];
+    const input = { env: {}, workingDir };
+    const original = await detectMcpDuplicates(f.deps, input);
+    f.choices[original.connections[0]!.id] = 'claude';
+    if (source === 'ancestor') {
+      f.files.set(path.join(path.dirname(canonical), '.mcp.json'), { mcpServers: f.native });
+    } else {
+      f.config.projects[canonical.replace(/\\/g, '/')] = source === 'disabled'
+        ? { disabledMcpServers: ['magpie'] } : { mcpServers: f.native };
+    }
+    expect(resolveMcpDuplicateChoices(await detectMcpDuplicates(f.deps, input)))
+      .toEqual({ skipHostServers: [], denyNativeServers: [] });
   });
 });

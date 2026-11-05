@@ -77,17 +77,25 @@ export async function detectMcpDuplicates(
     if (input.workingDir) {
       // Share CLI discovery with the runtime guard: lexical paths alone miss an
       // external symlink target and a linked worktree's canonical repository.
-      for (const file of await deps.workspaceSettingsFiles(input.workingDir)) settingsFiles.add(file);
-      const project = object(object(config.projects)[input.workingDir.replace(/\\/g, '/')]
-        ?? object(config.projects)[input.workingDir]);
-      for (const name of Object.keys(object(project.mcpServers))) masked.add(name);
-      for (const name of [...(Array.isArray(project.disabledMcpServers) ? project.disabledMcpServers : []),
-        ...(Array.isArray(config.disabledMcpServers) ? config.disabledMcpServers : [])]) {
-        if (typeof name === 'string') masked.add(name);
+      const workspaceDirs = new Set([path.resolve(input.workingDir)]);
+      for (const file of await deps.workspaceSettingsFiles(input.workingDir)) {
+        settingsFiles.add(file);
+        workspaceDirs.add(path.dirname(path.dirname(file)));
+      }
+      for (const dir of workspaceDirs) {
+        for (const key of new Set([dir, dir.replace(/\\/g, '/')])) {
+          const project = object(object(config.projects)[key]);
+          for (const name of Object.keys(object(project.mcpServers))) masked.add(name);
+          for (const name of Array.isArray(project.disabledMcpServers) ? project.disabledMcpServers : []) {
+            if (typeof name === 'string') masked.add(name);
+          }
+        }
       }
       // Native project discovery can inherit ancestor .mcp.json files. Be conservative:
       // never apply a user-scope choice to a same-name project connection.
-      for (let dir = path.resolve(input.workingDir);;) {
+      const scannedDirs = new Set<string>();
+      for (const start of workspaceDirs) for (let dir = start; !scannedDirs.has(dir);) {
+        scannedDirs.add(dir);
         settingsFiles.add(path.join(dir, '.claude', 'settings.json'));
         settingsFiles.add(path.join(dir, '.claude', 'settings.local.json'));
         const scoped = object(await deps.readJson(path.join(dir, '.mcp.json')));
@@ -125,7 +133,7 @@ export async function detectMcpDuplicates(
         if (masked.has(name) || customIds.has(name)) continue;
         const entry = object(raw);
         const nativeUrl = endpoint(entry.url, input.env);
-        if (!nativeUrl || (entry.type !== undefined && entry.type !== 'http' && entry.type !== 'sse')) continue;
+        if (!nativeUrl || (entry.type !== 'http' && entry.type !== 'sse')) continue;
         const reason = relation(hostUrl, nativeUrl);
         if (!reason) continue;
         const id = fingerprint([configFile, server, deps.readToken(server.id), name, entry, nativeUrl.href,
