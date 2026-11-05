@@ -18,6 +18,10 @@ export function BotLearningFooter({ receipts }: { receipts: unknown }) {
     <div className={cn('mt-2 flex w-full min-w-0 flex-col items-start gap-1', CHAT_BUBBLE_COLUMN_CLASS)} data-bot-learning-footer>
       {items.map((item) => {
         const Icon = item.kind === 'memory' ? Brain : BookOpen;
+        const label = t(
+          `bots.learning.${item.kind === 'memory' ? 'memory' : item.action === 'created' ? 'skillCreated' : 'skillUpdated'}`,
+          { title: item.title },
+        );
         return (
           <button
             key={`${item.kind}:${item.key}`}
@@ -33,11 +37,8 @@ export function BotLearningFooter({ receipts }: { receipts: unknown }) {
             }
           >
             <Icon size={13} className="shrink-0" aria-hidden />
-            <span className="min-w-0 truncate underline underline-offset-4">
-              {t(
-                `bots.learning.${item.kind === 'memory' ? 'memory' : item.action === 'created' ? 'skillCreated' : 'skillUpdated'}`,
-                { title: item.title },
-              )}
+            <span className="min-w-0 truncate underline underline-offset-4" title={label}>
+              {label}
             </span>
           </button>
         );
