@@ -43,7 +43,7 @@
 | 复用现有登录 | 部分 | 登录入口真实可达（含 PKCE/托管回调），重启后 `authenticated:true` 复用现有会话（`evidence/stage2-login.md`）；**真实浏览器完成一次授权未验证**（需要用户本人凭证） |
 | 复用现有存储 | 已验证 | 打开同一 owner 库（145 条 migration / 87 表），无平行数据库 |
 | 单 Runtime 锁 | 已验证 | 第二个 Host 报 `runtime.state=blocked`、`storage=unopened` |
-| 插件列表 | 已验证（读） | `#/plugins` 页在浏览器渲染空态「No plugins installed yet」，明暗两种模式正常；插件**执行**未迁移 |
+| 插件列表 | 已验证（读） | Host 复用 Desktop `GhostManager` 列出已装插件（`/api/ghosts`，单测 + 实跑 `[]`）；`#/plugins` 页明暗两种模式正常；插件**执行**未迁移 |
 | Memory / 文件访问 | 禁用 + TODO | 未验证 |
 | systemd user unit | 已验证（模板） | `apps/host/cindy-host.service`，`systemd-analyze verify` 通过；未在本机 enable/start |
 | Tray / 原生菜单 / 窗口特效 / 桌面快捷键 | 禁用 + TODO | Electron 专属；浏览器端不提供，需在 `cindy-desktop` 保留 |

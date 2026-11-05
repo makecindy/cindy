@@ -29,6 +29,7 @@ CINDY_HOST_API=http://127.0.0.1:3456 pnpm --filter desktop dev
 | `maker:usage:model-pricing` / `-v2` / `reference-model-pricing` | `POST /api/usage/*` |
 | `maker:model-visibility:legacy-owner-claim-sync` | `POST /api/model-visibility/claim`（启动时预取，同步回放） |
 | `maker:get-pending-interactions` / `maker:resolve-interaction` | `POST /api/interactions/*` |
+| `ghosts:list`（同步，启动预取后回放） | `POST /api/ghosts`（复用 Desktop `GhostManager`，非第二套实现） |
 | `maker:list-available-agents` | `POST /api/agents` |
 | `maker:list-agent-commands` | `POST /api/agent-commands` |
 | `maker:list-agent-skills` | `POST /api/agent-skills` |
@@ -53,6 +54,12 @@ CINDY_HOST_API=http://127.0.0.1:3456 pnpm --filter desktop dev
 - 只接受 loopback（`127.0.0.1` / `localhost` / `::1`）目标；非 loopback 直接拒绝启动，
   避免把 profile token 发到机器外。
 - 凭据取自 `<userData>/host-api-token`（Host 首次启动生成，0600）；缺失时拒绝启动。
+
+## 插件列表
+
+Host 直接复用 Desktop 的 `GhostManager`（同一实现），只注入 owner 作用域路径；市场账本、
+命名空间迁移、常驻进程拉起等安全相关适配保持默认（fail closed）。Web 与 Electron 客户端的
+插件列表都来自这里。
 
 ## 明确未迁移（客户端模式下会显式失败）
 

@@ -292,7 +292,8 @@
     'modelFavoritesHost.changed': () => () => {},
     'gitContext.listAllPrRefs': () => [],
     'layout.getStateSync': () => ({ layout: window.__cindyBoot?.layout ?? null }),
-    'ghosts.listSync': () => STATIC.ghosts,
+    // Preloaded at boot (sync channel): the desktop answers this from memory too.
+    'ghosts.listSync': () => ({ ghosts: ghostsCache ?? [] }),
     'ghosts.recommendationsSync': () => STATIC.ghostRecommendations,
     'sidebarSettings.loadSnapshot': () => ({
       ...STATIC.sidebarSettings,
@@ -426,6 +427,16 @@
    * first value they produced for the same channel and arguments.
    */
   const syncSnapshots = new Map();
+  /** Installed plugins, fetched once at boot for the synchronous list channel. */
+  let ghostsCache = null;
+  void (async () => {
+    try {
+      const installed = await rpc('/ghosts');
+      ghostsCache = Array.isArray(installed) ? installed : [];
+    } catch {
+      ghostsCache = [];
+    }
+  })();
   let capabilitiesCache = null;
 
   /** Non-function members the preload exposes as plain values. */

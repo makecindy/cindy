@@ -26,6 +26,7 @@ import { createRequire } from 'node:module';
 import { readAuthEndpoints } from './auth/endpoints.mjs';
 import { logoutHostSession } from './auth/logout.mjs';
 import { listInstalledPlugins } from './plugins.mjs';
+import { listInstalledGhosts } from './plugins-installed.ts';
 import { listActiveSessions } from './sessions.mjs';
 import { createPreparedLinuxCredentialStore } from './credentials/store.mjs';
 import { createHostServer } from './server.mjs';
@@ -560,6 +561,13 @@ const server = createHostServer({
     });
     return page.items;
   },
+  ghosts: () => (runtime.owner
+    ? listInstalledGhosts({
+        userDataDir: resolveHostDataDir(),
+        ownerId: runtime.owner,
+        onChanged: (ghosts: unknown[]) => eventHub.publish({ type: 'ghosts_changed', ghosts }),
+      })
+    : []),
   listPlugins: () => (runtime.owner
     ? listInstalledPlugins(resolveHostDataDir(), runtime.owner)
     : { plugins: [], namespace: 'canonical', legacyNamespacePresent: false }),

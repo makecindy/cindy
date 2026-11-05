@@ -6767,6 +6767,18 @@ const registerIpcHandlers = () => {
       const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain });
       console.log(`[bootstrap-electron] client mode proxies: ${installed.join(', ')}`);
       void registerHostDelegatedSync({
+        channel: 'ghosts:list',
+        path: '/api/ghosts',
+        client: hostClient,
+        map: (response) => ({ ghosts: Array.isArray(response) ? response : [] }),
+        ipcMain,
+      }).catch((error: unknown) => {
+        console.warn(
+          '[bootstrap-electron] client mode plugin list failed:',
+          error instanceof Error ? error.message : String(error),
+        );
+      });
+      void registerHostDelegatedSync({
         channel: 'maker:model-visibility:legacy-owner-claim-sync',
         path: '/api/model-visibility/claim',
         client: hostClient,

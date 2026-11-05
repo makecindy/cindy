@@ -134,6 +134,7 @@ export function createHostServer(deps) {
           send(response, 200, await deps.history(String(body.sessionId ?? ''), Number(body.limit ?? 200)));
           return;
         }
+        if (url.pathname === '/api/ghosts') { send(response, 200, await deps.ghosts()); return; }
         if (url.pathname === '/api/plugins/list') { send(response, 200, deps.listPlugins()); return; }
         if (url.pathname === '/api/providers') { send(response, 200, await deps.providers()); return; }
         if (url.pathname === '/api/model-visibility/claim') { send(response, 200, deps.modelVisibilityClaim()); return; }

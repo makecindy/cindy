@@ -306,11 +306,14 @@ export function registerHostDelegatedSync(input: {
   readonly channel: string;
   readonly path: string;
   readonly client: HostClient;
+  /** Host response → the synchronous value the renderer expects. */
+  readonly map?: (response: unknown) => unknown;
   readonly ipcMain: { on(channel: string, listener: (event: { returnValue: unknown }) => void): void };
 }): Promise<void> {
-  return input.client.request(input.path).then((claim) => {
+  return input.client.request(input.path).then((response) => {
+    const value = input.map ? input.map(response) : response;
     input.ipcMain.on(input.channel, (event) => {
-      event.returnValue = claim;
+      event.returnValue = value;
     });
   });
 }
