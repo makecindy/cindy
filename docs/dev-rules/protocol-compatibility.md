@@ -577,6 +577,24 @@ Electron 进程的 IPC/WebRTC smoke，以及 Desktop、Mobile 和共享包类型
 （本机起中转、走加入流程，再跑 `scripts/device-link/interop.test.ts`，认证方案由 `CINDY_TEST_AUTH_SCHEME` 指定；
 `CINDY_TEST_FRAME_AUTH` 提供测试签名密钥时全程开启设备签名，两端核对每一条对端消息）。
 
+### agent-net 数据报转发（实验，默认关闭）
+
+agent-net 第 7 步（[`agent-net-plan.md`](../agent-net-plan.md) §0）在自建中转内核里加了一条可选的数据报转发通道，
+实现见 `packages/device-link-relay/src/agentNet.ts`。**默认关闭**：`startRelayServer` 不传 `agentNet` 时不注册路径、
+`/relay/info` 的 `features` 不变、升级请求照旧 404，内核行为与 bundle `0.3.1` 逐字节相同，所以没有改 `RELAY_VERSION`、
+CLI 和分发构建；产品里开始用它时再升版本、加开关，并按本节下方的同步维护要求补互通验证。
+
+- 入口 `/api/device-link/agent-net`，WebSocket 升级时用 `CindyRelay` 凭证认证（和设备连接共用端口、证书与 Nginx）。打开后 `features` 声明 `agent-net-relay-v1`。
+- 只收发二进制帧 `[类型 1][设备号长度 1][设备号][长度 2，大端][数据报]…`：设备发出时设备号是收件设备，中转转发时换成凭证绑定的发件设备。
+  内容是两端 agent-net 核心加密过的数据报，中转不解析；不在线、积压超过 1 MiB、帧不合格时直接丢，不回错误。
+- 每台设备只保留最新的一条（旧的 4409），设备被移除时立即断开（4410），之后凭证升级返回 401；不交换在线状态，在线仍由 `/api/device-link/ws` 负责。
+- 没有自建中转、或自建中转没开这项功能时，agent-net 的数据报夹带在现有 `push` 帧里（channel `agent-net:datagrams`，内容 base64），
+  官方中转与已部署的自建中转都按不透明 push 转发，不需要改服务端，旧客户端收不到也不会处理这个 channel。
+  这条路尚未接入产品，只在 `prototypes/agent-net-spike` 验证。
+- 验证（2026-11-05）：`relay.test.ts` 的 agent-net 用例覆盖默认关闭、认证、发件设备改写、丢弃规则、顶替和移除；
+  `pnpm --filter @cindy/device-link-relay test` 50 项与 `run interop` 通过；EdgeHub 原型在本机起的内核上
+  用专用通道和 push 夹带两种方式各跑真实 `DeviceLinkClient` 的 12 项检查，UDP 关闭时全部通过。
+
 ### 自建中转同步维护
 
 服务器部署的 Nginx 自动接入使用中转 bundle `0.3.0`（`nginx` 为 SSH 部署内部 CLI）。公网仍使用

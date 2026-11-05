@@ -1064,6 +1064,11 @@ impl Connection {
         self.rtt.srtt_us()
     }
 
+    /// 连续超时了几次，有包被确认就清零。加密层据此判断当前路径是不是断了。
+    pub(crate) fn timeouts_in_a_row(&self) -> u32 {
+        self.consecutive_timeouts
+    }
+
     /// 换了路径：在途的包多半跟着旧路径丢了，全部放回待重传；往返、带宽、丢包和乱序都按新路径从头量。
     /// 序号、包号和流都不受影响，对端照常确认。
     pub(crate) fn on_path_change(&mut self, now_us: u64) {

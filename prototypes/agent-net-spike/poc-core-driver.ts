@@ -7,7 +7,7 @@
  */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { Endpoint, generateIdentity, type Connection, type RecvStream } from '../../packages/agent-net-core/wasm/node.mts';
+import { Endpoint, generateIdentity, isLinkAddress, type Address, type Connection, type RecvStream } from '../../packages/agent-net-core/wasm/node.mts';
 import { mibPerSecond, nowMs, sleep } from './util.mjs';
 
 const PROLOGUE = 'agent-net-spike/driver/1';
@@ -29,6 +29,12 @@ function pattern(size: number): Buffer {
 }
 
 const sha = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
+
+/** 数据现在发往的 UDP 地址；走通道或者还不知道时是 `null`。 */
+function udpPeer(connection: Connection): Address | null {
+  const address = connection.peerAddress();
+  return address && !isLinkAddress(address) ? address : null;
+}
 
 /** 等对端开的第一条流收完，返回内容的哈希、长度和用时。 */
 function receiveStream(server: Endpoint): Promise<{ hash: string; size: number; ms: number; connection: Connection }> {
@@ -105,7 +111,7 @@ await check('IPv6 回环上握手和收发', async () => {
   stream.write(payload);
   stream.finish();
   const result = await received;
-  const peer = result.connection.peerAddress();
+  const peer = udpPeer(result.connection);
   const port = client.address().port;
   client.close();
   server.close();
@@ -133,7 +139,7 @@ for (const notify of [true, false]) {
     stream.finish();
     const result = await received;
     const stats = result.connection.stats();
-    const peer = result.connection.peerAddress();
+    const peer = udpPeer(result.connection);
     client.close();
     server.close();
     assert.notEqual(before, after);

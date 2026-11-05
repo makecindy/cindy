@@ -83,6 +83,20 @@ const MAX_CANDIDATES: usize = 4;
 const AMPLIFICATION_FACTOR: u64 = 3;
 /// 最多攒这么多个还没回的路径验证，再多就丢掉最早的：对端会重发。
 const MAX_PENDING_RESPONSES: usize = 4;
+/// 记着代价的路径最多这么多条，再多就忘掉不在用、不在验证、也不是备用的。
+const MAX_PATH_COSTS: usize = 16;
+/// 备用路径最多记这么多条，见 [`SecureConnection::set_path_cost`]。
+const MAX_ALTERNATES: usize = 4;
+/// 数据路径这么久（也至少这么多个往返）没收到对端的包，才算安静，见 `SecureConnection::set_path_cost`。
+/// 打洞成功、这一端先换到直连时，对端要一两个往返才跟过来，这期间它的包还从中继来，不能把这一端拉回去。
+/// 刚换过路径时新路径的往返还没量出来，按换之前那条路径的往返算。
+const ACTIVE_QUIET_US: u64 = 300_000;
+const ACTIVE_QUIET_RTTS: u64 = 3;
+/// 连续超时这么多次、又安静了，才算数据路径断了。换路径时往返从头量，长往返的路径上第一次超时常常是误判，确认随后就到；
+/// 换过去以后从头冲的那一阵挤爆了窄路径时也会连着超时，但对端的包照样从这条路径来，路是通的（2026-11-05 随机矩阵的种子 860）。
+const FAILING_TIMEOUTS: u32 = 2;
+/// 自己退回备用路径时要求的安静时间下限。已经连续超时了，只需确认对端的包也不从这条路径来，不用等对端跟过来的那段时间。
+const DEAD_QUIET_US: u64 = 100_000;
 /// 对端忽然安静多久以后探测：至少这么久，也至少这么多个往返。之后没有回音就隔这么久再探测，不退避，
 /// 默认是安静后每秒一次，到对端判死的 `dead_after_us`（默认 30 秒）为止。断网多久不知道，网络一恢复，
 /// 下一次探测最多再等一个间隔；丢包三成的新网络上，探测、验证、回复丢掉一个就白试一次，试得越多越不会断。
@@ -317,6 +331,12 @@ pub struct SecurityStats {
     pub path_failures: u64,
     /// 对端忽然安静时发出的探测，见模块说明。
     pub silence_pings: u64,
+    /// 这一端自己开始验证一条路径的次数：调用方的 [`SecureConnection::probe_path`]，和数据路径断了时退回备用路径。
+    pub path_probes: u64,
+    /// 其中数据路径断了、自动去验证备用路径的次数。
+    pub fallback_probes: u64,
+    /// 验证通过但没换过去、留作备用的次数：数据路径更便宜，也还好好的。
+    pub alternates_kept: u64,
 }
 
 /// 收到的握手请求，还没有回复。调用方检查对方身份和附带数据后决定是否接受。
@@ -457,6 +477,10 @@ struct Candidate {
     deadline: u64,
     /// 调用方说这条路径和数据路径只差端口。
     same_route: bool,
+    /// 这一端自己要验证的（[`SecureConnection::probe_path`]、退回备用路径），不是跟着对端来的。
+    /// 地址来自已认证的对端或这一端自己，不受放大限制，每轮最多发 `MAX_CHALLENGES` 个满长度的验证包，顺便确认这条路径过得了满长度的包；
+    /// 数据路径来了新包也接着验证。
+    proactive: bool,
 }
 
 /// 往哪条路径发，以及正在验证的新路径。路径是调用方编的号，见模块说明。
@@ -468,25 +492,73 @@ struct Paths {
     /// 还没回的路径验证：（来自哪条路径，值，包长）。回复发回验证来的那条路径。
     responses: VecDeque<(u64, u64, usize)>,
     next_value: u64,
+    /// 调用方给的路径代价，没给的是 0。
+    costs: Vec<(u64, u8)>,
+    /// 备用路径，代价小的在前：从代价更高的路径换到更便宜的以后留着原来那条，验证通过但没换过去的也留着。
+    alternates: Vec<u64>,
+    /// 最后一次从数据路径收到对端通过认证的包的时间，换路径时从头算。
+    active_heard: u64,
+    /// 换到数据路径那一刻、原来那条路径的平滑往返。
+    previous_srtt_us: u64,
 }
 
 impl Paths {
-    fn new() -> Self {
-        Self { active: 0, candidates: Vec::new(), responses: VecDeque::new(), next_value: 0 }
+    fn new(now_us: u64) -> Self {
+        Self {
+            active: 0,
+            candidates: Vec::new(),
+            responses: VecDeque::new(),
+            next_value: 0,
+            costs: Vec::new(),
+            alternates: Vec::new(),
+            active_heard: now_us,
+            previous_srtt_us: 0,
+        }
     }
 
     fn candidate(&self, path: u64) -> Option<&Candidate> {
         self.candidates.iter().find(|candidate| candidate.path == path)
     }
 
-    /// 还能往 `path` 发多少字节，`None` 表示不限。只有正在验证的路径受限，别的路径只发和验证包一样长的回复。
+    fn cost(&self, path: u64) -> u8 {
+        self.costs.iter().find(|(known, _)| *known == path).map_or(0, |(_, cost)| *cost)
+    }
+
+    fn set_cost(&mut self, path: u64, cost: u8) {
+        self.costs.retain(|(known, _)| *known != path);
+        if cost == 0 {
+            return;
+        }
+        if self.costs.len() >= MAX_PATH_COSTS {
+            let busy = |known: u64| known == self.active || self.candidate(known).is_some() || self.alternates.contains(&known);
+            if let Some(index) = self.costs.iter().position(|(known, _)| !busy(*known)) {
+                self.costs.remove(index);
+            } else {
+                return;
+            }
+        }
+        self.costs.push((path, cost));
+        let costs = &self.costs;
+        let cost_of = |known: &u64| costs.iter().find(|(path, _)| path == known).map_or(0, |(_, cost)| *cost);
+        self.alternates.sort_by_key(cost_of);
+    }
+
+    /// 还能往 `path` 发多少字节，`None` 表示不限。只有跟着对端验证的路径受限，别的路径只发和验证包一样长的回复。
     fn room(&self, path: u64) -> Option<usize> {
-        let candidate = self.candidate(path)?;
+        let candidate = self.candidate(path).filter(|candidate| !candidate.proactive)?;
         let room = candidate.received.saturating_mul(AMPLIFICATION_FACTOR).saturating_sub(candidate.sent);
         Some(usize::try_from(room).unwrap_or(usize::MAX))
     }
 
-    fn on_received(&mut self, path: u64, bytes: usize) {
+    /// 这条验证现在能不能发：次数没用完，跟着对端的路径还要额度够发最短的验证包。
+    fn can_challenge(&self, candidate: &Candidate) -> bool {
+        candidate.challenges < MAX_CHALLENGES && (candidate.proactive || self.room(candidate.path).is_some_and(|room| room >= MIN_PROBE_LEN))
+    }
+
+    fn on_received(&mut self, now_us: u64, path: u64, bytes: usize) {
+        if path == self.active {
+            self.active_heard = now_us;
+        }
         if let Some(candidate) = self.candidates.iter_mut().find(|candidate| candidate.path == path) {
             candidate.received += bytes as u64;
         }
@@ -498,48 +570,103 @@ impl Paths {
         }
     }
 
-    /// 对端最新的包（或者它从数据路径以外来的重复）从 `path` 来。从数据路径来就不用再验证别的路径：说明对端还在那里，
-    /// 刚才从别处来的多半是路上的人抢先送到的复制包。从别的路径来就开始验证它，已经在验证的接着验证。
-    /// 验证满了就放弃最早开始的那条。返回是否开始了新一轮验证。
-    fn observe(&mut self, now_us: u64, path: u64, interval_us: u64, same_route: bool) -> bool {
+    fn push_candidate(&mut self, now_us: u64, path: u64, interval_us: u64, same_route: bool, proactive: bool) {
+        if self.candidates.len() == MAX_CANDIDATES {
+            let index = self.candidates.iter().position(|candidate| !candidate.proactive).unwrap_or(0);
+            self.candidates.remove(index);
+        }
+        let deadline = now_us + interval_us * VALIDATION_RTOS;
+        self.candidates.push(Candidate { path, received: 0, sent: 0, first: self.next_value, challenges: 0, due_at: now_us, interval_us, deadline, same_route, proactive });
+        self.next_value += MAX_CHALLENGES as u64;
+    }
+
+    /// 对端最新的包（或者它从数据路径以外来的重复）从 `path` 来。从数据路径来就不用再验证对端换过去的别的路径：说明对端还在那里，
+    /// 刚才从别处来的多半是路上的人抢先送到的复制包；这一端自己要验证的接着验证。从别的路径来就开始验证它，已经在验证的接着验证。
+    /// 那条路径的代价比数据路径高、数据路径又没断（`active_failing` 为 false）时不跟过去：多半是对端还没从那里换过来。
+    /// 验证满了就放弃最早开始的那条跟着对端的。返回是否开始了新一轮验证。
+    fn observe(&mut self, now_us: u64, path: u64, interval_us: u64, same_route: bool, active_failing: bool) -> bool {
         if path == self.active {
-            self.candidates.clear();
+            self.candidates.retain(|candidate| candidate.proactive);
             return false;
         }
         if self.candidate(path).is_some() {
             return false;
         }
-        if self.candidates.len() == MAX_CANDIDATES {
-            self.candidates.remove(0);
+        if self.cost(path) > self.cost(self.active) && !active_failing {
+            return false;
         }
-        let deadline = now_us + interval_us * VALIDATION_RTOS;
-        self.candidates.push(Candidate { path, received: 0, sent: 0, first: self.next_value, challenges: 0, due_at: now_us, interval_us, deadline, same_route });
-        self.next_value += MAX_CHALLENGES as u64;
+        self.push_candidate(now_us, path, interval_us, same_route, false);
         true
+    }
+
+    /// 这一端自己要验证 `path`。已经在跟着对端验证的改成这一端自己要的。返回是否开始了新一轮验证。
+    fn probe(&mut self, now_us: u64, path: u64, interval_us: u64) -> bool {
+        if path == self.active {
+            return false;
+        }
+        if let Some(candidate) = self.candidates.iter_mut().find(|candidate| candidate.path == path) {
+            candidate.proactive = true;
+            return false;
+        }
+        self.push_candidate(now_us, path, interval_us, false, true);
+        true
+    }
+
+    /// 数据路径断了时退回哪条备用路径：代价比数据路径高的里面最便宜、又不在验证的。
+    fn fallback(&self) -> Option<u64> {
+        let active = self.cost(self.active);
+        self.alternates.iter().copied().find(|&path| self.cost(path) > active && self.candidate(path).is_none())
     }
 
     /// 到期要发的验证：发往的路径、值、包长、是否只换了端口。放大限制连最短的验证包都不允许的路径跳过。
     fn next_challenge(&mut self, now_us: u64, max_packet_size: usize) -> Option<(u64, u64, usize, bool)> {
-        let index = self.candidates.iter().position(|candidate| {
-            candidate.challenges < MAX_CHALLENGES && candidate.due_at <= now_us && self.room(candidate.path).is_some_and(|room| room >= MIN_PROBE_LEN)
-        })?;
-        let room = self.room(self.candidates[index].path)?;
+        let index = self.candidates.iter().position(|candidate| candidate.due_at <= now_us && self.can_challenge(candidate))?;
+        // 只用一半额度：验证包丢了还要重发，从这条路径收到更多之前得留着。这一端自己要验证的发满长度。
+        let size = match self.room(self.candidates[index].path) {
+            Some(room) => (room / 2).clamp(MIN_PROBE_LEN, max_packet_size),
+            None => max_packet_size,
+        };
         let candidate = &mut self.candidates[index];
         let value = candidate.first + candidate.challenges as u64;
         candidate.due_at = now_us + (candidate.interval_us << candidate.challenges);
         candidate.challenges += 1;
-        // 只用一半额度：验证包丢了还要重发，从这条路径收到更多之前得留着。
-        Some((candidate.path, value, (room / 2).clamp(MIN_PROBE_LEN, max_packet_size), candidate.same_route))
+        Some((candidate.path, value, size, candidate.same_route))
     }
 
-    /// 对端回了验证。是哪一条正在验证的路径发出的值，数据就换到那条路径，其余的验证都不用了，
-    /// 返回那条路径是否只换了端口；不是任何一条的值时返回 `None`。
-    fn on_response(&mut self, value: u64) -> Option<bool> {
+    /// 对端回了验证：返回是哪一条正在验证的路径发出的值、它是否只换了端口、是不是这一端自己要验证的；不是任何一条的值时返回 `None`。
+    /// 换不换过去由调用方决定（[`switch_to`](Self::switch_to) 或 [`keep_alternate`](Self::keep_alternate)）。
+    fn on_response(&self, value: u64) -> Option<(u64, bool, bool)> {
         let candidate = self.candidates.iter().find(|candidate| (candidate.first..candidate.first + candidate.challenges as u64).contains(&value))?;
-        let same_route = candidate.same_route;
-        self.active = candidate.path;
+        Some((candidate.path, candidate.same_route, candidate.proactive))
+    }
+
+    /// 数据换到 `path`，其余的验证都不用了。从代价更高的路径换到更便宜的时，原来那条留作备用。`srtt_us` 是原来那条路径的往返。
+    fn switch_to(&mut self, now_us: u64, path: u64, srtt_us: u64) {
+        let previous = self.active;
+        self.active = path;
+        self.active_heard = now_us;
+        self.previous_srtt_us = srtt_us;
         self.candidates.clear();
-        Some(same_route)
+        self.alternates.retain(|&known| known != path);
+        if self.cost(previous) > self.cost(path) {
+            self.remember_alternate(previous);
+        }
+    }
+
+    /// 验证通过但不换过去：数据路径更便宜，也还好好的。留作备用。
+    fn keep_alternate(&mut self, path: u64) {
+        self.candidates.retain(|candidate| candidate.path != path);
+        self.remember_alternate(path);
+    }
+
+    fn remember_alternate(&mut self, path: u64) {
+        if !self.alternates.contains(&path) {
+            self.alternates.push(path);
+        }
+        let costs = &self.costs;
+        let cost_of = |known: &u64| costs.iter().find(|(path, _)| path == known).map_or(0, |(_, cost)| *cost);
+        self.alternates.sort_by_key(cost_of);
+        self.alternates.truncate(MAX_ALTERNATES);
     }
 
     fn queue_response(&mut self, path: u64, value: u64, size: usize) {
@@ -552,7 +679,7 @@ impl Paths {
     /// 下一个要发的验证回复：发往哪条路径、值、包长。发回数据路径时填满到 `max_packet_size`：
     /// 对端在验证这一端的新地址，正受放大限制，回复越长它能发的越多，验证包丢了才重发得出来，
     /// 也顺便确认了这个方向能过满长度的包。发往别的路径时和验证包一样长，放大不了；
-    /// 发往这一端自己也在验证的路径时还要守那里的额度，不够就缩短，再短不了就不回，对端会重发。
+    /// 发往这一端自己也跟着对端在验证的路径时还要守那里的额度，不够就缩短，再短不了就不回，对端会重发。
     fn next_response(&mut self, max_packet_size: usize) -> Option<(u64, u64, usize)> {
         while let Some((path, value, size)) = self.responses.pop_front() {
             let size = if path == self.active { max_packet_size } else { self.room(path).map_or(size, |room| room.min(size)) };
@@ -574,10 +701,7 @@ impl Paths {
     fn wake_at(&self) -> Option<u64> {
         self.candidates
             .iter()
-            .map(|candidate| {
-                let sendable = candidate.challenges < MAX_CHALLENGES && self.room(candidate.path).is_some_and(|room| room >= MIN_PROBE_LEN);
-                if sendable { candidate.due_at.min(candidate.deadline) } else { candidate.deadline }
-            })
+            .map(|candidate| if self.can_challenge(candidate) { candidate.due_at.min(candidate.deadline) } else { candidate.deadline })
             .min()
     }
 }
@@ -620,6 +744,8 @@ pub struct SecureConnection<C: Crypto> {
     silence_sent_at: Option<u64>,
     /// 最近一次因为这一端换了网络而从头量的时间。
     moved_at: Option<u64>,
+    /// 最近一次路径验证通过、数据换到新路径的时间。
+    switched_at: Option<u64>,
     /// 握手失败、超时，或者认证失败的包太多。
     dead: bool,
     stats: SecurityStats,
@@ -643,10 +769,11 @@ impl<C: Crypto> SecureConnection<C> {
             handshake_hash: None,
             remote_id: 0,
             known_ephemeral: None,
-            paths: Paths::new(),
+            paths: Paths::new(now_us),
             silence_heard: 0,
             silence_sent_at: None,
             moved_at: None,
+            switched_at: None,
             dead: false,
             stats: SecurityStats::default(),
         }
@@ -732,6 +859,56 @@ impl<C: Crypto> SecureConnection<C> {
     /// 正在验证的新路径，先开始的在前。验证通过之前数据照旧发往 [`path`](Self::path)，发往新路径的只有验证包，受放大限制。
     pub fn validating(&self) -> impl Iterator<Item = u64> + '_ {
         self.paths.candidates.iter().map(|candidate| candidate.path)
+    }
+
+    /// 备用路径，代价小的在前，见 [`set_path_cost`](Self::set_path_cost)。
+    pub fn alternates(&self) -> impl Iterator<Item = u64> + '_ {
+        self.paths.alternates.iter().copied()
+    }
+
+    /// 设一条路径的代价，越小越优先，没设过的是 0。比如直连 0、经中继转发 1。
+    ///
+    /// - 对端最新的包从代价更高的路径来时，数据路径还好好的就不跟过去：多半是对端还没换过来。
+    ///   数据路径安静了 `max(300 毫秒, 3 个往返)`、在途的包又连续两次超时（或者没有包在途）才照常验证、换过去。
+    /// - 从代价更高的路径换到更便宜的以后，原来那条留作备用。数据路径安静了、在途的包又连续两次超时，
+    ///   就去验证最便宜的那条更贵的备用路径，通了就换过去。只是丢包、对端的包照样从数据路径来时不退。
+    /// - [`probe_path`](Self::probe_path) 验证通过的路径比数据路径便宜（或一样）才换过去，否则留作备用。
+    ///
+    /// 都不设时和以前完全一样。
+    pub fn set_path_cost(&mut self, path: u64, cost: u8) {
+        self.paths.set_cost(path, cost);
+    }
+
+    /// 主动验证一条路径，通过了按代价决定换不换过去，见 [`set_path_cost`](Self::set_path_cost)。打洞时两端各自验证对方的候选地址：
+    /// 先发的验证包被对方的 NAT 挡掉，但它打开了这一端 NAT 的映射，对方的验证包就能进来，对方的回复也回得来。
+    /// 地址要来自已认证的对端或这一端自己：这条路径不受放大限制，一轮最多发 4 个满长度的验证包，约 3 秒后放弃。
+    /// 握手完成前、`path` 已经是数据路径时返回 `false`；已经在验证时也返回 `false`，验证接着做。
+    pub fn probe_path(&mut self, now_us: u64, path: u64) -> bool {
+        if !self.is_established() {
+            return false;
+        }
+        let started = self.paths.probe(now_us, path, self.config.initial_rto_us);
+        if started {
+            self.stats.path_probes += 1;
+        }
+        started
+    }
+
+    /// 这么久（至少 `floor_us`，也至少 3 个往返）没从数据路径收到对端的包。
+    fn active_quiet(connection: &Connection, paths: &Paths, now_us: u64, floor_us: u64) -> bool {
+        let quiet = floor_us.max(ACTIVE_QUIET_RTTS * connection.srtt_us().max(paths.previous_srtt_us));
+        now_us.saturating_sub(paths.active_heard) >= quiet
+    }
+
+    /// 数据路径断了：安静了，在途的包又连续超时。这时自己退回备用路径。
+    fn active_dead(connection: &Connection, paths: &Paths, now_us: u64) -> bool {
+        connection.timeouts_in_a_row() >= FAILING_TIMEOUTS && Self::active_quiet(connection, paths, now_us, DEAD_QUIET_US)
+    }
+
+    /// 可以跟着对端去代价更高的路径：数据路径断了，或者没有包在途、又安静了（对端多半已经换走，这一端没有包在途就看不出路通不通）。
+    /// 有包在途、确认照常回来时路是通的，对端的包从哪条路径来都不跟。
+    fn active_failing(connection: &Connection, paths: &Paths, now_us: u64) -> bool {
+        Self::active_quiet(connection, paths, now_us, ACTIVE_QUIET_US) && (connection.timeouts_in_a_row() >= FAILING_TIMEOUTS || connection.bytes_in_flight() == 0)
     }
 
     pub fn send(&mut self, now_us: u64, data: &[u8]) -> usize {
@@ -845,10 +1022,11 @@ impl<C: Crypto> SecureConnection<C> {
             return Err(Self::forgery(&mut self.dead, &self.stats));
         }
         if duplicate {
-            if !wire::is_path_frame(&self.scratch[DATA_PREFIX..body_end]) && self.paths.observe(now_us, path, self.config.initial_rto_us, same_route) {
+            let failing = Self::active_failing(&self.connection, &self.paths, now_us);
+            if !wire::is_path_frame(&self.scratch[DATA_PREFIX..body_end]) && self.paths.observe(now_us, path, self.config.initial_rto_us, same_route, failing) {
                 self.stats.path_challenges += 1;
             }
-            self.paths.on_received(path, packet.len());
+            self.paths.on_received(now_us, path, packet.len());
             return Err(PacketError::Replayed);
         }
         if matches!(slot, RecvSlot::Next) {
@@ -870,28 +1048,31 @@ impl<C: Crypto> SecureConnection<C> {
         // 可靠层要的是包头紧跟着帧：把包头挪到连接号的位置上。
         self.scratch.copy_within(..wire::PACKET_HEADER_LEN, CONNECTION_ID_LEN);
         let result = self.connection.on_packet_numbered(now_us, Some(number), &self.scratch[CONNECTION_ID_LEN..body_end]);
-        if result.is_ok() && newest && self.paths.observe(now_us, path, self.config.initial_rto_us, same_route) {
+        let failing = Self::active_failing(&self.connection, &self.paths, now_us);
+        if result.is_ok() && newest && self.paths.observe(now_us, path, self.config.initial_rto_us, same_route, failing) {
             self.stats.path_challenges += 1;
         }
-        self.paths.on_received(path, packet.len());
+        self.paths.on_received(now_us, path, packet.len());
         result
     }
 
     /// 只含路径验证的包：回复对端的验证，或者确认自己发出的验证。
     fn on_probe(&mut self, now_us: u64, path: u64, size: usize, frame: wire::PathFrame, value: u64) {
         self.connection.on_probe_received(size);
-        self.paths.on_received(path, size);
+        self.paths.on_received(now_us, path, size);
         match frame {
             wire::PathFrame::Challenge { same_route } => {
                 self.paths.queue_response(path, value, size);
                 // 对端在验证这一端的新地址：这一端换了网络自己却不知道，往返和带宽也该从头量。
                 // 对端看出只换了端口时不用，走的还是同一条路；但验证通过之前对端的确认都发往旧端口，
                 // 这两个往返里收不到确认不判超时，否则在途的包会被当成丢了全部重传（往返长的蜂窝线路上常见）。
-                // 一轮验证会收到好几次，只在一轮验证的时长里第一次收到时重来。
+                // 一轮验证会收到好几次，只在一轮验证的时长里第一次收到时重来。这一端刚换过路径（打洞成功、退回备用路径）时也不重来：
+                // 换的时候已经重量过，对端是跟着这一端过来、在验证这一端在新路径上的地址。
                 let window = self.config.initial_rto_us * VALIDATION_RTOS;
+                let recently_switched = self.switched_at.is_some_and(|at| now_us.saturating_sub(at) < window);
                 if same_route && path == self.paths.active {
                     self.connection.hold_timeouts(now_us + 2 * self.connection.srtt_us());
-                } else if path == self.paths.active && self.moved_at.is_none_or(|at| now_us.saturating_sub(at) >= window) {
+                } else if path == self.paths.active && !recently_switched && self.moved_at.is_none_or(|at| now_us.saturating_sub(at) >= window) {
                     self.moved_at = Some(now_us);
                     self.connection.on_path_change(now_us);
                 }
@@ -901,7 +1082,17 @@ impl<C: Crypto> SecureConnection<C> {
                 // 只换了端口时在途的包照样重传，往返和带宽照旧，并马上补一个确认：对端没有重来，窗口还满着，
                 // 验证期间的确认又都发往了旧端口。真换了网络时不补：自己知道换了网络的对端已经重来，补的确认只确认旧路径上的包，
                 // 2026-11-05 模拟里这时上传反而慢 2%、双向慢 3%。
-                let Some(same_route) = self.paths.on_response(value) else { return };
+                // 这一端自己要验证的路径比数据路径贵、数据路径又还好好的：留作备用，不换。
+                let Some((path, same_route, proactive)) = self.paths.on_response(value) else { return };
+                // 断了的判断和发起退回时一样：自己连续超时、又安静了，或者可以跟着对端走了。
+                let failing = Self::active_dead(&self.connection, &self.paths, now_us) || Self::active_failing(&self.connection, &self.paths, now_us);
+                if proactive && self.paths.cost(path) > self.paths.cost(self.paths.active) && !failing {
+                    self.paths.keep_alternate(path);
+                    self.stats.alternates_kept += 1;
+                    return;
+                }
+                self.paths.switch_to(now_us, path, self.connection.srtt_us());
+                self.switched_at = Some(now_us);
                 if same_route {
                     self.connection.on_port_change();
                     self.connection.ack_now(now_us);
@@ -1116,6 +1307,14 @@ impl<C: Crypto> SecureConnection<C> {
     fn tick_established(&mut self, now_us: u64) {
         self.stats.path_failures += self.paths.expire(now_us);
         self.connection.tick(now_us);
+        // 数据路径断了、又有代价更高的备用路径（比如中继）：去验证它，通了就换过去；数据路径在验证期间恢复了就不换。
+        if Self::active_dead(&self.connection, &self.paths, now_us)
+            && let Some(path) = self.paths.fallback()
+            && self.paths.probe(now_us, path, self.config.initial_rto_us)
+        {
+            self.stats.path_probes += 1;
+            self.stats.fallback_probes += 1;
+        }
         if self.silence_ping_at().is_some_and(|at| at <= now_us) {
             self.silence_heard = self.connection.last_heard();
             self.silence_sent_at = Some(now_us);

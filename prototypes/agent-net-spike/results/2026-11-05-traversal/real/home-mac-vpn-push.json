@@ -1,0 +1,70 @@
+{
+ "uplink": "push",
+ "udp": "udp",
+ "gatherMs": 77,
+ "connectMs": 43,
+ "timeline": [
+  {
+   "atMs": 54,
+   "path": "relay"
+  },
+  {
+   "atMs": 153,
+   "path": "direct"
+  }
+ ],
+ "echoFirst150": {
+  "lost": 0,
+  "relay": {
+   "n": 2,
+   "p50": 36.9,
+   "p95": 36.9,
+   "max": 36.9
+  },
+  "direct": {
+   "n": 148,
+   "p50": 16.98,
+   "p95": 17.59,
+   "max": 17.73
+  }
+ },
+ "echoAfterBulk": {
+  "lost": 0,
+  "direct": {
+   "n": 100,
+   "p50": 16.71,
+   "p95": 17.13,
+   "max": 17.36
+  }
+ },
+ "upload": {
+  "path": "direct",
+  "mbitPerSecond": 75.2,
+  "intact": true
+ },
+ "download": {
+  "path": "direct",
+  "mbitPerSecond": 75.8,
+  "intact": true
+ },
+ "relayDatagramsSent": 6,
+ "directAddressKind": "private",
+ "stats": {
+  "srttUs": 16576,
+  "minRttUs": 13465,
+  "bandwidth": 11857229,
+  "packetsSent": 14988,
+  "packetsReceived": 13818,
+  "wireBytesSent": 17271196,
+  "wireBytesReceived": 17326530,
+  "retransmittedSegments": 1,
+  "handshakeRttUs": 37658,
+  "unauthenticatedPackets": 0,
+  "replayedPackets": 0,
+  "pathChallenges": 1,
+  "migrations": 1,
+  "pathProbes": 7,
+  "fallbackProbes": 0,
+  "alternatesKept": 0
+ }
+}

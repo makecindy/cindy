@@ -10,6 +10,8 @@
 //! - 握手请求是否接受由宿主的 `admit` 回答。回答时不能回调这个实例。
 //!
 //! 地址的 24 字节：`[族 4 或 6][0][端口 2，小端][IPv6 作用域 4，小端][地址 16，IPv4 只用前 4 字节]`。
+//! 族是 `L`（0x4C）时是宿主自己编号的通道（经中继转发等），`[L][代价][0 0][通道号 4，小端][0 …]`：
+//! 发往它的数据报由宿主送进那个通道，代价见 `SecureConnection::set_path_cost`，UDP 地址的代价是 0。
 //!
 //! 只在 wasm32 上编译；别的目标上这个 crate 是空的。
 
@@ -19,11 +21,32 @@ use std::cell::{RefCell, UnsafeCell};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 use agent_net_core::{
-    BandwidthShare, Config, Crypto, Endpoint, HASH_LEN, Incoming, PUBLIC_KEY_LEN, Priority, RecoveryPolicy, StreamEvent, TAG_LEN,
+    BandwidthShare, Config, Crypto, Endpoint, HASH_LEN, Incoming, PUBLIC_KEY_LEN, PathAddress, Priority, RecoveryPolicy, StreamEvent, TAG_LEN,
 };
 
 const IO_LEN: usize = 65_536;
 const ADDR_LEN: usize = 24;
+const LINK_FAMILY: u8 = b'L';
+
+/// UDP 地址，或者宿主编号的通道。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Address {
+    Udp(SocketAddr),
+    Link { id: u32, cost: u8 },
+}
+
+impl PathAddress for Address {
+    fn same_host(&self, other: &Self) -> bool {
+        matches!((self, other), (Address::Udp(a), Address::Udp(b)) if a.ip() == b.ip())
+    }
+
+    fn cost(&self) -> u8 {
+        match self {
+            Address::Udp(_) => 0,
+            Address::Link { cost, .. } => *cost,
+        }
+    }
+}
 
 /// 和宿主交换数据的固定缓冲。
 struct Exchange<const N: usize>(UnsafeCell<[u8; N]>);
@@ -173,7 +196,7 @@ impl Crypto for HostCrypto {
 }
 
 struct State {
-    endpoint: Endpoint<HostCrypto>,
+    endpoint: Endpoint<HostCrypto, Address>,
     crypto: HostCrypto,
     config: Config,
 }
@@ -190,21 +213,31 @@ fn micros(now: f64) -> u64 {
     if now.is_finite() && now > 0.0 { now as u64 } else { 0 }
 }
 
-fn decode_addr(bytes: &[u8; ADDR_LEN]) -> Option<SocketAddr> {
+fn decode_addr(bytes: &[u8; ADDR_LEN]) -> Option<Address> {
     let port = u16::from_le_bytes([bytes[2], bytes[3]]);
+    let scope = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
     match bytes[0] {
-        4 => Some(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(bytes[8], bytes[9], bytes[10], bytes[11]), port))),
+        4 => Some(Address::Udp(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(bytes[8], bytes[9], bytes[10], bytes[11]), port)))),
         6 => {
-            let scope = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
             let ip: [u8; 16] = bytes[8..24].try_into().ok()?;
-            Some(SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::from(ip), port, 0, scope)))
+            Some(Address::Udp(SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::from(ip), port, 0, scope))))
         }
+        LINK_FAMILY => Some(Address::Link { id: scope, cost: bytes[1] }),
         _ => None,
     }
 }
 
-fn encode_addr(address: SocketAddr, out: &mut [u8; ADDR_LEN]) {
+fn encode_addr(address: Address, out: &mut [u8; ADDR_LEN]) {
     *out = [0; ADDR_LEN];
+    let address = match address {
+        Address::Udp(address) => address,
+        Address::Link { id, cost } => {
+            out[0] = LINK_FAMILY;
+            out[1] = cost;
+            out[4..8].copy_from_slice(&id.to_le_bytes());
+            return;
+        }
+    };
     out[2..4].copy_from_slice(&address.port().to_le_bytes());
     match address {
         SocketAddr::V4(v4) => {
@@ -348,6 +381,13 @@ pub extern "C" fn close(id: u32) -> i32 {
     with(0, |state| state.endpoint.close(id).is_some() as i32)
 }
 
+/// 主动验证连接 `id` 到 addr 里那个地址的路径（打洞、退回中继），见 `Endpoint::probe`。开始了新一轮验证时返回 1。
+#[unsafe(no_mangle)]
+pub extern "C" fn probe(id: u32, now: f64) -> i32 {
+    let Some(address) = decode_addr(addr()) else { return 0 };
+    with(0, |state| state.endpoint.probe(micros(now), id, address) as i32)
+}
+
 /// 这一端换了网络，见 `Endpoint::on_local_address_change`。
 #[unsafe(no_mangle)]
 pub extern "C" fn local_address_change(now: f64) {
@@ -455,7 +495,8 @@ pub extern "C" fn conn_poll_event(id: u32) -> f64 {
 
 /// 连接的计数按下面的顺序写成 `f64` 数组放进 io，返回个数；连接不存在返回 -1。
 /// 往返（微秒）、最小往返、带宽估计（字节/秒）、发出包数、收到包数、线上发出字节、线上收到字节、重传分片、
-/// 握手往返（微秒）、认证失败丢掉的包、重放丢掉的包、开始验证新路径的次数、换过去的次数。
+/// 握手往返（微秒）、认证失败丢掉的包、重放丢掉的包、开始验证新路径的次数、换过去的次数、
+/// 这一端主动验证路径的次数、其中数据路径断了退回备用路径的次数、验证通过但留作备用的次数。
 #[unsafe(no_mangle)]
 pub extern "C" fn conn_stats(id: u32) -> i32 {
     let io = io();
@@ -477,6 +518,9 @@ pub extern "C" fn conn_stats(id: u32) -> i32 {
             security.replayed_packets,
             security.path_challenges,
             security.migrations,
+            security.path_probes,
+            security.fallback_probes,
+            security.alternates_kept,
         ];
         write_f64s(io, &values)
     })

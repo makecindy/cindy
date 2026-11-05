@@ -4,12 +4,15 @@
 //! - 数据包和握手回复按连接号（[`destination_id`]）找连接，不按来源地址：NAT 换了端口、手机换了网络，地址都会变。
 //!   握手请求按 [`Endpoint::listen`] 设的规则决定接不接受。
 //! - 每条连接自己给来源地址编路径号：0 是建连时的地址，之后每见到一个新地址编一个新号，核心据此验证新路径、换过去。
-//!   新地址和数据路径 IP 相同、只差端口时告诉连接（`on_packet_via_route`），换过去时不重量往返和带宽。
+//!   新地址和数据路径是同一台主机、只差端口时告诉连接（`on_packet_via_route`），换过去时不重量往返和带宽。
+//! - 地址的类型由驱动定（[`PathAddress`]）：UDP 地址，或者驱动自己编的中继通道。每种地址自带代价，
+//!   编路径号时交给连接（`SecureConnection::set_path_cost`），直连和中继同时可用时优先直连。
 
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec::Vec;
 use core::net::SocketAddr;
+use core::fmt::Debug;
 
 use crate::connection::{Config, PacketError};
 use crate::crypto::{Crypto, PUBLIC_KEY_LEN};
@@ -21,6 +24,22 @@ use crate::secure::{Incoming, SecureConnection, destination_id, is_initiation};
 const MAX_PATHS: usize = 16;
 /// 还没确认的连接最多这么多条。重放的握手请求会各开一条，确认不了，`dead_after_us` 后自己放弃。
 const MAX_UNCONFIRMED: usize = 1024;
+
+/// 驱动用的地址。核心只比较是否相同、是不是同一台主机，以及取它的代价。
+pub trait PathAddress: Copy + Eq + Debug {
+    /// 和 `other` 是同一台主机、只是端口可能不同：两个地址只差端口时，多半是 NAT 换了外部端口，走的还是同一条路。
+    fn same_host(&self, other: &Self) -> bool;
+    /// 走这个地址的代价，越小越优先，见 `SecureConnection::set_path_cost`。
+    fn cost(&self) -> u8 {
+        0
+    }
+}
+
+impl PathAddress for SocketAddr {
+    fn same_host(&self, other: &Self) -> bool {
+        self.ip() == other.ip()
+    }
+}
 
 /// 分发层的计数。
 #[derive(Clone, Copy, Debug, Default)]
@@ -36,35 +55,38 @@ pub struct EndpointStats {
     pub rejected_initiations: u64,
 }
 
-struct Slot<C: Crypto> {
+struct Slot<C: Crypto, A: PathAddress> {
     connection: SecureConnection<C>,
     /// 路径号 → （地址，最后一次从那里收到包的时间）。
-    paths: BTreeMap<u64, (SocketAddr, u64)>,
+    paths: BTreeMap<u64, (A, u64)>,
     next_path: u64,
 }
 
-impl<C: Crypto> Slot<C> {
-    fn new(connection: SecureConnection<C>, peer: SocketAddr, now_us: u64) -> Self {
+impl<C: Crypto, A: PathAddress> Slot<C, A> {
+    fn new(mut connection: SecureConnection<C>, peer: A, now_us: u64) -> Self {
+        if peer.cost() != 0 {
+            connection.set_path_cost(0, peer.cost());
+        }
         Self { connection, paths: BTreeMap::from([(0, (peer, now_us))]), next_path: 1 }
     }
 
-    fn knows(&self, address: SocketAddr) -> bool {
+    fn knows(&self, address: A) -> bool {
         self.paths.values().any(|(known, _)| *known == address)
     }
 
     /// `from` 和数据路径只差端口：多半是 NAT 换了外部端口，走的还是同一条路。
-    fn same_route(&self, from: SocketAddr) -> bool {
-        self.paths.get(&self.connection.path()).is_some_and(|(active, _)| active.ip() == from.ip() && active.port() != from.port())
+    fn same_route(&self, from: A) -> bool {
+        self.paths.get(&self.connection.path()).is_some_and(|(active, _)| active.same_host(&from) && *active != from)
     }
 
     /// 来源地址对应的路径号，没见过就编一个新的。
-    fn path_of(&mut self, from: SocketAddr, now_us: u64) -> u64 {
+    fn path_of(&mut self, from: A, now_us: u64) -> u64 {
         if let Some((&path, entry)) = self.paths.iter_mut().find(|(_, (address, _))| *address == from) {
             entry.1 = now_us;
             return path;
         }
         if self.paths.len() >= MAX_PATHS {
-            let keep: Vec<u64> = core::iter::once(self.connection.path()).chain(self.connection.validating()).collect();
+            let keep: Vec<u64> = core::iter::once(self.connection.path()).chain(self.connection.validating()).chain(self.connection.alternates()).collect();
             let oldest = self.paths.iter().filter(|(path, _)| !keep.contains(path)).min_by_key(|(_, (_, seen))| *seen).map(|(&path, _)| path);
             if let Some(path) = oldest {
                 self.paths.remove(&path);
@@ -73,34 +95,37 @@ impl<C: Crypto> Slot<C> {
         let path = self.next_path;
         self.next_path += 1;
         self.paths.insert(path, (from, now_us));
+        if from.cost() != 0 {
+            self.connection.set_path_cost(path, from.cost());
+        }
         path
     }
 }
 
 /// 接受规则：看过对方身份、附带数据和来源地址以后决定接不接受。
-type Admit<C> = Box<dyn FnMut(&Incoming<C>, SocketAddr) -> bool>;
+type Admit<C, A> = Box<dyn FnMut(&Incoming<C>, A) -> bool>;
 
 /// 收到陌生的握手请求时怎么办。
-struct Listener<C: Crypto> {
+struct Listener<C: Crypto, A> {
     prologue: Vec<u8>,
     config: Config,
     payload: Vec<u8>,
     /// 给每条新连接一个加密实现，读请求也用它。
     crypto: Box<dyn FnMut() -> C>,
-    admit: Admit<C>,
+    admit: Admit<C, A>,
 }
 
-/// 一个本地端口和上面的所有连接。
-pub struct Endpoint<C: Crypto> {
-    connections: BTreeMap<u32, Slot<C>>,
-    listener: Option<Listener<C>>,
+/// 一个本地端口和上面的所有连接。`A` 是驱动的地址类型，默认是 UDP 地址。
+pub struct Endpoint<C: Crypto, A: PathAddress = SocketAddr> {
+    connections: BTreeMap<u32, Slot<C, A>>,
+    listener: Option<Listener<C, A>>,
     accepted: VecDeque<u32>,
     /// 新连接号的来源。
     random: Box<dyn FnMut() -> u32>,
     stats: EndpointStats,
 }
 
-impl<C: Crypto> Endpoint<C> {
+impl<C: Crypto, A: PathAddress> Endpoint<C, A> {
     /// `random` 给新连接选连接号，必须是不可预测的随机数：同一台机器先后的连接号连着的话，路上的人能据此把它们对上。
     pub fn new(random: impl FnMut() -> u32 + 'static) -> Self {
         Self {
@@ -136,7 +161,7 @@ impl<C: Crypto> Endpoint<C> {
         prologue: &[u8],
         remote_static: &[u8; PUBLIC_KEY_LEN],
         payload: &[u8],
-        peer: SocketAddr,
+        peer: A,
     ) -> Result<u32, HandshakeError> {
         let id = self.allocate_id();
         let connection = SecureConnection::connect(crypto, Config { connection_id: id, ..config }, prologue, remote_static, payload, now_us)?;
@@ -152,7 +177,7 @@ impl<C: Crypto> Endpoint<C> {
         config: Config,
         payload: &[u8],
         crypto: impl FnMut() -> C + 'static,
-        admit: impl FnMut(&Incoming<C>, SocketAddr) -> bool + 'static,
+        admit: impl FnMut(&Incoming<C>, A) -> bool + 'static,
     ) {
         self.listener = Some(Listener { prologue: prologue.to_vec(), config, payload: payload.to_vec(), crypto: Box::new(crypto), admit: Box::new(admit) });
     }
@@ -175,7 +200,7 @@ impl<C: Crypto> Endpoint<C> {
     }
 
     /// 这条连接的数据现在发往哪个地址。
-    pub fn peer_addr(&self, id: u32) -> Option<SocketAddr> {
+    pub fn peer_addr(&self, id: u32) -> Option<A> {
         let slot = self.connections.get(&id)?;
         slot.paths.get(&slot.connection.path()).map(|(address, _)| *address)
     }
@@ -183,6 +208,14 @@ impl<C: Crypto> Endpoint<C> {
     /// 关掉一条连接，不再收发。
     pub fn close(&mut self, id: u32) -> Option<SecureConnection<C>> {
         self.connections.remove(&id).map(|slot| slot.connection)
+    }
+
+    /// 主动验证这条连接到 `address` 的路径（打洞时验证对端的候选地址、手动退回中继等），
+    /// 见 `SecureConnection::probe_path`。地址要来自已认证的对端或这一端自己。开始了新一轮验证时返回 `true`。
+    pub fn probe(&mut self, now_us: u64, id: u32, address: A) -> bool {
+        let Some(slot) = self.connections.get_mut(&id) else { return false };
+        let path = slot.path_of(address, now_us);
+        slot.connection.probe_path(now_us, path)
     }
 
     /// 这一端换了网络（换了网卡、重新绑定了端口）：告诉每条连接，它们会马上发包让对端跟过来。
@@ -208,7 +241,7 @@ impl<C: Crypto> Endpoint<C> {
     }
 
     /// 收到一个数据报。
-    pub fn on_datagram(&mut self, now_us: u64, from: SocketAddr, packet: &[u8]) {
+    pub fn on_datagram(&mut self, now_us: u64, from: A, packet: &[u8]) {
         self.stats.datagrams_received += 1;
         self.stats.bytes_received += packet.len() as u64;
         if is_initiation(packet) {
@@ -231,7 +264,7 @@ impl<C: Crypto> Endpoint<C> {
         let _ = slot.connection.on_packet_via_route(now_us, path, same_route, packet);
     }
 
-    fn admit(&mut self, now_us: u64, from: SocketAddr, packet: &[u8]) {
+    fn admit(&mut self, now_us: u64, from: A, packet: &[u8]) {
         let unconfirmed = self.connections.values().filter(|slot| !slot.connection.is_established()).count();
         let id = self.allocate_id();
         let Some(listener) = self.listener.as_mut().filter(|_| unconfirmed < MAX_UNCONFIRMED) else {
@@ -254,7 +287,7 @@ impl<C: Crypto> Endpoint<C> {
 
     /// 取下一个要发的数据报，写进 `out`，返回长度和目的地址。`out` 不能小于各连接配置的 `max_packet_size`。
     /// 一条连接的包取完了才轮到下一条。
-    pub fn poll_transmit(&mut self, now_us: u64, out: &mut [u8]) -> Option<(usize, SocketAddr)> {
+    pub fn poll_transmit(&mut self, now_us: u64, out: &mut [u8]) -> Option<(usize, A)> {
         for slot in self.connections.values_mut() {
             while let Some((size, path)) = slot.connection.poll_transmit_via(now_us, out) {
                 // 路径号被忘掉了（来源地址太多），这个包只能丢掉，可靠层会重传。

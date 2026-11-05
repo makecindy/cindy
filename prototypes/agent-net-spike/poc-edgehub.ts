@@ -1,10 +1,15 @@
 /**
  * 验证：真实 DeviceLinkClient 不改一行、不连任何中转，能否经 EdgeHub 工作。
- * 运行：npx tsx --tsconfig tsconfig.json poc-edgehub.ts [core|quic]
- * 默认 core（自研传输，第 6 步）；quic 是第 0 阶段的 iroh 对照，要先 npm install。两种传输跑同一套 12 项检查。
- * 能看到线上数据报的传输另加一项附加检查：抓到的包里没有业务明文。
+ * 运行：npx tsx --tsconfig tsconfig.json poc-edgehub.ts [core|relay|push|punch|quic]
+ * - core：自研传输走本机 UDP（第 6 步）。
+ * - relay：UDP 全被挡，全部经本机起的自建中转的专用通道（第 7 步，`agent-net-relay-v1`）。
+ * - push：UDP 全被挡，全部夹带在现有中转的 push 消息里（官方中转也能用的那条路）。
+ * - punch：先经中转专用通道连上，交换候选地址后打洞换到直连。
+ * - quic：第 0 阶段的 iroh 对照，要先 npm install。
+ * 每种都跑同一套 12 项检查；自研传输另加附加检查：抓到的包里没有业务明文，以及这种方式该走的路径。
  */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   DeviceLinkClient,
   PROTOCOL_VERSION,
@@ -12,12 +17,18 @@ import {
   type InvokePayload,
 } from '../../packages/device-link/src/index';
 import { EdgeHub } from './edgehub.ts';
+import { connectAgentNetRelay, connectPushTunnel } from './relay-client.ts';
+import { startRelay } from './relay-fixture.ts';
 import type { TransportKind } from './transport.ts';
 import { nowMs, sleep, summarize } from './util.mjs';
 
-const transport = (process.argv[2] ?? 'core') as TransportKind;
-if (transport !== 'core' && transport !== 'quic') throw new Error(`unknown transport ${transport}`);
+type Mode = 'core' | 'relay' | 'push' | 'punch' | 'quic';
+const mode = (process.argv[2] ?? 'core') as Mode;
+if (!['core', 'relay', 'push', 'punch', 'quic'].includes(mode)) throw new Error(`unknown mode ${mode}`);
+const transport: TransportKind = mode === 'quic' ? 'quic' : 'core';
+const relayed = mode === 'relay' || mode === 'push' || mode === 'punch';
 const roster = new Map();
+const userId = 'spike-account';
 const results: Array<{ check: string; ok: boolean; extra?: boolean; detail?: string }> = [];
 
 async function check(name: string, run: () => Promise<string | void>, extra = false) {
@@ -29,9 +40,26 @@ async function check(name: string, run: () => Promise<string | void>, extra = fa
   }
 }
 
-/** 抓包：线上每个数据报都留一份，最后找业务明文。只有自研传输能看到数据报。 */
-const datagrams: Buffer[] = [];
-const tap = transport === 'core' ? (datagram: Uint8Array) => void datagrams.push(Buffer.from(datagram)) : undefined;
+/** 抓包：线上每个数据报（经 UDP 或经中转）都留一份，最后找业务明文、看走了哪条路。只有自研传输能看到数据报。 */
+const captured: Array<{ bytes: Buffer; via: 'udp' | 'relay' }> = [];
+const datagrams = () => captured.map((entry) => entry.bytes);
+const tap = transport === 'core' ? (datagram: Uint8Array, via: 'udp' | 'relay') => void captured.push({ bytes: Buffer.from(datagram), via }) : undefined;
+
+// 中转上的设备号和 EdgeHub 的设备号不同：中转只按自己的设备号转发。流氓节点也加入了中转，只是不在别人的 agent-net 名册里。
+const relayIds: Record<string, string> = { 'h-host': 'hub-host', 'a-phone': 'hub-phone', 'c-laptop': 'hub-laptop', rogue: 'hub-rogue' };
+// 设了 AGENT_NET_RELAY_CONFIG 就用远端已经起好的中转（真实网络测试，见 real/README.md）：{ relay: { url, servername, ca }, credentials }。
+const remote = relayed && process.env.AGENT_NET_RELAY_CONFIG ? JSON.parse(readFileSync(process.env.AGENT_NET_RELAY_CONFIG, 'utf8')) : null;
+const fixture = relayed ? (remote ? { url: remote.relay.url, credentials: new Map(Object.entries(remote.credentials as Record<string, string>)), close: async () => undefined } : await startRelay(Object.values(relayIds))) : null;
+const tls = remote ? { servername: remote.relay.servername, ca: remote.relay.ca } : undefined;
+
+async function hubOptions(deviceId: string) {
+  const base = { userId, transport, ...(tap ? { tap } : {}) };
+  if (!fixture) return base;
+  const relayId = relayIds[deviceId];
+  const credential = fixture.credentials.get(relayId)!;
+  const uplink = mode === 'push' ? await connectPushTunnel(fixture.url, credential, deviceId, tls) : await connectAgentNetRelay(fixture.url, credential, tls);
+  return { ...base, relay: { uplink, deviceId: relayId }, udp: mode === 'punch', reprobeMs: 2_000 };
+}
 
 function makeClient(hub: EdgeHub, id: string, host: boolean) {
   const statuses: string[] = [];
@@ -50,10 +78,12 @@ function makeClient(hub: EdgeHub, id: string, host: boolean) {
     timing: {
       reconnectBaseMs: 30,
       reconnectMaxMs: 100,
-      requestTimeoutMs: 4_000,
+      // 本机回环上 4 秒足够；经真实中转时用产品的默认值：测试用的云主机出口只有约 5.8 Mbit/s，3 MiB 光传就要 4 秒多。
+      requestTimeoutMs: remote ? 30_000 : 4_000,
       pingIntervalMs: 1_000,
       pongMissLimit: 3,
-      transportRetryIntervalMs: 100,
+      // 同上：经真实中转时用产品的 2 秒。100 毫秒在慢路径上确认还没回来就整窗重发，上面这层可靠传输会把线路堵死。
+      transportRetryIntervalMs: remote ? 2_000 : 100,
       transportMaxRetryAttempts: 5,
       congestionBackoffBaseMs: 300,
       congestionBackoffMaxMs: 600,
@@ -99,13 +129,11 @@ async function waitFor(test: () => boolean, ms = 4_000) {
   }
 }
 
-const userId = 'spike-account';
-const hubOptions = { userId, transport, ...(tap ? { tap } : {}) };
-const hubHost = await EdgeHub.create({ deviceId: 'h-host', roster, ...hubOptions });
-const hubA = await EdgeHub.create({ deviceId: 'a-phone', roster, ...hubOptions });
-const hubC = await EdgeHub.create({ deviceId: 'c-laptop', roster, ...hubOptions });
+const hubHost = await EdgeHub.create({ deviceId: 'h-host', roster, ...(await hubOptions('h-host')) });
+const hubA = await EdgeHub.create({ deviceId: 'a-phone', roster, ...(await hubOptions('a-phone')) });
+const hubC = await EdgeHub.create({ deviceId: 'c-laptop', roster, ...(await hubOptions('c-laptop')) });
 // 流氓节点知道所有人的地址，但自己不在别人的名册里。
-const rogue = await EdgeHub.create({ deviceId: 'rogue', roster: new Map(roster), ...hubOptions });
+const rogue = await EdgeHub.create({ deviceId: 'rogue', roster: new Map(roster), ...(await hubOptions('rogue')) });
 
 const host = makeClient(hubHost, 'h-host', true);
 const a = makeClient(hubA, 'a-phone', false);
@@ -263,11 +291,37 @@ if (tap) {
     async () => {
       // 设备号、通道名、帧字段名，以及 3 MiB 结果里的一段内容，任何一个出现在线上都说明有明文。
       const needles = ['"kind"', 'fixture:', 'h-host', 'a-phone', 'c-laptop', 'presence-changed', 'invoke', 'x'.repeat(16)];
-      const bytes = datagrams.reduce((sum, datagram) => sum + datagram.length, 0);
-      assert.ok(datagrams.length > 1000, `只抓到 ${datagrams.length} 个包`);
-      const hits = needles.filter((needle) => datagrams.some((datagram) => datagram.includes(needle)));
+      const all = datagrams();
+      const bytes = all.reduce((sum, datagram) => sum + datagram.length, 0);
+      assert.ok(all.length > 1000, `只抓到 ${all.length} 个包`);
+      const hits = needles.filter((needle) => all.some((datagram) => datagram.includes(needle)));
       assert.deepEqual(hits, []);
-      return `${datagrams.length} 个包，${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+      return `${all.length} 个包，${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+    },
+    true,
+  );
+}
+
+const count = (via: 'udp' | 'relay') => captured.filter((entry) => entry.via === via).length;
+if (mode === 'relay' || mode === 'push') {
+  await check(
+    'UDP 全被挡时所有数据报都经中转（443 上的 WebSocket）',
+    async () => {
+      assert.equal(count('udp'), 0);
+      assert.ok(count('relay') > 1000, `经中转只有 ${count('relay')} 个包`);
+      return `经中转 ${count('relay')} 个包，UDP 0 个`;
+    },
+    true,
+  );
+}
+if (mode === 'punch') {
+  await check(
+    '先经中转连上，交换地址后换到直连',
+    async () => {
+      // 重连检查之后 a-phone 刚经中转重新连上，等它打洞完成。
+      await waitFor(() => hubA.pathTo('h-host') === 'direct' && hubC.pathTo('h-host') === 'direct' && hubHost.pathTo('a-phone') === 'direct');
+      assert.ok(count('relay') > 0 && count('udp') > count('relay'), `经中转 ${count('relay')} 个，UDP ${count('udp')} 个`);
+      return `经中转 ${count('relay')} 个包，直连 ${count('udp')} 个`;
     },
     true,
   );
@@ -282,11 +336,12 @@ const extras = results.filter((result) => result.extra);
 const failed = results.filter((result) => !result.ok).length;
 const passed = (list: typeof results) => list.filter((result) => result.ok).length;
 console.log(
-  `\n传输：${transport}。${passed(required)}/${required.length} 通过` +
+  `\n方式：${mode}。${passed(required)}/${required.length} 通过` +
     (extras.length ? `，附加 ${passed(extras)}/${extras.length}` : ''),
 );
 a.client.stop();
 c.client.stop();
 host.client.stop();
 await Promise.allSettled([hubA.close(), hubC.close(), hubHost.close(), rogue.close()]);
+await fixture?.close();
 process.exit(failed ? 1 : 0);

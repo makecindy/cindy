@@ -13,6 +13,7 @@ import {
   type PresenceSnapshot,
 } from '@cindy/device-link-protocol';
 import type { WsLike } from '../../packages/device-link/src/client';
+import type { RelayUplink } from './relay-client.ts';
 import { createTransport, type PeerChannel, type RosterEntry, type Transport, type TransportKind } from './transport.ts';
 
 interface NodeInfo {
@@ -104,7 +105,14 @@ export interface EdgeHubOptions {
   roster: Map<string, RosterEntry>;
   transport?: TransportKind;
   /** 线上的每个数据报，见 `TransportOptions.tap`。 */
-  tap?: (datagram: Uint8Array) => void;
+  tap?: (datagram: Uint8Array, via: 'udp' | 'relay') => void;
+  /** 经中转转发数据报（第 7 步），见 `TransportOptions.relay`。 */
+  relay?: { uplink: RelayUplink; deviceId: string };
+  /** `false` 时不用 UDP，只走中转。 */
+  udp?: boolean;
+  reprobeMs?: number;
+  bindAddress?: string;
+  stunServers?: string[];
 }
 
 export class EdgeHub {
@@ -138,7 +146,18 @@ export class EdgeHub {
         return false;
       },
       onIncoming: (channel) => hub.adopt(channel),
+      relayIdOf: (remoteId) => {
+        for (const entry of options.roster.values()) {
+          if (entry.id === remoteId) return (entry.dial as { relayId?: string } | undefined)?.relayId;
+        }
+        return undefined;
+      },
       ...(options.tap ? { tap: options.tap } : {}),
+      ...(options.relay ? { relay: options.relay } : {}),
+      ...(options.udp === false ? { udp: false } : {}),
+      ...(options.reprobeMs ? { reprobeMs: options.reprobeMs } : {}),
+      ...(options.bindAddress ? { bindAddress: options.bindAddress } : {}),
+      ...(options.stunServers ? { stunServers: options.stunServers } : {}),
     });
     options.roster.set(options.deviceId, { id: hub.transport.id, dial: hub.transport.dial });
     return hub;
@@ -154,6 +173,11 @@ export class EdgeHub {
 
   peerIds(): string[] {
     return [...this.peers.keys()];
+  }
+
+  /** 到这台设备的数据现在走直连还是中转。 */
+  pathTo(deviceId: string): 'direct' | 'relay' | null {
+    return this.peers.get(deviceId)?.channel.path?.() ?? null;
   }
 
   async dial(deviceId: string): Promise<void> {

@@ -8,6 +8,7 @@ pub mod kcp;
 pub mod crypto;
 pub mod migration;
 pub mod share;
+pub mod traversal;
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;

@@ -13,6 +13,10 @@
  *   发送节奏、延迟确认和重传都会被拖慢；所以短于一个节拍的等待改成每轮事件循环看一次时间，长的等待提前一个节拍醒来。
  * - 流和核心一样是单向的：{@link Connection.openStream} 开一条发往对端的流，对端开的流从 `stream` 事件拿到。
  *   连接还带一条不用开的默认流（{@link Connection.write} 和 `data` 事件），它不能结束。
+ * - 除了 UDP 地址，还可以用上层自己的通道（{@link Endpoint.createLink}，比如经中继转发）：端点把发往通道的数据报交给上层，
+ *   上层把从通道收到的数据报交回来。通道有代价，直连和通道都通时优先代价小的，见核心的 `SecureConnection::set_path_cost`。
+ * - 打洞：上层经已建好的连接交换候选地址，用 {@link Connection.probe} 主动验证。查公网地址这类和数据共用一个 UDP 端口的包，
+ *   用 `intercept` 截下、用 {@link Endpoint.sendUdp} 发出，不经过核心。
  */
 import { EventEmitter } from 'node:events';
 import dgram from 'node:dgram';
@@ -50,6 +54,15 @@ export interface Address {
   port: number;
 }
 
+/** 上层自己的通道，见 {@link Endpoint.createLink}。 */
+export interface LinkAddress {
+  link: number;
+}
+
+export type PeerAddress = Address | LinkAddress;
+
+export const isLinkAddress = (address: PeerAddress): address is LinkAddress => 'link' in address;
+
 export type Priority = 'interactive' | 'normal' | 'background';
 const PRIORITY_CODE: Record<Priority, number> = { interactive: 0, normal: 1, background: 2 };
 
@@ -69,10 +82,14 @@ export interface EndpointOptions {
     /** 回复里附带的数据。 */
     payload?: Uint8Array;
     /** 看过对方的长期公钥、附带数据和来源地址后决定接不接受。只能做判断，不能调用这个端点。 */
-    admit: (peer: { publicKey: Uint8Array; payload: Uint8Array; from: Address }) => boolean;
+    admit: (peer: { publicKey: Uint8Array; payload: Uint8Array; from: PeerAddress }) => boolean;
   };
-  /** 线上每个数据报都会经过这里，测试用来检查有没有明文。 */
-  tap?: (direction: 'in' | 'out', datagram: Uint8Array, address: Address) => void;
+  /** 线上每个数据报（UDP 和通道）都会经过这里，测试用来检查有没有明文。 */
+  tap?: (direction: 'in' | 'out', datagram: Uint8Array, address: PeerAddress) => void;
+  /** 先看收到的 UDP 数据报：返回 `true` 表示这是上层自己的（比如查公网地址的回复），不交给核心。 */
+  intercept?: (datagram: Uint8Array, from: Address) => boolean;
+  /** `false` 时不开 UDP 套接字，只走通道，发往 UDP 地址的包直接丢掉：和 UDP 全被挡一样。默认 `true`。 */
+  udp?: boolean;
   /** 已编译的核心；不给就读本仓库 `target` 下的 release 产物。 */
   module?: WebAssembly.Module;
 }
@@ -91,6 +108,9 @@ export interface ConnectionStats {
   replayedPackets: number;
   pathChallenges: number;
   migrations: number;
+  pathProbes: number;
+  fallbackProbes: number;
+  alternatesKept: number;
 }
 
 export interface EndpointStats {
@@ -117,6 +137,7 @@ interface Exports {
   accept(): number;
   close(id: number): number;
   local_address_change(now: number): void;
+  probe(id: number, now: number): number;
   conn_state(id: number): number;
   conn_remote_static(id: number): number;
   conn_remote_payload(id: number): number;
@@ -133,9 +154,12 @@ interface Exports {
 const DEFAULT_MODULE_URL = new URL('../target/wasm32-unknown-unknown/release/agent_net_wasm.wasm', import.meta.url);
 let defaultModule: WebAssembly.Module | null = null;
 
-/** 读本仓库里编好的核心：`cargo build --release -p agent-net-wasm --target wasm32-unknown-unknown`。 */
+/**
+ * 读编好的核心：默认是本仓库里的 release 产物（`cargo build --release -p agent-net-wasm --target wasm32-unknown-unknown`），
+ * 环境变量 `AGENT_NET_WASM` 可以指定别的文件（打包成单个脚本、放到别的机器上跑时用）。
+ */
 export function loadModule(): WebAssembly.Module {
-  defaultModule ??= new WebAssembly.Module(readFileSync(DEFAULT_MODULE_URL));
+  defaultModule ??= new WebAssembly.Module(readFileSync(process.env.AGENT_NET_WASM ?? DEFAULT_MODULE_URL));
   return defaultModule;
 }
 
@@ -189,8 +213,18 @@ function parseIPv6(text: string, out: Uint8Array): void {
   if (tail) out.set(tail, 12);
 }
 
-function encodeAddress(view: Uint8Array, { address, port }: Address): void {
+const LINK_FAMILY = 0x4c;
+
+/** `linkCost` 是通道地址的代价，UDP 地址不用。 */
+function encodeAddress(view: Uint8Array, peer: PeerAddress, linkCost = 0): void {
   view.fill(0);
+  if (isLinkAddress(peer)) {
+    view[0] = LINK_FAMILY;
+    view[1] = linkCost;
+    new DataView(view.buffer, view.byteOffset).setUint32(4, peer.link >>> 0, true);
+    return;
+  }
+  const { address, port } = peer;
   view[2] = port & 0xff;
   view[3] = port >> 8;
   if (isIPv4(address)) {
@@ -205,7 +239,8 @@ function encodeAddress(view: Uint8Array, { address, port }: Address): void {
   parseIPv6(percent >= 0 ? address.slice(0, percent) : address, view.subarray(8, 24));
 }
 
-function decodeAddress(view: Uint8Array): Address {
+function decodeAddress(view: Uint8Array): PeerAddress {
+  if (view[0] === LINK_FAMILY) return { link: new DataView(view.buffer, view.byteOffset).getUint32(4, true) };
   const port = view[2] | (view[3] << 8);
   if (view[0] === 4) return { address: `${view[8]}.${view[9]}.${view[10]}.${view[11]}`, port };
   const groups: string[] = [];
@@ -354,8 +389,21 @@ export class Connection extends EventEmitter {
   }
 
   /** 数据现在发往的地址。 */
-  peerAddress(): Address | null {
+  peerAddress(): PeerAddress | null {
     return this.endpoint.call((core, _io, addr) => (core.conn_peer(this.id) === 1 ? decodeAddress(addr()) : null));
+  }
+
+  /**
+   * 主动验证到 `address` 的路径（打洞时验证对端的候选地址，或者手动退回中继），通过了按代价决定换不换过去。
+   * 地址要来自已认证的对端或这一端自己。开始了新一轮验证时返回 `true`。
+   */
+  probe(address: PeerAddress): boolean {
+    const started = this.endpoint.call((core, _io, addr) => {
+      this.endpoint.encode(addr(), address);
+      return core.probe(this.id, this.endpoint.now());
+    });
+    this.endpoint.schedule();
+    return started === 1;
   }
 
   stats(): ConnectionStats | null {
@@ -378,8 +426,45 @@ export class Connection extends EventEmitter {
         replayedPackets: v[10],
         pathChallenges: v[11],
         migrations: v[12],
+        pathProbes: v[13],
+        fallbackProbes: v[14],
+        alternatesKept: v[15],
       };
     });
+  }
+}
+
+/**
+ * 上层自己的通道（经中继转发等）。端点把发往它的数据报交给创建时给的 `send`，从通道收到的数据报用 {@link Link.deliver} 交回来。
+ * 通道不保证送到，和 UDP 一样，可靠和加密都在核心里。
+ */
+export class Link {
+  closed = false;
+
+  constructor(
+    private readonly endpoint: Endpoint,
+    readonly id: number,
+    readonly cost: number,
+    private readonly sendDatagram: (datagram: Uint8Array) => void,
+  ) {}
+
+  get address(): LinkAddress {
+    return { link: this.id };
+  }
+
+  /** 从这个通道收到了一个数据报。 */
+  deliver(datagram: Uint8Array): void {
+    if (!this.closed) this.endpoint.receiveLink(this, datagram);
+  }
+
+  /** @internal */
+  send(datagram: Uint8Array): void {
+    if (!this.closed) this.sendDatagram(datagram);
+  }
+
+  /** 不再用这个通道：之后发往它的包都丢掉，连接会自己退回别的路径或者判死。 */
+  close(): void {
+    this.closed = true;
   }
 }
 
@@ -393,6 +478,8 @@ export class Endpoint extends EventEmitter {
   private readonly epoch = performance.now();
   private readonly ephemerals = new Map<number, KeyObject>();
   private readonly keys = new Map<number, KeyObject>();
+  private readonly links = new Map<number, Link>();
+  private nextLink = 1;
   private nextHandle = 1;
   private socket: dgram.Socket | null = null;
   private timer: NodeJS.Timeout | null = null;
@@ -417,7 +504,7 @@ export class Endpoint extends EventEmitter {
   static async create(options: EndpointOptions): Promise<Endpoint> {
     const endpoint = new Endpoint(options);
     endpoint.start();
-    await endpoint.bindSocket(options.bind?.address ?? '0.0.0.0', options.bind?.port ?? 0);
+    if (options.udp !== false) await endpoint.bindSocket(options.bind?.address ?? '0.0.0.0', options.bind?.port ?? 0);
     return endpoint;
   }
 
@@ -426,13 +513,30 @@ export class Endpoint extends EventEmitter {
     return Math.floor((performance.now() - this.epoch) * 1000);
   }
 
+  /** 本地 UDP 地址。没开 UDP（`udp: false`）时抛错。 */
   address(): Address {
-    const { address, port } = this.socket!.address();
+    if (!this.socket) throw new Error('this endpoint has no UDP socket');
+    const { address, port } = this.socket.address();
     return { address, port };
   }
 
+  /** 开一条通道，见 {@link Link}。`cost` 越小越优先，UDP 地址是 0，经中继转发一般给 1。 */
+  createLink(send: (datagram: Uint8Array) => void, cost = 1): Link {
+    if (!Number.isInteger(cost) || cost < 0 || cost > 255) throw new Error('link cost must be 0-255');
+    const link = new Link(this, this.nextLink++, cost, send);
+    this.links.set(link.id, link);
+    return link;
+  }
+
+  /** 从本地 UDP 端口发一个不经核心的数据报，比如查公网地址的请求。没开 UDP 时什么也不做。 */
+  sendUdp(to: Address, datagram: Uint8Array): void {
+    this.socket?.send(datagram, to.port, to.address, (error) => {
+      if (error) this.sendErrors += 1;
+    });
+  }
+
   /** 向 `peer` 发起加密连接。握手在后台进行，完成时连接发出 `established`。 */
-  connect(remotePublicKey: Uint8Array, peer: Address, payload: Uint8Array = new Uint8Array()): Connection {
+  connect(remotePublicKey: Uint8Array, peer: PeerAddress, payload: Uint8Array = new Uint8Array()): Connection {
     const prologue = this.prologueBytes();
     const id =
       this.call((core, io, addr) => {
@@ -440,7 +544,7 @@ export class Endpoint extends EventEmitter {
         view.set(remotePublicKey.subarray(0, PUBLIC_KEY_LEN));
         view.set(prologue, PUBLIC_KEY_LEN);
         view.set(payload, PUBLIC_KEY_LEN + prologue.length);
-        encodeAddress(addr(), peer);
+        this.encode(addr(), peer);
         return core.connect(this.now(), prologue.length, payload.length);
       }) >>> 0;
     if (id === 0) throw new Error('handshake could not start (payload too large?)');
@@ -527,12 +631,23 @@ export class Endpoint extends EventEmitter {
   private onMessage(socket: dgram.Socket, message: Buffer, remote: dgram.RemoteInfo): void {
     if (socket !== this.socket || this.broken || message.length > IO_LEN) return;
     const from = { address: remote.address, port: remote.port };
-    this.options.tap?.('in', message, from);
+    if (this.options.intercept?.(message, from)) return;
+    this.input(message, from);
+  }
+
+  /** @internal 从通道收到的数据报。 */
+  receiveLink(link: Link, datagram: Uint8Array): void {
+    if (this.broken || datagram.length > IO_LEN || this.links.get(link.id) !== link) return;
+    this.input(datagram, link.address);
+  }
+
+  private input(datagram: Uint8Array, from: PeerAddress): void {
+    this.options.tap?.('in', datagram, from);
     try {
       this.call((core, io, addr) => {
-        io().set(message);
-        encodeAddress(addr(), from);
-        core.datagram(this.now(), message.length);
+        io().set(datagram);
+        this.encode(addr(), from);
+        core.datagram(this.now(), datagram.length);
       });
     } catch (error) {
       this.fail(error);
@@ -541,9 +656,14 @@ export class Endpoint extends EventEmitter {
     this.schedule();
   }
 
+  /** @internal 写一个地址给核心，通道带上它的代价。 */
+  encode(view: Uint8Array, address: PeerAddress): void {
+    encodeAddress(view, address, isLinkAddress(address) ? (this.links.get(address.link)?.cost ?? 1) : 0);
+  }
+
   /** @internal 在这一轮事件循环末尾处理一次。 */
   schedule(): void {
-    if (this.immediate || this.broken || !this.socket) return;
+    if (this.immediate || this.broken) return;
     this.immediate = setImmediate(() => {
       this.immediate = null;
       this.pump();
@@ -551,7 +671,7 @@ export class Endpoint extends EventEmitter {
   }
 
   private pump(): void {
-    if (this.broken || !this.socket) return;
+    if (this.broken) return;
     try {
       const now = this.now();
       this.call((core) => core.tick(now));
@@ -623,7 +743,6 @@ export class Endpoint extends EventEmitter {
   }
 
   private flush(now: number): void {
-    const socket = this.socket!;
     for (;;) {
       const packet = this.call((core, io, addr) => {
         const len = core.transmit(now);
@@ -631,9 +750,8 @@ export class Endpoint extends EventEmitter {
       });
       if (!packet) return;
       this.options.tap?.('out', packet.data, packet.to);
-      socket.send(packet.data, packet.to.port, packet.to.address, (error) => {
-        if (error) this.sendErrors += 1;
-      });
+      if (isLinkAddress(packet.to)) this.links.get(packet.to.link)?.send(packet.data);
+      else this.sendUdp(packet.to, packet.data);
     }
   }
 
@@ -699,6 +817,8 @@ export class Endpoint extends EventEmitter {
     this.broken ??= failure ?? new Error('endpoint closed');
     this.socket?.close();
     this.socket = null;
+    for (const link of this.links.values()) link.close();
+    this.links.clear();
     this.keys.clear();
     this.ephemerals.clear();
   }

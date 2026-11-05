@@ -1,11 +1,13 @@
 # agent-net 验证脚本
 
 只用于验证方案，不进入产品构建，也不是 pnpm workspace 的一部分。第 0 阶段结论见
-[`docs/agent-net-plan.md`](../../docs/agent-net-plan.md) §2，第 6 步见 [`results/2026-11-05-edgehub-core`](results/2026-11-05-edgehub-core/README.md)。
+[`docs/agent-net-plan.md`](../../docs/agent-net-plan.md) §2，第 6 步见 [`results/2026-11-05-edgehub-core`](results/2026-11-05-edgehub-core/README.md)，
+第 7 步见 [`results/2026-11-05-traversal`](results/2026-11-05-traversal/README.md)。
 
 > 2026-10-30 路线改为自研传输，iroh 不进产品。这里的 iroh 代码只保留作性能参照。
 > 2026-11-05（第 6 步）`edgehub.ts` 改成可以换传输：默认跑自研核心（`transport-core.ts`），QUIC（`transport-quic.ts`）留作对照，
 > 两种传输跑同一套检查。
+> 第 7 步自研传输可以经中转转发（`relay-client.ts`：自建中转的专用通道，或夹带在现有中转的 push 里），先经中转连上，再打洞换到直连。
 
 第 0 阶段 2026-10-30 在一台 macOS 26（arm64）上运行，第 6 步 2026-11-05 在一台 Windows（x64）上运行。
 除非注明，都是本机回环，**不是真实网络指标**。
@@ -37,7 +39,7 @@ cargo build --release --target aarch64-apple-ios
 
 | 脚本 | 验证什么 | 结果 |
 | --- | --- | --- |
-| `npx tsx --tsconfig tsconfig.json poc-edgehub.ts [core\|quic]` | 真实 `DeviceLinkClient` 经 EdgeHub 跑点对点传输，全程没有中转。`core` 另查抓到的包里没有业务明文 | 两种传输都 12/12 通过，`core` 附加 1/1 |
+| `npx tsx --tsconfig tsconfig.json poc-edgehub.ts [core\|relay\|push\|punch\|quic]` | 真实 `DeviceLinkClient` 经 EdgeHub 工作，业务帧不经 device-link 中转。`relay`、`push` 是 UDP 全被挡、只经本机起的自建中转转发数据报，`punch` 是先经中转再打洞。自研传输另查抓到的包里没有业务明文和该走的路径 | 五种都 12/12 通过，附加检查都通过 |
 | `npx tsx --tsconfig tsconfig.json poc-core-driver.ts` | 自研核心 Node 驱动里 EdgeHub 碰不到的部分：大块数据、IPv6、传输途中换端口、拒绝握手、确认后再关 | 6/6 通过 |
 | `node poc-lan.mjs` | 组播发现，账号派生轮换标签，其它账号的节点被忽略 | 2/2 通过，261 ms 发现 |
 | `node poc-relay.mjs` | 自建中继回退、回调准入、自动升级直连。要先启动 `iroh-relay` 和准入回调 | 5/5 通过 |
@@ -53,6 +55,17 @@ cargo build --release --target aarch64-apple-ios
 | --- | ---: | ---: |
 | invoke 往返 p50 / p95 | 0.44 / 0.92 ms | 0.76 / 1.26 ms |
 | 3 MiB 结果送达 | 221 ms | 620 ms |
+
+## 第 7 步：经中转和打洞
+
+四种方式轮流各 3 轮，详细见 [`本轮记录`](results/2026-11-05-traversal/README.md)。中位数：
+
+| 方式 | invoke 往返 p50 | 3 MiB 结果送达 |
+| --- | ---: | ---: |
+| 只走 UDP | 0.47 ms | 286 ms |
+| UDP 全被挡，经自建中转的专用通道 | 0.66 ms | 611 ms（7 次的中位数约 300 ms，慢的几次是电脑负载） |
+| UDP 全被挡，夹带在现有中转的 push 里 | 0.63 ms | 292 ms |
+| 先经中转，再打洞换到直连 | 0.41 ms | 237 ms |
 
 ## 第 0 阶段基准
 
