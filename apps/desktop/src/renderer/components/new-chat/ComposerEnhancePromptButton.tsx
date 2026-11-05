@@ -9,7 +9,7 @@ import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { extractIpcError, mapIpcErrorToI18nKey } from '@/utils/ipcError';
-import { hasFocusMovedToInteractiveElement } from './useComposerSendFocusRestore';
+import { hasFocusMovedToInteractiveElement, hasNonCollapsedSelectionOutsideComposer } from './useComposerSendFocusRestore';
 import { COMPOSER_ENHANCE_MAX_INPUT_CHARS } from '../../../shared/composerPromptEnhance';
 import {
   buildEnhancedDocument,
@@ -205,7 +205,11 @@ export function ComposerEnhancePromptButton({
       // that owns it), so the rewrite is only selected while the composer still
       // holds the user's attention.
       const focusStayedInComposer = !editor.isDestroyed
-        && !hasFocusMovedToInteractiveElement(null, editor.view.dom);
+        && !hasFocusMovedToInteractiveElement(null, editor.view.dom)
+        // A selection outside the composer keeps the focus on the body, so the
+        // check above would pass and select-all would replace the text the user
+        // was about to copy.
+        && !hasNonCollapsedSelectionOutsideComposer(editor.view.dom);
       if (focusStayedInComposer) {
         editor.commands.focus();
         editor.commands.selectAll();
