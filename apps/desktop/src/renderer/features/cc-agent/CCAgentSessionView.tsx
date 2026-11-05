@@ -1,9 +1,5 @@
-import { usePluginUiVisibilityValues } from '@/cindy-brain/usePluginUiVisibility';
 import { McpAppPermissionPrompt } from '@/components/chat/McpAppPermissionPrompt';
 import { PluginUiEnablePrompt } from '@/components/new-chat/PluginUiEnablePrompt';
-import { PluginUiContributionControls } from '@/cindy-brain/PluginUiControls';
-import { PluginUiCommandShortcuts } from '@/cindy-brain/PluginUiCommandShortcuts';
-import { PluginUiStatusBar } from '@/cindy-brain/PluginUiStatusBar';
 import { McpSetupPrompt, useMcpSetupRequest } from '@/components/new-chat/McpSetupPrompt';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { VoiceCallComposerSlot } from '../bots/voice/GlobalVoiceCall';
@@ -52,7 +48,6 @@ import {
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import { CindyMakeSessionGate } from './CindyMakeSessionGate';
 import { SessionRouteOriginGate } from './SessionRouteOriginGate';
-import { usePluginSkillSetup } from './pluginSkillSetup';
 import { useBotIslandVisibleSession } from '@/features/bots/useBotIslandVisibleSession';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import { useTranslation } from 'react-i18next';
@@ -280,6 +275,9 @@ import { startSubagentTabDiscovery } from './subagentTabDiscovery';
 import { requestChatTaskFocus, subscribeChatTaskFocus } from '@/features/right-sidebar/plugins/background-tasks/chatTaskFocusIntent';
 import { BotChatQuoteProvider, type BotChatQuoteValue } from '@/features/bots/botChatQuoteContext';
 import { BotChatQuoteComposerPreview } from '@/features/bots/BotChatQuoteViews';
+import { useBotProfiles } from '@/features/bots/botStore';
+import { useCompanionCloud } from '@/features/bots/companionCloudStore';
+import { withoutShadowedBots } from '@/features/bots/companionCloudPresentation';
 import { clearSentBotReplyQuote, getPendingBotReplyQuote, setPendingBotReplyQuote, usePendingBotReplyQuote } from '@/features/bots/botDmQuote';
 import { useBotReplyTargetPreference } from '@/features/bots/useBotReplyTargetPreference';
 import { canFocusWithoutJumpLoad } from '@/lib/searchJumpTargeting';
@@ -866,8 +864,22 @@ function CCAgentSessionContent({
   botUnreadBoundaryAt,
   onBotReadThrough,
 }: CCAgentSessionViewProps = {}) {
-  const pluginVisibility = usePluginUiVisibilityValues();
   const { t } = useTranslation();
+  // Ordinary task routes do not have a BotSessionView wrapper, so supply the
+  // live roster to the @ suggestion panel at this shared production entry.
+  const rosterProfiles = useBotProfiles();
+  const companionCloud = useCompanionCloud();
+  const ordinaryTaskBotMentions = useMemo(
+    () => withoutShadowedBots(rosterProfiles, companionCloud)
+      .filter((bot) => bot.status === 'active')
+      .map((bot) => ({
+        id: bot.id,
+        name: bot.name,
+        ...(bot.description?.trim() ? { description: bot.description } : {}),
+      })),
+    [rosterProfiles, companionCloud],
+  );
+  const composerBotMentions = botMentions ?? ordinaryTaskBotMentions;
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
   const sessionId = sessionIdProp ?? paramSessionId;
   const navigate = useNavigate();
@@ -2219,22 +2231,6 @@ function CCAgentSessionContent({
       startedAt: session?.activeTurnStartedAt ?? null,
       endedAt: session?.lastTurnEndedAt ?? null,
     });
-  // `/` 面板里待装插件的技能(如 /pr):与首页 Gmail 推荐同一套安装接续,装好后回到本任务
-  // 并把 `/技能 ` 填进输入框。SSH / 被控电脑 / 只读与编辑排队消息时不提供。
-  const pluginSkillSetup = usePluginSkillSetup({
-    enabled:
-      !!session &&
-      !!sessionId &&
-      !session.remoteHostId &&
-      rightSidebarDeviceLinkDeviceId === null &&
-      !readOnly &&
-      session.source !== 'review' &&
-      !activeQueueComposerEdit,
-    ownerId: dataOwnerId,
-    workingDir: session?.workingDir ?? null,
-    targetKey: JSON.stringify(['session', sessionId ?? null]),
-    draftKey: sessionId ?? '',
-  });
   // Agent 在另一台电脑运行的任务:模型目录同样以那台为准(任务本身在本机)。
   const agentDeviceId = remoteDeviceId ? undefined : (session?.agentDeviceId ?? undefined);
   // 远程 Agent:本机任务的模型面板也列出其他电脑的供应商(选中 = 把 Agent 挪过去,下一条消息
@@ -5334,7 +5330,7 @@ function CCAgentSessionContent({
     <MessageReadAloudContext.Provider value={messageReadAloud.value}>
     <MessageStream
       header={messageStreamHeader}
-      footer={pendingMcpSetup ? <McpSetupPrompt key={pendingMcpSetup.requestId} request={pendingMcpSetup} teammate={!!botChatIdentity} /> : null}
+      footer={pendingMcpSetup ? <McpSetupPrompt key={pendingMcpSetup.requestId} request={pendingMcpSetup} /> : null}
       key={sessionId}
       sessionId={sessionId}
       sessionTitle={session?.title ?? null}
@@ -5626,7 +5622,6 @@ function CCAgentSessionContent({
            key={sessionId}: force a full remount on session switch so scroll state,
            refs, and ResizeObservers are fresh — guarantees per-session isolation. */}
         <div
-          data-plugin-ui-element="messages"
           className="wallpaper-message-viewport relative min-h-0 flex-1"
           style={{ '--wallpaper-composer-height': `${overlayHeight}px` } as CSSProperties}
         >
@@ -5856,7 +5851,6 @@ function CCAgentSessionContent({
                   dataOwnerId={dataOwnerId}
                   sessionId={sessionId}
                   latestFailedRun={scheduleSessionInfo.latestFailedRun}
-                  remote={rightSidebarDeviceLinkDeviceId !== null}
                   onDiagnose={canDiagnoseError ? handleDiagnoseError : undefined}
                   style={{ width: inputWidth }}
                   className="py-1"
@@ -5948,12 +5942,10 @@ function CCAgentSessionContent({
               style={{ width: inputWidth }}
               data-chat-composer-stack
             >
-              <div className="contents" data-plugin-ui-keep-visible>
-                {!readOnly && sessionId && <McpAppPermissionPrompt sessionId={sessionId} floating />}
-                {!readOnly && !session?.remoteHostId && (
-                  <PluginUiEnablePrompt key={`${sessionId}:${remoteDeviceId ?? agentDeviceId ?? 'local'}`} deviceId={remoteDeviceId ?? agentDeviceId ?? undefined} />
-                )}
-              </div>
+              {!readOnly && sessionId && <McpAppPermissionPrompt sessionId={sessionId} floating />}
+              {!readOnly && !session?.remoteHostId && (
+                <PluginUiEnablePrompt key={`${sessionId}:${remoteDeviceId ?? agentDeviceId ?? 'local'}`} deviceId={remoteDeviceId ?? agentDeviceId ?? undefined} />
+              )}
               {/* FP-7 / F-PERM-2 / F7.4: mutually exclusive prompts.
                  Plan review takes precedence — the SDK won't interleave it with
                  other tool calls, but explicit priority guards against layout
@@ -5970,10 +5962,9 @@ function CCAgentSessionContent({
                   ? <RemoteBotFollowUpInvitation key={`${remoteDeviceId}:${sessionId}`} deviceId={remoteDeviceId} botId={botChatIdentity.id} />
                   : <BotFollowUpInvitation key={`follow-up-invitation:${sessionId}`} botId={botChatIdentity.id} engaged />
               )}
-              <div className="contents" data-plugin-ui-keep-visible>
               <InteractionPromptHost
                 hasInteraction={
-                  pluginVisibility.workspace && pluginVisibility.tools && !!(
+                  !!(
                     pendingPlanReview ||
                     pendingPermission ||
                     pendingAskUser ||
@@ -6078,7 +6069,6 @@ function CCAgentSessionContent({
                   />
                 ) : null}
               </InteractionPromptHost>
-              </div>
               {/* 会话内 /goal 进行中状态条(composer 上方);无 goal 时返回 null 不占位。 */}
               {!isSharedTaskPeer(remoteDeviceId ?? '') && <GoalIndicator sessionId={sessionId} />}
               {/* Only the compact bar reserves composer space; its transcript is a
@@ -6143,17 +6133,6 @@ function CCAgentSessionContent({
                   aria-hidden={voiceModeOpen && voiceSurfaceAvailable ? true : undefined}
                 >
                 <ChatInput
-                  middleToolbarSlot={sessionId ? <>
-                    <PluginUiContributionControls sessionId={sessionId}
-                      point="composer.tools" deviceId={remoteDeviceId}
-                      connected={!remoteDeviceId || remoteConn === 'connected'}
-                      active={chatRealtime && !!session && session.status === 'active'}
-                      readOnly={readOnly} />
-                    <PluginUiCommandShortcuts sessionId={sessionId} entry="session" deviceId={remoteDeviceId}
-                      connected={!remoteDeviceId || remoteConn === 'connected'}
-                      active={chatRealtime && !!session && session.status === 'active'}
-                      readOnly={readOnly} />
-                  </> : undefined}
                   topSlot={cindyMakeRecoveryId && session ? (
                     <CindyMakeEditingActions
                       key={`${session.id}:${cindyMakeRecoveryId}`}
@@ -6200,7 +6179,6 @@ function CCAgentSessionContent({
                   initialPermissionMode={session?.permissionMode}
                   planModeEnabled={planModeEnabled}
                   onPlanModeChange={setPlanMode}
-                  pluginSkillSetup={pluginSkillSetup}
                   fastMode={fastMode}
                   onFastModeChange={setFastMode}
                   onWorkingDirChange={handleWorkingDirChange}
@@ -6326,7 +6304,7 @@ function CCAgentSessionContent({
                         }
                       : undefined
                   }
-                  botMentions={botMentions}
+                  botMentions={composerBotMentions}
                   hideRuntimeControls={Boolean(botChatIdentity)}
                 />
                 </div>
@@ -6405,10 +6383,6 @@ function CCAgentSessionContent({
                       )}
                     </WorkingDirectoryTip>
                   )}
-
-                  <PluginUiStatusBar sessionId={sessionId}
-                    deviceId={remoteDeviceId ?? agentDeviceId ?? undefined} readOnly={readOnly}
-                    active={Boolean(session?.workingDir || worktreeCreation)} />
 
                   {/* Right: Context capacity indicator */}
                   <div className="flex shrink-0 items-center gap-3">
@@ -6505,7 +6479,6 @@ function CCAgentSessionContent({
     // WorkdirBrowseRoute)本身也挂这个类,主会话内层再挂一层是冗余但无害(CSS 规则幂等)。
     <div
       ref={containerRef}
-      data-plugin-ui-session={sessionId}
       className={cn('relative h-full w-full', isCompact && 'chat-rail-compact')}
     >
       {/* TopRightChipStackProvider 必须包住 MessageStream(消费 slot 的后代)
@@ -6860,9 +6833,8 @@ function RunningStatusBar({
     latestRate,
   });
   const latestRateText = latestRate !== null ? formatRecentOutputTokenRate(latestRate) : null;
-  // 工具执行期间(host 已 pause)不显示流速:那不是生成速度,残留读数只会误导。
   const rateText =
-    !isHidden && !reconnecting && usageMeta.kind === 'rate' && !(tokenSpeed && !tokenSpeed.streaming)
+    !isHidden && !reconnecting && usageMeta.kind === 'rate'
       ? latestRateText !== null
         ? t('chat.runningStatus.tokenRate', { rate: latestRateText })
         : null
@@ -6959,15 +6931,9 @@ function RunningStatusBar({
             {showRatePanel && (
               <RunningTokenRatePopover
                 elapsedText={elapsedText}
-                // 工具执行期间(host 已 pause)没有"当前"速度:latestRate 缓存着生成
-                // 结束前的读数(60s 内仍新),打开浮窗会显示成仍在跑。平均速度与峰值
-                // 仍然保留,它们描述的是已经发生的生成。
-                rate={tokenSpeed && !tokenSpeed.streaming ? null : latestRateText}
+                rate={latestRateText}
                 rateText={
-                  workflowWaiting ||
-                  sideTaskRunning ||
-                  backgroundTasksRunning ||
-                  (tokenSpeed && !tokenSpeed.streaming)
+                  workflowWaiting || sideTaskRunning || backgroundTasksRunning
                     ? null
                     : usageMeta.kind === 'tokens'
                       ? tokenCountText
