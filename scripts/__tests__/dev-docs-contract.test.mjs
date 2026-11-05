@@ -1,3 +1,4 @@
+import { classifyChanges, detectChanges } from "../ci-change-scope.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -339,7 +340,7 @@ test("client CI keeps the complete sharded unit gate on Windows", () => {
 	const runnerChecks = workflowJob(workflow, "windows-runner-checks");
 	assert.ok(runnerChecks, "client CI must run Windows runner self-tests once");
 	assert.match(runnerChecks, /^    runs-on: windows-latest$/m);
-	assert.doesNotMatch(runnerChecks, /^    needs:/m);
+	assert.match(runnerChecks, /^    needs: changes$/m);
 	assert.doesNotMatch(runnerChecks, /^    strategy:/m);
 	assert.equal([...runnerChecks.matchAll(/^        run: pnpm test:runner$/gm)].length, 1);
 	assert.match(runnerChecks, /botCanonicalSession\.test\.ts/);
@@ -364,15 +365,15 @@ test("client CI keeps the complete sharded unit gate on Windows", () => {
 	assert.match(gate, /^      - windows-runner-checks$/m);
 	assert.match(gate, /^          WINDOWS_UNIT_SHARDS_RESULT: \$\{\{ needs\.windows-unit-shards\.result \}\}$/m);
 	assert.match(gate, /^          WINDOWS_RUNNER_CHECKS_RESULT: \$\{\{ needs\.windows-runner-checks\.result \}\}$/m);
-	assert.match(gate, /^          test "\$WINDOWS_UNIT_SHARDS_RESULT" = "success"$/m);
-	assert.match(gate, /^          test "\$WINDOWS_RUNNER_CHECKS_RESULT" = "success"$/m);
+	assert.match(gate, /^            test "\$WINDOWS_UNIT_SHARDS_RESULT" = "success"$/m);
+	assert.match(gate, /^            test "\$WINDOWS_RUNNER_CHECKS_RESULT" = "success"$/m);
 });
 
 test("client CI runs Linux checks and complete unit shards in parallel behind stable verify", () => {
 	const workflow = readText(".github/workflows/ci.yml");
 	const checks = workflowJob(workflow, "verify-checks");
 	assert.ok(checks, "client CI must define independent Linux verification checks");
-	assert.doesNotMatch(checks, /^    needs:/m);
+	assert.match(checks, /^    needs: changes$/m);
 	assert.match(checks, /^        run: pnpm test:runner$/m);
 	assert.match(
 		checks,
@@ -386,12 +387,12 @@ test("client CI runs Linux checks and complete unit shards in parallel behind st
 	const shards = workflowJob(workflow, "linux-unit-shards");
 	assert.ok(shards, "client CI must define Linux unit shards");
 	assert.match(shards, /^    runs-on: ubuntu-latest$/m);
-	assert.doesNotMatch(shards, /^    needs:/m);
+	assert.match(shards, /^    needs: changes$/m);
 	assertCompleteShardMatrix(shards);
 	assert.match(shards, /^        run: pnpm run test:workspaces --tier unit$/m);
 	assert.doesNotMatch(shards, /pnpm test:(?:unit|runner)/);
 	assert.equal([...shards.matchAll(/--tier integration --workspace @cindy\/maker-pi-manager/g)].length, 1);
-	assert.match(shards, /^      - name: Run Pi manager integration tests\r?\n        if: matrix\.shard == 1\r?\n        run: pnpm run test:workspaces --tier integration --workspace @cindy\/maker-pi-manager$/m);
+	assert.match(shards, /^      - name: Run Pi manager integration tests\r?\n        if: matrix\.shard == 1 && needs\.changes\.outputs\.desktop == 'true'\r?\n        run: pnpm run test:workspaces --tier integration --workspace @cindy\/maker-pi-manager$/m);
 
 	const gate = workflowJob(workflow, "verify");
 	assert.ok(gate, "client CI must preserve the stable verify check");
@@ -402,5 +403,56 @@ test("client CI runs Linux checks and complete unit shards in parallel behind st
 	assert.match(gate, /^          VERIFY_CHECKS_RESULT: \$\{\{ needs\.verify-checks\.result \}\}$/m);
 	assert.match(gate, /^          LINUX_UNIT_SHARDS_RESULT: \$\{\{ needs\.linux-unit-shards\.result \}\}$/m);
 	assert.match(gate, /^          test "\$VERIFY_CHECKS_RESULT" = "success"$/m);
-	assert.match(gate, /^          test "\$LINUX_UNIT_SHARDS_RESULT" = "success"$/m);
+	assert.match(gate, /^            test "\$LINUX_UNIT_SHARDS_RESULT" = "success"$/m);
+});
+
+// CI's production selector must not spend full OS suites on explanatory docs,
+// or turn a mixed/runtime PR into a docs skip. Existing shard guards only check
+// the full route. Minimal regressions: docs + one source file; a moved source;
+// and an unavailable event base. These are root runner/CI contract tests.
+test("CI scope separates explanatory docs and translations from runtime changes", () => {
+	for (const [files, mode, linux, windows, desktop] of [
+		[["AGENTS.md", "REVIEW.md", ".greptile/files.json", "docs/dev-rules/server-channel-review.md"], "docs", false, false, false],
+		[["apps/desktop/src/renderer/i18n/locales/de/common.json"], "locales", true, false, false],
+		[["apps/mobile/src/i18n/locales/en/session.json", "README.md"], "locales", true, false, false],
+		[["apps/mobile/src/session/InlineQueueSection.tsx", "docs/product-rules/bot-group-chat.md"], "mobile", true, true, false],
+		[["apps/desktop/src/renderer/components/new-chat/PendingQueuePanel.tsx"], "desktop", true, true, true],
+		[["AGENTS.md", "packages/maker-core/src/index.ts"], "full", true, true, true],
+	]) {
+		const plan = classifyChanges(files);
+		assert.deepEqual([plan.mode, plan.linux_unit, plan.windows_unit, plan.desktop],
+			[mode, linux, windows, desktop], files.join(", "));
+	}
+	for (const file of ["pnpm-lock.yaml", ".github/workflows/ci.yml", "scripts/test-workspaces.mjs",
+		"apps/mobile/metro.config.js", "apps/mobile/scripts/build-ios.mjs", "apps/desktop/package.json",
+		"docs/legal/notices/LICENSE.txt", "i18n/GLOSSARY.md", "docs/design-previews/example/main.js",
+		"apps/desktop/resources/system-skills/guide/SKILL.md", "unknown.json"]) {
+		assert.equal(classifyChanges([file]).runtime, true, file);
+	}
+});
+
+test("CI scope uses the event comparison and falls back to full checks without a usable diff", () => {
+	const base = "a".repeat(40);
+	const head = "b".repeat(40);
+	for (const [eventName, event] of [
+		["pull_request", { pull_request: { base: { sha: base } } }],
+		["merge_group", { merge_group: { base_sha: base } }],
+		["push", { before: base }],
+	]) {
+		const plan = detectChanges({ eventName, event, head, git(command, args) {
+			assert.equal(command, "git");
+			assert.deepEqual(args, ["diff", "--name-only", "--no-renames", "-z", base, head, "--"]);
+			return "docs/dev-rules/new.md\0packages/example/old.ts\0docs/dev-rules/a\nb.md\0";
+		} });
+		assert.equal(plan.mode, "full");
+		assert.equal(plan.files[2], "docs/dev-rules/a\nb.md");
+	}
+	for (const event of [{}, { before: "0".repeat(40) }]) {
+		assert.equal(detectChanges({ eventName: "push", event, head }).mode, "full");
+	}
+	assert.equal(detectChanges({ eventName: "workflow_dispatch", event: {}, head }).mode, "full");
+	assert.equal(detectChanges({ eventName: "push", event: { before: base }, head,
+		git() { throw new Error("missing commit"); } }).mode, "full");
+	assert.equal(classifyChanges([]).mode, "full");
+	assert.throws(() => detectChanges({ eventName: "push", event: { before: "bad-ref" }, head }), /complete event/);
 });

@@ -10,6 +10,7 @@ import { findBareColors, matchBareColors } from '../shared/hardcoded-color-match
 import { addedLines, inspectFile, readExemptions, validateExemptions, objectPathAt, audit } from '../hardcoded-color-audit.mjs';
 import { classifyDesignLayer, reportDesignLayers } from '../shared/design-layer-report.mjs';
 import { resolvePosixShell } from '../lib/posix-shell.mjs';
+import { classifyChanges } from '../ci-change-scope.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const exemptions = readExemptions(root);
 const renderer = 'apps/desktop/src/renderer/';
@@ -312,6 +313,8 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
       // environment object. Set fixture values inside the shell script so
       // this contract test behaves the same on Windows and Linux.
       const aggregateScript = summary.run
+        .replaceAll('$SCOPE_RESULT', 'success')
+        .replaceAll('$LINUX_UNIT_REQUIRED', 'true')
         .replaceAll('$VERIFY_CHECKS_RESULT', checks)
         .replaceAll('$LINUX_UNIT_SHARDS_RESULT', shards);
       const aggregate = runBash(aggregateScript);
@@ -320,6 +323,8 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
     }
   }
   const propagatedScript = summary.run
+    .replaceAll('$SCOPE_RESULT', 'success')
+    .replaceAll('$LINUX_UNIT_REQUIRED', 'true')
     .replaceAll('$VERIFY_CHECKS_RESULT', failed.status ? 'failure' : 'success')
     .replaceAll('$LINUX_UNIT_SHARDS_RESULT', 'success');
   const propagated = runBash(propagatedScript);
@@ -424,10 +429,10 @@ test('CI design commands feed the existing verify job and preserve Windows aggre
   assert.ok(pkg.scripts['test:runner'].includes('scripts/__tests__/hardcoded-color-audit.test.mjs'));
   assert.equal(workflow.jobs.verify.name,'verify');
   assert.match(workflow.jobs.verify.if,/always\(\)/);
-  assert.deepEqual(workflow.jobs.verify.needs,['verify-checks','linux-unit-shards']);
+  assert.deepEqual(workflow.jobs.verify.needs,['changes','verify-checks','linux-unit-shards']);
   const windows=workflow.jobs['windows-unit'];
   assert.equal(windows.name,'Windows unit tests');
-  assert.deepEqual(windows.needs,['windows-unit-shards','windows-runner-checks']);
+  assert.deepEqual(windows.needs,['changes','verify-checks','windows-unit-shards','windows-runner-checks']);
   assert.match(windows.if,/always\(\)/);
   for(const name of ['linux-unit-shards','windows-unit-shards']) {
     const job=workflow.jobs[name];
@@ -439,15 +444,61 @@ test('CI design commands feed the existing verify job and preserve Windows aggre
   }
   // Companion DB regressions run once per OS: on Linux shard 1, and on Windows
   // in the parallel one-off job instead of on a shard's critical path.
-  assert.ok(workflow.jobs['linux-unit-shards'].steps.some(s=>s.name==='Run companion database regressions' && s.if==='matrix.shard == 1'));
+  assert.ok(workflow.jobs['linux-unit-shards'].steps.some(s=>s.name==='Run companion database regressions' && s.if==="matrix.shard == 1 && needs.changes.outputs.desktop == 'true'"));
   assert.ok(workflow.jobs['windows-runner-checks'].steps.some(s=>s.name==='Run companion database regressions' && s.if===undefined));
   const gateVars=['$WINDOWS_UNIT_SHARDS_RESULT','$WINDOWS_RUNNER_CHECKS_RESULT'];
   for(const result of ['success','failure','cancelled','skipped']) {
     for(const target of gateVars) {
-      const windowsScript=gateVars.reduce((script,name)=>script.replaceAll(name,name===target?result:'success'),windows.steps[0].run);
+      const windowsScript=gateVars.reduce((script,name)=>script.replaceAll(name,name===target?result:'success'),windows.steps[0].run)
+        .replaceAll('$SCOPE_RESULT','success').replaceAll('$VERIFY_CHECKS_RESULT','success')
+        .replaceAll('$WINDOWS_UNIT_REQUIRED','true').replaceAll('$WINDOWS_RUNNER_REQUIRED','true');
       const run=runBash(windowsScript);
       if (!run) return t.skip('Git Bash is unavailable on this host');
       assert.equal(run.status===0,result==='success',`${target}=${result}`);
+    }
+  }
+});
+
+// Required-check contract: a planned skip is valid only after scope detection
+// and static checks succeed. Execute the actual workflow shell, including a
+// missing output and unexpected skip, rather than duplicating its decision.
+test('CI aggregates only accept planned skips and preserve failure propagation', (t) => {
+  const { jobs } = matter.engines.yaml.parse(fs.readFileSync(path.join(root, '.github/workflows/ci.yml'), 'utf8'));
+  assert.equal(jobs.changes.outputs.linux_unit, '${{ steps.scope.outputs.linux_unit }}');
+  assert.equal(jobs.changes.outputs.windows_unit, '${{ steps.scope.outputs.windows_unit }}');
+  assert.equal(jobs['linux-unit-shards'].if, "needs.changes.outputs.linux_unit == 'true'");
+  assert.equal(jobs['windows-unit-shards'].if, "needs.changes.outputs.windows_unit == 'true'");
+  assert.equal(jobs['windows-runner-checks'].if, "needs.changes.outputs.desktop == 'true'");
+  assert.equal(jobs['git-integration'].if, "needs.changes.outputs.desktop == 'true'");
+  assert.equal(jobs['git-integration'].steps.at(-1).run, 'pnpm run test:workspaces --tier git-integration');
+  const invoke = (job, values) => {
+    const script = job.steps[0].run.replace(/\$([A-Z_]+)/g, (_, key) => values[key] ?? '');
+    return runBash(script);
+  };
+  for (const files of [['README.md'], ['apps/desktop/src/renderer/i18n/locales/de/common.json'],
+    ['apps/mobile/src/session/example.ts'], ['pnpm-lock.yaml']]) {
+    const plan = classifyChanges(files);
+    const values = {
+      SCOPE_RESULT: 'success', VERIFY_CHECKS_RESULT: 'success',
+      LINUX_UNIT_REQUIRED: String(plan.linux_unit),
+      WINDOWS_UNIT_REQUIRED: String(plan.windows_unit), WINDOWS_RUNNER_REQUIRED: String(plan.desktop),
+      LINUX_UNIT_SHARDS_RESULT: plan.linux_unit ? 'success' : 'skipped',
+      WINDOWS_UNIT_SHARDS_RESULT: plan.windows_unit ? 'success' : 'skipped',
+      WINDOWS_RUNNER_CHECKS_RESULT: plan.desktop ? 'success' : 'skipped',
+    };
+    for (const [job, required, result] of [
+      [jobs.verify, 'LINUX_UNIT_REQUIRED', 'LINUX_UNIT_SHARDS_RESULT'],
+      [jobs['windows-unit'], 'WINDOWS_UNIT_REQUIRED', 'WINDOWS_UNIT_SHARDS_RESULT'],
+      [jobs['windows-unit'], 'WINDOWS_RUNNER_REQUIRED', 'WINDOWS_RUNNER_CHECKS_RESULT'],
+    ]) {
+      const passed = invoke(job, values);
+      if (!passed) return t.skip('Git Bash is unavailable on this host');
+      assert.equal(passed.status, 0, `${plan.mode} planned result`);
+      for (const override of [
+        { SCOPE_RESULT: 'failure' }, { SCOPE_RESULT: 'cancelled' }, { VERIFY_CHECKS_RESULT: 'failure' },
+        { [required]: '' }, { [result]: 'failure' }, { [result]: 'cancelled' },
+        { [result]: values[result] === 'success' ? 'skipped' : 'success' },
+      ]) assert.notEqual(invoke(job, { ...values, ...override }).status, 0, JSON.stringify({ mode: plan.mode, override }));
     }
   }
 });
