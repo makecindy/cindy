@@ -2808,6 +2808,7 @@ export class DeviceLinkClient {
       // 不在 ROUTED_KINDS 里，设备之间发不出去。link-close 是路由帧，
       // 且控制端按 dst 拒绝 pending（见 rejectPendingLinkOpen），不需要 id。
       if (env.kind === 'link-open' && env.src) {
+        const problem = describeInvalidLinkOpen(env.payload);
         try {
           this.sendEnvelope({
             v: PROTOCOL_VERSION,
@@ -2821,10 +2822,7 @@ export class DeviceLinkClient {
           // 与改动前行为一致，不会倒退。
           this.log.debug('link-close for a rejected link-open failed', err);
         }
-        this.log.warn(
-          `rejected link-open from ${env.src.slice(0, 8)}: protocol-error `
-          + '(capabilities declared without transportStreamId)',
-        );
+        this.log.warn(`rejected link-open from ${env.src.slice(0, 8)}: ${problem}`);
       }
       return;
     }
@@ -3282,10 +3280,11 @@ export class DeviceLinkClient {
             close?.reason === 'revoked'
               ? 'access revoked by target device'
               : close?.reason === 'protocol-error'
-                // 被控端只在我们带了 capabilities 却缺 transportStreamId 时回这个。
-                // 带上可操作提示，避免控制端把这当成普通的「对端关链」。
+                // 被控端判定我们的 link-open 不满足协议契约。wire 上只有这个
+                // 笼统的 reason，不带具体缺哪个字段，所以这里不指名——错指
+                // 字段比不指更坑，真实原因看被控端日志。
                 ? 'target rejected link-open: protocol-error '
-                  + '(capabilities declared without transportStreamId)'
+                  + '(see target device logs for the offending field)'
                 : 'control link closed by peer',
           );
           const peer = this.getPeerTransport(env.src);
@@ -6198,6 +6197,36 @@ function isKnownInboundEnvelope(value: unknown): value is Envelope {
     return false;
   }
   return DEVICE_LINK_ENVELOPE_KINDS.has(value.kind);
+}
+
+/**
+ * 把一条未通过校验的 link-open 翻译成可操作的失败原因。
+ *
+ * 被控端回给控制端的只有 `link-close('protocol-error')`，不带细节（payload
+ * 是封闭 shape，加字段要同步改两端类型）。所以本函数至少要让**被控端日志**
+ * 说清楚到底缺了什么，否则运维只能对着「某个字段不对」徒猜。
+ *
+ * 只覆盖 link-open 的已知必填项；未识别的形状回一个不指名的通用描述——
+ * 错指字段比不指更坑。
+ */
+function describeInvalidLinkOpen(payload: unknown): string {
+  if (!isRecord(payload)) return 'protocol-error (payload is not an object)';
+  const missing: string[] = [];
+  if (typeof payload.controllerName !== 'string') missing.push('controllerName');
+  if (typeof payload.protocolVersion !== 'number' || !Number.isFinite(payload.protocolVersion)) {
+    missing.push('protocolVersion');
+  }
+  if (typeof payload.appVersion !== 'string') missing.push('appVersion');
+  if (
+    Array.isArray(payload.capabilities)
+    && payload.capabilities.length > 0
+    && typeof payload.transportStreamId !== 'string'
+  ) {
+    missing.push('transportStreamId (required when capabilities are declared)');
+  }
+  return missing.length > 0
+    ? `protocol-error (missing or invalid: ${missing.join(', ')})`
+    : 'protocol-error (frame does not match the current link-open contract)';
 }
 
 /**

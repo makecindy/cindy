@@ -527,6 +527,44 @@ describe('self-hosted relay device signatures', () => {
     } finally { h.client.stop(); }
   });
 
+  // 回包覆盖所有未通过校验的 link-open，所以日志必须按实际失败项指认，
+  // 不能一律宣称「缺 transportStreamId」——那会误导跨端实现按错的方向排查。
+  it('names the actually missing field when rejecting a malformed link-open', async () => {
+    const warnings: string[] = [];
+    const h = makeHarness({
+      timing: { pingIntervalMs: 60_000 },
+      logger: {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: (msg: string) => { warnings.push(String(msg)); },
+        error: () => undefined,
+      } as unknown as ConstructorParameters<typeof DeviceLinkClient>[0]['logger'],
+    });
+    try {
+      h.client.start(); await tick();
+      const socket = h.current(); socket.ack();
+      socket.push({
+        v: PROTOCOL_VERSION,
+        kind: 'link-open',
+        id: 'no-app-version-1',
+        src: 'dev-b',
+        payload: {
+          controllerName: 'Phone',
+          protocolVersion: 1,
+          // 缺 appVersion；capabilities 与 streamId 都合法
+          capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+          transportStreamId: 'stream-1',
+        },
+      });
+      await tick();
+      const rejection = warnings.find((w) => w.includes('rejected link-open'));
+      expect(rejection).toBeDefined();
+      expect(rejection).toContain('appVersion');
+      expect(rejection).not.toContain('transportStreamId');
+      expect(socket.sent.some((env) => env.kind === 'link-close')).toBe(true);
+    } finally { h.client.stop(); }
+  });
+
   // 对照组:不带 capabilities 的旧客户端不受这条约束,照旧能建链。
   it('still accepts a legacy link-open without capabilities or transportStreamId', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
