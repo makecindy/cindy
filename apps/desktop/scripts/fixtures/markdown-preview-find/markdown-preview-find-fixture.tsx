@@ -52,7 +52,7 @@ function Fixture({ editor, projectSearch, voice, video, askVoice }: { editor: bo
     <>
       <main className="flex h-screen flex-col gap-4 p-6">
         <p>背景聊天中的苹果不应计入文档搜索。</p>
-        <button data-testid="open-preview" onClick={() => setOpen(true)}>打开 Markdown 示例</button>
+        <button data-testid="open-preview" data-ui-page-control onClick={() => setOpen(true)}>打开 Markdown 示例</button>
         {voice && <VoiceComposer />}
         {askVoice && <VoiceQuestion />}
         {projectSearch && <div className="h-64 w-64"><WorkdirBrowseSidebar
