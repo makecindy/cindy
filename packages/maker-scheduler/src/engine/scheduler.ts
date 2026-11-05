@@ -1151,7 +1151,8 @@ export class Scheduler extends EventEmitter {
       patch.lastFiredAt = firedAt;
       if (current.recurring) {
         patch.nextFireAt = computeNextFireAt(current, finishedAt);
-        if (patch.nextFireAt === undefined && current.expireAt !== undefined && current.status !== 'paused') {
+        if (!current.manual && patch.nextFireAt === undefined && current.expireAt !== undefined &&
+          current.status !== 'paused') {
           patch.status = 'expired';
         }
       } else if (current.status !== 'paused') {
@@ -1159,10 +1160,29 @@ export class Scheduler extends EventEmitter {
         patch.nextFireAt = undefined;
       }
     }
-    // Recovery may race another process after the read. Match the scheduling
-    // snapshot inside UPDATE; losing ownership only updates completion time.
-    const expected = source === 'recovery' && ownsSchedule ? current : undefined;
+    // Recovery and recurring expiry may race another process after the read.
+    // Match the scheduling snapshot inside UPDATE so a stale cutoff cannot
+    // overwrite an expireAt extension. On expiry conflict, re-read and replan
+    // once from the winner's row while retaining this run's timestamps.
+    const expiringRecurring = current.recurring && patch.status === 'expired';
+    const expected = (source === 'recovery' && ownsSchedule) || expiringRecurring ? current : undefined;
     let updated = await this.storage.update(schedule.id, patch, expected);
+    if (!updated && expiringRecurring && source === 'automatic') {
+      const fresh = await this.storage.get(schedule.id);
+      if (fresh) {
+        const retryPatch: Partial<Schedule> = {
+          lastFiredAt: firedAt,
+          lastFinishedAt: finishedAt,
+        };
+        if (fresh.status === 'active' && fresh.recurring && !fresh.manual) {
+          retryPatch.nextFireAt = computeNextFireAt(fresh, finishedAt);
+          if (retryPatch.nextFireAt === undefined && fresh.expireAt !== undefined) {
+            retryPatch.status = 'expired';
+          }
+        }
+        updated = await this.storage.update(schedule.id, retryPatch, fresh);
+      }
+    }
     if (!updated && expected) {
       updated = await this.storage.update(schedule.id, { lastFinishedAt: finishedAt });
     }
@@ -1707,11 +1727,18 @@ export class Scheduler extends EventEmitter {
     // 成为调度依据。不能让一次 interval 模式更新把畸形 cron 持久化，留到以后才
     // 在重排或启动时爆炸；timezone 变更同样需要验证现有表达式在新时区可解析。
     const intervalKeyPresent = Object.prototype.hasOwnProperty.call(patch, 'intervalMs');
+    const expireAtKeyPresent = Object.prototype.hasOwnProperty.call(patch, 'expireAt');
+    const expiryReachedByPatch = expireAtKeyPresent && isRecurringSchedulePastExpiry(candidate, now);
+    const expiryNeedsRecompute = expireAtKeyPresent && candidate.recurring && !candidate.manual &&
+      (existing.nextFireAt === undefined ||
+        (candidate.expireAt !== undefined && existing.nextFireAt !== undefined &&
+          existing.nextFireAt >= candidate.expireAt));
     if (
       patch.cronExpr !== undefined ||
       patch.timezone !== undefined ||
       patch.manual === false ||
       intervalKeyPresent ||
+      expiryNeedsRecompute ||
       shouldReactivateExpired
     ) {
       nextCronOrMonthlyFire(candidate.cronExpr, now, candidate.timezone);
@@ -1728,9 +1755,14 @@ export class Scheduler extends EventEmitter {
       patch.timezone !== undefined ||
       patch.manual !== undefined ||
       intervalKeyPresent ||
+      expiryNeedsRecompute ||
       shouldReactivateExpired;
     let recomputeFromTo: { from: number | undefined; to: number | undefined } | null = null;
-    if (needsRecompute) {
+    if (expiryReachedByPatch) {
+      updates.status = 'expired';
+      updates.nextFireAt = undefined;
+      recomputeFromTo = { from: existing.nextFireAt, to: undefined };
+    } else if (needsRecompute) {
       // intervalMs 遵循真 partial 契约：**patch 没带 key 就不动**。
       //
       // 历史上这里曾在「patch 带 cronExpr 但没带 intervalMs」时隐式清空 intervalMs——
@@ -1753,14 +1785,18 @@ export class Scheduler extends EventEmitter {
         patch.timezone !== undefined ||
         patch.manual === false ||
         intervalKeyPresent ||
+        expiryNeedsRecompute ||
         shouldReactivateExpired
       ) {
         // intervalMs 模式：把"修改"视作冷启动，从 now 起新一轮 N 倒计时。
         // cron 模式：照旧从 now 找下一个壁钟槽位。
-        updates.nextFireAt =
+        const next =
           merged.intervalMs !== undefined
             ? now + merged.intervalMs
             : nextCronOrMonthlyFire(merged.cronExpr, now, merged.timezone);
+        updates.nextFireAt = merged.recurring && merged.expireAt !== undefined && next >= merged.expireAt
+          ? undefined
+          : next;
       }
       recomputeFromTo = { from: existing.nextFireAt, to: updates.nextFireAt };
     }
@@ -1817,19 +1853,26 @@ export class Scheduler extends EventEmitter {
   }
 
   private async resumeUnlocked(id: string, expected?: ScheduleMutationGuard): Promise<Schedule> {
-    const existing = await this.get(id);
+    let existing = await this.get(id);
     if (!existing) throw new Error(`Schedule not found: ${id}`);
     assertScheduleMutationGuard(expected, existing);
     const now = this.clock.now();
     if (isRecurringSchedulePastExpiry(existing, now)) {
       const updated = await this.storage.update(id, {
         status: 'expired', nextFireAt: undefined, updatedAt: now,
-      });
-      if (!updated) throw new Error(`Schedule not found: ${id}`);
-      this.invalidScheduleIds.delete(id);
-      this.activeSchedules.delete(id);
-      this.emitEvent({ type: 'changed', scheduleId: id });
-      return updated;
+      }, existing);
+      if (updated) {
+        this.invalidScheduleIds.delete(id);
+        this.activeSchedules.delete(id);
+        this.emitEvent({ type: 'changed', scheduleId: id });
+        return updated;
+      }
+      const fresh = await this.get(id);
+      if (!fresh) throw new Error(`Schedule not found: ${id}`);
+      if (isRecurringSchedulePastExpiry(fresh, now)) {
+        throw new Error('Schedule changed; refresh before resuming');
+      }
+      existing = fresh;
     }
     // 与 create/update 对齐：恢复 interval 任务前也验证它保留的 cron 元数据，不能
     // 重新激活一条未来清 interval 后必坏的记录。
@@ -1837,16 +1880,19 @@ export class Scheduler extends EventEmitter {
     // resume 视作冷启动：interval 模式起新一轮 N 倒计时（从 now 起算，与 update() 一致）；
     // cron 模式找下一个壁钟槽位。不要复用 nextIntervalFire —— 它按 lastFinishedAt+N 尊重原
     // 节奏（restart 语义），会让「上次完成不到一个 N 就 resume」比冷启动更早触发。
-    const next =
+    const rawNext =
       existing.intervalMs !== undefined
         ? now + existing.intervalMs
         : nextCronOrMonthlyFire(existing.cronExpr, now, existing.timezone);
+    const next = existing.recurring && existing.expireAt !== undefined && rawNext >= existing.expireAt
+      ? undefined
+      : rawNext;
     const updated = await this.storage.update(id, {
       status: 'active',
       updatedAt: now,
       nextFireAt: next,
-    });
-    if (!updated) throw new Error(`Schedule not found: ${id}`);
+    }, existing);
+    if (!updated) throw new Error('Schedule changed; refresh before resuming');
     this.invalidScheduleIds.delete(id);
     this.activeSchedules.set(id, updated);
     this.emitEvent({ type: 'changed', scheduleId: id });
@@ -3248,10 +3294,14 @@ function computeNextFireAt(schedule: Schedule, fromMs: number): number | undefin
       schedule.intervalMs,
       fromMs,
     );
-    return schedule.expireAt !== undefined && next >= schedule.expireAt ? undefined : next;
+    return schedule.recurring && schedule.expireAt !== undefined && next >= schedule.expireAt
+      ? undefined
+      : next;
   }
   const next = nextCronOrMonthlyFire(schedule.cronExpr, fromMs, schedule.timezone);
-  return schedule.expireAt !== undefined && next >= schedule.expireAt ? undefined : next;
+  return schedule.recurring && schedule.expireAt !== undefined && next >= schedule.expireAt
+    ? undefined
+    : next;
 }
 
 function isRecurringSchedulePastExpiry(schedule: Schedule, now: number): boolean {

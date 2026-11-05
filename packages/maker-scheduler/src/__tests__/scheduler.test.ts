@@ -1188,6 +1188,36 @@ describe('Scheduler', () => {
     });
   });
 
+  it('restores a filtered next fire when expireAt is extended', async () => {
+    h.clock.setTo(Date.UTC(2026, 0, 1, 0, 10, 0));
+    const sch = await h.scheduler.create({
+      ...baseInput, cronExpr: '0 * * * *', expireAt: Date.UTC(2026, 0, 1, 0, 30, 0),
+    });
+    await h.scheduler.start();
+    expect((await h.storage.get(sch.id))?.nextFireAt).toBeUndefined();
+
+    const extended = await h.scheduler.update(sch.id, { expireAt: Date.UTC(2026, 0, 1, 2, 0, 0) });
+
+    expect(extended.status).toBe('active');
+    expect(extended.nextFireAt).toBe(Date.UTC(2026, 0, 1, 1, 0, 0));
+    await h.scheduler.stop();
+  });
+
+  it('does not strand a one-shot schedule when its next fire is after expireAt', async () => {
+    h.clock.setTo(Date.UTC(2026, 0, 1, 0, 10, 0));
+    const sch = await h.scheduler.create({
+      ...baseInput, recurring: false, cronExpr: '0 * * * *',
+      expireAt: Date.UTC(2026, 0, 1, 0, 30, 0),
+    });
+
+    await h.scheduler.start();
+
+    expect(await h.storage.get(sch.id)).toMatchObject({
+      status: 'active', nextFireAt: Date.UTC(2026, 0, 1, 1, 0, 0),
+    });
+    await h.scheduler.stop();
+  });
+
   it('one-shot schedule moves to expired after fire', async () => {
     const sch = await h.scheduler.create({ ...baseInput, recurring: false });
     h.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 5));
@@ -2464,6 +2494,105 @@ describe('Scheduler', () => {
     // 按新 cron 排到 09:00，而不是旧 */10 的下一个槽位 00:20:00
     expect(after?.nextFireAt).toBe(Date.UTC(2026, 0, 1, 9, 0, 0));
     expect(after?.intervalMs).toBeUndefined();
+  });
+
+  // Review regression (#8897): completion and resume are production entry
+  // points that can race another process after reading a schedule. Previous
+  // expiry tests did not pause between read and CAS. Unit tier, one schedule,
+  // deterministic gates and in-memory storage; no external I/O.
+  it('does not expire a task switched to manual while its automatic run is in flight', async () => {
+    let finishRunner!: () => void;
+    const runnerHeld = new Promise<void>((resolve) => { finishRunner = resolve; });
+    const local = makeHarness({ runnerImpl: async () => {
+      await runnerHeld;
+      return { sessionId: 'sess-manual' };
+    } });
+    const sch = await local.scheduler.create({
+      ...baseInput, expireAt: Date.UTC(2026, 0, 1, 1, 0, 0),
+    });
+    local.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 5));
+    const tick = local.scheduler.tick();
+    await vi.waitFor(() => expect(local.runner.fire).toHaveBeenCalledTimes(1));
+    await local.scheduler.update(sch.id, { manual: true });
+
+    finishRunner();
+    await tick;
+
+    expect(await local.storage.get(sch.id)).toMatchObject({
+      status: 'active', manual: true, nextFireAt: undefined,
+    });
+  });
+
+  it('replans from a concurrent expireAt extension during run finalization', async () => {
+    let finishRunner!: () => void;
+    const runnerHeld = new Promise<void>((resolve) => { finishRunner = resolve; });
+    const local = makeHarness({ runnerImpl: async () => {
+      await runnerHeld;
+      return { sessionId: 'sess-extended' };
+    } });
+    const sch = await local.scheduler.create({
+      ...baseInput, expireAt: Date.UTC(2026, 0, 1, 0, 1, 30),
+    });
+    const originalGet = local.storage.get.bind(local.storage);
+    const originalUpdate = local.storage.update.bind(local.storage);
+    let armFinishRead = false;
+    let releaseRead!: () => void;
+    let finishRead!: () => void;
+    const readHeld = new Promise<void>((resolve) => { releaseRead = resolve; });
+    const readEntered = new Promise<void>((resolve) => { finishRead = resolve; });
+    vi.spyOn(local.storage, 'get').mockImplementation(async (id) => {
+      const snapshot = await originalGet(id);
+      if (armFinishRead) {
+        armFinishRead = false;
+        finishRead();
+        await readHeld;
+      }
+      return snapshot;
+    });
+    local.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 5));
+    const tick = local.scheduler.tick();
+    await vi.waitFor(() => expect(local.runner.fire).toHaveBeenCalledTimes(1));
+    armFinishRead = true;
+    finishRunner();
+    await readEntered;
+    await originalUpdate(sch.id, { expireAt: Date.UTC(2026, 0, 1, 0, 3, 0) });
+    releaseRead();
+    await tick;
+
+    expect(await originalGet(sch.id)).toMatchObject({
+      status: 'active', expireAt: Date.UTC(2026, 0, 1, 0, 3, 0),
+      nextFireAt: Date.UTC(2026, 0, 1, 0, 2, 0),
+    });
+  });
+
+  it('rechecks expireAt after a resume expiry CAS loses to an extension', async () => {
+    const sch = await h.scheduler.create({
+      ...baseInput, expireAt: Date.UTC(2026, 0, 1, 0, 0, 40),
+    });
+    h.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 5));
+    const originalUpdate = h.storage.update.bind(h.storage);
+    let releaseExpiry!: () => void;
+    let expiryEntered!: () => void;
+    const expiryHeld = new Promise<void>((resolve) => { releaseExpiry = resolve; });
+    const expiryReady = new Promise<void>((resolve) => { expiryEntered = resolve; });
+    let blockExpiry = true;
+    vi.spyOn(h.storage, 'update').mockImplementation(async (id, patch, expected) => {
+      if (blockExpiry && patch.status === 'expired' && expected) {
+        blockExpiry = false;
+        expiryEntered();
+        await expiryHeld;
+      }
+      return originalUpdate(id, patch, expected);
+    });
+    const resuming = h.scheduler.resume(sch.id);
+    await expiryReady;
+    await originalUpdate(sch.id, { expireAt: Date.UTC(2026, 0, 1, 0, 3, 0) });
+    releaseExpiry();
+
+    await expect(resuming).resolves.toMatchObject({
+      status: 'active', expireAt: Date.UTC(2026, 0, 1, 0, 3, 0),
+      nextFireAt: Date.UTC(2026, 0, 1, 0, 2, 0),
+    });
   });
 
   // ---------- 静默 run(silenceRun / isRunSilenced)----------
