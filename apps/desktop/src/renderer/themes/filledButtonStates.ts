@@ -1,0 +1,21 @@
+/**
+ * 填充按钮的悬停 / 按下由基础色算出，主题不用写状态色（DESIGN.md §4 Filled button states）。
+ *
+ * 亮度在 OKLCH 里减固定步长，不同色相看起来变化接近。步长取自 Cindy 反相中性按钮的定稿色：
+ * 浅色悬停 -0.051 / 按下 -0.091，深色 -0.036 / -0.079。
+ * 底色亮度低于 0.25 时已压不出可见差异，改抬到固定灰阶。
+ *
+ * CSS 没有条件表达式，用 clamp 把 `l > 0.25` 变成 0 / 1 的开关。
+ */
+function filledButtonState(base: string, step: number, liftTo: number): string {
+  const isLight = 'clamp(0, (l - 0.25) * 1000, 1)';
+  return `oklch(from ${base} calc(${isLight} * (l - ${step}) + (1 - ${isLight}) * ${liftTo}) c h)`;
+}
+
+export function filledButtonHover(base: string): string {
+  return filledButtonState(base, 0.045, 0.27);
+}
+
+export function filledButtonPressed(base: string): string {
+  return filledButtonState(base, 0.085, 0.355);
+}

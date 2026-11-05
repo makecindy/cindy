@@ -193,7 +193,6 @@ const PREEXISTING_UNFROZEN_LITERAL_IDS: Record<string, ReadonlySet<string>> = {
     'ask-option-list-bg',
     'model-item-hover',
     'update-btn-bg',
-    'update-btn-hover',
   ]),
   'cindy-dark': new Set([
     'ask-header-chip-bg',
@@ -202,7 +201,6 @@ const PREEXISTING_UNFROZEN_LITERAL_IDS: Record<string, ReadonlySet<string>> = {
     'ask-send-disabled-bg',
     'model-item-hover',
     'update-btn-bg',
-    'update-btn-hover',
   ]),
 };
 
@@ -248,7 +246,8 @@ describe('CINDY · ③ 值格式按消费契约', () => {
   it('baseline 外未列入决策表的新增 override 只能引用已治理 token', () => {
     const frozenIds = new Set(Object.keys(CINDY_EXPECTED_VALUES));
     const registeredIds = new Set(colorRegistry.getColors().map((color) => color.id));
-    const tokenReference = /^var\(--([a-z0-9-]+)\)$/;
+    // 引用已治理 token，或用填充按钮状态规则从已治理 token 算出（DESIGN.md §4）。
+    const tokenReference = /^(?:var|oklch\(from var)\(--([a-z0-9-]+)\)/;
     for (const [name, theme] of THEMES) {
       const preexistingLiteralIds = PREEXISTING_UNFROZEN_LITERAL_IDS[name] ?? new Set();
       for (const [id, value] of Object.entries(theme.colors)) {
