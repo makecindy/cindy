@@ -6,17 +6,21 @@ import { MAX_RECORDING_MS, recordingControlsBounds, type RegionCaptureBegin } fr
 import type { RegionScreenshotBitmap } from '../../../shared/regionScreenshot';
 import { bitmapToImageData, type RegionScreenshotOverlayBridge } from './bridge';
 import { CaptureRecorder } from './captureRecorder';
+import { RecordingAudioToggle } from './RecordingAudioToggle';
 import { SCREENSHOT_INK } from './screenshotColors';
+import { nativeAudioStream } from '../remote-desktop/nativeAudioStream';
+import type { RecordingAudioOptions } from '../../../shared/recordingAudio';
 
-type Phase = 'countdown' | 'capturing' | 'paused' | 'finishing' | 'done';
+type Phase = 'ready' | 'preparing' | 'countdown' | 'capturing' | 'paused' | 'finishing' | 'done';
 type Point = { x: number; y: number };
 type Mark = { kind: 'pen' | 'arrow' | 'rect'; points: Point[] };
 
-export function LiveCapturePanel({ begin, token, bridge }: { begin: RegionCaptureBegin; token: string; bridge: RegionScreenshotOverlayBridge }) {
+export function LiveCapturePanel({ begin, token, bridge, audioOptions }: { begin: RegionCaptureBegin; token: string; bridge: RegionScreenshotOverlayBridge; audioOptions: RecordingAudioOptions }) {
   const { t } = useTranslation();
   const preview = useRef<HTMLCanvasElement>(null);
   const runtime = useRef({
-    phase: 'countdown' as Phase, countdownUntil: 0,
+    phase: (begin.mode === 'video' ? 'ready' : 'countdown') as Phase, countdownUntil: 0,
+    audio: null as Awaited<ReturnType<typeof nativeAudioStream>> | null, audioFailed: false, audioChanging: false,
     active: true, inFlight: null as Promise<void> | null, recorder: null as CaptureRecorder | null,
     canvas: null as HTMLCanvasElement | null,
     imageData: undefined as ImageData | undefined,
@@ -36,8 +40,58 @@ export function LiveCapturePanel({ begin, token, bridge }: { begin: RegionCaptur
   const [tool, setTool] = useState<Mark['kind'] | null>(null);
   const [result, setResult] = useState<Uint8Array<ArrayBuffer> | null>(null);
   const [saving, setSaving] = useState(false);
+  const [audioChanging, setAudioChanging] = useState(false);
+  const [systemAudio, setSystemAudio] = useState(audioOptions.system);
+  const [microphone, setMicrophone] = useState(audioOptions.microphone);
   const currentTime = () => runtime.current.elapsed + (runtime.current.phase === 'capturing' ? performance.now() - runtime.current.startedAt : 0);
   const changePhase = (next: Phase) => { runtime.current.phase = next; setPhase(next); };
+
+  function stopAudio() {
+    runtime.current.audio?.stop(); runtime.current.audio = null;
+    if (begin.mode === 'video') void bridge.stopAudio(token).catch(() => {});
+  }
+
+  async function suspendAudio() {
+    const audio = runtime.current.audio;
+    // pause() invalidates in-flight reads synchronously before the host closes.
+    // Keep the destination track live for the paused MediaRecorder.
+    if (audio) await Promise.all([audio.pause(), bridge.stopAudio(token)]);
+  }
+
+  async function start() {
+    const state = runtime.current;
+    if (state.phase !== 'ready') return;
+    changePhase('preparing'); setError('');
+    try {
+      const error = await bridge.startAudio(token, { system: systemAudio, microphone });
+      if (!state.active) return;
+      if (error) { setError(error); changePhase('ready'); return; }
+      if (systemAudio || microphone) {
+        const audio = await nativeAudioStream(
+          () => bridge.readAudio(token),
+          () => state.active && !['ready', 'done', 'finishing'].includes(state.phase),
+          () => {
+            if (state.active && (state.phase === 'capturing' || state.phase === 'paused')) {
+              state.audioFailed = true;
+              state.elapsed = currentTime(); state.recorder?.pause(state.elapsed);
+              changePhase('paused'); setError('audioInterrupted');
+              void bridge.holdCapture(token).catch(() => {});
+              stopAudio();
+            } else if (state.active && state.phase === 'countdown') {
+              setError('audioFailed'); changePhase('ready'); stopAudio();
+            }
+          },
+        );
+        if (!state.active) { audio.stop(); return; }
+        state.audio = audio;
+      }
+      state.countdownUntil = performance.now() + 3000;
+      setCountdown(3); changePhase('countdown');
+    } catch {
+      stopAudio();
+      if (state.active) { setError('audioFailed'); changePhase('ready'); }
+    }
+  }
 
   function paint(bitmap: RegionScreenshotBitmap, pointer: Point | null = null) {
     const state = runtime.current;
@@ -90,7 +144,7 @@ export function LiveCapturePanel({ begin, token, bridge }: { begin: RegionCaptur
       paint(frame.image, frame.cursor);
       if (!state.recorder) {
         state.startedAt = performance.now(); state.elapsed = 0;
-        state.recorder = new CaptureRecorder(state.canvas!, begin.mode === 'gif' ? 'gif' : 'webm', () => { setStatus('limit'); void finish(); });
+        state.recorder = new CaptureRecorder(state.canvas!, begin.mode === 'gif' ? 'gif' : 'webm', () => { setStatus('limit'); void finish(); }, undefined, state.audio?.track);
       }
       await state.recorder.add(currentTime());
       if (!state.active || state.phase !== 'capturing') return;
@@ -103,6 +157,7 @@ export function LiveCapturePanel({ begin, token, bridge }: { begin: RegionCaptur
     const state = runtime.current;
     state.active = true; state.countdownUntil = performance.now() + 3000;
     paint(begin.first);
+    if (begin.mode === 'video') void start();
     let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
       if (!state.active) return;
@@ -118,11 +173,9 @@ export function LiveCapturePanel({ begin, token, bridge }: { begin: RegionCaptur
         }
       }
       if (state.phase === 'capturing') {
-        state.inFlight = sample().catch(() => {
+        state.inFlight = sample().catch(async () => {
           if (!state.active || state.phase !== 'capturing') return;
-          state.elapsed = currentTime();
-          state.recorder?.pause(state.elapsed);
-          changePhase('paused'); setError('captureFailed');
+          await pause('captureFailed');
         });
         await state.inFlight;
         state.inFlight = null;
@@ -130,36 +183,61 @@ export function LiveCapturePanel({ begin, token, bridge }: { begin: RegionCaptur
       if (state.active) timer = setTimeout(tick, Math.max(0, 100 - (performance.now() - tickStarted)));
     };
     timer = setTimeout(tick, 250);
-    return () => { state.active = false; clearTimeout(timer); state.recorder?.dispose(); };
+    return () => { state.active = false; clearTimeout(timer); state.recorder?.dispose(); stopAudio(); };
     // A capture's lifetime is the component's lifetime; all changing options live in runtime.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => { if (expanded) paint(runtime.current.bitmap); }, [expanded]);
 
-  function pause() {
+  async function pause(reason = '') {
     const state = runtime.current;
-    if (state.phase === 'capturing') {
-      state.elapsed = currentTime(); state.recorder?.pause(state.elapsed); changePhase('paused'); setStatus('paused');
-      void bridge.holdCapture(token).catch(() => {});
-    } else if (state.phase === 'paused') {
-      state.startedAt = performance.now(); state.recorder?.resume(); changePhase('capturing'); setError(''); setStatus('recording');
+    if (state.audioChanging || state.audioFailed || !['capturing', 'paused'].includes(state.phase)) return;
+    state.audioChanging = true; setAudioChanging(true);
+    try {
+      if (state.phase === 'capturing') {
+        state.elapsed = currentTime(); state.recorder?.pause(state.elapsed); changePhase('paused'); setStatus('paused'); setError(reason);
+        await Promise.all([suspendAudio(), bridge.holdCapture(token).catch(() => {})]);
+      } else {
+        const audio = state.audio;
+        if (audio) {
+          const error = await bridge.startAudio(token, { system: systemAudio, microphone });
+          if (!state.active || state.phase !== 'paused' || state.audio !== audio) {
+            await bridge.stopAudio(token); return;
+          }
+          // A device may be temporarily unavailable. Retain the paused track and
+          // recording so the user can retry or finish what was already captured.
+          if (error) { setError(error); return; }
+          await audio.resume();
+          if (!state.active || state.phase !== 'paused' || state.audio !== audio) { stopAudio(); return; }
+        }
+        state.startedAt = performance.now(); state.recorder?.resume(); changePhase('capturing'); setError(''); setStatus('recording');
+      }
+    } catch {
+      if (state.active && state.phase === 'paused') { state.audioFailed = true; setError('audioInterrupted'); }
+      stopAudio();
+    } finally {
+      state.audioChanging = false;
+      if (state.active) setAudioChanging(false);
     }
   }
 
   async function finish() {
     const state = runtime.current;
-    if (state.phase === 'done' || state.phase === 'finishing' || state.phase === 'countdown') return;
+    if (state.phase !== 'capturing' && state.phase !== 'paused') return;
     const at = currentTime();
     state.elapsed = at; setElapsed(at);
+    state.recorder?.pause(at);
     changePhase('finishing');
+    const audioPaused = suspendAudio().catch(() => {});
     // Finish after any in-flight sample; it will see the changed phase and discard its frame.
     await state.inFlight;
+    await audioPaused;
     if (!state.active) return;
     try {
       await bridge.holdCapture(token);
       {
-        if (!state.recorder) { setError('captureFailed'); changePhase('paused'); return; }
+        if (!state.recorder) { setError('captureFailed'); changePhase('done'); return; }
         const bytes = await state.recorder.finish(at);
         if (!state.active) return;
         setResult(bytes);
@@ -167,6 +245,7 @@ export function LiveCapturePanel({ begin, token, bridge }: { begin: RegionCaptur
         await previewRecording(bytes);
       }
     } catch { if (state.active) { setError('encodeFailed'); changePhase('done'); } }
+    finally { state.recorder?.dispose(); stopAudio(); }
   }
 
   async function previewRecording(bytes: Uint8Array<ArrayBuffer>) {
@@ -237,21 +316,26 @@ export function LiveCapturePanel({ begin, token, bridge }: { begin: RegionCaptur
         onLostPointerCapture={(event) => endDrag(event)}
         onKeyDown={(event) => { const delta = { ArrowLeft: [-10, 0], ArrowRight: [10, 0], ArrowUp: [0, -10], ArrowDown: [0, 10] }[event.key]; if (delta) { event.preventDefault(); void moveControls(expanded, { x: controls.x + delta[0], y: controls.y + delta[1] }); } }}>
         <span className="flex w-7 shrink-0 justify-center"><GripVertical size={14} /></span>
-        <span className="text-[var(--text-secondary)]">{begin.mode === 'gif' ? 'GIF' : 'WebM'}</span>
-        <span className="whitespace-nowrap font-medium tabular-nums">{`${Math.floor(elapsed / 60_000)}:${String(Math.floor(elapsed / 1000) % 60).padStart(2, '0')}`} / 5:00</span>
+        {phase !== 'ready' && phase !== 'preparing' && <><span className="text-[var(--text-secondary)]">{begin.mode === 'gif' ? 'GIF' : 'WebM'}</span>
+        <span className="whitespace-nowrap font-medium tabular-nums">{`${Math.floor(elapsed / 60_000)}:${String(Math.floor(elapsed / 1000) % 60).padStart(2, '0')}`} / 5:00</span></>}
       </button>
+      {(phase === 'ready' || phase === 'preparing') && <>
+        <RecordingAudioToggle compact source="system" enabled={systemAudio} onChange={setSystemAudio} disabled={phase === 'preparing'} error={error === 'systemAudioFailed' ? error : undefined} />
+        <RecordingAudioToggle compact source="microphone" enabled={microphone} onChange={setMicrophone} disabled={phase === 'preparing'} error={error === 'microphoneFailed' ? error : undefined} />
+        <Button size="xs" variant="cta" disabled={phase === 'preparing'} onClick={() => void start()}><Play size={14} />{t('regionScreenshot.live.start')}</Button>
+      </>}
       {(phase === 'capturing' || phase === 'paused') && <>
         <Button size="xs" variant="secondary" tone={expanded ? 'default' : 'quiet'} className="w-7 px-0" aria-label={t('regionScreenshot.live.annotate')} aria-pressed={expanded} onClick={() => void moveControls(!expanded)}><Pencil size={14} /></Button>
-        <Button size="xs" variant="secondary" tone="quiet" className="w-7 px-0" aria-label={t(`regionScreenshot.live.${phase === 'capturing' ? 'pause' : 'resume'}`)} onClick={pause}>{phase === 'capturing' ? <Pause size={14} /> : <Play size={14} />}</Button>
+        <Button size="xs" variant="secondary" tone="quiet" className="w-7 px-0" disabled={audioChanging || runtime.current.audioFailed} aria-label={t(`regionScreenshot.live.${phase === 'capturing' ? 'pause' : 'resume'}`)} onClick={() => void pause()}>{phase === 'capturing' ? <Pause size={14} /> : <Play size={14} />}</Button>
       </>}
-      {phase !== 'countdown' && phase !== 'done' && <Button size="xs" variant="cta" disabled={phase === 'finishing'} onClick={() => void finish()}><Square size={12} />{t(`regionScreenshot.live.${phase === 'finishing' ? 'finishing' : 'finish'}`)}</Button>}
+      {(phase === 'capturing' || phase === 'paused' || phase === 'finishing') && <Button size="xs" variant="cta" disabled={phase === 'finishing'} onClick={() => void finish()}><Square size={12} />{t(`regionScreenshot.live.${phase === 'finishing' ? 'finishing' : 'finish'}`)}</Button>}
       {phase === 'done' && result && <>
         <Button size="xs" variant="secondary" onClick={() => void previewRecording(result)}>{t('regionScreenshot.live.preview')}</Button>
         <Button size="xs" variant="cta" disabled={saving} onClick={() => void saveRecording()}>{t('regionScreenshot.save')}</Button>
       </>}
       <Button size="xs" variant="secondary" tone="quiet" className="w-7 px-0" disabled={saving || phase === 'finishing'} aria-label={t('regionScreenshot.cancel')} onClick={() => bridge.cancel(token)}><X size={14} /></Button>
     </div>
-    <p role={error ? 'alert' : 'status'} className={`truncate ${error ? 'text-[var(--text-danger)]' : 'text-[var(--text-secondary)]'}`} title={error ? t(`regionScreenshot.live.${error}`) : undefined}>{t(`regionScreenshot.live.${error || (phase === 'countdown' ? 'countdownHint' : phase === 'finishing' ? 'finishing' : status || (phase === 'paused' ? 'paused' : phase === 'done' ? 'done' : 'recording'))}`)}</p>
+    <p role={error ? 'alert' : 'status'} className={`truncate ${error ? 'text-[var(--text-danger)]' : 'text-[var(--text-secondary)]'}`} title={error ? t(`regionScreenshot.live.${error}`) : undefined}>{t(`regionScreenshot.live.${error || (phase === 'ready' ? 'audioHint' : phase === 'preparing' ? 'preparingAudio' : phase === 'countdown' ? 'countdownHint' : phase === 'finishing' ? 'finishing' : status || (phase === 'paused' ? 'paused' : phase === 'done' ? 'done' : 'recording'))}`)}</p>
     {expanded && <><div className="flex min-h-12 flex-1 items-center justify-center overflow-hidden">
       <canvas ref={preview} aria-label={t('regionScreenshot.live.preview')} className="block max-h-full max-w-full" style={{ objectFit: 'contain', cursor: tool ? 'crosshair' : 'default' }}
         onPointerDown={(event) => {

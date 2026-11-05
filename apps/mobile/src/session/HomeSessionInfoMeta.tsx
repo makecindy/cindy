@@ -1,4 +1,12 @@
-import { createContext, Fragment, useCallback, useContext, useEffect, useSyncExternalStore } from 'react';
+import { prNumberLabel } from '@cindy/maker-shared';
+import {
+  createContext,
+  Fragment,
+  useCallback,
+  useContext,
+  useEffect,
+  useSyncExternalStore,
+} from 'react';
 import { AppState, StyleSheet, View, type StyleProp, type TextStyle } from 'react-native';
 import { PR_STATUS_REFRESH_INTERVAL_MS } from '@cindy/maker-shared';
 import { useAuth } from '@/auth/AuthContext';
@@ -130,7 +138,7 @@ function InfoMetaContent({
           ) : piece.key === 'pr' && pr ? (
             <PrPiece
               color={prStatusVisual(pr.status?.ok ? pr.status.status : null, colors)}
-              label={`#${pr.ref.prNumber}`}
+              label={`${prNumberLabel(pr.ref)}`}
               testID={`home.sessionInfo.pr.${session.id}`}
               textStyle={textStyle}
             />

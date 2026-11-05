@@ -2060,6 +2060,11 @@ export function ChatInput({
   const remoteAtomicModelSelectionSupported =
     hostCcCaps.capabilities?.supportsSessionAgentSwitchCas === true ||
     hostCodexCaps.capabilities?.supportsSessionAgentSwitchCas === true;
+  // 被控电脑上的协同 Lead / 本机 Worker 能不能换 Agent 所在电脑，由被控端声明(host 级能力，两个
+  // 引擎的快照都带)。v0.1.104–v0.1.110 的被控端会拒绝，缺这一位时不列其他电脑与分享。
+  const hostSupportsOrcaAgentRelocation =
+    hostCcCaps.capabilities?.supportsOrcaAgentRelocation === true ||
+    hostCodexCaps.capabilities?.supportsOrcaAgentRelocation === true;
   // Orca Lead/Worker keeps its workflow identity in the session row and vendor
   // options; it can therefore use the same deferred handoff transaction as a
   // normal session. Remote sessions remain gated by their host capabilities.
@@ -7932,9 +7937,11 @@ export function ChatInput({
   );
   const sessionRemoteAgentOptions = useMemo<RemoteAgentSelectorOptions | undefined>(() => {
     // 本机或能力已确认的被控端任务可换电脑；SSH 与运行设备 Worker 不开放位置选择。协同的 Lead / Worker
-    // 任务在本机，换 Agent 位置与普通任务同一套(2026-10-16)；被控电脑上的协同任务旧版会拒绝，先不开放。
+    // 任务在本机，换 Agent 位置与普通任务同一套(2026-10-16)；被控电脑上的协同任务要被控端声明
+    // supportsOrcaAgentRelocation 才开放(旧版被控端会拒绝)。
     if (!sessionId || !agentLocationAware || remoteHostId || !sessionEngineFilter ||
-        sessionOrcaRole === undefined || (sessionOrcaRole !== null && deviceLinkDeviceId) ||
+        sessionOrcaRole === undefined ||
+        (sessionOrcaRole !== null && deviceLinkDeviceId && !hostSupportsOrcaAgentRelocation) ||
         sessionOrcaRemoteWorker) return undefined;
     if (!remoteAgentDevices || (remoteAgentDevices.length === 0 && !effectiveAgentDeviceId)) {
       return undefined;
@@ -7974,6 +7981,7 @@ export function ChatInput({
     sessionEngineFilter,
     sessionOrcaRole,
     sessionOrcaRemoteWorker,
+    hostSupportsOrcaAgentRelocation,
     remoteAgentDevices,
     catalogHostDeviceId,
     effectiveAgentDeviceId,
