@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   requestedSessionId: undefined as string | undefined,
   online: true,
   listed: true,
+  omissions: new Set<string>(),
   cached: false,
   lastReplyAt: 0,
   devices: null as Array<{ deviceId: string; online: boolean; remoteControlEnabled: boolean }> | null,
@@ -32,6 +33,7 @@ vi.mock('react-router-dom', () => ({
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('../useRemoteBots', () => ({
+  useRemoteBotOmissions: () => h.omissions,
   markRemoteBotRead: h.markRead,
   useRemoteBots: () => !h.listed ? [] : [
     {
@@ -69,6 +71,7 @@ beforeEach(() => {
   h.requestedSessionId = undefined;
   h.online = true;
   h.listed = true;
+  h.omissions = new Set();
   h.cached = false;
   h.lastReplyAt = 0;
   h.cloud = { enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: [] };
@@ -93,6 +96,23 @@ beforeEach(() => {
   window.electronAPI = { deviceLink: { invoke: h.invoke } } as unknown as Window['electronAPI'];
 });
 afterEach(cleanup);
+// Unit regression: the old cloud fallback called a deliberately hidden entry
+// "offline". A stale companion URL must leave it, while exact history links survive.
+it('leaves a home-omitted companion without an offline takeover banner and preserves exact task links', async () => {
+  h.listed = false;
+  h.omissions = new Set(['home:writer']);
+  h.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: [], actors: [
+    { id: 'actor', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'home' }] };
+  const { rerender } = render(<RemoteBotSessionView />);
+  expect(h.navigate).toHaveBeenLastCalledWith({ to: '/bots', replace: true });
+  expect(h.cloudView).not.toHaveBeenCalled();
+  expect(h.invoke).not.toHaveBeenCalled();
+  h.requestedSessionId = 'old-canonical';
+  rerender(<RemoteBotSessionView />);
+  expect(h.navigate).toHaveBeenLastCalledWith({
+    to: '/cc-agent/old-canonical?keep=1&device=home', state: { searchJump: { messageClientId: 'reply' } }, replace: true,
+  });
+});
 // Unit regression: an exact notification link must retain its task, host and anchor
 // when the canonical link changed, its host is offline, or the companion lookup fails.
 it.each(['changed', 'offline', 'failed'] as const)('preserves the original task when the companion is %s', async (reason) => {

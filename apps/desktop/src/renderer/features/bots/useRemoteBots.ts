@@ -9,12 +9,17 @@ import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { revokedDevicesStore } from '@/features/device-link/revokedDevicesStore';
 import { useCompanionCloud, companionCloudApi } from './companionCloudStore';
-import { parseRemoteBots, remoteBotCreatedTaskIds, type RemoteBot } from './remoteBotRoster';
+import { parseRemoteBots, remoteBotCreatedTaskIds, remoteBotKey, type RemoteBot } from './remoteBotRoster';
 
 const CACHE_PREFIX = 'cindy.remoteBots.v1.';
+// Display evidence, not profile state: only a complete successful home roster can
+// establish an omission. Keep it separate so released clients still read v1 rows.
+const OMISSIONS_CACHE_PREFIX = 'cindy.remoteBotOmissions.v1.';
+const ROSTER_LIMIT = 200;
 let owner: string | null = null;
 let snapshot: RemoteBot[] = [];
 let cindyIds = new Set<string>();
+let omissions: ReadonlySet<string> = new Set();
 const listeners = new Set<() => void>();
 const publish = (next: RemoteBot[]) => {
   next = next.map(bot => cindyIds.has(bot.id) ? { ...bot, templateId: 'cindy' } : bot);
@@ -22,6 +27,8 @@ const publish = (next: RemoteBot[]) => {
   if (owner) {
     try { const value = JSON.stringify(next.map((bot) => ({ ...bot, online: false })));
       if (value.length <= 256 * 1024) window.localStorage.setItem(CACHE_PREFIX + owner, value);
+      const missing = JSON.stringify([...omissions]);
+      if (missing.length <= 256 * 1024) window.localStorage.setItem(OMISSIONS_CACHE_PREFIX + owner, missing);
     } catch { /* display cache may be unavailable */ }
   }
   listeners.forEach((fn) => fn());
@@ -53,6 +60,13 @@ export function useRemoteCindyIds(): ReadonlySet<string> {
 }
 const EMPTY_CINDY_IDS: ReadonlySet<string> = new Set();
 
+/** Device-qualified cloud entries omitted by a successful complete home roster. */
+export function useRemoteBotOmissions(): ReadonlySet<string> {
+  const { dataOwnerId, isAuthenticated } = useAuth();
+  const missing = useSyncExternalStore(subscribe, () => omissions);
+  return isAuthenticated && owner === dataOwnerId ? missing : EMPTY_CINDY_IDS;
+}
+
 /** One subscription owner in the main window; a failed host cannot erase another host. */
 export function useRemoteBotSync(): void {
   const { dataOwnerId, isAuthenticated } = useAuth();
@@ -68,11 +82,19 @@ export function useRemoteBotSync(): void {
     if (owner !== nextOwner) {
       owner = nextOwner;
       cindyIds = new Set();
+      omissions = new Set();
       let cached: RemoteBot[] = [];
       try {
         if (!nextOwner) {
-          for (const key of Object.keys(window.localStorage)) if (key.startsWith(CACHE_PREFIX)) window.localStorage.removeItem(key);
+          for (const key of Object.keys(window.localStorage)) if (key.startsWith(CACHE_PREFIX) || key.startsWith(OMISSIONS_CACHE_PREFIX)) window.localStorage.removeItem(key);
         } else {
+          const missing = window.localStorage.getItem(OMISSIONS_CACHE_PREFIX + nextOwner);
+          if (missing && missing.length <= 256 * 1024) {
+            try {
+              const ids: unknown = JSON.parse(missing);
+              if (Array.isArray(ids)) omissions = new Set(ids.filter((id): id is string => typeof id === 'string' && id.length > 0));
+            } catch { /* Missing evidence must not discard usable cached rows. */ }
+          }
           const raw = window.localStorage.getItem(CACHE_PREFIX + nextOwner);
           if (raw && raw.length <= 256 * 1024) {
             const rows = JSON.parse(raw);
@@ -122,7 +144,7 @@ export function useRemoteBotSync(): void {
         const request: RemoteCollectionListRequest = {
           client: { protocolVersion: 1, primitives: ['status', 'session-link'] },
           collectionId: 'teammates',
-          limit: 200,
+          limit: ROSTER_LIMIT,
         };
         const result = await window.electronAPI.deviceLink.invoke(
           deviceId,
@@ -137,6 +159,20 @@ export function useRemoteBotSync(): void {
           templateId: previous.get(bot.id)?.templateId,
           readAt: snapshot.find((old) => old.deviceId === deviceId && old.id === bot.id)?.readAt ?? bot.lastReplyAt ?? 0,
         }));
+        const missing = new Set(omissions);
+        for (const bot of bots) missing.delete(remoteBotKey(bot));
+        // A full first page from old hosts has no nextCursor even when truncated.
+        // Neither it, a paged response, nor a failed/malformed read proves absence.
+        const response = result as { items: unknown[]; nextCursor?: unknown };
+        if (response.items.length < ROSTER_LIMIT && response.nextCursor === undefined && cloud.enabled) {
+          const listed = new Set(bots.map(bot => bot.id));
+          for (const actor of cloud.actors) {
+            if (actor.homeDeviceId === deviceId && !listed.has(actor.externalId)) {
+              missing.add(remoteBotKey({ deviceId, id: actor.externalId }));
+            }
+          }
+        }
+        omissions = missing;
         publish([...snapshot.filter((bot) => bot.deviceId !== deviceId), ...bots]);
         // Older released hosts already expose the task-card list, even when their
         // directory has no task links. Read serially per host; never per task row.
@@ -216,7 +252,7 @@ export function useRemoteBotSync(): void {
       offStatus();
       timers.forEach(clearTimeout);
     };
-  }, [dataOwnerId, isAuthenticated, devices, revoked]);
+  }, [dataOwnerId, isAuthenticated, devices, revoked, cloud.enabled, actorsKey]);
   useEffect(() => {
     const api = companionCloudApi();
     const requestOwner = isAuthenticated ? dataOwnerId : null;

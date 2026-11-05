@@ -10,8 +10,8 @@ import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore'
 import type { Session } from '@/lib/ccAgent.types';
 import { Spinner } from '@/components/ui/spinner';
 import { BotAvatar } from './BotAvatar';
-import { parseRemoteBots, type RemoteBot } from './remoteBotRoster';
-import { markRemoteBotRead, useRemoteBots } from './useRemoteBots';
+import { parseRemoteBots, remoteBotKey, type RemoteBot } from './remoteBotRoster';
+import { markRemoteBotRead, useRemoteBotOmissions, useRemoteBots } from './useRemoteBots';
 import { useCompanionCloud } from './companionCloudStore';
 import { cloudCompanionAt, homeControlOff } from './companionCloudPresentation';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
@@ -36,6 +36,7 @@ function RemoteBotSessionGate() {
   const [originalTask, setOriginalTask] = useState(false);
   const { t } = useTranslation();
   const bots = useRemoteBots();
+  const omissions = useRemoteBotOmissions();
   const bot = bots.find((row) => row.id === botId && row.deviceId === deviceId);
   const cloud = useCompanionCloud();
   const deviceList = useDeviceLinkDeviceList();
@@ -144,6 +145,11 @@ function RemoteBotSessionGate() {
     const query = new URLSearchParams(location.search);
     query.set('device', deviceId);
     return <Navigate to={`${standardSessionRoute(requestedSessionId)}?${query}`} state={location.state} replace />;
+  }
+  // Hiding is not disconnection. A stale companion URL leaves the hidden entry;
+  // exact task/history links above retain their original destination and anchor.
+  if (!bot && deviceId && botId && omissions.has(remoteBotKey({ deviceId, id: botId }))) {
+    return <Navigate to="/bots" replace />;
   }
   // Its main computer is offline (or never reachable here): read the cloud conversation
   // and offer to continue on this computer instead of a stale read-only mirror.

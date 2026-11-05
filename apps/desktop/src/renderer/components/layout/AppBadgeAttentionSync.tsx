@@ -19,7 +19,7 @@ import { useBotGroupList } from '@/features/bots/botGroupStore';
 import { isBotGroupUnread, subscribeBotReadState, getBotLastReadAtMap } from '@/features/bots/botReadState';
 import { useBotUnreadSync } from '@/features/bots/useBotUnreadSync';
 import { useCompanionIslandChats } from '@/features/bots/useCompanionIslandChats';
-import { useRemoteBotSync, useRemoteBots } from '@/features/bots/useRemoteBots';
+import { useRemoteBotSync, useRemoteBotOmissions, useRemoteBots } from '@/features/bots/useRemoteBots';
 import { isRemoteBotUnread } from '@/features/bots/remoteBotRoster';
 import { useCompanionCloud } from '@/features/bots/companionCloudStore';
 import { cloudRemoteBots, withoutShadowedBots } from '@/features/bots/companionCloudPresentation';
@@ -39,7 +39,8 @@ export function AppBadgeAttentionSync() {
   const unread = useBotUnreadCounts();
   const { groups } = useBotGroupList();
   const rosterRemoteBots = useRemoteBots();
-  const remoteBots = useMemo(() => cloudRemoteBots(cloud, rosterRemoteBots), [cloud, rosterRemoteBots]);
+  const omissions = useRemoteBotOmissions();
+  const remoteBots = useMemo(() => cloudRemoteBots(cloud, rosterRemoteBots, omissions), [cloud, rosterRemoteBots, omissions]);
   useCompanionIslandChats(allBots, bots, unread, remoteBots);
   useSyncExternalStore(subscribeBotReadState, readRevision, readRevision);
   const localTeammates = bots.filter(bot => bot.status !== 'archived' && bot.status !== 'deleting' && !bot.hiddenAt && (unread[bot.id] ?? 0) > 0).length

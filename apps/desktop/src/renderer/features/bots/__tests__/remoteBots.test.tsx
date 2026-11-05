@@ -6,12 +6,13 @@ const h = vi.hoisted(() => ({
   devices: [] as any[],
   invoke: vi.fn(),
   cloudEnabled: false,
+  actors: [] as any[],
   copies: vi.fn(),
   status: null as any,
   push: null as any,
 }));
 vi.mock('../companionCloudStore', () => ({
-  useCompanionCloud: () => ({ enabled: h.cloudEnabled, actors: [] }),
+  useCompanionCloud: () => ({ enabled: h.cloudEnabled, actors: h.actors }),
   companionCloudApi: () => ({ listCindyCopies: h.copies }),
 }));
 vi.mock('@/contexts/AuthContext', () => ({
@@ -21,7 +22,9 @@ vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
   useDeviceLinkDeviceList: () => h.devices,
 }));
 vi.mock('@/lib/remoteDataOwnerPushFence', () => ({ isDeviceLinkRemotePushCurrent: () => true }));
-import { useRemoteBotSync, useRemoteBots, useRemoteCindyIds, markRemoteBotRead } from '../useRemoteBots';
+import { useRemoteBotSync, useRemoteBots, useRemoteBotOmissions, useRemoteCindyIds, markRemoteBotRead } from '../useRemoteBots';
+import { cloudRemoteBots } from '../companionCloudPresentation';
+import type { CompanionCloudSnapshot } from '../../../../shared/companionCloud';
 import { parseRemoteCollectionListRequest, REMOTE_RESOURCE_LIST_CHANNEL, REMOTE_RESOURCE_CHANGED_CHANNEL } from '@cindy/device-link';
 import { parseRemoteBots, remoteBotKey, isRemoteBotUnread } from '../remoteBotRoster';
 const host = (deviceId: string, online = true) => ({
@@ -48,7 +51,8 @@ function useRoster() {
 }
 beforeEach(() => {
   h.cloudEnabled = false;
-  h.copies.mockReset();
+  h.actors = [];
+  h.copies.mockReset().mockResolvedValue([]);
   h.owner = `owner-${Math.random()}`;
   h.devices = [host('a'), host('b')];
   h.invoke.mockReset().mockResolvedValue(collection());
@@ -71,6 +75,109 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+});
+
+// Unit integration: a successful empty home roster used to be resurrected by the
+// cloud fallback. Exercise the sync + presentation together, including persistence
+// and failed/partial reads; existing tests only covered positive roster rows.
+function useCloudRoster() {
+  useRemoteBotSync();
+  const rows = useRemoteBots();
+  const omissions = useRemoteBotOmissions();
+  const cloud: CompanionCloudSnapshot = { enabled: h.cloudEnabled, actors: h.actors,
+    selfDeviceId: 'controller', humanActorId: 'human', demotedBotIds: [] };
+  return cloudRemoteBots(cloud, rows, omissions);
+}
+function cloudHome(deviceId = 'a') {
+  h.cloudEnabled = true;
+  h.actors = [{ id: 'actor', externalId: 'same-bot', name: 'Writer', avatar: null,
+    homeDeviceId: deviceId, homeDevice: { deviceId, name: deviceId, online: true, isSelf: false } }];
+}
+it('keeps a home-hidden companion hidden across reconnect, cache reload and failed reads, then restores it when listed', async () => {
+  cloudHome();
+  h.devices = [host('a')];
+  h.invoke.mockResolvedValue({ collectionId: 'teammates', items: [] });
+  const savedOwner = h.owner;
+  const { result, rerender } = renderHook(useCloudRoster);
+  await act(async () => {});
+  expect(result.current).toEqual([]);
+  h.invoke.mockRejectedValue(new Error('temporary resource failure'));
+  act(() => h.status({ status: 'stopped' }));
+  act(() => h.status({ status: 'online' }));
+  await act(async () => {});
+  expect(result.current).toEqual([]);
+  // Switching away/back forces the same cache load used by a renderer restart.
+  h.owner = 'other-account';
+  h.devices = [];
+  rerender();
+  expect(result.current).toHaveLength(1);
+  h.owner = savedOwner;
+  h.devices = [host('a', false)];
+  rerender();
+  expect(result.current).toEqual([]);
+  h.devices = [host('a')];
+  h.invoke.mockResolvedValue(collection());
+  rerender();
+  await act(async () => {});
+  expect(result.current).toMatchObject([{ id: 'same-bot', online: true, sessionId: 'canonical' }]);
+});
+
+it.each(['failure', 'malformed', 'cursor', 'limit'] as const)('keeps an unseen cloud history entry on a %s roster read', async (mode) => {
+  cloudHome();
+  h.devices = [host('a')];
+  if (mode === 'failure') h.invoke.mockRejectedValue(new Error('CHANNEL_NOT_ALLOWED'));
+  else if (mode === 'malformed') h.invoke.mockResolvedValue({ collectionId: 'teammates', items: [{}] });
+  else if (mode === 'cursor') h.invoke.mockResolvedValue({ collectionId: 'teammates', items: [], nextCursor: 'more' });
+  else h.invoke.mockResolvedValue({ collectionId: 'teammates', items: Array.from({ length: 200 }, (_, i) => ({
+    ...collection().items[0], ref: { collectionId: 'teammates', kind: 'bot', id: `other-${i}` }, links: [],
+  })) });
+  const { result } = renderHook(useCloudRoster);
+  await act(async () => {});
+  expect(result.current.find(bot => bot.id === 'same-bot')).toMatchObject({ online: false, sessionId: null });
+});
+
+it('does not let a hidden result from another host or a late disconnected/account response hide the real home', async () => {
+  cloudHome('b');
+  h.devices = [host('a'), host('b', false)];
+  h.invoke.mockResolvedValue({ collectionId: 'teammates', items: [] });
+  const { result, rerender } = renderHook(useCloudRoster);
+  await act(async () => {});
+  expect(result.current).toMatchObject([{ deviceId: 'b', online: false }]);
+  let finish!: (value: unknown) => void;
+  h.devices = [host('b')];
+  h.invoke.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  rerender();
+  await act(async () => {});
+  act(() => h.status({ status: 'stopped' }));
+  await act(async () => finish({ collectionId: 'teammates', items: [] }));
+  expect(result.current).toHaveLength(1);
+  act(() => h.status({ status: 'online' }));
+  h.owner = 'new-cloud-account';
+  h.devices = [];
+  rerender();
+  await act(async () => finish({ collectionId: 'teammates', items: [] }));
+  expect(result.current).toHaveLength(1);
+});
+
+it('refreshes visibility when cloud identity arrives after the roster and keeps listed history when the home goes offline', async () => {
+  h.devices = [host('a')];
+  h.invoke.mockResolvedValue({ collectionId: 'teammates', items: [] });
+  const { result, rerender } = renderHook(useCloudRoster);
+  await act(async () => {});
+  cloudHome();
+  rerender();
+  await act(async () => {});
+  expect(result.current).toEqual([]);
+  h.invoke.mockResolvedValue(collection());
+  vi.useFakeTimers();
+  try {
+    act(() => h.push({ deviceId: 'a', channel: REMOTE_RESOURCE_CHANGED_CHANNEL }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+  } finally { vi.useRealTimers(); }
+  expect(result.current).toMatchObject([{ id: 'same-bot', online: true, sessionId: 'canonical' }]);
+  h.devices = [host('a', false)];
+  rerender();
+  expect(result.current).toMatchObject([{ id: 'same-bot', online: false, sessionId: 'canonical' }]);
 });
 describe('remote teammate roster', () => {
   it('keeps identical bot ids on two hosts distinct and retains only the offline host as offline', async () => {

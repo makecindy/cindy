@@ -17,8 +17,8 @@ export default {
   stubs: {
     'src/renderer/contexts/AuthContext': { partial: 'export const useAuth=()=>({dataOwnerId:"ui-fixture"});' },
     'src/renderer/features/bots/botStore': { partial: `export const useBotProfiles=()=>${data}.profiles; export const useBotUnreadCounts=()=>(${data}.unread||{});` },
-    'src/renderer/features/bots/useRemoteBots': `export const useRemoteBots=()=>${data}.remoteBots;`,
-    'src/renderer/features/bots/companionCloudStore': { partial: 'const snapshot={enabled:false,actors:[],demotedBotIds:[]}; export const useCompanionCloud=()=>snapshot;' },
+    'src/renderer/features/bots/useRemoteBots': `export const useRemoteBotOmissions=()=>new Set(${data}.omissions||[]); export const useRemoteBots=()=>${data}.remoteBots;`,
+    'src/renderer/features/bots/companionCloudStore': { partial: `const snapshot={enabled:false,actors:[],demotedBotIds:[]}; export const useCompanionCloud=()=>${data}.cloud||snapshot;` },
     'src/renderer/features/bots/botGroupStore': { partial: `export const useBotGroupList=()=>({groups:${data}.groups||[],loaded:true});` },
     'src/renderer/features/device-link/useDeviceLinkDeviceList': 'export const useDeviceLinkDeviceList=()=>[];',
     'src/renderer/state/agentIslandActivity': { partial: `export const useAgentIslandActivityMap=()=>new Map(${data}.activities||[]);` },
@@ -26,6 +26,16 @@ export default {
     'src/renderer/features/bots/BotDeleteDialog': 'export const BotDeleteDialog=()=>null;',
   },
   cases: {
+    'home-hidden': {
+      about: 'A home-hidden cloud identity stays absent while an unseen offline companion retains its history entry',
+      data: {
+        profiles: [], remoteBots: [], route: '/bots', omissions: ['home:hidden'],
+        cloud: { enabled: true, selfDeviceId: 'controller', humanActorId: 'human', demotedBotIds: [],
+          actors: ['hidden', 'history'].map(id => ({ id: `actor-${id}`, externalId: id,
+            name: id === 'hidden' ? 'Hidden companion' : 'Saved companion', avatar: null,
+            homeDeviceId: 'home', homeDevice: { deviceId: 'home', name: 'Home', online: false, isSelf: false } })) },
+      },
+    },
     'group-types': {
       about: 'Group and private rows retain their original avatars without type markers; running/unread @ points remain',
       data: {
@@ -127,6 +137,11 @@ export default {
     },
   },
   async check(page, ui) {
+    if (ui.case === 'home-hidden') {
+      assert.equal(await page.getByText('Hidden companion', { exact: true }).count(), 0);
+      assert.equal(await page.getByText('Saved companion', { exact: true }).count(), 1);
+      return;
+    }
     if (ui.case === 'group-types') {
       const section = page.locator('[data-sidebar-section="teammates"]');
       assert.equal(await section.locator('[data-bot-group-id]').count(), 2);
