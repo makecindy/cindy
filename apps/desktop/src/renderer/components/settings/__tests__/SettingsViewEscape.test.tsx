@@ -15,6 +15,7 @@ import { getAgentIslandSoundSettings, setAgentIslandEnabled, setAgentIslandSound
 import { LocaleProvider, useLocale } from '@/hooks/useLocale';
 import { WallpaperSettingsProvider } from '@/hooks/useWallpaperSettings';
 import { DEFAULT_APPEARANCE_SETTINGS, type AppearanceSettings } from '../../../../shared/appearanceSettings';
+import { getDefaultVoiceInputSettings } from '../../../../shared/voiceInputData';
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...await importOriginal<typeof import('react-i18next')>(),
@@ -37,16 +38,22 @@ vi.mock('@/lib/useCindyVersions', () => ({
   useCindyVersions: () => ({ state: 'idle' }),
 }));
 
-const { Stub } = vi.hoisted(() => ({ Stub: () => null }));
+const { Stub, voicePage } = vi.hoisted(() => ({ Stub: () => null, voicePage: { real: false } }));
+vi.mock('../VoiceSpeakerFilterCard', () => ({ VoiceSpeakerFilterCard: Stub }));
 vi.mock('../UserProfileCard', () => ({ UserProfileCard: Stub }));
-vi.mock('../VoiceInputSection', () => ({
-  VoiceInputSection: ({ modelSelection }: { modelSelection: ReturnType<typeof useVoiceInputModelSelection> }) => (
-    <>
-      <button onClick={() => void modelSelection.setAsrProvider('openai')}>Use preset ASR</button>
-      <button onClick={() => void modelSelection.setAsrProvider('custom-realtime-asr')}>Use custom ASR</button>
-    </>
-  ),
-}));
+vi.mock('../VoiceInputSection', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../VoiceInputSection')>();
+  return {
+    VoiceInputSection: ({ modelSelection }: { modelSelection: ReturnType<typeof useVoiceInputModelSelection> }) => (
+      voicePage.real ? <actual.VoiceInputSection modelSelection={modelSelection} /> : (
+        <>
+          <button onClick={() => void modelSelection.setAsrProvider('openai')}>Use preset ASR</button>
+          <button onClick={() => void modelSelection.setAsrProvider('custom-realtime-asr')}>Use custom ASR</button>
+        </>
+      )
+    ),
+  };
+});
 vi.mock('../AppearanceSection', () => ({ AppearanceSection: Stub }));
 vi.mock('../SubagentModelSection', () => ({ SubagentModelSection: Stub }));
 vi.mock('../AuxiliaryModelSection', () => ({ AuxiliaryModelSection: Stub }));
@@ -153,6 +160,7 @@ function pressEscape() {
 const location = () => screen.getByTestId('location').textContent;
 
 beforeEach(() => {
+  voicePage.real = false;
   vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
   vi.stubGlobal('ResizeObserver', class {
     observe() {}
@@ -173,6 +181,47 @@ afterEach(() => {
 });
 
 describe('SettingsView Escape', () => {
+  // PR #8481/r4476577125, unit: earlier tests covered only initial loading and
+  // setters. Keep SettingsView, the selection hook and voice page real; change
+  // the IPC snapshot while away and verify both stale notices disappear on return.
+  it('refreshes voice credentials and refinement after returning from their settings tabs', async () => {
+    voicePage.real = true;
+    const snapshot = {
+      selection: { serviceMode: 'byok', asrProvider: 'openai',
+        refinerProviderChainSource: 'configured', refinerProviderChain: [] as string[] },
+      asrProfiles: [], refinerProfiles: [],
+      readiness: { ok: false, provider: 'openai', auth: 'api-key' },
+    };
+    const permissions = { microphone: { ok: true, status: 'granted' } };
+    Object.assign(window.electronAPI.voiceInput, {
+      getModelSelection: vi.fn(async () => structuredClone(snapshot)),
+      getDataSnapshot: () => ({ settings: getDefaultVoiceInputSettings('darwin') }),
+      getHistory: () => [],
+      setGlobalShortcut: vi.fn(async () => ({ ok: true })),
+      getSystemPermissionsCached: () => permissions,
+      getSystemPermissions: async () => permissions,
+    });
+    await act(async () => { renderSettings('/settings?tab=voice-input'); });
+    const missingCredential = 'settings.voiceInput.serviceSource.credentialError.gatewayMissing';
+    const cannotRefine = 'settings.voiceInput.serviceSource.refiner.cannotRefine';
+    expect(screen.getByText(missingCredential)).toBeTruthy();
+    expect(screen.getByText(cannotRefine)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.voiceInput.serviceSource.manageProviders' }));
+    expect(location()).toContain('tab=providers');
+    snapshot.readiness.ok = true;
+    fireEvent.click(screen.getByRole('tab', { name: 'settings.tabs.voiceInput' }));
+    await waitFor(() => expect(screen.queryByText(missingCredential)).toBeNull());
+    expect(screen.getByText(cannotRefine)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.voiceInput.serviceSource.refiner.openAuxiliary' }));
+    expect(location()).toContain('tab=personalization');
+    snapshot.selection.refinerProviderChain = ['configured-refiner'];
+    fireEvent.click(screen.getByRole('tab', { name: 'settings.tabs.voiceInput' }));
+    await waitFor(() => expect(screen.queryByText(cannotRefine)).toBeNull());
+    expect(screen.getByText('settings.voiceInput.serviceSource.refiner.followHint')).toBeTruthy();
+    expect(screen.queryByText(missingCredential)).toBeNull();
+  });
   // Unit wiring regression (#8481): static context tests cannot prove status
   // pushes update search before the voice page is mounted.
   it('updates speaker-filter search after capability and enrollment status pushes', async () => {
@@ -310,12 +359,14 @@ describe('SettingsView Escape', () => {
     fireEvent.click(result()!);
     expect(location()).toContain('tab=voice-input');
     expect(location()).toContain('section=voiceInput.customAsrWebsocketUrl');
+    await act(async () => resolveSelection({ selection: { serviceMode: 'cindy', asrProvider: 'custom-realtime-asr' } }));
     fireEvent.change(search, { target: { value: query } });
     fireEvent.click(screen.getByRole('button', { name: 'Use preset ASR' }));
     await waitFor(() => expect(result()).toBeNull());
     fireEvent.click(screen.getByRole('button', { name: 'Use custom ASR' }));
     await waitFor(() => expect(result()).not.toBeNull());
-    expect(getSelection).toHaveBeenCalledTimes(1);
+    // One initial read plus one on entry; edits still share the same hook.
+    expect(getSelection).toHaveBeenCalledTimes(2);
     expect(setSelection).toHaveBeenCalledTimes(2);
   });
 

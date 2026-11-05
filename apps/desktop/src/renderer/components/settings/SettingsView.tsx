@@ -170,6 +170,16 @@ function SettingsViewContent() {
     if (isLegacyAppearanceDeepLink(raw, rawSection)) return 'appearance';
     return isSettingsTab(raw) ? raw : 'general';
   }, [canAccessBilling, canAccessUsage, isMac, rawSection, rawTab]);
+  const previousTabRef = useRef(activeTab);
+  const refreshVoiceModelSelection = voiceModelSelection.refresh;
+  useEffect(() => {
+    // The shared hook outlives each tab; restore the old voice-page remount refresh.
+    if (previousTabRef.current !== activeTab && activeTab === 'voice-input') {
+      void refreshVoiceModelSelection();
+    }
+    previousTabRef.current = activeTab;
+  }, [activeTab, refreshVoiceModelSelection]);
+
   const piExtensionsPanelOpen =
     activeTab === 'general' &&
     (rawTab === 'pi-extensions' || searchParams.get('openPanel') === 'pi-extensions');
