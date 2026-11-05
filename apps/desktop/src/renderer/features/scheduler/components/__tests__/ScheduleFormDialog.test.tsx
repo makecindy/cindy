@@ -17,6 +17,8 @@ const state = vi.hoisted(() => ({
   references: new Map<string, unknown>(),
   loading: false,
   localLoading: false,
+  rosterLoading: false,
+  rosterFailed: false,
   hiddenModels: new Set<string>(),
   claudeModels: [] as { id: string; defaultEnabled: boolean; efforts: string[] }[],
   alternativeProviders: [] as ProviderView[],
@@ -40,7 +42,9 @@ vi.mock('@/hooks/useAgentCapabilities', () => ({
   }),
 }));
 vi.mock('@/hooks/useAvailableAgents', () => ({
-  useAvailableAgents: () => ({ availableVendors: state.vendors, loaded: !state.localLoading }),
+  useAvailableAgents: () => ({ availableVendors: state.vendors,
+    loaded: !state.localLoading && !state.rosterLoading && !state.rosterFailed,
+    loading: state.localLoading || state.rosterLoading }),
 }));
 vi.mock('@/hooks/useProviders', () => ({
   useProviders: () => ({ providers: [{ id: 'source', auth: { method: 'oauth' }, source: 'builtin', access: { kind: 'subscription' }, connected: true, agents: ['codex', 'claude-code'], routing: { codex: {}, 'claude-code': {} },
@@ -120,12 +124,40 @@ beforeEach(() => {
   state.localModels = [{ id: 'shared', efforts: ['low'], defaultEffort: 'low', supportsFastMode: false }];
   state.loading = false;
   state.localLoading = false;
+  state.rosterLoading = false;
+  state.rosterFailed = false;
   state.vendors = new Set(['cc', 'codex', 'pi']);
   localStorage.clear();
   resetDraft();
 });
 afterEach(cleanup);
 afterEach(() => vi.unstubAllGlobals());
+
+// PR #8950 review: loaded=false also means a failed fail-open lookup. Previous
+// fixtures coupled roster readiness to catalog readiness, missing this deadlock.
+// Unit/jsdom: pending -> rejected roster, usable catalog, real form submission.
+it('allows calibrated creation after a roster lookup fails, but waits while it is pending', async () => {
+  state.rosterLoading = true;
+  state.vendors = new Set();
+  localStorage.setItem('xdt:scheduleFormPrefs:v1', JSON.stringify({ agentKind: 'codex',
+    lastByAgent: { codex: { model: 'removed', providerId: 'source', effort: 'high' } },
+  }));
+  const onSubmit = vi.fn(async () => {});
+  const initialValues = { name: 'New', prompt: 'Check work' };
+  const element = () => <ScheduleFormDialog open initial={null} initialValues={initialValues}
+    onOpenChange={() => {}} onSubmit={onSubmit} />;
+  const view = render(element());
+  const create = screen.getByRole('button', { name: 'scheduler.editor.promptDialog.createAria' });
+  expect((create as HTMLButtonElement).disabled).toBe(true);
+  state.rosterLoading = false;
+  state.rosterFailed = true;
+  view.rerender(element());
+  expect((create as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(create);
+  await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+    agentKind: 'codex', model: 'shared', providerId: 'source', effort: 'low',
+  }), false));
+});
 
 // PR #6830, unit/jsdom: a bound remote task must not hide an explicit local
 // model-only selection from the real hook-generation IPC request.

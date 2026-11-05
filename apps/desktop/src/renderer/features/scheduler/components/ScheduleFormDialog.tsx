@@ -160,7 +160,7 @@ export function ScheduleFormDialog({
   const selectedAgentDeviceId = form.modelAgentDeviceId !== undefined
     ? form.modelAgentDeviceId || null
     : isBound ? boundAgentDeviceId : form.agentDeviceId || null;
-  const { availableVendors, loaded: agentsLoaded } = useAvailableAgents(selectedAgentDeviceId);
+  const { availableVendors, loaded: agentsLoaded, loading: agentsLoading } = useAvailableAgents(selectedAgentDeviceId);
   const modelVisibilityVersion = useModelVisibilityVersion();
   const caps = useAgentCapabilities(form.agentKind, selectedAgentDeviceId ?? undefined);
   const localProviders = useProviders();
@@ -500,7 +500,7 @@ export function ScheduleFormDialog({
   useEffect(() => {
     if (!open || isEdit || editProjectSchedule || isScriptMode || form.modelAgentKind
       || initialTemplatePending || selectedTemplate?.model?.trim() || initialValues?.model || form.targetSessionId.trim()
-      || selectedAgentDeviceId || providersLoading || !agentsLoaded) return;
+      || selectedAgentDeviceId || providersLoading || (!agentsLoaded && agentsLoading)) return;
     // A model-less, source-less template supplies a preferred Agent, not a route.
     // Keep an explicit source/Agent constraint, but let generic templates work
     // when their preferred Agent has no models visible in the picker.
@@ -512,7 +512,9 @@ export function ScheduleFormDialog({
       .filter((agent) => agent !== preferredAgent)];
     void modelVisibilityVersion;
     for (const agent of agents) {
-      if (!availableVendors.has(agent === 'claude-code' ? 'cc' : agent)) continue;
+      // A failed roster lookup is unknown, not proof that every runtime is absent.
+      // Keep catalog validation and let the host enforce runtime availability.
+      if (agentsLoaded && !availableVendors.has(agent === 'claude-code' ? 'cc' : agent)) continue;
       const route = getScheduleDefaultRoute(agent, providers, requiredProvider);
       if (!route.model) continue;
       if (form.agentKind !== agent) setField('agentKind', agent);
@@ -526,7 +528,7 @@ export function ScheduleFormDialog({
     if (form.providerId !== (requiredProvider ?? '')) setField('providerId', requiredProvider ?? '');
     if (form.effort) setField('effort', '');
   }, [open, isEdit, editProjectSchedule, isScriptMode, form.modelAgentKind, initialTemplatePending, selectedTemplate, initialValues,
-    form.targetSessionId, selectedAgentDeviceId, providersLoading, agentsLoaded,
+    form.targetSessionId, selectedAgentDeviceId, providersLoading, agentsLoaded, agentsLoading,
     availableVendors, providers, modelVisibilityVersion, form.agentKind, form.model, form.providerId, form.effort, setField]);
 
   const modelUnavailable = !isScriptMode && modelCatalogReady && (
@@ -534,7 +536,7 @@ export function ScheduleFormDialog({
       (agentsLoaded && !availableVendors.has(form.agentKind === 'claude-code' ? 'cc' : form.agentKind))
       || !effectiveSourceIdForModel(providers, form.providerId || null, form.model, form.agentKind)
       || isExplicitScheduleModelUnavailable(form.model, caps.capabilities?.availableModels)
-    )) || (!isEdit && !isBound && agentsLoaded && !form.model.trim())
+    )) || (!isEdit && !isBound && !agentsLoading && !form.model.trim())
   );
 
   // Keep a bound model paired with its execution computer when switching run modes.
@@ -574,7 +576,7 @@ export function ScheduleFormDialog({
   }, [isEdit, editProjectSchedule, modelCatalogReady, form.modelAgentKind, providers.length, form.fastMode, showFastModeToggle, setField]);
 
   const awaitingNewModelCatalog = !isEdit && !editProjectSchedule && !isScriptMode && !isBound
-    && (!modelCatalogReady || !agentsLoaded);
+    && (!modelCatalogReady || (!agentsLoaded && agentsLoading));
 
   const handleSubmit = async () => {
     if (awaitingNewModelCatalog) return;
