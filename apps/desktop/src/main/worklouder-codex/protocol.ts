@@ -506,6 +506,17 @@ export function isCindyExclusiveAgentLayer(layer: WorkLouderKeymapLayer | undefi
   );
 }
 
+/** The firmware answered an RPC with "no such method" rather than failing the transport. */
+export function isWorkLouderUnsupportedRpc(code: unknown, message: unknown): boolean {
+  if (code === -32601) return true;
+  const pattern =
+    /not[_ -]?supported|unsupported|not[_ -]?implemented|method[_ -]?not[_ -]?found|unknown[_ -]?method|enosys/i;
+  return (
+    (typeof code === 'string' && pattern.test(code)) ||
+    (typeof message === 'string' && pattern.test(message))
+  );
+}
+
 /**
  * Whether to snapshot the live document before Cindy rewrites it. A snapshot that is
  * still on disk belongs to an occupancy that was never released; keep it when the

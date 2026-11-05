@@ -27,6 +27,7 @@ import {
   creatorMicro2KeymapSessionFileName,
   isCindyExclusiveAgentKeymap,
   shouldSaveCreatorKeymapSession,
+  isWorkLouderUnsupportedRpc,
   workLouderLayerHasAgentKeys,
   workLouderFirmwareIdlesHidRead,
   projectWorkLouderCodexSlotActivity,
@@ -513,6 +514,16 @@ describe('Creator Micro 2 agent keymap', () => {
     expect(shouldSaveCreatorKeymapSession(true, true)).toBe(false);
     expect(shouldSaveCreatorKeymapSession(false, true)).toBe(true);
     expect(shouldSaveCreatorKeymapSession(false, false)).toBe(true);
+  });
+
+  it('tells a firmware that lacks the file RPC from a failing transport', () => {
+    expect(isWorkLouderUnsupportedRpc(-32601, undefined)).toBe(true);
+    expect(isWorkLouderUnsupportedRpc('ERR_NOT_IMPLEMENTED', undefined)).toBe(true);
+    expect(isWorkLouderUnsupportedRpc(undefined, 'Method not found')).toBe(true);
+    expect(isWorkLouderUnsupportedRpc(undefined, 'fs.read is not supported')).toBe(true);
+    expect(isWorkLouderUnsupportedRpc(-13, 'permission denied')).toBe(false);
+    expect(isWorkLouderUnsupportedRpc(undefined, 'device has been closed')).toBe(false);
+    expect(isWorkLouderUnsupportedRpc(undefined, undefined)).toBe(false);
   });
 
   it('only treats the rebound layer as a Cindy occupancy map', () => {

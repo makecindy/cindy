@@ -28,6 +28,7 @@ import {
   unwrapWorkLouderKeymapText,
   isCindyExclusiveAgentKeymap,
   shouldSaveCreatorKeymapSession,
+  isWorkLouderUnsupportedRpc,
   WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT,
   WORKLOUDER_DEVICE_KEYMAP_FILE,
   workLouderFirmwareIdlesHidRead,
@@ -65,7 +66,7 @@ interface WorkLouderComm {
 interface WorkLouderRpcResult {
   ok?: boolean;
   value?: unknown;
-  error?: { message?: string };
+  error?: { message?: string; code?: unknown };
 }
 
 interface WorkLouderFsApi {
@@ -743,18 +744,36 @@ async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
   if (!comm) return;
   const generation = creatorKeymapGeneration;
   const fsApi = loadWorkLouderFsApi(deviceApi, comm);
-  if (!fsApi) {
-    // Optional in the SDK contract. Stay on the factory keymap and say so, instead of
-    // leaving the bind loop to spin on a board that can never be rewritten.
-    hostLog('warn', 'Work Louder keymap bind could not load WLRPCApi; keeping factory keymap');
+  // Optional in the SDK contract, and old firmware may refuse the file RPC. Stay on the
+  // factory keymap and say so, instead of leaving the bind loop to spin or reconnect on a
+  // board that can never be rewritten.
+  const keepFactoryKeymap = async (reason: string): Promise<void> => {
+    hostLog('warn', `Work Louder keymap bind ${reason}; keeping factory keymap`);
     keymapUnsupported = true;
     creatorKeymapBound = true;
     clearCreatorKeymapRetry();
-    await postDeviceStatus(deviceApi, connectedDevice.deviceType, connectedDevice.isUsb);
+    if (connectedDevice) {
+      await postDeviceStatus(deviceApi, connectedDevice.deviceType, connectedDevice.isUsb);
+    }
+  };
+  if (!fsApi) {
+    await keepFactoryKeymap('could not load WLRPCApi');
     return;
   }
-  const liveResult = await fsApi.readFile(WORKLOUDER_DEVICE_KEYMAP_FILE);
+  let liveResult: WorkLouderRpcResult;
+  try {
+    liveResult = await fsApi.readFile(WORKLOUDER_DEVICE_KEYMAP_FILE);
+  } catch (error) {
+    const record = typeof error === 'object' && error !== null ? (error as { code?: unknown }) : {};
+    if (!isWorkLouderUnsupportedRpc(record.code, safeErrorMessage(error))) throw error;
+    await keepFactoryKeymap('was refused by the firmware');
+    return;
+  }
   if (!workLouderFsSucceeded(liveResult)) {
+    if (isWorkLouderUnsupportedRpc(liveResult?.error?.code, liveResult?.error?.message)) {
+      await keepFactoryKeymap('was refused by the firmware');
+      return;
+    }
     throw new Error(liveResult?.error?.message ?? 'fs.read keymap.json failed');
   }
   const liveText = unwrapWorkLouderKeymapText(liveResult);
