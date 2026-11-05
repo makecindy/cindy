@@ -29,16 +29,22 @@ function createEntry(deviceId: string) {
   let loading = false;
   let dirty = false;
   let disposed = false;
+  let relayOnline = true;
+  let targetOnline = true;
+  let connectionRevision = 0;
   const current = () => !disposed && isDataOwnerGenerationCurrent(owner);
   const refresh = async () => {
-    if (!current()) return;
+    if (!current() || !relayOnline || !targetOnline) { dirty = true; return; }
     if (loading) { dirty = true; return; }
     if (timer) { clearTimeout(timer); timer = undefined; }
     loading = true;
     dirty = false;
+    const revision = connectionRevision;
+    let failed = false;
     try {
-      actions ??= await pluginManagementActions(deviceId);
-      if (!current()) return;
+      const discovered = actions ?? await pluginManagementActions(deviceId);
+      if (!current() || revision !== connectionRevision) return;
+      actions = discovered;
       let next: PluginUiConsentSnapshot;
       if (actions.includes('management:ui-consent')) {
         next = parseConsent(await invokePluginManagement(deviceId, 'ui-consent'));
@@ -51,17 +57,23 @@ function createEntry(deviceId: string) {
         actions = undefined;
         next = { version: 1 };
       }
-      if (!current()) return;
+      if (!current() || revision !== connectionRevision) return;
       snapshot = next;
       for (const listener of listeners) listener(next);
-    } catch { /* A failed discovery never grants consent or removes the last good prompt. */ }
+    } catch {
+      // Retain the last good prompt, but let the next subscription/notification retry.
+      // Do not turn a failed read into an automatic 250ms retry loop.
+      dirty = true;
+      failed = true;
+    }
     finally {
       loading = false;
-      if (dirty && current()) schedule();
+      if (dirty && (!failed || revision !== connectionRevision) && current()) schedule();
     }
   };
   const schedule = () => {
     if (!current()) return;
+    if (!relayOnline || !targetOnline) { dirty = true; return; }
     if (!listeners.size) { dirty = true; return; }
     if (loading) { dirty = true; return; }
     if (!timer) timer = setTimeout(() => { timer = undefined; void refresh(); }, 250);
@@ -70,6 +82,27 @@ function createEntry(deviceId: string) {
     if (current() && push.deviceId === deviceId && push.channel === REMOTE_RESOURCE_CHANGED_CHANNEL
       && (push.payload as { collectionId?: unknown } | null)?.collectionId === PLUGIN_COLLECTION
       && isDeviceLinkRemotePushCurrent(push, stamp)) schedule();
+  });
+  const connectionChanged = () => {
+    if (!current()) return;
+    connectionRevision++;
+    actions = undefined;
+    snapshot = undefined;
+    dirty = true;
+    if (timer) { clearTimeout(timer); timer = undefined; }
+    if (relayOnline && targetOnline) schedule();
+  };
+  // These listeners outlive the last composer during the cache retention window.
+  const unlistenStatus = window.electronAPI.deviceLink.onStatusChanged(state => {
+    const online = state.status === 'online';
+    if (relayOnline === online) return;
+    relayOnline = online;
+    connectionChanged();
+  });
+  const unlistenPresence = window.electronAPI.deviceLink.onPresenceChanged(state => {
+    if (state.deviceId !== deviceId || targetOnline === state.online) return;
+    targetOnline = state.online;
+    connectionChanged();
   });
   return {
     owner, listeners, refresh,
@@ -93,6 +126,8 @@ function createEntry(deviceId: string) {
       if (timer) clearTimeout(timer);
       if (releaseTimer) clearTimeout(releaseTimer);
       unlisten();
+      unlistenStatus();
+      unlistenPresence();
       listeners.clear();
     },
   };

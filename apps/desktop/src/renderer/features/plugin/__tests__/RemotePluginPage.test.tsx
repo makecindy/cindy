@@ -172,6 +172,8 @@ beforeEach(() => {
     deviceLink: {
       invoke,
       onRemotePush: () => () => {},
+      onStatusChanged: () => () => {},
+      onPresenceChanged: () => () => {},
     },
   } as never;
   invoke.mockImplementation(
@@ -1033,6 +1035,80 @@ describe('remote task interactive-page consent prompt', () => {
     expect(notices.error).toHaveBeenCalledWith('settings.ghosts.remote.changed');
     expect(invoke.mock.calls.filter(c => c[2]?.[0]?.actionId === 'management:answer')).toHaveLength(1);
     expect(screen.queryByText('newChat.pluginUi.ready')).toBeNull();
+  });
+  // Unit: a failed notification read after a successful empty snapshot must remain
+  // stale, without retrying in a loop; the next actual composer subscription retries.
+  it('retries stale discovery on remount after a failed plugin notification read', async () => {
+    setup(true);
+    const normal = invoke.getMockImplementation()!;
+    let pending = false;
+    let fail = false;
+    invoke.mockImplementation(async (device, channel, args) => {
+      if (args?.[0]?.actionId === 'management:snapshot' && fail) throw new Error('temporary failure');
+      const result = await normal(device, channel, args);
+      if (args?.[0]?.actionId === 'management:snapshot' && !pending) result.result.ghosts = [];
+      return result;
+    });
+    let push: ((value: unknown) => void) | undefined;
+    window.electronAPI.deviceLink.onRemotePush = (listener => { push = listener; return () => {}; }) as never;
+    const reads = () => invoke.mock.calls.filter(c => c[2]?.[0]?.actionId === 'management:snapshot').length;
+    const first = render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    await waitFor(() => expect(reads()).toBe(1));
+    vi.useFakeTimers();
+    pending = true;
+    fail = true;
+    await act(async () => {
+      push!({ deviceId: 'computer-a', channel: 'maker:remote-resources:changed', payload: { collectionId: 'plugins' } });
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(reads()).toBe(2);
+    first.unmount();
+    fail = false;
+    const second = render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    expect(reads()).toBe(3);
+    expect(screen.getByText('newChat.pluginUi.enable')).toBeTruthy();
+    second.unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+  });
+  // Unit: neither relay nor target disconnects replay missed plugin notifications.
+  // Exercise the retained production entry with no mounted consumers, then remount.
+  it.each(['relay', 'target'])('invalidates retained discovery across a %s disconnect without consumers', async source => {
+    setup(true);
+    const normal = invoke.getMockImplementation()!;
+    let pending = false;
+    invoke.mockImplementation(async (device, channel, args) => {
+      const result = await normal(device, channel, args);
+      if (args?.[0]?.actionId === 'management:snapshot' && !pending) result.result.ghosts = [];
+      return result;
+    });
+    let status!: Parameters<typeof window.electronAPI.deviceLink.onStatusChanged>[0];
+    let presence!: Parameters<typeof window.electronAPI.deviceLink.onPresenceChanged>[0];
+    const offStatus = vi.fn(), offPresence = vi.fn();
+    window.electronAPI.deviceLink.onStatusChanged = listener => { status = listener; return offStatus; };
+    window.electronAPI.deviceLink.onPresenceChanged = listener => { presence = listener; return offPresence; };
+    const reads = () => invoke.mock.calls.filter(c => c[2]?.[0]?.actionId === 'management:snapshot').length;
+    const first = render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    await waitFor(() => expect(reads()).toBe(1));
+    first.unmount();
+    vi.useFakeTimers();
+    await act(async () => {
+      if (source === 'relay') status({ status: 'connecting' });
+      else presence({ deviceId: 'computer-a', online: false } as never);
+      pending = true;
+      if (source === 'relay') status({ status: 'online' });
+      else presence({ deviceId: 'computer-a', online: true } as never);
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(reads()).toBe(1);
+    const second = render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    expect(reads()).toBe(2);
+    expect(screen.getByText('newChat.pluginUi.enable')).toBeTruthy();
+    second.unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(offStatus).toHaveBeenCalledOnce();
+    expect(offPresence).toHaveBeenCalledOnce();
   });
   // Unit: the real directory Hook initially reports offline until getState settles.
   // A second composer used to destroy the first composer's live shared subscription.
