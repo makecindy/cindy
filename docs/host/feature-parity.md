@@ -15,10 +15,10 @@
 | 任务列表（真实数据） | 已验证 | 浏览器侧 `localDb.sessions.list()` 返回共用 SQLite 中的任务数组（实测 13 条） |
 | 新建任务（草稿 → 落库 → 转正） | 已验证 | `POST /api/sessions/create` 写会话行；`localDb.sessions.create` 走同一路由；`provisional` 标记与 `discard/commit` 路由存在 |
 | 发送消息（真实 Agent 回合） | 已验证 | 通过 renderer 通道发送后，SSE 依次收到 `session`、`status`、`text` 增量、`text(isFinal)`、`done`（`stop_reason: end_turn`） |
-| 流式回复呈现 | 部分 | SSE 与事件模型已验证；界面渲染被详情页崩溃阻断（见下） |
-| 停止生成 | 禁用 + TODO | 需详情页可用后验证 `maker.stop` 通道 |
-| 打开历史任务 / 恢复会话 | 禁用 + TODO | `#/cc-agent/<id>` 抛 React #185（Maximum update depth exceeded），组件栈指向 `ChatInput`；已排除全部 Host IPC 失败与模型目录形状 |
-| 历史消息窗口 | 部分 | `localDb.messages.list` 返回数组；`historyView` 只对“确实没有消息”的任务返回真实空页，非空任务显式报 `history_view_not_implemented_on_host`（windowed reader 仍在 Electron IPC 内） |
+| 流式回复呈现 | 已验证 | 浏览器内用户气泡 + 助手回复 `FINAL OK`；事件流 `status → session_id → text → done` |
+| 停止生成 | 已验证 | 「Stop generating」后 `turnInProgress=false`，用户消息保留，已产出的部分文本落库 |
+| 打开历史任务 / 恢复会话 | 已验证 | 新标签页/刷新后仍显示同一轮问答（见 `evidence/stage4-e2e.md`） |
+| 历史消息窗口 | 已验证 | Host 在回台中落库 user/assistant 行；`historyView` 用共享投影器生成页面（单页返回，未分页） |
 | 会话用量 | 部分 | `estimatedSessionValue` 读会话行总数，无逐条明细 |
 | 附件 / 图片 / 语音 | 禁用 + TODO | 未实现媒体通道；voice readiness 返回明确“不可用” |
 
@@ -51,5 +51,5 @@
 | 验收 | 状态 | 证据 |
 |---|---|---|
 | 关掉浏览器后 Host 仍运行 | 已验证 | Host 为独立 Node 进程，关闭页面后 `/health` 持续可用 |
-| 重开浏览器恢复会话 | 未达成 | 详情页渲染循环阻断 |
+| 重开浏览器恢复会话 | 已验证 | 刷新/新标签页后恢复同一轮问答（`evidence/stage4-e2e.md`） |
 | Electron 不参与 Runtime | 未达成 | Desktop 仍装载 Runtime；共享 API 未接入 |
