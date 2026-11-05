@@ -27,6 +27,37 @@ export interface PromptRecommendationSnapshot {
 
 const COMPLETION_SETTLE_MS = 500;
 const entries = new Map<string, PromptRecommendationSnapshot>();
+/**
+ * 已生成的推荐在 session 切换后仍然保留：composer 重新挂载时直接复用，
+ * 不重新发起付费预测，也不会因为切走再回来而凭空消失。
+ * 只在新的完成轮次、显式消费（Tab / 发送 / 换目录）、会话删除、账号切换或
+ * 偏好关闭时作废；切回会话、新轮开始这类非破坏性失效只清运行期 entry。
+ */
+const retainedRecommendations = new Map<string, PromptRecommendationSnapshot>();
+
+/**
+ * 存的是快照对象本身：useSyncExternalStore 要求未变化的读取返回同一引用。
+ * 不设 TTL —— 运行期 ready entry 本身也没有过期时间，保留区如果自行按时间失效，
+ * 会出现"界面还显示着、但下次读取突然为空"的窗口（没有定时器通知订阅者）。
+ * 生命周期与 entry 一致：新的完成轮次、显式消费、会话删除、账号切换时作废。
+ */
+function retainReadyRecommendation(sessionId: string, revision: number, prompt: string): void {
+  retainedRecommendations.set(sessionId, {
+    revision,
+    phase: 'ready',
+    prompt,
+    requestSeq: 0,
+  });
+}
+
+function dropRetainedRecommendation(sessionId: string): void {
+  retainedRecommendations.delete(sessionId);
+}
+
+/** 切回会话时复用保留的快照对象。 */
+function retainedSnapshot(sessionId: string): PromptRecommendationSnapshot | undefined {
+  return retainedRecommendations.get(sessionId);
+}
 const sessionListeners = new Map<string, Set<() => void>>();
 const runningSessionIds = new Set<string>();
 const sawRunningSessionIds = new Set<string>();
@@ -60,6 +91,7 @@ function clearRuntimeState(): void {
   const changedSessionIds = [...entries.keys()];
   for (const timer of settleTimers.values()) clearTimeout(timer);
   entries.clear();
+  retainedRecommendations.clear();
   runningSessionIds.clear();
   sawRunningSessionIds.clear();
   runStartedAtBySession.clear();
@@ -73,6 +105,7 @@ function handlePreferenceChanged(enabled: boolean): void {
   if (!enabled) {
     const changedSessionIds = [...entries.keys()];
     entries.clear();
+    retainedRecommendations.clear();
     pendingCompletionRevisions.clear();
     sawRunningSessionIds.clear();
     runStartedAtBySession.clear();
@@ -195,6 +228,7 @@ function noteTurnEnded(sessionId: string, revision: number): void {
   const handled = handledCompletionRevisions.get(sessionId) ?? 0;
   const pending = pendingCompletionRevisions.get(sessionId) ?? 0;
   if (revision <= handled || revision <= pending) return;
+  dropRetainedRecommendation(sessionId);
   pendingCompletionRevisions.set(sessionId, revision);
   // 新 revision 已到达时立即隔离旧 Promise，不能等 settle timer 才作废。
   deleteEntry(sessionId);
@@ -278,7 +312,14 @@ function subscribeSession(sessionId: string | undefined, listener: () => void): 
 function getSessionSnapshot(
   sessionId: string | undefined,
 ): PromptRecommendationSnapshot | undefined {
-  return sessionId ? entries.get(sessionId) : undefined;
+  if (!sessionId) return undefined;
+  const current = entries.get(sessionId);
+  if (current) return current;
+  // 同一会话已经开始了下一轮（另一窗口 / 远端 / 队列续跑）：上一轮的文案必须隐藏，
+  // 否则忙碌期间输入框仍可 Tab / 点击接受过期推荐。等本轮完成通知到达后自然恢复。
+  if (runningSessionIds.has(sessionId)) return undefined;
+  if (pendingCompletionRevisions.has(sessionId)) return undefined;
+  return retainedSnapshot(sessionId);
 }
 
 /** 当前 session 的推荐状态；切换 session 时同步读取对应 key，不携带上一 session state。 */
@@ -336,14 +377,17 @@ export function resolvePromptRecommendationPrediction(
     phase: 'ready',
     prompt,
   });
+  retainReadyRecommendation(sessionId, revision, prompt);
   emitSession(sessionId);
 }
 
 /** Tab / 发送 / workingDir 等显式消费路径同步作废当前推荐和迟到的完成通知。 */
-export function dismissPromptRecommendation(sessionId: string, revision?: number): void {
-  const current = entries.get(sessionId);
-  if (revision != null && current?.revision !== revision) return;
-  // 无 entry 也可能仍在等待最终 done；显式发送/换目录应取消这份等待。
+/**
+ * 非破坏性失效：作废本轮运行期状态（待定 revision、在途预测、entry），
+ * 但保留已生成的文案。会话切换、新轮开始、偏好同步走这里 —— 这些都不是"用户消费了这句话"。
+ */
+export function invalidatePromptRecommendation(sessionId: string): void {
+  // 无 entry 也可能仍在等待最终 done。
   // 新 running 的 layout effect 也会调用本函数，不能清掉刚开始的新轮资格。
   if (!runningSessionIds.has(sessionId)) {
     clearSettleTimer(sessionId);
@@ -354,6 +398,19 @@ export function dismissPromptRecommendation(sessionId: string, revision?: number
   deleteEntry(sessionId);
 }
 
+/**
+ * 破坏性失效：用户或产品行为明确消费了这句话（Tab 填入、发送、换工作目录）。
+ * 运行期 entry 与保留区一起作废，避免切回会话或清空输入框后复活。
+ */
+export function dismissPromptRecommendation(sessionId: string, revision?: number): void {
+  const current = entries.get(sessionId);
+  const effectiveRevision =
+    current?.revision ?? retainedRecommendations.get(sessionId)?.revision;
+  if (revision != null && effectiveRevision !== revision) return;
+  invalidatePromptRecommendation(sessionId);
+  dropRetainedRecommendation(sessionId);
+}
+
 export function clearPromptRecommendationSession(sessionId: string): void {
   clearSettleTimer(sessionId);
   runningSessionIds.delete(sessionId);
@@ -361,6 +418,7 @@ export function clearPromptRecommendationSession(sessionId: string): void {
   runStartedAtBySession.delete(sessionId);
   pendingCompletionRevisions.delete(sessionId);
   handledCompletionRevisions.delete(sessionId);
+  dropRetainedRecommendation(sessionId);
   deleteEntry(sessionId);
 }
 

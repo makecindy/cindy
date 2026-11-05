@@ -41,6 +41,7 @@ import {
   __testing,
   beginPromptRecommendationPrediction,
   dismissPromptRecommendation,
+  invalidatePromptRecommendation,
   resolvePromptRecommendationPrediction,
 } from '../promptRecommendationStore';
 
@@ -263,5 +264,69 @@ describe('promptRecommendationStore', () => {
     resolvePromptRecommendationPrediction('session-a', 501, request!, '不应复活');
 
     expect(__testing.getSessionSnapshot('session-a')).toBeUndefined();
+  });
+  it('会话切换的失效调用不丢已生成的推荐，也不重新预测', () => {
+    h.statusBySession.set('session-a', ELIGIBLE);
+    complete('session-a', 601);
+    const seq = beginPromptRecommendationPrediction('session-a', 601)!;
+    resolvePromptRecommendationPrediction('session-a', 601, seq, '接着问点什么');
+    expect(__testing.getSessionSnapshot('session-a')?.prompt).toBe('接着问点什么');
+
+    // ChatInput 在切回会话 / 新轮开始时走非破坏性失效：entry 清掉，文案保留。
+    invalidatePromptRecommendation('session-a');
+
+    const restored = __testing.getSessionSnapshot('session-a');
+    expect(restored).toEqual({
+      revision: 601,
+      phase: 'ready',
+      prompt: '接着问点什么',
+      requestSeq: 0,
+    });
+    // useSyncExternalStore 的快照必须是稳定引用，否则输入框会无限重渲染。
+    expect(__testing.getSessionSnapshot('session-a')).toBe(restored);
+    // 保留值是 ready，不会为了重新显示再发一次付费预测。
+    expect(beginPromptRecommendationPrediction('session-a', 601)).toBeNull();
+  });
+
+  it('发送 / 换目录的破坏性失效连保留区一起作废', () => {
+    h.statusBySession.set('session-a', ELIGIBLE);
+    complete('session-a', 602);
+    const seq = beginPromptRecommendationPrediction('session-a', 602)!;
+    resolvePromptRecommendationPrediction('session-a', 602, seq, '别复活');
+
+    // 发送 / 换工作目录不传 revision，也必须把保留文案一起作废。
+    dismissPromptRecommendation('session-a');
+
+    expect(__testing.getSessionSnapshot('session-a')).toBeUndefined();
+  });
+
+  it('同一会话新一轮进行中不暴露上一轮的推荐', () => {
+    h.statusBySession.set('session-a', ELIGIBLE);
+    complete('session-a', 601);
+    const seq = beginPromptRecommendationPrediction('session-a', 601)!;
+    resolvePromptRecommendationPrediction('session-a', 601, seq, '上一轮的推荐');
+    expect(__testing.getSessionSnapshot('session-a')?.prompt).toBe('上一轮的推荐');
+
+    // 另一个窗口 / 远端开始了新一轮：running 边沿清掉 entry，保留值也不能露出来。
+    h.startedAtBySession.set('session-a', 700);
+    __testing.applyRunningSnapshot(new Map([['session-a', { isRunning: true }]]));
+
+    expect(__testing.getSessionSnapshot('session-a')).toBeUndefined();
+  });
+
+  it('新一轮完成后旧文案作废，不把上一轮推荐带进新轮', () => {
+    h.statusBySession.set('session-a', ELIGIBLE);
+    complete('session-a', 601);
+    const seq = beginPromptRecommendationPrediction('session-a', 601)!;
+    resolvePromptRecommendationPrediction('session-a', 601, seq, '上一轮的推荐');
+    expect(__testing.getSessionSnapshot('session-a')?.prompt).toBe('上一轮的推荐');
+
+    complete('session-a', 701);
+
+    expect(__testing.getSessionSnapshot('session-a')).toMatchObject({
+      revision: 701,
+      phase: 'candidate',
+      prompt: null,
+    });
   });
 });
