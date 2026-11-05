@@ -309,6 +309,15 @@ it('adds the highest shared weekly quota only to the open native panel and clear
   finishRefresh(response);
   await vi.advanceTimersByTimeAsync(0);
   expect(mocks.publish.mock.lastCall?.[0].details['share:share-one']).toBeDefined();
+  mocks.onHelperMessage?.({ type: 'panel', open: false });
+  expect(mocks.sharedChanged).toBeNull();
+  expect(mocks.publish.mock.lastCall?.[0].details['share:share-one']).toBeUndefined();
+  const closedCalls = mocks.sharedRead.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(mocks.sharedRead).toHaveBeenCalledTimes(closedCalls);
+  mocks.onHelperMessage?.({ type: 'panel', open: true });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(mocks.publish.mock.lastCall?.[0].details['share:share-one']).toBeDefined();
   mocks.sharedRead.mockRejectedValueOnce(new Error('access denied'));
   mocks.sharedAccessEpoch++;
   mocks.sharedChanged?.();
