@@ -191,7 +191,11 @@ export function buildSkillList(input: SkillListProjectionInput): ScanResult {
     const projectHash = project?.hash;
     // skill 类型的 identity 始终是目录名（= market slug），不依赖 frontmatter name。
     // Codex RPC 可能从 frontmatter 取 name 导致与目录名不一致，统一用 basename(realPath)。
-    const canonicalName = c.kind === 'skill' ? path.basename(realPath) : c.name;
+    // Claude Code 插件 Skill 例外：它的可调用名带 `<plugin>:` 命名空间，两个插件
+    // 提供同名 Skill 时必须能区分来源，因此保留扫描阶段算好的完整名字。
+    const canonicalName = c.kind === 'skill'
+      ? (c.pluginName ? `${c.pluginName}:${path.basename(realPath)}` : path.basename(realPath))
+      : c.name;
     // Codex RPC may return 'repo' scope for user-level skills when homedir is
     // used as fallback cwd. If the workingDir doesn't map to a tracked project,
     // treat the skill as global — it's effectively user-level.
@@ -267,10 +271,14 @@ export function buildSkillList(input: SkillListProjectionInput): ScanResult {
       ...(c.kind === 'skill' ? (() => {
         const discoveryPaths = [...new Set(all.map((item) => item.absolutePath))];
         const target = inspectLocalSkillTarget(realPath, discoveryPaths, managedSkillRoots);
+        const pluginManaged = c.pluginName !== undefined;
         return { cindyEnabled: !disabledPaths.includes(activationKey(realPath, userDataDir, appDataDir)), discoveryPaths,
           ...(builtIn ? { builtIn: true } : {}),
-          managedByPlugin: isPluginManagedSkillPath(realPath, managedSkillRoots),
-          canUninstall: !builtIn && target !== null, uninstallLinkOnly: target?.linkOnly ?? false };
+          // Claude 忽略插件 Skill 的 skillOverrides，启停开关对它无效；插件目录也
+          // 不归 Cindy 管，不能当普通 Skill 卸载。两种情况都归入 managedByPlugin，
+          // 由 UI 禁用开关并提示到所属插件页管理。
+          managedByPlugin: pluginManaged || isPluginManagedSkillPath(realPath, managedSkillRoots),
+          canUninstall: !builtIn && !pluginManaged && target !== null, uninstallLinkOnly: target?.linkOnly ?? false };
       })() : {}),
       ...(project ? { projectRoot: project.projectRoot } : {}),
       ...(projectHash ? { projectHash } : {}),

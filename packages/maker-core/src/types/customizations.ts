@@ -46,6 +46,13 @@ export interface AgentCustomization {
   /** 入参列表无前导 `/`。 */
   name: string;
 
+  /**
+   * Claude Code 插件提供的 Skill: 所属插件名（命名空间前缀）。
+   * 有值时 `name` 形如 `<pluginName>:<skill>`，且启停/卸载由插件自己管理——
+   * Claude 忽略插件 Skill 的 `skillOverrides`。
+   */
+  pluginName?: string;
+
   /** 摘要描述 (frontmatter description / codex shortDescription, 截断 ~500 字)。 */
   description?: string;
 

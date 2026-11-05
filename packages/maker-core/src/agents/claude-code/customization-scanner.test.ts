@@ -132,6 +132,9 @@ describe('scanClaudeRuntimeSkills', () => {
 
     expect(result.items).toContainEqual(expect.objectContaining({
       name: 'alpha:browser',
+      // SkillHub 依赖这个来源标记来禁用启停开关（Claude 忽略插件 Skill 的
+      // skillOverrides），并保留 `alpha:` 命名空间显示。
+      pluginName: 'alpha',
       engine: 'claude-code',
       kind: 'skill',
       scope: 'global',

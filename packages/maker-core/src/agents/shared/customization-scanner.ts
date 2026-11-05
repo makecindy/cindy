@@ -96,6 +96,7 @@ export function readFolderSkill(source: SourceDef, folder: string, mdPath: strin
     kind: source.kind,
     scope: source.scope,
     name,
+    ...(source.namePrefix ? { pluginName: source.namePrefix } : {}),
     description,
     absolutePath: folder,
     mdPath,

@@ -129,6 +129,47 @@ describe('scanAllSkills', () => {
     });
   });
 
+  it('keeps the plugin namespace and disables management for Claude plugin Skills', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-plugin-skill-'));
+    tempRoots.push(root);
+    const skillDir = path.join(
+      root, '.claude', 'plugins', 'cache', 'alpha', '1.0.0', 'skills', 'browser',
+    );
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, 'SKILL.md'),
+      '---\nname: browser\ndescription: Plugin skill\n---\nBody\n',
+      'utf-8',
+    );
+    const maker = {
+      listCustomizations: vi.fn(async () => ({
+        errors: [],
+        items: [{
+          engine: 'claude-code' as const,
+          kind: 'skill' as const,
+          scope: 'global' as const,
+          name: 'alpha:browser',
+          pluginName: 'alpha',
+          description: 'Plugin skill',
+          absolutePath: skillDir,
+          mdPath: path.join(skillDir, 'SKILL.md'),
+          files: [],
+        }],
+      })),
+    } as unknown as Maker;
+
+    const result = await scanAllSkills({}, maker);
+
+    // 名称必须保留 `alpha:` 命名空间：两个插件提供同名 Skill 时要能区分来源。
+    // managedByPlugin 让界面禁用启停开关——Claude 忽略插件 Skill 的
+    // skillOverrides，开关只会造成「显示已关闭但仍加载」的假象。
+    expect(result.skills[0]).toMatchObject({
+      name: 'alpha:browser',
+      managedByPlugin: true,
+      canUninstall: false,
+    });
+  });
+
   it('uses the nested skill root when excluding package files', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-nested-exclusion-'));
     tempRoots.push(root);

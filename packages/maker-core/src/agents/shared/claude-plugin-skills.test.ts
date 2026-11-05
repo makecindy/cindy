@@ -131,4 +131,30 @@ describe('scanClaudePluginSkills', () => {
       'alpha:one',
     ]);
   });
+
+  it('falls back to installPath when the marketplace checkout directory is gone', () => {
+    const configDir = tempRoot();
+    const repo = path.join(configDir, 'repo');
+    const cached = path.join(configDir, 'plugins', 'cache', 'alpha', '1.0.0');
+    writeSkill(path.join(cached, 'skills', 'one'), 'one');
+    writeJson(path.join(cached, '.claude-plugin', 'plugin.json'), { name: 'alpha' });
+    // The manifest still declares ./plugins/alpha, but that checkout was moved.
+    writeJson(path.join(repo, '.claude-plugin', 'marketplace.json'), {
+      name: 'alpha-market',
+      plugins: [{ name: 'alpha', source: './plugins/alpha' }],
+    });
+    writeJson(path.join(configDir, 'plugins', 'known_marketplaces.json'), {
+      'alpha-market': {
+        source: { source: 'directory', path: repo },
+        installLocation: repo,
+      },
+    });
+    writeJson(path.join(configDir, 'plugins', 'installed_plugins.json'), {
+      plugins: { 'alpha@alpha-market': [{ installPath: cached }] },
+    });
+
+    expect(scanClaudePluginSkills(configDir).map((skill) => skill.name)).toEqual([
+      'alpha:one',
+    ]);
+  });
 });

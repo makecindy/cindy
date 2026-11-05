@@ -157,7 +157,16 @@ function resolveDirectoryPluginDir(
     if (record?.name !== pluginName) continue;
     const relative = record.source;
     if (typeof relative !== 'string' || !relative.trim()) return null;
-    return path.resolve(installLocation, relative.trim());
+    const resolved = path.resolve(installLocation, relative.trim());
+    // A checkout can be moved or deleted while the marketplace entry survives.
+    // Only adopt the source when it is still a readable directory; otherwise
+    // fall back to `installPath` so a valid cache is not silently dropped.
+    try {
+      if (!fs.statSync(resolved).isDirectory()) return null;
+    } catch {
+      return null;
+    }
+    return resolved;
   }
   return null;
 }
