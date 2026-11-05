@@ -97,6 +97,9 @@ function createEntry(deviceId: string) {
     const online = state.status === 'online';
     if (relayOnline === online) return;
     relayOnline = online;
+    // Presence is incremental and is not replayed on relay reconnect. An old
+    // target-offline observation must not block discovery in the new connection.
+    targetOnline = true;
     connectionChanged();
   });
   const unlistenPresence = window.electronAPI.deviceLink.onPresenceChanged(state => {

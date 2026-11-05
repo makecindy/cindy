@@ -1073,7 +1073,7 @@ describe('remote task interactive-page consent prompt', () => {
   });
   // Unit: neither relay nor target disconnects replay missed plugin notifications.
   // Exercise the retained production entry with no mounted consumers, then remount.
-  it.each(['relay', 'target'])('invalidates retained discovery across a %s disconnect without consumers', async source => {
+  it.each(['relay', 'target', 'target-before-relay'])('invalidates retained discovery across a %s disconnect without consumers', async source => {
     setup(true);
     const normal = invoke.getMockImplementation()!;
     let pending = false;
@@ -1093,11 +1093,13 @@ describe('remote task interactive-page consent prompt', () => {
     first.unmount();
     vi.useFakeTimers();
     await act(async () => {
-      if (source === 'relay') status({ status: 'connecting' });
-      else presence({ deviceId: 'computer-a', online: false } as never);
+      if (source !== 'relay') presence({ deviceId: 'computer-a', online: false } as never);
+      if (source !== 'target') status({ status: 'connecting' });
       pending = true;
-      if (source === 'relay') status({ status: 'online' });
-      else presence({ deviceId: 'computer-a', online: true } as never);
+      if (source === 'target') presence({ deviceId: 'computer-a', online: true } as never);
+      // A new relay connection never replays target presence. The directory can
+      // confirm online on remount even though this entry saw the old offline push.
+      else status({ status: 'online' });
       await vi.advanceTimersByTimeAsync(1000);
     });
     expect(reads()).toBe(1);
