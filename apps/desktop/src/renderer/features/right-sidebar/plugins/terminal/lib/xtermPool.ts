@@ -49,6 +49,8 @@ export interface XtermEntry {
   ptyAttached: boolean;
   /** Closing entries reject late asynchronous work until disposal. */
   closing: boolean;
+  /** Resume suspended preparation when a close is rolled back. */
+  closeCancelledListeners: Set<() => void>;
   /** Original create/attach origin; retained across transient device-index gaps. */
   remoteContext?: RemoteTerminalContext;
   /** SSH form values and submission intent live only as long as this pooled tab. */
@@ -103,10 +105,17 @@ export function getOrCreateXterm(tabId: string): XtermEntry {
     lastSize: { cols: 80, rows: 24 },
     ptyAttached: false,
     closing: false,
+    closeCancelledListeners: new Set(),
   };
   pool.set(tabId, entry);
   const registeredEntry = entry;
-  registerClosing(tabId, (closing) => { registeredEntry.closing = closing; });
+  registerClosing(tabId, (closing) => {
+    const wasClosing = registeredEntry.closing;
+    registeredEntry.closing = closing;
+    if (wasClosing && !closing) {
+      registeredEntry.closeCancelledListeners.forEach(listener => listener());
+    }
+  });
   return entry;
 }
 
@@ -159,6 +168,7 @@ export function disposeXterm(tabId: string): void {
   pool.delete(tabId);
   unregisterClosing(tabId);
   entry.remoteDraft = undefined;
+  entry.closeCancelledListeners.clear();
   try {
     entry.terminal.dispose();
   } catch {

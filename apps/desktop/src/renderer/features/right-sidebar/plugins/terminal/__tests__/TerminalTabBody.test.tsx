@@ -26,6 +26,7 @@ const entry = {
   lastSize: { cols: 80, rows: 24 },
   ptyAttached: true,
   closing: false,
+  closeCancelledListeners: new Set<() => void>(),
   remoteContext: undefined as import('../../../../../../shared/terminal-bridge').RemoteTerminalContext | undefined,
   remoteDraft: undefined as { contextKey: string; connection?: import('../../../../../../shared/terminal-bridge').RemoteTerminalConnection; submitted: boolean } | undefined,
 };
@@ -47,7 +48,11 @@ vi.mock('@/components/ui/select', () => ({
 vi.mock('../lib/xtermPool', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/xtermPool')>()),
   getOrCreateXterm: () => {
-    registerClosing('terminal-1', (closing) => { entry.closing = closing; });
+    registerClosing('terminal-1', (closing) => {
+      const wasClosing = entry.closing;
+      entry.closing = closing;
+      if (wasClosing && !closing) entry.closeCancelledListeners.forEach(listener => listener());
+    });
     return entry;
   },
   getXterm: () => entry,
@@ -96,6 +101,7 @@ beforeEach(() => {
   entry.lastSize = { cols: 80, rows: 24 };
   entry.ptyAttached = true;
   entry.closing = false;
+  entry.closeCancelledListeners.clear();
   entry.remoteDraft = undefined;
   entry.remoteContext = undefined;
   TestResizeObserver.callback = null;
@@ -586,6 +592,50 @@ describe('TerminalTabBody remote ownership', () => {
     await closing;
     await act(async () => { finishPrepare({ context: { sessionId: 'session-1' }, target: { key: 'target', label: 'Host', cwd: '/remote' }, connection: { host: 'saved' }, candidates: [], ticket: 'late' }); });
     expect(window.electronAPI.terminal.create).toHaveBeenCalledTimes(1);
+  });
+
+  // PR8881 / unit: real preparation + close hook must recover without a parent
+  // render. Existing success/unmount cases miss rejected disposal. Minimal race:
+  // describe settles during close, or an older describe settles after rollback.
+  it.each(['before', 'after', 'mount-during-close'] as const)('retries preparation after close fails (%s)', async ordering => {
+    const api = window.electronAPI.terminal;
+    let finishPrepare!: (value: Awaited<ReturnType<typeof api.describeRemote>>) => void;
+    let rejectDispose!: (error: Error) => void;
+    const description = { context: { sessionId: 'session-1' }, target: { key: 'target', label: 'Host', cwd: '/remote' }, connection: null, candidates: [] };
+    const describe = vi.mocked(api.describeRemote);
+    if (ordering !== 'mount-during-close') {
+      describe.mockImplementationOnce(() => new Promise(resolve => { finishPrepare = resolve; }));
+    }
+    describe.mockResolvedValue(description);
+    vi.mocked(api.dispose).mockImplementationOnce(() => new Promise((_, reject) => { rejectDispose = reject; }));
+    const ctx = makeContext({ deviceLinkDeviceId: 'device-1' });
+    const state = { created: false, exited: null, title: '', shellId: '', shellDisplayName: '' };
+    const mount = () => render(<TerminalTabBody state={state} ctx={ctx} active />);
+    if (ordering !== 'mount-during-close') {
+      mount();
+      await waitFor(() => expect(describe).toHaveBeenCalledOnce());
+    }
+    let closing: void | boolean | Promise<void | boolean>;
+    act(() => { closing = getTabKind('terminal')!.onBeforeClose!(state, { tabId: ctx.tabId, sessionId: ctx.sessionId }); });
+    if (ordering === 'mount-during-close') {
+      entry.remoteDraft = { contextKey: JSON.stringify([ctx.sessionId, ctx.deviceLinkDeviceId, ctx.remoteHostId]), submitted: false };
+      mount();
+      expect(describe).not.toHaveBeenCalled();
+    }
+    await waitFor(() => expect(api.dispose).toHaveBeenCalled());
+    if (ordering === 'before') await act(async () => { finishPrepare(description); });
+    expect(screen.queryByLabelText('rightSidebar.terminal.remote.host')).toBeNull();
+    await act(async () => {
+      rejectDispose(new Error('offline'));
+      expect(await closing).toBe(false);
+    });
+    expect(await screen.findByLabelText('rightSidebar.terminal.remote.host')).toBeTruthy();
+    if (ordering === 'after') {
+      await act(async () => { finishPrepare({ ...description, ticket: 'stale-ticket' }); });
+      expect(screen.getByLabelText('rightSidebar.terminal.remote.host')).toBeTruthy();
+    }
+    expect(describe).toHaveBeenCalledTimes(ordering === 'mount-during-close' ? 1 : 2);
+    expect(api.create).toHaveBeenCalledTimes(ordering === 'mount-during-close' ? 0 : 1);
   });
 
   it('blocks a terminal first mounted after close starts and before disposal completes', async () => {

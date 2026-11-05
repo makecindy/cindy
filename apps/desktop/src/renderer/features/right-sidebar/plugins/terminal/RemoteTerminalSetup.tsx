@@ -33,9 +33,16 @@ export function RemoteTerminalSetup(props: TabKindBodyProps<TerminalState>) {
     : { phase: 'terminal' });
 
   useEffect(() => {
-    if (setup.phase !== 'prepare' || entry.closing) return;
+    if (setup.phase !== 'prepare') return;
     let cancelled = false;
-    void window.electronAPI.terminal.describeRemote({ id: ctx.tabId, ...context, ...(setup.connection ? { connection: setup.connection } : {}) }).then((result) => {
+    const retryAfterClose = () => {
+      // Invalidate the old request synchronously, before React runs cleanup.
+      // Main may have invalidated its ticket while attempting disposal.
+      cancelled = true;
+      setSetup(current => current === setup ? { ...current } : current);
+    };
+    entry.closeCancelledListeners.add(retryAfterClose);
+    if (!entry.closing) void window.electronAPI.terminal.describeRemote({ id: ctx.tabId, ...context, ...(setup.connection ? { connection: setup.connection } : {}) }).then((result) => {
       if (cancelled || entry.closing) return;
       if (result.ticket && !setup.editing) {
         setSetup({ phase: 'terminal', ticket: result.ticket });
@@ -43,7 +50,10 @@ export function RemoteTerminalSetup(props: TabKindBodyProps<TerminalState>) {
         setSetup({ phase: 'form', description: result });
       }
     }).catch(() => { if (!cancelled && !entry.closing) setSetup({ ...setup, phase: 'error' }); });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      entry.closeCancelledListeners.delete(retryAfterClose);
+    };
   }, [context, ctx.tabId, entry, setup]);
 
   const ticket = setup.phase === 'terminal' ? setup.ticket : undefined;

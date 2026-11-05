@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
  * 生命周期：
  *   1. 首次 mount：从 xtermPool 拿 Terminal 实例 → `terminal.open(slot)` → fit
  *      → state.created === false → IPC create PTY → patchState({ created: true })
- *      之后再次 mount 重挂 DOM + fit + focus；远程终端还会 attach 补收离开期间的退出状态
+ *      之后再次 mount 重挂 DOM + fit + focus，并 attach 检查离开期间的退出状态
  *   2. 用户输入 → xterm onData → IPC.terminal.write(id, data)
  *   3. PTY 输出 → main 推 terminal:data event → 自己按 id filter → terminal.write(chunk)
  *   4. PTY 退出 → state.exited 填上 → 渲染 overlay (退出码 + Restart 按钮)
@@ -93,7 +93,8 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
   const slotRef = useRef<HTMLDivElement>(null);
   const entryRef = useRef<XtermEntry | null>(null);
   // A pooled attachment outlives this body's exit subscription. Each new body
-  // must attach once after subscribing for SSH so main can replay an exit missed away.
+  // must attach once after subscribing: SSH replays missed exits, while local
+  // create rejects an exited session so the error overlay offers restart.
   const attachedEntryRef = useRef<XtermEntry | null>(null);
   const exitRevisionRef = useRef(0);
   const fontControllerRef = useRef<ReturnType<typeof createTerminalFontController> | null>(null);
@@ -188,7 +189,7 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
   useEffect(() => {
     const entry = entryRef.current;
     if (!entry || entry.closing) return;
-    if (state.created && entry.ptyAttached && (!isRemote || attachedEntryRef.current === entry)) {
+    if (state.created && entry.ptyAttached && attachedEntryRef.current === entry) {
       if (isRemote) setCreating(false);
       return;
     }
@@ -295,7 +296,16 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
     setRestarting(true);
     setRuntimeError(null);
     try {
-      const result = await window.electronAPI.terminal.restart(tabId);
+      const result = await window.electronAPI.terminal.restart(tabId).catch((err: unknown) => {
+        // A failed first spawn has no registered PTY. Try restart first because
+        // hydrated state.created can also be false for an existing exited PTY.
+        if (remote || extractIpcError(err)?.code !== 'TERMINAL_NOT_FOUND') throw err;
+        return window.electronAPI.terminal.create({
+          id: tabId,
+          cwd: workdir || (typeof process !== 'undefined' && process.env?.HOME) || '/',
+          ...(entry?.lastSize ?? { cols: 80, rows: 24 }),
+        });
+      });
       if (!aliveRef.current) return;
       // The exited PTY ignored font-driven resizes. Restart uses its old grid,
       // so resend the latest usable size even when the renderer has not changed.
@@ -328,7 +338,7 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
     } finally {
       if (aliveRef.current) setRestarting(false);
     }
-  }, [restarting, tabId, patchState, state.created, remote, onPrepare]);
+  }, [restarting, tabId, workdir, patchState, state.created, remote, onPrepare]);
 
   const editConnection = useCallback(async () => {
     if (!onEditConnection || restarting) return;

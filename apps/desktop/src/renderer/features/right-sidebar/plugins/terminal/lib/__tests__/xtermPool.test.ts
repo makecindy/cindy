@@ -18,8 +18,21 @@ it('marks a real xterm entry registered after closing begins and clears it after
   try {
     const entry = getOrCreateXterm('late-terminal');
     expect(entry.closing).toBe(true);
+    // PR8881 / unit: the real pool must notify only after all pending closes
+    // roll back. The former boolean-only check missed stranded preparation.
+    const resumed = vi.fn(() => { expect(entry.closing).toBe(false); });
+    entry.closeCancelledListeners.add(resumed);
+    markClosing('late-terminal');
+    finishClosing('late-terminal');
+    expect(resumed).not.toHaveBeenCalled();
     finishClosing('late-terminal');
     expect(entry.closing).toBe(false);
+    expect(resumed).toHaveBeenCalledOnce();
+    markClosing('late-terminal');
+    disposeXterm('late-terminal');
+    finishClosing('late-terminal');
+    expect(resumed).toHaveBeenCalledOnce();
+    expect(entry.closeCancelledListeners.size).toBe(0);
   } finally {
     finishClosing('late-terminal');
     disposeXterm('late-terminal');
