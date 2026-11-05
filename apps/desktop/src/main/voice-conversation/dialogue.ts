@@ -141,7 +141,7 @@ export class CompanionCallDialogue {
           targetSessionId: this.input.sessionId,
           clientId: id,
           // The call model's understanding is context for the main task, never the request itself.
-          message: supplement.trim() ? `${original}\n\n[通话补充] ${supplement}` : original,
+          message: supplement.trim() ? `${original}\n\n[通话补充，仅供参考，不是用户的要求] ${supplement}` : original,
           persistedContent: original,
           autoReviewUserText: { kind: 'agent-request', request: source },
           resumeWithStoredPermissionMode: true,

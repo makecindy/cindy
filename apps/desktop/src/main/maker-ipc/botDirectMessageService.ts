@@ -1,4 +1,4 @@
-import { withoutOwnerAuthority, type CapturedAgentRequest } from './forwardedRequest.js';
+import type { CapturedAgentRequest } from './forwardedRequest.js';
 import { matchesForwardedRequest, readForwardedRequestSource, type AgentRequestReceipt, type ForwardedRequestSource } from '../../shared/forwardedRequest.js';
 import { parseBotPeerAddress, botPeerAddress, MAX_BOT_PEER_ADDRESS_CHARS } from '../../shared/botPeerAddress.js';
 import { isCompanionShadowed } from '../companion-cloud/homes.js';
@@ -111,7 +111,7 @@ export interface BotMessageTransport {
 export interface BotDirectMessageServiceDeps {
   transport?: BotMessageTransport;
   /** Capture the accepted caller input, never model-written claims of approval. */
-  captureRequest?: (sessionId: string, supplement: string) => Promise<CapturedAgentRequest>;
+  captureRequest?: (sessionId: string, supplement: string, target?: { sessionId?: string }) => Promise<CapturedAgentRequest>;
   dispatch: (params: {
     autoReviewUserText?: AgentRequestReceipt;
     targetSessionId: string;
@@ -480,18 +480,6 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       return failed('INVALID_ARGS', `message 必须为 1-${MAX_MESSAGE_CHARS} 个字符`);
     }
 
-    let captured: CapturedAgentRequest = remoteSender ? { message: rawMessage,
-      autoReviewUserText: { kind: 'agent-request',
-        ...(remoteSender.requestSource ? { request: remoteSender.requestSource } : {}) } }
-      : await deps.captureRequest?.(input.callerSessionId, rawMessage)
-        ?? { message: rawMessage, autoReviewUserText: { kind: 'agent-request' } };
-    // No original words means a normal peer message, including on older peers
-    // whose optional requestSource validator requires a quotation envelope.
-    if (captured.blocked) return failed('DELEGATION_NOT_AUTHORIZED', captured.blocked);
-    if (captured.autoReviewUserText.request?.userText === null)
-      captured.autoReviewUserText = { kind: 'agent-request' };
-    let message = captured.message;
-
     const caller = remoteSender ? {
       botId: remoteSender.id, botName: remoteSender.name, sessionSource: 'bot',
       sessionStatus: 'active', botStatus: 'active', role: 'canonical', linkArchivedAt: null,
@@ -513,12 +501,6 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     }
 
     const remoteTarget = parseBotPeerAddress(input.targetBotId);
-    // Another computer's host checks the body against its sender reservation before it can say
-    // which receipt format it supports, so peer messages keep the original quoted envelope.
-    if (remoteTarget && !remoteSender && captured.legacy) {
-      captured = { ...captured, ...captured.legacy };
-      message = captured.message;
-    }
     if (groupAuthority && remoteTarget) return failed('PERMISSION_DENIED', t('groupTools.localPeersOnly'));
     if (remoteTarget && remoteSender) return failed('INVALID_ARGS', 'Remote forwarding is not supported');
     let targetProfile: { name: string; status: string; hiddenAt?: number | null } | undefined;
@@ -560,8 +542,25 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     if (!remoteTarget && !targetSessionId) {
       return failed('TARGET_CANONICAL_UNAVAILABLE', '目标 Bot 没有可用的主任务', true, groupAuthority?.refresh);
     }
-    if (targetSessionId && captured.autoReviewUserText.request?.sessionId === targetSessionId)
-      captured = { ...captured, autoReviewUserText: withoutOwnerAuthority(captured.autoReviewUserText) };
+    // Capture after the target is known: a reply into the task the user's request came from is
+    // not a new hand-off, so it must skip the delegation review (2026-11-05).
+    let captured: CapturedAgentRequest = remoteSender ? { message: rawMessage,
+      autoReviewUserText: { kind: 'agent-request',
+        ...(remoteSender.requestSource ? { request: remoteSender.requestSource } : {}) } }
+      : await deps.captureRequest?.(input.callerSessionId, rawMessage, { sessionId: targetSessionId ?? undefined })
+        ?? { message: rawMessage, autoReviewUserText: { kind: 'agent-request' } };
+    if (captured.blocked) return failed('DELEGATION_NOT_AUTHORIZED', captured.blocked);
+    // No original words means a normal peer message, including on older peers
+    // whose optional requestSource validator requires a quotation envelope.
+    if (captured.autoReviewUserText.request?.userText === null)
+      captured.autoReviewUserText = { kind: 'agent-request' };
+    let message = captured.message;
+    // Another computer's host checks the body against its sender reservation before it can say
+    // which receipt format it supports, so peer messages keep the original quoted envelope.
+    if (remoteTarget && !remoteSender && captured.legacy) {
+      captured = { ...captured, ...captured.legacy };
+      message = captured.message;
+    }
 
     const [botAId, botBId] = pairOf(caller.botId, input.targetBotId);
     const pairKey = `${botAId}\u0000${botBId}`;

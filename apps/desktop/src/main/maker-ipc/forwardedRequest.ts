@@ -135,10 +135,3 @@ export function formatForwardedRequest(source: ForwardedRequestSource, supplemen
   return source.plainBody || source.userText == null ? supplement
     : formatLocalizedForwardedRequest(source, supplement, getResolvedMainLocale());
 }
-
-/** A reply into the task the owner's request came from keeps provenance but never speaks for the owner. */
-export function withoutOwnerAuthority(receipt: AgentRequestReceipt): AgentRequestReceipt {
-  const request = receipt.request;
-  if (!request?.plainBody || request.delegatedText === undefined) return receipt;
-  return { ...receipt, request: { sessionId: request.sessionId, clientId: request.clientId, plainBody: true } };
-}

@@ -421,11 +421,14 @@ export function rebuildSessionQueueItem(
   captured?: AgentRequestReceipt,
 ): AgentInputQueuedMessage {
   const request = typeof item.autoReviewUserText === 'object' ? item.autoReviewUserText.request : undefined;
-  // Older envelopes keep their quoted owner words when edited. A plain hand-off speaks for the
-  // owner only if the editor's own request re-checked the new text; otherwise it keeps provenance.
-  const plainRequest = !request?.plainBody ? undefined
+  // Older envelopes keep their quoted user words when edited. Any other item (a plain hand-off or
+  // an ordinary message without authority) speaks for the user only if the editor's own request
+  // re-checked exactly the new text; otherwise it keeps its provenance without authority.
+  const legacyEnvelope = request?.plainBody !== true && typeof request?.userText === 'string';
+  const plainRequest = legacyEnvelope ? undefined
     : captured?.request?.delegatedText === message ? captured.request
-      : { sessionId: request.sessionId, clientId: request.clientId, plainBody: true as const };
+      : request?.plainBody ? { sessionId: request.sessionId, clientId: request.clientId, plainBody: true as const }
+        : undefined;
   const nextRequest = plainRequest ?? request;
   if (item.origin?.kind === 'session') message = formatForwardedRequest(nextRequest ?? { userText: null }, message);
   const updated = updateQueuedMessageText(item, message);

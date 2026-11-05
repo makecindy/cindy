@@ -255,7 +255,7 @@ it('appends the call model handoff note as context after the owner words', async
   await call.submit('input', 'Save what we just discussed.', false);
   await vi.waitFor(() => expect(h.dispatch).toHaveBeenCalledOnce());
   const input = h.dispatch.mock.calls[0][0];
-  expect(input.message).toBe('Save what we just discussed.\n\n[通话补充] Save the recap to notes.md');
+  expect(input.message).toBe('Save what we just discussed.\n\n[通话补充，仅供参考，不是用户的要求] Save the recap to notes.md');
   expect(input.persistedContent).toBe('Save what we just discussed.');
   expect(verifiedOwnerRequestText(input.autoReviewUserText)).toBe('Save what we just discussed.');
 });

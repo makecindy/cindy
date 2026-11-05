@@ -351,6 +351,18 @@ describe('session control domain service', () => {
     expect(checked.autoReviewUserText).toEqual({ kind: 'agent-request', request: recheck });
   });
 
+  // Review feedback on #9023: an ordinary queued message (no authority) later edited at the
+  // user's request must adopt the editor's freshly checked receipt, not keep the empty one.
+  it('adopts a freshly checked receipt when editing an ordinary queued message', () => {
+    const queued = item({ kind: 'session', senderSessionId: 'caller', displayText: 'before' });
+    queued.autoReviewUserText = { kind: 'agent-request' };
+    const recheck = { sessionId: 'owner', clientId: 'human', plainBody: true as const, delegatedText: 'Merge it after checks.' };
+    const checked = rebuildSessionQueueItem(queued, 'Merge it after checks.', { kind: 'agent-request', request: recheck });
+    expect(checked.autoReviewUserText).toEqual({ kind: 'agent-request', request: recheck });
+    const unchecked = rebuildSessionQueueItem(queued, 'Merge it after checks.');
+    expect(unchecked.autoReviewUserText).toEqual({ kind: 'agent-request', request: { userText: null } });
+  });
+
   it('keeps renderer composer envelopes intact when rebuilding a non-session queue item', () => {
     const queued = item();
     queued.persistedContent = JSON.stringify({

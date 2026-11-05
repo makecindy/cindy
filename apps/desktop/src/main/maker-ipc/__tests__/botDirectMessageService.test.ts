@@ -143,10 +143,24 @@ describe('botDirectMessageService', () => {
     }, async () => [], true, false, { targetSessionId: 'c-main', authorize });
     expect(next.autoReviewUserText.request).toMatchObject({ sessionId: 'a-main', delegatedText: 'Keep coverage' });
     // The peer's answer into the task the owner spoke in keeps provenance only.
-    const reply = createBotDirectMessageService({ dispatch, captureRequest: (sessionId, message) => captureAgentRequest(sessionId, message,
-      { clientId: delivered.clientId, delegatedRequest: delivered.autoReviewUserText.request }, async () => [], true, false, { authorize }) });
+    const reply = createBotDirectMessageService({ dispatch, captureRequest: (sessionId, message, target) => captureAgentRequest(sessionId, message,
+      { clientId: delivered.clientId, delegatedRequest: delivered.autoReviewUserText.request }, async () => [], true, false,
+      { targetSessionId: target?.sessionId, authorize }) });
     expect(await reply.messageAgent({ callerSessionId: 'b-main', targetBotId: 'bot-a', message: 'Fixtures are clean.' }))
       .toMatchObject({ ok: true });
+    expect(verifiedOwnerRequestText(dispatch.mock.calls.at(-1)![0].autoReviewUserText)).toBeUndefined();
+  });
+
+  // Review feedback on #9023: the target is resolved before capture, so a reply into the task the
+  // user's request came from skips the delegation review instead of being refused by it.
+  it('does not review a reply into the task the request came from', async () => {
+    const authorize = vi.fn(async () => ({ kind: 'blocked' as const, reason: 'unavailable' }));
+    const captureRequest = (sessionId: string, message: string, target?: { sessionId?: string }) => captureAgentRequest(sessionId, message,
+      { clientId: 'x', delegatedRequest: { sessionId: 'a-main', clientId: 'owner-input', plainBody: true, delegatedText: 'Fix it.' } },
+      async () => [], true, false, { targetSessionId: target?.sessionId, authorize });
+    const service = createBotDirectMessageService({ dispatch, captureRequest });
+    expect(await service.messageAgent({ callerSessionId: 'b-main', targetBotId: 'bot-a', message: 'Done.' })).toMatchObject({ ok: true });
+    expect(authorize).not.toHaveBeenCalled();
     expect(verifiedOwnerRequestText(dispatch.mock.calls.at(-1)![0].autoReviewUserText)).toBeUndefined();
   });
 
