@@ -317,6 +317,74 @@ describe('sidebar navigation customization', () => {
     expect(getSidebarNavigationPrefs(OWNER).appsAtTop).toEqual(['app:xd-sites']);
   });
 
+  it('discards the draft and closes on an unclaimed Esc', () => {
+    const onDone = vi.fn();
+    render(<SidebarNavigationCustomize onDone={onDone} />);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'sidebar.navigation.items.search' }));
+    act(() => sortableMock.props!.onReorder(['plugins', 'search', 'automations']));
+    const before = localStorage.getItem(PREFS_KEY);
+    // Focus is on the body after the More menu closes, so the press reaches window.
+    const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    act(() => {
+      document.body.dispatchEvent(event);
+    });
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
+    expect(getSidebarNavigationPrefs(OWNER)).toEqual({
+      order: [...defaults().order],
+      visible: [...defaults().visible],
+      appsAtTop: [],
+    });
+    expect(localStorage.getItem(PREFS_KEY)).toBe(before);
+  });
+
+  it('closes on Esc from its own controls but leaves claimed presses alone', () => {
+    const onDone = vi.fn();
+    render(<SidebarNavigationCustomize onDone={onDone} />);
+    const escape = (target: EventTarget, init: KeyboardEventInit = {}) =>
+      act(() => {
+        target.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true, ...init }),
+        );
+      });
+    // Held key auto-repeat, modifiers and IME composition never close the panel.
+    escape(document.body, { repeat: true });
+    escape(document.body, { shiftKey: true });
+    escape(document.body, { isComposing: true });
+    // An editable field elsewhere keeps its Esc.
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    escape(input);
+    // A press already handled by an inner layer is not taken again.
+    const claimed = (event: Event) => event.preventDefault();
+    window.addEventListener('keydown', claimed, true);
+    escape(document.body);
+    window.removeEventListener('keydown', claimed, true);
+    // An open preview closes first.
+    const lightbox = document.createElement('div');
+    lightbox.setAttribute('data-lightbox-layer', '');
+    document.body.appendChild(lightbox);
+    escape(document.body);
+    lightbox.remove();
+    input.remove();
+    expect(onDone).not.toHaveBeenCalled();
+    // Esc on the panel's own checkbox still closes it.
+    escape(screen.getByRole('checkbox', { name: 'sidebar.navigation.items.plugins' }));
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops listening for Esc once closed', () => {
+    const onDone = vi.fn();
+    const view = render(<SidebarNavigationCustomize onDone={onDone} />);
+    view.unmount();
+    act(() => {
+      document.body.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+      );
+    });
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
   it('toggles from anywhere in the row except the drag handle', () => {
     render(<SidebarNavigationCustomize onDone={() => {}} />);
     const plugins = screen.getByRole('checkbox', { name: 'sidebar.navigation.items.plugins' });

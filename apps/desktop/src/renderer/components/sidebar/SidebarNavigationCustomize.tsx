@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Check, GripVertical, Puzzle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -7,6 +7,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
+import { shouldCardShortcutYield } from '@/lib/editableKeyboardTarget';
 import { cn } from '@/lib/utils';
 
 import { MAIN_VIEW_ICONS } from './GhostMainViewNavEntries';
@@ -29,6 +30,7 @@ import {
 import { SortableList } from './SortableList';
 
 interface SidebarNavigationCustomizeProps {
+  /** Closes the panel, after saving (Done) or after discarding the draft (Esc). */
   onDone: () => void;
 }
 
@@ -42,7 +44,7 @@ interface CustomizeDraft {
 
 /**
  * 管理一级入口(含带主视图的插件)的勾选与顺序；草稿在“完成”时一次性提交，
- * 取消离开不会改偏好。勾选只决定入口在最外层还是收进「更多」；插件是否进侧边栏
+ * 按 Esc 放弃草稿并关闭，不会改偏好。勾选只决定入口在最外层还是收进「更多」；插件是否进侧边栏
  * 由插件自己的「在侧边栏显示」开关决定，关掉的插件不会出现在这里。
  */
 export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomizeProps) {
@@ -60,6 +62,36 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
   const [draft, setDraft] = useState<CustomizeDraft>(initial);
   const reducedMotion = useReducedMotion();
   const [resetting, setResetting] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // Esc discards the draft and closes. The panel opens from the More menu, whose
+  // trigger unmounts meanwhile, so focus usually sits on the body rather than in the
+  // panel: listen on window and act only on an unclaimed press. Editable fields,
+  // menus / dialogs / controls elsewhere, IME composition, modified Esc and key
+  // auto-repeat keep the key; an open preview closes first.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key !== 'Escape' ||
+        event.repeat ||
+        event.keyCode === 229 ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey
+      ) {
+        return;
+      }
+      if (shouldCardShortcutYield(event, 'dismiss', rootRef.current)) return;
+      // Previews close on a document-level Esc without preventDefault and stay mounted
+      // while they fade out; that press belongs to them.
+      if (document.querySelector('[data-lightbox-layer]')) return;
+      event.preventDefault();
+      onDone();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onDone]);
 
   // Plugins switched on or off while the panel is open join or leave the list.
   const orderedItems = resolveSidebarNavigationOrder(draft.order, appIds);
@@ -161,6 +193,7 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
 
   return (
     <div
+      ref={rootRef}
       role="dialog"
       aria-label={t('sidebar.navigation.customize.title')}
       className="mx-2 mb-2 rounded-xl border border-sidebar-border bg-[var(--surface-elevated)] p-3 shadow-[shadow:var(--shadow-menu)]"
