@@ -77,7 +77,6 @@ export const personalizationDetailsSettings = defineSettings({
     targetId: 'settings-search-target-personalization-auxiliary-models',
     titleKey: 'settings.auxiliaryModels.preferred.label',
     sectionKey: 'settings.sections.auxiliaryModels',
-    descriptionKey: 'settings.auxiliaryModels.preferred.description',
   },
   auxiliaryModelsFallback1Label: {
     id: 'settings.auxiliaryModels.fallback1.label',
@@ -86,7 +85,6 @@ export const personalizationDetailsSettings = defineSettings({
     targetId: 'settings-search-target-personalization-auxiliary-models',
     titleKey: 'settings.auxiliaryModels.fallback1.label',
     sectionKey: 'settings.sections.auxiliaryModels',
-    descriptionKey: 'settings.auxiliaryModels.fallback1.description',
   },
   auxiliaryModelsFallback2Label: {
     id: 'settings.auxiliaryModels.fallback2.label',
@@ -95,7 +93,6 @@ export const personalizationDetailsSettings = defineSettings({
     targetId: 'settings-search-target-personalization-auxiliary-models',
     titleKey: 'settings.auxiliaryModels.fallback2.label',
     sectionKey: 'settings.sections.auxiliaryModels',
-    descriptionKey: 'settings.auxiliaryModels.fallback2.description',
   },
   terminalShellCardLabel: {
     id: 'settings.terminalShell.card.label',

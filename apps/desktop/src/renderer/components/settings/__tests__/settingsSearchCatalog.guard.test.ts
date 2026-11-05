@@ -57,7 +57,8 @@ describe('settings search anchor contract', () => {
       // Per-row identity and platform filtering are also checked against real DOM
       // in KeyboardShortcutsSection.mutationRace.test.tsx.
       for (const match of text.matchAll(/const (\w+) = (\w+)\[[^\]]+\];/g)) {
-        if (!text.includes('id={' + match[1] + '.targetId}')) continue;
+        if (!text.includes('id={' + match[1] + '.targetId}') &&
+          !text.includes('id={' + match[1] + '?.targetId}')) continue;
         const collection = definitions.get(match[2]);
         if (!collection) continue;
         for (const definition of Object.values(collection)) {

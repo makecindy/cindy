@@ -37,11 +37,12 @@ const controls = new Set([
   "VoiceInputSelect",
   "PillSelect",
   "BehaviorRow",
+  "OneshotModelPinPicker",
 ]);
 // These application controls do not spread DOM props by contract. Check their
 // implementation as well as every caller, including aliases and same-file controls.
 const customControls = new Set([
-  "SegmentedControl", "FontFamilyPicker", "BotModelChainEditor", "VoiceInputSelect", "PillSelect", "Select", "BehaviorRow",
+  "SegmentedControl", "FontFamilyPicker", "BotModelChainEditor", "VoiceInputSelect", "PillSelect", "Select", "BehaviorRow", "OneshotModelPinPicker", "ModelSelector",
 ]);
 const interactiveRoles = new Set([
   "button", "checkbox", "radio", "switch", "combobox", "listbox", "option",
@@ -77,8 +78,22 @@ function forwardedIdParameter(owner) {
       !binding.initializer && !binding.dotDotDotToken)?.name.text;
 }
 
-function forwardsIdToDom(source, name) {
+function forwardsIdToDom(source, name, controlSources = new Map(), visited = new Set()) {
+  if (visited.has(name)) return false;
+  const nextVisited = new Set([...visited, name]);
   const file = parse(source);
+  const nestedControls = new Map();
+  for (const statement of file.statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
+    const named = statement.importClause?.namedBindings;
+    if (!named || !ts.isNamedImports(named)) continue;
+    for (const item of named.elements) {
+      const exported = item.propertyName?.text ?? item.name.text;
+      if (customControls.has(exported)) nestedControls.set(item.name.text, {
+        name: exported, source: controlSources.get(statement.moduleSpecifier.text + '#' + exported),
+      });
+    }
+  }
   let forwarded = false;
   walk(file, owner => {
     if (!ts.isFunctionDeclaration(owner) || owner.name?.text !== name || !owner.body) return;
@@ -88,7 +103,10 @@ function forwardsIdToDom(source, name) {
       if (!ts.isJsxOpeningElement(node) && !ts.isJsxSelfClosingElement(node)) return;
       const tag = node.tagName.getText(file);
       // Intrinsic elements and the existing DOM-prop-forwarding UI primitives.
-      if (!/^[a-z]/.test(tag) && tag !== "Button" && tag !== "Switch" && tag !== "Select.Trigger") return;
+      if (!/^[a-z]/.test(tag) && tag !== "Button" && tag !== "Switch" && tag !== "Select.Trigger") {
+        const nested = nestedControls.get(tag);
+        if (!nested?.source || !forwardsIdToDom(nested.source, nested.name, controlSources, nextVisited)) return;
+      }
       if (node.attributes.properties.some(attribute => ts.isJsxAttribute(attribute) &&
         attribute.name.getText(file) === "data-setting-id" && attribute.initializer &&
         ts.isJsxExpression(attribute.initializer) && attribute.initializer.expression &&
@@ -280,7 +298,7 @@ export function inspectSettingsControls(
     else {
       const tag = node.tagName.getText(file);
       const customName = customNames.get(tag);
-      if (customName && !forwardsIdToDom(controlSources.get(imports.get(tag)) ?? source, customName))
+      if (customName && !forwardsIdToDom(controlSources.get(imports.get(tag)) ?? source, customName, controlSources))
         errors.push({
           line: file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1,
           message: `${tag} must forward the caller data-setting-id to rendered DOM`,
@@ -446,6 +464,26 @@ export function checkSettingsSearch(baseRef = "HEAD") {
     if (baseFiles.has(file)) previous = git(["show", `${baseRef}:${file}`]);
     const registered = new Set();
     const controlSources = new Map();
+    const loadControlSource = (from, name, importer) => {
+      const key = from + '#' + name;
+      if (controlSources.has(key)) return;
+      const stem = from.startsWith('@/')
+        ? path.join(root, 'apps/desktop/src/renderer', from.slice(2))
+        : path.resolve(root, path.dirname(importer), from);
+      const resolved = stem + '.tsx';
+      if (!existsSync(resolved)) return;
+      const content = readFileSync(resolved, 'utf8');
+      controlSources.set(key, content);
+      for (const statement of parse(content).statements) {
+        if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
+        const named = statement.importClause?.namedBindings;
+        if (!named || !ts.isNamedImports(named)) continue;
+        for (const item of named.elements) {
+          const exported = item.propertyName?.text ?? item.name.text;
+          if (customControls.has(exported)) loadControlSource(statement.moduleSpecifier.text, exported, resolved);
+        }
+      }
+    };
     walk(parse(source), (node) => {
       if (
         !ts.isImportDeclaration(node) ||
@@ -458,11 +496,7 @@ export function checkSettingsSearch(baseRef = "HEAD") {
         for (const item of named.elements) {
           const name = item.propertyName?.text ?? item.name.text;
           if (!customControls.has(name)) continue;
-          const stem = from.startsWith("@/")
-            ? path.join(root, "apps/desktop/src/renderer", from.slice(2))
-            : path.resolve(root, path.dirname(file), from);
-          const resolved = `${stem}.tsx`;
-          if (existsSync(resolved)) controlSources.set(`${from}#${name}`, readFileSync(resolved, "utf8"));
+          loadControlSource(from, name, file);
         }
       }
       if (!from.endsWith(".settings-search")) return;

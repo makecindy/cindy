@@ -54,7 +54,7 @@ void mountPage({
       gitSafetyGet: read(state({ enabled: true })),
       memoryGet: read({ enabled: true }), memoryGetSettingsState: read(state({ maker: true })),
       subagentModelSettingsGet: read(state(SUBAGENT_MODEL_SETTINGS_DEFAULTS)),
-      auxiliaryModelSettingsGet: read(state({ models: [] })),
+      auxiliaryModelSettingsGet: read(state({ models: ctx.data.customAuxiliary ? ['cat:openrouter:codex:openai/gpt-5-mini'] : [] })),
       visionBridgeSettingsGet: read(state(VISION_BRIDGE_SETTINGS_DEFAULTS)),
       silentEncryptedRetryGet: read(state({ enabled: true })),
       listCustomMcpServers: read({ servers: [] }), onMcpChanged: subscription('mcp'),

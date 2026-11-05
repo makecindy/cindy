@@ -19,7 +19,7 @@ return <Switch {...item.controlProps} checked={true} />; }`;
 
 describe("settings search coverage gate", () => {
   it("rejects custom controls that discard or replace a registered caller ID", () => {
-    for (const name of ['SegmentedControl', 'FontFamilyPicker', 'BotModelChainEditor', 'PillSelect', 'Select', 'BehaviorRow']) {
+    for (const name of ['SegmentedControl', 'FontFamilyPicker', 'BotModelChainEditor', 'PillSelect', 'Select', 'BehaviorRow', 'OneshotModelPinPicker']) {
       const page = `${imports}\nconst page = <${name} data-setting-id={settings.enabled.id} />;`;
       const discarded = `function ${name}({ value }) { return <div />; }`;
       const replaced = `function ${name}({ 'data-setting-id': settingId }) { return <button data-setting-id={settings.other.id} />; }`;
@@ -31,6 +31,21 @@ describe("settings search coverage gate", () => {
   });
   // PR #8481: role-based selectors escaped the migrated-file contract. Exercise
   // the real checker with the smallest unbound role control (unit tier).
+  // PR #8481: a two-hop adapter must not hide a dropped ID in its leaf control.
+  it("checks the complete picker forwarding chain", () => {
+    const page = imports + '\nimport { OneshotModelPinPicker } from "./Picker"; const page = <OneshotModelPinPicker data-setting-id={settings.enabled.id} />;';
+    const adapter = 'import { ModelSelector } from "./Selector"; export function OneshotModelPinPicker({ "data-setting-id": id }) { return <ModelSelector data-setting-id={id} />; }';
+    const leaf = 'export function ModelSelector({ "data-setting-id": id }) { return <button data-setting-id={id} />; }';
+    const sources = new Map([['./Picker#OneshotModelPinPicker', adapter], ['./Selector#ModelSelector', leaf]]);
+    assert.deepEqual(inspectSettingsControls(page, '', registered, new Set(), sources), []);
+    sources.set('./Selector#ModelSelector', leaf.replace('data-setting-id={id}', ''));
+    assert.equal(inspectSettingsControls(page, '', registered, new Set(), sources).length, 1);
+    sources.delete('./Selector#ModelSelector');
+    assert.equal(inspectSettingsControls(page, '', registered, new Set(), sources).length, 1);
+    sources.set('./Selector#ModelSelector', leaf);
+    sources.set('./Picker#OneshotModelPinPicker', adapter.replace('data-setting-id={id}', ''));
+    assert.equal(inspectSettingsControls(page, '', registered, new Set(), sources).length, 1);
+  });
   it("checks intrinsic interactive roles without treating status text as a control", () => {
     for (const role of ['button', 'checkbox', 'radio', 'switch', 'combobox', 'textbox', 'slider', 'spinbutton', 'option']) {
       for (const roleAttribute of [`role="${role}"`, `role={'${role}'}`]) {

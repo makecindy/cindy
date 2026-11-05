@@ -12,6 +12,7 @@ export default {
     'src/renderer/contexts/AuthContext': { partial: `export const useAuth = () => ({ mode: (window.__uiPage.ctx.data.cloud || window.__uiPage.ctx.data.tab === 'billing') ? 'cloud' : 'local', dataOwnerId: 'fixture-account', user: { id: 'fixture-account', name: 'Preview', membershipKind: 'personal' } });` },
   },
   cases: {
+    'personalization-custom': { about: 'Custom auxiliary slots forward search IDs to real model selector buttons', data: { tab: 'personalization', customAuxiliary: true } },
     'remote-signed-in': { about: 'Signed-in device controls and relay section with searchable targets', data: { tab: 'remote-control', cloud: true } },
     ...Object.fromEntries([
     'general', 'appearance', 'personalization', 'voice-input', 'shortcuts',
@@ -30,6 +31,13 @@ export default {
         const classical = panel.locator('#settings-classical-language [role="combobox"]');
         assert.equal(await classical.count(), 2);
         for (const control of await classical.all()) assert.equal(await control.getAttribute('data-setting-id'), 'general.classicalLanguage');
+      }
+    }
+    if (ui.data.customAuxiliary) {
+      for (const slot of ['preferred', 'fallback1', 'fallback2']) {
+        const trigger = panel.locator('button[data-setting-id="settings.auxiliaryModels.' + slot + '.label"]');
+        assert.equal(await trigger.count(), 1);
+        assert.equal(await trigger.getAttribute('aria-haspopup'), 'listbox');
       }
     }
     // Expand actual disclosure buttons without opening selects or write actions.

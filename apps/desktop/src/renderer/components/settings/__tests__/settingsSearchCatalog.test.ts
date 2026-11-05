@@ -46,6 +46,16 @@ const searchContext = { platform: 'win32', region: 'cn', mode: 'cloud', membersh
 } as const;
 
 describe('settings discoverability regressions', () => {
+  // Unit regression (#8481): automatic mode renders no slot explanations.
+  // Existing catalog tests did not query those hidden descriptions.
+  it('does not advertise custom-only auxiliary slot explanations', () => {
+    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, searchContext);
+    for (const slot of ['preferred', 'fallback1', 'fallback2']) {
+      const query = searchI18n.t('settings.auxiliaryModels.' + slot + '.description');
+      expect(searchSettings(documents, query).map(({ entry }) => entry.id))
+        .not.toContain('settings.auxiliaryModels.' + slot + '.label');
+    }
+  });
   // Unit regressions (#8481): generic titles did not cover visible storage
   // explanations or the speaker card's unsupported/enrolled branches.
   it('finds storage rows by their visible descriptions', () => {

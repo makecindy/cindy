@@ -281,7 +281,7 @@ export function AuxiliaryModelSection() {
                         {t(definition.titleKey)}
                       </div>
                       <p className="mt-1 text-12 leading-[1.5] text-[var(--text-tertiary)]">
-                        {t(definition.descriptionKey)}
+                        {t(`settings.auxiliaryModels.${slotKey}.description`)}
                       </p>
                     </div>
                     <div className="w-[min(100%,320px)] shrink-0">
@@ -289,6 +289,7 @@ export function AuxiliaryModelSection() {
                           provider-first picker exposes every routable supplier without
                           surfacing Harness or a thinking-depth control. */}
                       <OneshotModelPinPicker
+                        data-setting-id={definition.id}
                         value={pin ?? undefined}
                         options={slotOptions}
                         onChange={(next) => applySlot(index, next)}
