@@ -60,19 +60,20 @@ export function FailedScheduleNotice({
     setDismissed(run);
     void AsyncStorage.setItem(key, JSON.stringify({ runId: run.runId, firedAt: run.firedAt })).catch(() => undefined);
   };
+  const message = t(`session.failedScheduleNotice.${scheduleFailureMessageKey(run)}`, {
+    name: run.missingPlugin?.name,
+  });
   return (
     <ErrorNotice
       style={{ marginTop: spacing.sm }}
       testID="session.failedScheduleNotice"
-      message={t(
-        `session.failedScheduleNotice.${scheduleFailureMessageKey(run)}`,
-      )}
+      message={message}
       onDismiss={dismiss}
       dismissLabel={t('session.failedScheduleNotice.dismissTitle')}
     >
       {run.errorMsg ? <AgentErrorDetails message={run.errorMsg}
         onDiagnose={onDiagnose ? () => onDiagnose({
-          message: t(`session.failedScheduleNotice.${scheduleFailureMessageKey(run)}`),
+          message,
           details: run.errorMsg!,
         }) : undefined} /> : null}
     </ErrorNotice>

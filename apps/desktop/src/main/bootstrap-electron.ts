@@ -1176,6 +1176,7 @@ import {
   getGhostBrowserExtensionSlot,
   screenGhostControlPoint,
   resolveGhostControlPointPlugin,
+  diagnoseScheduleHookPluginForActiveOwner,
   getLiveScreenHost,
 } from './cindy-brain/index.js';
 import { setCodexImageAuthBinding } from './cindy-brain/codexImageAuthBinding.js';
@@ -1381,6 +1382,9 @@ async function attemptStartSchedulerOnce(): Promise<void> {
       ...automationGitBaselineHooks,
       screenControlPoint: screenGhostControlPoint,
       resolvePreRunPlugin: (pluginId) => resolveGhostControlPointPlugin('will-schedule-run', pluginId),
+      diagnosePreRunHookFailure: (command) =>
+        diagnoseScheduleHookPluginForActiveOwner(command, async (pluginId) =>
+          (await getPluginMarketService().detail(pluginId)).name || undefined),
     });
     // startScheduler fences resets while its async startup is in flight. Keep
     // the boundary check immediately before listener publication as a second
