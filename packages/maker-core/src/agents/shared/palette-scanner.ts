@@ -7,6 +7,7 @@ import type {
   AtResourceItem,
   ScanAtResourcesResult,
 } from '../../types/palette.js';
+import { scanClaudePluginSkills } from './claude-plugin-skills.js';
 import { shouldPruneSkillScanDirectory } from './skill-scan-limits.js';
 
 const MAX_SCAN_ITEMS = 2_000;
@@ -357,6 +358,19 @@ export async function scanClaudeSlashCommands(workingDir?: string): Promise<Agen
       ...(await scanClaudeCommandFiles(path.join(workingDir, '.claude', 'commands'), 'project')),
       ...(await scanClaudeSkillDirs(path.join(workingDir, '.claude', 'skills'), 'project')),
     );
+  }
+
+  // Enabled Claude Code plugins expose their Skills with a `plugin:skill`
+  // namespace. Claude Code's own runtime loads them; the Desktop palette used
+  // to scan only user/project folders, so plugin Skills never showed up here.
+  for (const skill of scanClaudePluginSkills(path.join(home, '.claude'))) {
+    discovered.push({
+      name: skill.name,
+      description: await readMarkdownDescription(skill.mdPath),
+      source: 'skill',
+      path: skill.mdPath,
+      scope: 'global',
+    });
   }
 
   for (const cmd of discovered) {

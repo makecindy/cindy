@@ -21,7 +21,12 @@ import type {
   ListCustomizationsOptions,
   ListCustomizationsResult,
 } from '../../types/customizations.js';
-import { scanCustomizationSources, type SourceDef } from '../shared/customization-scanner.js';
+import { scanClaudePluginSkills } from '../shared/claude-plugin-skills.js';
+import {
+  readFolderSkill,
+  scanCustomizationSources,
+  type SourceDef,
+} from '../shared/customization-scanner.js';
 
 type Kind = 'skill' | 'command' | 'agent';
 type Scope = 'global' | 'project';
@@ -73,6 +78,26 @@ function scanClaudeCustomizationsAtConfig(
 
   const sources = buildClaudeSources(workingDirs, configDir);
   const result = scanCustomizationSources(sources, kindFilter);
+
+  // Enabled Claude Code plugins contribute Skills with a `plugin:skill`
+  // namespace. They are not part of the user/project folder sources above.
+  if (!kindFilter || kindFilter.has('skill')) {
+    for (const skill of scanClaudePluginSkills(configDir)) {
+      result.items.push(
+        readFolderSkill(
+          {
+            engine: 'claude-code',
+            kind: 'skill',
+            scope: 'global',
+            dir: skill.folder,
+            namePrefix: skill.pluginName,
+          },
+          skill.folder,
+          skill.mdPath,
+        ),
+      );
+    }
+  }
 
   result.items.sort((a, b) => {
     const sa = SCOPE_ORDER[a.scope as Scope] ?? 99;
