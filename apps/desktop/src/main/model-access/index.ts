@@ -65,7 +65,7 @@ import {
   resetExecutableMediaModelCache,
 } from './mediaModels.js';
 import { noteModelAccessSyncState } from './readiness.js';
-export { isModelAccessProvisioning, isModelAccessReady } from './readiness.js';
+export { isModelAccessReady, isModelAccessTransientlyUnavailable } from './readiness.js';
 
 const log = createLogger('modelAccess');
 

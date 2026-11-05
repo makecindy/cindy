@@ -765,7 +765,7 @@ import { recordGhostCallMedia } from './ghostMediaLedger.js';
 import { resolveGhostMediaHandoverTarget } from './ghostMediaHandoverTargetTracker.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { ghostSetupNavigationForAction } from './ghostSetupNavigation.js';
-import { isModelAccessProvisioning, isModelAccessReady } from '../model-access/readiness.js';
+import { isModelAccessReady, isModelAccessTransientlyUnavailable } from '../model-access/readiness.js';
 import {
   filterEnabledGatewayMediaModels,
   isMediaModelExecutable,
@@ -6216,7 +6216,7 @@ export function getGhostCindySlot(): GhostCindySlot {
       // 留在主机侧，意识只拿规范化结果。
       searchWeb: (params) => getCindyProxySearchService().search(params),
       isModelAccessReady,
-      isModelAccessProvisioning,
+      isModelAccessTransientlyUnavailable,
       // 快问快答(text.oneshot):走轻量任务模型链(与会话起标题/任务摘要
       // 同一条,用户在设置里配置)。动态 import:utility-model 的传递依赖在
       // 模块顶层读 electron app 路径,静态引入会把这条链拽进所有 import 本

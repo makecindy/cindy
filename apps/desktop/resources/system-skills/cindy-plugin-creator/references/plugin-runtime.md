@@ -285,7 +285,8 @@ const r = await cindy.send({
   (cindy 详单未知类目硬拒),
   声明前确认目标用户群的主机版本;
 - `errorCode:'NO_CANDIDATE'` = 用户当前没有可用的快速通道(未配置或凭证
-  不可用)。**这是正常失败面**:如实提示用户,不要重试轰炸;
+  不可用)。**这是正常失败面**:如实提示用户,不要重试轰炸。账号切换、刚登录
+  凭证还在下发或同步暂时失败时主机回 `'INTERNAL'` 而不是它,稍后可以再试;
 - `expectJson: true` 时主机会剥掉代码围栏并校验 JSON.parse,解析失败返回
   `errorCode:'BAD_MODEL_OUTPUT'`(message 带原始输出开头供排查)。字段结构
   在 prompt 里自己描述,主机不做逐字段 schema 校验;
@@ -389,7 +390,8 @@ const r = await cindy.send({
   给你另一个长度;
 - `errorCode:'NO_CANDIDATE'` = 当前没有可用的向量型号(用户在设置里停用了、
   该版本/该区域不提供,或主机侧凭证不可用)。**这是正常失败面**,如实提示,别
-  重试轰炸;
+  重试轰炸。账号切换、刚登录凭证还在下发或同步暂时失败时主机回 `'INTERNAL'`
+  而不是它;
 - 失败码是分档的,按它决定下一步,别一律重试:`'INVALID_PARAMS'` = 你的请求
   本身要改(型号不在白名单、维度不支持、texts/documents 同时传、不支持上下文化
   的型号收到 documents),原样重试永远失败;`'RATE_LIMITED'` = 退避后可再来;
