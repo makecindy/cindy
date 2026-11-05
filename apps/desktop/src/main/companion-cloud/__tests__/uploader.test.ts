@@ -608,6 +608,32 @@ describe('companion store', () => {
     expect(t.entries.get(key)?.deleted).toBe(true);
   });
 
+  it('keeps a value written meanwhile when clearing an old store copy meets a conflict', async () => {
+    const t = storeSetup();
+    const key = 'companion.memory.v1:big.md';
+    const big = memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000));
+    t.setValues([profile('soul'), big]);
+    await t.uploader.syncBot('bot', 'actor');
+    // The previous home's late upload lands over preference revision 1 before this cleanup.
+    const late = memory('big.md', 'z'.repeat(COMPANION_VALUE_MAX_BYTES + 1000));
+    t.entries.set(key, { ...t.entries.get(key)!, revision: 2, value: { companionStore: 1, prefRevision: 1, value: late.value } });
+    t.setValues([profile('soul'), memory('big.md', 'small')]);
+    await t.uploader.syncBot('bot', 'actor');
+    expect(t.entries.get(key)?.deleted).toBe(false);
+  });
+
+  it('does not let a hand-over to a preference-only reader skip a later store value', async () => {
+    const t = storeSetup();
+    const key = 'companion.memory.v1:big.md';
+    t.setValues([profile('soul'), memory('big.md', 'small')]);
+    await t.uploader.syncBot('bot', 'actor');
+    // Another computer's large value sits in the store; an older reader would restore 'small'.
+    t.entries.set(key, { key, revision: 1, seq: 9, hash: 'late', size: 70_000, deleted: false, value: { companionStore: 1, prefRevision: 1, value: { content: 'late' } } });
+    t.state.update('bot', 'actor', entry => { entry.storeSeeded = false; });
+    await expect(t.uploader.syncBot('bot', 'actor', Number.POSITIVE_INFINITY, { requireAll: true, preferencesOnly: true }))
+      .rejects.toThrow('COMPANION_VALUE_TOO_LARGE');
+  });
+
   it('passes a deletion of a value kept only in the store to the next restore', async () => {
     const t = storeSetup();
     const big = memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000));

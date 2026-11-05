@@ -181,6 +181,13 @@ export function createCompanionUploader(deps: {
     const same = !server.deleted && (server.blob ? server.hash === store.blobHash(value, prefRevision)
       : valueHash(server.value) === hash && ((server as { prefRevision?: number }).prefRevision ?? 0) >= prefRevision);
     if (same || (server.deleted && value === null)) return server.revision;
+    // Clearing an old copy is not an edit: a value written meanwhile over this computer's
+    // preference row (the previous home's late upload) stays.
+    const serverPrefRevision = (server as { prefRevision?: number }).prefRevision;
+    if (value === null && !server.deleted && (server.blob || (serverPrefRevision !== undefined && serverPrefRevision >= prefRevision))) {
+      deps.state.update(botId, actorId, entry => { entry.stored = { ...entry.stored, [key]: { hash: server.hash, revision: server.revision } }; });
+      return null;
+    }
     return store.write(actorId, key, value, server.revision, prefRevision);
   }
 
@@ -316,9 +323,18 @@ export function createCompanionUploader(deps: {
         }
         const conflict = chatRejection(error, 409, 'REVISION_CONFLICT');
         if (!conflict) throw error;
-        revision = await resolveStoreConflict(botId, actorId, store, key, storeValue, inPreferences ? TOMBSTONE_HASH : hash);
+        const resolved = await resolveStoreConflict(botId, actorId, store, key, storeValue, inPreferences ? TOMBSTONE_HASH : hash);
+        if (resolved === null) continue;
+        revision = resolved;
       }
       deps.state.update(botId, actorId, entry => { entry.stored = { ...entry.stored, [key]: { hash: storeHash, revision, local: true, ...(storeValue !== null ? { prefRevision } : {}) } }; });
+    }
+    // A reader limited to the preferences would also miss a later store value another computer
+    // wrote (it wins over this computer's preference row on restore): not complete for it either.
+    if (options.requireAll && options.preferencesOnly && store?.active()) {
+      for (const [key, entry] of Object.entries(deps.state.bot(botId)?.stored ?? {})) {
+        if (!entry.local && entry.hash !== TOMBSTONE_HASH && owned(key) && !unread.some(prefix => key.startsWith(prefix))) skipped += 1;
+      }
     }
     if (skipped > 0 && options.requireAll) throw new Error(COMPANION_VALUE_TOO_LARGE);
     return writes;
