@@ -4,7 +4,7 @@ import {
 } from "./ImageLightbox";
 import { PreviewCollectionContext } from "./PreviewChrome";
 import { RemoteAttachmentPreview } from "./RemoteAttachmentPreview";
-import { isPayloadDirectPreviewableUrl } from "./messagePayload";
+import { isPayloadDirectPreviewableUrl, toRemoteAttachmentUrl } from "./messagePayload";
 import type { MobileMessageGalleryImage } from "./messageGallery";
 import type { ResolveRemoteMediaFn } from "./remoteMedia";
 import type { RemoteSerializedAttachment } from "./types";
@@ -64,9 +64,7 @@ export function ComposerAttachmentPreview({
             return resolveRemoteMedia(
               {
                 kind: "file",
-                url: source.startsWith("/")
-                  ? `xdt-file://open?path=${encodeURIComponent(source)}`
-                  : source,
+                url: toRemoteAttachmentUrl(source),
                 previewable: false,
               },
               { front: true, signal },

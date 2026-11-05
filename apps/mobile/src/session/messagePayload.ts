@@ -49,6 +49,20 @@ export type MessagePayload = SharedMessagePayload<NormalizedToolDiff, Normalized
   galleryImageSlot?: number;
 };
 
+const WINDOWS_ABSOLUTE_PATH_RE = /^[A-Za-z]:[\\/]/;
+const URI_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
+
+/**
+ * Convert a desktop attachment source into the host-file URL understood by
+ * device-link. Windows drive letters look like URI schemes (`C:`), so they
+ * must be recognized as paths before applying the generic scheme check.
+ */
+export function toRemoteAttachmentUrl(source: string): string {
+  return WINDOWS_ABSOLUTE_PATH_RE.test(source) || !URI_SCHEME_RE.test(source)
+    ? `xdt-file://open?path=${encodeURIComponent(source)}`
+    : source;
+}
+
 /** Direct media already has playable bytes; only host-owned references need fetching. */
 export async function resolveAttachmentPreviewSource(
   payload: Extract<MessagePayload, { kind: 'file' | 'media' }>,
@@ -58,9 +72,7 @@ export async function resolveAttachmentPreviewSource(
   if (payload.kind === 'media' && payload.media.previewable && (isPayloadDirectPreviewableUrl(payload.media.url) || /^data:audio\//i.test(payload.media.url)))
     return { url: payload.media.url, mimeType: payload.media.mimeType };
   const source = payload.kind === 'file' ? payload.sourcePath! : payload.media.url;
-  const url = /^(?:[a-z][a-z0-9+.-]*):/i.test(source)
-    ? source
-    : `xdt-file://open?path=${encodeURIComponent(source)}`;
+  const url = toRemoteAttachmentUrl(source);
   return resolve({ kind: 'file', url, previewable: false }, { front: true, signal });
 }
 
