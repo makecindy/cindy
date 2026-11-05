@@ -142,6 +142,8 @@ export interface UseApiKeyReturn {
   /** 本机当前保存的 XD key(展示遮罩用);无 key 为空串。 */
   key: string;
   hasSavedKey: boolean;
+  /** Whether this renderer can inspect the local key; false means unknown, not absent. */
+  canReadKey: boolean;
   /**
    * mount 时 reconcile (safeStorage 读) 还没完成时为 true。
    * consumer 用它避免在 reconcile 完成前误判为"没 Key"——reconcile 完成后才能
@@ -211,5 +213,11 @@ export function useApiKey(): UseApiKeyReturn {
     }
   }, []);
 
-  return { key, hasSavedKey, isReconciling, clearKey };
+  return {
+    key,
+    hasSavedKey,
+    canReadKey: typeof window.electronAPI?.safeStorageRead === 'function',
+    isReconciling,
+    clearKey,
+  };
 }

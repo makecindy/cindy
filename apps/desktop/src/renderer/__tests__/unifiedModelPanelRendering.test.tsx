@@ -84,8 +84,10 @@ vi.mock('@/hooks/useAgentCapabilities', () => ({
     error: null,
   }),
 }));
-const keyPresence = vi.hoisted(() => ({ available: true }));
-vi.mock('@/hooks/useApiKey', () => ({ useApiKey: () => ({ hasSavedKey: keyPresence.available }) }));
+const keyPresence = vi.hoisted(() => ({ available: true, canReadKey: true }));
+vi.mock('@/hooks/useApiKey', () => ({ useApiKey: () => ({
+  hasSavedKey: keyPresence.available, canReadKey: keyPresence.canReadKey,
+}) }));
 vi.mock('@/hooks/useAvailableAgents', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/hooks/useAvailableAgents')>()),
   useModelPickerAgents: () => ['claude-code', 'codex'],
@@ -345,6 +347,7 @@ async function openFlyoutForRow(row: HTMLElement): Promise<HTMLElement> {
 
 beforeEach(() => {
   keyPresence.available = true;
+  keyPresence.canReadKey = true;
   onProviderChange.mockClear();
   resetEnginePrefs();
   resetFavorites();
@@ -453,6 +456,7 @@ describe('统一面板 · 打折 GPT-5.6 与 GPT-6 包月互切', () => {
   // Minimal input: one connected XD provider, missing credential bridge; tier: unit.
   it('selects a connected gateway model without a renderer credential read', async () => {
     keyPresence.available = false;
+    keyPresence.canReadKey = false;
     const onUnifiedSelect = vi.fn(() => true);
     renderPanel({ vendorKey: 'codex', currentProviderId: 'openai', modelId: 'gpt-6-astra', onUnifiedSelect });
     fireEvent.click(screen.getByText('Discount Sol'));
