@@ -14,6 +14,7 @@ const runtime = vi.hoisted(() => ({
   deferAnimations: false,
   animationHeight: undefined as number | undefined,
   reactions: new Set<() => void>(),
+  textFrame: null as null | { pageX: number; pageY: number; width: number; height: number },
 }));
 vi.mock('react-native', () => ({ PanResponder: { create: vi.fn(() => ({ panHandlers: {} })) } }));
 vi.mock('expo-constants', () => ({
@@ -38,7 +39,16 @@ vi.mock('@/platform/gestureHandler', () => {
       onFinalize(fn: Callback) { callbacks.finalize = fn; return this; },
     });
   };
-  return { Gesture: { Pan: make, Native: make } };
+  // Manual: touches drive the gesture; the manager records who ends up owning it.
+  const manual = () => {
+    const callbacks = {} as Record<string, (...args: unknown[]) => void>;
+    const on = (name: string) => function (this: unknown, fn: (...args: unknown[]) => void) { callbacks[name] = fn; return this; };
+    return Object.assign(callbacks, {
+      onTouchesDown: on('down'), onTouchesMove: on('move'), onTouchesUp: on('up'),
+      onTouchesCancelled: on('cancelled'), onFinalize: on('finalizeManual'),
+    });
+  };
+  return { Gesture: { Pan: make, Native: make, Manual: manual } };
 });
 // Run real hooks/React and geometry models. Model UI worklets as synchronous
 // callbacks, but hold runOnJS deliveries to exercise a busy JS thread explicitly.
@@ -46,6 +56,8 @@ vi.mock('react-native-reanimated', async () => {
   const { useRef } = await import('react');
   return {
     useSharedValue: (initial: unknown) => useRef({ value: initial }).current,
+    useAnimatedRef: () => useRef({}).current,
+    measure: () => runtime.textFrame,
     useDerivedValue: (calculate: () => unknown) => ({ get value() { return calculate(); } }),
     useAnimatedStyle: (calculate: () => unknown) => ({ get current() { return calculate(); } }),
     // UI-thread reactions run when the test flushes a frame, after shared values change.
@@ -117,6 +129,7 @@ beforeEach(() => {
   runtime.deferAnimations = false;
   runtime.animationHeight = undefined;
   runtime.reactions.clear();
+  runtime.textFrame = null;
   root = createRoot(document.createElement('div'));
 });
 afterEach(() => act(() => root.unmount()));
@@ -417,6 +430,85 @@ describe('composer resize interaction boundary', () => {
     for (const job of runtime.ui.splice(0)) job();
     expect(harness.result.active.value).toBe(true);
     expect(harness.result.contentHeight.value).toBe(210);
+  });
+});
+
+// Text area spans y 400–460 on screen; the toolbar sits below it.
+const TEXT_FRAME = { pageX: 0, pageY: 400, width: 390, height: 60 };
+type BodyGesture = Record<'down' | 'move' | 'up' | 'cancelled' | 'finalizeManual', (...args: unknown[]) => void>;
+function bodyDrag(gesture: unknown, x = 100) {
+  const body = gesture as BodyGesture;
+  const manager = { activate: vi.fn(), fail: vi.fn(), end: vi.fn() };
+  const touches = (y: number, dx = 0) => ({ numberOfTouches: 1, allTouches: [{ absoluteX: x + dx, absoluteY: y }], changedTouches: [{ absoluteX: x + dx, absoluteY: y }] });
+  return {
+    manager,
+    down: (y: number) => body.down(touches(y), manager),
+    move: (y: number, dx = 0) => body.move(touches(y, dx), manager),
+    up: (y: number) => body.up(touches(y), manager),
+  };
+}
+
+describe('composer body drag (press anywhere on the card)', () => {
+  beforeEach(() => { runtime.textFrame = TEXT_FRAME; vi.spyOn(Date, 'now').mockReturnValue(1_000); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('resizes from anywhere on a draft that fits, measured from where the drag was recognised', () => {
+    const harness = mountComposer({ ...composerInput(), bodyDragEnabled: true });
+    const drag = bodyDrag(harness.result.bodyGesture);
+    drag.down(440);
+    drag.move(436);
+    // Still inside the tap slop: the editor keeps the touch for caret placement.
+    expect(drag.manager.activate).not.toHaveBeenCalled();
+    drag.move(430);
+    expect(drag.manager.activate).toHaveBeenCalledOnce();
+    expect(harness.result.contentHeight.value).toBe(60);
+    drag.move(390);
+    expect(harness.result.contentHeight.value).toBe(100);
+    drag.up(390);
+    flushJS();
+    expect(drag.manager.end).toHaveBeenCalledOnce();
+    expect(harness.result.mode).toBe('manual');
+    expect(harness.result.visibleContentHeight).toBe(100);
+  });
+
+  it.each([
+    // Long draft (500 > auto cap 120) with no edge report: text drags keep scrolling.
+    { name: 'unknown edge, drag up on text', edge: null, startY: 440, endY: 400, claims: false },
+    { name: 'scrolled mid-way, drag down on text', edge: { atTop: false, atBottom: false }, startY: 420, endY: 460, claims: false },
+    { name: 'at bottom, drag down on text scrolls back', edge: { atTop: false, atBottom: true }, startY: 420, endY: 460, claims: false },
+    { name: 'at bottom, drag up on text grows', edge: { atTop: false, atBottom: true }, startY: 440, endY: 400, claims: true },
+    { name: 'at top, drag down on text shrinks', edge: { atTop: true, atBottom: false }, startY: 420, endY: 460, claims: true },
+    { name: 'toolbar drag ignores the text scroll', edge: { atTop: false, atBottom: false }, startY: 500, endY: 540, claims: true },
+  ])('long draft: $name', ({ edge, startY, endY, claims }) => {
+    const harness = mountComposer({ ...composerInput(), contentHeight: 500, bodyDragEnabled: true });
+    act(() => harness.result.setTextScrollEdge(edge));
+    const drag = bodyDrag(harness.result.bodyGesture);
+    drag.down(startY);
+    drag.move(startY + Math.sign(endY - startY) * 10);
+    drag.move(endY);
+    expect(drag.manager.activate).toHaveBeenCalledTimes(claims ? 1 : 0);
+    expect(drag.manager.fail).toHaveBeenCalledTimes(claims ? 0 : 1);
+    expect(harness.result.contentHeight.value === 120).toBe(!claims);
+  });
+
+  it('leaves long-press selection, horizontal swipes and the collapsed pill to the editor', () => {
+    const harness = mountComposer({ ...composerInput(), bodyDragEnabled: true });
+    const longPress = bodyDrag(harness.result.bodyGesture);
+    longPress.down(440);
+    vi.spyOn(Date, 'now').mockReturnValue(1_400);
+    longPress.move(410);
+    expect(longPress.manager.fail).toHaveBeenCalledOnce();
+    vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const swipe = bodyDrag(harness.result.bodyGesture);
+    swipe.down(440);
+    swipe.move(436, 30);
+    expect(swipe.manager.fail).toHaveBeenCalledOnce();
+    const collapsed = mountComposer({ ...composerInput(), bodyDragEnabled: false });
+    const pill = bodyDrag(collapsed.result.bodyGesture);
+    pill.down(440);
+    expect(pill.manager.fail).toHaveBeenCalledOnce();
+    for (const drag of [longPress, swipe, pill]) expect(drag.manager.activate).not.toHaveBeenCalled();
+    expect(harness.result.contentHeight.value).toBe(60);
   });
 });
 

@@ -1,7 +1,7 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { PanResponder } from 'react-native';
+import { PanResponder, type View } from 'react-native';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
-import { runOnJS, runOnUI, useAnimatedReaction, useAnimatedStyle, useDerivedValue, useSharedValue } from 'react-native-reanimated';
+import { measure, runOnJS, runOnUI, useAnimatedReaction, useAnimatedRef, useAnimatedStyle, useDerivedValue, useSharedValue } from 'react-native-reanimated';
 import { Gesture } from '@/platform/gestureHandler';
 import { COMPOSER_TEXT_LINE_HEIGHT, COMPOSER_TEXT_VERTICAL_PADDING } from '@/session/composerTextMetrics';
 import {
@@ -11,14 +11,20 @@ import {
   buildComposerResizeGestureConfig,
   buildComposerResizeTouchHandlers,
   computeComposerResizeBounds,
+  resolveComposerBodyDrag,
   resolveComposerInputHeight,
   settleComposerResizeDrag,
   shouldDismissComposerDuringDrag,
   shouldDismissComposerOnRelease,
+  type ComposerTextScrollEdge,
 } from '@/session/composerResize';
 import { composerPullTranslation, type ComposerPullEvent, type ComposerPullThroughBridge } from '@/session/composerPullThrough';
 
 const isStoreClient = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+
+const BODY_DRAG_IDLE = 0;
+const BODY_DRAG_PENDING = 1;
+const BODY_DRAG_ACTIVE = 2;
 
 export interface UseComposerResizeInput {
   contentHeight: number;
@@ -34,6 +40,8 @@ export interface UseComposerResizeInput {
   onGrabberTouchActiveChange?: (active: boolean) => void;
   /** 聊天记录拖进输入框时由列表侧接手；与按住顶边拖动走同一套调高逻辑。 */
   pullThrough?: ComposerPullThroughBridge;
+  /** 展开卡片态、外壳不需要自己滚动时，按在卡片任意处上下拖动也能调高（bodyGesture）。 */
+  bodyDragEnabled?: boolean;
 }
 
 /** UI-thread resize. React remembers the settled height, not the pointer stream. */
@@ -55,6 +63,11 @@ export function useComposerResize(input: UseComposerResizeInput) {
   const dragTranslation = useSharedValue(0);
   const startAbsoluteY = useSharedValue(0);
   const dismissedGestureId = useSharedValue(0);
+  const measuredOverflow = input.contentHeight > model.visibleContentHeight + 1;
+  const bodyDragGate = useSharedValue({ enabled: input.bodyDragEnabled === true, measuredOverflow });
+  useLayoutEffect(() => {
+    bodyDragGate.value = { enabled: input.bodyDragEnabled === true, measuredOverflow };
+  }, [bodyDragGate, input.bodyDragEnabled, measuredOverflow]);
   useLayoutEffect(() => {
     const nextGeometry = { collapsed: input.collapsed === true, bounds, visibleHeight: model.visibleContentHeight, explicit: input.collapsed === true || model.mode === 'manual', minFrameHeight: input.minFrameHeight ?? 0, autoMaxHeight: input.autoMaxContentHeight };
     // Check the generation and publish together on UI: another gesture may
@@ -156,6 +169,101 @@ export function useComposerResize(input: UseComposerResizeInput) {
         : event.translationY, successful);
     }), [drag, scrollGesture, startAbsoluteY]);
 
+  // 按在卡片任意处上下拖动调高。Manual 而非 Pan：待定期间不装一个与之竞争的
+  // UIPanGestureRecognizer，不拖住 iOS 侧滑返回和视频控件（同 composerPullThrough）；
+  // 判定为调高前编辑器照常收到触摸，点按、选字、滚动文字不受影响。
+  const textFrameRef = useAnimatedRef<View>();
+  const textScrollEdge = useSharedValue<ComposerTextScrollEdge | null>(null);
+  const setTextScrollEdge = useCallback((edge: ComposerTextScrollEdge | null) => {
+    textScrollEdge.value = edge;
+  }, [textScrollEdge]);
+  const bodyPhase = useSharedValue(BODY_DRAG_IDLE);
+  const bodyStartX = useSharedValue(0);
+  const bodyStartY = useSharedValue(0);
+  const bodyStartTime = useSharedValue(0);
+  const bodyInText = useSharedValue(false);
+  const bodyGesture = useMemo(() => {
+    const cancel = () => {
+      'worklet';
+      if (bodyPhase.value === BODY_DRAG_ACTIVE) drag.finalize(dragTranslation.value, false);
+      bodyPhase.value = BODY_DRAG_IDLE;
+    };
+    return Gesture.Manual()
+      .onTouchesDown((touches, manager) => {
+        'worklet';
+        bodyPhase.value = BODY_DRAG_IDLE;
+        const touch = touches.allTouches[0];
+        if (touches.numberOfTouches !== 1 || touch === undefined || !bodyDragGate.value.enabled) {
+          manager.fail();
+          return;
+        }
+        const frame = measure(textFrameRef);
+        bodyInText.value = frame !== null
+          && touch.absoluteX >= frame.pageX && touch.absoluteX <= frame.pageX + frame.width
+          && touch.absoluteY >= frame.pageY && touch.absoluteY <= frame.pageY + frame.height;
+        bodyStartX.value = touch.absoluteX;
+        bodyStartY.value = touch.absoluteY;
+        bodyStartTime.value = Date.now();
+        bodyPhase.value = BODY_DRAG_PENDING;
+      })
+      .onTouchesMove((touches, manager) => {
+        'worklet';
+        if (bodyPhase.value === BODY_DRAG_IDLE) return;
+        const touch = touches.allTouches[0];
+        if (touches.numberOfTouches !== 1 || touch === undefined) {
+          cancel();
+          manager.fail();
+          return;
+        }
+        if (bodyPhase.value === BODY_DRAG_PENDING) {
+          const decision = resolveComposerBodyDrag({
+            inText: bodyInText.value,
+            edge: textScrollEdge.value,
+            measuredOverflow: bodyDragGate.value.measuredOverflow,
+            dx: touch.absoluteX - bodyStartX.value,
+            dy: touch.absoluteY - bodyStartY.value,
+            elapsedMs: Date.now() - bodyStartTime.value,
+          });
+          if (decision === 'pending') return;
+          if (decision === 'reject') {
+            bodyPhase.value = BODY_DRAG_IDLE;
+            manager.fail();
+            return;
+          }
+          // 从判定点起算位移：越过判定距离的那几点不让输入框跳一下。
+          bodyPhase.value = BODY_DRAG_ACTIVE;
+          manager.activate();
+          drag.beginAt(touch.absoluteY);
+          return;
+        }
+        drag.moveBy(touch.absoluteY - startAbsoluteY.value);
+      })
+      .onTouchesUp((touches, manager) => {
+        'worklet';
+        if (bodyPhase.value === BODY_DRAG_ACTIVE) {
+          const y = touches.changedTouches[0]?.absoluteY;
+          const translationY = y === undefined ? dragTranslation.value : y - startAbsoluteY.value;
+          drag.moveBy(translationY);
+          drag.finalize(translationY, true);
+          bodyPhase.value = BODY_DRAG_IDLE;
+          manager.end();
+          return;
+        }
+        bodyPhase.value = BODY_DRAG_IDLE;
+        manager.fail();
+      })
+      .onTouchesCancelled((_touches, manager) => {
+        'worklet';
+        cancel();
+        manager.fail();
+      })
+      .onFinalize(() => {
+        'worklet';
+        // 被其它手势（顶边把手、编辑器滚动）挤掉时不会再收到抬手：按取消收尾。
+        cancel();
+      });
+  }, [bodyDragGate, bodyInText, bodyPhase, bodyStartTime, bodyStartX, bodyStartY, drag, dragTranslation, startAbsoluteY, textFrameRef, textScrollEdge]);
+
   // 列表侧接手：event 每次都带完整位置，同一帧内合并的 begin / move / end 也能按状态补齐。
   const pullThroughEvent = input.pullThrough?.event;
   const pullThroughId = useSharedValue(0);
@@ -254,6 +362,7 @@ export function useComposerResize(input: UseComposerResizeInput) {
   return {
     adjustByLine,
     active,
+    bodyGesture,
     contentHeight,
     collapseProgress,
     dragging,
@@ -268,6 +377,8 @@ export function useComposerResize(input: UseComposerResizeInput) {
     reset,
     scrollEnabled: model.scrollEnabled,
     scrollGesture,
+    setTextScrollEdge,
+    textFrameRef,
     visibleContentHeight: model.visibleContentHeight,
   };
 }

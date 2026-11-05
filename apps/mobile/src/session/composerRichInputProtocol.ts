@@ -10,6 +10,7 @@ export type ComposerWebMessage =
   | { type: 'ready' | 'focus' | 'blur' }
   | { type: 'pong'; id: number }
   | { type: 'height'; height: number }
+  | { type: 'scroll-edge'; atTop: boolean; atBottom: boolean }
   | { type: 'change'; document: unknown; documentId?: number }
   | { type: 'snapshot'; requestId: number; documentId: number; document: unknown; pendingPaste: boolean }
   | { type: 'selection'; documentId: number; before: ComposerSelectionPrefix; through: ComposerSelectionPrefix }
@@ -50,6 +51,11 @@ export function parseComposerWebMessage(raw: string): ComposerWebMessage | null 
     if (message.type === 'height') {
       return typeof message.height === 'number' && Number.isFinite(message.height)
         ? { type: 'height', height: message.height }
+        : null;
+    }
+    if (message.type === 'scroll-edge') {
+      return typeof message.atTop === 'boolean' && typeof message.atBottom === 'boolean'
+        ? { type: 'scroll-edge', atTop: message.atTop, atBottom: message.atBottom }
         : null;
     }
     if (message.type === 'change') {

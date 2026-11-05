@@ -253,6 +253,7 @@ import { RewindPreviewPanel } from '@/session/RewindPreviewPanel';
 import { BlurBackdrop, FLOATING_CHROME_BLUR_INTENSITY } from '@/session/BlurBackdrop';
 import { SheetModal } from '@/session/SheetModal';
 import { SheetGrabber, SheetSurface } from '@/session/SheetSurface';
+import { GestureDetector } from '@/platform/gestureHandler';
 import { NativePermissionSheet } from '@/session/NativePermissionSheet';
 import { permissionAccentColor, permissionPresentation } from '@/session/permissionPresentation';
 import {
@@ -12691,8 +12692,18 @@ function SessionComposerInput({
       scrollEnabled: active ? false : composerScrollEnabledRef.current,
     });
   }, [onDragActiveChange]);
+  const composerShellHasScrollableContent = attachmentCount > 0
+    || pendingUploadCount > 0
+    || attachmentError !== null
+    || composerTrigger.kind === 'slash'
+    || composerTrigger.kind === 'at';
+  // Only enable shell scrolling when attachments or palettes can overflow.
+  const composerShellScrolls = (nativeShellLayout.composerScrollEnabled || composerTrigger.kind !== 'none')
+    && composerShellHasScrollableContent;
   const composerResize = useComposerResize({
     autoMaxContentHeight: composerInputMaxContentHeight,
+    // 外壳自己要滚（附件 / 候选面板溢出）时卡片上的竖直拖动归外壳，调高只走顶边把手。
+    bodyDragEnabled: composerCardActive && !composerShellScrolls,
     // 简洁态一律收到单行(下拉收起和点别处收键盘的结果一致);
     // auto / manual 记忆保留,重新聚焦后恢复。
     collapsed: !composerCardActive,
@@ -12727,16 +12738,8 @@ function SessionComposerInput({
       && (draft.includes('\n') || composerEffectiveContentHeight > COMPOSER_INPUT_MULTILINE_CONTENT_THRESHOLD));
   const composerInputVisibleHeight = composerResize.visibleContentHeight;
   const composerInputScrollEnabled = composerResize.scrollEnabled;
-  const composerShellHasScrollableContent = attachmentCount > 0
-    || pendingUploadCount > 0
-    || attachmentError !== null
-    || composerTrigger.kind === 'slash'
-    || composerTrigger.kind === 'at';
-  // Only enable shell scrolling when attachments or palettes can overflow.
   // Native gesture arbitration lets the grabber win without waiting for JS.
-  const composerScrollEnabled = (nativeShellLayout.composerScrollEnabled || composerTrigger.kind !== 'none')
-    && !composerResize.dragging
-    && composerShellHasScrollableContent;
+  const composerScrollEnabled = composerShellScrolls && !composerResize.dragging;
   composerScrollEnabledRef.current = composerScrollEnabled;
   const resizeActive = composerResize.active;
   const manualResize = composerResize.mode === 'manual';
@@ -12916,6 +12919,8 @@ function SessionComposerInput({
                   unframed={!nativeComposerFrameAvailable}
                   style={styles.composerScrollFrame}
                 >
+                {/* 卡片任意处上下拖动调高；文字区先滚动、滚到头才调高（resolveComposerBodyDrag）。 */}
+                <GestureDetector gesture={composerResize.bodyGesture}>
                 <View style={[
                   styles.composerSurface,
                   compactComposer && !composerCardActive && styles.composerSurfaceCompact,
@@ -12941,6 +12946,7 @@ function SessionComposerInput({
                     floatingVoiceButton={voiceUiAvailable ? controls.voiceButton : undefined}
                     cursorColor={colors.inputCaret}
                     inputFrameAnimatedStyle={composerResize.frameStyle}
+                    inputFrameRef={composerResize.textFrameRef}
                     collapseProgress={composerResize.collapseProgress}
                     // 听写期间把输入区撑到 44pt 触控目标:命中层盖在 inputFrame 上,
                     // hitSlop 越不过父边界(见常量注释)。
@@ -12965,6 +12971,7 @@ function SessionComposerInput({
                         onChangeDocument={applyRichComposerChange}
                         onFocus={() => setComposerFocused(true)}
                         onHeightChange={handleComposerRichInputHeight}
+                        onScrollEdgeChange={composerResize.setTextScrollEdge}
                         onPasteImages={onPasteImages}
                         onPasteImagesLoading={beginPastePlaceholders}
                         onPasteImagesLoadFailed={failPastePlaceholders}
@@ -13015,6 +13022,7 @@ function SessionComposerInput({
                     voicePlacement={composerVoicePlacement}
                   />
                 </View>
+                </GestureDetector>
                 </ComposerFrame>
               </Reanimated.View>
     </>

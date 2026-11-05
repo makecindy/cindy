@@ -345,3 +345,51 @@ function normalizePositiveDimension(value: number, fallback: number): number {
 function normalizeNonNegativeDimension(value: number, fallback: number): number {
   return Number.isFinite(value) && value >= 0 ? value : fallback;
 }
+
+/** 输入框文字当前滚到了哪一端；编辑器没有上报时为 null。 */
+export interface ComposerTextScrollEdge {
+  atTop: boolean;
+  atBottom: boolean;
+}
+
+/** 按在卡片任意处拖动调高：手指移出这段距离才判定，之内仍可能是点按。 */
+export const COMPOSER_BODY_DRAG_SLOP = 8;
+/** 按住超过这么久才开始移动视为长按（选字 / 拖光标），交给编辑器。 */
+export const COMPOSER_BODY_DRAG_LONG_PRESS_MS = 350;
+
+export type ComposerBodyDragDecision = 'pending' | 'claim' | 'reject';
+
+export interface ResolveComposerBodyDragInput {
+  /** 起手点在文字区内（而不是工具排、附件或卡片留白）。 */
+  inText: boolean;
+  /** 编辑器上报的滚动端点；null 时退回 measuredOverflow。 */
+  edge: ComposerTextScrollEdge | null;
+  /** 测得的内容高度超出文字区可视高度。 */
+  measuredOverflow: boolean;
+  dx: number;
+  /** 向下为正。 */
+  dy: number;
+  /** 从按下到这次移动经过的时间。 */
+  elapsedMs: number;
+}
+
+/**
+ * 按在卡片任意处上下拖动时，这次拖动归调高还是归编辑器。
+ *
+ * 卡片留白、工具排、附件上的竖直拖动一律调高。文字区里，文字看得全时上下拖都调高；
+ * 文字需要滚动时先滚动，只有已在最上面还往下拖（拖矮）、已在最下面还往上拖（拉高）
+ * 才调高。编辑器没上报滚动端点、测量又显示溢出时保守交给滚动。横向滑动和长按后的
+ * 拖动（选字、拖光标）留给编辑器。
+ */
+export function resolveComposerBodyDrag(input: ResolveComposerBodyDragInput): ComposerBodyDragDecision {
+  'worklet';
+  const ax = Math.abs(input.dx);
+  const ay = Math.abs(input.dy);
+  if (input.elapsedMs >= COMPOSER_BODY_DRAG_LONG_PRESS_MS) return 'reject';
+  if (ax < COMPOSER_BODY_DRAG_SLOP && ay < COMPOSER_BODY_DRAG_SLOP) return 'pending';
+  if (ax >= ay) return 'reject';
+  if (!input.inText) return 'claim';
+  const edge = input.edge;
+  if (edge === null) return input.measuredOverflow ? 'reject' : 'claim';
+  return (input.dy > 0 ? edge.atTop : edge.atBottom) ? 'claim' : 'reject';
+}

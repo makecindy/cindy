@@ -144,6 +144,8 @@ export interface MobileComposerInputRowProps {
    */
   inputFrameHeight?: number | Animated.Value | null;
   inputFrameAnimatedStyle?: ReturnType<typeof useAnimatedStyle>;
+  /** 文字区（inputFrame）的 UI 线程测量句柄：按在卡片上拖动调高时据此区分文字区与留白。 */
+  inputFrameRef?: AnimatedRef<View>;
   /**
    * 输入区（inputFrame）的最小高度。给语音听写用：听写期间「点输入区停止听写」的命中层
    * 盖在 inputFrame 上，而单行听写时 inputFrame 只有 28pt，不满足触控目标 44pt；
@@ -239,6 +241,7 @@ export function MobileComposerInputRow({
   floatingVoiceButtonStyle,
   inputFrameHeight,
   inputFrameAnimatedStyle,
+  inputFrameRef,
   inputFrameMinHeight,
   inputElement,
   inputOverlay,
@@ -369,6 +372,8 @@ export function MobileComposerInputRow({
       >
         {cardLayout ? null : leading}
         <Reanimated.View
+          ref={inputFrameRef}
+          collapsable={false}
           style={[
             styles.inputFrame,
             // 收起单行与 34pt + 并排：输入盒在行内居中。

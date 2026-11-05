@@ -68,6 +68,10 @@ vi.mock('react-native-reanimated', () => ({
 }));
 vi.mock('expo-file-system', () => ({ File: class {}, Paths: { cache: '/unused' } }));
 vi.mock('expo-clipboard', () => ({ getStringAsync: bridge.clipboard }));
+vi.mock('@/platform/gestureHandler', () => {
+  const gesture = { enabled: () => gesture };
+  return { Gesture: { Native: () => gesture }, GestureDetector: ({ children }: { children: unknown }) => children };
+});
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
