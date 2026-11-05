@@ -15,6 +15,7 @@ const FAKE_OPENAI_KEY = ['sk', 'fixture-openai-key-0123456789'].join('-');
 const FAKE_BEARER = ['fixture', 'bearer-0123456789'].join('-');
 const FAKE_AWS_KEY = ['AKIA', 'FIXTUREPLACEHOLDER01'].join('');
 const FAKE_GOOGLE_KEY = ['AIza', 'FixturePlaceholder012345678901234567'].join('');
+const FAKE_PASSWORD = ['fixture', 'plain-password'].join('-');
 const FAKE_DB_PASSWORD = ['fixture', 'db-password'].join('-');
 const FAKE_OPENAI_KEY_2 = ['sk', 'fixture-openai-key-0987654321'].join('-');
 
@@ -83,13 +84,13 @@ describe('live compact spine selection', () => {
     const raw = [
       `export OPENAI_API_KEY=${FAKE_OPENAI_KEY}`,
       `curl -H "Authorization: Bearer ${FAKE_BEARER}"`,
-      'password: "fixture-plain-password"',
+      'password: "' + FAKE_PASSWORD + '"',
       'normal text stays untouched: sk-short',
     ].join(String.fromCharCode(10));
     const out = redactSecrets(raw);
     expect(out).not.toContain(FAKE_OPENAI_KEY);
     expect(out).not.toContain(FAKE_BEARER);
-    expect(out).not.toContain('fixture-plain-password');
+    expect(out).not.toContain(FAKE_PASSWORD);
     expect(out).toContain('[REDACTED]');
     // 小于阈值的普通文本不能被误伤。
     expect(out).toContain('sk-short');
