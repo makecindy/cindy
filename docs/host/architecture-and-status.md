@@ -152,19 +152,21 @@ Host 现已注册真实 Codex agent（本机 Codex CLI 登录 lane，未复制�
 
 逐项功能状态见 [功能保留清单](feature-parity.md)（阶段 7 台账，随验证更新）。
 
-## 阶段 4 现状（实测，2026-11-05）
+## 阶段 4/5 现状（实测，2026-11-05 收尾）
 
-浏览器侧复用同一份 renderer 构建产物，`/shim.js` 实现 preload 通道表；Host 已具备：
+浏览器侧复用同一份 renderer 构建产物，`/shim.js` 实现 preload 通道表；实测结论：
 
 | 领域 | 状态 | 证据 |
 |---|---|---|
-| 应用外壳、侧栏、任务列表 | 已验证 | 真实任务行来自共用 SQLite（13 条），`localDb.sessions.list()` 返回数组 |
-| 模型目录 | 已验证 | `/api/providers` 单一 `xd` provider，28 个网关对话模型，双 harness routing；`/api/capabilities` 与之一致 |
-| 模型选择器 | 已验证 | 可选列表可展开并选中 `anthropic/claude-sonnet-5-5` |
-| 任务创建 / 发送 / 流式 | 已验证（直连通道） | 通过 renderer 通道建任务后发送，SSE 依次得到 `session`、`status`、`text` 增量、`text(isFinal)`、`done` |
-| 任务详情页 | **阻断** | 打开任意任务抛 React #185（Maximum update depth exceeded），组件栈指向 `ChatInput`；props 在循环中完全不变，聚焦/扫描 effect 排除后仍复现 |
-| 停止、历史恢复、插件列表页 | 未验证 | 依赖详情页恢复 |
+| 应用外壳、侧栏、任务列表 | 已验证 | 共用 SQLite 的真实任务行 |
+| 模型目录 / 选择器 | 已验证 | 单一 `xd` provider、28 个网关模型、能力与之一致；选择器可展开并选中 |
+| 任务详情页 | 已验证 | 根因是 shim 每次属性访问新建 Proxy，导致外部 store 每帧重订阅；按路径缓存后详情页正常渲染 |
+| 发送 / 流式 / 停止 | 已验证 | 输入队列 + SSE：`status → session_id → text → done`；Stop 后 `turnInProgress=false` |
+| 历史恢复 | 已验证 | 刷新/新标签页恢复同一轮问答（`evidence/stage4-e2e.md`） |
+| 权限确认 | 已验证（协议） | `permissionMode=ask` 真实回合：`interaction_request` → 200 应答 → 工具执行 → `DONE` |
+| 插件列表 | 已验证（读） | Host 复用 Desktop `GhostManager` 列出已装插件（`/api/ghosts`） |
+| Electron 客户端模式 | 已验证 | 有 Host 时自动加入（`host-endpoint.json`），`getMaker()` 抛错、21 通道由 Host 提供、0 error |
 
-崩溃机理的最新证据（React DevTools hook 探针，2026-11-05）：任务路由挂载期间 Radix 的 `Tooltip`/`Popper`/`Presence`/`DialogPortal` 被**重新挂载**（不是单纯重渲染）约 54 次即触发上限，每次挂载 `useId` 都变（`_r_33_` → `_r_2g_`）；父链为 `an > TooltipProvider > TooltipProviderProvider > ln`，说明循环里某个父组件在每帧重建子树。下一步应锁定 `an`/`ln` 对应的真实组件（在未压缩构建里按 displayName 反查），而不是继续补 Host 通道——该路由的 IPC 失败已清零。
+已知缺口（均为 Host 侧未迁移，客户端模式下显式失败）：插件执行沙箱、MCP 执行、scheduler、
+device-link、记忆/文件工具；`historyView` 为单页返回（未分页）。
 
-`localDb.messages.list`、`localDb.messages.historyView`、`localDb.messages.estimatedSessionValue` 已有 Host 路由；windowed history reader 仍在 Electron IPC 内，非空任务的历史页显式报错（`history_view_not_implemented_on_host`），不返回空页冒充。
