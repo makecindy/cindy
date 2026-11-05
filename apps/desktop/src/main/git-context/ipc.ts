@@ -171,6 +171,7 @@ let githubReadService: GithubReadService | null = null;
 const prFollowWatch = new PrFollowWatch({
   listActive: async () => (await getSchedulerIfInitialized()?.list({ status: 'active' })) ?? [],
   inflight: (id) => getSchedulerIfInitialized()?.getInflightCount(id) ?? 0,
+  hasCapacity: () => getSchedulerIfInitialized()?.hasFreeSlot() ?? false,
   runNow: async (id, trigger) => {
     const scheduler = getSchedulerIfInitialized();
     if (!scheduler) return null;

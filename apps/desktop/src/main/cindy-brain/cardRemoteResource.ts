@@ -139,16 +139,24 @@ function prSlotKey(value: string): string | null {
  * phone's projection entirely (text, live label and controls), so older phones stop showing them too.
  */
 export async function omitEndedPrOpenOnly(html: string, ended: (key: string) => Promise<boolean>): Promise<string> {
-  const marked = markedElements(html, /(?:^|\s)data-ghost-pr-open-only="[^"]+"/);
-  if (!marked.length) return html;
   const verdicts = new Map<string, Promise<boolean>>();
   const drop: Array<[number, number]> = [];
-  for (const el of marked) {
-    const key = prSlotKey(readAttr(el.attrs, 'data-ghost-pr-open-only') ?? '');
-    if (!key) continue;
-    if (!verdicts.has(key)) verdicts.set(key, ended(key).catch(() => false));
-    if (await verdicts.get(key)) drop.push([el.start, el.end]);
-  }
+  // markedElements returns outermost matches only; look inside the ones that stay for nested marks.
+  const scan = async (from: number, to: number): Promise<void> => {
+    for (const el of markedElements(html.slice(from, to), /(?:^|\s)data-ghost-pr-open-only="[^"]+"/)) {
+      const key = prSlotKey(readAttr(el.attrs, 'data-ghost-pr-open-only') ?? '');
+      if (key) {
+        if (!verdicts.has(key)) verdicts.set(key, ended(key).catch(() => false));
+        if (await verdicts.get(key)) {
+          drop.push([from + el.start, from + el.end]);
+          continue;
+        }
+      }
+      await scan(from + el.innerStart, from + el.innerEnd);
+    }
+  };
+  await scan(0, html.length);
+  drop.sort((x, y) => x[0] - y[0]);
   let out = html;
   for (let i = drop.length - 1; i >= 0; i -= 1) out = out.slice(0, drop[i][0]) + out.slice(drop[i][1]);
   return out;

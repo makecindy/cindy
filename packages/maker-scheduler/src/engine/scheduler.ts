@@ -1890,6 +1890,11 @@ export class Scheduler extends EventEmitter {
    * UI 在 delete/pause 前用它决定是否弹"有 N 次执行正在进行"二次确认。
    * 无 in-flight → 0(包括 schedule 已 paused / expired / 不存在的情况)。
    */
+  /** A run started now would get a slot under maxConcurrentRuns (run-now itself never waits for one). */
+  hasFreeSlot(): boolean {
+    return this.countSlotsInUse() < this.maxConcurrentRuns;
+  }
+
   getInflightCount(id: string): number {
     return this.inflightByschedule.get(id)?.size ?? 0;
   }

@@ -603,6 +603,7 @@ describe('PR follow watch', () => {
     let head = 'a1';
     const runNow = vi.fn(async () => ({ runId: 'r' }));
     const inflight = vi.fn(() => 0);
+    const hasCapacity = vi.fn(() => true);
     const watch = new PrFollowWatch({
       listActive: async () => [
         schedule('follow-85', 'https://github.com/MakeCindy/cindy/pull/85'),
@@ -612,6 +613,7 @@ describe('PR follow watch', () => {
         schedule('manual', 'https://github.com/makecindy/cindy/pull/85', { manual: true }),
       ],
       inflight,
+      hasCapacity,
       runNow,
       now: () => now,
     });
@@ -629,7 +631,7 @@ describe('PR follow watch', () => {
       await svc.getStatuses([Q], { waitForFresh: true });
       await new Promise((resolve) => setImmediate(resolve));
     };
-    return { look, runNow, inflight };
+    return { look, runNow, inflight, hasCapacity };
   }
 
   it('runs only recurring schedules naming this PR, once per change, skipping in-flight and recent ones', async () => {
@@ -649,11 +651,28 @@ describe('PR follow watch', () => {
     expect(runNow).toHaveBeenCalledTimes(2);
   });
 
+  // Review (Greptile P1 on #9022): run-now skips the scheduler's concurrency cap, so a burst of PR
+  // changes could start more agents than maxConcurrentRuns. Minimal input: one change while no slot is
+  // free, then a later refresh once a slot opens (unit).
+  it('waits for a free scheduler slot instead of exceeding the cap, and runs on the next refresh', async () => {
+    const { look, runNow, hasCapacity } = setup();
+    await look(10);
+    hasCapacity.mockReturnValue(false);
+    await look(100_000, 'b2');
+    expect(runNow).not.toHaveBeenCalled();
+    hasCapacity.mockReturnValue(true);
+    await look(200_000);
+    expect(runNow).toHaveBeenCalledTimes(1);
+    await look(300_000);
+    expect(runNow).toHaveBeenCalledTimes(1);
+  });
+
   it('treats failed reads as no news and keeps the baseline', async () => {
     const runNow = vi.fn(async () => null);
     const watch = new PrFollowWatch({
       listActive: async () => [schedule('follow-85', 'https://github.com/makecindy/cindy/pull/85')],
       inflight: () => 0,
+      hasCapacity: () => true,
       runNow,
     });
     const ok = (headSha: string) => ({ ok: true, status: 'open', prNumber: 85, headSha }) as never;

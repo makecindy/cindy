@@ -36,7 +36,7 @@ vi.mock('../git-context/githubSetup', () => ({
     return { start: mocks.start, snapshot: () => ({ phase: 'idle' }), cancel: vi.fn() };
   },
 }));
-import { openGithubSignIn, registerGithubSetupIpc } from '../git-context/githubSetupIpc';
+import { openGithubSignIn, readGithubConnection, registerGithubSetupIpc } from '../git-context/githubSetupIpc';
 import { readGhostSecret } from '../secrets/providerSecretStore';
 import { outboundFetch } from '../maker-host/outbound-fetch';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus';
@@ -114,4 +114,15 @@ it('opens the GitHub sign-in in the focused window, then the main window', () =>
   expect(mainSend).toHaveBeenCalledWith('git-context:github-setup:open');
   mocks.main = null;
   expect(openGithubSignIn()).toBe(false);
+});
+
+// Review (Codex P2 on #9022): with no gh login, the fallback token read must be the requested
+// plugin's own secret, never the GitHub plugin's. Minimal input: a token only under the GitHub plugin (unit).
+it('reads only the requested plugin\'s fallback token when one is given', async () => {
+  vi.mocked(readGhostSecret).mockImplementation(((id: string, key: string) =>
+    id === 'cindy-github' && key === 'github_pat' ? 'ghp_github_plugin' : null) as never);
+  expect(await readGithubConnection({ instanceId: 'other-plugin', key: 'token' })).toEqual({ status: 'missing' });
+  expect(outboundFetch).not.toHaveBeenCalled();
+  expect(readGhostSecret).toHaveBeenCalledWith('other-plugin', 'token');
+  expect(readGhostSecret).not.toHaveBeenCalledWith('cindy-github', 'github_pat');
 });

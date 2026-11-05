@@ -1353,12 +1353,15 @@ describe('connect_account ordinary task entry', () => {
   // Minimal input: a gh-cli plugin, signed out → signed in → explicit reconnect (unit).
   it('opens Cindy\'s GitHub sign-in for a gh-cli plugin and reports ready once signed in', async () => {
     listMock.mockReturnValue([chipGhost('cindy-github', ['tool'], {
-      network: { secrets: [{ key: 'github_pat', label: 'GitHub', source: 'gh-cli' }] },
+      network: { secrets: [{ key: 'my_token', label: 'GitHub', source: 'gh-cli' }] },
     })]);
     githubSignIn.read.mockResolvedValueOnce({ status: 'missing' });
     expect(await makeDeps().connectAccount!({ kind: 'plugin', id: 'cindy-github' }))
       .toMatchObject({ ok: false, errorCode: 'GITHUB_SIGN_IN_REQUIRED', signInOpened: true, connection: 'missing' });
     expect(githubSignIn.open).toHaveBeenCalledTimes(1);
+    // Review (Codex P2 / Greptile P1 on #9022): readiness must use the fallback token this plugin's own
+    // requests read (its instance and declared key), not the GitHub plugin's.
+    expect(githubSignIn.read).toHaveBeenCalledWith({ instanceId: 'cindy-github', key: 'my_token' });
     githubSignIn.read.mockResolvedValue({ status: 'connected', login: 'octo', source: 'gh-cli' });
     expect(await makeDeps().connectAccount!({ kind: 'plugin', id: 'cindy-github' }))
       .toMatchObject({ ok: true, status: 'ready', login: 'octo' });

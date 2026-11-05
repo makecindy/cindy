@@ -12,6 +12,7 @@
  * - 第一次看到某个 PR 只记基线,不触发(启动后的首轮刷新不该把所有跟进都叫一遍);
  * - 只触发 active、按计划重复且此刻没有在跑的任务(提前跑会用掉一次性任务,手动任务不该被别人启动);
  *   同一任务两次触发至少间隔 MIN_RETRIGGER_MS;
+ * - 没有空闲的并发名额时不抢(run-now 本身不排队):这个 PR 记为待触发,下一次状态刷新再试,计划本身也会兜底;
  * - 只看确定的结果(ok),失败或查不到不算变化,也不清掉基线;
  * - 全部是尽力而为:出错只记日志,不影响状态查询本身。
  */
@@ -32,6 +33,8 @@ export interface PrFollowWatchDeps {
   listActive(): Promise<Schedule[]>;
   /** Runs of this schedule in flight right now. */
   inflight(id: string): number;
+  /** The scheduler has a free concurrency slot right now. */
+  hasCapacity(): boolean;
   runNow(id: string, trigger: ScheduleRunTrigger): Promise<unknown>;
   now?: () => number;
   log?: { info?: (msg: string, meta?: unknown) => void; warn?: (msg: string, meta?: unknown) => void };
@@ -69,6 +72,8 @@ export function watchesPr(schedule: Schedule, url: string): boolean {
 export class PrFollowWatch {
   private readonly signatures = new Map<string, string>();
   private readonly lastTriggered = new Map<string, number>();
+  /** PR URLs whose trigger found no free slot; retried on the next observation. */
+  private readonly pending = new Set<string>();
   private readonly now: () => number;
 
   constructor(private readonly deps: PrFollowWatchDeps) {
@@ -79,6 +84,7 @@ export class PrFollowWatch {
   observe(query: PrStatusQuery, result: PrStatusResult): void {
     const signature = prStatusSignature(result);
     if (signature === null) return;
+    this.retryPending();
     const key = prStatusKey(query);
     const previous = this.signatures.get(key);
     this.signatures.delete(key);
@@ -92,6 +98,13 @@ export class PrFollowWatch {
     });
   }
 
+  private retryPending(): void {
+    for (const url of Array.from(this.pending)) {
+      this.pending.delete(url);
+      void this.trigger(url).catch(() => undefined);
+    }
+  }
+
   private async trigger(url: string): Promise<void> {
     if (!url) return;
     const schedules = (await this.deps.listActive()).filter((schedule) => watchesPr(schedule, url));
@@ -101,6 +114,10 @@ export class PrFollowWatch {
       if (this.deps.inflight(schedule.id) > 0) continue;
       const last = this.lastTriggered.get(schedule.id);
       if (last !== undefined && now - last < MIN_RETRIGGER_MS) continue;
+      if (!this.deps.hasCapacity()) {
+        this.pending.add(url);
+        break;
+      }
       this.lastTriggered.set(schedule.id, now);
       this.deps.log?.info?.('pr follow watch: status changed, running schedule now', { scheduleId: schedule.id, url });
       void this.deps

@@ -24,8 +24,14 @@ const cindyGithubRootInstance = () => pluginInstallStoragePart(
   pluginNewInstallRelId(createPluginLogicalIdentity(null, 'cindy-github')),
 );
 
-/** This computer's effective GitHub sign-in (gh, then the plugin's saved fallback token), for the active owner. */
-export async function readGithubConnection(): Promise<GithubConnectionState> {
+/**
+ * This computer's effective GitHub sign-in for the active owner: gh first, then the fallback token the
+ * requested plugin would actually use (`fallback`: its installed instance and declared secret key; the
+ * GitHub plugin's own token when omitted).
+ */
+export async function readGithubConnection(
+  fallback?: { instanceId: string; key: string },
+): Promise<GithubConnectionState> {
   const owner = activeOwnerScopeKey();
   const source = getSharedGhCliTokenSource();
   source.invalidate();
@@ -33,9 +39,11 @@ export async function readGithubConnection(): Promise<GithubConnectionState> {
   const result = await githubConnection({
     readGh: () => source.readToken(),
     readFallback: () =>
-      owner === activeOwnerScopeKey()
-        ? readGhostSecret(rootInstance, 'github_pat') ?? readGhostSecret('cindy-github', 'github_pat')
-        : null,
+      owner !== activeOwnerScopeKey()
+        ? null
+        : fallback
+          ? readGhostSecret(fallback.instanceId, fallback.key)
+          : readGhostSecret(rootInstance, 'github_pat') ?? readGhostSecret('cindy-github', 'github_pat'),
     fetch: outboundFetch,
   });
   return owner === activeOwnerScopeKey() ? result : { status: 'missing' };
