@@ -28,7 +28,9 @@ export async function openPluginTabView(instanceId: string, id: string, sessionI
     const tab = existing ?? await addTab(sessionId, 'plugin-tab-view', { instanceId, id, scope: 'session' } satisfies PluginTabViewState,
       { onOptimisticAdd: options.beforeReveal, activate: false });
     tabId = tab.id;
-    if (!focus() || getBucket(sessionId).activeTabId !== previousActive || getActiveGlobalTabId() !== previousGlobal) return tabId;
+    // The Shell can select the optimistic first tab while creation awaits IPC.
+    const activeNow = getBucket(sessionId).activeTabId;
+    if (!focus() || (activeNow !== previousActive && activeNow !== tabId) || getActiveGlobalTabId() !== previousGlobal) return tabId;
     await setActiveTab(sessionId, tabId);
     if (!focus() || getBucket(sessionId).activeTabId !== tabId || getActiveGlobalTabId() !== previousGlobal) return tabId;
     if (!isTabPoppedOut(tabId)) {

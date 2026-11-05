@@ -6146,11 +6146,11 @@ function CCAgentSessionContent({
                     <PluginUiContributionControls sessionId={sessionId}
                       point="composer.tools" deviceId={remoteDeviceId}
                       connected={!remoteDeviceId || remoteConn === 'connected'}
-                      active={chatRealtime && !!session && session.status === 'active' && !session.clearedAt}
+                      active={chatRealtime && !!session && session.status === 'active'}
                       readOnly={readOnly} />
                     <PluginUiCommandShortcuts sessionId={sessionId} entry="session" deviceId={remoteDeviceId}
                       connected={!remoteDeviceId || remoteConn === 'connected'}
-                      active={chatRealtime && !!session && session.status === 'active' && !session.clearedAt}
+                      active={chatRealtime && !!session && session.status === 'active'}
                       readOnly={readOnly} />
                   </> : undefined}
                   topSlot={cindyMakeRecoveryId && session ? (
