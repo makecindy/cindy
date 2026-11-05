@@ -7757,6 +7757,7 @@
         "customSlotAsleep": "このプラグインは無効です。有効化すると、ここに設定画面が表示されます。",
         "descriptionExpand": "もっと見る",
         "descriptionCollapse": "折りたたむ",
+        "readmeTitle": "紹介",
         "useAction": "Plugin を使用",
         "chatAction": "会話",
         "enabledLabel": "有効",

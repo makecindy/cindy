@@ -7800,6 +7800,7 @@
         "customSlotAsleep": "This plugin is disabled. Enable it to see its settings UI here.",
         "descriptionExpand": "Show more",
         "descriptionCollapse": "Show less",
+        "readmeTitle": "About",
         "useAction": "Use Plugin",
         "chatAction": "Chat",
         "enabledLabel": "Enabled",

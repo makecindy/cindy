@@ -7757,6 +7757,7 @@
         "customSlotAsleep": "이 플러그인은 비활성 상태입니다. 활성화하면 여기에 설정 화면이 표시됩니다.",
         "descriptionExpand": "더 보기",
         "descriptionCollapse": "접기",
+        "readmeTitle": "소개",
         "useAction": "Plugin 사용",
         "chatAction": "대화",
         "enabledLabel": "사용 중",

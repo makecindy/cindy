@@ -7757,6 +7757,7 @@
         "customSlotAsleep": "插件未生效，生效後這裡將顯示它的設定介面。",
         "descriptionExpand": "展開",
         "descriptionCollapse": "收起",
+        "readmeTitle": "介紹",
         "useAction": "使用",
         "chatAction": "對話",
         "enabledLabel": "已啟用",

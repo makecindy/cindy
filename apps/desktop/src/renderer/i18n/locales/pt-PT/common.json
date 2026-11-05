@@ -7867,6 +7867,7 @@
         "customSlotAsleep": "Este plugin está desativado. Ative-o para ver aqui a interface de definições.",
         "descriptionExpand": "Mostrar mais",
         "descriptionCollapse": "Mostrar menos",
+        "readmeTitle": "Sobre",
         "useAction": "Usar plugin",
         "chatAction": "Conversa",
         "enabledLabel": "Ativado",
