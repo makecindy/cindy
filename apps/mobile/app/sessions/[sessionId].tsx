@@ -11051,6 +11051,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                           onRecoverHistory={canRecoverHistory ? () => void recoverReadableHistory() : undefined}
                           sessionSource={currentSession?.source}
                           onClearError={clearQueueError}
+                          onDiscardBlockedQueueHead={removeQueueItem}
                           onCancelUsageLimitWait={cancelUsageLimitWait}
                           onResume={resumeQueue}
                           onRetryError={retryQueueError}
@@ -14290,3 +14291,4 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   sendButtonDisabled: { opacity: 0.45 },
   routeButtonPressed: { opacity: 0.72 },
 });
+
