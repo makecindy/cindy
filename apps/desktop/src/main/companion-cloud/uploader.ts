@@ -168,10 +168,11 @@ export function createCompanionUploader(deps: {
       deps.onLostHome?.();
       throw new CompanionLostHomeError();
     }
+    const prefRevision = deps.state.bot(botId)?.prefs[key]?.revision ?? 0;
     const server = await store.entry(actorId, key);
-    const same = !server.deleted && (server.blob ? server.hash === store.blobHash(value) : valueHash(server.value) === hash);
+    const same = !server.deleted && (server.blob ? server.hash === store.blobHash(value, prefRevision) : valueHash(server.value) === hash);
     if (same || (server.deleted && value === null)) return server.revision;
-    return store.write(actorId, key, value, server.revision);
+    return store.write(actorId, key, value, server.revision, prefRevision);
   }
 
   /**
@@ -220,7 +221,7 @@ export function createCompanionUploader(deps: {
       const json = canonicalJson(value);
       const inPreferences = key.length <= MAX_KEY_LENGTH && Buffer.byteLength(json) <= maxBytes;
       const hash = sha256(json);
-      const storeUsable = !!store && key.length <= STORE_KEY_MAX_LENGTH && refused.get(`${actorId}\n${key}`) !== hash;
+      const storeUsable = !!store?.active() && key.length <= STORE_KEY_MAX_LENGTH && refused.get(`${actorId}\n${key}`) !== hash;
       // `preferencesOnly` only stops a value the reader could not see from counting as uploaded;
       // clearing the store copy of a value that shrank or was deleted must still happen.
       const inStore = storeUsable && (inPreferences || !options.preferencesOnly);
@@ -258,7 +259,7 @@ export function createCompanionUploader(deps: {
       writes += 1;
       let revision: number;
       try {
-        revision = await store.write(actorId, key, storeValue, priorStored?.revision ?? 0);
+        revision = await store.write(actorId, key, storeValue, priorStored?.revision ?? 0, deps.state.bot(botId)?.prefs[key]?.revision ?? 0);
       } catch (error) {
         // Switched off meanwhile, or a value the store can never take (no bucket, over its
         // limits): skipped as before, so a hand-over still refuses to leave it behind.

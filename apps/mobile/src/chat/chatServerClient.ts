@@ -471,7 +471,10 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
     try {
       const entry = await request<{ deleted?: unknown; value?: unknown; blob?: unknown } | null>(PROFILE_STORED, 'GET', undefined, chatId(actorId));
       if (!entry || typeof entry !== 'object' || Array.isArray(entry) || entry.deleted !== false) return undefined;
-      return entry.blob === true ? PROFILE_IN_BUCKET : entry.value;
+      if (entry.blob === true) return PROFILE_IN_BUCKET;
+      // Desktop keeps the value wrapped with the preference revision it supersedes (companion-cloud/store.ts).
+      const wrapped = entry.value as { companionStore?: unknown; value?: unknown } | null;
+      return wrapped && typeof wrapped === 'object' && wrapped.companionStore === 1 ? wrapped.value : entry.value;
     } catch (error) {
       // 404: an older server or the store switched off. Anything else is a failed read, not "no profile".
       if (error && typeof error === 'object' && 'status' in error && error.status === 404) return undefined;

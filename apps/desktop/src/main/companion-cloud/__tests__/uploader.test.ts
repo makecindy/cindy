@@ -447,6 +447,39 @@ describe('companion store', () => {
     expect((await readCompanionRows(t.api, t.store, 'actor')).find(row => row.key === key)?.value).toBeNull();
   });
 
+  it('fails a complete sync when the store goes off part way and a large value is left', async () => {
+    const options = { off: false };
+    const t = storeSetup(options);
+    t.setValues([profile('soul'), memory('a.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000))]);
+    await t.uploader.syncBot('bot', 'actor');
+    options.off = true;
+    // a.md shrinks (its store cleanup finds the store off), then b.md is new and too large.
+    t.setValues([profile('soul'), memory('a.md', 'small'), memory('b.md', 'y'.repeat(COMPANION_VALUE_MAX_BYTES + 1000))]);
+    await expect(t.uploader.syncBot('bot', 'actor', Number.POSITIVE_INFINITY, { requireAll: true })).rejects.toThrow('COMPANION_VALUE_TOO_LARGE');
+  });
+
+  it('lets a newer preference deletion win over an older large store value', async () => {
+    const t = storeSetup();
+    const key = 'companion.memory.v1:big.md';
+    t.setValues([profile('soul'), memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000))]);
+    await t.uploader.syncBot('bot', 'actor');
+    // Another computer deleted it while the store was off: only a preference tombstone was written.
+    t.prefs.set(key, { key, value: null, revision: 1 });
+    expect((await readCompanionRows(t.api, t.store, 'actor')).find(row => row.key === key)?.value).toBeNull();
+  });
+
+  it('asks the store again before a restore instead of trusting a switch-off pause', async () => {
+    const options = { off: false };
+    const t = storeSetup(options);
+    const big = memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000));
+    t.setValues([profile('soul'), big]);
+    await t.uploader.syncBot('bot', 'actor');
+    options.off = true;
+    expect((await readCompanionRows(t.api, t.store, 'actor')).some(row => row.key === big.key)).toBe(false);
+    options.off = false;
+    expect((await readCompanionRows(t.api, t.store, 'actor')).find(row => row.key === big.key)?.value).toEqual(big.value);
+  });
+
   it('passes a deletion of a value kept only in the store to the next restore', async () => {
     const t = storeSetup();
     const big = memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000));
