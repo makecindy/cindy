@@ -16,6 +16,7 @@ import {
 } from '../git-context/prStatusService';
 import type { GhCliTokenReadResult } from '../git-context/ghCliTokenSource';
 import { fetchPrSummary, summarizeChecks } from '../git-context/prSummary';
+import { PrFollowWatch, prStatusSignature } from '../git-context/prFollowWatch';
 import type { GithubClient } from '@cindy/github-client';
 
 const Q = { owner: 'makecindy', repo: 'cindy', prNumber: 85 };
@@ -588,4 +589,83 @@ describe('GitLab MR status', () => {
       expect(reportError).toHaveBeenCalledExactlyOnceWith(error);
     },
   );
+});
+
+// Rule (Dash, 2026-11-06): a PR follow-up should react when the title-bar refresh already saw the
+// PR change, instead of waiting for its next cron look; no test covered status → schedule.
+// Production entry: PrStatusService.getStatuses feeding the real PrFollowWatch (unit, fake clock).
+// Minimal inputs: one head change, a schedule for #8 next to one for #85, one in flight.
+describe('PR follow watch', () => {
+  const schedule = (id: string, url: string, extra: Record<string, unknown> = {}) =>
+    ({ id, status: 'active', recurring: true, manual: false, preRunHook: { command: `node "/s/pr-heartbeat-gate.mjs" ${url}` }, ...extra }) as never;
+  function setup() {
+    let now = 0;
+    let head = 'a1';
+    const runNow = vi.fn(async () => ({ runId: 'r' }));
+    const inflight = vi.fn(() => 0);
+    const watch = new PrFollowWatch({
+      listActive: async () => [
+        schedule('follow-85', 'https://github.com/MakeCindy/cindy/pull/85'),
+        schedule('follow-8', 'https://github.com/makecindy/cindy/pull/8'),
+        schedule('other', 'https://github.com/makecindy/cindy/pull/850'),
+        schedule('once', 'https://github.com/makecindy/cindy/pull/85', { recurring: false }),
+        schedule('manual', 'https://github.com/makecindy/cindy/pull/85', { manual: true }),
+      ],
+      inflight,
+      runNow,
+      now: () => now,
+    });
+    const svc = new PrStatusService({
+      readToken: TOKEN_OK,
+      fetchPr: async () => remote({ head_sha: head } as Partial<PrRemoteState>),
+      cacheTtlMs: 1,
+      staleTtlMs: 0,
+      now: () => now,
+      onObserved: (query, result) => watch.observe(query, result),
+    });
+    const look = async (at: number, nextHead = head) => {
+      now = at;
+      head = nextHead;
+      await svc.getStatuses([Q], { waitForFresh: true });
+      await new Promise((resolve) => setImmediate(resolve));
+    };
+    return { look, runNow, inflight };
+  }
+
+  it('runs only recurring schedules naming this PR, once per change, skipping in-flight and recent ones', async () => {
+    const { look, runNow, inflight } = setup();
+    await look(10);
+    await look(20);
+    expect(runNow).not.toHaveBeenCalled();
+    await look(30, 'b2');
+    expect(runNow.mock.calls).toEqual([['follow-85', { kind: 'watch', source: 'pr-status', detail: 'https://github.com/makecindy/cindy/pull/85' }]]);
+    await look(40, 'c3');
+    expect(runNow).toHaveBeenCalledTimes(1);
+    inflight.mockReturnValue(1);
+    await look(70_000, 'd4');
+    expect(runNow).toHaveBeenCalledTimes(1);
+    inflight.mockReturnValue(0);
+    await look(80_000, 'e5');
+    expect(runNow).toHaveBeenCalledTimes(2);
+  });
+
+  it('treats failed reads as no news and keeps the baseline', async () => {
+    const runNow = vi.fn(async () => null);
+    const watch = new PrFollowWatch({
+      listActive: async () => [schedule('follow-85', 'https://github.com/makecindy/cindy/pull/85')],
+      inflight: () => 0,
+      runNow,
+    });
+    const ok = (headSha: string) => ({ ok: true, status: 'open', prNumber: 85, headSha }) as never;
+    const settle = () => new Promise((resolve) => setImmediate(resolve));
+    watch.observe(Q, ok('a1'));
+    watch.observe(Q, { ok: false, prNumber: 85, reason: 'fetch-failed' } as never);
+    watch.observe(Q, ok('a1'));
+    await settle();
+    expect(runNow).not.toHaveBeenCalled();
+    watch.observe(Q, ok('b2'));
+    await settle();
+    expect(runNow).toHaveBeenCalledTimes(1);
+    expect(prStatusSignature({ ok: false, prNumber: 85, reason: 'fetch-failed' } as never)).toBeNull();
+  });
 });

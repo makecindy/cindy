@@ -124,6 +124,19 @@ class InMemoryStorage implements ScheduleStorage {
   }
 }
 
+// Rule (2026-11-06): a host-triggered run must reach the runner with its trigger so the pre-run
+// check can skip its own pacing; manual runs stay unmarked. Minimal input: two runNow calls (unit).
+it('hands a runNow trigger to the runner and leaves manual runs unmarked', async () => {
+  const h = makeHarness();
+  await h.scheduler.start();
+  const schedule = await h.scheduler.create(baseInput);
+  const trigger = { kind: 'watch' as const, source: 'pr-status', detail: 'https://github.com/o/r/pull/1' };
+  await h.scheduler.runNow(schedule.id, { trigger });
+  await h.scheduler.runNow(schedule.id);
+  expect(h.fireCalls.map((call) => call.ctx.trigger)).toEqual([trigger, undefined]);
+  await h.scheduler.stop();
+});
+
 // Regression: quitting while a runner is active must preserve an interrupted run,
 // even when closing the provider produces a late rejection. Unit, in-memory I/O.
 it('preserves interrupted runs on app exit instead of recording a provider-close failure', async () => {
