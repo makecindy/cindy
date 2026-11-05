@@ -29,6 +29,7 @@ import { useTranslation } from 'react-i18next';
 
 import {
   findSlashCommandToken,
+  isSlashCommandRuntimeAlias,
   leadingSlashCommandRange,
   restoreSlashCommandRuntimeAlias,
   slashCommandRangeCoversToken,
@@ -201,7 +202,7 @@ export function UserMessageEditBox({
           : undefined;
       const rebuiltSlashRange = leadingSlashCommandRange(submitText);
       const submitTokenIsRuntimeAlias = rebuiltSlashRange
-        ? submitText.slice(rebuiltSlashRange.start, rebuiltSlashRange.end).toLowerCase().startsWith('/skill:')
+        ? isSlashCommandRuntimeAlias(submitText.slice(rebuiltSlashRange.start, rebuiltSlashRange.end))
         : false;
       const preservedSlashCommandRanges = visibleTextUnchanged && slashCommandRanges !== undefined
         ? [...slashCommandRanges]

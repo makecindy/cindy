@@ -12,6 +12,7 @@ import {
   mediaRequestParamsForLog,
   mediaRequestUrlForLog,
 } from '../../cindy-media/mediaRequestLog.js';
+import { parseDataUrl } from '../../cindy-media/dataUrl.js';
 
 export class GatewayImageError extends Error {
   constructor(
@@ -244,9 +245,16 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
     return { Authorization: `Bearer ${await requireApiKey()}` };
   }
 
-  function assertSizeQualityAllowed(params: { size?: string; quality?: string }): void {
+  function assertSizeQualityAllowed(params: {
+    size?: string;
+    quality?: string;
+    nativeParameters?: Record<string, unknown>;
+  }): void {
     if (allowSizeQuality) return;
-    if (params.size !== undefined || params.quality !== undefined) {
+    if (
+      params.size !== undefined || params.quality !== undefined ||
+      params.nativeParameters?.size !== undefined || params.nativeParameters?.quality !== undefined
+    ) {
       throw new GatewayImageError(
         `${brandLabel} 图像通道不支持画幅/档位参数(size/quality),请去掉后重试`,
         400,
@@ -261,13 +269,14 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
     assertSizeQualityAllowed(params);
     const headers = await requestHeaders();
     const body: Record<string, unknown> = {
-      model: params.model,
-      prompt: params.prompt,
       n: params.n ?? 1,
       // 不接受 size 的来源连缺省 'auto' 也不发(assert 只能挡显式参数)。
       ...(allowSizeQuality ? { size: params.size ?? 'auto' } : {}),
+      ...(params.quality ? { quality: params.quality } : {}),
+      ...params.nativeParameters,
+      model: params.model,
+      prompt: params.prompt,
     };
-    if (params.quality) body.quality = params.quality;
 
     // 停用轴派发前重查(PR #744 review 第二十一轮):凭证获取是 await,期间该
     // (供应商, 模型) 可能被用户停用 —— payload 就绪、请求发出的紧前再验一次。
@@ -302,13 +311,31 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
       throw new GatewayImageError('image_edit requires at least 1 image', 400);
     }
 
+    const body: Record<string, unknown> = {
+      n: params.n ?? 1,
+      ...(allowSizeQuality ? { size: params.size ?? 'auto' } : {}),
+      ...(params.quality ? { quality: params.quality } : {}),
+      ...params.nativeParameters,
+      model: params.model,
+      prompt: params.prompt,
+    };
     const form = new FormData();
-    form.append('model', params.model);
-    form.append('prompt', params.prompt);
-    form.append('n', String(params.n ?? 1));
-    // 同 generateImage:不接受 size 的来源连缺省 'auto' 也不发。
-    if (allowSizeQuality) form.append('size', params.size ?? 'auto');
-    if (params.quality) form.append('quality', params.quality);
+    for (const [key, value] of Object.entries(body)) {
+      if (value === undefined) continue;
+      const media = key !== 'model' && key !== 'prompt' && typeof value === 'string'
+        ? parseDataUrl(value) : null;
+      if (media?.base64) {
+        // Core expands managed native media (for example a mask) to data URLs.
+        // Multipart endpoints need those bytes as files, never local paths.
+        form.append(
+          key,
+          new Blob([Buffer.from(media.payload, 'base64')], { type: media.mimeType }),
+          `input.${media.mimeType.split('/')[1]}`,
+        );
+      } else {
+        form.append(key, typeof value === 'object' ? JSON.stringify(value) : String(value));
+      }
+    }
 
     const imageParams: Array<{ filename: string; mimeType: string; bytes: number }> = [];
     for (const p of params.imagePaths) {
@@ -330,14 +357,7 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
         signal,
       },
       params.model,
-      {
-        model: params.model,
-        prompt: params.prompt,
-        n: params.n ?? 1,
-        ...(allowSizeQuality ? { size: params.size ?? 'auto' } : {}),
-        ...(params.quality ? { quality: params.quality } : {}),
-        images: imageParams,
-      },
+      { ...body, images: imageParams },
     );
     return parseResponse(res, params.model, brandLabel, opts.maxResponseBytes);
   }
