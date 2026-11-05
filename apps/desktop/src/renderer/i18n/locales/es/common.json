@@ -14972,7 +14972,7 @@
           "urlPlaceholder": "Enlace de PR de GitHub o MR de GitLab",
           "notFound": "No se encontró el MR o la cuenta actual no tiene permiso para verlo"
         },
-        "merge": "Fusionar",
+        "merge": "Fusión",
         "conflicts": "Con conflictos"
       }
     },
