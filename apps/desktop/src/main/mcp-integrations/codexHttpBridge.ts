@@ -184,7 +184,20 @@ export interface CodexHttpBridge {
    * 仅靠 expectedToken 无法区分新旧,必须连同代次一起比较。
    */
   unregisterSessionToken(sessionId: string, expectedToken?: string, generation?: number): void;
+  /** 当前存活的 MCP streamable-http 会话数(诊断用,见 countLiveBridgeMcpSessions)。 */
+  mcpSessionCount(): number;
   shutdown(): Promise<void>;
+}
+
+/**
+ * 本进程所有存活 bridge 上的 MCP 会话总数,写进 memory-usage 采样行。每个会话持有一整个
+ * McpServer(连同全部工具的 zod schema,约 1–2 MB),这个数持续上涨就是会话只开不关。
+ */
+const liveBridges = new Set<CodexHttpBridge>();
+export function countLiveBridgeMcpSessions(): number {
+  let n = 0;
+  for (const bridge of liveBridges) n += bridge.mcpSessionCount();
+  return n;
 }
 
 export interface StartCodexHttpBridgeOptions {
@@ -408,6 +421,7 @@ export async function startCodexHttpBridge(
         appServer,
         pluginId: opts.pluginIdByServerName?.[serverName],
         sessionTokenCtx,
+        ownerSessionId: sessionQuery ?? undefined,
         threadInstanceQuery: sessionQuery === null ? instanceQuery : null,
         remoteBotHelper: isScopedRemoteToken && serverName === REMOTE_BOT_HELPER_SERVER_NAME,
       });
@@ -485,7 +499,28 @@ export async function startCodexHttpBridge(
     socket.once('close', () => liveSockets.delete(socket));
   });
 
+  // `?session=` 路由的客户端(Pi 会话、远端 Claude)退出时往往不发 DELETE,transport 的
+  // onclose 永远不触发,会话连同整个 McpServer 一直留在表里(2026-11 个人版实测:Pi 桥
+  // 40 分钟新建 77 个会话、关闭 0 个)。该 session 的注册真正注销(不是被重建覆盖后的迟到
+  // dispose)即说明它的进程已结束,名下会话一并关掉;客户端若仍在,下一次请求会因 ctx 已注销
+  // 被 401 挡住,与关不关会话无关。本地 Codex 不带 ?session=,不受影响。
+  const closeSessionOwnedTransports = (sessionId: string): void => {
+    let closed = 0;
+    for (const transports of transportsByServer.values()) {
+      for (const [mcpSessionId, entry] of transports) {
+        if (entry.ownerSessionId !== sessionId) continue;
+        transports.delete(mcpSessionId);
+        closed++;
+        void entry.transport.close().catch((e: unknown) => {
+          log.warn('transport close threw', { message: (e as Error).message });
+        });
+      }
+    }
+    if (closed > 0) log.info('closed MCP sessions of ended session', { session: prefixId(sessionId), closed });
+  };
+
   const shutdown = async (): Promise<void> => {
+    liveBridges.delete(bridge);
     log.info('shutting down http bridge', {
       activeSockets: liveSockets.size,
       activeTransports: countTransports(transportsByServer),
@@ -527,7 +562,7 @@ export async function startCodexHttpBridge(
     log.info('http bridge shut down');
   };
 
-  return {
+  const bridge: CodexHttpBridge = {
     port,
     token,
     instanceId: randomBytes(8).toString('hex'),
@@ -557,7 +592,8 @@ export async function startCodexHttpBridge(
       if (expectedCtx !== undefined && sessionCtxById.get(sessionId) !== expectedCtx) {
         return;
       }
-      sessionCtxById.delete(sessionId);
+      if (!sessionCtxById.delete(sessionId)) return;
+      closeSessionOwnedTransports(sessionId);
     },
     registerSessionToken: (sessionId, sessionToken) => {
       const generation = nextTokenGeneration++;
@@ -571,8 +607,11 @@ export async function startCodexHttpBridge(
       if (generation !== undefined && entry.generation !== generation) return;
       sessionTokenBySessionId.delete(sessionId);
     },
+    mcpSessionCount: () => countTransports(transportsByServer),
     shutdown,
   };
+  liveBridges.add(bridge);
+  return bridge;
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -621,6 +660,8 @@ interface DispatchOpts {
   pluginId?: string;
   /** per-session token 命中时解析出的 ctx;存在即优先于 _meta.threadId 路由。 */
   sessionTokenCtx?: LiziMcpSessionContext;
+  /** 经 `?session=` 路由时的 Cindy sessionId;新建的 MCP 会话归它所有,随它注销而关闭。 */
+  ownerSessionId?: string;
   /** Local Codex per-thread URL identity. null means an unbound legacy URL. */
   threadInstanceQuery: string | null;
 }
@@ -628,6 +669,7 @@ interface DispatchOpts {
 interface SessionTransport {
   transport: StreamableHTTPServerTransport;
   mcpServer: McpServer;
+  ownerSessionId?: string;
 }
 
 /**
@@ -651,6 +693,7 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
     discoveryContexts,
     pluginId,
     sessionTokenCtx,
+    ownerSessionId,
     threadInstanceQuery,
     remoteBotHelper,
     remoteAppServer,
@@ -834,7 +877,7 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (newId) => {
-      transports.set(newId, { transport, mcpServer });
+      transports.set(newId, { transport, mcpServer, ownerSessionId });
       log.debug('mcp session initialized', { serverName, sessionId: newId });
     },
   });
