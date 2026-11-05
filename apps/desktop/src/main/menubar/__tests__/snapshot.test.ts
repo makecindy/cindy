@@ -96,6 +96,13 @@ describe('buildMenubarView', () => {
     expect(widget?.sources[0]).toMatchObject({ value, unit: 'credits', fill: 0, reserve: true });
   });
 
+  // PR #8622: buildMenubarView must expose fractional Credits to screen readers.
+  // Existing unit coverage only checked an integer label; 0.0004 was read as zero.
+  it.each([0.0004, 128.1234])('preserves fractional credit precision in accessibility labels: %s', (credits) => {
+    const view = buildMenubarView(input([codex('alpha', 100, { credits })]));
+    expect(view.sources[0].accessibilityLabel).toContain(`${credits} credits`);
+  });
+
   it('follows the saved order and hides pay-as-you-go connections until shown', () => {
     const payg: MenubarSourceInput = { kind: 'payg', id: 'glm', providerId: 'glm', logoSvg: '', name: 'GLM', billing: 'api' };
     const sources = [codex('alpha', 10), codex('beta', 10), payg];

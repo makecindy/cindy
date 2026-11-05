@@ -731,7 +731,7 @@ class Builder {
       ...(unusedAtReset ? { unusedAtReset: true } : {}),
       ...(seenAtMs !== null ? { stale: true } : {}),
       accessibilityLabel: reserve
-        ? `${this.t('a11y.reserve', { name: `${source.brand} ${name}` })} · ${source.creditsUnlimited ? this.t('fact.unlimited') : source.credits?.toLocaleString(this.input.locale)} ${this.t('cell.credits')}`
+        ? `${this.t('a11y.reserve', { name: `${source.brand} ${name}` })} · ${source.creditsUnlimited ? this.t('fact.unlimited') : source.credits?.toLocaleString(this.input.locale, { maximumSignificantDigits: 21 })} ${this.t('cell.credits')}`
         : this.t('a11y.remaining', { name: source.brand === name ? name : `${source.brand} ${name}`, n: Math.round(remaining) }),
     };
   }
