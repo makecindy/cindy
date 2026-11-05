@@ -72,7 +72,8 @@ export function createSessionQueueControlService(deps: SessionQueueControlDeps) 
   async function resolve(
     params: BaseControlParams,
   ): Promise<
-    { ok: true; item: AgentInputQueuedMessage } | Exclude<SessionQueueControlResult, { ok: true }>
+    | { ok: true; item: AgentInputQueuedMessage; queue: readonly AgentInputQueuedMessage[] }
+    | Exclude<SessionQueueControlResult, { ok: true }>
   > {
     const snapshot = await deps.getSnapshot(params.sessionId);
     if (snapshot.consumingClientIds.includes(params.queuedMessageId)) {
@@ -90,7 +91,9 @@ export function createSessionQueueControlService(deps: SessionQueueControlDeps) 
         message: authorization.message,
       };
     }
-    return { ok: true, item };
+    // 把这次读到的队列一起带出去:停点判定复用同一份快照,不再多读一次
+    // (调用方按次编排的快照序列不能被内部多出的读取打乱)。
+    return { ok: true, item, queue: snapshot.pendingQueue };
   }
 
   async function classifyLostRace(
@@ -175,17 +178,29 @@ export function createSessionQueueControlService(deps: SessionQueueControlDeps) 
       const resolved = await resolve(params);
       if (!resolved.ok) return resolved;
       await params.beforeMutation?.();
-      // 其它条目不得越过停点:否则停点位置与队列可见顺序不一致。
-      // (停点条目自身可以移动,停点跟着走。)
+      // 其它条目不得跨过停点:否则停点会把一条本该执行的消息静默降到不执行
+      // 的一侧。停点前后各自区间内的排序仍然可用,停点条目自身也可以移动。
       if (resolved.item.held !== true) {
-        const queue = (await deps.getSnapshot(params.sessionId)).pendingQueue;
+        const queue = resolved.queue;
         const stopIndex = queue.findIndex((candidate) => candidate.held === true);
-        if (stopIndex >= 0 && params.position <= stopIndex) {
-          return {
-            ok: false,
-            errorCode: 'QUEUE_HELD_BOUNDARY',
-            message: `queued message ${params.queuedMessageId} cannot move ahead of the queue stop point`,
-          };
+        const movingIndex = queue.findIndex(
+          (candidate) => candidate.clientId === params.queuedMessageId,
+        );
+        if (stopIndex >= 0 && movingIndex >= 0) {
+          // 与 coordinator.move 的插入下标修正保持一致:先夹到长度,再从后移方向减一。
+          const clamped = Math.max(0, Math.min(params.position, queue.length));
+          const insertIndex = movingIndex < clamped ? clamped - 1 : clamped;
+          const stopIndexAfterRemoval = movingIndex < stopIndex ? stopIndex - 1 : stopIndex;
+          const startsBeforeStop = movingIndex < stopIndex;
+          // 插到停点当前位置之前(含同位)才算「停在停点前面」。
+          const endsBeforeStop = insertIndex <= stopIndexAfterRemoval;
+          if (startsBeforeStop !== endsBeforeStop) {
+            return {
+              ok: false,
+              errorCode: 'QUEUE_HELD_BOUNDARY',
+              message: `queued message ${params.queuedMessageId} cannot move across the queue stop point`,
+            };
+          }
         }
       }
       const position = deps.moveQueuedMessage(

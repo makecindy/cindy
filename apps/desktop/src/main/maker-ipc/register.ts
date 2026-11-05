@@ -928,6 +928,7 @@ import { normalizeSessionContextWindowBoundsRoute } from '../../shared/sessionCo
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
 import { readSessionBackgroundTaskOutputTail } from '../background-task-output/reader.js';
 import { AgentInputCoordinator, markManualSchedulerContinuation } from './agent-input-coordinator.js';
+import { applyQueueHold } from './queueHoldHandler.js';
 import { createAutomaticContinueEligibility, isActiveCompanionFailoverSession } from './automaticContinueEligibility.js';
 import { bindSilentStopContinuationGeneration } from './silentStopContinuationBinding.js';
 import { notePromptPredictionSessionStopped } from './promptPredictionStopLedger.js';
@@ -22887,11 +22888,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     async (_e, sessionId: unknown, clientId: unknown, opts?: unknown) => {
       const sid = requireSessionId(sessionId);
       await assertRemoteInputControlBoundary(sid, isDeviceLinkInvoke(), opts);
-      // 先恢复队列再设置停点:未恢复的快照会在之后被懒加载流程重建,直接写状态会被覆盖。
-      await inputCoordinator.ensureQueueRestored(sid);
-      return clientId === null
-        ? inputCoordinator.releaseHold(sid)
-        : inputCoordinator.hold(sid, requireClientId(clientId));
+      return applyQueueHold(
+        inputCoordinator,
+        sid,
+        clientId === null ? null : requireClientId(clientId),
+      );
     },
   );
 

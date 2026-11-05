@@ -473,8 +473,11 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
    （`MESSAGE_HELD`）。协同侧可观测：`get_worker_queue_status` 每条返回 `held` 并在
    顶层返回 `queue_held`；`send_to_worker` 的排队回执带 `queue_held`（说明本条只是
    入队、不会自动执行，否则 Lead 会等一个不会到来的回报）；`merge_queued_messages`
-   区间含停点返回 `QUEUE_HAS_HELD`（整次零修改），`move_queued_message` 拒绝把其它
-   条目移到停点之前（`QUEUE_HELD_BOUNDARY`），停点条目自身可以移动。实现指针：
+   区间含停点返回 `QUEUE_HAS_HELD`（整次零修改）；合并还会在同步替换回调里按最新条目
+   再判一次，避免异步权限复核期间刚设的停点被合并删除。`move_queued_message` 拒绝把
+   其它条目**跨过**停点（`QUEUE_HELD_BOUNDARY`，前后两侧各自区间内的排序仍可用），
+   停点条目自身可以移动。转插话在 `isControlSteerBlocked`（预检与 provider 前复核共用）
+   里读最新 `held`，而 `hold` 拒绝已在投递中的条目，两侧互斥封住「挂起条目被送进当前轮」。实现指针：
    `agent-input-coordinator.ts` 的 `hold`／`releaseHold` 与 `explainDrainBlockGate`、
    `sessionQueueControl.ts` 的 steer/move 校验、`orcaTeamService.ts` 的
    `listWorkerQueuedMessages` / `mergeWorkerQueuedMessages`、`register.ts` 的

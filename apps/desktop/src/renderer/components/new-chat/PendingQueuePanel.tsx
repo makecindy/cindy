@@ -500,7 +500,7 @@ export function PendingQueuePanel({
                 // 队列表在哪一条停住。这个槽位与拖拽把手同为 20px,行宽不变。
                 <span
                   aria-label={t('newChat.pendingQueue.heldRowAria', { index: originalIdx + 1 })}
-                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded-[6px] text-[var(--settings-section-desc)]"
+                  className="flex h-5 w-5 shrink-0 items-center justify-center text-[var(--settings-section-desc)]"
                 >
                   <Pause size={12} strokeWidth={2.25} aria-hidden />
                 </span>
@@ -512,7 +512,7 @@ export function PendingQueuePanel({
                 aria-label={t('newChat.pendingQueue.dragAria', { index: originalIdx + 1 })}
                 aria-keyshortcuts="ArrowUp ArrowDown Home End"
                 className={cn(
-                  'pending-queue-drag-handle flex h-5 w-5 shrink-0 touch-none select-none items-center justify-center rounded-[6px]',
+                  'pending-queue-drag-handle flex h-5 w-5 shrink-0 touch-none select-none items-center justify-center',
                   'appearance-none border-0 bg-transparent p-0',
                   'text-[var(--cmd-palette-item-meta)] opacity-0 transition-opacity',
                   !dragDisabled &&

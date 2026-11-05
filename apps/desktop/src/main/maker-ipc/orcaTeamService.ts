@@ -1981,6 +1981,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           targets.some((item) => item.origin?.kind !== 'orca' || item.origin.senderLabel !== 'Lead')
         )
           return null;
+        // 异步权限复核期间用户可能刚拍下停点:在同一个无 await 临界区里按最新
+        // 条目再查一次,否则合并会把拦住队列的停点删掉并当场发出去。
+        if (targets.some((item) => item.held === true)) return null;
         // 合并后条目代表全部被合并消息: 其余条目的图片按队列顺序并入保留条目,
         // 避免"只改文本"语义静默丢图。
         const survivor = targets[0]!;

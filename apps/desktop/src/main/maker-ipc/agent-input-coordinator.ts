@@ -2407,6 +2407,7 @@ export class AgentInputCoordinator {
       (state.activeTurn !== null && !isActiveTurnDispatched(state.activeTurn)) ||
       (opts.fromQueue &&
         (state.queueEditLocks.includes(clientId) ||
+          state.pendingQueue.find((queued) => queued.clientId === clientId)?.held === true ||
           !state.pendingQueue.some((queued) => queued.clientId === clientId)))
     );
   }
@@ -3260,9 +3261,11 @@ export class AgentInputCoordinator {
     if (!target || target.held === true || consuming) {
       return this.getProjection(sessionId);
     }
-    state.pendingQueue = state.pendingQueue.map((item) => {
-      const { held: _previous, ...rest } = item;
-      return item.clientId === clientId ? { ...rest, held: true as const } : rest;
+    // 只替换真正变化的条目:其余条目保持对象身份,恢复快照的 provenance
+    // (restoredQueueItems)不会因为一次 hold 而丢;被替换的那条显式迁移标记。
+    state.pendingQueue = this.mapQueueRows(state.pendingQueue, (item) => {
+      if (item.clientId !== clientId) return item.held === true ? this.withoutHold(item) : item;
+      return this.preserveRestoredQueueProvenance(item, { ...this.withoutHold(item), held: true });
     });
     this.emit(sessionId);
     return this.getProjection(sessionId);
@@ -3275,11 +3278,36 @@ export class AgentInputCoordinator {
     if (!state.pendingQueue.some((item) => item.held === true)) {
       return this.getProjection(sessionId);
     }
-    state.pendingQueue = state.pendingQueue.map(({ held: _held, ...rest }) => rest);
+    state.pendingQueue = this.mapQueueRows(state.pendingQueue, (item) =>
+      item.held === true
+        ? this.preserveRestoredQueueProvenance(item, this.withoutHold(item))
+        : item,
+    );
     this.emit(sessionId);
     this.scheduleDrain(sessionId, 'hold-released');
     this.scheduleExternalTurnRetryIfNeeded(sessionId, state, 'hold-released');
     return this.getProjection(sessionId);
+  }
+
+  /** 代价最小的去 held:未挂起的条目原样返回,避免无意义地丢对象身份。 */
+  private withoutHold(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
+    if (item.held !== true) return item;
+    const { held: _held, ...rest } = item;
+    return rest;
+  }
+
+  /** 只在真发生替换时新建数组,不改队列顺序。 */
+  private mapQueueRows(
+    queue: readonly AgentInputQueuedMessage[],
+    map: (item: AgentInputQueuedMessage) => AgentInputQueuedMessage,
+  ): AgentInputQueuedMessage[] {
+    let changed = false;
+    const next = queue.map((item) => {
+      const mapped = map(item);
+      if (mapped !== item) changed = true;
+      return mapped;
+    });
+    return changed ? next : [...queue];
   }
 
   /** 用户点「重试 / 继续任务」。行为见 performRetryLastError。 */
@@ -3674,7 +3702,13 @@ export class AgentInputCoordinator {
     // filter 保序,removedIndex 现在正好指向原位置的下一项。
     if (removed?.held === true) {
       const next = state.pendingQueue[removedIndex];
-      if (next) state.pendingQueue[removedIndex] = { ...next, held: true };
+      // 继承停点的条目也是被替换的对象:同样要迁移恢复标记与重试谱系。
+      if (next) {
+        state.pendingQueue[removedIndex] = this.preserveRestoredQueueProvenance(next, {
+          ...next,
+          held: true,
+        });
+      }
     }
     if (removed) this.deps.onDiscardedQueuedMessage?.(sessionId, removed);
     // 显式移除的消息从未派发:该 clientId 允许被合法地重新入队(重排/再发都是

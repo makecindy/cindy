@@ -1,4 +1,5 @@
-import { createInputEnqueueHarness, createSetHoldHarness } from './inputEnqueueHarness.js';
+import { createInputEnqueueHarness } from './inputEnqueueHarness.js';
+import { applyQueueHold } from '../queueHoldHandler.js';
 import { FORWARDED_REQUEST_RECEIPT } from '../../../shared/forwardedRequest.js';
 import { BOT_GROUP_CLIENT_ID } from '../../../shared/botGroupChat.js';
 import { authorizeGroupTool, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
@@ -16538,6 +16539,57 @@ describe('queue message hold (stop point)', () => {
     expect(heldIds(h, sid)).toEqual(['a']);
   });
 
+  it('keeps the restored-snapshot provenance of untouched rows across hold', async () => {
+    // 恢复队列里的条目带着 restoredFromSnapshot 标记(派发时据此补持久执行凭证)。
+    // 一次 hold 不能让其它条目丢掉它,否则伙伴委派会报“没有执行凭证”。
+    const h = createHarness();
+    const sid = 'hold-restored-provenance';
+    h.setLoadQueueSnapshot(async () => [makeItem('a', 'restored first')]);
+    await h.coordinator.ensureQueueRestored(sid);
+    expect(h.coordinator.getProjection(sid).pendingQueue.map((item) => item.clientId)).toEqual(['a']);
+
+    const before = h.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]!;
+    h.coordinator.hold(sid, 'a');
+    const held = h.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]!;
+    h.coordinator.releaseHold(sid);
+    const released = h.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]!;
+    // 只有被挂起的那条换成新对象,恢复后它仍然记得自己来自快照。
+    expect(held).not.toBe(before);
+    expect(released).not.toBe(held);
+
+    // 恢复出来的队列原本是暂停的,点「继续」后才真正派发。
+    h.coordinator.resume(sid);
+    await flush();
+    expect(h.onAcceptedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'a' }),
+      true,
+    );
+  });
+
+  it('does not recreate untouched rows when a stop point moves', async () => {
+    const { h, sid } = await withQueued(['a', 'b', 'c']);
+    const rowsBefore = h.coordinator.getQueueControlSnapshot(sid).pendingQueue;
+
+    h.coordinator.hold(sid, 'b');
+    const rowsAfter = h.coordinator.getQueueControlSnapshot(sid).pendingQueue;
+
+    // 未变化的行保持对象身份:恢复标记、去重窗口等按对象记账的状态都不会被冲掉。
+    expect(rowsAfter[0]).toBe(rowsBefore[0]);
+    expect(rowsAfter[2]).toBe(rowsBefore[2]);
+    expect(rowsAfter[1]).not.toBe(rowsBefore[1]);
+  });
+
+  it('moves the stop point without recreating the adopting row', async () => {
+    const { h, sid } = await withQueued(['a', 'b', 'c']);
+    h.coordinator.hold(sid, 'a');
+    const adoptingRow = h.coordinator.getQueueControlSnapshot(sid).pendingQueue[1]!;
+
+    h.coordinator.remove(sid, 'a');
+
+    expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]).not.toBe(adoptingRow);
+  });
+
   it('keeps the stop point behind a UI continue inserted at the head', async () => {
     const { h, sid } = await withQueued(['a', 'b']);
     h.coordinator.hold(sid, 'a');
@@ -16550,16 +16602,59 @@ describe('queue message hold (stop point)', () => {
     expect(heldIds(h, sid)).toEqual(['a']);
   });
 
-  it('restores a cold queue before writing the stop point through the IPC handler', async () => {
+  it('never steers a queued row that is already the stop point', async () => {
+    const h = createHarness();
+    const sid = 'hold-steer-held';
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, makeItem('report', 'worker report'));
+    await flush();
+    h.coordinator.hold(sid, 'report');
+
+    const outcome = await h.coordinator.steerControlInput(
+      sid,
+      { queuedClientId: 'report' },
+      { session: h.getTurnSessionIdentity(), turnGeneration: 0 },
+    );
+
+    expect(outcome).toBe('not-attempted');
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.hasPendingQueueItem(sid, 'report')).toBe(true);
+  });
+
+  it('refuses to hold a row that is already being steered', async () => {
+    // 这条互斥是停点并发窗口的另一半:delivery 一旦开始,用户就不能再把它挂起,
+    // 于是「挂起中的条目被送进当前轮」不可能发生。
+    const h = createHarness();
+    const sid = 'hold-while-steering';
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, makeItem('report', 'worker report'));
+    await flush();
+    let rejected = false;
+    h.steerToAgent.mockImplementationOnce(async () => {
+      h.coordinator.hold(sid, 'report');
+      rejected = h.coordinator.getProjection(sid).pendingQueue.every((item) => item.held !== true);
+    });
+
+    await expect(
+      h.coordinator.steerControlInput(sid, { queuedClientId: 'report' }, {
+        session: h.getTurnSessionIdentity(),
+        turnGeneration: 0,
+      }),
+    ).resolves.toBe('steered');
+
+    expect(rejected).toBe(true);
+  });
+
+  it('restores a cold queue before writing the stop point', async () => {
     const h = createHarness();
     const sid = 'hold-cold-restore';
     h.setLoadQueueSnapshot(async () => [
       makeItem('a', 'first'),
       makeItem('b', 'second', { held: true }),
     ]);
-    const setHold = createSetHoldHarness(h.coordinator);
-
-    const projection = await setHold({}, sid, 'a');
+    const projection = await applyQueueHold(h.coordinator, sid, 'a');
 
     // 快照里的旧停点已经被新的原子覆盖, 且恢复结果没有被丢。
     expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['a', 'b']);
