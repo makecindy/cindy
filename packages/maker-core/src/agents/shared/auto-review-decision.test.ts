@@ -869,4 +869,3 @@ describe('Host-stamped references the current message points at', () => {
     });
   });
 });
-

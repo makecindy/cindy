@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 109757)
-Total output lines: 8261
-
 /**
  * ClaudeCodeAgent — Claude Code 的 maker-core 一等公民实现。
  *
@@ -3823,7 +3820,664 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 计划模式开启时远端 SDK 同样跑 plan; 读 mutable 值让 rewind 重建也拿到当前档。
         const requestedRemotePermissionMode = extra?.permissionMode ?? effectiveSdkPermissionMode();
         const remoteHasMcpServers = Object.keys(remoteMcpServers ?? {}).length > 0;
-        // effectiveSdkPermissionMode() is computed from the …9757 tokens truncated…                  abortRequested,
+        // effectiveSdkPermissionMode() is computed from the local registration snapshot,
+        // which still includes in-process SDK MCPs that were just filtered out above.
+        // Restore native OAuth Auto when the remote query has no serializable MCP surface;
+        // the Desktop factory will still downgrade it before opening the query if it later
+        // injects a host HTTP MCP (for example the collaboration bridge).
+        const remotePermissionMode =
+          requestedRemotePermissionMode === 'default'
+          && mutablePermissionMode === 'auto'
+          && !mutablePlanMode
+          && !planTurnActive
+          && !nativeAutoReviewUnavailable
+          && mutableAutoReviewCredentialMode === 'oauth-bearer'
+          && !remoteHasMcpServers
+            ? 'auto'
+            : requestedRemotePermissionMode;
+        sdkInPlanMode = remotePermissionMode === 'plan';
+        const remoteToolGuards = [
+          ...buildClaudeRemoteToolGuards(capabilityRouting),
+          ...buildClaudeRemoteRootOnlyToolGuards(),
+          ...buildClaudeRemoteOrcaCallerGuards(vo.orcaRole === 'worker'),
+        ];
+
+        const startParams: Record<string, unknown> = {
+          cwd: opts.workingDir,
+          model: currentSdkModel,
+          // 关键: 远端必须用 remoteEnv (零 process.env 继承), 不能用本地分支的
+          // env。否则 desktop 的 HOME / PATH / APPDATA 等会污染远端 SDK spawn 的
+          // cc CLI(典型: Windows HOME=C:\Users\Lizi 透到 mac, 远端 cc CLI
+          // 把 ~ 展开成 <cwd>/C:\Users\Lizi/.claude/, session 全落怪目录)。
+          // remoteEnv 在 startSession 顶部已经 build (opts.remoteHostId 非空时
+          // 才 build), 这里 ! 是合理的 — 走到这分支 remoteCcQueryFactory 也已经
+          // gate 过 remoteHostId 非空。
+          env: remoteEnv ?? env,
+          permissionMode: remotePermissionMode,
+          // cc-manager 的 QueryStartParams 已原生支持 allowedTools; 传副本避免 RPC
+          // 序列化前后任一侧原地改写 session 快照。
+          ...(claudeAllowedTools ? { allowedTools: [...claudeAllowedTools] } : {}),
+          ...(claudeDisallowedTools.length > 0
+            ? { disallowedTools: [...claudeDisallowedTools] }
+            : {}),
+          ...(remoteToolGuards.length > 0
+            ? { toolGuards: remoteToolGuards }
+            : {}),
+          systemPrompt: (() => {
+            const appendText = buildClaudeSystemPromptAppend({
+              answerDeliveryPrompt: reviewMode ? undefined : this.deps.runtimeConfig.answerDeliveryPrompt,
+              makerMemoryRules,
+              ghostRosterPrompt,
+              hostSystemPrompt,
+              makerMemoryIndex,
+              botProfilePrompt: reviewMode ? undefined : opts.botProfilePrompt,
+              botProfileContextPrompt:
+                reviewMode ? undefined : opts.botProfileContextPrompt,
+              botUserProfilePrompt: reviewMode ? undefined : opts.botUserProfilePrompt,
+              userPrompt: reviewMode || opts.botRuntimeProfile ? undefined : opts.userPrompt,
+              ...(hosted ? { deviceHostedNote: deviceHostedClaudeNote(hosted, opts.workingDir) } : {}),
+            });
+            return {
+              type: 'preset' as const,
+              preset: 'claude_code' as const,
+              ...(appendText ? { append: appendText } : {}),
+            };
+          })(),
+          // **不透传 extraDirs 到远端**: mutableExtraDirs 由 desktop session/draft
+          // 提供, 路径基于 desktop 本地文件系统 (用户拖进来的文件夹), 跟远端机器
+          // 上的路径毫无关系。SDK 把 additionalDirectories 当 cwd 之外的允许范围,
+          // 用 desktop 路径只会让远端 SDK 报"路径不存在 / 不在允许范围"或者更糟,
+          // 误把同名远端路径加进允许范围。远端 cwd 在 startParams.cwd 已传, 别处
+          // 想加额外目录要由远端用户在远端机器上配置, 不在本 PR scope。
+          ...(remoteMcpServers && Object.keys(remoteMcpServers).length > 0 ? { mcpServers: remoteMcpServers } : {}),
+          ...(resumeSdkSid ? { resumeSdkSessionId: resumeSdkSid } : {}),
+          // includePartialMessages 必须跟本地分支保持一致 — 否则 daemon 端 SDK
+          // 不发 stream_event / message_delta, UsageTracker 拿不到 per-turn cache
+          // 数据 (cache hit rate 永远 n/a, 违反规则 19), renderer 也失去增量打字
+          // 动效。cache 实际是热的, 只是观测链路断了。
+          //
+          // 走 extraOptions 通道: QueryStartParams 顶层枚举字段没列 it, daemon
+          // destructure 拿不到; 但 daemon 末尾 spread `...extraOptions` 进 SDK
+          // options (cc-mgr.ts:106), 所以 extraOptions 是任意 SDK 字段的统一透传出口。
+          extraOptions: {
+            includePartialMessages: true,
+            ...(opts.botRuntimeProfile ? { strictMcpConfig: true } : {}),
+            ...thinkingOpts,
+            ...(currentSdkEffort ? { effort: currentSdkEffort } : {}),
+            // settings 对象跟本地分支同源 — 不透传则远端 SDK 拿不到
+            // showThinkingSummaries / autoMemoryEnabled, 远端行为跟本地分歧。
+            settings: buildSettings(),
+            // settingSources 跟本地分支同源透传:远端 cc CLI 会读用户在远端机器
+            // 上的 ~/.claude / 项目 .claude / cwd-local 三层 settings 文件 (slash
+            // commands / output styles / hooks / per-project model 等)。不透传
+            // SDK 默认不读, 远端会丢用户配置, 跟本地行为分歧。
+            settingSources: reviewMode || !!opts.botRuntimeProfile
+              ? []
+              : ['user', 'project', 'local'],
+          },
+        };
+
+        onRuntimeStartAttempted();
+        const remoteQuery = await this.deps.remoteCcQueryFactory({
+          remoteHostId: opts.remoteHostId,
+          botSession: !reviewMode && !!opts.botRuntimeProfile,
+          sessionId: opts.sessionId,
+          ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
+          startParams,
+          // 协同身份以 session 自己的 vendorOptions 为准 (worker 首次创建时
+          // DB 标记尚未写入, host 现场查库会拿到空角色)。见 base-agent.ts
+          // remoteCcQueryFactory 的 vendorOptions 注释。
+          vendorOptions: vo,
+          // per-session Maker Memory 开关 — host 据此决定是否把 cindy_memory
+          // 以 http 形态注进远端 startParams.mcpServers (cc-remote-mcp.ts)。
+          makerMemoryEnabled,
+          // 同一个 scope key 也必须随注册的 session ctx 走: prompt 段用它读索引
+          // (上方 memoryScopeKey), 远端工具侧不给就会回落到 workdir 键。
+          ...((makerMemoryEnabled || opts.makerMemoryScopeKey) ? { makerMemoryScopeKey: memoryScopeKey } : {}),
+          onApprovalRequest: (rawParams: unknown) => withRemoteApprovalIdleGuard(rawParams, async () => {
+            // 110s timeout — must respond before daemon's 120s server-request timeout.
+            // On timeout, dismiss the pending interaction (clears UI) and reject to
+            // let cc-manager-client return deny to daemon.
+            const REMOTE_APPROVAL_TIMEOUT_MS = 110_000;
+            async function dispatchWithTimeout(
+              req: InteractionRequest,
+            ): Promise<InteractionDecision> {
+              let timer: NodeJS.Timeout | undefined;
+              try {
+                return await new Promise<InteractionDecision>((resolve, reject) => {
+                  timer = setTimeout(() => {
+                    dismissSinglePending(req.requestId, 'approval_timeout');
+                    reject(new Error('approval timed out'));
+                  }, REMOTE_APPROVAL_TIMEOUT_MS);
+                  dispatchInteraction(req).then(resolve, reject);
+                });
+              } finally {
+                if (timer) clearTimeout(timer);
+              }
+            }
+            const params = rawParams as {
+              sessionId: string;
+              requestId: string;
+              kind: 'permission' | 'ask_user_question' | 'plan_review';
+              toolName?: string;
+              input?: Record<string, unknown>;
+              title?: string;
+              displayName?: string;
+              description?: string;
+              suggestions?: unknown[];
+              metadata?: Record<string, unknown>;
+              questions?: unknown[];
+              plan?: string;
+              planFilePath?: string;
+            };
+            if (params.kind === 'ask_user_question') {
+              const askInput = (params.input ?? {}) as { questions?: unknown[] };
+              const decision = await dispatchWithTimeout({
+                kind: 'ask_user_question',
+                requestId: params.requestId,
+                toolUseId: params.requestId,
+                questions: (params.questions ?? askInput.questions ?? []) as AskUserQuestionItem[],
+              });
+              if (decision.kind !== 'ask_user_question') {
+                return { kind: 'ask_user_question', answers: {} };
+              }
+              // 远端澄清同样改变本轮授权范围(用户把范围从 src/ 收窄到 build/)→ 与本地 AskUserQuestion
+              // 分支一致地并入有界 review intent 并清空裁决缓存,否则后续工具仍按澄清前的意图裁决、
+              // 越界操作可能被静默允许(codex 报)。
+              setAutoReviewIntent(composeAutoReviewIntentWithClarification(
+                currentAutoReviewIntent,
+                Object.entries(decision.answers ?? {}).map(([question, answer]) => ({ question, answer })),
+              ));
+              return { kind: 'ask_user_question', answers: decision.answers };
+            }
+            if (params.kind === 'plan_review') {
+              const planInput = (params.input ?? {}) as { plan?: string; planFilePath?: string };
+              const plan = params.plan ?? planInput.plan ?? '';
+              // 审批等待期间用户可能继续发消息(setAutoReviewIntent 会覆盖 currentAutoReviewIntent),
+              // 实施阶段的审查意图必须锚在**发起计划时**的原始请求上,不能掺进审批期间的内部跟进
+              // (copilot 报;与本地 ExitPlanMode 分支的 planRequestAutoReviewIntent 同款)。
+              const planRequestAutoReviewIntent = currentAutoReviewIntent;
+              const decision = await dispatchWithTimeout({
+                kind: 'plan_review',
+                requestId: params.requestId,
+                toolUseId: params.requestId,
+                plan,
+                planFilePath: params.planFilePath ?? planInput.planFilePath,
+              });
+              if (decision.kind !== 'plan_review') {
+                return { kind: 'plan_review', behavior: 'deny', reason: 'resolver kind mismatch' };
+              }
+              if (decision.behavior === 'allow') {
+                planTurnActive = false;
+                sdkInPlanMode = false;
+                appendActiveCapabilitySelectionText(
+                  capabilitySelectionAddedByPlanEdit(
+                    capabilityRouting,
+                    'claude-code',
+                    plan,
+                    decision.editedPlan,
+                  ),
+                );
+                // 远端计划获批同样要把审查意图更新成"原始意图 + 最终获批计划"—— 与本地 ExitPlanMode 分支
+                // 一致,否则后续实施工具的轻量 reviewer 仍按批准前的过期意图裁决(codex 报)。
+                setAutoReviewIntent(composeAutoReviewIntentWithApprovedPlan(
+                  planRequestAutoReviewIntent,
+                  decision.editedPlan ?? plan,
+                ));
+              } else if (!decision.dismissed) {
+                appendActiveCapabilitySelectionText(decision.reason);
+                if (decision.reason?.trim()) setAutoReviewIntent(appendAutoReviewUserIntent(planRequestAutoReviewIntent, decision.reason));
+              }
+              return {
+                kind: 'plan_review',
+                behavior: decision.behavior,
+                editedPlan: decision.editedPlan,
+                reason: decision.reason,
+                dismissed: decision.dismissed,
+              };
+            }
+            // permission kind
+            const remoteToolName = params.toolName ?? '';
+            // Remote cc-manager checks the route with authoritative scoped MCP
+            // provenance before forwarding canUseTool. Old managers do not add
+            // this attestation, so retain the desktop-side fail-closed fallback.
+            const capabilityRoute = params.metadata?.capabilityRoutingChecked === true
+              ? undefined
+              : deniedCapabilityRoute(remoteToolName);
+            if (capabilityRoute) {
+              log.warn('cc remote: downstream MCP source denied by host capability route', {
+                toolName: remoteToolName,
+                capabilityId: capabilityRoute.capabilityId,
+                replacement: capabilityRoute.replacement?.id,
+              });
+              return {
+                kind: 'permission',
+                behavior: 'deny',
+                reason: capabilityRoute.replacement
+                  ? `This downstream source was not selected. Use Cindy capability ${capabilityRoute.replacement.id}.`
+                  : 'This downstream source was not selected.',
+              };
+            }
+            // Auto allow/block do not need UI, including MCP operations.
+            if (isPlanToolBlocked(remoteToolName)) {
+              return { kind: 'permission', behavior: 'deny', reason: 'The current Plan turn is read-only.' };
+            }
+            const canReviewRemoteWithoutUi = mutablePermissionMode === 'auto';
+            if (!interactionResolver && !canReviewRemoteWithoutUi) {
+              if (isReadOnlyClaudeTool(remoteToolName)) {
+                return { kind: 'permission', behavior: 'allow' };
+              }
+              log.warn('cc remote: approval without interactionResolver → fail-closed deny', {
+                tool: remoteToolName || 'unknown',
+              });
+              return {
+                kind: 'permission',
+                behavior: 'deny',
+                reason: 'no interaction resolver attached; denying non-read-only tool (fail-closed)',
+              };
+            }
+            const remoteTurnPolicyForcePrompt = forceTurnConfirmation(
+              remoteToolName || 'unknown',
+              params.input ?? {},
+            );
+            if (mutablePermissionMode === 'bypassPermissions') {
+              return { kind: 'permission', behavior: 'allow' };
+            }
+            // 远端会话走同一份 host MCP 策略 —— 否则 SSH 会话里可信 server 又要逐次
+            // 弹窗, prompt-each-time 的"禁止持久化授权"保护也整套缺失。
+            const remoteMcpPolicy = classifyMcpApprovalPolicy(remoteToolName, params.input ?? {});
+            let remoteForcePrompt = mutablePermissionMode !== 'auto' && remoteTurnPolicyForcePrompt;
+            let remoteUnavailableHandoff = false;
+            let remoteAutoReviewAskReason: string | undefined;
+            const reviewPermissionMode = mutablePermissionMode;
+            if (reviewPermissionMode === 'auto' || (remoteMcpPolicy === 'auto-approve' && !remoteTurnPolicyForcePrompt)) {
+              const normalizedAction = normalizeBuiltinToolForAutoReview(remoteToolName, params.input ?? {});
+              const action = normalizedAction.kind === 'other'
+                ? toolAutoReviewAction(remoteToolName, params.input ?? {})
+                : normalizedAction;
+              if (action.kind === 'exec') action.destructivePathResolution = 'unavailable';
+              // The controller cannot prove a path on the SSH filesystem. Mark
+              // structured writes unresolved so shared review never grants them
+              // from a lexical prefix alone.
+              if (action.kind === 'file-write') action.resolvedPath = null;
+              const autoDecision = await reviewAutoAction(
+                remoteTurnPolicyForcePrompt ? toolAutoReviewAction(remoteToolName, params.input ?? {}, undefined, action) : action,
+                [opts.workingDir].filter(
+                  (d): d is string => typeof d === 'string' && d.length > 0,
+                ),
+                [opts.workingDir].filter(
+                  (d): d is string => typeof d === 'string' && d.length > 0,
+                ),
+                'linux',
+                remoteMcpPolicy === 'auto-approve' && !remoteTurnPolicyForcePrompt,
+                reviewPermissionMode !== 'auto',
+              );
+              const modeAfterReview = mutablePermissionMode as PermissionMode;
+              if (isPlanToolBlocked(remoteToolName)) {
+                return { kind: 'permission', behavior: 'deny', reason: 'The current Plan turn is read-only.' };
+              }
+              if (modeAfterReview === 'bypassPermissions') {
+                return { kind: 'permission', behavior: 'allow' };
+              }
+              if (modeAfterReview === reviewPermissionMode && autoDecision.verdict === 'allow') {
+                return { kind: 'permission', behavior: 'allow' };
+              }
+              if (modeAfterReview === 'auto' && reviewPermissionMode === 'auto' && autoDecision.verdict === 'block') {
+                // 与本地分支同口径:模型判定保持静默(审阅器故障已降级成 ask)。
+                return {
+                  kind: 'permission',
+                  behavior: 'deny',
+                  reason: formatPermissionDenial('auto', autoDecision.reason),
+                };
+              }
+              // 与本地分支同口径:故障降级来的 ask 提示一次,让用户知道为何开始被问。
+              if (autoDecision.unavailable) {
+                autoReviewUnavailableNotice.notify(autoDecision.reason);
+                remoteUnavailableHandoff = true;
+              } else {
+                remoteAutoReviewAskReason = autoDecision.reason;
+              }
+              remoteForcePrompt = true;
+            } else {
+              remoteForcePrompt = remoteForcePrompt || remoteMcpPolicy === 'prompt-each-time';
+            }
+            const remotePermissionRequest = {
+              kind: 'permission' as const,
+              requestId: params.requestId,
+              toolUseId: params.requestId,
+              toolName: params.toolName ?? 'unknown',
+              input: params.input ?? {},
+              title: params.title,
+              displayName: params.displayName,
+              description: params.description,
+              suggestions: remoteForcePrompt
+                ? undefined
+                : this.normalizeSessionPermissionSuggestions(params.suggestions),
+              metadata: params.metadata ?? {},
+            };
+            let decision: InteractionDecision;
+            try {
+              decision = await dispatchWithTimeout(
+                annotatePermissionRequestForAutoReview(remotePermissionRequest, {
+                  unavailable: remoteUnavailableHandoff,
+                  reason: remoteAutoReviewAskReason,
+                }),
+              );
+            } catch {
+              if (remoteUnavailableHandoff) autoReviewConfirmUndeliveredNotice.notify();
+              return { kind: 'permission', behavior: 'deny', reason: 'approval_timeout' };
+            }
+            notifyIfAutoReviewConfirmUndelivered(remoteUnavailableHandoff, decision);
+            if (isPlanToolBlocked(remoteToolName)) {
+              return { kind: 'permission', behavior: 'deny', reason: 'The current Plan turn is read-only.' };
+            }
+            if (decision.kind !== 'permission') {
+              return { kind: 'permission', behavior: 'deny', reason: 'resolver kind mismatch' };
+            }
+            if (remoteForcePrompt && decision.permissionUpdates && decision.permissionUpdates.length > 0) {
+              log.warn('dropping session permission grant for prompt-each-time MCP tool (remote)', {
+                tool: params.toolName,
+              });
+            }
+            return {
+              kind: 'permission',
+              behavior: decision.behavior,
+              updatedInput: decision.updatedInput,
+              permissionUpdates: remoteForcePrompt ? undefined : decision.permissionUpdates,
+              reason: decision.behavior === 'deny'
+                ? formatPermissionDenial(isSystemPermissionDenialReason(decision.reason) ? 'system' : 'user', decision.reason)
+                : decision.reason,
+            };
+          }),
+          onSubagentModelAccessRequest: async (rawParams: unknown) => {
+            const params = typeof rawParams === 'object' && rawParams !== null
+              ? rawParams as Record<string, unknown>
+              : {};
+            const model = typeof params.model === 'string' ? params.model : '';
+            if (!model || !resolveSubagentModelAccess) return { status: 'unknown' };
+            try {
+              return await resolveSubagentModelAccess(model);
+            } catch {
+              return { status: 'unknown' };
+            }
+          },
+          // 订阅 token 到期续命(远端版,对齐本地 SDK options 的 getOAuthToken 回调,
+          // 见 buildQuery 本地分支):远端 cc 中途 401 → daemon 发 oauth/refresh 反向
+          // RPC → 这里向 host 要新 token。接线条件与本地同款:env 实际带订阅 token 且
+          // host 实现了强刷 —— 网关 key / 自定义供应商会话绝不接,避免 API-key 401 被
+          // 误引导去刷订阅 token。刷新语义(失败基线 / 原地写回单一事实源)与本地共用
+          // refreshSubscriptionTokenInPlace。
+          ...(remoteEnv?.CLAUDE_CODE_OAUTH_TOKEN && this.deps.auth.getFreshSubscriptionToken
+            ? {
+                onOAuthRefresh: async (): Promise<unknown> => ({
+                  token: await this.refreshSubscriptionTokenInPlace(remoteEnv),
+                }),
+              }
+            : {}),
+        });
+        // factory 可能注入 host 侧 http server (远端 cc 协同恢复通道的
+        // cindy_orca / orca_worker_bridge, 见 maker-host remoteCcQueryFactory),
+        // 审批归属快照必须按注入后的最终清单定稿, 否则 canUseTool 的
+        // resolveMcpToolTarget 认不出 orca server 名, 归属判定缺失。
+        hostMcpServerNames = new Set(
+          Object.keys((startParams as { mcpServers?: Record<string, unknown> }).mcpServers ?? {}),
+        );
+        registeredMcpServerNames = hostMcpServerNames;
+        nonHarnessMcpServerNames = hostMcpServerNames;
+        // The factory may inject host HTTP MCPs and downgrade OAuth Auto to
+        // default before opening cc-manager. Track the post-factory mode so a
+        // later SDK init cannot repeat that downgrade and turn a harmless
+        // control-RPC failure into a fatal close.
+        const finalRemotePermissionMode =
+          (startParams.permissionMode as SdkPermissionMode | undefined) ?? remotePermissionMode;
+        sdkInPlanMode = finalRemotePermissionMode === 'plan';
+        // 记入 closure: handle.close / U2 兜底需要 await remoteQuery.close()。
+        activeRemoteQuery = remoteQuery as unknown as { close: () => Promise<void>; detach?: () => Promise<void> };
+
+        // Bridge inputQueue (maker-core push) → remoteQuery.send (RPC)。
+        // 失败处理 (round-16 fix #2 P2): 之前只 warn → user message 永远不到
+        // daemon, 但 handle.send 已经 armed streaming state, renderer 卡在
+        // "thinking..." 直到 idle watchdog (默认数分钟) 才解套。改成主动调
+        // activeRemoteQuery.close() 关闭 RemoteQuery → close subscription
+        // 让 RemoteQuery iterator 自然结束 → maker-core 主循环 for-await 退出
+        // → 复用 U2 兜底 (本文件 line ~1418-1471) emit error + done +
+        // dismissAllPending + inputQueue.end + abort, 用户立即看到 "远端连接
+        // 中断" 错误能重发, 不再卡 watchdog 时长。break for-await 防后续
+        // inputQueue msg 又调死掉的 send 触发同款 warn。
+        (async (): Promise<void> => {
+          for await (const msg of inputQueue) {
+            try {
+              await (remoteQuery as unknown as {
+                send: (m: unknown) => Promise<void>;
+              }).send(msg);
+            } catch (e) {
+              log.warn('cc remote: forwarding inputQueue → remoteQuery.send failed; closing remote query to surface aborted-turn', {
+                error: String((e as Error)?.message ?? e),
+              });
+              if (activeRemoteQuery) {
+                void activeRemoteQuery.close().catch((err) => {
+                  log.warn('cc remote: remoteQuery.close after send failure threw (best-effort)', {
+                    error: String((err as Error)?.message ?? err),
+                  });
+                });
+              }
+              break;
+            }
+          }
+        })().catch(() => undefined);
+
+        if (finalRemotePermissionMode === 'auto') nativeAutoQueries.add(remoteQuery);
+        if (modelUsageCumulativeStartsAtZero) modelUsageStartsAtZeroQueries.add(remoteQuery);
+        return remoteQuery;
+      }
+
+      // ── 本地 SDK 分支 ──
+      // resume 转录就位兜底:CLI 只按当前 cwd 的转码目录查找转录,而转录可能因
+      // CLI 运行中 cd(worktree 工作流)、rewind fork(新 jsonl 落在源文件旁)等
+      // 场景落在其它转码目录(见 transcript-relocation.ts)。spawn 前把 jsonl 归位;
+      // projectsRoot 按子进程实际可见的 CLAUDE_CONFIG_DIR 解析(SDK spawn 时
+      // {...process.env, ...env} 合并,env 覆盖优先)。best-effort:已在位只花一次
+      // stat,失败/缺失只记日志不阻断——CLI 找不到时仍按原行为报错。
+      if (resumeSdkSid && opts.workingDir) {
+        try {
+          const claudeConfigDir =
+            env.CLAUDE_CONFIG_DIR ??
+            process.env.CLAUDE_CONFIG_DIR ??
+            path.join(os.homedir(), '.claude');
+          const outcome = await ensureClaudeTranscriptInWorkingDir({
+            sdkSessionId: resumeSdkSid,
+            workingDir: opts.workingDir,
+            projectsRoot: path.join(claudeConfigDir, 'projects'),
+          });
+          if (outcome === 'restored') {
+            log.info('resume transcript restored into cwd project dir', {
+              resumeSdkSid,
+              workingDir: opts.workingDir,
+            });
+          }
+          // kimi 系 tool_call id 归一化: moonshot 按可见历史铸造 `${name}_${index}`
+          // id, rewind/中断造成的可见数回落会让新铸 id 与历史撞车, CLI 的
+          // ensureToolResultPairing 随即将重复 id 的 tool exchange 整段丢弃并以
+          // "(no content)" 占位 user 消息 —— 模型看到"自己的工具调用被阻止 +
+          // 用户连发空消息"进入空转(2026-07-31 kimi-k3 实测)。转录就位后、spawn
+          // 前做一次幂等归一化(重复 id 去重 + 数字后缀移出铸造空间), 纯 Anthropic
+          // 会话预扫不命中、零解析开销。详见 jsonl-tool-id-normalize.ts 头注。
+          // 'target-key-inexact' 时 relocation 无法定位 CLI 转码目录, 但全局扫描
+          // 找到的最新副本大概率正是 CLI 要读的转录, 归一化它同样是正收益。
+          if (outcome !== 'missing' && resumeSdkSid) {
+            const transcriptFile = await findClaudeSessionJsonl(
+              resumeSdkSid,
+              opts.workingDir,
+              path.join(claudeConfigDir, 'projects'),
+            );
+            if (transcriptFile) {
+              const normalized = await normalizeClaudeSessionJsonlToolIds(transcriptFile);
+              if (normalized.changed) {
+                log.info('resume transcript tool ids normalized', {
+                  resumeSdkSid,
+                  dedupedBlocks: normalized.dedupedBlockCount,
+                  offsetBlocks: normalized.offsetBlockCount,
+                  duplicateIds: normalized.duplicateIdCount,
+                  backupPath: normalized.backupPath,
+                });
+              }
+            }
+          }
+          if (outcome === 'missing') {
+            const cleared = await clearInvalidResumeSession(resumeSdkSid, 'transcript_preflight');
+            if (cleared) {
+              // 本地 CLI 没有转录就不可能恢复。spawn 前转 fresh，当前用户消息尚未
+              // dispatch，不需要运行期 replay，也不会产生任何失败边界事件。
+              // 重置 recovery 标记：后续全新会话是独立生命周期,若首 turn 产生幽灵 id
+              // 仍需 runtime 路径清理,不应被 preflight 的一次性消耗阻塞。
+              resumeRecoveryAttempted = false;
+              freshSessionValidationPending = true;
+              resumeSdkSid = undefined;
+              modelUsageCumulativeStartsAtZero = true;
+            } else {
+              log.warn('resume transcript not found in any project dir (CLI resume may fail)', {
+                resumeSdkSid,
+                workingDir: opts.workingDir,
+              });
+            }
+          }
+        } catch (e) {
+          log.warn('resume transcript bootstrap failed (continuing)', {
+            resumeSdkSid,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
+      // 计划模式开启时 SDK 跑 plan; 读 mutable 值让 rewind/fork 重建拿到当前档而非创建时快照。
+      const additionalDirectories = [...new Set([...mutableExtraDirs, ...mutableWritableDirs])];
+      activeQueryHasDirectoryGrants = additionalDirectories.length > 0;
+      // 只过滤交给 SDK 的副本：旧协议带的是控制端真实路径，虚拟根外的同名目录属于供应商电脑，
+      // 不能让 Claude Code 加载其中的说明与技能。没有虚拟根时沿用旧行为，不传任何附加目录。
+      const sdkAdditionalDirectories = hosted
+        ? additionalDirectories.map((dir) => path.resolve(dir)).filter((dir) =>
+          hosted.mirrorRoot && isInsideDeviceHostedRoot(dir, hosted.mirrorRoot))
+        : additionalDirectories;
+      activeQueryDirectoryGeneration = autoReviewDirectoryGeneration;
+      activeQueryReadonlyDirs = [...mutableExtraDirs];
+      extraDirsRebuildAttempted = false;
+      activeQueryExploreInheritCapGeneration = exploreInheritCapEnvGeneration;
+      const sdkStartPermissionMode = extra?.permissionMode ?? effectiveSdkPermissionMode();
+      sdkInPlanMode = sdkStartPermissionMode === 'plan';
+      // Review 会话不带任何 Bot 身份/能力(与 botSkillPolicy 同口径)。
+      companionEnvironment?.assertCurrent?.();
+      // Re-read at each Query boundary: plugin uninstall/disable may remove the
+      // previous projection while the conversation itself remains open.
+      // 受邀者(另一个账号)的托管会话不带本机安装的托管技能(属于本机用户与其组织)。
+      // 任务所在电脑提供了托管技能时以它为准(工具也在那台执行)，本机的一律不加载。
+      const controllerManagedSkills = reviewMode ? undefined : hosted?.controllerManagedSkills;
+      const managedSkills = !reviewMode && !hosted?.guest && !controllerManagedSkills && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly && this.deps.getManagedSkills
+        ? await this.deps.getManagedSkills() : [];
+      const managedDisabledPaths = currentDisabledSkillLaunchPaths(managedDisabledSkillLaunch);
+      const allowedManagedSkills = resolveAllowedManagedSkills(managedSkills, managedSkillGrants, managedDisabledPaths);
+      const managedPlugins = allowedManagedSkills.length
+        ? await prepareManagedSkillPlugins(allowedManagedSkills, (name) => {
+          log.warn('managed skill disappeared before Query startup; skipping', { skill: name });
+        }) : undefined;
+      const releaseManagedPlugins = () => {
+        void managedPlugins?.dispose().catch((error) => log.warn('managed skill plugin cleanup failed', { error: String(error) }));
+      };
+      const querySignal = abortController.signal;
+      if (managedPlugins) querySignal.addEventListener('abort', releaseManagedPlugins, { once: true });
+      const botOwnSkillPluginRoots = reviewMode
+        ? []
+        : [...new Set([
+          ...(managedPlugins?.roots ?? []),
+          ...(controllerManagedSkills?.claudePluginRoots ?? []),
+          ...(opts.botRuntimeProfile?.skillPolicy.ownSkillPluginRoots ?? []),
+        ])];
+      // Bind the native request id before the first HTTP request, not after SDK init.
+      // A fork keeps its resume source but must publish a new destination id.
+      const newSdkSessionId = !resumeSdkSid || finalFork ? randomUUID() : undefined;
+      const previousSdkSessionId = sdkSessionId;
+      const createLocalQueryArgs = (): Parameters<typeof sdkQuery>[0] => ({
+        prompt: inputQueue as unknown as Parameters<typeof sdkQuery>[0]['prompt'],
+        options: {
+          abortController,
+          cwd: opts.workingDir,
+          // 附加目录在 Query 创建时冻结；运行时 setter 立即收紧 Cindy 审核，后续 Query
+          // 重建再取最新 closure。空数组省略字段，让 SDK 走默认。
+          // 设备托管也传虚拟路径，让模型从 Claude Code 原生环境信息看到附加目录；
+          // 供应商端已创建占位目录，文件访问仍经 cindy_exec，内置文件/命令工具保持禁用。
+          ...(sdkAdditionalDirectories.length > 0 ? { additionalDirectories: sdkAdditionalDirectories } : {}),
+          // Bot 自有技能和已按启用状态/白名单过滤的 Cindy 托管技能，
+          // 只通过本次 Query 的本地插件加载，不写用户共用技能目录。
+          // 与 additionalDirectories 同理:路径是本机的,远端 cc-mgr 分支不透传。
+          ...(botOwnSkillPluginRoots.length > 0
+            ? { plugins: botOwnSkillPluginRoots.map((root) => ({ type: 'local' as const, path: root })) }
+            : {}),
+          model: currentSdkModel,
+          ...(currentSdkEffort ? { effort: currentSdkEffort } : {}),
+          permissionMode: sdkStartPermissionMode,
+          includePartialMessages: true,
+          ...thinkingOpts,
+          pathToClaudeCodeExecutable: binaryPath,
+          // systemPrompt 八段拼接(含 SDK 内嵌 preset)— SDK 先输出 preset, 再追加 append 字段。
+          //   [1] cc preset                  — Claude SDK 自带 (内嵌不可见)
+          //   [2] opts.botProfilePrompt      — Bot SOUL identity only (main/DB authority)
+          //   [3] MAKER_SYSTEM_PROMPT_APPEND — maker engine (system-prompt-append.md)
+          //   [4] makerMemoryRules           — maker memory 写入规范 (条件式: makerMemoryEnabled
+          //                                    且 manager 注入成功才注入)
+          //   [5] opts.botProfileContextPrompt — stable active-profile marker, kept outside SOUL
+          //   [6] hostSystemPrompt           — host runtime (runtimeConfig.systemPrompt)
+          //   [7] makerMemoryIndex           — 当前 workdir MEMORY.md 内容 (条件式, 紧邻 userPrompt
+          //                                    高优先级, 启动时快照 — 跟 userPrompt 同语义)
+          //   [8] opts.userPrompt            — per-call 用户级 (renderer 本地 storage,
+          //                                    每次 startSession 透传, 优先级最高)
+          // 空段被 .filter 跳过 (.md 文件为空 / userPrompt 为空 = 不 append).
+          systemPrompt: (() => {
+            const appendText = buildClaudeSystemPromptAppend({
+              answerDeliveryPrompt: reviewMode ? undefined : this.deps.runtimeConfig.answerDeliveryPrompt,
+              makerMemoryRules,
+              ghostRosterPrompt,
+              hostSystemPrompt,
+              makerMemoryIndex,
+              botProfilePrompt: reviewMode ? undefined : opts.botProfilePrompt,
+              botProfileContextPrompt:
+                reviewMode ? undefined : opts.botProfileContextPrompt,
+              botUserProfilePrompt: reviewMode ? undefined : opts.botUserProfilePrompt,
+              userPrompt: reviewMode || opts.botRuntimeProfile ? undefined : opts.userPrompt,
+              ...(hosted ? { deviceHostedNote: deviceHostedClaudeNote(hosted, opts.workingDir) } : {}),
+            });
+            return {
+              type: 'preset' as const,
+              preset: 'claude_code' as const,
+              ...(appendText ? { append: appendText } : {}),
+            };
+          })(),
+          ...(resumeSdkSid ? { resume: resumeSdkSid } : {}),
+          ...(newSdkSessionId ? { sessionId: newSdkSessionId } : {}),
+          // 设备托管：文件改在任务所在电脑上，Claude Code 的文件检查点看不到。
+          enableFileCheckpointing: enableFileCheckpointing && !hosted,
+          ...(finalResumeAt ? { resumeSessionAt: finalResumeAt } : {}),
+          ...(finalFork ? { forkSession: true } : {}),
+          env,
+          ...(this.deps.registerLocalAgentProcess || this.deps.trackCcDebugFile
+            ? {
+                spawnClaudeCodeProcess: (spawnOptions) =>
+                  spawnObservedClaudeProcess({
+                    spawnOptions,
+                    registerProcess: (pid) =>
+                      this.deps.registerLocalAgentProcess?.({
+                        pid,
+                        kind: 'claude',
+                        role: 'task-host',
+                        sessionId: opts.sessionId ?? null,
+                      }),
+                    trackDebugFile: process.env.XDT_CC_DEBUG_NET === '1' && ccDebugFile
+                      ? () => this.deps.trackCcDebugFile?.(ccDebugFile, opts.sessionId) ?? (() => {})
+                      : undefined,
+                    onStderr: vo.onStderrLine as ((line: string) => void) | undefined,
+                    onExit: ({ pid, exitCode, signal, abortRequested }) => {
+                      const details = {
+                        pid,
+                        exitCode,
+                        signal,
+                        abortRequested,
                         sessionId: opts.sessionId ?? null,
                       };
                       if (signal !== null && !abortRequested) {
@@ -7604,4 +8258,3 @@ async function statMemoryDir(dir: string): Promise<{ entryCount: number; sizeByt
   }
   return { entryCount, sizeBytes };
 }
-

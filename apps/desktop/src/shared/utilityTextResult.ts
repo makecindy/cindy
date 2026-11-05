@@ -58,4 +58,3 @@ export type UtilityTextSuccess = {
 
 /** Result of a utility-model text request. Expected availability failures never collapse to null. */
 export type UtilityTextResult = UtilityTextSuccess | UtilityTextFailure;
-

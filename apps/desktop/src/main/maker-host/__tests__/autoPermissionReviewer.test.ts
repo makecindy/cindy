@@ -547,4 +547,3 @@ it('keeps registered plugin scope separate from actual user restrictions', () =>
  expect(prompt).toContain('Actual user restrictions and revocations in userIntent always win');
  expect(prompt).not.toContain('host-revision');
 });
-

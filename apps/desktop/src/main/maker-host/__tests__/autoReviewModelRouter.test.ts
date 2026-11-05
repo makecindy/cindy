@@ -400,4 +400,3 @@ describe('dedicated Auto-review candidate policy', () => {
     expect(requestCandidate).toHaveBeenCalledTimes(1);
   });
 });
-

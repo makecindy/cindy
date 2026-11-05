@@ -2547,4 +2547,3 @@ function aggregateFailureReason(failedAttempts: UtilityTextAttempt[]): UtilityTe
 function joinProxyPath(baseUrl: string, suffix: string): string {
   return appendProviderPath(baseUrl, suffix);
 }
-

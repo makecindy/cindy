@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 129703)
-Total output lines: 9953
-
 import { estimatePiContext, type PiPromptSource } from './context-estimate.js';
 import { getPiExtensionUiCapability } from './extension-ui-capabilities.js';
 import { createPiCacheInputTracker } from './cache-input.js';
@@ -3960,7 +3957,2209 @@ export class PiAgent extends BaseAgent {
           projectResourceAssembly = await stageApprovedPiProjectResources(projectResourceAssembly, configHome);
         }
       } catch {
-      …29703 tokens truncated…    }
+        projectResourceAssembly = unavailablePiProjectResourceAssembly('approval-resolver-failed');
+        this.deps.logger.warn('pi project approval resolver failed closed', {
+          sessionId: opts.sessionId ?? null,
+        });
+      }
+    }
+    this.deps.logger.debug('pi project resource assembly snapshot', {
+      sessionId: opts.sessionId ?? null,
+      status: projectResourceAssembly.diagnostic.status,
+      reason: projectResourceAssembly.diagnostic.reason,
+      approvalRevision: projectResourceAssembly.diagnostic.approvalRevision,
+      requestedSkillCount: projectResourceAssembly.diagnostic.requestedSkillCount,
+    });
+    const botSkillSelection = applyPiBotSkillPolicy(
+      reviewMode ? undefined : opts.botRuntimeProfile?.skillPolicy,
+      projectResourceAssembly,
+    );
+    projectResourceAssembly = botSkillSelection.projectAssembly;
+
+    // Cindy-managed installs use a shared package home, but Pi remains the
+    // package/resource loader. Ordinary local runtimes receive installed roots
+    // in their own settings.json; Cindy inspection below is advisory metadata.
+    // Review stays hermetic, and SSH runtimes never receive controller paths.
+    let managedPackageResources: {
+      extensions: string[];
+      skills: Array<{ path: string; name: string; description?: string }>;
+      promptTemplates: string[];
+      packageRoots: string[];
+    } = { extensions: [], skills: [], promptTemplates: [], packageRoots: [] };
+    let nativePackagePaths: PiNativePackageEntry[] = [];
+    // 受邀者不加载本机用户安装的 Pi 包(其中的扩展会在本机执行)。
+    if (!reviewMode && !opts.remoteHostId && !hostedGuest) {
+      if (this.deps.resolvePiNativePackagePaths) {
+        try {
+          nativePackagePaths = opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : await this.deps.resolvePiNativePackagePaths();
+          await this.writePiRuntimeSettings(configHome, {
+            contextWindow: startupContextWindow,
+            workingContextWindow: startupWorkingContextWindow,
+            piCompactionPct: sessionPiAutoCompactPct,
+            packages: nativePackagePaths,
+          });
+        } catch {
+          // Projection runs after config/runtime files and the MCP session route
+          // exist, but before a handle owns their normal close path. Roll back
+          // exactly that unpublished startup state before surfacing the failure.
+          try {
+            disposeSessionCtx?.();
+          } catch {
+            /* best-effort: cleanup failure must not mask package-state failure */
+          }
+          disposeSessionCtx = undefined;
+          cleanupConfigHome();
+          cleanupRuntimeFiles();
+          // Do not substitute Cindy's static analyzer as an allowlist or launch
+          // with an empty package projection. That would silently drop native
+          // Pi packages while claiming the task started normally.
+          this.deps.logger.warn('pi native package projection unavailable', {
+            sessionId: opts.sessionId ?? null,
+            failureCategory: 'state-unavailable',
+          });
+          const strings = resolvePiExtensionUiStrings(this.deps);
+          throw new Error(
+            strings.mutationFailure?.['state-unavailable'] ?? strings.mutationFailed,
+          );
+        }
+      }
+      if (this.deps.resolvePiManagedPackageResources) {
+        try {
+          // Advisory metadata only (command palette, labels, diagnostics).
+          managedPackageResources = await this.deps.resolvePiManagedPackageResources({ startupTraceId });
+        } catch {
+          this.deps.logger.warn('pi managed package metadata unavailable', {
+            sessionId: opts.sessionId ?? null,
+          });
+        }
+      }
+    }
+
+    if (disabledSkillPaths.length > 0) {
+      const settingsPath = path.join(configHome, 'settings.json');
+      const settings = JSON.parse(await fs.readFile(settingsPath, 'utf8'));
+      disabledSkillLaunch = extendDisabledSkillLaunchPaths(disabledSkillLaunch,
+        piDisabledDiscoveryPaths(currentDisabledSkillLaunchPaths(disabledSkillLaunch), [
+          path.join(configHome, 'skills'), path.join(os.homedir(), '.agents', 'skills'),
+          ...managedPackageResources.skills.map((skill) => skill.path),
+        ]));
+      await fs.writeFile(settingsPath, JSON.stringify(applyPiDisabledSkillSettings(settings,
+        currentDisabledSkillLaunchPaths(disabledSkillLaunch)), null, 2) + '\n', { mode: 0o600 });
+    }
+
+    const nativePackageRoots = nativePackagePaths.map((entry) => (
+      typeof entry === 'string' ? entry : entry.source
+    ));
+
+    // Local root tasks load project skills/prompts/extensions in place via
+    // explicit CLI flags. Keep --no-approve so `.pi/settings.json` is unread.
+    // 受邀者：只要会话目录内的技能与提示词模板，项目扩展不加载(会在本机执行)。
+    const collectedProjectResources = loadProjectResourcesInPlace
+      ? guestRoot
+        ? restrictPiGuestProjectResources(collectPiProjectResourceCliPaths(opts.workingDir), guestRoot)
+        : collectPiProjectResourceCliPaths(opts.workingDir)
+      : emptyPiProjectResourceCliPaths();
+    const projectResourceCli = loadProjectResourcesInPlace
+      ? {
+          ...collectedProjectResources,
+          skills: filterPiProjectCliSkills(
+            collectedProjectResources.skills,
+            currentDisabledSkillLaunchPaths(disabledSkillLaunch),
+          ),
+        }
+      : collectedProjectResources;
+
+    // Own the entire managed-skill setup in the existing startup rollback:
+    // discovery and path checks can fail before any projection is created.
+    let managedSkillPaths: string[];
+    let managedSkillRoot: string | undefined;
+    let args: string[];
+    try {
+      const managedSkillGrants = snapshotManagedSkillGrants(opts.botRuntimeProfile?.skillPolicy);
+      // 受邀者不带本机安装的托管技能(属于本机用户与其组织)。
+      // 任务所在电脑提供了托管技能时，它们已作为项目技能放在影子目录，本机的不再加载。
+      const managedSkills = opts.remoteHostId || reviewMode || hostedGuest || hosted?.controllerManagedSkills || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : await this.deps.getManagedSkills?.() ?? [];
+      const managedDisabledPaths = snapshotDisabledSkillLaunch(opts.remoteHostId || reviewMode || hostedGuest ? [] : this.deps.getDisabledSkillPaths?.() ?? []);
+      const managedSourceIdentities = new Set(managedSkills.flatMap((skill) =>
+        skill.path ? [canonicalSkillPath(skill.path)] : []));
+      const managedSourcePaths = new Set(managedSkills.flatMap((skill) => skill.path ? [path.resolve(skill.path)] : []));
+      managedSkillPaths = resolveAllowedManagedSkills(managedSkills, managedSkillGrants,
+        currentDisabledSkillLaunchPaths(managedDisabledPaths)).map((skill) => skill.path);
+      // The catalog path may alias a managed source. Apply the managed grant and
+      // activation checks once, including paths already selected by the Bot.
+      const additionalSkillPaths = [...new Map([
+        ...(loadProjectResourcesInPlace || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : botSkillSelection.explicitSkillPaths.filter((skillPath) =>
+          !managedSourcePaths.has(path.resolve(skillPath)) && !managedSourceIdentities.has(canonicalSkillPath(skillPath)))),
+      ].map((skillPath) => [canonicalSkillPath(skillPath), skillPath])).values()];
+
+      // One explicit directory also works with --no-skills. Keep its lifetime in
+      // the existing per-session configHome and link only already-authorized
+      // physical sources; argv size must not grow with installed plugin count.
+      const managedLaunchSkills = managedSkillPaths.filter((skillPath) => !projectResourceCli.skills
+        .some((existing) => canonicalSkillPath(existing) === canonicalSkillPath(skillPath)));
+      managedSkillRoot = managedLaunchSkills.length ? path.join(configHome, 'cindy-managed-skills') : undefined;
+
+      // pi 的 --append-system-prompt 接受 <text|path>:参数在磁盘上存在即按文件读。
+      // 伙伴提示词(身份 + 能力说明 + teammate-guide + 记忆索引)轻易两三万字符,
+      // 内联进 argv 会单独顶穿 Windows 的 spawn 命令行上限并让整个会话起不来,
+      // 所以永远写进本会话的 configHome、argv 只带路径。
+      const appendSystemPromptPath = appendSystemPrompt.length > 0
+        ? joinRemotePosixPath(configHome, CINDY_APPEND_SYSTEM_PROMPT_FILENAME)
+        : undefined;
+      if (appendSystemPromptPath) await writeFile(appendSystemPromptPath, appendSystemPrompt);
+
+      args = [
+        '--mode',
+        'rpc',
+        // --no-approve remains the hard project-settings gate. Explicit --skill /
+        // --prompt-template / --extension pass original in-repo paths without
+        // trusting `.pi/settings.json` or auto-installing project packages.
+        '--no-approve',
+        ...(nativePackagePaths.length === 0 ? ['--no-extensions'] : []),
+        '--session-dir',
+        sessionDir,
+        '--provider',
+        initialProvider,
+        '--model',
+        initialWireModel,
+        ...(reviewMode ? ['--tools', 'read,grep,find,ls'] : []),
+        ...(opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? ['--no-skills', '--no-context-files', '--no-prompt-templates'] : []),
+        // Bot sessions must not absorb project/global AGENTS.md or CLAUDE.md from
+        // the cwd chain — their context is the Bot profile, not the workspace.
+        ...(opts.botRuntimeProfile ? ['--no-context-files'] : []),
+        ...(botSkillSelection.disableImplicitSkills ? ['--no-skills'] : []),
+        // 受邀者：不发现本机用户的技能、模板与会话目录之外的说明文件；受邀者自己的用下面的显式路径。
+        ...(hostedGuest
+          ? PI_DEVICE_HOSTED_GUEST_FLAGS.filter((flag) => !(
+            (flag === '--no-context-files' && opts.botRuntimeProfile)
+            || (flag === '--no-skills' && botSkillSelection.disableImplicitSkills)))
+          : []),
+        ...additionalSkillPaths.filter((skillPath) => !projectResourceCli.skills
+          .some((existing) => canonicalSkillPath(existing) === canonicalSkillPath(skillPath)))
+          .flatMap((skillPath) => ['--skill', skillPath]),
+        ...(managedSkillRoot ? ['--skill', managedSkillRoot] : []),
+        ...(appendSystemPromptPath ? ['--append-system-prompt', appendSystemPromptPath] : []),
+        // 受邀者的说明文件扩展排在 bridge 之前：托管时 bridge 会按当前选项渲染整段系统提示。
+        ...(guestContextExtensionPath ? ['--extension', guestContextExtensionPath] : []),
+        '--extension',
+        bridgeExtensionPath,
+        ...(localSubagentSupported ? ['--extension', subagentExtensionPath] : []),
+        ...(!reviewMode && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly && planModeExtAvailable ? ['--extension', planModeExtPath] : []),
+        ...(loadProjectResourcesInPlace
+          ? piProjectResourceCliArgs(projectResourceCli)
+          : []),
+      ];
+      if (managedSkillRoot) {
+        await fs.mkdir(managedSkillRoot);
+        for (const [index, skillPath] of managedLaunchSkills.entries()) {
+          // Preserve discovery order for same-name skills without long filenames.
+          await fs.symlink(path.dirname(skillPath), path.join(managedSkillRoot, String(index).padStart(12, '0')),
+            process.platform === 'win32' ? 'junction' : 'dir');
+        }
+      }
+      assertPiSpawnArgvFitsPlatform(args);
+    } catch (error) {
+      try {
+        disposeSessionCtx?.();
+      } catch {
+        /* best-effort: cleanup failure must not mask Skill setup / argv failure */
+      }
+      disposeSessionCtx = undefined;
+      await cleanupConfigHome();
+      cleanupRuntimeFiles();
+      throw error;
+    }
+
+    const queue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
+    const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger);
+    ctx.getPriceVariant = opts.getPriceVariant;
+    ctx.resolveUsagePriceVariant = opts.resolveUsagePriceVariant;
+    ctx.workingContextWindow = startupWorkingContextWindow;
+    const contextModeRoot = findContextModePackageRoot([
+      ...nativePackageRoots,
+      ...managedPackageResources.packageRoots,
+    ]);
+    ctx.rewriteToolResultText = (text) => rewriteContextModeDoctorPath(text, contextModeRoot);
+    let interactionResolver: InteractionResolver | null = null;
+    /**
+     * Bumped whenever the approval surface is (re)wired. Deferred Subagent
+     * approvals are re-offered on a change, so a re-attached host gets the card
+     * immediately instead of waiting for the next durable poll to guess.
+     */
+    let interactionResolverGeneration = 0;
+    // Host 每轮权限策略(个人微信 / Telegram 群)。刻意保留在 send 之外的闭包里:
+    // pi 的内部续跑(plan 审批后的实施轮、自动继续)不再经 handle.send,却必须继续
+    // 强制确认策略命中的工具 —— 与 Claude(task_notification 续跑)/ Codex(plan
+    // follow-up send)同口径。清空只认 turn 终态,由 send 预检覆盖为最新值。
+    let activeTurnPermissionPolicy: TurnPermissionPolicy | null = null;
+    let mutableModel = opts.model;
+    let appliedCacheRoutes = cacheRoutes;
+    let appliedModelConfigHash = modelConfigHash;
+    let pendingCurrentDescriptorRefresh = false;
+    let retainedLiveGatewayModel = initialProvider === PI_PROVIDER_ID ? selectedRuntimeModel : undefined;
+    const providerRefreshStages = new Map<string, {
+      nonce: string;
+      operation: 'inspect' | 'refresh';
+      env: Record<string, string>;
+      aliases: ReturnType<typeof nativeProviderAdapterAliases>;
+      acknowledge: (ok: boolean, code?: string, settings?: unknown) => void;
+    }>();
+    let mutableWireModel = initialWireModel;
+    // Pi RPC 实际选中的 provider。与用于宿主鉴权/审阅元数据的 mutableProviderId 分开：
+    // null/订阅来源会归一到 cindy，setModel 未显式传来源时也必须跟随本次解析结果。
+    let mutablePiProviderId = initialProvider;
+    let mutableProviderId: string | null | undefined = opts.providerId ?? authProviderId;
+    const readCacheCompatibility = () => {
+      const route = appliedCacheRoutes.get(JSON.stringify([mutablePiProviderId, mutableWireModel]));
+      if (!route) return undefined;
+      const compat = remote ? undefined : this.deps.resolvePiNativeCompatOverride?.(
+        route.providerId, route.wireModelId, route.routeKey);
+      return { ...route, modelId: mutableModel ?? route.modelId,
+        applied: compat?.supportsLongCacheRetention === false };
+    };
+    let inputCacheCompatibility: PiCacheCompatibility | undefined;
+    const cacheInputTracker = createPiCacheInputTracker(text => createHash('sha256').update(text).digest('hex'));
+    let pendingCacheCompatibility: { key: string; value: PiCacheCompatibility | undefined } | undefined;
+    ctx.getCacheCompatibility = () => inputCacheCompatibility;
+    let activeEffortSnapshot = initialEffortSnapshot;
+    let mutableEffort: Effort | null = startupEffort ?? null;
+    // 用户明确关掉思考（setThinkingEnabled(false) / 切模显式 thinkingEnabled:false /
+    // 启动 opts.thinkingEnabled === false）的意图标记：无载体切模不得据此悄悄重新开启。
+    // 只跟随显式意图变化；目标不支持思考而下发 off 不算用户意图，不置位。
+    let thinkingExplicitlyOff = false;
+    let currentAutoReviewIntent: AutoReviewUserIntent = '';
+    let autoReviewIntentInitialized = false;
+    const autoReviewActionContext = createAutoReviewActionContext();
+    const autoReviewContext = () => activeTurnPermissionPolicy?.autoReviewContext
+      ?? (activeTurnPermissionPolicy?.origin.kind === 'im'
+        ? { requesterAuthority: 'unknown' as const, source: 'direct' as const }
+        : undefined);
+    // Authorization belongs to the accepted input, not the foreground policy's lifetime.
+    let currentAutoReviewAuthority: ReturnType<typeof autoReviewContext> | null;
+    const priorAutoReviewIntent = () => !autoReviewIntentInitialized ? undefined : JSON.stringify(currentAutoReviewAuthority ?? null) === JSON.stringify(autoReviewContext() ?? null) ? currentAutoReviewIntent : '';
+    const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
+    const setAutoReviewIntent = (content: AutoReviewUserIntent, source = { authority: currentAutoReviewAuthority }): void => {
+      autoReviewActionContext.advance(typeof content !== 'string' && JSON.stringify(currentAutoReviewAuthority ?? null) === JSON.stringify(source.authority ?? null));
+      currentAutoReviewIntent = normalizeAutoReviewUserIntent(content);
+      autoReviewIntentInitialized = true;
+      currentAutoReviewAuthority = source.authority && { ...source.authority };
+      autoReviewDecisionCache.clear();
+      // 每条新用户消息 = 新一轮,提示重新武装。ErrorBanner 那份只活到下一条非 error 事件
+      // (renderer 的 handleStreamEvent 会清 recoverableError),所以「整个会话只说一次」
+      // 会让用户在后续轮次里完全看不到;改为每轮至多一条 —— 不刷屏,又保证每一轮遇到时
+      // 都有机会看见。持久呈现需要一条真正的会话级 notice 通道,见 issue 外推。
+      autoReviewUnavailableNotice.reset();
+      autoReviewConfirmUndeliveredNotice.reset();
+    };
+    /**
+     * 挂起的权限卡登记表 —— 档位切换 / 会话关闭时必须能把它们强制 settle 并让 UI 收卡,
+     * 与 Claude / Codex 的 `dismissAllPending` 同口径(Pi 此前是唯一没有这套的 harness)。
+     *
+     * 没有它的后果:用户看到卡之后切到 Full access,`resolver` 仍只挂在那张卡上,不会被唤醒,
+     * 于是「Full access 不该再问」永远等不到生效 —— 工具调用一直卡住,直到用户手动回答一张
+     * 已经失效的卡(codex review P1)。
+     */
+    type PendingPrompt = {
+      /**
+       * `unanswered` = the surface went away without the user deciding. Only
+       * durable Subagent prompts opt into it (`deferWhenSurfaceLost`); a root
+       * turn's prompt still fails closed to deny.
+       */
+      settle: PiPendingPromptSettle;
+      /** 来源/本轮范围约束或非操作审批，不随 Full access 自动结算。 */
+      forcePrompt: boolean;
+      /** Auto 审阅故障降级来的确认:系统收口不能当成用户点了拒绝。 */
+      unavailableHandoff?: boolean;
+      /**
+       * The request survives this handle in a durable mailbox, so losing the
+       * approval surface must park it rather than answer it. Set only by the
+       * PI Subagent path — the child keeps running and can be asked again.
+       */
+      deferWhenSurfaceLost?: boolean;
+    };
+    const pendingPrompts = new Map<string, PendingPrompt>();
+    const registerPendingPrompt = (requestId: string, entry: PendingPrompt): (() => void) => {
+      pendingPrompts.set(requestId, entry);
+      return () => pendingPrompts.delete(requestId);
+    };
+    const dismissAllPendingPrompts = (
+      reason: string,
+      resolveAs: 'allow' | 'deny',
+      dismissOpts?: { surfaceLost?: boolean },
+    ): void => {
+      if (pendingPrompts.size === 0) return;
+      for (const [requestId, entry] of Array.from(pendingPrompts.entries())) {
+        // The approval surface itself is going away (session teardown / process
+        // exit). A durable Subagent question the user never answered must be
+        // parked, not denied — its child keeps running and the durable mailbox
+        // can re-offer it. The card is still dismissed so no stale UI remains.
+        if (dismissOpts?.surfaceLost && entry.deferWhenSurfaceLost) {
+          pendingPrompts.delete(requestId);
+          entry.settle('unanswered', reason);
+          queue.push({
+            type: 'interaction_dismissed',
+            data: { requestId, reason, resolvedAs: 'deny', deferred: true },
+            source: 'pi',
+          });
+          continue;
+        }
+        // 普通操作审批沿用新档位；来源/本轮范围等独立约束不能因此被扩大。
+        const effectiveResolveAs: 'allow' | 'deny' = resolveAs === 'allow' && entry.forcePrompt ? 'deny' : resolveAs;
+        if (effectiveResolveAs === 'deny' && entry.unavailableHandoff) {
+          autoReviewConfirmUndeliveredNotice.notify();
+        }
+        pendingPrompts.delete(requestId);
+        entry.settle(effectiveResolveAs, reason);
+        queue.push({
+          type: 'interaction_dismissed',
+          data: { requestId, reason, resolvedAs: effectiveResolveAs },
+          source: 'pi',
+        });
+      }
+    };
+    const clearActiveTurnPermissionPolicy = (
+      reason: string,
+      opts?: { dismissPending?: boolean; surfaceLost?: boolean },
+    ): void => {
+      activeTurnPermissionPolicy = null;
+      if (opts?.surfaceLost) autoReviewDecisionCache.clear();
+      if (opts?.dismissPending) {
+        dismissAllPendingPrompts(reason, 'deny', { surfaceLost: opts.surfaceLost === true });
+      }
+    };
+    // 「自动审核不可用」的会话级一次性提示(issue #1574);与 Claude / Codex 同口径,走既有的
+    // 非终止 error 事件 + `[CODE]` 约定,不新增事件类型。
+    const emitAutoReviewRuntimeNotice = (message: string): void => {
+      queue.push({
+        type: 'error',
+        data: { message, isTerminal: false },
+        source: 'pi',
+      });
+    };
+    const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice(emitAutoReviewRuntimeNotice);
+    const autoReviewConfirmUndeliveredNotice = createAutoReviewConfirmUndeliveredNotice(emitAutoReviewRuntimeNotice);
+    const reviewAutoAction = (action: ReviewableAction, hostAutoApprove = false, hostShortcutOnly = false): Promise<AutoReviewDecision> => {
+      // Directory grants become active only after their permission snapshot is
+      // durable. While persistence is pending, neither the requested roots nor
+      // the old runtime roots are a complete authorization view, so fail closed
+      // instead of letting a reviewer decision bridge that transaction window.
+      if (directoryPermissionsPendingPersistence()) {
+        return Promise.resolve({
+          verdict: 'block',
+          reason: 'Directory permissions are still being persisted.',
+        });
+      }
+      if (currentAutoReviewAuthority === null) {
+        return Promise.resolve({ verdict: 'block', reason: 'User request was not accepted; retry with the current request.' });
+      }
+      const directoryGeneration = autoReviewDirectoryGeneration;
+      const request = {
+        sessionId: opts.sessionId,
+        agentKind: 'pi' as const,
+        providerId: mutableProviderId,
+        model: mutableModel,
+        userIntent: currentAutoReviewIntent,
+        precedingBlockedActions: autoReviewActionContext.precedingBlockedActions,
+        ...(currentAutoReviewAuthority ? { authorizationContext: currentAutoReviewAuthority } : {}),
+        action,
+        // 设备托管：路径在任务所在电脑上，以那台电脑的真实工作目录为准。
+        workspaceRoots: [opts.deviceHosted?.workingDir ?? opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs],
+        writableRoots: [opts.deviceHosted?.workingDir ?? opts.workingDir, ...mutableWritableDirs],
+        platform: opts.remoteHostId ? ('linux' as const) : process.platform,
+      };
+      let cacheKey: string | undefined;
+      let pending: Promise<AutoReviewDecision> | undefined;
+      return withAutoReviewContext(request, this.deps.reviewAutoPermissionAction, (prepared) => {
+        if (request.userIntent !== currentAutoReviewIntent || request.authorizationContext !== (currentAutoReviewAuthority ?? undefined)) {
+          return Promise.resolve({ verdict: 'block', reason: 'User instructions changed; retry against the current request.' });
+        }
+        cacheKey = JSON.stringify([prepared, hostAutoApprove, hostShortcutOnly]);
+        pending = autoReviewDecisionCache.get(cacheKey);
+        if (!pending) {
+          pending = resolveAutoReviewDecision(prepared, this.deps.reviewAutoPermissionAction, hostAutoApprove, hostShortcutOnly);
+          autoReviewDecisionCache.set(cacheKey, pending);
+        }
+        return pending;
+      }, (decision) => {
+        if (!pending || !cacheKey) return decision;
+        if (request.userIntent !== currentAutoReviewIntent || request.authorizationContext !== (currentAutoReviewAuthority ?? undefined)
+            || autoReviewDecisionCache.get(cacheKey) !== pending) {
+          return { verdict: 'block', reason: 'User instructions changed; retry against the latest authorization.' };
+        }
+        if (directoryGeneration !== autoReviewDirectoryGeneration || directoryPermissionsPendingPersistence()) {
+          return { verdict: 'block', reason: 'Directory permissions changed; retry with the current scope.' };
+        }
+        autoReviewActionContext.record(action, decision);
+        return decision;
+      });
+    };
+    let closed = false;
+    /**
+     * Has the Pi process itself exited?
+     *
+     * The detached supervisor needs this to read an empty run directory
+     * correctly: while Pi is alive its injected extension can be part-way
+     * through `launchDurableRun`, so "no run directories yet" is not the same
+     * statement as "no durable runs". Navigating away exactly as a subagent tool
+     * starts used to release the proxy lease and stop approval supervision on
+     * that first empty scan, and the run that appeared a moment later had its
+     * model requests fail on a revoked token with nobody left to answer its
+     * approvals.
+     */
+    let piProcessExited = false;
+    let rpcDisconnected = false;
+    type PiSubagentStatusSummary = Pick<PiSubagentRunStatus,
+      'runId' | 'taskId' | 'state' | 'startedAt' | 'updatedAt' | 'title' | 'description'>;
+    const piSubagentStatuses = new Map<string, PiSubagentStatusSummary>();
+    const piSubagentFingerprints = new Map<string, string>();
+    const piSubagentApprovalRequests = new Set<string>();
+    const piSubagentApprovalDeliveries = new Set<string>();
+    const piSubagentApprovalDecisions = new Map<string, PiPermissionResolution>();
+    /**
+     * Approval offers that have been started but have not settled yet.
+     *
+     * An offer awaits the user, so it can outlive the poll round that fired it
+     * — and, before this set existed, the close that was supposed to end the
+     * session. An account boundary needs a point where nothing is still writing
+     * a child's mailbox through the outgoing owner's resolver, and a bare
+     * `void dispatch()` gave it none.
+     */
+    const piSubagentApprovalDispatches = new Set<Promise<void>>();
+    /**
+     * Approval publishes that are inside `controlPiSubagentRuns` and have not
+     * finished writing their mailbox entries yet.
+     *
+     * Narrower than `piSubagentApprovalDispatches` on purpose. That set settles
+     * only once the runner has acknowledged, and an account teardown that waited
+     * for acknowledgements would be held up by the very children it is trying to
+     * stop. This one settles at the end of the *write* phase — bounded fs work —
+     * which is exactly what has to be over before the stop sweep runs.
+     */
+    const piSubagentApprovalWrites = new Set<Promise<void>>();
+    const inFlightSubagentLaunches = new Set<Promise<void>>();
+    /**
+     * Publish an approval answer, keeping its mailbox-write phase awaitable and
+     * refusing the write itself if the account boundary went up in the meantime.
+     *
+     * The fence is read *inside* the helper, immediately before each write: the
+     * caller-side check a few lines up still leaves discovery and the directory
+     * guard between the check and the write, and a teardown can start and finish
+     * its sweep in there.
+     */
+    const publishPiSubagentApproval = async (
+      taskId: string,
+      options: Parameters<typeof controlPiSubagentRuns>[3],
+    ): Promise<number> => {
+      let settleWrites!: () => void;
+      const writesSettled = new Promise<void>((resolve) => { settleWrites = resolve; });
+      piSubagentApprovalWrites.add(writesSettled);
+      try {
+        return await controlPiSubagentRuns(subagentRunRoot, taskId, 'approval', {
+          ...options,
+          // Read through the live variable, never a snapshot: the whole point is
+          // to see a flag that was raised after this publish started.
+          beforeMailboxWrite: () => !accountBoundaryTeardown,
+          onMailboxWritesSettled: settleWrites,
+        });
+      } finally {
+        // Also on the throw path, or a failed publish would pin the teardown.
+        settleWrites();
+        piSubagentApprovalWrites.delete(writesSettled);
+      }
+    };
+    let piSubagentRefreshInFlight = false;
+    let piSubagentNextRefreshAt = 0;
+    let piSubagentRefreshGeneration = 0;
+    // Approval delivery belongs to the *detached run* lifecycle, not to the
+    // parent handle. After a navigation close the foreground refresh timer is
+    // gone, but `deferProxyDisposalForDetachedRuns` keeps polling durable status
+    // until the last detached run settles; while that supervisor runs it owns
+    // approval consumption, so a child that reaches an approval-gated tool after
+    // the parent view unmounted still gets a real Cindy prompt instead of
+    // waiting out its own run timeout.
+    let detachedApprovalSupervisorActive = false;
+    /**
+     * Approvals we offered while no approval surface was listening.
+     *
+     * A durable child's question must not be *consumed* as a denial just
+     * because the parent view went away: `Session.performClose` clears its
+     * interaction listener, so the resolver that survives on the handle answers
+     * `no_listener_attached` — a system deny that would fail the child's tool
+     * for a question the user never saw. Those requests stay in the durable
+     * mailbox instead, and the sidebar keeps showing `awaitingApproval`.
+     *
+     * The value is the resolver generation the offer was made under, so the
+     * 250ms supervisor poll re-offers exactly once per surface change rather
+     * than hammering a resolver that has nobody behind it.
+     */
+    const piSubagentApprovalDeferred = new Map<string, number>();
+    let piSubagentResumeTail: Promise<void> = Promise.resolve();
+    const clearPiSubagentApprovalState = (runId: string): void => {
+      const prefix = `${runId}:`;
+      for (const key of piSubagentApprovalRequests) {
+        if (key.startsWith(prefix)) piSubagentApprovalRequests.delete(key);
+      }
+      for (const key of piSubagentApprovalDeliveries) {
+        if (key.startsWith(prefix)) piSubagentApprovalDeliveries.delete(key);
+      }
+      for (const key of piSubagentApprovalDeferred.keys()) {
+        if (key.startsWith(prefix)) piSubagentApprovalDeferred.delete(key);
+      }
+      for (const key of piSubagentApprovalDecisions.keys()) {
+        if (key.startsWith(prefix)) piSubagentApprovalDecisions.delete(key);
+      }
+    };
+    const emitPiSubagentStatus = (status: PiSubagentRunStatus): void => {
+      const taskId = status.taskId;
+      const projectedStatus = status.state === 'queued' ? 'running' : status.state;
+      if (isPiSubagentTerminal(status.state)) clearPiSubagentApprovalState(status.runId);
+      const fingerprint = createHash('sha256').update(JSON.stringify([
+        status.runId,
+        status.state,
+        status.totalTokens,
+        status.toolUses,
+        status.stopRequested,
+        status.timedOut,
+        status.tasks.map((task) => [
+          task.status,
+          task.output,
+          task.outputTruncated,
+          task.error,
+          task.pendingApproval?.id,
+        ]),
+      ])).digest('hex');
+      if (piSubagentFingerprints.get(taskId) === fingerprint) return;
+      piSubagentFingerprints.set(taskId, fingerprint);
+      const taskModels = new Set(status.tasks.map((task) => task.model ?? null));
+      const onlyModel = taskModels.size === 1 ? [...taskModels][0] : null;
+      const taskThinking = new Set(status.tasks.map((task) => task.thinking ?? null));
+      const onlyThinking = taskThinking.size === 1 ? [...taskThinking][0] : null;
+      const terminal = isPiSubagentTerminal(status.state);
+      const terminalBodies = terminal
+        ? status.tasks.map((task) => [
+            task.output,
+            task.error ? `Error: ${task.error}` : undefined,
+          ].filter((part): part is string => Boolean(part)).join('\n\n'))
+        : [];
+      const hasReturnedResult = terminalBodies.some((body) => body.length > 0);
+      const returnedResult = terminal && hasReturnedResult
+        ? status.tasks.map((task, index) => status.tasks.length === 1
+            ? terminalBodies[index]
+            : `## ${task.title ?? task.agent}\n\n${terminalBodies[index] || '(no output)'}`,
+          ).join('\n\n')
+        : undefined;
+      const terminalSummary = returnedResult?.slice(0, 2_000);
+      queue.push({
+        type: 'agent_task_update',
+        source: 'pi',
+        data: {
+          provider: 'pi',
+          taskId,
+          parentToolUseId: taskId,
+          status: projectedStatus,
+          taskType: 'pi_subagent',
+          subagentParentContext: status.context === 'fork' ? 'snapshot' : 'none',
+          title: status.title,
+          description: status.description,
+          createdAt: new Date(status.startedAt).toISOString(),
+          updatedAt: new Date(status.updatedAt).toISOString(),
+          ...(terminalSummary ? { summary: terminalSummary } : {}),
+          ...(returnedResult !== undefined ? { returnedResult } : {}),
+          ...(terminal && !hasReturnedResult ? { returnedResultEmpty: true } : {}),
+          ...(terminal && status.tasks.some((task) => task.outputTruncated === true)
+            ? { returnedResultTruncated: true }
+            : {}),
+          ...(onlyModel ? { model: onlyModel } : taskModels.size > 1 ? { model: null } : {}),
+          ...(onlyThinking ? { reasoningEffort: onlyThinking } : {}),
+          usage: {
+            ...(typeof status.totalTokens === 'number' ? { totalTokens: status.totalTokens } : {}),
+            ...(typeof status.toolUses === 'number' ? { toolUses: status.toolUses } : {}),
+            ...(typeof status.usage?.cost === 'number' ? { costUsd: status.usage.cost } : {}),
+            durationMs: Math.max(0, (status.endedAt ?? status.updatedAt) - status.startedAt),
+          },
+          subagentObservation: {
+            // A UUID run directory is host-owned discovery authority. Non-terminal
+            // snapshots stay spawn/enrichment so the durable DB may learn native
+            // run/child ids even though the tool-start event fired before the
+            // detached runner UUID existed. Terminal snapshots must be `terminal`:
+            // message persist only stores compact-card `agentTaskStatus` for that
+            // kind, otherwise reopen falls back to the launch receipt and shows
+            // `running` forever.
+            kind: terminal ? 'terminal' : 'spawn',
+            logicalSubagentId: status.runId,
+            parentToolUseId: taskId,
+            providerRunIds: [status.runId, ...status.tasks.map((task) => task.childId)],
+          },
+        },
+      });
+    };
+    /**
+     * Terminal projection for a run that ended without saying so.
+     *
+     * Deliberately the same shape the durable reconciler writes for a stale
+     * diagnostic (`localDb/ipc/subagentRuns.ts`), on the same `agent_task_update`
+     * channel: the Host persists it and broadcasts the change, which is what
+     * makes the sidebar re-read. Only *provably* dead runs get this — a record
+     * that is merely unreadable is held, not buried.
+     */
+    const emitPiSubagentDiagnostic = (
+      previous: PiSubagentStatusSummary,
+      diagnostic: PiSubagentRunDiagnostic,
+    ): void => {
+      queue.push({
+        type: 'agent_task_update',
+        source: 'pi',
+        data: {
+          provider: 'pi',
+          taskId: previous.taskId,
+          parentToolUseId: previous.taskId,
+          status: 'failed',
+          taskType: 'pi_subagent_diagnostic',
+          title: diagnostic.title ?? previous.title ?? 'Unavailable PI Subagent run',
+          ...(diagnostic.description ?? previous.description
+            ? { description: diagnostic.description ?? previous.description }
+            : {}),
+          summary: diagnostic.message,
+          createdAt: new Date(diagnostic.startedAt || previous.startedAt).toISOString(),
+          updatedAt: new Date(diagnostic.updatedAt || previous.updatedAt).toISOString(),
+          subagentObservation: {
+            kind: 'spawn',
+            logicalSubagentId: previous.runId,
+            parentToolUseId: previous.taskId,
+            providerRunIds: [previous.runId],
+          },
+        },
+      });
+    };
+    const resolvePiSubagentApproval = async (
+      status: PiSubagentRunStatus,
+      task: PiSubagentRunStatus['tasks'][number],
+    ): Promise<void> => {
+      if (closed && !detachedApprovalSupervisorActive) return;
+      // Shared userData can contain active runs from another Desktop instance.
+      // Missing ownership is legacy metadata and must fail closed here. A
+      // reopened task's new handle may *adopt* an approval parked by an earlier
+      // handle of the same session (same host process, or an owner that is
+      // gone) — otherwise navigation-close approvals stay unreachable forever.
+      // Adoption moves the delivery surface only; the verdict path below forces
+      // explicit confirmation for it.
+      const approvalScope = piSubagentApprovalScope(
+        status,
+        subagentRuntimeOwnerId,
+        process.pid,
+        sid,
+      );
+      if (approvalScope === 'refused') return;
+      const adopted = approvalScope === 'adopted';
+      // Controls must carry the run's own owner id, not ours, or the mailbox
+      // owner filter would reject an adopted answer.
+      const controlOwnerId = status.runtimeOwnerId ?? subagentRuntimeOwnerId;
+      const approval = task.pendingApproval;
+      if (!approval || status.interactiveOwner === 'extension') return;
+      const turnChangeCapture = approval.method === 'confirm'
+        && approval.title === 'cindy:turn-change-capture';
+      const key = `${status.runId}:${task.childId}:${approval.id}`;
+      if (piSubagentApprovalDeliveries.has(key) || piSubagentApprovalRequests.has(key)) return;
+      // Parked for want of an approval surface: hold until one is (re)wired.
+      if (piSubagentApprovalDeferred.get(key) === interactionResolverGeneration) return;
+      // Snapshot the surface generation *before* the offer's awaits. A resolver
+      // attached while auto-review is still running must invalidate the park,
+      // otherwise the entry is filed under the new generation and the retry gate
+      // below never opens again.
+      const offeredUnderGeneration = interactionResolverGeneration;
+      let checkingAutomaticPermission = permissionMode === 'auto';
+      const offeredWhileClosed = closed;
+      const offeredAfterProcessExit = piProcessExited;
+      // Detached runs outlive the root, but an Auto verdict must not straddle
+      // its teardown. Reuse the durable unanswered path without stopping later
+      // offers that begin under the already-detached lifecycle.
+      const autoReviewOfferExpired = (): boolean => checkingAutomaticPermission
+        && (closed !== offeredWhileClosed || piProcessExited !== offeredAfterProcessExit);
+      piSubagentApprovalRequests.add(key);
+      if (turnChangeCapture) {
+        let toolName = '';
+        let input: Record<string, unknown> = {};
+        try {
+          const payload = JSON.parse(approval.message ?? '{}') as { toolName?: unknown; input?: unknown };
+          if (typeof payload.toolName === 'string') toolName = payload.toolName;
+          if (payload.input && typeof payload.input === 'object' && !Array.isArray(payload.input)) {
+            input = payload.input as Record<string, unknown>;
+          }
+        } catch {
+          // Malformed capture payload is non-fatal; acknowledge it as opaque.
+        }
+        if (sid) {
+          try {
+            const targetPath = typeof input.path === 'string' ? input.path : null;
+            if (targetPath && (toolName === 'edit' || toolName === 'write')) {
+              await this.deps.turnChangeCapture?.beforeKnownFileWrite({
+                sessionId: sid,
+                provider: 'pi',
+                cwd: opts.workingDir,
+                targetPath,
+                ...(opts.remoteHostId ? { remote: true } : {}),
+              });
+            } else {
+              this.deps.turnChangeCapture?.noteOpaqueWrite({
+                sessionId: sid,
+                provider: 'pi',
+                cwd: opts.workingDir,
+                ...(opts.remoteHostId ? { remote: true } : {}),
+              });
+            }
+          } catch (error) {
+            this.deps.logger.warn('PI Subagent turn change capture failed', {
+              toolName,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+        // Same write-side fence check as the ordinary approval path below, for
+        // the same reason and with more of a window: `beforeKnownFileWrite`
+        // snapshots the file and can take as long as the workspace is large, and
+        // the user can switch accounts inside that await. Acknowledging after
+        // that would let the outgoing account's surface tell a child of the
+        // outgoing account to go ahead and write. Fail closed, and closed here
+        // means *parked*, not denied — no `confirmed`, and no deny either: the
+        // request stays in the durable mailbox exactly as a lost approval
+        // surface leaves it, for whoever owns the runtime next.
+        if (accountBoundaryTeardown) {
+          piSubagentApprovalRequests.delete(key);
+          return;
+        }
+        try {
+          const controlled = await publishPiSubagentApproval(status.taskId, {
+            childId: task.childId,
+            approvalId: approval.id,
+            confirmed: true,
+            runtimeOwnerId: controlOwnerId,
+          });
+          if (controlled > 0) piSubagentApprovalDeliveries.add(key);
+        } catch (error) {
+          this.deps.logger.warn('PI Subagent turn change capture acknowledgement failed', {
+            message: error instanceof Error ? error.message : String(error),
+          });
+        } finally {
+          piSubagentApprovalRequests.delete(key);
+        }
+        return;
+      }
+      if (approval.method === 'input' && approval.title === 'cindy:harness-hook') {
+        // The harness hook bridge was reverted (2f2721a49b), so nothing on the
+        // host handles these any more, but a durable child started by an older
+        // bridge can still raise one. It is an internal sync hook, not an
+        // approval: answer `continue` (the native policy) instead of rendering
+        // a `Subagent: tool` card with `{}` input (#7494).
+        try {
+          // Park across an account switch rather than answer for the outgoing
+          // account, as the turn-change acknowledgement does.
+          if (accountBoundaryTeardown) return;
+          const controlled = await publishPiSubagentApproval(status.taskId, {
+            childId: task.childId,
+            approvalId: approval.id,
+            value: JSON.stringify({ action: 'continue' }),
+            runtimeOwnerId: controlOwnerId,
+          });
+          if (controlled > 0) piSubagentApprovalDeliveries.add(key);
+        } catch (error) {
+          this.deps.logger.warn('PI Subagent harness hook response failed', {
+            message: error instanceof Error ? error.message : String(error),
+          });
+        } finally {
+          piSubagentApprovalRequests.delete(key);
+        }
+        return;
+      }
+      let toolName = 'tool';
+      let input: Record<string, unknown> = {};
+      let resolvedWritePath: string | null | undefined;
+      let resolvedWritableRoots: string[] | null | undefined;
+      let controlPlaneWrite = false;
+      const approvalPayload = approval.method === 'input'
+        ? approval.placeholder
+        : approval.message;
+      if (approval.title === 'cindy:permission' && approvalPayload) {
+        try {
+          const payload = JSON.parse(approvalPayload) as {
+            toolName?: unknown;
+            input?: unknown;
+            resolvedWritePath?: unknown;
+            resolvedWritableRoots?: unknown;
+            controlPlaneWrite?: unknown;
+          };
+          if (typeof payload.toolName === 'string' && payload.toolName) toolName = payload.toolName;
+          if (payload.input && typeof payload.input === 'object' && !Array.isArray(payload.input)) {
+            input = payload.input as Record<string, unknown>;
+          }
+          if (Object.hasOwn(payload, 'resolvedWritePath')) {
+            resolvedWritePath = typeof payload.resolvedWritePath === 'string'
+              && payload.resolvedWritePath.length > 0
+              ? payload.resolvedWritePath
+              : null;
+          }
+          if (Object.hasOwn(payload, 'resolvedWritableRoots')) {
+            resolvedWritableRoots = Array.isArray(payload.resolvedWritableRoots)
+              && payload.resolvedWritableRoots.length <= 64
+              && payload.resolvedWritableRoots.every(
+                (root) => typeof root === 'string' && root.length > 0,
+              )
+              ? payload.resolvedWritableRoots as string[]
+              : null;
+          }
+          controlPlaneWrite = payload.controlPlaneWrite === true;
+        } catch {
+          /* malformed permission payload remains a generic, deny-by-default prompt */
+        }
+      }
+      if ((toolName === 'write' || toolName === 'edit') && resolvedWritePath === undefined) {
+        // Durable child 可能来自旧 bridge；缺少执行期真实路径时不能回退成字面绿灯。
+        resolvedWritePath = null;
+      }
+      if ((toolName === 'write' || toolName === 'edit') && resolvedWritableRoots === undefined) {
+        resolvedWritableRoots = null;
+      }
+      const requestId = `pi-subagent:${key}`;
+      const turnPolicyForcePrompt = (() => {
+        if (!activeTurnPermissionPolicy || permissionMode === 'bypassPermissions') return false;
+        try {
+          return activeTurnPermissionPolicy.forceConfirmToolCall(toolName, input) === true;
+        } catch (error) {
+          this.deps.logger.error('PI Subagent turn permission policy threw -> force confirmation', {
+            toolName,
+            origin: activeTurnPermissionPolicy.origin,
+            message: error instanceof Error ? error.message : String(error),
+          });
+          return true;
+        }
+      })();
+      const requestUserDecision = async (
+        options: { forcePrompt: boolean; unavailableHandoff?: boolean; autoReviewReason?: string },
+      ): Promise<PiPermissionResolution | null> => {
+        if (
+          permissionMode === 'bypassPermissions'
+          && !adopted
+          && !turnPolicyForcePrompt
+          && !options.forcePrompt
+        ) return 'allow';
+        // Session wires the resolver immediately after handle creation. Keep a
+        // very fast Ask/gray request pending until that wiring exists instead
+        // of turning startup ordering into a denial. The runner timeout remains
+        // the final fail-closed bound if a resolver never arrives.
+        if (!interactionResolver) return null;
+        return new Promise<PiPermissionResolution | null>((resolve) => {
+          let settled = false;
+          let unregister: (() => void) | null = null;
+          const finalize = (resolution: PiPermissionResolution | null): void => {
+            if (settled) return;
+            settled = true;
+            unregister?.();
+            resolve(resolution);
+          };
+          unregister = registerPendingPrompt(requestId, {
+            // control-plane writes must keep forcePrompt across a Full Access
+            // hot-switch; otherwise dismissAllPendingPrompts would allow them.
+            forcePrompt: options.forcePrompt || adopted,
+            ...(options.unavailableHandoff ? { unavailableHandoff: true } : {}),
+            // Durable child: losing the surface parks the question.
+            deferWhenSurfaceLost: true,
+            settle: (resolveAs, reason) => finalize(
+              resolveAs === 'allow' ? 'allow' : resolveAs === 'unanswered' ? null : piPermissionDenial('system-deny', reason),
+            ),
+          });
+          const permissionRequest = {
+            kind: 'permission' as const,
+            requestId,
+            toolName,
+            input,
+            title: `Subagent: ${toolName}`,
+            description: `Requested by ${task.title ?? task.agent}`,
+            metadata: {
+              provider: 'pi',
+              subagent: true,
+              runId: status.runId,
+              childId: task.childId,
+            },
+          };
+          Promise.resolve().then(() => interactionResolver!(
+            annotatePermissionRequestForAutoReview(permissionRequest, {
+              unavailable: options.unavailableHandoff,
+              reason: options.autoReviewReason,
+            }),
+          )).then((decision) => {
+            if (decision.kind !== 'permission') {
+              if (options.unavailableHandoff) autoReviewConfirmUndeliveredNotice.notify();
+              finalize('system-deny');
+              return;
+            }
+            // "Nobody was listening" is not an answer. The parent view can be
+            // gone (Session.performClose clears its interaction listener) while
+            // the detached child runs on; consuming that as a denial fails a
+            // tool call for a question the user never saw. Park it instead.
+            if (
+              decision.behavior === 'deny'
+              && isPiApprovalSurfaceAbsentReason(decision.reason)
+            ) {
+              finalize(null);
+              return;
+            }
+            if (
+              options.unavailableHandoff
+              && decision.behavior === 'deny'
+              && isSystemPermissionDenialReason(decision.reason)
+            ) {
+              autoReviewConfirmUndeliveredNotice.notify();
+            }
+            finalize(
+              decision.behavior === 'allow'
+                ? 'allow'
+                : piPermissionDenial(isSystemPermissionDenialReason(decision.reason) ? 'system-deny' : 'user-deny', decision.reason),
+            );
+          }).catch((error) => {
+            this.deps.logger.warn('PI Subagent approval forwarding failed closed', {
+              message: error instanceof Error ? error.message : String(error),
+            });
+            if (options.unavailableHandoff) autoReviewConfirmUndeliveredNotice.notify();
+            finalize('system-deny');
+          });
+        });
+      };
+      let cacheResolution = true;
+      const resolveConfirmation = async (): Promise<PiPermissionResolution | null> => {
+        // Review resumed child evidence against current user authorization.
+        // Other modes retain the independent confirmation for adopted work.
+        if (controlPlaneWrite) return requestUserDecision({ forcePrompt: true });
+        if (adopted && permissionMode !== 'auto') return requestUserDecision({ forcePrompt: true });
+        if (permissionMode === 'bypassPermissions') {
+          return 'allow';
+        }
+        const mcpTarget = resolveMcpToolTarget(toolName, registeredMcpServerNames);
+        const mcpPolicy = (() => {
+          const classifier = this.deps.getMcpToolApprovalPolicy;
+          if (!classifier || !mcpTarget) return null;
+          try {
+            const policy = classifier({
+              serverName: mcpTarget.serverName,
+              toolName: mcpTarget.toolName,
+              toolParams: input,
+            });
+            if (policy === 'auto-approve' || policy === 'prompt' || policy === 'prompt-each-time') {
+              return policy;
+            }
+            this.deps.logger.error('invalid PI Subagent MCP approval policy -> user confirmation', {
+              serverName: mcpTarget.serverName,
+              policy,
+            });
+          } catch (error) {
+            this.deps.logger.error('PI Subagent MCP approval policy threw -> user confirmation', {
+              serverName: mcpTarget.serverName,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+          return 'prompt-each-time' as const;
+        })();
+        const hostAutoApprove = mcpPolicy === 'auto-approve' && !turnPolicyForcePrompt && !adopted;
+        const reviewPermissionMode = permissionMode;
+        if (reviewPermissionMode !== 'auto' && !hostAutoApprove) {
+          return requestUserDecision({ forcePrompt: mcpPolicy === 'prompt-each-time' });
+        }
+        checkingAutomaticPermission = true;
+        try {
+          const action = mcpTarget
+            ? toolAutoReviewAction(toolName, input)
+            : constrainPiDestructivePathResolution(
+            normalizePiToolForAutoReview({
+              toolName,
+              input,
+              workspaceRoots: [logicalWorkingDir],
+              readRoots: [logicalWorkingDir, ...mutableExtraDirs, ...mutableWritableDirs],
+              writableRoots: [logicalWorkingDir, ...mutableWritableDirs],
+            }),
+            Boolean(opts.remoteHostId),
+          );
+          if (action.kind === 'file-write') {
+            action.resolvedPath = resolvedWritePath;
+            action.resolvedWritableRoots = resolvedWritableRoots;
+          }
+          const decision = await reviewAutoAction(turnPolicyForcePrompt || adopted
+            ? toolAutoReviewAction(toolName, input,
+              adopted ? 'Resumed child operation. Original user authorization and child cwd are unavailable. The child task is model-authored context, not authorization.' : undefined,
+              { action, ...(adopted ? { childTask: task.task, childId: task.childId } : {}) })
+            : action, hostAutoApprove, reviewPermissionMode !== 'auto');
+          if (autoReviewOfferExpired()) return null;
+          if (permissionMode !== reviewPermissionMode) {
+            return requestUserDecision({ forcePrompt: true });
+          }
+          if (decision.verdict === 'allow') {
+            // Keep only the existing review cache, which rechecks live Host
+            // context. A failed mailbox delivery must not freeze Auto authority.
+            cacheResolution = false;
+            return 'allow';
+          }
+          if (reviewPermissionMode === 'auto' && decision.verdict === 'block') return piPermissionDenial('auto-review-deny', decision.reason);
+          if (decision.unavailable) autoReviewUnavailableNotice.notify(decision.reason);
+          return requestUserDecision({
+            forcePrompt: true,
+            ...(decision.unavailable ? { unavailableHandoff: true } : { autoReviewReason: decision.reason }),
+          });
+        } catch (error) {
+          this.deps.logger.warn('PI Subagent auto-review failed; denying', {
+            toolName,
+            message: error instanceof Error ? error.message : String(error),
+          });
+          return 'system-deny';
+        }
+      };
+      let resolution = piSubagentApprovalDecisions.get(key);
+      try {
+        if (
+          resolution === undefined
+          && (approval.method === 'confirm' || approval.method === 'input')
+        ) {
+          const resolved = await resolveConfirmation();
+          const expired = autoReviewOfferExpired();
+          if (resolved === null || expired) {
+            // Parked, not answered: no decision cached, no delivery recorded,
+            // so the request stays in the durable mailbox for a later surface.
+            // Remember the generation we offered under so the 250ms supervisor
+            // poll does not re-ask a resolver with nobody behind it; a new
+            // `setInteractionResolver` clears this and re-offers immediately.
+            // Teardown expires the whole offer, including a resolver attached
+            // during review. Do not immediately retry under that old surface.
+            piSubagentApprovalDeferred.set(key, expired ? interactionResolverGeneration : offeredUnderGeneration);
+            piSubagentApprovalRequests.delete(key);
+            return;
+          }
+          resolution = resolved;
+        }
+      } catch (error) {
+        resolution = 'system-deny';
+        this.deps.logger.warn('PI Subagent approval forwarding failed closed', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      if (resolution === undefined) resolution = 'system-deny';
+      // Explicit human answers retain their existing delivery-only retry.
+      if (cacheResolution) piSubagentApprovalDecisions.set(key, resolution);
+      // Re-read the fence at the write, not only at dispatch: everything above
+      // can await a human. An answer decided under the outgoing account must
+      // not reach the child's mailbox after that account stopped being the
+      // owner — the decision stays cached and undelivered, which is the same
+      // state a failed delivery already leaves behind.
+      if (accountBoundaryTeardown) {
+        piSubagentApprovalRequests.delete(key);
+        return;
+      }
+      try {
+        const controlled = await publishPiSubagentApproval(status.taskId, {
+          childId: task.childId,
+          approvalId: approval.id,
+          ...(approval.method === 'input'
+            ? { value: resolution }
+            : { confirmed: resolution === 'allow' }),
+          runtimeOwnerId: controlOwnerId,
+        });
+        if (controlled > 0) {
+          piSubagentApprovalDeliveries.add(key);
+          piSubagentApprovalDecisions.delete(key);
+        }
+      } catch (error) {
+        this.deps.logger.warn('PI Subagent approval response delivery failed', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        piSubagentApprovalRequests.delete(key);
+      }
+    };
+    /**
+     * Fire an approval offer and keep it awaitable until it settles.
+     *
+     * The single door every offer goes through, which is what lets the account
+     * boundary close it: once the fence is up nothing new is dispatched, so the
+     * set can actually be drained rather than merely sampled. Not answering is
+     * not denying — the request stays in the durable mailbox for whoever owns
+     * the runtime next, exactly as a lost approval surface leaves it.
+     */
+    const dispatchPiSubagentApproval = (
+      status: PiSubagentRunStatus,
+      task: PiSubagentRunStatus['tasks'][number],
+    ): void => {
+      if (accountBoundaryTeardown) return;
+      const dispatch = resolvePiSubagentApproval(status, task);
+      piSubagentApprovalDispatches.add(dispatch);
+      const forget = (): void => { piSubagentApprovalDispatches.delete(dispatch); };
+      // Both arms: a rejected offer must neither stay in the set nor surface as
+      // an unhandled rejection. The awaiting side uses `allSettled` anyway.
+      dispatch.then(forget, forget);
+    };
+    const refreshPiSubagentRuns = async (): Promise<void> => {
+      if (closed || piSubagentRefreshInFlight) return;
+      const generation = piSubagentRefreshGeneration;
+      const refreshStartedAt = Date.now();
+      piSubagentRefreshInFlight = true;
+      let active = false;
+      let succeeded = false;
+      try {
+        const seenRunIds = new Set<string>();
+        for await (const status of scanPiSubagentRuns(subagentRunRoot, { latestPerTask: true })) {
+          if (closed) break;
+          seenRunIds.add(status.runId);
+          const previous = piSubagentStatuses.get(status.taskId);
+          if (previous && (previous.startedAt > status.startedAt
+            || (previous.startedAt === status.startedAt && previous.runId.localeCompare(status.runId) > 0))) continue;
+          const terminal = isPiSubagentTerminal(status.state);
+          if (!terminal) active = true;
+          // Disk/DB remain the history source. Output is delivered below, but
+          // never pinned by this live handle's discovery or fingerprint cache.
+          piSubagentStatuses.set(status.taskId, {
+            runId: status.runId, taskId: status.taskId, state: status.state,
+            startedAt: status.startedAt, updatedAt: status.updatedAt,
+            ...(!terminal ? { title: status.title, description: status.description } : {}),
+          });
+          emitPiSubagentStatus(status);
+          for (const task of status.tasks) dispatchPiSubagentApproval(status, task);
+        }
+        // Dropping out of the parseable list is not a reason on its own. That
+        // list hides anything it cannot read, and a status.json is unreadable
+        // for a moment every time it is rewritten — tearing down on that alone
+        // deleted the approval dedupe state, so the same pendingApproval was
+        // offered again the instant the file parsed and two decisions raced for
+        // one request. Ask the directory set what actually happened.
+        const missing = [...piSubagentStatuses].filter(([, status]) => !seenRunIds.has(status.runId));
+        if (missing.length > 0) {
+          const [runIds, diagnostics] = await Promise.all([
+            listPiSubagentRunDirectoryIds(subagentRunRoot),
+            listPiSubagentRunDiagnostics(subagentRunRoot),
+          ]);
+          if (closed) return;
+          const presentRunIds = new Set(runIds);
+          const staleDiagnostics = new Map(
+            diagnostics.filter((entry) => entry.kind === 'stale').map((entry) => [entry.runId, entry]),
+          );
+          for (const [taskId, previous] of missing) {
+            const stale = staleDiagnostics.get(previous.runId);
+            if (!stale && presentRunIds.has(previous.runId)) {
+              // Still on disk and not provably dead: unknown, not finished.
+              // Keep the entry and its dedupe records until it says otherwise.
+              continue;
+            }
+            piSubagentStatuses.delete(taskId);
+            piSubagentFingerprints.delete(taskId);
+            clearPiSubagentApprovalState(previous.runId);
+            // A run whose runner died without publishing a terminal status
+            // leaves the row reading `running` forever: the panel refreshes off
+            // change pushes, and removing this silently emits none. Project the
+            // same diagnostic the durable reconciler would, through the same
+            // update channel, so the row and the sidebar both settle.
+            if (stale) emitPiSubagentDiagnostic(previous, stale);
+          }
+        }
+        // Unreadable statuses are not proof that a previously active run ended.
+        active ||= [...piSubagentStatuses.values()].some((status) => !isPiSubagentTerminal(status.state));
+        succeeded = true;
+      } catch (error) {
+        deps.logger.warn('pi subagent durable status refresh failed', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        piSubagentRefreshInFlight = false;
+        if (generation === piSubagentRefreshGeneration) {
+          piSubagentNextRefreshAt = refreshStartedAt + (succeeded && !active
+            ? PI_SUBAGENT_IDLE_POLL_MS : PI_SUBAGENT_ACTIVE_POLL_MS);
+        }
+      }
+    };
+    const requestPiSubagentRefresh = async (): Promise<void> => {
+      piSubagentRefreshGeneration++;
+      piSubagentNextRefreshAt = 0;
+      await refreshPiSubagentRuns();
+    };
+    const piSubagentRefreshTimer = localSubagentSupported
+      ? setInterval(() => {
+          if (Date.now() < piSubagentNextRefreshAt) return;
+          void refreshPiSubagentRuns();
+        }, PI_SUBAGENT_ACTIVE_POLL_MS)
+      : null;
+    let piSubagentRefreshTimerCleared = false;
+    const clearPiSubagentRefreshTimer = (): void => {
+      if (piSubagentRefreshTimerCleared) return;
+      piSubagentRefreshTimerCleared = true;
+      if (piSubagentRefreshTimer) clearInterval(piSubagentRefreshTimer);
+    };
+    piSubagentRefreshTimer?.unref?.();
+    if (localSubagentSupported) void requestPiSubagentRefresh();
+    // Native /plan toggles and Execute/Refine continuations share this mirror.
+    // Native continuations re-read persisted state before Host side effects can use it.
+    let planModeActive: boolean | null = planModeExtAvailable ? null : false;
+    // The checkbox arms the next send; the native flag belongs to the executing turn.
+    let armedPlanMode: boolean | null = null;
+    let planModeRevision = 0;
+    let syncNativePlanMode: (() => void) | undefined;
+
+    // proc 构造即 spawn 子进程 —— spawn 参数非法等会**同步**抛。此刻 ctx 已在
+    // preparePiExtraSpawnConfig 注册、但 handle 尚未交出,close() 不会跑 → 单独
+    // 兜底注销 ctx 再抛(构造失败没有 proc 可关)。catch 必抛,故其后 proc 恒已赋值。
+    let proc: PiRpcProcess;
+    // Pi owns automatic threshold and overflow compaction. Cindy only records a
+    // deterministic native failure so Desktop can rebuild before the next send.
+    let nativeAutoCompactNeedsRollover = false;
+    // compact / 所有 prompt(/plan、分支切换、用户发送) / set_model / set_thinking_level
+    // 共用一条双向串行链。只等 compact 再发控制 RPC 是单向的。
+    let sessionRpcChain: Promise<void> = Promise.resolve();
+    const waitForSessionRpcIdle = async (): Promise<void> => {
+      await sessionRpcChain.catch(() => undefined);
+    };
+    /**
+     * 宿主发起的独占 RPC 操作(手动压缩 / rewind / 切模等)不预约 turn、也不置
+     * `ctx.isStreaming`；用计数器把它们暴露给 `hasPendingHostOperation()`，
+     * 空闲回收据此拒绝关闭正在执行这类操作的会话。
+     */
+    let hostOperationsInFlight = 0;
+    const runExclusivePiRpc = <T>(fn: () => Promise<T>): Promise<T> => {
+      hostOperationsInFlight += 1;
+      const run = sessionRpcChain.then(fn);
+      sessionRpcChain = run.then(() => undefined, () => undefined);
+      return run.finally(() => { hostOperationsInFlight -= 1; });
+    };
+    const requestPiCompact = async (instructions?: string): Promise<ManualCompactResult> => {
+      const command: Record<string, unknown> = { type: 'compact' };
+      if (instructions && instructions.trim().length > 0) {
+        command.customInstructions = instructions.trim();
+      }
+      const resp = await proc.request(command, { timeoutMs: PI_COMPACT_TIMEOUT_MS });
+      if (!resp.success) {
+        const err = (resp.error ?? '').toLowerCase();
+        if (err.includes('nothing to compact') || err.includes('too small')) {
+          return { noop: true };
+        }
+        throw new Error(`pi compact failed: ${resp.error ?? 'unknown'}`);
+      }
+      const data = (resp.data ?? {}) as { tokensBefore?: number; estimatedTokensAfter?: number };
+      const result: ManualCompactResult = {};
+      if (typeof data.tokensBefore === 'number') result.tokensBefore = data.tokensBefore;
+      if (typeof data.estimatedTokensAfter === 'number') result.estimatedTokensAfter = data.estimatedTokensAfter;
+      return result;
+    };
+    const runPiCompact = (instructions?: string): Promise<ManualCompactResult> =>
+      runExclusivePiRpc(() => requestPiCompact(instructions));
+    let sessionTransport: PiTransport | undefined;
+    let localProcessSpawned = false;
+    let runtimeCapabilityManifest: PiRuntimeCapabilityManifest | undefined;
+    let runtimeCapabilityGeneration = 0;
+    let piAgentLifecycleSequence = 0;
+    let activeExtensionCommandNotifications: string[] | null = null;
+    const doctorCommandActivity = new DoctorCommandActivity();
+    const runtimeCapabilityListeners = new Set<(manifest: PiRuntimeCapabilityManifest | undefined) => void>();
+    const notifyRuntimeCapabilityListener = (
+      listener: (manifest: PiRuntimeCapabilityManifest | undefined) => void,
+      manifest: PiRuntimeCapabilityManifest | undefined,
+    ): void => {
+      try {
+        listener(manifest);
+      } catch (error) {
+        this.deps.logger.warn('pi runtime capability listener failed (non-fatal)', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    };
+    const publishRuntimeCapabilities = (manifest: PiRuntimeCapabilityManifest | undefined): void => {
+      runtimeCapabilityManifest = manifest;
+      for (const listener of runtimeCapabilityListeners) {
+        notifyRuntimeCapabilityListener(listener, manifest);
+      }
+    };
+    let disposeProxySession: (() => void) | undefined;
+    const appendProxyDisposer = (disposer: (() => void) | void): void => {
+      if (typeof disposer !== 'function') return;
+      const previous = disposeProxySession;
+      disposeProxySession = () => {
+        let firstError: unknown;
+        try { disposer(); } catch (error) { firstError = error; }
+        try { previous?.(); } catch (error) { firstError ??= error; }
+        if (firstError) throw firstError;
+      };
+    };
+    // MCP context belongs only to the root Pi process and is always released
+    // immediately. The gateway proxy token is different: detached children use
+    // it too, so parent navigation transfers that disposer to a bounded durable
+    // run lease instead of revoking the token underneath a live child.
+    let sessionContextDisposed = false;
+    let proxyRegistrationOwned = true;
+    const disposeSessionContext = (): void => {
+      if (sessionContextDisposed) return;
+      sessionContextDisposed = true;
+      disposeSessionCtx?.();
+    };
+    const disposeProxyRegistration = (): void => {
+      if (!proxyRegistrationOwned) return;
+      proxyRegistrationOwned = false;
+      const dispose = disposeProxySession;
+      disposeProxySession = undefined;
+      dispose?.();
+    };
+    const disposeSessionRegistrations = (): void => {
+      let firstError: unknown;
+      try {
+        disposeProxyRegistration();
+      } catch (error) {
+        firstError = error;
+      }
+      try {
+        disposeSessionContext();
+      } catch (error) {
+        firstError ??= error;
+      }
+      if (firstError) throw firstError;
+    };
+    /**
+     * Settles when the detached-run supervisor loop has left.
+     *
+     * Already resolved while no supervisor is running, so a caller can await it
+     * unconditionally. Raising the account-boundary fence only makes the loop
+     * *decide* to leave — up to one 250ms round plus the scan it is inside
+     * later — and until it does it is still consuming approvals through the
+     * outgoing owner's resolver.
+     */
+    let supervisorExited: Promise<void> = Promise.resolve();
+    /**
+     * Account boundary teardown for this task's detached runners.
+     *
+     * Bounded on purpose: a runner that does not acknowledge in time still
+     * loses its proxy token when `disposeSessionRegistrations()` runs right
+     * after, and the parent watchdog in the runner itself is the backstop.
+     * Never deletes durable files — logout is an ownership boundary.
+     */
+    let accountBoundaryTeardown = false;
+    const stopDetachedSubagentRunsForAccountBoundary = async (): Promise<void> => {
+      accountBoundaryTeardown = true;
+      if (!localSubagentSupported) return;
+      // One budget for the whole teardown, shared by the pre-sweep drain and
+      // the convergence barrier below, so this function's worst-case latency is
+      // what it was before the drain existed.
+      let expired: ReturnType<typeof setTimeout> | undefined;
+      const budget = new Promise<'timed-out'>((resolve) => {
+        expired = setTimeout(() => resolve('timed-out'), 2_000);
+      });
+      let converged = true;
+      try {
+      // Before the sweep, not after. The fence now also gates each mailbox
+      // write from inside `controlPiSubagentRuns`, so no publish that has not
+      // reached its write can still land — but one that already passed that
+      // gate is an fs write in flight, and letting it complete *after* the
+      // sweep is exactly the ordering this has to rule out. Only the write
+      // phase is waited on: acknowledgement waits on the runner, and a teardown
+      // that waited for those would be held up by the children it is stopping.
+      while (converged && piSubagentApprovalWrites.size > 0) {
+        const writes = Promise.allSettled([...piSubagentApprovalWrites]).then(() => 'done' as const);
+        converged = await Promise.race([writes, budget]) === 'done';
+      }
+      if (!converged) {
+        this.deps.logger.warn('pi detached Subagent approval writes did not settle before the account boundary deadline', {
+          sessionId: opts.sessionId,
+        });
+      }
+      while (converged && inFlightSubagentLaunches.size > 0) {
+        const launches = Promise.allSettled([...inFlightSubagentLaunches]).then(() => 'done' as const);
+        converged = await Promise.race([launches, budget]) === 'done';
+      }
+      try {
+        const stopped = await stopPiSubagentRunsForAccountBoundary(subagentRunRoot, {
+          runtimeOwnerId: subagentRuntimeOwnerId,
+        });
+        if (!stopped) {
+          this.deps.logger.warn('pi detached Subagent runners did not stop before the account boundary deadline', {
+            sessionId: opts.sessionId,
+          });
+        }
+      } catch (error) {
+        this.deps.logger.warn('pi detached Subagent account boundary stop failed', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      // Raising the fence and stopping the children only *starts* the wind-down.
+      // The supervisor sees the fence at the top of its next round, and an
+      // approval offer already dispatched is awaiting a resolver that still
+      // belongs to the outgoing owner — so without this barrier close() returned
+      // while the old token was briefly still valid and the old resolver could
+      // still write a child's control mailbox.
+      //
+      // Four layers, and only the first actually closes the window:
+      //  1. the dispatch gate (`dispatchPiSubagentApproval`) plus the re-check
+      //     before the mailbox write. After the fence is up no offer starts and
+      //     no answer lands, so the set below can only shrink.
+      //  2. this drain. Sampling the set once was not enough: a supervisor
+      //     round that passed its fence check before the fence went up could
+      //     still be inside its directory scan, and the offers it fired when
+      //     the scan returned were not in that sample. Looping means an offer
+      //     that appeared during the previous round is picked up by the next —
+      //     and with (1) in place there can be at most one such round.
+      //  3. the budget. An offer waits on a human, and a card nobody answers
+      //     must not wedge a logout, so a slow convergence is logged and let go.
+      //  4. the caller. Missing the deadline is not a security decision here:
+      //     the shutdown report and the account-boundary sweep are what refuse
+      //     the handover. This function converges the common case and hands
+      //     anything left upwards.
+      // The supervisor first: it is the thing that could still open an offer.
+      converged = converged
+        && await Promise.race([supervisorExited.then(() => 'done' as const), budget]) === 'done';
+      while (converged && piSubagentApprovalDispatches.size > 0) {
+        const round = Promise.allSettled([...piSubagentApprovalDispatches]).then(() => 'done' as const);
+        converged = await Promise.race([round, budget]) === 'done';
+      }
+      if (!converged) {
+        this.deps.logger.warn('pi detached Subagent approvals did not converge before the account boundary deadline', {
+          sessionId: opts.sessionId,
+        });
+      }
+      } finally {
+        if (expired) clearTimeout(expired);
+      }
+    };
+    let proxyLeaseInitialInspection: Promise<void> | null = null;
+    const deferProxyDisposalForDetachedRuns = (): Promise<void> => {
+      if (proxyLeaseInitialInspection) return proxyLeaseInitialInspection;
+      // `proc.close()` fires onExit *after* an account-boundary close already
+      // stopped the runners and revoked the registrations. Without this fence
+      // that exit would start a supervisor for the outgoing owner and let a
+      // runner that missed its stop deadline reach the old approval surface.
+      if (accountBoundaryTeardown) return Promise.resolve();
+      const dispose = proxyRegistrationOwned ? disposeProxySession : undefined;
+      if (dispose) {
+        disposeProxySession = undefined;
+        proxyRegistrationOwned = false;
+      } else if (!localSubagentSupported) {
+        // Nothing to lease and no durable children to supervise.
+        return Promise.resolve();
+      }
+      let leaseDisposed = false;
+      detachedApprovalSupervisorActive = localSubagentSupported;
+      const settleLease = (): void => {
+        if (leaseDisposed) return;
+        leaseDisposed = true;
+        detachedApprovalSupervisorActive = false;
+        dispose?.();
+      };
+      const startedAt = Date.now();
+      const unreadableDirectoryDeadline = startedAt + 2_000;
+      const hardDeadline = startedAt + (24 * 60 + 5) * 60 * 1_000;
+      let resolveInitialInspection!: () => void;
+      let initialInspectionSettled = false;
+      proxyLeaseInitialInspection = new Promise<void>((resolve) => {
+        resolveInitialInspection = resolve;
+      });
+      const settleInitialInspection = (): void => {
+        if (initialInspectionSettled) return;
+        initialInspectionSettled = true;
+        resolveInitialInspection();
+      };
+      let resolveSupervisorExited!: () => void;
+      supervisorExited = new Promise<void>((resolve) => { resolveSupervisorExited = resolve; });
+      void (async () => {
+        for (;;) {
+          // The boundary can be raised *after* this loop started: Pi crashes,
+          // onExit starts the supervisor, and the user then switches accounts.
+          // The teardown stops the old children, but a child killed a moment
+          // ago still has an unexpired heartbeat, so without this re-check the
+          // loop kept treating it as active — answering its approvals through
+          // the *outgoing* account's resolver, writing its control mailbox, and
+          // holding that account's proxy lease. Leave through the same release
+          // path as every other exit; reclaiming the children is the account
+          // boundary sweep's job, not a second kill from here.
+          if (accountBoundaryTeardown) {
+            settleInitialInspection();
+            settleLease();
+            return;
+          }
+          // Sampled *before* the scan: a scan that started while Pi was alive
+          // cannot rule out a launch already in flight inside it, even if the
+          // process exits before the scan returns.
+          const scanFollowsExit = piProcessExited;
+          const [directoryCount, inspected] = await Promise.all([
+            countPiSubagentRunDirectories(subagentRunRoot),
+            (async () => {
+              let readable = 0;
+              const activeStatuses: PiSubagentRunStatus[] = [];
+              for await (const status of scanPiSubagentRuns(subagentRunRoot)) {
+                readable++;
+                if (!isPiSubagentTerminal(status.state)) activeStatuses.push(status);
+              }
+              return { readable, activeStatuses };
+            })(),
+          ]);
+          const active = inspected.activeStatuses.length > 0;
+          const allDirectoriesReadable = inspected.readable === directoryCount;
+          settleInitialInspection();
+          // Approval delivery keeps running while any detached run is live. The
+          // decision/delivery dedupe sets are the same ones the foreground timer
+          // used, so a request already answered before close is never re-asked.
+          if (localSubagentSupported && !leaseDisposed) {
+            for (const status of inspected.activeStatuses) {
+              for (const task of status.tasks) dispatchPiSubagentApproval(status, task);
+            }
+          }
+          // Pi's own exit is the lifecycle boundary. Until then a launch may be
+          // in flight inside it, and this scan cannot see it — the run
+          // directory is created by the extension, not by us. Once the process
+          // is gone nothing new can appear, so the same scan becomes conclusive.
+          if (
+            !active
+            && scanFollowsExit
+            && (
+              directoryCount === 0
+              || allDirectoriesReadable
+              || Date.now() >= unreadableDirectoryDeadline
+            )
+          ) {
+            settleLease();
+            return;
+          }
+          if (Date.now() >= hardDeadline) {
+            settleLease();
+            return;
+          }
+          await new Promise<void>((resolve) => setTimeout(resolve, 250));
+        }
+      })().catch((error) => {
+        settleInitialInspection();
+        // Inspection failure revokes rather than leaking a credential lease.
+        detachedApprovalSupervisorActive = false;
+        try {
+          settleLease();
+        } catch {
+          /* best effort */
+        }
+        this.deps.logger.warn('pi detached Subagent proxy lease failed closed', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }).finally(resolveSupervisorExited);
+      return proxyLeaseInitialInspection;
+    };
+    let durableSpawnEnv: NodeJS.ProcessEnv = {};
+    // Both model controls and the UI use the same durable resume path. Track it
+    // before yielding so close/account-boundary teardown can await its lease.
+    const resumeSubagent = async (taskId: string, message: string, childId?: string): Promise<string> => {
+      if (closed || accountBoundaryTeardown) throw new Error('PI session is closed');
+      if (!localSubagentSupported) throw new Error('PI Subagent is available only in local PI sessions.');
+      const operation = (async () => {
+        await permissionWriteChain;
+        if (closed) throw new Error('PI session is closed');
+        // Model refresh writes and rolls back these files in the RPC lane. Read
+        // the snapshot there too, so a child never freezes a mixed generation.
+        // Launch/refresh below stay outside: they may enqueue their own RPC.
+        const [modelsJson, bridgeSource, runnerSource, cacheRulesJson] = await runExclusivePiRpc(() => {
+          if (closed) throw new Error('PI session is closed');
+          return Promise.all([
+            fs.readFile(path.join(configHome, 'models.json')),
+            fs.readFile(bridgeExtensionPath),
+            fs.readFile(subagentRunnerPath),
+            fs.readFile(path.join(configHome, 'pi-cache-compatibility.json')),
+          ]);
+        });
+        const runId = await resumePiSubagentRun(subagentRunRoot, taskId, message, {
+          launchRunner: (request) => this.launchSubagentRunner(request),
+          env: durableSpawnEnv,
+          runtimeOwnerId: subagentRuntimeOwnerId,
+          permissionSnapshot: {
+            ...requestedPermissionSnapshot,
+            mode: permissionMode,
+            readOnlyRoots: [...requestedPermissionSnapshot.readOnlyRoots],
+            writableRoots: [...requestedPermissionSnapshot.writableRoots],
+            ...reviewPathSnapshot,
+          },
+          runnerFallbackFile: subagentRunnerPath,
+          runtimeSnapshot: { modelsJson, bridgeSource, runnerSource, cacheRulesJson },
+        }, childId);
+        if (!runId) throw new Error('No terminal PI Subagent run is available to resume.');
+        await requestPiSubagentRefresh();
+        return runId;
+      })();
+      // close() waits for every resume that entered while this handle was
+      // live before inspecting durable runs and transferring the proxy-token
+      // lease. Otherwise a concurrent close can observe no new directory,
+      // revoke the token, and then let this resume launch a doomed child.
+      piSubagentResumeTail = Promise.allSettled([piSubagentResumeTail, operation]).then(() => undefined);
+      return operation;
+    };
+
+    let piSpawnStartedAt: number | undefined;
+    let piSpawnLogged = false;
+    try {
+      for (const file of globalContextFiles) {
+        await writeFile(joinRemotePosixPath(configHome, file.name), file.content);
+      }
+      // 远端不 stage 本地 rg(本机二进制远端无意义)—— 远端走 PATH 上的 rg(远端 POSIX
+      // 系统常见),与 CC/Codex 远端一致(不注入受管工具路径)。
+      const managedRipgrepPath = remote
+        ? undefined
+        : await stageManagedRipgrep(configHome, this.deps.runtimeConfig.managedExecutablePaths?.ripgrep);
+      if (proxySessionToken && opts.sessionId && this.deps.registerPiProxySession) {
+        appendProxyDisposer(this.deps.registerPiProxySession(
+          opts.sessionId,
+          proxySessionToken,
+          () => mutablePiProviderId === PI_PROVIDER_ID
+            ? null
+            : resolveSourceProvider(mutablePiProviderId),
+        ));
+        for (const { providerId, token } of subagentProxyTokens.values()) {
+          appendProxyDisposer(this.deps.registerPiProxySession(
+            opts.sessionId,
+            token,
+            () => providerId,
+            { scope: 'subagent-route' },
+          ));
+        }
+      }
+      // 视觉桥后端 env（层 C）：host 解析后注入，cindy-bridge 的 vision 工具读取。
+      // 键名可能含 API key，须纳入 piSecretEnvNames 剥离面。
+      // 传当前 session model：未命中视觉桥目标模型的 Pi 模型不注入 env、不注册
+      // vision 工具（零干扰，不因别的模型配置了视觉桥而改变本模型工具面）。
+      // sessionId 供 OpenCode Go 后端确定性派生会话头（spawn env 必须稳定）。
+      // 供应商分享受邀者不注入：视觉后端是本机用户自己的其它供应商，且 vision 工具直接读本机文件。
+      const visionBridgeEnv = hostedGuest
+        ? null
+        : this.deps.resolvePiVisionBridgeEnv?.(opts.model, opts.sessionId) ?? null;
+      // 这些值必须留在 Pi 父进程，供 models.json 的 $ENV 请求期解析及 bridge
+      // client 使用；cindy-bridge 用该**仅含变量名**的清单在 bash spawn 边界剥离
+      // 真值，阻止 LLM shell 绕过工具审批直连 localhost proxy/MCP 或盗用 BYOM key。
+      const piSecretEnvNames = Array.from(new Set([
+        PI_API_KEY_ENV,
+        PI_SESSION_ID_ENV,
+        PI_SESSION_TOKEN_ENV,
+        ...(piPackageManagementToken ? [PI_PACKAGE_MANAGEMENT_ENV] : []),
+        PI_BASH_PACKAGE_HOME_ENV,
+        ...(visionBridgeEnv ? Object.keys(visionBridgeEnv) : []),
+        ...Object.keys(authEnv),
+        ...Object.keys(nativeEnv),
+        ...Object.keys(mcpEnv),
+        ...(mcpBridge && mcpBridge.servers.length > 0 ? [PI_MCP_BRIDGE_ENV] : []),
+        ...(hosted ? [DEVICE_HOSTED_PI_ENV] : []),
+        // 子代理路由快照:虽然不是凭证,但它是**控制面** —— 一次获批的 bash 拿到路径就能改写
+        // provider/model,让后续每次委派都打到攻击者选定的 endpoint(提示词与代码随之外泄)。
+        // 与 CINDY_PI_PERMISSION_FILE 同一类:靠改写受信文件给后续调用永久换向(review)。
+        // 只从 bash/模型工具的 spawn 边界剥离;子代理自己的 spawn 不走 bridge 的 bash 钩子,
+        // 扩展照旧现读快照,能力不受影响。
+        CINDY_SUBAGENT_ENV.runtimeFile,
+        CINDY_SUBAGENT_ENV.ownerId,
+        'CINDY_PI_MODEL_REQUEST_PREFS_FILE',
+        // 受管工具路径同属控制面：不得让获批 bash 改写/替换后影响后续自动放行的 grep/find。
+        ...(managedRipgrepPath ? [PI_MANAGED_RG_PATH_ENV] : []),
+      ]));
+      // 远端会话零继承本机 env(对齐 claude env-builder mode:'remote')—— 本机全量 env
+      // 对远端无意义且是隐私泄漏面;远端只有精选集合(CINDY_PI_* + authEnv + MCP header)。
+      // 本地保持历史行为(继承本机 env)。
+      // 「Agent 流量走本地 Proxy」:远端会话注入 HTTPS_PROXY/HTTP_PROXY/NO_PROXY
+      // (指向本地代理经 SSH remote-forward 隧道),与 CC 远端同机制。
+      // 失败(fail-closed)直接传播 —— 用户显式开启代理却静默直连是安全语义缺陷
+      // (R2 MCP BUG-2):隧道 arm 失败应让会话启动失败,而非绕过代理。
+      const proxyEnv = remote && this.deps.getRemotePiAgentProxyEnv ? await this.deps.getRemotePiAgentProxyEnv(opts.remoteHostId!) : null;
+      const companionEnvironment = opts.botRuntimeProfile && !remote && opts.sessionId
+        ? await this.deps.resolveSessionEnvironment?.(opts.sessionId) : undefined;
+      const spawnEnv: NodeJS.ProcessEnv = {
+        ...(remote ? {} : process.env),
+        ...(typeof this.deps.runtimeConfig.behaviorFlags === 'function'
+          ? this.deps.runtimeConfig.behaviorFlags({
+              credentialMode,
+              sessionProviderId: authProviderId,
+              spawnMode: remote ? 'remote' : 'local',
+            })
+          : this.deps.runtimeConfig.behaviorFlags),
+        ...authEnv,
+        ...(proxyEnv ?? {}),
+        // BYOM 原生 provider 的 api keys(键名对应 spec.apiKeyEnvVar,models.json 用 $ENV 引用)。
+        ...nativeEnv,
+        CINDY_PI_CACHE_COMPAT_FILE: this.deps.resolvePiNativeCompatStorePath?.(opts.remoteHostId) ?? joinRemotePosixPath(agentHome, 'pi-native-compat-overrides.json'),
+        CINDY_PI_NATIVE_PROVIDER_ADAPTERS: JSON.stringify(nativeProviderAdapterAliases(nativeProviders, hostedGuest ? hosted?.guestProvider?.modelIds : undefined, Boolean(hosted))),
+        // 外部 MCP header 真值只经 env 交给 bridge extension；host 生成独立名字，
+        // 且这些键已进入 piSecretEnvNames，LLM 可调用的 bash 子进程拿不到。
+        ...mcpEnv,
+        // 视觉桥后端 env（层 C）：键含 API key 已纳入 piSecretEnvNames 剥离面。
+        ...(visionBridgeEnv ? visionBridgeEnv : {}),
+        // Input handoff askpass, owner's own local tasks only (deterministic per session).
+        ...(!remote && !hosted && !reviewMode && opts.sessionId
+          ? this.deps.runtimeConfig.taskShellEnv?.({ sessionId: opts.sessionId })
+          : {}),
+        [PI_SESSION_ID_ENV]: opts.sessionId ?? '',
+        ...(proxySessionToken !== undefined ? { [PI_SESSION_TOKEN_ENV]: proxySessionToken } : {}),
+        [PI_SECRET_ENV_NAMES_ENV]: JSON.stringify(piSecretEnvNames),
+        PI_CODING_AGENT_DIR: configHome,
+        [PI_BASH_PACKAGE_HOME_ENV]: bashPackageHome,
+        CINDY_PI_PERMISSION_FILE: permissionFile,
+        ...(hosted ? { [DEVICE_HOSTED_PI_ENV]: deviceHostedPiEnvValue(hosted) } : {}),
+        ...(fastModels.length > 0 ? { CINDY_PI_FAST_MODELS: JSON.stringify(fastModels) } : {}),
+        CINDY_PI_TURN_TOOL_POLICY: remote ? '' : runtimeInstanceId,
+        ...(allowPiPackageManagement ? { [PI_PACKAGE_MANAGEMENT_ENV]: piPackageManagementToken } : {}),
+        // 轮 40-w4-t12 HIGH-1:review-only 启动标记 —— 独立于权限文件(文件损坏/
+        // 缺失时 bridge 仍保留 reviewOnly 语义, 不降级成普通 ask;见
+        // cindy-bridge-source currentPermissionState fail-closed)。
+        ...(reviewMode ? { CINDY_PI_REVIEW_ONLY: '1' } : {}),
+        // 子代理能力与其全部控制面 env 一起注入。当前只支持本地 PI；远端会话不加载
+        // 扩展，也不能看见一组指向 Desktop 本机文件的半残能力。
+        ...(subagentRoutingEnabled ? {
+          // 给二进制路径而不是让扩展猜 process.execPath；host 知道本次会话的真实 pi。
+          [CINDY_SUBAGENT_ENV.binary]: effectivePiBinaryPath,
+          // model/provider 由扩展每次现读，setModel 后立即生效。快照不可用时整组不传，
+          // 扩展据此完全不注册 subagent 工具（fail-closed）。
+          [CINDY_SUBAGENT_ENV.runtimeFile]: subagentRuntimeFile,
+          [CINDY_SUBAGENT_ENV.runRoot]: subagentRunRoot,
+          [CINDY_SUBAGENT_ENV.runnerFile]: subagentRunnerPath,
+          [CINDY_SUBAGENT_ENV.ownerId]: subagentRuntimeOwnerId,
+        } : {}),
+        // 嵌入式 runtime 不做启动期联网:关掉 pi 的版本检查与安装遥测
+        // (pi.dev/api/latest-version、report-install)。LLM 请求走 provider 通道不受影响。
+        PI_OFFLINE: '1',
+        // 保留稳定 system/tool 前缀的长缓存。不支持的 provider 会忽略该选项；
+        // 支持者（如 Anthropic）可避免较长会话在短 TTL 后重新计费。
+        PI_CACHE_RETENTION: 'long',
+        ...(mcpBridge && mcpBridge.servers.length > 0 ? { [PI_MCP_BRIDGE_ENV]: JSON.stringify(mcpBridge) } : {}),
+        CINDY_LOCAL_HOST_TOOLS_ONLY: opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? '1' : '',
+      };
+      // 不继承宿主进程里碰巧存在的同名变量；Windows 环境键大小写不敏感，必须先清掉
+      // 所有 casing 再写入 host 校验并 stage 后的唯一绝对路径。
+      for (const key of Object.keys(spawnEnv)) {
+        const normalizedKey = key.toLowerCase();
+        if (
+          normalizedKey === PI_MANAGED_RG_PATH_ENV.toLowerCase()
+          || normalizedKey === PI_LEGACY_SUBAGENT_NODE_ENV.toLowerCase()
+          || normalizedKey === PI_ELECTRON_RUN_AS_NODE_ENV.toLowerCase()
+        ) {
+          delete spawnEnv[key];
+        }
+      }
+      if (managedRipgrepPath) spawnEnv[PI_MANAGED_RG_PATH_ENV] = managedRipgrepPath;
+      // models.json + settings.json 内容 hash 进 spawn env —— 远端 daemon 的
+      // envHash 覆盖它, 路由或 retry/transport 改写时条件 restart, 不误 attach。
+      // 仅远端注入(本地无 envHash 机制); 值本身无凭证(只是内容指纹)。
+      if (remote) {
+        spawnEnv[PI_MODELS_JSON_HASH_ENV] = modelsJsonHash;
+        spawnEnv[PI_PERMISSION_HASH_ENV] = permissionSnapshotHash;
+        spawnEnv[PI_EXTENSION_BUNDLE_HASH_ENV] = createHash('sha256')
+          .update(CINDY_BRIDGE_EXTENSION_SOURCE)
+          .update('\n')
+          .update(CINDY_SUBAGENT_EXTENSION_SOURCE)
+          .digest('hex')
+          .slice(0, 16);
+        // 追加提示词本体在文件里，命令行不再带它；指纹进 env 才让提示词变化
+        // 触发远端 restart 而不是纯 attach。
+        spawnEnv[PI_APPEND_SYSTEM_PROMPT_HASH_ENV] = createHash('sha256')
+          .update(appendSystemPrompt)
+          .digest('hex')
+          .slice(0, 16);
+      }
+      mergeLoopbackNoProxy(spawnEnv);
+      durableSpawnEnv = spawnEnv;
+      const initialHostProxyForward = nativeProviderById.get(initialProvider)?.hostProxyForward;
+      companionEnvironment?.assertCurrent?.();
+      piSpawnStartedAt = Date.now();
+      // A remote rejection may lose the reply after spawning. Local spawning is
+      // synchronous and its process observer marks the boundary before returning.
+      if (remote) onRuntimeStartAttempted();
+      const { transport } = await this.createTransport(
+        {
+          args,
+          cwd: opts.workingDir,
+          env: spawnEnv,
+          sessionId: opts.sessionId,
+          hostProxyForwards: initialHostProxyForward ? [initialHostProxyForward] : [],
+        },
+        (pid) => {
+          localProcessSpawned = true;
+          onRuntimeStartAttempted();
+          return this.deps.registerLocalAgentProcess?.({
+            pid,
+            kind: 'pi',
+            role: 'task-host',
+            sessionId: opts.sessionId ?? null,
+          });
+        },
+        opts.remoteHostId,
+        effectivePiBinaryPath,
+      );
+      sessionTransport = transport;
+      onRuntimeStartAttempted();
+      proc = new PiRpcProcess({
+        transport,
+        logger: this.deps.logger,
+        onEvent: (event: PiRpcEvent) => {
+          const cacheInput = cacheInputTracker.observe(event);
+          if (cacheInput) pendingCacheCompatibility = { key: cacheInput.key, value: readCacheCompatibility() };
+          if (event.type === 'extension_ui_request' && event.method === 'input' && event.title === 'cindy:cache-input') {
+            let request: { key?: unknown; direct?: unknown } = {};
+            try { request = JSON.parse(typeof event.placeholder === 'string' ? event.placeholder : '{}'); } catch {}
+            const receipt = !closed && !proc.isClosed ? cacheInputTracker.read(request?.key) : undefined;
+            if (receipt && pendingCacheCompatibility?.key === receipt.key && (request.direct === true || receipt.followUp)) {
+              inputCacheCompatibility = pendingCacheCompatibility.value;
+              pendingCacheCompatibility = undefined;
+            }
+            proc.send({ type: 'extension_ui_response', id: event.id, value: JSON.stringify(receipt ?? {}) });
+            return;
+          }
+          // Native retries remain within one agent_start/settled lifecycle.
+          // A new start also recovers diagnostics if the previous turn omitted
+          // settled (abort/retry exhaustion), without changing turn execution.
+          if (event.type === 'agent_start') {
+            providerRequestObservedAt = undefined;
+            providerTurnObservedAt = undefined;
+            providerFirstOutputLogged = false;
+          }
+          if (!remote && event.type === 'extension_ui_request' && event.method === 'notify' &&
+              typeof event.message === 'string' && event.message.startsWith(CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX)) {
+            const prefix = `${CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX}${runtimeInstanceId}:`;
+            if (event.message.startsWith(prefix) && event.message.length <= prefix.length + 1024) {
+              try {
+                const metadata = projectPiRequestDiagnostics(JSON.parse(event.message.slice(prefix.length)));
+                providerRequestObservedAt = performance.now();
+                providerTurnObservedAt ??= providerRequestObservedAt;
+                providerFirstOutputLogged = false;
+                providerRequestSequence++;
+                this.deps.logger.debug('pi request stage', {
+                  startupTraceId, requestSequence: providerRequestSequence,
+                  stage: 'provider-request-prepared', ...metadata,
+                });
+              } catch { /* Invalid diagnostic frames never enter logs or user UI. */ }
+            }
+            return;
+          }
+          if (providerRequestObservedAt !== undefined) {
+            const update = event.assistantMessageEvent as { type?: unknown } | undefined;
+            if (!providerFirstOutputLogged && event.type === 'message_update' &&
+                ['text_delta', 'thinking_delta', 'toolcall_start', 'toolcall_delta'].includes(String(update?.type))) {
+              providerFirstOutputLogged = true;
+              this.deps.logger.debug('pi request stage', {
+                startupTraceId, requestSequence: providerRequestSequence, stage: 'first-output',
+                elapsedMs: Math.max(0, performance.now() - providerRequestObservedAt),
+              });
+            }
+            if (event.type === 'agent_settled') {
+              this.deps.logger.debug('pi request stage', {
+                startupTraceId, requestSequence: providerRequestSequence, stage: 'agent-settled',
+                elapsedMs: Math.max(0, performance.now() - providerRequestObservedAt),
+                turnElapsedMs: Math.max(0, performance.now() - providerTurnObservedAt!),
+              });
+              providerRequestObservedAt = undefined;
+              providerTurnObservedAt = undefined;
+            }
+          }
+          if (event.type === 'agent_start' && !ctx.pendingHostTurnStartToken) {
+            syncNativePlanMode?.();
+          }
+          if (event.type === 'agent_start' || event.type === 'agent_settled') {
+            piAgentLifecycleSequence += 1;
+          }
+          if (!remote && event.type === 'extension_ui_request' && event.method === 'notify') {
+            if (event.message === `${CINDY_PI_TEXT_ONLY_READY_PREFIX}${runtimeInstanceId}`) {
+              textOnlyPolicyReady = true;
+              return;
+            }
+            if (event.message === `${CINDY_PI_TEXT_ONLY_CLOSED_PREFIX}${runtimeInstanceId}`) {
+              textOnlyPolicyReady = false;
+              return;
+            }
+          }
+          if (event.type === 'extension_ui_request') {
+            if (event.method === 'input' &&
+                (event.title === 'cindy:provider-refresh' || event.title === 'cindy:provider-refresh-ack')) {
+              const requestId = typeof event.id === 'string' ? event.id : '';
+              let payload: { nonce?: unknown; ok?: unknown; code?: unknown; runtimeSettings?: unknown } = {};
+              try { payload = JSON.parse(typeof event.placeholder === 'string' ? event.placeholder : '{}'); }
+              catch { /* Invalid private command payload is rejected below. */ }
+              const stage = typeof payload.nonce === 'string' ? providerRefreshStages.get(payload.nonce) : undefined;
+              const valid = Boolean(requestId && stage && payload.nonce === stage.nonce &&
+                !closed && !piProcessExited && !proc.isClosed && !accountBoundaryTeardown);
+              if (event.title === 'cindy:provider-refresh') {
+                proc.send(valid
+                  ? { type: 'extension_ui_response', id: requestId,
+                    value: JSON.stringify({ nonce: stage!.nonce, operation: stage!.operation, env: stage!.env, aliases: stage!.aliases }) }
+                  : { type: 'extension_ui_response', id: requestId, cancelled: true });
+              } else {
+                if (valid) stage!.acknowledge(payload.ok === true, typeof payload.code === 'string' ? payload.code : undefined, payload.runtimeSettings);
+                proc.send({ type: 'extension_ui_response', id: requestId, cancelled: true });
+              }
+              return;
+            }
+            this.handleExtensionUiRequest(event, proc, () => ({
+              resolver: interactionResolver,
+              permissionMode,
+              currentModelIds: [mutableModel, mutableWireModel],
+              readNativeFast: (provider, model) => !requestPrefsClosed && nativeFastEnabled &&
+                fastModels.some(candidate => candidate.provider === provider && candidate.id === model),
+              workspaceRoots: [logicalWorkingDir],
+              readRoots: [logicalWorkingDir, ...mutableExtraDirs, ...mutableWritableDirs],
+              writableRoots: [logicalWorkingDir, ...mutableWritableDirs],
+              reviewAutoAction,
+              recordUserClarification: (question, answer) => setAutoReviewIntent(composeAutoReviewIntentWithClarification(currentAutoReviewIntent, [{ question, answer }])),
+              notifyAutoReviewUnavailable: (reason?: string) => autoReviewUnavailableNotice.notify(reason),
+              notifyAutoReviewConfirmUndelivered: () => autoReviewConfirmUndeliveredNotice.notify(),
+              registeredMcpServerNames,
+              registerPendingPrompt,
+              isAccountBoundaryTornDown: () => accountBoundaryTeardown,
+              isPermissionContextClosed: () => closed || piProcessExited || proc.isClosed || accountBoundaryTeardown,
+              turnPermissionPolicy: activeTurnPermissionPolicy,
+              sessionId: opts.sessionId ?? '',
+              workingDir: opts.workingDir ?? '',
+              remote: Boolean(opts.remoteHostId),
+              deviceHosted: Boolean(hosted),
+              allowPiPackageManagement,
+              piPackageManagementToken,
+              resumeSubagent,
+              controlSubagentRunner: async (action, runId) => {
+                if (action === 'delivery') {
+                  return localSubagentSupported && !closed && !accountBoundaryTeardown
+                    && !proc.isClosed && !isCurrentTurnHostAbortRequested(ctx);
+                }
+                if (!localSubagentSupported || !PI_SUBAGENT_RUN_ID_RE.test(runId)) {
+                  throw new Error('PI Subagent runner request is unavailable');
+                }
+                const runDir = path.join(subagentRunRoot, runId);
+                const live = this.subagentRunners.has(runId);
+                if (action === 'status') {
+                  const message = this.subagentRunnerExitErrors.get(runId);
+                  if (message) throw new PiSubagentRunnerHostExitedError(message);
+                  if (live) return true;
+                }
+                if (action === 'terminate' && live) {
+                  return this.terminateSubagentRunner(runId, runDir);
+                }
+                const status = (await listPiSubagentRuns(subagentRunRoot))
+                  .find((candidate) => candidate.runId === runId);
+                if (!status || status.runtimeOwnerId !== subagentRuntimeOwnerId) {
+                  if (action === 'terminate') return false;
+                  throw new Error('PI Subagent runner request does not belong to this task');
+                }
+                if (action === 'status') {
+                  return true;
+                }
+                if (action === 'terminate') {
+                  return this.terminateSubagentRunner(runId, runDir);
+                }
+                if (isPiSubagentTerminal(status.state)) {
+                  throw new Error('PI Subagent runner request is already terminal');
+                }
+                if (accountBoundaryTeardown) {
+                  throw new Error('PI Subagent runner request is unavailable');
+                }
+                const launching = this.launchSubagentRunner({
+                  runId,
+                  runDir,
+                  runnerFile: path.join(runDir, 'runner.cjs'),
+                  configFile: path.join(runDir, 'config.json'),
+                  cwd: opts.workingDir,
+                  env: durableSpawnEnv,
+                });
+                inFlightSubagentLaunches.add(launching);
+                try {
+                  await launching;
+                } finally {
+                  inFlightSubagentLaunches.delete(launching);
+                }
+                if (accountBoundaryTeardown) {
+                  const confirmed = await this.terminateSubagentRunner(runId, runDir);
+                  throw confirmed
+                    ? new Error('PI Subagent runner request is unavailable')
+                    : new PiSubagentRunnerExitUnconfirmedError(
+                      'PI Subagent runner request is unavailable',
+                    );
+                }
+                void requestPiSubagentRefresh();
+                return true;
+              },
+              emitExtensionNotification: (message, event) => {
+                const text = shouldRewriteContextModeDoctorNotification(
+                  message,
+                  event,
+                  doctorCommandActivity.active,
+                )
+                  ? rewriteContextModeDoctorPath(message, contextModeRoot)
+                  : message;
+                if (activeExtensionCommandNotifications) {
+                  activeExtensionCommandNotifications.push(text);
+                }
+                const notification: AgentEvent = {
+                  type: 'text',
+                  data: { text, isFinal: true },
+                  source: 'pi',
+                  standaloneText: true,
+                  turnScope: 'background',
+                  // Freeze the notice's origin before the async queue: a later
+                  // /clear must discard it even when delivery happens afterward.
+                  backgroundTurnStartedAt: Date.now(),
+                };
+                queue.push(notification);
+                return notification;
+              },
+            }));
+            return;
+          }
+          // 压缩即记忆:compaction_end 带摘要正文时沉淀 digest(auto/manual 都触发,pi
+          // 文档:两种压缩都发此事件)。fire-and-forget,不阻塞事件流。
+          if (event.type === 'compaction_end' && compactionMemoryEnabled) {
+            const summary = (event.result as { summary?: unknown } | null)?.summary;
+            if (typeof summary === 'string' && summary.trim().length > 0) {
+              const reason = typeof event.reason === 'string' ? event.reason : 'auto';
+              void writeCompactionDigest(summary.trim(), reason);
+            }
+          }
+          // Pi 的真实 turn 终态是 agent_settled；auto-retry 耗尽则先发 terminal error。
+          // 两条路径都必须立即清本轮 host policy，避免它泄漏到后续 Desktop turn。
+          if (event.type === 'agent_settled' || (event.type === 'auto_retry_end' && event.success !== true)) {
+            clearActiveTurnPermissionPolicy('turn_terminal', {
+              dismissPending: true,
+            });
+          }
+          translatePiEvent(event, queue, ctx);
+          if (event.type === 'compaction_end') {
+            const nativeAutomaticFailure =
+              event.aborted !== true &&
+              (event.reason === 'threshold' || event.reason === 'overflow') &&
+              isFailedOrAbortedPiCompaction(event);
+            if (nativeAutomaticFailure && !opts.remoteHostId) {
+              const failureText = [
+                typeof event.errorMessage === 'string' ? event.errorMessage : '',
+                'Error during compaction',
+              ].join(': ');
+              if (isDeterministicHostCompactFailure(failureText)) {
+                nativeAutoCompactNeedsRollover = true;
+                this.deps.logger.info('pi native auto-compact failure latched for rollover', {
+                  reason: event.reason,
+                  contextTokens: ctx.contextTokens,
+                  contextWindow: ctx.contextWindow,
+                });
+              }
+            }
+          }
+        },
+        onDisconnect: (reason) => {
+          rpcDisconnected = true;
+          // EOF/error is certain RPC loss, not a silent live tool or proof of
+          // process death. Deliver one terminal only for unsettled work, then
+          // retire the executor using the existing confirmed-exit cleanup.
+          // A pending idle prompt belongs to the next generation even before
+          // agent_start. Its predecessor's retry error is not its terminal.
+          const pendingNewTurn = !ctx.isStreaming && ctx.pendingHostTurnStartToken !== null;
+          if (!closed && (pendingNewTurn || (ctx.isStreaming && !ctx.terminalAssistantErrorEmitted))) {
+            queue.push(isCurrentTurnHostAbortRequested(ctx, true) ? {
+              type: 'done', data: { status: 'cancelled' }, source: 'pi',
+            } : {
+              type: 'error',
+              data: {
+                message: `pi RPC disconnected (${reason}); tool outcome is unknown`,
+                reason: 'pi-rpc-disconnected', isTerminal: true,
+              },
+              source: 'pi',
+            });
+          }
+          disposePiTranslateContext(ctx);
+          // A transport can report a previously observed disconnect while the
+          // RPC wrapper is being constructed. Wait until proc is assigned.
+          queueMicrotask(() => {
+            void proc.close().catch((error) => {
+              this.deps.logger.error('pi RPC disconnect cleanup remains unconfirmed', {
+                message: error instanceof Error ? error.message : String(error),
+              });
+            });
+          });
+        },
+        onExit: ({ code, signal }) => {
+          const hostAbortRequested = isCurrentTurnHostAbortRequested(ctx, true);
+          piProcessExited = true;
+          clearPiSubagentRefreshTimer();
+          void deferProxyDisposalForDetachedRuns();
+          disposePiTranslateContext(ctx);
+          // The root pi process is gone, but detached children are not. Their
+          // unanswered cards are parked in the durable mailbox rather than
+          // denied; a root-turn card still fails closed to deny.
+          clearActiveTurnPermissionPolicy('process_exit', { dismissPending: true, surfaceLost: true });
+          runtimeCapabilityGeneration++;
+          publishRuntimeCapabilities(undefined);
+          runtimeCapabilityListeners.clear();
+          if (!closed) {
+            // 非用户 close 的进程死亡:terminal error + 收尾,避免 UI 永久 running。
+            if (!rpcDisconnected) queue.push(hostAbortRequested ? {
+              type: 'done',
+              data: { status: 'cancelled' },
+              source: 'pi',
+            } : {
+              type: 'error',
+              data: {
+                message: `pi process exited unexpectedly (code=${code}, signal=${signal})`,
+                isTerminal: true,
+              },
+              source: 'pi',
+            });
+            // 轮 43 P1(codex-connector):**远端 daemon 模式不注销 MCP 注册** ——
+            // transport onClose(SSH 闪断/桥断)≠ 进程死, daemon 仍持有同一个 pi
+            // 子进程继续跑; 注销 MCP 注册会关闭 SSH remote-forward 隧道并清掉
+            // MCP session context, 远端 pi 的 cindy_memory/cindy_orca/cindy_ghost
+            // 等 MCP 调用在 detach 期间立即 401 或不可达, 破坏断链保活语义。
+            // 本地 stdio 无 daemon, onExit 即真死, 保持清理。
+            if (!remote) {
+              try {
+                disposeSessionRegistrations();
+              } catch (err) {
+                this.deps.logger.warn('pi dispose on unexpected exit failed (non-fatal)', {
+                  message: err instanceof Error ? err.message : String(err),
+                });
+              }
+            }
+          }
+          // 进程已死:隔离的 configHome(models.json + extension)与 runtime 文件不再被读,清理。
+          // 轮 42 P1(codex-connector):**远端会话不清理** —— daemon 模式下
+          // transport onClose(SSH 闪断)≠ 进程死, daemon 仍持有同一个 pi 子进程
+          // 继续跑; 删 configHome/permission/subagent runtime 会让存活 pi 的
+          // 后续工具调用降级 ask / 审批卡死 / 子代理路由丢, 破坏断链保活语义。
+          // 远端只在用户显式关闭时由 daemon 的 killRemoteSession 清 session,
+          // runtime 文件残留由下次 startSession 的清陈旧目录兜底(轮 40-w4-t4)。
+          // 本地 stdio 无 daemon, onExit 即真死, 保持清理。
+          if (!remote) {
+            void cleanupConfigHome();
+            cleanupRuntimeFiles();
+          }
+          queue.end();
+        },
+      });
+      logPiStartupStage(this.deps.logger, startupTraceId, 'pi-spawn', piSpawnStartedAt, 'ok');
+      piSpawnLogged = true;
+    } catch (err) {
+      if (piSpawnStartedAt !== undefined && !piSpawnLogged) {
+        logPiStartupStage(this.deps.logger, startupTraceId, 'pi-spawn', piSpawnStartedAt, 'degraded');
+      }
+      clearPiSubagentRefreshTimer();
+      disposePiTranslateContext(ctx);
+      try {
+        disposeSessionRegistrations();
+      } catch {
+        /* best-effort:注销失败不掩盖原始构造错误 */
+      }
+      // The transport can exist even if constructing its RPC wrapper throws.
+      // Reuse the same quarantine as RPC startup failures until close is proven.
+      if (sessionTransport) {
+        const transport = sessionTransport;
+        const cleanup = { close: async () => {
+          try { await transport.killRemoteSession?.(); }
+          finally { await transport.close(); }
+        } };
+        try {
+          await cleanup.close();
+        } catch (closeError) {
+          if (!remote) configHomeCleanupDeferredToQuarantine = true;
+          let confirmStopped!: () => void;
+          const whenStopped = new Promise<void>((resolve) => { confirmStopped = resolve; });
+          this.failedStartupCleanups.set(startupCleanupKey, {
+            proc: cleanup, promise: null, confirmStopped,
+            ...(!remote ? { cleanupLocal: () => {
+              void cleanupConfigHome();
+              cleanupRuntimeFiles();
+            } } : {}),
+          });
+          throw new AgentStartupCleanupPendingError(
+            `pi startup failed and transport cleanup remains unconfirmed: ${String(closeError)}`,
+            { cause: err, whenStopped },
+          );
+        }
+      } else if (remote || localProcessSpawned) {
+        // No handle after dispatch/spawn is not proof of exit. Keep runtime
+        // files too: an unpublished local writer may still be reading them.
+        if (!remote) configHomeCleanupDeferredToQuarantine = true;
+        throw err;
+      }
       // 轮 42 P1:远端失败也不清理 runtime 文件(可能与并发存活会话共享/复用)。
       if (!remote) {
         await cleanupConfigHome();
@@ -7751,4 +9950,3 @@ export class PiAgent extends BaseAgent {
     // transcript. Pi already handles native TUI-only stubs inside its process.
   }
 }
-

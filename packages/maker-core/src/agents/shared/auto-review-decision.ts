@@ -701,4 +701,3 @@ export function composeAutoReviewIntentWithClarification(
   if (lines.length === 0) return normalizeAutoReviewUserIntent(currentUserIntent);
   return appendAutoReviewUserIntent(currentUserIntent, `Clarifications:\n${lines.join('\n')}`);
 }
-
