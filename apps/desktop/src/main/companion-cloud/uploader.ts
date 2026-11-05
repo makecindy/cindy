@@ -151,7 +151,12 @@ export function createCompanionUploader(deps: {
       for (const [key, row] of server) {
         if (!owned(key)) continue;
         const known = stored[key];
-        stored[key] = known?.local ? { ...known, revision: row.revision } : { hash: row.hash, revision: row.revision };
+        // A live store value under a key whose current value this computer holds in the
+        // preferences (deleted or small, written while the store was off, or restored from there)
+        // is older than that value: clear it, or it would win on the next restore.
+        const supersededHere = !!entry.prefs[key]?.local && row.hash !== TOMBSTONE_HASH;
+        stored[key] = known?.local ? { ...known, revision: row.revision }
+          : { hash: row.hash, revision: row.revision, ...(supersededHere ? { local: true } : {}) };
       }
       entry.stored = stored;
       entry.storeSeeded = true;
@@ -197,11 +202,17 @@ export function createCompanionUploader(deps: {
         store = undefined;
       }
     }
-    // Store keys count even while the store is unavailable: their deletion then travels as a
-    // preference tombstone, which is all a reader without the store sees.
-    for (const [key, entry] of [...Object.entries(deps.state.bot(botId)?.prefs ?? {}), ...Object.entries(deps.state.bot(botId)?.stored ?? {})]) {
+    // Store keys count too, whether or not the store is available: a deletion of a value this
+    // computer kept there also goes into the preferences (below), which is all a reader without
+    // the store sees, so a store tombstone without a preference tombstone still needs one.
+    const known = deps.state.bot(botId);
+    for (const [key, entry] of Object.entries(known?.prefs ?? {})) {
       if (unread.some(prefix => key.startsWith(prefix))) continue;
       if (!desired.has(key) && entry.local && entry.hash !== TOMBSTONE_HASH) desired.set(key, null);
+    }
+    for (const [key, entry] of Object.entries(known?.stored ?? {})) {
+      if (unread.some(prefix => key.startsWith(prefix))) continue;
+      if (!desired.has(key) && entry.local && (entry.hash !== TOMBSTONE_HASH || known?.prefs[key]?.hash !== TOMBSTONE_HASH)) desired.set(key, null);
     }
     let writes = 0;
     let skipped = 0;
@@ -222,9 +233,9 @@ export function createCompanionUploader(deps: {
       if (inPreferences) {
         const prior = deps.state.bot(botId)?.prefs[key];
         const storedHere = deps.state.bot(botId)?.stored?.[key];
-        // A deleted value this computer kept in the store needs a tombstone here too when the store
-        // cannot take the deletion (switched off): the preferences never had the key.
-        const storeDeletionPending = value === null && !store?.active() && !!storedHere?.local && storedHere.hash !== TOMBSTONE_HASH;
+        // A deleted value this computer kept in the store gets a tombstone here too, though the
+        // preferences never had the key: a reader without the store (switched off) must see it.
+        const storeDeletionPending = value === null && !!storedHere?.local;
         if (prior ? prior.hash === hash : value === null && !storeDeletionPending) {
           if (prior && !prior.local && value !== null) deps.state.update(botId, actorId, entry => { entry.prefs[key] = { ...prior, local: true }; });
         } else {
@@ -254,12 +265,6 @@ export function createCompanionUploader(deps: {
         if (!store.active() || STORE_REFUSALS.has(errorCode(error))) {
           // Nothing was written: a pass with only refused store writes counts as settled.
           writes -= 1;
-          // The store went off before it took a deletion: the preferences carry it instead.
-          const pref = deps.state.bot(botId)?.prefs[key];
-          if (value === null && !store.active() && pref?.hash !== TOMBSTONE_HASH) {
-            writes += 1;
-            await writePreference(botId, actorId, key, null, json, hash);
-          }
           if (inPreferences) continue;
           if (store.active()) refused.set(`${actorId}\n${key}`, hash);
           deps.log?.warn('Companion value too large to upload; skipped', { actorId, keyKind: key.split(':')[0], bytes: Buffer.byteLength(json), code: errorCode(error) });

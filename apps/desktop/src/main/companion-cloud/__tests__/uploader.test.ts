@@ -341,7 +341,7 @@ describe('companion store', () => {
     const log = { warn: vi.fn() };
     const uploader = createCompanionUploader({ api, state, readValues: async () => values, log, store });
     const posts = () => calls.filter(call => call.method === 'POST').map(call => `${call.route} ${(call.data as { key?: string }).key ?? ''}`);
-    return { api, store, uploader, prefs, entries, transfer, log, posts, setValues: (next: CompanionPreferenceValue[]) => { values = next; } };
+    return { api, store, uploader, state, prefs, entries, transfer, log, posts, setValues: (next: CompanionPreferenceValue[]) => { values = next; } };
   }
 
   it('keeps a memory too large for the preferences in the store, and a restore reads it back', async () => {
@@ -418,6 +418,35 @@ describe('companion store', () => {
     await expect(t.uploader.syncBot('bot', 'actor', Number.POSITIVE_INFINITY, { requireAll: true })).resolves.toBe(0);
   });
 
+  it('gives a deletion completed in the store a preference tombstone too', async () => {
+    const t = storeSetup();
+    const key = 'companion.memory.v1:big.md';
+    t.setValues([profile('soul'), memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000))]);
+    await t.uploader.syncBot('bot', 'actor');
+    t.setValues([profile('soul')]);
+    await t.uploader.syncBot('bot', 'actor');
+    // Both carry it: a reader whose store is later off still removes its own copy.
+    expect(t.entries.get(key)?.deleted).toBe(true);
+    expect(t.prefs.get(key)).toMatchObject({ value: null });
+  });
+
+  it('clears a stale store value under a key this computer deleted while the store was off', async () => {
+    const options = { off: true };
+    const t = storeSetup(options);
+    const key = 'companion.memory.v1:big.md';
+    const big = memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000));
+    // Another computer left a live large value; this one holds a preference tombstone for the key.
+    t.entries.set(key, { key, revision: 1, seq: 1, hash: canonicalHash(big.value), size: 70_000, deleted: false, value: big.value });
+    t.prefs.set(key, { key, value: null, revision: 2 });
+    t.state.update('bot', 'actor', entry => { entry.prefs[key] = { hash: canonicalHash(null), revision: 2, local: true }; entry.prefsSeeded = true; });
+    t.setValues([profile('soul')]);
+    await t.uploader.syncBot('bot', 'actor');
+    options.off = false;
+    await t.uploader.syncBot('bot', 'actor', Number.POSITIVE_INFINITY, { requireAll: true });
+    expect(t.entries.get(key)?.deleted).toBe(true);
+    expect((await readCompanionRows(t.api, t.store, 'actor')).find(row => row.key === key)?.value).toBeNull();
+  });
+
   it('passes a deletion of a value kept only in the store to the next restore', async () => {
     const t = storeSetup();
     const big = memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000));
@@ -427,7 +456,7 @@ describe('companion store', () => {
     await t.uploader.syncBot('bot', 'actor');
     // Without the deletion the computer taking over would keep (and re-upload) its old copy.
     expect((await readCompanionRows(t.api, t.store, 'actor')).find(row => row.key === big.key))
-      .toMatchObject({ value: null, fromStore: true });
+      .toMatchObject({ value: null });
   });
 
   it('sends a value over the inline limit through the bucket and checks it on the way back', async () => {
