@@ -389,10 +389,10 @@ describe('live compact 1.0.8: cache-safe drains, pointer-only spans, no cross-us
     expect(selectCutIndexes(items, { engine: 'cloud', totalTokens: 40000, maxEnd: 2 })).toBeNull();
     // 低于水位且没在收尾:一律不切。
     expect(selectCutIndexes(items, { engine: 'cloud', totalTokens: 30000, maxEnd: 2 })).toBeNull();
-    // 收尾模式:尽管已经从 40000 往下切,还是要继续切。
+    // 收尾模式不看保留区边界:总量还在水位之上就继续切(这里切到最新一轮)。
     expect(selectCutIndexes(items, { engine: 'cloud', totalTokens: 40000, drain: true, maxEnd: 2 })).toMatchObject({
-      start: 1,
-      end: 2,
+      start: 7,
+      end: 8,
     });
     // 过了紧急线(48000)即使没标 drain 也进入批量切。
     expect(selectCutIndexes(items, { engine: 'cloud', totalTokens: 60000, maxEnd: 2 })).not.toBeNull();

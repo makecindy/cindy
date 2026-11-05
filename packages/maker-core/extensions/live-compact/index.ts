@@ -17,7 +17,8 @@
  *   - Never grows: if the framed summary estimates >= the shadowed span, abort the cut.
  *   - Backup must be written before the card points at it (1.0.5).
  *   - The newest 3 finished tool rounds stay in place, within KEEP_ROUND_TOKENS
- *     (32k) budget; only older spans get cut. Tool results are snapshotted by toolCallId
+ *     (32k) budget; on ordinary turns only older spans get cut. A drain may cut them
+ *     too (otherwise a full keep zone would pin the context above the water line). Tool results are snapshotted by toolCallId
  *     (raw-<hash>.txt + sha256/bytes meta) and the card only cites a verified
  *     pointer; assistant "done/published" wording never counts as evidence.
  *   - Cloud vs local cuts (1.0.8): a cloud provider does not cut on an ordinary turn —
@@ -655,10 +656,10 @@ export function selectCutIndexes(
   const draining = cloud && (options.drain === true || (typeof total === "number" && total >= urgentTokens));
   // 收尾时即使已经低于水位也继续切到这批的下限;平时低于水位一律不切。
   if (options.drain !== true && cloud && typeof total === "number" && total <= keepBudget) return null;
-  // 上游在 drain 时把 maxEnd 换成整条尾巴;本仓保留 maxEnd,否则收尾会把"最近几轮工具结果
-  // 原地保留"这个承诺一起切掉(pi 侧这个保留区是用户可见行为)。
-  // Upstream ignores maxEnd while draining. We keep it: the kept tool rounds must survive a drain.
-  const limit = options.maxEnd === null || options.maxEnd === undefined ? items.length - 1 : options.maxEnd;
+  // 收尾模式下不看保留区边界:收尾的目标是把总量切回水位以下,如果保留区本身就顶满水位,
+  // 守住边界等于永远停在水位之上。普通轮次仍以 maxEnd(保留区之前)为上限。
+  // Upstream parity: a drain may cut into the kept rounds; an ordinary turn may not.
+  const limit = draining ? items.length - 1 : options.maxEnd === null || options.maxEnd === undefined ? items.length - 1 : options.maxEnd;
   if (limit < 0) return null;
   const lastUser = items.reduce((found, item, index) => (item.type === "user" ? index : found), -1);
   const firstUser = items.findIndex((item) => item.type === "user");
@@ -1791,8 +1792,8 @@ export function selectNewestChunk(
   let end = walkOffTail(items, nodes.length - 1, first);
   while (end >= first && !cutOk(() => suffixClean(end))) end -= 1;
 
-  // 1.0.6/1.0.8: 最近 KEEP_ROUNDS 轮已完成的工具结果原地保留(受 KEEP_ROUND_TOKENS 预算约束),
-  // 切点最多只能站在保留区前面。
+  // 1.0.6/1.0.8: 最近 KEEP_ROUNDS 轮已完成的工具结果尽量原地保留(受 KEEP_ROUND_TOKENS 预算约束),
+  // 普通轮次的切点最多站在保留区前面;收尾时这条边界会被越过(见 selectCutIndexes)。
   const rounds = keptToolRounds(entries, KEEP_ROUNDS);
   const kept = chooseKeptSpan(
     rounds,
