@@ -427,6 +427,17 @@ const server = createHostServer({
   providers: () => listProviders({ gateway: gatewayCredentials, ownerId: runtime.owner }),
   // The agent's own capability descriptor; no second catalog is invented here.
   // Gateway credential state, reported from the same facts the runtime uses.
+  // The renderer asks this synchronously at boot; the desktop proxies it from
+  // here so both clients start from the same visibility-owner facts.
+  modelVisibilityClaim: () => ({
+    dataOwnerId: runtime.owner,
+    ownerGeneration: 1,
+    canWriteOwnerScoped: Boolean(runtime.owner),
+    claimed: false,
+    claimedByOtherOwner: false,
+    canInitialize: false,
+    profileOrigin: 'existing',
+  }),
   modelAccess: () => (gatewayCredentials
     ? { state: 'ready', source: 'server', endpoint: gatewayCredentials.endpoint, accountTier: null }
     : { state: 'idle', source: null, endpoint: null, accountTier: null }),

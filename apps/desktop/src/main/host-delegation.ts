@@ -113,6 +113,21 @@ export const PROXIED_CHANNELS: readonly ProxiedChannel[] = [
     body: ([sessionId, clientId]) => ({ sessionId, clientId }),
   },
   {
+    channel: 'maker:usage:model-pricing',
+    path: '/api/usage/model-pricing',
+    body: () => null,
+  },
+  {
+    channel: 'maker:usage:model-pricing-v2',
+    path: '/api/usage/model-pricing',
+    body: () => null,
+  },
+  {
+    channel: 'maker:usage:reference-model-pricing',
+    path: '/api/usage/reference-model-pricing',
+    body: () => null,
+  },
+  {
     channel: 'model-access:get-status',
     path: '/api/model-access',
     body: () => null,
@@ -227,6 +242,24 @@ export function registerHostDelegatedIpc(deps: HostDelegatedIpcDeps): string[] {
     installed.push(entry.channel);
   }
   return installed;
+}
+
+/**
+ * The renderer reads the visibility-owner claim **synchronously** at boot, so the
+ * host value is fetched once and replayed from memory instead of doing network
+ * I/O inside a sendSync handler.
+ */
+export function registerHostDelegatedSync(input: {
+  readonly channel: string;
+  readonly path: string;
+  readonly client: HostClient;
+  readonly ipcMain: { on(channel: string, listener: (event: { returnValue: unknown }) => void): void };
+}): Promise<void> {
+  return input.client.request(input.path).then((claim) => {
+    input.ipcMain.on(input.channel, (event) => {
+      event.returnValue = claim;
+    });
+  });
 }
 
 /**

@@ -462,6 +462,7 @@ import { registerLocalDbIpc } from './localDb/ipc/registerAll';
 import {
   createHostClient,
   registerHostDelegatedIpc,
+  registerHostDelegatedSync,
   resolveHostDelegation,
   startHostEventBridge,
   type HostDelegationConfig,
@@ -6765,6 +6766,17 @@ const registerIpcHandlers = () => {
       const hostClient = createHostClient(clientDelegation);
       const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain });
       console.log(`[bootstrap-electron] client mode proxies: ${installed.join(', ')}`);
+      void registerHostDelegatedSync({
+        channel: 'maker:model-visibility:legacy-owner-claim-sync',
+        path: '/api/model-visibility/claim',
+        client: hostClient,
+        ipcMain,
+      }).catch((error: unknown) => {
+        console.warn(
+          '[bootstrap-electron] client mode visibility claim failed:',
+          error instanceof Error ? error.message : String(error),
+        );
+      });
       startHostEventBridge({
         baseUrl: clientDelegation.baseUrl,
         token: clientDelegation.token,

@@ -25,6 +25,8 @@ CINDY_HOST_API=http://127.0.0.1:3456 pnpm --filter desktop dev
 | `local-db:messages:estimated-value` | `POST /api/messages/estimated-value` |
 | `maker:input:remove` | `POST /api/input/remove` |
 | `model-access:get-status` | `POST /api/model-access` |
+| `maker:usage:model-pricing` / `-v2` / `reference-model-pricing` | `POST /api/usage/*` |
+| `maker:model-visibility:legacy-owner-claim-sync` | `POST /api/model-visibility/claim`（启动时预取，同步回放） |
 | `maker:send` | `POST /api/input/enqueue`（返回 `{accepted:true}`） |
 | `maker:list-active` | `POST /api/sessions/list` |
 | `maker:provider:list` | `POST /api/providers` |
@@ -64,4 +66,4 @@ Orca 协同、记忆与文件工具等仍由 Desktop 内 Runtime 提供；客户
 | `electron-forge start`（dev，`xvfb-run`） | 失败：主进程打包阶段 V8 堆上限 4GB OOM（本机内存受限），未进入应用启动 |
 | 打包产物 `out/Cindy-linux-x64/Cindy`（`--no-sandbox --mock`） | 失败：打包缺 `sharp` 的 linux-x64 原生依赖（`libvips-cpp.so`），属既有打包问题 |
 | `electron-forge start`（dev，8GB 堆，xvfb，修复原生依赖后） | **主进程成功以客户端模式启动**：日志出现 `client mode: delegating to http://127.0.0.1:3456` 与 `client mode proxies: …`（18 个通道），随后 renderer 通过代理读取任务/供应商/能力 |
-| 全通道真机验收 | **未完成**：本机同一 `node_modules` 只能有一份 `better-sqlite3` 原生绑定——Host 需要 Node ABI、Electron 需要 Electron ABI，二者不能同时运行；需要独立 checkout 或预编译双份绑定后复验 |
+| 全通道真机验收 | **未完成**：给 `apps/desktop/node_modules` 放一份 Electron ABI 绑定后，Host 与 Electron 可同时运行，客户端模式能读到任务/供应商/能力；但 renderer 的 `localCatalogSnapshot` 仍以 `code:UNKNOWN` 失败，模型选择器降级，未定位（浏览器端同一路径是通的） |

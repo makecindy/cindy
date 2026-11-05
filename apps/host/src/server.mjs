@@ -132,6 +132,7 @@ export function createHostServer(deps) {
         }
         if (url.pathname === '/api/plugins/list') { send(response, 200, deps.listPlugins()); return; }
         if (url.pathname === '/api/providers') { send(response, 200, await deps.providers()); return; }
+        if (url.pathname === '/api/model-visibility/claim') { send(response, 200, deps.modelVisibilityClaim()); return; }
         if (url.pathname === '/api/model-access') { send(response, 200, deps.modelAccess()); return; }
         if (url.pathname === '/api/usage/model-pricing') { send(response, 200, await deps.modelPricing()); return; }
         if (url.pathname === '/api/usage/reference-model-pricing') { send(response, 200, deps.referenceModelPricing()); return; }
