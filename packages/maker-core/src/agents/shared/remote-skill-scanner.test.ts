@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import type { RemoteAgentFileOps } from '../base-agent.js';
-import { scanRemoteClaudeSkills, scanRemotePiSkills } from './remote-skill-scanner.js';
+import {
+  scanRemoteClaudePluginSkills,
+  scanRemoteClaudeSkills,
+  scanRemotePiSkills,
+} from './remote-skill-scanner.js';
 
 function fakeRemoteFiles(files: Record<string, string>): RemoteAgentFileOps {
   const fileNames = new Set(Object.keys(files));
@@ -141,5 +145,33 @@ describe('remote Skill scanners', () => {
       expect.objectContaining({ name: 'global', scope: 'user', runtimeCommandName: 'skill:global' }),
       expect.objectContaining({ name: 'repo', scope: 'repo', runtimeCommandName: 'skill:repo' }),
     ]));
+  });
+
+  it('discovers enabled user-scoped Claude plugin Skills on the remote host', async () => {
+    const fileOps = fakeRemoteFiles({
+      '$HOME/.claude/plugins/installed_plugins.json': JSON.stringify({
+        plugins: {
+          'alpha@market': [{ scope: 'user', installPath: '$HOME/.claude/plugins/cache/alpha/1.0.0' }],
+          'beta@market': [{ scope: 'project', installPath: '$HOME/work/repo/.claude/plugins/beta' }],
+        },
+      }),
+      '$HOME/.claude/plugins/cache/alpha/1.0.0/.claude-plugin/plugin.json': JSON.stringify({ name: 'alpha' }),
+      '$HOME/.claude/plugins/cache/alpha/1.0.0/skills/browser/SKILL.md': '---\ndescription: Browser skill\n---',
+      '$HOME/work/repo/.claude/plugins/beta/.claude-plugin/plugin.json': JSON.stringify({ name: 'beta' }),
+      '$HOME/work/repo/.claude/plugins/beta/skills/hidden/SKILL.md': '---\ndescription: Project plugin\n---',
+    });
+
+    const skills = await scanRemoteClaudePluginSkills(fileOps);
+
+    // 远端会话同样只应看到 user scope 的插件；project scope 的 beta 属于
+    // 那个项目自己的运行时，不该出现在全局 `/` 菜单。
+    expect(skills).toEqual([
+      expect.objectContaining({
+        name: 'alpha:browser',
+        scope: 'global',
+        source: 'skill',
+        description: 'Browser skill',
+      }),
+    ]);
   });
 });

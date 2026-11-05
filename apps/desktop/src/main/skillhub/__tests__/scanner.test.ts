@@ -180,7 +180,7 @@ describe('scanAllSkills', () => {
       root, '.claude', 'plugins', 'cache', 'alpha', '1.0.0', 'skills', 'browser',
     );
     fs.mkdirSync(path.dirname(skillDir), { recursive: true });
-    fs.symlinkSync(target, skillDir, 'dir');
+    fs.symlinkSync(target, skillDir, process.platform === 'win32' ? 'junction' : 'dir');
     const maker = {
       listCustomizations: vi.fn(async () => ({
         errors: [],

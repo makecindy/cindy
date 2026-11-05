@@ -171,7 +171,11 @@ export function buildSkillList(input: SkillListProjectionInput): ScanResult {
     const realKey = realPathOrNormalized(c.absolutePath);
     const normalizedScope = normalizeScope(c.engine, c.scope);
     const project = normalizedScope === 'project' ? projectForWorkingDir(c.workingDir) : undefined;
-    const dedupeKey = project ? `${realKey}\0project:${project.hash}` : realKey;
+    // 两个插件可以把各自的 Skill 目录软链到同一份物理文件。运行时按插件命名空间
+    // 分别暴露（alpha:browser / beta:browser），投影若只按 realPath 合并就会丢掉
+    // 除第一个之外的命名空间，导致 SkillHub 少条目而 `/` 菜单多条目。
+    const pluginKey = c.pluginName ? `\0plugin:${c.pluginName}` : '';
+    const dedupeKey = (project ? `${realKey}\0project:${project.hash}` : realKey) + pluginKey;
     const existing = seenItems.get(dedupeKey);
     if (existing) {
       existing.all.push(c);
