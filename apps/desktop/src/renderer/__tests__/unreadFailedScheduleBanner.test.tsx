@@ -111,6 +111,19 @@ describe('historical failed schedule notice', () => {
     fireEvent.click(screen.getByText('chat.unreadFailedScheduleBanner.installPlugin'));
     expect(screen.getByTestId('location').textContent).toBe('/plugins?market=p1');
   });
+  // Review (#8957): a remote task's check runs on another computer; this computer's plugin
+  // pages would fix the wrong machine, so the message stays but the action is not offered.
+  it('does not offer the plugin action for a remote task', () => {
+    render(
+      <MemoryRouter>
+        <UnreadFailedScheduleBanner dataOwnerId="owner" sessionId="session" remote
+          latestFailedRun={{ runId: 'failed', firedAt: 1, failureKind: 'precheck',
+            missingPlugin: { ghostId: 'cindy-github', pluginId: 'p1', name: 'GitHub' } }} />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText('chat.unreadFailedScheduleBanner.pluginMissing')).toBeTruthy();
+    expect(screen.queryByText('chat.unreadFailedScheduleBanner.installPlugin')).toBeNull();
+  });
   it('reads on opening even when running or specific errors replace the generic banner', async () => {
     render(<View runIds={['old']} showBanner={false} />);
     await waitFor(() => expect(readIds.has('old')).toBe(true));

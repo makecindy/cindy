@@ -23,6 +23,8 @@ interface BannerProps {
   dataOwnerId: string | null;
   sessionId: string;
   latestFailedRun: FailedScheduleRunSnapshot;
+  /** Remote tasks run on another computer; the plugin pages here would act on this one. */
+  remote?: boolean;
   onDiagnose?: (error: ErrorDiagnosisSource) => void;
   className?: string;
   style?: CSSProperties;
@@ -42,6 +44,7 @@ function FailedScheduleNotice({
   dataOwnerId,
   sessionId,
   latestFailedRun,
+  remote,
   onDiagnose,
   className,
   style,
@@ -98,7 +101,7 @@ function FailedScheduleNotice({
       data-testid="unread-failed-schedule-banner"
       data-banner-kind="unread-failed-schedule"
       message={message}
-      actions={missingPlugin ? <MissingPluginAction plugin={missingPlugin} /> : undefined}
+      actions={missingPlugin && !remote ? <MissingPluginAction plugin={missingPlugin} /> : undefined}
       details={latestFailedRun.errorMsg}
       onDiagnose={onDiagnose && latestFailedRun.errorMsg ? () => onDiagnose({
         message,

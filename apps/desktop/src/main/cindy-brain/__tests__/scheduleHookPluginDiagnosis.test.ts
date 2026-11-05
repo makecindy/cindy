@@ -37,7 +37,7 @@ describe('schedule check blocked by an unavailable plugin', () => {
       message: 'plugin "GitHub" (cindy-github) is not installed',
     },
     {
-      link: 'cindy-github--pr', installed: { name: 'GitHub' }, market: null,
+      link: 'cindy-github--pr', installed: { name: 'GitHub', enabled: false }, market: null,
       expected: { ghostId: 'cindy-github', name: 'GitHub', installed: true },
       message: 'plugin "GitHub" (cindy-github) is not enabled',
     },
@@ -50,6 +50,22 @@ describe('schedule check blocked by an unavailable plugin', () => {
     const hook = await withPreRunHookDiagnosis(blocked, command(link), diagnose);
     expect(hook.missingPlugin).toEqual(expected);
     expect(formatPreRunHookFailure(hook)).toContain(message);
+  });
+
+  // Review (#8957): an enabled plugin whose skill was dropped by an update must not be reported
+  // as "not enabled"; an aborted check must not wait for the market lookup.
+  it('keeps the original error for an enabled plugin and skips diagnosis for aborted checks', async () => {
+    let lookups = 0;
+    const deps = {
+      skillsRoot,
+      findInstalled: () => ({ name: 'GitHub', enabled: true }),
+      lookupMarket: async () => { lookups += 1; return null; },
+    };
+    expect(await diagnoseScheduleHookPlugin(command('cindy-github--pr'), deps)).toBeUndefined();
+    const aborted = { ...blocked, status: 'aborted' as const, aborted: true };
+    const diagnose = async () => { lookups += 1; return { ghostId: 'cindy-github' }; };
+    expect(await withPreRunHookDiagnosis(aborted, command('cindy-github--pr'), diagnose)).toBe(aborted);
+    expect(lookups).toBe(0);
   });
 
   it('leaves failures alone when the plugin skill is present or the script is unrelated', async () => {

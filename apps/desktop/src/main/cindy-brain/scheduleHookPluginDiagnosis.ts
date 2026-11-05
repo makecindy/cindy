@@ -45,7 +45,7 @@ export function findPluginSkillDirInCommand(
 export interface ScheduleHookPluginDiagnosisDeps {
   skillsRoot: string;
   /** 已安装（不论是否启用）的同一插件；未安装返回 null。 */
-  findInstalled(ghostId: string, namespace: string | null): { name: string } | null;
+  findInstalled(ghostId: string, namespace: string | null): { name: string; enabled: boolean } | null;
   /** 市场信息，尽力而为：拿不到返回 null，不影响诊断结论。 */
   lookupMarket(ghostId: string, namespace: string | null): Promise<{ pluginId?: string; name?: string } | null>;
 }
@@ -61,6 +61,8 @@ export async function diagnoseScheduleHookPlugin(
   if (!identity) return undefined;
   const { ghostId, namespace } = identity;
   const installed = deps.findInstalled(ghostId, namespace);
+  // 已启用却缺技能目录（例如插件更新去掉了某项技能）不是「没装/没启用」，不乱下结论。
+  if (installed?.enabled) return undefined;
   const market = await deps.lookupMarket(ghostId, namespace).catch(() => null);
   const name = installed?.name || market?.name;
   return {

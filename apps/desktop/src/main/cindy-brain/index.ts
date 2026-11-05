@@ -3566,7 +3566,9 @@ export async function diagnoseScheduleHookPluginForActiveOwner(
     skillsRoot: path.join(ghostSkillPluginRoot(manager.approvalStateRoot()), 'skills'),
     findInstalled: (ghostId, namespace) => {
       const resolved = resolveInstalledGhost(manager.list(), ghostId, namespace);
-      return resolved.status === 'unique' ? { name: resolved.ghost.manifest.name } : null;
+      return resolved.status === 'unique'
+        ? { name: resolved.ghost.manifest.name, enabled: resolved.ghost.enabled }
+        : null;
     },
     lookupMarket: async (ghostId, namespace) => {
       const pluginId = getPluginMarketLedger().installationForPlugin({ ghostId, namespace })?.pluginId;

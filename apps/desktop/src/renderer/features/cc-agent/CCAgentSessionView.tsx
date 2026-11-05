@@ -5850,6 +5850,7 @@ function CCAgentSessionContent({
                   dataOwnerId={dataOwnerId}
                   sessionId={sessionId}
                   latestFailedRun={scheduleSessionInfo.latestFailedRun}
+                  remote={rightSidebarDeviceLinkDeviceId !== null}
                   onDiagnose={canDiagnoseError ? handleDiagnoseError : undefined}
                   style={{ width: inputWidth }}
                   className="py-1"

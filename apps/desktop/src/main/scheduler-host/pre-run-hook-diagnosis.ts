@@ -16,7 +16,8 @@ export async function withPreRunHookDiagnosis(
   command: string,
   diagnose: DiagnosePreRunHookFailure | undefined,
 ): Promise<PreRunHookRunResult> {
-  if (hook.decision !== 'block' || !diagnose) return hook;
+  // 被暂停/删除中止的检查不需要诊断，也不能为查市场名多等几秒。
+  if (hook.decision !== 'block' || hook.aborted || hook.status === 'aborted' || !diagnose) return hook;
   try {
     const missingPlugin = await diagnose(command);
     return missingPlugin ? { ...hook, missingPlugin } : hook;
