@@ -49,6 +49,7 @@
       ok: false, serviceMode: Object.freeze({}), provider: 'openai-realtime-whisper',
       providerModel: '', auth: 'api-key', settingsTab: 'api-keys', error: 'not_available_on_host',
     }),
+    rightSidebarTabs: Object.freeze({ tabs: Object.freeze([]), activeTabId: null }),
     voiceModelSelection: Object.freeze({ serviceMode: null, asrProvider: null, refinerProvider: null, refinerModel: null }),
     appShortcuts: Object.freeze({ overrides: Object.freeze({}), platform: 'linux', globalFailures: Object.freeze([]) }),
   });
@@ -261,6 +262,7 @@
     'localDb.sessions.get': (args) => rpc('/sessions/get', { sessionId: args?.[0] }),
     'localDb.sessions.list': () => rpc('/sessions/list'),
     'localDb.sessions.messages': async (args) => rpc('/sessions/messages', args),
+    'localDb.rightSidebarTabs.list': () => STATIC.rightSidebarTabs,
     'localDb.messages.list': (args) => rpc('/messages/list', { sessionId: args?.[0], limit: args?.[1]?.limit }),
     'localDb.messages.estimatedSessionValue': (args) => rpc('/messages/estimated-value', { sessionId: args?.[0] }),
     'localDb.messages.historyView': (args) => rpc('/messages/history-view', { sessionId: args?.[0], before: args?.[1]?.before ?? null }),
