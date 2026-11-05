@@ -349,9 +349,14 @@ import {
   listRestorableBuiltinGhosts,
   isTrustedBuiltinSeedSource,
   provisionBuiltinGhosts,
+  readBuiltinSeededIds,
+  readBuiltinSeedVersion,
   readBuiltinTombstones,
   recordBuiltinTombstone,
   renameBuiltinTombstone,
+  resolveBuiltinInstalledDir,
+  seedIsNewerThanStore,
+  type BuiltinStoreInstallFact,
   type ProvisionIdentity,
 } from './builtinGhostProvisioner.js';
 import { getAccessToken, getAuthState, onAuthStateChange } from '../authManager.js';
@@ -636,6 +641,7 @@ import {
 } from '../plugin-market/ledger.js';
 import {
   installedMarketManifestIdentity,
+  verifyInstalledMarketManifest,
   type InstalledMarketManifestIdentity,
 } from '../plugin-market/installedManifestIdentity.js';
 import { createOrganizationPrefixStore } from '../plugin-market/organizationPrefixStore.js';
@@ -1924,6 +1930,7 @@ async function reconcileBuiltinGhostsLocked(
       },
       publishSeed: (id, seedDir, options) =>
         mutation.publishTrustedBundledSeed(id, seedDir, options),
+      storeInstall: builtinSeedStoreInstall,
       onApplyStart: () => {
         tipShown = true;
         broadcastGhostProvisioning(true);
@@ -1981,7 +1988,10 @@ async function reconcileBuiltinGhostsLocked(
           // `.disabled` 镜像的读数只作停用方向的输入:receipt 已钉停用时,镜像被
           // 外部移除不会把插件翻回启用(合并规则见 approveTrustedBundledInstall
           // 头注释;重新启用只有用户显式 setEnabled 一条路)。
-          !hasDisabledMarker(path.join(brainRootDir(), manifest.id)),
+          !hasDisabledMarker(
+            resolveBuiltinInstalledDir(brainRootDir(), manifest.id) ??
+              path.join(brainRootDir(), manifest.id),
+          ),
           { sourceDir: outcome.approvedSourceDirs[manifest.id] },
         )) || approvalChanged;
       // 本会话内被撤销熄灯的常驻实例,批准补回即恢复点火(隔离态下批准必然重写,
@@ -3903,6 +3913,29 @@ export async function diagnoseScheduleHookPluginForActiveOwner(
       return { pluginId, ...(name ? { name } : {}) };
     },
   });
+}
+
+/**
+ * 内置种子对照的同 id 商店安装(builtinGhostProvisioner 的 storeInstall):只认服务端市场
+ * 已装的根 namespace 记录。账本读不了时抛错,播种把该种子按本轮失败处理、不动已装字节。
+ */
+function builtinSeedStoreInstall(id: string, installedDir: string): BuiltinStoreInstallFact | null {
+  const record = getPluginMarketLedger().installationForPlugin({ ghostId: id, namespace: null });
+  if (
+    !record?.installed ||
+    record.ghostId !== id ||
+    (record.source !== 'market' && record.source !== 'legacy-adopted') ||
+    (hasDeliveryNamespace(record) && record.namespace !== null)
+  ) {
+    return null;
+  }
+  const snapshot = readInstalledGhostManifestSnapshot(installedDir, GHOST_INSTALL_MANIFEST_MAX_BYTES);
+  return {
+    version: record.version,
+    ownsInstalledBytes:
+      snapshot.ok &&
+      verifyInstalledMarketManifest(record, installedMarketManifestIdentity(snapshot.snapshot)),
+  };
 }
 
 /** Reuse the verified install ledger; an official label never establishes distribution identity. */
@@ -8979,6 +9012,20 @@ async function uninstallGhostAndCleanupLocked(
 /** 市场默认安装必须尊重用户对内置插件的显式卸载选择。 */
 export function isBuiltinGhostRemovedByUser(id: string): boolean {
   return readBuiltinTombstones(brainRootDir()).includes(id);
+}
+
+/**
+ * 商店 Release 能否把内置播种管理的实例(seeded 台账内)换回商店包:种子已撤,或当前种子
+ * 不比该 Release 新(相同取商店)。不归播种管理、台账读不了时都不放行。
+ */
+export function builtinSeedYieldsToStoreVersion(id: string, storeVersion: string): boolean {
+  try {
+    if (!readBuiltinSeededIds(brainRootDir()).includes(id)) return false;
+  } catch {
+    return false;
+  }
+  const seedVersion = readBuiltinSeedVersion(builtinSeedRootDirs(), id);
+  return seedVersion === null || !seedIsNewerThanStore(seedVersion, storeVersion);
 }
 
 /**
