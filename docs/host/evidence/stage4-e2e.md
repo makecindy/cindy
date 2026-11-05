@@ -63,3 +63,21 @@ FINAL OK                       just now
 ```
 
 说明 Host 的交互 broker 在真实 Agent 回合中可用（发布请求、接收应答、继续执行）。
+
+## 6. Electron 客户端模式（验收 ③）
+
+Host 运行中、**不设置任何环境变量**启动 dev Electron：
+
+```
+[bootstrap-electron] client mode requested at startup
+[bootstrap-electron] client mode: delegating to http://127.0.0.1:3456
+[bootstrap-electron] client mode proxies: local-db:sessions:list, …（21 条）
+[bootstrap-electron] client mode keeps the host handler for …（42 次重复注册被挡下）
+```
+
+- 全程 0 个 `ERROR`/`FATAL`；窗口创建成功（`main-window-created t+7495ms`）。
+- 退出阶段唯一相关日志：`maker.shutdown failed (or not ready): cindy-host owns the runtime; this process is a client`
+  —— 反向证明本进程从未装配 Runtime。
+- 发现机制：Host 启动时写 `<dataDir>/host-endpoint.json`（pid + loopback URL），Desktop 校验 pid
+  存活后自动接管；`CINDY_HOST_API` 仍可显式指定。
+- 已知回退：Host 未运行时 Desktop 仍用内嵌 Runtime（自动拉起 Host 为 TODO）。
