@@ -1,5 +1,9 @@
 /** Window-local owners share the host's window-scoped session topic. */
-interface Subscription { owners: Set<symbol>; pending: number }
+interface Subscription {
+  owners: Set<symbol>;
+  pending: number;
+  ack?: Promise<void>;
+}
 const subscriptions = new Map<string, Subscription>();
 
 export function createRemoteSessionSubscription(deviceId: string, sessionId: string) {
@@ -13,18 +17,31 @@ export function createRemoteSessionSubscription(deviceId: string, sessionId: str
     void window.electronAPI.deviceLink.unsubscribe(deviceId, topics).catch(() => undefined);
   };
   return {
-    // Repeated calls deliberately forward: recovery needs a fresh remote ACK.
+    // New owners share the current ACK, including after it settles. Repeating
+    // subscribe on an existing owner is recovery and needs a fresh remote ACK.
     subscribe() {
       if (released) return Promise.resolve();
-      const entry = subscriptions.get(key) ?? { owners: new Set<symbol>(), pending: 0 };
+      const entry: Subscription = subscriptions.get(key) ?? { owners: new Set<symbol>(), pending: 0 };
       subscriptions.set(key, entry);
+      const recovering = entry.owners.has(token);
       entry.owners.add(token);
+      if (!recovering && entry.ack) return entry.ack;
       entry.pending++;
-      return window.electronAPI.deviceLink.subscribe(deviceId, topics).finally(() => {
-        entry.pending--;
-        // The last ACK can settle after its owner leaves or is replaced.
-        releaseIfUnused(entry);
-      }).then(() => undefined);
+      const ack: Promise<void> = window.electronAPI.deviceLink.subscribe(deviceId, topics)
+        .then(() => undefined)
+        .catch((error) => {
+          // A failed acquisition must not poison a later owner's retry. An
+          // older failure must not discard a newer recovery's ACK either.
+          if (entry.ack === ack) entry.ack = undefined;
+          throw error;
+        })
+        .finally(() => {
+          entry.pending--;
+          // The last ACK can settle after its owner leaves or is replaced.
+          releaseIfUnused(entry);
+        });
+      entry.ack = ack;
+      return ack;
     },
     release() {
       if (released) return;
