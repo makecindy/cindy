@@ -370,7 +370,7 @@
         "update-btn-border": "#3C3F43",
         "update-btn-bg": "#3C3F43",
         "update-btn-text": "#FCFCFC",
-        "update-btn-hover": "oklch(from var(--update-btn-bg) calc(clamp(0, (l - 0.25) * 1000, 1) * (l - 0.045) + (1 - clamp(0, (l - 0.25) * 1000, 1)) * 0.27) c h)",
+        "update-btn-hover": "oklch(from var(--update-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.045) + (1 - sign(max(0, l - 0.25))) * 0.27) c h)",
         "accent-foreground": "0.0 0.0% 0.0% / 0.88",
         "panel-bg": "#F2F2ED",
         "primary": "214.3 5.5% 24.9%",
@@ -437,7 +437,7 @@
         "segmented-selected-border": "#F0F0EB",
         "segmented-option-fg": "#6B6B67",
         "segmented-hover-bg": "#E4E4DF",
-        "update-btn-pressed": "oklch(from var(--update-btn-bg) calc(clamp(0, (l - 0.25) * 1000, 1) * (l - 0.085) + (1 - clamp(0, (l - 0.25) * 1000, 1)) * 0.355) c h)"
+        "update-btn-pressed": "oklch(from var(--update-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.085) + (1 - sign(max(0, l - 0.25))) * 0.355) c h)"
       }
     },
     "cindy-dark": {
@@ -557,7 +557,7 @@
         "update-btn-border": "#EEEEEE",
         "update-btn-bg": "#EEEEEE",
         "update-btn-text": "#151515",
-        "update-btn-hover": "oklch(from var(--update-btn-bg) calc(clamp(0, (l - 0.25) * 1000, 1) * (l - 0.045) + (1 - clamp(0, (l - 0.25) * 1000, 1)) * 0.27) c h)",
+        "update-btn-hover": "oklch(from var(--update-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.045) + (1 - sign(max(0, l - 0.25))) * 0.27) c h)",
         "accent-foreground": "0.0 0.0% 100.0% / 0.82",
         "panel-bg": "#181818",
         "primary": "0.0 0.0% 93.3%",
@@ -621,7 +621,7 @@
         "segmented-selected-border": "#3B3B3B",
         "segmented-option-fg": "#AAAAAA",
         "segmented-hover-bg": "#292929",
-        "update-btn-pressed": "oklch(from var(--update-btn-bg) calc(clamp(0, (l - 0.25) * 1000, 1) * (l - 0.085) + (1 - clamp(0, (l - 0.25) * 1000, 1)) * 0.355) c h)"
+        "update-btn-pressed": "oklch(from var(--update-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.085) + (1 - sign(max(0, l - 0.25))) * 0.355) c h)"
       }
     },
     "default-dark": {

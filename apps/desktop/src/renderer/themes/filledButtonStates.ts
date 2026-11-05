@@ -5,10 +5,10 @@
  * 浅色悬停 -0.051 / 按下 -0.091，深色 -0.036 / -0.079。
  * 底色亮度低于 0.25 时已压不出可见差异，改抬到固定灰阶。
  *
- * CSS 没有条件表达式，用 clamp 把 `l > 0.25` 变成 0 / 1 的开关。
+ * CSS 没有条件表达式，用 sign 把 `l > 0.25` 变成只取 0 / 1 的开关，阈值两侧不会混合出中间亮度。
  */
 function filledButtonState(base: string, step: number, liftTo: number): string {
-  const isLight = 'clamp(0, (l - 0.25) * 1000, 1)';
+  const isLight = 'sign(max(0, l - 0.25))';
   return `oklch(from ${base} calc(${isLight} * (l - ${step}) + (1 - ${isLight}) * ${liftTo}) c h)`;
 }
 

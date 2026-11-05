@@ -18,6 +18,7 @@ import { describe, expect, it } from 'vitest';
 
 import { colorRegistry } from '../color-registry';
 import '../colors';
+import { filledButtonHover, filledButtonPressed } from '../filledButtonStates';
 import { builtinThemes } from '../registry';
 import { resolveThemeValue } from '../theme-service';
 import type { Theme } from '../types';
@@ -57,12 +58,18 @@ const RGBA_RE = /^rgba?\(\s*([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\s*
 const HSL_VAR_RE = /^hsl\(var\(--([a-z0-9-]+)\)\)$/;
 // themes/filledButtonStates.ts 的产物；形态变化时这里 fail closed，守卫会红。
 const FILLED_STATE_RE =
-  /^oklch\(from (.+?) calc\(clamp\(0, \(l - 0\.25\) \* 1000, 1\) \* \(l - ([\d.]+)\) \+ \(1 - clamp\(0, \(l - 0\.25\) \* 1000, 1\)\) \* ([\d.]+)\) c h\)$/;
+  /^oklch\(from (.+?) calc\(sign\(max\(0, l - 0\.25\)\) \* \(l - ([\d.]+)\) \+ \(1 - sign\(max\(0, l - 0\.25\)\)\) \* ([\d.]+)\) c h\)$/;
 const HSL_TRIPLET_RE = /^([\d.]+)\s+([\d.]+)%\s+([\d.]+)%(?:\s*\/\s*([\d.]+))?$/;
 
 const toLinear = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
 const toGamma = (c: number) => (c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055);
 const clampByte = (c: number) => Math.min(255, Math.max(0, c * 255));
+
+/** 逐项对应 filledButtonStates.ts 的 calc；表达式形态变化时 FILLED_STATE_RE 先红。 */
+function filledStateLightness(L: number, step: number, liftTo: number): number {
+  const isLight = Math.sign(Math.max(0, L - 0.25));
+  return isLight * (L - step) + (1 - isLight) * liftTo;
+}
 
 /** 在 OKLab 里改亮度（色度与色相不变，等价于 OKLCH 只动 L）。 */
 function applyFilledState(color: Rgba, step: number, liftTo: number): Rgba {
@@ -75,7 +82,7 @@ function applyFilledState(color: Rgba, step: number, liftTo: number): Rgba {
   const L = 0.2104542553 * lms[0] + 0.793617785 * lms[1] - 0.0040720468 * lms[2];
   const A = 1.9779984951 * lms[0] - 2.428592205 * lms[1] + 0.4505937099 * lms[2];
   const B = 0.0259040371 * lms[0] + 0.7827717662 * lms[1] - 0.808675766 * lms[2];
-  const next = L > 0.25 ? L - step : liftTo;
+  const next = filledStateLightness(L, step, liftTo);
   const l = (next + 0.3963377774 * A + 0.2158037573 * B) ** 3;
   const m = (next - 0.1055613458 * A - 0.0638541728 * B) ** 3;
   const s = (next - 0.0894841775 * A - 1.291485548 * B) ** 3;
@@ -195,6 +202,21 @@ describe('填充按钮的按下与悬停同向（DESIGN.md §4 Filled button sta
       });
     }
   }
+
+  // 自定义主题的底色可以落在任何亮度，阈值附近不能混合出反向的中间值。
+  it('亮度阈值两侧都同向', () => {
+    const lightnessOf = (expression: string, L: number) => {
+      const parts = FILLED_STATE_RE.exec(expression);
+      if (!parts) throw new Error(`填充按钮状态表达式形态已变化: ${expression}`);
+      return filledStateLightness(L, Number(parts[2]), Number(parts[3]));
+    };
+    for (let i = 2400; i <= 2600; i += 1) {
+      const L = i / 10000;
+      const hover = lightnessOf(filledButtonHover('var(--x)'), L);
+      const pressed = lightnessOf(filledButtonPressed('var(--x)'), L);
+      expect(Math.sign(pressed - hover), `L=${L}`).toBe(Math.sign(hover - L));
+    }
+  });
 });
 
 describe('DS-4 · Button 状态梯在每个内置主题都可区分', () => {
