@@ -453,19 +453,26 @@ it('accepts ordinary name prefixes while retaining member publisher identity pro
 });
 
 
-it('keeps an account-free local copy usable beside a same-ID account-managed market copy', () => {
+it('keeps an account-free local copy usable beside a same-ID account-managed market copy', async () => {
   const base = { manifest: { schemaVersion: 3 as const, id: 'helper', name: 'Helper', version: '1.0.0', kind: 'chip' as const, entry: 'main.js' },
     namespaceState: 'confirmed' as const, enabled: true, approval: { state: 'approved' as const, revision: 'receipt' } };
   const local = { ...base, namespace: 'local', instanceKey: '_ns__local__helper', dir: '/plugins/_ns/local/helper' };
   const root = { ...base, namespace: null, instanceKey: '_root__helper', dir: '/plugins/_ns/_root/helper', manifest: { ...base.manifest, cindy: { image: ['generate'] } } };
   const manager = { list: () => [root, local], findInstalledInstance: (id: string) => [root, local].find(ghost => ghost.instanceKey === id) };
-  const create = createGhostProductionCallbacks<{ findGhostForInstanceId(id: string): InstalledGhost | null }>({ functions: ['isGhostAvailableForActiveSession', 'availableGhosts', 'findGhostForInstanceId'] });
+  const create = createGhostProductionCallbacks<{
+    findGhostForInstanceId(id: string): InstalledGhost | null;
+    listAvailableGhostsAsync(): Promise<InstalledGhost[]>;
+  }>({ functions: ['isGhostAvailableForActiveSession', 'availableGhosts', 'findGhostForInstanceId', 'listAvailableGhostsAsync'] });
   const callbacks = create({ managerSingleton: manager, getGhostManager: () => manager,
     isAppSessionBoundaryPending: () => false, getAppCapabilities: () => ({ canUseCindyAccountServices: false }),
     findInstalledGhostByInstanceId, ghostRequiresCindyAccount,
+    listInstalledGhostsAsync: async () => [root, local],
   });
   expect(callbacks.findGhostForInstanceId(local.instanceKey)).toEqual(local);
   expect(callbacks.findGhostForInstanceId(root.instanceKey)).toBeNull();
+  const rescans = vi.spyOn(manager, 'list');
+  await expect(callbacks.listAvailableGhostsAsync()).resolves.toEqual([local]);
+  expect(rescans).not.toHaveBeenCalled();
 });
 
 

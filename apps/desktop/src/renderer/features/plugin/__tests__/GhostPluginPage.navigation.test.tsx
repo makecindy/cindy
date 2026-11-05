@@ -248,6 +248,36 @@ it('keeps linked computer and project scope in the page heading without changing
   expect(screen.getByText(detail.name)).toBe(recommended);
 });
 
+// Unit: another window's project toggle must update the real detail switch
+// without a global installed-list broadcast or another synchronous policy read.
+it('updates the selected project from a scoped push without refreshing unrelated projects', async () => {
+  const installed: InstalledGhost = {
+    manifest: { ...detail.manifest, name: 'Scoped Plugin' },
+    dir: path.join('plugins', detail.ghostId), enabled: true,
+    approval: { state: 'approved', revision: 'scoped-revision' },
+  };
+  let push!: (policy: { workdirKey: string; disabled: string[] }) => void;
+  const workdirPrefsSync = vi.fn(() => ({ disabled: [], workdirKey: '/fixture/Cindy' }));
+  Object.assign(window.electronAPI, { showOpenDirectoryDialog: async () => ({ canceled: false, path: '/fixture/Cindy/' }) });
+  Object.assign(window.electronAPI.ghosts, {
+    listSync: () => ({ ghosts: [installed] }), workdirPrefsSync,
+    onWorkdirPrefsChanged: (callback: typeof push) => { push = callback; return () => {}; },
+  });
+  render(page('/plugins'));
+  fireEvent.keyDown(screen.getByRole('button', { name: 'settings.ghosts.remote.device' }), { key: 'ArrowDown' });
+  fireEvent.keyDown(await screen.findByRole('menuitem', { name: 'settings.ghosts.scopePicker.ariaLabel' }), { key: 'ArrowRight' });
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.ghosts.scopePicker.browse' }));
+  await screen.findByText('settings.ghosts.projectBanner.desc');
+  fireEvent.click(await screen.findByText('Scoped Plugin'));
+  const control = await screen.findByRole('switch', { name: 'settings.ghosts.enableAria' });
+  expect(control.getAttribute('aria-checked')).toBe('true');
+  act(() => push({ workdirKey: '/other', disabled: [detail.ghostId] }));
+  expect(control.getAttribute('aria-checked')).toBe('true');
+  act(() => push({ workdirKey: '/fixture/Cindy', disabled: [detail.ghostId] }));
+  expect(control.getAttribute('aria-checked')).toBe('false');
+  expect(workdirPrefsSync).toHaveBeenCalledOnce();
+});
+
 async function openFromCatalog() {
   const plugin = await screen.findByText(detail.name);
   const catalog = screen.getByRole('main');
