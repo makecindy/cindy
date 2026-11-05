@@ -1552,7 +1552,7 @@ struct AgentIslandCompactReminder: Codable {
 }
 
 /// One plan's remaining quota; main decides every value (see `AgentIslandQuotaItem` in
-/// `shared/agentIsland.ts`), including the nominal `width` both sides reserve.
+/// `shared/agentIsland.ts`), including the nominal `width` used to decide what fits.
 struct AgentIslandQuotaItem: Codable, Equatable, Identifiable {
   let id: String
   let logoSvg: String
@@ -1678,8 +1678,7 @@ private let expandedIslandTopPadding: CGFloat = 7
 private let expandedIslandBodySpacing: CGFloat = 4
 private let expandedIslandBottomPadding: CGFloat = 16
 private let compactIslandBaseWidth: CGFloat = 210
-/// Idle pill without a notch: padding, the 16pt mascot and its gap. Mirrors
-/// `AGENT_ISLAND_COMPACT_IDLE_QUOTA_CHROME`.
+/// Idle pill without a notch: padding, the 16pt mascot and its gap.
 private let compactIdleQuotaChrome: CGFloat = 11 * 2 + 16 + 6
 private let compactIslandMinContentWidth: CGFloat = 80
 private let compactCollapseTrailingReservedWidth: CGFloat = 100
@@ -2143,17 +2142,13 @@ struct AgentIslandLayout: Equatable {
     let compactBadgeWidth = !expanded && layoutScreenMetrics.hasNotch && hasSession
       ? PillBadge.intrinsicWidth(pillSnapshot: state.pillSnapshot, compact: true)
       : 0
-    let idleQuotaWidth = !expanded && !hasSession
-      ? AgentIslandQuotaRow.compactReservedWidth(items: state.displayQuota, hasNotch: layoutScreenMetrics.hasNotch)
-      : 0
     let baseWidth = computeWidth(
       expanded: expanded,
       hasSession: hasSession,
       availableFrameWidth: availableFrameWidth,
       screenMetrics: layoutScreenMetrics,
       preferredContentWidth: preferredContentWidth,
-      compactBadgeWidth: compactBadgeWidth,
-      idleQuotaWidth: idleQuotaWidth
+      compactBadgeWidth: compactBadgeWidth
     )
     // A hidden island reveals only enough room for its existing icon and count.
     // Wider user preferences stay unchanged, and the saved width is never rewritten.
@@ -2191,8 +2186,7 @@ struct AgentIslandLayout: Equatable {
     availableFrameWidth: CGFloat,
     screenMetrics: AgentIslandScreenMetrics,
     preferredContentWidth: CGFloat?,
-    compactBadgeWidth: CGFloat,
-    idleQuotaWidth: CGFloat = 0
+    compactBadgeWidth: CGFloat
   ) -> CGFloat {
     let idleExpandedWidth: CGFloat = 340
     let carrierInset = expanded ? expandedIslandCarrierExpandedInset : compactIslandCarrierInset
@@ -2213,15 +2207,13 @@ struct AgentIslandLayout: Equatable {
         maxWidth: maxWidth,
         hasSession: hasSession,
         screenMetrics: screenMetrics,
-        compactBadgeWidth: compactBadgeWidth,
-        idleQuotaWidth: idleQuotaWidth
+        compactBadgeWidth: compactBadgeWidth
       )
     }
     let defaultWidth = defaultCompactWidth(
       hasSession: hasSession,
       screenMetrics: screenMetrics,
-      compactBadgeWidth: compactBadgeWidth,
-      idleQuotaWidth: idleQuotaWidth
+      compactBadgeWidth: compactBadgeWidth
     )
     return min(preferred ?? defaultWidth, availableWidth)
   }
@@ -2251,15 +2243,12 @@ struct AgentIslandLayout: Equatable {
     compactBadgeWidth + hardwareNotchBadgeReservedInset
   }
 
-  /// Mirrors `getAgentIslandDefaultContentWidth` in `shared/agentIsland.ts`.
   static func defaultCompactWidth(
     hasSession: Bool,
     screenMetrics: AgentIslandScreenMetrics,
-    compactBadgeWidth: CGFloat = 0,
-    idleQuotaWidth: CGFloat = 0
+    compactBadgeWidth: CGFloat = 0
   ) -> CGFloat {
     let notchWidth = CGFloat(screenMetrics.notchWidth)
-    let quotaWidth = hasSession ? 0 : idleQuotaWidth
     if screenMetrics.hasNotch {
       let baseExtra = hasSession
         ? AgentIslandScreenMetricsConfig.compactHardwareActiveExtraWidth
@@ -2269,16 +2258,11 @@ struct AgentIslandLayout: Equatable {
       let badgeExtra = hasSession
         ? hardwareNotchBadgeSideWidth(compactBadgeWidth: compactBadgeWidth) * 2
         : 0
-      // Idle quota sits on the trailing side, mirrored like the badge.
-      let quotaExtra = quotaWidth > 0
-        ? hardwareNotchBadgeSideWidth(compactBadgeWidth: quotaWidth) * 2
-        : 0
-      let extra = max(baseExtra, badgeExtra, quotaExtra)
+      let extra = max(baseExtra, badgeExtra)
       return max(compactIslandBaseWidth, notchWidth + extra)
     }
     let extra = hasSession ? AgentIslandScreenMetricsConfig.compactSimulatedActiveExtraWidth : 0
-    let quotaContentWidth = quotaWidth > 0 ? quotaWidth + compactIdleQuotaChrome : 0
-    return max(compactIslandBaseWidth, notchWidth + extra, quotaContentWidth)
+    return max(compactIslandBaseWidth, notchWidth + extra)
   }
 
   static func snappedCompactHardwareWidth(
@@ -2287,8 +2271,7 @@ struct AgentIslandLayout: Equatable {
     maxWidth: CGFloat,
     hasSession: Bool,
     screenMetrics: AgentIslandScreenMetrics,
-    compactBadgeWidth: CGFloat = 0,
-    idleQuotaWidth: CGFloat = 0
+    compactBadgeWidth: CGFloat = 0
   ) -> CGFloat {
     guard screenMetrics.hasNotch else {
       return clampedWidth
@@ -2308,8 +2291,7 @@ struct AgentIslandLayout: Equatable {
         defaultCompactWidth(
           hasSession: hasSession,
           screenMetrics: screenMetrics,
-          compactBadgeWidth: compactBadgeWidth,
-          idleQuotaWidth: idleQuotaWidth
+          compactBadgeWidth: compactBadgeWidth
         )
       )
     )
@@ -3240,8 +3222,9 @@ enum AgentIslandQuotaLogos {
   }
 }
 
-/// Remaining quota per plan: logo and amount, in the menu bar's order. Chips that do not fit
-/// `maxWidth` are left out from the end, using the nominal widths main sent.
+/// Remaining quota per plan: logo and amount, in the menu bar's order. The island never
+/// widens for it (the width is the user's): chips that do not fit `maxWidth` are left out
+/// from the end, using the nominal widths main sent.
 struct AgentIslandQuotaRow: View {
   let items: [AgentIslandQuotaItem]
   let maxWidth: CGFloat
@@ -3250,16 +3233,6 @@ struct AgentIslandQuotaRow: View {
   static let logoSize: CGFloat = 10
   static let logoGap: CGFloat = 3
   static let chipSpacing: CGFloat = 8
-  static let compactMaxItems = 4
-  static let compactHardwareMaxItems = 2
-
-  /// Mirrors `getAgentIslandCompactQuotaWidth`: room the idle pill makes for its first chips.
-  static func compactReservedWidth(items: [AgentIslandQuotaItem], hasNotch: Bool) -> CGFloat {
-    let reserved = items.prefix(hasNotch ? compactHardwareMaxItems : compactMaxItems)
-    guard !reserved.isEmpty else { return 0 }
-    return reserved.reduce(CGFloat(0)) { $0 + CGFloat($1.width) }
-      + chipSpacing * CGFloat(reserved.count - 1)
-  }
 
   static func fitting(items: [AgentIslandQuotaItem], maxWidth: CGFloat) -> [AgentIslandQuotaItem] {
     var used: CGFloat = 0
@@ -6361,8 +6334,7 @@ final class AgentIslandController {
         AgentIslandLayout.defaultCompactWidth(
           hasSession: model.state.totalCount > 0,
           screenMetrics: model.screenMetrics,
-          compactBadgeWidth: compactBadgeWidth,
-          idleQuotaWidth: compactIdleQuotaWidth
+          compactBadgeWidth: compactBadgeWidth
         )
       )
     )
@@ -6443,21 +6415,8 @@ final class AgentIslandController {
       maxWidth: maxWidth,
       hasSession: model.state.totalCount > 0,
       screenMetrics: model.screenMetrics,
-      compactBadgeWidth: compactBadgeWidth,
-      idleQuotaWidth: compactIdleQuotaWidth
+      compactBadgeWidth: compactBadgeWidth
     )
-  }
-
-  /// Width the idle hardware-notch pill reserves for quota; like the badge, only the
-  /// centered notch layout snaps to it.
-  private var compactIdleQuotaWidth: CGFloat {
-    guard model.hardwareNotchLayoutEnabled,
-      model.screenMetrics.hasNotch,
-      model.state.totalCount == 0
-    else {
-      return 0
-    }
-    return AgentIslandQuotaRow.compactReservedWidth(items: model.state.displayQuota, hasNotch: true)
   }
 
   /// Width reserved for the compact count badge in the current snapshot, used to keep
@@ -6492,8 +6451,7 @@ final class AgentIslandController {
     let badgeAwareBasicWidth = AgentIslandLayout.defaultCompactWidth(
       hasSession: hasSession,
       screenMetrics: model.screenMetrics,
-      compactBadgeWidth: compactBadgeWidth,
-      idleQuotaWidth: compactIdleQuotaWidth
+      compactBadgeWidth: compactBadgeWidth
     )
     guard abs(contentWidth - badgeAwareBasicWidth) <= compactWidthSnapTolerance else {
       return contentWidth

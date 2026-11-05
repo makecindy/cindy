@@ -2537,7 +2537,6 @@ export class AgentIslandService {
       // Keep the carrier wide enough for the native count badge; without this the
       // native side's own reservation gets clamped away and the badge is clipped.
       pillSnapshot: displayState.pillSnapshot,
-      quota: displayState.quota,
     });
     const minimumContentWidth = getAgentIslandMinimumContentWidth({
       expanded,
@@ -2552,7 +2551,6 @@ export class AgentIslandService {
         screenMetrics,
         minimumContentWidth,
         pillSnapshot: displayState.pillSnapshot,
-        quota: displayState.quota,
       })
       : null;
     return computeAgentIslandCarrierSize(
@@ -2795,7 +2793,6 @@ export class AgentIslandService {
     screenMetrics: AgentIslandScreenLayoutMetrics | null;
     minimumContentWidth: number;
     pillSnapshot?: AgentIslandPillSnapshot | null;
-    quota?: readonly AgentIslandQuotaItem[] | null;
   }): number {
     if (input.expanded) {
       return input.desiredWidth;
@@ -2813,7 +2810,6 @@ export class AgentIslandService {
       hasSession: input.hasSession,
       screenMetrics: input.screenMetrics,
       pillSnapshot: input.pillSnapshot,
-      quota: input.quota,
     });
   }
 

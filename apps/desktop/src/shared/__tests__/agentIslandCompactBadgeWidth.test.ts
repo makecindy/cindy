@@ -460,14 +460,11 @@ describe('snapAgentIslandCompactHardwareContentWidth', () => {
 });
 
 /**
- * 空闲灵动岛显示各套餐余量(与菜单栏同口径)。余量芯片同样由 native 绘制、carrier 宽度由
- * 这里决定,所以 TS 给每个芯片算好标称宽度(`AgentIslandQuotaItem.width`),两侧直接用同一个数。
+ * 灵动岛余量芯片由 native 绘制,宽度不为余量加宽(用户自己设的),helper 用 main 下发的标称宽度
+ * (`AgentIslandQuotaItem.width`)判断放得下几个。标称值若小于实绘,最后一个芯片会被裁掉一截。
  * renderedWidth 是 SwiftUI 实绘宽度(NSHostingView 实测,10pt logo + 3pt 间距 + 10pt 等宽字)。
  */
-describe('空闲灵动岛为余量预留宽度', () => {
-  const chip = (text: string) => ({ width: getAgentIslandQuotaChipWidth(text) });
-  const notch = { hasNotch: true, notchWidth: 200 };
-
+describe('getAgentIslandQuotaChipWidth', () => {
   it('标称宽度覆盖 SwiftUI 实绘宽度,含中日文标签', () => {
     const rendered: Array<[string, number]> = [
       ['0%', 26], ['100%', 38], ['$12.30', 51], ['¥1,234.56', 69], ['credits', 57], ['额度', 33], ['クレジット', 61],
@@ -475,32 +472,5 @@ describe('空闲灵动岛为余量预留宽度', () => {
     for (const [text, width] of rendered) {
       expect(getAgentIslandQuotaChipWidth(text), text).toBeGreaterThanOrEqual(width);
     }
-  });
-
-  it('非刻痕屏:空闲岛加宽到能放下前 4 个余量,有任务时不受余量影响', () => {
-    const quota = ['72%', '45%', '100%', '$12.30', '9%'].map(chip);
-    const firstFour = quota.slice(0, 4).reduce((sum, item) => sum + item.width, 0) + 8 * 3;
-    const idle = getAgentIslandDefaultContentWidth({ expanded: false, hasSession: false, displayWidth: 1440, quota });
-    expect(idle).toBe(firstFour + 44);
-    expect(getAgentIslandDefaultContentWidth({ expanded: false, hasSession: true, displayWidth: 1440, quota }))
-      .toBe(getAgentIslandDefaultContentWidth({ expanded: false, hasSession: true, displayWidth: 1440 }));
-    // 单个余量放得进原来的 210,不额外加宽。
-    expect(getAgentIslandDefaultContentWidth({ expanded: false, hasSession: false, displayWidth: 1440, quota: [chip('72%')] }))
-      .toBe(AGENT_ISLAND_COMPACT_IDLE_WIDTH);
-  });
-
-  it('刻痕屏:右侧放前 2 个余量,两侧对称加宽;吸附的 basic 位随之加宽、hidden 阈值不变', () => {
-    const quota = ['72%', '45%', '100%'].map(chip);
-    const reserved = quota[0]!.width + quota[1]!.width + 8;
-    const idle = getAgentIslandDefaultContentWidth({ expanded: false, hasSession: false, screenMetrics: notch, quota });
-    expect(idle).toBe(notch.notchWidth + (reserved + AGENT_ISLAND_COMPACT_HARDWARE_BADGE_RESERVED_INSET) * 2);
-    const snap = (desiredWidth: number) => snapAgentIslandCompactHardwareContentWidth({
-      desiredWidth, clampedWidth: desiredWidth, maxWidth: AGENT_ISLAND_MAX_RESIZABLE_WIDTH,
-      hasSession: false, screenMetrics: notch, quota,
-    });
-    const oldBasic = notch.notchWidth + AGENT_ISLAND_COMPACT_HARDWARE_IDLE_EXTRA_WIDTH;
-    // 停在旧 basic 的持久化宽度升级到能放下余量的新 basic,而不是被判成 hidden。
-    expect(snap(oldBasic)).toBe(idle);
-    expect(snap(notch.notchWidth + 4)).toBe(notch.notchWidth);
   });
 });

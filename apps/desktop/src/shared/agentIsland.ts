@@ -619,8 +619,8 @@ export interface AgentIslandQuotaItem {
   stale: boolean;
   accessibilityLabel: string;
   /**
-   * Nominal upper-bound width of the chip. Main sizes the carrier from it and the helper
-   * reserves exactly the same number, so neither side measures fonts for layout.
+   * Nominal upper-bound width of the chip. The island never widens for quota (its width is
+   * the user's); the helper shows the chips whose widths fit, without measuring fonts.
    */
   width: number;
 }
@@ -629,17 +629,10 @@ export interface AgentIslandQuotaItem {
 // `native/agent-island/macos-agent-island-helper.swift`.
 export const AGENT_ISLAND_QUOTA_LOGO_SIZE = 10;
 export const AGENT_ISLAND_QUOTA_LOGO_GAP = 3;
-export const AGENT_ISLAND_QUOTA_CHIP_SPACING = 8;
 /** Upper bound for one monospaced 10pt character; wide (CJK) characters take the second. */
 export const AGENT_ISLAND_QUOTA_CHAR_WIDTH_BOUND = 7;
 export const AGENT_ISLAND_QUOTA_WIDE_CHAR_WIDTH_BOUND = 11;
 export const AGENT_ISLAND_QUOTA_ROUNDING_SLACK = 1;
-/** Chips the idle pill makes room for; more fit only when the user widens it. */
-export const AGENT_ISLAND_COMPACT_QUOTA_MAX_ITEMS = 4;
-/** Beside a hardware notch the pill grows on both sides, so it reserves room for fewer. */
-export const AGENT_ISLAND_COMPACT_HARDWARE_QUOTA_MAX_ITEMS = 2;
-/** Idle pill without a notch: horizontal padding, the 16pt mascot and its gap. */
-export const AGENT_ISLAND_COMPACT_IDLE_QUOTA_CHROME = 11 * 2 + 16 + 6;
 
 function isWideQuotaChar(char: string): boolean {
   const code = char.codePointAt(0) ?? 0;
@@ -661,35 +654,16 @@ export function getAgentIslandQuotaChipWidth(text: string): number {
   return AGENT_ISLAND_QUOTA_LOGO_SIZE + AGENT_ISLAND_QUOTA_LOGO_GAP + textWidth + AGENT_ISLAND_QUOTA_ROUNDING_SLACK;
 }
 
-/** Width of the chips the idle pill reserves room for; 0 without quota. */
-export function getAgentIslandCompactQuotaWidth(
-  quota: readonly Pick<AgentIslandQuotaItem, 'width'>[] | null | undefined,
-  hasNotch: boolean,
-): number {
-  if (!quota || quota.length === 0) return 0;
-  const reserved = quota.slice(
-    0,
-    hasNotch ? AGENT_ISLAND_COMPACT_HARDWARE_QUOTA_MAX_ITEMS : AGENT_ISLAND_COMPACT_QUOTA_MAX_ITEMS,
-  );
-  return reserved.reduce((total, item) => total + item.width, 0)
-    + AGENT_ISLAND_QUOTA_CHIP_SPACING * (reserved.length - 1);
-}
-
 export function getAgentIslandDefaultContentWidth(input: {
   expanded: boolean;
   hasSession: boolean;
   displayWidth?: number;
   screenMetrics?: AgentIslandScreenLayoutMetrics | null;
   pillSnapshot?: AgentIslandCompactBadgeCounts | null;
-  /** Quota shown on the idle pill; it widens the pill only while no task is on the island. */
-  quota?: readonly Pick<AgentIslandQuotaItem, 'width'>[] | null;
 }): number {
   if (input.expanded) {
     return input.hasSession ? AGENT_ISLAND_MAX_EXPANDED_WIDTH : AGENT_ISLAND_IDLE_EXPANDED_WIDTH;
   }
-  const idleQuotaWidth = input.hasSession
-    ? 0
-    : getAgentIslandCompactQuotaWidth(input.quota, input.screenMetrics?.hasNotch === true);
   const notchWidth = input.screenMetrics
     ? input.screenMetrics.notchWidth
     : (typeof input.displayWidth === 'number'
@@ -704,26 +678,18 @@ export function getAgentIslandDefaultContentWidth(input: {
       ? (getAgentIslandCompactBadgeWidth(input.pillSnapshot)
         + AGENT_ISLAND_COMPACT_HARDWARE_BADGE_RESERVED_INSET) * 2
       : 0;
-    // Idle quota sits on the trailing side, mirrored like the badge.
-    const quotaExtra = idleQuotaWidth > 0
-      ? (idleQuotaWidth + AGENT_ISLAND_COMPACT_HARDWARE_BADGE_RESERVED_INSET) * 2
-      : 0;
     return Math.max(
       AGENT_ISLAND_COMPACT_IDLE_WIDTH,
-      notchWidth + Math.max(baseExtra, badgeExtra, quotaExtra),
+      notchWidth + Math.max(baseExtra, badgeExtra),
     );
   }
-  const idleQuotaContentWidth = idleQuotaWidth > 0 ? idleQuotaWidth + AGENT_ISLAND_COMPACT_IDLE_QUOTA_CHROME : 0;
   if (typeof input.displayWidth === 'number' || input.screenMetrics) {
     return Math.max(
       AGENT_ISLAND_COMPACT_IDLE_WIDTH,
       notchWidth + (input.hasSession ? AGENT_ISLAND_COMPACT_SIMULATED_ACTIVE_EXTRA_WIDTH : 0),
-      idleQuotaContentWidth,
     );
   }
-  return input.hasSession
-    ? AGENT_ISLAND_COMPACT_ACTIVE_WIDTH
-    : Math.max(AGENT_ISLAND_COMPACT_IDLE_WIDTH, idleQuotaContentWidth);
+  return input.hasSession ? AGENT_ISLAND_COMPACT_ACTIVE_WIDTH : AGENT_ISLAND_COMPACT_IDLE_WIDTH;
 }
 
 export function getAgentIslandMinimumContentWidth(input: {
@@ -754,7 +720,6 @@ export function snapAgentIslandCompactHardwareContentWidth(input: {
   hasSession: boolean;
   screenMetrics?: AgentIslandScreenLayoutMetrics | null;
   pillSnapshot?: AgentIslandCompactBadgeCounts | null;
-  quota?: readonly Pick<AgentIslandQuotaItem, 'width'>[] | null;
 }): number {
   if (!input.screenMetrics?.hasNotch) {
     return input.clampedWidth;
@@ -777,7 +742,6 @@ export function snapAgentIslandCompactHardwareContentWidth(input: {
       hasSession: input.hasSession,
       screenMetrics: input.screenMetrics,
       pillSnapshot: input.pillSnapshot,
-      quota: input.quota,
     })),
   );
   const gap = baseBasicWidth - hiddenWidth;
