@@ -3,6 +3,7 @@ import type { TurnUsageContext } from '../turnUsageContext.js';
 import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { handleSessionEvent, type SessionEventDependencies } from '../sessionEventPipeline.js';
+import { flushSessionPiTurnUsage } from '../sessionPiTurnUsage.js';
 import { createBotCompactRuntimeRefreshCoordinator } from '../botCompactRuntimeRefresh.js';
 import { createContextOverflowRollover } from '../contextOverflowRollover.js';
 import { setMainLocale } from '../../i18n.js';
@@ -1919,6 +1920,28 @@ describe('usage through the production event pipeline', () => {
     await microtasks();
     expect(effects.fn('recordSessionTurnTokens')).toHaveBeenCalledTimes(1);
     expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledTimes(writes);
+    await h.dispose();
+  });
+
+  it('drains a failed Pi turn before the outgoing account database is replaced', async () => {
+    const h = harness();
+    pricing(false);
+    let releasePricing!: (value: unknown) => void;
+    effects.fn('getGatewayModelPricingForModel').mockReturnValue(new Promise(resolve => {
+      releasePricing = resolve;
+    }));
+    const payload = { ...usage('pi'), settlementId: 'outgoing-owner-turn' };
+    h.emit(event('status', { isRunning: true }, { source: 'pi' }));
+    h.emit(event('error', { message: 'closed on account switch', isTerminal: true, usage: payload }, { source: 'pi' }));
+    let drained = false;
+    const flush = flushSessionPiTurnUsage().then(() => { drained = true; });
+    await microtasks();
+    expect(drained).toBe(false);
+    expect(effects.fn('recordModelTurnUsage')).not.toHaveBeenCalled();
+    releasePricing({});
+    await flush;
+    expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledTimes(1);
+    expect(drained).toBe(true);
     await h.dispose();
   });
 

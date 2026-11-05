@@ -56,6 +56,20 @@ export interface RecordSessionPiTurnUsageDeps {
 // A failed Pi turn can report usage on both its error and legacy paired done.
 // Scope identities to the Session and retain a bounded tail for delayed pairs.
 const recordedSettlements = new WeakMap<Session, Set<string>>();
+const pendingPiUsageWrites = new Set<Promise<unknown>>();
+
+/** Complete outgoing-owner Pi writes before the account database is replaced. */
+export async function flushSessionPiTurnUsage(): Promise<void> {
+  while (pendingPiUsageWrites.size > 0) {
+    await Promise.allSettled([...pendingPiUsageWrites]);
+  }
+}
+
+function trackPiUsageWrite(write: Promise<unknown>): void {
+  const pending = Promise.resolve(write);
+  pendingPiUsageWrites.add(pending);
+  void pending.finally(() => pendingPiUsageWrites.delete(pending)).catch(() => {});
+}
 
 export function recordSessionPiTurnUsage(
   deps: RecordSessionPiTurnUsageDeps,
@@ -129,8 +143,8 @@ export function recordSessionPiTurnUsage(
         tokens.outputTokens +
         tokens.cacheReadTokens +
         tokens.cacheCreateTokens;
-      void recordSessionTurnTokens(session.id, totalTokens);
-      void (async () => {
+      trackPiUsageWrite(recordSessionTurnTokens(session.id, totalTokens));
+      trackPiUsageWrite((async () => {
         let turnModel = 'unknown';
         try {
           turnModel = await modelPromise;
@@ -352,7 +366,7 @@ export function recordSessionPiTurnUsage(
         } else if (effectiveProvider === 'xd' || effectiveProvider == null) {
           void triggerClaudeAccountUsageRefresh();
         }
-      })();
+      })());
     }
   }
 }

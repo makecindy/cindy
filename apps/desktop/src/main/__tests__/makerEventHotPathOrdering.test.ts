@@ -1128,7 +1128,7 @@ describe('maker:event hot path ordering', () => {
 
   it('pi subscription turns estimate value from the shared reference-price helper', () => {
     const wireSessionSource = readEventModule('sessionPiTurnUsage');
-    const piDoneIndex = wireSessionSource.indexOf("event.type === 'done' && event.source === 'pi'");
+    const piDoneIndex = wireSessionSource.indexOf("event.type === 'done' || isTerminalAgentErrorEvent(event)");
     expect(piDoneIndex).toBeGreaterThanOrEqual(0);
     const piDoneSource = wireSessionSource.slice(piDoneIndex);
     expect(piDoneSource).toContain(
