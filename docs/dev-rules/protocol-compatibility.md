@@ -1,5 +1,22 @@
 # 跨端协议兼容
 
+## 远程输入框的轻量插件授权查询（2026-11-05，未发布）
+
+`plugins` 集合新增只读 action `management:ui-consent`，返回 `{version:1, uiCapabilityApproval?, item?}`。
+`item` 仅含待确认实例的 `instanceKey`、`name`、`approvalToken`，不含图标、市场、项目或完整 manifest。
+控制端按集合 actions 协商；旧主机未声明时仍读原 `management:snapshot` 并在本机投影。
+同一 renderer、账号代次与远程电脑共用读取，插件通知（含角标变化）250ms 合并、在途不并发。
+最后一个输入框卸载后保留轻量缓存与失效监听 30 秒，期间不发起读取；切换回来复用缓存，若有变化则合并刷新。
+离线立即作废缓存，重连重新协商；闲置到期释放订阅，账号代次变化隔离旧结果。
+保留期间由共享层监听 relay 与目标 presence；断线前在途结果不回填。查询失败保留待刷新状态，
+下次订阅或通知补读，不因失败自动循环重试。
+读取期间已排队的新通知在该读取失败后仍合并补读一次；没有新通知的失败不自行循环重试。
+relay 换代时清除旧的目标离线结论，不依赖新连接重放增量 presence。
+目标 peer 的 reset/reopened 同样使缓存及旧在途结果失效；其他设备的 peer 事件不触发读取。
+普通任务、新任务和伙伴输入框共用此逻辑；非插件集合变化不触发。批准、稍后提示、版本复验沿用原事务。
+旧控制端继续使用原快照，存量插件批准与数据不变。未新增 channel、权限或传输帧；官方/自建中转均透传原
+remote-resource invoke，无需服务端或中转升级。
+
 ## Pi 上下文来源估算（2026-11-05，未发布）
 
 `maker:get-context-usage` 沿用原通道，仅增加可选 `textEstimate`：
@@ -14,6 +31,14 @@ Desktop 与 Mobile 明确标注估算和排除项。旧端忽略可选字段，�
 Desktop 和 Mobile 共用 shared parser，仅认可未删除的伙伴作者消息、单个完整 card、已知版本及白名单类别；普通人或未知／混合内容继续普通消息展示。Desktop 发往手机的既有消息视图可选追加 `capabilityNoticeCode`，手机 Remote Resource 解析仅保留未删除的伙伴 notice 上的白名单类别，content 保留 fallback，旧手机忽略新字段仍可读；手机直连自行投影，新手机连旧电脑仍用旧内容。旧桌面／手机直连把未知卡片显示为伙伴消息的 fallback，不丢失提示。
 
 不改服务端接口、权限档、原生配置、schema 或数据库 migration。提示只有原因，没有原始工具参数、路径或错误正文。回滚客户端后沿用 fallback，不修改已有历史。
+## Anthropic 兼容网关的工具引用恢复（#8593）
+
+Desktop 的 Anthropic loopback 代理在上游 400/422 明确报出
+`content type tool_reference requires a native Anthropic Messages target` 时，
+仅将 `messages[].content[]` 中 `tool_result.content[]` 的工具引用转换为保留工具名的文本，
+沿现有恢复规则最多重试一次。工具定义、调用参数、结果对应关系和本地历史均不修改；
+上游接受的原生引用不触发转换，未知错误照常返回。Tool Search 默认策略与用户显式配置不变。
+没有设备协议、relay 或服务端变更；回退该恢复规则即可回到原来的上游错误行为。
 
 ## 群聊代答的工作记录兼容（2026-11-03）
 

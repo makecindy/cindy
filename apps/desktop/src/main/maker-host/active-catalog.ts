@@ -3,7 +3,7 @@ import { effectiveGatewayModelCost } from '../../shared/modelPriceQuote.js';
 import { projectCurrentModelSources } from './model-source-snapshots.js';
 import type { ModelDisplayPricing } from '@cindy/model-providers';
 import {
-  projectProviderMediaModels,
+  projectProviderMediaModels, projectSelectionAliases,
   isCustomRoutedProvider,
   isOrganizationManagedProvider,
   stripCodexGatewayWirePrefix,
@@ -1956,6 +1956,18 @@ function computeMerged(): Catalog {
       }),
     ])) };
   });
+  providers = providers.map((provider) => projectSelectionAliases(provider, modelRegistry, {
+    hasUserMetadata: (agent, model) => {
+      const catalogId = providerCatalogId(provider);
+      const identity = findModelRegistryRoute(modelRegistry, catalogId, model.id)?.entry.modelRef ??
+        findBaseModel(modelRegistry, model.id)?.id;
+      const key = `${encodeURIComponent(provider.id)}:${model.id}`;
+      return !!(identity && localOverrides.baseModels?.[identity]) ||
+        !!localOverrides.additions[key] ||
+        !!(localOverrides.patches[key] && (!localOverrides.patches[key].agents ||
+          localOverrides.patches[key].agents?.includes(agent)));
+    },
+  }));
   return { ...b, modelRegistry, providers };
 }
 

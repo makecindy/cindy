@@ -4,7 +4,7 @@ import {
   isModelSelectableForNewRoute,
   type ProviderView,
 } from '@cindy/model-providers';
-import { GHOST_PICK_MIN_INTERVAL_MS, type InstalledGhost } from '../../shared/ghost.js';
+import type { InstalledGhost } from '../../shared/ghost.js';
 import {
   isPluginModelPickerRoute,
   type PluginModelPickerRequest,
@@ -144,7 +144,6 @@ interface Pending {
 /** One Host-owned picker, bound to its originating installation, page and answering window. */
 export class GhostModelPicker {
   private pending?: Pending;
-  private readonly lastAttempt = new Map<string, number>();
 
   constructor(
     private readonly deps: {
@@ -162,6 +161,7 @@ export class GhostModelPicker {
     raw: unknown = {},
     isCurrent = () => true,
     signal?: AbortSignal,
+    pageTarget?: PluginModelPickerTarget,
   ): Promise<PluginModelPickerResult> {
     const fail = (
       errorCode: Extract<PluginModelPickerResult, { ok: false }>['errorCode'],
@@ -192,14 +192,12 @@ export class GhostModelPicker {
     )
       return fail('INVALID_REQUEST', 'Invalid model picker options');
     if (this.pending) return fail('BUSY', 'A model picker is already open');
-    const now = this.deps.now?.() ?? Date.now(),
-      last = this.lastAttempt.get(ghostId);
-    this.lastAttempt.set(ghostId, now);
-    if (last !== undefined && now - last < GHOST_PICK_MIN_INTERVAL_MS)
-      return fail('RATE_LIMITED', 'Please wait before opening the model picker again');
+    // Selection is UI, not inference. The active-request guard prevents overlapping pickers;
+    // closing one must not impose a cooldown on the next user interaction.
+    const now = this.deps.now?.() ?? Date.now();
     let target: PluginModelPickerTarget | null;
     try {
-      target = this.deps.target(ghostId, options.mobilePageId as string | undefined);
+      target = pageTarget ?? this.deps.target(ghostId, options.mobilePageId as string | undefined);
     } catch {
       target = null;
     }
