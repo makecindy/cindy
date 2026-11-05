@@ -1227,10 +1227,14 @@ export function rotateShadow(options: {
   dir: string;
   incomingBytes: number;
   protectPath?: string;
+  /** 当前卡片引用的其它文件(raw-*.txt);容量不够时宁可放弃这次切割。 */
+  protectPaths?: string[];
   cap?: number;
 }) {
   const cap = options.cap ?? shadowMaxBytes();
-  const protect = options.protectPath ? resolve(options.protectPath) : "";
+  const protect = new Set<string>();
+  if (options.protectPath) protect.add(resolve(options.protectPath));
+  for (const path of options.protectPaths ?? []) protect.add(resolve(path));
   const files = listShadowFiles(options.dir);
   let used = files.reduce((sum, file) => sum + file.size, 0);
   if (options.incomingBytes > cap) {
@@ -1242,7 +1246,7 @@ export function rotateShadow(options: {
   const low = Math.floor(cap * 0.8);
   let deleted = 0;
   let freed = 0;
-  const candidates = files.filter((file) => file.path !== protect).sort((left, right) => left.mtimeMs - right.mtimeMs);
+  const candidates = files.filter((file) => !protect.has(resolve(file.path))).sort((left, right) => left.mtimeMs - right.mtimeMs);
   for (const file of candidates) {
     if (used + options.incomingBytes <= low) break;
     try {
@@ -1314,14 +1318,15 @@ function tightenShadow(dir: string): void {
   } catch {}
 }
 
-function saveShadow(state: SpineState, dir: string, file: string, body: string): void {
+function saveShadow(state: SpineState, dir: string, file: string, body: string, incomingExtra = 0, protectPaths: string[] = []): void {
   const id = state.key || DEFAULT_KEY;
   // 1.0.6: 会话目录带 owner,别的进程看得出这份备份是否还在用。
   try {
     const owner = join(dir, "owner");
     if (!existsSync(owner)) writeFileSync(owner, String(process.pid), { mode: 0o600 });
   } catch {}
-  const incoming = Buffer.byteLength(body);
+  // 本次切割还要写出的原文快照也计入待写入量,否则轮换放行后总量会突破上限。
+  const incoming = Buffer.byteLength(body) + incomingExtra;
   const temp = `${file}.tmp`;
   // 先把内容落到 temp(不在轮换统计里),再腾地方,最后 rename 成正式名:
   // 任何一步失败都只可能留下已被删掉的 temp,旧备份不会因为「删了但没写成功」而丢失。
@@ -1335,7 +1340,7 @@ function saveShadow(state: SpineState, dir: string, file: string, body: string):
     logLine(state, `spine shadow write failed: ${(error as Error)?.message ?? error}; 这一刀不切`);
     throw new Error("spine: shadow backup was not written");
   }
-  const rotation = rotateShadow({ dir, incomingBytes: incoming, protectPath: file });
+  const rotation = rotateShadow({ dir, incomingBytes: incoming, protectPath: file, protectPaths });
   if (!rotation.ok) {
     // 腾不出地方(或单份就超上限):撤掉 temp,旧备份原样保留。
     try {
@@ -1508,6 +1513,9 @@ interface RawRecord {
   toolCallId: string;
   label?: string;
   reason?: string;
+  /** 已规划但还没落盘的正文(已脱敏);切割被接受后才写。 */
+  body?: string;
+  pending?: boolean;
 }
 
 function readExistingRaw(file: string, toolCallId: string): RawRecord {
@@ -1536,6 +1544,13 @@ function readExistingRaw(file: string, toolCallId: string): RawRecord {
 export function verifiedRaw(record: RawRecord | null | undefined): RawRecord {
   const id = record?.toolCallId || "";
   if (!record?.ok || !record.path || !record.sha256 || !id) return { ok: false, toolCallId: id };
+  if (record.pending) {
+    const body = record.body;
+    if (typeof body !== "string") return { ok: false, toolCallId: id };
+    const bytes = Buffer.from(body, "utf8");
+    if (contentHash(bytes) !== record.sha256 || bytes.length !== record.bytes) return { ok: false, toolCallId: id };
+    return { ok: true, path: record.path, sha256: record.sha256, bytes, toolCallId: id, label: record.label || "" };
+  }
   let stored: Buffer;
   try {
     stored = readFileSync(record.path);
@@ -1551,6 +1566,7 @@ export function verifiedRaw(record: RawRecord | null | undefined): RawRecord {
 /** 卡片里的工具块取原文:校验通过用原文,被修剪过的表面文本不当作原文。 */
 export function rawExcerptText(surface: any, record: RawRecord | null | undefined): { text: string; raw?: RawRecord } {
   const checked = record?.ok ? verifiedRaw(record) : null;
+  if (checked?.ok && record?.pending && typeof record.body === "string") return { text: record.body, raw: checked };
   if (checked?.ok) {
     try {
       return { text: readFileSync(checked.path as string, "utf8"), raw: checked };
@@ -1571,28 +1587,54 @@ export function captureToolResult(options: {
   name?: string;
   pathLabel?: string;
 }): RawRecord {
+  const planned = planRawEntry(options);
+  return planned.ok && planned.pending ? commitRawEntry(planned) : planned;
+}
+
+/**
+ * 只算「要不要写、写什么」,不碰磁盘:卡片构期就能拿到指针,被拒的切割不留文件。
+ * 写盘前统一脉敏(与卡片、汇总备份同一套规则),哈希算在真正落盘的字节上。
+ */
+export function planRawEntry(options: {
+  dir: string;
+  toolCallId: string;
+  text: string;
+  turn?: number | null;
+  name?: string;
+  pathLabel?: string;
+}): RawRecord {
   const { dir, toolCallId } = options;
   if (!toolCallId) return { ok: false, reason: "missing-id", toolCallId: "" };
-  const body = String(options.text ?? "");
+  const surfaceText = String(options.text ?? "");
   const file = join(dir, rawName(toolCallId));
   if (existsSync(file)) return readExistingRaw(file, toolCallId);
-  if (body.includes(PRUNE_MARKER)) return { ok: false, reason: "already-pruned", toolCallId };
+  if (surfaceText.includes(PRUNE_MARKER)) return { ok: false, reason: "already-pruned", toolCallId };
+  const body = redactSecrets(surfaceText);
+  const bytes = Buffer.from(body, "utf8");
+  return {
+    ok: true,
+    pending: true,
+    body,
+    path: file,
+    bytes: bytes.length,
+    sha256: contentHash(bytes),
+    toolCallId,
+    label: options.pathLabel || "",
+  };
+}
+
+/** 把已规划的原文真的写下去;写不进去只影响指针,不阻断切割。 */
+export function commitRawEntry(record: RawRecord): RawRecord {
+  if (!record.ok || !record.pending || !record.path) return record;
+  const { toolCallId, path: file, body, sha256, bytes } = record;
+  const content = Buffer.from(String(body ?? ""), "utf8");
   try {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const bytes = Buffer.from(body, "utf8");
-    const hash = contentHash(bytes);
-    writeFileSync(file, bytes, { flag: "wx", mode: 0o600 });
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+    writeFileSync(file, content, { flag: "wx", mode: 0o600 });
     try {
       writeFileSync(
         `${file}.meta.json`,
-        JSON.stringify({
-          toolCallId,
-          bytes: bytes.length,
-          sha256: hash,
-          turn: options.turn ?? null,
-          name: options.name || "",
-          label: options.pathLabel || "",
-        }),
+        JSON.stringify({ toolCallId, bytes: content.length, sha256, label: record.label || "" }),
         { mode: 0o600 },
       );
     } catch (error) {
@@ -1602,7 +1644,7 @@ export function captureToolResult(options: {
       } catch {}
       throw error;
     }
-    return { ok: true, path: file, bytes: bytes.length, sha256: hash, toolCallId, label: options.pathLabel || "" };
+    return { ok: true, path: file, bytes: content.length, sha256, toolCallId, label: record.label || "" };
   } catch (error) {
     if ((error as any)?.code === "EEXIST" && existsSync(file)) return readExistingRaw(file, toolCallId);
     return { ok: false, reason: "unwritable", toolCallId };
@@ -1611,6 +1653,13 @@ export function captureToolResult(options: {
 
 /** 切之前把切范围内的工具原文按调用编号存盘;写不进去就只影响指针,不阻断切割。 */
 export function captureRawEntries(state: SpineState, entries: SpineEntry[]): Map<string, RawRecord> {
+  const raws = new Map<string, RawRecord>();
+  for (const record of planRawEntries(state, entries).values()) raws.set(record.toolCallId, commitRawEntry(record));
+  return raws;
+}
+
+/** 只规划不写盘:返回值里 pending=true 的记录由 commitRawEntry 落盘。 */
+export function planRawEntries(state: SpineState, entries: SpineEntry[]): Map<string, RawRecord> {
   const dir = shadowDirectory(state.key);
   const callIndex = new Map<string, { name: string; command: string; filePath: string; jobId: string }>();
   for (const entry of entries) {
@@ -1620,27 +1669,63 @@ export function captureRawEntries(state: SpineState, entries: SpineEntry[]): Map
   for (const entry of entries) {
     for (const id of entry.results) {
       const call = callIndex.get(id);
-      const record = captureToolResult({
-        dir,
-        toolCallId: id,
-        text: entry.text,
-        turn: entry.turn,
-        name: call?.name || "",
-        pathLabel: readResultLabel(call?.name, call?.filePath || "", entry.turn),
-      });
-      raws.set(id, record);
+      raws.set(
+        id,
+        planRawEntry({
+          dir,
+          toolCallId: id,
+          text: entry.text,
+          turn: entry.turn,
+          name: call?.name || "",
+          pathLabel: readResultLabel(call?.name, call?.filePath || "", entry.turn),
+        }),
+      );
     }
   }
   return raws;
 }
 
-/** 懒执行:只有真的要算卡片时才写 raw 文件,大部分轮次(不切)不碰磁盘。 */
-function rawLookup(state: SpineState, entries: SpineEntry[]): (toolCallId: string) => RawRecord | undefined {
-  let captured: Map<string, RawRecord> | null = null;
-  return (id: string) => {
-    if (captured === null) captured = captureRawEntries(state, entries);
-    return captured.get(id);
+/**
+ * 懒执行:只有卡片真的要算某个工具块时才为那一条算指针;不切、被拒的轮次一律不落盘。
+ * 返回的 planned() 是本次卡片引用到的、还没写的原文,切割被接受后才统一落盘。
+ */
+function rawPlanner(state: SpineState, entries: SpineEntry[]) {
+  const dir = shadowDirectory(state.key);
+  const cache = new Map<string, RawRecord>();
+  let index: Map<string, { entry: SpineEntry; call?: { name: string; command: string; filePath: string; jobId: string } }> | null = null;
+  const lookup = (id: string): RawRecord | undefined => {
+    const hit = cache.get(id);
+    if (hit) return hit;
+    if (index === null) {
+      index = new Map();
+      for (const entry of entries) {
+        for (const resultId of entry.results) {
+          const slot = index.get(resultId);
+          if (slot) slot.entry = entry;
+          else index.set(resultId, { entry });
+        }
+        for (const [metaId, info] of entry.callMeta ?? []) {
+          const slot = index.get(metaId);
+          if (slot) slot.call = info;
+          else index.set(metaId, { entry: undefined as unknown as SpineEntry, call: info });
+        }
+      }
+    }
+    const slot = index.get(id);
+    if (!slot?.entry) return undefined;
+    const record = planRawEntry({
+      dir,
+      toolCallId: id,
+      text: slot.entry.text,
+      turn: slot.entry.turn,
+      name: slot.call?.name || "",
+      pathLabel: readResultLabel(slot.call?.name, slot.call?.filePath || "", slot.entry.turn),
+    });
+    cache.set(id, record);
+    return record;
   };
+  const planned = () => [...cache.values()].filter((record) => record.ok && record.pending);
+  return { lookup, planned };
 }
 
 export function selectNewestChunk(
@@ -1846,10 +1931,11 @@ export default function (pi: ExtensionAPI) {  // Idle cut: pi fires agent_before
       return undefined;
     }
 
+    const raws = rawPlanner(state, entries);
     const chunk = selectNewestChunk(
       entries,
       (why) => logLine(state, `spine skip: ${why} | total=${totalTokens} n=${entries.length} :: ${describeEntries(entries)}`),
-      { rawLookup: rawLookup(state, entries), jobs: collectJobs(entries), engine: resolved.engine },
+      { rawLookup: raws.lookup, jobs: collectJobs(entries), engine: resolved.engine },
     );
     if (chunk === null) return undefined;
     if (chunk.entries.slice(chunk.start, chunk.end + 1).some((entry) => !entry.id)) {
@@ -1899,7 +1985,19 @@ export default function (pi: ExtensionAPI) {  // Idle cut: pi fires agent_before
       // 判定通过才建目录并落盘:被拒的切割不留空目录(空目录会占会话回收额度)。
       mkdirSync(shadow, { recursive: true, mode: 0o700 });
       tightenShadow(shadow);
-      saveShadow(state, shadow, file, body);
+      // 卡片引用的原文快照与备份一起受容量轮换保护,轮换腾不出地方就不切。
+      const pending = raws.planned();
+      const pendingBytes = pending.reduce((sum, record) => sum + (record.bytes || 0), 0);
+      saveShadow(
+        state,
+        shadow,
+        file,
+        body,
+        pendingBytes,
+        pending.map((record) => record.path || "").filter(Boolean),
+      );
+      // 备份已就位才写原文快照:指针落地后卡片才引用得到。
+      for (const record of pending) commitRawEntry(record);
       pruneShadowSessions(join(spineRoot(), "shadow"));
 
       drafts = [

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -9,7 +9,7 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
   generateSummaryWithUsage: vi.fn(),
 }));
 
-const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, verifiedRaw, resolveEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText } = await import(
+const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText } = await import(
   '../../../../extensions/live-compact/index.ts'
 );
 
@@ -288,6 +288,47 @@ describe('live compact 1.0.6: kept tool rounds, evidence and raw pointers', () =
       const pruned = captureToolResult({ dir, toolCallId: 'c2', text: '[... tool result middle pruned ...]' });
       expect(pruned.ok).toBe(false);
       expect(pointerFor(pruned)).toBe('无完整备份 [c2]');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('plans a raw pointer without touching disk, redacts secrets before writing, hashes the saved bytes', () => {
+    // 卡片先指向路径、切割被接受后才落盘;落盘内容与哈希必须是同一份脉敏后的字节。
+    const dir = mkdtempSync(join(tmpdir(), 'spine-plan-'));
+    try {
+      const text = 'export OPENAI_API_KEY=fixture-openai-placeholder-2\nline two';
+      const planned = planRawEntry({ dir, toolCallId: 'c9', text });
+      expect(planned.ok).toBe(true);
+      expect(planned.pending).toBe(true);
+      expect(existsSync(planned.path)).toBe(false);
+      expect(planned.body).not.toContain('fixture-openai-placeholder-2');
+      expect(verifiedRaw(planned).ok).toBe(true);
+      const committed = commitRawEntry(planned);
+      expect(committed.pending).toBeUndefined();
+      expect(verifiedRaw(committed).ok).toBe(true);
+      expect(readFileSync(committed.path, 'utf8')).not.toContain('fixture-openai-placeholder-2');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('never rotates away a file the new card points at', () => {
+    // 卡片的指针能命中文件名时,轮换宁可放弃这一刀,也不能把刚引用的原文删了。
+    const dir = mkdtempSync(join(tmpdir(), 'spine-protect-'));
+    try {
+      const files = ['span.txt', 'raw-a.txt', 'raw-b.txt'];
+      files.forEach((name) => writeFileSync(join(dir, name), 'x'.repeat(300)));
+      const result = rotateShadow({
+        dir,
+        incomingBytes: 300,
+        protectPath: join(dir, 'span.txt'),
+        protectPaths: [join(dir, 'raw-a.txt'), join(dir, 'raw-b.txt')],
+        cap: 1000,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.deleted).toBe(0);
+      expect(readdirSync(dir).sort()).toEqual([...files].sort());
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

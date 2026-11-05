@@ -63,14 +63,17 @@ const content = [
   '',
 ].join('\n');
 
+// Windows core.autocrlf 会把检出后的生成文件变成 CRLF:两侧都比 LF,避免假红。
+const lf = (text) => text.replace(/\r\n/g, '\n');
+
 if (process.argv.includes('--check')) {
   let current = '';
   try {
-    current = readFileSync(outputPath, 'utf8');
+    current = lf(readFileSync(outputPath, 'utf8'));
   } catch {
     /* missing counts as out of date */
   }
-  if (current !== content) {
+  if (current !== lf(content)) {
     console.error(
       'live-compact-source.ts is out of date. Run: node scripts/generate-live-compact-source.mjs',
     );
