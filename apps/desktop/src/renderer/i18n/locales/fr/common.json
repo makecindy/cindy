@@ -8461,6 +8461,26 @@
         "title": "Supprimer « {{name}} » ?",
         "message": "Les nouvelles sessions ne chargeront plus ce MCP.",
         "confirm": "Supprimer"
+      },
+      "duplicates": {
+        "title": "Connexions MCP potentiellement en double",
+        "description": "Cindy et votre configuration utilisateur Claude Code contiennent des connexions identiques ou similaires qui pourraient charger les outils deux fois. Choisissez la source à conserver, ou gardez les deux en cas de doute.",
+        "scope": "S’applique uniquement aux tâches Claude Code ordinaires dans Cindy sur cet ordinateur, au prochain démarrage de l’Agent. Votre configuration Claude Code reste inchangée. Les doublons liés partagent le même choix.",
+        "unavailable": "Une partie de la configuration n’a pas pu être lue. Les connexions restent inchangées. Rouvrez cette page pour une nouvelle vérification.",
+        "endpoint": "Même adresse de connexion",
+        "similar": "Adresses de connexion similaires",
+        "keep": {
+          "both": "Conserver les deux sources de ce groupe"
+        },
+        "selected": {
+          "cindy": "Connexion Cindy sélectionnée",
+          "claude": "Connexion Claude Code sélectionnée",
+          "both": "Les deux sources de ce groupe sont conservées"
+        },
+        "reset": "Choisir à nouveau",
+        "saveFailed": "Enregistrement impossible. Les connexions ont peut-être changé. Choisissez à nouveau dans la liste actuelle.",
+        "keepThis": "Conserver cette connexion",
+        "keepThese": "Conserver ces connexions"
       }
     },
     "remotePermission": {

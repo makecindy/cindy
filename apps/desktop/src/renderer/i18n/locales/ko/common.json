@@ -8351,6 +8351,26 @@
         "title": "\"{{name}}\"을(를) 삭제할까요?",
         "message": "삭제하면 새 세션에서 이 MCP가 더 이상 로드되지 않습니다.",
         "confirm": "삭제"
+      },
+      "duplicates": {
+        "title": "중복이 의심되는 MCP 연결",
+        "description": "Cindy와 Claude Code 사용자 설정에 같거나 비슷한 연결이 있어 도구가 두 번 로드될 수 있습니다. 유지할 연결을 선택하세요. 확실하지 않으면 둘 다 유지할 수 있습니다.",
+        "scope": "이 컴퓨터의 Cindy에서 실행하는 일반 Claude Code 작업에만 다음 에이전트 세션부터 적용됩니다. Claude Code 설정은 변경되지 않습니다. 서로 연관된 중복 연결에는 같은 선택이 적용됩니다.",
+        "unavailable": "일부 설정을 읽지 못했습니다. 연결은 변경되지 않았습니다. 이 페이지를 다시 열면 재확인합니다.",
+        "endpoint": "같은 연결 주소",
+        "similar": "비슷한 연결 주소",
+        "keep": {
+          "both": "이 그룹의 양쪽 모두 유지"
+        },
+        "selected": {
+          "cindy": "Cindy 연결 선택됨",
+          "claude": "Claude Code 연결 선택됨",
+          "both": "이 그룹의 양쪽 연결을 모두 유지합니다"
+        },
+        "reset": "다시 선택",
+        "saveFailed": "저장하지 못했습니다. 연결이 변경되었을 수 있습니다. 현재 목록에서 다시 선택하세요.",
+        "keepThis": "이 연결 유지",
+        "keepThese": "이 연결들 유지"
       }
     },
     "remotePermission": {

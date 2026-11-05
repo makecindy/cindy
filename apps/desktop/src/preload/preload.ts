@@ -6960,6 +6960,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       context === undefined
         ? ipcRenderer.invoke('maker:mcp:custom:list')
         : ipcRenderer.invoke('maker:mcp:custom:list', context),
+    listMcpDuplicates: (): Promise<import('../shared/customMcp').McpDuplicateReport> =>
+      ipcRenderer.invoke('maker:mcp:duplicates:list'),
+    chooseMcpDuplicate: (input: { id: string; choice: import('../shared/customMcp').McpDuplicateChoice | null }): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('maker:mcp:duplicates:choose', input),
     createCustomMcpServer: (
       config: import('../shared/customMcp').CustomMcpConfig,
     ): Promise<{ ok: true }> => ipcRenderer.invoke('maker:mcp:custom:create', config),
