@@ -18,7 +18,7 @@ import { Maker } from '@cindy/maker-core/maker';
 
 import { hasClaudeNativeLogin } from '../../../desktop/src/main/maker-host/claude-native-auth.ts';
 
-const LOGGER = {
+export const LOGGER = {
   debug: () => {},
   info: () => {},
   warn: () => {},
@@ -94,11 +94,18 @@ export function createCodexLocalCliAuth(gateway) {
 }
 
 export function createHostAgentGraph(options) {
+  const mcpProviders = options.mcpProviders ?? [];
   const agent = new ClaudeCodeAgent({
     auth: options.gateway ? createClaudeGatewayAuth(options.gateway) : createClaudeSubscriptionAuth(),
-    runtimeConfig: options.gateway ? { endpoint: options.gateway.endpoint } : {},
+    runtimeConfig: {
+      ...(options.gateway ? { endpoint: options.gateway.endpoint } : {}),
+      // The session flag gates whether cindy_memory is registered at all.
+      ...(options.makerMemory ? { makerMemoryEnabled: options.makerMemory.isEnabled() } : {}),
+    },
     binaryPath: options.binaryPath,
     logger: LOGGER,
+    ...(mcpProviders.length > 0 ? { mcpProviders } : {}),
+    ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
   });
   const codex = options.codexBinaryPath
     ? new CodexAgent({
@@ -106,6 +113,7 @@ export function createHostAgentGraph(options) {
         runtimeConfig: {},
         binaryPath: options.codexBinaryPath,
         logger: LOGGER,
+        ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
       })
     : null;
   const agents = { 'claude-code': agent, ...(codex ? { codex } : {}) };

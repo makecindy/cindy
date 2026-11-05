@@ -16,6 +16,7 @@ import { discoverHostOwner, ownerDatabasePath, resolveHostDataDir, resolveHostRe
 import { acquireHostRuntimeLease, type HostRuntimeLease } from './runtime-lock.js';
 import { readAdoptedSessionState } from './credentials/session.mjs';
 import { configureHostOwner, readClaudeSubscriptionState } from './agent/claude-auth.mjs';
+import { attachAgentsToMakerMemory, createHostMemoryManager, createHostMemoryMcpProviders } from './agent/memory.mjs';
 import { createHostAgentGraph } from './agent/runtime.mjs';
 import { readGatewayCredentials } from './agent/gateway.mjs';
 import { listProviders } from './agent/providers.mjs';
@@ -160,6 +161,8 @@ let agentGraph: {
   }>;
 } | null = null;
 let gatewayCredentials: { endpoint: string; credential: string } | null = null;
+/** Owner-scoped Maker Memory; null until the runtime owns an account. */
+let makerMemory: ReturnType<typeof createHostMemoryManager> | null = null;
 const provisionalSessionIds = new Set<string>();
 /** Non-secret projection of the adopted Desktop login; never tokens. */
 let account: { authenticated: boolean; realm: string | null; error?: string } = { authenticated: false, realm: null };
@@ -225,12 +228,23 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       ownerKey: process.env.CINDY_HOST_OWNER_KEY?.trim() || undefined,
       keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
     }).catch(() => null);
+    // Memory uses the same owner-scoped store Desktop reads, so a task started
+    // here sees the same memories as a task started there.
+    makerMemory = createHostMemoryManager({ userDataDir: dataDir, ownerId });
+    // Flip the flag before the agents are built: their runtimeConfig snapshots it
+    // at construction, and native-agent syncoff needs the agents that do not exist yet.
+    if (makerMemory.isEnabled()) await makerMemory.enable({ skipAgentSync: true });
     agentGraph = createHostAgentGraph({
       binaryPath: claudeBinary,
       codexBinaryPath: harnessBinaryPath('codex') ?? undefined,
       storage: sessionStorage,
       gateway,
+      makerMemory,
+      mcpProviders: createHostMemoryMcpProviders(makerMemory),
     });
+    attachAgentsToMakerMemory(makerMemory, agentGraph.instances);
+    // Second step, now that the agents exist: turn their native memory off.
+    if (makerMemory.isEnabled()) void makerMemory.enable();
     runtime.agents = agentGraph.agents;
     runtime.agentLane = gateway ? 'gateway-key' : 'claude-subscription';
     gatewayCredentials = gateway;
