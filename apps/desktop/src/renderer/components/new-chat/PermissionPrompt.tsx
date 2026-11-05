@@ -28,6 +28,7 @@ import {
   isEditableKeyboardTarget,
   isEmbeddedContentHost,
   isInsideClosingKeyboardLayer,
+  isForeignKeyboardControl,
   isInsideKeyboardLayer,
   shouldCardShortcutYield,
 } from '@/lib/editableKeyboardTarget';
@@ -143,6 +144,23 @@ function swallowHeldActivationKeys(): () => void {
   window.addEventListener('keydown', onKeyDown, true);
   window.addEventListener('keyup', onKeyUp, true);
   return dispose;
+}
+
+/** Split-pane container, and the controls whose only job is to open a task there. */
+const SPLIT_PANE_SELECTOR = '[data-split-pane-key]';
+const SESSION_OPENER_SELECTOR = '[data-split-pane-route-action], [data-session-switch-opener]';
+
+/**
+ * Pressing (or tabbing to) an ordinary control in a non-owner split pane hands that
+ * pane the route on pointerdown / focus, which arms the switch intent while the
+ * control keeps focus and still runs its own action. The user is operating that
+ * control; moving focus to 「Allow once」 would turn their next Enter into an approval.
+ * Only controls that exist to open the task (the pane title, task links) give way.
+ */
+function isOwnPaneControl(active: Element, card: Element | null): boolean {
+  const pane = card?.closest(SPLIT_PANE_SELECTOR);
+  if (!pane?.contains(active) || active.closest(SESSION_OPENER_SELECTOR)) return false;
+  return isForeignKeyboardControl(active);
 }
 
 export function PermissionPrompt({
@@ -277,7 +295,11 @@ export function PermissionPrompt({
     // Focus already sits on another control of this card (e.g. Tab straight onto Deny in a
     // split pane, which is what makes that pane the route owner): the user chose it, and
     // the button's own activation wins over the card shortcuts. Don't redirect it.
-    if (active instanceof Element && active !== button && cardRef.current?.contains(active)) {
+    if (
+      active instanceof Element &&
+      active !== button &&
+      (cardRef.current?.contains(active) || isOwnPaneControl(active, cardRef.current))
+    ) {
       onAutoFocusHandled?.();
       return;
     }
@@ -306,8 +328,13 @@ export function PermissionPrompt({
     }
     // The card can briefly render into a detached node (e.g. the files route's
     // prompt slot is still registered during navigation, then the card remounts
-    // inline). Keep the request until focus actually lands on a live button.
-    if (!button.isConnected) return;
+    // inline). Keep the request until focus actually lands on a live button. The
+    // window shortcut is already live meanwhile and focus is usually on body (the
+    // opener unmounted), so guard a key still held from the switch first.
+    if (!button.isConnected) {
+      guardHeldKeys();
+      return;
+    }
     button.focus({ preventScroll: true });
     if (document.activeElement !== button) return;
     guardHeldKeys();

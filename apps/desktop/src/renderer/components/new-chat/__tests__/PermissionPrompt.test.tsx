@@ -354,6 +354,61 @@ describe('PermissionPrompt 经交互卡 portal 切换路由', () => {
 
   afterEach(() => setSlotElement(null));
 
+  // 文件页聊天栏里在任务链接上按住 Enter 打开等授权的任务：链接随旧视图卸载，焦点落到
+  // body，卡片还在已脱离的 slot 里，但 window 上的快捷键已经生效。这期间的连发不能替用户
+  // 批准（带 Ctrl 的也不能变成「本对话都允许」）；卡片回到行内后还要一次新的按键。
+  it.each([
+    ['Enter', '{Enter>4}', '{/Enter}'],
+    ['Ctrl+Enter', '{Control>}{Enter>4}', '{/Enter}{/Control}'],
+  ])('卡片在已脱离的 slot 里时，按住 %s 打开任务的连发不批准', async (_name, hold, release) => {
+    const user = userEvent.setup();
+    const onRespond = vi.fn();
+    const staleSlot = document.createElement('div');
+    setSlotElement(staleSlot);
+    function LinkSwitch() {
+      const [switched, setSwitched] = useState(false);
+      const intent = useSessionSwitchFocusIntent(switched ? 'task-b' : 'task-a', true, switched ? 'req-1' : null, noHostQuery);
+      return switched ? (
+        <InteractionPromptHost hasInteraction>
+          <PermissionPrompt
+            permission={permission([bashRule])}
+            onRespond={onRespond}
+            autoFocus={intent.armed}
+            onAutoFocusHandled={intent.consume}
+          />
+        </InteractionPromptHost>
+      ) : (
+        <button
+          type="button"
+          data-split-pane-route-action=""
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              setSwitched(true);
+            }
+          }}
+        >
+          task-link
+        </button>
+      );
+    }
+    render(<LinkSwitch />);
+    screen.getByRole('button', { name: 'task-link' }).focus();
+
+    await user.keyboard(hold);
+    expect(staleSlot.isConnected).toBe(false);
+    expect(onRespond).not.toHaveBeenCalled();
+
+    act(() => setSlotElement(null));
+    const allowOnce = screen.getByRole('button', { name: /allowOnce/ });
+    expect(document.activeElement).toBe(allowOnce);
+    await user.keyboard(release);
+    expect(onRespond).not.toHaveBeenCalled();
+
+    await user.keyboard('{Enter}');
+    expect(onRespond).toHaveBeenCalledWith({ behavior: 'allow' });
+  });
+
   it('卡片先渲染进已脱离的 slot 时保留意图，回到行内后聚焦「允许一次」', () => {
     const staleSlot = document.createElement('div');
     setSlotElement(staleSlot);
