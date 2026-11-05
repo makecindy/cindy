@@ -3,8 +3,9 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
-import { getActiveCatalog, setActiveCatalog, clearDiscoveredProviderModels } from '../active-catalog.js';
+import { getActiveCatalog, setActiveCatalog, clearDiscoveredProviderModels, setCustomProviderConfigs } from '../active-catalog.js';
 import { refreshSubscriptionAccountModels } from '../subscription-account-models.js';
+import { clearAllXaiMediaModels, clearXaiMediaModels } from '../model-discovery/xai-media.js';
 import { waitForXaiDiscoveryIdleForTest } from '../model-discovery/xai.js';
 const state = vi.hoisted(() => ({
   directory: '',
@@ -38,6 +39,7 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
 }));
 vi.mock('../grok-oauth-login.js', () => ({
   runGrokOAuthLogin: (...args: unknown[]) => state.login(...args),
+  getGrokOAuthCredentialGeneration: () => 1,
   getGrokAccessToken: async (id: string) => JSON.parse(state.secrets.get(`${state.scope}:${id}`) ?? 'null')?.access_token,
   peekGrokAccessToken: (id: string) => JSON.parse(state.secrets.get(`${state.scope}:${id}`) ?? 'null')?.access_token ?? null,
   cancelGrokOAuthLogin: vi.fn(),
@@ -104,6 +106,42 @@ describe('independent subscription account credentials', () => {
     state.removeFails = false;
     setSubscriptionAccountInvalidatedHandler(() => {});
   });
+  it('discovers media using only the selected xAI account and clears only its snapshot', async () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setCustomProviderConfigs(['grok-a', 'grok-b'].map(id => ({
+      id, name: id, auth: { method: 'oauth', native: 'xai' }, runtimes: {},
+    })));
+    putToken('grok-a', 'fake-a');
+    putToken('grok-b', 'fake-b');
+    state.fetch.mockImplementation(async (url: string, init: RequestInit) => {
+      if (String(url).includes('-generation-models')) {
+        const video = String(url).includes('video-generation');
+        return new Response(JSON.stringify({ models: [{
+          id: video ? 'future-video' : 'future-image',
+          input_modalities: ['text', 'image'], output_modalities: [video ? 'video' : 'image'],
+        }] }));
+      }
+      return new Response(JSON.stringify({ userId: 'fake-user', data: [] }));
+    });
+    const account = (id: string) => getActiveCatalog().providers.find(provider => provider.id === id)!;
+    try {
+      await refreshSubscriptionAccountModels('grok-a');
+      expect(account('grok-a').imageModels?.map(model => model.id)).toEqual(['grok-a/future-image']);
+      expect(account('grok-a').videoModels?.map(model => model.id)).toEqual(['grok-a/future-video']);
+      const mediaCalls = state.fetch.mock.calls.filter(([url]) => String(url).includes('-generation-models'));
+      expect(mediaCalls).toHaveLength(2);
+      for (const [, init] of mediaCalls) expect(init.headers.Authorization).toBe('Bearer fake-a');
+      await refreshSubscriptionAccountModels('grok-b');
+      clearXaiMediaModels();
+      expect(account('grok-b').imageModels?.map(model => model.id)).toEqual(['grok-b/future-image']);
+      removeSubscriptionAccountCredentialsReversibly('grok-a');
+      expect(account('grok-a').imageModels?.some(model => model.id.includes('future'))).toBe(false);
+      expect(account('grok-b').imageModels?.map(model => model.id)).toEqual(['grok-b/future-image']);
+    } finally {
+      setCustomProviderConfigs([]);
+    }
+  });
+
   it('commits each login to its provider and supports rollback', async () => {
     state.login.mockImplementation(async (opts) => {
       opts.persist({ access_token: 'fake-a' });
@@ -152,6 +190,7 @@ describe('independent subscription account credentials', () => {
   });
   afterEach(async () => {
     await waitForXaiDiscoveryIdleForTest();
+    clearAllXaiMediaModels();
     clearDiscoveredProviderModels();
     setActiveCatalog(BUNDLED_CATALOG);
     await fsp.rm(state.directory, { recursive: true, force: true });

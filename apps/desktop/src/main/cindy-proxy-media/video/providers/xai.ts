@@ -76,6 +76,7 @@ interface XaiVideoStatusResponse extends XaiVideoErrorBody {
 }
 
 export interface CreateXaiVideoProviderOptions {
+  providerId?: string;
   hasOAuthLogin(): boolean;
   getAccessToken(): Promise<string>;
   getCredentialGeneration(): number;
@@ -207,17 +208,20 @@ function internalContentRef(
   ownerScopeKey: string,
   credentialGeneration: number,
   sourceUrl: string,
+  providerId: string,
 ): string {
   const url = new URL(`${INTERNAL_CONTENT_PROTOCOL}//${INTERNAL_CONTENT_HOST}`);
   url.pathname = `/${encodeURIComponent(taskId)}`;
   url.searchParams.set('owner', ownerScopeKey);
   url.searchParams.set('credential', String(credentialGeneration));
   url.searchParams.set('source', assertXaiVideoUrl(sourceUrl));
+  if (providerId !== 'xai') url.searchParams.set('provider', providerId);
   return url.toString();
 }
 
 function parseInternalContentRef(raw: string): {
   taskId: string;
+  providerId: string;
   ownerScopeKey: string;
   credentialGeneration: number;
   sourceUrl: string;
@@ -250,7 +254,7 @@ function parseInternalContentRef(raw: string): {
     credentialGeneration < 0 ||
     !sourceUrl ||
     [...url.searchParams.keys()].some(
-      (key) => key !== 'owner' && key !== 'credential' && key !== 'source',
+      (key) => key !== 'owner' && key !== 'credential' && key !== 'source' && key !== 'provider',
     )
   ) {
     throw new Error('xAI 视频下载引用无效');
@@ -264,6 +268,7 @@ function parseInternalContentRef(raw: string): {
   if (!taskId) throw new Error('xAI 视频下载引用无效');
   return {
     taskId,
+    providerId: url.searchParams.get('provider') ?? 'xai',
     ownerScopeKey,
     credentialGeneration,
     sourceUrl: assertXaiVideoUrl(sourceUrl),
@@ -313,13 +318,16 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
     requestedLimit > 0
       ? Math.min(requestedLimit, MAX_VIDEO_DOWNLOAD_BYTES)
       : MAX_VIDEO_DOWNLOAD_BYTES;
+  const providerId = opts.providerId ?? 'xai';
+  const executorId = providerId === 'xai' ? 'xai-video' : `${providerId}-video`;
+  const prefix = `${providerId}/`;
   const aliases = [...new Set(opts.modelAliases ?? [XAI_VIDEO_CATALOG_MODEL_ID])];
   const upstreamByAlias = new Map<string, string>();
   for (const alias of aliases) {
-    if (!alias.startsWith('xai/') || alias.length <= 'xai/'.length) {
+    if (!alias.startsWith(prefix) || alias.length <= prefix.length) {
       throw new Error(`xAI 视频模型 alias 无效: ${alias}`);
     }
-    upstreamByAlias.set(alias, alias.slice('xai/'.length));
+    upstreamByAlias.set(alias, alias.slice(prefix.length));
   }
   const expectedSecondsByAlias = Object.fromEntries(aliases.map((alias) => [alias, 180]));
   const capabilities: VideoProviderCapabilities = {
@@ -428,7 +436,7 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
     }
     assertRequestScopeCurrent(opts, ownerScopeKey, credentialGeneration);
     return {
-      providerId: 'xai-video',
+      providerId: executorId,
       taskId: response.request_id,
       modelUsed: upstreamModelId,
       submittedAt: Date.now(),
@@ -442,7 +450,7 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
     signal?: AbortSignal,
   ): Promise<VideoTaskStatus> {
     if (
-      handle.providerId !== 'xai-video' ||
+      handle.providerId !== executorId ||
       !handle.ownerScopeKey ||
       !Number.isSafeInteger(handle.credentialGeneration) ||
       handle.credentialGeneration! < 0
@@ -481,6 +489,7 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
         handle.ownerScopeKey,
         credentialGeneration,
         data.video.url,
+        providerId,
       ),
       meta: {
         durationSec: data.video?.duration,
@@ -496,7 +505,9 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
     videoUrl: string,
     signal?: AbortSignal,
   ): Promise<{ buffer: Buffer; mimeType: string }> {
-    const { ownerScopeKey, credentialGeneration, sourceUrl } = parseInternalContentRef(videoUrl);
+    const content = parseInternalContentRef(videoUrl);
+    if (content.providerId !== providerId) throw new Error('xAI 视频下载账号不匹配');
+    const { ownerScopeKey, credentialGeneration, sourceUrl } = content;
     const assertStillCurrent = () =>
       assertRequestScopeCurrent(opts, ownerScopeKey, credentialGeneration);
     assertStillCurrent();
@@ -528,7 +539,7 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
   }
 
   return {
-    id: 'xai-video',
+    id: executorId,
     capabilities,
     submit,
     poll,

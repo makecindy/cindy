@@ -60,6 +60,30 @@ describe('xAI video provider · capabilities', () => {
     expect(provider.capabilities.audioDefault).toBe(true);
   });
 
+  it('keeps independent account video aliases and executor identities separate', async () => {
+    const doFetch = vi.fn<typeof fetch>(async (_url, init) =>
+      new Response(JSON.stringify(init?.method === 'POST' ? { request_id: 'task' } : {
+        status: 'done', video: { url: 'https://vidgen.x.ai/task.mp4' },
+      }), { status: 200 }));
+    const selected = createXaiVideoProvider({
+      providerId: 'grok-work', modelAliases: ['grok-work/grok-imagine-video'],
+      hasOAuthLogin: () => true, getAccessToken: async () => 'fake-work-token',
+      getCredentialGeneration: () => 1, getOwnerScopeKey: () => 'owner',
+      isOwnerBoundaryPending: () => false, fetchImplementation: doFetch,
+    });
+    expect(selected.id).toBe('grok-work-video');
+    const handle = await selected.submit({ prompt: 'test' }, 'grok-work/grok-imagine-video');
+    expect(handle.providerId).toBe(selected.id);
+    const result = await selected.poll(handle);
+    expect(result.state).toBe('succeeded');
+    const peer = makeProvider({ fetchImplementation: doFetch });
+    expect((await peer.poll(handle)).state).toBe('failed');
+    if (result.state === 'succeeded') await expect(peer.download(result.videoUrl!)).rejects.toThrow('账号不匹配');
+    const init = doFetch.mock.calls[0]![1]!;
+    expect(JSON.parse(String(init.body)).model).toBe('grok-imagine-video');
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer fake-work-token');
+  });
+
   it('accepts future catalog aliases without a model-name whitelist', async () => {
     const fetchMock = vi.fn(
       async () => new Response(JSON.stringify({ request_id: 'future-task' }), { status: 200 }),

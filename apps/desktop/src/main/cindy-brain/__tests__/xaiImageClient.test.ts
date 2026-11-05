@@ -25,6 +25,16 @@ function channel(fetchImplementation: typeof fetch, overrides: Record<string, un
 }
 
 describe('xaiImageClient', () => {
+  it('uses the selected independent account and sends the upstream model id', async () => {
+    const doFetch = vi.fn<typeof fetch>(async () =>
+      new Response(JSON.stringify({ data: [{ b64_json: 'aW1hZ2U=' }] }), { status: 200 }));
+    await channel(doFetch, { providerId: 'grok-work', getAccessToken: async () => 'fake-work-token' })
+      .generateImage({ model: 'grok-work/grok-imagine-image', prompt: 'test' });
+    const init = doFetch.mock.calls[0]![1]!;
+    expect(JSON.parse(String(init.body)).model).toBe('grok-imagine-image');
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer fake-work-token');
+  });
+
   it('uses the xAI API-key source for Imagine generation', async () => {
     const doFetch = vi.fn<typeof fetch>(
       async () =>

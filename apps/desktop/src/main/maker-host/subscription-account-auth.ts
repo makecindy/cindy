@@ -1,6 +1,7 @@
 import { activeOwnerScopeKey, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { genericOAuthSecretIo } from '../secrets/providerSecretStore.js';
 import { getActiveCatalog, setDiscoveredProviderModels, setXaiDiscoveredModels } from './active-catalog.js';
+import { clearXaiMediaModels } from './model-discovery/xai-media.js';
 import { discardXaiModelsDiskCache } from './model-discovery/xai.js';
 import {
   runGrokOAuthLogin,
@@ -32,6 +33,7 @@ export function subscriptionAccountKind(providerId?: string | null): 'claude' | 
 export function clearSubscriptionAccountDiscoveredModels(providerId: string): Promise<void> {
   setDiscoveredProviderModels(providerId, 'claude-code', []);
   setXaiDiscoveredModels(null, providerId);
+  clearXaiMediaModels(providerId);
   if (subscriptionAccountKind(providerId) === 'xai') {
     // Share the discovery writer's queue so an older pending write cannot recreate the LKG.
     return discardXaiModelsDiskCache({

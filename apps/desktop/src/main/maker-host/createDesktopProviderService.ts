@@ -129,7 +129,7 @@ import {
   notifyOpenAiMediaCredentialChanged,
   refreshOpenAiMediaModels,
 } from './model-discovery/openai-media.js';
-import { clearXaiMediaModels } from './model-discovery/xai-media.js';
+import { clearAllXaiMediaModels } from './model-discovery/xai-media.js';
 import { getAuthState } from '../authManager.js';
 import { getCindyAiProviderName, getCindyAiProviderLogoKind } from '../cindyAiProviderName.js';
 import { getActiveAppSession } from '../appSessionState.js';
@@ -454,7 +454,7 @@ function handleProviderSecretsCleared(): void {
   resetSubscriptionAccountCaches();
   clearDiscoveredProviderModels();
   clearXaiDiscoveredModels();
-  clearXaiMediaModels();
+  clearAllXaiMediaModels();
   notifyOpenAiMediaCredentialChanged();
 }
 
