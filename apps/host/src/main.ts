@@ -433,7 +433,10 @@ const server = createHostServer({
     dataOwnerId: runtime.owner,
     ownerGeneration: 1,
     canWriteOwnerScoped: Boolean(runtime.owner),
-    claimed: false,
+    // The host holds the profile lease, so it is the owner of the legacy
+    // renderer namespace; a fresh client can then finish its first-run
+    // migration instead of staying pending forever.
+    claimed: Boolean(runtime.owner),
     claimedByOtherOwner: false,
     canInitialize: false,
     profileOrigin: 'existing',

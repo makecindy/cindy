@@ -66,4 +66,5 @@ Orca 协同、记忆与文件工具等仍由 Desktop 内 Runtime 提供；客户
 | `electron-forge start`（dev，`xvfb-run`） | 失败：主进程打包阶段 V8 堆上限 4GB OOM（本机内存受限），未进入应用启动 |
 | 打包产物 `out/Cindy-linux-x64/Cindy`（`--no-sandbox --mock`） | 失败：打包缺 `sharp` 的 linux-x64 原生依赖（`libvips-cpp.so`），属既有打包问题 |
 | `electron-forge start`（dev，8GB 堆，xvfb，修复原生依赖后） | **主进程成功以客户端模式启动**：日志出现 `client mode: delegating to http://127.0.0.1:3456` 与 `client mode proxies: …`（18 个通道），随后 renderer 通过代理读取任务/供应商/能力 |
-| 全通道真机验收 | **未完成**：给 `apps/desktop/node_modules` 放一份 Electron ABI 绑定后，Host 与 Electron 可同时运行，客户端模式能读到任务/供应商/能力；但 renderer 的 `localCatalogSnapshot` 仍以 `code:UNKNOWN` 失败，模型选择器降级，未定位（浏览器端同一路径是通的） |
+| 客户端模式 + 目录 | **已验证**：claim 改为「host 持有 profile 即 legacy owner」后，Electron 客户端模式不再出现 `localCatalogSnapshot` 失败，渲染层用代理到的供应商/能力/价格数据完成目录刷新 |
+| 全通道真机验收 | **未完成**：放在 `apps/desktop/node_modules` 的 Electron ABI 绑定会被 Host（同样解析到该目录）加载而报 ABI 不匹配，反之亦然；两者无法在同一 checkout 同时运行。需要独立 checkout 或独立原生模块路径 |
