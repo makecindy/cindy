@@ -22,6 +22,8 @@ export const PREFERENCE_KEY_MAX_LENGTH = 160;
 /** Inline store writes stay under the server's 256 KB request limit; larger values go through the bucket. */
 export const STORE_INLINE_MAX_BYTES = 190 * 1024;
 export const STORE_KEY_MAX_LENGTH = 300;
+/** After the server says the store is off, how long to use preferences only before asking again. */
+export const STORE_OFF_RETRY_MS = 10 * 60_000;
 
 /** Signed-URL transfers, validated like room media (https, or the isolated local server). */
 export interface CompanionStoreTransfer {
@@ -49,12 +51,12 @@ export async function readPreferences(api: CompanionApi, actorId: string): Promi
 export type CompanionStore = ReturnType<typeof createCompanionStore>;
 
 export function createCompanionStore(api: CompanionApi, options: { enabled: () => boolean; transfer?: CompanionStoreTransfer }) {
-  /** The server answered that the store is switched off (or absent): use preferences only this run. */
-  let off = false;
-  const active = () => !off && options.enabled();
+  /** The server answered that the store is switched off (or absent): preferences only for a while, then ask again. */
+  let offUntil = 0;
+  const active = () => Date.now() >= offUntil && options.enabled();
   const guard = async <T>(run: () => Promise<T>): Promise<T> => {
     try { return await run(); } catch (error) {
-      if (chatRejection(error, 404, 'COMPANION_STORE_DISABLED') || chatRejection(error, 404, 'NOT_FOUND')) off = true;
+      if (chatRejection(error, 404, 'COMPANION_STORE_DISABLED') || chatRejection(error, 404, 'NOT_FOUND')) offUntil = Date.now() + STORE_OFF_RETRY_MS;
       throw error;
     }
   };
