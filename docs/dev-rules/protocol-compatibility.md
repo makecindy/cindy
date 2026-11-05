@@ -23,6 +23,35 @@
 账号 id，账号切换中或不匹配时不写入。回归入口：`botRemoteResourceProvider.test.ts`、
 `botReadStateStore.test.ts`、Renderer `botReadState.test.ts` 与 Mobile `remoteResourceCache.test.ts`。
 
+## 分享历史任务恢复诊断（2026-11-05）
+
+`remote-agent/allocate` 指定 `preferredExecutorDeviceId` 时，失败以既有错误包报告有界的
+`SHARED_TASK_RECOVERY_*` 类别与 `SHARED_TASK_STAGE_*` 环节；外层仍使用既有
+`REMOTE_AGENT_UNAVAILABLE`／`REMOTE_AGENT_PROVIDER_NOT_ALLOWED`／`REMOTE_AGENT_BUSY`／
+`REMOTE_AGENT_PEER_TOO_OLD`，旧控制端继续按原通用错误处理。只公开白名单原因与少量
+传输错误码，不转发上游私密消息。未指定原执行电脑的新任务仍用 `null` 回到旧中转路径。
+新控制端收到旧 O 的 `null` 时显示“原因未确认”，不把它当作明确离线或用量耗尽。
+
+本节诊断本身不新增帧、channel、请求字段、能力位或服务端 API；官方及自建 relay 沿用既有错误包
+转发，不需要同步部署。原电脑上的建链／能力探测各最多补试一次，取消与代次检查不变，
+不重放分配、open 或正文。Desktop 的原因说明与用户选择入口见
+[分享直连合同](../product-rules/provider-sharing-direct-execution.md)；旧端与 Mobile
+仍保留原有错误界面，不宣称已交付新的恢复弹窗。
+
+## 组 Fast 策略缓存与授权同行（2026-11-05）
+
+新版执行机声明可选 `subscriptionFastPolicyCache: true`；缺字段或非布尔真值按旧端处理。
+既有 `remote-agent/delegate` 的 grant 可附带 `fastPolicy: {group, revision, allowFast}`，
+O 只向声明能力的 M 发送。M 复用该次服务端委托核验，按已认证 O、组和真实托管任务绑定，
+不为 Fast 再查一次云端授权；G 不能提交 delegate，也不能冒充 O 为其他任务提供组策略。
+独立 fast-policy 操作仍按已认证来源隔离命名空间，保留分享来的组内电脑所需路径。原始 grant 仍兼容。
+收到的策略从接收时起最多信任 30 分钟，墙钟／单调时钟任一到期即停止允许 Fast；
+读取、失败与离线新任务绑定不续期。缺失／到期时仅降为普通速度，不代替任务与模型授权。
+授权及续期携带新鲜策略，既有组同步循环也在 15 分钟后刷新已确认目标，失败沿用原退避，
+不新增 timer 或服务端接口。实际执行机账号／本机限制始终取交集。
+旧端保留原先绑定确认流程；新版任务的 Fast ACK 暂时失败不阻止普通速度执行。
+官方和自建 relay 只透传既有消息，无新帧或 relay 行为，无需中转／服务端升级。
+
 ## 远程输入框的轻量插件授权查询（2026-11-05，未发布）
 
 `plugins` 集合新增只读 action `management:ui-consent`，返回 `{version:1, uiCapabilityApproval?, item?}`。

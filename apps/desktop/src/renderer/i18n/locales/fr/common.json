@@ -1,4 +1,34 @@
 {
+  "sharedTaskRecovery": {
+    "title": "Impossible de reprendre sur l’ordinateur d’origine",
+    "description": "Choisissez un autre ordinateur ou fournisseur pour poursuivre avec un transfert de contexte. Vos messages restent, mais l’état d’exécution complet de l’ordinateur d’origine n’est pas transféré.",
+    "choose": "Choisir un autre ordinateur",
+    "cancel": "Rester ici",
+    "stage": {
+      "owner": "Échec du contact avec l’ordinateur de partage.",
+      "allocation": "Échec de l’attribution des droits à l’exécuteur d’origine.",
+      "executor": "Échec de la vérification de la connexion device-link de l’exécuteur.",
+      "capability": "Échec de la vérification des capacités de l’exécuteur.",
+      "authorization": "Échec de l’installation des droits d’exécution.",
+      "unknown": "L’étape en échec n’a pas été indiquée."
+    },
+    "reason": {
+      "offline": "L’exécuteur d’origine a été signalé hors ligne. D’autres sessions peuvent utiliser d’autres ordinateurs.",
+      "timeout": "La requête a expiré. L’étape en échec indique le service contacté ; aucune panne de la liaison directe ou du relais n’est confirmée.",
+      "relay": "La connexion device-link n’est pas prête ou a été fermée. Un échec de la liaison directe seule bascule normalement sur le relais.",
+      "denied": "L’accès a été refusé ou le contrôle à distance désactivé. Réessayer ne contourne pas cette restriction.",
+      "model": "Le fournisseur partagé ou le modèle n’est pas autorisé pour cette session.",
+      "budget": "Le fournisseur a signalé une limite d’utilisation ou un quota insuffisant. Un autre ordinateur peut utiliser le même quota.",
+      "capacity": "La capacité des sessions ou des connexions est atteinte. Fermez les sessions inutilisées ou choisissez un autre ordinateur.",
+      "unsupported": "L’exécuteur ne prend pas en charge les capacités de session partagée requises.",
+      "authorization": "Les droits d’exécution n’ont pas pu être installés. Cela ne prouve pas que l’exécuteur est hors ligne.",
+      "history": "L’emplacement de la session d’origine est inutilisable. Son historique natif ne peut pas être ouvert directement ailleurs.",
+      "policy": "Les règles d’utilisation du partage nécessitent une vérification en temps réel sur l’ordinateur de partage. L’exécution directe ne peut pas les appliquer ; cela ne signifie pas que le solde est épuisé.",
+      "unknown": "L’ordinateur de partage n’a pas fourni de cause précise. L’état hors ligne, le quota et le chemin direct ou relais restent non confirmés.",
+      "rate": "Le service limite les requêtes ou est saturé. Attendez la fin du délai ; un autre ordinateur peut partager la même limite.",
+      "service": "Le service d’autorisation du partage est inaccessible ou a renvoyé un échec. L’exécuteur n’a pas été confirmé hors ligne."
+    }
+  },
   "pluginUi": {
     "renderer": "Affichage",
     "original": "Original",

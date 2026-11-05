@@ -1,4 +1,34 @@
 {
+  "sharedTaskRecovery": {
+    "title": "Não é possível retomar no computador original",
+    "description": "Escolha outro computador ou fornecedor para continuar com uma transferência de contexto. As mensagens são mantidas, mas o estado completo da execução no computador original não é transferido.",
+    "choose": "Escolher outro computador",
+    "cancel": "Ficar aqui",
+    "stage": {
+      "owner": "Falha ao contatar o computador que compartilha.",
+      "allocation": "Falha ao atribuir permissões ao executor original.",
+      "executor": "Falha ao verificar a conexão device-link do executor.",
+      "capability": "Falha ao verificar os recursos do executor.",
+      "authorization": "Falha ao instalar a autorização de execução.",
+      "unknown": "A etapa que falhou não foi informada."
+    },
+    "reason": {
+      "offline": "O executor original foi informado como offline. Outras sessões podem usar outros computadores.",
+      "timeout": "A solicitação excedeu o tempo limite. A etapa que falhou indica o serviço contatado; não foi confirmada uma falha da conexão direta ou do relay.",
+      "relay": "A conexão device-link não está pronta ou foi encerrada. Se apenas a conexão direta falhar, normalmente o relay é usado automaticamente.",
+      "denied": "O acesso foi negado ou o controle remoto foi desativado. Tentar novamente não contorna essa restrição.",
+      "model": "O fornecedor compartilhado ou o modelo não são permitidos nesta sessão.",
+      "budget": "O fornecedor informou um limite de uso ou cota insuficiente. Outro computador pode usar a mesma cota.",
+      "capacity": "A capacidade de sessões ou conexões foi atingida. Feche sessões não utilizadas ou escolha outro computador.",
+      "unsupported": "O executor não oferece os recursos necessários para a sessão compartilhada.",
+      "authorization": "Não foi possível instalar a autorização de execução. Isso não prova que o executor esteja offline.",
+      "history": "A localização da sessão original não pode ser usada. O histórico nativo não pode ser aberto diretamente em outro computador.",
+      "policy": "As regras de uso do compartilhamento exigem verificações em tempo real pelo computador que compartilha. A execução direta não pode aplicá-las; isso não significa saldo esgotado.",
+      "unknown": "O computador que compartilha não forneceu uma causa precisa. O estado offline, a cota e a conexão direta ou relay não foram confirmados.",
+      "rate": "O serviço está limitando solicitações ou está congestionado. Aguarde o fim do período de espera; outro computador pode compartilhar o mesmo limite.",
+      "service": "Não foi possível acessar o serviço de autorização do compartilhamento ou ele retornou uma falha. Não foi confirmado que o executor esteja offline."
+    }
+  },
   "pluginUi": {
     "renderer": "Exibição",
     "original": "Original",

@@ -513,6 +513,8 @@ function isPointInsideElement(
 }
 
 interface ChatInputProps {
+  modelPickerRequest?: number;
+  onModelPickerRequestConsumed?: (nonce: number) => void;
   onSend: (
     message: string,
     model: string,
@@ -1312,6 +1314,8 @@ function resolveModelThinkingIntent(input: {
 }
 
 export function ChatInput({
+  modelPickerRequest,
+  onModelPickerRequestConsumed,
   onSend,
   onComposerTyping,
   onComposerVoiceBusyChange,
@@ -10138,6 +10142,8 @@ export function ChatInput({
                     : useNarrowToolbar ? 'min-w-0 shrink' : undefined}
                 >
                   {!sessionModelLoading && <ModelSelector
+                    openRequest={modelPickerRequest}
+                    onOpenRequestConsumed={onModelPickerRequestConsumed}
                     sshCodex={sshCodexCatalog}
                     // 选中态一律是会话 / 草稿持有的 **wire model id**(sessions.model 或
                     // lastByVendor.model)。面板行的归一化 id 只活在面板内部 —— 从这里递进去
