@@ -300,6 +300,12 @@ export interface CindySlotDeps {
    */
   isModelAccessReady?(): boolean;
   /**
+   * 网关凭证正在下发(首次登录的 key 写入窗口)。此时 isModelAccessReady()
+   * 仍为 false,但马上会好:按目录暂时取不到的临时口径回复,不报 NO_CANDIDATE。
+   * 可选依赖:不注入 = 视为没有在下发。
+   */
+  isModelAccessProvisioning?(): boolean;
+  /**
    * 快问快答(text.oneshot,2026-07-31):把 prompt 交给主机的轻量任务
    * 模型链直答一次。注入实现包装 utility-model/oneShotCandidates 的
    * requestUtilityText(动态 import,保持本模块纯 node 可测)。可选依赖:
@@ -838,9 +844,13 @@ export class GhostCindySlot {
     // (说明见 cindyMediaCatalog.ts;详情页对应的那几行同时显示为灰字不可选)。
     if (cfg.models.length === 0 || cfg.defaults === null) {
       const category = CATEGORY_LABEL[info.category];
-      // 账号切换期间网关能力会暂时为否，目录也随之为空：那是可重试的临时状态，
-      // 不能当成"未登录"下结论，交给下面的临时口径。
-      if (!this.deps.isOwnerBoundaryPending() && this.deps.isModelAccessReady?.() === false) {
+      // 账号切换期间网关能力会暂时为否，目录也随之为空；首次登录时凭证还在下发，
+      // key 尚未写入。两者都是可重试的临时状态，不能当成"未登录"下结论，交给下面的临时口径。
+      if (
+        !this.deps.isOwnerBoundaryPending() &&
+        this.deps.isModelAccessProvisioning?.() !== true &&
+        this.deps.isModelAccessReady?.() === false
+      ) {
         return {
           ok: false,
           message:

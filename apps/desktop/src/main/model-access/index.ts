@@ -64,7 +64,8 @@ import {
   listExecutableMediaModels,
   resetExecutableMediaModelCache,
 } from './mediaModels.js';
-export { isModelAccessReady } from './readiness.js';
+import { noteModelAccessSyncState } from './readiness.js';
+export { isModelAccessProvisioning, isModelAccessReady } from './readiness.js';
 
 const log = createLogger('modelAccess');
 
@@ -417,6 +418,7 @@ function getSync(): CredentialsSync {
       writeXdKey: writeXdKeyWithCodexSideEffect,
       store: getModelAccessCredentialsStore(),
       onStatusChange: (status) => {
+        noteModelAccessSyncState(status.state);
         const auth = authManager.getAuthState();
         noteQuotaCredentialStatus(
           cloudQuotaOwnerKey(auth),
