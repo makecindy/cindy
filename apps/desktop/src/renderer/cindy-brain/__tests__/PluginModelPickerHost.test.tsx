@@ -201,6 +201,25 @@ it('retains the popover when the Host rejects the selected route', async () => {
   await waitFor(() => expect(resolve).toHaveBeenLastCalledWith('request', null));
 });
 
+// Greptile #8964: Escape was swallowed by the selection lock during remote validation.
+// Existing rejection coverage only presses Escape after validation completes. Minimal input:
+// one unresolved route response followed by Escape; late responses must stay ignored. Tier: unit.
+it('cancels during remote validation and ignores the superseded response', async () => {
+  let finishValidation!: (value: { handled: boolean; accepted: boolean }) => void;
+  resolve.mockImplementationOnce(() => new Promise((done) => { finishValidation = done; }));
+  selectedLocation = 'share:fixture';
+  render(<PluginModelPickerHost />);
+  act(() => push({ ...request, allowRemote: true, pageAnchor: {
+    guestId: 42, rect: { x: 20, y: 30, width: 160, height: 32 },
+  } }));
+  fireEvent.click(screen.getByText('Choose model'));
+  expect(resolve).toHaveBeenCalledWith('request', expect.objectContaining({ agentDeviceId: 'share:fixture' }));
+  await act(async () => { fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' }); });
+  expect(resolve).toHaveBeenLastCalledWith('request', null);
+  await act(async () => { finishValidation({ handled: false, accepted: false }); });
+  expect(screen.queryByText(zh.settings.ghosts.modelPicker.unavailable)).toBeNull();
+});
+
 it('cancels when the originating plugin page is gone instead of opening on a different page', async () => {
   render(<PluginModelPickerHost />);
   act(() => push({ ...request, pageAnchor: { guestId: 99, rect: { x: 20, y: 30, width: 160, height: 32 } } }));

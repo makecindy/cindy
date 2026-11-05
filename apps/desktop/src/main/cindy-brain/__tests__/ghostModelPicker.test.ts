@@ -197,6 +197,22 @@ describe('Host plugin model picker', () => {
     },
   );
 
+  // #8964: cancellation must win over an already-running remote availability check.
+  // Existing cancellation cases resolve before validation starts. Tier: unit, no real waiting.
+  it('discards a remote selection that finishes validation after cancellation', async () => {
+    const h = setup();
+    let finishValidation!: (value: boolean) => void;
+    h.available.mockImplementationOnce(() => new Promise((done) => { finishValidation = done; }));
+    const result = h.picker.request('plugin', { allowRemote: true });
+    const id = h.sent[0].requestId;
+    const selection = h.picker.resolve(7, id, { ...route, agentDeviceId: 'share:fixture' });
+    expect(await h.picker.resolve(7, id, null)).toEqual({ handled: true, accepted: true });
+    expect(await result).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    finishValidation(true);
+    expect(await selection).toEqual({ handled: false, accepted: false });
+    expect(h.dismiss).toHaveBeenCalledExactlyOnceWith(id);
+  });
+
   // Regression: the inherited directory-picker cooldown blocked normal rapid close/reopen
   // and switching between the page popover and dialog. Keep the clock fixed to catch it. Tier: unit.
   it('rejects malformed, disabled and concurrent requests but allows immediate reopening', async () => {

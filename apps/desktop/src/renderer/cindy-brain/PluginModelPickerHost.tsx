@@ -29,7 +29,8 @@ export function PluginModelPickerPopover({
   const draft = useRef(request.initial);
   const settled = useRef(false);
   const [error, setError] = useState(false);
-  const lock = useRef(false);
+  const lock = useRef<'selection' | 'cancel' | null>(null);
+  const answerSequence = useRef(0);
   const preferenceStore = useTransientModelPickerPreferences();
   const agents = useModelPickerAgents(
     route?.agentKind === 'cc' ? 'claude-code' : (route?.agentKind ?? 'codex'),
@@ -102,20 +103,25 @@ export function PluginModelPickerPopover({
   }, [request.requestId]);
   const answer = async (value: PluginModelPickerRoute | null) => {
     if (settled.current) return true;
-    if (lock.current) return false;
-    lock.current = true;
+    // Cancellation must reach Main even while a remote source is being checked.
+    // Its reply supersedes the in-flight selection, whose late result cannot change this UI.
+    if (lock.current && (value !== null || lock.current === 'cancel')) return false;
+    const sequence = ++answerSequence.current;
+    lock.current = value === null ? 'cancel' : 'selection';
     setError(false);
     try {
       const result = await onAnswer(value);
+      if (sequence !== answerSequence.current) return false;
       const accepted = result.handled && result.accepted;
       settled.current = accepted;
       if (!accepted) setError(true);
       return accepted;
     } catch {
+      if (sequence !== answerSequence.current) return false;
       setError(true);
       return false;
     } finally {
-      lock.current = false;
+      if (sequence === answerSequence.current) lock.current = null;
     }
   };
   const update = (value: PluginModelPickerRoute) => {
