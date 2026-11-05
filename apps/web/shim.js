@@ -370,7 +370,16 @@
     'preferredSystemLocale': 'en',
   });
 
+  /**
+   * The preload exposes plain objects with stable identities; renderer code
+   * memoizes on them (`useMemo([api, …])`, store subscriptions). Building a new
+   * Proxy per property read makes every one of those memo keys change on each
+   * render, which re-subscribes external stores forever.
+   */
+  const nodeCache = new Map();
+
   function makeNode(path) {
+    if (nodeCache.has(path)) return nodeCache.get(path);
     const node = function shimCall(...args) {
       window.__cindyCalls?.push(path);
       const handler = routes[path];
@@ -391,7 +400,7 @@
       // Mirror the preload: sync channels return values, the rest are promises.
       return sync ? value : Promise.resolve(value);
     };
-    return new Proxy(node, {
+    const proxy = new Proxy(node, {
       get(_target, prop) {
         if (path === '' && prop in SYNC_VALUES) return SYNC_VALUES[prop];
         const full = path ? `${path}.${String(prop)}` : String(prop);
@@ -417,6 +426,8 @@
         return makeNode(path ? `${path}.${String(prop)}` : String(prop));
       },
     });
+    nodeCache.set(path, proxy);
+    return proxy;
   }
 
   window.electronAPI = makeNode('');
