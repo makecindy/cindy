@@ -634,6 +634,21 @@ describe('companion store', () => {
       .rejects.toThrow('COMPANION_VALUE_TOO_LARGE');
   });
 
+  it('lets a hand-over to a preference-only reader through once a later edit overtakes the store value', async () => {
+    const t = storeSetup();
+    const key = 'companion.memory.v1:big.md';
+    t.setValues([profile('soul'), memory('big.md', 'small')]);
+    await t.uploader.syncBot('bot', 'actor');
+    t.entries.set(key, { key, revision: 1, seq: 9, hash: 'late', size: 70_000, deleted: false, value: { companionStore: 1, prefRevision: 1, value: { content: 'late' } } });
+    t.state.update('bot', 'actor', entry => { entry.storeSeeded = false; });
+    await expect(t.uploader.syncBot('bot', 'actor', Number.POSITIVE_INFINITY, { requireAll: true, preferencesOnly: true }))
+      .rejects.toThrow('COMPANION_VALUE_TOO_LARGE');
+    // This computer then edits the value: the newer preference row wins for every reader.
+    t.setValues([profile('soul'), memory('big.md', 'edited')]);
+    await expect(t.uploader.syncBot('bot', 'actor', Number.POSITIVE_INFINITY, { requireAll: true, preferencesOnly: true }))
+      .resolves.toBeGreaterThanOrEqual(0);
+  });
+
   it('passes a deletion of a value kept only in the store to the next restore', async () => {
     const t = storeSetup();
     const big = memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000));

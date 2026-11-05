@@ -150,12 +150,15 @@ export function createCompanionUploader(deps: {
     // is this computer's to clear only if that preference row is newer than the value (written
     // over an older row); a later value (the previous home's late upload) stays until edited here.
     const superseded = new Set<string>();
+    const kept = new Map<string, number>();
     const before = deps.state.bot(botId);
     for (const [key, row] of server) {
       const pref = before?.prefs[key];
       if (!owned(key) || row.hash === TOMBSTONE_HASH || before?.stored?.[key]?.local || !pref?.local) continue;
       const current = await store.entry(actorId, key) as { prefRevision?: number };
-      if (current.prefRevision !== undefined && pref.revision > current.prefRevision) superseded.add(key);
+      if (current.prefRevision === undefined) continue;
+      if (pref.revision > current.prefRevision) superseded.add(key);
+      else kept.set(key, current.prefRevision);
     }
     deps.state.update(botId, actorId, entry => {
       const stored = entry.stored ?? {};
@@ -163,7 +166,8 @@ export function createCompanionUploader(deps: {
         if (!owned(key)) continue;
         const known = stored[key];
         stored[key] = known?.local ? { ...known, revision: row.revision }
-          : { hash: row.hash, revision: row.revision, ...(superseded.has(key) ? { local: true } : {}) };
+          : { hash: row.hash, revision: row.revision, ...(superseded.has(key) ? { local: true } : {}),
+            ...(kept.has(key) ? { prefRevision: kept.get(key) } : {}) };
       }
       entry.stored = stored;
       entry.storeSeeded = true;
@@ -185,7 +189,7 @@ export function createCompanionUploader(deps: {
     // preference row (the previous home's late upload) stays.
     const serverPrefRevision = (server as { prefRevision?: number }).prefRevision;
     if (value === null && !server.deleted && (server.blob || (serverPrefRevision !== undefined && serverPrefRevision >= prefRevision))) {
-      deps.state.update(botId, actorId, entry => { entry.stored = { ...entry.stored, [key]: { hash: server.hash, revision: server.revision } }; });
+      deps.state.update(botId, actorId, entry => { entry.stored = { ...entry.stored, [key]: { hash: server.hash, revision: server.revision, ...(serverPrefRevision !== undefined ? { prefRevision: serverPrefRevision } : {}) } }; });
       return null;
     }
     return store.write(actorId, key, value, server.revision, prefRevision);
@@ -333,7 +337,9 @@ export function createCompanionUploader(deps: {
     // wrote (it wins over this computer's preference row on restore): not complete for it either.
     if (options.requireAll && options.preferencesOnly && store?.active()) {
       for (const [key, entry] of Object.entries(deps.state.bot(botId)?.stored ?? {})) {
-        if (!entry.local && entry.hash !== TOMBSTONE_HASH && owned(key) && !unread.some(prefix => key.startsWith(prefix))) skipped += 1;
+        // A preference written over the stored copy's revision already wins for every reader.
+        const overtaken = entry.prefRevision !== undefined && (deps.state.bot(botId)?.prefs[key]?.revision ?? 0) > entry.prefRevision;
+        if (!entry.local && !overtaken && entry.hash !== TOMBSTONE_HASH && owned(key) && !unread.some(prefix => key.startsWith(prefix))) skipped += 1;
       }
     }
     if (skipped > 0 && options.requireAll) throw new Error(COMPANION_VALUE_TOO_LARGE);
