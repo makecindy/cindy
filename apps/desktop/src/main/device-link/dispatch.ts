@@ -29,6 +29,8 @@ import {
   mapMessageBodies,
   messageRecord,
   MESSAGE_BODY_FORMAT,
+  PROVIDER_METADATA_TRUST_MS,
+  readProviderMetadataContinuity,
 } from '@cindy/device-link';
 import { requestFilePeer, stopFilePeers } from './filePeer';
 import { requestTaskMigration } from '../task-migration/service';
@@ -127,6 +129,7 @@ import { createLogger } from '../logger';
 import { projectMobileMessagePage, projectMobileToolPush } from './mobileToolProjection';
 import { normalizeSessionProviderId } from '../maker-host/session-provider-store.js';
 import { readDeviceLinkSettings } from './settings-store';
+import { noteControllerAccessAllowed, noteControllerAccessDenied, syncRemoteControlAccessGeneration } from './remoteControlAccess.js';
 import { PLUGIN_OAUTH_CHANNEL, PROVIDER_GROUP_REMOTE_CHANNEL } from '@cindy/device-link';
 import { requestPluginOauth, invalidatePluginOauth } from '../plugin-oauth/runtime.js';
 import { dispatchLocalInvoke } from './invoke-registry';
@@ -843,8 +846,19 @@ function projectInvokeResultForTunnel(
       ...(row.persistentSession === true ? { persistentSession: true } : {}),
     }));
   }
-  if (channel !== 'maker:provider:list') return result;
-  const r = result as { providers?: unknown; modelVisibilityOverrides?: unknown; providerOrder?: unknown };
+  if (channel !== 'maker:provider:list') {
+    // New hosts stamp every allowed object-form read. Keeping the original
+    // object spread here preserves existing fields and never adds private
+    // share fields: provider-share projection scrubs before this point.
+    if ((channel === 'maker:get-capabilities' || channel === 'maker:agent:status')
+      && result && typeof result === 'object' && !Array.isArray(result)) {
+      const continuity = readProviderMetadataContinuity(result);
+      return { ...result, providerContinuity: continuity ?? { stale: false, remainingMs: PROVIDER_METADATA_TRUST_MS } };
+    }
+    return result;
+  }
+  const r = result as { providers?: unknown; modelVisibilityOverrides?: unknown; providerOrder?: unknown;
+    providerContinuity?: unknown };
   if (!Array.isArray(r.providers)) return result;
   const modelVisibilityOverrides = r.modelVisibilityOverrides
     && typeof r.modelVisibilityOverrides === 'object'
@@ -894,10 +908,15 @@ function projectInvokeResultForTunnel(
     rest.routing = projectRoutingForDisplay(p.routing);
     return rest;
   });
+  // New hosts advertise the optional directory budget. Consumers deduct their
+  // own read time once; an existing shorter upstream remainder wins. Older
+  // controllers ignore this additive field.
+  const continuity = readProviderMetadataContinuity(r);
   return {
     providers,
     ...(modelVisibilityOverrides !== undefined ? { modelVisibilityOverrides } : {}),
     ...(Array.isArray(r.providerOrder) ? { providerOrder: normalizeProviderOrder(r.providerOrder) } : {}),
+    providerContinuity: continuity ?? { stale: false, remainingMs: PROVIDER_METADATA_TRUST_MS },
   };
 }
 
@@ -2936,6 +2955,7 @@ function handleLinkOpen(
   }
   // 第二道开关校验(server 已是第一道)
   if (!readDeviceLinkSettings().remoteControlEnabled) {
+    syncRemoteControlAccessGeneration();
     // server 正常不会转发到这里;真到了说明状态不一致,静默不 accept
     log.warn(`link-open from ${shortId(src)} rejected: remote control disabled locally`);
     return;
@@ -2943,6 +2963,7 @@ function handleLinkOpen(
   // 逐设备黑名单:已撤销访问权限的控制端,发 link-close('revoked') 给明确信号
   // (legacy openLink 仍会超时,但控制端据此 link-close 标记「已撤销」),不接受其 link-open。
   if (isControllerRevoked(src)) {
+    noteControllerAccessDenied(src);
     // 清理必须每次都做:限频只挡 closeLink/日志,不能把 purge 也吞掉。
     // 否则短暂解禁再撤权时,restore 窗口里装上的订阅会在 throttle 内继续收 push。
     purgeRevokedController(src);
@@ -2983,6 +3004,7 @@ function handleLinkOpen(
     return;
   }
   markControllerLinkActive(client, src);
+  noteControllerAccessAllowed(src);
   subscriptions.clearHistoryViews(src);
   acceptedLinkControllers.add(src);
   if (knownModernController) {
@@ -3328,11 +3350,17 @@ function currentRemoteInvokeAdmissionFailure(src: string): InvokeResultPayload |
   }
   if (isSharedTaskPeer(src)) return captureSharedTaskPeer(src) ? null : sharedTaskAccessFailure(src);
   if (!readDeviceLinkSettings().remoteControlEnabled) {
+    // This real admission is the first local observation of an external close.
+    // End retained continuity before the denial leaves, even if the controller
+    // never receives a link-close.
+    syncRemoteControlAccessGeneration();
     return { ok: false, error: { code: 'REMOTE_DISABLED', message: 'remote control disabled' } };
   }
   if (isControllerRevoked(src)) {
+    noteControllerAccessDenied(src);
     return { ok: false, error: { code: 'ACCESS_REVOKED', message: 'access revoked by target device' } };
   }
+  noteControllerAccessAllowed(src);
   return null;
 }
 
@@ -4238,12 +4266,15 @@ function handleSubscriptionFrame(
   }
   // 被控开关(server 已 gate invoke,这里二次兜底)
   if (!isSharedTaskPeer(src) && !readDeviceLinkSettings().remoteControlEnabled) {
+    syncRemoteControlAccessGeneration();
     return { ok: false, error: { code: 'REMOTE_DISABLED', message: 'remote control disabled' } };
   }
   // 逐设备黑名单:已撤销 → 拒绝订阅(控制端据此 ACCESS_REVOKED 标记「已撤销」+ 移除该设备)。
   if (isControllerRevoked(src)) {
+    if (!isSharedTaskPeer(src)) noteControllerAccessDenied(src);
     return { ok: false, error: { code: 'ACCESS_REVOKED', message: 'access revoked by target device' } };
   }
+  if (!isSharedTaskPeer(src)) noteControllerAccessAllowed(src);
   const arg = (payload.args ?? [])[0];
   const o =
     arg && typeof arg === 'object'
@@ -4418,7 +4449,11 @@ async function projectProviderShareRead(
   if (view && 'ok' in view) return view;
   if (channel === 'maker:agent:status') {
     const status = result && typeof result === 'object' ? result as { binaryReady?: unknown } : {};
-    return { ok: true, value: { binaryReady: view?.agents.includes(String(args[0])) === true && status.binaryReady === true } };
+    const continuity = readProviderMetadataContinuity(result);
+    return { ok: true, value: {
+      binaryReady: view?.agents.includes(String(args[0])) === true && status.binaryReady === true,
+      ...(continuity ? { providerContinuity: continuity } : {}),
+    } };
   }
   if (channel === 'maker:list-available-agents') {
     return { ok: true, value: Array.isArray(result) && view ? result.filter((agent) => view.agents.includes(String(agent))) : [] };
@@ -4619,15 +4654,19 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
   if (!payload || typeof payload.channel !== 'string') {
     return { ok: false, error: { code: 'INTERNAL', message: 'malformed invoke payload' } };
   }
+  const ordinaryPeer = !isProviderSharePeer(src) && !isSharedTaskPeer(src);
   // 双层校验之一:被控开关
   if (!isSharedTaskPeer(src) && !readDeviceLinkSettings().remoteControlEnabled) {
+    if (ordinaryPeer) syncRemoteControlAccessGeneration();
     return { ok: false, error: { code: 'REMOTE_DISABLED', message: 'remote control disabled' } };
   }
   // 逐设备黑名单:已撤销访问权限的控制端直接拒绝(早于 allowlist)。
   if (isControllerRevoked(src)) {
+    if (ordinaryPeer) noteControllerAccessDenied(src);
     log.warn(`blocked invoke from revoked controller ${shortId(src)}: ${payload.channel}`);
     return { ok: false, error: { code: 'ACCESS_REVOKED', message: 'access revoked by target device' } };
   }
+  if (ordinaryPeer) noteControllerAccessAllowed(src);
   // 双层校验之二:allowlist(权威)
   if (!REMOTE_INVOKE_ALLOWLIST.has(payload.channel)) {
     log.warn(`blocked non-allowlisted channel from ${shortId(src)}: ${payload.channel}`);

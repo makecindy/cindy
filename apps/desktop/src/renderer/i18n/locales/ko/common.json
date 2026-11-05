@@ -1024,11 +1024,19 @@
       "copied": "복사됨",
       "copyFailed": "복사하지 못했습니다. 다시 시도하거나 파일을 저장하세요.",
       "scrollHint": "선택 영역에서 위아래로 스크롤하거나 자동 스크롤을 선택하세요",
-      "recordHint": "미리 보기에 그린 주석은 녹화에 포함됩니다. 소리는 녹음하지 않습니다.",
+      "recordHint": "미리 보기에 그린 주석은 녹화에 포함됩니다.",
       "format": "형식",
       "videoFormat": "동영상 (WebM)",
-      "prepareHint": "시작을 누르면 3초 후 녹화됩니다. 소리는 녹음하지 않습니다.",
+      "prepareHint": "시작을 누르면 3초 후 녹화됩니다.",
       "countdown": "{{count}}초 후 녹화 시작",
+      "systemAudio": "스피커",
+      "microphone": "마이크",
+      "audioHint": "녹음할 소리를 선택한 후 녹화를 시작하세요.",
+      "preparingAudio": "오디오 준비 중…",
+      "systemAudioFailed": "스피커 소리를 녹음할 수 없습니다. 시스템 권한을 확인하거나 이 소리를 끄세요.",
+      "microphoneFailed": "마이크를 사용할 수 없습니다. 권한과 입력 장치를 확인하거나 마이크를 끄세요.",
+      "audioFailed": "녹음을 시작할 수 없습니다. 장치를 확인하거나 소리를 끄세요.",
+      "audioInterrupted": "오디오가 중단되었습니다. 녹화를 종료하여 녹화된 내용을 저장하세요.",
       "countdownHint": "곧 시작합니다. Esc를 누르면 취소됩니다.",
       "annotate": "주석",
       "finishing": "완료 처리 중…",
@@ -6026,8 +6034,10 @@
       "accessRevokedByPeer": "액세스 권한이 철회되었습니다. 상대방이 설정에서 복원해야 합니다",
       "deviceControlToggleAria": "{{name}} 제어 전환",
       "myDevices": {
-        "controlIt": "이 기기를 제어",
-        "allowInbound": "이 기기가 본 기기를 제어하도록 허용",
+        "iCan": "내가",
+        "itCan": "상대가",
+        "controlIt": "제어하기",
+        "controlThisDevice": "본 기기 제어",
         "allowInboundAria": "{{name}}이(가) 본 기기를 제어하도록 허용할지 전환",
         "peerControlOff": "상대방이 제어를 허용하지 않음",
         "masterOffHint": "먼저 위의 메인 스위치를 켜세요",
@@ -13417,6 +13427,24 @@
           "autocompactBuffer": "자동 압축 버퍼",
           "compactBuffer": "압축 버퍼",
           "freeSpace": "사용 가능"
+        },
+        "estimate": {
+          "title": "텍스트 추정치",
+          "delivery": "답변 표시",
+          "host": "Cindy 지침",
+          "plugins": "플러그인 목록",
+          "memoryRules": "메모리 지침",
+          "memoryIndex": "메모리 색인",
+          "profile": "팀원 프로필",
+          "user": "사용자 지침",
+          "directories": "추가 디렉터리",
+          "native": "Pi 지침",
+          "skills": "스킬 목록",
+          "project": "프로젝트 지침",
+          "tools": "도구 정의",
+          "messages": "대화 본문",
+          "other": "기타 지침",
+          "note": "현재 텍스트의 대략적인 추정치이며 모델의 토큰화 결과가 아닙니다. 이미지와 공급업체 형식의 추가 사용량은 제외되므로 합계가 Pi 총량과 일치하지 않습니다."
         }
       },
       "compact": {
@@ -14706,7 +14734,7 @@
         "manage": {
           "title": "PR 링크 관리",
           "hint": "상단에 최대 3개 표시하며 고정한 PR이 먼저 표시됩니다",
-          "empty": "GitHub PR 링크를 붙여넣어 추가하세요",
+          "empty": "GitHub PR 또는 GitLab MR 링크를 붙여넣어 추가하세요",
           "removed": "제거됨: {{count}}개",
           "legacy": "미확인 참조: {{count}}",
           "addLabel": "PR 링크 추가",
@@ -14717,17 +14745,26 @@
           "unpin": "고정 해제",
           "pinLimit": "PR은 최대 3개까지 고정할 수 있습니다",
           "reorderHint": "Alt+↑/↓ 키로 고정 또는 고정되지 않은 그룹 안에서 순서를 변경합니다.",
-          "dragHandle": "{{repo}} #{{number}} 끌어서 순서 변경",
+          "dragHandle": "{{repo}} {{numberLabel}} 끌어서 순서 변경",
           "remove": "PR 제거",
           "errors": {
             "duplicate": "이미 연결된 PR입니다. 제거한 링크는 목록에서 복원할 수 있습니다",
             "notFound": "PR을 찾을 수 없거나 접근 권한이 없습니다",
-            "invalidUrl": "유효한 GitHub PR 링크를 입력하세요",
+            "invalidUrl": "유효한 GitHub PR 또는 GitLab MR 링크를 입력하세요",
             "reorderFailed": "순서가 저장되지 않았습니다. 다시 시도하세요.",
-            "verifyFailed": "PR을 확인할 수 없습니다. GitHub 로그인과 접근 권한을 확인하세요",
+            "verifyFailed": "PR을 확인할 수 없습니다. GitHub 또는 GitLab 로그인과 접근 권한을 확인하세요",
             "unsupported": "이 컴퓨터의 버전은 PR 링크 관리를 지원하지 않습니다",
             "failed": "PR 링크를 업데이트할 수 없습니다"
           }
+        },
+        "gitlab": {
+          "missing": "GitLab CLI(glab)를 찾을 수 없습니다. glab를 설치하고 로그인하면 MR 상태가 표시됩니다.",
+          "notLoggedIn": "이 컴퓨터의 glab가 {{host}}에 로그인되어 있지 않습니다. 터미널에서 glab auth login을 실행해 로그인하면 MR 상태가 표시됩니다.",
+          "unsupported": "이 컴퓨터는 아직 GitLab MR 상태를 지원하지 않습니다",
+          "openAria": "브라우저에서 MR !{{number}} 열기",
+          "summaryAria": "MR !{{number}} 요약",
+          "urlPlaceholder": "GitHub PR 또는 GitLab MR 링크",
+          "notFound": "MR이 없거나 현재 계정으로는 볼 수 없습니다"
         }
       }
     },
