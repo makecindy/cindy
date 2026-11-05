@@ -1,4 +1,5 @@
 import { createAutoReviewIntentProjection, type AutoReviewUserIntent } from '@cindy/maker-shared/auto-review-intent';
+import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import type { AgentKind, UserMessage } from '../../types/common.js';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '../base-agent.js';
 
@@ -644,6 +645,11 @@ export function appendAutoReviewUserIntent(previous: AutoReviewUserIntent | unde
   );
 }
 
+/** A host-synthesized continuation re-sends the same user intent; it is not a new user input. */
+export function isAutoReviewNewUserInput(sendOpts?: SendOptions): boolean {
+  return !sendOpts?.[AUTO_REVIEW_DELEGATED_CONTINUATION];
+}
+
 export interface AutoReviewAgentContext {
   /** The agent's last public message before the user's current message: what a short "yes" answers. */
   lastReplyToUser?: string;
@@ -654,8 +660,12 @@ export interface AutoReviewAgentContext {
 /** Each field is kept at its end, where the question or the step being started usually sits. */
 export const MAX_AUTO_REVIEW_AGENT_CONTEXT_CHARS = 2_000;
 
+/** Raw window kept per field; far larger than what is sent, so cutting it never touches the sent tail. */
+const MAX_AGENT_TEXT_WINDOW_CHARS = 32_000;
+
+/** Redaction needs the text around a credential, so it always runs before any cut that drops text. */
 function tailOf(text: string): string {
-  const trimmed = text.trim();
+  const trimmed = redactSensitiveText(text).trim();
   return trimmed.length <= MAX_AUTO_REVIEW_AGENT_CONTEXT_CHARS
     ? trimmed
     : `…${trimmed.slice(-(MAX_AUTO_REVIEW_AGENT_CONTEXT_CHARS - 1))}`;
@@ -682,8 +692,7 @@ export function createAutoReviewAgentTextTracker() {
       if (afterTool || data.isFinal === true) explanation = '';
       afterTool = false;
       textSinceInput = true;
-      // Twice the sent budget is enough to keep an exact tail after trimming.
-      explanation = (explanation + data.text).slice(-2 * MAX_AUTO_REVIEW_AGENT_CONTEXT_CHARS);
+      explanation = (explanation + data.text).slice(-MAX_AGENT_TEXT_WINDOW_CHARS);
     },
     /** A new user input: the latest text becomes the message it replies to. */
     beginUserInput(): void {
@@ -693,7 +702,7 @@ export function createAutoReviewAgentTextTracker() {
       afterTool = false;
     },
     snapshot(toolDescription?: unknown, mainScope = true): AutoReviewAgentContext | undefined {
-      const purpose = [typeof toolDescription === 'string' ? toolDescription.trim() : '', mainScope ? explanation.trim() : '']
+      const purpose = [typeof toolDescription === 'string' ? toolDescription.slice(-MAX_AGENT_TEXT_WINDOW_CHARS).trim() : '', mainScope ? explanation.trim() : '']
         .filter(Boolean).join('\n');
       const context = {
         ...(lastReplyToUser.trim() ? { lastReplyToUser: tailOf(lastReplyToUser) } : {}),

@@ -28,6 +28,7 @@ import {
   normalizeAutoReviewUserIntent,
   createAutoReviewActionContext,
   createAutoReviewAgentTextTracker,
+  isAutoReviewNewUserInput,
   resolveAutoReviewDecision,
   formatPermissionDenial,
   toolAutoReviewAction,
@@ -755,6 +756,25 @@ describe('agent text tracker for Auto review', () => {
     expect(tracker.snapshot('Search docs', false)).toMatchObject({ statedPurpose: 'Search docs' });
     tracker.observe(text('Now pushing.'));
     expect(tracker.snapshot()).toMatchObject({ statedPurpose: 'Now pushing.' });
+  });
+});
+
+describe('agent text redaction and continuation', () => {
+  const text = (value: string) => ({ type: 'text', data: { text: value } });
+  it('redacts credentials before cutting, so a cut never strips the label that identifies one', () => {
+    const tracker = createAutoReviewAgentTextTracker();
+    tracker.observe(text('Status: password=opaqueCredentialValue123456789 ' + 'x'.repeat(1_980)));
+    tracker.beginUserInput();
+    tracker.observe(text('Next step'));
+    const context = tracker.snapshot('token=abcdefghijklmnopqrstuvwxyz012345\n' + 'y'.repeat(1_966))!;
+    expect(context.lastReplyToUser).not.toContain('CredentialValue');
+    expect(context.statedPurpose).not.toContain('abcdefghijklmnopqrstuvwxyz012345');
+    expect(context.statedPurpose!.length).toBeLessThanOrEqual(2_000);
+  });
+
+  it('only a real user input moves the reply, not a host continuation', () => {
+    expect(isAutoReviewNewUserInput({} as SendOptions)).toBe(true);
+    expect(isAutoReviewNewUserInput({ [AUTO_REVIEW_DELEGATED_CONTINUATION]: true } as SendOptions)).toBe(false);
   });
 });
 
