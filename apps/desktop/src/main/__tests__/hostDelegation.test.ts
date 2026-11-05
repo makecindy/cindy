@@ -97,6 +97,17 @@ describe('host proxies', () => {
       path: '/api/input/enqueue',
       body: { sessionId: 'task-1', item: { clientId: 'c1', text: 'hi' } },
     });
+
+    // The legacy send path maps onto the queue and reports acceptance.
+    const accepted = await handlers.get('maker:send')!({} as IpcMainInvokeEvent, 'task-1', 'hello', {
+      model: 'm1',
+      workingDir: '/tmp',
+    });
+    expect(accepted).toEqual({ accepted: true });
+    const send = requests.at(-1) as { path: string; body: { item: { text: string; model: string } } };
+    expect(send.path).toBe('/api/input/enqueue');
+    expect(send.body.item.text).toBe('hello');
+    expect(send.body.item.model).toBe('m1');
   });
 });
 

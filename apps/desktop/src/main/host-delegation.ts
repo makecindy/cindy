@@ -85,6 +85,8 @@ interface ProxiedChannel {
   readonly path: string;
   /** Renderer args → request body. */
   readonly body: (args: unknown[]) => unknown;
+  /** Host response → renderer result, when the shapes differ. */
+  readonly map?: (response: unknown) => unknown;
 }
 
 /** Channels the host implements; everything else is intentionally absent. */
@@ -115,6 +117,36 @@ export const PROXIED_CHANNELS: readonly ProxiedChannel[] = [
     channel: 'local-db:messages:create',
     path: '/api/messages/create',
     body: ([sessionId, message]) => ({ sessionId, message }),
+  },
+  {
+    // Legacy composer path: enqueue and report acceptance; the answer arrives on
+    // the event stream like any other turn.
+    channel: 'maker:send',
+    path: '/api/input/enqueue',
+    body: ([sessionId, message, createOpts]) => {
+      const options = createOpts as
+        | { agentKind?: string; model?: string; workingDir?: string; effort?: string; permissionMode?: string }
+        | undefined;
+      const text = typeof message === 'string' ? message : (message as { content?: unknown })?.content;
+      return {
+        sessionId,
+        item: {
+          clientId: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          text: typeof text === 'string' ? text : JSON.stringify(text ?? ''),
+          persistedContent: typeof text === 'string' ? text : JSON.stringify(text ?? ''),
+          model: options?.model ?? '',
+          effort: options?.effort ?? '',
+          permissionMode: options?.permissionMode ?? '',
+          workingDir: options?.workingDir ?? '',
+        },
+      };
+    },
+    map: () => ({ accepted: true }),
+  },
+  {
+    channel: 'maker:list-active',
+    path: '/api/sessions/list',
+    body: () => null,
   },
   { channel: 'maker:provider:list', path: '/api/providers', body: () => null },
   {
@@ -168,9 +200,10 @@ export function registerHostDelegatedIpc(deps: HostDelegatedIpcDeps): string[] {
   const installed: string[] = [];
   for (const entry of PROXIED_CHANNELS) {
     deps.ipcMain.removeHandler(entry.channel);
-    deps.ipcMain.handle(entry.channel, async (_event, ...args: unknown[]) =>
-      deps.client.request(entry.path, entry.body(args)),
-    );
+    deps.ipcMain.handle(entry.channel, async (_event, ...args: unknown[]) => {
+      const response = await deps.client.request(entry.path, entry.body(args));
+      return entry.map ? entry.map(response) : response;
+    });
     installed.push(entry.channel);
   }
   return installed;

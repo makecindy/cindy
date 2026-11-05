@@ -38,7 +38,7 @@
 
 | 能力 | 状态 | 证据 / 缺口 |
 |---|---|---|
-| 复用现有登录 | 部分 | OSCrypt 双向实测通过；`cindy-host login` 单测通过；**真实浏览器完成一次授权未验证**（需要用户本人凭证） |
+| 复用现有登录 | 部分 | 登录入口真实可达（含 PKCE/托管回调），重启后 `authenticated:true` 复用现有会话（`evidence/stage2-login.md`）；**真实浏览器完成一次授权未验证**（需要用户本人凭证） |
 | 复用现有存储 | 已验证 | 打开同一 owner 库（145 条 migration / 87 表），无平行数据库 |
 | 单 Runtime 锁 | 已验证 | 第二个 Host 报 `runtime.state=blocked`、`storage=unopened` |
 | 插件列表 | 已验证（读） | `#/plugins` 页在浏览器渲染空态「No plugins installed yet」，明暗两种模式正常；插件**执行**未迁移 |
