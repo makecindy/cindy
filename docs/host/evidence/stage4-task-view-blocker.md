@@ -92,10 +92,21 @@ Presence<= PopperProvider > TooltipProvider > TooltipPortal > … (54)
 | 2700 | 崩溃 |
 | 3000 / 3500 / 4500 | 崩溃 |
 
-切点差异只落在 2685–2700 这一段（`sessionInterruptAcked` latch effect 与
-`refreshPendingAlerts()` effect）。但把这两个 effect 的**函数体**分别用运行时开关短路后重建，
-崩溃仍在 —— 说明“是否执行该段 hook”与“是否崩溃”并非一一对应，此路二分已不足以继续收敛：
-需要在 renderer 内部用真实断点（React DevTools 交互式）观察首次渲染期间的 dispatch 序列。
+**该表需要按后续复测修正**：切点落在回调函数体内部时（2700 及之后），插入的 `return null`
+只是提前退出该回调，并未跳过后面的渲染，因此那些“崩溃”行不能当作二分证据。真正有效的
+切点是 2438/2560/2660/2685（都渲染 `null`、不挂载任何子组件）。
+
+在此基础上做了两项定点排除，均为构建 + 浏览器实测：
+
+| 假设 | 做法 | 结果 |
+|---|---|---|
+| latch effect（`setSessionInterruptAcked(true)`） | 运行时开关短路函数体 | 仍崩溃 |
+| `refreshPendingAlerts()` effect | 运行时开关短路函数体 | 仍崩溃 |
+| `MessageStream`（仅会话路由挂载） | `messageStreamEl` 直接置 `null` | 仍崩溃 |
+
+结论：循环需要**渲染子组件**才会发生（渲染 `null` 即恢复），但不在 `MessageStream`、也不在
+上述两个 effect 内。继续推进必须在运行时观察首次渲染期间的 dispatch 序列（例如给 `useState`
+的 setter 包一层探针），构建级二分到此为止。
 
 结论：循环源在 `CCAgentSessionContent` 的渲染子树内（不是 `ChatInput` 本身，也不是 Host 通道），
 且发生在首轮渲染提交之前。继续推进需要交互式调试，而不是构建级二分。
