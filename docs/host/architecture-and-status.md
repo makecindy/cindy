@@ -167,6 +167,13 @@ Host 现已注册真实 Codex agent（本机 Codex CLI 登录 lane，未复制�
 | 插件列表 | 已验证（读） | Host 复用 Desktop `GhostManager` 列出已装插件（`/api/ghosts`） |
 | Electron 客户端模式 | 已验证 | 有 Host 时自动加入（`host-endpoint.json`），`getMaker()` 抛错、21 通道由 Host 提供、0 error |
 
+### owner 解析（实测）
+
+- 不设 `CINDY_HOST_OWNER`、profile 内只有一个 `cindy-<owner>.db` → `runtime.state=ready`、
+  `storage=ready`、`agents=["claude-code","codex"]`，日志 `using the profile owner 20 chars long`。
+- 同 profile 放入第二个账号库 → `runtime.state=uninitialized`，
+  `detail="profile has 2 accounts; name one with CINDY_HOST_OWNER"`，不猜测、不打开任何库。
+
 已知缺口（均为 Host 侧未迁移，客户端模式下显式失败）：插件执行沙箱、MCP 执行、scheduler、
 device-link、记忆/文件工具；`historyView` 为单页返回（未分页）。
 
