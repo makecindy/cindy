@@ -32,7 +32,12 @@ $ curl -s http://127.0.0.1:3456/health
 {"runtime":"ready","authenticated":true,"realm":"global","agents":["claude-code","codex"]}
 ```
 
-## 3. 回环登录全链路（桩 IdP，非真实账号）
+## 3. 两条授权路径均已覆盖（桩 IdP，非真实账号）
+
+- **托管回调轮询**：`pollDesktopAuthorization` 先返回 `pending`、再返回 `ok(code)`，
+  登录完成并写入记录（`realm` 随区域）。
+- **回环监听**：本地桩端点 302 回 Host 的 loopback，PKCE/state/code 兑换/落盘全链路。
+
 
 `apps/host/src/auth/login.loopback.test.mjs` 用本地桩授权端点重定向回 Host 的 loopback
 监听，覆盖：PKCE S256 校验（challenge 与 verifier 一致）、`state` 校验、code 兑换、

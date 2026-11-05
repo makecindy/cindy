@@ -41,7 +41,7 @@ test('completes the loopback login against a stub provider and stores the sessio
         },
         exchangeAuthorizationCode: async (code, verifier) => {
           exchanged.push({ code, verifier });
-          return { refreshToken: 'stub-refresh-token' };
+          return { refreshToken: 'fixture-refresh-value' };
         },
       },
       store: { write: (key, value) => written.set(key, value) },
@@ -64,11 +64,41 @@ test('completes the loopback login against a stub provider and stores the sessio
       createHash('sha256').update(exchanged[0].verifier).digest('base64url'),
     );
     const stored = [...written.values()][0];
-    assert.match(stored, /stub-refresh-token/);
+    assert.match(stored, /fixture-refresh-value/);
     assert.match(stored, /"global"/);
   } finally {
     await new Promise((resolve) => provider.close(() => resolve()));
   }
+});
+
+test('completes the hosted-callback login once polling returns a code', async () => {
+  const written = new Map();
+  let polls = 0;
+  const result = await runHostLogin({
+    client: {
+      getProviders: async () => ({ social: ['apple'] }),
+      buildAuthorizeUrl: () => 'https://auth.example.invalid/authorize',
+      pollDesktopAuthorization: async () => {
+        polls += 1;
+        return polls < 2
+          ? { status: 'pending' }
+          : { status: 'ok', code: 'hosted-code' };
+      },
+      exchangeAuthorizationCode: async (code) => {
+        assert.equal(code, 'hosted-code');
+        return { refreshToken: 'fixture-refresh-value' };
+      },
+    },
+    store: { write: (key, value) => written.set(key, value) },
+    region: 'cn',
+    hostedCallbackUrl: 'https://auth.example.invalid/desktop/callback',
+    method: 'apple',
+    openBrowser: async () => {},
+  });
+
+  assert.deepEqual(result, { authenticated: true, realm: 'cn', method: 'apple' });
+  assert.ok(polls >= 2, 'keeps polling while the browser flow is pending');
+  assert.match([...written.values()][0], /fixture-refresh-value/);
 });
 
 test('refuses a callback whose state does not match the request', async () => {
@@ -92,7 +122,7 @@ test('refuses a callback whose state does not match the request', async () => {
             url.searchParams.set('state', state);
             return url.toString();
           },
-          exchangeAuthorizationCode: async () => ({ refreshToken: 'must-not-be-used' }),
+          exchangeAuthorizationCode: async () => ({ refreshToken: 'fixture-unused-value' }),
         },
         store: { write: () => assert.fail('nothing may be stored') },
         region: 'global',
