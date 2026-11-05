@@ -17465,6 +17465,7 @@
     "sidebar": "잔액 및 요금제",
     "settings": {
       "title": "사용량 및 결제",
+      "supportHint": "문제가 있나요? {{email}}로 문의해 도움을 받으세요.",
       "subscriptionCard": {
         "title": "현재 요금제",
         "empty": "활성 구독이 없습니다",
@@ -17539,14 +17540,38 @@
     },
     "orders": {
       "title": "주문 내역",
-      "description": "Cindy에서 시작한 잔액 충전 및 구독 주문만 표시합니다. 결제 대기 중인 주문은 시간이 지나면 자동으로 취소됩니다.",
+      "description": "결제된 충전 주문과 정산된 구독 청구서를 표시합니다.",
+      "history": {
+        "loadFailed": "주문 내역을 불러오지 못했습니다",
+        "retry": "주문 다시 불러오기",
+        "unknownPaidAt": "결제 일시 정보 없음",
+        "unknownAmount": "금액 정보 없음",
+        "refundedAmount": "환불액 {{amount}}",
+        "refunded": "환불됨",
+        "partiallyRefunded": "부분 환불됨",
+        "noPayment": "결제 불필요",
+        "page": "{{page}}페이지",
+        "previous": "이전 페이지",
+        "next": "다음 페이지"
+      },
       "count": "{{count}}건",
-      "incomplete": "주문 내역이 많아 최근 {{count}}건만 표시합니다.",
       "orderId": "NO. {{id}}",
       "copy": {
         "action": "주문 ID {{id}} 복사",
         "success": "주문 ID를 복사했습니다",
         "failed": "주문 ID를 복사하지 못했습니다. 다시 시도해 주세요."
+      },
+      "refund": {
+        "action": "환불 신청",
+        "title": "환불 신청",
+        "description": "환불을 신청하려면 다음 정보를 {{email}}로 보내 주세요.",
+        "emailSubject": "Cindy 환불 신청 - {{orderId}}",
+        "sendAction": "환불 신청 보내기",
+        "gmailFallbackDescription": "환불 신청에는 주문 정보가 포함됩니다. Gmail을 열면 이 정보가 Google에 공유됩니다. 계속하시겠어요?",
+        "emailBody": "안녕하세요. 아래 주문에 대한 환불을 신청하고 싶습니다. 확인 후 도움 부탁드립니다.\n\n주문 ID: {{orderId}}\n결제 거래 ID: {{providerTransactionId}}\n애플리케이션: {{application}}\n결제 수단: {{paymentMethod}}\n결제 금액: {{amount}}\n\n겪으신 문제:\n(어떤 상황이었는지 간단히 알려 주세요)\n\n감사합니다.",
+        "fields": {
+          "amount": "결제 금액"
+        }
       },
       "invoice": {
         "action": "세금계산서 신청",
@@ -17556,7 +17581,7 @@
         "emailSubject": "주문 {{orderId}} 세금계산서 발급 신청",
         "personalInvoicePolicy": "Cindy 개인용 충전 시 기본적으로 <strong>개인 명의의 세금계산서</strong>가 발급됩니다. 발급 명의는 성명 또는 “개인”으로 기재할 수 있습니다. 회사 경비 정산을 위해 기업 명의의 세금계산서가 필요한 경우, <strong>회사 직인이 날인된 경비 정산 설명서</strong>를 제출하고 설명서에 발급 명의를 명시해 주세요.",
         "invoiceTitleHint": "작성 안내: 개인 명의의 경우 성명 또는 “개인”을 기재해 주세요. 회사 경비 정산을 위해 기업 명의로 발급받으려면, 회사 직인이 날인되고 발급 명의가 명시된 경비 정산 설명서를 이메일에 첨부해 주세요.",
-        "emailBody": "안녕하세요.\n\n다음 주문에 대한 세금계산서 발급을 신청합니다.\n\n────────────────────\n주문 ID: {{orderId}}\n애플리케이션: {{application}}\n결제 수단: {{paymentMethod}}\n발행 금액: {{amount}}\n청구서 제목: \n{{invoiceTitleHint}}\n\n담당자: \n전화번호: \n이메일: \n────────────────────\n\n감사합니다.",
+        "emailBody": "안녕하세요.\n\n다음 주문에 대한 세금계산서 발급을 신청합니다.\n\n────────────────────\n주문 ID: {{orderId}}\n결제 거래 ID: {{providerTransactionId}}\n애플리케이션: {{application}}\n결제 수단: {{paymentMethod}}\n발행 금액: {{amount}}\n청구서 제목: \n{{invoiceTitleHint}}\n\n담당자: \n전화번호: \n이메일: \n────────────────────\n\n감사합니다.",
         "sendAction": "세금계산서 신청 보내기",
         "emailCopied": "고객센터 이메일을 복사했습니다",
         "emailCopyFailed": "고객센터 이메일을 복사하지 못했습니다. 다시 시도해 주세요.",
@@ -17567,6 +17592,7 @@
         "notAvailable": "정보 없음",
         "fields": {
           "orderId": "주문 ID",
+          "providerTransactionId": "결제 거래 ID",
           "application": "애플리케이션",
           "paymentMethod": "결제 수단",
           "amount": "발행 금액",

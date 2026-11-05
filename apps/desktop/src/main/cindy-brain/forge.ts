@@ -293,7 +293,6 @@ function scaffoldManifest(input: ForgeScaffoldInput): Record<string, unknown> {
     version: '1.0.0',
     kind: 'chip',
     entry: 'main.js',
-    icon: 'assets/icon.png',
   };
   if (input.template === 'agent-action') {
     return {
@@ -560,14 +559,6 @@ readline.createInterface({ input: process.stdin }).on('line', function (line) {
 `;
 }
 
-/**
- * 占位图标(128×128 纯色 PNG,离线生成后内嵌)。让「有图标」成为骨架默认:
- * 不配 icon 的插件在面板和身份头里只有默认拼图占位符,作者往往到发布才发现。
- * 官方插件仓惯例图标放 assets/icon.png(见 FORGE_GUIDE §8.1),骨架直接对齐。
- */
-const SCAFFOLD_ICON_PNG_BASE64 =
-  'iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAABEElEQVR42u3SMREAIAwAsfpFAAsKOETgtCyYgGZ4A3+J1leqbmECAEYAIABuY259HAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJgEgAAQAAJAAAgAASAABIAAEAACQAAIAAEgAASAABAAAkAACAABIAAEgAAQAAJAAAgAASAABIAAEAACQAAIAAEgAASAABAAAkAACAABIAAEgAAQAAJAAAgAASAABIAAEAACQAAIAAEgAASAABAAAkAACAABIAAEgAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAmASAABAAAkAACAABIAAEgAAQAAJAAAgAASAABIAAEAACQADodQCqFQAAmACAynYAQtWXyojiIUQAAAAASUVORK5CYII=';
-
 /** 按模板产出相对路径到源码内容的完整映射。 */
 function scaffoldFiles(input: ForgeScaffoldInput): Record<string, string | Buffer> {
   const manifest = scaffoldManifest(input);
@@ -586,7 +577,6 @@ function scaffoldFiles(input: ForgeScaffoldInput): Record<string, string | Buffe
           : input.template === 'node-mcp'
             ? nodeMcpMainSource()
             : plainMainSource(),
-    'assets/icon.png': Buffer.from(SCAFFOLD_ICON_PNG_BASE64, 'base64'),
   };
   if (input.withUi) {
     const handler = interactiveExampleMain.replace('cindy.onHostMessage(handleInteractivePage);', '');
@@ -847,6 +837,7 @@ export async function scaffoldGhostDir(
     files: Object.keys(files).sort(),
     nextSteps: [
       '按需要修改 ghost.json、main.js 和 worker 源码。',
+      '图标尚未设置：请用户提供图片，或在用户同意后调用 Agent 图片能力生成插件图标；不要制作纯色占位图。',
       '调用 ghost_forge_pack 校验并生成 .cindy；打包本身不会安装插件。',
       'Node 模板不允许在安装或首次运行时执行 npm install、npx 或 postinstall。',
     ],
@@ -946,7 +937,7 @@ async function buildGhostPackage(
       // 无效清单先交给正式 validator，避免 overlay 把 null/数组等输入改造成
       // 另一种形状、掩盖原始 MANIFEST_INVALID。只有普通对象才写入快照。
       if (typeof manifestRaw === 'object' && manifestRaw !== null && !Array.isArray(manifestRaw)) {
-        // icon_source 是打包期 overlay：源码仍保留 scaffold 占位图，只有用户
+        // icon_source 是打包期 overlay：源码保留原图标或缺省状态，只有用户
         // 确认生成成功的这一包替换图标。清单快照也同步指向固定安全路径。
         manifestRaw = { ...manifestRaw, icon: FORGE_AI_ICON_PATH };
         // 采用紧凑 JSON，避免仅为 overlay 重排空白就把清单推过安装侧上限。
