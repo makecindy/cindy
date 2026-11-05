@@ -81,6 +81,17 @@ pnpm --filter desktop test:migration-replay
 companion CommonJS 格式和历史 runtime identity 冻结；不能用单独 typecheck 代替。回放测试
 验证空库与历史 fixture 能实际升级到 HEAD；高风险历史兼容改动应补对应 fixture。
 
+CI 在 `windows-runner-checks` 中按相关路径运行完整 `migration` tier 与核心 DB 回归
+（迁移兼容、schema 租约与漂移、连接初始化），复用 Windows 的原生 SQLite、LFS
+sqlite-vec 与依赖准备。普通数据库源码变化（含 `db` tier 测试直接 import 的 localDb 外源码，如
+`git-context/prRefsStore.ts`）再按 Vitest import graph 选择既有 `db`
+tier 中的相关测试；删除源码、fixture 变化或无法确定事件基准时回退完整 DB 层。
+无关改动不执行这两层，严格性能计时仍留在 `db-perf`。路径和事件基准判定见
+`scripts/ci-database-tests.mjs`，涵盖 PR、merge queue 与 main push。执行入口拒绝
+不支持的平台，并校验 migration replay 报告确有通过用例、没有跳过。
+该步骤沿用 `Windows unit tests` 汇总门禁，静态 `db:validate`、既有伴侣 DB 回归
+与 guard 保持各自覆盖。回放只使用临时数据库，不读取用户 profile。
+
 ## Companion script
 
 - 路径和 basename 必须与 SQL 对齐：`drizzle/scripts/NNNN_name.ts` 对应

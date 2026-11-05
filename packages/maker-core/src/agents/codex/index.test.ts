@@ -1851,6 +1851,7 @@ function installFakeHost(
     codexBrowserMcpToolAvailable?: boolean;
     remoteCompactionProviderId?: string;
     cindyRemoteCompactionProviderId?: string;
+    defaultModelProviderId?: string;
     localCompactionProviderId?: string;
     codexCustomProviderRoutes?: Array<{
       providerId: string;
@@ -1996,6 +1997,7 @@ function installFakeHost(
     waitForMcpTool,
     getRemoteCompactionProviderId,
     getCindyRemoteCompactionProviderId,
+    getDefaultModelProviderId: () => opts.defaultModelProviderId,
     getLocalCompactionProviderId: () => opts.localCompactionProviderId ?? null,
     getCustomProviderModelProviderId,
     getCustomProviderThreadPolicy,
@@ -6073,6 +6075,43 @@ describe('CodexAgent.startSession developerInstructions', () => {
     await expect(agent.startSession({ sessionId: 'resume-provider-refusal', model: 'gpt-6.1-sol', providerId: 'openai',
       workingDir: '/repo', resumeSessionId: '11111111-1111-1111-1111-111111111111' })).rejects.toThrow();
     expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadFork)).toHaveLength(0);
+  });
+
+  // #8670: after switching a subscription task to another provider, the rebuilt
+  // app-server only declares cindy_openai as a spawn placeholder. That lets native
+  // config validation pass and thread/resume surface the structured mismatch above,
+  // so the saved history is forked onto the selected gateway identity. The bare
+  // -32600 case stays a hard error — it is what a spawn without the declaration
+  // reduces to. Coverage gap: installFakeHost had no default provider, so the
+  // provider-oauth route resolved threadModelProvider to undefined and this fork
+  // was only reachable through the integration fixture that declares every
+  // provider unconditionally (provider-compatibility.integration.test.ts).
+  it('forks history when a switched provider resumes a thread saved on cindy_openai', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method, params) => {
+      if (method === Method.ThreadResume) {
+        throw Object.assign(
+          new Error('This chat uses model provider "cindy_openai", which is no longer configured'),
+          { code: -32600, data: { type: 'modelProviderMismatch', modelProvider: 'cindy_openai', currentModelProvider: 'cindy_gateway' } },
+        );
+      }
+      if (method === Method.ThreadFork) {
+        const { model, modelProvider } = params as { model?: string; modelProvider?: string };
+        return { thread: { id: 'fork-thread-id' }, model, modelProvider, cwd: '/repo' };
+      }
+      return undefined;
+    }, { codexProxyActive: true, defaultModelProviderId: 'cindy_gateway' });
+    const handle = await agent.startSession({
+      sessionId: 'resume-legacy-cindy-openai', model: 'gpt-6.1-sol', providerId: 'xai',
+      workingDir: '/repo', resumeSessionId: '11111111-1111-1111-1111-111111111111',
+    });
+    const forks = host.request.mock.calls.filter(([method]) => method === Method.ThreadFork);
+    expect(forks).toHaveLength(1);
+    expect(forks[0][1]).toMatchObject({
+      threadId: '11111111-1111-1111-1111-111111111111',
+      modelProvider: 'cindy_gateway',
+    });
+    await handle.close();
   });
 
   it('selects one generic custom Provider identity for every eligible Responses model', async () => {

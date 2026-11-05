@@ -2808,6 +2808,7 @@ export function ProviderConnectionDialog({
                     <div key={model.id} className="flex items-center justify-between gap-2 border-b border-[var(--border-default)] py-2">
                       <span className="min-w-0 break-words text-[var(--text-primary)]">{model.id}</span>
                       <Button type="button" variant="secondary" size="sm" className="shrink-0"
+                        data-settings-search-action="Remove this model from the current provider draft"
                         aria-label={`${t('settings.providers.connection.removeModel')} ${model.id}`}
                         onClick={() => patch(activeTab, value => ({ ...value, models: value.models.filter(row => row.id !== model.id) }))}>
                         {t('settings.providers.connection.removeModel')}
@@ -3661,6 +3662,7 @@ export function ModelPickerOverlay({
               size="md"
               compact
               ref={primaryButtonRef}
+              data-settings-search-action="Confirm the model picker selection for the current provider draft"
               type="button"
               onClick={onConfirm}
             >

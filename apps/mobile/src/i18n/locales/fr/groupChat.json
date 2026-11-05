@@ -202,7 +202,22 @@
     "progressDone": "Terminé {{done}} / {{total}}",
     "allDone": "Tout est terminé",
     "intro_many": "Cela prend {{count}} étapes. Voici qui fait quoi :",
-    "eyebrow_many": "Plan · {{count}} étapes"
+    "eyebrow_many": "Plan · {{count}} étapes",
+    "stepQueued": "En attente de démarrage",
+    "stepExecuting": "En cours",
+    "stepSkipped": "Ignoré",
+    "skippingTurn": "Passage en cours…",
+    "queueWaiting": "En attente de la suite",
+    "skipTurnLabel": "Passer {{name}}",
+    "stepSpoken": "Terminé",
+    "allTurns_one": "{{count}} coéquipier",
+    "allTurns_other": "Les {{count}} coéquipiers",
+    "foldTurns": "Afficher moins",
+    "allTurns_many": "Les {{count}} coéquipiers",
+    "talkTitle": "Écouter chacun à son tour",
+    "talkPending": "Non commencé",
+    "skipTurn": "Passer",
+    "queueEnded": "Tour terminé"
   },
   "speaking": {
     "queued": "En attente",
@@ -314,7 +329,8 @@
     "lifecycleUnavailable": "Le serveur ou l'ordinateur actuel ne prend pas encore en charge cette action.",
     "groupDissolved": "Ce groupe a été dissous. Vous pouvez toujours lire l'historique disponible.",
     "lastOwner": "Transférez la propriété ou dissolvez ce groupe avant de le quitter.",
-    "allBotsMentionDisabled": "Le propriétaire du groupe n’a pas encore activé @Tous les coéquipiers."
+    "allBotsMentionDisabled": "Le propriétaire du groupe n’a pas encore activé @Tous les coéquipiers.",
+    "turnAlreadyStarted": "Ce coéquipier a déjà commencé et ne peut plus être ignoré"
   },
   "followUp": {
     "next": "Plan · Étape suivante",
@@ -512,6 +528,7 @@
     "searchMembers": "Rechercher des membres",
     "membersNoMatch": "Aucun membre ne correspond à « {{query}} »",
     "you": "Vous",
+    "companionOf": "Compagnon de {{name}}",
     "teammateTag": "Coéquipier",
     "paused": "En pause",
     "accessNone": "Propriétaire uniquement",

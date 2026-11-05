@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateGhostManifest } from '../manifest.js';
+import { validateGhostManifest, validateStoredGhostManifest } from '../manifest.js';
 
 const base = {
   schemaVersion: 3, minCindyVersion: '0.1.0', id: 'future-declarations',
@@ -8,6 +8,69 @@ const base = {
 const extension = { mode: 'future', options: [1, null, { enabled: true }] };
 
 describe('declaration forward compatibility is not Host authorization', () => {
+  // 4.1: named tabs need distinct identities and packaged entry pages. The
+  // existing contribution matrix does not validate tab declarations. Tier: unit.
+  it('validates named tab pages without changing stored or legacy declarations', () => {
+    const view = { id: 'log', title: 'Log', scope: 'session', page: 'views/log.html' };
+    expect(validateGhostManifest({ ...base, ui: { version: 1, tabViews: [view,
+      { ...view, id: 'preview', scope: 'global' }] } })).toMatchObject({ ok: true });
+    for (const tabViews of [[view, view], [{ ...view, page: '../outside.html' }],
+      [{ ...view, page: 'views/log.js' }], [{ ...view, scope: 'message' }]]) {
+      const raw = { ...base, ui: { version: 1, tabViews } };
+      expect(validateGhostManifest(raw).ok).toBe(false);
+      expect(validateStoredGhostManifest(raw)).toMatchObject({ ok: true, manifest: { ui: raw.ui } });
+    }
+  });
+  it('preserves historical malformed UI without tolerating unrelated invalid package data', () => {
+    const raw = { ...base, ui: { version: 1, contributions: 'old unknown data' } };
+    expect(validateGhostManifest(raw).ok).toBe(false);
+    expect(validateStoredGhostManifest(raw)).toMatchObject({ ok: true, manifest: { ui: raw.ui } });
+    expect(validateStoredGhostManifest({ ...raw, entry: '../escape.js' }).ok).toBe(false);
+  });
+  // C1: these are package-parser outcomes, not evidence of runtime authority.
+  it.each([
+    { version: 1 },
+    { version: 1, appearance: { fields: ['uiFont', 'future-field'], resources: [{ id: 'regular', kind: 'font', path: 'assets/regular.ttf' }] } },
+    { version: 1, contributions: [{ id: 'format', point: 'composer.tools', scope: 'session' }] },
+    { version: 1, contributions: [{ id: 'format', point: 'composer.tools', scope: 'session', context: ['session.summary', 'selection'], editor: ['append'] }] },
+    { version: 1, contributions: [{ id: 'message', point: 'message.body', scope: 'message', match: { kind: 'self' } }] },
+    { version: 1, contributions: [{ id: 'message', point: 'message.body', scope: 'message', page: 'ui/message.html' }] },
+    { version: 1, contributions: [{ id: 'future', point: 'future.point', scope: 'future', page: { future: true } }] },
+    { version: 1, contributions: [{ id: 'tool', point: 'tool.body', scope: 'tool', match: { kind: 'plugin', instanceId: '_root__writer', name: 'format' } }] },
+    { version: 1, commands: [{ id: 'format', title: 'Format', points: ['composer.tools', 'session.header.actions'], scope: 'session', context: ['selection'], editor: ['append'], defaultShortcut: { code: 'KeyJ', meta: true } }] },
+    { version: 1, commands: [{ id: 'keyboard-only', title: 'Keyboard command', scope: 'session' }] },
+    { version: 1, contributions: [{ id: 'future', point: 'future.point', scope: 'future', future: extension }] },
+    { version: 2, contributions: 'future representation', future: extension },
+  ])('retains additive native UI declarations without changing their canonical bytes: %j', (ui) => {
+    const result = validateGhostManifest({ ...base, ui });
+    expect(result).toMatchObject({ ok: true, manifest: { ui } });
+    if (result.ok) expect(validateGhostManifest(result.manifest)).toEqual(result);
+  });
+
+  it.each([
+    null, [], {}, { version: 0 }, { version: '1' },
+    { version: 1, contributions: null },
+    { version: 1, commands: null },
+    { version: 1, commands: [{ id: 'format', title: 'Format', points: ['composer.tools'], scope: 'session' }, { id: 'format', title: 'Other', points: ['composer.tools'], scope: 'session' }] },
+    { version: 1, commands: [{ id: 'format', title: 'Format', points: ['composer.tools', 'composer.tools'], scope: 'session' }] },
+    { version: 1, commands: [{ id: 'format', title: 'Format', points: ['composer.tools'], scope: 'session', defaultShortcut: { code: 'KeyJ', meta: 'yes' } }] },
+    { version: 1, appearance: { fields: ['uiFont'], resources: [{ id: 'font', kind: 'font', path: '../secret.ttf' }] } },
+    { version: 1, appearance: { fields: ['uiFont', 'uiFont'] } },
+    { version: 1, contributions: [{ id: 'a', point: 'composer.tools' }] },
+    { version: 1, contributions: [{ id: 'a', point: 'composer.tools', scope: 'session' }, { id: 'a', point: 'future', scope: 'session' }] },
+    { version: 1, contributions: [{ id: 'a', point: 'x'.repeat(161), scope: 'session' }] },
+    { version: 1, contributions: [{ id: 'a', point: 'composer.tools', scope: 'session', context: ['selection', 'selection'] }] },
+    { version: 1, contributions: [{ id: 'a', point: 'composer.tools', scope: 'session', editor: true }] },
+    { version: 1, contributions: [{ id: 'a', point: 'tool.body', scope: 'tool', match: { kind: 'plugin' } }] },
+    { version: 1, contributions: [{ id: 'a', point: 'tool.body', scope: 'tool', match: { kind: 'tool', name: '' } }] },
+    { version: 1, contributions: [{ id: 'a', point: 'message.body', scope: 'message', page: '../outside.html' }] },
+    { version: 1, contributions: [{ id: 'a', point: 'tool.body', scope: 'tool', page: 'https://example.com/page.html' }] },
+    { version: 1, contributions: [{ id: 'a', point: 'composer.tools', scope: 'session', page: 'page.js' }] },
+    { version: 1, contributions: [{ id: 'a', point: 'message.body', scope: 'message', page: { path: 'page.html' } }] },
+  ])('rejects malformed known native UI declarations: %j', (ui) => {
+    expect(validateGhostManifest({ ...base, ui }).ok).toBe(false);
+  });
+
   it.each([
     ['mobile', { channels: ['practice-ui'], panel: 'mobile/panel.html' }],
     ['mainView', { html: 'view.html' }],

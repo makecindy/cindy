@@ -298,8 +298,9 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 
 - 首次安装只来自明确依据：用户导入本地 `.cindy`、明确要求当前 Agent 调用
   `ghost_forge_install`、用户点击某个市场条目的安装、当前 Agent 按用户请求与既有操作授权
-  调用 `ghost_market_install` 安装选定的缺失插件，或服务端为当前 owner 下发
-  `defaultInstall`。安装成功默认启用。
+  调用 `ghost_market_install` 安装选定的缺失插件，用户在「迁移助理」中选择并确认的
+  市场插件（[新电脑设置](../product-rules/new-device-setup-migration.md)），或服务端为当前
+  owner 下发 `defaultInstall`。安装成功默认启用。
 - **安装／更新确认**（`shared/ghostInstallConsent.ts` 判据，`main/cindy-brain/ghostInstallConsent.ts`
   两段式实现）：
   - 判据：「权限」与插件详情页权限区同口径，即 `ghostPermissionItems` 中除 Agent 工具外的
@@ -324,6 +325,11 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
     租约内捕获 owner 并传入装入入口，等锁结束后若账号已切换则拒绝取租约。每条装入路径都
     必须显式交出确认策略（`prompt`／`automatic`／`exempt`）或锁外求得的结论，签名上必填，
     新增路径无法漏掉。
+  - 「迁移助理」仍走 `prompt` 策略与上面的两段式：迁移窗口展示 Main 按这台电脑市场
+    release 的 manifest 算出的确认事实（`evaluateGhostInstallConsent`），用户一次确认整批；
+    安装时 prompt 只在真实包算出的事实与用户确认的事实一致时回答「已确认」，否则回落到发起窗口
+    的普通逐个确认。批准只来自同一窗口、同一账号的计划，Renderer 只能选择计划内的条目，不能
+    提交事实；锁内复核与包摘要绑定不变。不新增批准记录或豁免策略，存量插件影响：无。
   - 服务端 `defaultInstall` 插件（首装、组织默认接管与之后的自动更新）按下发方决定，
     策略为 `exempt`，不向用户确认。豁免只绑当前用户对该条目的默认下发资格：目录标
     `defaultInstall` 且该用户没有仍生效的 default-install opt-out。只有用户显式卸载写
@@ -901,7 +907,7 @@ Forge 新装默认 root，不按当前登录组织自动创建组织实例。已
 
 `taskView`（跟对话的任务页）的现行协议在 `FORGE_GUIDE` §4.22；v2 对应 `task-view` 槽。
 任务页页签（右侧栏 kind `plugin-task`）存在各任务自己的页签桶里，随任务切换；页面与
-panel / mainView 同一 Ghost WebView 沙箱（零桥、专属分区），只经查询参数 `session`
+panel / mainView 同一 Ghost WebView 沙箱（专属分区，仅有下述页面选模桥），只经查询参数 `session`
 得知所在任务。逻辑页经 `cindy.taskView({sessionId?, focus?})`（管子 `task-view-request`）
 打开或聚焦它：只承载包内页面、不收网址，因此不设 preview 式白名单与限速。Host 做资格审
 （已装、启用、声明 taskView）与落点解析（显式任务优先，缺省台前任务），回执带回落点
@@ -1063,6 +1069,20 @@ IPC 时追加对应专项规则要求的验证。
 
 ### 宿主统一模型选择器（新增接口，尚未发布）
 
+桌面插件的 settings / panel / mainView / taskView WebView 可调用
+`window.cindyUI.pickModel({anchor:{x,y,width,height},initial?,allowRemote?})`，锚点使用按钮
+`getBoundingClientRect()` 的页面 CSS 坐标；默认包含其他电脑与分享供应商。
+Main 只向通过安装／owner 附加校验的 guest 注入页面选模桥（原生 tabView 与普通页面共用），只暴露这一个方法，
+逐次核对真实 sender 和顶层 frame，绑定原 guest、宿主窗口与批准代次。
+Renderer 在原宿主窗口定位该 guest，把按钮坐标换算到宿主；不存在、隐藏或锚点越界时取消。
+模型目录、搜索、收藏、最近使用、说明、档位与 Fast 复用 `ModelRouteSelectorContent`，
+选中后经既有可用性校验返回完整 route；不返回凭证、endpoint 或 ProviderView。
+参数和收藏编辑沿用现有插件选模的单次草稿，不写宿主偏好。旧 `pickModel` 与
+`POST /model-picker` 保留居中确认弹窗及原默认值，不改变旧插件批准。
+页面滚动／缩放、文档导航、关闭或崩溃撤销等待，旧答案不能落到替代页。
+此页面桥仅本机 Electron guest 使用，不进入 device-link 白名单；手机、远程控制页面与旧 Host
+须检测接口并沿用电子脑 `pickModel({mobilePageId,...})` 的原生选模通道。
+
 电子脑 `cindy.pickModel({initial?,mobilePageId?,allowRemote?})` 与桌面页面同源 `POST /model-picker`
 复用 Cindy 的统一模型选择器，返回完整配置（模型、引擎、思考档位、Fast 与可选的 `agentDeviceId` 运行来源）。
 选模不需要新的 manifest 权限、不改变存量批准，不修改默认或现有任务、不执行模型调用。
@@ -1070,7 +1090,8 @@ IPC 时追加对应专项规则要求的验证。
 
 Main 按真实逻辑页或专属协议分区定位物理实例，绑定当前 owner 与安装批准版本；
 只接受目标宿主窗口或目标页面的回答，验证输入形状与实际可用路由，异步校验后再次复核绑定。
-同一 Host 仅一单，重复打开沿用目录选择的限速。取消、90 秒超时、窗口/页面关闭、账号边界、
+同一 Host 仅一单，已有选择器时返回 `BUSY`；选模不调用模型，不设关闭后重新打开的时间冷却。
+取消、90 秒超时、窗口/页面关闭、账号边界、
 插件停止均撤销等待并收起界面；不可用的来源保持选择器可编辑，不能静默换模型。
 手机与远程桌面设置页保留显式 mobilePageId，展示端读取执行电脑目录，缺失/失效来源不回退另一设备。
 原生插件页与远程 Desktop 设置控制端打开页面时声明 `modelPickerRemoteSources:true`，Host

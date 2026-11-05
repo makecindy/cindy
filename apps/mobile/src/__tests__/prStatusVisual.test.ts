@@ -29,4 +29,20 @@ describe('prStatusVisual', () => {
     expect(prStatusVisual('draft', lightColors).Icon).toBe(GitPullRequestDraft);
     expect(prStatusVisual(null, lightColors).Icon).toBe(GitPullRequest);
   });
+  // Unit: open conflict changes only the tint; drafts and terminal statuses keep priority.
+  it("uses warning only for a confirmed open conflict in both themes", () => {
+    for (const colors of [lightColors, darkColors]) {
+      expect(prStatusVisual("open", colors, true)).toEqual({
+        Icon: GitPullRequest,
+        color: colors.warningFg,
+      });
+      for (const kind of ["draft", "closed", "merged", null] as const)
+        expect(prStatusVisual(kind, colors, true)).toEqual(
+          prStatusVisual(kind, colors),
+        );
+      expect(prStatusVisual("open", colors, null)).toEqual(
+        prStatusVisual("open", colors),
+      );
+    }
+  });
 });

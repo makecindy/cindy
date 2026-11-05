@@ -362,8 +362,10 @@ function referencePriceQuoteForVariant(
   });
 }
 
+/** `at` 解析某一天生效的路由参考价(历史用量估价)；省略为今天。 */
 export function registryPricingCatalog(
   registry: ModelRegistry | null | undefined,
+  at?: string | Date,
 ): ModelPricingCatalog {
   const catalog: ModelPricingCatalog = {};
   if (!registry) return catalog;
@@ -372,7 +374,7 @@ export function registryPricingCatalog(
       // XD/Cindy AI 的售价只认登录账号对应的 Gateway /models 响应。公共 registry
       // 只提供用户自带 API/OAuth 的参考价，绝不能在 Gateway 离线时伪装成 XD 售价。
       if (route.providerId === 'xd') continue;
-      const quote = providerReferencePriceQuote(route.providerId, route.modelId, registry);
+      const quote = providerReferencePriceQuote(route.providerId, route.modelId, registry, { at });
       if (!quote) continue;
       (catalog[route.providerId] ??= {})[route.modelId] = quote;
     }

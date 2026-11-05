@@ -18,6 +18,8 @@ import { throwIpcError } from '../utils/ipcValidate';
 import { recordingControlsBounds, scrollCaptureLayout, scrollPreviewBounds, validRecordingBytes, type ScrollCaptureLayout, type RegionCaptureBegin, type RegionCaptureFrame, type RegionCaptureMode } from '../../shared/regionCapture';
 import { captureLiveRegion, RegionVideoCapture } from './liveCapture';
 import { saveRegionRecording } from './save';
+import { RecordingAudioHost } from './recordingAudio';
+import { isRecordingAudioOptions, type RecordingAudioError } from '../../shared/recordingAudio';
 import {
   intersectRegion,
   isRegionScreenshotAction,
@@ -102,6 +104,7 @@ export class RegionScreenshotSession {
   private handedToEditor = false;
   private exporting = false;
   private videoCapture: RegionVideoCapture | null = null;
+  private audioCapture: RecordingAudioHost | null = null;
   private recordingControls: RegionRect | null = null;
   private draggingControls = false;
   private live: { member: Member; selection: RegionRect; mode: RegionCaptureMode; sampling: boolean; lastSample: number; editing: boolean; layout: ScrollCaptureLayout | null; automatic: boolean; target: SnapshotWindow | null; targetResolved: boolean; ignoring: boolean; previewHeight: number } | null = null;
@@ -533,6 +536,37 @@ export class RegionScreenshotSession {
     }
   }
 
+  async startAudio(sender: WebContents, frame: Electron.WebFrameMain | null, token: unknown, options: unknown): Promise<RecordingAudioError | null> {
+    const member = this.member(sender, frame, token);
+    if (!member || this.live?.member !== member || this.live.mode !== 'video') return throwIpcError('PERMISSION_DENIED', 'Invalid recording');
+    if (!isRecordingAudioOptions(options)) return throwIpcError('INVALID_ARGUMENT', 'Invalid audio options');
+    this.audioCapture?.stop(); this.audioCapture = null;
+    if (!options.system && !options.microphone) return null;
+    const audio = new RecordingAudioHost(options, member.capture.display.id);
+    this.audioCapture = audio;
+    try {
+      await audio.start();
+      if (this.closed || this.audioCapture !== audio) { audio.stop(); return 'audioFailed'; }
+      return null;
+    } catch (error) {
+      audio.stop();
+      if (this.audioCapture === audio) this.audioCapture = null;
+      return error instanceof Error && (error.message === 'systemAudioFailed' || error.message === 'microphoneFailed') ? error.message : 'audioFailed';
+    }
+  }
+
+  readAudio(sender: WebContents, frame: Electron.WebFrameMain | null, token: unknown): Uint8Array {
+    const member = this.member(sender, frame, token);
+    if (!member || this.live?.member !== member || this.live.mode !== 'video' || !this.audioCapture) return throwIpcError('PERMISSION_DENIED', 'Invalid recording');
+    return this.audioCapture.read();
+  }
+
+  stopAudio(sender: WebContents, frame: Electron.WebFrameMain | null, token: unknown): void {
+    const member = this.member(sender, frame, token);
+    if (!member || this.live?.member !== member) return;
+    this.audioCapture?.stop(); this.audioCapture = null;
+  }
+
   async saveRecording(sender: WebContents, frame: Electron.WebFrameMain | null, token: unknown, bytes: unknown, format: unknown): Promise<boolean> {
     const member = this.member(sender, frame, token);
     if (!member || !this.live || this.live.member !== member || this.exporting) return false;
@@ -668,6 +702,8 @@ export class RegionScreenshotSession {
     this.stopScrolling();
     this.videoCapture?.stop();
     this.videoCapture = null;
+    this.audioCapture?.stop();
+    this.audioCapture = null;
     this.live = null;
     if (this.revealTimer) clearTimeout(this.revealTimer);
     this.releaseEscape();

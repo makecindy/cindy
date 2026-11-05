@@ -16,6 +16,7 @@ import type { ThemeColors } from '@/theme';
 export function prStatusVisual(
   kind: PrStatusKind | null,
   colors: ThemeColors,
+  conflicts?: boolean | null,
 ): { Icon: LucideIcon; color: string } {
   switch (kind) {
     case 'merged':
@@ -25,7 +26,10 @@ export function prStatusVisual(
     case 'draft':
       return { Icon: GitPullRequestDraft, color: colors.textTertiary };
     case 'open':
-      return { Icon: GitPullRequest, color: colors.statusDone };
+      return {
+        Icon: GitPullRequest,
+        color: conflicts === true ? colors.warningFg : colors.statusDone,
+      };
     default:
       return { Icon: GitPullRequest, color: colors.textTertiary };
   }
