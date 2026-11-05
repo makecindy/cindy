@@ -388,7 +388,8 @@ pub fn run_moves(scenario: &Scenario) -> Report {
 pub fn random_scenario(seed: u64) -> Scenario {
     let mut rng = Rng::new(seed ^ 0x3A1F_0C4E);
     let mut config = crate::random_case(seed).config;
-    config.max_packet_size = config.max_packet_size.max(128);
+    // 握手请求至少 135 字节（2026-11-06 加了 mac1、mac2 以前是 103）。
+    config.max_packet_size = config.max_packet_size.max(160);
     // 握手、启动都完成以后再换，也有一开始就换的。
     let first = rng.pick(&[200_000, 1_000_000, 3_000_000]);
     let moves = (0..1 + rng.below(2))

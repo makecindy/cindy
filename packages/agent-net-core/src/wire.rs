@@ -8,6 +8,7 @@
 //! PARITY：`[4][首分片序号低 16 位 2][覆盖分片数 1][校验包序号 1][长度校验 2][校验内容]`，内容一直到包尾，所以只能是最后一帧。
 //! PATH_CHALLENGE / PATH_RESPONSE：`[6、8 或 7][值 8]`，只用在加密连接的路径验证里，单独成包，后面全是填充的零，见 `secure.rs`。
 //! 8 是验证一个只换了端口的地址（来源 IP 和数据路径相同），被验证的一端不用从头量往返和带宽。
+//! CLOSE：`[9]`，只用在加密连接里，单独成包：发包的一端已经关掉这条连接，对端收到就停，不用等判死，见 `secure.rs`。
 //!
 //! 每次发送都用新包号，重传也不例外：这样 RTT 没有歧义，第 4 步也能用包号做加密 nonce。
 
@@ -48,8 +49,10 @@ const FRAME_CREDIT: u8 = 5;
 const FRAME_PATH_CHALLENGE: u8 = 6;
 const FRAME_PATH_RESPONSE: u8 = 7;
 const FRAME_PATH_CHALLENGE_SAME_ROUTE: u8 = 8;
+const FRAME_CLOSE: u8 = 9;
 pub(crate) const CREDIT_FRAME_LEN: usize = 9;
 pub(crate) const PATH_FRAME_LEN: usize = 9;
+pub(crate) const CLOSE_FRAME_LEN: usize = 1;
 
 /// 确认延迟的单位。两字节能表示约 4.2 秒，再长就饱和。
 const ACK_DELAY_UNIT_US: u64 = 64;
@@ -198,6 +201,15 @@ pub(crate) fn write_path_frame(out: &mut [u8], frame: PathFrame, value: u64) {
     };
     out[1..PATH_FRAME_LEN].copy_from_slice(&value.to_be_bytes());
     out[PATH_FRAME_LEN..].fill(0);
+}
+
+pub(crate) fn write_close_frame(out: &mut [u8]) {
+    out[0] = FRAME_CLOSE;
+}
+
+/// 包头之后是不是关闭帧。
+pub(crate) fn is_close_frame(frames: &[u8]) -> bool {
+    frames == [FRAME_CLOSE]
 }
 
 /// 包头之后是不是路径验证帧。

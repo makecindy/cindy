@@ -46,6 +46,16 @@ impl PathAddress for Address {
             Address::Link { cost, .. } => *cost,
         }
     }
+
+    fn write_identity(&self, out: &mut Vec<u8>) {
+        match self {
+            Address::Udp(address) => address.write_identity(out),
+            Address::Link { id, .. } => {
+                out.push(LINK_FAMILY);
+                out.extend_from_slice(&id.to_be_bytes());
+            }
+        }
+    }
 }
 
 /// 和宿主交换数据的固定缓冲。
@@ -375,7 +385,7 @@ pub extern "C" fn accept() -> u32 {
     with(0, |state| state.endpoint.accept().unwrap_or(0))
 }
 
-/// 关掉一条连接。连接不存在返回 0。
+/// 关掉一条连接。连接不存在返回 0。已建立的连接会先排好告诉对端的关闭包，之后照常用 `transmit` 取出发掉。
 #[unsafe(no_mangle)]
 pub extern "C" fn close(id: u32) -> i32 {
     with(0, |state| state.endpoint.close(id).is_some() as i32)
@@ -394,7 +404,7 @@ pub extern "C" fn local_address_change(now: f64) {
     with((), |state| state.endpoint.on_local_address_change(micros(now)));
 }
 
-/// 连接状态：0 不存在；否则 1 加上“已建立”2、“已放弃”4、“还有数据没被对端确认”8。
+/// 连接状态：0 不存在；否则 1 加上“已建立”2、“已放弃”4、“还有数据没被对端确认”8、“对端发来了关闭包”16。
 #[unsafe(no_mangle)]
 pub extern "C" fn conn_state(id: u32) -> i32 {
     with(0, |state| match state.endpoint.connection(id) {
@@ -402,6 +412,7 @@ pub extern "C" fn conn_state(id: u32) -> i32 {
             1 | (connection.is_established() as i32) << 1
                 | (connection.is_dead() as i32) << 2
                 | (connection.connection().has_unacked_data() as i32) << 3
+                | (connection.closed_by_peer() as i32) << 4
         }
         None => 0,
     })
@@ -496,7 +507,7 @@ pub extern "C" fn conn_poll_event(id: u32) -> f64 {
 /// 连接的计数按下面的顺序写成 `f64` 数组放进 io，返回个数；连接不存在返回 -1。
 /// 往返（微秒）、最小往返、带宽估计（字节/秒）、发出包数、收到包数、线上发出字节、线上收到字节、重传分片、
 /// 握手往返（微秒）、认证失败丢掉的包、重放丢掉的包、开始验证新路径的次数、换过去的次数、
-/// 这一端主动验证路径的次数、其中数据路径断了退回备用路径的次数、验证通过但留作备用的次数。
+/// 这一端主动验证路径的次数、其中数据路径断了退回备用路径的次数、验证通过但留作备用的次数、收到 cookie 的次数。
 #[unsafe(no_mangle)]
 pub extern "C" fn conn_stats(id: u32) -> i32 {
     let io = io();
@@ -521,6 +532,7 @@ pub extern "C" fn conn_stats(id: u32) -> i32 {
             security.path_probes,
             security.fallback_probes,
             security.alternates_kept,
+            security.cookies_received,
         ];
         write_f64s(io, &values)
     })
@@ -539,6 +551,9 @@ pub extern "C" fn stats() -> i32 {
             stats.bytes_sent,
             stats.unknown_destination,
             stats.rejected_initiations,
+            stats.bad_mac1,
+            stats.cookie_replies,
+            stats.throttled_initiations,
         ];
         write_f64s(io, &values)
     })

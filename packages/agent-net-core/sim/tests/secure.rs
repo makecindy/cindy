@@ -1,23 +1,28 @@
 //! 测试价值
-//! - 生产入口与可观察结果：`agent_net_core::SecureConnection` / `Incoming` 的公开接口和底层的 `noise::Handshake`。
+//! - 生产入口与可观察结果：`agent_net_core::SecureConnection` / `Incoming` / `Endpoint` 的公开接口和底层的 `noise::Handshake`。
 //!   断言线上抓到的字节里没有明文和身份，篡改、重放的包被拒绝且不改变状态，私钥泄露后录下的通信仍解不开，
-//!   握手的每个字节和 Noise 官方测试向量一致，加密以后各种网络下的数据仍然完整有序。
+//!   握手的每个字节和 Noise 官方测试向量一致，加密以后各种网络下的数据仍然完整有序；
+//!   不知道公钥的请求不做 DH、不回包，伪造来源的洪水做的 DH 不超过准入额度，同时真的发起方照样连得上；
+//!   一端关闭时对端收到关闭包马上停，伪造的关闭包不起作用。
 //! - Bug／规则依据：`docs/agent-net-plan.md` 第 4 步过关标准（抓包无明文，防篡改、防重放，有前向保密），
-//!   `docs/product-rules/agent-net.md` 硬性规则 1（端到端加密，不允许明文降级）。
+//!   `docs/product-rules/agent-net.md` 硬性规则 1（端到端加密，不允许明文降级）和“准入分两道门”（2026-11-06）：
+//!   对公网开放监听之前，伪造的握手请求不能把 CPU 拖垮；对端走了要马上知道，不能等 15–30 秒判死。
 //! - 现有覆盖缺口：`reliability.rs`、`streams.rs`、`sharing.rs` 只测明文的 `Connection`。
 //! - 最小失败输入：随机矩阵打印种子，用 `AGENT_NET_REPLAY=<种子>` 重放；其余用例的输入都是固定的。
 //! - tier：Rust integration，虚拟时间，无真实网络。加密算法是测试用的 ring 和 x25519-dalek（`sim/src/crypto.rs`），
 //!   一次性密钥按种子生成，不能用于真实通信；产品里由各平台传入系统实现。
 //! - 实测耗时：2026-11-03，本机默认 200 个种子共 0.7 秒；`AGENT_NET_SEEDS=10000` 的记录见 `sim/results/2026-11-03-encryption/`。
+//!   2026-11-06 加了两个准入用例和两个关闭用例，整个文件 1.7 秒，其中洪水用例 1.1 秒（2.5 秒虚拟时间里 5 万个请求）。
 //! - 测试本身的有效性由 `sim/mutants.py` 验证：注入已知 bug，这里必须变红。
 
 use std::collections::VecDeque;
+use std::net::SocketAddr;
 use std::rc::Rc;
 
 use agent_net_core::noise::Handshake;
-use agent_net_core::{Config, Crypto, Incoming, PacketError, SecureConnection, TAG_LEN, is_initiation};
+use agent_net_core::{Admission, Config, Crypto, Endpoint, Incoming, PacketError, SecureConnection, TAG_LEN, is_initiation};
 use agent_net_sim::crypto::{AesGcm, ChaChaPoly, PROLOGUE, Probe, SecurePeer, Suite, TestCrypto};
-use agent_net_sim::{Shifted, random_case, run};
+use agent_net_sim::{Rng, Shifted, random_case, run};
 
 fn hex(text: &str) -> Vec<u8> {
     (0..text.len()).step_by(2).map(|at| u8::from_str_radix(&text[at..at + 2], 16).expect("hex")).collect()
@@ -200,8 +205,8 @@ fn encrypted_seeds_deliver_intact_streams() {
     let mut failures = Vec::new();
     for seed in seeds {
         let mut case = random_case(seed);
-        // 64 字节放不下握手。
-        case.config.max_packet_size = case.config.max_packet_size.max(128);
+        // 64 字节放不下握手（请求至少 135 字节）。
+        case.config.max_packet_size = case.config.max_packet_size.max(160);
         let outcome = if seed % 3 == 0 {
             let (a, b) = SecurePeer::<ChaChaPoly>::pair(case.config.clone(), seed);
             run(a, b, case.a_link.clone(), case.b_link.clone(), &case.workload, seed)
@@ -227,7 +232,7 @@ fn encrypted_seeds_deliver_intact_streams() {
 fn shifting_the_clock_changes_nothing() {
     for seed in HARD_SEEDS.into_iter().chain(0..seed_count().min(300)) {
         let mut case = random_case(seed);
-        case.config.max_packet_size = case.config.max_packet_size.max(128);
+        case.config.max_packet_size = case.config.max_packet_size.max(160);
         let pair = |at: u64| {
             let (a, b) = SecurePeer::<AesGcm>::pair_at(case.config.clone(), seed, true, at);
             (Shifted { peer: a, offset_us: at }, Shifted { peer: b, offset_us: at })
@@ -780,6 +785,249 @@ fn low_order_public_keys_are_rejected() {
     for key in low_order {
         let mut forged = buffer[..size].to_vec();
         forged[1..33].copy_from_slice(&key);
+        // 攻击者知道响应方公钥，能把 mac1 算对，这样才走到 DH 那一步的检查。
+        remac(&responder.public(), &mut forged);
+        let probe = responder.probe();
+        let before = probe.dh_operations.get();
         assert_eq!(Incoming::read(&responder, PROLOGUE, &forged).err(), Some(PacketError::Unauthenticated));
+        assert!(probe.dh_operations.get() > before, "the low-order key must be caught at the DH, past the mac1 check");
     }
+}
+
+// ---------- 握手准入：在 DH 之前挡掉伪造请求 ----------
+
+type Node = Endpoint<TestCrypto<AesGcm>>;
+
+const LISTENER_SEED: u64 = 70;
+
+/// 改过的请求重新算 mac1（`admission.rs` 的线上格式）：知道响应方公钥的人做得到。
+fn remac(responder: &[u8; 32], packet: &mut [u8]) {
+    let crypto = TestCrypto::<AesGcm>::from_seed(0);
+    let key = crypto.hash(&[b"mac1----", responder]);
+    let end = packet.len() - 32;
+    let mac = crypto.hmac(&key, &[&packet[..end]]);
+    packet[end..end + 16].copy_from_slice(&mac[..16]);
+}
+
+fn listener_public() -> [u8; 32] {
+    TestCrypto::<AesGcm>::from_seed(LISTENER_SEED).public()
+}
+
+/// 接受所有人的端点，长期密钥固定；`probe` 记它做过多少次 DH。
+fn listener(probe: &Rc<Probe>) -> Node {
+    let mut rng = Rng::new(71);
+    let mut node = Node::new(move || rng.next_u64() as u32);
+    let secret = TestCrypto::<AesGcm>::from_seed(LISTENER_SEED).secret_bytes();
+    let probe = probe.clone();
+    let mut created = 0;
+    node.listen(
+        PROLOGUE,
+        Config::default(),
+        &[],
+        move || {
+            created += 1;
+            TestCrypto::from_secret(secret, created).with_probe(probe.clone())
+        },
+        |_, _| true,
+    );
+    node
+}
+
+fn dialer(seed: u64) -> Node {
+    let mut rng = Rng::new(seed);
+    Node::new(move || rng.next_u64() as u32)
+}
+
+/// 第 `index` 个伪造的来源地址。
+fn spoofed(index: u64) -> SocketAddr {
+    SocketAddr::from(([10, (index >> 16) as u8, (index >> 8) as u8, index as u8], 40_000 + (index % 20_000) as u16))
+}
+
+/// 一个发往 `responder` 的真请求，原样取出来。
+fn initiation_to(responder: &[u8; 32], seed: u64) -> Vec<u8> {
+    let config = Config::default();
+    let mut initiator = SecureConnection::connect(TestCrypto::<AesGcm>::from_seed(seed), config.clone(), PROLOGUE, responder, &[], 0).expect("connect");
+    let mut buffer = vec![0; config.max_packet_size];
+    let size = initiator.poll_transmit(0, &mut buffer).expect("initiation");
+    buffer.truncate(size);
+    buffer
+}
+
+fn drain(node: &mut Node, now: u64) -> Vec<(Vec<u8>, SocketAddr)> {
+    let mut buffer = vec![0; 2048];
+    let mut out = Vec::new();
+    while let Some((size, to)) = node.poll_transmit(now, &mut buffer) {
+        out.push((buffer[..size].to_vec(), to));
+    }
+    out
+}
+
+/// 不知道这一端公钥的人发来的请求（乱码，或者发给别的公钥的真请求）：一次 DH 都不做，一个字节都不回，扫描的人看不出这里有服务。
+#[test]
+fn initiations_without_our_key_cost_no_dh_and_get_no_reply() {
+    let probe = Rc::new(Probe::default());
+    let mut node = listener(&probe);
+    let stranger = initiation_to(&TestCrypto::<AesGcm>::from_seed(72).public(), 73);
+    let mut rng = Rng::new(74);
+    for index in 0..5_000 {
+        let mut garbage = vec![0x81; stranger.len()];
+        for byte in &mut garbage[1..] {
+            *byte = rng.next_u64() as u8;
+        }
+        node.on_datagram(index, spoofed(index), &garbage);
+        node.on_datagram(index, spoofed(index), &stranger);
+    }
+    assert_eq!(probe.dh_operations.get(), 0);
+    assert!(drain(&mut node, 5_000).is_empty(), "replied to a stranger");
+    assert_eq!(node.stats().bad_mac1, 10_000);
+    assert_eq!(node.ids().count(), 0);
+}
+
+/// 知道公钥的人伪造来源地址，每秒 2 万个请求（录下的真请求重放），连续 2.5 秒：
+/// 做 DH 的请求不超过准入额度，回给伪造地址的字节远少于收到的；同时一个正常的发起方先拿 cookie 再重发，1 毫秒内连上；
+/// 另一个真地址上每毫秒新建一条连接，也只按这个地址的额度处理。
+#[test]
+fn a_flood_is_capped_and_a_real_client_still_connects() {
+    const FLOOD_US: u64 = 2_500_000;
+    const STEP_US: u64 = 50;
+    const CLIENT_AT: u64 = 300_000;
+    let admission = Admission::default();
+    let probe = Rc::new(Probe::default());
+    let mut server = listener(&probe);
+    let public = listener_public();
+    let recorded: Vec<Vec<u8>> = (0..64).map(|seed| initiation_to(&public, 1_000 + seed)).collect();
+    let server_addr = SocketAddr::from(([198, 51, 100, 1], 443));
+    let client_addr = SocketAddr::from(([192, 0, 2, 1], 5_000));
+    let noisy_addr = SocketAddr::from(([192, 0, 2, 2], 6_000));
+    let (mut client, mut noisy) = (dialer(75), dialer(76));
+    let config = Config::default();
+
+    let (mut flood_in, mut flood_out, mut noisy_started) = (0, 0, 0);
+    let (mut client_id, mut client_connected_at) = (None, None);
+    let mut now = 0;
+    while now < FLOOD_US {
+        let index = now / STEP_US;
+        let packet = &recorded[(index % 64) as usize];
+        server.on_datagram(now, spoofed(index), packet);
+        flood_in += packet.len();
+        if now == CLIENT_AT {
+            client_id = Some(client.connect(now, TestCrypto::from_seed(77), config.clone(), PROLOGUE, &public, b"", server_addr).expect("connect"));
+        }
+        if now >= CLIENT_AT && now % 1_000 == 0 && noisy_started < 2_000 {
+            noisy.connect(now, TestCrypto::from_seed(5_000 + noisy_started), config.clone(), PROLOGUE, &public, b"", server_addr).expect("connect");
+            noisy_started += 1;
+        }
+        for (packet, to) in drain(&mut server, now) {
+            match to {
+                to if to == client_addr => client.on_datagram(now, server_addr, &packet),
+                to if to == noisy_addr => noisy.on_datagram(now, server_addr, &packet),
+                _ => flood_out += packet.len(),
+            }
+        }
+        for (packet, _) in drain(&mut client, now) {
+            server.on_datagram(now, client_addr, &packet);
+        }
+        for (packet, _) in drain(&mut noisy, now) {
+            server.on_datagram(now, noisy_addr, &packet);
+        }
+        for node in [&mut server, &mut client, &mut noisy] {
+            node.tick(now);
+        }
+        let established = client_id.and_then(|id| client.connection(id)).is_some_and(SecureConnection::is_established);
+        if established && client_connected_at.is_none() {
+            client_connected_at = Some(now);
+        }
+        now += STEP_US;
+    }
+
+    let seconds = FLOOD_US as f64 / 1e6;
+    let stats = server.stats();
+    let client_stats = client.connection(client_id.expect("client")).expect("client connection").security_stats();
+    let noisy_established = noisy.ids().filter(|&id| noisy.connection(id).is_some_and(SecureConnection::is_established)).count() as f64;
+    let report = format!(
+        "{stats:?}; server DH {}; client cookies {}, connected {:?}us after connect; noisy {noisy_established} of {noisy_started} established; flood in {flood_in} out {flood_out}",
+        probe.dh_operations.get(),
+        client_stats.cookies_received,
+        client_connected_at.map(|at| at - CLIENT_AT)
+    );
+    // 结果记录见 `sim/results/2026-11-06-hardening/`：`--nocapture` 时打印这一行。
+    eprintln!("{report}");
+    // 每个处理过的请求是 4 次 DH（解开 2 次，回复 2 次）。不忙时的额度由伪造的和那个真地址共用，忙时证明过地址的按地址限流，正常的发起方另算一个。
+    let unproven_cap = admission.handshake_burst as f64 + admission.handshakes_per_second as f64 * seconds;
+    let address_cap = admission.per_address_burst as f64 + admission.per_address_per_second as f64 * seconds;
+    let dh_cap = 4.0 * (unproven_cap + address_cap + 1.0);
+    assert!((probe.dh_operations.get() as f64) <= dh_cap, "{} DH > {dh_cap}: {report}", probe.dh_operations.get());
+    assert!(noisy_established * 10.0 < noisy_started as f64, "one address got {noisy_established} of {noisy_started} handshakes through: {report}");
+    assert!(noisy_established >= admission.per_address_burst as f64, "the proven address was starved: {report}");
+    assert!(client_connected_at.is_some_and(|at| at - CLIENT_AT <= 1_000), "client connected at {client_connected_at:?}: {report}");
+    assert!(client_stats.cookies_received >= 1, "the server was not busy when the client came: {report}");
+    assert!(flood_out * 10 < flood_in, "{report}");
+    assert!(stats.throttled_initiations > 0, "{report}");
+}
+
+/// 关闭通知：一端关掉，发出两个关闭包就停；第一个在路上丢了，第二个照样让对端马上停，并且知道是对端关的，不用等 15–30 秒判死。
+/// 改过的关闭包认证不过，对端照常工作；握手还没完成时关闭不发任何包。
+#[test]
+fn closing_tells_the_peer_at_once() {
+    let mut pair = Pair::new(60, Config::default(), &[]);
+    pair.transfer(b"before close", b"reply");
+    let settled = pair.run_until(pair.now + 1_000_000, &mut pass, &|pair| pair.in_flight.is_empty() && pair.now > 0);
+    assert!(settled);
+    pair.initiator.close();
+    let mut buffer = vec![0; pair.config.max_packet_size];
+    let mut sent = Vec::new();
+    while let Some(size) = pair.initiator.poll_transmit(pair.now, &mut buffer) {
+        sent.push(buffer[..size].to_vec());
+    }
+    assert_eq!(sent.len(), 2, "two close packets");
+    assert!(pair.initiator.is_dead() && pair.initiator.next_wake().is_none());
+    assert!(!pair.initiator.closed_by_peer());
+
+    let mut forged = sent[0].clone();
+    *forged.last_mut().expect("tag") ^= 1;
+    assert_eq!(pair.deliver(true, &forged), Err(PacketError::Unauthenticated));
+    assert!(!pair.responder().is_dead(), "a forged close stopped the connection");
+
+    assert_eq!(pair.deliver(true, &sent[1]), Ok(()));
+    let responder = pair.responder();
+    assert!(responder.is_dead() && responder.closed_by_peer());
+    assert_eq!(responder.next_wake(), None);
+    assert_eq!(pair.deliver(true, &sent[0]), Err(PacketError::Dead));
+
+    let mut early = Pair::new(61, Config::default(), &[]);
+    early.initiator.close();
+    assert_eq!(early.initiator.poll_transmit(0, &mut buffer), None, "nothing to tell before the handshake");
+    assert!(early.initiator.is_dead());
+}
+
+/// `Endpoint::close` 是驱动关连接的入口：关闭包排进 `poll_transmit`，发往对端现在的地址，对端的连接随即停下。
+#[test]
+fn endpoint_close_tells_the_peer() {
+    let probe = Rc::new(Probe::default());
+    let (mut server, mut client) = (listener(&probe), dialer(62));
+    let server_addr = SocketAddr::from(([198, 51, 100, 1], 443));
+    let client_addr = SocketAddr::from(([192, 0, 2, 1], 5_000));
+    let id = client.connect(0, TestCrypto::from_seed(63), Config::default(), PROLOGUE, &listener_public(), b"", server_addr).expect("connect");
+    let established = |client: &Node, server: &Node| {
+        client.connection(id).is_some_and(SecureConnection::is_established) && server.ids().any(|id| server.connection(id).is_some_and(SecureConnection::is_established))
+    };
+    let mut now = 0;
+    while !established(&client, &server) && now < 1_000_000 {
+        for (packet, _) in drain(&mut client, now) {
+            server.on_datagram(now, client_addr, &packet);
+        }
+        for (packet, _) in drain(&mut server, now) {
+            client.on_datagram(now, server_addr, &packet);
+        }
+        now += 1_000;
+    }
+    assert!(established(&client, &server));
+    let server_id = server.ids().next().expect("server connection");
+    assert!(server.close(server_id).is_some());
+    let packets = drain(&mut server, now);
+    assert_eq!(packets.len(), 2, "two close packets");
+    assert!(packets.iter().all(|(_, to)| *to == client_addr));
+    client.on_datagram(now, server_addr, &packets[0].0);
+    let connection = client.connection(id).expect("client connection");
+    assert!(connection.is_dead() && connection.closed_by_peer());
 }

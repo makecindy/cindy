@@ -2,11 +2,15 @@
 //!
 //! 线上格式：
 //!
-//! - 握手请求：`[0x81][发起方一次性公钥 32][加密的发起方长期公钥 48][加密的附带数据]`
+//! - 握手请求：`[0x81][发起方一次性公钥 32][加密的发起方长期公钥 48][加密的附带数据][mac1 16][mac2 16]`
 //! - 握手回复：`[0x82][发起方的连接号 4][响应方一次性公钥 32][加密的附带数据]`
+//! - cookie 回复：`[0x83][请求的 mac1 16][盐 16][加密的 cookie 32][认证标签 16]`
 //! - 数据包：`[包头 3][收包方的连接号 4][加密的帧][认证标签 16]`。包头和连接号不加密但参与认证，nonce 是完整包号。
 //!
 //! 数据包的首字节高 3 位是 `101`，握手是 `100`，不会混淆。
+//!
+//! **握手准入。** 请求末尾的 mac1 证明发起方知道响应方的公钥，mac2 证明它收得到发往来源地址的包；响应方忙时先回 cookie，
+//! 发起方带着它马上重发。在 DH 之前挡掉伪造请求，见 `admission` 模块。
 //!
 //! 附带数据加密前是 `[发送方的连接号 4][长度 2][数据][填充]`。请求填满到 `max_packet_size`，回复填到和请求一样长。
 //! 握手因此顺便确认了这条路径两个方向都能过满长度的包。
@@ -45,12 +49,18 @@
 //! **定期换密钥。** 包号每过 2^20 个，两个方向各自按 Noise 的 `Rekey` 推导新密钥，旧密钥随即丢弃。
 //! 这样同一个密钥加密的包数远低于 AES-GCM 的安全上限，用过的密钥也不会一直留在内存里。
 //! 换密钥只看包号，线上不需要任何额外字段，两端也不需要协调。
+//!
+//! **关闭通知。** 调用 [`SecureConnection::close`] 以后，`poll_transmit` 先发两个只含关闭帧的包（加密、认证，和数据包一样），
+//! 然后这条连接就停了。对端认证通过就马上停（[`SecureConnection::closed_by_peer`]），不用等 15–30 秒判死。
+//! 两个都丢了，对端照旧靠判死发现。关闭是立刻的：还没送到的数据不再重传，要对端收全，先结束流、等确认再关。
+//! 对端还没确认在线（响应方）或者握手还没完成时不发，只在这一端停下。进程被强行结束时发不出来，对端仍要等判死。
 
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use crate::admission::{self, COOKIE_LEN, COOKIE_REPLY, COOKIE_USABLE_US, MAC_LEN};
 use crate::connection::{Config, Connection, PacketError, Stats};
 use crate::crypto::{Crypto, HASH_LEN, PUBLIC_KEY_LEN, TAG_LEN};
 use crate::noise::{FIRST_MESSAGE_FIXED_LEN, Handshake, HandshakeError, SECOND_MESSAGE_FIXED_LEN, TransportKeys};
@@ -63,7 +73,9 @@ const CONNECTION_ID_LEN: usize = 4;
 const LENGTH_PREFIX: usize = 2;
 /// 附带数据加密前开头的发送方连接号和长度。
 const PAYLOAD_PREFIX: usize = CONNECTION_ID_LEN + LENGTH_PREFIX;
-const INITIATION_OVERHEAD: usize = 1 + FIRST_MESSAGE_FIXED_LEN + PAYLOAD_PREFIX;
+/// 请求末尾的 mac1 和 mac2。
+const MACS_LEN: usize = 2 * MAC_LEN;
+const INITIATION_OVERHEAD: usize = 1 + FIRST_MESSAGE_FIXED_LEN + PAYLOAD_PREFIX + MACS_LEN;
 /// 回复开头不加密的部分：类型和发起方的连接号。
 const RESPONSE_PREFIX: usize = 1 + CONNECTION_ID_LEN;
 const RESPONSE_OVERHEAD: usize = RESPONSE_PREFIX + SECOND_MESSAGE_FIXED_LEN + PAYLOAD_PREFIX;
@@ -85,6 +97,10 @@ const AMPLIFICATION_FACTOR: u64 = 3;
 const MAX_PENDING_RESPONSES: usize = 4;
 /// 记着代价的路径最多这么多条，再多就忘掉不在用、不在验证、也不是备用的。
 const MAX_PATH_COSTS: usize = 16;
+/// 关闭时发几个关闭包。发两个，丢包 1% 的路径上两个都丢的机会是万分之一。
+const CLOSE_COPIES: u8 = 2;
+/// 关闭包的长度：包头、连接号、关闭帧和认证标签。
+pub(crate) const CLOSE_PACKET_LEN: usize = DATA_PREFIX + wire::CLOSE_FRAME_LEN + TAG_LEN;
 /// 备用路径最多记这么多条，见 [`SecureConnection::set_path_cost`]。
 const MAX_ALTERNATES: usize = 4;
 /// 数据路径这么久（也至少这么多个往返）没收到对端的包，才算安静，见 `SecureConnection::set_path_cost`。
@@ -122,11 +138,16 @@ pub fn is_initiation(packet: &[u8]) -> bool {
     packet.first() == Some(&INITIATION)
 }
 
-/// 这个包是发给哪个连接号的：数据包和握手回复带着收包方的连接号，握手请求没有，交给 [`Incoming::read`]。
+/// 这是不是响应方忙时回的 cookie。它不带连接号，交给正在发起的连接（[`SecureConnection::awaits_cookie`]）。
+pub fn is_cookie_reply(packet: &[u8]) -> bool {
+    packet.first() == Some(&COOKIE_REPLY)
+}
+
+/// 这个包是发给哪个连接号的：数据包和握手回复带着收包方的连接号，握手请求和 cookie 回复没有。
 /// 一个端口上有多条连接时调用方据此找连接。这个号没有经过认证，找到的连接还会再认证。
 pub fn destination_id(packet: &[u8]) -> Option<u32> {
     match *packet.first()? {
-        INITIATION => None,
+        INITIATION | COOKIE_REPLY => None,
         RESPONSE => read_id(packet, 1),
         _ => wire::parse_header(packet).and_then(|_| read_id(packet, wire::PACKET_HEADER_LEN)),
     }
@@ -167,6 +188,11 @@ fn packet_error(error: HandshakeError) -> PacketError {
 
 fn ephemeral_of(initiation: &[u8]) -> Option<&[u8]> {
     initiation.get(1..1 + PUBLIC_KEY_LEN)
+}
+
+/// 同一个请求：只有 mac2 不同也算，发起方中途拿到 cookie 或 cookie 过期，重发的请求只有 mac2 变了。
+fn same_request(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.len() >= MAC_LEN && a[..a.len() - MAC_LEN] == b[..b.len() - MAC_LEN]
 }
 
 /// Noise 的 `Rekey`：用当前密钥加密 32 个零字节，取密文当新密钥。
@@ -337,6 +363,8 @@ pub struct SecurityStats {
     pub fallback_probes: u64,
     /// 验证通过但没换过去、留作备用的次数：数据路径更便宜，也还好好的。
     pub alternates_kept: u64,
+    /// 发起方收到响应方忙时回的 cookie 的次数，见模块说明的“握手准入”。
+    pub cookies_received: u64,
 }
 
 /// 收到的握手请求，还没有回复。调用方检查对方身份和附带数据后决定是否接受。
@@ -348,18 +376,22 @@ pub struct Incoming<C: Crypto> {
 }
 
 impl<C: Crypto> Incoming<C> {
-    /// 解开握手请求，需要做两次 DH。`prologue` 必须和发起方的一致。
+    /// 解开握手请求，需要做两次 DH。`prologue` 必须和发起方的一致。先查 mac1（一次 HMAC），对不上就不做 DH；
+    /// 忙时的 cookie 和限流由 [`Endpoint`](crate::Endpoint) 在调用这里之前做。
     ///
     /// 请求可能是录下来重放的，所以这里只证明对方曾经持有那个长期私钥，不证明对方此刻在线。
     /// 需要拒绝重放的请求时，发起方可以在附带数据里放时间戳，由调用方检查。
     /// 对方的第一个数据包到达后，[`SecureConnection::is_established`] 才变成 `true`。
     pub fn read(crypto: &C, prologue: &[u8], packet: &[u8]) -> Result<Self, PacketError> {
-        if !is_initiation(packet) {
+        if !is_initiation(packet) || packet.len() < 1 + MACS_LEN {
             return Err(PacketError::Malformed);
+        }
+        if !admission::check_mac1(crypto, &admission::mac1_key(crypto, &crypto.static_public()), packet) {
+            return Err(PacketError::Unauthenticated);
         }
         let mut handshake = Handshake::responder(crypto, prologue);
         let mut plain = Vec::new();
-        handshake.read_first(crypto, &packet[1..], &mut plain).map_err(packet_error)?;
+        handshake.read_first(crypto, &packet[1..packet.len() - MACS_LEN], &mut plain).map_err(packet_error)?;
         let (remote_id, payload) = unpadded(&plain).ok_or(PacketError::Malformed)?;
         let payload = payload.to_vec();
         Ok(Self { handshake, payload, initiation: packet.to_vec(), remote_id })
@@ -435,6 +467,7 @@ impl<C: Crypto> Keys<C> {
 struct Initiation<C: Crypto> {
     /// 收到回复后取走。
     handshake: Option<Handshake<C>>,
+    /// 完整的请求，mac2 全零，发的时候有 cookie 再填。
     message: Vec<u8>,
     prologue: Vec<u8>,
     payload: Vec<u8>,
@@ -442,6 +475,18 @@ struct Initiation<C: Crypto> {
     first_sent_at: Option<u64>,
     next_send_at: u64,
     interval_us: u64,
+    /// 响应方忙时回的 cookie 和收到的时间。
+    cookie: Option<([u8; COOKIE_LEN], u64)>,
+}
+
+impl<C: Crypto> Initiation<C> {
+    fn mac1(&self) -> &[u8] {
+        admission::mac1_of(&self.message).unwrap_or(&[])
+    }
+
+    fn usable_cookie(&self, now_us: u64) -> Option<&[u8; COOKIE_LEN]> {
+        self.cookie.as_ref().filter(|(_, at)| now_us.saturating_sub(*at) < COOKIE_USABLE_US).map(|(cookie, _)| cookie)
+    }
 }
 
 struct Response {
@@ -748,6 +793,10 @@ pub struct SecureConnection<C: Crypto> {
     switched_at: Option<u64>,
     /// 握手失败、超时，或者认证失败的包太多。
     dead: bool,
+    /// 这一端关闭以后还要发的关闭包个数，发完就停。
+    closing: u8,
+    /// 对端发来了关闭包。
+    closed_by_peer: bool,
     stats: SecurityStats,
 }
 
@@ -775,6 +824,8 @@ impl<C: Crypto> SecureConnection<C> {
             moved_at: None,
             switched_at: None,
             dead: false,
+            closing: 0,
+            closed_by_peer: false,
             stats: SecurityStats::default(),
         }
     }
@@ -794,7 +845,10 @@ impl<C: Crypto> SecureConnection<C> {
         }
         let mut handshake = Handshake::initiator(&crypto, prologue, remote_static);
         let mut message = vec![INITIATION];
-        handshake.write_first(&crypto, &padded(config.connection_id, payload, config.max_packet_size - 1 - FIRST_MESSAGE_FIXED_LEN), &mut message)?;
+        handshake.write_first(&crypto, &padded(config.connection_id, payload, config.max_packet_size - 1 - FIRST_MESSAGE_FIXED_LEN - MACS_LEN), &mut message)?;
+        let mac1 = admission::mac(&crypto, &admission::mac1_key(&crypto, remote_static), &message);
+        message.extend_from_slice(&mac1);
+        message.extend_from_slice(&[0; MAC_LEN]);
         let phase = Phase::Initiating(Box::new(Initiation {
             handshake: Some(handshake),
             message,
@@ -804,6 +858,7 @@ impl<C: Crypto> SecureConnection<C> {
             first_sent_at: None,
             next_send_at: now_us,
             interval_us: config.initial_rto_us,
+            cookie: None,
         }));
         Ok(Self::new(crypto, config, phase, *remote_static, now_us))
     }
@@ -849,6 +904,42 @@ impl<C: Crypto> SecureConnection<C> {
 
     pub fn is_dead(&self) -> bool {
         self.dead || self.connection.is_dead()
+    }
+
+    /// 关掉这条连接，见模块说明的“关闭通知”。之后 `poll_transmit` 先发关闭包，发完 [`is_dead`](Self::is_dead) 变成 `true`；
+    /// 不能告诉对端时（握手还没完成，或者对端还没确认在线）立刻停。再收到的包都丢掉。
+    pub fn close(&mut self) {
+        if self.is_dead() || self.closing > 0 {
+            return;
+        }
+        if matches!(self.phase, Phase::Established { confirmed: true, .. }) {
+            self.closing = CLOSE_COPIES;
+        } else {
+            self.dead = true;
+        }
+    }
+
+    /// 这条连接停下是因为对端发来了关闭包，不是超时或认证失败。
+    pub fn closed_by_peer(&self) -> bool {
+        self.closed_by_peer
+    }
+
+    /// 关闭以后要发的下一个关闭包：长度和路径。最后一个发出后连接就停了。
+    pub(crate) fn poll_close(&mut self, out: &mut [u8]) -> Option<(usize, u64)> {
+        if self.closing == 0 {
+            return None;
+        }
+        self.closing -= 1;
+        if self.closing == 0 {
+            self.dead = true;
+        }
+        let plain = DATA_PREFIX + wire::CLOSE_FRAME_LEN;
+        let number = self.connection.take_packet_number(CLOSE_PACKET_LEN);
+        wire::write_header(out, number, false);
+        self.address(out);
+        wire::write_close_frame(&mut out[DATA_PREFIX..plain]);
+        let size = self.seal_into(out, plain, number)?;
+        Some((size, self.paths.active))
     }
 
     /// 数据现在发往哪条路径。对端在这里收得到，握手或者路径验证证明过。
@@ -981,6 +1072,7 @@ impl<C: Crypto> SecureConnection<C> {
         let result = match packet.first() {
             Some(&INITIATION) => self.on_initiation(now_us, path, packet),
             Some(&RESPONSE) => self.on_response(now_us, packet),
+            Some(&COOKIE_REPLY) => self.on_cookie_reply(now_us, packet),
             _ => self.on_transport(now_us, path, same_route, packet),
         };
         match result {
@@ -1040,6 +1132,12 @@ impl<C: Crypto> SecureConnection<C> {
             *response = None;
         }
         let frames = &self.scratch[DATA_PREFIX..body_end];
+        if wire::is_close_frame(frames) {
+            // 对端关掉了这条连接：马上停，不用等判死。
+            self.closed_by_peer = true;
+            self.dead = true;
+            return Ok(());
+        }
         if wire::is_path_frame(frames) {
             let (frame, value) = wire::parse_path_frame(frames).ok_or(PacketError::Malformed)?;
             self.on_probe(now_us, path, packet.len(), frame, value);
@@ -1113,9 +1211,29 @@ impl<C: Crypto> SecureConnection<C> {
         PacketError::Unauthenticated
     }
 
+    /// 这条连接正在发起，`packet` 是回给它最近那个请求的 cookie。只比较 mac1，不解密。
+    pub fn awaits_cookie(&self, packet: &[u8]) -> bool {
+        matches!(&self.phase, Phase::Initiating(initiation)
+            if is_cookie_reply(packet) && packet.get(1..1 + MAC_LEN).is_some_and(|mac1| admission::same(mac1, initiation.mac1())))
+    }
+
+    /// 响应方忙，回了 cookie：之后的请求都带上它。第一次拿到、或者原来的已经过期时马上重发。
+    fn on_cookie_reply(&mut self, now_us: u64, packet: &[u8]) -> Result<(), PacketError> {
+        let Phase::Initiating(initiation) = &mut self.phase else {
+            return Err(PacketError::Replayed);
+        };
+        let cookie = admission::open_cookie(&self.crypto, &self.remote_static, initiation.mac1(), packet).ok_or(PacketError::Unauthenticated)?;
+        if initiation.usable_cookie(now_us).is_none() {
+            initiation.next_send_at = now_us;
+        }
+        initiation.cookie = Some((cookie, now_us));
+        self.stats.cookies_received += 1;
+        Ok(())
+    }
+
     fn on_initiation(&mut self, now_us: u64, path: u64, packet: &[u8]) -> Result<(), PacketError> {
         if let Phase::Established { response: Some(response), .. } = &mut self.phase
-            && response.initiation == packet
+            && same_request(&response.initiation, packet)
         {
             response.due = true;
             // 发起方握手途中换了地址：回复跟着最新的请求走。还没确认之前只回和请求一样长的回复，换到哪里都放大不了。
@@ -1184,6 +1302,9 @@ impl<C: Crypto> SecureConnection<C> {
         if self.is_dead() {
             return None;
         }
+        if self.closing > 0 {
+            return self.poll_close(out);
+        }
         let current = self.paths.active;
         match &mut self.phase {
             Phase::Initiating(initiation) => {
@@ -1199,6 +1320,10 @@ impl<C: Crypto> SecureConnection<C> {
                 initiation.interval_us = (initiation.interval_us * 2).min(self.config.max_rto_us);
                 let size = initiation.message.len();
                 out[..size].copy_from_slice(&initiation.message);
+                if let Some(cookie) = initiation.usable_cookie(now_us) {
+                    let mac2 = admission::mac(&self.crypto, cookie, &out[..size - MAC_LEN]);
+                    out[size - MAC_LEN..size].copy_from_slice(&mac2);
+                }
                 self.stats.handshake_packets_sent += 1;
                 Some((size, current))
             }
@@ -1230,6 +1355,13 @@ impl<C: Crypto> SecureConnection<C> {
                 (size + CONNECTION_ID_LEN, self.connection.last_packet_number(), self.paths.active)
             }
         };
+        let sealed = self.seal_into(out, size, number)?;
+        self.paths.on_sent(path, sealed);
+        Some((sealed, path))
+    }
+
+    /// 加密 `out[..size]`：包头和连接号不加密但参与认证，标签接在后面。返回整个包的长度。
+    fn seal_into(&mut self, out: &mut [u8], size: usize, number: u64) -> Option<usize> {
         let Phase::Established { keys, .. } = &mut self.phase else {
             return None;
         };
@@ -1239,8 +1371,7 @@ impl<C: Crypto> SecureConnection<C> {
         let tag = self.crypto.seal(key, number, header, body);
         self.stats.rekeys += keys.send.epoch - before;
         out[size..size + TAG_LEN].copy_from_slice(&tag);
-        self.paths.on_sent(path, size + TAG_LEN);
-        Some((size + TAG_LEN, path))
+        Some(size + TAG_LEN)
     }
 
     /// 包头后面写上对端的连接号。
@@ -1327,6 +1458,9 @@ impl<C: Crypto> SecureConnection<C> {
     pub fn next_wake(&self) -> Option<u64> {
         if self.is_dead() {
             return None;
+        }
+        if self.closing > 0 {
+            return Some(0);
         }
         match &self.phase {
             Phase::Initiating(initiation) => Some(initiation.next_send_at.min(initiation.started_at + self.config.dead_after_us)),

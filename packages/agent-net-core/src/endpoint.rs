@@ -7,23 +7,30 @@
 //!   新地址和数据路径是同一台主机、只差端口时告诉连接（`on_packet_via_route`），换过去时不重量往返和带宽。
 //! - 地址的类型由驱动定（[`PathAddress`]）：UDP 地址，或者驱动自己编的中继通道。每种地址自带代价，
 //!   编路径号时交给连接（`SecureConnection::set_path_cost`），直连和中继同时可用时优先直连。
+//! - 陌生的握手请求先过准入（[`Admission`]）：mac1 不对的直接丢，不回任何东西；处理得太快时先回 cookie、按地址限流，
+//!   最后才交给 `admit` 做 DH。cookie 回复按 mac1 交给正在发起的那条连接。
 
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, VecDeque};
+use alloc::string::String;
 use alloc::vec::Vec;
-use core::net::SocketAddr;
-use core::fmt::Debug;
+use core::fmt::{Debug, Write};
+use core::net::{IpAddr, SocketAddr};
+
+use crate::admission::{Admission, Admitter, Gate, Verdict};
 
 use crate::connection::{Config, PacketError};
 use crate::crypto::{Crypto, PUBLIC_KEY_LEN};
 use crate::noise::HandshakeError;
-use crate::secure::{Incoming, SecureConnection, destination_id, is_initiation};
+use crate::secure::{CLOSE_PACKET_LEN, Incoming, SecureConnection, destination_id, is_cookie_reply, is_initiation};
 
 /// 一条连接最多记住这么多个来源地址，再多就忘掉最久没见到的（正在用的和正在验证的除外）。
 /// 伪造来源的包每个都会占一个号，不能无限增长。
 const MAX_PATHS: usize = 16;
 /// 还没确认的连接最多这么多条。重放的握手请求会各开一条，确认不了，`dead_after_us` 后自己放弃。
 const MAX_UNCONFIRMED: usize = 1024;
+/// 排队等发的 cookie 回复最多这么多个，调用方来不及取时多出来的丢掉。
+const MAX_OUTGOING: usize = 256;
 
 /// 驱动用的地址。核心只比较是否相同、是不是同一台主机，以及取它的代价。
 pub trait PathAddress: Copy + Eq + Debug {
@@ -33,11 +40,25 @@ pub trait PathAddress: Copy + Eq + Debug {
     fn cost(&self) -> u8 {
         0
     }
+    /// 算 cookie 用的地址字节：同一个地址每次都一样，不同的地址不一样。只在本机用，不上线。默认用 `Debug` 的写法。
+    fn write_identity(&self, out: &mut Vec<u8>) {
+        let mut text = String::new();
+        let _ = write!(text, "{self:?}");
+        out.extend_from_slice(text.as_bytes());
+    }
 }
 
 impl PathAddress for SocketAddr {
     fn same_host(&self, other: &Self) -> bool {
         self.ip() == other.ip()
+    }
+
+    fn write_identity(&self, out: &mut Vec<u8>) {
+        match self.ip() {
+            IpAddr::V4(ip) => out.extend_from_slice(&ip.octets()),
+            IpAddr::V6(ip) => out.extend_from_slice(&ip.octets()),
+        }
+        out.extend_from_slice(&self.port().to_be_bytes());
     }
 }
 
@@ -49,10 +70,16 @@ pub struct EndpointStats {
     /// 交给调用方去发的数据报。
     pub datagrams_sent: u64,
     pub bytes_sent: u64,
-    /// 连接号对不上任何连接的包。
+    /// 连接号对不上任何连接的包，以及对不上正在发起的连接的 cookie 回复。
     pub unknown_destination: u64,
     /// 读不开、或者被接受规则拒绝的握手请求。
     pub rejected_initiations: u64,
+    /// mac1 不对、没做 DH 就丢掉的握手请求：发的人不知道这一端的公钥。
+    pub bad_mac1: u64,
+    /// 忙的时候回出去的 cookie。
+    pub cookie_replies: u64,
+    /// 忙的时候超过限额、没做 DH 就丢掉的握手请求。
+    pub throttled_initiations: u64,
 }
 
 struct Slot<C: Crypto, A: PathAddress> {
@@ -113,6 +140,8 @@ struct Listener<C: Crypto, A> {
     /// 给每条新连接一个加密实现，读请求也用它。
     crypto: Box<dyn FnMut() -> C>,
     admit: Admit<C, A>,
+    /// 查 mac1、mac2，写 cookie 回复。
+    gate: Gate<C>,
 }
 
 /// 一个本地端口和上面的所有连接。`A` 是驱动的地址类型，默认是 UDP 地址。
@@ -120,21 +149,32 @@ pub struct Endpoint<C: Crypto, A: PathAddress = SocketAddr> {
     connections: BTreeMap<u32, Slot<C, A>>,
     listener: Option<Listener<C, A>>,
     accepted: VecDeque<u32>,
-    /// 新连接号的来源。
+    /// 新连接号、cookie 密钥和盐的来源。
     random: Box<dyn FnMut() -> u32>,
+    admitter: Admitter,
+    /// 不属于任何连接、等着发的包：cookie 回复，关掉的连接最后的关闭包。
+    outgoing: VecDeque<(Vec<u8>, A)>,
     stats: EndpointStats,
 }
 
 impl<C: Crypto, A: PathAddress> Endpoint<C, A> {
-    /// `random` 给新连接选连接号，必须是不可预测的随机数：同一台机器先后的连接号连着的话，路上的人能据此把它们对上。
+    /// `random` 给新连接选连接号，也用来生成算 cookie 的密钥，必须是不可预测的随机数：
+    /// 同一台机器先后的连接号连着的话，路上的人能据此把它们对上；cookie 密钥猜得到，伪造来源地址就挡不住了。
     pub fn new(random: impl FnMut() -> u32 + 'static) -> Self {
         Self {
             connections: BTreeMap::new(),
             listener: None,
             accepted: VecDeque::new(),
             random: Box::new(random),
+            admitter: Admitter::new(),
+            outgoing: VecDeque::new(),
             stats: EndpointStats::default(),
         }
+    }
+
+    /// 改握手准入的限额，见 [`Admission`]。
+    pub fn set_admission(&mut self, admission: Admission) {
+        self.admitter.config = admission;
     }
 
     pub fn stats(&self) -> EndpointStats {
@@ -176,10 +216,11 @@ impl<C: Crypto, A: PathAddress> Endpoint<C, A> {
         prologue: &[u8],
         config: Config,
         payload: &[u8],
-        crypto: impl FnMut() -> C + 'static,
+        mut crypto: impl FnMut() -> C + 'static,
         admit: impl FnMut(&Incoming<C>, A) -> bool + 'static,
     ) {
-        self.listener = Some(Listener { prologue: prologue.to_vec(), config, payload: payload.to_vec(), crypto: Box::new(crypto), admit: Box::new(admit) });
+        let gate = Gate::new(crypto());
+        self.listener = Some(Listener { prologue: prologue.to_vec(), config, payload: payload.to_vec(), crypto: Box::new(crypto), admit: Box::new(admit), gate });
     }
 
     /// 新接受的连接，取一个少一个。
@@ -205,9 +246,20 @@ impl<C: Crypto, A: PathAddress> Endpoint<C, A> {
         slot.paths.get(&slot.connection.path()).map(|(address, _)| *address)
     }
 
-    /// 关掉一条连接，不再收发。
+    /// 关掉一条连接，不再收发。连接已经建立时先把关闭包排进 [`poll_transmit`](Self::poll_transmit)，
+    /// 对端收到就停，不用等判死，见 `SecureConnection::close`。
     pub fn close(&mut self, id: u32) -> Option<SecureConnection<C>> {
-        self.connections.remove(&id).map(|slot| slot.connection)
+        let mut slot = self.connections.remove(&id)?;
+        slot.connection.close();
+        let mut packet = [0; CLOSE_PACKET_LEN];
+        while let Some((size, path)) = slot.connection.poll_close(&mut packet) {
+            if let Some(&(address, _)) = slot.paths.get(&path)
+                && self.outgoing.len() < MAX_OUTGOING
+            {
+                self.outgoing.push_back((packet[..size].to_vec(), address));
+            }
+        }
+        Some(slot.connection)
     }
 
     /// 主动验证这条连接到 `address` 的路径（打洞时验证对端的候选地址、手动退回中继等），
@@ -226,8 +278,11 @@ impl<C: Crypto, A: PathAddress> Endpoint<C, A> {
         }
     }
 
-    /// 下一次需要调用 [`tick`](Self::tick) 的时间。
+    /// 下一次需要调用 [`tick`](Self::tick) 的时间。有包等着发时是 0。
     pub fn next_wake(&self) -> Option<u64> {
+        if !self.outgoing.is_empty() {
+            return Some(0);
+        }
         self.connections.values().filter_map(|slot| slot.connection.next_wake()).min()
     }
 
@@ -244,7 +299,22 @@ impl<C: Crypto, A: PathAddress> Endpoint<C, A> {
     pub fn on_datagram(&mut self, now_us: u64, from: A, packet: &[u8]) {
         self.stats.datagrams_received += 1;
         self.stats.bytes_received += packet.len() as u64;
+        if is_cookie_reply(packet) {
+            match self.connections.values_mut().find(|slot| slot.connection.awaits_cookie(packet)) {
+                Some(slot) => {
+                    let path = slot.connection.path();
+                    let _ = slot.connection.on_packet_via(now_us, path, packet);
+                }
+                None => self.stats.unknown_destination += 1,
+            }
+            return;
+        }
         if is_initiation(packet) {
+            // 先查 mac1：不知道这一端公钥的人发来的，什么都不做，也不回。
+            if self.listener.as_ref().is_some_and(|listener| !listener.gate.mac1_ok(packet)) {
+                self.stats.bad_mac1 += 1;
+                return;
+            }
             // 重发的请求交给同一条连接：还没确认的会再回一次，确认过的当重复丢掉。对方重新发起的新连接才另开一条。
             if let Some(slot) = self.connections.values_mut().find(|slot| slot.knows(from)) {
                 let path = slot.path_of(from, now_us);
@@ -252,7 +322,22 @@ impl<C: Crypto, A: PathAddress> Endpoint<C, A> {
                     return;
                 }
             }
-            self.admit(now_us, from, packet);
+            let Some(listener) = self.listener.as_ref() else {
+                self.stats.rejected_initiations += 1;
+                return;
+            };
+            let mut address = Vec::new();
+            from.write_identity(&mut address);
+            match self.admitter.check(&listener.gate, now_us, &address, packet, &mut self.random) {
+                Verdict::Process => self.admit(now_us, from, packet),
+                Verdict::Cookie(reply) => {
+                    self.stats.cookie_replies += 1;
+                    if self.outgoing.len() < MAX_OUTGOING {
+                        self.outgoing.push_back((reply, from));
+                    }
+                }
+                Verdict::Throttled => self.stats.throttled_initiations += 1,
+            }
             return;
         }
         let Some(slot) = destination_id(packet).and_then(|id| self.connections.get_mut(&id)) else {
@@ -288,6 +373,12 @@ impl<C: Crypto, A: PathAddress> Endpoint<C, A> {
     /// 取下一个要发的数据报，写进 `out`，返回长度和目的地址。`out` 不能小于各连接配置的 `max_packet_size`。
     /// 一条连接的包取完了才轮到下一条。
     pub fn poll_transmit(&mut self, now_us: u64, out: &mut [u8]) -> Option<(usize, A)> {
+        if let Some((packet, address)) = self.outgoing.pop_front() {
+            out[..packet.len()].copy_from_slice(&packet);
+            self.stats.datagrams_sent += 1;
+            self.stats.bytes_sent += packet.len() as u64;
+            return Some((packet.len(), address));
+        }
         for slot in self.connections.values_mut() {
             while let Some((size, path)) = slot.connection.poll_transmit_via(now_us, out) {
                 // 路径号被忘掉了（来源地址太多），这个包只能丢掉，可靠层会重传。

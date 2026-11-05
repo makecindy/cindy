@@ -12,6 +12,7 @@
 
 extern crate alloc;
 
+mod admission;
 mod congestion;
 mod connection;
 mod crypto;
@@ -23,9 +24,10 @@ mod secure;
 mod stream;
 mod wire;
 
+pub use admission::Admission;
 pub use connection::{BandwidthShare, Config, Connection, PacketError, RecoveryPolicy, Stats};
 pub use crypto::{Crypto, HASH_LEN, PUBLIC_KEY_LEN, TAG_LEN};
 pub use endpoint::{Endpoint, EndpointStats, PathAddress};
 pub use noise::HandshakeError;
-pub use secure::{Incoming, SecureConnection, SecurityStats, destination_id, is_initiation, max_handshake_payload};
+pub use secure::{Incoming, SecureConnection, SecurityStats, destination_id, is_cookie_reply, is_initiation, max_handshake_payload};
 pub use stream::{DEFAULT_STREAM, Priority, StreamEvent};

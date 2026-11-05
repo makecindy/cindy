@@ -59,6 +59,8 @@ pub struct Probe {
     pub live_ephemerals: Cell<i64>,
     pub ephemerals_created: Cell<u64>,
     pub packets_sealed: Cell<u64>,
+    /// 做过的 X25519 次数，长期私钥和一次性私钥的都算。握手里最贵的就是它。
+    pub dh_operations: Cell<u64>,
 }
 
 pub struct Ephemeral {
@@ -167,10 +169,12 @@ impl<S: Suite> Crypto for TestCrypto<S> {
     }
 
     fn dh_static(&self, peer: &[u8; PUBLIC_KEY_LEN]) -> Option<[u8; PUBLIC_KEY_LEN]> {
+        self.probe.dh_operations.set(self.probe.dh_operations.get() + 1);
         Some(self.secret.diffie_hellman(&PublicKey::from(*peer)).to_bytes())
     }
 
     fn dh_ephemeral(&self, secret: &Ephemeral, peer: &[u8; PUBLIC_KEY_LEN]) -> Option<[u8; PUBLIC_KEY_LEN]> {
+        self.probe.dh_operations.set(self.probe.dh_operations.get() + 1);
         Some(secret.secret.diffie_hellman(&PublicKey::from(*peer)).to_bytes())
     }
 

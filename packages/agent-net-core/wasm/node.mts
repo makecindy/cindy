@@ -46,6 +46,7 @@ const STATE_EXISTS = 1;
 const STATE_ESTABLISHED = 2;
 const STATE_DEAD = 4;
 const STATE_UNACKED = 8;
+const STATE_PEER_CLOSED = 16;
 /** 计时器的实际精度（微秒）：短于它的等待不交给 `setTimeout`。Windows 的系统时钟节拍是 15.6 毫秒。 */
 const TIMER_GRANULARITY_US = process.platform === 'win32' ? 16_000 : 1_000;
 
@@ -111,6 +112,8 @@ export interface ConnectionStats {
   pathProbes: number;
   fallbackProbes: number;
   alternatesKept: number;
+  /** 对端忙时回了 cookie、这一端带着它重发的次数。 */
+  cookiesReceived: number;
 }
 
 export interface EndpointStats {
@@ -120,6 +123,12 @@ export interface EndpointStats {
   bytesSent: number;
   unknownDestination: number;
   rejectedInitiations: number;
+  /** mac1 不对、没做 DH 就丢掉的握手请求：发的人不知道这一端的公钥。 */
+  badMac1: number;
+  /** 忙的时候回出去的 cookie。 */
+  cookieReplies: number;
+  /** 忙的时候超过限额、没做 DH 就丢掉的握手请求。 */
+  throttledInitiations: number;
   sendErrors: number;
 }
 
@@ -316,11 +325,13 @@ export class RecvStream extends EventEmitter {
   }
 }
 
-export type CloseReason = 'local' | 'dead' | 'endpoint';
+/** `local` 这一端关的，`peer` 对端发来了关闭包，`dead` 超时或认证失败判死，`endpoint` 整个端点关了。 */
+export type CloseReason = 'local' | 'peer' | 'dead' | 'endpoint';
 
 /**
  * 一条加密连接。事件：`established`（握手完成）、`stream`（对端开了流，给出 {@link RecvStream}）、
- * `data`（默认流的数据）、`close`（{@link CloseReason}）。协议里没有关闭通知：要让对端知道，先结束流再关。
+ * `data`（默认流的数据）、`close`（{@link CloseReason}）。关闭时会告诉对端（对端的原因是 `peer`），但关闭是立刻的：
+ * 还没送到的数据不再重传，要对端收全，先结束流、等确认再关（{@link Connection.closeWhenDrained}）。
  */
 export class Connection extends EventEmitter {
   established = false;
@@ -429,6 +440,7 @@ export class Connection extends EventEmitter {
         pathProbes: v[13],
         fallbackProbes: v[14],
         alternatesKept: v[15],
+        cookiesReceived: v[16],
       };
     });
   }
@@ -580,6 +592,9 @@ export class Endpoint extends EventEmitter {
         bytesSent: v[3],
         unknownDestination: v[4],
         rejectedInitiations: v[5],
+        badMac1: v[6],
+        cookieReplies: v[7],
+        throttledInitiations: v[8],
         sendErrors: this.sendErrors,
       };
     });
@@ -696,7 +711,7 @@ export class Endpoint extends EventEmitter {
     for (let rounds = 0; !connection.closed; rounds++) {
       const state = this.call((core) => core.conn_state(connection.id));
       if ((state & STATE_EXISTS) === 0 || (state & STATE_DEAD) !== 0) {
-        this.closeConnection(connection, 'dead');
+        this.closeConnection(connection, (state & STATE_PEER_CLOSED) !== 0 ? 'peer' : 'dead');
         return;
       }
       if (!connection.established && (state & STATE_ESTABLISHED) !== 0) {
@@ -771,7 +786,11 @@ export class Endpoint extends EventEmitter {
     if (connection.closed) return;
     connection.closed = true;
     this.connections.delete(connection.id);
-    if (!this.broken) this.call((core) => core.close(connection.id));
+    if (!this.broken) {
+      this.call((core) => core.close(connection.id));
+      // 核心排好了告诉对端的关闭包，这一轮末尾发出去。
+      this.schedule();
+    }
     connection.emit('close', reason);
   }
 
@@ -814,6 +833,10 @@ export class Endpoint extends EventEmitter {
       if (failure) this.broken ??= failure;
       this.closeConnection(connection, 'endpoint');
     }
+    // 正常关掉端点时，把各条连接的关闭包在套接字关掉之前发出去。
+    if (!this.broken) this.flush(this.now());
+    if (this.immediate) clearImmediate(this.immediate);
+    this.immediate = null;
     this.broken ??= failure ?? new Error('endpoint closed');
     this.socket?.close();
     this.socket = null;

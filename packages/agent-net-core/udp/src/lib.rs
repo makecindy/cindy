@@ -36,6 +36,12 @@ pub struct EndpointStats {
     pub unknown_destination: u64,
     /// 读不开、或者被接受规则拒绝的握手请求。
     pub rejected_initiations: u64,
+    /// mac1 不对、没做 DH 就丢掉的握手请求，见核心的 `EndpointStats`。
+    pub bad_mac1: u64,
+    /// 忙的时候回出去的 cookie。
+    pub cookie_replies: u64,
+    /// 忙的时候超过限额、没做 DH 就丢掉的握手请求。
+    pub throttled_initiations: u64,
     /// 发送失败的包：网络不可达、发送缓冲满。可靠层会当丢包处理。
     pub send_errors: u64,
     pub rebinds: u64,
@@ -93,6 +99,9 @@ impl<C: Crypto> Endpoint<C> {
             bytes_sent: self.bytes_sent,
             unknown_destination: core.unknown_destination,
             rejected_initiations: core.rejected_initiations,
+            bad_mac1: core.bad_mac1,
+            cookie_replies: core.cookie_replies,
+            throttled_initiations: core.throttled_initiations,
             send_errors: self.send_errors,
             rebinds: self.rebinds,
         }
