@@ -52,7 +52,7 @@ describe('buildWireMessageSourceNote', () => {
     const request = { sessionId: 's-1', clientId: 'u1', plainBody: true };
     const checked = buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request',
       request: { ...request, delegatedText: 'Fix #12 and merge it.' } } });
-    expect(checked).toContain('代表主人对本任务的请求');
+    expect(checked).toContain('代表用户对本任务的请求');
     expect(checked).not.toContain('用户原话');
     expect(buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request', request } }))
       .toBe(buildWireMessageSourceNote({ origin }));

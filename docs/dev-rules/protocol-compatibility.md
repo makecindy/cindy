@@ -4358,8 +4358,8 @@ namespace + id 下同一插件的有界 JSON 请求；`deviceSync: true` 是独�
 ### 跨任务委派的原文正文（2026-11-05）
 
 新版发送端的跨任务正文是 Agent 写的原文，回执 `requestSource` 增加可选 `plainBody: true` 与 `delegatedText`
-（仅在发送端判断主人确实要求这次转交时出现，并与正文逐字相同）；`plainBody` 回执不再携带 `userText`，
-只保留原请求出处的 `sessionId` / `clientId`；`delegatedText` 存在本身就是主人授权，不再另带 `ownerVerified`
+（仅在发送端判断用户确实要求这次转交时出现，并与正文逐字相同）；`plainBody` 回执不再携带 `userText`，
+只保留原请求出处的 `sessionId` / `clientId`；`delegatedText` 存在本身就是用户授权，不再另带 `ownerVerified`
 （它只留在发给旧接收端的包装回执里）。`matchesForwardedRequest` 对 `plainBody`
 只接受 `delegatedText === 正文`；三行包装与最初中文格式的校验、显示解码全部保留。
 

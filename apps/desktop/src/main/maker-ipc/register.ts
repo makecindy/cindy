@@ -2643,7 +2643,7 @@ type SendToSessionInternalResult =
       message: string;
     };
 
-/** send_to_session 的结果：发送任务的审核没有确认主人要求这样转交时(2026-11-05)，没有发出。 */
+/** send_to_session 的结果：发送任务的审核没有确认用户要求这样转交时(2026-11-05)，没有发出。 */
 type SendToSessionResult = SendToSessionInternalResult
   | { ok: false; errorCode: 'DELEGATION_NOT_AUTHORIZED'; message: string };
 
