@@ -371,7 +371,11 @@ export function PanelDragController({
       const onUp = () => finish({ commit: true, suppressClick: true });
       const onCancel = () => finish({ commit: false, suppressClick: false });
       const onKey = (e: KeyboardEvent) => {
-        if (e.key === 'Escape') finish({ commit: false, suppressClick: false });
+        if (e.key !== 'Escape') return;
+        // This Esc cancels the drag; mark it handled so window-level Esc owners that
+        // honor defaultPrevented (cards, the sidebar Customize panel) don't also act.
+        e.preventDefault();
+        finish({ commit: false, suppressClick: false });
       };
       document.addEventListener('pointermove', onMove);
       document.addEventListener('pointerup', onUp);
