@@ -231,7 +231,7 @@ describe("mobile account deletion", () => {
     expect(layout).toContain("loginText('accountDeletionRestoredCopy')");
     expect(
       loginMessages.match(/(?:["']accountDeletionAcknowledgeCopy["']|accountDeletionAcknowledgeCopy):/g),
-    ).toHaveLength(12);
+    ).toHaveLength(13);
     expect(loginMessages).toContain("其他客户端会在登录状态失效后退出");
     expect(loginMessages).toContain(
       "other clients will sign out when their sign-in session becomes invalid",

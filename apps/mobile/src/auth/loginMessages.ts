@@ -1504,7 +1504,8 @@ const messages = {
       "accountDeletionUnavailableTitle": "Hesap silme kullanılamıyor",
       "accountDeletionUnavailableCopy": "Bu cihazda hesabınızı silemezsiniz. Silmek için Cindy web sitesinde veya bilgisayarınızda oturum açın.",
       "accountDeletionAcknowledgeA11y": "Hesabımı silmenin sonuçlarını anlıyorum",
-      "accountDeletionAcknowledgeCopy": "diğer istemciler oturum açma oturumları geçersiz olduğunda çıkış yapacaktır",
+      "accountDeletionAcknowledgeCopy":
+        "Şunları anlıyorum: bu telefonun oturumu hemen kapatılacaktır; diğer istemcilerin oturumu oturum açma oturumu geçersiz olduğunda kapatılacaktır; 30 gün içinde oturum açmak silme işlemini iptal eder; bu sürenin ardından Cindy oturum açma hesabı kalıcı olarak silinir ve kurtarılamaz.",
       "accountDeletionVerifyTitle": "Hesabınızı doğrulayın",
       "accountDeletionCodeSent": "{target} adresine bir doğrulama kodu gönderildi.",
       "accountDeletionConfirmingA11y": "Hesap silme işlemi onaylanıyor",
