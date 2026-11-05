@@ -270,6 +270,13 @@ export function PermissionPrompt({
     const button = allowOnceRef.current;
     if (!button) return;
     const active = document.activeElement;
+    // Focus already sits on another control of this card (e.g. Tab straight onto Deny in a
+    // split pane, which is what makes that pane the route owner): the user chose it, and
+    // the button's own activation wins over the card shortcuts. Don't redirect it.
+    if (active instanceof Element && active !== button && cardRef.current?.contains(active)) {
+      onAutoFocusHandled?.();
+      return;
+    }
     const keyboardOwnedElsewhere =
       active instanceof Element &&
       !cardRef.current?.contains(active) &&

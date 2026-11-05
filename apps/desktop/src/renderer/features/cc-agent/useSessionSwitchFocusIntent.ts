@@ -152,6 +152,9 @@ export function useSessionSwitchFocusIntent(
   // 否则确认卡晚一点重建出来时就拿不到焦点。
   // 读屏等辅助技术「激活」一个控件时，可能只派发一次可信的 click，前面没有 pointerdown /
   // keydown，所以也监听可信 click。代码里的 .click()（isTrusted=false）不是用户操作，不撤销。
+  // 只认 detail === 0 的 click（键盘 / 辅助技术激活）：指针点击（detail ≥ 1）前面必有
+  // pointerdown，监听挂上之后按下的已经由 pointerdown 撤销；挂上之前按下的，正是这次切换
+  // 本身（分屏在 pointerdown 时就切换路由主权，路由可能在松开前就解析完），不能撤销。
   useEffect(() => {
     if (!live) return;
     const disarm = () => setTarget(null);
@@ -159,7 +162,7 @@ export function useSessionSwitchFocusIntent(
       if (!e.repeat) disarm();
     };
     const disarmOnClick = (e: MouseEvent) => {
-      if (e.isTrusted) disarm();
+      if (e.isTrusted && e.detail === 0) disarm();
     };
     window.addEventListener('pointerdown', disarm, true);
     window.addEventListener('keydown', disarmOnKey, true);

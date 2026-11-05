@@ -491,6 +491,43 @@ describe('PermissionPrompt 经搜索弹层切换任务', () => {
 
 // 键盘切换：在侧栏行上按住 Enter，第一次 keydown 切任务、焦点随即落到「允许一次」；
 // 同一次按住产生的重复 keydown（以及最后的松开）不能激活按钮或卡片快捷键，替用户批准。
+// 分屏里已挂载的非主 pane：用户直接 Tab 到它授权卡上的「拒绝」，焦点进入 pane 让它成为
+// 主视图、切换意图随之武装。用户已经选定了「拒绝」，焦点不能被挪到「允许一次」，否则
+// 下一下回车就成了批准。
+describe('PermissionPrompt 焦点已在卡片控件上时不改道', () => {
+  function SplitPaneCard({ onRespond }: { onRespond: (r: unknown) => void }) {
+    const [owner, setOwner] = useState(false);
+    const intent = useSessionSwitchFocusIntent('task-b', owner, 'req-1', noHostQuery);
+    return (
+      <>
+        <button type="button">pane-a</button>
+        <div onFocusCapture={() => setOwner(true)}>
+          <PermissionPrompt
+            permission={permission([bashRule])}
+            onRespond={onRespond}
+            autoFocus={intent.armed}
+            onAutoFocusHandled={intent.consume}
+          />
+        </div>
+      </>
+    );
+  }
+
+  it('Tab 到「拒绝」使 pane 成为主视图后，焦点留在「拒绝」，回车即拒绝', async () => {
+    const user = userEvent.setup();
+    const onRespond = vi.fn();
+    render(<SplitPaneCard onRespond={onRespond} />);
+    screen.getByRole('button', { name: 'pane-a' }).focus();
+
+    await user.tab();
+    const deny = screen.getByRole('button', { name: /deny/ });
+    expect(document.activeElement).toBe(deny);
+    await user.keyboard('{Enter}');
+    expect(onRespond).toHaveBeenCalledTimes(1);
+    expect(onRespond).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'deny' }));
+  });
+});
+
 describe('PermissionPrompt 键盘切换时不替按住的按键批准', () => {
   function SidebarSwitch({ onRespond }: { onRespond: (r: unknown) => void }) {
     const [switched, setSwitched] = useState(false);

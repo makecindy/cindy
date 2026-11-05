@@ -101,21 +101,25 @@ describe('useSessionSwitchFocusIntent', () => {
     expect(result.current.armed).toBe(false);
   });
 
-  // 读屏等辅助技术激活控件时只发一次可信 click，没有 pointerdown / keydown。jsdom 造不出
-  // isTrusted=true 的事件，所以取到真实挂上的 click 监听，直接按可信与否各调一次。
-  it('辅助技术的可信 click 撤销意图，代码里的 .click() 不撤销', () => {
+  // 读屏等辅助技术激活控件时只发一次可信 click（detail=0），没有 pointerdown / keydown。
+  // jsdom 造不出 isTrusted=true 的事件，所以取到真实挂上的 click 监听，直接按可信与否各调一次。
+  // 指针点击（detail≥1）前面必有 pointerdown：监听挂上之后按下的已被 pointerdown 撤销，
+  // 之前按下的是这次切换本身（分屏按 pointerdown 切换主权），它的 click 不撤销。
+  it('辅助技术的可信 click 撤销意图，代码里的 .click() 和切换那次按压的 click 不撤销', () => {
     const add = vi.spyOn(window, 'addEventListener');
     const { result } = setup({ sessionId: 'a', enabled: true });
     const clickListener = add.mock.calls.find(([type]) => type === 'click')?.[1] as
-      | ((e: Pick<MouseEvent, 'isTrusted'>) => void)
+      | ((e: Pick<MouseEvent, 'isTrusted' | 'detail'>) => void)
       | undefined;
     expect(clickListener).toBeTypeOf('function');
 
     act(() => fireEvent.click(document.body));
     expect(result.current.armed).toBe(true);
-    act(() => clickListener?.({ isTrusted: false }));
+    act(() => clickListener?.({ isTrusted: false, detail: 0 }));
     expect(result.current.armed).toBe(true);
-    act(() => clickListener?.({ isTrusted: true }));
+    act(() => clickListener?.({ isTrusted: true, detail: 1 }));
+    expect(result.current.armed).toBe(true);
+    act(() => clickListener?.({ isTrusted: true, detail: 0 }));
     expect(result.current.armed).toBe(false);
   });
 
