@@ -32,9 +32,13 @@ export function onBotRemoteResourceChanged(listener: (botId: string) => void): (
   return () => { localListeners.delete(listener); };
 }
 
-/** Notify every controller that a host-owned teammate projection must be re-read. */
-export function broadcastBotRemoteResourceChanged(botId: string): void {
-  for (const listener of localListeners) {
+/**
+ * Notify every controller that a host-owned teammate projection must be re-read.
+ * `local: false` skips in-process observers: a read position changes no profile or
+ * conversation, so it must not wake the cloud mirror and profile upload.
+ */
+export function broadcastBotRemoteResourceChanged(botId: string, options: { local?: boolean } = {}): void {
+  if (options.local !== false) for (const listener of localListeners) {
     try { listener(botId); } catch { /* observers never block the broadcast */ }
   }
   const payload = {

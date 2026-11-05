@@ -1,6 +1,7 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import {
   REMOTE_RESOURCE_CHANGED_CHANNEL,
+  REMOTE_RESOURCE_INVOKE_CHANNEL,
   REMOTE_RESOURCE_LIST_CHANNEL,
   type RemoteCollectionListRequest,
 } from '@cindy/device-link';
@@ -135,7 +136,8 @@ export function useRemoteBotSync(): void {
           ...bot,
           delegatedSessionIds: previous.get(bot.id)?.delegatedSessionIds,
           templateId: previous.get(bot.id)?.templateId,
-          readAt: snapshot.find((old) => old.deviceId === deviceId && old.id === bot.id)?.readAt ?? bot.lastReplyAt ?? 0,
+          // Reading on the phone or the home computer counts here too; newest position wins.
+          readAt: Math.max(snapshot.find((old) => old.deviceId === deviceId && old.id === bot.id)?.readAt ?? bot.lastReplyAt ?? 0, bot.hostReadAt ?? 0),
         }));
         publish([...snapshot.filter((bot) => bot.deviceId !== deviceId), ...bots]);
         // Older released hosts already expose the task-card list, even when their
@@ -234,6 +236,18 @@ export function useRemoteBotSync(): void {
 
 export function markRemoteBotRead(deviceId: string, botId: string, at: number): void {
   if (!Number.isFinite(at) || at < 0) return;
-  if (!snapshot.some((bot) => bot.deviceId === deviceId && bot.id === botId && (bot.readAt ?? -1) < at)) return;
+  const bot = snapshot.find((bot) => bot.deviceId === deviceId && bot.id === botId);
+  if (!bot || (bot.readAt ?? -1) >= at) return;
   publish(snapshot.map((bot) => bot.deviceId === deviceId && bot.id === botId ? { ...bot, readAt: Math.max(bot.readAt ?? 0, at) } : bot));
+  // Hosts that publish their read position accept `read`; the position stays local if it fails
+  // (home computer offline) and the next read carries it.
+  if (bot.hostReadAt !== undefined && at > bot.hostReadAt && at > 0) {
+    void window.electronAPI.deviceLink.invoke(deviceId, REMOTE_RESOURCE_INVOKE_CHANNEL, [{
+      client: { protocolVersion: 1, primitives: [] },
+      collectionId: 'teammates',
+      actionId: 'read',
+      resourceRef: { collectionId: 'teammates', kind: 'bot', id: botId },
+      input: { at: Math.floor(at) },
+    }]).catch(() => undefined);
+  }
 }

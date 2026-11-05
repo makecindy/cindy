@@ -589,6 +589,7 @@ function createIpcFanOut(channel: string): FanOut {
 // Stage 2 C1: cc-agent:* push channel fanout 全部退役 (renderer 已切到 maker:event 等),
 // 老 7 个 fanOut + fanOutUserMessagePersisted 一起拿掉。
 const fanOutUpdateStatus = createIpcFanOut('update-status');
+const fanOutBotReadStateChanged = createIpcFanOut('local-db:bots:read-state:changed');
 const fanOutSkillhubLocalStateChanged = createIpcFanOut('skillhub:local-state-changed');
 const fanOutDatabaseSizeWarningChanged = createIpcFanOut('database-size-warning:changed');
 const fanOutDbSlimmingStartupProgress = createIpcFanOut(
@@ -6121,6 +6122,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
         welcomeContext?: import('../shared/botWelcomeContext').BotWelcomeContext;
         locale?: import('../shared/locale').SupportedLocale;
       }): Promise<unknown[]> => ipcRenderer.invoke('local-db:bots:list', body),
+      readState: {
+        get: (): Promise<{ ownerId: string | null; positions: Record<string, number> }> =>
+          ipcRenderer.invoke('local-db:bots:read-state:get'),
+        update: (body: {
+          ownerId: string;
+          mark?: Record<string, number>;
+          seed?: Record<string, number>;
+          prune?: { botIds?: string[]; groupIds?: string[] };
+        }): Promise<{ ownerId: string | null; positions: Record<string, number> }> =>
+          ipcRenderer.invoke('local-db:bots:read-state:update', body),
+        onChanged: fanOutBotReadStateChanged,
+      },
       get: (botId: string): Promise<unknown> => ipcRenderer.invoke('local-db:bots:get', botId),
       chooseAvatarSource: (): Promise<{ canceled: boolean; previewDataUrl?: string }> =>
         ipcRenderer.invoke('local-db:bots:choose-avatar-source'),
