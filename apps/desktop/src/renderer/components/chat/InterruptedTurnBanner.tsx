@@ -29,6 +29,8 @@
  * 错误横幅统一复用 ErrorNotice 的中性表面与操作布局。
  */
 
+import type { OutputLimitDetails } from '@cindy/maker-shared';
+
 import { useMemo, useState } from 'react';
 import { CirclePause, Play } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -115,6 +117,7 @@ export function ErrorTailErrorBanner({
   onDiagnose,
   errorReason,
   toolLoop,
+  outputLimit,
   onSilentStopContinue,
   sessionSource,
   className,
@@ -143,6 +146,7 @@ export function ErrorTailErrorBanner({
   onDiagnose?: (error: ErrorDiagnosisSource) => void;
   errorReason?: string | null;
   toolLoop?: ToolLoopErrorDetails;
+  outputLimit?: OutputLimitDetails;
   onSilentStopContinue?: () => void;
   sessionSource?: string | null;
   className?: string;
@@ -158,6 +162,7 @@ export function ErrorTailErrorBanner({
       error={errorText}
       errorReason={errorReason}
       toolLoop={toolLoop}
+      outputLimit={outputLimit}
       retryText={ERROR_TAIL_RETRY_TOKEN}
       onRetry={() => void onContinue()}
       onCancel={onDismiss}

@@ -165,6 +165,7 @@ const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
   'opencode-go': 'opencode',
   'vercel-ai-gateway': 'vercel',
   ollama: 'ollama',
+  'ollama-cloud': 'ollama',
   'cindy-local-ollama': 'ollama',
   lmstudio: 'lmstudio',
   'cindy-local-lmstudio': 'lmstudio',

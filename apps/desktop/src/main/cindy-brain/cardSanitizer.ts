@@ -314,6 +314,10 @@ function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string |
   // 替换其内容(ghostCardPrStatus);插件写在里面的是兜底快照。值不合格只丢属性。
   const prStatus = tag === 'div' ? (attrs['data-ghost-pr-status'] ?? '').trim() : '';
   if (GHOST_CARD_PR_STATUS_RE.test(prStatus)) parts.push(` data-ghost-pr-status="${escapeAttr(prStatus)}"`);
+  // 只在 PR 开着时成立的部分(data-ghost-pr-open-only="owner/repo#123"):挂 div / span / button。
+  // 标题栏同一份状态显示这条 PR 已合并或关闭后,宿主把它藏起来(电脑)或不投影(手机)。
+  const prOpenOnly = tag === 'div' || tag === 'span' || tag === 'button' ? (attrs['data-ghost-pr-open-only'] ?? '').trim() : '';
+  if (GHOST_CARD_PR_STATUS_RE.test(prOpenOnly)) parts.push(` data-ghost-pr-open-only="${escapeAttr(prOpenOnly)}"`);
   // 手机端呈现提示(只挂 button):data-ghost-primary 画成主按钮;data-ghost-toggle="on|off"
   // 画成原生开关。电脑端不读,卡内样式照旧由插件决定。
   if (tag === 'button' && attrs['data-ghost-primary'] !== undefined) parts.push(' data-ghost-primary=""');

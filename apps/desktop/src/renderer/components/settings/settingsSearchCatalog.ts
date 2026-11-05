@@ -22,6 +22,8 @@ export function normalizeSettingsSearchText(value: string): string {
   return value.normalize('NFKC').toLowerCase().trim().replace(/\s+/g, ' ');
 }
 
+const chineseWords = new Intl.Segmenter('zh', { granularity: 'word' });
+
 export function buildSettingsSearchDocuments(
   t: TFunction,
   visibleTabIds: readonly VisibleSettingsTab[],
@@ -32,19 +34,27 @@ export function buildSettingsSearchDocuments(
     (entry) => visible.has(entry.tab) && (!entry.isVisible || (context !== undefined && entry.isVisible(context))),
   ).map((entry) => {
     const text = (key: string, english = false) => {
-      const value: unknown = t(key, { ...(english ? { lng: 'en' } : {}), defaultValue: '' });
+      const value: unknown = t(key, { ...entry.textValues?.(context), ...(english ? { lng: 'en' } : {}), defaultValue: '' });
       return typeof value === 'string' && value !== key ? value.replace(/{{[^}]+}}/g, '') : '';
     };
     const title = text(entry.titleKey);
     const section = text(entry.sectionKey);
     const category = text(TAB_LABEL_KEY[entry.tab]);
+    const descriptionKey = (context && entry.descriptionKeyForContext?.(context)) ?? entry.descriptionKey;
     const english = [
       text(entry.titleKey, true),
       text(entry.sectionKey, true),
       text(TAB_LABEL_KEY[entry.tab], true),
     ];
+    const keywordKeys = [
+      ...(entry.keywordKeys ?? []),
+      ...(entry.options ?? [])
+        .filter((option) => !option.isVisible || (context !== undefined && option.isVisible(context)))
+        .flatMap(({ labelKey, descriptionKey }) =>
+          descriptionKey ? [labelKey, descriptionKey] : [labelKey]),
+    ];
     const searchText = normalizeSettingsSearchText(
-      [title, section, category, ...english, ...(entry.keywordKeys ?? []).flatMap((key) => [text(key), text(key, true)]), ...(entry.descriptionKey ? [text(entry.descriptionKey), text(entry.descriptionKey, true)] : []), ...(entry.aliases ?? [])].join(' '),
+      [title, section, category, ...english, ...keywordKeys.flatMap((key) => [text(key), text(key, true)]), ...(descriptionKey ? [text(descriptionKey), text(descriptionKey, true)] : []), ...(entry.aliases ?? [])].join(' '),
     );
     return { entry, title, section, category, searchText };
   });
@@ -56,6 +66,12 @@ export function searchSettings(
 ): SettingsSearchDocument[] {
   const normalizedQuery = normalizeSettingsSearchText(query);
   if (!normalizedQuery) return [];
+  // Chinese phrases often span the category and title without spaces (语音快捷键).
+  // Segment into words, never individual-character OR matches: every word must match.
+  const tokens = /\p{Script=Han}/u.test(normalizedQuery)
+    ? Array.from(chineseWords.segment(normalizedQuery))
+      .filter(({ isWordLike }) => isWordLike).map(({ segment }) => segment)
+    : normalizedQuery.split(' ');
 
   return documents
     .map((document, index) => {
@@ -64,7 +80,7 @@ export function searchSettings(
       const category = normalizeSettingsSearchText(document.category);
       if (
         !document.searchText.includes(normalizedQuery) &&
-        !normalizedQuery.split(' ').every((token) => document.searchText.includes(token))
+        !(tokens.length > 0 && tokens.every((token) => document.searchText.includes(token)))
       ) {
         return null;
       }

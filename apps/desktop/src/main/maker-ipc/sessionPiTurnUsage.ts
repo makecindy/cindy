@@ -2,6 +2,8 @@ import { captureTurnUsageContext, turnBillingSource, type TurnUsageContext } fro
 import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.js';
 import { isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId } from '../maker-host/subscription-account-auth.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
+import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
+import { isPiReceiptPayload, recordPiUsageReceipts, trackPiUsageWrite } from './piUsageReceipts.js';
 
 import { buildTurnUsageDetails } from '../../shared/turnUsageDetails.js';
 import { recordSessionTurnSpend, recordSessionTurnTokens } from '../sessionSpendBroadcaster.js';
@@ -45,6 +47,8 @@ import {
 } from '../usageBroadcaster.js';
 import { broadcastSchedulerChanged } from './schedule.js';
 
+const completedReceipts = new WeakMap<Session, Set<string>>();
+
 export interface RecordSessionPiTurnUsageDeps {
   readonly turnUsageContextBySession: Map<string, TurnUsageContext>;
   readonly turnModelPromiseBySession: Map<string, Promise<string>>;
@@ -58,12 +62,25 @@ export function recordSessionPiTurnUsage(
   event: AgentEvent,
   turnAssistantPersistId: string | undefined,
 ) {
+  const raw = (event.data as { usage?: unknown } | undefined)?.usage;
+  const identified = event.source === 'pi' && isPiReceiptPayload(raw);
+  if (identified) {
+    const context = deps.turnUsageContextBySession.get(session.id) ?? captureTurnUsageContext(session.id);
+    recordPiUsageReceipts(session, raw, context);
+    if (event.type === 'account_usage') return;
+    if (event.type !== 'done' && !isTerminalAgentErrorEvent(event)) return;
+    const completed = completedReceipts.get(session) ?? new Set<string>();
+    if (completed.has(raw.settlementId)) return;
+    completed.add(raw.settlementId);
+    if (completed.size > 64) completed.delete(completed.values().next().value!);
+    completedReceipts.set(session, completed);
+  }
   // Pi done 事件同样携带 per-turn token/cache 明细。Pi 复用 Cindy 的 provider
   // 路由，因此计费形态必须看 session provider，而不是把它当成一个新的计费方：
   //   openai / anthropic / xai → 用户订阅，显示剩余窗口 + 本对话价值；
   //   xd / 默认网关            → 实际 gateway cost。
   // usage 事实无论价格是否可解析都持久化，保证新模型也能看到 cache 命中明细。
-  if (event.type === 'done' && event.source === 'pi') {
+  if ((event.type === 'done' || (identified && isTerminalAgentErrorEvent(event))) && event.source === 'pi') {
     const turnContext = deps.turnUsageContextBySession.get(session.id) ?? captureTurnUsageContext(session.id);
     const sessionProvider = turnContext.providerId;
     // New Pi payloads carry the tariff on every request segment. Keep the
@@ -88,7 +105,7 @@ export function recordSessionPiTurnUsage(
         },
       );
       const piUsageSegments = normalizeTurnUsageSegments(
-        (rawUsage as { segments?: unknown }).segments,
+        identified ? raw.receipts : (rawUsage as { segments?: unknown }).segments,
       ).map((segment) => ({
         ...segment,
         // Parent requests use this session's bridge preference. Delegated
@@ -98,20 +115,20 @@ export function recordSessionPiTurnUsage(
           segment.priceVariant ?? (segment.id?.startsWith('pi:') ? piPriceVariant : 'standard'),
       }));
       const piSegmentTotals = sumTurnUsageSegments(piUsageSegments);
-      const piSegmentsReliable =
+      const piSegmentsReliable = identified || (
         (rawUsage as { segmentsComplete?: unknown }).segmentsComplete === true &&
         piUsageSegments.length > 0 &&
         piSegmentTotals.inputTokens === tokens.inputTokens &&
         piSegmentTotals.outputTokens === tokens.outputTokens &&
         piSegmentTotals.cacheReadTokens === tokens.cacheReadTokens &&
-        piSegmentTotals.cacheCreateTokens === tokens.cacheCreateTokens;
+        piSegmentTotals.cacheCreateTokens === tokens.cacheCreateTokens);
       const totalTokens =
         tokens.inputTokens +
         tokens.outputTokens +
         tokens.cacheReadTokens +
         tokens.cacheCreateTokens;
-      void recordSessionTurnTokens(session.id, totalTokens);
-      void (async () => {
+      if (!identified) trackPiUsageWrite(recordSessionTurnTokens(session.id, totalTokens));
+      trackPiUsageWrite((async () => {
         let turnModel = 'unknown';
         try {
           turnModel = await modelPromise;
@@ -201,7 +218,8 @@ export function recordSessionPiTurnUsage(
             // Missing/incomplete request boundaries are explicitly unpriceable. A provider-
             // reported request cost may still win in resolveTurnCost; token × quote must not
             // collapse the whole turn into one synthetic long-context request.
-            const pricingSegments = piSegmentsReliable ? group.segments : [];
+            const pricingSegments = piSegmentsReliable
+              ? group.segments.filter(segment => !segment.id?.startsWith('pi-unattributed:')) : [];
             let money: RegionalMoney | null = null;
             if (billingRoute === 'subscription') {
               const quote = (effectiveProvider
@@ -245,7 +263,7 @@ export function recordSessionPiTurnUsage(
                   ? (money ?? deps.unpricedSubscriptionValueMarker())
                   : null;
             recordedModels.add(model);
-            modelWrites.push(
+            if (!identified) modelWrites.push(
               recordModelTurnUsage({
                 sessionId: session.id,
                 agentKind: 'pi',
@@ -277,9 +295,9 @@ export function recordSessionPiTurnUsage(
             durationMs,
             turnDurationMs,
           });
-          if (actualMoney) {
-            void recordTurnSpend(actualMoney);
-            void recordSessionTurnSpend(session.id, actualMoney);
+          if (actualMoney && !identified) {
+            await recordTurnSpend(actualMoney);
+            await recordSessionTurnSpend(session.id, actualMoney);
           }
           if (messageMoney) {
             const changedScheduleId = await recordSchedulerTurnCost({
@@ -299,7 +317,7 @@ export function recordSessionPiTurnUsage(
           }
         } catch {
           // Price/catalog failure must not lose token/cache facts.
-          const writes = [...groupedSegments]
+          const writes = (identified ? [] : [...groupedSegments])
             .filter(([model]) => !recordedModels.has(model))
             .map(([model, group]) =>
               recordModelTurnUsage({
@@ -333,7 +351,7 @@ export function recordSessionPiTurnUsage(
         } else if (effectiveProvider === 'xd' || effectiveProvider == null) {
           void triggerClaudeAccountUsageRefresh();
         }
-      })();
+      })());
     }
   }
 }

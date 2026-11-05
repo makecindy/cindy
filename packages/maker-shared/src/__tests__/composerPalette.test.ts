@@ -208,4 +208,26 @@ describe('shared composer palette model', () => {
       }),
     ).toBe(0);
   });
+
+  it('projects Claude Code managed Skill namespaces to the human slash label', () => {
+    const wire = '/cindy-plugin-cindy-github:pr 跟进';
+    const range = [{ start: 0, end: '/cindy-plugin-cindy-github:pr'.length }];
+    expect(projectSlashCommandsInText(wire, range)).toBe('/pr 跟进');
+    expect(slashCommandDisplayLabel('/cindy:learn')).toBe('/learn');
+    expect(slashCommandDisplayLabel('/cindy-plugin-cindy-github:')).toBe('/cindy-plugin-cindy-github:');
+    expect(restoreSlashCommandRuntimeAlias(wire, '/pr 再看看', range)).toBe(
+      '/cindy-plugin-cindy-github:pr 再看看',
+    );
+    const plugin = { name: 'pr', runtimeCommandName: 'cindy-plugin-cindy-github:pr' };
+    expect(slashCommandRuntimePrefixLength('/cindy-plugin-cindy-github:pr', plugin)).toBe(
+      'cindy-plugin-cindy-github:'.length,
+    );
+    // Same-named Skills are listed by their namespaced name; keep it visible.
+    expect(
+      slashCommandRuntimePrefixLength('/cindy-plugin-cindy-github:pr', {
+        name: 'cindy-plugin-cindy-github:pr',
+        runtimeCommandName: 'cindy-plugin-cindy-github:pr',
+      }),
+    ).toBe(0);
+  });
 });

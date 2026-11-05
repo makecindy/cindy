@@ -75,6 +75,7 @@ export interface TurnCostDeps {
     money: RegionalMoney | null;
     costUsd: number;
     hasEstimatedValue: boolean;
+    isFirstUserRound?: boolean;
   }>;
   enqueue<T>(label: string, fn: () => Promise<T> | T): Promise<T>;
   broadcast(payload: MessageTurnCostPayload): void;
@@ -162,6 +163,14 @@ async function patchAgentMetaPreservingTurnDuration(
   };
 }
 
+/** 第一轮没有可复用的缓存；把这一事实随明细落库，供「缓存命中率偏低」建议排除。 */
+function withFirstUserRound(
+  details: TurnUsageDetails | null | undefined,
+  isFirstUserRound: boolean | undefined,
+): TurnUsageDetails | null | undefined {
+  return details && isFirstUserRound ? { ...details, firstUserRound: true } : details;
+}
+
 /**
  * 把一笔 SDK 分段费用写到指定消息，并同时写入从本轮用户消息累计的展示费用。
  *
@@ -192,10 +201,10 @@ export async function recordTurnCostOnMessage(
       // This runs in the durable FIFO after prior assistant cost patches, so
       // the query sees every earlier segment of this user round.
       const prior = await deps.readPriorUserRoundCost(sessionId, clientId);
-      const detailsWithAdditional = prior.additionalCosts?.length
+      const detailsWithAdditional = withFirstUserRound(prior.additionalCosts?.length
         ? { ...(turnUsageDetails ?? { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0,
             cacheCreateTokens: 0, totalTokens: 0, cacheHitRate: null }), additionalCosts: prior.additionalCosts }
-        : turnUsageDetails;
+        : turnUsageDetails, prior.isFirstUserRound);
       userTurnMoney = addCompatibleRegionalMoney([
         ...(prior.money ? [prior.money] : []), normalized,
         ...supplementalConversationEstimates({ turnCost: normalized, turnUsageDetails }),
@@ -321,8 +330,9 @@ export async function recordTurnUsageOnMessage(
       // 与 recordTurnCostOnMessage 同一条 durable FIFO,所以这里看得到本用户轮此前
       // 每个 segment 已落库的费用。
       const prior = await deps.readPriorUserRoundCost(sessionId, clientId);
-      const detailsWithAdditional = prior.additionalCosts?.length
-        ? { ...turnUsageDetails, additionalCosts: prior.additionalCosts } : turnUsageDetails;
+      const detailsWithAdditional = withFirstUserRound(prior.additionalCosts?.length
+        ? { ...turnUsageDetails, additionalCosts: prior.additionalCosts } : turnUsageDetails,
+      prior.isFirstUserRound) ?? turnUsageDetails;
       const userTurnMoney =
         prior.money && prior.money.amount > 0 ? prior.money : null;
       const patch: Record<string, unknown> = { turnUsageDetails: detailsWithAdditional };

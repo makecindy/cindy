@@ -76,8 +76,14 @@ export interface RemoteResourceDisplay {
   /** Optional roster activity; older hosts omit it, older controllers ignore it. */
   teammateActivity?: { phase: string };
   timestamp?: number;
-  /** Latest visible reply in host time; controllers keep their own read position. */
+  /** Latest visible reply in host time. */
   lastReplyAt?: number;
+  /**
+   * Read position the host keeps for this conversation, in host time (0 = none yet). A host that
+   * sends it accepts the resource's `read` action; controllers merge it forward with their own
+   * position, so reading on any device clears the badge on the others. Older hosts omit it.
+   */
+  lastReadAt?: number;
   avatar?: RemoteResourceAvatar;
   status?: RemoteResourceStatus;
   badges?: RemoteResourceBadge[];
