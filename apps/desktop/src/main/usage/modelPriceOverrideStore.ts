@@ -363,8 +363,9 @@ function mergedQuote(
       ? (bandValue / referenceValue) * overrideValue
       : overrideValue;
   };
-  // 设置里只有一个「缓存写入」价。改它时 1h 写入价按参考价的 1h/5m 倍率跟着投影，
-  // 不改时沿用参考价；清空缓存写入价则 1h 一并清空。
+  // 设置里只有一个「缓存写入」价。改它时 1h 写入价按「该档 1h 价 ÷ 基础 5m 价」跟着
+  // 投影（与分档 5m 价同一个分母，长上下文倍率才不丢）；不改时沿用参考价；清空缓存
+  // 写入价则 1h 一并清空。
   const projectCacheCreate1h = (
     reference1h: number | undefined,
     reference5m: number | undefined,
@@ -409,7 +410,10 @@ function mergedQuote(
         values.cacheCreatePerMtok,
       );
     }
-    const band1h = projectCacheCreate1h(band.cacheCreate1hPerMtok, band.cacheCreatePerMtok);
+    const band1h = projectCacheCreate1h(
+      band.cacheCreate1hPerMtok,
+      mergeReference.cacheCreatePerMtok,
+    );
     if (band1h === undefined) delete merged.cacheCreate1hPerMtok;
     else merged.cacheCreate1hPerMtok = band1h;
     return merged;

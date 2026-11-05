@@ -211,6 +211,26 @@ describe('model price override sparse persistence', () => {
     expect(__testing.sameComparable(savedBeforeThisField, __testing.comparable(reference))).toBe(true);
   });
 
+  it('keeps the long-context multiplier on the 1h cache-write price of a band', () => {
+    const merged = __testing.mergedQuote(
+      { providerId: 'custom', agent: 'claude-code', modelId: 'model' },
+      {
+        providerId: 'custom', modelId: 'model', currency: 'USD', source: 'provider-reference',
+        approximate: true, inputPerMtok: 5, outputPerMtok: 25,
+        cacheCreatePerMtok: 6.25, cacheCreate1hPerMtok: 10,
+        inputTokenPriceBands: [{
+          minInputTokens: 200_000, inputPerMtok: 10, outputPerMtok: 50,
+          cacheCreatePerMtok: 12.5, cacheCreate1hPerMtok: 20,
+        }],
+      },
+      { cacheCreatePerMtok: 10 },
+    );
+    expect(merged?.cacheCreate1hPerMtok).toBe(16);
+    expect(merged?.inputTokenPriceBands?.[0]).toMatchObject({
+      cacheCreatePerMtok: 20, cacheCreate1hPerMtok: 32,
+    });
+  });
+
   it('preserves remote long-context multipliers when applying a sparse local override', () => {
     const inputTokenPriceBands = [
       {
