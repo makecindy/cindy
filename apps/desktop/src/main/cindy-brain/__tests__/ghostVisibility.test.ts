@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import { classifyGhostVisibility, classifyInstalledGhostVisibility } from '../ghostVisibility.js';
@@ -21,6 +21,22 @@ describe('classifyGhostVisibility namespace', () => {
     isAvailableForActiveSession: () => true,
     isDisabledForWorkdir: () => false,
   };
+
+  // BWG3 unit regression: repeated pre-dispatch checks use only the selected
+  // physical installation, but removal/replacement/disable still take effect.
+  it('rechecks an exact installation without scanning unrelated plugins', () => {
+    let current: InstalledGhost | undefined = enterprise;
+    const listGhosts = vi.fn(() => { throw new Error('full scan'); });
+    const exactDeps = { ...deps, listGhosts, findInstalledInstance: () => current };
+    expect(classifyInstalledGhostVisibility(enterprise, null, exactDeps)).toMatchObject({ ok: true });
+    current = { ...enterprise, enabled: false };
+    expect(classifyInstalledGhostVisibility(enterprise, null, exactDeps)).toMatchObject({ ok: false, errorCode: 'GHOST_ASLEEP' });
+    current = { ...enterprise, approval: { state: 'approved', revision: 'replacement' } };
+    expect(classifyInstalledGhostVisibility(enterprise, null, exactDeps)).toMatchObject({ ok: false, errorCode: 'GHOST_NOT_FOUND' });
+    current = undefined;
+    expect(classifyInstalledGhostVisibility(enterprise, null, exactDeps)).toMatchObject({ ok: false, errorCode: 'GHOST_NOT_FOUND' });
+    expect(listGhosts).not.toHaveBeenCalled();
+  });
 
   it('returns GHOST_AMBIGUOUS when the same ghostId has two instances and namespace is omitted', () => {
     const result = classifyGhostVisibility('helper', null, deps);

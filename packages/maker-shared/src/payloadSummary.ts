@@ -464,6 +464,13 @@ export function extractPayloadToolCardIds(text: string): string[] {
     .filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 128))];
 }
 
+/** 声明排到本轮末尾的卡片 id(host 在 tool_result 里注入 xdt_card_turn_end: true)。 */
+export function extractPayloadTurnEndCardIds(text: string): string[] {
+  const parsed = parseToolResultPayload(text);
+  return parsed?.xdt_card_turn_end === true && typeof parsed.xdt_card_id === 'string'
+    && parsed.xdt_card_id.length > 0 && parsed.xdt_card_id.length <= 128 ? [parsed.xdt_card_id] : [];
+}
+
 export interface PayloadToolFile { url: string; title: string }
 
 // Preserve the legacy URL alphabet. Source delimiters are contextual; adding

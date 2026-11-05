@@ -105,6 +105,13 @@ vi.mock('../../clientEndpointsService.js', () => ({
 }));
 vi.mock('../index', () => ({
   getDeviceLinkStatus: () => 'online',
+  hasOfflineDirectPath: () => false,
+  isDeviceDataPathAvailable: () => false,
+  isPeerControlAvailable: () => true,
+  getPeerControlState: () => ({ online: true, available: true, disabled: false }),
+  isPresenceFreshAfterRequest: () => false,
+  forgetPeerControlState: () => {},
+  getDirectDataDeviceIds: () => [],
   getDeviceLinkConnectionIssue: () => null,
   isDeviceLinkStandby: () => false,
   getUnresponsiveDeviceIds: () => [],

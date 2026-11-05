@@ -44,6 +44,7 @@ import {
   agentKindOfEngine,
   anchorKey,
   engineOfAgentKind,
+  enginePreferenceModelIds,
   wireModelIdOf,
   type UnifiedAnchor,
   type UnifiedEngine,
@@ -446,7 +447,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       if (applied !== false && getRecentModelsOwner() === ownerAtSelect) {
         recordRecentModel({
           providerId: entry.providerId,
-          modelId: entry.modelId,
+          modelId: entry.enginePreferenceId ?? entry.modelId,
           agent: config.engine,
           ...(config.effort ? { effort: config.effort } : {}),
           // 三态：`'ultrafast'` 必须原样存，写成 `true` 会让「最近」里再应用变成普通 Fast。
@@ -849,12 +850,12 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
           }),
         ).then((applied) => {
           if (!applied) return false;
-          (options.engineStore?.set ?? setModelEngineOverride)(anchor.providerId, anchor.modelId, engine);
+          (options.engineStore?.set ?? setModelEngineOverride)(anchor.providerId, enginePreferenceModelIds(entry)[0]!, engine);
         });
       }
       return;
     }
-    (options.engineStore?.set ?? setModelEngineOverride)(anchor.providerId, anchor.modelId, engine);
+    (options.engineStore?.set ?? setModelEngineOverride)(anchor.providerId, enginePreferenceModelIds(entry)[0]!, engine);
   };
 
   const applyEffort: UnifiedRowActions['applyEffort'] = (anchor, entry, config, effort) => {
@@ -989,7 +990,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
 
     /** 「跟随推荐」的持久化部分:删 override + 删掉当前与推荐引擎两格的深度 / Fast 记忆。 */
     const resetStoredConfig = (): void => {
-      (options.engineStore?.clear ?? clearModelEngineOverride)(anchor.providerId, anchor.modelId);
+      for (const id of enginePreferenceModelIds(entry)) (options.engineStore?.clear ?? clearModelEngineOverride)(anchor.providerId, id);
       // ★ 删,不是写快照(2026-08-17 review H3)。记忆表是 override 表:表里没有该键
       // ⇒ 跟随当前版本的目录默认。此前这里把**这一版**的 defaultEffort 快照写回记忆槽,
       // 于是服务端之后改了推荐档,点过「恢复推荐」的用户被钉死在旧值上 —— 与
@@ -1091,7 +1092,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     if (interactionDisabled) return;
     const result = favorites.add({
       providerId: anchor.providerId,
-      modelId: anchor.modelId,
+      modelId: config.storedModelId ?? anchor.modelId,
       agent: config.engine,
       ...(config.effort ? { effort: config.effort } : {}),
       ...(config.fast ? { fast: config.fast } : {}),

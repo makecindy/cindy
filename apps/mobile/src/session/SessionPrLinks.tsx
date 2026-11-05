@@ -1,16 +1,13 @@
-import { useEffect, useRef, useState } from "react";
-import { Linking, View } from "react-native";
-import { useTranslation } from "react-i18next";
-import {
-  type SessionPrRef,
-  type SessionPrRefAction,
-  sessionPrUrl,
-} from "@cindy/maker-shared";
-import { Text, TextInput } from "@/components/AppText";
-import { ActionPill } from "@/components/MobilePrimitives";
-import { useDeviceLink } from "@/device-link/DeviceLinkContext";
-import { useTheme } from "@/theme";
-import { radius, spacing, typeScale } from "@/theme/tokens";
+import { prNumberLabel } from '@cindy/maker-shared';
+import { useEffect, useRef, useState } from 'react';
+import { Linking, View } from 'react-native';
+import { useTranslation } from 'react-i18next';
+import { type SessionPrRef, type SessionPrRefAction, sessionPrUrl } from '@cindy/maker-shared';
+import { Text, TextInput } from '@/components/AppText';
+import { ActionPill } from '@/components/MobilePrimitives';
+import { useDeviceLink } from '@/device-link/DeviceLinkContext';
+import { useTheme } from '@/theme';
+import { radius, spacing, typeScale } from '@/theme/tokens';
 
 /** Uses the existing same-account association manager; historical links stay recoverable on phones. */
 export function SessionPrLinks({
@@ -122,7 +119,7 @@ export function SessionPrLinks({
                     fontSize: typeScale.body,
                   }}
                 >
-                  {row.owner}/{row.repo} #{row.prNumber}
+                  {row.owner}/{row.repo} {prNumberLabel(row)}
                 </Text>
                 {!readOnly && (
                   <View
@@ -197,7 +194,7 @@ export function SessionPrLinks({
             <>
               <TextInput
                 accessibilityLabel={label("addLabel")}
-                placeholder="https://github.com/owner/repo/pull/123"
+                placeholder={t('session.githubPrs.urlPlaceholder')}
                 placeholderTextColor={colors.textSecondary}
                 value={url}
                 onChangeText={setUrl}

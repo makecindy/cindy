@@ -10,6 +10,7 @@
  */
 
 import { net } from 'electron';
+import { retryAfterDeadline } from '@cindy/auth-client';
 import * as authManager from './authManager';
 import { getResolvedMainLocale } from './i18n.js';
 
@@ -29,6 +30,7 @@ export class ServerApiError extends Error {
     public readonly code: string,
     public readonly statusCode: number,
     message: string,
+    public readonly retryAt?: number,
   ) {
     super(message);
     this.name = 'ServerApiError';
@@ -62,6 +64,8 @@ export interface ApiFetchOptions {
   baseUrl: string | (() => string);
   /** Abort the request after this many milliseconds; 0 disables the deadline. */
   timeoutMs?: number;
+  /** Caller lifetime/deadline, including waiting for shared login refresh and retry. */
+  signal?: AbortSignal;
   /** Keep upstream response/network details out of local logs for sensitive flows. */
   redactErrorDetails?: boolean;
   /**
@@ -85,9 +89,11 @@ interface RawResponse<T> {
   ok: boolean;
   status: number;
   data: T | null;
+  retryAt?: number;
 }
 
 async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawResponse<T>> {
+  opts.signal?.throwIfAborted();
   const baseUrl = typeof opts.baseUrl === 'function' ? opts.baseUrl() : opts.baseUrl;
   const url = baseUrl + apiPath;
   const method = opts.method ?? 'GET';
@@ -105,8 +111,10 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
     }
   }
   const timeoutMs = opts.timeoutMs ?? 0;
-  const controller = timeoutMs > 0 ? new AbortController() : null;
-  const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  const controller = timeoutMs > 0 || opts.signal ? new AbortController() : null;
+  const abort = () => controller?.abort(opts.signal?.reason);
+  opts.signal?.addEventListener('abort', abort, { once: true });
+  const timeoutId = controller && timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
   try {
     const body = opts.bodyFactory ? opts.bodyFactory() : opts.body;
     const response = await net.fetch(url, {
@@ -120,13 +128,16 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
     try {
       data = (await response.json()) as T;
     } catch (error) {
+      opts.signal?.throwIfAborted();
       log.warn('response read failed', opts.logLabel ?? redactedLogPath(apiPath),
         { status: response.status },
         opts.redactErrorDetails || opts.logLabel ? '[response details hidden]' : requestErrorMessage(error));
       data = null;
     }
-    return { ok: response.ok, status: response.status, data };
+    return { ok: response.ok, status: response.status, data,
+      retryAt: response.status === 429 ? retryAfterDeadline(response) : undefined };
   } catch (err) {
+    opts.signal?.throwIfAborted();
     if (opts.redactErrorDetails) {
       log.error(
         'serverApiFetch.redacted_network_error',
@@ -139,7 +150,26 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
     return { ok: false, status: 0, data: null };
   } finally {
     if (timeoutId !== null) clearTimeout(timeoutId);
+    opts.signal?.removeEventListener('abort', abort);
   }
+}
+
+/** Cancel only this waiter; another request may still need the shared refresh. */
+function waitForRefresh(refresh: Promise<boolean>, signal?: AbortSignal): Promise<boolean> {
+  if (!signal) return refresh;
+  return new Promise((resolve, reject) => {
+    const abort = () => { signal.removeEventListener('abort', abort); reject(signal.reason); };
+    signal.addEventListener('abort', abort, { once: true });
+    refresh.then(value => {
+      signal.removeEventListener('abort', abort);
+      if (signal.aborted) reject(signal.reason);
+      else resolve(value);
+    }, error => {
+      signal.removeEventListener('abort', abort);
+      reject(signal.aborted ? signal.reason : error);
+    });
+    if (signal.aborted) abort();
+  });
 }
 
 /**
@@ -148,6 +178,7 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
  */
 export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<T> {
   let result = await rawFetch<T>(apiPath, opts);
+  opts.signal?.throwIfAborted();
   let refreshedAndRetried = false;
   const firstCode = readErrorCode(result.data) ?? statusToCode(result.status);
 
@@ -157,10 +188,13 @@ export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions):
     firstCode !== 'ACCOUNT_UNAVAILABLE' &&
     isRefreshableUnauthorizedCode(firstCode)
   ) {
-    const refreshed = await authManager.refresh();
+    opts.signal?.throwIfAborted();
+    const refreshed = await waitForRefresh(authManager.refresh({ serverRejectedToken: true }), opts.signal);
+    opts.signal?.throwIfAborted();
     if (refreshed) {
       refreshedAndRetried = true;
       result = await rawFetch<T>(apiPath, opts);
+      opts.signal?.throwIfAborted();
     }
   }
 
@@ -213,6 +247,7 @@ export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions):
       publicCode,
       result.status,
       opts.redactErrorDetails ? `请求失败 (${result.status})` : errMsg,
+      result.retryAt,
     );
   }
   if (result.data === null) {
