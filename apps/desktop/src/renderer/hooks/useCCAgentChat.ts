@@ -109,6 +109,8 @@ interface UseCCAgentChatReturn {
   /** F-QUEUE-DEFER: 切换队列面板的展开 / 折叠态，仅影响展示。 */
   setQueueExpanded: (expanded: boolean) => void;
   /** Resume a queue paused by Stop. */
+  /** 设置/清除队列停点:被挂起的条目及其之后的排队消息都不再自动派发。 */
+  setQueueHold: (clientId: string | null) => void;
   resumeQueue: () => void;
   /** Reorder a queued row by moving it to the requested insertion index. */
   moveQueueItem: (clientId: string, targetIndex: number) => void;
@@ -814,6 +816,15 @@ export function useCCAgentChat(
     makerChatStore.resumeQueue(sessionId);
   }, [sessionId]);
 
+  /** 设置/清除队列停点:被挂起的条目及其之后的排队消息都不再自动派发。 */
+  const setQueueHold = useCallback(
+    (clientId: string | null) => {
+      if (!sessionId) return;
+      makerChatStore.setQueueHold(sessionId, clientId);
+    },
+    [sessionId],
+  );
+
   const moveQueueItem = useCallback(
     (clientId: string, targetIndex: number) => {
       if (!sessionId) return;
@@ -868,6 +879,7 @@ export function useCCAgentChat(
     queueExpanded: lightState.queueExpanded,
     setQueueExpanded,
     resumeQueue,
+    setQueueHold,
     moveQueueItem,
     setQueueInteractionLock,
     setQueueEditLock,

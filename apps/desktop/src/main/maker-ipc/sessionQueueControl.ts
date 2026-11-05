@@ -2,7 +2,12 @@ import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import type { ControlSteerOutcome } from './agent-input-coordinator.js';
 
 export type SessionQueueControlFailureCode =
-  'QUEUED_MESSAGE_NOT_FOUND' | 'MESSAGE_CONSUMING' | 'NOT_AUTHORIZED' | 'INVALID_ARGS';
+  | 'QUEUED_MESSAGE_NOT_FOUND'
+  | 'MESSAGE_CONSUMING'
+  | 'MESSAGE_HELD'
+  | 'QUEUE_HELD_BOUNDARY'
+  | 'NOT_AUTHORIZED'
+  | 'INVALID_ARGS';
 
 export type SessionQueueControlResult =
   | { ok: true; queuedMessageId: string }
@@ -142,6 +147,14 @@ export function createSessionQueueControlService(deps: SessionQueueControlDeps) 
     async steer(params: BaseControlParams): Promise<SessionQueueSteerResult> {
       const resolved = await resolve(params);
       if (!resolved.ok) return resolved;
+      // 停点条目不会参与当前轮,插话与它的语义直接冲突;要先恢复再决定。
+      if (resolved.item.held === true) {
+        return {
+          ok: false,
+          errorCode: 'MESSAGE_HELD',
+          message: `queued message ${params.queuedMessageId} is the queue stop point; resume it before steering`,
+        };
+      }
       await params.beforeMutation?.();
       const outcome = await deps.steerQueuedMessage(params.sessionId, params.queuedMessageId);
       if (outcome.kind === 'gone') return classifyLostRace(params.sessionId, params.queuedMessageId);
@@ -162,6 +175,19 @@ export function createSessionQueueControlService(deps: SessionQueueControlDeps) 
       const resolved = await resolve(params);
       if (!resolved.ok) return resolved;
       await params.beforeMutation?.();
+      // 其它条目不得越过停点:否则停点位置与队列可见顺序不一致。
+      // (停点条目自身可以移动,停点跟着走。)
+      if (resolved.item.held !== true) {
+        const queue = (await deps.getSnapshot(params.sessionId)).pendingQueue;
+        const stopIndex = queue.findIndex((candidate) => candidate.held === true);
+        if (stopIndex >= 0 && params.position <= stopIndex) {
+          return {
+            ok: false,
+            errorCode: 'QUEUE_HELD_BOUNDARY',
+            message: `queued message ${params.queuedMessageId} cannot move ahead of the queue stop point`,
+          };
+        }
+      }
       const position = deps.moveQueuedMessage(
         params.sessionId,
         params.queuedMessageId,

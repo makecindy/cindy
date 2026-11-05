@@ -160,8 +160,19 @@ describe('makerQueueState', () => {
     expect(getDrainableQueueHead(s)).toBeNull();
   });
 
-  it('treats pending steer markers as busy for new sends', () => {
-    const s = state({ steeringQueueClientIds: ['steer-1'] });
+  it('treats a projection-applied stop point as not drainable', () => {
+    // 停点来自 main 的 projection(held 字段), renderer 不得把它当成可派发的队首。
+    const held = { ...queued('held'), held: true as const };
+
+    expect(getDrainableQueueHead(state({ pendingQueue: [held, queued('after')] }))).toBeNull();
+    expect(
+      getDrainableQueueHead(
+        state({ pendingQueue: [{ ...queued('head') }, { ...held, clientId: 'held-2' }] }),
+      )?.clientId,
+    ).toBe('head');
+  });
+
+  it('treats pending steer markers as busy for new sends', () => {    const s = state({ steeringQueueClientIds: ['steer-1'] });
 
     expect(isDispatchBoundaryBusy(s)).toBe(true);
     expect(isSendBusyForQueue(s)).toBe(true);

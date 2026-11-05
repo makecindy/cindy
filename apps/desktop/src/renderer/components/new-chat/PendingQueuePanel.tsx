@@ -28,7 +28,9 @@ import {
   ChevronDown,
   ChevronUp,
   GripVertical,
+  Pause,
   Pencil,
+  Play,
   Puzzle,
   Send,
   Trash2,
@@ -56,6 +58,11 @@ import {
   isPendingQueueRowActive,
   prunePendingQueueRowActivity,
 } from './pendingQueueRowActivity';
+import {
+  findStopIndex,
+  queueRowActionWidth,
+  resolveQueueHoldRow,
+} from './pendingQueueHold';
 import { getPendingQueueRowPresentation } from './pendingQueueRowPresentation';
 import {
   acquireQueueEditLock,
@@ -90,6 +97,10 @@ interface PendingQueuePanelProps {
   turnRunning?: boolean;
   /** Resume a paused queue and let the store drain the current head. */
   onResume?: () => void;
+  /** 把这一条设为队列停点:它和之后的条目都不再自动派发。 */
+  onHold?: (clientId: string) => void;
+  /** 清除队列停点。 */
+  onReleaseHold?: () => void;
   /** Move a row to an insertion index in the full FIFO queue. */
   onReorder?: (clientId: string, targetIndex: number) => void;
   /** Lock auto-drain globally while drag-sort is in progress. */
@@ -175,6 +186,8 @@ export function PendingQueuePanel({
   steeringClientIds = [],
   paused = false,
   onResume,
+  onHold,
+  onReleaseHold,
   onReorder,
   onInteractionLock,
   onEditLock,
@@ -201,6 +214,8 @@ export function PendingQueuePanel({
     [expanded, queue],
   );
   const hiddenCount = Math.max(0, queue.length - visibleQueue.length);
+  // 停点在完整队列里的位置,按行时用它的下标判定“是否停点 / 是否在停点之后”。
+  const stopIndex = findStopIndex(queue);
   const hasCollapsibleTail = queue.length > COLLAPSE_THRESHOLD_ROWS;
   const showFooter = hasCollapsibleTail || paused;
 
@@ -334,6 +349,12 @@ export function PendingQueuePanel({
             Boolean(onEditBegin) &&
             rowPresentation.canEdit &&
             (editingClientId === null || isRowEditing);
+          const holdRow = resolveQueueHoldRow(entry, stopIndex, originalIdx, {
+            canSteer: canSteerRow,
+            canEdit: canEditRow,
+          });
+          const canHoldRow = Boolean(onHold) && holdRow.canHold && !isPendingEnqueue;
+          const canReleaseRow = Boolean(onReleaseHold) && holdRow.canRelease && !isPendingEnqueue;
           const chatMessageContent = entry.chatMessage.content ?? entry.text;
           const agentReferences =
             entry.chatMessage.agentReferences?.length
@@ -346,14 +367,16 @@ export function PendingQueuePanel({
               (entry.chatMessage.slashCommandRanges?.length ?? 0) > 0 ||
               agentReferences.length > 0 ||
               (entry.mentions?.length ?? 0) > 0);
-          const actionSlotWidth = canSteerRow
-            ? canEditRow
-              ? 'w-[68px]'
-              : 'w-[44px]'
-            : canEditRow
-              ? 'w-[44px]'
-              : 'w-5';
-          const dragDisabled = !onReorder || isPendingEnqueue || isRowEditing || isSteering;
+          const steerableRow = holdRow.canSteer;
+          const actionSlotWidth = queueRowActionWidth(
+            (holdRow.canSteer ? 1 : 0) +
+              (canHoldRow ? 1 : 0) +
+              (canReleaseRow ? 1 : 0) +
+              (canEditRow && !isSteering ? 1 : 0) +
+              (!isSteering ? 1 : 0),
+          );
+          const dragDisabled =
+            !onReorder || isPendingEnqueue || isRowEditing || isSteering || !holdRow.draggable;
           const steerTipText = (() => {
             if (isSteering) return t('newChat.pendingQueue.steeringAction');
             const base = t(
@@ -384,7 +407,7 @@ export function PendingQueuePanel({
             : rowPresentation.displayText || t('newChat.pendingQueue.noTextContent');
           const handleRowKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
             if (!isPendingQueueSteerShortcut(e)) return;
-            if (!canSteerRow || !onSteer || isSteering || isRowEditing) return;
+            if (!steerableRow || !onSteer || isSteering || isRowEditing) return;
             e.preventDefault();
             e.stopPropagation();
             void onSteer(entry.clientId);
@@ -431,8 +454,8 @@ export function PendingQueuePanel({
           return (
             <div
               role="listitem"
-              tabIndex={canSteerRow && !isPendingEnqueue ? 0 : undefined}
-              aria-keyshortcuts={canSteerRow ? 'Meta+Enter Control+Enter' : undefined}
+              tabIndex={steerableRow && !isPendingEnqueue ? 0 : undefined}
+              aria-keyshortcuts={steerableRow ? 'Meta+Enter Control+Enter' : undefined}
               onKeyDown={handleRowKeyDown}
               onMouseEnter={() => {
                 setRowActivity((activity) =>
@@ -467,8 +490,21 @@ export function PendingQueuePanel({
                 // 编辑态仅保留行高亮与取消入口，正文统一在主输入框修改。
                 'items-center',
                 (isRowActive || isRowEditing) && 'bg-[var(--chat-input-chip-bg)]',
+                // 停点及其之后的条目都不会自动发送:未交互的行整行弱化,
+                // 悬停 / 聚焦 / 编辑时恢复可读。
+                holdRow.dimmed && !isRowActive && !isRowEditing && 'opacity-45',
               )}
             >
+              {holdRow.leading === 'held' ? (
+                // 停点标记常驻可见(不像其它按钮只 hover 才出):用户得一眼看到
+                // 队列表在哪一条停住。这个槽位与拖拽把手同为 20px,行宽不变。
+                <span
+                  aria-label={t('newChat.pendingQueue.heldRowAria', { index: originalIdx + 1 })}
+                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded-[6px] text-[var(--settings-section-desc)]"
+                >
+                  <Pause size={12} strokeWidth={2.25} aria-hidden />
+                </span>
+              ) : (
               <button
                 type="button"
                 disabled={dragDisabled}
@@ -486,6 +522,7 @@ export function PendingQueuePanel({
               >
                 <GripVertical size={12} strokeWidth={2} aria-hidden />
               </button>
+              )}
               {rowPresentation.isOrca ||
               rowPresentation.isScheduler ||
               rowPresentation.isSession ||
@@ -596,7 +633,31 @@ export function PendingQueuePanel({
                 <div
                   className={cn('flex shrink-0 items-center justify-end gap-1', actionSlotWidth)}
                 >
-                  {canSteerRow && onSteer && (
+                  {canHoldRow && onHold && (
+                    <Tip text={t('newChat.pendingQueue.holdTip')} side="top">
+                      <button
+                        type="button"
+                        onClick={() => onHold(entry.clientId)}
+                        aria-label={t('newChat.pendingQueue.holdAria', { index: originalIdx + 1 })}
+                        className={iconButtonClassName}
+                      >
+                        <Pause size={11} strokeWidth={2.25} aria-hidden />
+                      </button>
+                    </Tip>
+                  )}
+                  {canReleaseRow && onReleaseHold && (
+                    <Tip text={t('newChat.pendingQueue.releaseHoldTip')} side="top">
+                      <button
+                        type="button"
+                        onClick={onReleaseHold}
+                        aria-label={t('newChat.pendingQueue.releaseHoldAria', { index: originalIdx + 1 })}
+                        className={cn(iconButtonClassName, 'text-[var(--msg-assistant-text)]')}
+                      >
+                        <Play size={11} strokeWidth={2.25} aria-hidden />
+                      </button>
+                    </Tip>
+                  )}
+                  {steerableRow && onSteer && (
                     <Tip text={steerTipText} side="top">
                       <button
                         type="button"

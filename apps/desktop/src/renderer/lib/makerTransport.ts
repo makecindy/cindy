@@ -226,6 +226,7 @@ export interface RoutableMaker {
     | 'resume'
     | 'setInteractionLock'
     | 'setEditLock'
+    | 'setHold'
     | 'move'
     | 'remove'
     | 'updateText'
@@ -344,6 +345,7 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
         'maker:input:set-interaction-lock',
       ) as FullMaker['input']['setInteractionLock'],
       setEditLock: t('maker:input:set-edit-lock') as FullMaker['input']['setEditLock'],
+      setHold: t('maker:input:set-hold') as FullMaker['input']['setHold'],
       move: t('maker:input:move') as FullMaker['input']['move'],
       remove: t('maker:input:remove') as FullMaker['input']['remove'],
       updateText: t('maker:input:update-text') as FullMaker['input']['updateText'],

@@ -6576,6 +6576,11 @@ interface ElectronAPI {
         locked: boolean,
         opts?: { expectedClearBoundaryMs?: number | null },
       ) => Promise<import('../shared/agentInputQueue').AgentInputProjection>;
+      setHold: (
+        sessionId: string,
+        clientId: string | null,
+        opts?: { expectedClearBoundaryMs?: number | null },
+      ) => Promise<import('../shared/agentInputQueue').AgentInputProjection>;
       clearSession: (
         sessionId: string,
         clearedAt?: string,

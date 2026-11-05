@@ -84,3 +84,32 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
     (event: object, sid: string, item: AgentInputQueuedMessage, opts?: unknown) => Promise<AgentInputProjection>;
   return { enqueue, acceptedCallbacks, preparations };
 }
+
+// 与 enqueue 同一个模式:直接跑 register.ts 里 INPUT_SET_HOLD 的真实 handler,
+// 只注入宿主服务,保证"先 ensureQueueRestored 再写停点"这段接线不会在测试里被改写。
+const setHoldSource = readFileSync(new URL('../register.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const setHoldStart = setHoldSource.indexOf('    MAKER_INVOKE.INPUT_SET_HOLD,');
+const setHoldHandlerStart = setHoldSource.indexOf(
+  '    async (_e, sessionId: unknown, clientId: unknown, opts?: unknown) => {',
+  setHoldStart,
+);
+const setHoldHandlerEnd = setHoldSource.indexOf('\n  );', setHoldHandlerStart);
+if (setHoldStart < 0 || setHoldHandlerStart < setHoldStart || setHoldHandlerEnd < setHoldHandlerStart) {
+  throw new Error('INPUT_SET_HOLD handler not found');
+}
+const setHoldCompiled = transpileModule(
+  `return (${setHoldSource.slice(setHoldHandlerStart, setHoldHandlerEnd).trim().replace(/,$/, '')});`,
+  { compilerOptions: { target: ScriptTarget.ES2022 } },
+).outputText;
+
+export function createSetHoldHarness(coordinator: AgentInputCoordinator) {
+  const bindings = {
+    inputCoordinator: coordinator,
+    requireSessionId: (id: string) => id,
+    requireClientId: (id: string) => id,
+    isDeviceLinkInvoke: () => true,
+    assertRemoteInputControlBoundary: async () => {},
+  };
+  return new Function(...Object.keys(bindings), setHoldCompiled)(...Object.values(bindings)) as
+    (_event: object, sid: string, clientId: string | null, opts?: unknown) => Promise<AgentInputProjection>;
+}

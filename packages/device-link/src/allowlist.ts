@@ -237,6 +237,7 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'maker:input:set-expanded',
   'maker:input:set-interaction-lock',
   'maker:input:set-edit-lock',
+  'maker:input:set-hold',
   'maker:input:clear-session',
   // device-link:auth error 重试失败/放弃时控制端调此补落被控端 DB;被控端 main 执行无 sender 依赖。
   'maker:persist-turn-error-deferred',
@@ -770,6 +771,7 @@ export const REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS: ReadonlySet<string> = new Se
   'maker:input:set-expanded',
   'maker:input:set-interaction-lock',
   'maker:input:set-edit-lock',
+  'maker:input:set-hold',
   'maker:input:clear-session',
 ]);
 

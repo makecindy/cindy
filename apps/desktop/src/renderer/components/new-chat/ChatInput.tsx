@@ -715,6 +715,10 @@ interface ChatInputProps {
   queuePaused?: boolean;
   /** Resume a queue paused by Stop. */
   onQueueResume?: () => void;
+  /** 把某条排队消息设为停点:它和之后的条目都不再自动派发。 */
+  onQueueHold?: (clientId: string) => void;
+  /** 清除队列停点。 */
+  onQueueReleaseHold?: () => void;
   /** Move a queued row to a new insertion index. */
   onQueueReorder?: (clientId: string, targetIndex: number) => void;
   /** Lock the whole queue while drag-sort is in progress. */
@@ -1367,6 +1371,8 @@ export function ChatInput({
   steeringQueueClientIds = [],
   queuePaused = false,
   onQueueResume,
+  onQueueHold,
+  onQueueReleaseHold,
   onQueueReorder,
   onQueueInteractionLock,
   onQueueEditLock,
@@ -9587,6 +9593,8 @@ export function ChatInput({
               paused={queuePaused}
               turnRunning={showStopButton}
               onResume={onQueueResume}
+              onHold={onQueueHold}
+              onReleaseHold={onQueueReleaseHold}
               onReorder={onQueueReorder}
               onInteractionLock={onQueueInteractionLock}
               onEditLock={onQueueEditLock}

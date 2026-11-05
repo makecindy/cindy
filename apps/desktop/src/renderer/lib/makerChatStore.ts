@@ -14576,6 +14576,20 @@ function setQueueEditLock(sessionId: string, clientId: string, locked: boolean):
   ).catch((err) => log.warn('setQueueEditLock failed:', err));
 }
 
+/**
+ * 设置/清除队列停点。clientId = 挂起那一条(它及之后不再自动派发),null = 恢复。
+ * 与其它队列编辑同口径:只靠 main 回填的 projection,本地不预改队列。
+ */
+function setQueueHold(sessionId: string, clientId: string | null): void {
+  if (!sessionId) return;
+  const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
+  runInputProjectionOperation(sessionId, (input) =>
+    boundaryOpts
+      ? input.setHold(sessionId, clientId, boundaryOpts)
+      : input.setHold(sessionId, clientId),
+  ).catch((err) => log.warn('setQueueHold failed:', err));
+}
+
 function moveQueueItem(sessionId: string, clientId: string, targetIndex: number): void {
   if (!sessionId || !clientId) return;
   const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
@@ -18555,6 +18569,8 @@ export const makerChatStore = {
   setQueueExpanded,
   /** Resume a paused queue and try dispatching the current head. */
   resumeQueue,
+  /** Set (clientId) or clear (null) the queue stop point; held rows never auto-send. */
+  setQueueHold,
   /** Move a queued row to a new insertion index. */
   moveQueueItem,
   /** Toggle a short-lived edit/drag lock that prevents auto-drain races. */
