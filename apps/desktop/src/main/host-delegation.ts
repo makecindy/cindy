@@ -113,6 +113,11 @@ export const PROXIED_CHANNELS: readonly ProxiedChannel[] = [
     body: ([sessionId]) => ({ sessionId }),
   },
   {
+    channel: 'maker:turn-change-sets:list',
+    path: '/api/turn-change-sets/list',
+    body: ([sessionId]) => ({ sessionId }),
+  },
+  {
     channel: 'maker:get-pending-interactions',
     path: '/api/interactions/pending',
     body: ([sessionId]) => ({ sessionId }),

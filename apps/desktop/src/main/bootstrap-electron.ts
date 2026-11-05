@@ -130,6 +130,7 @@ import { prewarmMacComputerPermissionGuideHelper } from './computer-permission-g
 import { handleOpenChatGPTApp } from './chatgpt-app.js';
 import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
 import {
+  setTurnChangeSetWindowBroadcast,
   waitForTurnChangeSetActions,
   waitForTurnChangeSetPersistence,
 } from './turn-change-set/store.js';
@@ -6757,6 +6758,15 @@ const registerIpcHandlers = () => {
       console.error('[bootstrap-electron] failed to register maker:* IPC', err);
       // 不阻塞启动 —— 老链路仍可用; 下次 splash retry 再尝试。
     }
+
+    // The change-set store no longer imports Electron; the desktop supplies its
+    // window fan-out here.
+    setTurnChangeSetWindowBroadcast((payload, ownerStamp) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (win.isDestroyed()) continue;
+        win.webContents.send(MAKER_PUSH.TURN_CHANGE_SET_UPDATED, payload, ownerStamp);
+      }
+    });
 
     // Client mode: install the host proxies only after the desktop finished its
     // own registrations. Installing earlier makes those registrations throw and

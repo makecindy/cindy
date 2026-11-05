@@ -561,6 +561,10 @@ const server = createHostServer({
     });
     return page.items;
   },
+  turnChangeSets: async (sessionId: string) => {
+    const { listTurnChangeSets } = await import('../../desktop/src/main/turn-change-set/store.ts');
+    return listTurnChangeSets(sessionId);
+  },
   ghosts: () => (runtime.owner
     ? listInstalledGhosts({
         userDataDir: resolveHostDataDir(),

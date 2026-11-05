@@ -30,6 +30,7 @@ CINDY_HOST_API=http://127.0.0.1:3456 pnpm --filter desktop dev
 | `maker:model-visibility:legacy-owner-claim-sync` | `POST /api/model-visibility/claim`（启动时预取，同步回放） |
 | `maker:get-pending-interactions` / `maker:resolve-interaction` | `POST /api/interactions/*` |
 | `ghosts:list`（同步，启动预取后回放） | `POST /api/ghosts`（复用 Desktop `GhostManager`，非第二套实现） |
+| `maker:turn-change-sets:list` | `POST /api/turn-change-sets/list`（`store.ts` 已去掉 Electron 依赖，窗口广播改为注入） |
 | `maker:list-available-agents` | `POST /api/agents` |
 | `maker:list-agent-commands` | `POST /api/agent-commands` |
 | `maker:list-agent-skills` | `POST /api/agent-skills` |
