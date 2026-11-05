@@ -3283,6 +3283,51 @@ describe('官方飞书 / Lark provider lane', () => {
     );
   });
 
+  it('冷启动沿用缓存的绑定时, 等这条连接上服务端的绑定快照到了才接派发', () => {
+    // 离线期间可能已解绑或换了应用: 缓存里的 confirmed 不能放行重连后先到的旧任务(PR #8947 review)。
+    const dispatcher = stubDispatcher();
+    const { manager, transports } = feishuLaneHarness(
+      { dispatcher },
+      {
+        feishuEnabled: true,
+        feishuBindingCache: {
+          bindingId: 'binding-feishu-1',
+          principalId: 'ou_user',
+          principalName: 'Cindy User',
+          scopeId: 'cli_app',
+          scopeName: 'Cindy',
+        },
+      },
+    );
+    manager.sync();
+    const opts = transports[0];
+    if (opts === undefined) throw new Error('Feishu transport was not created');
+    expect(manager.snapshot().feishu.binding?.state).toBe('confirmed');
+    opts.onWelcome?.({ serverName: 'feishu-hook', features: FEISHU_FEATURES });
+    opts.onStatus('connected', null);
+
+    const dispatch = makeTaskDispatch({
+      requestId: 'feishu-early',
+      externalKey: 'feishu:dm:cli_app:ou_user:g1',
+      workspace: 'chat',
+      prompt: 'hello',
+      source: { im: 'feishu' },
+    });
+    const replies: HookMessage[] = [];
+    opts.onMessage(dispatch, (message) => {
+      replies.push(message);
+      return true;
+    });
+    expect(replies).toEqual([
+      expect.objectContaining({ type: 'task.ack', payload: expect.objectContaining({ result: 'rejected' }) }),
+    ]);
+    expect(dispatcher.handleDispatch).not.toHaveBeenCalled();
+
+    opts.onMessage(makeProviderBindState(FEISHU_CONFIRMED), () => true);
+    opts.onMessage(dispatch, () => true);
+    expect(dispatcher.handleDispatch).toHaveBeenCalledOnce();
+  });
+
   it('任何绑定状态下「打开飞书机器人」都只认飞书 / Lark AppLink, 不合规时连按钮一起去掉', () => {
     // confirmed 帧通常带 remediationUrl; 只在 pending 时校验会让任意 HTTPS 链接进快照,
     // 设置页显示一个点了打不开的按钮(PR #8947 review)。

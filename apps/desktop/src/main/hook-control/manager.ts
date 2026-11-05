@@ -2651,13 +2651,16 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           lane.binding.principalId !== telegramGroupLane.principalId);
       // 官方飞书服务由多个组织的应用共用: 只接这台电脑当前已确认绑定的应用与
       // 飞书账号的派发。解绑、换绑或换应用之后迟到 / 重投的旧任务在这里被拒,
-      // 不进本地任务。
+      // 不进本地任务。冷启动时的绑定来自本地缓存(离线期间可能已解绑 / 换应用),
+      // 要等这条连接上服务端的绑定快照到了才作数。
       const feishuLane =
         provider === 'feishu' ? feishuLaneIdentityOf(msg.payload.externalKey) : null;
       const feishuBindingMismatch =
         provider === 'feishu' &&
         (feishuLane === null ||
-          lane?.binding?.state !== 'confirmed' ||
+          lane === null ||
+          lane.awaitingStateSnapshot ||
+          lane.binding?.state !== 'confirmed' ||
           lane.binding.scopeId !== feishuLane.appId ||
           lane.binding.principalId !== feishuLane.openId);
       // 接收日志: 复用已有会话的派发在 dispatcher 里是静默路径(只有新建才留
