@@ -1049,6 +1049,7 @@ async function requestExplicitProviderText(
       onText: opts.onText,
       responseInstructions: opts.responseInstructions,
       validateResponse: opts.validateResponse,
+      requireCompleteOutput: opts.requireCompleteOutput,
       beforeDispatch: opts.beforeDispatch,
       routeStillCurrent,
     });
@@ -1242,6 +1243,8 @@ async function requestBuiltinProviderText(
     onText?: (text: string) => void;
     responseInstructions?: string;
     validateResponse?: (text: string) => boolean;
+    /** Carry the caller's strict-output flag into the built-in HTTP routes. */
+    requireCompleteOutput?: boolean;
     beforeDispatch?: (route: UtilityTextDispatchRoute) => Promise<boolean>;
     routeStillCurrent?: () => boolean;
   },
