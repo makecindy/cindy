@@ -40,7 +40,15 @@ const source = ts.createSourceFile('NewMakerDraftRoute.tsx', readFileSync(
   resolve(__dirname, '../NewMakerDraftRoute.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const callbacks: Record<string, ts.Expression> = {};
 const routeDeclarations: string[] = [];
+const worktreeDeclarations: string[] = [];
 function visit(node: ts.Node) {
+  if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer
+    && ['wtEffectiveSourceBranch', 'wtSourceReady'].includes(node.name.text)) {
+    worktreeDeclarations.push(`const ${node.getText(source)};`);
+  }
+  if (ts.isBinaryExpression(node) && node.left.getText(source) === 'wtRef.current') {
+    worktreeDeclarations.push(`${node.getText(source)};`);
+  }
   if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer
     && ['controlledModelRoute', 'deviceLinkRemoteAgentSupported', 'effectiveAgentDeviceId', 'remoteAgentDevices', 'catalogDeviceId'].includes(node.name.text)) {
     routeDeclarations.push(`const ${node.getText(source)};`);
@@ -54,6 +62,10 @@ function visit(node: ts.Node) {
   ts.forEachChild(node, visit);
 }
 visit(source);
+const worktreeSnapshotCode = ts.transpileModule(worktreeDeclarations.join('\n') + '\nwtRef.current;', {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+}).outputText;
+
 const collabBuilder = source.statements.find((node): node is ts.FunctionDeclaration =>
   ts.isFunctionDeclaration(node) && node.name?.text === 'draftEnableOrcaOptions');
 if (!collabBuilder) throw new Error('Draft collaboration builder missing');
@@ -111,6 +123,8 @@ function provider(id = providerId, efforts: PiReasoningEffort[] = []): ProviderV
 async function submit(options: {
   entry?: 'send' | 'goal';
   createFailure?: boolean;
+  sourceBranch?: string;
+  defaultSourceBranch?: string;
   checkoutBusy?: boolean;
   worktreeEnabled?: boolean;
   pluginRoute?: () => Promise<GhostStartTaskRouteResult>;
@@ -291,7 +305,8 @@ async function submit(options: {
     markSendInFlight: (value: boolean) => { if (value) started = true; else done(); },
     t: (key: string) => key, authVendor: agentKind,
     vendorAuthGate: { checkAndConfirm },
-    localDraftSessionIdRef: { current: 'draft-id' }, optimisticFirstMessageTitle: () => null,
+    localDraftSessionIdRef: { current: 'draft-id' }, optimisticFirstMessageTitle: () => null, autoTitleLabels: {},
+    remoteProjectsStore: { setPendingTitlePreview: noop, clearPendingTitlePreview: noop, clearPendingFirstSend: noop },
     createSession, toastCreateSessionFailed: noop, carryDraftFavoriteAnchorToSession: noop,
     makerChatStore: { setSessionRuntime: noop, sendMessage, autoNameSession: noop }, sessionsStore: { patchLocal: noop },
     markSessionStarting: noop, clearSessionStarting: noop,
@@ -332,6 +347,16 @@ async function submit(options: {
     log: { warn: (...args: unknown[]) => errors.push(args), error: (...args: unknown[]) => errors.push(args) },
     toast: { error: toastError, warning: toastWarning },
   };
+  if (options.defaultSourceBranch) {
+    environment.wtRef.current = runInNewContext(worktreeSnapshotCode, {
+      wtRef: {}, wtEnabled: true, wtName: 'creator', wtBaseRepo: baseRepo,
+      wtSourceBranch: options.sourceBranch ?? '', wtBranchPreferenceReady: true,
+      wtBranchPreferenceSaving: false, wtPreferenceSaving: false,
+      wtSupportsRecoveryKeyDiscard: true, wtConfirmedIneligible: false,
+      effectiveDeviceLinkDeviceId: options.deviceId,
+      wtDefaultSource: { baseRepo, deviceId: options.deviceId ?? null, sourceBranch: options.defaultSourceBranch },
+    });
+  }
   if (options.collab) {
     environment.draftEnableOrcaOptions = runInNewContext(collabBuilderCode, {
       ...environment, connectedProvidersForAgent, isModelSelectableForNewRoute, createWorkerLabel,
@@ -447,6 +472,19 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.createSession).toHaveBeenCalledOnce();
     expect(result.detectCwd).not.toHaveBeenCalled();
   });
+  // Rule C: execute the real default-to-snapshot derivation and submission, not
+  // just the chip. Earlier fixtures supplied only an explicit source. Tier: unit.
+  it.each([undefined, 'task-computer'])('creates on %s using the derived default unless a source was remembered', async deviceId => {
+    for (const sourceBranch of ['', 'remembered-feature']) {
+      const result = await submit({ deviceId, message: '/help', worktreeSkills: [], sourceBranch, defaultSourceBranch: 'refs/remotes/origin/main' });
+      const request = deviceId
+        ? result.invokeRemote.mock.calls.find(([, channel]) => channel === 'worktree:create')?.[2]?.[0]
+        : vi.mocked(result.environment.window.electronAPI.worktreeCreate).mock.calls[0]?.[0];
+      expect(request?.sourceBranch).toBe(sourceBranch || 'refs/remotes/origin/main');
+      expect(result.errors).toEqual([]);
+    }
+  });
+
   // Checkout is asynchronous even when worktree is off. The actual send/goal
   // callbacks must retain the draft rather than start a task on the old branch.
   it.each(['send', 'goal'] as const)('does not create a task while checkout is running (%s)', async entry => {

@@ -367,9 +367,16 @@ function setupCheckout(supportsCheckout = true, overrides = {}) {
 function CheckoutRow({
   deviceId,
   onSourceChange,
-}: { deviceId?: string; onSourceChange?: (branch: string) => void } = {}) {
+  remembered = 'remembered-source',
+  defaultSource,
+}: {
+  deviceId?: string;
+  onSourceChange?: (branch: string) => void;
+  remembered?: string;
+  defaultSource?: (value: { sourceBranch: string }) => void;
+} = {}) {
   const [enabled, setEnabled] = React.useState(false);
-  const [source, setSource] = React.useState('remembered-source');
+  const [source, setSource] = React.useState(remembered);
   return (
     <WorktreeChipsRow
       cwd="/repo"
@@ -377,6 +384,7 @@ function CheckoutRow({
       enabled={enabled}
       onEnabledChange={setEnabled}
       sourceBranch={source}
+      onDefaultSourceBranchChange={defaultSource}
       onSourceBranchChange={(branch) => {
         onSourceChange?.(branch);
         setSource(branch);
@@ -771,5 +779,58 @@ it.each(['plain', 'carry', 'stash', 'idle', 'fetched'])(
       if (mode === 'fetched') expect(message).toContain('"branch":"origin/main","count":2');
       expect(options.action.label).toBe('newChat.checkout.undo');
     }
+  },
+);
+
+// Rule C: an unremembered worktree starts at the repository default, without
+// persisting that default. Existing coverage only had a remembered feature source.
+// Production row supplies the same derived value to creation. Tier: unit.
+it.each([
+  {
+    remembered: '',
+    remoteDefaultBranch: 'refs/remotes/origin/trunk',
+    branches: ['main', 'master', 'feature'],
+    expected: 'origin/trunk',
+    source: 'refs/remotes/origin/trunk',
+  },
+  {
+    remembered: 'remembered-source',
+    remoteDefaultBranch: 'refs/remotes/origin/main',
+    branches: ['main', 'feature'],
+    expected: 'remembered-source',
+    source: 'refs/remotes/origin/main',
+  },
+  { remembered: '', branches: ['main', 'master', 'feature'], expected: 'main', source: 'main' },
+  { remembered: '', branches: ['master', 'feature'], expected: 'master', source: 'master' },
+  { remembered: '', branches: ['feature'], expected: 'feature', source: 'feature' },
+])(
+  'uses the default source without saving it: $expected ($remembered)',
+  async ({ remembered, remoteDefaultBranch, branches, expected, source }) => {
+    setupCheckout(true, { current: 'feature' });
+    vi.mocked(window.electronAPI.worktreeListBranches).mockResolvedValue({
+      current: 'feature',
+      branches,
+      remoteDefaultBranch,
+    });
+    const onSourceChange = vi.fn();
+    const defaultSource = vi.fn();
+    render(
+      <CheckoutRow
+        remembered={remembered}
+        onSourceChange={onSourceChange}
+        defaultSource={defaultSource}
+      />,
+    );
+    await waitFor(() => expect(branchButton().textContent).toBe('feature'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('create-agent-worktree-chip'));
+    });
+    await waitFor(() => expect(branchButton().textContent).toBe(expected));
+    expect(defaultSource).toHaveBeenLastCalledWith({
+      baseRepo: '/repo',
+      deviceId: null,
+      sourceBranch: source,
+    });
+    expect(onSourceChange).not.toHaveBeenCalled();
   },
 );

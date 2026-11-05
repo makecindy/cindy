@@ -60,7 +60,10 @@ import { themeService } from '@/themes/theme-service';
 import type { Theme as ColorTheme } from '@/themes/types';
 import { ThemeBrandLockup } from '@/components/branding/ThemeBrandLockup';
 import { ChatInput } from '@/components/new-chat/ChatInput';
-import { WorktreeChipsRow } from '@/components/new-chat/WorktreeChipsRow';
+import {
+  WorktreeChipsRow,
+  type WorktreeDefaultSource,
+} from '@/components/new-chat/WorktreeChipsRow';
 import { checkDraftBranchBeforeStart } from './newMakerDraftBranchCheck';
 import {
   FolderPickerPopover,
@@ -931,6 +934,7 @@ export function NewMakerDraftRoute() {
   const [wtEnabled, setWtEnabled] = useState(false);
   const [wtName, setWtName] = useState('');
   const [wtSourceBranch, setWtSourceBranch] = useState('');
+  const [wtDefaultSource, setWtDefaultSource] = useState<WorktreeDefaultSource | null>(null);
   const [wtBaseRepo, setWtBaseRepo] = useState<string | null>(null);
   const [wtSupportsRecoveryKeyDiscard, setWtSupportsRecoveryKeyDiscard] = useState<boolean | null>(
     null,
@@ -4251,25 +4255,34 @@ export function NewMakerDraftRoute() {
     setWtName(name);
   }, []);
 
+  // Only explicit picks live in wtSourceBranch. The row's derived default is
+  // scoped to the execution device/repository and never written to preferences.
+  const wtEffectiveSourceBranch =
+    wtSourceBranch ||
+    (wtDefaultSource?.baseRepo === wtBaseRepo &&
+    wtDefaultSource?.deviceId === (effectiveDeviceLinkDeviceId ?? null)
+      ? wtDefaultSource.sourceBranch
+      : '');
+  const wtSourceReady = wtBranchPreferenceReady && !!wtEffectiveSourceBranch;
   const wtRef = useRef({
     enabled: wtEnabled,
     name: wtName,
-    sourceBranch: wtSourceBranch,
+    sourceBranch: wtEffectiveSourceBranch,
     baseRepo: wtBaseRepo,
     supportsRecoveryKeyDiscard: wtSupportsRecoveryKeyDiscard,
     confirmedIneligible: wtConfirmedIneligible,
-    branchPreferenceReady: wtBranchPreferenceReady,
+    branchPreferenceReady: wtSourceReady,
     branchPreferenceSaving: wtBranchPreferenceSaving,
     preferenceSaving: wtPreferenceSaving,
   });
   wtRef.current = {
     enabled: wtEnabled,
     name: wtName,
-    sourceBranch: wtSourceBranch,
+    sourceBranch: wtEffectiveSourceBranch,
     baseRepo: wtBaseRepo,
     supportsRecoveryKeyDiscard: wtSupportsRecoveryKeyDiscard,
     confirmedIneligible: wtConfirmedIneligible,
-    branchPreferenceReady: wtBranchPreferenceReady,
+    branchPreferenceReady: wtSourceReady,
     branchPreferenceSaving: wtBranchPreferenceSaving,
     preferenceSaving: wtPreferenceSaving,
   };
@@ -6761,6 +6774,7 @@ export function NewMakerDraftRoute() {
                   onEnabledChange={handleWtEnabledChange}
                   sourceBranch={wtSourceBranch}
                   onSourceBranchChange={handleWtSourceBranchChange}
+                  onDefaultSourceBranchChange={setWtDefaultSource}
                   onCheckoutBusyChange={handleWtCheckoutBusyChange}
                   onBaseRepoChange={handleWtBaseRepoChange}
                   onRecoveryKeyDiscardSupportChange={handleWtRecoveryKeyDiscardSupportChange}

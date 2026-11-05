@@ -8,6 +8,7 @@ export default {
   notCovered:
     'Real Git and remote devices; switch responses are simulated in memory, no Git executes',
   cases: {
+    'default-source': { about: 'Worktree without a saved source defaults to origin/main' },
     default: { about: 'Actual branch while unchecked and an occupied branch in the menu' },
     busy: { about: 'Running session blocks checkout with an explicit worktree alternative' },
     idle: { about: 'Idle sessions are named without blocking branch choices' },
@@ -52,6 +53,19 @@ export default {
     };
     const before = await geometry();
     await ui.capture('before-feedback');
+    if (ui.case === 'default-source') {
+      await page.getByTestId('create-agent-worktree-chip').click();
+      await page
+        .getByTestId('create-agent-branch-chip')
+        .filter({ hasText: 'origin/main' })
+        .waitFor();
+      assert.equal(
+        await page.getByTestId('create-agent-worktree-chip').getAttribute('aria-pressed'),
+        'true',
+      );
+      assert.equal(await page.locator('[data-toast-id]').count(), 0);
+      return;
+    }
     await page.getByTestId('create-agent-branch-chip').click();
     await page.getByRole('option', { name: /^feature/ }).waitFor();
     if (ui.case === 'ordinary') {

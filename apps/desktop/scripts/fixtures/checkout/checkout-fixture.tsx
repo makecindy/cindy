@@ -12,9 +12,9 @@ if (!crypto.randomUUID) {
   crypto.randomUUID = () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`;
 }
 
-function Page({ switching }: { switching: boolean }) {
+function Page({ switching, defaultSource }: { switching: boolean; defaultSource: boolean }) {
   const [enabled, setEnabled] = useState(false);
-  const [source, setSource] = useState('release');
+  const [source, setSource] = useState(defaultSource ? '' : 'release');
   return (
     <Tooltip.Provider>
       <div className="p-4 pt-44 text-foreground" data-ui-page-subject>
@@ -138,5 +138,7 @@ void mountPage({
       },
     };
   },
-  render: (ctx) => <Page switching={ctx.case === 'switching'} />,
+  render: (ctx) => (
+    <Page switching={ctx.case === 'switching'} defaultSource={ctx.case === 'default-source'} />
+  ),
 });

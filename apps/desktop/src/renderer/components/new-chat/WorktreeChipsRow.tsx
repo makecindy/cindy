@@ -70,6 +70,13 @@ import { getProjectPickerDisplayName } from '@/hooks/useProjectPickerOptions';
 
 export type FolderPickerMode = 'folder' | 'project';
 
+/** Derived for display/creation only; never persisted as a source preference. */
+export interface WorktreeDefaultSource {
+  baseRepo: string | null;
+  deviceId: string | null;
+  sourceBranch: string;
+}
+
 export interface WorktreeChipsRowProps {
   cwd: string | null;
   // 接受 null:当 picker 选了"对话(不在项目中)"时,上游需要清掉 workingDir
@@ -91,6 +98,7 @@ export interface WorktreeChipsRowProps {
   onEnabledChange: (v: boolean) => void;
   sourceBranch: string;
   onSourceBranchChange: (v: string) => void;
+  onDefaultSourceBranchChange?: (value: WorktreeDefaultSource) => void;
   onCheckoutBusyChange?: (busy: boolean) => void;
   onBaseRepoChange?: (baseRepo: string | null) => void;
   /**
@@ -145,6 +153,7 @@ export function WorktreeChipsRow({
   onEnabledChange,
   sourceBranch,
   onSourceBranchChange,
+  onDefaultSourceBranchChange,
   onCheckoutBusyChange,
   onBaseRepoChange,
   onRecoveryKeyDiscardSupportChange,
@@ -262,8 +271,23 @@ export function WorktreeChipsRow({
     onCheckoutBusyChange,
   );
   const actualBranch = checkout.status?.current || branches.current || currentBranch || 'HEAD';
+  const defaultSourceBranch = branches.loading
+    ? ''
+    : branches.remoteDefaultBranch ||
+      (branches.branches.includes('main')
+        ? 'main'
+        : branches.branches.includes('master')
+          ? 'master'
+          : actualBranch);
+  useLayoutEffect(() => {
+    onDefaultSourceBranchChange?.({
+      baseRepo,
+      deviceId: deviceLinkDeviceId ?? null,
+      sourceBranch: baseRepo ? defaultSourceBranch : '',
+    });
+  }, [baseRepo, deviceLinkDeviceId, defaultSourceBranch, onDefaultSourceBranchChange]);
   const branchLabel = effectiveWorktreeEnabled
-    ? sourceBranch || branches.current || currentBranch || 'HEAD'
+    ? sourceBranch || defaultSourceBranch || actualBranch
     : actualBranch;
   useEffect(() => {
     const refresh = () => branches.refetch();
