@@ -2946,7 +2946,9 @@ struct IdleIslandView: View {
     let trailingQuota = !layout.expanded && hasQuota
     // Chips keep the badge's inset; the bare percentage may use the narrowest one, so the
     // default notch width still fits it.
-    let trailingInset = AgentIslandQuotaRow.selection(items: quota, maxWidth: sideWidth - hardwareNotchBadgeReservedInset).logoHidden
+    // Falls back to the narrow inset whenever nothing fits at the badge's, not only when the
+    // bare percentage is what fits there: a 100% reading can be too wide for 9pt yet fit 7pt.
+    let trailingInset = AgentIslandQuotaRow.selection(items: quota, maxWidth: sideWidth - hardwareNotchBadgeReservedInset).items.isEmpty
       ? hardwareNotchMinimumSideInset
       : hardwareNotchBadgeReservedInset
     return HStack(spacing: 0) {
