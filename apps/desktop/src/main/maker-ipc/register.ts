@@ -3400,6 +3400,8 @@ interface PendingInteractionEntry {
   /** IM owns presentation/timeouts; Host retains the execution and cancellation boundary. */
   migrated?: boolean;
   deferredDecision?: InteractionDecision;
+  /** Monotonic registration time; only reported as an age, never as a wall-clock value. */
+  pendingSince?: number;
 }
 
 const pendingInteractionResolvers = new Map<string, PendingInteractionEntry>();
@@ -3826,6 +3828,30 @@ type PendingInteractionSnapshotEntry = {
  * INTERACTION_REQUEST push 设置,后加入的窗口会错过那条 push,靠这个查询补回。
  * 纯内存读;O(N) 其中 N = 全局挂起交互数(极小)。
  */
+/**
+ * Opt-in `{ includeAge: true }`: each Agent interaction reports how long it has
+ * been pending on this Host (`pendingForMs`, monotonic). A controller uses it to
+ * tell a request that existed when the user switched tasks from one raised while
+ * the snapshot was in flight. Entries without an age (Host-owned confirmations)
+ * must be treated as unknown. Without the option the snapshot is unchanged.
+ */
+function withPendingInteractionAge<T extends { request: { requestId?: unknown } }>(
+  pending: T[],
+  options: unknown,
+): Array<T & { pendingForMs?: number }> {
+  if (!options || typeof options !== 'object' || (options as { includeAge?: unknown }).includeAge !== true) {
+    return pending;
+  }
+  const now = performance.now();
+  return pending.map((entry) => {
+    const requestId = entry.request.requestId;
+    const since = typeof requestId === 'string'
+      ? pendingInteractionResolvers.get(requestId)?.pendingSince
+      : undefined;
+    return since === undefined ? entry : { ...entry, pendingForMs: Math.max(0, now - since) };
+  });
+}
+
 function getPendingInteractionsForSession(sessionId: string): PendingInteractionSnapshotEntry[] {
   const out: PendingInteractionSnapshotEntry[] = [];
   for (const entry of pendingInteractionResolvers.values()) {
@@ -5850,6 +5876,7 @@ export function installDesktopInteractionListener(session: {
         resolve,
         request: boundaryRequest,
         persistId: interactionPersistId ?? undefined,
+        pendingSince: performance.now(),
       };
       // 必须先登记 pending,再广播。否则 renderer / device-link 回得太快会打到
       // 「no pending resolver」,确认卡看起来没反应,Codex 最终却记成用户拒绝。
@@ -23012,13 +23039,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
 
   // 快照:打开/重连/刷新会话时,renderer 拉当前挂起交互重建面板(本机 + device-link 远程共用)。
-  ipcMain.handle(MAKER_INVOKE.GET_PENDING_INTERACTIONS, (_e, sessionId: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.GET_PENDING_INTERACTIONS, (_e, sessionId: unknown, options?: unknown) => {
     if (typeof sessionId !== 'string' || !sessionId) return [];
     let pending = getPendingInteractionsForSession(sessionId);
     // Shared-task guests never see the owner's input handoff.
     if (getDeviceLinkInvokeContext()?.sharedTask)
       pending = pending.filter(({ request }) => request.kind !== 'input_handoff');
-    return projectPendingInteractionsForRemote(pending, isDeviceLinkInvoke());
+    return withPendingInteractionAge(
+      projectPendingInteractionsForRemote(pending, isDeviceLinkInvoke()),
+      options,
+    );
   });
 
   /**

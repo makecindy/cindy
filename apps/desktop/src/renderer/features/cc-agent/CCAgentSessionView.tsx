@@ -135,7 +135,10 @@ import {
   tryRequestFollowLatest,
 } from '@/components/chat/autoFollowIntent';
 import { useComposerOverlayMetrics } from './useComposerOverlayMetrics';
-import { useSessionSwitchFocusIntent } from './useSessionSwitchFocusIntent';
+import {
+  queryHostPendingPermissions,
+  useSessionSwitchFocusIntent,
+} from './useSessionSwitchFocusIntent';
 import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
 import {
   shareSelectionStore,
@@ -834,20 +837,6 @@ export function CCAgentSessionView(props: CCAgentSessionViewProps) {
       </CindyMakeSessionGate>
     </SessionRouteOriginGate>
   );
-}
-
-/** 任务所在 Host 上当前挂起的授权请求 id（切换后聚焦用）。 */
-async function queryPendingPermissionIds(sessionId: string): Promise<readonly string[]> {
-  const list: unknown = await makerApiForSticky(sessionId).getPendingInteractions(sessionId);
-  if (!Array.isArray(list)) return [];
-  const ids: string[] = [];
-  for (const item of list as Array<{ request?: { kind?: unknown; requestId?: unknown } } | null>) {
-    const request = item?.request;
-    if (request?.kind === 'permission' && typeof request.requestId === 'string') {
-      ids.push(request.requestId);
-    }
-  }
-  return ids;
 }
 
 function CCAgentSessionContent({
@@ -1952,12 +1941,20 @@ function CCAgentSessionContent({
   } = useCCAgentChat(sessionId, handleTitleUpdate, { chatRealtime });
   // 从侧栏等入口切到这个任务时，若它正等着授权，把焦点交给确认卡，直接按键就能处理。
   // 只有拥有路由的主视图这样做；分屏非主 pane、文件页 rail、只读回查都不抢焦点。
-  // 只交接切换那一刻已挂起的请求：本地还没重建时向任务所在的 Host 查一次。
+  // 只交接切换那一刻已挂起的请求：本地还没重建时向任务所在的 Host 查一次。归属
+  // （本机 / 哪台被控端）没解析前不查，否则远程任务刷新后会问到本机、拿到空列表。
+  const pendingPermissionQuery = useMemo(
+    () =>
+      rightSidebarDeviceLinkDeviceId === undefined
+        ? null
+        : (id: string) => queryHostPendingPermissions(rightSidebarDeviceLinkDeviceId, id),
+    [rightSidebarDeviceLinkDeviceId],
+  );
   const permissionSwitchFocus = useSessionSwitchFocusIntent(
     sessionId,
     ownsRoute && viewVisible && !disableAutofocus && !readOnly,
     pendingPermission?.requestId ?? null,
-    queryPendingPermissionIds,
+    pendingPermissionQuery,
   );
   useBotIslandVisibleSession(
     viewVisible && session?.id === sessionId && historyLoaded ? sessionId ?? null : null,

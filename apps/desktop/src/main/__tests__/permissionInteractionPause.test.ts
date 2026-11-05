@@ -14,7 +14,7 @@ const names = new Set([
   'schedulePendingPermissionTimeout', 'setPendingInteractionTimeoutsPaused',
   'resolvePendingInteraction', 'cancelPendingInteraction', 'defaultDecisionForPending',
   'cleanupPendingAgentInteractionsForSession', 'takePendingInteractionsForSession',
-  'bindSharedPermission',
+  'bindSharedPermission', 'withPendingInteractionAge',
 ]);
 const functions = ast.statements.filter((node) => ts.isFunctionDeclaration(node)
   && node.name && names.has(node.name.text)).map(node => node.getText(ast).replace(/^export /, ''));
@@ -42,7 +42,8 @@ const compiled = ts.transpileModule(`${functions.join('\n')}
 setSharedTaskInteractionReader(${interactionReaderSource});
 return { install: installDesktopInteractionListener, hold: ${holdInputSource},
   answer: resolvePendingInteraction, cleanup: cleanupPendingAgentInteractionsForSession,
-  take: takePendingInteractionsForSession, resolveFromIpc: ${resolveHandlerSource} };`, {
+  take: takePendingInteractionsForSession, withAge: withPendingInteractionAge,
+  resolveFromIpc: ${resolveHandlerSource} };`, {
   compilerOptions: { target: ts.ScriptTarget.ES2022 },
 }).outputText;
 const MINUTE = 60_000;
@@ -84,6 +85,7 @@ function harness() {
     answer: (id: string, decision: InteractionDecision) => boolean;
     cleanup: (id: string, reason: string) => void;
     take: (id: string) => Array<{ resolve: (decision: InteractionDecision) => void; sharedPermission?: SharedPermission }>;
+    withAge: (pending: Array<{ request: { requestId?: string } }>, options: unknown) => Array<{ request: { requestId?: string }; pendingForMs?: number }>;
     resolveFromIpc: (event: unknown, id: string, decision: InteractionDecision) => Promise<{ accepted: boolean }>;
   };
   const request = (id = 'permission', sessionId = 'task', kind: InteractionRequest['kind'] = 'permission', channel?: InteractionHandler, signal?: AbortSignal) => {
@@ -187,6 +189,30 @@ it('rejects a guest replacement tool input without consuming the pending request
   const originalDecision = { kind: 'permission', behavior: 'allow' } as const;
   await expect(h.resolveFromIpc({}, 'permission', originalDecision)).resolves.toEqual({ accepted: true });
   await expect(p.promise).resolves.toEqual(originalDecision);
+});
+
+// Device Link snapshot contract (maker:get-pending-interactions, opt-in includeAge): the
+// controller focuses a permission after a task switch only if the Host reports it was
+// already pending before the switch. Without the age, a request raised while the
+// snapshot was in flight is indistinguishable from one that existed at navigation, and
+// one Enter would approve it. Old controllers send no option and must get the old shape.
+it('reports how long each Agent interaction has been pending only when asked', () => {
+  const h = harness();
+  h.request('older');
+  vi.advanceTimersByTime(1500);
+  h.request('newer');
+  vi.advanceTimersByTime(200);
+  const snapshot = [
+    { request: { requestId: 'older' } },
+    { request: { requestId: 'newer' } },
+    { request: { requestId: 'host-owned-confirm' } },
+  ];
+  expect(h.withAge(snapshot, { includeAge: true })).toEqual([
+    { request: { requestId: 'older' }, pendingForMs: 1700 },
+    { request: { requestId: 'newer' }, pendingForMs: 200 },
+    { request: { requestId: 'host-owned-confirm' } },
+  ]);
+  expect(h.withAge(snapshot, undefined)).toBe(snapshot);
 });
 
 describe('permission timeout follows the task pause lifecycle', () => {

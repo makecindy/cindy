@@ -2,7 +2,12 @@
 import { act, cleanup, fireEvent, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { useSessionSwitchFocusIntent } from '../useSessionSwitchFocusIntent';
+import {
+  queryHostPendingPermissions,
+  useSessionSwitchFocusIntent,
+  type HostPendingPermission,
+  type QueryPendingPermissions,
+} from '../useSessionSwitchFocusIntent';
 
 afterEach(() => {
   cleanup();
@@ -13,30 +18,44 @@ interface Props {
   sessionId: string | undefined;
   enabled: boolean;
   pending?: string | null;
-  query?: (sessionId: string) => Promise<readonly string[]>;
+  query?: QueryPendingPermissions | null;
 }
 
 // 默认：本地已经展示着切换时挂起的请求 p1，Host 查询不会被用到。
-const noQuery = () => Promise.resolve([] as readonly string[]);
+const noQuery: QueryPendingPermissions = () => Promise.resolve([]);
 
 function setup(initial: Props) {
   return renderHook(
     ({ sessionId, enabled, pending = 'p1', query = noQuery }: Props) =>
-      useSessionSwitchFocusIntent(sessionId, enabled, pending, query),
+      useSessionSwitchFocusIntent(sessionId, enabled, pending, query ?? null),
     { initialProps: initial },
   );
 }
 
-/** 可以在测试里手动结算的 Host 查询。 */
+/**
+ * 可以在测试里手动结算的 Host 查询。只给 id 时按「切换前很久就已挂起」上报时长；
+ * 也可以直接给出 Host 报的完整条目。
+ */
 function deferredQuery() {
-  let resolve!: (ids: readonly string[]) => void;
+  let resolve!: (list: readonly HostPendingPermission[]) => void;
   const query = vi.fn(
     () =>
-      new Promise<readonly string[]>((r) => {
+      new Promise<readonly HostPendingPermission[]>((r) => {
         resolve = r;
       }),
   );
-  return { query, resolve: (ids: readonly string[]) => resolve(ids) };
+  return {
+    query,
+    resolve: (items: ReadonlyArray<string | HostPendingPermission>) =>
+      resolve(items.map((i) => (typeof i === 'string' ? { requestId: i, pendingForMs: 60_000 } : i))),
+  };
+}
+
+/** 让 performance.now() 可控：切换（hook 挂载）发生在 1000ms。 */
+function controlClock() {
+  let now = 1000;
+  vi.spyOn(performance, 'now').mockImplementation(() => now);
+  return { advance: (ms: number) => (now += ms) };
 }
 
 describe('useSessionSwitchFocusIntent', () => {
@@ -124,8 +143,8 @@ describe('useSessionSwitchFocusIntent', () => {
   // 切到一个还在跑、没在等授权的任务，用户只是看输出；之后才弹出的新请求不是这次切换要
   // 交接的，不能把焦点从侧栏行抢走（那时回车就成了批准）。
   it.each([
-    ['Host 上没有挂起请求', () => Promise.resolve([] as readonly string[])],
-    ['查询失败', () => Promise.reject(new Error('offline'))],
+    ['Host 上没有挂起请求', (() => Promise.resolve([])) as QueryPendingPermissions],
+    ['查询失败', (() => Promise.reject(new Error('offline'))) as QueryPendingPermissions],
   ])('切换时没在等授权（%s），之后才到的新请求不抢焦点', async (_name, query) => {
     const { result, rerender } = setup({ sessionId: 'a', enabled: true, pending: null, query });
     await act(async () => {});
@@ -140,6 +159,49 @@ describe('useSessionSwitchFocusIntent', () => {
     expect(result.current.armed).toBe(true);
     rerender({ sessionId: 'a', enabled: true, pending: 'p2' });
     expect(result.current.armed).toBe(false);
+  });
+
+  // Host 快照是查询执行那一刻的实时读取。远程往返 800ms 期间 Host 新建了 p2：它报的
+  // 已挂起时长（300ms）短于切换到收到结果的时间，说明是切换之后才建的，不能接管焦点，
+  // 否则下一次回车就批准了一个切换时还不存在的请求。切换前就在等的 p1 照常交接。
+  it('只接受切换前就已挂起的请求，查询途中新建的不抢焦点', async () => {
+    const clock = controlClock();
+    const { query, resolve } = deferredQuery();
+    const { result, rerender } = setup({ sessionId: 'a', enabled: true, pending: null, query });
+    clock.advance(800);
+    await act(async () =>
+      resolve([
+        { requestId: 'p1', pendingForMs: 5_000 },
+        { requestId: 'p2', pendingForMs: 300 },
+      ]),
+    );
+    rerender({ sessionId: 'a', enabled: true, pending: 'p2', query });
+    expect(result.current.armed).toBe(false);
+    rerender({ sessionId: 'a', enabled: true, pending: 'p1', query });
+    expect(result.current.armed).toBe(true);
+  });
+
+  // 旧被控端不报时长：分不清请求是切换前还是查询途中建的，按不确定处理。
+  it('Host 没报挂起时长（旧版本）时不聚焦', async () => {
+    const { query, resolve } = deferredQuery();
+    const { result, rerender } = setup({ sessionId: 'a', enabled: true, pending: null, query });
+    await act(async () => resolve([{ requestId: 'p1' }]));
+    rerender({ sessionId: 'a', enabled: true, pending: 'p1', query });
+    expect(result.current.armed).toBe(false);
+  });
+
+  // 远程任务刷新后，设备镜像还没填充，归属未知（query 为 null）。这时不能去问本机
+  // （本机列表为空，意图会被直接清掉）；归属解析后再查，切换前就在等的请求照常聚焦。
+  it('归属解析前不查询，解析后再查', async () => {
+    const { query, resolve } = deferredQuery();
+    const { result, rerender } = setup({ sessionId: 'a', enabled: true, pending: null, query: null });
+    await act(async () => {});
+    expect(query).not.toHaveBeenCalled();
+    rerender({ sessionId: 'a', enabled: true, pending: null, query });
+    expect(query).toHaveBeenCalledWith('a');
+    await act(async () => resolve(['p1']));
+    rerender({ sessionId: 'a', enabled: true, pending: 'p1', query });
+    expect(result.current.armed).toBe(true);
   });
 
   it('查询结果回来前用户已有操作，结果作废', async () => {
@@ -166,5 +228,37 @@ describe('useSessionSwitchFocusIntent', () => {
     expect(result.current.armed).toBe(false);
     rerender({ sessionId: 'a', enabled: true });
     expect(result.current.armed).toBe(true);
+  });
+});
+
+// 查询入口按已解析的归属选 Host，并要求 Host 带上挂起时长；只取授权请求。
+describe('queryHostPendingPermissions', () => {
+  const snapshot = [
+    { request: { kind: 'permission', requestId: 'p1' }, pendingForMs: 4200 },
+    { request: { kind: 'ask_user_question', requestId: 'q1' }, pendingForMs: 4200 },
+    { request: { kind: 'permission', requestId: 'p-old-host' } },
+  ];
+  const expected = [{ requestId: 'p1', pendingForMs: 4200 }, { requestId: 'p-old-host' }];
+
+  afterEach(() => {
+    delete (window as { electronAPI?: unknown }).electronAPI;
+  });
+
+  it('本机任务问本机 Host', async () => {
+    const getPendingInteractions = vi.fn(async () => snapshot);
+    const invoke = vi.fn();
+    Object.assign(window, { electronAPI: { maker: { getPendingInteractions }, deviceLink: { invoke } } });
+    await expect(queryHostPendingPermissions(null, 's1')).resolves.toEqual(expected);
+    expect(getPendingInteractions).toHaveBeenCalledWith('s1', { includeAge: true });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('远程任务经 Device Link 问它所在的被控端', async () => {
+    const getPendingInteractions = vi.fn();
+    const invoke = vi.fn(async () => snapshot);
+    Object.assign(window, { electronAPI: { maker: { getPendingInteractions }, deviceLink: { invoke } } });
+    await expect(queryHostPendingPermissions('dev-1', 's1')).resolves.toEqual(expected);
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:get-pending-interactions', ['s1', { includeAge: true }]);
+    expect(getPendingInteractions).not.toHaveBeenCalled();
   });
 });

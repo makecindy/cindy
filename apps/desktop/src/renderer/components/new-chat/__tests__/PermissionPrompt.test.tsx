@@ -43,7 +43,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 afterEach(cleanup);
 
 // 本地已有切换时挂起的请求，不走 Host 查询。
-const noHostQuery = () => Promise.resolve([] as readonly string[]);
+const noHostQuery = () => Promise.resolve([]);
 
 const bashRule = {
   type: 'addRules',

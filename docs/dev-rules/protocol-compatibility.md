@@ -1,5 +1,15 @@
 # 跨端协议兼容
 
+## 挂起交互快照的已挂起时长（2026-11-05）
+
+`maker:get-pending-interactions` 可选追加第二个参数 `{ includeAge: true }`。带上时，Host 为每条
+Agent 交互（permission / ask_user_question / plan_review）附加 `pendingForMs`：按 Host 单调时钟
+计算的已挂起毫秒数，不暴露绝对时间。Host 自有的确认卡不带该字段。Desktop 控制端在切换任务后
+用它判断授权请求是否在切换前就已挂起，只有这样的请求才接管焦点。不带参数时返回形状不变，
+Mobile 与旧控制端不受影响；旧 Host 忽略多出的参数、不返回该字段，新控制端按「时长未知」
+处理，不自动聚焦。共享任务访客沿用原 `history.read` 授权，参数不含会话引用。没有新 channel、
+帧、能力位或 allowlist 变化，官方与自建中转只透传 invoke，无需适配。
+
 ## 群聊代答的工作记录兼容（2026-11-03）
 
 已发布 Desktop 在普通和个人代答的完成请求中附带 `cindy.work-record` revision 1，
