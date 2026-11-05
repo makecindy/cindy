@@ -41,7 +41,7 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
     let timer: ReturnType<typeof setTimeout> | undefined;
     const subscription = deviceId ? createRemoteSessionSubscription(deviceId, process.sessionId) : undefined;
     let closed = false;
-    const stopUpdates = () => { if (closed) return; closed = true; clearTimeout(timer); off(); subscription?.release(); };
+    const stopUpdates = () => { if (closed) return; closed = true; clearTimeout(timer); off(); recoveryOffs.forEach(off => off?.()); subscription?.release(); };
     const refresh = () => {
       if (!current() || closed) return;
       if (reading) { refreshPending = true; return; }
@@ -75,6 +75,23 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
       : window.electronAPI.localDb.messages.onCreated(({ sessionId }, stamp) => {
         if (isDataOwnerPushCurrent(stamp)) changed(sessionId);
       });
+    // Replayed subscriptions restore future pushes, not records whose push was
+    // lost during a disconnect. Reconcile this bounded turn on peer recovery.
+    const recoveryOffs = deviceId ? [
+      window.electronAPI.deviceLink.onPeerLinkReset?.(p => {
+        if (p.deviceId === deviceId) changed(process.sessionId);
+      }),
+      window.electronAPI.deviceLink.onPresenceChanged?.(p => {
+        if (p.deviceId === deviceId && p.online && p.remoteControlEnabled) changed(process.sessionId);
+      }),
+      window.electronAPI.deviceLink.onResponsivenessChanged?.(p => {
+        if (p.deviceId === deviceId && !p.unresponsive && p.recovered !== false) changed(process.sessionId);
+      }),
+      window.electronAPI.deviceLink.onStatusChanged?.(p => {
+        if (p.dataPathChangedDeviceId && p.dataPathChangedDeviceId !== deviceId) return;
+        if (p.status === 'online' || p.directDataDeviceIds?.includes(deviceId)) changed(process.sessionId);
+      }),
+    ] : [];
     void subscription?.subscribe().catch(() => undefined);
     refresh();
     return () => {

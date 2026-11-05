@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createElement as el, useEffect, type ReactNode } from 'react';
+import { act, createElement as el, useEffect, useState, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 // Unit: a completed turn must not hide records the reader opened, including after
@@ -19,22 +19,34 @@ vi.mock('lucide-react-native', () => ({ ChevronRight: () => null, Layers: () => 
 vi.mock('@/components/AppText', () => ({ Text: ({ children }: any) => el('span', null, children) }));
 vi.mock('@/theme', () => ({ useTheme: () => ({ colors: {} }), useThemedStyles: () => ({}) }));
 vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
-const history = vi.hoisted(() => ({ invoke: vi.fn(), generation: 1, subscribe: vi.fn(async () => undefined), unsubscribe: vi.fn(async () => undefined), toolActions: undefined as any }));
+const history = vi.hoisted(() => ({ invoke: vi.fn(), generation: 1, subscribe: vi.fn(async () => undefined), unsubscribe: vi.fn(async () => undefined), toolActions: undefined as any, resolveMedia: vi.fn(async (media: any) => ({ url: 'https://media.invalid/resolved', mimeType: media.kind === 'video' ? 'video/mp4' : 'image/png' })), mediaDevice: '' }));
 vi.mock('expo-router', () => ({ useFocusEffect: (effect: () => void) => useEffect(effect, [effect]) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: history.generation }) }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: history.invoke, subscribe: history.subscribe, unsubscribe: history.unsubscribe }) }));
 vi.mock('@/components/MobilePrimitives', () => ({ MainWindowActionButton: ({ action }: any) => el('button', { onClick: action.onPress }, 'Retry') }));
 vi.mock('@/session/BotGroupMessageText', () => ({ BotGroupMarkdownText: ({ content }: any) => el('p', null, content) }));
+vi.mock('@/session/useBotGroupRemoteMedia', () => ({ useBotGroupRemoteMedia: (device: string) => { history.mediaDevice = device; return history.resolveMedia; } }));
+// Only adapt the native viewer. Exercise the group callback and its resolver
+// handoff, not a fake claim that native image/video decoding was tested.
+vi.mock('@/session/ImageLightbox', () => ({ ImageLightbox: ({ images, onResolveRemoteMedia, onClose }: any) => {
+  const [uri, setUri] = useState('');
+  useEffect(() => {
+    void onResolveRemoteMedia?.(images[0].payload.media, { front: true }).then((value: any) => setUri(value.url));
+  }, [images, onResolveRemoteMedia]);
+  return el('div', { 'data-testid': 'process-lightbox', 'data-url': uri }, el('button', { onClick: onClose }, 'Close media'));
+} }));
 // Adapt native rows/viewers; keep the real payload builder, normalization,
 // callbacks and disclosure state so this checks the group-to-viewer handoff.
 vi.mock('@/session/MessageRenderer', async () => {
-  const { buildToolResultPayload, buildTextPayload } = await import('@/session/messagePayload');
+  const { buildToolResultPayload, buildTextPayload, buildMediaPayload } = await import('@/session/messagePayload');
+  const { readToolProcessMedia } = await import('@cindy/maker-shared/tool-process-media');
   return {
     WorkToolActivityRow: ({ activity, actions }: any) => {
       history.toolActions = actions;
       const tool = activity.message.normalized;
       return el('div', { 'data-message-id': tool.source.id, 'data-session-id': tool.source.sessionId },
-        el('p', null, tool.label, tool.body, activity.toolResult),
+        el('p', null, tool.label, tool.body, tool.secondaryBody, activity.toolResult),
+        ...readToolProcessMedia(tool.secondaryBody).map(media => el('button', { key: media.url, onClick: () => actions.onOpenPayload(buildMediaPayload({ ...media, previewable: false }, 'Process media')) }, 'Open process media')),
         tool.toolInputProjection && el('button', { disabled: !actions.onLoadToolInput, onClick: () => {
           void actions.onLoadToolInput(tool.toolInputProjection).then((detail: any) => actions.onOpenPayload(buildTextPayload('Full input', detail.body)));
         } }, 'Load full input'),
@@ -49,7 +61,7 @@ import { TeammateProcess } from '@/session/TeammateProcess';
 import { __test_internals as memory } from '@/session/expandedBlockMemory';
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root, node: HTMLDivElement;
-beforeEach(() => { history.invoke.mockReset(); history.toolActions = undefined; history.generation = 1; remoteSessionStore.clear(); memory.reset(); node = document.createElement('div'); root = createRoot(node); });
+beforeEach(() => { history.invoke.mockReset(); history.resolveMedia.mockClear(); history.toolActions = undefined; history.generation = 1; remoteSessionStore.clear(); memory.reset(); node = document.createElement('div'); root = createRoot(node); });
 afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
 const header = () => node.querySelector('button')!;
 async function show(running: boolean) {
@@ -321,4 +333,40 @@ it.each(['success', 'failure', 'unmount'])('coalesces in-flight group history re
     await act(async () => root.render(null));
     await act(async () => { pending.forEach(request => request.resolve([source])); });
   }
+});
+
+// PR #8979 / unit: production normalization previously filtered out commentary,
+// making an unfinished tool falsely adjacent to another tool's result.
+it('preserves commentary boundaries when pairing group tool results', async () => {
+  await act(async () => root.render(el(BotGroupProcessEntries, { id: 'pairing-boundary', deviceId: 'mac', sessionId: 'lane', messages: [
+    { clientId: 'tool-b', role: 'tool_use', toolUseId: 'B', content: { toolName: 'Read', input: { file_path: '/repo/b.md' } } },
+    { clientId: 'tool-a', role: 'tool_use', toolUseId: 'A', content: { toolName: 'Read', input: { file_path: '/repo/a.md' } } },
+    { clientId: 'between', role: 'assistant', content: 'Still processing', agentMeta: { assistantPhase: 'commentary' } },
+    { clientId: 'result-b', role: 'tool_result', toolUseId: 'B', content: 'OUTPUT FROM B ONLY' },
+  ] })));
+  await act(async () => header().click());
+  const toolA = node.querySelector('[data-message-id="tool-a"]');
+  expect(toolA).not.toBeNull();
+  expect(toolA!.textContent).not.toContain('OUTPUT FROM B ONLY');
+  expect(node.querySelector('[data-message-id="tool-b"]')!.textContent).toContain('OUTPUT FROM B ONLY');
+});
+
+// PR #8979 / unit: real process-media parsing/payloads and group viewer routing;
+// the native viewer is adapted, preserving execution-device resolver handoff.
+it.each(['image', 'video'] as const)('routes group tool %s through the execution-device resolver and shared lightbox', async kind => {
+  const url = `cindy-media://blobs/${'c'.repeat(64)}.${kind === 'image' ? 'png' : 'mp4'}`;
+  await act(async () => root.render(el(BotGroupProcessEntries, { id: `media-${kind}`, deviceId: 'execution-mac', sessionId: 'execution-lane', messages: [
+    { clientId: 'capture', role: 'tool_use', toolUseId: 'capture', content: { toolName: 'Capture', input: {} } },
+    { clientId: 'captured', role: 'tool_result', toolUseId: 'capture', content: JSON.stringify({ cindy_process_media: [{ kind, url }] }) },
+  ] })));
+  await act(async () => header().click());
+  expect(history.toolActions.onResolveRemoteMedia).toBe(history.resolveMedia);
+  await act(async () => Array.from(node.querySelectorAll('button')).find(button => button.textContent === 'Open process media')!.click());
+  expect(history.mediaDevice).toBe('execution-mac');
+  expect(history.resolveMedia).toHaveBeenCalledWith(expect.objectContaining({ kind, url }), { front: true });
+  expect(node.querySelector('[data-testid="process-lightbox"]')?.getAttribute('data-url')).toBe('https://media.invalid/resolved');
+  expect(node.querySelector('[role="dialog"]')).toBeNull();
+  await act(async () => Array.from(node.querySelectorAll('button')).find(button => button.textContent === 'Close media')!.click());
+  expect(node.querySelector('[data-testid="process-lightbox"]')).toBeNull();
+  expect(node.querySelector('[data-message-id="capture"]')).not.toBeNull();
 });

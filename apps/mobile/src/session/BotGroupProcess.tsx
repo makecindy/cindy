@@ -16,6 +16,9 @@ import { TeammateProcess, TeammateWorkSegment, useTeammateElapsedTitle } from '.
 import { BotGroupMarkdownText } from './BotGroupMessageText';
 import { MessagePayloadModal, WorkToolActivityRow } from './MessageRenderer';
 import type { MessagePayload } from './messagePayload';
+import { ImageLightbox } from './ImageLightbox';
+import { isLightboxMediaKind } from './messageGallery';
+import { useBotGroupRemoteMedia } from './useBotGroupRemoteMedia';
 import { normalizeRemoteMessages } from './messageNormalize';
 import { buildMessageContentLayout } from './messageContentLayout';
 import { fetchMobileToolInputDetail, type MobileToolInputProjection } from './messageToolPayloadProjection';
@@ -100,16 +103,24 @@ export function BotGroupProcessEntries({ messages, id, deviceId, sessionId, runn
   const { invoke } = useDeviceLink();
   const loadToolInput = useCallback((ref: MobileToolInputProjection) => fetchMobileToolInputDetail(ref,
     (messageId, options) => invoke<RemoteMessage[]>(deviceId, 'local-db:messages:around', [sessionId, messageId, options])), [invoke, deviceId, sessionId]);
-  const actions = useMemo(() => ({ isSessionStreaming: running, onOpenPayload: setPayload, onLoadToolInput: loadToolInput }), [running, loadToolInput]);
+  const resolveMedia = useBotGroupRemoteMedia(deviceId);
+  const lightboxImages = useMemo(() => payload?.kind === 'media' && isLightboxMediaKind(payload.media.kind)
+    ? [{ key: payload.media.url, title: payload.title, url: payload.media.url, payload }] : null, [payload]);
+  const actions = useMemo(() => ({ isSessionStreaming: running, onOpenPayload: setPayload, onLoadToolInput: loadToolInput,
+    onResolveRemoteMedia: resolveMedia }), [running, loadToolInput, resolveMedia]);
   const tools = useMemo(() => new Map(normalizeRemoteMessages(messages
-    .filter(message => isBotGroupProcessMessageVisible(message) && ['tool_use', 'tool_result'].includes(message.role))
+    // Keep non-tool record boundaries: removing commentary can falsely pair a
+    // pending tool with an unrelated result through adjacency fallback.
+    .filter(isBotGroupProcessMessageVisible)
     .map(message => ({ ...message, id: message.id ?? message.clientId, sessionId,
-      role: message.role === 'tool_use' ? 'tool_use' as const : 'tool_result' as const,
+      role: message.role as RemoteMessage['role'],
       toolUseId: message.toolUseId ?? null, agentMeta: message.agentMeta ?? null,
       createdAt: message.createdAt ?? new Date(0).toISOString(),
     })), { preserveSourceOrder: true, includeInteractionTools: true }).map(tool => [tool.source.clientId, tool])), [messages, sessionId]);
   return <View style={{ gap: spacing.md }}>
-    {payload && <MessagePayloadModal payload={payload} onClose={closePayload} />}
+    {payload && (lightboxImages && payload.kind === 'media'
+      ? <ImageLightbox images={lightboxImages} initialUrl={payload.media.url} onClose={closePayload} onResolveRemoteMedia={resolveMedia} />
+      : <MessagePayloadModal payload={payload} onClose={closePayload} onResolveRemoteMedia={resolveMedia} />)}
     {projection.segments.map((segment, index) => {
       if (segment.kind === 'content') return <BotGroupMarkdownText key={segment.key} content={segment.item.text ?? ''} authorKind="bot" />;
       const active = running && index === projection.segments.length - 1;

@@ -4920,3 +4920,42 @@ it.each(['success', 'failure', 'unmount'])('coalesces in-flight group history re
     vi.useRealTimers();
   }
 });
+
+// PR #8979 / unit: a successful collapsed read must refresh on peer recovery
+// without a new database push. Earlier tests only refreshed from created events.
+it.each(['onStatusChanged', 'onPresenceChanged', 'onPeerLinkReset', 'onResponsivenessChanged'])('reconciles cached group history after %s recovery', async event => {
+  vi.useFakeTimers();
+  const process = { groupId: 'g1', executionId: `lost-history-${event}`, sessionId: 'lost-lane', clientId: 'source', deviceId: 'original-mac' };
+  const rows: import('../../../../shared/botGroupChat').BotGroupProcessMessage[] = [
+    { clientId: 'source', role: 'user', content: 'Request' },
+    { clientId: 'note', role: 'assistant', content: 'Before disconnect', agentMeta: { assistantPhase: 'commentary' } },
+    { clientId: 'final', role: 'assistant', content: 'Answer', agentMeta: { turnCompleted: true } },
+  ];
+  mocks.remoteInvoke.mockImplementation(async () => [...rows]);
+  const listeners = new Map<string, Set<(payload: any) => void>>();
+  for (const name of ['onStatusChanged', 'onPresenceChanged', 'onPeerLinkReset', 'onResponsivenessChanged']) {
+    const callbacks = new Set<(payload: any) => void>(); listeners.set(name, callbacks);
+    Object.assign(window.electronAPI.deviceLink, { [name]: (cb: (payload: any) => void) => { callbacks.add(cb); return () => { callbacks.delete(cb); }; } });
+  }
+  const emit = (deviceId: string) => listeners.get(event)!.forEach(cb => cb({ deviceId, dataPathChangedDeviceId: deviceId,
+    status: 'online', online: true, remoteControlEnabled: true, unresponsive: false, recovered: true }));
+  const view = render(<Tooltip.Provider><BotGroupProcess process={process}
+    member={{ ...detail().members[0]!, isOwned: true, homeDeviceId: 'new-mac' }} /></Tooltip.Provider>);
+  try {
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const heading = () => view.container.querySelector('[data-teammate-process] > button')!;
+    expect(heading().getAttribute('aria-expanded')).toBe('false');
+    const reads = mocks.remoteInvoke.mock.calls.length;
+    await act(async () => { emit('neighbor-mac'); await vi.advanceTimersByTimeAsync(50); });
+    expect(mocks.remoteInvoke).toHaveBeenCalledTimes(reads);
+    rows.push({ clientId: 'lost-thinking', role: 'thinking', content: 'Hidden reasoning from disconnected period' });
+    await act(async () => { emit('original-mac'); await vi.advanceTimersByTimeAsync(50); });
+    expect(mocks.remoteInvoke).toHaveBeenCalledTimes(reads + 2);
+    expect(mocks.remoteInvoke.mock.calls.every(([device]) => device === 'original-mac')).toBe(true);
+    fireEvent.click(heading());
+    expect(view.container.querySelector('[data-teammate-segment]')).not.toBeNull();
+    expect(view.container.textContent).not.toContain('Hidden reasoning from disconnected period');
+    view.unmount();
+    expect([...listeners.values()].every(callbacks => callbacks.size === 0)).toBe(true);
+  } finally { view.unmount(); vi.useRealTimers(); }
+});
