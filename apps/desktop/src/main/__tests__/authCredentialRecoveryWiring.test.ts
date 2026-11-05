@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { ScriptTarget, transpileModule } from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
+import { createStartupInFlightCall } from '../startupInFlightCall';
 
 const bootstrap = readFileSync(new URL('../bootstrap-electron.ts', import.meta.url), 'utf8');
 
@@ -103,6 +104,7 @@ describe('production credential recovery wiring', () => {
         isCindyVersionLaunchPending: vi.fn(() => versionLaunchPending),
         recordDesktopDevAuthStartupResult: recordStartupResult,
         noteAuthColdStartState: vi.fn(),
+        startupAuthInitialize: createStartupInFlightCall(),
       };
       new Function(...Object.keys(deps), compiled)(...Object.values(deps));
       if (rejects) await expect(handler()).rejects.toBe(outcome);
