@@ -126,16 +126,23 @@ export async function enhanceComposerPrompt(
   });
 
   if (!result.ok) {
-    // The auxiliary chain is the only route this feature uses, so an exhausted
-    // chain is a configuration problem the user can act on. It gets its own
-    // code so the renderer can point at Settings instead of reporting a
-    // generic "unavailable in the current state".
     if (result.reason === 'timeout') {
       throwIpcError('PRECONDITION_FAILED', 'Prompt enhancement timed out');
     }
+    // Only "no usable candidate at all" is a configuration problem, so only
+    // that one may send the user to Settings. A chain that ran and failed
+    // (upstream HTTP error, empty body, a rewrite refused for being cut short)
+    // keeps its own meaning: offering the settings link there hides the real
+    // cause from users whose configuration is already correct.
+    if (result.reason === 'no_candidate') {
+      throwIpcError(
+        'AUXILIARY_MODEL_UNAVAILABLE',
+        'No auxiliary model is available to enhance the prompt',
+      );
+    }
     throwIpcError(
-      'AUXILIARY_MODEL_UNAVAILABLE',
-      'No auxiliary model is available to enhance the prompt',
+      'PRECONDITION_FAILED',
+      'The auxiliary model did not return a usable rewrite',
     );
   }
 

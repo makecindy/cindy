@@ -85,6 +85,23 @@ describe('enhanceComposerPrompt', () => {
     });
   });
 
+  it('keeps a failed call distinct from a missing configuration', async () => {
+    // An upstream HTTP error or an empty body is not a configuration problem:
+    // the renderer turns AUXILIARY_MODEL_UNAVAILABLE into "configure a model",
+    // which would be wrong advice for a chain the user already configured.
+    for (const reason of ['all_candidates_failed', 'empty_response'] as const) {
+      const request = async (): Promise<UtilityTextResult> => ({
+        ok: false,
+        reason,
+        attempts: [],
+      });
+
+      await expect(enhanceComposerPrompt(request, 'hello')).rejects.toMatchObject({
+        code: 'PRECONDITION_FAILED',
+      });
+    }
+  });
+
   it('maps an empty rewrite to an internal failure', async () => {
     const request = async () => okResponse('   ');
     await expect(enhanceComposerPrompt(request, 'hello')).rejects.toMatchObject({
