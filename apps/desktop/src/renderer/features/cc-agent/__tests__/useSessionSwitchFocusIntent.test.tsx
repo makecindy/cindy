@@ -9,12 +9,34 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function setup(initial: { sessionId: string | undefined; enabled: boolean; awaiting?: boolean }) {
+interface Props {
+  sessionId: string | undefined;
+  enabled: boolean;
+  pending?: string | null;
+  query?: (sessionId: string) => Promise<readonly string[]>;
+}
+
+// 默认：本地已经展示着切换时挂起的请求 p1，Host 查询不会被用到。
+const noQuery = () => Promise.resolve([] as readonly string[]);
+
+function setup(initial: Props) {
   return renderHook(
-    ({ sessionId, enabled, awaiting = true }) =>
-      useSessionSwitchFocusIntent(sessionId, enabled, awaiting),
+    ({ sessionId, enabled, pending = 'p1', query = noQuery }: Props) =>
+      useSessionSwitchFocusIntent(sessionId, enabled, pending, query),
     { initialProps: initial },
   );
+}
+
+/** 可以在测试里手动结算的 Host 查询。 */
+function deferredQuery() {
+  let resolve!: (ids: readonly string[]) => void;
+  const query = vi.fn(
+    () =>
+      new Promise<readonly string[]>((r) => {
+        resolve = r;
+      }),
+  );
+  return { query, resolve: (ids: readonly string[]) => resolve(ids) };
 }
 
 describe('useSessionSwitchFocusIntent', () => {
@@ -78,24 +100,54 @@ describe('useSessionSwitchFocusIntent', () => {
     expect(result.current.armed).toBe(false);
   });
 
+  // 新窗口 / 刷新后切到任务：本地挂起请求还没重建、活动快照也可能是空的。这时向 Host
+  // 查一次，查到的请求随后在本地出现时照常聚焦。
+  it('本地还没重建时向 Host 查询，切换时已挂起的请求随后出现仍会聚焦', async () => {
+    const { query, resolve } = deferredQuery();
+    const { result, rerender } = setup({ sessionId: 'a', enabled: true, pending: null, query });
+    expect(query).toHaveBeenCalledWith('a');
+    await act(async () => resolve(['p1']));
+    expect(result.current.armed).toBe(false);
+    rerender({ sessionId: 'a', enabled: true, pending: 'p1', query });
+    expect(result.current.armed).toBe(true);
+  });
+
+  it('查询结果晚于本地重建也会聚焦', async () => {
+    const { query, resolve } = deferredQuery();
+    const { result, rerender } = setup({ sessionId: 'a', enabled: true, pending: null, query });
+    rerender({ sessionId: 'a', enabled: true, pending: 'p1', query });
+    expect(result.current.armed).toBe(false);
+    await act(async () => resolve(['p1']));
+    expect(result.current.armed).toBe(true);
+  });
+
   // 切到一个还在跑、没在等授权的任务，用户只是看输出；之后才弹出的新请求不是这次切换要
   // 交接的，不能把焦点从侧栏行抢走（那时回车就成了批准）。
-  it('切换时没在等授权就不武装，之后才到的新请求不抢焦点', () => {
-    const { result, rerender } = setup({ sessionId: 'a', enabled: true, awaiting: false });
-    expect(result.current.armed).toBe(false);
-    rerender({ sessionId: 'a', enabled: true, awaiting: true });
-    expect(result.current.armed).toBe(false);
-    rerender({ sessionId: 'b', enabled: true, awaiting: false });
-    rerender({ sessionId: 'b', enabled: true, awaiting: true });
+  it.each([
+    ['Host 上没有挂起请求', () => Promise.resolve([] as readonly string[])],
+    ['查询失败', () => Promise.reject(new Error('offline'))],
+  ])('切换时没在等授权（%s），之后才到的新请求不抢焦点', async (_name, query) => {
+    const { result, rerender } = setup({ sessionId: 'a', enabled: true, pending: null, query });
+    await act(async () => {});
+    rerender({ sessionId: 'a', enabled: true, pending: 'p1', query });
     expect(result.current.armed).toBe(false);
   });
 
-  // 切换时在等授权、确认卡还没重建，这条请求就在别处被处理掉了；之后的新请求同样不抢焦点。
-  it('恢复期间请求已被处理掉，之后的新请求不抢焦点', () => {
-    const { result, rerender } = setup({ sessionId: 'a', enabled: true, awaiting: true });
+  // 切换时在等 p1，确认卡重建前 p1 被别处处理掉、p2 顶上来；会话一直是「等授权」，但 p2
+  // 不是这次切换要交接的请求。
+  it('交接的请求被别的请求替换后不抢焦点', () => {
+    const { result, rerender } = setup({ sessionId: 'a', enabled: true, pending: 'p1' });
     expect(result.current.armed).toBe(true);
-    rerender({ sessionId: 'a', enabled: true, awaiting: false });
-    rerender({ sessionId: 'a', enabled: true, awaiting: true });
+    rerender({ sessionId: 'a', enabled: true, pending: 'p2' });
+    expect(result.current.armed).toBe(false);
+  });
+
+  it('查询结果回来前用户已有操作，结果作废', async () => {
+    const { query, resolve } = deferredQuery();
+    const { result, rerender } = setup({ sessionId: 'a', enabled: true, pending: null, query });
+    act(() => fireEvent.pointerDown(window));
+    await act(async () => resolve(['p1']));
+    rerender({ sessionId: 'a', enabled: true, pending: 'p1', query });
     expect(result.current.armed).toBe(false);
   });
 

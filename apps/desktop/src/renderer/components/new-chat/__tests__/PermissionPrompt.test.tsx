@@ -42,6 +42,9 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 
 afterEach(cleanup);
 
+// 本地已有切换时挂起的请求，不走 Host 查询。
+const noHostQuery = () => Promise.resolve([] as readonly string[]);
+
 const bashRule = {
   type: 'addRules',
   rules: [{ toolName: 'Bash', ruleContent: 'curl:*' }],
@@ -334,7 +337,7 @@ describe('PermissionPrompt 切换任务后聚焦「允许一次」', () => {
 // 等 slot 注销、卡片回到行内重新挂载后，意图必须还在，焦点才能落到「允许一次」。
 describe('PermissionPrompt 经交互卡 portal 切换路由', () => {
   function SwitchedView() {
-    const intent = useSessionSwitchFocusIntent('task-b', true, true);
+    const intent = useSessionSwitchFocusIntent('task-b', true, 'req-1', noHostQuery);
     return (
       <InteractionPromptHost hasInteraction>
         <PermissionPrompt
@@ -390,7 +393,7 @@ describe('PermissionPrompt 经搜索弹层切换任务', () => {
   function SearchSwitch({ onRespond = vi.fn() }: { onRespond?: (r: unknown) => void }) {
     const [open, setOpen] = useState(false);
     const [taskId, setTaskId] = useState('task-a');
-    const intent = useSessionSwitchFocusIntent(taskId, true, true);
+    const intent = useSessionSwitchFocusIntent(taskId, true, taskId === 'task-b' ? 'req-1' : null, noHostQuery);
     return (
       <>
         <Popover open={open} onOpenChange={setOpen}>
@@ -491,7 +494,7 @@ describe('PermissionPrompt 经搜索弹层切换任务', () => {
 describe('PermissionPrompt 键盘切换时不替按住的按键批准', () => {
   function SidebarSwitch({ onRespond }: { onRespond: (r: unknown) => void }) {
     const [switched, setSwitched] = useState(false);
-    const intent = useSessionSwitchFocusIntent(switched ? 'task-b' : 'task-a', switched, true);
+    const intent = useSessionSwitchFocusIntent(switched ? 'task-b' : 'task-a', switched, 'req-1', noHostQuery);
     return (
       <>
         <div
@@ -543,7 +546,7 @@ describe('PermissionPrompt 键盘切换时不替按住的按键批准', () => {
   it('确认卡晚到且 Enter、空格同时按着时，松开其一后另一个的重复不批准', () => {
     const onRespond = vi.fn();
     function DelayedPrompt() {
-      const intent = useSessionSwitchFocusIntent('task-b', true, true);
+      const intent = useSessionSwitchFocusIntent('task-b', true, 'req-1', noHostQuery);
       const [restored, setRestored] = useState(false);
       return (
         <>
