@@ -1162,7 +1162,9 @@ it('does not label an unverified working default as the upstream capacity', () =
   expect(mocks.setLimit).toHaveBeenLastCalledWith(1_000_000);
 });
 
-it.each([true, false])('uses an explicit common image choice %s when engine defaults differ', async (supported) => {
+it.each([true, false].flatMap(supported => [false, true].map(mixed => ({ supported, mixed }))))(
+  'uses an explicit common image choice $supported when engine defaults differ (mixed overrides: $mixed)', async ({ supported, mixed }) => {
+  mocks.imageMixed = mixed;
   const first = { ...model, supportsImageInput: true, imageInputDefault: { supportsImageInput: true } };
   const second = { ...model, id: 'chatgpt/gpt-6', supportsImageInput: false, imageInputDefault: { supportsImageInput: false } };
   render(<ModelAdvancedDrawer provider={provider}
@@ -1177,6 +1179,29 @@ it.each([true, false])('uses an explicit common image choice %s when engine defa
   fireEvent.click(items[supported ? 0 : 1]);
   expect(mocks.imageSet).toHaveBeenLastCalledWith(supported);
   expect(mocks.imageSet).not.toHaveBeenCalledWith(null);
+});
+
+// A saved override and an inherited value can agree despite different provenance.
+it.each([true, false].flatMap(supported => [false, true].map(firstOverridden => ({ supported, firstOverridden }))))(
+  'shows effective capability $supported when mixed overrides agree (first overridden: $firstOverridden)', async ({ supported, firstOverridden }) => {
+  mocks.imageMixed = true;
+  // The IPC returns the first stored override even when the target values differ.
+  mocks.imageValue = firstOverridden ? supported : null;
+  const primary = { ...model, supportsImageInput: supported, imageInputDefault: { supportsImageInput: firstOverridden ? !supported : supported } };
+  const other = { ...model, id: 'chatgpt/gpt-6', supportsImageInput: supported, imageInputDefault: { supportsImageInput: firstOverridden ? supported : !supported } };
+  render(<ModelAdvancedDrawer provider={provider}
+    row={{ id: model.id, name: model.name, avail: ['codex', 'claude-code'], byAgent: { codex: primary, 'claude-code': other } }}
+    open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+  const trigger = screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' });
+  expect(trigger.textContent).toBe(`settings.providers.models.advanced.${supported ? 'supported' : 'unsupported'}`);
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+  const items = await screen.findAllByRole('menuitemradio');
+  expect(items).toHaveLength(2);
+  expect(items.some(item => item.textContent?.includes('imageInputDefault'))).toBe(false);
+  const selected = items[supported ? 0 : 1];
+  expect(selected.getAttribute('aria-checked')).toBe('true');
+  fireEvent.click(selected);
+  expect(mocks.imageSet).toHaveBeenLastCalledWith(supported);
 });
 
 it.each([true, false, undefined].flatMap(supported => [false, true].map(readFailed => ({ supported, readFailed }))))(

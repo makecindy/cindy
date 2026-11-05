@@ -7,6 +7,7 @@ export default {
     'image-unknown':{about:'Undeclared image input: two explicit choices, no default'},
     'image-unsupported':{about:'Unsupported catalog default restores inheritance'},
     'image-mixed':{about:'Different engine defaults require an explicit common choice'},
+    'image-inherited':{about:'Mixed override provenance with the same effective image capability'},
     default:{about:'GPT-6 Astra with Codex Ultrafast entitlement'},
     narrow:{about:'Model compaction at phone width', viewport:{width:320,height:800}},
     sol:{about:'GPT-6.1 Sol with Codex Ultrafast entitlement'},
@@ -34,7 +35,8 @@ export default {
     }
     await ui.capture('ultra-selected');
     const imageInput = page.getByRole('button', { name: await ui.t('settings.providers.models.advanced.imageInput'), exact: true });
-    const knownDefault = !['image-unknown', 'image-mixed'].includes(ui.case);
+    const knownDefault = !['image-unknown', 'image-mixed', 'image-inherited'].includes(ui.case);
+    if (ui.case === 'image-inherited' && !(await imageInput.textContent()).includes(await ui.t('settings.providers.models.advanced.supported'))) throw Error('Mixed override provenance must show its common effective capability');
     const defaultSupported = ui.case !== 'image-unsupported';
     const label = async supported => {
       const value = await ui.t('settings.providers.models.advanced.' + (supported ? 'supported' : 'unsupported'));

@@ -26,7 +26,10 @@ void mountPage({
         queueMicrotask(() => finishOldImageSave?.());
       }),
       maker: {
-    getModelImageInputOverride: async () => ({ value: imageInput, mixed: false }),
+    getModelImageInputOverride: async () => ({
+      value: imageInput ?? (ctx.case === 'image-inherited' ? true : null),
+      mixed: ctx.case === 'image-inherited' && imageInput === null,
+    }),
     setModelImageInputOverride: async (_target: unknown, value: boolean | null) => {
       imageInput = value;
       if (ctx.case === 'owner-repair' && value === false) {
@@ -55,6 +58,7 @@ void mountPage({
         efforts:meta.efforts ?? [], defaultEffort:meta.defaultEffort ?? 'medium',
         supportsImageInput:ctx.case === 'image-unknown' ? undefined
           : ctx.case === 'image-unsupported' || (ctx.case === 'image-mixed' && agent === 'claude-code') ? false : true,
+        ...(ctx.case === 'image-inherited' ? { imageInputDefault: { supportsImageInput: agent !== 'codex' } } : {}),
         supportsFastMode:true,
         supportsUltrafastMode:agent === 'codex' && ctx.case !== 'unavailable' && ctx.case !== 'legacy-sol',
       };

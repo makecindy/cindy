@@ -439,17 +439,23 @@ export function ModelAdvancedDrawer({
   const imageInputDefault = modelImageInputDefault(primaryModel, row.id);
   // An undeclared catalog has no default option: both choices remain explicit overrides.
   // A failed read retains the chat route's effective fields, independently of media routes.
-  const imageInputValue = imageInputOverride.value ?? (imageInputOverride.error
+  const imageInputValue = imageInputOverride.value ?? (imageInputOverride.error || imageInputOverride.mixed
     ? modelImageInputDefault({ ...primaryModel, imageInputDefault: undefined }, row.id)
     : imageInputDefault);
-  const imageInputTargetDefaults = (contextTarget ? [contextTarget, ...contextTarget.relatedTargets] : []).map(({ agent }) => {
+  const imageInputTargets = contextTarget ? [contextTarget, ...contextTarget.relatedTargets] : [];
+  const imageInputTargetDefaults = imageInputTargets.map(({ agent }) => {
     const candidate = row.byAgent[agent];
     return candidate ? modelImageInputDefault(candidate, row.id) : null;
   });
   const imageDefaultsMatch = (value: boolean) => imageInputTargetDefaults.length > 0 &&
     imageInputTargetDefaults.every(defaultValue => defaultValue === value);
-  const imageInputMixed = imageInputOverride.mixed ||
-    (!imageInputOverride.error && imageInputOverride.value === null && new Set(imageInputTargetDefaults).size > 1);
+  // Different override provenance can still resolve to the same effective capability.
+  const imageInputMixed = imageInputOverride.mixed
+    ? new Set(imageInputTargets.map(({ agent }) => {
+        const candidate = row.byAgent[agent];
+        return candidate ? modelImageInputDefault({ ...candidate, imageInputDefault: undefined }, row.id) : null;
+      })).size > 1
+    : !imageInputOverride.error && imageInputOverride.value === null && new Set(imageInputTargetDefaults).size > 1;
 
   const conversational = isAgentSelectableModel(primaryModel, {
     userProvider: provider.source === 'user',
