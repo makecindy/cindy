@@ -190,8 +190,9 @@ describe('model advanced editor', () => {
     try {
       const close = vi.fn();
       const disable = vi.fn();
+      const selectMember = vi.fn();
       const disabled = failure === 'thrown';
-      render(<ModelAdvancedDrawer provider={source} row={groupRow} selectedMemberId={selectedId} open onOpenChange={close} pricePresentationOf={() => null} onDisable={disable} disabled={disabled} paymentRequired={false} />);
+      render(<ModelAdvancedDrawer provider={source} row={groupRow} selectedMemberId={selectedId} onSelectMember={selectMember} open onOpenChange={close} pricePresentationOf={() => null} onDisable={disable} disabled={disabled} paymentRequired={false} />);
       const input = screen.getByRole('textbox', { name: 'settings.providers.models.advanced.displayName' }) as HTMLInputElement;
       const save = screen.getByRole('button', { name: 'settings.providers.models.advanced.saveName' }) as HTMLButtonElement;
       fireEvent.change(input, { target: { value: '   ' } });
@@ -206,6 +207,17 @@ describe('model advanced editor', () => {
       expect(toggle.disabled).toBe(true);
       expect(disable).not.toHaveBeenCalled();
       expect(input.disabled).toBe(true);
+      if (grouped) {
+        const memberSelector = screen.getByRole('button', { name: 'settings.providers.models.advanced.modelId' }) as HTMLButtonElement;
+        // The newly merged selector must not discard this failed-save draft.
+        expect(memberSelector.disabled).toBe(true);
+        // A queued pointer event can still reach Radix after the DOM trigger
+        // becomes disabled. Its selection callback must keep the editor target.
+        fireEvent.pointerDown(memberSelector, { button: 0, ctrlKey: false });
+        fireEvent.click(screen.getByRole('menuitemradio', { name: 'private', exact: true }));
+        expect(selectMember).not.toHaveBeenCalled();
+        await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+      }
       expect((screen.getByRole('button', { name: 'settings.providers.models.advanced.close' }) as HTMLButtonElement).disabled).toBe(true);
       expect(update).toHaveBeenCalledOnce();
       expect(close).not.toHaveBeenCalled();

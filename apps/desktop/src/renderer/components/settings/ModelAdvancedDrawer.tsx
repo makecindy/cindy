@@ -87,6 +87,7 @@ import { modelBrand } from './modelManagementPresentation';
 import { ModelPriceOverrideDialog } from './ModelPriceOverrideDialog';
 import { SettingsTextInput } from './SettingsTextInput';
 import type { UnionModelRow } from './UnifiedModelList';
+import { providersSettings } from './ProvidersSection.settings-search';
 
 const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
@@ -171,7 +172,7 @@ function Section({
         <h4 className="text-12 font-medium text-[var(--text-secondary)]">{title}</h4>
         {hint && (
           <Tip text={hint} contentClassName="z-[10002]">
-            <button
+            <button data-setting-id={providersSettings.providers.id}
               type="button"
               aria-label={hint}
               className="rounded-full p-1 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
@@ -673,14 +674,14 @@ export function ModelAdvancedDrawer({
               <div className="min-w-0 flex-1">
                 {groupRow?.aliasRows && <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <button type="button" disabled={ctx.loading || protocolSaving} aria-label={t('settings.providers.models.advanced.modelId')}
+                    <button data-setting-id={providersSettings.providers.id} type="button" disabled={nameSaving || ctx.loading || protocolSaving} aria-label={t('settings.providers.models.advanced.modelId')}
                       className="mb-2 flex max-w-full items-center gap-1 rounded-full px-2 py-1 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-chip)]">
                       <span className="truncate">{row.id}</span><ChevronDown size={12} />
                     </button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent className="z-[10003]" align="start">
                     <DropdownMenuRadioGroup value={row.id} onValueChange={(id) => {
-                      if (ctx.loading || ctxDirtyRef.current || protocolSaving) return;
+                      if (nameSavingRef.current || ctx.loading || ctxDirtyRef.current || protocolSaving) return;
                       const member = memberRows.find((candidate) => candidate.id === id);
                       if (member) onSelectMember?.(member);
                     }}>
@@ -790,7 +791,7 @@ export function ModelAdvancedDrawer({
                                     model.userModelConfig?.api || model.userModelConfig?.piApi || model.userModelConfig?.route?.wireProtocol) ? (
                                     <DropdownMenu>
                                       <DropdownMenuTrigger asChild>
-                                        <button type="button" disabled={configurationBlocked || protocolSaving || imageCapabilitySaving || nameSaving}
+                                        <button data-setting-id={providersSettings.providers.id} type="button" disabled={configurationBlocked || protocolSaving || imageCapabilitySaving || nameSaving}
                                           aria-label={`${AGENT_LABEL[agent]} · ${t('settings.providers.custom.fields.wireProtocol')}`}
                                           className="rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">
                                           {protocolLabel(protocol.outbound)} <ChevronDown size={12} className="inline" aria-hidden />
@@ -826,7 +827,7 @@ export function ModelAdvancedDrawer({
                                   contentClassName="z-[10002]"
                                   text={t('settings.providers.models.advanced.engineNotConfigured')}
                                 >
-                                  <button
+                                  <button data-setting-id={providersSettings.providers.id}
                                     type="button"
                                     aria-label={`${AGENT_LABEL[agent]} · ${t('settings.providers.models.advanced.engineNotConfigured')}`}
                                     className="inline-flex rounded-full p-1"
@@ -837,7 +838,7 @@ export function ModelAdvancedDrawer({
                               )}
                             </span>
                             <span className="inline-flex shrink-0 rounded-full border border-transparent p-0.5">
-                              <Switch
+                              <Switch data-setting-id={providersSettings.providers.id}
                                 aria-describedby={protocol ? protocolId : undefined}
                                 data-compatibility={compatibility || undefined}
                                 checked={
@@ -865,7 +866,7 @@ export function ModelAdvancedDrawer({
                         );
                       })}
                       {visibilityCustomized && !paymentRequired && selectionAvailable && (
-                        <Button
+                        <Button data-setting-id={providersSettings.providers.id}
                           variant="secondary"
                           size="sm"
                           tone="quiet"
@@ -888,7 +889,7 @@ export function ModelAdvancedDrawer({
                       title={t('settings.providers.models.advanced.defaultEffort')}
                       hint={t('settings.providers.models.advanced.defaultEffortHint')}
                     >
-                      <SegmentedControl
+                      <SegmentedControl data-setting-id={providersSettings.providers.id}
                         className="mt-1"
                         fullWidth
                         // Six translated labels exceed a details column. Keep every
@@ -920,7 +921,7 @@ export function ModelAdvancedDrawer({
                         (a) =>
                           rememberedEffort(a, row.byAgent[a]!.id) !== undefined,
                       ) && (
-                        <Button
+                        <Button data-setting-id={providersSettings.providers.id}
                           variant="secondary"
                           size="sm"
                           tone="quiet"
@@ -957,7 +958,7 @@ export function ModelAdvancedDrawer({
                           {supportsMillionContext && (
                             <div className="mt-2 flex gap-2">
                               {[{ label: '256K', tokens: 262144 }, { label: '1M', tokens: 1_000_000 }].map((preset) => (
-                                <Button key={preset.tokens} variant={effectiveLimit === preset.tokens ? 'primary' : 'secondary'} compact
+                                <Button data-setting-id={providersSettings.providers.id} key={preset.tokens} variant={effectiveLimit === preset.tokens ? 'primary' : 'secondary'} compact
                                   aria-pressed={effectiveLimit === preset.tokens}
                                   disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
                                   onClick={() => {
@@ -978,7 +979,7 @@ export function ModelAdvancedDrawer({
                                   : 'border-[var(--settings-theme-card-border)]',
                               )}
                             >
-                              <input
+                              <input data-setting-id={providersSettings.providers.id}
                                 value={ctxDraft}
                                 onChange={(event) => {
                                   ctxDirtyRef.current = true;
@@ -1011,7 +1012,7 @@ export function ModelAdvancedDrawer({
                               })}
                             </span>
                             {ctx.isCustomized && (
-                              <button
+                              <button data-setting-id={providersSettings.providers.id}
                                 type="button"
                                 onClick={resetCtx}
                                 disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
@@ -1079,7 +1080,7 @@ export function ModelAdvancedDrawer({
                         <Row label={t('settings.providers.models.advanced.imageCapability.label')}>
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
-                              <button type="button" disabled={configurationBlocked || nameSaving || protocolSaving || imageCapabilitySaving || !selectionAvailable || paymentRequired}
+                              <button data-setting-id={providersSettings.providers.id} type="button" disabled={configurationBlocked || nameSaving || protocolSaving || imageCapabilitySaving || !selectionAvailable || paymentRequired}
                                 aria-label={t('settings.providers.models.advanced.imageCapability.label')}
                                 className="rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">
                                 {t(`settings.providers.models.advanced.imageCapability.${imageCapability}`)} <ChevronDown size={12} className="inline" aria-hidden />
@@ -1104,7 +1105,7 @@ export function ModelAdvancedDrawer({
                         <Row label={t('settings.providers.models.advanced.videoCapability.label')}>
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
-                              <button type="button" disabled={configurationBlocked || nameSaving || protocolSaving || imageCapabilitySaving || !selectionAvailable || paymentRequired}
+                              <button data-setting-id={providersSettings.providers.id} type="button" disabled={configurationBlocked || nameSaving || protocolSaving || imageCapabilitySaving || !selectionAvailable || paymentRequired}
                                 aria-label={t('settings.providers.models.advanced.videoCapability.label')}
                                 className="rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">
                                 {t(`settings.providers.models.advanced.videoCapability.${videoCapability}`)} <ChevronDown size={12} className="inline" aria-hidden />
@@ -1128,7 +1129,7 @@ export function ModelAdvancedDrawer({
                       {conversational && !isOrganizationManagedProvider(provider) ? (
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <button type="button" disabled={imageInputOverride.loading || localConfigurationBlocked}
+                            <button data-setting-id={providersSettings.providers.id} type="button" disabled={imageInputOverride.loading || localConfigurationBlocked}
                               aria-label={t('settings.providers.models.advanced.imageInput')}
                               className="inline-flex min-h-8 items-center gap-1.5 rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50">
                               {imageInputMixed
@@ -1295,7 +1296,7 @@ export function ModelAdvancedDrawer({
                     {/* 自定义报价:原「⋯」菜单的一项,搬到它真正相关的段落里。
                     XD 网关的价格由服务端定,不给覆盖入口(与 IPC 侧的拒绝一致)。 */}
                     {provider.id !== 'xd' && !isOrganizationManagedProvider(provider) && !paymentRequired && (
-                      <button
+                      <button data-setting-id={providersSettings.providers.id}
                         type="button"
                         onClick={() => setPriceDialogOpen(true)}
                         className="mt-2 text-12 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
@@ -1309,10 +1310,10 @@ export function ModelAdvancedDrawer({
                       <FormField id="model-display-name" label={t('settings.providers.models.advanced.displayName')} className="mb-3">
                         {(control) => (
                           <div className="flex flex-wrap items-center gap-2">
-                            <SettingsTextInput {...control} size="sm" className="min-w-[120px] flex-1"
+                            <SettingsTextInput data-setting-id={providersSettings.providers.id} {...control} size="sm" className="min-w-[120px] flex-1"
                               value={nameDraft} disabled={nameSaving} maxLength={256}
                               onChange={(value) => { nameDirtyRef.current = true; setNameDraft(value); }} />
-                            <Button type="button" variant="secondary" size="md" compact loading={nameSaving}
+                            <Button data-setting-id={providersSettings.providers.id} type="button" variant="secondary" size="md" compact loading={nameSaving}
                               disabled={configurationBlocked || nameDraft.trim().length > 256 || !nameDraft.trim() || !nameDirtyRef.current || protocolSaving || imageCapabilitySaving}
                               onClick={() => void saveModelName()}>
                               {t('settings.providers.models.advanced.saveName')}
@@ -1347,7 +1348,7 @@ export function ModelAdvancedDrawer({
                 the manufacturer reference when one is declared. */}
             {!paymentRequired && (
               <div className="flex shrink-0 flex-col gap-2 border-t border-[var(--settings-theme-card-border)] px-5 py-3">
-                <Button
+                <Button data-setting-id={providersSettings.providers.id}
                   variant="secondary"
                   size="md"
                   compact
@@ -1360,7 +1361,7 @@ export function ModelAdvancedDrawer({
                     : t('settings.providers.models.disableModel')}
                 </Button>
                 {isLocalOllama && onDeleteLocal && (
-                  <Button
+                  <Button data-setting-id={providersSettings.providers.id}
                     variant="secondary"
                     size="md"
                     tone="danger"
