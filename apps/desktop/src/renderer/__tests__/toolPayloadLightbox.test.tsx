@@ -234,3 +234,22 @@ describe('ToolPayloadLightbox shared file diff mode', () => {
     );
   });
 });
+
+// Tool payload previews carry the shared preview marker like image / text / video
+// previews, so window-level Esc owners elsewhere (sidebar Customize, find-in-page)
+// yield the press that closes the preview instead of also acting on it.
+describe('ToolPayloadLightbox preview layer', () => {
+  it.each([
+    { kind: 'diff' as const, files: [] },
+    { kind: 'json' as const, title: 'Bash', toolInput: { command: 'ls' } },
+  ])('$kind previews mark themselves as the preview layer', (payload) => {
+    vi.useFakeTimers();
+    render(
+      <Tooltip.Provider>
+        <ToolPayloadLightbox payload={payload} onClose={vi.fn()} />
+      </Tooltip.Provider>,
+    );
+    const layer = document.querySelector('[data-lightbox-layer]');
+    expect(layer?.contains(document.querySelector('[data-tool-payload-lightbox-card]'))).toBe(true);
+  });
+});
