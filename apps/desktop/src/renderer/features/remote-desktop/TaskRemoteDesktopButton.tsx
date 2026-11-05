@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 import { useEffect, useRef, useState } from 'react';
 import { LoaderCircle, Monitor, MonitorOff } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -28,7 +29,7 @@ export function TaskRemoteDesktopButton({
 }) {
   const { t } = useTranslation();
   const devices = useDeviceLinkDeviceList();
-  const name = devices?.find((device) => device.deviceId === deviceId)?.name || deviceId;
+  const name = deviceDisplayName(deviceId, undefined, devices ?? []);
   const availability = useRemoteDesktopAvailability(deviceId);
   const [opening, setOpening] = useState(false);
   const mounted = useRef(true);

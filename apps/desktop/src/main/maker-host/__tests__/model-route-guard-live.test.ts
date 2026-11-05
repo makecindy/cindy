@@ -4,7 +4,9 @@ const h = vi.hoisted(() => ({
   catalog: { modelRegistry: {} },
   listProviders: vi.fn(),
   effectiveSourceIdForModel: vi.fn(),
+  readDeviceProviderViews: vi.fn(),
 }));
+
 
 vi.mock('@cindy/model-providers', async (importOriginal) => ({
   findCatalogModel: (await importOriginal<typeof import('@cindy/model-providers')>()).findCatalogModel,
@@ -44,6 +46,24 @@ import {
   resolveScheduledModelSelectionLive,
   resolveLenientSessionRoute,
 } from '../model-route-guard-live.js';
+
+// Unit: use the remote authorized catalog even when the local provider has the
+// same id. An offline/revoked share must fail before trying local credentials.
+describe('scheduled remote model catalog', () => {
+  it('resolves only the selected computer catalog and preserves its axes', async () => {
+    vi.clearAllMocks();
+    h.readDeviceProviderViews.mockResolvedValue([{ id: 'shared-provider', connected: true, agents: ['pi'], routing: { pi: {} },
+      models: { pi: [{ id: 'remote-model', efforts: ['high'], defaultEffort: 'high', supportsFastMode: false }] } }]);
+    const choice = { agentKind: 'pi' as const, agentDeviceId: 'shared:owner', model: 'remote-model',
+      providerId: 'shared-provider', effort: 'ultra' as const, fastMode: true };
+    await expect(resolveScheduledModelSelectionLive(choice, h.readDeviceProviderViews)).resolves.toMatchObject({ ...choice, effort: 'high', fastMode: false });
+    expect(h.listProviders).not.toHaveBeenCalled();
+    expect(h.readDeviceProviderViews).toHaveBeenCalledWith('shared:owner');
+    h.readDeviceProviderViews.mockRejectedValueOnce(new Error('[REMOTE_AGENT_SHARE_REMOVED] removed'));
+    await expect(resolveScheduledModelSelectionLive(choice, h.readDeviceProviderViews)).rejects.toThrow('REMOTE_AGENT_SHARE_REMOVED');
+    expect(h.listProviders).not.toHaveBeenCalled();
+  });
+});
 
 describe('resolveDefaultScheduleRoute', () => {
   beforeEach(() => {

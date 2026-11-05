@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 /**
  * 远程 Agent 的「其他电脑」模型目录(纯逻辑,与桌面模型面板同口径):
  * 手机的模型选择器在被控电脑自己的供应商之后,列出同账号其他电脑上开了「允许被远程调用」的
@@ -53,7 +54,7 @@ export function selectRemoteAgentDevices(input: {
     .filter((item) => item.canOpen || input.keepDeviceIds.includes(item.device.deviceId))
     .map((item) => ({
       deviceId: item.device.deviceId,
-      name: item.device.name?.trim() || item.device.deviceId,
+      name: deviceDisplayName(item.device.deviceId, item.device.name, input.devices),
       canOpen: item.canOpen,
     }));
 }
@@ -87,7 +88,8 @@ export function providerShareRemoteCatalogs(input: {
     if (seen.has(share.agentDeviceId)) continue;
     seen.add(share.agentDeviceId);
     const kept = keep.delete(share.agentDeviceId);
-    const reachable = share.status === 'active' && share.hostOnline;
+    const reachable = share.status === 'active' && (share.hostOnline
+      || (share.payload?.providerContinuity?.remainingMs ?? 0) > 0);
     if (!kept && (input.keepOnly || !reachable)) continue;
     const payload = share.payload;
     catalogs.push({

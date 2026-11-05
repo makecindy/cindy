@@ -18,6 +18,20 @@ function session(id: string, deviceId: string, name: string): MobileHomeSessionL
 }
 
 describe('shared tasks in the mobile Home', () => {
+  // #7237 / unit: real Home and native scope-menu projections; existing shared
+  // filtering coverage had only one named computer, missing duplicate fallbacks.
+  it('distinguishes two unnamed computer scopes while preserving selection IDs', () => {
+    const home = buildMobileHomePresentation({ selectedDeviceId: 'host-b', devices: [
+      { deviceId: 'host-b', name: 'host-b', canOpen: true },
+      { deviceId: 'host-a', name: 'host-a', canOpen: true },
+    ], sessions: [] });
+    const scopes = home.deviceFilters.filter(item => item.deviceId !== null);
+    expect(scopes.find(item => item.deviceId === 'host-a')?.label).toMatch(/ \(1\)$/);
+    expect(scopes.find(item => item.deviceId === 'host-b')?.label).toMatch(/ \(2\)$/);
+    expect(scopes.find(item => item.selected)?.deviceId).toBe('host-b');
+    expect(buildHomeScopePullDownActions(scopes, 'All').map(item => item.title)).toEqual(scopes.map(item => item.label));
+  });
+
   it.each([undefined, peer])('keeps shared rows but excludes task peers from device scopes (selection %s)', (selectedDeviceId) => {
     const home = buildMobileHomePresentation({
       selectedDeviceId,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  normalizeWorkingDirForComparison,
   normalizeWorkingDirForGrouping,
   normalizeWorkingDirForProjectSettings,
   normalizeWorkingDirForStorage,
@@ -8,6 +9,19 @@ import {
 } from '../workingDir';
 
 describe('workingDir normalization', () => {
+  // #7644 (unit): grouping and settings used to share strict container matching.
+  // Mixed-case Windows containers must become searchable without changing the settings scope.
+  it.each([
+    ['C:/Work/Repo/.CINDY-WORKTREES/topic', 'C:/Work/Repo'],
+    ['//Server/Share/Repo/.XDT-WORKTREES/topic', '//Server/Share/Repo'],
+  ])('groups %s while preserving its independent project settings', (value, base) => {
+    expect(normalizeWorkingDirForGrouping(value)).toBe(base);
+    expect(normalizeWorkingDirForComparison(value)).toBe(normalizeWorkingDirForComparison(base));
+    expect(normalizeWorkingDirForProjectSettings(value)).toBe(value);
+    const standardContainer = value.replace(/\.(CINDY|XDT)-WORKTREES/, (name) => name.toLowerCase());
+    expect(normalizeWorkingDirForProjectSettings(standardContainer)).toBe(base);
+  });
+
   it('preserves significant whitespace through repeated storage normalization', () => {
     for (const path of ['/repo ', '/repo /', '/repo\t']) {
       const expected = path.endsWith('/') ? path.slice(0, -1) : path;

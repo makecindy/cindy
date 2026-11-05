@@ -13,6 +13,12 @@ import type { BotSessionOwner } from '@/features/cc-agent/lib/projectGrouping';
 import type { BotProfile } from './botStore';
 import type { RemoteBot } from './remoteBotRoster';
 
+/** The durable registry has exactly one canonical link; kind is only presentation. */
+export function canonicalBotSession<T extends { role?: unknown }>(bot: { sessions: readonly T[] }): T | undefined {
+  const matches = bot.sessions.filter((session) => session.role === 'canonical');
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 /**
  * Find the Bot that owns a real Cindy Session through the projected
  * `bot_session_links` registry. The compatibility mirror on BotProfile is
@@ -47,10 +53,9 @@ export function botRouteForOwnedSession(
   const bot = findBotProfileForSession(profiles, sessionId);
   if (!bot) return null;
   const botRoute = `/bots/${encodeURIComponent(bot.id)}`;
-  const canonicalSessionId = bot.sessions.find(
-    (session) => session.role === 'canonical' || session.kind === 'chat',
-  )?.id;
-  if (canonicalSessionId === sessionId) return { route: botRoute, consumesAlert: false };
+  const canonicalSessionId = canonicalBotSession(bot)?.id;
+  // Keep the original id even if the cached link becomes history before the click lands.
+  if (canonicalSessionId === sessionId) return { route: `${botRoute}/session/${encodeURIComponent(sessionId)}`, consumesAlert: false };
   return { route: `/cc-agent/${encodeURIComponent(sessionId)}`, consumesAlert: false };
 }
 
@@ -65,7 +70,7 @@ export function remoteBotRouteForSession(
   const bot = remoteBots.find((candidate) => candidate.sessionId === sessionId);
   if (!bot) return null;
   return {
-    route: `/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}`,
+    route: `/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}/session/${encodeURIComponent(sessionId)}`,
     consumesAlert: false,
   };
 }
@@ -120,7 +125,8 @@ export interface SessionEntryNavigatorDeps {
   /** Re-reads the projection for a Session it did not know (see resolveBotRouteForSessionEntry). */
   resolveBotRoute: (sessionId: string) => Promise<BotSessionEntryTarget | null>;
   /** `islandEntryId` is handed to a route whose gate disposes the card (gateConsumesAlert). */
-  openBotRoute: (route: string, islandEntryId?: string) => void;
+  openBotRoute: (route: string, islandEntryId?: string, messageClientId?: string, sessionId?: string) => void;
+  captureOwner?: () => () => boolean;
   /** Asks main to dispose the card of this island click (see BotSessionEntryTarget). */
   consumeAlert: (sessionId: string, islandEntryId: string) => void;
   /** `isLatest` lets the ordinary path drop its own late async route result too. */
@@ -161,7 +167,7 @@ export function createSessionEntryNavigator(
   // coming back never counts as "stayed".
   let committedSinceOpen = new Set<string>();
   let pending: { entry: number; sessionId: string; islandEntryId: string; route: string } | null = null;
-  const openBotTarget = (entry: number, sessionId: string, target: BotSessionEntryTarget, disposalId: string | undefined) => {
+  const openBotTarget = (entry: number, sessionId: string, target: BotSessionEntryTarget, disposalId: string | undefined, messageClientId?: string) => {
     if (target.consumesAlert && disposalId) {
       if (committedPath === target.route) {
         deps.consumeAlert(sessionId, disposalId);
@@ -170,7 +176,7 @@ export function createSessionEntryNavigator(
       }
     }
     try {
-      deps.openBotRoute(target.route, target.gateConsumesAlert ? disposalId : undefined);
+      deps.openBotRoute(target.route, target.gateConsumesAlert ? disposalId : undefined, messageClientId, sessionId);
     } catch (error) {
       if (pending?.entry === entry) pending = null;
       throw error;
@@ -180,13 +186,14 @@ export function createSessionEntryNavigator(
     const entry = ++sequence;
     pending = null;
     committedSinceOpen = new Set();
-    const isLatest = () => sequence === entry;
+    const ownerCurrent = deps.captureOwner?.() ?? (() => true);
+    const isLatest = () => sequence === entry && ownerCurrent();
     if (deviceId && deps.isRemoteDevice) {
       void deps.isRemoteDevice(deviceId).then((remote) => {
-        if (!isLatest()) return;
+        if (!isLatest() || committedSinceOpen.size > 0) return;
         if (remote) deps.openOrdinary(sessionId, messageClientId, isLatest, deviceId);
         else openLocal();
-      });
+      }).catch(() => undefined);
       return;
     }
     openLocal();
@@ -194,11 +201,11 @@ export function createSessionEntryNavigator(
       const known = deps.readKnownBotRoute(sessionId);
       // Background tasks keep their ordinary page with message anchors and visible-session reporting.
       if (known && !known.route.startsWith('/cc-agent/')) {
-        openBotTarget(entry, sessionId, known, islandEntryId);
+        openBotTarget(entry, sessionId, known, islandEntryId, messageClientId);
         return;
       }
       let movedToBotPage = false;
-      deps.openOrdinary(sessionId, messageClientId, () => isLatest() && !movedToBotPage);
+      deps.openOrdinary(sessionId, messageClientId, () => isLatest() && !movedToBotPage && committedSinceOpen.size === 0);
       if (known) return;
       const ordinaryRoute = `/cc-agent/${encodeURIComponent(sessionId)}`;
       void deps.resolveBotRoute(sessionId).then((target) => {
@@ -209,8 +216,8 @@ export function createSessionEntryNavigator(
           if (path !== ordinaryRoute && path !== target.route) return;
         }
         movedToBotPage = true;
-        openBotTarget(entry, sessionId, target, islandEntryId);
-      });
+        openBotTarget(entry, sessionId, target, islandEntryId, messageClientId);
+      }).catch(() => undefined);
     }
   };
   return Object.assign(open, {

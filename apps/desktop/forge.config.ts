@@ -24,6 +24,7 @@ import { preparePackagedNodePty } from './forge-node-pty';
 import { prunePackagedRuntime, prunePackagedMigrationSnapshots } from './forge-prune-runtime';
 import { copyRuntimeDependencyTrees as copyRuntimeTrees } from './forge-runtime-deps';
 import { packagedResourcesPath, stagePackagedThirdPartyNotices } from './forge-third-party-notices';
+import { stageMacPermissionLocales } from './forge-mac-locales';
 import {
   swiftTargetTriple,
   swiftTargetTriplesForForgeArch,
@@ -145,6 +146,9 @@ const NATIVE_RUNTIME_DEPS = [
   '@protobufjs/pool',
   '@protobufjs/utf8',
   'long',
+  // turndown keeps this require in the bundled browser recipes. Ship its
+  // dependency-free DOM implementation so packaged startup can resolve it.
+  '@mixmark-io/domino',
   // @parcel/watcher: file-browser 用的 OS 原生 watcher。N-API 模块, 无需
   // electron-rebuild, 但平台特定子包 (@parcel/watcher-{platform}-{arch})
   // 必须跟主包一起进包, 否则运行时 require('@parcel/watcher') 找不到 .node。
@@ -801,6 +805,8 @@ function extraResourcesForTarget(targetPlatform: string): string[] {
     'resources/cc-manager',
     'resources/anthropic-compat-proxy',
     'resources/remote-file-service',
+    // 自建中转单文件:「部署到我的服务器」经 SSH 上传到用户服务器运行。
+    'resources/device-link-relay',
     // .cindy 发布者/审核 Ed25519 公钥信任表(私钥永不进客户端)。
     'resources/ghost-trust.json',
     // 远端 pi manager bundle(Node 单例 daemon,SSH remote 会话的进程持有器)。
@@ -927,6 +933,7 @@ const MACOS_SESSION_DRAG_RELEASE_HELPER_DEPLOYMENT_TARGET = 'macos10.15';
 const MACOS_MENUBAR_HELPER_DEPLOYMENT_TARGET = 'macos14.0';
 const MACOS_XBOX_GAMEPAD_HELPER_DEPLOYMENT_TARGET = 'macos11.0';
 const MACOS_REMOTE_DESKTOP_INPUT_DEPLOYMENT_TARGET = 'macos10.15';
+const MACOS_REGION_SCREENSHOT_HELPER_DEPLOYMENT_TARGET = 'macos10.15';
 
 function swiftArchLabel(arch: ForgeArch, deploymentTarget: string): string {
   return swiftTargetTriplesForForgeArch(arch, deploymentTarget)
@@ -1208,8 +1215,30 @@ function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void
     if (arch !== 'x64' && arch !== 'arm64')
       throw new Error('Unsupported Windows desktop architecture');
     const target = arch === 'arm64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc';
-    for (const helper of ['windows-input', 'windows-host']) {
+    // The host EXE and cdylib otherwise compete for the same PDB filename.
+    // Match source-mode builds by isolating their Cargo output directories.
+    for (const [helper, buildTarget, artifact, destination] of [
+      [
+        'windows-input',
+        '--bin',
+        'cindy-windows-desktop-input.exe',
+        'cindy-windows-desktop-input.exe',
+      ],
+      [
+        'windows-host',
+        '--bin',
+        'cindy-windows-desktop-host.exe',
+        'cindy-windows-desktop-host.exe',
+      ],
+      [
+        'windows-host',
+        '--lib',
+        'cindy_windows_desktop_host.dll',
+        'cindy-windows-desktop-host.node',
+      ],
+    ] as const) {
       const root = path.join(__dirname, 'native', 'remote-desktop', helper);
+      const targetDir = path.join(root, 'target', buildTarget === '--lib' ? 'addon' : 'bin');
       const result = spawnSync(
         'cargo',
         [
@@ -1218,21 +1247,21 @@ function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void
           '--locked',
           '--target',
           target,
+          '--config',
+          path.join(__dirname, 'native', 'remote-desktop', '.cargo', 'config.toml'),
           '--manifest-path',
           path.join(root, 'Cargo.toml'),
+          '--target-dir',
+          targetDir,
+          buildTarget,
+          ...(buildTarget === '--bin' ? [path.parse(artifact).name] : []),
         ],
         { stdio: 'inherit' },
       );
       if (result.error || result.status !== 0)
         throw new Error(`Remote desktop ${helper} build failed`);
-      const output = path.join(root, 'target', target, 'release');
-      const name = `cindy-windows-desktop-${helper === 'windows-input' ? 'input' : 'host'}`;
-      fs.copyFileSync(path.join(output, `${name}.exe`), path.join(destDir, `${name}.exe`));
-      if (helper === 'windows-host')
-        fs.copyFileSync(
-          path.join(output, 'cindy_windows_desktop_host.dll'),
-          path.join(destDir, `${name}.node`),
-        );
+      const output = path.join(targetDir, target, 'release');
+      fs.copyFileSync(path.join(output, artifact), path.join(destDir, destination));
     }
   }
 }
@@ -1353,6 +1382,57 @@ function buildWindowsInputHelper(
     );
   const name = `cindy-windows-${kind}-helper.exe`;
   const dest = path.join(__dirname, 'resources', 'tools', group);
+  fs.mkdirSync(dest, { recursive: true });
+  fs.copyFileSync(path.join(source, 'target', target, 'release', name), path.join(dest, name));
+}
+
+/**
+ * 框选截图的窗口 / 界面元素识别程序 (只产出几何信息)。Windows 用 Rust + UI
+ * Automation, macOS 用 Swift + CGWindowList / AX; 缺失时截图照常可用, 只是不吸附。
+ */
+function buildRegionScreenshotHelper(platform: ForgePlatform, arch: ForgeArch): void {
+  const dest = path.join(__dirname, 'resources', 'tools', 'region-screenshot');
+  if (process.platform === 'darwin' && isMacForgePlatform(platform)) {
+    const src = path.join(__dirname, 'native', 'region-screenshot', 'macos-snapshot.swift');
+    fs.mkdirSync(dest, { recursive: true });
+    const output = path.join(dest, 'cindy-macos-screenshot-snapshot');
+    buildSwiftHelperForForgeArch(
+      src,
+      output,
+      arch,
+      MACOS_REGION_SCREENSHOT_HELPER_DEPLOYMENT_TARGET,
+      ['-O'],
+      'region screenshot snapshot helper',
+    );
+    fs.chmodSync(output, 0o755);
+    return;
+  }
+  if (process.platform !== 'win32' || platform !== 'win32') return;
+  const target =
+    arch === 'arm64' ? 'aarch64-pc-windows-msvc' : arch === 'x64' ? 'x86_64-pc-windows-msvc' : null;
+  if (!target) throw new Error(`[forge] Unsupported region screenshot helper architecture: ${arch}`);
+  const source = path.join(__dirname, 'native', 'region-screenshot', 'windows-snapshot');
+  const userCargo = process.env.USERPROFILE
+    ? path.join(process.env.USERPROFILE, '.cargo', 'bin', 'cargo.exe')
+    : 'cargo';
+  const result = spawnSync(
+    fs.existsSync(userCargo) ? userCargo : 'cargo',
+    [
+      'build',
+      '--locked',
+      '--release',
+      '--target',
+      target,
+      '--manifest-path',
+      path.join(source, 'Cargo.toml'),
+    ],
+    { stdio: 'inherit', windowsHide: true },
+  );
+  if (result.error || result.status !== 0)
+    throw new Error(
+      `[forge] Region screenshot helper build failed: ${result.error?.message ?? result.status}`,
+    );
+  const name = 'cindy-windows-screenshot-snapshot.exe';
   fs.mkdirSync(dest, { recursive: true });
   fs.copyFileSync(path.join(source, 'target', target, 'release', name), path.join(dest, name));
 }
@@ -1828,8 +1908,8 @@ const config: ForgeConfig = {
     //
     //   Windows / Linux 完全忽略此字段。
     extendInfo: {
-      NSMicrophoneUsageDescription: 'This app needs access to the microphone for voice input.',
-      NSAudioCaptureUsageDescription: 'Share computer audio with your connected remote desktop.',
+      NSMicrophoneUsageDescription: 'Cindy uses the microphone for voice input and screen recordings.',
+      NSAudioCaptureUsageDescription: 'Cindy captures computer audio for screen recordings and your connected remote desktop.',
       // agent 会话中访问受 TCC 保护的目录(桌面/文稿/下载)时，macOS 需要这些声明才能向
       // 用户展示授权弹窗；缺失时系统直接静默拒绝，不弹窗。
       NSDesktopFolderUsageDescription:
@@ -1838,14 +1918,15 @@ const config: ForgeConfig = {
         "Cindy's AI agent needs access to read and write files in your Documents folder.",
       NSDownloadsFolderUsageDescription:
         "Cindy's AI agent needs access to read and write files in your Downloads folder.",
-      // 智能通讯录导入: 经 osascript 向"通讯录"发 Apple Events(只读拉取)。
-      // 缺这条声明 macOS 会不弹授权窗直接拒绝(-1743), 用户只看到静默失败。
+      // 通讯录插件(cindy-contacts)的 Node 工作进程经 osascript 向"通讯录"发 Apple Events
+      // 导入名片; macOS 按 Cindy 应用授权。缺这条声明会不弹授权窗直接拒绝(-1743)。
       NSAppleEventsUsageDescription:
         'Cindy uses Apple Events to read Contacts you import and to add or update Contacts you explicitly export.',
       NSContactsUsageDescription:
         'Cindy accesses Contacts only when you import them or explicitly export additions or updates.',
+      // Device Link 局域网直连(direct-link-v1)。
       NSLocalNetworkUsageDescription:
-        'Cindy uses your local network to sync end-to-end encrypted Smart Contacts directly between your online desktop devices.',
+        'Cindy uses your local network to connect directly, with encryption, to your other devices signed in to the same account.',
       CFBundleDocumentTypes: [
         {
           CFBundleTypeName: 'Folder',
@@ -1897,8 +1978,8 @@ const config: ForgeConfig = {
     // helper bundles also need the usage description for macOS TCC to register
     // the packaged app correctly in Privacy & Security > Microphone.
     extendHelperInfo: {
-      NSMicrophoneUsageDescription: 'This app needs access to the microphone for voice input.',
-      NSAudioCaptureUsageDescription: 'Share computer audio with your connected remote desktop.',
+      NSMicrophoneUsageDescription: 'Cindy uses the microphone for voice input and screen recordings.',
+      NSAudioCaptureUsageDescription: 'Cindy captures computer audio for screen recordings and your connected remote desktop.',
       NSDesktopFolderUsageDescription:
         "Cindy's AI agent needs access to read and write files on your Desktop.",
       NSDocumentsFolderUsageDescription:
@@ -1926,6 +2007,9 @@ const config: ForgeConfig = {
       (buildPath, _electronVersion, platform, _arch, callback) => {
         try {
           prunePackagedMigrationSnapshots(packagedResourcesPath(buildPath, platform));
+          if (platform === 'darwin' || platform === 'mas') {
+            stageMacPermissionLocales(packagedResourcesPath(buildPath, platform));
+          }
           callback();
         } catch (err) {
           callback(err as Error);
@@ -1977,12 +2061,26 @@ const config: ForgeConfig = {
       buildWindowsGamepadHelper(platform, arch);
       buildWindowsAtomicRenameHelper(platform, arch);
       buildWindowsTaskbarAddon(platform, arch);
+      if (platform === 'darwin') {
+        const trackpadBuild = spawnSync(
+          process.execPath,
+          [
+            path.join(__dirname, 'native/trackpad/build.mjs'),
+            path.join(__dirname, 'resources/tools/trackpad/cindy-trackpad.node'),
+            arch,
+          ],
+          { stdio: 'inherit' },
+        );
+        if (trackpadBuild.error || trackpadBuild.status !== 0)
+          throw new Error('Native trackpad build failed');
+      }
       buildMacVoiceInputModifierShortcutListener(platform, arch);
       buildMacAgentIslandHelper(platform, arch);
       buildMacComputerPermissionGuideHelper(platform, arch);
       buildMacSessionDragReleaseHelper(platform, arch);
       buildMacMenubarHelper(platform, arch);
       buildRemoteDesktopInput(platform, arch);
+      buildRegionScreenshotHelper(platform, arch);
     },
     // packaged dir 产出后、makers 跑之前签内部 .exe。这样 NSIS 包出来的
     // Setup.exe 内嵌的、和 publish 阶段从同一 packagedDir 打的热更 ZIP 内嵌的，
@@ -2057,14 +2155,18 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
-          entry: 'src/main/contacts-sync/contactsSyncCodecWorker.ts',
-          config: 'vite.contacts-sync-codec-worker.config.ts',
-          // 大通讯录 JSON/gzip/crypto 隔离在线程中，避免阻塞 Electron main。
+          entry: 'src/main/bot-import/openclawCronWorker.ts',
+          config: 'vite.node-worker.config.ts',
           target: 'preload',
         },
         {
-          entry: 'src/main/bot-import/openclawCronWorker.ts',
-          config: 'vite.contacts-sync-codec-worker.config.ts',
+          entry: 'src/main/maker-host/claudeCliStatusWorker.ts',
+          config: 'vite.node-worker.config.ts',
+          target: 'preload',
+        },
+        {
+          entry: 'src/main/performance-trace/traceRedactionWorker.ts',
+          config: 'vite.node-worker.config.ts',
           target: 'preload',
         },
         {
@@ -2103,7 +2205,7 @@ const config: ForgeConfig = {
         },
         {
           entry: 'src/main/skillhub/customizationScanProcess.ts',
-          config: 'vite.contacts-sync-codec-worker.config.ts',
+          config: 'vite.node-worker.config.ts',
           // File approvals can stall native scandir indefinitely. Keep discovery
           // in a killable utility process so Main can time out and recover.
           target: 'preload',
@@ -2160,6 +2262,27 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          // 全局框选截图浮层与贴图窗口: 各自只暴露截图的固定通道和只读外观快照。
+          entry: 'src/preload/regionScreenshotPreload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
+          entry: 'src/preload/regionScreenshotPinPreload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
+          entry: 'src/preload/regionScreenshotEditorPreload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
+          entry: 'src/preload/recordingPreviewPreload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
           // 资源用量独立窗不加载主应用的通用 bridge 与模块级同步初始化。
           entry: 'src/preload/resourceUsagePreload.ts',
           config: 'vite.preload.config.ts',
@@ -2186,8 +2309,12 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
-          // 意识电子脑管子桥(离屏沙箱逻辑页专用;面板 webview 无 preload,
-          // hardener 亦强制 delete。见 brain/runtime/electronSandboxAdapter)。
+          entry: 'src/preload/ghostPagePreload.ts',
+          config: 'vite.ghost-preload.config.ts',
+          target: 'preload',
+        },
+        {
+          // 意识电子脑管子桥，独立于插件可见页面的最小选模桥。
           entry: 'src/preload/ghostPreload.ts',
           config: 'vite.ghost-preload.config.ts',
           target: 'preload',

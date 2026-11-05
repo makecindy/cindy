@@ -6,6 +6,7 @@ import {
   PROVIDER_SHARE_GROUP_STATUS_REQUEST,
   readProviderShareGroupSize,
   readProviderShareGroupStatus,
+  readProviderMetadataContinuity,
   type ProviderShareGroupState,
 } from '@cindy/device-link';
 
@@ -47,7 +48,9 @@ export function SharedProviderGroupStatus({
         if (!canApply()) return;
         const provider = Array.isArray(raw?.providers) ? raw.providers.find((entry) => entry?.id === providerId) : null;
         if (!provider) throw new Error('Shared provider missing');
-        setSnapshot({ size: readProviderShareGroupSize(provider), states: readProviderShareGroupStatus(provider) });
+        const states = readProviderShareGroupStatus(provider);
+        setSnapshot({ size: readProviderShareGroupSize(provider),
+          states: readProviderMetadataContinuity(raw)?.stale ? states?.map(() => 'unknown') ?? null : states });
         setFailed(false);
       } catch {
         if (!canApply()) return;

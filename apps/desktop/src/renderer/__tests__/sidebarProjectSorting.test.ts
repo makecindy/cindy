@@ -59,6 +59,32 @@ function project(
 }
 
 describe('sidebar project sorting', () => {
+  // #7469, unit: grouping reuse must survive both production sorting stages.
+  // Existing ordering assertions did not catch needless project replacement.
+  it('retains an unchanged project through sidebar and main-list sorting but applies a changed order', () => {
+    const older = session({ id: 'older', updatedAt: '2026-01-01T00:00:00Z' });
+    const newer = session({ id: 'newer', updatedAt: '2026-01-02T00:00:00Z' });
+    const node = project({ workingDir: '/repo', displayName: 'repo', sessions: [newer, older] });
+    const sorted = sortProjectsForSidebar([node], 'recency', []);
+    expect(sorted[0]).toBe(node);
+    const entries = buildMainListEntries({
+      projects: sorted, dialogues: [], unclassified: [], groupBy: 'project',
+      groupDialogue: false, sortBy: 'recency', manualProjectOrder: [],
+    });
+    expect(entries[0].kind).toBe('project');
+    if (entries[0].kind !== 'project') throw new Error('Missing project');
+    expect(entries[0].project).toBe(node);
+    const reversed = { ...node, sessions: [older, newer] };
+    const changed = buildMainListEntries({
+      projects: [reversed], dialogues: [], unclassified: [], groupBy: 'project',
+      groupDialogue: false, sortBy: 'recency', manualProjectOrder: [],
+    });
+    expect(changed[0].kind).toBe('project');
+    if (changed[0].kind !== 'project') throw new Error('Missing project');
+    expect(changed[0].project.sessions).toEqual([newer, older]);
+    expect(reversed.sessions).toEqual([older, newer]);
+  });
+
   it('applies manual project order with unranked projects after ranked projects', () => {
     const sorted = sortProjectsForSidebar(
       [

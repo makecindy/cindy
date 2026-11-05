@@ -199,4 +199,15 @@ describe('usage limit recovery detection', () => {
       extractUsageLimitRecoveryHint({ message: 'insufficient_quota: add billing credits' }, NOW),
     ).toBeNull();
   });
+
+  it('keeps an upstream overload that also says "rate limit exceeded" out of the limit path', () => {
+    // 实录文案同时命中限额正则与过载短语，过载短语必须优先(否则会按限额的周期
+    // 重置去安排自动续跑，issue #7897)。
+    expect(
+      extractUsageLimitRecoveryHint(
+        { message: 'rate limit exceeded: The engine is currently overloaded, please try again later' },
+        NOW,
+      ),
+    ).toBeNull();
+  });
 });

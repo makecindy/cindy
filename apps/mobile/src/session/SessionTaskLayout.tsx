@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 import { useCallback, useEffect, useRef, type ReactNode, type RefObject } from 'react';
 import { Alert, Platform, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, useNavigation } from 'expo-router';
@@ -32,7 +33,7 @@ export function SessionTaskLayout({ children }: {
   const legacyHistory = readRouteParam(params.resourceHistorySessionId) === sessionId && !!sessionId;
   useEffect(() => {
     if (legacyHistory && deviceId) switchDrawerSessionInPlace(navigation, {
-      sessionId, deviceId, deviceName: readRouteParam(params.deviceName) ?? deviceId,
+      sessionId, deviceId, deviceName: deviceDisplayName(deviceId, readRouteParam(params.deviceName)),
       focusClientId: readRouteParam(params.focusClientId) ?? undefined,
     });
   }, [legacyHistory, deviceId, sessionId, navigation, params.deviceName, params.focusClientId]);
@@ -55,7 +56,7 @@ export function SessionTaskLayout({ children }: {
     beforeSessionSwitchRef.current?.();
     switchDrawerSessionInPlace(navigation, {
       deviceId: targetDeviceId,
-      deviceName: target.deviceLinkDeviceName ?? targetDeviceId,
+      deviceName: deviceDisplayName(targetDeviceId, target.deviceLinkDeviceName),
       sessionId: target.id,
       ...(focusClientId ? { focusClientId } : {}),
     });

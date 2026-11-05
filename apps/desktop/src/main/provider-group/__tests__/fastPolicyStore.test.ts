@@ -27,6 +27,64 @@ const fixture = () => {
 const current = () => {};
 
 describe('durable subscription Fast constraints', () => {
+  // #7848, unit: prepare() must preserve the file and its read cache when an
+  // unacknowledged target is retried. Existing revision tests do not observe IO.
+  it('does not rewrite or reload an unchanged outgoing policy with pending targets', async () => {
+    const config = fixture();
+    const store = createGroupFastPolicyStore(config);
+    const initial = await store.prepare('group', true, ['one', 'two'], current, true);
+    await store.acknowledge('group', 'one', initial.revision, current);
+    const timestamp = new Date('2020-01-01T00:00:00Z');
+    fs.utimesSync(config.filePath(), timestamp, timestamp);
+    const before = store.outgoing().group;
+    const content = fs.readFileSync(config.filePath(), 'utf8');
+    const readFile = vi.spyOn(fs, 'readFileSync');
+    const writeFile = vi.spyOn(fs, 'writeFileSync');
+    try {
+      expect(await store.prepare('group', true, ['two', 'one', 'one'], current, true)).toEqual(
+        before,
+      );
+      expect(await store.prepare('group', true, ['one'], current)).toEqual(before);
+      expect(await store.prepare('group', true, [], current)).toEqual(before);
+      expect(readFile.mock.calls.filter(([file]) => file === config.filePath())).toEqual([]);
+      expect(writeFile.mock.calls.filter(([file]) => file === `${config.filePath()}.tmp`)).toEqual(
+        [],
+      );
+      expect(fs.statSync(config.filePath()).mtimeMs).toBe(timestamp.getTime());
+      expect(fs.readFileSync(config.filePath(), 'utf8')).toBe(content);
+      await expect(
+        store.prepare('group', true, [], () => {
+          throw Error('owner changed');
+        }),
+      ).rejects.toThrow('owner changed');
+    } finally {
+      readFile.mockRestore();
+      writeFile.mockRestore();
+    }
+  });
+
+  // The no-op fast path must still observe other instances and persist new
+  // binding destinations, even when allowFast and the revision stay unchanged.
+  it('refreshes external policy changes and persists a new target without replacing members', async () => {
+    const config = fixture();
+    const store = createGroupFastPolicyStore(config);
+    const other = createGroupFastPolicyStore(config);
+    await store.prepare('group', true, ['one'], current, true);
+    const timestamp = new Date('2020-01-01T00:00:00Z');
+    fs.utimesSync(config.filePath(), timestamp, timestamp);
+    store.outgoing();
+    const external = await other.prepare('group', false, ['one'], current, true);
+    await other.acknowledge('group', 'one', external.revision, current);
+    const next = await store.prepare('group', false, ['two'], current);
+    expect(next).toEqual({
+      revision: external.revision,
+      allowFast: false,
+      members: ['one'],
+      targets: { one: external.revision, two: -1 },
+    });
+    expect(createGroupFastPolicyStore(config).outgoing().group).toEqual(next);
+  });
+
   it('updates actual account keys atomically across instances and survives reload', async () => {
     const config = fixture();
     const a = createProviderFastPolicyStore(config),
@@ -69,6 +127,13 @@ describe('durable subscription Fast constraints', () => {
     expect(store.allows(hostSessionIdFor('consumer', 'task-1'))).toBe(false);
     expect(store.allows('task-1')).toBe(true);
     expect(store.allows(hostSessionIdFor('other', 'task-1'))).toBe(true);
+    const received = store.received('group-owner', 'openai');
+    expect(received).toEqual({ revision: 1, allowFast: false });
+    expect(store.received('unrelated-owner', 'openai')).toBeNull();
+    await store.receive('group-owner', { group: 'openai', ...received!,
+      binding: { sessionId: 'new-offline-task', controllerDeviceId: 'consumer' } }, 'executor', current);
+    expect(store.allows(hostSessionIdFor('consumer', 'new-offline-task'))).toBe(false);
+    expect(store.allows(hostSessionIdFor('other', 'new-offline-task'))).toBe(true);
     await store.receive(
       'owner',
       {

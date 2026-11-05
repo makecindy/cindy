@@ -7,6 +7,8 @@ import { isTerminalAgentErrorEvent, type AgentEvent } from '@cindy/maker-core';
 import { mapJsonPathText, pathTextContext, type ExecutorWorkspace, type PathTextContext } from '../executor/workspace';
 
 const URL_TEXT = /[a-z][a-z0-9+.-]*:\/\/[^\s\x60"'<>()[\]{}]+/gi;
+/** 渠道说明要求的 `[名称](xdt-file:///绝对路径)`；括号内才是完整地址，路径可能带裸空格。 */
+const XDT_PATH_LINK = /\]\((xdt-(?:file|image):\/\/\/[^()\r\n]+)\)/gi;
 const TEXT_BOUNDARIES = new Set(['tool_use', 'tool_result', 'tool_result_full', 'interaction_request', 'done', 'error', 'compact_boundary']);
 const IDENTITY_FIELDS = new Set(['id', 'toolUseId', 'toolUseIds', 'agentMessageId', 'taskId', 'parentToolUseId', 'turnId', 'requestId', 'blockId', 'sessionId', 'sdkSessionId', 'toolName', 'lastToolName', 'model', 'providerId']);
 
@@ -24,6 +26,13 @@ function localFileUrl(value: string, workspace: ExecutorWorkspace): string {
       result.search = url.search;
       result.hash = url.hash;
       return result.href;
+    }
+    if ((url.protocol === 'xdt-file:' || url.protocol === 'xdt-image:') && !url.hostname && !url.searchParams.has('path')) {
+      // 无 host 形态由出站收集器按本机路径读盘；括号也要编码，否则会提前闭合 Markdown 链接。
+      const remote = decodeURIComponent(url.pathname).replace(/^\/(?=[A-Za-z]:[\\/])/, '');
+      const local = workspace.mapAlias(remote);
+      if (local === remote) return value;
+      return url.protocol + pathToFileURL(local).href.slice('file:'.length).replace(/\(/g, '%28').replace(/\)/g, '%29');
     }
     if (url.protocol === 'xdt-file:' || url.protocol === 'xdt-audio:') {
       const remote = url.searchParams.get('path');
@@ -58,6 +67,12 @@ function localText(value: string, workspace: ExecutorWorkspace, context: PathTex
     if (code !== undefined && local !== remote && /\s/.test(remote) && !fs.existsSync(local)) return literal;
     return local === remote ? literal : code !== undefined ? '\x60' + local + '\x60' : '<' + local + '>';
   });
+  // URL 分词会在裸空格处截断路径，这类链接先按括号取完整地址；未映射的保持原文。
+  value = value.replace(XDT_PATH_LINK, (link, target: string) => {
+    const encoded = target.replace(/\s/g, encodeURIComponent);
+    const local = localFileUrl(encoded, workspace);
+    return local === encoded ? link : '](' + local + ')';
+  });
   // URL 单独解析；HTTP 与媒体仓标识不得被普通路径替换改写。
   const parts: string[] = [];
   let end = 0;
@@ -90,21 +105,38 @@ export function localPlanReview<T extends { kind: string }>(request: T, workspac
   };
 }
 
-/** 只暂存末尾未闭合的路径，避免地址被多个 delta 切开后漏掉映射。 */
-function pendingPathIndex(text: string, workspace: ExecutorWorkspace): number {
-  let pending = text.length;
-  const prefixes = workspace.agentPathPrefixes().flatMap((prefix) => {
+interface PendingPrefix { prefix: string; insensitive: boolean; target: string }
+
+/** 前缀展开只与别名数组有关，按 agentPathPrefixes() 返回的数组引用缓存(#7710)：每个 delta 都要判断。 */
+const pendingPrefixCache = new WeakMap<readonly string[], PendingPrefix[]>();
+
+function pendingPrefixes(workspace: ExecutorWorkspace): PendingPrefix[] {
+  const aliases = workspace.agentPathPrefixes();
+  let cached = pendingPrefixCache.get(aliases);
+  if (cached) return cached;
+  const prefixes = aliases.flatMap((prefix) => {
     const forward = prefix.replace(/\\/g, '/');
     const backward = forward.replace(/\//g, '\\');
     return [forward, backward, backward.replace(/\\/g, '\\\\')];
   });
-  if (!prefixes.length) return pending;
   // 完整 URL 出现前保留 scheme，才能在后续 delta 中判断文件 URL 或外部 URL。
-  prefixes.push('file://', 'xdt-file://', 'xdt-audio://', 'http://', 'https://', 'cindy-media://');
-  for (const prefix of prefixes) {
+  if (prefixes.length) prefixes.push('file://', 'xdt-file://', 'xdt-audio://', 'xdt-image://', 'http://', 'https://', 'cindy-media://');
+  cached = prefixes.map((prefix) => {
     const insensitive = /^[A-Za-z]:|^[a-z-]+:\/\//i.test(prefix);
-    const source = insensitive ? text.toLowerCase() : text;
-    const target = insensitive ? prefix.toLowerCase() : prefix;
+    return { prefix, insensitive, target: insensitive ? prefix.toLowerCase() : prefix };
+  });
+  pendingPrefixCache.set(aliases, cached);
+  return cached;
+}
+
+/** 只暂存末尾未闭合的路径，避免地址被多个 delta 切开后漏掉映射。 */
+function pendingPathIndex(text: string, workspace: ExecutorWorkspace): number {
+  let pending = text.length;
+  const prefixes = pendingPrefixes(workspace);
+  if (!prefixes.length) return pending;
+  let lowered: string | undefined;
+  for (const { prefix, insensitive, target } of prefixes) {
+    const source = insensitive ? lowered ??= text.toLowerCase() : text;
     let start = -1;
     while ((start = source.indexOf(target[0], start + 1)) >= 0) {
       if (start && /[A-Za-z0-9_]/.test(text[start - 1])) continue;

@@ -23,6 +23,7 @@
  */
 
 import path from 'node:path';
+import { installNativeTrackpad } from './nativeTrackpad';
 
 import { app, session, type BrowserWindow, type Session, type WebContents } from 'electron';
 import { CURRENT_APP_ID } from '../shared/brandRegion';
@@ -47,6 +48,9 @@ import {
   handleGhostPreviewNavigation,
   noteGhostUserGesture,
   resolveGhostWebviewAttach,
+  authorizePluginTabViewAttach,
+  attachPluginTabViewGuest,
+  attachGhostPageModelPicker,
 } from './cindy-brain/index.js';
 import { classifyGhostPanelNavigation } from './cindy-brain/previewGate.js';
 import { ghostMediaHandoverDragScript, ghostMediaHandoverTargetTracker } from './cindy-brain/ghostMediaHandoverTargetTracker.js';
@@ -171,6 +175,7 @@ export function applyGhostWebviewHardening(
   webPreferences.webviewTag = false;
   webPreferences.plugins = false;
   delete webPreferences.preload;
+  delete webPreferences.additionalArguments;
 }
 
 type GhostWebviewAttachResolver = typeof resolveGhostWebviewAttach;
@@ -207,6 +212,8 @@ export function authorizeGhostWebviewAttach(
   params.partition = resolved.partition;
   webPreferences.partition = resolved.partition;
   applyGhostWebviewHardening(webPreferences, params);
+  // A single page-scoped picker method; never reuse the logic page or main-window bridge.
+  webPreferences.preload = path.join(__dirname, 'ghostPagePreload.js');
   return {
     id: resolved.ghost.manifest.id,
     instanceId,
@@ -762,6 +769,8 @@ export function installDeferredPopupRouter(
  *   - http(s) 与 about:blank popup 都让 Chromium 创建真实 child WebContents;
  *   - `createWindow` 接管 Electron 预创建的 `options.webContents`,把**同一个**
  *     browsing context 放进 main-owned WebContentsView,再路由成 RSB tab;
+ *   - 点击链接触发的新窗口可能没有 child WebContents;这时直接将 HTTP(S) 地址路由为
+ *     RSB tab,避免把缺省 guest 当成致命错误;
  *   - 不能另建 `<webview>`:那会让 opener 手里的 WindowProxy 指向已关闭的旧
  *     context,破坏 OAuth/SSO 对 closed/location/close 的依赖。
  *   - 推消息走 channel `rsb:browser-popup`,renderer 端通过 preload 的 fanOut 订阅。
@@ -775,6 +784,7 @@ export function installBrowserGuestHandlers(
   hostContents: WebContents,
   guestContents: WebContents,
 ): void {
+  installNativeTrackpad(hostContents, guestContents);
   guestContents.setWindowOpenHandler((details) => {
     if (!isRoutablePopupUrl(details.url) && !isInitialBlankPopupUrl(details.url)) {
       return { action: 'deny' };
@@ -795,7 +805,17 @@ export function installBrowserGuestHandlers(
           options as typeof options & { webContents?: WebContents }
         ).webContents;
         if (!popupContents) {
-          throw new Error('Electron did not provide popup WebContents to createWindow');
+          if (isRoutablePopupUrl(details.url)) {
+            routeBrowserPopup(hostContents, guestContents.id, {
+              url: details.url,
+              disposition: details.disposition,
+            });
+          }
+          // Electron invokes this callback for link-triggered new windows even
+          // when Chromium did not create a child WebContents. In that path it
+          // ignores the returned WebContents, so return the opener after routing
+          // the URL instead of crashing the main process.
+          return guestContents;
         }
         const surfaceId = createRsbNativePopupSurface(hostContents, popupContents);
         if (!surfaceId) {
@@ -971,12 +991,14 @@ export function installWebviewHardener(): void {
     // will 阶段的意识/captcha 判定带给 did 阶段(这两类 guest 走独立接线,
     // 不装浏览器的 popup 路由与快捷键转发)。
     let pendingGhostAttach: ReturnType<typeof authorizeGhostWebviewAttach> = null;
+    let pendingTabView: { url: string; current(): boolean } | null = null;
     let pendingCaptchaAttach = false;
     let pendingRemoteSettings: ReturnType<typeof resolveRemoteSettingsAttach> = null;
     contents.on('will-attach-webview', (e, webPreferences, params) => {
       pendingCaptchaAttach = false;
       pendingRemoteSettings = null;
       pendingGhostAttach = null;
+      pendingTabView = null;
       if (typeof params.partition === 'string' && params.partition.startsWith(REMOTE_PLUGIN_SETTINGS_PARTITION)) {
         const view = resolveRemoteSettingsAttach(contents, params.partition, params.src);
         if (!view) { e.preventDefault(); return; }
@@ -1003,6 +1025,14 @@ export function installWebviewHardener(): void {
           return;
         }
         pendingGhostAttach = authorized;
+        if (new URL(params.src).searchParams.has('cindyView')) {
+          const tab = authorizePluginTabViewAttach(contents, params.src);
+          if (!tab) { e.preventDefault(); pendingGhostAttach = null; return; }
+          // Same compiled preload, but only the narrow view API is exposed.
+          webPreferences.preload = path.join(__dirname, 'ghostPreload.js');
+          webPreferences.additionalArguments = ['--cindy-plugin-tab-view'];
+          pendingTabView = { url: params.src, current: tab.current };
+        }
         return;
       }
       pendingGhostAttach = null;
@@ -1057,9 +1087,17 @@ export function installWebviewHardener(): void {
         const authorized = pendingGhostAttach;
         const ghostId = authorized.id;
         pendingGhostAttach = null;
+        const tab = pendingTabView; pendingTabView = null;
+        if (tab && (!tab.current() || !attachPluginTabViewGuest(contents, tab.url, guestContents))) { guestContents.close(); return; }
         // 崩溃豁免登记(lifecycle 的全局 render-process-gone 守卫据此放行,
         // 面板错误接管态负责用户侧收尾)。
         registerGhostWebContents(guestContents.id);
+        attachGhostPageModelPicker(contents, guestContents, authorized.instanceId,
+          () => authorized.isCurrent() && (!tab || tab.current()));
+        installNativeTrackpad(contents, guestContents, () => {
+          if (!isGhostGuestOwnerActive(authorized.owner)) return false;
+          return authorized.isCurrent();
+        });
         // 意识面板零弹窗、零跳转:window.open 全拒,导航锁死在自己协议同源内。
         // 两个声明式例外(都是拦下导航、主机代办,面板侧依旧零桥):
         //   - /preview/ 预览链接 → 主窗口弹 lightbox(cindy-brain/previewGate.ts);

@@ -121,7 +121,7 @@ export function botProfileModelSelectionChanged(previous: Record<string, unknown
   // shape the settings save uses, so adding mirror fields is not a model edit.
   previous = normalizeBotProfileModelChain(previous);
   next = normalizeBotProfileModelChain(next);
-  return ['modelChainOverride', 'modelOverride', 'modelChain', 'harness', 'model', 'providerId', 'effort', 'fastMode']
+  return ['modelChainOverride', 'modelOverride', 'modelChain', 'harness', 'model', 'providerId', 'agentDeviceId', 'effort', 'fastMode']
     .some((key) => JSON.stringify(previous[key] ?? null) !== JSON.stringify(next[key] ?? null));
 }
 
@@ -144,6 +144,11 @@ export function normalizeBotProfileModelChain(
       next.harness = primary.harness;
       next.model = primary.model;
       next.providerId = primary.providerId;
+      // The scalar fields mirror the first route, including returning to this
+      // computer. Do not introduce a new field into untouched legacy local profiles.
+      if (primary.agentDeviceId || Object.prototype.hasOwnProperty.call(next, 'agentDeviceId')) {
+        next.agentDeviceId = primary.agentDeviceId ?? null;
+      }
       next.effort = primary.effort;
       next.fastMode = primary.fastMode;
     }

@@ -24,6 +24,8 @@ import {
   DeviceLinkError,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
+  isProviderSharePeer,
+  REMOTE_AGENT_CHANNEL,
   type DeviceLinkErrorCode,
 } from '@cindy/device-link';
 
@@ -52,6 +54,13 @@ export const DEVICE_RESPONSIVENESS_PROBE_CHANNEL = 'local-db:sessions:list';
 
 export function buildDeviceResponsivenessProbeArgs(): unknown[] {
   return [1, 'all', { includePinned: false }];
+}
+
+/** Shared provider peers cannot enumerate the owner's database. A live Agent
+ * caps request checks the authorized service, never a metadata cache or a new grant. */
+export function deviceResponsivenessProbe(deviceId: string): { channel: string; args: unknown[] } {
+  return isProviderSharePeer(deviceId) ? { channel: REMOTE_AGENT_CHANNEL, args: [{ op: 'caps' }] }
+    : { channel: DEVICE_RESPONSIVENESS_PROBE_CHANNEL, args: buildDeviceResponsivenessProbeArgs() };
 }
 
 export interface DeviceResponsivenessProbeEligibility {
@@ -169,7 +178,8 @@ export function classifyDeviceSendFailure(error: unknown): BreakerSettleOutcome 
  * 特判通道不定论,其余为真实恢复证据。
  */
 export function classifyDeviceSendSuccess(channel: string, wasProbe = false): BreakerSettleOutcome {
-  if (wasProbe && channel !== DEVICE_RESPONSIVENESS_PROBE_CHANNEL) return 'inconclusive';
+  if (wasProbe) return channel === DEVICE_RESPONSIVENESS_PROBE_CHANNEL || channel === REMOTE_AGENT_CHANNEL
+    ? 'responded' : 'inconclusive';
   return BREAKER_NEUTRAL_INVOKE_CHANNELS.has(channel) ? 'inconclusive' : 'responded';
 }
 
@@ -191,6 +201,8 @@ export interface ResponsivenessTrackerDeps {
   isProbeEligible(deviceId: string): boolean;
   /** 首次业务超时后的 peer 级恢复；由 Desktop 接入 openRemoteLink 去重。 */
   recoverLink?: (deviceId: string) => Promise<unknown>;
+  /** Verify shared relay activity before attributing a timeout to one device. */
+  confirmRelayForTimeout?: (deviceId: string) => boolean;
   /** 时钟注入(测试用;默认 Date.now)。 */
   now?: () => number;
   log?: TrackerLogger;
@@ -318,6 +330,9 @@ export function createResponsivenessTracker(
       const outcome =
         isBreakerObservedError(err)
         || (wasProbe && channel !== DEVICE_RESPONSIVENESS_PROBE_CHANNEL)
+        || (classifyDeviceSendFailure(err) === 'timeout' && (
+          lifecycleEpochs.get(deviceId) !== lifecycleEpoch || deps.confirmRelayForTimeout?.(deviceId) === false
+        ))
           ? 'inconclusive'
           : classifyDeviceSendFailure(err);
       markBreakerObserved(err);
@@ -341,10 +356,11 @@ export function createResponsivenessTracker(
       if (slot.decision !== 'probe') continue;
       let probePromise: Promise<unknown>;
       try {
+        const probe = deviceResponsivenessProbe(deviceId);
         probePromise = deps.probeInvoke(
           deviceId,
-          DEVICE_RESPONSIVENESS_PROBE_CHANNEL,
-          buildDeviceResponsivenessProbeArgs(),
+          probe.channel,
+          probe.args,
         );
       } catch (err) {
         probePromise = Promise.reject(err);
@@ -358,7 +374,11 @@ export function createResponsivenessTracker(
               classifyDeviceSendSuccess(DEVICE_RESPONSIVENESS_PROBE_CHANNEL, true),
             ),
           (err) => {
-            const outcome = classifyDeviceSendFailure(err);
+            const classified = classifyDeviceSendFailure(err);
+            const outcome = classified === 'timeout' && (
+              lifecycleEpochs.get(deviceId) !== lifecycleEpoch || deps.confirmRelayForTimeout?.(deviceId) === false
+            )
+              ? 'inconclusive' : classified;
             settle(deviceId, slot, outcome, false);
             // 探测是 open 后唯一会真正穿过 peer link 的流量。若它仍等满超时，
             // 继续按单-peer 半径重开 link；clear/reset 已翻代时 breaker 会先关闭。

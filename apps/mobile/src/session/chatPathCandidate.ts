@@ -287,7 +287,8 @@ export function classifyChatPathLinkTarget(url: string): ChatPathCandidate | nul
 
 /**
  * href → 被控端绝对路径(与桌面 resolveLocalPath 同语义):
- * file:// 解包;绝对路径原样;相对路径按 workdir 分隔符风格 join
+ * file:// 解包;Windows workdir 下 /C:/… 去多余前导斜杠;其余绝对路径原样;
+ * 相对路径按 workdir 分隔符风格 join
  * (workdir 含 `\` → Windows join 并把 href 的 `/` 归一为 `\`)。
  * 不做存在性检查——那是 remotePathVerdict 的事。
  */
@@ -305,6 +306,12 @@ export function resolveChatAbsPath(href: string, workdir: string): string {
     if (/^\/[A-Za-z]:[\\/]/.test(p)) p = p.slice(1);
     return p;
   }
+  // Match Desktop's model-authored /C:/ compatibility using the file owner's
+  // workdir, not the phone OS. POSIX hosts may have a literal /C: directory.
+  const windowsWorkdir = WIN_ABS_RE.test(workdir) || workdir.startsWith('\\\\') || workdir.startsWith('//');
+  // Directory classification strips /C:/ to /C:; C: alone would be drive-relative.
+  if (windowsWorkdir && /^\/[A-Za-z]:$/.test(href)) return `${href.slice(1)}/`;
+  if (windowsWorkdir && /^\/[A-Za-z]:[\\/]/.test(href)) return href.slice(1);
   if (href.startsWith('/')) return href;
   if (WIN_ABS_RE.test(href)) return href;
 
@@ -592,7 +599,12 @@ export interface BareFilePathMatch {
  * 候选 ≠ 点亮:`16/9.0`、`a/b.c` 这类形状达标的误命中同样返回,存在性由远端
  * stat(remotePathVerdict)兜底,解析不到就保持纯文本。
  */
-export function findBareFilePathMatch(input: string, from: number): BareFilePathMatch | null {
+export function findBareFilePathMatch(
+  input: string,
+  from: number,
+  // Optional paragraph-local exec cache, bound to this exact immutable input.
+  search?: (regex: RegExp) => RegExpExecArray | null,
+): BareFilePathMatch | null {
   // 不含任何路径分隔符的文本一定不是带分隔符路径。这条短路在渲染热路径上逐 token
   // 生效(见 messageMarkdown.findNextInlineToken),不能省。
   if (!input.includes('/') && !input.includes('\\')) return null;
@@ -601,7 +613,7 @@ export function findBareFilePathMatch(input: string, from: number): BareFilePath
   const re = new RegExp(BARE_PATH_RE_SOURCE, 'g');
   re.lastIndex = Math.max(0, from);
   let m: RegExpExecArray | null;
-  while ((m = re.exec(input)) !== null) {
+  while ((m = search ? search(re) : re.exec(input)) !== null) {
     const value = m[1];
     if (!looksLikeFilePath(splitChatPathLineSuffix(value).href)) continue;
     const index = m.index + (m[0].length - value.length);

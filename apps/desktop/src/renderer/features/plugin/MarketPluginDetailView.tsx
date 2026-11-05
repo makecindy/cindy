@@ -1,8 +1,10 @@
+import { PluginShareButton } from './PluginShareButton';
 import { Button } from '@/components/ui/button';
+import { PluginVersionUpdates } from './PluginVersionUpdates';
+import { ToolsSection } from './GhostPluginDetailView';
 import { useId } from 'react';
 import { Download, ShieldCheck } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-
 
 import { ghostPermissionItems } from '../../../shared/ghost';
 import type { PluginMarketDetail } from '../../../shared/pluginMarket';
@@ -57,6 +59,11 @@ export function MarketPluginDetailView({
         label={t('settings.ghosts.detail.backToList')}
         onBack={onBack}
         scrolled={scrolled}
+        actions={
+          detail.sourceType === 'server' && detail.scope === 'public' ? (
+            <PluginShareButton pluginId={detail.pluginId} />
+          ) : undefined
+        }
       />
       <article className="plugin-detail-frame mx-auto w-full max-w-[824px] px-8 pb-16 pt-5 max-[760px]:px-6">
         <header>
@@ -106,14 +113,17 @@ export function MarketPluginDetailView({
               </Button>
             ) : null}
           </div>
-          <p
-            id={replacementDescription ? replacementDescriptionId : undefined}
-            className="mt-5 text-14 leading-[1.571] text-[var(--text-secondary)]"
-          >
-            {replacementDescription ?? (detail.description || detail.ghostId)}
+          <p className="mt-5 text-14 leading-[1.571] text-[var(--text-secondary)]">
+            {detail.description || detail.ghostId}
           </p>
+          {replacementDescription ? (
+            <p id={replacementDescriptionId} className="mt-3 text-13 leading-5 text-[var(--text-secondary)]">
+              {replacementDescription}
+            </p>
+          ) : null}
         </header>
 
+        {detail.manifest.tools?.length ? <ToolsSection tools={detail.manifest.tools} /> : null}
         <section className="mt-10" aria-labelledby="market-security-title">
           <h2
             id="market-security-title"
@@ -166,6 +176,18 @@ export function MarketPluginDetailView({
             )}
           </div>
         </section>
+        {detail.manifest.releaseNotes?.trim() ? (
+          <PluginVersionUpdates key={detail.pluginId}>
+            <section className="space-y-3" aria-label={t('settings.ghosts.contribution.releaseNotes')}>
+              <h2 className="text-18 font-medium leading-[1.444] text-[var(--text-primary)]">
+                {t('settings.ghosts.contribution.releaseNotes')} · {detail.version}
+              </h2>
+              <p className="whitespace-pre-wrap break-words text-14 leading-6 text-[var(--text-secondary)]">
+                {detail.manifest.releaseNotes}
+              </p>
+            </section>
+          </PluginVersionUpdates>
+        ) : null}
       </article>
     </main>
   );

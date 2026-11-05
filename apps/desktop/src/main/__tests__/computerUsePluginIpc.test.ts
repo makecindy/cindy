@@ -328,15 +328,8 @@ describe('computer use platform copy invariants', () => {
       'utf-8',
     );
     expect(sectionSource).toContain("nextStatus.permissionState?.platform === 'macos'");
-    const macPermissionBlockStart = sectionSource.indexOf(
-      "{window.electronAPI.platform === 'darwin' ? (",
-    );
-    const permissionTitle = sectionSource.indexOf(
-      "t('settings.computerUse.directControl.permissions.title')",
-      macPermissionBlockStart,
-    );
-    expect(macPermissionBlockStart).toBeGreaterThanOrEqual(0);
-    expect(permissionTitle).toBeGreaterThan(macPermissionBlockStart);
+    // Actual permission-row visibility is verified by the component tests in
+    // ComputerUseSection.driverUpdate.test.tsx, independent of translation syntax.
 
     for (const locale of ['en', 'ja', 'ko', 'zh-CN']) {
       const messages = JSON.parse(

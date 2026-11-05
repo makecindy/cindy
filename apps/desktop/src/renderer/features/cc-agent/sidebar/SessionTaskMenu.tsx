@@ -35,6 +35,7 @@ import {
   type TaskMoveDestination,
 } from './TaskMoveSubmenu';
 import { TaskMigrationDialog } from './TaskMigrationDialog';
+import { setSessionNotificationsMuted } from './sessionNotificationMute';
 import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
 
 interface Props {
@@ -53,6 +54,7 @@ interface Props {
   tags: ReactNode;
   copy: ReactNode;
   exportShare: ReactNode;
+  pluginCommands?: ReactNode;
 }
 
 type SharingDialog =
@@ -85,6 +87,7 @@ function ActiveSessionTaskMenu({
   tags,
   copy,
   exportShare,
+  pluginCommands,
   dialog,
   setDialog,
 }: Props & {
@@ -229,11 +232,31 @@ function ActiveSessionTaskMenu({
               !empty &&
               item(session.pinnedAt != null ? 'unpin' : 'pin', onPin, ownerActionsBlocked)}
             {item('rename', onRename, ownerActionsBlocked)}
+            {/* 提醒归任务所在的那台设备发，device-link 任务（别人的任务）在这里设不了。 */}
+            {!archived && !empty && !session.deviceLinkDeviceId && (
+              <DropdownMenuItem
+                className={MENU_ITEM_CLASS}
+                disabled={ownerActionsBlocked}
+                onSelect={() => {
+                  void setSessionNotificationsMuted(
+                    session,
+                    session.notificationsMuted !== true,
+                  ).catch(() => toast.error(t('ccAgent.sidebar.muteNotificationsFailed')));
+                }}
+              >
+                {t(
+                  session.notificationsMuted
+                    ? 'ccAgent.sidebar.sessionMenu.unmuteNotifications'
+                    : 'ccAgent.sidebar.sessionMenu.muteNotifications',
+                )}
+              </DropdownMenuItem>
+            )}
             {tags}
             {separator}
             {copy}
           </>
         )}
+        {pluginCommands}
         {session.status === 'active' &&
           (hosted && !guest ? (
             <DropdownMenuSub>

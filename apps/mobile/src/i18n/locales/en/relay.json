@@ -1,0 +1,55 @@
+{
+  "settings": {
+    "sectionTitle": "Relay Service",
+    "currentLabel": "Relay Service",
+    "official": "{{appName}} Official Relay",
+    "switchToOfficial": "Switch Back to Official Relay",
+    "officialHint": "Your devices connect through the {{appName}} official relay. To use your own relay, show its join QR code on the computer running it and scan the code with your phone’s camera.",
+    "selfHostedHint": "Your devices connect through your own relay at {{address}}. Sign-in, models, shared tasks, and other services still use {{appName}}.",
+    "removedHint": "This phone was removed from the relay, or the relay was turned off. Switch back to the official relay, or join again from your computer.",
+    "credentialMissingHint": "The relay credential isn’t on this phone anymore. Join again from your computer, or switch back to the official relay.",
+    "confirmTitle": "Switch Back to Official Relay?",
+    "confirmBody": "This phone will leave “{{name}}” and use the {{appName}} official relay. To use that relay again, join it again from your computer.",
+    "confirmAction": "Switch Back",
+    "switchFailed": "Couldn’t switch back to the official relay. Try again in a moment.",
+    "pushUnavailable": "While you use your own relay, task notifications from your computers aren’t sent to this phone."
+  },
+  "issue": {
+    "removedTitle": "Removed from Relay",
+    "removedHint": "This phone was removed from the relay, or the relay was turned off. You can switch back to the official relay in Settings."
+  },
+  "join": {
+    "title": "Join Relay",
+    "checking": "Connecting to the relay…",
+    "body": "After you join, this phone connects to your computers through this relay. Sign-in, models, shared tasks, and other services still use {{appName}}. While you use your own relay, task notifications from your computers aren’t sent to this phone.",
+    "switchNote": "Joining switches this phone from “{{current}}” to this relay.",
+    "action": "Join",
+    "pairingCodeLabel": "Pairing Code",
+    "verifyHint": "On the computer running the relay, check that it shows these digits, then approve.",
+    "waiting": "Waiting for approval…",
+    "cancel": "Cancel",
+    "joinedTitle": "Joined the Relay",
+    "joinedBody": "This phone now connects to your computers through “{{name}}”.",
+    "done": "Done",
+    "retry": "Try Again",
+    "signedOut": "Sign in to {{appName}} first, then join this relay.",
+    "signIn": "Sign In",
+    "invalidLink": "This join link isn’t valid or has expired. Create a new one on your computer.",
+    "cancelled": "Joining was canceled. To join this relay, create a new join link on your computer."
+  },
+  "errors": {
+    "unreachable": "Can’t reach this relay. Make sure your phone and computer are on the same network, or that your phone can open this address.",
+    "insecureUnreachable": "Can’t reach this relay. Phones can join a relay only over HTTPS. Set up a certificate for the relay on your computer, then create a new join link.",
+    "notRelay": "This address isn’t a {{appName}} relay. Check the join link.",
+    "incompatible": "This relay doesn’t work with this version of {{appName}}. Update both the relay and {{appName}}.",
+    "accountMismatch": "This relay belongs to a different {{appName}} account.",
+    "codeInvalid": "This join link has expired. Create a new one on your computer.",
+    "rateLimited": "Too many attempts. Try again later.",
+    "rejected": "The join request was declined on the computer.",
+    "expired": "The request timed out while waiting for approval. Create a new join link on your computer.",
+    "ownerMismatch": "The relay returned a certificate that the owner in the join link didn’t issue. You may be connected to a fake relay, so joining stopped.",
+    "failed": "Couldn’t join the relay. Try again later.",
+    "saveFailed": "The request was approved, but the relay credential couldn’t be saved on this phone. Create a new join link on your computer and try again.",
+    "credentialUnavailable": "This phone doesn’t have a usable relay credential. Join again, or switch back to the official relay in Settings."
+  }
+}

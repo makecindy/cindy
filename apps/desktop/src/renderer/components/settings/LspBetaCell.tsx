@@ -15,6 +15,8 @@
  * 时已 evaluate, 工具列表已固化, 不会动态变化 — toast 文案明示。
  */
 
+import { additionalSettings } from './AdditionalSettings.settings-search';
+import { useSettingDefinition } from './useSettingDefinition';
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -26,6 +28,7 @@ import { useLspMode } from '@/hooks/useLspMode';
 const log = createLogger('LspBetaCell');
 
 export function LspBetaCell() {
+  const setting = useSettingDefinition(additionalSettings.lsp);
   const { t } = useTranslation();
   const { enabled, setEnabled } = useLspMode();
   const [pending, setPending] = useState(false);
@@ -57,11 +60,11 @@ export function LspBetaCell() {
     [enabled, setEnabled, t],
   );
 
-  const title = t('settings.lspMode.cell.title');
-  const description = t('settings.lspMode.cell.description');
+  const title = setting.title;
+  const description = setting.description;
 
   return (
-    <div className="flex flex-col gap-3 px-4 py-4">
+    <div {...setting.anchorProps} className="flex flex-col gap-3 px-4 py-4">
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
           <p
@@ -76,6 +79,7 @@ export function LspBetaCell() {
         </div>
 
         <Switch
+          {...setting.controlProps}
           checked={enabled}
           disabled={pending}
           onCheckedChange={(v) => void handleToggle(v)}

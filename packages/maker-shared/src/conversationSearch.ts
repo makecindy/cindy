@@ -55,6 +55,7 @@ export interface ConversationSearchSessionSummary {
   id: string;
   title: string;
   workingDir: string | null;
+  projectDir?: string | null;
   workspaceKind: ConversationSearchWorkspaceKind;
   agentKind: ConversationSearchAgentKind;
   status: ConversationSearchSessionStatus;
@@ -219,7 +220,7 @@ export function remoteIndexedSearchIgnoredWorkingDirs(
   const allowed = normalizeWorkingDirSet(workingDirs);
   if (allowed == null) return false;
   const results = Array.isArray(response?.results) ? response.results : [];
-  return results.some((item) => !matchesWorkingDirSet(item.session.workingDir, allowed));
+  return results.some((item) => !matchesWorkingDirSet(item.session.projectDir ?? item.session.workingDir, allowed));
 }
 
 export function filterResultsByWorkingDirs(
@@ -242,7 +243,7 @@ export function filterResultsByRequestFilters(
     ...response,
     results: response.results.filter((item) => {
       if (!CINDY_MAKE_ENABLED && isCindyMakeSource(item.session.source)) return false;
-      if (!matchesWorkingDirSet(item.session.workingDir, allowedDirs)) return false;
+      if (!matchesWorkingDirSet(item.session.projectDir ?? item.session.workingDir, allowedDirs)) return false;
       if (!matchesStatus(item.session.status, status)) return false;
       if (agentKind !== 'all' && item.session.agentKind !== agentKind) return false;
       if (activityCutoff !== null && sessionActivityMs(item.session) < activityCutoff) {
@@ -268,7 +269,8 @@ function normalizeWorkingDirForGrouping(raw: string | null | undefined): string 
     if (/^[A-Za-z]:\/$/.test(out)) break;
     out = out.slice(0, -1);
   }
-  return collapseWorktreeDirForGrouping(out);
+  const collapsed = collapseWorktreeDirForGrouping(out);
+  return isWindowsPathLike(collapsed) ? collapsed.toLowerCase() : collapsed;
 }
 
 function stripWindowsLongPathPrefix(value: string): string {

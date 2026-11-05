@@ -17,6 +17,8 @@ export default {
     'dev-failed': { about: 'API startup failure cannot supply a code', data: { developer: { state: 'failed' } } },
     'dev-stopped': { about: 'Stopped API cannot supply a code', data: { developer: { state: 'stopped' } } },
     default: { about: 'Revoke one application and retain the other row', data: { connections } },
+    'visible-enabled': { about: 'Toggle one application without changing another', data: { connections: [{ ...connections[0], createVisibleSessions: true }, connections[1]] } },
+    'save-failed': { about: 'A failed preference write retains the previous setting', data: { connections, saveFailed: true } },
     long: { about: 'Long unverified application names and IDs at phone width', viewport: { width: 390, height: 844 }, data: { connections: [
       { id: 'grant-long', name: 'Independent application with a long name 独立本机应用程序', clientId: 'org.example.an.independent.application.with.a.long.identifier' }, connections[1],
     ] } },
@@ -61,6 +63,18 @@ export default {
       return;
     }
     await page.getByText(list[0].clientId, { exact: false }).waitFor();
+    const toggles = page.getByRole('switch', { name: await ui.t('localAgent.createVisibleSessions'), exact: true });
+    if (await toggles.nth(0).isChecked() !== Boolean(list[0].createVisibleSessions)) throw new Error('Wrong initial visibility');
+    await toggles.nth(0).click();
+    if (ui.data.saveFailed) {
+      await page.getByText(await ui.t('localAgent.saveFailed'), { exact: true }).waitFor();
+      if (await toggles.nth(0).isChecked()) throw new Error('Failed setting was shown as saved');
+    } else {
+      await page.waitForFunction(({ id, checked }) => document.getElementById(id)?.getAttribute('aria-checked') === String(checked), {
+        id: `local-agent-visible-${list[0].id}`, checked: !Boolean(list[0].createVisibleSessions),
+      });
+    }
+    if (await toggles.nth(1).isChecked()) throw new Error('Changed another application');
     await page.getByRole('button', { name: await ui.t('localAgent.revokeConnection', { app: list[0].name }), exact: true }).click();
     if (ui.data.cancel || ui.data.revokeFailed) await page.getByText(list[0].clientId, { exact: false }).waitFor();
     else await page.getByText(list[0].clientId, { exact: false }).waitFor({ state: 'detached' });

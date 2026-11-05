@@ -21,6 +21,16 @@ export function outboxSessionKey(record: DurableOutboxRecord): string {
   return JSON.stringify([record.deviceId, record.item.sessionId]);
 }
 
+/** Delivery follows the record's connection, including an independent official shared-task route. */
+export function canConnectOutboxPeer(link: {
+  status: string;
+  getConnectionState?(deviceId: string): { status: string };
+  getPresenceAvailability(deviceId: string): boolean | null;
+}, deviceId: string): boolean {
+  return (link.getConnectionState?.(deviceId).status ?? link.status) === 'online'
+    && link.getPresenceAvailability(deviceId) !== false;
+}
+
 /** Accepted hidden sends stay durable without pinning their raw history window. */
 export function outboxNeedsReconciliation(record: DurableOutboxRecord, isHistoryActive: boolean): boolean {
   return !isDurableOutboxHandedOff(record) || !!record.cancelRequested || isHistoryActive;
@@ -80,7 +90,7 @@ export function createOutboxSessionAccess(deps: OutboxSessionAccessDeps) {
     return read;
   };
   const canRun = (record: DurableOutboxRecord) =>
-    deps.isForeground() &&
+    !record.chat && deps.isForeground() &&
     (hidden(record) ||
       isDurableOutboxSettled(record) ||
       (!record.suspended &&
@@ -115,6 +125,7 @@ export function createOutboxMessageLeases(deps: OutboxMessageLeaseDeps) {
     if (!deps.isCurrent()) return;
     const keys = new Set<string>();
     for (const record of deps.getRecords()) {
+      if (record.chat) continue;
       if (isDurableOutboxSettled(record) || deps.hidden(record)) continue;
       if (deps.restoreEditable(record)) continue;
       if (record.creation?.cancelled) {

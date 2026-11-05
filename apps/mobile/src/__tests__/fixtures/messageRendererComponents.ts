@@ -48,9 +48,6 @@ export function collaborationRenderer() {
     .map(name => rendererFunction(name).getText(rendererSource)).join(String.fromCharCode(10));
   const bindings = { useMemo: React.useMemo, useState: React.useState, useEffect: React.useEffect, useCallback: React.useCallback, useTranslation, i18n, View, Text, useTheme: () => ({ colors: lightColors }),
     useThemedStyles: () => ({}), makeStyles: () => ({}),
-    // Native occupancy/entrance is outside these collaboration routing tests.
-    CompanionEntering: ({ children }: NativeProps) => children,
-    AnimatedContentHeight: ({ open = true, children }: NativeProps & { open?: boolean }) => open ? children : null,
     useAuth: () => ({ accountGeneration: state.accountGeneration }),
     useRecyclingState: React.useState, useFoldableExpandedState,
     buildMessageHierarchyLayout, formatLocalizedDuration, iconSize, iconStroke,

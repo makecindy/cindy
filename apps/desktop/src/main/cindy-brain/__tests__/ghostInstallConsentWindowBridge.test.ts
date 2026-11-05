@@ -90,6 +90,24 @@ describe('GhostInstallConsentWindowBridge', () => {
     }
   });
 
+  // MCP refusal persists only for an explicit answer, not a timeout or owner boundary.
+  // The local bridge is the real decision entry; no renderer source assertions. Tier: unit.
+  it('distinguishes an explicit refusal from cancellation for MCP consent', async () => {
+    const bridge = new GhostInstallConsentWindowBridge();
+    const window = target(7);
+    const onDecision = vi.fn();
+    const request = { ...REQUEST, purpose: 'ui-capability' as const };
+    const cancelled = bridge.request(window.target, request, { onDecision });
+    bridge.cancelAll();
+    expect(await cancelled).toBe(false);
+    expect(onDecision).not.toHaveBeenCalled();
+    const refused = bridge.request(window.target, request, { onDecision });
+    expect(bridge.resolve(8, window.sent[1]!.requestId, false)).toBe(false);
+    bridge.resolve(7, window.sent[1]!.requestId, false);
+    expect(await refused).toBe(false);
+    expect(onDecision).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
   it('fails closed when the window cannot receive the request', async () => {
     const bridge = new GhostInstallConsentWindowBridge();
     await expect(bridge.request(target(5, false).target, REQUEST)).rejects.toThrow();

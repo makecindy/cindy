@@ -1,3 +1,4 @@
+import { aboutSettings } from './AboutSection.settings-search';
 /**
  * AboutSection — Settings → About tab content.
  *
@@ -207,6 +208,13 @@ function AgentVersionRow({
 }) {
   const { t, i18n } = useTranslation();
   const { confirm } = useConfirmDialog();
+  const [preparing, setPreparing] = useState(false);
+  const preparingRef = useRef(false);
+  const active = useRef(true);
+  useEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
   const stateRef = useRef(state);
   stateRef.current = state;
   const currentVersion = state.version ? extractSemver(state.version) : null;
@@ -218,7 +226,7 @@ function AgentVersionRow({
   const canUpdate = () => {
     const next = stateRef.current;
     return Boolean(
-      !next.checking &&
+      active.current && !next.checking &&
         next.updateAvailable &&
         next.version &&
         next.latestVersion &&
@@ -226,7 +234,9 @@ function AgentVersionRow({
         extractSemver(next.latestVersion),
     );
   };
-  const status = state.checking
+  const status = preparing
+    ? t('settings.about.piKernel.download')
+    : state.checking
     ? t('settings.about.harnessChecking')
     : state.checkFailed
       ? t('settings.about.harnessCheckFailed')
@@ -235,7 +245,21 @@ function AgentVersionRow({
         : '';
 
   const handleUpdate = async () => {
-    if (!canUpdate() || !currentVersion || !latestVersion) return;
+    if (preparingRef.current || !canUpdate() || !currentVersion || !latestVersion) return;
+    const targetVersion = stateRef.current.latestVersion;
+    if (!targetVersion) return;
+    preparingRef.current = true;
+    setPreparing(true);
+    try {
+      await window.electronAPI.prepareHarnessUpdate(kind, targetVersion);
+    } catch {
+      toast.error(t('settings.about.harnessUpdateFailed'));
+      return;
+    } finally {
+      preparingRef.current = false;
+      if (active.current) setPreparing(false);
+    }
+    if (!canUpdate() || stateRef.current.latestVersion !== targetVersion) return;
     const confirmed = await confirm({
       title: t('settings.about.harnessUpdateTitle', { name }),
       description: t('settings.about.harnessUpdateDescription', {
@@ -272,7 +296,7 @@ function AgentVersionRow({
     if (!canUpdate()) return;
 
     try {
-      await window.electronAPI.relaunchForHarnessUpdate(kind);
+      await window.electronAPI.relaunchForHarnessUpdate(kind, targetVersion);
     } catch {
       toast.error(t('settings.about.harnessUpdateFailed'));
     }
@@ -284,16 +308,16 @@ function AgentVersionRow({
       manageLabel={t('settings.about.harnessManage', { name })}
       version={renderVersion(state, t)}
       status={status}
-      pending={state.checking}
+      pending={state.checking || preparing}
     >
       <HarnessVersionMenuItem
         label={t('settings.about.harnessUpdateButton', { name })}
         version={latestVersion}
-        disabled={!updateAvailable || state.checking}
+        disabled={!updateAvailable || state.checking || preparing}
         onSelect={() => void handleUpdate()}
       />
       <DropdownMenuSeparator />
-      <DropdownMenuItem className={HARNESS_MENU_ITEM_CLASS} disabled={state.checking} onSelect={onCheck}>
+      <DropdownMenuItem className={HARNESS_MENU_ITEM_CLASS} disabled={state.checking || preparing} onSelect={onCheck}>
         {state.checking ? t('settings.about.harnessChecking') : t('settings.about.harnessCheck')}
       </DropdownMenuItem>
       {state.checkedAt && (
@@ -320,7 +344,7 @@ export function AboutSection() {
       </div>
 
       {/* Info Card */}
-      <div id="settings-search-settings-about-appVersionLabel"
+      <div id={aboutSettings.appVersionLabel.targetId}
         className={cn(
           'flex flex-col rounded-xl',
           'bg-[var(--settings-theme-card-bg)]',
@@ -330,7 +354,7 @@ export function AboutSection() {
         {CURRENT_CINDY_REGION === 'cn' && (
           <>
             <InfoRow
-              label={t('settings.about.appVersionLabel')}
+              label={t(aboutSettings.appVersionLabel.titleKey)}
               value={window.electronAPI.appDisplayVersion}
               title={window.electronAPI.appDisplayVersionDetail}
             />
@@ -344,13 +368,13 @@ export function AboutSection() {
         <AgentVersionsRows />
         <DebugLogToggleRow />
         <Divider />
-        <div id="settings-search-settings-about-logsDirLabel">
+        <div id={aboutSettings.logsDirLabel.targetId}>
           <OpenLogsRow />
         </div>
         <Divider />
         <CrashAutoUploadToggleRow />
         <Divider />
-        <div id="settings-search-settings-about-logUpload-uploadLabel">
+        <div id={aboutSettings.logUploadUploadLabel.targetId}>
           <UploadLogsRow />
         </div>
         <Divider />
@@ -398,7 +422,7 @@ function LegalLinkRow({ label, url }: { label: string; url: string }) {
   return (
     <div className="flex items-center justify-between gap-3 px-[18px] py-4">
       <span className="select-none text-13 text-[var(--settings-section-sublabel)]">{label}</span>
-      <Button
+      <Button data-settings-search-action="Open the selected help link or legal document"
         variant="secondary"
         size="lg"
         aria-label={t('settings.about.legal.viewDocument', { document: label })}
@@ -436,7 +460,7 @@ function SocialLinksPanel() {
 
       <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-2.5">
         {DESKTOP_SOCIAL_LINKS.map((link) => (
-          <button
+          <button data-settings-search-action="Open the selected help link or legal document"
             className={cn(
               'group flex min-h-[68px] min-w-0 select-none items-center gap-3 rounded-full px-6 py-2.5 text-left',
               'border border-[var(--settings-theme-card-border)]',
@@ -518,8 +542,8 @@ export function AutoUpdateToggleRow() {
     return (
       <div className="flex flex-col gap-1.5 px-[18px] py-4">
         <div className="flex min-w-0 flex-col gap-1">
-          <span id="settings-search-settings-about-autoUpdateLabel" className="text-13 text-[var(--settings-section-sublabel)]">
-            {t('settings.about.autoUpdateLabel')}
+          <span id={aboutSettings.autoUpdateLabel.targetId} className="text-13 text-[var(--settings-section-sublabel)]">
+            {t(aboutSettings.autoUpdateLabel.titleKey)}
           </span>
           <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
             {t('settings.about.linuxUpdateDescription')}
@@ -563,11 +587,11 @@ export function AutoUpdateToggleRow() {
     <div className="flex flex-col gap-1.5 px-[18px] py-4">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <span id="settings-search-settings-about-autoUpdateLabel" className="text-13 text-[var(--settings-section-sublabel)]">
-            {t('settings.about.autoUpdateLabel')}
+          <span id={aboutSettings.autoUpdateLabel.targetId} className="text-13 text-[var(--settings-section-sublabel)]">
+            {t(aboutSettings.autoUpdateLabel.titleKey)}
           </span>
           <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {t('settings.about.autoUpdateDescription')}
+            {t(aboutSettings.autoUpdateLabel.descriptionKey)}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -576,11 +600,11 @@ export function AutoUpdateToggleRow() {
             disabled={disabled}
             onReset={handleReset}
           />
-          <Switch
+          <Switch data-setting-id={aboutSettings.autoUpdateLabel.id}
             checked={state.autoRelaunchOnIdle}
             disabled={disabled}
             onCheckedChange={handleToggle}
-            aria-label={t('settings.about.autoUpdateLabel')}
+            aria-label={t(aboutSettings.autoUpdateLabel.titleKey)}
           />
         </div>
       </div>
@@ -639,11 +663,11 @@ function AnalyticsToggleRow() {
     <div className="flex flex-col gap-1.5 px-[18px] py-4">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <span id="settings-search-settings-about-analyticsLabel" className="text-13 text-[var(--settings-section-sublabel)]">
-            {t('settings.about.analyticsLabel')}
+          <span id={aboutSettings.analyticsLabel.targetId} className="text-13 text-[var(--settings-section-sublabel)]">
+            {t(aboutSettings.analyticsLabel.titleKey)}
           </span>
           <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {t('settings.about.analyticsDescription')}
+            {t(aboutSettings.analyticsLabel.descriptionKey)}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -652,11 +676,11 @@ function AnalyticsToggleRow() {
             disabled={state.loading || saving}
             onReset={handleReset}
           />
-          <Switch
+          <Switch data-setting-id={aboutSettings.analyticsLabel.id}
             checked={state.analyticsEnabled}
             disabled={state.loading || saving}
             onCheckedChange={handleToggle}
-            aria-label={t('settings.about.analyticsLabel')}
+            aria-label={t(aboutSettings.analyticsLabel.titleKey)}
           />
         </div>
       </div>
@@ -688,18 +712,18 @@ function DebugLogToggleRow() {
   return (
     <div className="flex flex-col gap-1.5 px-[18px] py-4">
       <div className="flex items-center justify-between gap-3">
-        <span id="settings-search-settings-about-debugLogLabel" className="text-13 text-[var(--settings-section-sublabel)]">
-          {t('settings.about.debugLogLabel')}
+        <span id={aboutSettings.debugLogLabel.targetId} className="text-13 text-[var(--settings-section-sublabel)]">
+          {t(aboutSettings.debugLogLabel.titleKey)}
         </span>
-        <Switch
+        <Switch data-setting-id={aboutSettings.debugLogLabel.id}
           checked={effectiveEnabled}
           disabled={lockedOn}
           onCheckedChange={setEnabled}
-          aria-label={t('settings.about.debugLogLabel')}
+          aria-label={t(aboutSettings.debugLogLabel.titleKey)}
         />
       </div>
       <p className="text-12 leading-[1.4] text-[var(--text-secondary)] pr-12">
-        {t('settings.about.debugLogDescription')}
+        {t(aboutSettings.debugLogLabel.descriptionKey)}
       </p>
     </div>
   );
@@ -758,8 +782,8 @@ function CrashAutoUploadToggleRow() {
     <div className="flex flex-col gap-1.5 px-[18px] py-4">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <span id="settings-search-settings-about-logUpload-crashAutoLabel" className="text-13 text-[var(--settings-section-sublabel)]">
-            {t('settings.about.logUpload.crashAutoLabel')}
+          <span id={aboutSettings.logUploadCrashAutoLabel.targetId} className="text-13 text-[var(--settings-section-sublabel)]">
+            {t(aboutSettings.logUploadCrashAutoLabel.titleKey)}
           </span>
           <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
             {t('settings.about.logUpload.crashAutoDescription')}
@@ -771,11 +795,11 @@ function CrashAutoUploadToggleRow() {
             disabled={state.loading || saving}
             onReset={handleReset}
           />
-          <Switch
+          <Switch data-setting-id={aboutSettings.logUploadCrashAutoLabel.id}
             checked={state.crashAutoUploadEnabled}
             disabled={disabled}
             onCheckedChange={handleToggle}
-            aria-label={t('settings.about.logUpload.crashAutoLabel')}
+            aria-label={t(aboutSettings.logUploadCrashAutoLabel.titleKey)}
           />
         </div>
       </div>

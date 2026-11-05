@@ -28,6 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { PiAgent } from '../index.js';
+import { ANSWER_DELIVERY_PROMPT, PI_ANSWER_DELIVERY_PROMPT } from '@cindy/maker-shared/rich-answer-guide';
 import { PiRpcProcess } from '../rpc-client.js';
 import * as sessionJsonlScan from '../session-jsonl-scan.js';
 import { providerCatalogForPi, BUNDLED_CATALOG } from '@cindy/model-providers';
@@ -528,6 +529,27 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       }
     });
 
+  it('applies a model compaction policy in native Pi and detects a later policy change', { timeout: 30_000 }, async () => {
+    let pct: number | null = 75;
+    const deps = buildDeps();
+    deps.runtimeConfig.piAutoCompactThresholdPct = 85;
+    deps.resolveModelCompactionPct = (provider, model) => provider === 'xd' && model === 'pi-test-model' ? pct : null;
+    const agent = new PiAgent(deps);
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-model-compaction-'));
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await agent.startSession({ sessionId: 'model-compaction-native', workingDir, model: 'pi-test-model', providerId: 'xd' });
+      expect((await handle.previewModelSwitch?.('pi-test-model', { providerId: 'xd' }))?.action).toBe('hot');
+      pct = 80;
+      expect((await handle.previewModelSwitch?.('pi-test-model', { providerId: 'xd' }))?.action).toBe('rebuild');
+      await handle.close();
+      handle = await agent.startSession({ sessionId: 'model-compaction-native-next', workingDir, model: 'pi-test-model', providerId: 'xd' });
+      expect((await handle.previewModelSwitch?.('pi-test-model', { providerId: 'xd' }))?.action).toBe('hot');
+      pct = null;
+      expect((await handle.previewModelSwitch?.('pi-test-model', { providerId: 'xd' }))?.action).toBe('rebuild');
+    } finally { await handle?.close(); rmSync(workingDir, { recursive: true, force: true }); }
+  });
+
   it.each(['CLAUDE.md', 'AGENTS.md', 'AGENTS.override.md'])(
     'loads global %s with native precedence and keeps the prompt stable across turns',
     { timeout: 60_000 },
@@ -637,6 +659,40 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       }
     },
   );
+
+  // Real Pi request comparison: shortening host instructions must leave native
+  // tools/project rules intact, and getContextUsage must inspect the same runtime.
+  it('keeps native capabilities with on-demand answer instructions and exposes context sources', { timeout: 30_000 }, async () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), 'pi-context-int-'));
+    writeFileSync(path.join(cwd, 'AGENTS.md'), 'Project context verification marker.');
+    const requests: Array<{ system: Array<{ text: string }>; tools: unknown }> = [];
+    try {
+      for (const answerDeliveryPrompt of [ANSWER_DELIVERY_PROMPT, PI_ANSWER_DELIVERY_PROMPT]) {
+        const deps = buildDeps();
+        deps.runtimeConfig = { ...deps.runtimeConfig, answerDeliveryPrompt };
+        const handle = await new PiAgent(deps).startSession({ sessionId: `context-${requests.length}`, workingDir: cwd, model: 'pi-test-model' });
+        try {
+          const settled = (async () => { for await (const event of handle.events()) if (event.type === 'done') break; })();
+          await handle.send({ type: 'user', content: 'ping' });
+          await settled;
+          requests.push(JSON.parse(seenRequests.at(-1)!.body));
+          const usage = await handle.getContextUsage!();
+          expect(usage?.textEstimate?.items).toEqual(expect.arrayContaining([
+            expect.objectContaining({ source: 'delivery', tokens: expect.any(Number) }),
+            expect.objectContaining({ source: 'project', tokens: expect.any(Number) }),
+            expect.objectContaining({ source: 'tools', tokens: expect.any(Number) }),
+          ]));
+          expect(usage?.categories).toEqual([]);
+          expect(usage?.totalTokens).toBeGreaterThan(0);
+        } finally { await handle.close(); }
+      }
+      expect(requests[1].tools).toEqual(requests[0].tools);
+      const systemText = (request: typeof requests[number]) => request.system.map(block => block.text).join('\n');
+      expect(systemText(requests[1])).toContain('Project context verification marker.');
+      expect(systemText(requests[1])).toContain('rich-answers');
+      expect(systemText(requests[0]).length - systemText(requests[1]).length).toBeGreaterThan(5_000);
+    } finally { rmSync(cwd, { recursive: true, force: true }); }
+  });
 
   it(
     'keeps the target runtime after a context-window settings reload',
@@ -1025,7 +1081,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       try {
         writeFileSync(path.join(workingDir, 'proof.txt'), 'GROK47_TOOL_OK');
         const imagePath = path.join(workingDir, 'pixel.png');
-        writeFileSync(imagePath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC', 'base64'));
+        writeFileSync(imagePath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII=', 'base64'));
         handle = await agent.startSession({ sessionId: 'grok47-native', workingDir,
           model: row.id, providerId: 'xai', effort: 'high', permissionMode: 'bypassPermissions' });
         const send = async (image = false) => {
@@ -1341,9 +1397,10 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     'forwards an image attachment through pi to the gateway (multimodal image)',
     { timeout: 60_000 },
     async () => {
-      // 合法 1x1 透明 PNG —— pi 不会因非法图片拒收;其 base64 应原样出现在网关请求体。
+      // Valid 1x1 RGBA PNG, including chunk CRCs. Pi 1.4 rejects the old corrupt
+      // fixture during image normalization; intact bytes must reach the model.
       const PNG_1x1_B64 =
-        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC';
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII=';
       const agent = new PiAgent(buildDeps());
       const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-img-cwd-'));
       let handle: AgentSessionHandle | null = null;
@@ -1385,7 +1442,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     { timeout: 60_000 },
     async () => {
       const pngBase64 =
-        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC';
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII=';
       const agent = new PiAgent(buildDeps());
       const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-review-formats-'));
       const markdownPath = path.join(workingDir, 'launch.md');
@@ -2091,6 +2148,58 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       await handle?.close();
     }
   }
+
+  // Integration: the real Pi request builder must preserve declared low and
+  // upstream remaps, while an unavailable low must follow the catalog default.
+  // The former offline SDK probe never exercised Cindy startup reconciliation.
+  it.each([
+    { efforts: ['low', 'medium', 'high', 'max'] as const, requested: 'low' as const, wire: 'low' },
+    { efforts: ['low', 'medium', 'high', 'max'] as const, requested: 'medium' as const, wire: 'high' },
+    { efforts: ['medium', 'high', 'max'] as const, requested: 'low' as const, wire: 'high' },
+  ])('sends catalog effort $requested as $wire and records the real payload boundary', { timeout: 30_000 }, async ({ efforts, requested, wire }) => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-effort-wire-'));
+    const deps = buildDeps();
+    const debug = vi.fn();
+    deps.logger = { ...noopLogger, debug };
+    const model = 'deepseek/deepseek-v4-flash';
+    deps.capabilityAdditions = { availableModels: [{
+      id: model, displayName: 'DeepSeek test route', contextWindow: 200_000,
+      efforts: [...efforts], defaultEffort: 'high',
+    }] };
+    deps.resolvePiGatewayModelApi = () => 'openai-completions';
+    deps.resolvePiGatewayModelSpec = () => ({
+      api: 'openai-completions',
+      compat: { thinkingFormat: 'deepseek', maxTokensField: 'max_tokens',
+        requiresReasoningContentOnAssistantMessages: true },
+      thinkingLevelMap: { low: 'low', medium: 'high', high: 'high', max: 'max' },
+    });
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await new PiAgent(deps).startSession({ sessionId: `effort-${requested}-${efforts.length}`,
+        workingDir, model, providerId: 'xd', effort: requested });
+      const before = seenRequests.length;
+      const done = (async () => {
+        for await (const event of handle!.events()) if (event.type === 'done') return;
+      })();
+      await handle.send({ type: 'user', content: 'private translation fixture' });
+      await done;
+      const requests = seenRequests.slice(before);
+      expect(requests).toHaveLength(1);
+      const body = JSON.parse(requests[0]!.body);
+      expect(body.reasoning_effort).toBe(wire);
+      expect(body.thinking).toEqual({ type: 'enabled' });
+      const stages = debug.mock.calls.filter(([message]) => message === 'pi request stage').map(([, fields]) => fields);
+      expect(stages.map(row => row.stage)).toEqual(['provider-request-prepared', 'first-output', 'agent-settled']);
+      expect(stages[0]).toMatchObject({ wireEffort: wire, toolCount: body.tools.length, messageCount: body.messages.length,
+        preparationMs: expect.any(Number) });
+      expect(stages[0].preparationMs).toBeGreaterThanOrEqual(0);
+      expect(JSON.stringify(stages)).not.toContain('private translation fixture');
+      expect(JSON.stringify(stages)).not.toContain('test-key-123');
+    } finally {
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
 
   it.each(['ask', 'auto', 'bypassPermissions'] as const)(
     'host text-only turn blocks tools in %s and restores the next ordinary turn',

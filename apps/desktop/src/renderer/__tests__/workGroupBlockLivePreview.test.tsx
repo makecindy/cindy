@@ -128,23 +128,10 @@ const group = (
   childItems,
 });
 
-function containerPreview() {
-  return document.querySelector('[data-live-work-preview]')?.parentElement?.parentElement;
-}
-
 function clickGroup(label: string) {
   const button = screen.getByText(label).closest('button');
   if (!button) throw new Error(`Missing work-group button: ${label}`);
   fireEvent.click(button);
-  // The outgoing preview now retains its rows until its height transition ends.
-  // Finish that real production lifecycle event instead of counting both the
-  // exiting preview and expanded details, or waiting on a wall-clock fallback.
-  for (const preview of document.querySelectorAll('[data-live-work-preview]')) {
-    const body = preview.parentElement;
-    if (body?.getAttribute('aria-hidden') === 'true') {
-      fireEvent.transitionEnd(body.parentElement!, { propertyName: 'height' });
-    }
-  }
 }
 
 // #6351: production grouping feeds the real disclosure/Collapse/state store.
@@ -293,8 +280,10 @@ describe('WorkGroupBlock — running latest-five preview', () => {
   });
 
   it('rebinds visible detail interest when the Host changes without changing the group key', () => {
-    const first = vi.fn();
-    const second = vi.fn();
+    const firstRelease = vi.fn();
+    const secondRelease = vi.fn();
+    const first = vi.fn(() => firstRelease);
+    const second = vi.fn(() => secondRelease);
     const deferred = (owner: object, setVisible: typeof first) => ({ owner, key: 'range',
       expanded: false, loading: false, failed: false, toggle: vi.fn(), retry: vi.fn(), setVisible });
     const props = { blockId: 'work:same-key', isStreaming: true,
@@ -304,15 +293,17 @@ describe('WorkGroupBlock — running latest-five preview', () => {
     expect(screen.getAllByTestId('direct-tool')).toHaveLength(5);
     clickGroup('chat.workGroup.working');
     expect(first).toHaveBeenLastCalledWith(true, true);
+    expect(firstRelease).toHaveBeenCalledTimes(1);
     rerender(createElement(WorkGroupBlock, { ...props, deferred: deferred({}, second) }));
-    expect(first).toHaveBeenLastCalledWith(false, false);
+    expect(firstRelease).toHaveBeenCalledTimes(2);
     expect(second).toHaveBeenLastCalledWith(true, true);
     unmount();
-    expect(second).toHaveBeenLastCalledWith(false, false);
+    expect(secondRelease).toHaveBeenCalledOnce();
   });
 
   it('keeps an outer summary independent from inner detail visibility and remembers the inner toggle', async () => {
-    const setVisible = vi.fn();
+    const release = vi.fn();
+    const setVisible = vi.fn(() => release);
     const child: WorkGroupChild = { kind: 'group', key: 'inner', blockId: 'work:inner', durationMs: 1000,
       isStreaming: false, childItems: [tools('tools', [mkTool('inside')])],
       deferred: { owner: {}, key: 'range', expanded: false, loading: false, failed: false, toggle: vi.fn(), retry: vi.fn(), setVisible } };
@@ -320,14 +311,15 @@ describe('WorkGroupBlock — running latest-five preview', () => {
       childItems: [rendered('progress', 'Checking'), child] }));
     expect(setVisible).not.toHaveBeenCalled();
     clickGroup('chat.workGroup.worked:3s');
-    expect(setVisible).toHaveBeenLastCalledWith(false, false);
+    expect(setVisible).toHaveBeenLastCalledWith(false, true);
     expect(screen.queryByTestId('direct-tool')).toBeNull();
     clickGroup('chat.workGroup.worked:1s');
-    expect(setVisible).toHaveBeenLastCalledWith(true, false);
+    expect(setVisible).toHaveBeenLastCalledWith(true, true);
     clickGroup('chat.workGroup.worked:3s');
-    await waitFor(() => expect(setVisible).toHaveBeenLastCalledWith(false, false));
+    await waitFor(() => expect(release).toHaveBeenCalledTimes(2));
     clickGroup('chat.workGroup.worked:3s');
-    await waitFor(() => expect(setVisible).toHaveBeenLastCalledWith(true, false));
+    await waitFor(() => expect(setVisible).toHaveBeenCalledTimes(3));
+    expect(setVisible).toHaveBeenLastCalledWith(true, true);
   });
 
   it('keeps the latest five tools/reasoning rows in chronological order and drops empty thinking', async () => {
@@ -502,8 +494,6 @@ describe('WorkGroupBlock — running latest-five preview', () => {
     const doneButton = screen.getByText('chat.workGroup.worked:12s').closest('button');
     expect(doneButton?.hasAttribute('disabled')).toBe(false);
     expect(doneButton?.querySelector('svg.lucide-chevron-right')).toBeTruthy();
-    const outgoing = containerPreview();
-    if (outgoing) fireEvent.transitionEnd(outgoing, { propertyName: 'height' });
     expect(screen.queryByTestId('direct-tool')).toBeNull();
     clickGroup('chat.workGroup.worked:12s');
     expect(screen.getByTestId('direct-tool').textContent).toBe('git status');
@@ -785,7 +775,7 @@ describe('WorkGroupBlock — Host-projected running lines', () => {
   });
   const placeholder = thinking({ ...mkThinking('placeholder', ''), thinkingRedacted: true });
 
-  it('renders Host lines without asking for the detail preview, and a line opens the group', () => {
+  it('renders Host lines, and a line opens the group', () => {
     const remote = deferred([
       { kind: 'tool', key: 'c1', toolName: 'exec', status: 'done',
         descriptor: { kind: 'command', toolName: 'exec', command: 'pnpm test', intent: { action: 'test' } } },
@@ -794,12 +784,12 @@ describe('WorkGroupBlock — Host-projected running lines', () => {
     const { container } = render(createElement(WorkGroupBlock, {
       blockId: 'work:remote', isStreaming: true, childItems: [placeholder], deferred: remote,
     }));
-    expect(remote.setVisible).toHaveBeenLastCalledWith(false, false);
+    expect(remote.setVisible).toHaveBeenLastCalledWith(false, true);
     expect(container.querySelector('[data-live-work-preview]')).not.toBeNull();
     expect(screen.getByTestId('direct-tool').getAttribute('data-descriptor')).toBe('command');
     expect(screen.getByText('Checking the failing case')).toBeTruthy();
     fireEvent.click(screen.getByTestId('direct-tool'));
-    expect(remote.setVisible).toHaveBeenLastCalledWith(true, false);
+    expect(remote.setVisible).toHaveBeenLastCalledWith(true, true);
   });
 
   it('keeps the Host lines on screen after expanding until detail rows arrive', () => {
@@ -816,17 +806,14 @@ describe('WorkGroupBlock — Host-projected running lines', () => {
     expect(screen.getByText('Checking the failing case')).toBeTruthy();
     expect(screen.queryByTestId('assistant-progress')).toBeNull();
     // The detail body is already open, so the handoff below swaps rows without replaying its expansion.
-    const body = container.querySelector('[data-live-work-preview]')?.parentElement?.parentElement?.nextElementSibling;
+    const body = container.querySelector('.grid');
     expect(body).not.toBeNull();
 
     rerender(createElement(WorkGroupBlock, {
       ...props, deferred: { ...deferred(lines), awaitingDetails: false },
     }));
-    const exiting = containerPreview();
-    if (exiting) fireEvent.transitionEnd(exiting, { propertyName: 'height' });
     expect(container.querySelector('[data-live-work-preview]')).toBeNull();
-    expect(body?.isConnected).toBe(true);
-    expect(body?.contains(screen.getByTestId('assistant-progress'))).toBe(true);
+    expect(container.querySelector('.grid')).toBe(body);
     expect(screen.getByTestId('assistant-progress').textContent).toBe('Every detail row');
   });
 

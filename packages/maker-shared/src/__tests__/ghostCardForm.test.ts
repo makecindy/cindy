@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parse, type DefaultTreeAdapterTypes } from 'parse5';
 import { applyMailInlineEdits, hasMailExternalImages, mailInlineDocument, mailInlineRuns, mailTextParagraphs, safeMailDocument } from '../mailTextEdit';
 import {
+  ghostCardLinkOpensDirectly,
   parseGhostCardForm,
   parseGhostCardFormValues,
   readGhostCardForm,
@@ -106,6 +107,17 @@ describe("declarative card forms", () => {
     expect(JSON.parse(values.attachmentItems)).toEqual(files);
     expect(visibleMailAttachments({ ...values, bodyHtml: '' }).map(f => f.key)).toEqual(['body', 'unused', 'pdf']);
     expect(visibleMailAttachments({ ...values, bodyHtml: '', quoteHtml: '' })).toEqual(files);
+  });
+  // Unit regression through insertMailImage: attachment-list coverage already checked CID
+  // prefixes, but insertion still used substring matching. `cid:photo-large` plus a `photo`
+  // attachment was the minimal input that incorrectly left the user's draft unchanged.
+  it('inserts an image when another inline CID only shares its prefix', () => {
+    const values = { bodyHtml: '<img src="cid:photo-large">', quoteHtml: '', attachmentItems: JSON.stringify([
+      { key: 'photo', filename: 'photo.png', mimeType: 'image/png', contentId: 'photo' },
+    ]) };
+    const next = insertMailImage(values, 'attachmentItems', 'photo');
+    expect(next.bodyHtml).toContain('<img src="cid:photo-large">');
+    expect(next.bodyHtml).toContain('<img src="cid:photo" alt="photo.png"');
   });
   it('inserts existing image bytes with an unused CID and keeps preview addresses out of the authored HTML', () => {
     const url = `cindy-media://blobs/${'a'.repeat(64)}.png`;
@@ -258,4 +270,13 @@ describe("declarative card forms", () => {
       expect(parseGhostCardFormValues(values)).toBeNull();
     expect(readGhostCardForm('<div data-ghost-form="[]"></div>')).toBeNull();
   });
+});
+
+// Rule (owner, 2026-11-03): GitHub links on plugin cards open without the confirmation; anything that
+// only looks like GitHub still asks.
+it('opens only real https GitHub pages without the link confirmation', () => {
+  for (const url of ['https://github.com/o/r/pull/9', 'https://www.github.com/o'])
+    expect(ghostCardLinkOpensDirectly(url)).toBe(true);
+  for (const url of ['http://github.com/o', 'https://github.com.evil.io/o', 'https://evil.io/github.com', 'https://user@github.com/o', 'https://github.com:8443/o', 'https://gist.github.com/o', 'not a url'])
+    expect(ghostCardLinkOpensDirectly(url)).toBe(false);
 });

@@ -8,5 +8,6 @@
   "messageSource": "由 $t(mcpApps.appName)「{{name}}」傳送",
   "serverId": "MCP 伺服器 ID：{{id}}",
   "exitFullscreen": "離開全螢幕",
-  "mobileUpdateRequired": "請更新手機上的 Cindy 後再開啟此卡片。"
+  "mobileUpdateRequired": "請更新手機上的 Cindy 後再開啟此卡片。",
+  "filesOnExecutionComputer": "檔案內容請在執行電腦查看"
 }

@@ -19,6 +19,10 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Session } from '@/lib/ccAgent.types';
+import type {
+  AutomationScheduleAction,
+  AutomationSessionGroup,
+} from '../../lib/automationSidebarGrouping';
 import { addSessionAttention, clearSessionAttention } from '@/lib/sessionAttentionStore';
 import {
   applyRemoteSessionActivity,
@@ -55,10 +59,26 @@ vi.mock('@/components/ui/tooltip', () => ({
 }));
 
 vi.mock('@/components/ui/dropdown-menu', () => ({
-  DropdownMenu: ({ children }: { children: React.ReactNode }) => children,
+  // Radix only mounts the menu while it is open, so a case has to reach the menu through the
+  // real entry point (right-click on the group header) instead of assuming it is in the tree.
+  DropdownMenu: ({ open, children }: { open?: boolean; children: React.ReactNode }) =>
+    open ? children : null,
   DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => children,
-  DropdownMenuContent: () => null,
-  DropdownMenuItem: () => null,
+  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => children,
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+    disabled,
+  }: {
+    children: React.ReactNode;
+    onSelect?: () => void;
+    disabled?: boolean;
+  }) =>
+    createElement(
+      'button',
+      { role: 'menuitem', onClick: onSelect, disabled, ...(disabled ? { 'data-disabled': '' } : {}) },
+      children,
+    ),
   DropdownMenuSeparator: () => null,
 }));
 
@@ -117,12 +137,19 @@ function GroupHarness({
   urgentSessionIds,
   initialCollapsed,
   onSessionClick = noop,
+  onScheduleAction = noop,
+  deviceLinkDeviceId,
+  scheduleId = 'sched-1',
 }: {
   sessions: Session[];
   notifications: string[];
   urgentSessionIds: ReadonlySet<string>;
   initialCollapsed: boolean;
   onSessionClick?: (sessionId: string) => void;
+  onScheduleAction?: (group: AutomationSessionGroup, action: AutomationScheduleAction) => void;
+  deviceLinkDeviceId?: string;
+  /** null models an automation that has been deleted: the group keeps its runs but loses its schedule. */
+  scheduleId?: string | null;
 }) {
   const [collapsed, setCollapsed] = useState(initialCollapsed);
   return createElement(SessionAttentionUrgencyProvider, {
@@ -130,8 +157,9 @@ function GroupHarness({
     children: createElement(AutomationSessionGroupItem, {
       group: {
         id: 'schedule:sched-1',
-        scheduleId: 'sched-1',
+        scheduleId: scheduleId ?? undefined,
         scheduleStatus: 'active',
+        deviceLinkDeviceId,
         title: '产品决策巡检',
         sessions,
         attentionSessionIds: notifications,
@@ -145,7 +173,7 @@ function GroupHarness({
       onAction: noop,
       onRename: noop,
       onTogglePin: noop,
-      onScheduleAction: noop,
+      onScheduleAction,
     }),
   });
 }
@@ -174,6 +202,11 @@ function renderGroup({
   );
 }
 
+/** The entry point under test: right-clicking the group header opens the same 更多 menu. */
+function openGroupMenu() {
+  fireEvent.contextMenu(screen.getByText('产品决策巡检'));
+}
+
 const childRunIds = (container: HTMLElement): string[] =>
   [...container.querySelectorAll('[data-child-run]')].map(
     (node) => node.getAttribute('data-child-run') ?? '',
@@ -190,6 +223,120 @@ beforeEach(() => {
 });
 
 describe('AutomationSessionGroupItem — 收起态的未处理告警', () => {
+  // Feature regression (unit): the actual group menu must dispatch all members,
+  // even while collapsed. Existing alert tests do not exercise menu actions.
+  // Minimal input: two hidden runs; remote and archived-only groups cannot archive.
+  // Standalone validation: Vitest 2.71s, tests 159ms (2026-10-27).
+  it.each(['local', 'remote', 'archived'] as const)(
+    'offers bulk archive only for active local groups (%s)',
+    (kind) => {
+      const onScheduleAction = vi.fn();
+      const sessions = RUNS.slice(0, 2).map((run) => ({
+        ...run,
+        status: kind === 'archived' ? ('archived' as const) : ('active' as const),
+      }));
+      const { container } = render(
+        createElement(GroupHarness, {
+          sessions,
+          notifications: [],
+          urgentSessionIds: new Set<string>(),
+          initialCollapsed: true,
+          onScheduleAction,
+          deviceLinkDeviceId: kind === 'remote' ? 'other-computer' : undefined,
+        }),
+      );
+      expect(childRunIds(container)).toEqual([]);
+      openGroupMenu();
+      const menuItem = screen.queryByRole('menuitem', {
+        name: 'ccAgent.sidebar.projectAction.archivedAll',
+      });
+      if (kind === 'remote') {
+        expect(menuItem).toBeNull();
+      } else {
+        expect(menuItem).not.toBeNull();
+        fireEvent.click(menuItem!);
+        if (kind === 'archived') expect(onScheduleAction).not.toHaveBeenCalled();
+        else
+          expect(onScheduleAction).toHaveBeenCalledWith(
+            expect.objectContaining({ sessions }),
+            'archive-all',
+          );
+      }
+    },
+  );
+
+  // #8594 regression (unit). Deleting an automation leaves its past runs under a fallback
+  // group key with no scheduleId, and the header used to gate its whole action slot on
+  // scheduleId — so the user could neither hover-archive nor right-click a group whose runs
+  // are still active. Production entry: AutomationSessionGroupItem header menu; observable
+  // result: the archive-all menu item dispatches 'archive-all' for the group's sessions.
+  // Gap in existing coverage: every case above renders a group that still has a schedule.
+  // Minimal failing input: scheduleId undefined with an active run.
+  function renderOrphanGroup(sessions: Session[], onScheduleAction = vi.fn()) {
+    const { container } = render(
+      createElement(GroupHarness, {
+        sessions,
+        notifications: [],
+        urgentSessionIds: new Set<string>(),
+        initialCollapsed: true,
+        onScheduleAction,
+        scheduleId: null,
+      }),
+    );
+    return { container, onScheduleAction };
+  }
+
+  it('keeps the bulk archive entry for runs of a deleted automation', () => {
+    const sessions = RUNS.slice(0, 2);
+    const { container, onScheduleAction } = renderOrphanGroup(sessions);
+    expect(childRunIds(container)).toEqual([]);
+    expect(
+      screen.queryByRole('menuitem', { name: 'ccAgent.sidebar.projectAction.archivedAll' }),
+    ).toBeNull();
+    openGroupMenu();
+    const menuItem = screen.getByRole('menuitem', {
+      name: 'ccAgent.sidebar.projectAction.archivedAll',
+    });
+    expect(menuItem.hasAttribute('data-disabled')).toBe(false);
+    fireEvent.click(menuItem);
+    expect(onScheduleAction).toHaveBeenCalledWith(expect.objectContaining({ sessions }), 'archive-all');
+  });
+
+  it('does not offer to delete an automation that is already gone', () => {
+    renderOrphanGroup(RUNS.slice(0, 2));
+    openGroupMenu();
+    expect(
+      screen.queryByRole('menuitem', { name: 'ccAgent.sidebar.automationGroup.menu.delete' }),
+    ).toBeNull();
+  });
+
+  // An orphan group with nothing left to archive gets no action slot at all, so the header
+  // does not offer an operation that can only fail.
+  it('offers no bulk archive entry once an orphan group has nothing active', () => {
+    const sessions = RUNS.slice(0, 2).map((run) => ({ ...run, status: 'archived' as const }));
+    const { onScheduleAction } = renderOrphanGroup(sessions);
+    openGroupMenu();
+    expect(
+      screen.queryByRole('menuitem', { name: 'ccAgent.sidebar.projectAction.archivedAll' }),
+    ).toBeNull();
+    expect(onScheduleAction).not.toHaveBeenCalled();
+  });
+
+  it('still offers delete for a group whose automation exists', () => {
+    render(
+      createElement(GroupHarness, {
+        sessions: RUNS.slice(0, 2),
+        notifications: [],
+        urgentSessionIds: new Set<string>(),
+        initialCollapsed: true,
+      }),
+    );
+    openGroupMenu();
+    expect(
+      screen.getByRole('menuitem', { name: 'ccAgent.sidebar.automationGroup.menu.delete' }),
+    ).not.toBeNull();
+  });
+
   it('无告警时收起就是收起:组头不点状态、不渲染子行', () => {
     const { container } = renderGroup();
     expect(childRunIds(container)).toEqual([]);

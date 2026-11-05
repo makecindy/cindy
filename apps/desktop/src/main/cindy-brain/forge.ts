@@ -1,3 +1,11 @@
+import { getPluginToolUi } from '@cindy/plugin-protocol';
+import { parseGhostNativeUi } from '@cindy/plugin-protocol';
+import { PLUGIN_UI_CAPABILITIES, PLUGIN_APPEARANCE_FIELDS, pluginUiPointAcceptsScope } from '@cindy/maker-shared';
+import { MCP_APPS_MAX_BYTES } from '../mcp-apps/protocol.js';
+import interactiveExampleManifest from '../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/static/ghost.json?raw';
+import interactiveExampleMain from '../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/static/main.js?raw';
+import interactiveExampleHtml from '../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/static/ui/page.html?raw';
+import { PLUGIN_UI_MIN_CINDY_VERSION, compareCindyVersions, pluginHasToolUi } from '@cindy/plugin-protocol';
 /**
  * forge.ts — 意识锻造(agent 帮用户做意识的主机真身,2026-07-11 Lizi 定案)。
  *
@@ -166,7 +174,7 @@ function shouldSkip(name: string): boolean {
 }
 
 export type ForgePackResult =
-  | { ok: true; cindyPath: string; manifest: GhostManifest; buf: Buffer }
+  | { ok: true; cindyPath: string; manifest: GhostManifest; buf: Buffer; warnings?: string[] }
   | {
       ok: false;
       errorCode:
@@ -181,6 +189,24 @@ export type ForgePackResult =
         | 'PERMISSION_DENIED';
       message: string;
     };
+
+function nativeUiWarnings(manifest: GhostManifest): string[] {
+  const ui = parseGhostNativeUi(manifest.ui);
+  if (!ui) return [];
+  if (ui.version !== 1) return [`ui.version: unsupported UI version ${ui.version}; original tools remain available`];
+  return [...(ui.appearance?.fields ?? []).flatMap((field, index) =>
+    PLUGIN_APPEARANCE_FIELDS.includes(field as typeof PLUGIN_APPEARANCE_FIELDS[number]) ? [] : [`ui.appearance.fields[${index}]: unsupported field ${field}`]),
+    ...(ui.contributions ?? []).flatMap((c, index) =>
+    !PLUGIN_UI_CAPABILITIES.points.includes(c.point)
+      ? [`ui.contributions[${index}].point (${c.id}): unsupported point ${c.point}`]
+      : !pluginUiPointAcceptsScope(c.point, c.scope)
+        ? [`ui.contributions[${index}].scope (${c.id}): ${c.scope} does not match ${c.point}`] : []),
+    ...(ui.commands ?? []).flatMap((command, index) => (command.points ?? []).flatMap(point =>
+      !['composer.tools', 'session.header.actions', 'message.actions', 'turn.footer'].includes(point)
+        ? [`ui.commands[${index}].points (${command.id}): unsupported point ${point}`]
+        : !pluginUiPointAcceptsScope(point, command.scope)
+          ? [`ui.commands[${index}].scope (${command.id}): ${command.scope} does not match ${point}`] : []))];
+}
 
 /** 对话制作插件时可直接生成的四种安全起步模板。 */
 export const FORGE_SCAFFOLD_TEMPLATES = [
@@ -208,6 +234,7 @@ export type ForgeScaffoldResult =
 interface ForgeScaffoldInput {
   dir: string;
   template: ForgeScaffoldTemplate;
+  withUi?: boolean;
   id: string;
   name: string;
   description?: string;
@@ -544,6 +571,11 @@ const SCAFFOLD_ICON_PNG_BASE64 =
 /** 按模板产出相对路径到源码内容的完整映射。 */
 function scaffoldFiles(input: ForgeScaffoldInput): Record<string, string | Buffer> {
   const manifest = scaffoldManifest(input);
+  if (input.withUi) {
+    const example = JSON.parse(interactiveExampleManifest) as { tools: unknown[]; mcpApps: unknown };
+    manifest.tools = [...(manifest.tools as unknown[]), ...example.tools];
+    manifest.mcpApps = example.mcpApps;
+  }
   const files: Record<string, string | Buffer> = {
     [GHOST_MANIFEST_FILE]: `${JSON.stringify(manifest, null, 2)}\n`,
     'main.js':
@@ -556,6 +588,14 @@ function scaffoldFiles(input: ForgeScaffoldInput): Record<string, string | Buffe
             : plainMainSource(),
     'assets/icon.png': Buffer.from(SCAFFOLD_ICON_PNG_BASE64, 'base64'),
   };
+  if (input.withUi) {
+    const handler = interactiveExampleMain.replace('cindy.onHostMessage(handleInteractivePage);', '');
+    files['main.js'] = handler + String(files['main.js']).replace(
+      'cindy.onHostMessage(async function (msg) {',
+      'cindy.onHostMessage(async function (msg) {\n  if (handleInteractivePage(msg)) return;',
+    );
+    files['ui/page.html'] = interactiveExampleHtml;
+  }
   if (input.template === 'node-json-rpc') files['node/worker.cjs'] = nodeJsonRpcWorkerSource();
   if (input.template === 'node-mcp') files['node/worker.cjs'] = nodeMcpWorkerSource();
   return files;
@@ -583,6 +623,10 @@ export async function scaffoldGhostDir(
     isCurrent?: () => boolean;
   },
 ): Promise<ForgeScaffoldResult> {
+  if (input.withUi !== undefined && typeof input.withUi !== 'boolean')
+    return { ok: false, errorCode: 'INVALID_INPUT', message: 'withUi 必须是布尔值' };
+  if (input.withUi && (compareCindyVersions(input.minCindyVersion, PLUGIN_UI_MIN_CINDY_VERSION) ?? -1) < 0)
+    return { ok: false, errorCode: 'INVALID_INPUT', message: `交互页面要求 minCindyVersion >= ${PLUGIN_UI_MIN_CINDY_VERSION}` };
   const template = input.template;
   if (!FORGE_SCAFFOLD_TEMPLATES.includes(template)) {
     return { ok: false, errorCode: 'INVALID_INPUT', message: `不认识的模板:${String(template)}` };
@@ -913,6 +957,13 @@ async function buildGhostPackage(
     if (reservedNamespace) {
       return { ok: false, errorCode: 'MANIFEST_INVALID', message: `清单不合格:${reservedNamespace}` };
     }
+    if (manifestRaw && typeof manifestRaw === 'object' && !Array.isArray(manifestRaw) &&
+        'mcpApps' in manifestRaw && manifestRaw.mcpApps && typeof manifestRaw.mcpApps === 'object' &&
+        'ui' in manifestRaw.mcpApps &&
+        !('minCindyVersion' in manifestRaw)) {
+      manifestRaw = { ...manifestRaw, minCindyVersion: PLUGIN_UI_MIN_CINDY_VERSION };
+      manifestBytes = Buffer.from(`${JSON.stringify(manifestRaw)}\n`, 'utf8');
+    }
     const v = validateGhostManifest(manifestRaw);
     if (!v.ok) {
       return { ok: false, errorCode: 'MANIFEST_INVALID', message: `清单不合格:${v.reason}` };
@@ -929,6 +980,9 @@ async function buildGhostPackage(
       };
     }
     const manifest = v.manifest;
+    if (pluginHasToolUi(manifest) && (!manifest.minCindyVersion ||
+        (compareCindyVersions(manifest.minCindyVersion, PLUGIN_UI_MIN_CINDY_VERSION) ?? -1) < 0))
+      return { ok: false, errorCode: 'MANIFEST_INVALID', message: `交互页面要求 minCindyVersion >= ${PLUGIN_UI_MIN_CINDY_VERSION}` };
 
     // 2) locale 资源必须真实、可解析且提供的条目合法(缺译回退原文,不拒)。
     // 与装入侧使用同一 validator，避免 Forge 能打包、安装却被拒的契约漂移。
@@ -942,7 +996,14 @@ async function buildGhostPackage(
     }
 
     // 3) 清单声明的入口文件必须真实在场(打包期拦,别等装入后沙箱 404)。
-    const mustExist: string[] = [];
+    const nativeUi = parseGhostNativeUi(manifest.ui);
+    const uiFiles = new Set((getPluginToolUi(manifest)?.resources ?? []).map(resource => resource.file));
+    if (nativeUi?.version === 1) for (const view of nativeUi.tabViews ?? []) uiFiles.add(view.page);
+    if (nativeUi?.version === 1) for (const contribution of nativeUi.contributions ?? []) {
+      if (PLUGIN_UI_CAPABILITIES.points.includes(contribution.point) && contribution.page) uiFiles.add(contribution.page);
+    }
+    const mustExist: string[] = [...uiFiles];
+    if (nativeUi?.version === 1) for (const resource of nativeUi.appearance?.resources ?? []) mustExist.push(resource.path);
     if (manifest.entry) mustExist.push(manifest.entry);
     if (manifest.node?.entry) {
       mustExist.push(manifest.node.entry, ...(manifest.node.entries ?? []));
@@ -959,6 +1020,9 @@ async function buildGhostPackage(
         // stat 会判"在场"而 walk 不收集它,装出的包缺入口、运行期才 404。
         const st = await fs.promises.lstat(path.join(dir, rel));
         if (!st.isFile()) throw new Error('not a file');
+        if (uiFiles.has(rel) && st.size > MCP_APPS_MAX_BYTES) {
+          return { ok: false, errorCode: 'MANIFEST_INVALID', message: `交互页面 ${rel} 超过 ${MCP_APPS_MAX_BYTES} 字节上限` };
+        }
       } catch {
         return { ok: false, errorCode: 'ENTRY_MISSING', message: `清单声明的文件不存在:${rel}` };
       }
@@ -1494,7 +1558,8 @@ export async function packGhostDir(
   }
   // 作者目录里的副本只给人手动拿走。安装链路必须用内存里的 `buf` 直写
   // staging，绝不能从 cindyPath 回读——agent 能在确认前替换那份文件。
-  return { ok: true, cindyPath, manifest: built.manifest, buf: built.buf };
+  const warnings = nativeUiWarnings(built.manifest);
+  return { ok: true, cindyPath, manifest: built.manifest, buf: built.buf, ...(warnings.length ? { warnings } : {}) };
 }
 
 /**
@@ -1547,8 +1612,9 @@ export async function packGhostDirToFile(
       message: `写入打包产物失败:${err instanceof Error ? err.message : String(err)}`,
     };
   }
-  return { ok: true, cindyPath: destPath, manifest: built.manifest, buf: built.buf };
+  const warnings = nativeUiWarnings(built.manifest);
+  return { ok: true, cindyPath: destPath, manifest: built.manifest, buf: built.buf, ...(warnings.length ? { warnings } : {}) };
 }
 
 // Keep the existing tool/test export while the built-in Skill owns the documentation.
-export { FORGE_GUIDE } from './forgeGuide.js';
+export { FORGE_GUIDE, FORGE_PAGE_MANUAL } from './forgeGuide.js';

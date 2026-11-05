@@ -10,7 +10,8 @@ describe('botMarketLocale', () => {
     ['zh-CN', 'zh-CN'], ['zh', 'zh-CN'], ['zh-Hans', 'zh-CN'], ['zh-SG', 'zh-CN'],
     ['zh-TW', 'zh-TW'], ['zh_TW', 'zh-TW'], ['zh-Hant', 'zh-TW'], ['zh-HK', 'zh-TW'],
     ['en', 'en'], ['en-US', 'en'], ['ja', 'ja'], ['ja-JP', 'ja'], ['ko', 'ko'], ['ko-KR', 'ko'],
-    ['fr', 'en'], ['', 'en'], [undefined, 'en'], [null, 'en'],
+    ['fr', 'fr'], ['fr-CA', 'fr'], ['es-MX', 'es'], ['de-AT', 'de'],
+    ['pt-Latn-BR', 'pt-BR'], ['pt-AO', 'pt-PT'], ['', 'en'], [undefined, 'en'], [null, 'en'],
   ])('maps %s to %s', (language, expected) => { expect(botMarketLocale(language)).toBe(expected); });
 });
 
@@ -23,6 +24,11 @@ describe('botOpeningGreeting', () => {
 });
 
 describe('localizedBotMarketEntry', () => {
+  // Unit: authored French was previously unreachable; old packages still fall back to English.
+  it('uses optional new translations without requiring old packages to be republished', () => {
+    expect(localizedBotMarketEntry(entry, 'fr-CA').name).toBe('en');
+    expect(localizedBotMarketEntry({ ...entry, locales: { ...entry.locales, fr: copy('Français') } }, 'fr-CA').name).toBe('Français');
+  });
   it('uses the Chinese base for Simplified Chinese and the matching copy otherwise, carrying its own bubble', () => {
     expect(localizedBotMarketEntry(entry, 'zh-CN')).toBe(entry);
     expect(localizedBotMarketEntry(entry, 'ja').name).toBe('ja');

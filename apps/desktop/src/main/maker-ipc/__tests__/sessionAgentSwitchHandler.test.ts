@@ -16,7 +16,11 @@ import { createAgentHandoffPendingRegistry } from '../agentHandoff';
 import { MAKER_INVOKE } from '../channels';
 import { remoteAgentLinkError } from '../../remote-agent/controller/runClient';
 import { IpcHarness } from './helpers/ipcHarness';
-import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context';
+import { getDeviceLinkInvokeContext, runDeviceLinkInvokeContext } from '../../device-link/invoke-context';
+import { applyScheduledModelSelection, type ScheduledModelSelection } from '../scheduledModelSelection';
+import { authorizeSharedTaskOperation } from '@cindy/device-link';
+import type { SharedTaskPeerCapture } from '../../device-link/sharedTaskDispatch';
+import { createSharedTaskSettingGuard } from '../sharedTaskSetting';
 
 function makeRow(overrides: Partial<AgentSwitchSessionRow> = {}): AgentSwitchSessionRow {
   return {
@@ -38,6 +42,7 @@ function makeDeps(overrides: Partial<MakerSessionAgentSwitchHandlerDeps> = {}): 
 } {
   const calls: string[] = [];
   const deps: MakerSessionAgentSwitchHandlerDeps = {
+    confirmNativeHistoryFallback: vi.fn(async () => true),
     getSessionRow: vi.fn(async () => makeRow()),
     getLiveSession: vi.fn(() => ({ isTurnRunning: () => false })),
     closeSession: vi.fn(async () => {
@@ -79,6 +84,252 @@ const validParams = {
   model: 'gpt-5.5',
   providerId: null,
 };
+
+describe('same-harness native relocation', () => {
+  // Quota balancing is now automatic only while native context survives. Exercise the
+  // real switch entry: refusal after a failed resume must restore the original route.
+  it.each(['missing', 'rejected', 'silent'] as const)('asks before summary fallback after %s native history and preserves the source on refusal', async failure => {
+    let row = makeRow({ workingDir: '/project', sdkSessionId: 'source-native', agentDeviceId: null });
+    const original = { ...row };
+    const { deps } = makeDeps({
+      getSessionRow: vi.fn(async () => ({ ...row })),
+      relocateNativeHistory: vi.fn(async () => failure === 'missing' ? null : 'transferred'),
+      closeSession: vi.fn().mockResolvedValueOnce(undefined).mockRejectedValue(new Error('DEVICE_LINK_NOT_CONNECTED')),
+      applyAgentSwitchToDb: vi.fn(async (_id, patch) => { row = { ...row, ...patch, providerId: patch.providerId ?? null }; }),
+      getLiveSession: () => ({ isTurnRunning: () => false, sdkSessionId: failure === 'silent' ? 'fresh' : row.sdkSessionId ?? undefined }),
+      bootstrapSwitchedSession: vi.fn(async () => { if (failure === 'rejected') throw new Error('cannot resume'); }),
+      confirmNativeHistoryFallback: vi.fn(async () => {
+        expect(row).toMatchObject({ sdkSessionId: original.sdkSessionId, agentDeviceId: original.agentDeviceId, providerId: original.providerId });
+        return false;
+      }),
+    });
+    await expect(performSessionAgentSwitch(deps, { ...validParams, targetAgentKind: 'claude-code', agentDeviceId: 'mini',
+      applyNow: true, skipBootstrap: true, providerGroupSwitchReason: 'quota-rebalance' })).rejects.toThrow('NATIVE_HISTORY_FALLBACK_DECLINED');
+    expect(deps.confirmNativeHistoryFallback).toHaveBeenCalledOnce();
+    expect(deps.insertBoundaryMessage).not.toHaveBeenCalled();
+    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+    expect(row.sdkSessionId).toBe('source-native');
+  });
+
+  it.each([false, true])('publishes an automatic native switch without asking, or a confirmed summary (%s)', async resumeFails => {
+    let row = makeRow({ workingDir: '/project', sdkSessionId: 'source-native' });
+    const { deps } = makeDeps({
+      getSessionRow: vi.fn(async () => ({ ...row })),
+      relocateNativeHistory: vi.fn(async () => 'transferred'),
+      applyAgentSwitchToDb: vi.fn(async (_id, patch) => { row = { ...row, ...patch, providerId: patch.providerId ?? null }; }),
+      getLiveSession: () => ({ isTurnRunning: () => false, sdkSessionId: row.sdkSessionId ?? undefined }),
+      bootstrapSwitchedSession: vi.fn(async () => { if (resumeFails) throw new Error('cannot resume'); }),
+    });
+    await performSessionAgentSwitch(deps, { ...validParams, targetAgentKind: 'claude-code', agentDeviceId: 'mini',
+      applyNow: true, skipBootstrap: true, providerGroupSwitchReason: 'quota-rebalance' });
+    expect(deps.confirmNativeHistoryFallback).toHaveBeenCalledTimes(resumeFails ? 1 : 0);
+    expect(deps.bootstrapSwitchedSession).toHaveBeenCalledOnce();
+    expect(deps.insertBoundaryMessage).toHaveBeenCalledWith('s1', expect.objectContaining({ nativeHistory: resumeFails ? 'fallback' : 'restored' }));
+    expect(row.agentDeviceId).toBe('mini');
+    expect(row.sdkSessionId).toBe(resumeFails ? null : 'transferred');
+  });
+
+  it('restores the source on cancellation during the native probe without asking', async () => {
+    let row = makeRow({ workingDir: '/project', sdkSessionId: 'source-native' });
+    const controller = new AbortController();
+    const { deps } = makeDeps({
+      getSessionRow: vi.fn(async () => ({ ...row })),
+      relocateNativeHistory: vi.fn(async () => 'transferred'),
+      applyAgentSwitchToDb: vi.fn(async (_id, patch) => { row = { ...row, ...patch, providerId: patch.providerId ?? null }; }),
+      bootstrapSwitchedSession: vi.fn(async () => { controller.abort(); }),
+    });
+    await expect(performSessionAgentSwitch(deps, { ...validParams, targetAgentKind: 'claude-code', agentDeviceId: 'mini',
+      applyNow: true, providerGroupSwitchReason: 'quota-rebalance', signal: controller.signal })).rejects.toThrow();
+    expect(row.sdkSessionId).toBe('source-native');
+    expect(row.agentDeviceId).toBeNull();
+    expect(deps.confirmNativeHistoryFallback).not.toHaveBeenCalled();
+  });
+
+  it.each(['closed', 'close-rejected', 'account-changed', 'history-cleared'] as const)('rolls back a successful quota probe when the final route write fails (%s)', async state => {
+    let row = makeRow({ workingDir: '/project', sdkSessionId: 'source-native', agentDeviceId: 'source' });
+    const original = { ...row };
+    let owner = 1;
+    let generation = 0;
+    let targetWrites = 0;
+    let live = true;
+    const { deps } = makeDeps({
+      readOwnerGeneration: () => owner,
+      readPendingHandoffGeneration: () => generation,
+      getSessionRow: vi.fn(async () => ({ ...row })),
+      getLiveSession: () => live ? { isTurnRunning: () => false, sdkSessionId: row.sdkSessionId ?? undefined } : undefined,
+      relocateNativeHistory: vi.fn(async () => 'transferred'),
+      applyAgentSwitchToDb: vi.fn(async (_id, patch) => {
+        if (patch.sdkSessionId === 'transferred' && ++targetWrites === 2) throw new Error('route write failed');
+        row = { ...row, ...patch, providerId: patch.providerId ?? null };
+      }),
+      bootstrapSwitchedSession: vi.fn(async () => { live = true; }),
+      closeSession: vi.fn(async () => {
+        live = false;
+        if (targetWrites < 2) return;
+        if (state === 'account-changed') owner++;
+        if (state === 'history-cleared') generation++;
+        if (state !== 'closed') throw new Error('DEVICE_LINK_NOT_CONNECTED');
+      }),
+    });
+    await expect(performSessionAgentSwitch(deps, { ...validParams, targetAgentKind: 'claude-code', agentDeviceId: 'mini',
+      applyNow: true, providerGroupSwitchReason: 'quota-rebalance', effort: 'high', fastMode: true })).rejects.toThrow('route write failed');
+    expect(live).toBe(false);
+    expect(deps.insertBoundaryMessage).not.toHaveBeenCalled();
+    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+    expect(deps.confirmNativeHistoryFallback).not.toHaveBeenCalled();
+    if (state === 'account-changed' || state === 'history-cleared') {
+      expect(deps.applyAgentSwitchToDb).toHaveBeenCalledTimes(2);
+      expect(deps.setSessionProvider).toHaveBeenCalledTimes(1);
+      return;
+    }
+    expect(row).toEqual(original);
+    expect(deps.setSessionProvider).toHaveBeenLastCalledWith('s1', original.providerId);
+  });
+
+  it.each([
+    ['claude-code', 'cc', null, 'mini'], ['codex', 'codex', 'mini', null], ['pi', 'pi', 'mini', 'studio'],
+  ] as const)('restores %s history from %s between computers before dispatch', async (kind, dbKind, from, to) => {
+    let nativeId = 'original';
+    const row = makeRow({ agentKind: dbKind, agentDeviceId: from, workingDir: '/project', sdkSessionId: nativeId });
+    const relocateNativeHistory = vi.fn(async () => 'transferred');
+    const { deps, calls } = makeDeps({
+      getSessionRow: vi.fn(async () => row), relocateNativeHistory,
+      getLiveSession: () => ({ isTurnRunning: () => false, sdkSessionId: nativeId }),
+      applyAgentSwitchToDb: vi.fn(async (_sessionId, patch) => { calls.push('db'); nativeId = patch.sdkSessionId!; }),
+    });
+    await performSessionAgentSwitch(deps, { ...validParams, targetAgentKind: kind, agentDeviceId: to, applyNow: true, skipBootstrap: true });
+    expect(relocateNativeHistory).toHaveBeenCalledWith(expect.objectContaining({ fromDevice: from, toDevice: to, nativeId: 'original', workingDir: '/project' }));
+    expect(vi.mocked(deps.closeSession).mock.invocationCallOrder[0]).toBeLessThan(relocateNativeHistory.mock.invocationCallOrder[0]);
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({ sdkSessionId: 'transferred' }));
+    expect(deps.bootstrapSwitchedSession).toHaveBeenCalledOnce();
+    expect(deps.insertBoundaryMessage).toHaveBeenCalledWith('s1', expect.objectContaining({ resumed: true, handoff: expect.not.stringContaining('你好') }));
+    expect(deps.applyResumeFallbackAtomically).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('falls back with visible handoff metadata when restore fails or silently starts fresh (%s)', async (silent) => {
+    const { deps } = makeDeps({
+      getSessionRow: vi.fn(async () => makeRow({ workingDir: '/project' })),
+      relocateNativeHistory: vi.fn(async () => 'transferred'),
+      bootstrapSwitchedSession: silent ? vi.fn(async () => {}) : vi.fn().mockRejectedValueOnce(new Error('native format unavailable')).mockResolvedValue(undefined),
+    });
+    await performSessionAgentSwitch(deps, { ...validParams, targetAgentKind: 'claude-code', agentDeviceId: 'mini', applyNow: true });
+    expect(deps.applyResumeFallbackAtomically).toHaveBeenCalledWith('s1', 'boundary-client-1', expect.objectContaining({ resumed: false, handoff: expect.stringContaining('你好') }));
+    expect(deps.bootstrapSwitchedSession).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['current', 'account-changed', 'history-cleared'] as const)('settles native resume fallback despite failed target cleanup (%s)', async state => {
+    let owner = 1;
+    let generation = 0;
+    let row = makeRow({ workingDir: '/project', sdkSessionId: 'source-native' });
+    let boundary: unknown;
+    const { deps } = makeDeps({
+      readOwnerGeneration: () => owner,
+      readPendingHandoffGeneration: () => generation,
+      getSessionRow: vi.fn(async () => ({ ...row })),
+      getLiveSession: () => ({ isTurnRunning: () => false, sdkSessionId: row.sdkSessionId ?? undefined }),
+      relocateNativeHistory: vi.fn(async () => 'transferred'),
+      applyAgentSwitchToDb: vi.fn(async (_id, patch) => { row = { ...row, ...patch, providerId: patch.providerId ?? null }; }),
+      insertBoundaryMessage: vi.fn(async (_id, content) => { boundary = content; return 'boundary-client-1'; }),
+      applyResumeFallbackAtomically: vi.fn(async (_id, _clientId, content) => { row.sdkSessionId = null; boundary = content; }),
+      closeSession: vi.fn().mockResolvedValueOnce(undefined).mockImplementation(async () => {
+        if (state === 'account-changed') owner++;
+        if (state === 'history-cleared') generation++;
+        throw new Error('DEVICE_LINK_NOT_CONNECTED');
+      }),
+      bootstrapSwitchedSession: vi.fn().mockRejectedValueOnce(new Error('cannot resume')).mockResolvedValue(undefined),
+    });
+    const switching = performSessionAgentSwitch(deps, { ...validParams, targetAgentKind: 'claude-code', agentDeviceId: 'mini', applyNow: true });
+    if (state !== 'current') {
+      await expect(switching).rejects.toThrow(state === 'account-changed' ? 'REMOTE_AGENT_ACCOUNT_CHANGED' : 'history changed');
+      expect(deps.applyResumeFallbackAtomically).not.toHaveBeenCalled();
+      expect(deps.bootstrapSwitchedSession).toHaveBeenCalledOnce();
+      return;
+    }
+    await expect(switching).resolves.toMatchObject({ switched: true, engineReady: true });
+    expect(row.sdkSessionId).toBeNull();
+    expect(boundary).toMatchObject({ resumed: false, nativeHistory: 'fallback', handoff: expect.stringContaining('你好') });
+    expect(deps.setPendingHandoff).toHaveBeenLastCalledWith('s1', expect.stringContaining('你好'), 0);
+    expect(deps.bootstrapSwitchedSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not commit native history after clear or cancellation during transfer', async () => {
+    let generation = 0;
+    const { deps } = makeDeps({
+      readPendingHandoffGeneration: () => generation,
+      getSessionRow: vi.fn(async () => makeRow({ workingDir: '/project' })),
+      relocateNativeHistory: vi.fn(async input => { generation++; input.assertCurrent(); return 'transferred'; }),
+    });
+    await expect(performSessionAgentSwitch(deps, { ...validParams, targetAgentKind: 'claude-code', agentDeviceId: 'mini', applyNow: true })).rejects.toThrow('history changed');
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+  });
+
+  it('keeps context from a previous switch that has not reached the native session yet', async () => {
+    const { deps } = makeDeps({
+      getSessionRow: vi.fn(async () => makeRow({ workingDir: '/project' })),
+      relocateNativeHistory: vi.fn(async () => 'transferred'),
+      peekPendingHandoff: vi.fn(async () => 'Important context waiting for the first native send'),
+      getLiveSession: () => ({ isTurnRunning: () => false, sdkSessionId: 'transferred' }),
+    });
+    await performSessionAgentSwitch(deps, { ...validParams, targetAgentKind: 'claude-code', agentDeviceId: 'mini', applyNow: true });
+    expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining('Important context waiting for the first native send'), undefined);
+    expect(deps.applyResumeFallbackAtomically).not.toHaveBeenCalled();
+  });
+
+  it('does not treat an account switch during transfer as an ordinary fallback', async () => {
+    let owner = 1;
+    const { deps } = makeDeps({
+      readOwnerGeneration: () => owner,
+      getSessionRow: vi.fn(async () => makeRow({ workingDir: '/project' })),
+      relocateNativeHistory: vi.fn(async () => { owner++; throw new Error('owner changed'); }),
+    });
+    await expect(performSessionAgentSwitch(deps, { ...validParams, targetAgentKind: 'claude-code', agentDeviceId: 'mini', applyNow: true })).rejects.toThrow('REMOTE_AGENT_ACCOUNT_CHANGED');
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+  });
+
+  it('resumes native history on startup relocation and atomically falls back if opening it fails', async () => {
+    const { deps } = makeDeps({
+      getSessionRow: vi.fn(async () => makeRow({ workingDir: '/project', agentDeviceId: 'target' })),
+      relocateNativeHistory: vi.fn(async () => 'restored-native'),
+    });
+    const result = await relocateForFreshStart(deps, { sessionId: 's1', agentDeviceId: 'target', providerId: null,
+      from: { agentDeviceId: 'source', providerId: null } });
+    expect(result.nativeId).toBe('restored-native');
+    expect(deps.relocateNativeHistory).toHaveBeenCalledWith(expect.objectContaining({ fromDevice: 'source', toDevice: 'target' }));
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({ sdkSessionId: 'restored-native' }));
+    expect(deps.insertBoundaryMessage).toHaveBeenCalledWith('s1', expect.objectContaining({ nativeHistory: 'restored', resumed: true }));
+    await result.fallback!();
+    expect(deps.applyResumeFallbackAtomically).toHaveBeenCalledWith('s1', 'boundary-client-1', expect.objectContaining({
+      resumed: false, nativeHistory: 'fallback', handoff: expect.stringContaining('你好'),
+    }));
+    expect(deps.setPendingHandoff).toHaveBeenLastCalledWith('s1', expect.stringContaining('你好'), undefined);
+  });
+
+  it('keeps cross-harness switching on the existing handoff path', async () => {
+    const relocateNativeHistory = vi.fn();
+    const { deps } = makeDeps({ relocateNativeHistory, getSessionRow: vi.fn(async () => makeRow({ workingDir: '/project' })) });
+    await performSessionAgentSwitch(deps, { ...validParams, agentDeviceId: 'mini', applyNow: true });
+    expect(relocateNativeHistory).not.toHaveBeenCalled();
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({ sdkSessionId: null }));
+  });
+
+  it('restores the source before opening a native copy whose fallback boundary could not be saved', async () => {
+    const { deps } = makeDeps({
+      getSessionRow: vi.fn(async () => makeRow({ workingDir: '/project', sdkSessionId: 'source-native', agentDeviceId: 'source' })),
+      relocateNativeHistory: vi.fn(async () => 'transferred'),
+      insertBoundaryMessage: vi.fn(async () => { throw new Error('boundary write failed'); }),
+    });
+    await expect(relocateForFreshStart(deps, { sessionId: 's1', agentDeviceId: 'target', providerId: null }))
+      .rejects.toThrow('boundary write failed');
+    expect(deps.applyAgentSwitchToDb).toHaveBeenLastCalledWith('s1', expect.objectContaining({
+      sdkSessionId: 'source-native', agentDeviceId: 'source', providerId: 'xd',
+    }));
+    expect(deps.setSessionProvider).toHaveBeenLastCalledWith('s1', 'xd');
+    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+    expect(deps.bootstrapSwitchedSession).not.toHaveBeenCalled();
+  });
+});
 
 const orcaAgents = [
   { kind: 'claude-code', dbKind: 'cc', model: 'claude-fable-5', providerId: 'anthropic' },
@@ -171,6 +422,83 @@ describe('same-engine selection at send', () => {
     });
     return { deps, pending, apply, calls, row: () => row };
   }
+
+  // #7825, unit: exercise the production pending-apply entry with the real
+  // setting guard and permission policy. Existing cases test switching and
+  // guest denial separately; the missing input is an owner-staged choice whose
+  // first send runs inside a guest's async invoke context.
+  function sharedSelectionHarness(sessionId = 's1') {
+    const h = selectionHarness();
+    let current = true;
+    const capture: SharedTaskPeerCapture = {
+      author: { sharedTaskId: 'shared', sessionId, memberId: 'guest', accountId: 'guest', displayName: 'Guest' },
+      isCurrent: () => current,
+      authorize: (operation) => authorizeSharedTaskOperation({
+        sharedTaskId: 'shared', sessionId: 's1', ownerAccountId: 'owner', hostDeviceId: 'host',
+        status: 'active', revision: 1,
+        guests: current ? [{ memberId: 'guest', accountId: 'guest', version: 1, deviceIds: ['phone'] }] : [],
+      }, { accountId: 'guest', deviceId: 'phone' }, 's1', operation).allowed,
+    };
+    const context = { controllerDeviceId: 'phone', channel: 'maker:input:enqueue', sharedTask: capture,
+      sharedTaskSetting: { admitted: false } };
+    const preflight = vi.fn(async () => false);
+    const select = h.deps.selectSameAgentModel!;
+    h.deps.selectSameAgentModel = async (id, intent, applyNow, assertSelectionCurrent, beforeMutation, pendingSelectionAccess) => {
+      if (!applyNow) return select(id, intent, false);
+      const invoke = getDeviceLinkInvokeContext();
+      const guard = pendingSelectionAccess ?? createSharedTaskSettingGuard(invoke?.sharedTask, id, invoke?.sharedTaskSetting ?? { admitted: false });
+      assertSelectionCurrent?.();
+      guard();
+      await preflight();
+      await beforeMutation?.();
+      assertSelectionCurrent?.();
+      guard.admit();
+      return select(id, intent, true);
+    };
+    return { ...h, capture, context, preflight, revoke: () => { current = false; } };
+  }
+
+  it('applies the owner choice on the first guest send without granting the guest model access', async () => {
+    const h = sharedSelectionHarness();
+    await performSessionAgentSwitch(h.deps, { ...validParams, model: 'gpt-5.6-sol' });
+    await runDeviceLinkInvokeContext(h.context, async () => {
+      await applyPendingAgentSwitchIfIdle(h.deps, 's1');
+      expect(h.row().model).toBe('gpt-5.6-sol');
+      expect(h.pending.get('s1')).toBeUndefined();
+      // The next send still carries the guest author, and a subsequent settings
+      // request in the same invoke must not inherit the host transaction's admission.
+      expect(getDeviceLinkInvokeContext()).toBe(h.context);
+      expect(h.context.sharedTaskSetting.admitted).toBe(false);
+      const ipc = new IpcHarness();
+      registerMakerSessionAgentSwitchHandler(ipc, h.deps);
+      await expect(ipc.invoke(MAKER_INVOKE.SWITCH_SESSION_AGENT, 's1', 'codex', 'guest-model', null))
+        .rejects.toThrow('PERMISSION_DENIED');
+      expect(h.row().model).toBe('gpt-5.6-sol');
+      expect(h.pending.get('s1')).toBeUndefined();
+    });
+    expect(h.apply).toHaveBeenCalledOnce();
+  });
+
+  it.each(['revoked', 'other-task', 'during-preflight'] as const)(
+    'keeps the owner choice pending when guest access fails (%s)', async (failure) => {
+      const h = sharedSelectionHarness(failure === 'other-task' ? 'other-task' : 's1');
+      await performSessionAgentSwitch(h.deps, { ...validParams, model: 'gpt-5.6-sol' });
+      if (failure === 'revoked') h.revoke();
+      if (failure === 'during-preflight') h.preflight.mockImplementationOnce(async () => {
+        h.revoke();
+        return false;
+      });
+      await expect(runDeviceLinkInvokeContext(h.context, () => applyPendingAgentSwitchIfIdle(h.deps, 's1')))
+        .rejects.toThrow('PERMISSION_DENIED');
+      expect(h.row().model).toBe('gpt-6-astra');
+      expect(h.apply).not.toHaveBeenCalled();
+      expect(h.pending.get('s1')?.model).toBe('gpt-5.6-sol');
+      // An invalid guest request must not discard the owner's pending choice.
+      await applyPendingAgentSwitchIfIdle(h.deps, 's1');
+      expect(h.row().model).toBe('gpt-5.6-sol');
+      expect(h.pending.get('s1')).toBeUndefined();
+    },
+  );
 
   it('keeps the source thread untouched while selecting away and back, and applies only the final choice on send', async () => {
     const h = selectionHarness();
@@ -1115,7 +1443,7 @@ describe('Phase 2:切回停泊引擎(resume + 增量交接)', () => {
     const { deps } = makeResumeDeps();
     const result = await performSessionAgentSwitch(deps, validParams);
     expect(result).toMatchObject({ switched: true, engineReady: true });
-    expect(deps.findParkedEngineSession).toHaveBeenCalledWith('s1', 'codex');
+    expect(deps.findParkedEngineSession).toHaveBeenCalledWith('s1', 'codex', null);
     expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', {
       agentKind: 'codex',
       model: 'gpt-5.5',
@@ -1129,11 +1457,23 @@ describe('Phase 2:切回停泊引擎(resume + 增量交接)', () => {
     });
     const boundary = vi.mocked(deps.insertBoundaryMessage).mock.calls[0][1];
     expect(boundary.resumed).toBe(true);
+    // Same-device engine switches still record the departure device so a later
+    // relocation cannot make this boundary look local to another computer.
+    expect(boundary.fromAgentDeviceId).toBeNull();
+    expect(boundary).not.toHaveProperty('toAgentDeviceId');
     // 增量 framing(归位续接),且工作状态区来自全量历史
     expect(boundary.handoff).toContain('now it is switching back to you');
     expect(boundary.handoff).toContain('- /repo/a.ts');
     expect(boundary.handoff).not.toContain('最早的问题');
     expect(boundary.handoff).toContain('离开期间的问题');
+  });
+
+  it('passes the task device so a thread parked on another computer is not resumed', async () => {
+    const { deps } = makeResumeDeps({
+      getSessionRow: vi.fn(async () => makeRow({ agentDeviceId: 'device-remote' })),
+    });
+    await performSessionAgentSwitch(deps, validParams);
+    expect(deps.findParkedEngineSession).toHaveBeenCalledWith('s1', 'codex', 'device-remote');
   });
 
   it('无停泊绑定(查询返回 null):v1 全量行为不变', async () => {
@@ -1652,6 +1992,39 @@ describe('远程 Agent:选模型时换 Agent 所在电脑', () => {
       })).resolves.toMatchObject({ switched: true });
     expect(userMove.calls).toEqual([]);
     expect(staged.calls).toEqual([]);
+  });
+
+  // PR #6830 merge regression, unit: the scheduled entry materialized inherited
+  // null and turned a same-computer Harness switch into a forbidden Worker move.
+  // Earlier tests entered the handoff directly. Exercise both production entries;
+  // an actual location change must still fail before runtime or database mutation.
+  it.each([undefined, null, 'office-pc'])('scheduled execution-device Worker keeps its location boundary: %j', async (agentDeviceId) => {
+    const h = relocationHarness({ agentDeviceId: null, orcaRole: null,
+      orcaRemoteLead: JSON.stringify({ leadDeviceId: 'lead-device', leadSessionId: 'lead-1', workerLabel: 'worker' }),
+    });
+    const choice: ScheduledModelSelection = { agentKind: 'codex', agentDeviceId,
+      model: 'gpt-5.5', providerId: 'openai', effort: null, fastMode: false };
+    const applyModel = vi.fn(async () => {});
+    const result = applyScheduledModelSelection(choice, {
+      getTarget: async () => ({ agentKind: 'claude-code', agentDeviceId: null, status: 'active' }),
+      isBusy: () => false,
+      resolveSelection: async (value) => value,
+      switchHarness: (value) => performSessionAgentSwitch({ ...h.deps, pendingSwitches: undefined }, {
+        sessionId: 's1', targetAgentKind: value.agentKind, model: value.model,
+        agentDeviceId: value.agentDeviceId, providerId: value.providerId,
+        effort: value.effort, fastMode: value.fastMode, applyNow: true, configStaged: true,
+      }),
+      applyModel,
+    });
+    if (agentDeviceId) {
+      await expect(result).rejects.toThrow(/UNSUPPORTED_CAPABILITY/);
+      expect(h.calls).toEqual([]);
+      expect(applyModel).not.toHaveBeenCalled();
+    } else {
+      await expect(result).resolves.toMatchObject({ agentKind: 'codex', agentDeviceId: null });
+      expect(h.deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({ agentKind: 'codex' }));
+      expect(applyModel).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'codex', agentDeviceId: null }));
+    }
   });
 
   it('协同 Lead 离开远程电脑:关闭旧远程会话遇链路错误仍提交新位置', async () => {

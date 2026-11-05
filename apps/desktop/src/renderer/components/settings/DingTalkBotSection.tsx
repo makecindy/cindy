@@ -1,4 +1,6 @@
+import { imBotSettings } from './ImBotSection.settings-search';
 import { Button } from '@/components/ui/button';
+import { ImConnectionError, ImReconnectButton } from './ImConnectionRecovery';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Loader2, Trash2 } from 'lucide-react';
@@ -59,8 +61,8 @@ export function DingTalkBotSection({
 
   return (
     <ImChannelSettingsCard
-      id="personal-im-dingtalk"
-      title={t('settings.dingtalkBot.title')}
+      id={imBotSettings.dingtalk.targetId}
+      title={t(imBotSettings.dingtalk.titleKey)}
       description={t('settings.dingtalkBot.description')}
       routeSummary={
         routeSummary
@@ -119,7 +121,7 @@ export function DingTalkBotSection({
             label={t('settings.dingtalkBot.connected.ownerLabel')}
             value={bot.ownerUserId || t('settings.dingtalkBot.connected.notBound')}
           />
-          <Button
+          <Button data-setting-id={imBotSettings.dingtalk.id}
             variant="secondary"
             size="lg"
             loading={bot.isClearing}
@@ -152,7 +154,7 @@ export function DingTalkBotSection({
               }
               className="pr-10"
             />
-            <button
+            <button data-setting-id={imBotSettings.dingtalk.id}
               type="button"
               onClick={() => setShowSecret((value) => !value)}
               className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[var(--settings-eye-icon)]"
@@ -171,9 +173,10 @@ export function DingTalkBotSection({
                 {bot.validationError}
               </span>
             ) : bot.status.kind === 'error' ? (
-              <span className="text-[var(--settings-error-text)]" role="alert">
-                {t('settings.dingtalkBot.errorHint')}
-              </span>
+              <ImConnectionError
+                message={t('settings.dingtalkBot.errorHint')}
+                details={bot.status.reason}
+              />
             ) : (
               <span className="text-[var(--settings-source-meta)]">
                 {t('settings.dingtalkBot.formHint')}
@@ -182,22 +185,17 @@ export function DingTalkBotSection({
           </div>
           <div className="flex gap-2">
             {bot.hasSecret && !bot.appSecret.trim() ? (
-              <Button
+              <ImReconnectButton
                 variant="cta"
                 size="lg"
                 loading={bot.isSaving}
-                type="button"
-                onClick={() => void bot.reconnect()}
-                disabled={bot.isSaving}
+                onReconnect={bot.reconnect}
                 className="flex-1"
               >
-                {bot.isSaving && (
-                  <Loader2 size={14} className="animate-spin motion-reduce:animate-none" />
-                )}
                 {t('settings.dingtalkBot.reconnect')}
-              </Button>
+              </ImReconnectButton>
             ) : (
-              <Button
+              <Button data-setting-id={imBotSettings.dingtalk.id}
                 variant="cta"
                 size="lg"
                 loading={bot.isSaving}
@@ -213,7 +211,7 @@ export function DingTalkBotSection({
               </Button>
             )}
             {bot.hasSecret && (
-              <button
+              <button data-setting-id={imBotSettings.dingtalk.id}
                 type="button"
                 onClick={() => void clear()}
                 disabled={bot.isClearing}
@@ -228,7 +226,7 @@ export function DingTalkBotSection({
       )}
 
       <div className="border-t border-[var(--settings-theme-card-border)] pt-3">
-        <button
+        <button data-setting-id={imBotSettings.dingtalk.id}
           type="button"
           onClick={() => setGuideOpen((value) => !value)}
           className="flex w-full items-center justify-between bg-transparent p-0 text-left"
@@ -251,7 +249,7 @@ export function DingTalkBotSection({
                 <span>{step}</span>
               </div>
             ))}
-            <button
+            <button data-setting-id={imBotSettings.dingtalk.id}
               type="button"
               onClick={() => window.electronAPI.openExternal?.(DEVELOPER_PORTAL_URL)}
               className="mt-1 w-fit bg-transparent p-0 text-12 font-medium text-[var(--settings-source-link)] underline underline-offset-2"
@@ -285,7 +283,7 @@ function TextInput({
   className?: string;
 }) {
   return (
-    <input
+    <input data-setting-id={imBotSettings.dingtalk.id}
       type={type}
       value={value}
       onChange={(event) => onChange(event.target.value)}

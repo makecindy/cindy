@@ -1,4 +1,5 @@
 import { parse, serialize, defaultTreeAdapter as adapter, html as htmlNames, type DefaultTreeAdapterTypes } from 'parse5';
+export { mailReadingColor, mailReadingThemeScript } from './mailReadingColors';
 
 type Run = { start: number; end: number; text: string };
 type Paragraph = { text: string; runs: Run[] };
@@ -89,7 +90,7 @@ export function hasMailExternalImages(source: string): boolean {
 
 /** Sanitize before creating our markers. Mail-provided editing attributes,
  * scripts, nested contexts and event handlers can never become editor controls. */
-export function safeMailDocument(source: string, inline = false, images: MailInlineImage[] = [], allowExternalImages = false): string {
+export function safeMailDocument(source: string, inline = false, images: MailInlineImage[] = [], allowExternalImages = false, deferExternalImages = inline): string {
   const doc = parse(source, { sourceCodeLocationInfo: true });
   const runs = inline ? mailInlineRuns(source) : [];
   const byStart = new Map(runs.map((run, id) => [run.start, { ...run, id }]));
@@ -110,9 +111,9 @@ export function safeMailDocument(source: string, inline = false, images: MailInl
         node.attrs = node.attrs.filter(a => a.name === 'style' || (attrs.has(a.name) &&
           (a.name !== 'href' || /^(https?:|mailto:)/i.test(a.value)) &&
           (a.name !== 'src' || /^(cid:|data:image\/(png|jpeg|gif|webp);base64,)/i.test(a.value))));
-        // Inline hosts start opted-in requests after the document is ready, so
+        // Preview hosts start opted-in requests after the document is ready, so
         // a slow image server cannot hold the entire mail body invisible.
-        if (externalImage) node.attrs.push({ name: inline ? 'data-cindy-mail-external-src' : 'src', value: externalImage }, { name: 'referrerpolicy', value: 'no-referrer' });
+        if (externalImage) node.attrs.push({ name: deferExternalImages ? 'data-cindy-mail-external-src' : 'src', value: externalImage }, { name: 'referrerpolicy', value: 'no-referrer' });
         for (const attr of node.attrs) if (attr.name === 'style') attr.value = cleanCss(attr.value);
         if (node.tagName === 'style') {
           node.childNodes = node.childNodes.filter(n => 'value' in n);
@@ -155,7 +156,18 @@ export const validMailImageUrl = (url: string) => /^cindy-media:\/\/blobs\/[a-f0
 export const MAIL_PAPER_COLOR = 'white';
 export const MAIL_INLINE_STYLE = `html{color-scheme:light}body{margin:4px;background:${MAIL_PAPER_COLOR};color:#111;font:16px/1.6 Arial,Helvetica,sans-serif;overflow-wrap:anywhere}img{max-width:100%;height:auto}table{max-width:100%}[data-cindy-mail-run]{white-space:pre-wrap;outline:none}[data-cindy-mail-run]:empty{display:inline-block;min-width:1ch;min-height:1em}`;
 export function mailInlineDocument(source: string, images: MailInlineImage[] = [], allowExternalImages = false): string {
-  return '<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'none\'; img-src data: cindy-media:' + (allowExternalImages ? ' https: http:' : '') + '; style-src \'unsafe-inline\'; form-action \'none\'; base-uri \'none\'"><meta name="viewport" content="width=device-width,initial-scale=1"><style>' + MAIL_INLINE_STYLE + '</style>' + safeMailDocument(source, true, images, allowExternalImages);
+  return mailPreviewDocument(source, images, allowExternalImages, true);
+}
+
+/** Reading keeps the sender's text nodes and whitespace collapsing. Editor
+ * spans with pre-wrap would expose HTML indentation as visible gaps/newlines. */
+export function mailReadingDocument(source: string, images: MailInlineImage[] = [], allowExternalImages = false): string {
+  return mailPreviewDocument(source, images, allowExternalImages, false);
+}
+
+const MAIL_READING_STYLE = `html{color-scheme:light}body{margin:4px;background:${MAIL_PAPER_COLOR};color:#111;font-family:Arial,Helvetica,sans-serif;overflow-wrap:break-word}img{max-width:100%;height:auto}table{max-width:100%}`;
+function mailPreviewDocument(source: string, images: MailInlineImage[], allowExternalImages: boolean, editable: boolean): string {
+  return '<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'none\'; img-src data: cindy-media:' + (allowExternalImages ? ' https: http:' : '') + '; style-src \'unsafe-inline\'; form-action \'none\'; base-uri \'none\'"><meta name="viewport" content="width=device-width,initial-scale=1"><style>' + (editable ? MAIL_INLINE_STYLE : MAIL_READING_STYLE) + '</style>' + safeMailDocument(source, editable, images, allowExternalImages, true);
 }
 
 /** Executed only by the native WebView injection API. The document CSP allows

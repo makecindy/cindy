@@ -1,3 +1,5 @@
+import { useProviderAccountUsage } from '@/hooks/useProviderAccountUsage';
+import { isKimiCodingProviderView } from '../../../shared/kimiCodingUsage';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -20,6 +22,7 @@ import {
 import { isXaiWeeklyUsageCurrent } from '../../../shared/xaiSubscriptionUsage';
 import { providerWeeklyQuotaSource } from '../new-chat/useProviderWeeklyQuota';
 import {
+  buildKimiUsageCard,
   buildClaudeUsageCard,
   buildCodexUsageCard,
   buildXaiUsageCard,
@@ -112,7 +115,7 @@ function useRemoteProviderSubscriptionCard(
   const { t, i18n } = useTranslation();
   const source = provider && deviceId ? providerWeeklyQuotaSource({ ...provider, suspended: false }) : null;
   const providerId = provider?.id ?? 'openai';
-  const codex = useRemoteCodexAccountUsage(source === 'codex' ? deviceId : null, providerId);
+  const codex = useRemoteCodexAccountUsage(source === 'codex' ? deviceId : null, providerId, { live: true });
   const claude = useRemoteClaudeSubscriptionUsage(source === 'claude' ? deviceId : null, providerId);
   const xai = useRemoteXaiSubscriptionUsage(source === 'xai' ? deviceId : null, providerId);
   const [nowMs, setNowMs] = useState(Date.now);
@@ -139,5 +142,14 @@ export function useDeviceProviderSubscriptionCard(
 ): UsageCardAccount | null {
   const local = useProviderSubscriptionCard(deviceId === null ? provider : undefined);
   const remote = useRemoteProviderSubscriptionCard(deviceId === null ? undefined : provider, deviceId);
+  const { t } = useTranslation();
+  const kimi = useProviderAccountUsage(deviceId && isKimiCodingProviderView(provider) ? provider : undefined, undefined, deviceId);
+  if (deviceId && kimi.supported) {
+    const snapshot = kimi.result?.status === 'ready' ? kimi.result.snapshot : null;
+    const card = buildKimiUsageCard(snapshot?.kind === 'kimi-coding-quota' ? snapshot : null, t);
+    if (kimi.result?.status === 'unavailable') card.emptyText = t(`providerAccountUsage.kimi.error.${kimi.result.error}`);
+    if (kimi.result?.status === 'ready' && kimi.result.stale) card.notices = [{ text: t('providerAccountUsage.kimi.stale'), tone: 'warn' }];
+    return card;
+  }
   return deviceId === null ? local : remote;
 }

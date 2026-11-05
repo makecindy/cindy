@@ -43,6 +43,8 @@ export interface AgentIslandCompanionSnapshot {
  * Renderer-facing session snapshot for the macOS Agent Island overlay.
  */
 export interface AgentIslandSessionSnapshot {
+  /** Group-message UI only; never a maker task or a remotely relayed activity. */
+  groupChat?: { avatars: AgentIslandCompanionSnapshot[]; mentionLabel?: string };
   /** Opaque identity of the completed card, issued by its owning process. */
   completionToken?: string;
   /** This completion preserves older unread state without requesting a new alert. */
@@ -83,6 +85,8 @@ export interface AgentIslandSessionActivity
   interactionKind?: AgentIslandInteractionKind;
   /** Compatibility/display alias; canonical probe field is currentActionSummary. */
   compactDetail: string;
+  /** Only marked summaries can bypass legacy Markdown recovery on another host. */
+  summaryFormat?: 'plain-text';
 }
 
 export type AgentIslandDisplayMode = 'compact' | 'expanded';
@@ -729,6 +733,8 @@ export interface AgentIslandDisplayState {
   sessions: AgentIslandSessionSnapshot[];
   totalCount: number;
   measuredContentHeight: number;
+  /** Local presentation only; absent on older hosts. Never relayed as task activity. */
+  compactReminder?: { phase: AgentIslandSessionPhase; until: number };
   strings: AgentIslandStrings;
   soundSettings: AgentIslandSoundSettings;
   mascotSkin: AgentIslandMascotSkin;
@@ -795,6 +801,7 @@ export const AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL = 'agent-island:consume-en
 export const AGENT_ISLAND_SET_ENABLED_CHANNEL = 'agent-island:set-enabled';
 export const AGENT_ISLAND_SET_SOUND_SETTINGS_CHANNEL = 'agent-island:set-sound-settings';
 export const AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL = 'agent-island:set-mascot-skin';
+export const AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL = 'agent-island:set-subtle-reminders';
 export const AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL = 'agent-island:set-display-target';
 export const AGENT_ISLAND_GET_DISPLAY_OPTIONS_CHANNEL = 'agent-island:get-display-options';
 export const AGENT_ISLAND_PREVIEW_SOUND_CHANNEL = 'agent-island:preview-sound';
@@ -853,6 +860,7 @@ export function parseAgentIslandCompanionChats(raw: unknown): AgentIslandCompani
  * 只含 running / needs-interaction / 未读终态;范围由 renderer 按侧栏「任务范围」裁剪。
  */
 export interface AgentIslandRemoteSessionInput {
+  summaryFormat?: 'plain-text';
   completionToken?: string;
   completionNotification?: 'pending' | 'teammate' | 'silent';
   sessionId: string;
@@ -860,6 +868,7 @@ export interface AgentIslandRemoteSessionInput {
   deviceName: string | null;
   title: string | null;
   workingDir: string | null;
+  projectDir?: string | null;
   workspaceKind: string | null;
   /** DB 形态('cc' | 'codex' | 'pi')。 */
   agentKind: string | null;
@@ -925,12 +934,15 @@ export function parseAgentIslandRemoteSessions(raw: unknown): AgentIslandRemoteS
       deviceName: readBoundedString(record.deviceName, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH),
       title: readBoundedString(record.title, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH),
       workingDir: readBoundedString(record.workingDir, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH * 4),
+      ...(record.projectDir !== undefined
+        ? { projectDir: readBoundedString(record.projectDir, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH * 4) } : {}),
       workspaceKind: readBoundedString(record.workspaceKind, 64),
       agentKind: readBoundedString(record.agentKind, 64),
       phase: phase as AgentIslandSessionPhase,
       ...(record.completionNotification === 'pending' || record.completionNotification === 'teammate' || record.completionNotification === 'silent'
         ? { completionNotification: record.completionNotification } : {}),
       detail: readBoundedString(record.detail, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH) ?? '',
+      ...(record.summaryFormat === 'plain-text' ? { summaryFormat: 'plain-text' as const } : {}),
       ...(workingPhase ? { workingPhase } : {}),
       ...(interactionKind ? { interactionKind } : {}),
       ...(companion ? { companion } : {}),

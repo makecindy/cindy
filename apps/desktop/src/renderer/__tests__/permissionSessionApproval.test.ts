@@ -385,3 +385,22 @@ describe('PermissionPrompt source contract', () => {
     expect(source).not.toContain("...suggestion, destination: 'session'");
   });
 });
+
+// unit: page approvals must not replace the composer/model prompt. Smallest failure:
+// two page tools plus one model permission; answering/cancelling one leaves the others.
+it('keeps concurrent page approvals separate and answers the exact Host request', async () => {
+  makerChatStore.initGlobalListeners();
+  showPermission('model');
+  for (const id of ['page-a', 'page-b']) listeners.interaction?.({ sessionId: SESSION_ID, request: {
+    kind: 'permission', requestId: id, toolName: 'MCP App: save', input: { id },
+    metadata: { mcpApp: { clientId: id, serverId: 'custom', title: 'Planner', scope: 'once' } },
+  } });
+  expect(makerChatStore.getSnapshot(SESSION_ID).pendingPermission?.requestId).toBe('model');
+  expect(makerChatStore.getSnapshot(SESSION_ID).pendingAppPermissions?.map(p => p.requestId)).toEqual(['page-a', 'page-b']);
+  makerChatStore.respondToPermission(SESSION_ID, { behavior: 'allow' }, 'page-b');
+  await vi.waitFor(() => expect(resolveInteraction).toHaveBeenCalledWith('page-b', expect.objectContaining({ behavior: 'allow' })));
+  await vi.waitFor(() => expect(makerChatStore.getSnapshot(SESSION_ID).pendingAppPermissions?.map(p => p.requestId)).toEqual(['page-a']));
+  listeners.dismissed?.({ sessionId: SESSION_ID, requestId: 'page-a', reason: 'cancelled' });
+  expect(makerChatStore.getSnapshot(SESSION_ID).pendingAppPermissions).toEqual([]);
+  expect(makerChatStore.getSnapshot(SESSION_ID).pendingPermission?.requestId).toBe('model');
+});

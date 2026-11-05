@@ -2,7 +2,7 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { PromptRecommendation, PromptRecommendationSlot } from '@/session/PromptRecommendation';
+import { PromptRecommendation } from '@/session/PromptRecommendation';
 
 const mocks = vi.hoisted(() => ({
   handlers: {} as Record<string, (...args: any[]) => void>,
@@ -12,17 +12,12 @@ const mocks = vi.hoisted(() => ({
   x: null as { value: number } | null,
   deferAnimation: false,
   pendingAnimation: null as ((finished: boolean) => void) | null,
-  measure: null as ((event: any) => void) | null,
-  slot: {} as Record<string, any>,
 }));
 vi.mock('react-native', async () => {
   const { createElement } = await import('react');
   return {
     Pressable: (props: any) => { mocks.button = props; return createElement('button', { onClick: props.onPress }, props.children); },
-    View: (props: any) => {
-      if (props.onLayout) mocks.measure = props.onLayout;
-      return createElement('div', {}, props.children);
-    },
+    View: (props: any) => createElement('div', {}, props.children),
     StyleSheet: { create: (value: any) => value, hairlineWidth: 1 },
     useWindowDimensions: () => ({ width: 390 }),
   };
@@ -47,10 +42,7 @@ vi.mock('react-native-worklets', () => ({ scheduleOnRN: (fn: () => void) => fn()
 vi.mock('react-native-reanimated', async () => {
   const { createElement, useRef } = await import('react');
   return {
-    default: { View: (props: any) => {
-      if (props.testID === 'session.promptRecommendationSlot') mocks.slot = props;
-      return createElement('div', {}, props.children);
-    } },
+    default: { View: (props: any) => createElement('div', {}, props.children) },
     Easing: { bezier: () => undefined },
     cancelAnimation: vi.fn(() => {
       const pending = mocks.pendingAnimation;
@@ -65,11 +57,6 @@ vi.mock('react-native-reanimated', async () => {
     },
     withTiming: (value: number, config: { duration: number }, done?: (finished: boolean) => void) => {
       mocks.timings.push(config);
-      if (mocks.deferAnimation) mocks.pendingAnimation = done ?? null;
-      else done?.(true);
-      return value;
-    },
-    withSpring: (value: number, _config: object, done?: (finished: boolean) => void) => {
       if (mocks.deferAnimation) mocks.pendingAnimation = done ?? null;
       else done?.(true);
       return value;
@@ -98,7 +85,6 @@ async function render() {
 beforeEach(() => {
   vi.clearAllMocks(); mocks.x = null; mocks.timings = []; mocks.reduceMotion = false;
   mocks.deferAnimation = false; mocks.pendingAnimation = null;
-  mocks.measure = null; mocks.slot = {};
   container = document.createElement('div'); root = createRoot(container);
 });
 afterEach(async () => { await act(async () => root.unmount()); });
@@ -146,35 +132,4 @@ it.each([true, null])('does not animate dismissal when reduced motion is %s', as
   mocks.reduceMotion = preference; await render(); swipe(120, 0);
   expect(onDismiss).toHaveBeenCalledOnce();
   expect(mocks.timings.at(-1)?.duration).toBe(0);
-});
-
-// Unit: the real slot retains its outgoing card until its occupied height reaches
-// zero. Previously conditional removal discarded the card before any exit could run.
-async function showSlot(prompt: string | null) {
-  await act(async () => root.render(createElement(PromptRecommendationSlot, {
-    prompt, paddingHorizontal: 12, onAccept, onDismiss,
-  })));
-}
-it('keeps the outgoing recommendation visible but inactive until its collapse completes', async () => {
-  await showSlot('Continue work');
-  await act(async () => mocks.measure!({ nativeEvent: { layout: { height: 52 } } }));
-  mocks.deferAnimation = true;
-  await showSlot(null);
-  expect(container.textContent).toContain('Continue work');
-  expect(mocks.slot.pointerEvents).toBe('none');
-  expect(mocks.slot.accessibilityElementsHidden).toBe(true);
-  await act(async () => mocks.pendingAnimation!(true));
-  expect(container.textContent).not.toContain('Continue work');
-});
-
-it('does not remove a new recommendation when an interrupted exit completes late', async () => {
-  await showSlot('Old recommendation');
-  await act(async () => mocks.measure!({ nativeEvent: { layout: { height: 52 } } }));
-  mocks.deferAnimation = true;
-  await showSlot(null);
-  const oldCompletion = mocks.pendingAnimation!;
-  await showSlot('New recommendation');
-  await act(async () => oldCompletion(true));
-  expect(container.textContent).toContain('New recommendation');
-  expect(mocks.slot.accessibilityElementsHidden).toBeFalsy();
 });

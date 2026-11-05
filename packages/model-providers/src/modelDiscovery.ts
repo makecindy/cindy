@@ -1,3 +1,4 @@
+import { discoveredMagpieSource } from './modelSource.js';
 import {
   pickModelMetadata,
   type DiscoveredModel,
@@ -8,6 +9,16 @@ export function isOpenRouterModelsUrl(value: string): boolean {
   try {
     const url = new URL(value);
     return url.origin === 'https://openrouter.ai' && url.pathname.replace(/\/+$/, '') === '/api/v1/models';
+  } catch { return false; }
+}
+
+/** Only the official, unfiltered OpenHubs endpoint is a complete account inventory. */
+export function isOpenHubsModelsUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.origin === 'https://openhubs.zhidemai.com'
+      && url.pathname.replace(/\/+$/, '') === '/v1/models'
+      && !url.search && !url.hash && !url.username && !url.password;
   } catch { return false; }
 }
 
@@ -38,6 +49,16 @@ export function parseModelsListResponse(
   json: unknown,
   sourceUrl?: string,
 ): DiscoveredModel[] | null {
+  // OpenHubs can return HTTP 200 with a business error and an empty data array.
+  // Such a failure must never clear the wizard's offline recommendations.
+  if (sourceUrl && isOpenHubsModelsUrl(sourceUrl)) {
+    if (!json || typeof json !== 'object' || Array.isArray(json)) return null;
+    const response = json as { data?: unknown; error?: unknown; error_code?: unknown };
+    if (!Array.isArray(response.data) || response.error != null
+      || (response.error_code !== undefined && response.error_code !== 0)) return null;
+    if (response.data.some(model => !model || typeof model !== 'object'
+      || typeof model.id !== 'string' || !model.id.trim())) return null;
+  }
   const list = (() => {
     if (Array.isArray(json)) return json;
     if (!json || typeof json !== "object") return null;
@@ -47,6 +68,7 @@ export function parseModelsListResponse(
     return null;
   })();
   if (!list) return null;
+  const magpieCatalog = list.some(item => !!item && typeof item === "object" && !!discoveredMagpieSource(item as Record<string, unknown>));
   const out: DiscoveredModel[] = [];
   const seen = new Set<string>();
   for (const item of list) {
@@ -88,6 +110,7 @@ export function parseModelsListResponse(
             max_context_length?: unknown;
             max_input_tokens?: unknown;
             max_context_window?: unknown;
+            limit?: { context?: unknown; output?: unknown };
           })
         : null;
     const name = google && typeof google.displayName === 'string' ? google.displayName :
@@ -96,6 +119,12 @@ export function parseModelsListResponse(
         : rec && typeof rec.name === "string" && rec.name.length > 0
           ? rec.name
           : id;
+    // OpenCode-compatible catalogs report token limits in a nested object (#8867).
+    // Validate each field before using it as a fallback for existing flat formats.
+    const nestedLimits = pickModelMetadata({
+      contextWindow: rec?.limit?.context,
+      maxOutputTokens: rec?.limit?.output,
+    });
     const rawWindow = rec
       ? [
           rec.context_length,
@@ -174,7 +203,7 @@ export function parseModelsListResponse(
     const openRouterSpeech = sourceUrl !== undefined && isOpenRouterModelsUrl(sourceUrl)
       && Array.isArray(architecture?.output_modalities)
       && architecture.output_modalities.includes('speech');
-    const discoveredMetadata = { ...pickModelMetadata(record), ...pickModelMetadata({
+    const discoveredMetadata = { ...nestedLimits, ...pickModelMetadata(record), ...pickModelMetadata({
       nativeApi: record.nativeApi !== undefined ? record.nativeApi : record.native_api,
       ...([rec?.display_name, rec?.name, google?.displayName].some(
         (value) => typeof value === "string" && value.trim().length > 0,
@@ -264,15 +293,18 @@ export function parseModelsListResponse(
         return Number.isFinite(amount) && amount >= 0 ? [[target, amount]] : [];
       }),
     );
+    const discoveredSource = discoveredMagpieSource(record);
     out.push({
       id,
+      ...(discoveredSource ? { discoveredSource } : {}),
+      ...(magpieCatalog ? { opaqueModelId: true as const } : {}),
       ...(Array.isArray(serviceTiers) || Array.isArray(additionalSpeedTiers)
         ? { supportsUltrafastMode: declaredSpeedTiers.includes('ultrafast') } : {}),
       discoveredMetadata,
       ...(Object.keys(discoveredCost).length ? { discoveredCost } : {}),
       name,
-      ...(typeof rawWindow === "number"
-        ? { contextWindow: Math.floor(rawWindow) }
+      ...(discoveredMetadata.contextWindow !== undefined
+        ? { contextWindow: discoveredMetadata.contextWindow }
         : {}),
     });
   }

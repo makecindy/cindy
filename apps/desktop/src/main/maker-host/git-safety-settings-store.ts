@@ -15,6 +15,7 @@ import path from 'node:path';
 import { desktopMakerLogger } from './logger-adapter.js';
 import {
   createOverrideSettingsFile,
+  portableOverrideSettings,
   type OverrideSettingsState,
 } from './override-settings-file.js';
 
@@ -131,3 +132,6 @@ export function resetGitSafetySettings(): GitSafetySettings {
 }
 
 export const __testing = { mergeOverrides, normalize };
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const gitSafetyPortableSettings = portableOverrideSettings(store);

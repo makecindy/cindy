@@ -1,3 +1,5 @@
+/// <reference path="../vite-env.d.ts" />
+
 /**
  * Site Recipe + SiteGuide registry.
  *
@@ -90,12 +92,26 @@ export const RecipeSchema = z.object({
   /** Host-owned state; authored drafts cannot supply this. Legacy files remain runnable. */
   validation: z.object({
     site: z.string(),
-    state: z.enum(['active', 'suspended']),
+    state: z.enum(['candidate', 'active', 'suspended']),
+    /** Newly learned recipes stay in their browser profile; legacy files omit it. */
+    profile: z.string().optional(),
   }).optional(),
 }).refine(recipe => recipe.adapter ? recipe.steps.length === 0 : recipe.steps.length > 0, 'recipe requires steps or a bundled adapter, exclusively');
 
 export type Recipe = z.infer<typeof RecipeSchema>;
 export type RecipeStep = z.infer<typeof RecipeStepSchema>;
+
+/** Deferred candidates can only compose known read primitives, never authored
+ * page code or interactive steps. This is a capability check, not a promise
+ * about a remote site's GET side effects; normal recipe approval still applies. */
+export function deferredRecipeIssue(recipe: Recipe): string | undefined {
+  if (recipe.access !== 'read') return '延后验证仅支持声明为 read 的新流程';
+  if (recipe.adapter || recipe.steps.some(step => step.fn !== undefined
+    || !['navigate', 'wait', 'extract', 'requests', 'responseBody'].includes(step.action))) {
+    return '延后验证仅支持 navigate、无 fn 的 wait、extract、requests、responseBody；交互、evaluate 或脚本步骤必须在当次真实操作中验证后再保存，不能为测试重放写操作';
+  }
+  return undefined;
+}
 
 /** SiteGuide is loose, agent-facing knowledge; we validate only the shape we rely on. */
 export const SiteGuideSchema = z

@@ -119,6 +119,20 @@ export function deviceHostedPiMcpBridge(hosted: DeviceHostedSession): NonNullabl
   };
 }
 
+/**
+ * 设备托管的插件花名册：插件工具(ghost_*)经隧道回到任务所在电脑，花名册用那台打开任务时给的快照，
+ * 且那台确实经隧道提供了插件工具。Agent 所在电脑自己装了哪些插件与这个任务无关，也不能外露给受邀者。
+ * 旧控制端不带快照：受邀者照旧不注入；同账号照旧用本机花名册(`legacyLocal`)，升级前不比原来差。
+ */
+export function deviceHostedGhostRoster(
+  hosted: DeviceHostedSession,
+  snapshot: string | undefined,
+  legacyLocal: () => string,
+): string {
+  if (snapshot !== undefined) return snapshot && hosted.mcpServers.includes('cindy') ? snapshot : '';
+  return hosted.guest ? '' : legacyLocal();
+}
+
 /** 设备托管时顶替 Claude Code 自带文件与命令工具的 Cindy MCP 服务名。 */
 export const DEVICE_HOSTED_EXEC_MCP_SERVER = 'cindy_exec';
 /** 顶替的工具名(与自带工具同名)。 */

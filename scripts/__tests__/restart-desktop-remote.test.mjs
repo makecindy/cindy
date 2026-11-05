@@ -1041,6 +1041,16 @@ test("devEnvPrefix passes harness envs through on Windows cmd with quote strippi
 	);
 });
 
+test("devEnvPrefix forwards only the requested local relay override and unsets stale macOS values", () => {
+	const env = { XDT_DEVICE_LINK_LOCAL_URL: "http://127.0.0.1:33355", XDT_DEVICE_LINK_CN_LOCAL_URL: "http://127.0.0.1:33355", XDT_DEVICE_LINK_GLOBAL_LOCAL_URL: "http://127.0.0.1:33356" };
+	assert.ok(devEnvPrefix(env, "darwin").includes("XDT_DEVICE_LINK_LOCAL_URL='http://127.0.0.1:33355'"));
+	assert.ok(devEnvPrefix(env, "win32").includes('set "XDT_DEVICE_LINK_LOCAL_URL=http://127.0.0.1:33355"'));
+	assert.ok(darwinStaleDevEnvUnset({}).includes("XDT_DEVICE_LINK_LOCAL_URL"));
+	assert.ok(devEnvPrefix(env, "darwin").includes("XDT_DEVICE_LINK_GLOBAL_LOCAL_URL='http://127.0.0.1:33356'"));
+	assert.ok(devEnvPrefix(env, "win32").includes('set "XDT_DEVICE_LINK_CN_LOCAL_URL=http://127.0.0.1:33355"'));
+	assert.ok(darwinStaleDevEnvUnset({}).includes("XDT_DEVICE_LINK_GLOBAL_LOCAL_URL"));
+});
+
 test("devEnvPrefix carries the Cindy Make test-window marker through restart", () => {
 	assert.equal(
 		devEnvPrefix({ XDT_CINDY_MAKE_TEST: "1" }, "darwin"),

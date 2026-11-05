@@ -7,6 +7,7 @@
  */
 import { isProviderShareAgentDeviceId, PROVIDER_SHARE_AGENT_DEVICE_PREFIX } from './providerShare.js';
 import type { ProviderManagementRequest, ProviderManagementResult } from './providerManagement';
+import { readProviderMetadataContinuity, type ProviderMetadataContinuity } from '@cindy/device-link';
 
 export const PROVIDER_GROUP_IPC = {
   /** Renderer → Main：全部操作走同一个命令通道。 */
@@ -157,7 +158,8 @@ export function readProviderGroupMemberQuota(value: unknown): ProviderGroupMembe
 
 /**
  * 任务进行中换号的提议(provider-groups.md §6.2「任务进行中换号」)：用户自己发下一条消息前问任务所在的电脑。
- * `ask` = 弹窗问；`auto` = 这个任务选过「以后自动换」，不再问，直接确认这个提议。`label` 是要换去的那台(带账号名)。
+ * `ask` = 弹窗问；`auto` = 同账号先尝试原生接续，或任务已有自动换号偏好。原生失败由宿主单独确认摘要回退。
+ * `label` 是要换去的那台(带账号名)。旧客户端已支持 auto，无需新增协议字段。
  */
 export type ProviderGroupRebalanceSuggestion =
   | { kind: 'ask' | 'auto'; memberKey: string; label: string; quota: ProviderGroupMemberQuota }
@@ -194,6 +196,7 @@ export interface ProviderGroupReshareSummary {
 }
 
 export interface ProviderGroupView {
+  providerContinuity?: ProviderMetadataContinuity;
   /** Some executors have not confirmed this group's subscription speed policy yet. */
   fastPolicyPending?: boolean;
   providerId: string;
@@ -512,7 +515,8 @@ export interface ProviderGroupUsageLimit {
 export type ProviderGroupRemotePick =
   /** 那个供应商现在没有组(组被删了或旧版本)：照常直接在组所在电脑上运行。 */
   | { kind: 'none' }
-  | { kind: 'member'; member: Pick<ProviderGroupMember, 'key' | 'kind' | 'agentDeviceId' | 'providerId'>; label: string }
+  | { kind: 'member'; member: Pick<ProviderGroupMember, 'key' | 'kind' | 'agentDeviceId' | 'providerId'>; label: string;
+      continuity?: { id: string; remainingMs: number; config: ProviderGroupConfig } }
   | { kind: 'unavailable'; usageLimit?: ProviderGroupUsageLimit };
 
 /** 一次最多报告的运行中任务数(每台电脑的任务上限远低于此)。 */
@@ -685,10 +689,19 @@ export function parseProviderGroupRemotePick(raw: unknown, groupProviderId: stri
   const member = normalizeMember(value.member, groupProviderId);
   if (!member) return { kind: 'none' };
   const label = normalizeLabel(value.label) ?? member.label ?? member.key;
+  const rawContinuity = value.continuity as { id?: unknown; remainingMs?: unknown; config?: unknown } | undefined;
+  const config = rawContinuity ? normalizeProviderGroupConfig(rawContinuity.config, groupProviderId) : null;
+  const continuity = member.kind === 'device' && config?.members.some(row => row.key === member.key && !row.paused
+    && row.agentDeviceId === member.agentDeviceId && row.providerId === member.providerId)
+    && typeof rawContinuity?.id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(rawContinuity.id)
+    && typeof rawContinuity.remainingMs === 'number' && Number.isFinite(rawContinuity.remainingMs)
+    && rawContinuity.remainingMs > 0 && rawContinuity.remainingMs <= 30 * 60_000
+    ? { id: rawContinuity.id, remainingMs: rawContinuity.remainingMs, config } : undefined;
   return {
     kind: 'member',
     member: { key: member.key, kind: member.kind, agentDeviceId: member.agentDeviceId, providerId: member.providerId },
     label,
+    ...(continuity ? { continuity } : {}),
   };
 }
 
@@ -770,5 +783,6 @@ export function parseProviderGroupRemoteView(raw: unknown, groupProviderId: stri
     }];
   });
   return { providerId: groupProviderId, config, members, ...(model ? { model } : {}),
+    ...(readProviderMetadataContinuity(raw) ? { providerContinuity: readProviderMetadataContinuity(raw) } : {}),
     ...(value.fastPolicyPending === true ? { fastPolicyPending: true } : {}) };
 }

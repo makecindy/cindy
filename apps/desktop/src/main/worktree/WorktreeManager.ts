@@ -12,6 +12,7 @@
 
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { currentOperationBudget, operationWait } from '../utils/operationBudget';
 import fs from 'node:fs/promises';
 
 import {
@@ -34,6 +35,7 @@ import {
   safeDirectorySpellings,
 } from './gitExec';
 import { gitPathOutput } from './gitPathOutput';
+import { ensureManagedWorktreeExcluded } from './managedWorktreeExclude';
 import { withCrossProcessLock } from '../device-link/crossProcessLock';
 import { applyWorktreeIncludeFile, listChangedWorktreeIncludeFiles } from './includePatternsEngine';
 import { hasKeepSentinel, isManagedWorktreePath } from './safety';
@@ -406,7 +408,12 @@ async function withPrecreatedWorktreeOperationQueue<T>(
 /**
  * 探测 cwd 状态: 是否 git repo / 是否在 worktree 内 / git 是否可用 / 当前分支 / repo root
  */
-export const detectCwd = createCwdProbeScheduler(detectCwdOnce);
+const scheduledDetectCwd = createCwdProbeScheduler(detectCwdOnce);
+export function detectCwd(cwd: string): Promise<DetectCwdResp> {
+  // Automatic snapshots own cancellation. Never lend their abortable probe to
+  // an unrelated UI request (or borrow an unabortable pending UI probe).
+  return currentOperationBudget() ? operationWait(detectCwdOnce(cwd)) : scheduledDetectCwd(cwd);
+}
 
 // Share the work budget across realpath and every Git query. Git's additional
 // 3s process-tree cleanup still leaves response headroom under Mobile's 15s wait.
@@ -415,6 +422,7 @@ const CWD_PROBE_TIMEOUT_MS = 10_000;
 async function detectCwdOnce(cwd: string): Promise<DetectCwdResp> {
   const deadline = performance.now() + CWD_PROBE_TIMEOUT_MS;
   const probeGit = async (args: readonly string[], dir?: string) => {
+    currentOperationBudget()?.check();
     const timeoutMs = Math.ceil(deadline - performance.now());
     if (timeoutMs <= 0) {
       throw new GitExecError({
@@ -1051,7 +1059,17 @@ export async function awaitBackgroundCheckout(sessionId: string): Promise<void> 
   await backgroundCheckouts.get(sessionId)?.catch(() => undefined);
 }
 
-export async function createWorktree(req: CreateWorktreeReq, options?: { trackBackgroundCheckout?: boolean }): Promise<CreateWorktreeResp> {
+export interface CreateWorktreeOptions {
+  /** Keep a handle on the background checkout so failure compensation can wait for it. */
+  trackBackgroundCheckout?: boolean;
+  /**
+   * Return only after the whole tree is checked out, and fail (with rollback) if that checkout fails.
+   * For callers that hand the directory to a running agent, which must not see a half-written tree.
+   */
+  awaitFullCheckout?: boolean;
+}
+
+export async function createWorktree(req: CreateWorktreeReq, options?: CreateWorktreeOptions): Promise<CreateWorktreeResp> {
   const create = () => withCreateWorktreeQueue(req.baseRepo, () => {
     assertPrecreatedSessionNotCancelled(req.sessionId);
     return createWorktreeInner(req, options);
@@ -1059,7 +1077,7 @@ export async function createWorktree(req: CreateWorktreeReq, options?: { trackBa
   return withPrecreatedWorktreeOperationQueue(req.sessionId, create);
 }
 
-async function createWorktreeInner(req: CreateWorktreeReq, options?: { trackBackgroundCheckout?: boolean }): Promise<CreateWorktreeResp> {
+async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorktreeOptions): Promise<CreateWorktreeResp> {
   const snap: CreatedSnapshot = {};
   const totalStartedAt = Date.now();
   try {
@@ -1166,6 +1184,7 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: { trackBack
 
     // 4. mkdirp parent
     return await withWorktreeResourceLock(worktreePath, async (): Promise<CreateWorktreeResp> => {
+      await ensureManagedWorktreeExcluded(baseRepo, worktreePath);
       const parentDir = path.dirname(worktreePath);
       await timed('ensure parent directory', () => fs.mkdir(parentDir, { recursive: true }));
       snap.parentEnsured = parentDir;
@@ -1270,6 +1289,7 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: { trackBack
         await bgPromise?.catch(() => undefined);
         throw error;
       }
+      if (options?.awaitFullCheckout && bgPromise) await bgPromise;
       // store + DB
       const meta: WorktreeMeta = {
         sessionId: req.sessionId,

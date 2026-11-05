@@ -221,6 +221,10 @@ export async function evictCacheBlobs(
       }
       const removed = await ledger.deleteCacheBlobRecord(hash, db, params.integration);
       if (!removed) {
+        if (params.integration === 'remote-media') {
+          params.assertStillValid?.();
+          await ledger.removeIntegrationCacheRefs(hash, params.integration, db);
+        }
         result.skipped++;
         continue;
       }

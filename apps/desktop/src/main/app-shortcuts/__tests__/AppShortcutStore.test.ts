@@ -47,6 +47,42 @@ afterEach(() => {
 });
 
 describe('AppShortcutStore', () => {
+  it('keeps plugin bindings when an instance is unavailable and never displaces an existing shortcut', () => {
+    const id = `plugin:${'a'.repeat(64)}` as const;
+    const definition = { id, label: 'Format', pluginName: 'Example', scope: 'session' as const, defaultCombo: combo('KeyB', { meta: true }) };
+    const store = makeStore('darwin');
+    store.setPluginShortcuts([definition]);
+    expect(store.getPluginShortcutCombos(id)).toEqual([]); // ⌘B belongs to Cindy.
+    expect(store.setOverride(id, combo('KeyJ', { meta: true }))).toBeNull();
+    expect(store.setOverride('new-maker', combo('KeyJ', { meta: true }))).toBe('conflict');
+    store.setPluginShortcuts([]);
+    expect(store.getPluginShortcutCombos(id)).toEqual([]);
+    expect(store.setOverride('toggle-sidebar', combo('KeyK', { meta: true }))).toBeNull();
+    const reopened = makeStore('darwin');
+    expect(reopened.getOverrides()[id]).toEqual(combo('KeyJ', { meta: true }));
+    reopened.setPluginShortcuts([definition]);
+    expect(reopened.getPluginShortcutCombos(id)).toEqual([combo('KeyJ', { meta: true })]);
+  });
+
+  it('gives user bindings priority over plugin defaults and suppresses a stale conflicting binding', () => {
+    const first = `plugin:${'a'.repeat(64)}` as const;
+    const second = `plugin:${'b'.repeat(64)}` as const;
+    const definitions = [
+      { id: first, label: 'First', pluginName: 'Example', scope: 'session' as const, defaultCombo: combo('KeyJ', { meta: true }) },
+      { id: second, label: 'Second', pluginName: 'Example', scope: 'session' as const },
+    ];
+    const store = makeStore('darwin');
+    store.setPluginShortcuts(definitions);
+    expect(store.setOverride(second, combo('KeyJ', { meta: true }))).toBeNull();
+    expect(store.getPluginShortcutCombos(first)).toEqual([]);
+    expect(store.getPluginShortcutCombos(second)).toEqual([combo('KeyJ', { meta: true })]);
+    expect(store.setOverride(first, combo('KeyJ', { meta: true }))).toBe('conflict');
+    store.setPluginShortcuts([]);
+    expect(store.setOverride('toggle-sidebar', combo('KeyJ', { meta: true }))).toBeNull();
+    store.setPluginShortcuts(definitions);
+    expect(store.getPluginShortcutCombos(second)).toEqual([]);
+    expect(store.getOverrides()[second]).toEqual(combo('KeyJ', { meta: true }));
+  });
   it('returns registry defaults when no overrides exist', () => {
     const store = makeStore('darwin');
     expect(store.getEffectiveCombos('toggle-sidebar')).toEqual([
@@ -112,6 +148,27 @@ describe('AppShortcutStore', () => {
     // (IntlYen 无 accelerator 映射且不与任何默认组合撞键)
     const winStore = makeStore('win32');
     expect(winStore.setOverride('new-maker', combo('IntlYen', { ctrl: true }))).toBeNull();
+  });
+
+  it('guards the system-wide screenshot shortcut', () => {
+    const store = makeStore('win32');
+    // 全局键在所有应用里截走按键: 占用 Ctrl+C 会让别的应用无法复制
+    expect(store.setOverride('region-screenshot', combo('KeyC', { ctrl: true }))).toBe(
+      'global-unusable',
+    );
+    // globalShortcut 只认 accelerator: NumpadAdd 表达不了, 绑定后永远不会触发
+    expect(
+      store.setOverride('region-screenshot', combo('NumpadAdd', { ctrl: true, alt: true })),
+    ).toBe('global-unusable');
+    expect(store.setOverride('region-screenshot', combo('KeyA', { ctrl: true, alt: true }))).toBeNull();
+    // Cindy 在前台时全局键同样先截走按键, 浏览器域的应用内快捷键也不能与它同键
+    expect(
+      store.setOverride('browser-focus-url', combo('KeyA', { ctrl: true, alt: true })),
+    ).toBe('conflict');
+    // 暂不支持 Linux
+    expect(
+      makeStore('linux').setOverride('region-screenshot', combo('KeyA', { ctrl: true, alt: true })),
+    ).toBe('platform-unavailable');
   });
 
   it('setOverride(null) deletes the binding: effective combos become empty', () => {

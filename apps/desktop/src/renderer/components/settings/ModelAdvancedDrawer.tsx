@@ -1,7 +1,9 @@
-import { isDisplayPricingTableRedundant } from '@/lib/displayPricingFormat';
+import { modelImageInputDefault } from '../../../shared/modelImageInputOverride';
+import { displayPricingComponent, isDisplayPricingTableRedundant } from '@/lib/displayPricingFormat';
 import { DisplayPricingDetails, DisplayPricingQuote } from '@/components/DisplayPricingDetails';
 import { Button } from '@/components/ui/button';
 import { localizedModelDescription } from '@/lib/modelDescriptions';
+import { providerDisplayName } from '@/lib/providerDisplayName';
 import { localizedModelName, localizedBrandName } from '@/lib/modelDisplayNames';
 /**
  * ModelAdvancedDrawer —— 单模型配置面板。宽屏配置与事实并列，窄屏按同一顺序排成一列。
@@ -39,16 +41,19 @@ import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
 import { PiMark } from '@/components/icons/PiMark';
 import { useModelContextLimit } from '@/hooks/useModelContextLimit';
+import { useModelImageInputOverride } from '@/hooks/useModelImageInputOverride';
+import { parseContextTokenInput } from '../../../shared/modelContextLimit';
+import { ModelCompactionSettings } from './ModelCompactionSettings';
 import { modelPriceDetailRows, type ModelPricePresentation } from '@/lib/modelPriceFormat';
 import {
   isModelEnabled,
-  setModelVisibility,
+  setModelVisibility, setModelVisibilities,
   isModelVisibilityCustomized,
   resetModelVisibilities,
   useModelVisibilityVersion,
 } from '@/state/modelVisibilityPrefs';
 import {
-  clearProviderModelEffort,
+  clearProviderModelEffort, editProviderModelMemoryBatch,
   getProviderModelEffort,
   setProviderModelEffort,
   useProviderModelMemoryVersion,
@@ -85,12 +90,6 @@ const AGENT_LABEL: Record<AgentKind, string> = {
   codex: 'Codex',
   pi: 'Pi',
 };
-
-// Editing uses whole decimal K, rounded down to avoid suggesting a value above the upstream
-// maximum. Merely opening/blurring the field never writes this display approximation back.
-function editableContextK(tokens: number): string {
-  return String(Math.max(1, Math.floor(tokens / 1000)));
-}
 
 const AGENT_MARK: Record<AgentKind, (size: number) => ReactNode> = {
   'claude-code': (size) => <ClaudeMark size={size} />,
@@ -185,6 +184,8 @@ function Section({
 }
 
 interface Props {
+  selectedMemberId?: string;
+  onSelectMember?: (row: UnionModelRow) => void;
   provider: ProviderView;
   row: UnionModelRow | null;
   open: boolean;
@@ -203,7 +204,9 @@ interface Props {
 
 export function ModelAdvancedDrawer({
   provider,
-  row,
+  row: groupRow,
+  selectedMemberId,
+  onSelectMember,
   open,
   onOpenChange,
   pricePresentationOf,
@@ -212,6 +215,13 @@ export function ModelAdvancedDrawer({
   disabled,
   paymentRequired,
 }: Props) {
+  const row = groupRow?.aliasRows?.find((member) => member.id === selectedMemberId)
+    ?? groupRow?.aliasRows?.find((member) => member.id === groupRow.id) ?? groupRow;
+  const memberRows = groupRow?.aliasRows ?? (row ? [row] : []);
+  const memberTargets = memberRows.flatMap((member) => member.avail.flatMap((agent) => {
+    const model = member.byAgent[agent];
+    return model ? [{ agent, modelId: model.id, model }] : [];
+  }));
   const { t, i18n } = useTranslation();
   const selectionAvailable = provider.connected && !provider.suspended;
   const locale = i18n.resolvedLanguage ?? i18n.language ?? 'en';
@@ -283,6 +293,7 @@ export function ModelAdvancedDrawer({
     [contextAgent, contextModel, provider.id, row, chatAgents],
   );
   const ctx = useModelContextLimit(open ? contextTarget : null);
+  const imageInputOverride = useModelImageInputOverride(open ? contextTarget : null);
   const canEditProtocol = provider.source === 'user' && !provider.auth?.native && !isManagedSidecarProviderId(provider.id);
   const imageAgents = canEditProtocol
     ? provider.agents.filter(agent => provider.routing?.[agent]?.imageApi === 'openai-images')
@@ -337,10 +348,21 @@ export function ModelAdvancedDrawer({
       if (agent === 'pi') model.piApi = api as PiModelApi;
       const wire = providerWireProtocolForApi(api);
       if (!wire) return;
-      model.route = {
-        baseUrl: providerBaseUrlForApi(model.route?.baseUrl ?? runtime.baseUrl, api),
-        wireProtocol: wire,
-      };
+      // Pi gets the selected API from api/piApi. A same-endpoint generated route
+      // would look explicit after refresh and block a later Messages /v1 fix.
+      // Keep existing routes and endpoints that change for the selected API.
+      const inheritPiEndpoint = agent === 'pi' && !model.route && !runtime.requestPath &&
+        (runtime.wireProtocol === 'openai-chat' || runtime.wireProtocol === 'openai-responses' ||
+          runtime.wireProtocol === 'anthropic-messages' || runtime.wireProtocol === 'google-generative-ai') &&
+        (api === 'anthropic-messages' ||
+          ((api === 'openai-completions' || api === 'openai-responses' || api === 'google-generative-ai') &&
+            providerBaseUrlForApi(runtime.baseUrl, api) === runtime.baseUrl));
+      if (!inheritPiEndpoint) {
+        model.route = {
+          baseUrl: providerBaseUrlForApi(model.route?.baseUrl ?? runtime.baseUrl, api),
+          wireProtocol: wire,
+        };
+      }
     }
     setProtocolSaving(true);
     try {
@@ -354,16 +376,28 @@ export function ModelAdvancedDrawer({
 
   const [ctxDraft, setCtxDraft] = useState('');
   const ctxDirtyRef = useRef(false);
-  const defaultWindow = contextAgent === 'codex' && ctx.codexContext
-    ? ctx.codexContext.contextWindow : contextModel?.contextWindow ?? 0;
+  const defaultWindow =
+    contextAgent === 'codex' && ctx.codexContext
+      ? ctx.codexContext.contextWindow
+      : (contextModel?.contextWindow ?? 0);
   // The editor guard is not a native request-capacity limit. Keep small/local
   // model windows selectable and never derive this floor from a saved override.
   // Local runtimes own their loaded window; their catalog maximum cannot set an editor floor.
-  const modelWindows = chatAgents.map((agent) => row?.byAgent[agent]?.contextWindow)
-    .filter((window): window is number => typeof window === 'number' && Number.isFinite(window) && window > 0);
+  const modelWindows = chatAgents
+    .map((agent) => row?.byAgent[agent]?.contextWindow)
+    .filter(
+      (window): window is number =>
+        typeof window === 'number' && Number.isFinite(window) && window > 0,
+    );
   const minimumContextK = isLocalRuntimeBetaProviderId(provider.id)
-    ? 1 : Math.max(1, Math.floor(Math.min(100_000, ...modelWindows) / 1000));
-  const routeWindow = supportsMillionContext ? 1_000_000 : primaryModel?.contextWindowMax ?? primaryModel?.contextWindow ?? 0;
+    ? 1
+    : Math.max(1, Math.floor(Math.min(100_000, ...modelWindows) / 1000));
+  // A working default (including a heuristic fallback) is not a declared capacity.
+  // Codex's native maximum may already contain the user's override, so it
+  // cannot establish the provider's declared capacity.
+  const routeWindow = supportsMillionContext ? 1_000_000
+    : (contextModel ?? primaryModel)?.contextWindowMax
+      ?? (primaryModel?.contextWindowVerified === true ? primaryModel.contextWindow : 0);
   const effectiveLimit = ctx.limit ?? (defaultWindow > 0 ? defaultWindow : null);
   useEffect(() => {
     ctxDirtyRef.current = false;
@@ -372,13 +406,15 @@ export function ModelAdvancedDrawer({
   }, [open, primaryAgent, primaryModel?.id, provider.id]);
   useEffect(() => {
     if (ctx.loading || ctxDirtyRef.current) return;
-    setCtxDraft(effectiveLimit === null ? '' : editableContextK(effectiveLimit));
+    setCtxDraft(effectiveLimit === null ? '' : String(effectiveLimit));
   }, [ctx.loading, effectiveLimit, open]);
-  const parsedK = Number(ctxDraft.trim());
-  const parsedTokens = parsedK * 1000;
+  const parsedTokens = parseContextTokenInput(ctxDraft);
   const ctxInvalid =
-    ctxDirtyRef.current && ctxDraft.trim() !== '' &&
-    (!Number.isSafeInteger(parsedK) || parsedK < minimumContextK || parsedTokens > maximumContext);
+    ctxDirtyRef.current &&
+    ctxDraft.trim() !== '' &&
+    (parsedTokens === null ||
+      parsedTokens < minimumContextK * 1000 ||
+      parsedTokens > maximumContext);
   const commitCtxDraft = useCallback(() => {
     if (!ctxDirtyRef.current || ctxInvalid || ctx.loading || localConfigurationBlocked) return;
     ctxDirtyRef.current = false;
@@ -387,7 +423,7 @@ export function ModelAdvancedDrawer({
   const resetCtx = useCallback(() => {
     if (localConfigurationBlocked) return;
     ctxDirtyRef.current = false;
-    setCtxDraft(defaultWindow > 0 ? editableContextK(defaultWindow) : '');
+    setCtxDraft(defaultWindow > 0 ? String(defaultWindow) : '');
     void ctx.reset();
   }, [ctx, defaultWindow, localConfigurationBlocked]);
 
@@ -411,6 +447,27 @@ export function ModelAdvancedDrawer({
           ? 'vision'
           : 'no-vision'
         : classifyVisionCapability(primaryModel.id);
+  const imageInputDefault = modelImageInputDefault(primaryModel, row.id);
+  // An undeclared catalog has no default option: both choices remain explicit overrides.
+  // A failed read retains the chat route's effective fields, independently of media routes.
+  const imageInputValue = imageInputOverride.value ?? (imageInputOverride.error || imageInputOverride.mixed
+    ? modelImageInputDefault({ ...primaryModel, imageInputDefault: undefined }, row.id)
+    : imageInputDefault);
+  const imageInputTargets = contextTarget ? [contextTarget, ...contextTarget.relatedTargets] : [];
+  const imageInputTargetDefaults = imageInputTargets.map(({ agent }) => {
+    const candidate = row.byAgent[agent];
+    return candidate ? modelImageInputDefault(candidate, row.id) : null;
+  });
+  const imageDefaultsMatch = (value: boolean) => imageInputTargetDefaults.length > 0 &&
+    imageInputTargetDefaults.every(defaultValue => defaultValue === value);
+  // Different override provenance can still resolve to the same effective capability.
+  const imageInputMixed = imageInputOverride.mixed
+    ? new Set(imageInputTargets.map(({ agent }) => {
+        const candidate = row.byAgent[agent];
+        return candidate ? modelImageInputDefault({ ...candidate, imageInputDefault: undefined }, row.id) : null;
+      })).size > 1
+    : !imageInputOverride.error && imageInputOverride.value === null && new Set(imageInputTargetDefaults).size > 1;
+
   const conversational = isAgentSelectableModel(primaryModel, {
     userProvider: provider.source === 'user',
   });
@@ -437,6 +494,7 @@ export function ModelAdvancedDrawer({
     const model = row.byAgent[agent];
     return model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' }) ? [{ agent, modelId: model.id }] : [];
   });
+  if (groupRow?.aliasRows) visibilityTargets.splice(0, visibilityTargets.length, ...memberTargets.map(({ agent, modelId }) => ({ agent, modelId })));
   const visibilityCustomized = visibilityTargets.some(({ agent, modelId }) =>
     isModelVisibilityCustomized(agent, provider.id, modelId),
   );
@@ -454,7 +512,7 @@ export function ModelAdvancedDrawer({
       ? defaultWindow
       : parsedTokens
     : effectiveLimit;
-  const editRouteWindow = contextModel?.contextWindowMax ?? defaultWindow;
+  const editRouteWindow = routeWindow;
   const overRouteWindow =
     editRouteWindow > 0 &&
     displayedLimit !== null &&
@@ -464,18 +522,25 @@ export function ModelAdvancedDrawer({
   const efforts = EFFORT_ORDER.filter((effort) =>
     chatAgents.some((a) => row.byAgent[a]?.efforts.includes(effort)),
   );
+  const rememberedEffort = (agent: AgentKind, modelId: string) => {
+    const ids = groupRow?.aliasRows
+      ? memberTargets.filter((target) => target.agent === agent).map((target) => target.modelId)
+      : [modelId];
+    const values = [...new Set(ids.map((id) => getProviderModelEffort(agent, provider.id, id))
+      .filter((value) => value !== undefined))];
+    return values.length === 1 ? values[0] : undefined;
+  };
   const commonEfforts = efforts.filter((intent) => chatAgents.every((agent) => {
     const model = row.byAgent[agent];
     return !model?.efforts.length ||
       clampEffortToSupported(intent, model.efforts) ===
-        (getProviderModelEffort(agent, provider.id, model.id) ?? model.defaultEffort);
+        (rememberedEffort(agent, model.id) ?? model.defaultEffort);
   }));
   const preferredEffort = conversational
-    ? getProviderModelEffort(primaryAgent, provider.id, primaryModel.id) ?? primaryModel.defaultEffort
+    ? rememberedEffort(primaryAgent, primaryModel.id) ?? primaryModel.defaultEffort
     : null;
   const effortMixed = efforts.length > 0 && commonEfforts.length === 0;
-  const currentEffort = preferredEffort && commonEfforts.some((effort) => effort === preferredEffort)
-    ? preferredEffort : commonEfforts[0] ?? null;
+  const currentEffort = preferredEffort ?? commonEfforts[0] ?? null;
   const shownEfforts = EFFORT_ORDER.filter((effort) =>
     chatAgents.some((agent) => {
       const model = row.byAgent[agent];
@@ -492,6 +557,14 @@ export function ModelAdvancedDrawer({
    */
   const applyEffort = (effort: Effort) => {
     if (!efforts.includes(effort)) return;
+    if (groupRow?.aliasRows) {
+      const ok = editProviderModelMemoryBatch(memberTargets.filter((target) => target.model.efforts.length).map((target) => ({
+        kind: 'set-effort' as const, agent: target.agent, providerId: provider.id, model: target.modelId,
+        effort: clampEffortToSupported(effort, target.model.efforts) as Effort,
+      })));
+      if (!ok) toast.error(t('settings.providers.models.visibilityWriteFailed'));
+      return;
+    }
     for (const agent of chatAgents) {
       const model = row.byAgent[agent];
       if (!model) continue;
@@ -526,6 +599,23 @@ export function ModelAdvancedDrawer({
           >
             <header className="flex shrink-0 items-start gap-3 border-b border-[var(--settings-theme-card-border)] px-5 pb-3 pt-4">
               <div className="min-w-0 flex-1">
+                {groupRow?.aliasRows && <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button type="button" disabled={ctx.loading || protocolSaving} aria-label={t('settings.providers.models.advanced.modelId')}
+                      className="mb-2 flex max-w-full items-center gap-1 rounded-full px-2 py-1 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-chip)]">
+                      <span className="truncate">{row.id}</span><ChevronDown size={12} />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent className="z-[10003]" align="start">
+                    <DropdownMenuRadioGroup value={row.id} onValueChange={(id) => {
+                      if (ctx.loading || ctxDirtyRef.current || protocolSaving) return;
+                      const member = memberRows.find((candidate) => candidate.id === id);
+                      if (member) onSelectMember?.(member);
+                    }}>
+                      {memberRows.map((member) => <DropdownMenuRadioItem key={member.id} value={member.id}>{member.id}</DropdownMenuRadioItem>)}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>}
                 <Dialog.Title
                   ref={titleRef}
                   tabIndex={-1}
@@ -534,7 +624,7 @@ export function ModelAdvancedDrawer({
                   {localizedModelName(primaryModel.name, t)}
                 </Dialog.Title>
                 <p className="mt-0.5 truncate text-12 text-[var(--text-tertiary)]">
-                  {provider.id === 'xd' ? t('settings.providers.xd.title') : provider.name}
+                  {providerDisplayName(provider, t)}
                 </p>
               </div>
               <Dialog.Close
@@ -561,12 +651,12 @@ export function ModelAdvancedDrawer({
                           {t('settings.providers.models.manage.connectionRequired')}
                         </p>
                       )}
-                      {protocols.reference && protocolLabel(protocols.reference) && <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 text-11">
+                      {protocols.upstreamApis.length > 0 && <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 text-11">
                         <span className="text-[var(--text-tertiary)]">
-                          {t('settings.providers.models.advanced.protocol.reference')}
+                          {t('settings.providers.models.advanced.protocol.upstream')}
                         </span>
                         <span className="text-[var(--text-secondary)]">
-                          {protocolLabel(protocols.reference)}
+                          {protocols.upstreamApis.map(api => MODEL_PROTOCOL_LABEL[api as PiModelApi] ?? api).join(' · ')}
                         </span>
                       </div>}
                       {provider.agents.map((agent) => {
@@ -574,7 +664,7 @@ export function ModelAdvancedDrawer({
                         // Missing catalog membership proves no configured route, not upstream incompatibility.
                         const supported = Boolean(model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' }));
                         const protocol = protocols.forAgent(agent);
-                        const compatibility = protocol?.mode === 'compatibility';
+                        const compatibility = protocol?.path === 'local';
                         const protocolId = `model-protocol-${agent}`;
                         const notes: string[] = [];
                         if (model) {
@@ -621,7 +711,10 @@ export function ModelAdvancedDrawer({
                                   id={protocolId}
                                   className="mt-0.5 text-11 leading-4 text-[var(--text-tertiary)]"
                                 >
-                                  {canEditProtocol && (!model?.catalogPresetId || !!model.availableInterfaces?.length) && supported ? (
+                                  {/* Presets follow the catalog; any saved explicit choice, including older api/route-only
+                                      ones, keeps its way back to automatic. */}
+                                  {canEditProtocol && supported && (!model?.catalogPresetId || model.userModelConfig?.interfaceId ||
+                                    model.userModelConfig?.api || model.userModelConfig?.piApi || model.userModelConfig?.route?.wireProtocol) ? (
                                     <DropdownMenu>
                                       <DropdownMenuTrigger asChild>
                                         <button type="button" disabled={protocolSaving}
@@ -641,14 +734,10 @@ export function ModelAdvancedDrawer({
                                       </DropdownMenuContent>
                                     </DropdownMenu>
                                   ) : protocolLabel(protocol.outbound)}
-                                  {/* Missing manufacturer metadata does not make a configured
-                                      outbound protocol unconfirmed. Keep that distinction in
-                                      the manufacturer reference when one is declared. */}
-                                  {(protocol.mode !== 'unknown' || !protocol.outbound) && <>
-                                    {protocolLabel(protocol.outbound) && ' · '}
-                                    {compatibility ? <ModelCompatibilityNotice /> : t(
-                                      `settings.providers.models.advanced.protocol.${protocol.mode}`,
-                                    )}
+                                  {/* Only Cindy's local conversion is called out; phone widths put it on its own line. */}
+                                  {compatibility && <>
+                                    <span className="hidden min-[400px]:inline"> · </span>
+                                    <span className="block min-[400px]:inline"><ModelCompatibilityNotice /></span>
                                   </>}
                                 </p>
                               )}
@@ -687,7 +776,9 @@ export function ModelAdvancedDrawer({
                                 onCheckedChange={async (next) => {
                                   if (!model || !selectionAvailable) return;
                                   if (
-                                    await setModelVisibility(agent, provider.id, model.id, next) === false
+                                    (groupRow?.aliasRows
+                                      ? await setModelVisibilities(provider.id, memberTargets.filter((m) => m.agent === agent), next)
+                                      : await setModelVisibility(agent, provider.id, model.id, next)) === false
                                   ) {
                                     toast.error(
                                       t('settings.providers.models.visibilityWriteFailed'),
@@ -754,7 +845,7 @@ export function ModelAdvancedDrawer({
                       )}
                       {chatAgents.some(
                         (a) =>
-                          getProviderModelEffort(a, provider.id, row.byAgent[a]!.id) !== undefined,
+                          rememberedEffort(a, row.byAgent[a]!.id) !== undefined,
                       ) && (
                         <Button
                           variant="secondary"
@@ -764,6 +855,11 @@ export function ModelAdvancedDrawer({
                           type="button"
                           disabled={paymentRequired}
                           onClick={() => {
+                            if (groupRow?.aliasRows) {
+                              if (!editProviderModelMemoryBatch(memberTargets.map((target) => ({ kind: 'clear-effort' as const,
+                                agent: target.agent, providerId: provider.id, model: target.modelId })))) toast.error(t('settings.providers.models.visibilityWriteFailed'));
+                              return;
+                            }
                             for (const a of chatAgents)
                               clearProviderModelEffort(a, provider.id, row.byAgent[a]!.id);
                           }}
@@ -793,7 +889,7 @@ export function ModelAdvancedDrawer({
                                   disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
                                   onClick={() => {
                                     ctxDirtyRef.current = false;
-                                    setCtxDraft(editableContextK(preset.tokens));
+                                    setCtxDraft(String(preset.tokens));
                                     void ctx.setLimit(preset.tokens);
                                   }}
                                 >{preset.label}</Button>
@@ -823,14 +919,15 @@ export function ModelAdvancedDrawer({
                                   }
                                 }}
                                 aria-invalid={ctxInvalid || undefined}
-                                inputMode="numeric"
+                                inputMode="text"
+                                maxLength={32}
                                 disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
                                 aria-label={t(
                                   'settings.providers.models.advanced.contextLimitAria',
                                 )}
-                                className="w-20 bg-transparent text-center text-13 tabular-nums text-[var(--text-primary)] outline-none"
+                                className="w-28 bg-transparent text-center text-13 tabular-nums text-[var(--text-primary)] outline-none"
                               />
-                              <span className="text-11 text-[var(--text-tertiary)]">K</span>
+                              <span className="text-11 text-[var(--text-tertiary)]">tokens</span>
                             </span>
                             <span className="min-w-0 flex-1 text-11 tabular-nums text-[var(--text-tertiary)]">
                               {t('settings.providers.models.advanced.contextLimitRoute', {
@@ -855,7 +952,7 @@ export function ModelAdvancedDrawer({
                             <p role="status" className="mt-1.5 text-12 text-[var(--warning-fg)]">
                               {t(
                                 `settings.providers.models.advanced.${ctxInvalid ? 'contextInvalid' : ctx.error ? 'contextWriteFailed' : 'contextMixed'}`,
-                                { min: minimumContextK },
+                                { min: formatExactTokens(minimumContextK * 1000, locale), max: formatExactTokens(maximumContext, locale) },
                               )}
                             </p>
                           )}
@@ -866,6 +963,11 @@ export function ModelAdvancedDrawer({
                             </p>
                           )}
                         </>
+                      )}
+                      {ctx.compaction && (
+                        <ModelCompactionSettings policy={ctx.compaction}
+                          disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
+                          onChange={ctx.setCompaction} />
                       )}
                     </Section>
                   )}
@@ -950,7 +1052,37 @@ export function ModelAdvancedDrawer({
                       </>
                     )}
                     <Row label={t('settings.providers.models.advanced.imageInput')}>
-                      <span
+                      {conversational && !isOrganizationManagedProvider(provider) ? (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button type="button" disabled={imageInputOverride.loading || localConfigurationBlocked}
+                              aria-label={t('settings.providers.models.advanced.imageInput')}
+                              className="inline-flex min-h-8 items-center gap-1.5 rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50">
+                              {imageInputMixed
+                                ? t('settings.providers.models.advanced.imageInputMixed')
+                                : imageInputValue === null
+                                  ? t('settings.providers.models.advanced.undeclared')
+                                  : t(`settings.providers.models.advanced.${imageInputValue ? 'supported' : 'unsupported'}`)}
+                              <ChevronDown size={12} aria-hidden />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent className="z-[10003]" align="end">
+                            <DropdownMenuRadioGroup
+                              value={imageInputMixed || imageInputValue === null ? '' : String(imageInputValue)}
+                              onValueChange={(value) => void imageInputOverride.setValue(
+                                imageDefaultsMatch(value === 'true') ? null : value === 'true',
+                              )}>
+                              {[true, false].map((supported) => {
+                                const label = t(`settings.providers.models.advanced.${supported ? 'supported' : 'unsupported'}`);
+                                return <DropdownMenuRadioItem key={String(supported)} value={String(supported)}>
+                                  {imageDefaultsMatch(supported)
+                                    ? t('settings.providers.models.advanced.imageInputDefault', { value: label }) : label}
+                                </DropdownMenuRadioItem>;
+                              })}
+                            </DropdownMenuRadioGroup>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      ) : <span
                         title={
                           capabilityModel.modalities || capabilityModel.supportsImageInput !== undefined
                             ? t('settings.providers.models.advanced.catalogCapabilities')
@@ -963,8 +1095,13 @@ export function ModelAdvancedDrawer({
                           }
                           label={t(`settings.providers.models.advanced.vision.${vision}`)}
                         />
-                      </span>
+                      </span>}
                     </Row>
+                    {imageInputOverride.error && (
+                      <p role="alert" className="text-12 leading-5 text-[var(--error-fg)]">
+                        {t('settings.providers.custom.toast.saveFailed')}
+                      </p>
+                    )}
                     {capabilityModel.modalities &&
                       (['input', 'output'] as const).map((direction) => (
                         <Row
@@ -1004,10 +1141,14 @@ export function ModelAdvancedDrawer({
                         {(['input', 'output', 'cacheRead', 'cacheWrite'] as const).map((role) => {
                           const quotes = primaryModel.displayPricing?.summary?.[role];
                           if (!quotes?.length) return null;
+                          const components = quotes.map(quote => displayPricingComponent(quote.component));
+                          const component = components.every(value => value === components[0]) ? components[0] : undefined;
                           return (
                             <Row
                               key={role}
-                              label={t(`settings.providers.models.advanced.price.${role === 'cacheWrite' ? 'cacheCreate' : role}`)}
+                              label={component
+                                ? t(`newChat.modelSelector.displayPricing.roles.${component}.${role}`)
+                                : t(`settings.providers.models.advanced.price.${role === 'cacheWrite' ? 'cacheCreate' : role}`)}
                             >
                               <span className="flex flex-col items-end gap-1">
                                 {quotes.map((quote, index) => (
@@ -1016,6 +1157,9 @@ export function ModelAdvancedDrawer({
                                     quote={quote}
                                     currency={primaryModel.currency!}
                                     costDiscount={discount}
+                                    componentLabel={!component && components[index]
+                                      ? t(`newChat.modelSelector.displayPricing.components.${components[index]}`)
+                                      : undefined}
                                   />
                                 ))}
                               </span>
@@ -1120,7 +1264,7 @@ export function ModelAdvancedDrawer({
                   compact
                   type="button"
                   disabled={disabled && !selectionAvailable}
-                  onClick={() => onDisable(row)}
+                  onClick={() => onDisable(groupRow ?? row)}
                 >
                   {disabled
                     ? t('settings.providers.models.enableModel')

@@ -10,6 +10,7 @@ import {
   type SchedulerToolResult,
 } from "../cindy_schedulerToolRegistry.js";
 import {
+  registerScheduleCreateTool,
   registerScheduleDeleteTool,
   registerScheduleGetTool,
   registerScheduleListRunsTool,
@@ -413,6 +414,17 @@ describe("cindy_scheduler cross-device routing", () => {
     expect(s.scheduler.pause).toHaveBeenCalledWith("l1", undefined);
   });
 
+  // PR #6830, unit: the real MCP entry must retain explicit clearing across JSON;
+  // replacing null with undefined here would silently keep the old remote route.
+  it("forwards model selection clearing as JSON null without changing omitted fields", async () => {
+    const s = setup();
+    const patch = { modelAgentDeviceId: null, modelAgentKind: null, model: null, providerId: null, effort: null, fastMode: false };
+    const result = parse(await s.registry.call("schedule_update", { id: "r1", device: "mbp", ...patch }));
+    expect(result.ok).toBe(true);
+    expect(JSON.parse(JSON.stringify(s.invoke.mock.calls[0]))).toEqual(["mbp", "update", ["r1", patch]]);
+    expect(s.scheduler.updateFromCurrent).not.toHaveBeenCalled();
+  });
+
   it("rejects writes that cannot be expressed on another computer instead of guessing", async () => {
     const s = setup();
     for (const args of [{ id: "r1", device: "all" }]) {
@@ -425,7 +437,7 @@ describe("cindy_scheduler cross-device routing", () => {
     }
     for (const patch of [
       { bindToCurrentSession: true },
-      { model: null },
+      { workingDir: null },
       { cronExpr: "not a cron" },
       // 运行位置 id 相对本机的设备目录,对那台电脑没有意义。
       { agentDeviceId: "studio", model: "claude-opus-5-5" },
@@ -496,5 +508,69 @@ describe("cindy_scheduler cross-device routing", () => {
         code: "REMOTE_UNSUPPORTED",
       });
     }
+  });
+});
+
+describe('remote schedule create', () => {
+  function setup() {
+    const scheduler = {
+      create: vi.fn(async () => ({ id: 'local' })),
+    };
+    const invoke = vi.fn(async (_deviceId: string, op: string, args: unknown[]): Promise<SchedulerRemoteResult> => {
+      if (op === 'create') return { ok: true, data: { ...(args[0] as object), id: 'dst', status: 'active' } };
+      return { ok: false, code: 'REMOTE_UNSUPPORTED', message: op };
+    });
+    const registry = new SchedulerToolRegistry();
+    const deps = {
+      getScheduler: () => scheduler as unknown as Scheduler,
+      remote: { listDevices: async () => [], invoke },
+      listModels: vi.fn(async () => ({
+        ok: true as const,
+        pi: [{ id: 'grok-4.6', label: 'Grok 4.6', providers: [{ id: 'xai-2fdb5bc7', name: 'xAI' }], defaultProviderId: 'xai-2fdb5bc7' }],
+      })),
+    };
+    registerScheduleCreateTool(registry, deps);
+    return { registry, invoke, scheduler };
+  }
+
+  it('creates on the named computer and does not touch the local scheduler', async () => {
+    const s = setup();
+    const result = parse(await s.registry.call('schedule_create', {
+      device: 'spark',
+      name: '游戏领域雷达',
+      prompt: '围绕主题搜集动态',
+      cronExpr: '0 9 * * 1-5',
+      timezone: 'Asia/Shanghai',
+      recurring: true,
+      agentKind: 'pi',
+      model: 'grok-4.6',
+      providerId: 'xai-2fdb5bc7',
+      useWorktree: false,
+      notify: { desktop: true, feishu: false },
+    }));
+    expect(result.ok).toBe(true);
+    expect(s.invoke).toHaveBeenCalledWith('spark', 'create', [expect.objectContaining({
+      name: '游戏领域雷达',
+      providerId: 'xai-2fdb5bc7',
+    })]);
+    expect(s.scheduler.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects binding the current session when creating remotely', async () => {
+    const s = setup();
+    const result = parse(await s.registry.call('schedule_create', {
+      device: 'spark',
+      bindToCurrentSession: true,
+      name: 'n',
+      prompt: 'p',
+      cronExpr: '0 9 * * *',
+      timezone: 'Asia/Shanghai',
+      recurring: true,
+      agentKind: 'pi',
+      useWorktree: false,
+      notify: { desktop: true, feishu: false },
+    }));
+    expect(result).toMatchObject({ ok: false, code: 'INVALID_PARAMS' });
+    expect(s.invoke).not.toHaveBeenCalled();
   });
 });

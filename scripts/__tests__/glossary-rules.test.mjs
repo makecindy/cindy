@@ -486,6 +486,11 @@ test('validateAgainstSchema: 校验 required / enum / pattern / oneOf', () => {
   };
   assert.deepEqual(validateAgainstSchema({ id: 'session', status: 'decided' }, schema), []);
   assert.match(validateAgainstSchema({ id: 'session' }, schema).join(), /缺少必填字段 "status"/);
+  // required 只认实例自有字段，不能接受 Object.prototype 上的同名属性。
+  assert.match(
+    validateAgainstSchema({}, { type: 'object', required: ['toString'] }).join(),
+    /缺少必填字段 "toString"/,
+  );
   assert.match(validateAgainstSchema({ id: 'Session', status: 'decided' }, schema).join(), /不匹配/);
   assert.match(validateAgainstSchema({ id: 'a', status: 'decied' }, schema).join(), /取值必须是/);
   // 条件禁用少写 whenEn 时,两个 oneOf 分支都不匹配

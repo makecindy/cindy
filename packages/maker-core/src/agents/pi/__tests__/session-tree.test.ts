@@ -90,6 +90,43 @@ describe('pi session tree adapter', () => {
     expect(() => piRetryBranch(retryTree(settings), '0')).toThrow('no failed response');
   });
 
+  it('allows omission context edits around repeated empty failures', () => {
+    const omit = { type: 'context_edit', targetId: 'failed', replacement: null };
+    expect(piRetryBranch(retryTree([emptyFailure, omit, emptyFailure, omit]), '0')).toEqual({
+      parentId: null,
+      requestTooLarge: true,
+    });
+  });
+
+  it('does not treat an omission edit alone as a failed response', () => {
+    expect(() => piRetryBranch(retryTree([{ type: 'context_edit', targetId: '0', replacement: null }]), '0'))
+      .toThrow('no failed response');
+  });
+
+  // #8383: a gateway that enforces a request-body byte limit answers HTTP 400
+  // (BadRequest.TooLarge), not 413. requestTooLarge decides whether a user retry compacts
+  // before resending; missing it resends the same image history and the task stops at
+  // "Could not complete the reply". Existing cases cover only the 413 and buffer wordings.
+  // Each spelling is a separate row so dropping either alternative fails that row alone;
+  // the transport-failure row keeps the boundary from widening. The combined production
+  // payload is covered end-to-end by the gateway-400 mode in pi-provider-routing.test.ts.
+  it.each([
+    { spelling: 'the BadRequest.TooLarge error type', errorMessage: '400 {"error":{"message":"Bad Request","type":"BadRequest.TooLarge"}}', requestTooLarge: true },
+    { spelling: 'the max-bytes request-body wording', errorMessage: '400 {"error":{"message":"Exceeded limit on max bytes to request body : 16777216"}}', requestTooLarge: true },
+    { spelling: 'an unrelated transport failure', errorMessage: 'upstream returned 502 Bad Gateway', requestTooLarge: false },
+  ])('scores $spelling as requestTooLarge=$requestTooLarge', ({ errorMessage, requestTooLarge }) => {
+    expect(piRetryBranch(retryTree([{
+      type: 'message', message: { role: 'assistant', stopReason: 'error', content: [], errorMessage },
+    }]), '0')).toEqual({ parentId: null, requestTooLarge });
+  });
+
+  it('still protects a context edit that replaces message content', () => {
+    expect(() => piRetryBranch(retryTree([
+      emptyFailure,
+      { type: 'context_edit', targetId: '1', replacement: 'rewritten' },
+    ]), '0')).toThrow('discard output or session state');
+  });
+
   it.each([
     { type: 'message', message: { role: 'assistant', stopReason: 'error', content: [{ type: 'text', text: 'partial' }] } },
     { type: 'message', message: { role: 'assistant', stopReason: 'error', content: [{ type: 'toolCall', name: 'bash' }] } },

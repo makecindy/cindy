@@ -1,4 +1,6 @@
+import { imBotSettings } from './ImBotSection.settings-search';
 import { Button } from '@/components/ui/button';
+import { ImConnectionError, ImSavedConnectionRecovery } from './ImConnectionRecovery';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Trash2 } from 'lucide-react';
@@ -58,6 +60,7 @@ export function DiscordBotSection({
     isDisconnecting,
     canConnect,
     connect,
+    reconnect,
     disconnect,
   } = useDiscordBot();
 
@@ -109,8 +112,8 @@ export function DiscordBotSection({
 
   return (
     <ImChannelSettingsCard
-      id="personal-im-discord"
-      title={t('settings.discordBot.title')}
+      id={imBotSettings.discord.targetId}
+      title={t(imBotSettings.discord.titleKey)}
       description={t('settings.discordBot.description')}
       routeSummary={
         routeSummary
@@ -154,6 +157,13 @@ export function DiscordBotSection({
         />
       ) : (
         <div className="flex flex-col gap-3">
+          {hasSavedCreds && ownerUserId && (
+            <ImSavedConnectionRecovery
+              loading={isSaving}
+              disabled={isDisconnecting}
+              onReconnect={reconnect}
+            />
+          )}
           <label
             className="text-12 font-medium text-[var(--settings-section-desc)]"
             style={{ letterSpacing: '0.12px' }}
@@ -161,7 +171,7 @@ export function DiscordBotSection({
             {t('settings.discordBot.tokenLabel')}
           </label>
           <div className="relative">
-            <input
+            <input data-setting-id={imBotSettings.discord.id}
               type={showToken ? 'text' : 'password'}
               value={token}
               onChange={(e) => setToken(e.target.value)}
@@ -176,7 +186,7 @@ export function DiscordBotSection({
               )}
               style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
             />
-            <button
+            <button data-setting-id={imBotSettings.discord.id}
               type="button"
               onClick={() => setShowToken(!showToken)}
               className="absolute right-[14px] top-1/2 -translate-y-1/2 text-[var(--settings-eye-icon)] transition-colors hover:text-[var(--settings-eye-icon-hover)]"
@@ -194,7 +204,7 @@ export function DiscordBotSection({
           >
             {t('settings.discordBot.ownerUserIdLabel')}
           </label>
-          <input
+          <input data-setting-id={imBotSettings.discord.id}
             type="text"
             value={ownerUserId}
             onChange={(e) => setOwnerUserId(e.target.value)}
@@ -219,9 +229,7 @@ export function DiscordBotSection({
                   {validationError}
                 </p>
               ) : status.kind === 'error' ? (
-                <p className="text-12 text-[var(--settings-error-text)]" role="alert">
-                  {status.reason}
-                </p>
+                <ImConnectionError details={status.reason} />
               ) : (
                 <p className="text-12 text-[var(--settings-source-meta)]">
                   {t('settings.discordBot.formHint')}
@@ -229,7 +237,7 @@ export function DiscordBotSection({
               )}
             </div>
             {hasSavedCreds && (
-              <button
+              <button data-setting-id={imBotSettings.discord.id}
                 type="button"
                 onClick={() => void handleDisconnectClick()}
                 disabled={isDisconnecting}
@@ -245,7 +253,7 @@ export function DiscordBotSection({
             )}
           </div>
 
-          <Button
+          <Button data-setting-id={imBotSettings.discord.id}
             variant="cta"
             size="lg"
             loading={isSaving}
@@ -273,7 +281,7 @@ export function DiscordBotSection({
       )}
 
       <div className="border-t border-[var(--settings-theme-card-border)] pt-3">
-        <button
+        <button data-setting-id={imBotSettings.discord.id}
           type="button"
           onClick={() => setGuideOpen(!guideOpen)}
           className="flex w-full items-center justify-between gap-3 bg-transparent p-0 text-left"
@@ -304,7 +312,7 @@ export function DiscordBotSection({
                 </div>
               </div>
             ))}
-            <button
+            <button data-setting-id={imBotSettings.discord.id}
               type="button"
               onClick={openDeveloperPortal}
               className="w-fit cursor-pointer bg-transparent p-0 text-12 font-medium text-[var(--settings-source-link)] underline decoration-[var(--settings-source-link)] decoration-1 underline-offset-2"
@@ -360,7 +368,7 @@ function ConnectedCard(props: {
         </div>
       </div>
       <div className="flex gap-2 pt-1">
-        <Button
+        <Button data-settings-search-action="Disconnect this bot account"
           variant="secondary"
           size="lg"
           loading={props.isDisconnecting}

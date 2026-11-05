@@ -38,10 +38,13 @@ export {
 } from './instructions-injection.js';
 export {
   createActiveStripTransform,
+  createToolReferenceRecoveryRule,
+  lowerToolReferencesFromBody,
   createDuplicateToolUseIdRecoveryRule,
   createEmptyAssistantMessageRecoveryRule,
   createEmptyTextRecoveryRule,
   createEmptyThinkingRecoveryRule,
+  createAnthropicContextManagementRecoveryRule,
   createEncryptedContentRecoveryRule,
   createResponsesReasoningContentRecoveryRule,
   createImageGenerationIdRecoveryRule,

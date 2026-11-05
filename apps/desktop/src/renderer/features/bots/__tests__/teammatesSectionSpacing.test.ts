@@ -17,13 +17,15 @@
  *   .row-time  { font-size:11px; flex:none }                             → text-11 shrink-0
  *   .row-prev  { font-size:12.5px }                                      → text-12(仓库字号阶梯里最近的一档)
  *   .badge     { min-width:16px; height:16px; padding:0 4px; radius:9999 } → h-4 min-w-4 px-1 rounded-full
- *   .av-40     { 40px }                                                   → BotAvatar size="md"
+ *   列表头像  { 44px }                                                   → BotAvatar size="row"
  *   .side-list { padding:0 12px 12px }                                    → 容器 pl-3(伙伴段并入任务侧栏后,
  *                                                                           右侧由侧栏滚动区统一留白)
  *
  * 未读角标依用户的侧栏细化反馈收小，数字采用等宽，预览不再随未读加粗。
  * 2026-10-13 伙伴从整栏切换改为任务侧栏里的「伙伴」段(TeammatesSection):行几何不变,
  * 段头改与置顶 / 全部任务段头同款。
+ * 2026-10-29 头像几何按 DESIGN.md「Mobile task home teammate section」统一为
+ * 列表 44px；2026-11-04 收起沿用 36px 头像、40px 点击区与 4px 间距。
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -66,7 +68,7 @@ describe('伙伴行的间距基线', () => {
 
   it('头像与正文之间 10px', () => {
     expect(ROW_BUTTON_CLASS).toContain('gap-2.5');
-    expect(source).toContain('<BotAvatar bot={bot} size="md" />');
+    expect(source).toContain('<BotAvatar bot={bot} size="row" />');
   });
 
   it('两行之间 2px,行内元素之间 8px', () => {
@@ -80,18 +82,18 @@ describe('伙伴行的间距基线', () => {
     expect(source).toContain("'min-w-0 flex-1 truncate text-14 leading-5',");
     expect(source).toContain("cn('min-h-4 text-11 tabular-nums', mutedClass)");
     expect(source).toContain("'min-w-0 flex-1 truncate text-12 leading-4',");
-    // 徽标 16×16,左右各 4px，数字变化不抖动。
-    expect(source).toContain(
-      'flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-[var(--bot-unread-bg)] px-1 text-10 font-medium tabular-nums leading-none text-[var(--bot-unread-fg)]',
-    );
+    // 未读由行尾状态点表达，时间列占位仍与 main 一致。
+    expect(source).toContain('<BotAvatar bot={bot} size="row" />');
   });
 
-  it('时间与未读共用右列,较长的相对时间不折行', () => {
+  it('时间保留 main 的右列布局，较长的相对时间不折行', () => {
     const start = source.indexOf(
       '<span className="flex min-w-10 shrink-0 self-stretch flex-col items-end justify-between whitespace-nowrap py-0.5">',
     );
     const metaColumn = source.slice(start, source.indexOf('</button>', start));
-    expect(metaColumn).toContain("aria-label={t('bots.list.unread', { count: unread })}");
+    expect(metaColumn).toContain('flex min-h-4 items-center justify-end');
+    const subtitle = source.slice(source.indexOf('{showRunning ? <TeammateRunningPreview>{subtitleText}'), start);
+    expect(subtitle).toContain('<TeammateRowStatus status={status} />');
     expect(metaColumn).toContain("cn('min-h-4 text-11 tabular-nums', mutedClass)");
   });
 
@@ -126,7 +128,7 @@ describe('伙伴行的间距基线', () => {
       '<div className="group/sidebar-header flex h-6 items-center justify-between pr-3 pl-6">',
     );
     // 头像行起点 = 列表容器 12px + 行内边距 10px。
-    expect(source).toContain('<div ref={avatarRowRef} className="flex flex-nowrap items-center gap-2 overflow-hidden py-1 pr-0 pl-[22px]">');
+    expect(source).toContain('<div ref={avatarRowRef} className="flex flex-nowrap items-center gap-1 overflow-hidden py-1 pr-0 pl-[22px]">');
     // 段头动作是 20px 图标钮,与其它段头动作同尺寸。
     expect(source).toContain('<BotCreateMenu variant="header" />');
     // 加入群聊收进「+」菜单的「输入邀请链接…」(#6013),段头不再有单独的加群按钮。
@@ -140,7 +142,7 @@ describe('群聊与伙伴行同一套几何', () => {
     'utf8',
   ).replace(/\r\n/g, '\n');
 
-  it('群行沿用对称的 10px / 8px 内边距、40px 头像位、14/12/11 字号', () => {
+  it('群行沿用对称的 10px / 8px 内边距、44px 头像位、14/12/11 字号', () => {
     expect(groupRow).toContain('gap-2.5 rounded-xl px-2.5 py-2 text-left');
     expect(groupRow).toContain('<span className="flex min-w-0 flex-1 flex-col gap-0.5">');
     expect(groupRow).toContain('min-w-0 truncate text-14 leading-5');

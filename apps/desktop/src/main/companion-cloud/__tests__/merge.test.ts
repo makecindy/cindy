@@ -53,7 +53,7 @@ describe('merging copies of Cindy', () => {
       roomOf: async (actor) => (actor.id === keep.id ? KEEP_ROOM : FROM_ROOM), importHistory, fence: { assertCurrent: () => undefined } });
     const addPreference = (n: number) => { added.push({ key: `companion.memory.v1:late-${n}.md`, value: { content: 'late' }, revision: Math.max(1, 100 + n) }); };
     const withAttachment = () => { files.push({ type: 'media', mediaId: 'media-1', caption: 'cat.png' }); };
-    return { run, api, local, calls, imports, importHistory, addPreference, withAttachment };
+    return { run, api, local, calls, imports, importHistory, addPreference, withAttachment, added };
   }
 
   it('brings memories, todos and the conversation over, keeping a different same-name memory as a copy', async () => {
@@ -142,5 +142,56 @@ describe('merging copies of Cindy', () => {
       roomOf: async (actor) => (actor.id === keep.id ? KEEP_ROOM : FROM_ROOM), importHistory: t.importHistory,
       fence: { assertCurrent: () => undefined } })).rejects.toThrow('MEDIA_DOWNLOAD_FAILED');
     expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
+  });
+
+  describe('skill files', () => {
+    const script = { path: 'run.sh', size: 1, sha256: 'theirs', mediaId: 'media-1' };
+    const merge = async (kept: Array<{ path: string; sha256: string }>, download = vi.fn(async () => ({ name: 'run.sh', category: 'file', mimeType: 'application/octet-stream', size: 1, url: null, path: '/d/run.sh' }))) => {
+      const t = setup();
+      t.added.push({ key: 'companion.skill.v1:brew', value: { slug: 'brew', content: 'steps' }, revision: 50 },
+        { key: 'companion.skill-files.v1:brew', value: { slug: 'brew', files: [script] }, revision: 51 });
+      t.local.skills.set('brew', 'steps');
+      const applied: Array<[string, Array<string | null>]> = [];
+      const applySkillFiles = vi.fn(async (_bot: string, slug: string, files: Array<{ path: string }>, fetch: (file: never) => Promise<string | null>) => {
+        applied.push([slug, await Promise.all(files.map(file => fetch(file as never)))]);
+        return [];
+      });
+      const run = mergeCompanionsInto({ api: t.api, host: { ...t.local.host, applySkillFiles, readSkillFiles: async () => kept.map(file => ({ ...file, size: 1 })) }, keep, from: [from], humanActorId: 'human',
+        roomOf: async (actor) => (actor.id === keep.id ? KEEP_ROOM : FROM_ROOM), importHistory: async () => undefined, media: { upload: vi.fn(), download }, fence: { assertCurrent: () => undefined } });
+      return { run, applied, t };
+    };
+
+    it('keeps a skill with the same text but a different script as its own copy', async () => {
+      const { run, applied, t } = await merge([{ path: 'run.sh', sha256: 'ours' }]);
+      expect((await run).renamed).toContain('brew-macbook-pro');
+      expect(t.local.skills.get('brew-macbook-pro')).toBe('steps');
+      expect(applied).toEqual([['brew-macbook-pro', ['/d/run.sh']]]);
+    });
+
+    it('keeps its own copy when a file sits where the other side has a folder', async () => {
+      const { run, applied } = await merge([{ path: 'run.sh/old', sha256: 'x' }]);
+      expect((await run).renamed).toContain('brew-macbook-pro');
+      expect(applied[0]?.[0]).toBe('brew-macbook-pro');
+    });
+
+    it('keeps its own copy when only the executable bit differs, so the kept script stays runnable', async () => {
+      const { run, applied } = await merge([{ path: 'run.sh', sha256: 'theirs', executable: true } as never]);
+      expect((await run).renamed).toContain('brew-macbook-pro');
+      expect(applied[0]?.[0]).toBe('brew-macbook-pro');
+    });
+
+    it('fills in what an interrupted merge left out, without a second copy', async () => {
+      const { run, applied } = await merge([]);
+      const summary = await run;
+      expect(summary.renamed).not.toContain('brew-macbook-pro');
+      expect(summary.skills).toBe(0);
+      expect(applied).toEqual([['brew', ['/d/run.sh']]]);
+    });
+
+    it('stops before retiring the copy when a file may still come', async () => {
+      const { run, t } = await merge([], vi.fn(async () => { throw new Error('ECONNRESET'); }));
+      await expect(run).rejects.toThrow('ECONNRESET');
+      expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
+    });
   });
 });

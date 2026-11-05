@@ -49,9 +49,38 @@ test('an open PR remains active even when its current HEAD is in base', () => {
   assert.equal(classifyWorktree({ ...cleanTask, pr: { state: 'OPEN' } }), 'active PR');
 });
 
+test('an open PR remains active when upstream status is unknown', () => {
+  assert.equal(classifyWorktree({
+    ...cleanTask,
+    inBase: false,
+    upstream: 'origin/feature-current-task',
+    aheadOfUpstream: null,
+    pr: { state: 'OPEN' },
+  }), 'active PR');
+});
+
 test('unreadable status is not reported as clean', () => {
   assert.equal(classifyWorktree({ ...cleanTask, ...parseWorktreeStatus(null) }), 'status unavailable');
   assert.equal(classifyWorktree({ ...cleanTask, ...parseWorktreeStatus('') }), 'clean HEAD in base');
+});
+
+test('a feature branch with unknown upstream status is not reported as clean', () => {
+  assert.equal(classifyWorktree({
+    ...cleanTask,
+    inBase: false,
+    upstream: 'origin/feature-current-task',
+    aheadOfUpstream: null,
+  }), 'status unavailable');
+});
+
+test('main with unknown upstream status is not reported as clean', () => {
+  assert.equal(classifyWorktree({
+    ...cleanTask,
+    branch: 'main',
+    inBase: false,
+    upstream: 'origin/main',
+    aheadOfUpstream: null,
+  }), 'status unavailable');
 });
 
 test('existing dirty and unpushed work remain visible', () => {

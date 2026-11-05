@@ -8,11 +8,14 @@ import {
   createEmptyAssistantMessageRecoveryRule,
   createEmptyTextRecoveryRule,
   createEmptyThinkingRecoveryRule,
+  createAnthropicContextManagementRecoveryRule,
   createEncryptedContentRecoveryRule,
   createResponsesReasoningContentRecoveryRule,
   createImageGenerationIdRecoveryRule,
   createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
+  createToolReferenceRecoveryRule,
+  lowerToolReferencesFromBody,
   dedupeDuplicateToolUseIds,
   dedupeDuplicateToolUseIdsFromBody,
   repairToolExchangeAdjacency,
@@ -45,6 +48,34 @@ const ctx: RequestTransformCtx = {
   url: '/v1/responses',
   headers: { 'thread-id': 'thread-a' },
 };
+
+describe('tool reference protocol lowering (#8593)', () => {
+  it('only lowers tool-result content, preserving opaque inputs and other content', () => {
+    const reference = { type: 'tool_reference', tool_name: 'lookup' };
+    const image = { type: 'image', source: { type: 'base64', data: 'opaque' } };
+    const tool = { type: 'tool_use', id: 'call-1', name: 'lookup', input: { content: [reference] } };
+    const schema = { name: 'lookup', input_schema: { example: reference } };
+    const body = { model: 'glm-5.3-flash', tools: [schema], messages: [
+      { role: 'assistant', content: [tool] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call-1', is_error: false,
+        content: [reference, image] }] },
+    ] };
+    const lowered = JSON.parse(lowerToolReferencesFromBody(buf(body))!.toString());
+    expect(lowered.messages[0].content).toEqual([tool]);
+    expect(lowered.tools).toEqual([schema]);
+    expect(lowered.messages[1].content[0]).toEqual({ type: 'tool_result', tool_use_id: 'call-1', is_error: false,
+      content: [{ type: 'text', text: 'Available tool: lookup' }, image] });
+    expect(lowerToolReferencesFromBody(buf(lowered))).toBeNull();
+    expect(body.messages[1]!.content[0]).toMatchObject({ content: [reference, image] });
+  });
+  it('does not rewrite clean or invalid requests or match unrelated failures', () => {
+    for (const raw of [Buffer.from('invalid'), buf({ input: [{ type: 'tool_reference', tool_name: 'lookup' }] }),
+      buf({ messages: [{ content: 'hello' }] })]) expect(lowerToolReferencesFromBody(raw)).toBeNull();
+    const rule = createToolReferenceRecoveryRule();
+    expect(rule.matches('invalid API key')).toBe(false);
+    expect(rule.matches('Unknown field tool_reference')).toBe(false);
+  });
+});
 
 describe('compactOversizedImageHistory', () => {
   it('drops older history images before the newest tool-result and newest user image', () => {
@@ -2223,5 +2254,34 @@ describe('repair → dedupe 链式顺序(host 主动链同序)', () => {
       ],
     });
     expect(repairToolExchangeStructureFromBody(clean)).toBeNull();
+  });
+});
+
+describe('Anthropic context management recovery (#7041)', () => {
+  it('only removes the top-level rejected field and preserves the original request', () => {
+    const rule = createAnthropicContextManagementRecoveryRule();
+    const request = { messages: [{ role: 'user', content: 'hello' }], context_management: {},
+      metadata: { context_management: 'user data' } };
+    const body = Buffer.from(JSON.stringify(request));
+    const stripped = rule.strip(body);
+    expect(stripped).not.toBeNull();
+    expect(JSON.parse(stripped!.toString())).toEqual({ messages: request.messages, metadata: request.metadata });
+    expect(JSON.parse(body.toString())).toEqual(request);
+    expect(rule.strip(stripped!)).toBeNull();
+    expect(rule.strip(Buffer.from('{invalid'))).toBeNull();
+    expect(rule.strip(Buffer.from(JSON.stringify({ input: [], context_management: {} })))).toBeNull();
+  });
+
+  it('does not trigger on unrelated fields or participate in other recovery rules', () => {
+    const rule = createAnthropicContextManagementRecoveryRule();
+    expect(rule.matches('ValidationException: context_management: Extra inputs are not permitted')).toBe(true);
+    for (const message of ['context_management: authentication required',
+      'other_context_management: Extra inputs are not permitted',
+      'messages.0.context_management: Extra inputs are not permitted',
+      'context_management is supported; other_field: Extra inputs are not permitted']) {
+      expect(rule.matches(message)).toBe(false);
+    }
+    expect(rule.applyOnUnmatchedRetry).toBe(false);
+    expect(rule.allowExtraRules).toBe(false);
   });
 });

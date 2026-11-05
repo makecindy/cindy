@@ -55,6 +55,7 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     systemPrefersDark = false;
     localStorage.clear();
     delete document.documentElement.dataset.theme;
+    delete document.documentElement.dataset.wallpaperActive;
     document.documentElement.classList.remove('dark');
     vi.spyOn(themeService, 'applyTheme').mockImplementation(() => {});
     (window as unknown as { electronAPI: unknown }).electronAPI = {
@@ -67,7 +68,7 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     localStorage.setItem('theme', 'dark');
     renderHook(() => useTheme(), { wrapper });
 
-    expect(applyVibrancyMock).toHaveBeenCalledWith('cindy', true, 'dark', true);
+    expect(applyVibrancyMock).toHaveBeenCalledWith('cindy', true, 'dark', true, false);
   });
 
   it('utility 窗口复用 ThemeProvider 时不写全局窗口材质快照', () => {
@@ -81,7 +82,7 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     localStorage.setItem('theme.familyId', 'eclipse');
     renderHook(() => useTheme(), { wrapper });
 
-    expect(applyVibrancyMock).toHaveBeenCalledWith('eclipse', true, 'system', false);
+    expect(applyVibrancyMock).toHaveBeenCalledWith('eclipse', true, 'system', false, false);
   });
 
   it('系统深色下真首启按亮色门的实际主题上报 backing，门结束后恢复深色', () => {
@@ -89,12 +90,12 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     expect(getInitialThemeVariant().theme.type).toBe('light');
 
     renderHook(() => useTheme(), { wrapper });
-    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', false, 'system', true);
+    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', false, 'system', true, false);
 
     act(() => {
       endLoginFirstLaunchLightGate();
     });
-    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', true, 'system', true);
+    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', true, 'system', true, false);
   });
 
   it('其他窗口切 theme → storage 事件 → 本窗口 theme state 跟随并重应用', () => {
@@ -105,6 +106,46 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     });
     expect(result.current.theme).toBe('dark');
     expect(themeService.applyTheme).toHaveBeenCalled();
+  });
+
+  // Protocol regression: wallpaper rendering used to leave the native material enabled.
+  it('reports actual canvas coverage, deduplicates unchanged coverage and stops observing on unmount', async () => {
+    localStorage.setItem('theme', 'dark');
+    const { result, unmount } = renderHook(() => useTheme(), { wrapper });
+    const root = document.documentElement;
+    await act(async () => {
+      root.dataset.wallpaperActive = 'true';
+    });
+    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', true, 'dark', true, true);
+
+    const count = applyVibrancyMock.mock.calls.length;
+    await act(async () => {
+      root.dataset.wallpaperActive = 'true';
+    });
+    expect(applyVibrancyMock).toHaveBeenCalledTimes(count);
+
+    act(() => {
+      result.current.setTheme('light');
+    });
+    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', false, 'light', true, true);
+    await act(async () => {
+      delete root.dataset.wallpaperActive;
+    });
+    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', false, 'light', true, false);
+
+    unmount();
+    applyVibrancyMock.mockClear();
+    await act(async () => {
+      root.dataset.wallpaperActive = 'true';
+    });
+    expect(applyVibrancyMock).not.toHaveBeenCalled();
+  });
+
+  it('reports a wallpaper canvas already present at ThemeProvider mount', () => {
+    localStorage.setItem('theme', 'dark');
+    document.documentElement.dataset.wallpaperActive = 'true';
+    renderHook(() => useTheme(), { wrapper });
+    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', true, 'dark', true, true);
   });
 
   it('无存档时默认 cindy,其他窗口切 familyId=default 后本窗口跟随', () => {

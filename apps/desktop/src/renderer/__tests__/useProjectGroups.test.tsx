@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { cleanup, renderHook } from '@testing-library/react';
+import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Session } from '@/lib/ccAgent.types';
 import { useProjectGroups } from '@/features/cc-agent/hooks/useProjectGroups';
+import i18n from '@/i18n';
 
 const registry = vi.hoisted(() => ({ hosts: [] as RemoteHostSnapshot[], bots: [] }));
 vi.mock('@/hooks/useRemoteSshHosts', () => ({ useRemoteSshHosts: () => registry.hosts }));
@@ -63,7 +64,29 @@ it('updates collision labels when another device starts or stops sharing the nam
   });
   expect(result.current.projects[0].remoteMachineIdentity?.detail).toBeNull();
   rerender({ rows: [rows[0], { ...rows[1], deviceLinkDeviceName: 'Mac' }] });
-  expect(result.current.projects[0].remoteMachineIdentity?.detail).toBe('one');
+  expect(result.current.projects[0].remoteMachineIdentity?.displayLabel).toBe('Mac (1)');
   rerender({ rows });
   expect(result.current.projects[0].remoteMachineIdentity?.detail).toBeNull();
+});
+
+it('refreshes cached unnamed labels and reused results when the language changes', async () => {
+  const previousLanguage = i18n.language;
+  await i18n.changeLanguage('en');
+  const rows = [task('a', { deviceLinkDeviceId: 'one', deviceLinkDeviceName: 'one' })];
+  try {
+    const { result } = renderHook(() => {
+      const all = useProjectGroups(rows);
+      const filtered = useProjectGroups(rows, undefined, false, undefined, '', all);
+      return { all, filtered };
+    });
+    const before = result.current.all;
+    expect(before.projects[0].remoteMachineIdentity?.label).toBe('another computer');
+    await act(async () => { await i18n.changeLanguage('zh-CN'); });
+    expect(result.current.all.projects[0].remoteMachineIdentity?.label).toBe('另一台电脑');
+    expect(result.current.all).not.toBe(before);
+    expect(result.current.filtered).toBe(result.current.all);
+  } finally {
+    cleanup();
+    await i18n.changeLanguage(previousLanguage);
+  }
 });

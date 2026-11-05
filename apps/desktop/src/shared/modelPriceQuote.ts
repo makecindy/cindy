@@ -1,6 +1,7 @@
 import {
   resolveModelReferencePrice,
   type AgentKind,
+  type CatalogModel,
   type ModelRegistry,
 } from '@cindy/model-providers';
 
@@ -28,6 +29,34 @@ function normalizedCostDiscount(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 1
     ? value
     : undefined;
+}
+
+/** Catalog display prices for platform and enterprise Gateway models; quotes retain list prices. */
+export function effectiveGatewayModelCost(model: Pick<ModelAccessGatewayModel,
+  'inputCostPerToken' | 'outputCostPerToken' | 'cacheReadInputTokenCost' |
+  'cacheCreationInputTokenCost' | 'costDiscount'>): CatalogModel['cost'] | undefined {
+  const input = model.inputCostPerToken;
+  const output = model.outputCostPerToken;
+  if (
+    typeof input !== 'number' ||
+    !Number.isFinite(input) ||
+    input < 0 ||
+    typeof output !== 'number' ||
+    !Number.isFinite(output) ||
+    output < 0
+  ) {
+    return undefined;
+  }
+  const discount = normalizedCostDiscount(model.costDiscount) ?? 0;
+  const multiplier = 1 - discount;
+  const cacheRead = perMtok(model.cacheReadInputTokenCost);
+  const cacheWrite = perMtok(model.cacheCreationInputTokenCost);
+  return {
+    input: input * 1_000_000 * multiplier,
+    output: output * 1_000_000 * multiplier,
+    ...(cacheRead !== undefined ? { cacheRead: cacheRead * multiplier } : {}),
+    ...(cacheWrite !== undefined ? { cacheWrite: cacheWrite * multiplier } : {}),
+  };
 }
 
 function gatewayInputTokenPriceBands(
@@ -333,8 +362,10 @@ function referencePriceQuoteForVariant(
   });
 }
 
+/** `at` 解析某一天生效的路由参考价(历史用量估价)；省略为今天。 */
 export function registryPricingCatalog(
   registry: ModelRegistry | null | undefined,
+  at?: string | Date,
 ): ModelPricingCatalog {
   const catalog: ModelPricingCatalog = {};
   if (!registry) return catalog;
@@ -343,7 +374,7 @@ export function registryPricingCatalog(
       // XD/Cindy AI 的售价只认登录账号对应的 Gateway /models 响应。公共 registry
       // 只提供用户自带 API/OAuth 的参考价，绝不能在 Gateway 离线时伪装成 XD 售价。
       if (route.providerId === 'xd') continue;
-      const quote = providerReferencePriceQuote(route.providerId, route.modelId, registry);
+      const quote = providerReferencePriceQuote(route.providerId, route.modelId, registry, { at });
       if (!quote) continue;
       (catalog[route.providerId] ??= {})[route.modelId] = quote;
     }

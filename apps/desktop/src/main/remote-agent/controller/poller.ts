@@ -43,6 +43,8 @@ export interface PolledRun {
   onLost(reason: string, error: RemoteAgentErrorInfo): void;
   /** 本机还有这个任务的工作在进行、对方看不到(拉取时报 hold，对方不按闲置收回)。 */
   holdsRemote?(): boolean;
+  /** Revalidate a direct-share grant through its owner, only during an existing outage. */
+  recoverAuthorization?(): Promise<void>;
 }
 
 interface Entry {
@@ -50,12 +52,17 @@ interface Entry {
   cursor: number;
 }
 
-/** 可恢复的链路错误：重拉即可。 */
+/**
+ * 可恢复的链路错误：重拉即可。
+ * DEVICE_UNRESPONSIVE 是本机熔断器在连续超时后的快速失败，不碰网络；熔断自己探测恢复，
+ * 这里照常退避重拉，由 REMOTE_AGENT_READ_GIVE_UP_MS 兜底，避免一次抖动直接结束远程任务。
+ */
 export function isRetryableLinkError(error: unknown): boolean {
   const code = (error as { code?: unknown })?.code;
   const message = error instanceof Error ? error.message : String(error);
   if (typeof code === 'string' && [
     'PEER_RESET', 'TIMEOUT', 'INVOKE_TIMEOUT', 'BACKPRESSURE', 'DEVICE_OFFLINE', 'LINK_CLOSED', 'LINK_NOT_OPEN', 'NOT_CONNECTED',
+    'DEVICE_UNRESPONSIVE',
   ].includes(code)) {
     return true;
   }
@@ -72,6 +79,12 @@ export function remoteAgentErrorFrom(error: unknown, fallbackCode = 'REMOTE_AGEN
   };
 }
 
+/** The executor no longer holds this task's in-memory delegation grant. */
+export function isSharedTaskAuthorizationDenied(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\[REMOTE_AGENT_INVALID\] this shared task is not authorized on this computer/i.test(message);
+}
+
 export class RemoteAgentPoller {
   private readonly entries = new Map<string, Entry>();
   private inflight = 0;
@@ -79,6 +92,7 @@ export class RemoteAgentPoller {
   private needFresh = false;
   private unreachableSince: number | null = null;
   private attempt = 0;
+  private readonly recoveringAuthorization = new WeakSet<PolledRun>();
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private rotation = 0;
   private emptyFastStreak = 0;
@@ -101,6 +115,12 @@ export class RemoteAgentPoller {
 
   unregister(runId: string): void {
     this.entries.delete(runId);
+    if (this.entries.size === 0) {
+      if (this.retryTimer) clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+      this.unreachableSince = null;
+      this.attempt = 0;
+    }
   }
 
   get size(): number {
@@ -256,7 +276,17 @@ export class RemoteAgentPoller {
   }
 
   private handleFailure(wanted: ReadonlyArray<{ runId: string; cursor: number }>, error: unknown): void {
-    if (!isRetryableLinkError(error)) {
+    if (!wanted.some(({ runId }) => this.entries.has(runId))) {
+      this.ensureAfterReturn();
+      return;
+    }
+    // A restarting share can briefly look revoked while its route is being restored.
+    // Only an established outage gets this grace; never bypass the owner or reset its deadline.
+    // remoteAgentInvoker may prefix a rejection with UNAVAILABLE while preserving
+    // the authoritative transport code on the Error, so check both.
+    const shareRefusal = (code: unknown) => code === 'ACCESS_REVOKED' || code === 'REMOTE_AGENT_SHARE_UNAVAILABLE';
+    const shareRefused = shareRefusal(remoteAgentErrorFrom(error).code) || shareRefusal((error as { code?: unknown })?.code);
+    if (shareRefused ? this.unreachableSince === null : !isRetryableLinkError(error)) {
       // 对方拒绝整个 poll(远程控制已关、版本不支持等)：涉及的任务都无法继续。
       const info = remoteAgentErrorFrom(error);
       for (const { runId } of wanted) {
@@ -277,6 +307,18 @@ export class RemoteAgentPoller {
         });
       }
       return;
+    }
+    if (shareRefused) {
+      for (const { runId } of wanted) {
+        const run = this.entries.get(runId)?.run;
+        if (!run?.recoverAuthorization || this.recoveringAuthorization.has(run)) continue;
+        this.recoveringAuthorization.add(run);
+        // Do not await authorization: the poll deadline and per-task lease expiry
+        // must still fire if O or M never answers. A grant alone is not poll success.
+        void Promise.resolve().then(() => {
+          if (this.entries.get(runId)?.run === run) return run.recoverAuthorization!();
+        }).catch(() => undefined).finally(() => this.recoveringAuthorization.delete(run));
+      }
     }
     this.attempt += 1;
     this.retryLater(Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** Math.min(this.attempt, 4)));

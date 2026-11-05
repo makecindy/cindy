@@ -44,6 +44,7 @@
  */
 
 import * as Lark from '@larksuiteoapi/node-sdk';
+import { ConnectionRetry } from '../connectionRetry.js';
 
 import { ConflictDetector } from './conflictDetector.js';
 import { feishuEvents } from './events.js';
@@ -74,6 +75,9 @@ function createWsState() {
     pendingStartAccount: null as Pick<BotCredentials, 'appId' | 'service'> | null,
     topicLeaseDiscardThroughGeneration: 0,
     currentStatus: 'idle' as FeishuConnectionStatus,
+    currentError: undefined as string | undefined,
+    connectionRetry: new ConnectionRetry(),
+    retryStart: null as (() => void) | null,
     acceptingInbound: false,
     lifecycleGeneration: 0,
     conflictTransitionGeneration: null as number | null,
@@ -106,7 +110,6 @@ function shouldAbandonTopicLease(
     (S().currentBotAppId !== botAppId || S().currentService !== service)
   );
 }
-
 
 /**
  * 入站消息去重 —— 飞书事件是「至少送达一次」: 服务端等不到我们的 ACK 就会把
@@ -176,10 +179,10 @@ export const QUIT_OFFLINE_ANNOUNCE_TIMEOUT_MS = 4500;
 // existing reconnect flow instead of dropping inbound messages indefinitely.
 const FEISHU_WS_PING_TIMEOUT_SECONDS = 30;
 
-function emitRendererStatus(error?: string): void {
+function emitRendererStatus(): void {
   feishuEvents.emit('status', {
     status: S().currentStatus,
-    error,
+    error: S().currentError,
     botAppId: S().currentBotAppId,
     ownerOpenId: ownerGuard.firstAllowed() ?? storage.readOwnerOpenId(),
   });
@@ -187,7 +190,8 @@ function emitRendererStatus(error?: string): void {
 
 function setStatus(status: FeishuConnectionStatus, error?: string): void {
   S().currentStatus = status;
-  emitRendererStatus(error);
+  S().currentError = error;
+  emitRendererStatus();
   // Also broadcast public IMStatus to host orchestrator subscribers
   feishuEvents.emit('imStatus', toImStatus(status, error));
 }
@@ -204,12 +208,17 @@ export function getCurrentStatus(): FeishuConnectionStatus {
   return S().currentStatus;
 }
 
+export function getCurrentError(): string | undefined {
+  return S().currentError;
+}
+
 export function getCurrentBotAppId(): string | null {
   return S().currentBotAppId;
 }
 
 export function setLifecycleAnnouncement(enabled: boolean): void {
   S().lifecycleAnnouncementEnabled = enabled;
+  if (!enabled) S().pendingOfflineNotice = false;
   getLog().info(`[feishu/wsClient] lifecycleAnnouncement set to ${enabled}`);
 }
 
@@ -252,7 +261,9 @@ function isConflictSignal(message: string): boolean {
 }
 
 function isActiveConnection(generation: number, appId: string): boolean {
-  return S().acceptingInbound && S().lifecycleGeneration === generation && S().currentBotAppId === appId;
+  return (
+    S().acceptingInbound && S().lifecycleGeneration === generation && S().currentBotAppId === appId
+  );
 }
 
 async function transitionToConflict(generation: number, appId: string): Promise<void> {
@@ -277,8 +288,12 @@ function handleReadySignal(
 ): void {
   if (!isActiveConnection(generation, appId)) return;
   activeDetector.markReady();
-  if (activeDetector.getVerdict()?.kind === 'connected' && S().currentStatus !== 'connected') {
+  // The startup verdict is final, but the SDK can recover after its deadline.
+  // Only a connection conflict (or the generation guard above) forbids recovery.
+  if (activeDetector.getVerdict()?.kind !== 'conflict' && S().currentStatus !== 'connected') {
+    S().connectionRetry.reset();
     setStatus('connected');
+    void fetchBotOpenId();
   }
 }
 
@@ -289,7 +304,10 @@ function handleReconnectingSignal(
 ): void {
   if (!isActiveConnection(generation, appId)) return;
   activeDetector.markReconnecting();
-  if (activeDetector.getVerdict()?.kind !== 'conflict' && S().currentStatus === 'connected') {
+  if (
+    activeDetector.getVerdict()?.kind !== 'conflict' &&
+    (S().currentStatus === 'connected' || S().currentStatus === 'error')
+  ) {
     setStatus('reconnecting');
   }
 }
@@ -299,11 +317,7 @@ function handleReconnectedSignal(
   generation: number,
   appId: string,
 ): void {
-  if (!isActiveConnection(generation, appId)) return;
-  activeDetector.markReconnected();
-  if (activeDetector.getVerdict()?.kind === 'connected' && S().currentStatus !== 'connected') {
-    setStatus('connected');
-  }
+  handleReadySignal(activeDetector, generation, appId);
 }
 
 function handleErrorSignal(
@@ -320,6 +334,11 @@ function handleErrorSignal(
     return;
   }
   activeDetector.markError(error);
+  setStatus('error', error.message);
+  // The SDK owns ordinary reconnects. Only restart when that loop has stopped.
+  if (/WebSocket reconnect exhausted/i.test(error.message) && S().retryStart) {
+    S().connectionRetry.schedule(S().retryStart!);
+  }
 }
 
 // ── SDK logger interceptor ────────────────────────────────────────────────────
@@ -346,6 +365,9 @@ function makeCapturingLogger(
       log.debug('[feishu/sdk-info]', msg);
       if (!isActiveConnection(generation, appId)) return;
       if (msg.includes('ws client ready')) {
+        // Some SDK versions log "ready" after merely scheduling their retry loop.
+        const state = S().client?.getConnectionStatus?.().state;
+        if (state && state !== 'connected') return;
         handleReadySignal(activeDetector, generation, appId);
       } else if (msg.includes('reconnect success')) {
         handleReconnectedSignal(activeDetector, generation, appId);
@@ -474,14 +496,28 @@ export async function start(
     'card.action.trigger_v1': (data: unknown) => runInScope(scope, () => handleCardAction(data)),
   });
 
-  try {
-    void client.start({ eventDispatcher });
-  } catch (err) {
+  const onStartFailure = bound((err: unknown) => {
+    if (!isActiveConnection(startedGeneration, creds.appId)) return;
     const msg = err instanceof Error ? err.message : String(err);
     log.error(`[feishu/wsClient] start threw: ${msg}`);
     setStatus('error', msg);
     startDetector.markError(err instanceof Error ? err : new Error(msg));
-  }
+    if (S().retryStart) S().connectionRetry.schedule(S().retryStart!);
+  });
+  const startSdk = bound(() => {
+    if (!isActiveConnection(startedGeneration, creds.appId)) return;
+    try {
+      void Promise.resolve(client.start({ eventDispatcher })).catch(onStartFailure);
+    } catch (err) {
+      onStartFailure(err);
+    }
+  });
+  S().retryStart = bound(() => {
+    if (!isActiveConnection(startedGeneration, creds.appId)) return;
+    setStatus('reconnecting');
+    startSdk();
+  });
+  startSdk();
 
   const verdict = await startDetector.waitForVerdict();
   if (S().detector === startDetector) S().detector = null;
@@ -494,10 +530,13 @@ export async function start(
     return 'error';
   }
 
-  switch (verdict.kind) {
+  // A ready callback may have arrived after the initial error settled but before
+  // this continuation ran. Do not repaint that recovered connection as failed.
+  const currentVerdict =
+    S().currentStatus === 'connected' ? { kind: 'connected' as const } : verdict;
+  switch (currentVerdict.kind) {
     case 'connected':
       if (S().currentStatus !== 'connected') setStatus('connected');
-      void fetchBotOpenId();
       // 恢复本 bot 在 stop() 时被挂起的排队重试(同账号重连) — 事件已被
       // ACK, 不恢复的话孤儿提示/撤回链随断连永久消失。
       if (opts.announceLifecycle !== false) {
@@ -510,7 +549,7 @@ export async function start(
       await transitionToConflict(startedGeneration, creds.appId);
       return 'conflict';
     case 'error':
-      setStatus('error', verdict.message);
+      setStatus('error', currentVerdict.message);
       return 'error';
   }
 }
@@ -554,6 +593,8 @@ export async function stop(opts: StopOptions = {}): Promise<void> {
 }
 
 async function stopCurrentClient(opts: StopOptions): Promise<void> {
+  S().connectionRetry.reset();
+  S().retryStart = null;
   const log = getLog();
   const stoppedGeneration = S().lifecycleGeneration;
   if (opts.discardPendingTopicLeases) {
@@ -642,18 +683,28 @@ async function stopCurrentClient(opts: StopOptions): Promise<void> {
 async function announceLifecycle(phase: 'online' | 'offline'): Promise<void> {
   const log = getLog();
 
+  // A shared-profile preview owns only its local socket, not the bot's presence.
+  // Do not create an offline-history warning or persist a user preference here.
+  if (getScope().shouldAnnounceLifecycle?.() === false) {
+    log.info(
+      `[feishu/wsClient] announceLifecycle ${phase}: suppressed for secondary instance`,
+    );
+    return;
+  }
+
   const owner = ownerGuard.firstAllowed();
   if (!owner) {
     log.info(`[feishu/wsClient] announceLifecycle ${phase}: no owner whitelisted, skip`);
     return;
   }
 
-  if (phase === 'offline') S().pendingOfflineNotice = true;
-
   if (!S().lifecycleAnnouncementEnabled) {
     log.info(`[feishu/wsClient] announceLifecycle ${phase}: message suppressed by setting`);
     return;
   }
+
+  // 离线补发提醒属于同一类生命周期通知:关闭后不记待发标记(与 Discord 口径一致)。
+  if (phase === 'offline') S().pendingOfflineNotice = true;
 
   const text =
     phase === 'online' ? transportMessages.lifecycle.online : transportMessages.lifecycle.offline;
@@ -933,14 +984,19 @@ async function processClaimedMessage(
     return;
   }
 
-  // 飞书普通「回复某条消息」只在 parent_id 表达引用关系;root_id 也会出现在
-  // 话题链路,不能拿它判普通回复。严格限定群主流(!thread_id),确保已有话题
-  // @bot 与普通群主流 @bot 不经过新增 REST/上下文路径。
+  // Resolve private/main-stream quotes. Topic replies retain their history path;
+  // directly received merged forwards always need their embedded messages.
   const parentMessageId = data.message?.parent_id;
   const resolvedReply =
-    isGroup && !incomingThreadId && parentMessageId
-      ? await outbound.resolveReplyMessage(parentMessageId, chatId)
-      : null;
+    msgType === 'merge_forward'
+      ? await outbound.resolveReplyMessage(messageId, chatId)
+      : (!isGroup || !incomingThreadId) && parentMessageId
+        ? await outbound.resolveReplyMessage(parentMessageId, chatId)
+        : null;
+
+  if (msgType === 'merge_forward' && !resolvedReply) {
+    unsupported = [...unsupported, { type: 'merge_forward', label: '合并转发内容读取失败' }];
+  }
 
   // 入站门禁复查: 附件下载等 await 期间连接可能已 stop()/换账号换代 — 不复查
   // 会把旧连接的轮次推进新连接的编排状态(锚点污染/跨账号出站)。
@@ -987,7 +1043,10 @@ async function processClaimedMessage(
           speaker: { id: senderOpenId, name: '', isOwner: senderIsOwner },
         }
       : {}),
-    ...(resolvedReply ? { replyContext: resolvedReply.replyContext } : {}),
+    ...(resolvedReply ? {
+      replyContext: resolvedReply.replyContext,
+      ...(resolvedReply.attachments?.length ? { feishuReplyAttachments: resolvedReply.attachments } : {}),
+    } : {}),
     attachments,
     unsupported,
     raw: data,

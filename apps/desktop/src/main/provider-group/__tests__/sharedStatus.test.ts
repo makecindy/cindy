@@ -71,6 +71,22 @@ describe('anonymous shared group status', () => {
     expect(env.readCaps).toHaveBeenCalledTimes(1);
   });
 
+  // A live answer from O can contain stale member directories: the outer
+  // provider:list stamp is fresh, so the anonymous projection must hide old
+  // busy/available states itself (provider-groups.md short-outage contract).
+  // Real readSharedGroupStatus entry; missing coverage was this inner budget,
+  // rather than a stale outer IPC reply. Unit, no real waits or extra wire data.
+  it.each([
+    { stale: true, remainingMs: 600_000 },
+    { stale: false, remainingMs: 0 },
+  ])('reports unconfirmed member states for an old group view (%j)', async (continuity) => {
+    const env = setup(['available', 'full', 'paused']);
+    env.view.providerContinuity = continuity;
+    expect(await readSharedGroupStatus(env.deps, 'anthropic')).toEqual(['unknown', 'unknown', 'paused']);
+    env.view.providerContinuity = { stale: false, remainingMs: 600_000 };
+    expect(await readSharedGroupStatus(env.deps, 'anthropic')).toEqual(['available', 'busy', 'paused']);
+  });
+
   it('bounds capability probes for 512 members and shares them across concurrent refreshes', async () => {
     vi.useFakeTimers();
     const env = setup(Array.from({ length: 512 }, () => 'available'));

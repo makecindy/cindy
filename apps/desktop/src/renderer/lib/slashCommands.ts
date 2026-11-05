@@ -315,6 +315,55 @@ export function hasUnavailableProjectSkillPreview(commands: UnifiedCommand[]): b
     || (shadowedUnavailableSkillsByCommands.get(commands)?.size ?? 0) > 0;
 }
 
+export interface PluginSkillSetupPaletteEntry {
+  skillName: string;
+  description: string;
+  /** Short row tag, e.g. "needs install". */
+  meta?: string;
+  /**
+   * The plugin is installed but unusable in this project, so the Skill linked from its global install
+   * would only fail here: this row takes that command's place. (A same-named Skill of the user's own is
+   * hidden from the list too, but typing its name still runs it.)
+   */
+  replacesInstalled?: boolean;
+}
+
+const pluginSkillSetupCommands = new WeakMap<UnifiedCommand, string>();
+
+/**
+ * Palette-only rows for plugin Skills whose plugin is not usable yet. They go
+ * after every real command and, unless the entry says its installed Skill is
+ * unusable here (`replacesInstalled`), only when no command of that name exists,
+ * so a real Skill wins. Keep them out of the decoration roster and dispatch:
+ * they are a setup entry, not a sendable command.
+ */
+export function addPluginSkillSetupCommands(
+  commands: UnifiedCommand[],
+  entries: readonly PluginSkillSetupPaletteEntry[],
+): UnifiedCommand[] {
+  const replaced = new Set(entries.filter((entry) => entry.replacesInstalled).map((entry) => entry.skillName.toLowerCase()));
+  if (replaced.size > 0) commands = commands.filter((command) => !replaced.has(command.name.toLowerCase()));
+  const names = new Set(commands.map((command) => command.name.toLowerCase()));
+  const extra = entries
+    .filter((entry) => !names.has(entry.skillName.toLowerCase()))
+    .map((entry) => {
+      const command: UnifiedCommand = {
+        kind: 'desktop',
+        name: entry.skillName,
+        description: entry.description,
+        ...(entry.meta ? { meta: entry.meta } : {}),
+      };
+      pluginSkillSetupCommands.set(command, entry.skillName);
+      return command;
+    });
+  return extra.length > 0 ? [...commands, ...extra] : commands;
+}
+
+/** The Skill a palette row would set up, or undefined for ordinary commands. */
+export function pluginSkillSetupName(command: UnifiedCommand): string | undefined {
+  return pluginSkillSetupCommands.get(command);
+}
+
 /**
  * 包含过滤(case-insensitive); 精确匹配优先,其次是前缀匹配,最后是普通包含匹配。
  *
@@ -352,6 +401,33 @@ export function filterSlashCommands(
   return filtered.length > limit ? filtered.slice(0, limit) : filtered;
 }
 
+type SkillListResult = { success: boolean; skills?: unknown[] };
+const pendingSkillLists = new WeakMap<object, Map<string, Promise<SkillListResult>>>();
+
+/** Share only outstanding reads; edits and activation changes remain live. */
+function loadPendingSkills(
+  key: string | null,
+  forceReload: boolean,
+  load: () => Promise<SkillListResult>,
+): Promise<SkillListResult> {
+  const owner = window.electronAPI;
+  let pending = pendingSkillLists.get(owner);
+  if (!pending) {
+    pending = new Map();
+    pendingSkillLists.set(owner, pending);
+  }
+  if (key !== null && !forceReload) {
+    const existing = pending.get(key);
+    if (existing) return existing;
+  }
+  const request = load().catch(() => ({ success: false })).finally(() => {
+    // An older request must not evict an in-flight forced refresh.
+    if (key !== null && pending.get(key) === request) pending.delete(key);
+  });
+  if (key !== null) pending.set(key, request);
+  return request;
+}
+
 /**
  * 拉三路 IPC, 合并成 UnifiedCommand[]。
  *
@@ -379,7 +455,6 @@ export async function loadAllCommands(
     commands?: unknown[];
     runtimeStatus?: PiPackageCommandRuntimeStatus;
   };
-  type SkillRes = { success: boolean; skills?: unknown[] };
 
   // device-link「以被控端为准」:agent-builtin / agent-skill 是被控端**该会话**的能力,远程时经隧道
   // 从被控端读(channel 已 allowlist,workingDir 是被控端路径,扫描在被控端跑正确)。
@@ -415,15 +490,17 @@ export async function loadAllCommands(
     ...(opts?.forceReload !== undefined ? { forceReload: opts.forceReload } : {}),
     ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
   };
-  const skillP: Promise<SkillRes> = shouldLoadSkills
-    ? (
-        deviceId
+  const skillP: Promise<SkillListResult> = shouldLoadSkills
+    ? loadPendingSkills(
+        opts?.sessionId ? JSON.stringify([agentKind, deviceId || null, workingDir || null, opts.sessionId]) : null,
+        opts?.forceReload === true,
+        () => deviceId
           ? (window.electronAPI.deviceLink.invoke(deviceId, 'maker:list-agent-skills', [
               agentKind,
               skillParams,
-            ]) as Promise<SkillRes>)
-          : api.listAgentSkills(agentKind, skillParams)
-      ).catch(() => ({ success: false }))
+            ]) as Promise<SkillListResult>)
+          : api.listAgentSkills(agentKind, skillParams),
+      )
     : Promise.resolve({ success: true, skills: [] });
 
   const [desktopRes, builtinRes, skillRes] = await Promise.all([desktopP, builtinP, skillP]);

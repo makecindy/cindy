@@ -2,38 +2,52 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { palettes, type ThemeMode } from '@/theme/tokens';
+
+const theme = vi.hoisted(() => ({ mode: 'light' as 'light' | 'dark' }));
 
 // 把 style 展平进 data-style,断言每个 Text 实际叠了哪些样式。
 vi.mock('react-native', async () => {
   const React = await import('react');
   const flat = (style: unknown): Record<string, unknown> =>
     Object.assign({}, ...[style].flat(Infinity).filter(Boolean));
-  const host = (tag: string) => ({ children, style, horizontal, onLayout, testID }: any) => {
+  const host = (tag: string) => ({ children, style, horizontal, onLayout, testID, selectable, onPress, onTouchStart, accessibilityRole }: any) => {
     React.useEffect(() => { onLayout?.({ nativeEvent: { layout: { width: 280 } } }); }, [onLayout]);
     return React.createElement(tag, { 'data-style': JSON.stringify(flat(style)),
-      'data-horizontal': horizontal, 'data-testid': testID }, children);
+      'data-horizontal': horizontal, 'data-testid': testID, 'data-selectable': selectable, 'data-role': accessibilityRole, onClick: onPress, onTouchStart }, children);
   };
   return {
     View: host('div'),
     ScrollView: host('section'),
     Text: host('span'),
     useWindowDimensions: () => ({ width: 360, height: 800, fontScale: 1, scale: 3 }),
-    StyleSheet: { create: (s: any) => s, flatten: (s: any) => s, hairlineWidth: 1 },
+    StyleSheet: { create: (s: any) => s, flatten: flat, hairlineWidth: 1 },
     Platform: { OS: 'ios', select: (s: any) => s.ios ?? s.default },
   };
 });
-vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native')).Text }));
-vi.mock('@/theme', () => ({
-  fontWeight: { regular: '400', medium: '500', semibold: '600', bold: '700' },
-  monoFont: 'Menlo',
-  useThemedStyles: (make: (colors: any) => any) => make(new Proxy({}, { get: () => '#000' })),
+vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native')).Text, MAX_FONT_SIZE_MULTIPLIER: 1.5 }));
+vi.mock('react-native-uitextview', async () => {
+  const React = await import('react');
+  const { StyleSheet } = await import('react-native');
+  return { UITextView: ({ children, uiTextView, selectable, style, onPress, onTouchStart, accessibilityRole }: any) => React.createElement('span', {
+    'data-uitextview': uiTextView ? 'root' : 'span', 'data-selectable': selectable,
+    'data-style': JSON.stringify(StyleSheet.flatten(style) ?? {}), 'data-role': accessibilityRole, onClick: onPress, onTouchStart,
+  }, children) };
+});
+vi.mock('@/session/SelectionMenuText', async () => ({ SelectionMenuText: (await import('react-native')).Text }));
+vi.mock('@/session/ShareMessageCheckbox', () => ({ useCancelShareSelectionRowTap: () => null }));
+vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
+vi.mock('@/theme', async () => ({
+  ...await import('@/theme/tokens'), monoFont: 'Menlo',
+  useThemedStyles: (make: (colors: any) => any) => make(palettes[theme.mode]),
 }));
 
-import { BotGroupMarkdownText } from '@/session/BotGroupMessageText';
+import { BotGroupMarkdownText, BotGroupUserText } from '@/session/BotGroupMessageText';
 
 let root: Root;
 let node: HTMLDivElement;
 beforeEach(() => {
+  theme.mode = 'light';
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   node = document.createElement('div');
   document.body.append(node);
@@ -107,6 +121,19 @@ it('keeps component literal punctuation and Markdown formatting distinct', async
   expect(node.textContent).not.toContain('"op":"create"');
 });
 
+// #7492: media src filtering removed the only visible access path for public URLs.
+it('keeps public component media URLs readable without exposing internal sources', async () => {
+  const sources = ['https://example.test/image.png', 'https://example.test/video.mp4', 'https://example.test/audio.mp3'];
+  const content = '```cindy-ui\n' + [
+    ...sources.map((src, i) => ({ seq: i + 1, version: 1, op: 'create', id: `public${i}`, kind: ['image', 'video', 'audio'][i], props: { src } })),
+    { seq: 4, op: 'create', id: 'local', kind: 'image', props: { src: 'cindy-media://blobs/private.png', alt: 'Local description' } },
+  ].map(item => JSON.stringify(item)).join('\n') + '\n```';
+  await act(async () => root.render(createElement(BotGroupMarkdownText, { content, authorKind: 'bot' })));
+  for (const src of sources) expect(node.textContent).toContain(src);
+  expect(node.textContent).toContain('Local description');
+  expect(node.textContent).not.toContain('cindy-media://');
+});
+
 // #6716 review: group images render as alt text, not 150px native previews.
 it.each([['x', ''], ['a long image description that wraps inside its column', 'y']])(
   'measures image cells like their visible fallback text (%s / %s)', async (alt, otherAlt) => {
@@ -124,3 +151,121 @@ it.each([['x', ''], ['a long image description that wraps inside its column', 'y
     if (!otherAlt) expect(imageWidths.reduce((a, b) => a + b, 0)).toBe(280);
   },
 );
+
+// Regression: iOS RN Text selectable offers only whole-block Copy. Exercise the
+// production body with native-carrier fakes; real selection handles need Simulator.
+// Existing layout tests did not cover the UITextView root/child native contract.
+it.each(['ios', 'android'])('uses system partial-selection text for formatted group bodies and own mentions on %s', async (platform) => {
+  const { Platform } = await import('react-native');
+  Platform.OS = platform as typeof Platform.OS;
+  try {
+    await act(async () => root.render(createElement('div', null,
+      createElement(BotGroupMarkdownText, { content: 'Select **part** of this paragraph.\n\n> quote\n\n- item\n\n~~~text\ncode\n~~~\n\n| Cell | Other |\n| --- | --- |\n| value | next |' }),
+      createElement(BotGroupUserText, { content: '@Cindy keep my words', mentionLabels: ['Cindy'] }),
+    )));
+    const roots = [...node.querySelectorAll('[data-selectable="true"]')];
+    expect(roots.map(el => el.textContent)).toEqual([
+      'Select part of this paragraph.', 'quote', 'item', 'code', 'Cell', 'Other', 'value', 'next', '@Cindy keep my words',
+    ]);
+    for (const text of roots) {
+      if (platform === 'ios') {
+        expect(text.getAttribute('data-uitextview')).toBe('root');
+        // Mixing RN Text descendants into a UITextView breaks styled selection.
+        expect(text.querySelector('span:not([data-uitextview="span"])')).toBeNull();
+      } else {
+        expect(text.hasAttribute('data-uitextview')).toBe(false);
+        expect(text.querySelector('[data-uitextview]')).toBeNull();
+      }
+    }
+    expect(styleOf('part').fontWeight).toBe('600');
+  } finally {
+    Platform.OS = 'ios';
+  }
+});
+
+// A01 / unit: production sent body must resolve ids before exposing a touch action.
+// Existing selection tests cover carriers only. Minimal failure: @Ann with one
+// explicit id; namesakes, broadcasts and email/code must never open the wrong person.
+it.each([['ios', 'light'], ['ios', 'dark'], ['android', 'light'], ['android', 'dark']])('keeps PC mention styling, identity and text boundaries on %s / %s', async (platform, mode) => {
+  theme.mode = mode as ThemeMode;
+  const { Platform } = await import('react-native');
+  Platform.OS = platform as typeof Platform.OS;
+  const member = (botId: string, name: string) => ({ botId, name, avatar: '', avatarColor: '', status: 'active' as const });
+  const ann = member('ann-1', 'Ann');
+  const other = member('ann-2', 'Ann');
+  const reserved = member('all', '所有人');
+  const onPress = vi.fn();
+  const context = { members: [ann, other, reserved], mentions: { all: false, botIds: ['ann-1'] },
+    serverBacked: false, allLabels: ['所有人'], allBotsLabels: ['所有伙伴'], labels: ['Ann', '所有人', '所有伙伴'], onPress };
+  const renderBody = async (content: string, changes = {}) => {
+    const nextContext = { ...context, ...changes };
+    await act(async () => root.render(createElement(BotGroupUserText, {
+      content, mentionLabels: nextContext.labels, mentionContext: nextContext,
+    })));
+  };
+  const links = () => [...node.querySelectorAll('span')].filter(span => span.getAttribute('data-role') === 'link');
+  try {
+    await renderBody('@Ann mail@Ann.test @Anna @Unknown 正文');
+    expect(links().map(span => span.textContent)).toEqual(['@Ann']);
+    const mentionStyle = JSON.parse(links()[0]!.getAttribute('data-style')!);
+    expect(mentionStyle).toMatchObject({ color: palettes[theme.mode].groupMentionText });
+    expect(mentionStyle.textDecorationLine).toBeUndefined();
+    expect(mentionStyle.fontWeight).toBeUndefined();
+    expect(mentionStyle.backgroundColor).toBeUndefined();
+    const touch = new Event('touchstart', { bubbles: true });
+    Object.defineProperties(touch, { pageX: { value: 108 }, pageY: { value: 246 } });
+    await act(async () => { links()[0]!.dispatchEvent(touch); links()[0]!.click(); });
+    expect(onPress).toHaveBeenLastCalledWith(ann, { x: 108, y: 246 });
+    expect(node.textContent).toBe('@Ann mail@Ann.test @Anna @Unknown 正文');
+    await renderBody('@Ann', { mentions: { all: false, botIds: ['ann-1', 'ann-2'] } });
+    expect(links()).toHaveLength(0);
+    await renderBody('@Ann', { serverBacked: true, mentions: { all: false, botIds: [] } });
+    expect(links()).toHaveLength(0); // Server fallback still refuses namesakes.
+    await renderBody('@Ann', { members: [ann], serverBacked: true, mentions: { all: false, botIds: [] } });
+    expect(links()).toHaveLength(1);
+    await renderBody('@Ann', { members: [] });
+    expect(links()).toHaveLength(0); // Departed/unknown target.
+    await renderBody('@所有人 @所有伙伴', { mentions: { all: true, allBots: true, botIds: [] } });
+    expect(links()).toHaveLength(0);
+    const broadcasts = [...node.querySelectorAll('span')].filter(span => ['@所有人', '@所有伙伴'].includes(span.textContent ?? ''));
+    expect(broadcasts).toHaveLength(2);
+    for (const span of broadcasts) expect(JSON.parse(span.getAttribute('data-style')!)).toMatchObject({ color: palettes[theme.mode].groupMentionText });
+    await renderBody('@所有人', { mentions: { all: false, botIds: ['all'] } });
+    expect(links()).toHaveLength(1); // Explicitly picked namesake is a person, as on PC.
+    // Localized teammate broadcast with a colliding member name (PR #8818).
+    const spanish = { members: [member('todos', 'Todos los compañeros')], allBotsLabels: ['Todos los compañeros'],
+      labels: ['Todos los compañeros'], mentions: { all: false, allBots: true, botIds: ['todos'] } };
+    await renderBody('@Todos los compañeros', spanish);
+    expect(links()).toHaveLength(0);
+    await renderBody('@Todos los compañeros', { ...spanish, mentions: { all: false, botIds: ['todos'] } });
+    expect(links()).toHaveLength(1); // Without broadcast intent the explicit person remains clickable.
+    await act(async () => root.render(createElement(BotGroupMarkdownText, {
+      content: '**@Ann** `@Ann` [website](https://example.test)\n\n~~~text\n@Ann\n~~~', mentionContext: context,
+    })));
+    expect(links().map(span => span.textContent)).toEqual(['@Ann']);
+    expect(JSON.parse(links()[0]!.getAttribute('data-style')!)).toMatchObject({ fontWeight: '600', color: palettes[theme.mode].groupMentionText });
+    expect(styleOf('website').textDecorationLine).toBeUndefined();
+  } finally { Platform.OS = 'ios'; }
+});
+
+// PR #8818 / component: per-inline matching mistook **@Ann**a for Ann.
+// Existing carrier/identity tests do not cross formatting boundaries. Check the
+// rendered word through the production body, including a valid split mention.
+it.each(['ios', 'android'])('matches complete rendered words across formatting on %s', async platform => {
+  const { Platform } = await import('react-native');
+  Platform.OS = platform as typeof Platform.OS;
+  const ann = { botId: 'ann', name: 'Ann', avatar: '', avatarColor: '', status: 'active' as const };
+  const context = { members: [ann], mentions: { all: false, botIds: [] }, serverBacked: true,
+    allLabels: ['所有人'], allBotsLabels: ['所有伙伴'], labels: ['Ann'], onPress: vi.fn() };
+  try {
+    await act(async () => root.render(createElement(BotGroupMarkdownText, {
+      content: '**@Ann**a mail**@Ann**.test @**Ann**', mentionContext: context,
+    })));
+    expect(node.textContent).toBe('@Anna mail@Ann.test @Ann');
+    const links = [...node.querySelectorAll('[data-role="link"]')];
+    expect(links.map(span => span.textContent)).toEqual(['@', 'Ann']);
+    const highlighted = [...node.querySelectorAll('[data-style]')].filter(span =>
+      JSON.parse(span.getAttribute('data-style')!).color === palettes.light.groupMentionText);
+    expect(highlighted.map(span => span.textContent)).toEqual(['@', 'Ann']);
+  } finally { Platform.OS = 'ios'; }
+});

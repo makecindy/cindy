@@ -7,7 +7,7 @@
  * - Bug／规则依据：docs/product-rules/cindy-bots-runtime.md「伙伴近况」；近况取代右侧栏工作台后，待办不再有
  *   行内按钮（点一条只交给对话），切电脑并进这里。
  * - 现有覆盖缺口：这是新入口；头部测试只验证按钮存在，不覆盖浮层内的行为。
- * - 「帮我查查」与「每天帮我查一次」：没有待办时也在；前者以主人的一句话走普通发送，后者经宿主开关内置例行任务。
+ * - 「帮我查查」与「每天帮我查一次」：空待办收起；有待办时紧凑检查动作走普通发送，关闭每天检查经原宿主入口停用。
  * - 最小失败输入：一条今天到期的待办 + 一份带成品文件的委派 + Cindy 在另一台在线、一台离线的电脑上。
  * - tier：unit（jsdom 渲染真实组件，宿主 API 用内存 fake）。
  * - 实测耗时：见 PR（pnpm --dir apps/desktop exec vitest run 本文件）。
@@ -16,6 +16,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildTodoReferenceHref } from '@cindy/maker-shared/agent-input-projection';
 import { todoLocalDate, type TeammateTodo } from '@cindy/maker-shared/teammate-todo';
+import type { BotChatIdentity } from '../BotSessionContentHeader';
 
 const h = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -26,6 +27,17 @@ const h = vi.hoisted(() => ({
   remote: [] as Array<Record<string, unknown>>,
   delegations: [] as Array<Record<string, unknown>>,
   send: vi.fn(async () => true),
+  sessions: [] as Array<Record<string, unknown>>,
+  remoteSessions: [] as Array<Record<string, unknown>>,
+  refs: [] as Array<Record<string, unknown>>,
+  statuses: new Map(),
+  attention: new Map(),
+  scopes: [] as Array<Record<string, unknown>>,
+  pin: vi.fn(),
+  openExternal: vi.fn(),
+  routines: [] as Array<Record<string, unknown>>,
+  listRoutines: vi.fn(),
+  remoteRoutines: vi.fn(),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -36,6 +48,7 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => h.navigate }));
+vi.mock('../remoteBotSettingsClient', () => ({ invokeBotSettings: h.remoteRoutines }));
 vi.mock('@/lib/composerActionsBus', () => ({ insertTodoReferenceIntoComposer: h.insert }));
 vi.mock('@/lib/toast', () => ({ toast: { info: h.toastInfo, error: h.toastError } }));
 vi.mock('@/lib/orcaSessionIdentity', () => ({ resolveSessionRoute: async (id: string) => `/cc-agent/${id}` }));
@@ -45,7 +58,25 @@ vi.mock('@/lib/sessionService', () => ({
 }));
 vi.mock('../BotAvatar', () => ({ BotAvatar: () => <span data-testid="bot-avatar" /> }));
 vi.mock('../botStore', () => ({ useBotProfiles: () => h.local, useBotUnreadCounts: () => ({}) }));
-vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => h.remote }));
+vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => h.remote, useRemoteCindyIds: () => new Set<string>() }));
+vi.mock('@/features/device-link/refreshRemoteSessions', () => ({ refreshRemoteDeviceSessions: async () => 'done' }));
+vi.mock('@/hooks/useCCSessions', () => ({ useCCSessions: () => ({ sessions: h.sessions }) }));
+vi.mock('@/features/device-link/remoteProjectsStore', () => ({
+  useRemoteProjectSessions: () => h.remoteSessions,
+  remoteProjectsStore: { getSessionDeviceId: (id: string) => h.remoteSessions.find(task => task.id === id)?.deviceLinkDeviceId,
+    getDeviceSessions: () => h.remoteSessions, pinSessionOrigin: h.pin },
+}));
+vi.mock('../botFollowScopes', async importOriginal => {
+  const actual = await importOriginal<typeof import('../botFollowScopes')>();
+  return { ...actual, useTaskCreatorIndex: () => new Map(h.scopes.map(scope =>
+    [JSON.stringify([scope.deviceId ?? null, scope.sessionId]), new Set([JSON.stringify([null, 'bot-1'])])])) };
+});
+vi.mock('@/lib/sessionAttentionStore', () => ({ useSessionAttentionKind: (id: string) => h.attention.get(id) }));
+vi.mock('@/contexts/PrRefsContext', () => ({
+  usePrActions: () => ({ registerPrConsumer: () => () => undefined }),
+  usePrRefsForSessions: (ids: string[]) => h.refs.filter(ref => ids.includes(ref.sessionId as string)),
+  usePrStatuses: () => ({ statuses: h.statuses, successfulStatuses: new Map() }),
+}));
 vi.mock('../botDelegationLive', () => ({ useBotDelegations: () => h.delegations }));
 vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
   useDeviceLinkDeviceList: () => [{ deviceId: 'self', name: 'Mac-Studio', isSelf: true }],
@@ -69,7 +100,7 @@ function todo(id: string, patch: Partial<TeammateTodo> = {}): TeammateTodo {
     status: 'open',
     createdAt: '2026-10-20T01:00:00Z',
     updatedAt: '2026-10-20T01:00:00Z',
-    sourceDeadline: null,
+    sourceDeadline: { kind: 'date', date: todoLocalDate(new Date(), 'UTC'), timeZone: 'UTC' },
     deadlineCandidate: null,
     suggestedDate: null,
     decision: null,
@@ -86,10 +117,17 @@ const update = vi.fn(async (_botId: string, patch: { id: string }) => ({ ...todo
 const openPath = vi.fn(async () => ({ ok: true }));
 let dailyOn = false;
 let routinesChanged: (() => void) | null = null;
+const routineListeners = new Set<() => void>();
 const dailyCheck = vi.fn(async (_botId: string, enabled?: boolean) => (dailyOn = enabled ?? dailyOn));
 
 beforeEach(() => {
   items = [];
+  h.routines = [];
+  h.listRoutines.mockImplementation(async () => h.routines);
+  h.remoteRoutines.mockResolvedValue([]);
+  routineListeners.clear();
+  routinesChanged = () => routineListeners.forEach(listener => listener());
+  h.sessions = []; h.remoteSessions = []; h.refs = []; h.scopes = []; h.statuses.clear(); h.attention.clear();
   dailyOn = false;
   dailyCheck.mockImplementation(async (_botId: string, enabled?: boolean) => (dailyOn = enabled ?? dailyOn));
   h.local = [];
@@ -97,11 +135,12 @@ beforeEach(() => {
   h.delegations = [];
   window.localStorage.clear();
   (window as unknown as { electronAPI: unknown }).electronAPI = {
-    localDb: { bots: { todos: { list, update, dailyCheck } } },
+    localDb: { bots: { todos: { list, update, dailyCheck }, workbench: { followScopes: async () => h.scopes } } },
     maker: { onBotWorkbenchChanged: () => () => undefined },
-    routines: { onChanged: (listener: () => void) => { routinesChanged = listener; return () => { routinesChanged = null; }; } },
+    routines: { list: h.listRoutines, onChanged: (listener: () => void) => { routineListeners.add(listener); return () => { routineListeners.delete(listener); }; } },
     deviceLink: { invoke: vi.fn(), onRemotePush: () => () => undefined },
     openPath,
+    openExternal: h.openExternal,
   };
 });
 afterEach(() => {
@@ -111,14 +150,96 @@ afterEach(() => {
 
 const bot = { id: 'bot-1', name: '葫芦', sessionId: 's1' };
 
-async function openGlance(target = bot) {
+async function openGlance(target: BotChatIdentity = bot) {
   render(<BotGlanceButton bot={target} cloudHome={false} />);
-  await waitFor(() => expect(list).toHaveBeenCalled());
+  if (!target.deviceId) await waitFor(() => expect(list).toHaveBeenCalled());
   fireEvent.click(screen.getByTestId('bot-glance-button'));
   return screen.findByTestId('bot-glance-popover');
 }
 
 describe('BotGlanceButton', () => {
+  // A never-run rule must be visible in the same list as ordinary tasks. Multiple run
+  // sessions for one rule must not duplicate it or discard its latest unread result.
+  // Recency follows ordinary task activity (creation for never-run rules), not rule edits.
+  it('mixes never-run routines and tasks, groups runs, and opens the existing routine settings', async () => {
+    h.routines = [
+      { id: 'clean', name: '磁盘低空间自动清理', enabled: true, createdAt: 30, updatedAt: 900 },
+      { id: 'issues', name: '跟进 issue 和 bug', enabled: false, createdAt: 1, updatedAt: 999 },
+      { id: 'builtin', name: 'Internal follow-up', builtin: 'follow-up', updatedAt: 40 },
+    ];
+    h.sessions = [
+      { id: 'ordinary', title: 'Ordinary task', status: 'active', lastActivityAt: new Date(25).toISOString(), updatedAt: new Date(990).toISOString() },
+      ...['newest', 'older'].map((id, i) => ({ id, title: `Run ${id}`, status: 'active',
+        updatedAt: new Date(19 - i).toISOString(), companion: { id: bot.id, role: 'routine', routineId: 'issues' } })),
+    ];
+    h.scopes = h.sessions.map(task => ({ sessionId: task.id }));
+    h.attention.set('newest', 'done');
+    const popover = await openGlance();
+    await screen.findByText('磁盘低空间自动清理');
+    expect(screen.getAllByTestId('bot-glance-task').map(row => row.querySelector('[title]')?.getAttribute('title')))
+      .toEqual(['磁盘低空间自动清理', 'Ordinary task', '跟进 issue 和 bug']);
+    expect(screen.queryByText('Run newest')).toBeNull();
+    expect(screen.queryByText('Internal follow-up')).toBeNull();
+    expect(popover.querySelectorAll('[aria-label="routines.title"]')).toHaveLength(2);
+    expect(screen.getByText('routines.paused')).toBeTruthy();
+    expect(screen.getByLabelText('bots.glance.unread')).toBeTruthy();
+    fireEvent.click(screen.getByText('磁盘低空间自动清理'));
+    expect(h.navigate).toHaveBeenCalledWith('/bots/bot-1?settings=1&settingsPage=routines');
+  });
+
+  // PR #8532 review: 31 fresh runs used to consume the raw 30-session window before
+  // grouping. Exercise the real popover: older tasks must fill it, another rule must
+  // retain its execution time/unread, and the final list (not raw runs) stays capped.
+  it('applies the recent-task limit after grouping runs and preserves older rule activity', async () => {
+    h.routines = [
+      { id: 'busy', name: 'Frequent routine', enabled: true, createdAt: 1 },
+      { id: 'older', name: 'Older routine', enabled: true, createdAt: 2 },
+    ];
+    h.sessions = [
+      ...Array.from({ length: 31 }, (_, i) => ({ id: `run-${i}`, title: `Fresh run ${i}`, status: 'active',
+        updatedAt: new Date(2000 - i).toISOString(), companion: { id: bot.id, role: 'routine', routineId: 'busy' } })),
+      ...Array.from({ length: 29 }, (_, i) => ({ id: `ordinary-${i}`, title: `Ordinary task ${i}`, status: 'active',
+        updatedAt: new Date(1000 - i * 2).toISOString() })),
+      { id: 'older-run', title: 'Older execution', status: 'active', updatedAt: new Date(989).toISOString(),
+        companion: { id: bot.id, role: 'routine', routineId: 'older' } },
+    ];
+    h.scopes = h.sessions.map(task => ({ sessionId: task.id }));
+    h.attention.set('older-run', 'done');
+    // PR output discovery retains its existing 30-raw-session budget.
+    h.refs = [{ sessionId: 'ordinary-0', owner: 'example', repo: 'app', prNumber: 1, lastSeenAt: 1 }];
+    await openGlance();
+    await screen.findByText('Frequent routine');
+    expect(screen.getAllByTestId('bot-glance-task')).toHaveLength(5);
+    fireEvent.click(screen.getByText('bots.glance.showMore'));
+    const titles = screen.getAllByTestId('bot-glance-task').map(row => row.querySelector('[title]')?.getAttribute('title'));
+    expect(titles).toHaveLength(30);
+    expect(titles.slice(0, 3)).toEqual(['Frequent routine', 'Ordinary task 0', 'Ordinary task 1']);
+    expect(titles.indexOf('Older routine')).toBe(titles.indexOf('Ordinary task 5') + 1);
+    expect(screen.getByText('Older routine').closest('button')?.querySelector('[aria-label="bots.glance.unread"]')).not.toBeNull();
+    expect(screen.queryByText('Ordinary task 28')).toBeNull();
+    expect(screen.queryByText('Fresh run 0')).toBeNull();
+    expect(screen.queryByTestId('bot-glance-pr')).toBeNull();
+  });
+
+  it('reads remote routines from their computer and keeps the settings link on that computer', async () => {
+    h.remoteRoutines.mockResolvedValue([{ id: 'clean', name: 'Remote cleanup', enabled: true, updatedAt: 30 }]);
+    await openGlance({ ...bot, deviceId: 'mini' });
+    fireEvent.click(await screen.findByText('Remote cleanup'));
+    expect(h.remoteRoutines).toHaveBeenCalledWith('mini', 'routines.list', bot.id);
+    expect(h.listRoutines).not.toHaveBeenCalled();
+    expect(h.navigate).toHaveBeenCalledWith('/bots/remote/mini/bot-1?settings=1&settingsPage=routines');
+  });
+
+  it('offers retry after a routine read fails, then refreshes rule changes without reopening', async () => {
+    h.listRoutines.mockRejectedValueOnce(new Error('offline'));
+    await openGlance();
+    fireEvent.click(await screen.findByTestId('bot-glance-routines-retry'));
+    await waitFor(() => expect(screen.queryByTestId('bot-glance-routines-retry')).toBeNull());
+    h.routines = [{ id: 'clean', name: 'Added cleanup', enabled: true, updatedAt: 30 }];
+    await act(async () => routinesChanged?.());
+    expect(await screen.findByText('Added cleanup')).toBeTruthy();
+  });
+
   it('quotes a todo into the composer instead of acting on it, and offers only an undoable delete', async () => {
     items = [todo('t1')];
     await openGlance();
@@ -143,49 +264,74 @@ describe('BotGlanceButton', () => {
     expect(update).toHaveBeenLastCalledWith('bot-1', { id: 't1', expectedRevision: 4, operation: 'restore' });
   });
 
-  it('asks the teammate to check for todos as the owner, and switches the weekday check on', async () => {
+  it('hides an empty todo section without stopping an enabled daily routine', async () => {
+    dailyOn = true;
     await openGlance();
-    // No todos yet: the section still offers 「帮我查查」 and the daily switch.
-    fireEvent.click(await screen.findByTestId('bot-glance-check'));
-    await waitFor(() => expect(h.send).toHaveBeenCalledWith('s1', 'bots.glance.checkPrompt', 'm', 'high', 'auto', '/w'));
-
-    fireEvent.click(screen.getByTestId('bot-glance-button'));
-    const toggle = (await screen.findByTestId('bot-glance-daily-check')).querySelector('[role="switch"]')!;
-    expect(toggle.getAttribute('aria-checked')).toBe('false');
-    fireEvent.click(toggle);
-    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('true'));
-    expect(dailyCheck).toHaveBeenLastCalledWith('bot-1', true);
-
-    // Paused from the routines list while 近况 is open: the switch follows.
-    dailyOn = false;
-    await act(async () => routinesChanged?.());
-    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
+    expect(screen.queryByText('bots.glance.todos')).toBeNull();
+    expect(dailyCheck.mock.calls.every(call => call[1] === undefined)).toBe(true);
   });
 
-  it('keeps the switch when the host refuses it, and hides it for a teammate on an older desktop', async () => {
-    dailyCheck.mockImplementation(async (_botId: string, enabled?: boolean) => {
-      if (enabled !== undefined) throw new Error('The teammate is paused');
-      return false;
-    });
+  it('checks from the compact action and stops the daily routine persistently with its close button', async () => {
+    items = [todo('t1')]; dailyOn = true;
     await openGlance();
-    const toggle = (await screen.findByTestId('bot-glance-daily-check')).querySelector('[role="switch"]')!;
-    fireEvent.click(toggle);
-    await waitFor(() => expect(h.toastError).toHaveBeenCalledWith('bots.glance.dailyCheckFailed'));
-    expect(toggle.getAttribute('aria-checked')).toBe('false');
-    cleanup();
-
-    // Another computer whose host predates the switch: its todo page has no dailyCheck field.
-    const invoke = window.electronAPI.deviceLink.invoke as ReturnType<typeof vi.fn>;
-    invoke.mockResolvedValue({ blocks: [{ primitive: 'teammate-todos', data: { items: [], total: 0 } }] });
-    render(<BotGlanceButton bot={{ ...bot, deviceId: 'mini', deviceName: 'Mac-mini' }} cloudHome={false} />);
-    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    fireEvent.click(await screen.findByTestId('bot-glance-check'));
+    await waitFor(() => expect(h.send).toHaveBeenCalledWith('s1', 'bots.glance.checkPrompt', 'm', 'high', 'auto', '/w'));
     fireEvent.click(screen.getByTestId('bot-glance-button'));
-    expect(await screen.findByTestId('bot-glance-check')).toBeTruthy();
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.glance.stopDailyCheck' }));
+    await waitFor(() => expect(screen.queryByTestId('bot-glance-daily-check')).toBeNull());
+    expect(dailyCheck).toHaveBeenLastCalledWith('bot-1', false);
+    await act(async () => routinesChanged?.());
     expect(screen.queryByTestId('bot-glance-daily-check')).toBeNull();
   });
 
+  it('keeps the daily row and reports failure when stopping is refused', async () => {
+    items = [todo('t1')];
+    dailyCheck.mockImplementation(async (_botId: string, enabled?: boolean) => {
+      if (enabled !== undefined) throw new Error('The teammate is paused');
+      return true;
+    });
+    await openGlance();
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.glance.stopDailyCheck' }));
+    await waitFor(() => expect(h.toastError).toHaveBeenCalledWith('bots.glance.dailyCheckFailed'));
+    expect(screen.getByTestId('bot-glance-daily-check')).toBeTruthy();
+  });
+
+  // cindy-bots-runtime.md §6「伙伴技能分层」: with the Todos system Skill off, its background check is refused by the host;
+  // 近况 still lists the Todos but no longer offers "check for me" or the daily check.
+  it('keeps todos but hides both check controls when the Todos system Skill is off', async () => {
+    items = [todo('t1')]; dailyOn = true;
+    h.local = [{ id: 'bot-1', name: '葫芦', capabilities: { systemSkillsOff: ['todo'] } }];
+    await openGlance();
+    expect(await screen.findByText('Todo t1')).toBeTruthy();
+    expect(screen.queryByTestId('bot-glance-check')).toBeNull();
+    expect(screen.queryByTestId('bot-glance-daily-check')).toBeNull();
+  });
+
+  // User-approved #7546 projection: two devices, existing unread, real PR title, one output per PR.
+  it('opens the correct task host, reads existing attention and deduplicates true PR outputs', async () => {
+    const a = { id: 'task-a', title: 'Session title A', status: 'active', updatedAt: '2026-10-28T10:00:00Z' };
+    const b = { id: 'task-b', title: 'Session title B', status: 'active', updatedAt: '2026-10-28T09:00:00Z', deviceLinkDeviceId: 'mini', deviceLinkDeviceName: 'Mac mini' };
+    h.sessions = [a, { ...a, id: 'unrelated', title: 'Unrelated' }]; h.remoteSessions = [b];
+    h.scopes = [{ sessionId: a.id }, { sessionId: b.id, deviceId: 'mini' }];
+    h.attention.set(a.id, 'done'); h.attention.set(b.id, 'error');
+    h.refs = [a,b].map((task, i) => ({ id: String(i), sessionId: task.id, owner: 'makecindy', repo: 'cindy', prNumber: 123, lastSeenAt: 2-i }));
+    h.statuses.set('github:github.com/makecindy/cindy#123', { ok: true, status: 'merged', title: 'Actual PR title' });
+    await openGlance();
+    expect(screen.getAllByTestId('bot-glance-task')).toHaveLength(2);
+    expect(screen.queryByText('Unrelated')).toBeNull();
+    expect(screen.getAllByLabelText('bots.glance.unread')).toHaveLength(1);
+    expect(screen.getAllByTestId('bot-glance-pr')).toHaveLength(1);
+    expect(screen.getByText('Actual PR title')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('bot-glance-pr'));
+    expect(h.openExternal).toHaveBeenCalledWith('https://github.com/makecindy/cindy/pull/123');
+    fireEvent.click(screen.getByText('Session title B'));
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/cc-agent/task-b'));
+    expect(h.pin).toHaveBeenCalledWith('mini', 'task-b');
+  });
+
   it('lights the entry dot for a due todo until 近况 is opened, and marks the row itself', async () => {
-    items = [todo('due', { sourceDeadline: { kind: 'date', date: today, timeZone: 'UTC' } }), todo('later')];
+    items = [todo('due', { sourceDeadline: { kind: 'date', date: today, timeZone: 'UTC' } }),
+      todo('later', { sourceDeadline: { kind: 'date', date: todoLocalDate(new Date(Date.now() + 3 * 86_400_000), 'UTC'), timeZone: 'UTC' } })];
     render(<BotGlanceButton bot={bot} cloudHome={false} />);
     const button = screen.getByTestId('bot-glance-button');
     await waitFor(() => expect(button.getAttribute('aria-label')).toContain('bots.glance.dueUnseen'));
@@ -203,17 +349,19 @@ describe('BotGlanceButton', () => {
     expect(screen.getByTestId('bot-glance-button').getAttribute('aria-label')).not.toContain('bots.glance.dueUnseen');
   });
 
-  it('reaches todos past the first host page, and keeps finished ones after the last open todo is done', async () => {
+  it('reaches due todos past the first host page and hides the section when only old ideas or completed items remain', async () => {
     items = Array.from({ length: 30 }, (_, i) => todo(`o${String(i).padStart(2, '0')}`));
     await openGlance();
     fireEvent.click(screen.getByText('bots.glance.showMore'));
     expect(screen.getAllByTestId('bot-glance-todo')).toHaveLength(30);
 
     cleanup();
-    items = [todo('finished', { status: 'done' })];
+    items = [todo('finished', { status: 'done' }),
+      ...Array.from({ length: 51 }, (_, i) => todo(`old-${i}`, { sourceDeadline: null }))];
     await openGlance();
-    fireEvent.click(await screen.findByText('bots.glance.doneCount:1'));
-    expect(screen.getByText('Todo finished')).toBeTruthy();
+    expect(screen.queryByText('bots.glance.todos')).toBeNull();
+    expect(screen.queryByTestId('bot-glance-check')).toBeNull();
+    expect(update).not.toHaveBeenCalled();
   });
 
   it('lists Cindy on each computer: this one first, online ones selectable, offline ones folded', async () => {
@@ -254,5 +402,25 @@ describe('BotGlanceButton', () => {
     expect(outputs.map((row) => row.textContent)).toEqual([expect.stringContaining('report.docx')]);
     fireEvent.click(outputs[0]);
     await waitFor(() => expect(openPath).toHaveBeenCalledWith('/w/out/report.docx'));
+  });
+
+  // PR + file entries share one chronology and one fold; separate lists hid newer files below older PRs.
+  it('mixes PRs and files by time with one shared show-more control', async () => {
+    h.sessions = [{ id: 'task', title: 'Task', status: 'active' }];
+    h.scopes = [{ sessionId: 'task' }];
+    h.refs = [4, 2].map(at => ({ sessionId: 'task', owner: 'example', repo: 'app', prNumber: at, lastSeenAt: at }));
+    for (const at of [4, 2]) h.statuses.set(`github:github.com/example/app#${at}`, { ok: true, status: 'merged', title: `PR title ${at}` });
+    h.delegations = [3, 1].map(at => ({ id: `d${at}`, requestingBotId: 'bot-1', status: 'completed',
+      title: 'Task', childSessionId: 'task', completedAt: at, updatedAt: at,
+      artifacts: [{ path: `file-${at}.pdf`, absolutePath: `/w/file-${at}.pdf`, status: 'added' }] }));
+    const popover = await openGlance();
+    const rows = () => [...popover.querySelectorAll('[data-testid="bot-glance-pr"], [data-testid="bot-glance-output"]')]
+      .map(row => row.querySelector('[title]')?.getAttribute('title'));
+    expect(rows()).toEqual(['PR title 4', 'file-3.pdf', 'PR title 2']);
+    expect(screen.getAllByText('bots.glance.showMore')).toHaveLength(1);
+    fireEvent.click(screen.getByText('bots.glance.showMore'));
+    expect(rows()).toEqual(['PR title 4', 'file-3.pdf', 'PR title 2', 'file-1.pdf']);
+    fireEvent.click(screen.getByText('bots.glance.showLess'));
+    expect(rows()).toHaveLength(3);
   });
 });

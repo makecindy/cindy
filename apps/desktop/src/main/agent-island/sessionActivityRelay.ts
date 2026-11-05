@@ -307,6 +307,7 @@ function toSessionActivityPayload(activity: AgentIslandSessionActivity): Session
     phase: activity.phase,
     workingPhase: activity.workingPhase,
     compactDetail: activity.compactDetail,
+    ...(activity.summaryFormat ? { summaryFormat: activity.summaryFormat } : {}),
     interactionKind: activity.interactionKind,
     attention: activity.attention,
   };
@@ -339,6 +340,7 @@ function activitySignature(payload: SessionActivityPayload): string {
     payload.phase,
     payload.completionNotification ?? '',
     payload.compactDetail,
+    payload.summaryFormat ?? '',
     payload.workingPhase,
     payload.interactionKind ?? '',
     payload.attention === true ? '1' : '0',

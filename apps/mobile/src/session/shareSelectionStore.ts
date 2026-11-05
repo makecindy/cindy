@@ -68,6 +68,21 @@ export const shareSelectionStore = {
     selectedIds.clear();
     notify();
   },
+  /** Hand off to the system sheet now; restore only if opening it fails. */
+  exitForShare(): () => boolean {
+    const sessionId = activeSessionId;
+    const selection = Array.from(selectedIds);
+    shareSelectionStore.exit();
+    const exitedRevision = revision;
+    return () => {
+      // A newer selection (even one subsequently cancelled) owns the UI now.
+      if (!sessionId || revision !== exitedRevision) return false;
+      activeSessionId = sessionId;
+      for (const id of selection) selectedIds.add(id);
+      notify();
+      return true;
+    };
+  },
   toggle(clientId: string): void {
     if (!clientId) return;
     if (selectedIds.has(clientId)) selectedIds.delete(clientId);

@@ -1,0 +1,6 @@
+{
+  "requestTimeout": "请求逾时，请稍后再试",
+  "networkUnavailable": "网络连接不可用，请察网络后再试{{webHint}}",
+  "networkUnavailableWebHint": "。Web 先览或为浏览器 CORS 所拦，请以 Expo Go/模拟器测之",
+  "requestFailed": "请求未毕。请稍后再试。"
+}

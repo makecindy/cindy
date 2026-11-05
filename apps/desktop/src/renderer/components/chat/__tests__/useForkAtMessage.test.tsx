@@ -71,7 +71,8 @@ describe('useForkAtMessage introduction dialog', () => {
       }),
     );
 
-    await act(async () => result.current());
+    const onConfirmed = vi.fn();
+    await act(async () => result.current({ onConfirmed }));
     expect(mocks.confirm).toHaveBeenLastCalledWith({
       title: 'chat.messageActionBar.forkConfirmTitle',
       description: 'chat.messageActionBar.forkConfirmDescription',
@@ -80,8 +81,10 @@ describe('useForkAtMessage introduction dialog', () => {
       autoFocusConfirm: true,
     });
     expect(mocks.forkAtMessage).not.toHaveBeenCalled();
+    expect(onConfirmed).not.toHaveBeenCalled();
 
-    await act(async () => result.current());
+    await act(async () => result.current({ onConfirmed }));
+    expect(onConfirmed).toHaveBeenCalledTimes(1);
     expect(mocks.forkAtMessage).toHaveBeenCalledWith('source-session', 'message-1');
     expect(mocks.emitRefresh).toHaveBeenCalledTimes(1);
     expect(mocks.reportSessionNavigation).toHaveBeenCalledWith('new-session', 'new-session');

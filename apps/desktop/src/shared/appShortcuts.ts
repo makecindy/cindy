@@ -15,6 +15,8 @@
  * 本 registry 随版本演进; getEffectiveAppShortcuts 负责合并。
  */
 
+import { isSystemReservedShortcut } from './keyboardReserved.js';
+
 /** 规范化组合键: code 为 W3C KeyboardEvent.code, key 仅供显示兜底不参与匹配。 */
 export interface AppShortcutCombo {
   code: string;
@@ -28,12 +30,16 @@ export interface AppShortcutCombo {
 /**
  * 冲突检测域: app 与一切重叠; workdir-doc 与 browser / composer 也重叠, 因为
  * 文件预览可同屏挂载右侧浏览器和 chat rail, 且在 window capture 阶段消费快捷键。
+ * global = 系统级全局快捷键 (main 用 globalShortcut 注册, Cindy 不在前台也生效),
+ * Cindy 在前台时同样先于应用内监听截走按键, 因此与一切重叠。
  * 仅用于改绑冲突判定, 不做展示分组。
  */
-export type AppShortcutScope = 'app' | 'workdir-doc' | 'browser' | 'composer';
+export type AppShortcutScope = 'app' | 'workdir-doc' | 'browser' | 'composer' | 'global';
 
 export const APP_SHORTCUT_IDS = [
   'toggle-sidebar',
+  'session-history-back',
+  'session-history-forward',
   'open-settings',
   'new-maker',
   'close-tab-or-window',
@@ -51,6 +57,7 @@ export const APP_SHORTCUT_IDS = [
   'browser-forward',
   'browser-reload',
   'cycle-permission-mode',
+  'region-screenshot',
   'switch-session-1',
   'switch-session-2',
   'switch-session-3',
@@ -63,6 +70,20 @@ export const APP_SHORTCUT_IDS = [
 ] as const;
 
 export type AppShortcutId = (typeof APP_SHORTCUT_IDS)[number];
+export type PluginShortcutId = `plugin:${string}`;
+export type ShortcutId = AppShortcutId | PluginShortcutId;
+export interface PluginShortcutDefinition {
+  id: PluginShortcutId;
+  label: string;
+  pluginName: string;
+  instanceId?: string;
+  scope: 'session' | 'message';
+  points?: string[];
+  defaultCombo?: AppShortcutCombo;
+}
+export function isPluginShortcutId(value: unknown): value is PluginShortcutId {
+  return typeof value === 'string' && /^plugin:[a-f0-9]{64}$/.test(value);
+}
 
 /**
  * 侧边栏对话切换槽位: mod+1..9 跳转到侧边栏第 N 个可见对话(含置顶区, 按渲染
@@ -156,6 +177,46 @@ export const APP_SHORTCUT_DEFINITIONS: ReadonlyArray<AppShortcutDefinition> = [
     descriptionKey: 'settings.shortcuts.items.toggle-sidebar.description',
     rebindable: true,
     getDefaultCombos: (platform) => [modCombo('KeyB', platform)],
+  },
+  // 任务浏览栈的前进/后退: 与浏览器同一惯例 (⌘[ / ⌘]), 在 ChromeActions
+  // 的左上按钮簇里消费。raw 按键在 macOS 上不会被系统菜单吃掉
+  // (keyboardReserved 不含 Bracket*), webview 内的 ⌘[ 留给浏览器自己的后退。
+  {
+    id: 'session-history-back',
+    scope: 'app',
+    labelKey: 'settings.shortcuts.items.session-history-back.label',
+    descriptionKey: 'settings.shortcuts.items.session-history-back.description',
+    rebindable: true,
+    // 新增默认键位对用户既有改绑让位：老用户把 toggle-sidebar 等动作改绑到 ⌘[ 是
+    // 历史合法绑定，若两个动作同名生效，一次按键会同时切侧栏与后退。
+    yieldsToUserBindings: true,
+    getDefaultCombos: (platform) => [modCombo('BracketLeft', platform)],
+  },
+  {
+    id: 'session-history-forward',
+    scope: 'app',
+    labelKey: 'settings.shortcuts.items.session-history-forward.label',
+    descriptionKey: 'settings.shortcuts.items.session-history-forward.description',
+    rebindable: true,
+    yieldsToUserBindings: true,
+    getDefaultCombos: (platform) => [modCombo('BracketRight', platform)],
+  },
+  // 全局框选截图: Cindy 不在前台也生效，可复制、保存、贴图或交给新任务。默认键避开系统截图
+  // (macOS ⇧⌘3/4/5/6、Windows Win+Shift+S) 与常见 IM 截图键 (Windows: Ctrl+Alt+A、
+  // Alt+A、Ctrl+Shift+A; macOS: 飞书 ⇧⌘A、微信 / QQ ⌃⌘A)。macOS 不用 ⇧⌘S: 它是几乎所有
+  // 应用的「存储为」, 全局注册会把它从每个应用里拿走。暂不支持 Linux (Wayland 无可靠的
+  // 全局快捷键与静默截屏)。
+  {
+    id: 'region-screenshot',
+    scope: 'global',
+    labelKey: 'settings.shortcuts.items.region-screenshot.label',
+    descriptionKey: 'settings.shortcuts.items.region-screenshot.description',
+    rebindable: true,
+    platforms: ['darwin', 'win32'],
+    getDefaultCombos: (platform) =>
+      platform === 'darwin'
+        ? [combo('KeyA', { ctrl: true, shift: true })]
+        : [combo('KeyA', { alt: true, shift: true })],
   },
   {
     id: 'cycle-permission-mode',
@@ -365,7 +426,7 @@ export function isAppShortcutAvailableOnPlatform(id: AppShortcutId, platform: st
  * 生效组合为空列表, 所有消费端自然不匹配)。
  */
 export type AppShortcutOverrideValue = AppShortcutCombo | null;
-export type AppShortcutOverrides = Partial<Record<AppShortcutId, AppShortcutOverrideValue>>;
+export type AppShortcutOverrides = Partial<Record<ShortcutId, AppShortcutOverrideValue>>;
 
 /** 校验并规整单个 combo; 结构非法返回 null。 */
 export function normalizeAppShortcutCombo(raw: unknown): AppShortcutCombo | null {
@@ -414,6 +475,14 @@ export function normalizeAppShortcutOverrides(raw: unknown, platform: string): A
   if (!raw || typeof raw !== 'object') return {};
   const result: AppShortcutOverrides = {};
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    // A plugin may be disabled when preferences load. Retain its binding while
+    // requiring an active declaration before it can be changed or executed.
+    if (isPluginShortcutId(key)) {
+      const normalized = value === null ? null : normalizeAppShortcutCombo(value);
+      if (normalized === null && value !== null) continue;
+      result[key] = normalized;
+      continue;
+    }
     if (!isAppShortcutId(key)) continue;
     const def = DEFINITION_MAP.get(key);
     if (!def || !def.rebindable) continue;
@@ -734,6 +803,27 @@ export function isAppShortcutComboBindable(comboValue: AppShortcutCombo): boolea
   return /^F([1-9]|1[0-9]|2[0-4])$/.test(comboValue.code);
 }
 
+/** 单修饰 (mac ⌘ / 其它 Ctrl) + 这些键是所有应用的编辑惯例键, 全局占用会让别的应用失灵。 */
+const GLOBAL_EDITING_CODES = new Set(['KeyA', 'KeyC', 'KeyV', 'KeyX', 'KeyY', 'KeyZ']);
+
+/**
+ * global scope 条目的额外约束: 必须能表达为 Electron accelerator (globalShortcut
+ * 只认 accelerator, 表达不了 = 绑定了也永远不触发), 且不得占用编辑惯例键 ——
+ * 全局快捷键会在所有应用里截走按键。系统保留键另由 keyboardReserved 判定。
+ */
+export function isGlobalAppShortcutComboUsable(
+  comboValue: AppShortcutCombo,
+  platform: string,
+): boolean {
+  if (comboToElectronAccelerator(comboValue, platform) === null) return false;
+  const editingModifier = platform === 'darwin' ? comboValue.meta : comboValue.ctrl;
+  const otherModifiers =
+    platform === 'darwin'
+      ? comboValue.ctrl || comboValue.alt || comboValue.shift
+      : comboValue.meta || comboValue.alt || comboValue.shift;
+  return !(editingModifier && !otherModifiers && GLOBAL_EDITING_CODES.has(comboValue.code));
+}
+
 export function appShortcutCombosEqual(a: AppShortcutCombo, b: AppShortcutCombo): boolean {
   return (
     a.code === b.code &&
@@ -746,9 +836,9 @@ export function appShortcutCombosEqual(a: AppShortcutCombo, b: AppShortcutCombo)
 
 const OVERLAPPING_SCOPE_PAIRS = new Set(['browser:workdir-doc', 'composer:workdir-doc']);
 
-/** 冲突检测域判定: app 与一切重叠; workdir-doc 与 browser / composer 同屏重叠。 */
+/** 冲突检测域判定: app / global 与一切重叠; workdir-doc 与 browser / composer 同屏重叠。 */
 export function appShortcutScopesOverlap(a: AppShortcutScope, b: AppShortcutScope): boolean {
-  if (a === 'app' || b === 'app' || a === b) return true;
+  if (a === 'app' || b === 'app' || a === 'global' || b === 'global' || a === b) return true;
   const pair = [a, b].sort().join(':');
   return OVERLAPPING_SCOPE_PAIRS.has(pair);
 }
@@ -778,6 +868,50 @@ export function findAppShortcutConflict(
     if (def.yieldsToUserBindings && overrides[def.id] === undefined) continue;
     const combos = effective.get(def.id);
     if (combos?.some((c) => appShortcutCombosEqual(c, comboValue))) return def.id;
+  }
+  return null;
+}
+
+/** Plugin shortcuts use the existing user overrides and yield to Cindy bindings. */
+export function getEffectivePluginShortcuts(
+  definitions: readonly PluginShortcutDefinition[],
+  overrides: AppShortcutOverrides,
+  platform: string,
+  yieldToCombos: readonly AppShortcutCombo[] = [],
+): Map<PluginShortcutId, AppShortcutCombo[]> {
+  const used = [...getEffectiveAppShortcuts(overrides, platform, yieldToCombos).values()].flat().concat(yieldToCombos);
+  const result = new Map<PluginShortcutId, AppShortcutCombo[]>();
+  const sorted = [...definitions].sort((a, b) => a.id.localeCompare(b.id));
+  const family = platform === 'darwin' ? 'mac' : platform === 'win32' ? 'windows' : 'other';
+  // Explicit user bindings win over plugin defaults; a collision leaves the
+  // losing preference saved so it can become effective again later.
+  for (const explicit of [true, false]) for (const def of sorted) {
+    const override = overrides[def.id];
+    if ((override !== undefined) !== explicit) continue;
+    const candidate = override === undefined ? def.defaultCombo : override;
+    if (!candidate || !isAppShortcutComboBindable(candidate) || isSystemReservedShortcut(candidate, family) ||
+        used.some(other => appShortcutCombosEqual(other, candidate))) { result.set(def.id, []); continue; }
+    result.set(def.id, [candidate]); used.push(candidate);
+  }
+  return result;
+}
+
+/** Only active plugin user overrides block a new Cindy binding. Defaults yield. */
+export function findPluginShortcutConflict(
+  id: ShortcutId,
+  candidate: AppShortcutCombo,
+  definitions: readonly PluginShortcutDefinition[],
+  overrides: AppShortcutOverrides,
+  platform: string,
+): ShortcutId | null {
+  if (isPluginShortcutId(id)) {
+    for (const [builtin, combos] of getEffectiveAppShortcuts(overrides, platform))
+      if (combos.some(combo => appShortcutCombosEqual(combo, candidate))) return builtin;
+  }
+  for (const def of definitions) {
+    if (def.id === id) continue;
+    const override = overrides[def.id];
+    if (override && appShortcutCombosEqual(override, candidate)) return def.id;
   }
   return null;
 }

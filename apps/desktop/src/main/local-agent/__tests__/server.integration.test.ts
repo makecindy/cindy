@@ -126,6 +126,58 @@ async function fixture(overrides: Partial<LocalAgentServerDeps> = {}) {
 }
 
 describe('local application authorization and lifecycle', () => {
+  // #7631: only the owner setting may publish app sessions. RPC parameters
+  // cannot enable it; the preference survives an API restart without allowing
+  // the caller to select an existing Cindy task.
+  it('defaults to private sessions and persists visibility independently for each authorized app', async () => {
+    const f = await fixture();
+    const first = await f.connect({ id: 'org.example.first', name: 'First' });
+    const second = await f.connect({ id: 'org.example.second', name: 'Second' });
+    const connection = f.server().connections()[0];
+    await f.start(first, 'hidden', {
+      visibleSession: { id: 'another-private-task' },
+      createVisibleSessions: true,
+    });
+    expect(f.open.mock.calls[0][0].visibleSession).toBeUndefined();
+    expect(await f.server().setCreateVisibleSessions(connection.id, true)).toBe(true);
+    f.open.mockImplementation(async (input) => ({
+      id: 'native-session',
+      resumed: Boolean(input.resume),
+      call: f.call,
+      close: f.close,
+      ...(input.visibleSession ? { visibleSessionId: 'visible-task' } : {}),
+    }));
+    const opened = await f.start(first, 'visible');
+    expect(opened.result.cindySessionId).toBe('visible-task');
+    expect(f.open.mock.calls.at(-1)![0].visibleSession).toEqual({
+      title: 'First',
+      clientId: 'org.example.first',
+    });
+    await f.start(second, 'hidden');
+    expect(f.open.mock.calls.at(-1)![0].visibleSession).toBeUndefined();
+    await f.restart();
+    expect(
+      f
+        .server()
+        .connections()
+        .map((c) => Boolean(c.createVisibleSessions)),
+    ).toEqual([true, false]);
+    await f.start(first, 'resumed', { resume: opened.result.id });
+    expect(f.open.mock.calls.at(-1)![0].visibleSession).not.toHaveProperty('id');
+    grantWrites.fail = true;
+    await expect(f.server().setCreateVisibleSessions(connection.id, false)).rejects.toThrow();
+    expect(f.server().connections()[0].createVisibleSessions).toBe(true);
+    await Promise.allSettled([
+      f.server().setCreateVisibleSessions(connection.id, false),
+      f.server().setCreateVisibleSessions(connection.id, true),
+    ]);
+    expect(f.server().connections()[0].createVisibleSessions).toBe(true);
+    grantWrites.fail = false;
+    expect(await f.server().setCreateVisibleSessions(connection.id, false)).toBe(true);
+    await f.start(first, 'hidden-again');
+    expect(f.open.mock.calls.at(-1)![0].visibleSession).toBeUndefined();
+  });
+
   it('bounds untrusted connection-code handshakes without following redirects or hanging on a reused port', async () => {
     let mode = 'redirect';
     let requests = 0;
