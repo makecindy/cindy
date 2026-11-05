@@ -25,7 +25,10 @@ export interface TurnUsageDetails extends UsageBillingSource {
   totalTokens: number;
   /** 可证明的纯模型生成耗时；不含工具执行/用户等待，用于计算输出速率。 */
   durationMs?: number;
-  /** 整轮 wall-clock 耗时，仅供诊断展示；绝不用于计算输出速率。 */
+  /**
+   * 整轮 wall-clock 耗时。不能直接当输出速率的分母（含工具执行/用户等待）；
+   * 仅作为 durationMs 的上限，避免并行请求累加的生成耗时超过整轮实际耗时。
+   */
   turnDurationMs?: number;
   /** cacheRead / (input + cacheRead + cacheCreate)，无输入分母时为 null。 */
   cacheHitRate: number | null;

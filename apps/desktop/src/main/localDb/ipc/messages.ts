@@ -2270,7 +2270,10 @@ export async function readPriorUserRoundCost(
   const realUserRows = userRows.filter((row) => !isAutoResumeUserMessage(row.agentMeta));
   const boundary = realUserRows[0];
   if (!boundary) return { money: null, costUsd: 0, hasEstimatedValue: false };
-  const isFirstUserRound = realUserRows.length === 1;
+  // 运行中插话（delivery: 'steer'）与界面一样归在同一轮，不算新的用户请求。
+  const isFirstUserRound =
+    realUserRows.filter((row) => parseAgentMetaRecord(row.agentMeta)?.delivery !== 'steer')
+      .length === 1;
 
   const afterBoundary = or(
     gt(messages.createdAt, boundary.createdAt),
