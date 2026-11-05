@@ -365,6 +365,16 @@ describe('companion store', () => {
     expect((await readCompanionRows(t.api, t.store, 'actor')).find(row => row.key === big.key)?.value).toEqual(memory('big.md', 'small again').value);
   });
 
+  it('still refuses a hand-over to a computer that cannot read the store', async () => {
+    const t = storeSetup();
+    t.setValues([profile('soul'), memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000))]);
+    await t.uploader.syncBot('bot', 'actor');
+    // Already in the store, but an older Cindy taking over reads only the preferences.
+    await expect(t.uploader.syncBot('bot', 'actor', Number.POSITIVE_INFINITY, { requireAll: true, preferencesOnly: true }))
+      .rejects.toThrow('COMPANION_VALUE_TOO_LARGE');
+    await expect(t.uploader.syncBot('bot', 'actor', Number.POSITIVE_INFINITY, { requireAll: true })).resolves.toBe(0);
+  });
+
   it('passes a deletion of a value kept only in the store to the next restore', async () => {
     const t = storeSetup();
     const big = memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000));

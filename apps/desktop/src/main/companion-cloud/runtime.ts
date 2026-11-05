@@ -158,6 +158,12 @@ const PROFILE_CACHE_MS = 5 * 60_000;
 
 /** Home versions that accept a hand-over request from another computer (device-link caps). */
 const REMOTE_HAND_OVER_VERSION = 2;
+/**
+ * Targets that also read the companion store when taking over (device-link caps). Until the caps
+ * version advertises it, every hand-over keeps refusing values only the store holds; a computer
+ * taking a companion over itself (it reads the store) is not affected.
+ */
+const COMPANION_CLOUD_STORE_READ_VERSION = 3;
 /** How long a move waits for the companion to finish its turn (the device-link budget is larger). */
 export const COMPANION_BUSY_WAIT_MS = 4 * 60_000;
 /** After asking the turn to stop, how long it may take to settle. */
@@ -534,7 +540,7 @@ export function startCompanionCloud(input: {
     publish();
   }
 
-  async function flush(botId: string) {
+  async function flush(botId: string, options: { preferencesOnly?: boolean } = {}) {
     const bot = pick(null).find(candidate => candidate.botId === botId);
     if (!bot) throw new Error('NOT_HOME');
     // The whole conversation backlog first: the old copy stops mirroring once demoted, and a long
@@ -547,7 +553,7 @@ export function startCompanionCloud(input: {
     // until a pass writes nothing, so the move starts from what is on disk right now; that last pass
     // is the last await before the busy check and the move.
     for (let pass = 0; ; pass += 1) {
-      if (await uploader.syncBot(bot.botId, bot.actorId, Number.POSITIVE_INFINITY, { requireAll: true }) === 0) break;
+      if (await uploader.syncBot(bot.botId, bot.actorId, Number.POSITIVE_INFINITY, { requireAll: true, ...options }) === 0) break;
       if (pass >= 2) throw new Error('COMPANION_STILL_CHANGING');
     }
   }
@@ -610,11 +616,13 @@ export function startCompanionCloud(input: {
   }
 
   /** Everything the new home needs reaches the server, then the home moves and this copy is demoted. */
-  async function handOver(actor: CompanionRuntimeActor, targetDeviceId: string): Promise<CompanionCloudActionResult> {
+  async function handOver(actor: CompanionRuntimeActor, targetDeviceId: string, targetReadsStore: boolean): Promise<CompanionCloudActionResult> {
     // A running turn would keep working here (tools, files, replies) after the target took over.
     const turnActive = async () => !!(await input.host.isBotBusy?.(actor.externalId));
     if (await turnActive()) return { ok: false, code: 'BUSY' };
-    try { await flush(actor.externalId); }
+    // An older target reads only the preferences: what only the store holds would not arrive, so
+    // such a value still refuses the move, as before the store existed.
+    try { await flush(actor.externalId, { preferencesOnly: !targetReadsStore }); }
     catch (error) {
       input.log?.warn('Companion hand-over stopped: sync did not finish', { actorId: actor.id, code: errorCode(error) });
       return syncFailure(error);
@@ -754,7 +762,8 @@ export function startCompanionCloud(input: {
       // past the flush, or past the move. Background sync resumes after the copy is demoted.
       // Still working: wait for (or stop) the turn first, outside the sync lock so its reply keeps syncing.
       if (!(await settleBusy(actor.externalId, options?.whenBusy))) return { ok: false, code: 'BUSY' };
-      return mirrors.exclusive(() => uploads.exclusive(() => handOver(actor, targetDeviceId)));
+      const targetVersion = await input.host.homeLink?.version(targetDeviceId).catch(() => 0) ?? 0;
+      return mirrors.exclusive(() => uploads.exclusive(() => handOver(actor, targetDeviceId, targetVersion >= COMPANION_CLOUD_STORE_READ_VERSION)));
     },
 
     async homeChoices(botId) {

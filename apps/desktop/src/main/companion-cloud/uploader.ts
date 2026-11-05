@@ -159,9 +159,11 @@ export function createCompanionUploader(deps: {
   /**
    * Upload what changed; returns the number of writes made (bounded by `budget`). With
    * `requireAll` (before a hand-over) an oversized value fails the sync instead of being skipped.
+   * `preferencesOnly`: the reader cannot read the companion store (an older Cindy taking over), so
+   * a value the preferences cannot hold counts as not uploaded.
    */
   async function syncBot(botId: string, actorId: string, budget = Number.POSITIVE_INFINITY,
-    options: { requireAll?: boolean } = {}): Promise<number> {
+    options: { requireAll?: boolean; preferencesOnly?: boolean } = {}): Promise<number> {
     const read = await deps.readValues(botId, actorId);
     const unread = read.filter(entry => entry.unread).map(entry => entry.key);
     if (unread.length && options.requireAll) throw new Error(COMPANION_READ_INCOMPLETE);
@@ -189,7 +191,7 @@ export function createCompanionUploader(deps: {
       const json = canonicalJson(value);
       const inPreferences = key.length <= MAX_KEY_LENGTH && Buffer.byteLength(json) <= maxBytes;
       const hash = sha256(json);
-      const inStore = !!store && key.length <= STORE_KEY_MAX_LENGTH && refused.get(`${actorId}\n${key}`) !== hash;
+      const inStore = !!store && !options.preferencesOnly && key.length <= STORE_KEY_MAX_LENGTH && refused.get(`${actorId}\n${key}`) !== hash;
       if (!inPreferences && !inStore) {
         deps.log?.warn('Companion value too large to upload; skipped', { actorId, keyKind: key.split(':')[0], bytes: Buffer.byteLength(json) });
         skipped += 1;
