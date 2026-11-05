@@ -3850,7 +3850,12 @@
           "stop": "Parar teste"
         },
         "fetch": {
-          "button": "Buscar lista de modelos",
+          "selectedCount": "{{count}} modelos selecionados",
+          "availableCount": "{{count}} modelos disponíveis encontrados",
+          "notFetched": "A lista de modelos ainda não foi buscada",
+          "failedRetry": "Não foi possível buscar a lista de modelos. Tente novamente.",
+          "retryFailed": "Esta busca falhou. Tente novamente.",
+          "button": "Buscar e selecionar modelos",
           "fetching": "Buscando modelos…",
           "needBaseUrl": "Preencha primeiro a URL base",
           "failed": "Falha ao buscar a lista de modelos",

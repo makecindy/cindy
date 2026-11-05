@@ -3761,7 +3761,12 @@
           "stop": "止试"
         },
         "fetch": {
-          "button": "取模型清单",
+          "selectedCount": "已选 {{count}} 模型",
+          "availableCount": "已得 {{count}} 可选模型",
+          "notFetched": "尚未取模型清单",
+          "failedRetry": "取模型清单未成，请重试",
+          "retryFailed": "此番未成，请重试",
+          "button": "取并选模型",
           "fetching": "方取模型…",
           "needBaseUrl": "请先填基础 URL",
           "failed": "模型清单取之未成",
