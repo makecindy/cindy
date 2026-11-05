@@ -718,6 +718,7 @@ import {
   builtInSkillDescriptors,
 } from './maker-host/built-in-skills.js';
 import { isCindyLearnSkillEnabled, isCindyLearnSkillEnabledForCommandListing } from './skillhub/activationPreferences';
+import { setHostClientMode } from './host-client-mode.js';
 // Maker Core 一阶段重构（新链路）—— 静态 import 避免 dynamic import 触发 vite chunking
 // 让 imageProtocol 等需要 app.ready 前注册的模块跑在错误时机。getMaker() 是 lazy 的，
 // 静态 import 不会触发 Maker / Agent 的实例化。
@@ -1277,6 +1278,8 @@ function installHostClientMode(): boolean {
   const delegation = hostDelegation();
   if (!delegation) return false;
   setMakerClientMode(true);
+  // The host owns the profile's database too; a local open would be a second writer.
+  setHostClientMode(true);
   // Registered outside the runtime block by other modules; drop those so the
   // host stays authoritative instead of throwing on a duplicate handler.
   claimProxiedChannels(ipcMain, (channel) => {

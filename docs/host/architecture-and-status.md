@@ -177,6 +177,33 @@ Host 现已注册真实 Codex agent（本机 Codex CLI 登录 lane，未复制�
 回合内工具（Bash / 文件读写）在 Host 内真实执行：`POST /chat` 现在挂上交互代理，
 工具审批经 `/api/interactions/respond` 放行后，`proof.txt` 被真实写出并回显内容。
 
-已知缺口（均为 Host 侧未迁移，客户端模式下显式失败）：插件执行沙箱、MCP 执行、scheduler、
-device-link、Memory、文件选择对话框；`historyView` 为单页返回（未分页）。
+## 验收状态（2026-11-05 收口）
+
+| 验收 | 证据 | 状态 |
+|---|---|---|
+| 关掉浏览器 Host 仍运行 | Host 是独立 Node 进程；关页后 `/health` 持续 `ready`，同一 pid 继续服务 `/api/*` | 已验证 |
+| 重开浏览器恢复会话 | 认证态下刷新/新标签页恢复同一轮问答（`evidence/stage4-e2e.md`） | 已验证（需认证态；当前测试 profile 已登出，无法在本轮重放） |
+| Electron 不参与 Runtime | 客户端模式实测：`client mode: delegating`、21 通道由 Host 提供、`maker.shutdown` 抛 `cindy-host owns the runtime`、`localDb.ensureReady` 在客户端模式直接拒绝（同一 profile 只有一个 writer） | 已验证 |
+
+### 待人工交互验证
+
+`cindy-host login --method=google` 需要本人在浏览器点同意。实现与自动化验证已完备：PKCE、
+回环回调、托管轮询、code 兑换、凭据落盘、重启免登录、无 Secret Service 的显式失败、桩 IdP
+全链路。完成后跑 `cindy-host status --json`，把 `{"authenticated":…,"realm":…}` 补进
+`evidence/stage2-login.md` 即闭环。
+
+## 残余清单
+
+| 能力 | 状态 | 说明 |
+|---|---|---|
+| 插件执行（运行期） | 禁用 + TODO | 插件沙箱宿主是 Electron `webContents` 实现；Host 需要独立沙箱方案 |
+| Codex 网关 lane | 部分 | 线程可启动/流式；网关需要 Desktop 的 Responses 代理（`codex-proxy-host.ts`，4171 行、依赖 raw-import 构建产物），未迁移 |
+| MCP：自定义/远程服务器 | 禁用 + TODO | `custom-mcp-store` 无 Electron 依赖可复用，尚未接线 |
+| Memory | 已验证（Claude 回合内） | Codex 回合内需要 HTTP MCP 桥，未迁移 |
+| 定时任务（scheduler） | 禁用 + TODO | 仍在 Electron main |
+| device-link / 手机端 | 部分 | 迁移期仍由 Desktop 承担 |
+| 文件选择/目录浏览 UI | 禁用 + TODO | 依赖 Electron `dialog`；浏览器端用路径输入 |
+| 历史分页（historyView） | 部分 | 单页返回，未分页 |
+| 多 Agent / 伙伴 / 群聊 | 禁用 + TODO | 依赖 bot 通道，返回明确空态 |
+| Tray / 原生菜单 / 窗口特效 / 桌面快捷键 | 禁用 + TODO | Electron 专属，客户端模式保留 UI 层 |
 

@@ -76,6 +76,9 @@
       window.__cindyErrors?.push(`${scope}: ${String(message).slice(0, 400)}`);
       return undefined;
     },
+    // Startup diagnostics are telemetry: the preload sends them and ignores the
+    // result, so the browser must not answer with a rejected promise.
+    'reportStartupGateStall': () => undefined,
     // Boot-time snapshot; the host has no microphone permission surface.
     'voiceInput.getDataSnapshot': () => window.__cindyBoot?.voiceInput ?? {
       settings: {}, history: [],

@@ -27,6 +27,7 @@ import type Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { localDbHostUi } from './hostUi.js';
 import { userDataPath } from '../userDataPath.js';
+import { isHostClientMode } from '../host-client-mode.js';
 import { isCindyPersonalRuntime } from '../cindy-make/versionRuntimeIdentity.js';
 import fs from 'node:fs';
 
@@ -133,6 +134,18 @@ export type EnsureReadyResult =
  * - 任何不可恢复故障 → 弹 OS 对话框 + return `{ ready: false, error }`，由 renderer 阻断 navigate
  */
 export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
+  // One writer per profile: the host holds the runtime and schema leases, so a
+  // local open here would race it. Every runtime channel is proxied to the host.
+  if (isHostClientMode()) {
+    log.info(JSON.stringify({ event: 'localDb.ensureReady.hostClientMode' }));
+    return {
+      ready: false,
+      error: {
+        code: 'DB_INIT_FAILED',
+        message: 'cindy-host owns the profile database; this process is a client',
+      },
+    };
+  }
   if (!userId || typeof userId !== 'string') {
     return { ready: false, error: { code: 'DB_INIT_FAILED', message: 'invalid userId' } };
   }
