@@ -188,31 +188,41 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
   //      输入输出即恢复(xterm scrollback 是 per-renderer 的,迁移后丢失可接受)。
   useEffect(() => {
     const entry = entryRef.current;
-    if (!entry || entry.closing) return;
-    if (state.created && entry.ptyAttached && attachedEntryRef.current === entry) {
-      if (isRemote) setCreating(false);
-      return;
-    }
-    const isReattach = state.created;
+    if (!entry) return;
     let cancelled = false;
-    const { cols, rows } = entry.lastSize;
-    if (isRemote) setCreating(true);
-    const fallbackCwd = workdir || (typeof process !== 'undefined' && process.env?.HOME) || '/';
-    // For SSH, discard hydrated exit state, then reconcile on completion: a late
-    // canonical snapshot can restore it while the IPC is pending. A real exit
-    // delivered during this request always wins over that cleanup.
-    const exitRevision = exitRevisionRef.current;
-    if (isRemote && state.exited != null) patchState({ exited: null });
-    // Keep the launch identity in the pool across task/window unmounts. A mirror
-    // index may disappear before close; never retain a short-lived ticket here.
-    if (remote) entry.remoteContext = { sessionId: remote.sessionId, deviceId: remote.deviceId ?? null };
-    // Layout subscriptions above are installed before this ownership handoff.
-    const request = window.electronAPI.terminal.create({
-      id: tabId, cwd: fallbackCwd, cols, rows,
-      ...(remote ? { remote } : {}),
-    });
-    void request.then((result) => {
+    let pending = false;
+    let needsAttach = true;
+    const attach = () => {
+      if (cancelled || entry.closing || pending || !needsAttach) return;
+      if (state.created && entry.ptyAttached && attachedEntryRef.current === entry) {
+        if (isRemote) setCreating(false);
+        return;
+      }
+      const isReattach = state.created;
+      pending = true;
+      // A result skipped during close is not a completed attachment, even when
+      // this body attached the same pooled entry before an earlier invalidation.
+      attachedEntryRef.current = null;
+      const { cols, rows } = entry.lastSize;
+      if (isRemote) setCreating(true);
+      const fallbackCwd = workdir || (typeof process !== 'undefined' && process.env?.HOME) || '/';
+      // For SSH, discard hydrated exit state, then reconcile on completion: a late
+      // canonical snapshot can restore it while the IPC is pending. A real exit
+      // delivered during this request always wins over that cleanup.
+      const exitRevision = exitRevisionRef.current;
+      if (isRemote && state.exited != null) patchState({ exited: null });
+      // Keep the launch identity in the pool across task/window unmounts. A mirror
+      // index may disappear before close; never retain a short-lived ticket here.
+      if (remote) entry.remoteContext = { sessionId: remote.sessionId, deviceId: remote.deviceId ?? null };
+      // Layout subscriptions above are installed before this ownership handoff.
+      const request = window.electronAPI.terminal.create({
+        id: tabId, cwd: fallbackCwd, cols, rows,
+        ...(remote ? { remote } : {}),
+      });
+      void request.then((result) => {
+        pending = false;
         if (cancelled || !aliveRef.current || entry.closing) return;
+        needsAttach = false;
         if (isRemote) setCreating(false);
         entry.ptyAttached = true;
         attachedEntryRef.current = entry;
@@ -240,9 +250,10 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
           patchState({ exited: null });
         }
         setRuntimeError(null);
-      })
-      .catch((err: unknown) => {
+      }).catch((err: unknown) => {
+        pending = false;
         if (cancelled || !aliveRef.current || entry.closing) return;
+        needsAttach = false;
         if (isRemote) setCreating(false);
         if (isRemote && extractIpcError(err)?.code === 'PRECONDITION_FAILED') {
           entry.ptyAttached = false;
@@ -252,8 +263,14 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
           setRuntimeError(parseError(err));
         }
       });
+    };
+    // Subscribe even when mounting during close. Rollback resumes skipped work;
+    // an in-flight request finishes normally without a duplicate create/restart.
+    entry.closeCancelledListeners.add(attach);
+    attach();
     return () => {
       cancelled = true;
+      entry.closeCancelledListeners.delete(attach);
     };
   }, [state.created, tabId, workdir, patchState, remote, isRemote, onPrepare]);
 

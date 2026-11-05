@@ -45,6 +45,7 @@ const terminalEntry = vi.hoisted(() => ({
     write: vi.fn(), focus: vi.fn(),
   },
   fitAddon: { fit: vi.fn() }, lastSize: { cols: 80, rows: 24 }, ptyAttached: false,
+  closing: false, closeCancelledListeners: new Set<() => void>(),
 }));
 vi.mock('../plugins/terminal/lib/xtermPool', () => ({ getOrCreateXterm: () => terminalEntry }));
 

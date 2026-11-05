@@ -640,6 +640,65 @@ describe('TerminalTabBody remote ownership', () => {
     expect(api.create).toHaveBeenCalledTimes(ordering === 'mount-during-close' ? 0 : 1);
   });
 
+  // PR8881 discussion_r4476128365 / unit: the real body must resume a skipped
+  // create/attach after close rollback. Prepare-stage tests miss this stage and
+  // the pending-result race. Fake IPC promises control each ordering without waits.
+  it.each([null, 'device-1'].flatMap(deviceLinkDeviceId =>
+    ['mount', 'result-during-close', 'rollback-before-result', 'reattach-result'].map(ordering => ({ deviceLinkDeviceId, ordering })),
+  ))('recovers terminal-stage close cancellation ($deviceLinkDeviceId, $ordering)', async ({ deviceLinkDeviceId, ordering }) => {
+    const api = window.electronAPI.terminal;
+    const result = { shellId: 'sh' as const, shellDisplayName: 'Shell', pid: 1 };
+    vi.mocked(api.create).mockResolvedValue(result);
+    let finishCreate!: (value: typeof result) => void;
+    let rejectDispose!: (error: Error) => void;
+    vi.mocked(api.dispose).mockImplementationOnce(() => new Promise((_, reject) => { rejectDispose = reject; }));
+    let ctx = makeContext({ deviceLinkDeviceId });
+    const state = { created: ordering === 'reattach-result', exited: null, title: '', shellId: '', shellDisplayName: '' };
+    let view: ReturnType<typeof render>;
+    if (ordering === 'reattach-result') {
+      view = render(<TerminalTabBody state={state} ctx={ctx} active />);
+      await act(async () => {});
+      entry.ptyAttached = false;
+      ctx = { ...ctx, workdir: '/another-workspace' };
+    }
+    if (ordering !== 'mount') {
+      vi.mocked(api.create).mockImplementationOnce(() => new Promise(resolve => { finishCreate = resolve; }));
+      if (ordering === 'reattach-result') view!.rerender(<TerminalTabBody state={state} ctx={ctx} active />);
+      else view = render(<TerminalTabBody state={state} ctx={ctx} active />);
+    }
+    const closing = getTabKind('terminal')!.onBeforeClose!(state, { tabId: ctx.tabId, sessionId: ctx.sessionId });
+    if (ordering === 'mount') {
+      view = render(<TerminalTabBody state={state} ctx={ctx} active />);
+      expect(api.create).not.toHaveBeenCalled();
+    } else if (ordering !== 'rollback-before-result') {
+      await act(async () => { finishCreate(result); });
+      expect(ctx.patchState).not.toHaveBeenCalledWith(expect.objectContaining({ created: true }));
+    }
+    await act(async () => {});
+    await act(async () => {
+      rejectDispose(new Error('offline'));
+      expect(await closing).toBe(false);
+    });
+    if (ordering === 'rollback-before-result') {
+      expect(api.create).toHaveBeenCalledOnce();
+      await act(async () => { finishCreate(result); });
+    }
+    expect(api.create).toHaveBeenCalledTimes(ordering === 'reattach-result' ? 3 : ordering === 'result-during-close' ? 2 : 1);
+    expect(entry.ptyAttached).toBe(true);
+    if (!state.created) expect(ctx.patchState).toHaveBeenCalledWith(expect.objectContaining({ created: true, shellDisplayName: 'Shell' }));
+    expect(screen.queryByText('settings.remote.status.connecting')).toBeNull();
+    view!.rerender(<TerminalTabBody state={{ ...state, created: true }} ctx={ctx} active />);
+    // A later failed close of an attached shell must neither attach nor restart.
+    const calls = vi.mocked(api.create).mock.calls.length;
+    vi.mocked(api.dispose).mockRejectedValueOnce(new Error('offline again'));
+    await act(async () => { await getTabKind('terminal')!.onBeforeClose!(state, { tabId: ctx.tabId, sessionId: ctx.sessionId }); });
+    expect(api.create).toHaveBeenCalledTimes(calls);
+    expect(api.restart).not.toHaveBeenCalled();
+    expect(api.describeRemote).not.toHaveBeenCalled();
+    view!.unmount();
+    expect(entry.closeCancelledListeners.size).toBe(0);
+  });
+
   it('blocks a terminal first mounted after close starts and before disposal completes', async () => {
     let finishDispose!: () => void;
     vi.mocked(window.electronAPI.terminal.dispose).mockImplementationOnce(() => new Promise((resolve) => { finishDispose = resolve; }));

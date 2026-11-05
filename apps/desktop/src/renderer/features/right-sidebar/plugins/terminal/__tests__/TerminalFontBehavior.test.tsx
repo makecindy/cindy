@@ -132,6 +132,7 @@ function makeEntry() {
     terminal, fitAddon, fitSamples, inputListeners, output,
     lastSize: { cols: 80, rows: 24 },
     ptyAttached: true,
+    closeCancelledListeners: new Set<() => void>(),
   };
 }
 
