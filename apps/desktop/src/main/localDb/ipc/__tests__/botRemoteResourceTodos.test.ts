@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { createIpcError } from '../../../../shared/ipc-errors';
 const env = vi.hoisted(() => ({ visible: true, current: true, access: vi.fn(), get: vi.fn(),
   dailyRead: vi.fn(), dailySet: vi.fn(), broadcast: vi.fn() }));
 vi.mock('../../../routines/service.js', () => ({ routineTools: { todoCheckEnabled: env.dailyRead, setTodoCheck: env.dailySet } }));
@@ -54,9 +55,11 @@ beforeEach(async () => {
   env.dailyRead.mockReset().mockResolvedValue(false);
   env.dailySet.mockReset().mockImplementation(async (_botId: string, enabled: boolean) => enabled);
   env.broadcast.mockReset();
-  env.get.mockImplementation(async (id: string) =>
-    id === 'bot-one' && env.visible ? source : null,
-  );
+  // Match getBotRemoteResourceSource: absent companions reject with the IPC error.
+  env.get.mockImplementation(async (id: string) => {
+    if (id !== 'bot-one' || !env.visible) throw createIpcError('NOT_FOUND', 'Companion not found');
+    return source;
+  });
   root = await mkdtemp(path.join(os.tmpdir(), 'remote-todo-'));
   const store = createBotTodoStore(path.join(root, 'todos.v1.json'), async () => ({}));
   env.access.mockImplementation(async () => ({

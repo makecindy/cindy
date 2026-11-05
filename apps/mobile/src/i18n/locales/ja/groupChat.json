@@ -520,6 +520,7 @@
     "searchMembers": "メンバーを検索",
     "membersNoMatch": "「{{query}}」に一致するメンバーはいません",
     "you": "あなた",
+    "companionOf": "{{name}} のパートナー",
     "teammateTag": "仲間",
     "paused": "一時停止中",
     "accessNone": "オーナーのみ",

@@ -140,6 +140,8 @@ Small interactive chips (button backgrounds, tag pills, avatar fills, selected-n
 
 ### Semantic & Accent
 
+**Mobile group mention text** — 用户 2026-11-04 要求群聊 `@点名` 样式对齐 PC；专用 `groupMentionText` 采用 CINDY Light／Dark `msg-link` 的对应色（Mobile 数值正本 `apps/mobile/src/theme/tokens.ts`），只用于群聊已识别点名，不用于普通链接、状态或其他文字。仅着色，不另加下划线、底色或字重；身份入口与边界见 §14.5、`bot-group-chat.md`。
+
 - **PR/MR merge conflicts (user decision, 2026-11-05)** — an open, non-draft PR/MR with a confirmed merge conflict uses `--warning-fg` (Mobile `warningFg`) on its existing state icon across headers, sidebars, companion cards and management lists; no extra icon. Draft, merged and closed keep their main-state colors. The Desktop hover panel shows a separate Merge / Conflicts data row for open and draft conflicts, with a warning-colored, medium-weight value; its header stays unchanged. The button's accessible name includes the conflict. Unknown or absent conflict fields add no signal; passing checks remain independent. Both Light and Dark use the same semantic tokens. Plugin cards are outside this scope and retain their existing merge-state text row.
 
 Toast loading is neutral: use the shared 16×16 Spinner in `--text-secondary`, with polite status semantics. Keep it visible until the operation settles and explicitly dismiss it; only failures use the error variant.

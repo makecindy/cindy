@@ -12211,7 +12211,7 @@
       "effortLabel": "Esforço de raciocínio",
       "thinking": "Pensando",
       "edit": "Editar",
-      "options": "Options",
+      "options": "Opções",
       "priceTip": "Entrada {{input}} · Saída {{output}} por 1M de tokens",
       "pricing": {
         "title": "Por 1 milhão de tokens",
@@ -13510,7 +13510,7 @@
         "empty": "Nenhum comando disponível."
       },
       "cost": {
-        "title": "Custo da Sessão",
+        "title": "Uso da sessão",
         "tokensUsed": "Tokens usados (neste turno)"
       },
       "pwd": {
@@ -13518,7 +13518,7 @@
         "notSet": "(não definido)"
       },
       "status": {
-        "title": "Status da Sessão",
+        "title": "Status da sessão",
         "agent": "Agent",
         "model": "Modelo",
         "effort": "Esforço",
