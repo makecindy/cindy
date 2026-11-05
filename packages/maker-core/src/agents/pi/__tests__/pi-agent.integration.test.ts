@@ -1618,17 +1618,27 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       handle = await new PiAgent(buildDeps()).startSession({
         sessionId: 'plan-execute', workingDir, model: 'pi-test-model', planMode: true,
       });
-      const resolver = vi.fn(async (request: { kind: string; questions?: Array<{ question: string }> }) => ({
-        kind: 'ask_user_question',
-        answers: { [request.questions![0]!.question]: 'Execute the plan (track progress)' },
-      }));
+      // #8932: real Pi must review the complete plan and execute the user's edit,
+      // rather than returning the native English select's step-title summary.
+      const editedPlan = 'Plan:\n1. Say the revised greeting.\n\nPreserve this detailed acceptance condition exactly.';
+      let approve!: () => void;
+      const approved = new Promise<void>(resolve => { approve = resolve; });
+      const resolver = vi.fn(async () => {
+        await approved;
+        return { kind: 'plan_review', behavior: 'allow', editedPlan };
+      });
       handle.setInteractionResolver!(resolver as never);
       scriptedResponses.push(anthropicStreamBody('Plan:\n1. Say hello.'));
       const before = seenRequests.length;
       await handle.send({ type: 'user', content: 'Plan a greeting.' });
+      await vi.waitFor(() => expect(resolver).toHaveBeenCalled(), { timeout: 20_000 });
+      expect(seenRequests).toHaveLength(before + 1);
+      expect(JSON.parse(seenRequests[before]!.body).tools.map((tool: { name: string }) => tool.name)).not.toContain('write');
+      approve();
       await vi.waitFor(() => expect(seenRequests.length).toBeGreaterThan(before + 1), { timeout: 20_000 });
       await vi.waitFor(() => expect(handle!.isTurnRunning!()).toBe(false), { timeout: 20_000 });
-      expect(resolver).toHaveBeenCalled();
+      expect(resolver).toHaveBeenCalledWith(expect.objectContaining({ kind: 'plan_review', plan: 'Plan:\n1. Say hello.' }));
+      expect(seenRequests[before + 1]!.body).toContain(jsonStringContent(editedPlan));
       expect(handle.getPlanMode!()).toBe(false);
       expect(handle.getExecutionPlanMode!()).toBe(false);
       const next = seenRequests.length;
@@ -1643,6 +1653,59 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       rmSync(workingDir, { recursive: true, force: true });
     }
   });
+
+  // #8932 / integration tier: real Pi's agent_end UI hook must preserve the
+  // read-only revision cycle and never interpret cancel/dismissal as feedback.
+  // Existing plan tests only exercised the old native Execute selection.
+  it.each(['feedback', 'cancel', 'dismiss'] as const)(
+    'keeps Pi plan review %s within its approved lifecycle', { timeout: 60_000 }, async action => {
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-plan-review-'));
+      let handle: AgentSessionHandle | undefined;
+      try {
+        handle = await new PiAgent(buildDeps()).startSession({
+          sessionId: `plan-review-${action}`, workingDir, model: 'pi-test-model', planMode: true,
+          ...(action === 'cancel' ? { permissionMode: 'bypassPermissions' as const } : {}),
+        });
+        const feedback = 'Keep this revision read-only and include a second greeting.';
+        const revised = 'Plan:\n1. Say the revised greeting.\n2. Say another greeting.';
+        const resolver = vi.fn(async () => ({
+          kind: 'plan_review' as const, behavior: 'deny' as const,
+          ...(action === 'feedback' && resolver.mock.calls.length === 1 ? { reason: feedback }
+            : action === 'dismiss' ? { dismissed: true, reason: 'session_aborted' } : {}),
+        }));
+        handle.setInteractionResolver!(resolver);
+        if (action === 'cancel') scriptedResponses.push(anthropicToolUseBody('bash', {
+          command: 'printf forbidden > forbidden.txt',
+        }));
+        scriptedResponses.push(anthropicStreamBody('Plan:\n1. Say the first greeting.'));
+        if (action === 'feedback') scriptedResponses.push(anthropicStreamBody(revised));
+        const before = seenRequests.length;
+        await handle.send({ type: 'user', content: 'Plan a greeting.' });
+        await vi.waitFor(() => expect(resolver).toHaveBeenCalled(), { timeout: 20_000 });
+        await vi.waitFor(() => expect(handle!.isTurnRunning!()).toBe(false), { timeout: 20_000 });
+        expect(seenRequests.length - before).toBe(action === 'dismiss' ? 1 : 2);
+        if (action === 'cancel') {
+          expect(existsSync(path.join(workingDir, 'forbidden.txt'))).toBe(false);
+          expect(seenRequests[before + 1]!.body).toContain('Plan mode: command blocked');
+        }
+        if (action === 'feedback') {
+          expect(resolver).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'plan_review', plan: revised }));
+          const revision = JSON.parse(seenRequests[before + 1]!.body);
+          expect(revision.tools.map((tool: { name: string }) => tool.name)).not.toContain('write');
+          expect(seenRequests[before + 1]!.body).toContain(feedback);
+        }
+        const next = seenRequests.length;
+        await handle.send({ type: 'user', content: 'Send an ordinary greeting.' });
+        await vi.waitFor(() => expect(seenRequests.length).toBeGreaterThan(next), { timeout: 20_000 });
+        await vi.waitFor(() => expect(handle!.isTurnRunning!()).toBe(false), { timeout: 20_000 });
+        expect(JSON.parse(seenRequests[next]!.body).tools.map((tool: { name: string }) => tool.name)).toContain('write');
+      } finally {
+        scriptedResponses.length = 0;
+        await handle?.close();
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each(['anthropic-messages', 'openai-completions'] as const)(
     'keeps native plan notifications separate from replies using %s',

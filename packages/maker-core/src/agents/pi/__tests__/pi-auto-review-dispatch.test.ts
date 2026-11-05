@@ -1628,6 +1628,42 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
+  // #8932 / unit: adapter's real onEvent entry, pending review followed by a
+  // teardown or permission change. Generic dialog tests did not exercise stale
+  // plan approval; no native process is needed to distinguish the wire result.
+  it.each(['abort', 'close', 'full-access'] as const)('never accepts a late plan approval after %s', async action => {
+    const handle = await start('ask');
+    let answer!: (decision: InteractionDecision) => void;
+    const resolver = vi.fn(() => new Promise<InteractionDecision>(resolve => { answer = resolve; }));
+    handle.setInteractionResolver!(resolver);
+    try {
+      captured.onEvent!({ type: 'extension_ui_request', id: 'plan-late', method: 'input',
+        title: 'cindy:plan-review', placeholder: JSON.stringify({ plan: 'Plan:\n1. Preserve all files.' }) });
+      await vi.waitFor(() => expect(resolver).toHaveBeenCalled());
+      if (action === 'abort') await handle.abort!();
+      else if (action === 'close') await handle.close();
+      else await handle.setPermissionMode!('bypassPermissions');
+      answer({ kind: 'plan_review', behavior: 'allow' });
+      await flush();
+      expect(captured.sent.filter(frame => frame.id === 'plan-late' && typeof frame.value === 'string')).toEqual([]);
+      if (action !== 'close') expect(captured.sent).toContainEqual({
+        type: 'extension_ui_response', id: 'plan-late', cancelled: true,
+      });
+    } finally { await handle.close(); }
+  });
+
+  it('keeps a plan-looking ordinary extension select as a question', async () => {
+    const handle = await start('bypassPermissions');
+    const resolver = vi.fn(async () => ({ kind: 'ask_user_question' as const, answers: {} }));
+    handle.setInteractionResolver!(resolver);
+    try {
+      captured.onEvent!({ type: 'extension_ui_request', id: 'ordinary-plan-select', method: 'select',
+        title: 'Plan mode - what next?', options: ['Execute the plan (track progress)', 'Stay in plan mode', 'Refine the plan'] });
+      expect(await waitForResponse('ordinary-plan-select')).toMatchObject({ cancelled: true });
+      expect(resolver).toHaveBeenCalledWith(expect.objectContaining({ kind: 'ask_user_question' }));
+    } finally { await handle.close(); }
+  });
+
   it('passes a typed custom answer for a select dialog through and keeps an empty answer as cancel (#4273)', async () => {
     const handle = await start();
     const answers: Record<string, string> = {
