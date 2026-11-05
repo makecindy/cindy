@@ -210,3 +210,68 @@ describe('cloud session realm publication', () => {
   });
 
 });
+
+// Terminal continuity must distinguish same-owner projection repair from a realm
+// move, while notifying consumers before a different owner becomes visible.
+// Existing request-scope tests did not expose the reason for an invalidation.
+describe('session invalidation reasons', () => {
+  it('marks the actual local-auth repair commit as projection repair', async () => {
+    commitActiveAppSession('local');
+    const observed: unknown[] = [];
+    const off = onAppSessionInvalidated(change => observed.push(change));
+    const dependencies = {
+      getActiveAppSession, beginAppSessionBoundary, commitActiveAppSession, commitVolatileAppSession,
+      LOCAL_DATA_OWNER_ID: getActiveAppSession().dataOwnerId,
+      isPassiveSharedUserDataInstance: () => false,
+      withGhostSkillProjectionOwnerCommit: async (options: {
+        prepareTransition: (value: { ownerChanged: boolean }) => Promise<void>;
+        prepareCommit: () => Promise<void>; commit: () => void;
+      }) => {
+        await options.prepareTransition({ ownerChanged: false });
+        await options.prepareCommit();
+        return options.commit();
+      },
+      authSessionTeardown: vi.fn(), projectionRepairTeardown: vi.fn(async () => {}),
+      clearAuth: vi.fn(), notifyRendererAuthBoundaryPending: vi.fn(),
+      enterOwnerChangeShellPending: vi.fn(), leaveOwnerChangeShellPending: vi.fn(),
+      requestStableOwnerPostCommit: vi.fn(), notifyRenderer: vi.fn(), notifyAuthListeners: vi.fn(),
+    };
+    const start = authSource.indexOf('async function withAccountFreeOwnerCommit(');
+    const source = authSource.slice(start, authSource.indexOf('\n}\n', start) + 2);
+    const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    const repair = new Function('dependencies', `const { ${Object.keys(dependencies).join(', ')} } = dependencies; ${compiled}; return withAccountFreeOwnerCommit;`)(dependencies);
+    try {
+      await repair({ reason: 'test-local-repair', nextMode: 'local', notify: false });
+      expect(dependencies.projectionRepairTeardown).toHaveBeenCalledOnce();
+      expect(observed).toEqual([
+        { kind: 'boundary', ownerChanged: false },
+        { kind: 'commit', ownerChanged: false, generationReason: 'projection-repair' },
+      ]);
+    } finally { off(); }
+  });
+
+  it.each([commitActiveAppSession, commitVolatileAppSession])('identifies repair and ownership changes before publication', (commit) => {
+    commit('cloud', 'terminal-owner-a');
+    const seen: Array<{ change: unknown; owner: string | null }> = [];
+    const off = onAppSessionInvalidated(change => seen.push({ change, owner: getActiveAppSession().dataOwnerId }));
+    let release: (() => void) | undefined;
+    try {
+      commit('cloud', 'terminal-owner-a');
+      expect(seen).toEqual([]);
+      release = beginAppSessionBoundary();
+      commit('cloud', 'terminal-owner-a', true, 'projection-repair');
+      release();
+      commit('cloud', 'terminal-owner-a', true);
+      commit('cloud', 'terminal-owner-b');
+      expect(seen).toEqual([
+        { change: { kind: 'boundary', ownerChanged: false }, owner: 'terminal-owner-a' },
+        { change: { kind: 'commit', ownerChanged: false, generationReason: 'projection-repair' }, owner: 'terminal-owner-a' },
+        { change: { kind: 'commit', ownerChanged: false, generationReason: undefined }, owner: 'terminal-owner-a' },
+        { change: { kind: 'commit', ownerChanged: true, generationReason: undefined }, owner: 'terminal-owner-a' },
+      ]);
+    } finally {
+      release?.();
+      off();
+    }
+  });
+});

@@ -20,6 +20,7 @@ import {
   markPopupSpawnedTab,
 } from '../lib/popupTabs';
 import { browserWebviewPool } from '../lib/browserWebviewPool';
+import { markClosing, registerClosing, unregisterClosing } from '../lib/tabClosingSignal';
 import type { TabKindPlugin } from '../types';
 
 // device-link origin 注册表桩:'remote-' 前缀的 sessionId 视为远程会话。
@@ -100,6 +101,27 @@ describe('RSB store', () => {
     _resetTabKindRegistry();
     _resetPopupTabsForTests();
     vi.restoreAllMocks();
+  });
+
+  it('releases terminal closing signals after a failed close rolls the tab back', async () => {
+    registerTabKind({
+      kind: 'terminal',
+      menu: { kind: 'terminal', labelKey: 'terminal', icon: (() => null) as never, order: 1, enabled: true },
+      TabPillTitle: () => null, TabBody: () => null, defaultState: () => ({}),
+      onBeforeClose: async (_state, ctx) => { markClosing(ctx.tabId); },
+    } as TabKindPlugin);
+    await store.ensureHydrated('s1');
+    const tab = await store.addTab('s1', 'terminal');
+    ipc.close.mockRejectedValueOnce(new Error('db down'));
+    let closing = false;
+    registerClosing(tab.id, (value) => { closing = value; });
+    try {
+      await expect(store.closeTab('s1', tab.id)).rejects.toThrow('db down');
+      expect(closing).toBe(false);
+      expect(store.getBucket('s1').tabs.some((item) => item.id === tab.id)).toBe(true);
+    } finally {
+      unregisterClosing(tab.id);
+    }
   });
 
   describe('getBucket', () => {

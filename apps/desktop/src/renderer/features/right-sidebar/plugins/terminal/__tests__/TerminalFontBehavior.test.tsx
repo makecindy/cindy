@@ -8,8 +8,9 @@ import type { TabKindHostContext } from '../../../types';
 import type { TerminalState } from '../index';
 import type { XtermEntry } from '../lib/xtermPool';
 
-const poolMocks = vi.hoisted(() => ({ getOrCreateXterm: vi.fn() }));
+const poolMocks = vi.hoisted(() => ({ getOrCreateXterm: vi.fn(), markClosing: vi.fn(), disposeXterm: vi.fn() }));
 vi.mock('../lib/xtermPool', () => poolMocks);
+vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
@@ -115,6 +116,10 @@ function makeEntry() {
     refresh: vi.fn(),
   };
   const fitAddon = {
+    proposeDimensions: vi.fn(() => ({
+      cols: Math.max(1, Math.floor(width / (terminal.options.fontSize * 0.6))),
+      rows: Math.max(1, Math.floor(height / (terminal.options.fontSize * 1.2))),
+    })),
     fit: vi.fn(() => {
       fitSamples.push({ fontFamily: terminal.options.fontFamily, fontSize: terminal.options.fontSize });
       // Deliberately responsive to the public font option. This checks that the

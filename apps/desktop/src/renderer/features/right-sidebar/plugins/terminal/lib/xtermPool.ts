@@ -25,6 +25,8 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 
 import { createLogger } from '@/lib/logger';
+import { registerClosing, unregisterClosing } from '../../../lib/tabClosingSignal';
+import type { RemoteTerminalConnection, RemoteTerminalContext } from '../../../../../../shared/terminal-bridge';
 import {
   DEFAULT_APPEARANCE_SETTINGS,
   DEFAULT_TERMINAL_FONT_FAMILY,
@@ -45,6 +47,12 @@ export interface XtermEntry {
    * 否则 PTY 输出仍推给旧窗口。见 TerminalTabBody effect #2。
    */
   ptyAttached: boolean;
+  /** Closing entries reject late asynchronous work until disposal. */
+  closing: boolean;
+  /** Original create/attach origin; retained across transient device-index gaps. */
+  remoteContext?: RemoteTerminalContext;
+  /** SSH form values and submission intent live only as long as this pooled tab. */
+  remoteDraft?: { contextKey: string; connection?: RemoteTerminalConnection; submitted: boolean };
 }
 
 const pool = new Map<string, XtermEntry>();
@@ -70,6 +78,11 @@ const DEFAULT_OPTIONS: ITerminalOptions = {
   },
 };
 
+/** Read existing close context without creating a terminal for an unmounted tab. */
+export function getXterm(tabId: string): XtermEntry | undefined {
+  return pool.get(tabId);
+}
+
 /** 获取或创建某个 tabId 的 xterm 实例。重复调用同 id 返回同一个。 */
 export function getOrCreateXterm(tabId: string): XtermEntry {
   let entry = pool.get(tabId);
@@ -89,8 +102,11 @@ export function getOrCreateXterm(tabId: string): XtermEntry {
     fitAddon,
     lastSize: { cols: 80, rows: 24 },
     ptyAttached: false,
+    closing: false,
   };
   pool.set(tabId, entry);
+  const registeredEntry = entry;
+  registerClosing(tabId, (closing) => { registeredEntry.closing = closing; });
   return entry;
 }
 
@@ -141,6 +157,8 @@ export function disposeXterm(tabId: string): void {
   const entry = pool.get(tabId);
   if (!entry) return;
   pool.delete(tabId);
+  unregisterClosing(tabId);
+  entry.remoteDraft = undefined;
   try {
     entry.terminal.dispose();
   } catch {

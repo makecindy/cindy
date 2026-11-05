@@ -2,7 +2,8 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { openTerminalExternalLink } from '../xtermPool';
+import { disposeXterm, getOrCreateXterm, openTerminalExternalLink } from '../xtermPool';
+import { finishClosing, markClosing } from '../../../../lib/tabClosingSignal';
 
 const { warn } = vi.hoisted(() => ({
   warn: vi.fn(),
@@ -11,6 +12,19 @@ const { warn } = vi.hoisted(() => ({
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ warn }),
 }));
+
+it('marks a real xterm entry registered after closing begins and clears it after rollback', () => {
+  markClosing('late-terminal');
+  try {
+    const entry = getOrCreateXterm('late-terminal');
+    expect(entry.closing).toBe(true);
+    finishClosing('late-terminal');
+    expect(entry.closing).toBe(false);
+  } finally {
+    finishClosing('late-terminal');
+    disposeXterm('late-terminal');
+  }
+});
 
 describe('openTerminalExternalLink', () => {
   afterEach(() => {

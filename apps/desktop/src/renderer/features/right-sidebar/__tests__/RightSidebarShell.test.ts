@@ -37,6 +37,16 @@ vi.mock('@/lib/toast', () => ({
 }));
 
 vi.mock('../plugins', () => ({}));
+const terminalEntry = vi.hoisted(() => ({
+  terminal: {
+    options: { fontFamily: '', fontSize: 13 }, cols: 80, rows: 24,
+    element: undefined,
+    open: vi.fn(), onData: vi.fn(() => ({ dispose: vi.fn() })),
+    write: vi.fn(), focus: vi.fn(),
+  },
+  fitAddon: { fit: vi.fn() }, lastSize: { cols: 80, rows: 24 }, ptyAttached: false,
+}));
+vi.mock('../plugins/terminal/lib/xtermPool', () => ({ getOrCreateXterm: () => terminalEntry }));
 
 const installedGhostsMock = vi.hoisted(() => ({ list: [] as unknown[] }));
 vi.mock('@/cindy-brain/useInstalledGhosts', () => ({
@@ -324,6 +334,48 @@ describe('RightSidebarShell empty state', () => {
     window.localStorage.clear();
     installedGhostsMock.list = [];
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  });
+
+  // Real Shell -> hydrateTabState -> terminal body -> patchTabState regression:
+  // repeated render-time hydration used to erase created/exited patches. A stale
+  // renderer marker must still require a fresh attach after restart. Unit tier;
+  // minimal input is one persisted terminal followed by a live exit event.
+  it('preserves terminal lifecycle patches through real host hydration while rejecting stale renderer state', async () => {
+    await import('../plugins/terminal');
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { callback(0); return 1; });
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    let exitListener!: (event: { id: string; exit: { code: number | null; signal: string | null } }) => void;
+    const create = vi.fn(async () => ({ shellId: 'sh', shellDisplayName: 'sh', pid: 1 }));
+    const restart = vi.fn(async () => ({ shellId: 'sh', shellDisplayName: 'sh', pid: 2 }));
+    Object.assign(window.electronAPI, { terminal: {
+      create, restart, dispose: vi.fn(async () => undefined), write: vi.fn(async () => undefined), resize: vi.fn(async () => undefined),
+      onData: vi.fn(() => vi.fn()),
+      onExit: vi.fn((listener: typeof exitListener) => { exitListener = listener; return vi.fn(); }),
+    } });
+    terminalEntry.ptyAttached = false;
+    tabsIpc.list.mockResolvedValueOnce({
+      tabs: [{ id: 'terminal-live', kind: 'terminal', state: { rendererInstanceId: 'previous-renderer', created: true, exited: { code: 255, signal: null } } }],
+      activeTabId: 'terminal-live',
+    });
+    try {
+      render(createElement(RightSidebarShell, {
+        sessionId: 'terminal-task', workdir: '/workspace', remoteHostId: null, deviceLinkDeviceId: null,
+        isMac: true, unifiedTopbar: true,
+      }));
+      await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect((getBucket('terminal-task').tabs[0].state as { created: boolean }).created).toBe(true));
+      act(() => exitListener({ id: 'terminal-live', exit: { code: 17, signal: null } }));
+      expect(await screen.findByText('rightSidebar.terminal.processExited')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.terminal.restart' }));
+      await waitFor(() => expect(restart).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(screen.queryByText('rightSidebar.terminal.processExited')).toBeNull());
+      expect(create).toHaveBeenCalledTimes(1);
+    } finally {
+      cleanup();
+      unregisterTabKind('terminal');
+      vi.unstubAllGlobals();
+    }
   });
 
   // 测试价值

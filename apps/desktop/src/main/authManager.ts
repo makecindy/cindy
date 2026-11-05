@@ -2519,7 +2519,7 @@ async function withCloudOwnerCommit<T>(opts: {
         // so activeOwnerScopeKey() changes and stale captured scopes are rejected.
         if (forceBumpGeneration) {
           const session = getActiveAppSession();
-          commitActiveAppSession(session.mode, session.dataOwnerId ?? undefined, true);
+          commitActiveAppSession(session.mode, session.dataOwnerId ?? undefined, true, 'projection-repair');
         }
         return result;
       },
@@ -2658,7 +2658,7 @@ async function withAccountFreeOwnerCommit(opts: {
         // real commit so activeOwnerScopeKey() changes and stale captured scopes
         // are rejected across the teardown.
         if (forceBumpGeneration) {
-          commitActiveAppSession(opts.nextMode, undefined, true);
+          commitActiveAppSession(opts.nextMode, undefined, true, 'projection-repair');
         }
       },
     });
