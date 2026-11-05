@@ -1073,6 +1073,11 @@ interface SpineEntry {
   callMeta: Map<string, { name: string; command: string; filePath: string; jobId: string }>;
   /** 1.0.6: 这个条目属于第几轮(以 user 消息计数)。 */
   turn: number;
+  /**
+   * 带非文本载荷(图片/音频等)的条目。卡片与原文快照都只有文本,切走以后就再也拿不回来,
+   * 所以这类条目按 checkpoint 一样当屏障,不参与切割。
+   */
+  opaque: boolean;
 }
 
 interface SpineState {
@@ -1417,7 +1422,15 @@ function logLine(state: SpineState, message: string) {
 }
 
 /** Project pi's projected context entries into the flat spine entry list. */
-function spineEntries(contextEntries: any[]): SpineEntry[] {
+/** 卡片/快照只装得下文本:出现这些块就说明这条内容切走即丢。 */
+function hasOpaqueContent(message: any): boolean {
+  const content = message?.content;
+  if (!Array.isArray(content)) return false;
+  return content.some((block) => block && typeof block === "object" && typeof block.type === "string"
+    && !TEXTUAL.has(block.type) && block.type !== "reasoning" && block.type !== "thinking" && block.type !== "toolCall");
+}
+
+export function spineEntries(contextEntries: any[]): SpineEntry[] {
   const entries: SpineEntry[] = [];
   let turn = 0;
   for (const projected of contextEntries || []) {
@@ -1432,7 +1445,9 @@ function spineEntries(contextEntries: any[]): SpineEntry[] {
     const results: string[] = [];
     const callMeta = new Map<string, { name: string; command: string; filePath: string; jobId: string }>();
     let role = "";
+    let opaque = false;
     for (const message of messages) {
+      if (hasOpaqueContent(message)) opaque = true;
       text += (text ? "\n" : "") + messageText(message);
       shadowText += (shadowText ? "\n" : "") + messageShadowText(message);
       reasoning += (reasoning ? "\n" : "") + messageReasoningText(message);
@@ -1475,6 +1490,7 @@ function spineEntries(contextEntries: any[]): SpineEntry[] {
       results,
       callMeta,
       turn,
+      opaque,
     });
   }
   return entries;
@@ -1482,6 +1498,8 @@ function spineEntries(contextEntries: any[]): SpineEntry[] {
 
 function isCheckpoint(entry: SpineEntry): boolean {
   if (entry.entryType === "compaction" || entry.entryType === "branch_summary") return true;
+  // 图片等非文本载荷切走就恢复不了(卡片与原文快照只有文本),按屏障处理。
+  if (entry.opaque) return true;
   if (entry.role === "custom") return true;
   return entry.text.includes(MARK);
 }

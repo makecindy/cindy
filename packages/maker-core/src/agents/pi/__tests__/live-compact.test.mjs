@@ -9,7 +9,7 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
   generateSummaryWithUsage: vi.fn(),
 }));
 
-const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText } = await import(
+const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries } = await import(
   '../../../../extensions/live-compact/index.ts'
 );
 
@@ -438,6 +438,37 @@ describe('live compact 1.0.8: cache-safe drains, pointer-only spans, no cross-us
     ]);
     expect(selectCutIndexes(items, { engine: 'local', pointerMax: 8000 })).toMatchObject({ start: 2, end: 2, pointerOnly: true });
     expect(selectCutIndexes(items, { engine: 'local' })?.pointerOnly).toBeUndefined();
+  });
+
+  it('keeps an entry that carries an image payload out of every span', () => {
+    // 工具结果里带图片时,卡片和原文快照都只有文本:切走就等于把图丢了。
+    // 这里把带图的一轮夹在只能靠它才凑够 CHUNK_MIN 的位置上 —— 没有屏障就会把它一起切走。
+    const tool = (id) => ({ sourceEntry: { id }, messages: [{ role: 'assistant', content: [{ type: 'toolCall', id, name: 'read', arguments: {} }] }] });
+    const result = (id, text) => ({ sourceEntry: { id: `${id}-r` }, messages: [{ role: 'toolResult', toolCallId: id, content: [{ type: 'text', text }] }] });
+    const entries = spineEntries([
+      { sourceEntry: { id: 'u' }, messages: [{ role: 'user', content: [{ type: 'text', text: 'look at this screen' }] }] },
+      tool('c0'),
+      result('c0', 'log '.repeat(4000)),
+      tool('c1'),
+      {
+        sourceEntry: { id: 'c1-r' },
+        messages: [{
+          role: 'toolResult',
+          toolCallId: 'c1',
+          content: [{ type: 'text', text: 'shot '.repeat(3000) }, { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' }],
+        }],
+      },
+      tool('c2'),
+      result('c2', 'tiny '.repeat(100)),
+      tool('c3'),
+      result('c3', 'tiny '.repeat(100)),
+      tool('c4'),
+      result('c4', 'tiny '.repeat(100)),
+    ]);
+    expect(entries[4].opaque).toBe(true);
+    expect(entries[6].opaque).toBe(false);
+    // 后面三轮都太小,凑够 CHUNK_MIN 就必须跨过带图的那一轮 —— 所以这里只能不切。
+    expect(selectNewestChunk(entries, undefined, { drain: true, totalTokens: 60000 })).toBeNull();
   });
 
   it('does not drain while the whole cuttable history is inside the kept rounds', () => {

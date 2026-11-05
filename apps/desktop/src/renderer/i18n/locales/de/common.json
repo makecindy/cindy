@@ -4465,7 +4465,7 @@
     "liveCompact": {
       "cell": {
         "title": "Live Compact · Beta",
-        "description": "Faltet am Ende jeder Runde einen abgeschlossenen Gesprächsabschnitt in eine lokale Karte: Das Modell behält Kernpunkte und einen Pfad zum Volltext, der Kontext wächst langsamer. Gilt für Pi-Tasks, die ab jetzt starten (auch ein erneut geöffneter Task zählt); bereits laufende Tasks bleiben unverändert. Die Strategie weicht von der nativen ab.",
+        "description": "Faltet am Ende jeder Runde einen abgeschlossenen Gesprächsabschnitt in eine lokale Karte: Das Modell behält Kernpunkte und einen Pfad zum Volltext, der Kontext wächst langsamer. Gilt für Pi-Tasks, die ab jetzt starten (auch ein erneut geöffneter Task zählt); bereits laufende Tasks bleiben unverändert. Gilt nur für Pi-Tasks auf diesem Computer; Tasks auf einem entfernten Computer sind nicht betroffen. Die Strategie weicht von der nativen ab.",
         "sourceLabel": "Ursprung: MerkyorLynn/dsh-live-compact"
       },
       "toast": {

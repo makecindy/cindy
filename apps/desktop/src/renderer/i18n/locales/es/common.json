@@ -4518,7 +4518,7 @@
     "liveCompact": {
       "cell": {
         "title": "Live Compact · Beta",
-        "description": "Al final de cada turno pliega un tramo cerrado de la conversación en una tarjeta local: el modelo conserva los puntos clave y una ruta al texto completo, y el contexto crece más despacio. Se aplica a las tareas Pi que se inicien desde ahora (también al reabrir una tarea); las que ya están en marcha no cambian. La estrategia difiere de la nativa.",
+        "description": "Al final de cada turno pliega un tramo cerrado de la conversación en una tarjeta local: el modelo conserva los puntos clave y una ruta al texto completo, y el contexto crece más despacio. Se aplica a las tareas Pi que se inicien desde ahora (también al reabrir una tarea); las que ya están en marcha no cambian. Solo se aplica a las tareas Pi de este ordenador; las de un equipo remoto no se ven afectadas. La estrategia difiere de la nativa.",
         "sourceLabel": "Origen: MerkyorLynn/dsh-live-compact"
       },
       "toast": {

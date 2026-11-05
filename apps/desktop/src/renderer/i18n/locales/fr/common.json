@@ -4518,7 +4518,7 @@
     "liveCompact": {
       "cell": {
         "title": "Live Compact · Bêta",
-        "description": "À la fin de chaque tour, replie un pan de conversation terminé dans une carte locale : le modèle garde les points clés et un chemin vers le texte intégral, et le contexte croît plus lentement. S'applique aux tâches Pi démarrées à partir de maintenant (une tâche réouverte compte aussi) ; celles déjà en cours ne changent pas. La stratégie diffère de la native.",
+        "description": "À la fin de chaque tour, replie un pan de conversation terminé dans une carte locale : le modèle garde les points clés et un chemin vers le texte intégral, et le contexte croît plus lentement. S'applique aux tâches Pi démarrées à partir de maintenant (une tâche réouverte compte aussi) ; celles déjà en cours ne changent pas. Ne s'applique qu'aux tâches Pi de cet ordinateur ; celles d'un ordinateur distant ne sont pas concernées. La stratégie diffère de la native.",
         "sourceLabel": "Source : MerkyorLynn/dsh-live-compact"
       },
       "toast": {
