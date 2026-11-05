@@ -65,11 +65,13 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
   const rootRef = useRef<HTMLDivElement>(null);
 
   // The More menu and its trigger unmount when the panel opens, which would leave focus
-  // on the body. Take focus instead: decision cards (permission, plan review, question)
-  // keep window-level Esc listeners registered earlier than this one, and they treat a
-  // body-targeted Esc as theirs; with focus in this dialog they yield it.
+  // on the body. Start on the first checkbox instead, the panel's primary control with
+  // its own focus ring: decision cards (permission, plan review, question, issue,
+  // rename, plugin grant) keep window-level Esc listeners registered earlier than this
+  // one, and they treat a body-targeted Esc as theirs; with focus in this dialog they
+  // yield it.
   useEffect(() => {
-    rootRef.current?.focus();
+    rootRef.current?.querySelector<HTMLElement>("[role='checkbox']")?.focus();
   }, []);
 
   // Esc discards the draft and closes. Listen on window so the press still works after
@@ -203,9 +205,7 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
       ref={rootRef}
       role="dialog"
       aria-label={t('sidebar.navigation.customize.title')}
-      // Focusable only by script, as the landing spot when the panel opens.
-      tabIndex={-1}
-      className="mx-2 mb-2 rounded-xl outline-none border border-sidebar-border bg-[var(--surface-elevated)] p-3 shadow-[shadow:var(--shadow-menu)]"
+      className="mx-2 mb-2 rounded-xl border border-sidebar-border bg-[var(--surface-elevated)] p-3 shadow-[shadow:var(--shadow-menu)]"
     >
       <div className="mb-2 flex items-center justify-between gap-2 px-1">
         <h2 className="text-sm font-medium text-[var(--text-primary)]">

@@ -6,10 +6,11 @@ import { Button } from '@/components/ui/button';
  * agent 只能发起待改清单;用户在卡片上确认后 main 才继续写库。
  */
 
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { Check, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { shouldCardEscapeYield } from '@/lib/editableKeyboardTarget';
 import { cn } from '@/lib/utils';
 import type { PendingRenameSessionsConfirm } from '@/lib/makerChatStore';
 
@@ -32,12 +33,16 @@ export function RenameSessionsConfirmCard({
     onRespond({ confirmed: false });
   }, [onRespond]);
 
+  const cardRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         handleSubmit();
       } else if (e.key === 'Escape') {
+        // Esc already handled elsewhere, or meant for a menu, dialog or control outside
+        // the card (such as the sidebar Customize panel), is not a cancel.
+        if (shouldCardEscapeYield(e, cardRef.current)) return;
         e.preventDefault();
         handleCancel();
       }
@@ -48,6 +53,7 @@ export function RenameSessionsConfirmCard({
 
   return (
     <div
+      ref={cardRef}
       className={cn(
         'w-full max-w-[914px] rounded-[12px] border p-4',
         'border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]',

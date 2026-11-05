@@ -753,16 +753,28 @@ describe('Plugins joining the sidebar', () => {
     expect(getSidebarNavigationPrefs(OWNER).visible).toEqual(['automations', 'plugins', 'search']);
   });
 
-  it('keeps focus in Customize after the More menu finishes closing', async () => {
+  it('keeps focus in Customize while open and returns it to More when it closes', async () => {
     renderNav();
-    openMore();
-    fireEvent.click(screen.getByRole('menuitem', { name: 'sidebar.navigation.customize.title' }));
-    // The closing menu returns focus on a later tick; it must not pull focus back out.
-    await act(async () => {
+    const settleMenuFocus = () => act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    expect(document.activeElement)
-      .toBe(screen.getByRole('dialog', { name: 'sidebar.navigation.customize.title' }));
+    const openCustomize = async () => {
+      openMore();
+      fireEvent.click(screen.getByRole('menuitem', { name: 'sidebar.navigation.customize.title' }));
+      // The closing menu returns focus on a later tick; it must not pull focus back out.
+      await settleMenuFocus();
+      expect(document.activeElement)
+        .toBe(screen.getByRole('checkbox', { name: 'sidebar.navigation.items.automations' }));
+    };
+    const more = () => screen.getByRole('button', { name: 'sidebar.navigation.more' });
+    // Esc and Done both put keyboard users back on the More button they started from.
+    await openCustomize();
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(more());
+    await openCustomize();
+    fireEvent.click(screen.getByRole('button', { name: 'sidebar.navigation.customize.done' }));
+    expect(document.activeElement).toBe(more());
   });
 });
 

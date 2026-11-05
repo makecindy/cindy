@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button';
  *   Esc            → 取消
  */
 
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import {
@@ -22,6 +22,7 @@ import {
   saveIssueConfirmDraft,
   type IssueConfirmDraft,
 } from '@/lib/issueConfirmDraftStore';
+import { shouldCardEscapeYield } from '@/lib/editableKeyboardTarget';
 import { cn } from '@/lib/utils';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import type { PendingIssueConfirm } from '@/lib/makerChatStore';
@@ -157,12 +158,16 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
   }, [onRespond]);
 
   // ── Keyboard shortcuts(textarea 内 Enter 正常换行,只有带修饰键才提交)──
+  const cardRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         handleSubmit();
       } else if (e.key === 'Escape') {
+        // Esc already handled elsewhere, or meant for a menu, dialog or control outside
+        // the card (such as the sidebar Customize panel), is not a cancel.
+        if (shouldCardEscapeYield(e, cardRef.current)) return;
         e.preventDefault();
         handleCancel();
       }
@@ -193,6 +198,7 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
 
   return (
     <div
+      ref={cardRef}
       className={cn(
         'w-full max-w-[914px] rounded-[12px] border p-4',
         'border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]',
