@@ -28,7 +28,7 @@
 | 能力 | 状态 | 证据 / 缺口 |
 |---|---|---|
 | Claude Code harness | 已验证 | 网关 key lane（`ANTHROPIC_API_KEY` 注入）跑通真实回合；订阅 lane 由 CLI 自身登录 |
-| Codex harness | 部分 | 已注册并返回真实能力描述；未跑通真实回合 |
+| Codex harness | 部分 | 线程可启动并流式（已修掉 `invalid transport in mcp_servers.cindy_memory` 崩溃）；真实回合仍卡在 `responseStreamDisconnected`：网关 lane 需要 Desktop 的 Responses 代理（`codex-proxy-host.ts`，4171 行、依赖多个 desktop 模块），Host 未迁移 → TODO |
 | 模型目录 / 选择器 | 已验证 | 单一 `xd` provider，28 个网关对话模型，双 harness routing；选择器可展开并选中 |
 | 能力描述 | 已验证 | `/api/capabilities` 与 provider 模型列表逐项一致 |
 | 斜杠命令 / 技能 | 部分 | `maker.listAgentCommands` / `listAgentSkills` 转真实 agent 实现；未在界面验证 |
