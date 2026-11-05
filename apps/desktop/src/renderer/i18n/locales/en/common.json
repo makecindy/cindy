@@ -15490,6 +15490,13 @@
         "preRunPluginRequired": "Choose a plugin for the pre-run check",
         "templateParamRequired": "Enter {{label}}",
         "templateApplyFailed": "Could not apply the template. Check the parameters and try again."
+      },
+      "layout": {
+        "content": "What to run",
+        "notifications": "Notifications & quiet runs",
+        "contentTab": "Content & schedule",
+        "optionsTab": "Run options",
+        "sections": "Automation settings"
       }
     },
     "chips": {
@@ -15690,6 +15697,13 @@
           "prompt": "Health-check the documents in the working directory and find content that needs updating.\nConstraints:\n- Look for outdated information (stale dates, dead links, deprecated processes or tools), contradictions, and duplication\n- Cite the file path and location for every issue and explain the reasoning\n- Categorize as \"update / merge / delete\" suggestions and produce a revision checklist\n- Only output the report; do not modify the documents"
         }
       }
+    },
+    "deadline": {
+      "label": "End date and time",
+      "clear": "Clear",
+      "hint": "Leave empty for no limit. Times use {{timezone}}. No new automatic runs start after this time; runs already started can finish.",
+      "invalid": "Enter a valid date and time",
+      "expired": "Expired"
     }
   },
   "issueTracker": {

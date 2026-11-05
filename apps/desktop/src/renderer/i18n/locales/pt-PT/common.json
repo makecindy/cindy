@@ -15633,6 +15633,13 @@
         "preRunPluginRequired": "Escolhe um plugin para a verificação prévia",
         "templateParamRequired": "Introduz {{label}}",
         "templateApplyFailed": "Não foi possível aplicar o modelo. Verifique os parâmetros e tente novamente."
+      },
+      "layout": {
+        "content": "O que executar",
+        "notifications": "Notificações e execução silenciosa",
+        "contentTab": "Conteúdo e agenda",
+        "optionsTab": "Opções de execução",
+        "sections": "Definições de automação"
       }
     },
     "chips": {
@@ -15833,6 +15840,13 @@
           "prompt": "Verificar o estado dos documentos no diretório de trabalho e identificar conteúdo que precisa de atualização.\nRestrições:\n- Procurar informação desatualizada (datas antigas, ligações inativas, processos ou ferramentas obsoletos), contradições e duplicações\n- Citar o caminho do ficheiro e a localização de cada problema e explicar o raciocínio\n- Categorizar como sugestões de \"atualizar / unir / eliminar\" e produzir uma lista de revisão\n- Apresentar apenas o relatório; não modificar os documentos"
         }
       }
+    },
+    "deadline": {
+      "label": "Data e hora de fim",
+      "clear": "Limpar",
+      "hint": "Deixe vazio para não limitar. Fuso horário: {{timezone}}. Depois não se iniciam execuções automáticas; as já iniciadas podem terminar.",
+      "invalid": "Introduza uma data e hora válidas",
+      "expired": "Expirado"
     }
   },
   "issueTracker": {

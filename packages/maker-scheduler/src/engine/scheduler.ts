@@ -416,6 +416,9 @@ export class Scheduler extends EventEmitter {
   private readonly schedulerInstanceId: string;
   private readonly processId?: number;
   private readonly inflightAttempts = new Map<string, InflightAttempt>();
+  // Keep deadline edits visible while an automatic run is preparing/queued,
+  // including edits that remove it from activeSchedules by expiring it.
+  private readonly automaticDispatchSchedules = new Map<string, Schedule>();
   private readonly manualContinuations = new Set<string>();
   private readonly waitingSchedules = new Map<string, SchedulerWaitingSchedule>();
   private lastGateLogAt = 0;
@@ -518,6 +521,7 @@ export class Scheduler extends EventEmitter {
     const now = this.clock.now();
     this.lastTickAt = now;
     for (const sch of actives) {
+      if (await this.expireSchedule(sch, this.clock.now())) continue;
       // 注意：这里**不做** intervalMs 回填。曾有一段"老数据迁移"逻辑会把 interval
       // 形态 cron（`*/10 * * * *` 等）的任务在启动时打上 intervalMs——但它无法区分
       // 老数据和新建任务，MCP 创建的纯 cron 任务会被误转成 interval 语义并永久冻结
@@ -708,6 +712,8 @@ export class Scheduler extends EventEmitter {
     if (this.tickHandle !== tickHandle) return;
     const due: Schedule[] = [];
     for (const sch of this.activeSchedules.values()) {
+      if (await this.expireSchedule(sch, this.clock.now())) continue;
+      if (this.tickHandle !== tickHandle) return;
       if (sch.nextFireAt !== undefined && sch.nextFireAt <= now && !this.inflightByschedule.has(sch.id)) {
         due.push(sch);
       }
@@ -754,6 +760,33 @@ export class Scheduler extends EventEmitter {
     }
     if (firePromises.length === 0) return;
     await Promise.all(firePromises);
+  }
+
+  /** Deadline expiry never aborts an already running turn. Match the persisted
+   * snapshot so another instance extending the deadline wins over this scan. */
+  private async expireSchedule(schedule: Schedule, now: number): Promise<boolean> {
+    if (!hasExpired(schedule, now)) return false;
+    try {
+      const updated = await this.storage.update(schedule.id, {
+        status: 'expired', nextFireAt: undefined,
+      }, schedule);
+      const current = updated ?? await this.storage.get(schedule.id);
+      if (current) this.refreshAutomaticDispatchSchedules(current);
+      if (current?.status === 'active') this.activeSchedules.set(current.id, current);
+      else this.activeSchedules.delete(schedule.id);
+      if (updated) this.emitEvent({ type: 'changed', scheduleId: schedule.id });
+    } catch (err) {
+      // Keep it available for persistence retry, but never dispatch past deadline.
+      this.activeSchedules.set(schedule.id, schedule);
+      this.logger?.warn?.('scheduler: could not persist deadline expiry', { scheduleId: schedule.id, error: String(err) });
+    }
+    return true;
+  }
+
+  private refreshAutomaticDispatchSchedules(schedule: Schedule): void {
+    for (const [runId, previous] of this.automaticDispatchSchedules) {
+      if (previous.id === schedule.id) this.automaticDispatchSchedules.set(runId, schedule);
+    }
   }
 
   /** 并发登记包装:同步注册/释放让 tick 的槽位计算无超发窗口(见字段注释)。 */
@@ -811,6 +844,7 @@ export class Scheduler extends EventEmitter {
         return;
       }
       schedule = claimed;
+      if (await this.expireSchedule(schedule, this.clock.now())) return;
       // The CAS protects the fire time, not the rest of the row. Another
       // instance can therefore change cron metadata while retaining the same
       // nextFireAt and still return its new row here. Validate the claimed
@@ -884,6 +918,7 @@ export class Scheduler extends EventEmitter {
     let skipped = false;
     // unregisterInflight 会清掉 session 映射,终态 emit 必须用 finally 之前捕获的值。
     let knownSessionId: string | undefined;
+    this.automaticDispatchSchedules.set(runId, schedule);
     this.updateInflightAttempt(runId, 'running');
     try {
       if (schedule.targetSessionId) {
@@ -893,6 +928,7 @@ export class Scheduler extends EventEmitter {
         runId,
         firedAt,
         signal: controller.signal,
+        canDispatch: () => !hasExpired(this.automaticDispatchSchedules.get(runId) ?? schedule, this.clock.now()),
         onSessionBound: this.buildOnSessionBound(schedule.id, runId),
         onPreRunHookCompleted: this.buildOnPreRunHookCompleted(runId),
         onTurnActive: this.buildOnTurnActive(runId),
@@ -911,6 +947,7 @@ export class Scheduler extends EventEmitter {
       runError = err instanceof Error ? err.message : String(err);
       this.logger?.warn?.('schedule fire failed', { scheduleId: schedule.id, runId, error: runError });
     } finally {
+      this.automaticDispatchSchedules.delete(runId);
       knownSessionId = this.resolveTerminalSessionId(runId, sessionId, schedule.targetSessionId);
       this.unregisterInflight(schedule.id, runId);
       this.updateInflightAttempt(runId, 'finalizing');
@@ -947,7 +984,11 @@ export class Scheduler extends EventEmitter {
       }
       this.silencedRuns.delete(runId);
       const retryAt = finishedAt + (deferRetryMs ?? 60_000);
-      const updated = await this.storage.update(schedule.id, { nextFireAt: retryAt });
+      const current = (await this.storage.get(schedule.id)) ?? schedule;
+      const updated = await this.storage.update(schedule.id, {
+        nextFireAt: beforeDeadline(current, retryAt),
+        ...(current.status === 'active' && hasExpired(current, finishedAt) ? { status: 'expired' as const } : {}),
+      });
       if (updated && updated.status === 'active') {
         this.activeSchedules.set(updated.id, updated);
       }
@@ -1096,17 +1137,21 @@ export class Scheduler extends EventEmitter {
     if (ownsSchedule) {
       patch.lastFiredAt = firedAt;
       if (current.recurring) {
-        patch.nextFireAt = current.intervalMs !== undefined
+        patch.nextFireAt = beforeDeadline(current, current.intervalMs !== undefined
           ? finishedAt + current.intervalMs
-          : nextCronOrMonthlyFire(current.cronExpr, finishedAt, current.timezone);
+          : nextCronOrMonthlyFire(current.cronExpr, finishedAt, current.timezone));
       } else if (current.status !== 'paused') {
         patch.status = 'expired';
         patch.nextFireAt = undefined;
       }
     }
+    if (current.status === 'expired' || (current.status === 'active' && hasExpired(current, finishedAt))) {
+      patch.status = 'expired';
+      patch.nextFireAt = undefined;
+    }
     // Recovery may race another process after the read. Match the scheduling
     // snapshot inside UPDATE; losing ownership only updates completion time.
-    const expected = source === 'recovery' && ownsSchedule ? current : undefined;
+    const expected = (source === 'recovery' && ownsSchedule) || current.expireAt !== undefined ? current : undefined;
     let updated = await this.storage.update(schedule.id, patch, expected);
     if (!updated && expected) {
       updated = await this.storage.update(schedule.id, { lastFinishedAt: finishedAt });
@@ -1321,8 +1366,10 @@ export class Scheduler extends EventEmitter {
       // schedule.lastFiredAt。否则:① 顺延却显示成"已触发",违背"顺延不留可见记录";
       // ② 对 recurring=false 的 Once 任务,lastFiredAt 一旦落地,重启时
       // computeNextFireAt 会因 lastFiredAt 已设而返回 undefined → 顺延的重试被吞掉。
+      const current = (await this.storage.get(schedule.id)) ?? schedule;
       const updated = await this.storage.update(schedule.id, {
-        nextFireAt: options?.deferToCaller ? schedule.nextFireAt : retryAt,
+        nextFireAt: beforeDeadline(current, options?.deferToCaller ? current.nextFireAt : retryAt),
+        ...(current.status === 'active' && hasExpired(current, finishedAt) ? { status: 'expired' as const } : {}),
         lastFiredAt: schedule.lastFiredAt,
       });
       if (updated && updated.status === 'active') {
@@ -1509,17 +1556,18 @@ export class Scheduler extends EventEmitter {
       // A missing choice may be a reminder, even when a pre-run hook gates delivery.
       // Only a caller that knows this is a check may opt into quiet reporting.
       silentWhenIdle: input.silentWhenIdle ?? false,
-      status: 'active',
+      expireAt: normalizeExpireAt(input.expireAt),
+      status: hasExpired(input, now) ? 'expired' : 'active',
       createdAt: now,
       updatedAt: now,
-      nextFireAt: firstFireAt,
+      nextFireAt: hasExpired(input, now) ? undefined : beforeDeadline(input, firstFireAt),
     };
     validateScheduleExecutionShape(schedule);
     if (schedule.targetSessionId) {
       await this.validateTargetSession?.(schedule.targetSessionId, 'create', schedule);
     }
     const inserted = await this.storage.insert(schedule);
-    this.activeSchedules.set(id, inserted);
+    if (inserted.status === 'active') this.activeSchedules.set(id, inserted);
     this.emitEvent({ type: 'changed', scheduleId: id });
     return inserted;
   }
@@ -1567,6 +1615,8 @@ export class Scheduler extends EventEmitter {
     }
     const now = this.clock.now();
     const updates = { ...patch, updatedAt: now } as Partial<Schedule>;
+    const expiryChanged = Object.prototype.hasOwnProperty.call(patch, 'expireAt');
+    if (expiryChanged) updates.expireAt = normalizeExpireAt(patch.expireAt);
     if (Object.prototype.hasOwnProperty.call(patch, 'scriptConfig')) {
       updates.scriptConfig = normalizeScriptConfig(patch.scriptConfig);
     }
@@ -1643,7 +1693,7 @@ export class Scheduler extends EventEmitter {
     // 不会进入 activeSchedules，重启后 listActive() 同样加载不到。状态恢复集中在引擎
     // 层处理，让 desktop、device-link 与其它调用方共享一致行为。
     const shouldReactivateExpired =
-      existing.status === 'expired' && candidate.recurring && !candidate.manual;
+      existing.status === 'expired' && candidate.recurring && !candidate.manual && !hasExpired(candidate, now);
     if (shouldReactivateExpired) {
       updates.status = 'active';
     }
@@ -1668,6 +1718,7 @@ export class Scheduler extends EventEmitter {
     // intervalMs 按「key 是否在场」判定而不是「值是否 undefined」：显式清空
     // （key 在、值 undefined）同样是触发字段变化，必须重算回 cron 槽位。
     const needsRecompute =
+      (expiryChanged && existing.nextFireAt === undefined && !this.inflightByschedule.has(id)) ||
       patch.cronExpr !== undefined ||
       patch.timezone !== undefined ||
       patch.manual !== undefined ||
@@ -1697,7 +1748,7 @@ export class Scheduler extends EventEmitter {
         patch.timezone !== undefined ||
         patch.manual === false ||
         intervalKeyPresent ||
-        shouldReactivateExpired
+        shouldReactivateExpired || expiryChanged
       ) {
         // intervalMs 模式：把"修改"视作冷启动，从 now 起新一轮 N 倒计时。
         // cron 模式：照旧从 now 找下一个壁钟槽位。
@@ -1708,8 +1759,15 @@ export class Scheduler extends EventEmitter {
       }
       recomputeFromTo = { from: existing.nextFireAt, to: updates.nextFireAt };
     }
+    const nextSchedule = { ...existing, ...updates };
+    updates.nextFireAt = beforeDeadline(nextSchedule, nextSchedule.nextFireAt);
+    if (hasExpired(nextSchedule, now)) {
+      updates.nextFireAt = undefined;
+      if (nextSchedule.status === 'active') updates.status = 'expired';
+    }
     const updated = await this.storage.update(id, updates);
     if (!updated) throw new Error(`Schedule not found: ${id}`);
+    this.refreshAutomaticDispatchSchedules(updated);
     if (updated.status === 'active') {
       this.activeSchedules.set(id, this.keepInvalidScheduleQuarantined(updated, now));
     } else {
@@ -1776,13 +1834,14 @@ export class Scheduler extends EventEmitter {
         ? now + existing.intervalMs
         : nextCronOrMonthlyFire(existing.cronExpr, now, existing.timezone);
     const updated = await this.storage.update(id, {
-      status: 'active',
+      status: hasExpired(existing, now) ? 'expired' : 'active',
       updatedAt: now,
-      nextFireAt: next,
+      nextFireAt: hasExpired(existing, now) ? undefined : beforeDeadline(existing, next),
     });
     if (!updated) throw new Error(`Schedule not found: ${id}`);
     this.invalidScheduleIds.delete(id);
-    this.activeSchedules.set(id, updated);
+    if (updated.status === 'active') this.activeSchedules.set(id, updated);
+    else this.activeSchedules.delete(id);
     this.emitEvent({ type: 'changed', scheduleId: id });
     return updated;
   }
@@ -2014,6 +2073,7 @@ export class Scheduler extends EventEmitter {
     try {
       const schedule = await this.storage.get(scheduleId);
       if (!schedule || schedule.status !== 'active') return;
+      if (await this.expireSchedule(schedule, now)) return;
       // nextFireAt 仍在 = 悬置的不是认领(如 runNow 僵尸),排期没坏,不动。
       if (schedule.nextFireAt !== undefined) return;
       // 该 schedule 仍有 running 行(如清的是 runNow 僵尸、cron 认领正被另一活
@@ -3070,6 +3130,7 @@ export class Scheduler extends EventEmitter {
       const current = await this.storage.get(scheduleId);
       if (!current) return; // 行已删,无需补排
       if (current.status !== 'active') return; // paused / expired:resume 时自己会重算
+      if (await this.expireSchedule(current, now)) return;
       if (current.nextFireAt !== undefined) return; // 已有排期(别的路径已补),不覆盖
       // 一次性任务(Once)必须**过期**而不是重排。强制收口没走 fireOneInner 的正常终态段,
       // lastFiredAt 从未落定,computeNextFireAt 因此把它当成"还没跑过"又排一次 —— 一个
@@ -3166,6 +3227,7 @@ export class Scheduler extends EventEmitter {
 }
 
 function computeNextFireAt(schedule: Schedule, fromMs: number): number | undefined {
+  if (hasExpired(schedule, fromMs)) return undefined;
   // manual schedule 永远不参与自动触发，跳过 cron 计算（runNow 是单独路径）
   if (schedule.manual) return undefined;
   if (!schedule.recurring && schedule.lastFiredAt !== undefined) return undefined;
@@ -3176,13 +3238,29 @@ function computeNextFireAt(schedule: Schedule, fromMs: number): number | undefin
   if (schedule.intervalMs !== undefined) {
     // 冷启动：基线取 lastFinishedAt（跑过）或 createdAt（没跑过），再 max(base+N, now+N)
     // —— 漏掉的不补发，重新起 N 倒计时。
-    return nextIntervalFire(
+    return beforeDeadline(schedule, nextIntervalFire(
       schedule.lastFinishedAt ?? schedule.createdAt,
       schedule.intervalMs,
       fromMs,
-    );
+    ));
   }
-  return nextCronOrMonthlyFire(schedule.cronExpr, fromMs, schedule.timezone);
+  return beforeDeadline(schedule, nextCronOrMonthlyFire(schedule.cronExpr, fromMs, schedule.timezone));
+}
+
+function normalizeExpireAt(value: number | null | undefined): number | undefined {
+  if (value == null) return undefined;
+  if (!Number.isSafeInteger(value) || !Number.isFinite(new Date(value).getTime())) {
+    throw new Error('expireAt must be a valid Unix millisecond timestamp');
+  }
+  return value;
+}
+
+function hasExpired(schedule: { expireAt?: number | null }, now: number): boolean {
+  return schedule.expireAt != null && now >= schedule.expireAt;
+}
+
+function beforeDeadline(schedule: { expireAt?: number | null }, next: number | undefined): number | undefined {
+  return next !== undefined && schedule.expireAt != null && next >= schedule.expireAt ? undefined : next;
 }
 
 function defaultGenerateId(): string {

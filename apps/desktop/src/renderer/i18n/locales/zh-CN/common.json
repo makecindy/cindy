@@ -15424,6 +15424,13 @@
         "preRunPluginRequired": "请为前置检查选择插件",
         "templateParamRequired": "请填写{{label}}",
         "templateApplyFailed": "无法应用模板，请检查参数后重试"
+      },
+      "layout": {
+        "content": "执行内容",
+        "notifications": "通知与静默",
+        "contentTab": "内容与计划",
+        "optionsTab": "运行选项",
+        "sections": "自动化配置"
       }
     },
     "chips": {
@@ -15624,6 +15631,13 @@
           "prompt": "体检工作目录中的文档，找出需要更新的内容。\n约束：\n- 检查过期信息（旧日期、失效链接、已废弃的流程或工具）、前后矛盾和重复内容\n- 每个问题都注明文件路径和具体位置，说明判断依据\n- 按\"建议更新 / 建议合并 / 建议删除\"分类，给出修订建议清单\n- 只输出体检报告，不要直接修改文档"
         }
       }
+    },
+    "deadline": {
+      "label": "截止时间",
+      "clear": "清除",
+      "hint": "留空不限制。时间按 {{timezone}} 显示；到期后不再自动运行，已开始的运行会继续完成。",
+      "invalid": "请输入有效的日期和时间",
+      "expired": "已到期"
     }
   },
   "issueTracker": {

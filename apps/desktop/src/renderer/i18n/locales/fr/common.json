@@ -15633,6 +15633,13 @@
         "preRunPluginRequired": "Choisis un plugin pour la vérification préalable",
         "templateParamRequired": "Saisissez {{label}}",
         "templateApplyFailed": "Impossible d'appliquer le modèle. Vérifiez les paramètres et réessayez."
+      },
+      "layout": {
+        "content": "Contenu à exécuter",
+        "notifications": "Notifications et exécution silencieuse",
+        "contentTab": "Contenu et planification",
+        "optionsTab": "Options d’exécution",
+        "sections": "Paramètres de l’automatisation"
       }
     },
     "chips": {
@@ -15833,6 +15840,13 @@
           "prompt": "Contrôle l'état des documents du répertoire de travail et repère les contenus à mettre à jour.\nContraintes :\n- Recherche les informations obsolètes (dates périmées, liens morts, processus ou outils abandonnés), les contradictions et les doublons\n- Cite le chemin du fichier et l'emplacement de chaque problème, et explique ton raisonnement\n- Classe les suggestions en « mettre à jour / fusionner / supprimer » et produis une liste de révisions\n- Produis uniquement le rapport ; ne modifie pas les documents"
         }
       }
+    },
+    "deadline": {
+      "label": "Date et heure de fin",
+      "clear": "Effacer",
+      "hint": "Laissez vide pour ne pas limiter la durée. Fuseau : {{timezone}}. Aucune exécution automatique ne démarrera après cette date ; celles en cours pourront se terminer.",
+      "invalid": "Saisissez une date et une heure valides",
+      "expired": "Expirée"
     }
   },
   "issueTracker": {

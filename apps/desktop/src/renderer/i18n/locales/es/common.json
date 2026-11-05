@@ -15633,6 +15633,13 @@
         "preRunPluginRequired": "Elige un complemento para la comprobación previa",
         "templateParamRequired": "Ingresa {{label}}",
         "templateApplyFailed": "No se pudo aplicar la plantilla. Revisa los parámetros y vuelve a intentarlo."
+      },
+      "layout": {
+        "content": "Qué ejecutar",
+        "notifications": "Notificaciones y ejecución silenciosa",
+        "contentTab": "Contenido y horario",
+        "optionsTab": "Opciones de ejecución",
+        "sections": "Configuración de automatización"
       }
     },
     "chips": {
@@ -15833,6 +15840,13 @@
           "prompt": "Revisa el estado de los documentos del directorio de trabajo y busca contenido que necesite actualizarse.\nRestricciones:\n- Busca información desactualizada (fechas antiguas, enlaces rotos, procesos o herramientas obsoletos), contradicciones y duplicaciones\n- Cita la ruta del archivo y la ubicación de cada problema y explica el razonamiento\n- Clasifica las sugerencias como \"actualizar / combinar / eliminar\" y elabora una lista de verificación de revisiones\n- Presenta solo el informe; no modifiques los documentos"
         }
       }
+    },
+    "deadline": {
+      "label": "Fecha y hora de finalización",
+      "clear": "Borrar",
+      "hint": "Déjalo vacío para no limitarlo. Horario de {{timezone}}. Después no se iniciarán ejecuciones automáticas; las ya iniciadas podrán finalizar.",
+      "invalid": "Introduce una fecha y hora válidas",
+      "expired": "Vencida"
     }
   },
   "issueTracker": {

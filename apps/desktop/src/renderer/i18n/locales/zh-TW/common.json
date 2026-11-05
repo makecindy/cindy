@@ -15424,6 +15424,13 @@
         "preRunPluginRequired": "請為前置檢查選擇插件",
         "templateParamRequired": "請填寫{{label}}",
         "templateApplyFailed": "無法套用模板，請檢查參數後重試"
+      },
+      "layout": {
+        "content": "執行內容",
+        "notifications": "通知與靜默",
+        "contentTab": "內容與排程",
+        "optionsTab": "執行選項",
+        "sections": "自動化設定"
       }
     },
     "chips": {
@@ -15624,6 +15631,13 @@
           "prompt": "體檢工作目錄中的文件，找出需要更新的內容。\n約束：\n- 檢查過期資訊（舊日期、失效連結、已廢棄的流程或工具）、前後矛盾和重複內容\n- 每個問題都註明檔案路徑和具體位置，說明判斷依據\n- 按\"建議更新 / 建議合併 / 建議刪除\"分類，給出修訂建議清單\n- 只輸出體檢報告，不要直接修改文件"
         }
       }
+    },
+    "deadline": {
+      "label": "截止時間",
+      "clear": "清除",
+      "hint": "留空不限制。時間按 {{timezone}} 顯示；到期後不再自動執行，已開始的執行會繼續完成。",
+      "invalid": "請輸入有效的日期和時間",
+      "expired": "已到期"
     }
   },
   "issueTracker": {

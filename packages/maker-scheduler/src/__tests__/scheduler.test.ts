@@ -40,7 +40,7 @@ class InMemoryStorage implements ScheduleStorage {
     const ex = this.schedules.get(id);
     if (!ex) return null;
     if (expected && (['lastFiredAt', 'nextFireAt', 'status', 'recurring', 'manual',
-      'cronExpr', 'timezone', 'intervalMs'] as const).some((key) => ex[key] !== expected[key])) return null;
+      'cronExpr', 'timezone', 'intervalMs', 'expireAt'] as const).some((key) => ex[key] !== expected[key])) return null;
     const merged: Schedule = { ...ex, ...patch };
     if (patch.lastFinishedAt !== undefined) {
       merged.lastFinishedAt = Math.max(ex.lastFinishedAt ?? patch.lastFinishedAt, patch.lastFinishedAt);
@@ -544,7 +544,7 @@ class FakeClock {
   }
 }
 
-const baseInput: CreateScheduleInput = {
+const baseInput = {
   name: 'test',
   prompt: 'do thing',
   kind: 'cron',
@@ -554,7 +554,7 @@ const baseInput: CreateScheduleInput = {
   agentKind: 'claude-code',
   useWorktree: false,
   notify: { desktop: false, feishu: false },
-};
+} satisfies CreateScheduleInput;
 
 function makeIdGen(): () => string {
   let n = 0;
@@ -1122,6 +1122,156 @@ describe('Scheduler', () => {
     expect(await h.scheduler.update(saved.id, { ...script, modelAgentDeviceId: '' })).toMatchObject({
       ...script, ...remote, modelAgentDeviceId: '',
     });
+  });
+
+  // #8886 / unit: existing cadence tests never set expireAt. Exercise the real
+  // create/update/tick/start entries with a deadline between two minute slots.
+  it.each([undefined, 30_000])('stops automatic fires at expireAt (interval=%s)', async (intervalMs) => {
+    const expireAt = h.clock.now() + 60_000;
+    const sch = await h.scheduler.create({ ...baseInput, intervalMs, expireAt });
+    h.clock.setTo(sch.nextFireAt!);
+    await h.scheduler.tick();
+    expect(h.fireCalls).toHaveLength(1);
+    expect((await h.scheduler.get(sch.id))?.nextFireAt).toBeUndefined();
+    h.clock.setTo(expireAt);
+    await h.scheduler.tick();
+    expect(await h.scheduler.get(sch.id)).toMatchObject({ status: 'expired', nextFireAt: undefined });
+    h.clock.advance(120_000);
+    await h.scheduler.tick();
+    expect(h.fireCalls).toHaveLength(1);
+  });
+
+  it('expires overdue rows on startup without dispatching them', async () => {
+    const sch = await h.scheduler.create(baseInput);
+    await h.storage.update(sch.id, { expireAt: h.clock.now() - 1 });
+    await h.scheduler.start();
+    try {
+      expect(await h.scheduler.get(sch.id)).toMatchObject({ status: 'expired', nextFireAt: undefined });
+      h.clock.advance(120_000);
+      await h.scheduler.tick();
+      expect(h.fireCalls).toHaveLength(0);
+    } finally { await h.scheduler.stop(); }
+  });
+
+  it('does not revive a deadline-expired row on rename or resume, but permits extending it', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, expireAt: h.clock.now() - 1 });
+    expect(sch.status).toBe('expired');
+    expect((await h.scheduler.update(sch.id, { name: 'renamed' })).status).toBe('expired');
+    expect((await h.scheduler.resume(sch.id)).status).toBe('expired');
+    const renewed = await h.scheduler.update(sch.id, { expireAt: h.clock.now() + 120_000 });
+    expect(renewed.status).toBe('active');
+    expect(renewed.nextFireAt).toBeGreaterThan(h.clock.now());
+  });
+
+  it('checks wall time after a due fire waited past its deadline', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, expireAt: h.clock.now() + 60_000 });
+    h.clock.advance(120_000);
+    await h.scheduler.tick();
+    expect(h.fireCalls).toHaveLength(0);
+    expect((await h.scheduler.get(sch.id))?.status).toBe('expired');
+  });
+
+  it('allows an already-started run to finish across the deadline without rescheduling', async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => { entered = resolve; });
+    const local = makeHarness({ runnerImpl: async (_schedule, ctx) => {
+      entered();
+      await new Promise<void>((resolve) => { release = resolve; });
+      expect(ctx.signal.aborted).toBe(false);
+      return { sessionId: 'finished' };
+    } });
+    const expireAt = local.clock.now() + 60_000;
+    const sch = await local.scheduler.create({ ...baseInput, expireAt });
+    local.clock.setTo(sch.nextFireAt!);
+    const fire = local.scheduler.tick();
+    await ready;
+    local.clock.setTo(expireAt);
+    await local.scheduler.tick();
+    release();
+    await fire;
+    expect(await local.scheduler.get(sch.id)).toMatchObject({ status: 'expired', nextFireAt: undefined });
+    expect((await local.scheduler.listRuns(sch.id))[0]?.status).toBe('success');
+  });
+
+  // #8886 / unit: a runner can wait for a busy task before dispatching. The
+  // cadence cases above do not exercise edits during that preparation window.
+  it.each(['elapsed', 'shortened', 'cleared'] as const)('checks the latest deadline before queued dispatch (%s)', async (change) => {
+    let release!: () => void;
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => { entered = resolve; });
+    let dispatched = false;
+    const local = makeHarness({ runnerImpl: async (_schedule, ctx) => {
+      entered();
+      await new Promise<void>((resolve) => { release = resolve; });
+      dispatched = ctx.canDispatch?.() !== false;
+      return { sessionId: 'busy-task', deferred: !dispatched };
+    } });
+    const expireAt = local.clock.now() + 120_000;
+    const sch = await local.scheduler.create({ ...baseInput, expireAt });
+    local.clock.setTo(sch.nextFireAt!);
+    const fire = local.scheduler.tick();
+    await ready;
+    if (change === 'shortened') await local.scheduler.update(sch.id, { expireAt: local.clock.now() });
+    else {
+      if (change === 'cleared') await local.scheduler.update(sch.id, { expireAt: null });
+      local.clock.setTo(expireAt);
+    }
+    release();
+    await fire;
+    expect(dispatched).toBe(change === 'cleared');
+  });
+
+  it.each([false, true])('bounds a deferred retry by the deadline (manual=%s)', async (manual) => {
+    const local = makeHarness({ runnerImpl: async () => ({ sessionId: 'busy', deferred: true, deferRetryMs: 120_000 }) });
+    const expireAt = local.clock.now() + 60_000;
+    const sch = await local.scheduler.create({ ...baseInput, expireAt });
+    local.clock.setTo(sch.nextFireAt!);
+    if (manual) await local.scheduler.runNow(sch.id);
+    else await local.scheduler.tick();
+    expect((await local.scheduler.get(sch.id))?.nextFireAt).toBeUndefined();
+    local.clock.setTo(expireAt);
+    await local.scheduler.tick();
+    expect((await local.scheduler.get(sch.id))?.status).toBe('expired');
+    expect(local.fireCalls).toHaveLength(1);
+  });
+
+  it('uses the claimed deadline when another instance shortens it after the scan', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, expireAt: h.clock.now() + 120_000 });
+    const claim = h.storage.claimDueFire.bind(h.storage);
+    vi.spyOn(h.storage, 'claimDueFire').mockImplementationOnce(async (id, next) => {
+      await h.storage.update(id, { expireAt: h.clock.now() });
+      return claim(id, next);
+    });
+    h.clock.setTo(sch.nextFireAt!);
+    await h.scheduler.tick();
+    expect(h.fireCalls).toHaveLength(0);
+    expect((await h.scheduler.get(sch.id))?.status).toBe('expired');
+  });
+
+  it('does not overwrite a deadline extension made during expiration', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, expireAt: h.clock.now() + 60_000 });
+    const update = h.storage.update.bind(h.storage);
+    const extended = h.clock.now() + 180_000;
+    vi.spyOn(h.storage, 'update').mockImplementationOnce(async (id, patch, expected) => {
+      await update(id, { expireAt: extended });
+      return update(id, patch, expected);
+    });
+    h.clock.advance(60_000);
+    await h.scheduler.tick();
+    expect(await h.scheduler.get(sch.id)).toMatchObject({ status: 'active', expireAt: extended });
+    await h.scheduler.tick();
+    expect(h.fireCalls).toHaveLength(1);
+  });
+
+  it('clears a deadline over JSON while omission preserves it and manual force-fire stays available', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, expireAt: h.clock.now() - 1 });
+    await h.scheduler.runNow(sch.id);
+    expect(h.fireCalls).toHaveLength(1);
+    expect((await h.scheduler.update(sch.id, { name: 'kept' })).expireAt).toBe(sch.expireAt);
+    const cleared = await h.scheduler.update(sch.id, JSON.parse('{"expireAt":null}'));
+    expect(cleared).toMatchObject({ status: 'active', expireAt: undefined });
+    expect(cleared.nextFireAt).toBeGreaterThan(h.clock.now());
   });
 
   it('recurring fire updates lastFiredAt and recomputes nextFireAt', async () => {
