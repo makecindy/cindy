@@ -822,6 +822,28 @@ describe('interactive page consent transactions', () => {
     const start = () => f.invoke('begin', input, 'desktop-a', installedGhostStoragePart(f.ghosts[0]));
     return { ...f, input, start };
   }
+  // Unit: composer discovery must not fetch icons/market data or grant consent.
+  // A pending plugin with a 1.4 MB icon reproduces the previous oversized response.
+  it('projects only pending consent facts and keeps revocation and defer boundaries', async () => {
+    const f = pages();
+    f.ghosts[0].manifest.tools = [{ name: 'open', description: 'Open page' }];
+    f.ghosts[0].manifest.mcpApps = { ui: { resources: [{ uri: 'ui://weather', file: 'ui.html' }],
+      tools: { open: { resourceUri: 'ui://weather' } } } };
+    f.ghosts[0].iconDataUrl = 'data:image/png;base64,' + 'a'.repeat(1_400_000);
+    const read = await f.invoke('ui-consent', {});
+    expect(read).toEqual({ version: 1, uiCapabilityApproval: true, item: {
+      instanceKey: installedGhostStoragePart(f.ghosts[0]), name: 'Weather',
+      approvalToken: ghostInstallApprovalToken(f.ghosts[0].approval),
+    } });
+    expect(JSON.stringify(read).length).toBeLessThan(512);
+    expect(f.deps.market.snapshot).not.toHaveBeenCalled();
+    expect(f.ghosts[0].uiCapabilityApproved).toBeUndefined();
+    await f.invoke('begin', { ...f.input, kind: 'defer-ui' }, 'desktop-a', installedGhostStoragePart(f.ghosts[0]));
+    await flush();
+    expect(await f.invoke('ui-consent', {})).not.toHaveProperty('item');
+    f.revoke('desktop-a');
+    await expect(f.invoke('ui-consent', {})).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
   it.each([sharedTaskGuestPeer('task', 'member', 'device'), providerShareGuestPeer('share', 'member', 'device')])('rejects forged page approval from %s', async peer => {
     const f = pages();
     await expect(f.invoke('begin', f.input, peer, installedGhostStoragePart(f.ghosts[0]))).rejects.toBeDefined();
