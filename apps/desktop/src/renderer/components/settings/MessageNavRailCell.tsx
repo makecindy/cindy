@@ -5,6 +5,8 @@
  * (语义 = 清 override 跟随版本默认,见 useMessageNavRailPreference)。
  */
 
+import { additionalSettings } from './AdditionalSettings.settings-search';
+import { useSettingDefinition } from './useSettingDefinition';
 import { useTranslation } from 'react-i18next';
 import { ListOrdered } from 'lucide-react';
 
@@ -14,11 +16,12 @@ import { cn } from '@/lib/utils';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 
 export function MessageNavRailCell() {
+  const setting = useSettingDefinition(additionalSettings.messageNavRail);
   const { t } = useTranslation();
   const { enabled, isCustomized, setEnabled } = useMessageNavRailPreference();
 
   return (
-    <div className="flex items-center justify-between gap-3 px-4 py-[14px]">
+    <div {...setting.anchorProps} className="flex items-center justify-between gap-3 px-4 py-[14px]">
       <div className="flex items-center gap-3">
         <div
           className={cn(
@@ -30,16 +33,17 @@ export function MessageNavRailCell() {
         </div>
         <div className="flex flex-col gap-[8px]">
           <p className="text-14 font-medium leading-none text-[var(--settings-section-title)]">
-            {t('settings.messageNavRail.cell.label')}
+            {setting.title}
           </p>
           <p className="text-12 leading-[1.4] text-[var(--settings-section-desc)]">
-            {t('settings.messageNavRail.cell.description')}
+            {setting.description}
           </p>
         </div>
       </div>
       <div className="flex items-center gap-2">
         <DefaultOverrideControls isCustomized={isCustomized} onReset={() => setEnabled(true)} />
         <Switch
+          {...setting.controlProps}
           checked={enabled}
           onCheckedChange={setEnabled}
           aria-label={t('settings.messageNavRail.toggleAria')}

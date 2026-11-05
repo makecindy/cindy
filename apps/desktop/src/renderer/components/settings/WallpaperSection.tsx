@@ -1,3 +1,4 @@
+import { appearanceSettings } from './AppearanceSection.settings-search';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { useTranslation } from 'react-i18next';
 import { RotateCcw, ImagePlus, Film } from 'lucide-react';
@@ -113,11 +114,11 @@ export function WallpaperSection() {
     <section
       id="settings-search-target-appearance-wallpaper"
       className="flex flex-col gap-[14px]"
-      aria-label={t('settings.appearance.wallpaper.title')}
+      aria-label={t(appearanceSettings.wallpaperTitle.titleKey)}
     >
       <div className="flex min-h-[30px] items-center justify-between gap-3">
-        <h3 className={SETTINGS_SECTION_TITLE_CLASS}>{t('settings.appearance.wallpaper.title')}</h3>
-        <Button
+        <h3 className={SETTINGS_SECTION_TITLE_CLASS}>{t(appearanceSettings.wallpaperTitle.titleKey)}</h3>
+        <Button data-setting-id={appearanceSettings.wallpaperTitle.id}
           variant="secondary"
           size="md"
           compact
@@ -138,7 +139,7 @@ export function WallpaperSection() {
         </Button>
       </div>
 
-      <div id="settings-search-settings-appearance-wallpaper" className={SETTINGS_CARD_CLASS}>
+      <div id={appearanceSettings.wallpaperCustomChoose.targetId} className={SETTINGS_CARD_CLASS}>
         <div className="flex flex-col gap-4 px-4 py-4">
           <div
             className="grid grid-cols-[repeat(auto-fill,minmax(6rem,1fr))] gap-2"
@@ -164,7 +165,7 @@ export function WallpaperSection() {
                       : label
                   }
                 >
-                  <button
+                  <button data-setting-id={appearanceSettings.wallpaperTitle.id}
                     ref={(button) => {
                       if (button) buttons.current.set(id, button);
                       else buttons.current.delete(id);
@@ -318,7 +319,7 @@ export function WallpaperSection() {
           )}
 
           <div className="flex flex-wrap items-center gap-3">
-            <Button
+            <Button data-setting-id={appearanceSettings.wallpaperCustomChoose.id}
               variant="secondary"
               type="button"
               disabled={busy}
@@ -330,7 +331,7 @@ export function WallpaperSection() {
               )}
             </Button>
             {customWallpaperUrl && (
-              <Button
+              <Button data-setting-id={appearanceSettings.wallpaperCustomChoose.id}
                 variant="secondary"
                 type="button"
                 disabled={busy}
@@ -340,7 +341,7 @@ export function WallpaperSection() {
               </Button>
             )}
             <p className="text-12 text-[var(--text-secondary)]">
-              {t('settings.appearance.wallpaper.customHint')}
+              {t(appearanceSettings.wallpaperCustomChoose.descriptionKey)}
             </p>
           </div>
           {(error || (wallpaperId === 'custom' && playbackFailed)) && (
@@ -364,14 +365,11 @@ export function WallpaperSection() {
                   {t('settings.appearance.wallpaper.motionHint')}
                 </p>
               </div>
-              <SegmentedControl
+              <SegmentedControl data-setting-id={appearanceSettings.wallpaperCustomChoose.id}
                 aria-label={t('settings.appearance.wallpaper.motionLabel')}
                 value={wallpaperMotion}
                 onValueChange={setMotion}
-                options={[
-                  { value: 'static', label: t('settings.appearance.wallpaper.motionStatic') },
-                  { value: 'dynamic', label: t('settings.appearance.wallpaper.motionDynamic') },
-                ]}
+                options={appearanceSettings.wallpaperCustomChoose.options.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
               />
             </div>
           )}
@@ -379,7 +377,7 @@ export function WallpaperSection() {
             <span className="shrink-0 text-12 text-[var(--settings-section-sublabel)]">
               {t('settings.appearance.wallpaper.visibilityLabel')}
             </span>
-            <Slider
+            <Slider data-setting-id={appearanceSettings.wallpaperCustomChoose.id}
               min={APPEARANCE_LIMITS.wallpaperVisibility.min}
               max={APPEARANCE_LIMITS.wallpaperVisibility.max}
               step={APPEARANCE_LIMITS.wallpaperVisibility.step}
@@ -404,7 +402,7 @@ export function WallpaperSection() {
             <span className="shrink-0 text-12 text-[var(--settings-section-sublabel)]">
               {t('settings.appearance.wallpaper.blurLabel')}
             </span>
-            <Slider
+            <Slider data-setting-id={appearanceSettings.wallpaperCustomChoose.id}
               min={APPEARANCE_LIMITS.wallpaperBlur.min}
               max={APPEARANCE_LIMITS.wallpaperBlur.max}
               step={APPEARANCE_LIMITS.wallpaperBlur.step}
