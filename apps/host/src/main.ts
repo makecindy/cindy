@@ -35,6 +35,7 @@ import { createInputQueue } from './agent/input-queue.mjs';
 import { messageToCamel, sessionToCamel } from '../../desktop/src/main/localDb/mapper.ts';
 import { messages as messageTable, sessions as sessionTable } from '../../desktop/src/main/localDb/schema.js';
 import { eq } from 'drizzle-orm';
+import { projectHistoryView } from '@cindy/maker-shared/message-window';
 
 const DEFAULT_VOICE_INPUT_SETTINGS = getDefaultVoiceInputSettings();
 const DEFAULT_LAYOUT = createDefaultLayout();
@@ -241,8 +242,43 @@ const inputQueue = createInputQueue({
   },
   hub: eventHub,
   readSession: readSessionForRun,
+  persistMessage: insertSessionMessage,
   sent: (sessionId: string) => provisionalSessionIds.delete(sessionId),
 });
+
+/** Insert one chat message row and read it back through the shared mapper. */
+async function insertSessionMessage(sessionId: string, input: Record<string, unknown>) {
+  const clientId = typeof input.clientId === 'string' ? input.clientId : '';
+  const role = input.role;
+  if (!clientId) throw new Error('clientId is required');
+  if (role !== 'user' && role !== 'assistant' && role !== 'system' && role !== 'tool') {
+    throw new Error('unsupported message role');
+  }
+  const content = input.content;
+  if (content === undefined) throw new Error('content is required');
+  const id = typeof input.id === 'string' && input.id ? input.id : randomBytes(16).toString('hex');
+  const createdAt = typeof input.createdAt === 'string'
+    ? Date.parse(input.createdAt) || Date.now()
+    : typeof input.createdAt === 'number' ? input.createdAt : Date.now();
+  await getDbClient().drizzle.insert(messageTable).values({
+    id,
+    clientId,
+    sessionId,
+    role,
+    // The renderer sends user content pre-encoded as a JSON string; assistant
+    // text arrives as plain text. Only structure needs encoding.
+    content: typeof content === 'string' ? content : JSON.stringify(content),
+    toolUseId: typeof input.toolUseId === 'string' ? input.toolUseId : null,
+    createdAt,
+    agentMeta: input.agentMeta ? JSON.stringify(input.agentMeta) : null,
+    agentKind: typeof input.agentKind === 'string' ? input.agentKind : null,
+  });
+  const rows = await getDbClient().drizzle.select().from(messageTable)
+    .where(eq(messageTable.id, id)).limit(1);
+  const row = rows[0];
+  if (!row) throw new Error('created message is unavailable');
+  return messageToCamel(row as never);
+}
 
 const apiToken = readOrCreateApiToken(resolveHostDataDir());
 // Per-boot cookie for the bundled web client; the bearer remains the CLI path.
@@ -431,36 +467,7 @@ const server = createHostServer({
       availableModels,
     };
   },
-  createMessage: async (sessionId: string, input: Record<string, unknown>) => {
-    const clientId = typeof input.clientId === 'string' ? input.clientId : '';
-    const role = input.role;
-    if (!clientId) throw new Error('clientId is required');
-    if (role !== 'user' && role !== 'assistant' && role !== 'system' && role !== 'tool') {
-      throw new Error('unsupported message role');
-    }
-    const content = input.content;
-    if (content === undefined) throw new Error('content is required');
-    const id = typeof input.id === 'string' && input.id ? input.id : randomBytes(16).toString('hex');
-    const createdAt = typeof input.createdAt === 'string'
-      ? Date.parse(input.createdAt) || Date.now()
-      : typeof input.createdAt === 'number' ? input.createdAt : Date.now();
-    await getDbClient().drizzle.insert(messageTable).values({
-      id,
-      clientId,
-      sessionId,
-      role,
-      content: JSON.stringify(content),
-      toolUseId: typeof input.toolUseId === 'string' ? input.toolUseId : null,
-      createdAt,
-      agentMeta: input.agentMeta ? JSON.stringify(input.agentMeta) : null,
-      agentKind: typeof input.agentKind === 'string' ? input.agentKind : null,
-    });
-    const rows = await getDbClient().drizzle.select().from(messageTable)
-      .where(eq(messageTable.id, id)).limit(1);
-    const row = rows[0];
-    if (!row) throw new Error('created message is unavailable');
-    return messageToCamel(row as never);
-  },
+  createMessage: insertSessionMessage,
   // Usage totals come from the same session row the task list reads; the
   // per-message breakdown stays with the windowed reader (host TODO).
   estimatedSessionValue: async (sessionId: string) => {
@@ -477,10 +484,12 @@ const server = createHostServer({
     const { getMessagesForHistory } = await import('../../desktop/src/main/localDb/chatHistoryReader.ts');
     const page = await getMessagesForHistory({
       sessionIds: [sessionId], workdir: null, fromMs: null, toMs: null,
-      agentKind: null, roles: null, includeRewound: false, limit: 1, cursor: null, order: 'asc',
+      agentKind: null, roles: null, includeRewound: false, limit: 500, cursor: null, order: 'asc',
     });
-    if (page.items.length > 0) throw new Error('history_view_not_implemented_on_host');
-    return { version: 1, items: [], nextCursor: null, hasMore: false };
+    // Same projection the desktop's windowed reader uses; the host serves one
+    // complete page because a task's stored history fits in a single read.
+    const items = projectHistoryView(page.items as never, false, false);
+    return { version: 1, items, nextCursor: null, hasMore: false };
   },
   history: async (sessionId: string, limit: number) => {
     const { getMessagesForHistory } = await import('../../desktop/src/main/localDb/chatHistoryReader.ts');

@@ -92,13 +92,42 @@ export function createInputQueue(deps) {
       state.unsubscribe?.();
       state.unsubscribe = null;
       state.items.shift();
+      // A turn stopped before its final event still leaves what the user saw.
+      if (!finalTextPersisted && assistantText.trim() && deps.persistMessage) {
+        void deps.persistMessage(sessionId, {
+          clientId: `partial-${Date.now()}`,
+          role: 'assistant',
+          content: assistantText,
+          agentKind: stored.agentKind,
+        }).catch(() => {});
+      }
       // Start the next queued item from a microtask so the terminal event of
       // this turn is delivered first.
       void Promise.resolve().then(() => dispatch(sessionId)).catch(() => {});
     };
 
+    let assistantText = '';
+    let finalTextPersisted = false;
     state.unsubscribe = session.onEvent((event) => {
       deps.hub.publish({ sessionId, ...event });
+      if (event.type === 'text' && typeof event.data?.text === 'string') {
+        if (event.data.isFinal) {
+          // Final text carries the complete assistant answer for this turn.
+          if (deps.persistMessage) {
+            void deps.persistMessage(sessionId, {
+              clientId: event.agentMeta?.uuid ?? `${Date.now()}-assistant`,
+              role: 'assistant',
+              content: event.data.text,
+              agentMeta: event.agentMeta ?? null,
+              agentKind: stored.agentKind,
+            }).catch(() => {});
+          }
+          assistantText = '';
+          finalTextPersisted = true;
+        } else {
+          assistantText += event.data.text;
+        }
+      }
       if (event.type === 'done' || (event.type === 'error' && event.turnScope !== 'background')) {
         finish();
       }
@@ -117,6 +146,15 @@ export function createInputQueue(deps) {
         return;
       }
       deps.sent(sessionId);
+      if (deps.persistMessage) {
+        await deps.persistMessage(sessionId, {
+          clientId: next.clientId,
+          role: 'user',
+          content: next.persistedContent || next.text,
+          createdAt: next.createdAt,
+          agentKind: stored.agentKind,
+        }).catch(() => {});
+      }
     } catch (error) {
       deps.hub.publish({
         type: 'error',

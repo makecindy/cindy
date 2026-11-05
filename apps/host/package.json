@@ -18,6 +18,7 @@
     "@cindy/maker-core": "workspace:*",
     "better-sqlite3": "^12.9.0",
     "@cindy/auth-client": "workspace:*",
-    "node-machine-id": "^1.1.12"
+    "node-machine-id": "^1.1.12",
+    "@cindy/maker-shared": "workspace:*"
   }
 }
