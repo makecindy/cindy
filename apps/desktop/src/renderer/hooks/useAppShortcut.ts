@@ -39,7 +39,22 @@ export function useAppShortcut(
   handler: (event: KeyboardEvent) => boolean,
   options: UseAppShortcutOptions = {},
 ): void {
+  useAppShortcutEvents(
+    event => getAppShortcutCombos(id).some(combo => matchesKeyboardEvent(event, combo)),
+    handler,
+    options,
+  );
+}
+
+/** Reuse the same input, recording and interaction-lock rules for dynamic shortcuts. */
+export function useAppShortcutEvents(
+  matches: (event: KeyboardEvent) => boolean,
+  handler: (event: KeyboardEvent) => boolean,
+  options: UseAppShortcutOptions = {},
+): void {
   const { enabled = true, stopImmediate = false } = options;
+  const matchesRef = useRef(matches);
+  matchesRef.current = matches;
   const handlerRef = useRef(handler);
   handlerRef.current = handler;
 
@@ -51,9 +66,7 @@ export function useAppShortcut(
       // stopImmediatePropagation 压制, 用 body dataset 旗标做确定性互斥
       // (KeyboardShortcutsSection 录制态设置)。
       if (document.body.dataset.appShortcutRecording === '1') return;
-      const combos = getAppShortcutCombos(id);
-      if (combos.length === 0) return;
-      if (!combos.some((combo) => matchesKeyboardEvent(event, combo))) return;
+      if (!matchesRef.current(event)) return;
       if (isAppInteractionLocked()) {
         event.preventDefault();
         event.stopPropagation();
@@ -67,7 +80,7 @@ export function useAppShortcut(
     };
     window.addEventListener('keydown', listener, true);
     return () => window.removeEventListener('keydown', listener, true);
-  }, [id, enabled, stopImmediate]);
+  }, [enabled, stopImmediate]);
 }
 
 /**

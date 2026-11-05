@@ -17,6 +17,8 @@ const disabledDraft: DetectedProviderDraft = {
 function Page({ scenario }: { scenario: string }) {
   const [identified, setIdentified] = useState<DetectedProviderDraft | undefined>(['reenable', 'return-reenable'].includes(scenario) ? disabledDraft : undefined);
   const [draft, setDraft] = useState<DetectedProviderDraft>();
+  if (scenario === 'openhubs') return <AddProviderWizard providers={[]} entry={{ kind: 'preset', presetId: 'openhubs' }}
+    onClose={() => undefined} onDone={() => undefined} onOpenCustomForm={() => undefined} />;
   return identified ? <AddProviderWizard providers={[]} detected={identified}
     onReturnCustom={value => { setDraft(value); setIdentified(undefined); }}
     onClose={() => undefined} onDone={() => undefined} onOpenCustomForm={() => undefined} />
@@ -29,15 +31,16 @@ mountPage({
       ...(BUNDLED_CATALOG.presets ?? []),
       ...(ctx.case === 'loopback-identity' ? [{ id: 'local-custom-brand', name: 'Local custom', runtimes: { pi: { baseUrl: 'https://localhost:1234/v1', models: [] } } }] : []),
       ...(ctx.case === 'ambiguous-official' ? [{ ...BUNDLED_CATALOG.presets!.find(p => p.id === 'deepseek')!, id: 'same-address-plan' }] : []),
-    ] }),
-    fetchProviderModels: async () => ctx.case === 'failed' ? { ok: false, code: 'AUTH_INVALID' } : { ok: true, models },
+    ], modelRegistry: BUNDLED_CATALOG.modelRegistry }),
+    fetchProviderModels: async () => ctx.case === 'failed' ? { ok: false, code: 'AUTH_INVALID' } : { ok: true, models: ctx.case === 'openhubs'
+      ? [{ id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' }, { id: 'new-account-model', name: 'New Account Model' }] : models },
     detectProvider: async (input: { cancel?: boolean }) => input.cancel ? { candidates: [] }
       : { candidates: ctx.case === 'relay' ? ['sub2api'] : ctx.case === 'litellm' ? ['litellm'] : [], reason: ['relay', 'litellm'].includes(ctx.case) ? 'matched' : 'insufficient_evidence',
         catalog: ctx.case === 'manual-fetch' ? undefined : ctx.case === 'failed' ? { ok: false, code: 'AUTH_INVALID' } : { ok: true, models } },
     localModelList: async () => ({ status: { kind: 'absent', appInstalled: false }, models: [], memoryGb: 0 }),
     scanLocalCli: async () => ({ detections: [] }),
     onProviderOAuthProgress: subscription('providerOAuthProgress'),
-    createCustomProvider: ctx.case.startsWith('cloudflare-') || ['local-noauth', 'reenable', 'return-reenable', 'custom-port'].includes(ctx.case)
+    createCustomProvider: ctx.case.startsWith('cloudflare-') || ['openhubs', 'local-noauth', 'reenable', 'return-reenable', 'custom-port'].includes(ctx.case)
       ? async (config: unknown) => { evidence.saved = config; return { ok: true }; }
       : forbid('createCustomProvider'),
     testProviderConnection: ctx.case === 'local-noauth'

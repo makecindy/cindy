@@ -320,6 +320,12 @@ function chatMemberIdentity(member: ChatMember, members: readonly ChatMember[]) 
   return { botId: member.id, name: memberName(member, members), ...chatMemberAvatar(member.groupAvatar ?? member.avatar ?? member.defaultAvatarUrl ?? null), avatarColor: '' };
 }
 
+function chatMessageMentions(message: ChatMessage): BotGroupMention {
+  return { all: message.mentionAudience === 'humans' || message.mentionAudience === 'everyone',
+    ...(message.mentionAudience === 'bots' || message.mentionAudience === 'everyone' ? { allBots: true } : {}),
+    botIds: message.mentions ?? [] };
+}
+
 /**
  * Sequence strings stay on the wire; numeric positions below are presentation order only.
  * `actors` (the account's own, from `/actors`) tell which computer runs each owned companion.
@@ -364,7 +370,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
       authorKind: message.origin === 'system' ? 'system' : message.author.kind === 'human' ? 'user' : 'bot',
       authorBotId: message.authorId, authorName: joinedName !== undefined ? joinedName
         : member ? memberName(member, ownerMembers) : message.author.name,
-      isSelf: message.authorId === selfId, content: contentText(message), mentions: { all: message.mentionAudience === 'humans' || message.mentionAudience === 'everyone', ...(message.mentionAudience === 'bots' || message.mentionAudience === 'everyone' ? { allBots: true } : {}), botIds: message.mentions ?? [] },
+      isSelf: message.authorId === selfId, content: contentText(message), mentions: chatMessageMentions(message),
       ...(quote ? { quote: deletedIds.has(quote.messageId) ? { ...quote, originalDeleted: true } : quote } : {}),
       noticeCode: joinedName !== undefined ? 'member-joined' : null, planId: messagePlanId(message), files: [],
       attachments: chatMessageAttachments(message), createdAt: Date.parse(message.createdAt) };
@@ -415,6 +421,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
       view.threadShare = { ...card, status: source === undefined ? 'loading' : available ? 'available' : 'unavailable',
         authorKind: available && source.author.kind !== 'human' ? 'bot' : 'user', authorBotId: available ? source.authorId : null,
         authorName: available ? authorName(source) : '', sharedByAuthor: !!available && source.authorId === message.authorId,
+        ...(available ? { mentions: chatMessageMentions(source) } : {}),
         content: available ? contentText(source) : '', attachments: available ? chatMessageAttachments(source) : [],
         createdAt: available ? Date.parse(source.createdAt) : null, edited: !!available && (source.revision ?? 1) > 1,
         ...(replyCount !== undefined ? { replyCount } : {}), ...(threadPreview ? { threadPreview } : {}),
