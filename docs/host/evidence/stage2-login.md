@@ -52,7 +52,18 @@ CINDY_HOST_DATA_DIR=<profile> CINDY_HOST_KEYRING_APPLICATION=Cindy \
 
 只输出 `{"authenticated":…,"realm":…}`，不含任何令牌。
 
-## 5. 未验证项（需要用户本人凭证）
+## 5. Headless / 无 Secret Service 的显式失败（实测）
+
+```
+$ CINDY_HOST_KEYRING_APPLICATION=DefinitelyMissingApp cindy-host login --method=google
+cindy-host login failed: Secret Service is not available for application "DefinitelyMissingApp" ...;
+unlock the login keyring and retry
+```
+
+- 无密钥时抛 `CREDENTIAL_STORE_UNAVAILABLE`（`SafeStorageUnavailableError`），不落明文、不静默降级。
+- 有密钥时写入记录为 `0600`，磁盘内容不含明文，读取可还原。
+
+## 6. 未验证项（需要用户本人凭证）
 
 - 在真实浏览器完成一次 Google/Apple 授权并让 `code` 兑换写入 `safe-storage`。
   这一步必须由账号持有人操作，自动化无法代替，也不能用手工构造的 code 冒充。
