@@ -15,7 +15,7 @@ it('keeps a session stream until every history and live-view owner releases it',
   await Promise.all([first.subscribe(), second.subscribe(), live.subscribe()]);
   first.release(); second.release(); await settle();
   expect(unsubscribe).not.toHaveBeenCalled();
-  live.release(); await settle();
+  live.release();
   expect(unsubscribe).toHaveBeenCalledExactlyOnceWith('mac', ['session:shared']);
 });
 
