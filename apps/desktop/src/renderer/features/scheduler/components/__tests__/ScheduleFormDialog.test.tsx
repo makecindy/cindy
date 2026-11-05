@@ -3,6 +3,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Schedule, ScheduleTemplate } from '@cindy/maker-scheduler';
+import type { ProviderView } from '@cindy/model-providers';
+import { __resetForTest as resetDraft } from '@/state/newMakerDraft';
 
 // PR #6832: exercise the real form's save/effect path. Pure form-logic tests cannot
 // catch the dialog wiring a remote choice to the local catalog. Minimal inputs:
@@ -14,7 +16,14 @@ const state = vi.hoisted(() => ({
   error: vi.fn(),
   references: new Map<string, unknown>(),
   loading: false,
-  localModels: [{ id: 'shared', efforts: ['low'], supportsFastMode: false }],
+  localLoading: false,
+  hiddenModels: new Set<string>(),
+  claudeModels: [] as { id: string; defaultEnabled: boolean; efforts: string[] }[],
+  alternativeProviders: [] as ProviderView[],
+  vendors: new Set(['cc', 'codex', 'pi']),
+  localModels: [{ id: 'shared', efforts: ['low'], defaultEffort: 'low', supportsFastMode: false }] as {
+    id: string; efforts: string[]; defaultEffort: string; supportsFastMode: boolean; defaultEnabled?: boolean;
+  }[],
   remoteModels: [
     { id: 'shared', efforts: ['ultra'], supportsFastMode: true },
     { id: 'remote-only', efforts: ['ultra'], supportsFastMode: true },
@@ -30,12 +39,20 @@ vi.mock('@/hooks/useAgentCapabilities', () => ({
     loading: !!device && state.loading,
   }),
 }));
+vi.mock('@/hooks/useAvailableAgents', () => ({
+  useAvailableAgents: () => ({ availableVendors: state.vendors, loaded: !state.localLoading }),
+}));
 vi.mock('@/hooks/useProviders', () => ({
-  useProviders: () => ({ providers: [{ id: 'source', connected: true, agents: ['codex'], routing: { codex: {} },
-    models: { codex: state.localModels } }], loading: false }),
+  useProviders: () => ({ providers: [{ id: 'source', auth: { method: 'oauth' }, source: 'builtin', access: { kind: 'subscription' }, connected: true, agents: ['codex', 'claude-code'], routing: { codex: {}, 'claude-code': {} },
+    models: { codex: state.localModels, 'claude-code': state.claudeModels } }, ...state.alternativeProviders], loading: state.localLoading }),
+}));
+vi.mock('@/state/modelVisibilityPrefs', () => ({
+  useModelVisibilityVersion: () => state.hiddenModels.size,
+  isModelEnabled: (_agent: string, _provider: string, model: { id: string; defaultEnabled?: boolean }) =>
+    model.defaultEnabled !== false && !state.hiddenModels.has(model.id),
 }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
-  useDeviceProviders: () => ({ providers: [{ id: 'source', connected: true, agents: ['codex'], routing: { codex: {} },
+  useDeviceProviders: () => ({ providers: [{ id: 'source', auth: { method: 'oauth' }, source: 'builtin', access: { kind: 'subscription' }, connected: true, agents: ['codex'], routing: { codex: {} },
     models: { codex: state.loading ? state.localModels : state.remoteModels } }], loading: state.loading }),
 }));
 vi.mock('@/hooks/useFeishuBot', () => ({ useFeishuBot: () => ({ status: 'disconnected' }) }));
@@ -52,8 +69,8 @@ vi.mock('../TemplateParamForm', () => ({ TemplateParamForm: () => null }));
 vi.mock('../BoundSessionCard', () => ({ BoundSessionCard: () => null }));
 vi.mock('../ScheduleChips', () => ({
   ProjectChip: () => null, ScheduleChip: () => null, ScheduleSettingsButton: () => null, ThreadPickerInline: () => null,
-  ModelEffortChip: ({ onSelect }: { onSelect: (choice: unknown) => void }) => (
-    <button onClick={() => onSelect({ engine: 'codex', modelId: 'remote-only', providerId: 'source',
+  ModelEffortChip: ({ onSelect, ...selection }: { onSelect: (choice: unknown) => void }) => (
+    <button data-testid="model-selection" data-selection={JSON.stringify(selection)} onClick={() => onSelect({ engine: 'codex', modelId: 'remote-only', providerId: 'source',
       effort: 'ultra', fast: true, agentDevice: { deviceId: 'studio' } })}>select remote</button>
   ),
 }));
@@ -97,8 +114,15 @@ it('keeps localized switch guidance and redacted diagnostics after a rejected sa
 beforeEach(() => {
   vi.clearAllMocks();
   state.references.clear();
+  state.hiddenModels.clear();
+  state.claudeModels = [];
+  state.alternativeProviders = [];
+  state.localModels = [{ id: 'shared', efforts: ['low'], defaultEffort: 'low', supportsFastMode: false }];
   state.loading = false;
+  state.localLoading = false;
+  state.vendors = new Set(['cc', 'codex', 'pi']);
   localStorage.clear();
+  resetDraft();
 });
 afterEach(cleanup);
 afterEach(() => vi.unstubAllGlobals());
@@ -181,4 +205,135 @@ it('keeps edited template fields across catalog refreshes and reapplies on reope
   view.rerender(element());
   expect(screen.getByDisplayValue('Template title')).toBeTruthy();
   expect(screen.getByDisplayValue('Template prompt')).toBeTruthy();
+});
+
+// Reported stale automation default: real dialog effects must validate remembered
+// engine/source/model together after loading. Existing tests only cover explicit
+// remote selections. Minimal input: removed model or source, high effort vs low.
+// Tier: unit/jsdom; assertions cover displayed selection and submitted values.
+// Standalone final run: 4.10s Vitest, 384ms test execution (13 cases).
+it.each([
+  { agentKind: 'codex', model: 'removed', providerId: 'source' },
+  { agentKind: 'codex', model: 'shared', providerId: 'removed-source' },
+  { agentKind: 'pi', model: 'shared', providerId: 'source' },
+])('calibrates stale new defaults after catalog loading: %j', async (remembered) => {
+  state.localLoading = true;
+  state.vendors = new Set(['codex']);
+  localStorage.setItem('xdt:scheduleFormPrefs:v1', JSON.stringify({
+    agentKind: remembered.agentKind,
+    lastByAgent: { [remembered.agentKind]: { ...remembered, effort: 'high', fastMode: true } },
+  }));
+  const onSubmit = vi.fn(async (_input: unknown, _edit: boolean) => {});
+  const initialValues = { name: 'New automation', prompt: 'Check work' };
+  const element = () => <ScheduleFormDialog open initial={null} initialValues={initialValues}
+    onOpenChange={() => {}} onSubmit={onSubmit} />;
+  const view = render(element());
+  expect(screen.getByTestId('model-selection').getAttribute('data-selection')).toContain(remembered.model);
+  fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.promptDialog.createAria' }));
+  expect(onSubmit).not.toHaveBeenCalled();
+  state.localLoading = false;
+  view.rerender(element());
+  fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.promptDialog.createAria' }));
+  await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+    agentKind: 'codex', model: 'shared', providerId: 'source',
+  }), false));
+  expect(onSubmit.mock.calls[0][0]).toMatchObject({ effort: 'low' });
+});
+
+it('preserves a saved invalid source and effort while showing the failure before save', () => {
+  mount(schedule({ providerId: 'removed-source', effort: 'high', fastMode: true }));
+  expect(screen.getByText('scheduler.editor.validation.modelUnavailable')).toBeTruthy();
+  const selection = JSON.parse(screen.getByTestId('model-selection').getAttribute('data-selection')!);
+  expect(selection).toMatchObject({ providerId: 'removed-source', modelValue: 'shared', effortValue: 'high' });
+});
+
+it('clears an implicit default when no runtime is available, but preserves an explicit remote choice', () => {
+  state.vendors = new Set();
+  const onSubmit = vi.fn(async () => {});
+  render(<ScheduleFormDialog open initial={null} initialValues={{ name: 'New', prompt: 'Check' }}
+    onOpenChange={() => {}} onSubmit={onSubmit} />);
+  expect(JSON.parse(screen.getByTestId('model-selection').getAttribute('data-selection')!)).toMatchObject({ modelValue: '' });
+  expect(screen.getByText('scheduler.editor.validation.modelUnavailable')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.promptDialog.createAria' }));
+  expect(onSubmit).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByText('select remote'));
+  expect(JSON.parse(screen.getByTestId('model-selection').getAttribute('data-selection')!)).toMatchObject({
+    modelValue: 'remote-only', effortValue: 'ultra', agentDeviceId: 'studio',
+  });
+});
+
+// Acceptance caught a default-hidden Claude bridge selected outside the picker.
+// Unit/jsdom: real create form, unlike prior fixtures where every model was visible.
+it.each([false, true])('uses a visible route for a model-less template (user hidden=%s)', async (userHidden) => {
+  state.claudeModels = [{ id: 'chatgpt/shared', defaultEnabled: userHidden, efforts: ['low'] }];
+  if (userHidden) state.hiddenModels.add('chatgpt/shared');
+  localStorage.setItem('xdt:scheduleFormPrefs:v1', JSON.stringify({agentKind:'claude-code',
+    lastByAgent:{'claude-code':{model:'chatgpt/shared',providerId:'source',effort:'high'}}}));
+  const onSubmit = vi.fn(async () => {});
+  const initialTemplate: ScheduleTemplate = {id:'weekly',name:'Weekly',prompt:'Summarize work',
+    description:'',category:'office-docs',source:'builtin',agentKind:'claude-code'};
+  render(<ScheduleFormDialog open initial={null} initialTemplate={initialTemplate}
+    onOpenChange={() => {}} onSubmit={onSubmit} />);
+  expect(JSON.parse(screen.getByTestId('model-selection').getAttribute('data-selection')!)).toMatchObject({
+    agentKind:'codex', modelValue:'shared', providerId:'source', effortValue:'low',
+  });
+  fireEvent.click(screen.getByRole('button', {name:'scheduler.editor.promptDialog.createAria'}));
+  await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+    agentKind:'codex',model:'shared',providerId:'source',effort:'low',
+  }),false));
+});
+
+// Review P1: history without a source passed visibility checks via B but was
+// later resolved back to hidden source A. Prior fixtures had only one source.
+// Unit/jsdom: real form submission must pin B and use B's effort capabilities.
+it.each(['schedule', 'chat'])('pins the visible source for source-less %s history', async (history) => {
+  state.localModels = [{ id: 'shared', defaultEnabled: false, efforts: ['high'], defaultEffort: 'high', supportsFastMode: false }];
+  state.alternativeProviders = [{
+    id: 'visible-source', name: 'Visible source', source: 'user', connected: true, agents: ['codex'],
+    auth: { method: 'apiKey' }, routing: { codex: { upstream: 'https://example.test', authStrategy: 'api-key-header' } },
+    models: { codex: [{ id: 'shared', name: 'Shared', contextWindow: 100000, defaultEnabled: true,
+      efforts: ['low'], defaultEffort: 'low' }] },
+  }];
+  localStorage.setItem('xdt:scheduleFormPrefs:v1', JSON.stringify({ agentKind: 'codex',
+    lastByAgent: { codex: { model: history === 'schedule' ? 'shared' : '', providerId: '', effort: 'high' } },
+  }));
+  if (history === 'chat') localStorage.setItem('xdt:newMakerDraft:v1', JSON.stringify({ vendor: 'codex',
+    lastByVendor: { codex: { model: 'shared', providerId: '', effort: 'high' } }, modelChosenByVendor: { codex: true },
+  }));
+  const onSubmit = vi.fn(async () => {});
+  render(<ScheduleFormDialog open initial={null} initialValues={{ name: 'New', prompt: 'Check work' }}
+    onOpenChange={() => {}} onSubmit={onSubmit} />);
+  expect(JSON.parse(screen.getByTestId('model-selection').getAttribute('data-selection')!)).toMatchObject({
+    agentKind: 'codex', modelValue: 'shared', providerId: 'visible-source', effortValue: 'low',
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.promptDialog.createAria' }));
+  await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+    agentKind: 'codex', model: 'shared', providerId: 'visible-source', effort: 'low',
+  }), false));
+});
+
+// Review P1: filtering a hidden Auto copy can resemble a catalog relocation.
+// Unit/jsdom: a template's explicit source must still constrain the saved route.
+it('does not relocate hidden Auto history outside a template source constraint', () => {
+  state.localModels = [];
+  state.alternativeProviders = ['xd', 'pool'].map((id): ProviderView => ({
+    id, name: id, source: id === 'xd' ? 'builtin' : 'organization', connected: true, agents: ['codex'],
+    auth: { method: 'managed' }, access: { kind: 'managed' },
+    routing: { codex: { upstream: 'https://example.test', authStrategy: 'api-key-header' } },
+    models: { codex: [{ id: 'auto/group-1', name: 'Auto', contextWindow: 100000,
+      defaultEnabled: id === 'pool', efforts: [], defaultEffort: null }] },
+  }));
+  localStorage.setItem('xdt:scheduleFormPrefs:v1', JSON.stringify({ agentKind: 'codex',
+    lastByAgent: { codex: { model: 'auto/group-1', providerId: 'xd' } },
+  }));
+  const initialTemplate: ScheduleTemplate = { id: 'pinned-source', name: 'Pinned', prompt: 'Check work',
+    description: '', category: 'office-docs', source: 'builtin', agentKind: 'codex', providerId: 'xd' };
+  const onSubmit = vi.fn(async () => {});
+  render(<ScheduleFormDialog open initial={null} initialTemplate={initialTemplate}
+    onOpenChange={() => {}} onSubmit={onSubmit} />);
+  expect(JSON.parse(screen.getByTestId('model-selection').getAttribute('data-selection')!)).toMatchObject({
+    modelValue: '', providerId: 'xd',
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.promptDialog.createAria' }));
+  expect(onSubmit).not.toHaveBeenCalled();
 });
