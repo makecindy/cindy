@@ -43,7 +43,7 @@ export function TeammateRowStatus({ status, groupUnread, mentioned = false, inli
   return <span data-teammate-row-status className={cn('pointer-events-none flex h-4 items-center justify-end', !inline && 'absolute right-2.5')}>
     {groupUnread !== undefined && (status === 'running' || status === 'unread' || blueCount) ? (
       <span data-teammate-unread-count data-teammate-mention={blueCount || undefined}>
-        <NavigationCountBadge count={groupUnread} label={t('sidebar.teammateUnreadCount', { count: groupUnread })}
+        <NavigationCountBadge count={groupUnread} label={[t('sidebar.teammateUnreadCount', { count: groupUnread }), ...(blueCount ? [t('bots.groupChat.server.thread.hintMentioned')] : [])].join(' · ')}
           className={blueCount ? 'bg-[var(--bot-unread-bg)] text-[var(--bot-unread-fg)]' : undefined} />
       </span>
     ) : <TeammateStatusDot status={status} group={groupUnread !== undefined} mentioned={mentioned} inline />}

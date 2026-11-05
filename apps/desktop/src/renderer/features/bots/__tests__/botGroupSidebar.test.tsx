@@ -612,6 +612,9 @@ describe('collapsed avatar strip mentions', () => {
     expect(count.textContent).toBe('12');
     expect(count.firstElementChild?.className).toContain('bg-[var(--bot-unread-bg)]');
     expect(count.firstElementChild?.className).toContain('text-[var(--bot-unread-fg)]');
+    expect(count.firstElementChild?.getAttribute('aria-label')).toBe(
+      `${translate('sidebar.teammateUnreadCount', { count: 12 })} · ${translate('bots.groupChat.server.thread.hintMentioned')}`,
+    );
     expect(view.container.querySelector('[data-teammate-status]')).toBeNull();
     collapse();
     const point = screen.getByRole('button', { name: /^周末出游 ·/ }).querySelector<HTMLElement>('[data-teammate-mention]');
