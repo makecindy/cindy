@@ -296,7 +296,9 @@ export function syncGroupFastPolicy(group: string): Promise<void> {
     const active = new Set(destinations);
     const retryTargets = retriesFor(group, state.revision);
     for (const device of retryTargets.keys()) {
-      if (state.targets[device] === undefined || state.targets[device] === state.revision) {
+      // A revision ACK can predate a failed periodic refresh. Only the
+      // successful send below (or target removal) ends that retry cooldown.
+      if (state.targets[device] === undefined) {
         retryTargets.delete(device);
       }
     }

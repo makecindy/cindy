@@ -686,12 +686,16 @@ describe('group owner to executor enforcement handshake', () => {
     expect(receive).not.toHaveBeenCalled();
     expect(groupFastPolicyStore.allows(hostSessionIdFor('self', 'task'), true)).toBe(false);
   });
-  // #7848, unit: use the real sync/store and a failed peer, advancing virtual
-  // polling time. Existing tests cover in-flight coalescing, not later retries
-  // or the policy file's unchanged mtime after each unsuccessful poll.
-  it('backs off failed peers up to five minutes without rewriting unchanged policy on polls', async () => {
+  // #7848 / PR #9063, unit: real sync/store with a failed peer and virtual
+  // polling time. Initial-send failures alone miss the acknowledged-target
+  // refresh path, which must retain backoff without rewriting policy on polls.
+  it.each([false, true])('backs off failed peers up to five minutes without rewriting unchanged policy on polls (previously confirmed: %s)', async (confirmed) => {
     // Only virtualize the retry clock: filesystem lock mtimes use real Date.
     vi.useFakeTimers({ toFake: ['performance', 'setInterval', 'clearInterval'] });
+    if (confirmed) {
+      await runtime.syncGroupFastPolicy('openai');
+      vi.advanceTimersByTime(15 * 60_000);
+    }
     state.offline.add('one');
     await runtime.syncGroupFastPolicy('openai');
     const file = path.join(temporary, state.owner, 'provider-group-fast-policy.json');
@@ -700,7 +704,8 @@ describe('group owner to executor enforcement handshake', () => {
     const stop = runtime.startGroupFastPolicySync();
     const attempts = (device: string) =>
       state.calls.filter((call) => call.device === device && call.command.op === 'caps').length;
-    let count = 1;
+    let count = confirmed ? 2 : 1;
+    const healthyAttempts = confirmed ? 2 : 1;
     let totalElapsed = 0;
     try {
       for (const delay of [5_000, 10_000, 20_000, 40_000, 80_000, 160_000, 300_000, 300_000]) {
@@ -716,9 +721,9 @@ describe('group owner to executor enforcement handshake', () => {
         expect(attempts('one')).toBe(++count);
         // Healthy peers refresh their speed cache on the existing sync loop
         // after fifteen minutes; unsuccessful polls before then stay read-only.
-        expect(attempts('two')).toBe(totalElapsed < 15 * 60_000 ? 1 : 2);
+        expect(attempts('two')).toBe(healthyAttempts + (totalElapsed < 15 * 60_000 ? 0 : 1));
         if (totalElapsed < 15 * 60_000) expect(fs.statSync(file).mtimeMs).toBe(timestamp.getTime());
-        expect(runtime.groupFastPolicyPending('openai')).toBe(true);
+        expect(runtime.groupFastPolicyPending('openai')).toBe(!confirmed);
       }
       state.offline.clear();
       await vi.advanceTimersByTimeAsync(300_000);

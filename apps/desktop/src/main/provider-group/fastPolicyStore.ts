@@ -49,9 +49,11 @@ export function createGroupFastPolicyStore(options: {
   const monoNow = () => options.clock?.mono() ?? performance.now();
   // Wall time survives a restart; monotonic time prevents a clock rollback from
   // extending trust in this process. Bind/read operations never renew a source.
-  let deadlineOwner = options.scopeKey();
+  // The singleton can load before account initialization. Bind each empty
+  // in-memory map to the current owner on its first use, not during import.
+  let deadlineOwner: string | undefined;
   const deadlines = new Map<string, { confirmedAt: number; wall: number; mono: number; expired: boolean }>();
-  let suppressionOwner = options.scopeKey();
+  let suppressionOwner: string | undefined;
   const suppressed = new Map<string, Set<string>>();
   const requiredOrigins = new Map<string, string>();
   const suppression = () => {
