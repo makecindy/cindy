@@ -12685,7 +12685,7 @@
       "failed": "Der Prompt konnte nicht verbessert werden",
       "stale": "Der Entwurf hat sich geändert, die Verbesserung wurde nicht angewendet",
       "undoUnavailable": "Der Inhalt hat sich geändert, Rückgängig ist nicht möglich",
-      "unsupported": "Dieser Entwurf enthält @-Erwähnungen oder Zitate und kann noch nicht verbessert werden",
+      "unsupported": "Dieser Entwurf nutzt ein noch nicht unterstütztes Format (@-Erwähnungen, Zitate, Listen)",
       "locked": "Die Eingabe ist derzeit nicht bearbeitbar"
     }
   },

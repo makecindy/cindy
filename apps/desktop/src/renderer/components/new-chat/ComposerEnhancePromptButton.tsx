@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Sparkles, Undo2 } from 'lucide-react';
 import type { Editor, JSONContent } from '@tiptap/core';
@@ -30,7 +30,6 @@ interface ComposerEnhancePromptButtonProps {
   disabledReason?: string;
 }
 
-
 /**
  * "Enhance prompt" control for the chat composer.
  *
@@ -38,9 +37,15 @@ interface ComposerEnhancePromptButtonProps {
  * model), so enhancing never spends the quota of the model the conversation is
  * about to use.
  *
- * The rewrite is only applied when the draft is still exactly the one the
- * request was started from: a draft that changed in the meantime, that moved
- * to another session, or that is mid IME composition keeps the user's text.
+ * Two rules keep the user's text safe:
+ *
+ * - A draft is only rewritten when a plain-text round trip can reproduce it.
+ *   Mention chips, pasted-text chips, quotes and lists carry structure that a
+ *   string cannot restore, so such a draft is not eligible.
+ * - The answer is applied only when the draft is still exactly the one the
+ *   request was started from: a draft that changed in the meantime, that moved
+ *   to another session, or that is mid IME composition keeps the user's text.
+ *
  * The pre-enhancement document is kept so the rewrite can be undone, and the
  * undo only applies while the document still is the rewritten one.
  */
@@ -56,8 +61,21 @@ export function ComposerEnhancePromptButton({
   const [structured, setStructured] = useState(false);
   const [undoState, setUndoState] = useState<{ original: JSONContent; applied: string } | null>(null);
 
+  // The latest props, read when an answer comes back. Comparing a value
+  // captured in the closure of the request would always match, because the
+  // closure never sees the newer render.
+  const latest = useRef({ draftKey, editor, disabled });
+  latest.current = { draftKey, editor, disabled };
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
   // Track the draft so the button only appears once there is something to
-  // rewrite, and so a structured draft can be detected up front.
+  // rewrite, and so an ineligible draft can be detected up front.
   useEffect(() => {
     if (!editor) {
       setHasDraft(false);
@@ -84,7 +102,7 @@ export function ComposerEnhancePromptButton({
   }, [draftKey]);
 
   const unavailableReason = useMemo(() => {
-    if (disabled) return disabledReason ?? t('newChat.composerEnhance.disabled');
+    if (disabled) return disabledReason ?? t('newChat.composerEnhance.locked');
     if (structured) return t('newChat.composerEnhance.unsupported');
     return null;
   }, [disabled, disabledReason, structured, t]);
@@ -99,8 +117,12 @@ export function ComposerEnhancePromptButton({
     setBusy(true);
     try {
       const result = await window.electronAPI.composer.enhancePrompt(draft);
+      const current = latest.current;
       const stillSameDraft =
-        draftKey === requestKey &&
+        mounted.current &&
+        current.editor === editor &&
+        current.draftKey === requestKey &&
+        !current.disabled &&
         documentFingerprint(editor.getJSON()) === originalFingerprint;
       if (!stillSameDraft || editorIsComposing(editor)) {
         toast.warning(t('newChat.composerEnhance.stale'));
@@ -123,7 +145,8 @@ export function ComposerEnhancePromptButton({
   }, [busy, draftKey, editor, t, unavailableReason]);
 
   const undo = useCallback(() => {
-    if (!editor || undoState === null) return;
+    if (!editor || undoState === null || busy || unavailableReason) return;
+    if (!mounted.current || latest.current.disabled) return;
     if (documentFingerprint(editor.getJSON()) !== undoState.applied) {
       toast.warning(t('newChat.composerEnhance.undoUnavailable'));
       return;
@@ -132,7 +155,7 @@ export function ComposerEnhancePromptButton({
     setUndoState(null);
     editor.commands.focus();
     editor.commands.selectAll();
-  }, [editor, t, undoState]);
+  }, [busy, editor, t, undoState, unavailableReason]);
 
   if (!editor || !hasDraft) return null;
 
@@ -155,7 +178,6 @@ export function ComposerEnhancePromptButton({
           onClick={() => void enhance()}
           disabled={Boolean(unavailableReason) || busy}
           aria-label={label}
-          aria-disabled={Boolean(unavailableReason)}
           className={controlClass}
         >
           {busy ? <Spinner size={14} /> : <Sparkles size={15} />}
@@ -166,6 +188,7 @@ export function ComposerEnhancePromptButton({
           <button
             type="button"
             onClick={undo}
+            disabled={busy || Boolean(unavailableReason)}
             aria-label={t('newChat.composerEnhance.undo')}
             className={controlClass}
           >

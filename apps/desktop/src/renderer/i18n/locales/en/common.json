@@ -12685,7 +12685,7 @@
       "failed": "Could not enhance the prompt",
       "stale": "The draft changed, so the enhancement was not applied",
       "undoUnavailable": "The content changed, so it cannot be undone",
-      "unsupported": "This draft contains @mentions or quotes, which cannot be enhanced yet",
+      "unsupported": "This draft uses a format that cannot be enhanced yet (@mentions, quotes, lists)",
       "locked": "The composer is not editable right now"
     }
   },

@@ -4,16 +4,13 @@ import type { JSONContent } from '@tiptap/core';
  * Node types a plain-text rewrite can reproduce faithfully.
  *
  * Everything else (mention chips, pasted-text chips, quote chips, code
- * blocks, ...) carries structure that a string cannot restore, so a draft
- * containing them is not eligible for enhancement.
+ * blocks, lists, ...) carries structure that a string cannot restore, so a
+ * draft containing them is not eligible for enhancement.
  */
 const PLAIN_TEXT_NODE_TYPES = new Set([
   'doc',
   'paragraph',
   'text',
-  'bulletList',
-  'orderedList',
-  'listItem',
   'hardBreak',
 ]);
 

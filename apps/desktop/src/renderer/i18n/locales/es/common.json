@@ -12787,7 +12787,7 @@
       "failed": "No se pudo mejorar el prompt",
       "stale": "El borrador cambió, así que no se aplicó la mejora",
       "undoUnavailable": "El contenido cambió, no se puede deshacer",
-      "unsupported": "Este borrador contiene menciones o citas, que aún no se pueden mejorar",
+      "unsupported": "Este borrador usa un formato que aún no se puede mejorar (menciones, citas, listas)",
       "locked": "El cuadro de entrada no se puede editar ahora"
     }
   },

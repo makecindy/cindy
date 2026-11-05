@@ -47,17 +47,32 @@ describe('documentHasStructuredNodes', () => {
     expect(documentHasStructuredNodes(doc)).toBe(true);
   });
 
+  it('rejects a draft carrying a list, whose numbering and nesting a plain text cannot restore', () => {
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'orderedList',
+          attrs: { start: 3 },
+          content: [
+            {
+              type: 'listItem',
+              content: [{ type: 'paragraph', content: [{ type: 'text', text: 'step one' }] }],
+            },
+          ],
+        },
+      ],
+    };
+    expect(documentHasStructuredNodes(doc)).toBe(true);
+  });
+
   it('treats a missing document as plain', () => {
     expect(documentHasStructuredNodes(undefined)).toBe(false);
   });
 });
 
 describe('documentFingerprint', () => {
-  it('is stable for an unchanged document', () => {
-    expect(documentFingerprint(plainDoc)).toBe(documentFingerprint(plainDoc));
-  });
-
-  it('changes once the document changes', () => {
+  it('tells two documents that differ by one character apart', () => {
     const edited = {
       type: 'doc',
       content: [
@@ -65,6 +80,17 @@ describe('documentFingerprint', () => {
       ],
     };
     expect(documentFingerprint(edited)).not.toBe(documentFingerprint(plainDoc));
+  });
+
+  it('tells two structurally different drafts with the same words apart', () => {
+    const twoParagraphs = {
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'add a search box' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: 'add a search box' }] },
+      ],
+    };
+    expect(documentFingerprint(twoParagraphs)).not.toBe(documentFingerprint(plainDoc));
   });
 });
 
