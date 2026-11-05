@@ -12,9 +12,13 @@ export default {
     const toggle = page.getByRole('switch', { name: await ui.t('settings.agentIsland.subtleRemindersLabel'), exact: true });
     const before = await toggle.getAttribute('aria-checked');
     await toggle.click();
-    await page.waitForFunction(expected => localStorage.getItem('notifications.agentIslandSubtleReminders') === expected,
+    await page.waitForFunction(expected => globalThis.localStorage.getItem('notifications.agentIslandSubtleReminders') === expected,
       String(before !== 'true'));
     if (await toggle.getAttribute('aria-checked') === before) throw new Error('Reminder switch did not update');
     await ui.capture('toggled');
+    await page.getByRole('button', { name: await ui.t('settings.defaults.restore'), exact: true }).click();
+    await page.waitForFunction(() => globalThis.localStorage.getItem('notifications.agentIslandSubtleReminders') === null);
+    if (await toggle.getAttribute('aria-checked') !== 'false') throw new Error('Reminder reset did not restore the default');
+    await ui.capture('reset');
   },
 };

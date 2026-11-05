@@ -188,7 +188,9 @@ export function AgentIslandSection() {
     enabled,
     setEnabled,
     subtleReminders,
+    subtleRemindersCustomized,
     setSubtleReminders,
+    resetSubtleReminders,
     soundSettings,
     soundCustomized,
     mascotSkin,
@@ -211,6 +213,15 @@ export function AgentIslandSection() {
     setSubtleRemindersPending(true);
     try {
       if (!await setSubtleReminders(next)) toast.error(t('settings.agentIsland.subtleRemindersFailed'));
+    } finally {
+      setSubtleRemindersPending(false);
+    }
+  };
+  const handleResetSubtleReminders = async () => {
+    setSubtleRemindersPending(true);
+    try {
+      if (await resetSubtleReminders()) toast.success(t('settings.defaults.restored'));
+      else toast.error(t('settings.defaults.restoreFailed'));
     } finally {
       setSubtleRemindersPending(false);
     }
@@ -310,12 +321,19 @@ export function AgentIslandSection() {
                 {t('settings.agentIsland.subtleRemindersHint')}
               </p>
             </div>
-            <Switch
-              checked={subtleReminders}
-              disabled={subtleRemindersPending}
-              onCheckedChange={handleSubtleRemindersChange}
-              aria-label={t('settings.agentIsland.subtleRemindersLabel')}
-            />
+            <div className="flex shrink-0 items-center gap-2">
+              <DefaultOverrideControls
+                isCustomized={subtleRemindersCustomized}
+                disabled={subtleRemindersPending}
+                onReset={() => void handleResetSubtleReminders()}
+              />
+              <Switch
+                checked={subtleReminders}
+                disabled={subtleRemindersPending}
+                onCheckedChange={handleSubtleRemindersChange}
+                aria-label={t('settings.agentIsland.subtleRemindersLabel')}
+              />
+            </div>
           </SettingsCard>
           <SettingsCard className="flex flex-col gap-3">
             <div className="flex min-w-0 flex-col gap-1">

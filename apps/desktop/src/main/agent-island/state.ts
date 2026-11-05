@@ -174,6 +174,8 @@ interface AgentIslandSessionState {
   deferredReveal: boolean;
   deferredRevealReason: 'visible-session' | 'app-focus' | 'queued' | 'manual-dismiss' | null;
   queuedRevealDwellMs: number | null;
+  /** Reminder request order, including remote/group entries; preserved when requeued. */
+  revealSequence: number;
   unread: boolean;
   activityLines: AgentIslandActivityLine[];
   activitySeq: number;
@@ -289,6 +291,7 @@ export interface AgentIslandRemoteUnreadTerminal {
 // 卡片身份的无碰撞活动代数:全局单调递增、不复用。不要退回毫秒时间戳 —— 重试在同一
 // 毫秒内再落新终态时时间戳会撞上(review P1),旧点击会误处置新提醒。
 let agentIslandActivityGeneration = 0;
+let agentIslandRevealSequence = 0;
 
 function nextActivityGeneration(): number {
   return ++agentIslandActivityGeneration;
@@ -1601,7 +1604,7 @@ export function buildAgentIslandDisplayState(
     ? orderedSessions.filter((session) => session.revealUntil !== null && session.revealUntil > now
       && !shouldSmartSuppressSession(state, session)
       && !(isBlockingSession(session) && isBlockingRevealSuppressed(state, session)))
-      .sort((a, b) => revealStartedAt(b) - revealStartedAt(a) || b.activityGeneration - a.activityGeneration)[0]
+      .sort((a, b) => revealStartedAt(b) - revealStartedAt(a) || b.revealSequence - a.revealSequence)[0]
     : undefined;
 
   return {
@@ -2018,6 +2021,7 @@ function requestAttentionReveal(
   session.unread = options.forceUnread === true || !shouldSmartSuppressSession(state, session);
   session.queuedRevealDwellMs = dwellMs;
   if (session.phase === 'needs-interaction') {
+    session.revealSequence = ++agentIslandRevealSequence;
     session.revealUntil = now + dwellMs;
     session.deferredReveal = false;
     session.deferredRevealReason = null;
@@ -2048,6 +2052,7 @@ function enqueueTransientReveal(
     return;
   }
   removeQueuedTransientReveal(state, session.sessionId);
+  session.revealSequence = ++agentIslandRevealSequence;
   if (state.activeTransientSessionId === session.sessionId) {
     session.revealUntil = now + dwellMs;
     session.deferredReveal = false;
@@ -2130,6 +2135,9 @@ function deferActiveTransientReveal(
   state: AgentIslandState,
   reason: AgentIslandSessionState['deferredRevealReason'],
 ): void {
+  // Compact hints coexist with waiting tasks. Restarting the old hint on the
+  // next render would give it a newer start time than the incoming interaction.
+  if (state.subtleReminders) return;
   const activeSessionId = state.activeTransientSessionId;
   if (!activeSessionId) return;
   const active = state.sessions.get(activeSessionId);
@@ -2787,6 +2795,7 @@ function createSession(meta: AgentIslandSessionMeta, now: number): AgentIslandSe
     deferredReveal: false,
     deferredRevealReason: null,
     queuedRevealDwellMs: null,
+    revealSequence: 0,
     unread: false,
     activityLines: [],
     activitySeq: 0,

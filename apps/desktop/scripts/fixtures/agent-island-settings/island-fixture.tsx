@@ -4,7 +4,8 @@ import { AgentIslandSection } from '../../../src/renderer/components/settings/Ag
 mountPage({
   host: (ctx) => {
     localStorage.setItem('notifications.agentIslandEnabled', 'true');
-    localStorage.setItem('notifications.agentIslandSubtleReminders', String(ctx.case === 'subtle'));
+    if (ctx.case === 'subtle') localStorage.setItem('notifications.agentIslandSubtleReminders', 'true');
+    else localStorage.removeItem('notifications.agentIslandSubtleReminders');
     return {
       platform: 'darwin', osRelease: '24.0.0',
       agentIsland: {

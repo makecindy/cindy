@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { renderHook } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
 
 import {
   AGENT_ISLAND_SOUND_OPTIONS,
@@ -12,6 +12,7 @@ import {
   getAgentIslandEnabled,
   getAgentIslandSubtleReminders,
   setAgentIslandSubtleReminders,
+  resetAgentIslandSubtleReminders,
   getAgentIslandSoundSettings,
   isAgentIslandSoundSettingsCustomized,
   isAgentIslandSupported,
@@ -21,6 +22,7 @@ import {
   setAgentIslandEnabled,
   syncAgentIslandEnabledToMain,
   useResyncAgentIslandSettingsAfterLogin,
+  useAgentIslandSettings,
 } from '@/hooks/useAgentIslandSettings';
 
 vi.mock('@/lib/logger', () => ({
@@ -74,6 +76,38 @@ describe('agent island settings', () => {
 
     expect(getAgentIslandEnabled()).toBe(true);
     expect(localStorage.getItem('notifications.agentIslandEnabled')).toBe('true');
+  });
+
+  // Unit, configuration contract §4 / review #8848: resetting must remove the
+  // override, not pin false. Existing switch coverage only tested saved booleans.
+  it.each([true, false])('clears a subtle reminder override (%s) and updates mounted settings', async (override) => {
+    const setSubtleReminders = vi.fn(async () => ({ ok: true as const }));
+    installElectronApi({ setSubtleReminders });
+    localStorage.setItem('notifications.agentIslandSubtleReminders', String(override));
+    const { result, unmount } = renderHook(() => useAgentIslandSettings());
+    expect(result.current.subtleRemindersCustomized).toBe(true);
+
+    await act(async () => {
+      await expect(result.current.resetSubtleReminders()).resolves.toBe(true);
+    });
+    expect(setSubtleReminders).toHaveBeenLastCalledWith(false);
+    expect(localStorage.getItem('notifications.agentIslandSubtleReminders')).toBeNull();
+    expect(result.current.subtleReminders).toBe(false);
+    expect(result.current.subtleRemindersCustomized).toBe(false);
+    unmount();
+  });
+
+  it.each(['main', 'storage'] as const)('keeps the subtle reminder override when reset fails in %s', async (failure) => {
+    const setSubtleReminders = vi.fn(async () => ({ ok: true as const }));
+    installElectronApi({ setSubtleReminders });
+    localStorage.setItem('notifications.agentIslandSubtleReminders', 'true');
+    if (failure === 'main') setSubtleReminders.mockRejectedValueOnce(new Error('unavailable'));
+    else vi.spyOn(Storage.prototype, 'removeItem').mockImplementationOnce(() => { throw new Error('unavailable'); });
+
+    await expect(resetAgentIslandSubtleReminders()).resolves.toBe(false);
+    expect(localStorage.getItem('notifications.agentIslandSubtleReminders')).toBe('true');
+    expect(getAgentIslandSubtleReminders()).toBe(true);
+    if (failure === 'storage') expect(setSubtleReminders.mock.calls).toEqual([[false], [true]]);
   });
 
   it('persists the switch only after main accepts the enabled change', async () => {
