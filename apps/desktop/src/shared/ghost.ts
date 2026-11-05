@@ -251,16 +251,13 @@ export interface GhostAgentNeeds {
    * 不依赖 tasks,需独立批准(observeCapabilityApproved)。
    */
   observe?: boolean;
-<<<<<<< HEAD
   /** Final-answer file references; independent Host consent, requires observe. */
   observeFiles?: boolean;
-=======
   /**
    * companions = 只读查看伙伴(含主人其他电脑上的)名单、实时状态、工作阶段、待处理请求摘要与最新回复,
    * 并在主窗口打开伙伴的任务。不能替用户批准或回答;不依赖 tasks,需独立批准(companionsCapabilityApproved)。
    */
   companions?: boolean;
->>>>>>> upstream/main
 }
 
 /** 插件随包本地 Node 工作进程使用的 stdio 协议。 */
@@ -1912,12 +1909,9 @@ export interface InstalledGhost {
   approvedAutoTools?: string[];
   /** Independent Host consent for read-only project task observation. */
   observeCapabilityApproved?: true;
-<<<<<<< HEAD
   observeFilesCapabilityApproved?: true;
-=======
   /** Independent Host consent for reading companions: roster, live status, pending request summaries and latest reply. */
   companionsCapabilityApproved?: true;
->>>>>>> upstream/main
   manifest: GhostManifest;
   /** 安装目录绝对路径(userData/brain/<id> 或 userData/brain/_ns/<org>/<id>)。 */
   dir: string;
@@ -4969,12 +4963,8 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
     if (!preserveHistoricalTasks && agentRaw.observe !== undefined && typeof agentRaw.observe !== 'boolean') {
       return { ok: false, reason: 'agent.observe must be boolean' };
     }
-<<<<<<< HEAD
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && Object.keys(unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'observeFiles'])).length === 0) {
-=======
     if (!preserveHistoricalTasks && agentRaw.companions !== undefined && typeof agentRaw.companions !== 'boolean') return { ok: false, reason: 'agent.companions must be boolean' };
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && agentRaw.companions !== true && Object.keys(unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions'])).length === 0) {
->>>>>>> upstream/main
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && agentRaw.companions !== true && Object.keys(unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'observeFiles', 'companions'])).length === 0) {
       return {
         ok: false,
         reason:
@@ -4982,11 +4972,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
       };
     }
     agent = {
-<<<<<<< HEAD
-      ...unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'observeFiles']),
-=======
-      ...unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions']),
->>>>>>> upstream/main
+      ...unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'observeFiles', 'companions']),
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
       ...(agentRaw.tasks === true ? { tasks: true } : {}),
@@ -4995,11 +4981,8 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
       ...(agentRaw.tasks === true && agentRaw.hiddenTasks === true ? { hiddenTasks: true } : {}),
       ...(agentRaw.schedule === true ? { schedule: true } : {}),
       ...(agentRaw.observe === true ? { observe: true } : {}),
-<<<<<<< HEAD
       ...(agentRaw.observe === true && agentRaw.observeFiles === true ? { observeFiles: true } : {}),
-=======
       ...(agentRaw.companions === true ? { companions: true } : {}),
->>>>>>> upstream/main
     };
   }
 

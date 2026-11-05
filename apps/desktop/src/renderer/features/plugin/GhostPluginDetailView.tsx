@@ -584,30 +584,32 @@ export function GhostPluginDetailView({
             {t('settings.ghosts.perm.agentObserveRequest')}
           </Button>
         ) : null}
-<<<<<<< HEAD
         {!remote && enabled && ghost?.manifest.agent?.observeFiles === true && ghost.observeCapabilityApproved === true && ghost.observeFilesCapabilityApproved !== true ? (
           <Button variant="secondary" size="sm" className="mt-4" disabled={taskApprovalPending} onClick={async () => {
             setTaskApprovalPending(true);
             try {
               await window.electronAPI.ghosts.requestTaskApproval(detail.id, 'observeFiles');
-=======
-        {!remote && enabled && ghost?.manifest.agent?.companions === true && ghost.companionsCapabilityApproved !== true ? (
-          <Button variant="secondary" size="sm" className="mt-4" disabled={taskApprovalPending} onClick={async () => {
-            setTaskApprovalPending(true);
-            try {
-              await window.electronAPI.ghosts.requestTaskApproval(detail.id, 'companions');
->>>>>>> upstream/main
             } catch {
               toast.error(t('settings.ghosts.errors.generic'));
             } finally {
               setTaskApprovalPending(false);
             }
           }}>
-<<<<<<< HEAD
             {t('settings.ghosts.perm.agentObserveFilesRequest')}
-=======
+          </Button>
+        ) : null}
+        {!remote && enabled && ghost?.manifest.agent?.companions === true && ghost.companionsCapabilityApproved !== true ? (
+          <Button variant="secondary" size="sm" className="mt-4" disabled={taskApprovalPending} onClick={async () => {
+            setTaskApprovalPending(true);
+            try {
+              await window.electronAPI.ghosts.requestTaskApproval(detail.id, 'companions');
+            } catch {
+              toast.error(t('settings.ghosts.errors.generic'));
+            } finally {
+              setTaskApprovalPending(false);
+            }
+          }}>
             {t('settings.ghosts.perm.agentCompanionsRequest')}
->>>>>>> upstream/main
           </Button>
         ) : null}
 

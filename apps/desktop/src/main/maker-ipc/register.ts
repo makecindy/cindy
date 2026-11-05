@@ -1,11 +1,8 @@
-<<<<<<< HEAD
 import { PluginObserveFiles } from './pluginObserveFiles.js';
-=======
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
 import { z as settingsSchema } from 'zod';
 import { registerPreferenceControlIpc } from '../app-settings/preferences.js';
 import { configureModelSettingsActions } from '../app-settings/models.js';
->>>>>>> upstream/main
 import { createTaskCompletionDeliveryHost, type TaskCompletionDeliveryHost } from './taskCompletionDeliveryHost.js';
 import { setRoutineResultDispatch } from '../routines/deliveryDispatch.js';
 import { McpSetupBridge } from './mcpSetupBridge.js';
@@ -56,11 +53,8 @@ import {
   setPluginTaskHandler,
   setPluginTargetAdapter,
   setPluginObserveAdapter,
-<<<<<<< HEAD
   openPluginObservedFile,
-=======
   setPluginCompanionAdapter,
->>>>>>> upstream/main
   assertPluginTargetQueuedDelivery,
   getPluginTaskSourceSessionId,
   setPluginTaskUninstaller,
@@ -75,12 +69,8 @@ import {
   acceptPluginInvocation,
 } from '../cindy-brain/index.js';
 import { listPluginTargetCandidates, resolvePluginTargetSession } from './pluginTargetCandidates.js';
-<<<<<<< HEAD
 import { assertPluginObservableTask, listPluginObserveTasks, readPluginObserveFileSource } from './pluginObserveTasks.js';
-=======
-import { assertPluginObservableTask, listPluginObserveTasks } from './pluginObserveTasks.js';
 import { createPluginCompanionHost } from './pluginCompanionHost.js';
->>>>>>> upstream/main
 import { createPluginTargetStore } from './pluginTargetStore.js';
 import { collectPluginAttachmentPayloadTexts, withPluginMessageAttachments } from '../cindy-media/pluginMessageAttachments.js';
 import { isPluginTaskPermissionMode, type PluginTaskRoute, type PluginTaskRequest } from '../../shared/pluginTasks.js';

@@ -404,7 +404,6 @@ instanceId、generation、outcome（completed/failed/cancelled/interrupted）及
 - `openTask({taskId})`：在主窗口打开该任务；Cindy 未在前台时不抢焦点。只接受 `projectTasks` 能列出的任务，否则返回 `TARGET_UNAVAILABLE`。返回 `{opened:true}`。
 - 只读，不能发送消息、修改、归档或停止任务；需要这些操作请改用 `cindy.tasks` / `cindy.targets` 并声明对应权限。状态变化不推送，插件自行按需刷新。
 
-<<<<<<< HEAD
 
 ### 最终回复中的文件引用（未发布）
 
@@ -426,7 +425,6 @@ instanceId、generation、outcome（completed/failed/cancelled/interrupted）及
   宿主重查授权、任务、来源与文件，不调用系统 shell。只允许真实执行目录内的普通文件，拒绝软/硬链接、敏感/隐藏路径及穿越。
   `TARGET_UNAVAILABLE` 表示目标/标识失效，`FILE_UNAVAILABLE` 表示文件不可用；重启、更新授权或文件恢复后重新查询。
   标识不跨插件、账号、项目、任务使用；不跨设备转发，不保证文件仍是最初引用时的内容。
-=======
 ## 4.11.9 查看伙伴和状态（未发布）
 
 插件要把伙伴画成角色、头像墙或状态面板时，声明 `"agent": { "companions": true }`，在本机 Desktop 逻辑页使用 `cindy.companions`。
@@ -496,4 +494,3 @@ async function answerFirst(c) {
   return answered;
 }
 ```
->>>>>>> upstream/main

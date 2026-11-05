@@ -155,7 +155,6 @@ it('declares observe as its own permission without requiring tasks', () => {
   expect(ghostPermissionItems(installed.manifest).some(item => item.key === 'agent:observe')).toBe(false);
 });
 
-<<<<<<< HEAD
 // Unit: old observe approval cannot expand through a new manifest field.
 it('requires separate observeFiles permission and preserves historical invalid declarations without granting them', () => {
   const previous = validateGhostManifest({ ...base, agent: { observe: true } });
@@ -168,7 +167,8 @@ it('requires separate observeFiles permission and preserves historical invalid d
   if (!old.ok) throw new Error('old plugin disabled');
   expect(old.manifest.agent?.observeFiles).toBe('yes');
   expect(ghostPermissionItems(old.manifest).some(item => item.key === 'agent:observeFiles')).toBe(false);
-=======
+});
+
 // unit: companion viewing is standalone and never widens an existing tasks/targets/observe grant.
 it('declares companions as its own permission without requiring tasks', () => {
   const standalone = validateGhostManifest({ ...base, agent: { companions: true } });
@@ -184,5 +184,4 @@ it('declares companions as its own permission without requiring tasks', () => {
   const installed = validateInstalledGhostManifest({ ...base, agent: { companions: 'yes' } });
   if (!installed.ok) throw new Error('historical plugin disabled');
   expect(ghostPermissionItems(installed.manifest).some(item => item.key === 'agent:companions')).toBe(false);
->>>>>>> upstream/main
 });

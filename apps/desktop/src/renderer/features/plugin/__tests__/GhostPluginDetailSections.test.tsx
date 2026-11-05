@@ -471,7 +471,6 @@ describe('Ghost plugin detail sections', () => {
     rerender(view(true));
     expect(screen.queryByRole('button', { name: 'settings.ghosts.perm.agentObserveRequest' })).toBeNull();
   });
-<<<<<<< HEAD
   it('offers a separate file permission retry that never requests tasks', () => {
     vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     const requestTaskApproval = vi.fn(async () => ({ granted: false }));
@@ -484,7 +483,8 @@ describe('Ghost plugin detail sections', () => {
     expect(requestTaskApproval).toHaveBeenCalledWith(detail.id, 'observeFiles');
     rerender(view(true));
     expect(screen.queryByRole('button', { name: 'settings.ghosts.perm.agentObserveFilesRequest' })).toBeNull();
-=======
+  });
+
   // unit: a declined first-use companions prompt is not retried by the plugin; this Host button is the only re-approval path.
   it('offers a separate companions permission retry that requests only companions', () => {
     vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
@@ -498,7 +498,6 @@ describe('Ghost plugin detail sections', () => {
     expect(requestTaskApproval).toHaveBeenCalledWith(detail.id, 'companions');
     rerender(view(true));
     expect(screen.queryByRole('button', { name: 'settings.ghosts.perm.agentCompanionsRequest' })).toBeNull();
->>>>>>> upstream/main
   });
   it('uses the shared Cindy Switch for the plugin enabled control', () => {
     vi.stubGlobal(

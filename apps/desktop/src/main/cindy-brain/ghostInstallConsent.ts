@@ -69,11 +69,7 @@ export function confirmedTaskCapability(
   decision: GhostInstallConsentDecision,
   installed: InstalledGhost | null | undefined,
   next: GhostManifest,
-<<<<<<< HEAD
-  capability: 'tasks' | 'targets' | 'delegation' | 'observe' | 'observeFiles' = 'tasks',
-=======
   capability: PluginTaskCapability = 'tasks',
->>>>>>> upstream/main
 ): true | undefined {
   if (decision.mode !== 'confirmed') return undefined;
   const facts = evaluateGhostInstallConsent(installed, next);

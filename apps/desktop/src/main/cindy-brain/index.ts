@@ -97,12 +97,8 @@ import { createDownloader } from '../downloader/index.js';
 import { handlePluginTaskRequest, type PluginTaskHandler } from './taskSlot.js';
 import { PluginTargetSlot, type PluginTargetAdapter } from './pluginTargetSlot.js';
 import { handlePluginObserveRequest, type PluginObserveAdapter } from './pluginObserveSlot.js';
-<<<<<<< HEAD
-import { ensurePluginTaskApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, hasPluginObserveApproval, hasPluginObserveFilesApproval, pluginCapabilityApproval, PluginTaskApprovalGate } from './taskCapability.js';
-=======
 import { createCompanionWatchHub, handlePluginCompanionRequest, type CompanionWatchHub, type PluginCompanionAdapter } from './pluginCompanionSlot.js';
-import { ensurePluginTaskApproval, hasPluginCompanionsApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, hasPluginObserveApproval, pluginCapabilityApproval, PluginTaskApprovalGate, type PluginTaskCapability } from './taskCapability.js';
->>>>>>> upstream/main
+import { ensurePluginTaskApproval, hasPluginCompanionsApproval, hasPluginObserveFilesApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, hasPluginObserveApproval, pluginCapabilityApproval, PluginTaskApprovalGate, type PluginTaskCapability } from './taskCapability.js';
 import {
   registerGhostCardRemoteProvider,
   persistGhostCardWithRemoteChange,
@@ -139,11 +135,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type { GhostInstallConsentFacts } from '../../shared/ghostInstallConsent.js';
 
 const taskApprovalGate = new PluginTaskApprovalGate();
-<<<<<<< HEAD
-function requestPluginTaskApproval(id: string, isCurrent: () => boolean, confirm: (facts: GhostInstallConsentFacts) => Promise<boolean>, explicit = false, capability: 'tasks' | 'targets' | 'delegation' | 'observe' | 'observeFiles' = 'tasks'): Promise<boolean> {
-=======
 function requestPluginTaskApproval(id: string, isCurrent: () => boolean, confirm: (facts: GhostInstallConsentFacts) => Promise<boolean>, explicit = false, capability: PluginTaskCapability = 'tasks'): Promise<boolean> {
->>>>>>> upstream/main
   const ghost = findGhostForInstanceId(id);
   if (!isCurrent()) return Promise.resolve(false);
   if (pluginCapabilityApproval(capability)(ghost)) return Promise.resolve(true);
@@ -7669,11 +7661,8 @@ async function installAndDockLocked(
     approvedControlPoints: confirmedControlPoints(opts.consent.decision, installedBefore, opts.consent.manifest),
     approvedAutoTools: confirmedAutoTools(opts.consent.decision, installedBefore, opts.consent.manifest),
     observeCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'observe'),
-<<<<<<< HEAD
     observeFilesCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'observeFiles'),
-=======
     companionsCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'companions'),
->>>>>>> upstream/main
     initiallyEnabled: opts.enable ?? false,
     expectedPackageSha256: opts.expectedPackageSha256,
     ...(opts.trustOverride ? { trustOverride: opts.trustOverride } : {}),
@@ -7866,11 +7855,8 @@ async function updateLocalGhostPackageLocked(
           approvedControlPoints: confirmedControlPoints(consent, previousGhost, inspected.manifest),
           approvedAutoTools: confirmedAutoTools(consent, previousGhost, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'observe'),
-<<<<<<< HEAD
           observeFilesCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'observeFiles'),
-=======
           companionsCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'companions'),
->>>>>>> upstream/main
           expectedPackageSha256,
           expectedInstalledApproval,
           installOrigin: installOrigin ?? 'manual',
@@ -8372,11 +8358,8 @@ async function installOrUpdateMarketGhostPackageLocked(
           approvedControlPoints: confirmedControlPoints(expected.consent, installed, inspected.manifest),
           approvedAutoTools: confirmedAutoTools(expected.consent, installed, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'observe'),
-<<<<<<< HEAD
           observeFilesCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'observeFiles'),
-=======
           companionsCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'companions'),
->>>>>>> upstream/main
           expectedPackageSha256: inspected.packageSha256,
           expectedInstalledApproval: expected.expectedInstalledApproval!,
           ...(previousRelId ? { simulatorPreviousRelId: previousRelId } : {}),
@@ -10778,24 +10761,16 @@ export function registerGhostIpc(): void {
   ipcMain.handle('ghosts:request-task-approval', async (event, id: unknown, capability: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof id !== 'string' || !id.trim()) throwIpcError('INVALID_PARAMS', 'id must be a non-empty string');
-<<<<<<< HEAD
-    if (capability !== undefined && capability !== 'observe' && capability !== 'observeFiles') throwIpcError('INVALID_PARAMS', 'capability must be observe or observeFiles when provided');
-=======
-    if (capability !== undefined && capability !== 'observe' && capability !== 'companions') {
-      throwIpcError('INVALID_PARAMS', 'capability must be observe or companions when provided');
+    if (capability !== undefined && capability !== 'observe' && capability !== 'companions' && capability !== 'observeFiles') {
+      throwIpcError('INVALID_PARAMS', 'capability must be observe, observeFiles or companions when provided');
     }
->>>>>>> upstream/main
     requireGhostAvailableForActiveSession(id);
     const isCurrent = () => {
       try { assertTrustedAppRendererEvent(event); return !event.sender.isDestroyed(); } catch { return false; }
     };
     const granted = await requestPluginTaskApproval(id, isCurrent, facts =>
-<<<<<<< HEAD
-      createWindowGhostInstallConsentPrompt(event.sender)({ purpose: 'task-capability', initiator: 'user', origin: 'local-file', facts }), true, capability === 'observeFiles' ? 'observeFiles' : capability === 'observe' ? 'observe' : 'tasks');
-=======
       createWindowGhostInstallConsentPrompt(event.sender)({ purpose: 'task-capability', initiator: 'user', origin: 'local-file', facts }), true,
       capability === undefined ? 'tasks' : capability);
->>>>>>> upstream/main
     if (granted) broadcastGhostsChanged(getGhostManager().list());
     return { granted };
   });

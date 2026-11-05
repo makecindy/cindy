@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-<<<<<<< HEAD
-import { ensurePluginTaskApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, hasPluginObserveApproval, hasPluginObserveFilesApproval, PluginTaskApprovalGate } from '../taskCapability.js';
-=======
-import { ensurePluginTaskApproval, hasPluginCompanionsApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, hasPluginObserveApproval, PluginTaskApprovalGate } from '../taskCapability.js';
->>>>>>> upstream/main
+import { ensurePluginTaskApproval, hasPluginCompanionsApproval, hasPluginObserveFilesApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, hasPluginObserveApproval, PluginTaskApprovalGate } from '../taskCapability.js';
 import { handlePluginTaskRequest } from '../taskSlot.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import type { GhostInstallConsentFacts } from '../../../shared/ghostInstallConsent.js';
@@ -214,7 +210,6 @@ it.each(['missing-declaration', 'old-receipt', 'deny', 'account-change', 'approv
   },
 );
 
-<<<<<<< HEAD
 // Unit: observe consent promised no files; a new explicit grant is required.
 it.each(['old', 'missing-observe', 'deny', 'account-change', 'approve'] as const)('keeps final-answer files separately approved: %s', async scenario => {
   const ghost = legacy();
@@ -238,7 +233,6 @@ it.each(['old', 'missing-observe', 'deny', 'account-change', 'approve'] as const
   ghost.enabled = false;
   expect(hasPluginObserveFilesApproval(ghost)).toBe(false);
 });
-=======
 // unit: companion viewing needs its own receipt fact; tasks, targets or observe grants never imply it.
 it.each(['missing-declaration', 'deny', 'account-change', 'approve'] as const)(
   'keeps companions independently approved without requiring tasks: %s', async scenario => {
@@ -266,4 +260,3 @@ it.each(['missing-declaration', 'deny', 'account-change', 'approve'] as const)(
     expect(hasPluginCompanionsApproval(ghost)).toBe(false);
   },
 );
->>>>>>> upstream/main
