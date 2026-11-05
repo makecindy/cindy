@@ -5873,7 +5873,6 @@ export class PiAgent extends BaseAgent {
               try { plan = JSON.parse(typeof event.placeholder === 'string' ? event.placeholder : '{}').plan; }
               catch { /* Malformed requests cannot grant implementation authority. */ }
               const resolver = interactionResolver;
-              const planIntent = currentAutoReviewIntent;
               const planAuthority = currentAutoReviewAuthority;
               let settled = false;
               let unregister: () => void = () => undefined;
@@ -5882,10 +5881,14 @@ export class PiAgent extends BaseAgent {
                 settled = true;
                 unregister?.();
                 if (closed || piProcessExited || proc.isClosed || accountBoundaryTeardown) return;
+                // Approval cannot revive a rejected input or cross requester
+                // boundaries. Same-requester steers remain part of live intent.
+                if (result && (currentAutoReviewAuthority === null
+                  || JSON.stringify(currentAutoReviewAuthority ?? null) !== JSON.stringify(planAuthority ?? null))) result = undefined;
                 if (result?.action === 'implement') {
-                  setAutoReviewIntent(composeAutoReviewIntentWithApprovedPlan(planIntent, result.plan), { authority: planAuthority });
+                  setAutoReviewIntent(composeAutoReviewIntentWithApprovedPlan(currentAutoReviewIntent, result.plan));
                 } else if (result?.action === 'revise') {
-                  setAutoReviewIntent(appendAutoReviewUserIntent(planIntent, result.feedback), { authority: planAuthority });
+                  setAutoReviewIntent(appendAutoReviewUserIntent(currentAutoReviewIntent, result.feedback));
                 }
                 proc.send({ type: 'extension_ui_response', id: requestId,
                   ...(result ? { value: JSON.stringify(result) } : { cancelled: true }) });
