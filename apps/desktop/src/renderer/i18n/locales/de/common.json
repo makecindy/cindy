@@ -17381,9 +17381,21 @@
     },
     "orders": {
       "title": "Bestellverlauf",
-      "description": "Es werden nur Auflade- und Abobestellungen aufgeführt, die in Cindy gestartet wurden. Bestellungen mit ausstehender Zahlung werden nach Ablauf der Zahlungsfrist automatisch storniert.",
+      "description": "Bezahlte Aufladungen und beglichene Aborechnungen.",
+      "history": {
+        "loadFailed": "Bestellverlauf konnte nicht geladen werden",
+        "retry": "Bestellungen neu laden",
+        "unknownPaidAt": "Zahlungsdatum nicht verfügbar",
+        "unknownAmount": "Betrag nicht verfügbar",
+        "refundedAmount": "Erstattet: {{amount}}",
+        "refunded": "Erstattet",
+        "partiallyRefunded": "Teilweise erstattet",
+        "noPayment": "Keine Zahlung erforderlich",
+        "page": "Seite {{page}}",
+        "previous": "Vorherige Seite",
+        "next": "Nächste Seite"
+      },
       "count": "{{count}} Bestellungen",
-      "incomplete": "Es gibt viele Bestellungen. Nur die neuesten {{count}} werden angezeigt.",
       "orderId": "Nr. {{id}}",
       "copy": {
         "action": "Bestell-ID {{id}} kopieren",
@@ -17398,7 +17410,7 @@
         "emailSubject": "Rechnungsanfrage für Bestellung {{orderId}}",
         "personalInvoicePolicy": "Rechnungen für Cindy Personal-Aufladungen werden standardmäßig auf <strong>den Namen einer Privatperson</strong> ausgestellt. Du kannst deinen Namen oder „Privatperson“ als Rechnungsempfänger angeben. Wenn du für eine Kostenerstattung eine Rechnung auf den Namen deines Unternehmens benötigst, lege <strong>eine Kostenerstattungserklärung mit dem offiziellen Firmenstempel</strong> vor, in der der Rechnungsempfänger angegeben ist.",
         "invoiceTitleHint": "Hinweise: Gib für eine Privatrechnung deinen Namen oder „Privatperson“ ein. Für eine Rechnung auf den Namen deines Unternehmens zur Kostenerstattung füge eine Kostenerstattungserklärung mit dem offiziellen Firmenstempel bei, in der der Rechnungsempfänger angegeben ist.",
-        "emailBody": "Hallo,\n\nich möchte eine Rechnung für die folgende Bestellung anfordern:\n\n────────────────────\nBestell-ID: {{orderId}}\nAnwendung: {{application}}\nZahlungsmethode: {{paymentMethod}}\nRechnungsbetrag: {{amount}}\nRechnungsempfänger: \n{{invoiceTitleHint}}\n\nKontaktperson: \nTelefonnummer: \nE-Mail: \n────────────────────\n\nVielen Dank.",
+        "emailBody": "Hallo,\n\nich möchte eine Rechnung für die folgende Bestellung anfordern:\n\n────────────────────\nBestell-ID: {{orderId}}\nTransaktions-ID des Zahlungsanbieters: {{providerTransactionId}}\nAnwendung: {{application}}\nZahlungsmethode: {{paymentMethod}}\nRechnungsbetrag: {{amount}}\nRechnungsempfänger: \n{{invoiceTitleHint}}\n\nKontaktperson: \nTelefonnummer: \nE-Mail: \n────────────────────\n\nVielen Dank.",
         "sendAction": "Rechnungsanfrage senden",
         "emailCopied": "Support-E-Mail-Adresse kopiert",
         "emailCopyFailed": "Support-E-Mail-Adresse nicht kopiert – versuch es erneut",
@@ -17409,6 +17421,7 @@
         "notAvailable": "Nicht verfügbar",
         "fields": {
           "orderId": "Bestell-ID",
+          "providerTransactionId": "Transaktions-ID des Zahlungsanbieters",
           "application": "Anwendung",
           "paymentMethod": "Zahlungsmethode",
           "amount": "Rechnungsbetrag",

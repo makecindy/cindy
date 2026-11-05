@@ -39,6 +39,8 @@ import {
   type BillingCatalogOfferUnavailableReason,
   type BillingCatalogProduct,
   type BillingPaymentOrder,
+  type BillingPaymentHistory,
+  type BillingPaymentHistoryRecord,
   type BillingPendingPlanChange,
   type BillingSubscription,
 } from '../../../shared/billing';
@@ -65,7 +67,7 @@ import {
   PlanChangeTargetDialog,
   type PlanChangeCandidate,
 } from './PlanChangeDialog';
-import { phaseForOrder, useBillingCheckout } from './useBillingCheckout';
+import { useBillingCheckout } from './useBillingCheckout';
 import { usePlanChange, type PlanChangeSettledKind } from './usePlanChange';
 
 type CatalogOfferEntry = {
@@ -101,36 +103,9 @@ const INVOICE_REQUIRED_FIELDS = ['invoiceTitle', 'contact', 'phone', 'email'] as
 const GMAIL_COMPOSE_URL = 'https://mail.google.com/mail/?view=cm&fs=1';
 
 /**
- * 订单记录默认只列最近 10 笔。这一组回答的是「上次充了多少、那笔没付成的还在不在」,
- * 不是账目导出 —— 更早的记录没有分页器可翻,服务端还有下一页时只用一条提示条说明。
+ * 沿用现有每页10笔的密度；服务端统一查询成功充值和每笔已付订阅账单。
  */
 const ORDER_HISTORY_LIMIT = 10;
-
-/**
- * 订单状态 chip 的文案 key。刻意复用 checkout 的 `phaseForOrder` 而不是自己再写一套
- * status→文案映射:同一个 `CREATED`,支付弹窗说「等待支付」、列表说别的,是用户直接
- * 可见的不一致。两处必须由同一个判据推导。
- */
-function orderStatusLabelKey(order: BillingPaymentOrder): string {
-  switch (phaseForOrder(order)) {
-    case 'COMPLETED':
-      return 'billing.orders.states.completed';
-    case 'CANCELED':
-      return 'billing.orders.states.canceled';
-    case 'EXPIRED':
-      return 'billing.orders.states.expired';
-    case 'FAILED':
-      return 'billing.orders.states.failed';
-    default:
-      // phaseForOrder 对未终态一律返 AWAITING_PAYMENT(CREATED / PENDING)。
-      return 'billing.orders.states.awaitingPayment';
-  }
-}
-
-/** 「待支付」是这组里唯一可能还需要用户处理的状态,给它主文本色;其余保持二级色。 */
-function isAwaitingPaymentOrder(order: BillingPaymentOrder): boolean {
-  return phaseForOrder(order) === 'AWAITING_PAYMENT';
-}
 
 /** 订单号展示保留首尾用于对单，中段固定脱敏；复制仍使用服务端返回的完整原值。 */
 function maskedOrderId(orderId: string): string {
@@ -319,8 +294,14 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   const [balanceError, setBalanceError] = useState<BalanceIssue>(null);
   // 订单记录按账号天然隔离:BillingPage 用 `billing:<dataOwnerId>` 做 key,换账号会整段
   // 重挂,这份 state 连同缓存一起重建,不会把上一个账号的订单渲染给新账号。
-  const [orders, setOrders] = useState<BillingPaymentOrder[]>([]);
-  const [moreOrdersAvailable, setMoreOrdersAvailable] = useState(false);
+  const [orderHistory, setOrderHistory] = useState<BillingPaymentHistory & {
+    cursor?: string;
+    previousCursors: (string | undefined)[];
+  }>({ records: [], nextCursor: null, previousCursors: [] });
+  const [loadingOrders, setLoadingOrders] = useState(true);
+  const [ordersError, setOrdersError] = useState(false);
+  const ordersGenerationRef = useRef(0);
+  const ordersRequestRef = useRef<{ cursor?: string; previousCursors: (string | undefined)[] }>({ previousCursors: [] });
   const [subscriptionDialogOpen, setSubscriptionDialogOpen] = useState(false);
   const [topupDialogOpen, setTopupDialogOpen] = useState(false);
   const [planChangeTargetOpen, setPlanChangeTargetOpen] = useState(false);
@@ -403,19 +384,23 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     }
   }, []);
 
-  const loadOrders = useCallback(async () => {
+  const loadOrders = useCallback(async (cursor?: string, previousCursors: (string | undefined)[] = []) => {
+    const generation = ++ordersGenerationRef.current;
+    ordersRequestRef.current = { cursor, previousCursors };
+    setLoadingOrders(true);
+    setOrdersError(false);
     try {
-      const list = await billingApi.listOrders(ORDER_HISTORY_LIMIT);
-      setOrders(list.orders);
-      // nextCursor 是「服务端还有更早的记录」的唯一实证;这一组不做分页器,只据此出提示条。
-      setMoreOrdersAvailable(list.nextCursor !== null);
+      const list = await billingApi.listPaymentHistory(ORDER_HISTORY_LIMIT, cursor);
+      if (generation !== ordersGenerationRef.current) return;
+      setOrderHistory({ ...list, cursor, previousCursors });
     } catch {
-      // 订单记录是补充叙事(钱是怎么来的),拿不到就整组不渲染 —— 余额 / 用量 / 赠送
-      // 三组都不受影响,也不为它加一个空错误壳占版面。
-      setOrders([]);
-      setMoreOrdersAvailable(false);
+      if (generation === ordersGenerationRef.current) setOrdersError(true);
+    } finally {
+      if (generation === ordersGenerationRef.current) setLoadingOrders(false);
     }
   }, []);
+
+  useEffect(() => () => { ordersGenerationRef.current += 1; }, []);
 
   const loadSubscription = useCallback(async (fallback: BillingSubscription | null = null) => {
     setLoadingSubscription(true);
@@ -453,8 +438,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         .finally(() => setLoadingCatalog(false)),
       loadSubscription(),
       loadBalance(),
-      // 进页面拉一次,「刷新」也跟着重拉;不加轮询 —— 订单只在用户自己发起支付时变化,
-      // 而那条路径由 checkout 弹窗自己轮询。
+      // 进入页面和手动刷新都回到最新一页，自动续费的账单也从同一服务端历史读取。
       loadOrders(),
     ]);
   }, [loadBalance, loadOrders, loadSubscription]);
@@ -497,8 +481,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       setCurrentSubscription(null);
       void loadSubscription();
     }
-    // 关弹窗也刷一次订单:用户可能在 AWAITING_PAYMENT 中途放弃 —— 那笔「待支付」
-    // 此刻就该出现在订单记录里,而不是等他手动点「刷新」才知道它还挂着。
+    // 关闭支付弹窗后重读服务端确认的成功历史；未付款记录不进入此列表。
     void loadOrders();
   }, [checkout, loadOrders, loadSubscription]);
 
@@ -506,9 +489,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     const previousPhase = previousCheckoutPhaseRef.current;
     previousCheckoutPhaseRef.current = checkout.state.phase;
     if (previousPhase === checkout.state.phase) return;
-    // 订单记录跟着订单生命周期的每一次落位刷新,不只 COMPLETED:订单一创建(进入
-    // AWAITING_PAYMENT)就已经是一条「待支付」记录;轮询落到 FAILED / EXPIRED /
-    // CANCELED 时列表里那行的状态也变了。只刷 COMPLETED 会让其余终态全靠手动刷新。
+    // 支付阶段落位时重新读取已确认历史；当前支付结果仍由原支付弹窗承接。
     if (
       checkout.state.phase === 'AWAITING_PAYMENT' ||
       checkout.state.phase === 'COMPLETED' ||
@@ -1182,21 +1163,30 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
             </BillingGroup>
           )}
 
-          {/* 空态(没有任何订单 / 拉不到)整组不渲染:页面保持现状,不加空壳 —— 从没在
-              Cindy 内付过钱的用户不需要一个写着「暂无订单」的框告诉他这件事。 */}
-          {orders.length > 0 && (
-            <BillingGroup
-              title={t('billing.orders.title')}
-              description={t('billing.orders.description')}
-              badge={
-                <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 font-medium text-[var(--text-secondary)]">
-                  {t('billing.orders.count', { count: orders.length })}
-                </span>
-              }
-            >
-              <OrderHistoryCard orders={orders} hasMore={moreOrdersAvailable} />
-            </BillingGroup>
-          )}
+          {(orderHistory.records.length > 0 || ordersError) && <BillingGroup
+            title={t('billing.orders.title')}
+            description={t('billing.orders.description')}
+            badge={
+              <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 font-medium text-[var(--text-secondary)]">
+                {t('billing.orders.count', { count: orderHistory.records.length })}
+              </span>
+            }
+          >
+            <OrderHistoryCard
+              orders={orderHistory.records}
+              hasMore={orderHistory.nextCursor !== null}
+              page={orderHistory.previousCursors.length + 1}
+              loading={loadingOrders}
+              error={ordersError}
+              onRetry={() => void loadOrders(ordersRequestRef.current.cursor, ordersRequestRef.current.previousCursors)}
+              onNext={() => {
+                if (orderHistory.nextCursor) void loadOrders(orderHistory.nextCursor, [...orderHistory.previousCursors, orderHistory.cursor]);
+              }}
+              onPrevious={orderHistory.previousCursors.length > 0 ? () => {
+                void loadOrders(orderHistory.previousCursors.at(-1), orderHistory.previousCursors.slice(0, -1));
+              } : undefined}
+            />
+          </BillingGroup>}
         </div>
       </div>
 
@@ -1815,16 +1805,33 @@ function PromotionalGrantStatus({ state }: { state: ModelAccessPromotionalGrantS
  * 订单记录卡。行结构与 PromotionalGrantsCard 同一套(12px 容器 + 1px 分隔行 + 左列双行
  * 加右侧数列),因为它们在同一页里是同一类东西:一条条只读流水。
  */
-function OrderHistoryCard({
+type InvoiceRequestOrder = Pick<BillingPaymentOrder, 'orderId' | 'amount' | 'currency'> & {
+  provider: string | null;
+  providerTransactionId: string | null;
+};
+
+export function OrderHistoryCard({
   orders,
   hasMore,
+  page,
+  loading,
+  error,
+  onNext,
+  onPrevious,
+  onRetry,
 }: {
-  orders: readonly BillingPaymentOrder[];
+  orders: readonly BillingPaymentHistoryRecord[];
   hasMore: boolean;
+  page: number;
+  loading: boolean;
+  error: boolean;
+  onNext: () => void;
+  onPrevious?: () => void;
+  onRetry: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
-  const [invoiceOrder, setInvoiceOrder] = useState<BillingPaymentOrder | null>(null);
+  const [invoiceOrder, setInvoiceOrder] = useState<InvoiceRequestOrder | null>(null);
   const copyOrderId = async (orderId: string) => {
     try {
       await navigator.clipboard.writeText(orderId);
@@ -1833,25 +1840,19 @@ function OrderHistoryCard({
       toast.error(t('billing.orders.copy.failed'));
     }
   };
-  /**
-   * 支付方式只有在服务端还带着本单的支付动作时才知道 —— 订单投影(shared/billing.ts 的
-   * BillingPaymentOrder)里没有收单渠道字段,终态订单通常也不再带 paymentAction。整批都
-   * 拿不到时**整列不出**,免得留下一列破折号;有一单拿得到就保留该列并给缺的那些占位。
-   */
-  const showPaymentMethod = orders.some((order) => order.paymentAction !== null);
+  const showPaymentMethod = orders.some((order) => isSupportedBillingProvider(order.provider ?? undefined));
   return (
     <section className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
-      {hasMore && (
-        <p className="border-b border-[var(--border-default)] px-5 py-3 text-11 leading-4 text-[var(--text-tertiary)]">
-          {t('billing.orders.incomplete', { count: orders.length })}
-        </p>
+      {error && (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-default)] px-5 py-3">
+          <p className="text-12 text-[var(--text-secondary)]">{t('billing.orders.history.loadFailed')}</p>
+          <Button variant="secondary" disabled={loading} onClick={onRetry}>{t('billing.orders.history.retry')}</Button>
+        </div>
       )}
-      {/* 不像赠送明细那样封高 + 内滚:那边的行数由服务端历史决定(可达上百条),这边行数
-          由 ORDER_HISTORY_LIMIT 封死在 10,再套一层内滚只会凭空造出嵌套滚动区。 */}
-      <div className="divide-y divide-[var(--border-default)]" role="list">
+      {orders.length > 0 && <div className="divide-y divide-[var(--border-default)]" role="list">
         {orders.map((order) => (
           <div
-            key={order.orderId}
+            key={order.recordId}
             role="listitem"
             className={cn(
               'grid gap-x-3 gap-y-2 px-5 py-3.5 lg:items-center',
@@ -1867,14 +1868,14 @@ function OrderHistoryCard({
               )}
             >
               <p className="truncate text-12 font-medium tabular-nums text-[var(--text-primary)]">
-                {formatLedgerTimestamp(order.createdAt, billingLocale)}
+                {order.paidAt ? formatLedgerTimestamp(order.paidAt, billingLocale) : t('billing.orders.history.unknownPaidAt')}
               </p>
               {/* 可见值只露首尾；整块按钮含 Copy 图标，点击任一位置都复制完整订单号。 */}
               <button
                 type="button"
-                onClick={() => void copyOrderId(order.orderId)}
+                onClick={() => void copyOrderId(order.sourceId)}
                 aria-label={t('billing.orders.copy.action', {
-                  id: maskedOrderId(order.orderId),
+                  id: maskedOrderId(order.sourceId),
                 })}
                 className={cn(
                   '-ml-1.5 mt-0.5 inline-flex max-w-full cursor-pointer select-none items-center gap-1 rounded-full px-1.5 py-0.5 text-left',
@@ -1884,36 +1885,44 @@ function OrderHistoryCard({
                 )}
               >
                 <span className="min-w-0 break-all">
-                  {t('billing.orders.orderId', { id: maskedOrderId(order.orderId) })}
+                  {t('billing.orders.orderId', { id: maskedOrderId(order.sourceId) })}
                 </span>
                 <Copy aria-hidden="true" size={11} className="shrink-0" />
               </button>
             </div>
-            <p className="min-w-0 truncate text-right text-12 font-medium tabular-nums text-[var(--text-primary)]">
-              {formatMoney(order.amount, order.currency, billingLocale)}
+            <p
+              className="min-w-0 truncate text-right text-12 font-medium tabular-nums text-[var(--text-primary)]"
+              title={order.refundSummary.refundedMinor > 0
+                ? t('billing.orders.history.refundedAmount', { amount: formatMoney(order.refundSummary.refundedAmount, order.currency, billingLocale) })
+                : undefined}
+            >
+              {order.amount === null ? t('billing.orders.history.unknownAmount') : formatMoney(order.amount, order.currency, billingLocale)}
             </p>
             {showPaymentMethod && (
               <p className="min-w-0 truncate text-11 text-[var(--text-secondary)]">
-                {order.paymentAction
-                  ? t(`billing.paymentActions.${order.paymentAction.type}`)
+                {isSupportedBillingProvider(order.provider ?? undefined)
+                  ? t(`billing.providers.${order.provider}`)
                   : '—'}
               </p>
             )}
             <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
               <span
-                className={cn(
-                  'shrink-0 whitespace-nowrap text-11',
-                  isAwaitingPaymentOrder(order)
-                    ? 'text-[var(--text-primary)]'
-                    : 'text-[var(--text-secondary)]',
-                )}
+                className="shrink-0 whitespace-nowrap text-11 text-[var(--text-secondary)]"
               >
-                {t(orderStatusLabelKey(order))}
+                {t(order.refundSummary.status === 'REFUNDED' ? 'billing.orders.history.refunded'
+                  : order.refundSummary.status === 'PARTIALLY_REFUNDED' ? 'billing.orders.history.partiallyRefunded'
+                    : order.amountPaidMinor === 0 ? 'billing.orders.history.noPayment'
+                      : 'billing.orders.states.completed')}
               </span>
-              {phaseForOrder(order) === 'COMPLETED' && (
+              {order.amount !== null && (
                 <Button
                   variant="secondary"
-                  onClick={() => setInvoiceOrder(order)}
+                  onClick={() => {
+                    if (order.amount !== null) setInvoiceOrder({
+                      orderId: order.sourceId, amount: order.amount, currency: order.currency,
+                      provider: order.provider, providerTransactionId: order.providerTransactionId,
+                    });
+                  }}
                   className="whitespace-nowrap px-3"
                 >
                   {t('billing.orders.invoice.action')}
@@ -1922,7 +1931,16 @@ function OrderHistoryCard({
             </div>
           </div>
         ))}
-      </div>
+      </div>}
+      {(hasMore || page > 1) && (
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-default)] px-5 py-3">
+          <span className="text-11 text-[var(--text-secondary)]">{t('billing.orders.history.page', { page })}</span>
+          <div className="flex gap-2">
+            <Button variant="secondary" disabled={loading || !onPrevious} onClick={onPrevious}>{t('billing.orders.history.previous')}</Button>
+            <Button variant="secondary" disabled={loading || !hasMore} onClick={onNext}>{t('billing.orders.history.next')}</Button>
+          </div>
+        </div>
+      )}
       <InvoiceRequestDialog order={invoiceOrder} onClose={() => setInvoiceOrder(null)} />
     </section>
   );
@@ -1932,22 +1950,22 @@ function InvoiceRequestDialog({
   order,
   onClose,
 }: {
-  order: BillingPaymentOrder | null;
+  order: InvoiceRequestOrder | null;
   onClose: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const { confirm } = useConfirmDialog();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
   const sendInvoiceLockRef = useRef(false);
-  // BillingPaymentOrder does not carry the actual acquiring provider, and a
-  // terminal order usually has no paymentAction. Never present an action type
-  // such as QR_CODE/REDIRECT as the user's payment method.
-  const paymentMethod = t('billing.orders.invoice.notAvailable');
+  const paymentMethod = isSupportedBillingProvider(order?.provider ?? undefined)
+    ? t(`billing.providers.${order?.provider}`) : t('billing.orders.invoice.notAvailable');
+  const providerTransactionId = order?.providerTransactionId ?? t('billing.orders.invoice.notAvailable');
   const buildInvoiceEmail = () => {
     if (!order) return null;
     const subject = t('billing.orders.invoice.emailSubject', { orderId: order.orderId });
     const body = t('billing.orders.invoice.emailBody', {
       orderId: order.orderId,
+      providerTransactionId,
       application: 'Cindy',
       paymentMethod,
       amount: formatMoney(order.amount, order.currency, billingLocale),
@@ -2059,6 +2077,11 @@ function InvoiceRequestDialog({
         <InvoiceInfoRow
           label={t('billing.orders.invoice.fields.orderId')}
           value={order.orderId}
+          mono
+        />
+        <InvoiceInfoRow
+          label={t('billing.orders.invoice.fields.providerTransactionId')}
+          value={providerTransactionId}
           mono
         />
         <InvoiceInfoRow label={t('billing.orders.invoice.fields.application')} value="Cindy" />

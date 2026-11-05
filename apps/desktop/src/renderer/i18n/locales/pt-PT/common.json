@@ -17542,9 +17542,21 @@
     },
     "orders": {
       "title": "Histórico de encomendas",
-      "description": "Apenas são apresentadas as encomendas de carregamento e subscrição iniciadas no Cindy. As encomendas a aguardar pagamento são canceladas automaticamente quando o prazo expira.",
+      "description": "Carregamentos pagos e faturas de subscrição liquidadas.",
+      "history": {
+        "loadFailed": "Não foi possível carregar o histórico de encomendas",
+        "retry": "Recarregar encomendas",
+        "unknownPaidAt": "Data de pagamento indisponível",
+        "unknownAmount": "Montante indisponível",
+        "refundedAmount": "Reembolsado: {{amount}}",
+        "refunded": "Reembolsado",
+        "partiallyRefunded": "Reembolso parcial",
+        "noPayment": "Sem pagamento necessário",
+        "page": "Página {{page}}",
+        "previous": "Página anterior",
+        "next": "Página seguinte"
+      },
       "count": "{{count}} encomendas",
-      "incomplete": "Existem muitos registos de encomendas. Apenas são apresentados os {{count}} mais recentes.",
       "orderId": "N.º {{id}}",
       "copy": {
         "action": "Copiar ID da encomenda {{id}}",
@@ -17559,7 +17571,7 @@
         "emailSubject": "Pedido de fatura da encomenda {{orderId}}",
         "personalInvoicePolicy": "As faturas de carregamentos do Cindy Personal são emitidas, por predefinição, em <strong>nome de uma pessoa singular</strong>. Pode usar o seu nome ou «Particular» como nome na fatura. Se precisar de uma fatura em nome da sua empresa para reembolso de despesas, forneça <strong>uma declaração de reembolso com o carimbo oficial da empresa</strong> que indique o nome a constar na fatura.",
         "invoiceTitleHint": "Instruções: Para uma fatura individual, introduza o seu nome ou «Particular». Para uma fatura em nome da sua empresa para reembolso de despesas, anexe uma declaração de reembolso com o carimbo oficial da empresa e que indique o nome a constar na fatura.",
-        "emailBody": "Olá,\n\nGostaria de pedir uma fatura para a seguinte encomenda:\n\n────────────────────\nID da encomenda: {{orderId}}\nAplicação: {{application}}\nMétodo de pagamento: {{paymentMethod}}\nMontante da fatura: {{amount}}\nNome na fatura: \n{{invoiceTitleHint}}\n\nPessoa de contacto: \nNúmero de telefone: \nE-mail: \n────────────────────\n\nObrigado.",
+        "emailBody": "Olá,\n\nGostaria de pedir uma fatura para a seguinte encomenda:\n\n────────────────────\nID da encomenda: {{orderId}}\nID de transação do prestador: {{providerTransactionId}}\nAplicação: {{application}}\nMétodo de pagamento: {{paymentMethod}}\nMontante da fatura: {{amount}}\nNome na fatura: \n{{invoiceTitleHint}}\n\nPessoa de contacto: \nNúmero de telefone: \nE-mail: \n────────────────────\n\nObrigado.",
         "sendAction": "Enviar pedido de fatura",
         "emailCopied": "E-mail de apoio copiado",
         "emailCopyFailed": "Não foi possível copiar o e-mail de apoio — tente novamente",
@@ -17570,6 +17582,7 @@
         "notAvailable": "Indisponível",
         "fields": {
           "orderId": "ID da encomenda",
+          "providerTransactionId": "ID de transação do prestador",
           "application": "Aplicação",
           "paymentMethod": "Método de pagamento",
           "amount": "Montante da fatura",

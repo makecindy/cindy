@@ -17542,9 +17542,21 @@
     },
     "orders": {
       "title": "Historique des commandes",
-      "description": "Seules les commandes de recharge et d'abonnement effectuées dans Cindy sont listées. Les commandes en attente de paiement sont annulées automatiquement à expiration du délai.",
+      "description": "Recharges payées et factures d’abonnement réglées.",
+      "history": {
+        "loadFailed": "Impossible de charger l’historique des commandes",
+        "retry": "Recharger les commandes",
+        "unknownPaidAt": "Date de paiement indisponible",
+        "unknownAmount": "Montant indisponible",
+        "refundedAmount": "Remboursé : {{amount}}",
+        "refunded": "Remboursé",
+        "partiallyRefunded": "Partiellement remboursé",
+        "noPayment": "Aucun paiement requis",
+        "page": "Page {{page}}",
+        "previous": "Page précédente",
+        "next": "Page suivante"
+      },
       "count": "{{count}} commandes",
-      "incomplete": "Il existe de nombreuses commandes. Seules les {{count}} plus récentes sont affichées.",
       "orderId": "N° {{id}}",
       "copy": {
         "action": "Copier l'ID de commande {{id}}",
@@ -17559,7 +17571,7 @@
         "emailSubject": "Demande de facture pour la commande {{orderId}}",
         "personalInvoicePolicy": "Les factures des recharges Cindy Personal sont émises par défaut <strong>au nom d'un particulier</strong>. Vous pouvez indiquer votre nom ou « Particulier » comme intitulé de facture. Si vous avez besoin d'une facture au nom de votre entreprise pour un remboursement de frais, fournissez <strong>une attestation de remboursement portant le cachet officiel de l'entreprise</strong> et précisant l'intitulé de la facture.",
         "invoiceTitleHint": "Instructions : pour une facture au nom d'un particulier, indiquez votre nom ou « Particulier ». Pour une facture au nom de votre entreprise en vue d'un remboursement de frais, joignez une attestation de remboursement portant le cachet officiel de l'entreprise et précisant l'intitulé de la facture.",
-        "emailBody": "Bonjour,\n\nJe souhaite demander une facture pour la commande suivante :\n\n────────────────────\nID de commande : {{orderId}}\nApplication : {{application}}\nMoyen de paiement : {{paymentMethod}}\nMontant de la facture : {{amount}}\nIntitulé de la facture : \n{{invoiceTitleHint}}\n\nPersonne à contacter : \nNuméro de téléphone : \nE-mail : \n────────────────────\n\nMerci.",
+        "emailBody": "Bonjour,\n\nJe souhaite demander une facture pour la commande suivante :\n\n────────────────────\nID de commande : {{orderId}}\nIdentifiant de transaction du prestataire : {{providerTransactionId}}\nApplication : {{application}}\nMoyen de paiement : {{paymentMethod}}\nMontant de la facture : {{amount}}\nIntitulé de la facture : \n{{invoiceTitleHint}}\n\nPersonne à contacter : \nNuméro de téléphone : \nE-mail : \n────────────────────\n\nMerci.",
         "sendAction": "Envoyer la demande de facture",
         "emailCopied": "E-mail du support copié",
         "emailCopyFailed": "L'e-mail du support n'a pas été copié : réessayez",
@@ -17570,6 +17582,7 @@
         "notAvailable": "Non disponible",
         "fields": {
           "orderId": "ID de commande",
+          "providerTransactionId": "Identifiant de transaction du prestataire",
           "application": "Application",
           "paymentMethod": "Moyen de paiement",
           "amount": "Montant de la facture",

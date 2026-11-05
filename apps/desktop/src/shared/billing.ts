@@ -55,6 +55,7 @@ export const BILLING_INVOKE = {
   GET_CREDIT_USAGE: 'billing:get-credit-usage',
   GET_CATALOG: 'billing:get-catalog',
   LIST_ORDERS: 'billing:list-orders',
+  LIST_PAYMENT_HISTORY: 'billing:list-payment-history',
   GET_ORDER: 'billing:get-order',
   CREATE_TOPUP: 'billing:create-topup',
   REFRESH_TOPUP: 'billing:refresh-topup',
@@ -252,6 +253,35 @@ export type BillingOrderList = {
   nextCursor: string | null;
 };
 
+/** Settled payment facts; independent of checkout, contract and fulfillment state. */
+export type BillingPaymentHistoryRecord = {
+  recordId: string;
+  sourceType: 'CREDIT_TOPUP' | 'SUBSCRIPTION_INVOICE';
+  sourceId: string;
+  subscriptionId: string | null;
+  productName: string | null;
+  billingReason: string | null;
+  amountPaidMinor: number | null;
+  amount: string | null;
+  currency: string;
+  provider: string | null;
+  providerTransactionId: string | null;
+  paidAt: string | null;
+  createdAt: string;
+  periodStartAt: string | null;
+  periodEndAt: string | null;
+  refundSummary: {
+    status: 'UNREFUNDED' | 'PARTIALLY_REFUNDED' | 'REFUNDED' | null;
+    refundedMinor: number;
+    refundedAmount: string;
+  };
+};
+
+export type BillingPaymentHistory = {
+  records: BillingPaymentHistoryRecord[];
+  nextCursor: string | null;
+};
+
 export type BillingCurrentSubscription = {
   subscription: BillingSubscription | null;
 };
@@ -272,6 +302,7 @@ export interface BillingRendererApi {
   getCreditUsage: () => Promise<ModelAccessCreditUsage>;
   getCatalog: () => Promise<BillingCatalog>;
   listOrders: (payload: { limit: number }) => Promise<BillingOrderList>;
+  listPaymentHistory: (payload: { limit: number; cursor?: string }) => Promise<BillingPaymentHistory>;
   getOrder: (payload: { orderId: string }) => Promise<BillingPaymentOrder>;
   createTopup: (payload: {
     request: CreateBillingTopupRequest;
