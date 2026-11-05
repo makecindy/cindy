@@ -146,17 +146,24 @@ export function createCompanionUploader(deps: {
   /** Store revisions once per state file, like `seed`; keys this device holds stay its own. */
   async function seedStore(botId: string, actorId: string, store: CompanionStore) {
     const server = await store.revisions(actorId);
+    // A live store value under a key whose current value this computer holds in the preferences
+    // is this computer's to clear only if that preference row is newer than the value (written
+    // over an older row); a later value (the previous home's late upload) stays until edited here.
+    const superseded = new Set<string>();
+    const before = deps.state.bot(botId);
+    for (const [key, row] of server) {
+      const pref = before?.prefs[key];
+      if (!owned(key) || row.hash === TOMBSTONE_HASH || before?.stored?.[key]?.local || !pref?.local) continue;
+      const current = await store.entry(actorId, key) as { prefRevision?: number };
+      if (current.prefRevision !== undefined && pref.revision > current.prefRevision) superseded.add(key);
+    }
     deps.state.update(botId, actorId, entry => {
       const stored = entry.stored ?? {};
       for (const [key, row] of server) {
         if (!owned(key)) continue;
         const known = stored[key];
-        // A live store value under a key whose current value this computer holds in the
-        // preferences (deleted or small, written while the store was off, or restored from there)
-        // is older than that value: clear it, or it would win on the next restore.
-        const supersededHere = !!entry.prefs[key]?.local && row.hash !== TOMBSTONE_HASH;
         stored[key] = known?.local ? { ...known, revision: row.revision }
-          : { hash: row.hash, revision: row.revision, ...(supersededHere ? { local: true } : {}) };
+          : { hash: row.hash, revision: row.revision, ...(superseded.has(key) ? { local: true } : {}) };
       }
       entry.stored = stored;
       entry.storeSeeded = true;
@@ -248,9 +255,10 @@ export function createCompanionUploader(deps: {
         // A deleted value this computer kept in the store gets a tombstone here too, though the
         // preferences never had the key: a reader without the store (switched off) must see it.
         const storeDeletionPending = value === null && !!storedHere?.local;
-        // Back from the store with the very value the preferences still hold: write it again, so
-        // the preference row is newer than the store copy even while that copy cannot be cleared.
-        const storeCopyAhead = value !== null && !!prior && !!storedHere?.local && storedHere.hash !== TOMBSTONE_HASH
+        // Back from the store with the very value (or deletion) the preferences still hold: write
+        // it again, so the preference row is newer than the store copy even while that copy cannot
+        // be cleared.
+        const storeCopyAhead = !!prior && !!storedHere?.local && storedHere.hash !== TOMBSTONE_HASH
           && storedHere.prefRevision !== undefined && prior.revision <= storedHere.prefRevision;
         if (prior ? prior.hash === hash && !storeCopyAhead : value === null && !storeDeletionPending) {
           if (prior && !prior.local && value !== null) deps.state.update(botId, actorId, entry => { entry.prefs[key] = { ...prior, local: true }; });
@@ -267,7 +275,9 @@ export function createCompanionUploader(deps: {
       let prefRevision = deps.state.bot(botId)?.prefs[key]?.revision ?? 0;
       const storeValue = inPreferences ? null : value;
       let storeHash = inPreferences ? TOMBSTONE_HASH : storedValueHash(value, prefRevision);
-      if (priorStored ? priorStored.hash === storeHash : storeValue === null) {
+      // Only a store copy this computer wrote or took over is cleared here: another computer's
+      // later value stays until this computer actually edits the key.
+      if (priorStored ? priorStored.hash === storeHash || (storeValue === null && !priorStored.local) : storeValue === null) {
         if (priorStored && !priorStored.local && storeValue !== null) deps.state.update(botId, actorId, entry => { entry.stored = { ...entry.stored, [key]: { ...priorStored, local: true } }; });
         continue;
       }

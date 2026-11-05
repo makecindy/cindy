@@ -436,7 +436,7 @@ describe('companion store', () => {
     const key = 'companion.memory.v1:big.md';
     const big = memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000));
     // Another computer left a live large value; this one holds a preference tombstone for the key.
-    t.entries.set(key, { key, revision: 1, seq: 1, hash: canonicalHash(big.value), size: 70_000, deleted: false, value: big.value });
+    t.entries.set(key, { key, revision: 1, seq: 1, hash: canonicalHash(big.value), size: 70_000, deleted: false, value: { companionStore: 1, prefRevision: 1, value: big.value } });
     t.prefs.set(key, { key, value: null, revision: 2 });
     t.state.update('bot', 'actor', entry => { entry.prefs[key] = { hash: canonicalHash(null), revision: 2, local: true }; entry.prefsSeeded = true; });
     t.setValues([profile('soul')]);
@@ -560,6 +560,38 @@ describe('companion store', () => {
     t.setValues([profile('soul'), big]);
     await t.uploader.syncBot('bot', 'actor');
     expect((await readCompanionRows(t.api, t.store, 'actor')).find(row => row.key === key)?.value).toEqual(big.value);
+  });
+
+  it('keeps a later large value written over the preference row this computer restored', async () => {
+    const t = storeSetup();
+    const key = 'companion.memory.v1:big.md';
+    const late = memory('big.md', 'z'.repeat(COMPANION_VALUE_MAX_BYTES + 1000));
+    // This computer restored the small value at preference revision 1; the previous home's late
+    // upload then put a large value in the store over that same revision.
+    t.prefs.set(key, { key, value: { filename: 'big.md', content: 'small' }, revision: 1 });
+    t.state.update('bot', 'actor', entry => { entry.prefs[key] = { hash: canonicalHash({ filename: 'big.md', content: 'small' }), revision: 1, local: true }; });
+    t.entries.set(key, { key, revision: 1, seq: 1, hash: 'late', size: 70_000, deleted: false, value: { companionStore: 1, prefRevision: 1, value: late.value } });
+    t.setValues([profile('soul'), memory('big.md', 'small')]);
+    await t.uploader.syncBot('bot', 'actor');
+    expect(t.entries.get(key)?.deleted).toBe(false);
+  });
+
+  it('advances an existing tombstone when a recreated store value is deleted again', async () => {
+    const options = { off: false };
+    const t = storeSetup(options);
+    const key = 'companion.memory.v1:big.md';
+    const big = memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000));
+    t.setValues([profile('soul'), big]);
+    await t.uploader.syncBot('bot', 'actor');
+    t.setValues([profile('soul')]);
+    await t.uploader.syncBot('bot', 'actor');
+    t.setValues([profile('soul'), big]);
+    await t.uploader.syncBot('bot', 'actor');
+    options.off = true;
+    t.setValues([profile('soul')]);
+    await t.uploader.syncBot('bot', 'actor', Number.POSITIVE_INFINITY, { requireAll: true });
+    options.off = false;
+    expect((await readCompanionRows(t.api, t.store, 'actor')).find(row => row.key === key)?.value).toBeNull();
   });
 
   it('passes a deletion of a value kept only in the store to the next restore', async () => {
