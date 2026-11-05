@@ -1,4 +1,15 @@
 {
+  "pluginUi": {
+    "renderer": "Affichage",
+    "original": "Original",
+    "unavailable": "Les contrôles de l’extension sont indisponibles. Les actions sont désactivées.",
+    "outcome-unknown": "Le résultat n’est pas confirmé. Consultez l’état actuel de l’extension.",
+    "rejected": "L’extension n’a pas exécuté cette action. Votre saisie est conservée.",
+    "draftChanged": "Votre saisie a changé. La modification de l’extension n’a pas été appliquée.",
+    "editorUnavailable": "Ce champ est indisponible. La modification de l’extension n’a pas été appliquée.",
+    "more": "Plus",
+    "close": "Fermer"
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "Actualiser le quota",
@@ -7764,6 +7775,8 @@
         "skill": "Ajoute la skill « {{name}} » à vos assistants IA",
         "skillDetail": "Une skill est un fichier d'instructions que l'IA charge et suit comme les siennes, avec toutes vos autorisations, dans Claude Code et Codex, dans tous les projets. Elle n'est pas confinée au bac à sable de ce plugin. Elle reste disponible tant que le plugin est activé et est retirée lorsque le plugin est désactivé ou désinstallé ; désactiver le plugin pour un seul dossier ne la masque pas. Le texte complet de la skill ne peut pas être prévisualisé ici : n'installez que des plugins de confiance.",
         "routineEvents": "Événements de routine",
+        "nativeUi": "Ajouter des contrôles aux tâches",
+        "nativeTabView": "Ouvrir la vue « {{title}} »",
         "mcpUi": "Afficher des pages interactives dans la conversation",
         "mcpUiDomains": "Domaines accessibles aux pages : {{domains}}",
         "mcpAppOnly": "Page uniquement",
