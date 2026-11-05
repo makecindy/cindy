@@ -1312,6 +1312,7 @@ export function ModelAdvancedDrawer({
                   compact
                   type="button"
                   disabled={disabled && !selectionAvailable}
+                  data-settings-search-action="Enable or disable the displayed model group"
                   onClick={() => {
                     if (!pricePendingRef.current) onDisable(groupRow ?? row);
                   }}
@@ -1325,6 +1326,7 @@ export function ModelAdvancedDrawer({
                     variant="secondary"
                     size="md"
                     tone="danger"
+                    data-settings-search-action="Delete the displayed local model"
                     compact
                     type="button"
                     onClick={() => {

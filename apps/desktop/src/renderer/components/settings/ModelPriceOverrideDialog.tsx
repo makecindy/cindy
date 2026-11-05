@@ -17,6 +17,8 @@ import type {
 import type { UnionModelRow } from './UnifiedModelList';
 import type { ModelPriceQuote } from '../../../shared/regionalMoney';
 import { getModelPriceQuote } from '../../../shared/modelPriceQuote';
+import { providersSettings } from './ProvidersSection.settings-search';
+import { useSettingDefinition } from './useSettingDefinition';
 
 const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
@@ -111,6 +113,7 @@ export function ModelPriceOverrideDialog({
 }: Props) {
   const inline = presentation === 'inline';
   const { t } = useTranslation();
+  const pricingSetting = useSettingDefinition(providersSettings.modelPricing, t);
   const [agent, setAgent] = useState<AgentKind>(initialAgent ?? row.avail[0]);
   const [view, setView] = useState<ModelPriceOverrideView | null>(null);
   const [form, setFormState] = useState<FormState>(EMPTY_FORM);
@@ -421,12 +424,13 @@ export function ModelPriceOverrideDialog({
     const inputUnavailable = loading || !view?.editable;
     const details = typeof referenceDetails === 'function' ? referenceDetails(agent) : referenceDetails;
     return (
-      <section className="pt-5" aria-label={t('settings.providers.models.advanced.pricing')} aria-busy={saving}>
+      <section {...pricingSetting.anchorProps} className="pt-5" aria-label={t('settings.providers.models.advanced.pricing')} aria-busy={saving}>
         <div className="flex min-h-8 items-center justify-between gap-2">
           <h4 className="text-12 font-medium text-[var(--text-secondary)]">
             {t('settings.providers.models.advanced.pricing')}
           </h4>
           <Button ref={resetButtonRef} variant="secondary" onClick={() => void reset()}
+            data-settings-search-action="Restore the current model quote to its default"
             data-model-price-deferred-action onBlur={(event) => void save(undefined, staysInQuoteFields(event.currentTarget, event.relatedTarget))}
             disabled={inputUnavailable || (!view?.override && !hasDraft(view, form))} aria-disabled={saving || undefined} className="px-3 aria-disabled:opacity-60"
             title={t('settings.providers.models.priceOverride.reset')}>
@@ -436,6 +440,7 @@ export function ModelPriceOverrideDialog({
         <div className="mt-1.5">
           {row.avail.length > 1 && (
             <SegmentedControl className="mb-2"
+              data-settings-search-action="Choose which engine quote to edit"
               aria-label={t('settings.providers.custom.fields.protocols')}
               value={agent} onValueChange={(next) => {
                 if (pendingMutationRef.current) requestedAgentRef.current = next;
@@ -448,6 +453,7 @@ export function ModelPriceOverrideDialog({
             <label className="mb-2 flex items-center justify-between gap-4 text-12 text-[var(--text-secondary)]">
               {t('settings.providers.models.priceOverride.currency')}
               <select value={form.currency} disabled={inputUnavailable} aria-disabled={saving || undefined}
+                {...pricingSetting.controlProps}
                 data-model-price-deferred-action onBlur={(event) => void save(undefined, staysInQuoteFields(event.currentTarget, event.relatedTarget))}
                 onKeyDown={(event) => {
                   if (pendingMutationRef.current && event.key !== 'Tab' && event.key !== 'Escape') event.preventDefault();
@@ -483,6 +489,7 @@ export function ModelPriceOverrideDialog({
                 <span className="-my-2 inline-flex h-8 items-center rounded-full border border-transparent px-1 text-[var(--text-primary)] hover:border-[var(--border-default)] focus-within:border-[var(--settings-input-border-focus)] focus-within:ring-2 focus-within:ring-[var(--focus-ring-soft)]">
                   <span aria-hidden>{form.currency === 'CNY' ? '¥' : '$'}</span>
                   <input ref={field === 'input' ? primaryInputRef : undefined} id={`price-${agent}-${field}`} data-model-price-input type="text" inputMode="decimal"
+                    {...pricingSetting.controlProps}
                     value={form[field]} disabled={inputUnavailable} readOnly={saving}
                     placeholder="—"
                     aria-label={t(`settings.providers.models.priceOverride.${label}`)}
@@ -566,6 +573,7 @@ export function ModelPriceOverrideDialog({
             </div>
             <Dialog.Close asChild>
               <button
+                data-settings-search-action="Close the model quote editor"
                 type="button"
                 aria-label={t('settings.providers.models.priceOverride.close')}
                 className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)]"
@@ -578,6 +586,7 @@ export function ModelPriceOverrideDialog({
           <div className="flex flex-col gap-4 px-5 pb-5">
             {row.avail.length > 1 && (
               <SegmentedControl
+                data-settings-search-action="Choose which engine quote to edit"
                 aria-label={t('settings.providers.custom.fields.protocols')}
                 value={agent}
                 onValueChange={setAgent}
@@ -600,6 +609,7 @@ export function ModelPriceOverrideDialog({
             )}
 
             <div
+              {...pricingSetting.anchorProps}
               className={cn('grid grid-cols-2 gap-3', loading && 'pointer-events-none opacity-60')}
             >
               <label className="col-span-2 flex flex-col gap-1.5">
@@ -607,6 +617,7 @@ export function ModelPriceOverrideDialog({
                   {t('settings.providers.models.priceOverride.currency')}
                 </span>
                 <select
+                  {...pricingSetting.controlProps}
                   value={form.currency}
                   onChange={(event) =>
                     setForm((current) => ({
@@ -636,6 +647,7 @@ export function ModelPriceOverrideDialog({
                     {t(`settings.providers.models.priceOverride.${label}`)}
                   </span>
                   <input
+                    {...pricingSetting.controlProps}
                     ref={field === 'input' ? primaryInputRef : undefined}
                     type="number"
                     min="0"
@@ -664,6 +676,7 @@ export function ModelPriceOverrideDialog({
               <div>
                 {view?.override && (
                   <Button
+                    data-settings-search-action="Restore the current model quote to its default"
                     variant="secondary"
                     size="md"
                     tone="quiet"
@@ -678,11 +691,12 @@ export function ModelPriceOverrideDialog({
               </div>
               <div className="flex gap-2">
                 <Dialog.Close asChild>
-                  <Button variant="secondary" size="md" compact type="button">
+                  <Button data-settings-search-action="Cancel the model quote editor" variant="secondary" size="md" compact type="button">
                     {t('settings.providers.models.priceOverride.cancel')}
                   </Button>
                 </Dialog.Close>
                 <Button
+                  data-settings-search-action="Save the entered model quote"
                   variant="cta"
                   size="md"
                   compact

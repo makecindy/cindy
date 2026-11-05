@@ -869,7 +869,7 @@ import {
 } from '../remote-ssh/index.js';
 import { recordSessionContextSnapshot } from '../sessionSpendBroadcaster.js';
 
-import { broadcastReferenceModelPricing } from '../usage/referenceModelPricing.js';
+import { broadcastReferenceModelPricing, getModelPriceOverrideReference } from '../usage/referenceModelPricing.js';
 import {
   clearModelPriceOverride,
   stageProviderModelPriceOverridesClear,
@@ -7908,9 +7908,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     getLedgerCurrency: currentLedgerCurrency,
     readModelPriceOverride: (target) =>
-      readModelPriceOverrideView(target, getActiveCatalog().modelRegistry),
+      readModelPriceOverrideView(target, getActiveCatalog().modelRegistry, undefined, getModelPriceOverrideReference(target)),
     writeModelPriceOverride: (target, desired) =>
-      setModelPriceOverride(target, desired, getActiveCatalog().modelRegistry),
+      setModelPriceOverride(target, desired, getActiveCatalog().modelRegistry, getModelPriceOverrideReference(target)),
     clearModelPriceOverride,
     stageClearProviderModelPriceOverrides: stageProviderModelPriceOverridesClear,
     stageClearProviderModelCompaction: stageProviderModelCompactionClear,

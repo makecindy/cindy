@@ -56,10 +56,12 @@ vi.mock('../../secrets/providerSecretStore', () => ({
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { modelPricingKey, providerReferencePriceQuote } from '../../../shared/modelPriceQuote';
 import { getActiveCatalog } from '../../maker-host/active-catalog';
+import * as activeCatalog from '../../maker-host/active-catalog';
 import {
   applyModelPriceOverrides,
   clearModelPriceOverride,
   readModelPriceOverridesSnapshot,
+  readModelPriceOverrideView,
   setModelPriceOverride,
 } from '../modelPriceOverrideStore';
 import {
@@ -79,6 +81,8 @@ import {
   trackGatewayModelPricingSync,
 } from '../modelPricing';
 import {
+  getModelPriceOverrideReference,
+  getReferenceModelPricing,
   getClaudeSubscriptionValuePrice,
   getCodexProviderSubscriptionValuePrice,
   getCodexSubscriptionValuePrice,
@@ -594,6 +598,52 @@ describe('pricing cache lifecycle', () => {
 });
 
 describe('reference pricing helpers', () => {
+  it('reads a connection quote instead of its public registry quote', () => {
+    const target = { providerId: 'openai', agent: 'codex' as const, modelId: 'gpt-5.6-sol' };
+    const connection = { providerId: target.providerId, modelId: target.modelId,
+      source: 'provider-reference' as const, approximate: true, currency: 'USD' as const,
+      inputPerMtok: 0.5, outputPerMtok: 1.5 };
+    const view = readModelPriceOverrideView(target, getActiveCatalog().modelRegistry, 'USD', connection);
+    expect(view.reference).toMatchObject(connection);
+    expect(view.effective).toMatchObject(connection);
+  });
+  it.each([true, false])('keeps connection quote edits sparse with a public registry route: %s', (hasRegistryRoute) => {
+    const catalog = getActiveCatalog();
+    const registry = catalog.modelRegistry;
+    const target = { providerId: hasRegistryRoute ? 'openai' : 'custom-cost-8722',
+      agent: 'codex' as const, modelId: hasRegistryRoute ? 'gpt-5.6-sol' : 'cost-only-8722' };
+    const template = catalog.providers.find(provider => provider.id === 'openai')!;
+    const model = { ...template.models.codex![0], id: target.modelId,
+      cost: { input: 0.5, output: 1.5, cacheRead: 0.1, cacheWrite: 0.2 } };
+    const provider = { ...template, id: target.providerId, source: 'user' as const,
+      auth: { method: 'apiKey' as const }, models: { codex: [model] } };
+    vi.spyOn(activeCatalog, 'getActiveCatalog').mockReturnValue({ ...catalog,
+      providers: [...catalog.providers.filter(provider => provider.id !== target.providerId), provider] });
+    const connection = getModelPriceOverrideReference(target)!;
+    expect(connection).toEqual({ providerId: target.providerId, modelId: target.modelId,
+      source: 'provider-reference' as const, approximate: true, currency: 'USD' as const,
+      inputPerMtok: 0.5, outputPerMtok: 1.5, cacheReadPerMtok: 0.1, cacheCreatePerMtok: 0.2 });
+    setModelPriceOverride(target, { currency: 'USD', inputPerMtok: 3,
+      outputPerMtok: 1.5, cacheReadPerMtok: 0.1, cacheCreatePerMtok: 0.2 }, registry, connection);
+    const saved = Object.values(readModelPriceOverridesSnapshot()).find(record => record.providerId === target.providerId)!;
+    expect(saved.values).toEqual({ inputPerMtok: 3 });
+    model.cost = { ...model.cost, input: 2, output: 7, cacheRead: 0.4 };
+    // Reading the baseline excludes the saved patch; the ordinary projection
+    // still applies it and follows every untouched provider field.
+    const refreshed = getModelPriceOverrideReference(target)!;
+    expect(refreshed).toMatchObject({ inputPerMtok: 2, outputPerMtok: 7, cacheReadPerMtok: 0.4 });
+    const view = readModelPriceOverrideView(target, registry, 'USD', refreshed);
+    expect(view.effective).toMatchObject({ inputPerMtok: 3, outputPerMtok: 7, cacheReadPerMtok: 0.4 });
+    const projected = applyModelPriceOverrides({ [target.providerId]: {
+      [modelPricingKey(target.modelId, target.agent)]: refreshed } }, registry, 'USD');
+    expect(projected[target.providerId][modelPricingKey(target.modelId, target.agent)])
+      .toMatchObject({ inputPerMtok: 3, outputPerMtok: 7, cacheReadPerMtok: 0.4 });
+    expect(getReferenceModelPricing()[target.providerId][modelPricingKey(target.modelId, target.agent)])
+      .toMatchObject({ inputPerMtok: 3, outputPerMtok: 7, cacheReadPerMtok: 0.4 });
+    clearModelPriceOverride(target);
+    expect(readModelPriceOverrideView(target, registry, 'USD', refreshed))
+      .toMatchObject({ override: null, effective: refreshed });
+  });
   it('resolves historical subscription prices by their effective date', () => {
     expect(getClaudeSubscriptionValuePrice('claude-sonnet-5', null, '2026-08-31')).toMatchObject({
       inputPerMtok: 2,

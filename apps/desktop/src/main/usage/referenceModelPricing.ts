@@ -15,6 +15,7 @@ import {
   subscriptionDirectPriceQuote,
 } from '../../shared/modelPriceQuote.js';
 import type { ModelPriceQuote, ModelPricingCatalog } from '../../shared/regionalMoney.js';
+import type { ModelPriceOverrideTarget } from '../../shared/modelPriceOverride.js';
 import { getByokPricing } from '../model-access/byokPricing.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { accountReferencePriceQuote as providerReferencePriceQuote } from './accountReferencePrice.js';
@@ -82,6 +83,12 @@ export function broadcastReferenceModelPricing(): void {
       win.webContents.send(REFERENCE_MODEL_PRICING_CHANGED_CHANNEL, pricing);
     }
   }
+}
+
+/** Use the existing account projection as the editor's baseline, without its own patch. */
+export function getModelPriceOverrideReference(target: ModelPriceOverrideTarget): ModelPriceQuote | undefined {
+  const quote = getModelPriceQuote(getReferenceModelPricing({ overrides: {} }), target.providerId, target.modelId, target.agent);
+  return quote?.source === 'provider-reference' ? quote : undefined;
 }
 
 /** 按显式来源估算 Codex 订阅轮价值，不读取 XD Gateway 报价。 */

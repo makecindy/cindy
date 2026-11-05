@@ -8,7 +8,7 @@
 
 import type { AgentKind, ModelRegistry } from '@cindy/model-providers';
 
-import { modelPricingKey } from '../../shared/modelPriceQuote.js';
+import { getModelPriceQuote, modelPricingKey } from '../../shared/modelPriceQuote.js';
 import { accountReferencePriceQuote as providerReferencePriceQuote } from './accountReferencePrice.js';
 import type {
   ModelPriceOverrideDesiredQuote,
@@ -425,8 +425,9 @@ export function readModelPriceOverrideView(
   target: ModelPriceOverrideTarget,
   registry: ModelRegistry | null | undefined,
   ledgerCurrency: MoneyCurrency = currentLedgerCurrency(),
+  connectionReference?: ModelPriceQuote,
 ): ModelPriceOverrideView {
-  const remoteReference = providerReferencePriceQuote(target.providerId, target.modelId, registry, {
+  const remoteReference = connectionReference ?? providerReferencePriceQuote(target.providerId, target.modelId, registry, {
     agent: target.agent,
   });
   const reference =
@@ -454,11 +455,12 @@ export function setModelPriceOverride(
   target: ModelPriceOverrideTarget,
   desired: ModelPriceOverrideDesiredQuote,
   registry: ModelRegistry | null | undefined,
+  connectionReference?: ModelPriceQuote,
 ): void {
   if (target.providerId === 'xd') {
     throw new Error('Cindy AI Gateway pricing cannot be overridden');
   }
-  const reference = providerReferencePriceQuote(target.providerId, target.modelId, registry, {
+  const reference = connectionReference ?? providerReferencePriceQuote(target.providerId, target.modelId, registry, {
     agent: target.agent,
   });
   const baseReference = comparable(reference);
@@ -568,7 +570,10 @@ export function applyModelPriceOverrides(
   );
   for (const record of Object.values(options.entries ?? readEntries())) {
     if (record.providerId === 'xd') continue;
-    const reference = providerReferencePriceQuote(record.providerId, record.modelId, registry, {
+    // The caller has already resolved account-local costs and date-specific
+    // public prices. Merge sparse fields against that same unmodified quote.
+    const projected = getModelPriceQuote(pricing, record.providerId, record.modelId, record.agent);
+    const reference = (projected?.source === 'provider-reference' ? projected : undefined) ?? providerReferencePriceQuote(record.providerId, record.modelId, registry, {
       agent: record.agent,
       at: options.at,
     });

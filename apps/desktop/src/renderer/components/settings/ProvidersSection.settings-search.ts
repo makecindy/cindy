@@ -3,6 +3,27 @@ import { defineSettings, type SettingsSearchModule } from './settingsSearchTypes
 
 /** Static search metadata owned by this settings module; no component mounting or IPC. */
 export const providersSettings = defineSettings({
+  modelPricing: {
+    id: 'providers.modelPricing',
+    tab: 'providers',
+    targetId: 'settings-model-pricing',
+    fallbackTargetId: 'settings-panel-providers',
+    titleKey: 'settings.providers.models.advanced.pricing',
+    sectionKey: 'settings.tabs.providers',
+    descriptionKey: 'settings.providers.models.priceOverride.description',
+    keywordKeys: [
+      'settings.providers.models.priceOverride.input',
+      'settings.providers.models.priceOverride.output',
+      'settings.providers.models.priceOverride.cacheRead',
+      'settings.providers.models.priceOverride.cacheWrite',
+      'settings.providers.models.priceOverride.currency',
+      'settings.providers.models.priceOverride.resetShort',
+      'settings.providers.models.priceOverride.referenceDetails',
+      'settings.providers.models.advanced.perMtok',
+      'settings.providers.models.advanced.noPricing',
+      'settings.providers.models.subscription',
+    ],
+  },
   sharing: {
     id: 'providers.sharing',
     tab: 'providers',

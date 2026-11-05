@@ -9,6 +9,7 @@ import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 
 import type { ModelPriceOverrideView } from '../../../../shared/modelPriceOverride';
 import { ModelPriceOverrideDialog } from '../ModelPriceOverrideDialog';
+import { providersSettings } from '../ProvidersSection.settings-search';
 import type { UnionModelRow } from '../UnifiedModelList';
 
 const translate = (key: string) => key;
@@ -350,6 +351,23 @@ describe('ModelPriceOverrideDialog', () => {
     return <ModelPriceOverrideDialog provider={provider} row={row(modelId)} open
       onOpenChange={onOpenChange} presentation="inline" />;
   }
+
+  it.each(['inline', 'dialog'] as const)('binds %s quote fields to the searchable model pricing entry', async (presentation) => {
+    const view = priceView('model-a');
+    view.allowedCurrencies = ['USD', 'CNY'];
+    getModelPriceOverride.mockResolvedValue(view);
+    const ui = render(<ModelPriceOverrideDialog provider={provider} row={row('model-a')} open
+      onOpenChange={vi.fn()} presentation={presentation} />);
+    await waitFor(() => expect((ui.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement).value).toBe('1'));
+    const anchor = document.getElementById(providersSettings.modelPricing.targetId)!;
+    expect(anchor).not.toBeNull();
+    const controls = anchor.querySelectorAll('input, select');
+    expect(controls).toHaveLength(5);
+    for (const control of controls) expect(control.getAttribute('data-setting-id')).toBe(providersSettings.modelPricing.id);
+    expect(providersSettings.modelPricing.fallbackTargetId).toBe('settings-panel-providers');
+    expect(setModelPriceOverride).not.toHaveBeenCalled();
+    expect(resetModelPriceOverride).not.toHaveBeenCalled();
+  });
 
   it('keeps Enter inert and saves a changed inline quote only on blur', async () => {
     getModelPriceOverride.mockResolvedValue(priceView('model-a'));
