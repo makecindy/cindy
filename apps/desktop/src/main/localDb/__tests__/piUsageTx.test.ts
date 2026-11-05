@@ -11,7 +11,7 @@ describe('Pi request usage transaction', () => {
     db = new Database(':memory:');
     db.exec(`
       CREATE TABLE pi_usage_receipts(session_id TEXT, settlement_id TEXT, receipt_id TEXT,
-        recorded_at INTEGER, priced INTEGER DEFAULT 0, PRIMARY KEY(session_id, settlement_id, receipt_id));
+        recorded_at INTEGER, priced INTEGER DEFAULT 0, pricing_payload TEXT, PRIMARY KEY(session_id, settlement_id, receipt_id));
       CREATE TABLE daily_model_usage(day TEXT, agent_kind TEXT, model TEXT, cost_currency TEXT,
         cost_amount REAL DEFAULT 0, cost_is_approximate INTEGER DEFAULT 0, input_tokens INTEGER DEFAULT 0,
         output_tokens INTEGER DEFAULT 0, cache_read_tokens INTEGER DEFAULT 0, cache_create_tokens INTEGER DEFAULT 0,
@@ -72,5 +72,44 @@ describe('Pi request usage transaction', () => {
     write(receipt({ model: 'model-a#billing=subscription', amount: 0.2, approximate: true }));
     expect(total()).toEqual({ tokens: 154, cost: 0 });
     expect(db.prepare('SELECT COUNT(*) AS n FROM daily_spend').get()).toEqual({ n: 0 });
+  });
+
+  it('adds recovered-currency subscription value without repeating fallback-row tokens', () => {
+    const pending = receipt({ model: 'model-a#billing=subscription', approximate: true });
+    write(pending);
+    const confirmed = { ...pending, currency: 'CNY' as const, amount: 1.34 };
+    write(confirmed, pending, confirmed);
+    expect(total()).toEqual({ tokens: 154, cost: 0 });
+    expect(db.prepare('SELECT SUM(input_tokens + output_tokens + cache_read_tokens + cache_create_tokens) AS tokens FROM daily_model_usage').get())
+      .toEqual({ tokens: 154 });
+    expect(db.prepare('SELECT cost_currency, cost_amount, cost_is_approximate FROM daily_model_usage ORDER BY cost_currency').all())
+      .toEqual([
+        { cost_currency: 'CNY', cost_amount: 1.34, cost_is_approximate: 1 },
+        { cost_currency: 'USD', cost_amount: 0, cost_is_approximate: 1 },
+      ]);
+    expect(db.prepare('SELECT priced FROM pi_usage_receipts').get()).toEqual({ priced: 1 });
+  });
+
+  // #9030 P1: simulate termination after the token transaction, before pricing.
+  // The old identity-only receipt could not be reconstructed after reopening.
+  it('retains pending facts across reopen and clears them only with a successful money commit', () => {
+    const payload = JSON.stringify({ receipt: { id: 'pi:1', model: 'model-a' }, day: '2026-11-05' });
+    write(receipt({ pricingPayload: payload }));
+    const checkpoint = db.serialize();
+    db.close();
+    db = new Database(checkpoint);
+    expect(db.prepare('SELECT priced, pricing_payload FROM pi_usage_receipts').get())
+      .toEqual({ priced: 0, pricing_payload: payload });
+    db.exec(`CREATE TRIGGER reject_money BEFORE INSERT ON daily_spend BEGIN SELECT RAISE(ABORT, 'price failure'); END`);
+    const priced = receipt({ amount: 0.2, actualCost: true, pricingPayload: payload });
+    expect(() => write(priced)).toThrow('price failure');
+    expect(total()).toEqual({ tokens: 154, cost: 0 });
+    expect(db.prepare('SELECT priced, pricing_payload FROM pi_usage_receipts').get())
+      .toEqual({ priced: 0, pricing_payload: payload });
+    db.exec('DROP TRIGGER reject_money');
+    write(priced, priced);
+    expect(total()).toEqual({ tokens: 154, cost: 0.2 });
+    expect(db.prepare('SELECT priced, pricing_payload FROM pi_usage_receipts').get())
+      .toEqual({ priced: 1, pricing_payload: null });
   });
 });

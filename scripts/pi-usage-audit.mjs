@@ -7,6 +7,13 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 
+// Match Desktop normalizeModelIdForPricing after removing the ledger-only
+// billing marker. Keep raw model IDs in the source identity fingerprint below.
+function auditModelKey(raw) {
+  const model = typeof raw === 'string' ? raw.trim().replace(/#billing=subscription$/, '') : '';
+  return model.replace(/\[[^\]]*\]\s*$/, '').trim() || 'unknown';
+}
+
 export function auditPiUsageEntries(entries, ledgerRows, since = '') {
   const seen = new Map();
   const totals = new Map();
@@ -32,13 +39,13 @@ export function auditPiUsageEntries(entries, ledgerRows, since = '') {
     seen.set(identity, fingerprint);
     const day = `${timestamp.getFullYear()}-${String(timestamp.getMonth() + 1).padStart(2, '0')}-${String(timestamp.getDate()).padStart(2, '0')}`;
     if (day < since) continue;
-    const key = JSON.stringify([day, model]);
+    const key = JSON.stringify([day, auditModelKey(model)]);
     totals.set(key, (totals.get(key) ?? 0) + values.reduce((a, b) => a + b, 0));
   }
   const ledger = new Map();
   for (const row of ledgerRows) {
     if (row.day < since || row.agent_kind !== 'pi') continue;
-    const model = row.model.replace(/#billing=subscription$/, '');
+    const model = auditModelKey(row.model);
     const key = JSON.stringify([row.day, model]);
     ledger.set(key, (ledger.get(key) ?? 0) + ['input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_create_tokens']
       .reduce((sum, k) => sum + (row[k] ?? 0), 0));

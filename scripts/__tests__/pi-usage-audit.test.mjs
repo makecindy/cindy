@@ -30,6 +30,18 @@ describe('Pi usage audit', () => {
     assert.equal(result.rows[0].difference, -46);
     assert.equal(auditPiUsageEntries([entry('a')], [], '2027-01-01').rows.length, 0);
   });
+  it('compares native context suffixes using the same model key as the ledger', () => {
+    const request = entry('context');
+    request.message.model = ' gpt-5.6-sol[1m] ';
+    const day = auditPiUsageEntries([request], []).rows[0].day;
+    const result = auditPiUsageEntries([request], [
+      { day, agent_kind: 'pi', model: 'gpt-5.6-sol#billing=subscription', input_tokens: 154 },
+    ]);
+    assert.deepEqual(result.rows, [{ day, model: 'gpt-5.6-sol', transcriptTokens: 154, ledgerTokens: 154, difference: 0 }]);
+    // Normalizing aggregation keys must not conceal conflicting source identities.
+    const conflicting = { ...request, message: { ...request.message, model: 'gpt-5.6-sol' } };
+    assert.equal(auditPiUsageEntries([request, conflicting], []).diagnostics.conflictingIdentity, 1);
+  });
   it('reads real JSONL and SQLite without rewriting either or exposing message content', async () => {
     const directory = await mkdtemp(path.join(tmpdir(), 'pi-audit-'));
     try {

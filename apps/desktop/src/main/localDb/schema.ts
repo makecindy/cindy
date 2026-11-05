@@ -1918,7 +1918,11 @@ export const piUsageReceipts = sqliteTable('pi_usage_receipts', {
   receiptId: text('receipt_id').notNull(),
   recordedAt: integer('recorded_at').notNull(),
   priced: integer('priced', { mode: 'boolean' }).notNull().default(false),
-}, t => ({ pk: primaryKey({ columns: [t.sessionId, t.settlementId, t.receiptId] }) }));
+  pricingPayload: text('pricing_payload'),
+}, t => ({
+  pk: primaryKey({ columns: [t.sessionId, t.settlementId, t.receiptId] }),
+  pending: index('pi_usage_receipts_pending_idx').on(t.priced),
+}));
 
 /**
  * 每日按模型用量聚合表 (daily_model_usage) — 支撑首页用量仪表盘的"按模型拆分"。

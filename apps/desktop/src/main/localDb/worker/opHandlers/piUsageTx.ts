@@ -16,6 +16,8 @@ export interface PiUsageWrite {
   amount: number | null;
   approximate: boolean;
   actualCost: boolean;
+  /** Sanitized request facts and billing context, retained only until priced. */
+  pricingPayload?: string;
 }
 
 /** Self-contained for the inline worker. Receipt and all aggregates commit together. */
@@ -30,9 +32,13 @@ export function recordPiUsage(db: Database.Database, args: PiUsageWrite[]) {
           || [r.inputTokens, r.outputTokens, r.cacheReadTokens, r.cacheCreateTokens]
             .some(n => !Number.isSafeInteger(n) || n < 0)) throw new Error('Invalid Pi usage receipt');
       const inserted = db.prepare(`INSERT INTO pi_usage_receipts
-        (session_id, settlement_id, receipt_id, recorded_at) VALUES (?, ?, ?, ?)
-        ON CONFLICT DO NOTHING`).run(r.sessionId, r.settlementId, r.receiptId, r.recordedAt);
-      const priced = r.amount !== null && db.prepare(`UPDATE pi_usage_receipts SET priced = 1
+        (session_id, settlement_id, receipt_id, recorded_at, pricing_payload) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT DO NOTHING`).run(r.sessionId, r.settlementId, r.receiptId, r.recordedAt, r.pricingPayload ?? null);
+      // A replay can also supply facts missing from an older unpriced receipt.
+      if (r.pricingPayload) db.prepare(`UPDATE pi_usage_receipts SET pricing_payload = ?
+        WHERE session_id = ? AND settlement_id = ? AND receipt_id = ? AND priced = 0 AND pricing_payload IS NULL`)
+        .run(r.pricingPayload, r.sessionId, r.settlementId, r.receiptId);
+      const priced = r.amount !== null && db.prepare(`UPDATE pi_usage_receipts SET priced = 1, pricing_payload = NULL
         WHERE session_id = ? AND settlement_id = ? AND receipt_id = ? AND priced = 0`)
         .run(r.sessionId, r.settlementId, r.receiptId).changes > 0;
       if (!inserted.changes && !priced) continue;
