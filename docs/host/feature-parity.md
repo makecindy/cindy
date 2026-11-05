@@ -33,7 +33,7 @@
 | 能力描述 | 已验证 | `/api/capabilities` 与 provider 模型列表逐项一致 |
 | 斜杠命令 / 技能 | 部分 | `maker.listAgentCommands` / `listAgentSkills` 转真实 agent 实现；未在界面验证 |
 | 多 Agent / 伙伴 / 群聊 | 禁用 + TODO | 依赖 bot 相关通道，当前返回明确的空态；未验证行为一致 |
-| 插件执行（运行期） | 禁用 + TODO | 插件运行时仍在 Electron main；Host 侧只提供已装列表 |
+| 插件执行（运行期） | 禁用 + TODO | 插件沙箱宿主是 Electron `webContents` 实现（1026 行）；Host 需独立沙箱方案，未做 |
 
 ## 平台与集成
 
@@ -44,7 +44,10 @@
 | 复用现有存储 | 已验证 | 打开同一 owner 库（145 条 migration / 87 表），无平行数据库 |
 | 单 Runtime 锁 | 已验证 | 第二个 Host 报 `runtime.state=blocked`、`storage=unopened` |
 | 插件列表 | 已验证（读） | Host 复用 Desktop `GhostManager` 列出已装插件（`/api/ghosts`，单测 + 实跑 `[]`）；`#/plugins` 页明暗两种模式正常；插件**执行**未迁移 |
-| Memory / 文件访问 | 禁用 + TODO | 未验证 |
+| Memory / 文件访问 | 禁用 + TODO | Host 未暴露对应通道；客户端模式下显式失败 |
+| MCP 服务器配置 | 禁用 + TODO | `custom-mcp-store` 无 Electron 依赖，可复用；尚未接线到 Host |
+| 定时任务（scheduler） | 禁用 + TODO | 仍在 Electron main；Host 侧未实现 |
+| device-link / 手机端 | 部分 | 迁移期仍由 Desktop 承担；客户端模式下相关通道显式失败 |
 | systemd user unit | 已验证（模板） | `apps/host/cindy-host.service`，`systemd-analyze verify` 通过；未在本机 enable/start |
 | Tray / 原生菜单 / 窗口特效 / 桌面快捷键 | 禁用 + TODO | Electron 专属；浏览器端不提供，需在 `cindy-desktop` 保留 |
 | Device Link / 手机端 | 部分 | 迁移期保持 Desktop 实现；Host 侧只返回空态 |
