@@ -970,4 +970,59 @@ describe('ModelPriceOverrideDialog', () => {
       expect.objectContaining({ inputPerMtok: 7, outputPerMtok: 9 }));
   });
 
+  it.each([
+    ['input', '1.00', '3'], ['input', '1e0', '3'], ['output', '4.00', '9'],
+    ['cacheRead', '0.10', '0.3'], ['cacheCreate', '2.50', '5'], ['cacheRead', '  ', '0.3'],
+  ])('lets a formatting-only focused %s draft %s yield to a newer quote', async (field, draft, expected) => {
+    const before = priceView('model-a');
+    before.effective = { ...before.effective!, cacheReadPerMtok: draft.trim() ? 0.1 : undefined, cacheCreatePerMtok: 2.5 };
+    const after = refreshedPrice(3, 9);
+    after.effective = { ...after.effective!, cacheReadPerMtok: 0.3, cacheCreatePerMtok: 5 };
+    getModelPriceOverride.mockResolvedValueOnce(before).mockResolvedValue(after);
+    const ui = render(inline());
+    const input = ui.getByLabelText(`settings.providers.models.priceOverride.${field === "cacheCreate" ? "cacheWrite" : field}`) as HTMLInputElement;
+    await waitFor(() => expect(getModelPriceOverride).toHaveBeenCalledOnce());
+    await waitFor(() => expect(input.disabled).toBe(false));
+    input.focus();
+    fireEvent.change(input, { target: { value: draft } });
+    broadcastPricing();
+    await waitFor(() => expect(input.value).toBe(expected));
+    expect(document.activeElement).toBe(input);
+    fireEvent.blur(input);
+    expect(setModelPriceOverride).not.toHaveBeenCalled();
+  });
+
+  it('rebases a pending refresh by numeric semantics while preserving an actual edit', async () => {
+    let finishReload!: (value: ModelPriceOverrideView) => void;
+    getModelPriceOverride.mockResolvedValueOnce(priceView('model-a'))
+      .mockImplementationOnce(() => new Promise(resolve => { finishReload = resolve; }))
+      .mockResolvedValue(refreshedPrice(3));
+    setModelPriceOverride.mockResolvedValue(refreshedPrice(3, 7));
+    const ui = render(inline());
+    const input = ui.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+    const output = ui.getByLabelText('settings.providers.models.priceOverride.output') as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe('1'));
+    fireEvent.change(input, { target: { value: '1.00' } });
+    fireEvent.change(output, { target: { value: '7' } });
+    broadcastPricing();
+    fireEvent.blur(output);
+    await waitFor(() => expect(setModelPriceOverride).toHaveBeenCalledWith(
+      priceView('model-a').target, expect.objectContaining({ inputPerMtok: 3, outputPerMtok: 7 })));
+    await act(async () => { finishReload(refreshedPrice(3)); });
+  });
+
+  it.each(['repeat', 'ctrlKey', 'shiftKey', 'altKey', 'metaKey', 'isComposing'])(
+    'ignores %s Escape in a focused price field without blur or save', async (flag) => {
+      getModelPriceOverride.mockResolvedValue(priceView('model-a'));
+      const ui = render(inline());
+      const input = ui.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+      await waitFor(() => expect(input.value).toBe('1'));
+      input.focus();
+      fireEvent.change(input, { target: { value: '7' } });
+      fireEvent.keyDown(input, { key: 'Escape', [flag]: true });
+      expect(document.activeElement).toBe(input);
+      expect(input.value).toBe('7');
+      expect(setModelPriceOverride).not.toHaveBeenCalled();
+    });
+
 });

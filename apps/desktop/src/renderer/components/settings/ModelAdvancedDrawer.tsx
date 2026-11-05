@@ -635,7 +635,11 @@ export function ModelAdvancedDrawer({
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             aria-describedby={undefined}
             onEscapeKeyDown={(event) => {
-              // Radix handles Escape at document capture, before the inline input can undo its draft.
+              // Radix handles Escape at document capture, before the inline blur handler.
+              if (event.isComposing || event.repeat || event.ctrlKey || event.shiftKey || event.altKey || event.metaKey) {
+                event.preventDefault();
+                return;
+              }
               if (!(event.target instanceof HTMLElement)) return;
               if (event.target.hasAttribute('data-model-price-input')) event.preventDefault();
               const deferred = event.target.closest<HTMLElement>('[data-model-price-deferred-action]');

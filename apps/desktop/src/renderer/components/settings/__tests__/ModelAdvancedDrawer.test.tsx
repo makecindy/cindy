@@ -1229,3 +1229,20 @@ it('uses the custom model base cost when reset races an old override snapshot', 
   expect(fallback('codex')).toMatchObject({ source: 'provider-reference', inputPerMtok: 3,
     outputPerMtok: 6, cacheReadPerMtok: 0.2, cacheCreatePerMtok: 0.4 });
 });
+
+
+it.each(['repeat', 'ctrlKey', 'shiftKey', 'altKey', 'metaKey', 'isComposing'])(
+  'ignores %s Escape on price actions and after focus has left the field', (flag) => {
+    mocks.priceDeferredProbe = true;
+    const close = vi.fn();
+    const ui = drawer();
+    render({ ...ui, props: { ...ui.props, onOpenChange: close } });
+    const button = screen.getByLabelText('price deferred probe');
+    button.focus();
+    fireEvent.keyDown(button, { key: 'Escape', [flag]: true });
+    expect(document.activeElement).toBe(button);
+    expect(mocks.deferredBlur).not.toHaveBeenCalled();
+    button.blur();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape', [flag]: true });
+    expect(close).not.toHaveBeenCalled();
+  });

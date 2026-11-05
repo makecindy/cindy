@@ -66,9 +66,18 @@ function formFromView(view: ModelPriceOverrideView): FormState {
 
 const FORM_FIELDS = ['currency', 'input', 'output', 'cacheRead', 'cacheCreate'] as const;
 
+function sameFormValue(key: keyof FormState, left: string, right: string): boolean {
+  if (left === right) return true;
+  if (key === 'currency') return false;
+  if (!left.trim() && !right.trim()) return true;
+  const a = parseRequiredPrice(left);
+  const b = parseRequiredPrice(right);
+  return a !== null && b !== null && a === b;
+}
+
 function mergeDraft(previous: FormState, draft: FormState, latest: FormState): FormState {
   const value = <K extends keyof FormState>(key: K) =>
-    draft[key] === previous[key] ? latest[key] : draft[key];
+    sameFormValue(key, draft[key], previous[key]) ? latest[key] : draft[key];
   return { currency: value('currency'), input: value('input'), output: value('output'),
     cacheRead: value('cacheRead'), cacheCreate: value('cacheCreate') };
 }
@@ -131,7 +140,7 @@ export function ModelPriceOverrideDialog({
     const latest = formFromView(resolved);
     const current = formRef.current;
     if (preserveDraft && previous && previous.currency !== latest.currency &&
-        FORM_FIELDS.some(key => current[key] !== previous[key])) {
+        FORM_FIELDS.some(key => !sameFormValue(key, current[key], previous[key]))) {
       // Do not reinterpret an unsaved amount in another window's new currency.
       refreshQueuedRef.current = true;
       toast.error(t('settings.providers.models.priceOverride.loadFailed'));
@@ -424,6 +433,7 @@ export function ModelPriceOverrideDialog({
                     onKeyDown={(event) => {
                       if (event.nativeEvent.isComposing) return;
                       if (event.key === 'Escape') {
+                        if (event.repeat || event.ctrlKey || event.shiftKey || event.altKey || event.metaKey) return;
                         event.preventDefault();
                         event.stopPropagation();
                         event.currentTarget.blur();
