@@ -1594,10 +1594,14 @@ export function buildAgentIslandDisplayState(
   const pointerInside = isPointerInsideIsland(state);
   const shadowVisible = shouldShowShadow(current, manualExpanded, pointerInside);
   const pillSnapshot = buildPillSnapshot(surfaceOrderedSessions, current);
+  // List priority must not consume a newer hint's dwell behind an older waiting
+  // task. Compare reveal starts (card durations can predate enabling subtle mode),
+  // then card generations for events arriving in the same clock tick.
   const reminder = state.subtleReminders && mode === 'compact'
-    ? orderedSessions.find((session) => session.revealUntil !== null && session.revealUntil > now
+    ? orderedSessions.filter((session) => session.revealUntil !== null && session.revealUntil > now
       && !shouldSmartSuppressSession(state, session)
       && !(isBlockingSession(session) && isBlockingRevealSuppressed(state, session)))
+      .sort((a, b) => revealStartedAt(b) - revealStartedAt(a) || b.activityGeneration - a.activityGeneration)[0]
     : undefined;
 
   return {
@@ -1622,6 +1626,10 @@ export function buildAgentIslandDisplayState(
     ...createDefaultAgentIslandDisplayConfig(),
     updatedAt: now,
   };
+}
+
+function revealStartedAt(session: AgentIslandSessionState): number {
+  return (session.revealUntil ?? 0) - (session.queuedRevealDwellMs ?? AGENT_ISLAND_REVEAL_DWELL_MS);
 }
 
 export interface AgentIslandCompanionChatProjection {
@@ -2029,6 +2037,7 @@ function enqueueTransientReveal(
   dwellMs: number,
 ): void {
   if (state.subtleReminders) dwellMs = AGENT_ISLAND_SUBTLE_REMINDER_MS;
+  session.queuedRevealDwellMs = dwellMs;
   // 静音任务的完成 / 错误卡不揭示：它不该在岛面上出现，也不该带提示音。
   // 活动快照与未读账本另路，静音不影响。
   if (state.displaySuppressedSessionIds.has(session.sessionId)) {
@@ -2095,9 +2104,11 @@ function promoteNextTransientReveal(
       continue;
     }
     state.activeTransientSessionId = next.sessionId;
-    next.revealUntil = now + (state.subtleReminders
+    const dwellMs = state.subtleReminders
       ? AGENT_ISLAND_SUBTLE_REMINDER_MS
-      : (next.queuedRevealDwellMs ?? AGENT_ISLAND_REVEAL_DWELL_MS));
+      : (next.queuedRevealDwellMs ?? AGENT_ISLAND_REVEAL_DWELL_MS);
+    next.queuedRevealDwellMs = dwellMs;
+    next.revealUntil = now + dwellMs;
     next.deferredReveal = false;
     next.deferredRevealReason = null;
     return;

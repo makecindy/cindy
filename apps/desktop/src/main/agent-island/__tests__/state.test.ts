@@ -86,6 +86,65 @@ describe('subtle island reminders', () => {
     expect(next.pillSnapshot.attentionCount).toBe(3);
   });
 
+  // Review #8848: the old waiting-first list order consumed a newer completion's
+  // reminder interval. The previous case starts only after the waiting hint expires.
+  // Unit regression through real events/display output, including equal-clock events.
+  it.each([
+    { phase: 'completed', delay: 100 },
+    { phase: 'completed', delay: 0 },
+    { phase: 'error', delay: 100 },
+    { phase: 'error', delay: 0 },
+  ] as const)('shows the overlapping $phase reminder immediately (delay=$delay)', ({ phase, delay }) => {
+    const state = createAgentIslandState();
+    state.subtleReminders = true;
+    applyAgentIslandInteractionRequest(state, { sessionId: 'waiting' }, permissionRequest('p'), 1_000);
+    expect(buildAgentIslandDisplayState(state, 1_000).compactReminder?.phase).toBe('needs-interaction');
+
+    const eventAt = 1_000 + delay;
+    const until = eventAt + 3_000;
+    applyAgentIslandEvent(state, { sessionId: 'new' }, phase === 'completed' ? doneEvent() : terminalErrorEvent('Failed'), eventAt);
+    for (const now of [eventAt, 3_999, until - 1]) {
+      expect(buildAgentIslandDisplayState(state, now)).toMatchObject({
+        mode: 'compact', displaySurface: 'collapsed', compactReminder: { phase, until },
+      });
+    }
+    const settled = buildAgentIslandDisplayState(state, until);
+    expect(settled.compactReminder).toBeUndefined();
+    expect(settled.pillSnapshot.attentionCount).toBe(2);
+  });
+
+  it('lets a newer interaction hint replace an older completion hint', () => {
+    const state = createAgentIslandState();
+    state.subtleReminders = true;
+    applyAgentIslandEvent(state, { sessionId: 'done' }, doneEvent(), 1_000);
+    expect(buildAgentIslandDisplayState(state, 1_000).compactReminder?.phase).toBe('completed');
+    applyAgentIslandInteractionRequest(state, { sessionId: 'waiting' }, permissionRequest('p'), 1_100);
+    expect(buildAgentIslandDisplayState(state, 1_100).compactReminder).toEqual({ phase: 'needs-interaction', until: 4_100 });
+    expect(buildAgentIslandDisplayState(state, 4_099).compactReminder?.phase).toBe('needs-interaction');
+    expect(buildAgentIslandDisplayState(state, 4_100).compactReminder).toBeUndefined();
+  });
+
+  it('does not let an older card duration win after enabling subtle reminders', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandInteractionRequest(state, { sessionId: 'waiting' }, permissionRequest('p'), 1_000);
+    state.subtleReminders = true;
+    applyAgentIslandEvent(state, { sessionId: 'done' }, doneEvent(), 1_100);
+    expect(buildAgentIslandDisplayState(state, 1_100).compactReminder).toEqual({ phase: 'completed', until: 4_100 });
+    expect(buildAgentIslandDisplayState(state, 4_099).compactReminder?.phase).toBe('completed');
+  });
+
+  it('gives a newly promoted hint its compact interval after the mode changes', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'first' }, doneEvent(), 1_000);
+    applyAgentIslandEvent(state, { sessionId: 'queued' }, doneEvent(), 1_050);
+    applyAgentIslandInteractionRequest(state, { sessionId: 'waiting' }, permissionRequest('p'), 1_100);
+    state.subtleReminders = true;
+    expect(buildAgentIslandDisplayState(state, 1_100).compactReminder?.phase).toBe('needs-interaction');
+    expect(buildAgentIslandDisplayState(state, 4_100).compactReminder).toEqual({ phase: 'completed', until: 7_100 });
+    expect(buildAgentIslandDisplayState(state, 7_099).compactReminder?.phase).toBe('completed');
+    expect(buildAgentIslandDisplayState(state, 7_100).compactReminder).toBeUndefined();
+  });
+
   // Review #8848: card-hover suppression must not block the collapsed island's
   // deliberate hover. Existing subtle-reminder cases only exercise clicking.
   it.each([
