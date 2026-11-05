@@ -231,17 +231,25 @@ function liftRepliesFromWorkGroup(
 export function tailReplyClientIds(messages: readonly ChatMessage[]): ReadonlySet<string> {
   const ids = new Set<string>();
   let activityAfter = false;
+  // 续跑行开启的是「新的一次尝试」:它之前的正文属于被取代的那次尝试,
+  // `groupWorkRuns` 的 resumed 分支已经把这部分折进工作过程,不能再提升成正式回复。
+  let superseded = false;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]!;
     if (message.role === 'user') {
-      if (!isSteerUserRow(message) && !isContinuationMessage(message)) activityAfter = false;
+      if (isContinuationMessage(message)) {
+        superseded = true;
+      } else if (!isSteerUserRow(message)) {
+        activityAfter = false;
+        superseded = false;
+      }
       continue;
     }
     if (message.role === 'thinking' || message.role === 'tool_use' || message.role === 'tool_result') {
       activityAfter = true;
       continue;
     }
-    if (message.role !== 'assistant' || activityAfter) continue;
+    if (message.role !== 'assistant' || activityAfter || superseded) continue;
     if (message.parentToolUseId || message.botPrivateReply || message.systemCardType) continue;
     if (!message.content.trim() || message.failedSamplingAttempt) continue;
     if (message.assistantPhase === 'commentary' && !message.explicitDelivery

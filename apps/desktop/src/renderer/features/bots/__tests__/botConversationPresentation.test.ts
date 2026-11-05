@@ -574,4 +574,29 @@ describe('companion closing reply and read position', () => {
       tailReplyClientIds(messagesOfItems(firstWindow)));
     expect(proseIds(windowLocal)).toEqual(['wake', 'narration']);
   });
+
+  // 续跑（recovery）开启的是新一次尝试:它之前的正文已被 groupWorkRuns 的 resumed 分支
+  // 折进工作过程,不能因为后面没有工具就重新提升成正式回复（codex review P2）。
+  it('keeps a superseded attempt folded when the recovery answers directly', () => {
+    const rows: RenderItem[] = [
+      message('u', 'user', 'Check the inbox', { createdAt: at(0) }),
+      message('progress', 'assistant', 'Opening the first mailbox', { createdAt: at(2) }),
+      { type: 'message', key: 'msg-resume', message:
+        { clientId: 'resume', role: 'user', content: 'Continue after the error',
+          isContinuationTrigger: true } as ChatMessage } as RenderItem,
+      message('final', 'assistant', 'Inbox is clear', { turnCompleted: true, createdAt: at(4) }),
+    ];
+    const messages = [message('u', 'user').message, message('progress', 'assistant').message,
+      { clientId: 'resume', role: 'user', content: 'Continue after the error',
+        isContinuationTrigger: true } as ChatMessage, message('final', 'assistant').message];
+    const projected = projectBot(rows, messages);
+    // 只有续跑后的最终答案在顶层;被取代的那次尝试留在折叠里,读位也不越过它。
+    expect(proseIds(projected)).toEqual(['final']);
+    expect(allKeys(projected)).toContain('msg-progress');
+    expect(latestSettledAssistantMs(projected)).toBe(Date.parse(at(4)));
+    // 对照:没有续跑边界时同一段正文会被当作收尾提升（证明本用例靠的是续跑归属）。
+    const withoutResume = rows.filter(item => item.key !== 'msg-resume');
+    expect(proseIds(projectBot(withoutResume, messages.filter(m => m.clientId !== 'resume'))))
+      .toEqual(['progress', 'final']);
+  });
 });
