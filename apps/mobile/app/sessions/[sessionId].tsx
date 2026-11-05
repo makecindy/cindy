@@ -8149,9 +8149,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       setError(t('session.messageEdit.uploadsPending'));
       return;
     }
-    if (remoteSessionStore.isSessionRunning(sessionId)) {
-      void maker.input.stop(sessionId).catch(() => undefined);
-    }
+    // 不在这里中断运行中的任务:中断无法恢复,放弃编辑时任务应照常继续;发送时才中断。
     const previous = messageEditingRef.current;
     const next: MessageEditingState = {
       clientId,
@@ -8169,7 +8167,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     setAttachments(files);
     setAttachmentError(null);
     composerInputRef.current?.applyDocumentAndSetSelectionToEnd(draft.document);
-  }, [applyComposerDocument, canUseComposer, deviceId, getPendingUploadCount, maker, sessionId, t]);
+  }, [applyComposerDocument, canUseComposer, deviceId, getPendingUploadCount, sessionId, t]);
 
   // 静默预览文件回滚影响(桌面编辑框同款提示);运行中会被拒绝,等停下后再跑一次。
   // 失败只是不提示,不阻塞发送。
@@ -8254,6 +8252,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       try {
         updated = await commitMessageEditRewind({
           rewindCommit: (opts) => maker.rewindCommit(sessionId, editing.clientId, opts),
+          requestStop: () => { void maker.input.stop(sessionId).catch(() => undefined); },
           ...(messageEditingRef.current?.rollbackHint?.kind === 'conversation-only'
             ? { allowFileRestore: false as const }
             : {}),
