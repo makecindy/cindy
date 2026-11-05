@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>构建日志</title>
+<style>
+  body { margin: 0; padding: 20px; font: 14px/1.6 system-ui; color: var(--text-primary, inherit); }
+  h1 { font-size: 18px; margin: 0 0 8px; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  button { font: inherit; color: inherit; background: transparent; border: 1px solid var(--border-default, currentColor); border-radius: 6px; padding: 5px 12px; }
+</style>
+<main>
+  <h1>构建日志</h1>
+  <p>这是插件自己绘制的独立视图。</p>
+  <pre id="position">等待定位信息…</pre>
+  <button id="click">点击示例</button>
+  <p id="status" role="status">尚未点击</p>
+</main>
+<script src="build-log.js"></script>
+</html>

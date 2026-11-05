@@ -26,12 +26,14 @@ import notifications from '../../../resources/system-skills/cindy-plugin-creator
 import filesAndLibrary from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-files-and-library.md?raw';
 import agentTasks from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-agent-tasks.md?raw';
 import interactivePages from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-interactive-pages.md?raw';
+import nativeUi from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-native-ui.md?raw';
+import pluginAppearance from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-appearance.md?raw';
 import nodeWorker from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-node-worker.md?raw';
 import sessionContext from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-session-context.md?raw';
 import directoryPicker from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-directory-picker.md?raw';
 import panelPreview from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-panel-preview.md?raw';
 import browserExtension from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-browser-extension.md?raw';
-import bundledSkillsLegacy from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-bundled-skills-legacy.md?raw';
+import bundledSkills from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-bundled-skills.md?raw';
 import workspaceSessions from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-workspace-sessions.md?raw';
 import confirmDialog from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-confirm-dialog.md?raw';
 import mainView from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-main-view.md?raw';
@@ -75,13 +77,15 @@ export const FORGE_GUIDE = [
   directoryPicker,
   panelPreview,
   browserExtension,
-  bundledSkillsLegacy,
+  bundledSkills,
   workspaceSessions,
   confirmDialog,
   mainView,
   taskView,
   recommendations,
   interactivePages,
+  nativeUi,
+  pluginAppearance,
   panels,
   mobilePages,
   sandbox,

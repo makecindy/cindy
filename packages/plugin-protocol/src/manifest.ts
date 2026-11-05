@@ -1,4 +1,5 @@
 import { isSafeGhostRelativePath } from './internal/ghostPath.js';
+import { parseGhostNativeUi, validateWithStoredNativeUi } from './nativeUi.js';
 import { validateWithStoredMcpApps, parseGhostMcpApps, type GhostMcpApps } from './toolUi.js';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from './secretCheck.js';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from './routineEvents.js';
@@ -246,6 +247,8 @@ export interface GhostAgentNeeds {
   schedule?: boolean;
   /** 只读查看项目任务的列表与状态并打开任务;不含任务内容,需独立批准。 */
   observe?: boolean;
+  /** 只读查看伙伴(含主人其他电脑上的)名单、实时状态、待处理请求摘要与最新回复,并在主窗口打开;需独立批准。 */
+  companions?: boolean;
 }
 
 /** 插件随包本地 Node 工作进程使用的 stdio 协议。 */
@@ -894,6 +897,8 @@ export const GHOST_SETUP_KV_KEY_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 
 /** 已校验的 ghost.json 协议文档；Desktop 会再投影成无 slots 的运行时模型。 */
 export interface GhostManifest {
+  /** Optional native Cindy UI contributions; unrelated to MCP Apps. */
+  ui?: unknown;
   /** Optional MCP Apps resources and links to existing tools. */
   mcpApps?: unknown;
   /** Host-owned mail editor; providers supply mailbox adapters only. */
@@ -1203,6 +1208,7 @@ function isGhostManifestReservedRecordKey(value: string): boolean {
 }
 
 const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
+  'ui',
   'mcpApps',
   'routineEvents',
   'models',
@@ -1398,7 +1404,7 @@ function dropEmptyLegacyCapabilitySlots(
 /** Historical persisted data only; new packages must use validateGhostManifest. */
 export function validateStoredGhostManifest(value: unknown):
   { ok: true; manifest: GhostManifest } | { ok: false; reason: string } {
-  return validateWithStoredMcpApps(value, validateGhostManifest);
+  return validateWithStoredNativeUi(value, raw => validateWithStoredMcpApps(raw, validateGhostManifest));
 }
 
 export function validateGhostManifest(value: unknown): ManifestValidation {
@@ -1406,6 +1412,8 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
   if (!preparation.ok) return preparation;
   const prepared = preparation.prepared;
   const raw = prepared.raw;
+  const ui = raw.ui === undefined ? undefined : parseGhostNativeUi(raw.ui);
+  if (ui === null) return { ok: false, reason: 'ui 必须声明合法的 version 与唯一的 contributions' };
   if (raw.mail !== undefined && raw.mail !== true) return { ok: false, reason: 'mail 出现时必须是 true' };
   // Keep this shape aligned with maker-shared's runtime reader parser.
   const reader = raw.mailReader as Record<string, unknown> | undefined;
@@ -3121,15 +3129,16 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
     if (agentRaw.observe !== undefined && typeof agentRaw.observe !== 'boolean') {
       return { ok: false, reason: 'agent.observe must be boolean' };
     }
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe'])).length === 0) {
+    if (agentRaw.companions !== undefined && typeof agentRaw.companions !== 'boolean') return { ok: false, reason: 'agent.companions must be boolean' };
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && agentRaw.companions !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions'])).length === 0) {
       return {
         ok: false,
         reason:
-          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true 五项加档;仅需用户点击触发时请省略 agent 字段',
+          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true / companions: true 六项加档;仅需用户点击触发时请省略 agent 字段',
       };
     }
     agent = {
-      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe']),
+      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions']),
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
       ...(agentRaw.tasks === true ? { tasks: true } : {}),
@@ -3138,6 +3147,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       ...(agentRaw.tasks === true && agentRaw.hiddenTasks === true ? { hiddenTasks: true } : {}),
       ...(agentRaw.schedule === true ? { schedule: true } : {}),
       ...(agentRaw.observe === true ? { observe: true } : {}),
+      ...(agentRaw.companions === true ? { companions: true } : {}),
     };
   }
 
@@ -3905,6 +3915,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
     ok: true,
     manifest: {
       ...prepared.unknownV3Fields,
+      ...(ui !== undefined ? { ui } : {}),
       ...(mcpApps !== undefined ? { mcpApps } : {}),
       schemaVersion: prepared.schemaVersion,
       id: raw.id,

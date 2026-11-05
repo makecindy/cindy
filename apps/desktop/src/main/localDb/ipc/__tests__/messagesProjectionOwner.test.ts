@@ -59,7 +59,7 @@ vi.mock('../../client/current', () => ({
   getDbClient: () => h.client,
 }));
 
-import { createMessage } from '../messages';
+import { createMessage, patchMessageAgentMetaWithResult } from '../messages';
 import { tx } from '../../worker/opHandlers/tx';
 
 function setupDb(): void {
@@ -107,6 +107,19 @@ describe('teammate projection owner broadcasts', () => {
     h.ownerScope = undefined;
     h.duringInsert = undefined;
     setupDb();
+  });
+
+  it('keeps a sampling metadata retry on its original database across an account switch', async () => {
+    h.sqlite!.prepare(`INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at)
+      VALUES ('reply', 'reply', 's1', 'assistant', 'accepted', '{"samplingAttemptPending":true}', 1)`).run();
+    const pending = patchMessageAgentMetaWithResult('s1', 'reply', { samplingAttemptPending: false });
+    const nextOwnerUpdate = vi.fn(() => { throw new Error('must not write to the next owner'); });
+    h.client = { ...h.client!, drizzle: { update: nextOwnerUpdate } as unknown as ReturnType<typeof drizzle> };
+    await expect(pending).resolves.toMatchObject({ next: { samplingAttemptPending: false } });
+    expect(nextOwnerUpdate).not.toHaveBeenCalled();
+    expect(h.sqlite!.prepare('SELECT agent_meta FROM messages WHERE id = ?').get('reply')).toEqual({
+      agent_meta: '{"samplingAttemptPending":false}',
+    });
   });
 
   it.each([false, true])('keeps a projected reply on its original owner across message persistence (switch=%s)', async (switchOwner) => {

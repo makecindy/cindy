@@ -1,3 +1,6 @@
+import { registerRuntimeSettingsSection } from './app-settings/runtime.js';
+import { initializeRuntimeAppIcon } from './app-icon.js';
+import { z as settingsSchema } from 'zod';
 import { deliverRoutineResult, listRoutineDeliveryTargets } from './routines/delivery.js';
 import { flushPluginUsageLifecycle } from './plugin-usage/current.js';
 import { registerAccessibilitySupportIpc } from './accessibility-support-ipc.js';
@@ -7,6 +10,7 @@ import { ensureImportedAutomationReady, recoverCompanionImports } from './bot-im
 import { listWorktreeRecycleStatus, controlWorktreeRecycle } from './worktree/recycleControls';
 import { registerFilePeerIpc } from './device-link/filePeer';
 import { registerTaskMigrationIpc } from './task-migration/service';
+import { registerSetupMigration } from './setup-migration/register';
 import { registerLoginItemIpc } from './login-item-ipc.js';
 import { registerMenubarIpc } from './menubar/ipc.js';
 import { initMenubarService, stopMenubarService } from './menubar/service.js';
@@ -1115,6 +1119,7 @@ import {
   applyAppearanceToWindow,
   applyAppearanceToWindows,
   getPersistedWindowZoom,
+  installWindowZoomRestoration,
   registerAppearanceSettingsIpc,
   updatePersistedWindowZoom,
 } from './appearance-settings-ipc.js';
@@ -1164,6 +1169,7 @@ import {
   refreshGhostLocalization,
   refreshPluginUsageBindings,
   registerGhostIpc,
+  restorePluginAppIcon,
   setRemotePluginManagementServices,
   runStableOwnerPostCommitTask,
   setGhostNodeRuntimeStartAttemptContextReader,
@@ -4137,6 +4143,10 @@ const createWindow = () => {
     if (mainWindow.isDestroyed()) return;
     applyPageZoomLevel(mainWindow, getPersistedWindowZoom());
   });
+  // Conversation switching is an in-page hash navigation, so `did-finish-load`
+  // never fires. Chromium would otherwise restore that URL's stale per-URL zoom
+  // instead of the saved preference, making the window look smaller (#7486).
+  installWindowZoomRestoration(mainWindow);
   // Deep link 模块持有同一个 mainWindow 引用 — 解析出的 URL 通过 webContents.send
   // 推给 renderer (channel 'deep-link:navigate')。关窗时同步清空, 避免给已销毁
   // 的 BrowserWindow 发 IPC 触发 'Object has been destroyed'。
@@ -5028,11 +5038,10 @@ const registerIpcHandlers = () => {
   ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_GET, async () => {
     return subagentModelSettingsWire();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_SET, async (event, patch: unknown) => {
+  const updateSubagentSettings = async (patch: unknown) => {
     // 本 channel 已升级为可触发进程管理(软关/重启本地 Codex 会话)的操作,
     // 必须先验证调用方是可信主渲染器,不能让任意取得 channel 的 frame/WebView
     // 改写 owner-scoped 配置并重启会话(codex review P1)。
-    assertTrustedAppRendererEvent(event);
     // 配对一致性按「patch 合并当前存储」判定:有效模型为 null 时来源强制清空,
     // 同时兜住「清模型漏清来源」与「模型未指定时的 provider-only patch」两类孤儿写入。
     const current = readSubagentModelSettings();
@@ -5074,10 +5083,10 @@ const registerIpcHandlers = () => {
       // 该窗口内 owner boundary 清掉旧登记后,本请求不得再 schedule(codex review
       // P1 第 3 轮)。
     }, stillValid);
-  });
-  ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_RESET, async (event) => {
+  };
+  ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_SET, async (event, patch: unknown) => { assertTrustedAppRendererEvent(event); return updateSubagentSettings(patch); });
+  const restoreSubagentSettings = async () => {
     // 同 SET:restart-capable 操作,先验可信渲染器(codex review P1)。
-    assertTrustedAppRendererEvent(event);
     const needsCodexRestart =
       codexSpawnConfigChanged(readSubagentModelSettings(), SUBAGENT_MODEL_SETTINGS_DEFAULTS) &&
       getMakerIfReady() !== null;
@@ -5101,7 +5110,8 @@ const registerIpcHandlers = () => {
       resetSubagentModelSettings();
       return subagentModelSettingsWire();
     }, stillValid);
-  });
+  };
+  ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_RESET, async (event) => { assertTrustedAppRendererEvent(event); return restoreSubagentSettings(); });
 
   // 视觉桥设置 IPC —— store 与 Maker 单例无关, 提前注册（见 vision-bridge-settings-store）。
   // GET 也是特权配置面读取（providerId/modelId/开关），非可信 sender 同样拒绝（与 SET/RESET 对齐）。
@@ -5109,16 +5119,34 @@ const registerIpcHandlers = () => {
     assertTrustedAppRendererEvent(event);
     return visionBridgeSettingsWire();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.VISION_BRIDGE_SETTINGS_SET, async (event, patch: unknown) => {
-    assertTrustedAppRendererEvent(event);
+  const updateVisionSettings = async (patch: unknown) => {
     const parsed = parseVisionBridgeSettingsPatch(patch);
     writeVisionBridgeSettings(parsed);
     return visionBridgeSettingsWire();
-  });
-  ipcMain.handle(MAKER_IPC_INVOKE.VISION_BRIDGE_SETTINGS_RESET, async (event) => {
-    assertTrustedAppRendererEvent(event);
+  };
+  ipcMain.handle(MAKER_IPC_INVOKE.VISION_BRIDGE_SETTINGS_SET, async (event, patch: unknown) => { assertTrustedAppRendererEvent(event); return updateVisionSettings(patch); });
+  const restoreVisionSettings = async () => {
     resetVisionBridgeSettings();
     return visionBridgeSettingsWire();
+  };
+  ipcMain.handle(MAKER_IPC_INVOKE.VISION_BRIDGE_SETTINGS_RESET, async (event) => { assertTrustedAppRendererEvent(event); return restoreVisionSettings(); });
+
+  registerRuntimeSettingsSection({
+    id: 'subagent-models', title: '子代理模型',
+    description: 'Claude Code 子代理模型及来源；Codex 智能调配开关。Codex 忙碌时沿用设置页的延迟生效规则。',
+    effective: 'new-sessions-or-when-idle',
+    schema: settingsSchema.strictObject({ claudeCode: settingsSchema.string().min(1).max(256).nullable().optional(),
+      claudeCodeProviderId: settingsSchema.string().min(1).max(256).nullable().optional(),
+      codexSmartSubagentRouting: settingsSchema.boolean().optional() }),
+    read: subagentModelSettingsWire, update: updateSubagentSettings, reset: restoreSubagentSettings,
+  });
+  const visionBackendSchema = settingsSchema.strictObject({ providerId: settingsSchema.string().min(1).max(256), modelId: settingsSchema.string().min(1).max(256) }).nullable();
+  registerRuntimeSettingsSection({
+    id: 'vision-bridge', title: '视觉桥', description: '视觉桥总开关、目标模型、主视觉模型与备用模型。', effective: 'next-request',
+    schema: settingsSchema.strictObject({ enabled: settingsSchema.boolean().optional(),
+      targetModels: settingsSchema.array(settingsSchema.string().min(1).max(256)).max(512).optional(),
+      primary: visionBackendSchema.optional(), fallback: visionBackendSchema.optional() }),
+    read: visionBridgeSettingsWire, update: updateVisionSettings, reset: restoreVisionSettings,
   });
 
   // Claude Code 自动上下文压缩阈值 IPC —— store 跟 Maker 单例无关, 提前注册。
@@ -6813,7 +6841,9 @@ const registerIpcHandlers = () => {
           broadcastFailure: false,
           signal: piInstallSignal,
         }),
-      register: registerPiAgentIfAvailable,
+      // Before the first Maker exists, its constructor will pick up Pi. A false
+      // result from an existing Maker must instead enable background recovery.
+      register: () => getMakerIfReady() === null || registerPiAgentIfAvailable(),
     });
     if (piInfo.status === 'failed') {
       piRuntimeRecovery.markUnavailable(piInfo.error);
@@ -7261,6 +7291,17 @@ const registerIpcHandlers = () => {
       app.getPath('appData'),
     ),
     getAllowedProjectRoots: listAllowedSkillhubProjectRoots,
+  });
+  // 新电脑设置(docs/product-rules/new-device-setup-migration.md)：从同账号另一台电脑读取非秘密配置，
+  // 经本机原有安装器与设置存储重建；同时应答另一台电脑的只读快照请求。
+  registerSetupMigration({
+    getMaker: getMakerCore,
+    getManagedSkillRoots: () => getGhostManager().managedRootDirs(),
+    getBuiltInSkills: () => builtInSkillDescriptors(
+      app.getPath('userData'),
+      app.getPath('appData'),
+    ),
+    getMainWindow: () => mainWindowRef,
   });
   disposeSkillhubAutoSyncAuthListener = authManager.onAuthStateChange((state) => {
     if (!state.isAuthenticated) return;
@@ -9381,20 +9422,9 @@ app.on('ready', async () => {
 
   initializeUpdatePresentationRecovery();
 
-  // mac dev 下 Dock 显示的是 Electron 默认图标——macOS 忽略 BrowserWindow.icon,
-  // Dock 图标取自可执行 bundle 的 icns,而 dev 跑的是 node_modules 里的官方
-  // Electron 二进制。这里 dev-only 手动设成 Cindy 图标;packaged 版由
-  // resources/icon.icns 自然生效,不需要也不该动。
-  // 使用 icon-dock.png（generate-mac-icns.mjs 产出，已套 Apple 圆角网格）；
-  // setIcon 会原样显示资源，不会替应用图标自动加圆角。
-  if (!app.isPackaged && process.platform === 'darwin') {
-    try {
-      app.dock?.setIcon(path.join(__dirname, '../../resources/icon-dock.png'));
-    } catch (err) {
-      // 仅影响 dev Dock 观感,失败不挡启动
-      createLogger('dock-icon').warn('setIcon failed', { error: String(err) });
-    }
-  }
+  await initializeRuntimeAppIcon().then(restorePluginAppIcon).catch(err => {
+    createLogger('dock-icon').warn('Runtime icon initialization failed', { error: String(err) });
+  });
 
   await ensureMainAppPresence('app-ready');
 

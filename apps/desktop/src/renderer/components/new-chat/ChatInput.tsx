@@ -1,4 +1,5 @@
 import { deviceDisplayName } from '@/lib/deviceName';
+import { pluginUiComposerAccess, pluginUiComposerKey } from '@/cindy-brain/pluginUiComposerActions';
 import {
   useCallback,
   useEffect,
@@ -269,6 +270,7 @@ import {
 } from '@/components/cindy-make/CindyMakePreflightDialog';
 import { getModelById, getModelsForVendor } from '@/lib/modelDefinitions';
 import {
+  addPluginSkillSetupCommands,
   beginSlashCommandRosterLoad,
   EMPTY_SLASH_COMMANDS,
   failSlashCommandRosterLoad,
@@ -281,9 +283,11 @@ import {
   loadAllCommands,
   nextAvailableSlashCommandIndex,
   PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+  pluginSkillSetupName,
   rewriteBuiltInSkillDraftForSend,
   leadingSlashInvocation,
   rebaseInlineRangesAfterSlashCommandRewrite,
+  type PluginSkillSetupPaletteEntry,
   type SlashCommandRosterState,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
@@ -639,6 +643,14 @@ interface ChatInputProps {
    * 草稿 patchVendorPrefs)。未提供 = 不显示计划模式入口。
    */
   onPlanModeChange?: (enabled: boolean) => void | Promise<void>;
+  /**
+   * Plugin Skills the `/` palette offers while their plugin is missing or disabled
+   * here. Picking one clears the typed `/query` and calls onSelect; nothing is inserted.
+   */
+  pluginSkillSetup?: {
+    entries: readonly PluginSkillSetupPaletteEntry[];
+    onSelect: (skillName: string) => void;
+  };
   /** Current Fast Mode state from the session store. */
   fastMode?: boolean | 'ultrafast';
   /** Called when the Fast Mode toggle changes. Captured device ID pins remote routing. */
@@ -1327,6 +1339,7 @@ export function ChatInput({
   initialPermissionMode,
   planModeEnabled = false,
   onPlanModeChange,
+  pluginSkillSetup,
   fastMode = false,
   onFastModeChange,
   onWorkingDirChange,
@@ -1478,7 +1491,7 @@ export function ChatInput({
   const onComposerTypingRef = useRef(onComposerTyping);
   onComposerTypingRef.current = onComposerTyping;
   // session 切换时 ChatInput/Editor 会复用；推荐资格必须等目标草稿完成水合后再判断。
-  const [, setComposerHydrationGeneration] = useState(0);
+  const [composerHydrationGeneration, setComposerHydrationGeneration] = useState(0);
   // 完整输入框空判断:不仅检查 ProseMirror 文档是否为空,还检查附件、浏览器评论和语音稿。
   // 避免在用户放好了附件/评论/语音稿但正文为空时,仍发起付费的 predictNextPrompt 调用。
   const voiceDraftTextRef = useRef('');
@@ -2048,6 +2061,11 @@ export function ChatInput({
   const remoteAtomicModelSelectionSupported =
     hostCcCaps.capabilities?.supportsSessionAgentSwitchCas === true ||
     hostCodexCaps.capabilities?.supportsSessionAgentSwitchCas === true;
+  // 被控电脑上的协同 Lead / 本机 Worker 能不能换 Agent 所在电脑，由被控端声明(host 级能力，两个
+  // 引擎的快照都带)。v0.1.104–v0.1.110 的被控端会拒绝，缺这一位时不列其他电脑与分享。
+  const hostSupportsOrcaAgentRelocation =
+    hostCcCaps.capabilities?.supportsOrcaAgentRelocation === true ||
+    hostCodexCaps.capabilities?.supportsOrcaAgentRelocation === true;
   // Orca Lead/Worker keeps its workflow identity in the session row and vendor
   // options; it can therefore use the same deferred handoff transaction as a
   // normal session. Remote sessions remain gated by their host capabilities.
@@ -4824,8 +4842,17 @@ export function ChatInput({
         } as UnifiedCommand;
       });
   }, [ghostSourceLabels, ghostsForCommand, isGhostSigil, t]);
+  // 插件技能的安装/启用入口只进 / 面板,不进胶囊 roster 与发送期分派。
+  const pluginSkillSetupEntries = pluginSkillSetup?.entries;
+  const slashPaletteCommands = useMemo(
+    () =>
+      slashCommandsReady && pluginSkillSetupEntries
+        ? addPluginSkillSetupCommands(composerSlashCommands, pluginSkillSetupEntries)
+        : composerSlashCommands,
+    [composerSlashCommands, pluginSkillSetupEntries, slashCommandsReady],
+  );
   // 面板显示与键盘导航共用同一份命令源:$ 只列意识,/ 只列技能/命令。
-  const paletteCommands = isGhostSigil ? ghostCommandItems : composerSlashCommands;
+  const paletteCommands = isGhostSigil ? ghostCommandItems : slashPaletteCommands;
   const filteredCommands = useMemo(
     () => (trigger.kind === 'slash' ? filterSlashCommands(paletteCommands, trigger.query) : []),
     [paletteCommands, trigger],
@@ -5345,6 +5372,19 @@ export function ChatInput({
         }
         runEnd = parentStart + childOffset + text.length;
       });
+      const setupSkillName = pluginSkillSetupName(cmd);
+      if (setupSkillName) {
+        if (trigger.sigil !== '/' || !pluginSkillSetup) return;
+        // 安装/启用入口:删掉已键入的 `/query`、先落草稿再交给父组件走安装引导,
+        // 装好后由父组件把 `/技能 ` 填回这个输入框。
+        editor.chain().command(({ tr }) => {
+          tr.delete(from, runEnd);
+          return true;
+        }).run();
+        draftSaveSchedulerRef.current?.flush();
+        pluginSkillSetup.onSelect(setupSkillName);
+        return;
+      }
       let planModeCommandConsumed = false;
       const applied = editor
         .chain()
@@ -5373,7 +5413,7 @@ export function ChatInput({
         planModeEntry?.onToggle(!planModeEntry.enabled);
       }
     },
-    [editor, planModeCommandAvailable, planModeEntry, trigger],
+    [editor, planModeCommandAvailable, planModeEntry, pluginSkillSetup, trigger],
   );
 
   const resolveEffectiveAtRange = useCallback((): { from: number; to: number } | null => {
@@ -7898,9 +7938,11 @@ export function ChatInput({
   );
   const sessionRemoteAgentOptions = useMemo<RemoteAgentSelectorOptions | undefined>(() => {
     // 本机或能力已确认的被控端任务可换电脑；SSH 与运行设备 Worker 不开放位置选择。协同的 Lead / Worker
-    // 任务在本机，换 Agent 位置与普通任务同一套(2026-10-16)；被控电脑上的协同任务旧版会拒绝，先不开放。
+    // 任务在本机，换 Agent 位置与普通任务同一套(2026-10-16)；被控电脑上的协同任务要被控端声明
+    // supportsOrcaAgentRelocation 才开放(旧版被控端会拒绝)。
     if (!sessionId || !agentLocationAware || remoteHostId || !sessionEngineFilter ||
-        sessionOrcaRole === undefined || (sessionOrcaRole !== null && deviceLinkDeviceId) ||
+        sessionOrcaRole === undefined ||
+        (sessionOrcaRole !== null && deviceLinkDeviceId && !hostSupportsOrcaAgentRelocation) ||
         sessionOrcaRemoteWorker) return undefined;
     if (!remoteAgentDevices || (remoteAgentDevices.length === 0 && !effectiveAgentDeviceId)) {
       return undefined;
@@ -7940,6 +7982,7 @@ export function ChatInput({
     sessionEngineFilter,
     sessionOrcaRole,
     sessionOrcaRemoteWorker,
+    hostSupportsOrcaAgentRelocation,
     remoteAgentDevices,
     catalogHostDeviceId,
     effectiveAgentDeviceId,
@@ -8570,6 +8613,47 @@ export function ChatInput({
       }
     };
   }, []);
+
+  // Bind the actual visible editor. No draft copy is stored by the plugin UI.
+  const pluginComposerScopeRef = useRef({ sessionId, storageKey, ownsHardwareComposerActions, queueEditingClientId });
+  pluginComposerScopeRef.current = { sessionId, storageKey, ownsHardwareComposerActions, queueEditingClientId };
+  const pluginComposerOwner = getDataOwnerGeneration();
+  useEffect(() => {
+    if (!editor || !sessionId || deviceLinkDeviceId || !ownsHardwareComposerActions || queueEditingClientId || composerMutationLocked) return;
+    const draftKey = crypto.randomUUID();
+    let revision = 0;
+    const current = () => !editor.isDestroyed && editor.isEditable && !editor.view.composing &&
+      isDataOwnerGenerationCurrent(pluginComposerOwner) && isDataOwnerIdCurrent(editorDataOwnerRef.current) &&
+      pluginComposerScopeRef.current.sessionId === sessionId && pluginComposerScopeRef.current.storageKey === storageKey &&
+      pluginComposerScopeRef.current.ownsHardwareComposerActions && !pluginComposerScopeRef.current.queueEditingClientId &&
+      hasHydratedRef.current && storageKeyForDraftRef.current === storageKey && !isRestoringRef.current &&
+      !composerMutationLockedRef.current && document.visibilityState !== 'hidden';
+    const changed = ({ transaction }: { transaction: { docChanged: boolean; selectionSet: boolean } }) => {
+      if (transaction.docChanged || transaction.selectionSet) revision++;
+    };
+    editor.on('transaction', changed);
+    const off = pluginUiComposerAccess.register(pluginUiComposerKey({ sessionId }), {
+      current,
+      snapshot: () => {
+        const { from, to } = editor.state.selection;
+        return { draftKey, revision: String(revision), selection: { start: from, end: to },
+          selectedText: editor.state.doc.textBetween(from, to, '\n', '\uFFFC') };
+      },
+      apply: effect => {
+        if (!current()) throw new Error('EDITOR_UNAVAILABLE');
+        const from = effect.operation === 'append' ? Selection.atEnd(editor.state.doc).from : effect.selection.start;
+        const to = effect.operation === 'append' ? from : effect.selection.end;
+        const content: JSONContent[] = [];
+        effect.text.split('\n').forEach((text, index) => {
+          if (index) content.push({ type: 'hardBreak' });
+          if (text) content.push({ type: 'text', text });
+        });
+        return editor.commands.insertContentAt({ from, to }, content);
+      },
+    });
+    return () => { off(); editor.off('transaction', changed); };
+  }, [editor, sessionId, storageKey, deviceLinkDeviceId, ownsHardwareComposerActions, queueEditingClientId,
+    composerMutationLocked, composerHydrationGeneration, pluginComposerOwner]);
 
   useEffect(() => {
     if (!ownsHardwareComposerActions) {

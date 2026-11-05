@@ -1,5 +1,20 @@
 # 跨端协议兼容
 
+## Pi 上下文来源估算（2026-11-05，未发布）
+
+`maker:get-context-usage` 沿用原通道，仅增加可选 `textEstimate`：
+`{method:"text-heuristic",items:[{source,tokens}]}`。它是文字粗估，独立于原生总量；
+Desktop 与 Mobile 明确标注估算和排除项。旧端忽略可选字段，新端收到缺字段或未知 method
+时只显示原有总量，不要求双端同时升级。返回值不含模型上下文正文或工具定义正文。
+
+## 群内能力提示（非执行终态）
+
+复用现有通用 card 消息合同，新增 `cindy.capability-notice` / `schemaRevision: 1`：data 只带固定 code（`GROUP_AUTHORIZATION_REQUIRED`、`GROUP_AUTHORIZATION_UNAVAILABLE`、`ATTACHMENTS_UNAVAILABLE`），fallback 为执行电脑本地化的完整可读提示。以伙伴 actor 发往原主群或话题；同执行 ID、epoch、类别复用同一稳定幂等 ID，并按既有消息 POST 合同放入 `operationId`（不发送本地 `clientId` 字段）；投递重试不创建执行、不结算模型轮次。
+
+Desktop 和 Mobile 共用 shared parser，仅认可未删除的伙伴作者消息、单个完整 card、已知版本及白名单类别；普通人或未知／混合内容继续普通消息展示。Desktop 发往手机的既有消息视图可选追加 `capabilityNoticeCode`，手机 Remote Resource 解析仅保留未删除的伙伴 notice 上的白名单类别，content 保留 fallback，旧手机忽略新字段仍可读；手机直连自行投影，新手机连旧电脑仍用旧内容。旧桌面／手机直连把未知卡片显示为伙伴消息的 fallback，不丢失提示。
+
+不改服务端接口、权限档、原生配置、schema 或数据库 migration。提示只有原因，没有原始工具参数、路径或错误正文。回滚客户端后沿用 fallback，不修改已有历史。
+
 ## 群聊代答的工作记录兼容（2026-11-03）
 
 已发布 Desktop 在普通和个人代答的完成请求中附带 `cindy.work-record` revision 1，
@@ -23,6 +38,72 @@
 既有取消记录不复活，手动关闭继续取消在途和排队回复。回滚应用可保留兼容的数据库函数和数据，
 但旧应用会恢复旧的参与判定，不能承诺回滚期间保持新语义。Device Link 和自建中转无需适配。
 本地回归与生产部署分别验收，不将代码完成视为线上已生效。
+
+## 供应商目录的短断连续性（2026-11-03）
+
+`maker:provider:list`、对象形式的模型能力查询和同账号组 `view` 回包可附带
+`providerContinuity: { stale, remainingMs }`。它只描述目录信息的新鲜度，不是授权、预算或执行成功证明。
+转发者必须继承剩余期，并扣除本次读取花费的时间；不可在每一跳重新起算 30 分钟。
+Main、Desktop 与 Mobile 的视图缓存均以墙钟或单调时钟任一先到期为准，重复读取和失败不续期。
+
+没有此字段的旧端保留原有视图生命周期；不能在保持旧数组/标量回包形状的同时可靠转交剩余期，
+因此这些回包不进入新的 Main 连续性缓存。授权查询、远程 Agent `caps`、组分配与写操作不缓存。
+明确拒绝、账号/区域/权限代次变化或显式断开作废对应快照；网络、限流和服务暂时不可用才允许回退。
+恢复探测使用实时调用：分享 peer 走其已授权的 Agent 服务，不查询它无权读取的主人任务数据库。
+当前实际对象形式的 maker:agent:status 回包（binaryReady / authReady / identity 等执行机 Agent
+安装与登录来源发现信息）也按同一 providerContinuity 预算处理：各跳继承剩余期、双时钟，
+重复读取、失败或重开界面不会延长同一快照的剩余期；明确拒绝、账号/区域/权限代次变化或
+显式断开作废对应快照。它只说明目录信息的最近可用性，不证明恢复、设备授权、M 的任务 grant、
+额度或执行成功；真正的 M 任务准入与执行仍由 M 实时核验。maker:list-available-agents 仍是
+数组回包，不进入新的 Main 连续性缓存；旧端形状不变。
+
+只新增可忽略的业务结果字段，不新增帧类型、relay 权限或服务端依赖；旧客户端仍按原字段读取。
+回归入口为 `metadataContinuity.test.ts`、Main `providerMetadataContinuity.test.ts`、
+`deviceLinkIpc.test.ts`、`responsivenessTracker.test.ts` 与两端模型目录缓存测试。
+
+### 同账号组的新任务连续性
+
+`RemoteAgentCaps.groupContinuity: true` 是可选严格能力位，只对同账号控制端提供。
+O 在原 Fast 策略绑定之后，通过既有 `provider-group:remote` 发送 `continuity-prepare`，
+M 保存限定 O/C/组/供应商/Agent/模型的内存上下文并回 `{id, remainingMs}`；O 再把可选
+`continuity: {id, remainingMs, config}` 附在原 `pick` 成功结果。各跳从请求开始扣时，双时钟收口，
+重读/失败/业务流量不能续期。组设置和供应商权限变化发送精确 `continuity-revoke`，迟到 prepare 不得覆盖 revoke。
+
+O 再次交付已确认的上下文前，可用既有 `continuity-inspect` 核验 M 是否仍持有它；
+仅原签发者 O 可做这项只读核验，`continuity-admit` 仍只允许绑定的 C。健康上下文保留原 id
+与原双时钟期限，包括剩余不足 10 分钟时。M 重启丢失上下文时，只向 O 回 `{id, remainingMs: 0}`
+表示不存在；零值不是给 C 的正向 ACK，C 的现有解析继续拒绝。已记下的撤销或关闭仍返回拒绝，
+不能当成重启重新签发。只有明确不存在时 O 才重新 prepare 并取得 M ACK，继承旧剩余预算并扣传输预算；
+收到不存在回执后，旧行只保留原期限供重试，不再交付给 C；重新 prepare 超时或临时失败时，
+须等新 M ACK 才能再次交付连续性上下文。迟到的不存在回执也终止旧行的再次交付。
+临时失败不续期，迟到的明确拒绝也清理对应上下文，不影响邻居。不新增帧、通道或协议字段。
+
+O 不可达时，C 只向已预备 M 发 `continuity-inspect` 读实时可用性/负载，并对选中 M 发
+`continuity-admit {id, ownerDeviceId, sessionId}`。M 校验真实来源 C、自身权限/模型和原期限，
+将既收 O 的 Fast 策略绑定到新任务，之后仍走现有 Agent open。C 不传策略值或修订号。
+旧 M 缺此位时 O 不发新动作；旧 C 忽略 pick 可选字段，保持原路径。所有新动作仍受现有
+同账号 dispatch 边界保护，不进入供应商分享/共享任务访客授权；不扩大旧 task-specific 分享许可。
+候选、在途和回执数量有界；软并发保留原语义，准入临时计数只避免同时选择时低估负载。
+
+Desktop 本地 `STATUS_CHANGED/getState` 可附 `directDataDeviceIds`；路径事件再附单目标
+`dataPathChangedDeviceId`。它们由 Main 当前认证/就绪路径生成，界面不能据缓存伪造。
+一台目标失效只失效它的就绪状态、镜像和重试；全局信令状态仍单独用于诊断。Mobile 新前台客户端
+沿用 SDK 的最长 30 分钟保留，后台仍释放，旧端生命周期不变。无新增 wire 帧或服务端要求。
+回归入口：`continuityRouting.test.ts`、`continuityRuntime.test.ts`、`remoteHandler.test.ts`、
+`hostLifecycle.test.ts`、`remoteConnectionStatus.test.ts`、`remoteProjectsStartup.test.tsx` 和 Mobile `historyViewProvider.test.tsx`。
+
+## 设备离线投影与显式控制关闭（2026-11-04）
+
+本仓自建中转的 `DeviceLinkRelayHub.presenceOf()` / `disconnectDevice()` 与 REST `deviceView()`
+（`packages/device-link-relay/src/hub.ts`）在目标路由离线时都会把 `remoteControlEnabled` 投影为
+`false`。这是信令/目录的离线投影，不是目标用户关闭远控：只有**当前 online** 快照里的
+`remoteControlEnabled: false` 可作为新的控制关闭证据；`online: false` 附带的 false 不得撤销此前
+明确拒绝、不得解除已保留直连上的权限闸，也不得让界面把离线改画成已重新允许。明确关闭、撤权或
+停止仍按各自合同立即结束对应保留；只有新的有效 **online + enabled** 授权证据才能恢复。
+本仓只能读证自建中转生产者；官方服务端是否已部署同形投影不由本仓实现证明，不能据本仓代码宣称官方端已上线。
+
+回归入口：`packages/device-link/src/__tests__/client.test.ts`、`deviceLinkControllerPresenceDirectory.test.ts`、
+Mobile `historyViewProvider.test.tsx` 的 offline mask / explicit-off 用例。
 
 ## 机器实时状态（2026-11-02）
 
@@ -500,6 +581,10 @@ stream 匹配后才处理；信令不进入业务可靠 FIFO，也不走直连�
 在 5 分钟后回收（正在进行的请求例外），新业务可以再触发尝试。有等待者时每分钟检查长期
 空闲通道：至少 5 分钟无收发、没有在途请求、接收处理或缓冲时才让出名额。无压力时保留已建立
 的通道，分享许可续期不因本机空闲策略而换通道。
+信令失联时，已经认证、完成可靠握手且健康的通道，在原同账号 grace 或分享 lease
+剩余期内不参与这类空闲回收；共享池中其它在线客户端的等待者也不能提前打断该保留。
+信令恢复后恢复原空闲公平规则；任一时钟到期、明确关闭／撤权或通道故障仍结束保留，
+不续期、不扩大容量，也不允许离线建立新授权。等待者可能等到原期限结束或其它名额释放。
 Desktop 还通过 `isPeerBusy` 接入 dispatch 的执行中请求和待发回包，不能把可靠帧已 ACK
 误当作宿主业务已完成；这只阻止空闲回收，不延后 ACK 或阻塞后续 stop／steer／push。
 
@@ -2112,6 +2197,23 @@ Cindy 托管 Skill（2026-11-03）：内置 Skill 与插件带的 Skill 以任�
 旧 G 忽略新增字段；旧 O 缺字段时新 G 沿用原 30 分钟合同，M 仍为最终许可闸门。
 字段存在但无效时拒绝把它用作任务授权；此增量不更改 `maker:remote-agent:v1` 或服务端请求格式。
 
+M 的委托核权只调整本地发送调度，继续使用原 `POST /provider-shares/delegations/check` 与鉴权。
+首次／续权安装委托和后台复核共用账号作用域、端点隔离的串行查询门；只合并同一分享、成员、
+G、M 与授权代次的在途查询，完成后不缓存授权结果。物理请求之间随机间隔 750–1250ms；
+后台按 peer 合并任务，首次复核分散在 30–60 秒，后续约每 60 秒到期、串行发送，积压可能推迟。
+队列最多 128 项，从入队起最多等待／核验 15 秒；同一取消信号覆盖 HTTP、登录刷新等待及重试。
+到期取消请求并释放查询占用，不能在刷新完成后补发失效查询；共享登录刷新本身不被取消。
+
+HTTP 429 的 `Retry-After`（秒数或 HTTP-date）仅作为 Main 内存中的重试期限保留；
+旧服务端没有该头时按连续 429 退避 60/120/240/300 秒，成功重置。当前排队核权立即失败，
+冷却期不继续发送其他 peer 的查询，不自动重放首次授权。账号／端点变化或 host 停止时
+取消旧队列与请求，丢弃迟到结果；同账号、同端点重建 host 仍保留查询尾部、间隔及限流退避，
+不能借重建穿透预算。不重启 relay、不重放任务、不改变管理 API 或普通远控的发送。
+核权失败不作为新的授权，也不延长原许可；明确 `active=false` 仍按对应任务 nonce 撤销。
+这不提供多执行机的全局协调，也不拆分旧服务端的查询／管理限流桶，无法保证消除所有 429。
+实现与回归见 `providerShareDelegationChecks.ts`、`providerShareDelegationChecks.test.ts` 和
+`serverApiClient.test.ts`；服务端、自建 relay 与旧客户端无需同步升级。
+
 供应商退出期间的恢复（2026-10-29）沿用 v1 与既有字符串 `closed.reason`，不加必填字段、
 能力位或 relay 接口。新 host 的空闲 run 使用旧控制端已认识的 `ended + idleReclaimed`，旧端静默
 收尾、新端保留本机部分；忙碌 run 用 `provider-restarting`，旧端仍走原有错误恢复，不劣于原来的
@@ -2394,6 +2496,14 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   不在任务所在电脑时带值，旧端忽略即可。Lead 的 MCP 工具同步：`list_available_models` 可选 `agent_device_id` 并返回
   `locations`，`create_worker` / `create_workers` 可选 `agent_device_id`(`"local"` = 任务所在电脑)。同账号 allowlist 新增上述 models 查询；共享任务清单不变。回归见 `orcaWorkerCreationService.test.ts`、`CreateWorkerPopover.test.tsx`、Mobile
   `orcaTeam.test.ts` / `useOrcaWorkerForm.test.tsx`。
+- **被控电脑上的协同任务换 Agent 位置**(2026-11-04)：A 从 v0.1.112 起接受给它上面的协同 Lead / 本机 Worker
+  发带 `agentDeviceId` 的 `maker:switch-session-agent`(运行设备 Worker 仍回 `UNSUPPORTED_CAPABILITY`)；v0.1.104–v0.1.110
+  的 A 在登记意图前就回 `UNSUPPORTED_CAPABILITY`。A 在 `maker:get-capabilities` 声明 `supportsOrcaAgentRelocation: true`
+  后，桌面与 Mobile 控制端才对这类任务列其他电脑与分享、走与普通任务相同的换电脑事务；缺省 false 时维持原样，不出现能点却必失败的
+  选项。协议位是整台 A 的，控制端读到任一已注册 Agent 的快照带这一位即可。通道与参数不变，只新增可选能力位；中转只按通道名
+  放行(`packages/device-link/src/allowlist.ts`)、不解析能力字段，自建中转无需同步修改。Mobile 经 `normalizeMobileAgentCapabilities` 读
+  这一位(makecindy/cindy#8841)。回归见 `sessionAgentSwitchRemoteRouting.test.ts`、`remoteAgentRelocationWiring.test.ts`、
+  `sessionRuntimeControlWiring.test.ts`，Mobile `orcaModelSelection.test.ts`、`sessionAgentSwitchWiring.test.ts`。
 - **账号余量**(2026-10-09)：这一轮消耗的是 Agent 所在那台(B)的账号，桌面底部用量 chip 与手机任务菜单都改读 B 的
   余量，不读任务所在电脑(本机或被控电脑)的同名账号。直接经 device-link 调 B 已有的 `maker:usage:*` 读取与推送
   (与模型选择器读 B 的余量同一份镜像)，不新增 channel；任务价值与上下文仍读任务所在电脑。远程控制的任务把 Agent
@@ -2526,6 +2636,18 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
 桌面控制另一台电脑上的伙伴时，设置页的读写经现有 `maker:remote-resources:invoke`，不新增 device-link 通道，也不改 allowlist。契约正本是
 `apps/desktop/src/shared/botRemoteSettings.ts`，字段只追加：
 
+2026-11-03 修正主模型远程来源的保存：`profile.update` / `profile.acceptModelSelection`
+接收可选的 `capabilities.agentDeviceId`（合法位置字符串或 null），与模型链首项镜像一致；
+回到本机或恢复本机默认时明确清空，备用项保留各自位置。此字段不授予远程执行权限，
+保存仍经原有模型路由校验；同账号授权、伙伴可见性及 `permissions` 拒绝规则不变。
+旧控制端的请求继续有效；新控制端在提交完整模型链时省去顶层派生位置字段，链内各项的
+位置原样保留，因此旧主机的严格白名单也能接收切换远程来源、切回本机和恢复默认的请求。
+新主机从模型链生成或清空自己的位置镜像；不可丢弃链内位置而把远程选择改成本机来源。
+只有未更新的控制端仍发送顶层字段时，才需更新伙伴所在电脑以接收该字段。
+无新帧、通道或 relay 行为，官方与自建中转无需适配。
+回归见 `remoteBotSettingsTarget.test.ts`（旧主机字段边界）、`botRemoteSettingsHost.test.ts`、
+`botSettings.test.tsx` 与 `botModelChain.test.ts`。
+
 - **声明**：主机在 `teammates` 集合描述里增加集合动作 `{ id: "management:settings" }`（手机只检查 `open-create`，不显示该动作）。
 - **请求**：`collectionId: "teammates"`、`actionId: "management:settings"`、`input: { v: 1, op, args? }`；需要伙伴的操作带
   `resourceRef: { collectionId: "teammates", kind: "bot", id }`，主机级操作（`caps`、`models.default`、`autonomy.*`、`routines.sources`、
@@ -2624,6 +2746,14 @@ B 上的 Worker 是一条普通任务，`sessions.orca_remote_lead`(migration 01
   任务头标注「来自 X 的协同」，结束后显示「协同已结束」。
 
 ## 供应商组：同账号直连(P2a)
+
+中继断线连续性：Desktop 只对已经认证、可靠握手完成且健康的同账号直连数据通道启用
+最长 30 分钟的信令失联保留，组内请求、结果与订阅推送继续使用原可靠 stream / seq。
+不新增 wire 字段、能力位、离线握手或服务端授权；逐请求权限与显式断开、撤权、停止和
+到期清理不变。重复离线通知或流量不续期；两端都需更新，旧端与 Mobile 仍可能关闭通道。
+供应商分享既有短期许可不因此延长。本机 relay 恢复后若直连随后故障，可使用已恢复的 relay；
+对端仍明确离线时不能误判其可达。故障半径和验证入口见
+[`remote-and-mobile-adaptation.md`](remote-and-mobile-adaptation.md)「直连优先、中继兜底」。
 
 跨区组员恢复（2026-10-26）：控制端 Main 仅在同账号 `provider-group:remote` 的有效 `view` / `pick`
 回包或 `manage-group` 组视图引用分享时，恢复本机缺失的区域标记并通过既有 `/provider-shares/x/session` 核验成员关系。
@@ -4596,6 +4726,20 @@ agent.observe 为可选独立能力，不依赖 tasks/targets，只有 Host 确�
 逻辑页管道新增 `observe-request`（`project-tasks` / `open-task`），只在本机 Desktop Main 消费，不进入 device-link 白名单。
 旧 Host 忽略声明且没有 `cindy.observe`，插件须探测入口后降级。作者契约见 plugin-agent-tasks.md §4.11.8。
 
+## 插件查看伙伴和状态（未发布）
+
+agent.companions 为可选独立能力，只有 Host 确认的 `companionsCapabilityApproved` 才授予；
+历史未知字段、旧 tasks/targets/observe 批准不推断新授权；旧 receipt 缺少新可选字段照常读取，无需 schema migration。
+新包严格校验布尔值；已安装快照中的非布尔历史值原样保留但不授予，不因新校验停用。
+逻辑页管道新增 `companions-request`（capabilities / list / avatar / reply / history / open / interaction / answer / watch / unwatch）与下行 `companions-changed` 推送，只在本机 Desktop Main 消费，不进入 device-link 白名单。
+`interaction` 的 permission / plan 带 `allowHere`；插件对 `allowHere` 为 false 的请求「允许」返回 `ALLOW_IN_CINDY`（需在 Cindy 里允许），拒绝不受影响。
+`answer` 作答其他电脑上的伙伴时复用已在同账号远控白名单里的 `maker:get-pending-interactions` / `maker:resolve-interaction`，不新增 channel；旧版主力电脑不报告待处理请求，插件无从作答。
+旧 Host 忽略声明且没有 `cindy.companions`，插件须探测入口后降级。作者契约见 plugin-agent-tasks.md §4.11.9。
+跨电脑新增 device-link channel `maker:companion-live:read`（`COMPANION_LIVE_CHANNEL`，版本 1，只读，进同账号远控白名单、不进 sharedTask 访客白名单）：
+主力电脑返回本机伙伴的插件视图。旧版主力电脑没有该 channel → `CHANNEL_NOT_ALLOWED`，新查看端退回已发布的 teammates 列表（只有状态与工作阶段），
+不推断其他内容；请求带 `version`，未知版本返回 `INVALID_PARAMS`。返回字段只增不改，查看端逐字段校验后再交给插件。
+请求 `kind` 为 `list` / `reply` / `history`；不认识 `history` 的主力电脑返回 `INVALID_PARAMS`，查看端把对话记录当作读不到（null），不影响列表与回复。
+
 ## 伙伴列表的可选活动摘要
 
 RemoteResourceDisplay 与 BotGroupSummary 可选携带 `teammateActivity: { phase }`。宿主从现有运行、待确认、完成、错误状态投影，Desktop/iOS/Android 共用状态优先级。生成文案、确认权限、已读回执均保持原有路径。旧控制端忽略字段；新控制端连接旧宿主时回退已有 generation、确认快照及普通未读，不把缺失状态推断成完成。
@@ -4634,6 +4778,42 @@ Chat Server 请求复用既有消息 `content` 的 media 块及 `threadRootId`�
 无数据库迁移、权限扩大或服务端改动；回退客户端只收起电脑话题的附件输入，已有媒体消息仍可读取。
 回归入口：`ChatServerControls.test.tsx`、`chatServer.test.ts`。
 
+## PR 状态的合并就绪字段
+
+`PrStatusResult`（`git-context:pr-status`，含 device-link 远程会话）成功结果新增可选 `mergeState`、`reviewDecision`，
+取自同一次 GraphQL 汇总查询的 `mergeStateStatus` / `reviewDecision`，不增加请求。GitHub 插件 PR 卡片的状态位
+（`data-ghost-pr-status`）用它显示「可以合并 / 有冲突 / 等待审批」。旧控制端忽略字段；新控制端连接旧宿主时字段缺失，
+卡片省掉这一项而不是猜测。不改握手、白名单、relay 或服务端，无数据库迁移。
+回归入口：`gitContextPrStatusService.test.ts`、`ghostCardPrStatus.test.ts`。
+
+## 插件卡片的手机原生呈现（`plugin-card-rich`）
+
+手机读取 `plugin-results` 卡片时在 `client.primitives` 里多声明 `plugin-card-rich`。只有声明了的手机，宿主才在
+`plugin-card-actions` 的 `data` 里附带：动作的 `primary` / `toggle`、`live` 状态名，以及 `prStatus`。`prStatus`
+包含状态位、插件快照，并在能查到时附上与标题栏同源的 `PrStatusResult`。这些部分的文字同时移出文本块。
+指向本任务某个 GitHub PR 页面的链接动作，能查到状态时再带可选 `prState`（`open` / `draft` / `merged` / `closed`），
+手机据此在卡片标题前画 App 自己的 PR 状态图标；查不到就不带，手机按中性图标显示，旧手机忽略该字段。
+带名字的按钮里面的文字不进文本块；手机把文本块首行画成卡片标题，链接与标题同名时点标题打开链接。
+旧手机不声明，照旧收纯文字投影；新手机连旧宿主时收不到这些字段，回到纯文字和普通按钮。
+文本块对声明了 `card.externalLinks` 的插件不再插入链接地址，这对新旧手机一致，链接仍作为可点的动作下发。
+ghost_call 结果新增可选布尔 `xdt_card_turn_end`（MCP 层与手机工具投影同步放行）。手机据此把卡片排到本轮回复之后；
+旧手机忽略。不改握手、relay、服务端或数据库。回归入口：`cardRemoteResource.test.ts`、`messageRender.test.ts`、
+`pluginCardActions.test.tsx`。
+
+## 插件卡片的模型下拉框（`data-ghost-model-select`）
+
+卡片净化器在有 `data-ghost-action` 的 `button` 上放行 `data-ghost-model-select`，值只留合格的
+`PluginModelSelection` JSON，可再带 `agentDeviceId`（同账号其他电脑的 deviceId 或分享供应商的 `share:<id>`，不收 `local`）。renderer 的 `ghosts:card:action` 调用新增可选第 6 个参数 `modelSelection`；
+主机核对该动作在已存卡片里确实声明了下拉框、模型当前可用（本机模型与 `cindy.pickModel` 同一判据；远程模型须是当前提供的位置、且在该位置可远程调用的目录里）后，在插件收到的
+`card-action` 事件里多带 `modelSelection`。旧插件忽略该字段；旧客户端会丢掉这个属性、照常派发动作，插件按
+`cindy.pickModel` 兜底。手机与 device-link 路径不带该字段，不改握手、relay、服务端或数据库。
+回归入口：`cardSanitizer.test.ts`、`cardActionDispatch.test.ts`。
+
+## 插件卡片的 App 图标位（`data-ghost-icon`）
+
+卡片净化器在 `span` / `div` 上放行 `data-ghost-icon`，值只认 `GHOST_CARD_ICONS` 登记的名字（目前是 `settings`）。
+renderer 把这个位置的内容换成 App 里同名的 Lucide 图标；旧客户端会丢掉属性，照常显示插件写在里面的兜底图形。
+只影响电脑端的卡片画面，不改手机投影、握手、relay、服务端或数据库。回归入口：`cardSanitizer.test.ts`。
 ## 插件对话文件交接（`handoff:`）
 
 工具参数表把 `cindy_handoff_files` 声明为数组（`{"type":"array"}`）才启用，同名的其它形态参数不受影响；未声明的工具与旧插件行为逐字不变（非媒体仍报改用 dir）。
@@ -4652,3 +4832,26 @@ device-link 操作、字段或白名单。远程打开在执行端判定：新�
 ## GitHub 公共读取能力
 
 `git-context:github-read` 只在同账号授权链路开放，控制端先检查 `github-read-v1`。未声明的旧电脑返回明确不支持，既有 `pr-status` 的关联范围过滤与链接打开不变。新通道不进入共享任务访客 allowlist；中转仍转发原 invoke / invoke-result 帧，不引入服务器消息种类。关联新增 `associationSource / associationOrigin` 可选字段；旧消费者按原字段兼容，新消费者默认只显示宿主投影的明确有效关联。详见 [功能合同](../product-rules/github-status-and-associations.md)。
+
+## GitLab MR 关联状态
+
+PR/MR 状态结果新增可选 `conflicts: boolean | null`（2026-11-05）：GitHub 复用 REST `mergeable`，GitLab 在既有 GraphQL 查询读取 `conflicts`；`pr-status` / `mr-status` 原样透传。旧主机缺失字段按未知处理，旧客户端忽略；不新增请求、通道或 relay 适配，60 秒缓存与 90 秒刷新不变。
+
+关联与状态结果追加可选 `provider`（github / gitlab）和 `host`；缺省仍为公共 GitHub。
+新 Desktop / Mobile 的 GitLab 查询带完整 namespace / repo / number / provider / host，
+走同账号 `git-context:mr-status`；GitHub 继续使用原 `git-context:pr-status` 和旧参数形状。
+新通道复用原任务关联过滤与只读权限，不授予共享任务访客任意查询权限。
+旧 host 不认识新通道时，GitLab 显示不支持/未知，绝不回退为 GitHub 查询。
+新 host 可继续处理旧控制端的 GitHub 查询。新控制端正确显示并打开 GitLab MR，
+旧控制端对新增 GitLab 关联没有展示保证，使用 GitLab 需要更新控制端。
+
+Desktop 的本机查询、同账号远端查询、任务摘要及 Mobile 共用带 host 的状态身份。
+GitLab 的 glab 安装/登录原因仅本机可见，远端结果统一为无状态；凭证不进入协议。
+子路径部署的链接会被识别为多级分组，部署前缀进入项目路径，因路径不正确而查不到状态。
+Agent 的 GitHub 工具和脚本入口仍不支持 GitLab，不复用其 GitHub token。
+
+共享客户端 allowlist / invokePolicy 与 Mobile 低优先级读取表同步加入新通道。
+自建中转透传既有加密 invoke 帧，不解析 channel 的业务参数，因此不改 relay 内核、
+帧格式、认证、版本或部署程序。验证入口为 `pnpm --filter @cindy/device-link test`、
+`pnpm --filter @cindy/device-link-relay test` 与
+`pnpm --filter @cindy/device-link-relay run interop`；结果以本次交付的执行日志为准。

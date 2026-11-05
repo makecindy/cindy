@@ -2753,20 +2753,23 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const orcaModelSelectionUsesIntent = !!currentSession?.orcaRole && sessionAgentSwitchSupported;
   // 远程 Agent:模型列表在被控电脑自己的供应商之外,另列同账号其他电脑上开放了远程调用的供应商
   // (与桌面同一套,2026-10-07 产品裁决)。选另一台电脑的模型 = 把 Agent 挪过去,先二次确认;
-  // 同一台电脑内换模型直接切。共享任务访客与 Orca 成员不能换电脑，SSH 不支持切换;
+  // 同一台电脑内换模型直接切。共享任务访客与运行设备 Worker 不能换电脑，SSH 不支持切换;
   // 旧被控端不投影 agentDeviceId 字段、也不认换位置参数,这些情况维持原有调用与展示。
+  // Orca Lead / 本机 Worker 要被控电脑声明 supportsOrcaAgentRelocation 才能换电脑(旧版会拒绝)。
+  const orcaAgentLocationLocked = !!currentSession?.orcaRole
+    && capabilities?.supportsOrcaAgentRelocation !== true;
   const agentLocationMovable = sessionAgentSwitchSupported
     && !isSharedTaskPeer(deviceId)
     && !!currentSession
-    && !currentSession.orcaRole
+    && !orcaAgentLocationLocked
     && !currentSession.orcaRemoteLead
     && Object.prototype.hasOwnProperty.call(currentSession, 'agentDeviceId');
   /** Agent 现在所在的电脑(null = 被控电脑)。 */
   const currentAgentDeviceId = sessionAgentRunsOnOtherComputer(currentSession)
     ? currentSession!.agentDeviceId!
     : null;
-  // Orca 只禁换位置；Agent 已在其他电脑时，仍保留那台电脑的目录供原地选模。
-  const orcaRemoteAgentDeviceId = currentSession?.orcaRole ? currentAgentDeviceId : null;
+  // 不能换位置的 Orca 任务：Agent 已在其他电脑时，仍保留那台电脑的目录供原地选模。
+  const orcaRemoteAgentDeviceId = orcaAgentLocationLocked ? currentAgentDeviceId : null;
   /** 下一条消息时 Agent 所在的电脑(挂着换位置的意图就按意图)。 */
   const nextAgentDeviceId = effectiveAgentDeviceId(currentSession, agentSwitchIntent);
   const remoteAgentKeepDeviceIds = useMemo(
@@ -5771,6 +5774,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           connectionProvider: (providerId: string) => voiceContext.createAsrConnection(providerId),
           refinerTargetProvider: (providerId: string, options?: { refreshAccessToken?: boolean }) =>
             voiceContext.createRefinerTarget(providerId, options),
+          refineRequestBudget: () => voiceContext.refineRequestBudget(),
           warmRefiner: (input: { system: string; user: unknown; promptCacheKey: string;
           }) =>
             voiceContext.warmRefiner(input),
@@ -9044,8 +9048,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     targetAgentKind: MobileSessionAgentKind,
     targetContextWindow: number | undefined,
     hostGuardSupported: boolean,
+    relocates: boolean,
   ): boolean => {
-    if (!orcaModelSelectionUsesIntent || targetAgentKind !== sessionAgentKind) return true;
+    // 换电脑是在新位置重建会话再交接，旧窗口带不过去，不做原地缩窗检查(与桌面同一口径)。
+    if (relocates || !orcaModelSelectionUsesIntent || targetAgentKind !== sessionAgentKind) return true;
     const contextTokens = currentSession?.contextTokens;
     const currentContextWindow = currentSession?.contextWindow;
     const pressuredShrink =
@@ -9142,7 +9148,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       if (!location) return;
       if (orcaModelSelectionUsesIntent || modelSheetAgentKind !== sessionAgentKind || location.agentDeviceId !== undefined) {
         if (!canStageOrcaModelSelection(modelSheetAgentKind, row.model.contextWindow,
-          modelSheetCapabilities?.supportsModelWindowSwitchGuard === true)) return;
+          modelSheetCapabilities?.supportsModelWindowSwitchGuard === true,
+          location.agentDeviceId !== undefined)) return;
         await writeSessionAgentSwitchIntent({
           targetAgentKind: modelSheetAgentKind,
           model: next.model,
@@ -9245,7 +9252,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     if (relocates || orcaModelSelectionUsesIntent) {
       // 同引擎换电脑或 Orca 换模型均走下一条消息生效的切换意图。
       if (!canStageOrcaModelSelection(config.agent, capability.contextWindow,
-        targetCapabilities.supportsModelWindowSwitchGuard === true)) return false;
+        targetCapabilities.supportsModelWindowSwitchGuard === true, relocates)) return false;
       const applied = await writeSessionAgentSwitchIntent({
         targetAgentKind: config.agent,
         model: config.modelId,
@@ -9303,7 +9310,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       if (!location) return;
       if (location.agentDeviceId !== undefined || orcaModelSelectionUsesIntent) {
         if (!canStageOrcaModelSelection(sessionAgentKind, option.contextWindow,
-          modelSheetCapabilities?.supportsModelWindowSwitchGuard === true)) return;
+          modelSheetCapabilities?.supportsModelWindowSwitchGuard === true,
+          location.agentDeviceId !== undefined)) return;
         await writeSessionAgentSwitchIntent({
           targetAgentKind: sessionAgentKind,
           model: option.id,

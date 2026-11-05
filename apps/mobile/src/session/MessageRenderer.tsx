@@ -167,6 +167,7 @@ import {
   MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT,
 } from '@/session/MobileComposerInputRow';
 import { MAX_FONT_SIZE_MULTIPLIER, Text } from '@/components/AppText';
+import { pluginCardPlainText } from '@/plugins/pluginCardText';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type {
   NormalizedAttachment,
@@ -3201,10 +3202,18 @@ const RenderItemView = memo(function RenderItemView({
   }
   const groupTimestamp = actions.companion && (item.type === 'message' || item.type === 'pending_send')
     ? actions.companionTimeGroups?.get(item.key) : undefined;
-  // Cards and work groups share the reply text column, leaving the avatar slot empty.
+  // Each outer process group owns a portrait, just like the final reply.
+  // Nested details clear companionAvatar, so expanding them cannot repeat it.
+  const processAvatar = actions.companion && item.type === 'work_group' ? actions.companionAvatar : undefined;
+  // Cards still share the reply text column without repeating the portrait.
   const alignWithReplies = !!actions.companionAvatar && actions.companion
-    && (item.type === 'work_group' || (item.type === 'message' && !!item.message.companion));
-  const aligned = alignWithReplies ? (
+    && item.type === 'message' && !!item.message.companion;
+  const aligned = processAvatar ? (
+    <View style={styles.companionAvatarRow} testID="companion.processRow">
+      <View style={styles.companionAvatarSlot}>{processAvatar}</View>
+      <View style={styles.companionAvatarContent}>{node}</View>
+    </View>
+  ) : alignWithReplies ? (
     <View style={styles.companionAvatarInset}>{node}</View>
   ) : (
     node
@@ -5380,6 +5389,8 @@ function SubagentCard({
   const [expanded, toggleExpanded] = useFoldableExpandedState(item.key, false);
   const deferred = item.deferred;
   useEffect(() => deferred?.setVisible?.(expanded, false), [deferred?.owner, deferred?.key, expanded]);
+  // Subagent work is detail content, not another reply from the main partner.
+  const childActions = useMemo(() => ({ ...actions, companionAvatar: undefined }), [actions]);
   const title = item.header.subagentType
     ? t('message.renderer.subagentTyped', { type: item.header.subagentType })
     : t('message.renderer.subagent');
@@ -5416,7 +5427,7 @@ function SubagentCard({
           ) : null}
           {/* 两级展开(与 WorkGroupCard 同规则):内层子卡保持各自折叠头行,按需下钻。 */}
           {item.childItems.map((child) => (
-            <RenderItemView key={child.key} item={child} actions={actions} />
+            <RenderItemView key={child.key} item={child} actions={childActions} />
           ))}
           {item.summary ? (
             <View style={styles.stackSmall}>
@@ -7040,11 +7051,19 @@ function PluginResultCard({ callId, sessionId, excludedUrls, actions }: {
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
   if (hidden) return null;
+  // Desktop draws every plugin card in a frame; mail cards already draw their own.
+  const mailCard = blocks?.some((block) => block.primitive === 'plugin-card-actions'
+    && !!((block.data as { mail?: unknown; legacyMail?: unknown } | undefined)?.mail || (block.data as { legacyMail?: unknown } | undefined)?.legacyMail));
+  // With live controls the card's text becomes their title and detail lines (Desktop's layout).
+  const controlsText = !mailCard && actions.remoteDeviceId && blocks?.some((block) => block.primitive === 'plugin-card-actions')
+    ? blocks.find((block) => block.id === 'text' && block.primitive === 'markdown') : undefined;
   return (
-    <View style={styles.toolMediaBlock} testID="message.pluginResultCard">
+    <View style={mailCard ? styles.toolMediaBlock : styles.pluginResultCard} testID="message.pluginResultCard">
     {blocks?.map((block) => {
+      if (block === controlsText) return null;
       if (block.primitive === 'plugin-card-actions') return (
             <PluginCardActions key={block.id} data={block.data} deviceId={actions.remoteDeviceId} sessionId={sessionId} callId={callId}
+        text={controlsText ? pluginCardPlainText(controlsText.fallbackMarkdown) : undefined}
         onOpenAttachment={actions.onOpenPayload ? (url, name) => actions.onOpenPayload!(buildMediaPayload({ kind: 'image', url, previewable: true }, name)) : undefined} />
           );
       const url = (block.data as { url?: unknown } | undefined)?.url;
@@ -7066,8 +7085,7 @@ function PluginResultCard({ callId, sessionId, excludedUrls, actions }: {
           );
         }
         return (
-          <MarkdownBody key={block.id} text={block.fallbackMarkdown} layout={layout} streaming={false} selectable
-        onOpenPayload={actions.onOpenPayload} onOpenSessionLink={actions.onOpenSessionLink} />
+          <Text key={block.id} selectable style={mailCard ? styles.messageText : styles.pluginResultCardText}>{pluginCardPlainText(block.fallbackMarkdown)}</Text>
         );
     })}
     {!blocks && !error ? (
@@ -9650,6 +9668,16 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   // tool 产出媒体独立块:agent 侧左对齐,逐个竖排(图片 attachment 帧自带圆角)。
   toolMediaBlock: { alignItems: 'flex-start', maxWidth: '100%' },
+  pluginResultCard: {
+    alignSelf: 'stretch',
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.container,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceElevated,
+  },
+  pluginResultCardText: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body },
   imagePreviewWrap: {
     backgroundColor: colors.surfaceChip,
     borderRadius: radius.container,

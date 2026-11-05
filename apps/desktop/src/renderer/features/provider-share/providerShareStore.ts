@@ -14,16 +14,17 @@
  */
 import { useSyncExternalStore } from 'react';
 
-import type { ProviderShareReceived } from '@cindy/device-link';
+import { PROVIDER_METADATA_TRUST_MS, readProviderMetadataContinuity, type ProviderShareReceived } from '@cindy/device-link';
 
-import { getCachedDeviceProviders, hasSubscriptionShareCatalog, isSubscriptionShareCatalogStale } from '@/hooks/useDeviceProviders';
+import { hasSubscriptionShareCatalog, isSubscriptionShareCatalogStale } from '@/hooks/useDeviceProviders';
 import { refreshRemoteCatalogSnapshot } from '@/lib/remoteCatalogSnapshot';
 import { createLogger } from '@/lib/logger';
-import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
 import { getProviderShareFavoriteRegions, reconcileProviderShareFavorites } from '@/state/providerShareFavorites';
 
 import type {
   ProviderShareOwnerState,
+  ProviderShareReceivedSnapshot,
   ProviderShareRequestedEvent,
 } from '../../../shared/providerShare';
 import {
@@ -52,29 +53,227 @@ export interface ReceivedSnapshot {
 }
 
 let receivedSnapshot: ReceivedSnapshot = { received: [], loaded: false };
+type ShareRegion = ProviderShareReceived['owner']['region'];
+/** Stable empty result while the renderer owner changed but no new snapshot has arrived. */
+const EMPTY_OWNER_SNAPSHOT: ReceivedSnapshot = { received: [], loaded: false };
+let receivedOwnerId: string | null = null;
+let receivedOwnerGeneration = 0;
+const retiredReceivedOwnerKeys = new Set<string>();
 let receivedStarted = false;
 let unsubscribeCatalogPush: (() => void) | undefined;
 /** 推送序号：首次 `received` 命令晚于推送返回时，不得用旧列表覆盖。 */
 let receivedPushSeq = 0;
 const receivedSubscribers = new Set<() => void>();
 
+type RegionBudget = NonNullable<ProviderShareReceivedSnapshot['regionBudget']>;
+
+interface BudgetRequestStart {
+  wall: number;
+  mono: number;
+}
+
+interface RegionRetention {
+  sourceId: string;
+  /** Main-assigned request order; absent only for legacy/local projections. */
+  order?: number;
+  wallUntil: number;
+  monoUntil: number;
+  expired: boolean;
+  retired: boolean;
+}
+const regionRetention = new Map<ShareRegion, RegionRetention>();
+let regionRetentionTimer: ReturnType<typeof setTimeout> | null = null;
+let expiredReadSource: ReceivedSnapshot | null = null;
+let expiredReadSnapshot: ReceivedSnapshot | null = null;
+let retentionCleanupTimer: ReturnType<typeof setTimeout> | null = null;
+let expiredReadKey = '';
+
+function clearRegionRetention(): void {
+  if (regionRetentionTimer) clearTimeout(regionRetentionTimer);
+  if (retentionCleanupTimer) clearTimeout(retentionCleanupTimer);
+  regionRetentionTimer = null;
+  retentionCleanupTimer = null;
+  regionRetention.clear();
+}
+
+function scheduleExpiredRetentionCleanup(): void {
+  if (retentionCleanupTimer) return;
+  retentionCleanupTimer = setTimeout(() => {
+    retentionCleanupTimer = null;
+    expireRegionRetention();
+  }, 0);
+}
+
+function sourceIsNewer(previous: RegionRetention | undefined, next: NonNullable<RegionBudget[ShareRegion]>): boolean {
+  if (!previous) return true;
+  if (previous.expired) {
+    // Keep an expired source fenced until Main confirms a later request. A
+    // wall-clock comparison cannot distinguish a rollback from an old reply.
+    return previous.order !== undefined && next.order !== undefined && next.order > previous.order;
+  }
+  if (previous.order !== undefined) {
+    return next.order !== undefined && next.order > previous.order;
+  }
+  return true;
+}
+
+function advanceRegionRetention(
+  budget: RegionBudget | undefined,
+  receivedWall = Date.now(),
+  receivedMono = performance.now(),
+  requestStart?: BudgetRequestStart,
+): boolean {
+  if (!budget) return false;
+  let changed = false;
+  for (const region of ['cn', 'global'] as const) {
+    const row = budget[region];
+    if (!row) continue;
+    // For an IPC reply, deduct the whole renderer-side request interval. Main's
+    // remainingMs is measured at snapshot generation; both local clocks bound
+    // the hop without comparing absolute performance origins across processes.
+    const hopWall = Math.max(0, receivedWall - (requestStart?.wall ?? row.generatedAt));
+    const hopMono = requestStart ? Math.max(0, receivedMono - requestStart.mono) : 0;
+    const hopAge = Math.max(hopWall, hopMono);
+    const remaining = Math.max(0, Math.min(PROVIDER_METADATA_TRUST_MS, row.remainingMs - hopAge));
+    const previous = regionRetention.get(region);
+    if (previous?.sourceId === row.id) {
+      if (previous.expired) continue;
+      const wallUntil = receivedWall + remaining;
+      const monoUntil = receivedMono + remaining;
+      if (remaining <= 0) {
+        previous.wallUntil = receivedWall;
+        previous.monoUntil = receivedMono;
+        previous.expired = true;
+        changed = true;
+      } else if (wallUntil < previous.wallUntil || monoUntil < previous.monoUntil) {
+        // A repeated projection of the same confirmation may inherit a
+        // shorter positive remainder; only tighten, never start a new window.
+        previous.wallUntil = Math.min(previous.wallUntil, wallUntil);
+        previous.monoUntil = Math.min(previous.monoUntil, monoUntil);
+        changed = true;
+      }
+      continue;
+    }
+    if (!sourceIsNewer(previous, row)) continue;
+    regionRetention.set(region, {
+      sourceId: row.id,
+      ...(row.order === undefined ? {} : { order: row.order }),
+      wallUntil: receivedWall + remaining,
+      monoUntil: receivedMono + remaining,
+      expired: remaining <= 0,
+      retired: false,
+    });
+    changed = true;
+  }
+  return changed;
+}
+
+function retentionLive(region: ShareRegion): boolean {
+  const deadline = regionRetention.get(region);
+  // No timestamp means an older Main snapshot; keep its original lifecycle.
+  if (!deadline) return true;
+  if (deadline.expired) {
+    if (!deadline.retired) scheduleExpiredRetentionCleanup();
+    return false;
+  }
+  const live = Date.now() < deadline.wallUntil && performance.now() < deadline.monoUntil;
+  // Latch an observed expiry even when the timer is suspended. This is
+  // metadata-only; getSnapshot must not notify or set React state. A bounded
+  // deferred timer performs the one eventual catalog retirement.
+  if (!live) {
+    deadline.expired = true;
+    scheduleExpiredRetentionCleanup();
+  }
+  return live;
+}
+
+/** A snapshot's region may be listed without being backed by its current source. */
+function regionSourceCurrent(region: ShareRegion, sourceId: string | undefined): boolean {
+  const deadline = regionRetention.get(region);
+  if (!deadline) return true;
+  if (deadline.expired) return false;
+  return sourceId === undefined || deadline.sourceId === sourceId;
+}
+
+function armRegionRetentionTimer(): void {
+  if (regionRetentionTimer) clearTimeout(regionRetentionTimer);
+  regionRetentionTimer = null;
+  let remaining = Infinity;
+  let needsCleanup = false;
+  for (const deadline of regionRetention.values()) {
+    if (deadline.retired) continue;
+    if (deadline.expired) { needsCleanup = true; continue; }
+    const candidate = Math.min(deadline.wallUntil - Date.now(), deadline.monoUntil - performance.now());
+    if (candidate > 0) remaining = Math.min(remaining, candidate);
+    else needsCleanup = true;
+  }
+  if (needsCleanup) scheduleExpiredRetentionCleanup();
+  if (!Number.isFinite(remaining) || remaining <= 0) return;
+  regionRetentionTimer = setTimeout(expireRegionRetention, remaining);
+}
+
+function expireRegionRetention(): void {
+  regionRetentionTimer = null;
+  // An old-owner timer must not re-attribute its surviving region rows to the
+  // current account. Retire the previous owner first and drop this snapshot.
+  const currentOwner = getDataOwnerGeneration().dataOwnerId;
+  if (receivedOwnerId !== currentOwner) {
+    clearReceivedIfOwnerChanged(currentOwner);
+    return;
+  }
+  const now = Date.now(), mono = performance.now();
+  const expired = new Set<ShareRegion>();
+  for (const [region, deadline] of regionRetention) {
+    if (deadline.retired) continue;
+    if (deadline.expired || now >= deadline.wallUntil || mono >= deadline.monoUntil) {
+      deadline.expired = true;
+      expired.add(region);
+    }
+  }
+  if (expired.size === 0) { armRegionRetentionTimer(); return; }
+  // Mark the fence retired before notifying subscribers, so retentionLive
+  // cannot schedule a second 0ms cleanup during setReceived.
+  for (const region of expired) {
+    const deadline = regionRetention.get(region);
+    if (deadline) deadline.retired = true;
+  }
+  const previous = receivedSnapshot.received;
+  const next = previous.filter(share => !expired.has(share.owner.region));
+  if (next.length !== previous.length) setReceived(next, { clearEmpty: true });
+  armRegionRetentionTimer();
+}
+
 function invalidateShareCatalogs(
   previous: readonly ProviderShareReceived[],
   next: readonly ProviderShareReceived[],
+  options?: { clearEmpty?: boolean; skipCatalogs?: boolean; retireShareIds?: ReadonlySet<string> },
 ): void {
-  // 设备互联断开 / 换账号时 main 先推一份空列表：那是「暂时读不到」，不作废已取到的目录，
-  // 否则重连后列表原样回来(前后无差异)也不会再触发重取。
-  if (next.length === 0) return;
-  const { changed, removed } = diffReceivedShares(previous, next);
+  // 旧 Main 把临时不可达也投影成空列表；调用方只有在确认区域完整时
+  // 才允许用空列表撤权，否则必须保留上一份有界显示。
+  if (next.length === 0 && !options?.clearEmpty && !options?.retireShareIds?.size) return;
+  // An owner transition retires all previous rows at once; do not run a second
+  // per-target refresh against the new owner.
+  if (options?.skipCatalogs) return;
+  const revokedCatalog = { providerContinuity: { stale: true, remainingMs: 0 } };
+  const nextById = new Map(next.map((share) => [share.shareId, share]));
+  const { changed, removed, revoked } = diffReceivedShares(previous, next);
+  const revokedById = new Set(revoked);
   for (const shareId of changed) {
-    void refreshRemoteCatalogSnapshot(providerShareAgentDeviceId(shareId)).catch(() => undefined);
+    const deviceId = providerShareAgentDeviceId(shareId);
+    const after = nextById.get(shareId);
+    // 暂停、成员/供应商/区域/主机身份变化是明确换了一代许可：
+    // 即使刷新失败或卡住，也不能继续显示旧目录。
+    const mustClear = revokedById.has(shareId) || after?.status !== 'active';
+    if (options?.retireShareIds?.has(shareId)) void refreshRemoteCatalogSnapshot(deviceId, revokedCatalog, { retireOnly: true }).catch(() => undefined);
+    else void refreshRemoteCatalogSnapshot(deviceId, mustClear ? revokedCatalog : undefined)
+      .catch(() => undefined);
   }
   for (const shareId of removed) {
+    // 已移出名单的分享没有可再读的目录；清掉界面上可能仍挂着的旧行。
     const deviceId = providerShareAgentDeviceId(shareId);
-    // 没取过目录就没有要作废的缓存；取过的重取一次，让模型列表拿到「已不可用」。
-    if (getCachedDeviceProviders(deviceId)) {
-      void refreshRemoteCatalogSnapshot(deviceId).catch(() => undefined);
-    }
+    // A share no longer in the authoritative list has no target to read; do
+    // not repopulate its mounted catalog after removing the row.
+    void refreshRemoteCatalogSnapshot(deviceId, revokedCatalog, { retireOnly: true }).catch(() => undefined);
   }
   for (const share of next) {
     const deviceId = providerShareAgentDeviceId(share.shareId);
@@ -84,14 +283,134 @@ function invalidateShareCatalogs(
   }
 }
 
-function setReceived(next: readonly ProviderShareReceived[]): void {
+function setReceived(
+  next: readonly ProviderShareReceived[],
+  options?: { clearEmpty?: boolean; skipCatalogs?: boolean; ownerId?: string | null; ownerGeneration?: number; loaded?: boolean },
+): void {
   const previous = receivedSnapshot.received;
-  receivedSnapshot = { received: next, loaded: true };
-  invalidateShareCatalogs(previous, next);
+  const expiredShareIds = new Set<string>();
+  const filtered = next.filter(share => {
+    if (retentionLive(share.owner.region)) return true;
+    expiredShareIds.add(share.shareId);
+    return false;
+  });
+  // A stale row can already be absent from next (for example while a partial
+  // neighbor-only projection is applied); it still must retire its catalog.
+  // Do not turn one expired region into a blanket retirement of changed,
+  // healthy neighbours in the same snapshot.
+  for (const share of previous) {
+    if (!retentionLive(share.owner.region)) expiredShareIds.add(share.shareId);
+  }
+  receivedOwnerId = options?.ownerId !== undefined ? options.ownerId : getDataOwnerGeneration().dataOwnerId;
+  receivedOwnerGeneration = options?.ownerGeneration ?? getDataOwnerGeneration().generation;
+  receivedSnapshot = { received: filtered, loaded: options?.loaded ?? true };
+  expiredReadSource = null;
+  expiredReadSnapshot = null;
+  expiredReadKey = '';
+  invalidateShareCatalogs(previous, filtered, expiredShareIds.size > 0
+    ? { ...options, retireShareIds: expiredShareIds } : options);
   for (const listener of receivedSubscribers) listener();
 }
 
-type ShareRegion = ProviderShareReceived['owner']['region'];
+function clearReceivedIfOwnerChanged(ownerId: string | null = getDataOwnerGeneration().dataOwnerId): void {
+  if (receivedOwnerId === ownerId) return;
+  if (receivedOwnerId !== null) retiredReceivedOwnerKeys.add(receivedOwnerId + ':' + receivedOwnerGeneration);
+  const previous = receivedSnapshot.received;
+  const changed = receivedSnapshot.loaded || previous.length > 0;
+  receivedOwnerId = ownerId;
+  receivedOwnerGeneration = getDataOwnerGeneration().generation;
+  receivedSnapshot = EMPTY_OWNER_SNAPSHOT;
+  expiredReadSource = null;
+  expiredReadSnapshot = null;
+  expiredReadKey = '';
+  clearRegionRetention();
+  if (changed) for (const listener of receivedSubscribers) listener();
+}
+
+function readRegionBudget(value: unknown): RegionBudget | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const parsed: RegionBudget = {};
+  for (const region of ['cn', 'global'] as const) {
+    const item = (value as Record<string, unknown>)[region];
+    if (!item || typeof item !== 'object') continue;
+    const row = item as Record<string, unknown>;
+    if (typeof row.id !== 'string' || row.id.length === 0 || row.id.length > 256) continue;
+    if (typeof row.remainingMs !== 'number' || !Number.isFinite(row.remainingMs)
+      || row.remainingMs < 0 || row.remainingMs > PROVIDER_METADATA_TRUST_MS) continue;
+    if (typeof row.generatedAt !== 'number' || !Number.isFinite(row.generatedAt) || row.generatedAt <= 0) continue;
+    const order = typeof row.order === 'number' && Number.isInteger(row.order) && row.order >= 0
+      ? row.order : undefined;
+    parsed[region] = { id: row.id, ...(order === undefined ? {} : { order }),
+      remainingMs: row.remainingMs, generatedAt: row.generatedAt };
+  }
+  return Object.keys(parsed).length > 0 ? parsed : undefined;
+}
+
+function readReceivedSnapshot(value: unknown): ProviderShareReceivedSnapshot | null {
+  if (!value || typeof value !== 'object') return null;
+  const row = value as Partial<ProviderShareReceivedSnapshot>;
+  if (!Array.isArray(row.received) || !Array.isArray(row.confirmedRegions)
+    || !row.confirmedRegions.every(region => region === 'cn' || region === 'global')
+    || !isDataOwnerPushStampCurrent(row.ownerStamp)) return null;
+  const regionBudget = readRegionBudget(row.regionBudget);
+  return {
+    ownerStamp: row.ownerStamp,
+    confirmedRegions: row.confirmedRegions,
+    received: row.received,
+    ...(typeof row.active === 'boolean' ? { active: row.active } : {}),
+    ...(regionBudget ? { regionBudget } : {}),
+  };
+}
+
+/** A snapshot with confirmed regions can tell an authoritative empty result from a
+ * temporarily incomplete cross-region projection. An inactive runtime with no
+ * shares is an explicit boundary and must retire all mounted catalogs. */
+function applyReceivedSnapshot(snapshot: ProviderShareReceivedSnapshot, requestStart?: BudgetRequestStart): void {
+  const ownerId = snapshot.ownerStamp.dataOwnerId;
+  const previous = receivedSnapshot.received;
+  const ownerChanged = receivedOwnerId === null ? previous.length > 0 : receivedOwnerId !== ownerId;
+  if (ownerChanged) clearRegionRetention();
+  if (snapshot.active === false && snapshot.received.length === 0) {
+    clearRegionRetention();
+    setReceived([], { clearEmpty: true, skipCatalogs: ownerChanged, ownerId });
+    return;
+  }
+  advanceRegionRetention(snapshot.regionBudget, Date.now(), performance.now(), requestStart);
+  const budget = snapshot.regionBudget;
+  const acceptedConfirmed = snapshot.confirmedRegions.filter(region =>
+    regionSourceCurrent(region, budget?.[region]?.id));
+  const confirmed = new Set(acceptedConfirmed);
+  const incoming = snapshot.received.filter(share =>
+    retentionLive(share.owner.region) && regionSourceCurrent(share.owner.region, budget?.[share.owner.region]?.id));
+  const currentIds = new Set(incoming.map(share => share.shareId));
+  // Same-owner incomplete projections keep their unconfirmed rows only within the
+  // deadline inherited from their last true confirmation; an owner change must not
+  // carry the previous account's rows into the new owner.
+  const retained = ownerChanged ? [] : previous.filter(share => !confirmed.has(share.owner.region)
+    && !currentIds.has(share.shareId) && retentionLive(share.owner.region));
+  // An empty, unconfirmed snapshot is not an authoritative empty list. This also
+  // keeps a favorites-side query from claiming the new owner is fully loaded.
+  const loaded = acceptedConfirmed.length > 0 || incoming.length > 0
+    || (!ownerChanged && previous.length > 0);
+  const next = [...incoming, ...retained];
+  setReceived(next, { clearEmpty: true, skipCatalogs: ownerChanged, ownerId,
+    ownerGeneration: snapshot.ownerStamp.ownerGeneration, loaded });
+  armRegionRetentionTimer();
+}
+
+/** Apply only the monotonic/wall display window from an already-current
+ * snapshot. This entry must not treat a cached row list as a fresh confirmation. */
+function applyReceivedSnapshotBudget(snapshot: ProviderShareReceivedSnapshot, requestStart?: BudgetRequestStart): void {
+  if (!advanceRegionRetention(snapshot.regionBudget, Date.now(), performance.now(), requestStart)) return;
+  const previous = receivedSnapshot.received;
+  const next = previous.filter(share => retentionLive(share.owner.region));
+  if (next.length !== previous.length) {
+    setReceived(next, { clearEmpty: true,
+      ownerId: snapshot.ownerStamp.dataOwnerId, loaded: receivedSnapshot.loaded });
+  } else {
+    armRegionRetentionTimer();
+  }
+}
 
 let membershipRequest = 0;
 let membershipRetryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -125,11 +444,28 @@ function refreshFavoriteMembership(api: ProviderShareApi): void {
       try { local = getProviderShareFavoriteRegions(owner.dataOwnerId); }
       catch { /* 清理器会报告存储错误并安排重试；读取恢复后再补齐区域线索。 */ }
       const regions = [...new Set([...local, ...hintedFavoriteRegions(owner.dataOwnerId)])];
+      const requestStart = { wall: Date.now(), mono: performance.now() };
       const snapshot = await api.command({
         action: 'received-snapshot',
         favoriteRecovery: { ownerStamp: { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation }, regions },
       });
       if (!current()) return;
+      if (!isDataOwnerPushStampCurrent(snapshot.ownerStamp)) { retry(); return; }
+      // This entry may be the only call after a new owner switch. A returning
+      // owner is fenced until an authoritative push/initial snapshot arrives;
+      // a late favorites projection must not resurrect old A rows after A-B-A.
+      const snapshotOwnerId = snapshot.ownerStamp.dataOwnerId;
+      const retired = snapshotOwnerId !== null
+        && retiredReceivedOwnerKeys.has(snapshotOwnerId + ':' + snapshot.ownerStamp.ownerGeneration);
+      if (!retired && (receivedOwnerId !== snapshot.ownerStamp.dataOwnerId
+        || !receivedSnapshot.loaded || snapshot.active === false || snapshot.regionBudget !== undefined)) {
+        // A full authoritative snapshot (including an empty list or an explicit
+        // inactive boundary) must remove rows immediately. applyReceivedSnapshot
+        // still enforces source order and owner fences.
+        applyReceivedSnapshot(snapshot, requestStart);
+      } else if (!retired) {
+        applyReceivedSnapshotBudget(snapshot, requestStart);
+      }
       const cleaned = reconcileProviderShareFavorites(snapshot);
       if (!cleaned || regions.some((region) => !snapshot.confirmedRegions.includes(region))) retry();
       else membershipFailures = 0;
@@ -139,40 +475,82 @@ function refreshFavoriteMembership(api: ProviderShareApi): void {
 
 /** 启动已收到分享的同步(幂等)。Preload 不可用(测试 / 旧窗口)时什么都不做。 */
 export function ensureProviderShareReceivedStarted(): void {
+  // An owner switch remounts the router; subscription effects must retire the old owner's rows even when no share push/snapshot arrives.
+  clearReceivedIfOwnerChanged();
   if (receivedStarted) return;
   const api = providerShareApi();
   if (!api) return;
   receivedStarted = true;
   unsubscribeCatalogPush = window.electronAPI?.deviceLink?.onRemotePush?.(push => {
     if (push.channel !== 'maker:provider:changed' || !push.deviceId.startsWith('share:')) return;
-    if (!receivedSnapshot.received.some(share => providerShareAgentDeviceId(share.shareId) === push.deviceId && share.status === 'active')) return;
-    if (hasSubscriptionShareCatalog(push.deviceId)) {
-      void refreshRemoteCatalogSnapshot(push.deviceId).catch(() => undefined);
+    if (!getReceivedSnapshot().received.some(share => providerShareAgentDeviceId(share.shareId) === push.deviceId && share.status === 'active')) return;
+    const continuity = readProviderMetadataContinuity(push.payload);
+    if (continuity?.remainingMs === 0) {
+      // Explicit denial / expired budget: retire the display without reopening
+      // the denied target (a prefetch would revive it and can feed a 403 loop).
+      void refreshRemoteCatalogSnapshot(push.deviceId, push.payload, { retireOnly: true }).catch(() => undefined);
+    } else if (hasSubscriptionShareCatalog(push.deviceId)) {
+      void refreshRemoteCatalogSnapshot(push.deviceId, push.payload).catch(() => undefined);
     }
   });
   api.onReceivedChanged((list) => {
+    const pushed = Array.isArray(list) ? list : [];
     receivedPushSeq += 1;
-    setReceived(Array.isArray(list) ? list : []);
-    refreshFavoriteMembership(api);
-  });
-  const seqAtRequest = receivedPushSeq;
-  void api
-    .command({ action: 'received' })
-    .then((list) => {
-      if (receivedPushSeq !== seqAtRequest) return;
-      setReceived(list);
+    const seq = receivedPushSeq;
+    const owner = getDataOwnerGeneration();
+    // Retire the old owner immediately; the new snapshot may stay pending or fail.
+    clearReceivedIfOwnerChanged(owner.dataOwnerId);
+    // The push is only a hint; ask Main for the same runtime snapshot with
+    // confirmed regions so a cross-region outage cannot masquerade as removal.
+    const requestStart = { wall: Date.now(), mono: performance.now() };
+    void api.command({ action: 'received-snapshot' }).then((value) => {
+      if (seq !== receivedPushSeq || !isDataOwnerGenerationCurrent(owner)) return;
+      const snapshot = readReceivedSnapshot(value);
+      if (snapshot) applyReceivedSnapshot(snapshot, requestStart);
+      else setReceived(pushed, { ownerId: owner.dataOwnerId }); // Older Main / old preload fallback.
       refreshFavoriteMembership(api);
-    })
-    .catch((error: unknown) => {
+    }).catch(() => {
+      if (seq !== receivedPushSeq || !isDataOwnerGenerationCurrent(owner)) return;
+      setReceived(pushed, { ownerId: owner.dataOwnerId });
+      refreshFavoriteMembership(api);
+    });
+  });
+  const ownerAtRequest = getDataOwnerGeneration();
+  clearReceivedIfOwnerChanged(ownerAtRequest.dataOwnerId);
+  const seqAtRequest = receivedPushSeq;
+  void (async () => {
+    // Prefer the timestamped snapshot. Older Main falls back to the list command.
+    try {
+      const requestStart = { wall: Date.now(), mono: performance.now() };
+      const value = await api.command({ action: 'received-snapshot' });
+      if (receivedPushSeq !== seqAtRequest || !isDataOwnerGenerationCurrent(ownerAtRequest)) return;
+      const snapshot = readReceivedSnapshot(value);
+      if (snapshot) {
+        applyReceivedSnapshot(snapshot, requestStart);
+        refreshFavoriteMembership(api);
+        return;
+      }
+    } catch { /* Older Main / unsupported snapshot command. */ }
+    try {
+      const list = await api.command({ action: 'received' });
+      if (receivedPushSeq !== seqAtRequest || !isDataOwnerGenerationCurrent(ownerAtRequest)) return;
+      clearReceivedIfOwnerChanged(ownerAtRequest.dataOwnerId);
+      setReceived(list, { ownerId: ownerAtRequest.dataOwnerId });
+      refreshFavoriteMembership(api);
+    } catch (error: unknown) {
       log.debug('provider share received list unavailable', {
         error: error instanceof Error ? error.message : String(error),
       });
-      if (receivedPushSeq === seqAtRequest) refreshFavoriteMembership(api);
-    });
+      if (receivedPushSeq === seqAtRequest && isDataOwnerGenerationCurrent(ownerAtRequest)) refreshFavoriteMembership(api);
+    }
+  })();
 }
 
 /** AuthContext 的同账号修复不会重挂宿主，generation 更新时仍须重新核对收藏。 */
 export function refreshProviderShareFavoriteMembership(): void {
+  // ProviderShareGlobalHost runs this on every dataOwnerId/generation change; this is
+  // the non-push owner-boundary entry that retires old-owner rows.
+  clearReceivedIfOwnerChanged();
   if (!receivedStarted) {
     ensureProviderShareReceivedStarted();
     return;
@@ -197,15 +575,31 @@ export function requestProviderShareFavoriteRegions(regions: readonly ShareRegio
 export function refreshProviderShareReceived(): void {
   const api = providerShareApi();
   if (!api) return;
+  const ownerAtRequest = getDataOwnerGeneration();
+  clearReceivedIfOwnerChanged(ownerAtRequest.dataOwnerId);
   const seqAtRequest = receivedPushSeq;
-  void api
-    .command({ action: 'received' })
-    .then((list) => {
-      if (receivedPushSeq !== seqAtRequest) return;
-      setReceived(list);
+  void (async () => {
+    try {
+      // Use the timestamped snapshot first so a manual refresh inherits the
+      // request-start budget instead of treating a cached array as a renewal.
+      const requestStart = { wall: Date.now(), mono: performance.now() };
+      const value = await api.command({ action: 'received-snapshot' });
+      if (receivedPushSeq !== seqAtRequest || !isDataOwnerGenerationCurrent(ownerAtRequest)) return;
+      const snapshot = readReceivedSnapshot(value);
+      if (snapshot) {
+        applyReceivedSnapshot(snapshot, requestStart);
+        refreshFavoriteMembership(api);
+        return;
+      }
+    } catch { /* Older Main / unsupported snapshot command. */ }
+    try {
+      const list = await api.command({ action: 'received' });
+      if (receivedPushSeq !== seqAtRequest || !isDataOwnerGenerationCurrent(ownerAtRequest)) return;
+      clearReceivedIfOwnerChanged(ownerAtRequest.dataOwnerId);
+      setReceived(list, { ownerId: ownerAtRequest.dataOwnerId });
       refreshFavoriteMembership(api);
-    })
-    .catch(() => undefined);
+    } catch { /* The push path can still deliver a later authoritative list. */ }
+  })();
 }
 
 function subscribeReceived(listener: () => void): () => void {
@@ -217,7 +611,21 @@ function subscribeReceived(listener: () => void): () => void {
 }
 
 function getReceivedSnapshot(): ReceivedSnapshot {
-  return receivedSnapshot;
+  // The owner may change before the new IPC settles or after it fails. Never expose
+  // the previous account's rows while the store is still attributed to the old owner.
+  const owner = getDataOwnerGeneration().dataOwnerId;
+  if (receivedOwnerId !== owner && (receivedOwnerId !== null || receivedSnapshot.loaded || receivedSnapshot.received.length > 0)) return EMPTY_OWNER_SNAPSHOT;
+  const live = receivedSnapshot.received.filter(share => retentionLive(share.owner.region));
+  if (live.length === receivedSnapshot.received.length) return receivedSnapshot;
+  const liveKey = live.map(share => share.shareId + '@' + share.owner.region).join('|');
+  // A timer may be suspended while the renderer is in the background. Keep the
+  // read synchronous and stable, but never mutate/notify from getSnapshot.
+  if (expiredReadSource !== receivedSnapshot || expiredReadKey !== liveKey) {
+    expiredReadSource = receivedSnapshot;
+    expiredReadKey = liveKey;
+    expiredReadSnapshot = { received: live, loaded: receivedSnapshot.loaded };
+  }
+  return expiredReadSnapshot!;
 }
 
 export function useProviderShareReceived(): ReceivedSnapshot {
@@ -367,6 +775,13 @@ export function resetProviderShareStoreForTests(): void {
   unsubscribeCatalogPush?.();
   unsubscribeCatalogPush = undefined;
   receivedSnapshot = { received: [], loaded: false };
+  receivedOwnerId = null;
+  retiredReceivedOwnerKeys.clear();
+  receivedOwnerGeneration = 0;
+  expiredReadSource = null;
+  expiredReadSnapshot = null;
+  expiredReadKey = '';
+  clearRegionRetention();
   receivedStarted = false;
   receivedPushSeq = 0;
   membershipRequest += 1;

@@ -75,6 +75,12 @@ const runtime = `<script data-cindy-runtime>
 })();
 </script>`;
 
+/** Reuse the existing sandbox form guard without adding an MCP SDK import to native pages. */
+export function withHostPageRuntime(html: string, trustedPrefix: string): string {
+  const { insertion } = environmentPlan(html);
+  return html.slice(0, insertion) + runtime + trustedPrefix + html.slice(insertion);
+}
+
 /** Prepare the App environment outside the chat contract's startup dependency graph. */
 export function withHostAppSdk(html: string, sdkUrl: string): string {
   if (!new URL(sdkUrl).hostname) throw new Error('MCP_APP_SDK_URL_REQUIRED');

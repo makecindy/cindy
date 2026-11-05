@@ -254,19 +254,21 @@ it.each(['route', 'persistence'] as const)('rechecks creation permission after %
 
 // 通用统计：保护真实 send 接受边界，不将空任务、拒绝或同键重放计为新调用。
 // unit: new-title intent lives in the existing create receipt; context must reach
-// dispatch and participate in deduplication rather than becoming visible prose.
+// dispatch and participate in deduplication, but must not become title-model material.
 it('persists automatic naming intent and dispatches separate context without duplicating title requests', async () => {
   const f = fixture();
   const schedule = vi.fn();
   f.deps.scheduleAutoTitle = schedule;
   const task = await f.service.create('p', { requestKey: 'new', autoTitle: true });
   expect(JSON.parse(f.rows.get(task.taskId)!.payload)).toMatchObject({ autoTitle: true });
-  const request = { taskId: task.taskId, expectedRevision: task.revision, requestKey: 'send', text: 'Look here', context: 'Window contents' };
+  const request = { taskId: task.taskId, expectedRevision: task.revision, requestKey: 'send',
+    text: 'Release this project', context: 'Capture metadata. '.repeat(30) };
   await f.service.send('p', request);
   await f.service.send('p', request);
   expect(f.deps.dispatch).toHaveBeenCalledOnce();
-  expect(vi.mocked(f.deps.dispatch).mock.calls[0]?.[5]).toBe('Window contents');
+  expect(vi.mocked(f.deps.dispatch).mock.calls[0]?.[5]).toBe(request.context);
   expect(schedule).toHaveBeenCalledOnce();
+  expect(schedule).toHaveBeenCalledWith('p', task.taskId, request.text, request.text);
   await expect(f.service.send('p', { ...request, context: 'Another window' }))
     .rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
 });

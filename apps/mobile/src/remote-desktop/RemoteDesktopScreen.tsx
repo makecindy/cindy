@@ -16,11 +16,10 @@ import {
   FoldDesktopBezel,
   FoldDesktopDeck,
   FoldDesktopSkinSwitch,
-  DEFAULT_FOLD_DESKTOP_SKIN,
   retroDesktopViewport,
   foldDesktopSkinColors,
-  type FoldDesktopSkin,
 } from "./FoldDesktopSkin";
+import { useFoldSkinPreference } from "./useFoldSkinPreference";
 import {
   useCallback,
   useMemo,
@@ -606,9 +605,7 @@ export function RemoteDesktopSession({
     keyboardPanelHeight,
     keyboard,
   );
-  const [foldSkin, setFoldSkin] = useState<FoldDesktopSkin>(
-    DEFAULT_FOLD_DESKTOP_SKIN,
-  );
+  const [foldSkin, setFoldSkin] = useFoldSkinPreference();
   const foldSkinAvailable = Boolean(foldLayout);
   const retroDesktop =
     foldSkinAvailable &&
@@ -644,7 +641,14 @@ export function RemoteDesktopSession({
   const retroViewport =
     retroDesktop && foldLayout
       ? retroDesktopViewport(
-          hardwareMedia,
+          foldSkin === "macbook"
+            ? {
+                ...hardwareMedia,
+                // Keep the display flush at the top; the physical fold band
+                // belongs to the silver case rather than the video surface.
+                height: foldLayout.media.y + foldLayout.media.height,
+              }
+            : hardwareMedia,
           foldSkin,
           foldLayout.media,
           lease && lease.display.height > 0
@@ -3633,6 +3637,15 @@ export function RemoteDesktopSession({
     foldLayout ? foldControls.height : windowSize.height * 0.7,
   );
   const keySurface = {
+    onKeyDown: (code: string) => {
+      const feedback = remotePresentation?.keyFeedbackForSkin
+        ? remotePresentation.keyFeedbackForSkin(
+            retroDesktop ? foldSkin : "modern",
+            code,
+          )
+        : remotePresentation?.keyFeedback?.();
+      void feedback?.catch(() => {});
+    },
     platform: caps?.platform,
     // Inactive already released host input; latched modifiers must not outlive it.
     enabled: canInput && appState === "active",
@@ -3725,6 +3738,13 @@ export function RemoteDesktopSession({
     >
       {Platform.OS === "android" && focused && <StatusBar hidden />}
       <View style={[styles.body, landscape && styles.landscape]}>
+        {retroDesktop && focused && foldLayout && foldSkin === "macbook" ? (
+          <FoldDesktopBezel
+            region={hardwareMedia}
+            skin={foldSkin}
+            viewport={retroViewport}
+          />
+        ) : null}
         <View
           style={[
             styles.canvas,
@@ -3754,7 +3774,7 @@ export function RemoteDesktopSession({
                 },
           ]}
         >
-          {retroDesktop && focused && foldLayout ? (
+          {retroDesktop && focused && foldLayout && foldSkin !== "macbook" ? (
             <FoldDesktopBezel
               region={hardwareMedia}
               skin={foldSkin}
@@ -3773,7 +3793,7 @@ export function RemoteDesktopSession({
                 top: retroViewport.y,
                 bottom:
                   geometry.height - retroViewport.y - retroViewport.height,
-                borderRadius: radius.control,
+                borderRadius: foldSkin === "macbook" ? 0 : radius.control,
                 overflow: "hidden",
               },
             ]}

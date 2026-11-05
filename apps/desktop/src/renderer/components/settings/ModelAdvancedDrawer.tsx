@@ -1,3 +1,4 @@
+import { modelImageInputDefault } from '../../../shared/modelImageInputOverride';
 import { displayPricingComponent, isDisplayPricingTableRedundant } from '@/lib/displayPricingFormat';
 import { DisplayPricingDetails, DisplayPricingQuote } from '@/components/DisplayPricingDetails';
 import { Button } from '@/components/ui/button';
@@ -336,10 +337,21 @@ export function ModelAdvancedDrawer({
       if (agent === 'pi') model.piApi = api as PiModelApi;
       const wire = providerWireProtocolForApi(api);
       if (!wire) return;
-      model.route = {
-        baseUrl: providerBaseUrlForApi(model.route?.baseUrl ?? runtime.baseUrl, api),
-        wireProtocol: wire,
-      };
+      // Pi gets the selected API from api/piApi. A same-endpoint generated route
+      // would look explicit after refresh and block a later Messages /v1 fix.
+      // Keep existing routes and endpoints that change for the selected API.
+      const inheritPiEndpoint = agent === 'pi' && !model.route && !runtime.requestPath &&
+        (runtime.wireProtocol === 'openai-chat' || runtime.wireProtocol === 'openai-responses' ||
+          runtime.wireProtocol === 'anthropic-messages' || runtime.wireProtocol === 'google-generative-ai') &&
+        (api === 'anthropic-messages' ||
+          ((api === 'openai-completions' || api === 'openai-responses' || api === 'google-generative-ai') &&
+            providerBaseUrlForApi(runtime.baseUrl, api) === runtime.baseUrl));
+      if (!inheritPiEndpoint) {
+        model.route = {
+          baseUrl: providerBaseUrlForApi(model.route?.baseUrl ?? runtime.baseUrl, api),
+          wireProtocol: wire,
+        };
+      }
     }
     setProtocolSaving(true);
     try {
@@ -424,6 +436,27 @@ export function ModelAdvancedDrawer({
           ? 'vision'
           : 'no-vision'
         : classifyVisionCapability(primaryModel.id);
+  const imageInputDefault = modelImageInputDefault(primaryModel, row.id);
+  // An undeclared catalog has no default option: both choices remain explicit overrides.
+  // A failed read retains the chat route's effective fields, independently of media routes.
+  const imageInputValue = imageInputOverride.value ?? (imageInputOverride.error || imageInputOverride.mixed
+    ? modelImageInputDefault({ ...primaryModel, imageInputDefault: undefined }, row.id)
+    : imageInputDefault);
+  const imageInputTargets = contextTarget ? [contextTarget, ...contextTarget.relatedTargets] : [];
+  const imageInputTargetDefaults = imageInputTargets.map(({ agent }) => {
+    const candidate = row.byAgent[agent];
+    return candidate ? modelImageInputDefault(candidate, row.id) : null;
+  });
+  const imageDefaultsMatch = (value: boolean) => imageInputTargetDefaults.length > 0 &&
+    imageInputTargetDefaults.every(defaultValue => defaultValue === value);
+  // Different override provenance can still resolve to the same effective capability.
+  const imageInputMixed = imageInputOverride.mixed
+    ? new Set(imageInputTargets.map(({ agent }) => {
+        const candidate = row.byAgent[agent];
+        return candidate ? modelImageInputDefault({ ...candidate, imageInputDefault: undefined }, row.id) : null;
+      })).size > 1
+    : !imageInputOverride.error && imageInputOverride.value === null && new Set(imageInputTargetDefaults).size > 1;
+
   const conversational = isAgentSelectableModel(primaryModel, {
     userProvider: provider.source === 'user',
   });
@@ -973,21 +1006,27 @@ export function ModelAdvancedDrawer({
                             <button type="button" disabled={imageInputOverride.loading || localConfigurationBlocked}
                               aria-label={t('settings.providers.models.advanced.imageInput')}
                               className="inline-flex min-h-8 items-center gap-1.5 rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50">
-                              {imageInputOverride.mixed
+                              {imageInputMixed
                                 ? t('settings.providers.models.advanced.imageInputMixed')
-                                : imageInputOverride.value === null
-                                  ? <><span>{t('settings.providers.models.advanced.imageCapability.default')}</span><span aria-hidden>·</span><span>{t(`settings.providers.models.advanced.vision.${vision}`)}</span></>
-                                  : t(`settings.providers.models.advanced.${imageInputOverride.value ? 'supported' : 'unsupported'}`)}
+                                : imageInputValue === null
+                                  ? t('settings.providers.models.advanced.undeclared')
+                                  : t(`settings.providers.models.advanced.${imageInputValue ? 'supported' : 'unsupported'}`)}
                               <ChevronDown size={12} aria-hidden />
                             </button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent className="z-[10003]" align="end">
                             <DropdownMenuRadioGroup
-                              value={imageInputOverride.mixed ? '' : imageInputOverride.value === null ? 'default' : String(imageInputOverride.value)}
-                              onValueChange={(value) => void imageInputOverride.setValue(value === 'default' ? null : value === 'true')}>
-                              <DropdownMenuRadioItem value="default">{t('settings.providers.models.advanced.imageCapability.default')}</DropdownMenuRadioItem>
-                              <DropdownMenuRadioItem value="true">{t('settings.providers.models.advanced.supported')}</DropdownMenuRadioItem>
-                              <DropdownMenuRadioItem value="false">{t('settings.providers.models.advanced.unsupported')}</DropdownMenuRadioItem>
+                              value={imageInputMixed || imageInputValue === null ? '' : String(imageInputValue)}
+                              onValueChange={(value) => void imageInputOverride.setValue(
+                                imageDefaultsMatch(value === 'true') ? null : value === 'true',
+                              )}>
+                              {[true, false].map((supported) => {
+                                const label = t(`settings.providers.models.advanced.${supported ? 'supported' : 'unsupported'}`);
+                                return <DropdownMenuRadioItem key={String(supported)} value={String(supported)}>
+                                  {imageDefaultsMatch(supported)
+                                    ? t('settings.providers.models.advanced.imageInputDefault', { value: label }) : label}
+                                </DropdownMenuRadioItem>;
+                              })}
                             </DropdownMenuRadioGroup>
                           </DropdownMenuContent>
                         </DropdownMenu>
