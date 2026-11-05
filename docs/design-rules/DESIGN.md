@@ -1443,6 +1443,8 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 | --------------------- | ------------------------ | --------------------- | ------------------------------- |
 | `surfaceListRow`      | `#FFFFFC`                | `#1E1E1E`             | List project/task rows          |
 | `surfaceTranslucent`  | `rgba(249,249,246,0.78)` | `rgba(18,18,18,0.78)` | Sticky chrome (page at opacity) |
+| `edgeBlurShade`       | `transparent`            | `rgba(0,0,0,0.18)`    | Shade on the single-layer edge blur (composer), so an empty page stays `surface` |
+| `edgeBlurShadeLayered`| `transparent`            | `rgba(0,0,0,0.08)`    | Same shade on each of the three header blur layers |
 | `surfaceListExpanded` | `#EAEAE6`                | `#121212`             | Expanded list block             |
 | `activeGlyph`         | `#DF0C27`                | `#A61629`             | Leading active glyph in lists   |
 | `chatCodeSurface`     | `#F1F1EC` (recessed)     | `#1A1A1A`             | Chat / task code card           |

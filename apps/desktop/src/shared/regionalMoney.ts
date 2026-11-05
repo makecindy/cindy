@@ -36,12 +36,15 @@ export interface ModelPriceQuote {
   outputPerMtok: number;
   cacheReadPerMtok?: number;
   cacheCreatePerMtok?: number;
+  /** 1h TTL cache write price; missing → 1h writes use cacheCreatePerMtok. */
+  cacheCreate1hPerMtok?: number;
   /** Declared fast/priority tariff. Missing fields make that request unpriceable. */
   priority?: {
     inputPerMtok?: number;
     outputPerMtok?: number;
     cacheReadPerMtok?: number;
     cacheCreatePerMtok?: number;
+    cacheCreate1hPerMtok?: number;
     inputTokenPriceBands?: ModelPriceQuote['inputTokenPriceBands'];
   };
   /**
@@ -55,6 +58,7 @@ export interface ModelPriceQuote {
     outputPerMtok?: number;
     cacheReadPerMtok?: number;
     cacheCreatePerMtok?: number;
+    cacheCreate1hPerMtok?: number;
   }>;
   /** 平台或企业 Gateway 声明的折扣比例；计费金额按原价 × (1 - costDiscount)。 */
   costDiscount?: number;
