@@ -34,7 +34,7 @@ export function BotGroupTaskCard({ task, owned, botId }: { task: BotGroupTaskCar
     >
       <ListTodo size={14} aria-hidden className="mt-[5px] shrink-0 text-[var(--text-tertiary)]" />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="truncate text-13 font-medium leading-6 text-[var(--text-primary)]">{task.title}</span>
+        <span title={task.title} className="truncate text-13 font-medium leading-6 text-[var(--text-primary)]">{task.title}</span>
         <span className="min-w-0 break-words text-12 leading-5 text-[var(--text-tertiary)]">
           {task.state === 'waiting' && task.summary ? `${state} · ${task.summary}` : state}
         </span>

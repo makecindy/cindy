@@ -489,10 +489,10 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
           data-testid={message.outbox ? "bot-group-outbox" : undefined}
           data-status={message.outbox?.status}
           aria-busy={sending && message.outbox?.status !== 'failed' ? true : undefined}
-          className={cn('group/message relative flex min-w-0 justify-end rounded-lg py-0.5', sharing && 'ml-10')}
+          className={cn('group/message chat-bubble-layout relative flex min-w-0 justify-end rounded-lg py-0.5', sharing && 'ml-10', attribution && 'pr-[42px]')}
         >
           {sharing && shareable ? <ShareMessageCheckbox clientId={message.id} /> : null}
-          <div className={cn('flex min-w-0 flex-col items-end gap-1.5 transition-opacity', share ? 'max-w-[min(560px,calc(100%-var(--chat-bubble-gutter,120px)))]' : CHAT_BUBBLE_COLUMN_CLASS, sending && message.outbox?.status !== 'failed' && 'opacity-60')}>
+          <div className={cn('flex min-w-0 flex-col items-end gap-1.5 transition-opacity', share ? 'chat-bubble-column max-w-[min(560px,calc(100%-var(--chat-bubble-gutter,120px)))]' : CHAT_BUBBLE_COLUMN_CLASS, sending && message.outbox?.status !== 'failed' && 'opacity-60')}>
             {/* The toolbar and the reaction corner hang off the message's own content. */}
             <div className={cn("relative flex min-w-0 max-w-full flex-col items-end gap-1.5", threadPreview && "self-stretch")}>
               {share ? <>{reactions}<div className="relative flex w-full min-w-0 max-w-full flex-col items-end gap-1.5">{quote}{shareBody}{actions}</div></> : null}
@@ -500,17 +500,20 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
               {!share && (hasText || hasAttachments) ? (
                 <div className={cn("flex min-w-0 max-w-full flex-col", threadPreview ? "w-full" : "w-fit")}>
                   {reactions}
-                  <ChatBubble speaker="user"
-                    data-testid="bot-group-self-bubble"
-                    className="flex flex-col gap-2"
-                  >
-                    {quote}
-                    {hasText ? <BotGroupMessageText content={message.content} mentionLabels={mentionLabels} members={members} mentions={message.mentions ?? NO_MENTIONS} serverBacked={Boolean(props.reactionGroupId)} readTail={hasReadMark && !hasAttachments} /> : null}
-                    <BotGroupMessageAttachments attachments={message.attachments ?? []} align="start" />
-                    {hasReadMark && (hasAttachments || !hasText) ? <ReadTailRow /> : null}
-                    {readMark}
+                  {/* Keep actions outside the read-receipt anchor and below reaction rows. */}
+                  <div className="relative min-w-0 max-w-full">
+                    <ChatBubble speaker="user"
+                      data-testid="bot-group-self-bubble"
+                      className="flex flex-col gap-2"
+                    >
+                      {quote}
+                      {hasText ? <BotGroupMessageText content={message.content} mentionLabels={mentionLabels} members={members} mentions={message.mentions ?? NO_MENTIONS} serverBacked={Boolean(props.reactionGroupId)} readTail={hasReadMark && !hasAttachments} /> : null}
+                      <BotGroupMessageAttachments attachments={message.attachments ?? []} align="start" />
+                      {hasReadMark && hasAttachments ? <ReadTailRow /> : null}
+                      {readMark}
+                    </ChatBubble>
                     {actions}
-                  </ChatBubble>
+                  </div>
                 </div>
               ) : null}
               {!share && !hasText && !hasAttachments ? <>{reactions}<div className="relative">{quote}{actions}</div></> : null}
@@ -520,7 +523,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
             {message.outbox ? <BotGroupOutboxStatus entry={message.outbox} readOnly={props.readOnly} /> : null}
             {sending && !message.outbox && !share ? <span className="sr-only">{t('bots.groupChat.timeline.sending')}</span> : null}
           </div>
-          {attribution ? <div className="ml-2.5 w-8 shrink-0"><GroupMaskMessageAvatar messageId={message.id} attribution={attribution} /></div> : null}
+          {attribution ? <div className="absolute right-0 top-0 w-8"><GroupMaskMessageAvatar messageId={message.id} attribution={attribution} /></div> : null}
         </article>
       </Row>
     );
@@ -531,7 +534,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
   if (message.kind === 'plan' && props.plan?.kind === 'talk') {
     return (
       <Row {...rowProps} block="author">
-        <div className="flex min-w-0 gap-2.5">
+        <div className="chat-bubble-layout flex min-w-0 gap-2.5">
           <span aria-hidden className="w-7 shrink-0" />
           <div data-testid="bot-group-arrangement" className={cn('w-full min-w-0', CHAT_BUBBLE_COLUMN_CLASS)}>
             <div className="w-full min-w-0 max-w-full">
@@ -581,7 +584,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
               : <BotAvatar bot={props.avatar ?? { name: authorName, avatar: null, avatarColor: null }} size="sm" />
           )}
         </div>
-        <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
+        <div className="chat-bubble-layout flex min-w-0 flex-1 flex-col items-start gap-1">
           {!continued ? (
             <span className="flex min-w-0 max-w-full select-none items-baseline gap-1.5">
               <span className="min-w-0 truncate text-13 font-medium leading-5 text-[var(--text-primary)]">{authorName}</span>

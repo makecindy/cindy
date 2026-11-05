@@ -1370,6 +1370,7 @@ export function UserMessage({
         'flex w-full',
         orcaCommunication || hookSource ? 'justify-start' : 'justify-end',
         bubbleActions && 'group/message',
+        simplifiedBotConversation && 'chat-bubble-layout',
       )}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}

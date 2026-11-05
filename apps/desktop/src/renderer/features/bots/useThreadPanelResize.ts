@@ -24,8 +24,8 @@ export function useThreadPanelResize(
   }, [layoutRef, rootId]);
 
   // At narrow widths retain two columns, rather than introducing another layout.
-  const minWidth = Math.min(280, availableWidth * 0.4);
-  const maxWidth = availableWidth - Math.min(400, availableWidth * 0.4);
+  const minWidth = Math.min(280, availableWidth / 2);
+  const maxWidth = availableWidth - Math.min(400, availableWidth / 2);
   const clamp = (width: number) => Math.min(maxWidth, Math.max(minWidth, width));
   const width = preferredWidth === null ? undefined : clamp(preferredWidth);
 
