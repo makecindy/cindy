@@ -200,7 +200,7 @@ describe('buildAutoPermissionReviewPrompt', () => {
 
   it('bounds oversized intent and workspace roots before sending them to the model', () => {
     const prompt = buildAutoPermissionReviewPrompt(request({
-      userIntent: `intent-head-${'i'.repeat(4_000)}-intent-tail`,
+      userIntent: `intent-head-${'i'.repeat(32_000)}-intent-tail`,
       workspaceRoots: Array.from(
         { length: 12 },
         (_, index) => `/root-${index}-${'r'.repeat(2_000)}`,

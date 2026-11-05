@@ -34,6 +34,7 @@ import {
 } from './auto-review-decision.js';
 
 const roots = ['/repo', '/extra'];
+const MAX_INTENT = createAutoReviewIntentProjection().maxIntentChars;
 
 function intentText(value: unknown): string { return typeof value === 'string' ? value : JSON.stringify(value); }
 
@@ -525,7 +526,7 @@ describe('extractAutoReviewUserIntent', () => {
       { type: 'image', path: '/tmp/screenshot.png', mimeType: 'image/png' },
       { type: 'text', text: 'Then run tests' },
     ])).toBe('Fix the type error\nThen run tests');
-    const longIntent = `initial context-${'x'.repeat(2_100)}-FINAL: do not push`;
+    const longIntent = `initial context-${'x'.repeat(MAX_INTENT + 100)}-FINAL: do not push`;
     const compacted = extractAutoReviewUserIntent(longIntent);
     expect(intentText(compacted)).toContain('cannot establish authorization');
     expect(intentText(compacted)).not.toContain('initial context-');
@@ -541,10 +542,10 @@ describe('extractAutoReviewUserIntent', () => {
     });
 
     const compacted = composeAutoReviewIntentWithApprovedPlan(
-      `original-${'x'.repeat(1_900)}`,
-      `first plan step-${'y'.repeat(1_900)}-FINAL PLAN STEP`,
+      `original-${'x'.repeat(MAX_INTENT - 100)}`,
+      `first plan step-${'y'.repeat(MAX_INTENT - 100)}-FINAL PLAN STEP`,
     );
-    expect(intentText(compacted).length).toBeLessThanOrEqual(2_000);
+    expect(intentText(compacted).length).toBeLessThanOrEqual(MAX_INTENT);
     expect(intentText(compacted)).not.toContain('original-');
     expect(compacted).toEqual({ earlierUserMessages: [], historyOmitted: true,
       currentUserMessage: 'User message omitted because it exceeds the review budget; it cannot establish authorization.',
@@ -576,13 +577,13 @@ describe('composeAutoReviewIntentWithClarification', () => {
     expect(intentText(partial)).not.toContain('q1');
   });
 
-  it('无问题文本时只记答案;整体受 2000 字上限约束', () => {
+  it('无问题文本时只记答案;整体受同一预算约束', () => {
     expect(intentText(composeAutoReviewIntentWithClarification('原请求', [{ answer: 'build/' }])))
       .toContain('- build/');
-    const long = composeAutoReviewIntentWithClarification('x'.repeat(1_900), [
+    const long = composeAutoReviewIntentWithClarification('x'.repeat(MAX_INTENT - 100), [
       { question: 'q'.repeat(200), answer: 'a'.repeat(200) },
     ]);
-    expect(intentText(long).length).toBeLessThanOrEqual(2_000);
+    expect(intentText(long).length).toBeLessThanOrEqual(MAX_INTENT);
   });
 });
 
@@ -618,16 +619,16 @@ describe('重试预算', () => {
 
 describe('user authorization across ordinary follow-ups', () => {
   it.each(['follow-up', 'plan', 'clarification'] as const)('keeps each %s atomic, including its middle restriction', (kind) => {
-    for (const length of [1_500, 2_100]) {
+    for (const length of [MAX_INTENT - 500, MAX_INTENT + 100]) {
       const approval = 'APPROVED: send the report.';
       const revocation = 'REVOKED: do not send anything.';
       const latest = 'a'.repeat(1_100) + revocation + 'b'.repeat(length - 1_100);
       const result = kind === 'plan' ? composeAutoReviewIntentWithApprovedPlan(approval, latest)
         : kind === 'clarification' ? composeAutoReviewIntentWithClarification(approval, [{ answer: latest }])
         : appendAutoReviewUserIntent(approval, latest);
-      expect(intentText(result).length).toBeLessThanOrEqual(2_000);
+      expect(intentText(result).length).toBeLessThanOrEqual(MAX_INTENT);
       expect(!intentText(result).includes(approval) || intentText(result).includes(revocation)).toBe(true);
-      if (length === 1_500) expect(intentText(result)).toContain(latest);
+      if (length < MAX_INTENT) expect(intentText(result)).toContain(latest);
       else expect(intentText(result)).toContain('cannot establish authorization');
       expect(intentText(extractAutoReviewUserIntent(approval + latest))).not.toContain('middle omitted');
     }
@@ -652,11 +653,11 @@ describe('user authorization across ordinary follow-ups', () => {
     const revocation = 'REVOKED: do not send anything.';
     let intent = appendAutoReviewUserIntent(approval, revocation);
     for (let index = 0; index < 3; index++) {
-      const text = `Only analyze this material ${index}. ` + 'reference '.repeat(150);
+      const text = `Only analyze this material ${index}. ` + 'reference '.repeat(Math.ceil(MAX_INTENT / 25));
       intent = kind === 'plan' ? composeAutoReviewIntentWithApprovedPlan(intent, text)
         : kind === 'clarification' ? composeAutoReviewIntentWithClarification(intent, [{ answer: text }])
         : appendAutoReviewUserIntent(intent, text);
-      expect(intentText(intent).length).toBeLessThanOrEqual(2000);
+      expect(intentText(intent).length).toBeLessThanOrEqual(MAX_INTENT);
       // Either the intervening restriction remains, or the old approval is gone too.
       expect(!intentText(intent).includes(approval) || intentText(intent).includes(revocation)).toBe(true);
     }
@@ -713,8 +714,8 @@ describe('user authorization across ordinary follow-ups', () => {
     expect(revoked).toMatchObject({ currentUserMessage: 'Do not send anything; only show the draft.' });
   });
   it('drops all sampled authorization when the latest message exceeds the budget', () => {
-    const intent = appendAutoReviewUserIntent('old '.repeat(1000), 'Do not deploy. ' + 'details '.repeat(1000) + 'Only inspect staging.');
-    expect(intentText(intent).length).toBeLessThanOrEqual(2000);
+    const intent = appendAutoReviewUserIntent('old '.repeat(1000), 'Do not deploy. ' + 'details '.repeat(Math.ceil(MAX_INTENT / 8)) + 'Only inspect staging.');
+    expect(intentText(intent).length).toBeLessThanOrEqual(MAX_INTENT);
     expect(intentText(intent)).toContain('cannot establish authorization');
     expect(intentText(intent)).not.toContain('old');
     expect(intentText(intent)).not.toContain('Do not deploy.');
@@ -744,12 +745,14 @@ describe('flat authorization and observed denied actions', () => {
     });
   });
 
-  it('retains a standing restriction across task changes and flags budget loss across later inputs', () => {
+  it('retains a standing restriction across task changes and drops the oldest messages first over budget', () => {
     let intent = appendAutoReviewUserIntent('Never install plugins in any task.', 'Write a poem.');
     intent = appendAutoReviewUserIntent(intent, 'New task: search the web.');
     expect(intent).toMatchObject({ earlierUserMessages: ['Never install plugins in any task.', 'Write a poem.'] });
-    intent = appendAutoReviewUserIntent(intent, 'reference '.repeat(190));
-    expect(intent).toMatchObject({ earlierUserMessages: [], historyOmitted: true });
+    // Room for exactly one earlier message: the newest one survives, the standing restriction does not.
+    const latest = 'r'.repeat(MAX_INTENT - 110);
+    intent = appendAutoReviewUserIntent(intent, latest);
+    expect(intent).toEqual({ earlierUserMessages: ['New task: search the web.'], currentUserMessage: latest, historyOmitted: true });
     expect(appendAutoReviewUserIntent(intent, 'Continue.')).toMatchObject({ historyOmitted: true });
   });
 
@@ -830,13 +833,13 @@ describe('Host-stamped references the current message points at', () => {
   });
 
   it('does not let the reference wrapper push a near-budget message over its limit', () => {
-    for (const latest of ['x'.repeat(2_000), '"'.repeat(1_999)]) {
+    for (const latest of ['x'.repeat(MAX_INTENT), '"'.repeat(MAX_INTENT - 1)]) {
       const intent = appendAutoReviewUserIntent('', latest, withRefs(latest, references));
       expect(intent).toEqual({ earlierUserMessages: [], currentUserMessage: latest, currentUserReferences: references });
       expect(normalizeAutoReviewUserIntent(intent)).toEqual(intent);
     }
     // Over budget is still omitted exactly as without references.
-    const over = appendAutoReviewUserIntent('', 'y'.repeat(2_001), withRefs('y'.repeat(2_001), references));
+    const over = appendAutoReviewUserIntent('', 'y'.repeat(MAX_INTENT + 1), withRefs('y'.repeat(MAX_INTENT + 1), references));
     expect(over).toMatchObject({ currentUserMessage: expect.stringContaining('cannot establish authorization') });
     expect(over).not.toHaveProperty('historyOmitted');
   });

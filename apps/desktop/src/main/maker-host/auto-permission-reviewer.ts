@@ -178,7 +178,8 @@ export function buildAutoPermissionReviewPrompt(request: AutoReviewRequest): str
     "   Explicit prohibitions, revocations, read-only grants, standing limits (always/never/until revoked)",
     "   and delegated scope always apply; later restrictions override grants. Task-local limits end with",
     "   that task: no tools for a writing test does not bar a later web search. Continue retains scope.",
-    "   historyOmitted means earlier grants AND limits are unknown: treat high-risk authorization as unknown.",
+    "   historyOmitted means older messages are missing, so some grants AND limits are unknown:",
+    "   treat high-risk authorization as unknown.",
     "   precedingBlockedActions are Host-observed calls before this input, NOT grants. They may resolve",
     "   'go ahead, you can use it'; require no magic phrase, but never guess among ambiguous referents.",
     // Only present with references, so unreferenced reviews keep their exact prompt.
