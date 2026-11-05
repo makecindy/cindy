@@ -5,7 +5,8 @@
  */
 import { botGroupBodyParts } from '@cindy/maker-shared/botGroupPresentation';
 import type { BotGroupAuthorKind } from '@cindy/maker-shared/botGroupChat';
-import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
+import { hasRichAnswer } from '@cindy/maker-shared/rich-answer';
+import { useCallback, useContext, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Platform, ScrollView, StyleSheet, View, useWindowDimensions, type GestureResponderEvent, type LayoutChangeEvent, type StyleProp, type TextStyle } from 'react-native';
 import { splitBotGroupMentionSegments, type BotGroupTextSegment } from '@cindy/maker-shared/botGroupMentions';
 import { Text } from '@/components/AppText';
@@ -16,6 +17,12 @@ import { parseMobileMarkdown, type MobileMarkdownBlock, type MobileMarkdownInlin
 import { buildMessageContentLayout } from './messageContentLayout';
 import { buildMobileMarkdownTableColumnWidths } from './messageTableLayout';
 import { botGroupMentionMember, type BotGroupMentionContext, type BotGroupMentionPoint } from './botGroupMentions';
+import { MarkdownBody, MessagePayloadModal, MessageHeavyContentVisibilityContext } from './MessageRenderer';
+import { ImageLightbox } from './ImageLightbox';
+import type { MessagePayload } from './messagePayload';
+import { ChatFilePathContext } from './chatFilePathContext';
+import { SessionQuickSendProvider, useSessionQuickSend } from './SessionQuickSendContext';
+import { MessageListVisibilityContext, useMessageListItemVisible } from './messageListVisibility';
 
 type Styles = ReturnType<typeof makeStyles>;
 
@@ -156,12 +163,45 @@ function renderBlock(block: MobileMarkdownBlock, styles: Styles, context?: BotGr
   }
 }
 
-export function BotGroupMarkdownText({ content, authorKind, mentionContext }: { content: string; authorKind?: BotGroupAuthorKind; mentionContext?: BotGroupMentionContext }) {
+/**
+ * Rich bot replies reuse the native answer renderer without borrowing a task's file authority.
+ * 富媒体与普通 Markdown 用同一入口：只有伙伴正文且含可组合组件时走 RichAnswer。
+ */
+export function BotGroupMarkdownText({ content, authorKind, mentionContext, messageKey, messageId, readOnly = false }: {
+  content: string; authorKind?: BotGroupAuthorKind; mentionContext?: BotGroupMentionContext;
+  messageKey?: string; messageId?: string; readOnly?: boolean;
+}) {
   const styles = useThemedStyles(makeStyles);
   const touch = useMentionTouchContext(mentionContext);
-  const blocks = useMemo(() => botGroupBodyParts(content, authorKind).flatMap((part, index): MobileMarkdownBlock[] => part.kind === 'markdown'
+  const { width } = useWindowDimensions();
+  const instanceKey = useId();
+  const sender = useSessionQuickSend();
+  const visibility = useContext(MessageListVisibilityContext);
+  const visible = useMessageListItemVisible(messageId ?? instanceKey);
+  const [payload, setPayload] = useState<MessagePayload | null>(null);
+  const layout = useMemo(() => buildMessageContentLayout({ screenWidth: width }), [width]);
+  const rich = authorKind === 'bot' && hasRichAnswer(content);
+  const blocks = useMemo(() => rich ? [] : botGroupBodyParts(content, authorKind).flatMap((part, index): MobileMarkdownBlock[] => part.kind === 'markdown'
     ? parseMobileMarkdown(part.content).map(block => ({ ...block, key: `${index}:${block.key}` }))
-    : [{ type: 'paragraph', key: String(index), inlines: [{ type: 'text', text: part.content }] }]), [content, authorKind]);
+    : [{ type: 'paragraph', key: String(index), inlines: [{ type: 'text', text: part.content }] }]), [content, authorKind, rich]);
+  if (rich) return (
+    <SessionQuickSendProvider value={readOnly ? null : sender}>
+      <MessageHeavyContentVisibilityContext.Provider value={!visibility || visible}>
+        <ChatFilePathContext.Provider value={null}>
+          <MarkdownBody renderRichAnswers publicMediaOnly richStateKey={messageKey ?? instanceKey}
+            markdownImageCacheKey={messageKey ?? instanceKey} layout={layout} text={content} selectable
+            onOpenPayload={next => {
+              // Shared answers may open public media and diagrams, never task-local files.
+              if (next.kind === 'mermaid' || (next.kind === 'media' && /^https?:\/\//i.test(next.media.url))) setPayload(next);
+            }} />
+          {payload?.kind === 'media' && payload.media.kind === 'image'
+            ? <ImageLightbox images={[{ key: messageKey ?? instanceKey, title: payload.title, url: payload.media.url, payload }]}
+                initialUrl={payload.media.url} onClose={() => setPayload(null)} />
+            : payload ? <MessagePayloadModal payload={payload} onClose={() => setPayload(null)} /> : null}
+        </ChatFilePathContext.Provider>
+      </MessageHeavyContentVisibilityContext.Provider>
+    </SessionQuickSendProvider>
+  );
   return <View ref={touch.ref} collapsable={false} style={styles.body} onTouchStart={touch.onTouchStart}>{blocks.map((block) => renderBlock(block, styles, touch.context))}</View>;
 }
 

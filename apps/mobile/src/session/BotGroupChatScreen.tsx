@@ -100,6 +100,8 @@ import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
 import { MessageListVisibilityContext, useScrollViewMessageVisibility } from './messageListVisibility';
 import { BotGroupTaskCard } from './BotGroupTaskCard';
 import { BotGroupMarkdownText, BotGroupUserText } from './BotGroupMessageText';
+import { SessionQuickSendProvider } from './SessionQuickSendContext';
+import { randomUUID } from 'expo-crypto';
 import { BotGroupMentionIdentity } from './BotGroupMentionIdentity';
 import { botGroupMentionDisplayName, type BotGroupMentionContext, type BotGroupMentionPoint } from './botGroupMentions';
 import { i18n as appI18n, SUPPORTED_LOCALES } from '@/i18n';
@@ -571,6 +573,16 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     }
   };
 
+  // Bypass the composer draft, quote and division choice; use the active room/thread outbox.
+  const sendRichAnswer = async (text: string) => {
+    if (!group || group.archived || group.dissolvedAt || (!chat.online && !chat.canQueue)) return false;
+    stickToBottom.current = true;
+    try {
+      await chat.act('send', { text, clientId: randomUUID(), mentions: { all: false, botIds: [] } });
+      return true;
+    } catch { return false; }
+  };
+
   const stop = async () => {
     if (stopPendingRef.current) return;
     stopPendingRef.current = true; setStopping(true);
@@ -697,6 +709,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
           acknowledge();
         }}
         testID="botGroup.timeline">
+        <SessionQuickSendProvider value={!imageSelectionActive && !group.archived && !group.dissolvedAt && (chat.online || chat.canQueue) ? sendRichAnswer : null}>
         <BotGroupTimeline threadRootId={threadRootId} onOpenThread={!threadRootId && !deviceId && chat.server && !direct ? openThread : undefined} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
           onRetrySource={chat.reload}
           onOpenTopic={!deviceId && chat.server ? openTopic : undefined} onRevealShare={revealShare}
@@ -725,6 +738,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
           onPlanAction={(action, planId, revision) => void runPlanAction(action, planId, revision)}
           onEditStep={(planId, step, action, botId, revision) => void editPlanStep(planId, step, action, botId, revision)}
           />
+        </SessionQuickSendProvider>
       {!imageSelectionActive && !threadRootId ? <BotGroupWorkArea onStop={stop} stopping={stopping} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
         onError={message => { if (message) Alert.alert(message); }} /> : null}
       </ScrollView>
@@ -1134,8 +1148,8 @@ function BotGroupTimelineItem({
             deviceId={member?.homeDeviceId || deviceId || ''} /> : null}
           <View style={styles.botMessageContent}>
             {renderAttachments('left')}
-            {message.threadShare && !authoredShare ? <BotGroupThreadShare onRetry={onRetrySource} share={message.threadShare} mentionContext={contentMentionContext} resolveMedia={resolveMedia} resolveServerMedia={resolveServerMedia} />
-              : content.trim() ? <BotGroupMarkdownText content={content} authorKind={message.authorKind} mentionContext={contentMentionContext} /> : null}
+            {message.threadShare && !authoredShare ? <BotGroupThreadShare messageId={message.id} messageKey={`group:${deviceId}:${groupId}:${message.threadShare.messageId}`} onRetry={onRetrySource} share={message.threadShare} mentionContext={contentMentionContext} resolveMedia={resolveMedia} resolveServerMedia={resolveServerMedia} />
+              : content.trim() ? <BotGroupMarkdownText content={content} authorKind={message.authorKind} readOnly={!!message.threadShare} messageId={message.id} messageKey={`group:${deviceId}:${groupId}:${message.id}`} mentionContext={contentMentionContext} /> : null}
           </View>
           <BotGroupHandoffFiles files={message.files} />
           {shareFooter}
