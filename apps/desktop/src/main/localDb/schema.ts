@@ -1915,6 +1915,19 @@ export const dailySpend = sqliteTable(
   }),
 );
 
+/** Immutable request receipts; insertion and aggregate increments share one transaction. */
+export const piUsageReceipts = sqliteTable('pi_usage_receipts', {
+  sessionId: text('session_id').notNull(),
+  settlementId: text('settlement_id').notNull(),
+  receiptId: text('receipt_id').notNull(),
+  recordedAt: integer('recorded_at').notNull(),
+  priced: integer('priced', { mode: 'boolean' }).notNull().default(false),
+  pricingPayload: text('pricing_payload'),
+}, t => ({
+  pk: primaryKey({ columns: [t.sessionId, t.settlementId, t.receiptId] }),
+  pending: index('pi_usage_receipts_pending_idx').on(t.priced),
+}));
+
 /**
  * 每日按模型用量聚合表 (daily_model_usage) — 支撑首页用量仪表盘的"按模型拆分"。
  *
@@ -1923,7 +1936,7 @@ export const dailySpend = sqliteTable(
  *     costUsd 为 SDK 实报美元。
  *   - codex: done.data.usage 的 per-turn token 数 (SDK 不报 cost, costUsd 恒 0,
  *     美元在读取时用 modelPricing 价格表估算 — 价格会变, 不在写入时冻结)。
- *   - pi: done.data.usage 的 per-turn token/cache 数；订阅路由读时估值，API 路由写时记费。
+ *   - pi: 每个请求的 usage 回执增量入账，终态重放补漏；旧事件仍按 turn 入账。
  *
  * 与 daily_spend 的关系: daily_spend 仍是日总额 canonical 来源 (热力图 / streak 用它);
  * 本表只做按模型的拆分展示, 两边求和因舍入可能有微小差异 — 设计取舍。

@@ -44,6 +44,11 @@ export interface PreRunHookStdinPayload {
   lastFinishedAt?: number;
   /** Webhook 触发时的事件元数据（外部不可信数据）。 */
   webhook?: { events: ScheduleWebhookEvent[]; omitted: number };
+  /**
+   * Present when host code started this run early instead of the cron or a user, for example
+   * `{ kind: 'watch', source: 'pr-status', detail: <PR URL> }` when a watched PR's status changed.
+   */
+  trigger?: { kind: 'watch'; source: string; detail?: string };
 }
 
 export interface PreRunHookInput {

@@ -1,5 +1,28 @@
 # 跨端协议兼容
 
+## 伙伴已读跨设备同步（2026-11-05，未发布）
+
+伙伴的远程资源（`teammates` 集合的 `bot` 行）在 `display` 中可选追加 `lastReadAt`，即电脑保存的已读时刻
+（电脑时间，0 表示还没有）。带这个字段的电脑接受既有 `maker:remote-resources:invoke` 的 `read` 动作：
+`resourceRef` 指向该伙伴，`input: { at }` 为设备实际显示到的消息时间；电脑校验伙伴可见性与账号代次，
+读位只前进，且不晚于这台电脑上该私聊的最新消息，回包 `{ effects: [], lastReadAt }`。早期本机群
+（`bot-groups`，非服务器群）同样在行上追加 `lastReadAt`，群详情追加 `supportsLocalReadSync: true`，
+`read` 动作对本机群接受 `input: { at }`；服务器群的 `read`（`messageId`，转交 Chat Server）不变。
+读位变化后电脑发出既有的远程资源变更推送，手机和其他电脑重读列表。
+`read` 的 `input` 可选追加 `threadSessionId`：该伙伴的私聊话题 Session，电脑核对它属于这位伙伴、
+未归档且是话题后，只推进 `thread:<Session>` 的读位（不晚于电脑当前时间，回包 `lastReadAt` 为话题读位），
+不改主聊天读位；不属于该伙伴或已归档的话题返回 `NOT_FOUND`。手机只在读完话题时上报，话题未读点
+目前只显示在伙伴所在电脑上，手机不新增话题未读界面。
+
+手机与桌面控制端把 `lastReadAt` 与本地读位取较新者合并，看过后先记本地再上报；上报是否成功与本地读位
+分开记录：没被电脑确认的读位在再次显示同一条回复时重发，桌面控制端另在每次名册读成功（含重连）后补发，
+电脑已有更新的读位或不支持时丢弃。只有电脑声明了 `lastReadAt` 才发 `read`，旧电脑保持各端独立的本地读位，旧控制端忽略新字段。不新增 IPC 白名单、
+帧、能力位或 relay 行为，官方与自建中转只透传既有 invoke／push，无需适配；不改服务端。电脑侧读位
+按账号保存在 `owners/<账号>/bot-read-state.json`，本机窗口经仅限可信页面的
+`local-db:bots:read-state:get` / `update` 与推送 `local-db:bots:read-state:changed` 读写，请求带
+账号 id，账号切换中或不匹配时不写入。回归入口：`botRemoteResourceProvider.test.ts`、
+`botReadStateStore.test.ts`、Renderer `botReadState.test.ts` 与 Mobile `remoteResourceCache.test.ts`。
+
 ## 远程输入框的轻量插件授权查询（2026-11-05，未发布）
 
 `plugins` 集合新增只读 action `management:ui-consent`，返回 `{version:1, uiCapabilityApproval?, item?}`。
@@ -39,6 +62,25 @@ Desktop 的 Anthropic loopback 代理在上游 400/422 明确报出
 沿现有恢复规则最多重试一次。工具定义、调用参数、结果对应关系和本地历史均不修改；
 上游接受的原生引用不触发转换，未知错误照常返回。Tool Search 默认策略与用户显式配置不变。
 没有设备协议、relay 或服务端变更；回退该恢复规则即可回到原来的上游错误行为。
+
+## OpenCode Go 配额查询（2026-11-04）
+
+同账号只读 invoke 白名单新增 `maker:usage:opencode-go`，请求只接受 `providerId`、可选
+`agent` 及 `forceRefresh`，不接受端点或凭证。执行端按真实路由只认官方
+`https://opencode.ai/zen/go/v1`，执行地址对控制端剥离；返回规范化的滚动、每周、每月
+窗口比例、重置时间及查询状态，控制端再次校验字段。不开放供应商分享、共享任务或未连接
+设备权限，不改变推理请求、计费、凭据配置及限额自动继续规则。
+
+新控制端连接旧执行端时该 channel 不受支持，返回 `CHANNEL_NOT_ALLOWED`，界面按查询
+不可用处理且不回退到本机账号；旧控制端不发送此请求，新执行端的既有通道保持不变。
+查询失败只影响该连接的配额显示，不重启共享链路、不重放任务写操作；无需 server、协议
+版本、数据库迁移或新增能力协商。
+
+自建中转沿用 `packages/device-link-relay/src/hub.ts` 的通用 envelope 转发：`invoke`
+的 channel、args 与响应 payload 不由中转解析，因此无需修改中转内核、升级 `RELAY_VERSION`
+或新增能力协商；旧中转也可转发，是否支持查询仍由执行端决定。验证包括共享客户端与
+自建中转单测，以及 `pnpm --filter @cindy/device-link-relay run interop` 的真实客户端
+加入／签名通信／重连；这些验证不替代真实 OpenCode Go 账号与两台实机的端到端验收。
 
 ## 群聊代答的工作记录兼容（2026-11-03）
 
@@ -4389,6 +4431,25 @@ namespace + id 下同一插件的有界 JSON 请求；`deviceSync: true` 是独�
 不发送，新接收端按未核实处理。同账号鉴权、行动回执与共享访客限制不变。产品语义见
 [伙伴代表谁](../product-rules/teammate-authority.md)。
 
+### 跨任务委派的原文正文（2026-11-05）
+
+新版发送端的跨任务正文是 Agent 写的原文，回执 `requestSource` 增加可选 `plainBody: true` 与 `delegatedText`
+（仅在发送端判断用户确实要求这次转交时出现，并与正文逐字相同）；`plainBody` 回执不再携带 `userText`，
+只保留原请求出处的 `sessionId` / `clientId`；`delegatedText` 存在本身就是用户授权，不再另带 `ownerVerified`
+（它只留在发给旧接收端的包装回执里）。`matchesForwardedRequest` 对 `plainBody`
+只接受 `delegatedText === 正文`；三行包装与最初中文格式的校验、显示解码全部保留。
+
+- `maker:session:handoff` 的 `task-action-capability` 回答增加 `plainRequestBody: 1`。发送端只在看到它时发原文与
+  新回执；旧接收端收到的仍是改动前的三行包装与原话回执，逐字校验照旧通过。
+- 伙伴跨电脑私信没有能力探测，且接收端按发送端存下的正文核对发件人，发送端暂时继续发旧格式。
+- 接收端 Auto 审核经 `verifiedOwnerRequestText` 读 `delegatedText`；旧发送端的回执没有 `plainBody`，
+  继续以 `userText` 为意图。旧接收端的回退包装由发送端从自己当前的输入读原话生成，转过一手的委派读不到原话，
+  回退为不带回执的普通正文。
+- 本机持久化的队列与委派快照可选携带新字段；旧版本读到缺少 `userText` 的回执时按无效回执处理（不授权），
+  不需要迁移。
+  没有新 relay channel、服务端变更或数据库 migration。产品语义见
+  [消息来源](../product-rules/message-source.md#跨任务委派发送端判断正文是原文2026-11-05)。
+
 ## 普通个人的社区插件贡献
 
 已安装清单可选追加只读 `publishingSource`，由 Host 既有实例记录、批准回执与安装台账重建。
@@ -4844,6 +4905,11 @@ Chat Server 请求复用既有消息 `content` 的 media 块及 `threadRootId`�
 （`data-ghost-pr-status`）用它显示「可以合并 / 有冲突 / 等待审批」。旧控制端忽略字段；新控制端连接旧宿主时字段缺失，
 卡片省掉这一项而不是猜测。不改握手、白名单、relay 或服务端，无数据库迁移。
 回归入口：`gitContextPrStatusService.test.ts`、`ghostCardPrStatus.test.ts`。
+
+插件卡片可在 `div` / `span` / `button` 上标 `data-ghost-pr-open-only="owner/repo#N"`：标题栏同源状态为已合并或已关闭时，
+电脑端藏起这些元素，手机投影在宿主侧把它们连同文字、`live` 与按钮一起去掉，所以新旧手机都无需改动；查不到状态时照常显示。
+手机只对含 PR 状态位或 PR 链接的卡片定时重读，带该标记的卡片需保留其中之一（GitHub 插件的 PR 卡片标题始终链接到 PR）。旧宿主的净化器丢掉这个属性，卡片维持原快照。不改握手、白名单、relay 或服务端，无数据库迁移。
+回归入口：`cardSanitizer.test.ts`、`cardRemoteResource.test.ts`、`ghostCardPrStatus.test.ts`。
 
 ## 插件卡片的手机原生呈现（`plugin-card-rich`）
 

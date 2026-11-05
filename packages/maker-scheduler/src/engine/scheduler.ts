@@ -19,6 +19,7 @@ import type {
   ScheduleMutationGuard,
   ScheduleWebhookTrigger,
   ScheduleWebhookTriggerInput,
+  ScheduleRunTrigger,
 } from '../types.js';
 import { normalizePreRunPlugin, SCRIPT_CAPABILITIES } from '../types.js';
 import { isLegalPhaseTransition } from './attemptLifecycle.js';
@@ -64,6 +65,7 @@ export interface RunNowOptions {
   canDispatch?: () => boolean;
   expectedSchedule?: ScheduleMutationGuard;
   webhook?: FireContext['webhook'];
+  trigger?: ScheduleRunTrigger;
   /** Internal durable-queue handoff. Awaited after insertRun, before any runner side effects. */
   onRunCreated?: () => Promise<void>;
 }
@@ -1314,6 +1316,7 @@ export class Scheduler extends EventEmitter {
         webhook: options?.webhook,
         resumeSessionId: recovery?.sessionId,
         canDispatch: options?.canDispatch,
+        ...(options?.trigger ? { trigger: options.trigger } : {}),
         ...(options?.expectedSchedule?.effectiveWorkingDir
           ? { expectedPreRunWorkingDir: options.expectedSchedule.effectiveWorkingDir } : {}),
         signal: controller.signal,
@@ -1951,6 +1954,16 @@ export class Scheduler extends EventEmitter {
    * UI 在 delete/pause 前用它决定是否弹"有 N 次执行正在进行"二次确认。
    * 无 in-flight → 0(包括 schedule 已 paused / expired / 不存在的情况)。
    */
+  /** Passive instances leave automatic runs to another instance on the same data (manual run-now still works). */
+  isPassive(): boolean {
+    return this.passive;
+  }
+
+  /** A run started now would get a slot under maxConcurrentRuns (run-now itself never waits for one). */
+  hasFreeSlot(): boolean {
+    return this.countSlotsInUse() < this.maxConcurrentRuns;
+  }
+
   getInflightCount(id: string): number {
     return this.inflightByschedule.get(id)?.size ?? 0;
   }

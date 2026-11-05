@@ -6,6 +6,7 @@
  */
 
 import { BrowserWindow } from 'electron';
+import { notifyUsagePricingChanged } from './pricingChanges.js';
 import type { AgentKind } from '@cindy/model-providers';
 
 import {
@@ -76,6 +77,7 @@ export function getReferenceModelPricing(
 }
 
 export function broadcastReferenceModelPricing(): void {
+  notifyUsagePricingChanged();
   const pricing = getReferenceModelPricing();
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {

@@ -43,6 +43,23 @@ describe('fillGhostCardPrStatus', () => {
     expect(slot.querySelectorAll('svg')).toHaveLength(3);
   });
 
+  // Rule (2026-11-06): #90's card still said "following" with stop/settings buttons after the PR was
+  // merged on GitHub, while the title bar said merged. Minimal input: one marked element with its own
+  // inline display, through merged → unknown → closed (unit, jsdom).
+  it('hides open-only parts once the same status says merged or closed, and restores them otherwise', () => {
+    document.body.innerHTML = '<div data-ghost-pr-open-only="Octo/Repo#9" style="display:flex">actions</div>';
+    const el = document.querySelector('div')!;
+    expect(readPrStatusSlotKey(document.body.innerHTML)).toBe('octo/repo#9');
+    fillGhostCardPrStatus(document, () => status(), t);
+    expect(el.style.display).toBe('flex');
+    fillGhostCardPrStatus(document, () => status({ status: 'merged' }), t);
+    expect(el.style.display).toBe('none');
+    fillGhostCardPrStatus(document, () => undefined, t);
+    expect(el.style.display).toBe('flex');
+    fillGhostCardPrStatus(document, () => status({ status: 'closed' }), t);
+    expect(el.style.display).toBe('none');
+  });
+
   it('puts the plugin snapshot back when the live status later disappears', () => {
     const slot = card();
     fillGhostCardPrStatus(document, () => status(), t);

@@ -1,3 +1,4 @@
+import { parseOutputLimitDetails, isReasoningDominatedOutputLimit } from '@cindy/maker-shared';
 import { isResponsesLiteParallelToolCallsError, parseAgentErrorCode, isRemoteCompactEncryptedContentError } from '@cindy/maker-shared/error-redaction';
 import { requiresAgentErrorConfigurationChange as requiresConfigurationChange } from '@cindy/maker-shared/error-redaction';
 import { i18n } from '@/i18n';
@@ -72,10 +73,19 @@ export function localizeAgentError(
   reason: unknown,
   toolLoop: MobileToolLoopErrorDetails | null,
   message = '',
+  outputLimit?: unknown,
 ): string | null {
   if (isRemoteCompactEncryptedContentError(message, reason)) return i18n.t('session.tail.remoteCompactEncryptedContent');
   if (reason === 'yield-continuation-incomplete') return i18n.t('session.tail.executionResultUnavailable');
-  if (reason === 'output-limit') return i18n.t('session.tail.outputLimit');
+  if (reason === 'output-limit') {
+    const details = parseOutputLimitDetails(outputLimit);
+    const guidance = i18n.t(details && isReasoningDominatedOutputLimit(details)
+      ? 'session.tail.outputLimitReasoning' : 'session.tail.outputLimit');
+    if (!details) return guidance;
+    const usage = i18n.t(details.reasoningTokens === undefined
+      ? 'session.tail.outputLimitOutputUsage' : 'session.tail.outputLimitUsage', { ...details });
+    return `${usage} ${guidance}`;
+  }
   if (reason !== 'tool_use_loop_detected') return null;
   if (!toolLoop) return i18n.t('session.tail.toolUseLoopDetected');
   return i18n.t(TOOL_LOOP_I18N_KEYS[toolLoop.kind], { count: toolLoop.count });

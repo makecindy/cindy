@@ -3,6 +3,8 @@ import { initializeRuntimeAppIcon } from './app-icon.js';
 import { z as settingsSchema } from 'zod';
 import { deliverRoutineResult, listRoutineDeliveryTargets } from './routines/delivery.js';
 import { flushPluginUsageLifecycle } from './plugin-usage/current.js';
+import { flushSessionPiTurnUsage, retryPendingPiUsageReceipts } from './maker-ipc/piUsageReceipts.js';
+import { onUsagePricingChanged } from './usage/pricingChanges.js';
 import { registerAccessibilitySupportIpc } from './accessibility-support-ipc.js';
 import { mcpAppSchemePrivilege, registerMcpAppProtocol } from './mcp-apps/sandboxProtocol.js';
 import { prepareImportedAutomation, finishImportedAutomation } from './bot-import/automationRuntime.js';
@@ -576,6 +578,7 @@ import {
 import { initNotificationService, showDeviceSessionDesktopEvent } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
+import { startAgentIslandQuota } from './agent-island/quota.js';
 import { setCompanionAvatarResolver } from './agent-island/companionIdentity.js';
 import { companionAvatarCache } from './companion-cloud/avatarCacheHost.js';
 import { attachWorkLouderCodexWindowReveal } from './worklouder-codex/index.js';
@@ -2216,6 +2219,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
       });
       await flushPluginTaskLifecycle();
       await flushPluginUsageLifecycle();
+      await flushSessionPiTurnUsage();
       await lifecycleDbClientManager.dispose(reason);
     } finally {
       releaseEndedSuppression();
@@ -2243,6 +2247,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   try {
     await flushPluginTaskLifecycle();
     await flushPluginUsageLifecycle();
+    await flushSessionPiTurnUsage();
     await lifecycleDbClientManager.dispose(reason);
   } finally {
     try {
@@ -4702,6 +4707,9 @@ const registerIpcHandlers = () => {
     },
   });
   app.once('will-quit', stopMenubarService);
+  // 灵动岛余量:与菜单栏同一份余量概览(顺序、显示与隐私设置都跟菜单栏),岛开着时才读取。
+  const agentIsland = getAgentIslandService();
+  if (agentIsland) app.once('will-quit', startAgentIslandQuota(agentIsland, getQuotaOverviewService()));
 
   // 全局框选截图快捷键 (键盘快捷键设置里可改)，支持复制、保存、贴图与新任务。
   initRegionScreenshot();
@@ -9826,7 +9834,8 @@ app.on('ready', async () => {
         dbClientLog.warn('legacy profile override cleanup threw (non-fatal)', err);
       });
       // 价格表作用域依赖当前 localDb 用户与 provider-secret owner;必须等用户 DB ready 后再预热。
-      void prewarmModelPricing();
+      void prewarmModelPricing().then(() => retryPendingPiUsageReceipts())
+        .catch(error => dbClientLog.warn('Pi usage startup recovery failed', { message: String(error) }));
       // DB 可读与 Agent 可启动是两个不同的 readiness：现有任务列表只依赖前者，不能
       // 被网络模型发现阻塞；新建 / 发送则经 registerMakerIpc 的中心入口等待下方 barrier，
       // 保留 issue #1196 的路由正确性（Anthropic 清单回来前不能先按 XD 默认建 Opus）。
@@ -10671,9 +10680,12 @@ onQuit('hook-control', () => disposeHookControl(), 'sync');
 onQuit('git-context', () => disposeGitContext(), 'async');
 
 // Post-async 阶段: 串行跑, 确保依赖 async 阶段产物的清理 (WAL checkpoint by close)。
+const stopPiUsageRecovery = onUsagePricingChanged(() => { void retryPendingPiUsageReceipts(); });
+onQuit('pi-usage-recovery', stopPiUsageRecovery, 'sync');
 onQuit('db-client', async () => {
   await flushPluginTaskLifecycle();
   await flushPluginUsageLifecycle();
+  await flushSessionPiTurnUsage();
   await lifecycleDbClientManager.dispose('quit');
 }, 'post-async');
 onQuit('local-db-close', () => localDbCloseDb(), 'post-async');

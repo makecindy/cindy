@@ -589,6 +589,7 @@ function createIpcFanOut(channel: string): FanOut {
 // Stage 2 C1: cc-agent:* push channel fanout 全部退役 (renderer 已切到 maker:event 等),
 // 老 7 个 fanOut + fanOutUserMessagePersisted 一起拿掉。
 const fanOutUpdateStatus = createIpcFanOut('update-status');
+const fanOutBotReadStateChanged = createIpcFanOut('local-db:bots:read-state:changed');
 const fanOutSkillhubLocalStateChanged = createIpcFanOut('skillhub:local-state-changed');
 const fanOutDatabaseSizeWarningChanged = createIpcFanOut('database-size-warning:changed');
 const fanOutDbSlimmingStartupProgress = createIpcFanOut(
@@ -697,6 +698,7 @@ const fanOutRsbBrowserBridgeTabOpRequest = createIpcFanOut('rsb-browser-bridge:t
 const fanOutGitContextChanged = createIpcFanOut('git-context:changed');
 const fanOutGitContextPrRefsChanged = createIpcFanOut('git-context:pr-refs-changed');
 const fanOutGithubConnected = createIpcFanOut('git-context:github-connected');
+const fanOutGithubSetupOpen = createIpcFanOut('git-context:github-setup:open');
 // 系统级瞬时网络错误 tip：lifecycle 兜底 catch 到 ETIMEDOUT/ECONNRESET 等不杀进程时,
 // 把 err.code / address / port 推给 renderer, renderer 自己 toast (带节流) 让用户感知。
 const fanOutSystemTransientNetworkError = createIpcFanOut('system:transient-network-error');
@@ -752,6 +754,7 @@ const fanOutLayoutChanged = createIpcFanOut('layout:changed');
 // 见 main/cindy-brain/index.ts)。
 const fanOutRetirementOpen = createIpcFanOut('ghosts:retirement-open');
 const fanOutGhostsChanged = createIpcFanOut('ghosts:changed');
+const fanOutGhostWorkdirPrefsChanged = createIpcFanOut('ghosts:workdir-prefs-changed');
 const fanOutPluginUiChanged = createIpcFanOut(PLUGIN_UI_CHANGED);
 const fanOutPluginTabViewRequest = createIpcFanOut(PLUGIN_TAB_VIEW_REQUEST);
 const fanOutPluginPublisherProgress = createIpcFanOut('plugin-publisher:progress');
@@ -1573,9 +1576,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     revealBackgroundTask: (id: string, taskId: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('ghosts:background-tasks:reveal', id, taskId),
     /** 目录级禁用清单(插件页项目范围视图;sendSync 保证切换同帧渲染)。 */
-    workdirPrefsSync: (workdir: string): { disabled: string[] } =>
+    workdirPrefsSync: (workdir: string): { disabled: string[]; workdirKey?: string } =>
       ipcRenderer.sendSync('ghosts:workdir-prefs', workdir),
-    workdirPrefs: (workdir: string): Promise<{ disabled: string[] }> =>
+    workdirPrefs: (workdir: string): Promise<{ disabled: string[]; workdirKey?: string }> =>
       ipcRenderer.invoke('ghosts:workdir-prefs', workdir),
     setWorkdirDisabled: (
       workdir: string,
@@ -1586,6 +1589,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     takePendingInstall: (): Promise<{ filePath: string | null }> =>
       ipcRenderer.invoke('ghosts:take-pending-install'),
     onChanged: fanOutGhostsChanged,
+    onWorkdirPrefsChanged: fanOutGhostWorkdirPrefsChanged,
     onSetupNavigate: (
       callback: (
         payload:
@@ -5698,6 +5702,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     cancelGithubSetup: (): Promise<import('../shared/githubSetup').GithubSetupState> =>
       ipcRenderer.invoke('git-context:github-setup:cancel'),
     onGithubConnected: fanOutGithubConnected,
+    /** main 请本窗口打开 GitHub 登录框(任务里请求连接 GitHub 插件、本机未登录时)。 */
+    onGithubSetupOpen: fanOutGithubSetupOpen,
     /** 读 workdir 当前分支(非 git 目录返回 head=null)。 */
     get: (workdir: string): Promise<unknown> => ipcRenderer.invoke('git-context:get', workdir),
     /** 按 session 解析「对话真实工作目录」+ HEAD + 来源(含 SSH 远端)。 */
@@ -6122,6 +6128,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
         welcomeContext?: import('../shared/botWelcomeContext').BotWelcomeContext;
         locale?: import('../shared/locale').SupportedLocale;
       }): Promise<unknown[]> => ipcRenderer.invoke('local-db:bots:list', body),
+      readState: {
+        get: (): Promise<{ ownerId: string | null; positions: Record<string, number> }> =>
+          ipcRenderer.invoke('local-db:bots:read-state:get'),
+        update: (body: {
+          ownerId: string;
+          mark?: Record<string, number>;
+          seed?: Record<string, number>;
+          prune?: { botIds?: string[]; groupIds?: string[] };
+        }): Promise<{ ownerId: string | null; positions: Record<string, number> }> =>
+          ipcRenderer.invoke('local-db:bots:read-state:update', body),
+        onChanged: fanOutBotReadStateChanged,
+      },
       get: (botId: string): Promise<unknown> => ipcRenderer.invoke('local-db:bots:get', botId),
       chooseAvatarSource: (): Promise<{ canceled: boolean; previewDataUrl?: string }> =>
         ipcRenderer.invoke('local-db:bots:choose-avatar-source'),
@@ -6820,6 +6838,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     fetchProviderAccountUsage: (input: {
       providerId: string;
       forceRefresh?: boolean;
+      agent?: 'claude-code' | 'codex' | 'pi';
     }): Promise<
       import('../shared/providerAccountUsage').ProviderAccountUsageResult
     > => ipcRenderer.invoke('maker:provider:account-usage', input),

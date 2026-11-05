@@ -951,6 +951,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           workingDir: hookCwd,
           lastFinishedAt: schedule.lastFinishedAt,
           ...(ctx.webhook ? { webhook: ctx.webhook } : {}),
+          ...(ctx.trigger ? { trigger: ctx.trigger } : {}),
         },
       }), schedule.preRunHook.command, this.deps.diagnosePreRunHookFailure);
       await ctx.onPreRunHookCompleted?.(hook);

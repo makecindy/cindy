@@ -301,6 +301,7 @@ relay 原有 60 秒主动续期节流保持不变。
 | macOS 菜单栏余量设置 | `userData/menubar-settings.json`，本机偏好：是否显示、来源顺序与显隐、菜单栏文字、快见底通知、隐藏个人信息、统计范围；只含供应商 id，不含凭证或用量数值 |
 | macOS 菜单栏 Cindy 余额样本 | `userData/owners/<账号>/menubar-credit-samples.json`，只记录观测到的余额数值与时间（按区域与币种分组），用于估算日均消耗；保留 30 天、原子替换写入，不含凭证或账号标识 |
 | 云端伙伴同步状态 | `userData/owners/<账号>/companion-cloud/<sha256(端点\n主人 actor id)>.json`，只记伙伴的云端 actor id、1:1 房间 id、对话导入游标（本机消息时间与 id）、已上传资料的内容哈希与版本号、是否已交出主力电脑（本机副本隐藏、不跑例行任务）、接管后待重建上下文的标记；原子替换写入，读不出时从空开始并向服务器重新核对，不含凭证、消息正文或资料正文。见 `main/companion-cloud/state.ts` |
+| 伙伴已读位置 | `userData/owners/<账号>/bot-read-state.json`（electron-store），只存这台电脑上伙伴私聊（伙伴 id）、早期本机群（`group:<群 id>`）与私聊话题（`thread:<Session id>`）的已读时刻，最多 2000 条；只前进不后退，读不出时从空开始，不含消息正文或凭证。本机窗口、手机与其他电脑经远程资源 `read` 推进同一份；Renderer 另在 localStorage `cindy.bots.readState.v1.<账号>` 留副本供首帧读取。见 `main/maker-ipc/botReadStateStore.ts` |
 | macOS 菜单栏 helper（开发构建） | `userData/menubar/`，开发时由 `swiftc` 编译的 helper 及其 wordmark 图片和源码哈希；打包版改用 `resources/tools/menubar/`，不在 userData 落盘 |
 | 供应商分享：受邀者会话登记 | `userData/remote-agent/guest-sessions.json`（控制端摘要 → 本机侧任务与原生会话 id），只用来限制受邀者只能恢复自己的会话，并在分享删除时精确清理影子工作区、附件与会话记录 |
 | 供应商分享：跨区域标记 | `userData/remote-agent/provider-share-regions.json`，账号摘要 → 对方区域；**不含凭证**。跨区连接凭证只在内存里，用新身份名片重新换取；没有标记的账号从不联系对方区域 |

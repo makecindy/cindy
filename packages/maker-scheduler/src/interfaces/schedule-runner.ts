@@ -1,4 +1,4 @@
-import type { PreRunHookRunResult, RunStatus, Schedule, ScheduleWebhookEvent } from '../types.js';
+import type { PreRunHookRunResult, RunStatus, Schedule, ScheduleWebhookEvent, ScheduleRunTrigger } from '../types.js';
 
 export interface ChildRunInput {
   sessionId?: string;
@@ -20,6 +20,11 @@ export interface FireContext {
   webhook?: { events: ScheduleWebhookEvent[]; omitted: number };
   /** Bound pre-run hooks must execute in the directory shown in the approval card. */
   expectedPreRunWorkingDir?: string;
+  /**
+   * Why an early run was started by host code (for example a watched PR's status changed).
+   * Passed to the pre-run hook's stdin as `trigger`; absent for cron fires and user run-now.
+   */
+  trigger?: ScheduleRunTrigger;
   /**
    * 由 Scheduler 创建并 own 的 AbortSignal。当用户在 UI 上 delete/pause 这条 schedule 时,
    * Scheduler 会对所有 in-flight 的 runner.fire() 触发 abort。
