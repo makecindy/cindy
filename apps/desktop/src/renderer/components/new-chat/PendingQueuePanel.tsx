@@ -187,6 +187,8 @@ export function PendingQueuePanel({
   const botProfiles = useBotProfiles();
   const resolvedAriaLabel = ariaLabel ?? t('newChat.pendingQueue.regionAria');
   const [rowActivity, setRowActivity] = useState(emptyPendingQueueRowActivityState);
+  /** 悬停行正文是否真的溢出单行:只有溢出时才挂全文提示,短消息不弹重复内容。 */
+  const [hoverBodyOverflowed, setHoverBodyOverflowed] = useState(false);
   const editingLockOwnerRef = useRef<QueueEditLockOwner | null>(null);
   const onEditLockRef = useRef(onEditLock);
   const interactionLockedRef = useRef(false);
@@ -354,6 +356,14 @@ export function PendingQueuePanel({
               ? 'w-[44px]'
               : 'w-5';
           const dragDisabled = !onReorder || isPendingEnqueue || isRowEditing || isSteering;
+          // 正文提示:被截断时才展开全文;合成指令行按契约只显示标签、不给原文。
+          // text/结构始终稳定,只由 controlledOpen 决定开合:悬停时若把 Tip 从透明分支
+          // 换成 Trigger 分支,正文节点会重建、丢掉当时这次 mouseover,提示就永远不弹。
+          const bodyTipText = rowPresentation.isSyntheticTrigger
+            ? null
+            : rowPresentation.displayText;
+          const bodyTipOpen =
+            isRowActive && hoverBodyOverflowed && !rowPresentation.isSyntheticTrigger;
           const steerTipText = (() => {
             if (isSteering) return t('newChat.pendingQueue.steeringAction');
             const base = t(
@@ -434,7 +444,10 @@ export function PendingQueuePanel({
               tabIndex={canSteerRow && !isPendingEnqueue ? 0 : undefined}
               aria-keyshortcuts={canSteerRow ? 'Meta+Enter Control+Enter' : undefined}
               onKeyDown={handleRowKeyDown}
-              onMouseEnter={() => {
+              onMouseEnter={(event) => {
+                const body =
+                  event.currentTarget.querySelector<HTMLElement>('[data-queue-row-body]');
+                setHoverBodyOverflowed(Boolean(body && body.scrollWidth > body.clientWidth));
                 setRowActivity((activity) =>
                   activatePendingQueueRowHover(activity, entry.clientId, editingClientId),
                 );
@@ -504,7 +517,6 @@ export function PendingQueuePanel({
                     { sender: queueRowSenderLabel },
                   )}
                   className="relative top-px flex min-w-0 flex-1 items-center gap-1.5"
-                  title={queueRowSourceIdTitle(entry, t) ?? undefined}
                 >
                   {rowPresentation.senderBotId ? (
                     <BotAvatar
@@ -545,41 +557,59 @@ export function PendingQueuePanel({
                       className="shrink-0 text-[var(--msg-assistant-text)]"
                     />
                   )}
-                  <span className="min-w-0 max-w-[120px] shrink truncate text-13 font-semibold leading-[1.25] text-[var(--msg-assistant-text)]">
+                  {/* 来源 ID 提示归来源标签:整行只留正文提示,两件事不再抢同一个悬停位置。 */}
+                  <span
+                    title={queueRowSourceIdTitle(entry, t) ?? undefined}
+                    className="min-w-0 max-w-[120px] shrink truncate text-13 font-semibold leading-[1.25] text-[var(--msg-assistant-text)]"
+                  >
                     {queueRowSenderLabel}
                   </span>
-                  <span
-                    className={cn(
-                      'min-w-0 flex-1 truncate text-13 leading-[1.25]',
-                      isRowActive
-                        ? 'text-[var(--msg-assistant-text)]'
-                        : 'text-[var(--settings-section-desc)]',
-                    )}
+                  <Tip
+                    text={bodyTipText}
+                    controlledOpen={bodyTipOpen}
+                    contentClassName={queueBodyTipClassName}
                   >
-                    {rowPresentation.isSyntheticTrigger
-                      ? t(
-                          rowPresentation.syntheticKind === 'continue'
-                          ? 'newChat.pendingQueue.syntheticContinueLabel'
-                          : 'newChat.pendingQueue.syntheticTriggerLabel',
-                        )
-                      : rowPresentation.displayText || t('newChat.pendingQueue.noTextContent')}
-                  </span>
+                    <span
+                      data-queue-row-body
+                      className={cn(
+                        'min-w-0 flex-1 truncate text-13 leading-[1.25]',
+                        isRowActive
+                          ? 'text-[var(--msg-assistant-text)]'
+                          : 'text-[var(--settings-section-desc)]',
+                      )}
+                    >
+                      {rowPresentation.isSyntheticTrigger
+                        ? t(
+                            rowPresentation.syntheticKind === 'continue'
+                            ? 'newChat.pendingQueue.syntheticContinueLabel'
+                            : 'newChat.pendingQueue.syntheticTriggerLabel',
+                          )
+                        : rowPresentation.displayText || t('newChat.pendingQueue.noTextContent')}
+                    </span>
+                  </Tip>
                 </div>
               ) : (
                 <>
                 {/* 手机 / 另一台电脑发来的本人排队消息:与已发送消息同一规则标出设备(查看者即发送设备时不标)。 */}
                 {entry.sourceDevice ? <QueueSourceDeviceTag device={entry.sourceDevice} /> : null}
-                <p
-                  className={cn(
-                    // top-px: 在居中基础上把文字再压低 1px, 抵消字体 metrics, 与 drag handle 光学对齐
-                    'relative top-px min-w-0 flex-1 truncate text-13 leading-[1.25]',
-                    isRowActive
-                      ? 'text-[var(--msg-assistant-text)]'
-                      : 'text-[var(--settings-section-desc)]',
-                  )}
+                <Tip
+                  text={bodyTipText}
+                  controlledOpen={bodyTipOpen}
+                  contentClassName={queueBodyTipClassName}
                 >
-                  {pendingRowContent}
-                </p>
+                  <p
+                    data-queue-row-body
+                    className={cn(
+                      // top-px: 在居中基础上把文字再压低 1px, 抵消字体 metrics, 与 drag handle 光学对齐
+                      'relative top-px min-w-0 flex-1 truncate text-13 leading-[1.25]',
+                      isRowActive
+                        ? 'text-[var(--msg-assistant-text)]'
+                        : 'text-[var(--settings-section-desc)]',
+                    )}
+                  >
+                    {pendingRowContent}
+                  </p>
+                </Tip>
                 </>
               )}
 
@@ -712,6 +742,9 @@ export function PendingQueuePanel({
     </div>
   );
 }
+
+// 正文全文提示:保留原换行;限高是防止超长协调指令把浮层铺满整屏。
+const queueBodyTipClassName = 'max-h-[200px] overflow-hidden whitespace-pre-wrap';
 
 const iconButtonClassName = cn(
   'flex h-5 w-5 shrink-0 items-center justify-center rounded-full border',
