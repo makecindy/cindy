@@ -31,7 +31,8 @@
 | 模型目录 / 选择器 | 已验证 | 单一 `xd` provider，28 个网关对话模型，双 harness routing；选择器可展开并选中 |
 | 能力描述 | 已验证 | `/api/capabilities` 与 provider 模型列表逐项一致 |
 | 斜杠命令 / 技能 | 部分 | `maker.listAgentCommands` / `listAgentSkills` 转真实 agent 实现；未在界面验证 |
-| 多 Agent / 伙伴 / 群聊 | 禁用 + TODO | 依赖 bot 相关通道，当前返回空态 |
+| 多 Agent / 伙伴 / 群聊 | 禁用 + TODO | 依赖 bot 相关通道，当前返回明确的空态；未验证行为一致 |
+| 插件执行（运行期） | 禁用 + TODO | 插件运行时仍在 Electron main；Host 侧只提供已装列表 |
 
 ## 平台与集成
 
@@ -40,7 +41,7 @@
 | 复用现有登录 | 部分 | OSCrypt 双向实测通过；`cindy-host login` 单测通过；**真实浏览器完成一次授权未验证**（需要用户本人凭证） |
 | 复用现有存储 | 已验证 | 打开同一 owner 库（145 条 migration / 87 表），无平行数据库 |
 | 单 Runtime 锁 | 已验证 | 第二个 Host 报 `runtime.state=blocked`、`storage=unopened` |
-| 插件列表 | 部分 | `GET /plugins` 列出 canonical 实例；插件执行未迁移 |
+| 插件列表 | 已验证（读） | `#/plugins` 页在浏览器渲染空态「No plugins installed yet」，明暗两种模式正常；插件**执行**未迁移 |
 | Memory / 文件访问 | 禁用 + TODO | 未验证 |
 | systemd user unit | 已验证（模板） | `apps/host/cindy-host.service`，`systemd-analyze verify` 通过；未在本机 enable/start |
 | Tray / 原生菜单 / 窗口特效 / 桌面快捷键 | 禁用 + TODO | Electron 专属；浏览器端不提供，需在 `cindy-desktop` 保留 |
@@ -53,3 +54,21 @@
 | 关掉浏览器后 Host 仍运行 | 已验证 | Host 为独立 Node 进程，关闭页面后 `/health` 持续可用 |
 | 重开浏览器恢复会话 | 已验证 | 刷新/新标签页后恢复同一轮问答（`evidence/stage4-e2e.md`） |
 | Electron 不参与 Runtime | 未达成 | Desktop 仍装载 Runtime；共享 API 未接入 |
+
+## 最终审计（当前状态）
+
+| 验收 | 结论 | 直接证据 |
+|---|---|---|
+| 关掉浏览器后 Host 仍运行 | 通过 | Host 为独立 Node 进程；关闭页面后 `/health` 持续 `runtime.state=ready` |
+| 重开浏览器恢复会话 | 通过 | 刷新/新标签页后同一轮问答从共用 DB 恢复（`evidence/stage4-e2e.md`） |
+| Electron 不参与 Runtime | **未通过** | Desktop 仍构造并持有 Maker、执行插件与会话；尚未接入 Host API |
+
+### 阶段 5（Electron 去核心化）的未完成清单
+
+- `bootstrap-electron.ts` 仍在 splash 后调用 `getMakerCore()` 并注册整套 `maker:*` IPC。
+- 插件运行时、scheduler、device-link、Orca 协同仍依赖进程内 Runtime。
+- 迁移方案：先用 runtime 租约保证同一 profile 只有一个 Runtime（Host 侧已完成），再把
+  `maker:*` / `local-db:*` handler 逐组替换为 Host HTTP 客户端（会话、消息、输入队列、
+  事件流已具备对应端点），最后删除 Desktop 内的 Runtime 装配。
+
+在完成上述迁移前，不把「Electron 不参与 Runtime」标为达成。
