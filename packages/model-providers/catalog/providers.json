@@ -2296,6 +2296,82 @@
           "wireProtocol": "openai-chat"
         }
       }
+    },
+    {
+      "id": "openhubs",
+      "name": "OpenHubs",
+      "docsUrl": "https://openhubs.zhidemai.com/docs",
+      "models": [
+        {
+          "id": "deepseek-v4-flash",
+          "name": "DeepSeek V4 Flash",
+          "engineOverrides": {
+            "pi": {
+              "piApi": "openai-completions"
+            }
+          },
+          "contextWindow": 1048576,
+          "maxOutput": 384000
+        },
+        {
+          "id": "kimi-k3.1-pro",
+          "name": "Kimi K3.1 Pro",
+          "engineOverrides": {
+            "pi": {
+              "piApi": "openai-completions"
+            }
+          }
+        },
+        {
+          "id": "glm-5.3",
+          "name": "GLM 5.3",
+          "engineOverrides": {
+            "pi": {
+              "piApi": "openai-completions"
+            }
+          }
+        }
+      ],
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://openhubs.zhidemai.com",
+          "modelsUrl": "https://openhubs.zhidemai.com/v1/models",
+          "wireProtocol": "anthropic-messages"
+        },
+        "codex": {
+          "baseUrl": "https://openhubs.zhidemai.com/v1",
+          "modelsUrl": "https://openhubs.zhidemai.com/v1/models",
+          "wireProtocol": "openai-responses"
+        },
+        "pi": {
+          "baseUrl": "https://openhubs.zhidemai.com/v1",
+          "modelsUrl": "https://openhubs.zhidemai.com/v1/models",
+          "wireProtocol": "openai-chat"
+        }
+      }
+    },
+    {
+      "id": "ollama-cloud",
+      "name": "Ollama Cloud",
+      "docsUrl": "https://docs.ollama.com/cloud",
+      "models": [],
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://ollama.com",
+          "modelsUrl": "https://ollama.com/v1/models",
+          "wireProtocol": "anthropic-messages"
+        },
+        "codex": {
+          "baseUrl": "https://ollama.com/v1",
+          "modelsUrl": "https://ollama.com/v1/models",
+          "wireProtocol": "openai-chat"
+        },
+        "pi": {
+          "baseUrl": "https://ollama.com/v1",
+          "modelsUrl": "https://ollama.com/v1/models",
+          "wireProtocol": "openai-chat"
+        }
+      }
     }
   ]
 }

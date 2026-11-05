@@ -333,6 +333,8 @@ export interface CatalogModel {
   currency?: 'USD' | 'CNY';
   costDiscount?: number;
 
+  /** Execution-host derived display identity only; original id remains the request/storage key. */
+  selectionAliasKey?: string;
   supportsToolCalls?: boolean;
   reasoningRequired?: boolean;
   userModelConfig?: ProviderRuntimeModelConfig;

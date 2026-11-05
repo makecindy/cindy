@@ -318,27 +318,22 @@ export class IlinkApiClient {
     }
   }
 
-  async getUpdates(cursor: string, signal: AbortSignal) {
-    try {
-      return await this.request(
-        "ilink/bot/getupdates",
-        {
-          method: "POST",
-          authenticated: true,
-          body: {
-            get_updates_buf: cursor,
-            base_info: this.baseInfo(),
-          },
+  getUpdates(cursor: string, signal: AbortSignal) {
+    // A long-poll timeout is an unknown transport outcome, not an empty
+    // successful response. Let the caller's retry/reconnect policy observe it.
+    return this.request(
+      "ilink/bot/getupdates",
+      {
+        method: "POST",
+        authenticated: true,
+        body: {
+          get_updates_buf: cursor,
+          base_info: this.baseInfo(),
         },
-        signal,
-        this.options.longPollTimeoutMs ?? 35_000,
-      );
-    } catch (error) {
-      if (error instanceof WechatIlinkError && error.code === "TIMEOUT") {
-        return { ret: 0, msgs: [], get_updates_buf: cursor };
-      }
-      throw error;
-    }
+      },
+      signal,
+      this.options.longPollTimeoutMs ?? 35_000,
+    );
   }
 
   notifyStart(signal: AbortSignal): Promise<Record<string, unknown>> {

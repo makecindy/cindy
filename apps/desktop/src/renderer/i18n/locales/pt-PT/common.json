@@ -1,4 +1,15 @@
 {
+  "pluginUi": {
+    "renderer": "Apresentação",
+    "original": "Original",
+    "unavailable": "Os controlos da extensão estão indisponíveis. As ações estão desativadas.",
+    "outcome-unknown": "O resultado não foi confirmado. Consulte o estado atual da extensão.",
+    "rejected": "A extensão não executou esta ação. O conteúdo introduzido foi mantido.",
+    "draftChanged": "O conteúdo introduzido mudou. A alteração da extensão não foi aplicada.",
+    "editorUnavailable": "Este campo está indisponível. A alteração da extensão não foi aplicada.",
+    "more": "Mais",
+    "close": "Fechar"
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "Atualizar quota",
@@ -2386,6 +2397,9 @@
     "agentIsland": {
       "title": "Agent Island",
       "unsupported": "O Agent Island requer o macOS 14 ou posterior.",
+      "subtleRemindersLabel": "Avisos discretos",
+      "subtleRemindersHint": "Quando há novas mensagens, pedidos de resposta ou erros, o ícone muda em vez de mostrar um cartão de notificação por baixo da ilha. Clica na ilha para ver a lista completa de tarefas.",
+      "subtleRemindersFailed": "Não foi possível guardar as definições dos avisos. Tenta novamente.",
       "enableLabel": "Mostrar Agent Island",
       "enableHint": "Mostra as tarefas em execução, que precisam de resposta e concluídas não lidas no topo do ecrã. Ao ativar, suprime as notificações equivalentes do sistema para evitar alertas duplicados.",
       "enableAria": "Ativar ou desativar o Agent Island",
@@ -3554,7 +3568,7 @@
         "formatIdentity": "Obrigatório. Defina kind como \"custom\" e name como o nome do fornecedor que pretende apresentar.",
         "formatAuth": "Obrigatório. Neste exemplo, defina method como \"apiKey\" e substitua apiKey pela chave do seu fornecedor.",
         "formatEndpoint": "Obrigatório para cada endpoint. protocol aceita \"openai-chat\", \"openai-responses\", \"anthropic-messages\" e \"google-generative-ai\". Defina baseUrl como o URL HTTP(S) completo do endpoint; recomenda-se HTTPS.",
-        "formatTargets": "Lista engine opcional: \"claude-code\", \"codex\" ou \"pi\". Omita-a para associar motores por protocolo ou especifique os motores explicitamente. O Claude Code também suporta os protocolos OpenAI e Google. O exemplo ativa apenas o Pi.",
+        "formatTargets": "Lista opcional de motores: \"claude-code\", \"codex\" ou \"pi\". Omita-a para associar motores por protocolo ou especifique os motores explicitamente. O Claude Code também suporta os protocolos OpenAI e Google. O exemplo ativa apenas o Pi.",
         "formatModels": "Opcional. Utilize cadeias com os IDs dos modelos ou objetos com id (name é opcional). Omita a lista ou deixe-a vazia para obter os modelos após a confirmação. Uma lista não vazia dispensa a obtenção automática.",
         "formatMetadata": "Campos opcionais dos modelos: group é o grupo do modelo, contextWindow é o comprimento do contexto e maxOutputTokens é o limite de saída (ambos em tokens). Os números do exemplo são ilustrativos; utilize as capacidades reais do modelo.",
         "formatEffort": "Campos opcionais dos modelos: efforts lista os níveis de esforço suportados; defaultEffort seleciona um deles como predefinição. Remova ambos os campos se tiver dúvidas.",
@@ -3836,7 +3850,12 @@
           "stop": "Parar teste"
         },
         "fetch": {
-          "button": "Obter lista de modelos",
+          "selectedCount": "{{count}} modelos selecionados",
+          "availableCount": "{{count}} modelos disponíveis obtidos",
+          "notFetched": "A lista de modelos ainda não foi obtida",
+          "failedRetry": "Não foi possível obter a lista de modelos. Tente novamente.",
+          "retryFailed": "Esta consulta falhou. Tente novamente.",
+          "button": "Obter e selecionar modelos",
           "fetching": "A obter modelos…",
           "needBaseUrl": "Preencha primeiro o URL base",
           "failed": "Não foi possível obter a lista de modelos",
@@ -4021,6 +4040,7 @@
             "hint": "Aplica-se à ligação de Images de {{agent}}. Declare apenas capacidades efetivamente suportadas pela API. Volte a abrir os detalhes de Art após guardar."
           },
           "capabilityHint": "Usa as capacidades declaradas por este fornecedor. Quando não há declaração, o suporte de imagens é inferido a partir do nome do modelo.",
+          "imageInputDefault": "{{value}} (predefinição)",
           "imageInput": "Entrada de imagens",
           "imageInputMixed": "Varia consoante o motor",
           "supported": "Suportado",
@@ -5726,6 +5746,7 @@
           "checking": "A procurar atualizações…",
           "upToDate": "Atualizado",
           "checkFailed": "Não foi possível procurar atualizações",
+          "rateLimited": "O GitHub está a limitar as verificações",
           "lastChecked": "Última verificação: {{time}}",
           "check": "Procurar atualizações",
           "retry": "Tentar novamente",
@@ -7774,6 +7795,8 @@
         "skill": "Adiciona a Skill \"{{name}}\" aos seus assistentes de IA",
         "skillDetail": "Uma Skill é um ficheiro de instruções que a IA carrega e segue como suas, com todas as suas permissões, no Claude Code e no Codex, em todos os projetos — não está limitada à sandbox deste plugin. Permanece disponível enquanto o plugin está ativo e é removida quando o plugin é desativado ou desinstalado; desativar o plugin para uma única pasta não a oculta. Não é possível pré-visualizar aqui o texto completo da Skill — instale apenas plugins em que confia.",
         "routineEvents": "Eventos de rotina",
+        "nativeUi": "Adicionar controlos às tarefas",
+        "nativeTabView": "Abrir a vista «{{title}}»",
         "mcpUi": "Apresentar páginas interativas na conversa",
         "mcpUiDomains": "Domínios de rede da página: {{domains}}",
         "mcpAppOnly": "Apenas a página",
@@ -7849,6 +7872,7 @@
         "customSlotAsleep": "Este plugin está desativado. Ative-o para ver aqui a interface de definições.",
         "descriptionExpand": "Mostrar mais",
         "descriptionCollapse": "Mostrar menos",
+        "readmeTitle": "Sobre",
         "useAction": "Usar plugin",
         "chatAction": "Conversa",
         "enabledLabel": "Ativado",
@@ -12211,7 +12235,7 @@
       "effortLabel": "Esforço de raciocínio",
       "thinking": "A pensar",
       "edit": "Editar",
-      "options": "Options",
+      "options": "Opções",
       "priceTip": "Entrada {{input}} · Saída {{output}} por 1M de tokens",
       "pricing": {
         "title": "Por 1 M de tokens",
@@ -13218,6 +13242,12 @@
       "text": "Uma execução automática falhou.",
       "precheck": "As verificações automáticas estão temporariamente bloqueadas.",
       "rateLimited": "As verificações automáticas estão temporariamente bloqueadas por um limite de frequência de pedidos.",
+      "pluginMissing": "As verificações automáticas estão bloqueadas: o plugin {{name}} não está instalado. Elas serão retomadas após a instalação.",
+      "pluginMissingUnnamed": "As verificações automáticas estão bloqueadas: um plugin necessário não está instalado. Elas serão retomadas após a instalação.",
+      "pluginDisabled": "As verificações automáticas estão bloqueadas: o plugin {{name}} está desativado. Elas serão retomadas após a ativação.",
+      "pluginDisabledUnnamed": "As verificações automáticas estão bloqueadas: um plugin necessário está desativado. Elas serão retomadas após a ativação.",
+      "installPlugin": "Instalar plugin",
+      "openPlugin": "Abrir plugin",
       "dismissTitle": "Dispensar aviso de falha anterior"
     },
     "worktreeRestoreBanner": {
@@ -13510,7 +13540,7 @@
         "empty": "Nenhum comando disponível."
       },
       "cost": {
-        "title": "Custo da sessão",
+        "title": "Utilização da sessão",
         "tokensUsed": "Tokens utilizados (neste turno)"
       },
       "pwd": {
@@ -17033,7 +17063,10 @@
       "registrationFailed": "Falha na criação, tente novamente mais tarde",
       "silentStopExhausted": "O modelo devolveu repetidamente respostas vazias; a retoma automática está em pausa. Clique em \"Continuar\" para retomar a tarefa.",
       "executionResultUnavailable": "Não foi possível obter o resultado da execução. A continuação automática foi interrompida. Pede ao assistente para verificar o resultado da execução existente.",
-      "outputLimit": "O modelo atingiu o limite de saída, pelo que esta resposta pode estar incompleta. Envia a próxima mensagem para continuar.",
+      "outputLimit": "O modelo atingiu o limite de saída, pelo que esta resposta pode estar incompleta. Envia uma nova mensagem para continuar. Se isto se repetir, reduz o esforço de raciocínio ou compacta primeiro o histórico da conversa.",
+      "outputLimitReasoning": "O raciocínio consumiu a maior parte do orçamento de saída deste pedido, pelo que a resposta pode estar incompleta. Reduz o esforço de raciocínio ou compacta o histórico da conversa antes de continuar.",
+      "outputLimitUsage": "Este pedido ao modelo utilizou {{outputTokens}} tokens de saída, incluindo {{reasoningTokens}} tokens de raciocínio.",
+      "outputLimitOutputUsage": "Este pedido ao modelo utilizou {{outputTokens}} tokens de saída.",
       "permissionTightenInterruptFailed": "Não foi possível parar a tarefa em execução ao restringir as permissões; pode continuar a executar sem pedidos de aprovação até terminar. Pare-a manualmente, se necessário.",
       "codexAutoReviewUnavailable": "A revisão automática está temporariamente indisponível. A ação atual foi bloqueada e as permissões passaram para Default. Repita o pedido; o Cindy pedirá aprovação quando necessário.",
       "hostShellCommandBlocked": "O Cindy bloqueou este comando de shell. Verifique o comando e use uma ferramenta ou comando disponível para continuar.",
@@ -17518,6 +17551,7 @@
     "sidebar": "Saldo e planos",
     "settings": {
       "title": "Utilização e faturação",
+      "supportHint": "Tem algum problema? Contacte {{email}} para obter ajuda.",
       "subscriptionCard": {
         "title": "Plano atual",
         "empty": "Sem subscrição ativa",
@@ -17592,14 +17626,38 @@
     },
     "orders": {
       "title": "Histórico de encomendas",
-      "description": "Apenas são apresentadas as encomendas de carregamento e subscrição iniciadas no Cindy. As encomendas a aguardar pagamento são canceladas automaticamente quando o prazo expira.",
+      "description": "Carregamentos pagos e faturas de subscrição liquidadas.",
+      "history": {
+        "loadFailed": "Não foi possível carregar o histórico de encomendas",
+        "retry": "Recarregar encomendas",
+        "unknownPaidAt": "Data de pagamento indisponível",
+        "unknownAmount": "Montante indisponível",
+        "refundedAmount": "Reembolsado: {{amount}}",
+        "refunded": "Reembolsado",
+        "partiallyRefunded": "Reembolso parcial",
+        "noPayment": "Sem pagamento necessário",
+        "page": "Página {{page}}",
+        "previous": "Página anterior",
+        "next": "Página seguinte"
+      },
       "count": "{{count}} encomendas",
-      "incomplete": "Existem muitos registos de encomendas. Apenas são apresentados os {{count}} mais recentes.",
       "orderId": "N.º {{id}}",
       "copy": {
         "action": "Copiar ID da encomenda {{id}}",
         "success": "ID da encomenda copiado",
         "failed": "Não foi possível copiar o ID da encomenda — tente novamente"
+      },
+      "refund": {
+        "action": "Pedir reembolso",
+        "title": "Pedir reembolso",
+        "description": "Envie as seguintes informações para {{email}} para pedir um reembolso.",
+        "emailSubject": "Pedido de reembolso Cindy - {{orderId}}",
+        "sendAction": "Enviar pedido de reembolso",
+        "gmailFallbackDescription": "O seu pedido de reembolso inclui detalhes da encomenda. Ao abrir o Gmail, estas informações serão partilhadas com a Google. Continuar?",
+        "emailBody": "Olá, gostaria de pedir o reembolso da seguinte encomenda. Podem ajudar-me a tratar deste pedido?\n\nID da encomenda: {{orderId}}\nID de transação do prestador: {{providerTransactionId}}\nAplicação: {{application}}\nMétodo de pagamento: {{paymentMethod}}\nMontante pago: {{amount}}\n\nProblema encontrado:\n(Descreva brevemente o que aconteceu)\n\nObrigado.",
+        "fields": {
+          "amount": "Montante pago"
+        }
       },
       "invoice": {
         "action": "Pedir fatura",
@@ -17609,7 +17667,7 @@
         "emailSubject": "Pedido de fatura da encomenda {{orderId}}",
         "personalInvoicePolicy": "As faturas de carregamentos do Cindy Personal são emitidas, por predefinição, em <strong>nome de uma pessoa singular</strong>. Pode usar o seu nome ou «Particular» como nome na fatura. Se precisar de uma fatura em nome da sua empresa para reembolso de despesas, forneça <strong>uma declaração de reembolso com o carimbo oficial da empresa</strong> que indique o nome a constar na fatura.",
         "invoiceTitleHint": "Instruções: Para uma fatura individual, introduza o seu nome ou «Particular». Para uma fatura em nome da sua empresa para reembolso de despesas, anexe uma declaração de reembolso com o carimbo oficial da empresa e que indique o nome a constar na fatura.",
-        "emailBody": "Olá,\n\nGostaria de pedir uma fatura para a seguinte encomenda:\n\n────────────────────\nID da encomenda: {{orderId}}\nAplicação: {{application}}\nMétodo de pagamento: {{paymentMethod}}\nMontante da fatura: {{amount}}\nNome na fatura: \n{{invoiceTitleHint}}\n\nPessoa de contacto: \nNúmero de telefone: \nE-mail: \n────────────────────\n\nObrigado.",
+        "emailBody": "Olá,\n\nGostaria de pedir uma fatura para a seguinte encomenda:\n\n────────────────────\nID da encomenda: {{orderId}}\nID de transação do prestador: {{providerTransactionId}}\nAplicação: {{application}}\nMétodo de pagamento: {{paymentMethod}}\nMontante da fatura: {{amount}}\nNome na fatura: \n{{invoiceTitleHint}}\n\nPessoa de contacto: \nNúmero de telefone: \nE-mail: \n────────────────────\n\nObrigado.",
         "sendAction": "Enviar pedido de fatura",
         "emailCopied": "E-mail de apoio copiado",
         "emailCopyFailed": "Não foi possível copiar o e-mail de apoio — tente novamente",
@@ -17620,6 +17678,7 @@
         "notAvailable": "Indisponível",
         "fields": {
           "orderId": "ID da encomenda",
+          "providerTransactionId": "ID de transação do prestador",
           "application": "Aplicação",
           "paymentMethod": "Método de pagamento",
           "amount": "Montante da fatura",

@@ -12,6 +12,7 @@ import {
   planLabel,
   type MenubarCollectDeps,
   modelDisplayNames,
+  opencodeGoSource,
   usageScope,
 } from '../collect';
 import { retainRemoteSubscriptions, REMOTE_RETAIN_MS, type RemoteSeen } from '../remoteSubscriptions';
@@ -383,6 +384,22 @@ it('maps Kimi periods and removes expired or stale numbers from the menu bar', (
   expect(source.windows).toMatchObject([{ kind: 'session', usedPercent: 20, windowMinutes: 300 }, { kind: 'period', usedPercent: 30, windowMinutes: 0 }]);
   expect(kimiSource(account, { ...result, stale: true } as never, NOW).windows).toEqual([]);
   expect(kimiSource(account, { status: 'unavailable', error: 'auth' }, NOW).windows).toEqual([]);
+});
+
+it('maps OpenCode Go rolling, weekly and monthly windows without showing stale numbers', () => {
+  const account = provider({ id: 'opencode-go', name: 'OpenCode Go' });
+  const result = { status: 'ready', stale: false, snapshot: { kind: 'opencode-go-quota', fetchedAt: NOW, windows: [
+    { id: 'rolling', usedPercent: 12, limited: false, resetsAt: NOW + 3600_000 },
+    { id: 'weekly', usedPercent: 34, limited: false, resetsAt: NOW + 86_400_000 },
+    { id: 'monthly', usedPercent: 100, limited: true, resetsAt: NOW - 1 },
+  ] } } as const;
+  const source = opencodeGoSource(account, result as never, NOW);
+  expect(source).toMatchObject({ family: 'opencode-go', brand: 'OpenCode Go', account: null, plan: null, credits: null });
+  expect(source.windows).toMatchObject([
+    { kind: 'session', label: 'rolling', usedPercent: 12, windowMinutes: 300 },
+    { kind: 'week', label: 'weekly', usedPercent: 34, windowMinutes: 10_080 },
+  ]);
+  expect(opencodeGoSource(account, { ...result, stale: true } as never, NOW).windows).toEqual([]);
 });
 
 // iPhone usage widgets split each day by model: the five with the most tokens in the last 30 days keep

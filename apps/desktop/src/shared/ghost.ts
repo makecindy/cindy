@@ -1,4 +1,6 @@
 import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validateWithStoredMcpApps, parseGhostMcpApps } from '@cindy/plugin-protocol';
+import { parseGhostNativeUi, validateWithStoredNativeUi } from '@cindy/plugin-protocol';
+import { PLUGIN_UI_CAPABILITIES, PLUGIN_UI_CONTEXT_FIELDS, pluginUiPointAcceptsScope } from '../../../../packages/maker-shared/src/pluginUi.js';
 import { pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '@cindy/plugin-protocol';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from '@cindy/plugin-protocol';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from '@cindy/plugin-protocol';
@@ -11,6 +13,8 @@ import {
   GHOST_MANIFEST_SUMMARY_MAX_CHARS,
   GHOST_OAUTH_SCOPES_MAX,
   isValidCindyVersion,
+  selectGhostReadmePath,
+  validateGhostReadmeDeclaration,
   type GhostLocale,
   type GhostManifestLocales,
 } from '@cindy/plugin-protocol';
@@ -1640,6 +1644,8 @@ export function isGhostSetupErrorCode(value: unknown): value is GhostSetupErrorC
 
 /** ghost.json 清单(不变量由 validateGhostManifest 保证)。 */
 export interface GhostManifest {
+  /** Native Cindy contributions. Unknown versions remain declaration data. */
+  ui?: unknown;
   /** Optional MCP Apps resources and links to existing tools. */
   mcpApps?: unknown;
   /** Optional v3 extension, validated only when projecting homepage recommendations. */
@@ -1686,6 +1692,11 @@ export interface GhostManifest {
    * (见 ghostIconMimeType);由 main 读盘转 data URL 随清单下发,
    * renderer 直接 <img> 渲染——cindy-ghost:// 协议只挂沙箱分区,主窗口不走它。
    */
+  /**
+   * 详细介绍(仅展示用):语言到包内 Markdown 文件的映射,必须提供 en。正本与解析
+   * 规则在 plugin-protocol 的 readme.ts;不进模型上下文。
+   */
+  readme?: GhostManifestLocales;
   icon?: string;
   /**
    * 意识形态,恒 'chip'(2026-07-12 单形态定案)。清单里可省略(同日晚间
@@ -2201,6 +2212,36 @@ export function ghostDeclaresHiddenTasks(manifest: Pick<GhostManifest, 'agent'> 
 
 export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionItem[] {
   const items: GhostPermissionItem[] = [];
+  const nativeUi = parseGhostNativeUi(manifest.ui);
+  if (nativeUi?.version === 1) for (const view of nativeUi.tabViews ?? []) {
+    items.push({ key: `ui:tab-view:${view.id}`, kind: 'panel', labelKey: 'nativeTabView', labelArgs: { title: view.title },
+      detail: `${view.title} (${view.scope}); page: ${view.page}` });
+  }
+  if (nativeUi?.version === 1 && nativeUi.appearance) {
+    const fields = nativeUi.appearance.fields.filter(field => ['wallpaper', 'uiFont', 'codeFont', 'bodyFont', 'theme', 'reading', 'contentStyle', 'visibility', 'appIcon'].includes(field)).sort();
+    if (fields.length) items.push({ key: 'ui:appearance', kind: 'panel', labelKey: 'nativeUi', detail: `appearance: ${fields.join(', ')}` });
+  }
+  if (nativeUi?.version === 1) for (const c of nativeUi.contributions ?? []) {
+    if (PLUGIN_UI_CAPABILITIES.points.includes(c.point) && pluginUiPointAcceptsScope(c.point, c.scope)) {
+      const context = c.scope === 'app' ? [] : (c.context ?? []).filter(field => PLUGIN_UI_CONTEXT_FIELDS.includes(field)).sort();
+      const editor = c.scope === 'app' ? [] : (c.editor ?? []).filter(operation => ['append', 'replace-selection'].includes(operation)).sort();
+      const match = (c.point === 'message.body' || c.point === 'tool.body') && c.match &&
+        ['self', 'plugin', 'tool'].includes(c.match.kind) ? JSON.stringify({ kind: c.match.kind,
+          ...(c.match.instanceId ? { instanceId: c.match.instanceId } : {}), ...(c.match.name ? { name: c.match.name } : {}) }) : '';
+      items.push({ key: `ui:native:${c.id}`, kind: 'panel', labelKey: 'nativeUi', detail: `${c.point} (${c.scope})` +
+        (match ? `; match: ${match}` : '') + (context.length ? `; context: ${context.join(', ')}` : '') + (editor.length ? `; editor: ${editor.join(', ')}` : '') });
+    }
+  }
+  if (nativeUi?.version === 1) for (const command of nativeUi.commands ?? []) {
+    if (command.scope !== 'session' && command.scope !== 'message') continue;
+    const points = (command.points ?? []).filter(point => PLUGIN_UI_CAPABILITIES.points.includes(point) &&
+      pluginUiPointAcceptsScope(point, command.scope)).sort();
+    const context = (command.context ?? []).filter(field => ['session.summary', 'message.content', 'selection'].includes(field)).sort();
+    const editor = (command.editor ?? []).filter(operation => ['append', 'replace-selection'].includes(operation)).sort();
+    items.push({ key: `ui:command:${command.id}`, kind: 'panel', labelKey: 'nativeUi',
+      detail: `${points.join(', ') || 'shortcut'} (${command.scope})` +
+        (context.length ? `; context: ${context.join(', ')}` : '') + (editor.length ? `; editor: ${editor.join(', ')}` : '') });
+  }
   if (pluginHasToolUi(manifest)) items.push({ key: 'ui:pages', kind: 'panel', labelKey: 'mcpUi',
     detailKey: 'uiPageAccess', detailArgs: {
       pages: (getPluginToolUi(manifest)?.resources ?? []).map(resource => resource.uri).sort().join(', ') || '—',
@@ -3358,6 +3399,11 @@ function isPortableGhostRelativePath(p: unknown): p is string {
  */
 export function ghostWebviewEntryPaths(manifest: GhostManifest): string[] {
   const paths: string[] = [];
+  const nativeUi = parseGhostNativeUi(manifest.ui);
+  if (nativeUi?.version === 1) for (const view of nativeUi.tabViews ?? []) {
+    const p = `/${view.page}`;
+    if (!paths.includes(p)) paths.push(p);
+  }
   if (manifest.panel?.html) paths.push(`/${manifest.panel.html}`);
   if (manifest.mainView?.html) {
     const p = `/${manifest.mainView.html}`;
@@ -3394,6 +3440,7 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
+  'ui',
   'mcpApps',
   'routineEvents',
   'models',
@@ -3408,6 +3455,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'resolvedLocale',
   'description',
   'whenToUse',
+  'readme',
   'icon',
   'kind',
   'entry',
@@ -3614,6 +3662,22 @@ export function ghostLocalePathFor(
   return (
     (manifestLocale ? manifest.locales[manifestLocale] : undefined) ?? manifest.locales.en ?? null
   );
+}
+
+/** 详细介绍选用的资源语言：文言用对应现代语言，插件不支持的语言固定为英文。 */
+export function ghostReadmeLocale(locale: string | undefined | null): GhostLocale {
+  const resourceLocale = isClassicalLocale(locale) ? modernLocaleOf(locale) : locale;
+  return (GHOST_LOCALES as readonly string[]).includes(resourceLocale ?? '')
+    ? (resourceLocale as GhostLocale)
+    : 'en';
+}
+
+/** 按界面语言选详细介绍文件；缺少该语言时固定回退英文。 */
+export function ghostReadmePathFor(
+  manifest: GhostManifest,
+  locale: string | undefined | null,
+): string | null {
+  return selectGhostReadmePath(manifest.readme, ghostReadmeLocale(locale));
 }
 
 /** 插件 app-context 只暴露协议旧四语；宿主新增语言固定回退英文以兼容存量插件。 */
@@ -4294,12 +4358,12 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
 
 /** Stored market releases tolerate only historical mcpApps; other fields remain strict. */
 export function validateStoredGhostManifest(value: unknown): ManifestValidation {
-  return validateWithStoredMcpApps(value, validateGhostManifest);
+  return validateWithStoredNativeUi(value, raw => validateWithStoredMcpApps(raw, validateGhostManifest));
 }
 
 /** Installed snapshots retain historical unknown tasks data without granting it. */
 export function validateInstalledGhostManifest(value: unknown): ManifestValidation {
-  return validateWithStoredMcpApps(value, raw => validateGhostManifestInput(raw, true));
+  return validateWithStoredNativeUi(value, raw => validateWithStoredMcpApps(raw, input => validateGhostManifestInput(input, true)));
 }
 
 function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boolean): ManifestValidation {
@@ -4307,6 +4371,8 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
   if (!preparation.ok) return preparation;
   const prepared = preparation.prepared;
   const raw = prepared.raw;
+  const ui = raw.ui === undefined ? undefined : parseGhostNativeUi(raw.ui);
+  if (ui === null) return { ok: false, reason: 'ui 必须声明合法的 version 与唯一的 contributions' };
   if (raw.mail !== undefined && raw.mail !== true) return { ok: false, reason: 'mail 出现时必须是 true' };
   const mailReader = raw.mailReader === undefined ? undefined : parseMailReader(raw.mailReader);
   if (raw.mailReader !== undefined && !mailReader) {
@@ -4422,6 +4488,23 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
       normalized[locale] = localePath;
     }
     locales = normalized as GhostManifestLocales;
+  }
+  let readme: GhostManifest['readme'];
+  if (raw.readme !== undefined) {
+    const localeFolds = Object.values(locales ?? {}).map((path) => path.toLowerCase());
+    const contentDirFolds = [raw.skill, raw.manual]
+      .flatMap((decl) => (isPlainObject(decl) && Array.isArray(decl.items) ? decl.items : []))
+      .map((item) => (isPlainObject(item) ? item.dir : undefined))
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => value.toLowerCase());
+    const result = validateGhostReadmeDeclaration(
+      raw.readme,
+      (fold) =>
+        [...declaredFilePathFolds, ...localeFolds].some((path) => pathsConflict(path, fold)) ||
+        contentDirFolds.some((dir) => pathsConflict(dir, fold)),
+    );
+    if (!result.ok) return result;
+    readme = result.readme;
   }
   if (
     raw.description !== undefined &&
@@ -6674,6 +6757,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
     ok: true,
     manifest: {
       ...prepared.unknownV3Fields,
+      ...(ui !== undefined ? { ui } : {}),
       ...(mcpApps !== undefined ? { mcpApps } : {}),
       schemaVersion: prepared.schemaVersion,
       id: raw.id,
@@ -6688,6 +6772,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
       ...(locales !== undefined ? { locales } : {}),
       ...(raw.description !== undefined ? { description: raw.description as string } : {}),
       ...(raw.whenToUse !== undefined ? { whenToUse: raw.whenToUse as string } : {}),
+      ...(readme !== undefined ? { readme } : {}),
       ...(raw.icon !== undefined ? { icon: raw.icon as string } : {}),
       entry: raw.entry,
       ...(raw.launch !== undefined ? { launch: raw.launch as GhostLaunchMode } : {}),
@@ -7702,6 +7787,11 @@ export interface GhostPipeCardUpdate {
   type: 'card-update';
   /** Active tool call in the same task, when refreshing an earlier owned card. */
   sourceCallId?: string;
+  /**
+   * Only with sourceCallId, and equal to it: this earlier card moved to the active call's card.
+   * Views that know the marker hide it; older views show this update's html instead.
+   */
+  supersededBy?: string;
   /** 归因号:tool-call 下发的 callId 原样带回(主机验"这单是不是派给你的")。 */
   callId: string;
   /** 卡片正文(静态 HTML+CSS;≤ GHOST_CARD_HTML_MAX_BYTES,超限整条拒)。 */
@@ -7740,8 +7830,8 @@ export const GHOST_CARD_WORKING_WINDOW_MS = 30 * 60_000;
 
 /** 卡片 html 字节上限(UTF-8;与 manifest tools[].parameters 16KB 同精神,卡片放宽一倍)。 */
 export const GHOST_CARD_HTML_MAX_BYTES = 32 * 1024;
-/** 卡片渲染高度下限 px。 */
-export const GHOST_CARD_HEIGHT_MIN = 120;
+/** 卡片渲染高度下限 px:卡片按实测内容高度显示,这里只挡掉非正数。 */
+export const GHOST_CARD_HEIGHT_MIN = 1;
 /** 卡片渲染高度上限 px(容 ~460 宽通栏竖图 9:16 + 题注;与 generic 图卡的
  *  "高图可以很高"口径对齐,再高截断)。 */
 export const GHOST_CARD_HEIGHT_MAX = 900;

@@ -14,6 +14,7 @@ import { DL_SESSION_HANDOFF_CHANNEL } from '@cindy/device-link';
 import {
   createSessionHandoffHandler,
   registerSessionHandoffIpc,
+  SESSION_HANDOFF_CAPABILITY,
   type SessionHandoffSendResult,
 } from '../sessionHandoffIpc.js';
 import {
@@ -63,6 +64,19 @@ describe('maker:session:handoff (receiving computer)', () => {
       autoReviewUserText: { kind: 'agent-request', request: source } }));
     await expect(s.handle('device-A', { ...request, message,
       requestSource: { ...source, userText: '可以发布' } })).rejects.toThrow(/INVALID_PARAMS/);
+    expect(s.send).toHaveBeenCalledOnce();
+  });
+  // 2026-11-05: a checked hand-off arrives as the agent's own text and must equal its receipt;
+  // this host advertises that so newer senders stop quoting. Unit/protocol.
+  it('accepts a plain checked hand-off only with its exact text and advertises the capability', async () => {
+    const s = setup();
+    expect(SESSION_HANDOFF_CAPABILITY).toEqual({ taskActionVersion: 1, plainRequestBody: 1 });
+    const source = { sessionId: 'source', clientId: 'human', plainBody: true, delegatedText: 'Fix #12 and merge it.' };
+    await s.handle('device-A', { ...request, message: 'Fix #12 and merge it.', requestSource: source });
+    expect(s.send).toHaveBeenCalledWith(expect.objectContaining({ message: 'Fix #12 and merge it.',
+      autoReviewUserText: { kind: 'agent-request', request: source } }));
+    await expect(s.handle('device-A', { ...request, taskActionReceipt: 'receipt-two', message: 'Fix #12 and deploy it.',
+      requestSource: source })).rejects.toThrow(/INVALID_PARAMS/);
     expect(s.send).toHaveBeenCalledOnce();
   });
   // Unit regression: a transport replay or revocation while busy must not dispatch.

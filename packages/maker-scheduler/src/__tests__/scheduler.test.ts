@@ -124,6 +124,19 @@ class InMemoryStorage implements ScheduleStorage {
   }
 }
 
+// Rule (2026-11-06): a host-triggered run must reach the runner with its trigger so the pre-run
+// check can skip its own pacing; manual runs stay unmarked. Minimal input: two runNow calls (unit).
+it('hands a runNow trigger to the runner and leaves manual runs unmarked', async () => {
+  const h = makeHarness();
+  await h.scheduler.start();
+  const schedule = await h.scheduler.create(baseInput);
+  const trigger = { kind: 'watch' as const, source: 'pr-status', detail: 'https://github.com/o/r/pull/1' };
+  await h.scheduler.runNow(schedule.id, { trigger });
+  await h.scheduler.runNow(schedule.id);
+  expect(h.fireCalls.map((call) => call.ctx.trigger)).toEqual([trigger, undefined]);
+  await h.scheduler.stop();
+});
+
 // Regression: quitting while a runner is active must preserve an interrupted run,
 // even when closing the provider produces a late rejection. Unit, in-memory I/O.
 it('preserves interrupted runs on app exit instead of recording a provider-close failure', async () => {
@@ -2864,6 +2877,10 @@ describe('Scheduler cross-instance dedupe', () => {
 
 // ── 被动模式(双开时 dev 端让出自动触发)──────────────────────────────────
 describe('Scheduler passive mode', () => {
+  it('reports passive mode so host triggers can stay out', () => {
+    expect(makeHarness({ passive: true }).scheduler.isPassive()).toBe(true);
+    expect(makeHarness().scheduler.isPassive()).toBe(false);
+  });
   it('start() 不清僵尸、不加载 actives、不装时钟;runNow 照常可用', async () => {
     const storage = new InMemoryStorage();
     const h = makeHarness({ storage, passive: true });
