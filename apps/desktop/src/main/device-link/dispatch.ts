@@ -1,5 +1,6 @@
 import { parseKimiUsageRequest, isKimiCodingProvider } from '../../shared/kimiCodingUsage.js';
-import { readKimiCodingAccountUsage } from '../maker-host/provider-account-usage.js';
+import { isOpenCodeGoProvider, parseOpenCodeGoUsageRequest } from '../../shared/opencodeGoUsage.js';
+import { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage } from '../maker-host/provider-account-usage.js';
 import { PROVIDER_SHARE_INSIGHTS_CHANNEL } from '../../shared/providerShareInsights.js';
 import { hasRichAnswer, compactRichAnswer, richAnswerText } from '@cindy/maker-shared/rich-answer';
 import type { RemoteAgentLimitUsage } from '../../shared/remoteAgentLimits.js';
@@ -905,6 +906,10 @@ function projectInvokeResultForTunnel(
     const kimiAgents = (['claude-code', 'codex', 'pi'] as const)
       .filter(agent => isKimiCodingProvider(p as unknown as import('@cindy/model-providers').Provider, agent));
     if (kimiAgents.length) rest.kimiCodingUsageAgents = kimiAgents;
+    delete rest.opencodeGoUsageAgents;
+    const opencodeGoAgents = (['claude-code', 'codex', 'pi'] as const)
+      .filter(agent => isOpenCodeGoProvider(p as unknown as import('@cindy/model-providers').Provider, agent));
+    if (opencodeGoAgents.length) rest.opencodeGoUsageAgents = opencodeGoAgents;
     rest.routing = projectRoutingForDisplay(p.routing);
     return rest;
   });
@@ -4833,6 +4838,11 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     const request = parseKimiUsageRequest((payload.args ?? [])[0]);
     if (!request) return { ok: false, error: { code: 'IPC_ERROR', message: '[INVALID_PARAMS] invalid Kimi usage query' } };
     return { ok: true, result: await readKimiCodingAccountUsage(request) };
+  }
+  if (payload.channel === 'maker:usage:opencode-go') {
+    const request = parseOpenCodeGoUsageRequest((payload.args ?? [])[0]);
+    if (!request) return { ok: false, error: { code: 'IPC_ERROR', message: '[INVALID_PARAMS] invalid OpenCode Go usage query' } };
+    return { ok: true, result: await readOpenCodeGoAccountUsage(request) };
   }
   if (payload.channel === 'maker:usage:xai-subscription' || payload.channel === 'maker:usage:claude-subscription') {
     const reader = payload.channel === 'maker:usage:xai-subscription'

@@ -663,6 +663,25 @@ describe('AgentIslandService native publishing', () => {
     headless.resetRuntimeState();
   });
 
+  it('account switch: reset drops the previous account quota and tells enabled subscribers, so the overview is released', async () => {
+    // 灵动岛余量跟随账号:reset 把 enabled 置 false 却不通知订阅者时,概览仍被持有,重新开启会先显示旧账号余量。
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn<(state: AgentIslandDisplayState) => boolean>(() => true);
+    const service = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish } });
+    syncEnabledForTest(service, publish);
+    const item = { id: 'a', logoSvg: '<svg/>', text: '50%', level: 'normal' as const, stale: false,
+      accessibilityLabel: 'a', lowest: true, width: 35, textWidth: 22 };
+    service.setQuota([item]);
+    expect(publish.mock.calls.at(-1)![0].quota).toEqual([item]);
+    const enabledChanges: boolean[] = [];
+    service.subscribeEnabled(enabled => enabledChanges.push(enabled));
+    service.resetRuntimeState();
+    expect(enabledChanges).toEqual([false]);
+    service.setEnabled(true);
+    expect(publish.mock.calls.at(-1)![0].quota).toBeUndefined();
+    service.resetRuntimeState();
+  });
+
   it('keeps group lane approvals but lets chat unread own the successful reply reminder', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn<(state: AgentIslandDisplayState) => boolean>(() => true);
