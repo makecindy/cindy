@@ -61,7 +61,7 @@
 |---|---|---|
 | 关掉浏览器后 Host 仍运行 | 通过 | Host 为独立 Node 进程；关闭页面后 `/health` 持续 `runtime.state=ready` |
 | 重开浏览器恢复会话 | 通过 | 刷新/新标签页后同一轮问答从共用 DB 恢复（`evidence/stage4-e2e.md`） |
-| Electron 不参与 Runtime | **未通过** | Desktop 仍构造并持有 Maker、执行插件与会话；尚未接入 Host API |
+| Electron 不参与 Runtime | **未通过（进行中）** | 已实现客户端模式（`CINDY_HOST_API`）：Desktop 不装配 Runtime，任务/消息/供应商/能力/输入队列改走 Host；其余通道显式失败。真机启动与剩余通道迁移未完成，见 `electron-client-mode.md` |
 
 ### 阶段 5（Electron 去核心化）的未完成清单
 

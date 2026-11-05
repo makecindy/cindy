@@ -459,6 +459,13 @@ import { cindyGhostSchemePrivilege } from './cindy-brain/runtime/electronSandbox
 import { fetchReleaseNotes, fetchReleaseNotesIndex } from './releaseNotesService';
 import { resolveWorkspacePathCached, resolveWorkspacePathBatchCached } from './pathResolver';
 import { registerLocalDbIpc } from './localDb/ipc/registerAll';
+import {
+  createHostClient,
+  registerHostDelegatedIpc,
+  resolveHostDelegation,
+  startHostEventBridge,
+  type HostDelegationConfig,
+} from './host-delegation';
 import { hasRecentWorkdir, listRecentWorkdirs } from './localDb/ipc/recentWorkdirs';
 import { getActiveCatalog } from './maker-host/active-catalog';
 import { resolveSessionContextWindow } from '../shared/sessionContextWindow';
@@ -1243,6 +1250,19 @@ import { registerGoalHandlers, broadcastGoalStatus } from './maker-ipc/goal.js';
 import { createLogger as createSchedulerLogger } from './logger.js';
 
 let makerProviderRefreshConfigured = false;
+
+/** Resolved once: client mode is a process-lifetime decision. */
+let hostDelegationConfig: HostDelegationConfig | null | undefined;
+function hostDelegation(): HostDelegationConfig | null {
+  if (hostDelegationConfig === undefined) {
+    hostDelegationConfig = resolveHostDelegation({
+      env: process.env,
+      userDataDir: app.getPath('userData'),
+    });
+  }
+  return hostDelegationConfig;
+}
+
 let startPendingAccountProviderReadiness: { ownerId: string; start: () => void } | null = null;
 
 function markMakerProviderRefreshConfigured(): void {
@@ -6580,13 +6600,27 @@ const registerIpcHandlers = () => {
       registerRelaunchBusyActivityIpc(readRelaunchActivitySources, {
         describeTurns: () => describeRelaunchTurns(() => listInTurnSessionIds(getMakerIfReady())),
       });
-      // getMakerCore() 首次调用触发 Maker 构造，同时发起自定义 MCP 初始加载。
-      // await 确保第一个会话的 mcpProviders 数组已填入已保存的自定义 MCP（P2 冷启动竞态修复）。
-      getMakerCore();
-      await waitForInitialCustomMcpRefresh();
+      // Client mode (CINDY_HOST_API): cindy-host owns the runtime, so this
+      // process must not assemble a second one. Channels outside the proxied
+      // allowlist fail loudly until they are migrated.
+      const delegation = hostDelegation();
+      if (delegation) {
+        console.log(`[bootstrap-electron] client mode: delegating to ${delegation.baseUrl}`);
+      } else {
+        // getMakerCore() 首次调用触发 Maker 构造，同时发起自定义 MCP 初始加载。
+        // await 确保第一个会话的 mcpProviders 数组已填入已保存的自定义 MCP（P2 冷启动竞态修复）。
+        getMakerCore();
+        await waitForInitialCustomMcpRefresh();
+      }
       // IPC handlers live for the whole process, while the concrete Maker is
       // replaced at every data-owner boundary. The facade resolves it lazily.
       const ipcMaker = createDynamicMaker(() => {
+        if (hostDelegation()) {
+          throwIpcError(
+            'UNSUPPORTED_CAPABILITY',
+            'cindy-host owns this profile; this channel is not proxied yet',
+          );
+        }
         if (isAppSessionBoundaryPending()) {
           throwIpcError(
             'PRECONDITION_FAILED',
@@ -10067,6 +10101,28 @@ app.on('ready', async () => {
       logStartupPhase('post-db-hooks-scheduled');
     },
   });
+  // Client mode: replace the covered channels with host proxies and relay the
+  // runtime event stream. Must run after every other registration so the proxy
+  // wins (one handler per channel).
+  const delegation = hostDelegation();
+  if (delegation) {
+    const hostClient = createHostClient(delegation);
+    const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain });
+    console.log(`[bootstrap-electron] client mode proxies: ${installed.join(', ')}`);
+    startHostEventBridge({
+      baseUrl: delegation.baseUrl,
+      token: delegation.token,
+      broadcast: (payload) => {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) win.webContents.send(MAKER_PUSH.EVENT, payload);
+        }
+      },
+      onError: (error) => {
+        console.warn('[bootstrap-electron] host event bridge disconnected:', error instanceof Error ? error.message : String(error));
+      },
+    });
+  }
+
   // dev-only IPC for embedding-host smoke testing (status + sync embed). 安全:
   // 内部自带 app.isPackaged 守卫, packaged build 下 register 是 no-op。
   registerDevEmbeddingIpc();
