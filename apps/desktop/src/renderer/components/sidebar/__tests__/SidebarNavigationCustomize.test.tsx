@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PermissionPrompt } from '@/components/new-chat/PermissionPrompt';
@@ -427,6 +428,37 @@ describe('sidebar navigation customization', () => {
       // Keys the panel does not take still reach them.
       fireEvent.keyDown(document.activeElement!, { key: 'Escape', shiftKey: true });
       expect(background).toHaveBeenCalledTimes(1);
+      expect(onDone).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener('keydown', background);
+    }
+  });
+
+  it('keeps focus in the panel after a click on a row label or its padding', async () => {
+    // Clicking non-focusable panel content moves focus to the nearest focusable
+    // ancestor. Without one that is the body, and the next Esc skips the panel's own
+    // handler: an earlier decision card denies first, or right-sidebar maximize also
+    // exits.
+    const onRespond = vi.fn();
+    render(
+      <PermissionPrompt
+        permission={{ requestId: 'req-1', toolName: 'Bash', input: { command: 'ls' } }}
+        onRespond={onRespond}
+      />,
+    );
+    const background = vi.fn();
+    window.addEventListener('keydown', background);
+    try {
+      const onDone = vi.fn();
+      render(<SidebarNavigationCustomize onDone={onDone} />);
+      const user = userEvent.setup();
+      await user.click(screen.getByText('sidebar.navigation.items.plugins'));
+      expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true);
+      await user.click(screen.getByRole('heading', { name: 'sidebar.navigation.customize.title' }));
+      expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true);
+      await user.keyboard('{Escape}');
+      expect(onRespond).not.toHaveBeenCalled();
+      expect(background).not.toHaveBeenCalled();
       expect(onDone).toHaveBeenCalledTimes(1);
     } finally {
       window.removeEventListener('keydown', background);

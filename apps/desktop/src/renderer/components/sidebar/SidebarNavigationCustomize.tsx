@@ -219,13 +219,18 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
     <div
       ref={rootRef}
       role="dialog"
+      // Focusable but not a tab stop: a click on a row label or the padding keeps focus
+      // in the dialog instead of dropping it to the body, so earlier window Esc owners
+      // (decision cards, right-sidebar maximize) keep yielding and the root still
+      // claims the next Esc. Initial focus goes to the first checkbox, which has a ring.
+      tabIndex={-1}
       aria-label={t('sidebar.navigation.customize.title')}
       onKeyDown={(event) => {
         if (dismissOnUnclaimedEscape(event.nativeEvent, rootRef.current, onDone)) {
           event.stopPropagation();
         }
       }}
-      className="mx-2 mb-2 rounded-xl border border-sidebar-border bg-[var(--surface-elevated)] p-3 shadow-[shadow:var(--shadow-menu)]"
+      className="mx-2 mb-2 rounded-xl border border-sidebar-border bg-[var(--surface-elevated)] p-3 shadow-[shadow:var(--shadow-menu)] outline-none"
     >
       <div className="mb-2 flex items-center justify-between gap-2 px-1">
         <h2 className="text-sm font-medium text-[var(--text-primary)]">
