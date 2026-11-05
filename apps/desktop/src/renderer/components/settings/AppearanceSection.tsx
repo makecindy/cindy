@@ -1,3 +1,4 @@
+import { appearanceSettings, UI_FONT_PRESETS, CODE_FONT_PRESETS, TERMINAL_FONT_PRESETS } from './AppearanceSection.settings-search';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SelectParts as Select } from '@/components/ui/select';
@@ -36,7 +37,7 @@ import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
 import { Slider } from '@/components/ui/slider';
 import { extractIpcError } from '@/utils/ipcError';
-import { FontFamilyPicker, type FontPreset } from './FontFamilyPicker';
+import { FontFamilyPicker } from './FontFamilyPicker';
 import { LayoutResetControl } from './LayoutResetControl';
 import {
   SETTINGS_CARD_CLASS,
@@ -68,51 +69,13 @@ const IMPORT_ERROR_KEYS: Record<string, string> = {
 
 type ThemeOption = 'light' | 'dark' | 'system';
 
-const THEME_OPTIONS: ThemeOption[] = ['light', 'dark', 'system'];
+const THEME_OPTIONS = appearanceSettings.modeLabel.options.map(({ value }) => value);
 
-const UI_FONT_PRESETS: FontPreset[] = [
-  {
-    id: 'default',
-    labelKey: 'settings.appearance.font.presetsUi.default',
-    family: '',
-  },
-  {
-    id: 'codexStyle',
-    labelKey: 'settings.appearance.font.presetsUi.codexStyle',
-    family: '-apple-system, BlinkMacSystemFont, "Segoe UI"',
-  },
-  {
-    id: 'harmonyOS',
-    labelKey: 'settings.appearance.font.presetsUi.harmonyOS',
-    family: '"HarmonyOS Sans SC"',
-  },
-];
 
-const CODE_FONT_PRESETS: FontPreset[] = [
-  {
-    id: 'default',
-    labelKey: 'settings.appearance.font.presetsCode.default',
-    family: '',
-  },
-  {
-    id: 'jetbrainsMono',
-    labelKey: 'settings.appearance.font.presetsCode.jetbrainsMono',
-    family: '"JetBrains Mono Variable", "JetBrains Mono"',
-  },
-];
 
-const TERMINAL_FONT_PRESETS: FontPreset[] = [
-  {
-    id: 'default',
-    labelKey: 'settings.appearance.font.presetsTerminal.default',
-    family: '',
-  },
-  {
-    id: 'jetbrainsMono',
-    labelKey: 'settings.appearance.font.presetsCode.jetbrainsMono',
-    family: '"JetBrains Mono Variable", "JetBrains Mono"',
-  },
-];
+
+
+
 
 const CODE_FONT_PREVIEW_SAMPLE =
   '// preview 0O 1lI\n' +
@@ -223,7 +186,7 @@ function ThemeCard({
   disabled = false,
 }: ThemeCardProps) {
   return (
-    <button
+    <button data-setting-id={appearanceSettings.modeLabel.id}
       type="button"
       role="radio"
       aria-checked={isSelected}
@@ -287,7 +250,7 @@ function LocalThemeIconButton({
 }) {
   return (
     <Tip text={label}>
-      <Button
+      <Button data-settings-search-action="Copy, reveal or refresh local theme files"
         variant="secondary"
         size="lg"
         className="w-9 px-0"
@@ -349,7 +312,7 @@ function FamilyDropdown({
       </p>
 
       <Select.Root value={selected.id} onValueChange={onSelect}>
-        <Select.Trigger
+        <Select.Trigger data-setting-id={appearanceSettings.themeLabel.id}
           aria-label={ariaLabel}
           className={cn(
             'flex h-9 w-[320px] max-w-full shrink-0 items-center justify-between gap-3 rounded-full border px-3.5 text-13 outline-none transition-colors',
@@ -643,12 +606,12 @@ export function AppearanceSection() {
         <section
           id="settings-search-target-appearance-theme"
           className="flex flex-col gap-[14px]"
-          aria-label={t('settings.appearance.themeLabel')}
+          aria-label={t(appearanceSettings.themeLabel.titleKey)}
         >
           {/* 主题卡片紧接页面标题,不再另设节标题 */}
-          <div id="settings-search-settings-appearance-themeLabel" className={SETTINGS_CARD_CLASS}>
+          <div id={appearanceSettings.themeLabel.targetId} className={SETTINGS_CARD_CLASS}>
             <FamilyDropdown
-              label={t('settings.appearance.themeLabel')}
+              label={t(appearanceSettings.themeLabel.titleKey)}
               ariaLabel={t('settings.appearance.themeAriaLabel')}
               families={families}
               selectedId={familyId}
@@ -663,11 +626,11 @@ export function AppearanceSection() {
             <div className="cindy-segmented-row px-4 py-4">
               <div className="flex min-w-0 flex-col gap-1">
                 <p
-                  id="settings-search-settings-appearance-modeLabel"
+                  id={appearanceSettings.modeLabel.targetId}
                   className={SETTINGS_ROW_LABEL_CLASS}
                   style={{ letterSpacing: '0.12px' }}
                 >
-                  {t('settings.appearance.modeLabel')}
+                  {t(appearanceSettings.modeLabel.titleKey)}
                 </p>
                 {lockedType ? (
                   <p className={SETTINGS_ROW_HINT_CLASS}>
@@ -681,12 +644,12 @@ export function AppearanceSection() {
               <div
                 className="flex shrink-0 gap-3"
                 role="radiogroup"
-                aria-label={t('settings.appearance.modeLabel')}
+                aria-label={t(appearanceSettings.modeLabel.titleKey)}
                 aria-disabled={lockedType ? true : undefined}
               >
                 <ThemeCard
                   value="light"
-                  label={t('settings.appearance.theme.light')}
+                  label={t(appearanceSettings.modeLabel.options[0].labelKey)}
                   ariaLabel={t('settings.appearance.themeAria.light')}
                   light={lightPalette}
                   dark={darkPalette}
@@ -698,7 +661,7 @@ export function AppearanceSection() {
 
                 <ThemeCard
                   value="dark"
-                  label={t('settings.appearance.theme.dark')}
+                  label={t(appearanceSettings.modeLabel.options[1].labelKey)}
                   ariaLabel={t('settings.appearance.themeAria.dark')}
                   light={lightPalette}
                   dark={darkPalette}
@@ -710,7 +673,7 @@ export function AppearanceSection() {
 
                 <ThemeCard
                   value="system"
-                  label={t('settings.appearance.theme.system')}
+                  label={t(appearanceSettings.modeLabel.options[2].labelKey)}
                   ariaLabel={t('settings.appearance.themeAria.system')}
                   light={lightPalette}
                   dark={darkPalette}
@@ -727,11 +690,11 @@ export function AppearanceSection() {
             <div className={cn(SETTINGS_ROW_CLASS, 'flex-wrap')}>
               <div className="flex min-w-0 flex-col gap-1">
                 <p
-                  id="settings-search-settings-appearance-localThemes-title"
+                  id={appearanceSettings.localThemesTitle.targetId}
                   className={SETTINGS_ROW_LABEL_CLASS}
                   style={{ letterSpacing: '0.12px' }}
                 >
-                  {t('settings.appearance.localThemes.title')}
+                  {t(appearanceSettings.localThemesTitle.titleKey)}
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -771,17 +734,17 @@ export function AppearanceSection() {
         <WallpaperSection />
 
         <section
-          id="settings-search-target-appearance-fonts"
+          id={appearanceSettings.fonts.targetId}
           className="flex flex-col gap-[14px]"
-          aria-label={t('settings.appearance.font.title')}
+          aria-label={t(appearanceSettings.fonts.titleKey)}
         >
-          <h3 className={SETTINGS_SECTION_TITLE_CLASS}>{t('settings.appearance.font.title')}</h3>
+          <h3 className={SETTINGS_SECTION_TITLE_CLASS}>{t(appearanceSettings.fonts.titleKey)}</h3>
 
           <div className={SETTINGS_CARD_CLASS}>
-            <div id="settings-search-settings-appearance-font-uiFamily-label" className="px-4 py-4">
-              <FontFamilyPicker
-                label={t('settings.appearance.font.uiFamily.label')}
-                description={t('settings.appearance.font.uiFamily.description')}
+            <div id={appearanceSettings.fontUiFamilyLabel.targetId} className="px-4 py-4">
+              <FontFamilyPicker data-setting-id={appearanceSettings.fontUiFamilyLabel.id}
+                label={t(appearanceSettings.fontUiFamilyLabel.titleKey)}
+                description={t(appearanceSettings.fontUiFamilyLabel.descriptionKey)}
                 ariaLabel={t('settings.appearance.font.uiFamily.aria')}
                 value={uiFamily}
                 presets={UI_FONT_PRESETS}
@@ -798,18 +761,18 @@ export function AppearanceSection() {
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p
-                    id="settings-search-settings-appearance-font-uiSize-label"
+                    id={appearanceSettings.fontUiSizeLabel.targetId}
                     className="text-13 font-medium text-[var(--settings-section-sublabel)]"
                     style={{ letterSpacing: '0.12px' }}
                   >
-                    {t('settings.appearance.font.uiSize.label')}
+                    {t(appearanceSettings.fontUiSizeLabel.titleKey)}
                   </p>
                   <p className="mt-1 text-12 leading-[1.4] text-[var(--text-secondary)]">
-                    {t('settings.appearance.font.uiSize.description')}
+                    {t(appearanceSettings.fontUiSizeLabel.descriptionKey)}
                   </p>
                 </div>
                 <Tip text={t('settings.appearance.font.reset')}>
-                  <Button
+                  <Button data-setting-id={appearanceSettings.fontUiSizeLabel.id}
                     variant="secondary"
                     className="w-8 px-0"
                     type="button"
@@ -823,7 +786,7 @@ export function AppearanceSection() {
               </div>
 
               <div className="flex items-center gap-3">
-                <Slider
+                <Slider data-setting-id={appearanceSettings.fontUiSizeLabel.id}
                   min={12}
                   max={24}
                   step={1}
@@ -833,9 +796,9 @@ export function AppearanceSection() {
                   }}
                   aria-label={t('settings.appearance.font.uiSize.aria')}
                 />
-                <input
+                <input data-setting-id={appearanceSettings.fontUiSizeLabel.id}
                   type="number"
-                  aria-label={t('settings.appearance.font.uiSize.label')}
+                  aria-label={t(appearanceSettings.fontUiSizeLabel.titleKey)}
                   min={12}
                   max={24}
                   step={1}
@@ -861,12 +824,12 @@ export function AppearanceSection() {
             <div className={SETTINGS_ROW_DIVIDER_CLASS} />
 
             <div
-              id="settings-search-settings-appearance-font-codeFamily-label"
+              id={appearanceSettings.fontCodeFamilyLabel.targetId}
               className="px-4 py-4"
             >
-              <FontFamilyPicker
-                label={t('settings.appearance.font.codeFamily.label')}
-                description={t('settings.appearance.font.codeFamily.description')}
+              <FontFamilyPicker data-setting-id={appearanceSettings.fontCodeFamilyLabel.id}
+                label={t(appearanceSettings.fontCodeFamilyLabel.titleKey)}
+                description={t(appearanceSettings.fontCodeFamilyLabel.descriptionKey)}
                 ariaLabel={t('settings.appearance.font.codeFamily.aria')}
                 value={codeFamily}
                 presets={CODE_FONT_PRESETS}
@@ -884,18 +847,18 @@ export function AppearanceSection() {
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p
-                    id="settings-search-settings-appearance-font-codeSize-label"
+                    id={appearanceSettings.fontCodeSizeLabel.targetId}
                     className="text-13 font-medium text-[var(--settings-section-sublabel)]"
                     style={{ letterSpacing: '0.12px' }}
                   >
-                    {t('settings.appearance.font.codeSize.label')}
+                    {t(appearanceSettings.fontCodeSizeLabel.titleKey)}
                   </p>
                   <p className="mt-1 text-12 leading-[1.4] text-[var(--text-secondary)]">
-                    {t('settings.appearance.font.codeSize.description')}
+                    {t(appearanceSettings.fontCodeSizeLabel.descriptionKey)}
                   </p>
                 </div>
                 <Tip text={t('settings.appearance.font.reset')}>
-                  <Button
+                  <Button data-setting-id={appearanceSettings.fontCodeSizeLabel.id}
                     variant="secondary"
                     className="w-8 px-0"
                     type="button"
@@ -909,7 +872,7 @@ export function AppearanceSection() {
               </div>
 
               <div className="flex items-center gap-3">
-                <Slider
+                <Slider data-setting-id={appearanceSettings.fontCodeSizeLabel.id}
                   min={10}
                   max={24}
                   step={1}
@@ -919,9 +882,9 @@ export function AppearanceSection() {
                   }}
                   aria-label={t('settings.appearance.font.codeSize.aria')}
                 />
-                <input
+                <input data-setting-id={appearanceSettings.fontCodeSizeLabel.id}
                   type="number"
-                  aria-label={t('settings.appearance.font.codeSize.label')}
+                  aria-label={t(appearanceSettings.fontCodeSizeLabel.titleKey)}
                   min={10}
                   max={24}
                   step={1}
@@ -947,12 +910,12 @@ export function AppearanceSection() {
             <div className={SETTINGS_ROW_DIVIDER_CLASS} />
 
             <div
-              id="settings-search-settings-appearance-font-terminalFamily-label"
+              id={appearanceSettings.fontTerminalFamilyLabel.targetId}
               className="px-4 py-4"
             >
-              <FontFamilyPicker
-                label={t('settings.appearance.font.terminalFamily.label')}
-                description={t('settings.appearance.font.terminalFamily.description')}
+              <FontFamilyPicker data-setting-id={appearanceSettings.fontTerminalFamilyLabel.id}
+                label={t(appearanceSettings.fontTerminalFamilyLabel.titleKey)}
+                description={t(appearanceSettings.fontTerminalFamilyLabel.descriptionKey)}
                 ariaLabel={t('settings.appearance.font.terminalFamily.aria')}
                 value={terminalFamily}
                 presets={TERMINAL_FONT_PRESETS}
@@ -969,18 +932,18 @@ export function AppearanceSection() {
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p
-                    id="settings-search-settings-appearance-font-terminalSize-label"
+                    id={appearanceSettings.fontTerminalSizeLabel.targetId}
                     className="text-13 font-medium text-[var(--settings-section-sublabel)]"
                     style={{ letterSpacing: '0.12px' }}
                   >
-                    {t('settings.appearance.font.terminalSize.label')}
+                    {t(appearanceSettings.fontTerminalSizeLabel.titleKey)}
                   </p>
                   <p className="mt-1 text-12 leading-[1.4] text-[var(--text-secondary)]">
-                    {t('settings.appearance.font.terminalSize.description')}
+                    {t(appearanceSettings.fontTerminalSizeLabel.descriptionKey)}
                   </p>
                 </div>
                 <Tip text={t('settings.appearance.font.reset')}>
-                  <Button
+                  <Button data-setting-id={appearanceSettings.fontTerminalSizeLabel.id}
                     variant="secondary"
                     className="w-8 px-0"
                     type="button"
@@ -994,7 +957,7 @@ export function AppearanceSection() {
               </div>
 
               <div className="flex items-center gap-3">
-                <Slider
+                <Slider data-setting-id={appearanceSettings.fontTerminalSizeLabel.id}
                   min={APPEARANCE_LIMITS.terminalSize.min}
                   max={APPEARANCE_LIMITS.terminalSize.max}
                   step={1}
@@ -1004,9 +967,9 @@ export function AppearanceSection() {
                   }}
                   aria-label={t('settings.appearance.font.terminalSize.aria')}
                 />
-                <input
+                <input data-setting-id={appearanceSettings.fontTerminalSizeLabel.id}
                   type="number"
-                  aria-label={t('settings.appearance.font.terminalSize.label')}
+                  aria-label={t(appearanceSettings.fontTerminalSizeLabel.titleKey)}
                   min={APPEARANCE_LIMITS.terminalSize.min}
                   max={APPEARANCE_LIMITS.terminalSize.max}
                   step={1}
@@ -1034,38 +997,34 @@ export function AppearanceSection() {
         {/* Sidebar view modes — 置顶段(三态) / 主列表(两态)分离(sidebar-redesign B 期)。
           独立卡片，沿用 NotificationSection 的 label+hint+Switch 行模式。 */}
         <section
-          id="settings-search-target-appearance-sidebar"
+          id={appearanceSettings.sidebar.targetId}
           className="flex flex-col gap-[14px]"
-          aria-label={t('settings.appearance.sidebarAndPanels')}
+          aria-label={t(appearanceSettings.sidebar.titleKey)}
         >
           <h3 className={SETTINGS_SECTION_TITLE_CLASS}>
-            {t('settings.appearance.sidebarAndPanels')}
+            {t(appearanceSettings.sidebar.titleKey)}
           </h3>
 
           <div className={SETTINGS_CARD_CLASS}>
             <div className="cindy-segmented-row px-4 py-4">
               <div className="flex min-w-0 flex-col gap-1">
                 <p
-                  id="settings-search-settings-appearance-sidebarCardMode-label"
+                  id={appearanceSettings.sidebarCardModeLabel.targetId}
                   className="text-13 font-medium text-[var(--settings-section-sublabel)]"
                   style={{ letterSpacing: '0.12px' }}
                 >
-                  {t('settings.appearance.sidebarCardMode.label')}
+                  {t(appearanceSettings.sidebarCardModeLabel.titleKey)}
                 </p>
                 <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                  {t('settings.appearance.sidebarCardMode.hint')}
+                  {t(appearanceSettings.sidebarCardModeLabel.descriptionKey)}
                 </p>
               </div>
 
-              <SegmentedControl
+              <SegmentedControl data-setting-id={appearanceSettings.sidebarCardModeLabel.id}
                 aria-label={t('settings.appearance.sidebarCardMode.aria')}
                 value={sidebarViewMode}
                 onValueChange={setSidebarViewMode}
-                options={[
-                  { value: 'text', label: t('ccAgent.sidebar.viewStyleList') },
-                  { value: 'card', label: t('ccAgent.sidebar.viewStyleCard') },
-                  { value: 'list', label: t('ccAgent.sidebar.viewStyleListWide') },
-                ]}
+                options={appearanceSettings.sidebarCardModeLabel.options.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
               />
             </div>
 
@@ -1074,25 +1033,22 @@ export function AppearanceSection() {
             <div className="cindy-segmented-row px-4 py-4">
               <div className="flex min-w-0 flex-col gap-1">
                 <p
-                  id="settings-search-settings-appearance-sidebarMainListMode-label"
+                  id={appearanceSettings.sidebarMainListModeLabel.targetId}
                   className="text-13 font-medium text-[var(--settings-section-sublabel)]"
                   style={{ letterSpacing: '0.12px' }}
                 >
-                  {t('settings.appearance.sidebarMainListMode.label')}
+                  {t(appearanceSettings.sidebarMainListModeLabel.titleKey)}
                 </p>
                 <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                  {t('settings.appearance.sidebarMainListMode.hint')}
+                  {t(appearanceSettings.sidebarMainListModeLabel.descriptionKey)}
                 </p>
               </div>
 
-              <SegmentedControl
+              <SegmentedControl data-setting-id={appearanceSettings.sidebarMainListModeLabel.id}
                 aria-label={t('settings.appearance.sidebarMainListMode.aria')}
                 value={sidebarMainViewMode}
                 onValueChange={setSidebarMainViewMode}
-                options={[
-                  { value: 'text', label: t('ccAgent.sidebar.viewStyleList') },
-                  { value: 'list', label: t('ccAgent.sidebar.viewStyleListWide') },
-                ]}
+                options={appearanceSettings.sidebarMainListModeLabel.options.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
               />
             </div>
 

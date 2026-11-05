@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils';
 import { isLightboxCovered } from '@/lib/lightboxLayer';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
-import { getTextPreviewSearchHost, isFindInPageClaimed } from './findInPageOwnership';
+import { getTextPreviewSearchHost, isFindInPageClaimed, isPreviewPopupKeyEvent } from './findInPageOwnership';
 import { acquirePageTextAccess, requestPageTextNavigation } from '@/lib/pageTextAccess';
 
 const MATCH_HIGHLIGHT_NAME = 'cindy-find-in-page-match';
@@ -570,19 +570,10 @@ export function FindInPageBar() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || isLightboxCovered(previewHost)) return;
       // Menus own Escape whether portaled to the body or inside fullscreen media.
-      const target = event.target;
-      const popup = target instanceof Element
-        ? target.closest('[role="menu"], [role="listbox"], [data-radix-popper-content-wrapper]')
-        : null;
       // Tooltips keep focus on their trigger, including when only hovered.
       // Follow the preview's active descriptions instead of treating a covered
       // page's unrelated tooltip as the foreground owner.
-      const hasPreviewTooltip = [...previewHost.querySelectorAll('[aria-describedby]')].some(element =>
-        (element.getAttribute('aria-describedby') ?? '').split(/\s+/).some(id =>
-          document.getElementById(id)?.getAttribute('role') === 'tooltip',
-        ),
-      );
-      if (popup || hasPreviewTooltip) return;
+      if (isPreviewPopupKeyEvent(event, previewHost)) return;
       if (event.isComposing || event.keyCode === 229) {
         // Leave the IME's default cancellation intact, without dismissing the
         // search or the preview through a later Escape listener.

@@ -350,3 +350,7 @@ export * from './providerDetection.js';
 
 export { validDiscoveredModelSource, modelSupplierLabel } from './modelSource.js';
 export type { DiscoveredModelSource } from './modelSource.js';
+export {
+  markedSelectionAliasGroups, projectSelectionAliases, inheritSelectionAliasPreferences,
+  selectionAliasTargets, type SelectionAliasGroup, type SelectionAliasPreferences,
+} from './selectionAliasGroups.js';

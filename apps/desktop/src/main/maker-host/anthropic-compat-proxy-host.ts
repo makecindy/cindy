@@ -28,6 +28,7 @@ import {
   createEncryptedContentRecoveryRule,
   createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
+  createToolReferenceRecoveryRule,
   createXaiModelInputRecoveryRule,
   createXaiModelInputSanitizeTransform,
   createAnthropicEffortCompatibilityRule,
@@ -1331,6 +1332,7 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
           onRetry: (threadId, model) => emptyAssistantStripController.markActive(threadId, model),
         }),
         createToolUseProviderSpecificFieldsRecoveryRule(),
+        createToolReferenceRecoveryRule(),
         // tool 配对断裂 400(moonshot `tool_call_id is not found` / Anthropic
         // `unexpected tool_use_id` / `tool_use ids were found without tool_result`
         // / OpenAI 系 wording)→ 组合结构修复重发,always-on。
