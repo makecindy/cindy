@@ -864,9 +864,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       return { ...payload, connectUrl: connectLink.url };
     },
     normalizeBindingPayload: (payload) => {
-      // 「打开飞书机器人」在任何状态下(通常是 confirmed)都只认飞书 / Lark 的 AppLink;
-      // 不合规的链接连同 open_provider 动作一起去掉, 设置页不出现点了打不开的按钮。
-      const remediationUrl = feishuBotUrlOrNull(payload.remediationUrl);
+      // 「打开飞书机器人」在任何状态下(通常是 confirmed)都只认飞书 / Lark 的 AppLink, 且必须
+      // 指向这次绑定的应用(scopeId): 多个组织的应用共用同一个服务, 只看主机挡不住别家机器人。
+      // 不合规的链接连同 open_provider 动作一起去掉, 设置页不出现点了打不开或打错的按钮。
+      const remediationUrl = feishuBotUrlOrNull(payload.remediationUrl, payload.scopeId);
       return {
         ...payload,
         remediationUrl,
@@ -878,7 +879,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         return bindingView.connectUrl;
       }
       if (action === 'provider' && bindingView.actions.includes('open_provider')) {
-        return feishuBotUrlOrNull(bindingView.remediationUrl);
+        return feishuBotUrlOrNull(bindingView.remediationUrl, bindingView.scopeId);
       }
       return null; // 第一期不提供加群链接(群里 @ 机器人即可), add-to-group 恒不可用
     },

@@ -155,11 +155,16 @@ export function parseFeishuBotUrl(input: string): string {
   return url.toString();
 }
 
-/** null-safe variant for server-supplied remediation URLs (invalid → null). */
-export function feishuBotUrlOrNull(input: string | null): string | null {
-  if (input === null) return null;
+/**
+ * null-safe variant for server-supplied remediation URLs. The service is shared by many
+ * organizations' apps, so the link must also open the bot of the binding's own app
+ * (`appId`); invalid links and other apps' bots → null.
+ */
+export function feishuBotUrlOrNull(input: string | null, appId: string | null): string | null {
+  if (input === null || appId === null) return null;
   try {
-    return parseFeishuBotUrl(input);
+    const url = parseFeishuBotUrl(input);
+    return new URL(url).searchParams.get('appId') === appId ? url : null;
   } catch {
     return null;
   }

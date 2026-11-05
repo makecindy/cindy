@@ -101,10 +101,13 @@ describe('Feishu bot AppLink', () => {
       VALID_BOT.replace('https://applink.feishu.cn', 'https://applink.feishu.cn:443'),
     ]) {
       expect(() => parseFeishuBotUrl(bad)).toThrow(/Feishu bot link|Feishu link/);
-      expect(feishuBotUrlOrNull(bad)).toBeNull();
+      expect(feishuBotUrlOrNull(bad, 'cli_a1b2c3d4e5f6')).toBeNull();
     }
-    expect(feishuBotUrlOrNull(null)).toBeNull();
-    expect(feishuBotUrlOrNull(VALID_BOT)).toBe(VALID_BOT);
+    expect(feishuBotUrlOrNull(null, 'cli_a1b2c3d4e5f6')).toBeNull();
+    expect(feishuBotUrlOrNull(VALID_BOT, 'cli_a1b2c3d4e5f6')).toBe(VALID_BOT);
+    // 多个组织共用服务: 别家应用的机器人链接、或不知道绑定的是哪个应用时都不给。
+    expect(feishuBotUrlOrNull(VALID_BOT, 'cli_other_org')).toBeNull();
+    expect(feishuBotUrlOrNull(VALID_BOT, null)).toBeNull();
   });
 });
 

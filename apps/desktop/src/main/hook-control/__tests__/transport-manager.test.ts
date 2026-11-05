@@ -3336,7 +3336,12 @@ describe('官方飞书 / Lark provider lane', () => {
     opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, remediationUrl: 'https://bot.example.com/cindy' }), () => true);
     expect(manager.snapshot().feishu.binding).toMatchObject({ remediationUrl: null, actions: ['revoke'] });
 
-    const appLink = 'https://applink.feishu.cn/client/bot/open?appId=cli_a1b2c3d4e5f6';
+    // 指向别家组织应用的机器人: 主机合规也不给(多个组织共用服务)。
+    const otherApp = 'https://applink.feishu.cn/client/bot/open?appId=cli_other_org';
+    opts.onMessage(makeProviderBindUpdate({ ...FEISHU_CONFIRMED, remediationUrl: otherApp }), () => true);
+    expect(manager.snapshot().feishu.binding).toMatchObject({ remediationUrl: null, actions: ['revoke'] });
+
+    const appLink = `https://applink.feishu.cn/client/bot/open?appId=${FEISHU_CONFIRMED.scopeId}`;
     opts.onMessage(makeProviderBindUpdate({ ...FEISHU_CONFIRMED, remediationUrl: appLink }), () => true);
     expect(manager.snapshot().feishu.binding).toMatchObject({
       remediationUrl: appLink,
