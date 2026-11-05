@@ -121,6 +121,10 @@ export function createHostServer(deps) {
           send(response, 200, await deps.historyView(String(body.sessionId ?? ''), body.before ?? null));
           return;
         }
+        if (url.pathname === '/api/messages/create') {
+          send(response, 201, await deps.createMessage(String(body.sessionId ?? ''), body.message ?? {}));
+          return;
+        }
         // The preload contract for `localDb.messages.list()` is a bare array.
         if (url.pathname === '/api/messages/list') {
           send(response, 200, await deps.history(String(body.sessionId ?? ''), Number(body.limit ?? 200)));
@@ -132,6 +136,21 @@ export function createHostServer(deps) {
         if (url.pathname === '/api/usage/model-pricing') { send(response, 200, await deps.modelPricing()); return; }
         if (url.pathname === '/api/usage/reference-model-pricing') { send(response, 200, deps.referenceModelPricing()); return; }
         if (url.pathname === '/api/agents') { send(response, 200, deps.agents()); return; }
+        if (url.pathname === '/api/input/projection') { send(response, 200, deps.input.projection(String(body.sessionId ?? ''))); return; }
+        if (url.pathname === '/api/input/enqueue') {
+          send(response, 200, await deps.input.enqueue(String(body.sessionId ?? ''), body.item ?? {}));
+          return;
+        }
+        if (url.pathname === '/api/input/stop') { send(response, 200, await deps.input.stop(String(body.sessionId ?? ''))); return; }
+        if (url.pathname === '/api/input/steer') {
+          send(response, 200, { ok: await deps.input.steer(String(body.sessionId ?? ''), body.item ?? {}) });
+          return;
+        }
+        if (url.pathname === '/api/input/remove') {
+          send(response, 200, await deps.input.remove(String(body.sessionId ?? ''), String(body.clientId ?? '')));
+          return;
+        }
+        if (url.pathname === '/api/input/resume') { send(response, 200, await deps.input.resume(String(body.sessionId ?? ''))); return; }
         if (url.pathname === '/api/agent-commands') { send(response, 200, await deps.agentCommands(body)); return; }
         if (url.pathname === '/api/agent-skills') { send(response, 200, await deps.agentSkills(body)); return; }
         if (url.pathname === '/api/capabilities') {
@@ -145,6 +164,32 @@ export function createHostServer(deps) {
           return;
         }
         send(response, 404, { error: 'not_found' });
+        return;
+      }
+
+      if (request.method === 'GET' && url.pathname === '/events') {
+        if (!isWebAuthorized(request, deps)) {
+          send(response, 401, { error: 'unauthorized' });
+          return;
+        }
+        response.writeHead(200, {
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-store',
+          connection: 'keep-alive',
+        });
+        response.write(': connected\n\n');
+        const unsubscribe = deps.events.subscribe((event) => {
+          if (response.writableEnded) return;
+          response.write(`data: ${JSON.stringify(event)}\n\n`);
+        });
+        const keepAlive = setInterval(() => {
+          if (response.writableEnded) return;
+          response.write(': ping\n\n');
+        }, 15_000);
+        request.on('close', () => {
+          clearInterval(keepAlive);
+          unsubscribe();
+        });
         return;
       }
 

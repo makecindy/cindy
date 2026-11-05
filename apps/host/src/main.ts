@@ -30,8 +30,10 @@ import { listActiveSessions } from './sessions.mjs';
 import { createPreparedLinuxCredentialStore } from './credentials/store.mjs';
 import { createHostServer } from './server.mjs';
 import { createChatHandler } from './chat.mjs';
-import { sessionToCamel } from '../../desktop/src/main/localDb/mapper.ts';
-import { sessions as sessionTable } from '../../desktop/src/main/localDb/schema.js';
+import { createEventHub } from './events.mjs';
+import { createInputQueue } from './agent/input-queue.mjs';
+import { messageToCamel, sessionToCamel } from '../../desktop/src/main/localDb/mapper.ts';
+import { messages as messageTable, sessions as sessionTable } from '../../desktop/src/main/localDb/schema.js';
 import { eq } from 'drizzle-orm';
 
 const DEFAULT_VOICE_INPUT_SETTINGS = getDefaultVoiceInputSettings();
@@ -218,6 +220,30 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   }
 }
 
+const eventHub = createEventHub();
+const readSessionForRun = async (sessionId: string) => {
+  const rows = await getDbClient().drizzle.select().from(sessionTable)
+    .where(eq(sessionTable.id, sessionId)).limit(1);
+  const row = rows[0];
+  if (!row || row.status !== 'active') throw new Error('session is not active');
+  return {
+    id: row.id,
+    agentKind: row.agentKind,
+    model: row.model,
+    workingDir: row.workingDir,
+    providerId: row.providerId,
+  };
+};
+const inputQueue = createInputQueue({
+  getMaker: () => {
+    if (!agentGraph) throw new Error('agent runtime is not ready');
+    return agentGraph.maker;
+  },
+  hub: eventHub,
+  readSession: readSessionForRun,
+  sent: (sessionId: string) => provisionalSessionIds.delete(sessionId),
+});
+
 const apiToken = readOrCreateApiToken(resolveHostDataDir());
 // Per-boot cookie for the bundled web client; the bearer remains the CLI path.
 const webSession = randomBytes(24).toString('base64url');
@@ -371,6 +397,8 @@ const server = createHostServer({
   modelPricing: async () => null,
   referenceModelPricing: () => ({}),
   agents: () => agentGraph?.agents ?? [],
+  events: eventHub,
+  input: inputQueue,
   agentCommands: async (input: { agentKind?: string }) => {
     const agent = agentGraph?.instances?.[String(input.agentKind ?? '')];
     if (!agent) return { success: false, error: `Agent '${String(input.agentKind ?? '')}' is not registered` };
@@ -402,6 +430,36 @@ const server = createHostServer({
       capabilities: { ...capabilities, availableModels },
       availableModels,
     };
+  },
+  createMessage: async (sessionId: string, input: Record<string, unknown>) => {
+    const clientId = typeof input.clientId === 'string' ? input.clientId : '';
+    const role = input.role;
+    if (!clientId) throw new Error('clientId is required');
+    if (role !== 'user' && role !== 'assistant' && role !== 'system' && role !== 'tool') {
+      throw new Error('unsupported message role');
+    }
+    const content = input.content;
+    if (content === undefined) throw new Error('content is required');
+    const id = typeof input.id === 'string' && input.id ? input.id : randomBytes(16).toString('hex');
+    const createdAt = typeof input.createdAt === 'string'
+      ? Date.parse(input.createdAt) || Date.now()
+      : typeof input.createdAt === 'number' ? input.createdAt : Date.now();
+    await getDbClient().drizzle.insert(messageTable).values({
+      id,
+      clientId,
+      sessionId,
+      role,
+      content: JSON.stringify(content),
+      toolUseId: typeof input.toolUseId === 'string' ? input.toolUseId : null,
+      createdAt,
+      agentMeta: input.agentMeta ? JSON.stringify(input.agentMeta) : null,
+      agentKind: typeof input.agentKind === 'string' ? input.agentKind : null,
+    });
+    const rows = await getDbClient().drizzle.select().from(messageTable)
+      .where(eq(messageTable.id, id)).limit(1);
+    const row = rows[0];
+    if (!row) throw new Error('created message is unavailable');
+    return messageToCamel(row as never);
   },
   // Usage totals come from the same session row the task list reads; the
   // per-message breakdown stays with the windowed reader (host TODO).

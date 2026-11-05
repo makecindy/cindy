@@ -168,6 +168,21 @@
       if (!capabilitiesCache.has(key)) capabilitiesCache.set(key, rpc('/capabilities', { agentKind: key }));
       return capabilitiesCache.get(key);
     },
+    'maker.input.getProjection': (args) => {
+      if (window.__noProjection === true) return Promise.reject(new Error('projection disabled for diagnosis'));
+      return rpc('/input/projection', { sessionId: args?.[0] });
+    },
+    'maker.input.enqueue': (args) => {
+      ensureEventStream();
+      return rpc('/input/enqueue', { sessionId: args?.[0], item: args?.[1] ?? {} });
+    },
+    'maker.input.stop': (args) => rpc('/input/stop', { sessionId: args?.[0] }),
+    'maker.input.steer': async (args) => {
+      const result = await rpc('/input/steer', { sessionId: args?.[0], item: args?.[1] ?? {} });
+      return Boolean(result?.ok);
+    },
+    'maker.input.remove': (args) => rpc('/input/remove', { sessionId: args?.[0], clientId: args?.[1] }),
+    'maker.input.resume': (args) => rpc('/input/resume', { sessionId: args?.[0] }),
     'maker.listAvailableAgents': () => rpc('/agents'),
     'maker.listAgentCommands': (args) => rpc('/agent-commands', { agentKind: args?.[0], sessionId: args?.[1]?.sessionId }),
     'maker.listAgentSkills': (args) => rpc('/agent-skills', { agentKind: args?.[0], workingDir: args?.[1]?.workingDir, sessionId: args?.[1]?.sessionId, forceReload: args?.[1]?.forceReload === true }),
@@ -305,6 +320,7 @@
     'localDb.sessions.list': () => rpc('/sessions/list'),
     'localDb.sessions.messages': async (args) => rpc('/sessions/messages', args),
     'localDb.rightSidebarTabs.list': () => STATIC.rightSidebarTabs,
+    'localDb.messages.create': (args) => rpc('/messages/create', { sessionId: args?.[0], message: args?.[1] ?? {} }),
     'localDb.messages.list': (args) => rpc('/messages/list', { sessionId: args?.[0], limit: args?.[1]?.limit }),
     'localDb.messages.estimatedSessionValue': (args) => rpc('/messages/estimated-value', { sessionId: args?.[0] }),
     'localDb.messages.historyView': (args) => rpc('/messages/history-view', { sessionId: args?.[0], before: args?.[1]?.before ?? null }),
@@ -345,6 +361,48 @@
     isPackaged: false,
     locale: 'en',
   };
+
+  /**
+   * One long-lived SSE connection carries every runtime event; `maker.onEvent`
+   * subscribers receive them through the same fan-out the preload provides.
+   */
+  let eventStreamStarted = false;
+  function ensureEventStream() {
+    if (eventStreamStarted) return;
+    eventStreamStarted = true;
+    void (async () => {
+      for (;;) {
+        try {
+          const response = await fetch('/events', { credentials: 'same-origin' });
+          if (!response.ok || !response.body) throw new Error(`events ${response.status}`);
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            let index;
+            while ((index = buffer.indexOf('\n\n')) !== -1) {
+              const chunk = buffer.slice(0, index);
+              buffer = buffer.slice(index + 2);
+              const line = chunk.split('\n').find((entry) => entry.startsWith('data: '));
+              if (!line) continue;
+              try {
+                const parsed = JSON.parse(line.slice(6));
+                (window.__hostEvents ??= []).push(parsed);
+                if (window.__hostEvents.length > 200) window.__hostEvents.shift();
+                emit('maker.onEvent', parsed);
+              } catch { /* ignore partial */ }
+            }
+          }
+        } catch {
+          // Reconnect with a short backoff; the host keeps the task running.
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+      }
+    })();
+  }
 
   /** Event listeners registered through `onX` members. */
   const listeners = new Map();
