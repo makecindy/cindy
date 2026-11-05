@@ -1,4 +1,15 @@
 {
+  "pluginUi": {
+    "renderer": "Darstellung",
+    "original": "Original",
+    "unavailable": "Die Plugin-Steuerelemente sind nicht verfügbar. Aktionen sind deaktiviert.",
+    "outcome-unknown": "Das Ergebnis ist unbestätigt. Prüfe den aktuellen Zustand des Plugins.",
+    "rejected": "Das Plugin hat diese Aktion nicht ausgeführt. Deine Eingabe bleibt erhalten.",
+    "draftChanged": "Deine Eingabe hat sich geändert. Die Änderung des Plugins wurde nicht übernommen.",
+    "editorUnavailable": "Dieses Eingabefeld ist nicht verfügbar. Die Änderung des Plugins wurde nicht übernommen.",
+    "more": "Mehr",
+    "close": "Schließen"
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "Kontingent aktualisieren",
@@ -2351,6 +2362,9 @@
     "agentIsland": {
       "title": "Agent Island",
       "unsupported": "Agent Island erfordert macOS 14 oder neuer.",
+      "subtleRemindersLabel": "Dezente Hinweise",
+      "subtleRemindersHint": "Bei neuen Nachrichten, Rückfragen oder Fehlern ändert sich das Symbol, statt eine Benachrichtigungskarte unter der Insel einzublenden. Per Klick auf die Insel öffnet sich die vollständige Aufgabenliste.",
+      "subtleRemindersFailed": "Die Hinweiseinstellungen konnten nicht gespeichert werden. Bitte versuche es erneut.",
       "enableLabel": "Agent Island anzeigen",
       "enableHint": "Zeigt laufende, zu beantwortende und ungelesene erledigte Aufgaben oben im Display an. Durch die Aktivierung werden die entsprechenden Systembenachrichtigungen unterdrückt, um doppelte Warnungen zu vermeiden.",
       "enableAria": "Agent Island ein-/ausschalten",
@@ -3970,6 +3984,7 @@
             "hint": "Gilt für die Images-Verbindung von {{agent}}. Nur Funktionen angeben, die die API tatsächlich unterstützt. Nach dem Speichern die Art-Details erneut öffnen."
           },
           "capabilityHint": "Verwendet von diesem Anbieter deklarierte Funktionen. Die Bildunterstützung greift auf die Modellbenennung zurück, wenn sie nicht deklariert ist.",
+          "imageInputDefault": "{{value}} (Standard)",
           "imageInput": "Bildeingabe",
           "imageInputMixed": "Je nach Engine unterschiedlich",
           "supported": "Unterstützt",
@@ -5671,6 +5686,7 @@
           "checking": "Nach Updates wird gesucht…",
           "upToDate": "Auf dem neuesten Stand",
           "checkFailed": "Suche nach Updates fehlgeschlagen",
+          "rateLimited": "GitHub begrenzt gerade die Update-Abfragen",
           "lastChecked": "Zuletzt geprüft: {{time}}",
           "check": "Nach Updates suchen",
           "retry": "Erneut versuchen",
@@ -7707,6 +7723,8 @@
         "skill": "Fügt deinen KI-Assistenten den Skill „{{name}}“ hinzu",
         "skillDetail": "Ein Skill ist eine Anweisungsdatei, die die KI in Claude Code und Codex projektübergreifend lädt und wie eigene Anweisungen mit deinen vollen Berechtigungen befolgt – sie ist nicht auf die Sandbox dieses Plugins beschränkt. Der Skill bleibt verfügbar, solange das Plugin aktiviert ist, und wird beim Deaktivieren oder Deinstallieren entfernt. Wenn du das Plugin nur für einen einzelnen Ordner ausschaltest, wird der Skill nicht ausgeblendet. Der vollständige Skill-Text kann hier nicht als Vorschau angezeigt werden – installiere nur Plugins, denen du vertraust.",
         "routineEvents": "Routineereignisse",
+        "nativeUi": "Steuerelemente zu Aufgaben hinzufügen",
+        "nativeTabView": "Ansicht „{{title}}“ öffnen",
         "mcpUi": "Interaktive Seiten in der Unterhaltung anzeigen",
         "mcpUiDomains": "Netzwerkdomains der Seiten: {{domains}}",
         "mcpAppOnly": "Nur Seite",
@@ -13017,7 +13035,7 @@
       "codexUsageLimit": "Das verbundene Codex-Konto hat sein Nutzungslimit erreicht. Warte, bis das Limit zurückgesetzt wird, oder wechsle vor dem erneuten Versuch zu einem anderen verfügbaren Konto.",
       "gatewayQuotaExhausted": "Dein Cindy AI-Guthaben ist aufgebraucht. Lade Guthaben auf, um fortzufahren.",
       "viewBalance": "Guthaben anzeigen",
-      "viewBalanceTitle": "Öffne „Nutzung & Abrechnung“, um dein Guthaben zu prüfen und aufzuladen",
+      "viewBalanceTitle": "Öffne „Nutzung und Abrechnung“, um dein Guthaben zu prüfen und aufzuladen",
       "credentialSwitchBusy": "Eine andere Codex-Aufgabe läuft noch. Daher kann der Anbieter für diese Sitzung noch nicht angewendet werden (der gemeinsam genutzte Codex-Prozess muss neu gestartet werden). Versuch es erneut, sobald diese Aufgaben abgeschlossen sind.",
       "accountBoundaryPending": "Cindy stellt den Kontostatus noch um. Daher kann diese Aufgabe noch nicht starten. Warte kurz und klicke dann auf „Erneut versuchen“. Falls das weiterhin passiert, starte Cindy neu.",
       "codexThreadStale": "Der Codex-Authentifizierungsmodus wurde geändert – diese Sitzung kann nicht fortgesetzt werden. Starte eine neue Sitzung, um ihn anzuwenden.",
@@ -13406,7 +13424,7 @@
         "empty": "Keine Befehle verfügbar."
       },
       "cost": {
-        "title": "Sitzungskosten",
+        "title": "Sitzungsnutzung",
         "tokensUsed": "Verwendete Tokens (dieser Dialogschritt)"
       },
       "pwd": {
