@@ -124,6 +124,12 @@ export function ComposerEnhancePromptButton({
   const enhance = useCallback(async () => {
     if (!editor || busy || enhanceUnavailableReason) return;
     const originalDoc = editor.getJSON();
+    // Decide eligibility from the document itself, not from a rendered flag that
+    // may lag behind the editor state.
+    if (documentHasStructuredNodes(originalDoc)) {
+      toast.warning(t('newChat.composerEnhance.unsupported'));
+      return;
+    }
     const originalFingerprint = documentFingerprint(originalDoc);
     const draft = editor.getText().trim();
     if (!draft) return;
@@ -168,6 +174,10 @@ export function ComposerEnhancePromptButton({
     if (!editor || undoState === null || busy || disabled) return;
     if (!mounted.current || latest.current.disabled) return;
     if (undoState.editor !== editor) return;
+    // The undo record belongs to the draft it was created for. Clearing it on a
+    // draft change is a convenience, not the guard: assert the identity here.
+    if (undoState.draftKey !== latest.current.draftKey) return;
+    if (latest.current.editor !== editor) return;
     if (editor.isDestroyed || editorIsComposing(editor)) return;
     if (documentFingerprint(editor.getJSON()) !== undoState.applied) {
       toast.warning(t('newChat.composerEnhance.undoUnavailable'));
@@ -186,8 +196,20 @@ export function ComposerEnhancePromptButton({
     'border border-[var(--border-default)] bg-[var(--composer-pill-bg)] text-[var(--composer-pill-icon)]',
     'transition-[background-color,transform] duration-[var(--motion-fast,150ms)] ease-[var(--motion-ease-out)]',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--chat-input-bg)]',
+  );
+
+  // The enhance and undo controls have separate eligibility, so they also have
+  // separate state styling: an undo that is available must not look disabled.
+  const enhanceControlClass = cn(
+    controlClass,
     !enhanceUnavailableReason && !busy && 'hover:bg-[var(--model-trigger-hover)] active:scale-[0.98]',
     (enhanceUnavailableReason || busy) && 'cursor-not-allowed opacity-40',
+  );
+
+  const undoControlClass = cn(
+    controlClass,
+    !busy && !disabled && 'hover:bg-[var(--model-trigger-hover)] active:scale-[0.98]',
+    (busy || disabled) && 'cursor-not-allowed opacity-40',
   );
 
   const label = busy ? t('newChat.composerEnhance.working') : t('newChat.composerEnhance.enhance');
@@ -200,7 +222,7 @@ export function ComposerEnhancePromptButton({
           onClick={() => void enhance()}
           disabled={Boolean(enhanceUnavailableReason) || busy}
           aria-label={label}
-          className={controlClass}
+          className={enhanceControlClass}
         >
           {busy ? <Spinner size={14} /> : <Sparkles size={15} />}
         </button>
@@ -212,7 +234,7 @@ export function ComposerEnhancePromptButton({
             onClick={undo}
             disabled={busy || disabled}
             aria-label={t('newChat.composerEnhance.undo')}
-            className={controlClass}
+            className={undoControlClass}
           >
             <Undo2 size={15} />
           </button>
