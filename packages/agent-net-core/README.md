@@ -6,12 +6,14 @@ agent-net 的自研传输核心。纯状态机，不碰网络和时钟，运行�
 这一层本质是通用的可靠 UDP 协议，目标是全面超越 KCP，不包含任何 Cindy 专属设计，未来可以单独拿出去给其他应用使用。
 边界规则见 [`docs/product-rules/agent-net.md`](../../docs/product-rules/agent-net.md)“传输核心的边界”。
 
-目前完成了第 1 到第 4 步，第 5 步除了真机切换 Wi-Fi 和蜂窝都已完成：一条连接里多条可靠字节流，带优先级，拥塞控制验证过和别的流量共用线路，
-`SecureConnection` 提供端到端加密，地址变了连接不断，`udp/` 是只用标准库的真机 UDP 驱动。**还没有接入产品**，线上格式在接入之前不做兼容承诺。
+目前完成了第 1 到第 5 步，第 6 步的原型跑通了：一条连接里多条可靠字节流，带优先级，拥塞控制验证过和别的流量共用线路，
+`SecureConnection` 提供端到端加密，地址变了连接不断，`Endpoint` 把一个端口上的多条连接按连接号分发。`udp/` 是只用标准库的真机 UDP 驱动，
+`wasm/` 把核心编成 WebAssembly、由 Node 驱动跑（电脑端用）。**还没有接入产品**，线上格式在接入之前不做兼容承诺。
 
 ```text
 src/              产品核心
-udp/              真机 UDP 驱动：套接字、时钟、按连接号分发、换端口，只用标准库
+udp/              真机 UDP 驱动：套接字、时钟、换端口，只用标准库
+wasm/             WebAssembly 接口（只用标准库）和 Node 驱动 node.mts（只用 Node 自带模块）
 sim/              确定性网络模拟器、真实网络测试工具，不进产品
 sim/mutants.py    往核心注入已知 bug，检验测试本身
 ```
@@ -150,7 +152,8 @@ while let Some((size, path)) = connection.poll_transmit_via(now_us, &mut out) { 
 connection.on_local_address_change(now_us);
 ```
 
-`udp/` 里的 `Endpoint` 已经把这些接好：一个套接字上跑多条连接，按连接号分发，给每个新来源地址编路径号，看出只换了端口时告诉核心，`rebind` 换端口。
+核心的 `Endpoint` 已经把这些接好：一个端口上跑多条连接，按连接号分发，给每个新来源地址编路径号，看出只换了端口时告诉连接。
+驱动只管收发数据报，`udp/` 和 Node 驱动都有 `rebind` 换端口，见下文“各平台的驱动”。
 
 | 做法 | 内容 |
 | --- | --- |
@@ -161,6 +164,43 @@ connection.on_local_address_change(now_us);
 | 伪造和重放 | 伪造、篡改的包认证不过，录下的包被防重放窗口挡掉，都不会触发验证。路上的人抢先送到的复制包只换来几个发往它那里的验证包，数据不跟过去。对端真换了地址、包又被抢先复制时，新地址来的真包都成了重复包：最新那个包的重复从数据路径以外来、认证通过时也去验证那里，所以每个包都被抢先复制也跟得到新地址 |
 | 自己不知道换了网络 | NAT 换端口、系统没通知换网时，没有包要发的一端（比如在下载）对端的包都发到了旧地址。这一端没有包在途、对端又安静下来时，1 秒后发一个探测包，没有回音就每秒一次（往返很长时每 4 个往返一次）到 30 秒，对端从新地址收到就跟过来；对端回了就停。对端在验证这一端的新地址时，这一端也把往返和带宽从头量 |
 | 往返变长 | 换到往返长得多的路径、又没察觉时，重传超时比新的往返短，每个包都先被超时判丢。判丢后才到的确认也取往返样本，超时就能追上；明文连接上路由变化同样受益 |
+
+## 各平台的驱动
+
+核心不碰套接字和时钟，每个平台配一个驱动。多连接分发都在核心的 `Endpoint` 里，驱动只做三件事：收发数据报、给时间、到点调用 `tick`。
+
+```rust
+let mut endpoint = Endpoint::new(random_u32);                     // 新连接号的随机数来源
+let id = endpoint.connect(now_us, crypto, config, b"my-app/1", &peer_public, &[], peer_addr)?;
+endpoint.listen(b"my-app/1", config, &[], new_crypto, |incoming, from| known(incoming.remote_static()));
+endpoint.on_datagram(now_us, from, packet);                       // 收到一个数据报
+endpoint.tick(now_us);                                            // next_wake() 到点时调用
+while let Some((size, to)) = endpoint.poll_transmit(now_us, &mut out) { /* 把 out[..size] 发往 to */ }
+```
+
+| 驱动 | 用在哪 | 内容 |
+| --- | --- | --- |
+| `udp/` | 测试工具、以后的原生宿主 | 只用标准库：一个 `UdpSocket`、单调时钟、`poll` 循环 |
+| `wasm/src/lib.rs` | 自己有事件循环的宿主 | 核心编成 WebAssembly（`cargo build --release -p agent-net-wasm --target wasm32-unknown-unknown`，276 KB），接口按 C 调用约定手写，不用 wasm-bindgen。数据经两块固定缓冲交换，加密算法从宿主导入，长期私钥不进 WebAssembly。接口约定见文件头 |
+| `wasm/node.mts` | 电脑端（Node、Electron） | UDP、时钟、加密用 Node 自带的 `dgram`、`performance`、`crypto`。套件是 X25519、AES-256-GCM、SHA-256。流和核心一样是单向的，另有不用开的默认流 |
+
+Node 驱动的用法：
+
+```ts
+const server = await Endpoint.create({ identity, prologue: 'my-app/1', accept: { admit: ({ publicKey }) => known(publicKey) } });
+server.on('connection', (connection) => connection.on('stream', (stream) => stream.on('data', onData)));
+const connection = client.connect(serverPublicKey, { address, port });
+const stream = connection.openStream('interactive');
+stream.write(bytes);
+stream.finish();                       // 对端读完数据后收到 end
+await connection.closeWhenDrained();   // 协议里没有关闭通知：先结束流，等对端确认再关
+```
+
+Node 驱动里两处和平台有关的取舍（2026-11-05，Windows 实测）：
+
+- Windows 上 Node 的 `setTimeout(1)` 实际要等约 15 毫秒，发送节奏、延迟确认和重传都会被拖慢。短于一个节拍的等待改成每轮事件循环看一次时间，
+  长的提前一个节拍醒来；代价是传输时那一个节拍里一直在转。改之前本机回环 8 MiB 只有 13.6 MiB/s。
+- Node 每次加密都用原始字节作密钥时一个包要 20 微秒，导入成 `KeyObject` 只要 4 微秒。代价是对称密钥要等垃圾回收才释放，不能丢弃时立即清零。
 
 ## 从 KCP 蒸馏了什么
 
@@ -205,6 +245,7 @@ AGENT_NET_REPLAY=<种子> cargo test --profile sim -p agent-net-sim --test relia
 cargo test --profile sim -p agent-net-sim --test secure          # 加密：Noise 官方向量、篡改、重放、前向保密，加上加密后的随机种子矩阵
 cargo test --profile sim -p agent-net-sim --test migration       # 换地址：Wi-Fi 切蜂窝、NAT 换端口、伪造来源和抢先复制、空闲不乱探测，加上随机换网矩阵
 cargo test --profile sim -p agent-net-sim --test udp             # 真机驱动：本机回环的真实 UDP 上多连接共用端口、换端口
+cargo build --release -p agent-net-wasm --target wasm32-unknown-unknown   # Node 驱动用的 WebAssembly，检查见 prototypes/agent-net-spike 的 poc-core-driver.ts
 cargo run --release -p agent-net-sim --example secure_cost -- 8 2  # 加密的代价：各场景用时、流量和 CPU
 python3 sim/mutants.py                                            # 注入 bug，约 35 分钟
 ./sim/fetch-kcp.sh && cargo run --release -p agent-net-sim --features kcp --bin compare   # 12 种 KCP 配置，约 1 小时
@@ -232,7 +273,21 @@ sim/share-public.py 用户@服务器 客户端公网地址 服务器的muxperf �
 
 判定卡死看**有没有进展**（120 秒无新数据送达），不看总时长：慢不等于卡死，吞吐好坏由 `compare` 衡量。
 
-## 本轮：只换端口时不重新测速，换网后更快、更稳地找到新地址（2026-11-05，核心代码指纹 `8e8947f3a654`）
+## 本轮：多连接分发挪进核心，编成 WebAssembly 接上 EdgeHub（2026-11-05，核心代码指纹 `9e35faa2344d`）
+
+第 6 步。按连接号分发、给来源地址编路径号从 `udp/` 原样挪进核心的 `Endpoint`，连接号不再取 0；连接、加密、拥塞控制的代码和线格式都没动。
+新增 `wasm/`：WebAssembly 接口和 Node 驱动。真实 `DeviceLinkClient` 经 EdgeHub 跑在它上面，12 项检查全过，抓到的包里没有业务明文。
+详细数据见 [`本轮记录`](../../prototypes/agent-net-spike/results/2026-11-05-edgehub-core/README.md)。
+
+| 项目（Windows 本机回环，全部节点同一个 Node 线程） | 自研 | QUIC 经 iroh 官方 Node 绑定 |
+| --- | --- | --- |
+| EdgeHub 12 项检查，两种传输轮流各 6 轮 | 6 次都 12/12，附加明文检查 6/6 | 6 次都 12/12 |
+| invoke 往返 p50 / p95（中位数） | 0.44 / 0.92 ms | 0.76 / 1.26 ms |
+| 3 MiB 结果送达（中位数） | 221 ms | 620 ms |
+| Node 驱动 32 MiB（收发两端同一个线程，3 次） | 42.7–47.8 MiB/s | 第 0 阶段 19.7 MiB/s |
+| `udp` / `migration` / `secure` 测试 | 2 / 10 / 16 个全过 | — |
+
+## 上一轮：只换端口时不重新测速，换网后更快、更稳地找到新地址（2026-11-05，核心代码指纹 `8e8947f3a654`）
 
 NAT 只换了外部端口时，路其实没变，原来换过去以后两端都从启动阶段重新冲，多丢一批包。详细数据见 [`本轮记录`](sim/results/2026-11-05-port-change/README.md)。
 线格式多了帧类型 8（只换端口时的路径验证），和上一版在只换端口时不互通。
@@ -257,7 +312,7 @@ NAT 只换了外部端口时，路其实没变，原来换过去以后两端都�
 | 安卓手机真机 Wi-Fi ↔ 蜂窝来回切（6 次传输、10 次换网） | — | 都没断、数据完整；下载切到蜂窝中断 1.0 秒，上传和切回 Wi-Fi 0.2 秒以内 |
 | 已有矩阵、新种子、变异体 | — | 单连接和共享矩阵和上一轮逐字节相同；三批新种子都通过；变异体 175 个全部抓到 |
 
-## 上一轮：多条连接挤浅队列（2026-11-05，核心代码指纹 `dc63b35dc075`）
+## 更早：多条连接挤浅队列（2026-11-05，核心代码指纹 `dc63b35dc075`）
 
 修上一轮记下的“很浅的队列上几条连接一起抢时丢包偏高”。只改了 `congestion.rs`，线格式和接口没变。详细数据见 [`本轮记录`](sim/results/2026-11-05-shared-shallow-queue/README.md)。
 
@@ -767,3 +822,5 @@ KCP 跑官方资料和 kcptun 的 12 种配置，见 `sim/src/kcp.rs` 文件头�
 - 真换了网络时从启动阶段重新量带宽；只换了端口时照旧（2026-11-05），但客户端自己重新绑定端口时驱动不知道从哪块网卡出去，仍从头量。
   没有路径 MTU 探测。空闲连接每 15 秒一来一回。
 - 驱动层单线程、没调套接字缓冲区，没有限流和 cookie，对公网开放监听之前要补上。
+- Node 驱动的加解密、收发和核心都在 Node 的一个线程上，局域网满速时 CPU 会先到顶，还没测；Electron 里要放进 `utilityProcess`，也还没跑过。
+- 协议里没有关闭通知。正常关闭靠结束流、等对端确认；对端进程直接退出时，这一端要等判死（有数据在途时 30 秒，空闲时靠 15 秒一次的探测）才知道。

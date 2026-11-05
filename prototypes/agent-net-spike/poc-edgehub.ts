@@ -1,6 +1,8 @@
 /**
  * 验证：真实 DeviceLinkClient 不改一行、不连任何中转，能否经 EdgeHub 工作。
- * 运行：npx tsx --tsconfig tsconfig.json poc-edgehub.ts
+ * 运行：npx tsx --tsconfig tsconfig.json poc-edgehub.ts [core|quic]
+ * 默认 core（自研传输，第 6 步）；quic 是第 0 阶段的 iroh 对照，要先 npm install。两种传输跑同一套 12 项检查。
+ * 能看到线上数据报的传输另加一项附加检查：抓到的包里没有业务明文。
  */
 import assert from 'node:assert/strict';
 import {
@@ -10,19 +12,26 @@ import {
   type InvokePayload,
 } from '../../packages/device-link/src/index';
 import { EdgeHub } from './edgehub.ts';
-import { nowMs, sleep, summarize } from './lib.mjs';
+import type { TransportKind } from './transport.ts';
+import { nowMs, sleep, summarize } from './util.mjs';
 
+const transport = (process.argv[2] ?? 'core') as TransportKind;
+if (transport !== 'core' && transport !== 'quic') throw new Error(`unknown transport ${transport}`);
 const roster = new Map();
-const results: Array<{ check: string; ok: boolean; detail?: string }> = [];
+const results: Array<{ check: string; ok: boolean; extra?: boolean; detail?: string }> = [];
 
-async function check(name: string, run: () => Promise<string | void>) {
+async function check(name: string, run: () => Promise<string | void>, extra = false) {
   try {
     const detail = await run();
-    results.push({ check: name, ok: true, ...(detail ? { detail } : {}) });
+    results.push({ check: name, ok: true, extra, ...(detail ? { detail } : {}) });
   } catch (error) {
-    results.push({ check: name, ok: false, detail: String((error as Error).message ?? error).slice(0, 200) });
+    results.push({ check: name, ok: false, extra, detail: String((error as Error).message ?? error).slice(0, 200) });
   }
 }
+
+/** 抓包：线上每个数据报都留一份，最后找业务明文。只有自研传输能看到数据报。 */
+const datagrams: Buffer[] = [];
+const tap = transport === 'core' ? (datagram: Uint8Array) => void datagrams.push(Buffer.from(datagram)) : undefined;
 
 function makeClient(hub: EdgeHub, id: string, host: boolean) {
   const statuses: string[] = [];
@@ -91,11 +100,12 @@ async function waitFor(test: () => boolean, ms = 4_000) {
 }
 
 const userId = 'spike-account';
-const hubHost = await EdgeHub.create({ deviceId: 'h-host', userId, roster });
-const hubA = await EdgeHub.create({ deviceId: 'a-phone', userId, roster });
-const hubC = await EdgeHub.create({ deviceId: 'c-laptop', userId, roster });
+const hubOptions = { userId, transport, ...(tap ? { tap } : {}) };
+const hubHost = await EdgeHub.create({ deviceId: 'h-host', roster, ...hubOptions });
+const hubA = await EdgeHub.create({ deviceId: 'a-phone', roster, ...hubOptions });
+const hubC = await EdgeHub.create({ deviceId: 'c-laptop', roster, ...hubOptions });
 // 流氓节点知道所有人的地址，但自己不在别人的名册里。
-const rogue = await EdgeHub.create({ deviceId: 'rogue', userId, roster: new Map(roster) });
+const rogue = await EdgeHub.create({ deviceId: 'rogue', roster: new Map(roster), ...hubOptions });
 
 const host = makeClient(hubHost, 'h-host', true);
 const a = makeClient(hubA, 'a-phone', false);
@@ -115,7 +125,7 @@ await check('真实 DeviceLinkClient 在没有中转时进入 online', async () 
 await hubA.dial('h-host');
 await hubC.dial('h-host');
 
-await check('在线状态由 QUIC 连接合成', async () => {
+await check('在线状态由点对点连接合成', async () => {
   const seen = new Promise<boolean>((resolve) => {
     const off = a.client.onPresenceChanged((snap) => {
       if (snap.deviceId === 'h-host' && snap.online && snap.remoteControlEnabled) {
@@ -166,7 +176,7 @@ await check('push 经可靠链路到达控制端', async () => {
   assert.deepEqual(await Promise.race([got, sleep(2_000).then(() => 'timeout')]), { hello: 1 });
 });
 
-await check('名册外的节点在 QUIC 层被拒绝', async () => {
+await check('名册外的节点被传输层拒绝', async () => {
   const before = hubHost.stats.rejected;
   await rogue.dial('h-host').catch(() => undefined);
   await waitFor(() => hubHost.stats.rejected === before + 1);
@@ -227,7 +237,7 @@ await check('故障半径：一台控制端静默，另一台零感知', async (
   return `另一台 invoke ms ${JSON.stringify(summarize(samples))}`;
 });
 
-await check('QUIC 断开后重连，请求不重复执行', async () => {
+await check('点对点连接断开后重连，请求不重复执行', async () => {
   await hubA.dropPeer('h-host');
   await waitFor(() => !hubHost.peerIds().includes('a-phone'));
   await sleep(50);
@@ -247,11 +257,34 @@ await check('全程没有任何中转连接', async () => {
   return `路由帧 出 ${out} 入 ${inbound}`;
 });
 
-for (const result of results) {
-  console.log(`${result.ok ? 'PASS' : 'FAIL'}  ${result.check}${result.detail ? `  (${result.detail})` : ''}`);
+if (tap) {
+  await check(
+    '抓到的包里没有业务明文',
+    async () => {
+      // 设备号、通道名、帧字段名，以及 3 MiB 结果里的一段内容，任何一个出现在线上都说明有明文。
+      const needles = ['"kind"', 'fixture:', 'h-host', 'a-phone', 'c-laptop', 'presence-changed', 'invoke', 'x'.repeat(16)];
+      const bytes = datagrams.reduce((sum, datagram) => sum + datagram.length, 0);
+      assert.ok(datagrams.length > 1000, `只抓到 ${datagrams.length} 个包`);
+      const hits = needles.filter((needle) => datagrams.some((datagram) => datagram.includes(needle)));
+      assert.deepEqual(hits, []);
+      return `${datagrams.length} 个包，${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+    },
+    true,
+  );
 }
+
+for (const result of results) {
+  const label = result.ok ? 'PASS' : 'FAIL';
+  console.log(`${label}  ${result.extra ? '附加：' : ''}${result.check}${result.detail ? `  (${result.detail})` : ''}`);
+}
+const required = results.filter((result) => !result.extra);
+const extras = results.filter((result) => result.extra);
 const failed = results.filter((result) => !result.ok).length;
-console.log(`\n${results.length - failed}/${results.length} 通过`);
+const passed = (list: typeof results) => list.filter((result) => result.ok).length;
+console.log(
+  `\n传输：${transport}。${passed(required)}/${required.length} 通过` +
+    (extras.length ? `，附加 ${passed(extras)}/${extras.length}` : ''),
+);
 a.client.stop();
 c.client.stop();
 host.client.stop();

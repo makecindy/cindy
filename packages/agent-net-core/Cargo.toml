@@ -10,7 +10,7 @@ description = "agent-net 自研传输核心：不碰网络和时钟的纯状态�
 [dependencies]
 
 [workspace]
-members = [".", "sim", "udp"]
+members = [".", "sim", "udp", "wasm"]
 
 [profile.release]
 strip = true

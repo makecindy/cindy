@@ -1,0 +1,14 @@
+[package]
+name = "agent-net-wasm"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "agent-net 核心的 WebAssembly 接口，给 Node 这类自己有事件循环的宿主用。只用标准库。"
+
+[lib]
+crate-type = ["cdylib"]
+
+# 和核心一样不引入第三方 crate：接口按 C 调用约定手写，不用 wasm-bindgen。
+[dependencies]
+agent-net-core = { path = ".." }

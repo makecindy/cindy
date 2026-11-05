@@ -1,6 +1,7 @@
 /**
  * EdgeHub 原型：节点内嵌的迷你中转。对 DeviceLinkClient 它就是一条 WebSocket，
- * 语义照搬 packages/device-link-relay/src/hub.ts；区别是帧不去服务器，而是按目标设备走 QUIC。
+ * 语义照搬 packages/device-link-relay/src/hub.ts；区别是帧不去服务器，而是按目标设备走点对点传输
+ * （`transport.ts`：第 6 步起默认是自研核心，QUIC 留作对照）。
  * 这里只验证接缝是否成立，不是产品实现：名册写死、没有加密封装回退、没有上游 WSS 合并。
  */
 import {
@@ -12,7 +13,7 @@ import {
   type PresenceSnapshot,
 } from '@cindy/device-link-protocol';
 import type { WsLike } from '../../packages/device-link/src/client';
-import { ALPN, addrOf, bindEndpoint } from './lib.mjs';
+import { createTransport, type PeerChannel, type RosterEntry, type Transport, type TransportKind } from './transport.ts';
 
 interface NodeInfo {
   deviceId: string;
@@ -25,13 +26,9 @@ interface NodeInfo {
 
 interface PeerLink {
   deviceId: string;
-  connection: any;
-  outbound: any;
-  writes: Promise<void>;
+  channel: PeerChannel;
   info: NodeInfo | null;
 }
-
-type RosterEntry = { endpointId: string; sockets: string[] };
 
 class EdgeSocket implements WsLike {
   private readonly handlers = new Map<string, Array<(...args: any[]) => void>>();
@@ -65,19 +62,63 @@ class EdgeSocket implements WsLike {
   }
 }
 
+/** 字节流上的帧：4 字节大端长度加 JSON。 */
+class FrameReader {
+  private buffered: Buffer[] = [];
+  private size = 0;
+  private expected: number | null = null;
+
+  push(bytes: Uint8Array, onFrame: (frame: Envelope) => void): void {
+    this.buffered.push(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+    this.size += bytes.byteLength;
+    for (;;) {
+      if (this.expected === null) {
+        if (this.size < 4) return;
+        this.expected = this.take(4).readUInt32BE(0);
+      }
+      if (this.size < this.expected) return;
+      const body = this.take(this.expected);
+      this.expected = null;
+      onFrame(JSON.parse(body.toString('utf8')) as Envelope);
+    }
+  }
+
+  /** 从前面取 `n` 个字节，一帧最多拼接一次。 */
+  private take(n: number): Buffer {
+    this.size -= n;
+    const first = this.buffered[0];
+    if (first.length >= n) {
+      if (first.length === n) this.buffered.shift();
+      else this.buffered[0] = first.subarray(n);
+      return first.subarray(0, n);
+    }
+    const all = Buffer.concat(this.buffered);
+    this.buffered = all.length > n ? [all.subarray(n)] : [];
+    return all.subarray(0, n);
+  }
+}
+
+export interface EdgeHubOptions {
+  deviceId: string;
+  userId: string;
+  roster: Map<string, RosterEntry>;
+  transport?: TransportKind;
+  /** 线上的每个数据报，见 `TransportOptions.tap`。 */
+  tap?: (datagram: Uint8Array) => void;
+}
+
 export class EdgeHub {
-  private endpoint: any = null;
+  private transport!: Transport;
   private socket: EdgeSocket | null = null;
   private ready = false;
   private readonly peers = new Map<string, PeerLink>();
   private info: NodeInfo;
   /** 模拟手机挂起：连接还在，但这个节点不再收发。 */
   muted = false;
+  /** `rejected`：被拒绝的握手。自研传输在握手阶段就拒绝，对方重发的请求也各算一次。 */
   readonly stats = { routedOut: 0, routedIn: 0, rejected: 0, relayConnections: 0 };
 
-  private constructor(
-    private readonly options: { deviceId: string; userId: string; roster: Map<string, RosterEntry> },
-  ) {
+  private constructor(private readonly options: EdgeHubOptions) {
     this.info = {
       deviceId: options.deviceId,
       deviceName: options.deviceId,
@@ -88,14 +129,18 @@ export class EdgeHub {
     };
   }
 
-  static async create(options: { deviceId: string; userId: string; roster: Map<string, RosterEntry> }) {
+  static async create(options: EdgeHubOptions) {
     const hub = new EdgeHub(options);
-    hub.endpoint = await bindEndpoint();
-    options.roster.set(options.deviceId, {
-      endpointId: hub.endpoint.id().toString(),
-      sockets: hub.endpoint.boundSockets(),
+    hub.transport = await createTransport(options.transport ?? 'core', {
+      admit: (remoteId) => {
+        if (hub.deviceOf(remoteId)) return true;
+        hub.stats.rejected += 1;
+        return false;
+      },
+      onIncoming: (channel) => hub.adopt(channel),
+      ...(options.tap ? { tap: options.tap } : {}),
     });
-    void hub.acceptLoop();
+    options.roster.set(options.deviceId, { id: hub.transport.id, dial: hub.transport.dial });
     return hub;
   }
 
@@ -115,12 +160,11 @@ export class EdgeHub {
     if (this.peers.has(deviceId)) return;
     const entry = this.options.roster.get(deviceId);
     if (!entry) throw new Error(`unknown peer ${deviceId}`);
-    const connection = await this.endpoint.connect(addrOf(entry.endpointId, entry.sockets), ALPN);
-    await this.adopt(connection);
+    this.adopt(await this.transport.connect(entry));
   }
 
   async dropPeer(deviceId: string): Promise<void> {
-    this.peers.get(deviceId)?.connection.close(0n, []);
+    this.peers.get(deviceId)?.channel.close();
   }
 
   /** 测试入口：绕过 DeviceLinkClient 直接写一帧，用来验证接收端不信任帧内 src。 */
@@ -130,7 +174,7 @@ export class EdgeHub {
   }
 
   async close(): Promise<void> {
-    await this.endpoint.close();
+    await this.transport.close();
   }
 
   fromClient(text: string): void {
@@ -217,68 +261,46 @@ export class EdgeHub {
     return { v: PROTOCOL_VERSION, kind: 'presence-changed', payload: snapshot };
   }
 
-  private async acceptLoop(): Promise<void> {
-    for (;;) {
-      const incoming = await this.endpoint.acceptNext().catch(() => null);
-      if (!incoming) return;
-      void (async () => {
-        const connection = await (await incoming.accept()).connect();
-        await this.adopt(connection);
-      })().catch(() => undefined);
-    }
-  }
-
-  /** 身份来自 QUIC 握手验证过的公钥，名册里没有的节点直接断开。 */
-  private async adopt(connection: any): Promise<void> {
-    const deviceId = this.deviceOf(connection.remoteId().toString());
+  /** 身份来自传输层握手验证过的公钥；名册外的节点传输层已经拒绝，这里再核对一次。 */
+  private adopt(channel: PeerChannel): void {
+    const deviceId = this.deviceOf(channel.remoteId);
     if (!deviceId) {
-      this.stats.rejected += 1;
-      connection.close(1n, []);
+      channel.close();
       return;
     }
-    const outbound = await connection.openUni();
-    const peer: PeerLink = { deviceId, connection, outbound, writes: Promise.resolve(), info: null };
+    const peer: PeerLink = { deviceId, channel, info: null };
+    // 同一台设备重新连上来：新连接取代旧的，旧连接关掉时不再报离线。
+    const previous = this.peers.get(deviceId);
     this.peers.set(deviceId, peer);
+    previous?.channel.close();
+    const reader = new FrameReader();
+    // 静默时整帧丢掉，字节流照常拆帧，恢复后帧边界不乱。
+    channel.onData((bytes) =>
+      reader.push(bytes, (frame) => {
+        if (!this.muted) this.fromPeer(peer, frame);
+      }),
+    );
+    channel.onClose(() => {
+      if (this.peers.get(deviceId) !== peer) return;
+      this.peers.delete(deviceId);
+      if (peer.info) this.toClient(this.presenceFrame(peer.info, false));
+    });
     this.write(peer, { v: PROTOCOL_VERSION, kind: 'presence-changed', payload: this.info });
-    void this.readLoop(peer);
-    void connection
-      .closed()
-      .catch(() => undefined)
-      .then(() => {
-        if (this.peers.get(deviceId) !== peer) return;
-        this.peers.delete(deviceId);
-        if (peer.info) this.toClient(this.presenceFrame(peer.info, false));
-      });
   }
 
-  private deviceOf(endpointId: string): string | undefined {
+  private deviceOf(remoteId: string): string | undefined {
     for (const [deviceId, entry] of this.options.roster) {
-      if (entry.endpointId === endpointId && deviceId !== this.options.deviceId) return deviceId;
+      if (entry.id === remoteId && deviceId !== this.options.deviceId) return deviceId;
     }
     return undefined;
   }
 
   private write(peer: PeerLink, frame: Envelope): void {
     const body = Buffer.from(JSON.stringify(frame));
-    const header = Buffer.alloc(4);
-    header.writeUInt32BE(body.length);
-    const bytes = [...header, ...body];
-    peer.writes = peer.writes.then(() => peer.outbound.writeAll(bytes)).catch(() => undefined);
-  }
-
-  private async readLoop(peer: PeerLink): Promise<void> {
-    const inbound = await peer.connection.acceptUni().catch(() => null);
-    if (!inbound) return;
-    for (;;) {
-      let body: number[];
-      try {
-        const size = Buffer.from(await inbound.readExact(4)).readUInt32BE(0);
-        body = await inbound.readExact(size);
-      } catch {
-        return;
-      }
-      if (!this.muted) this.fromPeer(peer, JSON.parse(Buffer.from(body).toString('utf8')) as Envelope);
-    }
+    const bytes = Buffer.alloc(4 + body.length);
+    bytes.writeUInt32BE(body.length, 0);
+    body.copy(bytes, 4);
+    peer.channel.send(bytes);
   }
 
   private fromPeer(peer: PeerLink, env: Envelope): void {

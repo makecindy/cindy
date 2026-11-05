@@ -1,17 +1,27 @@
-# agent-net 第 0 阶段验证脚本
+# agent-net 验证脚本
 
-只用于验证方案，不进入产品构建，也不是 pnpm workspace 的一部分。结论见
-[`docs/agent-net-plan.md`](../../docs/agent-net-plan.md) §2。
+只用于验证方案，不进入产品构建，也不是 pnpm workspace 的一部分。第 0 阶段结论见
+[`docs/agent-net-plan.md`](../../docs/agent-net-plan.md) §2，第 6 步见 [`results/2026-11-05-edgehub-core`](results/2026-11-05-edgehub-core/README.md)。
 
-> 2026-10-30 路线改为自研传输，iroh 不进产品。这里的 iroh 代码只保留作性能参照；
-> `edgehub.ts` 和 `poc-edgehub.ts` 验证的接缝继续有效，第 6 步会换成自研传输。
+> 2026-10-30 路线改为自研传输，iroh 不进产品。这里的 iroh 代码只保留作性能参照。
+> 2026-11-05（第 6 步）`edgehub.ts` 改成可以换传输：默认跑自研核心（`transport-core.ts`），QUIC（`transport-quic.ts`）留作对照，
+> 两种传输跑同一套检查。
 
-2026-10-30 在一台 macOS 26（arm64）上运行。除非注明，都是本机回环，**不是真实网络指标**。
+第 0 阶段 2026-10-30 在一台 macOS 26（arm64）上运行，第 6 步 2026-11-05 在一台 Windows（x64）上运行。
+除非注明，都是本机回环，**不是真实网络指标**。
 
 ## 准备
 
+自研传输要先编好核心的 WebAssembly（`rustup target add wasm32-unknown-unknown`）：
+
 ```sh
-npm install --ignore-scripts
+(cd ../../packages/agent-net-core && cargo build --release -p agent-net-wasm --target wasm32-unknown-unknown)
+npm install --ignore-scripts   # tsx，以及 QUIC 对照用的 iroh；只跑自研传输时 iroh 不会被加载
+```
+
+第 0 阶段的原生基准：
+
+```sh
 cd rust-bench && cargo build --release && cd ..
 ```
 
@@ -27,14 +37,24 @@ cargo build --release --target aarch64-apple-ios
 
 | 脚本 | 验证什么 | 结果 |
 | --- | --- | --- |
-| `npx tsx --tsconfig tsconfig.json poc-edgehub.ts` | 真实 `DeviceLinkClient` 经 EdgeHub 跑 QUIC，全程没有中转 | 12/12 通过 |
+| `npx tsx --tsconfig tsconfig.json poc-edgehub.ts [core\|quic]` | 真实 `DeviceLinkClient` 经 EdgeHub 跑点对点传输，全程没有中转。`core` 另查抓到的包里没有业务明文 | 两种传输都 12/12 通过，`core` 附加 1/1 |
+| `npx tsx --tsconfig tsconfig.json poc-core-driver.ts` | 自研核心 Node 驱动里 EdgeHub 碰不到的部分：大块数据、IPv6、传输途中换端口、拒绝握手、确认后再关 | 6/6 通过 |
 | `node poc-lan.mjs` | 组播发现，账号派生轮换标签，其它账号的节点被忽略 | 2/2 通过，261 ms 发现 |
 | `node poc-relay.mjs` | 自建中继回退、回调准入、自动升级直连。要先启动 `iroh-relay` 和准入回调 | 5/5 通过 |
 | `node bench-quic.mjs <MiB>` | 官方 Node 绑定的开销 | 19.7 MiB/s |
 | `rust-bench` | 原生 QUIC 与模拟瓶颈 | 见下表 |
 | `node bench-wss.mjs <MiB>` | v1 形态的基线，`LINK` 和 `SHAPER` 环境变量可加瓶颈 | 见下表 |
 
-## 基准
+## 第 6 步：EdgeHub 上的自研传输和 QUIC
+
+同一个 Node 进程里跑全部 EdgeHub，两种传输轮流各 6 轮，详细见 [`本轮记录`](results/2026-11-05-edgehub-core/README.md)。
+
+| | 自研（中位数） | QUIC 经官方 Node 绑定（中位数） |
+| --- | ---: | ---: |
+| invoke 往返 p50 / p95 | 0.44 / 0.92 ms | 0.76 / 1.26 ms |
+| 3 MiB 结果送达 | 221 ms | 620 ms |
+
+## 第 0 阶段基准
 
 模拟链路：100 Mbit/s、单向 20 ms、队列 50 ms，由 `rust-bench` 的 `shape-udp` / `shape-tcp` 提供。
 QUIC 组要设 `STICKY_PATH=1`，否则 iroh 会自动找到更优路径绕过瓶颈。TCP 一侧无法注入丢包，这里只比较限速和时延。
@@ -60,9 +80,11 @@ QUIC 组要设 `STICKY_PATH=1`，否则 iroh 会自动找到更优路径绕过�
 | Android arm64 官方绑定 | 18.0 MB |
 | Linux x64 官方绑定 | 20.0 MB |
 | `iroh-relay` macOS arm64 | 11.0 MB |
+| 自研核心 WebAssembly（所有电脑平台共用一份） | 276 KB |
 
-官方绑定是未压缩大小，且包含我们用不到的功能。自建核心的实际大小要到第 1 阶段才知道。
+官方绑定是未压缩大小，且包含我们用不到的功能。
 
 ## 没有覆盖
 
 两台真实设备、iOS / Android 真机、耗电、国内运营商、打洞成功率、经中继的吞吐、WSS 加密封装、EdgeHub 与上游 WSS 的合并。
+第 6 步的 EdgeHub 只在本机回环上跑过，没有经 Electron `utilityProcess`，也没有丢包和抖动。
