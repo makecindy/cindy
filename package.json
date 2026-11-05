@@ -154,7 +154,8 @@
     "test:peer-transfer": "node scripts/peer-transfer-acceptance.mjs",
     "ci:scheduler-guard": "node scripts/scheduler-ci-guard.mjs",
     "pctx": "node packages/project-context/dist/cli.js",
-    "pctx:build": "pnpm --filter project-context build"
+    "pctx:build": "pnpm --filter project-context build",
+    "dev:host": "node scripts/dev-with-host.mjs"
   },
   "dependencies": {
     "gray-matter": "^4.0.3"

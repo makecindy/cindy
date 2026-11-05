@@ -1,8 +1,15 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { ownerDatabasePath, resolveHostDataDir, resolveHostRegion } from './profile-path.mjs';
+import {
+  discoverHostOwner,
+  ownerDatabasePath,
+  resolveHostDataDir,
+  resolveHostRegion,
+} from './profile-path.mjs';
 
 test('defaults to the global profile and reuses Desktop DB naming', () => {
   assert.equal(resolveHostRegion(), 'global');
@@ -26,4 +33,19 @@ test('owner IDs are mandatory and cannot escape the profile directory', () => {
   assert.throws(() => ownerDatabasePath('/data', ''), /owner id is required/);
   assert.throws(() => ownerDatabasePath('/data', '../escape'), /single safe path segment/);
   assert.throws(() => ownerDatabasePath('/data', 'nested/owner'), /single safe path segment/);
+});
+
+test('discovers a single-account profile and refuses to guess across accounts', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'host-owner-'));
+  try {
+    assert.deepEqual(discoverHostOwner(root), { ownerId: null, reason: 'no account database in this profile' });
+    fs.writeFileSync(path.join(root, 'cindy-owner-a.db'), '');
+    fs.writeFileSync(path.join(root, 'cindy-host-runtime-owner-a.lock.db'), '');
+    assert.deepEqual(discoverHostOwner(root), { ownerId: 'owner-a', reason: null });
+    fs.writeFileSync(path.join(root, 'cindy-owner-b.db'), '');
+    assert.equal(discoverHostOwner(root).ownerId, null);
+    assert.match(discoverHostOwner(root).reason, /2 accounts/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

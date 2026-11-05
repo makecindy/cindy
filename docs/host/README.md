@@ -28,7 +28,9 @@ node --import tsx --import ./apps/host/src/loaders/register-raw.mjs apps/host/sr
 pnpm --filter desktop exec vite build --config vite.renderer.config.ts
 open http://127.0.0.1:3456/
 
-# 3) Electron 作为客户端（可选）
+# 3) Electron 作为客户端：自动加入已运行的 Host；没有就由脚本先拉起
+pnpm dev:host -- --mock
+#    也可以显式指定目标：
 CINDY_HOST_API=http://127.0.0.1:3456 pnpm --filter desktop dev
 ```
 

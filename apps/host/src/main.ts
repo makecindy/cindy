@@ -12,7 +12,7 @@ import { OwnerSessionStorage } from '../../desktop/src/main/localDb/sessionStora
 import { getDbClient, setCurrentDbClient } from '../../desktop/src/main/localDb/client/current.ts';
 import { readCachedBinaryStatus } from '../../desktop/src/main/agent-binaries/binaryStatus.js';
 import { openOwnerDatabase, OwnerDatabaseError } from '../../desktop/src/main/localDb/startupCore.js';
-import { resolveHostDataDir, resolveHostRegion } from './profile-path.mjs';
+import { discoverHostOwner, ownerDatabasePath, resolveHostDataDir, resolveHostRegion } from './profile-path.mjs';
 import { acquireHostRuntimeLease, type HostRuntimeLease } from './runtime-lock.js';
 import { readAdoptedSessionState } from './credentials/session.mjs';
 import { configureHostOwner, readClaudeSubscriptionState } from './agent/claude-auth.mjs';
@@ -611,8 +611,24 @@ server.listen(PORT, '127.0.0.1', () => {
       error: error instanceof Error ? error.message : String(error),
     };
   });
-  const owner = process.env.CINDY_HOST_OWNER?.trim();
-  if (!owner) return;
+  // An explicit owner wins; otherwise a single-account profile names itself and
+  // a multi-account one stays uninitialized instead of guessing.
+  let owner = process.env.CINDY_HOST_OWNER?.trim() || '';
+  if (!owner) {
+    const discovered = discoverHostOwner(resolveHostDataDir());
+    if (!discovered.ownerId) {
+      runtime.detail = discovered.reason ?? 'owner is unknown';
+      console.log(`cindy-host runtime stays uninitialized: ${runtime.detail}`);
+      return;
+    }
+    owner = discovered.ownerId;
+    // Fail closed if the discovered id does not name the expected database file.
+    if (!existsSync(ownerDatabasePath(resolveHostDataDir(), owner))) {
+      runtime.detail = 'owner database is missing';
+      return;
+    }
+    console.log(`cindy-host using the profile owner ${owner.length} chars long`);
+  }
   void ensureRuntime(owner).catch((error: unknown) => {
     if (runtime.state === 'blocked') {
       // A blocked host never opened storage; reporting 'error' would wrongly

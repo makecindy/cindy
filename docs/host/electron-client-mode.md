@@ -2,7 +2,11 @@
 
 默认行为：**本机有 Host 在跑时自动进入客户端模式**（Host 在启动时写 `host-endpoint.json`，
 Desktop 校验 pid 存活即接管），无需任何环境变量；`CINDY_HOST_API` 仍可显式指定目标。
-Host 未运行时回退到内嵌 Runtime（自动拉起 Host 仍为 TODO）。
+Host 未运行时回退到内嵌 Runtime；`pnpm dev:host` 会先确保 Host 在跑（复用或拉起），
+打包版的常驻由 systemd unit 负责。
+
+Host 也可不指定 owner：profile 内只有一个 `cindy-<owner>.db` 时自动采用该账号，
+多账号 profile 会明确拒绝猜测（`CINDY_HOST_OWNER` 仍可显式指定）。
 
 设置 `CINDY_HOST_API`（或自动发现）后，Desktop 不再装配自己的 Runtime，而是把已迁移的 renderer
 通道转发到 `cindy-host`，并把宿主的事件流回灌到同一 push 通道。
