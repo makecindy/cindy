@@ -398,6 +398,19 @@ describe('live compact 1.0.8: cache-safe drains, pointer-only spans, no cross-us
     expect(selectCutIndexes(items, { engine: 'cloud', totalTokens: 60000, maxEnd: 2 })).not.toBeNull();
   });
 
+  it('only drains a span while the measured total is still above the water line', () => {
+    // 上游入口是 `drain && measured <= KEEP_ROUND_TOKENS` 就 break:当前总量已经在水位以下时,
+    // 即使预测下一轮会过线,这一轮也不切(切发生在实测过线的那一轮)。选段层不拦,
+    // 拦在调用方——这里钉住两边,避免以后把上游口径单方面“优化”掉。
+    const items = cut([
+      ['user', 50],
+      ['assistant', 300],
+      ['tool', 5000],
+    ]);
+    expect(selectCutIndexes(items, { engine: 'cloud', drain: true, totalTokens: 30000, maxEnd: 2 })).not.toBeNull();
+    expect(selectCutIndexes(items, { engine: 'cloud', drain: false, totalTokens: 30000, maxEnd: 2 })).toBeNull();
+  });
+
   it('honours SPINE_POINTER_TOKENS separately from the span cap', () => {
     const items = cut([
       ['user', 50],

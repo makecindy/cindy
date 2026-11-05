@@ -40,6 +40,9 @@
  * 1.0.8 的 `spine-checkpoint` 事件种类同理:pi 的卡片是 custom_message,不会被官方摘要二次压;
  * “这是旧内容”前缀已经起到同样的作用。drain 在 pi 里是同一个 settle 钩子内多次估算切段
  * (drafts 在钩子返回后才落地,拿不到切后实测值),因此收尾水位按估算总量计算。
+ * 收尾入口的停止条件与上游逐字一致:`drain && measured <= KEEP_ROUND_TOKENS` 就 break。
+ * 后果是“当前 30k、预测下一轮 35k”这一轮不会切(cutting 发生到实测过线的那一轮);
+ * 这是上游既定行为,不要在本仓单方面改——要改先让上游裁决。
  * 引擎判定同理:pi 不把 provider baseURL 交给扩展,只能按 provider 名判云端/本地
  * (可用 SPINE_ENGINE=cloud|local 强制),地址判定保留供单测与后续接线。
  *
