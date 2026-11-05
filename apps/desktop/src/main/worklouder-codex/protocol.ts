@@ -7,7 +7,10 @@ import {
   type WorkLouderCodexDeviceState,
 } from '../../shared/workLouderCodex.js';
 
-export { WORKLOUDER_CODEX_AGENT_SLOT_COUNT } from '../../shared/workLouderCodex.js';
+export {
+  WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
+  WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT,
+} from '../../shared/workLouderCodex.js';
 
 export const enum WorkLouderLightingEffect {
   Off = 0,

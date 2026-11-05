@@ -27,6 +27,7 @@ import {
   readWorkLouderDeviceStatusOrThrow,
   unwrapWorkLouderKeymapText,
   isCindyExclusiveAgentKeymap,
+  WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT,
   WORKLOUDER_DEVICE_KEYMAP_FILE,
   workLouderFirmwareIdlesHidRead,
   parseWorkLouderCodexJoystickEvent,
@@ -645,7 +646,7 @@ function workLouderFsSucceeded(result: WorkLouderRpcResult | null | undefined): 
 }
 
 async function restoreCreatorKeymap(deviceApi: WorkLouderApi): Promise<void> {
-  if (connectedDevice?.deviceType !== 'creator-micro-2' || !keymapBackupDir || !comm) return;
+  if (!connectedDevice || !keymapBackupDir || !comm) return;
   const sessionPath = path.join(
     keymapBackupDir,
     creatorMicro2KeymapSessionFileName(connectedDevice.backupId),
@@ -687,7 +688,7 @@ async function backupCreatorKeymap(
   layerIndex: number,
 ): Promise<void> {
   if (!keymapBackupDir) {
-    throw new Error('Creator Micro 2 keymap backup directory is missing');
+    throw new Error('Work Louder keymap backup directory is missing');
   }
   await fs.mkdir(keymapBackupDir, { recursive: true });
   const factoryPath = path.join(
@@ -711,7 +712,7 @@ async function backupCreatorKeymap(
 
 async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
   if (creatorKeymapBound || stopping) return;
-  if (connectedDevice?.deviceType !== 'creator-micro-2') return;
+  if (!connectedDevice) return;
   if (!comm) return;
   const generation = creatorKeymapGeneration;
   const fsApi = loadWorkLouderFsApi(deviceApi, comm);
@@ -767,7 +768,7 @@ async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
 }
 
 async function bindCreatorAgentKeysWhenIdle(deviceApi: WorkLouderApi): Promise<void> {
-  if (connectedDevice?.deviceType !== 'creator-micro-2') return;
+  if (!connectedDevice) return;
   while (!stopping && !creatorKeymapBound) {
     if (Date.now() < creatorKeymapRetryAt) break;
     if (creatorKeymapBinding) {
@@ -777,12 +778,9 @@ async function bindCreatorAgentKeysWhenIdle(deviceApi: WorkLouderApi): Promise<v
     const task = bindCreatorAgentKeys(deviceApi)
       .catch((error) => {
         const message = safeErrorMessage(error);
-        hostLog('warn', `Creator Micro 2 keymap bind failed: ${message}`);
+        hostLog('warn', `Work Louder keymap bind failed: ${message}`);
         if (isWorkLouderHidContention(message)) {
-          hostLog(
-            'warn',
-            'Creator Micro 2 vendor HID is busy; another app may be using the keyboard',
-          );
+          hostLog('warn', 'Work Louder vendor HID is busy; another app may be using the keyboard');
           scheduleCreatorKeymapRetry();
         }
         throw error;
@@ -794,7 +792,7 @@ async function bindCreatorAgentKeysWhenIdle(deviceApi: WorkLouderApi): Promise<v
     await task;
   }
   if (!stopping && !creatorKeymapBound && Date.now() < creatorKeymapRetryAt) {
-    throw new Error('Creator Micro 2 vendor HID is busy; device has been closed');
+    throw new Error('Work Louder vendor HID is busy; device has been closed');
   }
 }
 
@@ -858,7 +856,7 @@ async function ensureConnected(): Promise<WorkLouderApi | null> {
   connectedDevice = {
     deviceType: candidate.deviceType,
     isUsb: candidate.device.isUsbConnection === true,
-    backupId: creatorKeymapBackupId(candidate.device),
+    backupId: creatorKeymapBackupId(candidate.device, candidate.deviceType),
   };
   await postDeviceStatus(nextApi, candidate.deviceType, candidate.device.isUsbConnection === true);
   await bindCreatorAgentKeysWhenIdle(nextApi);
@@ -965,7 +963,20 @@ function reportConnectionError(message: string): void {
   if (reason !== 'permission-required') scheduleRetry();
 }
 
-function creatorKeymapBackupId(device: WorkLouderDevice): string | null {
+/**
+ * Creator Micro 2 ids stay unprefixed so existing backups keep matching. Codex
+ * Micro backups share the directory, so they carry their own prefix.
+ */
+function creatorKeymapBackupId(
+  device: WorkLouderDevice,
+  deviceType: 'codex-micro' | 'creator-micro-2',
+): string | null {
+  const id = workLouderDeviceBackupId(device);
+  if (deviceType === 'creator-micro-2') return id;
+  return id ? `codex-micro-${id}` : 'codex-micro';
+}
+
+function workLouderDeviceBackupId(device: WorkLouderDevice): string | null {
   const serial = typeof device.serialNumber === 'string' ? device.serialNumber.trim() : '';
   if (serial) return serial;
   const pid = typeof device.devicePid === 'string' ? device.devicePid.trim() : '';
@@ -1007,7 +1018,7 @@ async function disconnect(): Promise<void> {
     try {
       await restoreCreatorKeymap(currentApi);
     } catch (error) {
-      hostLog('warn', `Creator Micro 2 keymap restore failed: ${safeErrorMessage(error)}`);
+      hostLog('warn', `Work Louder keymap restore failed: ${safeErrorMessage(error)}`);
     }
   }
   transportFaulted = false;
@@ -1077,7 +1088,8 @@ async function stop(): Promise<void> {
   await awaitWithTimeout(creatorKeymapBinding, 400);
   const currentApi = api;
   if (currentApi) {
-    const off = createWorkLouderCodexOffFrame();
+    // Cindy's keymap can bind up to 13 task-key threads; clear them all.
+    const off = createWorkLouderCodexOffFrame(WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT);
     await awaitWithTimeout(
       Promise.allSettled([
         currentApi.sendLightingConfig({ ambient: off.ambient, keys: off.keys }),

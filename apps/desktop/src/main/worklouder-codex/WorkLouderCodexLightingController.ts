@@ -2,16 +2,15 @@ import {
   WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
   WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
   WORKLOUDER_CODEX_KEYCAP_ACTIONS,
+  WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT,
   WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS,
-  WORKLOUDER_HID_AG_CODES,
-  normalizeWorkLouderCreatorTaskKeys,
   buildCreatorMicro2AgentKeymap,
   cloneWorkLouderCodexSettings,
   createWorkLouderCodexDefaultSettings,
   creatorCommandAssignment,
   isWorkLouderCodexVoiceAssignment,
   isWorkLouderCreatorProgrammableKey,
-  resolveWorkLouderHidRole,
+  resolveCreatorHidRole,
   workLouderCodexAutoDimMs,
   workLouderLayoutMerges,
   workLouderMergeForKey,
@@ -359,7 +358,7 @@ export class WorkLouderCodexLightingController {
       return;
     }
     const creatorRole = this.settings.layout.taskKeys
-      ? resolveWorkLouderHidRole(event.key, this.settings.layout.taskKeys, this.device.deviceType)
+      ? resolveCreatorHidRole(event.key, this.settings.layout.taskKeys)
       : null;
     if (creatorRole?.role === 'task') {
       if (event.act === 1) this.handleAgentKeyPress(creatorRole.slot);
@@ -389,11 +388,7 @@ export class WorkLouderCodexLightingController {
     const merge = workLouderMergeForKey(workLouderLayoutMerges(this.settings.layout), key);
     if (merge) return merge.origin as WorkLouderCodexPreviewPart;
     if (this.settings.layout.taskKeys) {
-      const role = resolveWorkLouderHidRole(
-        key,
-        this.settings.layout.taskKeys,
-        this.device.deviceType,
-      );
+      const role = resolveCreatorHidRole(key, this.settings.layout.taskKeys);
       if (role) return role.physical as WorkLouderCodexPreviewPart;
     }
     return previewPartForHidKey(key);
@@ -614,7 +609,7 @@ export class WorkLouderCodexLightingController {
   private releaseHeldVoiceFromEvent(event: WorkLouderCodexHidEvent): void {
     if (event.act !== 0) return;
     const creatorRole = this.settings.layout.taskKeys
-      ? resolveWorkLouderHidRole(event.key, this.settings.layout.taskKeys, this.device.deviceType)
+      ? resolveCreatorHidRole(event.key, this.settings.layout.taskKeys)
       : null;
     const slot =
       creatorRole?.role === 'command'
@@ -698,20 +693,10 @@ export class WorkLouderCodexLightingController {
         action: cloneAction(action),
       };
     });
+    // Cindy's keymap gives task key N the AG code for thread N.
     const sessionIdsByTaskSlot = this.agentSlots.map((slot) => slot.sessionId ?? '');
-    const taskKeys = normalizeWorkLouderCreatorTaskKeys(this.settings.layout.taskKeys);
-    if (this.device.deviceType === 'codex-micro') {
-      this.slotSessionIds = WORKLOUDER_HID_AG_CODES.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT).map(
-        (physical) => {
-          if (!isWorkLouderCreatorProgrammableKey(physical)) return '';
-          const slot = taskKeys.indexOf(physical);
-          return slot >= 0 ? (sessionIdsByTaskSlot[slot] ?? '') : '';
-        },
-      );
-      return;
-    }
     this.slotSessionIds = Array.from(
-      { length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT },
+      { length: WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT },
       (_, slot) => sessionIdsByTaskSlot[slot] ?? '',
     );
   }
@@ -762,12 +747,9 @@ export class WorkLouderCodexLightingController {
     return [...prioritized, ...this.taskCatalog.sidebar.filter((task) => !included.has(task.id))];
   }
 
-  private lightingThreadCount(): number {
-    return WORKLOUDER_CODEX_AGENT_SLOT_COUNT;
-  }
-
   private updateLightingFrame(wakeOnBaseFrameChange = false): WorkLouderCodexLightingFrame {
-    const threadCount = this.lightingThreadCount();
+    // Every thread, so a key that stops being a task key loses its last colour.
+    const threadCount = WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT;
     const projected = createWorkLouderCodexLightingFrame(
       this.latestActivity,
       this.slotSessionIds,
