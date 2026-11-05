@@ -272,7 +272,7 @@ describe('settings discoverability regressions', () => {
           .not.toContain('settings.agentIsland.skinLabel');
       }
     }
-    for (const field of ['displayLabel', 'soundLabel']) {
+    for (const field of ['subtleRemindersLabel', 'displayLabel', 'soundLabel']) {
       expect(documents.some(({ entry }) => entry.id === `settings.agentIsland.${field}`))
         .toBe(agentIsland.supported && agentIsland.enabled);
     }

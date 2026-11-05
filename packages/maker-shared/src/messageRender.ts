@@ -63,6 +63,19 @@ export interface MessageRenderSourceMessageLike {
   delivery?: string | null;
 }
 
+/** Presentation anchors only. Missing loaded user boundaries stay unavailable;
+ * continuation/steer rows never create a second persisted turn identity. */
+export function collectPluginUiTurnAnchors(messages: readonly MessageRenderSourceMessageLike[]): Map<string, string> {
+  const result = new Map<string, string>();
+  let anchor: string | undefined;
+  for (const message of messages) {
+    if (message.role === 'user' && message.delivery !== 'steer') {
+      if (!message.isSyntheticTrigger && !isContinuationMessage(message)) anchor = message.clientId || undefined;
+    } else if (message.role === 'assistant' && message.clientId && anchor) result.set(message.clientId, anchor);
+  }
+  return result;
+}
+
 export type MessageRenderNormalizedMessageKind =
   | 'user'
   | 'assistant'
