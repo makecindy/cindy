@@ -770,6 +770,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     targetSessionId: row.targetSessionId ?? undefined,
     persistentSession: !!row.persistentSession,
     silentWhenIdle: !!row.silentWhenIdle,
+    programChangeGate: !!row.programChangeGate,
     // preRunHook 与 notify 同模式:DB 拆列,内存合成嵌套对象。command 为空即未启用。
     preRunHook: row.preRunHookCommand
       ? {
@@ -830,6 +831,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     targetSessionId: s.targetSessionId ?? null,
     persistentSession: !!s.persistentSession,
     silentWhenIdle: !!s.silentWhenIdle,
+    programChangeGate: !!s.programChangeGate,
     preRunHookCommand: s.preRunHook?.command ?? null,
     preRunHookTimeoutMs: s.preRunHook?.timeoutMs ?? null,
     preRunPluginId: s.preRunPlugin?.pluginId ?? null,
@@ -889,6 +891,7 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   if (hasKey(patch, 'targetSessionId')) out.targetSessionId = patch.targetSessionId ?? null;
   if (hasKey(patch, 'persistentSession')) out.persistentSession = !!patch.persistentSession;
   if (hasKey(patch, 'silentWhenIdle')) out.silentWhenIdle = !!patch.silentWhenIdle;
+  if (hasKey(patch, 'programChangeGate')) out.programChangeGate = !!patch.programChangeGate;
   if (hasKey(patch, 'preRunHook')) {
     // 嵌套对象整体替换(同 notify):出现即两列同写;undefined = 关闭 hook,双列清 NULL
     out.preRunHookCommand = patch.preRunHook?.command ?? null;

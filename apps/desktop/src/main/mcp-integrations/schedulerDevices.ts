@@ -105,9 +105,17 @@ export function createSchedulerRemoteDeps(deps: {
         if (op === 'create') {
           const capabilities = await deps.invoke(deviceId, 'maker:get-capabilities', ['claude-code'], { preSend: assertCurrent });
           assertCurrent();
-          const supported = capabilities.ok ? capabilities.result as { supportsRemoteScheduleDirectoryCheck?: boolean } | null : null;
+          const supported = capabilities.ok ? capabilities.result as {
+            supportsRemoteScheduleDirectoryCheck?: boolean;
+            supportsScheduleProgramChangeGate?: boolean;
+          } | null : null;
           if (supported?.supportsRemoteScheduleDirectoryCheck !== true) {
             return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持远程创建定时任务，请先更新目标电脑' };
+          }
+          // 旧端会丢掉 programChangeGate，检查仍每次启动模型。只有打开门控的创建需要此能力。
+          if ((args[0] as { programChangeGate?: unknown } | undefined)?.programChangeGate === true
+            && supported.supportsScheduleProgramChangeGate !== true) {
+            return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持检查任务的程序变化门，请先更新目标电脑' };
           }
         }
         const patch = op === 'update' ? args[1] as Record<string, unknown> | undefined : undefined;
