@@ -68,7 +68,23 @@ Presence<= PopperProvider > TooltipProvider > TooltipPortal > … (54)
 | 焦点/扫描 effect | 用 dev flag 关闭 | 仍崩溃 |
 | render 期 setState（`ChatInput` / `ModelSelector`） | 加函数式相等守卫后重建 | 仍崩溃（已回滚改动） |
 
-## 6. 复现命令
+## 6. 二分定位（本轮新增）
+
+在组件顶部加一个常量开关式的提前返回（`return null`），重建后逐个下移：
+
+| 被禁用 | 结果 |
+|---|---|
+| `ChatInput` 整体 | 仍崩溃，错误归属改为 `<CCAgentSessionContent>` |
+| `CCAgentSessionContent` 整体 | 页面正常渲染（只剩外壳），不再崩溃 |
+
+进一步用 React DevTools hook 统计 `CCAgentSessionContent` 的 commit：崩溃时**一次 commit 都没有**，
+说明循环发生在其**首轮渲染期间**（render-phase update），而不是 effect 提交后的连锁更新 ——
+这与 React #185 的判定条件一致，也解释了为什么禁用它的子树就能恢复。
+
+结论：循环源在 `CCAgentSessionContent` 的渲染子树内（不是 `ChatInput` 本身，也不是 Host 通道），
+下一步应在该子树内按同样的提前返回法继续二分到具体子组件。
+
+## 7. 复现命令
 
 ```bash
 # 1) 构建 renderer
