@@ -219,6 +219,37 @@ describe('live compact card roles and tool excerpts (1.0.3-1.0.5)', () => {
     }
   });
 
+  it('keeps evicting past a file that cannot be deleted', () => {
+    // 计划内的最旧文件被占用(Windows 常见)时,不能就此放弃整轮压缩 ——
+    // 继续往下删,腾出够用的空间就照常切。
+    const dir = mkdtempSync(join(tmpdir(), 'spine-busy-'));
+    try {
+      const locked = join(dir, 'locked.txt');
+      writeFileSync(locked, 'l'.repeat(600));
+      writeFileSync(join(dir, 'b.txt'), 'b'.repeat(200));
+      writeFileSync(join(dir, 'c.txt'), 'c'.repeat(200));
+      const oldest = new Date(2026, 0, 1);
+      utimesSync(locked, oldest, oldest);
+      const newer = new Date(2026, 0, 2);
+      utimesSync(join(dir, 'b.txt'), newer, newer);
+      utimesSync(join(dir, 'c.txt'), newer, newer);
+      // 上限 1000、已用 1000、新写 100:计划只含最旧的 locked;它删不掉时必须继续删 b。
+      const result = rotateShadow({
+        dir,
+        incomingBytes: 100,
+        cap: 1000,
+        unlink: (path) => {
+          if (String(path).endsWith('locked.txt')) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+          rmSync(path, { force: true });
+        },
+      });
+      expect(result.ok).toBe(true);
+      expect(readdirSync(dir).sort()).toEqual(['c.txt', 'locked.txt']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('drops the raw snapshot record together with the snapshot it describes', () => {
     const dir = mkdtempSync(join(tmpdir(), 'spine-meta-'));
     try {

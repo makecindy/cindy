@@ -1266,7 +1266,10 @@ export function rotateShadow(options: {
   /** 当前卡片引用的其它文件(raw-*.txt);容量不够时宁可放弃这次切割。 */
   protectPaths?: string[];
   cap?: number;
+  /** 测试注入:上游同样把 unlink 做成参数。 */
+  unlink?: (path: string) => void;
 }) {
+  const unlink = options.unlink ?? unlinkSync;
   const cap = options.cap ?? shadowMaxBytes();
   const protect = new Set<string>();
   if (options.protectPath) protect.add(resolve(options.protectPath));
@@ -1297,9 +1300,14 @@ export function rotateShadow(options: {
   }
   let deleted = 0;
   let freed = 0;
-  for (const file of plan) {
+  // 计划只用来判断「删得够不够」;实际删除仍遍历全部候选,计划内的删不掉(Windows 上被占用)
+  // 就继续往下删,不让一个占用的旧文件顶掉整轮压缩。
+  const plannedPaths = new Set(plan.map((file) => file.path));
+  for (const file of candidates) {
+    if (used + options.incomingBytes <= low) break;
+    if (!plannedPaths.has(file.path) && used + options.incomingBytes <= cap) break;
     try {
-      unlinkSync(file.path);
+      unlink(file.path);
     } catch {
       continue;
     }
