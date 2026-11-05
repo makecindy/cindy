@@ -87,15 +87,18 @@ export function createCompanionStore(api: CompanionApi, options: { enabled: () =
         if (!result.hasMore) return out;
       }
     },
-    /** Live values in the store (large ones downloaded). */
+    /**
+     * Every value in the store (large ones downloaded); a deletion comes as `null`, like a
+     * preference tombstone, so a restore removes what another computer deleted.
+     */
     async values(actorId: string): Promise<CompanionRow[]> {
       const rows: CompanionRow[] = [];
       let after = '0';
       for (;;) {
         const result = await page(actorId, after, true);
         for (const entry of result.entries) {
-          if (entry.deleted) continue;
-          rows.push({ key: entry.key, revision: entry.revision, value: entry.blob ? await blobValue(actorId, entry) : entry.value });
+          rows.push({ key: entry.key, revision: entry.revision,
+            value: entry.deleted ? null : entry.blob ? await blobValue(actorId, entry) : entry.value });
         }
         after = result.cursor;
         if (!result.hasMore) return rows;
@@ -155,6 +158,8 @@ export async function readCompanionRows(api: CompanionApi, store: CompanionStore
     if (!store.active()) return rows;
     throw error;
   }
+  // A store deletion counts only for a key the preferences do not have: a value that shrank back
+  // into the preferences leaves a deletion in the store, and the preference row wins.
   const have = new Set(rows.map(row => row.key));
   const extra = stored.filter(row => !have.has(row.key) || !preferenceFits(row.key, canonicalJson(row.value)))
     .map(row => ({ ...row, fromStore: true as const }));

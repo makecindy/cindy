@@ -365,6 +365,18 @@ describe('companion store', () => {
     expect((await readCompanionRows(t.api, t.store, 'actor')).find(row => row.key === big.key)?.value).toEqual(memory('big.md', 'small again').value);
   });
 
+  it('passes a deletion of a value kept only in the store to the next restore', async () => {
+    const t = storeSetup();
+    const big = memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000));
+    t.setValues([profile('soul'), big]);
+    await t.uploader.syncBot('bot', 'actor');
+    t.setValues([profile('soul')]);
+    await t.uploader.syncBot('bot', 'actor');
+    // Without the deletion the computer taking over would keep (and re-upload) its old copy.
+    expect((await readCompanionRows(t.api, t.store, 'actor')).find(row => row.key === big.key))
+      .toMatchObject({ value: null, fromStore: true });
+  });
+
   it('sends a value over the inline limit through the bucket and checks it on the way back', async () => {
     const t = storeSetup();
     const huge = memory('huge.md', 'y'.repeat(STORE_INLINE_MAX_BYTES + 10_000));

@@ -156,6 +156,23 @@ describe('Chat Server client for companions', () => {
     await expect(client.hasProfileSnapshot(id(1))).resolves.toBe(false);
   });
 
+  it('finds a profile too large for the preferences in the companion store, and none on an older server', async () => {
+    const complete = { name: 'Cindy', description: '', soul: '', systemPrompt: '', user: '' };
+    const request = vi.fn(async (path: string): Promise<unknown> => (path.startsWith('/preferences') ? []
+      : { key: 'companion.profile.v1', revision: 1, deleted: false, value: complete }));
+    const client = createChatServerClient(request as never);
+    await expect(client.hasProfileSnapshot(id(1))).resolves.toBe(true);
+    expect(request).toHaveBeenLastCalledWith('/companion-store/entry?key=companion.profile.v1', 'GET', undefined, id(1));
+    request.mockImplementation(async (path: string) => (path.startsWith('/preferences') ? []
+      : { key: 'companion.profile.v1', revision: 1, deleted: false, blob: true }));
+    await expect(client.hasProfileSnapshot(id(1))).resolves.toBe(true);
+    request.mockImplementation(async (path: string) => {
+      if (path.startsWith('/preferences')) return [];
+      throw Object.assign(new Error('NOT_FOUND'), { status: 404 });
+    });
+    await expect(client.hasProfileSnapshot(id(1))).resolves.toBe(false);
+  });
+
   it('sends compare-and-set and returns a typed conflict', async () => {
     const request = vi.fn().mockResolvedValueOnce({ id: id(1), homeDeviceId: 'mac-b' })
       .mockRejectedValueOnce(new ApiError('HOME_DEVICE_CONFLICT', 409, 'conflict', { homeDeviceId: 'mac-c' }))

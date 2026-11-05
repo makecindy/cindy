@@ -300,7 +300,7 @@ export async function materializeCompanion(input: {
   // a folder or judgment removed meanwhile (or all of them) stays removed. One that never synced
   // (an old copy of its own) joins, and goes up with the rest.
   const workbench = prefs.get(COMPANION_WORKBENCH_KEY);
-  const replaceWorkbench = !!knownPrefs[COMPANION_WORKBENCH_KEY];
+  const replaceWorkbench = !!knownPrefs[COMPANION_WORKBENCH_KEY] || (known?.actorId === actor.id && !!known.stored?.[COMPANION_WORKBENCH_KEY]);
   if (workbench && host.applyWorkbench && (workbench.value !== null || replaceWorkbench)) {
     await apply('workbench', async () => {
       await step(() => host.applyWorkbench!(botId, workbench.value, fence, { replace: replaceWorkbench }));
