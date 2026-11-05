@@ -16,6 +16,7 @@ const state = vi.hoisted(() => ({
   error: vi.fn(),
   references: new Map<string, unknown>(),
   loading: false,
+  remoteCatalogStatus: 'ready' as 'ready' | 'unsupported' | 'error',
   localLoading: false,
   rosterLoading: false,
   rosterFailed: false,
@@ -56,8 +57,10 @@ vi.mock('@/state/modelVisibilityPrefs', () => ({
     model.defaultEnabled !== false && !state.hiddenModels.has(model.id),
 }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
-  useDeviceProviders: () => ({ providers: [{ id: 'source', auth: { method: 'oauth' }, source: 'builtin', access: { kind: 'subscription' }, connected: true, agents: ['codex'], routing: { codex: {} },
-    models: { codex: state.loading ? state.localModels : state.remoteModels } }], loading: state.loading }),
+  useDeviceProviders: () => ({ providers: state.remoteCatalogStatus === 'ready' ? [{ id: 'source', auth: { method: 'oauth' }, source: 'builtin', access: { kind: 'subscription' }, connected: true, agents: ['codex'], routing: { codex: {} },
+    models: { codex: state.loading ? state.localModels : state.remoteModels } }] : [], loading: state.loading,
+    unsupported: state.remoteCatalogStatus === 'unsupported',
+    error: state.remoteCatalogStatus === 'ready' ? null : 'catalog unavailable' }),
 }));
 vi.mock('@/hooks/useFeishuBot', () => ({ useFeishuBot: () => ({ status: 'disconnected' }) }));
 vi.mock('@/hooks/useWecomGroupNotificationSettings', () => ({ useWecomGroupNotificationSettings: () => ({}) }));
@@ -123,6 +126,7 @@ beforeEach(() => {
   state.alternativeProviders = [];
   state.localModels = [{ id: 'shared', efforts: ['low'], defaultEffort: 'low', supportsFastMode: false }];
   state.loading = false;
+  state.remoteCatalogStatus = 'ready';
   state.localLoading = false;
   state.rosterLoading = false;
   state.rosterFailed = false;
@@ -206,6 +210,31 @@ it('rejects a model missing from the selected remote catalog', () => {
   form.save();
   expect(form.onSubmit).not.toHaveBeenCalled();
   expect(state.warning).toHaveBeenCalledWith('scheduler.editor.validation.modelUnavailable');
+});
+
+// PR #8950 P1: old peers explicitly lacking provider:list still expose model
+// capabilities. Prior remote fixtures always returned a provider catalog.
+// Unit/jsdom: real edit/save must accept a supported legacy model, while rejecting
+// a missing capability or a modern catalog failure; saved routing stays unchanged.
+it.each([
+  { status: 'unsupported' as const, model: 'remote-only', saves: true },
+  { status: 'unsupported' as const, model: 'removed', saves: false },
+  { status: 'error' as const, model: 'remote-only', saves: false },
+])('uses capabilities-only validation for legacy peers: $status / $model', async ({ status, model, saves }) => {
+  state.remoteCatalogStatus = status;
+  const form = mount(schedule({ agentDeviceId: 'studio', model, effort: 'ultra', fastMode: true }));
+  fireEvent.change(screen.getByDisplayValue('Test'), { target: { value: 'Renamed automation' } });
+  form.save();
+  if (saves) {
+    await waitFor(() => expect(form.onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'Renamed automation', agentDeviceId: 'studio', model,
+      providerId: 'source', effort: 'ultra', fastMode: true,
+    }), true));
+    expect(screen.queryByText('scheduler.editor.validation.modelUnavailable')).toBeNull();
+  } else {
+    expect(form.onSubmit).not.toHaveBeenCalled();
+    expect(state.warning).toHaveBeenCalledWith('scheduler.editor.validation.modelUnavailable');
+  }
 });
 
 it('preserves remote preferences while its catalog refresh is still loading', async () => {

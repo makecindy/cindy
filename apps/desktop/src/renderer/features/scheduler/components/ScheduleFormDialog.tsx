@@ -166,6 +166,9 @@ export function ScheduleFormDialog({
   const localProviders = useProviders();
   const deviceProviders = useDeviceProviders(selectedAgentDeviceId ?? undefined);
   const { providers, loading: providersLoading } = selectedAgentDeviceId ? deviceProviders : localProviders;
+  // Old peers explicitly lacking provider:list still expose their model capabilities.
+  // An ordinary lookup error or an empty modern catalog must not take this fallback.
+  const legacyRemoteCatalog = !!selectedAgentDeviceId && deviceProviders.unsupported;
   // Do not calibrate saved choices against a provisional local or loading snapshot.
   const modelCatalogReady = (!isBound || form.modelAgentDeviceId !== undefined || !!boundSessionReference) && !caps.loading && !providersLoading;
   const hideWorkspaceFields = runMode === 'bound' || isBound;
@@ -534,7 +537,7 @@ export function ScheduleFormDialog({
   const modelUnavailable = !isScriptMode && modelCatalogReady && (
     (!!form.model.trim() && (
       (agentsLoaded && !availableVendors.has(form.agentKind === 'claude-code' ? 'cc' : form.agentKind))
-      || !effectiveSourceIdForModel(providers, form.providerId || null, form.model, form.agentKind)
+      || (!legacyRemoteCatalog && !effectiveSourceIdForModel(providers, form.providerId || null, form.model, form.agentKind))
       || isExplicitScheduleModelUnavailable(form.model, caps.capabilities?.availableModels)
     )) || (!isEdit && !isBound && !agentsLoading && !form.model.trim())
   );
