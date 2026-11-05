@@ -2,6 +2,40 @@ import { describe, expect, it } from 'vitest';
 import { imageParameterSchema, normalizeImageParameters } from '../imageParameters.js';
 
 describe('image options use the selected channel and model', () => {
+  it.each(['gpt-image-2.6-sunburst', 'gpt-image-2.6-flare'])(
+    'uses the documented quality levels and standard sizes for %s',
+    (model) => {
+      for (const quality of ['auto', 'low', 'medium', 'high', 'xhigh', 'max']) {
+        expect(
+          normalizeImageParameters('openai', `account/${model}`, {
+            size: '1024x1024',
+            quality,
+          }),
+        ).toEqual({ size: '1024x1024', quality });
+      }
+      expect(normalizeImageParameters('openai', model, { aspectRatio: '3:2' })).toEqual({
+        size: '1536x1024',
+      });
+      expect(imageParameterSchema('openai', model).size.enum).toEqual([
+        'auto',
+        '1024x1024',
+        '1536x1024',
+        '1024x1536',
+      ]);
+      expect(() => normalizeImageParameters('openai', model, { size: '1760x3824' })).toThrow();
+      expect(() => normalizeImageParameters('openai', model, { aspectRatio: '16:9' })).toThrow();
+    },
+  );
+
+  it('does not extend 2.6 quality levels to unrecognized models or other protocols', () => {
+    expect(() =>
+      normalizeImageParameters('openai', 'gpt-image-2.6-future', { quality: 'max' }),
+    ).toThrow();
+    expect(() =>
+      normalizeImageParameters('gemini', 'gpt-image-2.6-sunburst', { quality: 'max' }),
+    ).toThrow();
+  });
+
   it('keeps supported large native sizes and all Sunburst quality levels', () => {
     for (const quality of ['auto', 'low', 'medium', 'high', 'xhigh', 'max']) {
       expect(

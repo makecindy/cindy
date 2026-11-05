@@ -309,6 +309,9 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   已知 GPT Image 尺寸约束在付费提交前检查；不合法时保留 prepared 调用供更正。
   目标成品尺寸不满足模型约束时，由 Agent 选择合法生成尺寸并单独完成成品缩放，不能谎报
   请求尺寸就是实际输出尺寸。没有自动缩放或偷偷裁切。
+- GPT Image 2.6 Sunburst / Flare 的质量档按 OpenAI 图像生成指南提供到 `xhigh` / `max`。
+  Images API 文档尚未明确这两个型号的自定义尺寸范围；客户端暂只提供 `auto` 和文档列出的
+  三种标准尺寸，不继承 GPT Image 2 / 2.5 的尺寸限制。目录声明及真实账号准入需分别验证。
 - Codex SSE 的 partial image 仅为预览，不能在失败、未完成或只有预览的断流中当成成品。
   大 Base64 响应的字符校验必须采用常量栈空间，避免分组重复正则导致已生成图片收取失败。
 - 参数依据：[OpenAI](https://developers.openai.com/api/docs/guides/image-generation)、

@@ -2,7 +2,13 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { buildUserProvider, type Provider } from '@cindy/model-providers';
+import {
+  BUNDLED_CATALOG,
+  buildUserProvider,
+  mergeDiscoveredRuntimeModels,
+  parseModelsListResponse,
+  type Provider,
+} from '@cindy/model-providers';
 import { createCustomImageChannel, registerCustomImageChannels } from '../customImageChannel.js';
 import { pruneDynamicImageChannels } from '../byokImageChannel.js';
 import { ImageChannelRegistry } from '../imageChannelRegistry.js';
@@ -83,6 +89,105 @@ function harness(initial = provider()) {
 }
 
 describe('standalone custom OpenAI Images', () => {
+  // Issue #8917: a synthetic server declaration exercises discovery, projection
+  // and dispatch; it is not a claim that the server ships that declaration.
+  it.each(['gpt-image-2.6-sunburst', 'gpt-image-2.6-flare'])(
+    'projects and dispatches discovered %s when the catalog declares it',
+    async (model) => {
+      const models = mergeDiscoveredRuntimeModels([], parseModelsListResponse({
+        data: [{ id: model }],
+      })!);
+      const catalog = BUNDLED_CATALOG.modelRegistry!;
+      const modelId = `openai/${model}`;
+      const declaredCatalog = {
+        ...catalog,
+        baseModels: [
+          ...(catalog.baseModels ?? []).filter((item) => item.id !== modelId),
+          {
+            id: modelId,
+            aliases: [model],
+            defaults: {
+              name: model,
+              mode: 'image_generation' as const,
+              modalities: { input: ['text', 'image'], output: ['image'] },
+            },
+          },
+        ],
+        models: [
+          ...catalog.models.filter((item) => item.id !== modelId),
+          {
+            id: modelId,
+            name: model,
+            modelRef: modelId,
+            mode: 'image_generation' as const,
+            status: 'active' as const,
+            routes: [{ providerId: 'openai', modelId, agents: [] }],
+            nativeApi: 'openai-images' as const,
+          },
+        ],
+      };
+      const config = {
+        id: 'openai-api',
+        name: 'OpenAI API',
+        auth: { method: 'apiKey' as const },
+        runtimes: {
+          pi: { baseUrl: 'https://api.openai.com/v1', imageApi: 'openai-images' as const, models },
+        },
+      };
+      const undeclared = buildUserProvider(config, {
+        modelRegistry: {
+          ...catalog,
+          baseModels: (catalog.baseModels ?? []).filter((item) => item.id !== modelId),
+          models: catalog.models.filter((item) => item.id !== modelId),
+        },
+      });
+      expect(undeclared.imageModels ?? []).toEqual([]);
+      const source = buildUserProvider(config, { modelRegistry: declaredCatalog });
+      const h = harness(source);
+      const registry = new ImageChannelRegistry();
+      registerCustomImageChannels(registry, [source], new Set(), () => h.channel);
+      expect(source.imageModels).toEqual([
+        expect.objectContaining({ id: model, sourceAgent: 'pi', mode: 'image_generation' }),
+      ]);
+      expect(registry.isProviderReady('openai-api', model)).toBe(true);
+      await registry.resolve('openai-api', model).generateImage({
+        model, prompt: 'red circle', quality: 'max',
+      });
+      expect(h.fetchImplementation.mock.calls[0]?.[0]).toBe(
+        'https://api.openai.com/v1/images/generations',
+      );
+      expect(JSON.parse(String(h.fetchImplementation.mock.calls[0]?.[1]?.body))).toMatchObject({
+        model, prompt: 'red circle', quality: 'max',
+      });
+
+      const withoutImages = buildUserProvider(
+        { ...config, runtimes: { pi: { baseUrl: 'https://api.openai.com/v1', models } } },
+        { modelRegistry: declaredCatalog },
+      );
+      expect(harness(withoutImages).channel.isModelReady?.(model)).toBe(false);
+      const overridden = buildUserProvider(
+        {
+          ...config,
+          runtimes: { pi: { ...config.runtimes.pi,
+            models: models.map((item) => ({ ...item, mode: 'chat' as const })),
+          } },
+        },
+        { modelRegistry: declaredCatalog },
+      );
+      expect(overridden.imageModels ?? []).toEqual([]);
+      const unknown = buildUserProvider(
+        {
+          ...config,
+          runtimes: { pi: { ...config.runtimes.pi,
+            models: [{ id: 'gpt-image-2.6-unknown', name: 'Unknown' }],
+          } },
+        },
+        { modelRegistry: declaredCatalog },
+      );
+      expect(unknown.imageModels ?? []).toEqual([]);
+    },
+  );
+
   it('keeps URL-capable custom sources in Core but out of the legacy image channel', () => {
     const h = harness();
     const registry = new ImageChannelRegistry();
