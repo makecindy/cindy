@@ -44,6 +44,54 @@ it("exposes local management only when supported and propagates the host error",
   );
 });
 
+// 测试价值
+// - 生产入口与可观察结果：通过 SchedulerToolRegistry.call 验证 routine_save 的参数校验；
+//   空 effort 必须在工具边界被拒绝，合法档位必须继续传给宿主保存服务。
+// - Bug／规则依据：#8860；Gemini/Antigravity 拒绝 function schema 中的空 enum 值。
+// - 现有覆盖缺口：原有 routine_save 用例没有传 modelOverride.effort，无法发现 schema 生成了空枚举。
+// - 最小失败输入：modelOverride.effort = ""；tier：unit。
+it('rejects an empty routine model effort while preserving supported effort values', async () => {
+  const save = vi.fn(async () => ({ id: 'routine-1' }));
+  const registry = new SchedulerToolRegistry();
+  registerRoutineTools(registry, { routines: { save } } as unknown as { routines: RoutineToolService });
+  const baseArgs = {
+    botId: 'bot',
+    name: 'Review',
+    prompt: 'Review PRs',
+    enabled: true,
+    triggers: [{ id: 'tick', kind: 'interval' as const, intervalMs: 60000 }],
+    modelOverride: {
+      agentKind: 'pi' as const,
+      model: 'antigravity/gemini-4-argon',
+    },
+  };
+
+  const invalid = await registry.call('routine_save', {
+    ...baseArgs,
+    modelOverride: { ...baseArgs.modelOverride, effort: '' },
+  });
+  expect(invalid.isError).toBe(true);
+  const invalidMessage = invalid.content.find((block) => block.type === 'text');
+  expect(invalidMessage?.type).toBe('text');
+  if (invalidMessage?.type !== 'text') throw new Error('Expected INVALID_ARGS text response');
+  expect(JSON.parse(invalidMessage.text)).toMatchObject({
+    ok: false,
+    errorCode: 'INVALID_ARGS',
+  });
+  expect(save).not.toHaveBeenCalled();
+
+  const valid = await registry.call('routine_save', {
+    ...baseArgs,
+    modelOverride: { ...baseArgs.modelOverride, effort: 'medium' },
+  });
+  expect(valid.isError).not.toBe(true);
+  expect(save).toHaveBeenCalledWith(
+    'bot',
+    expect.objectContaining({ modelOverride: expect.objectContaining({ effort: 'medium' }) }),
+    undefined,
+  );
+});
+
 it.each([
   { id: 'tick', kind: 'once' as const, at: 30000 },
   { id: 'tick', kind: 'interval' as const, intervalMs: 60000, anchorMs: 30000 },
