@@ -8,7 +8,12 @@
 
 import { CINDY_MARK_PATH, CINDY_MARK_TRANSFORM } from '@cindy/model-providers/branding';
 
-import { getAgentIslandQuotaChipWidth, type AgentIslandQuotaItem } from '../../shared/agentIsland.js';
+import {
+  getAgentIslandQuotaChipWidth,
+  getAgentIslandQuotaSummaryWidth,
+  type AgentIslandQuotaItem,
+  type AgentIslandQuotaSummary,
+} from '../../shared/agentIsland.js';
 import type { MenubarView } from '../../shared/menubarQuota.js';
 import { MENUBAR_CINDY_LOGO } from '../menubar/logos.js';
 import type { QuotaOverviewService } from '../quota-overview/service.js';
@@ -16,6 +21,23 @@ import type { AgentIslandService } from './service.js';
 
 /** The menu bar helper draws the Cindy mark from a sentinel; the island gets the real SVG. */
 const CINDY_LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path fill="#000" fill-rule="evenodd" transform="${CINDY_MARK_TRANSFORM}" d="${CINDY_MARK_PATH}"/></svg>`;
+
+/**
+ * The menu bar's "lowest" status text, for an island too narrow for a single chip. Colored like
+ * the chip it comes from; "0%" means every subscription is used up.
+ */
+export function buildAgentIslandQuotaSummary(view: MenubarView | null): AgentIslandQuotaSummary | null {
+  if (!view || view.gate) return null;
+  const text = view.statusTextByMode.lowest;
+  if (!text) return null;
+  const cell = view.sources.find((source) => source.kind === 'subscription' && `${source.value}${source.valueUnit ?? ''}` === text);
+  return {
+    text,
+    level: cell?.level ?? (text === '0%' ? 'error' : 'normal'),
+    accessibilityLabel: cell?.accessibilityLabel ?? text,
+    width: getAgentIslandQuotaSummaryWidth(text),
+  };
+}
 
 /** Sources with a level to show, as the iPhone widgets pick them; pay-as-you-go and unread ones have none. */
 export function buildAgentIslandQuota(view: MenubarView | null): AgentIslandQuotaItem[] {
@@ -42,18 +64,20 @@ export function buildAgentIslandQuota(view: MenubarView | null): AgentIslandQuot
 export function startAgentIslandQuota(island: AgentIslandService, overview: QuotaOverviewService): () => void {
   let release: (() => void) | null = null;
   let unsubscribe: (() => void) | null = null;
+  const publish = (view: MenubarView | null) =>
+    island.setQuota(buildAgentIslandQuota(view), buildAgentIslandQuotaSummary(view));
   const sync = (enabled: boolean) => {
     if (enabled && !release) {
       // Subscribed first, so the first build after acquiring reaches the island.
-      unsubscribe = overview.subscribe((build) => island.setQuota(buildAgentIslandQuota(build.view)));
+      unsubscribe = overview.subscribe((build) => publish(build.view));
       release = overview.acquire();
-      island.setQuota(buildAgentIslandQuota(overview.latest()?.view ?? null));
+      publish(overview.latest()?.view ?? null);
     } else if (!enabled && release) {
       release();
       unsubscribe?.();
       release = null;
       unsubscribe = null;
-      island.setQuota([]);
+      island.setQuota([], null);
     }
   };
   const offEnabled = island.subscribeEnabled(sync);

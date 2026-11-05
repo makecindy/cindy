@@ -68,7 +68,7 @@ pnpm --filter desktop preview:island-mascots
 
 空闲灵动岛与展开后的顶栏会显示各套餐余量，数据来自菜单栏的余量概览
 （`src/main/agent-island/quota.ts` 投影 `MenubarView.sources`），展示哪些、顺序、隐私遮罩都跟菜单栏。
-**灵动岛宽度由用户决定，不为余量加宽**：放得下几个显示几个，从末尾省略（刘海屏默认宽度下收起态放不下，
-用户拉宽后才出现）。芯片的标称宽度由 main 算好随 `AgentIslandQuotaItem.width` 下发，helper 用它判断
+**灵动岛宽度由用户决定，不为余量加宽**：放得下几个显示几个，从末尾省略；一个完整余量都放不下时
+（如刘海屏默认宽度），只显示菜单栏「最低余量」的百分比（`quotaSummary`，与菜单栏图标旁的数字同源）。芯片的标称宽度由 main 算好随 `AgentIslandQuotaItem.width` 下发，helper 用它判断
 放得下几个、不测字体；改芯片字号、logo 尺寸或间距时，同步 `shared/agentIsland.ts` 的 `AGENT_ISLAND_QUOTA_*`
 与 `AgentIslandQuotaRow` 的常量，并重新实测「标称 ≥ 实绘」（见 `agentIslandCompactBadgeWidth.test.ts`）。

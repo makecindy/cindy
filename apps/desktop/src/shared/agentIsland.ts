@@ -625,6 +625,15 @@ export interface AgentIslandQuotaItem {
   width: number;
 }
 
+/** The menu bar's lowest-remaining percentage, shown alone when no chip fits. */
+export interface AgentIslandQuotaSummary {
+  text: string;
+  level: AgentIslandQuotaItem['level'];
+  accessibilityLabel: string;
+  /** Nominal upper-bound width of the text alone, without a logo. */
+  width: number;
+}
+
 // Quota chip metrics, mirrored by `AgentIslandQuotaRow` in
 // `native/agent-island/macos-agent-island-helper.swift`.
 export const AGENT_ISLAND_QUOTA_LOGO_SIZE = 10;
@@ -646,12 +655,16 @@ function isWideQuotaChar(char: string): boolean {
     || code >= 0x20000;
 }
 
-export function getAgentIslandQuotaChipWidth(text: string): number {
+export function getAgentIslandQuotaSummaryWidth(text: string): number {
   let textWidth = 0;
   for (const char of text) {
     textWidth += isWideQuotaChar(char) ? AGENT_ISLAND_QUOTA_WIDE_CHAR_WIDTH_BOUND : AGENT_ISLAND_QUOTA_CHAR_WIDTH_BOUND;
   }
-  return AGENT_ISLAND_QUOTA_LOGO_SIZE + AGENT_ISLAND_QUOTA_LOGO_GAP + textWidth + AGENT_ISLAND_QUOTA_ROUNDING_SLACK;
+  return textWidth + AGENT_ISLAND_QUOTA_ROUNDING_SLACK;
+}
+
+export function getAgentIslandQuotaChipWidth(text: string): number {
+  return AGENT_ISLAND_QUOTA_LOGO_SIZE + AGENT_ISLAND_QUOTA_LOGO_GAP + getAgentIslandQuotaSummaryWidth(text);
 }
 
 export function getAgentIslandDefaultContentWidth(input: {
@@ -787,6 +800,7 @@ export interface AgentIslandDisplayState {
   compactReminder?: { phase: AgentIslandSessionPhase; until: number };
   /** Remaining quota in the menu bar's order; absent or empty when there is none to show. */
   quota?: AgentIslandQuotaItem[];
+  quotaSummary?: AgentIslandQuotaSummary;
   strings: AgentIslandStrings;
   soundSettings: AgentIslandSoundSettings;
   mascotSkin: AgentIslandMascotSkin;

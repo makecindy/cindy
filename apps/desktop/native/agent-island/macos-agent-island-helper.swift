@@ -1563,9 +1563,18 @@ struct AgentIslandQuotaItem: Codable, Equatable, Identifiable {
   let width: Double
 }
 
+/// The menu bar's lowest-remaining percentage, shown alone when no chip fits.
+struct AgentIslandQuotaSummary: Codable, Equatable {
+  let text: String
+  let level: String
+  let accessibilityLabel: String
+  let width: Double
+}
+
 struct AgentIslandDisplayState: Codable {
   var compactReminder: AgentIslandCompactReminder? = nil
   var quota: [AgentIslandQuotaItem]? = nil
+  var quotaSummary: AgentIslandQuotaSummary? = nil
   let visible: Bool
   let mode: String
   let notchStatus: String
@@ -1710,6 +1719,8 @@ private let hardwareNotchTextRevealDistance: CGFloat = 38
 // beside the count badge. Reserving this much guarantees the badge is never clipped at
 // the default compact width.
 private let hardwareNotchBadgeReservedInset: CGFloat = 9
+/// Smallest inset `hardwareNotchSideInset` returns beside the notch.
+private let hardwareNotchMinimumSideInset: CGFloat = 7
 // How close a compact width must be to a snap point to count as sitting on it.
 private let compactWidthSnapTolerance: CGFloat = 1.5
 private let agentIslandTopDragHitSlop: CGFloat = 2
@@ -2536,6 +2547,7 @@ struct AgentIslandRootView: View {
           current: current,
           sessions: model.state.sessions,
           quota: model.state.displayQuota,
+          quotaSummary: model.state.quotaSummary,
           displaySurface: model.state.displaySurface,
           totalCount: model.state.totalCount,
           updatedAt: model.state.updatedAt,
@@ -2562,6 +2574,7 @@ struct AgentIslandRootView: View {
       IdleIslandView(
         layout: layout,
         quota: model.state.displayQuota,
+        quotaSummary: model.state.quotaSummary,
         strings: model.state.displayStrings,
         soundEnabled: model.state.displaySoundSettings.enabled,
         mascotSkin: model.state.displayMascotSkin,
@@ -2865,6 +2878,7 @@ struct CompactReminderView: View {
 struct IdleIslandView: View {
   let layout: AgentIslandLayout
   let quota: [AgentIslandQuotaItem]
+  let quotaSummary: AgentIslandQuotaSummary?
   let strings: AgentIslandStrings
   let soundEnabled: Bool
   let mascotSkin: String
@@ -2909,7 +2923,7 @@ struct IdleIslandView: View {
       Color.clear
     } else if layout.hasHardwareNotch {
       hardwareNotchBody
-    } else if !quota.isEmpty && layout.expanded {
+    } else if hasQuota && layout.expanded {
       // Quota takes the room left of the toolbar, aligned like a task's top bar.
       idleMark(quotaWidth: layout.width - expandedIslandCardHorizontalPadding * 2
         - ExpandedIslandToolbarControls.width - 8 - idleMascotWidth)
@@ -2932,7 +2946,12 @@ struct IdleIslandView: View {
     let textOpacity = hardwareNotchTextOpacity(sideWidth: sideWidth)
     // Collapsed, quota sits on the trailing side like the task badge; expanded, the toolbar
     // takes that side and quota follows the mascot.
-    let trailingQuota = !layout.expanded && !quota.isEmpty
+    let trailingQuota = !layout.expanded && hasQuota
+    // Chips keep the badge's inset; the bare percentage may use the narrowest one, so the
+    // default notch width still fits it.
+    let trailingInset = AgentIslandQuotaRow.fitting(items: quota, maxWidth: sideWidth - hardwareNotchBadgeReservedInset).isEmpty
+      ? hardwareNotchMinimumSideInset
+      : hardwareNotchBadgeReservedInset
     return HStack(spacing: 0) {
       idleMark(
         textOpacity: textOpacity,
@@ -2943,8 +2962,8 @@ struct IdleIslandView: View {
       Spacer(minLength: layout.notchWidth)
       Group {
         if trailingQuota {
-          AgentIslandQuotaRow(items: quota, maxWidth: sideWidth - hardwareNotchBadgeReservedInset)
-            .padding(.trailing, hardwareNotchBadgeReservedInset)
+          AgentIslandQuotaRow(items: quota, summary: quotaSummary, maxWidth: sideWidth - trailingInset)
+            .padding(.trailing, trailingInset)
         } else {
           Color.clear
         }
@@ -2962,14 +2981,16 @@ struct IdleIslandView: View {
 
   private var idleMascotWidth: CGFloat { 16 + 5 }
 
+  private var hasQuota: Bool { !quota.isEmpty || quotaSummary != nil }
+
   /// The mascot, then the quota when `quotaWidth` leaves room for it, otherwise the app name.
   @ViewBuilder
   private func idleMark(textOpacity: Double = 1, quotaWidth: CGFloat? = nil) -> some View {
     HStack(spacing: 5) {
       AgentIslandMascotView(skin: mascotSkin, state: .idle, size: 16)
         .frame(width: 16, height: 16)
-      if let quotaWidth, !AgentIslandQuotaRow.fitting(items: quota, maxWidth: quotaWidth).isEmpty {
-        AgentIslandQuotaRow(items: quota, maxWidth: quotaWidth)
+      if let quotaWidth, AgentIslandQuotaRow.hasContent(items: quota, summary: quotaSummary, maxWidth: quotaWidth) {
+        AgentIslandQuotaRow(items: quota, summary: quotaSummary, maxWidth: quotaWidth)
       } else {
         Text(strings.displayAppName)
           .font(.system(size: 10, weight: .semibold, design: .monospaced))
@@ -3047,6 +3068,7 @@ struct ExpandedIslandTopBar: View {
   var title: String? = nil
   let mascotState: AgentIslandMascotAnimationState?
   var quota: [AgentIslandQuotaItem] = []
+  var quotaSummary: AgentIslandQuotaSummary? = nil
   let layout: AgentIslandLayout
   let strings: AgentIslandStrings
   let soundEnabled: Bool
@@ -3108,7 +3130,7 @@ struct ExpandedIslandTopBar: View {
   /// mascot leaves.
   @ViewBuilder
   private func leadingContent(width: CGFloat) -> some View {
-    if mascotState != nil || title != nil || !quota.isEmpty {
+    if mascotState != nil || title != nil || !quota.isEmpty || quotaSummary != nil {
       HStack(spacing: 8) {
         if let mascotState {
           RunningMascotIcon(skin: mascotSkin, state: mascotState, size: 18, namespace: runningMascotNamespace)
@@ -3120,8 +3142,8 @@ struct ExpandedIslandTopBar: View {
             .foregroundColor(Color.white.opacity(0.34))
             .lineLimit(1)
             .truncationMode(.tail)
-        } else if !quota.isEmpty {
-          AgentIslandQuotaRow(items: quota, maxWidth: width - (mascotState != nil ? 18 + 8 : 0))
+        } else {
+          AgentIslandQuotaRow(items: quota, summary: quotaSummary, maxWidth: width - (mascotState != nil ? 18 + 8 : 0))
         }
       }
     }
@@ -3224,9 +3246,11 @@ enum AgentIslandQuotaLogos {
 
 /// Remaining quota per plan: logo and amount, in the menu bar's order. The island never
 /// widens for it (the width is the user's): chips that do not fit `maxWidth` are left out
-/// from the end, using the nominal widths main sent.
+/// from the end, using the nominal widths main sent. When not even one chip fits, the menu
+/// bar's lowest percentage is shown alone, as the menu bar icon does.
 struct AgentIslandQuotaRow: View {
   let items: [AgentIslandQuotaItem]
+  var summary: AgentIslandQuotaSummary? = nil
   let maxWidth: CGFloat
 
   // Mirrors the `AGENT_ISLAND_QUOTA_*` metrics in `shared/agentIsland.ts`.
@@ -3246,13 +3270,33 @@ struct AgentIslandQuotaRow: View {
     return result
   }
 
+  static func hasContent(items: [AgentIslandQuotaItem], summary: AgentIslandQuotaSummary?, maxWidth: CGFloat) -> Bool {
+    !fitting(items: items, maxWidth: maxWidth).isEmpty || fittingSummary(summary, maxWidth: maxWidth) != nil
+  }
+
+  private static func fittingSummary(_ summary: AgentIslandQuotaSummary?, maxWidth: CGFloat) -> AgentIslandQuotaSummary? {
+    guard let summary, CGFloat(summary.width) <= maxWidth + 0.5 else { return nil }
+    return summary
+  }
+
   var body: some View {
-    HStack(spacing: Self.chipSpacing) {
-      ForEach(Self.fitting(items: items, maxWidth: maxWidth)) { item in
-        chip(item)
+    let chips = Self.fitting(items: items, maxWidth: maxWidth)
+    if chips.isEmpty, let summary = Self.fittingSummary(summary, maxWidth: maxWidth) {
+      Text(summary.text)
+        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+        .foregroundColor(textColor(summary.level))
+        .lineLimit(1)
+        .fixedSize()
+        .accessibilityLabel(summary.accessibilityLabel)
+        .help(summary.accessibilityLabel)
+    } else {
+      HStack(spacing: Self.chipSpacing) {
+        ForEach(chips) { item in
+          chip(item)
+        }
       }
+      .fixedSize()
     }
-    .fixedSize()
   }
 
   private func chip(_ item: AgentIslandQuotaItem) -> some View {
@@ -3478,6 +3522,7 @@ struct ExpandedSessionsView: View {
   let current: AgentIslandSession
   let sessions: [AgentIslandSession]
   let quota: [AgentIslandQuotaItem]
+  let quotaSummary: AgentIslandQuotaSummary?
   let displaySurface: String
   let totalCount: Int
   let updatedAt: Double
@@ -3514,6 +3559,7 @@ struct ExpandedSessionsView: View {
       ExpandedIslandTopBar(
         mascotState: currentMascotState,
         quota: quota,
+        quotaSummary: quotaSummary,
         layout: layout,
         strings: strings,
         soundEnabled: soundEnabled,

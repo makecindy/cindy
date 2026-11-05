@@ -4,14 +4,15 @@
  * - 规则依据：灵动岛余量「展示哪些和排序跟着菜单栏来」(2026-11-05 需求)；Cindy 标志在菜单栏
  *   以哨兵传递，灵动岛 helper 不认识哨兵，必须换成真实 SVG。
  * - 现有覆盖缺口：新模块，菜单栏与 iPhone 小组件的测试不覆盖这条投影。
- * - 最小失败输入：含按量付费、未读到的来源、额度用完只剩 credits、Cindy 余额的视图；登录门槛。
+ * - 最小失败输入：含按量付费、未读到的来源、额度用完只剩 credits、Cindy 余额的视图；登录门槛；
+ *   宽度放不下任何余量时退回菜单栏「最低余量」的百分比(2026-11-05 需求)。
  * - tier：unit，纯函数。
  */
 import { describe, expect, it } from 'vitest';
 
 import type { MenubarSourceCell, MenubarView } from '../../../shared/menubarQuota';
 import { MENUBAR_CINDY_LOGO } from '../../menubar/logos';
-import { buildAgentIslandQuota } from '../quota';
+import { buildAgentIslandQuota, buildAgentIslandQuotaSummary } from '../quota';
 
 function cell(overrides: Partial<MenubarSourceCell> & Pick<MenubarSourceCell, 'id'>): MenubarSourceCell {
   return {
@@ -33,8 +34,12 @@ function cell(overrides: Partial<MenubarSourceCell> & Pick<MenubarSourceCell, 'i
   };
 }
 
-function view(sources: MenubarSourceCell[], gate?: MenubarView['gate']): MenubarView {
-  return { sources, ...(gate ? { gate } : {}) } as MenubarView;
+function view(sources: MenubarSourceCell[], gate?: MenubarView['gate'], lowest: string | null = null): MenubarView {
+  return {
+    sources,
+    statusTextByMode: { icon: null, lowest, today: null, task: null },
+    ...(gate ? { gate } : {}),
+  } as MenubarView;
 }
 
 describe('buildAgentIslandQuota', () => {
@@ -56,7 +61,21 @@ describe('buildAgentIslandQuota', () => {
   });
 
   it('登录前(菜单栏只显示登录提示)不显示余量', () => {
-    expect(buildAgentIslandQuota(view([cell({ id: 'codex', value: '50', valueUnit: '%' })], 'sign-in'))).toEqual([]);
+    const gated = view([cell({ id: 'codex', value: '50', valueUnit: '%' })], 'sign-in', '50%');
+    expect(buildAgentIslandQuota(gated)).toEqual([]);
+    expect(buildAgentIslandQuotaSummary(gated)).toBeNull();
     expect(buildAgentIslandQuota(null)).toEqual([]);
+  });
+
+  it('窄宽度的兜底取菜单栏「最低余量」,颜色跟对应套餐;全部用完的 0% 标红', () => {
+    const sources = [
+      cell({ id: 'claude', value: '72', valueUnit: '%' }),
+      cell({ id: 'codex', value: '18', valueUnit: '%', level: 'warn' }),
+    ];
+    expect(buildAgentIslandQuotaSummary(view(sources, undefined, '18%')))
+      .toMatchObject({ text: '18%', level: 'warn', accessibilityLabel: 'codex label' });
+    expect(buildAgentIslandQuotaSummary(view([], undefined, '0%'))).toMatchObject({ text: '0%', level: 'error' });
+    // 菜单栏没有可显示的百分比(例如只有按量付费)时也不兜底。
+    expect(buildAgentIslandQuotaSummary(view(sources))).toBeNull();
   });
 });
