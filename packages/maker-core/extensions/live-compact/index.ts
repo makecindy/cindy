@@ -1341,13 +1341,16 @@ export function rotateShadow(options: {
   return { ok: used + options.incomingBytes <= cap, deleted, freed, used, cap, oversize: false };
 }
 
-/** 判活用 Node 原生信号 0:只探测进程存在,不执行任何命令、不发信号、不经过 shell。 */
+/**
+ * 判活用 Node 原生信号 0:只探测进程存在,不执行任何命令、不发信号、不起子进程、不经过 shell。
+ * EPERM 说明进程在,只是当前权限探不到(仓内 botTakeover 同口径),按活着处理。
+ */
 function processAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException)?.code === "EPERM";
   }
 }
 
