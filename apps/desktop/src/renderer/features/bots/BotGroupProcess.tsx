@@ -36,23 +36,33 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
     const read = (clientId: string) => deviceId
       ? window.electronAPI.deviceLink.invoke(deviceId, 'local-db:messages:around-client-id', [process.sessionId, clientId, { radius: 80 }]) as Promise<BotGroupProcessMessage[]>
       : window.electronAPI.localDb.messages.aroundClientId(process.sessionId, clientId, { radius: 80 });
-    let revision = 0;
+    let reading = false;
+    let refreshPending = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const subscription = deviceId ? createRemoteSessionSubscription(deviceId, process.sessionId) : undefined;
     let closed = false;
     const stopUpdates = () => { if (closed) return; closed = true; clearTimeout(timer); off(); subscription?.release(); };
     const refresh = () => {
-      const request = ++revision;
-      const active = () => current() && request === revision;
+      if (!current() || closed) return;
+      if (reading) { refreshPending = true; return; }
+      clearTimeout(timer);
+      reading = true;
+      refreshPending = false;
+      const active = () => current();
       setLoading(true);
       void readBotGroupProcessMessages(process, read, () => !active(), () => { if (active()) stopUpdates(); }).then(messages => {
         if (active()) { setResult({ messages, failed: false }); setLoading(false); }
       }).catch(() => {
         if (active()) { setResult(previous => ({ messages: previous?.messages ?? [], failed: true })); setLoading(false); }
+      }).finally(() => {
+        reading = false;
+        if (refreshPending) refresh();
       });
     };
     const changed = (sessionId: unknown) => {
       if (!current() || closed || sessionId !== process.sessionId) return;
+      // Keep one read in flight; changes during it become one trailing read.
+      if (reading) { refreshPending = true; return; }
       // A persisted tool batch can contain several records. Read once after it settles.
       clearTimeout(timer);
       timer = setTimeout(refresh, 50);

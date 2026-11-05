@@ -4869,3 +4869,54 @@ it('does not reread closed group turns on later session activity', async () => {
   expect(mocks.remoteInvoke).toHaveBeenCalledTimes(reads);
   vi.useRealTimers();
 });
+
+// PR #8979 / unit: real history effect + shared reader, with only IPC delayed.
+// Earlier late-record tests settled each read before the next push, missing
+// overlapping reads. One pending read plus >50ms-separated pushes is sufficient.
+it.each(['success', 'failure', 'unmount'])('coalesces in-flight group history refreshes (%s)', async outcome => {
+  vi.useFakeTimers();
+  const process = { groupId: 'g1', executionId: 'slow-history', sessionId: 'slow-lane', clientId: 'source', deviceId: 'original-mac' };
+  const source = { clientId: 'source', role: 'user', content: 'Request' };
+  const latest = [source, { clientId: 'note', role: 'assistant', content: 'Newest persisted progress', agentMeta: { assistantPhase: 'commentary' } }];
+  const pending: Array<{ resolve(rows: unknown[]): void; reject(error: Error): void }> = [];
+  let slow = true;
+  let reads = 0;
+  mocks.remoteInvoke.mockImplementation((_device, _channel, args) => {
+    if (args[1] !== process.clientId) return Promise.resolve(latest);
+    reads++;
+    return slow ? new Promise((resolve, reject) => pending.push({ resolve, reject })) : Promise.resolve(latest);
+  });
+  const listeners = new Set<(push: unknown) => void>();
+  window.electronAPI.deviceLink.onRemotePush = ((listener: (push: unknown) => void) => {
+    listeners.add(listener); return () => { listeners.delete(listener); };
+  }) as typeof window.electronAPI.deviceLink.onRemotePush;
+  const view = render(<Tooltip.Provider><BotGroupProcess process={process}
+    member={{ ...detail().members[0]!, isOwned: true, homeDeviceId: 'original-mac' }} /></Tooltip.Provider>);
+  try {
+    await act(async () => {
+      for (let i = 0; i < 10; i++) {
+        listeners.forEach(listener => listener({ deviceId: 'original-mac', channel: 'local-db:messages:created', payload: { sessionId: process.sessionId } }));
+        await vi.advanceTimersByTimeAsync(60);
+      }
+    });
+    expect(reads).toBe(1);
+    if (outcome === 'unmount') view.unmount();
+    slow = false;
+    await act(async () => {
+      if (outcome === 'failure') pending[0]!.reject(new Error('slow read failed'));
+      else pending[0]!.resolve([source]);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(reads).toBe(outcome === 'unmount' ? 1 : 2);
+    if (outcome !== 'unmount') {
+      fireEvent.click(view.container.querySelector('[data-teammate-process] > button')!);
+      expect(view.container.textContent).toContain('Newest persisted progress');
+    }
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(reads).toBe(outcome === 'unmount' ? 1 : 2);
+  } finally {
+    view.unmount();
+    await act(async () => { pending.forEach(request => request.resolve([source])); });
+    vi.useRealTimers();
+  }
+});

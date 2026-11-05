@@ -278,3 +278,47 @@ it.each(['AskUserQuestion', 'ExitPlanMode'])('retains %s call, input and result 
   expect(node.textContent).toContain('Interaction input detail');
   expect(node.textContent).toContain('Interaction result detail');
 });
+
+// PR #8979 / unit: real focused history and reader, native rendering adapted.
+// Existing pushes resolved immediately; a slow read plus spaced notifications
+// must keep one request and one trailing refresh, including failure/blur cleanup.
+it.each(['success', 'failure', 'unmount'])('coalesces in-flight group history refreshes (%s)', async outcome => {
+  vi.useFakeTimers();
+  const latest = [source, { clientId: 'new-note', role: 'assistant', content: 'Newest persisted progress', agentMeta: { ...meta, assistantPhase: 'commentary' } }];
+  const pending: Array<{ resolve(rows: unknown[]): void; reject(error: Error): void }> = [];
+  let slow = true;
+  let reads = 0;
+  history.invoke.mockImplementation((_device, _channel, args) => {
+    if (args[1] !== process.clientId) return Promise.resolve(latest);
+    reads++;
+    return slow ? new Promise((resolve, reject) => pending.push({ resolve, reject })) : Promise.resolve(latest);
+  });
+  await act(async () => root.render(group()));
+  try {
+    await act(async () => {
+      for (let i = 0; i < 10; i++) {
+        remoteSessionStore.applyRemotePush('mac', 'local-db:messages:created', { sessionId: process.sessionId,
+          message: { id: `slow-${i}`, clientId: `slow-${i}`, sessionId: process.sessionId, role: 'thinking', content: '', createdAt: new Date().toISOString() } });
+        await vi.advanceTimersByTimeAsync(60);
+      }
+    });
+    expect(reads).toBe(1);
+    if (outcome === 'unmount') await act(async () => root.render(null));
+    slow = false;
+    await act(async () => {
+      if (outcome === 'failure') pending[0]!.reject(new Error('slow read failed'));
+      else pending[0]!.resolve([source]);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(reads).toBe(outcome === 'unmount' ? 1 : 2);
+    if (outcome !== 'unmount') {
+      await act(async () => header().click());
+      expect(node.textContent).toContain('Newest persisted progress');
+    }
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(reads).toBe(outcome === 'unmount' ? 1 : 2);
+  } finally {
+    await act(async () => root.render(null));
+    await act(async () => { pending.forEach(request => request.resolve([source])); });
+  }
+});

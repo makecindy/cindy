@@ -40,7 +40,8 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
   const title = useTeammateElapsedTitle(false, undefined, process.durationMs ?? projection.durationMs);
   useFocusEffect(useCallback(() => {
     let cancelled = false;
-    let revision = 0;
+    let reading = false;
+    let refreshPending = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const lease = remoteSessionStore.acquireSessionMessageWork(process.sessionId, true);
     const offTopic = startFocusedTopicSubscription({ deviceId, owner: `group-history:${process.executionId}`,
@@ -48,13 +49,21 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
     let closed = false;
     const stopUpdates = () => { if (closed) return; closed = true; clearTimeout(timer); off(); offTopic(); lease.release(); };
     const refresh = () => {
-      const request = ++revision;
-      const active = () => !cancelled && request === revision;
+      if (cancelled || closed) return;
+      if (reading) { refreshPending = true; return; }
+      clearTimeout(timer);
+      reading = true;
+      refreshPending = false;
+      const active = () => !cancelled;
       setLoading(true);
       void readBotGroupProcessMessages(process, clientId => invoke<BotGroupProcessMessage[]>(deviceId,
         'local-db:messages:around-client-id', [process.sessionId, clientId, { radius: 80 }]), () => !active(), () => { if (active()) stopUpdates(); })
         .then(messages => { if (active()) { setResult({ messages, failed: false }); setLoading(false); } })
-        .catch(() => { if (active()) { setResult(previous => ({ messages: previous?.messages ?? [], failed: true })); setLoading(false); } });
+        .catch(() => { if (active()) { setResult(previous => ({ messages: previous?.messages ?? [], failed: true })); setLoading(false); } })
+        .finally(() => {
+          reading = false;
+          if (refreshPending) refresh();
+        });
     };
     let messages = remoteSessionStore.getMessages(process.sessionId);
     const off = remoteSessionStore.subscribe(() => {
@@ -64,6 +73,8 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
       // every record is still re-read from this process's explicit execution device.
       if (cancelled || closed || next === messages || origin && origin !== deviceId) return;
       messages = next;
+      // Keep one read in flight; changes during it become one trailing read.
+      if (reading) { refreshPending = true; return; }
       clearTimeout(timer);
       timer = setTimeout(refresh, 50);
     });
