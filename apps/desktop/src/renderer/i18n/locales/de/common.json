@@ -3804,7 +3804,12 @@
           "stop": "Test stoppen"
         },
         "fetch": {
-          "button": "Modellliste abrufen",
+          "selectedCount": "{{count}} Modelle ausgewählt",
+          "availableCount": "{{count}} verfügbare Modelle abgerufen",
+          "notFetched": "Modellliste noch nicht abgerufen",
+          "failedRetry": "Modellliste konnte nicht abgerufen werden. Erneut versuchen.",
+          "retryFailed": "Dieser Abruf ist fehlgeschlagen. Erneut versuchen.",
+          "button": "Modelle abrufen und auswählen",
           "fetching": "Modelle werden abgerufen…",
           "needBaseUrl": "Zuerst die Basis-URL eingeben",
           "failed": "Modellliste konnte nicht abgerufen werden",
@@ -6750,8 +6755,6 @@
             "task": "Aufgabentaste",
             "action": "Aktionstaste"
           },
-          "lightingLimit": "Die Firmware kann die ersten 6 Aufgabentasten in der Reihenfolge der Platine unabhängig voneinander beleuchten. Zusätzliche Aufgabentasten wechseln weiterhin Aufgaben.",
-          "unlitKey": "Diese Taste folgt auf die ersten 6 und hat daher keine eigene Statusleuchte.",
           "taskHint": "Eine transparente Tastenkappe wird empfohlen, damit der Aufgabenstatus in verschiedenen Farben angezeigt werden kann."
         },
         "commandKeys": {
@@ -7800,6 +7803,7 @@
         "customSlotAsleep": "Dieses Plugin ist deaktiviert. Aktiviere es, um hier seine Einstellungen zu sehen.",
         "descriptionExpand": "Mehr anzeigen",
         "descriptionCollapse": "Weniger anzeigen",
+        "readmeTitle": "Über",
         "useAction": "Plugin verwenden",
         "chatAction": "Chat",
         "enabledLabel": "Aktiviert",
@@ -8390,6 +8394,26 @@
         "title": "„{{name}}“ löschen?",
         "message": "Neue Sitzungen laden diesen MCP nicht mehr.",
         "confirm": "Löschen"
+      },
+      "duplicates": {
+        "title": "Möglicherweise doppelte MCP-Verbindungen",
+        "description": "Cindy und deine Claude-Code-Benutzerkonfiguration enthalten gleiche oder ähnliche Verbindungen, die Werkzeuge doppelt laden könnten. Wähle die gewünschte Quelle oder behalte im Zweifel beide.",
+        "scope": "Gilt nur für normale Claude-Code-Aufgaben in Cindy auf diesem Computer, ab der nächsten Agent-Sitzung. Deine Claude-Code-Konfiguration bleibt unverändert. Zusammenhängende Duplikate verwenden dieselbe Auswahl.",
+        "unavailable": "Ein Teil der Konfiguration konnte nicht gelesen werden. Die Verbindungen bleiben unverändert. Beim erneuten Öffnen dieser Seite wird nochmals geprüft.",
+        "endpoint": "Gleiche Verbindungsadresse",
+        "similar": "Ähnliche Verbindungsadressen",
+        "keep": {
+          "both": "Beide Quellen dieser Gruppe behalten"
+        },
+        "selected": {
+          "cindy": "Cindy-Verbindung ausgewählt",
+          "claude": "Claude-Code-Verbindung ausgewählt",
+          "both": "Beide Quellen dieser Gruppe werden beibehalten"
+        },
+        "reset": "Erneut wählen",
+        "saveFailed": "Speichern fehlgeschlagen. Die Verbindungen könnten sich geändert haben. Wähle erneut aus der aktuellen Liste.",
+        "keepThis": "Diese Verbindung behalten",
+        "keepThese": "Diese Verbindungen behalten"
       }
     },
     "remotePermission": {
@@ -15375,7 +15399,7 @@
       },
       "fields": {
         "title": "Titel",
-        "schedule": "Zeitplan",
+        "schedule": "Auslöser",
         "notify": "Benachrichtigen",
         "prompt": "Prompt",
         "once": "Einmalig",
@@ -15491,6 +15515,13 @@
         "preRunPluginRequired": "Wähle ein Plugin für die Vorabprüfung",
         "templateParamRequired": "{{label}} eingeben",
         "templateApplyFailed": "Vorlage konnte nicht angewendet werden. Prüfe die Parameter und versuche es erneut."
+      },
+      "layout": {
+        "content": "Auszuführender Inhalt",
+        "notifications": "Benachrichtigungen und stille Ausführung",
+        "contentTab": "Inhalt und Auslöser",
+        "optionsTab": "Ausführungsoptionen",
+        "sections": "Automatisierungseinstellungen"
       },
       "webhook": {
         "quotaHint": "Webhook-Empfänge sind pro Tag begrenzt, und Filter hier verringern die Anzahl nicht. Wählen Sie beim Absender, etwa GitHub, nur die benötigten Ereignisse aus.",
@@ -15764,6 +15795,13 @@
           "prompt": "Prüfe die Dokumente im Arbeitsverzeichnis und finde Inhalte, die aktualisiert werden müssen.\nVorgaben:\n- Suche nach veralteten Informationen (überholte Datumsangaben, defekte Links, veraltete Abläufe oder Tools), Widersprüchen und Dopplungen\n- Gib für jedes Problem Dateipfad und Fundstelle an und begründe deine Einschätzung\n- Ordne Vorschläge den Kategorien „Aktualisieren / Zusammenführen / Löschen“ zu und erstelle eine Überarbeitungscheckliste\n- Gib nur den Bericht aus; ändere die Dokumente nicht"
         }
       }
+    },
+    "deadline": {
+      "label": "Enddatum und Uhrzeit",
+      "clear": "Löschen",
+      "hint": "Für unbegrenzte Laufzeit leer lassen. Zeitzone: {{timezone}}. Danach starten keine automatischen Ausführungen mehr; bereits gestartete dürfen enden.",
+      "invalid": "Gültiges Datum und gültige Uhrzeit eingeben",
+      "expired": "Abgelaufen"
     },
     "webhook": {
       "title": "Webhook-Auslöser",

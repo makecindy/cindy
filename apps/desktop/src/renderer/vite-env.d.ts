@@ -1691,6 +1691,7 @@ interface ElectronAPI {
     usageHistory: () => Promise<{ subjectId: string; ghostId: string; displayName: string; sourceKind: string }[]>;
     usageHistorySummary: (subjectId: string) => Promise<import('../shared/pluginUsage').PluginUsageSummary | null>;
     clearUsage: (subjectId: string | null) => Promise<void>;
+    readme: (id: string, locale?: string) => Promise<import('@cindy/plugin-protocol').GhostReadmeContent | null>;
     libraryOverview: (id: string) => Promise<import('../shared/ghost').GhostLibraryOverview>;
     handoffList: (id: string) => Promise<import('../shared/ghost').GhostHandoffFile[]>;
     handoffFolder: (id: string) => Promise<string | null>;
@@ -5937,6 +5938,8 @@ interface ElectronAPI {
     deleteCustomMcpServer: (mcpId: string) => Promise<{ ok: true }>;
     /** token-only 后置刷新：safeStorage write/remove 完成后调用，消除竞态窗口。 */
     refreshCustomMcpCodex: () => Promise<{ ok: true }>;
+    listMcpDuplicates: () => Promise<import('../shared/customMcp').McpDuplicateReport>;
+    chooseMcpDuplicate: (input: { id: string; choice: import('../shared/customMcp').McpDuplicateChoice | null }) => Promise<{ ok: true }>;
     /** 自定义 MCP 变更广播订阅（返回 off）。 */
     onMcpChanged: (cb: () => void) => () => void;
     /** 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）登录 / 登出 / 取消。 */

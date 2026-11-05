@@ -3850,7 +3850,12 @@
           "stop": "detener la prueba"
         },
         "fetch": {
-          "button": "Obtener lista de modelos",
+          "selectedCount": "{{count}} modelos seleccionados",
+          "availableCount": "{{count}} modelos disponibles obtenidos",
+          "notFetched": "Aún no se ha obtenido la lista de modelos",
+          "failedRetry": "No se pudo obtener la lista de modelos. Inténtalo de nuevo.",
+          "retryFailed": "La última consulta falló. Inténtalo de nuevo.",
+          "button": "Obtener y seleccionar modelos",
           "fetching": "Recuperando modelos…",
           "needBaseUrl": "Complete primero la base URL",
           "failed": "No se pudo recuperar la lista de modelos",
@@ -6812,8 +6817,6 @@
             "task": "Tecla de tarea",
             "action": "Tecla de acción"
           },
-          "lightingLimit": "El firmware puede iluminar de forma independiente las primeras 6 teclas de tarea en el orden del tablero. Las teclas de tarea adicionales también permiten cambiar de tarea.",
-          "unlitKey": "Esta tecla está después de las primeras 6, por lo que no tiene una luz de estado independiente.",
           "taskHint": "Se recomienda una cubierta transparente para mostrar el estado de la tarea en distintos colores."
         },
         "commandKeys": {
@@ -7867,6 +7870,7 @@
         "customSlotAsleep": "Este complemento está desactivado. Actívalo para ver aquí su interfaz de configuración.",
         "descriptionExpand": "Mostrar más",
         "descriptionCollapse": "Mostrar menos",
+        "readmeTitle": "Acerca de",
         "useAction": "Usar complemento",
         "chatAction": "Conversación",
         "enabledLabel": "Activado",
@@ -8457,6 +8461,26 @@
         "title": "¿Eliminar \"{{name}}\"?",
         "message": "Las nuevas sesiones ya no cargarán este MCP.",
         "confirm": "Eliminar"
+      },
+      "duplicates": {
+        "title": "Posibles conexiones MCP duplicadas",
+        "description": "Cindy y tu configuración de usuario de Claude Code tienen conexiones iguales o similares que podrían cargar herramientas dos veces. Elige cuál conservar, o conserva ambas si tienes dudas.",
+        "scope": "Solo afecta a las tareas normales de Claude Code en Cindy en este equipo, a partir de la próxima sesión del agente. No modifica tu configuración de Claude Code. Los duplicados relacionados comparten la elección.",
+        "unavailable": "No se pudo leer parte de la configuración. Las conexiones no han cambiado. Se comprobará de nuevo al abrir esta página.",
+        "endpoint": "Misma dirección de conexión",
+        "similar": "Direcciones de conexión similares",
+        "keep": {
+          "both": "Conservar ambas fuentes de este grupo"
+        },
+        "selected": {
+          "cindy": "Conexión de Cindy seleccionada",
+          "claude": "Conexión de Claude Code seleccionada",
+          "both": "Se conservan ambas fuentes de este grupo"
+        },
+        "reset": "Elegir de nuevo",
+        "saveFailed": "No se pudo guardar. Las conexiones pueden haber cambiado. Elige de nuevo en la lista actual.",
+        "keepThis": "Conservar esta conexión",
+        "keepThese": "Conservar estas conexiones"
       }
     },
     "remotePermission": {
@@ -15518,7 +15542,7 @@
       },
       "fields": {
         "title": "Título",
-        "schedule": "Programación",
+        "schedule": "Activación",
         "notify": "Notificar",
         "prompt": "Prompt",
         "once": "Una vez",
@@ -15634,6 +15658,13 @@
         "preRunPluginRequired": "Elige un complemento para la comprobación previa",
         "templateParamRequired": "Ingresa {{label}}",
         "templateApplyFailed": "No se pudo aplicar la plantilla. Revisa los parámetros y vuelve a intentarlo."
+      },
+      "layout": {
+        "content": "Qué ejecutar",
+        "notifications": "Notificaciones y ejecución silenciosa",
+        "contentTab": "Contenido y activación",
+        "optionsTab": "Opciones de ejecución",
+        "sections": "Configuración de automatización"
       },
       "webhook": {
         "quotaHint": "Las entregas de Webhook tienen un límite diario y filtrar aquí no reduce el recuento. En el emisor, como GitHub, selecciona solo los eventos que necesites.",
@@ -15907,6 +15938,13 @@
           "prompt": "Revisa el estado de los documentos del directorio de trabajo y busca contenido que necesite actualizarse.\nRestricciones:\n- Busca información desactualizada (fechas antiguas, enlaces rotos, procesos o herramientas obsoletos), contradicciones y duplicaciones\n- Cita la ruta del archivo y la ubicación de cada problema y explica el razonamiento\n- Clasifica las sugerencias como \"actualizar / combinar / eliminar\" y elabora una lista de verificación de revisiones\n- Presenta solo el informe; no modifiques los documentos"
         }
       }
+    },
+    "deadline": {
+      "label": "Fecha y hora de finalización",
+      "clear": "Borrar",
+      "hint": "Déjalo vacío para no limitarlo. Horario de {{timezone}}. Después no se iniciarán ejecuciones automáticas; las ya iniciadas podrán finalizar.",
+      "invalid": "Introduce una fecha y hora válidas",
+      "expired": "Vencida"
     },
     "webhook": {
       "title": "Activador de webhook",

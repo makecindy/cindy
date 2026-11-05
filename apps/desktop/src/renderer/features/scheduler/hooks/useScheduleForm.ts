@@ -9,6 +9,7 @@
  */
 
 import { useCallback, useRef, useState } from 'react';
+import { formatScheduleDeadline, parseScheduleDeadline } from '@cindy/maker-shared/schedule-form';
 import type { CreateScheduleInput, Schedule, ScheduleTemplate, ScheduleWorkspaceKind } from '@cindy/maker-scheduler';
 import { effectiveSourceIdForModel, type ProviderView } from '@cindy/model-providers';
 import { getDraft, getPersistedVendorModel } from '@/state/newMakerDraft';
@@ -286,6 +287,8 @@ export function makeFormFromSchedule(s: Schedule | null): ScheduleFormState {
     cronExpr: s.cronExpr,
     intervalMs: s.intervalMs,
     timezone: s.timezone,
+    deadline: formatScheduleDeadline(s.expireAt),
+    sourceExpireAt: s.expireAt,
     recurring: s.recurring,
     manual: s.manual,
     webhookEnabled: Boolean(s.webhookTrigger),
@@ -481,6 +484,9 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
   }, []);
 
   const validate = useCallback((): { key: string; values?: Record<string, string> } | null => {
+    if (Number.isNaN(parseScheduleDeadline(form.deadline ?? '', form.sourceExpireAt))) {
+      return { key: 'scheduler.deadline.invalid' };
+    }
     if (!form.name.trim()) return { key: 'scheduler.editor.validation.nameRequired' };
     if ((form.executionMode ?? 'agent') === 'agent' && !form.prompt.trim()) {
       return { key: 'scheduler.editor.validation.promptRequired' };

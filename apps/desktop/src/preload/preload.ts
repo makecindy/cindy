@@ -1733,6 +1733,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     usageHistory: (): Promise<{ subjectId: string; ghostId: string; displayName: string; sourceKind: string }[]> => ipcRenderer.invoke('ghosts:usage-history'),
     usageHistorySummary: (subjectId: string): Promise<import('../shared/pluginUsage').PluginUsageSummary | null> => ipcRenderer.invoke('ghosts:usage-history-summary', subjectId),
     clearUsage: (subjectId: string | null): Promise<void> => ipcRenderer.invoke('ghosts:usage-clear', subjectId),
+    readme: (id: string, locale?: string): Promise<import('@cindy/plugin-protocol').GhostReadmeContent | null> =>
+      ipcRenderer.invoke('ghosts:readme', id, locale),
     libraryOverview: (id: string): Promise<import('../shared/ghost').GhostLibraryOverview> =>
       ipcRenderer.invoke('ghosts:library-overview', id),
     handoffList: (id: string): Promise<import('../shared/ghost').GhostHandoffFile[]> =>
@@ -6958,6 +6960,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       context === undefined
         ? ipcRenderer.invoke('maker:mcp:custom:list')
         : ipcRenderer.invoke('maker:mcp:custom:list', context),
+    listMcpDuplicates: (): Promise<import('../shared/customMcp').McpDuplicateReport> =>
+      ipcRenderer.invoke('maker:mcp:duplicates:list'),
+    chooseMcpDuplicate: (input: { id: string; choice: import('../shared/customMcp').McpDuplicateChoice | null }): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('maker:mcp:duplicates:choose', input),
     createCustomMcpServer: (
       config: import('../shared/customMcp').CustomMcpConfig,
     ): Promise<{ ok: true }> => ipcRenderer.invoke('maker:mcp:custom:create', config),

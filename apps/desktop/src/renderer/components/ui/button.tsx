@@ -63,7 +63,7 @@ const TONE_STYLES: Record<ButtonTone, string> = {
   'danger-surface':
     '[--button-face-bg:color-mix(in_srgb,hsl(var(--destructive))_15%,var(--surface-elevated))] [--button-face-border:transparent] text-[hsl(var(--destructive))] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,hsl(var(--destructive))_25%,var(--surface-elevated))] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:color-mix(in_srgb,hsl(var(--destructive))_35%,var(--surface-elevated))]',
   'danger-solid':
-    '[--button-face-bg:hsl(var(--destructive))] [--button-face-border:hsl(var(--destructive))] text-[var(--accent-pure-cta-fg)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,hsl(var(--destructive))_90%,var(--text-primary))] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-border:color-mix(in_srgb,hsl(var(--destructive))_90%,var(--text-primary))] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:color-mix(in_srgb,hsl(var(--destructive))_80%,var(--text-primary))] enabled:[&:not([aria-disabled=true])]:active:[--button-face-border:color-mix(in_srgb,hsl(var(--destructive))_80%,var(--text-primary))]',
+    '[--button-face-bg:hsl(var(--destructive))] [--button-face-border:hsl(var(--destructive))] text-[var(--accent-pure-cta-fg)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--button-danger-solid-hover)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-border:var(--button-danger-solid-hover)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--button-danger-solid-pressed)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-border:var(--button-danger-solid-pressed)]',
 };
 
 /**
@@ -122,9 +122,9 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         palette === 'confirmation' &&
           (variant === 'secondary'
             ? '[--button-face-border:var(--confirm-btn-secondary-border)] [--button-face-bg:transparent] text-[var(--confirm-btn-secondary-text)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--confirm-btn-secondary-hover)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--confirm-btn-secondary-hover)]'
-            : '[--button-face-border:transparent] [--button-face-bg:var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--confirm-btn-primary-hover)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--confirm-btn-primary-hover)]'),
+            : '[--button-face-border:transparent] [--button-face-bg:var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--confirm-btn-primary-hover)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--confirm-btn-primary-pressed)]'),
         palette === 'permission' &&
-          '[--button-face-border:transparent] [--button-face-bg:var(--perm-allow-btn-bg)] text-[var(--perm-allow-btn-text)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,var(--perm-allow-btn-bg)_92%,var(--perm-allow-btn-text))] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:color-mix(in_srgb,var(--perm-allow-btn-bg)_82%,var(--perm-allow-btn-text))]',
+          '[--button-face-border:transparent] [--button-face-bg:var(--perm-allow-btn-bg)] text-[var(--perm-allow-btn-text)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--perm-allow-btn-hover)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--perm-allow-btn-pressed)]',
         TONE_STYLES[tone],
         compact && 'px-3',
         'disabled:cursor-not-allowed disabled:opacity-60',

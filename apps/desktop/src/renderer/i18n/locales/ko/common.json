@@ -3763,7 +3763,12 @@
           "stop": "테스트 중지"
         },
         "fetch": {
-          "button": "모델 목록 가져오기",
+          "selectedCount": "모델 {{count}}개 선택됨",
+          "availableCount": "선택 가능한 모델 {{count}}개를 가져왔습니다",
+          "notFetched": "아직 모델 목록을 가져오지 않았습니다",
+          "failedRetry": "모델 목록을 가져오지 못했습니다. 다시 시도하세요",
+          "retryFailed": "이번에 목록을 가져오지 못했습니다. 다시 시도하세요",
+          "button": "모델 가져오기 및 선택",
           "fetching": "모델 가져오는 중…",
           "needBaseUrl": "먼저 기본 URL을 입력해 주세요",
           "failed": "모델 목록을 가져오지 못했습니다",
@@ -6707,8 +6712,6 @@
             "task": "작업 키",
             "action": "동작 키"
           },
-          "lightingLimit": "펌웨어가 독립적으로 점등할 수 있는 것은 보드 순서상 앞 6개의 작업 키뿐입니다. 그 밖의 작업 키도 작업 전환은 됩니다.",
-          "unlitKey": "앞 6개 이후의 키라서 독립 상태 표시등이 없습니다.",
           "taskHint": "투명 키캡을 권장합니다. 작업 상태는 서로 다른 색의 조명으로 표시됩니다."
         },
         "commandKeys": {
@@ -7757,6 +7760,7 @@
         "customSlotAsleep": "이 플러그인은 비활성 상태입니다. 활성화하면 여기에 설정 화면이 표시됩니다.",
         "descriptionExpand": "더 보기",
         "descriptionCollapse": "접기",
+        "readmeTitle": "소개",
         "useAction": "Plugin 사용",
         "chatAction": "대화",
         "enabledLabel": "사용 중",
@@ -8347,6 +8351,26 @@
         "title": "\"{{name}}\"을(를) 삭제할까요?",
         "message": "삭제하면 새 세션에서 이 MCP가 더 이상 로드되지 않습니다.",
         "confirm": "삭제"
+      },
+      "duplicates": {
+        "title": "중복이 의심되는 MCP 연결",
+        "description": "Cindy와 Claude Code 사용자 설정에 같거나 비슷한 연결이 있어 도구가 두 번 로드될 수 있습니다. 유지할 연결을 선택하세요. 확실하지 않으면 둘 다 유지할 수 있습니다.",
+        "scope": "이 컴퓨터의 Cindy에서 실행하는 일반 Claude Code 작업에만 다음 에이전트 세션부터 적용됩니다. Claude Code 설정은 변경되지 않습니다. 서로 연관된 중복 연결에는 같은 선택이 적용됩니다.",
+        "unavailable": "일부 설정을 읽지 못했습니다. 연결은 변경되지 않았습니다. 이 페이지를 다시 열면 재확인합니다.",
+        "endpoint": "같은 연결 주소",
+        "similar": "비슷한 연결 주소",
+        "keep": {
+          "both": "이 그룹의 양쪽 모두 유지"
+        },
+        "selected": {
+          "cindy": "Cindy 연결 선택됨",
+          "claude": "Claude Code 연결 선택됨",
+          "both": "이 그룹의 양쪽 연결을 모두 유지합니다"
+        },
+        "reset": "다시 선택",
+        "saveFailed": "저장하지 못했습니다. 연결이 변경되었을 수 있습니다. 현재 목록에서 다시 선택하세요.",
+        "keepThis": "이 연결 유지",
+        "keepThese": "이 연결들 유지"
       }
     },
     "remotePermission": {
@@ -15309,7 +15333,7 @@
       },
       "fields": {
         "title": "제목",
-        "schedule": "일정",
+        "schedule": "작동 방식",
         "notify": "알림",
         "prompt": "프롬프트",
         "once": "1회",
@@ -15425,6 +15449,13 @@
         "preRunPluginRequired": "사전 검사에 쓸 플러그인을 선택하세요",
         "templateParamRequired": "{{label}}을(를) 입력하세요",
         "templateApplyFailed": "템플릿을 적용할 수 없습니다. 매개변수를 확인한 후 다시 시도하세요."
+      },
+      "layout": {
+        "content": "실행 내용",
+        "notifications": "알림 및 조용한 실행",
+        "contentTab": "내용 및 작동 방식",
+        "optionsTab": "실행 옵션",
+        "sections": "자동화 설정"
       },
       "webhook": {
         "quotaHint": "Webhook 수신 횟수에는 일일 한도가 있으며 여기서 필터링해도 횟수는 줄지 않습니다. 발신 측(예: GitHub)에서 필요한 이벤트만 선택하세요.",
@@ -15698,6 +15729,13 @@
           "prompt": "작업 디렉터리의 문서를 점검하고 업데이트가 필요한 내용을 찾으세요.\n제약 사항:\n- 오래된 정보(지난 날짜, 끊어진 링크, 폐기된 절차나 도구), 모순, 중복 내용을 확인합니다\n- 각 문제의 파일 경로와 구체적인 위치를 표시하고 판단 근거를 설명합니다\n- \"업데이트 권장 / 병합 권장 / 삭제 권장\"으로 분류하고 수정 체크리스트를 작성합니다\n- 점검 보고서만 출력하고 문서 자체는 수정하지 않습니다"
         }
       }
+    },
+    "deadline": {
+      "label": "종료 날짜 및 시간",
+      "clear": "지우기",
+      "hint": "비워 두면 제한이 없습니다. 시간은 {{timezone}} 기준입니다. 종료 시간 이후에는 자동 실행을 시작하지 않으며, 이미 시작한 실행은 완료됩니다.",
+      "invalid": "올바른 날짜와 시간을 입력하세요",
+      "expired": "만료됨"
     },
     "webhook": {
       "title": "Webhook 트리거",

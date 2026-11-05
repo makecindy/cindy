@@ -3763,7 +3763,12 @@
           "stop": "停止测试"
         },
         "fetch": {
-          "button": "获取模型列表",
+          "selectedCount": "已选 {{count}} 个模型",
+          "availableCount": "已获取 {{count}} 个可选模型",
+          "notFetched": "尚未获取模型列表",
+          "failedRetry": "获取模型列表失败，请重试",
+          "retryFailed": "本次获取失败，请重试",
+          "button": "获取并选择模型",
           "fetching": "正在获取模型…",
           "needBaseUrl": "请先填写基础 URL",
           "failed": "获取模型列表失败",
@@ -6701,8 +6706,6 @@
             "task": "任务键",
             "action": "动作键"
           },
-          "lightingLimit": "固件最多给板上顺序的前 6 颗任务键独立亮灯。多出来的任务键仍能切换任务。",
-          "unlitKey": "这颗键排在前 6 颗之后，没有独立状态灯。",
           "taskHint": "推荐使用透明键帽，任务状态会有不同颜色的灯效显示。"
         },
         "commandKeys": {
@@ -7757,6 +7760,7 @@
         "customSlotAsleep": "插件已停用，启用后这里将显示它的设置界面。",
         "descriptionExpand": "展开",
         "descriptionCollapse": "收起",
+        "readmeTitle": "介绍",
         "useAction": "使用",
         "chatAction": "对话",
         "enabledLabel": "已启用",
@@ -8347,6 +8351,26 @@
         "title": "删除 “{{name}}”？",
         "message": "删除后新建或重启的 Agent 会话将不再加载该 MCP。",
         "confirm": "删除"
+      },
+      "duplicates": {
+        "title": "疑似重复的 MCP 连接",
+        "description": "Cindy 与 Claude Code 的用户配置中有相同或相近的连接，可能重复加载工具。请选择保留的来源；不确定时可以都保留。",
+        "scope": "仅影响这台电脑上 Cindy 的普通 Claude Code 任务，下次 Agent 启动时生效。不会修改 Claude Code 配置。相互关联的重复连接共用选择。",
+        "unavailable": "未能完整读取配置，暂未更改连接。返回此页面时会重新检查。",
+        "endpoint": "连接地址相同",
+        "similar": "连接地址相近",
+        "keep": {
+          "both": "本组都保留"
+        },
+        "selected": {
+          "cindy": "已选择保留 Cindy 连接",
+          "claude": "已选择保留 Claude Code 连接",
+          "both": "已保留本组两边的连接"
+        },
+        "reset": "重新选择",
+        "saveFailed": "未能保存，连接可能已变化。请根据当前列表重新选择。",
+        "keepThis": "保留此连接",
+        "keepThese": "保留这些连接"
       }
     },
     "remotePermission": {
@@ -15309,7 +15333,7 @@
       },
       "fields": {
         "title": "标题",
-        "schedule": "计划",
+        "schedule": "触发方式",
         "notify": "通知",
         "prompt": "提示词",
         "once": "一次",
@@ -15425,6 +15449,13 @@
         "preRunPluginRequired": "请为前置检查选择插件",
         "templateParamRequired": "请填写{{label}}",
         "templateApplyFailed": "无法应用模板，请检查参数后重试"
+      },
+      "layout": {
+        "content": "执行内容",
+        "notifications": "通知与静默",
+        "contentTab": "内容与触发",
+        "optionsTab": "运行选项",
+        "sections": "自动化配置"
       },
       "webhook": {
         "quotaHint": "每天的 Webhook 接收次数有上限，这里的筛选不会减少次数。请在发送方（如 GitHub）只勾选需要的事件。",
@@ -15698,6 +15729,13 @@
           "prompt": "体检工作目录中的文档，找出需要更新的内容。\n约束：\n- 检查过期信息（旧日期、失效链接、已废弃的流程或工具）、前后矛盾和重复内容\n- 每个问题都注明文件路径和具体位置，说明判断依据\n- 按\"建议更新 / 建议合并 / 建议删除\"分类，给出修订建议清单\n- 只输出体检报告，不要直接修改文档"
         }
       }
+    },
+    "deadline": {
+      "label": "截止时间",
+      "clear": "清除",
+      "hint": "留空不限制。时间按 {{timezone}} 显示；到期后不再自动运行，已开始的运行会继续完成。",
+      "invalid": "请输入有效的日期和时间",
+      "expired": "已到期"
     },
     "webhook": {
       "title": "Webhook 触发",

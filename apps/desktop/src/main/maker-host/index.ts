@@ -11,6 +11,7 @@ import { resolveCompanionRuntimeEnvironment } from '../bot-import/runtime.js';
 import { registerCodexTextOnlyPolicy } from './codex-text-only-policy.js';
 import { ensureCodexCliLauncher } from '../agent-binaries/codex-cli-launcher.js';
 import { readDisabledSkillPaths } from '../skillhub/activationPreferences';
+import { resolveLocalMcpDuplicateChoices } from './mcp-duplicate-preferences.js';
 import { cindyMakeManager } from '../cindy-make/manager.js';
 import { makeSourceRoot } from '../cindy-make/sourcePaths.js';
 import { clearCodexAccountUsageSnapshot } from '../usageBroadcaster.js';
@@ -1422,6 +1423,7 @@ export function getMaker(): Maker {
       log: desktopMakerLogger.child('command-gate'),
     });
     const claudeAgent = new ClaudeCodeAgent({
+      resolveLocalMcpDuplicateChoices,
       resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
       getDisabledSkillPaths: readDisabledSkillPaths,
       getManagedSkills: listCindyManagedSkills,

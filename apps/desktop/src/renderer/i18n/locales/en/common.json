@@ -3804,7 +3804,12 @@
           "stop": "Stop test"
         },
         "fetch": {
-          "button": "Fetch model list",
+          "selectedCount": "{{count}} models selected",
+          "availableCount": "{{count}} available models fetched",
+          "notFetched": "Model list not fetched yet",
+          "failedRetry": "Could not fetch the model list. Try again.",
+          "retryFailed": "This fetch failed. Try again.",
+          "button": "Fetch and select models",
           "fetching": "Fetching models…",
           "needBaseUrl": "Fill in the base URL first",
           "failed": "Failed to fetch the model list",
@@ -6750,8 +6755,6 @@
             "task": "Task key",
             "action": "Action key"
           },
-          "lightingLimit": "Firmware can independently light the first 6 task keys in board order. Extra task keys still switch tasks.",
-          "unlitKey": "This key is after the first 6, so it has no independent status light.",
           "taskHint": "A clear keycap is recommended so task status can show in different colors."
         },
         "commandKeys": {
@@ -7800,6 +7803,7 @@
         "customSlotAsleep": "This plugin is disabled. Enable it to see its settings UI here.",
         "descriptionExpand": "Show more",
         "descriptionCollapse": "Show less",
+        "readmeTitle": "About",
         "useAction": "Use Plugin",
         "chatAction": "Chat",
         "enabledLabel": "Enabled",
@@ -8390,6 +8394,26 @@
         "title": "Delete \"{{name}}\"?",
         "message": "New sessions will no longer load this MCP.",
         "confirm": "Delete"
+      },
+      "duplicates": {
+        "title": "Possibly duplicate MCP connections",
+        "description": "Cindy and your Claude Code user configuration have matching or similar connections that may load tools twice. Choose which source to keep, or keep both if unsure.",
+        "scope": "Only affects ordinary Claude Code tasks in Cindy on this computer, when the agent next starts. Your Claude Code configuration stays unchanged. Related duplicates share the same choice.",
+        "unavailable": "Some configuration could not be read. Connections are unchanged. Reopening this page checks again.",
+        "endpoint": "Same connection address",
+        "similar": "Similar connection addresses",
+        "keep": {
+          "both": "Keep both sources in this group"
+        },
+        "selected": {
+          "cindy": "Cindy connection selected",
+          "claude": "Claude Code connection selected",
+          "both": "Keeping both sources in this group"
+        },
+        "reset": "Choose again",
+        "saveFailed": "Could not save. The connections may have changed. Choose again from the current list.",
+        "keepThis": "Keep this connection",
+        "keepThese": "Keep these connections"
       }
     },
     "remotePermission": {
@@ -15375,7 +15399,7 @@
       },
       "fields": {
         "title": "Title",
-        "schedule": "Schedule",
+        "schedule": "Trigger",
         "notify": "Notify",
         "prompt": "Prompt",
         "once": "Once",
@@ -15491,6 +15515,13 @@
         "preRunPluginRequired": "Choose a plugin for the pre-run check",
         "templateParamRequired": "Enter {{label}}",
         "templateApplyFailed": "Could not apply the template. Check the parameters and try again."
+      },
+      "layout": {
+        "content": "What to run",
+        "notifications": "Notifications & quiet runs",
+        "contentTab": "Content & Trigger",
+        "optionsTab": "Run options",
+        "sections": "Automation settings"
       },
       "webhook": {
         "quotaHint": "Webhook deliveries have a daily limit, and filtering here doesn't reduce the count. In the sender, such as GitHub, select only the events you need.",
@@ -15764,6 +15795,13 @@
           "prompt": "Health-check the documents in the working directory and find content that needs updating.\nConstraints:\n- Look for outdated information (stale dates, dead links, deprecated processes or tools), contradictions, and duplication\n- Cite the file path and location for every issue and explain the reasoning\n- Categorize as \"update / merge / delete\" suggestions and produce a revision checklist\n- Only output the report; do not modify the documents"
         }
       }
+    },
+    "deadline": {
+      "label": "End date and time",
+      "clear": "Clear",
+      "hint": "Leave empty for no limit. Times use {{timezone}}. No new automatic runs start after this time; runs already started can finish.",
+      "invalid": "Enter a valid date and time",
+      "expired": "Expired"
     },
     "webhook": {
       "title": "Webhook trigger",

@@ -2613,24 +2613,6 @@
             }
           }
         },
-        "value-update-btn-hover": {
-          "$type": "color",
-          "$value": {
-            "colorSpace": "srgb",
-            "components": [
-              0.886275,
-              0.886275,
-              0.886275
-            ]
-          },
-          "$extensions": {
-            "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
-            }
-          }
-        },
         "value-accent-foreground": {
           "$type": "color",
           "$value": {
@@ -3203,42 +3185,6 @@
               0.27451,
               0.27451,
               0.27451
-            ]
-          },
-          "$extensions": {
-            "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
-            }
-          }
-        },
-        "value-send-btn-hover-bg": {
-          "$type": "color",
-          "$value": {
-            "colorSpace": "srgb",
-            "components": [
-              0.886275,
-              0.886275,
-              0.886275
-            ]
-          },
-          "$extensions": {
-            "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
-            }
-          }
-        },
-        "value-send-btn-pressed-bg": {
-          "$type": "color",
-          "$value": {
-            "colorSpace": "srgb",
-            "components": [
-              0.831373,
-              0.831373,
-              0.831373
             ]
           },
           "$extensions": {
@@ -5846,24 +5792,6 @@
             }
           }
         },
-        "value-update-btn-hover": {
-          "$type": "color",
-          "$value": {
-            "colorSpace": "srgb",
-            "components": [
-              0.180392,
-              0.196078,
-              0.215686
-            ]
-          },
-          "$extensions": {
-            "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
-            }
-          }
-        },
         "value-accent-foreground": {
           "$type": "color",
           "$value": {
@@ -6436,42 +6364,6 @@
               0.345098,
               0.333333,
               0.333333
-            ]
-          },
-          "$extensions": {
-            "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
-            }
-          }
-        },
-        "value-send-btn-hover-bg": {
-          "$type": "color",
-          "$value": {
-            "colorSpace": "srgb",
-            "components": [
-              0.180392,
-              0.196078,
-              0.215686
-            ]
-          },
-          "$extensions": {
-            "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
-            }
-          }
-        },
-        "value-send-btn-pressed-bg": {
-          "$type": "color",
-          "$value": {
-            "colorSpace": "srgb",
-            "components": [
-              0.145098,
-              0.156863,
-              0.172549
             ]
           },
           "$extensions": {

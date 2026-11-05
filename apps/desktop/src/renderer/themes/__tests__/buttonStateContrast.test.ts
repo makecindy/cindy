@@ -18,6 +18,7 @@ import { describe, expect, it } from 'vitest';
 
 import { colorRegistry } from '../color-registry';
 import '../colors';
+import { filledButtonHover, filledButtonPressed } from '../filledButtonStates';
 import { builtinThemes } from '../registry';
 import { resolveThemeValue } from '../theme-service';
 import type { Theme } from '../types';
@@ -54,7 +55,44 @@ function hslToRgb(h: number, s: number, l: number): Rgb {
 const MIX_RE = /^color-mix\(in srgb,\s*(.+?)\s+(\d+)%,\s*(.+?)\)$/;
 const VAR_RE = /^var\(--([a-z0-9-]+)\)$/;
 const RGBA_RE = /^rgba?\(\s*([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\s*\)$/;
+const HSL_VAR_RE = /^hsl\(var\(--([a-z0-9-]+)\)\)$/;
+// themes/filledButtonStates.ts 的产物；形态变化时这里 fail closed，守卫会红。
+const FILLED_STATE_RE =
+  /^oklch\(from (.+?) calc\(sign\(max\(0, l - 0\.25\)\) \* \(l - ([\d.]+)\) \+ \(1 - sign\(max\(0, l - 0\.25\)\)\) \* ([\d.]+)\) c h\)$/;
 const HSL_TRIPLET_RE = /^([\d.]+)\s+([\d.]+)%\s+([\d.]+)%(?:\s*\/\s*([\d.]+))?$/;
+
+const toLinear = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+const toGamma = (c: number) => (c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055);
+const clampByte = (c: number) => Math.min(255, Math.max(0, c * 255));
+
+/** 逐项对应 filledButtonStates.ts 的 calc；表达式形态变化时 FILLED_STATE_RE 先红。 */
+function filledStateLightness(L: number, step: number, liftTo: number): number {
+  const isLight = Math.sign(Math.max(0, L - 0.25));
+  return isLight * (L - step) + (1 - isLight) * liftTo;
+}
+
+/** 在 OKLab 里改亮度（色度与色相不变，等价于 OKLCH 只动 L）。 */
+function applyFilledState(color: Rgba, step: number, liftTo: number): Rgba {
+  const [r, g, b] = [color.r, color.g, color.b].map((c) => toLinear(c / 255));
+  const lms = [
+    0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b,
+    0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b,
+    0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b,
+  ].map(Math.cbrt);
+  const L = 0.2104542553 * lms[0] + 0.793617785 * lms[1] - 0.0040720468 * lms[2];
+  const A = 1.9779984951 * lms[0] - 2.428592205 * lms[1] + 0.4505937099 * lms[2];
+  const B = 0.0259040371 * lms[0] + 0.7827717662 * lms[1] - 0.808675766 * lms[2];
+  const next = filledStateLightness(L, step, liftTo);
+  const l = (next + 0.3963377774 * A + 0.2158037573 * B) ** 3;
+  const m = (next - 0.1055613458 * A - 0.0638541728 * B) ** 3;
+  const s = (next - 0.0894841775 * A - 1.291485548 * B) ** 3;
+  return {
+    r: clampByte(toGamma(Math.max(0, 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s))),
+    g: clampByte(toGamma(Math.max(0, -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s))),
+    b: clampByte(toGamma(Math.max(0, -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s))),
+    a: color.a,
+  };
+}
 
 /**
  * 把一个 token 解析成带 alpha 的颜色。支持：hex 字面量、`rgb()/rgba()`、HSL 三元组
@@ -87,6 +125,18 @@ function resolveRgba(theme: Theme, expr: string, depth = 0): Rgba {
   const rgba = RGBA_RE.exec(text);
   if (rgba) {
     return { r: Number(rgba[1]), g: Number(rgba[2]), b: Number(rgba[3]), a: rgba[4] === undefined ? 1 : Number(rgba[4]) };
+  }
+
+  const hslVar = HSL_VAR_RE.exec(text);
+  if (hslVar) {
+    const next = resolveThemeValue(theme, hslVar[1]);
+    if (next == null) throw new Error(`解析不到 token --${hslVar[1]}`);
+    return resolveRgba(theme, next, depth + 1);
+  }
+
+  const filled = FILLED_STATE_RE.exec(text);
+  if (filled) {
+    return applyFilledState(resolveRgba(theme, filled[1], depth + 1), Number(filled[2]), Number(filled[3]));
   }
 
   const triplet = HSL_TRIPLET_RE.exec(text);
@@ -129,10 +179,48 @@ const LADDERS = [
   { variant: 'primary', rest: 'surface-chip', hover: 'button-primary-hover', pressed: 'button-primary-pressed' },
   { variant: 'secondary', rest: 'surface-elevated', hover: 'button-secondary-hover', pressed: 'button-secondary-pressed' },
   { variant: 'cta', rest: 'accent-cta-bg-pure', hover: 'button-cta-hover', pressed: 'button-cta-pressed' },
+  { variant: 'send', rest: 'send-btn-bg', hover: 'send-btn-hover-bg', pressed: 'send-btn-pressed-bg' },
+  { variant: 'confirmation', rest: 'confirm-btn-primary-bg', hover: 'confirm-btn-primary-hover', pressed: 'confirm-btn-primary-pressed' },
+  { variant: 'permission', rest: 'perm-allow-btn-bg', hover: 'perm-allow-btn-hover', pressed: 'perm-allow-btn-pressed' },
+  { variant: 'danger-solid', rest: 'destructive', hover: 'button-danger-solid-hover', pressed: 'button-danger-solid-pressed' },
 ] as const;
 
+const FILLED_VARIANTS = new Set<string>(['cta', 'send', 'confirmation', 'permission', 'danger-solid']);
+const relativeLuminance = ({ r, g, b }: Rgb) =>
+  0.2126 * toLinear(r / 255) + 0.7152 * toLinear(g / 255) + 0.0722 * toLinear(b / 255);
+
+describe('填充按钮的按下与悬停同向（DESIGN.md §4 Filled button states）', () => {
+  // 守的是一个真实缺陷：cta 曾朝文字色混合，白字按钮悬停变深、按下反而变亮。
+  for (const theme of Object.values(builtinThemes)) {
+    for (const ladder of LADDERS.filter((item) => FILLED_VARIANTS.has(item.variant))) {
+      it(`${theme.id} · ${ladder.variant}`, () => {
+        const page = baseRgb(theme, 'surface');
+        const [rest, hover, pressed] = [ladder.rest, ladder.hover, ladder.pressed].map((id) =>
+          relativeLuminance(tokenRgb(theme, id, page)),
+        );
+        expect(Math.sign(pressed - hover)).toBe(Math.sign(hover - rest));
+      });
+    }
+  }
+
+  // 自定义主题的底色可以落在任何亮度，阈值附近不能混合出反向的中间值。
+  it('亮度阈值两侧都同向', () => {
+    const lightnessOf = (expression: string, L: number) => {
+      const parts = FILLED_STATE_RE.exec(expression);
+      if (!parts) throw new Error(`填充按钮状态表达式形态已变化: ${expression}`);
+      return filledStateLightness(L, Number(parts[2]), Number(parts[3]));
+    };
+    for (let i = 2400; i <= 2600; i += 1) {
+      const L = i / 10000;
+      const hover = lightnessOf(filledButtonHover('var(--x)'), L);
+      const pressed = lightnessOf(filledButtonPressed('var(--x)'), L);
+      expect(Math.sign(pressed - hover), `L=${L}`).toBe(Math.sign(hover - L));
+    }
+  });
+});
+
 describe('DS-4 · Button 状态梯在每个内置主题都可区分', () => {
-  it('六个状态 token 都已注册', () => {
+  it('状态 token 都已注册', () => {
     for (const ladder of LADDERS) {
       expect(colorRegistry.resolveDefault(ladder.hover, 'light'), ladder.hover).toBeTruthy();
       expect(colorRegistry.resolveDefault(ladder.pressed, 'light'), ladder.pressed).toBeTruthy();

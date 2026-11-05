@@ -1,5 +1,29 @@
 # 跨端协议兼容
 
+## 插件详细介绍 `manifest.readme`（2026-11-06，未发布）
+
+`ghost.json` 新增可选 `readme`：语言到包内 `.md` 文件的映射，必须提供 `en`，规则正本在
+`packages/plugin-protocol/src/readme.ts`，Desktop 镜像同步校验，作者契约见 `FORGE_GUIDE` §2「详细介绍」。
+旧客户端把它当未知顶层字段保留（v3）或忽略（v2），只显示 `description`；它**不能**放进 locale
+JSON（旧客户端会拒收未知 locale 字段），因此各语言是独立文件。内容只供界面显示，不进入花名册、
+`ghost_list` / `ghost_info` 或市场搜索结果。图片只认包内文件，经 `resolveGhostReadmeAssetPath`
+解析出的规范路径作键，宿主读成 data URL（单张 ≤ 512 KB、最多 8 张、合计 ≤ 3 MB）；外部、`data:`
+与越界地址不显示，渲染进程 CSP 允许远程图片，所以白名单在 `MarkdownRenderer.resolveImageSrc`。
+
+- 已安装插件：新增本机 IPC `ghosts:readme`（不进 device-link 白名单），打开详情页时按需从安装目录
+  逐段拒链接、限量读取，不随 `ghosts:list` 广播。远程设备的插件详情暂不显示介绍。
+- 自定义市场：`plugin-market:detail` 在详情页请求时于发现租约内读取源副本，填 `PluginMarketDetail.readme`。
+- 官方市场：详情请求带 `?readmeLocale=<语言>`，服务端可在 `VisiblePluginDetail.readme` 返回
+  `{ path, markdown, images:[{ path, url, mimeType, sha256, sizeBytes, expiresAt }] }`（图片为短期地址）。
+  旧服务端忽略参数、不返回字段，客户端不显示介绍；字段不合法时客户端整体丢弃，不影响详情。
+  Plugin Server 尚未实现，需在服务端仓同步发布时提取与签发。
+- 手机：`plugin-capabilities.data` 仅在声明 `readme` 时追加 `readme: true`，不内联正文或图片。手机打开
+  「介绍」时经既有插件集合 invoke 调用 `readme:get`，以 `client.locale` 选语言；Host 返回
+  `{ path, markdown, images }`（包内 data URL）或 `null`，未声明时返回 NOT_FOUND。回复按 device-link
+  单条消息上限（4 MiB）预留余量控制在 2Mi 字符内，超出的图片按正文顺序丢弃、正文保留。手机只渲染
+  Host 返回的 `data:image/` 图片。旧手机忽略新字段；新手机遇到旧 Host 没有该标记，不显示入口。
+  不新增 channel、allowlist、relay 帧或协议版本，服务端与 Mobile 原生指纹不变。
+
 ## 伙伴已读跨设备同步（2026-11-05，未发布）
 
 伙伴的远程资源（`teammates` 集合的 `bot` 行）在 `display` 中可选追加 `lastReadAt`，即电脑保存的已读时刻
@@ -938,6 +962,11 @@ form 和 items[].submit，既有 invoke 的 input 可选追加 formValues。手�
 发送聊天消息前等待该任务已发起的编辑事件送达，避免远程输入被模型工具超越。
 card-update 可选 sourceCallId：只接受当前在途、同插件同任务的工具调用，用于更新较早的卡片；
 旧调用、跨任务、跨插件和脚本调用不能重开。旧 Host 忽略此字段，可能不更新超出宽限窗的旧卡，业务工具仍返回回执。
+card-update 可选 supersededBy：只能与 sourceCallId 同时出现且取值相同，表示这张旧卡已挪到当前调用的新卡。
+Host 在净化后的 html 前加宿主标记 `data-cindy-superseded-by`（插件 html 带不进这个属性），落库并推送；
+桌面隐藏整张旧卡及其工具行，远程 `plugin-card-actions` 投影可选追加 supersededBy、不再投影按钮并拒绝点击，
+新手机据此隐藏。旧 Host 忽略此字段，旧手机忽略新字段，都显示这次更新的 html，所以插件应同时给一段
+指向新位置的简短文字。卡片高度按实测内容显示，下限只挡非正数。
 没有新 channel、服务端 schema、数据库迁移或 Mobile 原生 fingerprint 变化。
 
 `ghosts:card-updated` 可选携带 Host 注册调用时确定的 `sessionId`，桌面实时卡匹配只使用
