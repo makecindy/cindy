@@ -199,7 +199,7 @@ it('reports a teammate this computer no longer has as not found, without failing
 it('advances the host read position from a device, never past the newest message here', async () => {
   const source: BotRemoteResourceSource = {
     id: 'bot-1', name: 'Sora', description: '', avatar: '', avatarColor: 'teal', status: 'active',
-    canonicalSessionId: 'session-1', lastMessageAt: 500, lastReplyAt: 400, needsAttention: false,
+    canonicalSessionId: 'session-1', lastMessagePreview: null, lastMessageAt: 500, lastMessageRole: 'user', lastReplyAt: 400, needsAttention: false,
     hiddenAt: null, pinnedAt: null, activityAt: 500, currentVersion: 1, updatedAt: 1,
   };
   db.get.mockImplementation(async () => ({ ...source }));
