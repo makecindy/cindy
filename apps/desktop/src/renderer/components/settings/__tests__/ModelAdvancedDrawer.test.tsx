@@ -1179,7 +1179,9 @@ it.each([true, false])('uses an explicit common image choice %s when engine defa
   expect(mocks.imageSet).not.toHaveBeenCalledWith(null);
 });
 
-it.each([true, false, undefined])('uses chat default %s independently of a same-ID Images connection', async (supported) => {
+it.each([true, false, undefined].flatMap(supported => [false, true].map(readFailed => ({ supported, readFailed }))))(
+  'uses chat default $supported independently of a same-ID Images connection (read failed: $readFailed)', async ({ supported, readFailed }) => {
+  mocks.imageError = readFailed;
   const source = { ...buildUserProvider({ id: 'relay', name: 'Relay', auth: { method: 'apiKey' }, runtimes: {
     pi: { baseUrl: 'https://chat.example.invalid/v1', models: [{
       id: 'private-image', name: 'Image', supportsImageInput: supported,
@@ -1212,4 +1214,18 @@ it.each([true, false, undefined])('uses chat default %s independently of a same-
   fireEvent.click(await screen.findByRole('menuitemradio', { name: 'settings.providers.models.advanced.' +
     (supported ? 'unsupported' : 'supported') }));
   expect(mocks.imageSet).toHaveBeenLastCalledWith(!supported);
+});
+
+// Unit regression: bridge names must not make identical inferred defaults look mixed.
+// Exercise the real drawer and its outgoing clear-override action for the union row.
+it('uses the union row identity to infer an undeclared bridge image default', async () => {
+  const primary = { ...model, id: 'gpt-5.6-sol', modalities: undefined, supportsImageInput: undefined };
+  draw(primary);
+  const trigger = screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' });
+  expect(trigger.textContent).toBe('settings.providers.models.advanced.supported');
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+  const items = await screen.findAllByRole('menuitemradio');
+  expect(items).toHaveLength(2);
+  fireEvent.click(screen.getByRole('menuitemradio', { name: 'settings.providers.models.advanced.imageInputDefault settings.providers.models.advanced.supported' }));
+  expect(mocks.imageSet).toHaveBeenCalledWith(null);
 });

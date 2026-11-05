@@ -22,11 +22,11 @@ export interface ModelImageInputCatalogModel extends CatalogModel {
   imageInputDefault?: Pick<CatalogModel, 'supportsImageInput' | 'modalities'>;
 }
 
-/** Resolve the same precedence without turning inferred modalities into an explicit flag. */
-export function modelImageInputDefault(model: ModelImageInputCatalogModel): boolean | null {
+/** Resolve raw fields first; a union row may supply its bridge-free ID for name inference. */
+export function modelImageInputDefault(model: ModelImageInputCatalogModel, canonicalId = model.id): boolean | null {
   const source = model.imageInputDefault ?? model;
   if (source.supportsImageInput !== undefined) return source.supportsImageInput;
   if (source.modalities) return source.modalities.input.includes('image');
-  const capability = classifyVisionCapability(model.id);
+  const capability = classifyVisionCapability(canonicalId);
   return capability === 'unknown' ? null : capability === 'vision';
 }

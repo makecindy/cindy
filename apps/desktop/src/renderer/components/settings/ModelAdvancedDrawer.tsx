@@ -436,14 +436,15 @@ export function ModelAdvancedDrawer({
           ? 'vision'
           : 'no-vision'
         : classifyVisionCapability(primaryModel.id);
-  const imageInputDefault = modelImageInputDefault(primaryModel);
+  const imageInputDefault = modelImageInputDefault(primaryModel, row.id);
   // An undeclared catalog has no default option: both choices remain explicit overrides.
+  // A failed read retains the chat route's effective fields, independently of media routes.
   const imageInputValue = imageInputOverride.value ?? (imageInputOverride.error
-    ? vision === 'unknown' ? null : vision === 'vision'
+    ? modelImageInputDefault({ ...primaryModel, imageInputDefault: undefined }, row.id)
     : imageInputDefault);
   const imageInputTargetDefaults = (contextTarget ? [contextTarget, ...contextTarget.relatedTargets] : []).map(({ agent }) => {
     const candidate = row.byAgent[agent];
-    return candidate ? modelImageInputDefault(candidate) : null;
+    return candidate ? modelImageInputDefault(candidate, row.id) : null;
   });
   const imageDefaultsMatch = (value: boolean) => imageInputTargetDefaults.length > 0 &&
     imageInputTargetDefaults.every(defaultValue => defaultValue === value);
