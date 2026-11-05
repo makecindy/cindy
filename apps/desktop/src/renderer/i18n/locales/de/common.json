@@ -1030,11 +1030,19 @@
       "copied": "Kopiert",
       "copyFailed": "Kopieren fehlgeschlagen. Versuche es erneut oder speichere die Datei.",
       "scrollHint": "Scrolle in der Auswahl nach oben oder unten oder wähle „Automatisch scrollen“.",
-      "recordHint": "Zeichne auf der Vorschau, um die Aufnahme mit Anmerkungen zu versehen. Ohne Audio.",
+      "recordHint": "Zeichne auf der Vorschau, um die Aufnahme mit Anmerkungen zu versehen.",
       "format": "Format",
       "videoFormat": "Video (WebM)",
-      "prepareHint": "Startet nach einem 3-Sekunden-Countdown. Ohne Ton.",
+      "prepareHint": "Startet nach einem 3-Sekunden-Countdown.",
       "countdown": "Aufnahme startet in {{count}}",
+      "systemAudio": "Lautsprecher",
+      "microphone": "Mikrofon",
+      "audioHint": "Tonquellen wählen, dann die Aufnahme starten.",
+      "preparingAudio": "Audio wird vorbereitet…",
+      "systemAudioFailed": "Lautsprecherton nicht verfügbar. Systemberechtigungen prüfen oder diese Tonquelle ausschalten.",
+      "microphoneFailed": "Mikrofon nicht verfügbar. Berechtigungen und Eingabegerät prüfen oder Mikrofon ausschalten.",
+      "audioFailed": "Audio konnte nicht gestartet werden. Geräte prüfen oder Audio ausschalten.",
+      "audioInterrupted": "Audio wurde unterbrochen. Aufnahme beenden, um den aufgenommenen Teil zu speichern.",
       "countdownHint": "Startet in Kürze. Drücke Esc zum Abbrechen.",
       "annotate": "Kommentieren",
       "finishing": "Wird abgeschlossen…",
@@ -6072,8 +6080,10 @@
       "accessRevokedByPeer": "Zugriff widerrufen — das andere Gerät muss ihn in seinen Einstellungen wiederherstellen",
       "deviceControlToggleAria": "Steuerung für {{name}} umschalten",
       "myDevices": {
-        "controlIt": "Ich steuere es",
-        "allowInbound": "Diesem Gerät die Steuerung erlauben",
+        "iCan": "Ich kann",
+        "itCan": "Es kann",
+        "controlIt": "Steuern",
+        "controlThisDevice": "Dieses Gerät steuern",
         "allowInboundAria": "Umschalten, ob {{name}} dieses Gerät steuern darf",
         "peerControlOff": "Die Fernsteuerung ist auf diesem Gerät nicht aktiviert",
         "masterOffHint": "Aktiviere zuerst den Hauptschalter oben",
@@ -13442,6 +13452,24 @@
           "autocompactBuffer": "Puffer für automatische Komprimierung",
           "compactBuffer": "Komprimierungspuffer",
           "freeSpace": "Freier Platz"
+        },
+        "estimate": {
+          "title": "Textschätzungen",
+          "delivery": "Antwortdarstellung",
+          "host": "Cindy-Anweisungen",
+          "plugins": "Plugin-Katalog",
+          "memoryRules": "Speicheranweisungen",
+          "memoryIndex": "Speicherindex",
+          "profile": "Teammitglied-Profil",
+          "user": "Benutzeranweisungen",
+          "directories": "Zusätzliche Verzeichnisse",
+          "native": "Pi-Anweisungen",
+          "skills": "Skill-Katalog",
+          "project": "Projektanweisungen",
+          "tools": "Werkzeugdefinitionen",
+          "messages": "Gesprächstext",
+          "other": "Weitere Anweisungen",
+          "note": "Schätzung des aktuellen Texts, keine Modell-Tokenisierung. Ohne Bilder und Anbieterformatierung; die Summe weicht vom nativen Gesamtwert ab."
         }
       },
       "compact": {
@@ -14775,7 +14803,7 @@
         "manage": {
           "title": "PR-Links verwalten",
           "hint": "Bis zu 3 in der Kopfzeile; angeheftete PRs erscheinen zuerst",
-          "empty": "Füge zum Hinzufügen einen GitHub-PR-Link ein",
+          "empty": "Füge zum Hinzufügen einen GitHub-PR- oder GitLab-MR-Link ein",
           "removed": "Entfernt: {{count}}",
           "legacy": "Unbestätigte Verweise: {{count}}",
           "addLabel": "PR-Link hinzufügen",
@@ -14786,17 +14814,26 @@
           "unpin": "PR lösen",
           "pinLimit": "Bis zu 3 PRs anheften",
           "reorderHint": "Mit Alt+↑/↓ innerhalb der angehefteten oder nicht angehefteten Gruppe umsortieren.",
-          "dragHandle": "Ziehen, um {{repo}} #{{number}} umzusortieren",
+          "dragHandle": "Ziehen, um {{repo}} {{numberLabel}} umzusortieren",
           "remove": "PR entfernen",
           "errors": {
             "duplicate": "Dieser PR ist bereits verknüpft; entfernte Links lassen sich aus der Liste wiederherstellen",
             "notFound": "PR nicht gefunden oder Zugriff verweigert",
-            "invalidUrl": "Gib einen gültigen GitHub-PR-Link ein",
+            "invalidUrl": "Gib einen gültigen GitHub-PR- oder GitLab-MR-Link ein",
             "reorderFailed": "Die Reihenfolge wurde nicht gespeichert. Versuche es erneut.",
-            "verifyFailed": "Der PR konnte nicht geprüft werden; prüfe deine GitHub-Anmeldung und Zugriffsrechte",
+            "verifyFailed": "Der PR konnte nicht geprüft werden; prüfe deine Anmeldung und Zugriffsrechte bei GitHub oder GitLab",
             "unsupported": "Die Version dieses Computers unterstützt die Verwaltung von PR-Links nicht",
             "failed": "PR-Links konnten nicht aktualisiert werden"
           }
+        },
+        "gitlab": {
+          "missing": "GitLab CLI (glab) wurde nicht gefunden. Installiere glab und melde dich an, um den MR-Status zu sehen.",
+          "notLoggedIn": "Das lokale glab ist nicht bei {{host}} angemeldet. Führe glab auth login im Terminal aus, um den MR-Status zu sehen.",
+          "unsupported": "Dieser Computer unterstützt den GitLab-MR-Status noch nicht",
+          "openAria": "MR !{{number}} im Browser öffnen",
+          "summaryAria": "Zusammenfassung von MR !{{number}}",
+          "urlPlaceholder": "GitHub-PR- oder GitLab-MR-Link",
+          "notFound": "MR nicht gefunden oder für das aktuelle Konto nicht sichtbar"
         }
       }
     },

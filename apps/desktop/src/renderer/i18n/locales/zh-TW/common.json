@@ -1024,11 +1024,19 @@
       "copied": "已複製",
       "copyFailed": "複製失敗，可以重試或儲存檔案。",
       "scrollHint": "在選取範圍內向上或向下捲動，也可點擊自動捲動",
-      "recordHint": "在預覽上繪製標註，標註會出現在錄影中。不錄製聲音",
+      "recordHint": "在預覽上繪製標註，標註會出現在錄影中。",
       "format": "格式",
       "videoFormat": "影片 (WebM)",
-      "prepareHint": "點擊開始後倒數 3 秒，不錄製聲音。",
+      "prepareHint": "點擊開始後倒數 3 秒。",
       "countdown": "{{count}} 秒後開始錄製",
+      "systemAudio": "揚聲器",
+      "microphone": "麥克風",
+      "audioHint": "選擇聲源後開始錄製，可同時開啟",
+      "preparingAudio": "正在準備聲音…",
+      "systemAudioFailed": "無法錄入揚聲器聲音，請檢查系統權限或關閉此聲源",
+      "microphoneFailed": "無法使用麥克風，請檢查權限和輸入裝置或關閉此聲源",
+      "audioFailed": "無法開始錄音，請檢查裝置或關閉聲音後錄製",
+      "audioInterrupted": "聲音已中斷，請結束錄製以儲存已錄內容",
       "countdownHint": "即將開始，按 Esc 取消。",
       "annotate": "標註",
       "finishing": "正在完成…",
@@ -6029,8 +6037,10 @@
       "accessRevokedByPeer": "訪問權限已被撤銷，需對方在選項中恢復",
       "deviceControlToggleAria": "切換是否控制 {{name}}",
       "myDevices": {
-        "controlIt": "我控制它",
-        "allowInbound": "允許它控制本機",
+        "iCan": "我可以",
+        "itCan": "它可以",
+        "controlIt": "控制它",
+        "controlThisDevice": "控制本機",
         "allowInboundAria": "切換是否允許 {{name}} 控制本機",
         "peerControlOff": "對方未允許遠端控制",
         "masterOffHint": "需先開啟上方總開關",
@@ -13419,6 +13429,24 @@
           "autocompactBuffer": "自動壓縮緩衝",
           "compactBuffer": "壓縮緩衝",
           "freeSpace": "剩餘可用"
+        },
+        "estimate": {
+          "title": "文字估算",
+          "delivery": "答案交付",
+          "host": "Cindy 規則",
+          "plugins": "插件目錄",
+          "memoryRules": "記憶規則",
+          "memoryIndex": "記憶索引",
+          "profile": "夥伴資料",
+          "user": "使用者指令",
+          "directories": "附加目錄",
+          "native": "Pi 原生規則",
+          "skills": "技能目錄",
+          "project": "專案指令",
+          "tools": "工具定義",
+          "messages": "對話正文",
+          "other": "其他指令",
+          "note": "依目前文字粗估，並非模型分詞結果。不含圖片與供應商格式開銷，分項總和不等於原生總量。"
         }
       },
       "compact": {
@@ -14709,7 +14737,7 @@
         "manage": {
           "title": "管理 PR 連結",
           "hint": "頂列最多顯示 3 個，固定的 PR 優先顯示",
-          "empty": "貼上 GitHub PR 連結即可新增",
+          "empty": "貼上 GitHub PR 或 GitLab MR 連結即可新增",
           "removed": "已移除 {{count}} 個",
           "legacy": "未確認的歷史引用：{{count}}",
           "addLabel": "新增 PR 連結",
@@ -14720,17 +14748,26 @@
           "unpin": "取消固定",
           "pinLimit": "最多固定 3 個 PR",
           "reorderHint": "按 Alt+↑/↓ 在已固定或未固定群組內調整順序。",
-          "dragHandle": "拖曳排序 {{repo}} #{{number}}",
+          "dragHandle": "拖曳排序 {{repo}} {{numberLabel}}",
           "remove": "移除 PR",
           "errors": {
             "duplicate": "此 PR 已關聯；已移除的連結可在清單中還原",
             "notFound": "找不到此 PR，或沒有存取權限",
-            "invalidUrl": "請輸入有效的 GitHub PR 連結",
+            "invalidUrl": "請輸入有效的 GitHub PR 或 GitLab MR 連結",
             "reorderFailed": "順序未儲存，請重試",
-            "verifyFailed": "無法驗證 PR，請檢查 GitHub 登入與存取權限",
+            "verifyFailed": "無法驗證 PR，請檢查 GitHub 或 GitLab 登入與存取權限",
             "unsupported": "這台電腦的版本暫不支援管理 PR 連結",
             "failed": "無法更新 PR 連結"
           }
+        },
+        "gitlab": {
+          "missing": "未偵測到 GitLab CLI（glab），無法顯示 MR 狀態。安裝 glab 並登入後即可顯示。",
+          "notLoggedIn": "本機 glab 尚未登入 {{host}}，無法顯示 MR 狀態。在終端執行 glab auth login 登入後即可顯示。",
+          "unsupported": "此電腦暫不支援 GitLab MR 狀態",
+          "openAria": "在瀏覽器開啟 MR !{{number}}",
+          "summaryAria": "MR !{{number}} 摘要",
+          "urlPlaceholder": "GitHub PR 或 GitLab MR 連結",
+          "notFound": "MR 不存在，或目前帳號無權限檢視"
         }
       }
     },

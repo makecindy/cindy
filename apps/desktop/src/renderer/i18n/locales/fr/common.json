@@ -1047,11 +1047,19 @@
       "copied": "Copié",
       "copyFailed": "Impossible de copier. Réessayez ou enregistrez le fichier.",
       "scrollHint": "Faites défiler vers le haut ou le bas dans la sélection, ou choisissez Défilement auto.",
-      "recordHint": "Dessinez sur l'aperçu pour annoter l'enregistrement. Sans audio.",
+      "recordHint": "Dessinez sur l'aperçu pour annoter l'enregistrement.",
       "format": "Format",
       "videoFormat": "Vidéo (WebM)",
-      "prepareHint": "Démarre après un compte à rebours de 3 secondes. Sans audio.",
+      "prepareHint": "Démarre après un compte à rebours de 3 secondes.",
       "countdown": "L'enregistrement démarre dans {{count}}",
+      "systemAudio": "Haut-parleur",
+      "microphone": "Microphone",
+      "audioHint": "Choisissez les sources audio avant de commencer.",
+      "preparingAudio": "Préparation de l’audio…",
+      "systemAudioFailed": "Son du haut-parleur indisponible. Vérifiez les autorisations système ou désactivez-le.",
+      "microphoneFailed": "Microphone indisponible. Vérifiez les autorisations et le périphérique d’entrée ou désactivez-le.",
+      "audioFailed": "Impossible de démarrer l’audio. Vérifiez les périphériques ou désactivez l’audio.",
+      "audioInterrupted": "L’audio a été interrompu. Terminez l’enregistrement pour sauvegarder la partie capturée.",
       "countdownHint": "Démarrage imminent. Appuyez sur Échap pour annuler.",
       "annotate": "Annoter",
       "finishing": "Finalisation…",
@@ -6130,8 +6138,10 @@
       "accessRevokedByPeer": "Accès révoqué : l'autre appareil doit le rétablir dans ses paramètres",
       "deviceControlToggleAria": "Activer/désactiver le contrôle de {{name}}",
       "myDevices": {
-        "controlIt": "Je le contrôle",
-        "allowInbound": "L'autoriser à contrôler cet appareil",
+        "iCan": "Je peux",
+        "itCan": "Il peut",
+        "controlIt": "Le contrôler",
+        "controlThisDevice": "Contrôler cet appareil",
         "allowInboundAria": "Autoriser ou non {{name}} à contrôler cet appareil",
         "peerControlOff": "Contrôle à distance non activé sur cet appareil",
         "masterOffHint": "Activez d'abord l'interrupteur principal ci-dessus",
@@ -13561,6 +13571,24 @@
           "autocompactBuffer": "Tampon de compactage automatique",
           "compactBuffer": "Tampon de compactage",
           "freeSpace": "Espace libre"
+        },
+        "estimate": {
+          "title": "Estimations du texte",
+          "delivery": "Présentation des réponses",
+          "host": "Instructions Cindy",
+          "plugins": "Catalogue des plugins",
+          "memoryRules": "Instructions de mémoire",
+          "memoryIndex": "Index de mémoire",
+          "profile": "Profil du coéquipier",
+          "user": "Instructions utilisateur",
+          "directories": "Répertoires supplémentaires",
+          "native": "Instructions Pi",
+          "skills": "Catalogue des skills",
+          "project": "Instructions du projet",
+          "tools": "Définitions des outils",
+          "messages": "Texte de la conversation",
+          "other": "Autres instructions",
+          "note": "Estimation du texte actuel, sans tokenisation du modèle. Hors images et formatage du fournisseur ; la somme diffère du total natif."
         }
       },
       "compact": {
@@ -14915,7 +14943,7 @@
         "manage": {
           "title": "Gérer les liens de PR",
           "hint": "Jusqu’à 3 dans l’en-tête ; les PR épinglées apparaissent en premier",
-          "empty": "Collez un lien de PR GitHub pour l’ajouter",
+          "empty": "Collez un lien de PR GitHub ou de MR GitLab pour l’ajouter",
           "removed": "Supprimées : {{count}}",
           "legacy": "Références non confirmées : {{count}}",
           "addLabel": "Ajouter un lien de PR",
@@ -14926,17 +14954,26 @@
           "unpin": "Désépingler la PR",
           "pinLimit": "Épingler jusqu’à 3 PR",
           "reorderHint": "Utilisez Alt+↑/↓ pour réorganiser les PR au sein du groupe épinglé ou non épinglé.",
-          "dragHandle": "Faire glisser pour réorganiser {{repo}} #{{number}}",
+          "dragHandle": "Faire glisser pour réorganiser {{repo}} {{numberLabel}}",
           "remove": "Supprimer la PR",
           "errors": {
             "duplicate": "Cette PR est déjà liée ; restaurez les liens supprimés depuis la liste",
             "notFound": "PR introuvable ou accès refusé",
-            "invalidUrl": "Saisissez un lien de PR GitHub valide",
+            "invalidUrl": "Saisissez un lien valide de PR GitHub ou de MR GitLab",
             "reorderFailed": "L’ordre n’a pas été enregistré. Réessayez.",
-            "verifyFailed": "Impossible de vérifier la PR ; vérifiez la connexion à GitHub et les droits d’accès",
+            "verifyFailed": "Impossible de vérifier la PR ; vérifiez la connexion à GitHub ou GitLab et les droits d’accès",
             "unsupported": "La version installée sur cet ordinateur ne permet pas de gérer les liens de PR",
             "failed": "Impossible de mettre à jour les liens de PR"
           }
+        },
+        "gitlab": {
+          "missing": "GitLab CLI (glab) est introuvable. Installez glab et connectez-vous pour voir l’état des MR.",
+          "notLoggedIn": "Le glab local n’est pas connecté à {{host}}. Exécutez glab auth login dans un terminal pour voir l’état des MR.",
+          "unsupported": "Cet ordinateur ne prend pas encore en charge l’état des MR GitLab",
+          "openAria": "Ouvrir la MR !{{number}} dans le navigateur",
+          "summaryAria": "Résumé de la MR !{{number}}",
+          "urlPlaceholder": "Lien de PR GitHub ou de MR GitLab",
+          "notFound": "MR introuvable, ou le compte actuel ne peut pas la consulter"
         }
       }
     },

@@ -1036,11 +1036,19 @@
       "copied": "Copied",
       "copyFailed": "Could not copy. Try again or save the file.",
       "scrollHint": "Scroll up or down in the selection, or choose Auto Scroll.",
-      "recordHint": "Draw on the preview to annotate the recording. No audio.",
+      "recordHint": "Draw on the preview to annotate the recording.",
       "format": "Format",
       "videoFormat": "Video (WebM)",
-      "prepareHint": "Starts after a 3-second countdown. No audio.",
+      "prepareHint": "Starts after a 3-second countdown.",
       "countdown": "Recording starts in {{count}}",
+      "systemAudio": "Speaker",
+      "microphone": "Microphone",
+      "audioHint": "Choose sound sources, then start recording.",
+      "preparingAudio": "Preparing audio…",
+      "systemAudioFailed": "Speaker audio unavailable. Check system permissions or turn it off.",
+      "microphoneFailed": "Microphone unavailable. Check permissions and the input device, or turn it off.",
+      "audioFailed": "Audio could not start. Check your devices or turn off audio.",
+      "audioInterrupted": "Audio stopped. Finish recording to save the captured portion.",
       "countdownHint": "Starting shortly. Press Esc to cancel.",
       "annotate": "Annotate",
       "finishing": "Finishing…",
@@ -6072,8 +6080,10 @@
       "accessRevokedByPeer": "Access revoked — the other device must restore it in its settings",
       "deviceControlToggleAria": "Toggle control for {{name}}",
       "myDevices": {
-        "controlIt": "I control it",
-        "allowInbound": "Let it control this device",
+        "iCan": "I can",
+        "itCan": "It can",
+        "controlIt": "Control it",
+        "controlThisDevice": "Control this device",
         "allowInboundAria": "Toggle whether {{name}} can control this device",
         "peerControlOff": "Remote control not enabled on that device",
         "masterOffHint": "Turn on the master switch above first",
@@ -13477,6 +13487,24 @@
           "autocompactBuffer": "Autocompact buffer",
           "compactBuffer": "Compact buffer",
           "freeSpace": "Free space"
+        },
+        "estimate": {
+          "title": "Text estimates",
+          "delivery": "Answer delivery",
+          "host": "Cindy instructions",
+          "plugins": "Plugin catalogue",
+          "memoryRules": "Memory instructions",
+          "memoryIndex": "Memory index",
+          "profile": "Teammate profile",
+          "user": "User instructions",
+          "directories": "Additional directories",
+          "native": "Pi instructions",
+          "skills": "Skill catalogue",
+          "project": "Project instructions",
+          "tools": "Tool definitions",
+          "messages": "Conversation text",
+          "other": "Other instructions",
+          "note": "Estimated from current text, not model tokenization. Excludes images and provider formatting; does not add up to the native total."
         }
       },
       "compact": {
@@ -14775,7 +14803,7 @@
         "manage": {
           "title": "Manage PR Links",
           "hint": "Up to 3 in the header; pinned PRs appear first",
-          "empty": "Paste a GitHub PR link to add it",
+          "empty": "Paste a GitHub PR or GitLab MR URL to add it",
           "removed": "Removed: {{count}}",
           "legacy": "Unconfirmed references: {{count}}",
           "addLabel": "Add PR Link",
@@ -14786,17 +14814,26 @@
           "unpin": "Unpin PR",
           "pinLimit": "Pin up to 3 PRs",
           "reorderHint": "Use Alt+↑/↓ to reorder within the pinned or unpinned group.",
-          "dragHandle": "Drag to reorder {{repo}} #{{number}}",
+          "dragHandle": "Drag to reorder {{repo}} {{numberLabel}}",
           "remove": "Remove PR",
           "errors": {
             "duplicate": "This PR is already linked; restore removed links from the list",
             "notFound": "PR not found or access denied",
-            "invalidUrl": "Enter a valid GitHub PR link",
+            "invalidUrl": "Enter a valid GitHub PR or GitLab MR URL",
             "reorderFailed": "The order was not saved. Please try again.",
-            "verifyFailed": "Could not verify the PR; check GitHub sign-in and access",
+            "verifyFailed": "Could not verify the PR; check GitHub or GitLab sign-in and access",
             "unsupported": "This computer’s version does not support managing PR links",
             "failed": "Could not update PR links"
           }
+        },
+        "gitlab": {
+          "missing": "GitLab CLI (glab) was not found. Install glab and sign in to see MR status.",
+          "notLoggedIn": "Local glab is not signed in to {{host}}. Run glab auth login in a terminal to see MR status.",
+          "unsupported": "This computer does not support GitLab MR status yet",
+          "openAria": "Open MR !{{number}} in browser",
+          "summaryAria": "MR !{{number}} summary",
+          "urlPlaceholder": "GitHub PR or GitLab MR URL",
+          "notFound": "MR not found, or the current account cannot view it"
         }
       }
     },

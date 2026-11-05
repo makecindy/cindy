@@ -703,7 +703,15 @@
       "running": "正在工作",
       "done": "已完成",
       "unread": "未读"
-    }
+    },
+    "viewMr": "查看 MR",
+    "viewPrMr": "查看 PR",
+    "mrCount": "{{count}} 个 MR",
+    "prMrCount": "{{count}} 个 PR",
+    "mrCount_one": "{{count}} 个 MR",
+    "prMrCount_one": "{{count}} 个 PR",
+    "mrCount_other": "{{count}} 个 MR",
+    "prMrCount_other": "{{count}} 个 PR"
   },
   "companionProfile": {
     "avatar": "头像",

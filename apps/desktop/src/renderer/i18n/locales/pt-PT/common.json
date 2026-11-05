@@ -1047,11 +1047,19 @@
       "copied": "Copiado",
       "copyFailed": "Não foi possível copiar. Tente novamente ou guarde o ficheiro.",
       "scrollHint": "Desloque para cima ou para baixo na seleção ou escolha Deslocamento automático.",
-      "recordHint": "Desenhe na pré-visualização para anotar a gravação. Sem áudio.",
+      "recordHint": "Desenhe na pré-visualização para anotar a gravação.",
       "format": "Formato",
       "videoFormat": "Vídeo (WebM)",
-      "prepareHint": "Começa após uma contagem decrescente de 3 segundos. Sem áudio.",
+      "prepareHint": "Começa após uma contagem decrescente de 3 segundos.",
       "countdown": "A gravação começa em {{count}}",
+      "systemAudio": "Altifalante",
+      "microphone": "Microfone",
+      "audioHint": "Escolha as fontes de áudio e comece a gravar.",
+      "preparingAudio": "A preparar áudio…",
+      "systemAudioFailed": "Áudio do altifalante indisponível. Verifique as permissões do sistema ou desative-o.",
+      "microphoneFailed": "Microfone indisponível. Verifique as permissões e o dispositivo de entrada ou desative-o.",
+      "audioFailed": "Não foi possível iniciar o áudio. Verifique os dispositivos ou desative o áudio.",
+      "audioInterrupted": "O áudio foi interrompido. Termine a gravação para guardar a parte capturada.",
       "countdownHint": "A começar em breve. Prima Esc para cancelar.",
       "annotate": "Anotar",
       "finishing": "A finalizar…",
@@ -6130,8 +6138,10 @@
       "accessRevokedByPeer": "Acesso revogado — o outro dispositivo tem de o restaurar nas suas definições",
       "deviceControlToggleAria": "Alternar controlo de {{name}}",
       "myDevices": {
-        "controlIt": "Eu controlo-o",
-        "allowInbound": "Permitir que controle este dispositivo",
+        "iCan": "Eu posso",
+        "itCan": "Ele pode",
+        "controlIt": "Controlá-lo",
+        "controlThisDevice": "Controlar este dispositivo",
         "allowInboundAria": "Alternar permissão para {{name}} controlar este dispositivo",
         "peerControlOff": "Controlo remoto não ativado nesse dispositivo",
         "masterOffHint": "Ative primeiro o interruptor principal acima",
@@ -13561,6 +13571,24 @@
           "autocompactBuffer": "Reserva de compactação automática",
           "compactBuffer": "Reserva de compactação",
           "freeSpace": "Espaço livre"
+        },
+        "estimate": {
+          "title": "Estimativas de texto",
+          "delivery": "Apresentação das respostas",
+          "host": "Instruções da Cindy",
+          "plugins": "Catálogo de plugins",
+          "memoryRules": "Instruções de memória",
+          "memoryIndex": "Índice de memória",
+          "profile": "Perfil do colega",
+          "user": "Instruções do utilizador",
+          "directories": "Diretórios adicionais",
+          "native": "Instruções do Pi",
+          "skills": "Catálogo de Skills",
+          "project": "Instruções do projeto",
+          "tools": "Definições das ferramentas",
+          "messages": "Texto da conversa",
+          "other": "Outras instruções",
+          "note": "Estimativa do texto atual, sem a tokenização do modelo. Exclui imagens e formatação do fornecedor; a soma difere do total nativo."
         }
       },
       "compact": {
@@ -14915,7 +14943,7 @@
         "manage": {
           "title": "Gerir ligações de PR",
           "hint": "Até 3 no cabeçalho; os PRs fixados aparecem primeiro",
-          "empty": "Cole uma ligação de PR do GitHub para o adicionar",
+          "empty": "Cole uma ligação de PR do GitHub ou MR do GitLab para o adicionar",
           "removed": "Removidos: {{count}}",
           "legacy": "Referências por confirmar: {{count}}",
           "addLabel": "Adicionar ligação de PR",
@@ -14926,17 +14954,26 @@
           "unpin": "Desafixar PR",
           "pinLimit": "Fixar até 3 PRs",
           "reorderHint": "Use Alt+↑/↓ para reordenar dentro do grupo de fixados ou não fixados.",
-          "dragHandle": "Arraste para reordenar {{repo}} #{{number}}",
+          "dragHandle": "Arraste para reordenar {{repo}} {{numberLabel}}",
           "remove": "Remover PR",
           "errors": {
             "duplicate": "Este PR já está associado; restaure as ligações removidas a partir da lista",
             "notFound": "PR não encontrado ou acesso negado",
-            "invalidUrl": "Introduza uma ligação de PR do GitHub válida",
+            "invalidUrl": "Introduz uma ligação válida de PR do GitHub ou MR do GitLab",
             "reorderFailed": "A ordem não foi guardada. Tente novamente.",
-            "verifyFailed": "Não foi possível verificar o PR; verifique o início de sessão e o acesso ao GitHub",
+            "verifyFailed": "Não foi possível verificar o PR; verifique o início de sessão e o acesso ao GitHub ou GitLab",
             "unsupported": "A versão deste computador não permite gerir ligações de PR",
             "failed": "Não foi possível atualizar as ligações de PR"
           }
+        },
+        "gitlab": {
+          "missing": "GitLab CLI (glab) não foi encontrado. Instala o glab e inicia sessão para ver o estado dos MR.",
+          "notLoggedIn": "O glab local não tem sessão iniciada em {{host}}. Executa glab auth login num terminal para ver o estado dos MR.",
+          "unsupported": "Este computador ainda não suporta o estado dos MR do GitLab",
+          "openAria": "Abrir MR !{{number}} no navegador",
+          "summaryAria": "Resumo do MR !{{number}}",
+          "urlPlaceholder": "Ligação de PR do GitHub ou MR do GitLab",
+          "notFound": "MR não encontrado ou a conta atual não o pode ver"
         }
       }
     },

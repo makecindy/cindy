@@ -47,15 +47,29 @@ export function prGuidanceFor(
 }
 
 /** 失败态 tooltip 的原因文案 key(ccAgent.gitContext.pr.*)。加载中(undefined)不给。 */
-export function prFailureCopyKey(status: PrStatusResult | undefined): string | null {
+export function prFailureCopyKey(
+  status: PrStatusResult | undefined,
+  opts?: PrGuidanceSessionOpts,
+): string | null {
   if (!status || status.ok) return null;
   switch (status.reason) {
+    case 'glab-missing':
+    case 'glab-not-logged-in':
+      if (opts?.remoteHostId || opts?.deviceLinkDeviceId || opts?.readOnly)
+        return 'ccAgent.gitContext.pr.statusUnknown';
+      return status.reason === 'glab-missing'
+        ? 'ccAgent.gitContext.pr.gitlab.missing'
+        : 'ccAgent.gitContext.pr.gitlab.notLoggedIn';
+    case 'unsupported':
+      return 'ccAgent.gitContext.pr.gitlab.unsupported';
     case 'gh-missing':
       return 'ccAgent.gitContext.pr.ghMissing';
     case 'gh-not-logged-in':
       return 'ccAgent.gitContext.pr.ghNotLoggedIn';
     case 'not-found':
-      return 'ccAgent.gitContext.pr.notFound';
+      return status.provider === 'gitlab'
+        ? 'ccAgent.gitContext.pr.gitlab.notFound'
+        : 'ccAgent.gitContext.pr.notFound';
     case 'no-token':
     case 'fetch-failed':
       return 'ccAgent.gitContext.pr.statusUnknown';
