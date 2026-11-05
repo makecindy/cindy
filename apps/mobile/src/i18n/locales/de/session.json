@@ -2,7 +2,7 @@
   "githubPrs": {
     "title": "PR-Links verwalten",
     "hint": "Bis zu 3 in der Kopfzeile; angeheftete PRs erscheinen zuerst",
-    "empty": "Füge zum Hinzufügen einen GitHub-PR-Link ein",
+    "empty": "Füge zum Hinzufügen einen GitHub-PR- oder GitLab-MR-Link ein",
     "removed": "Entfernt: {{count}}",
     "legacy": "Unbestätigte Verweise: {{count}}",
     "addLabel": "PR-Link hinzufügen",
@@ -10,7 +10,7 @@
     "loading": "Wird geladen…",
     "restore": "PR wiederherstellen",
     "pin": "In der Kopfzeile anheften",
-    "unpin": "PR lösen",
+    "unpin": "PR / MR lösen",
     "pinLimit": "Bis zu 3 PRs anheften",
     "reorderHint": "Mit Alt+↑/↓ innerhalb der angehefteten oder nicht angehefteten Gruppe umsortieren.",
     "dragHandle": "Ziehen, um {{repo}} #{{number}} umzusortieren",
@@ -18,12 +18,13 @@
     "errors": {
       "duplicate": "Dieser PR ist bereits verknüpft; entfernte Links lassen sich aus der Liste wiederherstellen",
       "notFound": "PR nicht gefunden oder Zugriff verweigert",
-      "invalidUrl": "Gib einen gültigen GitHub-PR-Link ein",
+      "invalidUrl": "Gib einen gültigen GitHub-PR- oder GitLab-MR-Link ein",
       "reorderFailed": "Die Reihenfolge wurde nicht gespeichert. Versuche es erneut.",
-      "verifyFailed": "Der PR konnte nicht geprüft werden; prüfe deine GitHub-Anmeldung und Zugriffsrechte",
+      "verifyFailed": "Der PR konnte nicht geprüft werden; prüfe deine Anmeldung und Zugriffsrechte bei GitHub oder GitLab",
       "unsupported": "Die Version dieses Computers unterstützt die Verwaltung von PR-Links nicht",
       "failed": "PR-Links konnten nicht aktualisiert werden"
     },
+    "urlPlaceholder": "GitHub-PR- oder GitLab-MR-Link",
     "moveUp": "Nach oben"
   },
   "paneResize": {
@@ -239,7 +240,25 @@
       },
       "context": {
         "title": "Kontextnutzung",
-        "unavailable": "Keine Kontextdaten"
+        "unavailable": "Keine Kontextdaten",
+        "estimate": {
+          "title": "Textschätzungen",
+          "delivery": "Antwortdarstellung",
+          "host": "Cindy-Anweisungen",
+          "plugins": "Plugin-Katalog",
+          "memoryRules": "Speicheranweisungen",
+          "memoryIndex": "Speicherindex",
+          "profile": "Teammitglied-Profil",
+          "user": "Benutzeranweisungen",
+          "directories": "Zusätzliche Verzeichnisse",
+          "native": "Pi-Anweisungen",
+          "skills": "Skill-Katalog",
+          "project": "Projektanweisungen",
+          "tools": "Werkzeugdefinitionen",
+          "messages": "Gesprächstext",
+          "other": "Weitere Anweisungen",
+          "note": "Schätzung des aktuellen Texts, keine Modell-Tokenisierung. Ohne Bilder und Anbieterformatierung; die Summe weicht vom nativen Gesamtwert ab."
+        }
       },
       "rateLimit": {
         "plan": "Plan",
@@ -660,7 +679,7 @@
     "REMOTE_PROVIDER_UPDATING": "Die Zugangsdaten dieses Modellanbieters werden aktualisiert. Versuch es gleich erneut.",
     "REMOTE_WORKDIR_UNAVAILABLE": "Das Remote-Arbeitsverzeichnis ist nicht verfügbar. Prüfe, ob der Ordner auf diesem Computer noch existiert, und versuch es erneut.",
     "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "Der Computer kann noch nicht bestätigen, ob diese Nachricht gesendet wurde. Warte kurz und versuch es erneut. Sende dieselbe Nachricht nicht zweimal.",
-    "REMOTE_AGENT_UNAVAILABLE": "Der Computer, auf dem der Agent läuft, ist nicht erreichbar. Stelle sicher, dass er online ist und Fernsteuerung erlaubt, und versuch es erneut.",
+    "REMOTE_AGENT_UNAVAILABLE": "Die Verbindung zum Computer, auf dem der Agent läuft, wurde unterbrochen. Versuch es erneut. Wenn das öfter passiert, stelle sicher, dass er online ist und Fernsteuerung erlaubt.",
     "REMOTE_AGENT_PEER_TOO_OLD": "Cindy auf dem anderen Computer ist zu alt, um den Agent für diesen Computer auszuführen. Aktualisiere Cindy dort zuerst.",
     "REMOTE_AGENT_EXPIRED": "Diese Sitzung wurde auf dem Computer, auf dem der Agent läuft, bereits beendet. Sende deine Nachricht erneut.",
     "REMOTE_AGENT_NOT_FOUND": "Diese Sitzung wurde auf dem Computer, auf dem der Agent läuft, bereits beendet. Sende deine Nachricht erneut.",

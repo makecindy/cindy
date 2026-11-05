@@ -2,11 +2,15 @@
 import { act, createElement as el, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BOT_GROUP_RUNTIME_FAILURE_CODES, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { buildBotGroupCapabilityNotice, BOT_GROUP_RUNTIME_FAILURE_CODES, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { chatGroupView, chatRoomRow, createChatServerClient, type ChatMessage, type ChatPage } from '@/chat/chatServerClient';
 import { shareSelectionStore } from '@/session/shareSelectionStore';
+import { i18n, SUPPORTED_LOCALES } from '@/i18n';
+import { resolveBotGroupMentions } from '@cindy/maker-shared/botGroupMentions';
 
 const h = vi.hoisted(() => ({
   processRead: vi.fn(),
+  translate: null as null | ((key: string, options?: Record<string, unknown>) => string),
   chat: null as any, pngExport: vi.fn(async () => 'encoded'), sharedImage: vi.fn(async () => {}), exported: [] as any[],
   management: null as any,
   openTeammate: vi.fn(),
@@ -16,7 +20,7 @@ const h = vi.hoisted(() => ({
   leaveDecision: (async () => false) as () => Promise<boolean>,
   confirm: vi.fn(),
   leave: vi.fn(),
-  focused: true,
+  focused: true, themeMode: 'light',
   nativeMenus: true,
   appState: 'active',
   appStateListeners: new Set<(state: string) => void>(),
@@ -57,16 +61,20 @@ vi.mock('@/session/ConversationShareWebView', () => ({ cleanupConversationShareP
 vi.mock('expo-sharing', () => ({ shareAsync: h.sharedImage }));
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn(async () => {}) }));
 vi.mock('react-native-uitextview', () => ({
-  UITextView: ({ children, testID }: any) => el('span', { 'data-testid': testID }, children),
+  UITextView: ({ children, testID, onPress, onTouchStart, style }: any) => el('span', { 'data-testid': testID, onClick: onPress, onTouchStart,
+    'data-style': JSON.stringify(Object.assign({}, ...[style].flat(Infinity).filter(Boolean))) }, children),
 }));
 vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => null }));
 vi.mock('expo-file-system', () => ({ Directory: class {}, File: class {}, Paths: { cache: 'file:///test-cache' } }));
 vi.mock('expo-web-browser', () => ({ openBrowserAsync: vi.fn(async () => ({})) }));
 vi.mock('@/components/ChatReplyIcon', () => ({ ChatReplyIcon: () => null }));
 vi.mock('react-native', () => {
-  const box = (tag: string) => ({ children, testID, accessibilityLabel, style, onLayout }: any) =>
+  const box = (tag: string) => ({ children, testID, accessibilityLabel, style, onLayout, onTouchStart, ref }: any) =>
     el(tag, { 'data-testid': testID, 'aria-label': accessibilityLabel,
-      ref: (node: any) => { if (node) node.nativeLayout = onLayout; },
+      onTouchStart, ref: (node: any) => {
+        if (node) { node.nativeLayout = onLayout; node.measureInWindow = (callback: any) => callback(0, 62, 402, 812); }
+        if (typeof ref === 'function') ref(node); else if (ref) ref.current = node;
+      },
       style: { opacity: [style].flat().filter(Boolean).findLast((item: any) => item.opacity !== undefined)?.opacity,
         display: [style].flat().filter(Boolean).findLast((item: any) => item.display !== undefined)?.display } }, children);
   return {
@@ -120,7 +128,7 @@ vi.mock('@/session/SessionHeaderNativeControls', () => ({ SessionHeaderNativeBlu
 vi.mock('react-i18next', async (importOriginal) => ({
   ...await importOriginal<typeof import('react-i18next')>(),
   useTranslation: () => ({
-    t: (key: string, options?: Record<string, unknown>) => options
+    t: (key: string, options?: Record<string, unknown>) => h.translate ? h.translate(key, options) : options
       ? `${key}(${Object.entries(options).map(([name, value]) => `${name}=${String(value)}`).join(',')})`
       : key,
     i18n: { language: 'zh-CN' },
@@ -129,12 +137,15 @@ vi.mock('react-i18next', async (importOriginal) => ({
 vi.mock('expo-crypto', () => ({ randomUUID: () => `uuid-${++h.uuid}` }));
 vi.mock('lucide-react-native', () => Object.fromEntries(
   ['Copy', 'Share', 'ArrowUpRight', 'CornerDownRight', 'Circle', 'Bell', 'ChevronLeft', 'Settings2', 'Plus', 'Square', 'Users', 'X', 'Check', 'CircleAlert', 'CircleCheck', 'CircleDashed', 'FileText', 'Sparkles', 'Folder', 'Camera', 'Image',
-    'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown', 'Reply', 'SlidersHorizontal', 'UserPlus']
+    'Minus', 'ChevronUp', 'CircleMinus', 'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown', 'Reply', 'SlidersHorizontal', 'UserPlus']
     .map((name) => [name, () => null]),
 ));
-vi.mock('@/theme', async () => ({
-  ...await import('@/theme/tokens'), useThemedStyles: (makeStyles: any) => makeStyles({}), useTheme: () => ({ colors: {} }), monoFont: 'mono',
-}));
+vi.mock('@/theme', async () => {
+  const tokens = await import('@/theme/tokens');
+  const colors = () => tokens.palettes[h.themeMode as keyof typeof tokens.palettes];
+  return { ...tokens, useThemedStyles: (makeStyles: any) => makeStyles(colors()),
+    useTheme: () => ({ mode: h.themeMode, colors: colors() }), monoFont: 'mono' };
+});
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.processRead, getPresenceAvailability: () => true }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({
   user: { id: 'owner' }, accountGeneration: 1, getAccessToken: async () => 'token', apiFetch: async () => ({}),
@@ -181,13 +192,19 @@ vi.mock('@/session/CompanionSheet', () => ({
     const was = useRef(visible);
     useEffect(() => { if (was.current && !visible) onClosed?.(); was.current = visible; }, [visible]);
     return visible ? el('div', { 'data-testid': testID, 'data-prevent-dismiss': String(!!preventDismiss) },
+      el('button', { 'data-testid': `${testID}.close`, onClick: onClose }, 'Close'),
       onBack ? el('button', { 'data-testid': `${testID}.back`, onClick: onBack }) : null,
       trailingAction ? el('button', { 'data-testid': trailingAction.testID, disabled: trailingAction.disabled || trailingAction.busy, onClick: trailingAction.onPress }, trailingAction.label) : null,
       children, footer) : null;
   },
 }));
+vi.mock('@/session/BotGroupMentionPopover', () => ({
+  BotGroupMentionPopover: ({ position, onClose, name, displayName, caption }: any) => el('div', {
+    'data-testid': 'mentionPopover', 'data-position': JSON.stringify(position),
+  }, el('div', { 'data-testid': 'botGroup.mention.identity' }, name, displayName, caption), el('button', { 'data-testid': 'botGroup.mention.identity.close', onClick: onClose }, 'Close')),
+}));
 vi.mock('@/session/BotGroupAvatars', () => ({
-  BOT_GROUP_MESSAGE_AVATAR_SIZE: 28, BOT_GROUP_STEP_AVATAR_SIZE: 24, BOT_GROUP_INLINE_AVATAR_SIZE: 20, BOT_GROUP_ROW_AVATAR_SIZE: 32,
+  BOT_GROUP_MESSAGE_AVATAR_SIZE: 28, BOT_GROUP_STEP_AVATAR_SIZE: 24, BOT_GROUP_INLINE_AVATAR_SIZE: 20, BOT_GROUP_ROW_AVATAR_SIZE: 32, BOT_GROUP_MENTION_AVATAR_SIZE: 48,
   BotGroupAvatar: () => null, BotGroupDuoAvatar: () => null,
   useBotGroupIdentities: () => (botId: string, fallbackName = '', member?: { name: string }) => ({ botId, name: fallbackName || member?.name || botId }),
 }));
@@ -355,6 +372,7 @@ async function render(data: BotGroupRemoteChatData | null = group(), kind: 'read
 }
 
 beforeEach(() => {
+  h.translate = null; h.themeMode = 'light';
   h.nativeMenus = true;
   shareSelectionStore.exit();
   h.management = null;
@@ -380,6 +398,121 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
 
 describe('group timeline', () => {
+  // PR #8818 / component: the identity matcher cannot reject a complete foreign
+  // broadcast if the real Timeline splits it at a shorter member name first.
+  // French send parser + English Screen: @Tous is personal, the longer broadcast is not.
+  it.each([true, false])('keeps a French broadcast whole beside a shorter personal mention (own=%s)', async own => {
+    h.translate = (key, options) => i18n.t(key, { ...options, lng: 'en' });
+    const name = 'Tous';
+    const broadcastLabel = i18n.t('groupChat.mention.allBots', { lng: 'fr' });
+    const content = `@${name} @${broadcastLabel}`;
+    const mentions = resolveBotGroupMentions(content, { members: [{ botId: 'mimi', name }],
+      allLabels: [i18n.t('groupChat.mention.all', { lng: 'fr' })], allBotLabels: [broadcastLabel] });
+    expect(mentions).toEqual({ all: false, allBots: true, botIds: ['mimi'] });
+    const data = group({ serverBacked: true, messages: [message('prefix-broadcast', 1, {
+      authorKind: 'user', isSelf: own, content, mentions,
+    })] });
+    data.members[0] = { ...data.members[0]!, name };
+    await render(data);
+    const spans = () => [...node.querySelectorAll('span')];
+    const broadcast = spans().find(span => span.textContent === `@${broadcastLabel}`)!;
+    expect(broadcast).toBeDefined();
+    expect(spans().filter(span => span.textContent === '@Tous')).toHaveLength(1);
+    await act(async () => broadcast.click());
+    expect(byId('botGroup.mention.identity')).toBeNull();
+    await act(async () => spans().find(span => span.textContent === '@Tous')!.click());
+    expect(byId('botGroup.mention.identity')?.textContent).toContain(name);
+    await click('botGroup.mention.identity.close');
+    data.messages[0]!.mentions = { all: false, botIds: [] };
+    await render(data);
+    await act(async () => spans().find(span => span.textContent === `@${broadcastLabel}`)!.click());
+    expect(byId('botGroup.mention.identity')).toBeNull();
+    expect(h.chat.act).not.toHaveBeenCalled();
+  });
+
+  // PR #8818 / component: Chinese-only broadcast coverage missed localized
+  // labels colliding with a member name. Use the real send parser and Timeline:
+  // a sender-locale broadcast must stay inert in English, while its qualified @ can open.
+  it.each([['es', 'es'], ...SUPPORTED_LOCALES.map(lng => [lng, 'en'])])('keeps %s teammate broadcasts out of personal identity when read in %s', async (senderLocale, readerLocale) => {
+    h.translate = (key, options) => i18n.t(key, { ...options, lng: readerLocale });
+    const name = i18n.t('groupChat.mention.allBots', { lng: senderLocale });
+    const allLabel = i18n.t('groupChat.mention.all', { lng: senderLocale });
+    const qualified = `${name} (Ana)`;
+    const content = `@${qualified} @${name}`;
+    const mentions = resolveBotGroupMentions(content, {
+      members: [{ botId: 'mimi', name: qualified }], allLabels: [allLabel], allBotLabels: [name],
+    });
+    expect(mentions).toEqual({ all: false, allBots: true, botIds: ['mimi'] });
+    const data = group({ serverBacked: true, messages: [message('broadcast', 1, {
+      authorKind: 'user', isSelf: true, content, mentions,
+    })] });
+    data.members[0] = { ...data.members[0]!, name, nickname: name, ownerName: 'Ana', isOwned: false, actorKind: 'bot' };
+    await render(data);
+    const spans = [...node.querySelectorAll('span')];
+    const broadcast = spans.find(span => span.textContent === `@${name}`)!;
+    expect(broadcast).toBeDefined();
+    await act(async () => broadcast.click());
+    expect(byId('botGroup.mention.identity')).toBeNull();
+    await act(async () => spans.find(span => span.textContent === `@${qualified}`)!.click());
+    expect(byId('botGroup.mention.identity')?.textContent).toContain(qualified);
+    await click('botGroup.mention.identity.close');
+    // A legacy projection without targets still must not turn a broadcast into
+    // the uniquely named member via the server's name fallback.
+    data.messages[0]!.mentions = { all: false, botIds: [] };
+    await render(data);
+    await act(async () => [...node.querySelectorAll('span')].find(span => span.textContent === `@${name}`)!.click());
+    expect(byId('botGroup.mention.identity')).toBeNull();
+  });
+
+  // A01 / unit: real screen -> sent mention -> public identity -> close. Existing
+  // composer tests never exercised sent-text taps; minimal failure is @咪咪.
+  it.each([[true, false], [false, false], [true, true]])('opens the named member from sent text (own=%s, topic=%s) and returns to the message', async (own, topic) => {
+    // Native acceptance found the owner caption leaking its translation key.
+    // Use the production catalog here so the complete identity text is observable.
+    h.translate = (key, options) => i18n.t(key, { ...options, lng: 'zh-CN' });
+    const data = group({ serverBacked: true, messages: [message('mention', 1, {
+      authorKind: 'user', isSelf: own, content: '@咪咪 看看这段正文', mentions: { all: false, botIds: ['mimi'] }, threadRootId: topic ? 'topic-root' : undefined,
+    })] });
+    data.members[0] = { ...data.members[0]!, actorKind: 'bot', ownerName: '王悦', isOwned: false, nickname: '咪咪', displayName: 'Cindy', status: 'paused' };
+    if (topic) {
+      data.messages.unshift(message('topic-root', 0, { content: '话题根消息' }));
+      h.chat = { ...h.chat, server: true };
+    }
+    // Topics are supported by the direct Chat Server route; the computer projection intentionally rejects them.
+    await render(topic ? data : parseBotGroupChatData(data)!, 'ready', topic ? 'topic-root' : undefined, topic ? '' : 'mac');
+    const mention = [...node.querySelectorAll('span')].find(span => span.textContent === '@咪咪')!;
+    expect(mention).toBeDefined();
+    expect(JSON.parse(mention.getAttribute('data-style')!).textDecorationLine).toBeUndefined();
+    const tapMention = async () => act(async () => {
+      const touch = new Event('touchstart', { bubbles: true });
+      Object.defineProperties(touch, { pageX: { value: 108 }, pageY: { value: 246 } });
+      mention.dispatchEvent(touch); mention.click();
+    });
+    await tapMention();
+    expect(JSON.parse(byId('mentionPopover')!.getAttribute('data-position')!)).toMatchObject({ x: 108, y: 184 });
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('Cindy');
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('王悦 的伙伴');
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('咪咪 (王悦)');
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('已暂停');
+    expect(byId('botGroup.mention.identity')?.textContent).not.toContain('groupChat.');
+    expect(h.chat.act).not.toHaveBeenCalled();
+    // Native acceptance: a presented UIKit material retains its old appearance.
+    // Dismiss on theme changes rather than rendering new text over stale material.
+    h.themeMode = 'dark';
+    await render(topic ? data : parseBotGroupChatData(data)!, 'ready', topic ? 'topic-root' : undefined, topic ? '' : 'mac');
+    expect(byId('botGroup.mention.identity')).toBeNull();
+    await tapMention();
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('Cindy');
+    await click('botGroup.mention.identity.close');
+    expect(byId('botGroup.mention.identity')).toBeNull();
+    expect(node.textContent).toContain('@咪咪 看看这段正文');
+    // PR #8818 / component: screen-reader activation has no touchstart. The
+    // real Timeline used to drop this press because it had no measured anchor.
+    await act(async () => mention.click());
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('咪咪 (王悦)');
+    expect(JSON.parse(byId('mentionPopover')!.getAttribute('data-position')!)).toMatchObject({ x: 201, y: 406 });
+  });
+
   it('shows a 引用回复 block from the loaded original, and only the author once it is deleted', async () => {
     // Server message ids are UUIDs; the parser rejects a quote that points at anything else.
     const originalId = '11111111-1111-4111-8111-111111111111';
@@ -486,6 +619,47 @@ describe('group timeline', () => {
     expect(h.headerBlur.at(-1)).toBe(72);
     // The two-line identity stays over solid blur; the feather starts at the header's lower edge.
     expect(h.headerFade.at(-1)).toBe(0);
+  });
+
+  // #8443: exercise the production projection, measured viewport and read client.
+  // A late capability notice must clear the unread count in both main and followed threads.
+  it.each([false, true])('acknowledges a displayed capability notice only at the measured tail (thread=%s)', async thread => {
+    vi.useFakeTimers();
+    const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+    const roomId = id(1), selfId = id(2), botId = id(3), rootId = id(4), noticeId = id(5);
+    const rootMessage: ChatMessage = { id: rootId, seq: '1', authorId: botId, author: { kind: 'bot', name: 'Bot' },
+      origin: 'bot', createdAt: '2026-11-03T00:00:00Z', deleted: false, threadRootId: null,
+      content: [{ type: 'text', text: 'Earlier reply' }] };
+    const notice: ChatMessage = { ...rootMessage, id: noticeId, seq: '2', threadRootId: thread ? rootId : null,
+      content: [buildBotGroupCapabilityNotice('ATTACHMENTS_UNAVAILABLE', 'Attachment unavailable')] };
+    const page: ChatPage = { threadRootId: thread ? rootId : undefined, before: null, messages: [rootMessage, notice],
+      snapshot: { room: { id: roomId, name: 'Group', kind: 'group', state: 'joined', archived: false,
+        revision: 1, created_at: '2026-11-03', updated_at: '2026-11-03', response_mode: 'all', speaking_mode: 'auto' },
+        members: [], cursor: '2', messages: [rootMessage, notice], reads: [
+          { thread_key: 'main', read_seq: '1' }, ...(thread ? [{ thread_key: rootId, read_seq: '1', following: true }] : []),
+        ] } };
+    const unread = () => chatRoomRow(page.snapshot.room, page.snapshot, selfId).chatUnread?.count;
+    expect(unread()).toBe(1);
+    const request = vi.fn().mockResolvedValue({ readSeq: '2' });
+    const client = createChatServerClient(request);
+    h.chat = { ...h.chat, server: true, markRead: (ids: string[]) => client.markRead(roomId, page, ids),
+      state: { kind: 'ready', group: chatGroupView(page, selfId) } };
+    await act(async () => root.render(el(BotGroupChatScreen, { deviceId: '', deviceName: '', groupId: roomId,
+      threadRootId: page.threadRootId })));
+    expect(node.textContent).toContain('groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(32);
+      h.scroll.onLayout({ nativeEvent: { layout: { height: 500 } } });
+      h.scroll.onContentSizeChange(400, 2000);
+    });
+    expect(request).not.toHaveBeenCalled();
+    expect(unread()).toBe(1);
+    await act(async () => h.scroll.onScroll({ nativeEvent: { contentOffset: { y: 1500 },
+      contentSize: { height: 2000 }, layoutMeasurement: { height: 500 } } }));
+    expect(request).toHaveBeenCalledWith(`/conversations/${roomId}/read`, 'POST', {
+      operationId: `read-${thread ? rootId : 'main'}:2`, readSeq: '2', ...(thread ? { threadRootId: rootId } : {}),
+    });
+    expect(unread()).toBe(0);
   });
 
   it('returns from history without new messages and resumes following the tail', async () => {
@@ -941,6 +1115,33 @@ describe('group timeline', () => {
     expect(byId('botGroup.message.plan')?.textContent).not.toContain('groupChat.plan.stepRunning');
     expect(byId('botGroup.message.plan')?.textContent).toContain('groupChat.plan.stepDone');
     expect(byId('botGroup.plan.start')).toBeNull();
+  });
+
+  // The real card folds the queue, sends future positions without an execution, and protects running turns (unit).
+  it('folds a talk queue and sends the exact queued turn when skipping', async () => {
+    const data = group();
+    data.openPlan = { id: 'p1', status: 'running', currentStep: 1, stepCount: 6, currentBotName: '阿布', currentStepStatus: 'running' };
+    const plan = { ...data.plans[0]!, kind: 'talk' as const, status: 'running' as const, currentStep: 1, canManage: true, supportsPendingSkip: true,
+      steps: Array.from({ length: 6 }, (_, position) => ({ ...data.plans[0]!.steps[position === 0 ? 0 : 1]!, position,
+        status: position === 0 ? 'done' as const : position === 1 ? 'running' as const : 'pending' as const,
+        ...(position === 1 ? { executionId: 'queued-turn', executionStatus: 'queued' as const } : {}),
+      })),
+    };
+    data.plans[0] = plan;
+    await render(data);
+    const card = byId('botGroup.plan')!;
+    expect(card.textContent).toContain('groupChat.plan.talkTitle');
+    expect(card.textContent).not.toContain('groupChat.plan.intro');
+    expect(card.querySelectorAll('[data-testid="botGroup.plan.step"]')).toHaveLength(3);
+    await click('botGroup.plan.fold');
+    expect(card.querySelectorAll('[data-testid="botGroup.plan.step"]')).toHaveLength(6);
+    await click('botGroup.plan.skipTurn');
+    expect(h.chat.act).toHaveBeenLastCalledWith('plan-edit', { planId: 'p1', position: 1, action: 'skip', executionId: 'queued-turn' });
+    data.plans[0] = { ...plan, steps: plan.steps.map(step => step.position === 1 ? { ...step, executionStatus: 'running' } : step) };
+    await render(data);
+    expect(card.querySelectorAll('[data-testid="botGroup.plan.step"]')[1]?.querySelector('[data-testid="botGroup.plan.skipTurn"]')).toBeNull();
+    await click('botGroup.plan.skipTurn');
+    expect(h.chat.act).toHaveBeenLastCalledWith('plan-edit', { planId: 'p1', position: 2, action: 'skip', executionId: undefined });
   });
 
   it('shows one row per speaker with its lane session', async () => {
@@ -2032,6 +2233,44 @@ describe('mobile group threads', () => {
     expect(byId('botGroup.row.mine')?.textContent).toContain('**literal**');
     expect(byId('botGroup.row.other')?.textContent).toContain('Other member');
     expect(byId('botGroup.row.other')?.querySelector('[data-testid="botGroup.message.userBubble"]')).toBeNull();
+  });
+
+  // PR #8818 / component: the displayed reply must use its own mention IDs,
+  // not the main share's self-addressed delivery metadata. Earlier share tests
+  // had no mentions. Minimal failure: sharer and target both named Ann.
+  it.each([true, false])('opens the source mention from a share without mistaking the sharer for its namesake (authored=%s)', async sharedByAuthor => {
+    h.chat.server = true;
+    const share = { messageId: 'source', threadRootId: rootId, status: 'available' as const, authorKind: 'user' as const,
+      authorBotId: 'self', authorName: 'Ann', sharedByAuthor, content: '@Ann 看看原回复',
+      mentions: { all: false, botIds: ['abu'] }, attachments: [], createdAt: 1000, edited: false };
+    const posted = message('posted', 2, { authorKind: 'user', isSelf: true, content: '',
+      mentions: { all: false, botIds: ['self'] }, threadShare: share });
+    const members = [{ ...group().members[0]!, botId: 'self', name: 'Ann', actorKind: 'human' as const, role: 'member' as const },
+      { ...group().members[1]!, name: 'Ann', nickname: 'Ann', displayName: 'Target' }];
+    const data = threadGroup({ serverBacked: true, members, messages: [posted] });
+    await render(data, 'ready', undefined, '');
+    const mention = [...node.querySelectorAll('span')].find(span => span.textContent === '@Ann' && span.getAttribute('data-style'))!;
+    expect(mention).toBeDefined();
+    const { palettes } = await import('@/theme/tokens');
+    expect(JSON.parse(mention.getAttribute('data-style')!).color).toBe(palettes.light.groupMentionText);
+    await act(async () => {
+      const touch = new Event('touchstart', { bubbles: true });
+      Object.defineProperties(touch, { pageX: { value: 108 }, pageY: { value: 246 } });
+      mention.dispatchEvent(touch); mention.click();
+    });
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('Target');
+    await click('botGroup.mention.identity.close');
+    h.themeMode = 'dark';
+    await render(data, 'ready', undefined, '');
+    const darkMention = [...node.querySelectorAll('span')].find(span => span.textContent === '@Ann' && span.getAttribute('data-style'))!;
+    expect(JSON.parse(darkMention.getAttribute('data-style')!).color).toBe(palettes.dark.groupMentionText);
+    await act(async () => darkMention.click());
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('Target');
+    await click('botGroup.mention.identity.close');
+    await render({ ...data, messages: [{ ...posted, threadShare: { ...share, mentions: undefined } }] }, 'ready', undefined, '');
+    const legacyMention = [...node.querySelectorAll('span')].find(span => span.textContent === '@Ann' && span.getAttribute('data-style'))!;
+    await act(async () => legacyMention.click());
+    expect(byId('botGroup.mention.identity')).toBeNull();
   });
 
   it('renders my resolved own post as a user message with the same thread summary as every thread share', async () => {

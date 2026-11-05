@@ -502,6 +502,10 @@ Irreversible group termination, distinct from archive, leave and personal list r
 
 伙伴设置里的开关与工作台小标：账号里只有一位伙伴负责定时看一遍所有任务（实现里叫 scheduler / 总调度，默认 Cindy 助理）。面向用户不写「总调度」「调度员」，一律用这句；在别的伙伴上打开就移过去，关闭则没有伙伴统一跟进。session 按已裁决译法写「任务 / Session / セッション / 세션」。
 
+### MR
+
+GitLab Merge Request 的平台名称，界面保留 MR 与 !编号；不同于 GitHub PR。
+
 ### Group Admin
 
 可管理群资料和成员，但不能替伙伴主人授权工具或私人资料。群设置内可简称管理员 / Admin。
@@ -590,9 +594,17 @@ Orca 协同角色名，与 Worker 成对。五语统一保留英文 Lead，不�
 
 标准 MCP Apps 协议提供的交互应用；卡片标题与消息来源沿用协议名称，各语言保留 MCP App，待术语评审后固化。
 
+### Merge conflict
+
+GitHub PR / GitLab MR 的合并冲突。数据行标签为 Merge / 合并，状态值为 Conflicts / 有冲突；与检查失败及应用崩溃区分。
+
 ### Read
 
 群聊里「别的成员已经看过这条消息」的状态（消息气泡下的双勾、「N 人已读」）。与「Read」作动词（读取文件）无关；只用于消息读取状态。
+
+### Migration Assistant
+
+新电脑从同账号的其他电脑复制插件、技能与设置的功能名（设置 → 通用），用户 2026-10-20 定名「迁移助理」。ja / ko 参照系统同类功能的常见叫法；登记为 proposed，待术语评审。
 
 ### Mivo Library
 
@@ -700,7 +712,7 @@ Plugin 声明的应用级完整页面能力；区别于会话内 Panel。V1 由 
 
 ### Manual
 
-插件随包提供、由 ghost_manual 按需读取的渐进披露长文资料。它不是权限项，也不等同于已停止新增的 Agent Skill；先登记为 proposed，待插件作者与用户实际使用后再固化。
+插件随包提供、由 ghost_manual 按需读取的渐进披露长文资料。它不是权限项，也不等同于插件随包的 Agent Skill；先登记为 proposed，待插件作者与用户实际使用后再固化。
 
 ### Audio
 

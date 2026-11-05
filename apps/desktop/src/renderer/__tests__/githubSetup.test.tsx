@@ -16,7 +16,7 @@ vi.mock('@/hooks/useSessionGitContext', () => ({
     prRefs: [
       { id: 'ref', owner: 'o', repo: 'r', prNumber: 1, url: 'https://github.com/o/r/pull/1' },
     ],
-    prStatuses: new Map([['o/r#1', { ok: false, reason: 'gh-missing' }]]),
+    prStatuses: new Map([['github:github.com/o/r#1', { ok: false, reason: 'gh-missing' }]]),
   }),
 }));
 afterEach(cleanup);

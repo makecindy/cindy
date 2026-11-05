@@ -44,6 +44,7 @@ describe('matchesDeterministicUsageExhaustionText', () => {
     'insufficient_quota',
     'insufficient credit balance',
     'insufficient balance',
+    '{"type":"insufficient_balance_error"}',
     'insufficient funds',
     'quota exhausted for this key',
     'Your quota has been exceeded',

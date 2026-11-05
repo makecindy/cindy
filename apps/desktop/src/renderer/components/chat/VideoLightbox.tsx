@@ -15,7 +15,8 @@ import { AttachmentCollectionPreview, useOpeningCollection } from './AttachmentC
  *   - Right-click (xdt-video:// only): 复制视频 / 打开视频所在目录。复制走
  *     OS 原生文件剪贴板(Win/Mac),粘贴出来是文件本体而不是字节流。
  *   - <video controls autoPlay loop preload="auto"> — autoplay is fine because
- *     the user explicitly clicked the cover to open the lightbox.
+ *     the user explicitly clicked the cover to open the lightbox. Audio
+ *     previews do not loop, and unmounting always pauses the element.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -83,10 +84,16 @@ function VideoLightboxContent({
 
   // 全局媒体互斥:lightbox autoPlay 起播时 bus 会自动 pause 其它正在
   // 播放的 audio/video;反过来,其它媒体起播时也会 pause 这里的视频。
+  // 合集预览关闭或切换时会直接卸载本组件而不经过 handleClose,卸载时
+  // 显式 pause,避免脱离 DOM 的媒体在后台继续发声。
   useEffect(() => {
     const el = videoRef.current;
     if (!el) return;
-    return registerMedia(el);
+    const unregister = registerMedia(el);
+    return () => {
+      unregister();
+      el.pause();
+    };
   }, []);
 
   useEffect(() => {
@@ -224,7 +231,7 @@ function VideoLightboxContent({
         src={src}
         controls
         autoPlay
-        loop
+        loop={kind !== 'audio'}
         preload="metadata"
           playsInline
           onLoadedMetadata={() => {

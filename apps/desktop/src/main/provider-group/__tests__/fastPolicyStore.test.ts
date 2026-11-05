@@ -127,6 +127,13 @@ describe('durable subscription Fast constraints', () => {
     expect(store.allows(hostSessionIdFor('consumer', 'task-1'))).toBe(false);
     expect(store.allows('task-1')).toBe(true);
     expect(store.allows(hostSessionIdFor('other', 'task-1'))).toBe(true);
+    const received = store.received('group-owner', 'openai');
+    expect(received).toEqual({ revision: 1, allowFast: false });
+    expect(store.received('unrelated-owner', 'openai')).toBeNull();
+    await store.receive('group-owner', { group: 'openai', ...received!,
+      binding: { sessionId: 'new-offline-task', controllerDeviceId: 'consumer' } }, 'executor', current);
+    expect(store.allows(hostSessionIdFor('consumer', 'new-offline-task'))).toBe(false);
+    expect(store.allows(hostSessionIdFor('other', 'new-offline-task'))).toBe(true);
     await store.receive(
       'owner',
       {
