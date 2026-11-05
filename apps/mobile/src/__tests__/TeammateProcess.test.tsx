@@ -21,10 +21,10 @@ vi.mock('lucide-react-native', () => ({ ChevronRight: () => null, Layers: () => 
 vi.mock('@/components/AppText', () => ({ Text: ({ children }: any) => el('span', null, children) }));
 vi.mock('@/theme', () => ({ useTheme: () => ({ colors: {} }), useThemedStyles: () => ({}) }));
 vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
-const history = vi.hoisted(() => ({ invoke: vi.fn(), generation: 1, subscribe: vi.fn(async () => undefined), unsubscribe: vi.fn(async () => undefined), toolActions: undefined as any, resolveMedia: vi.fn(async (media: any) => ({ url: 'https://media.invalid/resolved', mimeType: media.kind === 'video' ? 'video/mp4' : 'image/png' })), mediaDevice: '' }));
+const history = vi.hoisted(() => ({ invoke: vi.fn(), generation: 1, getSubscriptionIdentity: vi.fn((_deviceId: string, _topics: readonly Topic[]) => null as number | null), subscribe: vi.fn(async () => undefined), unsubscribe: vi.fn(async () => undefined), toolActions: undefined as any, resolveMedia: vi.fn(async (media: any) => ({ url: 'https://media.invalid/resolved', mimeType: media.kind === 'video' ? 'video/mp4' : 'image/png' })), mediaDevice: '' }));
 vi.mock('expo-router', () => ({ useFocusEffect: (effect: () => void) => useEffect(effect, [effect]) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: history.generation }) }));
-vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: history.invoke, subscribe: history.subscribe, unsubscribe: history.unsubscribe }) }));
+vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: history.invoke, subscribe: history.subscribe, unsubscribe: history.unsubscribe, getSubscriptionIdentity: history.getSubscriptionIdentity }) }));
 vi.mock('@/components/MobilePrimitives', () => ({ MainWindowActionButton: ({ action }: any) => el('button', { onClick: action.onPress }, 'Retry') }));
 vi.mock('@/session/BotGroupMessageText', () => ({ BotGroupMarkdownText: ({ content }: any) => el('p', null, content) }));
 vi.mock('@/session/useBotGroupRemoteMedia', () => ({ useBotGroupRemoteMedia: (device: string) => { history.mediaDevice = device; return history.resolveMedia; } }));
@@ -57,14 +57,15 @@ vi.mock('@/session/MessageRenderer', async () => {
     MessagePayloadModal: ({ payload, onClose }: any) => payload ? el('div', { role: 'dialog' }, payload.body, el('button', { onClick: onClose }, 'Close output')) : null,
   };
 });
-import { SESSION_SYNC_CHANNEL } from '@cindy/device-link';
+import { SESSION_SYNC_CHANNEL, type Topic } from '@cindy/device-link';
+import { SubscriptionAcknowledgements } from '@/device-link/subscriptionAcknowledgements';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { BotGroupProcess, BotGroupProcessEntries } from '@/session/BotGroupProcess';
 import { TeammateProcess } from '@/session/TeammateProcess';
 import { __test_internals as memory } from '@/session/expandedBlockMemory';
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root, node: HTMLDivElement;
-beforeEach(() => { history.invoke.mockReset(); history.resolveMedia.mockClear(); history.toolActions = undefined; history.generation = 1; remoteSessionStore.clear(); memory.reset(); node = document.createElement('div'); root = createRoot(node); });
+beforeEach(() => { history.invoke.mockReset(); history.getSubscriptionIdentity.mockReset().mockReturnValue(null); history.resolveMedia.mockClear(); history.toolActions = undefined; history.generation = 1; remoteSessionStore.clear(); memory.reset(); node = document.createElement('div'); root = createRoot(node); });
 afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
 const header = () => node.querySelector('button')!;
 async function show(running: boolean) {
@@ -298,8 +299,13 @@ it.each(['AskUserQuestion', 'ExitPlanMode'])('retains %s call, input and result 
 // Existing created pushes resolved immediately; dirty signals leave the mirror
 // array unchanged. A slow read plus spaced invalidations
 // must keep one request and one trailing refresh, including failure/blur cleanup.
-it.each(['created', 'invalidation'].flatMap(signal => ['success', 'failure', 'unmount'].map(outcome => ({ signal, outcome }))))('coalesces in-flight group history refreshes ($signal, $outcome)', async ({ signal, outcome }) => {
+it.each(['created', 'invalidation', 'recovery'].flatMap(signal => ['success', 'failure', 'unmount'].map(outcome => ({ signal, outcome }))))('coalesces in-flight group history refreshes ($signal, $outcome)', async ({ signal, outcome }) => {
   vi.useFakeTimers();
+  const acks = new SubscriptionAcknowledgements(() => undefined);
+  if (signal === 'recovery') {
+    acks.set('mac', new Set([`session:${process.sessionId}` as const]));
+    history.getSubscriptionIdentity.mockImplementation((deviceId, topics) => acks.identity(deviceId, topics));
+  }
   const latest = [source, { clientId: 'new-note', role: 'assistant', content: 'Newest persisted progress', agentMeta: { ...meta, assistantPhase: 'commentary' } }];
   const pending: Array<{ resolve(rows: unknown[]): void; reject(error: Error): void }> = [];
   let slow = true;
@@ -313,7 +319,13 @@ it.each(['created', 'invalidation'].flatMap(signal => ['success', 'failure', 'un
   try {
     await act(async () => {
       for (let i = 0; i < 10; i++) {
-        if (signal === 'invalidation') {
+        if (signal === 'recovery') {
+          acks.delete('mac');
+          acks.set('mac', new Set([`session:${process.sessionId}` as const]));
+          root.render(group());
+          // Flush the context rerender, then the existing 50ms read debounce.
+          await vi.advanceTimersByTimeAsync(0);
+        } else if (signal === 'invalidation') {
           remoteSessionStore.applyRemotePush('mac', SESSION_SYNC_CHANNEL, { sessionId: process.sessionId, resyncRequired: true });
         } else {
           remoteSessionStore.applyRemotePush('mac', 'local-db:messages:created', { sessionId: process.sessionId,
@@ -442,4 +454,49 @@ it('keeps foreground capacity available while collapsed group histories prefetch
   } finally {
     await act(async () => { root.render(null); release(); await foreground; });
   }
+});
+
+// PR #8979 / unit: a restarted execution host has no replay buffer and hidden
+// lanes have no sessionDeviceIndex entry, so the global snapshot is discarded.
+// An actual re-ACK, not mirror rows or another device's recovery, must refresh
+// the cached collapsed turn through the existing reader without owner churn.
+it('reconciles a hidden group history after its original execution host re-ACKs', async () => {
+  vi.useFakeTimers();
+  const acks = new SubscriptionAcknowledgements(() => undefined);
+  const topics = [`session:${process.sessionId}` as const];
+  acks.set('execution-mac', new Set(topics));
+  acks.set('neighbor-mac', new Set(['session:neighbor']));
+  history.getSubscriptionIdentity.mockImplementation((deviceId, topics) => acks.identity(deviceId, topics));
+  let note = 'Before host restart';
+  history.invoke.mockImplementation(async () => [source,
+    { clientId: 'note', role: 'assistant', content: note, agentMeta: { ...meta, assistantPhase: 'commentary' } }, final]);
+  const tree = () => el(BotGroupProcess, { process: { ...process, deviceId: 'execution-mac' }, owned: true, deviceId: 'new-home' });
+  await act(async () => { root.render(tree()); await vi.advanceTimersByTimeAsync(0); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+  expect(header().getAttribute('aria-expanded')).toBe('false');
+  expect(remoteSessionStore.getSessionDeviceId(process.sessionId)).toBeUndefined();
+  const mirror = remoteSessionStore.getMessages(process.sessionId);
+  const dirty = remoteSessionStore.getHistoryInvalidationToken(process.sessionId);
+  const reads = history.invoke.mock.calls.length;
+  const subscriptions = history.subscribe.mock.calls.length;
+  const releases = history.unsubscribe.mock.calls.length;
+  note = 'Persisted while host was disconnected';
+  acks.delete('neighbor-mac');
+  acks.set('neighbor-mac', new Set(['session:neighbor']));
+  await act(async () => { root.render(tree()); await vi.advanceTimersByTimeAsync(50); });
+  expect(history.invoke).toHaveBeenCalledTimes(reads);
+  acks.delete('execution-mac');
+  await act(async () => { root.render(tree()); await vi.advanceTimersByTimeAsync(50); });
+  expect(history.invoke).toHaveBeenCalledTimes(reads);
+  acks.set('execution-mac', new Set(topics));
+  await act(async () => { root.render(tree()); await vi.advanceTimersByTimeAsync(0); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+  expect(history.invoke.mock.calls.length).toBeGreaterThan(reads);
+  expect(history.invoke.mock.calls.every(([device]) => device === 'execution-mac')).toBe(true);
+  expect(history.subscribe).toHaveBeenCalledTimes(subscriptions);
+  expect(history.unsubscribe).toHaveBeenCalledTimes(releases);
+  expect(remoteSessionStore.getMessages(process.sessionId)).toBe(mirror);
+  expect(remoteSessionStore.getHistoryInvalidationToken(process.sessionId)).toBe(dirty);
+  await act(async () => header().click());
+  expect(node.textContent).toContain(note);
 });

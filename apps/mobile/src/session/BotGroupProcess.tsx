@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
 import { remoteSessionStore } from './remoteSessionStore';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
@@ -35,7 +35,10 @@ export function BotGroupProcess({ process, owned, deviceId }: { process: BotGrou
 function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProcessRef; deviceId: string }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { invoke, subscribe, unsubscribe } = useDeviceLink();
+  const { invoke, subscribe, unsubscribe, getSubscriptionIdentity } = useDeviceLink();
+  const subscriptionIdentity = getSubscriptionIdentity?.(deviceId, [`session:${process.sessionId}`]) ?? null;
+  const refreshAfterRecovery = useRef<(() => void) | null>(null);
+  const observedSubscription = useRef(subscriptionIdentity);
   const [result, setResult] = useState<{ messages: BotGroupProcessMessage[]; failed: boolean }>();
   const [attempt, retry] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -68,6 +71,13 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
           if (refreshPending) refresh();
         });
     };
+    const changed = () => {
+      if (cancelled || closed) return;
+      // Keep one read in flight; pushes and re-ACKs share one trailing refresh.
+      if (reading) { refreshPending = true; return; }
+      clearTimeout(timer);
+      timer = setTimeout(refresh, 50);
+    };
     let messages = remoteSessionStore.getMessages(process.sessionId);
     let invalidation = remoteSessionStore.getHistoryInvalidationToken(process.sessionId);
     const off = remoteSessionStore.subscribe(() => {
@@ -80,14 +90,20 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
       if (cancelled || closed || (next === messages && !invalidated) || (origin && origin !== deviceId)) return;
       messages = next;
       invalidation = nextInvalidation;
-      // Keep one read in flight; changes during it become one trailing read.
-      if (reading) { refreshPending = true; return; }
-      clearTimeout(timer);
-      timer = setTimeout(refresh, 50);
+      changed();
     });
+    refreshAfterRecovery.current = changed;
     refresh();
-    return () => { cancelled = true; stopUpdates(); };
+    return () => { cancelled = true; refreshAfterRecovery.current = null; stopUpdates(); };
   }, [invoke, subscribe, unsubscribe, deviceId, process.sessionId, process.clientId, process.executionId, attempt]));
+  // A restarted host has no push backlog. Its confirmed subscription changes
+  // even when the hidden lane's global history snapshot cannot enter the mirror.
+  // Keep this separate from focus ownership so a re-ACK never churns the topic.
+  useEffect(() => {
+    if (observedSubscription.current === subscriptionIdentity) return;
+    observedSubscription.current = subscriptionIdentity;
+    if (subscriptionIdentity !== null) refreshAfterRecovery.current?.();
+  }, [subscriptionIdentity]);
   // Resolve availability before advertising a disclosure, just like private chat.
   if (!result || (!result.failed && !projection.segments.length)) return null;
   return <TeammateProcess id={`group-process:${process.executionId}`} title={title}>
