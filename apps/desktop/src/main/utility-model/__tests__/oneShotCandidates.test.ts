@@ -956,6 +956,63 @@ describe('utility one-shot candidates', () => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(result.ok).toBe(false);
     });
+
+    const failedResponsesStream = {
+      ok: true,
+      text: async () => 'data: {"type":"response.output_text.delta","delta":"给这个页面加一个搜索框，搜索框要"}\n'
+        + 'data: {"type":"response.failed","response":{"status":"failed"}}\n',
+    } as never;
+
+    /** The custom provider route uses the Responses wire, which is the shape here. */
+    const responsesRoute = () => {
+      activeCatalog.mockReturnValue({
+        providers: [{
+          id: 'tapsvc',
+          name: 'Tap Service',
+          source: 'user',
+          agents: ['codex'],
+          auth: { method: 'apiKey' },
+          routing: {
+            codex: { upstream: 'https://custom.example/v1', authStrategy: 'api-key-header' },
+          },
+          models: { codex: [{ id: 'custom-mini', name: 'Custom Mini', contextWindow: 100_000 }] },
+        }],
+      } as never);
+      readCustomKey.mockReturnValue('custom-secret');
+    };
+
+    it('开启后:正文已吐出但流以 response.failed 收尾 → 拒绝,不把半截正文当成功', async () => {
+      // 不传 onText 的调用方拿不到 `readUtilityTextStream` 的失败事件检查,
+      // 所以严格模式必须自己看终态:这里只看 `response` 的 status。
+      responsesRoute();
+      fetchMock.mockResolvedValueOnce(failedResponsesStream);
+
+      const result = await requestUtilityText(makerMock(false), 'review', {
+        providerId: 'tapsvc',
+        agentKind: 'codex',
+        model: 'custom-mini',
+        maxTokens: 200,
+        requireCompleteOutput: true,
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('expected the failed stream to be refused');
+      expect(result.attempts).toHaveLength(1);
+    });
+
+    it('默认关闭:同一个失败流仍按旧行为返回正文(本次不扩大影响面)', async () => {
+      responsesRoute();
+      fetchMock.mockResolvedValueOnce(failedResponsesStream);
+
+      const result = await requestUtilityText(makerMock(false), 'review', {
+        providerId: 'tapsvc',
+        agentKind: 'codex',
+        model: 'custom-mini',
+        maxTokens: 200,
+      });
+
+      expect(result).toMatchObject({ ok: true, text: '给这个页面加一个搜索框，搜索框要' });
+    });
   });
 
   it('responses 的 SSE 终止事件被 max_output_tokens 截断 → 也放大预算重试', async () => {

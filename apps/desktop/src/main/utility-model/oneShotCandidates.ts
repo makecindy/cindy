@@ -2128,11 +2128,17 @@ async function requestProviderHttpText(input: {
     // from the body that produced the text below — not from the one before
     // the retry.
     const finalParsed = responseStructure(step.wire, raw);
-    if (input.requireCompleteOutput && text && outputBudgetExhausted(step.wire, finalParsed)) {
-      // The provider stopped at the output budget: the text is the beginning
-      // of the answer, not the answer. Refusing this candidate lets the chain
-      // fall back instead of handing a half answer to the caller.
-      log.warn('utility text response cut short by the output budget', {
+    if (
+      input.requireCompleteOutput
+      && text
+      && (outputBudgetExhausted(step.wire, finalParsed)
+        || streamEndedWithoutCompletion(step.wire, finalParsed))
+    ) {
+      // The provider stopped at the output budget, or the stream reported a
+      // terminal failure: either way the text is the beginning of the answer,
+      // not the answer. Refusing this candidate lets the chain fall back
+      // instead of handing a half answer to the caller.
+      log.warn('utility text response did not complete', {
         wire: step.wire,
         model: targetFor(step).model,
       });
@@ -2304,6 +2310,21 @@ function wireResponseText(wire: ProviderWire, raw: string): string {
  * 网关可以无视;此时放大预算重试一次就能拿到正文,不该直接丢掉候选。
  * 判据只认「输出被长度上限截断」这一个形状(各 wire 的对应字段见下),不猜模型。
  */
+/**
+ * 严格模式下『这个 Responses 响应并没有正常收尾』的判定。
+ *
+ * `readUtilityTextStream` 的失败事件检查只在调用方传了 `onText` 时才跑（它会读流
+ * 而不是 `response.text()`），所以不消费增量的调用方（比如输入框增强）会把
+ * "已吐出部分正文、随后 `response.failed`" 的流当成完整答案。这里只认终态里
+ * 明确写明的失败，缺字段或缺 status 时不指认——不拿缺失信息当失败。
+ */
+function streamEndedWithoutCompletion(wire: ProviderWire, terminal: unknown): boolean {
+  if (wire !== 'responses') return false;
+  if (typeof terminal !== 'object' || terminal === null) return false;
+  const status = (terminal as { status?: unknown }).status;
+  return status === 'failed' || status === 'cancelled' || status === 'incomplete';
+}
+
 function outputBudgetExhausted(wire: ProviderWire, parsed: unknown): boolean {
   if (typeof parsed !== 'object' || parsed === null) return false;
   if (wire === 'responses') {
