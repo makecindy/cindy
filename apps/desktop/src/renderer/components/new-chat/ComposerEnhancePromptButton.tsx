@@ -8,7 +8,6 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
-import { extractIpcError, mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { hasFocusMovedToInteractiveElement, hasNonCollapsedSelectionOutsideComposer } from './useComposerSendFocusRestore';
 import { COMPOSER_ENHANCE_MAX_INPUT_CHARS } from '../../../shared/composerPromptEnhance';
 import {
@@ -19,6 +18,7 @@ import {
   documentHasStructuredNodes,
   draftExceedsEnhanceInputLimit,
   editorIsComposing,
+  resolveEnhanceErrorKind,
   type EnhanceLiveState,
 } from '@/lib/composerEnhanceDraft';
 
@@ -218,7 +218,7 @@ export function ComposerEnhancePromptButton({
     } catch (error) {
       // An exhausted auxiliary chain is a configuration problem, not a
       // transient failure: point the user at the setting that fixes it.
-      if (extractIpcError(error)?.code === 'AUXILIARY_MODEL_UNAVAILABLE') {
+      if (resolveEnhanceErrorKind(error) === 'missing-config') {
         toast.error(t('newChat.composerEnhance.noAuxiliaryModel'), {
           action: {
             label: t('newChat.composerEnhance.openSettings'),
@@ -227,8 +227,11 @@ export function ComposerEnhancePromptButton({
         });
         return;
       }
-      const key = mapIpcErrorToI18nKey(error, { namespace: 'ipcError' });
-      toast.error(t(key, { defaultValue: t('newChat.composerEnhance.failed') }));
+      // Every other failure is the operation itself failing. The generic
+      // ipcError wording says "this action is unavailable in the current
+      // state, please try again later" — advice that no failure reason here
+      // supports — so the message names the operation instead.
+      toast.error(t('newChat.composerEnhance.failed'));
     } finally {
       setBusy(false);
     }

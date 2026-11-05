@@ -8,6 +8,7 @@ import {
   documentHasStructuredNodes,
   draftExceedsEnhanceInputLimit,
   editorIsComposing,
+  resolveEnhanceErrorKind,
   type EnhanceLiveState,
   type EnhanceRequestOrigin,
   type EnhanceUndoRecord,
@@ -270,5 +271,35 @@ describe('draftExceedsEnhanceInputLimit', () => {
     expect(draftExceedsEnhanceInputLimit('a'.repeat(10), 10)).toBe(false);
     expect(draftExceedsEnhanceInputLimit('a'.repeat(11), 10)).toBe(true);
     expect(COMPOSER_ENHANCE_MAX_INPUT_CHARS).toBe(1500);
+  });
+});
+
+describe('resolveEnhanceErrorKind', () => {
+  // The renderer receives the failure as the "[CODE] message" string the main
+  // process encodes, so the tests use that shape.
+  it('treats a missing auxiliary model as a configuration problem', () => {
+    expect(resolveEnhanceErrorKind(
+      new Error('[AUXILIARY_MODEL_UNAVAILABLE] No auxiliary model is available'),
+    )).toBe('missing-config');
+  });
+
+  it('treats an execution failure as the operation failing, not as a missing setting', () => {
+    // The upstream refused the call, or the completeness check rejected the
+    // rewrite. Neither is fixed by configuring a model, and the generic
+    // ipcError wording carries retry advice that no reason here supports.
+    expect(resolveEnhanceErrorKind(
+      new Error('[PRECONDITION_FAILED] Prompt enhancement timed out'),
+    )).toBe('failed');
+    expect(resolveEnhanceErrorKind(
+      new Error('[INTERNAL] The enhancement model returned an empty prompt'),
+    )).toBe('failed');
+    expect(resolveEnhanceErrorKind(
+      new Error('[INVALID_PARAMS] Prompt text is too long to enhance'),
+    )).toBe('failed');
+  });
+
+  it('treats an error without an IPC code as a plain failure', () => {
+    expect(resolveEnhanceErrorKind(new Error('boom'))).toBe('failed');
+    expect(resolveEnhanceErrorKind(undefined)).toBe('failed');
   });
 });

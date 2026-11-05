@@ -1,7 +1,27 @@
 import type { JSONContent } from '@tiptap/core';
 
 import { COMPOSER_ENHANCE_MAX_INPUT_CHARS } from '../../shared/composerPromptEnhance';
+import { extractIpcError } from '../utils/ipcError';
 import { plainTextToComposerDocument } from './composerListDocument';
+
+/**
+ * How a failed enhancement should be reported.
+ *
+ * - `missing-config`: the auxiliary chain has no usable candidate. The user
+ *   has to configure one, so the notice points at the setting that fixes it.
+ * - `failed`: the call itself failed — upstream error, empty body, or a
+ *   rewrite the completeness check rejected. The notice names the operation
+ *   that failed; the generic `ipcError.*` wording is not reused here, because
+ *   it carries retry advice that none of these failure reasons supports.
+ */
+export type EnhanceErrorKind = 'missing-config' | 'failed';
+
+/** Classify an enhancement failure for the message it should produce. */
+export function resolveEnhanceErrorKind(error: unknown): EnhanceErrorKind {
+  return extractIpcError(error)?.code === 'AUXILIARY_MODEL_UNAVAILABLE'
+    ? 'missing-config'
+    : 'failed';
+}
 
 /**
  * True when the draft is longer than the input budget the main side accepts.
