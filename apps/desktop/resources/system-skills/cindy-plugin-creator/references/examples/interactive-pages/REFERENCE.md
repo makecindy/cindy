@@ -3,7 +3,8 @@
 从[§4.23 指南](../../plugin-interactive-pages.md)进入；完整代码以本目录示例为准。
 这里列作者需要查询的参数、能力和失败处理，不要求在每个页面都实现。
 交给生成页面的 LLM（后端里的模型或 Cindy 对话中的 AI）的规则只写在
-《Cindy MCP Apps 页面生成手册》（[PAGE-GENERATION.md](PAGE-GENERATION.md)）；loader 用 `manual.items` 挂上同一份。
+《Cindy MCP Apps 页面生成手册》（[PAGE-GENERATION.md](PAGE-GENERATION.md)）；宿主用 `ghost_forge_guide({section:"pages"})`
+提供同一份，show_page 说明让 AI 写页面前先读。要兼容旧版 Cindy，可在插件里自带一份作退路。
 
 ## 清单
 
@@ -109,7 +110,7 @@ if (file?.url && file.mimeType?.startsWith('image/')) {
 
 对话交来的媒体附件（`ghost_call.attachments`）由宿主放进 hostContext，每项同样是
 resource_link，按上面的方式读 `_meta['cindy/file'].url`，换页重连后仍可读取。表格类
-附件要由声明了 `cindy_handoff_files` 的工具接收（示例的 import_file，0.1.123-beta 起，见
+附件要由声明了 `cindy_handoff_files` 的工具接收（示例的 import_file，0.1.122-beta 起，见
 [§4.10.3](../../plugin-files-and-library.md)）：`uri` 以 `handoff:` 开头，首屏只显示名称和大小，
 点按钮再把引用交给 upload_files；没有 `url` 表示已失效。没声明时插件经 dir 暂存，再把批次号
 和预览写进首屏 HTML。

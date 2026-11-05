@@ -566,7 +566,7 @@ describe('maker:event hot path ordering', () => {
     expect(source).toContain(
       'const pendingContinuationOnlyAutoResumeRebuilds = new WeakMap<Session, number>();',
     );
-    expect(source).toContain('if (isAcceptedTurnContinuationOnlyReason(signals.reason)) {');
+    expect(source).toContain('if (isContinuationOnlyAutoResumeReason(signals.reason)) {');
     expect(source).toContain(
       'pendingContinuationOnlyAutoResumeRebuilds.set(runtimeSession, decision.attemptToken);',
     );

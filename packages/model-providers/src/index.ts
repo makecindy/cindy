@@ -259,6 +259,7 @@ export {
   normalizeModelIdForClassification,
   catalogModelIdCandidates,
   findCatalogModel,
+  uniqueRenamedSessionModelId,
   resolveWireModelId,
   candidateAgentsForModel,
   nativeAgentForProviderModel,
@@ -266,6 +267,8 @@ export {
   recommendedAgentForModel,
   resolveAgentCapability,
   unifiedModelEntries,
+  resolveStoredModelEntry,
+  displayNameOfStoredModelId,
   partitionEntriesByNativeAgent,
   sortEntriesForAgent,
 } from "./unifiedSelection.js";
@@ -344,3 +347,6 @@ export { alignModelApiRoute, providerWireProtocolForApi, providerBaseUrlForApi }
 
 export { availableModelInterfaces, modelWithInterface, MODEL_INTERFACE_CAPABILITIES } from './providerInterfaceRoutes.js';
 export * from './providerDetection.js';
+
+export { validDiscoveredModelSource, modelSupplierLabel } from './modelSource.js';
+export type { DiscoveredModelSource } from './modelSource.js';

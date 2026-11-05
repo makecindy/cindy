@@ -1084,6 +1084,27 @@ export function selectionNeedsElectron(
 
 // 新 worktree 没装依赖、或 Electron 没解出 dist 时，vitest 会让几十个文件各自报错，
 // 极易被当成被测代码或「环境问题」放过。开跑前只读检查一次，直接给出处置命令。
+/**
+ * Variables an Agent's shell may carry that change test results without being part of the code
+ * under test. Each caused a false failure when the suite ran inside an agent session:
+ * NODE_ENV / NODE_DEBUG (production or debug branches), CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL
+ * (maker-core harness tests) and CINDY_INPUT_HANDOFF_ROUTE (a remotely controlled Cindy task's
+ * route token; device-hosted guest tests assert it is absent). CI never sets them.
+ */
+export const AGENT_ENV_TEST_POLLUTANTS = Object.freeze([
+	"NODE_ENV",
+	"NODE_DEBUG",
+	"CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL",
+	"CINDY_INPUT_HANDOFF_ROUTE",
+]);
+
+/** Remove those variables before any test child starts; returns the names that were removed. */
+export function stripAgentEnvPollutants(env = process.env) {
+	const removed = AGENT_ENV_TEST_POLLUTANTS.filter((name) => env[name] !== undefined);
+	for (const name of removed) delete env[name];
+	return removed;
+}
+
 export function findDependencyInstallIssues(
 	root = ROOT,
 	env = process.env,
@@ -1106,6 +1127,8 @@ export function findDependencyInstallIssues(
 
 async function main() {
 	const options = parseCliOptions(process.argv.slice(2));
+	const strippedEnv = stripAgentEnvPollutants();
+	if (strippedEnv.length > 0) console.log(`ENV ignored for tests: ${strippedEnv.join(", ")}`);
 	const {
 		all,
 		tier,

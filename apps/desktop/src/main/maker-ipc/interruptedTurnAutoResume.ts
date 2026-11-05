@@ -146,6 +146,20 @@ export function isAcceptedTurnContinuationOnlyReason(reason: unknown): boolean {
   );
 }
 
+/** The agent serving this route on another computer is gone (remote-agent controller / host). */
+export function isRemoteAgentRouteLostReason(reason: unknown): boolean {
+  return reason === 'remote_agent_closed' || reason === 'remote_agent_lost';
+}
+
+/**
+ * Resumes that may only CONTINUE and must follow the Session through its own unexpected close:
+ * accepted-turn stalls, plus a lost remote agent (the Session dies with it, and the turn's tools may
+ * already have run there). Only a Bot candidate route is ever granted the latter resume.
+ */
+export function isContinuationOnlyAutoResumeReason(reason: unknown): boolean {
+  return isAcceptedTurnContinuationOnlyReason(reason) || isRemoteAgentRouteLostReason(reason);
+}
+
 /**
  * continuation-only 自动续跑已批准后，provider/Session 可能因为 stall abort 复核、
  * terminal-error drain、或 Codex interrupt ACK 失败而 unexpected close。这时必须保住
