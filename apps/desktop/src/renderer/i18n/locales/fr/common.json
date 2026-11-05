@@ -4581,7 +4581,7 @@
       "clearAria": "Dissocier le bot de messagerie",
       "clearConfirm": {
         "title": "Dissocier le bot de messagerie ?",
-        "description": "La dissociation fermera la connexion WebSocket et supprimera l'App ID, l'App Secret et l'openId du propriétaire stockés localement. Pour le réactiver, vous devrez recréer ou saisir à nouveau les identifiants.",
+        "description": "La dissociation déconnecte le bot et supprime ses identifiants locaux et son association au propriétaire. Vous pouvez l’autoriser à nouveau avec un code QR ou un lien.",
         "confirm": "Dissocier",
         "cancel": "Annuler"
       },
@@ -4596,7 +4596,19 @@
         "hint": "Envoie un message privé via le bot Feishu ou Lark associé ; uniquement lorsque la fenêtre n'est pas au premier plan.",
         "disabledHint": "Configurez d'abord le bot et envoyez-lui un message privé une fois pour finaliser la liaison."
       },
-      "bind": "Lier"
+      "bind": "Lier",
+      "qr": {
+        "description": "Scannez le code avec Feishu ou Lark, ou ouvrez le lien d’autorisation. Confirmez pour connecter votre bot automatiquement.",
+        "qrAlt": "Code QR d’autorisation Feishu / Lark",
+        "expiresIn": "Le code QR expire dans {{seconds}} secondes",
+        "openLink": "Ouvrir le lien d’autorisation",
+        "cancel": "Annuler l’autorisation",
+        "begin": "Autoriser le bot",
+        "retry": "Autoriser à nouveau",
+        "connecting": "Connexion du bot…",
+        "cardActionHint": "Un bot créé par scan-code ne s'abonne qu'aux événements de message. Ajoute l'événement d'action de carte dans la plateforme ouverte pour utiliser les boutons.",
+        "cardActionHintAction": "Ouvrir la plateforme ouverte ↗"
+      }
     },
     "wechatBot": {
       "title": "WeChat personnel",
@@ -11611,6 +11623,7 @@
           "label": "Mode de connexion",
           "existing": "Utiliser le bot déjà configuré dans Cindy",
           "manual": "Saisir de nouveaux identifiants",
+          "manualFeishu": "Créer un nouveau bot par QR code",
           "moveNote": "Le bot est retiré de Paramètres → Bots de messagerie, qui restera vide. Ses conversations se poursuivent avec {{name}}."
         }
       },
@@ -17031,6 +17044,7 @@
       "steerFailed": "Échec de la réorientation : {{message}}",
       "qrExpired": "QR code expiré, veuillez recommencer",
       "registrationFailed": "Échec de la création, veuillez réessayer plus tard",
+      "credentialSaveFailed": "Impossible d'enregistrer les identifiants du bot. Veuillez réessayer.",
       "silentStopExhausted": "Le modèle a renvoyé des réponses vides à plusieurs reprises ; la reprise automatique est en pause. Cliquez sur « Continuer » pour reprendre la tâche.",
       "executionResultUnavailable": "Impossible de récupérer le résultat de l'exécution. La poursuite automatique s'est arrêtée. Demandez à l'assistant de vérifier le résultat d'exécution existant.",
       "outputLimit": "Le modèle a atteint sa limite de sortie, cette réponse est donc peut-être incomplète. Envoyez le message suivant pour continuer.",

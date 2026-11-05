@@ -4485,7 +4485,7 @@
       "clearAria": "解綁 IM 機器人",
       "clearConfirm": {
         "title": "解綁 IM 機器人？",
-        "description": "解綁後將斷開 WebSocket 連線，並刪除本機儲存的 App ID / App Secret / 主人 openId。如需重新使用，需要重新建立或重新填寫憑證。",
+        "description": "解除連結後將中斷連線，並刪除本機儲存的機器人憑證及主人連結。之後可重新掃碼或開啟連結授權。",
         "confirm": "解綁",
         "cancel": "取消"
       },
@@ -4500,7 +4500,19 @@
         "hint": "透過已繫結的飛書或 Lark 機器人，向你私聊傳送一條訊息；僅在視窗失焦時傳送。",
         "disabledHint": "需要先配置 Bot 並向它傳送一條訊息以完成繫結。"
       },
-      "bind": "繫結"
+      "bind": "繫結",
+      "qr": {
+        "description": "使用飛書或 Lark 掃碼，或開啟授權連結，確認後自動連結機器人。",
+        "qrAlt": "飛書 / Lark 授權 QR Code",
+        "expiresIn": "QR Code 將於 {{seconds}} 秒後到期",
+        "openLink": "開啟授權連結",
+        "cancel": "取消授權",
+        "begin": "開始授權",
+        "retry": "重新授權",
+        "connecting": "正在連線機器人…",
+        "cardActionHint": "掃碼建立的機器人預設只訂閱訊息事件，卡片按鈕需要另外在開放平台新增事件訂閱",
+        "cardActionHintAction": "開啟開放平台 ↗"
+      }
     },
     "wechatBot": {
       "title": "個人微信",
@@ -11470,6 +11482,7 @@
           "label": "連線方式",
           "existing": "使用已在 Cindy 設定的機器人",
           "manual": "填寫新的憑證",
+          "manualFeishu": "掃碼建立新機器人",
           "moveNote": "這個機器人會從 設定 → IM 機器人 移過來，那裡將變為空；原本的私訊和群組改由 {{name}} 接著回覆。"
         }
       },
@@ -16804,6 +16817,7 @@
       "steerFailed": "插話失敗：{{message}}",
       "qrExpired": "二維碼已過期，請重新開始",
       "registrationFailed": "建立失敗，請稍後重試",
+      "credentialSaveFailed": "未能儲存機器人憑證，請重試",
       "silentStopExhausted": "模型連續多次返回空響應，自動續跑已暫停。點選「繼續」恢復任務。",
       "executionResultUnavailable": "未能取得執行結果，已停止自動接續。可以請助手檢查既有的執行結果。",
       "outputLimit": "模型已達到輸出長度上限，本輪回覆可能不完整。可以直接傳送下一則訊息繼續。",

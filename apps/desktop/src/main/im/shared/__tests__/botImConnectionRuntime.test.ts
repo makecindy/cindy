@@ -494,6 +494,19 @@ describe('bot im connection runtime', () => {
     expect(__testing.instances.size).toBe(1);
   });
 
+  it('skips a queued add whose caller became stale before it ran', async () => {
+    await expect(
+      addBotImConnection(
+        { botId: 'bot-mia', channel: 'telegram', token: '1:ABCDEFGHIJKLMNOPQRSTUVWXYZ', ownerUserId: '4242' },
+        { shouldProceed: () => false },
+      ),
+    ).rejects.toThrow(/CANCELLED/);
+    // 没有记录、没有实例、也没有把凭证交给传输层。
+    expect(created).toHaveLength(0);
+    expect(listBotImConnections()).toHaveLength(0);
+    expect(__testing.instances.size).toBe(0);
+  });
+
   it('rolls the whole connection back when the transport cannot connect', async () => {
     connectOutcome = false;
     await expect(

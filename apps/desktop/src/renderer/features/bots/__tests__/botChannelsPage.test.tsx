@@ -15,7 +15,8 @@ const mocks = vi.hoisted(() => ({
   toastError: vi.fn(),
 }));
 
-vi.mock('@/lib/toast', () => ({ toast: { error: mocks.toastError } }));
+vi.mock('@/lib/toast', () => ({ toast: { error: mocks.toastError, success: vi.fn() } }));
+vi.mock('qrcode', () => ({ toDataURL: vi.fn(async () => 'data:image/png;base64,qr') }));
 
 vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
 // The shared-quota rail observes auth; this component fixture has no auth host.
@@ -67,6 +68,9 @@ function connection(overrides: Partial<BotImConnectionView> = {}): BotImConnecti
 }
 
 function installApi(payload: BotImConnectionListPayload) {
+  const registrationListeners = new Set<
+    (status: { status: string; runId?: number; error?: string }) => void
+  >();
   const api = {
     list: vi.fn(async () => payload),
     add: vi.fn(async () => ({
@@ -74,9 +78,26 @@ function installApi(payload: BotImConnectionListPayload) {
       connection: connection({ id: 'ffffffffffff', botContextId: '222' }),
     })),
     remove: vi.fn(async () => ({ connections: [], archivedSessionIds: ['lane-1'] })),
+    feishuRegistrationBegin: vi.fn(async () => ({
+      ok: true,
+      userCode: 'CODE',
+      verificationUrl: 'https://example.test/authorize',
+      expiresIn: 60,
+      runId: 7,
+    })),
+    feishuRegistrationCancel: vi.fn(async () => ({ ok: true })),
+    onFeishuRegistrationStatus: vi.fn(
+      (listener: (status: { status: string; runId?: number; error?: string }) => void) => {
+        registrationListeners.add(listener);
+        return () => registrationListeners.delete(listener);
+      },
+    ),
     onChanged: vi.fn(() => () => undefined),
     ...groupsApi,
     ...lanesApi,
+    emitRegistration(status: { status: string; runId?: number; error?: string }) {
+      for (const listener of registrationListeners) listener(status);
+    },
   };
   Object.assign(window, { electronAPI: { botImConnection: api } });
   return api;
@@ -459,97 +480,63 @@ describe('BotChannelsPage', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
-  it('switches to the Feishu form and explains a connect failure in place', async () => {
+  it('switches Feishu to QR authorization and explains a connection failure in place', async () => {
     const api = installApi({ connections: [] });
-    api.add.mockRejectedValueOnce(
-      new Error(
-        "Error invoking remote method 'botImConnection:add': Error: [PRECONDITION_FAILED] CONNECT_FAILED: invalid app secret",
-      ),
-    );
     render(<BotChannelsPage bot={mia} />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'bots.channels.add.button' }));
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('radio', { name: /bots\.channels\.platform\.feishu/ }));
-    fireEvent.change(within(dialog).getByLabelText('bots.channels.add.feishu.appIdLabel'), {
-      target: { value: 'cli_abc' },
-    });
-    fireEvent.change(within(dialog).getByLabelText('bots.channels.add.feishu.appSecretLabel'), {
-      target: { value: 'secret' },
-    });
-    fireEvent.click(within(dialog).getByRole('button', { name: /^bots\.channels\.add\.feishu\.confirm:/ }));
-
+    // 表单不再收 App ID / Secret: 拉起扫码授权, 凭证只在 main 落成连接。
+    expect(within(dialog).queryByLabelText('bots.channels.add.feishu.appIdLabel')).toBeNull();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'settings.feishuBot.qr.begin' }));
     await waitFor(() =>
-      expect(api.add).toHaveBeenCalledWith({
-        botId: 'bot-1',
-        channel: 'feishu',
-        appId: 'cli_abc',
-        appSecret: 'secret',
-        service: 'feishu',
-      }),
+      expect(api.feishuRegistrationBegin).toHaveBeenCalledWith({ botId: 'bot-1', service: 'feishu' }),
     );
+
+    act(() => api.emitRegistration({ status: 'error', runId: 7, error: 'CONNECT_FAILED: invalid app secret' }));
     expect(await within(dialog).findByRole('alert')).toHaveProperty(
       'textContent',
-      'bots.channels.add.errors.connectFailed:{"reason":"invalid app secret"}',
+      'CONNECT_FAILED: invalid app secret',
     );
-    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(screen.getByRole('dialog')).toBe(dialog);
   });
 
-  // Feature: users can create an application before entering credentials. Exercise
-  // the real form, external-link bridge and service payload; no live Feishu account.
-  it('opens the matching creation platform, toggles setup help and connects Lark with the entered credentials', async () => {
+  it('authorizes a new Lark bot by QR and closes after the connection is created', async () => {
     const api = installApi({ connections: [] });
-    const openExternal = vi.fn();
-    Object.assign(window.electronAPI, { openExternal });
     render(<BotChannelsPage bot={mia} />);
     fireEvent.click(await screen.findByRole('button', { name: 'bots.channels.add.button' }));
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('radio', { name: 'bots.channels.platform.feishu' }));
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'settings.feishuBot.services.lark' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'settings.feishuBot.qr.begin' }));
+    await waitFor(() =>
+      expect(api.feishuRegistrationBegin).toHaveBeenCalledWith({ botId: 'bot-1', service: 'lark' }),
+    );
 
-    const create = () => within(dialog).getByRole('link', { name: /^bots\.channels\.add\.feishu\.createLink:/ });
-    const steps = within(dialog).getByRole('button', { name: 'bots.channels.add.feishu.stepsLabel' });
-    expect(steps.getAttribute('aria-expanded')).toBe('false');
-    expect(within(dialog).queryByText('bots.channels.add.feishu.stepCreate')).toBeNull();
-    fireEvent.click(steps);
-    expect(steps.getAttribute('aria-expanded')).toBe('true');
-    expect(await within(dialog).findByText('bots.channels.add.feishu.stepCreate')).toBeTruthy();
-    fireEvent.click(steps);
-    expect(steps.getAttribute('aria-expanded')).toBe('false');
-
-    fireEvent.click(create());
-    expect(openExternal).toHaveBeenLastCalledWith('https://open.feishu.cn/page/launcher?from=backend_oneclick');
-    expect(api.add).not.toHaveBeenCalled();
-    expect(screen.getByRole('dialog')).toBe(dialog);
-    const submit = () => within(dialog).getByRole('button', { name: /^bots\.channels\.add\.feishu\.confirm:/ });
-    expect((submit() as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.change(within(dialog).getByLabelText('bots.channels.add.feishu.appIdLabel'), { target: { value: ' cli_lark ' } });
-    fireEvent.change(within(dialog).getByLabelText('bots.channels.add.feishu.appSecretLabel'), { target: { value: ' secret ' } });
-    fireEvent.click(within(dialog).getByRole('radio', { name: 'bots.channels.platform.lark' }));
-    expect(create().textContent).toContain('"service":"bots.channels.platform.lark"');
-    expect(submit().textContent).toContain('"service":"bots.channels.platform.lark"');
-    expect(within(dialog).getByText(/^bots\.channels\.add\.feishu\.description:/).textContent).toContain('"service":"bots.channels.platform.lark"');
-    fireEvent.click(create());
-    expect(openExternal).toHaveBeenLastCalledWith('https://open.larksuite.com/page/launcher?from=backend_oneclick');
-    fireEvent.click(submit());
-    await waitFor(() => expect(api.add).toHaveBeenCalledWith({ botId: 'bot-1', channel: 'feishu', service: 'lark', appId: 'cli_lark', appSecret: 'secret' }));
+    act(() => api.emitRegistration({ status: 'success', runId: 7 }));
+    await waitFor(() => expect(api.list.mock.calls.length).toBeGreaterThan(1));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
-  it('shows creation guidance only for manual Feishu setup and preserves existing-bot adoption', async () => {
+  it('shows QR authorization only for a new Feishu bot and preserves existing-bot adoption', async () => {
     const api = Object.assign(installApi({ connections: [] }), {
       listAdoptable: vi.fn(async () => ({ bots: [{ channel: 'feishu', identity: 'cli_existing' }] })),
-      adopt: vi.fn(async () => ({ connections: [connection({ channel: 'feishu' })] })),
+      adopt: vi.fn(async () => ({ connections: [connection({ channel: 'feishu' })], connection: connection({ channel: 'feishu' }) })),
     });
     render(<BotChannelsPage bot={mia} />);
     fireEvent.click(await screen.findByRole('button', { name: 'bots.channels.add.button' }));
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('radio', { name: 'bots.channels.platform.feishu' }));
     const existing = await within(dialog).findByRole('radio', { name: /bots\.channels\.add\.source\.existing/ });
-    expect(within(dialog).queryByRole('button', { name: 'bots.channels.add.feishu.stepsLabel' })).toBeNull();
-    fireEvent.click(within(dialog).getByRole('radio', { name: 'bots.channels.add.source.manual' }));
-    expect(within(dialog).getByRole('button', { name: 'bots.channels.add.feishu.stepsLabel' })).toBeTruthy();
-    fireEvent.click(existing);
+    // 默认复用设置页的机器人: 不出现扫码入口。
+    expect(within(dialog).queryByRole('button', { name: 'settings.feishuBot.qr.begin' })).toBeNull();
+    fireEvent.click(
+      within(dialog).getByRole('radio', { name: 'bots.channels.add.source.manualFeishu' }),
+    );
+    expect(within(dialog).getByRole('button', { name: 'settings.feishuBot.qr.begin' })).toBeTruthy();
     expect(within(dialog).queryByLabelText('bots.channels.add.feishu.appSecretLabel')).toBeNull();
+    fireEvent.click(existing);
     fireEvent.click(within(dialog).getByRole('button', { name: 'bots.channels.add.confirm' }));
     await waitFor(() => expect(api.adopt).toHaveBeenCalledWith({ botId: 'bot-1', channel: 'feishu' }));
     expect(api.add).not.toHaveBeenCalled();

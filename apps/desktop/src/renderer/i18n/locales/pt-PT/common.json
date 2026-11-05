@@ -4581,7 +4581,7 @@
       "clearAria": "Desassociar bot de mensagens instantâneas",
       "clearConfirm": {
         "title": "Desassociar bot de mensagens instantâneas?",
-        "description": "A desassociação fechará a ligação WebSocket e removerá o App ID / App Secret / openId do proprietário guardados localmente. Para voltar a ativar, terá de recriar ou reintroduzir as credenciais.",
+        "description": "Ao desvincular, a ligação é terminada e as credenciais locais e a associação ao proprietário são eliminadas. Pode voltar a autorizar com um código QR ou uma ligação.",
         "confirm": "Desassociar",
         "cancel": "Cancelar"
       },
@@ -4596,7 +4596,19 @@
         "hint": "Envia uma mensagem privada através do bot Feishu ou Lark associado; apenas quando a janela não está em foco.",
         "disabledHint": "Configure primeiro o bot e envie-lhe uma mensagem privada para concluir a associação."
       },
-      "bind": "Associar"
+      "bind": "Associar",
+      "qr": {
+        "description": "Leia o código com o Feishu ou Lark, ou abra a ligação de autorização. Confirme para ligar o bot automaticamente.",
+        "qrAlt": "Código QR de autorização do Feishu / Lark",
+        "expiresIn": "O código QR expira em {{seconds}} segundos",
+        "openLink": "Abrir ligação de autorização",
+        "cancel": "Cancelar autorização",
+        "begin": "Autorizar bot",
+        "retry": "Autorizar novamente",
+        "connecting": "A ligar o bot…",
+        "cardActionHint": "Um bot criado por código QR apenas subscreve eventos de mensagem. Adiciona o evento de ação de cartão na plataforma aberta para usar os botões.",
+        "cardActionHintAction": "Abrir a plataforma aberta ↗"
+      }
     },
     "wechatBot": {
       "title": "WeChat pessoal",
@@ -11611,6 +11623,7 @@
           "label": "Como ligar",
           "existing": "Usar o bot já configurado no Cindy",
           "manual": "Introduzir novas credenciais",
+          "manualFeishu": "Criar um novo bot por código QR",
           "moveNote": "O bot sai de Definições → Bots de IM, que ficará vazio. As conversas continuam com {{name}}."
         }
       },
@@ -17031,6 +17044,7 @@
       "steerFailed": "Falha na orientação: {{message}}",
       "qrExpired": "O código QR expirou, recomece",
       "registrationFailed": "Falha na criação, tente novamente mais tarde",
+      "credentialSaveFailed": "Não foi possível guardar as credenciais do bot. Tente novamente.",
       "silentStopExhausted": "O modelo devolveu repetidamente respostas vazias; a retoma automática está em pausa. Clique em \"Continuar\" para retomar a tarefa.",
       "executionResultUnavailable": "Não foi possível obter o resultado da execução. A continuação automática foi interrompida. Pede ao assistente para verificar o resultado da execução existente.",
       "outputLimit": "O modelo atingiu o limite de saída, pelo que esta resposta pode estar incompleta. Envia a próxima mensagem para continuar.",

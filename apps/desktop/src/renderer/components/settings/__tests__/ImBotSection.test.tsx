@@ -84,6 +84,15 @@ describe('ImBotSection', () => {
   const scrollIntoView = vi.fn();
 
   beforeEach(() => {
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        feishuBot: {
+          onRegistrationStatus: vi.fn(() => () => {}),
+          registrationCancel: vi.fn(async () => ({ ok: true })),
+        },
+      },
+    });
     authState.mode = 'cloud';
     authState.membershipKind = 'org';
     scrollIntoView.mockReset();

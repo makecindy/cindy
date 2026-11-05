@@ -4528,7 +4528,7 @@
       "clearAria": "Unbind IM bot",
       "clearConfirm": {
         "title": "Unbind IM bot?",
-        "description": "Unbinding will close the WebSocket connection and remove the locally stored App ID / App Secret / owner openId. To re-enable, you'll need to recreate or re-enter the credentials.",
+        "description": "Unlinking disconnects the bot and removes its locally saved credentials and owner binding. You can authorize again by scanning a QR code or opening a link.",
         "confirm": "Unbind",
         "cancel": "Cancel"
       },
@@ -4543,7 +4543,19 @@
         "hint": "Sends a private message via the linked Feishu or Lark bot; only when the window is unfocused.",
         "disabledHint": "First set up the bot and DM it once to complete binding."
       },
-      "bind": "Bind"
+      "bind": "Bind",
+      "qr": {
+        "description": "Scan with Feishu or Lark, or open the authorization link. Confirm to connect your bot automatically.",
+        "qrAlt": "Feishu / Lark authorization QR code",
+        "expiresIn": "QR code expires in {{seconds}} seconds",
+        "openLink": "Open authorization link",
+        "cancel": "Cancel authorization",
+        "begin": "Authorize bot",
+        "retry": "Authorize again",
+        "connecting": "Connecting your bot…",
+        "cardActionHint": "A bot created by scanning only subscribes to message events. Add the card action event in the open platform to use card buttons.",
+        "cardActionHintAction": "Open the open platform ↗"
+      }
     },
     "wechatBot": {
       "title": "Personal WeChat",
@@ -11516,6 +11528,7 @@
           "label": "How to connect",
           "existing": "Use the bot already set up in Cindy",
           "manual": "Enter new credentials",
+          "manualFeishu": "Create a new bot by QR code",
           "moveNote": "The bot moves out of Settings → IM bots, which will be left empty. Its chats continue with {{name}}."
         }
       },
@@ -16871,6 +16884,7 @@
       "steerFailed": "Steer failed: {{message}}",
       "qrExpired": "QR code expired, please start again",
       "registrationFailed": "Creation failed, please retry later",
+      "credentialSaveFailed": "Could not save the bot credentials. Please retry.",
       "silentStopExhausted": "The model returned empty responses repeatedly; auto-resume is paused. Click \"Continue\" to resume the task.",
       "executionResultUnavailable": "Unable to retrieve the execution result. Automatic continuation has stopped. Ask the assistant to check the existing execution result.",
       "outputLimit": "The model reached its output limit, so this response may be incomplete. Send the next message to continue.",

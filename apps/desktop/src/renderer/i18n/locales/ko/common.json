@@ -4485,7 +4485,7 @@
       "clearAria": "IM 봇 연동 해제",
       "clearConfirm": {
         "title": "IM 봇 연동을 해제하시겠습니까?",
-        "description": "연동을 해제하면 WebSocket 연결이 끊기고, 로컬에 저장된 App ID / App Secret / 소유자 openId가 삭제됩니다. 다시 사용하려면 재생성하거나 자격 증명을 다시 입력해야 합니다.",
+        "description": "연결을 해제하면 봇 연결이 끊기고 이 기기에 저장된 인증 정보와 소유자 연결이 삭제됩니다. QR 코드나 링크로 다시 인증할 수 있습니다.",
         "confirm": "연동 해제",
         "cancel": "취소"
       },
@@ -4500,7 +4500,19 @@
         "hint": "연동된 Feishu 또는 Lark 봇을 통해 DM을 보냅니다. 창이 비활성 상태일 때만 전송됩니다.",
         "disabledHint": "먼저 Bot을 설정하고 바인딩을 완료하려면 DM을 보내주세요."
       },
-      "bind": "연동"
+      "bind": "연동",
+      "qr": {
+        "description": "Feishu 또는 Lark로 QR 코드를 스캔하거나 인증 링크를 여세요. 승인하면 봇이 자동으로 연결됩니다.",
+        "qrAlt": "Feishu / Lark 인증 QR 코드",
+        "expiresIn": "QR 코드가 {{seconds}}초 후 만료됩니다",
+        "openLink": "인증 링크 열기",
+        "cancel": "인증 취소",
+        "begin": "인증 시작",
+        "retry": "다시 인증",
+        "connecting": "봇에 연결 중…",
+        "cardActionHint": "QR 코드로 만든 봇은 메시지 이벤트만 구독합니다. 카드 버튼을 쓰려면 오픈 플랫폼에서 카드 액션 이벤트를 추가하세요.",
+        "cardActionHintAction": "오픈 플랫폼 열기 ↗"
+      }
     },
     "wechatBot": {
       "title": "개인 WeChat",
@@ -11470,6 +11482,7 @@
           "label": "연결 방법",
           "existing": "Cindy에 설정된 봇 사용",
           "manual": "새 인증 정보 입력",
+          "manualFeishu": "QR 코드로 새 봇 만들기",
           "moveNote": "이 봇은 설정 → IM 봇에서 옮겨지며 그곳은 비게 됩니다. 기존 개인 채팅과 그룹 채팅은 {{name}}이(가) 이어서 답합니다."
         }
       },
@@ -16804,6 +16817,7 @@
       "steerFailed": "끼어들기 실패: {{message}}",
       "qrExpired": "QR 코드가 만료됨. 다시 시작하세요",
       "registrationFailed": "생성 실패. 잠시 후 다시 시도하세요",
+      "credentialSaveFailed": "봇 자격 증명을 저장하지 못했습니다. 다시 시도하세요.",
       "silentStopExhausted": "모델이 빈 응답을 반복해서 반환하여 자동 재개가 일시 중지되었습니다. \"계속\"을 클릭하여 작업을 재개하세요.",
       "executionResultUnavailable": "실행 결과를 가져오지 못해 자동 계속 진행을 중단했습니다. 어시스턴트에게 기존 실행 결과를 확인하도록 요청하세요.",
       "outputLimit": "모델이 출력 한도에 도달하여 이번 응답은 불완전할 수 있습니다. 다음 메시지를 보내 계속할 수 있습니다.",

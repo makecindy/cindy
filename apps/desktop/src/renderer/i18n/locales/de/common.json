@@ -4528,7 +4528,7 @@
       "clearAria": "IM-Bot-Verknüpfung aufheben",
       "clearConfirm": {
         "title": "Verknüpfung mit IM-Bot aufheben?",
-        "description": "Beim Aufheben der Verknüpfung wird die WebSocket-Verbindung geschlossen und die lokal gespeicherte App ID / das App Secret / die openId des Eigentümers werden entfernt. Zum erneuten Aktivieren musst du die Zugangsdaten neu erstellen oder erneut eingeben.",
+        "description": "Beim Trennen werden die Verbindung beendet und die lokal gespeicherten Zugangsdaten sowie die Eigentümerzuordnung gelöscht. Du kannst dich per QR-Code oder Link erneut autorisieren.",
         "confirm": "Verknüpfung aufheben",
         "cancel": "Abbrechen"
       },
@@ -4543,7 +4543,19 @@
         "hint": "Sendet eine private Nachricht über den verknüpften Feishu- oder Lark-Bot; nur, wenn das Fenster nicht fokussiert ist.",
         "disabledHint": "Richte zuerst den Bot ein und sende ihm einmal eine Direktnachricht, um die Verknüpfung abzuschließen."
       },
-      "bind": "Verknüpfen"
+      "bind": "Verknüpfen",
+      "qr": {
+        "description": "Scanne den QR-Code mit Feishu oder Lark oder öffne den Autorisierungslink. Nach deiner Bestätigung wird dein Bot automatisch verbunden.",
+        "qrAlt": "QR-Code zur Autorisierung von Feishu / Lark",
+        "expiresIn": "QR-Code läuft in {{seconds}} Sekunden ab",
+        "openLink": "Autorisierungslink öffnen",
+        "cancel": "Autorisierung abbrechen",
+        "begin": "Bot autorisieren",
+        "retry": "Erneut autorisieren",
+        "connecting": "Bot wird verbunden…",
+        "cardActionHint": "Ein per QR-Code erstellter Bot abonniert nur Nachrichtenereignisse. Für Kartenbuttons musst du das Kartenaktion-Ereignis in der Open Platform ergänzen.",
+        "cardActionHintAction": "Open Platform öffnen ↗"
+      }
     },
     "wechatBot": {
       "title": "Persönliches WeChat",
@@ -11516,6 +11528,7 @@
           "label": "So verbindest du dich",
           "existing": "Den bereits in Cindy eingerichteten Bot verwenden",
           "manual": "Neue Zugangsdaten eingeben",
+          "manualFeishu": "Neuen Bot per QR-Code erstellen",
           "moveNote": "Der Bot wird aus Einstellungen → IM-Bots verschoben; dieser Bereich bleibt leer. Seine Chats werden mit {{name}} fortgesetzt."
         }
       },
@@ -16871,6 +16884,7 @@
       "steerFailed": "Steuerung fehlgeschlagen: {{message}}",
       "qrExpired": "QR-Code abgelaufen, bitte starte erneut",
       "registrationFailed": "Erstellung fehlgeschlagen, bitte versuche es später erneut",
+      "credentialSaveFailed": "Bot-Zugangsdaten konnten nicht gespeichert werden. Bitte erneut versuchen.",
       "silentStopExhausted": "Das Modell hat wiederholt leere Antworten zurückgegeben; die automatische Fortsetzung ist pausiert. Klicke auf „Fortsetzen“, um die Aufgabe fortzusetzen.",
       "executionResultUnavailable": "Das Ausführungsergebnis konnte nicht abgerufen werden. Die automatische Fortsetzung wurde gestoppt. Bitte den Assistenten, das vorhandene Ausführungsergebnis zu prüfen.",
       "outputLimit": "Das Modell hat sein Ausgabelimit erreicht. Diese Antwort ist daher möglicherweise unvollständig. Sende die nächste Nachricht, um fortzufahren.",

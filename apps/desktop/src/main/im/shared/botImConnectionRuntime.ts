@@ -305,7 +305,7 @@ export function getBotFeishuTransport(botId: string, ownerOpenId?: string): Feis
   return null;
 }
 
-async function readBotProfileStatus(botId: string): Promise<string | null> {
+export async function readBotProfileStatus(botId: string): Promise<string | null> {
   const [row] = await getDbClient()
     .drizzle.select({ status: botProfiles.status })
     .from(botProfiles)
@@ -382,6 +382,11 @@ export interface BotImConnectionAddOptions {
   ownerUserId?: string;
   /** Telegram 群参与模式(chatId → always), 建连前写进记录。 */
   groupActivation?: Record<string, 'always'>;
+  /**
+   * 排队等待期间可能失效(取消授权 / 切换服务): 轮到执行时先复核, 不满足就不建
+   * 记录、不碰凭证。传输层一旦启动就会处理入站消息, 事后删连接撤不掉这些副作用。
+   */
+  shouldProceed?: () => boolean;
   /**
    * 连上后这么久内转成 conflict(同一个 token 另有进程在轮询, 例如原来的网关还开着)
    * 就当没连上, 整条撤销。缺省不等。
@@ -476,6 +481,9 @@ async function addBotImConnectionNow(
   input: BotImConnectionAddInput,
   options: BotImConnectionAddOptions,
 ): Promise<BotImConnectionAddResult> {
+  if (options.shouldProceed && !options.shouldProceed()) {
+    throw throwIpcError('PRECONDITION_FAILED', 'CANCELLED');
+  }
   await assertBotImConnectionAddable(input, options);
 
   let record = await addBotImConnectionRecord({
@@ -507,6 +515,8 @@ async function addBotImConnectionNow(
 
   const transport = live.transport;
   if (transport.kind !== input.channel) return rollback('channel mismatch');
+  // 建记录 / 起实例之间还有 await: 交接凭证和启动连接前再复核一次。
+  if (options.shouldProceed && !options.shouldProceed()) return rollback('CANCELLED');
   try {
     switch (transport.kind) {
       case 'telegram': {
