@@ -70,7 +70,6 @@ import {
   type AgentIslandDisplayState,
   type AgentIslandPillSnapshot,
   type AgentIslandQuotaItem,
-  type AgentIslandQuotaSummary,
   type AgentIslandRemoteSessionInput,
   type AgentIslandCompanionSnapshot,
   type AgentIslandSessionActivity,
@@ -419,7 +418,6 @@ export class AgentIslandService {
   private soundSettings: AgentIslandSoundSettings = createDefaultAgentIslandDisplayConfig().soundSettings;
   private mascotSkin: AgentIslandMascotSkin = DEFAULT_AGENT_ISLAND_MASCOT_SKIN;
   private quota: AgentIslandQuotaItem[] = [];
-  private quotaSummary: AgentIslandQuotaSummary | null = null;
   private readonly enabledListeners = new Set<(enabled: boolean) => void>();
   private displayTarget: AgentIslandDisplayTarget = DEFAULT_AGENT_ISLAND_DISPLAY_TARGET;
   private lastSoundDisplayState: AgentIslandDisplayState | null = null;
@@ -811,10 +809,9 @@ export class AgentIslandService {
   }
 
   /** Remaining quota from the menu bar overview, already ordered and filtered. */
-  setQuota(items: readonly AgentIslandQuotaItem[], summary: AgentIslandQuotaSummary | null): void {
-    if (sameAgentIslandQuota(this.quota, items) && sameAgentIslandQuotaSummary(this.quotaSummary, summary)) return;
+  setQuota(items: readonly AgentIslandQuotaItem[]): void {
+    if (sameAgentIslandQuota(this.quota, items)) return;
     this.quota = [...items];
-    this.quotaSummary = summary;
     if (this.isEnabled()) this.publish();
   }
 
@@ -2175,12 +2172,12 @@ export class AgentIslandService {
     // Sounds follow real runtime transitions. Chat read/visibility filters only own
     // the rendered unread projection and must neither mute a fresh turn nor replay history.
     const soundDisplayState = withAgentIslandConfig(
-      buildAgentIslandDisplayState(this.state, now), this.soundSettings, this.mascotSkin, this.quota, this.quotaSummary,
+      buildAgentIslandDisplayState(this.state, now), this.soundSettings, this.mascotSkin, this.quota,
     );
     const chatDisplayState = this.companionChats.size > 0
       ? withAgentIslandConfig(
         buildAgentIslandDisplayState(this.state, now, this.companionChatProjections()),
-        this.soundSettings, this.mascotSkin, this.quota, this.quotaSummary,
+        this.soundSettings, this.mascotSkin, this.quota,
       )
       : soundDisplayState;
     if (!this.enabled) {
@@ -3115,12 +3112,10 @@ function withAgentIslandConfig(
   soundSettings: AgentIslandSoundSettings,
   mascotSkin: AgentIslandMascotSkin,
   quota: readonly AgentIslandQuotaItem[] = [],
-  quotaSummary: AgentIslandQuotaSummary | null = null,
 ): AgentIslandDisplayState {
   return {
     ...displayState,
     ...(quota.length > 0 ? { quota: [...quota] } : {}),
-    ...(quotaSummary ? { quotaSummary: { ...quotaSummary } } : {}),
     strings: buildAgentIslandStrings(),
     soundSettings: cloneAgentIslandSoundSettings(soundSettings),
     mascotSkin,
@@ -3132,13 +3127,9 @@ function sameAgentIslandQuota(a: readonly AgentIslandQuotaItem[], b: readonly Ag
     const other = b[index]!;
     return item.id === other.id && item.logoSvg === other.logoSvg && item.text === other.text
       && item.level === other.level && item.stale === other.stale
-      && item.accessibilityLabel === other.accessibilityLabel && item.width === other.width;
+      && item.accessibilityLabel === other.accessibilityLabel && item.lowest === other.lowest
+      && item.width === other.width && item.textWidth === other.textWidth;
   });
-}
-
-function sameAgentIslandQuotaSummary(a: AgentIslandQuotaSummary | null, b: AgentIslandQuotaSummary | null): boolean {
-  if (!a || !b) return a === b;
-  return a.text === b.text && a.level === b.level && a.accessibilityLabel === b.accessibilityLabel && a.width === b.width;
 }
 
 function collapseManualExpandedStateForInactiveDisplay(displayState: AgentIslandDisplayState): AgentIslandDisplayState {

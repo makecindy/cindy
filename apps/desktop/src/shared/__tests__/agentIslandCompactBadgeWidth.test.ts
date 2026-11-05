@@ -13,7 +13,7 @@ import {
   getAgentIslandCompactBadgeWidth,
   getAgentIslandDefaultContentWidth,
   getAgentIslandQuotaChipWidth,
-  getAgentIslandQuotaSummaryWidth,
+  getAgentIslandQuotaTextWidth,
   snapAgentIslandCompactHardwareContentWidth,
 } from '../agentIsland';
 
@@ -477,8 +477,8 @@ describe('getAgentIslandQuotaChipWidth', () => {
 
   it('只显示最低百分比时同样覆盖实绘,且两位数放得进刘海屏默认宽度的一侧(32pt 减最小 inset 7)', () => {
     for (const [text, width] of [['9%', 13], ['72%', 19], ['100%', 25]] as const) {
-      expect(getAgentIslandQuotaSummaryWidth(text), text).toBeGreaterThanOrEqual(width);
+      expect(getAgentIslandQuotaTextWidth(text), text).toBeGreaterThanOrEqual(width);
     }
-    expect(getAgentIslandQuotaSummaryWidth('72%')).toBeLessThanOrEqual(32 - 7);
+    expect(getAgentIslandQuotaTextWidth('72%')).toBeLessThanOrEqual(32 - 7);
   });
 });

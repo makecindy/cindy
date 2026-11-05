@@ -1560,21 +1560,14 @@ struct AgentIslandQuotaItem: Codable, Equatable, Identifiable {
   let level: String
   let stale: Bool
   let accessibilityLabel: String
+  let lowest: Bool
   let width: Double
-}
-
-/// The menu bar's lowest-remaining percentage, shown alone when no chip fits.
-struct AgentIslandQuotaSummary: Codable, Equatable {
-  let text: String
-  let level: String
-  let accessibilityLabel: String
-  let width: Double
+  let textWidth: Double
 }
 
 struct AgentIslandDisplayState: Codable {
   var compactReminder: AgentIslandCompactReminder? = nil
   var quota: [AgentIslandQuotaItem]? = nil
-  var quotaSummary: AgentIslandQuotaSummary? = nil
   let visible: Bool
   let mode: String
   let notchStatus: String
@@ -2547,7 +2540,6 @@ struct AgentIslandRootView: View {
           current: current,
           sessions: model.state.sessions,
           quota: model.state.displayQuota,
-          quotaSummary: model.state.quotaSummary,
           displaySurface: model.state.displaySurface,
           totalCount: model.state.totalCount,
           updatedAt: model.state.updatedAt,
@@ -2574,7 +2566,6 @@ struct AgentIslandRootView: View {
       IdleIslandView(
         layout: layout,
         quota: model.state.displayQuota,
-        quotaSummary: model.state.quotaSummary,
         strings: model.state.displayStrings,
         soundEnabled: model.state.displaySoundSettings.enabled,
         mascotSkin: model.state.displayMascotSkin,
@@ -2878,7 +2869,6 @@ struct CompactReminderView: View {
 struct IdleIslandView: View {
   let layout: AgentIslandLayout
   let quota: [AgentIslandQuotaItem]
-  let quotaSummary: AgentIslandQuotaSummary?
   let strings: AgentIslandStrings
   let soundEnabled: Bool
   let mascotSkin: String
@@ -2949,7 +2939,7 @@ struct IdleIslandView: View {
     let trailingQuota = !layout.expanded && hasQuota
     // Chips keep the badge's inset; the bare percentage may use the narrowest one, so the
     // default notch width still fits it.
-    let trailingInset = AgentIslandQuotaRow.fitting(items: quota, maxWidth: sideWidth - hardwareNotchBadgeReservedInset).isEmpty
+    let trailingInset = AgentIslandQuotaRow.selection(items: quota, maxWidth: sideWidth - hardwareNotchBadgeReservedInset).logoHidden
       ? hardwareNotchMinimumSideInset
       : hardwareNotchBadgeReservedInset
     return HStack(spacing: 0) {
@@ -2962,7 +2952,7 @@ struct IdleIslandView: View {
       Spacer(minLength: layout.notchWidth)
       Group {
         if trailingQuota {
-          AgentIslandQuotaRow(items: quota, summary: quotaSummary, maxWidth: sideWidth - trailingInset)
+          AgentIslandQuotaRow(items: quota, maxWidth: sideWidth - trailingInset)
             .padding(.trailing, trailingInset)
         } else {
           Color.clear
@@ -2981,7 +2971,7 @@ struct IdleIslandView: View {
 
   private var idleMascotWidth: CGFloat { 16 + 5 }
 
-  private var hasQuota: Bool { !quota.isEmpty || quotaSummary != nil }
+  private var hasQuota: Bool { !quota.isEmpty }
 
   /// The mascot, then the quota when `quotaWidth` leaves room for it, otherwise the app name.
   @ViewBuilder
@@ -2989,8 +2979,8 @@ struct IdleIslandView: View {
     HStack(spacing: 5) {
       AgentIslandMascotView(skin: mascotSkin, state: .idle, size: 16)
         .frame(width: 16, height: 16)
-      if let quotaWidth, AgentIslandQuotaRow.hasContent(items: quota, summary: quotaSummary, maxWidth: quotaWidth) {
-        AgentIslandQuotaRow(items: quota, summary: quotaSummary, maxWidth: quotaWidth)
+      if let quotaWidth, !AgentIslandQuotaRow.selection(items: quota, maxWidth: quotaWidth).items.isEmpty {
+        AgentIslandQuotaRow(items: quota, maxWidth: quotaWidth)
       } else {
         Text(strings.displayAppName)
           .font(.system(size: 10, weight: .semibold, design: .monospaced))
@@ -3068,7 +3058,6 @@ struct ExpandedIslandTopBar: View {
   var title: String? = nil
   let mascotState: AgentIslandMascotAnimationState?
   var quota: [AgentIslandQuotaItem] = []
-  var quotaSummary: AgentIslandQuotaSummary? = nil
   let layout: AgentIslandLayout
   let strings: AgentIslandStrings
   let soundEnabled: Bool
@@ -3130,7 +3119,7 @@ struct ExpandedIslandTopBar: View {
   /// mascot leaves.
   @ViewBuilder
   private func leadingContent(width: CGFloat) -> some View {
-    if mascotState != nil || title != nil || !quota.isEmpty || quotaSummary != nil {
+    if mascotState != nil || title != nil || !quota.isEmpty {
       HStack(spacing: 8) {
         if let mascotState {
           RunningMascotIcon(skin: mascotSkin, state: mascotState, size: 18, namespace: runningMascotNamespace)
@@ -3143,7 +3132,7 @@ struct ExpandedIslandTopBar: View {
             .lineLimit(1)
             .truncationMode(.tail)
         } else {
-          AgentIslandQuotaRow(items: quota, summary: quotaSummary, maxWidth: width - (mascotState != nil ? 18 + 8 : 0))
+          AgentIslandQuotaRow(items: quota, maxWidth: width - (mascotState != nil ? 18 + 8 : 0))
         }
       }
     }
@@ -3245,12 +3234,12 @@ enum AgentIslandQuotaLogos {
 }
 
 /// Remaining quota per plan: logo and amount, in the menu bar's order. The island never
-/// widens for it (the width is the user's): chips that do not fit `maxWidth` are left out
-/// from the end, using the nominal widths main sent. When not even one chip fits, the menu
-/// bar's lowest percentage is shown alone, as the menu bar icon does.
+/// widens for it (the width is the user's), so the row shows what fits `maxWidth`, judged by
+/// the nominal widths main sent. The menu bar's lowest plan gets room first, so widening only
+/// ever adds plans around it; when not even its chip fits it folds to its bare percentage, as
+/// the menu bar icon shows it. Plans fade in and out as the width crosses each step.
 struct AgentIslandQuotaRow: View {
   let items: [AgentIslandQuotaItem]
-  var summary: AgentIslandQuotaSummary? = nil
   let maxWidth: CGFloat
 
   // Mirrors the `AGENT_ISLAND_QUOTA_*` metrics in `shared/agentIsland.ts`.
@@ -3258,62 +3247,62 @@ struct AgentIslandQuotaRow: View {
   static let logoGap: CGFloat = 3
   static let chipSpacing: CGFloat = 8
 
-  static func fitting(items: [AgentIslandQuotaItem], maxWidth: CGFloat) -> [AgentIslandQuotaItem] {
+  struct Selection: Equatable {
+    /// In the menu bar's order.
+    let items: [AgentIslandQuotaItem]
+    /// Only the lowest plan's percentage fits.
+    let logoHidden: Bool
+  }
+
+  static func selection(items: [AgentIslandQuotaItem], maxWidth: CGFloat) -> Selection {
+    let budget = maxWidth + 0.5
+    var chosen = Set<String>()
     var used: CGFloat = 0
-    var result: [AgentIslandQuotaItem] = []
-    for item in items {
-      let next = used + (result.isEmpty ? 0 : chipSpacing) + CGFloat(item.width)
-      if next > maxWidth + 0.5 { break }
+    for item in items.filter(\.lowest) + items.filter({ !$0.lowest }) {
+      let next = used + (chosen.isEmpty ? 0 : chipSpacing) + CGFloat(item.width)
+      if next > budget { break }
       used = next
-      result.append(item)
+      chosen.insert(item.id)
     }
-    return result
-  }
-
-  static func hasContent(items: [AgentIslandQuotaItem], summary: AgentIslandQuotaSummary?, maxWidth: CGFloat) -> Bool {
-    !fitting(items: items, maxWidth: maxWidth).isEmpty || fittingSummary(summary, maxWidth: maxWidth) != nil
-  }
-
-  private static func fittingSummary(_ summary: AgentIslandQuotaSummary?, maxWidth: CGFloat) -> AgentIslandQuotaSummary? {
-    guard let summary, CGFloat(summary.width) <= maxWidth + 0.5 else { return nil }
-    return summary
+    if chosen.isEmpty, let lowest = items.first(where: \.lowest), CGFloat(lowest.textWidth) <= budget {
+      return Selection(items: [lowest], logoHidden: true)
+    }
+    return Selection(items: items.filter { chosen.contains($0.id) }, logoHidden: false)
   }
 
   var body: some View {
-    let chips = Self.fitting(items: items, maxWidth: maxWidth)
-    if chips.isEmpty, let summary = Self.fittingSummary(summary, maxWidth: maxWidth) {
-      Text(summary.text)
-        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-        .foregroundColor(textColor(summary.level))
-        .lineLimit(1)
-        .fixedSize()
-        .accessibilityLabel(summary.accessibilityLabel)
-        .help(summary.accessibilityLabel)
-    } else {
-      HStack(spacing: Self.chipSpacing) {
-        ForEach(chips) { item in
-          chip(item)
-        }
+    let selection = Self.selection(items: items, maxWidth: maxWidth)
+    HStack(spacing: Self.chipSpacing) {
+      ForEach(selection.items) { item in
+        chip(item, showsLogo: !selection.logoHidden)
+          .transition(.opacity.combined(with: .scale(scale: 0.8)))
       }
-      .fixedSize()
     }
+    .fixedSize()
+    .animation(.easeOut(duration: 0.2), value: selection)
+    // Resizing the island turns animations off while dragging; a step in what fits still
+    // animates, since nothing else here changes with the drag.
+    .transaction { $0.disablesAnimations = false }
   }
 
-  private func chip(_ item: AgentIslandQuotaItem) -> some View {
-    HStack(spacing: Self.logoGap) {
-      Group {
-        if let image = AgentIslandQuotaLogos.image(item.logoSvg) {
-          Image(nsImage: image)
-            .renderingMode(.template)
-            .resizable()
-            .interpolation(.high)
-            .aspectRatio(contentMode: .fit)
-        } else {
-          Color.clear
+  private func chip(_ item: AgentIslandQuotaItem, showsLogo: Bool) -> some View {
+    HStack(spacing: showsLogo ? Self.logoGap : 0) {
+      if showsLogo {
+        Group {
+          if let image = AgentIslandQuotaLogos.image(item.logoSvg) {
+            Image(nsImage: image)
+              .renderingMode(.template)
+              .resizable()
+              .interpolation(.high)
+              .aspectRatio(contentMode: .fit)
+          } else {
+            Color.clear
+          }
         }
+        .frame(width: Self.logoSize, height: Self.logoSize)
+        .foregroundColor(Color.white.opacity(0.5))
+        .transition(.opacity.combined(with: .scale(scale: 0.5, anchor: .trailing)))
       }
-      .frame(width: Self.logoSize, height: Self.logoSize)
-      .foregroundColor(Color.white.opacity(0.5))
 
       Text(item.text)
         .font(.system(size: 10, weight: .semibold, design: .monospaced))
@@ -3522,7 +3511,6 @@ struct ExpandedSessionsView: View {
   let current: AgentIslandSession
   let sessions: [AgentIslandSession]
   let quota: [AgentIslandQuotaItem]
-  let quotaSummary: AgentIslandQuotaSummary?
   let displaySurface: String
   let totalCount: Int
   let updatedAt: Double
@@ -3559,7 +3547,6 @@ struct ExpandedSessionsView: View {
       ExpandedIslandTopBar(
         mascotState: currentMascotState,
         quota: quota,
-        quotaSummary: quotaSummary,
         layout: layout,
         strings: strings,
         soundEnabled: soundEnabled,

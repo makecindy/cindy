@@ -5,14 +5,14 @@
  *   以哨兵传递，灵动岛 helper 不认识哨兵，必须换成真实 SVG。
  * - 现有覆盖缺口：新模块，菜单栏与 iPhone 小组件的测试不覆盖这条投影。
  * - 最小失败输入：含按量付费、未读到的来源、额度用完只剩 credits、Cindy 余额的视图；登录门槛；
- *   宽度放不下任何余量时退回菜单栏「最低余量」的百分比(2026-11-05 需求)。
+ *   菜单栏「最低余量」对应的套餐要标出来:窄宽度时它先占位、放不下完整余量时只显示它的百分比(2026-11-05 需求)。
  * - tier：unit，纯函数。
  */
 import { describe, expect, it } from 'vitest';
 
 import type { MenubarSourceCell, MenubarView } from '../../../shared/menubarQuota';
 import { MENUBAR_CINDY_LOGO } from '../../menubar/logos';
-import { buildAgentIslandQuota, buildAgentIslandQuotaSummary } from '../quota';
+import { buildAgentIslandQuota } from '../quota';
 
 function cell(overrides: Partial<MenubarSourceCell> & Pick<MenubarSourceCell, 'id'>): MenubarSourceCell {
   return {
@@ -61,21 +61,19 @@ describe('buildAgentIslandQuota', () => {
   });
 
   it('登录前(菜单栏只显示登录提示)不显示余量', () => {
-    const gated = view([cell({ id: 'codex', value: '50', valueUnit: '%' })], 'sign-in', '50%');
-    expect(buildAgentIslandQuota(gated)).toEqual([]);
-    expect(buildAgentIslandQuotaSummary(gated)).toBeNull();
+    expect(buildAgentIslandQuota(view([cell({ id: 'codex', value: '50', valueUnit: '%' })], 'sign-in', '50%'))).toEqual([]);
     expect(buildAgentIslandQuota(null)).toEqual([]);
   });
 
-  it('窄宽度的兜底取菜单栏「最低余量」,颜色跟对应套餐;全部用完的 0% 标红', () => {
+  it('标出菜单栏「最低余量」对应的套餐;同为最低时只标顺序靠前的一个,没有最低时都不标', () => {
     const sources = [
       cell({ id: 'claude', value: '72', valueUnit: '%' }),
-      cell({ id: 'codex', value: '18', valueUnit: '%', level: 'warn' }),
+      cell({ id: 'codex-a', value: '18', valueUnit: '%', level: 'warn' }),
+      cell({ id: 'codex-b', value: '18', valueUnit: '%', level: 'warn' }),
     ];
-    expect(buildAgentIslandQuotaSummary(view(sources, undefined, '18%')))
-      .toMatchObject({ text: '18%', level: 'warn', accessibilityLabel: 'codex label' });
-    expect(buildAgentIslandQuotaSummary(view([], undefined, '0%'))).toMatchObject({ text: '0%', level: 'error' });
-    // 菜单栏没有可显示的百分比(例如只有按量付费)时也不兜底。
-    expect(buildAgentIslandQuotaSummary(view(sources))).toBeNull();
+    const lowestOf = (lowest: string | null) =>
+      buildAgentIslandQuota(view(sources, undefined, lowest)).filter((item) => item.lowest).map((item) => item.id);
+    expect(lowestOf('18%')).toEqual(['codex-a']);
+    expect(lowestOf(null)).toEqual([]);
   });
 });

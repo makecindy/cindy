@@ -619,19 +619,17 @@ export interface AgentIslandQuotaItem {
   stale: boolean;
   accessibilityLabel: string;
   /**
-   * Nominal upper-bound width of the chip. The island never widens for quota (its width is
-   * the user's); the helper shows the chips whose widths fit, without measuring fonts.
+   * The plan the menu bar's "lowest" status text names. When not every chip fits it keeps
+   * its place, and when not even one fits it is shown as its bare percentage.
+   */
+  lowest: boolean;
+  /**
+   * Nominal upper-bound widths of the chip and of its text alone. The island never widens
+   * for quota (its width is the user's); the helper picks what fits from these, without
+   * measuring fonts.
    */
   width: number;
-}
-
-/** The menu bar's lowest-remaining percentage, shown alone when no chip fits. */
-export interface AgentIslandQuotaSummary {
-  text: string;
-  level: AgentIslandQuotaItem['level'];
-  accessibilityLabel: string;
-  /** Nominal upper-bound width of the text alone, without a logo. */
-  width: number;
+  textWidth: number;
 }
 
 // Quota chip metrics, mirrored by `AgentIslandQuotaRow` in
@@ -655,7 +653,7 @@ function isWideQuotaChar(char: string): boolean {
     || code >= 0x20000;
 }
 
-export function getAgentIslandQuotaSummaryWidth(text: string): number {
+export function getAgentIslandQuotaTextWidth(text: string): number {
   let textWidth = 0;
   for (const char of text) {
     textWidth += isWideQuotaChar(char) ? AGENT_ISLAND_QUOTA_WIDE_CHAR_WIDTH_BOUND : AGENT_ISLAND_QUOTA_CHAR_WIDTH_BOUND;
@@ -664,7 +662,7 @@ export function getAgentIslandQuotaSummaryWidth(text: string): number {
 }
 
 export function getAgentIslandQuotaChipWidth(text: string): number {
-  return AGENT_ISLAND_QUOTA_LOGO_SIZE + AGENT_ISLAND_QUOTA_LOGO_GAP + getAgentIslandQuotaSummaryWidth(text);
+  return AGENT_ISLAND_QUOTA_LOGO_SIZE + AGENT_ISLAND_QUOTA_LOGO_GAP + getAgentIslandQuotaTextWidth(text);
 }
 
 export function getAgentIslandDefaultContentWidth(input: {
@@ -800,7 +798,6 @@ export interface AgentIslandDisplayState {
   compactReminder?: { phase: AgentIslandSessionPhase; until: number };
   /** Remaining quota in the menu bar's order; absent or empty when there is none to show. */
   quota?: AgentIslandQuotaItem[];
-  quotaSummary?: AgentIslandQuotaSummary;
   strings: AgentIslandStrings;
   soundSettings: AgentIslandSoundSettings;
   mascotSkin: AgentIslandMascotSkin;

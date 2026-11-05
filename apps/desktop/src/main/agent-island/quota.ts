@@ -10,9 +10,8 @@ import { CINDY_MARK_PATH, CINDY_MARK_TRANSFORM } from '@cindy/model-providers/br
 
 import {
   getAgentIslandQuotaChipWidth,
-  getAgentIslandQuotaSummaryWidth,
+  getAgentIslandQuotaTextWidth,
   type AgentIslandQuotaItem,
-  type AgentIslandQuotaSummary,
 } from '../../shared/agentIsland.js';
 import type { MenubarView } from '../../shared/menubarQuota.js';
 import { MENUBAR_CINDY_LOGO } from '../menubar/logos.js';
@@ -23,30 +22,22 @@ import type { AgentIslandService } from './service.js';
 const CINDY_LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path fill="#000" fill-rule="evenodd" transform="${CINDY_MARK_TRANSFORM}" d="${CINDY_MARK_PATH}"/></svg>`;
 
 /**
- * The menu bar's "lowest" status text, for an island too narrow for a single chip. Colored like
- * the chip it comes from; "0%" means every subscription is used up.
+ * Sources with a level to show, as the iPhone widgets pick them; pay-as-you-go and unread ones
+ * have none. The plan behind the menu bar's "lowest" status text is marked, so a narrow island
+ * shows the same number the menu bar icon does.
  */
-export function buildAgentIslandQuotaSummary(view: MenubarView | null): AgentIslandQuotaSummary | null {
-  if (!view || view.gate) return null;
-  const text = view.statusTextByMode.lowest;
-  if (!text) return null;
-  const cell = view.sources.find((source) => source.kind === 'subscription' && `${source.value}${source.valueUnit ?? ''}` === text);
-  return {
-    text,
-    level: cell?.level ?? (text === '0%' ? 'error' : 'normal'),
-    accessibilityLabel: cell?.accessibilityLabel ?? text,
-    width: getAgentIslandQuotaSummaryWidth(text),
-  };
-}
-
-/** Sources with a level to show, as the iPhone widgets pick them; pay-as-you-go and unread ones have none. */
 export function buildAgentIslandQuota(view: MenubarView | null): AgentIslandQuotaItem[] {
   if (!view || view.gate) return [];
+  const lowestText = view.statusTextByMode.lowest;
+  let lowestMarked = false;
   const items: AgentIslandQuotaItem[] = [];
   for (const cell of view.sources) {
     if (cell.kind === 'payg' || cell.fill === null) continue;
     const text = cell.value !== null ? `${cell.value}${cell.valueUnit ?? ''}` : (cell.valueLabel ?? '');
     if (!text) continue;
+    // Plans at the same percentage read alike; the first in the user's order stands for them.
+    const lowest = !lowestMarked && cell.kind === 'subscription' && cell.value !== null && text === lowestText;
+    if (lowest) lowestMarked = true;
     items.push({
       id: cell.id,
       logoSvg: cell.logoSvg === MENUBAR_CINDY_LOGO ? CINDY_LOGO_SVG : cell.logoSvg,
@@ -54,7 +45,9 @@ export function buildAgentIslandQuota(view: MenubarView | null): AgentIslandQuot
       level: cell.level,
       stale: cell.stale === true,
       accessibilityLabel: cell.accessibilityLabel,
+      lowest,
       width: getAgentIslandQuotaChipWidth(text),
+      textWidth: getAgentIslandQuotaTextWidth(text),
     });
   }
   return items;
@@ -64,8 +57,7 @@ export function buildAgentIslandQuota(view: MenubarView | null): AgentIslandQuot
 export function startAgentIslandQuota(island: AgentIslandService, overview: QuotaOverviewService): () => void {
   let release: (() => void) | null = null;
   let unsubscribe: (() => void) | null = null;
-  const publish = (view: MenubarView | null) =>
-    island.setQuota(buildAgentIslandQuota(view), buildAgentIslandQuotaSummary(view));
+  const publish = (view: MenubarView | null) => island.setQuota(buildAgentIslandQuota(view));
   const sync = (enabled: boolean) => {
     if (enabled && !release) {
       // Subscribed first, so the first build after acquiring reaches the island.
@@ -77,7 +69,7 @@ export function startAgentIslandQuota(island: AgentIslandService, overview: Quot
       unsubscribe?.();
       release = null;
       unsubscribe = null;
-      island.setQuota([], null);
+      island.setQuota([]);
     }
   };
   const offEnabled = island.subscribeEnabled(sync);
