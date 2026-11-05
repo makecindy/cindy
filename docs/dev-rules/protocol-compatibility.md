@@ -14,6 +14,14 @@ Desktop 与 Mobile 明确标注估算和排除项。旧端忽略可选字段，�
 Desktop 和 Mobile 共用 shared parser，仅认可未删除的伙伴作者消息、单个完整 card、已知版本及白名单类别；普通人或未知／混合内容继续普通消息展示。Desktop 发往手机的既有消息视图可选追加 `capabilityNoticeCode`，手机 Remote Resource 解析仅保留未删除的伙伴 notice 上的白名单类别，content 保留 fallback，旧手机忽略新字段仍可读；手机直连自行投影，新手机连旧电脑仍用旧内容。旧桌面／手机直连把未知卡片显示为伙伴消息的 fallback，不丢失提示。
 
 不改服务端接口、权限档、原生配置、schema 或数据库 migration。提示只有原因，没有原始工具参数、路径或错误正文。回滚客户端后沿用 fallback，不修改已有历史。
+## Anthropic 兼容网关的工具引用恢复（#8593）
+
+Desktop 的 Anthropic loopback 代理在上游 400/422 明确报出
+`content type tool_reference requires a native Anthropic Messages target` 时，
+仅将 `messages[].content[]` 中 `tool_result.content[]` 的工具引用转换为保留工具名的文本，
+沿现有恢复规则最多重试一次。工具定义、调用参数、结果对应关系和本地历史均不修改；
+上游接受的原生引用不触发转换，未知错误照常返回。Tool Search 默认策略与用户显式配置不变。
+没有设备协议、relay 或服务端变更；回退该恢复规则即可回到原来的上游错误行为。
 
 ## 群聊代答的工作记录兼容（2026-11-03）
 
