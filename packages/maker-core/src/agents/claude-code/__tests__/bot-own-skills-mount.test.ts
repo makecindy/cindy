@@ -82,7 +82,7 @@ function createFakeQuery() {
     setPermissionMode: vi.fn(async () => {}),
     setModel: vi.fn(async () => {}),
     applyFlagSettings: vi.fn(async () => {}),
-    mcpServerStatus: vi.fn(async (): Promise<Array<{ name: string; status: string }>> => []),
+    mcpServerStatus: vi.fn(async (): Promise<Array<{ name: string; status: string; scope?: string }>> => []),
     setMcpServers: vi.fn(async (servers: Record<string, unknown>) => ({ added: [], removed: servers.custom_magpie ? [] : ['custom_magpie'], errors: {} })),
     interrupt: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
@@ -266,7 +266,7 @@ describe('Claude Code mounts the Bot\'s own learned Skills', () => {
       nativeServersToKeep: choice === 'claude' ? ['magpie'] : [],
     }));
     const query = createFakeQuery();
-    query.mcpServerStatus.mockResolvedValue([{ name: 'magpie', status: 'connected' }]);
+    query.mcpServerStatus.mockResolvedValue([{ name: 'magpie', status: 'connected', scope: 'user' }]);
     const options = await startBotSession({ ordinary: true, duplicateResolver, query });
     expect(Object.keys(options.mcpServers ?? {})).toEqual(['custom_magpie', 'other']);
     if (choice === 'claude') {
@@ -283,7 +283,7 @@ describe('Claude Code mounts the Bot\'s own learned Skills', () => {
   it.each(['missing', 'failed', 'pending', 'error', 'update-error'])('keeps available connections when native selection is %s', async status => {
     const query = createFakeQuery();
     if (status === 'error') query.mcpServerStatus.mockRejectedValue(new Error('status unavailable'));
-    else query.mcpServerStatus.mockResolvedValue(status === 'missing' ? [] : [{ name: 'magpie', status: status === 'update-error' ? 'connected' : status }]);
+    else query.mcpServerStatus.mockResolvedValue(status === 'missing' ? [] : [{ name: 'magpie', status: status === 'update-error' ? 'connected' : status, scope: 'user' }]);
     if (status === 'update-error') query.setMcpServers.mockResolvedValueOnce({ added: [], removed: [], errors: {} })
       .mockRejectedValueOnce(new Error('update unavailable'));
     const options = await startBotSession({ ordinary: true, query,
@@ -298,6 +298,18 @@ describe('Claude Code mounts the Bot\'s own learned Skills', () => {
     await liveHandles.at(-1)!.send({ type: 'user', content: 'use the connection' });
     expect((await next).value).toMatchObject({ type: 'user' });
   });
+  // PR #9055: a connected name alone can belong to a host/provider, plugin or
+  // project override. Unit: saved user-scope choice + non-user runtime status.
+  it.each([['dynamic', 'magpie'], ['project', 'magpie'], [undefined, 'magpie'], ['user', 'other']] as const)(
+    'does not replace Cindy with a %s-scoped connection named %s', async (scope, name) => {
+      const query = createFakeQuery();
+      query.mcpServerStatus.mockResolvedValue([{ name, status: 'connected', scope }]);
+      const options = await startBotSession({ ordinary: true, query,
+        duplicateResolver: async () => ({ skipHostServers: ['custom_magpie'], denyNativeServers: [], nativeServersToKeep: [name] }),
+      });
+      expect(query.setMcpServers).toHaveBeenCalledTimes(1);
+      expect(query.setMcpServers).toHaveBeenCalledWith(options.mcpServers);
+    });
   it.each([{ ordinary: false }, { ordinary: true, remote: true }, { ordinary: true, reviewMode: true }, { ordinary: true, localHostOnly: true }])(
     'does not apply local duplicate choices in isolated/remote runtimes: %j', async context => {
       const duplicateResolver = vi.fn(async () => ({ skipHostServers: ['custom_magpie'], denyNativeServers: ['magpie'] }));

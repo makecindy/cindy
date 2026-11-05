@@ -1,4 +1,3 @@
-import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { app } from 'electron';
@@ -8,9 +7,9 @@ import { createLogger } from '../logger.js';
 import { readCustomMcpToken } from '../secrets/providerSecretStore.js';
 import { isUiMockDataEnabled } from '../localDb/uiMockSeed.js';
 import { groupMcpDuplicateConnections, type McpDuplicateChoice } from '../../shared/customMcp.js';
-import { listRegistrableCustomMcpServers } from '../mcp-integrations/custom-mcp-registry.js';
+import { getBuiltinMcpServerNames, listRegistrableCustomMcpServers } from '../mcp-integrations/custom-mcp-registry.js';
 import { createOverrideSettingsFile } from './override-settings-file.js';
-import { detectMcpDuplicates, resolveMcpDuplicateChoices } from './mcp-duplicate-detection.js';
+import { detectMcpDuplicates, readMcpJson, resolveMcpDuplicateChoices } from './mcp-duplicate-detection.js';
 
 const store = createOverrideSettingsFile<{ choices: Record<string, McpDuplicateChoice> }>({
   filePath: () => path.join(ownerScopedUserDataPath(), 'mcp-duplicate-preferences.json'),
@@ -29,19 +28,6 @@ const store = createOverrideSettingsFile<{ choices: Record<string, McpDuplicateC
   maxBytes: 1024 * 1024,
 });
 
-async function readJson(file: string): Promise<unknown> {
-  let handle;
-  try {
-    handle = await fs.open(file, 'r');
-    const stat = await handle.stat();
-    if (!stat.isFile() || stat.size > 4 * 1024 * 1024) throw new Error('Unsupported MCP configuration');
-    return JSON.parse(await handle.readFile('utf8'));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
-    throw error;
-  } finally { await handle?.close(); }
-}
-
 export function listMcpDuplicates(input?: { env: NodeJS.ProcessEnv; workingDir?: string }) {
   // Settings-only fixture: --mock must not inspect the person's native config.
   // Runtime resolution always passes an explicit environment and never uses this file.
@@ -50,8 +36,9 @@ export function listMcpDuplicates(input?: { env: NodeJS.ProcessEnv; workingDir?:
     ? { CLAUDE_CONFIG_DIR: path.join(app.getPath('userData'), 'ui-mock', 'claude') }
     : process.env };
   return detectMcpDuplicates({
-    home: os.homedir(), readJson, listCustom: listRegistrableCustomMcpServers, readToken: readCustomMcpToken,
+    home: os.homedir(), readJson: readMcpJson, listCustom: listRegistrableCustomMcpServers, readToken: readCustomMcpToken,
     workspaceSettingsFiles,
+    builtinNames: getBuiltinMcpServerNames,
     readChoices: () => { store.invalidateIfChanged(); return store.read().choices; },
   }, context);
 }

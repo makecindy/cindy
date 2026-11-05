@@ -4648,7 +4648,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           // The SDK applies file, MDM and server-managed policy before reporting
           // status. Missing/failed/pending entries cannot replace a working host.
           const statuses = await query.mcpServerStatus();
-          if (nativeNames.every(name => statuses.some(server => server.name === name && server.status === 'connected'))) {
+          if (nativeNames.every(name => !hostMcpServerNames.has(name) && statuses.some(server =>
+            server.name === name && server.status === 'connected' && server.scope === 'user'))) {
             // Reuse the original SDK server instances; recreating builtins here
             // would replace unrelated connections and their session state.
             const selectedServers = Object.fromEntries(Object.entries(mcpServers ?? {})

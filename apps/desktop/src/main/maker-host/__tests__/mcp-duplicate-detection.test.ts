@@ -1,11 +1,14 @@
 import path from 'node:path';
+import fs from 'node:fs/promises';
+import os from 'node:os';
 import { describe, expect, it } from 'vitest';
-import { detectMcpDuplicates, resolveMcpDuplicateChoices, type McpDuplicateDetectionDeps } from '../mcp-duplicate-detection.js';
+import { detectMcpDuplicates, readMcpJson, resolveMcpDuplicateChoices, type McpDuplicateDetectionDeps } from '../mcp-duplicate-detection.js';
 import type { McpDuplicateChoice } from '../../../shared/customMcp.js';
 
 // #8902: production diagnostics + runtime projection. Existing custom MCP CRUD tests
 // never read native configuration. Minimal input: one host hub and one native hub/claude.
-// Unit tier: injected JSON reader, no disk/network/real credentials.
+// Unit tier: injected JSON reader, except the small isolated parser fixture below.
+// No network or real credentials.
 function fixture() {
   const home = path.resolve('fixture-home');
   const native = { magpie: { type: 'http', url: 'http://localhost:3425/mcp/magpie/hub/claude', headers: { Authorization: 'fixture-native-secret' } } };
@@ -15,12 +18,52 @@ function fixture() {
   const files = new Map<string, unknown>([[path.join(home, '.claude.json'), config]]);
   const choices: Record<string, McpDuplicateChoice> = {};
   const deps: McpDuplicateDetectionDeps = { home, readJson: async file => files.get(file) ?? {},
+    builtinNames: () => [],
     workspaceSettingsFiles: async () => [],
     listCustom: async () => custom, readToken: () => 'fixture-host-secret', readChoices: () => choices };
   return { home, native, config, custom, files, choices, deps };
 }
 
 describe('MCP duplicate suggestions and explicit choices', () => {
+  // PR #9055: custom-only masking missed native entries named after builtins.
+  // Unit: one saved choice + a newly registered provider with the native name.
+  it('invalidates native choices shadowed by an injected builtin', async () => {
+    const f = fixture();
+    const report = await detectMcpDuplicates(f.deps, { env: {} });
+    f.choices[report.connections[0]!.id] = 'claude';
+    f.deps.builtinNames = () => ['magpie'];
+    const changed = await detectMcpDuplicates(f.deps, { env: {} });
+    expect(changed.connections).toEqual([]);
+    expect(resolveMcpDuplicateChoices(changed)).toEqual({ skipHostServers: [], denyNativeServers: [] });
+  });
+
+  // PR #9055: existing in-memory JSON fixtures did not exercise the actual file
+  // parser. Unit with one temporary settings file; no process/network/credentials.
+  it('reads native JSONC settings without hiding duplicates or ignoring denials', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-mcp-jsonc-'));
+    const file = path.join(root, 'settings.json');
+    try {
+      const f = fixture();
+      f.deps.workspaceSettingsFiles = async () => [file];
+      const readFixture = f.deps.readJson;
+      f.deps.readJson = input => input === file ? readMcpJson(file) : readFixture(input);
+      await fs.writeFile(file, '\uFEFF{ /* user note */ "env": { "LABEL": "https://local//path", }, }');
+      const input = { env: {}, workingDir: root };
+      const report = await detectMcpDuplicates(f.deps, input);
+      expect(report.complete).toBe(true);
+      expect(report.connections).toHaveLength(1);
+      f.choices[report.connections[0]!.id] = 'claude';
+      await fs.writeFile(file, '{ // disabled by user\n "deniedMcpServers": [{ "serverName": "magpie", },], }');
+      const denied = await detectMcpDuplicates(f.deps, input);
+      expect(denied.complete).toBe(true);
+      expect(resolveMcpDuplicateChoices(denied)).toEqual({ skipHostServers: [], denyNativeServers: [] });
+      await fs.writeFile(file, '{ broken');
+      expect(await detectMcpDuplicates(f.deps, input)).toEqual({ complete: false, connections: [] });
+    } finally {
+      await fs.unlink(file).catch(() => {});
+      await fs.rmdir(root);
+    }
+  });
   it('suggests router aliases without exposing credentials or changing runtime defaults', async () => {
     const f = fixture();
     f.files.set(path.join(f.home, '.claude', 'settings.json'), { deniedMcpServers: [{ serverName: 'claude.ai Slack' }] });

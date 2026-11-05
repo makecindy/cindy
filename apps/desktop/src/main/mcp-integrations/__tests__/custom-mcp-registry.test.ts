@@ -82,7 +82,7 @@ describe('refreshCustomMcpProviders', () => {
     storeMock.listCustomMcpServers.mockResolvedValue(saved);
     await refreshCustomMcpProviders();
     const report = await detectMcpDuplicates({
-      home: '/fixture', listCustom: listRegistrableCustomMcpServers,
+      home: '/fixture', listCustom: listRegistrableCustomMcpServers, builtinNames: getBuiltinMcpServerNames,
       readJson: async () => ({ mcpServers: { native_tools: { type: 'http', url: saved[0]!.url } } }),
       workspaceSettingsFiles: async () => [], readToken: () => null, readChoices: () => ({}),
     }, { env: {} });
@@ -98,7 +98,7 @@ describe('refreshCustomMcpProviders', () => {
     await refreshCustomMcpProviders();
     const choices: Record<string, McpDuplicateChoice> = {};
     const deps = {
-      home: '/fixture', listCustom: listRegistrableCustomMcpServers,
+      home: '/fixture', listCustom: listRegistrableCustomMcpServers, builtinNames: getBuiltinMcpServerNames,
       readJson: async () => ({ mcpServers: { native_tools: { type: 'http', url: config('mytools').url } } }),
       workspaceSettingsFiles: async () => [], readToken: () => null, readChoices: () => choices,
     };

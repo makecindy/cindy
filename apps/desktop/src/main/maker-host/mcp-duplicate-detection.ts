@@ -1,13 +1,32 @@
 import { createHash } from 'node:crypto';
+import fs from 'node:fs/promises';
 import path from 'node:path';
+import { parseClaudeSettingsJson } from '@cindy/maker-core';
 import { groupMcpDuplicateConnections, type CustomMcpConfig, type McpDuplicateChoice, type McpDuplicateReport } from '../../shared/customMcp.js';
 
 type JsonObject = Record<string, unknown>;
+/** Bounded, read-only native configuration reader; missing files are empty. */
+export async function readMcpJson(file: string): Promise<unknown> {
+  let handle;
+  try {
+    handle = await fs.open(file, 'r');
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > 4 * 1024 * 1024) throw new Error('Unsupported MCP configuration');
+    const raw = await handle.readFile('utf8');
+    return ['settings.json', 'settings.local.json'].includes(path.basename(file))
+      ? parseClaudeSettingsJson(raw) : JSON.parse(raw);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    throw error;
+  } finally { await handle?.close(); }
+}
+
 const object = (value: unknown): JsonObject => value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : {};
 export interface McpDuplicateDetectionDeps {
   readJson(file: string): Promise<unknown>;
   home: string;
   listCustom(): Promise<CustomMcpConfig[]>;
+  builtinNames(): string[];
   workspaceSettingsFiles(workingDir: string): Promise<string[]>;
   readToken(id: string): string | null;
   readChoices(): Record<string, McpDuplicateChoice>;
@@ -124,13 +143,13 @@ export async function detectMcpDuplicates(
       }
     }
     const custom = await deps.listCustom();
-    const customIds = new Set(custom.map(server => server.id));
+    const injectedNames = new Set([...deps.builtinNames(), ...custom.map(server => server.id)]);
     const choices = deps.readChoices();
     for (const server of custom) {
       const hostUrl = endpoint(server.url, input.env);
       if (!hostUrl) continue;
       for (const [name, raw] of Object.entries(native)) {
-        if (masked.has(name) || customIds.has(name)) continue;
+        if (masked.has(name) || injectedNames.has(name)) continue;
         const entry = object(raw);
         const nativeUrl = endpoint(entry.url, input.env);
         if (!nativeUrl || (entry.type !== 'http' && entry.type !== 'sse')) continue;
