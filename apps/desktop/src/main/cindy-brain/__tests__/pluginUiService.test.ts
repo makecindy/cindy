@@ -55,6 +55,32 @@ function setup(initial: PluginUiInstance[] = [{ id: 'root__sample', token: 'owne
 afterEach(() => vi.useRealTimers());
 
 describe('PluginUiService', () => {
+  // PR #8909: an idle mounted outlet has a live subscription, not an abandoned
+  // read projection. A later outlet must not invalidate its controls or page.
+  it.each([false, true])('expires only unsubscribed idle projections (subscribed=%s)', async subscribed => {
+    vi.useFakeTimers({ now: 0 });
+    const h = setup();
+    const read = async (sessionId: string, subscriptionId?: string) => {
+      const pending = h.service.read('phone', { ...request(sessionId), subscriptionId });
+      await h.flush(); h.answer(); return (await pending).views[0];
+    };
+    const first = await read('task-1', subscribed ? 'live' : undefined);
+    vi.setSystemTime(300_001);
+    await read('task-2', 'other');
+    if (!subscribed) {
+      expect(h.bindingRemoved).toHaveBeenCalledWith(first.viewId);
+      await expect(h.invoke(first)).rejects.toThrow();
+      return;
+    }
+    expect(h.bindingRemoved).not.toHaveBeenCalledWith(first.viewId);
+    const pending = h.invoke(first, 'after-idle'); await h.flush();
+    h.service.handle('root__sample', { type: 'ui-action-result', viewId: first.viewId,
+      invocationId: 'after-idle', result: { status: 'completed' } });
+    expect(await pending).toMatchObject({ status: 'completed' });
+    h.service.release('phone', 'live');
+    expect(h.bindingRemoved).toHaveBeenCalledWith(first.viewId);
+    await expect(h.invoke(first, 'after-release')).rejects.toThrow();
+  });
   // 4.3: sequence belongs to accepted intent, never asynchronous plugin replies.
   // Unit: real service invokes and forged/missing destinations, absent in old effects tests.
   it('issues navigation for its own declared view with source intent order and at-most-once invocation', async () => {

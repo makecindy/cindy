@@ -360,8 +360,8 @@ export class PluginUiService {
       let binding = this.bindings.get(this.bindingKeys.get(key) ?? '');
       if (!binding || !this.current(binding)) {
         if (binding) this.removeBinding(binding);
-        // Expire abandoned read projections; there is no write replay or stored business state.
-        for (const b of [...this.bindings.values()]) if (Date.now() - b.touched > 300_000) this.removeBinding(b);
+        // Live subscriptions own their lifetime; only unowned reads expire by age.
+        for (const b of [...this.bindings.values()]) if (!b.subscriptionId && Date.now() - b.touched > 300_000) this.removeBinding(b);
         if (this.bindings.size >= 1024) throw new PluginUiError('UNSUPPORTED_CAPABILITY', 'UI view budget exhausted');
         binding = { id: randomUUID(), key, instanceId: instance.id, token: current.token, controller,
           contribution, command, shortcutId: command ? commandShortcutId(instance, command.id) : undefined,
