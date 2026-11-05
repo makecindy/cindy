@@ -17,7 +17,11 @@ import {
   parseChatQuoteSegments,
   type ChatQuote,
 } from '@cindy/maker-shared/chat-quotes';
-import { serializeAtResource, type ComposerAtResourceItem } from '@cindy/maker-shared/composer-palette';
+import {
+  serializeAtResource,
+  slashCommandDisplayLabel,
+  type ComposerAtResourceItem,
+} from '@cindy/maker-shared/composer-palette';
 import { parseProjectDeepLinkUrl, parseSessionDeepLinkUrl } from '@/session/sessionLinks';
 import {
   buildSentInlineTokens,
@@ -386,6 +390,52 @@ export function mentionComposerNode(
 export function slashCommandTextNode(commandName: string): ComposerTextNode {
   const value = `/${commandName}`;
   return { type: 'text', text: value, slashCommand: value };
+}
+
+/** A sent slash command shown by its human label while editing (`/pr` ← `/cindy-plugin-cindy-github:pr`). */
+export interface ComposerSlashRuntimeAlias {
+  display: string;
+  wire: string;
+}
+
+/**
+ * Show confirmed runtime aliases (`/skill:git`, `/cindy-plugin-<plugin>:pr`) by
+ * the label the user typed. Returns the aliases so submit can put the exact
+ * wire form back with {@link restoreComposerSlashRuntimeAliases}.
+ */
+export function displayComposerSlashRuntimeAliases(document: ComposerDocument): {
+  document: ComposerDocument;
+  aliases: ComposerSlashRuntimeAlias[];
+} {
+  const aliases: ComposerSlashRuntimeAlias[] = [];
+  const nodes = document.nodes.map((node): ComposerNode => {
+    if (node.type !== 'text' || !node.slashCommand || node.slashCommand !== node.text) return node;
+    const display = slashCommandDisplayLabel(node.text);
+    if (display === node.text) return node;
+    aliases.push({ display, wire: node.text });
+    return { type: 'text', text: display, slashCommand: display };
+  });
+  return aliases.length > 0
+    ? { document: normalizeComposerDocument({ version: 1, nodes }), aliases }
+    : { document, aliases };
+}
+
+/** Put the wire form back on slash commands still confirmed with their display label. */
+export function restoreComposerSlashRuntimeAliases(
+  document: ComposerDocument,
+  aliases: readonly ComposerSlashRuntimeAlias[],
+): ComposerDocument {
+  if (aliases.length === 0) return document;
+  const wireByDisplay = new Map(aliases.map((alias) => [alias.display.toLowerCase(), alias.wire]));
+  let changed = false;
+  const nodes = document.nodes.map((node): ComposerNode => {
+    if (node.type !== 'text' || !node.slashCommand || node.slashCommand !== node.text) return node;
+    const wire = wireByDisplay.get(node.text.toLowerCase());
+    if (!wire) return node;
+    changed = true;
+    return { type: 'text', text: wire, slashCommand: wire };
+  });
+  return changed ? normalizeComposerDocument({ version: 1, nodes }) : document;
 }
 
 /** One of the teammate's todos, quoted from its 近况 sheet (same wire as Desktop's todo chip). */

@@ -394,7 +394,10 @@ import {
   todoReferenceComposerNode,
   slashCommandTextNode,
   textComposerDocument,
+  displayComposerSlashRuntimeAliases,
+  restoreComposerSlashRuntimeAliases,
   type ComposerDocument,
+  type ComposerSlashRuntimeAlias,
   type ComposerVoiceDraftUpdate,
 } from '@/session/composerDocument';
 import { boundAgentReferenceText } from '@cindy/maker-shared/agent-input-projection';
@@ -847,6 +850,8 @@ interface MessageEditingState {
   stashedAttachments: RemoteSerializedAttachment[];
   /** null = 预览尚未返回或失败(不提示、不阻塞发送)。 */
   rollbackHint: MessageEditRollbackHint;
+  /** 编辑时只显示 `/pr`;重发前换回原消息里的线路名(`/cindy-plugin-…:pr`、`/skill:git`)。 */
+  slashRuntimeAliases: ComposerSlashRuntimeAlias[];
 }
 
 /**
@@ -8153,22 +8158,25 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       void maker.input.stop(sessionId).catch(() => undefined);
     }
     const previous = messageEditingRef.current;
+    const { document: editDocument, aliases: slashRuntimeAliases } =
+      displayComposerSlashRuntimeAliases(draft.document);
     const next: MessageEditingState = {
       clientId,
       stashedDocument: previous?.stashedDocument ?? composerDocumentRef.current,
       stashedAttachments: previous ? previous.stashedAttachments : [...attachmentsRef.current],
       rollbackHint: null,
+      slashRuntimeAliases,
     };
     messageEditSeqRef.current += 1;
     messageEditingRef.current = next;
     setMessageEditing(next);
     setError(null);
-    applyComposerDocument(draft.document, { persist: false });
+    applyComposerDocument(editDocument, { persist: false });
     const files = buildMessageEditAttachments(draft.attachments, `message-edit:${clientId}`);
     attachmentsRef.current = files;
     setAttachments(files);
     setAttachmentError(null);
-    composerInputRef.current?.applyDocumentAndSetSelectionToEnd(draft.document);
+    composerInputRef.current?.applyDocumentAndSetSelectionToEnd(editDocument);
   }, [applyComposerDocument, canUseComposer, deviceId, getPendingUploadCount, maker, sessionId, t]);
 
   // 静默预览文件回滚影响(桌面编辑框同款提示);运行中会被拒绝,等停下后再跑一次。
@@ -8279,7 +8287,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       setMessageEditing(null);
       // 旧回合已在被控端软删:先让替代消息进入持久发件箱,再刷新消息窗口;
       // 同步只是尽力而为,失败不得打断重发与草稿恢复。
-      const accepted = await send({ documentOverride: document, messageEditResend: true });
+      const accepted = await send({
+        documentOverride: restoreComposerSlashRuntimeAliases(document, editing.slashRuntimeAliases),
+        messageEditResend: true,
+      });
       await requestSync({ reason: 'rewind-commit', replaceMessages: true }).catch(() => undefined);
       if (outboxSessionAliveRef.current !== sessionId) {
         // 离开任务后 send 已清空该任务的草稿:把暂存草稿写回它自己的存储。
