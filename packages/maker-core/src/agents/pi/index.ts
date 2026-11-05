@@ -153,6 +153,7 @@ import {
   appendAutoReviewUserIntent,
   normalizeAutoReviewUserIntent,
   createAutoReviewActionContext,
+  createAutoReviewAgentTextTracker,
   type AutoReviewUserIntent,
   composeAutoReviewIntentWithClarification,
   isSystemPermissionDenialReason,
@@ -4172,6 +4173,15 @@ export class PiAgent extends BaseAgent {
     }
 
     const queue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
+    // Reviewer context only: the agent's public text and tool calls, in the order the user sees them.
+    const autoReviewAgentText = createAutoReviewAgentTextTracker();
+    {
+      const push = queue.push.bind(queue);
+      queue.push = (event) => {
+        autoReviewAgentText.observe(event);
+        return push(event);
+      };
+    }
     const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger);
     ctx.getPriceVariant = opts.getPriceVariant;
     ctx.resolveUsagePriceVariant = opts.resolveUsagePriceVariant;
@@ -4241,6 +4251,7 @@ export class PiAgent extends BaseAgent {
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
     const setAutoReviewIntent = (content: AutoReviewUserIntent, source = { authority: currentAutoReviewAuthority }): void => {
       autoReviewActionContext.advance(typeof content !== 'string' && JSON.stringify(currentAutoReviewAuthority ?? null) === JSON.stringify(source.authority ?? null));
+      autoReviewAgentText.beginUserInput();
       currentAutoReviewIntent = normalizeAutoReviewUserIntent(content);
       autoReviewIntentInitialized = true;
       currentAutoReviewAuthority = source.authority && { ...source.authority };
@@ -4361,6 +4372,7 @@ export class PiAgent extends BaseAgent {
         model: mutableModel,
         userIntent: currentAutoReviewIntent,
         precedingBlockedActions: autoReviewActionContext.precedingBlockedActions,
+        ...((agentContext) => agentContext ? { agentContext } : {})(autoReviewAgentText.snapshot()),
         ...(currentAutoReviewAuthority ? { authorizationContext: currentAutoReviewAuthority } : {}),
         action,
         // 设备托管：路径在任务所在电脑上，以那台电脑的真实工作目录为准。

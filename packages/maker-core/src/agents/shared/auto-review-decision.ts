@@ -273,6 +273,8 @@ export interface AutoReviewRequest {
   userIntent: AutoReviewUserIntent;
   /** Actual blocked calls preceding the latest user input; reference evidence, never consent. */
   precedingBlockedActions?: readonly ReviewableAction[];
+  /** The agent's own public words (no thinking, no tool output); untrusted, never consent. */
+  agentContext?: AutoReviewAgentContext;
   /** Host-verified requester authority, separate from model-visible/quoted text. */
   authorizationContext?: {
     requesterAuthority: 'owner' | 'guest' | 'unknown';
@@ -640,6 +642,66 @@ export function appendAutoReviewUserIntent(previous: AutoReviewUserIntent | unde
     intentProjection.append(hasAttachments ? '' : previous, latest),
     sendOpts?.[MAIN_OWNED_SEND_CONTEXT]?.autoReviewReferences,
   );
+}
+
+export interface AutoReviewAgentContext {
+  /** The agent's last public message before the user's current message: what a short "yes" answers. */
+  lastReplyToUser?: string;
+  /** The agent's latest public explanation and the tool's own description for this call. */
+  statedPurpose?: string;
+}
+
+/** Each field is kept at its end, where the question or the step being started usually sits. */
+export const MAX_AUTO_REVIEW_AGENT_CONTEXT_CHARS = 2_000;
+
+function tailOf(text: string): string {
+  const trimmed = text.trim();
+  return trimmed.length <= MAX_AUTO_REVIEW_AGENT_CONTEXT_CHARS
+    ? trimmed
+    : `…${trimmed.slice(-(MAX_AUTO_REVIEW_AGENT_CONTEXT_CHARS - 1))}`;
+}
+
+/**
+ * Tracks the agent's public text in the main scope, mirroring the tool-loop explanation: text
+ * accumulates, the first text after a tool call starts a new explanation, and a final text block
+ * replaces it. Subagent and background text is ignored, so it is never attributed to a main call.
+ */
+export function createAutoReviewAgentTextTracker() {
+  let explanation = '';
+  let afterTool = false;
+  let lastReplyToUser = '';
+  // The intent can be re-resolved for the same input; only new text moves the reply forward.
+  let textSinceInput = false;
+  return {
+    observe(event: { type: string; data?: unknown; turnScope?: string; agentMeta?: Record<string, unknown> | null }): void {
+      if (event.turnScope === 'background' || event.agentMeta?.parentUuid || event.agentMeta?.parentToolUseId) return;
+      if (event.type === 'tool_use') { afterTool = true; return; }
+      if (event.type !== 'text') return;
+      const data = event.data && typeof event.data === 'object' ? event.data as { text?: unknown; isFinal?: unknown; runtimeActivity?: unknown } : {};
+      if (typeof data.text !== 'string' || data.runtimeActivity === 'snapshot') return;
+      if (afterTool || data.isFinal === true) explanation = '';
+      afterTool = false;
+      textSinceInput = true;
+      // Twice the sent budget is enough to keep an exact tail after trimming.
+      explanation = (explanation + data.text).slice(-2 * MAX_AUTO_REVIEW_AGENT_CONTEXT_CHARS);
+    },
+    /** A new user input: the latest text becomes the message it replies to. */
+    beginUserInput(): void {
+      if (textSinceInput) lastReplyToUser = explanation;
+      textSinceInput = false;
+      explanation = '';
+      afterTool = false;
+    },
+    snapshot(toolDescription?: unknown, mainScope = true): AutoReviewAgentContext | undefined {
+      const purpose = [typeof toolDescription === 'string' ? toolDescription.trim() : '', mainScope ? explanation.trim() : '']
+        .filter(Boolean).join('\n');
+      const context = {
+        ...(lastReplyToUser.trim() ? { lastReplyToUser: tailOf(lastReplyToUser) } : {}),
+        ...(purpose ? { statedPurpose: tailOf(purpose) } : {}),
+      };
+      return Object.keys(context).length ? context : undefined;
+    },
+  };
 }
 
 /** Keep actual denied actions across one user follow-up, without assistant explanations or grants. */

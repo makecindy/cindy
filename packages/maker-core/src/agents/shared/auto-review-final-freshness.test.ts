@@ -30,7 +30,7 @@ for (const engine of ['claude-code', 'codex', 'pi']) {
    delegate.prepareRequest=async request=>{if(++calls===2){entered();await barrier;}return request;};
    const record=vi.fn();
    const deps={withAutoReviewContext,opts:{sessionId:'s',workingDir:'/work'},mutableProviderId:undefined,mutableModel:'m',mutableCatalogModel:'m',
-    autoReviewActionContext:{precedingBlockedActions:[],record},autoReviewDecisionCache:new Map(),
+    autoReviewActionContext:{precedingBlockedActions:[],record},autoReviewAgentText:{snapshot:()=>undefined},autoReviewDecisionCache:new Map(),
     resolveAutoReviewDecision:vi.fn(async()=>({verdict:'allow'})),runtimeWorkspaceRoots:()=>['/work'],runtimeWritableRoots:()=>['/work'],
     sessionReviewPlatform:'linux',mutableExtraDirs:[],mutableWritableDirs:[]};
    const runtime=new Function(...Object.keys(deps),script).call({deps:{reviewAutoPermissionAction:delegate}},...Object.values(deps));

@@ -903,6 +903,15 @@ describe('Auto-review wiring: lightweight reviewer controls gray actions', () =>
     await handle.close();
   });
 
+  it("passes the Bash description as the stated purpose, and omits it when absent", async () => {
+    const { handle, canUseTool, reviewAutoPermissionAction } = await startSession('auto', { reviewVerdict: 'allow' });
+    await canUseTool('Bash', { command: 'npm install left-pad', description: 'Install the missing dependency' }, { toolUseID: 't-desc' });
+    await canUseTool('Bash', { command: 'npm install right-pad' }, { toolUseID: 't-plain', agentID: 'sub-1' } as never);
+    expect(reviewedRequest(reviewAutoPermissionAction, 0).agentContext).toEqual({ statedPurpose: 'Install the missing dependency' });
+    expect(reviewedRequest(reviewAutoPermissionAction, 1)).not.toHaveProperty('agentContext');
+    await handle.close();
+  });
+
   it('reviewer block → denies silently and tells the agent to choose a safer action', async () => {
     const { handle, canUseTool, seen } = await startSession('auto', {
       reviewVerdict: 'block',

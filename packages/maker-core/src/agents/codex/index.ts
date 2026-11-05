@@ -124,6 +124,7 @@ import {
   appendAutoReviewUserIntent,
   normalizeAutoReviewUserIntent,
   createAutoReviewActionContext,
+  createAutoReviewAgentTextTracker,
   type AutoReviewUserIntent,
   isSystemPermissionDenialReason,
   formatPermissionDenial,
@@ -3678,6 +3679,15 @@ assertRouteCurrent();
     }
 
     const eventQueue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
+    // Reviewer context only: the agent's public text and tool calls, in the order the user sees them.
+    const autoReviewAgentText = createAutoReviewAgentTextTracker();
+    {
+      const push = eventQueue.push.bind(eventQueue);
+      eventQueue.push = (event) => {
+        autoReviewAgentText.observe(event);
+        return push(event);
+      };
+    }
     const usageTracker = new UsageTracker();
     const translatorRt: CodexRuntimeState = newCodexRuntimeState();
     const liveUsageSnapshot = () => {
@@ -4850,6 +4860,7 @@ assertRouteCurrent();
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
     const setAutoReviewIntent = (content: AutoReviewUserIntent, source = { authority: currentAutoReviewAuthority }): void => {
       autoReviewActionContext.advance(typeof content !== 'string' && JSON.stringify(currentAutoReviewAuthority ?? null) === JSON.stringify(source.authority ?? null));
+      autoReviewAgentText.beginUserInput();
       currentAutoReviewIntent = normalizeAutoReviewUserIntent(content);
       autoReviewIntentInitialized = true;
       currentAutoReviewAuthority = source.authority && { ...source.authority };
@@ -5713,6 +5724,7 @@ assertRouteCurrent();
         model: mutableCatalogModel ?? mutableModel,
         userIntent: currentAutoReviewIntent,
         precedingBlockedActions: autoReviewActionContext.precedingBlockedActions,
+        ...((agentContext) => agentContext ? { agentContext } : {})(autoReviewAgentText.snapshot()),
         ...(currentAutoReviewAuthority ? { authorizationContext: currentAutoReviewAuthority } : {}),
         action,
         workspaceRoots: runtimeWorkspaceRoots().filter(

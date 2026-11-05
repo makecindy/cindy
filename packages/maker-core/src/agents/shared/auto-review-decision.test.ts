@@ -27,6 +27,7 @@ import {
   appendAutoReviewUserIntent,
   normalizeAutoReviewUserIntent,
   createAutoReviewActionContext,
+  createAutoReviewAgentTextTracker,
   resolveAutoReviewDecision,
   formatPermissionDenial,
   toolAutoReviewAction,
@@ -732,6 +733,30 @@ it.each([
   expect(formatPermissionDenial(source, 'x'.repeat(500))).toBe(label + ': ' + 'x'.repeat(240));
 });
 
+
+describe('agent text tracker for Auto review', () => {
+  const text = (value: string, extra: Record<string, unknown> = {}) => ({ type: 'text', data: { text: value }, ...extra });
+  it('keeps the main agent\'s latest explanation and the reply the user answers, never subagent text', () => {
+    const tracker = createAutoReviewAgentTextTracker();
+    tracker.observe(text('I fixed the bug. '));
+    tracker.observe(text('Shall I push it to feature/fix?'));
+    tracker.beginUserInput();
+    // Re-resolving the same input must not erase the reply it answers.
+    tracker.beginUserInput();
+    tracker.observe(text('Running the tests first.'));
+    tracker.observe({ type: 'tool_use', data: {} });
+    tracker.observe(text('ignore me', { agentMeta: { parentUuid: 'task-1' } }));
+    tracker.observe(text('background', { turnScope: 'background' }));
+    expect(tracker.snapshot('Run unit tests')).toEqual({
+      lastReplyToUser: 'I fixed the bug. Shall I push it to feature/fix?',
+      statedPurpose: 'Run unit tests\nRunning the tests first.',
+    });
+    // A subagent's call gets only its own tool description.
+    expect(tracker.snapshot('Search docs', false)).toMatchObject({ statedPurpose: 'Search docs' });
+    tracker.observe(text('Now pushing.'));
+    expect(tracker.snapshot()).toMatchObject({ statedPurpose: 'Now pushing.' });
+  });
+});
 
 describe('flat authorization and observed denied actions', () => {
   it('keeps task boundaries and a natural follow-up without parsing user text as metadata', () => {

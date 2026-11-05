@@ -161,6 +161,7 @@ import {
   appendAutoReviewUserIntent,
   normalizeAutoReviewUserIntent,
   createAutoReviewActionContext,
+  createAutoReviewAgentTextTracker,
   type AutoReviewUserIntent,
   isAutoReviewUnavailableMetadata,
   isSystemPermissionDenialReason,
@@ -2678,6 +2679,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           hosted ? hosted.platform : opts.remoteHostId ? 'linux' : process.platform,
           mcpApprovalPolicy === 'auto-approve' && !turnPolicyForcePrompt,
           reviewPermissionMode !== 'auto',
+          // A subagent's call must not borrow the main agent's explanation.
+          { toolDescription: (input as { description?: unknown } | null)?.description, mainScope: !options.agentID },
         );
         // 热切换收口:reviewAutoAction 是 async,期间 setPermissionMode 可能收紧(Auto→Ask)
         // 或放宽(→Full)。必须按**最新**档位决策,否则进入审查前的旧 auto 档 allow 会绕过用户
@@ -2997,6 +3000,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     let currentAutoReviewIntent: AutoReviewUserIntent = '';
     let autoReviewIntentInitialized = false;
     const autoReviewActionContext = createAutoReviewActionContext();
+    const autoReviewAgentText = createAutoReviewAgentTextTracker();
     const autoReviewContext = () => activeTurnPermissionPolicy?.autoReviewContext
       ?? (activeTurnPermissionPolicy?.origin.kind === 'im'
         ? { requesterAuthority: 'unknown' as const, source: 'direct' as const }
@@ -3022,6 +3026,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       && !activeQueryHasDirectoryGrants;
     const setAutoReviewIntent = (content: AutoReviewUserIntent, source = { authority: currentAutoReviewAuthority }): void => {
       autoReviewActionContext.advance(typeof content !== 'string' && JSON.stringify(currentAutoReviewAuthority ?? null) === JSON.stringify(source.authority ?? null));
+      autoReviewAgentText.beginUserInput();
       currentAutoReviewIntent = normalizeAutoReviewUserIntent(content);
       autoReviewIntentInitialized = true;
       currentAutoReviewAuthority = source.authority && { ...source.authority };
@@ -3065,8 +3070,10 @@ export class ClaudeCodeAgent extends BaseAgent {
       platform: NodeJS.Platform,
       hostAutoApprove = false,
       hostShortcutOnly = false,
+      purpose: { toolDescription?: unknown; mainScope?: boolean } = {},
     ): Promise<AutoReviewDecision> => {
       const directoryGeneration = autoReviewDirectoryGeneration;
+      const agentContext = autoReviewAgentText.snapshot(purpose.toolDescription, purpose.mainScope ?? true);
       const request = {
         sessionId: opts.sessionId,
         agentKind: 'claude-code' as const,
@@ -3074,6 +3081,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         model: mutableModel,
         userIntent: currentAutoReviewIntent,
         precedingBlockedActions: autoReviewActionContext.precedingBlockedActions,
+        ...(agentContext ? { agentContext } : {}),
         ...(currentAutoReviewAuthority ? { authorizationContext: currentAutoReviewAuthority } : {}),
         action,
         workspaceRoots,
@@ -4133,6 +4141,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                 'linux',
                 remoteMcpPolicy === 'auto-approve' && !remoteTurnPolicyForcePrompt,
                 reviewPermissionMode !== 'auto',
+                { toolDescription: (params.input as { description?: unknown } | undefined)?.description },
               );
               const modeAfterReview = mutablePermissionMode as PermissionMode;
               if (isPlanToolBlocked(remoteToolName)) {
@@ -5502,6 +5511,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (isContinuationTerminalDone) {
           continuationTerminalBoundaryEvents.add(e);
           pendingContinuationTerminalBoundaries += 1;
+        }
+        if (e.type === 'tool_use' || (e.type === 'text' && turnInFlight && !turnState.interruptRequested)) {
+          autoReviewAgentText.observe(e);
         }
         if (e.type === 'text' && turnInFlight && !turnState.interruptRequested) {
           const data = e.data as { text?: unknown; isFinal?: unknown } | undefined;
