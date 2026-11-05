@@ -1,4 +1,15 @@
 {
+  "pluginUi": {
+    "renderer": "표시 방식",
+    "original": "원본 내용",
+    "unavailable": "플러그인 화면을 사용할 수 없어 작업이 비활성화되었습니다.",
+    "outcome-unknown": "작업 결과가 확인되지 않았습니다. 플러그인의 최신 상태를 확인하세요.",
+    "rejected": "플러그인이 이 작업을 실행하지 않았습니다. 입력 내용은 유지됩니다.",
+    "draftChanged": "입력이 변경되어 플러그인의 입력 수정이 적용되지 않았습니다.",
+    "editorUnavailable": "현재 입력란을 사용할 수 없어 플러그인의 입력 수정이 적용되지 않았습니다.",
+    "more": "더 보기",
+    "close": "닫기"
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "할당량 새로 고침",
@@ -2321,6 +2332,9 @@
     "agentIsland": {
       "title": "Agent Island",
       "unsupported": "Agent Island를 사용하려면 macOS 14 이상이 필요합니다.",
+      "subtleRemindersLabel": "은은한 알림",
+      "subtleRemindersHint": "새 메시지, 응답이 필요한 항목, 오류가 있으면 아일랜드 아래로 알림 카드를 띄우지 않고 아이콘의 변화로 알려줍니다. 아일랜드를 클릭하면 전체 작업 목록을 볼 수 있습니다.",
+      "subtleRemindersFailed": "알림 설정을 저장하지 못했습니다. 다시 시도해 주세요.",
       "enableLabel": "Agent Island 표시",
       "enableHint": "실행 중, 응답 필요, 읽지 않은 완료 작업을 화면 상단에 표시합니다. 사용 설정 시 동종의 시스템 알림을 억제해 이중 알림을 방지합니다.",
       "enableAria": "Agent Island 전환",
@@ -7664,6 +7678,8 @@
         "skill": "AI 어시스턴트에 스킬 \"{{name}}\"을(를) 추가합니다",
         "skillDetail": "스킬은 AI가 자신의 지시로 읽어들여 실행하는 지시 파일입니다. 사용자의 전체 권한으로 Claude Code와 Codex의 모든 프로젝트에 적용되며, 이 플러그인의 샌드박스에 제한되지 않습니다. 플러그인이 활성화된 동안 계속 사용 가능하며, 비활성화하거나 제거하면 삭제됩니다. 특정 폴더에서만 플러그인을 끄더라도 숨겨지지 않습니다. 여기서는 스킬 전문을 미리 볼 수 없습니다 — 신뢰할 수 있는 플러그인만 설치하세요.",
         "routineEvents": "루틴 이벤트",
+        "nativeUi": "작업에 컨트롤 추가",
+        "nativeTabView": "독립 보기 ‘{{title}}’ 열기",
         "mcpUi": "대화에 인터랙티브 페이지 표시",
         "mcpUiDomains": "페이지 연결 도메인: {{domains}}",
         "mcpAppOnly": "페이지 전용",

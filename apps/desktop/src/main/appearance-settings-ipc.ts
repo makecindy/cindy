@@ -23,6 +23,7 @@ import {
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 import { isAppContentWindow } from './windowFocusClassifier.js';
+import { resetRuntimeAppIcon } from './app-icon.js';
 import {
   readAppearanceSettings,
   readAppearanceSettingsState,
@@ -187,8 +188,9 @@ function appearanceForWindow(
   win: BrowserWindow | null,
 ): AppearanceSettings {
   if (isAppContentWindow(win)) return settings;
-  const { customWallpaperUrl: _privateUrl, ...publicSettings } = settings;
-  void _privateUrl;
+  const { customWallpaperUrl: _privateUrl, customWallpaperFallbackUrl: _fallback,
+    uiFontResource: _ui, codeFontResource: _code, bodyFontResource: _body, appIconResource: _icon, ...publicSettings } = settings;
+  void _privateUrl; void _fallback; void _ui; void _code; void _body; void _icon;
   return {
     ...publicSettings,
     wallpaperId: settings.wallpaperId === 'custom' ? 'none' : settings.wallpaperId,
@@ -204,6 +206,11 @@ function broadcast(settings: AppearanceSettings): void {
       // A window may be torn down between enumeration and send.
     }
   }
+}
+
+export function publishAppearanceSettings(settings = readAppearanceSettings()): void {
+  applyAppearanceToWindows(settings);
+  broadcast(settings);
 }
 
 function parsePatch(rawPatch: unknown): AppearanceOverrides {
@@ -229,8 +236,8 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
     if (!allowed.has(key)) throwIpcError('INVALID_PARAMS', `unknown appearance field: ${key}`);
   }
   const patch: AppearanceOverrides = {};
-  if ('uiFamily' in raw) patch.uiFamily = parseFamily(raw.uiFamily, 'uiFamily');
-  if ('codeFamily' in raw) patch.codeFamily = parseFamily(raw.codeFamily, 'codeFamily');
+  if ('uiFamily' in raw) { patch.uiFamily = parseFamily(raw.uiFamily, 'uiFamily'); patch.uiFontResource = undefined; }
+  if ('codeFamily' in raw) { patch.codeFamily = parseFamily(raw.codeFamily, 'codeFamily'); patch.codeFontResource = undefined; }
   if ('terminalFamily' in raw)
     patch.terminalFamily = parseFamily(raw.terminalFamily, 'terminalFamily');
   if ('uiSize' in raw)
@@ -345,6 +352,7 @@ export async function updateAppearanceFromSettings(rawPatch: unknown) {
 }
 export async function resetAppearanceFromSettings() {
   const settings = await resetAppearanceSettings();
+  resetRuntimeAppIcon();
   applyAppearanceToWindows(settings);
   broadcast(settings);
   return settings;

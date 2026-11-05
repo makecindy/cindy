@@ -1,4 +1,5 @@
 import { isSafeGhostRelativePath } from './internal/ghostPath.js';
+import { parseGhostNativeUi, validateWithStoredNativeUi } from './nativeUi.js';
 import { validateWithStoredMcpApps, parseGhostMcpApps, type GhostMcpApps } from './toolUi.js';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from './secretCheck.js';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from './routineEvents.js';
@@ -896,6 +897,8 @@ export const GHOST_SETUP_KV_KEY_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 
 /** 已校验的 ghost.json 协议文档；Desktop 会再投影成无 slots 的运行时模型。 */
 export interface GhostManifest {
+  /** Optional native Cindy UI contributions; unrelated to MCP Apps. */
+  ui?: unknown;
   /** Optional MCP Apps resources and links to existing tools. */
   mcpApps?: unknown;
   /** Host-owned mail editor; providers supply mailbox adapters only. */
@@ -1205,6 +1208,7 @@ function isGhostManifestReservedRecordKey(value: string): boolean {
 }
 
 const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
+  'ui',
   'mcpApps',
   'routineEvents',
   'models',
@@ -1400,7 +1404,7 @@ function dropEmptyLegacyCapabilitySlots(
 /** Historical persisted data only; new packages must use validateGhostManifest. */
 export function validateStoredGhostManifest(value: unknown):
   { ok: true; manifest: GhostManifest } | { ok: false; reason: string } {
-  return validateWithStoredMcpApps(value, validateGhostManifest);
+  return validateWithStoredNativeUi(value, raw => validateWithStoredMcpApps(raw, validateGhostManifest));
 }
 
 export function validateGhostManifest(value: unknown): ManifestValidation {
@@ -1408,6 +1412,8 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
   if (!preparation.ok) return preparation;
   const prepared = preparation.prepared;
   const raw = prepared.raw;
+  const ui = raw.ui === undefined ? undefined : parseGhostNativeUi(raw.ui);
+  if (ui === null) return { ok: false, reason: 'ui 必须声明合法的 version 与唯一的 contributions' };
   if (raw.mail !== undefined && raw.mail !== true) return { ok: false, reason: 'mail 出现时必须是 true' };
   // Keep this shape aligned with maker-shared's runtime reader parser.
   const reader = raw.mailReader as Record<string, unknown> | undefined;
@@ -3909,6 +3915,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
     ok: true,
     manifest: {
       ...prepared.unknownV3Fields,
+      ...(ui !== undefined ? { ui } : {}),
       ...(mcpApps !== undefined ? { mcpApps } : {}),
       schemaVersion: prepared.schemaVersion,
       id: raw.id,

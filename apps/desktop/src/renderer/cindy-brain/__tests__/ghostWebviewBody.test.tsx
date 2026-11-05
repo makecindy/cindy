@@ -28,6 +28,26 @@ const manifest: GhostManifest = {
 };
 
 describe('GhostWebviewBody', () => {
+  // 4.3 unit: real packaged webview body, opaque mount URL and visibility update.
+  // Old main/panel tests do not exercise a registered view or its parameter budget.
+  it('mounts a named view without URL parameters and updates visibility without reloading', async () => {
+    const mount = vi.fn(async () => ({ token: 'opaque', sequence: 2, snapshot: {
+      id: 'log', scope: { kind: 'session', sessionId: 'task' }, params: { item: 'private-position' }, generation: 'opaque', visible: true,
+    } }));
+    const update = vi.fn(async () => {}), release = vi.fn(async () => {});
+    vi.stubGlobal('electronAPI', { ghosts: { ui: { tabViews: { ready: async () => {}, onRequest: () => () => {}, mount, update, release } } } });
+    const ghost = { manifest, dir: '/plugins/workspace' };
+    const tabView = { tabId: 'named', id: 'log', sessionId: 'task', visible: true };
+    const { container, rerender, unmount } = render(<GhostWebviewBody ghost={ghost} html="log.html" tabView={tabView} />);
+    await waitFor(() => expect(container.querySelector('webview')).not.toBeNull());
+    const page = container.querySelector('webview');
+    expect(page?.getAttribute('src')).toBe('cindy-ghost://workspace/log.html?cindyView=opaque');
+    rerender(<GhostWebviewBody ghost={ghost} html="log.html" tabView={{ ...tabView, visible: false }} />);
+    await waitFor(() => expect(update).toHaveBeenLastCalledWith(expect.objectContaining({ visible: false, params: { item: 'private-position' } })));
+    expect(container.querySelector('webview')).toBe(page); expect(mount).toHaveBeenCalledOnce();
+    // React unmount can be temporary; only the original tab store confirms close.
+    unmount(); expect(release).toHaveBeenCalledWith('opaque', true);
+  });
   afterEach(() => vi.unstubAllGlobals());
 
   it('drops the panel during its library swap and reloads it afterwards', () => {
