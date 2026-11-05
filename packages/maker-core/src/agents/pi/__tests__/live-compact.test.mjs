@@ -198,6 +198,27 @@ describe('live compact card roles and tool excerpts (1.0.3-1.0.5)', () => {
     }
   });
 
+  it('deletes nothing when the eviction plan cannot get under the cap', () => {
+    // 受保护文件占住额度:删光其余候选也装不下新备份。这时不能先删再报失败 ——
+    // 已有卡片会指向被删掉的原文。
+    const dir = mkdtempSync(join(tmpdir(), 'spine-nofit-'));
+    try {
+      const kept = join(dir, 'c.txt');
+      writeFileSync(kept, 'k'.repeat(700));
+      writeFileSync(join(dir, 'a.txt'), 'x'.repeat(200));
+      writeFileSync(join(dir, 'b.txt'), 'y'.repeat(200));
+      const older = new Date(2026, 0, 1);
+      utimesSync(join(dir, 'a.txt'), older, older);
+      utimesSync(join(dir, 'b.txt'), older, older);
+      const result = rotateShadow({ dir, incomingBytes: 600, protectPath: kept, cap: 1000 });
+      expect(result.ok).toBe(false);
+      expect(result.deleted).toBe(0);
+      expect(readdirSync(dir).sort()).toEqual(['a.txt', 'b.txt', 'c.txt']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('drops the raw snapshot record together with the snapshot it describes', () => {
     const dir = mkdtempSync(join(tmpdir(), 'spine-meta-'));
     try {

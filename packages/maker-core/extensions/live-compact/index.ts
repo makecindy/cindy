@@ -1280,11 +1280,24 @@ export function rotateShadow(options: {
     return { ok: true, deleted: 0, freed: 0, used, cap, oversize: false };
   }
   const low = Math.floor(cap * 0.8);
+  const candidates = files.filter((file) => !protect.has(resolve(file.path))).sort((left, right) => left.mtimeMs - right.mtimeMs);
+  // 先算出「要删哪些才够」,再一次性删。上游是边算边删:删完才发现装不下(受保护/删不掉的文件
+  // 占满了额度)会带着 ok:false 返回,调用方据此放弃这一刀 —— 但旧备份已经被删,已有卡片就
+  // 指向了空文件。计划阶段能把这种「删了又不切」整段避免掉。
+  const plan: Array<{ path: string; size: number }> = [];
+  let planned = used;
+  for (const file of candidates) {
+    if (planned + options.incomingBytes <= low) break;
+    plan.push(file);
+    planned -= file.size;
+  }
+  if (planned + options.incomingBytes > cap) {
+    // 删光所有候选也装不下:一个都不删。
+    return { ok: false, deleted: 0, freed: 0, used, cap, oversize: false };
+  }
   let deleted = 0;
   let freed = 0;
-  const candidates = files.filter((file) => !protect.has(resolve(file.path))).sort((left, right) => left.mtimeMs - right.mtimeMs);
-  for (const file of candidates) {
-    if (used + options.incomingBytes <= low) break;
+  for (const file of plan) {
     try {
       unlinkSync(file.path);
     } catch {
