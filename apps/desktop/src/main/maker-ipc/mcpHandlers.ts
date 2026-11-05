@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { extractIpcError } from '../../shared/ipcError.js';
 import type { IpcErrorCode } from '../../shared/ipc-errors.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import type { CustomMcpListContext } from '../../shared/customMcp.js';
 import type { McpDuplicateChoice, McpDuplicateReport } from '../../shared/customMcp.js';
 import { BOT_MODEL_CHAIN_MAX, type BotModelRoute } from '../../shared/botModelChain.js';
@@ -102,9 +103,12 @@ export function createCustomMcpServerFromMain(input: unknown, token: string | nu
 }
 
 export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandlerDeps): void {
-  registry.handle(MAKER_INVOKE.MCP_DUPLICATES_LIST, async () =>
-    deps.listDuplicates?.() ?? { connections: [], complete: false });
-  registry.handle(MAKER_INVOKE.MCP_DUPLICATES_CHOOSE, async (_event, input: unknown) => {
+  registry.handle(MAKER_INVOKE.MCP_DUPLICATES_LIST, async (event) => {
+    assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+    return deps.listDuplicates?.() ?? { connections: [], complete: false };
+  });
+  registry.handle(MAKER_INVOKE.MCP_DUPLICATES_CHOOSE, async (event, input: unknown) => {
+    assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
     const parsed = z.object({ id: z.string().regex(/^[a-f0-9]{64}$/),
       choice: z.enum(['cindy', 'claude', 'both']).nullable() }).strict().safeParse(input);
     if (!parsed.success) throwIpcError('INVALID_PARAMS', 'Invalid MCP duplicate choice');

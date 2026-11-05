@@ -85,3 +85,25 @@ it('reports unreadable configuration instead of claiming no duplicates', async (
   expect((await screen.findByRole('status')).textContent).toContain('unavailable');
   expect(api.choose).not.toHaveBeenCalled();
 });
+
+// PR #9055, unit/jsdom: a save rejected for stale credentials refreshes the ID or
+// removes the group; unlike a plain rejection, this must not erase the visible error.
+it.each(['changed', 'removed'] as const)('keeps the save failure visible after the connection is %s', async state => {
+  const api = setup();
+  api.choose.mockImplementation(async () => {
+    if (state === 'changed') api.report.connections[0]!.id = 'c'.repeat(64);
+    else api.report.connections = [];
+    throw new Error('stale');
+  });
+  render(<McpDuplicateNotice />);
+  fireEvent.click(await screen.findByRole('button', { name: choiceName('claude') }));
+  await waitFor(() => expect(api.list).toHaveBeenCalledTimes(2));
+  if (state === 'changed') {
+    await waitFor(() => expect((screen.getByRole('button', { name: choiceName('claude') }) as HTMLButtonElement).disabled).toBe(false));
+    expect(within(screen.getByRole('group', { name: /Magpie/ })).getByRole('alert').textContent).toContain('saveFailed');
+  } else {
+    await waitFor(() => expect(screen.queryByRole('group')).toBeNull());
+    expect(screen.getByRole('alert').textContent).toContain('Magpie');
+    expect(screen.getByRole('alert').textContent).toContain('saveFailed');
+  }
+});

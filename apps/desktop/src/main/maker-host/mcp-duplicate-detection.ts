@@ -72,6 +72,7 @@ export async function detectMcpDuplicates(
     const native = object(config.mcpServers);
     const masked = new Set<string>((Array.isArray(config.disabledMcpServers) ? config.disabledMcpServers : [])
       .filter((name): name is string => typeof name === 'string'));
+    const settingsFiles = new Set([path.join(input.env.CLAUDE_CONFIG_DIR ?? path.join(deps.home, '.claude'), 'settings.json')]);
     if (input.workingDir) {
       const project = object(object(config.projects)[input.workingDir.replace(/\\/g, '/')]
         ?? object(config.projects)[input.workingDir]);
@@ -83,11 +84,31 @@ export async function detectMcpDuplicates(
       // Native project discovery can inherit ancestor .mcp.json files. Be conservative:
       // never apply a user-scope choice to a same-name project connection.
       for (let dir = path.resolve(input.workingDir);;) {
+        settingsFiles.add(path.join(dir, '.claude', 'settings.json'));
+        settingsFiles.add(path.join(dir, '.claude', 'settings.local.json'));
         const scoped = object(await deps.readJson(path.join(dir, '.mcp.json')));
         for (const name of Object.keys(object(scoped.mcpServers))) masked.add(name);
         const parent = path.dirname(dir);
         if (parent === dir) break;
         dir = parent;
+      }
+    }
+    // Re-read inherited restrictions before applying a saved source choice. Name
+    // denials are unambiguous; complex policy/allowlist semantics belong to the CLI.
+    // If we cannot establish availability, never omit Cindy's connection.
+    for (const file of settingsFiles) {
+      const raw = await deps.readJson(file);
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { connections: [], complete: false };
+      const settings = object(raw);
+      if (settings.allowedMcpServers !== undefined || settings.allowManagedMcpServersOnly === true
+        || settings.strictPluginOnlyCustomization !== undefined) return { connections: [], complete: false };
+      if (settings.deniedMcpServers === undefined) continue;
+      if (!Array.isArray(settings.deniedMcpServers)) return { connections: [], complete: false };
+      for (const denied of settings.deniedMcpServers) {
+        const rule = object(denied);
+        if (Object.keys(rule).length !== 1 || typeof rule.serverName !== 'string'
+          || !rule.serverName || rule.serverName.trim() !== rule.serverName) return { connections: [], complete: false };
+        masked.add(rule.serverName);
       }
     }
     const custom = await deps.listCustom();
@@ -120,6 +141,7 @@ export async function detectMcpDuplicates(
 export function resolveMcpDuplicateChoices(report: McpDuplicateReport): {
   skipHostServers: string[]; denyNativeServers: string[];
 } {
+  if (!report.complete) return { skipHostServers: [], denyNativeServers: [] };
   const skipHostServers = new Set<string>();
   const denyNativeServers = new Set<string>();
   for (const group of groupMcpDuplicateConnections(report.connections)) {

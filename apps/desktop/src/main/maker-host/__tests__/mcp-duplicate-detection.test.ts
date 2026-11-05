@@ -22,6 +22,7 @@ function fixture() {
 describe('MCP duplicate suggestions and explicit choices', () => {
   it('suggests router aliases without exposing credentials or changing runtime defaults', async () => {
     const f = fixture();
+    f.files.set(path.join(f.home, '.claude', 'settings.json'), { deniedMcpServers: [{ serverName: 'claude.ai Slack' }] });
     const report = await detectMcpDuplicates(f.deps, { env: {} });
     expect(report.connections).toMatchObject([{ cindyId: 'custom_magpie', claudeName: 'magpie', reason: 'similar', origin: 'http://localhost:3425' }]);
     expect(JSON.stringify(report)).not.toContain('secret');
@@ -92,6 +93,38 @@ describe('MCP duplicate suggestions and explicit choices', () => {
   it('reports malformed native configurations as incomplete instead of no duplicates', async () => {
     const f = fixture(); f.files.set(path.join(f.home, '.claude.json'), { mcpServers: [] });
     expect(await detectMcpDuplicates(f.deps, { env: {} })).toEqual({ connections: [], complete: false });
+  });
+
+  // PR #9055: a native denial added after choosing Claude must not remove the last
+  // available connection. Unit tier; existing disabledMcpServers case misses settings files.
+  it.each(['user', 'custom-config', 'project', 'local'] as const)('rechecks %s settings after a source choice', async scope => {
+    const f = fixture();
+    const workingDir = path.resolve('project');
+    const env = scope === 'custom-config' ? { CLAUDE_CONFIG_DIR: path.resolve('other-config') } : {};
+    if (env.CLAUDE_CONFIG_DIR) f.files.set(path.join(env.CLAUDE_CONFIG_DIR, '.claude.json'), f.config);
+    const input = { env, workingDir };
+    const report = await detectMcpDuplicates(f.deps, input);
+    f.choices[report.connections[0]!.id] = 'claude';
+    expect(resolveMcpDuplicateChoices(await detectMcpDuplicates(f.deps, input)).skipHostServers).toEqual(['custom_magpie']);
+    const file = scope === 'user' || scope === 'custom-config'
+      ? path.join(env.CLAUDE_CONFIG_DIR ?? path.join(f.home, '.claude'), 'settings.json')
+      : path.join(workingDir, '.claude', scope === 'local' ? 'settings.local.json' : 'settings.json');
+    f.files.set(file, { deniedMcpServers: [{ serverName: 'magpie' }] });
+    expect(resolveMcpDuplicateChoices(await detectMcpDuplicates(f.deps, input))).toEqual({ skipHostServers: [], denyNativeServers: [] });
+  });
+
+  it.each([
+    { deniedMcpServers: [{ serverUrl: 'http://localhost:*/*' }] },
+    { allowedMcpServers: [] },
+    { deniedMcpServers: 'invalid' },
+  ])('preserves both sources when inherited policy cannot establish availability: %j', async settings => {
+    const f = fixture();
+    const report = await detectMcpDuplicates(f.deps, { env: {} });
+    f.choices[report.connections[0]!.id] = 'claude';
+    f.files.set(path.join(f.home, '.claude', 'settings.json'), settings);
+    const changed = await detectMcpDuplicates(f.deps, { env: {} });
+    expect(changed.complete).toBe(false);
+    expect(resolveMcpDuplicateChoices(changed)).toEqual({ skipHostServers: [], denyNativeServers: [] });
   });
 
   it('keeps both sides if overlapping pairs have contradictory or incomplete choices', async () => {
