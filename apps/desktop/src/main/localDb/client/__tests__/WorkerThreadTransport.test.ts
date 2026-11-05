@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { buildDbWorkerBundle, createMigratedSmokeDb } from '../../__tests__/dbWorkerTestUtils.js';
@@ -14,6 +15,29 @@ import { runAsBackgroundDbRpc } from '../rpcAdmission.js';
 import { WorkerThreadTransport } from '../WorkerThreadTransport.js';
 
 describe('WorkerThreadTransport', () => {
+  // Regression for review finding P1-2 (PR #8872): the inline worker prelude
+  // must embed every maker-shared constant the tx layer references at runtime,
+  // otherwise `transition` / priority validation crash under
+  // XDT_DB_WORKER_INLINE=true. Static contract check: the real tx cannot be
+  // evaled here because vite's SSR transform rewrites function source to
+  // `__vite_ssr_import_N__` identifiers, which no prelude can satisfy.
+  it('embeds every GROUP_TASK constant referenced by the tx layer into the worker prelude', () => {
+    const txSource = readFileSync(new URL('../../worker/opHandlers/groupTasksTx.ts', import.meta.url), 'utf8');
+    const transportSource = readFileSync(new URL('../WorkerThreadTransport.ts', import.meta.url), 'utf8');
+    const referenced = new Set(txSource.match(/\bGROUP_TASK_[A-Z_]+\b/g) ?? []);
+    const embedded = new Set(
+      [
+        ...transportSource.matchAll(
+          /const (GROUP_TASK_[A-Z_]+) = \$\{JSON\.stringify\((GROUP_TASK_[A-Z_]+)\)\}/g,
+        ),
+      ]
+        .filter((m) => m[1] === m[2])
+        .map((m) => m[1]),
+    );
+    const missing = [...referenced].filter((name) => !embedded.has(name));
+    expect(missing).toEqual([]);
+  });
+
   it('supports worktree reference reads in the inline worker fallback', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-db-worker-refs-'));
     const drizzleDir = path.join(dir, 'drizzle');

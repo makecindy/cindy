@@ -7,6 +7,8 @@ import { runGroupTasksTransaction } from '../worker/opHandlers/groupTasksTx.js';
 import {
   GROUP_TASK_DEPENDENCY_SATISFIED_STATUSES,
   GROUP_TASK_DISPATCHABLE_STATUSES,
+  GROUP_TASK_PRIORITIES,
+  GROUP_TASK_STATUSES,
   GROUP_TASK_TRANSITIONS,
   checkGroupTaskDependencyCycle,
   groupTaskDependencyBlockers,
@@ -52,6 +54,8 @@ const runTaskTagsTransaction = ${runTaskTagsTransaction.toString()};
 const recordMediaSpend = ${recordMediaSpend.toString()};
 const fastModeToStorage = ${fastModeToStorage.toString()};
 const GROUP_TASK_TRANSITIONS = ${JSON.stringify(GROUP_TASK_TRANSITIONS)};
+const GROUP_TASK_STATUSES = ${JSON.stringify(GROUP_TASK_STATUSES)};
+const GROUP_TASK_PRIORITIES = ${JSON.stringify(GROUP_TASK_PRIORITIES)};
 const GROUP_TASK_DISPATCHABLE_STATUSES = ${JSON.stringify(GROUP_TASK_DISPATCHABLE_STATUSES)};
 const GROUP_TASK_DEPENDENCY_SATISFIED_STATUSES = ${JSON.stringify(GROUP_TASK_DEPENDENCY_SATISFIED_STATUSES)};
 const isGroupTaskStatusTerminal = ${isGroupTaskStatusTerminal.toString()};

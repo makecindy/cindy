@@ -80,6 +80,18 @@ describe('group task transactions', () => {
     expect(taskOf(t.id).task.title).toBe('Renamed');
   });
 
+  it('clears description with an explicit empty string but rejects blank-only text', () => {
+    const t = create('g1', 'Describe me', { description: 'first draft' });
+    expect(() =>
+      run({ action: 'update', taskId: t.id, revision: t.revision, description: '   ' }),
+    ).toThrow('INVALID_PARAMS');
+    run({ action: 'update', taskId: t.id, revision: freshRevision(t.id), description: '' });
+    expect(taskOf(t.id).task.description).toBe('');
+    // create 与 update 口径一致：空串即空描述。
+    const created = run({ action: 'create', groupId: 'g1', newId: 't-empty', title: 'E', description: '' });
+    expect(created.detail!.task.description).toBe('');
+  });
+
   it('gates dispatch on unsatisfied same-group dependencies and ignores dangling ids', () => {
     const blocker = create('g1', 'Blocker');
     const gated = create('g1', 'Gated');
@@ -209,14 +221,22 @@ describe('group task transactions', () => {
       'INVALID_PARAMS',
     );
     run({ action: 'runSetStatus', runId: 'r1', status: 'running', now: 101 });
-    run({ action: 'runSetStatus', runId: 'r1', status: 'settled', outcome: 'done-by-agent', now: 102 });
-    const settled = taskOf(t.id).runs.find((r) => r.id === 'r1')!;
+    const settledResult = run({
+      action: 'runSetStatus',
+      runId: 'r1',
+      status: 'settled',
+      outcome: 'done-by-agent',
+      now: 102,
+    });
+    const settled = settledResult.detail!.runs.find((r) => r.id === 'r1')!;
     expect([settled.status, settled.outcome, settled.startedAt, settled.settledAt]).toEqual([
       'settled',
       'done-by-agent',
       101,
       102,
     ]);
+    // runSetStatus 的列表必须按任务所属群返回，而不是把任务 ID 当群 ID 空手而回。
+    expect(settledResult.tasks.map((t) => t.id)).toContain(t.id);
     // settled 是终态。
     expect(() => run({ action: 'runSetStatus', runId: 'r1', status: 'running' })).toThrow(
       'INVALID_PARAMS',

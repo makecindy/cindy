@@ -58,6 +58,15 @@ export function runGroupTasksTransaction(db: Database.Database, raw: unknown): G
     if (value === undefined) return undefined;
     return text(value, max);
   };
+  /**
+   * Description accepts an explicit empty string (clearing) but rejects
+   * blank-only text; the length cap stays identical to `text`.
+   */
+  const descText = (value: unknown, max: number): string => {
+    if (typeof value !== 'string') return fail('INVALID_PARAMS');
+    if (value === '') return '';
+    return text(value, max);
+  };
   const optNumber = (value: unknown): number | undefined => {
     if (value === undefined) return undefined;
     if (typeof value !== 'number' || !Number.isFinite(value)) return fail('INVALID_PARAMS');
@@ -167,11 +176,12 @@ export function runGroupTasksTransaction(db: Database.Database, raw: unknown): G
     if (!row) return fail('NOT_FOUND');
     return row;
   };
-  const statusOfOrNull = (id: string): string | null => {
+  const statusOfOrNull = (id: string): GroupTaskStatus | null => {
     const row = db.prepare('SELECT status FROM group_tasks WHERE id=?').get(id) as
       | { status: string }
       | undefined;
-    return row ? row.status : null;
+    if (!row || !(GROUP_TASK_STATUSES as readonly string[]).includes(row.status)) return null;
+    return row.status as GroupTaskStatus;
   };
   const listTasks = (groupId: string) =>
     db
@@ -304,7 +314,7 @@ export function runGroupTasksTransaction(db: Database.Database, raw: unknown): G
         const groupId = text(body.groupId, ID_MAX);
         requireGroup(groupId);
         const title = text(body.title, TITLE_MAX);
-        const description = optText(body.description, DESCRIPTION_MAX) ?? '';
+        const description = body.description === undefined ? '' : descText(body.description, DESCRIPTION_MAX);
         const priority = body.priority === undefined ? 'normal' : requirePriority(body.priority);
         const newId = text(body.newId, ID_MAX);
         const now = nowOf(body.now);
@@ -345,7 +355,7 @@ export function runGroupTasksTransaction(db: Database.Database, raw: unknown): G
         const row = taskRow(text(body.taskId, ID_MAX));
         requireRevision(row.revision, body.revision);
         const title = optText(body.title, TITLE_MAX) ?? row.title;
-        const description = optText(body.description, DESCRIPTION_MAX) ?? row.description;
+        const description = body.description === undefined ? row.description : descText(body.description, DESCRIPTION_MAX);
         const priority = body.priority === undefined ? row.priority : requirePriority(body.priority);
         const assigneeId =
           body.assigneeId === undefined
@@ -438,7 +448,7 @@ export function runGroupTasksTransaction(db: Database.Database, raw: unknown): G
         } else {
           db.prepare("UPDATE group_task_runs SET status='canceled', settled_at=? WHERE id=?").run(now, runId);
         }
-        return result(run.task_id, detail(run.task_id));
+        return result(taskRow(run.task_id).group_id, detail(run.task_id));
       }
       case 'comment': {
         const row = taskRow(text(body.taskId, ID_MAX));
