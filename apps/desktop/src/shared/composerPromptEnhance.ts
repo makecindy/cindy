@@ -25,13 +25,15 @@ export type ComposerEnhancePromptSuccess = {
 };
 
 /**
- * True when a rewrite looks cut off mid-structure.
+ * True when a rewrite ends inside an unclosed code fence.
  *
- * The utility-model route does not expose the provider's finish reason, so a
- * rewrite that ends inside an unclosed fence is the one truncation shape we
- * can detect reliably; applying it would drop the tail of the prompt.
+ * This is a format check on the answer, not truncation detection: the
+ * utility-model route does not expose the provider's finish reason, so a
+ * response cut off by the token budget cannot be told apart from a complete
+ * one here. A rewrite that breaks the fence would confuse the model, so it is
+ * refused rather than applied.
  */
-export function looksTruncated(text: string): boolean {
+export function hasUnclosedFence(text: string): boolean {
   const fences = text.match(/```/g);
   if (!fences) return false;
   return fences.length % 2 === 1;

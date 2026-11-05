@@ -66,6 +66,19 @@ describe('documentHasStructuredNodes', () => {
     expect(documentHasStructuredNodes(doc)).toBe(true);
   });
 
+  it('accepts a plain draft that only uses hard breaks', () => {
+    const hardBreakDoc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [{ type: 'text', text: 'first line' }, { type: 'hardBreak' }, { type: 'text', text: 'second line' }],
+        },
+      ],
+    };
+    expect(documentHasStructuredNodes(hardBreakDoc)).toBe(false);
+  });
+
   it('treats a missing document as plain', () => {
     expect(documentHasStructuredNodes(undefined)).toBe(false);
   });
@@ -82,15 +95,15 @@ describe('documentFingerprint', () => {
     expect(documentFingerprint(edited)).not.toBe(documentFingerprint(plainDoc));
   });
 
-  it('tells two structurally different drafts with the same words apart', () => {
-    const twoParagraphs = {
+  it('tells two drafts with the same words but a different structure apart', () => {
+    const sameWordsExtraBreak = {
       type: 'doc',
       content: [
         { type: 'paragraph', content: [{ type: 'text', text: 'add a search box' }] },
-        { type: 'paragraph', content: [{ type: 'text', text: 'add a search box' }] },
+        { type: 'paragraph' },
       ],
     };
-    expect(documentFingerprint(twoParagraphs)).not.toBe(documentFingerprint(plainDoc));
+    expect(documentFingerprint(sameWordsExtraBreak)).not.toBe(documentFingerprint(plainDoc));
   });
 });
 

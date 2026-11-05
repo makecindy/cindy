@@ -1,7 +1,7 @@
 import { throwIpcError } from './utils/ipcValidate.js';
 import {
   COMPOSER_ENHANCE_MAX_INPUT_CHARS,
-  looksTruncated,
+  hasUnclosedFence,
 } from '../shared/composerPromptEnhance.js';
 import type { UtilityTextResult } from '../shared/utilityTextResult.js';
 
@@ -104,8 +104,8 @@ export async function enhanceComposerPrompt(
   if (!enhanced) {
     throwIpcError('INTERNAL', 'The enhancement model returned an empty prompt');
   }
-  if (looksTruncated(enhanced)) {
-    throwIpcError('INTERNAL', 'The enhanced prompt was cut off; try a shorter draft');
+  if (hasUnclosedFence(enhanced)) {
+    throwIpcError('INTERNAL', 'The enhanced prompt has an unclosed code fence');
   }
   return { text: enhanced, model: `${result.providerId}/${result.model}` };
 }

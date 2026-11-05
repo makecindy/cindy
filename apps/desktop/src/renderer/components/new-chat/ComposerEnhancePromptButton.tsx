@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Sparkles, Undo2 } from 'lucide-react';
 import type { Editor, JSONContent } from '@tiptap/core';
@@ -46,8 +46,10 @@ interface ComposerEnhancePromptButtonProps {
  *   request was started from: a draft that changed in the meantime, that moved
  *   to another session, or that is mid IME composition keeps the user's text.
  *
- * The pre-enhancement document is kept so the rewrite can be undone, and the
- * undo only applies while the document still is the rewritten one.
+ * Enhancement and undo have separate eligibility. A rewrite may come back as
+ * a list even when the draft was plain text, and the undo for it must stay
+ * available: undo restores a full document, so it is only blocked by the
+ * composer lock, a running request, or a document that changed since.
  */
 export function ComposerEnhancePromptButton({
   editor,
@@ -59,13 +61,20 @@ export function ComposerEnhancePromptButton({
   const [busy, setBusy] = useState(false);
   const [hasDraft, setHasDraft] = useState(false);
   const [structured, setStructured] = useState(false);
-  const [undoState, setUndoState] = useState<{ original: JSONContent; applied: string } | null>(null);
+  const [undoState, setUndoState] = useState<{
+    original: JSONContent;
+    applied: string;
+    editor: Editor;
+    draftKey: string | undefined;
+  } | null>(null);
 
-  // The latest props, read when an answer comes back. Comparing a value
-  // captured in the closure of the request would always match, because the
-  // closure never sees the newer render.
+  // The latest committed props, read when an answer comes back. Comparing a
+  // value captured in the closure of the request would always match, because
+  // the closure never sees the newer render.
   const latest = useRef({ draftKey, editor, disabled });
-  latest.current = { draftKey, editor, disabled };
+  useLayoutEffect(() => {
+    latest.current = { draftKey, editor, disabled };
+  }, [draftKey, editor, disabled]);
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -96,19 +105,24 @@ export function ComposerEnhancePromptButton({
     };
   }, [editor]);
 
-  // A different draft invalidates the undo record.
+  // A different draft, or a different editor instance for the same draft,
+  // invalidates the undo record: it belongs to the document it came from.
   useEffect(() => {
-    setUndoState(null);
-  }, [draftKey]);
+    setUndoState((current) =>
+      current && (current.editor !== editor || current.draftKey !== draftKey)
+        ? null
+        : current,
+    );
+  }, [draftKey, editor]);
 
-  const unavailableReason = useMemo(() => {
+  const enhanceUnavailableReason = useMemo(() => {
     if (disabled) return disabledReason ?? t('newChat.composerEnhance.locked');
     if (structured) return t('newChat.composerEnhance.unsupported');
     return null;
   }, [disabled, disabledReason, structured, t]);
 
   const enhance = useCallback(async () => {
-    if (!editor || busy || unavailableReason) return;
+    if (!editor || busy || enhanceUnavailableReason) return;
     const originalDoc = editor.getJSON();
     const originalFingerprint = documentFingerprint(originalDoc);
     const draft = editor.getText().trim();
@@ -123,13 +137,19 @@ export function ComposerEnhancePromptButton({
         current.editor === editor &&
         current.draftKey === requestKey &&
         !current.disabled &&
+        !editor.isDestroyed &&
         documentFingerprint(editor.getJSON()) === originalFingerprint;
       if (!stillSameDraft || editorIsComposing(editor)) {
         toast.warning(t('newChat.composerEnhance.stale'));
         return;
       }
       editor.commands.setContent(plainTextToComposerDocument(result.text));
-      setUndoState({ original: originalDoc, applied: documentFingerprint(editor.getJSON()) });
+      setUndoState({
+        original: originalDoc,
+        applied: documentFingerprint(editor.getJSON()),
+        editor,
+        draftKey: requestKey,
+      });
       // Leave the rewritten text selected so the user can read it and press
       // Enter to send, or keep editing (same contract as the rename and
       // prompt-suggestion flows: fill back, never send).
@@ -142,11 +162,13 @@ export function ComposerEnhancePromptButton({
     } finally {
       setBusy(false);
     }
-  }, [busy, draftKey, editor, t, unavailableReason]);
+  }, [busy, draftKey, editor, enhanceUnavailableReason, t]);
 
   const undo = useCallback(() => {
-    if (!editor || undoState === null || busy || unavailableReason) return;
+    if (!editor || undoState === null || busy || disabled) return;
     if (!mounted.current || latest.current.disabled) return;
+    if (undoState.editor !== editor) return;
+    if (editor.isDestroyed || editorIsComposing(editor)) return;
     if (documentFingerprint(editor.getJSON()) !== undoState.applied) {
       toast.warning(t('newChat.composerEnhance.undoUnavailable'));
       return;
@@ -155,7 +177,7 @@ export function ComposerEnhancePromptButton({
     setUndoState(null);
     editor.commands.focus();
     editor.commands.selectAll();
-  }, [busy, editor, t, undoState, unavailableReason]);
+  }, [busy, disabled, editor, t, undoState]);
 
   if (!editor || !hasDraft) return null;
 
@@ -164,19 +186,19 @@ export function ComposerEnhancePromptButton({
     'border border-[var(--border-default)] bg-[var(--composer-pill-bg)] text-[var(--composer-pill-icon)]',
     'transition-[background-color,transform] duration-[var(--motion-fast,150ms)] ease-[var(--motion-ease-out)]',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--chat-input-bg)]',
-    !unavailableReason && !busy && 'hover:bg-[var(--model-trigger-hover)] active:scale-[0.98]',
-    (unavailableReason || busy) && 'cursor-not-allowed opacity-40',
+    !enhanceUnavailableReason && !busy && 'hover:bg-[var(--model-trigger-hover)] active:scale-[0.98]',
+    (enhanceUnavailableReason || busy) && 'cursor-not-allowed opacity-40',
   );
 
   const label = busy ? t('newChat.composerEnhance.working') : t('newChat.composerEnhance.enhance');
 
   return (
     <div className="flex shrink-0 items-center gap-1">
-      <Tip text={unavailableReason ?? label} side="top">
+      <Tip text={enhanceUnavailableReason ?? label} side="top">
         <button
           type="button"
           onClick={() => void enhance()}
-          disabled={Boolean(unavailableReason) || busy}
+          disabled={Boolean(enhanceUnavailableReason) || busy}
           aria-label={label}
           className={controlClass}
         >
@@ -188,7 +210,7 @@ export function ComposerEnhancePromptButton({
           <button
             type="button"
             onClick={undo}
-            disabled={busy || Boolean(unavailableReason)}
+            disabled={busy || disabled}
             aria-label={t('newChat.composerEnhance.undo')}
             className={controlClass}
           >
