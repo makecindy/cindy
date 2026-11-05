@@ -289,8 +289,14 @@ describe('PdfPreview lazy page rendering', () => {
       }),
     );
     root.scrollTop = nodes[2].offsetTop + 120;
-    const observer = FakeIntersectionObserver.instances.find((item) => item.targets.has(nodes[1]))!;
-    await act(async () => observer.emit(nodes[1], true));
+    // CI run 41612221680: placeholders can commit before the observer effect runs.
+    // Wait for the prefetch target before exercising the reading-position regression.
+    let observer: FakeIntersectionObserver | undefined;
+    await waitFor(() => {
+      observer = FakeIntersectionObserver.instances.find((item) => item.targets.has(nodes[1]));
+      expect(observer).toBeDefined();
+    });
+    await act(async () => observer!.emit(nodes[1], true));
     const before = root.scrollTop;
     await act(async () => pending.resolve(landscape));
     expect(nodes[1].style.height).toBe('400px');

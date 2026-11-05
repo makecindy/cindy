@@ -21,6 +21,8 @@
     "desktop:settings.help.qnaFeedbackBodyTemplate"
   ],
   "terms": [
+    {"id": "island-subtle-reminders", "status": "proposed", "en": "Subtle reminders", "translations": {"zh-CN": "轻提醒", "zh-TW": "輕提醒", "ja": "控えめな通知", "ko": "은은한 알림", "es": "Avisos discretos", "fr": "Alertes discrètes", "de": "Dezente Hinweise", "pt-PT": "Avisos discretos", "pt-BR": "Avisos discretos", "zh-Hant-x-lzh": "輕提醒", "zh-Hans-x-lzh": "轻提醒"}, "checkCase": false, "note": "灵动岛设置：新消息、待回复和错误通过图标变化提示，不向下弹出通知卡片；手动点击展开完整任务列表保持不变。"},
+    {"id": "gitlab-merge-request", "status": "proposed", "en": "MR", "translations": {"zh-CN": "MR", "zh-TW": "MR", "ja": "MR", "ko": "MR", "fr": "MR", "es": "MR", "de": "MR", "pt-PT": "MR", "pt-BR": "MR", "zh-Hans-x-lzh": "MR", "zh-Hant-x-lzh": "MR"}, "note": "GitLab Merge Request 的平台名称，界面保留 MR 与 !编号；不同于 GitHub PR。"},
     {
       "id": "additional-fees",
       "status": "proposed",
@@ -3471,11 +3473,24 @@
         ]
       },
       "minorityByDesign": {
+        "ko": "英文 Turn 的全词统计还包含大量 turn on/off（启用/关闭），录屏音频错误提示中的 turn it off / turn off audio 也属此义，不应译成表示完整问答往返的 턴。韩语按实际语境表达开关动作；不为提高占比改写开关文案。",
         "de": "英文 Turn 的全词统计还包含大量 turn on/off（启用/关闭），这些不是完整问答往返，不应译成此处术语。仅完整往返使用 Runde，普通界面沿用消息；不为提高占比改写开关文案。",
         "pt-PT": "英文 Turn 的全词统计还包含大量 turn on/off（启用/关闭），这些不是完整问答往返，不应译成此处术语。仅完整往返使用 turno，普通界面沿用消息；不为提高占比改写开关文案。",
         "pt-BR": "英文 Turn 的全词统计还包含大量 turn on/off（启用/关闭），这些不是完整问答往返，不应译成此处术语。仅完整往返使用 turno，普通界面沿用消息；不为提高占比改写开关文案。",
         "tr": "Türkçe yerelleştirme aşamalı olarak tamamlanmaktadır."
       }
+    },
+    {
+      "id": "migration-assistant",
+      "status": "proposed",
+      "en": "Migration Assistant",
+      "translations": {
+        "zh-CN": "迁移助理",
+        "zh-TW": "遷移助理",
+        "ja": "移行アシスタント",
+        "ko": "마이그레이션 지원"
+      },
+      "note": "新电脑从同账号的其他电脑复制插件、技能与设置的功能名（设置 → 通用），用户 2026-10-20 定名「迁移助理」。ja / ko 参照系统同类功能的常见叫法；登记为 proposed，待术语评审。"
     },
     {
       "id": "withdraw-reply",
@@ -3689,7 +3704,7 @@
         "ja": "マニュアル",
         "ko": "매뉴얼"
       },
-      "note": "插件随包提供、由 ghost_manual 按需读取的渐进披露长文资料。它不是权限项，也不等同于已停止新增的 Agent Skill；先登记为 proposed，待插件作者与用户实际使用后再固化。"
+      "note": "插件随包提供、由 ghost_manual 按需读取的渐进披露长文资料。它不是权限项，也不等同于插件随包的 Agent Skill；先登记为 proposed，待插件作者与用户实际使用后再固化。"
     },
     {
       "id": "vision-bridge",
@@ -4151,6 +4166,19 @@
         "ko": "읽음"
       },
       "note": "群聊里「别的成员已经看过这条消息」的状态（消息气泡下的双勾、「N 人已读」）。与「Read」作动词（读取文件）无关；只用于消息读取状态。"
+    },
+    {
+      "id": "merge-conflict",
+      "status": "proposed",
+      "en": "Merge conflict",
+      "translations": {
+        "zh-CN": "合并冲突",
+        "zh-TW": "合併衝突",
+        "ja": "マージコンフリクト",
+        "ko": "병합 충돌"
+      },
+      "checkCase": false,
+      "note": "GitHub PR / GitLab MR 的合并冲突。数据行标签为 Merge / 合并，状态值为 Conflicts / 有冲突；与检查失败及应用崩溃区分。"
     }
   ]
 }

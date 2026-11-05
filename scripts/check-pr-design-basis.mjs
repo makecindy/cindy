@@ -38,7 +38,7 @@ const FIELD_LABEL = '引用的设计规范';
 // 不再让任意 `*-design.md` 因包含 "design.md" 而误过）。Mobile 文字规范在
 // apps/mobile/docs/mobile-design-guide.md，AGENTS.md 要求 Mobile 文字改动引用它。
 const DESIGN_DOC_PATTERN =
-  /(docs\/design-rules\/|(?<![\w-])DESIGN\.md(?![\w-]|\.\w)|(?<![\w-])(?:cindy-design-system|token-decision-table|design-governance|ios-native-design|usage-history-charts|mobile-design-guide)(?:\.md)?(?![\w-]|\.\w))/;
+  /(docs\/design-rules\/|(?<![\w-])DESIGN\.md(?![\w-]|\.\w)|(?<![\w-])(?:cindy-design-system|token-decision-table|design-governance|ios-native-design|usage-history-charts|mobile-design-guide)(?:\.md)?(?![\w-]|\.\w)|(?<![\w-])(?:login-flow|message-link-clickability|container-transform|wallpaper|macos-menu-bar-quota|attachment-preview)\.md(?![\w-]|\.\w))/;
 // 已删除的设计文档：只剔除它自己的名字或路径（可带 docs/design-rules/ 前缀和 .md 后缀）再判断，
 // 否则 `docs/design-rules/figma-component-spec.md §4` 仍会因目录前缀被当作有效依据。
 // 不能按整段非空白字符剔除：中文 Markdown 常把链接无空格连写，会连带删掉紧挨着的有效引用。

@@ -1558,7 +1558,7 @@ export function ProviderConnectionDialog({
     );
     const originalModel = draft?.config.runtimes[agent]?.models.find(model => model.id.trim() === firstModel);
     const automatic = simpleAdding && agent === 'pi' && !rf.catalogPresetId && !rf.requestPath
-      && !originalModel?.api && !originalModel?.piApi && !originalModel?.route;
+      && !originalModel?.api && !originalModel?.piApi && !originalModel?.route && !firstModelConfig?.route;
     const cancellable = simpleAdding && agent === 'pi' && !rf.catalogPresetId
       && (!probeRoute.api || ['openai-completions', 'openai-responses', 'anthropic-messages', 'google-generative-ai'].includes(probeRoute.api));
     const requestId = cancellable ? 'connection-' + Date.now() + '-' + (++detectionRequestSequence) : undefined;
@@ -1605,8 +1605,10 @@ export function ProviderConnectionDialog({
         const api = selected.wireProtocol === 'openai-chat' ? 'openai-completions' as const : selected.wireProtocol;
         setRtSynced(previous => ({ ...previous, [agent]: { ...previous[agent],
           baseUrl: selected.baseUrl, modelRouteBaseUrl: selected.baseUrl, wireProtocol: selected.wireProtocol, requestPath: '',
+          // The selected endpoint is already on the runtime. A duplicate model route
+          // would look user-authored after refresh and block a later Messages switch.
           models: previous[agent].models.map(model => model.id.trim() === firstModel
-            ? { ...model, api, piApi: api, route: { baseUrl: selected.baseUrl, wireProtocol: selected.wireProtocol } } : model),
+            ? { ...model, api, piApi: api } : model),
         } }));
       }
       setTest((prev) => ({
@@ -2742,13 +2744,14 @@ export function ProviderConnectionDialog({
                       </div>
                     ))}
                   </>}
-                    <Button type="button" variant="secondary" className="w-full justify-between [--button-face-bg:transparent]"
+                    <button type="button"
+                      className="flex min-h-8 items-center gap-1 self-start text-13 font-medium text-[var(--settings-section-title)] rounded-full focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                       aria-expanded={manualOpen} aria-controls={fieldId('manual-fields')}
                       onClick={() => setManualOpen(open => !open)}>
+                      <ChevronDown size={14} aria-hidden className={cn('transition-transform', manualOpen && 'rotate-180')} />
                       {t('settings.providers.connection.manualAdd')}
-                      <ChevronDown size={14} aria-hidden className={cn('shrink-0', manualOpen && 'rotate-180')} />
-                    </Button>
-                  {manualOpen && <div id={fieldId('manual-fields')} className="flex flex-col gap-3">
+                    </button>
+                  {manualOpen && <div id={fieldId('manual-fields')} className="flex flex-col gap-3 pl-5">
                   <FormField id={fieldId(`${activeTab}:manualModel`)} label={t(simpleAdding ? 'settings.providers.connection.manualId' : 'settings.providers.connection.manualModel')} error={errorFor(`${activeTab}:manualModel`)}>
                         {(control) => (
                           <SettingsTextInput {...control} surface="ivory" value={manualModel}
@@ -2792,7 +2795,7 @@ export function ProviderConnectionDialog({
               onClick={() => setShowAdvanced(open => !open)}
               aria-expanded={showAdvanced}
               aria-controls={fieldId('advanced-fields')}
-              className="flex min-h-8 items-center gap-1 self-start text-13 font-medium text-[var(--settings-section-title)]"
+              className="flex min-h-8 items-center gap-1 self-start text-13 font-medium text-[var(--settings-section-title)] rounded-full focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
             >
               <ChevronDown size={14} aria-hidden className={cn('transition-transform', showAdvanced && 'rotate-180')} />
               {t('settings.providers.custom.advanced.label')}

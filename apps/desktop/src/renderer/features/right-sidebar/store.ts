@@ -30,6 +30,7 @@ import { isTabHostedHere } from './lib/tabHosting';
 import { isSidebarTabWindow } from '@/lib/sidebarTabWindow';
 import { isTabPoppedOut } from '@/lib/sidebarTabWindowState';
 import { clearTabGroup, setTabGroup, type TabGroupId } from './tabGroups';
+import { clearPluginTabViewPosition } from './pluginTabViewPositions';
 import type { TabKindId, TabState } from './types';
 import type { RsbWindowTabSnapshot } from '../../../shared/rightSidebarWindow';
 import type { SidebarTabReturnSnapshot } from '../../../shared/sidebarTabWindow';
@@ -1036,6 +1037,7 @@ export function hasTabCloseInterceptor(tabId: string): boolean {
  * close tab-op / guest 自关)都汇聚到 closeTab,标记不会随某条路径泄漏。
  */
 function forgetClosedTab(sessionId: string, tabId: string, kind: TabKindId): void {
+  if (kind === 'plugin-tab-view') clearPluginTabViewPosition(tabId);
   const key = tabStateWriteKey(sessionId, tabId);
   patchRevisions.delete(key);
   persistedStateBaselines.delete(key);

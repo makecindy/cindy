@@ -26,7 +26,10 @@ void mountPage({
         queueMicrotask(() => finishOldImageSave?.());
       }),
       maker: {
-    getModelImageInputOverride: async () => ({ value: imageInput, mixed: false }),
+    getModelImageInputOverride: async () => ({
+      value: imageInput ?? (ctx.case === 'image-inherited' ? true : null),
+      mixed: ctx.case === 'image-inherited' && imageInput === null,
+    }),
     setModelImageInputOverride: async (_target: unknown, value: boolean | null) => {
       imageInput = value;
       if (ctx.case === 'owner-repair' && value === false) {
@@ -49,11 +52,14 @@ void mountPage({
     const models = Object.fromEntries((['codex', 'claude-code', 'pi'] as const).map(agent => {
       const meta = resolveModelMetadata(BUNDLED_CATALOG.modelRegistry, 'openai', id, undefined, undefined, agent);
       const model: CatalogModel = {
-        id: agent === 'claude-code' ? `chatgpt/${id}` : id,
+        id: ctx.case === 'image-unknown' ? 'private-undeclared-model' : agent === 'claude-code' ? `chatgpt/${id}` : id,
         name:meta.name ?? id, group:'gpt', nativeApi:'openai-responses',
         contextWindow:meta.contextWindow ?? 272000, contextWindowMax:1050000, maxOutput:128000,
         efforts:meta.efforts ?? [], defaultEffort:meta.defaultEffort ?? 'medium',
-        supportsImageInput:true, supportsFastMode:true,
+        supportsImageInput:ctx.case === 'image-unknown' ? undefined
+          : ctx.case === 'image-unsupported' || (ctx.case === 'image-mixed' && agent === 'claude-code') ? false : true,
+        ...(ctx.case === 'image-inherited' ? { imageInputDefault: { supportsImageInput: agent !== 'codex' } } : {}),
+        supportsFastMode:true,
         supportsUltrafastMode:agent === 'codex' && ctx.case !== 'unavailable' && ctx.case !== 'legacy-sol',
       };
       return [agent, [model]];

@@ -1,0 +1,12 @@
+{
+  "files": [
+    {
+      "path": "docs/dev-rules/server-channel-review.md",
+      "description": "服务器通道调用的重点审查规则：用途、共享容量、累计压力、安全可靠性，以及 P0/P1/P2 缺陷的证据要求。"
+    },
+    {
+      "path": "REVIEW.md",
+      "description": "仓库自动 reviewer 的既有严重度映射；不要将 reviewer 的 P2 真实缺陷与可选优化混为一谈。"
+    }
+  ]
+}

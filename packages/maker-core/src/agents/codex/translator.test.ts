@@ -11,11 +11,15 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 
 import {
   classifyCodexError,
   extractRolloutUpdatePlanFunctionCallEvent,
   newCodexRuntimeState,
+  finalizeCodexCitationText,
+  normalizeCodexFileCitations,
+  stableCitationBoundary,
   translateErrorNotification,
   translateAgentMessageDelta,
   translateAccountRateLimitsUpdated,
@@ -132,6 +136,10 @@ describe('Codex assistant text streaming contract', () => {
       'progress', 'failed-commentary', 'failed-answer',
       'successful-commentary', 'successful-intro', 'successful-answer',
     ]);
+    expect(events.filter(event => (event.data as { assistantSamplingAccepted?: unknown }).assistantSamplingAccepted))
+      .toEqual([expect.objectContaining({ type: 'tool_result_full', source: 'codex',
+        data: expect.objectContaining({ assistantSamplingAccepted: { agentMessageIds: ['progress'] } }) })]);
+    expect(events.filter(event => event.type === 'status')).toHaveLength(0);
     expect(events.find(event => event.type === 'error')).toMatchObject({
       data: { isTerminal: false, willRetry: true, assistantAttemptFailure: {
         threadId: 't1', turnId: 'turn-a', attempt: 1,
@@ -2248,6 +2256,106 @@ describe('extractRolloutUpdatePlanFunctionCallEvent', () => {
 });
 
 describe('codex internal citation 归一化 (#785)', () => {
+  // 测试价值：通过 dedicated delta / completed 生产入口验证每步可见文本与既有全文口径相同。
+  // 依据：maker-core-and-agent-behavior §3.2–3.3，增量化不得丢失、错序或改写正文。
+  // 缺口：既有引用用例以 updated 全文为主，未覆盖专用流在任意字符边界拆分、两类引用嵌套
+  // 与引用剥除后暴露停止串。最小输入包括 ['正文 ', '<|eos|>']，逐尾转换不能吞掉后一段。
+  // tier：unit；复用公开全文转换作为每步参考，不复制解析实现，也不以计时阈值判断通过。
+  // 实测：pnpm --dir packages/maker-core exec vitest run src/agents/codex/translator.test.ts，0.43 秒。
+  it.each([
+    ['普通文本', '正文 😀\n第二行。'],
+    ['文件路径内引号、转义和花括号', String.raw`前 :codex-file-citation{path="/tmp/a{b}\"c.md" line=2} 后`],
+    ['文件路径内嵌引用开头', '前 :codex-file-citation{path="/tmp/:codex-file-citation{a.md"} 后'],
+    ['裸花括号畸形后仍有有效引用', '前 :codex-file-citation{oops{ 后 :codex-file-citation{path="a.md"}。'],
+    ['删除文件引用后拼成 web 开头', 'a\uE200ci:codex-file-citation{}te\uE202x\uE201b'],
+    ['并列文件和 web 引用及截断残尾', '前 :codex-file-citation{path="a.md"} \uE200cite\uE202turn1\uE201 后 \uE200ci'],
+    ['正文后停止标记', '正文 <|eos|><|eo 后'],
+    ['独立混合停止串', ' \n<|eos|> <|eot_id|>\n'],
+    ['仅 web 引用和停止串后恢复正文', '\uE200cite\uE202turn1\uE201<|eos|> 后'],
+    ['无 path 引用和停止串后恢复正文', ':codex-file-citation{line=2}<|eos|> 后'],
+    ['文件路径内嵌 web 引用', '前 :codex-file-citation{path="a\uE200cite\uE202turn1\uE201b.md"} 后'],
+    ['web 引用载荷内嵌文件引用', '前 \uE200cite\uE202:codex-file-citation{path="a.md"}\uE201 后'],
+  ])('dedicated delta 任意切分保持全文转换语义：%s', async (_name, raw) => {
+    const chunkings = Array.from({ length: raw.length + 1 }, (_, split) => [raw.slice(0, split), raw.slice(split)]);
+    chunkings.push(raw.split(''));
+    for (const chunks of chunkings) {
+      const rt = newCodexRuntimeState();
+      const q = createAsyncQueue<AgentEvent>();
+      const ctx = makeCtx(rt);
+      const expected: string[] = [];
+      let accumulated = '';
+      let previousLength = 0;
+      for (const delta of chunks) {
+        translateAgentMessageDelta({ threadId: 't', turnId: 'turn', itemId: 'm', delta }, q, ctx);
+        accumulated += delta;
+        const visible = stripInternalWebCitations(
+          normalizeCodexFileCitations(accumulated.slice(0, stableCitationBoundary(accumulated))),
+        );
+        const next = visible.slice(previousLength);
+        if (next) expected.push(next);
+        previousLength = visible.length;
+      }
+      translateItemNotification('completed', {
+        threadId: 't', turnId: 'turn', item: { type: 'agentMessage', id: 'm', text: raw },
+      }, q, ctx);
+      // Reusing the identity after completed must start with fresh parser context.
+      translateAgentMessageDelta({ threadId: 't', turnId: 'next', itemId: 'm', delta: '<|eos|>' }, q, ctx);
+      translateAgentMessageDelta({ threadId: 't', turnId: 'next', itemId: 'm', delta: 'answer' }, q, ctx);
+      const events = (await collect(q)).filter(event => event.type === 'text');
+      expect(events, JSON.stringify(chunks)).toEqual([
+        ...expected.map(text => ({ type: 'text', source: 'codex', data: { text, isFinal: false, agentMessageId: 'm' } })),
+        { type: 'text', source: 'codex', data: { text: finalizeCodexCitationText(raw), isFinal: true, isFullText: true, agentMessageId: 'm' } },
+        { type: 'text', source: 'codex', data: { text: '<|eos|>answer', isFinal: false, agentMessageId: 'm' } },
+      ]);
+    }
+  });
+
+  // Long replies exercise repeated prefix commits, unlike the short split-marker cases above.
+  // Unit: verify the actual stream and final calibration retain all 1,000 chunks, without a timing assertion.
+  it('preserves a long mixed-citation reply in the delta stream and completed full text', async () => {
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(newCodexRuntimeState());
+    const chunk = `${'文'.repeat(20)}:codex-file-citation{path="src/index.ts" line=10} \uE200cite\uE202turn1\uE201 后\n`;
+    const visibleChunk = `${'文'.repeat(20)}\`src/index.ts\`  后\n`;
+    for (let i = 0; i < 1_000; i += 1) {
+      translateAgentMessageDelta({ threadId: 't', turnId: 'turn', itemId: 'm', delta: chunk }, q, ctx);
+    }
+    translateItemNotification('completed', {
+      threadId: 't', turnId: 'turn', item: { type: 'agentMessage', id: 'm', text: chunk.repeat(1_000) + '完成。' },
+    }, q, ctx);
+    const events = (await collect(q)).filter(event => event.type === 'text');
+    const deltas = events.filter(event => !(event.data as { isFinal: boolean }).isFinal);
+    expect(deltas.map(event => (event.data as { text: string }).text).join('')).toBe(visibleChunk.repeat(1_000));
+    expect(events.filter(event => (event.data as { isFinal: boolean }).isFinal)).toEqual([
+      { type: 'text', source: 'codex', data: {
+        text: visibleChunk.repeat(1_000) + '完成。', isFinal: true, isFullText: true, agentMessageId: 'm',
+      } },
+    ]);
+  });
+
+  // The existing divergent snapshot test contains only plain text; this one retains a pending citation
+  // across the rejected branch and checks final calibration, not just the internal parser cursor.
+  it('keeps a pending citation on the accepted delta branch until completed calibrates a divergent snapshot', async () => {
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(newCodexRuntimeState());
+    const send = (delta: string) => translateAgentMessageDelta({ threadId: 't', turnId: 'turn', itemId: 'm', delta }, q, ctx);
+    send('前 :codex-file-citation{path="delta');
+    translateItemNotification('updated', {
+      threadId: 't', turnId: 'turn', item: { type: 'agentMessage', id: 'm', text: '前 :codex-file-citation{path="other.md"} 分叉' },
+    }, q, ctx);
+    // The snapshot differs inside the pending citation, despite sharing the already visible prefix.
+    // It must not replace that raw prefix or contaminate the parser's retained tail.
+    send('.md"} 后');
+    translateItemNotification('completed', {
+      threadId: 't', turnId: 'turn', item: { type: 'agentMessage', id: 'm', text: '前 :codex-file-citation{path="final.md"} 最终' },
+    }, q, ctx);
+    expect((await collect(q)).filter(event => event.type === 'text').map(event => event.data)).toEqual([
+      { text: '前 ', isFinal: false, agentMessageId: 'm' },
+      { text: '`delta.md` 后', isFinal: false, agentMessageId: 'm' },
+      { text: '前 `final.md` 最终', isFinal: true, isFullText: true, agentMessageId: 'm' },
+    ]);
+  });
+
   it('normalizeCodexFileCitations 把标记换成行内代码路径,畸形标记整个剥掉', async () => {
     const { normalizeCodexFileCitations } = await import('./translator.js');
     expect(

@@ -57,6 +57,8 @@ interface GroupData {
   readReceiptsFill?: boolean;
   /** My messages sent in 面具模式 (a teammate replied in my name): still mine, with the mask avatar beside the bubble. */
   readReceiptsMask?: boolean;
+  /** A group of me and two teammates: a teammate reads a message when its computer takes the execution up. */
+  readReceiptsTeammates?: boolean;
 }
 
 const T0 = 1700000000000;
@@ -131,6 +133,17 @@ function maskReceiptMessages() {
     mask('mk-short-sent', 3, '收到', false),
     mask('mk-long', 4, '先说结论：**需求文档**和**设计稿**都已经就绪，测试用例还在评审中。\n\n- 需求文档已更新到 v3\n- 设计稿已上传到共享目录\n- 测试用例等 QA 的评审意见\n\n如果周五之前 QA 还没有回复，我会在评审会上直接请他们当场确认。', true),
     message({ id: 'mk-own', sequence: 5, isSelf: true, content: '这条是我自己发的。', readByOthers: false, serverSequence: '5', createdAt: T0 + 5 * MINUTE }),
+  ];
+}
+
+/** My messages in a group of only teammates: the first has been taken up by both of them, the second by none yet. */
+function teammateReadMessages() {
+  const mine = (id: string, sequence: number, content: string, readByOthers: boolean) =>
+    message({ id, sequence, isSelf: true, content, readByOthers, serverSequence: String(sequence), createdAt: T0 + sequence * MINUTE });
+  return [
+    mine('tr-read', 1, '帮我整理一下周五评审前要确认的事。', true),
+    mine('tr-sent', 2, '再补一条：设计稿也一起看。', false),
+    mine('tr-mixed', 3, '评审会的结论我整理好了，大家看一下。', true),
   ];
 }
 
@@ -292,7 +305,7 @@ function threadSummaries() {
 
 function groupFrom(data: GroupData) {
   const bubbles = data.bubbles ? bubbleMessages(data.wrappedReactions) : null;
-  const receipts = data.readReceipts ? (data.readReceiptsMask ? maskReceiptMessages() : readReceiptMessages(data.readReceiptsFill)) : null;
+  const receipts = data.readReceipts ? (data.readReceiptsTeammates ? teammateReadMessages() : data.readReceiptsMask ? maskReceiptMessages() : readReceiptMessages(data.readReceiptsFill)) : null;
   const planKind = data.workMentioned ? 'work' : 'talk';
   return {
     id: 'fixture-group',
@@ -415,6 +428,13 @@ void mountPage({
           reactors: async () => ({ ok: true, reactors: [{ actorId: 'me', isSelf: true, name: 'You', formerMember: false }] }),
           readers: async (input: { messageId: string }) => {
             // A very large group: the server gives only the counts.
+            // Teammates read with no time (the server knows only that its computer took the execution up).
+            if (input.messageId === 'tr-read') return { ok: true, readers: { messageId: input.messageId, eligibleCount: 2, readCount: 2, listed: true,
+              readers: [{ actorId: 'a', name: 'Aster', readAt: null, formerMember: false }, { actorId: 'b', name: 'Nova', readAt: null, formerMember: false }] } };
+            // A person and a teammate in one list, in the server's order.
+            if (input.messageId === 'tr-mixed') return { ok: true, readers: { messageId: input.messageId, eligibleCount: 3, readCount: 2, listed: true,
+              readers: [{ actorId: 'g', name: 'Ada', readAt: T0 + 5 * MINUTE, formerMember: false }, { actorId: 'a', name: 'Aster', readAt: null, formerMember: false }] } };
+            if (input.messageId === 'tr-sent') return { ok: true, readers: { messageId: input.messageId, eligibleCount: 2, readCount: 0, listed: true, readers: [] } };
             if (input.messageId === 'rr-list') return { ok: true, readers: { messageId: input.messageId, eligibleCount: 180, readCount: 37, listed: false, readers: [] } };
             const readers = input.messageId === 'rr-many' || input.messageId === 'mk-long'
               ? ['g', 'h', 'c', 'd'].map((actorId, index) => ({ actorId, name: ['Ada', 'Kai', 'Leo', 'Mira'][index]!, readAt: T0 + (5 + index) * MINUTE, formerMember: false }))

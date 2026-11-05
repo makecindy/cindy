@@ -174,6 +174,39 @@ mountPage({ render: () => <div>PDF worker finished</div> });`);
   assert.equal(await inputsChanged(bundle.fingerprints), true);
 });
 
+// E2E: the real settings route previously crashed on import.meta.glob. Verify
+// executed catalog imports, input discovery, and the older revision's membership.
+test('loads eager default globs and preserves compare membership', async () => {
+  const first = path.join(dir, 'one.settings-search.ts');
+  const added = path.join(dir, 'two.settings-search.ts');
+  // A historical module may already be deleted from the worktree; resolving it
+  // must reach the revision overlay before esbuild checks the current filesystem.
+  const deleted = path.join(dir, 'deleted.settings-search.ts');
+  await writeFile(first, 'export default { title: "First" };');
+  await writeFile(added, 'export default { title: "Second" };');
+  const file = await entry('eager-glob', `
+type Entry = { title: string };
+const modules = import.meta.glob<Entry>('./**/*.settings-search.ts', { eager: true, import: 'default' });
+if (Object.values(modules).map(item => item.title).join(',') !== 'First,Second') throw new Error('Glob catalog mismatch');
+mountPage({ render: () => <div>{Object.values(modules).map(item => item.title).join(',')}</div> });`);
+  const definition = adhocPage(file);
+  const scanned = await scanPage(definition);
+  assert.ok(scanned.inputs.includes(first));
+  assert.ok(scanned.inputs.includes(added));
+  const before = await buildPage(definition, {
+    atRef: new Set([file, first, deleted]),
+    has: candidate => candidate === first || candidate === deleted,
+    get: candidate => candidate === first ? 'export default { title: "Original" };'
+      : candidate === deleted ? 'export default { title: "Deleted" };' : undefined,
+    resolve: candidate => candidate === deleted ? deleted : undefined,
+  });
+  assert.ok(before.fingerprints.has(first));
+  assert.ok(before.fingerprints.has(deleted));
+  assert.equal(before.fingerprints.has(added), false);
+  const result = await run(['--entry', file, '--theme', 'light', '--json']);
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+});
+
 test('one run reports each failure kind on its own variant', async () => {
   const file = await entry(
     'matrix',

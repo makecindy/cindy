@@ -6,5 +6,7 @@ export const remotePresentation = requireOptionalNativeModule<{
   clipboardVersion?(): Promise<string>;
   syncClipboard?(json: string, version: string): Promise<string>;
   rotate?(landscape: boolean): Promise<void>;
+  keyFeedback?(): Promise<void>;
+  keyFeedbackForSkin?(skin: string, code: string): Promise<void>;
   playback(enabled: boolean): Promise<void>;
 }>("CindyRemotePresentation");

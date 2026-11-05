@@ -1,3 +1,4 @@
+import { imBotSettings } from './ImBotSection.settings-search';
 /**
  * ImBotSection —— 「IM 机器人」设置页(单页 + 官方/个人纵向分区)。
  *
@@ -145,7 +146,7 @@ export function ImBotSection({ targetGroup }: { targetGroup: ImBotSettingsGroup 
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2">
         <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t('settings.sections.imBot')}
+          {t(imBotSettings.imBot.sectionKey)}
         </h2>
         <span className="rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-[1px] text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">
           {t('settings.imBot.beta')}
@@ -156,7 +157,7 @@ export function ImBotSection({ targetGroup }: { targetGroup: ImBotSettingsGroup 
         {cindyGroupAvailable && (
           <section
             ref={cindySectionRef}
-            id="im-bot-group-cindy"
+            id={imBotSettings.cindy.targetId}
             aria-labelledby="im-bot-group-heading-cindy"
             className="flex scroll-mt-4 flex-col gap-3"
           >

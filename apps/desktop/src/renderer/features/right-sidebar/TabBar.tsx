@@ -157,6 +157,7 @@ const KIND_ICON: Record<BuiltinTabKindId, LucideIcon> = {
   'cindy-make': Wrench,
   'plugin-view': Puzzle,
   'plugin-task': Puzzle,
+  'plugin-tab-view': Puzzle,
 };
 
 const KIND_LABEL_KEY: Record<BuiltinTabKindId, string> = {
@@ -175,6 +176,7 @@ const KIND_LABEL_KEY: Record<BuiltinTabKindId, string> = {
   'cindy-make': 'settings.cindyMake.title',
   'plugin-view': 'rightSidebar.tabs.kinds.pluginView',
   'plugin-task': 'rightSidebar.tabs.kinds.pluginTask',
+  'plugin-tab-view': 'rightSidebar.tabs.kinds.pluginView',
 };
 
 /**

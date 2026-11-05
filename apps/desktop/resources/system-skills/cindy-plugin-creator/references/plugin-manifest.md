@@ -26,6 +26,10 @@
   // 否则请始终声明一个 command。
   "tools": [ /* 见 §3；下方 open_view 必须在此声明 */ ],
   // 可选交互页面，完整示例见 §4.23；需要 minCindyVersion >= 0.1.122-beta
+  // 原生位置的贡献与多个独立视图另用 ui；开发中，完整契约见 plugin-native-ui.md。
+  // "ui": { "version": 1, "contributions": [{ "id": "format", "point": "composer.tools", "scope": "session" }] },
+  // 可并列 tabViews: [{ "id": "logs", "title": "日志", "scope": "session", "page": "views/logs.html" }]。
+  // 只登记可打开的页面，不自动打开；不替代 mainView / panel / taskView。
   "mcpApps": { "ui": {
     "resources": [{ "uri": "ui://records/v1", "file": "ui/page.html" }],
     "tools": { "open_view": { "resourceUri": "ui://records/v1" } }
@@ -166,7 +170,7 @@ node secretBindings key、setup kv key——都不能使用 `__proto__`、`const
 v3 直接用顶层字段声明插件贡献项与自主 Host 能力，不再有 `slots`。带详单的字段是 `tools`、`cindy`、
 `agent`、`panel`、`mainView`、`taskView`、`card`、`subscribe`、`network`、`node`、`preview`、
 `browserExtension`、`skill`；布尔能力写成字面量 `true`：`notify`、`badge`、`confirm`、`fs`、
-`library`、`deviceSync`、`sessionContext`、`pick`、`workspace`。不用的字段直接省略。
+`library`、`deviceSync`、`sessionContext`、`pick`、`workspace`、`liveScreen`(需同时声明 `node`,见 [§4.22.1](plugin-task-view.md#4221-在手机上查看与操作设备画面livescreen-能力))。不用的字段直接省略。
 `deviceSync` 的声明与调用约定见 [§4.10.2 资料同步](plugin-files-and-library.md#4102-同账号电脑间的插件资料同步)。
 邮件插件声明 `mail: true`，调用 Cindy 内置 `cindyMail.register(adapter)`
 （version 1），不生成卡片 HTML、不打包公共流程；纯邮件插件不需要 `card`。
