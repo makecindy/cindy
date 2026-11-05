@@ -24,6 +24,13 @@ export type TurnOrigin = TurnPermissionOrigin;
 export type InteractionSurface = 'desktop' | 'channel-card' | 'headless';
 export type InteractionRouteState = 'waiting' | 'resolved' | 'cancelled';
 
+/**
+ * Channel ask cards must always have a finite lifetime. Permission policies
+ * normally provide a timeout, but a partner owner's bypassed policy can leave
+ * an ask_user_question without one and permanently hold the turn open.
+ */
+export const CHANNEL_ASK_INTERACTION_TIMEOUT_MS = 30 * 60_000;
+
 export interface InteractionRoute {
   sessionId: string;
   turnId: string;
@@ -285,7 +292,10 @@ class SessionInteractionRouter {
     signal?.addEventListener('abort', abort, { once: true });
     this.notifyLifecycle('onStart', request, active?.route);
     this.notifyState(active?.route, 'waiting');
-    const timeoutMs = active?.route.timeoutMs;
+    const timeoutMs = active?.route.timeoutMs
+      ?? (active?.route.interactionSurface === 'channel-card' && request.kind === 'ask_user_question'
+        ? CHANNEL_ASK_INTERACTION_TIMEOUT_MS
+        : undefined);
     const timeout =
       timeoutMs && timeoutMs > 0
         ? setTimeout(() => {

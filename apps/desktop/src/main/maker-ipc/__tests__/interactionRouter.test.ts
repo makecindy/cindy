@@ -300,6 +300,36 @@ describe('session interaction router', () => {
     }
   });
 
+  it('times out channel ask cards even when no permission policy supplies a timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const host = makeSession();
+      const onCancel = vi.fn(() => false);
+      const lease = beginInteractionRoute(host.session, {
+        route: {
+          sessionId: host.session.id,
+          turnId: 'feishu-owner-ask',
+          origin: { kind: 'im', channel: 'feishu' },
+          interactionSurface: 'channel-card',
+        },
+        handle: async () => new Promise<InteractionDecision>(() => {}),
+        onCancel,
+      });
+
+      const decision = host.dispatch(ask('ask-no-policy'));
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+
+      await expect(decision).resolves.toEqual({ kind: 'ask_user_question', answers: {} });
+      expect(onCancel).toHaveBeenCalledWith('ask-no-policy', {
+        kind: 'ask_user_question',
+        answers: {},
+      });
+      lease.release();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('cancels pending requests with a kind-correct safe decision on release', async () => {
     const harness = makeSession();
     let keepPending!: () => void;
