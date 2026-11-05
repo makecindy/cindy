@@ -274,6 +274,15 @@ export function ComposerEnhancePromptButton({
 
   const label = busy ? t('newChat.composerEnhance.working') : t('newChat.composerEnhance.enhance');
 
+  // A disabled icon-only control has to say why (DESIGN §14.6). Undo can be
+  // blocked by a running request or by the composer lock, and neither reason is
+  // the same as "nothing to undo", so the tooltip carries it.
+  const undoUnavailableReason = busy
+    ? t('newChat.composerEnhance.working')
+    : disabled
+      ? (disabledReason ?? t('newChat.composerEnhance.locked'))
+      : null;
+
   return (
     <div className="flex shrink-0 items-center gap-1">
       <Tip text={enhanceUnavailableReason ?? label} side="top">
@@ -288,7 +297,7 @@ export function ComposerEnhancePromptButton({
         </button>
       </Tip>
       {undoState !== null && (
-        <Tip text={t('newChat.composerEnhance.undo')} side="top">
+        <Tip text={undoUnavailableReason ?? t('newChat.composerEnhance.undo')} side="top">
           <button
             type="button"
             onClick={undo}
