@@ -44,6 +44,13 @@ afterEach(() => {
 });
 
 describe('received provider group status', () => {
+  it('keeps the anonymous group size but does not present stale availability as current', async () => {
+    invoke.mockResolvedValue({ ...payload(['available', 'busy']), providerContinuity: { stale: true, remainingMs: 60_000 } });
+    await act(async () => { render(element()); });
+    expect(screen.getAllByText(zhCN.providerShare.received.groupStatus.state.unknown)).toHaveLength(2);
+    expect(screen.getByRole('status').textContent).toBe(zhCN.providerShare.received.groupStatus.unconfirmed);
+    expect(screen.queryByText(zhCN.providerShare.received.groupStatus.state.available)).toBeNull();
+  });
   it.each(Object.keys(catalogs) as Array<keyof typeof catalogs>)('renders real %s copy and only anonymous computer labels', async (locale) => {
     await i18n.changeLanguage(locale);
     await act(async () => { render(element()); });

@@ -79,12 +79,15 @@ export interface ChatExecutionFailure {
 export interface ChatExecution extends ChatExecutionFailure { requester_id?: string; created_at?: string; status: string }
 /** Existing Chat Server plan contract, also consumed by Desktop's chatServer adapter. */
 export interface ChatPlan {
+  activeExecution?: { id: string; status: string };
+  supportsPendingSkip?: boolean;
   id: string; revision: number; creator_id: string; organizer_id: string;
   status: BotGroupPlanView['status']; current_step: number | null; steps: BotGroupPlanView['steps'];
   kind?: 'work' | 'talk'; created_at: string; updated_at: string;
 }
 export type ChatPlanAction = { action: 'start' | 'dismiss' | 'continue' | 'retry' }
-  | { action: 'remove' | 'reassign'; position: number; botId?: string };
+  | { action: 'remove' | 'reassign'; position: number; botId?: string }
+  | { action: 'skip'; position: number; executionId?: string };
 export interface ChatPage { threadRootId?: string; snapshot: ChatSnapshot; messages: ChatMessage[]; before: string | null; failures?: ChatExecutionFailure[]; executions?: ChatExecution[]; historyRevision?: string;
   plans?: ChatPlan[];
   /** Authorized enrichments only; raw card fallback is never a resolved source. */
@@ -134,7 +137,9 @@ function messagePlanId(message: ChatMessage): string | null {
 function chatPlanView(plan: ChatPlan, snapshot: ChatSnapshot, self: string): BotGroupPlanView {
   return { id: plan.id, revision: plan.revision, status: plan.status, organizerBotId: plan.organizer_id,
     organizerName: snapshot.members.find(member => member.id === plan.organizer_id)?.name ?? '',
-    steps: plan.steps, currentStep: plan.current_step, workDir: null, branch: null,
+    supportsPendingSkip: plan.supportsPendingSkip === true,
+    steps: plan.steps.map(step => ({ ...step, ...(step.position === plan.current_step && plan.activeExecution
+      ? { executionId: plan.activeExecution.id, executionStatus: plan.activeExecution.status } : {}) })), currentStep: plan.current_step, workDir: null, branch: null,
     ...(plan.kind ? { kind: plan.kind } : {}),
     canManage: !snapshot.room.archived && !snapshot.room.dissolved_at && (plan.creator_id === self || !!chatGroupManager(snapshot, self)),
     // Direct sends do not yet use the computer's plan-comment/arrangement pipeline.
@@ -309,6 +314,12 @@ function chatMemberIdentity(member: ChatMember, members: readonly ChatMember[]) 
   return { botId: member.id, name: memberName(member, members), ...chatMemberAvatar(member.groupAvatar ?? member.avatar ?? member.defaultAvatarUrl ?? null), avatarColor: '' };
 }
 
+function chatMessageMentions(message: ChatMessage): BotGroupMention {
+  return { all: message.mentionAudience === 'humans' || message.mentionAudience === 'everyone',
+    ...(message.mentionAudience === 'bots' || message.mentionAudience === 'everyone' ? { allBots: true } : {}),
+    botIds: message.mentions ?? [] };
+}
+
 /**
  * Sequence strings stay on the wire; numeric positions below are presentation order only.
  * `actors` (the account's own, from `/actors`) tell which computer runs each owned companion.
@@ -353,7 +364,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
       authorKind: message.origin === 'system' ? 'system' : message.author.kind === 'human' ? 'user' : 'bot',
       authorBotId: message.authorId, authorName: joinedName !== undefined ? joinedName
         : member ? memberName(member, ownerMembers) : message.author.name,
-      isSelf: message.authorId === selfId, content: contentText(message), mentions: { all: message.mentionAudience === 'humans' || message.mentionAudience === 'everyone', ...(message.mentionAudience === 'bots' || message.mentionAudience === 'everyone' ? { allBots: true } : {}), botIds: message.mentions ?? [] },
+      isSelf: message.authorId === selfId, content: contentText(message), mentions: chatMessageMentions(message),
       ...(quote ? { quote: deletedIds.has(quote.messageId) ? { ...quote, originalDeleted: true } : quote } : {}),
       noticeCode: joinedName !== undefined ? 'member-joined' : null, planId: messagePlanId(message), files: [],
       attachments: chatMessageAttachments(message), createdAt: Date.parse(message.createdAt) };
@@ -404,6 +415,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
       view.threadShare = { ...card, status: source === undefined ? 'loading' : available ? 'available' : 'unavailable',
         authorKind: available && source.author.kind !== 'human' ? 'bot' : 'user', authorBotId: available ? source.authorId : null,
         authorName: available ? authorName(source) : '', sharedByAuthor: !!available && source.authorId === message.authorId,
+        ...(available ? { mentions: chatMessageMentions(source) } : {}),
         content: available ? contentText(source) : '', attachments: available ? chatMessageAttachments(source) : [],
         createdAt: available ? Date.parse(source.createdAt) : null, edited: !!available && (source.revision ?? 1) > 1,
         ...(replyCount !== undefined ? { replyCount } : {}), ...(threadPreview ? { threadPreview } : {}),
@@ -814,9 +826,21 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       const action = input.action === 'dismiss' && plan.status === 'waiting' ? 'stop' : input.action;
       if ((action === 'start' || action === 'dismiss') && plan.status !== 'proposed'
         || action === 'stop' && plan.status !== 'waiting'
-        || action === 'continue' && (plan.status !== 'waiting' || step?.status !== 'done')
+        || action === 'continue' && (plan.status !== 'waiting' || !(step?.status === 'done' || plan.kind === 'talk' && step?.status === 'skipped'))
         || action === 'retry' && (plan.status !== 'waiting' || step?.status !== 'failed')) throw new Error('PLAN_CLOSED');
-      let edit: { position: number; botId?: string } | undefined;
+      let edit: { position: number; botId?: string; executionId?: string } | undefined;
+      if (input.action === 'skip') {
+        if (plan.kind !== 'talk' || !['running', 'waiting'].includes(plan.status) || plan.current_step === null) throw new Error('PLAN_CLOSED');
+        const target = plan.steps.find(step => step.position === input.position);
+        if (input.position > plan.current_step && plan.supportsPendingSkip === true && target?.status === 'pending' && !input.executionId) {
+          edit = { position: input.position };
+        } else {
+          if (plan.status !== 'running' || input.position !== plan.current_step
+            || !input.executionId || input.executionId !== plan.activeExecution?.id) throw new Error('PLAN_CLOSED');
+          if (plan.activeExecution.status !== 'queued') throw new Error('TURN_ALREADY_STARTED');
+          edit = { position: input.position, executionId: chatId(input.executionId) };
+        }
+      }
       if (input.action === 'remove' || input.action === 'reassign') {
         const target = plan.steps.find(step => step.position === input.position);
         if (plan.kind === 'talk' || !target || (plan.status !== 'proposed'

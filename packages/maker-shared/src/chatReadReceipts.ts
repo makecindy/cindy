@@ -7,7 +7,7 @@ import type { BotGroupMessageReaders } from './botGroupChat';
 
 export const MAIN_READ_KEY = 'main';
 
-/** Per Thread, the highest position of my own messages another human has read (`thread_key` is `main` or the lowercase root ID). */
+/** Per Thread, the highest position of my own messages another member (a person, or a teammate that took the execution up) has read (`thread_key` is `main` or the lowercase root ID). */
 export type OthersReadEntries = ReadonlyArray<{ thread_key: string; read_seq: string }>;
 
 export const readReceiptKey = (threadRootId?: string | null): string => threadRootId ? threadRootId.toLowerCase() : MAIN_READ_KEY;
@@ -133,9 +133,9 @@ export interface MessageReadersReply {
 }
 
 /**
- * The read list a client shows: former members keep their group name, a bot is never a reader or an
- * unread member (the server counts people only; this guards the projection), and a time that does not
- * parse is dropped rather than shown.
+ * The read list a client shows, as the server gives it: people and teammates alike (a teammate reads
+ * a message when its computer takes the execution up), in the server's order. Former members keep their
+ * group name, and a time that does not parse (a teammate's read has none) is dropped rather than shown.
  */
 export function projectMessageReaders(
   reply: MessageReadersReply,
@@ -143,7 +143,7 @@ export function projectMessageReaders(
   nameOf: (actorId: string) => string | null,
 ): BotGroupMessageReaders {
   const memberOf = (actorId: string) => members.find(member => member.id === actorId);
-  const readers = reply.readers.filter(reader => memberOf(reader.actorId)?.kind !== 'bot').map(({ actorId, readAt }) => {
+  const readers = reply.readers.map(({ actorId, readAt }) => {
     const at = readAt === null ? NaN : Date.parse(readAt);
     return { actorId, name: nameOf(actorId), readAt: Number.isFinite(at) ? at : null, formerMember: memberOf(actorId)?.state !== 'joined' };
   });

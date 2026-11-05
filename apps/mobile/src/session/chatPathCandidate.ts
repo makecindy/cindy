@@ -287,7 +287,8 @@ export function classifyChatPathLinkTarget(url: string): ChatPathCandidate | nul
 
 /**
  * href → 被控端绝对路径(与桌面 resolveLocalPath 同语义):
- * file:// 解包;绝对路径原样;相对路径按 workdir 分隔符风格 join
+ * file:// 解包;Windows workdir 下 /C:/… 去多余前导斜杠;其余绝对路径原样;
+ * 相对路径按 workdir 分隔符风格 join
  * (workdir 含 `\` → Windows join 并把 href 的 `/` 归一为 `\`)。
  * 不做存在性检查——那是 remotePathVerdict 的事。
  */
@@ -305,6 +306,12 @@ export function resolveChatAbsPath(href: string, workdir: string): string {
     if (/^\/[A-Za-z]:[\\/]/.test(p)) p = p.slice(1);
     return p;
   }
+  // Match Desktop's model-authored /C:/ compatibility using the file owner's
+  // workdir, not the phone OS. POSIX hosts may have a literal /C: directory.
+  const windowsWorkdir = WIN_ABS_RE.test(workdir) || workdir.startsWith('\\\\') || workdir.startsWith('//');
+  // Directory classification strips /C:/ to /C:; C: alone would be drive-relative.
+  if (windowsWorkdir && /^\/[A-Za-z]:$/.test(href)) return `${href.slice(1)}/`;
+  if (windowsWorkdir && /^\/[A-Za-z]:[\\/]/.test(href)) return href.slice(1);
   if (href.startsWith('/')) return href;
   if (WIN_ABS_RE.test(href)) return href;
 

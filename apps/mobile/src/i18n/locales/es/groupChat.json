@@ -202,7 +202,22 @@
     "progressDone": "Hecho {{done}} / {{total}}",
     "allDone": "todo hecho",
     "intro_many": "Esto requiere pasos {{count}}. Aquí está quién hace qué:",
-    "eyebrow_many": "Plan · Pasos {{count}}"
+    "eyebrow_many": "Plan · Pasos {{count}}",
+    "stepQueued": "Esperando para empezar",
+    "stepExecuting": "En ejecución",
+    "stepSkipped": "Omitido",
+    "skippingTurn": "Omitiendo…",
+    "queueWaiting": "Esperando que continúes",
+    "skipTurnLabel": "Omitir {{name}}",
+    "stepSpoken": "Listo",
+    "allTurns_one": "El {{count}} compañero",
+    "allTurns_other": "Los {{count}} compañeros",
+    "foldTurns": "Mostrar menos",
+    "allTurns_many": "Los {{count}} compañeros",
+    "talkTitle": "Escuchar a todos por turnos",
+    "talkPending": "Sin iniciar",
+    "skipTurn": "Omitir",
+    "queueEnded": "Ronda terminada"
   },
   "speaking": {
     "queued": "En cola",
@@ -314,7 +329,8 @@
     "lifecycleUnavailable": "El servidor o computadora actual aún no admite esta acción.",
     "groupDissolved": "Este grupo ha sido disuelto. Aún puedes leer el historial disponible.",
     "lastOwner": "Transfiera la propiedad o disuelva este grupo antes de irse.",
-    "allBotsMentionDisabled": "El propietario del grupo aún no ha habilitado @Todos los compañeros."
+    "allBotsMentionDisabled": "El propietario del grupo aún no ha habilitado @Todos los compañeros.",
+    "turnAlreadyStarted": "Este compañero ya ha empezado y no se puede omitir"
   },
   "followUp": {
     "next": "Planificar · Siguiente paso",
@@ -512,6 +528,7 @@
     "searchMembers": "Buscar miembros",
     "membersNoMatch": "Ningún miembro coincide con “{{query}}”",
     "you": "Tú",
+    "companionOf": "Compañero de {{name}}",
     "teammateTag": "Compañero",
     "paused": "En pausa",
     "accessNone": "Solo su propietario",

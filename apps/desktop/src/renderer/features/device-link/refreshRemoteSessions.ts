@@ -191,6 +191,25 @@ interface RefreshTask {
 
 const refreshTasks = new Map<string, RefreshTask>();
 
+/** Every schedule index read takes the next sequence number when it starts. */
+let scheduleIndexReadSeq = 0;
+const lastScheduleIndexRead = new Map<string, { seq: number; startedAt: number }>();
+
+/**
+ * The last schedule index read that succeeded for this device. A refresh result of
+ * `ok` does not prove the index was read: a weak periodic tick may reuse a
+ * sessions-only refresh, and scope `both` tolerates an index failure. Compare `seq`
+ * with {@link remoteScheduleIndexReadSeq} taken earlier to know whether a read started
+ * after that point.
+ */
+export function remoteScheduleIndexLastRead(deviceId: string): { seq: number; startedAt: number } | undefined {
+  return lastScheduleIndexRead.get(deviceId);
+}
+
+export function remoteScheduleIndexReadSeq(): number {
+  return scheduleIndexReadSeq;
+}
+
 function refreshTaskKey(deviceId: string, status: RemoteSessionStatus): string {
   return `${deviceId}\u0000${status}`;
 }
@@ -453,6 +472,7 @@ async function runRefreshRemoteDeviceSessions(
         if (unresponsiveDevicesStore.has(deviceId)) return 'gave-up';
         let scheduleIndexError: unknown;
         try {
+          const indexRead = { seq: ++scheduleIndexReadSeq, startedAt: Date.now() };
           const raw = await window.electronAPI.deviceLink.invoke(
             deviceId,
             'maker:schedule:list-sidebar-index-runs',
@@ -471,6 +491,9 @@ async function runRefreshRemoteDeviceSessions(
             deviceId,
             projectScheduleSidebarIndex((raw as ScheduleSidebarIndexSnapshot).runs),
           );
+          if (indexRead.seq > (lastScheduleIndexRead.get(deviceId)?.seq ?? 0)) {
+            lastScheduleIndexRead.set(deviceId, indexRead);
+          }
         } catch (error) {
           // Older peers may not expose this existing channel. Keep the last mirror;
           // failure of optional schedule metadata must not hide a valid session list.
