@@ -130,6 +130,19 @@ export function createCompanionUploader(deps: {
     return write(actorId, key, value, json, server?.revision ?? fallbackRevision);
   }
 
+  async function writePreference(botId: string, actorId: string, key: string, value: unknown, json: string, hash: string) {
+    const prior = deps.state.bot(botId)?.prefs[key];
+    let revision: number;
+    try {
+      revision = await write(actorId, key, value, json, prior?.revision ?? 0);
+    } catch (error) {
+      const conflict = chatRejection(error, 409, 'REVISION_CONFLICT');
+      if (!conflict || typeof conflict.revision !== 'number') throw error;
+      revision = await resolveConflict(botId, actorId, key, value, json, hash, conflict.revision);
+    }
+    deps.state.update(botId, actorId, entry => { entry.prefs[key] = { hash, revision, local: true }; });
+  }
+
   /** Store revisions once per state file, like `seed`; keys this device holds stay its own. */
   async function seedStore(botId: string, actorId: string, store: CompanionStore) {
     const server = await store.revisions(actorId);
@@ -184,7 +197,9 @@ export function createCompanionUploader(deps: {
         store = undefined;
       }
     }
-    for (const [key, entry] of [...Object.entries(deps.state.bot(botId)?.prefs ?? {}), ...Object.entries(store ? deps.state.bot(botId)?.stored ?? {} : {})]) {
+    // Store keys count even while the store is unavailable: their deletion then travels as a
+    // preference tombstone, which is all a reader without the store sees.
+    for (const [key, entry] of [...Object.entries(deps.state.bot(botId)?.prefs ?? {}), ...Object.entries(deps.state.bot(botId)?.stored ?? {})]) {
       if (unread.some(prefix => key.startsWith(prefix))) continue;
       if (!desired.has(key) && entry.local && entry.hash !== TOMBSTONE_HASH) desired.set(key, null);
     }
@@ -206,20 +221,16 @@ export function createCompanionUploader(deps: {
       // Preferences stay complete for every value they can hold: older versions read only them.
       if (inPreferences) {
         const prior = deps.state.bot(botId)?.prefs[key];
-        if (prior ? prior.hash === hash : value === null) {
+        const storedHere = deps.state.bot(botId)?.stored?.[key];
+        // A deleted value this computer kept in the store needs a tombstone here too when the store
+        // cannot take the deletion (switched off): the preferences never had the key.
+        const storeDeletionPending = value === null && !store?.active() && !!storedHere?.local && storedHere.hash !== TOMBSTONE_HASH;
+        if (prior ? prior.hash === hash : value === null && !storeDeletionPending) {
           if (prior && !prior.local && value !== null) deps.state.update(botId, actorId, entry => { entry.prefs[key] = { ...prior, local: true }; });
         } else {
           if (writes >= budget) break;
           writes += 1;
-          let revision: number;
-          try {
-            revision = await write(actorId, key, value, json, prior?.revision ?? 0);
-          } catch (error) {
-            const conflict = chatRejection(error, 409, 'REVISION_CONFLICT');
-            if (!conflict || typeof conflict.revision !== 'number') throw error;
-            revision = await resolveConflict(botId, actorId, key, value, json, hash, conflict.revision);
-          }
-          deps.state.update(botId, actorId, entry => { entry.prefs[key] = { hash, revision, local: true }; });
+          await writePreference(botId, actorId, key, value, json, hash);
         }
       }
       if (!inStore || !store?.active()) continue;
@@ -241,6 +252,14 @@ export function createCompanionUploader(deps: {
         // Switched off meanwhile, or a value the store can never take (no bucket, over its
         // limits): skipped as before, so a hand-over still refuses to leave it behind.
         if (!store.active() || STORE_REFUSALS.has(errorCode(error))) {
+          // Nothing was written: a pass with only refused store writes counts as settled.
+          writes -= 1;
+          // The store went off before it took a deletion: the preferences carry it instead.
+          const pref = deps.state.bot(botId)?.prefs[key];
+          if (value === null && !store.active() && pref?.hash !== TOMBSTONE_HASH) {
+            writes += 1;
+            await writePreference(botId, actorId, key, null, json, hash);
+          }
           if (inPreferences) continue;
           if (store.active()) refused.set(`${actorId}\n${key}`, hash);
           deps.log?.warn('Companion value too large to upload; skipped', { actorId, keyKind: key.split(':')[0], bytes: Buffer.byteLength(json), code: errorCode(error) });

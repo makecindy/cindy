@@ -403,6 +403,21 @@ describe('companion store', () => {
     expect(t.entries.get(key)?.deleted).toBe(true);
   });
 
+  it('sends a deletion through the preferences when the store is off', async () => {
+    const options = { off: false };
+    const t = storeSetup(options);
+    const key = 'companion.memory.v1:big.md';
+    t.setValues([profile('soul'), memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000))]);
+    await t.uploader.syncBot('bot', 'actor');
+    expect(t.prefs.has(key)).toBe(false);
+    options.off = true;
+    t.setValues([profile('soul')]);
+    await t.uploader.syncBot('bot', 'actor', Number.POSITIVE_INFINITY, { requireAll: true });
+    // A computer reading only the preferences must see the deletion, or its own copy comes back.
+    expect(t.prefs.get(key)).toMatchObject({ value: null });
+    await expect(t.uploader.syncBot('bot', 'actor', Number.POSITIVE_INFINITY, { requireAll: true })).resolves.toBe(0);
+  });
+
   it('passes a deletion of a value kept only in the store to the next restore', async () => {
     const t = storeSetup();
     const big = memory('big.md', 'x'.repeat(COMPANION_VALUE_MAX_BYTES + 1000));
