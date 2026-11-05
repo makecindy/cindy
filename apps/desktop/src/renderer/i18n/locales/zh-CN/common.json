@@ -4422,12 +4422,12 @@
     "liveCompact": {
       "cell": {
         "title": "边做边压 · Live Compact",
-        "description": "每轮结束时把已完成的一段对话压成本地卡片：模型仍能看到要点与原文路径，上下文增长更慢。只对新建的 Pi 任务生效，策略与 Pi 原生压缩不同。",
+        "description": "每轮结束时把已完成的一段对话压成本地卡片：模型仍能看到要点与原文路径，上下文增长更慢。对之后启动的 Pi 任务生效（重新打开的历史任务也算），已在运行的任务不受影响；策略与 Pi 原生压缩不同。",
         "sourceLabel": "原仓：MerkyorLynn/dsh-live-compact"
       },
       "toast": {
-        "enabled": "已开启，新建任务后生效",
-        "disabled": "已关闭，新建任务后生效",
+        "enabled": "已开启，之后启动的 Pi 任务生效",
+        "disabled": "已关闭，之后启动的 Pi 任务生效",
         "toggleFailed": "切换边做边压开关失败",
         "readFailed": "读取边做边压开关失败"
       },

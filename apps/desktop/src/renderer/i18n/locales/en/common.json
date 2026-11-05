@@ -4465,12 +4465,12 @@
     "liveCompact": {
       "cell": {
         "title": "Live Compact · Beta",
-        "description": "Folds each completed stretch of conversation into a local card at turn end: the model keeps the gist plus a path to the full text, so context grows more slowly. New Pi tasks only; the strategy differs from native compaction.",
+        "description": "Folds each completed stretch of conversation into a local card at turn end: the model keeps the gist plus a path to the full text, so context grows more slowly. Applies to Pi tasks started from now on (reopening an old task counts too); tasks already running are unaffected. The strategy differs from native compaction.",
         "sourceLabel": "Upstream: MerkyorLynn/dsh-live-compact"
       },
       "toast": {
-        "enabled": "Enabled — takes effect in new tasks",
-        "disabled": "Disabled — takes effect in new tasks",
+        "enabled": "Enabled — applies to Pi tasks started from now on",
+        "disabled": "Disabled — applies to Pi tasks started from now on",
         "toggleFailed": "Could not change the Live Compact setting",
         "readFailed": "Could not read the Live Compact setting"
       },

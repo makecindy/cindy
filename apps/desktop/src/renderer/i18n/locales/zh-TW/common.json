@@ -4422,12 +4422,12 @@
     "liveCompact": {
       "cell": {
         "title": "邊做邊壓 · Live Compact",
-        "description": "每輪結束時把已完成的一段對話壓成本機卡片：模型仍能看到要點與原文路徑，上下文增長更慢。只對新建的 Pi 任務生效，策略與 Pi 原生壓縮不同。",
+        "description": "每輪結束時把已完成的一段對話壓成本機卡片：模型仍能看到要點與原文路徑，上下文增長更慢。對之後啟動的 Pi 任務生效（重新開啟的歷史任務也算），已在執行的任務不受影響；策略與 Pi 原生壓縮不同。",
         "sourceLabel": "原倉：MerkyorLynn/dsh-live-compact"
       },
       "toast": {
-        "enabled": "已開啟，新建任務後生效",
-        "disabled": "已關閉，新建任務後生效",
+        "enabled": "已開啟，之後啟動的 Pi 任務生效",
+        "disabled": "已關閉，之後啟動的 Pi 任務生效",
         "toggleFailed": "切換邊做邊壓開關失敗",
         "readFailed": "讀取邊做邊壓開關失敗"
       },

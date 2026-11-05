@@ -4518,12 +4518,12 @@
     "liveCompact": {
       "cell": {
         "title": "Live Compact · Beta",
-        "description": "No fim de cada turno, dobra um trecho concluído da conversa num cartão local: o modelo mantém os pontos principais e um caminho para o texto completo, e o contexto cresce mais devagar. Só tarefas novas do Pi; a estratégia difere da nativa.",
+        "description": "No fim de cada turno, dobra um trecho concluído da conversa num cartão local: o modelo mantém os pontos principais e um caminho para o texto completo, e o contexto cresce mais devagar. Aplica-se a tarefas Pi iniciadas a partir de agora (reabrir uma tarefa também conta); as que já estão a correr não mudam. A estratégia difere da nativa.",
         "sourceLabel": "Origem: MerkyorLynn/dsh-live-compact"
       },
       "toast": {
-        "enabled": "Ativado — aplica-se a tarefas novas",
-        "disabled": "Desativado — aplica-se a tarefas novas",
+        "enabled": "Ativado — aplica-se a tarefas Pi iniciadas a partir de agora",
+        "disabled": "Desativado — aplica-se a tarefas Pi iniciadas a partir de agora",
         "toggleFailed": "Não foi possível alterar a opção Live Compact",
         "readFailed": "Não foi possível ler a opção Live Compact"
       },

@@ -4422,12 +4422,12 @@
     "liveCompact": {
       "cell": {
         "title": "边做边压 · Live Compact",
-        "description": "每轮既毕，取已成之一段对谈，压为一纸本地之卡：模型仍见其要，及全文所在之径，故上下文增之也缓。唯新创之 Pi 务乃效，其法异于 Pi 原生之自压。",
+        "description": "每轮既毕，取已成之一段对谈，压为一纸本地之卡：模型仍见其要，及全文所在之径，故上下文增之也缓。凡后启之 Pi 务乃效（重开旧务亦在其中），方行之务不改；其法异于 Pi 原生之自压。",
         "sourceLabel": "原仓：MerkyorLynn/dsh-live-compact"
       },
       "toast": {
-        "enabled": "既启矣，新创之务乃效",
-        "disabled": "既闭矣，新创之务乃效",
+        "enabled": "既启矣，后启之务乃效",
+        "disabled": "既闭矣，后启之务乃效",
         "toggleFailed": "启闭边做边压之开关，未成",
         "readFailed": "读取边做边压之开关，未成"
       },

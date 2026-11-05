@@ -4422,12 +4422,12 @@
     "liveCompact": {
       "cell": {
         "title": "Live Compact · Beta",
-        "description": "매 턴이 끝날 때 완료된 대화 구간을 로컬 카드로 접습니다. 모델은 요점과 전체 원문 경로를 유지하므로 컨텍스트가 천천히 늘어납니다. 새 Pi 작업에만 적용되며 방식은 기본 압축과 다릅니다.",
+        "description": "매 턴이 끝날 때 완료된 대화 구간을 로컬 카드로 접습니다. 모델은 요점과 전체 원문 경로를 유지하므로 컨텍스트가 천천히 늘어납니다. 지금부터 시작하는 Pi 작업에 적용됩니다(다시 연 작업도 포함). 이미 실행 중인 작업은 그대로이며 방식은 기본 압축과 다릅니다.",
         "sourceLabel": "원본: MerkyorLynn/dsh-live-compact"
       },
       "toast": {
-        "enabled": "켜짐 — 새 작업에서 적용됩니다",
-        "disabled": "꺼짐 — 새 작업에서 적용됩니다",
+        "enabled": "켜짐 — 지금부터 시작하는 Pi 작업에 적용됩니다",
+        "disabled": "꺼짐 — 지금부터 시작하는 Pi 작업에 적용됩니다",
         "toggleFailed": "Live Compact 설정을 전환하지 못했습니다",
         "readFailed": "Live Compact 설정을 읽지 못했습니다"
       },
