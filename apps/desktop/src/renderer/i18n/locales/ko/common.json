@@ -14438,6 +14438,8 @@
       "undo": "실행 취소",
       "savedChanges": "{{branch}}에 임시 저장한 변경 사항이 있습니다.",
       "restore": "변경 사항 복원",
+      "undone": "브랜치 전환을 취소했습니다",
+      "restored": "보관한 변경 사항을 복원했습니다",
       "title": "{{branch}}(으)로 전환",
       "dirtyDescription": "{{branch}}에 커밋하지 않은 변경 사항이 {{count}}개 있습니다. 전환하기 전에 처리 방법을 선택하세요. 두 방법 모두 변경 사항을 보존합니다.",
       "carry": "{{branch}}(으)로 함께 가져오기",

@@ -14620,6 +14620,8 @@
       "undo": "Annuler",
       "savedChanges": "Des modifications sont mises de côté pour {{branch}}.",
       "restore": "Restaurer les modifications",
+      "undone": "Changement de branche annulé",
+      "restored": "Modifications mises de côté restaurées",
       "title": "Passer à {{branch}}",
       "dirtyDescription": "{{branch}} comporte {{count}} modifications non validées. Choisissez comment les traiter avant de changer de branche. Les deux options conservent vos modifications.",
       "carry": "Transférer les modifications vers {{branch}}",

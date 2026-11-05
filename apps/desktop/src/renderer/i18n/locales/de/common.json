@@ -14498,6 +14498,8 @@
       "undo": "Rückgängig",
       "savedChanges": "Für {{branch}} sind zwischengespeicherte Änderungen verfügbar.",
       "restore": "Änderungen wiederherstellen",
+      "undone": "Branch-Wechsel rückgängig gemacht",
+      "restored": "Gesicherte Änderungen wiederhergestellt",
       "title": "Zu {{branch}} wechseln",
       "dirtyDescription": "Auf {{branch}} gibt es {{count}} nicht committete Änderungen. Entscheide vor dem Wechsel, wie du damit umgehen möchtest. Beide Optionen erhalten deine Änderungen.",
       "carry": "Änderungen nach {{branch}} mitnehmen",

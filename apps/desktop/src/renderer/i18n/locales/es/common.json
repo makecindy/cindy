@@ -14620,6 +14620,8 @@
       "undo": "Deshacer",
       "savedChanges": "Hay cambios guardados para {{branch}}.",
       "restore": "Restaurar cambios",
+      "undone": "Cambio de rama deshecho",
+      "restored": "Cambios guardados restaurados",
       "title": "Cambiar a {{branch}}",
       "dirtyDescription": "{{branch}} tiene {{count}} cambios sin confirmar. Elige cómo tratarlos antes de cambiar. Ambas opciones conservan los cambios.",
       "carry": "Llevar los cambios a {{branch}}",

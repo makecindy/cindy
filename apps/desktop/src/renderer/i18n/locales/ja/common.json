@@ -14438,6 +14438,8 @@
       "undo": "元に戻す",
       "savedChanges": "{{branch}} で一時保存した変更があります。",
       "restore": "変更を復元",
+      "undone": "ブランチの切り替えを取り消しました",
+      "restored": "退避した変更を復元しました",
       "title": "{{branch}} に切り替える",
       "dirtyDescription": "{{branch}} には未コミットの変更が {{count}} 件あります。切り替える前に扱いを選んでください。どちらを選んでも変更は失われません。",
       "carry": "変更を {{branch}} に引き継ぐ",

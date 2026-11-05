@@ -1,7 +1,7 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
-import type { useCheckout } from '@/hooks/useCheckout';
+import { formatCheckoutError, type useCheckout } from '@/hooks/useCheckout';
 import type { CheckoutStatus } from '../../../shared/worktreeCheckout';
 
 /** Every explicit worktree alternative uses the checkbox's existing preference callback. */
@@ -23,21 +23,34 @@ export function UseWorktreeButton({
 /** The same conflict detail appears in feedback, the dialog and the branch menu. */
 export function CheckoutError({ code, status }: { code: string; status?: CheckoutStatus }) {
   const { t } = useTranslation();
-  const collision = code === 'conflict' ? status?.ignoredCollision : undefined;
-  return (
-    <span className="break-words">
-      {collision
-        ? t('newChat.checkout.errors.ignored', {
-            branch: collision.branch,
-            file: collision.paths[0],
-            count: collision.paths.length,
-          })
-        : t(`newChat.checkout.errors.${code}`)}
-    </span>
-  );
+  return <span className="break-words">{formatCheckoutError(t, code, status)}</span>;
 }
 
-export function CheckoutFeedback({
+/** Persistent recovery lives in the popover, never in the controls row. */
+export function CheckoutStashes({ checkout }: { checkout: ReturnType<typeof useCheckout> }) {
+  const { t } = useTranslation();
+  return checkout.status?.stashes.length ? (
+    <div className="space-y-2 px-3 py-2 text-12 text-muted-foreground">
+      {checkout.status.stashes.map((stash) => (
+        <div key={stash.id} className="space-y-1 break-words">
+          <p>{t('newChat.checkout.savedChanges', { branch: stash.branch })}</p>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={
+              checkout.busy || !!checkout.status?.blocked || !!checkout.status?.files.length
+            }
+            onClick={() => void checkout.restore(stash.id)}
+          >
+            {t('newChat.checkout.restore')}
+          </Button>
+        </div>
+      ))}
+    </div>
+  ) : null;
+}
+
+export function CheckoutDialog({
   checkout,
   onUseWorktree,
 }: {
@@ -45,60 +58,11 @@ export function CheckoutFeedback({
   onUseWorktree?: (branch?: string) => void;
 }) {
   const { t } = useTranslation();
-  const { dialog, receipt, status, busy } = checkout;
+  const { dialog, status, busy } = checkout;
   const target = dialog?.branch.replace(/^refs\/remotes\//, '') ?? '';
-  const idle = receipt?.sessions
-    .filter((s) => !s.running)
-    .map((s) => s.name)
-    .join(', ');
   const count = dialog?.status.sessions.length ?? 0;
   return (
     <>
-      {checkout.error || checkout.worktreeNotice || receipt || status?.stashes.length ? (
-        <div role="status" className="mt-2 space-y-1 break-words text-12 text-muted-foreground">
-          {checkout.error && (
-            <p>
-              <CheckoutError code={checkout.error} status={status} />
-            </p>
-          )}
-          {checkout.worktreeNotice && <p>{t('newChat.checkout.worktreeDefault')}</p>}
-          {receipt && (
-            <div>
-              <span>
-                {t('newChat.checkout.switched', { branch: receipt.to })}
-                {receipt.hadChanges
-                  ? t(`newChat.checkout.${receipt.strategy === 'stash' ? 'stashed' : 'carried'}`)
-                  : ''}
-              </span>
-              <Button
-                size="xs"
-                variant="secondary"
-                disabled={busy}
-                onClick={() => void checkout.undo()}
-                className="ml-2"
-              >
-                {t('newChat.checkout.undo')}
-              </Button>
-              {idle && (
-                <p>{t('newChat.checkout.sessionsContinue', { names: idle, branch: receipt.to })}</p>
-              )}
-            </div>
-          )}
-          {status?.stashes.map((stash) => (
-            <div key={stash.id} className="flex flex-wrap items-center gap-2">
-              <span>{t('newChat.checkout.savedChanges', { branch: stash.branch })}</span>
-              <Button
-                size="xs"
-                variant="secondary"
-                disabled={busy || !!status.blocked || !!status.files.length}
-                onClick={() => void checkout.restore(stash.id)}
-              >
-                {t('newChat.checkout.restore')}
-              </Button>
-            </div>
-          ))}
-        </div>
-      ) : null}
       <Dialog.Root
         open={!!dialog}
         onOpenChange={(open) => {

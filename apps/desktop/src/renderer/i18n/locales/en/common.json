@@ -14498,6 +14498,8 @@
       "undo": "Undo",
       "savedChanges": "Saved changes are available for {{branch}}.",
       "restore": "Restore changes",
+      "undone": "Branch switch undone",
+      "restored": "Saved changes restored",
       "title": "Switch to {{branch}}",
       "dirtyDescription": "{{branch}} has {{count}} uncommitted changes. Choose how to handle them before switching. Both options keep your changes.",
       "carry": "Bring changes to {{branch}}",

@@ -1,79 +1,129 @@
 import { useState } from 'react';
 import { mountPage, forbid } from '../../ui-page/harness';
 import { WorktreeChipsRow } from '../../../src/renderer/components/new-chat/WorktreeChipsRow';
+import { ToastContainer } from '../../../src/renderer/components/ui/toast/ToastContainer';
+import { Button } from '../../../src/renderer/components/ui/button';
 import { Tooltip } from '../../../src/renderer/components/ui/tooltip';
+
+// The isolated fixture origin lacks secure-context randomUUID. These IDs only
+// identify in-memory checkout responses; no repository is opened or changed.
+if (!crypto.randomUUID) {
+  let sequence = 0;
+  crypto.randomUUID = () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`;
+}
 
 function Page() {
   const [enabled, setEnabled] = useState(false);
   const [source, setSource] = useState('release');
   return (
     <Tooltip.Provider>
-      <div className="p-6 text-foreground" data-ui-page-subject>
-        <WorktreeChipsRow
-          cwd="/fixture"
-          enabled={enabled}
-          onEnabledChange={setEnabled}
-          sourceBranch={source}
-          onSourceBranchChange={setSource}
-          variant="advancedOnly"
-          compact
+      <div className="p-4 pt-44 text-foreground" data-ui-page-subject>
+        <div className="flex items-center gap-2" data-testid="checkout-controls-row">
+          <Button size="sm" variant="secondary" className="h-[30px]" data-testid="checkout-project">
+            1-basic
+          </Button>
+          <WorktreeChipsRow
+            cwd="/fixture"
+            enabled={enabled}
+            onEnabledChange={setEnabled}
+            sourceBranch={source}
+            onSourceBranchChange={setSource}
+            variant="advancedOnly"
+            compact
+          />
+        </div>
+        <textarea
+          aria-label="fixture input"
+          data-testid="checkout-input"
+          className="mt-3 h-24 w-full rounded-xl border border-border bg-background p-3"
+          readOnly
+          value=""
         />
       </div>
+      <ToastContainer />
     </Tooltip.Provider>
   );
 }
 void mountPage({
-  host: (ctx) => ({
-    worktreeDetectCwd: async () => ({
-      gitInstalled: true,
-      isGitRepo: true,
-      isInsideWorktree: false,
-      currentBranch: 'main',
-      repoRoot: '/fixture',
-      supportsCheckout: true,
-    }),
-    worktreeListBranches: async () => ({
-      current: 'main',
-      branches: ['main', 'feature', 'release'],
-      remoteDefaultBranch: 'refs/remotes/origin/main',
-    }),
-    worktreeSuggestName: async () => ({ name: 'fixture' }),
-    worktreeBranchSyncStatus: async () => ({
-      branch: 'main',
-      remoteOnly: false,
-      ahead: 0,
-      behind: 0,
-      dirtyFiles: 0,
-      blocked: 'no-remote',
-    }),
-    worktreeSyncBranch: forbid('worktreeSyncBranch'),
-    worktreeCheckout: async (req: { action: string; branch?: string }) => {
-      if (req.action !== 'status') return forbid('checkout mutation')();
-      return {
-        status: {
-          current: 'main',
-          head: 'fixture-head',
-          fingerprint: 'fixture-fingerprint',
-          files: ['dirty', 'conflict'].includes(ctx.case)
-            ? Array.from({ length: 30 }, (_, i) => `src/components/example-${i}.tsx`)
-            : [],
-          sessions: ['busy', 'idle', 'dirty'].includes(ctx.case)
-            ? [{ id: 'task-a', name: '修复登录页面', running: ctx.case === 'busy' }]
-            : [],
-          occupied: ['release'],
-          carryAllowed: ctx.case !== 'conflict',
-          stashes: [],
-          ...(ctx.case === 'busy' ? { blocked: 'busy' } : {}),
-          ...(ctx.case === 'ignored' && req.branch === 'feature'
+  host: (ctx) => {
+    let current = 'main';
+    let saved = false;
+    return {
+      worktreeDetectCwd: async () => ({
+        gitInstalled: true,
+        isGitRepo: true,
+        isInsideWorktree: false,
+        currentBranch: 'main',
+        repoRoot: '/fixture',
+        supportsCheckout: true,
+      }),
+      worktreeListBranches: async () => ({
+        current,
+        branches: ['main', 'feature', 'release'],
+        remoteDefaultBranch: 'refs/remotes/origin/main',
+      }),
+      worktreeSuggestName: async () => ({ name: 'fixture' }),
+      worktreeBranchSyncStatus: async () => ({
+        branch: 'main',
+        remoteOnly: false,
+        ahead: 0,
+        behind: 0,
+        dirtyFiles: 0,
+        blocked: 'no-remote',
+      }),
+      worktreeSyncBranch: forbid('worktreeSyncBranch'),
+      worktreeCheckout: async (req: { action: string; branch?: string }) => {
+        if (req.action === 'switch' && ['success', 'saved'].includes(ctx.case)) {
+          current = req.branch!;
+          saved = ctx.case === 'saved';
+        } else if (req.action !== 'status') return forbid('unexpected fixture mutation')();
+        return {
+          ...(req.action === 'switch'
             ? {
-                blocked: 'conflict',
-                carryAllowed: false,
-                ignoredCollision: { branch: 'feature', paths: ['private/collision', 'other-file'] },
+                receipt: {
+                  id: 'fixture-receipt',
+                  from: 'main',
+                  to: current,
+                  strategy: 'carry',
+                  hadChanges: false,
+                  sessions: [{ id: 'idle', name: '修复登录页面', running: false }],
+                },
               }
             : {}),
-        },
-      };
-    },
-  }),
+          status: {
+            current,
+            head: 'fixture-head',
+            fingerprint: 'fixture-fingerprint',
+            files: ['dirty', 'conflict'].includes(ctx.case)
+              ? Array.from({ length: 30 }, (_, i) => `src/components/example-${i}.tsx`)
+              : [],
+            sessions: ['busy', 'idle', 'dirty', 'worktree'].includes(ctx.case)
+              ? [
+                  {
+                    id: 'task-a',
+                    name: '修复登录页面',
+                    running: ['busy', 'worktree'].includes(ctx.case),
+                  },
+                ]
+              : [],
+            occupied: ['release'],
+            carryAllowed: ctx.case !== 'conflict',
+            stashes: saved ? [{ id: 'saved', branch: current }] : [],
+            ...(['busy', 'worktree'].includes(ctx.case) ? { blocked: 'busy' } : {}),
+            ...(ctx.case === 'ignored' && req.branch === 'feature'
+              ? {
+                  blocked: 'conflict',
+                  carryAllowed: false,
+                  ignoredCollision: {
+                    branch: 'feature',
+                    paths: ['private/collision', 'other-file'],
+                  },
+                }
+              : {}),
+          },
+        };
+      },
+    };
+  },
   render: () => <Page />,
 });

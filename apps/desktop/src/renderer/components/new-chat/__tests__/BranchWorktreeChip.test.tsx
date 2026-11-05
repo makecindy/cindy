@@ -24,10 +24,21 @@ const render = (element: React.ReactElement) =>
 const mocks = vi.hoisted(() => ({
   toast: vi.fn(),
   warning: vi.fn(),
+  success: vi.fn(),
+  info: vi.fn(),
+  dismiss: vi.fn(),
   t: (key: string, args?: object) => key + (args ? JSON.stringify(args) : ''),
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: mocks.t }) }));
-vi.mock('@/lib/toast', () => ({ toast: { error: mocks.toast, warning: mocks.warning } }));
+vi.mock('@/lib/toast', () => ({
+  toast: {
+    error: mocks.toast,
+    warning: mocks.warning,
+    success: mocks.success,
+    info: mocks.info,
+    dismiss: mocks.dismiss,
+  },
+}));
 vi.mock('../FolderPickerPopover', () => ({
   FolderPickerPopover: () => null,
   addRecentFolder: vi.fn(),
@@ -63,6 +74,8 @@ const props = {
 };
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.success.mockReturnValue('checkout-success-toast');
+  mocks.info.mockReturnValue('checkout-info-toast');
   status.mockResolvedValue(baseStatus);
   sync.mockResolvedValue({ status: { ...baseStatus, behind: 0 }, updated: 3 });
   Object.assign(window, {
@@ -462,7 +475,7 @@ it('explains ignored-only collisions before any checkout or stash request', asyn
   await act(async () => {
     fireEvent.click(await screen.findByRole('option', { name: 'feature' }));
   });
-  const explanation = screen.getByRole('status').textContent;
+  const explanation = mocks.toast.mock.calls.at(-1)?.[0];
   expect(explanation).toContain('feature');
   expect(explanation).toContain('private/collision');
   expect(explanation).toContain('"count":2');
@@ -550,7 +563,8 @@ it.each(['direct', 'lost-write', 'lost-result', 'unreachable'])(
     if (mode === 'unreachable') {
       expect(branchButton().textContent).toBe('remembered-source');
       expect(screen.queryByRole('button', { name: 'newChat.checkout.undo' })).toBeNull();
-      expect(screen.getByText('newChat.checkout.errors.git')).toBeTruthy();
+      expect(mocks.toast).toHaveBeenCalledWith('newChat.checkout.errors.git');
+      expect(mocks.success).not.toHaveBeenCalled();
       expect(checkout.mock.calls.at(-1)?.[0].action).toBe('status');
       return;
     }
@@ -559,12 +573,61 @@ it.each(['direct', 'lost-write', 'lost-result', 'unreachable'])(
       fireEvent.click(screen.getByTestId('create-agent-worktree-chip'));
     });
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'newChat.checkout.undo' }));
+      const [message, options] = mocks.success.mock.calls.at(-1)!;
+      expect(message).toContain('newChat.checkout.switched');
+      expect(options.duration).toBe(8000);
+      expect(options.action.label).toBe('newChat.checkout.undo');
+      options.action.onClick();
     });
     await waitFor(() => expect(branchButton().textContent).toBe('main'));
+    expect(mocks.success).toHaveBeenLastCalledWith('newChat.checkout.undone');
     await act(async () => {
       fireEvent.click(screen.getByTestId('create-agent-worktree-chip'));
     });
     expect(branchButton().textContent).toBe('remembered-source');
   },
 );
+
+// Saved changes remain discoverable after the toast expires, without adding any
+// inline recovery content to the controls row. Re-reading status does not re-toast.
+it.each(['toast', 'menu'])('restores saved changes from the %s action', async (entry) => {
+  const checkout = setupCheckout();
+  let stashes = [{ id: 'saved', branch: 'main' }];
+  checkout.mockImplementation(async (req) => {
+    if (req.action === 'restore') stashes = [];
+    return { status: { ...checkoutStatus, stashes } };
+  });
+  render(<CheckoutRow />);
+  await waitFor(() => expect(mocks.info).toHaveBeenCalledOnce());
+  const options = mocks.info.mock.calls[0][1];
+  expect(options.duration).toBe(8000);
+  expect(screen.queryByRole('button', { name: 'newChat.checkout.restore' })).toBeNull();
+  await act(async () => {
+    window.dispatchEvent(new Event('focus'));
+  });
+  expect(mocks.info).toHaveBeenCalledOnce();
+  await act(async () => {
+    fireEvent.click(branchButton());
+  });
+  const restoreButton = screen.getByRole('button', { name: 'newChat.checkout.restore' });
+  await act(async () => {
+    if (entry === 'toast') options.action.onClick();
+    else fireEvent.click(restoreButton);
+  });
+  expect(checkout.mock.calls.filter(([req]) => req.action === 'restore')).toHaveLength(1);
+  expect(mocks.success).toHaveBeenLastCalledWith('newChat.checkout.restored');
+  expect(screen.queryByRole('button', { name: 'newChat.checkout.restore' })).toBeNull();
+});
+
+it('dismisses the recovery toast and ignores its action after leaving the checkout', async () => {
+  const checkout = setupCheckout(true, { stashes: [{ id: 'saved', branch: 'main' }] });
+  const view = render(<CheckoutRow />);
+  await waitFor(() => expect(mocks.info).toHaveBeenCalledOnce());
+  const action = mocks.info.mock.calls[0][1].action;
+  view.unmount();
+  expect(mocks.dismiss).toHaveBeenCalledWith('checkout-info-toast');
+  await act(async () => {
+    action.onClick();
+  });
+  expect(checkout.mock.calls.every(([req]) => req.action === 'status')).toBe(true);
+});

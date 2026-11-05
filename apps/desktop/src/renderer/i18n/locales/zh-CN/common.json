@@ -14438,6 +14438,8 @@
       "undo": "撤销",
       "savedChanges": "{{branch}} 上有之前收起来的改动",
       "restore": "恢复改动",
+      "undone": "已撤销分支切换",
+      "restored": "已恢复暂存的改动",
       "title": "切换到 {{branch}}",
       "dirtyDescription": "{{branch}} 上有 {{count}} 个还没提交的改动，切换前要决定怎么处理。两种方式改动都不会丢。",
       "carry": "一起带到 {{branch}}",
@@ -14446,16 +14448,16 @@
       "worktreeGuideSessions": "不想动当前目录？改用 worktree，在独立目录里从 {{branch}} 开始。现在的改动和这个目录里的 {{count}} 个任务都不受影响（改动不会带过去）。",
       "idleSessions": "这个目录还有 {{count}} 个任务（{{names}}），切换后它们也会在新分支上继续",
       "errors": {
-        "busy": "这个目录有任务正在回复或有后台活动。请等它结束，或改用 worktree。",
-        "operation": "仓库正在合并、变基或进行其他 Git 操作，请完成后再切换。",
+        "busy": "这个目录有任务正在回复或有后台活动。请等它结束，或改用 worktree",
+        "operation": "仓库正在合并、变基或进行其他 Git 操作，请完成后再切换",
         "occupied": "已在其他 worktree 打开",
-        "changed": "分支或改动已经变化，请检查目录后再试。只有仍停在切过去的分支时才能撤销。",
-        "conflict": "这些改动与目标分支冲突，不能一起带过去。请先收起来，或改用 worktree。",
-        "ignored": "切到 {{branch}} 会覆盖被 Git 忽略的本地文件或目录 {{file}}（共 {{count}} 项），已停止切换。",
-        "dirty": "目录里有新的未提交改动，请先处理再恢复。",
-        "diverged": "本地和远程分支已分叉，请先处理再切换。",
-        "missing": "所选分支已不存在，请刷新列表。",
-        "git": "操作未能完成，请先检查当前分支和 git stash list，再决定是否重试。"
+        "changed": "分支或改动已经变化，请检查目录后再试。只有仍停在切过去的分支时才能撤销",
+        "conflict": "这些改动与目标分支冲突，不能一起带过去。请先收起来，或改用 worktree",
+        "ignored": "切到 {{branch}} 会覆盖被 Git 忽略的本地文件或目录 {{file}}（共 {{count}} 项），已停止切换",
+        "dirty": "目录里有新的未提交改动，请先处理再恢复",
+        "diverged": "本地和远程分支已分叉，请先处理再切换",
+        "missing": "所选分支已不存在，请刷新列表",
+        "git": "操作未能完成，请先检查当前分支和 git stash list，再决定是否重试"
       }
     }
   },

@@ -14620,6 +14620,8 @@
       "undo": "Desfazer",
       "savedChanges": "Há alterações guardadas para {{branch}}.",
       "restore": "Restaurar alterações",
+      "undone": "Mudança de branch desfeita",
+      "restored": "Alterações guardadas restauradas",
       "title": "Mudar para {{branch}}",
       "dirtyDescription": "{{branch}} tem {{count}} alterações sem commit. Escolha como lidar com elas antes de mudar. As duas opções preservam suas alterações.",
       "carry": "Levar as alterações para {{branch}}",

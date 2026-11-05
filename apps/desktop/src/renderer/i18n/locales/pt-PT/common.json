@@ -14620,6 +14620,8 @@
       "undo": "Anular",
       "savedChanges": "Há alterações guardadas para {{branch}}.",
       "restore": "Restaurar alterações",
+      "undone": "Mudança de branch anulada",
+      "restored": "Alterações guardadas restauradas",
       "title": "Mudar para {{branch}}",
       "dirtyDescription": "{{branch}} tem {{count}} alterações por submeter. Escolha como as tratar antes de mudar. Ambas as opções preservam as alterações.",
       "carry": "Levar as alterações para {{branch}}",

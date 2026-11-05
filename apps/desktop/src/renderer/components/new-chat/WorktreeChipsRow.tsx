@@ -58,7 +58,12 @@ import {
 import { useBranchSync } from '@/hooks/useBranchSync';
 import { resolveBranchPick } from './branchPick';
 import { useCheckout } from '@/hooks/useCheckout';
-import { CheckoutError, CheckoutFeedback, UseWorktreeButton } from './CheckoutFeedback';
+import {
+  CheckoutError,
+  CheckoutDialog,
+  CheckoutStashes,
+  UseWorktreeButton,
+} from './CheckoutFeedback';
 import type { ReactNode } from 'react';
 import { useBranches, useDetectCwd, useSuggestName } from '@/hooks/useWorktreeQueries';
 import { getProjectPickerDisplayName } from '@/hooks/useProjectPickerOptions';
@@ -298,72 +303,77 @@ export function WorktreeChipsRow({
   };
   const menuStatus = !effectiveWorktreeEnabled ? checkout.status : undefined;
   const branchWorktree = showBranchChip ? (
-    <div className="min-w-0">
-      <BranchWorktreeChip
-        baseRepo={baseRepo ?? undefined}
-        deviceId={deviceLinkDeviceId}
-        remoteDefaultBranch={branches.remoteDefaultBranch}
-        branchLabel={branchLabel}
-        branches={branches.branches}
-        branchesLoading={branches.loading}
-        branchesFailed={branches.failed}
-        onRetryBranches={branches.refetch}
-        checked={enabled}
-        branchSourceSelected={effectiveWorktreeEnabled && !!sourceBranch}
-        branchInteractive={branchInteractive}
-        checkboxDisabled={switchDisabled || checkout.busy}
-        cantUseReason={cantUseReason ?? undefined}
-        onPick={handleBranchPick}
-        onOpenRequested={() => {
-          void checkout.refresh();
-          branches.refetch();
-          // 上次拉取失败的话,重新打开菜单就自动重试一次,不逼用户去点重试项。
-          if (branches.failed && !branches.loading) branches.refetch();
-        }}
-        onToggle={onEnabledChange}
-        optionDisabledReason={
-          effectiveWorktreeEnabled
-            ? undefined
-            : (branch) => {
-                if (branch === actualBranch) return undefined;
-                if (!menuStatus) return t('newChat.worktree.detecting');
-                if (menuStatus.blocked === 'busy' || menuStatus.blocked === 'operation')
-                  return t(`newChat.checkout.errors.${menuStatus.blocked}`);
-                if (menuStatus.occupied.includes(branch.replace(/^refs\/remotes\/origin\//, '')))
-                  return t('newChat.checkout.errors.occupied');
-                return undefined;
-              }
-        }
-        menuHeader={
-          !effectiveWorktreeEnabled && (
-            <div className="max-w-[320px] space-y-2 px-3 py-2 text-12 text-muted-foreground">
-              {menuStatus?.blocked && (
-                <p>
-                  <CheckoutError code={menuStatus.blocked} status={menuStatus} />
-                </p>
+    <>
+      <div className="min-w-0">
+        <BranchWorktreeChip
+          baseRepo={baseRepo ?? undefined}
+          deviceId={deviceLinkDeviceId}
+          remoteDefaultBranch={branches.remoteDefaultBranch}
+          branchLabel={branchLabel}
+          branches={branches.branches}
+          branchesLoading={branches.loading}
+          branchesFailed={branches.failed}
+          onRetryBranches={branches.refetch}
+          checked={enabled}
+          branchSourceSelected={effectiveWorktreeEnabled && !!sourceBranch}
+          branchInteractive={branchInteractive}
+          checkboxDisabled={switchDisabled || checkout.busy}
+          cantUseReason={cantUseReason ?? undefined}
+          onPick={handleBranchPick}
+          onOpenRequested={() => {
+            void checkout.refresh();
+            branches.refetch();
+            // 上次拉取失败的话,重新打开菜单就自动重试一次,不逼用户去点重试项。
+            if (branches.failed && !branches.loading) branches.refetch();
+          }}
+          onToggle={onEnabledChange}
+          optionDisabledReason={
+            effectiveWorktreeEnabled
+              ? undefined
+              : (branch) => {
+                  if (branch === actualBranch) return undefined;
+                  if (!menuStatus) return t('newChat.worktree.detecting');
+                  if (menuStatus.blocked === 'busy' || menuStatus.blocked === 'operation')
+                    return t(`newChat.checkout.errors.${menuStatus.blocked}`);
+                  if (menuStatus.occupied.includes(branch.replace(/^refs\/remotes\/origin\//, '')))
+                    return t('newChat.checkout.errors.occupied');
+                  return undefined;
+                }
+          }
+          menuHeader={
+            <>
+              <CheckoutStashes checkout={checkout} />
+              {!effectiveWorktreeEnabled && (
+                <div className="max-w-[320px] space-y-2 px-3 py-2 text-12 text-muted-foreground">
+                  {menuStatus?.blocked && (
+                    <p>
+                      <CheckoutError code={menuStatus.blocked} status={menuStatus} />
+                    </p>
+                  )}
+                  {!!menuStatus?.sessions.length && !menuStatus.blocked && (
+                    <p>
+                      {t('newChat.checkout.idleSessions', {
+                        count: menuStatus.sessions.length,
+                        names: menuStatus.sessions.map((session) => session.name).join(', '),
+                      })}
+                    </p>
+                  )}
+                  {canUseWorktree &&
+                    (menuStatus?.blocked === 'busy' || !!menuStatus?.sessions.length) && (
+                      <UseWorktreeButton onClick={() => useWorktree()} />
+                    )}
+                </div>
               )}
-              {!!menuStatus?.sessions.length && !menuStatus.blocked && (
-                <p>
-                  {t('newChat.checkout.idleSessions', {
-                    count: menuStatus.sessions.length,
-                    names: menuStatus.sessions.map((session) => session.name).join(', '),
-                  })}
-                </p>
-              )}
-              {canUseWorktree &&
-                (menuStatus?.blocked === 'busy' || !!menuStatus?.sessions.length) && (
-                  <UseWorktreeButton onClick={() => useWorktree()} />
-                )}
-            </div>
-          )
-        }
-        compact={compact}
-      />
-      <CheckoutFeedback
+            </>
+          }
+          compact={compact}
+        />
+      </div>
+      <CheckoutDialog
         checkout={checkout}
         onUseWorktree={canUseWorktree ? useWorktree : undefined}
       />
-    </div>
+    </>
   ) : null;
 
   // advancedOnly:项目选择交给页面自己的 pill,这里出 [分支 │ ☑ worktree] 联合控件
