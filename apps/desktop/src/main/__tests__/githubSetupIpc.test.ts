@@ -12,9 +12,11 @@ const mocks = vi.hoisted(() => ({
   disposers: [] as Array<() => void>,
   connected: undefined as undefined | (() => void),
   focused: null as null | { isDestroyed(): boolean; webContents: { send(channel: string): void } },
+  secondary: null as null | { isDestroyed(): boolean; webContents: { send(channel: string): void } },
   main: null as null | { isDestroyed(): boolean; webContents: { send(channel: string): void } },
 }));
 vi.mock('../deepLink', () => ({ getDeepLinkMainWindow: () => mocks.main }));
+vi.mock('../secondary-windows', () => ({ isSecondaryAppWindow: (win: unknown) => win === mocks.secondary }));
 vi.mock('electron', () => ({
   app: { getPath: () => '/test/userData', once: (_event: string, dispose: () => void) => mocks.disposers.push(dispose) },
   ipcMain: {
@@ -107,8 +109,21 @@ it('opens the GitHub sign-in in the focused window, then the main window', () =>
   const mainSend = vi.fn();
   mocks.main = { isDestroyed: () => false, webContents: { send: mainSend } };
   mocks.focused = { isDestroyed: () => false, webContents: { send: focusedSend } };
+  mocks.secondary = mocks.focused;
   expect(openGithubSignIn()).toBe(true);
   expect(focusedSend).toHaveBeenCalledWith('git-context:github-setup:open');
+  // Review (Codex P2 on #9022): a focused window that does not mount the App (a detached sidebar window)
+  // would swallow the request, so it goes to the main window instead; a secondary App window is fine.
+  focusedSend.mockClear();
+  mainSend.mockClear();
+  expect(openGithubSignIn()).toBe(true);
+  expect(focusedSend).toHaveBeenCalledTimes(1);
+  mocks.secondary = null;
+  const sidebarSend = vi.fn();
+  mocks.focused = { isDestroyed: () => false, webContents: { send: sidebarSend } };
+  expect(openGithubSignIn()).toBe(true);
+  expect(sidebarSend).not.toHaveBeenCalled();
+  expect(mainSend).toHaveBeenCalledTimes(1);
   mocks.focused = null;
   expect(openGithubSignIn()).toBe(true);
   expect(mainSend).toHaveBeenCalledWith('git-context:github-setup:open');

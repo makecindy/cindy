@@ -16,6 +16,7 @@ import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
 import { getDeepLinkMainWindow } from '../deepLink.js';
+import { isSecondaryAppWindow } from '../secondary-windows.js';
 import type { GithubConnectionState } from '../../shared/githubSetup.js';
 
 export const GITHUB_SETUP_OPEN_CHANNEL = 'git-context:github-setup:open';
@@ -51,11 +52,15 @@ export async function readGithubConnection(
 
 /**
  * Open Cindy's own GitHub sign-in dialog in the window the user is looking at (or the main window),
+ * but only a window that mounts the App (the main and secondary windows; detached sidebar windows run
+ * their own entry and could not show it),
  * for a task that asked to connect a plugin signing in through this computer's GitHub login.
  * Does not take focus; returns false when no app window can show it.
  */
 export function openGithubSignIn(): boolean {
-  const win = BrowserWindow.getFocusedWindow() ?? getDeepLinkMainWindow();
+  const main = getDeepLinkMainWindow();
+  const focused = BrowserWindow.getFocusedWindow();
+  const win = focused && !focused.isDestroyed() && (focused === main || isSecondaryAppWindow(focused)) ? focused : main;
   if (!win || win.isDestroyed()) return false;
   win.webContents.send(GITHUB_SETUP_OPEN_CHANNEL);
   return true;
