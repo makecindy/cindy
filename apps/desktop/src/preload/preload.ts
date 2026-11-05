@@ -1729,8 +1729,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     usageHistory: (): Promise<{ subjectId: string; ghostId: string; displayName: string; sourceKind: string }[]> => ipcRenderer.invoke('ghosts:usage-history'),
     usageHistorySummary: (subjectId: string): Promise<import('../shared/pluginUsage').PluginUsageSummary | null> => ipcRenderer.invoke('ghosts:usage-history-summary', subjectId),
     clearUsage: (subjectId: string | null): Promise<void> => ipcRenderer.invoke('ghosts:usage-clear', subjectId),
-    readme: (id: string): Promise<import('@cindy/plugin-protocol').GhostReadmeContent | null> =>
-      ipcRenderer.invoke('ghosts:readme', id),
+    readme: (id: string, locale?: string): Promise<import('@cindy/plugin-protocol').GhostReadmeContent | null> =>
+      ipcRenderer.invoke('ghosts:readme', id, locale),
     libraryOverview: (id: string): Promise<import('../shared/ghost').GhostLibraryOverview> =>
       ipcRenderer.invoke('ghosts:library-overview', id),
     handoffList: (id: string): Promise<import('../shared/ghost').GhostHandoffFile[]> =>

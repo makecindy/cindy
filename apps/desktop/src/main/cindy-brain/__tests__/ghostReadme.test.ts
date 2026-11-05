@@ -31,6 +31,20 @@ async function write(rel: string, content: string | Buffer) {
   await fs.promises.writeFile(abs, content);
 }
 
+// 能力探测而不是按平台跳过(engineering-conventions §3.2「平台能力差异」):能建符号链接的平台都实跑。
+const canSymlink = (() => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-readme-symlink-probe-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'target.txt'), 'probe');
+    fs.symlinkSync(path.join(dir, 'target.txt'), path.join(dir, 'link.txt'), 'file');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+})();
+
 const manifest = {
   readme: { en: 'README.md', 'zh-CN': 'docs/README.zh-CN.md' },
 } as unknown as GhostManifest;
@@ -53,7 +67,7 @@ describe('readGhostReadmeFromDir', () => {
     expect(Object.keys(ja?.images ?? {})).toEqual(['assets/shot.png']);
   });
 
-  it.skipIf(process.platform === 'win32')('does not read an image that links outside the plugin', async () => {
+  it.skipIf(!canSymlink)('does not read an image that links outside the plugin', async () => {
     const secret = path.join(root, 'secret.png');
     await fs.promises.writeFile(secret, 'outside');
     await write('README.md', '![leak](assets/leak.png)');

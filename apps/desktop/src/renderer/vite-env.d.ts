@@ -1690,7 +1690,7 @@ interface ElectronAPI {
     usageHistory: () => Promise<{ subjectId: string; ghostId: string; displayName: string; sourceKind: string }[]>;
     usageHistorySummary: (subjectId: string) => Promise<import('../shared/pluginUsage').PluginUsageSummary | null>;
     clearUsage: (subjectId: string | null) => Promise<void>;
-    readme: (id: string) => Promise<import('@cindy/plugin-protocol').GhostReadmeContent | null>;
+    readme: (id: string, locale?: string) => Promise<import('@cindy/plugin-protocol').GhostReadmeContent | null>;
     libraryOverview: (id: string) => Promise<import('../shared/ghost').GhostLibraryOverview>;
     handoffList: (id: string) => Promise<import('../shared/ghost').GhostHandoffFile[]>;
     handoffFolder: (id: string) => Promise<string | null>;

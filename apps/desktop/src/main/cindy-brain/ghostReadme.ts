@@ -15,7 +15,6 @@ import {
   GHOST_README_IMAGES_MAX_TOTAL_BYTES,
   GHOST_README_MAX_BYTES,
   GHOST_README_MAX_IMAGES,
-  resolveGhostReadmeAssetPath,
   type GhostReadmeContent,
 } from '@cindy/plugin-protocol';
 
@@ -90,15 +89,10 @@ async function readPackageFile(
   }
 }
 
-const EXPLICIT_IMAGE_REF_RES = [
-  /!\[[^\]]*\]\(\s*<?([^)\s>]+)/g,
-  /<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi,
-];
-
 /**
- * 打包期检查（Forge）：声明的每份介绍必须在场、不超限且是 UTF-8；正文以图片语法引用的
- * 包内图片必须在场，且逐张大小、张数与总量不超限。返回第一条问题，没有问题返回 null。
- * 外部图片地址不报错（运行时不显示），只提示作者改用包内图片的手册说明。
+ * 打包期检查（Forge）：声明的每份介绍必须在场、不超限且是 UTF-8；正文里作为 Markdown 图片
+ * 引用的包内图片（与运行时读取同一份收集结果）必须在场，且逐张大小、张数与总量不超限。
+ * 返回第一条问题，没有问题返回 null。外部图片地址不报错（运行时不显示）。
  */
 export async function checkGhostReadmeForPack(
   dir: string,
@@ -117,13 +111,6 @@ export async function checkGhostReadmeForPack(
     } catch {
       return `详细介绍 ${readmePath} 必须是 UTF-8 文本`;
     }
-    const explicit = new Set<string>();
-    for (const re of EXPLICIT_IMAGE_REF_RES) {
-      for (const match of markdown.matchAll(re)) {
-        const resolved = resolveGhostReadmeAssetPath(readmePath, match[1]!);
-        if (resolved) explicit.add(resolved);
-      }
-    }
     let count = 0;
     let totalBytes = 0;
     for (const imagePath of collectGhostReadmeImagePaths(markdown, readmePath)) {
@@ -133,8 +120,7 @@ export async function checkGhostReadmeForPack(
         if (!stat.isFile()) throw new Error('not a file');
         size = stat.size;
       } catch {
-        if (explicit.has(imagePath)) return `详细介绍 ${readmePath} 引用的图片不存在:${imagePath}`;
-        continue;
+        return `详细介绍 ${readmePath} 引用的图片不存在:${imagePath}`;
       }
       if (size > GHOST_README_IMAGE_MAX_BYTES) {
         return `详细介绍图片 ${imagePath} 超过 ${GHOST_README_IMAGE_MAX_BYTES} 字节上限`;

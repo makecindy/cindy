@@ -23,15 +23,25 @@ describe('resolveGhostReadmeAssetPath', () => {
     expect(resolveGhostReadmeAssetPath(readmePath, src)).toBe(expected);
   });
 
-  it('collects package image references in order without duplicates or external URLs', () => {
+  // 打包检查与运行时读取共用这一份结果：代码示例里的图片语法不能让打包失败，
+  // 引用式图片缺文件则必须被发现。
+  it('collects only real markdown images, including reference style', () => {
     const markdown = [
       '![a](assets/a.png) ![b](https://cdn.example.com/b.png)',
-      '<img src="./assets/c.jpg" width="320">',
-      '[ref]: assets/a.png',
+      '<img src="./assets/html.jpg">',
+      '`![inline](assets/code.png)`',
+      '```md',
+      '![fenced](assets/fenced.png)',
+      '```',
+      '![ref][shot] ![short] ![dup](assets/a.png)',
+      '',
+      '[shot]: assets/shot.webp "title"',
+      '[short]: <assets/short.gif>',
     ].join('\n');
     expect(collectGhostReadmeImagePaths(markdown, 'README.md')).toEqual([
       'assets/a.png',
-      'assets/c.jpg',
+      'assets/shot.webp',
+      'assets/short.gif',
     ]);
   });
 });

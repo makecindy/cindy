@@ -126,17 +126,54 @@ export function resolveGhostReadmeAssetPath(readmePath: string, src: string): st
   return resolved;
 }
 
-const IMAGE_CANDIDATE_RE = /[^\s()<>"'`[\]]+\.(?:png|jpe?g|webp|gif)(?=$|[\s()<>"'`[\]])/gi;
+const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})/;
+const INLINE_IMAGE_RE = /!\[[^\]]*\]\(\s*<?([^)\s>]+)/g;
+const REFERENCE_IMAGE_RE = /!\[([^\]]*)\]\[([^\]]*)\]/g;
+const SHORTCUT_IMAGE_RE = /!\[([^\]]+)\](?![[(])/g;
+const DEFINITION_RE = /^ {0,3}\[([^\]]+)\]:\s*<?([^\s>]+)>?/;
+
+/** 去掉围栏代码块和行内代码，示例里写的图片语法不是真正的图片。 */
+function stripCode(markdown: string): string {
+  const lines: string[] = [];
+  let fence: string | null = null;
+  for (const line of markdown.split(/\r?\n/)) {
+    const open = FENCE_OPEN_RE.exec(line);
+    if (fence === null) {
+      if (open) fence = open[1]![0]!.repeat(open[1]!.length);
+      else lines.push(line.replace(/`+[^`]*`+/g, ''));
+    } else if (open && open[1]![0] === fence[0] && open[1]!.length >= fence.length) {
+      fence = null;
+    }
+  }
+  return lines.join('\n');
+}
 
 /**
- * 找出正文里可能引用的包内图片，按出现顺序去重。这里刻意宽松（不解析 Markdown），
- * 多读一张没被显示的图只会占一点预算；界面最终只显示真正作为图片出现的地址。
+ * 找出正文里真正作为 Markdown 图片出现的包内图片（行内、引用式、简写引用式），按出现顺序
+ * 去重。围栏代码块、行内代码、外部地址与 HTML `<img>` 不计入（HTML 不渲染）。宿主读图和
+ * Forge 打包检查共用这一个结果。
  */
 export function collectGhostReadmeImagePaths(markdown: string, readmePath: string): string[] {
+  const text = stripCode(markdown);
+  const definitions = new Map<string, string>();
+  for (const line of text.split('\n')) {
+    const match = DEFINITION_RE.exec(line);
+    if (match) definitions.set(match[1]!.trim().toLowerCase(), match[2]!);
+  }
+  const targets: string[] = [];
+  for (const match of text.matchAll(INLINE_IMAGE_RE)) targets.push(match[1]!);
+  for (const match of text.matchAll(REFERENCE_IMAGE_RE)) {
+    const url = definitions.get((match[2] || match[1]!).trim().toLowerCase());
+    if (url) targets.push(url);
+  }
+  for (const match of text.matchAll(SHORTCUT_IMAGE_RE)) {
+    const url = definitions.get(match[1]!.trim().toLowerCase());
+    if (url) targets.push(url);
+  }
   const paths: string[] = [];
   const seen = new Set<string>();
-  for (const match of markdown.matchAll(IMAGE_CANDIDATE_RE)) {
-    const resolved = resolveGhostReadmeAssetPath(readmePath, match[0]);
+  for (const target of targets) {
+    const resolved = resolveGhostReadmeAssetPath(readmePath, target);
     if (!resolved || seen.has(resolved)) continue;
     seen.add(resolved);
     paths.push(resolved);

@@ -172,7 +172,8 @@ export function GhostPluginDetailView({
   toggleDisabled,
   onIconLoadError,
 }: GhostPluginDetailViewProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const uiLanguage = i18n.resolvedLanguage ?? i18n.language;
   const { scrolled, onScroll } = usePluginDetailScrolled();
   const enableSwitchId = useId();
   const publicationBlocked = publishingPreview?.preflight?.actions.canSubmit === false;
@@ -205,8 +206,8 @@ export function GhostPluginDetailView({
   const hasAdditionalActions = localUpdateAvailable || onExport !== undefined;
   // 远程设备的插件目录不在本机，详细介绍只在本机详情页读取。
   const readme = usePluginReadme(
-    ghost ? `${detail.id}@${ghost.manifest.version}` : null,
-    ghost?.manifest.readme && !remote ? () => window.electronAPI.ghosts.readme(detail.id) : null,
+    ghost ? `${detail.id}@${ghost.manifest.version}@${uiLanguage}` : null,
+    ghost?.manifest.readme && !remote ? () => window.electronAPI.ghosts.readme(detail.id, uiLanguage) : null,
   );
   const localShareAvailable = !remote && ghost?.publishingSource?.kind === 'local' &&
     ghost.approval.state === 'approved' && ghost.namespaceState === 'confirmed' && (ghost.namespace === null || ghost.namespace === 'local') &&
