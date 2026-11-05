@@ -9,7 +9,7 @@ import type { Session } from '@/lib/ccAgent.types';
 import { useScheduleForm } from '../useScheduleForm';
 import { formToProjectConfig } from '../../lib/projectAutomationConfig';
 
-// #8886 / unit: edit initialization, validation and clear must survive the real hook.
+// Issue 8886 / unit: edit initialization, validation and clear must survive the real hook.
 it('restores the saved deadline and validates edits before saving', () => {
   const expireAt = new Date(2027, 3, 5, 10, 30, 15).getTime();
   const saved = { id: 'deadline', name: 'Deadline', prompt: 'check', cronExpr: '0 9 * * *',
