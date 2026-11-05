@@ -443,6 +443,9 @@ describe('quota fallback review regressions (#8811)', () => {
     const readRemoteViews = vi.fn(async () => [{ id: 'work-remote-only', auth: { native: 'codex' } }]);
     const remoteInvoke = vi.fn(async () => ({ ok: false }));
     const deps = {
+      recordSkippedSessionRuntimeFallbackRoutes: vi.fn(),
+      resetSessionRuntimeFallbackEpisode: vi.fn(),
+      sessionRuntimeGenerationMatches: () => true,
       readProviderGroup: (id: string) => groupEnabled && id === 'anthropic' ? { members: [{ key: 'other-computer' }] } : null,
       getDbClient: () => ({ drizzle: { select: () => query } }),
       botProfileVersions: {}, botSessionLinks: {}, sessions: {},
@@ -490,6 +493,14 @@ describe('quota fallback review regressions (#8811)', () => {
     expect(readLimit).not.toHaveBeenCalledWith('claude-code', 'anthropic', 'claude-sonnet-5', 'admission');
     groupEnabled = false;
     expect((await select('s', remoteCurrent, 's', 'bucket')).candidate).toBeNull();
+    let active = true;
+    readLimit.mockImplementation(async () => { active = false; return { limited: true }; });
+    await select('s', remoteCurrent, 's', 'bucket', 0, () => active, true);
+    expect(deps.recordSkippedSessionRuntimeFallbackRoutes).not.toHaveBeenCalled();
+    expect(deps.resetSessionRuntimeFallbackEpisode).not.toHaveBeenCalled();
+    await select('s', remoteCurrent, 's', 'bucket', 0, () => true, true);
+    expect(deps.recordSkippedSessionRuntimeFallbackRoutes).toHaveBeenCalledOnce();
+    expect(deps.resetSessionRuntimeFallbackEpisode).toHaveBeenCalledOnce();
   });
 
   it('does not apply ChatGPT model buckets to a Codex custom bridge with free model quota', () => {

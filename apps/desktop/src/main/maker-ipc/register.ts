@@ -1412,6 +1412,7 @@ import {
   pickSessionRuntimeFallback,
   recordFailedSessionRuntimeFallbackCandidate,
   recordSkippedSessionRuntimeFallbackRoutes,
+  resetSessionRuntimeFallbackEpisode,
   recordRecoveredSessionRuntimeMutation,
   recordRecoveredSessionRuntimeAxisMutation,
   recordUserSessionRuntimeAxisMutation,
@@ -17570,6 +17571,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     controlSessionId = sessionId,
     excludeFailedAccount: UsageExhaustionScope | boolean = false,
     expectedGeneration?: number,
+    isCurrent: () => boolean = () => true,
+    startEpisode = false,
   ): Promise<{ isBot: boolean; candidate: SessionRuntimeProfile | null; routeLocked?: boolean }> => {
     const [row] = await getDbClient()
       .drizzle.select({
@@ -17716,8 +17719,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       resolveDefaultProvider,
       candidateBuckets.get(botModelRouteRuntimeKey(candidate)),
     );
+    // Only Bot chains have a per-turn candidate contract; leave ordinary fallback budgets alone.
+    if (startEpisode && isCurrent() && sessionRuntimeGenerationMatches(controlSessionId, expectedGeneration)) {
+      resetSessionRuntimeFallbackEpisode(controlSessionId);
+    }
     const control = getSessionRuntimeControlSnapshot(controlSessionId);
-    if (scope && expectedGeneration !== undefined) {
+    if (scope && expectedGeneration !== undefined && isCurrent()) {
       const exhaustedKeys = chain
         .filter(isBlocked)
         .map(botModelRouteRuntimeKey);
@@ -17814,7 +17821,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // Bot routes are explicit and ordered. They switch on the first recoverable
       // failure and never depend on the generic Session fallback toggle/catalog
       // guesser. Ordinary Sessions keep their existing second-attempt behavior.
-      const botFallback = await readBotFallbackCandidate(sessionId, profiles.effective, sessionId, excludeFailedAccount, profiles.control.generation);
+      const botFallback = await readBotFallbackCandidate(sessionId, profiles.effective, sessionId, excludeFailedAccount, profiles.control.generation, isCurrent, episodeAttempt === 1);
       if (!isCurrent()) return { session: null, outcome: 'superseded' };
       let currentForFallback = profiles.effective;
       let candidate = botFallback.candidate;
@@ -17887,7 +17894,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         failed: SessionRuntimeProfile,
       ): Promise<boolean> => {
         if (!await recordFailedCandidate(failed) || !botFallback.isBot) return false;
-        const next = await readBotFallbackCandidate(sessionId, currentForFallback, sessionId, excludeFailedAccount, profiles.control.generation);
+        const next = await readBotFallbackCandidate(sessionId, currentForFallback, sessionId, excludeFailedAccount, profiles.control.generation, isCurrent);
         candidate = next.candidate;
         return candidate !== null;
       };
