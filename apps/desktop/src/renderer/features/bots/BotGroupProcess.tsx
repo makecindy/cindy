@@ -5,6 +5,7 @@ import { WorkGroupBlock, TeammateWorkSegment, type WorkGroupChild } from '@/comp
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
+import { createRemoteSessionSubscription } from '@/lib/remoteSessionSubscription';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { useBotProfiles } from './botStore';
 import { companionRunsHere } from './companionCloudPresentation';
@@ -37,18 +38,21 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
       : window.electronAPI.localDb.messages.aroundClientId(process.sessionId, clientId, { radius: 80 });
     let revision = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const subscription = deviceId ? createRemoteSessionSubscription(deviceId, process.sessionId) : undefined;
+    let closed = false;
+    const stopUpdates = () => { if (closed) return; closed = true; clearTimeout(timer); off(); subscription?.release(); };
     const refresh = () => {
       const request = ++revision;
       const active = () => current() && request === revision;
       setLoading(true);
-      void readBotGroupProcessMessages(process, read, () => !active()).then(messages => {
+      void readBotGroupProcessMessages(process, read, () => !active(), () => { if (active()) stopUpdates(); }).then(messages => {
         if (active()) { setResult({ messages, failed: false }); setLoading(false); }
       }).catch(() => {
         if (active()) { setResult(previous => ({ messages: previous?.messages ?? [], failed: true })); setLoading(false); }
       });
     };
     const changed = (sessionId: unknown) => {
-      if (!current() || sessionId !== process.sessionId) return;
+      if (!current() || closed || sessionId !== process.sessionId) return;
       // A persisted tool batch can contain several records. Read once after it settles.
       clearTimeout(timer);
       timer = setTimeout(refresh, 50);
@@ -61,16 +65,11 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
       : window.electronAPI.localDb.messages.onCreated(({ sessionId }, stamp) => {
         if (isDataOwnerPushCurrent(stamp)) changed(sessionId);
       });
-    const topics = [`session:${process.sessionId}`];
-    const subscription = deviceId ? window.electronAPI.deviceLink.subscribe(deviceId, topics) : undefined;
-    void subscription?.catch(() => undefined);
+    void subscription?.subscribe().catch(() => undefined);
     refresh();
     return () => {
       cancelled = true;
-      clearTimeout(timer);
-      off();
-      if (deviceId) void subscription?.catch(() => undefined)
-        .then(() => window.electronAPI.deviceLink.unsubscribe(deviceId, topics)).catch(() => undefined);
+      stopUpdates();
     };
   }, [process.sessionId, process.clientId, deviceId, attempt]);
   const projection = projectBotGroupProcess(result?.messages ?? [], false);

@@ -25,9 +25,17 @@ vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: hist
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: history.invoke, subscribe: history.subscribe, unsubscribe: history.unsubscribe }) }));
 vi.mock('@/components/MobilePrimitives', () => ({ MainWindowActionButton: ({ action }: any) => el('button', { onClick: action.onPress }, 'Retry') }));
 vi.mock('@/session/BotGroupMessageText', () => ({ BotGroupMarkdownText: ({ content }: any) => el('p', null, content) }));
-// Native tool rendering is covered by the private renderer; keep its input visible
-// here while exercising the real outer and inner disclosures (not mocked shells).
-vi.mock('@/session/MessageRenderer', () => ({ WorkToolActivityRow: ({ activity }: any) => el('p', null, activity.message.normalized.label, activity.toolResult) }));
+// Adapt native rows/viewers; keep the real payload builder, normalization,
+// callbacks and disclosure state so this checks the group-to-viewer handoff.
+vi.mock('@/session/MessageRenderer', async () => {
+  const { buildToolResultPayload } = await import('@/session/messagePayload');
+  return {
+    WorkToolActivityRow: ({ activity, actions }: any) => el('div', null,
+    el('p', null, activity.message.normalized.label, activity.toolResult),
+    el('button', { disabled: !actions.onOpenPayload, onClick: () => actions.onOpenPayload?.(buildToolResultPayload(activity.message.normalized)) }, 'View full output')),
+    MessagePayloadModal: ({ payload, onClose }: any) => payload ? el('div', { role: 'dialog' }, payload.body, el('button', { onClick: onClose }, 'Close output')) : null,
+  };
+});
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { BotGroupProcess, BotGroupProcessEntries } from '@/session/BotGroupProcess';
 import { TeammateProcess } from '@/session/TeammateProcess';
@@ -35,7 +43,7 @@ import { __test_internals as memory } from '@/session/expandedBlockMemory';
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root, node: HTMLDivElement;
 beforeEach(() => { history.invoke.mockReset(); history.generation = 1; remoteSessionStore.clear(); memory.reset(); node = document.createElement('div'); root = createRoot(node); });
-afterEach(async () => { await act(async () => root.unmount()); });
+afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
 const header = () => node.querySelector('button')!;
 async function show(running: boolean) {
   await act(async () => root.render(el(TeammateProcess, { id: 'turn', title: running ? 'Reading feedback' : 'Progress', running,
@@ -177,6 +185,7 @@ it('restores a persisted late tool result after leaving and returning to history
 });
 
 it('updates an open history from a persisted tool result without remounting', async () => {
+  vi.useFakeTimers();
   const rows: import('@cindy/maker-shared/botGroupChat').BotGroupProcessMessage[] = [source,
     { clientId: 'tool', role: 'tool_use', toolUseId: 'tool', content: { toolName: 'Read', input: { file_path: '/repo/notes.md' } }, agentMeta: meta }, final];
   history.invoke.mockImplementation(async () => [...rows]);
@@ -188,8 +197,38 @@ it('updates an open history from a persisted tool result without remounting', as
   rows.push(result);
   await act(async () => {
     remoteSessionStore.applyRemotePush('mac', 'local-db:messages:created', { sessionId: process.sessionId, message: result });
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await vi.advanceTimersByTimeAsync(50);
   });
   expect(header().getAttribute('aria-expanded')).toBe('true');
   expect(node.textContent).toContain('Result delivered while open');
+});
+
+
+it.each([false, true])('opens and closes the complete tool payload (running=%s)', async running => {
+  const output = 'Long tool output\n'.repeat(80) + 'END OF COMPLETE RESULT';
+  await act(async () => root.render(el(BotGroupProcessEntries, { id: 'payload-turn', running, messages: [source,
+    { clientId: 'tool', role: 'tool_use', toolUseId: 'tool', content: { toolName: 'Read', input: { file_path: '/repo/notes.md' } }, agentMeta: meta },
+    { clientId: 'result', role: 'tool_result', toolUseId: 'tool', content: output, agentMeta: meta }, final] })));
+  await act(async () => header().click());
+  const open = Array.from(node.querySelectorAll('button')).find(button => button.textContent === 'View full output')!;
+  expect(open.disabled).toBe(false);
+  await act(async () => open.click());
+  expect(node.querySelector('[role="dialog"]')?.textContent).toContain(output);
+  await act(async () => Array.from(node.querySelectorAll('button')).find(button => button.textContent === 'Close output')!.click());
+  expect(node.querySelector('[role="dialog"]')).toBeNull();
+});
+
+it('stops refreshing a historical turn after seeing the next input', async () => {
+  vi.useFakeTimers();
+  history.invoke.mockResolvedValue([source,
+    { clientId: 'note', role: 'assistant', content: 'Closed turn note', agentMeta: { assistantPhase: 'commentary' } }, final,
+    { clientId: 'next-input', role: 'user', content: 'Next request' }]);
+  await act(async () => root.render(group()));
+  const reads = history.invoke.mock.calls.length;
+  await act(async () => {
+    remoteSessionStore.applyRemotePush('mac', 'local-db:messages:created', { sessionId: process.sessionId,
+      message: { id: 'new-work', clientId: 'new-work', sessionId: process.sessionId, role: 'thinking', content: '', createdAt: new Date().toISOString() } });
+    await vi.advanceTimersByTimeAsync(50);
+  });
+  expect(history.invoke).toHaveBeenCalledTimes(reads);
 });

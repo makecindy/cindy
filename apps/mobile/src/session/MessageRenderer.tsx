@@ -7598,7 +7598,7 @@ function MessageContentOpenButton({
   );
 }
 
-function MessagePayloadModal({
+export function MessagePayloadModal({
   payload,
   imageAnnotation,
   onClose,

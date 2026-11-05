@@ -55,6 +55,8 @@ export async function readBotGroupProcessMessages(
   ref: BotGroupProcessRef,
   read: (clientId: string) => Promise<readonly BotGroupProcessMessage[]>,
   cancelled: () => boolean,
+  /** A later input/prose proves this turn can no longer receive work records. */
+  onBoundary?: () => void,
 ): Promise<BotGroupProcessMessage[]> {
   const messages: BotGroupProcessMessage[] = [];
   const seen = new Set<string>();
@@ -74,8 +76,11 @@ export async function readBotGroupProcessMessages(
       // Like private-chat history, retain work records that settle after the
       // answer. A seal closes reply prose, not the delivery of thinking/results.
       // Stop before another input or new prose so its work cannot enter this turn.
-      if (completed && row.role !== 'thinking' && row.role !== 'tool_result') return messages;
-      if (row.role === 'user' && meta?.isSyntheticTrigger !== true) return messages;
+      if (completed && row.role !== 'thinking' && row.role !== 'tool_result'
+        || row.role === 'user' && meta?.isSyntheticTrigger !== true) {
+        onBoundary?.();
+        return messages;
+      }
       if (isBotGroupProcessMessageVisible(row)) {
         // Preserve timing but never copy reasoning/final-answer text into process prose.
         messages.push(row.role === 'thinking' || row.role === 'assistant'

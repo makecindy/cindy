@@ -4828,3 +4828,29 @@ it('hides the process entry after a running group execution is stopped without a
     expect(screen.queryByText('Work produced before stop')).toBeNull();
   } finally { read.mockRestore(); }
 });
+
+
+it('does not reread closed group turns on later session activity', async () => {
+  const process = { groupId: 'g1', executionId: 'closed-history', sessionId: 'closed-lane', clientId: 'source', deviceId: 'original-mac' };
+  mocks.remoteInvoke.mockResolvedValue([
+    { clientId: 'source', role: 'user', content: 'Request' },
+    { clientId: 'note', role: 'assistant', content: 'Closed turn', agentMeta: { assistantPhase: 'commentary' } },
+    { clientId: 'final', role: 'assistant', content: 'Answer', agentMeta: { turnCompleted: true } },
+    { clientId: 'next', role: 'user', content: 'Next request' },
+  ]);
+  const listeners = new Set<(push: unknown) => void>();
+  window.electronAPI.deviceLink.onRemotePush = ((listener: (push: unknown) => void) => {
+    listeners.add(listener); return () => { listeners.delete(listener); };
+  }) as typeof window.electronAPI.deviceLink.onRemotePush;
+  const view = render(<Tooltip.Provider><BotGroupProcess process={process}
+    member={{ ...detail().members[0]!, isOwned: true, homeDeviceId: 'original-mac' }} /></Tooltip.Provider>);
+  await waitFor(() => expect(view.container.querySelector('[data-teammate-process]')).not.toBeNull());
+  vi.useFakeTimers();
+  const reads = mocks.remoteInvoke.mock.calls.length;
+  await act(async () => {
+    listeners.forEach(listener => listener({ deviceId: 'original-mac', channel: 'local-db:messages:created', payload: { sessionId: process.sessionId } }));
+    await vi.advanceTimersByTimeAsync(50);
+  });
+  expect(mocks.remoteInvoke).toHaveBeenCalledTimes(reads);
+  vi.useRealTimers();
+});

@@ -14,7 +14,8 @@ import { useTheme } from '@/theme';
 import { spacing } from '@/theme/tokens';
 import { TeammateProcess, TeammateWorkSegment, useTeammateElapsedTitle } from './TeammateProcess';
 import { BotGroupMarkdownText } from './BotGroupMessageText';
-import { WorkToolActivityRow } from './MessageRenderer';
+import { MessagePayloadModal, WorkToolActivityRow } from './MessageRenderer';
+import type { MessagePayload } from './messagePayload';
 import { normalizeRemoteMessages } from './messageNormalize';
 import { buildMessageContentLayout } from './messageContentLayout';
 
@@ -40,12 +41,14 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
     const lease = remoteSessionStore.acquireSessionMessageWork(process.sessionId, true);
     const offTopic = startFocusedTopicSubscription({ deviceId, owner: `group-history:${process.executionId}`,
       topic: `session:${process.sessionId}`, subscribe, unsubscribe });
+    let closed = false;
+    const stopUpdates = () => { if (closed) return; closed = true; clearTimeout(timer); off(); offTopic(); lease.release(); };
     const refresh = () => {
       const request = ++revision;
       const active = () => !cancelled && request === revision;
       setLoading(true);
       void readBotGroupProcessMessages(process, clientId => invoke<BotGroupProcessMessage[]>(deviceId,
-        'local-db:messages:around-client-id', [process.sessionId, clientId, { radius: 80 }]), () => !active())
+        'local-db:messages:around-client-id', [process.sessionId, clientId, { radius: 80 }]), () => !active(), () => { if (active()) stopUpdates(); })
         .then(messages => { if (active()) { setResult({ messages, failed: false }); setLoading(false); } })
         .catch(() => { if (active()) { setResult(previous => ({ messages: previous?.messages ?? [], failed: true })); setLoading(false); } });
     };
@@ -55,13 +58,13 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
       const origin = remoteSessionStore.getSessionDeviceId(process.sessionId);
       // Hidden group lanes may not be in the task list. The mirror only invalidates;
       // every record is still re-read from this process's explicit execution device.
-      if (cancelled || next === messages || origin && origin !== deviceId) return;
+      if (cancelled || closed || next === messages || origin && origin !== deviceId) return;
       messages = next;
       clearTimeout(timer);
       timer = setTimeout(refresh, 50);
     });
     refresh();
-    return () => { cancelled = true; clearTimeout(timer); off(); offTopic(); lease.release(); };
+    return () => { cancelled = true; stopUpdates(); };
   }, [invoke, subscribe, unsubscribe, deviceId, process.sessionId, process.clientId, process.executionId, attempt]));
   // Resolve availability before advertising a disclosure, just like private chat.
   if (!result || (!result.failed && !projection.segments.length)) return null;
@@ -77,7 +80,9 @@ export function BotGroupProcessEntries({ messages, id, running = false }: { mess
   const projection = useMemo(() => projectBotGroupProcess(messages, running), [messages, running]);
   const { width } = useWindowDimensions();
   const contentLayout = useMemo(() => buildMessageContentLayout({ screenWidth: width }), [width]);
-  const actions = useMemo(() => ({ isSessionStreaming: running }), [running]);
+  const [payload, setPayload] = useState<MessagePayload | null>(null);
+  const closePayload = useCallback(() => setPayload(null), []);
+  const actions = useMemo(() => ({ isSessionStreaming: running, onOpenPayload: setPayload }), [running]);
   const tools = useMemo(() => new Map(normalizeRemoteMessages(messages
     .filter(message => isBotGroupProcessMessageVisible(message) && ['tool_use', 'tool_result'].includes(message.role))
     .map(message => ({ ...message, id: message.clientId, sessionId: id,
@@ -86,6 +91,7 @@ export function BotGroupProcessEntries({ messages, id, running = false }: { mess
       createdAt: message.createdAt ?? new Date(0).toISOString(),
     })), { preserveSourceOrder: true }).map(tool => [tool.source.clientId, tool])), [messages, id]);
   return <View style={{ gap: spacing.md }}>
+    {payload && <MessagePayloadModal payload={payload} onClose={closePayload} />}
     {projection.segments.map((segment, index) => {
       if (segment.kind === 'content') return <BotGroupMarkdownText key={segment.key} content={segment.item.text ?? ''} authorKind="bot" />;
       const active = running && index === projection.segments.length - 1;

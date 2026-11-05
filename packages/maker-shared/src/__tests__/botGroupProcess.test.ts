@@ -191,3 +191,18 @@ it.each([false, true])('pairs a tool result persisted after the answer (error: %
   expect(activities).toContainEqual(expect.objectContaining({ kind: 'tool', toolResult: resultText }));
   expect(JSON.stringify(messages)).not.toContain('Other turn result');
 });
+
+
+it('reports a confirmed next-turn boundary but keeps a final seal open for late work', async () => {
+  const { readBotGroupProcessMessages } = await import('../botGroupProcess.js');
+  const source = row(ref.clientId, 'user', 'Request');
+  const final = row('final', 'assistant', 'Answer', { turnCompleted: true });
+  const boundary: string[] = [];
+  const tail = [source, final, row('late', 'tool_result', 'Late tool output')];
+  await readBotGroupProcessMessages(ref, async () => tail, () => false, () => boundary.push('closed'));
+  expect(boundary).toEqual([]);
+  const records = await readBotGroupProcessMessages(ref, async () => [...tail, row('next', 'user', 'Next request')], () => false, () => boundary.push('closed'));
+  expect(records.map(message => message.clientId)).toContain('late');
+  expect(records.map(message => message.clientId)).not.toContain('next');
+  expect(boundary).toEqual(['closed']);
+});
