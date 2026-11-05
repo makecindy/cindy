@@ -38,7 +38,9 @@ export type BuiltinTabKindId =
   /** 全局页签(不跟对话):承载插件的 mainView / panel 页面,见 globalTabs.ts。 */
   | 'plugin-view'
   /** 任务页签(跟对话):承载插件的 taskView 页面,存在各任务自己的页签桶里。 */
-  | 'plugin-task';
+  | 'plugin-task'
+  /** A manifest ui.tabViews page, global or scoped to an actual task. */
+  | 'plugin-tab-view';
 export type TabKindId = BuiltinTabKindId | `ghost:${string}`;
 
 /** 一个 tab 运行时实例。`state` 由各 plugin 自管理结构 + 序列化,壳子只搬运。 */

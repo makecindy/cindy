@@ -435,3 +435,25 @@ it('groups and filters decision, OCR and image editing as distinct management ki
   expect(rows.every(row => isCapabilityRow(row, true))).toBe(true);
   expect(groupModelsForManagement(rows, 'model', row => managementKindOfRow(row, true)).map(group => group.key)).toEqual(['image', 'decision', 'other']);
 });
+
+describe('admitted model alias management', () => {
+  const aliases = (): ProviderView => ({ ...provider,
+    models: { codex: ['new', 'old'].map((id) => ({ ...model(id), selectionAliasKey: 'new' })),
+      'claude-code': [{ ...model('new'), selectionAliasKey: 'new' }] },
+  });
+  it('retains all real members as visibility and disable targets', () => {
+    const rows = buildUnionRows(aliases(), () => ({}));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].aliasRows?.map((r) => r.id).sort()).toEqual(['new', 'old']);
+    expect(modelVisibilityTargets(aliases(), rows[0], true)).toEqual(expect.arrayContaining([
+      { agent: 'codex', modelId: 'old' }, { agent: 'codex', modelId: 'new' },
+      { agent: 'claude-code', modelId: 'new' },
+    ]));
+  });
+  it('does not merge different prices/windows or conflicting user settings', () => {
+    const p = aliases();
+    p.models.codex![0].contextWindow = 1;
+    expect(buildUnionRows(p, () => ({}))).toHaveLength(2);
+    expect(buildUnionRows(aliases(), (_, id) => ({ fast: id === 'old' }))).toHaveLength(2);
+  });
+});

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { createElement, type ReactNode } from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Schedule, ScheduleTemplate } from '@cindy/maker-scheduler';
 import type { ProviderView } from '@cindy/model-providers';
@@ -14,6 +14,7 @@ import { pluginScheduleNavigationState } from '@/features/scheduler/lib/pluginSc
 const createSchedule = vi.fn();
 const modelFixtures = vi.hoisted(() => ({
   providers: [] as ProviderView[],
+  loading: false,
   sessionReferences: new Map<string, SessionReference>(),
 }));
 const toastMocks = vi.hoisted(() => ({
@@ -172,8 +173,12 @@ vi.mock('@/hooks/useAgentCapabilities', () => ({
   }),
 }));
 
+vi.mock('@/hooks/useAvailableAgents', () => ({
+  useAvailableAgents: () => ({ availableVendors: new Set(['cc', 'codex', 'pi']), loaded: true }),
+}));
+
 vi.mock('@/hooks/useProviders', () => ({
-  useProviders: () => ({ providers: modelFixtures.providers }),
+  useProviders: () => ({ providers: modelFixtures.providers, loading: modelFixtures.loading }),
 }));
 
 vi.mock('@/state/newMakerDraft', () => ({
@@ -215,6 +220,7 @@ vi.mock('@/features/scheduler/components/ScheduleChips', async () => {
 
 beforeEach(() => {
   modelFixtures.providers = [DEFAULT_CLAUDE_PROVIDER];
+  modelFixtures.loading = false;
   modelFixtures.sessionReferences.clear();
   createSchedule.mockImplementation(async (input) => ({ id: 'created-schedule', ...input }));
   routerMocks.location.pathname = '/cc-agent/scheduled';
@@ -385,6 +391,9 @@ describe('Scheduler template entry', () => {
    */
   it('插件请求:用户不碰模型 chip 直接保存,存下的模型与表单显示的一致', async () => {
     const REMEMBERED = 'claude-opus-4-9';
+    const provider = structuredClone(DEFAULT_CLAUDE_PROVIDER);
+    provider.models['claude-code']!.push({ ...provider.models['claude-code']![0], id: REMEMBERED });
+    modelFixtures.providers = [provider];
     expect(REMEMBERED).not.toBe('claude-sonnet-4-6'); // 必须区别于 fallback,否则测不出问题
     localStorageData.set(
       'xdt:scheduleFormPrefs:v1',
@@ -465,4 +474,32 @@ describe('editing legacy bound automations', () => {
       model: 'gpt-5.5', providerId: 'custom-fast', effort: 'high', fastMode,
     }), true);
   });
+});
+
+// P1 found in full-client acceptance: a template without model must resolve its
+// default after catalog loading. Prior coverage had only ready catalogs.
+// Unit/jsdom: real dialog/template effects; no duplicate implementation.
+it.each([
+  {providerId:'xd',agentKind:'claude-code' as const,expected:'claude-sonnet-4-6'},
+  {providerId:'missing-source',agentKind:'claude-code' as const,expected:''},
+  {providerId:'xd',agentKind:'codex' as const,expected:''},
+])('resolves model-less templates within $agentKind / $providerId after loading', async ({providerId,agentKind,expected}) => {
+  modelFixtures.loading = true;
+  modelFixtures.providers = [];
+  localStorageData.set('xdt:scheduleFormPrefs:v1', JSON.stringify({agentKind:'claude-code',
+    lastByAgent:{'claude-code':{model:'removed-model',providerId:'xd',effort:'ultra'}}}));
+  const initialTemplate = {...template, providerId, agentKind};
+  const onSubmit = vi.fn(async () => {});
+  const element = () => createElement(ScheduleFormDialog, {open:true, initial:null, initialTemplate,
+    onOpenChange:()=>{}, onSubmit});
+  const view = render(element());
+  modelFixtures.providers = [DEFAULT_CLAUDE_PROVIDER];
+  modelFixtures.loading = false;
+  view.rerender(element());
+  expect(screen.getByTestId('model-value').textContent).toBe(expected);
+  await act(async () => { fireEvent.click(screen.getByRole('button', {name:'scheduler.editor.promptDialog.createAria'})); });
+  if(expected) await waitFor(()=>expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+    agentKind:'claude-code',model:'claude-sonnet-4-6',providerId:'xd',effort:'medium',
+  }),false));
+  else expect(onSubmit).not.toHaveBeenCalled();
 });

@@ -1,4 +1,15 @@
 {
+  "pluginUi": {
+    "renderer": "Apresentação",
+    "original": "Original",
+    "unavailable": "Os controlos da extensão estão indisponíveis. As ações estão desativadas.",
+    "outcome-unknown": "O resultado não foi confirmado. Consulte o estado atual da extensão.",
+    "rejected": "A extensão não executou esta ação. O conteúdo introduzido foi mantido.",
+    "draftChanged": "O conteúdo introduzido mudou. A alteração da extensão não foi aplicada.",
+    "editorUnavailable": "Este campo está indisponível. A alteração da extensão não foi aplicada.",
+    "more": "Mais",
+    "close": "Fechar"
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "Atualizar quota",
@@ -2386,6 +2397,9 @@
     "agentIsland": {
       "title": "Agent Island",
       "unsupported": "O Agent Island requer o macOS 14 ou posterior.",
+      "subtleRemindersLabel": "Avisos discretos",
+      "subtleRemindersHint": "Quando há novas mensagens, pedidos de resposta ou erros, o ícone muda em vez de mostrar um cartão de notificação por baixo da ilha. Clica na ilha para ver a lista completa de tarefas.",
+      "subtleRemindersFailed": "Não foi possível guardar as definições dos avisos. Tenta novamente.",
       "enableLabel": "Mostrar Agent Island",
       "enableHint": "Mostra as tarefas em execução, que precisam de resposta e concluídas não lidas no topo do ecrã. Ao ativar, suprime as notificações equivalentes do sistema para evitar alertas duplicados.",
       "enableAria": "Ativar ou desativar o Agent Island",
@@ -3554,7 +3568,7 @@
         "formatIdentity": "Obrigatório. Defina kind como \"custom\" e name como o nome do fornecedor que pretende apresentar.",
         "formatAuth": "Obrigatório. Neste exemplo, defina method como \"apiKey\" e substitua apiKey pela chave do seu fornecedor.",
         "formatEndpoint": "Obrigatório para cada endpoint. protocol aceita \"openai-chat\", \"openai-responses\", \"anthropic-messages\" e \"google-generative-ai\". Defina baseUrl como o URL HTTP(S) completo do endpoint; recomenda-se HTTPS.",
-        "formatTargets": "Lista engine opcional: \"claude-code\", \"codex\" ou \"pi\". Omita-a para associar motores por protocolo ou especifique os motores explicitamente. O Claude Code também suporta os protocolos OpenAI e Google. O exemplo ativa apenas o Pi.",
+        "formatTargets": "Lista opcional de motores: \"claude-code\", \"codex\" ou \"pi\". Omita-a para associar motores por protocolo ou especifique os motores explicitamente. O Claude Code também suporta os protocolos OpenAI e Google. O exemplo ativa apenas o Pi.",
         "formatModels": "Opcional. Utilize cadeias com os IDs dos modelos ou objetos com id (name é opcional). Omita a lista ou deixe-a vazia para obter os modelos após a confirmação. Uma lista não vazia dispensa a obtenção automática.",
         "formatMetadata": "Campos opcionais dos modelos: group é o grupo do modelo, contextWindow é o comprimento do contexto e maxOutputTokens é o limite de saída (ambos em tokens). Os números do exemplo são ilustrativos; utilize as capacidades reais do modelo.",
         "formatEffort": "Campos opcionais dos modelos: efforts lista os níveis de esforço suportados; defaultEffort seleciona um deles como predefinição. Remova ambos os campos se tiver dúvidas.",
@@ -4021,6 +4035,7 @@
             "hint": "Aplica-se à ligação de Images de {{agent}}. Declare apenas capacidades efetivamente suportadas pela API. Volte a abrir os detalhes de Art após guardar."
           },
           "capabilityHint": "Usa as capacidades declaradas por este fornecedor. Quando não há declaração, o suporte de imagens é inferido a partir do nome do modelo.",
+          "imageInputDefault": "{{value}} (predefinição)",
           "imageInput": "Entrada de imagens",
           "imageInputMixed": "Varia consoante o motor",
           "supported": "Suportado",
@@ -5726,6 +5741,7 @@
           "checking": "A procurar atualizações…",
           "upToDate": "Atualizado",
           "checkFailed": "Não foi possível procurar atualizações",
+          "rateLimited": "O GitHub está a limitar as verificações",
           "lastChecked": "Última verificação: {{time}}",
           "check": "Procurar atualizações",
           "retry": "Tentar novamente",
@@ -7774,6 +7790,8 @@
         "skill": "Adiciona a Skill \"{{name}}\" aos seus assistentes de IA",
         "skillDetail": "Uma Skill é um ficheiro de instruções que a IA carrega e segue como suas, com todas as suas permissões, no Claude Code e no Codex, em todos os projetos — não está limitada à sandbox deste plugin. Permanece disponível enquanto o plugin está ativo e é removida quando o plugin é desativado ou desinstalado; desativar o plugin para uma única pasta não a oculta. Não é possível pré-visualizar aqui o texto completo da Skill — instale apenas plugins em que confia.",
         "routineEvents": "Eventos de rotina",
+        "nativeUi": "Adicionar controlos às tarefas",
+        "nativeTabView": "Abrir a vista «{{title}}»",
         "mcpUi": "Apresentar páginas interativas na conversa",
         "mcpUiDomains": "Domínios de rede da página: {{domains}}",
         "mcpAppOnly": "Apenas a página",
@@ -13218,6 +13236,12 @@
       "text": "Uma execução automática falhou.",
       "precheck": "As verificações automáticas estão temporariamente bloqueadas.",
       "rateLimited": "As verificações automáticas estão temporariamente bloqueadas por um limite de frequência de pedidos.",
+      "pluginMissing": "As verificações automáticas estão bloqueadas: o plugin {{name}} não está instalado. Elas serão retomadas após a instalação.",
+      "pluginMissingUnnamed": "As verificações automáticas estão bloqueadas: um plugin necessário não está instalado. Elas serão retomadas após a instalação.",
+      "pluginDisabled": "As verificações automáticas estão bloqueadas: o plugin {{name}} está desativado. Elas serão retomadas após a ativação.",
+      "pluginDisabledUnnamed": "As verificações automáticas estão bloqueadas: um plugin necessário está desativado. Elas serão retomadas após a ativação.",
+      "installPlugin": "Instalar plugin",
+      "openPlugin": "Abrir plugin",
       "dismissTitle": "Dispensar aviso de falha anterior"
     },
     "worktreeRestoreBanner": {

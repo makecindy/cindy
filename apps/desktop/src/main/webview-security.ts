@@ -48,6 +48,9 @@ import {
   handleGhostPreviewNavigation,
   noteGhostUserGesture,
   resolveGhostWebviewAttach,
+  authorizePluginTabViewAttach,
+  attachPluginTabViewGuest,
+  attachGhostPageModelPicker,
 } from './cindy-brain/index.js';
 import { classifyGhostPanelNavigation } from './cindy-brain/previewGate.js';
 import { ghostMediaHandoverDragScript, ghostMediaHandoverTargetTracker } from './cindy-brain/ghostMediaHandoverTargetTracker.js';
@@ -172,6 +175,7 @@ export function applyGhostWebviewHardening(
   webPreferences.webviewTag = false;
   webPreferences.plugins = false;
   delete webPreferences.preload;
+  delete webPreferences.additionalArguments;
 }
 
 type GhostWebviewAttachResolver = typeof resolveGhostWebviewAttach;
@@ -208,6 +212,8 @@ export function authorizeGhostWebviewAttach(
   params.partition = resolved.partition;
   webPreferences.partition = resolved.partition;
   applyGhostWebviewHardening(webPreferences, params);
+  // A single page-scoped picker method; never reuse the logic page or main-window bridge.
+  webPreferences.preload = path.join(__dirname, 'ghostPagePreload.js');
   return {
     id: resolved.ghost.manifest.id,
     instanceId,
@@ -985,12 +991,14 @@ export function installWebviewHardener(): void {
     // will 阶段的意识/captcha 判定带给 did 阶段(这两类 guest 走独立接线,
     // 不装浏览器的 popup 路由与快捷键转发)。
     let pendingGhostAttach: ReturnType<typeof authorizeGhostWebviewAttach> = null;
+    let pendingTabView: { url: string; current(): boolean } | null = null;
     let pendingCaptchaAttach = false;
     let pendingRemoteSettings: ReturnType<typeof resolveRemoteSettingsAttach> = null;
     contents.on('will-attach-webview', (e, webPreferences, params) => {
       pendingCaptchaAttach = false;
       pendingRemoteSettings = null;
       pendingGhostAttach = null;
+      pendingTabView = null;
       if (typeof params.partition === 'string' && params.partition.startsWith(REMOTE_PLUGIN_SETTINGS_PARTITION)) {
         const view = resolveRemoteSettingsAttach(contents, params.partition, params.src);
         if (!view) { e.preventDefault(); return; }
@@ -1017,6 +1025,14 @@ export function installWebviewHardener(): void {
           return;
         }
         pendingGhostAttach = authorized;
+        if (new URL(params.src).searchParams.has('cindyView')) {
+          const tab = authorizePluginTabViewAttach(contents, params.src);
+          if (!tab) { e.preventDefault(); pendingGhostAttach = null; return; }
+          // Same compiled preload, but only the narrow view API is exposed.
+          webPreferences.preload = path.join(__dirname, 'ghostPreload.js');
+          webPreferences.additionalArguments = ['--cindy-plugin-tab-view'];
+          pendingTabView = { url: params.src, current: tab.current };
+        }
         return;
       }
       pendingGhostAttach = null;
@@ -1071,9 +1087,13 @@ export function installWebviewHardener(): void {
         const authorized = pendingGhostAttach;
         const ghostId = authorized.id;
         pendingGhostAttach = null;
+        const tab = pendingTabView; pendingTabView = null;
+        if (tab && (!tab.current() || !attachPluginTabViewGuest(contents, tab.url, guestContents))) { guestContents.close(); return; }
         // 崩溃豁免登记(lifecycle 的全局 render-process-gone 守卫据此放行,
         // 面板错误接管态负责用户侧收尾)。
         registerGhostWebContents(guestContents.id);
+        attachGhostPageModelPicker(contents, guestContents, authorized.instanceId,
+          () => authorized.isCurrent() && (!tab || tab.current()));
         installNativeTrackpad(contents, guestContents, () => {
           if (!isGhostGuestOwnerActive(authorized.owner)) return false;
           return authorized.isCurrent();

@@ -907,7 +907,7 @@ Forge 新装默认 root，不按当前登录组织自动创建组织实例。已
 
 `taskView`（跟对话的任务页）的现行协议在 `FORGE_GUIDE` §4.22；v2 对应 `task-view` 槽。
 任务页页签（右侧栏 kind `plugin-task`）存在各任务自己的页签桶里，随任务切换；页面与
-panel / mainView 同一 Ghost WebView 沙箱（零桥、专属分区），只经查询参数 `session`
+panel / mainView 同一 Ghost WebView 沙箱（专属分区，仅有下述页面选模桥），只经查询参数 `session`
 得知所在任务。逻辑页经 `cindy.taskView({sessionId?, focus?})`（管子 `task-view-request`）
 打开或聚焦它：只承载包内页面、不收网址，因此不设 preview 式白名单与限速。Host 做资格审
 （已装、启用、声明 taskView）与落点解析（显式任务优先，缺省台前任务），回执带回落点
@@ -1069,6 +1069,20 @@ IPC 时追加对应专项规则要求的验证。
 
 ### 宿主统一模型选择器（新增接口，尚未发布）
 
+桌面插件的 settings / panel / mainView / taskView WebView 可调用
+`window.cindyUI.pickModel({anchor:{x,y,width,height},initial?,allowRemote?})`，锚点使用按钮
+`getBoundingClientRect()` 的页面 CSS 坐标；默认包含其他电脑与分享供应商。
+Main 只向通过安装／owner 附加校验的 guest 注入页面选模桥（原生 tabView 与普通页面共用），只暴露这一个方法，
+逐次核对真实 sender 和顶层 frame，绑定原 guest、宿主窗口与批准代次。
+Renderer 在原宿主窗口定位该 guest，把按钮坐标换算到宿主；不存在、隐藏或锚点越界时取消。
+模型目录、搜索、收藏、最近使用、说明、档位与 Fast 复用 `ModelRouteSelectorContent`，
+选中后经既有可用性校验返回完整 route；不返回凭证、endpoint 或 ProviderView。
+参数和收藏编辑沿用现有插件选模的单次草稿，不写宿主偏好。旧 `pickModel` 与
+`POST /model-picker` 保留居中确认弹窗及原默认值，不改变旧插件批准。
+页面滚动／缩放、文档导航、关闭或崩溃撤销等待，旧答案不能落到替代页。
+此页面桥仅本机 Electron guest 使用，不进入 device-link 白名单；手机、远程控制页面与旧 Host
+须检测接口并沿用电子脑 `pickModel({mobilePageId,...})` 的原生选模通道。
+
 电子脑 `cindy.pickModel({initial?,mobilePageId?,allowRemote?})` 与桌面页面同源 `POST /model-picker`
 复用 Cindy 的统一模型选择器，返回完整配置（模型、引擎、思考档位、Fast 与可选的 `agentDeviceId` 运行来源）。
 选模不需要新的 manifest 权限、不改变存量批准，不修改默认或现有任务、不执行模型调用。
@@ -1076,7 +1090,8 @@ IPC 时追加对应专项规则要求的验证。
 
 Main 按真实逻辑页或专属协议分区定位物理实例，绑定当前 owner 与安装批准版本；
 只接受目标宿主窗口或目标页面的回答，验证输入形状与实际可用路由，异步校验后再次复核绑定。
-同一 Host 仅一单，重复打开沿用目录选择的限速。取消、90 秒超时、窗口/页面关闭、账号边界、
+同一 Host 仅一单，已有选择器时返回 `BUSY`；选模不调用模型，不设关闭后重新打开的时间冷却。
+取消、90 秒超时、窗口/页面关闭、账号边界、
 插件停止均撤销等待并收起界面；不可用的来源保持选择器可编辑，不能静默换模型。
 手机与远程桌面设置页保留显式 mobilePageId，展示端读取执行电脑目录，缺失/失效来源不回退另一设备。
 原生插件页与远程 Desktop 设置控制端打开页面时声明 `modelPickerRemoteSources:true`，Host
