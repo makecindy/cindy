@@ -1,4 +1,5 @@
 import { registerRuntimeSettingsSection } from './app-settings/runtime.js';
+import { initializeRuntimeAppIcon } from './app-icon.js';
 import { z as settingsSchema } from 'zod';
 import { deliverRoutineResult, listRoutineDeliveryTargets } from './routines/delivery.js';
 import { flushPluginUsageLifecycle } from './plugin-usage/current.js';
@@ -9,6 +10,7 @@ import { ensureImportedAutomationReady, recoverCompanionImports } from './bot-im
 import { listWorktreeRecycleStatus, controlWorktreeRecycle } from './worktree/recycleControls';
 import { registerFilePeerIpc } from './device-link/filePeer';
 import { registerTaskMigrationIpc } from './task-migration/service';
+import { registerSetupMigration } from './setup-migration/register';
 import { registerLoginItemIpc } from './login-item-ipc.js';
 import { registerMenubarIpc } from './menubar/ipc.js';
 import { initMenubarService, stopMenubarService } from './menubar/service.js';
@@ -1117,6 +1119,7 @@ import {
   applyAppearanceToWindow,
   applyAppearanceToWindows,
   getPersistedWindowZoom,
+  installWindowZoomRestoration,
   registerAppearanceSettingsIpc,
   updatePersistedWindowZoom,
 } from './appearance-settings-ipc.js';
@@ -1166,6 +1169,7 @@ import {
   refreshGhostLocalization,
   refreshPluginUsageBindings,
   registerGhostIpc,
+  restorePluginAppIcon,
   setRemotePluginManagementServices,
   runStableOwnerPostCommitTask,
   setGhostNodeRuntimeStartAttemptContextReader,
@@ -4139,6 +4143,10 @@ const createWindow = () => {
     if (mainWindow.isDestroyed()) return;
     applyPageZoomLevel(mainWindow, getPersistedWindowZoom());
   });
+  // Conversation switching is an in-page hash navigation, so `did-finish-load`
+  // never fires. Chromium would otherwise restore that URL's stale per-URL zoom
+  // instead of the saved preference, making the window look smaller (#7486).
+  installWindowZoomRestoration(mainWindow);
   // Deep link 模块持有同一个 mainWindow 引用 — 解析出的 URL 通过 webContents.send
   // 推给 renderer (channel 'deep-link:navigate')。关窗时同步清空, 避免给已销毁
   // 的 BrowserWindow 发 IPC 触发 'Object has been destroyed'。
@@ -7284,6 +7292,17 @@ const registerIpcHandlers = () => {
     ),
     getAllowedProjectRoots: listAllowedSkillhubProjectRoots,
   });
+  // 新电脑设置(docs/product-rules/new-device-setup-migration.md)：从同账号另一台电脑读取非秘密配置，
+  // 经本机原有安装器与设置存储重建；同时应答另一台电脑的只读快照请求。
+  registerSetupMigration({
+    getMaker: getMakerCore,
+    getManagedSkillRoots: () => getGhostManager().managedRootDirs(),
+    getBuiltInSkills: () => builtInSkillDescriptors(
+      app.getPath('userData'),
+      app.getPath('appData'),
+    ),
+    getMainWindow: () => mainWindowRef,
+  });
   disposeSkillhubAutoSyncAuthListener = authManager.onAuthStateChange((state) => {
     if (!state.isAuthenticated) return;
     void skillhubAutoSyncService.runOnceAfterLogin();
@@ -9403,20 +9422,9 @@ app.on('ready', async () => {
 
   initializeUpdatePresentationRecovery();
 
-  // mac dev 下 Dock 显示的是 Electron 默认图标——macOS 忽略 BrowserWindow.icon,
-  // Dock 图标取自可执行 bundle 的 icns,而 dev 跑的是 node_modules 里的官方
-  // Electron 二进制。这里 dev-only 手动设成 Cindy 图标;packaged 版由
-  // resources/icon.icns 自然生效,不需要也不该动。
-  // 使用 icon-dock.png（generate-mac-icns.mjs 产出，已套 Apple 圆角网格）；
-  // setIcon 会原样显示资源，不会替应用图标自动加圆角。
-  if (!app.isPackaged && process.platform === 'darwin') {
-    try {
-      app.dock?.setIcon(path.join(__dirname, '../../resources/icon-dock.png'));
-    } catch (err) {
-      // 仅影响 dev Dock 观感,失败不挡启动
-      createLogger('dock-icon').warn('setIcon failed', { error: String(err) });
-    }
-  }
+  await initializeRuntimeAppIcon().then(restorePluginAppIcon).catch(err => {
+    createLogger('dock-icon').warn('Runtime icon initialization failed', { error: String(err) });
+  });
 
   await ensureMainAppPresence('app-ready');
 

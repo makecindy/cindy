@@ -1,4 +1,6 @@
 import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validateWithStoredMcpApps, parseGhostMcpApps } from '@cindy/plugin-protocol';
+import { parseGhostNativeUi, validateWithStoredNativeUi } from '@cindy/plugin-protocol';
+import { PLUGIN_UI_CAPABILITIES, PLUGIN_UI_CONTEXT_FIELDS, pluginUiPointAcceptsScope } from '../../../../packages/maker-shared/src/pluginUi.js';
 import { pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '@cindy/plugin-protocol';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from '@cindy/plugin-protocol';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from '@cindy/plugin-protocol';
@@ -251,6 +253,11 @@ export interface GhostAgentNeeds {
    * 不依赖 tasks,需独立批准(observeCapabilityApproved)。
    */
   observe?: boolean;
+  /**
+   * companions = 只读查看伙伴(含主人其他电脑上的)名单、实时状态、工作阶段、待处理请求摘要与最新回复,
+   * 并在主窗口打开伙伴的任务。不能替用户批准或回答;不依赖 tasks,需独立批准(companionsCapabilityApproved)。
+   */
+  companions?: boolean;
 }
 
 /** 插件随包本地 Node 工作进程使用的 stdio 协议。 */
@@ -1635,6 +1642,8 @@ export function isGhostSetupErrorCode(value: unknown): value is GhostSetupErrorC
 
 /** ghost.json 清单(不变量由 validateGhostManifest 保证)。 */
 export interface GhostManifest {
+  /** Native Cindy contributions. Unknown versions remain declaration data. */
+  ui?: unknown;
   /** Optional MCP Apps resources and links to existing tools. */
   mcpApps?: unknown;
   /** Optional v3 extension, validated only when projecting homepage recommendations. */
@@ -1902,6 +1911,8 @@ export interface InstalledGhost {
   approvedAutoTools?: string[];
   /** Independent Host consent for read-only project task observation. */
   observeCapabilityApproved?: true;
+  /** Independent Host consent for reading companions: roster, live status, pending request summaries and latest reply. */
+  companionsCapabilityApproved?: true;
   manifest: GhostManifest;
   /** 安装目录绝对路径(userData/brain/<id> 或 userData/brain/_ns/<org>/<id>)。 */
   dir: string;
@@ -2194,6 +2205,36 @@ export function ghostDeclaresHiddenTasks(manifest: Pick<GhostManifest, 'agent'> 
 
 export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionItem[] {
   const items: GhostPermissionItem[] = [];
+  const nativeUi = parseGhostNativeUi(manifest.ui);
+  if (nativeUi?.version === 1) for (const view of nativeUi.tabViews ?? []) {
+    items.push({ key: `ui:tab-view:${view.id}`, kind: 'panel', labelKey: 'nativeTabView', labelArgs: { title: view.title },
+      detail: `${view.title} (${view.scope}); page: ${view.page}` });
+  }
+  if (nativeUi?.version === 1 && nativeUi.appearance) {
+    const fields = nativeUi.appearance.fields.filter(field => ['wallpaper', 'uiFont', 'codeFont', 'bodyFont', 'theme', 'reading', 'contentStyle', 'visibility', 'appIcon'].includes(field)).sort();
+    if (fields.length) items.push({ key: 'ui:appearance', kind: 'panel', labelKey: 'nativeUi', detail: `appearance: ${fields.join(', ')}` });
+  }
+  if (nativeUi?.version === 1) for (const c of nativeUi.contributions ?? []) {
+    if (PLUGIN_UI_CAPABILITIES.points.includes(c.point) && pluginUiPointAcceptsScope(c.point, c.scope)) {
+      const context = c.scope === 'app' ? [] : (c.context ?? []).filter(field => PLUGIN_UI_CONTEXT_FIELDS.includes(field)).sort();
+      const editor = c.scope === 'app' ? [] : (c.editor ?? []).filter(operation => ['append', 'replace-selection'].includes(operation)).sort();
+      const match = (c.point === 'message.body' || c.point === 'tool.body') && c.match &&
+        ['self', 'plugin', 'tool'].includes(c.match.kind) ? JSON.stringify({ kind: c.match.kind,
+          ...(c.match.instanceId ? { instanceId: c.match.instanceId } : {}), ...(c.match.name ? { name: c.match.name } : {}) }) : '';
+      items.push({ key: `ui:native:${c.id}`, kind: 'panel', labelKey: 'nativeUi', detail: `${c.point} (${c.scope})` +
+        (match ? `; match: ${match}` : '') + (context.length ? `; context: ${context.join(', ')}` : '') + (editor.length ? `; editor: ${editor.join(', ')}` : '') });
+    }
+  }
+  if (nativeUi?.version === 1) for (const command of nativeUi.commands ?? []) {
+    if (command.scope !== 'session' && command.scope !== 'message') continue;
+    const points = (command.points ?? []).filter(point => PLUGIN_UI_CAPABILITIES.points.includes(point) &&
+      pluginUiPointAcceptsScope(point, command.scope)).sort();
+    const context = (command.context ?? []).filter(field => ['session.summary', 'message.content', 'selection'].includes(field)).sort();
+    const editor = (command.editor ?? []).filter(operation => ['append', 'replace-selection'].includes(operation)).sort();
+    items.push({ key: `ui:command:${command.id}`, kind: 'panel', labelKey: 'nativeUi',
+      detail: `${points.join(', ') || 'shortcut'} (${command.scope})` +
+        (context.length ? `; context: ${context.join(', ')}` : '') + (editor.length ? `; editor: ${editor.join(', ')}` : '') });
+  }
   if (pluginHasToolUi(manifest)) items.push({ key: 'ui:pages', kind: 'panel', labelKey: 'mcpUi',
     detailKey: 'uiPageAccess', detailArgs: {
       pages: (getPluginToolUi(manifest)?.resources ?? []).map(resource => resource.uri).sort().join(', ') || '—',
@@ -2284,6 +2325,9 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     }
     if (manifest.agent?.observe === true) {
       items.unshift({ key: 'agent:observe', kind: 'agent', labelKey: 'agentObserve', detailKey: 'agentObserveDetail' });
+    }
+    if (manifest.agent?.companions === true) {
+      items.unshift({ key: 'agent:companions', kind: 'agent', labelKey: 'agentCompanions', detailKey: 'agentCompanionsDetail' });
     }
     // 后台隐藏任务:独立 key 单列(理由同 schedule —— 并进 agent:tasks 会让更新里
     // 新增 hiddenTasks 时 added 为空,扩权复核拦不住)。排在 agent:tasks 之后。
@@ -3348,6 +3392,11 @@ function isPortableGhostRelativePath(p: unknown): p is string {
  */
 export function ghostWebviewEntryPaths(manifest: GhostManifest): string[] {
   const paths: string[] = [];
+  const nativeUi = parseGhostNativeUi(manifest.ui);
+  if (nativeUi?.version === 1) for (const view of nativeUi.tabViews ?? []) {
+    const p = `/${view.page}`;
+    if (!paths.includes(p)) paths.push(p);
+  }
   if (manifest.panel?.html) paths.push(`/${manifest.panel.html}`);
   if (manifest.mainView?.html) {
     const p = `/${manifest.mainView.html}`;
@@ -3384,6 +3433,7 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
+  'ui',
   'mcpApps',
   'routineEvents',
   'models',
@@ -4284,12 +4334,12 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
 
 /** Stored market releases tolerate only historical mcpApps; other fields remain strict. */
 export function validateStoredGhostManifest(value: unknown): ManifestValidation {
-  return validateWithStoredMcpApps(value, validateGhostManifest);
+  return validateWithStoredNativeUi(value, raw => validateWithStoredMcpApps(raw, validateGhostManifest));
 }
 
 /** Installed snapshots retain historical unknown tasks data without granting it. */
 export function validateInstalledGhostManifest(value: unknown): ManifestValidation {
-  return validateWithStoredMcpApps(value, raw => validateGhostManifestInput(raw, true));
+  return validateWithStoredNativeUi(value, raw => validateWithStoredMcpApps(raw, input => validateGhostManifestInput(input, true)));
 }
 
 function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boolean): ManifestValidation {
@@ -4297,6 +4347,8 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
   if (!preparation.ok) return preparation;
   const prepared = preparation.prepared;
   const raw = prepared.raw;
+  const ui = raw.ui === undefined ? undefined : parseGhostNativeUi(raw.ui);
+  if (ui === null) return { ok: false, reason: 'ui 必须声明合法的 version 与唯一的 contributions' };
   if (raw.mail !== undefined && raw.mail !== true) return { ok: false, reason: 'mail 出现时必须是 true' };
   const mailReader = raw.mailReader === undefined ? undefined : parseMailReader(raw.mailReader);
   if (raw.mailReader !== undefined && !mailReader) {
@@ -4944,15 +4996,16 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
     if (!preserveHistoricalTasks && agentRaw.observe !== undefined && typeof agentRaw.observe !== 'boolean') {
       return { ok: false, reason: 'agent.observe must be boolean' };
     }
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && Object.keys(unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe'])).length === 0) {
+    if (!preserveHistoricalTasks && agentRaw.companions !== undefined && typeof agentRaw.companions !== 'boolean') return { ok: false, reason: 'agent.companions must be boolean' };
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && agentRaw.companions !== true && Object.keys(unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions'])).length === 0) {
       return {
         ok: false,
         reason:
-          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true 五项加档；仅需用户点击触发时请省略 agent 字段',
+          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true / companions: true 六项加档；仅需用户点击触发时请省略 agent 字段',
       };
     }
     agent = {
-      ...unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe']),
+      ...unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions']),
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
       ...(agentRaw.tasks === true ? { tasks: true } : {}),
@@ -4961,6 +5014,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
       ...(agentRaw.tasks === true && agentRaw.hiddenTasks === true ? { hiddenTasks: true } : {}),
       ...(agentRaw.schedule === true ? { schedule: true } : {}),
       ...(agentRaw.observe === true ? { observe: true } : {}),
+      ...(agentRaw.companions === true ? { companions: true } : {}),
     };
   }
 
@@ -6662,6 +6716,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
     ok: true,
     manifest: {
       ...prepared.unknownV3Fields,
+      ...(ui !== undefined ? { ui } : {}),
       ...(mcpApps !== undefined ? { mcpApps } : {}),
       schemaVersion: prepared.schemaVersion,
       id: raw.id,
@@ -8896,6 +8951,12 @@ export type GhostControlPointResult =
     }
   | { action: 'route'; ghostId: string; ghostName: string; route: GhostModelRoute; reason: string };
 
+
+/**
+ * 下行:伙伴名单或状态变了(cindy.companions.watch 的订阅)。不带内容,逻辑页用 cindy.companions.list 重读。
+ * 与 host-context-changed 一样不是订阅事件(type 不是 'event'),不并入 GhostPipeEventPush。
+ */
+export interface GhostPipeCompanionsChanged { type: 'companions-changed'; subscriptionId: string; seq: number }
 
 /**
  * 下行:主机 → 意识的事件推送(经管子 onHostMessage 到达)。

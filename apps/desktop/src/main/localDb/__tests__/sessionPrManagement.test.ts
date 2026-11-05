@@ -36,7 +36,9 @@ for (const table of [sessions, messages, sessionPrRefs, migrationMeta] as SQLite
     `CREATE TABLE "${config.name}" (${config.columns.map((c) => `"${c.name}" ${c.getSQLType()}${c.primary ? ' PRIMARY KEY' : ''}`).join(', ')})`,
   );
 }
-sqlite.exec('CREATE UNIQUE INDEX pr_identity ON session_pr_refs(session_id,owner,repo,pr_number)');
+sqlite.exec(
+  'CREATE UNIQUE INDEX pr_identity ON session_pr_refs(session_id,provider,host,owner,repo,pr_number)',
+);
 const verify = vi.fn(async () => undefined);
 const add = (number: number) =>
   managePrRefs(
@@ -62,6 +64,52 @@ beforeEach(() => {
 afterAll(() => sqlite.close());
 
 describe('manual PR management', () => {
+  // DB: MR imports and manual adds share identity across namespace/host/provider.
+  // Prior GitHub fixtures cannot detect cross-host collisions or dropped MR messages.
+  it('imports multi-group MRs and adds the same number on another host without collision', async () => {
+    const url = 'https://git.example.com/group/sub/project/-/merge_requests/7';
+    db.insert(messages)
+      .values({
+        id: 'mr',
+        clientId: 'mr',
+        sessionId: 's',
+        role: 'assistant',
+        content: JSON.stringify(url),
+        createdAt: 10,
+      })
+      .run();
+    await recordPrRefsForImportedMessages('s');
+    expect(await listPrRefs('s')).toMatchObject([
+      {
+        provider: 'gitlab',
+        host: 'git.example.com',
+        owner: 'group/sub',
+        repo: 'project',
+        prNumber: 7,
+      },
+    ]);
+    const refs = await managePrRefs(
+      's',
+      { action: 'add', url: url.replace('git.example.com', 'other.example.com') },
+      verify,
+    );
+    expect(refs).toHaveLength(2);
+    await recomputePrRefsForSession('s');
+    expect(await listPrRefs('s')).toHaveLength(2);
+    db.update(messages)
+      .set({ content: JSON.stringify('no MR remains') })
+      .where(eq(messages.id, 'mr'))
+      .run();
+    await recomputePrRefsForSession('s');
+    expect(await listPrRefs('s')).toMatchObject([{ host: 'other.example.com' }]);
+    await expect(
+      managePrRefs('s', { action: 'add', url: url.replace('https:', 'http:') }, verify),
+    ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(await manageSessionPrs('s', { action: 'list' }, verify, 'ui')).toMatchObject({ associations: [] });
+    expect(await manageSessionPrs('s', { action: 'attach', pr: { repo: 'example/repo', number: 1 } }, verify, 'ui')).toMatchObject({ associations: [{ provider: 'github', prNumber: 1 }] });
+    await expect(manageSessionPrs('s', { action: 'reorder', prs: [{ repo: 'example/repo', number: 1 }] }, verify, 'ui')).rejects.toThrow('UNSUPPORTED_PROVIDER');
+  });
+
   it('keeps removed links out of active reads until explicit restore', async () => {
     const [ref] = await add(1);
     await managePrRefs('s', { action: 'remove', id: ref.id }, verify);

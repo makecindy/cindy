@@ -1,4 +1,15 @@
 {
+  "pluginUi": {
+    "renderer": "顯示方式",
+    "original": "原始內容",
+    "unavailable": "插件介面暫時無法使用，目前操作已停用。",
+    "outcome-unknown": "插件操作結果尚未確認，請查看最新狀態。",
+    "rejected": "插件未執行這次操作，目前內容已保留。",
+    "draftChanged": "輸入已變更，未套用插件的輸入修改。",
+    "editorUnavailable": "目前輸入框無法使用，未套用插件的輸入修改。",
+    "more": "更多",
+    "close": "關閉"
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "重新整理配額",
@@ -1024,11 +1035,19 @@
       "copied": "已複製",
       "copyFailed": "複製失敗，可以重試或儲存檔案。",
       "scrollHint": "在選取範圍內向上或向下捲動，也可點擊自動捲動",
-      "recordHint": "在預覽上繪製標註，標註會出現在錄影中。不錄製聲音",
+      "recordHint": "在預覽上繪製標註，標註會出現在錄影中。",
       "format": "格式",
       "videoFormat": "影片 (WebM)",
-      "prepareHint": "點擊開始後倒數 3 秒，不錄製聲音。",
+      "prepareHint": "點擊開始後倒數 3 秒。",
       "countdown": "{{count}} 秒後開始錄製",
+      "systemAudio": "揚聲器",
+      "microphone": "麥克風",
+      "audioHint": "選擇聲源後開始錄製，可同時開啟",
+      "preparingAudio": "正在準備聲音…",
+      "systemAudioFailed": "無法錄入揚聲器聲音，請檢查系統權限或關閉此聲源",
+      "microphoneFailed": "無法使用麥克風，請檢查權限和輸入裝置或關閉此聲源",
+      "audioFailed": "無法開始錄音，請檢查裝置或關閉聲音後錄製",
+      "audioInterrupted": "聲音已中斷，請結束錄製以儲存已錄內容",
       "countdownHint": "即將開始，按 Esc 取消。",
       "annotate": "標註",
       "finishing": "正在完成…",
@@ -2313,6 +2332,9 @@
     "agentIsland": {
       "title": "靈動島",
       "unsupported": "靈動島需要 macOS 14 或更高版本。",
+      "subtleRemindersLabel": "輕提醒",
+      "subtleRemindersHint": "有新訊息、待回覆事項或錯誤時，不向下彈出通知卡片，透過圖示變化提示。點擊靈動島可查看完整任務清單。",
+      "subtleRemindersFailed": "無法儲存提醒設定，請重試。",
       "enableLabel": "顯示靈動島",
       "enableHint": "在螢幕頂部顯示正在執行、待互動和未讀完成的任務。啟用後會抑制同類系統通知，避免重複打擾。",
       "enableAria": "切換靈動島",
@@ -3921,6 +3943,7 @@
             "hint": "套用於 {{agent}} 的圖片連線。僅宣告介面實際支援的能力，儲存後重新開啟 Art 詳情。"
           },
           "capabilityHint": "優先使用目前供應商宣告的能力；未宣告時，圖片能力參考模型名稱。",
+          "imageInputDefault": "{{value}}（預設）",
           "imageInput": "圖片輸入",
           "imageInputMixed": "各引擎不同",
           "supported": "支援",
@@ -6027,8 +6050,10 @@
       "accessRevokedByPeer": "訪問權限已被撤銷，需對方在選項中恢復",
       "deviceControlToggleAria": "切換是否控制 {{name}}",
       "myDevices": {
-        "controlIt": "我控制它",
-        "allowInbound": "允許它控制本機",
+        "iCan": "我可以",
+        "itCan": "它可以",
+        "controlIt": "控制它",
+        "controlThisDevice": "控制本機",
         "allowInboundAria": "切換是否允許 {{name}} 控制本機",
         "peerControlOff": "對方未允許遠端控制",
         "masterOffHint": "需先開啟上方總開關",
@@ -7557,6 +7582,9 @@
         "agentObserve": "可查看本機專案的任務列表和狀態",
         "agentObserveDetail": "可查看已登記本機專案中任務的標題、Agent 類型、封存情況和狀態（執行中、待處理、最近活動時間），並在主視窗開啟某個任務。無法讀取訊息、計畫或檔案，也無法傳送訊息或修改任務。",
         "agentObserveRequest": "確認任務檢視權限",
+        "agentCompanions": "可查看夥伴、狀態和最近對話",
+        "agentCompanionsDetail": "可查看所有夥伴（包括在你其他電腦上執行的夥伴）的名稱、簡介、頭像和狀態（工作中、等你處理、閒置、離線），每位夥伴正在做哪類事（如思考、執行工具），等你處理的請求內容（提問、要執行的指令、計畫，和對話裡看到的一樣），以及夥伴主對話裡最近的對話（最多 50 則你說的話和夥伴的回覆，不含工具過程），並在主視窗開啟夥伴的對話。同時獲准投遞訊息時，可以把你在插件裡給的回答交給夥伴：回答提問、拒絕請求、對計畫提意見；允許執行仍要你在 Cindy 自己的確認框裡點。無法讀取檔案，也看不到工具過程和思考內容。",
+        "agentCompanionsRequest": "確認夥伴檢視權限",
         "agentHiddenTasks": "可建立不顯示在任務列表裡的後臺任務",
         "agentHiddenTasksDetail": "本插件建立的任務可以不出現在任務列表、搜尋和通知裡。你可以隨時在插件詳情的「後臺任務」中查看、開啟，或顯示到任務列表；解除安裝插件時這些任務會恢復顯示。",
         "agentErrand": "可建立任務、執行工作並讀取結果",
@@ -7652,6 +7680,8 @@
         "skill": "為 AI 助手新增技能「{{name}}」",
         "skillDetail": "技能是一份指令檔案，AI 會把它當作自己的指令載入執行，擁有你的全部權限，對 Claude Code 與 Codex、所有專案都生效——不受本插件沙箱約束。插件啟用期間持續可用，停用或解除安裝即移除；僅對某個資料夾關閉本插件不會隱藏它。此處無法預覽技能全文——請只安裝你信任的插件。",
         "routineEvents": "例行任務事件",
+        "nativeUi": "在任務中加入控制項",
+        "nativeTabView": "可開啟獨立檢視「{{title}}」",
         "mcpUi": "可在對話中顯示互動頁面",
         "mcpUiDomains": "頁面可連線網域：{{domains}}",
         "mcpAppOnly": "僅頁面可用",
@@ -10626,7 +10656,8 @@
         "lifecycleUnavailable": "目前伺服器或電腦尚不支援此操作。",
         "groupDissolved": "群聊已解散，仍可查看有權存取的歷史訊息。",
         "lastOwner": "請先轉讓群主或解散群聊，再退出。",
-        "allBotsMentionDisabled": "群主尚未開啟 @所有夥伴。"
+        "allBotsMentionDisabled": "群主尚未開啟 @所有夥伴。",
+        "turnAlreadyStarted": "這位夥伴已開始執行，不能略過"
       },
       "organizer": "負責人",
       "plan": {
@@ -10657,7 +10688,17 @@
         "stepSpoken": "說完了",
         "allTurns_one": "共 {{count}} 位",
         "allTurns_other": "共 {{count}} 位",
-        "foldTurns": "收起"
+        "foldTurns": "收起",
+        "stepQueued": "等待開始",
+        "stepExecuting": "執行中",
+        "stepSkipped": "已略過",
+        "skippingTurn": "略過中…",
+        "queueWaiting": "等你點繼續",
+        "skipTurnLabel": "略過 {{name}}",
+        "queueEnded": "本輪結束",
+        "talkTitle": "依序說說看法",
+        "talkPending": "待開始",
+        "skipTurn": "略過"
       },
       "speaking": {
         "planning": "正在安排…"
@@ -12969,7 +13010,7 @@
       "claudeSubscriptionSwitchFailed": "無法切換到 Claude.ai 或重試當前任務：{{msg}}",
       "codexAppServerRetired": "Codex 服務已重新啟動或更換；目前的請求已中斷，請重新執行。",
       "codexAuthMissing": "遠端 Codex 還沒同步登入態（401 Unauthorized）。點選右側「同步登入態」把本機 Codex 憑證推到遠端 Cindy Codex home，然後重試傳送。",
-      "codexAuthMissingLocal": "Codex 憑證缺失或失效（401 Unauthorized）。請在 {{appName}} Settings → Codex 重新登入（登入後會自動重啟 Codex app-server），或在終端跑 `codex login` + 在 Settings 切換一次鑑權模式來重啟 app-server，然後新建任務再發。",
+      "codexAuthMissingLocal": "Codex 憑證缺失或失效（401 Unauthorized）。請在 {{appName}} 設定 → Codex 重新登入（登入後會自動重啟 Codex app-server），或在終端跑 `codex login`，再到設定切換一次鑑權模式來重啟 app-server，然後新建任務再發。",
       "codexSessionExpired": "OpenAI 連線需要更新。重新連線 ChatGPT 後即可繼續；{{appName}} 不會退出系統 Codex CLI，也不會要求你重新連線其他模型來源。",
       "codexAuthSynced": "登入態已同步，請點選「重試」重新傳送。",
       "syncAuth": "同步登入態",
@@ -13403,6 +13444,24 @@
           "autocompactBuffer": "自動壓縮緩衝",
           "compactBuffer": "壓縮緩衝",
           "freeSpace": "剩餘可用"
+        },
+        "estimate": {
+          "title": "文字估算",
+          "delivery": "答案交付",
+          "host": "Cindy 規則",
+          "plugins": "插件目錄",
+          "memoryRules": "記憶規則",
+          "memoryIndex": "記憶索引",
+          "profile": "夥伴資料",
+          "user": "使用者指令",
+          "directories": "附加目錄",
+          "native": "Pi 原生規則",
+          "skills": "技能目錄",
+          "project": "專案指令",
+          "tools": "工具定義",
+          "messages": "對話正文",
+          "other": "其他指令",
+          "note": "依目前文字粗估，並非模型分詞結果。不含圖片與供應商格式開銷，分項總和不等於原生總量。"
         }
       },
       "compact": {
@@ -14693,7 +14752,7 @@
         "manage": {
           "title": "管理 PR 連結",
           "hint": "頂列最多顯示 3 個，固定的 PR 優先顯示",
-          "empty": "貼上 GitHub PR 連結即可新增",
+          "empty": "貼上 GitHub PR 或 GitLab MR 連結即可新增",
           "removed": "已移除 {{count}} 個",
           "legacy": "未確認的歷史引用：{{count}}",
           "addLabel": "新增 PR 連結",
@@ -14704,18 +14763,29 @@
           "unpin": "取消固定",
           "pinLimit": "最多固定 3 個 PR",
           "reorderHint": "按 Alt+↑/↓ 在已固定或未固定群組內調整順序。",
-          "dragHandle": "拖曳排序 {{repo}} #{{number}}",
+          "dragHandle": "拖曳排序 {{repo}} {{numberLabel}}",
           "remove": "移除 PR",
           "errors": {
             "duplicate": "此 PR 已關聯；已移除的連結可在清單中還原",
             "notFound": "找不到此 PR，或沒有存取權限",
-            "invalidUrl": "請輸入有效的 GitHub PR 連結",
+            "invalidUrl": "請輸入有效的 GitHub PR 或 GitLab MR 連結",
             "reorderFailed": "順序未儲存，請重試",
-            "verifyFailed": "無法驗證 PR，請檢查 GitHub 登入與存取權限",
+            "verifyFailed": "無法驗證 PR，請檢查 GitHub 或 GitLab 登入與存取權限",
             "unsupported": "這台電腦的版本暫不支援管理 PR 連結",
             "failed": "無法更新 PR 連結"
           }
-        }
+        },
+        "gitlab": {
+          "missing": "未偵測到 GitLab CLI（glab），無法顯示 MR 狀態。安裝 glab 並登入後即可顯示。",
+          "notLoggedIn": "本機 glab 尚未登入 {{host}}，無法顯示 MR 狀態。在終端執行 glab auth login 登入後即可顯示。",
+          "unsupported": "此電腦暫不支援 GitLab MR 狀態",
+          "openAria": "在瀏覽器開啟 MR !{{number}}",
+          "summaryAria": "MR !{{number}} 摘要",
+          "urlPlaceholder": "GitHub PR 或 GitLab MR 連結",
+          "notFound": "MR 不存在，或目前帳號無權限檢視"
+        },
+        "merge": "合併",
+        "conflicts": "有衝突"
       }
     },
     "schedule": {
@@ -18694,6 +18764,21 @@
     "autoDetail": "主任務與 Worker 的操作將交由 Cindy 自動審批。需要人工確認或遭拒時仍會暫停；這不是完全存取。此選擇儲存到插件 AI 設定，不變更其他任務的全域權限。",
     "autoTaskDetail": "主任務與 Worker 的操作將交由 Cindy 自動審批。需要人工確認或遭拒時仍會暫停；這不是完全存取。僅變更目前任務的權限，不變更插件預設設定。"
   },
+  "pluginCompanionAnswer": {
+    "title": "確認允許",
+    "planMessage": "讓{{companion}}按這份計畫開始執行？",
+    "permissionMessage": {
+      "command": "允許{{companion}}執行這條指令？",
+      "file-read": "允許{{companion}}讀取這些檔案？",
+      "file-write": "允許{{companion}}修改這些檔案？",
+      "browser": "允許{{companion}}在瀏覽器裡執行這一步？",
+      "plugin": "允許{{companion}}使用「{{tool}}」？",
+      "tool": "允許{{companion}}使用 {{tool}}？"
+    },
+    "source": "你在插件「{{plugin}}」裡選了允許，{{appName}} 在這裡再確認一次；允許後夥伴會繼續執行。",
+    "allow": "允許",
+    "cancel": "取消"
+  },
   "groupTools": {
     "authorizationRequired": "群組授權已失效或不允許此操作，請由夥伴主人在目前群組重新發起。",
     "localPeersOnly": "群組內的私訊只能傳送給本機同帳號夥伴。",
@@ -18779,6 +18864,297 @@
     "openVideoSource": "開啟原影片",
     "calculationUnavailable": "此項暫時無法計算。",
     "incomplete": "部分內容未能顯示。"
+  },
+  "setupMigration": {
+    "title": "遷移助理",
+    "back": "← 上一步",
+    "cancel": "取消",
+    "listSeparator": "、",
+    "steps": {
+      "label": "遷移步驟",
+      "source": "選擇電腦",
+      "review": "選擇內容",
+      "apply": "遷移"
+    },
+    "source": {
+      "description": "選一台登入了同一帳號的電腦。它的插件、技能、設定和連線會照原樣裝到這台電腦；金鑰只在你在那台電腦上點「允許」後複製，登入狀態不會離開那台電腦。",
+      "loading": "正在尋找你的其他電腦…",
+      "empty": "沒有找到這個帳號的其他電腦。在另一台電腦上登入 Cindy 後再開啟這裡",
+      "loadFailed": "未能讀取電腦清單",
+      "reload": "重新讀取",
+      "ready": "上線中，可以遷移",
+      "next": "讀取設定",
+      "readAgain": "重新讀取",
+      "unavailable": {
+        "offline": "離線。開啟那台電腦上的 Cindy 後可以遷移",
+        "remote-control-off": "需要先在那台電腦開啟「允許同帳號裝置控制本機」",
+        "control-disabled": "這台電腦已關閉對它的控制，可在「遠端連線」中重新開啟"
+      }
+    },
+    "reading": "正在讀取「{{name}}」上的設定…",
+    "errors": {
+      "SETUP_SOURCE_OUTDATED": "「{{name}}」上的 Cindy 版本較舊，不支援遷移。更新那台電腦上的 Cindy 後再試",
+      "SETUP_SOURCE_UNAVAILABLE": "未能讀取「{{name}}」上的設定。遷移需要那台電腦上線，並開啟「允許同帳號裝置控制本機」",
+      "SETUP_SNAPSHOT_INVALID": "「{{name}}」回傳的設定無法辨識。兩台電腦的 Cindy 版本不同時會出現這種情況，更新到同一版本後再試",
+      "SETUP_PLAN_EXPIRED": "遷移清單已過期，需要重新讀取「{{name}}」上的設定",
+      "GENERIC": "未能讀取「{{name}}」上的設定"
+    },
+    "review": {
+      "description": "勾選要從「{{name}}」遷移到這台電腦的內容。這台電腦上已經改過的設定會保留，不會被覆蓋。",
+      "partial": "那台電腦上有部分內容這次沒能讀取，下面只列出讀到的內容。",
+      "groupCount": "已選 {{selected}} / {{total}}",
+      "present_one": "另有 {{count}} 項與這台電腦相同，無需遷移",
+      "present_other": "另有 {{count}} 項與這台電腦相同，無需遷移",
+      "start_one": "遷移 {{count}} 項",
+      "start_other": "遷移 {{count}} 項",
+      "continue": "繼續",
+      "version": "版本 {{version}}",
+      "pluginDisabled": "在那台電腦上已停用，遷移後保持停用",
+      "pluginConsentLater": "來自插件市場「{{market}}」，安裝時單獨確認權限",
+      "skillTeam": "團隊技能",
+      "settingsChanges_one": "{{count}} 項設定",
+      "settingsChanges_other": "{{count}} 項設定",
+      "settingsKept_one": "保留這台電腦的 {{count}} 項設定",
+      "settingsKept_other": "保留這台電腦的 {{count}} 項設定",
+      "settingsChangesKept_one": "{{count}} 項設定，保留這台電腦的 {{kept}} 項",
+      "settingsChangesKept_other": "{{count}} 項設定，保留這台電腦的 {{kept}} 項",
+      "kept": "保留這台電腦的設定",
+      "rendererPrefs": "介面偏好",
+      "rendererPrefsHint": "主題、語言、通知與對話顯示偏好",
+      "toolOn": "開啟內建工具「{{name}}」",
+      "toolOff": "關閉內建工具「{{name}}」",
+      "mcp": "MCP · {{url}}",
+      "mcpToken": "MCP · {{url}} · 存取憑證需要在這台電腦上重新填寫",
+      "checklistTitle": "遷移後需要在這台電腦上完成",
+      "checklistDescription": "登入狀態、金鑰和系統權限不會離開原來的電腦。遷移完成後，可以依這份清單逐項補上。",
+      "groups": {
+        "plugins": "插件",
+        "skills": "技能",
+        "settings": "設定",
+        "connections": "模型供應商與 MCP",
+        "access": "這台電腦的存取",
+        "secrets": "金鑰",
+        "ssh": "SSH 伺服器"
+      },
+      "reason": {
+        "not-in-catalog": "這台電腦的插件市場裡沒有它",
+        "source-not-added": "來自這台電腦讀不到的插件市場",
+        "local-only": "只存在於那台電腦，需要手動處理",
+        "needs-sign-in": "需要先登入",
+        "platform": "只適用於另一種系統",
+        "invalid": "這台電腦無法辨識"
+      },
+      "providerAuth": {
+        "apiKey": "API Key 需要在這台電腦上重新填寫",
+        "oauth": "需要在這台電腦上重新登入",
+        "native": "需要在這台電腦上登入訂閱帳號",
+        "none": "無需金鑰",
+        "apiKeyCopy": "API Key 可隨「金鑰」一起複製"
+      },
+      "access": {
+        "remote-control": "允許同帳號裝置控制本機",
+        "remote-controlHint": "與「{{name}}」上的設定相同，可隨時在「遠端連線」中關閉",
+        "keep-awake": "保持電腦喚醒",
+        "keep-awakeHint": "與「{{name}}」上的設定相同，這台電腦不會進入休眠"
+      },
+      "secrets": {
+        "title_one": "複製 {{count}} 項的金鑰",
+        "title_other": "複製 {{count}} 項的金鑰",
+        "description": "需要在「{{name}}」上點「允許」後才會複製，只用這一次請求加密傳給這台電腦。帳號登入不會複製，遷移後可在清單裡依次登入。"
+      },
+      "sshDescription": "這台電腦會產生一把新的 SSH 金鑰，由「{{name}}」加到這些伺服器上（同樣需要在那台電腦上允許），再逐台測試連線。私鑰不會離開各自的電腦。",
+      "sshHost": "{{user}}@{{host}}:{{port}}",
+      "mcpTokenCopy": "MCP · {{url}} · 存取憑證可隨「金鑰」一起複製",
+      "checklistDescriptionWithKeys": "登入狀態和系統權限不會離開原來的電腦；金鑰在「{{name}}」允許後才會複製。遷移完成後，可以依這份清單逐項補上。"
+    },
+    "permissions": {
+      "title": "確認插件權限",
+      "description_one": "下面 {{count}} 個插件安裝後會取得這些權限。確認後會一起安裝。",
+      "description_other": "下面 {{count}} 個插件安裝後會取得這些權限。確認後會一起安裝。",
+      "pluginTitle": "{{name}} · 版本 {{version}}",
+      "confirm_one": "允許並安裝 {{count}} 個插件",
+      "confirm_other": "允許並安裝 {{count}} 個插件"
+    },
+    "running": {
+      "progress": "正在遷移：已完成 {{completed}} / {{total}}",
+      "label": "正在遷移…",
+      "confirm": "請在「{{name}}」上點「允許」。",
+      "confirmCode": "兩台電腦顯示的驗證碼應一致："
+    },
+    "done": {
+      "summary_one": "已從「{{name}}」遷移 {{count}} 項",
+      "summary_other": "已從「{{name}}」遷移 {{count}} 項",
+      "applyFailed": "插件、技能和設定的遷移沒有完成",
+      "failedTitle_one": "{{count}} 項未能遷移",
+      "failedTitle_other": "{{count}} 項未能遷移",
+      "checklistTitle": "還需要在這台電腦上完成",
+      "checklistEmpty": "沒有需要在這台電腦上補做的事",
+      "checklistDescription": "這份清單之後也可以在「設定 → 通用」中查看。",
+      "restartHint": "部分設定在重新開啟 Cindy 後生效。",
+      "finish": "完成",
+      "finishReload": "完成並重新整理介面"
+    },
+    "failure": {
+      "generic": "未能遷移（{{code}}）",
+      "SOURCE_NOT_ADDED": "未能新增它所在的插件市場",
+      "MUTATION_CANCELLED": "已取消安裝",
+      "PRECONDITION_FAILED": "遷移時插件或這台電腦的狀態發生了變化",
+      "PERMISSION_DENIED": "目前帳號無權安裝",
+      "NOT_FOUND": "在這台電腦的插件市場裡找不到它",
+      "ALREADY_EXISTS": "這台電腦上已有同名項目",
+      "SETUP_PLAN_EXPIRED": "遷移清單已過期",
+      "SETUP_TRANSFER_DECLINED": "那台電腦上沒有點「允許」，或 2 分鐘內沒有回應",
+      "SETUP_TRANSFER_BUSY": "那台電腦正在處理另一個遷移請求，請稍後再試",
+      "SETUP_TRANSFER_INVALID": "無法辨識那台電腦的回覆",
+      "SETUP_SOURCE_OUTDATED": "那台電腦的 Cindy 版本過舊，更新後才能複製",
+      "SETUP_SOURCE_UNAVAILABLE": "那台電腦現在沒有回應",
+      "SSH_AUTHORIZE_FAILED": "那台電腦沒能把新金鑰加到這台伺服器上",
+      "SSH_KEYGEN_FAILED": "這台電腦沒能產生 SSH 金鑰（需要系統內建的 ssh-keygen）",
+      "SSH_HOST_NOT_FOUND": "那台電腦上已經沒有這台伺服器",
+      "SSH_AUTH_FAILED": "新金鑰已加好，但伺服器拒絕了這台電腦的連線",
+      "SSH_CONNECT_FAILED": "這台電腦連不上這台伺服器，它可能只在那台電腦的網路裡可達",
+      "SSH_KEY_FILE_NOT_FOUND": "找不到這台電腦上的新金鑰檔案"
+    },
+    "checklist": {
+      "done": "已完成",
+      "markDone": "標記為完成",
+      "needs": "需要：{{items}}",
+      "voiceAsrName": "語音辨識",
+      "plugin-setup": {
+        "title": "連接「{{name}}」的帳號",
+        "action": "前往連接"
+      },
+      "plugin-manual": {
+        "title": "手動安裝插件「{{name}}」",
+        "detail": "它是在那台電腦上直接匯入的插件。在那台電腦的插件詳情中匯出安裝包，再在這台電腦匯入",
+        "action": "開啟插件"
+      },
+      "market-source": {
+        "title": "新增插件市場「{{name}}」",
+        "detail": "這個市場的位址只儲存在那台電腦上，新增後可以安裝其中的插件",
+        "action": "開啟插件"
+      },
+      "skill-manual": {
+        "title": "複製技能「{{name}}」",
+        "detail": "它不是從 SkillHub 安裝的，只存在於那台電腦",
+        "action": "開啟技能"
+      },
+      "provider-key": {
+        "title": "為「{{name}}」填寫 API Key",
+        "action": "前往填寫"
+      },
+      "provider-connection": {
+        "title": "為「{{name}}」重新填寫連線位址",
+        "detail": "原位址中的帳號資訊或查詢參數可能含有憑證，沒有一起遷移",
+        "action": "前往填寫"
+      },
+      "provider-sign-in": {
+        "title": "登入「{{name}}」",
+        "action": "前往登入"
+      },
+      "local-model": {
+        "title": "在這台電腦上準備本機模型「{{name}}」",
+        "detail": "本機模型執行在原來的電腦上，這台電腦需要單獨安裝",
+        "action": "開啟供應商"
+      },
+      "mcp-token": {
+        "title": "為 MCP「{{name}}」填寫存取憑證",
+        "action": "前往填寫"
+      },
+      "builtin-key": {
+        "title": "填寫「{{name}}」的 API Key",
+        "action": "前往填寫"
+      },
+      "im-channel": {
+        "title": "連接「{{name}}」",
+        "detail": "同一個機器人同時只在一台電腦上接收訊息，連接前先確認由哪台電腦接收",
+        "action": "前往連接"
+      },
+      "computer-use": {
+        "title": "開啟自動操作",
+        "detail": "需要在這台電腦上授予輔助使用與螢幕錄製權限",
+        "action": "前往開啟"
+      },
+      "remote-desktop": {
+        "title": "開啟遠端桌面",
+        "detail": "需要在這台電腦上單獨開啟，並授予螢幕錄製權限",
+        "action": "前往開啟"
+      },
+      "ssh": {
+        "title_one": "複製 {{count}} 台遠端主機的 SSH 金鑰與設定",
+        "title_other": "複製 {{count}} 台遠端主機的 SSH 金鑰與設定",
+        "detail": "~/.ssh 中的金鑰與設定不會自動遷移，需要複製到這台電腦",
+        "action": "開啟遠端連線"
+      },
+      "ssh-host": {
+        "title": "設定 SSH 伺服器「{{name}}」",
+        "detail": "沒能自動設定好。可以在 SSH 設定裡為它選擇金鑰並測試連線",
+        "action": "開啟遠端連線"
+      },
+      "startAll_one": "依次完成（{{count}} 項）",
+      "startAll_other": "依次完成（{{count}} 項）"
+    },
+    "settingsGroups": {
+      "appearance": "外觀",
+      "windowBehavior": "應用行為",
+      "menubar": "選單列餘量",
+      "collaboration": "協同",
+      "agentResource": "Agent 資源佔用",
+      "gitSafety": "Git 安全",
+      "goal": "目標模式",
+      "memory": "記憶",
+      "compaction": "上下文壓縮",
+      "silentEncryptedRetry": "靜默丟棄協議加密內容並重試",
+      "silentStopAutoResume": "意外停止後自動繼續",
+      "sessionRuntimeFallback": "任務模型自動降級",
+      "subagentModels": "Subagent",
+      "auxiliaryModels": "輔助模型",
+      "visionBridge": "視覺橋",
+      "modelVisibility": "模型顯示與隱藏",
+      "providerOrder": "供應商順序",
+      "modelCatalogOverrides": "模型參數調整",
+      "modelPriceOverrides": "模型單價",
+      "autoUpdate": "空閒時自動安裝更新",
+      "updateChannel": "Beta 測試管道"
+    },
+    "settings": {
+      "title": "遷移助理",
+      "description": "在一台新電腦上，把其他舊機器上 Cindy 所有接入的功能、插件和設定複製過來，成為成品能用。",
+      "start": "開啟遷移助理",
+      "pending_one": "還有 {{count}} 項需要在這台電腦上完成",
+      "pending_other": "還有 {{count}} 項需要在這台電腦上完成",
+      "allDone": "這台電腦上需要補做的事已全部完成",
+      "from": "來自「{{name}}」的遷移",
+      "closeChecklist": "關閉清單"
+    },
+    "suggestion": {
+      "title": "用遷移助理從「{{name}}」遷移？",
+      "description": "可以把那台電腦上的插件、技能、設定和連線搬到這台電腦。需要在這台電腦上重新登入或授權的內容會列成清單。之後也可以在「設定 → 通用 → 遷移助理」中開啟。",
+      "confirm": "開啟遷移助理",
+      "later": "以後再說"
+    },
+    "walkthrough": {
+      "progress": "遷移清單 {{current}} / {{total}}",
+      "open": "開啟",
+      "skip": "略過",
+      "next": "完成，下一項",
+      "stop": "結束",
+      "allDone": "清單已經走完"
+    },
+    "transfer": {
+      "prompt": {
+        "title": "遷移助理",
+        "message": "「{{name}}」請求從這台電腦複製以下內容",
+        "secrets": "金鑰（只複製到這一台電腦，這台電腦上的金鑰保持不變）：",
+        "ssh": "把那台電腦的新 SSH 公鑰加到這些伺服器：",
+        "sshKey": "公鑰指紋：{{fingerprint}}",
+        "code": "驗證碼：{{code}}。只有和那台電腦上顯示的一致時才允許。",
+        "notice": "如果不是你自己在設定新電腦，請拒絕。",
+        "more": "以及另外 {{count}} 項",
+        "allow": "允許",
+        "deny": "拒絕"
+      }
+    }
   },
   "forwardedRequest": {
     "sourcePresent": "[來源] 使用者原話由宿主原樣保留，作為請求背景；目前的請求在 Agent補充。",

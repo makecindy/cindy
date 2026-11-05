@@ -13,6 +13,23 @@ export { UI_MOCK_SHOWCASE_PROJECTS };
 /** Every seeded id starts with this prefix, except the Mobile state ids below. */
 export const UI_MOCK_ID_PREFIX = 'ui-mock-';
 
+/** Synthetic Pi diagnostics for the same context panel on Desktop and Mobile. */
+export const UI_MOCK_PI_CONTEXT_USAGE = {
+  model: 'pi-context-demo', totalTokens: 8192, maxTokens: 200000, rawMaxTokens: 200000,
+  percentage: 4.096, categories: [], gridRows: [], memoryFiles: [], mcpTools: [], agents: [],
+  isAutoCompactEnabled: true, apiUsage: null,
+  textEstimate: {
+    method: 'text-heuristic',
+    items: [
+      { source: 'delivery', tokens: 227 }, { source: 'host', tokens: 460 },
+      { source: 'plugins', tokens: 1100 }, { source: 'memoryRules', tokens: 900 },
+      { source: 'memoryIndex', tokens: 180 }, { source: 'native', tokens: 740 },
+      { source: 'skills', tokens: 1480 }, { source: 'project', tokens: 240 },
+      { source: 'tools', tokens: 2860 }, { source: 'messages', tokens: 320 },
+    ],
+  },
+};
+
 /** GitHub 插件 PR 卡片的演示卡位(手机 mock 按这些 id 返回卡片内容)。 */
 export const UI_MOCK_PR_CARD_IDS = {
   ask: `${UI_MOCK_ID_PREFIX}pr-card-ask`,

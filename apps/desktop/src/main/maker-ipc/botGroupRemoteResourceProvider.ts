@@ -634,7 +634,8 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
           result = await current.retryPlan(planInput);
           break;
         case 'plan-edit':
-          result = await current.editPlanStep({ ...planInput, position: input.position, action: input.action, botId: input.botId });
+          result = await current.editPlanStep({ ...planInput, position: input.position, action: input.action, botId: input.botId,
+            ...(input.action === 'skip' ? { executionId: input.executionId } : {}) });
           break;
         default:
           throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');

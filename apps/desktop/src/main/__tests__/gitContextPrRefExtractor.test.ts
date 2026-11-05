@@ -48,7 +48,7 @@ describe('extractPrRefs', () => {
     const text = [
       'https://github.com/o/r/issues/3',
       'https://github.com/o/r/commit/abcdef',
-      'https://gitlab.com/o/r/-/merge_requests/4',
+      'https://gitlab.com/o/r/-/issues/4',
       '#85',
     ].join(' ');
     expect(extractPrRefs(text)).toEqual([]);
@@ -74,4 +74,23 @@ describe('messageContentToText', () => {
     expect(messageContentToText(null)).toBe('');
     expect(messageContentToText(undefined)).toBe('');
   });
+});
+
+// Unit: provider/host identity and multi-level namespaces are new observable inputs;
+// the old GitHub-only extractor silently dropped these associations.
+it('recognizes HTTPS GitLab MRs without authentication and keeps hosts distinct', () => {
+  const refs = extractPrRefs(
+    'https://git.example.com/one/two/project/-/merge_requests/7 https://other.example.com/one/two/project/-/merge_requests/7 http://git.example.com/one/project/-/merge_requests/8',
+  );
+  expect(refs).toHaveLength(2);
+  expect(refs[0]).toMatchObject({
+    provider: 'gitlab',
+    host: 'git.example.com',
+    owner: 'one/two',
+    repo: 'project',
+    prNumber: 7,
+    url: 'https://git.example.com/one/two/project/-/merge_requests/7',
+  });
+  expect(refs[1].host).toBe('other.example.com');
+  expect(extractPrRefs('https://secret@git.example.com/g/p/-/merge_requests/1')).toEqual([]);
 });

@@ -27,6 +27,27 @@ import { MobilePluginPages } from './mobilePageService.js';
 import { listMobilePageFiles, readMobilePageChunk } from './mobilePageAssets.js';
 import { invokeGhostMobileRelay, fetchGhostMobilePage, fetchGhostSettings } from './runtime/electronSandboxAdapter.js';
 import { remoteResourceRegistry } from '../device-link/remoteResourceRegistry.js';
+import { PluginUiService, PluginUiError, isLocalPluginUiSession, pluginCommandShortcuts, type PluginUiInstance } from './pluginUiService.js';
+import { createPluginUiRendererRecords } from './pluginUiRendererRecords.js';
+import { getAppShortcutStore } from '../app-shortcuts/index.js';
+import { PluginAppearanceService } from './pluginAppearanceService.js';
+import { PluginUiPageHost } from './pluginUiPageHost.js';
+import { PluginTabViewHost } from './pluginTabViewHost.js';
+import { registerPluginTabViewIpc } from './pluginTabViewIpc.js';
+import { getSidebarTabViewOwner } from '../sidebar-tab-window/ipc.js';
+import { readPluginUiPageFile } from './pluginUiPageResources.js';
+import { mountNativeUiPageDocument, unmountRemoteAppDocument } from '../mcp-apps/sandboxProtocol.js';
+import { createPluginAppearanceIpc } from './pluginAppearanceIpc.js';
+import { PluginUiVisibilityService } from './pluginUiVisibility.js';
+import { createPluginUiVisibilityIpc } from './pluginUiVisibilityIpc.js';
+import { readAppearanceSettings, updateAppearanceSettingsAtomic } from '../appearance-settings-store.js';
+import { publishAppearanceSettings } from '../appearance-settings-ipc.js';
+import { applyRuntimeAppIcon } from '../app-icon.js';
+import { setCustomWallpaperBytes, revokePluginWallpaper } from '../custom-wallpaper.js';
+import { isAppContentWindow } from '../windowFocusClassifier.js';
+import { isSecondaryAppWindow } from '../secondary-windows.js';
+import { createPluginUiIpcHandlers } from './pluginUiIpc.js';
+import { PLUGIN_UI_READ, PLUGIN_UI_INVOKE, PLUGIN_UI_CHOOSE_RENDERER, PLUGIN_UI_PAGE_OPEN, PLUGIN_UI_PAGE_CLOSE, PLUGIN_UI_RELEASE, PLUGIN_UI_CHANGED, PLUGIN_UI_INSPECT } from '../../shared/pluginUi.js';
 import { REMOTE_RESOURCE_CHANGED_CHANNEL, PLUGIN_COLLECTION, type PluginPagePoll } from '@cindy/device-link';
 import { tapWindowBroadcast, getSafeDataOwnerPushStamp, captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from '../device-link/broadcast-tap.js';
 
@@ -97,7 +118,8 @@ import { createDownloader } from '../downloader/index.js';
 import { handlePluginTaskRequest, type PluginTaskHandler } from './taskSlot.js';
 import { PluginTargetSlot, type PluginTargetAdapter } from './pluginTargetSlot.js';
 import { handlePluginObserveRequest, type PluginObserveAdapter } from './pluginObserveSlot.js';
-import { ensurePluginTaskApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, hasPluginObserveApproval, pluginCapabilityApproval, PluginTaskApprovalGate } from './taskCapability.js';
+import { createCompanionWatchHub, handlePluginCompanionRequest, type CompanionWatchHub, type PluginCompanionAdapter } from './pluginCompanionSlot.js';
+import { ensurePluginTaskApproval, hasPluginCompanionsApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, hasPluginObserveApproval, pluginCapabilityApproval, PluginTaskApprovalGate, type PluginTaskCapability } from './taskCapability.js';
 import {
   registerGhostCardRemoteProvider,
   persistGhostCardWithRemoteChange,
@@ -134,7 +156,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type { GhostInstallConsentFacts } from '../../shared/ghostInstallConsent.js';
 
 const taskApprovalGate = new PluginTaskApprovalGate();
-function requestPluginTaskApproval(id: string, isCurrent: () => boolean, confirm: (facts: GhostInstallConsentFacts) => Promise<boolean>, explicit = false, capability: 'tasks' | 'targets' | 'delegation' | 'observe' = 'tasks'): Promise<boolean> {
+function requestPluginTaskApproval(id: string, isCurrent: () => boolean, confirm: (facts: GhostInstallConsentFacts) => Promise<boolean>, explicit = false, capability: PluginTaskCapability = 'tasks'): Promise<boolean> {
   const ghost = findGhostForInstanceId(id);
   if (!isCurrent()) return Promise.resolve(false);
   if (pluginCapabilityApproval(capability)(ghost)) return Promise.resolve(true);
@@ -198,7 +220,7 @@ export async function requestPluginUiApproval(id: string, sender?: WebContents, 
   return { granted, state: granted ? 'enabled' as const : declined ? 'declined' as const : 'pending' as const };
 }
 
-import { isValidPluginNamespace, supportsCindyVersion, PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES, pluginHasToolUi } from '@cindy/plugin-protocol';
+import { isValidPluginNamespace, supportsCindyVersion, PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES, pluginHasToolUi, parseGhostNativeUi } from '@cindy/plugin-protocol';
 import { buildGhostRecommendationSnapshot } from './ghostRecommendationSnapshot.js';
 import {
   readGhostRecommendationEntries,
@@ -682,7 +704,7 @@ import {
 import { isKnownEmbeddingModel } from '@cindy/embedding-client';
 import { resolveOneshotCatalogModel } from '../utility-model/textOneshotPinOptions.js';
 import { hasOneshotProviderCredential } from '../utility-model/oneshotProviderUsability.js';
-import { readGhostCindyInflightLimit, relocateGhostCindyPrefs } from './cindyPrefsStore.js';
+import { readGhostCindyInflightLimit, relocateGhostCindyPrefs, readPluginUiRendererChoice, writePluginUiRendererChoice } from './cindyPrefsStore.js';
 import { createGhostComposerListHandler } from './ghostComposerIpc.js';
 import { createGhostDisplayListHandler } from './ghostDisplayListIpc.js';
 import { GHOST_COMPOSER_LIST_CHANNEL } from '../../shared/ghostComposer.js';
@@ -755,7 +777,7 @@ import {
 // 主进程 OOM(2026-07-12 实事故,详见 bootstrap-electron.ts 末尾的缓存自愈注释)。
 import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current.js';
 import * as localDbSchema from '../localDb/schema.js';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull, inArray } from 'drizzle-orm';
 import { requireAppCapability } from '../appCapabilities.js';
 import {
   acknowledgeRecoveredLegacyGhosts,
@@ -2190,6 +2212,269 @@ let runtimeSingleton: GhostRuntime | null = null;
  * 唤醒开关被关掉,重新打开即 resetFuse 重获新生。
  */
 const invocationRuntimeGenerations = new Map<string, number>();
+let pluginUiServiceSingleton: PluginUiService | null = null;
+let pluginUiPageHostSingleton: PluginUiPageHost | null = null;
+let pluginTabViewHostSingleton: PluginTabViewHost | null = null;
+function getPluginTabViewHost(): PluginTabViewHost {
+  if (!pluginTabViewHostSingleton) pluginTabViewHostSingleton = new PluginTabViewHost({
+    current: id => {
+      const ghost = findGhostForInstanceId(id), instance = ghost && nativeUiInstance(ghost);
+      return ghost && instance ? { ...instance, pluginId: ghost.manifest.id } : null;
+    },
+    controller: id => {
+      const win = BrowserWindow.getAllWindows().find(win => win.webContents.id === id);
+      if (!win || !isTrustedAppRendererWindow(win)) return null;
+      const ownerCurrent = captureNativeUiController(`local:${id}`);
+      const query = new URL(win.webContents.getURL()).searchParams;
+      return { id, role: query.get('sidebarTabWindow') === '1' ? 'popout' : query.get('sidebarWindow') === '1' ? 'sidebar' : 'main',
+        current: () => ownerCurrent() && isTrustedAppRendererWindow(win),
+        visible: () => !win.isDestroyed() && win.isVisible(),
+        send: (channel, payload) => {
+          if (!ownerCurrent() || !isTrustedAppRendererWindow(win)) throw new Error('VIEW_UNAVAILABLE');
+          win.webContents.send(channel, { ...(payload as Record<string, unknown>), ownerStamp: getActiveDataOwnerPushStamp() });
+        } };
+    },
+    authorize: async (controller, sessionId, instanceId) => {
+      const current = captureNativeUiController(`local:${controller}`);
+      const ghost = findGhostForInstanceId(instanceId), instance = ghost && nativeUiInstance(ghost);
+      if (!instance || !current()) throw new Error('VIEW_UNAVAILABLE');
+      if (sessionId !== null) {
+        const row = await getSessionRowSnapshot(sessionId);
+        if (!row || row.status === 'deleted' || !isLocalPluginUiSession(row) || isGhostDisabledForWorkdir(instanceId, row.workingDir)) throw new Error('VIEW_UNAVAILABLE');
+        await assertRemoteBotInvocationAllowed([sessionId]);
+      }
+      return () => current() && !!findGhostForInstanceId(instanceId) &&
+        nativeUiInstance(findGhostForInstanceId(instanceId)!)?.token === instance.token;
+    },
+    ownerForTab: id => getSidebarTabViewOwner(id)?.id ?? null,
+  });
+  return pluginTabViewHostSingleton;
+}
+export function authorizePluginTabViewAttach(host: WebContents, url: string) {
+  return pluginTabViewHostSingleton?.authorizeAttach(host.id, url) ?? null;
+}
+export function attachPluginTabViewGuest(host: WebContents, url: string, guest: WebContents): boolean {
+  return pluginTabViewHostSingleton?.attach(host.id, url, { id: guest.id,
+    current: () => !guest.isDestroyed() && guest.getURL().split('#')[0] === url,
+    send: (channel, payload) => guest.send(channel, payload) }) ?? false;
+}
+let pluginAppearanceServiceSingleton: PluginAppearanceService | null = null;
+let pluginUiVisibilityServiceSingleton: PluginUiVisibilityService | null = null;
+const watchedVisibilityWindows = new Set<number>();
+const activeVisibilityWindows = new Set<number>();
+function findVisibilityWindow(id?: number, allowUnregistered = false): BrowserWindow | null {
+  const all = BrowserWindow.getAllWindows();
+  const supported = (win: BrowserWindow) => win === getDeepLinkMainWindow() || isSecondaryAppWindow(win);
+  const win = id === undefined ? [BrowserWindow.getFocusedWindow(), ...all].find(candidate =>
+    candidate && !candidate.isDestroyed() && candidate.isVisible() && isAppContentWindow(candidate) && supported(candidate) && activeVisibilityWindows.has(candidate.webContents.id)) :
+    all.find(candidate => !candidate.isDestroyed() && candidate.webContents.id === id && isAppContentWindow(candidate) && supported(candidate) &&
+      (allowUnregistered || activeVisibilityWindows.has(id)));
+  if (!win) return null;
+  const windowId = win.webContents.id;
+  if (!watchedVisibilityWindows.has(windowId)) {
+    watchedVisibilityWindows.add(windowId);
+    win.webContents.once('destroyed', () => {
+      watchedVisibilityWindows.delete(windowId);
+      activeVisibilityWindows.delete(windowId);
+      pluginUiVisibilityServiceSingleton?.forgetWindow(windowId);
+    });
+  }
+  return win;
+}
+const pluginUiVisibilityIpc = createPluginUiVisibilityIpc({
+  assertTrusted: event => assertTrustedAppRendererEvent(event),
+  snapshot: id => getPluginUiVisibilityService().snapshot(id),
+  open: id => {
+    if (!findVisibilityWindow(id, true)) return false;
+    activeVisibilityWindows.add(id);
+    return true;
+  },
+  close: id => {
+    if (!activeVisibilityWindows.delete(id)) return;
+    const win = findVisibilityWindow(id, true);
+    if (win && process.platform === 'darwin') win.setWindowButtonVisibility(true);
+    pluginUiVisibilityServiceSingleton?.forgetWindow(id);
+  },
+  window: id => {
+    const win = findVisibilityWindow(id);
+    return win ? { id, nativeButtons: visible => { if (process.platform === 'darwin') win.setWindowButtonVisibility(visible); },
+      send: (channel, payload) => win.webContents.send(channel, payload) } : null;
+  },
+});
+function getPluginUiVisibilityService(): PluginUiVisibilityService {
+  if (!pluginUiVisibilityServiceSingleton) pluginUiVisibilityServiceSingleton = new PluginUiVisibilityService({
+    current: id => { const ghost = findGhostForInstanceId(id); return ghost ? nativeUiInstance(ghost) : null; },
+    window: id => findVisibilityWindow(id)?.webContents.id ?? null,
+    apply: (id, values) => pluginUiVisibilityIpc.apply(id, values),
+  });
+  return pluginUiVisibilityServiceSingleton;
+}
+
+const pluginAppearanceIpc = createPluginAppearanceIpc({ assertTrusted: event => assertTrustedAppRendererEvent(event), service: getPluginAppearanceService,
+  viewingWindow: () => {
+    const win = [BrowserWindow.getFocusedWindow(), ...BrowserWindow.getAllWindows()]
+      .find(win => win && !win.isDestroyed() && win.isVisible() && isAppContentWindow(win));
+    return win ? { id: win.webContents.id, send: (channel, payload) => win.webContents.send(channel, payload) } : null;
+  } });
+
+function getPluginAppearanceService(): PluginAppearanceService {
+  if (!pluginAppearanceServiceSingleton) pluginAppearanceServiceSingleton = new PluginAppearanceService({
+    ready: () => !isAppSessionBoundaryPending(),
+    current: id => {
+      const ghost = findGhostForInstanceId(id), instance = ghost && nativeUiInstance(ghost);
+      return ghost && ghost.approval.state === 'approved' && instance ? { ...instance, dir: ghost.dir,
+        key: createHash('sha256').update(JSON.stringify([activeOwnerScopeKey(), id, ghost.approval.revision])).digest('hex') } : null;
+    },
+    files: createPluginFileAccess({ libraryPath: (id, file) => getGhostLibrarySlot().resolvePanelFilePath(id, file), libraryMime: mediaTypeForLibraryPath }),
+    read: readAppearanceSettings, update: updateAppearanceSettingsAtomic,
+    saveWallpaper: setCustomWallpaperBytes, revokeWallpaper: revokePluginWallpaper,
+    publish: publishAppearanceSettings, apply: settings => pluginAppearanceIpc.apply(settings),
+    applyAppIcon: applyRuntimeAppIcon,
+  });
+  return pluginAppearanceServiceSingleton;
+}
+
+export function restorePluginAppIcon(): Promise<void> {
+  return getPluginAppearanceService().restoreAppIcon();
+}
+
+function getPluginUiPageHost(): PluginUiPageHost {
+  if (!pluginUiPageHostSingleton) pluginUiPageHostSingleton = new PluginUiPageHost({
+    bind: (...args) => getPluginUiService().bindPage(...args),
+    instance: id => {
+      const ghost = findGhostForInstanceId(id);
+      const instance = ghost && nativeUiInstance(ghost);
+      return ghost && instance ? { dir: ghost.dir, ui: instance.ui } : null;
+    },
+    readFile: readPluginUiPageFile,
+    appearance: (id, input, assertCurrent) => getPluginAppearanceService().handle(id, input, assertCurrent),
+    visibility: (id, input, windowId, assertCurrent) => getPluginUiVisibilityService().handle(id, input, { windowId, assertCurrent }),
+    mount: mountNativeUiPageDocument,
+    unmount: unmountRemoteAppDocument,
+  });
+  return pluginUiPageHostSingleton;
+}
+
+function nativeUiInstance(ghost: InstalledGhost): PluginUiInstance | null {
+  if (isAppSessionBoundaryPending() || !ghost.enabled || ghost.approval.state !== 'approved' ||
+      !isGhostAvailableForActiveSession(ghost.manifest.id)) return null;
+  const ui = parseGhostNativeUi(ghost.manifest.ui);
+  if (ui?.version !== 1) return null;
+  const id = installedGhostStoragePart(ghost), owner = getActiveDataOwnerPushStamp();
+  return { id, ui, name: ghost.manifest.name, shortcutScope: activeOwnerScopeKey(), token: JSON.stringify([activeOwnerScopeKey(), owner.ownerGeneration,
+    getCurrentDbClientSnapshot()?.clientEpoch, ghost.approval.revision, invocationRuntimeGenerations.get(id) ?? 0]) };
+}
+function nativeUiInstances(ghosts: readonly InstalledGhost[]): PluginUiInstance[] {
+  return ghosts.map(nativeUiInstance).filter((i): i is PluginUiInstance => !!i);
+}
+function captureNativeUiController(controller: string): () => boolean {
+  if (!/^local:\d+$/.test(controller)) throw new PluginUiError('NOT_FOUND', 'UI controller unavailable');
+  const scope = captureDataOwnerBroadcastScope();
+  return () => isDataOwnerBroadcastScopeCurrent(scope) && !isAppSessionBoundaryPending();
+}
+async function readNativeUiMessage(sessionId: string, clientId: string) {
+  const [row] = await getDbClient().drizzle.select({ role: localDbSchema.messages.role, content: localDbSchema.messages.content,
+    agentMeta: localDbSchema.messages.agentMeta,
+    createdAt: localDbSchema.messages.createdAt, clearedAt: localDbSchema.sessions.clearedAt, status: localDbSchema.sessions.status })
+    .from(localDbSchema.messages).innerJoin(localDbSchema.sessions, eq(localDbSchema.messages.sessionId, localDbSchema.sessions.id))
+    .where(and(eq(localDbSchema.messages.sessionId, sessionId), eq(localDbSchema.messages.clientId, clientId), isNull(localDbSchema.messages.rewindAt))).limit(1);
+  if (!row || row.status === 'deleted' || (row.clearedAt !== null && row.createdAt <= row.clearedAt) ||
+      (row.role !== 'user' && row.role !== 'assistant')) return null;
+  return row;
+}
+async function readNativeUiTool(sessionId: string, toolUseId: string) {
+  const rows = await getDbClient().drizzle.select({ role: localDbSchema.messages.role, content: localDbSchema.messages.content,
+    toolUseId: localDbSchema.messages.toolUseId, createdAt: localDbSchema.messages.createdAt,
+    clearedAt: localDbSchema.sessions.clearedAt, status: localDbSchema.sessions.status })
+    .from(localDbSchema.messages).innerJoin(localDbSchema.sessions, eq(localDbSchema.messages.sessionId, localDbSchema.sessions.id))
+    .where(and(eq(localDbSchema.messages.sessionId, sessionId), eq(localDbSchema.messages.toolUseId, toolUseId),
+      inArray(localDbSchema.messages.role, ['tool_use', 'tool_result']), isNull(localDbSchema.messages.rewindAt))).limit(4);
+  const visible = rows.filter(row => row.status !== 'deleted' && (row.clearedAt === null || row.createdAt > row.clearedAt));
+  return { calls: visible.filter(row => row.role === 'tool_use'), results: visible.filter(row => row.role === 'tool_result') };
+}
+function getPluginUiService(): PluginUiService {
+  if (!pluginUiServiceSingleton) {
+    const records = createPluginUiRendererRecords({ readMessage: readNativeUiMessage, readTool: readNativeUiTool,
+      resolvePlugin: (id, namespace) => {
+        if (!isValidGhostId(id)) {
+          const exact = namespace === undefined ? findGhostForPhysicalStoragePart(id) : null;
+          return exact ? installedGhostStoragePart(exact) : undefined;
+        }
+        const resolved = resolveInstalledGhost(availableGhosts(), id, namespace);
+        return resolved.status === 'unique' ? installedGhostStoragePart(resolved.ghost) : undefined;
+      } });
+    pluginUiServiceSingleton = new PluginUiService({
+      current: id => { const ghost = findGhostForInstanceId(id); return ghost ? nativeUiInstance(ghost) : null; },
+      wake: async id => {
+        const ghost = findGhostForInstanceId(id);
+        if (!ghost || !nativeUiInstance(ghost)) return false;
+        const runtime = getGhostRuntime(), started = await runtime.spawn(ghost);
+        return started.ok && await runtime.waitUntilRunning(id);
+      },
+      authorize: async (sessionId, controller) => {
+        const current = captureNativeUiController(controller);
+        const row = await getSessionRowSnapshot(sessionId);
+        if (getDeviceLinkInvokeContext()?.sharedTask || !current() || !row || row.status === 'deleted' || !isLocalPluginUiSession(row))
+          throw new PluginUiError('NOT_FOUND', 'UI task unavailable');
+        await assertRemoteBotInvocationAllowed([sessionId]);
+        if (!current()) throw new PluginUiError('NOT_FOUND', 'UI context changed');
+        return { current, allows: id => !isGhostDisabledForWorkdir(id, row.workingDir) };
+      },
+      resolveScope: async (sessionId, point, target) => {
+        if (point === 'message.shortcuts') point = 'message.actions';
+        if (point === 'tool.body' && target?.kind === 'tool') {
+          const scope = { kind: 'tool' as const, sessionId, toolUseId: target.id };
+          return await records.read(scope) ? scope : null;
+        }
+        if (target?.kind !== 'message' || !['message.actions', 'message.body', 'turn.footer'].includes(point)) return null;
+        const row = await readNativeUiMessage(sessionId, target.id);
+        if (!row || (point === 'turn.footer' && row.role !== 'user')) return null;
+        return { kind: 'message', sessionId, messageClientId: target.id };
+      },
+      resolveRendererSource: async scope => {
+        const result = await records.read(scope);
+        return result ? { source: result.source, legacy: result.legacy } : {};
+      },
+      readRendererChoice: readPluginUiRendererChoice,
+      writeRendererChoice: writePluginUiRendererChoice,
+      readContext: async (scope, fields) => {
+        const result: Pick<import('@cindy/maker-shared').PluginUiContext, 'session' | 'message' | 'tool'> = {};
+        if (fields.includes('session.summary')) {
+          const row = await getSessionRowSnapshot(scope.sessionId);
+          if (!row || row.status === 'deleted') throw new PluginUiError('NOT_FOUND', 'UI task unavailable');
+          result.session = { id: scope.sessionId, title: row.title ?? '', status: row.status,
+            ...(row.agentKind ? { agentKind: row.agentKind } : {}) };
+        }
+        if (fields.includes('message.content') && scope.kind === 'message') {
+          const row = await readNativeUiMessage(scope.sessionId, scope.messageClientId);
+          if (!row) throw new PluginUiError('NOT_FOUND', 'UI message unavailable');
+          let content: unknown;
+          try { content = JSON.parse(row.content); } catch { content = row.content; }
+          const text = typeof content === 'string' ? content : content && typeof content === 'object' && 'text' in content &&
+            typeof content.text === 'string' ? content.text : undefined;
+          if (text !== undefined) result.message = { id: scope.messageClientId, role: row.role as 'user' | 'assistant', text };
+        }
+        if (scope.kind === 'tool' && fields.some(field => field.startsWith('tool.'))) {
+          const record = await records.read(scope);
+          if (!record) throw new PluginUiError('NOT_FOUND', 'UI tool unavailable');
+          result.tool = record.tool;
+        }
+        return result;
+      },
+      send: sendToGhostLogic,
+      prepareNavigation: input => getPluginTabViewHost().prepare(input),
+      navigate: (controller, requestId) => getPluginTabViewHost().navigate(controller, requestId),
+      bindingRemoved: viewId => pluginUiPageHostSingleton?.releaseBinding(viewId),
+      changed: sessionId => {
+        broadcastGhostWindowPush(PLUGIN_UI_CHANGED, { ...(sessionId ? { sessionId } : {}) });
+      },
+    });
+    const instances = nativeUiInstances(availableGhosts());
+    pluginUiServiceSingleton.reconcile(instances);
+    getAppShortcutStore().setPluginShortcuts(pluginCommandShortcuts(instances));
+  }
+  return pluginUiServiceSingleton;
+}
 const pluginInvocations = new PluginInvocations({
   scope: id => {
     const ghost = findGhostForInstanceId(id);
@@ -2256,6 +2541,8 @@ export function getGhostRuntime(): GhostRuntime {
           modelPickerSingleton?.cancel(storagePart);
           pluginInvocations.invalidate(storagePart);
           invocationRuntimeGenerations.set(storagePart, (invocationRuntimeGenerations.get(storagePart) ?? 0) + 1);
+          pluginUiServiceSingleton?.runtimeChanged(storagePart);
+          void pluginUiVisibilityServiceSingleton?.release(storagePart);
         }
         broadcastGhostRuntimeStates();
       },
@@ -2294,10 +2581,7 @@ export function getGhostPipeDispatcher(): GhostPipeDispatcher {
       getGhost: findGhostForInstanceId,
       ownerScope: ghostOwnerScope,
       runtimeStateOf: (id) => getGhostRuntime().stateOf(id),
-      spawn: async (ghost) => {
-        const r = await getGhostRuntime().spawn(ghost);
-        return r.ok ? { ok: true } : { ok: false, reason: r.reason };
-      },
+      spawn: (ghost) => getGhostRuntime().spawnForTool(ghost),
       sendToGhost: (ghostId, payload) => sendToGhostLogic(ghostId, payload),
       prepareUsage: (ghost, callId, toolName, sessionId) => {
         const invocation = pluginInvocations.begin(installedGhostStoragePart(ghost), 'tool',
@@ -2362,6 +2646,21 @@ const pluginTargetSlot = new PluginTargetSlot();
 export function setPluginTargetAdapter(adapter: PluginTargetAdapter): void { pluginTargetSlot.adapter = adapter; }
 let pluginObserveAdapter: PluginObserveAdapter | null = null;
 export function setPluginObserveAdapter(adapter: PluginObserveAdapter | null): void { pluginObserveAdapter = adapter; }
+let pluginCompanionAdapter: PluginCompanionAdapter | null = null;
+let pluginCompanionHub: CompanionWatchHub | null = null;
+/**
+ * Install the data behind `cindy.companions`. Returns the watch hub the caller feeds with changes
+ * (island activity, companion homes, pushes from the computers companions run on).
+ */
+export function setPluginCompanionAdapter(adapter: PluginCompanionAdapter | null): CompanionWatchHub | null {
+  pluginCompanionHub?.dispose();
+  pluginCompanionAdapter = adapter;
+  pluginCompanionHub = adapter ? createCompanionWatchHub({
+    send: sendToGhostLogic,
+    approved: id => hasPluginCompanionsApproval(findGhostForInstanceId(id)),
+  }) : null;
+  return pluginCompanionHub;
+}
 export async function assertPluginTargetQueuedDelivery(taskId: string, clientId: string): Promise<void> {
   await pluginTargetSlot.assertQueuedDelivery(taskId, clientId);
 }
@@ -2397,6 +2696,11 @@ export function pluginTargetAuthorizationRevision(id: string): string | null {
 function pluginObserveAuthorizationRevision(id: string): string | null {
   const ghost = findGhostForInstanceId(id);
   return hasPluginObserveApproval(ghost) ? ghostInstallApprovalToken(ghost?.approval) : null;
+}
+
+function pluginCompanionAuthorizationRevision(id: string): string | null {
+  const ghost = findGhostForInstanceId(id);
+  return hasPluginCompanionsApproval(ghost) ? ghostInstallApprovalToken(ghost?.approval) : null;
 }
 
 export function pluginDelegationAuthorizationRevision(id: string): string | null {
@@ -6256,6 +6560,63 @@ function getGhostSetupProbes(storeId: string, runtimeManifest: GhostManifest): G
   };
 }
 
+/**
+ * Keys a person types for this plugin (API Key / PAT): user network secrets and node bindings that
+ * are not OAuth. OAuth sign-ins, login-derived and host-managed credentials are never listed.
+ */
+function ghostUserSecretKeys(manifest: GhostManifest): string[] {
+  const network = (manifest.network?.secrets ?? [])
+    .filter((secret) => (!secret.source || secret.source === 'user') && !secret.oauth)
+    .map((secret) => secret.key);
+  const node = (manifest.node?.secretBindings ?? [])
+    .filter((binding) => !binding.oauthSecret)
+    .map((binding) => binding.key);
+  return [...new Set([...network, ...node])];
+}
+
+/** Snapshot hint only: check declared user-key presence without decrypting before consent. */
+export function hasGhostUserSecretsForSetup(instanceKey: string): boolean {
+  const ghost = findGhostForInstanceId(instanceKey);
+  if (!ghost) return false;
+  const storeId = installedGhostStoragePart(ghost);
+  return ghostUserSecretKeys(ghost.manifest).some((key) => ghostSecretSaved(storeId, key));
+}
+
+/**
+ * New-computer setup, other computer (docs/product-rules/new-device-setup-migration.md): the saved
+ * user keys of one installed plugin, after a person allowed the copy there.
+ */
+export function readGhostUserSecretsForSetup(instanceKey: string): Record<string, string> {
+  const ghost = findGhostForInstanceId(instanceKey);
+  if (!ghost) return {};
+  const storeId = installedGhostStoragePart(ghost);
+  const out: Record<string, string> = {};
+  for (const key of ghostUserSecretKeys(ghost.manifest)) {
+    const value = readGhostSecretStrict(storeId, key);
+    if (value) out[key] = value;
+  }
+  return out;
+}
+
+/**
+ * New-computer setup, this computer: writes copied keys the installed plugin declares and this
+ * computer has not saved yet; a key already saved here is kept. Returns how many were written.
+ */
+export function storeGhostUserSecretsForSetup(instanceKey: string, values: Record<string, string>): number {
+  const ghost = findGhostForInstanceId(instanceKey);
+  if (!ghost) return 0;
+  const storeId = installedGhostStoragePart(ghost);
+  const declared = new Set(ghostUserSecretKeys(ghost.manifest));
+  let written = 0;
+  for (const [key, value] of Object.entries(values)) {
+    if (!declared.has(key) || ghostSecretSaved(storeId, key)) continue;
+    if (!storeGhostSecret(storeId, key, value)) continue;
+    getGhostSetupChangeBus().emit(storeId, { source: 'secret', ref: key });
+    written += 1;
+  }
+  return written;
+}
+
 export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
   const ghost = findGhostForInstanceId(ghostId);
   if (!ghost || !ghostSetupKvStore) {
@@ -7583,6 +7944,7 @@ async function installAndDockLocked(
     approvedControlPoints: confirmedControlPoints(opts.consent.decision, installedBefore, opts.consent.manifest),
     approvedAutoTools: confirmedAutoTools(opts.consent.decision, installedBefore, opts.consent.manifest),
     observeCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'observe'),
+    companionsCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'companions'),
     initiallyEnabled: opts.enable ?? false,
     expectedPackageSha256: opts.expectedPackageSha256,
     ...(opts.trustOverride ? { trustOverride: opts.trustOverride } : {}),
@@ -7775,6 +8137,7 @@ async function updateLocalGhostPackageLocked(
           approvedControlPoints: confirmedControlPoints(consent, previousGhost, inspected.manifest),
           approvedAutoTools: confirmedAutoTools(consent, previousGhost, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'observe'),
+          companionsCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'companions'),
           expectedPackageSha256,
           expectedInstalledApproval,
           installOrigin: installOrigin ?? 'manual',
@@ -8276,6 +8639,7 @@ async function installOrUpdateMarketGhostPackageLocked(
           approvedControlPoints: confirmedControlPoints(expected.consent, installed, inspected.manifest),
           approvedAutoTools: confirmedAutoTools(expected.consent, installed, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'observe'),
+          companionsCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'companions'),
           expectedPackageSha256: inspected.packageSha256,
           expectedInstalledApproval: expected.expectedInstalledApproval!,
           ...(previousRelId ? { simulatorPreviousRelId: previousRelId } : {}),
@@ -8560,7 +8924,8 @@ function readLegacyEncryptedSecret(file: string): LegacyMigrationRead<string> {
 }
 
 
-async function setGhostEnabledForUser(id: string, enabled: boolean, expectedInstalledApproval?: string, assertCurrent?: () => void) {
+/** Same path as the plugin page switch (runtime stop, receipt write, owner lease). */
+export async function setGhostEnabledForUser(id: string, enabled: boolean, expectedInstalledApproval?: string, assertCurrent?: () => void) {
   assertCurrent?.();
   const target = findGhostForPhysicalStoragePart(id);
   if (!target) throwIpcError('NOT_FOUND', '目标插件实例已不存在');
@@ -8788,6 +9153,18 @@ export function registerGhostIpc(): void {
       providers: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true }),
       agents: async () => { const { getMakerIfReady } = await import('../maker-host/index.js'); return getMakerIfReady()?.listAvailableAgents() ?? []; },
     });
+  const nativeUiIpc = createPluginUiIpcHandlers({ service: getPluginUiService, pageHost: getPluginUiPageHost,
+    assertTrusted: assertTrustedAppRendererEvent, devEnabled: () => !app.isPackaged, fail: throwIpcError });
+  ipcMain.handle(PLUGIN_UI_READ, nativeUiIpc.read);
+  ipcMain.handle(PLUGIN_UI_INVOKE, nativeUiIpc.invoke);
+  ipcMain.handle(PLUGIN_UI_CHOOSE_RENDERER, nativeUiIpc.choose);
+  ipcMain.handle(PLUGIN_UI_PAGE_OPEN, nativeUiIpc.openPage);
+  ipcMain.handle(PLUGIN_UI_PAGE_CLOSE, nativeUiIpc.closePage);
+  ipcMain.handle(PLUGIN_UI_RELEASE, nativeUiIpc.release);
+  ipcMain.handle(PLUGIN_UI_INSPECT, nativeUiIpc.inspect);
+  registerPluginTabViewIpc(ipcMain, getPluginTabViewHost, assertTrustedAppRendererEvent);
+  pluginAppearanceIpc.register(ipcMain);
+  pluginUiVisibilityIpc.register(ipcMain);
   remotePluginManagement = new RemotePluginManagement({
     list: availableGhosts,
     settingsPage: true,
@@ -9448,6 +9825,9 @@ export function registerGhostIpc(): void {
     if (!id) throwIpcError('PERMISSION_DENIED', '非意识电子脑上下文');
     requireGhostAvailableForActiveSession(id);
     const type = (payload as { type?: unknown } | null)?.type;
+    if (type === 'ui-appearance-request') return getPluginAppearanceService().handle(id, payload);
+    if (type === 'ui-visibility-request') return getPluginUiVisibilityService().handle(id, payload);
+    if (typeof type === 'string' && type.startsWith('ui-')) return getPluginUiService().handle(id, payload);
     if (type === 'recommendations-update') {
       const ghost = findGhostForInstanceId(id);
       if (!ghost || !ghost.enabled) return { ok: false, errorCode: 'GHOST_ASLEEP' };
@@ -9545,6 +9925,50 @@ export function registerGhostIpc(): void {
       return handlePluginObserveRequest(pluginObserveAdapter, payload, () => {
         if (!isCurrent() || !revision || pluginObserveAuthorizationRevision(id) !== revision)
           throw Object.assign(new Error('PERMISSION_DENIED'), { code: 'PERMISSION_DENIED' });
+      });
+    }
+    if (type === 'companions-request') {
+      if (findGhostForInstanceId(id)?.manifest.agent?.companions !== true) {
+        return { ok: false, error: { code: 'PERMISSION_DENIED', message: 'PERMISSION_DENIED', retryable: false } };
+      }
+      if ((payload as { mobilePageId?: unknown } | null)?.mobilePageId !== undefined) {
+        return { ok: false, error: { code: 'UNSUPPORTED_CAPABILITY', message: 'UNSUPPORTED_CAPABILITY', retryable: false } };
+      }
+      const owner = getActiveDataOwnerPushStamp();
+      const isCurrent = () => {
+        const current = getActiveDataOwnerPushStamp();
+        return owner.dataOwnerId === current.dataOwnerId && owner.ownerGeneration === current.ownerGeneration &&
+          !event.sender.isDestroyed() && ghostIdForLogicWebContents(event.sender.id) === id;
+      };
+      const confirmCapability = (facts: GhostInstallConsentFacts) => {
+        const window = getDeepLinkMainWindow();
+        if (!window || !isTrustedAppRendererWindow(window)) return Promise.resolve(false);
+        return createWindowGhostInstallConsentPrompt(window.webContents)({ purpose: 'task-capability', initiator: 'user', origin: 'local-file', facts });
+      };
+      // Answering a companion's request is delivering the owner's words to it: agent.targets as well.
+      const answering = (payload as { kind?: unknown } | null)?.kind === 'answer';
+      if (answering && findGhostForInstanceId(id)?.manifest.agent?.targets !== true) {
+        return { ok: false, error: { code: 'PERMISSION_DENIED', message: 'PERMISSION_DENIED', retryable: false } };
+      }
+      try {
+        const capabilities: PluginTaskCapability[] = answering ? ['companions', 'tasks', 'targets'] : ['companions'];
+        for (const capability of capabilities) {
+          if (!await requestPluginTaskApproval(id, isCurrent, confirmCapability, false, capability)) {
+            return { ok: false, error: { code: 'PERMISSION_DENIED', message: 'PERMISSION_DENIED', retryable: false } };
+          }
+        }
+      } catch {
+        return { ok: false, error: { code: 'PERMISSION_DENIED', message: 'PERMISSION_DENIED', retryable: false } };
+      }
+      const revision = pluginCompanionAuthorizationRevision(id);
+      const targetRevision = answering ? pluginTargetAuthorizationRevision(id) : null;
+      return handlePluginCompanionRequest(pluginCompanionAdapter, pluginCompanionHub, payload, {
+        ghostId: id,
+        assertAuthorized: () => {
+          if (!isCurrent() || !revision || pluginCompanionAuthorizationRevision(id) !== revision ||
+              (answering && (!targetRevision || pluginTargetAuthorizationRevision(id) !== targetRevision)))
+            throw Object.assign(new Error('PERMISSION_DENIED'), { code: 'PERMISSION_DENIED' });
+        },
       });
     }
     if (type === 'tasks-request' || type === 'targets-request') {
@@ -10621,13 +11045,16 @@ export function registerGhostIpc(): void {
   ipcMain.handle('ghosts:request-task-approval', async (event, id: unknown, capability: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof id !== 'string' || !id.trim()) throwIpcError('INVALID_PARAMS', 'id must be a non-empty string');
-    if (capability !== undefined && capability !== 'observe') throwIpcError('INVALID_PARAMS', 'capability must be observe when provided');
+    if (capability !== undefined && capability !== 'observe' && capability !== 'companions') {
+      throwIpcError('INVALID_PARAMS', 'capability must be observe or companions when provided');
+    }
     requireGhostAvailableForActiveSession(id);
     const isCurrent = () => {
       try { assertTrustedAppRendererEvent(event); return !event.sender.isDestroyed(); } catch { return false; }
     };
     const granted = await requestPluginTaskApproval(id, isCurrent, facts =>
-      createWindowGhostInstallConsentPrompt(event.sender)({ purpose: 'task-capability', initiator: 'user', origin: 'local-file', facts }), true, capability === 'observe' ? 'observe' : 'tasks');
+      createWindowGhostInstallConsentPrompt(event.sender)({ purpose: 'task-capability', initiator: 'user', origin: 'local-file', facts }), true,
+      capability === undefined ? 'tasks' : capability);
     if (granted) broadcastGhostsChanged(getGhostManager().list());
     return { granted };
   });
@@ -11137,6 +11564,12 @@ function broadcastGhostsChanged(
   },
 ): void {
   if (!opts?.projectionOnly) {
+    void getPluginAppearanceService().reconcile().catch(() => log.warn('Plugin appearance reconciliation deferred'));
+    const instances = nativeUiInstances(ghosts);
+    pluginUiServiceSingleton?.reconcile(instances);
+    pluginTabViewHostSingleton?.reconcile();
+    void pluginUiVisibilityServiceSingleton?.reconcile();
+    getAppShortcutStore().setPluginShortcuts(pluginCommandShortcuts(instances));
     refreshPluginApps(ghosts, { find: findGhostForInstanceId,
       evidence: id => getGhostManager().approvedInstallEvidence(id), available: () => !isGhostBoundaryPending() });
     getGhostSetupManifestTracker().note(ghosts);
