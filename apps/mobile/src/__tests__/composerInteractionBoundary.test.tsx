@@ -491,6 +491,26 @@ describe('composer body drag (press anywhere on the card)', () => {
     expect(harness.result.contentHeight.value === 120).toBe(!claims);
   });
 
+  it('a second finger during a body drag still settles it', () => {
+    const input = { ...composerInput(), bodyDragEnabled: true };
+    const harness = mountComposer(input);
+    const body = harness.result.bodyGesture as unknown as BodyGesture;
+    const drag = bodyDrag(harness.result.bodyGesture);
+    drag.down(440);
+    drag.move(430);
+    drag.move(400);
+    expect(harness.result.active.value).toBe(true);
+    const manager = { activate: vi.fn(), fail: vi.fn(), end: vi.fn() };
+    const two = { numberOfTouches: 2, allTouches: [{ absoluteX: 100, absoluteY: 400 }, { absoluteX: 200, absoluteY: 440 }], changedTouches: [{ absoluteX: 200, absoluteY: 440 }] };
+    body.down(two, manager);
+    body.finalizeManual();
+    flushJS();
+    expect(manager.fail).toHaveBeenCalled();
+    expect(harness.result.active.value).toBe(false);
+    expect(harness.result.contentHeight.value).toBe(60);
+    expect(input.onGrabberTouchActiveChange).toHaveBeenLastCalledWith(false);
+  });
+
   it('leaves long-press selection, horizontal swipes and the collapsed pill to the editor', () => {
     const harness = mountComposer({ ...composerInput(), bodyDragEnabled: true });
     const longPress = bodyDrag(harness.result.bodyGesture);

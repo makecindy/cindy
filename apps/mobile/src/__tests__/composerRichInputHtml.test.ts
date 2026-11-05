@@ -406,6 +406,11 @@ describe('mobile composer rich input HTML', () => {
       { type: 'scroll-edge', atTop: false, atBottom: false },
       { type: 'scroll-edge', atTop: false, atBottom: true },
     ]);
+    // Replacing the draft can reset scrollTop without a scroll event or a resize.
+    const beforeReplace = messages.length;
+    root.scrollTop = 0;
+    windowStub.cindyComposer?.applyDocument({ version: 1, nodes: [{ type: 'text', text: 'replaced' }] }, false);
+    expect(messages.slice(beforeReplace)).toContainEqual({ type: 'scroll-edge', atTop: true, atBottom: false });
     windowStub.cindyComposer?.setConfig({ maxHeight: 400 });
     expect(messages.at(-1)).toEqual({ type: 'height', height: 400 });
     root.scrollHeight = 80;

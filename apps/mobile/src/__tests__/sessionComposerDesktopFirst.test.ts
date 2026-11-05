@@ -373,7 +373,8 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const composerInputVisibleHeight = composerResize.visibleContentHeight;');
     expect(source).toContain('const composerInputScrollEnabled = composerResize.scrollEnabled;');
     expect(source).toContain('const composerShellHasScrollableContent = attachmentCount > 0');
-    expect(source).toContain('const composerScrollEnabled = (nativeShellLayout.composerScrollEnabled');
+    expect(source).toContain('const composerShellScrolls = (nativeShellLayout.composerScrollEnabled');
+    expect(source).toContain('const composerScrollEnabled = composerShellScrolls && !composerResize.dragging;');
     // Scroll ownership is native in installed apps; retain Expo Go's JS fallback.
     expect(source).toContain('&& composerShellHasScrollableContent;');
     expect(source).not.toContain('&& (!composerInputScrollEnabled || composerShellHasScrollableContent);');
