@@ -422,6 +422,7 @@ export async function startCodexHttpBridge(
         pluginId: opts.pluginIdByServerName?.[serverName],
         sessionTokenCtx,
         ownerSessionId: sessionQuery ?? undefined,
+        isOwnerLive: (id) => sessionCtxById.has(id),
         threadInstanceQuery: sessionQuery === null ? instanceQuery : null,
         remoteBotHelper: isScopedRemoteToken && serverName === REMOTE_BOT_HELPER_SERVER_NAME,
       });
@@ -662,6 +663,8 @@ interface DispatchOpts {
   sessionTokenCtx?: LiziMcpSessionContext;
   /** 经 `?session=` 路由时的 Cindy sessionId;新建的 MCP 会话归它所有,随它注销而关闭。 */
   ownerSessionId?: string;
+  /** owner 的注册是否仍在;初始化请求跨越注销时据此自行关闭,不依赖注销时的那次扫描。 */
+  isOwnerLive?: (sessionId: string) => boolean;
   /** Local Codex per-thread URL identity. null means an unbound legacy URL. */
   threadInstanceQuery: string | null;
 }
@@ -694,6 +697,7 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
     pluginId,
     sessionTokenCtx,
     ownerSessionId,
+    isOwnerLive,
     threadInstanceQuery,
     remoteBotHelper,
     remoteAppServer,
@@ -891,6 +895,15 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
   try {
     await mcpServer.connect(transport);
     await transport.handleRequest(req, res, body);
+    // 注销时的扫描只看得到已入表的会话;这条 initialize 在 ctx 检查之后、入表之前若遇到
+    // 注销,会错过那次扫描。入表发生在 handleRequest 内,所以在它返回后复查 owner。
+    if (ownerSessionId !== undefined && isOwnerLive && !isOwnerLive(ownerSessionId)
+      && transport.sessionId) {
+      transports.delete(transport.sessionId);
+      void transport.close().catch((e: unknown) => {
+        log.warn('transport close threw', { message: (e as Error).message });
+      });
+    }
   } catch (err) {
     try {
       await transport.close();

@@ -1345,6 +1345,39 @@ describe('codexHttpBridge', () => {
     expect(bridge.mcpSessionCount()).toBe(1);
   });
 
+  // Review finding on the cleanup above: an initialize that already passed the ctx check
+  // can finish after the Session unregistered, missing the cleanup scan. The factory runs
+  // between the ctx check and the table insert, so unregistering there is that interleaving.
+  it('does not keep an MCP session whose owner unregistered while it was initializing', async () => {
+    const ctx = { agentKind: 'pi' as const, sessionId: 'pi-session', sessionInstanceId: 'pi-instance', workingDir: '/repo', vendorOptions: {} };
+    bridge = await startCodexHttpBridge({
+      serverFactories: {
+        cindy_orca: () => {
+          bridge?.unregisterSessionCtx('pi-session', ctx);
+          return createTestServer();
+        },
+      },
+      logger: noopLogger(),
+    });
+    bridge.registerSessionCtx('pi-session', ctx);
+    bridge.registerSessionToken('pi-session', 'pi-token');
+    const init = await fetch(
+      withMcpRouteIdentity(bridge.url('cindy_orca'), { sessionId: 'pi-session', sessionInstanceId: 'pi-instance' }),
+      {
+        method: 'POST',
+        headers: { accept: 'application/json, text/event-stream', 'content-type': 'application/json', authorization: 'Bearer pi-token' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'pi', version: '1.0.0' } },
+        }),
+      },
+    );
+    await init.text();
+    expect(bridge.mcpSessionCount()).toBe(0);
+  });
+
   it('rejects an unregistered ?session= query while leaving token-only requests untouched', async () => {
     bridge = await startCodexHttpBridge({
       serverFactories: { cindy_test: createTestServer },
