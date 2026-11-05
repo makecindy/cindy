@@ -992,6 +992,12 @@ function validateQueryRequest(p: Record<string, unknown>): string | null {
   if (!QUERY_KINDS.includes(p.kind as never)) {
     return `query.request.kind must be one of: ${QUERY_KINDS.join(', ')}`;
   }
+  if (
+    p.recipient !== undefined &&
+    !(isPlainObject(p.recipient) && isNonEmptyString(p.recipient.scopeId) && isNonEmptyString(p.recipient.principalId))
+  ) {
+    return 'query.request.recipient must be { scopeId, principalId } non-empty strings when present';
+  }
   if (p.kind === 'session-new') {
     if (!isPlainObject(p.sessionNew)) {
       return 'query.request.sessionNew must be an object when kind is session-new';

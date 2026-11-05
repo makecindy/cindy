@@ -2546,6 +2546,31 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       // 接收日志: /bind /model /effort 的实时问答帧。排查「server 到底有没有
       // 转发到本机」时这是唯一的客户端侧证据(低频帧, INFO 无性能顾虑)。
       log.info(`query.request received: kind=${msg.payload.kind} queryId=${msg.payload.queryId}`);
+      // 官方飞书服务由多个组织的应用共用: 查询须带收件身份, 且与这条连接上服务端确认过的绑定
+      // 一致才回答(同 task.dispatch 的绑定核对), 否则不交出本机的工作目录与模型清单。
+      if (expectedProvider === 'feishu') {
+        const recipient = msg.payload.recipient;
+        const binding = lane?.binding;
+        if (
+          recipient === undefined ||
+          lane === null ||
+          lane.awaitingStateSnapshot ||
+          binding?.state !== 'confirmed' ||
+          binding.scopeId !== recipient.scopeId ||
+          binding.principalId !== recipient.principalId
+        ) {
+          log.warn(`query.request rejected: not for the confirmed Feishu binding (kind=${msg.payload.kind})`);
+          send(
+            makeQueryResponse({
+              queryId: msg.payload.queryId,
+              kind: msg.payload.kind,
+              ok: false,
+              error: 'query is not for the confirmed binding',
+            }),
+          );
+          return;
+        }
+      }
       // buildQueryResponse 现为异步(models 数据源要实时读 listProviders);
       // 内部已捕获数据源错误(回 ok:false), 这里不会 reject。
       const admittedGeneration = accountGeneration;

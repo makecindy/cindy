@@ -974,6 +974,12 @@ export interface QueryRequestPayload {
     options?: TaskDispatchOptions;
     source?: TaskSource;
   };
+  /**
+   * 收件身份: 由多个组织共用的服务(官方飞书)发出的查询代表哪个 IM 应用(`scopeId`)的哪个账号
+   * (`principalId`)。桌面端与本机已确认绑定的 `scopeId` / `principalId` 核对一致才回答。可选 ——
+   * 其它服务不发, 旧桌面端忽略。
+   */
+  recipient?: { scopeId: string; principalId: string };
 }
 
 /**

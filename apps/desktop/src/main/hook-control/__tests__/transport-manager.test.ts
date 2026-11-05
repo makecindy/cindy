@@ -3344,7 +3344,7 @@ describe('官方飞书 / Lark provider lane', () => {
     });
   });
 
-  it('不交出本机任务列表: 飞书服务多组织共用, sessions 查询不带收件身份', async () => {
+  it('只回答本机已确认绑定的查询, 且不交出任务列表: 飞书服务多组织共用', async () => {
     const listRecentSessions = vi.fn(() => [
       { id: 'session-1', title: 'Release task', workspace: 'xdmaker', lastActiveAt: 1_800_000_000_000 },
     ]);
@@ -3356,13 +3356,30 @@ describe('官方飞书 / Lark provider lane', () => {
     opts.onWelcome?.({ serverName: 'feishu-hook', features: [...FEISHU_FEATURES, HOOK_FEATURE_SESSION_PICKER] });
     opts.onStatus('connected', null);
     opts.onMessage(makeProviderBindState(FEISHU_CONFIRMED), () => true);
-    const replies: HookMessage[] = [];
-    opts.onMessage(makeQueryRequest({ queryId: 'q-sessions', kind: 'sessions' }), (message) => {
-      replies.push(message);
-      return true;
+    const ask = async (
+      queryId: string,
+      kind: 'workspaces' | 'sessions',
+      recipient?: { scopeId: string; principalId: string },
+    ): Promise<HookMessage> => {
+      const replies: HookMessage[] = [];
+      opts.onMessage(makeQueryRequest({ queryId, kind, ...(recipient ? { recipient } : {}) }), (message) => {
+        replies.push(message);
+        return true;
+      });
+      await vi.waitFor(() => expect(replies).toHaveLength(1));
+      return replies[0]!;
+    };
+    const mine = { scopeId: 'cli_app', principalId: 'ou_user' };
+
+    expect(await ask('q-none', 'workspaces')).toMatchObject({ payload: { ok: false } });
+    expect(await ask('q-other-app', 'workspaces', { ...mine, scopeId: 'cli_other_org' })).toMatchObject({
+      payload: { ok: false },
     });
-    await vi.waitFor(() => expect(replies).toHaveLength(1));
-    expect(replies[0]).toMatchObject({ type: 'query.response', payload: { queryId: 'q-sessions', ok: false } });
+    expect(await ask('q-other-user', 'workspaces', { ...mine, principalId: 'ou_someone_else' })).toMatchObject({
+      payload: { ok: false },
+    });
+    expect(await ask('q-mine', 'workspaces', mine)).toMatchObject({ payload: { ok: true } });
+    expect(await ask('q-sessions', 'sessions', mine)).toMatchObject({ payload: { ok: false } });
     expect(listRecentSessions).not.toHaveBeenCalled();
   });
 
