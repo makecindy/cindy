@@ -60,6 +60,7 @@
     "@cindy/embedding-client": "workspace:*",
     "@cindy/file-browser-core": "workspace:*",
     "@cindy/github-client": "workspace:*",
+    "@cindy/gitlab-client": "workspace:*",
     "@cindy/heartbeat-client": "workspace:*",
     "@cindy/im": "workspace:*",
     "@cindy/maker-cc-manager": "workspace:*",

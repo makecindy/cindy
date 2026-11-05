@@ -13,6 +13,16 @@ export const COMPANION_CLOUD_RECEIVE_VERSION = 1;
 export const COMPANION_CLOUD_REMOTE_HAND_OVER_VERSION = 2;
 
 /**
+ * 插件「查看伙伴」(agent.companions) 跨电脑读取（只读）：在伙伴的主力电脑上返回本机伙伴的同一份插件
+ * 视图，让其他电脑上的插件看到与本机一致的状态、工作阶段、当前步骤、等主人处理的请求与最新回复。
+ * 入参 `[{ version: 1, kind: 'list' }]` 或 `[{ version: 1, kind: 'reply', companionId }]`；
+ * 返回 `{ version: 1, companions, sessions, conversations }` 或 `{ version: 1, reply }`（见 desktop
+ * pluginCompanionHost）。老版本没有该 channel → CHANNEL_NOT_ALLOWED，查看端退回伙伴列表里的状态。
+ */
+export const COMPANION_LIVE_CHANNEL = 'maker:companion-live:read';
+export const COMPANION_LIVE_VERSION = 1;
+
+/**
  * 在主力电脑上读取伙伴可以换到的电脑（只读，主力电脑视角：发起方自己也在其中）。
  * 入参无；返回 `CompanionCloudRemoteTarget[]`。
  */

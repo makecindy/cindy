@@ -1,11 +1,22 @@
+import { APP_PREFERENCE_REQUEST, APP_PREFERENCE_REPLY, APP_SETTINGS_CHANGED, type AppPreferenceControlBridge } from '../shared/appPreferenceControl.js';
 import type { VoiceConversationApi } from '../shared/voiceConversation';
 import { PERFORMANCE_TRACE_CHANNEL, PERFORMANCE_TRACE_EVENTS_CHANNEL, PERFORMANCE_TRACE_STATE_CHANNEL, type PerformanceTraceAPI, type PerformanceTraceState } from '../shared/performanceTrace';
 import { createAccessibilitySupportBridge } from './accessibilitySupport';
+import { createMicrophonePermissionSnapshot } from './microphonePermissionSnapshot';
+import { createVoiceInputDataSnapshot } from './voiceInputDataSnapshot';
+import type { VoiceInputDataSnapshot } from '../shared/voiceInputData';
 import { createWallpaperAssetsBridge } from './wallpaperAssets';
 import type { CompanionImportApi, CompanionImportSelection } from '@cindy/maker-shared/companion-import';
 import { TASK_MIGRATION_LOCAL_CHANNEL } from '@cindy/device-link';
+import type { PluginModelSelection } from '@cindy/device-link';
 import type { WorktreeRecycleAction, WorktreeRecycleStatus } from '../shared/worktreeRecycle';
 import type { GhostControlPointCandidate, GhostControlPointInfo, GhostPickerModel, GhostStartTaskPointData, GhostStartTaskRouteResult } from '../shared/ghost';
+import {
+  SETUP_MIGRATION_IPC,
+  type SetupMigrationApi,
+  type SetupMigrationHostRequest,
+  type SetupMigrationProgress,
+} from '../shared/setupMigration';
 import {
   FAVORITE_HOST_READY,
   FAVORITE_HOST_REQUEST,
@@ -86,6 +97,7 @@ import {
   AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL,
   AGENT_ISLAND_SET_ENABLED_CHANNEL,
   AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL,
+  AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL,
   AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL,
   AGENT_ISLAND_SET_COMPANION_CHATS_CHANNEL,
   AGENT_ISLAND_READ_COMPANION_CHAT_CHANNEL,
@@ -787,6 +799,7 @@ const fanOutVoiceInputShortcutRecoveryFailed = createIpcFanOut(
 // sync with REMOTE_SSH_PUSH.STATUS_CHANGED in main/remote-ssh/index.ts;
 // preload can't import from main due to vite chunking.
 const fanOutRemoteSshStatus = createIpcFanOut('maker:remote-ssh:status-changed');
+const fanOutRemoteSshHosts = createIpcFanOut('maker:remote-ssh:hosts-changed');
 // Phase B — install progress events (per hostId + agentKind).
 const fanOutRemoteSshInstallProgress = createIpcFanOut('maker:remote-ssh:install-progress');
 // Phase D — silent install status (maker:send 触发的自动 install 给 toast 用)。
@@ -913,6 +926,7 @@ const fanOutDeviceLinkOwnershipChanged = createIpcFanOut('device-link:ownership-
 const fanOutDeviceLinkResponsivenessChanged = createIpcFanOut('device-link:responsiveness-changed');
 const fanOutDeviceLinkPeerLinkReopened = createIpcFanOut(DEVICE_LINK_PUSH.PEER_LINK_REOPENED);
 const fanOutDeviceLinkPeerLinkReset = createIpcFanOut(DEVICE_LINK_PUSH.PEER_LINK_RESET);
+const fanOutDeviceLinkDeviceDirectoryInvalidated = createIpcFanOut(DEVICE_LINK_PUSH.DEVICE_DIRECTORY_INVALIDATED);
 
 // device-link 模型列表写穿:被控端本地 main → 自身 renderer,把控制端写穿的草稿 / 会话 pref
 // 交给 renderer 调它原来的本地 setter。仅被控端进程会收到(控制端从不收 → 监听不误触发)。
@@ -1107,7 +1121,23 @@ ipcRenderer.on('appearance-settings:changed', (_event, settings: AppearanceSetti
   appearanceSettingsInfo = settings;
 });
 
+const readMicrophonePermissionSnapshot = createMicrophonePermissionSnapshot();
+const voiceInputDataSnapshot = createVoiceInputDataSnapshot();
+
 contextBridge.exposeInMainWorld('electronAPI', {
+  appPreferenceControl: {
+    onSettingsChanged(listener) {
+      const receive = (_event: Electron.IpcRendererEvent, value: Parameters<typeof listener>[0]) => listener(value);
+      ipcRenderer.on(APP_SETTINGS_CHANGED, receive);
+      return () => ipcRenderer.removeListener(APP_SETTINGS_CHANGED, receive);
+    },
+    onRequest(listener) {
+      const receive = (_event: Electron.IpcRendererEvent, request: Parameters<typeof listener>[0]) => listener(request);
+      ipcRenderer.on(APP_PREFERENCE_REQUEST, receive);
+      return () => ipcRenderer.removeListener(APP_PREFERENCE_REQUEST, receive);
+    },
+    reply: (reply) => ipcRenderer.send(APP_PREFERENCE_REPLY, reply),
+  } satisfies AppPreferenceControlBridge,
   localAgent: {
     onConfirmation: (listener: (request: import('../shared/localAgent').LocalAgentConfirmation) => void): (() => void) => {
       const receive = (_event: Electron.IpcRendererEvent, request: import('../shared/localAgent').LocalAgentConfirmation) => listener(request);
@@ -1146,6 +1176,34 @@ contextBridge.exposeInMainWorld('electronAPI', {
       };
     },
   } satisfies ModelFavoritesHostApi,
+  // 新电脑设置：只暴露固定的几次调用；计划、安装与写入都由 Main 复核。
+  setupMigration: {
+    sources: () => ipcRenderer.invoke(SETUP_MIGRATION_IPC.SOURCES),
+    preview: (deviceId) => ipcRenderer.invoke(SETUP_MIGRATION_IPC.PREVIEW, deviceId),
+    apply: (request) => ipcRenderer.invoke(SETUP_MIGRATION_IPC.APPLY, request),
+    state: () => ipcRenderer.invoke(SETUP_MIGRATION_IPC.STATE),
+    dismiss: (request) => ipcRenderer.invoke(SETUP_MIGRATION_IPC.DISMISS, request),
+    onProgress: (listener) => {
+      const receive = (_event: Electron.IpcRendererEvent, progress: SetupMigrationProgress) =>
+        listener(progress);
+      ipcRenderer.on(SETUP_MIGRATION_IPC.PROGRESS, receive);
+      return () => {
+        ipcRenderer.removeListener(SETUP_MIGRATION_IPC.PROGRESS, receive);
+      };
+    },
+    host: {
+      ready: () => ipcRenderer.send(SETUP_MIGRATION_IPC.HOST_READY),
+      reply: (reply) => ipcRenderer.send(SETUP_MIGRATION_IPC.HOST_REPLY, reply),
+      onRequest: (listener) => {
+        const receive = (_event: Electron.IpcRendererEvent, request: SetupMigrationHostRequest) =>
+          listener(request);
+        ipcRenderer.on(SETUP_MIGRATION_IPC.HOST_REQUEST, receive);
+        return () => {
+          ipcRenderer.removeListener(SETUP_MIGRATION_IPC.HOST_REQUEST, receive);
+        };
+      },
+    },
+  } satisfies SetupMigrationApi,
   botMarket: {
     list: () => ipcRenderer.invoke('companion-import', 'packages'),
     invite: (input: import('../shared/botMarket').BotPackageIdentity & { locale?: string }) => ipcRenderer.invoke('companion-import', 'invite-package', input),
@@ -1468,7 +1526,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     uiPrompts: (): Promise<Array<{id: string; name: string; version: string}>> => ipcRenderer.invoke('ghosts:ui-prompts'),
     deferUiPrompt: (id: string, version: string): Promise<void> => ipcRenderer.invoke('ghosts:defer-ui-prompt', id, version),
     requestUiApproval: (id: string): Promise<{ granted: boolean }> => ipcRenderer.invoke('ghosts:request-ui-approval', id),
-    requestTaskApproval: (id: string, capability?: 'observe'): Promise<{ granted: boolean }> =>
+    requestTaskApproval: (id: string, capability?: 'observe' | 'companions'): Promise<{ granted: boolean }> =>
       ipcRenderer.invoke('ghosts:request-task-approval', id, capability),
     /** 本插件声明的控制节点(运行前检查)与生效状态。 */
     getControlPoints: (id: string): Promise<GhostControlPointInfo[]> =>
@@ -1491,6 +1549,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** 目录级禁用清单(插件页项目范围视图;sendSync 保证切换同帧渲染)。 */
     workdirPrefsSync: (workdir: string): { disabled: string[] } =>
       ipcRenderer.sendSync('ghosts:workdir-prefs', workdir),
+    workdirPrefs: (workdir: string): Promise<{ disabled: string[] }> =>
+      ipcRenderer.invoke('ghosts:workdir-prefs', workdir),
     setWorkdirDisabled: (
       workdir: string,
       id: string,
@@ -1591,8 +1651,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       prompt?: string,
       formValues?: Record<string, string>,
       formChange?: boolean,
+      modelSelection?: PluginModelSelection & { agentDeviceId?: string },
     ): Promise<{ ok: boolean }> =>
-      ipcRenderer.invoke('ghosts:card:action', callId, actionId, prompt, formValues, formChange),
+      ipcRenderer.invoke('ghosts:card:action', callId, actionId, prompt, formValues, formChange, modelSelection),
     resolvePanelMedia: (
       uri: string,
       purpose?: 'attach' | 'menu',
@@ -1796,9 +1857,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getBenchmarkFixtureAudio: (): Promise<
       { ok: true; path: string; wav: ArrayBuffer } | { ok: false }
     > => ipcRenderer.invoke('voice-input:benchmark-fixture-audio'),
-    getMicrophonePermissionCached: ():
-      { ok: true; status: string } | { ok: false; status: string; error: string } =>
-      ipcRenderer.sendSync('voice-input:get-microphone-permission-cached'),
+    getMicrophonePermissionCached: readMicrophonePermissionSnapshot,
     getSystemPermissionsCached: (): {
       microphone: { ok: true; status: string } | { ok: false; status: string; error: string };
       inputMonitoring: { ok: true; status: string } | { ok: false; status: string; error: string };
@@ -1869,13 +1928,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     cancel: (params?: { runId?: string }): Promise<{ ok: true }> =>
       ipcRenderer.invoke('voice-input:cancel', params),
     onEvent: fanOutVoiceInputEvent,
-    getDataSnapshot: (): unknown => ipcRenderer.sendSync('voice-input:data:get'),
+    getDataSnapshot: voiceInputDataSnapshot.read,
     migrateLegacyRendererData: (payload: {
       settingsRaw?: string | null;
       historyRaw?: string | null;
     }): unknown => {
       const result = ipcRenderer.sendSync('voice-input:data:migrate-legacy', payload);
       throwVoiceInputSyncError(result);
+      voiceInputDataSnapshot.replace(result as VoiceInputDataSnapshot);
       return result;
     },
     updateSettings: (patch: unknown): Promise<unknown> =>
@@ -2240,6 +2300,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke(AGENT_ISLAND_SET_SOUND_SETTINGS_CHANNEL, settings),
     setMascotSkin: (skin: AgentIslandMascotSkin): Promise<{ ok: true }> =>
       ipcRenderer.invoke(AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL, skin),
+    setSubtleReminders: (enabled: boolean): Promise<{ ok: true }> =>
+      ipcRenderer.invoke(AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL, enabled),
     setDisplayTarget: (target: AgentIslandDisplayTarget): Promise<{ ok: true }> =>
       ipcRenderer.invoke(AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL, target),
     getDisplayOptions: (): Promise<{
@@ -3965,6 +4027,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       success: boolean;
       path: string | null;
     }> => ipcRenderer.invoke('dialog:show-open-directory', params ?? {}),
+    /** 把最近项目列表里的目录授权为当前任务的可写目录（只认列表里原样保存的路径）。 */
+    authorizeRecentWritableDirectory: (params: {
+      directory: string;
+      writableGrantScope: string;
+    }): Promise<{ success: true }> =>
+      ipcRenderer.invoke('dialog:authorize-recent-writable-directory', params),
     /** 打开系统文件选择对话框，返回用户选中的文件路径（取消时 path=null）。 */
     showOpenFile: (params?: {
       defaultPath?: string;
@@ -4979,6 +5047,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       remoteControlEnabled: boolean;
       keepAwake: boolean;
       linkStatus: 'stopped' | 'connecting' | 'online';
+      directDataDeviceIds?: string[];
       connectionIssue: {
         kind: 'auth-failed' | 'device-removed' | 'replaced' | 'too-many-connections' | 'version-mismatch' | 'unstable';
         closeCode?: number;
@@ -5020,6 +5089,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
         controlEnabled: boolean;
         isSelf: boolean;
       }>;
+      /** Bounded last-known directory; absence is not an authoritative removal. */
+      stale?: boolean;
+      displayBudget?: { remainingMs: number };
     }> => ipcRenderer.invoke('device-link:list-devices'),
     renameDevice: (
       deviceId: string,
@@ -5052,6 +5124,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('device-link:restore', { deviceId }),
     onPresenceChanged: fanOutDeviceLinkPresenceChanged,
     onStatusChanged: fanOutDeviceLinkStatusChanged,
+    onDeviceDirectoryInvalidated: fanOutDeviceLinkDeviceDirectoryInvalidated,
     /** 本机 relay 连接问题变化(鉴权失效/被顶号/超限/版本不符;null = 已恢复) */
     onConnectionIssue: fanOutDeviceLinkConnectionIssue,
     onRemotePush: fanOutDeviceLinkRemotePush,
@@ -5218,6 +5291,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     disconnect: (id: string): Promise<{ host: unknown }> =>
       ipcRenderer.invoke('maker:remote-ssh:disconnect', { id }),
     onStatusChanged: fanOutRemoteSshStatus,
+    onHostsChanged: fanOutRemoteSshHosts,
 
     // ── Phase B: agent on remote ──────────────────────────────────────────
     probeAgent: (
@@ -5602,7 +5676,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listAllPrRefs: (): Promise<unknown> => ipcRenderer.invoke('git-context:pr-refs:list-all'),
     /** 批量查 PR 实时状态(main 侧 60s TTL 缓存;未配 PAT 返回 no-token)。 */
     getPrStatuses: (
-      queries: Array<{ owner: string; repo: string; prNumber: number }>,
+      queries: Array<{
+        provider?: 'github' | 'gitlab';
+        host?: string;
+        owner: string;
+        repo: string;
+        prNumber: number;
+      }>,
     ): Promise<unknown> => ipcRenderer.invoke('git-context:pr-status', queries),
     /** 订阅 HEAD 分支变化。payload: { workdir, head }。 */
     onChanged: fanOutGitContextChanged,

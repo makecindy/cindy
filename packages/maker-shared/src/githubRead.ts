@@ -24,6 +24,11 @@ export function parseGithubPr(value: unknown): {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("INVALID_PR");
   const v = value as Record<string, unknown>;
+  if (
+    (v.provider !== undefined && v.provider !== 'github') ||
+    (v.host !== undefined && v.host !== 'github.com')
+  )
+    throw new Error('UNSUPPORTED_PROVIDER');
   let owner: string, repo: string, number: unknown;
   if (
     typeof v.url === "string" &&

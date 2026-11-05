@@ -290,13 +290,15 @@ describe('session runtime control wiring', () => {
       /if \(!app.isPackaged \|\| isCindyVersionLaunchPending\(\)\)\s+markDesktopDevWindowReady\(mainWindow.webContents.getOSProcessId\(\)\);/,
     );
   });
-  it('advertises host-side model-window protection to remote controllers', () => {
+  it('advertises host-side model-window protection and Orca relocation to remote controllers', () => {
     const capabilities = handlerBody(
       registerSource,
       'ipcMain.handle(MAKER_INVOKE.GET_CAPABILITIES',
       'ipcMain.handle(MAKER_INVOKE.GET_NEW_MAKER_DEFAULTS',
     );
     expect(capabilities).toContain('supportsModelWindowSwitchGuard: true');
+    // Controllers only offer moving a controlled Orca Lead / local Worker's Agent when this is declared.
+    expect(capabilities).toContain('supportsOrcaAgentRelocation: true');
   });
 
   it('authenticates Desktop package-command entry points before minting Main context', () => {

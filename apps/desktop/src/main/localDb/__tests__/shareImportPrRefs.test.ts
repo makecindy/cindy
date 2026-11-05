@@ -53,7 +53,9 @@ for (const table of [sessions, messages, sessionPrRefs, migrationMeta, orcaTeams
   const config = getTableConfig(table);
   sqlite.exec(`CREATE TABLE "${config.name}" (${config.columns.map(c => `"${c.name}" ${c.getSQLType()}${c.primary ? ' PRIMARY KEY' : ''}`).join(', ')})`);
 }
-sqlite.exec('CREATE UNIQUE INDEX pr_identity ON session_pr_refs(session_id,owner,repo,pr_number)');
+sqlite.exec(
+  'CREATE UNIQUE INDEX pr_identity ON session_pr_refs(session_id,provider,host,owner,repo,pr_number)',
+);
 sqlite.exec('CREATE UNIQUE INDEX message_identity ON messages(session_id,client_id)');
 const client = {
   drizzle: db,
