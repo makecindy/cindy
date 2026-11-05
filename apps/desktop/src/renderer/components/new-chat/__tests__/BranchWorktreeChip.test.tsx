@@ -379,6 +379,38 @@ function CheckoutRow({ deviceId }: { deviceId?: string } = {}) {
     />
   );
 }
+// A pending checkout now occupies the former chevron slot. Verify the real row
+// announces pending work and prevents another pick until the IPC completes;
+// the checkout UI fixture measures its width and right-aligned position.
+it('shows pending checkout until its reply arrives and prevents duplicate branch picks', async () => {
+  const checkout = setupCheckout();
+  let resolve!: (reply: unknown) => void;
+  checkout.mockImplementation(async (req) => {
+    if (req.action === 'switch')
+      return new Promise((done) => {
+        resolve = done;
+      });
+    return { status: checkoutStatus };
+  });
+  render(<CheckoutRow />);
+  await waitFor(() => expect(branchButton().textContent).toBe('main'));
+  await act(async () => {
+    fireEvent.click(branchButton());
+  });
+  await act(async () => {
+    fireEvent.click(await screen.findByRole('option', { name: 'feature' }));
+  });
+  await waitFor(() => expect(branchButton().getAttribute('aria-busy')).toBe('true'));
+  expect(branchButton().getAttribute('aria-disabled')).toBe('true');
+  expect(branchButton().textContent).toBe('main');
+  fireEvent.click(branchButton());
+  expect(screen.queryByRole('listbox')).toBeNull();
+  expect(checkout.mock.calls.filter(([req]) => req.action === 'switch')).toHaveLength(1);
+  await act(async () => resolve({ status: { ...checkoutStatus, current: 'feature' } }));
+  await waitFor(() => expect(branchButton().getAttribute('aria-busy')).toBeNull());
+  expect(branchButton().getAttribute('aria-disabled')).toBe('false');
+  expect(branchButton().textContent).toBe('feature');
+});
 it('shows actual checkout when off and the remembered source when on; toggles never mutate Git', async () => {
   const checkout = setupCheckout();
   render(<CheckoutRow />);

@@ -317,6 +317,7 @@ export function WorktreeChipsRow({
           checked={enabled}
           branchSourceSelected={effectiveWorktreeEnabled && !!sourceBranch}
           branchInteractive={branchInteractive}
+          checkoutBusy={checkout.busy}
           checkboxDisabled={switchDisabled || checkout.busy}
           cantUseReason={cantUseReason ?? undefined}
           onPick={handleBranchPick}
@@ -517,6 +518,7 @@ export function BranchWorktreeChip({
   checked,
   branchSourceSelected,
   branchInteractive,
+  checkoutBusy = false,
   checkboxDisabled,
   cantUseReason,
   onPick,
@@ -546,6 +548,8 @@ export function BranchWorktreeChip({
   branchSourceSelected: boolean;
   /** 分支菜单是否可开(与 checkbox 状态独立)。 */
   branchInteractive: boolean;
+  /** Preserve the chevron slot while checkout temporarily disables the menu. */
+  checkoutBusy?: boolean;
   checkboxDisabled?: boolean;
   cantUseReason?: string;
   onPick: (branch: string) => void;
@@ -643,6 +647,7 @@ export function BranchWorktreeChip({
     <button
       type="button"
       aria-disabled={!branchInteractive}
+      aria-busy={checkoutBusy || undefined}
       tabIndex={branchInteractive ? 0 : -1}
       data-testid="create-agent-branch-chip"
       className={cn(
@@ -666,12 +671,18 @@ export function BranchWorktreeChip({
       <span className="min-w-0 truncate" title={branchDisplayLabel}>
         {branchDisplayLabel}
       </span>
-      {branchInteractive && (
+      {checkoutBusy ? (
+        <Spinner
+          size={12}
+          aria-hidden
+          className={checked ? 'text-primary' : 'text-muted-foreground'}
+        />
+      ) : branchInteractive ? (
         <ChevronDown
           size={12}
           className={cn('shrink-0', checked ? 'text-primary' : 'text-muted-foreground')}
         />
-      )}
+      ) : null}
     </button>
   );
 

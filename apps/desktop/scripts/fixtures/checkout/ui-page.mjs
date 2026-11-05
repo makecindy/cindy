@@ -15,6 +15,9 @@ export default {
     conflict: { about: 'Carry option disabled for overlapping changes' },
     ignored: { about: 'Clean checkout names ignored files that prevent switching' },
     success: { about: 'Successful checkout toast with undo leaves the controls aligned' },
+    switching: {
+      about: 'Pending checkout keeps the right-aligned branch button width and position',
+    },
     worktree: { about: 'Explicit worktree info toast leaves the controls aligned' },
     saved: { about: 'Saved changes toast and persistent menu entry leave the controls aligned' },
   },
@@ -33,7 +36,12 @@ export default {
       ]) {
         const box = await page.getByTestId(id).boundingBox();
         assert.ok(box, id);
-        result[id] = { x: box.x, y: box.y, height: box.height };
+        result[id] = {
+          x: box.x,
+          y: box.y,
+          height: box.height,
+          ...(ui.case === 'switching' ? { width: box.width } : {}),
+        };
       }
       return result;
     };
@@ -41,7 +49,15 @@ export default {
     await ui.capture('before-feedback');
     await page.getByTestId('create-agent-branch-chip').click();
     await page.getByRole('option', { name: /^feature/ }).waitFor();
-    if (ui.case === 'ignored') {
+    if (ui.case === 'switching') {
+      await page.getByRole('option', { name: 'feature', exact: true }).click();
+      await page.locator('[data-testid="create-agent-branch-chip"][aria-busy="true"]').waitFor();
+      assert.equal(await page.getByTestId('create-agent-branch-chip').innerText(), 'main');
+      assert.equal(
+        await page.getByTestId('create-agent-branch-chip').getAttribute('aria-disabled'),
+        'true',
+      );
+    } else if (ui.case === 'ignored') {
       await page.getByRole('option', { name: 'feature', exact: true }).click();
       const feedback = page.getByRole('alert');
       await feedback.waitFor();

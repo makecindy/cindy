@@ -12,13 +12,16 @@ if (!crypto.randomUUID) {
   crypto.randomUUID = () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`;
 }
 
-function Page() {
+function Page({ switching }: { switching: boolean }) {
   const [enabled, setEnabled] = useState(false);
   const [source, setSource] = useState('release');
   return (
     <Tooltip.Provider>
       <div className="p-4 pt-44 text-foreground" data-ui-page-subject>
-        <div className="flex items-center gap-2" data-testid="checkout-controls-row">
+        <div
+          className={`flex items-center gap-2${switching ? ' justify-end' : ''}`}
+          data-testid="checkout-controls-row"
+        >
           <Button size="sm" variant="secondary" className="h-[30px]" data-testid="checkout-project">
             1-basic
           </Button>
@@ -73,6 +76,8 @@ void mountPage({
       }),
       worktreeSyncBranch: forbid('worktreeSyncBranch'),
       worktreeCheckout: async (req: { action: string; branch?: string }) => {
+        // Hold only this in-memory reply so the real row stays in its pending state.
+        if (req.action === 'switch' && ctx.case === 'switching') return new Promise(() => {});
         if (req.action === 'switch' && ['success', 'saved'].includes(ctx.case)) {
           current = req.branch!;
           saved = ctx.case === 'saved';
@@ -125,5 +130,5 @@ void mountPage({
       },
     };
   },
-  render: () => <Page />,
+  render: (ctx) => <Page switching={ctx.case === 'switching'} />,
 });
