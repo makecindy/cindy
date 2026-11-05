@@ -81,8 +81,24 @@ Presence<= PopperProvider > TooltipProvider > TooltipPortal > … (54)
 说明循环发生在其**首轮渲染期间**（render-phase update），而不是 effect 提交后的连锁更新 ——
 这与 React #185 的判定条件一致，也解释了为什么禁用它的子树就能恢复。
 
+在 `CCAgentSessionContent` 内部按行号继续二分（提前返回插在 hook 之间）：
+
+| 切点行号 | 结果 |
+|---|---|
+| 2438 | 正常 |
+| 2560 | 正常 |
+| 2660 | 正常 |
+| 2685 | 正常 |
+| 2700 | 崩溃 |
+| 3000 / 3500 / 4500 | 崩溃 |
+
+切点差异只落在 2685–2700 这一段（`sessionInterruptAcked` latch effect 与
+`refreshPendingAlerts()` effect）。但把这两个 effect 的**函数体**分别用运行时开关短路后重建，
+崩溃仍在 —— 说明“是否执行该段 hook”与“是否崩溃”并非一一对应，此路二分已不足以继续收敛：
+需要在 renderer 内部用真实断点（React DevTools 交互式）观察首次渲染期间的 dispatch 序列。
+
 结论：循环源在 `CCAgentSessionContent` 的渲染子树内（不是 `ChatInput` 本身，也不是 Host 通道），
-下一步应在该子树内按同样的提前返回法继续二分到具体子组件。
+且发生在首轮渲染提交之前。继续推进需要交互式调试，而不是构建级二分。
 
 ## 7. 复现命令
 

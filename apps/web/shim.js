@@ -11,7 +11,16 @@
 (function installCindyHostShim() {
   const pending = new Map();
 
+  /**
+   * Identical payloads reuse the previous parsed value. Renderer stores key
+   * effects on object identity (the Electron main process answers repeated reads
+   * with the same rows), so handing back a new object for unchanged data makes
+   * those effects re-run forever.
+   */
+  const payloadCache = new Map();
+
   async function rpc(path, args) {
+    const requestKey = `${path}\u0000${JSON.stringify(args ?? null)}`;
     const response = await fetch(`/api${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -23,7 +32,12 @@
       throw Object.assign(new Error(detail || `host ${path} failed`), { code: `HTTP_${response.status}` });
     }
     const text = await response.text();
-    return text ? JSON.parse(text) : null;
+    if (!text) return null;
+    const previous = payloadCache.get(requestKey);
+    if (previous && previous.text === text) return previous.value;
+    const value = JSON.parse(text);
+    payloadCache.set(requestKey, { text, value });
+    return value;
   }
 
   /**
