@@ -8,6 +8,10 @@ export default {
   name: 'group-review-layout',
   entry: '../group-control/group-control-fixture.tsx',
   cases: {
+    ...Object.fromEntries([400, 520, 521, 1200].map(width => [`short-${width}`, {
+      about: 'A one-character server message keeps its bubble and full toolbar dimensions until acknowledged',
+      viewport: { width, height: 760 }, data: { ...data, bubbles: true, sendStatus: true },
+    }])),
     ...Object.fromEntries([400, 520, 521, 1200].map(width => [`send-${width}`, {
       about: 'Pending, slow and acknowledged messages retain identical geometry across the narrow-toolbar breakpoint',
       viewport: { width, height: 760 }, data: { ...data, messages: 40, sendStatus: true },
@@ -22,6 +26,38 @@ export default {
     }])),
   },
   async check(page, ui) {
+    if (ui.case.startsWith('short-')) {
+      const input = page.locator('textarea');
+      const outbox = page.getByTestId('bot-group-outbox');
+      const row = page.locator('[data-bot-group-message-id^="pending:"], [data-bot-group-message-id^="sent-"]');
+      const geometry = () => row.evaluate(el => {
+        const bounds = target => {
+          const { x, width, height } = target.getBoundingClientRect();
+          return { x, width, height };
+        };
+        return {
+          row: bounds(el),
+          bubble: bounds(el.querySelector('[data-testid="bot-group-self-bubble"]')),
+          toolbar: bounds(el.querySelector('[data-bot-group-message-actions]')),
+        };
+      });
+      await input.fill('好');
+      await input.press('Enter');
+      await outbox.waitFor();
+      const pending = await geometry();
+      assert.equal(await outbox.getByRole('button').count(), 0, 'pending actions stay inaccessible');
+      await ui.capture('pending');
+      await outbox.getByRole('status').waitFor({ state: 'attached' });
+      assert.deepEqual(await geometry(), pending, 'slow feedback preserves the short bubble');
+      await page.evaluate(() => window.dispatchEvent(new CustomEvent('fixture-send-receipt', { detail: 'ok' })));
+      await outbox.waitFor({ state: 'detached' });
+      const sent = await geometry();
+      await ui.capture('sent');
+      console.log('SHORT_SEND_GEOMETRY', JSON.stringify({ pending, sent }));
+      assert.deepEqual(sent, pending, 'receipt preserves the short bubble and all toolbar slots');
+      assert.equal(await row.locator('[data-bot-group-message-actions]').getByRole('button').count(), 4);
+      return;
+    }
     if (ui.case.startsWith('send-')) return group.check.call(group, page, {
       ...ui, case: 'send-status',
       async capture(label) {

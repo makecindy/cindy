@@ -453,7 +453,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
     />
   ) : null;
   const share = message.threadShare;
-  const threadPreview = props.onOpenThread && (message.replyCount ?? 0) > 0 ? (
+  const threadPreview = !message.pending && props.onOpenThread && (message.replyCount ?? 0) > 0 ? (
     <BotGroupThreadPreview message={message} members={members}
       onOpen={() => props.onOpenThread!(message.id)} />
   ) : null;
@@ -462,9 +462,9 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
       <CornerDownRight size={12} aria-hidden />{sending ? t('bots.groupChat.timeline.sending') : botGroupThreadShareLabel(share, t)}</p>
     <BotGroupThreadShareQuote share={share} members={members} inset={!self}
       attachments={<BotGroupMessageAttachments attachments={share.attachments} align="start" />}
-      onOpenThread={props.onOpenThread ? () => props.onOpenThread!(share.threadRootId, share.messageId) : undefined} />
+      onOpenThread={!message.pending && props.onOpenThread ? () => props.onOpenThread!(share.threadRootId, share.messageId) : undefined} />
   </> : null;
-  // Reserve the toolbar's actual height while awaiting the server message id.
+  // Keep every action slot while awaiting the server id; inert prevents premature interaction.
   const actions = message.kind === 'message' && props.showActions !== false ? (
     <div className={cn('contents', message.pending && 'invisible')} inert={message.pending || undefined} aria-hidden={message.pending || undefined}>
       <ChatMessageHoverActions

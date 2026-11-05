@@ -1393,7 +1393,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             const owned = !isPlanCard && message.authorKind === 'user' && message.isSelf === false
               ? botGroupOwnedBotNames(member, members).join(separator) : '';
             const isOpenPlanCard = isPlanCard && openPlan !== null && openPlan.id === message.planId;
-            const quotable = canQuote && !message.pending && isBotGroupMessageQuotable(message);
+            const quotable = canQuote && isBotGroupMessageQuotable(message);
             return (
               <Fragment key={adoptedKeysRef.current.get(message.id) ?? message.id}>
                 {rowLayout?.dateDivider != null ? <BotGroupDateDivider timestamp={rowLayout.dateDivider} locale={locale} /> : null}
@@ -1416,7 +1416,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
                   quoteDisplay={quoteDisplays.get(message.id)?.display}
                   onLocateQuote={onLocateQuote}
                   onQuote={quotable ? onQuote : undefined}
-                  onOpenThread={group.serverBacked && !direct && !message.pending ? onOpenThread : undefined}
+                  onOpenThread={group.serverBacked && !direct ? onOpenThread : undefined}
                   onChanged={onChanged}
                   highlighted={highlightId === message.id}
                   focusable={jumpTarget === message.id || highlightId === message.id}
