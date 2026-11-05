@@ -16,9 +16,12 @@ import {
   SETTINGS_ROW_LABEL_CLASS,
   SETTINGS_SECTION_TITLE_CLASS,
 } from './settingsRowClasses';
+import { generalSettings } from './GeneralSettings.settings-search';
+import { useSettingDefinition } from './useSettingDefinition';
 
 export function DefaultNewTaskWorkingDirSection({ ownerId }: { ownerId: string | null }) {
   const { t } = useTranslation();
+  const setting = useSettingDefinition(generalSettings.defaultNewTaskWorkingDir);
   const path = useDefaultNewTaskWorkingDir(ownerId);
   const [busy, setBusy] = useState(false);
   const pending = useRef(false);
@@ -48,7 +51,7 @@ export function DefaultNewTaskWorkingDirSection({ ownerId }: { ownerId: string |
   return (
     <div className="flex flex-col gap-[14px]">
       <h2 className={SETTINGS_SECTION_TITLE_CLASS}>
-        {t('settings.defaultNewTaskWorkingDir.title')}
+        {setting.title}
       </h2>
       <div className={SETTINGS_CARD_CLASS}>
         <div className={`${SETTINGS_ROW_CLASS} flex-wrap`}>
@@ -66,12 +69,13 @@ export function DefaultNewTaskWorkingDirSection({ ownerId }: { ownerId: string |
               {path ?? t('settings.defaultNewTaskWorkingDir.unset')}
             </p>
           </div>
-          <div className="flex w-full shrink-0 items-center justify-end gap-2 sm:w-auto">
+          <div className="flex w-full min-w-0 flex-col items-stretch gap-2 sm:w-auto sm:flex-row sm:items-center sm:justify-end">
             {path && (
               <Button
+                {...setting.controlProps}
                 variant="secondary"
                 size="md"
-                className="gap-1.5"
+                className="w-full gap-1.5 sm:w-auto"
                 disabled={busy || !ownerId}
                 onClick={() => void update('clear')}
               >
@@ -80,9 +84,10 @@ export function DefaultNewTaskWorkingDirSection({ ownerId }: { ownerId: string |
               </Button>
             )}
             <Button
+              {...setting.controlProps}
               variant="secondary"
               size="md"
-              className="gap-1.5"
+              className="w-full gap-1.5 sm:w-auto"
               disabled={busy || !ownerId}
               onClick={() => void update('choose')}
             >
