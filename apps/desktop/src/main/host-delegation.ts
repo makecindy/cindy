@@ -133,6 +133,21 @@ export const PROXIED_CHANNELS: readonly ProxiedChannel[] = [
     body: () => null,
   },
   {
+    channel: 'local-db:sessions:interrupted-pending',
+    path: '/api/sessions/interrupted-pending',
+    body: () => null,
+  },
+  {
+    channel: 'local-db:sessions:error-tail-pending',
+    path: '/api/sessions/error-tail-pending',
+    body: () => null,
+  },
+  {
+    channel: 'local-db:sessions:interrupted-resume-candidates',
+    path: '/api/sessions/interrupted-candidates',
+    body: () => null,
+  },
+  {
     channel: 'local-db:messages:list',
     path: '/api/messages/list',
     body: ([sessionId, opts]) => ({

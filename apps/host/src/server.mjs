@@ -108,6 +108,9 @@ export function createHostServer(deps) {
         if (url.pathname === '/api/sessions/create') { send(response, 201, await deps.createSession(body)); return; }
         if (url.pathname === '/api/sessions/get') { send(response, 200, await deps.getSession(String(body.sessionId ?? ''))); return; }
         if (url.pathname === '/api/sessions/discard') { send(response, 200, await deps.discardProvisionalSession(String(body.sessionId ?? ''))); return; }
+        if (url.pathname === '/api/sessions/interrupted-pending') { send(response, 200, await deps.interruptedPending()); return; }
+        if (url.pathname === '/api/sessions/error-tail-pending') { send(response, 200, await deps.errorTailPending()); return; }
+        if (url.pathname === '/api/sessions/interrupted-candidates') { send(response, 200, await deps.interruptedCandidates()); return; }
         if (url.pathname === '/api/sessions/commit') { send(response, 200, await deps.commitProvisionalSession(String(body.sessionId ?? ''))); return; }
         if (url.pathname === '/api/sessions/messages') {
           send(response, 200, { messages: await deps.history(String(body.sessionId ?? ''), Number(body.limit ?? 200)) });

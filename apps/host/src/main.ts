@@ -337,6 +337,23 @@ const server = createHostServer({
     return result;
   },
   listSessions: async () => (sessionStorage ? listActiveSessions(sessionStorage) : []),
+  interruptedPending: async () => {
+    const { listInterruptedPendingRows } = await import('../../desktop/src/main/localDb/sessionActiveTurn.ts');
+    return (await listInterruptedPendingRows({ includeBotTasks: false })).map((row) => row.sessionId);
+  },
+  errorTailPending: async () => {
+    const { listErrorTailPendingSessionIds } = await import('../../desktop/src/main/localDb/sessionActiveTurn.ts');
+    return listErrorTailPendingSessionIds();
+  },
+  interruptedCandidates: async () => {
+    const { listInterruptedResumeCandidateRows } = await import('../../desktop/src/main/localDb/interruptedResumeCandidates.ts');
+    const rows = await listInterruptedResumeCandidateRows(() => false);
+    return rows.map((row) => ({
+      sessionId: row.sessionId,
+      interruptedAt: row.interruptedAt,
+      activity: row.activity ?? null,
+    }));
+  },
   getSession: async (sessionId: string) => {
     const rows = await getDbClient().drizzle.select().from(sessionTable)
       .where(eq(sessionTable.id, sessionId)).limit(1);
