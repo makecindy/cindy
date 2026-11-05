@@ -18,6 +18,10 @@ import { MessagePayloadModal, WorkToolActivityRow } from './MessageRenderer';
 import type { MessagePayload } from './messagePayload';
 import { normalizeRemoteMessages } from './messageNormalize';
 import { buildMessageContentLayout } from './messageContentLayout';
+import { fetchMobileToolInputDetail, type MobileToolInputProjection } from './messageToolPayloadProjection';
+import type { RemoteMessage } from './types';
+
+type ProcessMessage = BotGroupProcessMessage & Partial<Pick<RemoteMessage, 'id' | 'mobileToolInputProjection'>>;
 
 export function BotGroupProcess({ process, owned, deviceId }: { process: BotGroupProcessRef; owned: boolean; deviceId: string }) {
   const { accountGeneration } = useAuth();
@@ -71,25 +75,28 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
   return <TeammateProcess id={`group-process:${process.executionId}`} title={title}>
     {loading && <ActivityIndicator color={colors.textSecondary} />}
     {result.failed && !loading && <MainWindowActionButton action={{ label: t('message.renderer.retryPreview'), onPress: () => retry(v => v + 1) }} />}
-    {result && <BotGroupProcessEntries messages={result.messages} id={`group-process:${process.executionId}`} />}
+    {result && <BotGroupProcessEntries messages={result.messages} id={`group-process:${process.executionId}`} deviceId={deviceId} sessionId={process.sessionId} />}
   </TeammateProcess>;
 }
 
-export function BotGroupProcessEntries({ messages, id, running = false }: { messages: readonly BotGroupProcessMessage[]; id: string; running?: boolean }) {
+export function BotGroupProcessEntries({ messages, id, deviceId, sessionId, running = false }: { messages: readonly ProcessMessage[]; id: string; deviceId: string; sessionId: string; running?: boolean }) {
   const { t } = useTranslation();
   const projection = useMemo(() => projectBotGroupProcess(messages, running), [messages, running]);
   const { width } = useWindowDimensions();
   const contentLayout = useMemo(() => buildMessageContentLayout({ screenWidth: width }), [width]);
   const [payload, setPayload] = useState<MessagePayload | null>(null);
   const closePayload = useCallback(() => setPayload(null), []);
-  const actions = useMemo(() => ({ isSessionStreaming: running, onOpenPayload: setPayload }), [running]);
+  const { invoke } = useDeviceLink();
+  const loadToolInput = useCallback((ref: MobileToolInputProjection) => fetchMobileToolInputDetail(ref,
+    (messageId, options) => invoke<RemoteMessage[]>(deviceId, 'local-db:messages:around', [sessionId, messageId, options])), [invoke, deviceId, sessionId]);
+  const actions = useMemo(() => ({ isSessionStreaming: running, onOpenPayload: setPayload, onLoadToolInput: loadToolInput }), [running, loadToolInput]);
   const tools = useMemo(() => new Map(normalizeRemoteMessages(messages
     .filter(message => isBotGroupProcessMessageVisible(message) && ['tool_use', 'tool_result'].includes(message.role))
-    .map(message => ({ ...message, id: message.clientId, sessionId: id,
+    .map(message => ({ ...message, id: message.id ?? message.clientId, sessionId,
       role: message.role === 'tool_use' ? 'tool_use' as const : 'tool_result' as const,
       toolUseId: message.toolUseId ?? null, agentMeta: message.agentMeta ?? null,
       createdAt: message.createdAt ?? new Date(0).toISOString(),
-    })), { preserveSourceOrder: true }).map(tool => [tool.source.clientId, tool])), [messages, id]);
+    })), { preserveSourceOrder: true, includeInteractionTools: true }).map(tool => [tool.source.clientId, tool])), [messages, sessionId]);
   return <View style={{ gap: spacing.md }}>
     {payload && <MessagePayloadModal payload={payload} onClose={closePayload} />}
     {projection.segments.map((segment, index) => {

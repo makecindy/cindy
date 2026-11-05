@@ -19,7 +19,7 @@ vi.mock('lucide-react-native', () => ({ ChevronRight: () => null, Layers: () => 
 vi.mock('@/components/AppText', () => ({ Text: ({ children }: any) => el('span', null, children) }));
 vi.mock('@/theme', () => ({ useTheme: () => ({ colors: {} }), useThemedStyles: () => ({}) }));
 vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
-const history = vi.hoisted(() => ({ invoke: vi.fn(), generation: 1, subscribe: vi.fn(async () => undefined), unsubscribe: vi.fn(async () => undefined) }));
+const history = vi.hoisted(() => ({ invoke: vi.fn(), generation: 1, subscribe: vi.fn(async () => undefined), unsubscribe: vi.fn(async () => undefined), toolActions: undefined as any }));
 vi.mock('expo-router', () => ({ useFocusEffect: (effect: () => void) => useEffect(effect, [effect]) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: history.generation }) }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: history.invoke, subscribe: history.subscribe, unsubscribe: history.unsubscribe }) }));
@@ -28,11 +28,18 @@ vi.mock('@/session/BotGroupMessageText', () => ({ BotGroupMarkdownText: ({ conte
 // Adapt native rows/viewers; keep the real payload builder, normalization,
 // callbacks and disclosure state so this checks the group-to-viewer handoff.
 vi.mock('@/session/MessageRenderer', async () => {
-  const { buildToolResultPayload } = await import('@/session/messagePayload');
+  const { buildToolResultPayload, buildTextPayload } = await import('@/session/messagePayload');
   return {
-    WorkToolActivityRow: ({ activity, actions }: any) => el('div', null,
-    el('p', null, activity.message.normalized.label, activity.toolResult),
-    el('button', { disabled: !actions.onOpenPayload, onClick: () => actions.onOpenPayload?.(buildToolResultPayload(activity.message.normalized)) }, 'View full output')),
+    WorkToolActivityRow: ({ activity, actions }: any) => {
+      history.toolActions = actions;
+      const tool = activity.message.normalized;
+      return el('div', { 'data-message-id': tool.source.id, 'data-session-id': tool.source.sessionId },
+        el('p', null, tool.label, tool.body, activity.toolResult),
+        tool.toolInputProjection && el('button', { disabled: !actions.onLoadToolInput, onClick: () => {
+          void actions.onLoadToolInput(tool.toolInputProjection).then((detail: any) => actions.onOpenPayload(buildTextPayload('Full input', detail.body)));
+        } }, 'Load full input'),
+        el('button', { disabled: !actions.onOpenPayload, onClick: () => actions.onOpenPayload?.(buildToolResultPayload(tool)) }, 'View full output'));
+    },
     MessagePayloadModal: ({ payload, onClose }: any) => payload ? el('div', { role: 'dialog' }, payload.body, el('button', { onClick: onClose }, 'Close output')) : null,
   };
 });
@@ -42,7 +49,7 @@ import { TeammateProcess } from '@/session/TeammateProcess';
 import { __test_internals as memory } from '@/session/expandedBlockMemory';
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root, node: HTMLDivElement;
-beforeEach(() => { history.invoke.mockReset(); history.generation = 1; remoteSessionStore.clear(); memory.reset(); node = document.createElement('div'); root = createRoot(node); });
+beforeEach(() => { history.invoke.mockReset(); history.toolActions = undefined; history.generation = 1; remoteSessionStore.clear(); memory.reset(); node = document.createElement('div'); root = createRoot(node); });
 afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
 const header = () => node.querySelector('button')!;
 async function show(running: boolean) {
@@ -128,7 +135,7 @@ it.each(['automatic', 'inspected', 'collapsed'] as const)('uses private-chat com
     { clientId: 'tool', role: 'tool_use', content: { toolName: 'Read', input: { file_path: '/repo/notes.md' } }, agentMeta: meta }];
   history.invoke.mockResolvedValue([...messages, final]);
   await act(async () => root.render(el(TeammateProcess, { id: `group-process:${process.executionId}`, title: 'Working', running: true,
-    children: el(BotGroupProcessEntries, { messages, id: `group-process:${process.executionId}`, running: true }) })));
+    children: el(BotGroupProcessEntries, { messages, id: `group-process:${process.executionId}`, deviceId: 'mac', sessionId: 'lane', running: true }) })));
   expect(header().getAttribute('aria-expanded')).toBe('true');
   if (mode === 'inspected') await act(async () => node.querySelectorAll('button')[1]!.click());
   if (mode === 'collapsed') await act(async () => header().click());
@@ -206,7 +213,7 @@ it('updates an open history from a persisted tool result without remounting', as
 
 it.each([false, true])('opens and closes the complete tool payload (running=%s)', async running => {
   const output = 'Long tool output\n'.repeat(80) + 'END OF COMPLETE RESULT';
-  await act(async () => root.render(el(BotGroupProcessEntries, { id: 'payload-turn', running, messages: [source,
+  await act(async () => root.render(el(BotGroupProcessEntries, { id: 'payload-turn', deviceId: 'mac', sessionId: 'lane', running, messages: [source,
     { clientId: 'tool', role: 'tool_use', toolUseId: 'tool', content: { toolName: 'Read', input: { file_path: '/repo/notes.md' } }, agentMeta: meta },
     { clientId: 'result', role: 'tool_result', toolUseId: 'tool', content: output, agentMeta: meta }, final] })));
   await act(async () => header().click());
@@ -231,4 +238,43 @@ it('stops refreshing a historical turn after seeing the next input', async () =>
     await vi.advanceTimersByTimeAsync(50);
   });
   expect(history.invoke).toHaveBeenCalledTimes(reads);
+});
+
+
+it.each([false, true])('loads a projected input from its execution device and real session (running=%s)', async running => {
+  const projection = { projected: true as const, version: 1 as const, toolName: 'WebFetch', toolUseId: 'tool-id', toolUseMessageId: 'persisted-tool', summary: 'Large input' };
+  const projected = { id: 'persisted-tool', clientId: 'tool-client', role: 'tool_use', toolUseId: 'tool-id',
+    content: { toolName: 'WebFetch', toolUseId: 'tool-id', input: null, mobilePayloadProjected: true }, mobileToolInputProjection: projection, agentMeta: meta };
+  const full = { ...projected, sessionId: 'execution-lane', mobileToolInputProjection: undefined, createdAt: new Date(0).toISOString(),
+    content: { toolName: 'WebFetch', toolUseId: 'tool-id', input: { prompt: 'x'.repeat(40000) + 'COMPLETE_INPUT_END' } } };
+  history.invoke.mockImplementation(async (_device, channel) => channel === 'local-db:messages:around' ? [full] : [source, projected, final]);
+  const entries = el(BotGroupProcessEntries, { messages: [source, projected, final], id: 'group-process:projection', running,
+    deviceId: 'execution-mac', sessionId: 'execution-lane' });
+  await act(async () => root.render(running ? entries : el(BotGroupProcess, {
+    process: { ...process, executionId: 'projection', sessionId: 'execution-lane', deviceId: 'execution-mac' }, owned: true, deviceId: 'new-home',
+  })));
+  if (!running) await act(async () => header().click());
+  await act(async () => Array.from(node.querySelectorAll('button')).find(button => button.getAttribute('aria-expanded') === 'false')!.click());
+  const button = Array.from(node.querySelectorAll('button')).find(button => button.textContent === 'Load full input')!;
+  expect(button.disabled).toBe(false);
+  const readsBeforeOpen = history.invoke.mock.calls.filter(call => call[1] === 'local-db:messages:around');
+  expect(readsBeforeOpen).toHaveLength(0);
+  await act(async () => button.click());
+  expect(history.invoke).toHaveBeenCalledWith('execution-mac', 'local-db:messages:around', ['execution-lane', 'persisted-tool', { radius: 0 }]);
+  expect(node.querySelector('[data-message-id="persisted-tool"]')?.getAttribute('data-session-id')).toBe('execution-lane');
+  expect(node.querySelector('[role="dialog"]')?.textContent).toContain('COMPLETE_INPUT_END');
+  history.invoke.mockResolvedValueOnce([]);
+  await expect(history.toolActions.onLoadToolInput(projection)).rejects.toThrow('tool input is unavailable');
+  history.invoke.mockResolvedValueOnce([full]);
+  await expect(history.toolActions.onLoadToolInput(projection)).resolves.toMatchObject({ toolName: 'WebFetch' });
+});
+
+it.each(['AskUserQuestion', 'ExitPlanMode'])('retains %s call, input and result in group process', async toolName => {
+  await act(async () => root.render(el(BotGroupProcessEntries, { id: 'interaction-history', deviceId: 'mac', sessionId: 'lane', messages: [source,
+    { clientId: 'interaction', role: 'tool_use', toolUseId: 'interaction-id', content: { toolName, toolUseId: 'interaction-id', input: { note: 'Interaction input detail' } }, agentMeta: meta },
+    { clientId: 'interaction-result', role: 'tool_result', toolUseId: 'interaction-id', content: 'Interaction result detail', agentMeta: meta }, final] })));
+  await act(async () => header().click());
+  expect(node.textContent).toContain(toolName);
+  expect(node.textContent).toContain('Interaction input detail');
+  expect(node.textContent).toContain('Interaction result detail');
 });

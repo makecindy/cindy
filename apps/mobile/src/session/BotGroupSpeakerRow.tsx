@@ -159,5 +159,5 @@ function BotGroupLiveNotes({ deviceId, sessionId, clientId, groupId, executionId
       && (start >= 0 || since !== undefined && Date.parse(message.createdAt) >= since);
   });
   const merged = [...new Map([...history, ...live].map(message => [message.clientId, message])).values()];
-  return <BotGroupProcessEntries messages={merged} id={`group-process:${executionId}`} running />;
+  return <BotGroupProcessEntries messages={merged} id={`group-process:${executionId}`} deviceId={deviceId} sessionId={sessionId} running />;
 }
