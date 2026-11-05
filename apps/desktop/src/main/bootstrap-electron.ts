@@ -8847,7 +8847,13 @@ const registerIpcHandlers = () => {
           : withActiveChatAttachmentRoot((rootDir) => getFixedDirectoryStats(rootDir)),
       // 「边做边压」扩展把被切走的原文写在这里(spine.log + shadow/)。目录不存在时
       // 报数为 0、清理为无操作,无需先判断开关状态。
-      openSpineDir: () => openFixedDirectory(spineDir),
+      // 打开目录一律走 Electron shell + 统一的目标解析:目录由本机拼出来、不接受
+      // renderer 传路径,仍过一次 resolveShellOpenPathTarget,保证这条调用面永远不碰命令执行。
+      openSpineDir: async () => {
+        const target = resolveShellOpenPathTarget(spineDir);
+        if (!target) return false;
+        return openOrCreateFixedDirectory(target, { openPath: (filePath) => shell.openPath(filePath) });
+      },
       clearSpineDir: () => clearFixedDirectory(spineDir),
       getSpineDirStats: () => getFixedDirectoryStats(spineDir),
     });

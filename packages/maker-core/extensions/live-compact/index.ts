@@ -41,8 +41,14 @@
  * “这是旧内容”前缀已经起到同样的作用。drain 在 pi 里是同一个 settle 钩子内多次估算切段
  * (drafts 在钩子返回后才落地,拿不到切后实测值),因此收尾水位按估算总量计算。
  * 收尾入口的停止条件与上游逐字一致:`drain && measured <= KEEP_ROUND_TOKENS` 就 break。
- * 后果是“当前 30k、预测下一轮 35k”这一轮不会切(cutting 发生到实测过线的那一轮);
- * 这是上游既定行为,不要在本仓单方面改——要改先让上游裁决。
+ * 后果是“当前 30k、预测下一轮 35k”这一轮不会切(cutting 发生到实测过线的那一轮)。
+ * 上游 2026-11-05 在 dsh-live-compact#11 明确答复:开始看 `last + maxTurnGrowth`、
+ * 停止看实测,两把尺是故意的(合成预测会把刚读的日志也切掉,合成实测要等这轮已超线),
+ * 不另加「超线前先切」的开关 —— 本仓照此保留,不再单方面改。
+ * 同一条答复里另两处也确认是有意的:`expandBack` 撞到 checkpoint 就停(卡片是已进缓存的前缀,
+ * 穿过去会改写它),以及不足 CHUNK_MIN 就跳过、不跨 user 回头凑;单个大结果的指针门槛默认
+ * 仍是 32000(`SPINE_POINTER_TOKENS` 可自己设,不按占比算),上游 1.0.9 才会加
+ * `SPINE_CHUNK_MIN` / `SPINE_CHUNK_MAX`(默认仍是 1000 / 32000)。
  * 引擎判定同理:pi 不把 provider baseURL 交给扩展,只能按 provider 名判云端/本地
  * (可用 SPINE_ENGINE=cloud|local 强制),地址判定保留供单测与后续接线。
  *
@@ -67,7 +73,13 @@
  *
  * Env knobs (upstream-compatible): SPINE_MIN_TOKENS, SPINE_SHADOW_DIR, SPINE_SHADOW_MAX_BYTES,
  * SPINE_ENGINE (cloud|local), SPINE_KEEP_ROUNDS, SPINE_KEEP_ROUND_TOKENS, SPINE_POINTER_TOKENS,
- * SPINE_SHADOW_MAX_SESSIONS.
+ * SPINE_SHADOW_MAX_SESSIONS;本仓另有 SPINE_CARD_BUDGET(只用于对照上游固定预算,默认不设)。
+ *
+ * 卡片字符预算(唯一一处有意的数值偏离,2026-11-05 实测):上游固定 8000,本仓按
+ * min(max(8000, 0.9×span), 32000) 放大。内核是 buildCard 的 `ok = missing.length === 0`:
+ * 硬行装不下就整刀拒绝,不是截断卡片。dev 实测 30 轮小/中/大读码负载成卡 1.1–5.4K 字符,
+ * 预算从未成为约束(A/B 用 SPINE_CARD_BUDGET=8000 复跑,切刀决策一致);而 33.5K 字符的
+ * 中文文档只按 8000 会漏 87 条硬行 → 永不切,按放大预算(30,189)则全部装下。
  * Logging: stderr lines prefixed "[pi-live-compact]" (grep "spine cut"), plus an
  * append-only spine.log next to the shadow directory for test verification.
  */
@@ -916,11 +928,16 @@ export function attachBackupHint(card: any, shadowFile?: string) {
   };
 }
 
-function cardBudgetFor(span: string): number {
+/** A/B 用:设了 SPINE_CARD_BUDGET 就固定用这个字符预算(上游取 8000),否则按 span 放大。 */
+const CARD_BUDGET_FIXED = positiveInt(process.env.SPINE_CARD_BUDGET, 0);
+
+function cardBudgetFor(span: string | number): number {
+  if (CARD_BUDGET_FIXED > 0) return CARD_BUDGET_FIXED;
+  const spanLength = typeof span === "number" ? span : span.length;
   // pi 的 toolResult 是完整文件(带行号),硬行规模远大于 DSH 的摘要;中文文档更极端:
   // OBLIGATION 会命中「必须/不要/禁止」几乎每一行,硬行可占 span 的七成以上。
   // 固定 8K 只差几百字符就整刀放弃。预算随 span 放大,上限对齐 CHUNK_MAX(RAIL_TOKENS)。
-  return Math.min(Math.max(KEEP_BUDGET, Math.ceil(span.length * 0.9)), RAIL_TOKENS);
+  return Math.min(Math.max(KEEP_BUDGET, Math.ceil(spanLength * 0.9)), RAIL_TOKENS);
 }
 
 export function buildCard(
@@ -1324,6 +1341,7 @@ export function rotateShadow(options: {
   return { ok: used + options.incomingBytes <= cap, deleted, freed, used, cap, oversize: false };
 }
 
+/** 判活用 Node 原生信号 0:只探测进程存在,不执行任何命令、不发信号、不经过 shell。 */
 function processAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -2104,14 +2122,20 @@ export default function (pi: ExtensionAPI) {  // Idle cut: pi fires agent_before
     const drafts: any[] = [];
     let working = entries;
     let simulated = totalTokens;
-    for (let pass = 0; pass < DRAIN_PASSES; pass += 1) {
-      if (drain && simulated <= KEEP_ROUND_TOKENS) break;
-      const result = attemptCut({ state, entries: working, totalTokens: simulated, drain, engine: resolved.engine });
-      if (result === null) break;
-      drafts.push(...result.drafts);
-      working = result.entries;
-      simulated = result.after;
-      if (!drain) break;
+    try {
+      for (let pass = 0; pass < DRAIN_PASSES; pass += 1) {
+        if (drain && simulated <= KEEP_ROUND_TOKENS) break;
+        const result = attemptCut({ state, entries: working, totalTokens: simulated, drain, engine: resolved.engine });
+        if (result === null) break;
+        drafts.push(...result.drafts);
+        working = result.entries;
+        simulated = result.after;
+        if (!drain) break;
+      }
+    } catch (error) {
+      // 钩子里抛出去会被 pi 静默吞掉:这一轮不切,但必须留下原因。
+      logLine(state, `spine drain failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+      return undefined;
     }
     growth.last = simulated;
     if (drafts.length === 0) return undefined;
@@ -2154,6 +2178,12 @@ function attemptCut(options: {
     // 空 targetId 的 context_edit 会被 runner 忽略:条目没抹掉而卡片照加,净增长。
     logLine(state, "spine cut skipped: span contains an entry without id");
     return null;
+  }
+  // A/B 观测:span 字符数、字符预算与成卡大小(span 越大预算越大,上游固定 8000)。
+  {
+    let spanChars = 0;
+    for (let index = chunk.start; index <= chunk.end; index += 1) spanChars += entries[index].text.length + (index > chunk.start ? 1 : 0);
+    logLine(state, `spine card budget=${cardBudgetFor(spanChars)} spanChars=${spanChars} cardChars=${typeof chunk.card.text === "string" ? chunk.card.text.length : 0} ok=${chunk.card.ok === true}`);
   }
   const tailBeyondKept = chunk.after - (chunk.keptTokens || 0);
   if (!drain && tailBeyondKept > MAX_TAIL && totalTokens < URGENT_TOKENS) {
