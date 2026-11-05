@@ -56,6 +56,12 @@ CINDY_HOST_API=http://127.0.0.1:3456 pnpm --filter desktop dev
   避免把 profile token 发到机器外。
 - 凭据取自 `<userData>/host-api-token`（Host 首次启动生成，0600）；缺失时拒绝启动。
 
+## 结构保证：客户端模式不会装配 Runtime
+
+`getMaker()` 在客户端模式下直接抛错（`setMakerClientMode(true)`），因此任何懒加载路径
+（scheduler、device-link、托盘忙碌探针、MCP 刷新等）都无法在本进程里构造 Runtime；
+调用方原有的 try/catch 会把它们当作「无 runtime」处理。
+
 ## 插件列表
 
 Host 直接复用 Desktop 的 `GhostManager`（同一实现），只注入 owner 作用域路径；市场账本、

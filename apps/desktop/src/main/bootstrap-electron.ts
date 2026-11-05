@@ -723,6 +723,7 @@ import { isCindyLearnSkillEnabled, isCindyLearnSkillEnabledForCommandListing } f
 import {
   desktopClaudeAuthAdapter,
   getMaker as getMakerCore,
+  setMakerClientMode,
   getMakerIfReady,
   resetMaker,
   shutdownLspServerPool,
@@ -6607,6 +6608,8 @@ const registerIpcHandlers = () => {
       // allowlist fail loudly until they are migrated.
       const delegation = hostDelegation();
       if (delegation) {
+        // Structural guarantee: no code path may assemble a runtime here.
+        setMakerClientMode(true);
         console.log(`[bootstrap-electron] client mode: delegating to ${delegation.baseUrl}`);
       } else {
         // getMakerCore() 首次调用触发 Maker 构造，同时发起自定义 MCP 初始加载。
