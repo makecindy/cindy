@@ -1157,7 +1157,7 @@ export function ModelAdvancedDrawer({
                     </Row>
                   </Section>
 
-                  {provider.id !== 'xd' && !isOrganizationManagedProvider(provider) && !paymentRequired ? (
+                  {conversational && provider.id !== 'xd' && !isOrganizationManagedProvider(provider) && !paymentRequired ? (
                     <ModelPriceOverrideDialog
                       key={`${provider.id}:${row.id}`}
                       provider={provider}
@@ -1167,6 +1167,24 @@ export function ModelAdvancedDrawer({
                       presentation="inline"
                       initialAgent={primaryAgent}
                       onPendingChange={(pending) => { pricePendingRef.current = pending; }}
+                      fallbackQuoteOf={(agent) => {
+                        const model = row.byAgent[agent];
+                        const price = model ? pricePresentationOf(agent, model) : null;
+                        if (price?.kind === 'priced' && price.current.source === 'provider-reference') return price.current;
+                        // A reset can settle before the pricing snapshot broadcast. In that
+                        // window its old user-override quote is not a reference. Match the
+                        // connection-local cost source used by getReferenceModelPricing.
+                        const cost = model?.cost;
+                        if (provider.source !== 'user' || !model || cost?.input === undefined || cost.output === undefined ||
+                            ![cost.input, cost.output].every(value => Number.isFinite(value) && value >= 0)) return null;
+                        return {
+                          providerId: provider.id, modelId: model.id, currency: 'USD',
+                          source: 'provider-reference', approximate: true,
+                          inputPerMtok: cost.input, outputPerMtok: cost.output,
+                          ...(cost.cacheRead !== undefined ? { cacheReadPerMtok: cost.cacheRead } : {}),
+                          ...(cost.cacheWrite !== undefined ? { cacheCreatePerMtok: cost.cacheWrite } : {}),
+                        };
+                      }}
                       referenceDetails={(agent) => {
                         const model = row.byAgent[agent];
                         return model ? referencePriceContent(model, agent, true) : undefined;

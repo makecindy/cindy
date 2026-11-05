@@ -15,6 +15,7 @@ import type {
   ModelPriceOverrideView,
 } from '../../../shared/modelPriceOverride';
 import type { UnionModelRow } from './UnifiedModelList';
+import type { ModelPriceQuote } from '../../../shared/regionalMoney';
 
 const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
@@ -31,6 +32,7 @@ interface Props {
   initialAgent?: AgentKind;
   referenceDetails?: ReactNode | ((agent: AgentKind) => ReactNode);
   onPendingChange?: (pending: boolean) => void;
+  fallbackQuoteOf?: (agent: AgentKind) => ModelPriceQuote | null;
 }
 
 interface FormState {
@@ -74,7 +76,7 @@ function parseOptionalPrice(value: string): number | null | 'invalid' {
 }
 
 export function ModelPriceOverrideDialog({
-  provider, row, open, onOpenChange, presentation = 'dialog', initialAgent, referenceDetails, onPendingChange,
+  provider, row, open, onOpenChange, presentation = 'dialog', initialAgent, referenceDetails, onPendingChange, fallbackQuoteOf,
 }: Props) {
   const inline = presentation === 'inline';
   const { t } = useTranslation();
@@ -85,10 +87,27 @@ export function ModelPriceOverrideDialog({
   const [saving, setSaving] = useState(false);
 
   const model = row.byAgent[agent];
+  const modelId = model?.id;
   const target = useMemo(
-    () => (model ? { providerId: provider.id, agent, modelId: model.id } : null),
-    [agent, model, provider.id],
+    () => (modelId ? { providerId: provider.id, agent, modelId } : null),
+    [agent, modelId, provider.id],
   );
+
+  // The list already includes connection-local cost quotes. Use that same source
+  // only when the override API has no quote, without changing its edit permissions.
+  const fallbackQuoteOfRef = useRef(fallbackQuoteOf);
+  fallbackQuoteOfRef.current = fallbackQuoteOf;
+  const applyView = (next: ModelPriceOverrideView) => {
+    const fallback = fallbackQuoteOfRef.current?.(next.target.agent);
+    const effective = !next.effective && !next.reference &&
+      fallback?.source === 'provider-reference' &&
+      fallback.providerId === next.target.providerId && fallback.modelId === next.target.modelId &&
+      next.allowedCurrencies.includes(fallback.currency)
+        ? fallback : next.effective;
+    const resolved = effective === next.effective ? next : { ...next, effective };
+    setView(resolved);
+    setForm(formFromView(resolved));
+  };
 
   // DESIGN.md §4:弹窗打开时焦点落主输入,而不是 Radix 默认的首个可聚焦元素(关闭按钮)。
   const primaryInputRef = useRef<HTMLInputElement | null>(null);
@@ -135,8 +154,7 @@ export function ModelPriceOverrideDialog({
       .getModelPriceOverride(target)
       .then((next) => {
         if (cancelled) return;
-        setView(next);
-        setForm(formFromView(next));
+        applyView(next);
       })
       .catch(() => {
         if (!cancelled) toast.error(t('settings.providers.models.priceOverride.loadFailed'));
@@ -196,8 +214,7 @@ export function ModelPriceOverrideDialog({
     try {
       const next = await window.electronAPI.maker.setModelPriceOverride(target, desired);
       if (mutationEpochRef.current !== epoch) return;
-      setView(next);
-      setForm(formFromView(next));
+      applyView(next);
       toast.success(t('settings.providers.models.priceOverride.saved'));
       if (requestedAgentRef.current) setAgent(requestedAgentRef.current);
       requestedAgentRef.current = null;
@@ -220,8 +237,7 @@ export function ModelPriceOverrideDialog({
     try {
       const next = await window.electronAPI.maker.resetModelPriceOverride(target);
       if (mutationEpochRef.current !== epoch) return;
-      setView(next);
-      setForm(formFromView(next));
+      applyView(next);
       toast.success(t('settings.providers.models.priceOverride.resetDone'));
       if (requestedAgentRef.current) setAgent(requestedAgentRef.current);
       requestedAgentRef.current = null;

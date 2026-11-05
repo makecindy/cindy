@@ -58,6 +58,7 @@ vi.mock('@/state/providerModelMemory', () => ({
 vi.mock('../ModelPriceOverrideDialog', () => ({ ModelPriceOverrideDialog: (props: { initialAgent: 'codex' | 'claude-code' | 'pi'; referenceDetails?: React.ReactNode | ((agent: 'codex' | 'claude-code' | 'pi') => React.ReactNode) }) => { mocks.price(props); return mocks.priceDeferredProbe ? <button aria-label="price deferred probe" data-model-price-deferred-action onBlur={mocks.deferredBlur}>Reset</button> : mocks.priceProbe ? <input aria-label="price escape probe" data-model-price-input /> : typeof props.referenceDetails === 'function' ? props.referenceDetails(props.initialAgent) : props.referenceDetails ?? null; } }));
 import { MANAGED_OLLAMA_PROVIDER_ID } from '../../../../shared/localModelRuntime';
 import { ModelAdvancedDrawer } from '../ModelAdvancedDrawer';
+import { buildUnionRows } from '../UnifiedModelList';
 import { setModelVisibility } from '@/state/modelVisibilityPrefs';
 import { setProviderModelEffort, getProviderModelEffort, clearProviderModelEffort } from '@/state/providerModelMemory';
 import { modelPricePresentation } from '@/lib/modelPriceFormat';
@@ -1186,4 +1187,45 @@ it('flushes deferred blur before Escape can dismiss the drawer', () => {
   expect(fireEvent.keyDown(button, { key: 'Escape' })).toBe(false);
   expect(mocks.deferredBlur).toHaveBeenCalledOnce();
   expect(screen.getByRole('dialog')).toBeTruthy();
+});
+
+
+it.each([
+  ['imageModels', 'image_generation'], ['videoModels', 'video_generation'],
+  ['audioModels', 'audio_generation'], ['audioModels', 'audio_transcription'],
+  ['audioModels', 'realtime'], ['embeddingModels', 'embedding'],
+] as const)('keeps synthetic %s / %s quotes read-only', (list, mode) => {
+  const media = { id: 'media-only', name: 'Media model', mode, currency: 'USD',
+    displayPricing: { items: [{ label: 'Media fee', price: 0.05, unit: 'request', quantity: 1 }] } };
+  const source = { ...provider, source: 'user', models: {}, [list]: [media] } as ProviderView;
+  const row = buildUnionRows(source).find(row => row.id === media.id)!;
+  render(<ModelAdvancedDrawer provider={source} row={row} open onOpenChange={vi.fn()}
+    pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+  expect(mocks.price).not.toHaveBeenCalled();
+  expect(screen.getByText('Media fee')).toBeTruthy();
+  expect(screen.getByText(/0.05/)).toBeTruthy();
+});
+
+it('passes the list effective quote for each custom engine into the inline editor', () => {
+  const quote = { providerId: provider.id, modelId: model.id, currency: 'USD' as const,
+    source: 'provider-reference' as const, approximate: false, inputPerMtok: 3, outputPerMtok: 6 };
+  const ui = drawer();
+  const price = vi.fn((agent: string, current: CatalogModel) => ({ kind: 'priced' as const,
+    current: { ...quote, modelId: current.id, inputPerMtok: agent === 'codex' ? 3 : 5 } }));
+  render({ ...ui, props: { ...ui.props, pricePresentationOf: price } });
+  const fallback = mocks.price.mock.lastCall![0].fallbackQuoteOf;
+  expect(fallback('codex')).toMatchObject({ modelId: model.id, inputPerMtok: 3 });
+  expect(fallback('claude-code')).toMatchObject({ modelId: `chatgpt/${model.id}`, inputPerMtok: 5 });
+});
+
+
+it('uses the custom model base cost when reset races an old override snapshot', () => {
+  const custom = { ...model, cost: { input: 3, output: 6, cacheRead: 0.2, cacheWrite: 0.4 } };
+  const ui = drawer(custom, custom.defaultEffort, custom.efforts, { ...provider, source: 'user' });
+  render({ ...ui, props: { ...ui.props, pricePresentationOf: () => ({ kind: 'priced' as const,
+    current: { providerId: provider.id, modelId: model.id, currency: 'USD' as const,
+      source: 'user-override' as const, approximate: true, inputPerMtok: 7, outputPerMtok: 6 } }) } });
+  const fallback = mocks.price.mock.lastCall![0].fallbackQuoteOf;
+  expect(fallback('codex')).toMatchObject({ source: 'provider-reference', inputPerMtok: 3,
+    outputPerMtok: 6, cacheReadPerMtok: 0.2, cacheCreatePerMtok: 0.4 });
 });

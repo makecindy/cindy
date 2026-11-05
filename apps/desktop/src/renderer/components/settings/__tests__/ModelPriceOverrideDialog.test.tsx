@@ -693,4 +693,66 @@ describe('ModelPriceOverrideDialog', () => {
     expect(setModelPriceOverride).not.toHaveBeenCalled();
   });
 
+  it.each([0, 3])('uses the list quote for a cost-only custom model, including %s', async (amount) => {
+    const empty = { ...priceView('model-a'), effective: null, reference: null };
+    const fallback = { ...priceView('model-a').effective!, inputPerMtok: amount,
+      outputPerMtok: 6, cacheReadPerMtok: 0.2, cacheCreatePerMtok: 0.4 };
+    getModelPriceOverride.mockResolvedValue(empty);
+    resetModelPriceOverride.mockResolvedValue(empty);
+    const saved = priceView('model-a', 'codex', true);
+    saved.effective = { ...fallback, inputPerMtok: 7, source: 'user-override' };
+    setModelPriceOverride.mockResolvedValue(saved);
+    const ui = render(<ModelPriceOverrideDialog provider={provider} row={row('model-a')} open
+      presentation="inline" onOpenChange={vi.fn()} fallbackQuoteOf={() => fallback} />);
+    const input = ui.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe(String(amount)));
+    expect(ui.queryByRole('status')).toBeNull();
+    expect((ui.getByLabelText('settings.providers.models.priceOverride.output') as HTMLInputElement).value).toBe('6');
+    expect(setModelPriceOverride).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.blur(input);
+    expect(input.value).toBe(String(amount));
+    fireEvent.change(input, { target: { value: '7' } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(input.readOnly).toBe(false));
+    expect(setModelPriceOverride).toHaveBeenCalledWith(empty.target, {
+      currency: 'USD', inputPerMtok: 7, outputPerMtok: 6,
+      cacheReadPerMtok: 0.2, cacheCreatePerMtok: 0.4,
+    });
+    fireEvent.click(ui.getByRole('button', { name: 'settings.providers.models.priceOverride.resetShort' }));
+    await waitFor(() => expect(input.value).toBe(String(amount)));
+    expect(resetModelPriceOverride).toHaveBeenCalledWith(empty.target);
+  });
+
+  it.each(['success', 'failure'] as const)('preserves pending %s across a same-target provider refresh', async (outcome) => {
+    const pending = vi.fn();
+    getModelPriceOverride.mockResolvedValue(priceView('model-a'));
+    let resolve!: (value: ModelPriceOverrideView) => void;
+    let reject!: (error: Error) => void;
+    setModelPriceOverride.mockReturnValue(new Promise((ok, fail) => { resolve = ok; reject = fail; }));
+    const props = { provider, row: row('model-a'), open: true, presentation: 'inline' as const,
+      onOpenChange: vi.fn(), onPendingChange: pending };
+    const ui = render(<ModelPriceOverrideDialog {...props} />);
+    const input = ui.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe('1'));
+    fireEvent.change(input, { target: { value: '7' } });
+    fireEvent.blur(input);
+    expect(pending).toHaveBeenLastCalledWith(true);
+    ui.rerender(<ModelPriceOverrideDialog {...props} provider={{ ...provider }} row={row('model-a')} />);
+    expect(pending).toHaveBeenLastCalledWith(true);
+    expect(input.readOnly).toBe(true);
+    expect(input.value).toBe('7');
+    expect(getModelPriceOverride).toHaveBeenCalledOnce();
+    await act(async () => {
+      if (outcome === 'failure') reject(new Error('save failed'));
+      else resolve({ ...priceView('model-a', 'codex', true),
+        effective: { ...priceView('model-a').effective!, inputPerMtok: 7 } });
+    });
+    expect(pending).toHaveBeenLastCalledWith(false);
+    expect(input.value).toBe('7');
+    expect(input.readOnly).toBe(false);
+    expect(outcome === 'failure' ? toast.error : toast.success).toHaveBeenCalledWith(
+      `settings.providers.models.priceOverride.${outcome === 'failure' ? 'saveFailed' : 'saved'}`);
+  });
+
 });
