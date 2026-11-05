@@ -181,7 +181,7 @@ async function findCanonicalGitRoot(start: string): Promise<string | null> {
 }
 
 /** CLI 会加载的项目级设置文件(按路径去重)。 */
-async function workspaceSettingsFiles(workingDir: string): Promise<string[]> {
+export async function workspaceSettingsFiles(workingDir: string): Promise<string[]> {
   const cwd = path.resolve(workingDir);
   const real = await realpathOrSelf(cwd);
   const files: string[] = [];

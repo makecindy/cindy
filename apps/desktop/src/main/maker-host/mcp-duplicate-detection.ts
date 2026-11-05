@@ -8,6 +8,7 @@ export interface McpDuplicateDetectionDeps {
   readJson(file: string): Promise<unknown>;
   home: string;
   listCustom(): Promise<CustomMcpConfig[]>;
+  workspaceSettingsFiles(workingDir: string): Promise<string[]>;
   readToken(id: string): string | null;
   readChoices(): Record<string, McpDuplicateChoice>;
 }
@@ -74,6 +75,9 @@ export async function detectMcpDuplicates(
       .filter((name): name is string => typeof name === 'string'));
     const settingsFiles = new Set([path.join(input.env.CLAUDE_CONFIG_DIR ?? path.join(deps.home, '.claude'), 'settings.json')]);
     if (input.workingDir) {
+      // Share CLI discovery with the runtime guard: lexical paths alone miss an
+      // external symlink target and a linked worktree's canonical repository.
+      for (const file of await deps.workspaceSettingsFiles(input.workingDir)) settingsFiles.add(file);
       const project = object(object(config.projects)[input.workingDir.replace(/\\/g, '/')]
         ?? object(config.projects)[input.workingDir]);
       for (const name of Object.keys(object(project.mcpServers))) masked.add(name);

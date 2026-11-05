@@ -2,12 +2,13 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { app } from 'electron';
+import { workspaceSettingsFiles } from '@cindy/maker-core';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
 import { readCustomMcpToken } from '../secrets/providerSecretStore.js';
 import { isUiMockDataEnabled } from '../localDb/uiMockSeed.js';
 import { groupMcpDuplicateConnections, type McpDuplicateChoice } from '../../shared/customMcp.js';
-import { listCustomMcpServers } from './custom-mcp-store.js';
+import { listRegistrableCustomMcpServers } from '../mcp-integrations/custom-mcp-registry.js';
 import { createOverrideSettingsFile } from './override-settings-file.js';
 import { detectMcpDuplicates, resolveMcpDuplicateChoices } from './mcp-duplicate-detection.js';
 
@@ -49,7 +50,8 @@ export function listMcpDuplicates(input?: { env: NodeJS.ProcessEnv; workingDir?:
     ? { CLAUDE_CONFIG_DIR: path.join(app.getPath('userData'), 'ui-mock', 'claude') }
     : process.env };
   return detectMcpDuplicates({
-    home: os.homedir(), readJson, listCustom: listCustomMcpServers, readToken: readCustomMcpToken,
+    home: os.homedir(), readJson, listCustom: listRegistrableCustomMcpServers, readToken: readCustomMcpToken,
+    workspaceSettingsFiles,
     readChoices: () => { store.invalidateIfChanged(); return store.read().choices; },
   }, context);
 }

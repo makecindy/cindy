@@ -15,6 +15,7 @@ function fixture() {
   const files = new Map<string, unknown>([[path.join(home, '.claude.json'), config]]);
   const choices: Record<string, McpDuplicateChoice> = {};
   const deps: McpDuplicateDetectionDeps = { home, readJson: async file => files.get(file) ?? {},
+    workspaceSettingsFiles: async () => [],
     listCustom: async () => custom, readToken: () => 'fixture-host-secret', readChoices: () => choices };
   return { home, native, config, custom, files, choices, deps };
 }
@@ -133,5 +134,25 @@ describe('MCP duplicate suggestions and explicit choices', () => {
     const report = await detectMcpDuplicates(f.deps, { env: {} });
     report.connections[0]!.choice = 'claude'; report.connections[1]!.choice = 'cindy';
     expect(resolveMcpDuplicateChoices(report)).toEqual({ skipHostServers: [], denyNativeServers: [] });
+  });
+
+  // PR #9055: the runtime's canonical settings discovery can return files outside
+  // lexical ancestors. Unit: one saved choice and one native denial in that file.
+  it('checks runtime-discovered canonical settings before applying a saved choice', async () => {
+    const f = fixture();
+    const workingDir = path.resolve('external-link');
+    const canonicalSettings = path.resolve('canonical-repo', '.claude', 'settings.local.json');
+    f.deps.workspaceSettingsFiles = async dir => {
+      expect(dir).toBe(workingDir);
+      return [canonicalSettings];
+    };
+    const input = { env: {}, workingDir };
+    const original = await detectMcpDuplicates(f.deps, input);
+    f.choices[original.connections[0]!.id] = 'claude';
+    f.files.set(canonicalSettings, { deniedMcpServers: [{ serverName: 'magpie' }] });
+    expect(resolveMcpDuplicateChoices(await detectMcpDuplicates(f.deps, input)))
+      .toEqual({ skipHostServers: [], denyNativeServers: [] });
+    f.deps.workspaceSettingsFiles = async () => { throw new Error('cannot resolve workspace'); };
+    expect(await detectMcpDuplicates(f.deps, input)).toEqual({ complete: false, connections: [] });
   });
 });
