@@ -10,7 +10,7 @@ import {
   COMPOSER_ENHANCE_SYSTEM_PROMPT,
   COMPOSER_ENHANCE_TIMEOUT_MS,
 } from '../composer-prompt-enhance.js';
-import { COMPOSER_ENHANCE_MAX_INPUT_CHARS } from '../../shared/composerPromptEnhance.js';
+import { COMPOSER_ENHANCE_MAX_INPUT_CHARS, hasUnclosedFence } from '../../shared/composerPromptEnhance.js';
 import type { UtilityTextResult } from '../../shared/utilityTextResult.js';
 
 function okResponse(text: string): UtilityTextResult {
@@ -173,6 +173,25 @@ describe('outputBudgetFor', () => {
     expect(outputBudgetFor('x'.repeat(COMPOSER_ENHANCE_MAX_INPUT_CHARS))).toBe(
       COMPOSER_ENHANCE_MAX_OUTPUT_TOKENS,
     );
+  });
+});
+
+describe('hasUnclosedFence', () => {
+  it('flags a rewrite that ends inside a fenced block', () => {
+    expect(hasUnclosedFence('先看这段：\n```ts\nconst a = 1;')).toBe(true);
+    expect(hasUnclosedFence('```\n正文')).toBe(true);
+  });
+
+  it('accepts a closed block and a fence with an info string', () => {
+    expect(hasUnclosedFence('```ts\nconst a = 1;\n```')).toBe(false);
+    expect(hasUnclosedFence('说明\n```json\n{}\n```\n结束')).toBe(false);
+  });
+
+  it('does not treat a literal triple backtick inside a sentence as a fence', () => {
+    // A draft asking to remove that very marker must survive the round trip:
+    // counting occurrences used to reject exactly the rewrite that kept it.
+    expect(hasUnclosedFence('把文件里的 ``` 标记全部删掉')).toBe(false);
+    expect(hasUnclosedFence('第一行\n用 ``` 包住整段再贴回来')).toBe(false);
   });
 });
 

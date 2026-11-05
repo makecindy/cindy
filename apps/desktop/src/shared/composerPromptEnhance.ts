@@ -32,9 +32,26 @@ export type ComposerEnhancePromptSuccess = {
  * response cut off by the token budget cannot be told apart from a complete
  * one here. A rewrite that breaks the fence would confuse the model, so it is
  * refused rather than applied.
+ *
+ * The fence delimiters are matched per line, like a Markdown parser does. A
+ * literal ``` inside a sentence (a draft asking to remove that marker, say) is
+ * text the author wrote, not an opened block, and counting occurrences would
+ * reject exactly the rewrites that preserved it.
  */
 export function hasUnclosedFence(text: string): boolean {
-  const fences = text.match(/```/g);
-  if (!fences) return false;
-  return fences.length % 2 === 1;
+  let openFence: string | null = null;
+  for (const line of text.split(/\r?\n/)) {
+    // An opening fence may carry an info string (` ```ts `); a closing fence is
+    // backticks only. Both allow up to three leading spaces.
+    const match = /^ {0,3}(`{3,})/.exec(line);
+    if (!match) continue;
+    const ticks = match[1]!;
+    const rest = line.slice(match[0].length);
+    if (openFence === null) {
+      if (!rest.includes('`')) openFence = ticks;
+      continue;
+    }
+    if (rest.trim() === '' && ticks.length >= openFence.length) openFence = null;
+  }
+  return openFence !== null;
 }
