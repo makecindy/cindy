@@ -102,6 +102,9 @@ cindy.onHostMessage(async function (msg) {
 - **PR 状态位**:`div` 加 `data-ghost-pr-status="owner/repo#123"`,主机用任务标题栏同一份 PR 状态
   (检查、未解决意见、能否合并)实时替换这个 `div` 的内容,并随标题栏定时刷新。`div` 里写你自己的
   状态快照作兜底:旧版主机、手机,或这条 PR 不在本任务的 PR 列表里时原样显示。
+- **只在 PR 开着时成立的部分**:`div` / `span` / `button` 加 `data-ghost-pr-open-only="owner/repo#123"`
+  (如「跟进中」、操作按钮、「开放中」)。卡片是调用时的快照,PR 在卡片之外被合并或关闭后,主机按标题栏
+  同一份状态把这些部分藏起来,手机上也不再显示;状态查不到时原样显示,旧版主机忽略这个属性。
 - **手机端呈现提示**(手机不跑卡片 HTML,只收文字和原生按钮;这几个属性让它画得更像卡片):
   - 主操作 `button` 加空值属性 `data-ghost-primary`,手机画成主按钮;
   - 开关型设置的 `button` 加 `data-ghost-toggle="on|off"`,按钮里第一行文字是标题、其余是说明,

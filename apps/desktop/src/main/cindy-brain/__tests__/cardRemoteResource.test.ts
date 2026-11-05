@@ -311,4 +311,26 @@ describe('plugin-card-rich projection', () => {
       { id: 'prset:modelPick', label: '更换模型（当前：Opus）', disabled: false },
     ]);
   });
+
+  // Rule (2026-11-06): parts that only hold while the PR is open leave the phone card once the title
+  // bar's status says merged, for older phones too. Minimal input: the same card, open vs merged.
+  it('drops open-only parts from every projection once the PR was merged', async () => {
+    const card = '<div><span data-ghost-pr-open-only="O/R#9">开放中</span>'
+      + '<div data-ghost-pr-open-only="O/R#9"><button data-ghost-action="pr:stop" aria-label="停止跟进"></button>'
+      + '<div data-ghost-live-label="跟进中">跟进中</div></div><p>tail</p></div>';
+    const projected = async (state: 'open' | 'merged', primitives: string[]) => {
+      const lookup = vi.fn(async () => ({ ok: true, owner: 'o', repo: 'r', prNumber: 9, status: state, title: '', htmlUrl: '', branch: '' }) as never);
+      const resource = await createGhostCardRemoteProvider({
+        readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'github', html: card, v: 2, height: 100 }),
+        authorize: async () => {}, captureScope: () => () => true, prStatus: lookup,
+        interactions: { externalLinks: () => true, dispatch: vi.fn(async () => true) },
+      }).get!(context, { ...request, client: { protocolVersion: 1, primitives } });
+      const data = resource.blocks?.find(block => block.id === 'actions')?.data as Record<string, unknown>;
+      return { text: resource.blocks?.find(block => block.id === 'text')?.fallbackMarkdown, items: data.items, live: data.live, lookups: lookup.mock.calls.length };
+    };
+    const rich = ['plugin-card-actions', 'plugin-card-forms', 'plugin-card-rich'];
+    expect(await projected('open', rich)).toMatchObject({ text: '开放中\n\ntail', live: '跟进中', items: [{ id: 'pr:stop' }] });
+    expect(await projected('merged', rich)).toMatchObject({ text: 'tail', live: undefined, items: [], lookups: 1 });
+    expect(await projected('merged', ['plugin-card-actions'])).toMatchObject({ text: 'tail', items: [] });
+  });
 });
