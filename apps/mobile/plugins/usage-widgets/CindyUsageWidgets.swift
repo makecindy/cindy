@@ -158,15 +158,13 @@ struct UsageAccessoryView: View {
       .opacity(format.staleLabel(minimumHours: 1) != nil || sources.contains(where: {
         $0.stale == true || ($0.resetsAtMs.map { $0 <= now.timeIntervalSince1970 * 1000 } ?? false)
       }) ? 0.55 : 1)
-      .accessibilityLabel(sources.map { "\($0.name), \(label($0))" }.joined(separator: "; ") + ", " + format.updatedLabel())
+      .accessibilityLabel(sources.map { "\($0.name), \(label($0)), \(quotaTiming($0, format: format))" }.joined(separator: "; ") + ", " + format.updatedLabel())
   }
 
   private func quotaContent(_ source: WidgetSource, format: WidgetFormat) -> some View {
     let stale = source.stale == true || format.staleLabel(minimumHours: 1) != nil
-    let duration = format.when(source)
     let reset = source.resetsAtMs.map { $0 <= now.timeIntervalSince1970 * 1000 } ?? false
-    let detail = stale ? format.updatedLabel() : duration.isEmpty ? format.updatedLabel()
-      : reset ? duration : WidgetText.text("resetsIn", locale: format.locale).replacingOccurrences(of: "{{duration}}", with: duration)
+    let detail = quotaTiming(source, format: format)
     let value = source.value ?? source.label ?? "—"
     let unit = source.value == nil ? "" : source.unit ?? ""
     let label = "\(value)\(unit == "%" ? "" : " ")\(unit)"
@@ -182,6 +180,16 @@ struct UsageAccessoryView: View {
     }
     .opacity(stale || reset ? 0.55 : 1)
     .accessibilityLabel("\(source.name), \(label), \(detail)")
+  }
+
+  private func quotaTiming(_ source: WidgetSource, format: WidgetFormat) -> String {
+    let duration = format.when(source)
+    let reset = source.resetsAtMs.map { $0 <= now.timeIntervalSince1970 * 1000 } ?? false
+    let timing = duration.isEmpty ? "" : reset ? duration
+      : WidgetText.text("resetsIn", locale: format.locale).replacingOccurrences(of: "{{duration}}", with: duration)
+    let stale = source.stale == true || format.staleLabel(minimumHours: 1) != nil
+    return [timing, stale || timing.isEmpty ? format.updatedLabel() : ""]
+      .filter { !$0.isEmpty }.joined(separator: ", ")
   }
 
   @ViewBuilder
@@ -393,7 +401,9 @@ struct AccessoryQuotaTube: View {
     // Whole physical pixels keep this tiny gap consistent instead of antialiasing it away.
     let scale = max(1, displayScale)
     let borderWidth: CGFloat = (source.emphasized ? 2 : 1) / scale
-    let gap: CGFloat = 2 / scale
+    // Preserve at least two physical pixels of liquid at 2x as well as 3x.
+    // Reduce only the clear gap when the emphasized border leaves too little room.
+    let gap = min(2 / scale, max(0, (width - 2 * borderWidth - 2 / scale) / 2))
     let inset = borderWidth + gap
     let wellWidth = max(0, width - 2 * inset)
     let radius = width / 2
