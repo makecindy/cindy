@@ -274,6 +274,19 @@ export function BotRoutines({
     if (!persisted) return;
     setDraft((current) => current ? { ...current, enabled: persisted.enabled } : current);
   };
+  const saveDraft = async () => {
+    try {
+      return await routinesApi.save(
+        botId,
+        draftForSave(draft),
+        selected === 'new' ? undefined : selected!,
+      );
+    } catch (error) {
+      // Only a rejected save means the persisted enabled state is still authoritative.
+      restoreSavedEnabledState();
+      throw error;
+    }
+  };
   const add = (trigger: RoutineTrigger) =>
     setDraft((value) =>
       value && !inFlight.current ? { ...value, triggers: [...value.triggers, trigger] } : value,
@@ -436,10 +449,10 @@ export function BotRoutines({
                 onClick={() => {
                   if (revealInvalidField()) return;
                   void act(async () => {
-                    const saved = await routinesApi.save(botId, draftForSave(draft), selected!);
+                    const saved = await saveDraft();
                     setDraft(structuredClone(saved));
                     await routinesApi.runNow(botId, saved.id);
-                  }, restoreSavedEnabledState);
+                  });
                 }}
               >
                 {t(running ? 'routines.running' : 'routines.runNow')}
@@ -697,15 +710,11 @@ export function BotRoutines({
               onClick={() => {
                 if (revealInvalidField()) return;
                 void act(async () => {
-                  const saved = await routinesApi.save(
-                    botId,
-                    draftForSave(draft),
-                    selected === 'new' ? undefined : selected!,
-                  );
+                  const saved = await saveDraft();
                   setSelected(saved.id);
                   setDraft(saved);
                   toast.success(t('routines.saved'));
-                }, restoreSavedEnabledState);
+                });
               }}
             >
               {t('routines.save')}
