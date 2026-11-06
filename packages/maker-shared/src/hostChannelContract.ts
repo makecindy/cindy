@@ -246,6 +246,18 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     body: () => null,
   },
   {
+    desktopChannel: 'local-db:project-aliases:set',
+    webPath: 'localDb.projectAliases.set',
+    hostPath: '/api/project-aliases/set',
+    body: ([input]) => input ?? {},
+  },
+  {
+    desktopChannel: 'local-db:project-aliases:delete',
+    webPath: 'localDb.projectAliases.delete',
+    hostPath: '/api/project-aliases/delete',
+    body: ([projectKey]) => (typeof projectKey === 'string' ? { projectKey } : projectKey ?? {}),
+  },
+  {
     desktopChannel: 'local-db:recent-workdirs:list',
     webPath: 'localDb.recentWorkdirs.list',
     hostPath: '/api/recent-workdirs/list',

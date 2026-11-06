@@ -403,6 +403,7 @@ async function insertSessionMessage(sessionId: string, input: Record<string, unk
     .where(eq(messageTable.id, id)).limit(1);
   const row = rows[0];
   if (!row) throw new Error('created message is unavailable');
+  eventHub.publish({ type: 'message_created', sessionId, messageId: id });
   return messageToCamel(row as never);
 }
 
@@ -426,6 +427,7 @@ function writeProfileAppearance(patch: unknown) {
     patch && typeof patch === 'object' ? (patch as Record<string, unknown>) : {},
   );
   eventHub.publish({ type: 'appearance_changed', appearance: applied });
+  eventHub.publish({ type: 'settings_changed', domain: 'appearance', value: applied });
   return applied;
 }
 
@@ -455,10 +457,26 @@ const server = createHostServer({
   settings: {
     setAppearance: async (patch: unknown) => writeProfileAppearance(patch),
     resetAppearance: async () => writeProfileAppearance({ ...DEFAULT_APPEARANCE_SETTINGS }),
-    setLayout: async (layout: unknown) => writeLayout(hostProfileInput(), layout),
-    resetLayout: async () => writeLayout(hostProfileInput(), createDefaultLayout()),
-    setSidebar: async (value: unknown) => writeSidebarSettings(hostProfileInput(), value),
-    setShortcuts: async (overrides: unknown) => writeAppShortcutOverrides(hostProfileInput(), overrides),
+    setLayout: async (layout: unknown) => {
+      const applied = writeLayout(hostProfileInput(), layout);
+      eventHub.publish({ type: 'settings_changed', domain: 'layout', value: applied });
+      return applied;
+    },
+    resetLayout: async () => {
+      const applied = writeLayout(hostProfileInput(), createDefaultLayout());
+      eventHub.publish({ type: 'settings_changed', domain: 'layout', value: applied });
+      return applied;
+    },
+    setSidebar: async (value: unknown) => {
+      const applied = writeSidebarSettings(hostProfileInput(), value);
+      eventHub.publish({ type: 'settings_changed', domain: 'sidebar', value: applied });
+      return applied;
+    },
+    setShortcuts: async (overrides: unknown) => {
+      const applied = writeAppShortcutOverrides(hostProfileInput(), overrides);
+      eventHub.publish({ type: 'settings_changed', domain: 'shortcuts', value: applied });
+      return applied;
+    },
   },
   // Resolved per request so a bundle built after startup is picked up.
   webDir: () => (existsSync(path.join(webDir, 'index.html')) ? webDir : null),
@@ -514,6 +532,18 @@ const server = createHostServer({
       updatedAt: new Date(Number(row.updatedAt ?? 0)).toISOString(),
     }));
   },
+  setProjectAlias: async (input: { projectKey?: unknown; alias?: unknown }) => {
+    const { upsertProjectAlias } = await import('../../desktop/src/main/localDb/ipc/projectAliases.ts');
+    const result = await upsertProjectAlias(input.projectKey, input.alias);
+    eventHub.publish({ type: 'project_aliases_changed' });
+    return result;
+  },
+  deleteProjectAlias: async (input: { projectKey?: unknown }) => {
+    const { deleteProjectAlias } = await import('../../desktop/src/main/localDb/ipc/projectAliases.ts');
+    await deleteProjectAlias(input.projectKey);
+    eventHub.publish({ type: 'project_aliases_changed' });
+    return { ok: true };
+  },
   listRecentWorkdirs: async () => {
     const { listRecentWorkdirs } = await import('../../desktop/src/main/localDb/ipc/recentWorkdirs.ts');
     return listRecentWorkdirs();
@@ -559,6 +589,7 @@ const server = createHostServer({
       .where(eq(sessionTable.id, sessionId)).limit(1);
     const row = rows[0];
     if (!row) throw new Error('session not found');
+    eventHub.publish({ type: 'session_changed', sessionId, patch, status: row.status });
     return sessionToCamel({ ...row, messageCount: 0 });
   },
   getSession: async (sessionId: string) => {
@@ -574,6 +605,7 @@ const server = createHostServer({
     }
     await sessionStorage.delete(sessionId);
     provisionalSessionIds.delete(sessionId);
+    eventHub.publish({ type: 'session_changed', sessionId, status: 'deleted' });
     return { discarded: true, remaining: false };
   },
   commitProvisionalSession: async (sessionId: string) => {
@@ -630,6 +662,7 @@ const server = createHostServer({
       .where(eq(sessionTable.id, id)).limit(1);
     const row = rows[0];
     if (!row) throw new Error('created session metadata is unavailable');
+    eventHub.publish({ type: 'session_changed', sessionId: id, status: row.status });
     return { ...sessionToCamel({ ...row, messageCount: 0 }), provisional: input.provisional === true };
   },
   chat: createChatHandler({

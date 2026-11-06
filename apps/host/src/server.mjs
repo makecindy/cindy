@@ -136,6 +136,14 @@ export function createHostServer(deps) {
         // The preload contract for `localDb.sessions.list()` is a bare array.
         if (url.pathname === '/api/sessions/list') { send(response, 200, await deps.listSessions()); return; }
         if (url.pathname === '/api/project-aliases/list') { send(response, 200, await deps.listProjectAliases()); return; }
+        if (url.pathname === '/api/project-aliases/set') {
+          send(response, 200, await deps.setProjectAlias(body));
+          return;
+        }
+        if (url.pathname === '/api/project-aliases/delete') {
+          send(response, 200, await deps.deleteProjectAlias(body));
+          return;
+        }
         if (url.pathname === '/api/recent-workdirs/list') { send(response, 200, await deps.listRecentWorkdirs()); return; }
         if (url.pathname === '/api/sessions/create') { send(response, 201, await deps.createSession(body)); return; }
         if (url.pathname === '/api/sessions/update') { send(response, 200, await deps.updateSession(String(body.sessionId ?? ''), body.patch ?? {})); return; }
@@ -225,9 +233,25 @@ export function createHostServer(deps) {
           connection: 'keep-alive',
         });
         response.write(': connected\n\n');
+
+        const sinceHeader = request.headers['last-event-id'];
+        const sinceQuery = url.searchParams.get('since') ?? url.searchParams.get('lastEventId') ?? url.searchParams.get('after');
+        const sinceVal = sinceHeader ?? sinceQuery;
+        if (sinceVal !== null && sinceVal !== undefined && sinceVal !== '') {
+          const sinceSeq = parseInt(sinceVal, 10);
+          if (!Number.isNaN(sinceSeq) && typeof deps.events.getEventsSince === 'function') {
+            const missed = deps.events.getEventsSince(sinceSeq);
+            for (const item of missed) {
+              const idLine = item.seq != null ? `id: ${item.seq}\n` : '';
+              response.write(`${idLine}data: ${JSON.stringify(item)}\n\n`);
+            }
+          }
+        }
+
         const unsubscribe = deps.events.subscribe((event) => {
           if (response.writableEnded) return;
-          response.write(`data: ${JSON.stringify(event)}\n\n`);
+          const idLine = event.seq != null ? `id: ${event.seq}\n` : '';
+          response.write(`${idLine}data: ${JSON.stringify(event)}\n\n`);
         });
         const keepAlive = setInterval(() => {
           if (response.writableEnded) return;
