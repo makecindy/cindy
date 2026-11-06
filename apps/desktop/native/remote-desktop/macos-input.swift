@@ -1069,6 +1069,18 @@ final class AwayGuard {
 if CommandLine.arguments == [CommandLine.arguments[0], "--away-guard"] {
   // Locking is the only action left once Main is gone; it never needs Main's authority.
   let away = AwayGuard(lockSession: { lockOwnedSession(requireCaller: false) })
+  // A dead Main closes our stdout; writing the status word must not kill us before
+  // the lock (2026-11-06: a force-quit Cindy left the desktop uncovered and unlocked).
+  signal(SIGPIPE, SIG_IGN)
+  // Being terminated along with Cindy also ends in the lock, never in an open desktop.
+  var terminations: [DispatchSourceSignal] = []
+  for number in [SIGTERM, SIGHUP, SIGINT] {
+    signal(number, SIG_IGN)
+    let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
+    source.setEventHandler { away.finish(lock: true, reason: "terminated") }
+    source.resume()
+    terminations.append(source)
+  }
   var heartbeat = Date()
   let events: [CGEventType] = [.keyDown, .keyUp, .flagsChanged, .leftMouseDown, .leftMouseUp,
     .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp, .mouseMoved,
