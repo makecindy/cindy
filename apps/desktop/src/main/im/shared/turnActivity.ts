@@ -313,3 +313,14 @@ export function renderActivity(activity: TurnActivityState, now: number): string
   if (activity.interactionNotice !== null) lines.push(`> ⏳ ${activity.interactionNotice}`);
   return lines.join('\n');
 }
+
+/**
+ * A guest's work preview: one line, no steps. Tool rows name files and
+ * commands of the project, and the wording is not in the guest's language.
+ */
+export function renderGuestActivity(label: string) {
+  return (activity: TurnActivityState, now: number): string =>
+    activity.totalSteps === 0 && activity.notice === null && activity.interactionNotice === null
+      ? ''
+      : `⚙️ ${label} · ${formatElapsed(now - activity.startedAt)}`;
+}

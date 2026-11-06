@@ -46,6 +46,7 @@ import type {
 import { useBotTranslation } from './botPronounContext';
 import { useBotSettingsTarget } from './useBotSettingsTarget';
 import { RemoteOfficialXCard } from './RemoteOfficialXCard';
+import { BotChannelGuestAccess } from './BotChannelGuestAccess';
 import type { BotProfile } from './botStore';
 import {
   addBotImConnection,
@@ -53,6 +54,7 @@ import {
   botImConnectionLaneArchiveSupported,
   adoptPersonalBot,
   botImConnectionGroupsSupported,
+  botImConnectionGuestAccessSupported,
   botImConnectionLanesSupported,
   listBotImConnectionGroups,
   listBotImConnectionLanes,
@@ -233,6 +235,11 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
                 </div>
                 {view.channel === 'telegram' && view.botContextId && botImConnectionGroupsSupported(im) ? (
                   <ConnectionGroups api={im} connectionId={view.id} botName={bot.name} />
+                ) : null}
+                {view.botContextId && target.kind === 'local' && botImConnectionGuestAccessSupported(im) ? (
+                  <BotChannelGuestAccess api={im} view={view} botId={bot.id} botName={bot.name} onApplied={apply}
+                    guestEngineLimit={bot.capabilities.harness === 'pi' ? 'pi'
+                      : bot.capabilities.modelChain?.[0]?.agentDeviceId ? 'remote' : null} />
                 ) : null}
                 {view.botContextId && botImConnectionLanesSupported(im) ? (
                   <ConnectionLanes api={im} connectionId={view.id} botName={bot.name}

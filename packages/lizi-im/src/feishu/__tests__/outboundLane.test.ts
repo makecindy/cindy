@@ -429,6 +429,30 @@ describe('feishu outbound lane routing', () => {
     );
   });
 
+  it('sends a guest\'s approval card to the owner and only a notice to the guest (#8359)', async () => {
+    const ownerGuard = await import('../ownerGuard.js');
+    vi.mocked(ownerGuard.check).mockImplementation((id) => id === 'ou_owner');
+    const guests = createFeishuScope({
+      host: null,
+      secretKeyPrefix: 'companion',
+      guests: true,
+      guestApprovalNotice: () => 'Waiting for the owner.',
+    });
+    const sentTo = (id: string, text: string) => larkMocks.create.mock.calls.some(([p]) =>
+      (p.data as { receive_id?: string }).receive_id === id && p.data.content.includes(text));
+    try {
+      await runInScope(guests, async () => {
+        outbound.bindClient(creds);
+        await outbound.sendInteractive('ou_guest', { body: 'ls', buttons: [] }, { deliverToOwnerDm: true });
+      });
+      expect(sentTo('ou_owner', 'ls')).toBe(true);
+      expect(sentTo('ou_guest', 'ls')).toBe(false);
+      await vi.waitFor(() => expect(sentTo('ou_guest', 'Waiting for the owner.')).toBe(true));
+    } finally {
+      vi.mocked(ownerGuard.check).mockImplementation(() => true);
+    }
+  });
+
   it('resolves an exact reply message from the same chat', async () => {
     larkMocks.getMessage.mockResolvedValueOnce({
       code: 0,

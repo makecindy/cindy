@@ -39,8 +39,12 @@ const log = createLogger('im:bot-lanes');
 export interface BotImLaneRuntimeDeps {
   /** 这条任务此刻是否有一轮在跑(live 会话)。 */
   isTurnRunning(sessionId: string): boolean;
-  /** 伙伴已有的显式重启: 停掉当前一轮, 下一条消息从干净的原生会话开始。 */
-  restartSession(sessionId: string): Promise<void>;
+  /**
+   * 伙伴已有的显式重启: 停掉当前一轮, 下一条消息从干净的原生会话开始。
+   * `isolated`: no handoff of the earlier conversation either (a guest whose
+   * project changed, #8359).
+   */
+  restartSession(sessionId: string, options?: { isolated?: boolean }): Promise<void>;
 }
 
 /** 一条伙伴任务链接(主任务或隐藏专线)。 */
@@ -322,6 +326,27 @@ export async function resetBotImConnectionLane(
   }
   log.info(`bot im connection ${id}: lane ...${sessionId.slice(-8)} (${link.kind}) restarted`);
   return listBotImConnectionLanes(id, options);
+}
+
+/**
+ * Guest private-chat lanes of this connection, including rows hidden from the
+ * list: hiding a row does not stop its session, so access changes must reach it.
+ */
+export async function listBotImConnectionGuestLanes(
+  id: string,
+): Promise<Array<{ sessionId: string; guestId: string }>> {
+  const links = await listScopedLinks(requireRecord(id));
+  return links.flatMap((link) =>
+    link.kind === 'guest-dm' && link.chatId ? [{ sessionId: link.sessionId, guestId: link.chatId }] : []);
+}
+
+/** Restart a guest lane after its access changed, without carrying its old conversation over. */
+export async function restartBotImConnectionGuestLane(id: string, sessionId: string): Promise<void> {
+  const link = (await listScopedLinks(requireRecord(id))).find((item) => item.sessionId === sessionId);
+  if (!link || link.kind !== 'guest-dm') throwIpcError('NOT_FOUND', 'LANE_NOT_FOUND');
+  if (!deps) throwIpcError('PRECONDITION_FAILED', 'LANE_RESET_UNAVAILABLE');
+  await deps.restartSession(sessionId, { isolated: true });
+  log.info(`bot im connection ${id}: guest lane ...${sessionId.slice(-8)} restarted after access change`);
 }
 
 /** Archive only a connection list row. The underlying session keeps running unchanged. */

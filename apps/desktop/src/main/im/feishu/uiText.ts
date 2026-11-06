@@ -94,6 +94,8 @@ export const ui = {
       `ℹ️ 以下内容我消化不了，先丢一边了：\n${entries.map((e) => `• ${e.label}`).join('\n')}\n\n` +
       `其它部分收到啦，正在处理~`,
     companionUnavailable: (reason: string) => `⏸ 伙伴现在接不了消息：${reason.slice(0, 200)}`,
+    // Sent to a guest, so it follows the owner's app language (#8359).
+    guestRefused: () => t('bots.channels.guests.refusedNotice'),
   },
 
   // ── pre-dispatch 失败细分文案 ──────────────────────────────────────────────

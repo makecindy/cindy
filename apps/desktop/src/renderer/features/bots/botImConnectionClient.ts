@@ -16,6 +16,7 @@ import type {
   BotImConnectionListPayload,
   BotImConnectionRemoveResult,
   BotImGroupActivationMode,
+  BotImGuestAccessUpdate,
 } from '../../../shared/botImConnection';
 
 export type BotImConnectionApi = Window['electronAPI']['botImConnection'];
@@ -143,4 +144,17 @@ export function adoptPersonalBot(api: BotImConnectionApi | null, input: BotImAdo
 export function maskBotImContextId(value: string): string {
   if (value.length <= 10) return value;
   return `${value.slice(0, 8)}••••${value.slice(-4)}`;
+}
+
+export function botImConnectionGuestAccessSupported(api: BotImConnectionApi | null = botImConnectionApi()): boolean {
+  return !!api && typeof api.setGuestAccess === 'function' && typeof api.listLanes === 'function';
+}
+
+/** Owner-only: bind / unbind one guest, or choose what unbound guests get (#8359). */
+export function setBotImConnectionGuestAccess(
+  api: BotImConnectionApi | null,
+  update: BotImGuestAccessUpdate,
+): Promise<BotImConnectionListPayload> {
+  if (!api?.setGuestAccess) return Promise.reject(new Error('botImConnection IPC unavailable'));
+  return api.setGuestAccess(update);
 }

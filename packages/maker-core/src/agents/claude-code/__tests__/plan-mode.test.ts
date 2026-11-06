@@ -127,6 +127,7 @@ async function startPlanSession(
   reviewMode = false,
   botProfile = false,
   writableDirs: string[] = [],
+  extraOpts: { workspaceConfinement?: 'project' } = {},
 ) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -144,6 +145,7 @@ async function startPlanSession(
     planMode,
     ...(writableDirs.length > 0 ? { writableDirs } : {}),
     ...(reviewMode ? { reviewMode: true as const } : {}),
+    ...extraOpts,
     ...(botProfile
       ? {
           botProfilePrompt: 'BOT SOUL: research without changing the project.',
@@ -194,6 +196,28 @@ afterEach(async () => {
     process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
   }
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
+
+// #8359: a bound IM guest's session is confined by Cindy hooks, and the
+// teammate's Full access cannot lift that (the hooks would not bubble).
+describe('ClaudeCodeAgent confined guest workspace', () => {
+  it('never starts in Full access and denies reads outside the project', async () => {
+    const { queryOptions, workingDir, handle, fakeQuery } = await startPlanSession(
+      false, {}, 'bypassPermissions', false, false, [], { workspaceConfinement: 'project' },
+    );
+    expect(queryOptions.permissionMode).not.toBe('bypassPermissions');
+    expect(queryOptions.allowDangerouslySkipPermissions).not.toBe(true);
+    const hooks = (queryOptions.hooks?.PreToolUse ?? []).flatMap((entry) => entry.hooks);
+    const decisions = async (input: Record<string, unknown>) => (await Promise.all(hooks.map((hook) =>
+      hook({ hook_event_name: 'PreToolUse', ...input })))).map((result) =>
+      (result.hookSpecificOutput as { permissionDecision?: string } | undefined)?.permissionDecision);
+    expect(await decisions({ tool_name: 'Read', tool_input: { file_path: path.join(path.dirname(workingDir), 'other', 'x.txt') } })).toContain('deny');
+    expect(await decisions({ tool_name: 'Read', tool_input: { file_path: path.join(workingDir, 'x.txt') } })).not.toContain('deny');
+    expect(await decisions({ tool_name: 'Bash', tool_input: { command: 'cat ../other/x.txt' } })).toContain('ask');
+    await handle.setPermissionMode?.('bypassPermissions');
+    expect(fakeQuery.setPermissionMode).not.toHaveBeenCalledWith('bypassPermissions');
+    await handle.close();
+  });
 });
 
 describe('ClaudeCodeAgent plan mode', () => {

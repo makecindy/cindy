@@ -11,6 +11,13 @@
 
 import type { ImCompanionLane } from './types';
 
+/**
+ * `prepareSend` result for a guest the owner has not let in (#8359). The
+ * runner answers with `ui.agent.guestRefused`, which says nothing about the
+ * owner, the teammate or other guests.
+ */
+export const COMPANION_GUEST_REFUSED = 'guest-refused';
+
 export type ImCompanionSessionTarget =
   | { kind: 'canonical' }
   | { kind: 'channel'; routeKey: string; title: string };
@@ -38,6 +45,11 @@ export interface ImCompanionRouteDeps {
    * 必须在拿 send 锁之前调用。
    */
   prepareSend?(sessionId: string): Promise<string | null>;
+  /**
+   * Guest lane the owner has not let in (#8359). Checked before the runtime
+   * starts, so a refused guest gets the plain notice, not a start failure.
+   */
+  guestRefused?(sessionId: string): Promise<boolean>;
 }
 
 /** 一条连接下所有专线共用的 route key 前缀(整条连接收回 / 改绑时按它归档)。 */

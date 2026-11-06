@@ -63,6 +63,8 @@ export interface FeishuIMOptions {
   ipc?: boolean;
   /** 对外开放: 非主人的私聊与群 @ 进业务层(带非主人标记), 命令仍只认主人。 */
   guests?: boolean;
+  /** Sent to a guest whose approval card went to the owner's DM (#8359). */
+  guestApprovalNotice?: () => string;
   /** Process-local notice ownership; secondary hosts may chat without announcing global presence. */
   shouldAnnounceLifecycle?: () => boolean;
 }
@@ -104,6 +106,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
       secretKeyPrefix: options.secretKeyPrefix ?? '',
       ipc: options.ipc !== false,
       guests: options.guests === true,
+      guestApprovalNotice: options.guestApprovalNotice,
       shouldAnnounceLifecycle: options.shouldAnnounceLifecycle,
     });
     // 设置页那份(无前缀、带 IPC)就是默认作用域: 单测直接调模块函数、Electron IPC 进来

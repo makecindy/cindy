@@ -39,6 +39,56 @@ export const REVIEW_READ_TOOLS: DynamicToolSpec[] = [
   },
 ];
 
+const GUEST_DENIED = 'Cindy refused this read: it is outside this conversation\'s project, unavailable, or the arguments are invalid.';
+
+/**
+ * Read tools of a confined IM guest on Windows (#8359), where the native
+ * sandbox cannot narrow reads and the shell is off. Same host-checked
+ * implementation as the Review tools, under names and descriptions that say
+ * what the guest's scope is.
+ */
+const GUEST_TOOL_TARGETS: Record<string, string> = {
+  project_read_file: 'review_read_file',
+  project_list_directory: 'review_list_directory',
+  project_view_image: 'review_view_image',
+};
+const GUEST_TOOL_DESCRIPTIONS: Record<string, string> = {
+  project_read_file: 'Read a UTF-8 file in this conversation\'s project. Returns up to 200 numbered lines (maximum file size 2 MiB). Use offset for the next page. Paths outside the project are refused.',
+  project_list_directory: 'List a directory in this conversation\'s project. Sensitive files are excluded. Returns up to 200 entries; use nextOffset for the next page. Paths outside the project are refused.',
+  project_view_image: 'View a PNG, JPEG, GIF or WebP image in this conversation\'s project (maximum 10 MiB). Paths outside the project are refused.',
+};
+export const GUEST_PROJECT_TOOLS: DynamicToolSpec[] = Object.entries(GUEST_TOOL_TARGETS).map(([name, target]) => ({
+  ...REVIEW_READ_TOOLS.find((tool) => tool.name === target)!,
+  name,
+  description: GUEST_TOOL_DESCRIPTIONS[name],
+}));
+
+export function isGuestProjectTool(name: string): boolean {
+  return Object.hasOwn(GUEST_TOOL_TARGETS, name);
+}
+
+/** The same refusal for a confined guest, without Review wording. */
+export function asGuestReadResponse(response: DynamicToolCallResponse): DynamicToolCallResponse {
+  if (response.success !== false) return response;
+  return { ...response, contentItems: response.contentItems.map((item) =>
+    item.type === 'inputText' && item.text === DENIED ? { ...item, text: GUEST_DENIED } : item) };
+}
+
+export function guestReadDenied(): DynamicToolCallResponse {
+  return { success: false, contentItems: [{ type: 'inputText', text: GUEST_DENIED }] };
+}
+
+/** A guest project read: scope checks are the Review ones, grants are the project only. */
+export async function callGuestProjectTool(
+  name: string,
+  args: unknown,
+  workingDir: string,
+  grants: readonly ReviewReadGrant[],
+): Promise<DynamicToolCallResponse> {
+  if (!isGuestProjectTool(name)) return guestReadDenied();
+  return asGuestReadResponse(await callReviewReadTool(GUEST_TOOL_TARGETS[name], args, workingDir, grants));
+}
+
 export function reviewReadDenied(): DynamicToolCallResponse {
   return { success: false, contentItems: [{ type: 'inputText', text: DENIED }] };
 }

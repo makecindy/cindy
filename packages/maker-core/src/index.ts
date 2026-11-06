@@ -70,12 +70,15 @@ export {
   buildMemoryScopeKey,
   buildBotMemoryScopeKey,
   parseBotMemoryScopeKey,
+  buildBotGuestMemoryScopeKey,
+  parseBotMemoryScope,
   memoryScopeDirName,
   buildFilename,
   parseFilename,
   validateSlug,
   SSH_SCOPE_KEY_PREFIX,
   type MemoryStorageMeta,
+  type BotMemoryScope,
 } from './memory/storage.js';
 export {
   resolveMemoryScopeKey,

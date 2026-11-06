@@ -82,6 +82,8 @@ export interface BotImConnectionRecord {
    * 个人 bot 的同名配置互不相干 —— 每条连接自己一份。
    */
   groupActivation?: Record<string, 'always'>;
+  /** Owner-set isolation for non-owner private chats on this connection. */
+  guestAccess?: BotImGuestAccess;
   /** List-only archive cutoffs. Never changes the referenced session or its routing. */
   archivedTaskRows?: Record<string, number>;
   /** Optional anchors for the same archived rows; older clients retain numeric cutoffs. */
@@ -89,6 +91,34 @@ export interface BotImConnectionRecord {
 }
 
 export type BotImGroupActivationMode = 'mention' | 'always';
+
+/**
+ * What a guest without a binding gets: `shared` keeps the teammate's own Home
+ * workspace (the behaviour before bindings existed); `refuse` answers with a
+ * fixed notice and never starts a turn.
+ */
+export type BotImUnboundGuestPolicy = 'shared' | 'refuse';
+
+/** One guest (platform user id, verified by the transport) bound to one project. */
+export interface BotImGuestBinding {
+  /** Absolute path of a local project linked to the teammate. */
+  projectPath: string;
+}
+
+export interface BotImGuestAccess {
+  /** Missing = 'shared'. */
+  unbound?: BotImUnboundGuestPolicy;
+  /** guest user id → binding. */
+  bindings?: Record<string, BotImGuestBinding>;
+}
+
+export interface BotImGuestAccessUpdate {
+  connectionId: string;
+  /** Set the unbound policy. */
+  unbound?: BotImUnboundGuestPolicy;
+  /** Bind (projectPath) or unbind (null) one guest. */
+  binding?: { guestId: string; projectPath: string | null };
+}
 
 /** 伙伴机器人进过的群(群窗口表里出现过的 chat)及其参与模式。 */
 export interface BotImConnectionGroup {

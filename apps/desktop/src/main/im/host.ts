@@ -203,6 +203,7 @@ export function createBotFeishuIM(secretKeyPrefix: string): FeishuIM {
     secretKeyPrefix,
     ipc: false,
     guests: true,
+    guestApprovalNotice: () => t('bots.channels.guests.approvalPending'),
     shouldAnnounceLifecycle: shouldAnnounceFeishuLifecycle,
   });
 }
@@ -240,6 +241,7 @@ export function createBotTelegramIM(
     secretKeyPrefix,
     ipc: false,
     guestDm: true,
+    guestApprovalNotice: () => t('bots.channels.guests.approvalPending'),
   });
 }
 export const dingtalkIm = createDingTalkIM(host, {

@@ -10,9 +10,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildBotGuestMemoryScopeKey,
   buildBotMemoryScopeKey,
   buildMemoryScopeKey,
   memoryScopeDirName,
+  parseBotMemoryScope,
+  parseBotMemoryScopeKey,
   sanitizeWorkdir,
 } from './storage.js';
 
@@ -59,6 +62,30 @@ describe('buildBotMemoryScopeKey', () => {
     const b = buildBotMemoryScopeKey('team-a-b');
     expect(a).not.toBe(b);
     expect(memoryScopeDirName(a)).not.toBe(memoryScopeDirName(b));
+  });
+});
+
+describe('buildBotGuestMemoryScopeKey', () => {
+  it('derives a guest scope that never equals the owner scope', () => {
+    const owner = buildBotMemoryScopeKey('bot_alpha');
+    const guest = buildBotGuestMemoryScopeKey('bot_alpha', 'telegram', '42');
+    expect(guest).toBe('bot:bot_alpha:guest:telegram:42');
+    expect(memoryScopeDirName(guest)).not.toBe(memoryScopeDirName(owner));
+    expect(guest).not.toBe(buildBotGuestMemoryScopeKey('bot_alpha', 'telegram', '43'));
+  });
+
+  it('round-trips through parseBotMemoryScope, including encoded separators', () => {
+    const key = buildBotGuestMemoryScopeKey('team/a:b', 'feishu', 'ou_x:y');
+    expect(parseBotMemoryScope(key)).toEqual({ botId: 'team/a:b', guest: { channel: 'feishu', guestId: 'ou_x:y' } });
+    expect(parseBotMemoryScope(buildBotMemoryScopeKey('team/a:b'))).toEqual({ botId: 'team/a:b' });
+    expect(parseBotMemoryScopeKey(key)).toBe('team/a:b');
+  });
+
+  it('rejects malformed guest keys instead of falling back to the owner scope', () => {
+    for (const key of ['bot:a:guest:telegram', 'bot:a:other:telegram:1', 'bot:a:guest::1', 'bot:a:guest:t:%E0']) {
+      expect(parseBotMemoryScope(key)).toBeNull();
+    }
+    expect(() => buildBotGuestMemoryScopeKey('a', 'telegram', ' ')).toThrow();
   });
 });
 

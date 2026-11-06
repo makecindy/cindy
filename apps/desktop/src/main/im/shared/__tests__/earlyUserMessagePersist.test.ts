@@ -76,6 +76,7 @@ function wire(
     channel?: string;
     notificationSessionId?: string;
     ambientTurnGate?: ImChannelAdapter['ambientTurnGate'];
+    channelNoteSourceFor?: ImChannelAdapter['channelNoteSourceFor'];
   } = { withPrepare: true },
 ): Harness {
   const calls: string[] = [];
@@ -115,6 +116,7 @@ function wire(
     processingEmoji: 'Eyes',
     ...(prepareAgentTurnText ? { prepareAgentTurnText } : {}),
     ...(opts.ambientTurnGate ? { ambientTurnGate: opts.ambientTurnGate } : {}),
+    ...(opts.channelNoteSourceFor ? { channelNoteSourceFor: opts.channelNoteSourceFor } : {}),
   } as unknown as ImChannelAdapter;
 
   const attach = createMessageHandler(
@@ -175,6 +177,28 @@ describe('messageHandler early user-message persist', () => {
       expect(mocks.recordImage).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'msg' }));
     },
   );
+  // #8359: the early row is not rewritten at dispatch, so a guest's private message
+  // persisted without its chat kind showed as a group message in Desktop.
+  it('stores a guest private message as direct when the channel knows it synchronously', async () => {
+    const h = wire({
+      withPrepare: true,
+      channel: 'telegram',
+      channelNoteSourceFor: () => ({ chatKind: 'direct', chatId: '555', senderIsOwner: false }),
+    });
+    h.deliver(makeEvent({
+      channelName: 'telegram',
+      senderId: '555',
+      chatId: '555',
+      speaker: { id: '555', name: 'Test Client', isOwner: false },
+    }));
+
+    await vi.waitFor(() => expect(h.runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(h.persistEarly.mock.calls[0]![0].messageOrigin).toEqual({
+      chat: { kind: 'direct' },
+      sender: { isOwner: false, id: '555', name: 'Test Client' },
+    });
+  });
+
   it('先落库再拼群上下文, 并把落库结果透传给 turn', async () => {
     const h = wire();
     h.deliver(makeEvent());

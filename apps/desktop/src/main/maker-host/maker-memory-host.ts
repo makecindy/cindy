@@ -23,6 +23,7 @@ import path from 'node:path';
 
 import {
   MakerMemoryManager,
+  parseBotMemoryScope,
   parseBotMemoryScopeKey,
   type AgentKind,
   type BaseAgent,
@@ -39,7 +40,7 @@ import {
   getActiveAppSession,
   isAppSessionBoundaryPending,
 } from '../appSessionState.js';
-import { botProfileMemoryDir } from '../maker-ipc/botProfileFolder.js';
+import { botGuestMemoryDir, botProfileMemoryDir } from '../maker-ipc/botProfileFolder.js';
 
 const sqliteFactory: SqliteFactory = (filePath) => {
   // better-sqlite3 sync open. WAL 让多 session 并发读写更稳, busyTimeout 防小撞锁。
@@ -106,8 +107,11 @@ export function createDesktopMakerMemoryManager(
     // primitives, but not Maker Memory's physical directory, global toggle or
     // global reset surface.
     resolveStorageDir: (scopeKey, ownerRoot) => {
-      const botId = parseBotMemoryScopeKey(scopeKey);
-      return botId ? botProfileMemoryDir(ownerRoot, botId) : null;
+      const scope = parseBotMemoryScope(scopeKey);
+      if (!scope) return null;
+      return scope.guest
+        ? botGuestMemoryDir(ownerRoot, scope.botId, scope.guest.channel, scope.guest.guestId)
+        : botProfileMemoryDir(ownerRoot, scope.botId);
     },
     isIndependentScope: (scopeKey) => parseBotMemoryScopeKey(scopeKey) !== null,
     sqliteFactory,
