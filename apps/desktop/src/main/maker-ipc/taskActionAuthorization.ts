@@ -17,6 +17,11 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'steer_session',
   'stop_session_turn',
   'set_session_runtime',
+  'set_app_default_model',
+  'update_app_settings',
+  'set_model_configuration',
+  'configure_model_provider',
+  'reset_app_settings',
   'update_session_queued_message',
   'cancel_session_queued_message',
   'steer_session_queued_message',
@@ -30,6 +35,7 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'rename_sessions',
   'move_session',
   'manage_session_prs',
+  'create_shared_task_invitation',
 ]);
 
 export const ORCA_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
@@ -381,11 +387,15 @@ const REVOKED_MESSAGES: ReadonlySet<string> = new Set([
  * message stays queued for retry instead of being destroyed. Group errors are matched by
  * code (`GROUP_AUTHORIZATION_UNAVAILABLE` is the temporary one) to avoid importing the group module.
  */
-export function isTaskActionRevoked(error: unknown): boolean {
-  if (error instanceof TaskActionAuthorizationError) return true;
+export function taskActionRevocationCode(error: unknown): string | undefined {
+  if (error instanceof TaskActionAuthorizationError) return 'TASK_ACTION_AUTHORIZATION_EXPIRED';
   if (typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'GROUP_AUTHORIZATION_REQUIRED')
-    return true;
-  return error instanceof Error && REVOKED_MESSAGES.has(error.message);
+    return 'GROUP_AUTHORIZATION_REQUIRED';
+  return error instanceof Error && REVOKED_MESSAGES.has(error.message) ? error.message : undefined;
+}
+
+export function isTaskActionRevoked(error: unknown): boolean {
+  return taskActionRevocationCode(error) !== undefined;
 }
 
 /** Capture once; late callbacks must not pick up another invocation's authority. */

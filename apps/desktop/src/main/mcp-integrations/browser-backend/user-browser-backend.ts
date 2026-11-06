@@ -1097,9 +1097,11 @@ export class UserBrowserBackend implements BrowserBackend {
       }
       case 'clickCoords': {
         if (!parity) return outdated(req.action, '坐标点击');
+        // ref / selector 点元素中心,比按截图估算的坐标可靠(截图像素不等于 CSS 像素)。
         const job = await this.pageJob(control, record, 'clickCoords', {
-          x: request.x,
-          y: request.y,
+          ...(request.ref ? { ref: request.ref } : {}),
+          ...(request.selector ? { selector: request.selector } : {}),
+          ...(request.x !== undefined ? { x: request.x, y: request.y } : {}),
           ...pointerExtra,
         });
         return done(job);

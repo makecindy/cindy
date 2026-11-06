@@ -1,5 +1,8 @@
 ## 4.22 跟对话的任务页(taskView 能力)
 
+同一插件在任务中需要多个独立命名页签时，使用开发中的 `ui.tabViews`（`scope: 'session'`）；见
+[原生界面扩展](plugin-native-ui.md)。它不重写本节每插件每任务一个 `taskView` 的身份或入口。
+
 插件需要一个**跟着任务走**的页面时(每个任务各看各的:这个任务的模拟器、这个任务的
 构建进度、这个任务的预览),声明 `taskView`:
 
@@ -53,3 +56,44 @@
   主题规则同 §5;
 - 远程任务(工作目录在另一台电脑)不显示本机插件的任务页;插件停用、卸载或不再声明
   taskView 时,已有任务页页签自动隐藏。
+
+### 4.22.1 在手机上查看与操作设备画面(liveScreen 能力)
+
+提供设备画面的插件(模拟器、真机镜像)可以让用户在手机上全屏查看并直接触控。声明
+`"liveScreen": true` 且同时声明 `node` 后,用户从手机打开时,Cindy 主进程经远程桌面
+直接调用 Node 工作进程的以下固定方法(不经过 main.js,也不出现在 Agent 工具里):
+
+| 方法 | 参数 | 返回 |
+|---|---|---|
+| `liveScreen.list` | `{}` | `{ok, screens:[{id, name, platform, state, taskIds}]}` |
+| `liveScreen.open` | `{id}` | `{ok, url, screen:{platform, width, height, cornerRadius, maxTouches, keyboard, buttons}}` |
+| `liveScreen.input` | `{id, events}` | `{ok}` |
+| `liveScreen.control` | `{id, fps?, keyframe?}` | `{ok}`,Cindy 约每 20 秒调用一次作保活 |
+| `liveScreen.close` | `{id}` | `{ok}` |
+
+所有方法都带 `params._locale`(`zh-CN` 或 `en`);失败返回 `{ok:false, errorCode, message}`,
+`open` 的错误码限 `NOT_FOUND`、`NOT_RUNNING`、`DISABLED`、`UNSUPPORTED`。
+
+- **list**:只列本插件自己的设备,不得启动设备或续期活动。`id` 为 `[A-Za-z0-9._:-]{1,128}`;
+  `platform` 为 `ios | ipados | tvos | visionos | android`;`state` 为 `running | starting | off`,
+  只有 `running` 会被打开;`taskIds` 是绑定此设备的任务,手机据此在对应任务页右上角显示入口。
+- **open**:`url` 必须是 `http://127.0.0.1:<端口>/…`,路径带 32 字节随机令牌,只接受一次 GET,
+  流结束或 `close` 后失效。宿主拒绝其它主机、协议、用户名或片段。
+- **帧流**:响应体是连续的 `[u32 大端长度][消息]`,消息首字节为类型:`0x01` avcC、`0x02`
+  关键帧、`0x03` 普通帧(H.264 AVCC)、`0x04` JPEG / `0x06` PNG(退回路径)、`0x10` UTF-8 JSON
+  `{"type":"screen","width","height","rotation"}`(`rotation` 为显示时顺时针转几个直角)。
+  首帧前先发 `0x10`,变化时再发;连接后先发关键帧;画面静止时不发;单条不超过 8 MB。
+- **input**:`events` 最多 64 个,坐标都是摆正后画面上的 0..1 比例:
+  `{kind:'touch', touches:[{id, x, y, phase}], edge?}`(列出全部触点,`phase` 为
+  `began | moved | stationary | ended | cancelled`,`edge` 只在起手时出现)、
+  `{kind:'press', button}`(descriptor 里的按键 id)、`{kind:'text', text}`、
+  `{kind:'key', code, modifiers?}`、`{kind:'release'}`(抬起全部触点)。
+- **descriptor**:`buttons` 不超过 16 个,`id` 为 `[a-z0-9-]{1,32}`,`icon` 取
+  `home | back | recents | lock | power | volume-up | volume-down | rotate-left | rotate-right |
+  menu | play-pause | siri | shake | screenshot`,`label` 按 `_locale` 本地化;按重要性排序,
+  手机工具栏只放前三个,其余在设置面板里。
+- 有打开的帧流即算有人在看;插件自己的运行开关关闭时应拒绝 `open` 并结束已有的流。
+- 一台电脑同一时间只有一路远程连接:打开设备画面会替换当前的整屏远程桌面。手机上的
+  配对、授权与「仅查看」沿用远程桌面;插件不需要、也拿不到手机或远程桌面的任何凭证。
+- 旧版 Cindy 把 `liveScreen` 当作未知字段保留且不赋予能力,不需要提高 `minCindyVersion`;
+  在支持的版本上,插件详情会把它列为一项能力。

@@ -1140,7 +1140,7 @@ export class GhostNetworkSlot {
     const declaredSecrets = net?.secrets ?? [];
     const ghCliSecrets = declaredSecrets.filter((secret) => secret.source === 'gh-cli');
     if (ghCliSecrets.length > 0 && !canUseGithubHostCredentials(ghost)) {
-      return { ok: false, message: '本意识未通过官方 GitHub 宿主凭证信任校验，已阻断 gh-cli 凭证请求' };
+      return { ok: false, message: '本插件尚未批准或安装身份待确认，已阻断 gh-cli 凭证请求' };
     }
     // 连接地址每单现读快照(用户在设置页增删地址下一单即生效);本单内含
     // 重定向逐跳都用同一份快照,避免跳转中途清单变化产生放行摇摆。

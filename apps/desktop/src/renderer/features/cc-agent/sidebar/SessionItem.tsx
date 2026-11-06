@@ -766,6 +766,9 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   const handleMoveToProjectBrowse = useCallback(() => {
     onMoveSession?.(session.id, { kind: 'browseProject' });
   }, [onMoveSession, session.id]);
+  const handleMoveToNewProject = useCallback(() => {
+    onMoveSession?.(session.id, { kind: 'newProject' });
+  }, [onMoveSession, session.id]);
 
   const handleMoveToDialogue = useCallback(() => {
     onMoveSession?.(session.id, { kind: 'dialogue' });
@@ -840,6 +843,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
       isDialogue={session.workspaceKind === 'dialogue'}
       onSelectProject={handleMoveToProjectSelect}
       onBrowseProject={handleMoveToProjectBrowse}
+      onNewProject={handleMoveToNewProject}
       onMoveToDialogue={handleMoveToDialogue}
     />
   ) : null;
@@ -1317,6 +1321,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
       prRefs={prRefs}
       isAutomationSession={showAutomationTooltip}
       controlledOpen={rowTooltipOpen}
+      onOpenChange={setRowTooltipOpen}
     >
       {row}
     </SessionTooltip>

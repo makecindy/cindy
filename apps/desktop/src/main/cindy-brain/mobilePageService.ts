@@ -23,6 +23,8 @@ import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 import { resolvePreferredSystemLocale } from '../../shared/locale.js';
 import { t } from '../i18n.js';
 import { mobilePluginUsage } from './mobilePluginUsage.js';
+import { readGhostReadmeFromDir } from './ghostReadme.js';
+import type { GhostReadmeContent } from '@cindy/plugin-protocol';
 import { mobilePluginConfiguration } from './mobilePluginConfiguration.js';
 import type { GhostConfirmShowParams } from './confirmSlot.js';
 import type { PluginModelPickerTarget } from './ghostModelPicker.js';
@@ -33,6 +35,7 @@ import {
 
 interface Page {
   desktopSettings?: true;
+  modelPickerRemoteSources?: boolean;
   documentEpoch?: number;
   documentId?: string;
   documentSources?: Set<string>;
@@ -116,8 +119,29 @@ interface Dependencies {
     ): Promise<import('@cindy/device-link').PluginTaskPreferences>;
   };
   now?(): number;
+  /** Detailed introduction for the phone; defaults to reading the installed plugin directory. */
+  readme?(ghost: InstalledGhost, locale: string): Promise<GhostReadmeContent | null>;
   answerModelPicker?(pageId: string, requestId: string, route: unknown): Promise<{ handled: boolean; accepted: boolean }>;
 }
+/** Action that returns the detailed introduction; the detail resource only carries `readme: true`. */
+export const PLUGIN_README_ACTION = 'readme:get';
+/**
+ * One invoke reply stays within a device-link logical message (4 MiB) with room for the
+ * envelope and relay encoding. Images that would exceed it are dropped in document order.
+ */
+const MOBILE_README_MAX_CHARS = 2 * 1024 * 1024;
+
+function fitMobileReadme(content: GhostReadmeContent): GhostReadmeContent {
+  let size = content.markdown.length + content.path.length;
+  const images: Record<string, string> = {};
+  for (const [path, uri] of Object.entries(content.images)) {
+    if (size + path.length + uri.length > MOBILE_README_MAX_CHARS) continue;
+    images[path] = uri;
+    size += path.length + uri.length;
+  }
+  return { path: content.path, markdown: content.markdown, images };
+}
+
 const fail = (message = 'Plugin page is no longer available'): never => {
   throw new RemoteResourceRegistryError('NOT_FOUND', message);
 };
@@ -614,6 +638,7 @@ export class MobilePluginPages {
     this.check(page);
     return {
       id: page.id,
+      supportsRemoteRoutes: page.modelPickerRemoteSources === true,
       isCurrent: () => {
         try {
           this.check(page);
@@ -689,7 +714,10 @@ export class MobilePluginPages {
         title: { fallback: 'Plugins', translations: { 'zh-CN': '插件' } },
         icon: { name: 'puzzle', fallbackText: 'P' },
         ...(this.deps.management
-          ? { actions: [{ id: 'management:snapshot', label: 'Manage plugins' }] }
+          ? { actions: [
+            { id: 'management:snapshot', label: 'Manage plugins' },
+            { id: 'management:ui-consent', label: 'Read pending page consent' },
+          ] }
           : {}),
       },
       list: async (_ctx, request) => {
@@ -832,6 +860,8 @@ export class MobilePluginPages {
                 permissions,
                 details: detailFacts,
                 tasks: ghost.manifest.showTaskPreferences !== false && Boolean(ghost.manifest.agent?.tasks || ghost.manifest.agent?.errand),
+                // Content is fetched on demand with PLUGIN_README_ACTION; older phones ignore the flag.
+                ...(ghost.manifest.readme ? { readme: true } : {}),
                 mobile: parsePluginMobileDeclaration(ghost.manifest.mobile) !== null,
                 usage: mobilePluginUsage(
                   ghost,
@@ -857,6 +887,18 @@ export class MobilePluginPages {
         const input = record(request.input);
         const id = request.resourceRef?.id;
         if (!id) return fail();
+        if (request.actionId === PLUGIN_README_ACTION) {
+          const ghost = this.ghost(id);
+          if (!ghost.manifest.readme) return fail('Plugin has no introduction');
+          const owner = this.deps.captureOwner(),
+            peer = this.deps.captureController(context.controllerDeviceId);
+          const locale = resolvePreferredSystemLocale([request.client.locale ?? 'en']);
+          const content = await (this.deps.readme
+            ? this.deps.readme(ghost, locale)
+            : readGhostReadmeFromDir(ghost.dir, ghost.manifest, locale));
+          if (!owner() || !peer()) return fail();
+          return { effects: [], result: content ? fitMobileReadme(content) : null };
+        }
         if (request.actionId === 'task-settings:get' || request.actionId === 'task-settings:set') {
           const ghost = this.ghost(id),
             settings = this.deps.taskSettings;
@@ -926,6 +968,7 @@ export class MobilePluginPages {
             id: randomUUID(),
             plugin: id,
             controller: context.controllerDeviceId,
+            modelPickerRemoteSources: input.modelPickerRemoteSources === true,
             revision: this.deps.revision(ghost),
             currentOwner: this.deps.captureOwner(),
             currentController: this.deps.captureController(context.controllerDeviceId),
@@ -976,6 +1019,7 @@ export class MobilePluginPages {
             id: randomUUID(),
             plugin: id,
             controller: context.controllerDeviceId,
+            modelPickerRemoteSources: input.modelPickerRemoteSources === true,
             revision: this.deps.revision(ghost),
             currentOwner: this.deps.captureOwner(),
             currentController: this.deps.captureController(context.controllerDeviceId),

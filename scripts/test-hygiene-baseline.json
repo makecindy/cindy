@@ -798,9 +798,6 @@
     "apps/desktop/src/renderer/components/settings/__tests__/RemoteSection.addFormOrder.test.ts": {
       "sourceReads": 1
     },
-    "apps/desktop/src/renderer/components/settings/__tests__/settingsSearchCatalog.test.ts": {
-      "sourceReads": 1
-    },
     "apps/desktop/src/renderer/components/settings/usage/__tests__/usageHistoryDevices.test.tsx": {
       "sourceReads": 1
     },
@@ -859,9 +856,6 @@
       "resetModules": 1
     },
     "apps/desktop/src/renderer/features/right-sidebar/plugins/resource-usage/__tests__/subscription.test.ts": {
-      "resetModules": 1
-    },
-    "apps/desktop/src/renderer/features/right-sidebar/plugins/review/DiffViewer/__tests__/highlight.test.ts": {
       "resetModules": 1
     },
     "apps/desktop/src/renderer/features/skillhub/hooks/__tests__/useCategoryList.test.tsx": {
@@ -986,9 +980,6 @@
     },
     "apps/mobile/src/__tests__/useBotGroupChat.test.tsx": {
       "realWaits": 2
-    },
-    "apps/mobile/src/__tests__/useDeviceProviders.test.ts": {
-      "resetModules": 1
     },
     "apps/mobile/src/__tests__/visualMock.test.ts": {
       "resetModules": 1

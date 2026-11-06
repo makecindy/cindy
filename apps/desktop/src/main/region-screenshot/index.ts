@@ -42,6 +42,7 @@ import {
 import { SnapshotHelper, type SnapshotWindow } from './snapshotHost';
 import { captureScreenshotDisplays } from './liveCapture';
 import { REGION_CAPTURE_CHANNEL as LIVE } from '../../shared/regionCapture';
+import { registerRecordingAudioIpc } from './recordingAudio';
 
 /**
  * 全局框选截图: 用户在「键盘快捷键」里可改的 region-screenshot 快捷键 →
@@ -159,6 +160,10 @@ function syncShortcut(): void {
 }
 
 function registerIpc(): void {
+  registerRecordingAudioIpc();
+  ipcMain.handle(LIVE.AUDIO_START, (event, token: unknown, options: unknown) => active?.startAudio(event.sender, event.senderFrame, token, options) ?? 'audioFailed');
+  ipcMain.handle(LIVE.AUDIO_READ, (event, token: unknown) => active?.readAudio(event.sender, event.senderFrame, token));
+  ipcMain.handle(LIVE.AUDIO_STOP, (event, token: unknown) => active?.stopAudio(event.sender, event.senderFrame, token));
   ipcMain.handle(LIVE.CONTROLS, (event, token: unknown, expanded: unknown, point: unknown, dragging: unknown) => active?.updateRecordingControls(event.sender, event.senderFrame, token, expanded, point, dragging) ?? null);
   ipcMain.handle(LIVE.PREVIEW, (event, token: unknown, bytes: unknown, format: unknown) => active?.previewRecording(event.sender, event.senderFrame, token, bytes, format) ?? false);
   ipcMain.handle(LIVE.AUTO_SCROLL, (event, token: unknown, enabled: unknown) => active?.autoScroll(event.sender, event.senderFrame, token, enabled) ?? false);

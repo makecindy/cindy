@@ -16,11 +16,10 @@ import {
   FoldDesktopBezel,
   FoldDesktopDeck,
   FoldDesktopSkinSwitch,
-  DEFAULT_FOLD_DESKTOP_SKIN,
   retroDesktopViewport,
   foldDesktopSkinColors,
-  type FoldDesktopSkin,
 } from "./FoldDesktopSkin";
+import { useFoldSkinPreference } from "./useFoldSkinPreference";
 import {
   useCallback,
   useMemo,
@@ -145,6 +144,7 @@ import {
 import { useRemoteDesktopSafety } from "./useRemoteDesktopSafety";
 import { useVideoSettingsPreference } from "./useVideoSettingsPreference";
 import { usePictureInPicturePreference } from "./usePictureInPicturePreference";
+import { LiveScreenSettings } from "./LiveScreenSettings";
 import { PermissionGuide } from "./PermissionGuide";
 import { navigationChrome } from "@/theme/tokens";
 import { RemoteDesktopBackButton } from "./RemoteDesktopBackButton";
@@ -164,6 +164,18 @@ import {
   RemoteDesktopPanel,
   RemoteDesktopToolbar,
 } from "./RemoteDesktopChrome";
+import type { RemoteDesktopDeviceButton } from "./RemoteDesktopChrome";
+import {
+  LIVE_SCREEN_ICONS,
+  LIVE_SCREEN_NOT_IN_MENU,
+  LIVE_SCREEN_TOOLBAR_BUTTONS,
+  parseLiveScreenParam,
+} from "./liveScreen";
+import {
+  LiveScreenControls,
+  type LiveScreenAction,
+  type LiveScreenPicture,
+} from "./LiveScreenControls";
 
 type Mode = "pointer" | "touch" | "pan";
 /** How a data-channel request ended; "relay" means it was never executed. */
@@ -203,10 +215,12 @@ export default function RemoteDesktopScreen() {
     deviceId: rawId,
     deviceName: rawName,
     handoff: rawHandoff,
+    liveScreen: rawScreen,
   } = useLocalSearchParams<{
     deviceId: string;
     deviceName?: string;
     handoff?: string;
+    liveScreen?: string;
   }>();
   const deviceId = typeof rawId === "string" ? rawId : "";
   const deviceName = deviceDisplayName(
@@ -230,6 +244,7 @@ export default function RemoteDesktopScreen() {
         deviceId={deviceId}
         deviceName={deviceName}
         handoff={handoff}
+        screen={typeof rawScreen === "string" ? rawScreen : undefined}
         focused={focused}
         onBack={() => goBackGuarded(router)}
       />
@@ -241,6 +256,7 @@ export function RemoteDesktopSession({
   deviceId,
   deviceName,
   handoff,
+  screen: screenParam,
   focused,
   onBack,
   onRestore,
@@ -251,6 +267,8 @@ export function RemoteDesktopSession({
   deviceName: string;
   /** 代输入 live view: only the window this waiting request is about (the host picks it). */
   handoff?: string;
+  /** A plugin live screen (`plugin|id`) from the host's list, such as a simulator. */
+  screen?: string;
   focused: boolean;
   onBack(): void;
   onRestore?(): void;
@@ -258,6 +276,9 @@ export function RemoteDesktopSession({
   onEnded?(): void;
 }) {
   const auth = useAuth();
+  const screenTarget = parseLiveScreenParam(screenParam);
+  const screenPlugin = screenTarget?.plugin;
+  const screenId = screenTarget?.id;
   const navigation = useRef({ onBack, onRestore, onVisibility, onEnded });
   navigation.current = { onBack, onRestore, onVisibility, onEnded };
   const focusedRef = useRef(focused);
@@ -415,6 +436,12 @@ export function RemoteDesktopSession({
   const unlockFrame = useRef<((presented: boolean) => void) | null>(null);
   const inputBusy = useRef<{ lease: string } | null>(null);
   const [lease, setLease] = useState<RemoteDesktopLease | null>(null);
+  // What a device screen actually shows now, as its host last reported it.
+  const [deviceShape, setDeviceShape] = useState<{
+    lease: string;
+    width: number;
+    height: number;
+  } | null>(null);
   const [windowsOpen, setWindowsOpen] = useState(false);
   useEffect(() => {
     setWindowsOpen(false);
@@ -512,7 +539,9 @@ export function RemoteDesktopSession({
   const [canPip, setCanPip] = useState(false);
   const presentation = useRef(false);
   const actualPresentation = useRef(false);
-  const [pipEnabled, setPipEnabled] = usePictureInPicturePreference();
+  const [pipEnabled, setPipEnabled] = usePictureInPicturePreference(
+    screenPlugin ? "liveScreen" : "desktop",
+  );
   const pipEnabledRef = useRef(pipEnabled);
   pipEnabledRef.current = pipEnabled;
   const pipPrepared = useRef(false);
@@ -576,9 +605,7 @@ export function RemoteDesktopSession({
     keyboardPanelHeight,
     keyboard,
   );
-  const [foldSkin, setFoldSkin] = useState<FoldDesktopSkin>(
-    DEFAULT_FOLD_DESKTOP_SKIN,
-  );
+  const [foldSkin, setFoldSkin] = useFoldSkinPreference();
   const foldSkinAvailable = Boolean(foldLayout);
   const retroDesktop =
     foldSkinAvailable &&
@@ -614,7 +641,14 @@ export function RemoteDesktopSession({
   const retroViewport =
     retroDesktop && foldLayout
       ? retroDesktopViewport(
-          hardwareMedia,
+          foldSkin === "macbook"
+            ? {
+                ...hardwareMedia,
+                // Keep the display flush at the top; the physical fold band
+                // belongs to the silver case rather than the video surface.
+                height: foldLayout.media.y + foldLayout.media.height,
+              }
+            : hardwareMedia,
           foldSkin,
           foldLayout.media,
           lease && lease.display.height > 0
@@ -887,7 +921,8 @@ export function RemoteDesktopSession({
     lease,
     !connectionPending && !error,
     focused,
-    caps,
+    // A device screen leaves the computer alone: no privacy mask, mute or clipboard sync.
+    screenPlugin ? null : caps,
     request,
     exitLock.current,
   );
@@ -1317,6 +1352,9 @@ export function RemoteDesktopSession({
             resume: resuming,
             takeover,
             ...(handoff ? { handoff } : {}),
+            ...(screenPlugin && screenId
+              ? { screen: { plugin: screenPlugin, id: screenId } }
+              : {}),
             // Hosts with `autoControl` grant control with the lease.
             control: true,
             onStart: () => {
@@ -1333,6 +1371,7 @@ export function RemoteDesktopSession({
               if (
                 !resuming &&
                 !handoff &&
+                !screenPlugin &&
                 supportsAutoUnlock(result.platform)
               ) {
                 // Linux capture may be unavailable until its locker releases the session.
@@ -1463,6 +1502,8 @@ export function RemoteDesktopSession({
       deviceId,
       fail,
       handoff,
+      screenPlugin,
+      screenId,
       landscape,
       request,
       resolveControlFailure,
@@ -1691,11 +1732,14 @@ export function RemoteDesktopSession({
       )
         return;
       heartbeatBusy = current.lease;
-      void request<{ controlling: boolean }>({
+      void request<{ controlling: boolean; shape?: unknown }>({
         op: "heartbeat",
         lease: current.lease,
       })
         .then((result) => {
+          const shape = liveScreenShape(result.shape);
+          if (shape && active.current === current)
+            setDeviceShape({ lease: current.lease, ...shape });
           // The host owns the control bit. Follow it when it retracts control;
           // when a local transition timed out, retry a release or restore the
           // local bit so a held key cannot stay down behind a view-only phone.
@@ -1905,7 +1949,7 @@ export function RemoteDesktopSession({
             ? 0
             : keyboard && landscapeKeyboardOverlay
               ? keyboardPanelHeight + keyboardBottom
-              : !keyboard && !landscape
+              : !keyboard && !landscape && !screenPlugin
                 ? toolbarSize.height
                 : 0,
       keyboardOpen: keyboard && landscapeKeyboardOverlay,
@@ -1918,7 +1962,12 @@ export function RemoteDesktopSession({
       rightInset: 0,
       leftInset: 0,
       enabled:
-        showMouseButtons && focused && !operations && !keyboard && canInput,
+        showMouseButtons &&
+        !lease?.screen &&
+        focused &&
+        !operations &&
+        !keyboard &&
+        canInput,
       labels: {
         left: t("remoteDesktop.leftClick"),
         right: t("remoteDesktop.rightClick"),
@@ -3391,6 +3440,170 @@ export function RemoteDesktopSession({
     left: foldControls.x,
     right: Math.max(0, geometry.width - foldControls.x - foldControls.width),
   };
+  // A device screen turns with the phone by default: hold the phone sideways
+  // and the device goes landscape; upright again, and it turns back. Turning
+  // it by hand (an iPad on an iPhone, a landscape game, upside down) stops
+  // following, and the device stays put whatever the phone does. `turn`
+  // counts quarter turns clockwise from portrait, as the plugin does.
+  const [turn, setTurn] = useState<number | null>(null);
+  const [picture, setPicture] = useState<LiveScreenPicture>("fit");
+  const [zoomEditing, setZoomEditing] = useState(false);
+  const deviceTurn = useRef<string | null>(null);
+  const hasButton = (id: string) =>
+    Boolean(lease?.screen?.buttons.some((b) => b.id === id));
+  const turnable =
+    hasButton("orientation-portrait") && hasButton("orientation-landscape");
+  const rotatable = hasButton("rotate-left") && hasButton("rotate-right");
+  const following = turn === null;
+  const deviceLandscape = following ? landscape : turn % 2 === 1;
+  // Follow the device's shape as it turns: the host answers a screenShape
+  // request once the shape differs from the one we know (or after a few
+  // seconds), so one request is always waiting. Older hosts refuse it; then
+  // heartbeats, or the guess, carry the shape instead.
+  const leaseId = lease?.lease;
+  const watchesShape = Boolean(lease?.screen) && frameReady;
+  useEffect(() => {
+    const current = active.current;
+    if (!watchesShape || !current?.screen) return;
+    let stopped = false;
+    let known: { width: number; height: number } | null = null;
+    void (async () => {
+      while (!stopped && active.current === current) {
+        try {
+          const result = await request<{ shape?: unknown }>({
+            op: "screenShape",
+            lease: current.lease,
+            ...(known ? { known } : {}),
+          });
+          const shape = liveScreenShape(result.shape);
+          if (stopped || active.current !== current) return;
+          if (
+            shape &&
+            (shape.width !== known?.width || shape.height !== known?.height)
+          ) {
+            known = shape;
+            setDeviceShape({ lease: current.lease, ...shape });
+          } else {
+            // Nothing new (a host that answers at once): never spin.
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+          }
+        } catch (cause) {
+          const code = (cause as { code?: unknown })?.code;
+          if (code === "INVALID_REQUEST" || code === "DESKTOP_SCREEN_ONLY")
+            return;
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
+      }
+    })();
+    return () => {
+      stopped = true;
+    };
+  }, [watchesShape, leaseId, request]);
+  useEffect(() => {
+    if (!lease || !frameReady || !canInput) return;
+    if (following) {
+      if (!turnable) return;
+      const pose = `${lease.lease}:${deviceLandscape}`;
+      if (deviceTurn.current !== pose) {
+        deviceTurn.current = pose;
+        send({
+          type: "events",
+          events: [
+            {
+              kind: "press",
+              button: deviceLandscape
+                ? "orientation-landscape"
+                : "orientation-portrait",
+            },
+          ],
+        });
+      }
+    }
+  }, [lease, turnable, following, frameReady, canInput, deviceLandscape, send]);
+  // Lay the picture out at the shape the device shows. The host reports it
+  // (a pose the device or app refuses, such as upside down, changes nothing;
+  // an app may also turn the device itself); older hosts do not, and then the
+  // pose asked for is the best guess.
+  const reported = deviceShape?.lease === lease?.lease ? deviceShape : null;
+  useEffect(() => {
+    if (!lease?.screen || !frameReady) return;
+    const { width, height } = lease.display;
+    let shape = reported;
+    if (!shape) {
+      if ((following && !turnable) || width > height === deviceLandscape)
+        return;
+      shape = { lease: lease.lease, width: height, height: width };
+    }
+    if (shape.width === width && shape.height === height) return;
+    const display = {
+      ...lease.display,
+      width: shape.width,
+      height: shape.height,
+    };
+    send({ type: "displayGeometry", ...display, restore: true });
+    setLease({ ...lease, display });
+  }, [lease, reported, following, turnable, frameReady, deviceLandscape, send]);
+  const rotateDevice = (direction: "left" | "right") => {
+    if (!canInput) return;
+    // Following, the device was last set upright or to landscape-left.
+    const from = turn ?? (deviceLandscape ? 1 : 0);
+    deviceTurn.current = null;
+    send({
+      type: "events",
+      events: [{ kind: "press", button: `rotate-${direction}` }],
+    });
+    setTurn((from + (direction === "right" ? 1 : 3)) % 4);
+  };
+  // Filling depends on both shapes: size it again whenever either one turns.
+  // A free zoom does not survive a new shape; the picture fits again.
+  const pictureShape = `${lease?.display.width}x${lease?.display.height}:${landscape}`;
+  useEffect(() => {
+    if (!frameReady || !lease?.screen) return;
+    if (picture === "fill") send({ type: "fill" });
+  }, [frameReady, lease?.screen, picture, pictureShape, send]);
+  const shapeRef = useRef(pictureShape);
+  useEffect(() => {
+    if (shapeRef.current === pictureShape) return;
+    shapeRef.current = pictureShape;
+    if (picture !== "zoom") return;
+    setPicture("fit");
+    setZoomEditing(false);
+  }, [picture, pictureShape]);
+  const changePicture = (next: LiveScreenPicture) => {
+    setPicture(next);
+    setZoomEditing(next === "zoom");
+    if (next === "fit") send({ type: "fit" });
+    if (next === "fill") send({ type: "fill" });
+  };
+  // Fingers on a live screen are device touches, except while zooming the
+  // picture: then they pan and pinch it, and nothing reaches the device.
+  // A reloaded viewer and a new lease start without either setting (touches
+  // would become desktop pointers the host refuses), so send them again.
+  const liveScreenTouches = lease?.screen ? lease.screen.maxTouches : null;
+  useEffect(() => {
+    if (!frameReady) return;
+    send(
+      liveScreenTouches === null || zoomEditing
+        ? { type: "deviceTouch", enabled: false }
+        : { type: "deviceTouch", enabled: true, maxTouches: liveScreenTouches },
+    );
+  }, [
+    frameReady,
+    liveScreenTouches,
+    zoomEditing,
+    leaseId,
+    viewerReadyRevision,
+    send,
+  ]);
+  const wasZooming = useRef(false);
+  useEffect(() => {
+    if (zoomEditing) send({ type: "mode", mode: "pan" });
+    // Done zooming: hand the fingers back. Otherwise the desktop mode effect
+    // and connect already own `mode`.
+    else if (wasZooming.current && frameReady) send({ type: "mode", mode });
+    wasZooming.current = zoomEditing;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoomEditing, leaseId, viewerReadyRevision]);
   const selectKeyboardMode = (computer: boolean) => {
     send({ type: "events", events: [{ kind: "release" }] });
     setAwaitingSystemKeyboard(
@@ -3424,6 +3637,15 @@ export function RemoteDesktopSession({
     foldLayout ? foldControls.height : windowSize.height * 0.7,
   );
   const keySurface = {
+    onKeyDown: (code: string) => {
+      const feedback = remotePresentation?.keyFeedbackForSkin
+        ? remotePresentation.keyFeedbackForSkin(
+            retroDesktop ? foldSkin : "modern",
+            code,
+          )
+        : remotePresentation?.keyFeedback?.();
+      void feedback?.catch(() => {});
+    },
     platform: caps?.platform,
     // Inactive already released host input; latched modifiers must not outlive it.
     enabled: canInput && appState === "active",
@@ -3435,6 +3657,70 @@ export function RemoteDesktopSession({
     redo: foldRedo,
     keyLabel,
   };
+  // A plugin live screen: its own buttons, in the plugin's order of importance.
+  const liveScreen = lease?.screen;
+  const deviceButtons: RemoteDesktopDeviceButton[] = (
+    liveScreen?.buttons ?? []
+  ).map((button) => ({
+    key: `device-${button.id}`,
+    icon: LIVE_SCREEN_ICONS[button.icon] ?? LIVE_SCREEN_ICONS.home,
+    label: button.label,
+    press: () =>
+      send({ type: "events", events: [{ kind: "press", button: button.id }] }),
+  }));
+  const toolbarDeviceButtons = deviceButtons.slice(
+    0,
+    LIVE_SCREEN_TOOLBAR_BUTTONS,
+  );
+  const windowView = Boolean(handoff || liveScreen);
+  const toggleKeyboard = () => {
+    setOperations(false);
+    if (keyboard) {
+      Keyboard.dismiss();
+      send({ type: "events", events: [{ kind: "release" }] });
+    }
+    setKeyboard(!keyboard);
+  };
+  // A device screen fills the phone: everything else is in one movable panel.
+  const shownButton = (id: string) => !LIVE_SCREEN_NOT_IN_MENU.has(id);
+  const liveScreenAction = (id: string): LiveScreenAction | undefined => {
+    const button = deviceButtons.find((b) => b.key === `device-${id}`);
+    return (
+      button && {
+        key: id,
+        icon: button.icon,
+        label: button.label,
+        onPress: button.press,
+      }
+    );
+  };
+  const volumeDown = liveScreenAction("volume-down");
+  const volumeUp = liveScreenAction("volume-up");
+  const liveScreenActions: LiveScreenAction[] = (liveScreen?.buttons ?? [])
+    .filter((b) => shownButton(b.id) && !b.id.startsWith("volume-"))
+    .map((b) => liveScreenAction(b.id)!)
+    .filter(Boolean);
+  const rotation = (direction: "left" | "right") => {
+    const action = rotatable && liveScreenAction(`rotate-${direction}`);
+    return action
+      ? { ...action, onPress: () => rotateDevice(direction) }
+      : undefined;
+  };
+  const rotateLeft = rotation("left");
+  const rotateRight = rotation("right");
+  const controlDisabled =
+    !lease ||
+    busy ||
+    settingInFlight.current ||
+    Boolean(presentationTimer.current) ||
+    connecting.current ||
+    !caps?.canControl;
+  const pipAvailable = Boolean(
+    remotePresentation &&
+    caps?.backgroundViewing &&
+    (NativeRemoteDesktopView || canPip),
+  );
+  const latency = network?.latencyMs;
   const deckClipboard = (
     <RemoteDesktopClipboardButton
       enabled={!connectionPending && canInput}
@@ -3452,6 +3738,13 @@ export function RemoteDesktopSession({
     >
       {Platform.OS === "android" && focused && <StatusBar hidden />}
       <View style={[styles.body, landscape && styles.landscape]}>
+        {retroDesktop && focused && foldLayout && foldSkin === "macbook" ? (
+          <FoldDesktopBezel
+            region={hardwareMedia}
+            skin={foldSkin}
+            viewport={retroViewport}
+          />
+        ) : null}
         <View
           style={[
             styles.canvas,
@@ -3481,7 +3774,7 @@ export function RemoteDesktopSession({
                 },
           ]}
         >
-          {retroDesktop && focused && foldLayout ? (
+          {retroDesktop && focused && foldLayout && foldSkin !== "macbook" ? (
             <FoldDesktopBezel
               region={hardwareMedia}
               skin={foldSkin}
@@ -3500,7 +3793,7 @@ export function RemoteDesktopSession({
                 top: retroViewport.y,
                 bottom:
                   geometry.height - retroViewport.y - retroViewport.height,
-                borderRadius: radius.control,
+                borderRadius: foldSkin === "macbook" ? 0 : radius.control,
                 overflow: "hidden",
               },
             ]}
@@ -3564,6 +3857,7 @@ export function RemoteDesktopSession({
             Platform.OS === "ios" &&
             !tableRegion &&
             showMouseButtons &&
+            !liveScreen &&
             focused &&
             !operations &&
             !keyboard &&
@@ -3706,15 +4000,19 @@ export function RemoteDesktopSession({
                 {t("remoteDesktop.viewOnly")}
               </Text>
             )}
-          {lease && !showConnectionStatus && !operations && !landscape && (
-            <RemoteDesktopNetworkStatus
-              foreground={viewerColors.textPrimary}
-              send={send}
-              stats={network}
-              video={status === "live"}
-              top={edgePadding.paddingTop + spacing.sm}
-            />
-          )}
+          {lease &&
+            !screenPlugin &&
+            !showConnectionStatus &&
+            !operations &&
+            !landscape && (
+              <RemoteDesktopNetworkStatus
+                foreground={viewerColors.textPrimary}
+                send={send}
+                stats={network}
+                video={status === "live"}
+                top={edgePadding.paddingTop + spacing.sm}
+              />
+            )}
           {windowsOpen &&
             focused &&
             lease &&
@@ -3759,18 +4057,36 @@ export function RemoteDesktopSession({
                             windowSize.height -
                             insets.bottom -
                             navigationChrome.target *
-                              (handoff ? 2 : caps?.omarchyMenu ? 5 : 4)) /
+                              (liveScreen
+                                ? toolbarDeviceButtons.length +
+                                  (liveScreen.keyboard ? 2 : 1)
+                                : handoff
+                                  ? 2
+                                  : caps?.omarchyMenu
+                                    ? 5
+                                    : 4)) /
                           2,
                       }
                     : undefined
                 }
                 toolbarOnLeft={toolbarOnLeft}
-                toolbarActionCount={handoff ? 2 : caps?.omarchyMenu ? 5 : 4}
+                toolbarActionCount={
+                  liveScreen
+                    ? toolbarDeviceButtons.length +
+                      (liveScreen.keyboard ? 2 : 1)
+                    : handoff
+                      ? 2
+                      : caps?.omarchyMenu
+                        ? 5
+                        : 4
+                }
                 visible={operations && focused}
                 landscape={landscape}
                 topInset={edgePadding.paddingTop}
                 title={t(
-                  `remoteDesktop.${controlPage === "controls" ? "operations" : controlPage === "display" ? "displaySettings" : "security"}`,
+                  liveScreen
+                    ? "remoteDesktop.settings"
+                    : `remoteDesktop.${controlPage === "controls" ? "operations" : controlPage === "display" ? "displaySettings" : "security"}`,
                 )}
                 page={controlPage}
                 onBack={
@@ -3778,107 +4094,128 @@ export function RemoteDesktopSession({
                     ? undefined
                     : () => setControlPage("controls")
                 }
-                caption={`${lease?.window ? t("remoteDesktop.handoffWindow", { app: lease.window.app }) : deviceName} · ${showConnectionStatus ? connectionLabel : t(`remoteDesktop.${status}`)}`}
+                caption={`${lease?.window ? t("remoteDesktop.handoffWindow", { app: lease.window.app }) : liveScreen ? liveScreen.name : deviceName} · ${showConnectionStatus ? connectionLabel : t(`remoteDesktop.${status}`)}`}
                 onClose={() => setOperations(false)}
                 footer={
-                  <RemoteDesktopDisconnect onPress={() => void leave()} />
+                  // A device screen leaves with Back in its own panel.
+                  liveScreen ? undefined : (
+                    <RemoteDesktopDisconnect onPress={() => void leave()} />
+                  )
                 }
               >
-                {foldSkinAvailable && controlPage === "controls" ? (
+                {!liveScreen && foldSkinAvailable && controlPage === "controls" ? (
                   <FoldDesktopSkinSwitch
                     skin={foldSkin}
                     onChange={setFoldSkin}
                   />
                 ) : null}
-                <RemoteDesktopControls
-                  page={controlPage}
-                  onPage={setControlPage}
-                  security={{
-                    ...security,
-                    ...safety,
-                    hostPlatform: caps?.platform,
-                    lockOnExit,
-                    lockOnExitAvailable:
-                      lockOnExitLoaded && caps?.lockOnExit === true,
-                    onLockOnExit: updateLockOnExit,
-                    idleTimeoutMinutes,
-                    idleTimeoutAvailable:
-                      idleTimeoutLoaded && caps?.idleLock === true,
-                    onIdleTimeout: updateIdleTimeout,
-                  }}
-                  connected={Boolean(lease) && !connectionPending}
-                  controlling={Boolean(lease?.controlling)}
-                  viewOnly={viewOnlySelected}
-                  controlDisabled={
-                    !lease ||
-                    busy ||
-                    settingInFlight.current ||
-                    Boolean(presentationTimer.current) ||
-                    connecting.current ||
-                    !caps?.canControl
-                  }
-                  presentation={{
-                    enabled: pipEnabled,
-                    canRotate:
-                      typeof remotePresentation?.rotate === "function" &&
-                      !(
-                        geometry.reservedRegionsSupported &&
-                        Platform.OS === "ios" &&
-                        !Platform.isPad &&
-                        geometry.regularWidth &&
-                        geometry.regularHeight
-                      ),
-                    canPip: Boolean(
-                      remotePresentation &&
-                      caps?.backgroundViewing &&
-                      (NativeRemoteDesktopView || canPip),
-                    ),
-                    canAudio: Boolean(caps?.systemAudio),
-                    onRotate: () => {
-                      void remotePresentation
-                        ?.rotate?.(!landscape)
-                        .then(() => setOperations(false))
-                        .catch(() =>
-                          setSettingNotice(t("remoteDesktop.settingFailed")),
-                        );
-                    },
-                    onPip: togglePictureInPicture,
-                  }}
-                  video={{
-                    supported: Boolean(caps?.videoSettings),
-                    settings: videoSettings,
-                    busy: settingBusy,
-                    modesSupported: Boolean(caps?.displayModes),
-                    displayGeometry: lease
-                      ? `${lease.display.id}:${lease.display.width}:${lease.display.height}:${Boolean(fittedDisplay)}`
-                      : undefined,
-                    viewerDisplaySupported: caps?.viewerDisplay === true,
-                    viewerDisplayMatched,
-                    onFitDisplay: () => send({ type: "measureViewport" }),
-                    notice: audioUnavailable.current
-                      ? t("remoteDesktop.audioUnavailable")
-                      : settingNotice,
-                    onChange: (settings) => {
-                      void changeVideoSettings(settings);
-                    },
-                    readModes: readResolutionModes,
-                    onResolution: changeResolution,
-                  }}
-                  inputMode={inputMode}
-                  displays={handoff ? [] : (caps?.displays ?? [])}
-                  displayId={recovery.current.displayId ?? lease?.display.id}
-                  onViewOnly={() => void toggleControl()}
-                  onInputMode={(value) => {
-                    setInputMode(value);
-                    send({ type: "mode", mode: value });
-                  }}
-                  showMouseButtons={showMouseButtons}
-                  onShowMouseButtons={setShowMouseButtons}
-                  onDisplay={(id) => {
-                    setOperations(false);
-                    void connect(id);
-                  }}
-                />
+                {liveScreen ? (
+                  <LiveScreenSettings
+                    background={{
+                      enabled: pipEnabled,
+                      available: pipAvailable,
+                      onChange: togglePictureInPicture,
+                    }}
+                    video={{
+                      supported: Boolean(caps?.videoSettings),
+                      settings: videoSettings,
+                      busy: settingBusy,
+                      notice: settingNotice,
+                      onChange: (settings) => {
+                        void changeVideoSettings(settings);
+                      },
+                    }}
+                    connected={Boolean(lease) && !connectionPending}
+                    controlling={Boolean(lease?.controlling)}
+                  />
+                ) : (
+                  <RemoteDesktopControls
+                    page={controlPage}
+                    onPage={setControlPage}
+                    device={
+                      // The device's buttons are all in the floating menu.
+                      liveScreen ? { buttons: [] } : undefined
+                    }
+                    security={
+                      liveScreen
+                        ? undefined
+                        : {
+                            ...security,
+                            ...safety,
+                            hostPlatform: caps?.platform,
+                            lockOnExit,
+                            lockOnExitAvailable:
+                              lockOnExitLoaded && caps?.lockOnExit === true,
+                            onLockOnExit: updateLockOnExit,
+                            idleTimeoutMinutes,
+                            idleTimeoutAvailable:
+                              idleTimeoutLoaded && caps?.idleLock === true,
+                            onIdleTimeout: updateIdleTimeout,
+                          }
+                    }
+                    connected={Boolean(lease) && !connectionPending}
+                    controlling={Boolean(lease?.controlling)}
+                    viewOnly={viewOnlySelected}
+                    controlDisabled={controlDisabled}
+                    presentation={{
+                      enabled: pipEnabled,
+                      canRotate:
+                        typeof remotePresentation?.rotate === "function" &&
+                        !(
+                          geometry.reservedRegionsSupported &&
+                          Platform.OS === "ios" &&
+                          !Platform.isPad &&
+                          geometry.regularWidth &&
+                          geometry.regularHeight
+                        ),
+                      canPip: pipAvailable,
+                      canAudio: Boolean(caps?.systemAudio),
+                      onRotate: () => {
+                        void remotePresentation
+                          ?.rotate?.(!landscape)
+                          .then(() => setOperations(false))
+                          .catch(() =>
+                            setSettingNotice(t("remoteDesktop.settingFailed")),
+                          );
+                      },
+                      onPip: togglePictureInPicture,
+                    }}
+                    video={{
+                      supported: Boolean(caps?.videoSettings),
+                      settings: videoSettings,
+                      busy: settingBusy,
+                      modesSupported: Boolean(caps?.displayModes),
+                      displayGeometry: lease
+                        ? `${lease.display.id}:${lease.display.width}:${lease.display.height}:${Boolean(fittedDisplay)}`
+                        : undefined,
+                      viewerDisplaySupported: caps?.viewerDisplay === true,
+                      viewerDisplayMatched,
+                      onFitDisplay: () => send({ type: "measureViewport" }),
+                      notice: audioUnavailable.current
+                        ? t("remoteDesktop.audioUnavailable")
+                        : settingNotice,
+                      onChange: (settings) => {
+                        void changeVideoSettings(settings);
+                      },
+                      readModes: readResolutionModes,
+                      onResolution: changeResolution,
+                    }}
+                    inputMode={inputMode}
+                    displays={windowView ? [] : (caps?.displays ?? [])}
+                    displayId={recovery.current.displayId ?? lease?.display.id}
+                    onViewOnly={() => void toggleControl()}
+                    onInputMode={(value) => {
+                      setInputMode(value);
+                      send({ type: "mode", mode: value });
+                    }}
+                    showMouseButtons={showMouseButtons}
+                    onShowMouseButtons={setShowMouseButtons}
+                    onDisplay={(id) => {
+                      setOperations(false);
+                      void connect(id);
+                    }}
+                  />
+                )}
               </RemoteDesktopPanel>
             </View>
           )}
@@ -3945,7 +4282,7 @@ export function RemoteDesktopSession({
             ) : null}
           </View>
         ) : null}
-        {!keyboard && !keyboardDeck && (
+        {!keyboard && !keyboardDeck && !screenPlugin && (
           <Animated.View
             key={landscape ? "landscape-toolbar" : "portrait-toolbar"}
             testID="remoteDesktop.toolbarPosition"
@@ -4020,7 +4357,15 @@ export function RemoteDesktopSession({
           >
             <RemoteDesktopToolbar
               landscape={landscape || systemSideRail}
-              windowOnly={Boolean(handoff)}
+              windowOnly={windowView}
+              device={
+                liveScreen
+                  ? {
+                      buttons: toolbarDeviceButtons,
+                      keyboard: liveScreen.keyboard,
+                    }
+                  : undefined
+              }
               onWorkspaceLeft={
                 caps?.workspaceNavigation
                   ? () => workspaceAction("workspaceLeft")
@@ -4041,61 +4386,57 @@ export function RemoteDesktopSession({
               operations={operations}
               onWindows={openWindows}
               onDesktop={showDesktop}
-              onKeyboard={() => {
-                setOperations(false);
-                if (keyboard) {
-                  Keyboard.dismiss();
-                  send({ type: "events", events: [{ kind: "release" }] });
-                }
-                setKeyboard(!keyboard);
-              }}
+              onKeyboard={toggleKeyboard}
               onOperations={toggleOperations}
             />
           </Animated.View>
         )}
       </View>
-      <View
-        testID="remoteDesktop.backPosition"
-        pointerEvents="auto"
-        onLayout={({ nativeEvent: { layout } }) =>
-          setBackControlHeight(layout.height)
-        }
-        style={[
-          styles.back,
-          {
-            top: landscape
-              ? insets.top + spacing.lg
-              : sharedStatusRow
-                ? sharedBackTop
-                : edgePadding.paddingTop + spacing.xs,
-            // iOS landscape: Island/notch sits mid-edge, so the top-left
-            // corner stays clear even when insets.left is large. Skip that
-            // inset unless the top edge is also unsafe — a physical cutout
-            // occupying the corner, not a centered island. Android left
-            // insets are an unsafe strip (cutout/curve), not an island.
-            left: landscape
-              ? (Platform.OS === "ios" &&
-                !geometry.reservedRegionsSupported &&
-                insets.top === 0
-                  ? 0
-                  : insets.left) +
-                spacing.lg +
-                (Platform.OS === "ios" ? spacing.xs : 0)
-              : portraitBackLeft,
-          },
-          systemSideRail && {
-            top: sideRailTop,
-            left:
-              windowSize.width - (sideRailWidth + navigationChrome.target) / 2,
-            width: navigationChrome.target,
-          },
-        ]}
-      >
-        <RemoteDesktopBackButton
-          label={t("remoteDesktop.back")}
-          onPress={back}
-        />
-      </View>
+      {!screenPlugin && (
+        <View
+          testID="remoteDesktop.backPosition"
+          pointerEvents="auto"
+          onLayout={({ nativeEvent: { layout } }) =>
+            setBackControlHeight(layout.height)
+          }
+          style={[
+            styles.back,
+            {
+              top: landscape
+                ? insets.top + spacing.lg
+                : sharedStatusRow
+                  ? sharedBackTop
+                  : edgePadding.paddingTop + spacing.xs,
+              // iOS landscape: Island/notch sits mid-edge, so the top-left
+              // corner stays clear even when insets.left is large. Skip that
+              // inset unless the top edge is also unsafe — a physical cutout
+              // occupying the corner, not a centered island. Android left
+              // insets are an unsafe strip (cutout/curve), not an island.
+              left: landscape
+                ? (Platform.OS === "ios" &&
+                  !geometry.reservedRegionsSupported &&
+                  insets.top === 0
+                    ? 0
+                    : insets.left) +
+                  spacing.lg +
+                  (Platform.OS === "ios" ? spacing.xs : 0)
+                : portraitBackLeft,
+            },
+            systemSideRail && {
+              top: sideRailTop,
+              left:
+                windowSize.width -
+                (sideRailWidth + navigationChrome.target) / 2,
+              width: navigationChrome.target,
+            },
+          ]}
+        >
+          <RemoteDesktopBackButton
+            label={t("remoteDesktop.back")}
+            onPress={back}
+          />
+        </View>
+      )}
       {keyboard && (
         <View
           testID="remoteDesktop.keyboardPanel"
@@ -4197,6 +4538,79 @@ export function RemoteDesktopSession({
             </View>
           </View>
         </View>
+      )}
+      {screenPlugin && (
+        <LiveScreenControls
+          platform={liveScreen?.platform}
+          name={liveScreen?.name ?? deviceName}
+          status={{
+            text: showConnectionStatus
+              ? connectionLabel
+              : status === "live" && typeof latency === "number"
+                ? `${t(`remoteDesktop.${status}`)} · ${Math.round(latency)} ms`
+                : t(`remoteDesktop.${status}`),
+            tone:
+              status === "live"
+                ? "live"
+                : status === "disconnected"
+                  ? "failed"
+                  : "connecting",
+          }}
+          actions={liveScreenActions}
+          volume={
+            volumeDown && volumeUp
+              ? { down: volumeDown, up: volumeUp }
+              : undefined
+          }
+          orientation={
+            rotateLeft && rotateRight
+              ? {
+                  following,
+                  onFollow: turnable ? () => setTurn(null) : undefined,
+                  rotate: { left: rotateLeft, right: rotateRight },
+                }
+              : undefined
+          }
+          picture={{
+            value: picture,
+            editing: zoomEditing,
+            onChange: changePicture,
+            onDone: () => setZoomEditing(false),
+          }}
+          inputDisabled={!canInput}
+          onSettings={() => {
+            Keyboard.dismiss();
+            setKeyboard(false);
+            setZoomEditing(false);
+            send({ type: "events", events: [{ kind: "release" }] });
+            setControlPage("controls");
+            setOperations(true);
+          }}
+          onBack={() => void back()}
+          insets={{
+            top: insets.top,
+            bottom: insets.bottom + (keyboard ? keyboardPanelHeight : 0),
+            left: insets.left,
+            right: insets.right,
+          }}
+          hidden={operations}
+          labels={{
+            menu: t("remoteDesktop.deviceMenu"),
+            orientation: t("remoteDesktop.orientation"),
+            follow: t("remoteDesktop.orientationFollow"),
+            picture: t("remoteDesktop.picture"),
+            pictures: {
+              fit: t("remoteDesktop.pictureFit"),
+              fill: t("remoteDesktop.pictureFill"),
+              zoom: t("remoteDesktop.pictureZoom"),
+            },
+            zoomHint: t("remoteDesktop.zoomHint"),
+            zoomDone: t("remoteDesktop.zoomDone"),
+            volume: t("remoteDesktop.volume"),
+            settings: t("remoteDesktop.settings"),
+            back: t("remoteDesktop.back"),
+          }}
+        />
       )}
     </KeyboardAvoidingView>
   );
@@ -4333,3 +4747,19 @@ const makeStyles = (colors: ThemeColors) =>
     },
     // 选中只换色,字重保持与未选一致。
   });
+
+/** A device screen's reported upright size, or null when absent or malformed. */
+function liveScreenShape(
+  value: unknown,
+): { width: number; height: number } | null {
+  if (!value || typeof value !== "object") return null;
+  const { width, height } = value as { width?: unknown; height?: unknown };
+  return Number.isInteger(width) &&
+    Number.isInteger(height) &&
+    (width as number) > 0 &&
+    (height as number) > 0 &&
+    (width as number) <= 16384 &&
+    (height as number) <= 16384
+    ? { width: width as number, height: height as number }
+    : null;
+}

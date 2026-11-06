@@ -26,6 +26,8 @@ import {
   creatorMicro2KeymapBackupFileName,
   creatorMicro2KeymapSessionFileName,
   isCindyExclusiveAgentKeymap,
+  shouldSaveCreatorKeymapSession,
+  isWorkLouderUnsupportedRpc,
   workLouderLayerHasAgentKeys,
   workLouderFirmwareIdlesHidRead,
   projectWorkLouderCodexSlotActivity,
@@ -504,6 +506,24 @@ describe('Creator Micro 2 agent keymap', () => {
     const parsed = parseWorkLouderKeymapDocument(JSON.stringify(factoryDocument));
     const cindy = applyCreatorMicro2AgentLayer(parsed!, 0);
     expect(isCindyExclusiveAgentKeymap(JSON.stringify(cindy.document))).toBe(true);
+  });
+
+  it('saves the live layout for a Cindy-looking layer unless an unreleased snapshot exists', () => {
+    // Codex Micro's factory layer is itself a full KV_OAI grid.
+    expect(shouldSaveCreatorKeymapSession(true, false)).toBe(true);
+    expect(shouldSaveCreatorKeymapSession(true, true)).toBe(false);
+    expect(shouldSaveCreatorKeymapSession(false, true)).toBe(true);
+    expect(shouldSaveCreatorKeymapSession(false, false)).toBe(true);
+  });
+
+  it('tells a firmware that lacks the file RPC from a failing transport', () => {
+    expect(isWorkLouderUnsupportedRpc(-32601, undefined)).toBe(true);
+    expect(isWorkLouderUnsupportedRpc('ERR_NOT_IMPLEMENTED', undefined)).toBe(true);
+    expect(isWorkLouderUnsupportedRpc(undefined, 'Method not found')).toBe(true);
+    expect(isWorkLouderUnsupportedRpc(undefined, 'fs.read is not supported')).toBe(true);
+    expect(isWorkLouderUnsupportedRpc(-13, 'permission denied')).toBe(false);
+    expect(isWorkLouderUnsupportedRpc(undefined, 'device has been closed')).toBe(false);
+    expect(isWorkLouderUnsupportedRpc(undefined, undefined)).toBe(false);
   });
 
   it('only treats the rebound layer as a Cindy occupancy map', () => {

@@ -15,6 +15,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import yaml from 'js-yaml';
 
+import {
+  appendHookEvents, extractCodexEvents, hasMissingHookScripts, isPlainObject,
+  missingHookEvents, readCodexTomlHooks, readHookJson, unwrapNestedClaudeHooks,
+} from './hookConfig.js';
+
 import type {
   AgentKind,
   DetectResult,
@@ -194,45 +199,39 @@ async function detectAgents(wd: string, direction: MigrationDirection, items: Mi
 async function detectHooks(wd: string, direction: MigrationDirection, items: MigrationItem[]): Promise<void> {
   const claudeHooksDir = path.join(wd, '.claude', 'hooks');
   const claudeSettings = path.join(wd, '.claude', 'settings.json');
-  const codexHooksDir = path.join(wd, '.codex', 'hooks');
-  const codexHooksJson = path.join(wd, '.codex', 'hooks.json');
-
-  if (direction === 'to-claude') {
-    // 源：codex 端
-    const hasSourceDir = await isDir(codexHooksDir);
-    const hasSourceJson = await isNonEmptyTextFile(codexHooksJson);
-    if (!hasSourceDir && !hasSourceJson) return;
-    // 目标缺失判断：claude settings.json 不存在 / 不含 hooks 段，或 .claude/hooks/ 不存在
-    // 存量错误嵌套 settings.hooks.hooks 不算完备，需放行让 converter 拍平修复
-    const claudeSettingsHasHooks = await claudeSettingsHooksWellFormed(claudeSettings);
-    const claudeHooksDirExists = await isDir(claudeHooksDir);
-    // 按源端资产对齐：源端只有 hooks.json、没有 hooks/ 目录时，目标有 hooks 配置即视为完备
-    if ((!hasSourceJson || claudeSettingsHasHooks) && (!hasSourceDir || claudeHooksDirExists)) return;
-    items.push({
-      id: 'hooks:0',
-      kind: 'hooks',
-      direction,
-      label: 'Codex hooks → Claude hooks',
-      source: codexHooksJson, // converter 内部据此推算 dir
-      target: claudeSettings,
-    });
-  } else {
-    const hasSourceDir = await isDir(claudeHooksDir);
-    const hasSourceJson = await fileHasJsonKey(claudeSettings, 'hooks');
-    if (!hasSourceDir && !hasSourceJson) return;
-    // 旧平铺 hooks.json 缺少顶层 hooks 包装，不算完备，需放行让 converter 就地升级
-    const codexHooksJsonExists = await codexHooksJsonWellFormed(codexHooksJson);
-    const codexHooksDirExists = await isDir(codexHooksDir);
-    if ((!hasSourceJson || codexHooksJsonExists) && (!hasSourceDir || codexHooksDirExists)) return;
-    items.push({
-      id: 'hooks:0',
-      kind: 'hooks',
-      direction,
-      label: 'Claude hooks → Codex hooks',
-      source: claudeHooksDir, // converter 据此推算 settings.json 路径
-      target: codexHooksJson,
-    });
-  }
+  const codexDir = path.join(wd, '.codex');
+  const codexHooksDir = path.join(codexDir, 'hooks');
+  const codexHooksJson = path.join(codexDir, 'hooks.json');
+  // 检测保持只读、容错；转换时严格解析，不能因检测失败而覆盖用户文件。
+  const [claudeRoot, codexRoot, tomlEvents] = await Promise.all([
+    readHookJson(claudeSettings).catch(() => ({} as Record<string, unknown>)),
+    readHookJson(codexHooksJson).catch(() => ({} as Record<string, unknown>)),
+    readCodexTomlHooks(codexDir).catch(() => ({} as Record<string, unknown>)),
+  ]);
+  const rawClaudeHooks = isPlainObject(claudeRoot.hooks) ? claudeRoot.hooks : {};
+  const claudeEvents = unwrapNestedClaudeHooks(rawClaudeHooks);
+  const jsonEvents = extractCodexEvents(codexRoot);
+  const codexEvents = appendHookEvents(jsonEvents, missingHookEvents(tomlEvents, [jsonEvents]));
+  const toCodex = direction === 'to-codex';
+  const source = toCodex ? claudeEvents : codexEvents;
+  const targets = toCodex ? [jsonEvents, tomlEvents] : [claudeEvents];
+  const missingScripts = await hasMissingHookScripts(
+    toCodex ? claudeHooksDir : codexHooksDir,
+    toCodex ? codexHooksDir : claudeHooksDir,
+  );
+  const hasSource = Object.keys(source).length > 0 || missingScripts;
+  const repair = toCodex
+    ? !isPlainObject(codexRoot.hooks) && Object.keys(jsonEvents).length > 0
+    : claudeEvents !== rawClaudeHooks;
+  if (!hasSource || (!repair && !missingScripts && Object.keys(missingHookEvents(source, targets, direction)).length === 0)) return;
+  items.push({
+    id: 'hooks:0',
+    kind: 'hooks',
+    direction,
+    label: toCodex ? 'Claude hooks → Codex hooks' : 'Codex hooks → Claude hooks',
+    source: toCodex ? claudeHooksDir : codexHooksJson,
+    target: toCodex ? codexHooksJson : claudeSettings,
+  });
 }
 
 async function detectMcp(wd: string, direction: MigrationDirection, items: MigrationItem[]): Promise<void> {
@@ -262,33 +261,6 @@ async function detectMcp(wd: string, direction: MigrationDirection, items: Migra
       source: mcpJson,
       target: codexConfigToml,
     });
-  }
-}
-
-/** .claude/settings.json 含 hooks 段，且不是旧版错误产物 hooks.hooks。 */
-async function claudeSettingsHooksWellFormed(p: string): Promise<boolean> {
-  try {
-    const parsed = JSON.parse(await fs.readFile(p, 'utf8'));
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
-    const hooks = (parsed as Record<string, unknown>).hooks;
-    if (!hooks || typeof hooks !== 'object' || Array.isArray(hooks)) return false;
-    const nested = (hooks as Record<string, unknown>).hooks;
-    return !(nested && typeof nested === 'object' && !Array.isArray(nested));
-  } catch {
-    return false;
-  }
-}
-
-/** .codex/hooks.json 非空且不是旧平铺写法（有事件却没有顶层 hooks 包装）。 */
-async function codexHooksJsonWellFormed(p: string): Promise<boolean> {
-  try {
-    const parsed = JSON.parse(await fs.readFile(p, 'utf8'));
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
-    const rec = parsed as Record<string, unknown>;
-    if (rec.hooks && typeof rec.hooks === 'object' && !Array.isArray(rec.hooks)) return true;
-    return Object.keys(rec).filter((k) => k !== 'hooks').length === 0;
-  } catch {
-    return false;
   }
 }
 

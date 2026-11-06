@@ -171,7 +171,8 @@ export type RemoteAgentRequest =
       sessionId: string; generation: string; usageId: string; agentKind: RemoteAgentKind; samples: RemoteAgentUsageSample[] }
   /** Authenticated same-account group owner installs or removes a guest grant on the executor. */
   | { op: 'delegate'; action: 'grant' | 'revoke'; shareId: string; memberId: string; guestDeviceId: string;
-      providerId: string; model: string; sessionId: string; generation?: string; cleanupEpoch?: number }
+      providerId: string; model: string; sessionId: string; generation?: string; cleanupEpoch?: number;
+      fastPolicy?: Pick<RemoteAgentFastPolicy, 'group' | 'revision' | 'allowFast'> }
   /** Authenticated group owner updates only its own task speed constraints, never model grants. */
   | ({ op: 'fast-policy' } & RemoteAgentFastPolicy)
   | ({ op: 'fork' } & RemoteAgentForkRequest)
@@ -299,7 +300,11 @@ export interface RemoteAgentCaps {
   nativeHistoryTransfer?: boolean;
   /** Executor accepts bounded same-account group-owner delegation for a shared guest. */
   directGuestExecution?: boolean;
+  /** Same-account M supports an explicit bounded group routing context. */
+  groupContinuity?: true;
   subscriptionFastPolicy?: true;
+  /** Bounded speed-policy caching; delegated grants can carry the authenticated O policy. */
+  subscriptionFastPolicyCache?: true;
   nativeFork?: boolean;
   imageRecovery?: boolean;
   imageRecoveryRelay?: boolean;
@@ -329,6 +334,27 @@ export interface RemoteAgentCaps {
    * (事件流 `closed` 带 `idleReclaimed`)。旧版电脑不声明，也不收回。
    */
   idleReclaimMinutes?: number;
+  /**
+   * 这台能用任务所在电脑带来的 Cindy 托管 Skill：声明即支持单独的托管 Skill 额度与复用。`digests` 是这台自己的
+   * 托管 Skill(命令名 → 内容指纹)，指纹相同的任务所在电脑只报名字，这台复制自己那份。受邀者只看到 Cindy 内置的。
+   */
+  managedSkills?: { digests: Record<string, string> };
+}
+
+export const REMOTE_AGENT_MAX_MANAGED_SKILLS = 512;
+const MANAGED_SKILL_COMMAND = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
+function parseManagedSkillCaps(value: unknown): { managedSkills?: { digests: Record<string, string> } } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const digests = (value as Record<string, unknown>).digests;
+  const out: Record<string, string> = {};
+  if (digests && typeof digests === 'object' && !Array.isArray(digests)) {
+    for (const [command, digest] of Object.entries(digests).slice(0, REMOTE_AGENT_MAX_MANAGED_SKILLS)) {
+      if (MANAGED_SKILL_COMMAND.test(command) && typeof digest === 'string' && SHA256_HEX.test(digest)) out[command] = digest;
+    }
+  }
+  return { managedSkills: { digests: out } };
 }
 
 export interface RemoteAgentReadResult {
@@ -538,10 +564,19 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
       if (v.action === 'grant' && (typeof v.generation !== 'string' || !ID.test(v.generation))) invalid();
       if (v.generation !== undefined && (typeof v.generation !== 'string' || !ID.test(v.generation))) invalid();
       if (v.cleanupEpoch !== undefined) count(v.cleanupEpoch, Number.MAX_SAFE_INTEGER);
+      let fastPolicy: Extract<RemoteAgentRequest, { op: 'delegate' }>['fastPolicy'];
+      if (v.fastPolicy !== undefined) {
+        const p = record(v.fastPolicy);
+        if (typeof p.group !== 'string' || !/^[A-Za-z0-9_.:-]{1,256}$/.test(p.group)
+          || typeof p.allowFast !== 'boolean') invalid();
+        fastPolicy = { group: p.group as string, allowFast: p.allowFast as boolean,
+          revision: count(p.revision, Number.MAX_SAFE_INTEGER) };
+      }
       return { op: 'delegate', action: oneOf(v.action, ['grant', 'revoke'] as const), shareId, memberId, guestDeviceId,
         providerId: v.providerId, model: v.model, sessionId: v.sessionId,
         ...(typeof v.generation === 'string' ? { generation: v.generation } : {}),
-        ...(v.cleanupEpoch !== undefined ? { cleanupEpoch: v.cleanupEpoch as number } : {}) };
+        ...(v.cleanupEpoch !== undefined ? { cleanupEpoch: v.cleanupEpoch as number } : {}),
+        ...(fastPolicy ? { fastPolicy } : {}) };
     }
     case 'fast-policy': {
       if (typeof v.group !== 'string' || !/^[A-Za-z0-9_.:-]{1,256}$/.test(v.group)
@@ -790,6 +825,7 @@ export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
     ...(v.imageRecoveryRelay === true ? { imageRecoveryRelay: true } : {}),
     ...(v.guestRelay === true ? { guestRelay: true } : {}),
     ...(v.directGuestExecution === true ? { directGuestExecution: true } : {}),
+    ...(v.groupContinuity === true ? { groupContinuity: true as const } : {}),
     ...(v.relayModelAccess === true ? { relayModelAccess: true } : {}),
     ...(v.reshareConsent === true ? { reshareConsent: true } : {}),
     ...(v.reshareBatch === true ? { reshareBatch: true } : {}),
@@ -798,6 +834,8 @@ export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
       && (v.idleReclaimMinutes as number) <= REMOTE_AGENT_IDLE_RECLAIM_MAX_MINUTES
       ? { idleReclaimMinutes: v.idleReclaimMinutes as number } : {}),
     ...(v.subscriptionFastPolicy === true ? { subscriptionFastPolicy: true as const } : {}),
+    ...(v.subscriptionFastPolicyCache === true ? { subscriptionFastPolicyCache: true as const } : {}),
+    ...parseManagedSkillCaps(v.managedSkills),
   };
   if (caps.version < 1 || caps.maxRuns < 1 || caps.uploadChunkBytes < 1) invalid();
   return caps;

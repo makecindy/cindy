@@ -31,6 +31,7 @@ import {
   type ZhipuCodingPlanQuotaSnapshot,
 } from '../../shared/providerAccountUsage.js';
 import { isKimiCodingProvider, kimiCodingUsageEndpoint, parseKimiCodingUsage } from '../../shared/kimiCodingUsage.js';
+import { isOpenCodeGoProvider, parseOpenCodeGoUsage } from '../../shared/opencodeGoUsage.js';
 import { createMakerLogger } from './logger-adapter.js';
 
 const log = createMakerLogger('provider-account-usage');
@@ -44,6 +45,11 @@ const MAX_RETRY_AFTER_MS = 60 * 60_000;
 /** 官方账户接口清单。端点是唯一事实源，不从目录 / 用户配置推导。 */
 const INTEGRATIONS = {
   'kimi-coding-quota-v1': { origins: ['https://api.kimi.com', 'https://api.kimi.ai'], pathPrefixes: ['/coding'], endpointFor: (origin: string) => `${origin}/coding/v1/usages` },
+  'opencode-go-quota-v1': {
+    origins: ['https://opencode.ai'],
+    pathPrefixes: ['/zen/go'],
+    endpoint: 'https://opencode.ai/zen/go/v1/usage',
+  },
   'deepseek-balance-v1': {
     origins: ['https://api.deepseek.com'],
     endpoint: 'https://api.deepseek.com/user/balance',
@@ -391,6 +397,7 @@ async function fetchAccountJson<T>(
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
     const headers: Record<string, string> = { Authorization: authorization };
+    if (resolution.integrationId === 'opencode-go-quota-v1') headers.Accept = 'application/json';
     if (resolution.integrationId === 'zhipu-coding-plan-quota-v1') {
       // 与社区工具（cc-switch）实测口径一致：要求 JSON + 英文文案，响应 msg 语言稳定。
       headers['Content-Type'] = 'application/json';
@@ -502,8 +509,9 @@ async function readResolvedAccountUsage(
   const cacheKey = `${ownerStamp.dataOwnerId ?? 'local'}:${ownerStamp.generation}:${request.providerId}:${resolution.integrationId}:${resolution.endpoint}:${resolution.agent}:${keyFingerprint}:${revision}`;
   const now = accountUsageNow();
   const record = cache.get(cacheKey);
-  const kimi = resolution.integrationId === 'kimi-coding-quota-v1';
-  if (kimi && record?.lastError && now - record.lastAttemptAt < MIN_MANUAL_REFRESH_INTERVAL_MS) {
+  const structuredQuota = resolution.integrationId === 'kimi-coding-quota-v1'
+    || resolution.integrationId === 'opencode-go-quota-v1';
+  if (structuredQuota && record?.lastError && now - record.lastAttemptAt < MIN_MANUAL_REFRESH_INTERVAL_MS) {
     return record.snapshot ? { status: 'ready', snapshot: record.snapshot, stale: true, error: record.lastError, agent: resolution.agent } : { status: 'unavailable', error: record.lastError };
   }
   const manualRefreshBlocked =
@@ -539,6 +547,8 @@ async function readResolvedAccountUsage(
     const snapshot =
       resolution.integrationId === 'kimi-coding-quota-v1'
         ? await fetchAccountJson(resolution, `Bearer ${resolution.key}`, parseKimiCodingUsage)
+        : resolution.integrationId === 'opencode-go-quota-v1'
+        ? await fetchAccountJson(resolution, `Bearer ${resolution.key}`, parseOpenCodeGoUsage)
         : resolution.integrationId === 'zhipu-coding-plan-quota-v1'
         ? await fetchZhipuCodingPlanQuota(resolution)
         : await fetchDeepSeekBalance(resolution);
@@ -546,7 +556,10 @@ async function readResolvedAccountUsage(
     cache.set(cacheKey, {
       snapshot,
       expiresAt: Math.min(accountUsageNow() + CACHE_TTL_MS, ...(snapshot.kind === 'kimi-coding-quota'
-        ? snapshot.windows.flatMap(window => window.resetsAt !== null && window.resetsAt > accountUsageNow() ? [window.resetsAt] : []) : [])),
+        ? snapshot.windows.flatMap(window => window.resetsAt !== null && window.resetsAt > accountUsageNow() ? [window.resetsAt] : [])
+        : snapshot.kind === 'opencode-go-quota'
+          ? snapshot.windows.flatMap(window => window.resetsAt !== null && window.resetsAt > accountUsageNow() ? [window.resetsAt] : [])
+          : [])),
       lastAttemptAt: accountUsageNow(),
       retryAt: 0,
     });
@@ -554,7 +567,7 @@ async function readResolvedAccountUsage(
   } catch (err) {
     if (!current()) return { status: 'unavailable', error: 'updating' };
     const code = err instanceof AccountUsageRequestError ? err.code : 'unknown';
-    if (kimi && code === 'auth') {
+    if (structuredQuota && code === 'auth') {
       cache.set(cacheKey, { expiresAt: 0, lastAttemptAt: now, lastError: code, retryAt: 0 });
       return { status: 'unavailable', error: code };
     }
@@ -632,5 +645,16 @@ export async function readKimiCodingAccountUsage(request: ProviderAccountUsageRe
   if (!agent) return { status: 'unsupported' };
   // A mixed provider can also expose DeepSeek/Zhipu routes. Pin the generic reader
   // to the Kimi route so it cannot select another integration or its credentials.
+  return readProviderAccountUsage({ ...request, agent });
+}
+
+/** Only the fixed OpenCode Go integration is exposed to linked same-account computers. */
+export async function readOpenCodeGoAccountUsage(request: ProviderAccountUsageRequest): Promise<ProviderAccountUsageResult> {
+  const provider = providerReader(request.providerId);
+  const agents = request.agent ? [request.agent] : PROVIDER_ACCOUNT_USAGE_AGENTS;
+  const agent = agents.find(candidate => isOpenCodeGoProvider(provider, candidate));
+  if (!agent) return { status: 'unsupported' };
+  // Pin the generic reader to the official Go route so a mixed provider cannot
+  // select another integration or lend it the wrong runtime credential.
   return readProviderAccountUsage({ ...request, agent });
 }

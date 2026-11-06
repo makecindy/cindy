@@ -1,16 +1,25 @@
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { setImmediate } from 'node:timers/promises';
 
 import type Database from 'better-sqlite3';
-import { describe, expect, it } from 'vitest';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { afterEach, describe, expect, it } from 'vitest';
 
+import { listAllPrRefs, listPrRefs, managePrRefs } from '../../git-context/prRefsStore';
 import { createBetterSqliteDatabase } from '../betterSqliteFactory';
+import { clearCurrentDbClient, setCurrentDbClient } from '../client/current';
+import type { DbClient } from '../client/DbClient';
 import { listMigrations, runMigrationReplay } from '../migrationRunner';
 import { initializeTaskTagPresets } from '../taskTagPresets';
 
 const canRunMigrationReplay = process.platform === 'win32' || process.platform === 'darwin';
 const describeMigrationReplay = canRunMigrationReplay ? describe : describe.skip;
+
+// Let Vitest receive result acknowledgements between synchronous SQLite replays.
+// A long sequence otherwise starves worker RPC even when every assertion passes.
+afterEach(async () => { await setImmediate(); });
 
 function desktopRoot(): string {
   return path.resolve(__dirname, '../../../..');
@@ -70,9 +79,11 @@ function maxMigrationSeq(): number {
   return Math.max(...listMigrations(drizzleDir()).map((migration) => migration.seq));
 }
 
-// Migration tier: nonempty old data, explicit user choices, removals and a second startup.
+// Migration tier: 0.1.122 hid every automatic association on a real upgraded profile.
+// The previous fixture asserted row retention but accepted disappearance from UI reads.
+// Exercise direct and already-upgraded databases through the runner and production store.
 describeMigrationReplay('explicit PR association upgrade', () => {
-  it('preserves old links and durable observations across upgrade and reopen', () => {
+  it.each([140, 143])('keeps existing links visible from schema %i across upgrade and reopen', async (version) => {
     const root = mkdtempSync(path.join(tmpdir(), 'cindy-pr-upgrade-'));
     const staged = path.join(root, 'before'); mkdirSync(staged);
     const filename = path.join(root, 'fixture.db');
@@ -95,21 +106,37 @@ describeMigrationReplay('explicit PR association upgrade', () => {
       insert.run('pinned', 2, 'https://github.com/example/repo/pull/2', 1, 9, 0, null);
       insert.run('legacy', 3, 'https://github.com/example/repo/pull/3', 0, 0, 0, null);
       insert.run('removed', 4, 'https://github.com/example/repo/pull/4', 0, 3, 1, 42);
+      insert.run('removed-auto', 5, 'https://github.com/example/repo/pull/5', 0, 0, 0, 43);
+      if (version === 143) {
+        for (const migration of listMigrations(drizzleDir()).filter(m => m.seq >= 141 && m.seq <= 143)) {
+          copyFileSync(migration.sqlPath, path.join(staged, migration.fileName));
+        }
+        runMigrationReplay(db, { drizzleDir: staged });
+      }
       runMigrationReplay(db, { drizzleDir: drizzleDir() });
-      const read = () => db.prepare('SELECT id,association_source,priority,removed_at FROM session_pr_refs ORDER BY id').all();
+      const read = () => db.prepare('SELECT id,association_source,association_origin,priority,removed_at FROM session_pr_refs ORDER BY id').all();
       const upgraded = read();
       expect(upgraded).toEqual([
-        { id: 'legacy', association_source: 'legacy', priority: 0, removed_at: null },
-        { id: 'manual', association_source: 'explicit', priority: 7, removed_at: null },
-        { id: 'pinned', association_source: 'explicit', priority: 9, removed_at: null },
-        { id: 'removed', association_source: 'explicit', priority: 3, removed_at: 42 },
+        { id: 'legacy', association_source: 'explicit', association_origin: 'upgrade', priority: 0, removed_at: null },
+        { id: 'manual', association_source: 'explicit', association_origin: null, priority: 7, removed_at: null },
+        { id: 'pinned', association_source: 'explicit', association_origin: null, priority: 9, removed_at: null },
+        { id: 'removed', association_source: 'explicit', association_origin: null, priority: 3, removed_at: 42 },
+        { id: 'removed-auto', association_source: 'legacy', association_origin: null, priority: 0, removed_at: 43 },
       ]);
+      setCurrentDbClient({ drizzle: drizzle(db) } as unknown as DbClient, 'fixture');
+      expect((await listPrRefs('fixture')).map(ref => ref.id)).toEqual(['pinned', 'manual', 'legacy']);
+      expect((await listAllPrRefs()).map(ref => ref.id)).toEqual(['pinned', 'manual', 'legacy']);
+      expect(await listPrRefs('unassociated')).toEqual([]);
+      await managePrRefs('fixture', { action: 'remove', id: 'legacy' }, async () => undefined);
+      const removed = read();
       db.prepare('INSERT INTO github_observations (key,state,updated_at) VALUES (?,?,?)').run('fixture', '{"sequence":1}', 1);
       db.close(); db = createBetterSqliteDatabase(filename); loadSqliteVec(db);
+      setCurrentDbClient({ drizzle: drizzle(db) } as unknown as DbClient, 'fixture');
       expect(runMigrationReplay(db, { drizzleDir: drizzleDir() }).applied).toHaveLength(0);
-      expect(read()).toEqual(upgraded);
+      expect(read()).toEqual(removed);
+      expect((await listPrRefs('fixture')).map(ref => ref.id)).toEqual(['pinned', 'manual']);
       expect(db.prepare('SELECT state FROM github_observations WHERE key = ?').pluck().get('fixture')).toBe('{"sequence":1}');
-    } finally { db.close(); rmSync(root, { recursive: true, force: true }); }
+    } finally { clearCurrentDbClient(); db.close(); rmSync(root, { recursive: true, force: true }); }
   });
 });
 
@@ -162,7 +189,8 @@ describeMigrationReplay('migration replay', () => {
         db.exec(readFileSync(path.join(drizzleDir(), '0045_living_namor.sql'), 'utf-8'));
         const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
         expect(result.applied.map((migration) => migration.seq)).toEqual([
-          125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143,
+          125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
+          143, 144, 145, 146, 147,
         ]);
         expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
         expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
@@ -189,7 +217,7 @@ describeMigrationReplay('migration replay', () => {
   // a pre-138 database already has some/all columns; the old ALTER SQL failed.
   // The existing fresh-schema test did not cover interrupted/replayed schemas.
   it.each(['none', 'partial', 'all'])(
-    'preserves PR associations when %s management columns already exist',
+    'preserves PR associations when %s management/provider columns already exist',
     (existing) => {
       const { db, cleanup } = createTempDb();
       try {
@@ -211,10 +239,12 @@ describeMigrationReplay('migration replay', () => {
         if (existing !== 'none') {
           db.exec('ALTER TABLE session_pr_refs ADD pinned integer DEFAULT false NOT NULL');
           db.exec('ALTER TABLE session_pr_refs ADD priority integer DEFAULT 0 NOT NULL');
+          db.exec("ALTER TABLE session_pr_refs ADD provider text DEFAULT 'github' NOT NULL");
         }
         if (existing === 'all') {
           db.exec('ALTER TABLE session_pr_refs ADD manually_added integer DEFAULT false NOT NULL');
           db.exec('ALTER TABLE session_pr_refs ADD removed_at integer');
+          db.exec("ALTER TABLE session_pr_refs ADD host text DEFAULT 'github.com' NOT NULL");
         }
         runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 137 });
         expect(db.prepare('SELECT * FROM session_pr_refs').get()).toEqual({
@@ -230,8 +260,10 @@ describeMigrationReplay('migration replay', () => {
           priority: 0,
           manually_added: 0,
           removed_at: null,
-          association_source: 'legacy',
-          association_origin: null,
+          association_source: 'explicit',
+          association_origin: 'upgrade',
+          provider: 'github',
+          host: 'github.com',
         });
       } finally {
         cleanup();
@@ -336,7 +368,7 @@ describeMigrationReplay('migration replay', () => {
       db.exec(readFileSync(path.join(drizzleDir(), '0045_living_namor.sql'), 'utf-8'));
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 129 });
       expect(result.applied.map((migration) => migration.seq)).toEqual([
-        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143,
+        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147,
       ]);
       expect(columnNames(db, 'sessions')).toContain('notifications_muted');
       // 存量任务全部回填为「未静音」：升级不能替用户少发提醒。

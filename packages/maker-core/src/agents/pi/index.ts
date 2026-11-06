@@ -1,3 +1,4 @@
+import { estimatePiContext, type PiPromptSource } from './context-estimate.js';
 import { getPiExtensionUiCapability } from './extension-ui-capabilities.js';
 import { createPiCacheInputTracker } from './cache-input.js';
 import { parsePiManagementArgs, parsePiManagementText } from './managed-command.js';
@@ -203,7 +204,7 @@ import {
   assertReviewMessageContentPaths,
   buildReviewReadGrants } from '../shared/review-read-scope.js';
 import { resolveAgentCredentialMode } from '../credential-mode.js';
-import { PiRpcProcess, type PiRpcEvent } from './rpc-client.js';
+import { PI_RPC_OVERSIZED_FRAME_ERROR, PiRpcProcess, type PiRpcEvent } from './rpc-client.js';
 import { createPiStdioTransport, type PiTransport } from './transport.js';
 import type { PiRemoteFileOps } from '../base-agent.js';
 import {
@@ -256,6 +257,7 @@ import {
   rollbackPiHostTurnStart,
   translatePiEvent,
   usageSnapshotOf,
+  piTurnUsageOf,
   type PiTranslateContext,
 } from './translator.js';
 import {
@@ -3875,20 +3877,22 @@ export class PiAgent extends BaseAgent {
       : hosted
         ? deviceHostedGhostRoster(hosted, opts.ghostRosterSnapshot, localGhostRoster)
         : localGhostRoster();
-    const appendSections = [
-      reviewMode ? undefined : this.deps.runtimeConfig.answerDeliveryPrompt?.trim(),
-      reviewMode ? undefined : opts.botProfilePrompt?.trim(),
-      opts.botRuntimeProfile ? undefined : this.deps.runtimeConfig.systemPrompt?.trim(),
-      ghostRosterPrompt.trim(),
-      reviewMode ? undefined : opts.botProfileContextPrompt?.trim(),
-      makerMemoryPromptEnabled && !opts.makerMemoryScopeKey?.startsWith('bot:')
-        ? MAKER_MEMORY_RULES
-        : undefined,
-      makerMemoryIndex.trim(),
-      reviewMode ? undefined : opts.botUserProfilePrompt?.trim(),
-      reviewMode || opts.botRuntimeProfile ? undefined : opts.userPrompt?.trim(),
-      piExtraDirsPrompt(mutableExtraDirs, mutableWritableDirs),
-    ].filter((s): s is string => !!s && s.length > 0);
+    const promptSourceEntries: Array<[string, string | undefined]> = [
+      ['delivery', reviewMode ? undefined : this.deps.runtimeConfig.answerDeliveryPrompt?.trim()],
+      ['profile', reviewMode ? undefined : opts.botProfilePrompt?.trim()],
+      ['host', opts.botRuntimeProfile ? undefined : this.deps.runtimeConfig.systemPrompt?.trim()],
+      ['plugins', ghostRosterPrompt.trim()],
+      ['profile', reviewMode ? undefined : opts.botProfileContextPrompt?.trim()],
+      ['memoryRules', makerMemoryPromptEnabled && !opts.makerMemoryScopeKey?.startsWith('bot:')
+        ? MAKER_MEMORY_RULES : undefined],
+      ['memoryIndex', makerMemoryIndex.trim()],
+      ['user', reviewMode ? undefined : opts.botUserProfilePrompt?.trim()],
+      ['user', reviewMode || opts.botRuntimeProfile ? undefined : opts.userPrompt?.trim()],
+      ['directories', piExtraDirsPrompt(mutableExtraDirs, mutableWritableDirs)],
+    ];
+    const promptSources: PiPromptSource[] = promptSourceEntries.flatMap(([source, text]) =>
+      text ? [{ source, text }] : []);
+    const appendSections = promptSources.map(({ text }) => text);
     const appendSystemPrompt = appendSections.join('\n\n');
 
     // 远端会话先 resolve 远端 pi 二进制路径(probe;plan-mode 扩展路径 / subagent
@@ -4074,7 +4078,8 @@ export class PiAgent extends BaseAgent {
     try {
       const managedSkillGrants = snapshotManagedSkillGrants(opts.botRuntimeProfile?.skillPolicy);
       // 受邀者不带本机安装的托管技能(属于本机用户与其组织)。
-      const managedSkills = opts.remoteHostId || reviewMode || hostedGuest || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : await this.deps.getManagedSkills?.() ?? [];
+      // 任务所在电脑提供了托管技能时，它们已作为项目技能放在影子目录，本机的不再加载。
+      const managedSkills = opts.remoteHostId || reviewMode || hostedGuest || hosted?.controllerManagedSkills || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : await this.deps.getManagedSkills?.() ?? [];
       const managedDisabledPaths = snapshotDisabledSkillLaunch(opts.remoteHostId || reviewMode || hostedGuest ? [] : this.deps.getDisabledSkillPaths?.() ?? []);
       const managedSourceIdentities = new Set(managedSkills.flatMap((skill) =>
         skill.path ? [canonicalSkillPath(skill.path)] : []));
@@ -5788,10 +5793,9 @@ export class PiAgent extends BaseAgent {
             proc.send({ type: 'extension_ui_response', id: event.id, value: JSON.stringify(receipt ?? {}) });
             return;
           }
-          // Native retries remain within one agent_start/settled lifecycle.
-          // A new start also recovers diagnostics if the previous turn omitted
-          // settled (abort/retry exhaustion), without changing turn execution.
-          if (event.type === 'agent_start') {
+          // Native restarts inside a product turn retain its timing as well as usage.
+          if (event.type === 'agent_start' && (!ctx.isStreaming || ctx.turnSettled
+              || ctx.terminalAssistantErrorEmitted || ctx.pendingHostTurnStartToken !== null)) {
             providerRequestObservedAt = undefined;
             providerTurnObservedAt = undefined;
             providerFirstOutputLogged = false;
@@ -6031,13 +6035,15 @@ export class PiAgent extends BaseAgent {
           // agent_start. Its predecessor's retry error is not its terminal.
           const pendingNewTurn = !ctx.isStreaming && ctx.pendingHostTurnStartToken !== null;
           if (!closed && (pendingNewTurn || (ctx.isStreaming && !ctx.terminalAssistantErrorEmitted))) {
+            const usage = pendingNewTurn ? undefined : piTurnUsageOf(ctx);
             queue.push(isCurrentTurnHostAbortRequested(ctx, true) ? {
-              type: 'done', data: { status: 'cancelled' }, source: 'pi',
+              type: 'done', data: { status: 'cancelled', usage }, source: 'pi',
             } : {
               type: 'error',
               data: {
                 message: `pi RPC disconnected (${reason}); tool outcome is unknown`,
                 reason: 'pi-rpc-disconnected', isTerminal: true,
+                usage,
               },
               source: 'pi',
             });
@@ -6055,6 +6061,7 @@ export class PiAgent extends BaseAgent {
         },
         onExit: ({ code, signal }) => {
           const hostAbortRequested = isCurrentTurnHostAbortRequested(ctx, true);
+          const usage = ctx.pendingHostTurnStartToken === null ? piTurnUsageOf(ctx) : undefined;
           piProcessExited = true;
           clearPiSubagentRefreshTimer();
           void deferProxyDisposalForDetachedRuns();
@@ -6070,13 +6077,14 @@ export class PiAgent extends BaseAgent {
             // 非用户 close 的进程死亡:terminal error + 收尾,避免 UI 永久 running。
             if (!rpcDisconnected) queue.push(hostAbortRequested ? {
               type: 'done',
-              data: { status: 'cancelled' },
+              data: { status: 'cancelled', usage },
               source: 'pi',
             } : {
               type: 'error',
               data: {
                 message: `pi process exited unexpectedly (code=${code}, signal=${signal})`,
                 isTerminal: true,
+                usage,
               },
               source: 'pi',
             });
@@ -7833,7 +7841,13 @@ export class PiAgent extends BaseAgent {
           if (sendOpts?.retryTranscriptUserEntryId && !ctx.isStreaming) {
             await runExclusivePiRpc(async () => {
               const before = await proc.request({ type: 'get_tree' });
-              if (!before.success) throw new TurnDispatchRejectedError('Pi retry history unavailable');
+              if (!before.success) {
+                throw new TurnDispatchRejectedError(
+                  before.error === PI_RPC_OVERSIZED_FRAME_ERROR
+                    ? `Pi retry history unavailable: ${PI_RPC_OVERSIZED_FRAME_ERROR}`
+                    : 'Pi retry history unavailable',
+                );
+              }
               const branch = piRetryBranch(before.data, sendOpts.retryTranscriptUserEntryId!);
               if (!branch) {
                 if (expectedCompat) throw new TurnDispatchRejectedError('Pi cache recovery branch is not replayable');
@@ -7845,6 +7859,9 @@ export class PiAgent extends BaseAgent {
               const payload = encodeURIComponent(JSON.stringify({ entryId: sendOpts.retryTranscriptUserEntryId }));
               const switched = await proc.request({ type: 'prompt', message: `/cindy-branch-switch ${payload}` });
               const after = await proc.request({ type: 'get_tree' });
+              if (!after.success && after.error === PI_RPC_OVERSIZED_FRAME_ERROR) {
+                throw new TurnDispatchRejectedError(`Pi retry history unavailable: ${PI_RPC_OVERSIZED_FRAME_ERROR}`);
+              }
               if (!switched.success || !after.success || normalizePiSessionTree(after.data).leafId !== branch.parentId) {
                 throw new TurnDispatchRejectedError('Pi retry branch navigation was not confirmed');
               }
@@ -7856,7 +7873,7 @@ export class PiAgent extends BaseAgent {
                   const result = await requestPiCompact();
                   rejectIfCancelled(sendOpts, 'send');
                   if (result.noop) {
-                    throw new Error('Pi cannot compact the request rejected with HTTP 413');
+                    throw new Error('Pi cannot compact the request rejected with a body size limit');
                   }
                 } catch (error) {
                   rejectIfCancelled(sendOpts, 'send');
@@ -8360,6 +8377,10 @@ export class PiAgent extends BaseAgent {
         };
       },
 
+      getPendingTurnUsage() {
+        return ctx.turnGeneration > 0 && ctx.pendingHostTurnStartToken === null ? piTurnUsageOf(ctx) : undefined;
+      },
+
       setInteractionResolver(resolver: InteractionResolver): void {
         interactionResolver = resolver;
         // A new surface is listening: every approval we parked because nobody
@@ -8717,8 +8738,21 @@ export class PiAgent extends BaseAgent {
         const maxTokens = ctx.workingContextWindow && ctx.workingContextWindow > 0
           ? Math.min(ctx.workingContextWindow, nativeCapacity) : nativeCapacity;
         const percentage = maxTokens > 0 ? Math.min(100, (totalTokens / maxTokens) * 100) : 0;
+        // Optional, read-only and on demand. Native totals remain available on older
+        // runtimes and if a large transcript or an RPC timeout prevents diagnostics.
+        let textEstimate;
+        try {
+          const snapshot = await proc.request({ type: 'get_messages' }, { timeoutMs: 5_000 });
+          if (snapshot.success) {
+            textEstimate = estimatePiContext(
+              (snapshot.data as { messages?: unknown } | undefined)?.messages, promptSources,
+            );
+          }
+        } catch { /* Native totals do not depend on diagnostic availability. */ }
         return {
-          categories: [{ name: 'Messages', tokens: totalTokens, color: '#8b8b8b' }],
+          ...(textEstimate ? { textEstimate } : {}),
+          // Pi reports a whole-context total, not a measured Messages category.
+          categories: [],
           totalTokens,
           maxTokens,
           // Context cards and shared summaries use rawMaxTokens as their denominator.

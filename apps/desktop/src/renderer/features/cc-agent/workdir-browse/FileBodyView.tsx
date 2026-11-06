@@ -765,10 +765,13 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
           : null;
     return (
       <div
-        className="flex h-full w-full items-center justify-center px-8 text-center text-13 text-[var(--cmd-palette-item-meta)]"
+        className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-y-auto p-4 text-center text-13 text-[var(--cmd-palette-item-meta)]"
         title={content.message}
       >
-        {friendly ?? t('ccAgent.workdirBrowse.fileBody.readFailed', { message: content.message })}
+        {/* Auto margins center short errors without scrolling the start of tall errors out of reach. */}
+        <div className="my-auto w-full shrink-0 select-text [overflow-wrap:anywhere]">
+          {friendly ?? t('ccAgent.workdirBrowse.fileBody.readFailed', { message: content.message })}
+        </div>
       </div>
     );
   }
@@ -1333,7 +1336,7 @@ function CachedFileBody({
             </>
           )}
         </div>
-        <OpenInSystemActions absPath={cachePath} folderPath={cacheDir} className="shrink-0" />
+        <OpenInSystemActions absPath={cachePath} className="shrink-0" />
       </div>
     );
   }

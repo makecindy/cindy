@@ -8,6 +8,7 @@
  *   3. 那台的目录读不到时置灰列出;目录里已没有这个模型时不显示,收藏保留;
  *   4. 被控电脑上的任务:收藏读写被控电脑那一份(经设备互联)。
  */
+import type { ModelSelectorContentBaseProps } from '../components/new-chat/ModelSelector';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -49,6 +50,17 @@ vi.mock('react-i18next', async (importOriginal) => ({
 }));
 
 vi.mock('@/lib/scrollbarAutoHide', () => ({ flashScrollbar: vi.fn() }));
+const pluginLocations = vi.hoisted(() => ({ devices: [] as { deviceId: string; name: string }[] }));
+vi.mock('@/hooks/useModelRouteDevices', () => ({
+  useModelRouteDevices: ({ leadAgentDeviceId }: { leadAgentDeviceId?: string | null }) => ({
+    devices: pluginLocations.devices,
+    leadAgentDeviceId: leadAgentDeviceId ?? null,
+  }),
+}));
+vi.mock('@/hooks/useAvailableAgents', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/useAvailableAgents')>()),
+  useModelPickerAgents: () => ['claude-code'],
+}));
 
 vi.mock('@/hooks/useAgentCapabilities', () => ({
   evictDeviceCapabilities: vi.fn(),
@@ -148,6 +160,7 @@ vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({
 }));
 
 import { ModelSelectorContent } from '@/components/new-chat/ModelSelector';
+import { PluginModelPickerDialog } from '@/cindy-brain/PluginModelPickerHost';
 import { __resetForTest as resetEnginePrefs } from '@/state/modelEnginePrefs';
 import {
   __resetForTest as resetFavorites,
@@ -216,7 +229,7 @@ const rowOf = (scope: HTMLElement, name: string) =>
 
 function renderPanel(
   remoteAgent: Partial<React.ComponentProps<typeof ModelSelectorContent>['remoteAgent']> = {},
-  props: Partial<React.ComponentProps<typeof ModelSelectorContent>> = {},
+  props: Partial<ModelSelectorContentBaseProps> = {},
 ) {
   const onUnifiedSelect = vi.fn(async () => true);
   const onRelocate = vi.fn(async () => true);
@@ -397,6 +410,7 @@ describe('被控电脑上的任务:收藏读写被控电脑那一份', () => {
     ];
     render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'b-model',
         effort: 'high',
         onModelChange: vi.fn(),
@@ -410,6 +424,55 @@ describe('被控电脑上的任务:收藏读写被控电脑那一份', () => {
     await act(async () => {});
     expect(invoke).toHaveBeenCalledWith('device-b', MODEL_FAVORITES_GET, []);
     expect(within(favoritesGroup()).getByText('B Model')).toBeTruthy();
+  });
+});
+
+// PR #8460 / unit: request-local favorites previously bypassed source projections.
+// Ordinary persisted favorites did not cover that branch. Mount the real plugin dialog,
+// star a remote model, revisit an aggregate view and confirm its execution location.
+describe('插件临时收藏保留执行来源', () => {
+  it.each([
+    { source: 'device', rail: 'all', namesake: true },
+    { source: 'device', rail: 'favorites', namesake: false },
+    { source: 'share', rail: 'all', namesake: true },
+    { source: 'share', rail: 'favorites', namesake: false },
+  ])('$source / $rail / local namesake=$namesake', async ({ source, rail, namesake }) => {
+    setDataOwnerGeneration('recipient', 1);
+    setModelFavoritesOwner('recipient');
+    const share = {
+      shareId: 'temporary', memberId: 'member-temporary', providerId: 'a-local', providerLabel: 'A Local',
+      hostDeviceId: 'host', deviceName: 'Host', status: 'active' as const, hostOnline: true, hostCapable: true,
+      owner: { displayName: 'Shared', avatarUrl: null, region: 'global' as const },
+    };
+    reconcileProviderShareFavorites({
+      received: source === 'share' ? [share] : [], confirmedRegions: ['global'],
+      ownerStamp: { dataOwnerId: 'recipient', ownerGeneration: 1 },
+    });
+    const deviceId = source === 'share' ? 'share:temporary' : 'device-temporary';
+    const modelId = namesake ? 'a-model' : 'remote-only';
+    pluginLocations.devices = [{ deviceId, name: 'Temporary source' }];
+    catalogs.byDevice[deviceId] = [{
+      ...(catalogs.local[0] as object), remoteInvocationEnabled: true,
+      models: { 'claude-code': [{ id: modelId, name: 'Temporary Remote Model', efforts: ['low', 'high'], defaultEffort: 'high' }] },
+    }];
+    const baseline = listModelFavorites();
+    const onAnswer = vi.fn(async () => ({ handled: true, accepted: true }));
+    const { unmount } = render(<PluginModelPickerDialog request={{
+      requestId: 'temporary-favorite', ghostId: 'plugin', ghostName: 'Plugin', allowRemote: true,
+      expiresAt: Date.now() + 90_000,
+      initial: { agentKind: 'cc', providerId: 'a-local', model: 'a-model', effort: 'high', fastMode: false },
+    }} onAnswer={onAnswer} />);
+    await act(async () => fireEvent.click(document.querySelector(`[data-rail-item="remote:${deviceId}:a-local"]`)!));
+    await act(async () => fireEvent.click(within(rowOf(list(), 'Temporary Remote Model')).getByRole('button', { name: '收藏' })));
+    await act(async () => fireEvent.click(document.querySelector(`[data-rail-item="${rail}"]`)!));
+    await act(async () => fireEvent.click(rowOf(favoritesGroup(), 'Temporary Remote Model')));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.modelPicker.useConfiguration' })));
+    expect(onAnswer).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      agentDeviceId: deviceId, providerId: 'a-local', model: modelId, agentKind: 'cc',
+    }));
+    unmount();
+    expect(listModelFavorites()).toEqual(baseline);
+    expect(invoke.mock.calls.some(([, channel]) => channel === MODEL_FAVORITES_APPLY)).toBe(false);
   });
 });
 
@@ -583,7 +646,7 @@ describe('收藏 / 全部聚合来源，供应商只筛自己的收藏', () => {
   });
 });
 
-describe('Cindy AI(xd)来源行：只有本机自己的 Cindy AI 保留简介(#6110)', () => {
+describe('Cindy AI(xd)第二行：保留分享与电脑来源，原简介行显示供应商', () => {
   const DESCRIPTION = '用于内容写作、编程与问题分析。';
   /** 分享者真实电脑名：界面任何位置都不能出现(provider-sharing.md §6)。 */
   const HOST_DEVICE_NAME = 'Magi-Secret-MacBook-Pro';
@@ -608,9 +671,12 @@ describe('Cindy AI(xd)来源行：只有本机自己的 Cindy AI 保留简介(#6
   const sourceOf = (row: HTMLElement) => row.querySelector('[data-model-source-details]')?.textContent ?? null;
   const rowsOf = (scope: HTMLElement, name: string) =>
     within(scope).getAllByText(name).map((node) => node.closest('[data-unified-anchor]') as HTMLElement);
-  const expectDescription = (row: HTMLElement) => {
+  const expectSupplier = (row: HTMLElement) => {
     expect(sourceOf(row)).toBeNull();
-    expect(within(row).getByText(DESCRIPTION)).toBeTruthy();
+    const supplier = within(row).getByText('Cindy AI');
+    expect(supplier.getAttribute('title')).toBe('Cindy AI');
+    expect(supplier.className).toContain('truncate');
+    expect(within(row).queryByText(DESCRIPTION)).toBeNull();
   };
   const expectSource = (row: HTMLElement, label: string) => {
     expect(sourceOf(row)).toBe(label);
@@ -649,24 +715,24 @@ describe('Cindy AI(xd)来源行：只有本机自己的 Cindy AI 保留简介(#6
     Object.assign(catalogs.byDevice, saved.byDevice);
   });
 
-  it.each(['favorites', 'all'])('「%s」：分享来的与其他电脑上的 Cindy AI 显示来源，本机 Cindy AI 保留简介', async (rail) => {
+  it.each(['favorites', 'all'])('「%s」：分享来的与其他电脑上的 Cindy AI 显示来源，本机 Cindy AI 原描述行显示供应商', async (rail) => {
     renderPanel({ devices: xdDevices });
     await clickRail(rail);
     expectSource(rowOf(favoritesGroup(), SHARED), SHARED_LABEL);
     expectSource(rowOf(favoritesGroup(), REMOTE), REMOTE_LABEL);
-    // 本机 Cindy AI：收藏区与「全部」里的供应商分组都只显示简介。
-    for (const row of rowsOf(list(), LOCAL)) expectDescription(row);
+    // 本机 Cindy AI：收藏区与「全部」均复用原描述容器显示供应商。
+    for (const row of rowsOf(list(), LOCAL)) expectSupplier(row);
     expect(document.body.textContent).not.toContain(HOST_DEVICE_NAME);
   });
 
-  it('单供应商分栏保持现有简介写法', async () => {
+  it('单供应商分栏复用原描述行显示供应商', async () => {
     renderPanel({ devices: xdDevices });
     await clickRail('remote:share:magi:xd');
-    for (const row of rowsOf(list(), SHARED)) expectDescription(row);
+    for (const row of rowsOf(list(), SHARED)) expectSupplier(row);
     await clickRail('remote:device-c:xd');
-    for (const row of rowsOf(list(), REMOTE)) expectDescription(row);
+    for (const row of rowsOf(list(), REMOTE)) expectSupplier(row);
     await clickRail('provider:xd');
-    for (const row of rowsOf(list(), LOCAL)) expectDescription(row);
+    for (const row of rowsOf(list(), LOCAL)) expectSupplier(row);
   });
 
   it('定宽测量行与可见行同一判断', async () => {
@@ -676,7 +742,7 @@ describe('Cindy AI(xd)来源行：只有本机自己的 Cindy AI 保留简介(#6
     expect(sizer).toBeTruthy();
     for (const row of rowsOf(sizer, SHARED)) expectSource(row, SHARED_LABEL);
     for (const row of rowsOf(sizer, REMOTE)) expectSource(row, REMOTE_LABEL);
-    for (const row of rowsOf(sizer, LOCAL)) expectDescription(row);
+    for (const row of rowsOf(sizer, LOCAL)) expectSupplier(row);
     expect(sizer.textContent).not.toContain(HOST_DEVICE_NAME);
   });
 
@@ -684,7 +750,7 @@ describe('Cindy AI(xd)来源行：只有本机自己的 Cindy AI 保留简介(#6
     renderPanel({ devices: xdDevices });
     const sizer = () => document.querySelector('[data-width-sizer]') as HTMLElement;
     await clickRail('remote:share:magi:xd');
-    for (const row of rowsOf(list(), SHARED)) expectDescription(row);
+    for (const row of rowsOf(list(), SHARED)) expectSupplier(row);
     for (const row of rowsOf(sizer(), SHARED)) expectSource(row, SHARED_LABEL);
     await clickRail('remote:device-c:xd');
     for (const row of rowsOf(sizer(), REMOTE)) expectSource(row, REMOTE_LABEL);
@@ -694,6 +760,7 @@ describe('Cindy AI(xd)来源行：只有本机自己的 Cindy AI 保留简介(#6
   it('直接打开分享的目录(不经远程 Agent)时，分享的 Cindy AI 同样带来源', async () => {
     render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'qwen3.8-flash',
         effort: 'high',
         onModelChange: vi.fn(),
@@ -710,10 +777,11 @@ describe('Cindy AI(xd)来源行：只有本机自己的 Cindy AI 保留简介(#6
     expect(document.body.textContent).not.toContain(HOST_DEVICE_NAME);
   });
 
-  it('远程控制被控电脑时，那台自己的 Cindy AI 仍按任务所在电脑的目录显示简介', async () => {
+  it('远程控制被控电脑时，那台自己的 Cindy AI 仍按任务所在电脑的目录显示供应商', async () => {
     catalogs.byDevice['device-b'] = [xdProvider([['glm-5.3-flash', LOCAL]])];
     render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'glm-5.3-flash',
         effort: 'high',
         onModelChange: vi.fn(),
@@ -725,6 +793,6 @@ describe('Cindy AI(xd)来源行：只有本机自己的 Cindy AI 保留简介(#6
       }),
     );
     await act(async () => {});
-    for (const row of rowsOf(list(), LOCAL)) expectDescription(row);
+    for (const row of rowsOf(list(), LOCAL)) expectSupplier(row);
   });
 });

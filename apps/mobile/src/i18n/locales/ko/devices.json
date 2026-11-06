@@ -703,7 +703,15 @@
       "running": "작업 중",
       "done": "완료",
       "unread": "읽지 않음"
-    }
+    },
+    "viewMr": "MR 보기",
+    "viewPrMr": "PR 보기",
+    "mrCount": "MR {{count}}개",
+    "prMrCount": "PR {{count}}개",
+    "mrCount_one": "MR {{count}}개",
+    "prMrCount_one": "PR {{count}}개",
+    "mrCount_other": "MR {{count}}개",
+    "prMrCount_other": "PR {{count}}개"
   },
   "companionProfile": {
     "avatar": "아바타",

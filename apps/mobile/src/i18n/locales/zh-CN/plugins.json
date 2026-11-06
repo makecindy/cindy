@@ -130,6 +130,9 @@
   "detail": {
     "useItIn": "使用方式",
     "openPlugin": "打开插件",
+    "readme": "介绍",
+    "readmeLoadFailed": "无法加载介绍，请重试。",
+    "readmeUnavailable": "暂无介绍。",
     "computerSettings": "请在电脑端 Cindy 的「插件」中打开此插件详情，完成配置。",
     "runtimeIssue": "插件上次运行异常，可重新打开或在任务中重试。",
     "runtimeFused": "插件多次停止。关闭后重新启用，再试一次。",
@@ -284,6 +287,8 @@
       "workspaceDetail": "它发起请求时，由你亲手选择文件夹，或在确认卡上看到完整路径后再决定；它正在处理你发起的调用时，当前任务工作目录内的子文件夹可直接使用，不再单独确认。文件夹已有任务时直接复用，不重复创建。创建的只是空任务，不会自动开始运行。",
       "sessionContext": "可获知当前任务正在使用的项目文件夹位置",
       "sessionContextDetail": "只在它为当前任务干活时告知位置信息(任务编号与项目文件夹路径)，不包含文件内容，也不因此获得文件访问权。",
+      "liveScreen": "在手机上查看与操作设备画面",
+      "liveScreenDetail": "通过远程桌面，你的手机可以查看它提供的设备画面（例如模拟器）并直接触控、按键和输入文字。只在你从手机打开时连接，不会打开电脑的其他内容。",
       "preview": "可在右侧栏浏览器中打开以下网站的预览页面",
       "previewDetail": "只能打开下方列出的网站；每次打开都会提示是哪个插件打开的。",
       "nodeChildSpawn": "Node 程序可请宿主再启动包内申报过的子进程",
@@ -341,5 +346,23 @@
     "purpose": "确认交互页面权限",
     "updateHost": "请更新执行电脑上的 Cindy，再在此确认。文字工具仍可使用。",
     "failed": "交互页面未能启用，请检查连接和插件版本后重试。"
+  },
+  "openLinkHost": "打开 {{host}}",
+  "prStatus": {
+    "checksFailed": "失败",
+    "checksPending": "进行中",
+    "checksPassed": "通过",
+    "checksSkipped": "跳过或中立",
+    "threadsOpen": "{{count}} 条未解决的 review 评论",
+    "threadsNone": "没有待处理意见",
+    "mergeReady": "可以合并",
+    "mergeConflict": "有冲突",
+    "mergeBehind": "需要同步目标分支",
+    "mergeApproval": "等待审批",
+    "mergeChanges": "需要修改",
+    "mergeWaiting": "等待合并",
+    "merged": "已合并",
+    "closed": "已关闭",
+    "draft": "草稿"
   }
 }

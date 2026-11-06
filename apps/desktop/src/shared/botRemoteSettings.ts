@@ -156,6 +156,7 @@ export const BOT_SETTINGS_CAPABILITY_FIELDS = [
   'model',
   'modelOverride',
   'providerId',
+  'agentDeviceId',
   'effort',
   'fastMode',
   'harness',

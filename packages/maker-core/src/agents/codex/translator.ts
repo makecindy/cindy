@@ -103,6 +103,8 @@ export interface CodexRuntimeState {
   generationHeartbeatTimer: ReturnType<typeof setInterval> | null;
   /** item.id → 已接受且可安全追加到 UI 的原始全文。 */
   itemRawText: Map<string, string>;
+  /** Parsed raw prefix and the unresolved tail; never reparse generated Markdown as raw. */
+  itemTextProgress: Map<string, { rawOffset: number; pending: string; fullScan: boolean }>;
   /** item.id → 专用 agentMessage delta 已对齐到的原始全文游标（可由快照补齐漏帧）。 */
   itemDeltaText: Map<string, string>;
   /** item.id → item/started 或 item/updated 最新原始全文快照。 */
@@ -150,6 +152,7 @@ export function newCodexRuntimeState(): CodexRuntimeState {
     generationHeartbeatAt: null,
     generationHeartbeatTimer: null,
     itemRawText: new Map(),
+    itemTextProgress: new Map(),
     itemDeltaText: new Map(),
     itemSnapshotText: new Map(),
     itemMessagePhase: new Map(),
@@ -464,7 +467,28 @@ export function translateItemNotification(
     SAMPLING_ACCEPTED_TOOL_TYPES.has(itemType)) {
     // Tool results prove earlier generation was accepted. Its commentary and
     // side effects must not be invalidated by a later sampling request failing.
-    ctx.rt.samplingSegments.delete(JSON.stringify([notification.threadId, notification.turnId]));
+    const key = JSON.stringify([notification.threadId, notification.turnId]);
+    const accepted = ctx.rt.samplingSegments.get(key);
+    if (accepted?.itemIds.size) {
+      // Extend an existing result, rather than sending an extra status frame:
+      // older clients interpret a status without isRunning as an idle boundary.
+      const target = queue;
+      const agentMessageIds = [...accepted.itemIds];
+      let attached = false;
+      queue = {
+        ...target,
+        get pending() { return target.pending; },
+        push(event) {
+          if (!attached && (event.type === 'tool_result_full' || event.type === 'tool_result')) {
+            attached = true;
+            return target.push({ ...event, data: { ...(event.data as Record<string, unknown>),
+              assistantSamplingAccepted: { agentMessageIds } } });
+          }
+          return target.push(event);
+        },
+      };
+    }
+    ctx.rt.samplingSegments.delete(key);
   }
   noteCodexGenerationBoundary(
     ctx.rt,
@@ -1165,26 +1189,92 @@ export function stableCitationBoundary(text: string): number {
   return Math.min(stableInternalWebCitationBoundary(text), stopTokenEnd);
 }
 
+function hasOverlappingCitationSyntax(text: string): boolean {
+  if (!text.includes('\uE200')) return false;
+  let from = 0;
+  for (;;) {
+    const open = text.indexOf(CODEX_FILE_CITATION_OPEN, from);
+    if (open === -1) return false;
+    const close = findCitationClose(text, open + CODEX_FILE_CITATION_OPEN.length);
+    const end = close < 0 ? text.length : close + 1;
+    const web = text.indexOf('\uE200', from);
+    if (web !== -1 && web < end) {
+      // A web opener inside file attributes, or a file opener inside an
+      // opaque/partial web marker, makes the two transforms non-local.
+      const webClose = text.indexOf('\uE201', web);
+      if (web >= open || webClose === -1 || webClose >= open) return true;
+      from = webClose + 1;
+    } else {
+      from = end;
+    }
+  }
+}
+
 function emitAgentMessageProgress(
   itemId: string,
   rawText: string,
   queue: AsyncQueue<AgentEvent>,
   ctx: CodexTranslateContext,
+  appendedText?: string,
 ): void {
   const previousRawText = ctx.rt.itemRawText.get(itemId) ?? '';
   // AgentEvent.text 是只能追加的协议。快照和专用 delta 出现乱序或
   // 分叉时不能把另一个版本的尾巴拼进已发正文；completed 的全文会做终态校准。
-  if (!rawText.startsWith(previousRawText)) return;
+  if (appendedText === undefined && !rawText.startsWith(previousRawText)) return;
 
   // itemTextLen 记录的是**归一化后已发出**的长度:citation 替换会改变文本长度,
   // diff 必须在归一化空间里做,不能混用原文长度。
   const prevLen = ctx.rt.itemTextLen.get(itemId) ?? 0;
-  const emitted = stripInternalWebCitations(
-    normalizeCodexFileCitations(rawText.slice(0, stableCitationBoundary(rawText))),
-  );
-  const delta = emitted.slice(prevLen);
+  const progress = ctx.rt.itemTextProgress.get(itemId)
+    ?? { rawOffset: 0, pending: '', fullScan: false };
+  progress.pending += appendedText ?? rawText.slice(previousRawText.length);
+
+  // File attributes and opaque web payloads may contain each other's syntax.
+  // The legacy transforms can then rewrite an earlier prefix, so keep their
+  // full-text semantics for these unusual mixed tails (including partial web opens).
+  if (!progress.fullScan && hasOverlappingCitationSyntax(progress.pending)) {
+    progress.fullScan = true;
+  }
+  // A committed prefix already contains real prose. The sentinel carries
+  // that context through BOTH raw and normalized stop-token checks, so a
+  // later literal <|eos|> is not mistaken for a standalone control message.
+  const prefix = progress.rawOffset > 0 ? 'x' : '';
+  let end = 0;
+  let normalized = '';
+  if (!progress.fullScan) {
+    const pending = prefix + progress.pending;
+    end = stableCitationBoundary(pending);
+    normalized = normalizeCodexFileCitations(pending.slice(0, end));
+    // Cutting at a partial file opener can expose a partial web opener BEFORE
+    // that cut. Do not commit raw text that the subsequent web transform holds:
+    // deleting a path-less citation later may join it into a complete web marker.
+    if (stableInternalWebCitationBoundary(normalized) < normalized.length) progress.fullScan = true;
+  }
+  let delta: string;
+  let emittedLength: number;
+  if (progress.fullScan) {
+    const emitted = stripInternalWebCitations(
+      normalizeCodexFileCitations(rawText.slice(0, stableCitationBoundary(rawText))),
+    );
+    delta = emitted.slice(prevLen);
+    emittedLength = emitted.length;
+    progress.pending = '';
+  } else {
+    const emitted = stripInternalWebCitations(normalized).slice(prefix.length);
+    delta = prefix ? emitted : emitted.slice(prevLen);
+    emittedLength = prefix ? prevLen + emitted.length : emitted.length;
+    // Before real prose appears, keep the complete raw prefix: stripping a
+    // citation can expose a leading stop-token run or whitespace, and later
+    // prose must still be able to release that original text.
+    if (prefix || (emitted.length > 0 && stableStandaloneModelStopTokenBoundary(emitted) > 0)) {
+      const consumed = end - prefix.length;
+      progress.rawOffset += consumed;
+      progress.pending = progress.pending.slice(consumed);
+    }
+  }
+  ctx.rt.itemTextProgress.set(itemId, progress);
   ctx.rt.itemRawText.set(itemId, rawText);
-  ctx.rt.itemTextLen.set(itemId, emitted.length);
+  ctx.rt.itemTextLen.set(itemId, emittedLength);
   if (delta.length === 0) return;
   queue.push({
     type: 'text',
@@ -1237,8 +1327,18 @@ export function translateAgentMessageDelta(
   samplingSegment(ctx.rt, params.threadId, params.turnId).itemIds.add(params.itemId);
   const currentText = ctx.rt.itemRawText.get(params.itemId) ?? '';
   const previousDeltaText = ctx.rt.itemDeltaText.get(params.itemId) ?? '';
+  const snapshotLength = ctx.rt.itemSnapshotText.get(params.itemId)?.length ?? 0;
+  if (currentText === previousDeltaText && snapshotLength <= currentText.length) {
+    // Proven append on the dedicated stream, including an empty started
+    // snapshot, or a snapshot that cannot be ahead of it. Avoid scanning/flattening
+    // the prefix we constructed ourselves. Ahead snapshots retain reconciliation.
+    const rawText = previousDeltaText + params.delta;
+    ctx.rt.itemDeltaText.set(params.itemId, rawText);
+    emitAgentMessageProgress(params.itemId, rawText, queue, ctx, params.delta);
+    return;
+  }
   let rawText: string;
-  if (currentText.startsWith(previousDeltaText) && currentText.length > previousDeltaText.length) {
+  if (currentText.length > previousDeltaText.length && currentText.startsWith(previousDeltaText)) {
     // 快照已经比 dedicated delta 游标超前：新 chunk 可能是延迟重放的补齐段，
     // 也可能是漏帧之后的真新文本。先消费与快照 gap 的重叠，再把剩余部分追加。
     const snapshotGap = currentText.slice(previousDeltaText.length);
@@ -1268,6 +1368,7 @@ function handleAgentMessage(
   if (phase === 'completed') {
     ctx.rt.itemTextLen.delete(item.id);
     ctx.rt.itemRawText.delete(item.id);
+    ctx.rt.itemTextProgress.delete(item.id);
     ctx.rt.itemDeltaText.delete(item.id);
     ctx.rt.itemSnapshotText.delete(item.id);
     ctx.rt.itemMessagePhase.delete(item.id);

@@ -1,4 +1,6 @@
 import { getPluginToolUi } from '@cindy/plugin-protocol';
+import { parseGhostNativeUi } from '@cindy/plugin-protocol';
+import { PLUGIN_UI_CAPABILITIES, PLUGIN_APPEARANCE_FIELDS, pluginUiPointAcceptsScope } from '@cindy/maker-shared';
 import { MCP_APPS_MAX_BYTES } from '../mcp-apps/protocol.js';
 import interactiveExampleManifest from '../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/static/ghost.json?raw';
 import interactiveExampleMain from '../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/static/main.js?raw';
@@ -54,6 +56,7 @@ import {
   decodeGhostManualMarkdown,
   ghostManualLogicalPathForEntry,
 } from './ghostManualValidation.js';
+import { checkGhostReadmeForPack } from './ghostReadme.js';
 import { validateGhostLocaleResourcesInDirectory } from './ghostLocaleFiles.js';
 import { GHOST_SIGNATURE_FILE } from './ghostSignature.js';
 import {
@@ -172,7 +175,7 @@ function shouldSkip(name: string): boolean {
 }
 
 export type ForgePackResult =
-  | { ok: true; cindyPath: string; manifest: GhostManifest; buf: Buffer }
+  | { ok: true; cindyPath: string; manifest: GhostManifest; buf: Buffer; warnings?: string[] }
   | {
       ok: false;
       errorCode:
@@ -187,6 +190,24 @@ export type ForgePackResult =
         | 'PERMISSION_DENIED';
       message: string;
     };
+
+function nativeUiWarnings(manifest: GhostManifest): string[] {
+  const ui = parseGhostNativeUi(manifest.ui);
+  if (!ui) return [];
+  if (ui.version !== 1) return [`ui.version: unsupported UI version ${ui.version}; original tools remain available`];
+  return [...(ui.appearance?.fields ?? []).flatMap((field, index) =>
+    PLUGIN_APPEARANCE_FIELDS.includes(field as typeof PLUGIN_APPEARANCE_FIELDS[number]) ? [] : [`ui.appearance.fields[${index}]: unsupported field ${field}`]),
+    ...(ui.contributions ?? []).flatMap((c, index) =>
+    !PLUGIN_UI_CAPABILITIES.points.includes(c.point)
+      ? [`ui.contributions[${index}].point (${c.id}): unsupported point ${c.point}`]
+      : !pluginUiPointAcceptsScope(c.point, c.scope)
+        ? [`ui.contributions[${index}].scope (${c.id}): ${c.scope} does not match ${c.point}`] : []),
+    ...(ui.commands ?? []).flatMap((command, index) => (command.points ?? []).flatMap(point =>
+      !['composer.tools', 'session.header.actions', 'message.actions', 'turn.footer'].includes(point)
+        ? [`ui.commands[${index}].points (${command.id}): unsupported point ${point}`]
+        : !pluginUiPointAcceptsScope(point, command.scope)
+          ? [`ui.commands[${index}].scope (${command.id}): ${command.scope} does not match ${point}`] : []))];
+}
 
 /** 对话制作插件时可直接生成的四种安全起步模板。 */
 export const FORGE_SCAFFOLD_TEMPLATES = [
@@ -273,7 +294,6 @@ function scaffoldManifest(input: ForgeScaffoldInput): Record<string, unknown> {
     version: '1.0.0',
     kind: 'chip',
     entry: 'main.js',
-    icon: 'assets/icon.png',
   };
   if (input.template === 'agent-action') {
     return {
@@ -540,14 +560,6 @@ readline.createInterface({ input: process.stdin }).on('line', function (line) {
 `;
 }
 
-/**
- * 占位图标(128×128 纯色 PNG,离线生成后内嵌)。让「有图标」成为骨架默认:
- * 不配 icon 的插件在面板和身份头里只有默认拼图占位符,作者往往到发布才发现。
- * 官方插件仓惯例图标放 assets/icon.png(见 FORGE_GUIDE §8.1),骨架直接对齐。
- */
-const SCAFFOLD_ICON_PNG_BASE64 =
-  'iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAABEElEQVR42u3SMREAIAwAsfpFAAsKOETgtCyYgGZ4A3+J1leqbmECAEYAIABuY259HAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJgEgAAQAAJAAAgAASAABIAAEAACQAAIAAEgAASAABAAAkAACAABIAAEgAAQAAJAAAgAASAABIAAEAACQAAIAAEgAASAABAAAkAACAABIAAEgAAQAAJAAAgAASAABIAAEAACQAAIAAEgAASAABAAAkAACAABIAAEgAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAmASAABAAAkAACAABIAAEgAAQAAJAAAgAASAABIAAEAACQADodQCqFQAAmACAynYAQtWXyojiIUQAAAAASUVORK5CYII=';
-
 /** 按模板产出相对路径到源码内容的完整映射。 */
 function scaffoldFiles(input: ForgeScaffoldInput): Record<string, string | Buffer> {
   const manifest = scaffoldManifest(input);
@@ -566,7 +578,6 @@ function scaffoldFiles(input: ForgeScaffoldInput): Record<string, string | Buffe
           : input.template === 'node-mcp'
             ? nodeMcpMainSource()
             : plainMainSource(),
-    'assets/icon.png': Buffer.from(SCAFFOLD_ICON_PNG_BASE64, 'base64'),
   };
   if (input.withUi) {
     const handler = interactiveExampleMain.replace('cindy.onHostMessage(handleInteractivePage);', '');
@@ -827,6 +838,7 @@ export async function scaffoldGhostDir(
     files: Object.keys(files).sort(),
     nextSteps: [
       '按需要修改 ghost.json、main.js 和 worker 源码。',
+      '图标尚未设置：请用户提供图片，或在用户同意后调用 Agent 图片能力生成插件图标；不要制作纯色占位图。',
       '调用 ghost_forge_pack 校验并生成 .cindy；打包本身不会安装插件。',
       'Node 模板不允许在安装或首次运行时执行 npm install、npx 或 postinstall。',
     ],
@@ -926,7 +938,7 @@ async function buildGhostPackage(
       // 无效清单先交给正式 validator，避免 overlay 把 null/数组等输入改造成
       // 另一种形状、掩盖原始 MANIFEST_INVALID。只有普通对象才写入快照。
       if (typeof manifestRaw === 'object' && manifestRaw !== null && !Array.isArray(manifestRaw)) {
-        // icon_source 是打包期 overlay：源码仍保留 scaffold 占位图，只有用户
+        // icon_source 是打包期 overlay：源码保留原图标或缺省状态，只有用户
         // 确认生成成功的这一包替换图标。清单快照也同步指向固定安全路径。
         manifestRaw = { ...manifestRaw, icon: FORGE_AI_ICON_PATH };
         // 采用紧凑 JSON，避免仅为 overlay 重排空白就把清单推过安装侧上限。
@@ -976,8 +988,14 @@ async function buildGhostPackage(
     }
 
     // 3) 清单声明的入口文件必须真实在场(打包期拦,别等装入后沙箱 404)。
+    const nativeUi = parseGhostNativeUi(manifest.ui);
     const uiFiles = new Set((getPluginToolUi(manifest)?.resources ?? []).map(resource => resource.file));
+    if (nativeUi?.version === 1) for (const view of nativeUi.tabViews ?? []) uiFiles.add(view.page);
+    if (nativeUi?.version === 1) for (const contribution of nativeUi.contributions ?? []) {
+      if (PLUGIN_UI_CAPABILITIES.points.includes(contribution.point) && contribution.page) uiFiles.add(contribution.page);
+    }
     const mustExist: string[] = [...uiFiles];
+    if (nativeUi?.version === 1) for (const resource of nativeUi.appearance?.resources ?? []) mustExist.push(resource.path);
     if (manifest.entry) mustExist.push(manifest.entry);
     if (manifest.node?.entry) {
       mustExist.push(manifest.node.entry, ...(manifest.node.entries ?? []));
@@ -1000,6 +1018,13 @@ async function buildGhostPackage(
       } catch {
         return { ok: false, errorCode: 'ENTRY_MISSING', message: `清单声明的文件不存在:${rel}` };
       }
+    }
+
+    // 3.4) 详细介绍:声明的 Markdown 与正文引用的包内图片在场且不超限,
+    // 与详情页读取同一套上限(读取侧超限只静默跳过,作者在这里得到明确原因)。
+    const readmeProblem = await checkGhostReadmeForPack(dir, manifest);
+    if (readmeProblem) {
+      return { ok: false, errorCode: 'MANIFEST_INVALID', message: readmeProblem };
     }
 
     // 3.5) skill 能力:SKILL.md frontmatter 与清单声明必须逐字一致。与装入侧
@@ -1532,7 +1557,8 @@ export async function packGhostDir(
   }
   // 作者目录里的副本只给人手动拿走。安装链路必须用内存里的 `buf` 直写
   // staging，绝不能从 cindyPath 回读——agent 能在确认前替换那份文件。
-  return { ok: true, cindyPath, manifest: built.manifest, buf: built.buf };
+  const warnings = nativeUiWarnings(built.manifest);
+  return { ok: true, cindyPath, manifest: built.manifest, buf: built.buf, ...(warnings.length ? { warnings } : {}) };
 }
 
 /**
@@ -1585,8 +1611,9 @@ export async function packGhostDirToFile(
       message: `写入打包产物失败:${err instanceof Error ? err.message : String(err)}`,
     };
   }
-  return { ok: true, cindyPath: destPath, manifest: built.manifest, buf: built.buf };
+  const warnings = nativeUiWarnings(built.manifest);
+  return { ok: true, cindyPath: destPath, manifest: built.manifest, buf: built.buf, ...(warnings.length ? { warnings } : {}) };
 }
 
 // Keep the existing tool/test export while the built-in Skill owns the documentation.
-export { FORGE_GUIDE } from './forgeGuide.js';
+export { FORGE_GUIDE, FORGE_PAGE_MANUAL } from './forgeGuide.js';
