@@ -18,6 +18,9 @@ import {
   type GhostOauthFlowResult,
 } from '../ghostOauthFlow.js';
 
+// 回归：品牌入口改名时，未传 brandName 的授权页正文和按钮必须一起跟随。
+vi.mock('@cindy/maker-shared/branding', () => ({ BRAND_NAME: 'ExampleApp' }));
+
 const BASE_CONFIG: GhostOauthClientConfig = {
   authorizeUrl: 'https://auth.example.com/authorize',
   tokenUrl: 'https://auth.example.com/token',
@@ -118,6 +121,7 @@ describe('startGhostOauthFlow', () => {
 
   it('happy path:PKCE + state 校验 + code 换 token', async () => {
     let capturedAuthorizeUrl = '';
+    let callbackHtml = '';
     const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const form = new URLSearchParams(String(init?.body ?? ''));
       // PKCE:verifier 的 S256 必须等于授权 URL 里的 challenge。
@@ -157,11 +161,17 @@ describe('startGhostOauthFlow', () => {
         return browserRedirect(url, (au) => ({
           code: 'code-abc',
           state: au.searchParams.get('state') ?? '',
-        }));
+        }), async (input, init) => {
+          const response = await fetch(input, init);
+          callbackHtml = await response.clone().text();
+          return response;
+        });
       },
     });
 
     expect(result.ok).toBe(true);
+    expect(callbackHtml).toContain('You can close this page and return to ExampleApp.');
+    expect(callbackHtml).toContain('>Return to ExampleApp</a>');
     if (result.ok) {
       expect(result.bundle.accessToken).toBe('at-1');
       expect(result.bundle.refreshToken).toBe('rt-1');
