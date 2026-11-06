@@ -200,6 +200,12 @@ function sanitizeSchema(
   const properties = sanitizeProperties(node.properties, defs, depth, refDepth, state);
   if (properties) out.properties = properties;
 
+  // A required property keeps its required entry even when its enum was
+  // dropped above (e.g. enum [""]): Gemini rejects "" unconditionally, so no
+  // valid enum exists to keep, but the property is still required — only the
+  // value constraint is gone, and "" stays expressible to the tool's own
+  // validation. Dropping required here would let the model omit the property
+  // entirely, which is a wider loss than the unconstrained value.
   if (properties && Array.isArray(node.required)) {
     const required = [...new Set(node.required.filter((item): item is string => (
       typeof item === "string" && Object.hasOwn(properties, item)

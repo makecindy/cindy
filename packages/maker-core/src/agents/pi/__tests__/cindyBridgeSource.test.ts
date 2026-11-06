@@ -464,6 +464,45 @@ function loadBashTimeoutHelpers(): {
   return factory();
 }
 
+// Extracts the bridge's before_provider_request handler (with the payload
+// shapers it closes over) and runs it against a fake pi. The Gemini
+// sanitizer slice is included only when present, so this loader also runs on
+// the pre-fix bridge — where the hook returns Gemini payloads untouched.
+function loadProviderRequestHook(): (event: any, ctx: any) => Promise<any> {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const payloadStart = source.indexOf('function astraResponsesPayload');
+  const fastStart = source.indexOf('async function nativeFastPayload');
+  const fastEnd = source.indexOf('\n}\n', fastStart) + 3;
+  const geminiStart = source.indexOf('function sanitizeGeminiToolPayload');
+  const geminiCode = geminiStart >= 0
+    ? source.slice(geminiStart, source.indexOf('\n}\n', geminiStart) + 3)
+    : '';
+  const hookEnd = source.indexOf('\n  const mcpGateway');
+  // The cache-recovery source interpolated into the template registers its
+  // own before_provider_request handler first; the bridge hook is the
+  // nearest registration before the mcpGateway setup that follows it.
+  const hookStart = source.lastIndexOf("  pi.on('before_provider_request'", hookEnd);
+  if (payloadStart < 0 || fastStart <= payloadStart || fastEnd <= fastStart || hookStart < 0 || hookEnd <= hookStart) {
+    throw new Error('provider request hook was not found in the generated bridge');
+  }
+  const handlers = new Map<string, (event: any, ctx: any) => any>();
+  const compiled = ts.transpileModule(
+    source.slice(payloadStart, fastStart)
+      + source.slice(fastStart, fastEnd)
+      + geminiCode
+      + source.slice(hookStart, hookEnd),
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  runInNewContext(compiled, {
+    pi: { on: (event: string, callback: (event: any, ctx: any) => any) => { handlers.set(event, callback); } },
+    process: { env: {} },
+    performance: { now: () => 0 },
+  });
+  const hook = handlers.get('before_provider_request');
+  if (!hook) throw new Error('before_provider_request handler was not registered');
+  return hook;
+}
+
 function loadQuestionTool(): { execute: (...args: any[]) => Promise<any> } {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const start = source.indexOf('function registerCindyQuestionTool');
@@ -2482,10 +2521,11 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
       const model = tool.parameters.properties.modelOverride.anyOf.find((schema: any) => schema.type === 'object');
       expect(model.required).toEqual(['agentKind', 'model']);
       expect(model.properties.fastMode.anyOf).toContainEqual({ type: 'string', enum: ['ultrafast'] });
-      // #8784: Gemini rejects empty enum values with 400, so the effort enum
-      // must not carry the '' unset sentinel; omitting effort leaves it
-      // unspecified ('' stays expressible via the MCP/Zod path).
-      expect(model.properties.effort.enum).not.toContain('');
+      // #8784: the '' effort sentinel stays in the shared schema so
+      // non-Gemini providers can express an explicit unset; Gemini-bound
+      // requests have '' stripped per request in before_provider_request
+      // (see the Gemini tool payload test below).
+      expect(model.properties.effort.enum).toContain('');
       const variants = tool.parameters.properties.triggers.items.anyOf;
       const interval = variants.find((item: any) => item.properties.kind.enum.includes('interval'));
       expect(interval.properties.intervalMs.minimum).toBe(60000);
@@ -2511,8 +2551,77 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
     expect(calls.at(-1)).toEqual({ method: 'tools/call', params: { name: 'call_tool', arguments: { name, args } }, signal: controller.signal });
   }
 
-  // #8784: Gemini rejects empty enum/const values with 400, so no tool schema
-  // registered for a Pi session may contain one, whatever the provider.
+  // #8784: '' is a meaningful explicit-unset sentinel for non-Gemini
+  // providers, so the shared registration keeps it (see the effort assertion
+  // above). The guarantee that '' never reaches Gemini is tested at the
+  // provider request hook below, the only point that knows the model — a
+  // registration-time sweep would forbid the sentinel outright.
+});
+
+it('strips empty-string enum values from Gemini-bound tool payloads at the provider request hook, and leaves other providers untouched', async () => {
+  // Test value (engineering-conventions §3.2):
+  // - Production entry: the bridge's before_provider_request handler; the
+  //   observable result is the Gemini wire payload (pi-ai params shape:
+  //   config.tools[].functionDeclarations[].parametersJsonSchema).
+  // - Bug/rule: #8784 (Gemini 400 on '' enums) + Codex P1/P2 on PR #8798 —
+  //   the shared registration must keep '' for non-Gemini providers while
+  //   Gemini-bound schemas drop it.
+  // - Coverage gap: no test invoked the hook; the old registration sweep
+  //   asserted the wrong layer (it forbade '' in the shared schema).
+  // - Minimal failing input: a Gemini payload whose routine_save effort enum
+  //   carries ''; a non-Gemini payload with the same schema.
+  // - Tier: unit; the hook runs in-process against a fake pi.
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const client = { request: async () => ({ content: [{ type: 'text', text: 'ok' }] }) };
+  const gateway = new context.Gateway();
+  gateway.add('cindy_helper', client, [
+    { name: 'list_tools', inputSchema: { type: 'object' } },
+    { name: 'call_tool', inputSchema: { type: 'object' } },
+  ]);
+  const bot: any[] = [];
+  gateway.register({ registerTool: (tool: unknown) => bot.push(tool) }, { botMemoryFacade: true });
+  const routineSave = bot.find((item) => item.name === 'routine_save');
+  expect(routineSave).toBeDefined();
+  expect(routineSave.parameters.properties.modelOverride.anyOf
+    .find((schema: any) => schema.type === 'object').properties.effort.enum).toContain('');
+
+  const geminiModel = { api: 'google-generative-ai', id: 'gemini-2.5-pro', provider: 'cindy' };
+  const payload = {
+    model: 'gemini-2.5-pro',
+    contents: [{ role: 'user', parts: [{ text: 'Save a routine' }] }],
+    config: {
+      tools: [{ functionDeclarations: [
+        ...bot.map((tool: any) => ({
+          name: tool.name,
+          description: tool.description,
+          parametersJsonSchema: tool.parameters,
+        })),
+        // Required property whose only enum value is '': the enum must go,
+        // the property stays required and type-constrained.
+        { name: 'probe_required_empty', description: 'probe', parametersJsonSchema: {
+          type: 'object',
+          properties: { mode: { type: 'string', enum: [''] }, flag: { const: '' } },
+          required: ['mode'],
+        } },
+      ] }],
+    },
+  };
+  const hook = loadProviderRequestHook();
+  const result = await hook({ payload }, { model: geminiModel });
+  expect(result).not.toBe(payload);
+  expect(result.model).toBe('gemini-2.5-pro');
+  expect(result.contents).toEqual(payload.contents);
   const emptyValues: string[] = [];
   const visit = (schema: unknown, trail: string): void => {
     if (!schema || typeof schema !== 'object') return;
@@ -2524,8 +2633,30 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
       visit(value, `${trail}.${key}`);
     }
   };
-  for (const tool of bot) visit(tool.parameters, tool.name);
+  for (const entry of result.config.tools) {
+    for (const declaration of entry.functionDeclarations) visit(declaration.parametersJsonSchema, declaration.name);
+  }
   expect(emptyValues).toEqual([]);
+  const saved = result.config.tools[0].functionDeclarations.find((d: any) => d.name === 'routine_save');
+  const modelOverride = saved.parametersJsonSchema.properties.modelOverride.anyOf
+    .find((schema: any) => schema.type === 'object');
+  expect(modelOverride.properties.effort.enum).toEqual(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+  const probe = result.config.tools[0].functionDeclarations.find((d: any) => d.name === 'probe_required_empty');
+  expect(probe.parametersJsonSchema.properties.mode.enum).toBeUndefined();
+  expect(probe.parametersJsonSchema.properties.mode.type).toBe('string');
+  expect(probe.parametersJsonSchema.properties.flag.const).toBeUndefined();
+  expect(probe.parametersJsonSchema.required).toEqual(['mode']);
+  // The input payload is not mutated: the shared registration still carries ''.
+  const inputSaved = payload.config.tools[0].functionDeclarations.find((d: any) => d.name === 'routine_save');
+  expect(inputSaved?.parametersJsonSchema.properties.modelOverride.anyOf
+    .find((schema: any) => schema.type === 'object').properties.effort.enum).toContain('');
+  // A non-Gemini model passes through untouched, '' intact.
+  expect(await hook({ payload }, { model: { api: 'anthropic-messages', id: 'claude', provider: 'cindy' } })).toBe(payload);
+  // A Gemini payload with no '' is returned unchanged.
+  const cleanPayload = { model: 'gemini-2.5-pro', contents: [], config: { tools: [{ functionDeclarations: [{
+    name: 'read', description: 'read', parametersJsonSchema: { type: 'object', properties: { path: { type: 'string' } } },
+  }] }] } };
+  expect(await hook({ payload: cleanPayload }, { model: geminiModel })).toBe(cleanPayload);
 });
 
 
