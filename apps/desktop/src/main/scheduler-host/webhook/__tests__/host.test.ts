@@ -144,4 +144,47 @@ describe('ScheduleWebhookHost', () => {
     await host.stop();
     await expect(post(url, '{}')).rejects.toThrow();
   });
+
+  // PR #8470 / discussion_r4488657809, unit: the existing stop tests only
+  // checked the listener. An accepted request can still be awaiting get() when
+  // the owner switches; its delayed queue save must not overwrite the new owner.
+  it('keeps an in-flight delivery in its original owner directory after stop', async () => {
+    const originalRoot = dirs.root;
+    const nextRoot = path.join(originalRoot, 'next-owner');
+    const nextState = path.join(nextRoot, 'schedule-webhooks', 'state.json');
+    const untouched = JSON.stringify({ endpoints: { other: { received: 17 } } });
+    fs.mkdirSync(path.dirname(nextState), { recursive: true });
+    fs.writeFileSync(nextState, untouched);
+    scheduler.schedules = [withTrigger];
+    await host.start();
+    const url = host.status(withTrigger)!.url!;
+    const secret = (await host.setSecret(withTrigger)).secret!;
+    let entered!: () => void;
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { entered = resolve; });
+    const resume = new Promise<void>((resolve) => { release = resolve; });
+    vi.spyOn(scheduler, 'get').mockImplementationOnce(async () => {
+      entered();
+      await resume;
+      return withTrigger;
+    });
+    // stop closes the HTTP connection, but not the already accepted queue work.
+    const delivery = post(url, '{}', secret).catch(() => null);
+    try {
+      await waiting;
+      await host.stop();
+      dirs.root = nextRoot;
+      release();
+      await vi.waitFor(() => expect(host.status(withTrigger)?.received).toBe(1));
+      expect(fs.readFileSync(nextState, 'utf8')).toBe(untouched);
+      const saved = JSON.parse(fs.readFileSync(path.join(originalRoot, 'schedule-webhooks', 'state.json'), 'utf8'));
+      expect(saved.endpoints.s1.pending).toEqual([expect.objectContaining({ deliveryId: 'd-2', event: 'issues' })]);
+      expect(saved.endpoints.s1.receipts).toHaveProperty('d-2');
+      expect(scheduler.runNow).not.toHaveBeenCalled();
+    } finally {
+      release();
+      dirs.root = originalRoot;
+      await delivery;
+    }
+  });
 });

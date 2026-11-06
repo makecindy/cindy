@@ -83,10 +83,6 @@ interface Logger {
   warn?: (message: string, meta?: Record<string, unknown>) => void;
 }
 
-function dataPath(...parts: string[]): string {
-  return ownerScopedUserDataPath(DIR, ...parts);
-}
-
 function writeAtomically(file: string, content: string): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${randomUUID()}.tmp`;
@@ -105,11 +101,6 @@ function generateSecret(whsec: boolean): string {
   return whsec ? `whsec_${bytes.toString('base64')}` : bytes.toString('hex');
 }
 
-function secretFile(endpointId: string): string {
-  // endpointId 由引擎生成，这里仍防止它被拼出目录。
-  return dataPath('secrets', `${path.basename(endpointId)}.enc`);
-}
-
 function secureStorageAvailable(): boolean {
   const backend = (safeStorage as { getSelectedStorageBackend?: () => string }).getSelectedStorageBackend?.();
   return oauthSecureStorageAvailable({
@@ -119,9 +110,9 @@ function secureStorageAvailable(): boolean {
   });
 }
 
-function loadState(): ScheduleWebhookQueueState {
+function loadState(file: string): ScheduleWebhookQueueState {
   try {
-    const parsed = JSON.parse(fs.readFileSync(dataPath('state.json'), 'utf8')) as Partial<ScheduleWebhookQueueState>;
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<ScheduleWebhookQueueState>;
     return { port: parsed.port, endpoints: parsed.endpoints ?? {} };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -129,9 +120,7 @@ function loadState(): ScheduleWebhookQueueState {
   }
 }
 
-function remoteIdentityStore(): NonNullable<ScheduleWebhookRemoteDeps['identityStore']> {
-  // Capture the owner path before any asynchronous work or account switch.
-  const file = dataPath('remote-identities.json');
+function remoteIdentityStore(file: string): NonNullable<ScheduleWebhookRemoteDeps['identityStore']> {
   return {
     load: () => {
       try {
@@ -151,6 +140,9 @@ function remoteIdentityStore(): NonNullable<ScheduleWebhookRemoteDeps['identityS
 }
 
 export class ScheduleWebhookHost {
+  // Pending queue writes and cleanup may finish after stop. Never resolve their
+  // storage against a newly active account; each host belongs to its original owner.
+  private readonly dataDir = ownerScopedUserDataPath(DIR);
   private readonly queue: ScheduleWebhookQueue;
   private readonly secrets = new Map<string, string>();
   private readonly deliver: ReturnType<typeof createWebhookIngress>;
@@ -174,16 +166,17 @@ export class ScheduleWebhookHost {
     this.remote = options.remote
       ? new ScheduleWebhookRemote({
           ...options.remote,
-          identityStore: remoteIdentityStore(),
+          identityStore: remoteIdentityStore(this.dataPath('remote-identities.json')),
           onBatch: (batch) => this.acceptBatch(batch),
           onInvalidated: (id) => this.queue.forget(id),
           ...(options.onStatusChanged ? { onChanged: options.onStatusChanged } : {}),
           ...(options.onQuotaExhausted ? { onQuotaExhausted: options.onQuotaExhausted } : {}),
         })
       : null;
+    const stateFile = this.dataPath('state.json');
     this.queue = new ScheduleWebhookQueue({
-      load: async () => loadState(),
-      save: async (state) => writeAtomically(dataPath('state.json'), JSON.stringify(state)),
+      load: async () => loadState(stateFile),
+      save: async (state) => writeAtomically(stateFile, JSON.stringify(state)),
       getSchedule: (id) => scheduler.get(id),
       isBusy: (id) => scheduler.getInflightCount(id) > 0,
       fire: async (id, webhook, onRunCreated) => {
@@ -227,12 +220,12 @@ export class ScheduleWebhookHost {
     for (const id of this.queue.ids()) if (!liveIds.has(id)) await this.queue.forget(id);
     let files: string[] = [];
     try {
-      files = fs.readdirSync(dataPath('secrets'));
+      files = fs.readdirSync(this.dataPath('secrets'));
     } catch {
       return;
     }
     for (const file of files) {
-      if (file.endsWith('.enc') && !this.byEndpoint.has(file.slice(0, -'.enc'.length))) fs.rmSync(dataPath('secrets', file), { force: true });
+      if (file.endsWith('.enc') && !this.byEndpoint.has(file.slice(0, -'.enc'.length))) fs.rmSync(this.dataPath('secrets', file), { force: true });
     }
   }
 
@@ -294,7 +287,7 @@ export class ScheduleWebhookHost {
       return {
         receiver,
         ...(this.server && this.port ? { url: this.urlFor(endpointId) } : {}),
-        hasSecret: fs.existsSync(secretFile(endpointId)),
+        hasSecret: fs.existsSync(this.secretFile(endpointId)),
         ...counters,
       };
     }
@@ -341,7 +334,7 @@ export class ScheduleWebhookHost {
     if (!secureStorageAvailable()) throw new Error('CREDENTIAL_STORE_UNAVAILABLE');
     const secret = pasted ?? generateSecret(false);
     if (!isValidWebhookSecret('hmac-text', secret)) throw new Error('WEBHOOK_SECRET_INVALID');
-    writeAtomically(secretFile(trigger.endpointId), safeStorage.encryptString(secret).toString('base64'));
+    writeAtomically(this.secretFile(trigger.endpointId), safeStorage.encryptString(secret).toString('base64'));
     this.secrets.set(trigger.endpointId, secret);
     return pasted === undefined ? { secret } : {};
   }
@@ -357,13 +350,22 @@ export class ScheduleWebhookHost {
     return `http://127.0.0.1:${this.port}${PATH_PREFIX}${endpointId}`;
   }
 
+  private dataPath(...parts: string[]): string {
+    return path.join(this.dataDir, ...parts);
+  }
+
+  private secretFile(endpointId: string): string {
+    // endpointId 由引擎生成，这里仍防止它被拼出目录。
+    return this.dataPath('secrets', `${path.basename(endpointId)}.enc`);
+  }
+
   /** 启动时不碰钥匙串：收到第一个事件才解密，避免 macOS 开机弹窗。 */
   private readSecret(endpointId: string): string | null {
     const cached = this.secrets.get(endpointId);
     if (cached) return cached;
     let raw: string;
     try {
-      raw = fs.readFileSync(secretFile(endpointId), 'utf8');
+      raw = fs.readFileSync(this.secretFile(endpointId), 'utf8');
     } catch {
       return null;
     }
@@ -387,7 +389,7 @@ export class ScheduleWebhookHost {
     for (const [endpointId, schedule] of this.byEndpoint) {
       if (next.get(endpointId)?.id === schedule.id) continue;
       this.secrets.delete(endpointId);
-      fs.rmSync(secretFile(endpointId), { force: true });
+      fs.rmSync(this.secretFile(endpointId), { force: true });
       await this.queue.forget(schedule.id);
     }
     this.byEndpoint = next;
