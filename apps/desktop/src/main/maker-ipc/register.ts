@@ -14898,7 +14898,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           resolvedConfig = { ...configuration, providerId: group.providerId,
             ...(group.groupDeviceId ? { agentDeviceId: group.groupDeviceId } : {}) };
         }
-        const revision = Number.parseInt(pluginTaskConfigHash('sha256').update(JSON.stringify([resolvedConfig, row.permissionMode, row.planModeEnabled, row.workingDir, row.status, row.orcaRole])).digest('hex').slice(0, 12), 16);
+        // Preserve the historic local-field order while hashing remote identity
+        // in one position, regardless of pending/runtime/group object assembly.
+        const revisionConfig = { agentKind: resolvedConfig.agentKind, providerId: resolvedConfig.providerId,
+          model: resolvedConfig.model, effort: resolvedConfig.effort, fastMode: resolvedConfig.fastMode,
+          ...(resolvedConfig.agentDeviceId ? { agentDeviceId: resolvedConfig.agentDeviceId } : {}) };
+        const revision = Number.parseInt(pluginTaskConfigHash('sha256').update(JSON.stringify([revisionConfig, row.permissionMode, row.planModeEnabled, row.workingDir, row.status, row.orcaRole])).digest('hex').slice(0, 12), 16);
         return { taskId, title: row.title, status: row.status, revision, resolvedConfig, workingDir: row.workingDir ?? undefined, permissionMode: row.permissionMode, planModeEnabled: !!row.planModeEnabled, hidden: row.hiddenAt != null };
       },
       scheduleAutoTitle: schedulePluginAutoTitle,

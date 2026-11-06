@@ -212,18 +212,25 @@ it('keeps a verified remote provider group as the source while rejecting an unre
   const row = { id: 'task', source: 'plugin', status: 'active', ...configuration };
   const query = { from: () => query, where: () => query, limit: async () => [row] };
   let group: { groupDeviceId: string; providerId: string } | null = { groupDeviceId: 'group-computer', providerId: 'group-account' };
+  let pending = true;
   let unavailable = false;
   const read = compile(`return ({${property}}).readSession;`, {
     assertCurrent: () => {}, snapshot: { client: { drizzle: { select: () => query } } },
     sessions: {}, eq: () => true, pluginTaskConfigHash: createHash,
-    readSessionRuntimeProfiles: async () => ({ effective: configuration, pendingMutation: null }),
+    readSessionRuntimeProfiles: async () => ({ effective: configuration, pendingMutation: pending
+      ? { profile: { ...configuration, providerId: group!.providerId, agentDeviceId: group!.groupDeviceId } } : null }),
     readProviderGroupBinding: () => ({}), providerGroupService: { sessionGroup: async () => {
       if (unavailable) throw Error('Group computer is offline');
       return group;
     } },
   });
+  // PR #9155 P2: the same logical route was hashed in a different property order
+  // after group assignment. The existing test only read an already bound task.
+  const staged = await read('task');
+  pending = false;
   const bound = await read('task');
   expect(bound.resolvedConfig).toEqual({ ...configuration, agentDeviceId: 'group-computer', providerId: 'group-account' });
+  expect(bound.revision).toBe(staged.revision);
   group = null;
   const unbound = await read('task');
   expect(unbound.resolvedConfig).toEqual(configuration);

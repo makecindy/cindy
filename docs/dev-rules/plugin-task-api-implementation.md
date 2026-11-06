@@ -14,6 +14,12 @@
 controller 与 Agent 切换意图，pending/effective 快照包含位置；来源参与 revision、幂等和接受前配置比较。
 组分配用 `providerGroupService.sessionGroup` 核对当前成员，核验成功时投影所选组来源，避免正常分配
 被误判成用户改来源；已离组的真实位置仍参与比较，不能借旧绑定通过。
+revision 使用固定字段顺序，pending 来源与组分配后的同一配置不因对象字段顺序而冲突。
+
+远程目录读取、Session 创建及 runtime 改模不占用跨插件的回执写队列；返回后进入队列重读归属、
+批准、Plan、任务配置和回执，已经取消或结算的输入不能再被接受。创建、改模与卸载按插件实例串行，
+维持原有安装归属和幂等保证，同时允许同插件及其他插件的取消、终态写入继续进行。
+账号切换的 drain 等待上述完整在途操作；未开始落 Session 的回执仅能在原捕获数据库内精确回滚。
 
 发送沿 `sendToSessionInternal` / InputCoordinator，接受前复核插件归属、权限、Plan、完整来源配置及当前目录。
 远程 proxy 的输出与终态走普通 Session 持久化和 `settlePluginTaskTerminal`，run 保留 acceptedConfig；
