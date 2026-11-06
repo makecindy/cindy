@@ -70,3 +70,46 @@ export const ShowDesktopIcon = createLucideIcon("RemoteDesktopShowDesktop", [
   ["path", { d: "M8 13h8", key: "dock" }],
   ["path", { d: "M12 17v4M8 21h8", key: "stand" }],
 ]);
+
+// A foldable's postures, drawn as the desktop viewer draws them (cindy-simulator
+// control.html): closed, half open and flat. The camera dot is a stroked point,
+// since a child's own currentColor fill does not resolve here.
+export const PostureClosedIcon = createLucideIcon("LiveScreenPostureClosed", [
+  [
+    "path",
+    {
+      d: "M6.3 3.25h9.1a3 3 0 0 1 3 3v11.5a3 3 0 0 1-3 3H6.3a.7.7 0 0 1-.7-.7V3.95a.7.7 0 0 1 .7-.7z",
+      key: "body",
+    },
+  ],
+  [
+    "circle",
+    { cx: "15.4", cy: "6.3", r: ".45", strokeWidth: "0.9", key: "camera" },
+  ],
+  ["path", { d: "M9.9 18.55h4.2", strokeWidth: "1.1", key: "bar" }],
+]);
+
+export const PostureOpenIcon = createLucideIcon("LiveScreenPostureOpen", [
+  [
+    "path",
+    {
+      d: "M2.7 6.8Q2.7 3.91 5.5 4.3L12 5.2l6.5-.9q2.8-.39 2.8 2.5v10.4q0 2.89-2.8 2.5L12 18.8l-6.5.9q-2.8.39-2.8-2.5z",
+      key: "book",
+    },
+  ],
+]);
+
+export const PostureFlatIcon = createLucideIcon("LiveScreenPostureFlat", [
+  [
+    "rect",
+    {
+      x: "2.5",
+      y: "4.47",
+      width: "19",
+      height: "15.06",
+      rx: "2.7",
+      key: "screen",
+    },
+  ],
+  ["path", { d: "M9.45 17.65h5.1", strokeWidth: "1.1", key: "bar" }],
+]);
