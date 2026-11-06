@@ -19,12 +19,13 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { getPluginToolUi, pluginToolVisible } from '@cindy/plugin-protocol';
 
 import type {
   GhostPipeToolCall,
   GhostPipeToolProgress,
   GhostToolCallResult,
-  GhostToolDecl,
+  GhostManifest,
   InstalledGhost,
 } from '../../shared/ghost.js';
 import { GHOST_PIPE_CALL_MAX_TOTAL_MS, isGhostPluginErrorCode } from '../../shared/ghost.js';
@@ -120,7 +121,8 @@ const HOLD_SETTLE_GRACE_MS = 60_000;
  * 甚至误判"插件没有写能力"(2026-07-30 实测:二级分派型插件 cindy-github 的
  * 操作名被两个模型先后当作顶层 tool 直调,均在此卡死)。
  * 分派型插件(暴露了 call_tool)把 agent 想调的名字直接回填进正确调用形态;
- * 普通插件列出实际可用的顶层工具名。
+ * 普通插件列出实际可用的顶层工具名。调用方须传完整 manifest，不能先过滤工具，
+ * 否则无法区分未声明和仅页面可见；已知 audience 时只推荐该调用方可用的入口。
  * 消费方:本派发器 + ghost_call 主路径预检(mcp-integrations/ghost.ts)+
  * setup 恢复校验(maker-ipc/register.ts validateTarget)——所有 TOOL_NOT_FOUND
  * 返回点必须共用本函数,新增返回点不得自写文案。导出供单测直测(规则 14)。
@@ -128,9 +130,22 @@ const HOLD_SETTLE_GRACE_MS = 60_000;
 export function toolNotFoundMessage(
   ghostId: string,
   tool: string,
-  declaredTools: GhostToolDecl[] | undefined,
+  manifest: Partial<Pick<GhostManifest, 'schemaVersion' | 'tools' | 'mcpApps' | 'network'>>,
+  audience?: 'model' | 'app',
 ): string {
-  const names = (declaredTools ?? []).map((t) => t.name);
+  const declaredTools = manifest.tools ?? [];
+  const names = declaredTools
+    .filter((t) => !audience || pluginToolVisible(manifest, t.name, audience))
+    .map((t) => t.name);
+  if (audience === 'model' && declaredTools.some((t) => t.name === tool) &&
+      !pluginToolVisible(manifest, tool, 'model') && pluginToolVisible(manifest, tool, 'app')) {
+    const ui = getPluginToolUi(manifest);
+    const openers = names.filter((name) => ui?.tools[name]?.resourceUri);
+    const next = openers.length
+      ? `请先通过 ghost_call 调用模型可见的开页面工具: ${openers.join(', ')}，再由页面调用 ${tool}。`
+      : `当前没有模型可见的开页面工具；请先查看模型可见的工具: ${names.length ? names.join(', ') : '(无)'}。`;
+    return `插件 ${ghostId} 已声明工具 ${tool}，但它只供插件页面调用，模型不能直接 ghost_call。${next}不要据此判定插件缺少该能力。`;
+  }
   if (names.includes('call_tool')) {
     return (
       `插件 ${ghostId} 没有名为 ${tool} 的顶层工具——它采用二级分派:具体操作经 call_tool 下发,` +
@@ -222,7 +237,7 @@ export class GhostPipeDispatcher {
     }
     const declared = ghost.manifest.tools?.some((t) => t.name === tool);
     if (!declared) {
-      return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: toolNotFoundMessage(ghostId, tool, ghost.manifest.tools) };
+      return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: toolNotFoundMessage(ghostId, tool, ghost.manifest) };
     }
     const storagePart = installedGhostStoragePart(ghost);
     if (this.deps.runtimeStateOf(storagePart) === 'fused') {

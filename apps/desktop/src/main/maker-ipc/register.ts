@@ -3734,7 +3734,7 @@ initGhostSetupCoordinator({
       return {
         ok: false,
         errorCode: 'TOOL_NOT_FOUND',
-        message: toolNotFoundMessage(ghostId, tool, ghost.manifest.tools),
+        message: toolNotFoundMessage(ghostId, tool, ghost.manifest),
       };
     }
     return { ok: true };

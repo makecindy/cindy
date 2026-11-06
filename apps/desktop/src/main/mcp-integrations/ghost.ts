@@ -2364,7 +2364,7 @@ export function getCindyGhostsMcpDeps(
         return {
           ok: false,
           errorCode: 'TOOL_NOT_FOUND',
-          message: toolNotFoundMessage(ghostId, tool, target.manifest.tools?.filter(t => pluginToolVisible(target.manifest, t.name, audience))),
+          message: toolNotFoundMessage(ghostId, tool, target.manifest, audience),
         };
       }
       if (grantOnly && (!attachments || attachments.length === 0)) {
@@ -2414,7 +2414,7 @@ export function getCindyGhostsMcpDeps(
         return {
           ok: false,
           errorCode: 'TOOL_NOT_FOUND',
-          message: toolNotFoundMessage(ghostId, tool, refreshed.manifest.tools?.filter(t => pluginToolVisible(refreshed.manifest, t.name, audience))),
+          message: toolNotFoundMessage(ghostId, tool, refreshed.manifest, audience),
         };
       }
       let finalAssessment;
@@ -2656,7 +2656,7 @@ export function getCindyGhostsMcpDeps(
         return {
           ok: false,
           errorCode: 'TOOL_NOT_FOUND',
-          message: toolNotFoundMessage(ghostId, tool, preDispatch.manifest.tools?.filter(t => pluginToolVisible(preDispatch.manifest, t.name, audience))),
+          message: toolNotFoundMessage(ghostId, tool, preDispatch.manifest, audience),
         };
       }
       try {
@@ -2701,7 +2701,7 @@ export function getCindyGhostsMcpDeps(
         return {
           ok: false,
           errorCode: 'TOOL_NOT_FOUND',
-          message: toolNotFoundMessage(ghostId, tool, postCtx.manifest.tools?.filter(t => pluginToolVisible(postCtx.manifest, t.name, audience))),
+          message: toolNotFoundMessage(ghostId, tool, postCtx.manifest, audience),
         };
       }
       let postCtxAssessment: GhostSetupAssessment;
