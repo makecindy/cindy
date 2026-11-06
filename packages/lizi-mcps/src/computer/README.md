@@ -71,6 +71,20 @@ is usually redundant.
   Electron / browser targets. `set_value` was verified on Cindy's own composer:
   the field updates and its send button enables, without focus.
 
+## Input failure advice
+
+For `type_text`, `background_unavailable` and `type_text_incomplete` preserve
+error codes and structured progress/uncertainty, but replace driver recovery
+prose with Cindy MCP guidance. The driver may suggest pixel-targeted typing or
+foreground retries; Cindy's `type_text` schema does not accept `x/y` and a refusal
+must not trigger an automatic route change. Inspect web-content fields with
+`get_window_state`; `set_value` with a fresh element token is the supported text
+route when continuing is appropriate. After incomplete typing, do not resend the
+text or suffix without inspecting what happened. Observation success is not
+input completion. This applies to both thrown errors and returned refusals.
+See [result.ts](result.ts) and the MCP-entry regressions in
+[computerMcpServer.test.ts](computerMcpServer.test.ts).
+
 ## CUA 0.37 compatibility
 
 On 2026-10-22, a read-only native check reproduced `typed_output_mismatch`

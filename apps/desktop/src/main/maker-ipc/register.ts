@@ -22,7 +22,7 @@ import { createOrcaWorkerProjectHandlers } from './orcaWorkerProjectHandlers';
 import { getTeamByWorkerSession } from '../localDb/orcaTeamStore';
 import { readWorkerProjectContext, createWorkerWorktree, rememberWorkerProject, probeWorkerProject, resolveWorkerWorktreeSourceSelection, getWorkerOwnedWorktree } from './orcaWorkerProject';
 import type { WorkerWorktreeRequest } from '../../shared/orca-worker-project';
-import { captureAgentRequest as captureRequest, ownerChannelInputEvidence, type CapturedAgentRequest } from './forwardedRequest.js';
+import { captureAgentRequest as captureRequest, DelegationNotAuthorizedError, ownerChannelInputEvidence, type CapturedAgentRequest, type DelegationAuthorization } from './forwardedRequest.js';
 import { readChannelToolScope } from '../im/shared/channelToolScope.js';
 import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type AgentRequestReceipt } from '../../shared/forwardedRequest.js';
 import { configureBotTodoDispatch, settleBotTodoForSession } from './botTodoAccess.js';
@@ -1231,6 +1231,7 @@ import { registerProviderHandlers } from './providerHandlers.js';
 import { readModelImageInputOverride, writeModelImageInputOverride } from '../maker-host/model-catalog-override-store.js';
 import { createLocalCliScanDeps, scanLocalCliAuth } from './localCliDetect.js';
 import { registerMcpHandlers } from './mcpHandlers.js';
+import { listMcpDuplicates, saveMcpDuplicateChoice } from '../maker-host/mcp-duplicate-preferences.js';
 import {
   getBuiltinMcpServerNames,
   refreshCustomMcpProviders,
@@ -2643,6 +2644,10 @@ type SendToSessionInternalResult =
       message: string;
     };
 
+/** send_to_session 的结果：发送任务的审核没有确认用户要求这样转交时(2026-11-05)，没有发出。 */
+type SendToSessionResult = SendToSessionInternalResult
+  | { ok: false; errorCode: 'DELEGATION_NOT_AUTHORIZED'; message: string };
+
 /** 暴露给 xdt-helper MCP provider 的协同控制面，必须复用 IPC 同源业务路径。 */
 interface OrcaCollabService {
   listSessionQueue: (
@@ -2672,6 +2677,7 @@ interface OrcaCollabService {
           | 'MESSAGE_CONSUMING'
           | 'NOT_AUTHORIZED'
           | 'INVALID_ARGS'
+          | 'DELEGATION_NOT_AUTHORIZED'
           | 'HOST_NOT_READY'
           | 'INTERNAL';
         message: string;
@@ -2691,6 +2697,7 @@ interface OrcaCollabService {
           | 'MESSAGE_CONSUMING'
           | 'NOT_AUTHORIZED'
           | 'INVALID_ARGS'
+          | 'DELEGATION_NOT_AUTHORIZED'
           | 'HOST_NOT_READY'
           | 'INTERNAL';
         message: string;
@@ -2725,6 +2732,7 @@ interface OrcaCollabService {
           | 'UNSUPPORTED_CAPABILITY'
           | 'INPUT_LOCKED'
           | 'DELIVERY_FAILED'
+          | 'DELEGATION_NOT_AUTHORIZED'
           | 'HOST_NOT_READY'
           | 'INTERNAL';
         message: string;
@@ -2802,7 +2810,7 @@ interface OrcaCollabService {
     execution?: SendToSessionExecutionOverrides;
     /** Host-owned create defaults for non-session callers such as scheduler script tasks. */
     createDefaults?: SendToSessionCreateDefaults;
-  }) => Promise<SendToSessionInternalResult>;
+  }) => Promise<SendToSessionResult>;
   enableOrca: (
     leadSessionId: string,
     opts: EnableOrcaOptions,
@@ -5028,8 +5036,32 @@ export function getSessionInputProvenance(sessionId: string) {
   return { input, executing: !!input || !!getMakerIfReady()?.getSession(sessionId)?.isTurnRunning() };
 }
 
+const DELEGATION_REVIEW_CONTEXT = 'Host check before Cindy hands this message to another task as the owner\'s request. '
+  + 'The receiving task\'s automatic review will treat the message text as what the owner asked it to do. '
+  + 'Allow when the message stays within what the owner asked for in this conversation, including coordination such as '
+  + 'status questions, progress and results. Block when it adds work, targets, data or permissions the owner did not ask for.';
+
+/**
+ * Decide on the sending side, where the whole conversation is visible, whether the owner asked
+ * for this hand-off (2026-11-05). Full Access already trusts this task; Ask confirmed the task
+ * action with its arguments; Auto asks the task's own reviewer. Plan or a changing task sends none.
+ */
+async function authorizeSessionDelegation(sessionId: string, message: string, targetSessionId?: string): Promise<DelegationAuthorization> {
+  const session = getMakerIfReady()?.getSession(sessionId);
+  const permission = session?.stablePermissionModeState;
+  const plan = session?.stablePlanModeState;
+  if (!session || !permission || !plan || plan.enabled || permission.mode === 'plan') return { kind: 'none' };
+  if (permission.mode !== 'auto') return { kind: 'authorized' };
+  const { toolAutoReviewAction } = await import('@cindy/maker-core');
+  const decision = await session.reviewHostPermissionAction(toolAutoReviewAction('delegate_owner_request',
+    { targetSessionId: targetSessionId ?? 'a new task', message }, DELEGATION_REVIEW_CONTEXT));
+  if (decision.verdict === 'allow') return { kind: 'authorized' };
+  return { kind: 'blocked', reason: `Not sent: automatic review did not confirm the owner asked for this hand-off${
+    decision.reason ? ` (${decision.reason})` : ''}. Keep the message within the owner's request, or ask the owner first.` };
+}
+
 /** Capture from the caller's accepted input before any asynchronous target work. */
-export async function captureSessionAgentRequest(sessionId: string, supplement: string): Promise<CapturedAgentRequest> {
+export async function captureSessionAgentRequest(sessionId: string, supplement: string, target?: { sessionId?: string }): Promise<CapturedAgentRequest> {
   const scope = captureDataOwnerBroadcastScope();
   const active = agentInputCoordinatorHolder?.getAcceptedInputProvenance(sessionId) ?? null;
   const lane = readChannelToolScope({ sessionId, sessionInstanceId: getMakerIfReady()?.getSession(sessionId)?.instanceId });
@@ -5050,7 +5082,9 @@ export async function captureSessionAgentRequest(sessionId: string, supplement: 
   }) : null);
   const request = await captureRequest(sessionId, supplement, evidence,
     () => listMessagesForAgentHandoff(sessionId, 1, undefined, 'user'),
-    !!companion || ownerVerified || active?.delegatedRequest?.ownerVerified === true, ownerVerified);
+    !!companion || ownerVerified || active?.delegatedRequest?.ownerVerified === true
+      || active?.delegatedRequest?.delegatedText !== undefined, ownerVerified,
+    { targetSessionId: target?.sessionId, authorize: () => authorizeSessionDelegation(sessionId, supplement, target?.sessionId) });
   if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new Error('Data owner changed before request capture');
   return request;
 }
@@ -8231,6 +8265,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       invalidatePiEnvironment();
     };
   registerMcpHandlers(createElectronIpcHandlerRegistry(), {
+    listDuplicates: () => listMcpDuplicates(),
+    chooseDuplicate: saveMcpDuplicateChoice,
     listMcpServers: listBotRuntimeMcpServers,
     resolveBotContext: async (sessionId, chain) => {
       const route = await reconcileBotModelRoute.preview(sessionId, chain);
@@ -9980,6 +10016,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return !!snapshot?.runtimeEpochChanged;
       },
     });
+    if (outcome === 'kept-current-runtime') {
+      log.info('Bot capability refresh waits for background tasks; input runs on current runtime', {
+        sessionId: live.id,
+      });
+    }
     if (outcome === 'deferred') {
       throwIpcError(
         'PRECONDITION_FAILED',
@@ -18106,8 +18147,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       };
     },
     assertExternalInputAllowed: assertReviewExternalInputAllowed,
+    captureRequest: (callerSessionId, message, target) => captureSessionAgentRequest(callerSessionId, message, target),
     createQueuedMessage: async ({ targetSessionId, callerSessionId, queuedMessageId, message }) => {
-      const request = await captureSessionAgentRequest(callerSessionId, message);
+      const request = await captureSessionAgentRequest(callerSessionId, message, { sessionId: targetSessionId });
+      if (request.blocked) throw new DelegationNotAuthorizedError(request.blocked);
       message = request.message;
       const meta = await maker.getSessionMeta(targetSessionId);
       if (!meta) throw new Error(`session ${targetSessionId} not found`);
@@ -18234,7 +18277,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // owner turn is active. Never quote that companion's stale last input.
       const request: CapturedAgentRequest = params[AUTO_REVIEW_DELEGATED_CONTINUATION]
         ? { message: params.message, autoReviewUserText: { kind: 'agent-request' } }
-        : await captureSessionAgentRequest(params.dispatcherSessionId ?? '', params.message);
+        : await captureSessionAgentRequest(params.dispatcherSessionId ?? '', params.message,
+          { sessionId: params.targetSessionId });
+      if (request.blocked) return { ok: false, errorCode: 'DELEGATION_NOT_AUTHORIZED', message: request.blocked };
       params = { ...params, message: request.message };
       let classification: Awaited<ReturnType<typeof classifySessionMessagePurpose>>;
       try {

@@ -2,6 +2,7 @@ import { getPluginToolUi, pluginHasToolUi } from '@cindy/plugin-protocol';
 import { MCP_APPS_MAX_BYTES } from '../mcp-apps/protocol.js';
 import { findFeatureRetirement } from '../../shared/featureRetirements.js';
 import { FeatureRetirementStore } from './featureRetirementStore.js';
+import { GhostNotificationIndex } from './ghostNotificationIndex.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -705,6 +706,10 @@ function canTakeBareKey(
 }
 
 export class GhostManager {
+  private readonly notificationIndex = new GhostNotificationIndex({
+    roots: () => this.managedRootDirs(),
+    scan: () => this.listAsync(),
+  });
   private readonly receiptStore: GhostInstallReceiptStore;
   private readonly retirements = new FeatureRetirementStore(() => this.receiptStore.rootDir());
   private ownerContextKey: string;
@@ -1398,6 +1403,7 @@ export class GhostManager {
     if (next === this.ownerContextKey) return;
     this.assertDisjointRoots(this.resolveContentRoot(), this.resolveStateRoot());
     this.ownerContextKey = next;
+    this.notificationIndex.dispose();
     this.instanceRegistryService.clear();
     this.recoverInterruptedMutationsSync();
   }
@@ -2189,6 +2195,7 @@ export class GhostManager {
     operation: (mutation: GhostExclusiveMutation) => Promise<T>,
   ): Promise<T> {
     this.ensureCurrentOwnerContextSync();
+    this.notificationIndex.invalidate();
     const queuedOwnerContextKey = this.ownerContextKey;
     const previous = this.mutationTail;
     let release!: () => void;
@@ -2251,6 +2258,7 @@ export class GhostManager {
     } finally {
       capabilityActive = false;
       this.activeMutationContext = null;
+      this.notificationIndex.invalidate();
       release();
     }
   }
@@ -2797,6 +2805,20 @@ export class GhostManager {
    */
   async listAsync(): Promise<InstalledGhost[]> {
     return (await this.scanInstalledAsync()).ghosts;
+  }
+
+  /** Topic discovery only; never use these candidates to authorize execution. */
+  listNotificationCandidatesAsync(): Promise<InstalledGhost[]> {
+    this.ensureCurrentOwnerContextSync();
+    return this.notificationIndex.read();
+  }
+
+  invalidateNotificationCandidates(): void {
+    this.notificationIndex.invalidate();
+  }
+
+  disposeNotificationIndex(): void {
+    this.notificationIndex.dispose();
   }
 
   /** Only the caller's current market refresh retains this read-only view. */

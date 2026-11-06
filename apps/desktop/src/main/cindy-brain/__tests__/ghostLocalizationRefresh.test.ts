@@ -1,8 +1,78 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { refreshGhostLocalizationIfChanged } from '../ghostLocalizationRefresh';
+import type { InstalledGhost } from '../../../shared/ghost.js';
+import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
 
 const GHOSTS = ['plugin-a', 'plugin-b'];
+
+// Unit: exercise the production refresh routing. The localization helper alone
+// cannot catch a caller accidentally scheduling installation work on every push.
+const refreshCallbacks = createGhostProductionCallbacks<{
+  refreshGhostLocalization(locale: string): void;
+  broadcastGhostsChanged(ghosts: InstalledGhost[]): void;
+  setGhostWorkdirDisabledAndNotify(dir: string, id: string, disabled: boolean): string[];
+}>({ functions: ['refreshGhostLocalization', 'broadcastGhostsChanged', 'setGhostWorkdirDisabledAndNotify'] });
+
+function routing() {
+  const ghosts = [{ manifest: { id: 'plugin-a' }, enabled: true }] as InstalledGhost[];
+  const installation = {
+    apps: vi.fn(), manifest: vi.fn(), unread: vi.fn(), browser: vi.fn(), skills: vi.fn(), index: vi.fn(),
+    appearance: vi.fn().mockResolvedValue(undefined), nativeUi: vi.fn(), tabs: vi.fn(),
+    visibility: vi.fn(), shortcuts: vi.fn(),
+  };
+  const push = vi.fn(), remote = vi.fn(), setupChanged = vi.fn(), contextChanged = vi.fn();
+  const list = vi.fn(() => ghosts);
+  const manager = { list, invalidateNotificationCandidates: installation.index };
+  let disabled = false;
+  const callbacks = refreshCallbacks({
+    managerSingleton: manager, getGhostManager: () => manager,
+    currentGhostAppContext: () => ({ context: { region: 'global' } }), getResolvedMainLocale: () => 'en',
+    refreshGhostLocalizationIfChanged, sendToGhostLogic: contextChanged,
+    refreshPluginApps: installation.apps, getGhostSetupManifestTracker: () => ({ note: installation.manifest }),
+    sweepRevokedGhostUnread: installation.unread, getGhostBrowserExtensionSlot: () => ({ reconcile: installation.browser }),
+    scheduleGhostSkillReconcile: installation.skills,
+    getPluginAppearanceService: () => ({ reconcile: installation.appearance }),
+    nativeUiInstances: () => [], pluginUiServiceSingleton: { reconcile: installation.nativeUi },
+    pluginTabViewHostSingleton: { reconcile: installation.tabs },
+    pluginUiVisibilityServiceSingleton: { reconcile: installation.visibility },
+    pluginCommandShortcuts: () => [], getAppShortcutStore: () => ({ setPluginShortcuts: installation.shortcuts }),
+    isGhostAvailableForActiveSession: () => true, projectGhostForRenderer: (ghost: InstalledGhost) => ghost,
+    findGhostForInstanceId: () => ghosts[0], isGhostBoundaryPending: () => false,
+    broadcastGhostWindowPush: push, notifyMobilePluginsChanged: remote, ghostsChangedObserver: null,
+    isGhostDisabledForWorkdir: () => disabled,
+    setGhostDisabledForWorkdir: (_dir: string, id: string, value: boolean) => { disabled = value; return value ? [id] : []; },
+    normalizeWorkdirKey: () => '/project', getGhostSetupChangeBus: () => ({ emit: setupChanged }),
+  });
+  return { callbacks, ghosts, installation, push, remote, setupChanged, contextChanged, list };
+}
+
+it('projects a locale change without installation effects, while real roster changes still reconcile', () => {
+  const r = routing();
+  r.callbacks.refreshGhostLocalization('zh-CN');
+  expect(r.push).toHaveBeenCalledWith('ghosts:changed', { ghosts: r.ghosts });
+  expect(r.contextChanged).toHaveBeenCalledOnce();
+  expect(r.remote).toHaveBeenCalledOnce();
+  const { apps, ...installation } = r.installation;
+  expect(apps).toHaveBeenCalledOnce();
+  for (const effect of Object.values(installation)) expect(effect).not.toHaveBeenCalled();
+  r.callbacks.broadcastGhostsChanged(r.ghosts);
+  expect(apps).toHaveBeenCalledTimes(2);
+  for (const effect of Object.values(installation)) expect(effect).toHaveBeenCalledOnce();
+});
+
+it('publishes only the changed directory policy and retains setup and remote invalidation', () => {
+  const r = routing();
+  expect(r.callbacks.setGhostWorkdirDisabledAndNotify('/project/', 'plugin-a', true)).toEqual(['plugin-a']);
+  expect(r.push).toHaveBeenCalledExactlyOnceWith('ghosts:workdir-prefs-changed', { workdirKey: '/project', disabled: ['plugin-a'] });
+  expect(r.setupChanged).toHaveBeenCalledExactlyOnceWith('plugin-a', { source: 'workdir_policy' });
+  expect(r.remote).toHaveBeenCalledOnce();
+  expect(r.list).not.toHaveBeenCalled();
+  for (const effect of Object.values(r.installation)) expect(effect).not.toHaveBeenCalled();
+  r.callbacks.setGhostWorkdirDisabledAndNotify('/project', 'plugin-a', true);
+  expect(r.push).toHaveBeenCalledOnce();
+  expect(r.remote).toHaveBeenCalledOnce();
+});
 
 function setup() {
   const broadcastChanged = vi.fn();

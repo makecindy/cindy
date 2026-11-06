@@ -1915,6 +1915,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
       if (currentQ === q) nonHarnessMcpServerNames = fallbackNames;
     };
+    let duplicateMcpChoices: { skipHostServers: string[]; denyNativeServers: string[]; nativeServersToKeep?: string[] } = { skipHostServers: [], denyNativeServers: [] };
     const buildMcpServers = (): Record<string, McpServerConfig> | undefined => {
       const client = opts[LOCAL_AGENT_CLIENT];
       if (client && (!hosted || client.hostToolsOnly)) {
@@ -2938,6 +2939,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         botSkillPolicy: reviewMode ? undefined : opts.botRuntimeProfile?.skillPolicy,
         capabilityRouting: reviewMode ? undefined : capabilityRouting,
       });
+      if (duplicateMcpChoices.denyNativeServers.length) {
+        settings.deniedMcpServers = [...(settings.deniedMcpServers ?? []),
+          ...duplicateMcpChoices.denyNativeServers.map(serverName => ({ serverName }))];
+      }
       if (Object.keys(disabledSkillOverrides).length > 0) {
         settings.skillOverrides = { ...settings.skillOverrides, ...disabledSkillOverrides };
       }
@@ -3715,6 +3720,23 @@ export class ClaudeCodeAgent extends BaseAgent {
       const baseFork = vo.forkSession as boolean | undefined;
       const finalResumeAt = extra?.fresh ? undefined : (extra?.resumeSessionAt ?? baseResumeAt);
       const finalFork = extra?.fresh ? false : (extra?.forkSession ?? baseFork);
+      duplicateMcpChoices = { skipHostServers: [], denyNativeServers: [] };
+      if (!reviewMode && !opts.botRuntimeProfile && !opts.remoteHostId && !hosted && !opts[LOCAL_AGENT_CLIENT]) {
+        try {
+          duplicateMcpChoices = await this.deps.resolveLocalMcpDuplicateChoices?.({ workingDir: opts.workingDir, env })
+            ?? duplicateMcpChoices;
+          // A native name can also be a registered host name. A native preference
+          // must never disable an injected builtin or another host connection.
+          duplicateMcpChoices.denyNativeServers = duplicateMcpChoices.denyNativeServers
+            .filter(name => !mcpProviders.some(provider => provider.name === name));
+        } catch {
+          // Diagnostic/preferences failure must not make native MCPs unavailable.
+          log.warn('MCP duplicate preferences unavailable; preserving configured connections');
+        }
+      }
+      const requestedHostSkips = duplicateMcpChoices.skipHostServers;
+      // File diagnostics cannot establish effective managed policy. Start with all
+      // host connections, then honor a native choice only after the CLI confirms it.
       const mcpServers = buildMcpServers();
       // A prebound request id is not a resume source until its input is accepted.
       let resumeSdkSid = durableSdkSessionId ?? configuredResumeSessionId;
@@ -4394,8 +4416,14 @@ export class ClaudeCodeAgent extends BaseAgent {
       // A fork keeps its resume source but must publish a new destination id.
       const newSdkSessionId = !resumeSdkSid || finalFork ? randomUUID() : undefined;
       const previousSdkSessionId = sdkSessionId;
+      let releaseMcpSelection!: () => void;
+      const mcpSelectionReady = new Promise<void>(resolve => { releaseMcpSelection = resolve; });
+      const selectedInput = async function* () {
+        await mcpSelectionReady;
+        yield* inputQueue;
+      };
       const createLocalQueryArgs = (): Parameters<typeof sdkQuery>[0] => ({
-        prompt: inputQueue as unknown as Parameters<typeof sdkQuery>[0]['prompt'],
+        prompt: (requestedHostSkips.length ? selectedInput() : inputQueue) as unknown as Parameters<typeof sdkQuery>[0]['prompt'],
         options: {
           abortController,
           cwd: opts.workingDir,
@@ -4609,6 +4637,35 @@ export class ClaudeCodeAgent extends BaseAgent {
         eventQueue.push({ type: 'session_id', data: newSdkSessionId, source: 'claude-code' });
       }
       localQueryStarted = true;
+      try {
+        const nativeNames = duplicateMcpChoices.nativeServersToKeep;
+        if (requestedHostSkips.length && nativeNames?.length
+          && typeof query.mcpServerStatus === 'function' && typeof query.setMcpServers === 'function') {
+          // CLI startup configs are not initially owned by mcp_set_servers.
+          // Adopt the unchanged map first so a subsequent omission removes only
+          // our selected host connections, retaining the same SDK instances.
+          await query.setMcpServers(mcpServers ?? {});
+          // The SDK applies file, MDM and server-managed policy before reporting
+          // status. Missing/failed/pending entries cannot replace a working host.
+          const statuses = await query.mcpServerStatus();
+          if (nativeNames.every(name => !hostMcpServerNames.has(name) && statuses.some(server =>
+            server.name === name && server.status === 'connected' && server.scope === 'user'))) {
+            // Reuse the original SDK server instances; recreating builtins here
+            // would replace unrelated connections and their session state.
+            const selectedServers = Object.fromEntries(Object.entries(mcpServers ?? {})
+              .filter(([name]) => !requestedHostSkips.includes(name)));
+            const result = await query.setMcpServers(selectedServers);
+            const removed = new Set(result.removed);
+            hostMcpServerNames = new Set([...hostMcpServerNames].filter(name => !removed.has(name)));
+            registeredMcpServerNames = new Set([...registeredMcpServerNames].filter(name => !removed.has(name)));
+            nonHarnessMcpServerNames = new Set([...nonHarnessMcpServerNames].filter(name => !removed.has(name)));
+          }
+        }
+      } catch {
+        log.warn('MCP duplicate selection could not be confirmed; preserving available connections');
+      } finally {
+        releaseMcpSelection();
+      }
       return query;
     };
 

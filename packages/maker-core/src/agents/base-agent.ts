@@ -734,6 +734,14 @@ export interface AgentDeps {
    */
   mcpProviders?: McpProvider[];
 
+  /** Explicit local user choices only; never used by Bots, SSH or hosted runtimes. */
+  resolveLocalMcpDuplicateChoices?: (input: { workingDir: string; env: NodeJS.ProcessEnv }) => Promise<{
+    skipHostServers: string[];
+    denyNativeServers: string[];
+    /** Confirm these native connections in the live CLI before omitting any host. */
+    nativeServersToKeep?: string[];
+  }>;
+
   /**
    * pi 专用:pi 配置目录(PI_CODING_AGENT_DIR,内含 models.json / sessions/ 等)
    * 的解析器(host 注入)。文件落盘位置归 host 管;PiAgent 只在返回的目录里生成
@@ -2526,6 +2534,8 @@ export interface AgentSessionHandle {
 
   /** 当前 usage 快照 */
   getUsageSnapshot(): UsageSnapshot;
+  /** Replayable authoritative usage for Host-synthesized terminal events. */
+  getPendingTurnUsage?(): Record<string, unknown> | undefined;
 
   /** Structured context usage breakdown. Only Claude Code implements this today. */
   getContextUsage?(): Promise<ContextUsageData>;
