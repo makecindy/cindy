@@ -370,7 +370,13 @@ function AddDevice({
                 <Button variant="secondary" size="sm" disabled={controller.busy} onClick={() => void controller.run({ type: 'create-join-link' })}>
                   {t(`${k}.newLink`)}
                 </Button>
-                <Button variant="secondary" size="sm" disabled={!enlarged} onClick={() => setEnlargeOpen(true)}>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={!enlarged}
+                  data-settings-search-action="Show the join QR code in a larger dialog"
+                  onClick={() => setEnlargeOpen(true)}
+                >
                   {t(`${k}.enlarge`)}
                 </Button>
               </div>
@@ -389,7 +395,13 @@ function AddDevice({
               ) : null}
             </div>
             <DialogFooter>
-              <Button variant="secondary" size="sm" palette="confirmation" onClick={() => setEnlargeOpen(false)}>
+              <Button
+                variant="secondary"
+                size="sm"
+                palette="confirmation"
+                data-settings-search-action="Close the enlarged join QR code"
+                onClick={() => setEnlargeOpen(false)}
+              >
                 {t(`${k}.close`)}
               </Button>
             </DialogFooter>
