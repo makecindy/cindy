@@ -83,12 +83,18 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
   const [storedStyles, setStoredStyles] = useState<Record<ClassicalReplyStyleContext, ClassicalReplyStyleId | null>>(
     () => ({ classical: currentClassicalStyle('classical'), modern: currentClassicalStyle('modern') }),
   );
-  const userChoseStyleRef = useRef(false);
+  // 用户水合期改过哪一档就只跳过那一档的恢复:另一档照常读回，保证设置显示与
+  // 发送路径(currentClassicalStyleForLocale 读同一份存储内存)取到一致的值。
+  const chosenStyleContextRef = useRef<ClassicalReplyStyleContext | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     void readClassicalStyle().then((styles) => {
-      if (!cancelled && !userChoseStyleRef.current) setStoredStyles(styles);
+      if (cancelled) return;
+      setStoredStyles((prev) => ({
+        classical: chosenStyleContextRef.current === 'classical' ? prev.classical : styles.classical,
+        modern: chosenStyleContextRef.current === 'modern' ? prev.modern : styles.modern,
+      }));
     });
     return () => {
       cancelled = true;
@@ -101,7 +107,7 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
 
   const setClassicalStyle = useCallback(
     (next: ClassicalReplyStyleId) => {
-      userChoseStyleRef.current = true;
+      chosenStyleContextRef.current = styleContext;
       setStoredStyles((prev) => ({ ...prev, [styleContext]: next }));
       void saveClassicalStyle(styleContext, next);
     },
