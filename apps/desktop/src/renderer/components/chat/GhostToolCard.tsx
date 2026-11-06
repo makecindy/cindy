@@ -485,7 +485,9 @@ function GhostCardCanvas({
   // 监听器随文档重建,无需清理。
   const attachClickBridge = useCallback(() => {
     const doc = iframeRef.current?.contentDocument;
-    if (!doc) return;
+    // Effects can run while srcDoc is replacing the document, before its root
+    // or body exists. The existing iframe onLoad retries the bridge once ready.
+    if (!doc?.documentElement || !doc.body) return;
     // 与宿主的装饰动画闸门对齐一次:窗口可能在本卡挂载之前就已隐藏,那时闸门的遍历
     // 还看不到这个 iframe。走闸门自己的入口,由它登记进共享的恢复集合 —— 自行 pause
     // 而不登记的话,窗口切回来时统一恢复路径不会 play 它们,这张卡的动画会永久停住。
