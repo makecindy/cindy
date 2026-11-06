@@ -8,7 +8,7 @@ import type { MobileMessageGalleryImage } from "./messageGallery";
 import type { ResolveRemoteMediaFn } from "./remoteMedia";
 import type { RemoteSerializedAttachment } from "./types";
 
-/** One explicit draft collection; annotation continues to use the original image and strokes. */
+/** One explicit draft collection; images swipe inside one viewer, annotation keeps the original image and strokes. */
 export function ComposerAttachmentPreview({
   attachments,
   images,
@@ -34,7 +34,9 @@ export function ComposerAttachmentPreview({
         <ImageLightbox
           key={attachment.id}
           annotation={annotation}
-          images={[image]}
+          // 待发托盘里的图片放进同一个看图器,左右滑动切换(手机没有集合导航按钮)。
+          images={images}
+          initialImageKey={image.key}
           initialUrl={image.url}
           onClose={onClose}
         />

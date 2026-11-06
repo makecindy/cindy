@@ -138,12 +138,20 @@ it("zooms by pinch and double tap, re-laying out pages at the new scale", async 
 
   touch("touchstart", [[150, 200], [250, 200]]);
   touch("touchmove", [[100, 200], [300, 200]]);
-  expect(pagesStyle.transform).toBe("scale(2)");
+  expect(pagesStyle.transform).toBe("translate(0px,0px) scale(2)");
   expect(height()).toBe(fit); // 捏合中只做预览缩放,不重排。
   touch("touchend", [[100, 200]]);
   expect(pagesStyle.transform).toBe("");
   expect(height()).toBeCloseTo(fit * 2);
   expect(scrollBy).toHaveBeenCalled(); // 手指下的内容留在原处。
+
+  // 双指边捏合边平移:预览跟着两指中点走,松手后以最后的中点为锚点补滚动。
+  scrollBy.mockClear();
+  touch("touchstart", [[150, 200], [250, 200]]);
+  touch("touchmove", [[150, 260], [250, 260]]);
+  expect(pagesStyle.transform).toBe("translate(0px,60px) scale(1)");
+  touch("touchend", [[150, 260]]);
+  expect(scrollBy).toHaveBeenCalledWith(-0, -60); // 倍率没变:不重排,只按两指移动的距离补滚动。
 
   // 双击回到适应,再双击放大。
   for (let i = 0; i < 2; i++) {

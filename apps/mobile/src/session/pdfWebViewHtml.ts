@@ -54,16 +54,16 @@ addEventListener('touchstart',event=>{
  const touches=event.touches;
  if(touches.length===2&&pdf){
   const x=(touches[0].clientX+touches[1].clientX)/2,y=(touches[0].clientY+touches[1].clientY)/2;
-  pinch={distance:spread(touches)||1,scale:1,anchor:anchorAt(x,y)};tap=null;
+  pinch={distance:spread(touches)||1,scale:1,x0:x,y0:y,anchor:anchorAt(x,y)};tap=null;
   pages.style.transformOrigin=(scrollX+x)+'px '+(scrollY+y)+'px';event.preventDefault();
  }else if(touches.length===1)tap={x:touches[0].clientX,y:touches[0].clientY};
 },{passive:false});
 addEventListener('touchmove',event=>{
- if(pinch&&event.touches.length===2){event.preventDefault();pinch.scale=Math.max(MIN_ZOOM/zoom,Math.min(MAX_ZOOM/zoom,spread(event.touches)/pinch.distance));pages.style.transform='scale('+pinch.scale+')';return;}
+ if(pinch&&event.touches.length===2){event.preventDefault();pinch.scale=Math.max(MIN_ZOOM/zoom,Math.min(MAX_ZOOM/zoom,spread(event.touches)/pinch.distance));const mx=(event.touches[0].clientX+event.touches[1].clientX)/2,my=(event.touches[0].clientY+event.touches[1].clientY)/2;pinch.dx=mx-pinch.x0;pinch.dy=my-pinch.y0;pinch.anchor&&(pinch.anchor.x=mx,pinch.anchor.y=my);pages.style.transform='translate('+(mx-pinch.x0)+'px,'+(my-pinch.y0)+'px) scale('+pinch.scale+')';return;}
  const touch=event.touches[0];if(tap&&touch&&Math.hypot(touch.clientX-tap.x,touch.clientY-tap.y)>10)tap=null;
 },{passive:false});
 addEventListener('touchend',event=>{
- if(pinch){if(event.touches.length<2){const done=pinch;pinch=null;pages.style.transform='';zoomTo(zoom*done.scale,done.anchor);}return;}
+ if(pinch){if(event.touches.length<2){const done=pinch;pinch=null;pages.style.transform='';const before=zoom;zoomTo(zoom*done.scale,done.anchor);if(zoom===before&&(done.dx||done.dy))scrollBy(-done.dx,-done.dy);}return;}
  if(!tap||event.touches.length)return;
  const now=Date.now(),point=tap;tap=null;
  if(lastTap&&now-lastTap.at<300&&Math.hypot(point.x-lastTap.x,point.y-lastTap.y)<30){lastTap=null;event.preventDefault();zoomTo(zoom>MIN_ZOOM+0.01?MIN_ZOOM:DOUBLE_TAP_ZOOM,anchorAt(point.x,point.y));}
