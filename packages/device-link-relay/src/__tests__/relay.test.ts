@@ -350,6 +350,18 @@ describe('device-link relay wire contract', () => {
     // 设备签名原样交给收件设备核对。
     expect((delivered as Envelope & { auth?: unknown }).auth).toEqual(auth);
 
+    // Remote recommendation protocol regression (unit): old/new response shapes
+    // must survive the real self-hosted relay; the prior test only sent requests.
+    for (const [index, result] of [
+      { prompt: null }, { prompt: null, retryable: true }, { prompt: 'Recovered recommendation' },
+    ].entries()) {
+      const id = `prediction-result-${index}`;
+      host.send({ v: 1, kind: 'invoke-result', id, dst: 'phone-1', payload: { ok: true, result } });
+      const response = await phone.waitFor(env => env.kind === 'invoke-result' && env.id === id);
+      expect(response.src).toBe(OWNER_DEVICE);
+      expect(response.payload).toEqual({ ok: true, result });
+    }
+
     const cases: Array<{ frame: Record<string, unknown>; code: string }> = [
       { frame: { v: 1, kind: 'invoke', id: 'req-2', dst: 'nobody', payload: {} }, code: 'DEVICE_OFFLINE' },
       // 手机没开「允许被控」:控制类帧被拒,回程帧照常送达。

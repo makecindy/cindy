@@ -688,3 +688,150 @@ describe('builtinGhostProvisioner locale validation', () => {
       .toBe('// github');
   });
 });
+
+// 测试价值
+// - 生产入口与可观察结果：provisionBuiltinGhosts 对同 id 商店安装的处理——已装字节是否被种子覆盖、
+//   写在哪个目录、seeded 台账是否摘除、孤儿回收是否删掉商店安装。
+// - 规则依据：种子与商店按版本取新、相同取商店（2026-11）；新布局商店安装位于 `_ns/_root/<id>`。
+// - 现有覆盖缺口：既有用例只覆盖旧布局 `<id>` 和不看版本的指纹覆盖。
+// - 最小失败输入：`_ns/_root/<id>` 已装商店 1.0.0、种子 1.0.0（旧逻辑当作未装并覆盖）；
+//   种子 2.0.0（旧逻辑在根目录另装一份、丢掉 `.disabled`）；种子消失的台账 id 有商店安装（旧逻辑删除）。
+// - tier：unit（临时目录 + 注入的商店事实）。
+describe('builtinGhostProvisioner 与同名商店安装按版本取新', () => {
+  async function setVersion(dir: string, version: string): Promise<void> {
+    const file = path.join(dir, 'ghost.json');
+    const manifest = JSON.parse(await fs.promises.readFile(file, 'utf8')) as Record<string, unknown>;
+    await fs.promises.writeFile(file, JSON.stringify({ ...manifest, version }));
+  }
+
+  async function storeInstalledLayout(seedVersion: string) {
+    const root = await makeTempDir();
+    const seedRoot = path.join(root, 'seeds');
+    const repoRoot = path.join(root, 'installed');
+    await setVersion(await writeMinimalSeed(seedRoot, 'builtin-test'), seedVersion);
+    const storeDir = await writeMinimalSeed(path.join(repoRoot, '_ns', '_root'), 'builtin-test');
+    await fs.promises.writeFile(path.join(storeDir, 'main.js'), '// store bytes');
+    await fs.promises.writeFile(path.join(storeDir, '.disabled'), '');
+    return { seedRoot, repoRoot, storeDir };
+  }
+
+  const readSeeded = (repoRoot: string): string[] =>
+    (JSON.parse(fs.readFileSync(path.join(repoRoot, PROVISIONING_STATE_FILE), 'utf8')) as {
+      seeded: string[];
+    }).seeded;
+
+  it.each([
+    ['1.0.0', '相同版本'],
+    ['0.9.0', '种子更旧'],
+    ['not-a-version', '版本号不可比'],
+  ])('种子 %s（%s）让给 _ns/_root 下的商店安装，不覆盖也不另装', async (seedVersion) => {
+    const { seedRoot, repoRoot, storeDir } = await storeInstalledLayout(seedVersion);
+    const beforeReplace = vi.fn();
+    const outcome = await provisionBuiltinGhosts({
+      seedRootDirs: [seedRoot],
+      repoRootDir: repoRoot,
+      beforeReplace,
+      storeInstall: () => ({ version: '1.0.0', ownsInstalledBytes: true }),
+    });
+
+    expect(outcome.skipped).toContain('builtin-test');
+    expect(outcome.approved).toEqual([]);
+    expect(beforeReplace).not.toHaveBeenCalled();
+    expect(await fs.promises.readFile(path.join(storeDir, 'main.js'), 'utf8')).toBe('// store bytes');
+    expect(fs.existsSync(path.join(repoRoot, 'builtin-test'))).toBe(false);
+  });
+
+  it('种子版本更新时原位覆盖 _ns/_root 下的商店安装并保留停用状态', async () => {
+    const { seedRoot, repoRoot, storeDir } = await storeInstalledLayout('2.0.0');
+    const beforeReplace = vi.fn();
+    const outcome = await provisionBuiltinGhosts({
+      seedRootDirs: [seedRoot],
+      repoRootDir: repoRoot,
+      beforeReplace,
+      storeInstall: () => ({ version: '1.0.0', ownsInstalledBytes: true }),
+    });
+
+    expect(outcome.updated.map((m) => m.id)).toEqual(['builtin-test']);
+    expect(outcome.installed).toEqual([]);
+    expect(beforeReplace).toHaveBeenCalledWith('builtin-test');
+    expect(await fs.promises.readFile(path.join(storeDir, 'main.js'), 'utf8')).toBe('// brain');
+    expect(fs.existsSync(path.join(storeDir, '.disabled'))).toBe(true);
+    expect(fs.existsSync(path.join(repoRoot, 'builtin-test'))).toBe(false);
+    expect(readSeeded(repoRoot)).toEqual(['builtin-test']);
+  });
+
+  it('商店追上后：已装是商店字节就摘台账，仍是种子字节则留台账等商店更新', async () => {
+    const { seedRoot, repoRoot } = await storeInstalledLayout('2.0.0');
+    await provisionBuiltinGhosts({
+      seedRootDirs: [seedRoot],
+      repoRootDir: repoRoot,
+      storeInstall: () => ({ version: '1.0.0', ownsInstalledBytes: true }),
+    });
+
+    await provisionBuiltinGhosts({
+      seedRootDirs: [seedRoot],
+      repoRootDir: repoRoot,
+      storeInstall: () => ({ version: '2.0.0', ownsInstalledBytes: false }),
+    });
+    expect(readSeeded(repoRoot)).toEqual(['builtin-test']);
+
+    await provisionBuiltinGhosts({
+      seedRootDirs: [seedRoot],
+      repoRootDir: repoRoot,
+      storeInstall: () => ({ version: '2.0.0', ownsInstalledBytes: true }),
+    });
+    expect(readSeeded(repoRoot)).toEqual([]);
+  });
+
+  it('种子消失时不把有商店安装的台账 id 当孤儿删除', async () => {
+    const { seedRoot, repoRoot, storeDir } = await storeInstalledLayout('2.0.0');
+    await provisionBuiltinGhosts({
+      seedRootDirs: [seedRoot],
+      repoRootDir: repoRoot,
+      storeInstall: () => ({ version: '1.0.0', ownsInstalledBytes: true }),
+    });
+    await fs.promises.rm(path.join(seedRoot, 'builtin-test'), { recursive: true });
+    await writeMinimalSeed(seedRoot, 'other-seed');
+    const beforeRemove = vi.fn();
+
+    const outcome = await provisionBuiltinGhosts({
+      seedRootDirs: [seedRoot],
+      repoRootDir: repoRoot,
+      beforeRemove,
+      storeInstall: (id) => (id === 'builtin-test' ? { version: '2.0.0', ownsInstalledBytes: true } : null),
+    });
+
+    expect(outcome.removed).toEqual([]);
+    expect(beforeRemove).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(storeDir, 'ghost.json'))).toBe(true);
+    expect(readSeeded(repoRoot)).toEqual(['other-seed']);
+  });
+  // 补充依据：Codex review（#9078）——商店账本记录损坏时，lookup 抛错，孤儿回收不能把商店安装当种子删掉。
+  it('商店账本读不了时本轮不删除种子已撤的台账 id，并保持可重试', async () => {
+    const { seedRoot, repoRoot, storeDir } = await storeInstalledLayout('2.0.0');
+    await provisionBuiltinGhosts({
+      seedRootDirs: [seedRoot],
+      repoRootDir: repoRoot,
+      storeInstall: () => ({ version: '1.0.0', ownsInstalledBytes: true }),
+    });
+    await fs.promises.rm(path.join(seedRoot, 'builtin-test'), { recursive: true });
+    await writeMinimalSeed(seedRoot, 'other-seed');
+    const beforeRemove = vi.fn();
+
+    const outcome = await provisionBuiltinGhosts({
+      seedRootDirs: [seedRoot],
+      repoRootDir: repoRoot,
+      beforeRemove,
+      storeInstall: (id) => {
+        if (id === 'builtin-test') throw new Error('Plugin market ledger is unreadable');
+        return null;
+      },
+    });
+
+    expect(outcome.removed).toEqual([]);
+    expect(outcome.retryPending).toBe(true);
+    expect(beforeRemove).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(storeDir, 'ghost.json'))).toBe(true);
+    expect(readSeeded(repoRoot)).toContain('builtin-test');
+  });
+});

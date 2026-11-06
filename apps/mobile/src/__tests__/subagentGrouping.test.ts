@@ -153,28 +153,30 @@ describe('subagent grouping (buildMobileMessageRenderItems)', () => {
     expect(messages).toEqual(original);
   });
 
-  it('replaces a top-level Agent tool_use with a subagent_group nesting its children', () => {
-    const items = buildMobileMessageRenderItems([
-      msg({ id: 'u', role: 'user', content: { text: 'go' }, createdAt: '2026-01-01T00:00:01.000Z' }),
-      agentToolUse('A1', { description: '调研', subagentType: 'Explore', createdAt: '2026-01-01T00:00:02.000Z' }),
-      childTool('Bash', 'A1', '2026-01-01T00:00:03.000Z'),
-      childTool('Read', 'A1', '2026-01-01T00:00:04.000Z'),
-      agentResult('A1', '调研完成,结论 X', '2026-01-01T00:00:05.000Z'),
-    ]);
+  it.each(['A1', 'chatcmpl-tool-a1b2c3d4e5f60718'])(
+    'replaces a top-level Agent tool_use with a subagent_group nesting its children (%s)', (parentUuid) => {
+      const items = buildMobileMessageRenderItems([
+        msg({ id: 'u', role: 'user', content: { text: 'go' }, createdAt: '2026-01-01T00:00:01.000Z' }),
+        agentToolUse(parentUuid, { description: '调研', subagentType: 'Explore', createdAt: '2026-01-01T00:00:02.000Z' }),
+        childTool('Bash', parentUuid, '2026-01-01T00:00:03.000Z'),
+        childTool('Read', parentUuid, '2026-01-01T00:00:04.000Z'),
+        agentResult(parentUuid, '调研完成,结论 X', '2026-01-01T00:00:05.000Z'),
+      ]);
 
-    const groups = subagentGroups(items);
-    expect(groups).toHaveLength(1);
-    const g = groups[0];
-    expect(g.header).toEqual({ description: '调研', subagentType: 'Explore' });
-    expect(g.summary).toBe('调研完成,结论 X');
-    expect(g.status).toBe('completed');
-    expect(g.durationMs).toBe(3000); // 00:05 - 00:02
-    // children(2 个 tool)被归一化/折叠进 childItems(tool_group),不在顶层平铺。
-    expect(g.childItems.length).toBeGreaterThan(0);
-    // 顶层没有裸的 Agent tool_group 行。
-    const topToolGroups = items.filter((i) => i.type === 'tool_group');
-    expect(topToolGroups).toHaveLength(0);
-  });
+      const groups = subagentGroups(items);
+      expect(groups).toHaveLength(1);
+      const g = groups[0];
+      expect(g.header).toEqual({ description: '调研', subagentType: 'Explore' });
+      expect(g.summary).toBe('调研完成,结论 X');
+      expect(g.status).toBe('completed');
+      expect(g.durationMs).toBe(3000); // 00:05 - 00:02
+      // children(2 个 tool)被归一化/折叠进 childItems(tool_group),不在顶层平铺。
+      expect(g.childItems.length).toBeGreaterThan(0);
+      // 顶层没有裸的 Agent tool_group 行。
+      const topToolGroups = items.filter((i) => i.type === 'tool_group');
+      expect(topToolGroups).toHaveLength(0);
+    },
+  );
 
   it('recurses for nested sub-agents (2 levels)', () => {
     const items = buildMobileMessageRenderItems([

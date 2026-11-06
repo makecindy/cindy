@@ -168,7 +168,6 @@ export function useSingleInstanceViewGuard(ghost: InstalledGhost | null): void {
     // 只看承载主视图的页签:panel 与 mainView 是不同页面时可以并存。
     const existing = globalTabs.find(
       (tab) =>
-        tab.kind === 'plugin-view' &&
         (tab.state as PluginViewTabState | null)?.instanceId === instanceId &&
         ghost !== null &&
         tabShowsMainView(tab.state as PluginViewTabState, ghost),

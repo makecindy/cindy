@@ -401,7 +401,7 @@ export function BotGroupComposer({
           style={styles.topicOption} testID="botGroup.thread.alsoSend">
           {alsoSendToMain ? <CircleCheck size={iconSize.lg} color={colors.textPrimary} /> : <Circle size={iconSize.lg} color={colors.textSecondary} />}
           <Text style={styles.topicOptionText}>{t('groupChat.thread.alsoSend')}</Text>
-        </Pressable> : plus}{maskIndicator}</ComposerToolbarLeftGroup>
+        </Pressable> : plus}{!topic && maskIndicator}</ComposerToolbarLeftGroup>
         <ComposerToolbarSpacer />
         {trailing}
       </> : undefined}

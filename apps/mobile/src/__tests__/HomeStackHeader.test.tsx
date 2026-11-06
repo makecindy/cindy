@@ -3,10 +3,18 @@ import { act, createElement as el } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
-const h = vi.hoisted(() => ({ options: {} as any, dark: false }));
+const h = vi.hoisted(() => ({ options: {} as any, dark: false, layout: null as null | (() => void), menuFrame: [22, 44] as [number, number] }));
+vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => false }));
 vi.mock('react-native', () => ({
   StyleSheet: { create: (value: unknown) => value }, Image: ({ source, style }: any) => el('i', { 'data-artwork': source, style }),
-  View: ({ children, testID }: any) => el('div', { 'data-testid': testID }, children),
+  View: ({ children, testID, onLayout, ref }: any) => {
+    if (onLayout) h.layout = onLayout;
+    // The window frame UIKit has settled on, as measureInWindow reports it on device.
+    const attach = (node: any) => {
+      if (ref && node) ref.current = Object.assign(node, { measureInWindow: (cb: any) => cb(h.menuFrame[0], 0, h.menuFrame[1], 44) });
+    };
+    return el('div', { 'data-testid': testID, ref: attach }, children);
+  },
 }));
 vi.mock('expo-router', () => ({ Stack: {
   Screen: ({ options }: any) => { h.options = options; return options.headerTitle(); },
@@ -63,4 +71,30 @@ it('keeps the Duo custom menu within the native toolbar and preserves its action
   expect(toolbar.querySelector('[data-artwork]')?.getAttribute('data-artwork')).toBe('narrow-home-menu');
   await act(async () => toolbar.querySelector('button')!.click());
   expect(open).toHaveBeenCalledOnce();
+});
+
+// The Duo menu's window frame is read only once the row has been still for a moment: UIKit animates
+// rebuilt bar items without a new layout pass, so a read right after layout can be stale.
+it('reports the Duo menu frame after layout settles, restarts the wait on each layout and cancels on unmount', async () => {
+  vi.useFakeTimers();
+  try {
+    const onMenuFrame = vi.fn();
+    await act(async () => root.render(el(HomeStackHeader, {
+      title: el('span', null, 'All tasks'), menuA11y: 'Open menu', menuTestID: 'home.chromeMenu', onOpenMenu: vi.fn(),
+      keepMenuTopLeft: true, onMenuFrame,
+    })));
+    act(() => { h.layout!(); vi.advanceTimersByTime(200); });
+    expect(onMenuFrame).not.toHaveBeenCalled();
+    act(() => { h.layout!(); vi.advanceTimersByTime(200); });
+    expect(onMenuFrame).not.toHaveBeenCalled();
+    act(() => { vi.advanceTimersByTime(60); });
+    expect(onMenuFrame).toHaveBeenCalledExactlyOnceWith(22, 44);
+    act(() => { h.layout!(); });
+    await act(async () => root.unmount());
+    act(() => { vi.advanceTimersByTime(500); });
+    expect(onMenuFrame).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
+    root = createRoot(node);
+  }
 });
