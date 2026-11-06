@@ -13949,7 +13949,11 @@
       "mailAttach": "添加附件",
       "mailRemoveAttachment": "移除 {{name}}",
       "mailUpdated": "草稿已更新（只读）",
-      "mailLegacy": "历史草稿（只读）"
+      "mailLegacy": "历史草稿（只读）",
+      "taskAutoArchived": "已归档「{{title}}」",
+      "taskAutoArchivedUndo": "撤销",
+      "taskAutoArchivePending": "离开后自动归档",
+      "taskAutoArchiveCancel": "本次不归档"
     },
     "ghostHook": {
       "blockedFallback": "消息被插件拦下，未发送",

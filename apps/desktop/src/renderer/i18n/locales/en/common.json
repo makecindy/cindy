@@ -14015,7 +14015,11 @@
       "mailAttach": "Add attachment",
       "mailRemoveAttachment": "Remove {{name}}",
       "mailUpdated": "Draft updated (read-only)",
-      "mailLegacy": "Draft history (read-only)"
+      "mailLegacy": "Draft history (read-only)",
+      "taskAutoArchived": "Archived \"{{title}}\"",
+      "taskAutoArchivedUndo": "Undo",
+      "taskAutoArchivePending": "Archives when you leave",
+      "taskAutoArchiveCancel": "Keep this time"
     },
     "ghostHook": {
       "blockedFallback": "Message blocked by a plugin; not sent",
