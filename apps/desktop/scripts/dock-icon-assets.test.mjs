@@ -8,7 +8,8 @@ import rendererConfig from '../vite.renderer.config.ts';
 // PR #9139 regression: Windows/Linux emitted 869,882 bytes of macOS-only PNGs.
 // Existing appearance tests cover preferences, not the emitted build assets.
 // Minimal failing input: build that entry for win32; tier: standard unit.
-// Windows separator input reproduces the CI entry/external mismatch on any host.
+// Backslash input catches comparing Vite's resolved ID with the raw entry path.
+// Entry normalization happens before Vite; native Windows resolution still needs CI.
 // Measured standalone runtime: 451 ms (8 cases, macOS development machine).
 const entry = fileURLToPath(
   new URL('../src/renderer/components/settings/DockIconPicker.tsx', import.meta.url),
