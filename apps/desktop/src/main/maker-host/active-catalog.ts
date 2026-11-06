@@ -76,6 +76,7 @@ import {
 } from '@cindy/model-providers';
 
 import { selectDefaultModels } from './model-default-selection.js';
+import { codexApiModelMetadata } from './codex-api-model-capabilities.js';
 
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
@@ -136,6 +137,10 @@ let customConfigs: CustomProviderConfig[] | null = null;
  * **additions-only**:静态 id first-wins,cache 只补未来新增模型,不会覆盖目录的受控能力元数据。
  */
 let discoveredCodex: CatalogModel[] = [];
+/** API-route engine report; never mixed with OAuth membership or persisted user edits. */
+let codexApiModels: CatalogModel[] | null = null;
+const getDiscoveredModelMetadata: NonNullable<Parameters<typeof buildUserProvider>[1]>['getDiscoveredModelMetadata'] =
+  (agent, model, routing) => codexApiModelMetadata(codexApiModels, agent, model, routing);
 /** Mirrors credential presence only; secrets stay in the existing secret store. */
 let openAiImagesApiKeyConfigured = false;
 /**
@@ -2062,7 +2067,7 @@ function installActiveCatalog(
   baseUnverifiedXdMediaKinds = nextUnverifiedXdMediaKinds;
   if (customConfigs) {
     custom = customConfigs.map((config) =>
-      buildUserProvider(config, { modelRegistry: projectionRegistry, presets: catalog.presets }),
+      buildUserProvider(config, { modelRegistry: projectionRegistry, presets: catalog.presets, getDiscoveredModelMetadata }),
     );
   }
   markChanged();
@@ -2150,6 +2155,7 @@ export function commitModelPlaneFromCatalog(
       buildUserProvider(config, {
         modelRegistry: trustedCustomProviderRegistry,
         presets: (base ?? BUNDLED_CATALOG).presets,
+        getDiscoveredModelMetadata,
       }),
     );
   }
@@ -2201,9 +2207,21 @@ export function setCustomProviderConfigs(configs: CustomProviderConfig[]): void 
     buildUserProvider(config, {
       modelRegistry: trustedCustomProviderRegistry,
       presets: (base ?? BUNDLED_CATALOG).presets,
+      getDiscoveredModelMetadata,
     }),
   );
   markChanged();
+}
+
+export function hasCodexApiModelCapabilities(): boolean {
+  return codexApiModels !== null;
+}
+
+/** Replace the complete API-route engine report and re-project current raw configs. */
+export function setCodexApiModelCapabilities(models: CatalogModel[] | null): void {
+  codexApiModels = models;
+  if (customConfigs) setCustomProviderConfigs(customConfigs);
+  else markChanged();
 }
 
 /**
