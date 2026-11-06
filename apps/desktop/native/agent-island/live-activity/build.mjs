@@ -20,6 +20,8 @@ const DEPLOYMENT_TARGET = 'arm64-apple-macos27.3';
 const MODULE_NAME = 'CindyAgentActivity';
 const EXTENSION_NAME = 'CindyAgentActivity';
 export const AGENT_ACTIVITY_ADDON_RELATIVE_PATH = 'tools/agent-island/cindy-agent-activity.node';
+/** Built by `buildMacAgentIslandHelper` in forge.config.ts, next to its `mascots/`. */
+const ISLAND_HELPER_RELATIVE_PATH = 'tools/agent-island/xdt-macos-agent-island-helper';
 /** Matches `silentAlertSoundName` in CindyAgentActivityController.swift. */
 const SILENT_ALERT_SOUND = 'cindy-live-activity-silent.caf';
 
@@ -110,15 +112,18 @@ function plistSet(plist, key, type, value) {
 
 /**
  * WidgetKit only archives images from an asset catalog (a file-loaded NSImage renders
- * as a grey placeholder), so the island mascots are compiled into Assets.car.
+ * as a grey placeholder), so the island mascots are compiled into Assets.car. The sprite
+ * PNGs in `mascots/` have no eyes (the island draws them), so the packaged island helper
+ * renders finished stills of every skin and status first (`--export-mascots`).
  */
-function compileMascotAssets(resources) {
+function compileMascotAssets(resources, helper) {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-agent-activity-assets-'));
   try {
+    const mascots = path.join(work, 'mascots');
+    execFileSync(helper, ['--export-mascots', mascots], { stdio: 'inherit' });
     const catalog = path.join(work, 'Assets.xcassets');
     fs.mkdirSync(catalog, { recursive: true });
     fs.writeFileSync(path.join(catalog, 'Contents.json'), JSON.stringify({ info: { author: 'xcode', version: 1 } }));
-    const mascots = path.join(source, '../mascots');
     for (const file of fs.readdirSync(mascots).filter((name) => name.endsWith('.png'))) {
       const set = path.join(catalog, `${path.basename(file, '.png')}.imageset`);
       fs.mkdirSync(set);
@@ -191,6 +196,8 @@ export function installAgentActivityExtension(appPath, arch = process.arch) {
     log('extension skipped: addon was not packaged');
     return false;
   }
+  const helper = path.join(appPath, 'Contents/Resources', ISLAND_HELPER_RELATIVE_PATH);
+  if (!fs.existsSync(helper)) throw new Error(`[agent-activity] island helper missing at ${helper}`);
   const appPlist = path.join(appPath, 'Contents/Info.plist');
   const appId = plistBuddy(appPlist, 'Print :CFBundleIdentifier');
   const shortVersion = plistBuddy(appPlist, 'Print :CFBundleShortVersionString');
@@ -209,7 +216,7 @@ export function installAgentActivityExtension(appPath, arch = process.arch) {
     '-Xlinker', '-e', '-Xlinker', '_NSExtensionMain',
     '-o', path.join(appex, 'Contents/MacOS', EXTENSION_NAME),
   ]);
-  compileMascotAssets(path.join(appex, 'Contents/Resources'));
+  compileMascotAssets(path.join(appex, 'Contents/Resources'), helper);
   fs.writeFileSync(
     path.join(appex, 'Contents/Info.plist'),
     `<?xml version="1.0" encoding="UTF-8"?>

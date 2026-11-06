@@ -36,15 +36,17 @@ private extension CindyAgentActivityAttributes.ContentState {
   }
 }
 
-/// Asset-catalog mascot (build.mjs compiles `mascots/` into Assets.car; WidgetKit does
-/// not archive file-loaded images). Skins drawn in code fall back to Cindy.
+/// Asset-catalog still of the island mascot in the pose for `status` (`<skin>-<status>`,
+/// exported by the island helper in build.mjs; WidgetKit does not archive file-loaded images).
+/// A skin newer than this build falls back to Cindy.
 private struct MascotView: View {
   let skin: String
+  let status: String
   let size: CGFloat
   var dot: Color? = nil
 
   var body: some View {
-    Image(NSImage(named: skin) != nil ? skin : "cindy")
+    Image(NSImage(named: "\(skin)-\(status)") != nil ? "\(skin)-\(status)" : "cindy-\(status)")
       .resizable()
       .interpolation(.high)
       .scaledToFit()
@@ -127,7 +129,7 @@ private struct ActivityBanner: View {
 
   var body: some View {
     HStack(spacing: 12) {
-      MascotView(skin: state.mascot, size: 38, dot: state.tint)
+      MascotView(skin: state.mascot, status: state.status, size: 38, dot: state.tint)
       VStack(alignment: .leading, spacing: 3) {
         Text(state.title.isEmpty ? appName : state.title)
           .font(.system(size: 14, weight: .semibold))
@@ -150,7 +152,7 @@ struct CindyAgentActivityWidget: Widget {
     } dynamicIsland: { context in
       DynamicIsland {
         DynamicIslandExpandedRegion(.leading) {
-          MascotView(skin: context.state.mascot, size: 36, dot: context.state.tint)
+          MascotView(skin: context.state.mascot, status: context.state.status, size: 36, dot: context.state.tint)
             .padding(.leading, 4)
         }
         DynamicIslandExpandedRegion(.trailing) {
@@ -169,11 +171,11 @@ struct CindyAgentActivityWidget: Widget {
             .padding(.horizontal, 4)
         }
       } compactLeading: {
-        MascotView(skin: context.state.mascot, size: 20)
+        MascotView(skin: context.state.mascot, status: context.state.status, size: 20)
       } compactTrailing: {
         CompactStatus(state: context.state)
       } minimal: {
-        MascotView(skin: context.state.mascot, size: 20, dot: context.state.tint)
+        MascotView(skin: context.state.mascot, status: context.state.status, size: 20, dot: context.state.tint)
       }
       .keylineTint(context.state.tint)
     }

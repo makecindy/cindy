@@ -7513,11 +7513,57 @@ private enum AgentIslandMascotPreview {
   }
 }
 
+/// `--export-mascots <dir>`: writes a still of every skin in each Live Activity status
+/// (`<skin>-running.png`, `-attention.png`, `-completed.png`, 128px) for the widget extension's
+/// asset catalog (native/agent-island/live-activity/build.mjs). The sprite PNGs carry no eyes —
+/// this view draws them — so the extension must use these stills, not the raw sprites.
+private enum AgentIslandMascotExport {
+  static let flag = "--export-mascots"
+
+  static var outputDirectory: URL? {
+    let args = Array(CommandLine.arguments.dropFirst())
+    guard let index = args.firstIndex(of: flag), index + 1 < args.count else { return nil }
+    return URL(fileURLWithPath: args[index + 1], isDirectory: true)
+  }
+
+  @MainActor
+  static func run(to directory: URL) -> Bool {
+    let poses: [(String, AgentIslandMascotAnimationState)] = [
+      ("running", .working), ("attention", .waitingApproval), ("completed", .completed),
+    ]
+    do {
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      for skin in AgentIslandMascotCatalog.skins {
+        for (status, state) in poses {
+          let view = AgentIslandMascotView(skin: skin, state: state, size: 64)
+            .agentIslandMascotAnimationsActive(false)
+          let renderer = ImageRenderer(content: view)
+          renderer.scale = 2
+          guard let image = renderer.cgImage,
+                let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
+          else {
+            FileHandle.standardError.write(Data("could not render \(skin) \(status)\n".utf8))
+            return false
+          }
+          try png.write(to: directory.appendingPathComponent("\(skin)-\(status).png"))
+        }
+      }
+      return true
+    } catch {
+      FileHandle.standardError.write(Data("\(error)\n".utf8))
+      return false
+    }
+  }
+}
+
 final class AgentIslandAppDelegate: NSObject, NSApplicationDelegate {
   private let controllerManager = AgentIslandDisplayControllerManager()
   private let decoder = JSONDecoder()
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    if let directory = AgentIslandMascotExport.outputDirectory {
+      exit(AgentIslandMascotExport.run(to: directory) ? 0 : 1)
+    }
     if AgentIslandMascotPreview.isEnabled {
       AgentIslandMascotPreview.present()
       return

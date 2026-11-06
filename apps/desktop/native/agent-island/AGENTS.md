@@ -108,8 +108,10 @@ pnpm --filter desktop preview:island-mascots
   `<应用 id>.agent-activity`。必须按 Xcode 的方式用 `-e _NSExtensionMain` 链接：从 Swift `main`
   启动会跳过 ExtensionFoundation 的进程身份初始化，被 chronod 拉起即崩溃。共享的
   `CindyAgentActivityAttributes` 在扩展与原生扩展里都以 `-module-name CindyAgentActivity` 编译。
-- **扩展里的界面**：图片只认编译进 Asset Catalog 的（`build.mjs` 用 `actool` 把 `mascots/` 编成
-  `Assets.car`），从文件读的 `NSImage` 会渲染成灰块；灵动岛与菜单栏药丸背景恒为深色，文字用白色而
+- **扩展里的界面**：图片只认编译进 Asset Catalog 的，从文件读的 `NSImage` 会渲染成灰块。`mascots/`
+  里的素材没有眼睛（眼睛由本 helper 绘制），所以 `build.mjs` 先运行打包好的 helper
+  `--export-mascots <dir>`，导出每个角色在运行中／等你处理／已完成三种姿态的静帧
+  （`<skin>-running.png` 等），再用 `actool` 编成 `Assets.car`；改角色画法后实时活动会自动跟上。灵动岛与菜单栏药丸背景恒为深色，文字用白色而
   不是 `.primary`；菜单栏会省略只有文字的紧凑右侧区域，状态位要带一个图标。
   颜色与计数格式跟我们的岛一致：运行中橙、等你处理青、未读完成绿，计数写成「等你处理 · 运行中」。
 - **提醒展开**：只有「等你处理的任务变多」或「转为已完成」时带 `AlertConfiguration` 更新，系统会把活动
