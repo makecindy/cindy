@@ -26,11 +26,12 @@ const FAKE_AWS_SECRET = ['fixture', 'awssecret', '0123456789abcdef'].join('-');
 const FAKE_NPM_TOKEN = ['npm', 'fixture0123456789abcdef0123456789'].join('_');
 const FAKE_GH_PAT = ['github', 'pat', 'fixture0123456789abcdef0123'].join('_');
 const FAKE_GH_TOKEN = ['ghp', 'fixtureabcdefghijklmnopqrst'].join('_');
+const FAKE_GITLAB_PAT = ['glpat', 'fixture0123456789abcdef'].join('-');
 const FAKE_BRACKET_PASSWORD = ['abc', '[defghijklmnop'].join('');
 
-const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, resolveSpineEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, writeOwner, orderedDrainDrafts, withBackupHint, withoutFullBackupClaim, backupHint, discardRawSnapshots, lastCompactionEntry, inCooldown, resolveCooldownMs, providerURLFromPatch, resolveProviderBaseURL } = await import(
-  '../../../../extensions/live-compact/index.ts'
-);
+const extensionModule = await import('../../../../extensions/live-compact/index.ts');
+const registerLiveCompact = extensionModule.default;
+const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, resolveSpineEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, writeOwner, orderedDrainDrafts, withBackupHint, withoutFullBackupClaim, backupHint, discardRawSnapshots, lastCompactionEntry, inCooldown, resolveCooldownMs, providerURLFromPatch, resolveProviderBaseURL, spanHidesCallArgs } = extensionModule;
 
 let seq = 0;
 function entry(role, text, extra = {}) {
@@ -167,6 +168,9 @@ describe('live compact spine selection', () => {
       [`postgres://cindy:${FAKE_DB_PASSWORD}@db.internal:5432/app`, FAKE_DB_PASSWORD],
       [`echo ${FAKE_NPM_TOKEN}`, FAKE_NPM_TOKEN],
       [`echo ${FAKE_GH_PAT}`, FAKE_GH_PAT],
+      // GitLab 的 PAT 没有大写下划线键名可依:值带 glpat- 前缀,键可能是小写 token。
+      [`token: ${FAKE_GITLAB_PAT}`, FAKE_GITLAB_PAT],
+      [`{"private_token":"${FAKE_GITLAB_PAT}"}`, FAKE_GITLAB_PAT],
     ];
     for (const [text, secret] of positives) {
       const out = redactSecrets(text);
@@ -327,6 +331,48 @@ describe('live compact card roles and tool excerpts (1.0.3-1.0.5)', () => {
     expect(inCooldown(entries, { windowMs: 60_000, now: 1_300_000 })).toBe(false);
     expect(resolveCooldownMs({ SPINE_COOLDOWN_MS: '-1' })).toBe(0);
     expect(resolveCooldownMs({ SPINE_COOLDOWN_MS: '9000' })).toBe(9000);
+  });
+
+  it('remembers the compaction it let pass across settle hooks in the same session', () => {
+    // 已让过的条目要按会话存:stateFor 每次新建对象,存在 state 上的话同一条 compaction
+    // 会在每个 settle 都被当成首次出现,宿主压缩一次之后 Live Compact 永久停摆。
+    const root = mkdtempSync(join(tmpdir(), 'spine-cooldown-'));
+    const previous = process.env.SPINE_SHADOW_DIR;
+    process.env.SPINE_SHADOW_DIR = root;
+    try {
+      let handler = null;
+      registerLiveCompact({ on: (name, fn) => { if (name === 'agent_before_settle') handler = fn; } });
+      expect(handler).not.toBeNull();
+      const contextEntries = [
+        { messages: [{ role: 'system', content: 'sys' }], sourceEntry: { id: 'x1', type: 'message' } },
+        { messages: [{ role: 'user', content: 'go' }], sourceEntry: { id: 'x2', type: 'message' } },
+        { messages: [{ role: 'user', content: 'official summary' }], sourceEntry: { id: 'x3', type: 'compaction', timestamp: 1_000_000 } },
+      ];
+      const event = { outcome: 'completed', context: { contextEntries } };
+      const ctx = {
+        sessionManager: { getSessionId: () => 'session-cooldown' },
+        getContextUsage: () => ({ tokens: 100 }),
+      };
+      handler(event, ctx);
+      handler(event, ctx);
+      const log = readFileSync(join(root, 'spine.log'), 'utf8');
+      expect(log.match(/cooldown: official compaction/g) || []).toHaveLength(1);
+      // 第二次进入不该再走冷却分支:上下文没到压力线,只留 idle 一行。
+      expect(log).toContain('spine idle');
+    } finally {
+      if (previous === undefined) delete process.env.SPINE_SHADOW_DIR;
+      else process.env.SPINE_SHADOW_DIR = previous;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('asks for the backup pointer when a cut span hides its call arguments', () => {
+    // 卡片只写 callCommand(命令或工具名):write/edit 这类带路径与正文的调用切走后,
+    // 后续轮次看不到写入目标与内容,可能重复执行副作用 —— 这类 span 要给出备份指针。
+    const meta = (name, command) => new Map([['c1', { name, command }]]);
+    expect(spanHidesCallArgs([{ callMeta: meta('bash', 'npm test') }])).toBe(false);
+    expect(spanHidesCallArgs([{ callMeta: meta('write', 'write') }])).toBe(true);
+    expect(spanHidesCallArgs([])).toBe(false);
   });
 
   it('counts a hard fact only when it comes from the same source', () => {

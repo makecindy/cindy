@@ -57,7 +57,7 @@
  * 关键事实没进卡片就 ok=false(上游 issue #14 P0-2);增强的行归类(用户行里的「必须/口令/
  * 方案/编号」进硬行,工具行只记省略数)。
  *
- * 1.0.9 里本仓做不到或有意不做的三处:
+ * 1.0.9 里本仓做不到或有意不做的四处:
  *   1) 引擎地址解析链(请求头 → 已注册 provider → 配置层 → 配置树 → profile 补丁 → 官方
  *      DeepSeek 端点 → 内置目录)在本仓只接上了「官方端点」与「pi-ai 内置目录」两段:pi 扩展
  *      API 不交 baseURL,也没有 DSH 的 configEditor / profileContext / cordis.patch.yml。
@@ -72,6 +72,10 @@
  *      目录继承 `%APPDATA%` 的 ACL 已是 SYSTEM / Administrators / 当前用户三项,没有
  *      Users / Authenticated Users / Everyone,与上游 `/grant:r <user>:F` + `/inheritance:r`
  *      的落点一致;目录本身还在按账号隔离的 userData 下,备份文件仍按 0600 写。
+ *   4) 切范围里的调用参数进不了卡片时(write/edit/read 这类没有 `command` 参数的调用,
+ *      卡片只写工具名),本仓会把该 span 的备份指针进卡片;上游只看工具结果被省略才给指针。
+ *      理由:切走之后目标文件与写入内容就再没有下文,后续轮次可能重复执行副作用。
+ *      代价是这类 span 的卡片多一行指针,其余格式不变。
  *
  * Mapping notes (DSH -> pi):
  *   - agent/status idle + turn/end completed  -> pi.on("agent_before_settle", outcome === "completed")
@@ -1453,8 +1457,6 @@ interface SpineEntry {
 
 interface SpineState {
   key: string;
-  /** 1.0.9: 已经让过的那条宿主压缩条目 id;同一条只让一次。 */
-  cooldownSeenEntry?: string;
 }
 
 // 与原仓 eventText 一致:只取正文块。toolCall 参数不进 span/live——
@@ -1522,7 +1524,9 @@ const REDACT_RULES: Array<[RegExp, string]> = [
   // Stripe 形态是 `sk_live_...` / `rk_test_...`:前缀分段,上一条的 `sk-` 匹配不到。
   [/(?<![A-Za-z0-9])(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}/g, "[REDACTED]"],
   // GitHub:传统 PAT 是 gh[pousr]_,细粒度 PAT 是 github_pat_ 前缀(长度不固定)。
-  [/(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{22,}|xox[abps]-[A-Za-z0-9-]{10,})/g, "[REDACTED]"],
+  // GitLab 的 PAT 是 glpat- 前缀,常挂在 `PRIVATE-TOKEN:` 或小写 token 字段上 ——
+  // 没有大写下划线键名可依,只能按前缀认。
+  [/(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{22,}|glpat-[A-Za-z0-9_-]{20,}|xox[abps]-[A-Za-z0-9-]{10,})/g, "[REDACTED]"],
   // npm 的 registry 令牌是 `npm_` + 随机串;`.npmrc` 的 `_authToken=` 由上面的键名规则覆盖。
   [/(?<![A-Za-z0-9])npm_[A-Za-z0-9]{16,}/g, "[REDACTED]"],
   // 云厂商固定前缀凭证:AWS AK/ASIA、Google AIza、Stripe 的 live 前缀。
@@ -1593,6 +1597,13 @@ function stateFor(ctx: any): SpineState {
   // SpineState 现在只有 key(前缀快照随 thunder 一起注释掉了),Map 缓存没有可缓存的东西。
   return { key: sessionKey(ctx) };
 }
+
+/**
+ * 1.0.9: 已让过的宿主压缩条目,按会话记。上游把它挂在会话级 state 上,而本仓的 `stateFor`
+ * 每次都新建对象 —— 放这里,否则同一条 compaction 会在每个 settle 都被当成「首次出现」,
+ * 原生压缩一次之后 Live Compact 就永久停摆。上界同其它跟踪表。
+ */
+const cooldownSeen = new Map<string, string>();
 
 /** 实例级根:dev / packaged 各一份,跨会话稳定(原仓对应 DSH_HOME)。 */
 let rootWarned = false;
@@ -2634,8 +2645,8 @@ export default function (pi: ExtensionAPI) {  // Idle cut: pi fires agent_before
     }
     // 1.0.9: 宿主压缩后的第一次 idle 先让一让,免得紧接着又把它产出的摘要卷走。
     const official = lastCompactionEntry(entries);
-    if (official && state.cooldownSeenEntry !== official.id) {
-      state.cooldownSeenEntry = official.id;
+    if (official && cooldownSeen.get(state.key) !== official.id) {
+      rememberTracked(cooldownSeen, state.key, official.id);
       logLine(state, `spine cooldown: official compaction ${official.id} seen, skip this pass`);
       return undefined;
     }
@@ -2703,6 +2714,15 @@ function turnGrowthFor(key: string): { last: number | null; max: number } {
   return fresh;
 }
 
+/** 切范围里有调用参数进不了卡片(卡片只写 callCommand:命令或退化成工具名)。 */
+export function spanHidesCallArgs(
+  entries: Array<{ callMeta?: Map<string, { name: string; command: string }> }>,
+): boolean {
+  return (entries || []).some((entry) =>
+    [...(entry?.callMeta?.values() ?? [])].some((meta) => meta.command === meta.name),
+  );
+}
+
 /**
  * 选一刀并把它落盘/drafts 化。返回 null 表示这一刀被拒或没有合法段。
  * 返回的 entries/after 是「切完之后的模拟上下文」:收尾模式下用它接着切下一刀。
@@ -2750,7 +2770,11 @@ function attemptCut(options: {
     const file = join(shadow, shadowName(state.key));
 
     // 卡片正文会一直留在上下文里(小工具结果是整段原样进卡片),脱敏必须在这一侧也做。
-    const redacted = { ...chunk.card, text: redactSecrets(chunk.card.text) };
+    // 卡片只写调用名与命令(callCommand 拿不到 command 时退化成工具名),write/edit 这类
+    // 带路径与正文的调用切走后参数就没了下文 —— 让这类 span 也给出备份指针,否则后续轮次
+    // 看不到写入目标/内容,可能重复执行副作用。
+    const hiddenCallArgs = spanHidesCallArgs(spanEntries);
+    const redacted = { ...chunk.card, needsBackup: chunk.card.needsBackup || hiddenCallArgs, text: redactSecrets(chunk.card.text) };
     // 1.0.6: 切范围内存在被修剪过的工具结果时,不宣称「有完整备份」。
     const card = withBackupHint(redacted, file, backupClaimOk(spanEntries));
     // 1.0.8: 卡片不再用官方摘要标记,改成自己的正文开头(原仓 SPINE_SOURCE_KIND 的对应物)。
