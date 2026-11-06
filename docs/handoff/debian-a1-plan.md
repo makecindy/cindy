@@ -311,3 +311,33 @@ S8 里重新做的备份用其自己的文件名；回滚时以**最近一次**�
 早先文档提到的 `cindy-desktop.service.bak-20261106-163441` 并不存在；原 unit 内容已在
 本文件「当前状态」一节之外单独记录于 git 历史（commit `3c40a50675` 之前的会话记录）。
 恢复方式：按本文件步骤 3 重新写入 unit，或 `git log -p -- apps/host` 查阅对应配置。
+
+## safeStorage 主密钥为什么会变，以及如何不再变（2026-11-06 补）
+
+**“它”是什么**：`safe-storage/*.enc` 的加密主密钥来自 Secret Service 里的一个条目：
+`application=Cindy` + `xdg:schema=chrome_libsecret_os_crypt_password_v2`（label
+“Chromium Safe Storage”，存在 Inua keyring 里，底层是 pass/GPG）。Chromium 用这个 secret
+经 PBKDF2(1 轮, salt “saltysalt”) 派生 AES-128-CBC 密钥。
+
+**为什么会重建**：实测该条目 `created = 2026-11-03 12:42:32`（`application=chrome` 那条同
+时间），说明那一刻 keyring 被整体重建（`inua keyring` 初始化/替换/import 或 pass store
+重建）。Chromium 找不到旧条目时会**静默生成一个新的随机 secret**，于是 2026-10-16 写入的
+密文（`owner_*_provider_key_magpie-debian_*`、Telegram 凭据）全部 `bad decrypt`。
+
+**现在怎么防止**：
+
+1. 已把当前密钥另存为 `~/.local/state/cindy-safe-storage/{Cindy,chrome}.key`（0600）。
+2. 新增 `~/.local/bin/cindy-safestorage-guard`：条目缺失时用保存的密钥**恢复**（而不是让
+   Chromium 重新生成）；条目存在但与保存值不一致时只告警并把新值另存为 `.drift-*`，
+   不覆盖原值。
+3. 已接入 `cindy-desktop.service` 的 `ExecStartPre`（先于应用启动）和
+   `cindy-desktop-watchdog`（每分钟一次兜底）。
+4. 自测通过：临时条目 store → clear → 用保存值恢复，结果完全一致（`match=yes`）。
+
+**注意**：
+
+- 必须通过 `cindy-desktop.service` 启动 Cindy（或先手动跑一次 guard），否则应用可能先于
+  guard 生成新密钥。
+- 不要执行 `inua keyring replace/import`；若确实要重建 keyring，重建后立刻跑
+  `~/.local/bin/cindy-safestorage-guard` 恢复主密钥。
+- 保存的 `.key` 是明文（0600）。它和被保护的密文在同一台机器上，安全性依赖文件权限。
