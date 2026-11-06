@@ -1131,7 +1131,12 @@ Main 按真实逻辑页或专属协议分区定位物理实例，绑定当前 ow
 远程与分享来源复用普通模型选择器的目录与授权通道。选择确认与新任务路由分别重读精确来源目录，
 不可用时不借用本机同名模型；远程 Agent 不要求插件电脑安装对应 Harness。
 `/agent-models` 无参返回可选 `supportsRemoteRoutes:true`；旧 Host 没有该标志时路由插件保留本机行为，
-不回传远程路由，防止旧解析器丢弃来源后误执行。插件自建后台任务仍使用本机 `PluginTaskRoute`。
+不回传远程路由，防止旧解析器丢弃来源后误执行。
+插件自建任务另以 `tasks.capabilities().remoteRoutes:true` 声明完整远程执行支持；
+create / setModel 接受 `PluginTaskRoute.agentDeviceId`，send/accept 重读精确来源授权目录，
+任务记录与文件仍在插件宿主，结果和取消复用普通 Session/远程 proxy 的归属及轮次校验。
+不新增插件批准、不扩大工具/目录权限、不接管远程电脑上的任意任务；旧 route、批准和回执无迁移。
+实现、错误和来源保存规则见 [插件任务远程模型](plugin-task-api-implementation.md#插件任务使用远程模型2026-11-06未发布)。
 实现见 `ghostModelPicker.ts`、`PluginModelPickerHost.tsx`、`mobilePageService.ts`；
 作者契约见 `cindy-plugin-creator/references/plugin-agent-models.md`，回归见 `ghostModelPicker.test.ts`。
 
