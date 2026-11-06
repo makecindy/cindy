@@ -11,7 +11,7 @@ export interface SettingsSearchContext extends ImBotIdentity {
   voiceRefinementEnabled?: boolean;
   /** Capability and profile presence only; never include voiceprint data. */
   speakerFilter?: { supported: boolean; enrolled: boolean };
-  agentIsland?: { supported: boolean; enabled: boolean; soundEnabled?: boolean };
+  agentIsland?: { supported: boolean; enabled: boolean; soundEnabled?: boolean; liveActivitySupported?: boolean };
   /** Selector visibility only; never expose the user's custom media URL to search. */
   wallpaperMotionAvailable?: boolean;
 }

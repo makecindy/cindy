@@ -5768,6 +5768,69 @@ describe('AgentIslandService native publishing', () => {
     expect(framesById.get(2)).toMatchObject({ contentWidth: 210 });
   });
 
+  // The macOS Dynamic Island draws above our panel and passes clicks through, so on
+  // those displays the island must not start at the screen center; a stored
+  // position is still the user's choice.
+  it.each([
+    { stored: undefined, expectRightOfSystemIsland: true },
+    { stored: 0.25, expectRightOfSystemIsland: false },
+  ])('starts beside the macOS Dynamic Island unless a position is stored ($stored)', async ({ stored, expectRightOfSystemIsland }) => {
+    const display = {
+      id: 1,
+      label: 'Built-in Liquid Retina XDR Display',
+      bounds: { x: 0, y: 0, width: 1512, height: 993 },
+      internal: true,
+    };
+    mocks.readLayoutPreferences.mockReturnValueOnce(new Map<number, AgentIslandLayoutPreference>(
+      stored === undefined
+        ? []
+        : [[1, { centerXRatio: stored, displayName: display.label, displayIndex: 0, displayInternal: true, displayBounds: display.bounds }]],
+    ));
+    mocks.displays.splice(0, mocks.displays.length, display);
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+    });
+    syncEnabledForTest(service, publish);
+    (
+      service as unknown as {
+        handleNativeScreenMetrics(metrics: { screens: unknown[]; preferredDisplayId: number | null }): void;
+      }
+    ).handleNativeScreenMetrics({
+      preferredDisplayId: 1,
+      screens: [{
+        displayId: 1,
+        frame: display.bounds,
+        hasNotch: false,
+        hasSystemIsland: true,
+        notchWidth: 211,
+        topBarHeight: 30,
+        menuBarHeight: 30,
+        safeAreaTop: 0,
+        isMain: true,
+        signature: 'builtin-system-island',
+      }],
+    });
+
+    service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+
+    const frame = latestNativeFrames(publish).find((item) => item.displayId === 1);
+    if (!frame || typeof frame.contentWidth !== 'number') throw new Error('missing native frame');
+    const compactLeftEdge = frame.x + frame.width / 2 - frame.contentWidth / 2;
+    const systemIslandRightEdge = display.bounds.width / 2 + 131;
+    if (expectRightOfSystemIsland) {
+      expect(compactLeftEdge).toBeGreaterThanOrEqual(systemIslandRightEdge);
+    } else {
+      expect(frame.x + frame.width / 2).toBeCloseTo(display.bounds.width * stored!, 0);
+    }
+  });
+
   it('applies native layout preferences to the emitting display instead of the current target display', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {

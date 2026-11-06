@@ -192,6 +192,11 @@ export function AgentIslandSection() {
     subtleRemindersCustomized,
     setSubtleReminders,
     resetSubtleReminders,
+    liveActivity,
+    liveActivityCustomized,
+    liveActivitySupported,
+    setLiveActivity,
+    resetLiveActivity,
     soundSettings,
     soundCustomized,
     mascotSkin,
@@ -216,6 +221,24 @@ export function AgentIslandSection() {
       if (!await setSubtleReminders(next)) toast.error(t('settings.agentIsland.subtleRemindersFailed'));
     } finally {
       setSubtleRemindersPending(false);
+    }
+  };
+  const [liveActivityPending, setLiveActivityPending] = useState(false);
+  const handleLiveActivityChange = async (next: boolean) => {
+    setLiveActivityPending(true);
+    try {
+      if (!await setLiveActivity(next)) toast.error(t('settings.agentIsland.liveActivityFailed'));
+    } finally {
+      setLiveActivityPending(false);
+    }
+  };
+  const handleResetLiveActivity = async () => {
+    setLiveActivityPending(true);
+    try {
+      if (await resetLiveActivity()) toast.success(t('settings.defaults.restored'));
+      else toast.error(t('settings.defaults.restoreFailed'));
+    } finally {
+      setLiveActivityPending(false);
     }
   };
   const handleResetSubtleReminders = async () => {
@@ -310,6 +333,34 @@ export function AgentIslandSection() {
           aria-label={t('settings.agentIsland.enableAria')}
         />
       </SettingsCard>
+
+      {/* Independent of our own island: the system shows it even when ours is off. */}
+      {liveActivitySupported && (
+        <SettingsCard className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-1">
+            <p id={agentIslandSettings.liveActivityLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+              {t(agentIslandSettings.liveActivityLabel.titleKey)}
+            </p>
+            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
+              {t(agentIslandSettings.liveActivityLabel.descriptionKey)}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <DefaultOverrideControls
+              isCustomized={liveActivityCustomized}
+              disabled={liveActivityPending}
+              onReset={() => void handleResetLiveActivity()}
+            />
+            <Switch
+              data-setting-id={agentIslandSettings.liveActivityLabel.id}
+              checked={liveActivity}
+              disabled={liveActivityPending}
+              onCheckedChange={(next) => void handleLiveActivityChange(next)}
+              aria-label={t('settings.agentIsland.liveActivityLabel')}
+            />
+          </div>
+        </SettingsCard>
+      )}
 
       {enabled && (
         <>

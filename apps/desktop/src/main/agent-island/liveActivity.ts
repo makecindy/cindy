@@ -1,0 +1,231 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { app } from 'electron';
+
+import type { AgentIslandPillSnapshot } from '../../shared/agentIsland.js';
+import { createLogger } from '../logger.js';
+
+const log = createLogger('agent-island:live-activity');
+const requireNative = createRequire(__filename);
+
+/** Matches `AGENT_ACTIVITY_ADDON_RELATIVE_PATH` in native/agent-island/live-activity/build.mjs. */
+const ADDON_RELATIVE_PATH = 'tools/agent-island/cindy-agent-activity.node';
+/** ActivityKit for Mac apps shipped in macOS 27.3; Darwin and macOS versions match since 26. */
+const MIN_DARWIN_VERSION: readonly [number, number] = [27, 3];
+const MIN_NATIVE_INTERVAL_MS = 1000;
+const START_RETRY_MS = 15_000;
+
+/**
+ * Content of Cindy's single Live Activity, shown in the macOS Dynamic Island (menu bar
+ * Live Activity area on Macs without one). Mirrors `CindyAgentActivityAttributes.ContentState`.
+ */
+export interface AgentIslandLiveActivityState {
+  status: 'running' | 'attention' | 'completed';
+  runningCount: number;
+  attentionCount: number;
+  title: string;
+  detail: string;
+  mascot: string;
+}
+
+/**
+ * Projects the island's pill snapshot onto the Live Activity: what waits on the user
+ * first, then running work, then unread results; nothing left means no activity.
+ */
+export function agentIslandLiveActivityStateFromPill(
+  pill: AgentIslandPillSnapshot,
+  mascot: string,
+  strings: { needsInput: string; running: string; completed: string },
+): AgentIslandLiveActivityState | null {
+  const base = {
+    runningCount: pill.runningSessionCount,
+    attentionCount: pill.pendingInteractionCount,
+    title: pill.priorityCompactTitle,
+    mascot,
+  };
+  if (pill.pendingInteractionCount > 0) return { ...base, status: 'attention', detail: strings.needsInput };
+  if (pill.runningSessionCount > 0) return { ...base, status: 'running', detail: strings.running };
+  if (pill.unreadCompletedCount > 0) return { ...base, status: 'completed', detail: strings.completed };
+  return null;
+}
+
+interface NativeAgentActivity {
+  apply(command: string): string;
+}
+
+interface NativeReply {
+  ok?: boolean;
+  result?: string;
+  error?: string;
+}
+
+export interface AgentIslandLiveActivityDeps {
+  platform: NodeJS.Platform;
+  darwinRelease: string;
+  load: () => NativeAgentActivity | null;
+  now: () => number;
+  appName: string;
+}
+
+function defaultLoad(): NativeAgentActivity | null {
+  const base = app.isPackaged ? process.resourcesPath : path.join(app.getAppPath(), 'resources');
+  const addon = path.join(base, ADDON_RELATIVE_PATH);
+  if (!fs.existsSync(addon)) return null;
+  return requireNative(addon) as NativeAgentActivity;
+}
+
+function darwinAtLeast(release: string, [major, minor]: readonly [number, number]): boolean {
+  const [releaseMajor = 0, releaseMinor = 0] = release.split('.').map((part) => Number.parseInt(part, 10) || 0);
+  return releaseMajor > major || (releaseMajor === major && releaseMinor >= minor);
+}
+
+function sameState(a: AgentIslandLiveActivityState | null, b: AgentIslandLiveActivityState | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.status === b.status
+    && a.runningCount === b.runningCount
+    && a.attentionCount === b.attentionCount
+    && a.title === b.title
+    && a.detail === b.detail
+    && a.mascot === b.mascot;
+}
+
+/**
+ * Keeps at most one Cindy Live Activity in step with the island state. ActivityKit only
+ * accepts a start from the app process while it has a visible window (`visibility`), and
+ * later updates from the background, so a refused start waits for the next window focus
+ * or a short retry instead of failing the feature. Native calls are coalesced to one per
+ * second, keeping only the latest state.
+ */
+export class AgentIslandLiveActivity {
+  private readonly deps: AgentIslandLiveActivityDeps;
+  private native: NativeAgentActivity | null | undefined;
+  private enabled = true;
+  private desired: AgentIslandLiveActivityState | null = null;
+  /** What ActivityKit shows now; `undefined` until the first native call. */
+  private applied: AgentIslandLiveActivityState | null | undefined;
+  private active = false;
+  private lastNativeAt = Number.NEGATIVE_INFINITY;
+  private retryAfter = 0;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(deps: Partial<AgentIslandLiveActivityDeps> = {}) {
+    this.deps = {
+      platform: process.platform,
+      darwinRelease: os.release(),
+      load: defaultLoad,
+      now: Date.now,
+      appName: 'Cindy',
+      ...deps,
+    };
+  }
+
+  /** The OS supports Live Activities and this build ships the addon. */
+  isSupported(): boolean {
+    return this.loadNative() !== null;
+  }
+
+  setEnabled(enabled: boolean): void {
+    if (this.enabled === enabled) return;
+    this.enabled = enabled;
+    this.schedule();
+  }
+
+  sync(state: AgentIslandLiveActivityState | null): void {
+    if (sameState(this.desired, state)) return;
+    this.desired = state;
+    this.schedule();
+  }
+
+  /** A Cindy window became visible: a start refused for `visibility` can succeed now. */
+  notifyWindowVisible(): void {
+    if (this.active || this.retryAfter === 0) return;
+    this.retryAfter = 0;
+    // Replace the pending back-off timer so the retry happens now.
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    this.schedule();
+  }
+
+  dispose(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    // Quitting: let ActivityKit confirm the end so the system island does not keep a stale task.
+    if (this.native && (this.active || this.applied === undefined)) this.call({ action: 'end', wait: true });
+    this.active = false;
+  }
+
+  private target(): AgentIslandLiveActivityState | null {
+    return this.enabled ? this.desired : null;
+  }
+
+  private loadNative(): NativeAgentActivity | null {
+    if (this.native !== undefined) return this.native;
+    this.native = null;
+    if (this.deps.platform !== 'darwin' || !darwinAtLeast(this.deps.darwinRelease, MIN_DARWIN_VERSION)) {
+      return null;
+    }
+    try {
+      this.native = this.deps.load();
+    } catch (error) {
+      log.warn('Live Activity addon failed to load', error);
+    }
+    return this.native;
+  }
+
+  private schedule(): void {
+    if (this.timer) return;
+    const native = this.loadNative();
+    if (!native) return;
+    const now = this.deps.now();
+    const wait = Math.max(0, this.lastNativeAt + MIN_NATIVE_INTERVAL_MS - now, this.retryAfter - now);
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.flush();
+    }, wait);
+    this.timer.unref?.();
+  }
+
+  private flush(): void {
+    const target = this.target();
+    if (this.applied !== undefined && sameState(this.applied, target) && (target === null || this.active)) return;
+    if (this.applied === undefined) {
+      // Clears activities a previous run left behind after a crash or forced quit.
+      this.call({ action: 'end' });
+      this.applied = null;
+    }
+    if (target === null) {
+      if (this.active) {
+        this.call({ action: 'end' });
+        this.active = false;
+      }
+      this.applied = null;
+      return;
+    }
+    const reply = this.call({ action: 'sync', appName: this.deps.appName, state: target });
+    if (reply?.ok) {
+      if (reply.result === 'started') log.info('Live Activity started');
+      this.active = true;
+      this.applied = target;
+      this.retryAfter = 0;
+      return;
+    }
+    this.active = false;
+    this.applied = null;
+    this.retryAfter = this.deps.now() + START_RETRY_MS;
+    log.info('Live Activity start deferred', { reason: reply?.error ?? 'unknown' });
+    this.schedule();
+  }
+
+  private call(command: Record<string, unknown>): NativeReply | null {
+    if (!this.native) return null;
+    this.lastNativeAt = this.deps.now();
+    try {
+      return JSON.parse(this.native.apply(JSON.stringify(command))) as NativeReply;
+    } catch (error) {
+      log.warn('Live Activity native call failed', { action: command.action, error });
+      return null;
+    }
+  }
+}

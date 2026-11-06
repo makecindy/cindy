@@ -1294,6 +1294,10 @@ struct AgentIslandScreenMetrics: Codable, Equatable {
   let displayId: Int
   let frame: AgentIslandRect
   let hasNotch: Bool
+  /// The display hosts the macOS Dynamic Island (MenuBarAgent's CenterHUD): the
+  /// PROLED MacBook Pro's hole-punch camera. The system island draws above our
+  /// panel and does not swallow clicks, so the island avoids the screen center.
+  let hasSystemIsland: Bool
   let notchWidth: Double
   let topBarHeight: Double
   let menuBarHeight: Double
@@ -1305,6 +1309,7 @@ struct AgentIslandScreenMetrics: Codable, Equatable {
     displayId: 0,
     frame: AgentIslandRect(x: 0, y: 0, width: 1728, height: 1117),
     hasNotch: false,
+    hasSystemIsland: false,
     notchWidth: 210,
     topBarHeight: 24,
     menuBarHeight: 24,
@@ -1323,6 +1328,7 @@ struct AgentIslandScreenMetrics: Codable, Equatable {
         "height": frame.height,
       ],
       "hasNotch": hasNotch,
+      "hasSystemIsland": hasSystemIsland,
       "notchWidth": notchWidth,
       "topBarHeight": topBarHeight,
       "menuBarHeight": menuBarHeight,
@@ -1344,6 +1350,7 @@ struct AgentIslandScreenMetrics: Codable, Equatable {
       displayId: displayId,
       frame: frame,
       hasNotch: false,
+      hasSystemIsland: hasSystemIsland,
       notchWidth: simulatedNotchWidth,
       topBarHeight: topBarHeight,
       menuBarHeight: menuBarHeight,
@@ -1936,6 +1943,9 @@ private enum AgentIslandScreenMetricsProvider {
     } else {
       safeAreaTop = 0
     }
+    // A camera hole-punch may report auxiliary top areas, but there is no notch
+    // to hide behind: lay the island out like any notchless screen.
+    let hasSystemIsland = screenHasSystemIsland(screen)
     return AgentIslandScreenMetrics(
       displayId: displayId(for: screen),
       frame: AgentIslandRect(
@@ -1944,8 +1954,9 @@ private enum AgentIslandScreenMetricsProvider {
         width: Double(frame.width),
         height: Double(frame.height)
       ),
-      hasNotch: screenHasNotch(screen),
-      notchWidth: Double(notchWidth(for: screen)),
+      hasNotch: !hasSystemIsland && screenHasNotch(screen),
+      hasSystemIsland: hasSystemIsland,
+      notchWidth: Double(hasSystemIsland ? simulatedNotchWidth(for: screen) : notchWidth(for: screen)),
       topBarHeight: Double(topBarHeight(menuBarHeight: menuBarHeight, safeAreaTop: safeAreaTop)),
       menuBarHeight: Double(menuBarHeight),
       safeAreaTop: Double(safeAreaTop),
@@ -1966,6 +1977,34 @@ private enum AgentIslandScreenMetricsProvider {
       return screen.auxiliaryTopLeftArea != nil || screen.auxiliaryTopRightArea != nil
     }
     return false
+  }
+
+  /// Built-in touch screens are the Dynamic Island MacBook Pros. Both signals are
+  /// read through the runtime so older SDKs still compile: `touchCapabilities`
+  /// is public from macOS 27; `_centerHUDDefaultFrame` is AppKit's private
+  /// CenterHUD geometry (macOS 27.3), used only as a corroborating signal.
+  /// `XDT_AGENT_ISLAND_SIMULATE_SYSTEM_ISLAND=1` treats the main screen as one,
+  /// for testing in a VM with MenuBarAgent's emulated island.
+  static func screenHasSystemIsland(_ screen: NSScreen) -> Bool {
+    if ProcessInfo.processInfo.environment["XDT_AGENT_ISLAND_SIMULATE_SYSTEM_ISLAND"] == "1" {
+      return screen == NSScreen.screens.first
+    }
+    let hudSelector = NSSelectorFromString("_centerHUDDefaultFrame")
+    if screen.responds(to: hudSelector),
+       let value = screen.value(forKey: "_centerHUDDefaultFrame") as? NSValue,
+       !value.rectValue.isEmpty {
+      return true
+    }
+    let displayNumber = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+    guard displayNumber != 0, CGDisplayIsBuiltin(displayNumber) != 0 else {
+      return false
+    }
+    let touchSelector = NSSelectorFromString("touchCapabilities")
+    guard screen.responds(to: touchSelector),
+          let capabilities = screen.value(forKey: "touchCapabilities") as? NSNumber else {
+      return false
+    }
+    return capabilities.uintValue & 1 != 0
   }
 
   static func notchWidth(for screen: NSScreen) -> CGFloat {
@@ -2042,7 +2081,7 @@ private enum AgentIslandScreenMetricsProvider {
         return bestOverlap.0
       }
     }
-    if let notchedScreen = screens.first(where: { screenHasNotch($0) }) {
+    if let notchedScreen = screens.first(where: { screenHasNotch($0) || screenHasSystemIsland($0) }) {
       return notchedScreen
     }
     return NSScreen.main ?? screens.first
@@ -6562,6 +6601,10 @@ final class AgentIslandController {
       return constrainedCenterX(desiredCenterX, contentWidth: contentWidth)
     }
     let constrained = constrainedCenterX(desiredCenterX, contentWidth: contentWidth)
+    // The center belongs to the system Dynamic Island there; do not pull toward it.
+    if AgentIslandScreenMetricsProvider.screenHasSystemIsland(screen) {
+      return constrained
+    }
     if abs(constrained - screen.frame.midX) <= expandedIslandCenterSnapDistance {
       return constrainedCenterX(screen.frame.midX, contentWidth: contentWidth)
     }
@@ -7008,8 +7051,14 @@ enum AgentIslandDebugHarness {
       width: Double(screenFrame.width),
       height: Double(screenFrame.height)
     )
+    // Mirrors main's default on Dynamic Island displays (computeAgentIslandSystemIslandDefaultCenterXRatio):
+    // right of the system island's expanded footprint, clamped to the screen.
+    var centerX = screenFrame.midX
+    if let screen, AgentIslandScreenMetricsProvider.screenHasSystemIsland(screen) {
+      centerX = min(screenFrame.maxX - frameWidth / 2, screenFrame.midX + 131 + 12 + 298 / 2)
+    }
     let frame = AgentIslandCarrierFrame(
-      x: Double(screenFrame.minX + (screenFrame.width - frameWidth) / 2),
+      x: Double(centerX - frameWidth / 2),
       y: 0,
       width: Double(frameWidth),
       height: 640,

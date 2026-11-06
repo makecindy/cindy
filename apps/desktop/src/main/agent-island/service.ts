@@ -1,4 +1,4 @@
-import { dialog, ipcMain, screen, BrowserWindow, type Display, type OpenDialogOptions } from 'electron';
+import { app, dialog, ipcMain, screen, BrowserWindow, type Display, type OpenDialogOptions } from 'electron';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { release as getOsRelease } from 'node:os';
@@ -38,6 +38,8 @@ import {
   AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL,
   AGENT_ISLAND_SET_ENABLED_CHANNEL,
   AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL,
+  AGENT_ISLAND_SET_LIVE_ACTIVITY_CHANNEL,
+  AGENT_ISLAND_GET_LIVE_ACTIVITY_SUPPORT_CHANNEL,
   AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL,
   AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL,
   AGENT_ISLAND_SET_COMPANION_CHATS_CHANNEL,
@@ -57,6 +59,7 @@ import {
   getAgentIslandMinimumContentWidth,
   isAgentIslandMascotSkin,
   isAgentIslandSoundChoice,
+  computeAgentIslandSystemIslandDefaultCenterXRatio,
   isAgentIslandSoundId,
   isAgentIslandSupportedPlatform,
   isSilentAgentIslandSoundChoice,
@@ -86,6 +89,7 @@ import { getSessionRowSnapshot, patchSessionMetaInDb } from '../localDb/ipc/sess
 import { isSessionNotificationsMutedSync } from '../localDb/sessionFlagRegistry';
 import { withSessionRouteLock } from '../localDb/sessionRouteLock.js';
 import { confirmIslandArchive } from './archiveConfirmation.js';
+import { AgentIslandLiveActivity, agentIslandLiveActivityStateFromPill } from './liveActivity.js';
 import { remoteInvoke } from '../device-link/index.js';
 import { bindingStore } from '../im/binding.js';
 import { setAgentIslandCompanionChangeSink } from '../localDb/agentIslandSessionPatch.js';
@@ -229,6 +233,8 @@ export interface AgentIslandServiceDeps {
   isCompletionHandledByTeammate?: (sessionId: string) => Promise<boolean>;
   getMainWindow: () => BrowserWindow | null;
   nativeHost?: AgentIslandNativeRenderer;
+  /** macOS Live Activity mirror of the island state; production passes one on macOS. */
+  liveActivity?: AgentIslandLiveActivity | null;
   /** Main-process upgrade window used to classify remote daemon shutdowns. */
   isPlannedRemoteDaemonClose?: (sessionId: string) => boolean;
   /**
@@ -277,10 +283,17 @@ let serviceSingleton: AgentIslandService | null = null;
 export function initAgentIslandService(deps: AgentIslandServiceDeps): AgentIslandService | null {
   if (serviceSingleton) return serviceSingleton;
   const supportsNativeIsland = isAgentIslandSupportedPlatform(process.platform, getOsRelease());
+  const liveActivity = deps.liveActivity
+    ?? (supportsNativeIsland && process.platform === 'darwin' ? new AgentIslandLiveActivity({ appName: BRAND_NAME }) : null);
   serviceSingleton = new AgentIslandService({
     ...deps,
     nativeHost: deps.nativeHost ?? (supportsNativeIsland ? undefined : HEADLESS_AGENT_ISLAND_NATIVE_HOST),
+    liveActivity,
   });
+  if (liveActivity) {
+    app.on('browser-window-focus', () => liveActivity.notifyWindowVisible());
+    app.on('will-quit', () => liveActivity.dispose());
+  }
   setAgentIslandCompanionChangeSink({
     companionChanged: (botId) => serviceSingleton?.handleCompanionProfileChanged(botId),
     groupChanged: (groupId) => serviceSingleton?.handleBotGroupChanged(groupId),
@@ -705,6 +718,20 @@ export class AgentIslandService {
       this.state.subtleReminders = enabled;
       this.publish();
       return { ok: true };
+    });
+
+    ipcMain.handle(AGENT_ISLAND_SET_LIVE_ACTIVITY_CHANNEL, (event, enabled: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (typeof enabled !== 'boolean') {
+        throwIpcError('INVALID_PARAMS', 'enabled must be boolean');
+      }
+      this.deps.liveActivity?.setEnabled(enabled);
+      return { ok: true };
+    });
+
+    ipcMain.handle(AGENT_ISLAND_GET_LIVE_ACTIVITY_SUPPORT_CHANNEL, (event) => {
+      assertTrustedAppRendererEvent(event);
+      return { ok: true, supported: this.deps.liveActivity?.isSupported() === true };
     });
 
     ipcMain.handle(AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL, (_event, rawSkin: unknown) => {
@@ -2184,6 +2211,16 @@ export class AgentIslandService {
         this.soundSettings, this.mascotSkin, this.quota,
       )
       : soundDisplayState;
+    // The system Live Activity works whether or not our own island is shown.
+    this.deps.liveActivity?.sync(agentIslandLiveActivityStateFromPill(
+      chatDisplayState.pillSnapshot,
+      this.mascotSkin,
+      {
+        needsInput: t('agentIsland.native.needsInput'),
+        running: t('agentIsland.native.running'),
+        completed: t('agentIsland.native.completed'),
+      },
+    ));
     if (!this.enabled) {
       this.mutedCompletionSoundSessionIds.clear();
       this.baselineSoundSessionIds.clear();
@@ -2585,6 +2622,20 @@ export class AgentIslandService {
   }
 
   private getLayoutPreferenceForDisplay(display: Display): AgentIslandLayoutPreference {
+    const preference = this.getStoredLayoutPreferenceForDisplay(display);
+    if (Number.isFinite(preference.centerXRatio)) return preference;
+    // The screen center belongs to the macOS Dynamic Island on those displays; start
+    // beside it. Dragging records the user's own position as usual.
+    if (this.screenMetricsForDisplay(display)?.hasSystemIsland) {
+      return {
+        ...preference,
+        centerXRatio: computeAgentIslandSystemIslandDefaultCenterXRatio(display.bounds.width),
+      };
+    }
+    return preference;
+  }
+
+  private getStoredLayoutPreferenceForDisplay(display: Display): AgentIslandLayoutPreference {
     const preference = this.layoutPreferencesByDisplayId.get(display.id);
     if (!preference) return {};
     if (hasPersistedLayoutIdentity(preference)) return preference;

@@ -75,3 +75,43 @@ pnpm --filter desktop preview:island-mascots
 角色或右侧工具按钮时让开；刘海屏展开时中间被刘海占住，余量跟在左侧角色后面。芯片的标称宽度由 main 算好随 `AgentIslandQuotaItem.width` 下发，helper 用它判断
 放得下几个、不测字体；改芯片字号、logo 尺寸或间距时，同步 `shared/agentIsland.ts` 的 `AGENT_ISLAND_QUOTA_*`
 与 `AgentIslandQuotaRow` 的常量，并重新实测「标称 ≥ 实绘」（见 `agentIslandCompactBadgeWidth.test.ts`）。
+
+## 系统灵动岛（PROLED MacBook Pro）与实时活动
+
+2026-10 发布的 PROLED MacBook Pro 用摄像头挖孔取代刘海，系统自己的灵动岛（`MenuBarAgent`
+的 CenterHUD）画在屏幕顶部正中。macOS 27.3 实测（模拟形态，与 Apple 设计资源的边框图一致）：
+空闲约 57×32pt、距顶边 8pt；计时器实时活动紧凑态约 147×32pt；点开后约 261×58pt。
+
+- **识别**：`AgentIslandScreenMetricsProvider.screenHasSystemIsland`——内建屏且
+  `NSScreen.touchCapabilities` 含多点触摸，或私有 `_centerHUDDefaultFrame` 非空；两者都走运行时
+  查询，旧 SDK 也能编译。这类屏幕 `hasNotch` 一律为 false（挖孔不是可躲的刘海），也不做居中吸附。
+- **默认位置**：main 侧 `getLayoutPreferenceForDisplay` 在没有保存位置时，把岛放在系统灵动岛展开
+  上限（`AGENT_ISLAND_SYSTEM_ISLAND_EXPANDED_HALF_WIDTH`）右侧；用户拖动后照常记住自己的位置。
+  原因：系统灵动岛**画在我们的面板之上**（窗口列表报层级 26，我们是 27，合成时它仍在上），而且
+  **不吞点击**，重叠时会挡住我们的内容并让一次点击同时触发两个岛。
+- **模拟测试**：`XDT_AGENT_ISLAND_SIMULATE_SYSTEM_ISLAND=1` 把主屏当作系统灵动岛屏。真实的系统
+  灵动岛只能在关闭 SIP/AMFI 的 27.3 虚拟机里用 `MenuBarAgent` 的 `EmulateCenterHUD` 打开；这种
+  虚拟机里第三方 `_centerHUD*` 读数全为 0，`liveactivitiesd` 也查不到第三方应用，不能用来验证实时活动。
+
+### 实时活动（`live-activity/`）
+
+设置页「在系统灵动岛显示任务」，默认开启，与我们自己的岛是否开启无关。有灵动岛的 Mac 显示在
+系统灵动岛，其他 27.3 Mac 显示在菜单栏右侧的实时活动区。
+
+- **只能由 Cindy 主进程发起**：ActivityKit 按发起进程的应用身份找 `NSSupportsLiveActivities` 与扩展；
+  本 helper 是父进程直接拉起的子进程，即使放进 `Contents/MacOS` 也会被拒（`unsupportedTarget`）。
+  所以 main 通过 N-API 扩展 `cindy-agent-activity.node`（`addon.mm` + `CindyAgentActivityController.swift`）
+  调用，状态投影与节流在 `src/main/agent-island/liveActivity.ts`。
+- **发起时必须有可见窗口**：没有窗口会被拒（`visibility`），发起后转入后台照常更新。被拒后等下一次
+  窗口获得焦点或 15 秒后重试；全程只保持一个活动，启动时先结束上次运行残留的活动。
+- **Widget 扩展** `CindyAgentActivity.appex` 在 postPackage 装进 `Contents/PlugIns`，bundle id 为
+  `<应用 id>.agent-activity`。必须按 Xcode 的方式用 `-e _NSExtensionMain` 链接：从 Swift `main`
+  启动会跳过 ExtensionFoundation 的进程身份初始化，被 chronod 拉起即崩溃。共享的
+  `CindyAgentActivityAttributes` 在扩展与原生扩展里都以 `-module-name CindyAgentActivity` 编译。
+- **构建条件**：`live-activity/build.mjs` 需要 macOS 27.3 SDK 与 Apple 芯片，否则整段跳过、应用不带
+  此功能；`CINDY_LIVE_ACTIVITY=0` 可主动跳过。本地验证：
+  `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer node build.mjs addon <out.node> arm64`，
+  再对打包好的 `.app` 运行 `build.mjs extension <App.app> arm64`。
+- **发布签名**：扩展必须带 App Sandbox。正式签名时先用 `live-activity/extension.entitlements`
+  单独签 `Contents/PlugIns/CindyAgentActivity.appex`，再签应用本体；对整个包 `--deep` 统一签会
+  丢掉扩展的沙盒权限，扩展将无法加载。

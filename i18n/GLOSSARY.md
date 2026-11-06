@@ -590,6 +590,14 @@ Orca 协同角色名，与 Worker 成对。五语统一保留英文 Lead，不�
 
 远程桌面原生密码表单中的 macOS 系统账户密码，区别于 Cindy 账号密码；密码不经过 JavaScript。
 
+### Dynamic Island
+
+Apple 的系统灵动岛（新款 MacBook Pro 摄像头挖孔处）。中文沿用 Apple 用语并加「系统」前缀，避免与 Cindy 自己的灵动岛（英文 Agent Island）混同；繁中按 Apple 台湾用语作「動態島」。
+
+### Live Activities
+
+Apple 的实时活动（ActivityKit）。沿用 Apple 各地区官方译名；Cindy 只以此展示任务状态，不作为自有功能名。
+
 ### Black Cat
 
 灵动岛角色皮肤名(设置页「图标皮肤」列表)。角色本体是黑猫形象,四语先采用直译并登记为待讨论,避免后续界面出现「ブラックキャット / 블랙캣」等音译与直译混用。

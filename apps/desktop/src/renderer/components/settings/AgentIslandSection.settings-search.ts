@@ -24,7 +24,17 @@ export const agentIslandSettings = defineSettings({
     sectionKey: 'settings.tabs.agentIsland',
     descriptionKey: 'settings.agentIsland.enableHint',
   },
-  subtleRemindersLabel: {
+  liveActivityLabel: {
+    isVisible: ({ agentIsland }) => agentIsland?.supported === true && agentIsland.liveActivitySupported === true,
+    id: 'settings.agentIsland.liveActivityLabel',
+    fallbackTargetId: 'settings-panel-agent-island',
+    tab: 'agent-island',
+    targetId: 'settings-search-settings-agentIsland-liveActivityLabel',
+    titleKey: 'settings.agentIsland.liveActivityLabel',
+    sectionKey: 'settings.tabs.agentIsland',
+    descriptionKey: 'settings.agentIsland.liveActivityHint',
+  },
+    subtleRemindersLabel: {
     isVisible: areIslandControlsVisible,
     id: 'settings.agentIsland.subtleRemindersLabel',
     fallbackTargetId: 'settings-panel-agent-island',
