@@ -16,6 +16,7 @@ import path from 'node:path';
 
 import type { IpcMainInvokeEvent } from 'electron';
 import { HOST_CONTRACT_CHANNELS, type HostChannelDef } from '@cindy/maker-shared/host-channel-contract';
+import { createIpcError } from '../shared/ipc-errors.js';
 
 export interface HostDelegationConfig {
   readonly baseUrl: string;
@@ -165,10 +166,13 @@ export const PROXIED_CHANNELS: readonly ProxiedChannel[] = [
 export function claimProxiedChannels(ipcMain: unknown, log: (channel: string) => void): void {
   const target = ipcMain as {
     handle(channel: string, listener: (...args: never[]) => unknown): void;
+    __originalHandle?: (channel: string, listener: (...args: never[]) => unknown) => void;
   };
   const proxied = new Set(PROXIED_CHANNELS.map((entry) => entry.channel));
-  const original = target.handle.bind(target);
-  (target as unknown as { handle: unknown }).handle = (
+  const original = target.__originalHandle ?? target.handle.bind(target);
+  target.__originalHandle = original;
+
+  target.handle = (
     channel: string,
     listener: (...args: never[]) => unknown,
   ): void => {
@@ -197,15 +201,91 @@ export interface HostDelegatedIpcDeps {
  */
 export function registerHostDelegatedIpc(deps: HostDelegatedIpcDeps): string[] {
   const installed: string[] = [];
+  const target = deps.ipcMain as unknown as {
+    __originalHandle?: (
+      channel: string,
+      listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown,
+    ) => void;
+    handle: (
+      channel: string,
+      listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown,
+    ) => void;
+    removeHandler(channel: string): void;
+  };
+  const rawHandle = target.__originalHandle
+    ? target.__originalHandle.bind(target)
+    : target.handle.bind(target);
+
   for (const entry of PROXIED_CHANNELS) {
     deps.ipcMain.removeHandler(entry.channel);
-    deps.ipcMain.handle(entry.channel, async (_event, ...args: unknown[]) => {
+    rawHandle(entry.channel, async (_event, ...args: unknown[]) => {
       const response = await deps.client.request(entry.path, entry.body(args));
       return entry.map ? entry.map(response) : response;
     });
     installed.push(entry.channel);
   }
   return installed;
+}
+
+export interface UnsupportedMakerFallbackDeps {
+  readonly ipcMain: unknown;
+  readonly channels?: readonly string[];
+  readonly log?: (channel: string) => void;
+}
+
+/**
+ * In client mode, any `maker:*` channel outside the proxied contract fails with
+ * explicit UNSUPPORTED_CAPABILITY error rather than "No handler registered".
+ */
+export function installUnsupportedMakerFallbacks(deps: UnsupportedMakerFallbackDeps): void {
+  const target = deps.ipcMain as {
+    _invokeHandlers?: Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>;
+    handle?: (
+      channel: string,
+      listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown,
+    ) => void;
+    __originalHandle?: (
+      channel: string,
+      listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown,
+    ) => void;
+  };
+
+  const createFallback = (channel: string) => async () => {
+    throw createIpcError(
+      'UNSUPPORTED_CAPABILITY',
+      `Capability ${channel} is not supported in host client mode`,
+    );
+  };
+
+  if (target._invokeHandlers instanceof Map) {
+    const handlers = target._invokeHandlers;
+    const origGet = handlers.get.bind(handlers);
+    const origHas = handlers.has.bind(handlers);
+    handlers.get = (channel: string) => {
+      const existing = origGet(channel);
+      if (existing) return existing;
+      if (typeof channel === 'string' && channel.startsWith('maker:')) {
+        deps.log?.(channel);
+        return createFallback(channel);
+      }
+      return undefined;
+    };
+    handlers.has = (channel: string) => {
+      return origHas(channel) || (typeof channel === 'string' && channel.startsWith('maker:'));
+    };
+  }
+
+  if (deps.channels && target.handle) {
+    const rawHandle = target.__originalHandle
+      ? target.__originalHandle.bind(target)
+      : target.handle.bind(target);
+    const proxied = new Set(PROXIED_CHANNELS.map((e) => e.channel));
+    for (const ch of deps.channels) {
+      if (ch.startsWith('maker:') && !proxied.has(ch)) {
+        rawHandle(ch, createFallback(ch));
+      }
+    }
+  }
 }
 
 /**

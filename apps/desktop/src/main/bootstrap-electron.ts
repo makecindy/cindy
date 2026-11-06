@@ -463,6 +463,7 @@ import { registerLocalDbIpc } from './localDb/ipc/registerAll';
 import {
   claimProxiedChannels,
   createHostClient,
+  installUnsupportedMakerFallbacks,
   registerHostDelegatedIpc,
   registerHostDelegatedSync,
   resolveHostDelegation,
@@ -1280,13 +1281,19 @@ function installHostClientMode(): boolean {
   setMakerClientMode(true);
   // The host owns the profile's database too; a local open would be a second writer.
   setHostClientMode(true);
+  const hostClient = createHostClient(delegation);
+  const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain });
   // Registered outside the runtime block by other modules; drop those so the
   // host stays authoritative instead of throwing on a duplicate handler.
   claimProxiedChannels(ipcMain, (channel) => {
     console.log(`[bootstrap-electron] client mode keeps the host handler for ${channel}`);
   });
-  const hostClient = createHostClient(delegation);
-  const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain });
+  installUnsupportedMakerFallbacks({
+    ipcMain,
+    log: (channel) => {
+      console.log(`[bootstrap-electron] client mode unsupported maker fallback for ${channel}`);
+    },
+  });
   console.log(`[bootstrap-electron] client mode: delegating to ${delegation.baseUrl}`);
   console.log(`[bootstrap-electron] client mode proxies: ${installed.join(', ')}`);
   void registerHostDelegatedSync({
@@ -1418,6 +1425,7 @@ function attemptStartScheduler(): Promise<void> {
 }
 
 async function attemptStartSchedulerOnce(): Promise<void> {
+  if (hostClientMode) return;
   // 两个前置条件必须满足才能启动：
   //   1. maker 单例已构造 (splash check-environment 完成 → registerMakerIpcsAfterSplash)
   //   2. DbClient 已 smoke 通过 (user login → renderer 触发 'local-db:ensure-ready' IPC)
@@ -9708,6 +9716,7 @@ app.on('ready', async () => {
     discardStaleOwner: (userId) =>
       lifecycleDbClientManager.dispose(`stale-owner-after-ready:${userId}`),
     beforeEnsureReady: async (userId) => {
+      if (hostClientMode) return;
       // Provider discovery is detached from DB read readiness for the same owner, but a
       // different owner must not replace the DB while the previous account task can still
       // update owner-scoped catalogs or agent environments.
@@ -9786,6 +9795,7 @@ app.on('ready', async () => {
       }
     },
     onReady: async (userId) => {
+      if (hostClientMode) return;
       const startupHooksStartedAt = performance.now();
       let startupPhaseStartedAt = startupHooksStartedAt;
       const logStartupPhase = (phase: string): void => {

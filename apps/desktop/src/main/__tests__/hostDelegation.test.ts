@@ -8,7 +8,9 @@ import type { IpcMainInvokeEvent } from 'electron';
 
 import {
   PROXIED_CHANNELS,
+  claimProxiedChannels,
   createHostClient,
+  installUnsupportedMakerFallbacks,
   registerHostDelegatedIpc,
   resolveHostDelegation,
 } from '../host-delegation';
@@ -216,5 +218,84 @@ describe('createHostClient', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('boom', { status: 500 })));
     const client = createHostClient({ baseUrl: 'http://127.0.0.1:3456', token: 't' });
     await expect(client.request('/api/providers')).rejects.toThrow('boom');
+  });
+});
+
+describe('claimProxiedChannels and unsupported fallbacks', () => {
+  it('allows registerHostDelegatedIpc even after claimProxiedChannels is called', async () => {
+    const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>();
+    const ipcMain = {
+      removeHandler: () => {},
+      handle: (channel: string, listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown) => {
+        handlers.set(channel, listener);
+      },
+    };
+    const client = { request: async () => ({ ok: true }) };
+
+    claimProxiedChannels(ipcMain, () => {});
+    registerHostDelegatedIpc({ client, ipcMain });
+
+    expect(handlers.has('maker:get-capabilities')).toBe(true);
+    const caps = await handlers.get('maker:get-capabilities')!({} as IpcMainInvokeEvent, 'codex');
+    expect(caps).toEqual({ ok: true });
+  });
+
+  it('drops subsequent registrations of proxied channels without throwing', () => {
+    const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>();
+    const dropped: string[] = [];
+    const ipcMain = {
+      removeHandler: () => {},
+      handle: (channel: string, listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown) => {
+        handlers.set(channel, listener);
+      },
+    };
+    const client = { request: async () => [] };
+    registerHostDelegatedIpc({ client, ipcMain });
+    claimProxiedChannels(ipcMain, (ch) => dropped.push(ch));
+
+    ipcMain.handle('local-db:sessions:list', () => ['competing']);
+    expect(dropped).toContain('local-db:sessions:list');
+  });
+
+  it('fails with UNSUPPORTED_CAPABILITY for unproxied maker:* channels via _invokeHandlers map', async () => {
+    const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>();
+    const ipcMain = {
+      _invokeHandlers: handlers,
+      removeHandler: () => {},
+      handle: (channel: string, listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown) => {
+        handlers.set(channel, listener);
+      },
+    };
+
+    installUnsupportedMakerFallbacks({ ipcMain });
+
+    const fallback = handlers.get('maker:remote-ssh:connect');
+    expect(fallback).toBeDefined();
+    await expect(fallback!({} as IpcMainInvokeEvent)).rejects.toMatchObject({
+      code: 'UNSUPPORTED_CAPABILITY',
+    });
+  });
+
+  it('fails with UNSUPPORTED_CAPABILITY for explicit unproxied channels list', async () => {
+    const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>();
+    const ipcMain = {
+      removeHandler: () => {},
+      handle: (channel: string, listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown) => {
+        handlers.set(channel, listener);
+      },
+    };
+
+    installUnsupportedMakerFallbacks({
+      ipcMain,
+      channels: ['maker:project-automation:pending-imports', 'maker:send'],
+    });
+
+    expect(handlers.has('maker:send')).toBe(false);
+    expect(handlers.has('maker:project-automation:pending-imports')).toBe(true);
+    await expect(
+      handlers.get('maker:project-automation:pending-imports')!({} as IpcMainInvokeEvent),
+    ).rejects.toMatchObject({
+      code: 'UNSUPPORTED_CAPABILITY',
+    });
   });
 });

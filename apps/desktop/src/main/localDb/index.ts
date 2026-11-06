@@ -135,16 +135,15 @@ export type EnsureReadyResult =
  */
 export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
   // One writer per profile: the host holds the runtime and schema leases, so a
-  // local open here would race it. Every runtime channel is proxied to the host.
+  // local open here would race it. In client mode, confirm host readiness and
+  // report ready without opening a local SQLite database or creating a local DbClient.
   if (isHostClientMode()) {
-    log.info(JSON.stringify({ event: 'localDb.ensureReady.hostClientMode' }));
-    return {
-      ready: false,
-      error: {
-        code: 'DB_INIT_FAILED',
-        message: 'cindy-host owns the profile database; this process is a client',
-      },
-    };
+    log.info(JSON.stringify({ event: 'localDb.ensureReady.hostClientMode', userId }));
+    if (!userId || typeof userId !== 'string') {
+      return { ready: false, error: { code: 'DB_INIT_FAILED', message: 'invalid userId' } };
+    }
+    _currentUserId = userId;
+    return { ready: true };
   }
   if (!userId || typeof userId !== 'string') {
     return { ready: false, error: { code: 'DB_INIT_FAILED', message: 'invalid userId' } };
