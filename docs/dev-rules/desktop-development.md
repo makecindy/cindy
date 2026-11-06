@@ -233,6 +233,27 @@ localStorage 按 **origin + userData 目录** 分家——dev 的 renderer 从
 - 只修改 renderer 时优先使用现有实例的热更新，不重复重启。
 - 不确定运行实例来自哪个 checkout 时，先运行 `pnpm desktop:whoami -- --all` 核对。
 
+## 内存排查
+
+main 日志里 scope 为 `memory-usage` 的行是各进程内存采样（正式版每 10 分钟一次，dev 每 30 秒
+一次；实现见 `src/main/process-monitor/memory-log.ts`）：`main{...}` 是主进程
+`process.memoryUsage()` 细分，后面按进程类型分组列出 `app.getAppMetrics()` 的常驻内存，
+组内从大到小，单位 MB。排查「越用越卡」时，先按启动分段看 `Browser`（主进程）和最大的
+`Tab`（主界面）每小时涨多少：持续上涨、重启才回落就是泄漏；再看 `heapUsed` 与 `external` /
+`arrayBuffers` 谁在涨，区分 JS 对象和 Buffer。该 scope 只写进程类型与数字，已精确放行进
+日志上报，不要往这行里加标题、服务名、pid 或路径。
+
+`getAppMetrics()` 的 GPU 数字不含 IOSurface 等显存，macOS 上要看 GPU 进程真实占用用
+`footprint -p <pid>`。
+
+确认主进程在涨、要找是谁在涨时，在开发版日志目录的 `log-config.json` 写
+`"mainHeapSampling": true`（与 `level` 并列），重启后主进程常驻 V8 采样式堆分析（实现见
+`src/main/process-monitor/heap-sampling.ts`），每 30 分钟写一份到 `logs/heap-sampling/`，
+保留最近 48 份：`.heapprofile` 可在 Chrome DevTools 的 Memory 面板载入，`.summary.txt` 按
+「最近一帧应用代码」和「分配帧」两种口径列出仍存活的采样内存。对比前后几份摘要，持续
+变大的那几行就是泄漏点。不要在用户正在用的 GB 级主进程上拍完整堆快照：会冻结一两分钟
+并额外占用同等内存。正式版不读这个开关。
+
 ## 分层验证
 
 工作目录误报缺失或切到备用目录时，参见[工作目录异常日志判读](../working-directory-diagnostics.md)，
@@ -315,11 +336,21 @@ pnpm ui:check:selftest
 | 任务列表、任务页、侧栏等需要完整主界面的样式或交互 | `pnpm restart:desktop:remote -- --mock`（[UI 模拟数据](ui-mock-data.md)） | 依赖真实账号、发送或 Agent 运行时回到隔离 Desktop |
 | main、preload、IPC、数据库、登录、发送、跨设备、窗口生命周期 | 定向测试 + 隔离 Desktop（见「Agent 启动入口」） | `ui:check` 不覆盖这些行为，不能替代 |
 
-普通界面改动的 PR 截图直接用单页验证：检查通过后运行 `pnpm ui:check:publish`，它把最近一次
-运行的总览截图推到作者 fork 的 `pr-assets/<当前分支>`（不进上游仓库，也不动工作区），并输出
-一段带图片链接的「UI 变化」：命令、平台、版本、场景、通过情况、未覆盖的行为和 `--focus` 实测的
-改前／改后数值，原样写进 PR 正文。登录、发送、跨设备等单页验证覆盖不到的变化，仍按原方式附
-完整 Cindy 截图。
+普通界面改动的 PR 截图直接用单页验证：检查通过后运行 `pnpm ui:check:publish`，它把截图推到
+作者 fork 的 `pr-assets/<当前分支>`（不进上游仓库，也不动工作区），并输出一段「UI 变化」：命令、
+平台、版本、场景、通过情况、未覆盖的行为和 `--focus` 实测的改前／改后数值，原样写进 PR 正文。
+
+PR 截图给评审看改了什么，不是自检总览的搬运：
+
+- 正文只嵌与改动直接相关的截图，每组并排：带 `--compare` 时只放改前／改后有差异的截图
+  （改前 | 改后），否则每个场景一张（Light | Dark）。全量 `overview*.png` 只在末尾给链接，
+  不直接贴进正文。
+- 修旧问题用 `--compare`；改动集中在一个元素时加 `--focus`，用放大图代替整页截图；场景多时用
+  `pnpm ui:check:publish --case <场景>` 选出最能说明改动的那个。
+- 场景里只为测试存在的按钮、说明栏标 `data-ui-page-control`，截图时自动隐藏。
+
+登录、发送、跨设备等单页验证覆盖不到的变化，仍按原方式附完整 Cindy 截图，同样只放能说明
+改动的画面，裁掉无关区域。
 
 公开截图（PR 正文、评论、发到 fork 的图）的原则：
 

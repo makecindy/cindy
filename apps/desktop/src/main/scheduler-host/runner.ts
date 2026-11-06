@@ -950,6 +950,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           firedAt: ctx.firedAt,
           workingDir: hookCwd,
           lastFinishedAt: schedule.lastFinishedAt,
+          ...(ctx.trigger ? { trigger: ctx.trigger } : {}),
         },
       }), schedule.preRunHook.command, this.deps.diagnosePreRunHookFailure);
       await ctx.onPreRunHookCompleted?.(hook);

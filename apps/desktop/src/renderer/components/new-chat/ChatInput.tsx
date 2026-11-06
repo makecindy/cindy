@@ -422,7 +422,7 @@ import {
   shouldBlockLegacyRemotePiModelWindowSwitch,
 } from '../../../shared/modelSwitchAssessment';
 import { useVoiceInput } from '@/voice-input/useVoiceInput';
-import { getTextPreviewSearchHost } from '@/components/find-in-page/findInPageOwnership';
+import { getTextPreviewHost } from '@/components/find-in-page/findInPageOwnership';
 import { useVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 import { VoiceInputStatusNotice } from '@/voice-input/VoiceInputStatusNotice';
 import type { VoiceInputState } from '@cindy/voice-input-core';
@@ -513,6 +513,8 @@ function isPointInsideElement(
 }
 
 interface ChatInputProps {
+  modelPickerRequest?: number;
+  onModelPickerRequestConsumed?: (nonce: number) => void;
   onSend: (
     message: string,
     model: string,
@@ -1312,6 +1314,8 @@ function resolveModelThinkingIntent(input: {
 }
 
 export function ChatInput({
+  modelPickerRequest,
+  onModelPickerRequestConsumed,
   onSend,
   onComposerTyping,
   onComposerVoiceBusyChange,
@@ -1620,7 +1624,9 @@ export function ChatInput({
     if (turnStarting) {
       turnGenRef.current += 1;
       showRecommendationRef.current = false;
-      if (sessionId) dismissPromptRecommendation(sessionId);
+      // The session store owns turn invalidation. A mounted/reused composer can
+      // see a delayed busy projection; treating it as explicit consumption would
+      // erase B's buffered completion before the streams converge.
     }
   });
   useEffect(() => {
@@ -3693,7 +3699,7 @@ export function ChatInput({
       // 注册在 document 或组件层，晚于本 window capture handler 执行。
       if (
         event.key === 'Escape' &&
-        (getTextPreviewSearchHost() || (
+        (getTextPreviewHost() || (
           event.target instanceof Element &&
           event.target.closest('[role="alertdialog"], [data-morph-side]')
         ))
@@ -9304,7 +9310,7 @@ export function ChatInput({
     hasAttachments: hasPreparedOrPendingAttachments,
     hasBrowserComments: browserComments.length > 0,
     hasVoiceDraftText,
-    mutationLocked: composerMutationLocked,
+    mutationLocked: composerMutationLocked || showStopButton,
   };
   const recommendationComposerReady = isComposerReadyForPromptRecommendation(recommendationComposerState);
   usePromptRecommendationPrediction({
@@ -9314,7 +9320,7 @@ export function ChatInput({
       recommendationComposerReady && !!editor && !editor.isDestroyed &&
       deviceLinkDeviceId !== undefined && runtimeAgentKind != null &&
       hasPredictionMessages && !remoteHostId,
-    predict: async (revision) => {
+    predict: async (revision, isCurrent) => {
       if (!sessionId || runtimeAgentKind == null) return null;
       // 素材仍由 Main 从 DB 读取；远程任务经 sticky 路由交给被控电脑。
       const result = await predictPromptUntilDisabled(makerApiForSticky(sessionId), {
@@ -9324,7 +9330,7 @@ export function ChatInput({
         workingDir: workingDirRef.current ?? undefined,
         turnGen: turnGenRef.current,
         completionRevision: revision,
-      });
+      }, isCurrent);
       return result?.prompt ?? null;
     },
   });
@@ -10138,6 +10144,8 @@ export function ChatInput({
                     : useNarrowToolbar ? 'min-w-0 shrink' : undefined}
                 >
                   {!sessionModelLoading && <ModelSelector
+                    openRequest={modelPickerRequest}
+                    onOpenRequestConsumed={onModelPickerRequestConsumed}
                     sshCodex={sshCodexCatalog}
                     // 选中态一律是会话 / 草稿持有的 **wire model id**(sessions.model 或
                     // lastByVendor.model)。面板行的归一化 id 只活在面板内部 —— 从这里递进去

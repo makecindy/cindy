@@ -29,6 +29,14 @@ function reportToHost(body: { mark?: Record<string, number>; seed?: Record<strin
     if (isDataOwnerGenerationCurrent(requestOwner)) applyHostState(state);
   }, () => undefined);
 }
+/** Hydration may precede Main import. Only hand off the merged positions, never
+ * the newer discovery timestamp for an identity that already has a read position. */
+function reportSeedsToHost(ids: readonly string[]): void {
+  if (getBotReadStateSyncStatus().phase !== 'ready') return;
+  const positions = botReadStateProjection.localMap();
+  const seed = Object.fromEntries(ids.filter(id => Object.hasOwn(positions, id)).map(id => [id, positions[id]]));
+  if (Object.keys(seed).length) reportToHost({ seed });
+}
 function bindHost(): void {
   const current = getDataOwnerGeneration();
   if (!isDataOwnerGenerationCurrent(hostOwner)) {
@@ -81,7 +89,7 @@ export function seedMissingBotReadState(botIds: readonly string[], at: number = 
   if (!Number.isFinite(at) || at <= 0) return false;
   let changed = false;
   for (const id of botIds) if (id) changed = botReadStateProjection.seed(localBotReadIdentity(id), Math.floor(at)) || changed;
-  reportToHost({ seed: Object.fromEntries(botIds.filter(Boolean).map(id => [id, Math.floor(at)])) });
+  reportSeedsToHost(botIds);
   return changed;
 }
 /** A partial, hidden or stale roster is never authoritative evidence of deletion. */
@@ -142,10 +150,10 @@ export function isBotGroupUnread(group: GroupReadSummary): boolean {
   return botGroupUnreadCount(group) > 0;
 }
 export function seedBotGroupReadState(groups: readonly GroupReadSummary[]): void {
-  reportToHost({ seed: Object.fromEntries(groups.map(group => [botGroupReadKey(group.id), Math.max(1, latestGroupReplyAt(group))])) });
   for (const group of groups) {
     botReadStateProjection.seed(localBotReadIdentity(botGroupReadKey(group.id)), Math.max(1, latestGroupReplyAt(group)));
   }
+  reportSeedsToHost(groups.map(group => botGroupReadKey(group.id)));
 }
 
 /** Private-chat topics use the same owner-scoped, monotonic local read positions, per topic Session. */

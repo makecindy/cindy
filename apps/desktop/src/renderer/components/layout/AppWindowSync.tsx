@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
-import { startBotReadStateSync } from '@/features/bots/botReadStateSync';
+import { startBotReadStateSync } from '@/features/bots/botReadState';
 import { startBotGroupOutbox } from '@/features/bots/botGroupOutbox';
 import { useBotUnreadSync } from '@/features/bots/useBotUnreadSync';
 import { useRemoteBotSync } from '@/features/bots/useRemoteBots';

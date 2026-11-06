@@ -1,4 +1,34 @@
 {
+  "sharedTaskRecovery": {
+    "title": "Impossible de reprendre sur l’ordinateur d’origine",
+    "description": "Choisissez un autre ordinateur ou fournisseur pour poursuivre avec un transfert de contexte. Vos messages restent, mais l’état d’exécution complet de l’ordinateur d’origine n’est pas transféré.",
+    "choose": "Choisir un autre ordinateur",
+    "cancel": "Rester ici",
+    "stage": {
+      "owner": "Échec du contact avec l’ordinateur de partage.",
+      "allocation": "Échec de l’attribution des droits à l’exécuteur d’origine.",
+      "executor": "Échec de la vérification de la connexion device-link de l’exécuteur.",
+      "capability": "Échec de la vérification des capacités de l’exécuteur.",
+      "authorization": "Échec de l’installation des droits d’exécution.",
+      "unknown": "L’étape en échec n’a pas été indiquée."
+    },
+    "reason": {
+      "offline": "L’ordinateur contacté à cette étape a été signalé hors ligne. D’autres tâches peuvent s’exécuter sur d’autres ordinateurs.",
+      "timeout": "La requête a expiré. L’étape en échec indique le service contacté ; aucune panne de la liaison directe ou du relais n’est confirmée.",
+      "relay": "La connexion device-link n’est pas prête ou a été fermée. Un échec de la liaison directe seule bascule normalement sur le relais.",
+      "denied": "L’accès a été refusé ou le contrôle à distance désactivé. Réessayer ne contourne pas cette restriction.",
+      "model": "Le fournisseur partagé ou le modèle n’est pas autorisé pour cette session.",
+      "budget": "Le fournisseur a signalé une limite d’utilisation ou un quota insuffisant. Un autre ordinateur peut utiliser le même quota.",
+      "capacity": "La capacité des sessions ou des connexions est atteinte. Fermez les sessions inutilisées ou choisissez un autre ordinateur.",
+      "unsupported": "L’exécuteur ne prend pas en charge les capacités de session partagée requises.",
+      "authorization": "Les droits d’exécution n’ont pas pu être installés. Cela ne prouve pas que l’exécuteur est hors ligne.",
+      "history": "L’emplacement de la session d’origine est inutilisable. Son historique natif ne peut pas être ouvert directement ailleurs.",
+      "policy": "Les règles d’utilisation du partage nécessitent une vérification en temps réel sur l’ordinateur de partage. L’exécution directe ne peut pas les appliquer ; cela ne signifie pas que le solde est épuisé.",
+      "unknown": "L’ordinateur de partage n’a pas fourni de cause précise. L’état hors ligne, le quota et le chemin direct ou relais restent non confirmés.",
+      "rate": "Le service limite les requêtes ou est saturé. Attendez la fin du délai ; un autre ordinateur peut partager la même limite.",
+      "service": "Le service d’autorisation du partage est inaccessible ou a renvoyé un échec. L’exécuteur n’a pas été confirmé hors ligne."
+    }
+  },
   "pluginUi": {
     "renderer": "Affichage",
     "original": "Original",
@@ -3850,7 +3880,12 @@
           "stop": "Arrêter le test"
         },
         "fetch": {
-          "button": "Récupérer la liste des modèles",
+          "selectedCount": "{{count}} modèles sélectionnés",
+          "availableCount": "{{count}} modèles disponibles récupérés",
+          "notFetched": "La liste des modèles n’a pas encore été récupérée",
+          "failedRetry": "Impossible de récupérer la liste des modèles. Réessayez.",
+          "retryFailed": "La dernière récupération a échoué. Réessayez.",
+          "button": "Récupérer et sélectionner les modèles",
           "fetching": "Récupération des modèles…",
           "needBaseUrl": "Renseignez d'abord l'URL de base",
           "failed": "Impossible de récupérer la liste des modèles",
@@ -6812,8 +6847,6 @@
             "task": "Touche de tâche",
             "action": "Touche d'action"
           },
-          "lightingLimit": "Le firmware peut éclairer indépendamment les 6 premières touches de tâche dans l'ordre du clavier. Les touches de tâche supplémentaires changent quand même de tâche.",
-          "unlitKey": "Cette touche se trouve après les 6 premières : elle n'a donc pas de voyant de statut indépendant.",
           "taskHint": "Un keycap transparent est recommandé pour que le statut des tâches s'affiche en différentes couleurs."
         },
         "commandKeys": {
@@ -7867,6 +7900,7 @@
         "customSlotAsleep": "Ce plugin est désactivé. Activez-le pour voir ici son interface de paramètres.",
         "descriptionExpand": "Afficher plus",
         "descriptionCollapse": "Afficher moins",
+        "readmeTitle": "À propos",
         "useAction": "Utiliser le plugin",
         "chatAction": "Discuter",
         "enabledLabel": "Activé",
@@ -8457,6 +8491,26 @@
         "title": "Supprimer « {{name}} » ?",
         "message": "Les nouvelles sessions ne chargeront plus ce MCP.",
         "confirm": "Supprimer"
+      },
+      "duplicates": {
+        "title": "Connexions MCP potentiellement en double",
+        "description": "Cindy et votre configuration utilisateur Claude Code contiennent des connexions identiques ou similaires qui pourraient charger les outils deux fois. Choisissez la source à conserver, ou gardez les deux en cas de doute.",
+        "scope": "S’applique uniquement aux tâches Claude Code ordinaires dans Cindy sur cet ordinateur, au prochain démarrage de l’Agent. Votre configuration Claude Code reste inchangée. Les doublons liés partagent le même choix.",
+        "unavailable": "Une partie de la configuration n’a pas pu être lue. Les connexions restent inchangées. Rouvrez cette page pour une nouvelle vérification.",
+        "endpoint": "Même adresse de connexion",
+        "similar": "Adresses de connexion similaires",
+        "keep": {
+          "both": "Conserver les deux sources de ce groupe"
+        },
+        "selected": {
+          "cindy": "Connexion Cindy sélectionnée",
+          "claude": "Connexion Claude Code sélectionnée",
+          "both": "Les deux sources de ce groupe sont conservées"
+        },
+        "reset": "Choisir à nouveau",
+        "saveFailed": "Enregistrement impossible. Les connexions ont peut-être changé. Choisissez à nouveau dans la liste actuelle.",
+        "keepThis": "Conserver cette connexion",
+        "keepThese": "Conserver ces connexions"
       }
     },
     "remotePermission": {
@@ -15517,7 +15571,7 @@
       },
       "fields": {
         "title": "Titre",
-        "schedule": "Planification",
+        "schedule": "Déclenchement",
         "notify": "Notifier",
         "prompt": "Prompt",
         "once": "Une fois",
@@ -15633,6 +15687,13 @@
         "preRunPluginRequired": "Choisis un plugin pour la vérification préalable",
         "templateParamRequired": "Saisissez {{label}}",
         "templateApplyFailed": "Impossible d'appliquer le modèle. Vérifiez les paramètres et réessayez."
+      },
+      "layout": {
+        "content": "Contenu à exécuter",
+        "notifications": "Notifications et exécution silencieuse",
+        "contentTab": "Contenu et déclenchement",
+        "optionsTab": "Options d’exécution",
+        "sections": "Paramètres de l’automatisation"
       }
     },
     "chips": {
@@ -15833,6 +15894,13 @@
           "prompt": "Contrôle l'état des documents du répertoire de travail et repère les contenus à mettre à jour.\nContraintes :\n- Recherche les informations obsolètes (dates périmées, liens morts, processus ou outils abandonnés), les contradictions et les doublons\n- Cite le chemin du fichier et l'emplacement de chaque problème, et explique ton raisonnement\n- Classe les suggestions en « mettre à jour / fusionner / supprimer » et produis une liste de révisions\n- Produis uniquement le rapport ; ne modifie pas les documents"
         }
       }
+    },
+    "deadline": {
+      "label": "Date et heure de fin",
+      "clear": "Effacer",
+      "hint": "Laissez vide pour ne pas limiter la durée. Fuseau : {{timezone}}. Aucune exécution automatique ne démarrera après cette date ; celles en cours pourront se terminer.",
+      "invalid": "Saisissez une date et une heure valides",
+      "expired": "Expirée"
     }
   },
   "issueTracker": {

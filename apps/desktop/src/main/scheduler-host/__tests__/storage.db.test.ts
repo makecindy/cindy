@@ -949,6 +949,17 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     }
   });
 
+  // #8886 / db: a stale expiry scan must not undo another instance's extension.
+  it('matches expireAt before applying a guarded status update', async () => {
+    const harness = createStorageHarness();
+    try {
+      const original = await harness.storage.insert(baseSchedule({ expireAt: 1_800_000_000_000 }));
+      await harness.storage.update(original.id, { expireAt: original.expireAt! + 60_000 });
+      expect(await harness.storage.update(original.id, { status: 'expired', nextFireAt: undefined }, original)).toBeNull();
+      expect((await harness.storage.get(original.id))?.status).toBe('active');
+    } finally { harness.close(); }
+  });
+
   it('claimDueFire: CAS 命中时置空 next_fire_at 并返回行;不命中不动行', async () => {
     const harness = createStorageHarness();
     const due = 1_700_000_060_000;

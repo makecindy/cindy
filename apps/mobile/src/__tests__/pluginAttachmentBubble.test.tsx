@@ -81,7 +81,7 @@ vi.mock('@/session/mediaPlayerWebView', () => ({ RemoteMediaPlayerWebView: () =>
 vi.mock('@/session/MarkdownBlockContent', () => ({ MarkdownBlockContent: () => null }));
 vi.mock('@/session/MessageActionSheet', () => ({ MessageActionSheet: () => null }));
 vi.mock('@/session/AuthorizationMessageCard', () => ({ AuthorizationMessageCard: () => null }));
-vi.mock('@/session/CompanionMessageActions', () => ({ CompanionMessageActions: () => null }));
+vi.mock('@/session/CompanionMessageActions', () => ({ CompanionMessageActions: () => <div data-testid="companion.messageActions" /> }));
 vi.mock('@/session/CompanionMessageCard', () => ({ CompanionMessageCard: () => null }));
 vi.mock('@/session/PendingSendBubble', () => ({ PendingSendBubble: () => null }));
 vi.mock('@/session/messageActions', async (original) => ({ ...await original<object>(), copyMessageText: vi.fn(), writeClipboardText: vi.fn() }));
@@ -119,6 +119,28 @@ describe('attachment-only user plugin bubble', () => {
 });
 
 describe('partner work feedback', () => {
+  // unit regression: run the real normalizer, message model, and renderer. The existing
+  // failed-reply test checked the notice text but not the stray copy/reply/more bar.
+  it.each([false, true])('keeps error notices action-free without hiding ordinary messages (companion=%s)', (companion) => {
+    const host = document.createElement('div');
+    const errorItems = buildMobileMessageRenderItems([
+      msg('error', 'error', 'Connection interrupted'),
+    ], { isSessionStreaming: false });
+    host.innerHTML = renderClient(<MessageRenderer items={errorItems} companion={companion} />);
+    expect(host.textContent).toContain('Could not complete the reply');
+    expect(host.textContent).toContain('Error Details');
+    expect(host.querySelectorAll('[data-testid="message.actionBar"], [data-testid="companion.messageActions"], [data-testid="message.actionSlot"]')).toHaveLength(0);
+
+    const messages = buildMobileMessageRenderItems([
+      msg('user', 'user', 'Please continue'),
+      msg('answer', 'assistant', 'Completed answer', { agentMeta: { turnCompleted: true } }),
+    ], { isSessionStreaming: false });
+    host.innerHTML = renderClient(<MessageRenderer items={messages} companion={companion} />);
+    expect(host.querySelectorAll(companion
+      ? '[data-testid="companion.messageActions"]'
+      : '[data-testid="message.actionBar"]')).toHaveLength(2);
+  });
+
   it('retains failed reply warnings inside expanded work and the upstream error notice', () => {
     const items = buildMobileMessageRenderItems([
       msg('failed', 'assistant', 'Incomplete opening', { agentMeta: { failedSamplingAttempt: {

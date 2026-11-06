@@ -14,7 +14,7 @@ vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ canEnterApp: state.
 vi.mock('@/contexts/dataOwnerGeneration', () => ({ getDataOwnerGeneration: () => state.owner }));
 vi.mock('@/lib/secondaryWindow', () => ({ isSecondaryWindow: () => state.secondary }));
 vi.mock('@/lib/sidebarWindow', () => ({ isSidebarWindow: () => state.sidebar }));
-vi.mock('@/features/bots/botReadStateSync', () => ({ startBotReadStateSync: () => {
+vi.mock('@/features/bots/botReadState', () => ({ startBotReadStateSync: () => {
   state.events.push('read:start'); return () => { state.events.push('read:stop'); };
 } }));
 vi.mock('@/features/bots/botGroupOutbox', () => ({ startBotGroupOutbox: () => {

@@ -269,7 +269,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
 
   const remoteSessionHandoff = deps.historyRemote
     ? createRemoteSessionHandoff({
-        captureRequest: async (id, text) => (await import('../maker-ipc/register.js')).captureSessionAgentRequest(id, text),
+        captureRequest: async (id, text, target) => (await import('../maker-ipc/register.js')).captureSessionAgentRequest(id, text, target),
         captureAccess: deps.historyRemote.captureAccess,
         invoke: deps.invokeRemote,
       })

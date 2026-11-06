@@ -142,6 +142,88 @@ beforeEach(() => {
 afterEach(cleanup);
 afterEach(() => vi.unstubAllGlobals());
 
+// User-requested form grouping / unit: inactive tabs unmount their fields. Existing
+// model tests do not protect configured options during a save from another tab.
+it('preserves configured options across tab switches and saving from content', async () => {
+  const expireAt = new Date(2027, 4, 1, 18, 30).getTime();
+  const h = mount(
+    schedule({
+      expireAt,
+      persistentSession: true,
+      silentWhenIdle: true,
+      notify: { desktop: true, feishu: true },
+      preRunHook: { command: 'node check.mjs' },
+    }),
+  );
+  fireEvent.click(screen.getByRole('tab', { name: 'scheduler.editor.layout.optionsTab' }));
+  expect(screen.getByPlaceholderText('scheduler.editor.preRunHook.commandPlaceholder').getAttribute('value')).toBe('node check.mjs');
+  fireEvent.click(screen.getByRole('tab', { name: 'scheduler.editor.layout.contentTab' }));
+  fireEvent.change(screen.getByPlaceholderText('scheduler.editor.promptDialog.namePlaceholder'), {
+    target: { value: 'Renamed' },
+  });
+  h.save();
+  await waitFor(() =>
+    expect(h.onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Renamed',
+        expireAt,
+        persistentSession: true,
+        silentWhenIdle: true,
+        notify: expect.objectContaining({ feishu: true }),
+        preRunHook: expect.objectContaining({ command: 'node check.mjs' }),
+      }),
+      true,
+    ),
+  );
+});
+
+// Unit: the optional deadline popover must update and clear the saved deadline,
+// including after leaving the content tab (the popover is then unmounted).
+it('edits and clears a deadline through its compact picker', async () => {
+  const h = mount(schedule());
+  fireEvent.click(screen.getByRole('button', { name: 'scheduler.deadline.label' }));
+  const input = await screen.findByLabelText('scheduler.deadline.label', { selector: 'input' });
+  fireEvent.change(input, { target: { value: '2027-05-02T09:15' } });
+  fireEvent.keyDown(input, { key: 'Escape' });
+  fireEvent.click(screen.getByRole('tab', { name: 'scheduler.editor.layout.optionsTab' }));
+  h.save();
+  await waitFor(() => expect(h.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    expireAt: new Date(2027, 4, 2, 9, 15).getTime(),
+  }), true));
+  fireEvent.click(screen.getByRole('tab', { name: 'scheduler.editor.layout.contentTab' }));
+  fireEvent.click(screen.getByRole('button', { name: 'scheduler.deadline.label' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'scheduler.deadline.clear' }));
+  fireEvent.keyDown(screen.getByLabelText('scheduler.deadline.label', { selector: 'input' }), { key: 'Escape' });
+  h.save();
+  await waitFor(() => expect(h.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ expireAt: null }), true));
+});
+
+// An invalid pre-run command on another tab must be reachable directly after Save fails.
+it('selects the invalid tab and accepts its correction without losing the form', async () => {
+  const h = mount(schedule({ preRunHook: { command: 'node check.mjs' } }));
+  fireEvent.click(screen.getByRole('tab', { name: 'scheduler.editor.layout.optionsTab' }));
+  fireEvent.change(await screen.findByPlaceholderText('scheduler.editor.preRunHook.commandPlaceholder'), { target: { value: '' } });
+  fireEvent.click(screen.getByRole('tab', { name: 'scheduler.editor.layout.contentTab' }));
+  h.save();
+  expect(h.onSubmit).not.toHaveBeenCalled();
+  expect(state.warning).toHaveBeenCalledWith(
+    'scheduler.editor.validation.preRunHookCommandRequired',
+  );
+  const command = await screen.findByPlaceholderText(
+    'scheduler.editor.preRunHook.commandPlaceholder',
+  );
+  fireEvent.change(command, { target: { value: 'node fixed.mjs' } });
+  h.save();
+  await waitFor(() =>
+    expect(h.onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preRunHook: expect.objectContaining({ command: 'node fixed.mjs' }),
+      }),
+      true,
+    ),
+  );
+});
+
 // PR #8950 review: loaded=false also means a failed fail-open lookup. Previous
 // fixtures coupled roster readiness to catalog readiness, missing this deadlock.
 // Unit/jsdom: pending -> rejected roster, usable catalog, real form submission.
@@ -176,7 +258,8 @@ it('sends the explicit local Harness and location when generating a bound hook',
   state.references.set('bound', { id: 'bound', state: 'available', status: 'active', agentKind: 'claude-code', agentDeviceId: 'studio' });
   mount(schedule({ targetSessionId: 'bound', modelAgentKind: 'codex', modelAgentDeviceId: '', providerId: '',
     preRunHook: { command: 'node check.mjs' } }));
-  fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.preRunHook.aiModify' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'scheduler.editor.layout.optionsTab' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'scheduler.editor.preRunHook.aiModify' }));
   fireEvent.change(screen.getByPlaceholderText('scheduler.editor.preRunHook.aiPlaceholder'), { target: { value: 'check changes' } });
   fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.preRunHook.aiGenerate' }));
   await waitFor(() => expect(generatePreRunHook).toHaveBeenCalledWith(expect.objectContaining({

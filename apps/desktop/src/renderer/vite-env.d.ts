@@ -1443,8 +1443,9 @@ interface ElectronAPI {
     /** 「显示到任务列表」:清除后台隐藏,任务重新出现在任务列表。 */
     revealBackgroundTask: (id: string, taskId: string) => Promise<{ ok: true }>;
     /** 目录级禁用清单(插件页项目范围视图;sendSync 切换同帧渲染)。 */
-    workdirPrefsSync: (workdir: string) => { disabled: string[] };
-    workdirPrefs: (workdir: string) => Promise<{ disabled: string[] }>;
+    workdirPrefsSync: (workdir: string) => { disabled: string[]; workdirKey?: string };
+    workdirPrefs: (workdir: string) => Promise<{ disabled: string[]; workdirKey?: string }>;
+    onWorkdirPrefsChanged: (callback: (payload: { workdirKey: string; disabled: string[] }, ownerStamp?: unknown) => void) => () => void;
     /** 写/清一条目录级例外(disabled=false 即清除,回到跟随全局)。 */
     setWorkdirDisabled: (
       workdir: string,
@@ -1690,6 +1691,7 @@ interface ElectronAPI {
     usageHistory: () => Promise<{ subjectId: string; ghostId: string; displayName: string; sourceKind: string }[]>;
     usageHistorySummary: (subjectId: string) => Promise<import('../shared/pluginUsage').PluginUsageSummary | null>;
     clearUsage: (subjectId: string | null) => Promise<void>;
+    readme: (id: string, locale?: string) => Promise<import('@cindy/plugin-protocol').GhostReadmeContent | null>;
     libraryOverview: (id: string) => Promise<import('../shared/ghost').GhostLibraryOverview>;
     handoffList: (id: string) => Promise<import('../shared/ghost').GhostHandoffFile[]>;
     handoffFolder: (id: string) => Promise<string | null>;
@@ -4682,6 +4684,7 @@ interface ElectronAPI {
     startGithubSetup: () => Promise<import('../shared/githubSetup').GithubSetupState>;
     cancelGithubSetup: () => Promise<import('../shared/githubSetup').GithubSetupState>;
     onGithubConnected: (cb: () => void) => () => void;
+    onGithubSetupOpen?: (cb: () => void) => () => void;
     get: (workdir: string) => Promise<import('@/lib/gitContext.types').GitContextSnapshot>;
     getForSession: (input: {
       sessionId: string;
@@ -5940,6 +5943,8 @@ interface ElectronAPI {
     deleteCustomMcpServer: (mcpId: string) => Promise<{ ok: true }>;
     /** token-only 后置刷新：safeStorage write/remove 完成后调用，消除竞态窗口。 */
     refreshCustomMcpCodex: () => Promise<{ ok: true }>;
+    listMcpDuplicates: () => Promise<import('../shared/customMcp').McpDuplicateReport>;
+    chooseMcpDuplicate: (input: { id: string; choice: import('../shared/customMcp').McpDuplicateChoice | null }) => Promise<{ ok: true }>;
     /** 自定义 MCP 变更广播订阅（返回 off）。 */
     onMcpChanged: (cb: () => void) => () => void;
     /** 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）登录 / 登出 / 取消。 */
@@ -7054,7 +7059,7 @@ interface ElectronAPI {
       sessionId: string;
       completionRevision: number;
       cancel: true;
-    }) => Promise<{ prompt: string | null }>;
+    }) => Promise<{ prompt: string | null; retryable?: boolean }>;
     helpAsk: (
       request: import('../shared/helpTypes').HelpAskRequest,
     ) => Promise<import('../shared/helpTypes').HelpAnswerResult>;

@@ -3,6 +3,7 @@ import type { TaskTagRequest, TaskTagResult } from '@cindy/maker-shared';
 import type { ChatCacheTransaction, ChatCacheResult } from '../../worker/opHandlers/chatCacheTx.js';
 
 export type DbTxName =
+  | 'usage.recordPiUsage'
   | 'chatCache.execute'
   | 'usage.recordMediaSpend'
   | 'authorization.readProjection'
@@ -1386,6 +1387,7 @@ export interface MediaSpendArgs {
 
 export type DbTxArgsByName = {
   'usage.recordMediaSpend': MediaSpendArgs;
+  'usage.recordPiUsage': import('../../worker/opHandlers/piUsageTx.js').PiUsageWrite[];
   'authorization.readProjection': { sessionId: string; leadId: string };
   'rewind.commit': RewindCommitArgs;
   'session.treeRehydrate': SessionTreeRehydrateArgs;
@@ -1478,6 +1480,7 @@ export type DbTxArgsByName = {
 };
 
 export type DbTxResultByName = {
+  'usage.recordPiUsage': { changed: boolean };
   'usage.recordMediaSpend': {
     legacyUsd: number;
     amount: number;

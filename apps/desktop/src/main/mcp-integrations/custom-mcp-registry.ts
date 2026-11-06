@@ -64,6 +64,13 @@ export function getBuiltinMcpServerNames(): string[] {
   return [...names];
 }
 
+/** Read current rows using the same admission rules as provider registration. */
+export async function listRegistrableCustomMcpServers() {
+  const configs = await listCustomMcpServers();
+  const reservedIds = getBuiltinMcpServerNames();
+  return configs.filter(config => validateCustomMcpConfig(config, reservedIds).ok);
+}
+
 /** @deprecated 测试别名，直接用 resetCustomMcpRegistry。 */
 export const __resetCustomMcpRegistryForTest = resetCustomMcpRegistry;
 

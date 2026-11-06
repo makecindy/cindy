@@ -7,7 +7,10 @@ import {
   type WorkLouderCodexDeviceState,
 } from '../../shared/workLouderCodex.js';
 
-export { WORKLOUDER_CODEX_AGENT_SLOT_COUNT } from '../../shared/workLouderCodex.js';
+export {
+  WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
+  WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT,
+} from '../../shared/workLouderCodex.js';
 
 export const enum WorkLouderLightingEffect {
   Off = 0,
@@ -503,6 +506,30 @@ export function isCindyExclusiveAgentLayer(layer: WorkLouderKeymapLayer | undefi
   );
 }
 
+/** The firmware answered an RPC with "no such method" rather than failing the transport. */
+export function isWorkLouderUnsupportedRpc(code: unknown, message: unknown): boolean {
+  if (code === -32601) return true;
+  const pattern =
+    /not[_ -]?supported|unsupported|not[_ -]?implemented|method[_ -]?not[_ -]?found|unknown[_ -]?method|enosys/i;
+  return (
+    (typeof code === 'string' && pattern.test(code)) ||
+    (typeof message === 'string' && pattern.test(message))
+  );
+}
+
+/**
+ * Whether to snapshot the live document before Cindy rewrites it. A snapshot that is
+ * still on disk belongs to an occupancy that was never released; keep it when the
+ * layer already looks like Cindy's grid. Codex Micro's factory layer looks the same,
+ * so without a leftover snapshot the live document is the layout to hand back.
+ */
+export function shouldSaveCreatorKeymapSession(
+  liveLayerIsCindy: boolean,
+  sessionExists: boolean,
+): boolean {
+  return !liveLayerIsCindy || !sessionExists;
+}
+
 export function isCindyExclusiveAgentKeymap(
   text: string,
   profileIndex = 0,
@@ -785,7 +812,8 @@ function isWorkLouderCodexDeviceState(value: unknown): value is WorkLouderCodexD
     (device.inputMonitoringPermission === 'granted' ||
       device.inputMonitoringPermission === 'denied' ||
       device.inputMonitoringPermission === 'unknown' ||
-      device.inputMonitoringPermission === 'not-required')
+      device.inputMonitoringPermission === 'not-required') &&
+    (device.factoryKeymap === undefined || typeof device.factoryKeymap === 'boolean')
   );
 }
 
