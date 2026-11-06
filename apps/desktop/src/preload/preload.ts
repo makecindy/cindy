@@ -8313,7 +8313,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       sessionId: string;
       completionRevision: number;
       cancel: true;
-    }): Promise<{ prompt: string | null }> => ipcRenderer.invoke('maker:predict-prompt', request),
+    }): Promise<{ prompt: string | null; retryable?: boolean }> => ipcRenderer.invoke('maker:predict-prompt', request),
     helpAsk: (
       request: import('../shared/helpTypes').HelpAskRequest,
     ): Promise<import('../shared/helpTypes').HelpAnswerResult> =>
