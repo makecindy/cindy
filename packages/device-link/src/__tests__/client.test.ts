@@ -41,6 +41,7 @@ import { DIRECT_LINK_SIGNAL, type DirectRuntime, type DirectRuntimeEvents } from
 import { providerShareGuestPeer, providerShareHostPeer } from '../providerSharePeer.js';
 import { createDirectRuntimeBridge, createDirectRuntimeHost } from '../directRuntimeBridge.js';
 import { resolveRemoteInvokeTimeoutMs } from '../invokePolicy.js';
+import { parseRemoteActionInvokeRequest } from '../remoteResources.js';
 import { SESSION_ACTIVITY_CHANNEL } from '../topics.js';
 import { resolveDesktopIceServers, REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS } from '../remoteDesktopIceConfig.js';
 import { REMOTE_DESKTOP_ICE_SERVERS } from '../remoteDesktopIce.js';
@@ -148,6 +149,37 @@ function makeHarness(opts?: {
 const tick = (ms = 0): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe('outbound invoke admission', () => {
+  // Unit, PR #9153: resource actions share one channel. Valid parsed actionId
+  // values must survive in actual INFO request evidence, while unknown IDs and
+  // input remain private. Previous diagnostics tests covered channels only.
+  it.each(['management:snapshot', 'management:ui-consent', 'PRIVATE_ACTION'])(
+    'classifies parsed remote resource actionId %s in slow request diagnostics', async actionId => {
+      vi.useFakeTimers();
+      const info = vi.fn();
+      const h = makeHarness({ logger: { info, debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        timing: { pingIntervalMs: 60_000, requestTimeoutMs: 10_000 } });
+      try {
+        const input = parseRemoteActionInvokeRequest({
+          client: { protocolVersion: 1, primitives: ['action'] }, collectionId: 'plugins',
+          actionId, input: { value: 'PRIVATE_INPUT' },
+        });
+        expect(input).not.toBeNull();
+        h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+        const request = h.client.invoke('abcdef12', { channel: 'maker:remote-resources:invoke', args: [input] });
+        const sent = h.current().sent.find(frame => frame.kind === 'invoke')!;
+        await vi.advanceTimersByTimeAsync(1000);
+        h.current().push({ v: PROTOCOL_VERSION, kind: 'invoke-result', id: sent.id, src: sent.dst,
+          payload: { ok: true, result: {} } });
+        await expect(request).resolves.toMatchObject({ ok: true });
+        const records = info.mock.calls.filter(([s]) => s.startsWith('device-link diagnostic '))
+          .map(([s]) => JSON.parse(s.slice('device-link diagnostic '.length)));
+        expect(records).toContainEqual(expect.objectContaining({ stage: 'request', channel: 'maker:remote-resources:invoke',
+          operation: actionId === 'PRIVATE_ACTION' ? 'other-resource-action' : actionId }));
+        expect(JSON.stringify(info.mock.calls)).not.toContain('PRIVATE_');
+      } finally { h.client.stop(); vi.useRealTimers(); }
+    },
+  );
+
   // Unit, PR #9153: three larger direct-only queues must not hide the smaller
   // queue sharing the relay socket. Exercise production links and timeout logs.
   it('ranks competing relay backlog ahead of larger direct-only queues in stall evidence', async () => {

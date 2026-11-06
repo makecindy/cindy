@@ -1,5 +1,6 @@
 import { REMOTE_INVOKE_ALLOWLIST } from './allowlist.js';
 import type { InvokePayload } from './protocol.js';
+import type { RemoteActionInvokeRequest } from './remoteResources.js';
 import { parseSharedTaskPeer } from './sharedTaskPeer.js';
 import { parseProviderSharePeer } from './providerSharePeer.js';
 
@@ -17,7 +18,7 @@ export function diagnosticOperation(payload: InvokePayload): string {
   if (payload.channel !== 'maker:remote-resources:invoke') return diagnosticChannel(payload.channel);
   const input = payload.args?.[0];
   if (!input || typeof input !== 'object') return 'unknown';
-  const action = (input as { action?: unknown }).action;
+  const action = (input as Partial<RemoteActionInvokeRequest>).actionId;
   return action === 'management:snapshot' || action === 'management:ui-consent'
     ? action : 'other-resource-action';
 }
