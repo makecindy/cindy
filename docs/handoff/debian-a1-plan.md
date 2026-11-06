@@ -72,7 +72,7 @@ flowchart TB
 | R3 | **写操作不发事件**。`updateSession`、`createMessage`、`createSession` 写库后不向 `eventHub` 发布；设置里只有外观发了 `appearance_changed`，且两端都没有消费它。另一端只能靠下次主动读才能看到变化。 | `apps/host/src/main.ts`；`apps/web/shim.js` 只在本地 `emit` |
 | R4 | **设置文件有两个写者**。Host 与桌面主进程都直接写同一批文件（外观、布局、侧栏、快捷键），没有文件监听，也没有通知。 | `profile-settings.mjs` 与桌面 `appearanceSettings` 等模块 |
 | R5 | **桌面端 `localDb.ensureReady` 在客户端模式下直接返回失败**，而网页 shim 对同一通道直接返回 `{ready:true}`，两端启动门行为不对称。`local-db:ensure-ready` 不在代理列表里，渲染层 `LocalDbGate` 会调到它。是否真会卡住**尚未实测**（见步骤 S0）。 | `localDb/index.ts` 的 `isHostClientMode()` 早退；`registerAll.ts` 注册了该 handler |
-| R6 | **原生模块 ABI 冲突**：为 Electron 编译的 `better-sqlite3` 会让同 checkout 里的 Host（Node ABI）无法启动，反之亦然。dev 桌面与 Host 无法在同一个 checkout 同时运行。 | `docs/host/electron-client-mode.md` 末行 |
+| R6 | **原生模块 ABI 冲突（已有机制，S1 实测通过）**：`electron-rebuild` 会覆盖 hoisted 的根 `better-sqlite3`（Node ABI），让 Host 起不来。仓库已有 `scripts/ensure-deps.mjs`：把 Electron 版产物放进 `node_modules/.xdt-electron-native/…`，随后恢复根目录 Node ABI；`betterSqliteFactory.ts` 在 dev Electron 下自动选用该缓存。 | `docs/host/electron-client-mode.md` 末行（该说法已过时）；`docs/host/evidence/a1-s1-native-abi.md` |
 | R7 | **登录态共享刷新有竞争风险**：Host 与桌面读写同一份 keyring 里的 refresh token，两边同时轮换可能让会话失效。 | `apps/host/src/auth/refresh.mjs` |
 | R8 | **版本与二进制不一致**：安装版 0.1.109 的 migration 只到 128，dev Host 已到 129；安装版不含客户端模式代码，也不会进入客户端模式，只会自己打开数据库。 | 初版文档背景；`host-delegation.ts` 仅存在于 feat 分支 |
 
@@ -141,6 +141,8 @@ flowchart TB
 - 完成判据：两张清单都有，R5 已得出确定结论。
 
 ### S1 · 隔离原生模块（解决 R6）
+
+> **2026-11-06 已完成**：不需要新造机制，`node scripts/ensure-deps.mjs` 已生成 Electron 专用绑定并恢复根目录 Node ABI，两份二进制并存，Host 的 Node 加载验证通过。证据见 `docs/host/evidence/a1-s1-native-abi.md`。下面保留原设计作参考。
 
 - 目标：Host 用 Node ABI 的 `better-sqlite3`，Electron 用 Electron ABI，互不覆盖。
 - 做法（任选其一，先试 a）：
