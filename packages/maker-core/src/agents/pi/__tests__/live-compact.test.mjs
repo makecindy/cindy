@@ -277,6 +277,13 @@ describe('live compact spine selection', () => {
     const jsonWrapped = redactSecrets(JSON.stringify({ command: 'cat id_rsa', private_key: pem }));
     expect(jsonWrapped).not.toContain('b3BlbnNzaC1rZXk');
     expect(jsonWrapped).not.toContain('END OPENSSH');
+    // 大体积块不能只打一半:正文封顶会让整块规则认不到终结符,半块规则只吃掉前半截。
+    const bigBody = 'A'.repeat(10900);
+    const big = [pemEdge('BEGIN RSA'), bigBody, pemEdge('END RSA')].join(String.fromCharCode(10));
+    expect(redactSecrets(big)).toBe('[REDACTED PRIVATE KEY]');
+    // 截断的超大块也一样:没等到 END 也要整段吃掉,不能留后半截密钥。
+    const bigCut = [pemEdge('BEGIN RSA'), 'A'.repeat(20000)].join(String.fromCharCode(10));
+    expect(redactSecrets(bigCut)).toBe('[REDACTED PRIVATE KEY]');
     // 连接串的主机与用户名要留着,否则模型无法判断是哪套库。
     expect(out).toContain('postgres://cindy:');
     expect(out).toContain('@db.internal');
