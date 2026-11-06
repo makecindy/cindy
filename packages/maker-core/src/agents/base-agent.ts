@@ -816,6 +816,12 @@ export interface AgentDeps {
   resolvePiLiveCompactEnabled?: () => boolean;
 
   /**
+   * Pi-only: 边做边压的 shadow 根目录。备份里是会话正文,按账号(数据归属)隔离 ——
+   * 切账号后既读不到也清不掉上一个账号的备份。缺省回落到 agentHome/compaction-spine。
+   */
+  resolvePiLiveCompactShadowDir?: () => string;
+
+  /**
    * Pi-only: resolve the immutable Cindy project-approval input for one new
    * runtime. The host owns identity canonicalization, approval audit/revocation,
    * and discovered-resource provenance. Missing/throwing resolvers fail closed.

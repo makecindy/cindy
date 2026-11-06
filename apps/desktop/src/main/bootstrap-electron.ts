@@ -8823,7 +8823,29 @@ const registerIpcHandlers = () => {
       registerWindowDraftUrls(event.sender, urls);
     });
 
-    const spineDir = path.join(app.getPath('userData'), 'pi-agent-home', 'compaction-spine');
+    // 「边做边压」的备份里是会话正文,属于账号私有数据:目录与设置页操作都必须按当前
+    // 账号解析,切账号后既看不到也清不掉上一个账号的备份(与 chat attachments 同口径)。
+    const captureSpineDir = () => {
+      const ownerScopeKey = activeOwnerScopeKey();
+      if (!getActiveAppSession().dataOwnerId || isAppSessionBoundaryPending()) {
+        throwIpcError('PRECONDITION_FAILED', 'live compact directory requires a stable data owner');
+      }
+      return {
+        spineDir: ownerScopedUserDataPath('pi-agent-home', 'compaction-spine'),
+        isCurrentOwner: () => activeOwnerScopeKey() === ownerScopeKey && !isAppSessionBoundaryPending(),
+      };
+    };
+    const withSpineDir = async <T>(
+      action: (spineDir: string) => Promise<T>,
+      options: { allowOwnerChangeAfterAction?: boolean } = {},
+    ): Promise<T> => {
+      const { spineDir, isCurrentOwner } = captureSpineDir();
+      const result = await action(spineDir);
+      if (!options.allowOwnerChangeAfterAction && !isCurrentOwner()) {
+        throwIpcError('PRECONDITION_FAILED', 'live compact directory owner changed');
+      }
+      return result;
+    };
     const storageHandlers = createStorageIpcHandlers({
       clearRemoteMediaMemory: clearLocalEntries,
       getQueueScanTexts: collectAgentInputQueueScanTexts,
@@ -8849,13 +8871,18 @@ const registerIpcHandlers = () => {
       // 报数为 0、清理为无操作,无需先判断开关状态。
       // 打开目录一律走 Electron shell + 统一的目标解析:目录由本机拼出来、不接受
       // renderer 传路径,仍过一次 resolveShellOpenPathTarget,保证这条调用面永远不碰命令执行。
-      openSpineDir: async () => {
-        const target = resolveShellOpenPathTarget(spineDir);
-        if (!target) return false;
-        return openOrCreateFixedDirectory(target, { openPath: (filePath) => shell.openPath(filePath) });
-      },
-      clearSpineDir: () => clearFixedDirectory(spineDir),
-      getSpineDirStats: () => getFixedDirectoryStats(spineDir),
+      openSpineDir: () =>
+        withSpineDir(async (spineDir) => {
+          const target = resolveShellOpenPathTarget(spineDir);
+          if (!target) return false;
+          return openOrCreateFixedDirectory(target, { openPath: (filePath) => shell.openPath(filePath) });
+        }, { allowOwnerChangeAfterAction: true }),
+      clearSpineDir: () => withSpineDir((spineDir) => clearFixedDirectory(spineDir)),
+      // 未登录/账号边界未稳定时没有归属:按 0 报数,不读任何账号的目录。
+      getSpineDirStats: () =>
+        !getActiveAppSession().dataOwnerId || isAppSessionBoundaryPending()
+          ? Promise.resolve({ bytes: 0, fileCount: 0 })
+          : withSpineDir((spineDir) => getFixedDirectoryStats(spineDir)),
     });
     registerLocalAgentConfirmationIpc(() => mainWindowRef);
     ipcMain.handle('local-agent:connections', (event) => {

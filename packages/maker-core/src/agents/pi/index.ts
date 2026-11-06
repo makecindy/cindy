@@ -5733,7 +5733,10 @@ export class PiAgent extends BaseAgent {
         // 影子原文根目录显式交给扩展:设置页(存储/清理)按 <agentHome>/compaction-spine 统计,
         // 扩展若自己推导就可能漂移,导致「统计恒 0 / 清理假成功」。
         ...(liveCompactEnabled && !remote
-          ? { SPINE_SHADOW_DIR: joinRemotePosixPath(agentHome, 'compaction-spine') }
+          ? {
+              SPINE_SHADOW_DIR:
+                this.deps.resolvePiLiveCompactShadowDir?.() ?? joinRemotePosixPath(agentHome, 'compaction-spine'),
+            }
           : {}),
         [PI_BASH_PACKAGE_HOME_ENV]: bashPackageHome,
         CINDY_PI_PERMISSION_FILE: permissionFile,
