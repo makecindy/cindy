@@ -4008,6 +4008,8 @@
         "disabledGroup": "Désactivés",
         "enableAllModels": "Tout activer",
         "priceOverride": {
+          "resetShort": "Réinitialiser",
+          "referenceDetails": "Détails du tarif de référence",
           "menu": "Modifier l'estimation du prix API",
           "title": "Estimation du prix API de {{model}}",
           "description": "Sert uniquement à estimer la consommation sur votre propre API ou route d'abonnement. Cela ne modifie pas la facture du fournisseur.",

@@ -45,13 +45,11 @@ const {
   wizardSpy: vi.fn(),
 }));
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string, options?: { count?: number }) =>
-      key === 'settings.providers.models.manage.selected' ? `${key}:${options?.count}` : key,
-    i18n: { language: 'zh-CN' },
-  }),
-}));
+vi.mock('react-i18next', () => {
+  const t = (key: string, options?: { count?: number }) =>
+    key === 'settings.providers.models.manage.selected' ? `${key}:${options?.count}` : key;
+  return { useTranslation: () => ({ t, i18n: { language: 'zh-CN' } }) };
+});
 
 vi.mock('@/hooks/useProviders', () => ({
   useProviders: () => {
@@ -230,6 +228,10 @@ beforeEach(() => {
       requestProviderModelsAutoRefresh: requestAutoRefreshSpy,
       setProviderOrder: setProviderOrderSpy,
       onProviderOAuthProgress: vi.fn(() => () => {}),
+      getModelPriceOverride: vi.fn(async (target: Parameters<typeof window.electronAPI.maker.getModelPriceOverride>[0]) => ({
+        target, editable: true, effective: null, reference: null, override: null,
+        conflict: false, allowedCurrencies: ['USD', 'CNY'], registryUpdatedAt: null,
+      })),
     },
   };
 });

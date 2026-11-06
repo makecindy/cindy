@@ -765,7 +765,40 @@ Mobile 伙伴任务卡的列表外补读由 `companionTaskReads.ts` 按账号、
 每批最多 8 个、批次串行；同组共享刷新时钟，旧端单条回退同样串行。焦点或账号切换后
 不发送已失效的排队读取，不缓存已完成批次；卡片优先使用普通任务列表中的更新结果。
 
-Debug 日志区分两层耗时：
+远程卡顿的默认 INFO 证据使用 `device-link diagnostic`，不要求用户先开 Debug 再复现。
+记录只观察，不改变并发、超时、重试、选路、授权或 wire：
+
+- `admission`：本机准入满额、过期或等待超过 1 秒时，记录运行中与排队中的数量、
+  最老请求的通道／来源／优先级／年龄，以及可靠传输现场。两组各保留前三类，
+  `omittedGroups` 明示省略数量；队列满不等于网络慢。
+- `request`：请求超时、往返超过 1 秒或回复至少 256 KiB 时，记录同一个 request 前八位、
+  准入等待、首次写出前等待、写出后等待、回复字节数。`firstWriteWaitMs=null` 表示尚未写出。
+  `elapsedMs` 用本机单调时钟，`wallElapsedMs` 用墙钟；不能相减两台设备的时间戳当网络耗时。
+- `execution`（`device-link:execution-diagnostics`）：被控端执行超过 1 秒时记录授权、handler、
+  持久化和投影耗时；5 秒仍未结束时先记当前执行阶段，不等请求完成才留证。
+- `send`：大帧入队及大帧／慢帧收到 ACK 时记录字节数、序号、路径与等待。
+  `queueToAckMs` 覆盖全部排队／重传，`currentAttemptToAckMs` 仅覆盖当前重传轮。
+  `encode` / `decode` / `receive` 补充至少 250 毫秒的编码、解码、分片组装及按序等待。
+- `path` / `ack`：直连因 ACK、缓冲或写出故障撤下、或可靠层超时时，**在清理现场之前**记录
+  ACK 位置、前三个队头的 request／seq／字节／路径／年龄／发送闸门、接收缺口，以及共享
+  socket 上其它 peer 的积压（前三名及省略数）。少量大帧和旧 relay 前缀也能留下证据，
+  不依赖队列达到 48 条才触发。
+
+按 request 前八位关联两端；同一现场拆行时用 `instance + event + part` 拼回，`parts` 用于检查是否缺片。
+各阶段（准入原因、请求／执行／发送结果分桶）每 30 秒保留前四次，随后汇总 `suppressed`；
+直连故障不会被普通慢请求耗尽采样名额。单行小于上传器的 2,000 字符上限。
+只有固定通道／操作枚举、短标识、数量、字节和时长，不记录参数、回复、路径、SQL、凭证或错误正文。
+Desktop 的 `device-link`、`device-link:ipc-diagnostics`、`device-link:execution-diagnostics`、
+`device-link-transfer` 精确 scope 可经现有采集与脱敏导出；不开放其它子 scope。
+
+判断时要区分证据：运行槽被慢 handler 占满、发送闸门挡住大回复、以及旧 relay 队头阻止
+后续 direct 帧的累计 ACK，是不同原因。单端日志缺少对端阶段时只能定位等待区间，不能
+把“写出后等待”断言成网络慢；采样缺失、上报裁剪及旧版对端同样必须明确。
+共享传输层的记录仍使用各平台注入的 logger，本项不改变 Mobile 的日志持久化／上报策略。
+`node scripts/remote-stall-diagnostics-smoke.mjs` 用隔离 Electron、真实回环 WebSocket、正式
+INFO writer 与收集器验证上述四类故障，并保留 `collected.json`，不向云端上传。
+
+Debug 仍可追加两层细节：
 
 - `remote invoke slow execution`（至少 300 毫秒）包含 `stagesMs`：调用前授权、业务 handler、
   调用后授权、设置持久化、返回投影。总耗时还包含调度和序列化，不等于 SQL 执行时间。

@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider, resolveModelMetadata } from '@cindy/model-providers';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 
 const mocks = vi.hoisted(() => ({
+  priceProps: vi.fn(),
+  realPricing: false,
   setLimit: vi.fn(async () => {}),
   reset: vi.fn(async () => {}),
   target: vi.fn(),
@@ -18,13 +21,11 @@ const mocks = vi.hoisted(() => ({
   limit: null as number | null,
   mixed: false,
 }));
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string, values?: Record<string, unknown>) =>
-      values?.tokens ? `${key} ${values.tokens}` : values?.value ? `${key} ${values.value}` : key,
-    i18n: { resolvedLanguage: 'en' },
-  }),
-}));
+vi.mock('react-i18next', () => {
+  const t = (key: string, values?: Record<string, unknown>) =>
+    values?.tokens ? `${key} ${values.tokens}` : values?.value ? `${key} ${values.value}` : key;
+  return { useTranslation: () => ({ t, i18n: { resolvedLanguage: 'en' } }) };
+});
 vi.mock('@/hooks/useProviders', () => ({
   useProviders: () => ({ refetch: mocks.refetch, error: mocks.catalogError }),
 }));
@@ -61,7 +62,17 @@ vi.mock('@/state/providerModelMemory', () => ({
   setProviderModelEffort: vi.fn(),
   clearProviderModelEffort: vi.fn(),
 }));
-vi.mock('../ModelPriceOverrideDialog', () => ({ ModelPriceOverrideDialog: () => null }));
+vi.mock('../ModelPriceOverrideDialog', async (importOriginal) => {
+  const { ModelPriceOverrideDialog: RealPricing } = await importOriginal<typeof import('../ModelPriceOverrideDialog')>();
+  return {
+    ModelPriceOverrideDialog: (props: Parameters<typeof import('../ModelPriceOverrideDialog').ModelPriceOverrideDialog>[0]) => {
+      mocks.priceProps(props);
+      if (mocks.realPricing) return <RealPricing {...props} />;
+      const details = typeof props.referenceDetails === 'function' ? props.referenceDetails(props.row.avail[0]) : props.referenceDetails;
+      return <div data-testid="inline-pricing">{details}</div>;
+    },
+  };
+});
 import type { ModelImageInputCatalogModel } from '../../../../shared/modelImageInputOverride';
 import { ModelAdvancedDrawer } from '../ModelAdvancedDrawer';
 import { setModelVisibility } from '@/state/modelVisibilityPrefs';
@@ -118,6 +129,7 @@ const AGENT_NAMES = { 'claude-code': 'Claude Code', codex: 'Codex', pi: 'Pi' } a
 afterEach(cleanup);
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.realPricing = false;
   mocks.limit = null;
   mocks.catalogError = null;
   mocks.refetch.mockReset().mockResolvedValue(true);
@@ -188,8 +200,20 @@ describe('model advanced editor', () => {
     update.mockImplementationOnce(() => new Promise((resolve, reject) => {
       failFirst = () => failure === 'thrown' ? reject(new Error('save failed')) : resolve({ ok: false });
     }));
+    // New inline pricing shares the drawer: a quote save must not allow a name
+    // readback to replace its target, and a pending name must retain its draft.
+    mocks.realPricing = !grouped;
+    const quote = { currency: 'USD' as const, inputPerMtok: 1, outputPerMtok: 4 };
+    const priceView = { target: { providerId: source.id, agent: 'codex' as const, modelId: selectedId },
+      editable: true, effective: quote, reference: quote, override: null, conflict: false,
+      allowedCurrencies: ['USD' as const], registryUpdatedAt: null };
+    let finishPrice!: (next: unknown) => void;
+    const savePrice = vi.fn(() => new Promise(resolve => { finishPrice = resolve; }));
     const previous = window.electronAPI;
-    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
+      updateCustomProvider: update, getModelPriceOverride: vi.fn(async () => priceView),
+      setModelPriceOverride: savePrice,
+    } } });
     try {
       const close = vi.fn();
       const disable = vi.fn();
@@ -202,8 +226,27 @@ describe('model advanced editor', () => {
       fireEvent.click(save);
       expect(update).not.toHaveBeenCalled();
       fireEvent.change(input, { target: { value: 'Private Alias' } });
+      let priceInput: HTMLInputElement | undefined;
+      if (!grouped) {
+        priceInput = screen.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+        await waitFor(() => expect(priceInput!.disabled).toBe(false));
+        fireEvent.change(priceInput, { target: { value: '7' } });
+        fireEvent.blur(priceInput);
+        await waitFor(() => expect(savePrice).toHaveBeenCalledOnce());
+        expect(save.disabled).toBe(true);
+        fireEvent.click(save);
+        expect(update).not.toHaveBeenCalled();
+        await act(async () => { finishPrice({ ...priceView, effective: { ...quote, inputPerMtok: 7 } }); });
+        await waitFor(() => expect(save.disabled).toBe(false));
+      }
       fireEvent.click(save);
       fireEvent.click(save);
+      if (priceInput) {
+        const user = userEvent.setup();
+        await user.click(priceInput);
+        await user.type(priceInput, '9');
+        expect(priceInput.value).toBe('7');
+      }
       fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
       const toggle = screen.getByRole('button', { name: `settings.providers.models.${disabled ? 'enableModel' : 'disableModel'}` }) as HTMLButtonElement;
       fireEvent.click(toggle);
@@ -1367,9 +1410,8 @@ it('keeps enterprise reference prices read-only in the model drawer', () => {
       source: 'organization',
     }),
   );
-  expect(
-    screen.queryByRole('button', { name: 'settings.providers.models.priceOverride.menu' }),
-  ).toBeNull();
+  expect(screen.queryByTestId('inline-pricing')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'settings.providers.models.priceOverride.menu' })).toBeNull();
 });
 
 // Component contract (unit): the real drawer names the charge, independently of its token unit.
@@ -1610,4 +1652,61 @@ it('uses the union row identity to infer an undeclared bridge image default', as
   expect(items).toHaveLength(2);
   fireEvent.click(screen.getByRole('menuitemradio', { name: 'settings.providers.models.advanced.imageInputDefault settings.providers.models.advanced.supported' }));
   expect(mocks.imageSet).toHaveBeenCalledWith(null);
+});
+
+// UI entry regression: replace the old launcher while retaining the existing pricing body.
+// Dialog API/payload behavior is exercised by ModelPriceOverrideDialog.test.tsx (unit).
+it('replaces the API-price launcher with the existing form in inline mode', () => {
+  draw();
+  expect(screen.getByTestId('inline-pricing')).toBeTruthy();
+  expect(mocks.priceProps).toHaveBeenLastCalledWith(expect.objectContaining({ presentation: 'inline' }));
+  expect(screen.queryByRole('button', { name: 'settings.providers.models.priceOverride.menu' })).toBeNull();
+});
+
+// Real drawer + pricing form: Radix handles Escape in document capture before
+// the form's bubbling key handler, including when Shift+Tab reaches Reset.
+it('saves a dirty quote on Escape from Reset before allowing the drawer to close', async () => {
+  mocks.realPricing = true;
+  const user = userEvent.setup();
+  const previous = window.electronAPI;
+  const quote = { currency: 'USD' as const, inputPerMtok: 1, outputPerMtok: 4 };
+  const view = { target: { providerId: provider.id, agent: 'codex' as const, modelId: model.id },
+    editable: true, effective: quote, reference: quote, override: null, conflict: false,
+    allowedCurrencies: ['USD' as const], registryUpdatedAt: null };
+  let finishSave!: (next: unknown) => void;
+  const save = vi.fn(() => new Promise(resolve => { finishSave = resolve; }));
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
+    getModelPriceOverride: vi.fn(async () => view), setModelPriceOverride: save,
+    resetModelPriceOverride: vi.fn(),
+  } } });
+  const onOpenChange = vi.fn();
+  try {
+    render(<ModelAdvancedDrawer provider={provider}
+      row={{ id: model.id, name: model.name, avail: ['codex'], byAgent: { codex: model } }}
+      open onOpenChange={onOpenChange} pricePresentationOf={() => null}
+      onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+    const input = screen.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    await user.click(input);
+    await user.clear(input);
+    await user.type(input, '7');
+    await user.tab({ shift: true });
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'settings.providers.models.priceOverride.resetShort' }));
+    expect(save).not.toHaveBeenCalled();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(save).toHaveBeenCalledExactlyOnceWith(view.target, {
+      currency: 'USD', inputPerMtok: 7, outputPerMtok: 4, cacheReadPerMtok: null, cacheCreatePerMtok: null,
+    }));
+    expect(onOpenChange).not.toHaveBeenCalled();
+    await user.keyboard('{Escape}');
+    expect(onOpenChange).not.toHaveBeenCalled();
+    finishSave({ ...view, effective: { ...quote, inputPerMtok: 7 }, override: { ...quote, inputPerMtok: 7 } });
+    await waitFor(() => expect(input.readOnly).toBe(false));
+    expect(input.value).toBe('7');
+    await user.keyboard('{Escape}');
+    expect(onOpenChange).toHaveBeenCalledExactlyOnceWith(false);
+  } finally {
+    cleanup();
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous });
+  }
 });
