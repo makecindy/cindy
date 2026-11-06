@@ -15658,7 +15658,8 @@ async function sendMessageCore(
     })
     .catch((err) => {
       // 远端 lazy-create/startSession 抛的 [REMOTE_*] 不可恢复错误走 IPC reject 落这里
-      // (不经 stream error event reducer),保留诊断给横幅按当前语言解码。
+      // (不经 stream error event reducer)。保留已知 code 的 wrapper，让 ErrorBanner
+      // 选择可操作的 provider 指引；未知 code 仍由 helper 解码为通用本地化摘要。
       const message = remoteErrorMessageForBanner(err instanceof Error ? err.message : String(err));
       setState(sessionId, (s) => ({
         ...s,
@@ -16044,7 +16045,8 @@ async function steerMessageCore(
     })
     .catch((err) => {
       // 远端 lazy-create/startSession 抛的 [REMOTE_*] 不可恢复错误走 IPC reject 落这里
-      // (不经 stream error event reducer),保留诊断给横幅按当前语言解码。
+      // (不经 stream error event reducer)。保留已知 code 的 wrapper，让 ErrorBanner
+      // 选择可操作的 provider 指引；未知 code 仍由 helper 解码为通用本地化摘要。
       const message = remoteErrorMessageForBanner(err instanceof Error ? err.message : String(err));
       rollbackOptimisticSteer();
       setState(sessionId, (s) => ({
@@ -16194,7 +16196,7 @@ function steerQueuedMessage(sessionId: string, clientId: string): Promise<boolea
         .catch((err) => {
           unmarkLocalSentUserMessage(sessionId, clientId);
           // 远端 lazy-create/startSession 抛的 [REMOTE_*] 不可恢复错误走 IPC reject 落这里
-          // (不经 stream error event reducer),保留诊断给横幅按当前语言解码。
+          // (不经 stream error event reducer),同样要解码成 i18n 文案,别裸显 bracket code。
           const message = remoteErrorMessageForBanner(
             err instanceof Error ? err.message : String(err),
           );
