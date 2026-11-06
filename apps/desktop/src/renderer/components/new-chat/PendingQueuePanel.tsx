@@ -503,9 +503,9 @@ export function PendingQueuePanel({
                 setRowActivity((activity) =>
                   activatePendingQueueRowFocus(activity, entry.clientId),
                 );
-                // 键盘激活也要按当行现量;焦点落在行内动作按钮上时让位给按钮自己的 Tip。
+                // 键盘激活也要按当行现量;焦点落在行内动作按钮 / 引用 chip 上时让位给它们自己的 Tip。
                 syncBodyTip(
-                  !isQueueRowActionTarget(event.target) &&
+                  !isQueueRowChildTipTarget(event.target) &&
                     isQueueRowBodyOverflowed(
                       event.currentTarget.querySelector<HTMLElement>(
                         QUEUE_ROW_BODY_SELECTOR,
@@ -624,8 +624,12 @@ export function PendingQueuePanel({
                   >
                     <span
                       data-queue-row-body
-                      onPointerEnter={(event) =>
-                        syncBodyTip(isQueueRowBodyOverflowed(event.currentTarget))
+                      onPointerOver={(event) =>
+                        // pointerover 会冒泡到正文内的 chip:指针在 chip 上时行级全文提示让位。
+                        syncBodyTip(
+                          !isQueueRowChildTipTarget(event.target) &&
+                            isQueueRowBodyOverflowed(event.currentTarget),
+                        )
                       }
                       onPointerLeave={() =>
                         setBodyTipClientId((current) =>
@@ -661,8 +665,12 @@ export function PendingQueuePanel({
                 >
                   <p
                     data-queue-row-body
-                    onPointerEnter={(event) =>
-                      syncBodyTip(isQueueRowBodyOverflowed(event.currentTarget))
+                    onPointerOver={(event) =>
+                      // pointerover 会冒泡到正文内的 chip:指针在 chip 上时行级全文提示让位。
+                      syncBodyTip(
+                        !isQueueRowChildTipTarget(event.target) &&
+                          isQueueRowBodyOverflowed(event.currentTarget),
+                      )
                     }
                     onPointerLeave={() =>
                       setBodyTipClientId((current) =>
@@ -818,7 +826,12 @@ export function PendingQueuePanel({
 const queueBodyTipClassName = 'max-h-[200px] overflow-hidden whitespace-pre-wrap';
 
 const QUEUE_ROW_BODY_SELECTOR = '[data-queue-row-body]';
-const QUEUE_ROW_ACTION_SELECTOR = '[data-pending-queue-row-action="true"]';
+/**
+ * 行内自带 Tip 的子元素:动作按钮、正文里的引用 chip。
+ * 指针 / 焦点落在这些子元素上时,行级全文提示必须先收起,否则两层提示叠在一屏。
+ */
+const QUEUE_ROW_CHILD_TIP_SELECTOR =
+  '[data-pending-queue-row-action="true"], [data-inline-reference-chip]';
 
 /** 与 Tip 共享的 delayDuration 对齐:指针划过列表时不该立刻铺开全文浮层。 */
 const QUEUE_BODY_TIP_HOVER_DELAY_MS = 500;
@@ -828,9 +841,9 @@ function isQueueRowBodyOverflowed(node: HTMLElement | null): boolean {
   return Boolean(node && node.scrollWidth > node.clientWidth);
 }
 
-/** 行内动作按钮(插话 / 编辑 / 删除)各有自己的 Tip,行级浮层必须给它们让位。 */
-function isQueueRowActionTarget(target: EventTarget | null): boolean {
-  return target instanceof Element && target.closest(QUEUE_ROW_ACTION_SELECTOR) !== null;
+/** 行内自带 Tip 的子元素(插话/编辑/删除按钮、引用 chip)不该被行级浮层盖住。 */
+function isQueueRowChildTipTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(QUEUE_ROW_CHILD_TIP_SELECTOR) !== null;
 }
 
 const iconButtonClassName = cn(
