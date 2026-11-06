@@ -16,7 +16,7 @@ import { getCachedProvidersSnapshot } from '@/lib/providersSnapshotStore';
 import {
   NEW_BOT_DEFAULT_HARNESS,
 } from '../../../shared/botDefaults';
-import { getBotLastReadAtMap, pruneBotReadState, seedMissingBotReadState } from './botReadState';
+import { getBotLastReadAtMap, seedMissingBotReadState } from './botReadState';
 import type { BotAutonomySettingsView } from '../../../shared/botAutonomy';
 import { registerLoadedBotProfilesReader } from './botSessionOwners';
 import { canonicalBotSession } from './botSessionOwners';
@@ -778,12 +778,8 @@ async function hydrateFromDatabase(): Promise<void> {
     profileListLoaded = true;
     projectGlobalModelChain();
     applyUnreadCounts(rows);
-    // A Bot we have never tracked starts read: shipping unread badges must not
-    // retroactively mark every existing conversation as unread. Pruning keeps
-    // the stored map from growing with deleted Bots.
-    const visibleIds = profiles.map((bot) => bot.id);
-    seedMissingBotReadState(visibleIds);
-    pruneBotReadState(visibleIds);
+    // Discovery is not an acknowledgement; absent/hidden rows never delete shared reads.
+    seedMissingBotReadState(profiles.map((bot) => bot.id));
     emit();
   } catch {
     // DB readiness can race the first renderer render during account/bootstrap.

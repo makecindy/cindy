@@ -63,7 +63,7 @@ export function useComposerOverlayMetrics(overlayEl: HTMLElement | null): Compos
     };
     const ro = new ResizeObserver(() => measure(true));
     let observedTargets = new Set<HTMLElement>();
-    const syncResizeTargetsAndMeasure = (sync: boolean) => {
+    const syncResizeTargets = () => {
       const nextTargets = new Set(getMessageStreamIndicatorResizeTargets(overlayEl));
       for (const target of observedTargets) {
         if (!nextTargets.has(target)) ro.unobserve(target);
@@ -72,15 +72,22 @@ export function useComposerOverlayMetrics(overlayEl: HTMLElement | null): Compos
         if (!observedTargets.has(target)) ro.observe(target);
       }
       observedTargets = nextTargets;
-      measure(sync);
     };
 
     // Seed with the current geometry so the first paint after remount does not
     // reuse stale state. The plan flyout is absolutely positioned and mounts
     // only on hover/click, so its insertion does not resize the center group;
     // resync observed targets whenever that subtree changes.
-    syncResizeTargetsAndMeasure(false);
-    const mutationObserver = new MutationObserver(() => syncResizeTargetsAndMeasure(true));
+    syncResizeTargets();
+    measure(false);
+    const mutationObserver = new MutationObserver(() => {
+      syncResizeTargets();
+      // Reading geometry here forces layout after each React commit. Request a
+      // fresh observation instead: the browser batches it after layout, before
+      // paint. Re-observing also catches position-only changes with equal sizes.
+      ro.unobserve(overlayEl);
+      ro.observe(overlayEl);
+    });
     mutationObserver.observe(overlayEl, { childList: true, subtree: true });
     return () => {
       mutationObserver.disconnect();

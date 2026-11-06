@@ -242,7 +242,7 @@ describe("bundled catalog validity (dynamic-first contract)", () => {
     });
   });
 
-  it("openai ships GPT Image 2.6, 2.5 and previous GPT Image 2", () => {
+  it("openai ships the complete server GPT Image catalog", () => {
     expect(provider("openai").imageModels).toEqual([
       {
         id: "openai/gpt-image-2.6-sunburst",

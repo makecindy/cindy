@@ -4008,6 +4008,8 @@
         "disabledGroup": "Desativado",
         "enableAllModels": "Ativar todos",
         "priceOverride": {
+          "resetShort": "Repor",
+          "referenceDetails": "Detalhes do preço de referência",
           "menu": "Editar estimativa de preços da API",
           "title": "Estimativa de preços da API de {{model}}",
           "description": "Usada apenas para estimar a utilização na sua própria API ou via de subscrição. Não altera a faturação do fornecedor.",

@@ -75,6 +75,11 @@ function createPreBotPublishedDb() {
   const desktopRoot = path.resolve(__dirname, '../../../..');
   const dir = mkdtempSync(path.join(tmpdir(), 'cindy-bot-pre-'));
   const db = createBetterSqliteDatabase(path.join(dir, 'bots-pre.db'));
+  // Each replayed migration commits once. Under Windows CI disk contention the
+  // default fsync + rollback-journal file per commit turned ~6s into >60s. These
+  // pragmas only change crash durability, never how migration SQL executes.
+  db.pragma('journal_mode = MEMORY');
+  db.pragma('synchronous = OFF');
   const stagedDir = mkdtempSync(path.join(tmpdir(), 'cindy-bot-pre-lineage-'));
   cleanups.push(() => {
     db.close();

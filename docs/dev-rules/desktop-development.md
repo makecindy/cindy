@@ -170,6 +170,10 @@ checkout 的启动器顶掉）。因此并行多开的标准姿势是：**每个
   目录内，进程归属按命中的最深 worktree 判定。从主 checkout restart 不会停掉托管 worktree
   的实例，冲突门也会把它们当作其他 checkout。检测靠 helper 进程命令行上的
   `--user-data-dir`，对方实例刚启动还没起 helper 时可能漏检，属尽力而为。
+- **借用的 Node 不算归属**：判断归属前先去掉命令行开头的 Node 运行时与包管理器入口
+  （node / pnpm / npm / corepack）。另一份 checkout 借用本 checkout 自带的 node 启动 dev
+  时，本 checkout 的 restart 不会把它当成自己的实例杀掉；Electron、electron-forge 等指向
+  checkout 自身依赖的路径仍是归属依据。
 - **CDP 端口**：dev 的 remote-debugging-port 固定 9222，只有先起的实例能绑上。后起
   实例需要 CDP 调试面时，用 `XDT_CDP_PORT=<端口>` 覆写（仅数字生效，dev-only）。
 - 同一 checkout 内仍是单实例语义：restart 会替换本 checkout 上一个实例（不论沙箱

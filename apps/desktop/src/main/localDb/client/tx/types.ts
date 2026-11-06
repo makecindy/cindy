@@ -1488,7 +1488,7 @@ export type DbTxResultByName = {
     approximate: number;
   } | null;
   'authorization.readProjection': import('../../autoReviewProjection.js').StoredAutoReviewProjection;
-  'rewind.commit': undefined;
+  'rewind.commit': string[];
   'session.treeRehydrate': { messageCount: number; hiddenClientIds: string[] };
   'fork.session': { messageCount: number };
   'embedding.markDone': undefined;

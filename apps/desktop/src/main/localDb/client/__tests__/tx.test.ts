@@ -899,12 +899,12 @@ describe('db worker tx handlers', () => {
           ['m1', 'c1', 's1', 'user', 'before', 100, 'm2', 'c2', 's1', 'assistant', 'after', 200],
         );
 
-        await client.tx('rewind.commit', {
+        await expect(client.tx('rewind.commit', {
           sessionId: 's1',
           targetCreatedAt: 200,
           sdkSessionId: 'sdk-after-rewind',
           now: 999,
-        });
+        })).resolves.toEqual(['c2']);
 
         await expect(client.query('SELECT id, rewind_at FROM messages ORDER BY id')).resolves.toEqual(
           [
@@ -1073,13 +1073,14 @@ describe('db worker tx handlers', () => {
         ],
       );
 
-      await client.tx('rewind.commit', {
+      const rewoundClientIds = await client.tx('rewind.commit', {
         sessionId: 's1',
         targetCreatedAt: 200,
         targetMessageId: 'target',
         targetClientId: 'target-client',
         now: 999,
       });
+      expect(rewoundClientIds.sort()).toEqual(['c-after', 'target-client']);
 
       await expect(client.query('SELECT id, rewind_at FROM messages ORDER BY id')).resolves.toEqual(
         [
