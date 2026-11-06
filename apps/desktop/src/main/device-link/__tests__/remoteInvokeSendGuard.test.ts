@@ -40,7 +40,7 @@ function loadAdapters(overrides: Record<string, unknown>) {
     getRemoteLinkCloseEpoch: (id: string) => epochs.get(id) ?? 0,
     invokeProviderMetadataContinuity: (_target: string, _channel: string, _args: unknown[], read: () => unknown) => read(),
     resolveRemoteAgentTargetWhenReady: async (id: string) => id,
-    assertBackgroundLinkAccepted: () => {}, snapshotSubscriptions: () => [],
+    assertBackgroundLinkAccepted: () => {}, hasControlSubscription, snapshotSubscriptions: () => [],
     getReceivedShares: () => [], isCrossRegionProviderShareTarget: () => false,
     isProviderShareRefusal: () => false, noteProviderShareAccessFailure: vi.fn(),
     PROVIDER_SHARE_UNAVAILABLE_MESSAGE: 'unavailable',
@@ -235,18 +235,17 @@ it('subscribes to a shared task even though its scoped accept omits background-l
 });
 
 it('reads a shared task through its scoped link without requiring background-link-v1', async () => {
-  const remoteInvoke = vi.fn().mockResolvedValue({ ok: true, result: null });
+  const invoke = vi.fn().mockResolvedValue({ ok: true, result: null });
   const assertBackgroundLinkAccepted = vi.fn();
   const remoteBackgroundInvoke = loadBackgroundInvoke({
-    client: { isLinkReady: () => false },
+    client: { isLinkReady: () => false, invoke },
     parseSharedTaskPeer: () => ({ role: 'host' }),
     openRemoteLink: vi.fn().mockResolvedValue({ capabilities: ['shared-task-v2'] }),
     assertBackgroundLinkAccepted,
-    remoteInvoke,
   });
   await expect(remoteBackgroundInvoke('shared-task-peer', 'task:read', [])).resolves.toEqual({ ok: true, result: null });
   expect(assertBackgroundLinkAccepted).not.toHaveBeenCalled();
-  expect(remoteInvoke).toHaveBeenCalledOnce();
+  expect(invoke).toHaveBeenCalledOnce();
 });
 
 it('allows a foreground subscription to join an in-flight legacy background open', async () => {
