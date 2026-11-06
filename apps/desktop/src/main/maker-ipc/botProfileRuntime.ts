@@ -32,6 +32,7 @@ import { BOT_BASELINE_PLUGIN_IDS } from '../maker-host/plugins/types.js';
 import { BOT_IM_CHANNELS_VENDOR_KEY, type BotImChannel } from '../../shared/botImConnection.js';
 import businessOwnershipPrompt from '../maker-host/business-ownership-prompt.md?raw';
 import { readBotProjectMode } from '../../shared/botProjectMode.js';
+import { botLearningTracker } from './botLearningTracker.js';
 
 const log = createLogger('maker-ipc:bot-profile-runtime');
 
@@ -608,7 +609,9 @@ export async function hydrateBotProfileRuntime(
     伙伴身份和它自己的技能。群分工等在别的目录干活的会话按普通任务走那个目录。
   */
   const workspaceDir = botHomeDir ? path.join(path.resolve(botHomeDir), 'workspace') : '';
+  // Group lanes stay on the group's own tool authorization even in the workspace.
   const projectContext = !!workspaceDir && readBotProjectMode(config)
+    && row.role !== 'group'
     && path.resolve(opts.workingDir) === workspaceDir;
   // A V2 teammate's IM lanes are the same teammate with the same tools; the host
   // still checks per turn that the owner started it (teammateOwnerAction.ts).
@@ -618,6 +621,7 @@ export async function hydrateBotProfileRuntime(
   // Maker Memory switch. The profile can still explicitly disable its own memory.
   // A V2 teammate uses its project's memory like an ordinary task, still switched
   // by the teammate's own memory setting rather than the global one.
+  if (projectContext && opts.id) botLearningTracker.markProjectTeammate(opts.id);
   const memoryEngineEnabled = !projectContext && config.memory !== false;
   opts.makerMemoryEnabled = projectContext ? config.memory !== false : memoryEngineEnabled;
   const botMemoryScopeKey = buildBotMemoryScopeKey(row.botId);

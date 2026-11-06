@@ -131,6 +131,8 @@ import { normalizeBotWelcomeContext, type BotWelcomeContext } from '../../../sha
 import { broadcastBotRemoteResourceChanged } from '../../maker-ipc/botRemoteResourceInvalidation.js';
 import { routineTools } from '../../routines/service.js';
 import { createBotMemoryService } from '../../maker-ipc/botMemoryService.js';
+import { readTeammateProjectMode } from '../../maker-ipc/botWorkspaceRuntime.js';
+import { resolveMemoryScopeKey } from '@cindy/maker-core';
 
 const log = createLogger('bots');
 
@@ -176,9 +178,12 @@ export function getBotMemoryService(): ReturnType<typeof createBotMemoryService>
         .where(eq(botProfiles.id, botId))
         .limit(1);
       owner.assertCurrent();
-      return row && row.status !== 'deleting'
-        ? { canonicalSessionId: row.canonicalSessionId, assertCurrent: owner.assertCurrent }
-        : null;
+      if (!row || row.status === 'deleting') return null;
+      const scopeKey = await readTeammateProjectMode(botId)
+        ? await resolveMemoryScopeKey(path.join(botProfileDir(owner.userDataDir, botId), 'workspace'))
+        : undefined;
+      owner.assertCurrent();
+      return { canonicalSessionId: row.canonicalSessionId, assertCurrent: owner.assertCurrent, ...(scopeKey ? { scopeKey } : {}) };
     },
     requestRefresh: (sessionId) => requestBotRuntimeEpochRefresh(sessionId, 'resource'),
   });

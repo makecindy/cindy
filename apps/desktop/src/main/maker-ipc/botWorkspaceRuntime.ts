@@ -122,7 +122,7 @@ export async function prepareBotWorkspaceRuntime(
   }
 }
 
-async function readTeammateProjectMode(botId: string): Promise<boolean> {
+export async function readTeammateProjectMode(botId: string): Promise<boolean> {
   const [row] = await getDbClient().drizzle
     .select({ config: botProfileVersions.capabilitiesJson })
     .from(botProfiles)

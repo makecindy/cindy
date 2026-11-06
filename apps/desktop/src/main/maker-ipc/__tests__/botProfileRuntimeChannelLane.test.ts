@@ -205,6 +205,13 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     expect(elsewhere.botRuntimeProfile?.projectContext).toBeUndefined();
     expect(planSnapshot?.disabledToolsets).toEqual(['browser', 'docs']);
 
+    // A group lane in the workspace keeps the group's own tool authorization.
+    seed('group', 'group:g1', { ...narrow, projectMode: true });
+    const group = { id: 'group', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+    const groupSnapshot = await hydrateBotProfileRuntime(group, deps, { persistSnapshot: false });
+    expect(group.botRuntimeProfile?.projectContext).toBeUndefined();
+    expect(groupSnapshot?.disabledToolsets).toEqual(['browser', 'docs']);
+
     seed('canonical', null, narrow);
     const classic = { id: 'main', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
     await hydrateBotProfileRuntime(classic, deps, { persistSnapshot: false });

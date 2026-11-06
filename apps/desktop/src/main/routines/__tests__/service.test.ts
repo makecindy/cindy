@@ -342,6 +342,19 @@ it('skips follow-up and daily todo check runs while their system Skill is off, a
   expect(await routineTools.setTodoCheck('bot', false)).toBe(false);
 });
 
+// 依据：项目模式下夜间学习由项目自己的「整理记忆」自动化接替，原条目永远跳过；缺口：设置页仍列出可开关的夜间学习。
+// 最小失败输入：一条内置夜间学习 + 项目模式。tier：unit。
+it('hides and skips nightly learning for a project-mode teammate', async () => {
+  const engine = await getRoutineEngine();
+  await engine.ensureBuiltin('bot', 'nightly-learning', { name: 'Nightly', prompt: 'Learn', enabled: true,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] }, 'builtin-nightly-learning-bot');
+  expect((await routineTools.list('bot')).map((routine) => routine.builtin)).toEqual(['nightly-learning']);
+  mock.projectMode = true;
+  expect(await routineTools.list('bot')).toEqual([]);
+  await routineTools.runNow('bot', 'builtin-nightly-learning-bot');
+  await vi.waitFor(async () => expect((await routineTools.history('bot', 'builtin-nightly-learning-bot'))[0]?.status).toBe('skipped'));
+});
+
 it('skips a demoted teammate\'s routine while its home is another computer, keeping the rule', async () => {
   companionHomes.update({ enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: ['bot'],
     actors: [{ id: 'actor', externalId: 'bot', name: 'Bot', avatar: null, homeDeviceId: 'laptop' }] });

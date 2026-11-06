@@ -23,7 +23,7 @@ import { broadcastBotWorkbenchChanged } from './botWorkbenchService.js';
 import { broadcastBotRemoteResourceChanged } from './botRemoteResourceInvalidation.js';
 import { botLinkedProjectAccess } from './botLinkedProjects.js';
 import { boundTranscript, readSessionTranscript } from './botWorkbenchTranscripts.js';
-import { readTaskResponsibilities, responsibleSessionIds, setTaskResponsibility } from './botTaskResponsibility.js';
+import { createdSessionIds, readTaskResponsibilities, responsibleSessionIds, setTaskResponsibility } from './botTaskResponsibility.js';
 import { readBotGlance, readSchedulerBotId, readWatchedSession } from './botWorkbenchAutonomyBridge.js';
 import {
   createBotWorkbenchAccess,
@@ -158,16 +158,20 @@ export async function readBotResponsibleSessionIds(userDataDir: string, botId: s
 }
 
 /**
- * The same responsibility, split: `delegatedSessionIds` are the background tasks this Bot
- * started itself (delegation children); `sessionIds` adds the ordinary tasks it explicitly
+ * The same responsibility, split: `delegatedSessionIds` are the tasks this Bot started itself
+ * (delegation children, plus ordinary tasks it opened with send_to_session); `sessionIds` adds the ordinary tasks it explicitly
  * took over. The owner chip reads the first, the sidebar follow mark the second.
  */
 export async function readBotResponsibilityScope(
   userDataDir: string, botId: string,
 ): Promise<{ sessionIds: string[]; delegatedSessionIds: string[] }> {
-  const delegated = [...(await listBotDelegationChildren(botId)).keys()].sort();
+  const records = await readTaskResponsibilities(userDataDir, botId);
+  const delegated = [...new Set([
+    ...(await listBotDelegationChildren(botId)).keys(),
+    ...createdSessionIds(records),
+  ])].sort();
   return {
-    sessionIds: responsibleSessionIds(delegated, await readTaskResponsibilities(userDataDir, botId)),
+    sessionIds: responsibleSessionIds(delegated, records),
     delegatedSessionIds: delegated,
   };
 }
@@ -208,7 +212,7 @@ export async function captureBotCreatedTaskResponsibility(callerSessionId?: stri
     const target = await readWorkbenchTarget(sessionId);
     if (!target || target.status !== 'active' || target.botLinked || target.remoteHostId || target.orcaRole === 'worker') return;
     assertCurrent();
-    await setTaskResponsibility(root, botId, sessionId, true, assertCurrent);
+    await setTaskResponsibility(root, botId, sessionId, true, assertCurrent, { created: true });
     broadcastBotWorkbenchChanged(botId);
     // Remote task rows draw the same mark from the teammate roster's links.
     broadcastBotRemoteResourceChanged(botId);
