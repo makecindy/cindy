@@ -61,6 +61,7 @@ export function effectiveGatewayModelCost(model: Pick<ModelAccessGatewayModel,
 
 function gatewayInputTokenPriceBands(
   model: ModelAccessGatewayModel,
+  includeThresholdBaseline = false,
 ): ModelPriceQuote['inputTokenPriceBands'] {
   const explicit = model.tieredPricing
     ?.map((tier) => {
@@ -107,11 +108,22 @@ function gatewayInputTokenPriceBands(
       tier.outputPerMtok !== undefined ||
       tier.cacheReadPerMtok !== undefined,
   );
-  return thresholdBands.length > 0 ? thresholdBands : undefined;
+  if (thresholdBands.length === 0) return undefined;
+  // Reference quotes require complete ranges. Only legacy threshold fields omit
+  // the baseline; explicit tier tables above must keep their declared coverage.
+  return includeThresholdBaseline ? [{
+    minInputTokens: 0,
+    maxInputTokens: thresholdBands[0].minInputTokens,
+    inputPerMtok: perMtok(model.inputCostPerToken),
+    outputPerMtok: perMtok(model.outputCostPerToken),
+    cacheReadPerMtok: perMtok(model.cacheReadInputTokenCost),
+    cacheCreatePerMtok: perMtok(model.cacheCreationInputTokenCost),
+  }, ...thresholdBands] : thresholdBands;
 }
 
 function gatewayPriorityInputTokenPriceBands(
   model: ModelAccessGatewayModel,
+  includeThresholdBaseline = false,
 ): ModelPriceQuote['inputTokenPriceBands'] {
   const thresholdBands = [
     {
@@ -132,7 +144,14 @@ function gatewayPriorityInputTokenPriceBands(
       tier.outputPerMtok !== undefined ||
       tier.cacheReadPerMtok !== undefined,
   );
-  return thresholdBands.length > 0 ? thresholdBands : undefined;
+  if (thresholdBands.length === 0) return undefined;
+  return includeThresholdBaseline ? [{
+    minInputTokens: 0,
+    maxInputTokens: thresholdBands[0].minInputTokens,
+    inputPerMtok: perMtok(model.inputCostPerTokenPriority),
+    outputPerMtok: perMtok(model.outputCostPerTokenPriority),
+    cacheReadPerMtok: perMtok(model.cacheReadInputTokenCostPriority),
+  }, ...thresholdBands] : thresholdBands;
 }
 
 /** 该条目是否会产生报价(与币种无关;目录币种裁决与覆盖率统计共用此判定)。 */
@@ -151,7 +170,7 @@ export function gatewayModelPriceQuote(
   model: ModelAccessGatewayModel,
   fallbackCurrency: MoneyCurrency,
   fallbackIsInferred = false,
-  options: { allowFreeModel?: boolean } = {},
+  options: { allowFreeModel?: boolean; includeThresholdBaseline?: boolean } = {},
 ): ModelPriceQuote | undefined {
   const modelId = model.id.trim();
   const inputPerMtok = perMtok(model.inputCostPerToken);
@@ -164,7 +183,7 @@ export function gatewayModelPriceQuote(
   const priorityInputPerMtok = perMtok(model.inputCostPerTokenPriority);
   const priorityOutputPerMtok = perMtok(model.outputCostPerTokenPriority);
   const priorityCacheReadPerMtok = perMtok(model.cacheReadInputTokenCostPriority);
-  const priorityInputTokenPriceBands = gatewayPriorityInputTokenPriceBands(model);
+  const priorityInputTokenPriceBands = gatewayPriorityInputTokenPriceBands(model, options.includeThresholdBaseline);
   if (
     !options.allowFreeModel &&
     inputPerMtok === 0 &&
@@ -177,7 +196,7 @@ export function gatewayModelPriceQuote(
   // quote 保留标准价供模型选择器展示原价；所有 Gateway 模型统一把
   // costDiscount 带入计费计算，CatalogModel.cost 继续承载折后展示价。
   const costDiscount = normalizedCostDiscount(model.costDiscount);
-  const inputTokenPriceBands = gatewayInputTokenPriceBands(model);
+  const inputTokenPriceBands = gatewayInputTokenPriceBands(model, options.includeThresholdBaseline);
   const declaredCurrency = model.currency;
   return {
     providerId: 'xd',
@@ -258,6 +277,7 @@ function referenceQuote(
     outputPerMtok: number;
     cacheReadPerMtok?: number;
     cacheCreatePerMtok?: number;
+    cacheCreate1hPerMtok?: number;
     inputTokenPriceBands?: ModelPriceQuote['inputTokenPriceBands'];
   },
 ): ModelPriceQuote {
@@ -301,10 +321,16 @@ export function providerReferencePriceQuote(
     referencePriceQuoteForVariant(providerId, modelId, registry, { ...options, variant: 'fast' }) ??
     referencePriceQuoteForVariant(providerId, modelId, registry, { ...options, variant: 'priority' });
   if (!fast || fast.currency !== quote.currency) return quote;
-  const { inputPerMtok, outputPerMtok, cacheReadPerMtok, cacheCreatePerMtok, inputTokenPriceBands } = fast;
+  const {
+    inputPerMtok, outputPerMtok, cacheReadPerMtok, cacheCreatePerMtok, cacheCreate1hPerMtok,
+    inputTokenPriceBands,
+  } = fast;
   return {
     ...quote,
-    priority: { inputPerMtok, outputPerMtok, cacheReadPerMtok, cacheCreatePerMtok, inputTokenPriceBands },
+    priority: {
+      inputPerMtok, outputPerMtok, cacheReadPerMtok, cacheCreatePerMtok, cacheCreate1hPerMtok,
+      inputTokenPriceBands,
+    },
   };
 }
 
@@ -344,6 +370,9 @@ function referencePriceQuoteForVariant(
       ...(price.cacheWritePerMtok !== undefined
         ? { cacheCreatePerMtok: price.cacheWritePerMtok }
         : {}),
+      ...(price.cacheWrite1hPerMtok !== undefined
+        ? { cacheCreate1hPerMtok: price.cacheWrite1hPerMtok }
+        : {}),
     }))
     .sort((a, b) => a.minInputTokens - b.minInputTokens);
   return referenceQuote(providerId, modelId, {
@@ -356,14 +385,19 @@ function referencePriceQuoteForVariant(
     ...(resolved.price.cacheWritePerMtok !== undefined
       ? { cacheCreatePerMtok: resolved.price.cacheWritePerMtok }
       : {}),
+    ...(resolved.price.cacheWrite1hPerMtok !== undefined
+      ? { cacheCreate1hPerMtok: resolved.price.cacheWrite1hPerMtok }
+      : {}),
     ...(inputTokenPriceBands && inputTokenPriceBands.length > 0
       ? { inputTokenPriceBands }
       : {}),
   });
 }
 
+/** `at` 解析某一天生效的路由参考价(历史用量估价)；省略为今天。 */
 export function registryPricingCatalog(
   registry: ModelRegistry | null | undefined,
+  at?: string | Date,
 ): ModelPricingCatalog {
   const catalog: ModelPricingCatalog = {};
   if (!registry) return catalog;
@@ -372,7 +406,7 @@ export function registryPricingCatalog(
       // XD/Cindy AI 的售价只认登录账号对应的 Gateway /models 响应。公共 registry
       // 只提供用户自带 API/OAuth 的参考价，绝不能在 Gateway 离线时伪装成 XD 售价。
       if (route.providerId === 'xd') continue;
-      const quote = providerReferencePriceQuote(route.providerId, route.modelId, registry);
+      const quote = providerReferencePriceQuote(route.providerId, route.modelId, registry, { at });
       if (!quote) continue;
       (catalog[route.providerId] ??= {})[route.modelId] = quote;
     }

@@ -5,6 +5,60 @@ import { buildUserProvider } from '../user-provider.js';
 import { BUNDLED_CATALOG } from '../catalog.js';
 
 describe('shared provider discovery', () => {
+  // #8867: flat-window coverage missed OpenCode's nested limit metadata.
+  // Unit: real discovery -> refresh merge -> JSON save -> three runtime catalogs.
+  it('retains nested token limits through refresh and save without overriding user budgets', () => {
+    const discovered = parseModelsListResponse({ data: [{ id: 'deepseek-v4.1-flash',
+      limit: { context: 1_000_000, output: 384_000 },
+    }] })!;
+    expect(discovered[0]).toMatchObject({ contextWindow: 1_000_000,
+      discoveredMetadata: { contextWindow: 1_000_000, maxOutputTokens: 384_000 } });
+    const existing = [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek',
+      discoveredMetadata: { contextWindow: 200_000, maxOutputTokens: 8192 } }];
+    const models = JSON.parse(JSON.stringify(mergeDiscoveredRuntimeModels(existing, discovered)));
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const runtime = { baseUrl: 'https://relay.example/v1', models };
+      const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: { [agent]: runtime } });
+      expect(provider.models[agent]?.[0]).toMatchObject({
+        contextWindow: 1_000_000, maxOutput: 384_000, contextWindowVerified: true,
+      });
+      const overridden = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+        [agent]: { ...runtime, models: [{ ...models[0], contextWindow: 128_000, maxOutputTokens: 4096 }] },
+      } });
+      expect(overridden.models[agent]?.[0]).toMatchObject({ contextWindow: 128_000, maxOutput: 4096 });
+    }
+  });
+
+  it.each([{ context_length: 128_000 }, { contextWindow: 128_000 }])(
+    'keeps existing flat token fields ahead of nested limits: %j', fields => {
+      const [model] = parseModelsListResponse({ data: [{ id: 'private-model',
+        ...fields, max_output_tokens: 8192,
+        limit: { context: 1_000_000, output: 384_000 },
+      }] })!;
+      expect(model).toMatchObject({ contextWindow: 128_000,
+        discoveredMetadata: { contextWindow: 128_000, maxOutputTokens: 8192 } });
+    });
+
+  it('ignores invalid nested token limits independently and retains unknown-model defaults', () => {
+    for (const value of [undefined, null, '', '1000000', 0, -1, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
+      const [badContext, badOutput] = parseModelsListResponse({ data: [
+        { id: 'private-model', limit: { context: value, output: 8192 } },
+        { id: 'other-model', limit: { context: 128_000, output: value } },
+      ] })!;
+      expect(badContext.contextWindow).toBeUndefined();
+      expect(badContext.discoveredMetadata?.contextWindow).toBeUndefined();
+      expect(badContext.discoveredMetadata?.maxOutputTokens).toBe(8192);
+      expect(badOutput.contextWindow).toBe(128_000);
+      expect(badOutput.discoveredMetadata?.maxOutputTokens).toBeUndefined();
+      const models = mergeDiscoveredRuntimeModels([], [badContext]);
+      const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+        pi: { baseUrl: 'https://relay.example/v1', models },
+      } });
+      expect(provider.models.pi?.[0]?.contextWindow).toBe(200_000);
+      expect(provider.models.pi?.[0]?.contextWindowVerified).not.toBe(true);
+    }
+  });
+
   it.each([
     { service_tiers: [{ id: 'priority' }, { id: 'ultrafast' }] },
     { additional_speed_tiers: ['fast', 'ultrafast'] },

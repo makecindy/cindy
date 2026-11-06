@@ -20,7 +20,7 @@ import {
   useThemedStyles,
   type ThemeColors,
 } from "@/theme";
-import { PreviewIconButton } from "./PreviewChrome";
+import { PreviewGlass, PreviewIconButton } from "./PreviewChrome";
 import { preparePdfPreviewSource } from "./pdfPreviewSource";
 import { buildPdfWebViewHtml } from "./pdfWebViewHtml";
 
@@ -201,8 +201,9 @@ export function PdfDocumentPreview({ uri }: { uri: string }) {
         </View>
       ) : null}
       {status.pages > 0 && !failure ? (
-        <View>
-          <View style={styles.tools}>
+        <View style={styles.toolRow}>
+          {status.pages > 1 ? (
+          <PreviewGlass>
             <PreviewIconButton
               icon={ChevronLeft}
               label={t("message.attachmentPreview.previousPage")}
@@ -218,8 +219,9 @@ export function PdfDocumentPreview({ uri }: { uri: string }) {
               disabled={status.page >= status.pages}
               onPress={() => command({ type: "page", value: status.page + 1 })}
             />
-          </View>
-          <View style={styles.tools}>
+          </PreviewGlass>
+          ) : null}
+          <PreviewGlass>
             <PreviewIconButton
               icon={Minus}
               label={t("message.attachmentPreview.zoomOut")}
@@ -244,7 +246,7 @@ export function PdfDocumentPreview({ uri }: { uri: string }) {
               label={t("message.attachmentPreview.find")}
               onPress={() => setFind((value) => !value)}
             />
-          </View>
+          </PreviewGlass>
         </View>
       ) : null}
     </View>
@@ -271,13 +273,16 @@ const makeStyles = (colors: ThemeColors) =>
       fontSize: typeScale.caption,
       lineHeight: lineHeight.caption,
     },
-    tools: {
+    // 页码与缩放 / 查找两枚胶囊并排,窄屏自动换行。
+    toolRow: {
       flexDirection: "row",
+      flexWrap: "wrap",
       justifyContent: "center",
       alignItems: "center",
+      gap: spacing.sm,
       minHeight: 56,
-      borderTopColor: colors.border,
-      borderTopWidth: StyleSheet.hairlineWidth,
+      paddingVertical: spacing.xs,
+      paddingHorizontal: spacing.sm,
     },
     search: {
       flexDirection: "row",

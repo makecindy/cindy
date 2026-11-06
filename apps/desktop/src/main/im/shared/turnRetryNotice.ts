@@ -1,3 +1,4 @@
+import { parseOutputLimitDetails, isReasoningDominatedOutputLimit } from '@cindy/maker-shared';
 /**
  * main/im/shared/turnRetryNotice.ts
  * ---------------------------------------------------------------------------
@@ -278,7 +279,16 @@ export function quotaFailureNotice(
  */
 export function terminalErrorText(data: unknown, options?: QuotaFailureNoticeOptions): string {
   if (data && typeof data === 'object' && 'reason' in data && data.reason === 'output-limit') {
-    return '模型已达到输出长度上限，本轮回复可能不完整。可以直接发送下一条消息继续。';
+    const details = parseOutputLimitDetails((data as { outputLimit?: unknown }).outputLimit);
+    const usage = details
+      ? details.reasoningTokens === undefined
+        ? `本次模型请求已输出 ${details.outputTokens} tokens。`
+        : `本次模型请求已输出 ${details.outputTokens} tokens，其中 ${details.reasoningTokens} tokens 用于思考。`
+      : '';
+    const guidance = details && isReasoningDominatedOutputLimit(details)
+      ? '思考已消耗本次输出的大部分预算，回复可能不完整。建议降低推理强度，或先压缩对话记录，再继续。'
+      : '模型已达到输出长度上限，本轮回复可能不完整。可以发送新消息继续；若反复触发，请降低推理强度或先压缩对话记录。';
+    return usage + guidance;
   }
   if (data && typeof data === 'object' && 'reason' in data && data.reason === 'silent-stop-exhausted') {
     return '模型连续多次返回空响应，自动续跑已暂停。';

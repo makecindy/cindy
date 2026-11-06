@@ -46,7 +46,9 @@ export type RemoteSessionHandoffErrorCode =
   | 'REMOTE_DEVICE_OFFLINE'
   | 'REMOTE_DISABLED'
   | 'REMOTE_UNAVAILABLE'
-  | 'DELIVERY_UNKNOWN';
+  | 'DELIVERY_UNKNOWN'
+  /** This computer's review refused the hand-off before anything was sent. */
+  | 'DELEGATION_NOT_AUTHORIZED';
 
 /**
  * 目标电脑明确拒绝、消息没有进入目标任务的错误码（与本机 send_to_session 同名同义）。
@@ -120,7 +122,7 @@ function transportFailure(
 }
 
 export function createRemoteSessionHandoff(deps: {
-  captureRequest?: (sessionId: string, supplement: string) => Promise<CapturedAgentRequest>;
+  captureRequest?: (sessionId: string, supplement: string, target?: { sessionId?: string }) => Promise<CapturedAgentRequest>;
   captureAccess(): () => void;
   invoke(
     deviceId: string,
@@ -149,11 +151,12 @@ export function createRemoteSessionHandoff(deps: {
     try {
       assertCurrent = deps.captureAccess();
       sender = await request.sender();
-      captured = await deps.captureRequest?.(sender.sessionId, request.message);
+      captured = await deps.captureRequest?.(sender.sessionId, request.message, { sessionId: target.sessionId });
       assertCurrent();
     } catch {
       return notSent();
     }
+    if (captured?.blocked) return { ok: false, errorCode: 'DELEGATION_NOT_AUTHORIZED', message: captured.blocked };
     let response: InvokeResultPayload;
     let taskActionReceipt: string | undefined;
     const releaseReceipt = () => {
@@ -170,15 +173,21 @@ export function createRemoteSessionHandoff(deps: {
       // Old Hosts cannot recheck queued authority. Probe before sending any content.
       const support = await deps.invoke(target.deviceId, DL_SESSION_HANDOFF_CHANNEL,
         [{ action: 'task-action-capability', sessionId: target.sessionId }], { preSend: assertCurrent });
-      if (!support.ok || (support.result as { taskActionVersion?: unknown } | null)?.taskActionVersion !== 1)
+      const capability = support.ok ? support.result as { taskActionVersion?: unknown; plainRequestBody?: unknown } | null : null;
+      if (capability?.taskActionVersion !== 1)
         return { ok: false, errorCode: 'REMOTE_UNSUPPORTED', message: 'The other computer must support task-action authorization before a message can be sent.' };
       assertCurrent();
-      taskActionReceipt = issueRemoteTaskActionReceipt({ ...target, senderSessionId: sender.sessionId, message: captured?.message ?? request.message }, assertCurrent);
+      // Older hosts verify the quoted 用户原话 / Agent补充 envelope; keep it for them unchanged.
+      const delivered = capability.plainRequestBody === 1 || !captured?.legacy ? captured : { ...captured, ...captured.legacy };
+      const body = delivered?.message ?? request.message;
+      const source = delivered?.autoReviewUserText.request;
+      taskActionReceipt = issueRemoteTaskActionReceipt({ ...target, senderSessionId: sender.sessionId, message: body }, assertCurrent);
       const wire: RemoteSessionHandoffRequest = {
         sessionId: target.sessionId,
-        message: captured?.message ?? request.message,
-        ...(captured?.autoReviewUserText.request?.userText != null
-          ? { requestSource: captured.autoReviewUserText.request } : {}),
+        message: body,
+        // A plain body sends only a checked hand-off; its provenance stays on this computer.
+        ...(source && (source.plainBody ? source.delegatedText !== undefined : source.userText != null)
+          ? { requestSource: source } : {}),
         sender,
         taskActionReceipt,
       };

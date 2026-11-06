@@ -899,6 +899,56 @@ describe('virtual workspace', () => {
     }
   });
 
+  /**
+   * #8728：远程 Agent 建的定时任务由本机之后的任务执行，prompt 里的虚拟路径必须落成本机路径，
+   * 读回时再投影成单层虚拟路径。tier：unit(临时目录 + 内存里的调度存储)。
+   */
+  it.each(['/home/agent/workspace', 'C:\\Agent\\workspace'])('stores scheduler prompts with local paths and reads them back as virtual paths at %s', async (virtual) => {
+    const { project, executor } = setup(virtual);
+    const agentPath = virtual.startsWith('C:') ? path.win32 : path.posix;
+    const skill = path.join(project, 'skills', 'pr', 'SKILL.md');
+    fs.mkdirSync(path.dirname(skill), { recursive: true });
+    fs.writeFileSync(skill, '# pr');
+    const virtualSkill = agentPath.join(virtual, 'skills', 'pr', 'SKILL.md');
+    const virtualCheckout = agentPath.join(virtual, 'checkout');
+    const prompt = '按 ' + virtualSkill + ' 跟进 PR，检出目录 ' + virtualCheckout + '，说明里的 /api/v1 保持不变';
+    const stored = new Map<string, string>();
+    const router = createReverseHttpRouter({
+      executor,
+      mcpTarget: () => ({ url: 'http://unused', headers: {} }),
+      fetch: async (_url, options) => {
+        const request = JSON.parse(Buffer.from(options!.body as Uint8Array).toString());
+        const { name, args } = request.params.arguments;
+        const input = typeof args === 'string' ? JSON.parse(args) : args;
+        if (name !== 'schedule_get') stored.set(input.id ?? 's1', input.prompt);
+        const result = { content: [{ type: 'text', text: JSON.stringify({ id: input.id ?? 's1', prompt: stored.get(input.id ?? 's1') }) }] };
+        return new Response(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }), { headers: { 'content-type': 'application/json' } });
+      },
+    });
+    const call = async (name: string, args: Record<string, unknown> | string) => {
+      const reply = await router({ method: 'POST', path: '/mcp/cindy_scheduler', headers: [], body: Buffer.from(JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'call_tool', arguments: { name, args } },
+      })).toString('base64') });
+      if (reply.type !== 'http') throw new Error('expected MCP HTTP reply');
+      return JSON.parse(JSON.parse(Buffer.from(reply.body!, 'base64').toString()).result.content[0].text);
+    };
+    const localPrompt = '按 ' + skill + ' 跟进 PR，检出目录 ' + path.join(project, 'checkout') + '，说明里的 /api/v1 保持不变';
+    // 正文里的分隔符保持 Agent 写法（Windows 上存成 C:/...），所以只比较路径本身，不比较分隔符写法。
+    const sameSeparators = (text: string | undefined) => text?.replace(/\\/g, '/');
+    try {
+      expect(await call('schedule_create', { name: 'PR', prompt })).toEqual({ id: 's1', prompt });
+      expect(sameSeparators(stored.get('s1'))).toBe(sameSeparators(localPrompt));
+      // 本机任务执行时按 prompt 里的路径读 Skill。
+      expect(fs.readFileSync(/^按 (.+) 跟进/.exec(stored.get('s1')!)![1], 'utf8')).toBe('# pr');
+      expect(await call('schedule_get', { id: 's1' })).toEqual({ id: 's1', prompt });
+      await call('schedule_update', JSON.stringify({ id: 's1', prompt: prompt + '。' }));
+      expect(sameSeparators(stored.get('s1'))).toBe(sameSeparators(localPrompt + '。'));
+      expect(await call('schedule_get', { id: 's1' })).toEqual({ id: 's1', prompt: prompt + '。' });
+    } finally {
+      await executor.close();
+    }
+  });
+
   it.each(['/Users/agent/workspace', 'C:\\Agent\\workspace'])('runs a Skill script in the real directory and returns JSON paths at %s', async (virtual) => {
     const { project, executor } = setup(virtual);
     const agentPath = virtual.startsWith('C:') ? path.win32 : path.posix;
@@ -1108,6 +1158,24 @@ describe('path projection cost with many aliases', () => {
     expect(virtualOf(runtime)).toBe(virtual + '/f.txt');
     expect(localOf(virtual + '/f.txt')).toBe(path.join(runtime, 'f.txt'));
     expect(workspace.agentPathPrefixes()).toContain(virtual);
+  });
+
+  // 连回时已有映射默认保持原目标；重新同步过的托管 Skill 目录用 replaceFrom 换成新目标，不再指向被淘汰的旧快照。
+  it('keeps existing aliases on reconnect except the ones asked to be replaced', () => {
+    const project = path.join(root, 'work');
+    const oldSkill = path.join(root, 'skill-v1');
+    const newSkill = path.join(root, 'skill-v2');
+    const personal = path.join(root, 'personal');
+    for (const dir of [project, oldSkill, newSkill, personal]) fs.mkdirSync(dir, { recursive: true });
+    const workspace = new ExecutorWorkspace({ workingDir: project });
+    workspace.setVirtualRoot(VIRTUAL);
+    const skill = VIRTUAL + '/workspace/.claude/skills/cindy-pr';
+    const mine = VIRTUAL + '/workspace/.claude/skills/mine';
+    workspace.setAliases([{ from: skill, to: oldSkill }, { from: mine, to: personal }]);
+    workspace.addAliases([{ from: skill, to: newSkill }, { from: mine, to: newSkill }], new Set([skill]));
+    const localOf = (virtual: string) => path.normalize(workspace.mapTextFromAgent(virtual));
+    expect(localOf(skill + '/run.mjs')).toBe(path.join(newSkill, 'run.mjs'));
+    expect(localOf(mine + '/a.md')).toBe(path.join(personal, 'a.md'));
   });
 
   it('follows a symlinked alias target that is retargeted between batches', async ({ skip }) => {

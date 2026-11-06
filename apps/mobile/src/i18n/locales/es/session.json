@@ -2,7 +2,7 @@
   "githubPrs": {
     "title": "Administrar enlaces de PR",
     "hint": "Hasta 3 en el encabezado; los PR fijados aparecen primero",
-    "empty": "Pega un enlace de PR de GitHub para agregarlo",
+    "empty": "Pega un enlace de PR de GitHub o MR de GitLab para agregarlo",
     "removed": "Enlaces quitados: {{count}}",
     "legacy": "Referencias sin confirmar: {{count}}",
     "addLabel": "Agregar enlace de PR",
@@ -10,7 +10,7 @@
     "loading": "Cargando…",
     "restore": "Restaurar PR",
     "pin": "Fijar en el encabezado",
-    "unpin": "Dejar de fijar PR",
+    "unpin": "Dejar de fijar PR / MR",
     "pinLimit": "Fija hasta 3 PR",
     "reorderHint": "Usa Alt+↑/↓ para reordenar dentro del grupo de fijados o no fijados.",
     "dragHandle": "Arrastra para reordenar {{repo}} #{{number}}",
@@ -18,12 +18,13 @@
     "errors": {
       "duplicate": "Este PR ya está enlazado. Restaura los enlaces quitados desde la lista",
       "notFound": "No se encontró el PR o se denegó el acceso",
-      "invalidUrl": "Ingresa un enlace de PR de GitHub válido",
+      "invalidUrl": "Introduce un enlace válido de PR de GitHub o MR de GitLab",
       "reorderFailed": "No se guardó el orden. Inténtalo de nuevo.",
-      "verifyFailed": "No se pudo verificar el PR; revisa el inicio de sesión y el acceso a GitHub",
+      "verifyFailed": "No se pudo verificar el PR; revisa el inicio de sesión y el acceso a GitHub o GitLab",
       "unsupported": "La versión de esta computadora no permite administrar enlaces de PR",
       "failed": "No se pudieron actualizar los enlaces de PR"
     },
+    "urlPlaceholder": "Enlace de PR de GitHub o MR de GitLab",
     "moveUp": "Mover arriba"
   },
   "paneResize": {
@@ -72,6 +73,10 @@
     "text": "Error en la ejecución automática.",
     "precheck": "Los controles automáticos están bloqueados temporalmente.",
     "rateLimited": "Los controles automáticos están bloqueados temporalmente por un límite de tasa de solicitud.",
+    "pluginMissing": "Los controles automáticos están bloqueados: el complemento {{name}} no está instalado. Se reanudarán al instalarlo en tu ordenador.",
+    "pluginMissingUnnamed": "Los controles automáticos están bloqueados: un complemento necesario no está instalado. Se reanudarán al instalarlo en tu ordenador.",
+    "pluginDisabled": "Los controles automáticos están bloqueados: el complemento {{name}} está desactivado. Se reanudarán al activarlo en tu ordenador.",
+    "pluginDisabledUnnamed": "Los controles automáticos están bloqueados: un complemento necesario está desactivado. Se reanudarán al activarlo en tu ordenador.",
     "dismissTitle": "Descartar aviso de falla anterior"
   },
   "common": {
@@ -239,7 +244,25 @@
       },
       "context": {
         "title": "Uso del contexto",
-        "unavailable": "Sin datos de contexto"
+        "unavailable": "Sin datos de contexto",
+        "estimate": {
+          "title": "Estimaciones de texto",
+          "delivery": "Presentación de respuestas",
+          "host": "Instrucciones de Cindy",
+          "plugins": "Catálogo de complementos",
+          "memoryRules": "Instrucciones de memoria",
+          "memoryIndex": "Índice de memoria",
+          "profile": "Perfil del compañero",
+          "user": "Instrucciones del usuario",
+          "directories": "Directorios adicionales",
+          "native": "Instrucciones de Pi",
+          "skills": "Catálogo de habilidades",
+          "project": "Instrucciones del proyecto",
+          "tools": "Definiciones de herramientas",
+          "messages": "Texto de la conversación",
+          "other": "Otras instrucciones",
+          "note": "Estimación del texto actual, sin la tokenización del modelo. Excluye imágenes y formato del proveedor; la suma difiere del total nativo."
+        }
       },
       "rateLimit": {
         "plan": "Plan",
@@ -464,6 +487,7 @@
     "chipArchived": "Archivado",
     "titleFallback": "Sesión remota",
     "unnamedTitle": "Sesión sin título",
+    "openSection": "Abrir",
     "renameAction": "Renombrar sesión",
     "copyLinkAction": "Copiar enlace de la sesión",
     "unpin": "Desfijar",
@@ -601,7 +625,10 @@
     "dismissNotice": "Descartar aviso",
     "ignore": "ignorar",
     "executionResultUnavailable": "No se puede recuperar el resultado de la ejecución. La continuación automática se ha detenido. Pídale al asistente que verifique el resultado de la ejecución existente.",
-    "outputLimit": "El modelo alcanzó su límite de producción, por lo que esta respuesta puede estar incompleta. Envía el siguiente mensaje para continuar.",
+    "outputLimit": "El modelo alcanzó su límite de salida, por lo que esta respuesta puede estar incompleta. Envía un nuevo mensaje para continuar. Si se repite, reduce el esfuerzo de razonamiento o compacta primero el historial de la conversación.",
+    "outputLimitReasoning": "El razonamiento consumió la mayor parte del presupuesto de salida de esta solicitud, por lo que la respuesta puede estar incompleta. Reduce el esfuerzo de razonamiento o compacta el historial de la conversación antes de continuar.",
+    "outputLimitUsage": "Esta solicitud al modelo utilizó {{outputTokens}} tokens de salida, incluidos {{reasoningTokens}} tokens de razonamiento.",
+    "outputLimitOutputUsage": "Esta solicitud al modelo utilizó {{outputTokens}} tokens de salida.",
     "toolUseLoopDetected": "El modelo repitió demasiadas veces una llamada a una herramienta. Cindy detuvo este turno para evitar un bucle infinito. Envía un mensaje nuevo para continuar.",
     "toolUseLoopDetectedWithCount": "El modelo repitió llamadas no válidas a herramientas. Tras {{count}} fallos, Cindy detuvo este turno para evitar un bucle infinito. Envía un mensaje nuevo para continuar.",
     "toolUseLoopDetectedConsecutiveWithCount": "El modelo repitió la misma llamada a una herramienta {{count}} veces. Cindy detuvo este turno para evitar un bucle infinito. Envía un mensaje nuevo para continuar.",
@@ -662,7 +689,7 @@
     "REMOTE_PROVIDER_UPDATING": "Las credenciales de este proveedor de modelo se están actualizando. Inténtalo de nuevo en un momento.",
     "REMOTE_WORKDIR_UNAVAILABLE": "El directorio de trabajo remoto no está disponible. Verifique que la carpeta aún exista en esa computadora y vuelva a intentarlo.",
     "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "La computadora aún no puede confirmar si se envió este mensaje. Espere un momento y vuelva a intentarlo. No envíes el mismo mensaje dos veces.",
-    "REMOTE_AGENT_UNAVAILABLE": "No se puede acceder a la computadora que ejecuta el Agent. Asegúrate de que esté en línea y permita el control remoto, luego inténtalo nuevamente.",
+    "REMOTE_AGENT_UNAVAILABLE": "Se perdió la conexión con la computadora que ejecuta el Agent. Inténtalo de nuevo. Si sigue pasando, asegúrate de que esté en línea y permita el control remoto.",
     "REMOTE_AGENT_PEER_TOO_OLD": "Cindy en la otra computadora es demasiado antiguo para ejecutar Agent en esta. Actualice Cindy allí primero.",
     "REMOTE_AGENT_EXPIRED": "Esta sesión ya finalizó en la computadora que ejecuta Agent. Envía tu mensaje nuevamente.",
     "REMOTE_AGENT_NOT_FOUND": "Esta sesión ya finalizó en la computadora que ejecuta Agent. Envía tu mensaje nuevamente.",

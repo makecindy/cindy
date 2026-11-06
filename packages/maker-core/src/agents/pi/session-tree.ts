@@ -170,7 +170,7 @@ export function piRetryBranch(data: unknown, entryId: string): {
       throw new Error('Pi retry would discard output or session state');
     }
     hasFailedResponse = true;
-    requestTooLarge ||= /(?:\b413\b|Failed to buffer the request body:\s*length limit exceeded)/i.test(
+    requestTooLarge ||= /(?:\b413\b|Failed to buffer the request body:\s*length limit exceeded|BadRequest\.TooLarge|Exceeded limit on max bytes to request body)/i.test(
       typeof message.errorMessage === 'string' ? message.errorMessage : '',
     );
   }

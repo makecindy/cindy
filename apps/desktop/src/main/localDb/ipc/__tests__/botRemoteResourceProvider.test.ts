@@ -7,6 +7,13 @@ import type { BotRemoteResourceSource } from '../bots.js';
 const activity = vi.hoisted(() => ({ snapshot: vi.fn(), snapshots: vi.fn(), copy: vi.fn(async () => ({ text: 'Checking…' })), subscribe: vi.fn(), invalidate: vi.fn() }));
 vi.mock('../../../agent-island/service.js', () => ({ getAgentIslandService: () => ({ getSessionActivitySnapshot: activity.snapshot, getSessionActivitySnapshots: activity.snapshots, subscribeSessionActivity: activity.subscribe }) }));
 vi.mock('../../../maker-ipc/botRemoteResourceInvalidation.js', () => ({ scheduleBotRemoteResourceChangedForSession: activity.invalidate }));
+const readState = vi.hoisted(() => ({ positions: {} as Record<string, number> }));
+vi.mock('../../../maker-ipc/botReadStateStore.js', () => ({
+  markBotReadPositions: vi.fn((positions: Record<string, number>) => {
+    for (const [key, at] of Object.entries(positions)) readState.positions[key] = Math.max(readState.positions[key] ?? 0, at);
+  }),
+  readBotReadPosition: (key: string) => readState.positions[key] ?? null,
+}));
 
 const db = vi.hoisted(() => ({ get: vi.fn(), list: vi.fn(), current: true, client: null as any }));
 vi.mock('../../client/current.js', () => ({ getDbClient: () => db.client }));
@@ -186,4 +193,54 @@ it('reports a teammate this computer no longer has as not found, without failing
     actionId: 'todo-daily-check', resourceRef: { collectionId: 'teammates', kind: 'bot', id: 'todos:gone' },
     input: { enabled: true } }))
     .rejects.toMatchObject({ code: 'NOT_FOUND', message: 'Teammate unavailable' });
+});
+
+// The phone and other Macs report what they showed; the host keeps the one position every device reads.
+it('advances the host read position from a device, never past the newest message here', async () => {
+  const source: BotRemoteResourceSource = {
+    id: 'bot-1', name: 'Sora', description: '', avatar: '', avatarColor: 'teal', status: 'active',
+    canonicalSessionId: 'session-1', lastMessagePreview: null, lastMessageAt: 500, lastMessageRole: 'user', lastReplyAt: 400, needsAttention: false,
+    hiddenAt: null, pinnedAt: null, activityAt: 500, currentVersion: 1, updatedAt: 1,
+  };
+  db.get.mockImplementation(async () => ({ ...source }));
+  registerBotRemoteResourceProvider();
+  const context = { controllerDeviceId: 'phone' };
+  const client = { protocolVersion: 1, primitives: [] };
+  const read = (input: Record<string, unknown>, id = 'bot-1') => remoteResourceRegistry.invoke(context, {
+    client, collectionId: 'teammates', actionId: 'read', resourceRef: { collectionId: 'teammates', kind: 'bot', id }, input,
+  });
+  await expect(read({ at: 300 })).resolves.toEqual({ effects: [], lastReadAt: 300 });
+  // A skewed clock or a reply that has not arrived here yet cannot pre-read anything.
+  await expect(read({ at: 9_999 })).resolves.toEqual({ effects: [], lastReadAt: 500 });
+  await expect(read({ at: 100 })).resolves.toEqual({ effects: [], lastReadAt: 500 });
+  await expect(read({ at: 'soon' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+  await expect(read({ at: 300 }, 'bad id')).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+});
+
+// A topic keeps its own position: only the teammate's own live topics can be read, and the
+// main chat's position never moves with it.
+it('reads a private-chat topic on its own position, only for the teammate\'s own live topics', async () => {
+  sqlite.exec(`INSERT INTO bot_session_links VALUES
+    ('l-topic', 'bot-1', 'topic-1', 'thread', NULL, 1),
+    ('l-archived', 'bot-1', 'topic-gone', 'thread', 5, 1),
+    ('l-foreign', 'bot-2', 'topic-2', 'thread', NULL, 1),
+    ('l-canonical', 'bot-1', 'session-9', 'canonical', NULL, 1)`);
+  db.get.mockImplementation(async () => ({
+    id: 'bot-1', name: 'Sora', description: '', avatar: '', avatarColor: 'teal', status: 'active',
+    canonicalSessionId: 'session-1', lastMessagePreview: null, lastMessageAt: 500, lastMessageRole: 'user', lastReplyAt: 400,
+    needsAttention: false, hiddenAt: null, pinnedAt: null, activityAt: 500, currentVersion: 1, updatedAt: 1,
+  }));
+  registerBotRemoteResourceProvider();
+  const mainBefore = readState.positions['bot-1'];
+  const read = (input: Record<string, unknown>) => remoteResourceRegistry.invoke({ controllerDeviceId: 'phone' }, {
+    client: { protocolVersion: 1, primitives: [] }, collectionId: 'teammates', actionId: 'read',
+    resourceRef: { collectionId: 'teammates', kind: 'bot', id: 'bot-1' }, input,
+  });
+  await expect(read({ at: 300, threadSessionId: 'topic-1' })).resolves.toEqual({ effects: [], lastReadAt: 300 });
+  const future = await read({ at: Date.now() + 86_400_000, threadSessionId: 'topic-1' }) as unknown as { lastReadAt: number };
+  expect(future.lastReadAt).toBeLessThanOrEqual(Date.now());
+  for (const threadSessionId of ['topic-gone', 'topic-2', 'session-9', 'missing'])
+    await expect(read({ at: 300, threadSessionId })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  await expect(read({ at: 300, threadSessionId: 'bad id' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+  expect(readState.positions['bot-1']).toBe(mainBefore);
 });

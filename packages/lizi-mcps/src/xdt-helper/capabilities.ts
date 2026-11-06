@@ -70,19 +70,32 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     ].join(' '),
   },
   {
+    key: 'settings-control',
+    title: 'Cindy 设置与模型管理',
+    oneLiner: '通过原生工具查询和修改当前电脑的设置、默认模型、模型高级配置与 SSH 连接。',
+    detail: [
+      '先用 cindy_helper.list_tools({category:"settings"})。普通任务和伙伴共用入口，Claude Code、Codex、Pi 走相同宿主服务。工具是否可见取决于实时宿主接线；请以 list_tools 为准。',
+      'list_app_settings 列出当前已接通的分类和操作；get_app_settings 返回当前值与严格 schema；update_app_settings 只提交要改的字段；reset_app_settings 只对声明支持恢复默认的分类可用。结果说明仅本机及生效时点，不把保存成功说成所有在途任务都已切换。',
+      'get_app_default_model / set_app_default_model 管新任务默认；list_model_providers 包含关闭的型号和完整供应商；get_model_configuration / set_model_configuration 管单模型高级参数；configure_model_provider 管名称、顺序、开关和重新发现。当前任务换模型继续使用 control 类的 set_session_runtime。',
+      'SSH 使用 cindy_ssh 的 ssh_list_hosts / ssh_update_host / ssh_remove_host；改显示名只传 id 和 displayName，不用桌面点击，也不改系统 hostname。',
+      '没有一个额外的“AI 全开”设置。已提供的操作沿用任务权限、账号归属及群成员/共享访客规则；缺接口不能靠提高权限获得。此入口不提供任意 IPC、文件键值写入、密钥回读或当前任务自行提权。需要账号登录、密钥或原生系统授权时，仍使用 Cindy 的安全输入和授权流程。',
+    ].join(' '),
+  },
+  {
     key: 'self-management',
     title: '自我管理(Agent 管理用户自己的任务 / 定时任务 / 项目 / 伙伴)',
     oneLiner:
       '用户本人能对自己的任务、定时任务、项目、伙伴做的操作，Agent 有哪些对应工具、哪些能管到另一台电脑。',
     detail: [
       '【任务链接】已知任务 id 时调用 history/get_task_digest，返回的 sessionUrl 可直接写成 [任务标题](sessionUrl)。list_sessions、search_chat_history、get_chat_history 的任务元数据也附带 sessionUrl，含所属电脑，支持桌面与手机打开。',
+      '【邀请协助当前任务】control 类 create_shared_task_invitation / get_shared_task_state 生成原生共享邀请或查询状态；只针对调用工具的原任务，在任务宿主执行，手机或同账号另一台电脑控制该任务时也适用。访客能读完整历史、附件与工具结果，使用同一 Agent 和既有任务权限；链接可转发，不绑定收件人。工具不发通知、不另建任务，不能指定其他任务。将回执中的 invitationLink 原样交给发送流程；通知插件负责收件人、预览与发送确认。结果未知时先查询状态再决定是否重试，不自动重复。',
       '【机器】cindy_helper 的顶层工具 list_machines（不经 list_tools）：看账号下所有电脑的实时 CPU、可用内存、磁盘、空闲时长和在跑任务，以及这台电脑配置的 SSH 主机；只报事实，放哪台由你决定。',
       '【原则】用户本人能做的操作(含跨电脑)，Agent 也应有对应工具；是否执行由权限档与自动审核决定。数据保存在各自的电脑上：下结论「没有 / 没人在跟」之前，先确认查的是不是只有本机。',
       '【任务】cindy_helper history 类：list_sessions / search_chat_history(device=local|all|<deviceId>)、get_chat_history(deviceId::sessionId)、get_task_digest(一件任务的 ≤2KB 摘要：状态、已持续分钟、最后的要求与回答、待答问题、错误、模型路线与建议换到的下一条、PR、排队数；deviceId::sessionId 只读)、list_history_devices 可跨电脑；list_workdirs、list_session_queue 仅本机。handoff 类 send_to_session：发给既有任务可跨电脑(deviceId::sessionId)，新建任务仅本机。control 类 archive_sessions / unarchive_sessions 可跨电脑(deviceId::sessionId，单次限定一台电脑)；改名、移动、标签、排队消息、插话、停止、运行设置、list_projects 与项目增删改仅本机。',
       '【定时任务】cindy_scheduler：schedule_list / get / list_runs(device=local|all|<deviceId>，list 可用 query 做文本筛选)与 schedule_update / pause / resume / delete / run_now / schedule_create(device=<deviceId>)可跨电脑；schedule_set_pre_run_hook、当前运行的通知设置仅本机；本机定时任务可用 agentDeviceId 让每次新建的任务在其它电脑或分享来的供应商上运行（schedule_list_models 查位置与模型）。',
       '【伙伴】cindy_helper bots 类(仅伙伴任务可见)：list_agents / send_to_agent 可跨电脑(deviceId::botId)；get_teammate_home / move_teammate_home 查看与更换任一伙伴的主力电脑(跨电脑，更换按权限档)；资料、能力、待办、后台任务仅本机。list_teammate_projects / set_teammate_project 读取与修改自身关联项目，资料按需读取，关联不授予任务责任或执行权限。',
       '【自动跟进】宿主在任务卡住、等主人、出错、撞用量上限、做完时叫醒负责跟进的伙伴(内置例行任务)。伙伴先 get_task_digest 读摘要，再用 continue_workbench_task 让任务继续、send_to_session 代答低风险问题、set_session_runtime 换到 suggested_route(仅本机)、update_teammate_todo 记下要主人处理的事。get_workbench 是工作台「一眼」(等你 / 在做，仅本机投影)；负责「自动跟进所有任务」的伙伴可读取与继续另一台在线电脑上的任务(read_workbench_task / continue_workbench_task 传 deviceId::sessionId)，别的伙伴开的任务默认只读不继续(TASK_FOLLOWED_BY_OTHER_BOT，主人可在那位伙伴的设置里交出来)；其它伙伴只碰自己开的或接手的任务。',
-      '【跨电脑的前提】对方电脑在线、同一账号、已开启远程控制。离线、未开启、版本不支持或超时会按电脑写明原因，结果里的 partial=true 表示有电脑没查到。',
+      '【跨电脑的前提】对方电脑在线、同一账号、已开启远程控制。离线、未开启、版本不支持或超时会按电脑写明原因，结果里的 partial=true 表示有电脑没查到。主力电脑在别处的伙伴是例外：它和主人的对话存在云端，那台电脑离线时 search_chat_history 也能查到（cloud_hits，关键词子串匹配）。',
       '【尚无工具】在另一台电脑上新建任务、管理另一台电脑上的任务(改名 / 停止 / 队列)与项目；这些用户可在远程控制里手动完成。定时任务可以 schedule_create(device=) 新建到另一台电脑。',
     ].join(' '),
   },
@@ -213,8 +226,8 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
   },
   {
     key: 'chat-history-query',
-    title: '聊天历史查询(本机与在线已授权电脑)',
-    oneLiner: 'agent 可发现、列出和搜索本机与在线已授权电脑的聊天历史，并按任务读取内容。',
+    title: '聊天历史查询(本机、在线已授权电脑与云端伙伴对话)',
+    oneLiner: 'agent 可发现、列出和搜索本机与在线已授权电脑的聊天历史，并按任务读取内容；主力电脑离线的伙伴对话也能搜到。',
     detail: [
       '【引用任务】任务元数据的 sessionUrl 可直接写成 [任务标题](sessionUrl)；已知 id 只需链接时用 get_task_digest，无需读取完整聊天。',
       `【是什么】${BRAND_NAME} 的对话历史保存在各电脑的本地 SQLite。cindy_helper 的 history 类提供只读查询入口，让 agent 按宿主授予的范围读取历史，协助用户组织 memory / 知识库。`,
@@ -222,6 +235,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       '【典型用法】"帮我总结这周和 agent 的讨论, 写成 memory 条目" → list_sessions({from: 周一 ISO, time_field: "activity"}) 拿 sessionId 列表 → get_chat_history({session_ids: [...]}) 拿对话 → LLM 提炼成 memory。"我之前聊过 X / 上次怎么解决那个 bug"(只记得内容、不知道在哪) → search_chat_history({query}) 直接语义召回。"我在 xxx 项目里都聊过啥" → list_sessions({workdir}) → get_chat_history。',
       '【伙伴跨渠道】get_teammate_state 返回本机连接；list_sessions / search_chat_history 使用 teammate_id=profile.id 匹配已保存的归属，含归档、旧历史和话题。按话题搜索不默认限制 workdir 或创建时间。旧 IM 未关联记录仍可在原有账号权限内按内容查询，结果 companion=null 不代表属于当前伙伴；当前连接、目录或名字都不能补造归属。source 是原始任务来源，伙伴渠道看 companion.channel 和消息来源。',
       '【跨设备】list_history_devices 发现设备；list_sessions / search_chat_history 传 device="all" 查询本机与在线已授权电脑，或 device=<设备 ID> 指定电脑。结果按设备分组，每组独立翻页，partial 表示有设备未查到。远程任务 ID 带 deviceId:: 前缀，可直接传给 get_chat_history；不读取离线缓存，旧端不支持会明确报告。默认 device="local" 保持原本机查询。',
+      '【云端伙伴对话】主力电脑在别处的伙伴，它和主人的对话存在云端。search_chat_history 默认 device="local" 时首页也带 cloud_hits，那台电脑离线也能查；cloud_failed 是没查到的伙伴，cloud_incomplete 表示可能还有更多，cloud_continue_to 可作为 to 续读。云端只做关键词子串匹配。伙伴受限身份和共享任务访客不查云端。',
       '【向量是增益不是依赖】search_chat_history 在用户没开 embedding / sqlite-vec 不可用时静默退化为纯 FTS, 搜索照常工作; 响应里 vector_used 标明向量是否生效。',
       '【分页】任务列表与聊天读取可用 hasMore + nextCursor 持续翻页；跨设备时每台电脑独立翻页。搜索受候选池上限约束，pool_capped=true 时应缩小查询范围，不能声称已经穷尽全部匹配。',
       '【权限】遵循宿主授予的账号历史权限与设备授权；仅有归属范围权限的调用方不能扩大范围，远程查询保留任务可见性限制。',
@@ -246,7 +260,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     detail: [
       '输入框处随时可调:换模型(当前账号与供应商可用的模型)、「推理强度」、「速度」(标准 / 快速 / 超快;只在模型支持时出现,目前快速主要由 GPT / Codex 系模型提供,超快取决于当前账号的 Codex 目录)。',
       '权限模式:「默认权限」「自动审批」「完全访问」,Claude Code 另有「允许编辑」;另可开「计划模式」。',
-      '模型、推理强度、速度的修改对下一条消息生效(运行中则在当前轮结束后)。agent 可用 cindy_helper control 类 set_session_runtime 调整本机任务的模型来源、模型、推理强度与速度(get_session_runtime 先读);伙伴任务另有 bots 类 get_app_default_model / set_app_default_model 读改以后新建任务的默认模型;agent 不能切换权限模式。',
+      '模型、推理强度、速度的修改对下一条消息生效(运行中则在当前轮结束后)。agent 可用 cindy_helper control 类 set_session_runtime 调整本机任务的模型来源、模型、推理强度与速度(get_session_runtime 先读);普通任务与伙伴共用 settings 类 get_app_default_model / set_app_default_model 读改以后新建任务的默认模型;agent 不能切换权限模式。',
     ].join(' '),
   },
   {
@@ -339,7 +353,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     title: '远程连接(手机 / 其他电脑控制,SSH 远端主机)',
     oneLiner: '同账号的手机与其他电脑可远程操控这台桌面上的任务;也可经 SSH 让 agent 在远端主机上运行。',
     detail: [
-      '入口:设置 →「远程连接」。同一 Cindy 账号登录的设备自动出现,无需手动配对;每台设备有「我控制它」与「允许它控制本机」两个独立开关,本机另有允许被控制的总开关。手机 App 只做控制端,任务与数据都在被控电脑上。',
+      '入口:设置 →「远程连接」。同一 Cindy 账号登录的设备自动出现,无需手动配对;每台设备卡上按方向分两行:「我可以:控制它」与「它可以:控制本机」,两项各自独立开关,本机另有允许被控制的总开关。手机 App 只做控制端,任务与数据都在被控电脑上。',
       '控制端可查看与推进被控电脑上的任务(发消息、审批、切模型等),账号密钥与全局设置等不开放给控制端。主列表标题「全部任务 ▾」可切换只看本机或某台远程电脑。',
       'SSH 远端主机:在同一页添加主机(也读取 ~/.ssh/config),可在远端安装 Claude Code / Codex / Pi(未安装时首条消息自动安装)并新建远端任务,agent 进程与文件都在远端。',
       'agent 侧跨电脑能力(查任务、给另一台电脑的任务发消息、管定时任务等)见 self-management。',

@@ -1,3 +1,6 @@
+import { glabCliTokenSource } from './glabCliTokenSource';
+import { fetchGitlabMr } from './gitlabPrSummary';
+import { outboundFetch } from '../maker-host/outbound-fetch';
 import { setGithubReadRuntime } from './githubReadRuntime';
 import { manageSessionPrs } from './manageSessionPrs';
 /**
@@ -20,8 +23,9 @@ import { manageSessionPrs } from './manageSessionPrs';
  * 徽标点击打开内置 gh 安装和设备码登录。不做 app 级 PAT 绑定。
  */
 
-import { BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 import { GithubClient } from '@cindy/github-client';
+import { prStatusKey, isPrHost } from '@cindy/maker-shared';
 import { eq } from 'drizzle-orm';
 
 import { createLogger } from '../logger.js';
@@ -54,6 +58,7 @@ import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import * as worktreeStore from '../worktree/worktreeStore.js';
 import {
+  ensurePrRefsBackfill,
   listAllPrRefs,
   listPrRefs,
   managePrRefs,
@@ -68,6 +73,8 @@ import {
 } from './prStatusService.js';
 
 import { fetchPrSummary } from './prSummary';
+import { PrFollowWatch } from './prFollowWatch';
+import { getSchedulerIfInitialized } from '../scheduler-host/index.js';
 
 const log = createLogger('git-context/ipc');
 
@@ -153,12 +160,27 @@ async function fetchPrRemote(token: string, q: PrStatusQuery): Promise<PrRemoteS
     review_decision: summary && summary.headOid === pr.head.sha ? (summary.reviewDecision ?? null) : null,
     unresolved_count: summary?.unresolved ?? null,
     checks: summary && summary.headOid === pr.head.sha ? summary.checks : null,
+    merge_state: summary && summary.headOid === pr.head.sha ? (summary.mergeState ?? null) : null,
   };
 }
 
 let gitContextService: GitContextService | null = null;
 let prStatusService: PrStatusService | null = null;
 let githubReadService: GithubReadService | null = null;
+/** Runs the schedules that follow a PR as soon as a status refresh sees that PR change. */
+const prFollowWatch = new PrFollowWatch({
+  // A passive instance (dev beside a release build on the same data) never starts runs by itself.
+  autoRunAllowed: () => getSchedulerIfInitialized()?.isPassive() === false,
+  listActive: async () => (await getSchedulerIfInitialized()?.list({ status: 'active' })) ?? [],
+  inflight: (id) => getSchedulerIfInitialized()?.getInflightCount(id) ?? 0,
+  hasCapacity: () => getSchedulerIfInitialized()?.hasFreeSlot() ?? false,
+  runNow: async (id, trigger) => {
+    const scheduler = getSchedulerIfInitialized();
+    if (!scheduler) return null;
+    return scheduler.runNow(id, { trigger });
+  },
+  log,
+});
 export async function manageGithubPrs(
   sessionId: string,
   args: Record<string, unknown>,
@@ -190,10 +212,18 @@ export function registerGitContextIpc(): void {
   });
   prStatusService = new PrStatusService({
     readToken: readGithubToken,
+    readGitlabToken: (host) => glabCliTokenSource.readTokenDetailed(host),
+    fetchGitlab: (token, query) => fetchGitlabMr(token, query, outboundFetch),
+    rejectGitlabToken: (host) => glabCliTokenSource.rejectToken(host),
+    invalidateGitlabTokenFailures: () => glabCliTokenSource.invalidateNegativeCache(),
     scope: githubReadScope,
     fetchPr: fetchPrRemote,
     // The renderer keeps its last value while awaiting fresh counts; no delayed second tick.
     staleTtlMs: 0,
+    onObserved: (query, result) => prFollowWatch.observe(query, result),
+  });
+  app.on('browser-window-focus', () => {
+    prStatusService?.invalidateGitlabAuthFailures();
   });
   githubReadService = createGithubReadService(prStatusService);
   setGithubReadRuntime({ read: readGithub, manage: manageGithubPrs });
@@ -326,6 +356,7 @@ export function registerGitContextIpc(): void {
 
   ipcMain.handle(GIT_CONTEXT_INVOKE.PR_REFS_LIST, async (_e, sessionId: unknown) => {
     const sid = requireString(sessionId, 'sessionId');
+    void ensurePrRefsBackfill();
     return listPrRefs(sid);
   });
 
@@ -333,6 +364,7 @@ export function registerGitContextIpc(): void {
     // PrRefsProvider 挂在 App 顶层,首次调用通常早于登录后的 db ensureReady。
     // 未就绪时返回 null 当"稍后再试"信号(renderer 定时重试),不抛错刷日志。
     if (getCurrentDbClientUserId() === null) return null;
+    void ensurePrRefsBackfill();
     return listAllPrRefs();
   });
 
@@ -377,13 +409,15 @@ export function registerGitContextIpc(): void {
       if (!status?.ok) {
         throwIpcError(
           status?.reason === 'not-found' ? 'NOT_FOUND' : 'PRECONDITION_FAILED',
-          'Unable to verify GitHub PR',
+          status?.reason === 'glab-missing' || status?.reason === 'glab-not-logged-in'
+            ? status.reason
+            : 'Unable to verify PR or MR',
         );
       }
     });
   });
 
-  ipcMain.handle(GIT_CONTEXT_INVOKE.PR_STATUS, async (_e, queries: unknown) => {
+  const statusHandler = async (_e: unknown, queries: unknown) => {
     let rawQueries: unknown = queries;
     let remoteSessionId: string | null = null;
     if (isDeviceLinkInvoke()) {
@@ -395,14 +429,38 @@ export function registerGitContextIpc(): void {
       throwIpcError('INVALID_PARAMS', 'queries 必须是数组');
     }
     let parsed: PrStatusQuery[] = (rawQueries as unknown[]).map((q) => {
-      const obj = q as { owner?: unknown; repo?: unknown; prNumber?: unknown };
+      const obj = q as {
+        owner?: unknown;
+        repo?: unknown;
+        prNumber?: unknown;
+        provider?: unknown;
+        host?: unknown;
+      };
       const owner = requireString(obj?.owner, 'owner');
       const repo = requireString(obj?.repo, 'repo');
       const prNumber = Number(obj?.prNumber);
       if (!Number.isSafeInteger(prNumber) || prNumber <= 0) {
         throwIpcError('INVALID_PARAMS', 'prNumber 必须是正整数');
       }
-      return { owner, repo, prNumber };
+      const provider = obj.provider ?? 'github';
+      const host = obj.host ?? 'github.com';
+      if (
+        (provider !== 'github' && provider !== 'gitlab') ||
+        !isPrHost(host) ||
+        (provider === 'github' && host !== 'github.com') ||
+        !/^[A-Za-z0-9_.-]+$/.test(repo) ||
+        `${owner}/${repo}`.split('/').some((part) => part === '.' || part === '..') ||
+        !(
+          provider === 'gitlab' ? /^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/ : /^[A-Za-z0-9_.-]+$/
+        ).test(owner)
+      )
+        throwIpcError('INVALID_PARAMS', 'Invalid PR identity');
+      return {
+        owner,
+        repo,
+        prNumber,
+        ...(provider === 'gitlab' ? { provider, host: host.toLowerCase() } : {}),
+      };
     });
     if (remoteSessionId) {
       // A remote controller may only ask for statuses of PRs already extracted
@@ -424,7 +482,9 @@ export function registerGitContextIpc(): void {
       }
     }
     return prStatusService!.getStatuses(parsed, { remote: remoteSessionId !== null });
-  });
+  };
+  ipcMain.handle(GIT_CONTEXT_INVOKE.PR_STATUS, statusHandler);
+  ipcMain.handle('git-context:mr-status', statusHandler);
 }
 
 /**
@@ -438,9 +498,28 @@ export async function readSessionPrStatuses(
   if (!prStatusService) return [];
   const refs = (await listPrRefs(sessionId)).slice(0, limit);
   if (refs.length === 0) return [];
-  return prStatusService.getStatuses(
-    refs.map(({ owner, repo, prNumber }) => ({ owner, repo, prNumber })),
-  );
+  return prStatusService.getStatuses(refs);
+}
+
+/**
+ * 手机查看插件卡片的 PR 状态位用：只查该任务已记录的 PR(与远程 PR_STATUS 同一过滤),
+ * 走同一服务与缓存。查不到或失败返回 undefined,卡片保留插件写的快照。
+ */
+export async function readSessionPrStatus(
+  sessionId: string,
+  key: string,
+): Promise<PrStatusResult | undefined> {
+  if (!prStatusService) return undefined;
+  try {
+    const ref = (await listPrRefs(sessionId)).find(
+      (item) => prStatusKey(item) === (key.includes(':') ? key : `github:github.com/${key}`),
+    );
+    if (!ref) return undefined;
+    const [status] = await prStatusService.getStatuses([ref], { remote: true });
+    return status;
+  } catch {
+    return undefined;
+  }
 }
 
 /** 应用退出时清理 watcher 订阅。 */

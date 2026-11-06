@@ -1,3 +1,5 @@
+import { personalizationDetailsSettings } from './PersonalizationDetails.settings-search';
+import { tipsSettings } from './TipsSection.settings-search';
 /**
  * TipsSection — Settings → 个性化 下的 "小技巧" 区。
  * ---------------------------------------------------------------------------
@@ -25,6 +27,7 @@ import { usePromptRecommendationPreference } from '@/hooks/usePromptRecommendati
 import { ChatEmbeddingCell } from './ChatEmbeddingCell';
 import { MessageNavRailCell } from './MessageNavRailCell';
 import { SilentEncryptedRetryCell } from './SilentEncryptedRetryCell';
+import { additionalSettings } from './AdditionalSettings.settings-search';
 
 export function TipsSection() {
   const { t } = useTranslation();
@@ -43,7 +46,7 @@ export function TipsSection() {
     <div className="flex flex-col gap-[14px]">
       <div className="flex flex-col gap-1">
         <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t('settings.compatMode.title')}
+          {t(personalizationDetailsSettings.compatModeTitle.titleKey)}
         </h2>
         <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
           {t('settings.compatMode.description')}
@@ -72,22 +75,22 @@ export function TipsSection() {
               <Sparkles size={18} className="text-[var(--settings-section-title)]" />
             </div>
             <div className="flex flex-col gap-[8px]">
-              <p id="settings-search-settings-promptRecommendation-label" className="text-14 font-medium leading-none text-[var(--settings-section-title)]">
-                {t('settings.promptRecommendation.label')}
+              <p id={tipsSettings.promptRecommendationLabel.targetId} className="text-14 font-medium leading-none text-[var(--settings-section-title)]">
+                {t(tipsSettings.promptRecommendationLabel.titleKey)}
               </p>
               <p className="text-12 leading-[1.4] text-[var(--settings-section-desc)]">
-                {t('settings.promptRecommendation.description')}
+                {t(tipsSettings.promptRecommendationLabel.descriptionKey)}
               </p>
             </div>
           </div>
-          <Switch
+          <Switch data-setting-id={tipsSettings.promptRecommendationLabel.id}
             checked={recommendationEnabled}
             onCheckedChange={handleRecommendationToggle}
             aria-label={t('settings.promptRecommendation.toggleAria')}
           />
         </div>
         <SilentEncryptedRetryCell />
-        {mode !== 'local' ? <ChatEmbeddingCell /> : null}
+        {additionalSettings.chatEmbedding.isVisible({ mode }) ? <ChatEmbeddingCell /> : null}
         <MessageNavRailCell />
       </div>
     </div>

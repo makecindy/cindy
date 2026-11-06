@@ -1,6 +1,8 @@
 import { emitSessionCreated } from './sessionCreatedBroadcast.js';
 import type { RoutineModel } from '@cindy/maker-scheduler';
 import { todoAccess } from '../../maker-ipc/botTodoAccess.js';
+import { loadBotReadState, readBotReadPosition } from '../../maker-ipc/botReadStateStore.js';
+import { registerBotReadStateIpc } from '../../maker-ipc/botReadStateIpc.js';
 import { botLinkedProjectAccess } from '../../maker-ipc/botLinkedProjects.js';
 import type { TodoPatch } from '@cindy/maker-shared/teammate-todo';
 /** Cindy Bots 的 main-side 权威数据边界。
@@ -22,6 +24,7 @@ import type { OpenDialogOptions } from 'electron';
 import { and, desc, eq, gt, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 
 import { getDbClient, tryGetDbClient } from '../client/current';
+import { flushAssistantSamplingMetadata } from '../../messagePersistBroadcaster.js';
 import { notifyAgentIslandCompanionChanged } from '../agentIslandSessionPatch.js';
 import type {
   BotsReparentDelegationsResult,
@@ -790,6 +793,8 @@ export async function listBotDmThreads(botId: string, rootSessionId: string): Pr
     const root = parseBotDmThreadRouteKey(link.routeKey);
     if (!root || root.rootSessionId !== rootSessionId) continue;
     owner.assertCurrent();
+    await flushAssistantSamplingMetadata(link.sessionId);
+    owner.assertCurrent();
     const running = getMakerIfReady()?.getSession(link.sessionId)?.isTurnRunning?.() === true;
     const rows = await db
       .select({ role: messages.role, content: messages.content, createdAt: messages.createdAt })
@@ -1053,6 +1058,10 @@ function canonicalReplyCompleted() {
 /** Visibility shared by the local unread count and remote reply watermark. */
 function canonicalReplyVisibility() {
   return [
+    // Failed Codex sampling output is work history, not an addressed reply.
+    sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.failedSamplingAttempt') IS NULL)`,
+    // Unconfirmed output remains work history after its native runtime closes.
+    sql`(${messages.agentMeta} IS NULL OR COALESCE(json_extract(${messages.agentMeta}, '$.samplingAttemptPending'), 0) = 0)`,
     sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.assistantPhase') IS NOT 'commentary')`,
     sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.parentToolUseId') IS NULL)`,
     sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.parent_tool_use_id') IS NULL)`,
@@ -1253,6 +1262,9 @@ async function readProfile(
     )
     .limit(1);
   const canonicalClearedAt = byId.get(canonicalSessionId ?? '')?.clearedAt ?? null;
+  owner.assertCurrent();
+  if (canonicalSessionId) await flushAssistantSamplingMetadata(canonicalSessionId);
+  owner.assertCurrent();
   const latestMessage = await readCanonicalChatPreview(db, canonicalSessionId, canonicalClearedAt);
   const unreadCount = await countCanonicalUnread(
     db,
@@ -1501,6 +1513,8 @@ export interface BotRemoteResourceSource {
   lastMessageAt: number | null;
   lastMessageRole: BotChatRole | null;
   lastReplyAt?: number;
+  /** Host read position of this conversation (botReadStateStore); 0 when none is known. */
+  lastReadAt?: number;
   needsAttention: boolean;
   hiddenAt: number | null;
   pinnedAt: number | null;
@@ -1562,6 +1576,9 @@ async function readBotRemoteResourceSource(
   const [canonical] = canonicalSessionId ? await db
     .select({ clearedAt: sessions.clearedAt, updatedAt: sessions.updatedAt })
     .from(sessions).where(eq(sessions.id, canonicalSessionId)).limit(1) : [];
+  owner.assertCurrent();
+  if (canonicalSessionId) await flushAssistantSamplingMetadata(canonicalSessionId);
+  owner.assertCurrent();
   const latest = await readCanonicalChatPreview(db, canonicalSessionId, canonical?.clearedAt ?? null);
   const [version] = await db.select({ capabilitiesJson: botProfileVersions.capabilitiesJson })
     .from(botProfileVersions).where(and(eq(botProfileVersions.botId, botId), eq(botProfileVersions.version, profile.currentVersion))).limit(1);
@@ -1583,6 +1600,7 @@ async function readBotRemoteResourceSource(
     lastMessageAt: latest.createdAt,
     lastMessageRole: latest.role,
     lastReplyAt: reply.createdAt ?? 0,
+    lastReadAt: hostReadPosition(profile.id),
     needsAttention: profile.attentionAt !== null &&
       BOT_FAILURE_REASONS.includes(profile.attentionReason as BotFailureReason) &&
       isBotFailureAttentionWorthy(profile.attentionReason as BotFailureReason),
@@ -1705,6 +1723,21 @@ function readLastReadAtMap(raw: unknown): Map<string, number> {
     out.set(botId, Math.floor(at));
   }
   return out;
+}
+
+function hostReadPosition(botId: string): number {
+  try { return readBotReadPosition(botId) ?? 0; } catch { return 0; }
+}
+
+/** Positions advanced on the phone or another Mac live only in the host ledger. */
+function mergeHostReadPositions(fromRenderer: Map<string, number>): Map<string, number> {
+  let host: Record<string, number> = {};
+  try { host = loadBotReadState(); } catch { /* a broken ledger costs badges, never the list */ }
+  for (const [key, at] of Object.entries(host)) {
+    if (key.startsWith('group:') || key.startsWith('thread:')) continue;
+    if (at > (fromRenderer.get(key) ?? 0)) fromRenderer.set(key, at);
+  }
+  return fromRenderer;
 }
 
 async function fileExists(candidate: string): Promise<boolean> {
@@ -2343,6 +2376,7 @@ export async function searchBotHistory(botId: string, query: string, limit: numb
 }
 
 export function registerBotIpc(): void {
+  registerBotReadStateIpc();
   ipcMain.handle('local-db:bots:generate-avatar', async (event, token: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof token !== 'string') throwIpcError('INVALID_PARAMS', 'Invalid draft');
@@ -2397,9 +2431,9 @@ export function registerBotIpc(): void {
       ? readBotInvitationLocale((raw as Record<string, unknown>).locale) : undefined;
     await provisionDefaultBotForList(client, owner, welcomeContext, locale);
     const db = client.drizzle;
-    // Unread accounting is opt-in: the read position lives in the renderer, so
-    // a caller that has none (device-link, first boot) simply gets zeros.
-    const lastReadAtByBotId = remote ? new Map<string, number>() : readLastReadAtMap(raw);
+    // Unread accounting is opt-in: device-link callers keep their own projection and get
+    // zeros. Locally the host ledger and the renderer's copy merge forward (newest wins).
+    const lastReadAtByBotId = remote ? new Map<string, number>() : mergeHostReadPositions(readLastReadAtMap(raw));
     const profiles = await db
       .select({ id: botProfiles.id, status: botProfiles.status })
       .from(botProfiles)

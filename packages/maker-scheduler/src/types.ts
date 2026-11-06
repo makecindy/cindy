@@ -209,6 +209,21 @@ export interface PreRunHookRunResult {
   spawnError?: string;
   /** spawn 失败或未形成有效退出结果时的诊断信息。 */
   error?: string;
+  /** 检查失败时，脚本所属的插件未安装或未启用（插件技能目录随之撤下）。 */
+  missingPlugin?: PreRunHookMissingPlugin;
+}
+
+/** 检查脚本放在插件技能目录里，而该插件当前不可用。界面据此提示安装或启用。 */
+export interface PreRunHookMissingPlugin {
+  ghostId: string;
+  /** 企业插件的 orgSlug；公共插件为 null 或缺省。 */
+  namespace?: string | null;
+  /** 曾从市场安装时的 pluginId，用于打开市场详情；拿不到时缺省。 */
+  pluginId?: string;
+  /** 插件显示名；拿不到时缺省，界面用通用说法。 */
+  name?: string;
+  /** true = 插件仍已安装，只是未启用。 */
+  installed?: boolean;
 }
 
 export interface Schedule {
@@ -330,6 +345,16 @@ export type ScheduleMutationGuard = Readonly<Schedule> & {
   effectiveWorkingDir?: string;
 };
 
+/**
+ * An early run started by host code instead of the cron or a user. `kind: 'watch'`: something the
+ * schedule watches changed (`source` names the watcher, `detail` the watched object, such as a PR URL).
+ */
+export interface ScheduleRunTrigger {
+  kind: 'watch';
+  source: string;
+  detail?: string;
+}
+
 export interface ScheduleRun {
   id: string;
   scheduleId: string;
@@ -438,7 +463,8 @@ export interface CreateScheduleInput {
   /** 插件前置检查;update 时 null = 清除,省略 = 保留(旧客户端不认识该字段)。 */
   preRunPlugin?: PreRunPluginConfig | null;
   notify: ScheduleNotifyConfig;
-  expireAt?: number;
+  /** null explicitly clears the deadline across JSON transports. */
+  expireAt?: number | null;
 }
 
 export type UpdateScheduleInput = Partial<CreateScheduleInput>;

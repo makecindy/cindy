@@ -130,6 +130,9 @@
   "detail": {
     "useItIn": "Verwenden in",
     "openPlugin": "Plugin öffnen",
+    "readme": "Über",
+    "readmeLoadFailed": "Die Beschreibung konnte nicht geladen werden. Versuche es erneut.",
+    "readmeUnavailable": "Keine Beschreibung verfügbar.",
     "computerSettings": "Öffne zum Konfigurieren dieses Plugins seine Details unter Cindy → Plugins auf deinem Computer.",
     "runtimeIssue": "Das Plugin wurde unerwartet beendet. Versuche, es erneut zu öffnen oder in einer Aufgabe zu verwenden.",
     "runtimeFused": "Das Plugin wurde nach wiederholten Fehlern gestoppt. Deaktiviere und aktiviere es, um es erneut zu versuchen.",
@@ -284,6 +287,8 @@
       "workspaceDetail": "Bei einer Anfrage wählst du entweder selbst den Ordner aus oder siehst vor deiner Entscheidung den vollständigen Pfad auf einer Bestätigungskarte. Während es einen von dir gestarteten Aufruf bearbeitet, werden Unterordner im Arbeitsverzeichnis der aktuellen Sitzung direkt ohne zusätzliche Rückfrage verwendet. Ordner, die bereits eine Sitzung haben, werden wiederverwendet. Erstellt wird eine leere Sitzung – nichts startet von selbst.",
       "sessionContext": "Kann erfahren, in welchem Projektordner die aktuelle Sitzung arbeitet",
       "sessionContextDetail": "Teilt nur Angaben zum Speicherort (Sitzungs-ID und Projektordnerpfad), während es für die aktuelle Sitzung arbeitet – keine Dateiinhalte, und es wird kein Dateizugriff gewährt.",
+      "liveScreen": "Geräte-Bildschirme auf dem Telefon ansehen und bedienen",
+      "liveScreenDetail": "Über den Remote-Desktop kann Ihr Telefon die Geräte-Bildschirme anzeigen, die es bereitstellt (zum Beispiel Simulatoren), und Berührungen, Tasten und Text an sie senden. Die Verbindung besteht nur, wenn Sie sie vom Telefon aus öffnen, und es wird nichts anderes von diesem Computer angezeigt.",
       "preview": "Kann Vorschauseiten der folgenden Websites im Seitenleistenbrowser öffnen",
       "previewDetail": "Nur die unten aufgeführten Websites können geöffnet werden. Jede geöffnete Seite wird diesem Plugin zugeordnet.",
       "nodeChildSpawn": "Sein Node-Programm kann den Host bitten, deklarierte Unterprozesse aus seinem Paket zu starten",
@@ -341,5 +346,23 @@
     "purpose": "Berechtigungen interaktiver Seiten prüfen",
     "updateHost": "Aktualisiere Cindy auf dem ausführenden Computer, um hier zu bestätigen. Text-Tools bleiben verfügbar.",
     "failed": "Interaktive Seiten konnten nicht aktiviert werden. Prüfe die Verbindung und die Plugin-Version und versuche es erneut."
+  },
+  "openLinkHost": "{{host}} öffnen",
+  "prStatus": {
+    "checksFailed": "Fehlgeschlagen",
+    "checksPending": "Ausstehend",
+    "checksPassed": "Bestanden",
+    "checksSkipped": "Übersprungen oder neutral",
+    "threadsOpen": "Ungelöste Review-Threads: {{count}}",
+    "threadsNone": "Keine offenen Review-Threads",
+    "mergeReady": "Bereit zum Mergen",
+    "mergeConflict": "Hat Konflikte",
+    "mergeBehind": "Hinter dem Basis-Branch",
+    "mergeApproval": "Wartet auf Freigabe",
+    "mergeChanges": "Änderungen angefordert",
+    "mergeWaiting": "Wartet auf Merge",
+    "merged": "Gemergt",
+    "closed": "Geschlossen",
+    "draft": "Entwurf"
   }
 }

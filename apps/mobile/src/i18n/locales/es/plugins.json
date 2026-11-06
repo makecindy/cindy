@@ -132,6 +132,9 @@
   "detail": {
     "useItIn": "Úselo en",
     "openPlugin": "Abrir complemento",
+    "readme": "Acerca de",
+    "readmeLoadFailed": "No se pudo cargar la presentación. Inténtalo de nuevo.",
+    "readmeUnavailable": "No hay presentación disponible.",
     "computerSettings": "Para configurar este complemento, abra sus detalles en Cindy → Complementos en su computadora.",
     "runtimeIssue": "El complemento se detuvo inesperadamente. Intente abrirlo nuevamente o usarlo en una tarea.",
     "runtimeFused": "El complemento se detuvo después de repetidos fallos. Apágalo y enciéndelo para volver a intentarlo.",
@@ -286,6 +289,8 @@
       "workspaceDetail": "Cuando te lo pide, eliges la carpeta tú mismo o ves la ruta completa en una tarjeta de confirmación antes de decidir; Mientras maneja una llamada que usted inició, las subcarpetas dentro del directorio de trabajo de la sesión actual se usan directamente sin un aviso adicional. Las carpetas que ya tienen una sesión se reutilizan y lo que se crea es una sesión vacía: nada comienza a ejecutarse por sí solo.",
       "sessionContext": "Puede saber en qué carpeta de proyecto está trabajando la sesión actual",
       "sessionContextDetail": "Comparte solo datos de ubicación (ID de sesión y ruta de la carpeta del proyecto) mientras funciona para la sesión actual: no se concede contenido de archivos ni acceso a archivos.",
+      "liveScreen": "Ver y controlar pantallas de dispositivos en tu teléfono",
+      "liveScreenDetail": "A través del escritorio remoto, tu teléfono puede mostrar las pantallas de dispositivos que ofrece (como simuladores) y enviarles toques, botones y texto. Solo se conecta cuando lo abres desde tu teléfono y no muestra nada más de este ordenador.",
       "preview": "Puede abrir páginas de vista previa de los siguientes sitios en el navegador de la barra lateral",
       "previewDetail": "Sólo se pueden abrir los sitios que se enumeran a continuación; cada página que abre se atribuye a este complemento.",
       "nodeChildSpawn": "Su programa Node puede pedirle al host que inicie subprocesos declarados desde su paquete.",
@@ -343,5 +348,23 @@
     "purpose": "Revisar los permisos de la página interactiva",
     "updateHost": "Actualice Cindy en la computadora de ejecución para confirmar aquí. Las herramientas de texto siguen estando disponibles.",
     "failed": "No se pudieron habilitar las páginas interactivas. Verifique la conexión y la versión del complemento, luego inténtelo nuevamente."
+  },
+  "openLinkHost": "Abrir {{host}}",
+  "prStatus": {
+    "checksFailed": "Con errores",
+    "checksPending": "En espera",
+    "checksPassed": "Con éxito",
+    "checksSkipped": "Omitidas o neutrales",
+    "threadsOpen": "Hilos de revisión sin resolver: {{count}}",
+    "threadsNone": "Sin hilos de revisión abiertos",
+    "mergeReady": "Lista para fusionar",
+    "mergeConflict": "Tiene conflictos",
+    "mergeBehind": "Por detrás de la rama base",
+    "mergeApproval": "Esperando aprobación",
+    "mergeChanges": "Cambios solicitados",
+    "mergeWaiting": "Esperando la fusión",
+    "merged": "Fusionada",
+    "closed": "Cerrada",
+    "draft": "Borrador"
   }
 }

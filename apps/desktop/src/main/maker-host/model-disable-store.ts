@@ -22,7 +22,7 @@ import {
 } from '@cindy/model-providers';
 
 import { desktopMakerLogger } from './logger-adapter.js';
-import { createOverrideSettingsFile } from './override-settings-file.js';
+import { createOverrideSettingsFile, portableOverrideSettings } from './override-settings-file.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 
 const log = desktopMakerLogger.child('model-disable-store');
@@ -268,3 +268,6 @@ export function clearProviderDisableOverrides(providerId: string): void {
   log.info('provider disable overrides cleared on delete', { providerId });
   if (current.disabledProviders[providerId]) notifyProviderDisableChange(providerId);
 }
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const modelDisablePortableSettings = portableOverrideSettings(store);

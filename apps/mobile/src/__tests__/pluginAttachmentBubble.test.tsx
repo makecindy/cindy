@@ -21,7 +21,7 @@ vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null })
 // Only native surfaces and unrelated heavy viewers are replaced for Node rendering.
 vi.mock('react-native', async () => {
   const React = await import('react');
-  const view = ({ children, testID, accessibilityLabel }: any) => React.createElement('div', { 'data-testid': testID, 'aria-label': accessibilityLabel }, children);
+  const view = ({ children, testID, accessibilityLabel, onPress }: any) => React.createElement('div', { 'data-testid': testID, 'aria-label': accessibilityLabel, onClick: onPress }, children);
   class Value { constructor(public value: number) {} interpolate() { return 0; } setValue() {} stopAnimation() {} }
   return {
     View: view, Text: view, Pressable: view, ScrollView: view, Modal: () => null,
@@ -48,7 +48,7 @@ vi.mock('lucide-react-native', () => ({
   Mail: () => null, CalendarDays: () => null, Folder: () => null, ChartColumn: () => null, Info: () => null, Clock: () => null, MapPin: () => null, Coffee: () => null, Image: () => null, Users: () => null, Star: () => null,
   Database: () => null, FileArchive: () => null, FileAudio: () => null, FileChartColumn: () => null,
   FileCode: () => null, FileImage: () => null, FileSpreadsheet: () => null, FileText: () => null, FileVideo: () => null,
-  ArrowLeftRight: () => null, ArrowUp: () => null, Bot: () => null, Check: () => null, ChevronDown: () => null, ChevronRight: () => null, ChevronUp: () => null, Circle: () => null, CircleAlert: () => null, CircleCheck: () => null, CircleDashed: () => null, CircleStop: () => null, Copy: () => null, Ellipsis: () => null, ExternalLink: () => null, File: () => null, Ghost: () => null, Layers: () => null, ListTodo: () => null, LoaderCircle: () => null, PencilLine: () => null, RefreshCw: () => null, Send: () => null, Share: () => null, Sparkles: () => null, Split: () => null, Timer: () => null, Trash2: () => null, TriangleAlert: () => null, Undo2: () => null, X: () => null,
+  ArrowLeftRight: () => null, ArrowUp: () => null, Bot: () => null, Check: () => null, ChevronDown: () => null, ChevronRight: () => null, ChevronUp: () => null, Circle: () => null, CircleAlert: () => null, CircleCheck: () => null, CircleDashed: () => null, CircleMinus: () => null, CircleStop: () => null, CircleX: () => null, Copy: () => null, Ellipsis: () => null, ExternalLink: () => null, File: () => null, Ghost: () => null, Layers: () => null, ListTodo: () => null, LoaderCircle: () => null, PencilLine: () => null, RefreshCw: () => null, Send: () => null, Share: () => null, Sparkles: () => null, Split: () => null, Timer: () => null, Trash2: () => null, TriangleAlert: () => null, Undo2: () => null, X: () => null,
 }));
 vi.mock('react-native-svg', () => ({ default: () => null, Circle: () => null }));
 vi.mock('react-native-uitextview', () => ({ UITextView: () => null }));
@@ -262,9 +262,9 @@ describe('partner conversation presentation', () => {
     for (const element of cases) expect(renderClient(element)).not.toContain('companion.taskResult');
   });
 
-  // Regression: expanding process prose must not duplicate the final reply's portrait.
+  // Regression: the process and final reply each own one portrait; nested details do not.
   // Exercise the production projection and renderer, including nested work groups.
-  it('keeps expanded companion work readable without repeating the reply portrait', () => {
+  it('shows one process portrait and one reply portrait without repeating them in expanded details', () => {
     const items = companionConversationItems(buildMobileMessageRenderItems([
       msg('u', 'user', 'Check it'),
       msg('p', 'assistant', 'Checking the details', { agentMeta: { assistantPhase: 'commentary' } }),
@@ -277,7 +277,37 @@ describe('partner conversation presentation', () => {
       expect(html.match(/message\.agentBubble/g)).toHaveLength(2);
       expect(html).toContain('message.toolRow');
       expect(html.match(/companion\.replyRow/g)).toHaveLength(1);
-      expect(html.match(/partner-portrait/g)).toHaveLength(1);
+      expect(html.match(/companion\.processRow/g)).toHaveLength(1);
+      expect(html.match(/partner-portrait/g)).toHaveLength(2);
+    } finally {
+      viewportHarness.expanded = false;
+    }
+  });
+
+  // PR #8864: an Agent's nested tool work must not inherit the main partner's
+  // portrait. Existing process expansion coverage did not cross SubagentCard.
+  // Production projection + renderer, unit tier; Agent -> tool -> child answer
+  // is the smallest input that exposes the extra process portrait.
+  it('keeps the main partner portrait out of expanded subagent work', () => {
+    const items = companionConversationItems(buildMobileMessageRenderItems([
+      msg('u', 'user', 'Research it'),
+      msg('agent', 'tool_use', { toolName: 'Agent', toolUseId: 'agent', input: { description: 'Research' } }, { toolUseId: 'agent' }),
+      msg('tool', 'tool_use', { toolName: 'Bash', toolUseId: 'tool', input: { command: 'pwd' } }, { toolUseId: 'tool', agentMeta: { parentUuid: 'agent' } }),
+      msg('tool-result', 'tool_result', '/repo', { toolUseId: 'tool', agentMeta: { parentUuid: 'agent' } }),
+      msg('child-answer', 'assistant', 'Child research complete', { agentMeta: { parentUuid: 'agent', assistantPhase: 'final_answer' } }),
+      msg('agent-result', 'tool_result', 'Research summary', { toolUseId: 'agent' }),
+      msg('answer', 'assistant', 'Main partner answer', { agentMeta: { assistantPhase: 'final_answer' } }),
+    ], { isSessionStreaming: false }));
+    viewportHarness.expanded = true;
+    try {
+      const html = renderClient(<MessageRenderer items={items} companion companionAvatar={<i data-testid="partner-portrait" />} />);
+      const host = document.createElement('div');
+      host.innerHTML = html;
+      expect(host.querySelector('[data-testid="message.subagentToggle"]')).toBeTruthy();
+      expect(host.querySelector('[data-testid="message.toolRow"]')).toBeTruthy();
+      expect(host.textContent).toContain('Research summary');
+      expect(host.querySelectorAll('[data-testid="companion.processRow"]')).toHaveLength(0);
+      expect(host.querySelectorAll('[data-testid="partner-portrait"]')).toHaveLength(1);
     } finally {
       viewportHarness.expanded = false;
     }
@@ -300,6 +330,65 @@ describe('partner conversation presentation', () => {
     expect(ordinary).not.toContain('companion.timeGroup');
     expect(ordinary).not.toContain('companion.replyRow');
   });
+});
+
+// Regression (#8379 review): LegendList redraws a kept row only when its item or `extraData` changes.
+// Cross-row companion state (which reply is the last for its message, five-minute stamps) must
+// therefore reach `extraData`, now that the plugin-work map no longer changes on every flush.
+it.each([
+  ['a later reply to the same message moves the reply target', (messages: RemoteMessage[]) => [...messages,
+    msg('a2', 'assistant', 'Also', { createdAt: '2026-01-01T09:02:00Z', agentMeta: { replyToClientId: 'u1' } })]],
+  ['a corrected earlier time regroups the following rows', (messages: RemoteMessage[]) => [
+    msg('u1', 'user', 'Hi', { createdAt: '2026-01-01T08:00:00Z' }), ...messages.slice(1)]],
+])('refreshes kept companion rows when %s', async (_name, change) => {
+  const { createRoot } = await import('react-dom/client');
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const messages = [
+    msg('u1', 'user', 'Hi', { createdAt: '2026-01-01T09:00:00Z' }),
+    msg('a1', 'assistant', 'Hello', { createdAt: '2026-01-01T09:01:00Z', agentMeta: { replyToClientId: 'u1' } }),
+  ];
+  const quote = { names: { owner: 'Me', companion: 'Cindy' }, showReplyTargets: true, onQuote: vi.fn(), onLocate: vi.fn() };
+  const view = (rows: RemoteMessage[]) => <MessageRenderer
+    items={buildMobileMessageRenderItems(rows, { isSessionStreaming: false })} companion companionQuote={quote} />;
+  const root = createRoot(document.createElement('div'));
+  act(() => root.render(view(messages)));
+  const before = viewportHarness.list.extraData;
+  act(() => root.render(view(change(messages))));
+  expect(viewportHarness.list.extraData).not.toBe(before);
+  act(() => root.unmount());
+});
+
+// Regression (#8379 review): copy text is memoized per row, but its attachment prefix is localized.
+// A kept row must copy in the language the UI shows now, not the one it first rendered in.
+it('copies a kept row with the attachment prefix of the current UI language', async () => {
+  const [{ createRoot }, { i18n }, { copyMessageText }] = await Promise.all([
+    import('react-dom/client'), import('@/i18n'), import('@/session/messageActions')]);
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  vi.mocked(copyMessageText).mockResolvedValue('copied' as never);
+  const previous = i18n.language;
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  const items = buildMobileMessageRenderItems([msg('u', 'user', JSON.stringify({
+    text: 'Look', files: [{ name: 'sample.txt', path: '/tmp/sample.txt' }] }))], { isSessionStreaming: false });
+  const copy = async () => {
+    // The copy control is labelled by its state (Copy / Copied / Failed) in the current language.
+    const labels = ['copyStateCopy', 'copyStateCopied', 'copyStateFailed'].map((key) => i18n.t(`message.renderer.${key}`));
+    const button = [...host.querySelectorAll('[aria-label]')].find((node) => labels.includes(node.getAttribute('aria-label') ?? ''));
+    expect(button).toBeTruthy();
+    await act(async () => { button!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    return vi.mocked(copyMessageText).mock.calls.at(-1)?.[0];
+  };
+  try {
+    await act(async () => { await i18n.changeLanguage('en'); });
+    act(() => root.render(<MessageRenderer items={items} />));
+    expect(await copy()).toContain('Attachments: sample.txt');
+    await act(async () => { await i18n.changeLanguage('de'); });
+    expect(await copy()).toContain('Anhänge: sample.txt');
+  } finally {
+    act(() => root.unmount());
+    await i18n.changeLanguage(previous);
+    vi.mocked(copyMessageText).mockReset();
+  }
 });
 
 describe('companion native read position', () => {

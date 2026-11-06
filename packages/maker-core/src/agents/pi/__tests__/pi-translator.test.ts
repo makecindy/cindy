@@ -42,6 +42,36 @@ function makeQueue(): { queue: AsyncQueue<AgentEvent>; events: AgentEvent[] } {
 const ev = (e: Record<string, unknown>): PiRpcEvent => e as unknown as PiRpcEvent;
 
 describe('pi translator', () => {
+  // #8887: prior retry tests omitted the second native agent_start. Each
+  // completed request must be observable before settlement (unit, no I/O).
+  it.each(['success', 'exhausted'] as const)('accounts before settlement and preserves retry usage (%s)', outcome => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const request = (input: number) => ev({ type: 'message_end', message: {
+      role: 'assistant', model: 'model-a', content: [],
+      usage: { input, output: 2, cacheRead: 3, cacheWrite: 1 },
+    } });
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(request(100), queue, ctx);
+    expect(events.filter(e => e.type === 'account_usage')).toHaveLength(1);
+    translatePiEvent(ev({ type: 'agent_end' }), queue, ctx);
+    translatePiEvent(ev({ type: 'auto_retry_start', attempt: 1, maxAttempts: 2 }), queue, ctx);
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(request(20), queue, ctx);
+    if (outcome === 'exhausted') translatePiEvent(ev({ type: 'auto_retry_end', success: false, finalError: 'quota exceeded' }), queue, ctx);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+    const done = events.find(e => e.type === 'done')!;
+    expect(done.data).toMatchObject({ usage: { inputTokens: 120, outputTokens: 4, cacheReadTokens: 6, cacheCreationTokens: 2 } });
+    const receipts = events.filter(e => e.type === 'account_usage').map(e => (e.data as any).usage);
+    expect(receipts).toHaveLength(2);
+    expect(receipts[0].settlementId).toBe(receipts[1].settlementId);
+    expect(receipts.map(u => u.inputTokens)).toEqual([100, 20]);
+    expect(receipts[0].segments[0].id).not.toBe(receipts[1].segments[0].id);
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    expect(ctx.turnInput).toBe(0);
+    disposePiTranslateContext(ctx);
+  });
+
   it('projects MCP gateway calls into ordinary tools while keeping result pairing intact', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
@@ -557,6 +587,39 @@ describe('pi translator', () => {
     ]);
   });
 
+  it.each([131064, 1000, undefined])('preserves normalized Pi reasoning usage (%s) without double counting', (reasoning) => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    // Earlier tool round must contribute to billing but not the final-request warning.
+    translatePiEvent(ev({ type: 'message_end', message: {
+      role: 'assistant', stopReason: 'toolUse', content: [],
+      usage: { input: 10, output: 100, reasoning: 50 },
+    } }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_end', message: {
+      role: 'assistant', stopReason: 'length', content: [],
+      usage: { input: 657000, output: 131072, ...(reasoning === undefined ? {} : { reasoning }) },
+    } }), queue, ctx);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+    const error = events.find((event) => event.type === 'error')?.data;
+    expect(error).toMatchObject({
+      reason: 'output-limit', isTerminal: true,
+      outputLimit: { outputTokens: 131072, ...(reasoning === undefined ? {} : { reasoningTokens: reasoning }) },
+      usage: { outputTokens: 131172, reasoningTokens: 50 + (reasoning ?? 0) },
+    });
+    expect(ctx.turnTokens).toBe(657010 + 131172);
+    expect(ctx.turnUsageSegments.at(-1)).toMatchObject({ outputTokens: 131072 });
+    if (reasoning === undefined) {
+      expect((error as { outputLimit: object }).outputLimit).not.toHaveProperty('reasoningTokens');
+    } else {
+      expect(ctx.turnUsageSegments.at(-1)).toHaveProperty('reasoningTokens', reasoning);
+    }
+    // Next turn must not reuse either the warning or the reasoning subtotal.
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    expect(ctx.turnReasoning).toBeUndefined();
+    expect(ctx.finalAssistantUsage).toBeUndefined();
+  });
+
   it.each(['DeepSeek-V4-Flash-0731', 'claude-sonnet-4-6'])('preserves length-limited text and usage for %s', (model) => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
@@ -957,6 +1020,7 @@ describe('pi translator', () => {
 
     translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
     markPiHostAbortRequested(ctx);
+    markPiHostTurnStartPending(ctx); // A new Host prompt, not a native retry.
     translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
     translatePiEvent(
       ev({
@@ -1007,6 +1071,49 @@ describe('pi translator', () => {
     expect(events.find((event) => event.type === 'done')?.data).toMatchObject({
       result: '',
       status: 'cancelled',
+    });
+  });
+
+  it('keeps the last known context when a stopped request finalizes with zero usage', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'partial answer' }],
+          stopReason: 'stop',
+          usage: { input: 120, output: 30, cacheRead: 4_800, cacheWrite: 0 },
+        },
+      }),
+      queue,
+      ctx,
+    );
+    // Pi closes an aborted request with an all-zero usage message (Stop mid-turn).
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [],
+          stopReason: 'aborted',
+          errorMessage: 'Request aborted',
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    const doneStatus = [...events].reverse().find((event) => event.type === 'status');
+    expect(doneStatus?.data).toMatchObject({
+      status: 'Done',
+      isRunning: false,
+      contextTokens: 4_920,
     });
   });
 
@@ -2271,11 +2378,31 @@ describe('pi translator', () => {
       translatePiEvent(progressEvent('sa-2', { input: 200, output: 30, cost: 0.02 }), queue, ctx);
       // 回退的累计值(理论上不该出现)不得产生负增量。
       translatePiEvent(progressEvent('sa-2', { input: 5, output: 1, cost: 0 }), queue, ctx);
+      // An old frame followed by the latest snapshot must not bill its delta again.
+      translatePiEvent(progressEvent('sa-2', { input: 200, output: 30, cost: 0.02 }), queue, ctx);
 
       expect(ctx.turnInput).toBe(300);
       expect(ctx.turnOutput).toBe(40);
       expect(ctx.costUsd).toBeCloseTo(0.03, 10);
     });
+
+    it.each(['cumulative-first', 'segments-first'] as const)(
+      'does not recount child requests when progress changes shape (%s)', (mode) => {
+        const ctx = createPiTranslateContext(noopLogger);
+        const { queue, events } = makeQueue();
+        const usage = { input: 100, output: 10, cacheRead: 5, cacheWrite: 0, cost: 0.01 };
+        const usageSegments = [{ id: 'r1', model: 'gpt-5.5', ...usage }];
+        translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+        translatePiEvent(progressEvent('child', usage, mode === 'segments-first'
+          ? { usage: undefined, usageSegments } : {}), queue, ctx);
+        translatePiEvent(progressEvent('child', usage), queue, ctx);
+        translatePiEvent(progressEvent('child', usage, { usageSegments }), queue, ctx);
+        translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+        const done = events.find(event => event.type === 'done')!;
+        expect((done.data as { usage: unknown }).usage).toMatchObject({ inputTokens: 100, outputTokens: 10, cacheReadTokens: 5 });
+        expect(ctx.usageReceipts).toHaveLength(1);
+      },
+    );
 
     it('does not pollute contextTokens with the subagent context', () => {
       // contextTokens = "最后一次 API 调用占了多少上下文"。子代理有自己独立的上下文窗口,

@@ -1,5 +1,5 @@
 import type { GhostManifest, InstalledGhost } from './ghost';
-import type { PluginDownloadStatistics, PluginIconMetadata, PluginUsageStatistics } from '@cindy/plugin-protocol';
+import type { GhostReadmeContent, PluginDownloadStatistics, PluginIconMetadata, PluginUsageStatistics } from '@cindy/plugin-protocol';
 
 export type PluginMarketScope = 'public' | 'organization' | 'personal';
 export type PluginMarketInstallState =
@@ -76,6 +76,11 @@ export interface PluginRemovalUserNotice {
 /** 详情携带安装前展示给用户的 manifest；官方来自 release，自定义来自本地发现。 */
 export interface PluginMarketDetail extends PluginMarketItem {
   manifest: GhostManifest;
+  /**
+   * 详细介绍，只在详情页请求时提供：官方市场的图片是服务端签发的短期地址，自定义市场
+   * 的图片是 data URL。`null` 表示没有介绍；字段缺省表示调用方没有请求。
+   */
+  readme?: GhostReadmeContent | null;
 }
 
 /** Main 生成并接受的自定义市场图标身份键形状；首位 0 为保留值。 */

@@ -128,6 +128,9 @@
   "detail": {
     "useItIn": "用法",
     "openPlugin": "啟法器",
+    "readme": "介紹",
+    "readmeLoadFailed": "介紹未能載入，請再試。",
+    "readmeUnavailable": "暫無介紹。",
     "computerSettings": "請於機上 Cindy 之「法器」中啟此法器詳情，以竟其設。",
     "runtimeIssue": "法器前次行之有異，可重啟或於差事中再試。",
     "runtimeFused": "法器屢止。關之再啟，然後再試。",
@@ -282,6 +285,8 @@
       "workspaceDetail": "其發請時，由君親擇卷匣，或於確認卡上見全路徑後再決；其方理君所發之喚時，今差事工作目錄內之子卷匣可徑用，不另確認。卷匣已有差事則徑復用，不重立。所立唯空差事，不自始行。",
       "sessionContext": "可知今差事所用之案卷匣所在",
       "sessionContextDetail": "唯於其為今差事效勞時告以所在(差事編號與案卷匣路徑)，不含卷之內容，亦不因此得卷之訪問權。",
+      "liveScreen": "於手機觀並操器物之畫面",
+      "liveScreenDetail": "藉遠端桌面，手機可觀其所供器物之畫面(如模擬器)，並觸之、按之、書文字於其上。唯自手機開啟時方連，不示此電腦他物。",
       "preview": "可於右側欄瀏覽器中啟下列網站之先覽頁",
       "previewDetail": "唯可啟下列之網站；每啟皆示為何法器所啟。",
       "nodeChildSpawn": "Node 程式可請宿主再啟包內所申報之子程序",
@@ -339,5 +344,23 @@
     "purpose": "確認互動頁之權柄",
     "updateHost": "請更新行事之機上之 Cindy，再於此確認。文字工具仍可用。",
     "failed": "互動之頁未能啟，請察連線與法器之版後再試。"
+  },
+  "openLinkHost": "啟 {{host}}",
+  "prStatus": {
+    "checksFailed": "未成",
+    "checksPending": "方行",
+    "checksPassed": "已過",
+    "checksSkipped": "略過或居中",
+    "threadsOpen": "{{count}} 條未決之 review 評論",
+    "threadsNone": "無待理之意見",
+    "mergeReady": "可合併",
+    "mergeConflict": "有衝突",
+    "mergeBehind": "須同步目標分支",
+    "mergeApproval": "待批",
+    "mergeChanges": "須修改",
+    "mergeWaiting": "待合併",
+    "merged": "已合併",
+    "closed": "已閉",
+    "draft": "草稿"
   }
 }

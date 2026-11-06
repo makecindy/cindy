@@ -233,6 +233,27 @@ localStorage 按 **origin + userData 目录** 分家——dev 的 renderer 从
 - 只修改 renderer 时优先使用现有实例的热更新，不重复重启。
 - 不确定运行实例来自哪个 checkout 时，先运行 `pnpm desktop:whoami -- --all` 核对。
 
+## 内存排查
+
+main 日志里 scope 为 `memory-usage` 的行是各进程内存采样（正式版每 10 分钟一次，dev 每 30 秒
+一次；实现见 `src/main/process-monitor/memory-log.ts`）：`main{...}` 是主进程
+`process.memoryUsage()` 细分，后面按进程类型分组列出 `app.getAppMetrics()` 的常驻内存，
+组内从大到小，单位 MB。排查「越用越卡」时，先按启动分段看 `Browser`（主进程）和最大的
+`Tab`（主界面）每小时涨多少：持续上涨、重启才回落就是泄漏；再看 `heapUsed` 与 `external` /
+`arrayBuffers` 谁在涨，区分 JS 对象和 Buffer。该 scope 只写进程类型与数字，已精确放行进
+日志上报，不要往这行里加标题、服务名、pid 或路径。
+
+`getAppMetrics()` 的 GPU 数字不含 IOSurface 等显存，macOS 上要看 GPU 进程真实占用用
+`footprint -p <pid>`。
+
+确认主进程在涨、要找是谁在涨时，在开发版日志目录的 `log-config.json` 写
+`"mainHeapSampling": true`（与 `level` 并列），重启后主进程常驻 V8 采样式堆分析（实现见
+`src/main/process-monitor/heap-sampling.ts`），每 30 分钟写一份到 `logs/heap-sampling/`，
+保留最近 48 份：`.heapprofile` 可在 Chrome DevTools 的 Memory 面板载入，`.summary.txt` 按
+「最近一帧应用代码」和「分配帧」两种口径列出仍存活的采样内存。对比前后几份摘要，持续
+变大的那几行就是泄漏点。不要在用户正在用的 GB 级主进程上拍完整堆快照：会冻结一两分钟
+并额外占用同等内存。正式版不读这个开关。
+
 ## 分层验证
 
 工作目录误报缺失或切到备用目录时，参见[工作目录异常日志判读](../working-directory-diagnostics.md)，
@@ -286,6 +307,23 @@ pnpm ui:check:selftest
 - `ui:preview` 只在需要人工手动验收时使用：保持一个窗口、改文件自动重载，关窗或 Ctrl+C 结束。
 - 场景数据、宿主模拟、多语言和对比模式的写法见
   [单页验证说明](../../apps/desktop/scripts/ui-page/README.md)。
+
+### 局部 UI 的默认迭代流程
+
+局部样式、排版与交互问题优先沿用上述组件窗口完成复现、修复和人工试用：
+
+- 复用已有 fixture；缺少覆盖时直接挂载真实生产组件，沿用共享样式、字体、主题和翻译，
+  不复制 JSX／CSS 做一份外观相似的页面。模拟只补与本次验证无关的宿主依赖；被替换模块
+  写入 `stubs`，未覆盖行为写入 `notCovered`。
+- 修 bug 先留下失败场景，再用相同输入验证修复。尺寸、换行或抖动问题测实际浏览器布局；
+  涉及过渡动画时采样中间帧，不能只比较 CSS 字符串或动画结束后的截图。
+- 覆盖 Light／Dark 和受影响的鼠标、键盘状态；排版改动补相关语言与长文案，修改共享组件
+  或字体时检查相邻消费者。执行适用的 `--changed` 检查并目检 overview，明确报告失败和缺口。
+- 给用户试用时打开 `ui:preview`，说明所用分支和场景；等待用户验收期间保留窗口，不因
+  助手回复结束就关闭。验收结束后只收尾本轮拥有的预览进程。
+- 组件窗口不加载完整客户端及其用户数据，不需要抢占或重启已有完整客户端验收实例。
+  涉及真实宿主、登录、发送、持久化、跨设备或原生窗口行为时，按下表升级验证；构建失败
+  或 fixture 通过都不能作为这些行为已经验证的证据。
 
 ### 按改动选择验证方式
 
@@ -366,3 +404,15 @@ pnpm --filter desktop exec vitest run scripts/installer-directory-messages.test.
 还需在普通权限 Windows 环境走查：默认目录、自定义受保护目录、允许／取消授权、使用
 另一管理员账号、旧版覆盖安装，以及静默安装失败时旧版仍在。原生对话框的 Light／Dark
 外观由 Windows 提供，自动测试不代表两种模式已完成目检。
+
+远程桌面 helper 的 CRT 链接验收另运行：
+
+```bash
+node apps/desktop/scripts/check-windows-remote-desktop-runtime.mjs
+```
+
+这是显式 Windows x64 原生集成验收：编译两个 EXE 与 `.node`，检查 PE 依赖，对照
+动态／静态链接在临时目录中遇到不可用 VC++ DLL 时的结果，并以随机测试产品身份实跑
+生产 NSIS 钩子的当前用户安装、覆盖安装和卸载。它不改系统 DLL、不安装服务、不操作
+正式 Cindy 的安装。该故障注入不能代替干净 Windows 虚拟机、「所有用户」安装或已注册
+远程桌面服务的真实验收；编译与安装器子进程不进入默认单测。

@@ -65,11 +65,11 @@ authoritative inventory」的现行表述一致（该句本身也限定在颜色
 ### 2.1 台账 schema（现行生成与人工维护合同）
 
 - 单一文件 `docs/design-rules/design-inventory.md`，不建立第二份迁移台账；
-- 机器事实与人工决策物理分开：
+- 登记事实与人工决策物理分开：
 
 ```text
 <!-- BEGIN GENERATED: surface-facts -->
-脚本生成：稳定 surface ID、平台、生产入口、可达组件、样式来源、Token/裸值统计
+脚本生成：稳定 surface ID、平台、标题、生产入口，以及 Desktop 路由 / Mobile 文件路由覆盖
 <!-- END GENERATED: surface-facts -->
 
 人工维护：按 surface ID 记录 owner、迁移状态（legacy / pilot / migrated）、
@@ -77,6 +77,17 @@ protected 标签、目标道路、下一动作
 ```
 
 - 生成器只允许重写 GENERATED 区块，不得覆盖人工状态；连续两次生成结果必须字节一致；
+- GENERATED 只放登记事实，它们只在新增、删除、改名 surface 或更换入口时变化。可达组件、
+  样式来源与 Token / 裸颜色 / 裸圆角统计**不入库**：它们随任意样式改动漂移，每个 surface
+  又只占一行，入库会让碰到同一 surface 的 PR 必然在同一行冲突，且只能重跑生成器解决；
+  这道“数字是否最新”的检查也不阻断欠账增加（拦新增裸色的是 `check:design-colors`）。
+  需要时运行 `pnpm design:inventory:report`，输出到 gitignore 的
+  `tmp/design-inventory-report.md`；要看某次提交时的数字，在该提交上重跑。不得把这些列
+  加回台账；
+- `pnpm check:design-inventory` 是阻断的登记检查：新增或删除的 Desktop 路由、`?view=`
+  分支、renderer 入口参数、Mobile 文件路由未登记，入口组件与 catalog 不符，styleRoot
+  路径失效，或 GENERATED 与 catalog 不一致时失败；人工区出现已不存在的 surface ID 时
+  报告孤儿行；
 - `protected` 是与迁移阶段**正交**的独立标签（一个 surface 可以同时 `legacy + protected`，
   也可以 `migrated + protected`），表示其视觉或交互合同被有意保护——例如 `DESIGN.md §10`
   的语义豁免色族、`§15` CINDY 皮肤族、外部主题导入保护 Token；
@@ -275,10 +286,11 @@ commit 模式不覆盖未提交内容。正式 CI 比较事件 base 与当前候
 文档中出现的任何统计数字（Token 数、主题数、违规数）都是**当日快照**，必须标注统计
 日期与可重复执行的生成命令，不作为长期人工维护数据。
 
-设计台账中标记为 `GENERATED` 的源码事实区块是例外：它随源码提交维护，不写生成日期，
-保证同一源码树跨日重新生成字节一致；保留 `pnpm design:inventory` 与
-`pnpm check:design-inventory` 命令，事实变化时间以 Git 提交历史为准。人工区与其他文档中的
-快照统计仍须标注日期和生成命令。
+设计台账中标记为 `GENERATED` 的登记区块是例外：它只含登记事实、不含统计，随源码提交维护，
+不写生成日期，保证同一源码树跨日重新生成字节一致；保留 `pnpm design:inventory` 与
+`pnpm check:design-inventory` 命令。逐 surface 的 Token / 裸值统计不入库（见 §2.1），
+由 `pnpm design:inventory:report` 按需生成；同一源码树重跑结果一致，某次提交的数字在该
+提交上重跑即得。人工区与其他文档中的快照统计仍须标注日期和生成命令。
 
 人工快照示例：
 
@@ -337,7 +349,7 @@ DS-4/4b 尚有公开附件交接与完整设置页/部分状态证据缺口，DS
 | `docs/design-rules/token-decision-table.md` | 登录改版 token 决策记录（其自身已声明非现行清单） | 维持决策档案定位，非数值真相 |
 | `docs/design-rules/design-decision-log.md` | 全局设计决策史台账 | 维持只增不改；治理裁决（含 §10 待裁决项）关闭后在此归档 |
 | `DESIGN.md §10` Tier-1 slot 表 | DS-8 GENERATED 精确值摘要（用途与规则人工维护） | DS-8 同一 Terrazzo 流程生成，不再人工编辑表中数值 |
-| `DESIGN.md §16.1` 登录 token 表 | 登录域现行 token 清单（DS-8 起由 `packages/design-tokens` 生成，用途说明来自 `desktop-bindings.json`） | 同上，不再人工编辑表中数值；品牌保护项 `--login-brand-accent*` 在表外保留 |
+| `login-flow.md §16.1` 登录 token 表 | 登录域现行 token 清单（DS-8 起由 `packages/design-tokens` 生成，用途说明来自 `desktop-bindings.json`） | 同上，不再人工编辑表中数值；品牌保护项 `--login-brand-accent*` 在表外保留 |
 | UI 设计哨兵（插件仓） | SSR 抽取式扫描工具 | 仅用于发现组件、统计硬编码、定位代码与观察迁移进度；其样张不得充当视觉证据（§2 视觉真相行） |
 
 ## 12. 公开实施路线与目标验收

@@ -18,7 +18,7 @@
  */
 
 import type { ProviderView, UnifiedAgentCapability, UnifiedModelEntry } from '@cindy/model-providers';
-import { remoteInvocationModels } from '@cindy/model-providers';
+import { remoteInvocationModels, resolveStoredModelEntry, displayNameOfStoredModelId } from '@cindy/model-providers';
 
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { SelectableVendor } from '@/lib/agentVendors';
@@ -27,6 +27,8 @@ import { applyProviderOrderIds } from '../../../shared/providerOrder';
 import { modelConfigCopyIdentity, type ModelConfigCopy } from '@/state/modelConfigCopy';
 import type { ModelFavoriteItem } from '@/state/modelFavorites';
 import type { RecentModelItem } from '@/state/recentModels';
+
+export { resolveStoredModelEntry };
 
 /** 引擎在**选择器 / 草稿链路**里的口径(vendor);catalog / capabilities 侧是 AgentKind。 */
 export type UnifiedEngine = SelectableVendor;
@@ -75,6 +77,23 @@ export function wireModelIdOf(entry: UnifiedModelEntry, agent: AgentKind): strin
   return entry.capabilities[agent]?.wireModelId ?? entry.modelId;
 }
 
+/** Every actual member key for one engine; existing bridge rows keep their old single-key path. */
+export function entryWireIds(entry: UnifiedModelEntry, agent: AgentKind): string[] {
+  return [...new Set((entry.aliasEntries ?? [entry]).flatMap((member) =>
+    member.capabilities[agent] ? [member.capabilities[agent]!.wireModelId] : []))];
+}
+
+export function entryModelIds(entry: UnifiedModelEntry): string[] {
+  return [...new Set((entry.aliasEntries ?? [entry]).map((member) => member.modelId))];
+}
+
+/** Single-sided preferences inherit without persisting defaults or choosing a conflict winner. */
+export function readEntryPreference<T>(entry: UnifiedModelEntry, ids: readonly string[],
+  read: (providerId: string, modelId: string) => T | undefined): T | undefined {
+  const values = [...new Set(ids.map((id) => read(entry.providerId, id)).filter((value) => value !== undefined))];
+  return values.length === 1 ? values[0] : undefined;
+}
+
 /**
  * 外部给的 model id 是不是**这一行**。
  *
@@ -87,7 +106,8 @@ export function entryMatchesModelId(
   modelId: string | null | undefined,
 ): boolean {
   if (!modelId) return false;
-  if (entry.modelId === modelId) return true;
+  if (entry.modelId === modelId || entry.enginePreferenceId === modelId) return true;
+  if (entry.aliasEntries?.some((member) => entryMatchesModelId(member, modelId))) return true;
   return Object.values(entry.capabilities).some(
     (capability) => capability?.wireModelId === modelId,
   );
@@ -122,6 +142,8 @@ export interface UnifiedRowConfig {
    * 调用方回落行 id。
    */
   wireModelId: string | null;
+  /** Exact gateway identity for stored configuration copies only; never a request ID. */
+  storedModelId?: string;
 }
 
 export interface ResolveRowConfigArgs {
@@ -229,6 +251,7 @@ export function resolveUnifiedRowConfig(args: ResolveRowConfigArgs): UnifiedRowC
     customized,
     capability,
     wireModelId: capability?.wireModelId ?? null,
+    ...(entry.enginePreferenceId ? { storedModelId: entry.enginePreferenceId } : {}),
   };
 }
 
@@ -244,7 +267,8 @@ export function resolveFavoriteRowConfig(args: {
   item: ModelConfigCopy;
   agentFastModeCapable?: (agent: AgentKind) => boolean;
 }): UnifiedRowConfig {
-  const { entry, item, agentFastModeCapable } = args;
+  const { item, agentFastModeCapable } = args;
+  const entry = args.entry.aliasEntries?.find((member) => entryMatchesModelId(member, item.modelId)) ?? args.entry;
   const candidateEngines = entry.candidates.map(engineOfAgentKind);
   const engine = candidateEngines.includes(item.agent)
     ? item.agent
@@ -266,6 +290,7 @@ export function resolveFavoriteRowConfig(args: {
     customized: false,
     capability,
     wireModelId: capability?.wireModelId ?? null,
+    ...(entry.enginePreferenceId ? { storedModelId: entry.enginePreferenceId } : {}),
   };
 }
 
@@ -425,7 +450,7 @@ export function unavailableFavoriteEntry(item: ModelFavoriteItem): UnifiedModelE
   return {
     providerId: item.providerId,
     modelId: item.modelId,
-    displayName: item.modelId,
+    displayName: displayNameOfStoredModelId(item.modelId),
     candidates: [agent],
     recommended: agent,
     nativeAgent: null,
@@ -453,15 +478,6 @@ function matchesQuery(entry: UnifiedModelEntry, q: string): boolean {
     entry.modelId.toLowerCase().includes(q) ||
     (entry.description?.toLowerCase().includes(q) ?? false)
   );
-}
-
-/**
- * 行查找的 map key。分隔符用空格而不是裸 NUL:源码里嵌一个 `\0` 会让整个文件被
- * git / rg / grep 判成二进制(diff 只显示 `Bin`、符号一个都搜不到),代价远大于它能防的
- * 那点分隔符冲突 —— provider id 与 model id 都是 slug 形态,不含空格。
- */
-function entryKeyOf(providerId: string, modelId: string): string {
-  return `${providerId} ${modelId}`;
 }
 
 /**
@@ -592,23 +608,17 @@ export function buildUnifiedListSections(args: {
   const q = args.query.trim().toLowerCase();
   const rail: UnifiedRailFilter = q ? { kind: 'all' } : args.rail;
   const matches = args.matchesQuery ?? matchesQuery;
-  const byKey = new Map<string, UnifiedModelEntry>();
-  for (const entry of entries) byKey.set(entryKeyOf(entry.providerId, entry.modelId), entry);
 
   /**
    * 把一份「存下来的模型身份」解析回本轮目录里的一行(收藏与最近共用)。
    *
-   * 老数据可能存的是某个引擎的 wire id(合并行之前行身份就是 wire id):先按归一化 id
-   * 精确命中,失配再按「任一引擎的 wire id」扫一遍 —— 否则升级后老收藏会整条消失。
+   * 旧 Magpie 归一化身份有歧义时不猜测；新记录使用已存在的独立路由身份。
+   * 其它连接继续接受归一化行身份或引擎 wire id。
    * 解析不到 = 该模型当前不可路由(来源断开 / 目录下架)→ 调用方跳过,**不删条目**:
    * 连回来就该回来,静默删掉用户存过的东西是不可逆的。
    */
-  const resolveStoredEntry = (providerId: string, modelId: string): UnifiedModelEntry | undefined =>
-    byKey.get(entryKeyOf(providerId, modelId)) ??
-    entries.find(
-      (candidate) =>
-        candidate.providerId === providerId && entryMatchesModelId(candidate, modelId),
-    );
+  const resolveStoredEntry = (providerId: string, modelId: string) =>
+    resolveStoredModelEntry(entries, providerId, modelId);
 
   const sections: UnifiedListSection[] = [];
 
@@ -631,7 +641,7 @@ export function buildUnifiedListSections(args: {
           kind: 'fav',
           uid: item.uid,
           providerId: foreign.favorite.providerId,
-          modelId: foreign.favorite.modelId,
+          modelId: foreign.entry.enginePreferenceId ? foreign.entry.modelId : foreign.favorite.modelId,
         },
         entry: foreign.entry,
         favorite: foreign.favorite,
@@ -641,7 +651,7 @@ export function buildUnifiedListSections(args: {
       continue;
     }
     // 老收藏可能存的是某个引擎的 wire id(合并行之前的行身份就是 wire id):解析口径与最近视图
-    // 共用 resolveStoredEntry(先按归一化 id 精确命中,失配再按「任一引擎的 wire id」扫一遍)——
+    // 共用 resolveStoredEntry（含旧 Magpie 身份的歧义保护）——
     // 否则升级后老收藏会整条消失。
     const entry = resolveStoredEntry(item.providerId, item.modelId);
     // 收藏指向的模型已不可路由(来源断开 / 目录下架)→ 本轮不显示;**不删条目**:
@@ -668,7 +678,7 @@ export function buildUnifiedListSections(args: {
         kind: 'fav',
         uid: item.uid,
         providerId: item.providerId,
-        modelId: item.modelId,
+        modelId: entry.enginePreferenceId ? entry.modelId : item.modelId,
       },
       entry,
       favorite: item,
@@ -891,4 +901,11 @@ export function priceTierOf(outputPerMtok: number, currency: string): 1 | 2 | 3 
   if (usd <= 3) return 1;
   if (usd <= 15) return 2;
   return 3;
+}
+
+/** A colliding legacy bridge key stays stored but is never guessed onto a gateway route. */
+export function enginePreferenceModelIds(entry: UnifiedModelEntry): string[] {
+  return entry.enginePreferenceId
+    ? [...new Set([entry.enginePreferenceId, ...(entry.legacyEnginePreferenceId ? [entry.legacyEnginePreferenceId] : [])])]
+    : [entry.modelId];
 }

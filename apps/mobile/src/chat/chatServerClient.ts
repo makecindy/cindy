@@ -6,7 +6,7 @@ import { inferBotTemplatePresetId } from '@cindy/maker-shared/bot-template-prese
 import { parseChatInvitationToken } from '@cindy/device-link';
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
 import type { ChatHistory } from '@cindy/maker-shared/chat-history';
-import { botGroupMessageSummaryText, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupExecutionFailure, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { readBotGroupCapabilityNotice, botGroupMessageSummaryText, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupExecutionFailure, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 import { chatGroupMemberName as memberName, chatGroupOwnerName, botGroupActivityAt, latestBotGroupMessage, botGroupExecutionFailureBatches, projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 // The app's `@/i18n` sets up this default instance; importing it here would pull React bindings into a plain client.
@@ -15,6 +15,7 @@ import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from '@/i18n/locale';
 import { mobileMarkdownPreviewText } from '@/session/messageMarkdown';
 import { buildBotGroupThreadShareCard, botGroupThreadShareOperationId, readBotGroupThreadShareCard, type BotGroupThreadShareView } from '@cindy/maker-shared/botGroupChat';
 import type { RemoteSerializedAttachment } from '@/session/types';
+import type { BotGroupPlanView } from '@cindy/maker-shared/botGroupChat';
 
 export interface MobileChatInviteMemberAvatar { avatar: string | null; initial: string }
 
@@ -76,7 +77,19 @@ export interface ChatExecutionFailure {
   failure_code?: unknown; updated_at?: string; plan_id?: string | null;
 }
 export interface ChatExecution extends ChatExecutionFailure { requester_id?: string; created_at?: string; status: string }
+/** Existing Chat Server plan contract, also consumed by Desktop's chatServer adapter. */
+export interface ChatPlan {
+  activeExecution?: { id: string; status: string };
+  supportsPendingSkip?: boolean;
+  id: string; revision: number; creator_id: string; organizer_id: string;
+  status: BotGroupPlanView['status']; current_step: number | null; steps: BotGroupPlanView['steps'];
+  kind?: 'work' | 'talk'; created_at: string; updated_at: string;
+}
+export type ChatPlanAction = { action: 'start' | 'dismiss' | 'continue' | 'retry' }
+  | { action: 'remove' | 'reassign'; position: number; botId?: string }
+  | { action: 'skip'; position: number; executionId?: string };
 export interface ChatPage { threadRootId?: string; snapshot: ChatSnapshot; messages: ChatMessage[]; before: string | null; failures?: ChatExecutionFailure[]; executions?: ChatExecution[]; historyRevision?: string;
+  plans?: ChatPlan[];
   /** Authorized enrichments only; raw card fallback is never a resolved source. */
   threadSources?: Record<string, ChatMessage | null>; threadRoots?: Record<string, ChatMessage | null>; threadRetryAt?: number; previewMessages?: ChatMessage[];
 }
@@ -106,12 +119,37 @@ const SETTINGS_ROUTES: Record<Exclude<ChatGroupSettingsAction['type'], 'notifica
 
 export interface ChatInviteLink { link: string; expiresAt: string | null; reusable?: boolean }
 const INVITE_TOKEN = /^[A-Za-z0-9_-]{43}$/;
+/** Only a companion's profile row; an older server ignores `key` and returns every row, picked the same way. */
+const PROFILE_ONLY = `/preferences?key=${encodeURIComponent('companion.profile.v1')}`;
+/** A profile too large for the preferences is kept in the companion store (Desktop companion-cloud/store.ts). */
+const PROFILE_STORED = `/companion-store/entry?key=${encodeURIComponent('companion.profile.v1')}`;
+/** The stored profile is in the private bucket: present, but not downloaded for a check. */
+const PROFILE_IN_BUCKET = Symbol('profile-in-bucket');
 
 /** Prefer an owned owner, then the human's admin role, as on Desktop. */
 export function chatGroupManager(snapshot: ChatSnapshot, self: string) {
   const managers = snapshot.members.filter(member => member.state === 'joined'
     && (member.id === self || member.ownerActorId === self) && ['owner', 'admin'].includes(member.role));
   return managers.find(member => member.role === 'owner') ?? managers.find(member => member.id === self) ?? managers[0];
+}
+
+const planCardOf = (message: ChatMessage) => !message.deleted && message.content.find(block => block.type === 'card' && block.namespace === 'cindy.plan');
+function messagePlanId(message: ChatMessage): string | null {
+  const card = planCardOf(message);
+  if (!card || card.schemaRevision !== 1 || typeof card.data?.planId !== 'string') return null;
+  try { return chatId(card.data.planId); } catch { return null; }
+}
+
+function chatPlanView(plan: ChatPlan, snapshot: ChatSnapshot, self: string): BotGroupPlanView {
+  return { id: plan.id, revision: plan.revision, status: plan.status, organizerBotId: plan.organizer_id,
+    organizerName: snapshot.members.find(member => member.id === plan.organizer_id)?.name ?? '',
+    supportsPendingSkip: plan.supportsPendingSkip === true,
+    steps: plan.steps.map(step => ({ ...step, ...(step.position === plan.current_step && plan.activeExecution
+      ? { executionId: plan.activeExecution.id, executionStatus: plan.activeExecution.status } : {}) })), currentStep: plan.current_step, workDir: null, branch: null,
+    ...(plan.kind ? { kind: plan.kind } : {}),
+    canManage: !snapshot.room.archived && !snapshot.room.dissolved_at && (plan.creator_id === self || !!chatGroupManager(snapshot, self)),
+    // Direct sends do not yet use the computer's plan-comment/arrangement pipeline.
+    canAdd: false, createdAt: Date.parse(plan.created_at), updatedAt: Date.parse(plan.updated_at) };
 }
 
 export interface ChatSendInput {
@@ -282,6 +320,12 @@ function chatMemberIdentity(member: ChatMember, members: readonly ChatMember[]) 
   return { botId: member.id, name: memberName(member, members), ...chatMemberAvatar(member.groupAvatar ?? member.avatar ?? member.defaultAvatarUrl ?? null), avatarColor: '' };
 }
 
+function chatMessageMentions(message: ChatMessage): BotGroupMention {
+  return { all: message.mentionAudience === 'humans' || message.mentionAudience === 'everyone',
+    ...(message.mentionAudience === 'bots' || message.mentionAudience === 'everyone' ? { allBots: true } : {}),
+    botIds: message.mentions ?? [] };
+}
+
 /**
  * Sequence strings stay on the wire; numeric positions below are presentation order only.
  * `actors` (the account's own, from `/actors`) tell which computer runs each owned companion.
@@ -307,6 +351,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
   const sorted = [...new Map(page.messages.map(message => [message.id, message])).values()].filter(message => !message.deleted)
     .sort((a, b) => BigInt(chatCursor(a.seq)) < BigInt(chatCursor(b.seq)) ? -1 : BigInt(a.seq) > BigInt(b.seq) ? 1 : 0);
   const messages: BotGroupMessageView[] = sorted.map((message, index) => {
+    const capabilityNoticeCode = readBotGroupCapabilityNotice(message);
     const runtimeFailureCode = readImportedBotGroupRuntimeFailureCode(message);
     const legacy = runtimeFailureCode ? message.content.find(block => block.type === 'card' && block.namespace === 'cindy.local-history' && block.schemaRevision === 1)?.data : undefined;
     if (runtimeFailureCode) return { id: message.id, sequence: index + 1, serverSequence: chatCursor(message.seq), kind: 'notice', authorKind: 'system',
@@ -315,18 +360,19 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
       runtimeFailureCode, planId: null, files: [], attachments: [], createdAt: Date.parse(message.createdAt) };
     const member = active.find(candidate => candidate.id === message.authorId);
     const joinedName = joinedMemberName(message);
-    const quote = message.origin === 'system' ? null : readBotGroupQuote(message.content);
-    const task = message.origin === 'system' ? null : taskCardOf(message);
+    const planCard = planCardOf(message);
+    const quote = message.origin === 'system' || planCard ? null : readBotGroupQuote(message.content);
+    const task = message.origin === 'system' || planCard ? null : taskCardOf(message);
     const process = !message.deleted && message.origin !== 'system' && message.author.kind === 'bot' ? message.content.map(readBotGroupProcessCard).find(Boolean) : null;
-    return { id: message.id, sequence: index + 1, serverSequence: chatCursor(message.seq), kind: message.origin === 'system' ? 'notice' : 'message',
+    return { id: message.id, sequence: index + 1, serverSequence: chatCursor(message.seq), kind: capabilityNoticeCode ? 'notice' : planCard ? 'plan' : message.origin === 'system' ? 'notice' : 'message', ...(capabilityNoticeCode ? { capabilityNoticeCode } : {}),
       ...(message.maskAttribution ? { maskAttribution: message.maskAttribution } : {}),
       ...(task ? { task } : {}), ...(process ? { process } : {}), threadRootId: message.threadRootId, replyCount: message.replyCount, reactions: message.reactions,
       authorKind: message.origin === 'system' ? 'system' : message.author.kind === 'human' ? 'user' : 'bot',
       authorBotId: message.authorId, authorName: joinedName !== undefined ? joinedName
         : member ? memberName(member, ownerMembers) : message.author.name,
-      isSelf: message.authorId === selfId, content: contentText(message), mentions: { all: message.mentionAudience === 'humans' || message.mentionAudience === 'everyone', ...(message.mentionAudience === 'bots' || message.mentionAudience === 'everyone' ? { allBots: true } : {}), botIds: message.mentions ?? [] },
+      isSelf: message.authorId === selfId, content: contentText(message), mentions: chatMessageMentions(message),
       ...(quote ? { quote: deletedIds.has(quote.messageId) ? { ...quote, originalDeleted: true } : quote } : {}),
-      noticeCode: joinedName !== undefined ? 'member-joined' : null, planId: null, files: [],
+      noticeCode: joinedName !== undefined ? 'member-joined' : null, planId: messagePlanId(message), files: [],
       attachments: chatMessageAttachments(message), createdAt: Date.parse(message.createdAt) };
   });
   const known = new Map([...page.snapshot.messages, ...(page.previewMessages ?? []), ...page.messages].map(message => [message.id, message]));
@@ -375,6 +421,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
       view.threadShare = { ...card, status: source === undefined ? 'loading' : available ? 'available' : 'unavailable',
         authorKind: available && source.author.kind !== 'human' ? 'bot' : 'user', authorBotId: available ? source.authorId : null,
         authorName: available ? authorName(source) : '', sharedByAuthor: !!available && source.authorId === message.authorId,
+        ...(available ? { mentions: chatMessageMentions(source) } : {}),
         content: available ? contentText(source) : '', attachments: available ? chatMessageAttachments(source) : [],
         createdAt: available ? Date.parse(source.createdAt) : null, edited: !!available && (source.revision ?? 1) > 1,
         ...(replyCount !== undefined ? { replyCount } : {}), ...(threadPreview ? { threadPreview } : {}),
@@ -395,6 +442,9 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
   const speakers = executions.map(row => ({ botId: row.bot_id, sessionId: null, executionId: row.id,
     executionStatus: row.status as 'queued' | 'running' | 'needs_input' | 'stopping', stopping: row.status === 'stopping',
     activity: row.plan_id ? 'step' as const : 'reply' as const }));
+  const plans = (page.plans ?? []).map(plan => chatPlanView(plan, page.snapshot, selfId));
+  const open = plans.find(plan => ['proposed', 'running', 'waiting'].includes(plan.status));
+  const currentStep = open?.steps.find(step => step.position === open.currentStep);
   return { id: room.id, conversationKind: room.kind === 'direct' ? 'direct' : 'group',
     name: room.kind === 'direct' ? active.filter(member => member.id !== selfId).map(member => memberName(member, [])).join(', ') || room.name : room.name,
     ...(room.kind !== 'direct' && page.snapshot.reads ? { notificationMode: mainRead?.muted ? 'none' as const : mainRead?.notification_scope ?? 'all' as const } : {}),
@@ -407,7 +457,10 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     organizerBotId: room.organizer_id ?? null, projectDir: null, projectDirName: null,
     createdAt: Date.parse(room.created_at), updatedAt: Date.parse(room.updated_at),
     lastMessage: last ? { authorKind: last.authorKind, authorName: last.authorName, preview: mobileMarkdownPreviewText(last.threadShare ? i18next.t(last.isSelf ? 'groupChat.thread.sidebarOwn' : 'groupChat.thread.sidebarOther', { name: last.authorName }) : botGroupMessageSummaryText(last)).slice(0, 80), createdAt: last.createdAt } : null,
-    speakingBotIds: speakers.map(speaker => speaker.botId), planningBotId: null, openPlan: null, plans: [], messages: projectBotGroupExecutionFailures(messages, failures),
+    speakingBotIds: speakers.map(speaker => speaker.botId), planningBotId: null,
+    openPlan: open ? { id: open.id, status: open.status, currentStep: open.currentStep, stepCount: open.steps.length,
+      currentBotName: currentStep?.botName ?? null, currentStepStatus: currentStep?.status ?? null, ...(open.kind ? { kind: open.kind } : {}) } : null,
+    plans, messages: projectBotGroupExecutionFailures(messages, failures),
     hasMoreBefore: page.before !== null, round: { status: speakers.length ? 'running' : 'idle', speakers, canContinue: false }, supportsAttachments: true };
 }
 
@@ -417,6 +470,37 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
   const retryDelays = [30_000, 60_000, 120_000, 240_000, 480_000];
   let historyCache: Promise<ChatHistory> | undefined;
   const cache = () => openHistory ? historyCache ??= identity().then(openHistory).catch(error => { historyCache = undefined; throw error; }) : undefined;
+  /** A companion's profile: the preference row, else the companion store (absent on older servers or when switched off). */
+  async function companionProfile(actorId: string): Promise<unknown> {
+    const rows = await request<Array<{ key?: unknown; value?: unknown }>>(PROFILE_ONLY, 'GET', undefined, chatId(actorId));
+    const row = (Array.isArray(rows) ? rows : []).find(candidate => candidate?.key === 'companion.profile.v1');
+    if (row) return row.value;
+    try {
+      const entry = await request<{ deleted?: unknown; value?: unknown; blob?: unknown } | null>(PROFILE_STORED, 'GET', undefined, chatId(actorId));
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry) || entry.deleted !== false) return undefined;
+      if (entry.blob === true) return PROFILE_IN_BUCKET;
+      // Desktop keeps the value wrapped with the preference revision it supersedes (companion-cloud/store.ts).
+      const wrapped = entry.value as { companionStore?: unknown; value?: unknown } | null;
+      return wrapped && typeof wrapped === 'object' && wrapped.companionStore === 1 ? wrapped.value : entry.value;
+    } catch (error) {
+      // 404: an older server or the store switched off. Anything else is a failed read, not "no profile".
+      if (error && typeof error === 'object' && 'status' in error && error.status === 404) return undefined;
+      throw error;
+    }
+  }
+  async function readPlans(room: string, messages: readonly ChatMessage[]): Promise<ChatPlan[] | undefined> {
+    const ids = [...new Set(messages.map(messagePlanId).filter((id): id is string => id !== null))];
+    try {
+      // Like Desktop, request historical cards in the displayed window as well as open plans.
+      const plans = await request<ChatPlan[]>(`/conversations/${room}/plans${ids.length ? `?ids=${ids.join(',')}` : ''}`);
+      if (!Array.isArray(plans)) throw new Error('INVALID_CHAT_RESPONSE');
+      return plans;
+    } catch (error) {
+      // Only a missing route is an older server; access loss and failed reads stay errors.
+      if (chatRejection(error, 404, 'NOT_FOUND')) return undefined;
+      throw error;
+    }
+  }
   async function messagePage(room: string, query: string) {
     const stored = await cache();
     return stored ? stored.page<ChatMessage>(room, new URLSearchParams(query)) : request<ChatMessage[]>(`/conversations/${room}/messages?${query}`);
@@ -628,8 +712,9 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         if (actor.kind !== 'bot') continue;
         if (actor.externalId === 'cindy-default') { ids.push(actor.externalId); continue; }
         try {
-          const rows = await request<Array<{ key?: unknown; value?: unknown }>>('/preferences', 'GET', undefined, chatId(actor.id));
-          const profile = rows?.find(row => row.key === 'companion.profile.v1')?.value as { templateId?: unknown; soul?: unknown } | undefined;
+          const value = await companionProfile(actor.id);
+          if (value === PROFILE_IN_BUCKET) { if (previous.includes(actor.externalId)) ids.push(actor.externalId); continue; }
+          const profile = value as { templateId?: unknown; soul?: unknown } | undefined;
           if (profile?.templateId === 'cindy' || (typeof profile?.soul === 'string' && inferBotTemplatePresetId(profile.soul) === 'cindy')) ids.push(actor.externalId);
         } catch { if (previous.includes(actor.externalId)) ids.push(actor.externalId); }
       }
@@ -637,10 +722,11 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
     },
     /** The main computer has uploaded the profile snapshot another computer builds the companion from. */
     async hasProfileSnapshot(actorId: string): Promise<boolean> {
-      const rows = await request<Array<{ key?: unknown; value?: unknown }>>('/preferences', 'GET', undefined, chatId(actorId));
-      const row = (Array.isArray(rows) ? rows : []).find(candidate => candidate?.key === 'companion.profile.v1');
+      const stored = await companionProfile(actorId);
+      // Only Desktop writes the bucket copy, from a complete snapshot.
+      if (stored === PROFILE_IN_BUCKET) return true;
       // Same check as Desktop (companion-cloud/uploader.ts isCompanionProfileSnapshot): a complete profile.
-      const value = row?.value as Record<string, unknown> | null | undefined;
+      const value = stored as Record<string, unknown> | null | undefined;
       return !!value && typeof value === 'object' && !Array.isArray(value)
         && ['name', 'description', 'soul', 'systemPrompt', 'user'].every(field => typeof value[field] === 'string');
     },
@@ -738,14 +824,60 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       // Use the same execution snapshot for running status and stop controls.
       const executions = await request<ChatExecution[]>(`/conversations/${room}/executions`);
       const executionFailures = await failures(room, messages);
+      const plans = snapshot.room.kind === 'group' && !threadRootId ? await readPlans(room, messages) : undefined;
       const projection = await stored?.projection<ChatMessage>(room, []);
       if (projection && snapshot.cacheGeneration !== projection.generation) {
         if (attempt >= 2) throw new Error('CHAT_HISTORY_CHANGED');
         return this.load(roomId, undefined, threadRootId, attempt + 1);
       }
-      return { snapshot, messages, before, ...(projection ? { historyRevision: projection.generation } : {}),
+      return { snapshot, messages, before, ...(plans ? { plans } : {}), ...(projection ? { historyRevision: projection.generation } : {}),
         ...(threadRootId ? { threadRootId } : {}), failures: executionFailures,
         ...(Array.isArray(executions) ? { executions } : {}) };
+    },
+    async actPlan(roomId: string, plan: ChatPlan, input: ChatPlanAction, operationId: string, current = () => true, signal?: AbortSignal) {
+      const room = chatId(roomId);
+      const planId = chatId(plan.id);
+      if (!Number.isSafeInteger(plan.revision) || plan.revision < 1) throw new Error('INVALID_CHAT_RESPONSE');
+      if (!current()) throw new Error('OWNER_CHANGED');
+      const [snapshot, self] = await Promise.all([
+        request<ChatSnapshot>(`/conversations/${room}/snapshot`), identity(),
+      ]);
+      if (!current()) throw new Error('OWNER_CHANGED');
+      if (snapshot.room.id !== room || snapshot.room.kind !== 'group') throw new Error('GROUP_REQUIRED');
+      if (snapshot.room.archived) throw new Error('GROUP_ARCHIVED');
+      if (snapshot.room.dissolved_at) throw new Error('GROUP_DISSOLVED');
+      const manager = plan.creator_id === self ? undefined : chatGroupManager(snapshot, self);
+      if (plan.creator_id !== self && !manager) throw new Error('ROLE_REQUIRED');
+      const step = plan.steps.find(step => step.position === plan.current_step);
+      const action = input.action === 'dismiss' && plan.status === 'waiting' ? 'stop' : input.action;
+      if ((action === 'start' || action === 'dismiss') && plan.status !== 'proposed'
+        || action === 'stop' && plan.status !== 'waiting'
+        || action === 'continue' && (plan.status !== 'waiting' || !(step?.status === 'done' || plan.kind === 'talk' && step?.status === 'skipped'))
+        || action === 'retry' && (plan.status !== 'waiting' || step?.status !== 'failed')) throw new Error('PLAN_CLOSED');
+      let edit: { position: number; botId?: string; executionId?: string } | undefined;
+      if (input.action === 'skip') {
+        if (plan.kind !== 'talk' || !['running', 'waiting'].includes(plan.status) || plan.current_step === null) throw new Error('PLAN_CLOSED');
+        const target = plan.steps.find(step => step.position === input.position);
+        if (input.position > plan.current_step && plan.supportsPendingSkip === true && target?.status === 'pending' && !input.executionId) {
+          edit = { position: input.position };
+        } else {
+          if (plan.status !== 'running' || input.position !== plan.current_step
+            || !input.executionId || input.executionId !== plan.activeExecution?.id) throw new Error('PLAN_CLOSED');
+          if (plan.activeExecution.status !== 'queued') throw new Error('TURN_ALREADY_STARTED');
+          edit = { position: input.position, executionId: chatId(input.executionId) };
+        }
+      }
+      if (input.action === 'remove' || input.action === 'reassign') {
+        const target = plan.steps.find(step => step.position === input.position);
+        if (plan.kind === 'talk' || !target || (plan.status !== 'proposed'
+          && !(plan.status === 'waiting' && input.action === 'reassign' && ['pending', 'failed'].includes(target.status)))) throw new Error('PLAN_CLOSED');
+        if (input.action === 'remove' && plan.steps.length <= 1) throw new Error('INVALID_PARAMS');
+        if (input.action === 'reassign' && !snapshot.members.some(member => member.id === input.botId && member.kind === 'bot' && member.state === 'joined')) throw new Error('MEMBER_UNAVAILABLE');
+        edit = { position: input.position, ...(input.action === 'reassign' ? { botId: chatId(input.botId!) } : {}) };
+      }
+      // Use the revision the user saw. Never rebase a click onto a later step/revision.
+      await request(`/conversations/${room}/plans/${planId}`, 'POST',
+        { operationId, expectedRevision: plan.revision, action, ...edit }, manager?.id === self ? undefined : manager?.id, signal);
     },
     async stop(roomId: string, operationId: string) {
       const room = chatId(roomId);
@@ -781,8 +913,9 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       const updates = new Map(projection?.messages.map(message => [message.id, message]));
       const loaded = [...page.messages.map(message => updates.get(message.id) ?? message), ...messages];
       const executionFailures = await failures(roomId, loaded);
+      const plans = page.snapshot.room.kind === 'group' && !page.threadRootId ? await readPlans(chatId(roomId), loaded) : undefined;
       if (projection && (await cache())?.generation(roomId) !== projection.generation) return this.load(roomId, undefined, page.threadRootId);
-      return { ...page, messages: loaded, failures: executionFailures,
+      return { ...page, plans, messages: loaded, failures: executionFailures,
         before: messages.length === 100 ? chatCursor(messages.at(-1)!.seq) : null };
     },
     async media(roomId: string, mediaId: string, signal?: AbortSignal): Promise<BotGroupAttachment> {

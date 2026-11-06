@@ -235,8 +235,12 @@ export class GhostPipeDispatcher {
       return this.ownerBoundaryResult();
     }
 
+    const callId = request.callId && request.callId.length > 0 ? request.callId : randomUUID();
     // ── 按需拉起 ────────────────────────────────────────────────────────
     if (this.deps.runtimeStateOf(storagePart) !== 'running') {
+      this.deps.log?.info('ghost tool waiting for sandbox readiness', {
+        ghostId: storagePart, tool, callId, state: this.deps.runtimeStateOf(storagePart),
+      });
       const spawned = await this.deps.spawn(ghost);
       if (!spawned.ok) {
         return { ok: false, errorCode: 'GHOST_CRASHED', message: `插件启动失败:${spawned.reason}` };
@@ -245,9 +249,11 @@ export class GhostPipeDispatcher {
     if (!this.ownerScopeUsable(storagePart, ownerScopeSnapshot)) {
       return this.ownerBoundaryResult();
     }
+    if (this.deps.runtimeStateOf(storagePart) !== 'running') {
+      return { ok: false, errorCode: 'GHOST_CRASHED', message: '插件就绪前已停止' };
+    }
 
     // ── 派发 + 配对等待 ────────────────────────────────────────────────
-    const callId = request.callId && request.callId.length > 0 ? request.callId : randomUUID();
     let toolArgs = args;
     if (ghost.manifest.mail === true && ghost.manifest.mailReader?.tool === tool) {
       toolArgs = { ...args };

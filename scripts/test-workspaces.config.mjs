@@ -16,7 +16,8 @@ const vitestBin = (...args) => ({ type: 'packageBin', bin: 'vitest', args });
 //
 // Not everything moves. The heavy manual tiers (db, migration, git-integration)
 // stay on the default pool: they bootstrap runtime assets and drive real
-// Git/SQLite subprocesses, and none sits on the PR gate path. A workspace also
+// Git/SQLite subprocesses. CI selects DB/migration on database-related changes;
+// Git integration has its own job. A workspace also
 // opts out when its tests cannot survive a worker thread; the known blockers
 // are recorded at their call site below — desktop needs the webstorage flag on a
 // Node that installs those globals, and the flag cannot coexist with worker
@@ -122,6 +123,8 @@ const mobileGuardInclude = [
   // Whole-repo static scan of text colours (five neutral tiers, placeholders); reads production sources.
   'src/__tests__/textColorDiscipline.test.ts',
   'src/auth/__tests__/loginHandoffState.test.ts',
+  // DESIGN.md §16.2 copy budget: catalog strings against the login layout constants.
+  'src/auth/__tests__/loginConsentCopyBudget.test.ts',
   'src/__tests__/accountDeletion.test.ts',
   'src/__tests__/androidSessionInteractionParity.test.tsx',
   'src/__tests__/chatQuoteCrossDevice.test.ts',
@@ -132,6 +135,7 @@ const mobileGuardInclude = [
   'src/__tests__/homeChromeMenusAndroid.test.ts',
   'src/__tests__/homeDesktopFirst.test.ts',
   'src/__tests__/inactiveSessionListSubscriptions.test.ts',
+  'src/__tests__/managedVoiceRefineBudget.test.ts',
   'src/__tests__/mobileGoalCommands.test.ts',
   'src/__tests__/mobilePiRosterSessionBinding.test.ts',
   'src/__tests__/mobilePresentationRefresh.test.ts',
@@ -154,6 +158,7 @@ const mobileGuardInclude = [
 // in the explicit guard tier. Keeping an exact allowlist makes it impossible
 // for a new source scan to silently become part of the ordinary unit gate.
 const desktopGuardInclude = [
+  'src/renderer/components/settings/__tests__/settingsSearchCatalog.guard.test.ts',
   // Cross-file host/engine prompt ownership and remote-authorization isolation.
   'src/main/plugin-oauth/__tests__/runtimePrompt.test.ts',
   // Cross-hook voice stop/refine ownership and composer hydration race wiring.
@@ -181,6 +186,8 @@ const desktopGuardInclude = [
   'src/renderer/__tests__/xUsageGuideRiskContrast.test.ts',
   'src/main/__tests__/authHostedCallback.contract.test.ts',
   'src/main/__tests__/loginScenarioHarness.contract.test.ts',
+  // DESIGN.md §16.2 copy budget: locale catalogs against the login layout tokens.
+  'src/renderer/components/login/__tests__/loginConsentCopyBudget.test.ts',
   'src/main/__tests__/officialProfileMigrationPolicy.contract.test.ts',
   'src/renderer/__tests__/authContextRace.contract.test.ts',
   'src/main/__tests__/mobileClientPromptNote.contract.test.ts',
@@ -400,7 +407,7 @@ export default {
         },
         db: {
           status: 'manual',
-          reason: 'Desktop DB tests remain an explicit DB tier because they bootstrap runtime assets and cover localDb behavior outside fast unit.',
+          reason: 'Desktop DB tests are outside fast unit; CI selects core and related tests for database-related changes.',
           coverage: 'allowlist',
           preflight: [
             { type: 'packageScript', script: 'ensure-deps' },
@@ -412,7 +419,7 @@ export default {
         },
         migration: {
           status: 'manual',
-          reason: 'Migration replay remains an explicit DB tier because it replays SQLite history fixtures outside fast unit.',
+          reason: 'Migration replay uses real SQLite history fixtures; CI selects this tier for database-related changes.',
           coverage: 'allowlist',
           preflight: [
             { type: 'packageScript', script: 'ensure-deps' },

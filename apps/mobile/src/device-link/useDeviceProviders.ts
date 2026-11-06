@@ -114,7 +114,11 @@ export function useDeviceProviders(deviceId?: string, pickerOpen = false): UseDe
     let cancelled = false;
     const unsubscribeError = subscribeDeviceProvidersError(deviceId, (error) => {
       if (cancelled) return;
-      if (isDeviceProvidersUnsupportedError(error)) setPayload(EMPTY_PAYLOAD);
+      // 瞬时故障可继续显示有界快照；明确撤权、移除、旧端不支持或无效目录
+      // 属于永久失败，必须立刻清掉旧模型。
+      if (!canRecoverProviderRead(error) || isDeviceProvidersVisibilityNotReadyError(error)) {
+        setPayload(EMPTY_PAYLOAD);
+      }
       setReadyFor(null);
       setLoading(false);
       setError(formatRemoteError(error));

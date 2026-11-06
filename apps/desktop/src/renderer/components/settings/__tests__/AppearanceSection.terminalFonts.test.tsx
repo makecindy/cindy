@@ -89,15 +89,18 @@ function renderSettings() {
 }
 
 describe('AppearanceSection terminal fonts', () => {
-  it('registers search targets for the terminal font and size rows', () => {
+  // Replaces the catalog's JSX-text anchor scan (engineering-conventions §3.2):
+  // a source match cannot prove a search result has a rendered destination.
+  // Unit: each font search result must resolve to its real row.
+  it('registers rendered search targets for all font and size rows', () => {
     renderSettings();
-    for (const key of ['terminalFamily', 'terminalSize']) {
+    for (const key of ['uiFamily', 'uiSize', 'codeFamily', 'codeSize', 'terminalFamily', 'terminalSize'] as const) {
       const entry = appearanceSearch.entries.find(
         (item) => item.id === `settings.appearance.font.${key}.label`,
       );
       expect(entry).toBeDefined();
       expect(document.getElementById(entry!.targetId)?.textContent).toContain(
-        key === 'terminalFamily' ? '终端字体' : '终端字号',
+        zhCN.settings.appearance.font[key].label,
       );
     }
   });
@@ -106,6 +109,8 @@ describe('AppearanceSection terminal fonts', () => {
     renderSettings();
     const terminalPicker = screen.getByRole('button', { name: '选择终端字体' });
     const codePicker = screen.getByRole('button', { name: '选择代码字体' });
+    expect(terminalPicker.getAttribute('data-setting-id')).toBe('settings.appearance.font.terminalFamily.label');
+    expect(codePicker.getAttribute('data-setting-id')).toBe('settings.appearance.font.codeFamily.label');
 
     fireEvent.click(terminalPicker);
     fireEvent.change(screen.getByPlaceholderText(zhCN.settings.appearance.font.customPlaceholder), {
