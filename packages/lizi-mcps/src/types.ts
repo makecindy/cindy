@@ -331,6 +331,27 @@ export interface SchedulerMcpDeps {
    * (同 MemoryMcpDeps.searchSessions 模式)。
    */
   hookScript?: SchedulerHookScriptService;
+  /** 本机 Webhook 触发的状态(host 注入);不含密钥。缺省 = schedule_get 不带 webhookStatus。 */
+  webhookStatus?: (schedule: import('@cindy/maker-scheduler').Schedule) => {
+    receiver: string;
+    url?: string;
+    hasSecret: boolean;
+    lastReceivedAt?: number;
+    received: number;
+    ignored: number;
+    connected?: boolean;
+    problem?: string;
+    quotaLimit?: number;
+    quotaResetAt?: number;
+  } | null;
+  /** 这台电脑的 Webhook 接收方;signed-out / unavailable 时拒绝开启触发条件。缺省 = 不检查。 */
+  webhookReceiver?: () => 'cloud' | 'local' | 'signed-out' | 'unavailable';
+  /** 同账号云端地址管理；只返回安全摘要，不暴露签名密钥。 */
+  webhookManagement?: {
+    list(): Promise<unknown>;
+    release(id: string): Promise<void>;
+    restore(scheduleId: string): Promise<void>;
+  };
   /**
    * 本机定时任务可选的 Agent 运行位置与各处的模型(与协同 Worker 的 list_available_models
    * 同一份 host 实现)。agentDeviceId:null = 本机。缺省 = schedule_list_models 不注册。

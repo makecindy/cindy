@@ -7344,6 +7344,27 @@ interface ElectronAPI {
       pause: (id: string) => Promise<unknown>;
       resume: (id: string) => Promise<unknown>;
       runNow: (id: string) => Promise<{ runId: string }>;
+      /** Webhook 触发的接收地址与最近投递情况;未开启时返回 null。 */
+      webhookReceiver: () => Promise<'cloud' | 'local' | 'signed-out' | 'unavailable'>;
+      webhookStatus: (id: string) => Promise<{
+        receiver: 'cloud' | 'local' | 'signed-out' | 'unavailable';
+        url?: string;
+        hasSecret: boolean;
+        lastReceivedAt?: number;
+        received: number;
+        ignored: number;
+        connected?: boolean;
+        problem?: 'limit' | 'failed' | 'suspended' | 'quota' | 'released';
+        quotaLimit?: number;
+        quotaResetAt?: number;
+      } | null>;
+      /** 设置签名密钥:传入时保存从发送方复制的密钥;不传时生成新密钥,明文只在这次返回。仅任务所在电脑可用。 */
+      setWebhookSecret: (id: string, secret?: string) => Promise<{ secret?: string }>;
+      /** 换一个新的接收地址,旧地址立即失效。仅任务所在电脑可用。 */
+      rotateWebhookUrl: (id: string) => Promise<{ url: string }>;
+      webhookAccount: () => Promise<import('../shared/webhookAccount').WebhookAccountOverview>;
+      releaseWebhookEndpoint: (id: string) => Promise<void>;
+      restoreWebhookEndpoint: (id: string) => Promise<void>;
       /** script 任务能力选择器:各能力的运行时可用性(依赖意识的装入/唤醒态)。 */
       scriptCapabilityStatus: () => Promise<{
         statuses: Array<{

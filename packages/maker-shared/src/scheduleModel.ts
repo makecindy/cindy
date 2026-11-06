@@ -348,6 +348,9 @@ function describeScheduleTiming(
   localizer?: PresentationLocalizer,
 ): string {
   if (schedule.manual) {
+    if (schedule.webhookTrigger) {
+      return presentationText(localizer, 'devices.automations.presentation.schedule.webhook', 'Webhook 触发');
+    }
     return presentationText(localizer, 'devices.automations.presentation.schedule.manual', '手动触发');
   }
   if (typeof schedule.intervalMs === 'number' && schedule.intervalMs > 0) {

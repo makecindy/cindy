@@ -8530,6 +8530,34 @@ contextBridge.exposeInMainWorld('electronAPI', {
       resume: (id: string): Promise<unknown> => ipcRenderer.invoke('maker:schedule:resume', id),
       runNow: (id: string): Promise<{ runId: string }> =>
         ipcRenderer.invoke('maker:schedule:run-now', id),
+      /** 这台电脑能否接收 Webhook;signed-out / unavailable 时隐藏开关。 */
+      webhookReceiver: (): Promise<'cloud' | 'local' | 'signed-out' | 'unavailable'> =>
+        ipcRenderer.invoke('maker:schedule:webhook-receiver'),
+      /** Webhook 触发的接收地址与最近投递情况;未开启时返回 null。 */
+      webhookStatus: (id: string): Promise<{
+        receiver: 'cloud' | 'local' | 'signed-out' | 'unavailable';
+        url?: string;
+        hasSecret: boolean;
+        lastReceivedAt?: number;
+        received: number;
+        ignored: number;
+        connected?: boolean;
+        problem?: 'limit' | 'failed' | 'suspended' | 'quota' | 'released';
+        quotaLimit?: number;
+        quotaResetAt?: number;
+      } | null> => ipcRenderer.invoke('maker:schedule:webhook-status', id),
+      /** 设置签名密钥:传入时保存从发送方复制的密钥;不传时生成新密钥,明文只在这次返回。仅任务所在电脑可用。 */
+      setWebhookSecret: (id: string, secret?: string): Promise<{ secret?: string }> =>
+        ipcRenderer.invoke('maker:schedule:webhook-set-secret', id, secret),
+      /** 换一个新的接收地址,旧地址立即失效。仅任务所在电脑可用。 */
+      rotateWebhookUrl: (id: string): Promise<{ url: string }> =>
+        ipcRenderer.invoke('maker:schedule:webhook-rotate-url', id),
+      webhookAccount: (): Promise<import('../shared/webhookAccount').WebhookAccountOverview> =>
+        ipcRenderer.invoke('maker:schedule:webhook-account'),
+      releaseWebhookEndpoint: (id: string): Promise<void> =>
+        ipcRenderer.invoke('maker:schedule:webhook-release', id),
+      restoreWebhookEndpoint: (id: string): Promise<void> =>
+        ipcRenderer.invoke('maker:schedule:webhook-restore', id),
       /** script 任务能力选择器:各能力的运行时可用性(依赖意识的装入/唤醒态)。 */
       scriptCapabilityStatus: (): Promise<{
         statuses: Array<{
