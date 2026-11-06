@@ -23,7 +23,6 @@
 
 import { stripTrailingPathSeparators } from '../../shared/pathText';
 import { isWindowsPathLike } from '../../shared/workingDir';
-import { isWindowsPathLike } from '../../shared/workingDir';
 
 /** Image extension whitelist. Case-insensitive. Allows `?v=2`-style suffix. */
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|bmp|ico)(\?.*)?$/i;
