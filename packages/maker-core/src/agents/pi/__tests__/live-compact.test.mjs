@@ -18,6 +18,8 @@ const FAKE_GOOGLE_KEY = ['AIza', 'FixturePlaceholderABCDEFGHIJKLMNOPQRST'].join(
 const FAKE_PASSWORD = ['fixture', 'plain-password'].join('-');
 const FAKE_DB_PASSWORD = ['fixture', 'db-password'].join('-');
 const FAKE_OPENAI_KEY_2 = ['sk', 'fixture-openai-key-0987654321'].join('-');
+const FAKE_REFRESH_TOKEN = ['fixture', 'refresh', 'token', '0123456789'].join('-');
+const FAKE_STRIPE_KEY = ['sk', 'live', 'fixturestripeplaceholder0123'].join('_');
 
 const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, writeOwner, orderedDrainDrafts } = await import(
   '../../../../extensions/live-compact/index.ts'
@@ -99,6 +101,14 @@ describe('live compact spine selection', () => {
     expect(json).not.toContain('example-password-value');
     expect(json).not.toContain('example-api-key-value');
     expect(json).toContain('"password":"[REDACTED]"');
+    // 带后缀的键名与 Stripe 分段前缀:JSON 的 refresh_token、X_SECRET_KEY=、sk_live_…
+    const more = redactSecrets([
+      `{"refresh_token":"${FAKE_REFRESH_TOKEN}"}`,
+      `STRIPE_SECRET_KEY=${FAKE_STRIPE_KEY}`,
+    ].join(String.fromCharCode(10)));
+    expect(more).not.toContain(FAKE_REFRESH_TOKEN);
+    expect(more).not.toContain(FAKE_STRIPE_KEY);
+    expect(more).toContain('[REDACTED]');
   });
 
   it('masks cloud keys, connection-string passwords and PEM blocks', () => {

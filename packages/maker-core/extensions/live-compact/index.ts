@@ -1141,9 +1141,12 @@ function estimateTokens(message: any): number {
 // 写入前对常见凭证形态打码 —— 卡片里的路径是给模型 read 的,读到打码版比读到明文密钥安全。
 const REDACT_RULES: Array<[RegExp, string]> = [
   // 键名后允许再跟一个引号:JSON 形态 `{"password":"..."}` 的闭引号夹在键与冒号之间。
-  [/((?:api[_-]?key|access[_-]?token|secret|password|passwd|client[_-]?secret)["'`]?\s*[=:]\s*)(["'`]?)([^\s"'`]{8,})/gi, "$1$2[REDACTED]"],
+  // 键名要覆盖带后缀的写法(`SECRET_KEY`、`refresh_token`),否则 `X_SECRET_KEY=...` 整条不匹配。
+  [/((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|secret[_-]?key|private[_-]?key|password|passwd|secret)["'`]?\s*[=:]\s*)(["'`]?)([^\s"'`]{8,})/gi, "$1$2[REDACTED]"],
   [/(?<![A-Za-z0-9])Bearer\s+[A-Za-z0-9._-]{16,}/gi, "Bearer [REDACTED]"],
   [/(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}/g, "[REDACTED]"],
+  // Stripe 形态是 `sk_live_...` / `rk_test_...`:前缀分段,上一条的 `sk-` 匹配不到。
+  [/(?<![A-Za-z0-9])(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}/g, "[REDACTED]"],
   [/(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9]{20,}|xox[abps]-[A-Za-z0-9-]{10,})/g, "[REDACTED]"],
   // 云厂商固定前缀凭证:AWS AK/ASIA、Google AIza、Stripe 的 live 前缀。
   [/(?<![A-Za-z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}/g, "[REDACTED]"],
