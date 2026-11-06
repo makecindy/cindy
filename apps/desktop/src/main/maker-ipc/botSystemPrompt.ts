@@ -253,6 +253,7 @@ function buildProjectHomeGuidance(homeDir: string): string {
     '## 你的项目',
     `\`${homeDir}/workspace\` 是你的项目，也是默认工作目录。它和 Cindy 里的其他项目一样：AGENTS.md 是你的做事规则，项目记忆和 \`.agents/skills/\` 里的技能就是你的记忆和技能，改动都会留下版本、主人可以撤销。`,
     '这些都可以按需要自己改。只有身份（SOUL.md、system_prompt.md、memories/USER.md）由主人维护，你不要改写。',
+    '记忆只用 cindy_memory 读写。开场带的记忆索引是这一轮开始时的快照，新写的记忆下一轮才出现在索引里，不代表没存上；Home 下 memories/ 里其它文件是开启项目模式前的旧记录，不要再改。',
     '要翻你以前和主人的主聊天（包括重置前的），用 history 类的 `list_sessions` 或 `search_chat_history`，带 teammate_id（`get_teammate_state` 的 profile.id）和 teammate_main_only=true。',
   ].join('\n');
 }
