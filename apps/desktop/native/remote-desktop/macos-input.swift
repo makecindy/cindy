@@ -1051,13 +1051,7 @@ final class AwayGuard {
   var tap: CFMachPort?
   private var ended = false
   private let lockSession: () -> Bool
-  private let isLocked: () -> Bool
-  // The app in front when the cover went up; unlocking hands this Mac back to it.
-  private let previousApp = NSWorkspace.shared.frontmostApplication
-  init(lockSession: @escaping () -> Bool, isLocked: @escaping () -> Bool) {
-    self.lockSession = lockSession
-    self.isLocked = isLocked
-  }
+  init(lockSession: @escaping () -> Bool) { self.lockSession = lockSession }
   func finish(lock: Bool) {
     if ended { return }
     ended = true
@@ -1066,24 +1060,13 @@ final class AwayGuard {
       guard lockSession() else { print("lock-failed"); fflush(stdout); exit(3) }
       // The lock screen owns input now; never hold the owner's keys or clicks after unlock.
       DispatchQueue.main.sync { if let tap = tap { CGEvent.tapEnable(tap: tap, enable: false) } }
-      print("locked"); fflush(stdout)
-      // Removing the masks can leave the owner's app behind other windows after unlock.
-      let deadline = Date().addingTimeInterval(8 * 3600)
-      while Date() < deadline && isLocked() { usleep(250_000) }
-      if !isLocked() {
-        DispatchQueue.main.sync {
-          _ = previousApp?.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
-        }
-      }
-      exit(0)
+      print("locked"); fflush(stdout); exit(0)
     }
   }
 }
 if CommandLine.arguments == [CommandLine.arguments[0], "--away-guard"] {
   // Locking is the only action left once Main is gone; it never needs Main's authority.
-  let away = AwayGuard(
-    lockSession: { lockOwnedSession(requireCaller: false) },
-    isLocked: { ownedConsoleSession()?["CGSSessionScreenIsLocked"] as? Bool == true })
+  let away = AwayGuard(lockSession: { lockOwnedSession(requireCaller: false) })
   var heartbeat = Date()
   let events: [CGEventType] = [.keyDown, .keyUp, .flagsChanged, .leftMouseDown, .leftMouseUp,
     .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp, .mouseMoved,
@@ -1099,8 +1082,11 @@ if CommandLine.arguments == [CommandLine.arguments[0], "--away-guard"] {
       let physical = event.getIntegerValueField(.eventSourceUnixProcessID) == 0
         && event.getIntegerValueField(.eventSourceStateID) == Int64(CGEventSourceStateID.hidSystemState.rawValue)
       if !physical { return Unmanaged.passUnretained(event) }
-      // Someone is at this Mac: swallow everything until the system lock is up.
-      away.finish(lock: true)
+      // Pointer movement alone is swallowed but does not lock: idle mice and wireless
+      // receivers report small movements on their own (2026-11-06: every preview locked
+      // within 0.1 s). A key, modifier, click or scroll means someone is at this Mac.
+      let moved = [CGEventType.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains(type)
+      if !moved { away.finish(lock: true) }
       return nil
     }, userInfo: Unmanaged.passUnretained(away).toOpaque()), let runSource = CFMachPortCreateRunLoopSource(nil, tap, 0) else {
       print("error"); fflush(stdout); exit(2)

@@ -103,8 +103,8 @@ export interface AwayGuardInputMonitor extends PrivacyInputMonitor {
 /** `--away-guard`: the helper itself turns physical input, a missed heartbeat or a
  * dead Main into the system lock. `stop()` releases it without a lock (the screen is
  * already locked, or remote desktop takes over the display). `ended` runs once: on the
- * confirmed lock, or when the helper is gone. After the lock the helper stops reading
- * input and lingers only to bring the owner's app back to the front after unlock.
+ * confirmed lock, or when the helper is gone. The helper stops reading input as soon
+ * as the lock is up and then exits.
  */
 export async function watchAwayGuardInput(
   ended: (locked: boolean) => void,
@@ -174,7 +174,7 @@ export async function watchAwayGuardInput(
     report();
   });
   const finish = (command: 'lock' | 'release', timeoutMs: number): Promise<void> => {
-    // Once locked, the helper is only waiting to restore the owner's app; leave it be.
+    // Once locked, the helper has stopped reading input and is exiting by itself.
     if (locked) return Promise.resolve();
     write(command);
     const timer = setTimeout(() => child.kill(), timeoutMs);

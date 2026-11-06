@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { ipcMain, powerSaveBlocker, screen } from 'electron';
+import { app, BrowserWindow, ipcMain, powerMonitor, powerSaveBlocker, screen } from 'electron';
 import { createLogger } from '../logger';
 import { t } from '../i18n';
 import { onQuit } from '../lifecycle';
@@ -57,6 +57,20 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
   let awayAfterMs = DEFAULT_AWAY_MS;
   let displaySleepReadAt = 0;
   let generation = 0;
+  // Covering every Space briefly turns Cindy into a background app (Electron's
+  // visibleOnFullScreen), which drops its windows behind everything else and hides the
+  // Dock icon for a moment (2026-11-06: the test build looked like it had quit after
+  // unlocking). Give the owner back the Cindy window they were using.
+  let restoreWindow: BrowserWindow | null = null;
+  const restoreFront = () => {
+    const window = restoreWindow;
+    restoreWindow = null;
+    if (!window || window.isDestroyed() || deps.screenLocked()) return;
+    window.show();
+    window.focus();
+    app.focus({ steal: true });
+  };
+  powerMonitor.on('unlock-screen', restoreFront);
 
   const refreshDisplaySleep = () => {
     if (Date.now() - displaySleepReadAt < DISPLAY_SLEEP_REFRESH_MS) return;
@@ -128,7 +142,13 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     },
     showMasks: async () => {
       const current = ++generation;
-      await masks.set(true, () => current === generation);
+      restoreWindow = BrowserWindow.getFocusedWindow();
+      try {
+        await masks.set(true, () => current === generation);
+      } catch (error) {
+        restoreFront();
+        throw error;
+      }
     },
     lockAndHideMasks: async () => {
       generation++;
@@ -139,6 +159,7 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     hideMasks: () => {
       generation++;
       masks.stop();
+      restoreFront();
     },
     now: Date.now,
     log: (event, detail) => log.info(event, detail ?? {}),

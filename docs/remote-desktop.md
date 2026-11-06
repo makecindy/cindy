@@ -42,8 +42,12 @@ gets a mask and Agents keep working behind it: masks ignore mouse events and the
 `--away-guard` helper passes injected input. Owner absence is the HID idle time minus
 `cindy_computer`'s own dispatch, so Agent clicks never count as the owner.
 
-The helper consumes physical input and turns it into the fixed system lock shortcut;
-the owner unlocks with Touch ID or password through macOS itself. It also locks on
+The helper consumes physical input; a key, modifier, click or scroll turns into the
+fixed system lock shortcut, while pointer movement alone is swallowed without locking
+(idle mice and wireless receivers report movement on their own). The owner unlocks with
+Touch ID or password through macOS itself, and the tap is disabled as soon as the lock
+is up. Covering every Space briefly makes Electron a background app, so Main brings the
+Cindy window that was focused back to the front after unlock. It also locks on
 stdin EOF, a missed heartbeat or a dead parent, so a crashed Cindy leaves a locked
 screen rather than an uncovered desktop. Main locks before removing masks when work
 ends, the setting is turned off, a display is added, or a mask window fails. Remote
