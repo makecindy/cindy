@@ -22,6 +22,25 @@ export interface ProviderShareReceivedSnapshot {
   /** 仅这些区域的名单完整，可据此清理已撤权收藏；其它区域不受影响。 */
   confirmedRegions: readonly ProviderShareReceived['owner']['region'][];
   received: readonly ProviderShareReceived[];
+  /** false = 分享运行时已停止/账号边界；empty + false 是权威清空，不是暂时投影。 */
+  active?: boolean;
+  /** Per-region remaining display budget measured by Main's wall and monotonic clocks. */
+  regionBudget?: Partial<Record<ProviderShareReceived['owner']['region'], ProviderShareRegionBudget>>;
+}
+
+/**
+ * Main -> renderer only. id identifies the authoritative list request that
+ * produced this window, so repeated reads cannot restart it. remainingMs is
+ * calculated from both clocks in Main; generatedAt lets the IPC hop subtract
+ * the time spent crossing processes. This is a display-trust window, never an
+ * authorization or offline grant.
+ */
+export interface ProviderShareRegionBudget {
+  id: string;
+  /** Monotonic confirmation order assigned by Main; never a wall-clock comparison. */
+  order?: number;
+  remainingMs: number;
+  generatedAt: number;
 }
 
 /** 本机收藏作为重启后的查询线索，不作为授权或撤权依据。 */
@@ -206,6 +225,8 @@ export type ProviderShareCommand =
   | { action: 'reset-run-limits' }
   | { action: 'set-run-limits'; limits: Partial<RemoteAgentLimits> }
   | { action: 'owned'; range: ProviderShareUsageRange }
+  /** 设置页分区只读快照，不计算用量或延长快速拉取窗口。 */
+  | { action: 'shared-provider-ids' }
   /** 这个供应商按使用方的用量(本机与我的其他电脑)。不依赖分享服务。 */
   | { action: 'own-usage'; providerId: string; range: ProviderShareUsageRange }
   /** 这个供应商的用量按天明细(你自己、转来的与分享的人)，「用量」块据此按时间段、人与电脑筛选。 */
@@ -245,6 +266,7 @@ export interface ProviderShareCommandResult {
   'set-run-limits': RemoteAgentLimitsView;
   'reset-run-limits': RemoteAgentLimitsView;
   owned: ProviderShareOwnerState;
+  'shared-provider-ids': { ready: boolean; providerIds: string[] };
   'own-usage': ProviderOwnUsageView;
   'usage-history': ProviderUsageHistoryView;
   'create-link': ProviderShareLinkCreated;

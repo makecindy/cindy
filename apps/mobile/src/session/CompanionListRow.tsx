@@ -1,10 +1,10 @@
+import { TEAMMATE_AVATAR } from '@cindy/maker-shared/teammate-status';
 /**
  * 首页伙伴段的一行（伙伴与群聊共用，对齐任务行的几何）：固定 78 高；44 头像距左 16，文字列从 72 开始，
  * 右内边距 16；分割线画在文字列底边，从 72 一直到屏幕右缘，最后一行不画。
  *
- * 第一行：名字（18/28 500）+ 同名时的「· 电脑名」+ 右侧时间位。时间位只放一样东西：时间，或工作中
- * 的中性转圈。第二行：预览（15/26）+ 右侧未读蓝点。需要你处理的事写成预览开头的前缀（正文色
- * 500），不再用彩色点。见 apps/mobile/docs/mobile-design-guide.md §3 的列表节奏例外。
+ * 第一行：名字（18/28 500）+ 同名时的「· 电脑名」+ 右侧时间位。时间位只放一样东西：时间。第二行：预览（15/26）+ 可选未读数量。
+ * 伙伴与群聊的头像右下角共用实心状态点，待确认也通过预览前缀呈现。见 apps/mobile/docs/mobile-design-guide.md §3 的列表节奏例外。
  */
 import type { ReactElement, ReactNode } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
@@ -14,9 +14,9 @@ import { fontWeight, lineHeight, radius, spacing, typeScale, useThemedStyles, ty
 import { SessionRightSpinner } from './SessionRightSpinner';
 
 export const COMPANION_ROW_HEIGHT = 78;
-export const COMPANION_ROW_AVATAR_SIZE = 44;
-/** Unread / presence dots: the task row's 10pt status dot. */
-export const COMPANION_ROW_DOT_SIZE = 10;
+export const COMPANION_ROW_AVATAR_SIZE = TEAMMATE_AVATAR.row;
+/** Shared 10pt status point; its 2pt isolation border is outside this size. */
+export const COMPANION_ROW_DOT_SIZE = TEAMMATE_AVATAR.dot;
 const LEFT_INSET = spacing.lg;
 
 export type CompanionRowTrailing = { kind: 'time'; text: string } | { kind: 'working' };
@@ -25,7 +25,7 @@ export function CompanionListRow({
   avatar, title, device, trailing, preview, previewTone = 'secondary', previewPrefix, previewPrefixTestID,
   unread = false, unreadCount, mentioned = false, unreadLabel, disabled = false, last = false, accessibilityLabel, onPress, testID,
 }: {
-  /** Content of the 44pt avatar box (the caller draws presence dot and ring inside it). */
+  /** Content of the 44pt avatar box (the caller draws the shared status dot). */
   avatar: ReactNode;
   title: string;
   /** Computer name, only when two rows share a name. */

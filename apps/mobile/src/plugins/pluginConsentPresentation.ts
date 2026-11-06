@@ -30,11 +30,13 @@ export function pluginConsentPresentation(
   return {
     title: facts.name + " · " + facts.version,
     identity: facts.ghostId,
+    trust: consent.trust ? t("plugins.management.trust." + consent.trust) : undefined,
     origin: [
       t("plugins.notice.consentOrigin." + consent.origin),
       consent.originLabel,
       t("plugins.notice.initiator." + consent.initiator),
-      consent.purpose ? t("plugins.notice.taskCapability") : "",
+      consent.purpose === "ui-capability" ? t("plugins.uiApproval.purpose")
+        : consent.purpose === "task-capability" ? t("plugins.notice.taskCapability") : "",
     ]
       .filter(Boolean)
       .join(" · "),

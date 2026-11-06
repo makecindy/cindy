@@ -123,6 +123,16 @@ vi.mock('@/components/sidebar/WorktreeBadge', () => ({
       : null,
 }));
 
+vi.mock('@/lib/worktreeRemovalWarning', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/worktreeRemovalWarning')>(),
+  prefetchDirtyWorktreeForRemoval: vi.fn(),
+}));
+
+vi.mock('@/features/device-link/useDeviceLinkDeviceList', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/features/device-link/useDeviceLinkDeviceList')>(),
+  useDeviceLinkDeviceList: () => [],
+}));
+
 vi.mock('@/contexts/WorktreeContext', () => {
   const reportLiveness = vi.fn();
   const refreshObserved = vi.fn();
@@ -360,6 +370,25 @@ describe('SessionCard visual cases', () => {
     mocks.pendingPluginSetupSessionIds.add(visualCase.session.id);
     renderCase(visualCase.id, { variant: 'list', navigationOnly: true });
     expect(screen.getByText('等待插件设置')).toBeTruthy();
+  });
+
+  // Regression: remote-supplier tasks have local messages, but agentDeviceId hid export.
+  // The existing shared-task menu cases cover guests, not owner tasks using a remote agent.
+  // Unit tier: render the production rows and inspect the menu opened by a context click.
+  // Standalone file: 5.28s on Windows; existing imports take 3.50s, test bodies 0.76s.
+  it.each(['list', 'text'] as const)('offers history export for a remote supplier in the %s row', async (variant) => {
+    const session = { ...sessionCardVisualCases[0].session, agentDeviceId: 'remote-device' };
+    const props = {
+      session, isActive: false, isRunning: false, hasAttentionNotification: false,
+      onClick: vi.fn(), onRename: vi.fn(), onAction: vi.fn(), onTogglePin: vi.fn(),
+    };
+    const view = render(variant === 'list'
+      ? createElement(SessionCard, { ...props, variant: 'list' })
+      : createElement(SessionItem, props));
+    await act(async () => {
+      fireEvent.contextMenu(view.container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]')!);
+    });
+    expect(screen.getByRole('menuitem', { name: 'ccAgent.sidebar.sessionMenu.exportShare' })).toBeTruthy();
   });
 
   it.each(['list', 'text'] as const)('shows only leave sharing on a guest %s row', (variant) => {

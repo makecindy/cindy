@@ -14,6 +14,7 @@
 
 import { ipcMain, type IpcMainInvokeEvent } from 'electron';
 import { createLogger } from '../logger';
+import { measureTraceOperation, TRACE_OPERATIONS } from '../performance-trace/measure';
 
 const log = createLogger('device-link-invoke-registry');
 
@@ -45,8 +46,11 @@ export function installInvokeCapture(): void {
 
   const original = ipcMain.handle.bind(ipcMain);
   ipcMain.handle = ((channel: string, listener: InvokeHandler) => {
-    handlers.set(channel, listener);
-    return original(channel, listener);
+    const measured: InvokeHandler = TRACE_OPERATIONS.has(channel)
+      ? (event, ...args) => measureTraceOperation(channel, () => listener(event, ...args))
+      : listener;
+    handlers.set(channel, measured);
+    return original(channel, measured);
   }) as typeof ipcMain.handle;
 
   // removeHandler 也同步清映射,避免重注册后映射指向旧 handler

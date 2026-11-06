@@ -5,9 +5,11 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { registerPluginContributionsIpc } from '../../../../main/plugin-contributions/registerIpc';
-import type { ContributionReleaseView, PluginContributionsApi } from '../../../../shared/pluginContributions';
+import type { ContributionReleaseView, PluginContributionsApi, PluginReviewUpdate } from '../../../../shared/pluginContributions';
 import { MyPluginsPage } from '../MyPluginsPage';
 
+const review = vi.hoisted(() => ({ updates: [] as PluginReviewUpdate[], markRead: vi.fn(), refresh: vi.fn() }));
+vi.mock('@/contexts/PluginReviewUpdatesContext', () => ({ usePluginReviewUpdates: () => review }));
 const host = vi.hoisted(() => ({
   handlers: new Map<string, (event: unknown, raw: unknown) => Promise<unknown>>(),
   cancelReview: vi.fn(),
@@ -51,11 +53,11 @@ const pending: ContributionReleaseView = {
   content: { name: 'My Plugin', description: 'Description', iconUrl: null, permissions: [], manifestView: { releaseNotes: 'Complete version changes' } },
 };
 
-function view() {
+function view(options: { market?: 'disabled' | 'archived'; queriedAt?: string } = {}) {
   let current = pending;
   const plugin = () => ({
     pluginId: 'plugin', name: 'My Plugin', iconUrl: null, updatedAt: at,
-    market: { state: 'not_listed' as const, version: null, releaseId: null, reason: null },
+    market: { state: options.market ?? 'not_listed' as const, version: null, releaseId: null, reason: options.market ? '停止维护，现已归档' : null },
     latestSubmission: current, actions: { submitUpdate: true, viewMarket: false }, localInstanceId: null,
   });
   const api: PluginContributionsApi = {
@@ -63,7 +65,7 @@ function view() {
     prepare: vi.fn(), submit: vi.fn(), cancel: vi.fn(), discard: vi.fn(), status: vi.fn(),
     list: async () => ({ plugins: [plugin()], nextCursor: null, queriedAt: at }),
     setAnonymity: vi.fn(),
-    detail: async () => ({ plugin: plugin(), history: [], nextCursor: null, queriedAt: at }),
+    detail: async () => ({ plugin: plugin(), history: options.market ? [{ eventId: 'archive', type: 'disabled', ...(options.market === 'archived' ? { pluginStatus: 'archived' as const } : {}), at, releaseId: null, version: null, submissionId: null, revision: null, reason: '归档处理原因' }] : [], nextCursor: null, queriedAt: options.queriedAt ?? at }),
     releases: async () => ({ releases: [current], nextCursor: null, queriedAt: at }),
     submission: async () => current,
     // Match preload's real envelope, then exercise the actual strict Main IPC handler.
@@ -87,7 +89,8 @@ function view() {
 }
 
 beforeAll(() => registerPluginContributionsIpc());
-beforeEach(() => { host.cancelReview.mockReset(); });
+beforeEach(() => { host.cancelReview.mockReset(); review.updates = []; review.markRead.mockReset().mockResolvedValue(undefined); review.refresh.mockReset().mockResolvedValue(undefined); vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible'); });
+afterEach(() => vi.restoreAllMocks());
 afterEach(cleanup);
 
 describe('review cancellation through the real confirmation and IPC validation', () => {
@@ -131,5 +134,28 @@ describe('review cancellation through the real confirmation and IPC validation',
     expect(host.cancelReview).toHaveBeenCalledTimes(1);
     expect((screen.getByRole('button', { name: `${prefix}.cancelReview` }) as HTMLButtonElement).disabled).toBe(false);
     expect(screen.getByText('Complete version changes')).toBeTruthy();
+  });
+});
+
+// Production detail visibility is the acknowledgement boundary for market results.
+// Existing cancellation tests do not cover archive reasons or stale detail reads.
+describe('market result visibility', () => {
+  it('shows the market reason and compatible archive event, and acknowledges it after a fresh detail read', async () => {
+    review.updates = [{ pluginId: 'plugin', key: 'archive', status: 'archived', decidedAt: at, unread: true,
+      releaseId: null, version: null, sha256: null, revision: null }];
+    view({ market: 'archived' });
+    expect(await screen.findByText('停止维护，现已归档')).toBeTruthy();
+    await waitFor(() => expect(review.markRead).toHaveBeenCalledWith('plugin', 'archive'));
+    fireEvent.click(screen.getByText(`${prefix}.history`));
+    expect(await screen.findByText(`${prefix}.event.archived`)).toBeTruthy();
+    expect(screen.getByText('归档处理原因')).toBeTruthy();
+  });
+  it('keeps a market result unread when the displayed detail predates that event', async () => {
+    review.updates = [{ pluginId: 'plugin', key: 'disabled', status: 'disabled', decidedAt: '2026-10-17T00:00:00.000Z', unread: true,
+      releaseId: null, version: null, sha256: null, revision: null }];
+    view({ market: 'disabled', queriedAt: at });
+    await screen.findByText('停止维护，现已归档');
+    expect(review.markRead).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: `${prefix}.viewMarketResult` })).toBeTruthy();
   });
 });

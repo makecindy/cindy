@@ -25,6 +25,7 @@ const workspaceTsSourcePackages = [
   'device-link-protocol',
   'maker-shared',
   'model-providers',
+  'plugin-protocol',
   'voice-input-core',
 ];
 

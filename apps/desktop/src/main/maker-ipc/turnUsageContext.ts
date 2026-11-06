@@ -3,6 +3,7 @@ import { getSessionProvider } from '../maker-host/session-provider-store.js';
 import { isUserProviderSession } from '../maker-host/provider-route.js';
 import { getSessionFastMode } from '../maker-host/session-effort-store.js';
 import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.js';
+import type { UsageBillingSource } from '@cindy/maker-shared/usage-cost-details';
 import { isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId } from '../maker-host/subscription-account-auth.js';
 
 /** Non-secret billing identity captured with the existing product-turn metadata.
@@ -15,6 +16,7 @@ export function captureTurnUsageContext(sessionId: string) {
     : undefined;
   return {
     providerId,
+    providerName: getActiveCatalog().providers.find(provider => provider.id === providerId)?.name,
     accessKind,
     isUserProviderRoute: isUserProviderSession(sessionId),
     subscriptionKind: isOpenAiSubscriptionProviderId(providerId) ? 'codex' as const
@@ -24,3 +26,15 @@ export function captureTurnUsageContext(sessionId: string) {
   };
 }
 export type TurnUsageContext = ReturnType<typeof captureTurnUsageContext>;
+
+export function turnBillingSource(context: TurnUsageContext, route: string): UsageBillingSource {
+  if (route === 'xd-gateway' && context.providerId !== 'xd') {
+    return { providerId: 'xd', billingSource: 'cindy-ai' };
+  }
+  return {
+    ...(context.providerId ? { providerId: context.providerId } : {}),
+    ...(context.providerName ? { providerName: context.providerName } : {}),
+    billingSource: route === 'subscription' ? 'subscription' : route === 'xd-gateway' ? 'cindy-ai'
+      : route === 'provider-api' ? 'provider' : 'unknown',
+  };
+}

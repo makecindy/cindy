@@ -263,12 +263,13 @@ enum Palette {
   static let wellShade = dynamic(NSColor(white: 0, alpha: 0.08), NSColor(white: 0, alpha: 0.5))
   /// Red of the Cindy logo's ">" mark (the logo red, not a state color).
   static let brand = Color(nsColor: hex(0xF70121))
-  static let warn = Color(nsColor: hex(0xEA6B17))
+  /// Quota yellow (30% or less left, `@cindy/maker-shared/quota-level`); `error` is 10% or less.
+  static let warn = Color(nsColor: hex(0xF3A115))
   /// Shared by the menu-bar dot and its explanation inside the panel.
   private static let remoteControlValue: UInt32 = 0xFF9F0A
   static let remoteControlHex = String(format: "#%06X", remoteControlValue)
   static let remoteControl = Color(nsColor: hex(remoteControlValue))
-  static let error = Color(nsColor: hex(0xD91F37))
+  static let error = Color(nsColor: hex(0xEF4444))
   static let focus = Color(nsColor: hex(0x417CDD))
   static let claude = Color(nsColor: hex(0xD97757))
   static let claude2 = Color(nsColor: hex(0xE8A184))
@@ -782,6 +783,9 @@ final class StatusController: NSObject, NSWindowDelegate {
     self.store = store
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     super.init()
+    // Give macOS a stable identity so menu-bar managers can persist the user's
+    // placement across helper restarts and menu-bar reordering.
+    statusItem.autosaveName = "cindy.menubar.primary"
     if let button = statusItem.button {
       // Wallpaper can give the menu bar a different appearance from the app.
       statusAppearanceObservation = button.observe(\.effectiveAppearance, options: [.initial, .new]) { [weak self] _, _ in
@@ -1724,13 +1728,19 @@ struct LiquidSurface: Shape {
       let mode2 = Double(second) * cos(2 * Double.pi * u)
       return rect.minY + amp * CGFloat(1 + wave) - CGFloat(lean + mode2)
     }
+    // The surface meets the walls in a soft corner rather than a hard angle (owner request,
+    // 2026-11-01), the same 4pt as the iPhone widgets; a very low level gets a smaller one.
+    let corner = min(4, rect.height / 2, rect.width / 4)
     path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
-    path.addLine(to: CGPoint(x: rect.minX, y: y(0)))
+    path.addLine(to: CGPoint(x: rect.minX, y: y(0) + corner))
+    path.addQuadCurve(to: CGPoint(x: rect.minX + corner, y: y(corner)), control: CGPoint(x: rect.minX, y: y(0)))
     let steps = 16
-    for step in 1...steps {
-      let x = rect.width * CGFloat(step) / CGFloat(steps)
+    for step in 1..<steps {
+      let x = corner + (rect.width - 2 * corner) * CGFloat(step) / CGFloat(steps)
       path.addLine(to: CGPoint(x: rect.minX + x, y: y(x)))
     }
+    path.addLine(to: CGPoint(x: rect.maxX - corner, y: y(rect.width - corner)))
+    path.addQuadCurve(to: CGPoint(x: rect.maxX, y: y(rect.width) + corner), control: CGPoint(x: rect.maxX, y: y(rect.width)))
     path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
     path.closeSubpath()
     return path
@@ -2267,7 +2277,8 @@ struct CellView: View {
         }
       }
       .monospacedDigit()
-      .foregroundStyle(Palette.level(cell.level) ?? Palette.ink)
+      // The number keeps its ink; the liquid and its glow carry the quota color.
+      .foregroundStyle(Palette.ink)
       .animation(Motion.quick, value: value)
     } else if let label = cell.valueLabel {
       Text(label)

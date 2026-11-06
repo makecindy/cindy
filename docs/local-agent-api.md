@@ -102,6 +102,14 @@ node scripts/examples/local-agent-client.mjs --connection-code "cindy-local:v1:<
 
 `models[].id` 唯一标识供应商 + 引擎 + 模型组合，客户端将其视为不透明值。`provider` 是稳定分组编号，`providerLabel` 是可选显示名，不从 label 解析路由；同名模型的不同来源不合并。目录来自当前已连接且可选的对话来源，不导出路由地址和凭据。空目录正常返回空数组，不悄悄更换来源。
 
+目录包含本机、允许远程调用的同账号在线电脑，以及当前有效的供应商分享；按来源、供应商、引擎和模型区分身份。远程供应商显示电脑名，分享供应商显示分享者；`XD Gateway` 的内置显示名称与 Cindy 选择器一致为 `Cindy AI`。远程目录使用现有授权投影与模型可见性，单个不可达来源不阻塞其他来源；账号切换后丢弃迟到结果。来源 ID 和路由只保留在 Main，不进入公共模型 JSON。
+
+选中远程来源后，Agent 通过既有 device-link 在该来源运行，客户端工具仍回到调用应用；不要求本机装有对应引擎，不回落到本机同名供应商。远端（包括供应商组的实际执行端）须声明 `localApplication: true`，否则返回 `REMOTE_AGENT_PEER_TOO_OLD` 并提示更新。旧端仍可能出现在目录中，其在线和已授权不代表支持外部应用执行。`client-only` 不收集本机项目/个人配置，反向入口拒绝文件与命令执行；Codex 原生存储按控制端、分享中转身份和应用授权分目录。Pi、Claude 沿用各自原生适配器的记录目录，应用间的恢复授权由 API 的 owner/grant 绑定约束，不承诺所有引擎都有应用级物理目录。分享凭据访问仍需主人确认，当前 API 无交互回执时明确拒绝。
+
+本机供应商有组时，首次打开复用本机组路由器及 `localTask` 分配规则；同账号远程来源有组时复用 `provider-group:remote` 选机。两者都直连选中的组员（可为本机或分享来源），携带既有 `groupAssigned` 标记防止再次分组；组不可用或查询失败不直接落到组所在电脑。实际路由随原生线程封装在既有 owner/grant 恢复绑定中，修改指令及重新打开都回原组员，不重新选机；旧的裸线程绑定仍回原来源。启动失败向调用方报告，本 API 暂不自动重选成员：启动超时不代表远端没有创建执行，换机需要确认前一次清理并区分原生恢复，不能直接重放 open。该封装仅在 Main 存储，应用仍只收到不透明恢复句柄。目录与 Cindy 选择器共用组成员收起规则；组来源不可用时，其他可用成员恢复单独显示。实现见 `local-agent/groupRoute.ts`，回归见 `runtime.integration.test.ts` 与 `remote-agent/__tests__/roundtrip.test.ts`。
+
+应用会话的运行负载纳入既有供应商组统计：本机执行（包括组选回调用端本机）计入本机目录的 `runningTurns`；经远程组分配的会话保留组所在电脑和成员键，与普通任务合并为同一份 lease 快照，沿用 60 秒心跳和结束释放。注册表按账号隔离，账号切换后旧回调不进入新账号报告，恢复绑定保留原组归属。实现见 `local-agent/load.ts`，回归见 `local-agent/__tests__/load.test.ts` 与 `provider-group/__tests__/runtime.test.ts`。
+
 `sessionId` 是客户端自定的非空字符串，最多 128 字符；编号按授权隔离。`cwd` 为当前电脑上的现存绝对目录。`tools` 为至多 256 个 `{name,description,parameters}`，parameters 为 JSON Schema 对象；name 最多 64 字符，只含 `[A-Za-z0-9_-]` 且会话内唯一。新协议使用 `toolPolicy`：
 
 - `client-only`：仅调用该会话登记的客户端工具。它不代表工具本身只读，客户端仍负责业务确认和工具权限。
@@ -110,6 +118,8 @@ node scripts/examples/local-agent-client.mjs --connection-code "cindy-local:v1:<
 旧 v1 的 `access:"none"|"full"` 分别映射上述两种模式，仍可使用；同时传两者时必须一致。原生只读尚未声明，不能用提示词或 `client-only` 推断存在只读文件沙箱。
 
 `parts` 是 1–64 个 `{type:"text",text}` 或 `{type:"image",mimeType,data}`；图片 data 是 base64，只接受模型声明支持的 PNG/JPEG/WebP/GIF，单张解码最多 10 MiB。`client-only` 将以 `/` 开头的文本转义为字面消息，路径等普通内容仍可发送，不执行原生命令；`native` 保留既有引擎命令行为。模型、来源或引擎切换必须重新 open；相同模型可用原句柄恢复，不同模型返回新句柄和 `resumed:false`，客户端自行提供上下文交接，不重放旧工具或付费消息。
+
+本机组只收起已由本机目录实际提供的同引擎、同模型成员选项。本机连接不可用、引擎未安装或模型不可选时，对应远程／分享成员仍单独显示，避免仅有组配置却没有可选组入口时把可用来源全部隐藏。
 
 ## 事件和工具往返
 
@@ -129,6 +139,8 @@ node scripts/examples/local-agent-client.mjs --connection-code "cindy-local:v1:<
 当前协议不转发原生人机确认：原生提问/计划批准会产生明确失败，不能替用户答应；需要交互的客户端应提供自己的交互工具。
 
 ## 执行、存储与兼容
+
+远程执行不要求本机安装引擎的规则也适用于应用的可见任务：`Maker.createSession` 保留持久化、发送和关闭生命周期，缺少本机引擎时从远程句柄提供应用所需能力；本机执行仍须有本机引擎。回归见 `packages/maker-core/src/maker.test.ts`。
 
 默认使用 `Maker.startLocalAgentSession` 复用三种引擎及既有内存 `Session`，由同一套发送、原生续段、终态归属、工具循环与关闭生命周期管理执行；不建立第二个 Agent 循环，也不写入 Cindy 的私人任务数据库或装载私人记忆。用户为应用开启可见任务后，改走既有 `Maker.createSession` 和 Desktop 消息记录管线，工具策略仍由原本机能力约束。原生带 continuation claim 的 done 只是 SDK 段落边界，不能提前宣布客户端执行完成或接受下一轮发送。原生 cancelled 投影为 interrupted。
 

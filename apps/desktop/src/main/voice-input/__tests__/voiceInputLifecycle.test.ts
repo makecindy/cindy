@@ -35,7 +35,7 @@ const m = vi.hoisted(() => {
     restore: vi.fn(async (_id: number) => {}), unregister: vi.fn(),
   };
 });
-vi.mock('electron', () => ({ app: { isPackaged: true, once: vi.fn(),
+vi.mock('electron', () => ({ app: { isPackaged: true, once: vi.fn(), on: vi.fn(),
   getPreferredSystemLanguages: () => ['en'], getLocale: () => 'en', getSystemLocale: () => 'en' },
   ipcMain: { handle: (name: string, fn: (...args: any[]) => any) => m.handlers.set(name, fn),
     on: (name: string, fn: (...args: any[]) => any) => m.listeners.set(name, fn) },

@@ -9,6 +9,20 @@ export type MobileAttachmentCategory = RemoteSerializedAttachment['category'];
 export const MOBILE_MAX_ATTACHMENTS = 20;
 
 /**
+ * mimeType 缺失时的统一兜底。预签名的 contentType 与 PUT 实发的 Content-Type
+ * 必须**逐字节一致**且**都不能缺**:缺失时预签名把 Content-Type 位签成空串,而
+ * expo-file-system 原生直传层会自动补 application/octet-stream,两边不一致直接
+ * OSS SignatureDoesNotMatch 403(2026-07 粘贴图片无 mimeType 实撞)。presign 与
+ * buildMobileAttachmentUploadHeaders 都必须经 effectiveUploadMimeType 取值。
+ */
+const FALLBACK_UPLOAD_MIME = 'application/octet-stream';
+
+export function effectiveUploadMimeType(mimeType: string | undefined): string {
+  const trimmed = mimeType?.trim();
+  return trimmed ? trimmed : FALLBACK_UPLOAD_MIME;
+}
+
+/**
  * 与桌面一致,附件不设产品层体积上限。直连只受电脑磁盘空间约束;只有 OSS 保底中转有
  * 服务端单对象上限,超过它的附件没有保底、只能直连发送。
  */

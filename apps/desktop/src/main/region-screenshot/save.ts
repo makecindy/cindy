@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { createLogger } from '../logger';
 import { t } from '../i18n';
+import { encodeScreenshotImage } from './encodeImage';
 
 const log = createLogger('region-screenshot:save');
 
@@ -37,7 +38,7 @@ export async function saveScreenshotImage(image: NativeImage): Promise<boolean> 
   const isJpeg = extension === '.jpg' || extension === '.jpeg';
   const filePath = extension ? result.filePath : `${result.filePath}.png`;
   try {
-    await fs.writeFile(filePath, isJpeg ? image.toJPEG(92) : image.toPNG());
+    await fs.writeFile(filePath, await encodeScreenshotImage(image, isJpeg));
     lastDirectory = path.dirname(filePath);
     return true;
   } catch (error) {

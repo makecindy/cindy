@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 
 import {
   beginPromptRecommendationPrediction,
+  isPromptRecommendationPredictionCurrent,
   resolvePromptRecommendationPrediction,
   type PromptRecommendationSnapshot,
 } from '@/lib/promptRecommendationStore';
@@ -16,7 +17,7 @@ export function usePromptRecommendationPrediction({
   sessionId: string | undefined;
   recommendation: PromptRecommendationSnapshot | undefined;
   canPredict: boolean;
-  predict: (revision: number) => Promise<string | null>;
+  predict: (revision: number, isCurrent: () => boolean) => Promise<string | null>;
 }): void {
   const predictRef = useRef(predict);
   predictRef.current = predict;
@@ -27,7 +28,9 @@ export function usePromptRecommendationPrediction({
     const requestSeq = beginPromptRecommendationPrediction(sessionId, revision);
     if (requestSeq == null) return;
     // 切换任务或暂时输入文字不取消在途请求；结果仍落到原 session，重新打开可复用。
-    void predictRef.current(revision).then(
+    void predictRef.current(revision, () =>
+      isPromptRecommendationPredictionCurrent(sessionId, revision, requestSeq),
+    ).then(
       (prompt) => resolvePromptRecommendationPrediction(sessionId, revision, requestSeq, prompt),
       () => resolvePromptRecommendationPrediction(sessionId, revision, requestSeq, null),
     );

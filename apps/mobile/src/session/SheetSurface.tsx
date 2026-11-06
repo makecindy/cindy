@@ -38,6 +38,7 @@ export interface SheetSurfaceProps {
   backAccessibilityLabel?: string;
   /** header 右侧插槽(如模型浮窗的权限小入口);缺省为对称占位 spacer。 */
   headerTrailing?: ReactNode;
+  headerLeading?: ReactNode;
   /** header 下、滚动区上的固定插槽(如搜索框);不传不占位。 */
   pinnedTop?: ReactNode;
   children: ReactNode;
@@ -66,6 +67,7 @@ export function SheetSurface({
   onBack,
   backAccessibilityLabel,
   headerTrailing,
+  headerLeading,
   pinnedTop,
   children,
   renderScrollContent,
@@ -113,7 +115,7 @@ export function SheetSurface({
       <View collapsable={false} style={styles.dragZone} {...(nativeSheet ? {} : drag.panHandlers)}>
         {!nativeSheet && <SheetGrabber variant={variant} />}
         <View style={styles.header}>
-          {onBack ? (
+          {headerLeading ?? (onBack ? (
             <Pressable
               accessibilityLabel={backAccessibilityLabel ?? t('shared.back')}
               accessibilityRole="button"
@@ -126,7 +128,7 @@ export function SheetSurface({
             </Pressable>
           ) : (
             <View style={styles.headerSpacer} />
-          )}
+          ))}
           <View pointerEvents="none" style={styles.headerTitleOverlay}>
             <Text numberOfLines={1} style={styles.headerTitle}>{title}</Text>
           </View>

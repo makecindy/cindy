@@ -11,6 +11,7 @@ import {
 import { desktopMakerLogger } from './maker-host/logger-adapter.js';
 import {
   createOverrideSettingsFile,
+  portableOverrideSettings,
   type OverrideSettingsState,
 } from './maker-host/override-settings-file.js';
 
@@ -67,3 +68,16 @@ export const __testing = {
   normalize: normalizeAppearanceSettings,
   settingsFilePath,
 };
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const appearancePortableSettings = portableOverrideSettings(store, {
+  // Host-owned media reference; a custom wallpaper image is not copied.
+  omitKeys: ['customWallpaperUrl'],
+  optionalKeys: ['wallpaperBlur', 'wallpaperVisibility'],
+  filter: (values) => {
+    if (values.wallpaperId !== 'custom') return values;
+    const rest = { ...values };
+    delete rest.wallpaperId;
+    return rest;
+  },
+});

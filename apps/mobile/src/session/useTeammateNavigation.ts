@@ -51,7 +51,7 @@ export function useTeammateNavigation(hostPush?: ReturnType<typeof useGuardedPus
    * `leaving` also drops that companion's chat on the computer being left from under it, so back goes to the list.
    */
   const openTeammate = useCallback(async (hosted: HostedRemoteCollectionItem,
-    options?: { replace?: boolean; leaving?: { botId: string; deviceId: string } }) => {
+    options?: { replace?: boolean; leaving?: { botId: string; deviceId: string }; settings?: 'capabilities' }) => {
     const identity = teammateIdentity(hosted);
     if (!identity || pendingAccount.current === accountGeneration) return;
     // Fence rapid taps before the async preference write, not only at router.push.
@@ -71,7 +71,7 @@ export function useTeammateNavigation(hostPush?: ReturnType<typeof useGuardedPus
           && !remoteSessionStore.getSessionDeviceId(preview.id)) {
           remoteSessionStore.upsertDeviceSession(hosted.host.deviceId, hosted.host.deviceName, preview);
         }
-        const route = teammateResourceRoute(hosted, i18n.language);
+        const route = teammateResourceRoute(hosted, i18n.language, options?.settings);
         const state = options?.replace && options.leaving ? navigation.getState() : null;
         const routes = state?.routes.slice(0, state.index + 1) ?? [];
         const stale = options?.leaving ? staleCompanionChatCount(routes, options.leaving.botId, options.leaving.deviceId) : 0;

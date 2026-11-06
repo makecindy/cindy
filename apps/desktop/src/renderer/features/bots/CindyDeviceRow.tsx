@@ -1,18 +1,20 @@
+import { SIDEBAR_LIST_ROW_ACTIVE_CLASS, SIDEBAR_LIST_ROW_HEIGHT_CLASS } from '@/features/cc-agent/sidebar/listRowStyle';
 import type { KeyboardEventHandler, MouseEventHandler, ReactNode } from 'react';
-import { AlertTriangle, Pin } from 'lucide-react';
+import { Pin } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { BotAvatar } from './BotAvatar';
-import { BotConnectionStatus } from './BotConnectionStatus';
+import { TeammateRowStatus, TeammateRunningPreview } from './TeammateStatusDot';
+import type { TeammateStatus } from '@cindy/maker-shared/teammate-status';
 import { CindyDevicePicker } from './CindyDevicePicker';
 import type { CindyDeviceOption } from './cindyDeviceRoster';
-import { formatBotUnreadBadge } from './botListDisplay';
 
 /** One visual row, with separate sibling buttons for opening chat and choosing its device. */
 export function CindyDeviceRow({
   current,
   options,
   selected,
+  status,
   subtitle,
   timestamp,
   typing,
@@ -25,6 +27,7 @@ export function CindyDeviceRow({
   current: CindyDeviceOption;
   options: readonly CindyDeviceOption[];
   selected: boolean;
+  status: TeammateStatus;
   subtitle: ReactNode;
   timestamp: string;
   typing?: boolean;
@@ -36,14 +39,16 @@ export function CindyDeviceRow({
 }) {
   const { t } = useTranslation();
   const bot = current.bot;
+  const showRunning = typing && status !== 'awaiting';
   const mutedClass = selected ? 'opacity-70' : 'text-[var(--sidebar-list-muted)]';
   return (
     <div
       data-testid="cindy-device-row"
       className={cn(
-        'group relative flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 transition-colors',
+        'group relative flex w-full items-center gap-2.5 rounded-lg px-2.5 transition-colors',
+        SIDEBAR_LIST_ROW_HEIGHT_CLASS,
         selected
-          ? 'bg-sidebar-item-active text-sidebar-item-active-foreground'
+          ? SIDEBAR_LIST_ROW_ACTIVE_CLASS
           : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover',
       )}
     >
@@ -53,16 +58,11 @@ export function CindyDeviceRow({
         aria-current={selected ? 'page' : undefined}
         onContextMenu={onContextMenu}
         onKeyDown={onKeyDown}
-        className="absolute inset-0 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        className="absolute inset-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
         aria-label={`${bot.name} · ${current.label}`}
       />
       <span className="pointer-events-none relative flex shrink-0">
-        <BotAvatar bot={bot} size="md" />
-        <BotConnectionStatus
-          online={current.online}
-          connectionKnown={'deviceId' in bot ? bot.connectionKnown : undefined}
-          deviceName={current.label}
-        />
+        <BotAvatar bot={bot} size="row" />
       </span>
       <div className="pointer-events-none relative grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2.5 gap-y-0.5">
         <span className="flex min-w-0 items-center gap-2">
@@ -89,38 +89,15 @@ export function CindyDeviceRow({
                 'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,currentColor_10%,transparent)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:color-mix(in_srgb,currentColor_16%,transparent)]',
             )}
           />
-          {'needsAttention' in bot && bot.needsAttention ? (
-            <AlertTriangle
-              size={13}
-              aria-label={t('bots.list.needsAttention')}
-              className="shrink-0 text-[var(--warning-fg)]"
-            />
-          ) : null}
         </span>
-        <span className={cn('min-h-4 min-w-10 justify-self-end whitespace-nowrap text-right text-11 tabular-nums', mutedClass)}>{timestamp}</span>
+        <span data-teammate-timestamp className={cn('min-h-4 min-w-10 justify-self-end whitespace-nowrap text-right text-11 tabular-nums', mutedClass)}>{timestamp}</span>
         <span
-          className={cn('truncate text-12 leading-4', mutedClass, typing && 'italic')}
+          className={cn('min-w-0 truncate text-12 leading-4', !showRunning && mutedClass)}
           title={typeof subtitle === 'string' ? subtitle : undefined}
         >
-          {subtitle}
+          {showRunning ? <TeammateRunningPreview>{subtitle}</TeammateRunningPreview> : subtitle}
         </span>
-        <span className="flex min-h-4 items-center justify-end">
-          {current.unread ? (
-            current.unreadCount ? (
-              <span
-                aria-label={t('bots.list.unread', { count: current.unreadCount })}
-                className="flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--bot-unread-bg)] px-1 text-10 text-[var(--bot-unread-fg)]"
-              >
-                {formatBotUnreadBadge(current.unreadCount)}
-              </span>
-            ) : (
-              <span
-                aria-label={t('bots.devicePicker.unread')}
-                className="size-1.5 rounded-full bg-[var(--bot-unread-bg)]"
-              />
-            )
-          ) : null}
-        </span>
+        <span className="flex min-h-4 items-center justify-end"><TeammateRowStatus status={status} inline /></span>
       </div>
       {children}
     </div>

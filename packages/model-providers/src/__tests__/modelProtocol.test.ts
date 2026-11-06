@@ -30,22 +30,25 @@ function fixture(api?: PiModelApi) {
 }
 
 describe('per-model protocol comparison', () => {
-  it('compares a newly delivered Google API with both compatibility harnesses and recommends Pi', () => {
+  // Chris 2026-10-30: an API the upstream offers is used as is, even when the gateway
+  // serves it for another vendor's model. Only Cindy's local conversion is compatibility.
+  it('treats every Gateway front door as offered and still recommends Pi for a Google model', () => {
     const { provider, byAgent } = fixture('google-generative-ai');
     const result = modelProtocolComparison(provider, byAgent);
     expect(result.reference).toBe('google-generative-ai');
     expect(result.forAgent('claude-code')).toMatchObject({
       harness: 'anthropic-messages',
       outbound: 'anthropic-messages',
-      mode: 'compatibility',
+      mode: 'matching',
       localConversion: false,
     });
     expect(result.forAgent('codex')).toMatchObject({
       harness: 'openai-responses',
       outbound: 'openai-responses',
-      mode: 'compatibility',
+      mode: 'matching',
       localConversion: false,
     });
+    expect(result.upstreamApis).toEqual(['anthropic-messages', 'openai-responses', 'google-generative-ai']);
     expect(result.forAgent('pi')).toMatchObject({
       harness: 'google-generative-ai',
       outbound: 'google-generative-ai',
@@ -56,18 +59,19 @@ describe('per-model protocol comparison', () => {
   });
 
   it.each(['openai-chat', 'openai-responses'] as const)(
-    'marks Chat Completions via %s as compatibility without misreporting the native CLI transport',
+    'marks a Chat Completions model as compatibility only when Codex converts locally (%s)',
     (wireProtocol) => {
       const { provider, byAgent } = fixture('openai-completions');
       provider.routing.codex!.wireProtocol = wireProtocol;
+      const mode = wireProtocol === 'openai-chat' ? 'compatibility' : 'matching';
       expect(modelProtocolComparison(provider, byAgent).forAgent('codex')).toMatchObject({
         harness: 'openai-responses',
         outbound: wireProtocol === 'openai-chat' ? 'openai-completions' : 'openai-responses',
         localConversion: wireProtocol === 'openai-chat',
-        mode: 'compatibility',
+        mode,
       });
       expect(resolveAgentCapability([{ ...provider, connected: true }], 'xd', model.id, 'codex')?.protocolMode)
-        .toBe('compatibility');
+        .toBe(mode);
     },
   );
 
@@ -117,6 +121,15 @@ describe('per-model protocol comparison', () => {
     ).toBe('openai-responses');
   });
 
+  // Local conversion changes the engine side only; the API it reaches is still one the upstream serves.
+  it('lists a converted outbound API among upstream APIs', () => {
+    const claude = { ...model, route: { baseUrl: 'https://example.invalid/v1', wireProtocol: 'openai-chat' as const } };
+    const provider = { id: 'custom', source: 'user', agents: ['claude-code'], routing: {}, models: { 'claude-code': [claude] } } as unknown as Provider;
+    const result = modelProtocolComparison(provider, { 'claude-code': claude });
+    expect(result.forAgent('claude-code')).toMatchObject({ outbound: 'openai-completions', localConversion: true });
+    expect(result.upstreamApis).toEqual(['openai-completions']);
+  });
+
   it('projects protocol support with the same provider and real bridge model identity', () => {
     const { provider } = fixture('google-generative-ai');
     const other = {
@@ -134,16 +147,18 @@ describe('per-model protocol comparison', () => {
       outboundApi: 'google-generative-ai',
     });
     expect(resolveAgentCapability(providers, 'xd', model.id, 'codex')).toMatchObject({
-      protocolMode: 'compatibility',
+      protocolMode: 'matching',
       nativeApi: 'google-generative-ai',
       outboundApi: 'openai-responses',
     });
     expect(resolveAgentCapability(providers, 'other', model.id, 'codex')?.protocolMode).toBe(
       'matching',
     );
+    // The ChatGPT subscription bridge converts Claude Code requests locally to Responses.
     const subscription = {
       ...provider,
       id: 'openai',
+      source: 'builtin' as const,
       connected: true,
       models: {
         codex: [{ ...model, id: 'gpt-test' }],
@@ -155,6 +170,7 @@ describe('per-model protocol comparison', () => {
     ).toMatchObject({
       wireModelId: 'chatgpt/gpt-test',
       protocolMode: 'compatibility',
+      outboundApi: 'openai-responses',
     });
   });
 
@@ -187,21 +203,26 @@ describe('custom supplier transport ownership', () => {
     },
   );
 
-  it.each(['builtin', 'user'] as const)('applies Gateway compatibility defaults to %s supplier front doors', source => {
-    const { provider, byAgent } = fixture('google-generative-ai');
-    provider.source = source;
-    byAgent.pi.api = 'openai-completions';
-    const comparison = modelProtocolComparison(provider, byAgent);
-    expect(comparison.forAgent('claude-code')).toMatchObject({ mode: 'compatibility', localConversion: false });
-    expect(comparison.forAgent('codex')).toMatchObject({ mode: 'compatibility', localConversion: false });
-    expect(comparison.forAgent('pi')).toMatchObject({ mode: 'matching', outbound: 'openai-completions' });
-    expect(nativeModelAgents(provider, byAgent)).toEqual(['pi']);
+  it('enables every engine whose front door the Gateway offers (Gateway, user supplier)', () => {
+    for (const source of [undefined, 'user'] as const) {
+      const { provider, byAgent } = fixture('google-generative-ai');
+      if (source) provider.source = source;
+      byAgent.pi.api = 'openai-completions';
+      const comparison = modelProtocolComparison(provider, byAgent);
+      expect(comparison.forAgent('claude-code')).toMatchObject({ mode: 'matching', localConversion: false });
+      expect(comparison.forAgent('codex')).toMatchObject({ mode: 'matching', localConversion: false });
+      expect(comparison.forAgent('pi')).toMatchObject({ mode: 'matching', outbound: 'openai-completions' });
+      expect(nativeModelAgents(provider, byAgent)).toEqual(['claude-code', 'codex', 'pi']);
+    }
   });
 
-  it('does not advertise or automatically enable unverified fixed-protocol engines', () => {
-    const { provider, byAgent } = fixture();
-    provider.source = 'user';
-    expect(modelProtocolComparison(provider, byAgent).forAgent('codex')?.mode).toBe('unknown');
-    expect(nativeModelAgents(provider, byAgent)).toEqual(['pi']);
+  it('keeps a built-in subscription bridge in compatibility mode and off by default', () => {
+    const { provider, byAgent } = fixture('openai-responses');
+    provider.id = 'openai';
+    provider.source = 'builtin';
+    const comparison = modelProtocolComparison(provider, byAgent);
+    expect(comparison.forAgent('claude-code')).toMatchObject({ outbound: 'openai-responses', mode: 'compatibility' });
+    expect(comparison.forAgent('pi')).toMatchObject({ outbound: 'openai-responses', mode: 'matching' });
+    expect(nativeModelAgents(provider, byAgent)).toEqual(['codex', 'pi']);
   });
 });

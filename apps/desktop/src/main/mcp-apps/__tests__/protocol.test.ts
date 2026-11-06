@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { McpAppRecord } from '../../../shared/mcpApps.js';
 import {
@@ -11,6 +11,9 @@ import {
   MCP_APPS_MAX_BYTES,
   MCP_APPS_MAX_CARD_BYTES,
 } from '../protocol.js';
+
+vi.mock('../../i18n.js', () => ({ t: (key: string) => ({ 'mcpApps.pluginTrust.unverified': '未验证', 'mcpApps.pluginTrust.reviewed': '已审核' })[key] ?? key }));
+import { projectMcpAppHistory } from '../history.js';
 
 const tool = (ui: unknown): Tool => ({
   name: 'example',
@@ -86,6 +89,7 @@ describe('standard MCP Apps metadata and policy', () => {
   });
   it('uses the standard same-origin base URI default for omitted and empty declarations', () => {
     expect(appCsp().header).toContain("base-uri 'self'");
+    expect(appCsp().header).toContain("form-action 'none'");
     expect(appCsp({ csp: { baseUriDomains: [] } }).header).toContain("base-uri 'self'");
     expect(appCsp({ csp: { baseUriDomains: ['https://assets.example.org'] } }).header).toContain(
       'base-uri https://assets.example.org',
@@ -196,4 +200,16 @@ describe('standard MCP Apps metadata and policy', () => {
   ])('rejects privileged or malformed links: %s', (url) => {
     expect(() => safeAppLink(url)).toThrow('MCP_APP_INVALID_LINK');
   });
+});
+
+// Regression F07/F19: the public history projection stripped the Host badge.
+// Exercise the production projector, retaining no private schema/result. Tier: unit.
+it.each(['unverified', 'reviewed'])('projects Host plugin trust in the existing public title: %s', (trust) => {
+  const record = card({ content: [{ type: 'text', text: 'public' }], _meta: { secret: 'private' } });
+  record.tool._meta = { 'cindy/plugin': { name: 'Planner', trust } };
+  const content = { mcpApp: record };
+  const expected = { mcpAppHistory: { version: 1, title: `Planner · ${trust === 'unverified' ? '未验证' : '已审核'}`, text: 'public' } };
+  expect(projectMcpAppHistory(content, true)).toEqual(expected);
+  expect(projectMcpAppHistory(JSON.stringify(content), true)).toEqual(expected);
+  expect(projectMcpAppHistory(content, false)).toBe(content);
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { HistoryViewController, historyAfter, projectHistoryView, type HistoryWorkSummary } from '@cindy/maker-shared/message-window';
+import { HistoryViewController, historyAfter, projectHistoryView, type HistoryWorkReference } from '@cindy/maker-shared/message-window';
 import { buildMobileHistoryRenderItems, buildMobileSessionRenderWindow } from '../session/mobileHistoryRender';
 import { buildMobileMessageRenderItems, type MobileMessageRenderItem } from '../session/messageRenderModel';
 import type { RemoteMessage } from '../session/types';
@@ -19,13 +19,13 @@ const outline = (items: MobileMessageRenderItem[]): unknown[] => items.map((item
   : { key: item.key, type: item.type });
 
 function harness(rows: RemoteMessage[], streaming = false, lazyDetails = false) {
-  const details = vi.fn(async (summary: HistoryWorkSummary, after?: string) => {
+  const details = vi.fn(async (summary: HistoryWorkReference, after?: string) => {
     const start = rows.findIndex((item) => item.id === (after ?? summary.firstMessageId)) + (after ? 1 : 0);
     const end = rows.findIndex((item) => item.id === summary.lastMessageId) + 1;
     const messages = rows.slice(start, Math.min(start + 2, end));
     return { version: 1 as const, messages, hasMore: start + 2 < end, nextCursor: messages.at(-1)?.id ?? null };
   });
-  const expanded = vi.fn(async (_refs: readonly HistoryWorkSummary[]) => undefined);
+  const expanded = vi.fn(async (_refs: readonly HistoryWorkReference[]) => undefined);
   const view = new HistoryViewController<RemoteMessage>({
     page: async () => ({ version: 1, items: projectHistoryView(rows, streaming, lazyDetails), hasMore: false, nextCursor: null }),
     details, expanded,
@@ -246,7 +246,7 @@ describe('remote history preserves original folding', () => {
     expect(outer.deferred).toBeUndefined();
     const inner = outer.children.find((item) => item.type === 'work_group');
     if (inner?.type !== 'work_group') throw new Error('Missing inner group');
-    inner.deferred!.setVisible!(true, false);
+    const release = inner.deferred!.setVisible!(true, false);
     await vi.waitFor(() => expect([...view.getSnapshot().details.values()].every((state) => state.complete)).toBe(true));
     expect(details).toHaveBeenCalledTimes(2);
     expect(view.getSnapshot().expanded.size).toBe(1);
@@ -256,7 +256,7 @@ describe('remote history preserves original folding', () => {
     const loadedInner = loaded.children.find((item) => item.type === 'work_group');
     if (loadedInner?.type !== 'work_group') throw new Error('Missing loaded inner group');
     expect(loadedInner.children.length).toBeGreaterThan(0);
-    loadedInner.deferred!.setVisible!(false, false);
+    release();
     await view.refresh();
     expect(details).toHaveBeenCalledTimes(2);
     expect(view.getSnapshot().expanded.size).toBe(0);
@@ -339,4 +339,27 @@ it.each([false, true])('selects visible rows without reading unused raw bodies (
     expect(readRawBody).toHaveBeenCalled();
   }
   view.setActive(false);
+});
+
+// Unit regression: the screen's real history/raw renderer must not duplicate a
+// live failure when a hidden continuation row follows its persisted record.
+// Existing tail-only tests did not cover this non-tail identity.
+it.each([false, true])('hides only the live error identity and restores history when cleared (history=%s)', async ready => {
+  const rows = [row(0, 'user', 'Earlier request'),
+    row(1, 'error', { message: 'No capacity' }),
+    row(2, 'user', 'Current request'),
+    row(3, 'error', { message: 'No capacity' }),
+    row(4, 'user', CONTINUE_AFTER_ERROR_PROMPT)];
+  const { view } = harness(rows);
+  if (ready) await view.refresh();
+  const render = (activeErrorClientId: string | null) => buildMobileSessionRenderWindow({
+    history: { view, snapshot: view.getSnapshot(), messages: [], streaming: false, sessionId: 'session' },
+    raw: { cacheKey: 'en', messages: rows, options: { sessionId: 'session' } },
+    activeErrorClientId,
+  }).items.filter(item => item.type === 'message' && item.message.role === 'error')
+    .map(item => item.type === 'message' ? item.message.source.clientId : '');
+  try {
+    expect(render('client-3')).toEqual(['client-1']);
+    expect(render(null)).toEqual(['client-1', 'client-3']);
+  } finally { view.setActive(false); }
 });

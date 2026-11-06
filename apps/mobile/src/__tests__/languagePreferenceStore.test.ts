@@ -30,10 +30,10 @@ describe('languagePreferenceStore', () => {
     await expect(readLanguagePreference()).resolves.toBe('system');
   });
 
-  it('保存具体语言后读出该语言', async () => {
-    await saveLanguagePreference('ja');
-    await expect(readLanguagePreference()).resolves.toBe('ja');
-    expect(store.get(__testing.storageKey)).toBe('ja');
+  it.each(['ja', 'es', 'pt-PT', 'pt-BR'] as const)('保存具体语言 %s 后读出该语言', async (locale) => {
+    await saveLanguagePreference(locale);
+    await expect(readLanguagePreference()).resolves.toBe(locale);
+    expect(store.get(__testing.storageKey)).toBe(locale);
   });
 
   it('保存 system 即删除 override(默认 + override 模型)', async () => {
@@ -44,7 +44,7 @@ describe('languagePreferenceStore', () => {
   });
 
   it('存储里出现非法值时回退 system', async () => {
-    store.set(__testing.storageKey, 'fr');
+    store.set(__testing.storageKey, 'it');
     await expect(readLanguagePreference()).resolves.toBe('system');
   });
 });

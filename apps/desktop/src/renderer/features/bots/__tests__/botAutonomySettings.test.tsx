@@ -117,6 +117,22 @@ it('moves follow-up to this teammate, tells where it came from, and turns the pr
   expect(screen.queryByText(/bots.autonomy.restoreDefault/)).toBeNull();
 });
 
+// cindy-bots-runtime.md §6「伙伴技能分层」: the follow system Skill is the one switch for this teammate's follow-up; with it
+// off the host never makes it the scheduler, so this control must not look like a second working switch.
+it('disables taking over follow-up and explains why when this teammate\'s follow Skill is off', async () => {
+  render(
+    <div data-testid="cindy-default">
+      <BotAutonomySettings botId="cindy-default" botName="Cindy" allowSchedulerFollow={false}
+        onAllowSchedulerFollowChange={vi.fn()} followOff />
+    </div>,
+  );
+  await waitFor(() => expect(screen.getByText('bots.systemSkills.followOffHint:Cindy')).toBeTruthy());
+  expect(mainSwitch('cindy-default').hasAttribute('disabled')).toBe(true);
+  fireEvent.click(mainSwitch('cindy-default'));
+  expect(m.confirm).not.toHaveBeenCalled();
+  expect(host.setSettings).not.toHaveBeenCalled();
+});
+
 it('starts off, explains scope and usage before enabling, and turns off immediately', async () => {
   render(settingsFor('cindy-default'));
   await waitFor(() => expect(screen.getByText('bots.autonomy.heldByNobody')).toBeTruthy());

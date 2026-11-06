@@ -94,6 +94,9 @@ describe('provider share link admission', () => {
 describe('provider share invoke', () => {
   it('allows only the remote agent and the filtered provider list', async () => {
     state.access = ACCESS;
+    // #8010: a shared provider must not expose its owner's other model sources.
+    await expect(runInvoke(GUEST, { channel: 'maker:model-catalog:read', args: [{ op: 'locations' }] }))
+      .resolves.toMatchObject({ ok: false, error: { code: 'CHANNEL_NOT_ALLOWED' } });
     const handle = vi.fn(async () => ({ ok: true }));
     setRemoteAgentHandler({ handle, abortAll: vi.fn() });
     await expect(runInvoke(GUEST, { channel: 'local-db:sessions:list', args: [] }))
@@ -145,7 +148,8 @@ describe('provider share invoke', () => {
       await expect(runInvoke(GUEST, { channel: 'maker:get-capabilities', args: ['claude-code'] })).resolves.toEqual({
         ok: true,
         // Exact ids: `x[1m]` is a separate catalog model the shared provider does not list.
-        result: { availableModels: [{ id: 'claude-opus-5-5' }], permissionModes: [{ id: 'default' }] },
+        result: { availableModels: [{ id: 'claude-opus-5-5' }], permissionModes: [{ id: 'default' }],
+          providerContinuity: { stale: false, remainingMs: 30 * 60_000 } },
       });
       await expect(runInvoke(GUEST, { channel: 'maker:get-capabilities', args: ['codex'] }))
         .resolves.toMatchObject({ ok: true, result: { availableModels: [] } });
@@ -153,9 +157,11 @@ describe('provider share invoke', () => {
         .resolves.toEqual({ ok: true, result: ['claude-code'] });
       // Readiness only says whether an agent the share serves is installed (no sign-in, path or identity).
       await expect(runInvoke(GUEST, { channel: 'maker:agent:status', args: ['claude-code'] }))
-        .resolves.toEqual({ ok: true, result: { binaryReady: true } });
+        .resolves.toEqual({ ok: true, result: { binaryReady: true,
+          providerContinuity: { stale: false, remainingMs: 30 * 60_000 } } });
       await expect(runInvoke(GUEST, { channel: 'maker:agent:status', args: ['codex'] }))
-        .resolves.toEqual({ ok: true, result: { binaryReady: false } });
+        .resolves.toEqual({ ok: true, result: { binaryReady: false,
+          providerContinuity: { stale: false, remainingMs: 30 * 60_000 } } });
       await expect(runInvoke(GUEST, { channel: 'maker:get-capabilities', args: ['../x'] }))
         .resolves.toMatchObject({ ok: false, error: { message: expect.stringContaining('INVALID_PARAMS') } });
       // A failed read of the shared provider is reported, not answered as an empty list.

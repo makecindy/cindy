@@ -99,6 +99,29 @@ function collectEntries(): { locale: string; key: string; value: string }[] {
     }
   }
 
+  const shareStrings = JSON.parse(readFileSync(resolve(REPO_ROOT,
+    "apps/mobile/plugins/incoming-share-strings.json"), "utf8")) as Record<string, Record<string, string>>;
+  const iosLocale = (locale: string) => ({ "zh-Hans": "zh-CN", "zh-Hant": "zh-TW" })[locale] ?? locale;
+  const macPermissions = JSON.parse(readFileSync(resolve(REPO_ROOT,
+    "apps/desktop/resources/mac-permission-locales.json"), "utf8")) as Record<string, Record<string, string>>;
+  for (const [locale, table] of Object.entries(macPermissions)) {
+    for (const [key, value] of Object.entries(table)) {
+      out.push({ locale: iosLocale(locale), key: `desktop/systemPermissions:${key}`, value });
+    }
+  }
+  for (const [locale, table] of Object.entries(shareStrings)) {
+    for (const [key, value] of Object.entries(table)) {
+      out.push({ locale: iosLocale(locale), key: `mobile/incomingShare:${key}`, value });
+    }
+  }
+  for (const locale of Object.keys(shareStrings)) {
+    const { ios } = JSON.parse(readFileSync(resolve(REPO_ROOT,
+      `apps/mobile/locales/${locale}.json`), "utf8")) as { ios: Record<string, string> };
+    for (const [key, value] of Object.entries(ios)) {
+      out.push({ locale: iosLocale(locale), key: `mobile/systemPermissions:${key}`, value });
+    }
+  }
+
   return out;
 }
 

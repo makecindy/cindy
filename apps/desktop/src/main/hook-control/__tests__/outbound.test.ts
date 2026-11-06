@@ -455,6 +455,62 @@ describe('X managed video delivery', () => {
     expect(result.skipped).toBe(0);
   });
 
+  // 线上回归：Agent 中途导入的预览图经工具结果旁路带上，与 MP4 混发被服务端 X_MEDIA_COMBINATION 拒绝，
+  // 整条回帖连正文都没发出。相邻用例只测单个附件，未覆盖组合规则。unit，入口是出站收集器；
+  // 最小失败输入：一个正文视频 + 一张旁路图。
+  it.each([
+    ['旁路预览图让位给正文视频', '[视频](cindy-media://blobs/clip.mp4)', ['/blobs/preview.jpg'], ['clip.mp4'], []],
+    ['旁路视频不抢正文视频', '[视频](cindy-media://blobs/clip.mp4)', ['/blobs/other.mp4'], ['clip.mp4'], []],
+    ['旁路 GIF 不抢正文图片', '![封面](cindy-media://blobs/cover.jpg)', ['/blobs/a.gif'], ['cover.jpg'], []],
+    ['旁路视频不抢正文图片', '![封面](cindy-media://blobs/cover.jpg)', ['/blobs/other.mp4'], ['cover.jpg'], []],
+    ['正文图片与视频并存时点名没发出的图片', '![封面](cindy-media://blobs/cover.jpg)\n[视频](cindy-media://blobs/clip.mp4)', [], ['clip.mp4'], ['封面']],
+    ['GIF 不与图片混发', '![动图](cindy-media://blobs/a.gif)', ['/blobs/preview.jpg'], ['a.gif'], []],
+    ['第二个视频保留说明并点名', '[甲](xdt-file:///w/a.mp4) [乙](xdt-file:///w/b.mp4)', [], ['a.mp4'], ['乙']],
+    ['图片最多四张，旁路图先让位', '![1](cindy-media://blobs/1.png)![2](cindy-media://blobs/2.png)![3](cindy-media://blobs/3.png)![4](cindy-media://blobs/4.png)', ['/blobs/preview.jpg'], ['1.png', '2.png', '3.png', '4.png'], []],
+    ['第五张正文图片被点名', '![1](cindy-media://blobs/1.png)![2](cindy-media://blobs/2.png)![3](cindy-media://blobs/3.png)![4](cindy-media://blobs/4.png)![5](cindy-media://blobs/5.png)', [], ['1.png', '2.png', '3.png', '4.png'], ['5']],
+  ])('keeps a reply within X media combinations: %s', async (_name, reply, tools, sent, omitted) => {
+    const bytes = Buffer.from('media');
+    const files = Object.fromEntries(['clip.mp4', 'cover.jpg', 'a.gif', '1.png', '2.png', '3.png', '4.png', '5.png']
+      .map((name) => ['/blobs/blobs/' + name, bytes]));
+    const io = deps({ ...files, '/blobs/preview.jpg': bytes, '/blobs/a.gif': bytes, '/blobs/other.mp4': bytes, '/w/a.mp4': bytes, '/w/b.mp4': bytes }, { allowedFileRoots: ['/w'] });
+    const result = await collectOutboundAttachments(reply, tools, { ...io, provider: 'x' });
+    expect(result.attachments.map((item) => item.name)).toEqual(sent);
+    expect(result.skipped).toBe(omitted.length);
+    if (omitted.length) expect(result.text).toContain('Attachment delivery incomplete');
+    else expect(result.text).not.toContain('Attachment delivery incomplete');
+    for (const name of omitted) expect(result.text).toContain(name);
+  });
+
+  // 分块转传：视频不进内存、不受 10 MiB 限制；失败时正文照发并点名。unit，入口是出站收集器。
+  // 相邻用例都走内联。最小失败输入：一个超过内联上限的视频。
+  it('relays a video of any size without reading it', async () => {
+    const io = deps({ '/blobs/preview.jpg': Buffer.from('preview') });
+    const relayVideo = vi.fn(async () => '700');
+    const result = await collectOutboundAttachments('做好了\n\n[成片](cindy-media://blobs/clip.mp4)', ['/blobs/preview.jpg'], {
+      ...io, provider: 'x', relayVideo,
+    });
+    expect(relayVideo).toHaveBeenCalledExactlyOnceWith('/blobs/blobs/clip.mp4', 'video/mp4');
+    expect(io.readFile).toHaveBeenCalledTimes(1); // 只读了让位的预览图
+    expect(result).toMatchObject({ attachments: [], xMediaIds: ['700'], skipped: 0 });
+    expect(result.text.trim()).toBe('做好了\n\n成片');
+  });
+
+  it('keeps the caption and names the video when the relay fails', async () => {
+    const io = deps({ '/w/clip.mp4': Buffer.from('video') }, { allowedFileRoots: ['/w'] });
+    const relayVideo = vi.fn(async () => { throw Object.assign(new Error('no'), { code: 'X_MEDIA_REJECTED' }); });
+    const result = await collectOutboundAttachments('做好了 [成片](xdt-file:///w/clip.mp4)', [], { ...io, provider: 'x', relayVideo });
+    expect(result).toMatchObject({ attachments: [], xMediaIds: [], skipped: 1 });
+    expect(result.text).toContain('成片');
+    expect(result.text).toContain('Attachment delivery incomplete');
+    expect(result.text).not.toContain('xdt-file');
+  });
+
+  it('still rejects a video over the inline limit on a server without relay', async () => {
+    const io = deps({ '/blobs/blobs/clip.mp4': Buffer.alloc(10 * 1024 * 1024 + 1, 1) });
+    const result = await collectOutboundAttachments('[成片](cindy-media://blobs/clip.mp4)', [], { ...io, provider: 'x' });
+    expect(result).toMatchObject({ attachments: [], xMediaIds: [], skipped: 1 });
+  });
+
   it('does not upload code examples and reports an unreadable managed video', async () => {
     const io = deps({});
     const result = await collectOutboundAttachments(

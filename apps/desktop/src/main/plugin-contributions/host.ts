@@ -440,22 +440,23 @@ function localPluginInstallation(value: wire.MyPluginSummary): MyPluginLocalInst
     const manager = getGhostManager();
     manager.assertContributionReadAvailable(value.ghostId);
     const related = manager.list().filter(ghost => ghost.manifest.id === value.ghostId &&
-      (ghost.namespace === value.namespace || ghost.namespaceState !== 'confirmed'));
+      (ghost.namespace === value.namespace || (ghost.namespace === 'local' && value.namespace === null && ghost.publishingSource?.kind === 'local') || ghost.namespaceState !== 'confirmed'));
     if (related.length === 0) return { state: 'missing' };
     const matches = related.filter(ghost => {
-      if (ghost.namespaceState !== 'confirmed' || ghost.namespace !== value.namespace ||
+      if (ghost.namespaceState !== 'confirmed' || (ghost.namespace !== value.namespace && !(ghost.namespace === 'local' && value.namespace === null && ghost.publishingSource?.kind === 'local')) ||
         ghost.approval.state !== 'approved' || !ghost.publishingSource ||
         ghost.publishingSource.kind === 'unavailable') return false;
       if (ghost.publishingSource.kind === 'local') return true;
       return publicInstallationMatches(value, ghost);
     });
-    if (matches.length === 1) {
-      const ghost = matches[0];
-      return { state: 'installed', instanceId: installedGhostStoragePart(ghost),
-        version: ghost.manifest.version, enabled: ghost.enabled,
-        origin: ghost.publishingSource?.kind === 'public-market' ? 'public' : 'local' };
-    }
-    return { state: 'unavailable' };
+    const candidates = matches.map(ghost => ({
+      instanceId: installedGhostStoragePart(ghost),
+      version: ghost.manifest.version,
+      enabled: ghost.enabled,
+      origin: ghost.publishingSource?.kind === 'public-market' ? 'public' as const : 'local' as const,
+    }));
+    if (candidates.length === 1) return { state: 'installed', ...candidates[0] };
+    return { state: 'unavailable', ...(candidates.length > 1 ? { candidates } : {}) };
   } catch {
     return { state: 'unavailable' };
   }
@@ -493,7 +494,7 @@ function pluginView(
         : (value.market.unavailableReason ?? 'release_unavailable'),
       version: value.market.currentRelease?.version ?? null,
       releaseId: value.market.currentRelease?.releaseId ?? null,
-      reason: null,
+      reason: value.market.reason ?? null,
     },
     latestSubmission: value.latestSubmission ? releaseView(value.latestSubmission, content) : null,
     actions: { submitUpdate: value.publisherKind !== 'official' && value.actions.canSubmit, viewMarket: value.actions.canViewMarket },

@@ -214,13 +214,14 @@ function taskCreatorSessionKey(id: string, deviceId?: string): string {
 
 export function matchesTaskCreators(
   session: Session,
-  selected: 'all' | readonly string[],
+  selected: 'all' | 'none' | readonly string[],
   index: ReadonlyMap<string, ReadonlySet<string>>,
 ): boolean {
   if (selected === 'all') return true;
   const creators = isTeammateTaskSession(session) && session.companion
     ? index.get(`creator:${taskBotKey({ id: session.companion.id, deviceId: session.deviceLinkDeviceId })}`)
     : index.get(taskCreatorSessionKey(session.id, session.deviceLinkDeviceId));
+  if (selected === 'none') return !isTeammateTaskSession(session) && !creators?.size;
   return selected.some(key => creators?.has(key));
 }
 

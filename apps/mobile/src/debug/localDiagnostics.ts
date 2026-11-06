@@ -12,7 +12,8 @@ import {
 } from "./mobileDebugFiles";
 import { getMobileMarkdownRenderMetrics } from "../session/mobileMarkdownRenderMetrics";
 import { getMobileMessageWebViewMetrics } from "../session/mobileMessageWebViewMetrics";
-import { setJankMetricsEnabled, takeJankMetrics } from "./jankMetrics";
+import { recordLoopLag, recordUiThreadLag, setJankMetricsEnabled, takeJankMetrics, takeSyncWorkMetrics } from "./jankMetrics";
+import { createUiThreadProbe, createWorkletUiPing, UI_THREAD_STALL_MS } from "./uiThreadProbe";
 import {
   MAX_DIAGNOSTIC_EVENTS,
   projectDiagnostic,
@@ -20,6 +21,7 @@ import {
   type DiagnosticEvent,
 } from "./diagnosticEvents";
 
+const LOOP_LAG_SAMPLE_MS = 250;
 const KEY = "cindy.mobile.localDiagnostics.v1";
 const DEFAULT_ENABLED = process.env.EXPO_PUBLIC_CINDY_DIAGNOSTICS === "1";
 let enabled = false;
@@ -244,6 +246,9 @@ export function startLocalDiagnostics(): () => void {
   let lifecycleAt = lastTick;
   let lastRenderSnapshot: string | undefined;
   let lastRenderAt = -Infinity;
+  let lastLoopSample = lastTick;
+  let loopTimer: ReturnType<typeof setInterval> | undefined;
+  let uiProbe: ReturnType<typeof createUiThreadProbe> | null = null;
   void hydrateDiagnostics().then(() => {
     if (!stopped)
       mobileDebugLog("info", "lifecycle", "app started", { appState: state });
@@ -255,6 +260,8 @@ export function startLocalDiagnostics(): () => void {
     lastWallTick = Date.now();
     lifecycleAt = lastTick;
     lastRenderSnapshot = undefined;
+    uiProbe?.reset();
+    lastLoopSample = lastTick;
     mobileDebugLog("info", "lifecycle", `app ${next}`);
     void flushDiagnostics().catch(() => {});
   });
@@ -272,6 +279,7 @@ export function startLocalDiagnostics(): () => void {
       });
     lastTick = now;
     lastWallTick = Date.now();
+    if (state === "active") uiProbe?.sample();
     if (enabled) {
       const metrics = {
         markdown: getMobileMarkdownRenderMetrics(),
@@ -293,6 +301,7 @@ export function startLocalDiagnostics(): () => void {
     ) {
       ticksSinceJankMetrics = 0;
       mobileDebugLog("debug", "performance", "jank metrics", takeJankMetrics());
+      mobileDebugLog("debug", "performance", "sync work metrics", takeSyncWorkMetrics());
     }
     void flushDiagnostics().catch(() => {});
   };
@@ -301,11 +310,31 @@ export function startLocalDiagnostics(): () => void {
     if (!enabled || stopped) {
       if (timer !== undefined) clearInterval(timer);
       timer = undefined;
+      if (loopTimer !== undefined) clearInterval(loopTimer);
+      loopTimer = undefined;
+      uiProbe = null;
     } else if (timer === undefined) {
       lastTick = performance.now();
       lastWallTick = Date.now();
       lastRenderSnapshot = undefined;
       timer = setInterval(tick, 2000);
+      lastLoopSample = lastTick;
+      loopTimer = setInterval(() => {
+        const sampledAt = performance.now();
+        if (state === "active") recordLoopLag(Math.max(0, sampledAt - lastLoopSample - LOOP_LAG_SAMPLE_MS));
+        lastLoopSample = sampledAt;
+      }, LOOP_LAG_SAMPLE_MS);
+      const ping = createWorkletUiPing();
+      uiProbe = ping && createUiThreadProbe({
+        ping,
+        onLag: (lagMs) => {
+          recordUiThreadLag(lagMs);
+          if (lagMs >= UI_THREAD_STALL_MS) mobileDebugLog("warn", "lifecycle", "ui thread stall", { lagMs });
+        },
+        onUnanswered: (pendingMs) => {
+          mobileDebugLog("warn", "lifecycle", "ui thread ping unanswered", { pendingMs });
+        },
+      });
     }
   };
   recordingListeners.add(syncProbe);

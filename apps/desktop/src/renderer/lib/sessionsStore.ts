@@ -30,7 +30,7 @@ import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
  *                                   archived 桶按业务永远不应包含新建项，跳过。
  *                                   保留旧 createSession 的"省一次 IPC"优化。
  *   - forceRefresh(filter)         单桶强制重拉，drop 桶 + 走 ensure。
- *   - forceRefreshAll()            重拉所有"已加载过"的桶，未加载桶不动。
+ *   - forceRefreshAll()            重拉已缓存或正在加载的桶，未访问桶不动。
  *                                   sessionsBus.onRefresh / sessionsPush.onCreated
  *                                   走这条。
  *
@@ -88,7 +88,12 @@ class SessionBucketCache extends Map<ListStatusFilter, Session[]> {
 }
 
 const cache = new SessionBucketCache();
-const inflight = new Map<ListStatusFilter, Promise<Session[]>>();
+interface FilterRequest {
+  promise: Promise<void>;
+  resolve: (replacement?: PromiseLike<void>) => void;
+  reject: (reason: unknown) => void;
+}
+const inflight = new Map<ListStatusFilter, FilterRequest>();
 /**
  * 已收到「转入后台」推送(hiddenAt 非空)的任务。推送可能早于任务进缓存(首次列表请求
  * 在途),所以不论当时是否移除了行都登记;列表响应与本地插入写缓存前据此过滤,直到
@@ -813,13 +818,22 @@ export const sessionsStore = {
 
   /**
    * 确保指定桶已加载（命中即 noop，dedupe 并发请求）。
-   * 失败时 throw 原始错误，由调用方决定如何展示。
+   * 强制刷新会让已有等待者跟随替换请求；失败由调用方决定如何展示。
    */
   async ensureByFilter(filter: ListStatusFilter, opts?: { fresh?: boolean }): Promise<void> {
     if (!opts?.fresh && cache.has(filter)) return;
-    let promise = inflight.get(filter);
-    if (!promise) {
-      const request = fetchFilter(filter, opts)
+    let pending = inflight.get(filter);
+    if (!pending) {
+      let resolve!: FilterRequest['resolve'];
+      let reject!: FilterRequest['reject'];
+      const promise = new Promise<void>((onResolve, onReject) => {
+        resolve = onResolve;
+        reject = onReject;
+      });
+      const request = { promise, resolve, reject };
+      pending = request;
+      inflight.set(filter, request);
+      void fetchFilter(filter, opts)
         .then((fetched) => {
           // 转入后台推送可能早于这次列表响应到达:提交前按已知后台任务过滤。
           const data = withoutHiddenSessions(fetched);
@@ -831,37 +845,41 @@ export const sessionsStore = {
             notify();
             runTrailingFilterBackfill(filter);
           }
-          return data;
+          request.resolve();
         })
         .catch((e) => {
           if (inflight.get(filter) === request) {
             inflight.delete(filter);
             runTrailingFilterBackfill(filter);
           }
-          throw e;
+          // 替换时 resolve 已接到新请求，之后旧请求的 reject 不会再改变结果。
+          request.reject(e);
         });
-      promise = request;
-      inflight.set(filter, promise);
     }
-    await promise;
+    await pending.promise;
   },
 
   /** 强制重拉单桶（先 drop 再 ensure）。返回新数据。 */
   async forceRefresh(filter: ListStatusFilter): Promise<Session[]> {
     cache.delete(filter);
+    const previous = inflight.get(filter);
     inflight.delete(filter);
     trailingFilterRefreshes.delete(filter);
-    await this.ensureByFilter(filter, { fresh: true });
+    const replacement = this.ensureByFilter(filter, { fresh: true });
+    // 立即转交等待关系，不依赖旧 IPC 返回；连续刷新会自然跟随到最新请求。
+    previous?.resolve(replacement);
+    await replacement;
     return cache.get(filter) ?? [];
   },
 
   /**
-   * 重拉所有"已加载过"的桶，未加载的桶不动。
+   * 重拉已缓存或正在加载的桶，未访问的桶不动。
    * sessionsBus.onRefresh / sessionsPush.onCreated 走这条 ——
    * 无完整 row 的列表成员变化（main 端新建等）需要让所有活跃订阅者同步刷新。
    */
   async forceRefreshAll(): Promise<void> {
-    const filters = Array.from(cache.keys());
+    // forceRefresh 会暂时移除缓存；这段窗口收到的新建通知仍需触发 fresh 读取。
+    const filters = Array.from(new Set([...cache.keys(), ...inflight.keys()]));
     if (filters.length === 0) return;
     await Promise.all(filters.map((f) => this.forceRefresh(f)));
   },
@@ -1300,11 +1318,15 @@ export const sessionsStore = {
 /* 模块加载时一次性挂上，避免每个 hook 实例重复订阅。
  * 守卫 window/electronAPI 的存在性，规避 SSR / 测试 / preload 未就绪场景。 */
 
+function refreshAfterNotification(): void {
+  void sessionsStore.forceRefreshAll().catch(() => {
+    // 加载等待者会收到当前请求的错误；事件通知本身没有接收返回值的调用方。
+  });
+}
+
 if (typeof window !== 'undefined') {
   onPatch((sessionId, patch) => sessionsStore.patchLocal(sessionId, patch));
-  onRefresh(() => {
-    void sessionsStore.forceRefreshAll();
-  });
+  onRefresh(refreshAfterNotification);
 
   // 自动起名的即时标题预览 —— 条件更新,判定放在这里是因为**本模块持有列表缓存**:
   //
@@ -1372,7 +1394,7 @@ if (typeof window !== 'undefined') {
       );
     notify();
     // Supersede list reads which started before this directory mutation.
-    void sessionsStore.forceRefreshAll();
+    refreshAfterNotification();
     },
   );
 
@@ -1386,7 +1408,7 @@ if (typeof window !== 'undefined') {
       if (!isDataOwnerPushCurrent(ownerStamp)) return;
       // payload 只有 sessionId 不带完整 Session row，prependCreated 用不上 ——
       // 直接重拉所有已加载桶让新 session 出现在 sidebar。
-      void sessionsStore.forceRefreshAll();
+      refreshAfterNotification();
     });
   }
 
@@ -1400,7 +1422,7 @@ if (typeof window !== 'undefined') {
         'type' in event &&
         event.type === 'session-bound'
       ) {
-        void sessionsStore.forceRefreshAll();
+        refreshAfterNotification();
       }
     });
   }

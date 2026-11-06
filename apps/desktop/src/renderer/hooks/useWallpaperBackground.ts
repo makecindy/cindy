@@ -1,16 +1,18 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
+// Raised in-page surfaces let at most this share of the artwork through, which
+// keeps the tertiary text tier at the 3:1 floor over any wallpaper.
+const GLASS_MAX_WALLPAPER_SHARE = 0.16;
+
 /** One document canvas, including the fixed copies behind the composer. */
 export function useWallpaperBackground({
   background,
-  pending,
   visibility,
   blur,
   reducedMotion,
   decodeUrl,
 }: {
   background: string | undefined;
-  pending: boolean;
   visibility: number;
   blur: number;
   reducedMotion: boolean;
@@ -49,17 +51,21 @@ export function useWallpaperBackground({
       root.style.removeProperty('--app-wallpaper-previous-image');
     };
     const previous = root.style.getPropertyValue('--app-wallpaper-image');
-    // A download, disk-cache lookup or decode must not replace a displayed
-    // original with the next thumbnail. A failed selection also retains it.
-    const next = background && (pending || !imageReady) && previous ? previous : background;
+    // Official selections show their bundled preview until the asset hook
+    // supplies a decoded original. Only custom images need to wait here.
+    const next = background && !imageReady && previous ? previous : background;
     if (!next) {
       stopTransition();
       delete root.dataset.wallpaperActive;
       root.style.removeProperty('--app-wallpaper-image');
       root.style.removeProperty('--app-wallpaper-veil');
+      root.style.removeProperty('--app-wallpaper-glass-floor');
     } else {
       root.dataset.wallpaperActive = 'true';
       root.style.setProperty('--app-wallpaper-veil', `${100 - visibility * 100}%`);
+      const glassFloor =
+        visibility > 0 ? Math.max(0, 1 - GLASS_MAX_WALLPAPER_SHARE / visibility) : 0;
+      root.style.setProperty('--app-wallpaper-glass-floor', `${Math.ceil(glassFloor * 100)}%`);
       if (reducedMotion || visibility === 0) stopTransition();
       if (next !== previous) {
         stopTransition();
@@ -92,7 +98,7 @@ export function useWallpaperBackground({
       delete root.dataset.wallpaperBlur;
       root.style.removeProperty('--app-wallpaper-blur');
     }
-  }, [background, pending, visibility, blur, reducedMotion, imageReady]);
+  }, [background, visibility, blur, reducedMotion, imageReady]);
 
   useLayoutEffect(() => {
     const root = document.documentElement;
@@ -114,6 +120,7 @@ export function useWallpaperBackground({
         '--app-wallpaper-image',
         '--app-wallpaper-previous-image',
         '--app-wallpaper-veil',
+        '--app-wallpaper-glass-floor',
         '--app-wallpaper-blur',
       ])
         root.style.removeProperty(name);

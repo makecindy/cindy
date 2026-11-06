@@ -120,6 +120,17 @@ describe('server group feature parity', () => {
       return response(route);
     });
   }
+  function configureBroadcasts(allowMentionAllBots: boolean) {
+    const base = fixture.handle.getMockImplementation()!;
+    fixture.handle.mockImplementation((route, method, data) => {
+      const result = base(route, method, data);
+      if (route === '/me') return { ...result, body: { ...result.body,
+        capabilities: { ...result.body.capabilities, groupMentionAudiences: 1 } } };
+      if (route.endsWith('/snapshot')) return { ...result, body: { ...result.body,
+        room: { ...result.body.room, allow_mention_all_bots: allowMentionAllBots } } };
+      return result;
+    });
+  }
   async function flush() { await vi.advanceTimersByTimeAsync(0); }
   // Mention-only must suppress the auxiliary planning request as well as model replies.
   it.each([undefined, 'proposed', 'waiting'] as const)('keeps unaddressed mention-only messages idle with plan=%s', async status => {
@@ -135,12 +146,13 @@ describe('server group feature parity', () => {
     const posted = fixture.handle.mock.calls.find(([route, method]) => route.endsWith('/messages') && method === 'POST')![2];
     expect(posted).toMatchObject({ deferExecution: false, mentions: [] });
   });
-  it.each([{ division: true }, { mentions: { all: true, botIds: [] } }])('keeps directed planning available in mention-only rooms: %j', async input => {
+  it.each([{ division: true }, { mentions: { all: false, allBots: true, botIds: [] } }])('keeps directed planning available in mention-only rooms: %j', async input => {
     arrange();
     const base = fixture.handle.getMockImplementation()!;
     fixture.handle.mockImplementation((route, method, data) => route.endsWith('/snapshot')
       ? { body: { room: { ...room(roomId), response_mode: 'mentioned' }, members, messages: [], cursor: '1' } }
       : base(route, method, data));
+    if ('mentions' in input) configureBroadcasts(true);
     expect((await send(input)).ok).toBe(true); await flush();
     expect(deps.decidePlan).toHaveBeenCalledTimes(1);
     expect(planPosts()).toHaveLength(1);
@@ -162,17 +174,23 @@ describe('server group feature parity', () => {
     expect(fixture.handle.mock.calls.find(([route, method]) => route === `/conversations/${roomId}/plans/${planId}` && method === 'POST')?.[2])
       .toMatchObject({ action: expectedAction, expectedRevision: 1 });
   });
+  // User decision / CI 41107776765: the old @all fixture conflated humans and bots.
+  // Unit tier at sendMessage: preserve ordinary/bot planning, but never plan a human broadcast.
   it.each([
-    ['ordinary request', {}, undefined],
-    ['@all', { mentions: { all: true, botIds: [] } }, undefined],
-  ])('asks the organizer for %s without changing server mentions', async (_name, input, roster) => {
-    arrange(undefined, roster);
+    ['ordinary request', {}, true],
+    ['@all teammates', { mentions: { all: false, allBots: true, botIds: [] } }, true],
+    ['@all humans', { mentions: { all: true, botIds: [] } }, false],
+  ] as const)('routes planning for %s without changing its audience', async (name, input, shouldPlan) => {
+    arrange();
+    if (name !== 'ordinary request') configureBroadcasts(name === '@all teammates');
     expect((await send(input)).ok).toBe(true); await flush();
-    expect(deps.decidePlan).toHaveBeenCalledWith(expect.objectContaining({ mode: 'auto' }), expect.any(AbortSignal));
-    expect(planPosts()).toHaveLength(1);
+    expect(deps.decidePlan).toHaveBeenCalledTimes(shouldPlan ? 1 : 0);
+    if (shouldPlan) expect(deps.decidePlan).toHaveBeenCalledWith(expect.objectContaining({ mode: 'auto' }), expect.any(AbortSignal));
+    expect(planPosts()).toHaveLength(shouldPlan ? 1 : 0);
     const posted = fixture.handle.mock.calls.find(([route, method]) => route.endsWith('/messages') && method === 'POST')![2];
-    expect(posted.deferExecution).toBe(true);
-    expect(posted.mentions).toEqual(_name === '@all' ? [botId, secondBotId] : []);
+    expect(posted.deferExecution).toBe(shouldPlan);
+    expect(posted.mentions).toEqual(name === '@all teammates' ? [botId, secondBotId] : []);
+    expect(posted.mentionAudience).toBe(name === 'ordinary request' ? undefined : name === '@all teammates' ? 'bots' : 'humans');
   });
   it('gives an explicit 安排分工 the 引用回复 it quotes, in the decision and the stored request', async () => {
     const quotedId = '80000000-0000-4000-8000-000000000001';
@@ -266,9 +284,10 @@ describe('server group feature parity', () => {
     const view = await service.getGroup(roomId);
     expect(view).toMatchObject({ ok: true, group: { planningBotId: null } });
   });
-  it('keeps @all on an existing proposal as discussion, not a revision', async () => {
+  it.each(['humans', 'bots'] as const)('keeps a %s broadcast on an existing proposal as discussion, not a revision', async audience => {
     arrange(proposed);
-    await send({ mentions: { all: true, botIds: [] } }); await flush();
+    configureBroadcasts(audience === 'bots');
+    await send({ mentions: audience === 'bots' ? { all: false, allBots: true, botIds: [] } : { all: true, botIds: [] } }); await flush();
     expect(deps.decidePlan).not.toHaveBeenCalled();
     expect(planPosts()).toHaveLength(0);
   });
@@ -343,10 +362,12 @@ describe('server group feature parity', () => {
     arrange();
     const base = fixture.handle.getMockImplementation()!;
     fixture.handle.mockImplementation((route, ...args) => route === '/me' ? { body: { actor: { id: selfId }, capabilities: { groupDiscussionParity: 1 } } } : base(route, ...args));
+    configureBroadcasts(true);
     let finish!: (value: unknown) => void;
     deps.decidePlan = vi.fn(() => new Promise(resolve => { finish = resolve; })) as typeof deps.decidePlan;
-    await send({ mentions: { all: true, botIds: [] } }); await flush();
-    expect(fixture.handle.mock.calls.find(([route, method]) => route.endsWith('/messages') && method === 'POST')?.[2].mentionsAll).toBe(true);
+    await send({ mentions: { all: false, allBots: true, botIds: [] } }); await flush();
+    expect(fixture.handle.mock.calls.find(([route, method]) => route.endsWith('/messages') && method === 'POST')?.[2])
+      .toMatchObject({ mentionsAll: true, mentionAudience: 'bots', mentions: [botId, secondBotId] });
     await service.stopRound(roomId);
     expect(fixture.handle.mock.calls.some(([route]) => route.endsWith('/cancel-planning'))).toBe(true);
     finish({ needsPlan: true, steps }); await flush();expect(planPosts()).toHaveLength(0);

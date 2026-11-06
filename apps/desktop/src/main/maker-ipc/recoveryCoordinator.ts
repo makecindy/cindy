@@ -1,5 +1,19 @@
 import type { RecoveryCheckpoint } from '../../shared/agentInputQueue.js';
 
+/** A model divider records routing, not assistant work. Unknown/actual output stays progress. */
+export function isEmptyModelChangeMarker(message: {
+  role: string;
+  content: unknown;
+  agentMeta?: Record<string, unknown> | null;
+}): boolean {
+  const change = message.agentMeta?.modelChange;
+  return message.role === 'assistant' && message.content === ''
+    && !!change && typeof change === 'object' && !Array.isArray(change)
+    && 'fromModel' in change && typeof change.fromModel === 'string'
+    && 'toModel' in change && typeof change.toModel === 'string'
+    && 'modelOnly' in change && change.modelOnly === true;
+}
+
 /** A bounded snapshot read from the durable message/session store. */
 export interface RecoveryContextSnapshot {
   contextTokens: number;

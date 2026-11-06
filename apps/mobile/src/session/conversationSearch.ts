@@ -42,6 +42,7 @@ export type ConversationSearchInvoke = <T>(
   deviceId: string,
   channel: string,
   args?: unknown[],
+  options?: { preSend?: () => void },
 ) => Promise<T>;
 
 export interface ConversationSearchDeviceOrigin {
@@ -88,6 +89,8 @@ export interface SearchConversationsAcrossDevicesDeps {
   invoke: ConversationSearchInvoke;
   getCachedSessions: () => readonly RemoteSession[];
   isDeviceUnresponsive?: (deviceId: string) => boolean;
+  isCurrent?: () => boolean;
+  onProgress?: (page: ConversationSearchResponse) => void;
 }
 
 export function isConversationSearchChannelNotAllowed(error: unknown): boolean {
@@ -113,7 +116,9 @@ export async function searchConversationsAcrossDevices(
   deps: SearchConversationsAcrossDevicesDeps,
 ): Promise<ConversationSearchResponse> {
   const query = request.query.trim();
-  if (!query || origins.length === 0) return emptyConversationSearchResponse(query);
+  if (!query || origins.length === 0 || deps.isCurrent?.() === false) {
+    return emptyConversationSearchResponse(query);
+  }
 
   const keywordRequest: ConversationSearchRequest = {
     ...request,
@@ -122,9 +127,27 @@ export async function searchConversationsAcrossDevices(
     semanticMode: 'keyword',
   };
 
-  const pages = await Promise.all(
-    origins.map((origin) => searchOneDevice(origin, keywordRequest, deps)),
-  );
+  // Keep origin order rather than completion order so equal-ranked hits and
+  // duplicate metadata are deterministic as slower computers join the results.
+  const pages: (ConversationSearchResponse | null)[] = origins.map(() => null);
+  let merged = emptyConversationSearchResponse(query);
+  await Promise.all(origins.map(async (origin, index) => {
+    const page = await searchOneDevice(origin, keywordRequest, deps);
+    if (deps.isCurrent?.() === false) return;
+    pages[index] = page;
+    merged = mergeDevicePages(origins, pages, keywordRequest, deps);
+    deps.onProgress?.(merged);
+  }));
+  return merged;
+}
+
+function mergeDevicePages(
+  origins: readonly ConversationSearchDeviceOrigin[],
+  pages: readonly (ConversationSearchResponse | null)[],
+  keywordRequest: ConversationSearchRequest,
+  deps: SearchConversationsAcrossDevicesDeps,
+): ConversationSearchResponse {
+  const query = keywordRequest.query;
   const present = pages.filter((page): page is ConversationSearchResponse => page != null);
   // Updated hosts match aliases before limiting indexed results. Supplement the
   // cache for older/offline hosts, retaining the same visible device/project scope.
@@ -155,6 +178,7 @@ async function searchOneDevice(
   request: ConversationSearchRequest,
   deps: SearchConversationsAcrossDevicesDeps,
 ): Promise<ConversationSearchResponse | null> {
+  if (deps.isCurrent?.() === false) return null;
   const unresponsive = deps.isDeviceUnresponsive?.(origin.deviceId) === true;
   if (!origin.reachable || unresponsive) {
     return searchCachedDeviceSessions(origin, requestForOrigin(origin, request), deps.getCachedSessions());
@@ -163,15 +187,21 @@ async function searchOneDevice(
   try {
     const maker = createMobileMakerTransport({
       deviceId: origin.deviceId,
-      invoke: deps.invoke,
+      invoke: deps.isCurrent ? (deviceId, channel, args) => deps.invoke(deviceId, channel, args, {
+        preSend: () => {
+          if (deps.isCurrent?.() === false) throw new Error('Conversation search superseded');
+        },
+      }) : deps.invoke,
     });
     const deviceRequest = requestForOrigin(origin, request);
     const raw = await maker.searchConversations(remoteConversationSearchRequest(deviceRequest));
+    if (deps.isCurrent?.() === false) return null;
     if (remoteIndexedSearchIgnoredWorkingDirs(raw, deviceRequest.filters?.workingDirs)) {
       return searchCachedDeviceSessions(origin, deviceRequest, deps.getCachedSessions());
     }
     return finalizeRemotePage(raw, origin, deviceRequest);
   } catch (error) {
+    if (deps.isCurrent?.() === false) return null;
     return searchCachedDeviceSessions(origin, requestForOrigin(origin, request), deps.getCachedSessions());
   }
 }
@@ -252,6 +282,7 @@ function sessionToSearchSummary(
     id: session.id,
     title: session.title,
     workingDir: session.workingDir,
+    projectDir: session.projectDir,
     workspaceKind: session.workspaceKind,
     agentKind: session.agentKind,
     status: session.status,
@@ -318,6 +349,7 @@ export function toSearchListItem(
         id: item.session.id,
         title: item.session.title,
         workingDir: item.session.workingDir,
+        projectDir: item.session.projectDir,
         workspaceKind: item.session.workspaceKind,
         agentKind: item.session.agentKind,
         status: item.session.status,
@@ -382,7 +414,7 @@ export function shouldReplaceListWithSearchResults(
   query: string,
   status: 'idle' | 'searching' | 'ready',
 ): boolean {
-  return query.trim().length > 0 && status === 'ready';
+  return query.trim().length > 0 && status !== 'idle';
 }
 
 export function conversationSearchStatusFilter(
@@ -462,7 +494,7 @@ export function scopedConversationSearchOrigins(
 }
 
 export function listConversationSearchProjects(
-  sessions: readonly Pick<RemoteSession, 'canonicalDeviceId' | 'deviceLinkDeviceId' | 'deviceLinkDeviceName' | 'orcaRole' | 'workingDir' | 'workspaceKind' | 'remoteHostId'>[],
+  sessions: readonly Pick<RemoteSession, 'canonicalDeviceId' | 'deviceLinkDeviceId' | 'deviceLinkDeviceName' | 'orcaRole' | 'workingDir' | 'projectDir' | 'workspaceKind' | 'remoteHostId'>[],
   deviceIds?: ReadonlySet<string>,
   projectAliases?: ProjectAliasDisplayIndex,
 ): ConversationSearchProjectOption[] {
@@ -474,7 +506,7 @@ export function listConversationSearchProjects(
     if (session.workspaceKind === 'dialogue') continue;
     const deviceId = session.canonicalDeviceId ?? session.deviceLinkDeviceId;
     if (!deviceId) continue;
-    const workingDir = stripTrailingPathSeparators(session.workingDir?.trim() ?? '');
+    const workingDir = stripTrailingPathSeparators((session.projectDir ?? session.workingDir)?.trim() ?? '');
     if (!workingDir) continue;
     const dirKey = collapseWorktreeDirForGrouping(workingDir) ?? workingDir;
     const key = `${deviceId}:${dirKey}`;

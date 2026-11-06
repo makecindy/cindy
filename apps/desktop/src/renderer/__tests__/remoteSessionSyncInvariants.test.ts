@@ -55,7 +55,10 @@ const chatInputSrc = readFileSync(
 describe('useRemoteSessionSync 接线不变式', () => {
   it('WS 重连(onStatusChanged online)重建重 topic 订阅 + 对账', () => {
     expect(syncSrc).toContain('onStatusChanged');
-    expect(syncSrc).toContain("p.status !== 'online'");
+    // 重连后恢复订阅；信令离线时仅该目标已保留的健康直连也可恢复。
+    expect(syncSrc).toContain("p.status === 'online' || p.directDataDeviceIds?.includes(deviceId) === true");
+    expect(syncSrc).toContain('if (p.dataPathChangedDeviceId && p.dataPathChangedDeviceId !== deviceId) return;');
+    expect(syncSrc).toContain('if (!online || (p.dataPathChangedDeviceId && !changed)) return;');
     expect(syncSrc).toContain('subscribeHeavy()');
     expect(syncSrc).toContain('reconcileRemoteMessages');
   });

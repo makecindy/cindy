@@ -139,11 +139,12 @@ describe('Server catalog updates with independent Cindy native protocols', () =>
       piApi: 'google-generative-ai',
       contextWindow: 1234567,
     });
-    expect(models.codex.defaultEnabled).toBe(false);
-    expect(models['claude-code'].defaultEnabled).toBe(false);
+    // Cindy AI serves Responses and Messages for Gemini: those engines start enabled.
+    expect(models.codex.defaultEnabled).not.toBe(false);
+    expect(models['claude-code'].defaultEnabled).not.toBe(false);
     const comparison = modelProtocolComparison(gateway, models);
     expect(comparison.forAgent('pi')?.mode).toBe('matching');
-    expect(comparison.forAgent('codex')?.mode).toBe('compatibility');
+    expect(comparison.forAgent('codex')?.mode).toBe('matching');
     // Matching the model at the outbound end does not erase a local bridge conversion.
     expect(
       modelProtocolComparison(gateway, {

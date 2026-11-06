@@ -6,6 +6,7 @@ import {
   InterruptedTurnAutoResumeGuard,
   interruptedTurnResumeDelayMs,
   isAcceptedTurnContinuationOnlyReason,
+  isContinuationOnlyAutoResumeReason,
   isAutoResumeUserMessage,
   isInterruptedTurnError,
   isSubstantiveProgressEvent,
@@ -163,6 +164,15 @@ describe('isInterruptedTurnError', () => {
     expect(isAcceptedTurnContinuationOnlyReason('upstream-overload')).toBe(false);
     expect(isAcceptedTurnContinuationOnlyReason('turn-failed')).toBe(false);
     expect(isAcceptedTurnContinuationOnlyReason(undefined)).toBe(false);
+  });
+
+  it('continues a lost remote agent without letting ordinary tasks resume it', () => {
+    for (const reason of ['remote_agent_closed', 'remote_agent_lost']) {
+      expect(isContinuationOnlyAutoResumeReason(reason)).toBe(true);
+      expect(isAcceptedTurnContinuationOnlyReason(reason)).toBe(false);
+      expect(isInterruptedTurnError({ reason, message: 'The computer running this agent is unreachable.' })).toBe(false);
+    }
+    expect(isContinuationOnlyAutoResumeReason('remote_agent_restarted')).toBe(false);
   });
 
   it('preserves waiting continuation-only auto-resume only across unexpected close', () => {

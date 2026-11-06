@@ -4,9 +4,8 @@ import { refreshBotProfiles, useBotProfiles } from './botStore';
 import { subscribeBotReadState } from './botReadState';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { startBotGroupSync } from './botGroupStore';
-import { startBotGroupOutbox } from './botGroupOutbox';
 
-/** Main-window lifetime: entering a section is never a read receipt. */
+/** Per-window list mirrors; entering a section is never a read receipt. */
 export function useBotUnreadSync(): void {
   const bots = useBotProfiles();
   const owner = getDataOwnerGeneration();
@@ -27,7 +26,6 @@ export function useBotUnreadSync(): void {
       maker?.onBotLifecycleChanged?.((_payload, stamp) => { if (isDataOwnerPushCurrent(stamp)) refresh(); }),
       subscribeBotReadState(refresh),
       startBotGroupSync(),
-      startBotGroupOutbox(),
     ];
     window.addEventListener('focus', refresh);
     return () => {

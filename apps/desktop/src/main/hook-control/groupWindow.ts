@@ -120,6 +120,7 @@ export async function recordGroupMessage(
       author: payload.author,
       text: payload.text,
       fileNames: payload.fileNames,
+      imageRefs: payload.imageRefs,
       sentAt: payload.sentAt,
     },
     GROUP_WINDOW_RETENTION,

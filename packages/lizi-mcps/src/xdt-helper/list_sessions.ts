@@ -45,6 +45,7 @@ const DESCRIPTION = [
   'orcaRole / parentSessionId / userSendAt 仅在非 null 时出现(默认场景几乎全为 null, 已 omit)。',
   '',
   '【分页】游标分页, 默认 100 条/次, 最大 1000。串联 nextCursor 拿全量。',
+  '源设备可按完整记录的 64 KiB 软预算提前分页；单条超大记录仍完整返回。limit 是条数上限，结束以 hasMore 为准。',
 ].join('\n');
 
 export interface ListSessionsToolDeps {

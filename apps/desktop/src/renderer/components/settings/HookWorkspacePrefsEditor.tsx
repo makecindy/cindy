@@ -44,7 +44,7 @@ import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import { useAgentCapabilities, type AgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
-import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
+import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
 import { agentDeviceModelMemoryAccessors } from '@/state/agentDeviceModelMemory';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
 import type { MakerVendor } from '@/lib/ccAgent.types';
@@ -517,7 +517,7 @@ export function WorkspacePrefsEditor({
 }) {
   const { t } = useTranslation();
   const agentDeviceId = state.agentDeviceFor(alias);
-  const sharedDevices = useProviderShareAgentDevices([agentDeviceId]);
+  const routeDevices = useModelRouteDevices({ controlledDeviceId: null, leadAgentDeviceId: agentDeviceId });
   const claudeCaps = useAgentCapabilities('claude-code', agentDeviceId ?? undefined);
   const codexCaps = useAgentCapabilities('codex', agentDeviceId ?? undefined);
   const piCaps = useAgentCapabilities('pi', agentDeviceId ?? undefined);
@@ -565,7 +565,7 @@ export function WorkspacePrefsEditor({
           路由 —— 「选 A 落 B」的根因(选了来源没地方存)已消除。 */}
       <PrefsField label={t('settings.tina.prefs.modelLabel')} className="flex-1 basis-[220px]">
         <ModelSelector
-          remoteAgent={{ devices: sharedDevices.devices, selectedDeviceId: agentDeviceId }}
+          remoteAgent={routeDevices.devices && { devices: routeDevices.devices, selectedDeviceId: agentDeviceId }}
           fastModeConfigurable={false}
           unifiedAgents={pickerAgents}
           onUnifiedSelect={({ engine, modelId, providerId, effort, agentDevice }) => state.applyPatch(

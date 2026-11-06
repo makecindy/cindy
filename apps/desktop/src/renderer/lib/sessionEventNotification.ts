@@ -4,6 +4,7 @@ import { getNotificationsEnabled } from '@/hooks/useNotificationSettings';
 import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { getRemoteSessionActivity, subscribeRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
 import { isReviewSessionSource } from '../../shared/sessionSource';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 
 export type SessionEventNotificationKind = 'done' | 'error' | 'needs-reply';
 
@@ -108,19 +109,58 @@ export function sendSessionEventNotification(
      */
     remoteDevice?: boolean;
     remoteDeviceId?: string | null;
+    /** Main owns the fixed-copy phone push for input-handoff steps. */
+    mobile?: boolean;
+    /** Explicit Feishu delivery override for the ordinary notification path. */
+    feishu?: boolean;
+    /** Main owns the phone push; Feishu falls back only without an IM target. */
+    inputHandoff?: true;
+    /** The request that caused this event, independent of later task state. */
+    inputHandoffRequestId?: string;
   } = {},
 ): void {
   // The user is already looking at Cindy. In-app attention remains available,
   // but an OS/external notification would be duplicate noise.
   if (typeof document !== 'undefined' && document.hasFocus()) return;
 
-  if (kind === 'done' && options.remoteDeviceId) {
-    sendRemoteCompletionNotification(sessionId, options.remoteDeviceId, () =>
-      deliverSessionEventNotification(sessionId, title, kind, true));
+  if (kind === 'needs-reply' && options.inputHandoff) {
+    // Keep the desktop reminder immediate; Main owns request-scoped IM routing.
+    deliverSessionEventNotification(sessionId, title, kind, options.remoteDevice === true,
+      { ...options, mobile: false, feishu: false });
+    // The controller cannot resolve the execution host's IM bindings locally.
+    if (options.remoteDevice !== true && options.feishu !== false && options.inputHandoffRequestId
+      && getFeishuNotificationsEnabled()) {
+      void sendUnhandledHandoffFeishuNotification(sessionId, title, options.inputHandoffRequestId);
+    }
     return;
   }
 
-  deliverSessionEventNotification(sessionId, title, kind, options.remoteDevice === true);
+  if (kind === 'done' && options.remoteDeviceId) {
+    sendRemoteCompletionNotification(sessionId, options.remoteDeviceId, () =>
+      deliverSessionEventNotification(sessionId, title, kind, true, options));
+    return;
+  }
+
+  deliverSessionEventNotification(sessionId, title, kind, options.remoteDevice === true, options);
+}
+
+/** Main resolves the event's IM ownership; persisted source alone is not a live route. */
+async function sendUnhandledHandoffFeishuNotification(sessionId: string, title: string, requestId: string): Promise<void> {
+  const owner = getDataOwnerGeneration();
+  try {
+    const row = await window.electronAPI.localDb.sessions.get(sessionId);
+    // Missing session data is not proof of a valid local notification target.
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return;
+    if (!isDataOwnerGenerationCurrent(owner) || !getFeishuNotificationsEnabled()
+      || (typeof document !== 'undefined' && document.hasFocus())) return;
+    await window.electronAPI.notificationShowSessionEvent({
+      sessionId, title, kind: 'needs-reply', markAttention: false,
+      inputHandoffRequestId: requestId,
+      channels: { desktop: false, feishu: true, mobile: false },
+    });
+  } catch {
+    // Best effort: a failed lookup never delays the desktop or duplicates an IM pointer.
+  }
 }
 
 const pendingRemoteCompletions = new Map<string, () => void>();
@@ -158,7 +198,13 @@ function sendRemoteCompletionNotification(sessionId: string, deviceId: string, d
   pendingRemoteCompletions.set(key, cancel);
 }
 
-function deliverSessionEventNotification(sessionId: string, title: string, kind: SessionEventNotificationKind, remoteDevice: boolean): void {
+function deliverSessionEventNotification(
+  sessionId: string,
+  title: string,
+  kind: SessionEventNotificationKind,
+  remoteDevice: boolean,
+  options: { mobile?: boolean; feishu?: boolean },
+): void {
   // A handoff can finish after the user has opened Cindy or changed preferences.
   if (typeof document !== 'undefined' && document.hasFocus()) return;
 
@@ -171,10 +217,10 @@ function deliverSessionEventNotification(sessionId: string, title: string, kind:
     ...(remoteDevice ? { markAttention: false } : {}),
     channels: {
       desktop: !remoteDevice && getNotificationsEnabled() && !islandActive,
-      feishu: getFeishuNotificationsEnabled(),
+      feishu: options.feishu !== false && getFeishuNotificationsEnabled(),
       // Mobile owns registration/unregistration of its push token. There is
       // deliberately no second desktop setting for the same channel.
-      mobile: true,
+      mobile: options.mobile !== false,
     },
   });
 }

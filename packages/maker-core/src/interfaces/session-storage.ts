@@ -14,6 +14,8 @@ export interface SessionMeta {
   title: string;
   model: string;
   workspaceKind?: WorkspaceKind;
+  /** Product project membership, independent of the agent's execution directory. */
+  projectDir?: string | null;
   effort?: Effort;
   permissionMode?: PermissionMode;
   fastMode?: boolean | 'ultrafast';

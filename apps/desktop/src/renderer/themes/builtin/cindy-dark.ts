@@ -1,6 +1,7 @@
 import type { Theme } from '../types';
 import cindyLogoDark from '../../assets/cindy-logo-dark.png';
 import { CINDY_ACRYLIC_WINDOW_BACKING } from '../../../shared/windowBackdrop';
+import { filledButtonHover, filledButtonPressed } from '../filledButtonStates';
 
 /*
  * CINDY Dark — 品牌红 CTA + 中性近黑底(#181818)+ AA 正文;U2 二级信息色忠于 Figma 原值。
@@ -112,9 +113,9 @@ const GENERATED_OVERRIDES = {
   "settings-theme-auto-dark": "#181818", // Auto 预览: 新暗色底
   "sidebar-action-icon": "0.0 0.0% 100.0% / 0.40", // 墨水 白 40%: 三级文字(2026-10-22 用户裁决,取代实色灰)
   "cmd-palette-item-meta": "rgba(255, 255, 255, 0.55)", // 墨水 白 55%: 次要文字(2026-10-22 用户裁决,取代实色灰)
-  "sidebar-item-active-foreground": "#151515", // 反相深字(浅钮上)
+  "sidebar-item-active-foreground": "#EEEEEE", // Soft selected pill with same-polarity readable foreground.
   "sidebar-item-active-border": "transparent", // 用户三次改稿 2026-07-20:选中胶囊彻底去描边
-  "sidebar-item-active": "0.0 0.0% 93.3%", // 用户二次改稿 2026-07-20:反相胶囊 #EEEEEE 浅底(同 accent-cta-bg)
+  "sidebar-item-active": "214.3 5.5% 24.9%", // Soft selected pill with same-polarity readable foreground.
   "splash-bg": "0 0% 9.4%", // 页底 -> HSL
   "splash-text": "0.0 0.0% 100.0% / 0.55", // 墨水 白 55%: 次要文字(2026-10-22 用户裁决,取代实色灰)
   "splash-text-destructive": "0.0 0.0% 100.0%", // destructive splash text
@@ -125,7 +126,6 @@ const GENERATED_OVERRIDES = {
   "update-btn-border": "#EEEEEE", // E1D 中性底(实心胶囊,与 bg 同色)
   "update-btn-bg": "#EEEEEE", // E1D §15.10 反相中性:dark 浅底,承载深字
   "update-btn-text": "#151515", // 反相深字(浅钮上)
-  "update-btn-hover": "#E2E2E2", // E1D §15.10 四态 hover(实心,非 alpha 叠加)
   "accent-foreground": "0.0 0.0% 100.0% / 0.82", // 墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)
   "panel-bg": "#181818", // 直映: 页底(纯中性)
   "primary": "0.0 0.0% 93.3%", // E1D C 类裁决 3:反相中性 HSL
@@ -154,8 +154,6 @@ const GENERATED_OVERRIDES = {
   "send-btn-icon": "#151515", // 反相深字(浅钮上)
   "send-btn-disabled-bg": "#323232", // 禁用底/option hover 档
   "send-btn-disabled-icon": "#464646", // 禁用图标
-  "send-btn-hover-bg": "#E2E2E2", // E1D 反相中性 hover(lead 四态)
-  "send-btn-pressed-bg": "#D4D4D4", // E1D 反相中性 pressed(lead 四态)
   "completion-badge-fg": "#121212", // 反相深字: 平移
   "create-agent-control-bg": "#272727", // composer pill
   "create-agent-control-bg-hover": "rgba(255, 255, 255, 0.06)", // 墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)
@@ -202,6 +200,8 @@ export const cindyDark: Theme = {
   colors: {
     ...GENERATED_OVERRIDES,
     "surface-translucent-sidebar": CINDY_ACRYLIC_WINDOW_BACKING.dark,
+    "update-btn-hover": filledButtonHover('var(--update-btn-bg)'),
+    "update-btn-pressed": filledButtonPressed('var(--update-btn-bg)'),
   },
   // U5 品牌版横向 logo：白字+红箭头，深底可见。
   brand: { logo: { src: cindyLogoDark } },

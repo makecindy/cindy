@@ -19,6 +19,7 @@ vi.mock('../override-settings-file.js', () => ({
     read: () => mocks.value,
     writePatch: mocks.write,
   }),
+  portableOverrideSettings: () => ({ readCustomized: () => ({}), applyPatch: async () => false }),
 }));
 vi.mock('../../appSessionState.js', () => ({ ownerScopedUserDataPath: () => 'unused' }));
 vi.mock('../logger-adapter.js', () => ({

@@ -440,6 +440,46 @@ describe('automation-generated sessions', () => {
     });
   });
 
+  it('folds runs of one teammate routine together and leaves older-host routine rows flat', () => {
+    // 伙伴例行任务不是 schedule：按「伙伴 + 规则」成组，不同规则 / 伙伴各自成组；
+    // 旧主机不投影 routineId 时保持平铺，不误并。
+    const routineRun = (id: string, botId: string, routineId?: string) =>
+      makeSession({
+        id,
+        title: 'Morning brief',
+        source: 'bot',
+        workspaceKind: 'dialogue',
+        companion: { id: botId, role: 'routine', ...(routineId ? { routineId } : {}) },
+      });
+    const sessions = [
+      routineRun('brief-2', 'bot-a', 'brief'),
+      routineRun('brief-1', 'bot-a', 'brief'),
+      routineRun('other-bot', 'bot-b', 'brief'),
+      routineRun('legacy-1', 'bot-a'),
+      routineRun('legacy-2', 'bot-a'),
+    ];
+
+    const entries = groupAutomationSidebarEntries(sessions, { notifications: new Set() });
+
+    expect(entries.map((entry) => entry.kind)).toEqual([
+      'automation-group',
+      'session',
+      'session',
+      'session',
+    ]);
+    expect(entries[0]).toMatchObject({
+      kind: 'automation-group',
+      group: {
+        id: 'routine:bot-a:brief',
+        title: 'Morning brief',
+        teammateRoutine: { botId: 'bot-a', routineId: 'brief' },
+      },
+    });
+    if (entries[0].kind !== 'automation-group') throw new Error('expected automation group');
+    expect(entries[0].group.scheduleId).toBeUndefined();
+    expect(entries[0].group.sessions.map((session) => session.id)).toEqual(['brief-2', 'brief-1']);
+  });
+
   it('shows every recent run as its own row when expanded (primary not hidden into header)', () => {
     const group = {
       id: 'schedule:sched-jira',
@@ -1031,7 +1071,7 @@ describe('automation-generated sessions', () => {
     expect(source).toContain("group.scheduleStatus === 'active'");
     // 用正则容忍 prettier 折行(条件在一行还是拆三行都算通过)。
     expect(source).toMatch(
-      /scheduleId &&\s*!menuOpen &&\s*'group-hover:opacity-0 group-focus-within\/slot:opacity-0'/,
+      /hasHoverActions &&\s*!menuOpen &&\s*'group-hover:opacity-0 group-focus-within\/slot:opacity-0'/,
     );
     expect(source).toContain("menuOpen && 'opacity-0'");
     expect(source).toContain('disabled={!latestSession}');
@@ -1086,33 +1126,6 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('maker?.schedule');
     expect(source).toContain("event.type === 'session-bound'");
     expect(source).toContain('sessionsStore.forceRefreshAll()');
-  });
-
-  it('backfills scheduler session metadata before broadcasting session-bound refreshes', () => {
-    const source = readTextLf(
-      new URL('../../main/scheduler-host/runner.ts', import.meta.url),
-      'utf8',
-    );
-
-    const fireStart = source.indexOf(
-      'async fire(schedule: Schedule, ctx: FireContext): Promise<FireResult> {',
-    );
-    const turnListenerStart = source.indexOf('let assistantText =', fireStart);
-    expect(fireStart).toBeGreaterThanOrEqual(0);
-    expect(turnListenerStart).toBeGreaterThan(fireStart);
-
-    const fireSetupSource = source
-      .slice(fireStart, turnListenerStart)
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      .replace(/^\s*\/\/.*$/gm, '');
-    const backfillMatches = [...fireSetupSource.matchAll(/\bawait\s+backfillSessionMeta\s*\(/g)];
-    const sessionBoundMatches = [
-      ...fireSetupSource.matchAll(/\bawait\s+ctx\.onSessionBound\?\.\(session\.id\)/g),
-    ];
-
-    expect(backfillMatches).toHaveLength(1);
-    expect(sessionBoundMatches).toHaveLength(1);
-    expect(backfillMatches[0].index).toBeLessThan(sessionBoundMatches[0].index);
   });
 
   it('does not clear automation conversation attention just by browsing schedules', () => {

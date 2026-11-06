@@ -32,11 +32,12 @@ describe('Windows Android 模拟器参数', () => {
       DEFAULT_PORT: 8081, portArgs: { port: 8082, passthrough: ['--clear'] },
       portInUse: async () => false, ensureAndroidTarget, spawn,
       console: { log: vi.fn(), error: vi.fn() },
-      process: { env: { npm_execpath: npmExecPath, KEEP: 'inherited' } },
+      process: { on: vi.fn(), env: { npm_execpath: npmExecPath, KEEP: 'inherited' } },
       resolvePnpmInvocation: (args, options) => resolvePnpmInvocation(args, { ...options, platform: 'win32', execPath: node, comSpec: cmd }),
       usablePnpmExecPath, existsSync: (target) => present && target === npmExecPath,
       mobileDir: 'C:\\repo\\apps\\mobile', worktreeRoot: 'C:\\repo',
       buildEnv: { CINDY_USE_LOCAL_REGION_CONFIG: '1' }, region: 'global',
+      prepareMetroLog: () => null, removeMetroLog: () => {}, metroLogEnv: () => ({}),
       branch: 'test', commit: '123', sourceIdentity: 'test@123',
     });
     expect(ensureAndroidTarget).toHaveBeenCalledOnce();

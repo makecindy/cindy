@@ -1,3 +1,4 @@
+import { bearerKeyFromHeaders, reportCindyGatewayKeyRejected } from '../model-access/gatewayKeyRejection.js';
 import { captureUsagePricing, createUsagePricingObserver } from './model-usage-pricing.js';
 import { rewriteFastModel } from './model-fast-mode.js';
 import { createAttachmentRecovery } from './oversized-attachment-recovery.js';
@@ -25,7 +26,7 @@ import {
 } from '@cindy/model-providers';
 import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord, nativeBridgeApiKey, readBoundedResponseText, requiresNativeProviderAuth } from './pi-provider-transport.js';
-import { normalizeProviderRequest, normalizeMiniMaxResponsesReasoning } from '@cindy/model-compat';
+import { normalizeProviderRequest, normalizeMiniMaxResponsesReasoning, normalizeRepeatedResponseToolCallIdsFromBody } from '@cindy/model-compat';
 import { createCodexResponsesCompatibilityAdapter, sanitizeXaiTools, hasCacheOnlySearchProhibition, sanitizeByteDanceSeedTools, normalizeByteDanceSeedInput, sanitizeByteDanceSeedReasoning, normalizeStrictGatewayHistory, sanitizeDeepSeekV4CustomTools } from '@cindy/model-compat';
 import { peekGrokAccessToken } from './grok-oauth-login.js';
 import { bearerAccessTokenFromHeaders } from './chatgpt-bridge-auth-invalidation.js';
@@ -77,6 +78,7 @@ import {
   type RequestTransformCtx,
   type RoutingDecision,
   type RoutingTransform,
+  type RecoveryRule,
 } from '@cindy/anthropic-compat-proxy';
 import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-controller.js';
 import {
@@ -142,6 +144,7 @@ import {
   responsesItemIdStripController,
   responsesItemIdLengthStripController,
   responsesReasoningContentStripController,
+  responsesToolCallHistoryStripController,
   xaiModelInputStripController,
 } from './thread-strip-controllers.js';
 import { createMakerLogger } from './logger-adapter.js';
@@ -246,6 +249,19 @@ const responsesItemIdLengthRecoveryRule = createResponsesItemIdLengthRecoveryRul
 const responsesReasoningContentRecoveryRule = createResponsesReasoningContentRecoveryRule({
   onRetry: (threadId, model) => responsesReasoningContentStripController.markActive(threadId, model),
 });
+const duplicateResponsesToolCallRecoveryRule: RecoveryRule = {
+  id: 'duplicate_responses_tool_call',
+  enabled: () => true,
+  matches: (errorText) => /duplicate\s+function_call_output\s+for\s+call_id/i.test(errorText),
+  strip: normalizeRepeatedResponseToolCallIdsFromBody,
+  onRetry: (threadId, model) => responsesToolCallHistoryStripController.markActive(threadId, model),
+  useUpstreamModel: true,
+  applyOnUnmatchedRetry: false,
+  // 只修重复的工具 ID。这条规则的判据绑在「上游明确说 call_id 重复」上,不能顺带
+  // 叠洗别的 strip:encrypted-content 那条会在同一次透明重试里删掉上游从未拒绝过的
+  // 加密/reasoning 内容,并把删除带进后续轮次(与 responses_reasoning_content 同处理)。
+  allowExtraRules: false,
+};
 const xaiModelInputRecoveryRule = createXaiModelInputRecoveryRule({
   onRetry: (threadId, model) => xaiModelInputStripController.markActive(threadId, model),
 });
@@ -256,6 +272,7 @@ const CODEX_BODY_RECOVERY_RULES = [
   responsesItemIdPrefixRecoveryRule,
   responsesItemIdLengthRecoveryRule,
   responsesReasoningContentRecoveryRule,
+  duplicateResponsesToolCallRecoveryRule,
   xaiModelInputRecoveryRule,
   vllmResponsesCompatibilityRule,
 ] as const;
@@ -433,8 +450,13 @@ export function setCodexSubagentOAuthReader(reader: (providerId?: string) => Pro
 }
 
 let _readGatewayKey: () => string | null = () => null;
-export function setCodexProxyGatewayKeyReader(fn: () => string | null): void {
+let _isReplacedGatewayKey: (key: string) => boolean = () => false;
+export function setCodexProxyGatewayKeyReader(
+  fn: () => string | null,
+  isReplaced: (key: string) => boolean = () => false,
+): void {
   _readGatewayKey = fn;
+  _isReplacedGatewayKey = isReplaced;
 }
 
 function headerValue(headers: Readonly<Record<string, string>>, name: string): string {
@@ -2476,7 +2498,7 @@ function createCodexResponseObserver(): ResponseObserver {
 /**
  * 纯函数: 按 model(原始, 含 codex/ 前缀)+ spawn 鉴权注入方式决定 **默认** 上游 / 鉴权 override。
  * (会话显式选了供应商时由 resolveSessionRouteDecision 优先接管,不会走到这里。)
- *   - env-key spawn(codex 已带 gateway key): 全程 null(走默认上游 gateway, 不动 header)。
+ *   - env-key spawn: 仅把本次运行中已被替换的旧 key 换成当前 key，仍走默认网关。
  *   - oauth-bearer spawn(codex 带 OAuth token):
  *       codex/ 折扣模型 → 换 gateway key, 默认上游(gateway); 无 key 则 null(passthrough, 上游会 401)。
  *       普通模型        → override 上游到 ChatGPT, 透传 OAuth token(不动 header)= 订阅默认。
@@ -2486,8 +2508,17 @@ export function decideCodexRoute(opts: {
   model: string;
   authInjection: CodexProxyAuthInjection;
   gatewayKey: string | null;
+  requestKey?: string | null;
+  isReplacedGatewayKey?: (key: string) => boolean;
 }): RoutingDecision | null {
-  if (opts.authInjection === 'env-key' || opts.authInjection === 'provider-oauth') return null;
+  if (opts.authInjection === 'env-key') {
+    if (opts.gatewayKey && opts.requestKey && opts.requestKey !== opts.gatewayKey
+      && opts.isReplacedGatewayKey?.(opts.requestKey)) {
+      return { headerOverride: { authorization: `Bearer ${opts.gatewayKey}` } };
+    }
+    return null;
+  }
+  if (opts.authInjection === 'provider-oauth') return null;
   if (!opts.model) return null;
   const toGateway = gatewayProviderIdForRewrittenModel(opts.model) !== null;
   if (toGateway) {
@@ -2594,7 +2625,7 @@ export function createCodexGuestRoutingGuard(
     const defaultRouteIsShared = (providerId === 'xd' && authInjection === 'env-key')
       || (isOpenAiSubscriptionProviderId(providerId) && authInjection === 'oauth-bearer');
     return defaultRouteIsShared
-      ? decideCodexRoute({ model: requestModel, authInjection, gatewayKey: _readGatewayKey() })
+      ? decideCodexRoute({ model: requestModel, authInjection, gatewayKey: _readGatewayKey(), requestKey: bearerKeyFromHeaders(ctx.headers), isReplacedGatewayKey: _isReplacedGatewayKey })
       : codexGuestRouteRefusal();
   };
 }
@@ -3169,7 +3200,7 @@ export function createModelRoutingTransform(
             gatewayKey,
           );
           if (implicitProviderOAuth) return implicitProviderOAuth;
-          return decideCodexRoute({ model, authInjection, gatewayKey });
+          return decideCodexRoute({ model, authInjection, gatewayKey, requestKey: bearerKeyFromHeaders(ctx.headers), isReplacedGatewayKey: _isReplacedGatewayKey });
         });
       }
       const implicitProviderOAuth = resolveImplicitProviderOAuthRouteDecision(model, 'codex', gatewayKey);
@@ -3181,18 +3212,18 @@ export function createModelRoutingTransform(
     //    spawn 时那把凭证 —— oauth-bearer 揣的 OAuth token 在网关无效(要 sk-)→ 401。
     //    故按 spawn 凭证回它的原生后端: oauth-bearer → ChatGPT 订阅后端(只 override 上游、透传 OAuth
     //    token,等价 stock codex 订阅模式轮 /models 的去处); provider-oauth → 唯一 provider-oauth
-    //    供应商的上游/令牌(当前 xAI),避免把占位 key 打到网关; env-key → null(留默认网关, sk- key 本就有效)。
+    //    供应商的上游/令牌(当前 xAI),避免把占位 key 打到网关; env-key → 默认网关，只替换本次运行中已知被换掉的旧 key。
     //    `!model` 这道闸确保真实 /responses(永远带 model)绝不落进此分支,杜绝注册时序竞争误伤推理请求。
     if (!sessionId && !model) {
       if (authInjection === 'oauth-bearer') return { upstreamOverride: CODEX_OAUTH_UPSTREAM };
       if (authInjection === 'provider-oauth') {
         return resolveProviderOAuthControlRouteDecision('codex', gatewayKey);
       }
-      return null;
+      return decideCodexRoute({ model, authInjection, gatewayKey, requestKey: bearerKeyFromHeaders(ctx.headers), isReplacedGatewayKey: _isReplacedGatewayKey });
     }
 
-    // ② 未显式选供应商 → 回落默认路由(decideCodexRoute,与未升级行为字节级一致)。
-    const decision = decideCodexRoute({ model, authInjection, gatewayKey });
+    // ② 未显式选供应商 → 回落默认路由，env-key 只修复已知旧凭证。
+    const decision = decideCodexRoute({ model, authInjection, gatewayKey, requestKey: bearerKeyFromHeaders(ctx.headers), isReplacedGatewayKey: _isReplacedGatewayKey });
     // codex/ 折扣模型该走 gateway 换 key 但没配 key → null(passthrough), 上游大概率 401, 记一条诊断。
     if (decision === null && authInjection === 'oauth-bearer' && model
       && gatewayProviderIdForRewrittenModel(model) !== null && !gatewayKey) {
@@ -3311,6 +3342,11 @@ function createTransformRequestChain(
     // Run after every provider dialect rewrite: xAI can also turn custom calls into functions.
     // This covers native-custom routes and tool-less /responses/compact without changing call_id.
     normalizeResponsesToolItemIds,
+    createActiveStripTransform({
+      controller: responsesToolCallHistoryStripController,
+      enabled: () => true,
+      strip: normalizeRepeatedResponseToolCallIdsFromBody,
+    }),
     stripNonAnthropicFields,
   ];
   if (process.env.XDT_CODEX_PROXY_DUMP_TRANSFORMED_BODY === '1') {
@@ -3537,6 +3573,13 @@ async function createCodexProxyHandle(
     ),
     responseObserver: composeResponseObservers(
       ctx => {
+        if (ctx.status === 401
+          && ctx.upstreamBase.replace(/\/+$/, '') === buildCodexGatewayBaseUrl().replace(/\/+$/, '')) {
+          reportCindyGatewayKeyRejected(bearerKeyFromHeaders(ctx.outboundHeaders ?? ctx.requestHeaders));
+        }
+        return null;
+      },
+      ctx => {
         if (!guestSessionId || ctx.status < 200 || ctx.status >= 300) return null;
         let model = '';
         try { const body = JSON.parse(ctx.requestBody.toString('utf8')); if (typeof body.model === 'string') model = body.model; } catch { return null; }
@@ -3581,9 +3624,10 @@ async function createCodexProxyHandle(
      * 像 HTTP 路径那样按 model 推导(upgrade 也没有 body 可供推导)。
      *
      * 非 oauth-bearer 态返回 null → proxy 回 426 → codex 退回 HTTP transport:
-     * 该 provider 只在 oauth spawn 时定义(见 buildCodexProxySpawnArgs), env-key /
-     * provider-oauth 进程本不该有 upgrade 进来; 真收到就让它降级, 而不是拿一个凭据
-     * 形态不匹配的连接去打订阅后端。
+     * 该 provider 的 supports_websockets 只在 oauth spawn 打开(见
+     * buildCodexProxySpawnArgs), env-key / provider-oauth 进程即使声明了
+     * cindy_openai 占位(#8670, 供老 thread resume 校验)也不发出 upgrade;
+     * 真收到就让它降级, 而不是拿一个凭据形态不匹配的连接去打订阅后端。
      *
      * WS 内首次命中 body recovery 错误后，maker-core 调 armCodexHttpRecovery 登记
      * thread；下一次 upgrade 在这里回 426，Codex 原生 transport 按 session 级稳定
@@ -4041,6 +4085,7 @@ function clearSessionThreads(sessionId: string): string[] {
       httpRecoveryReasonByThread.delete(threadId);
       pendingHttpRecoveryStripByThread.delete(threadId);
       responsesReasoningContentStripController.clear(threadId);
+      responsesToolCallHistoryStripController.clear(threadId);
     }
   }
   return threadIds;
@@ -4079,6 +4124,7 @@ export async function disposeCodexProxy(): Promise<void> {
   for (const threadId of threadToSession.keys()) {
     registry.delete(threadId);
     responsesReasoningContentStripController.clear(threadId);
+    responsesToolCallHistoryStripController.clear(threadId);
   }
   sessionToThread.clear();
   sessionToThreads.clear();

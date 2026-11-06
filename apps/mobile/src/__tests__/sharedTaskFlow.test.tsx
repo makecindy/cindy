@@ -21,7 +21,10 @@ const h = vi.hoisted(() => ({
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: h.t }) }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem: vi.fn(async () => null), setItem: vi.fn(async () => undefined) } }));
-vi.mock('@/config/env', () => ({ DEVICE_LINK_API_BASE_URL: 'https://relay.example.test', APP_SCHEME: 'cindy' }));
+// PR #8182: shared invitations contain bearer tokens. The selected device relay
+// must differ from the official sharing origin so copy/admission tests catch
+// accidentally sending the token to a relay operator (real screen, unit tier).
+vi.mock('@/config/env', () => ({ DEVICE_LINK_API_BASE_URL: 'https://own-relay.example.test', getOfficialDeviceLinkApiBaseUrl: () => 'https://relay.example.test', APP_SCHEME: 'cindy' }));
 vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 vi.mock('lucide-react-native', () => ({ Check: () => null, Laptop: () => null, Link: () => null, Users: () => null, Clock: () => null, FileText: () => null, Square: () => null, X: () => null }));
 vi.mock('@/device-link/accessRevoked', () => ({ markDeviceAccessRevoked: h.revoked }));
@@ -209,7 +212,7 @@ it('retries failed Make membership rollback without exposing the task', async ()
   expect(h.api.leave).toHaveBeenCalledTimes(2);
   expect(element.textContent).toContain('sharedTask.invitationUnavailable');
 });
-it('copies a shareable invitation message with a link accepted by automatic and manual admission', async () => {
+it('copies an official invitation while using its own relay, accepted by automatic and manual admission', async () => {
   h.params = { sessionId: 'task', deviceId: 'desktop' };
   h.link.invoke.mockImplementation(async (_device, _channel, [command]) => command.action === 'invite' ? { invitation: 'A'.repeat(43) } : { available: true, detail });
   await render(); await click('sharedTask.invite');
@@ -219,8 +222,8 @@ it('copies a shareable invitation message with a link accepted by automatic and 
   expect(content).toContain('paste it into Join Shared Task in Cindy');
   expect(parseSharedTaskInvitation(content, 'https://relay.example.test')).toEqual({ ok: true, invitation: 'A'.repeat(43) });
 });
-it('rejects an invitation from another service without joining', async () => {
-  await render(); await fill('sharedTask.invitation', invitationLink.replace('relay.example.test', 'other.example.test'));
+it('rejects an invitation on the selected self-hosted origin without joining', async () => {
+  await render(); await fill('sharedTask.invitation', invitationLink.replace('relay.example.test', 'own-relay.example.test'));
   await click('sharedTask.join');
   expect(h.api.join).not.toHaveBeenCalled();
   expect(element.textContent).toContain('sharedTask.invitationDifferentServer');

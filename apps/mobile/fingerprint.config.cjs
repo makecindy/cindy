@@ -45,6 +45,7 @@ module.exports = {
     "cindy-link-2",
     "cindy-undo-2",
     "cindy-trash-2",
+    "cindy-pencil",
   ]
     .map((name) => ({
       type: "dir",
@@ -65,6 +66,15 @@ module.exports = {
         filePath: "plugins/communication-notifications",
         reasons: ["notification service extension native source"],
       },
+      {
+        type: "dir",
+        filePath: "plugins/usage-widgets",
+        reasons: ["home-screen widget extension native source"],
+      },
+      ...[
+        "../desktop/native/menubar/BarlowCondensed-Medium.ttf",
+        "../desktop/native/menubar/BarlowCondensed-SemiBold.ttf",
+      ].map((filePath) => ({ type: "file", filePath, reasons: ["home-screen widget number font"] })),
       ...[
         "../desktop/src/renderer/assets/bot-presets/cindy.png",
         "../desktop/resources/legacy-teammate-avatars/dash.png",

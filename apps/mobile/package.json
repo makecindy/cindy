@@ -8,6 +8,7 @@
     "@cindy/device-link": "workspace:*",
     "@cindy/maker-shared": "workspace:*",
     "@cindy/model-providers": "workspace:*",
+    "@cindy/plugin-protocol": "workspace:*",
     "@cindy/voice-input-core": "workspace:*",
     "@expo/dom-webview": "~57.0.1",
     "@expo/metro-runtime": "^57.0.14",

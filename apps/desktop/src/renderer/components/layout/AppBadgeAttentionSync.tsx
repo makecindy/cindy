@@ -17,9 +17,8 @@ import { useOrcaLeadWorkerAttention } from '@/features/cc-agent/lib/orcaLeadWork
 import { useBotProfiles, useBotUnreadCounts } from '@/features/bots/botStore';
 import { useBotGroupList } from '@/features/bots/botGroupStore';
 import { isBotGroupUnread, subscribeBotReadState, getBotLastReadAtMap } from '@/features/bots/botReadState';
-import { useBotUnreadSync } from '@/features/bots/useBotUnreadSync';
 import { useCompanionIslandChats } from '@/features/bots/useCompanionIslandChats';
-import { useRemoteBotSync, useRemoteBots } from '@/features/bots/useRemoteBots';
+import { useRemoteBots } from '@/features/bots/useRemoteBots';
 import { isRemoteBotUnread } from '@/features/bots/remoteBotRoster';
 import { useCompanionCloud } from '@/features/bots/companionCloudStore';
 import { cloudRemoteBots, withoutShadowedBots } from '@/features/bots/companionCloudPresentation';
@@ -30,8 +29,6 @@ const log = createLogger('AppBadgeAttentionSync');
 /** 主窗口常驻：设置/伙伴页也持续更新，独立订阅避免带动布局重渲染。 */
 export function AppBadgeAttentionSync() {
   useAuth();
-  useBotUnreadSync();
-  useRemoteBotSync();
   const cloud = useCompanionCloud();
   // Count each companion once, where it runs (same rows as the teammate list).
   const allBots = useBotProfiles();
@@ -90,7 +87,9 @@ export function AppBadgeAttentionSync() {
     publishNavigationAttention({ tasks: count, teammates });
   }, [count, teammates, owner]);
   useEffect(() => {
-    if (isLoading || error || history.isLoading || history.error) return;
+    // 历史桶(includeArchived:'all')只用于补齐目录 ID 做去重，它的加载/失败不影响
+    // 本桶的计数；用它 gate 整次推送会让角标永久停在旧值上(投影响应一次永不再发)。
+    if (isLoading || error) return;
     void window.electronAPI
       .notificationSetAppAttentionCount({
         count: count + localTeammates,
@@ -102,6 +101,6 @@ export function AppBadgeAttentionSync() {
         log.warn('failed to update app attention count', err);
       });
     // 卸载/切路由不是已读，不清图标；下次挂载会重新提交完整投影。
-  }, [count, localTeammates, isLoading, error, history.isLoading, history.error, catalogSessionIds, owner]);
+  }, [count, localTeammates, isLoading, error, catalogSessionIds, owner]);
   return null;
 }

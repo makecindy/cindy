@@ -27,6 +27,8 @@ import {
   HOOK_FEATURE_SESSION_RESULT,
   HOOK_FEATURE_SLACK_TOOLS,
   HOOK_FEATURE_TURN_DELIVERY,
+  HOOK_FEATURE_X_MEDIA_RELAY,
+  makeXMediaResult,
   makeBindState,
   makeBindUpdate,
   makePing,
@@ -187,6 +189,7 @@ describe('hook-control runtime capability gate', () => {
   it('X hello 声明 delivery ACK，且只在 welcome 双向协商后把回执路由给 dispatcher', () => {
     const transportOpts: HookTransportOpts[] = [];
     const handleTurnDelivery = vi.fn();
+    const handleXMediaResult = vi.fn();
     const dispatcher = {
       handleDispatch: vi.fn(),
       createSession: vi.fn(),
@@ -196,6 +199,7 @@ describe('hook-control runtime capability gate', () => {
       handleSessionArchive: vi.fn(),
       handleInteractionDecision: vi.fn(),
       handleTurnDelivery,
+      handleXMediaResult,
       onMessageOpResult: vi.fn(),
       setEmojiReactionsMode: vi.fn(),
       settleAckReactions: vi.fn(),
@@ -229,6 +233,9 @@ describe('hook-control runtime capability gate', () => {
     });
     opts.onMessage(delivery, () => true);
     expect(handleTurnDelivery).not.toHaveBeenCalled();
+    const mediaResult = makeXMediaResult({ uploadId: 'up-1', step: 'init', segmentIndex: null, mediaId: null, error: null });
+    opts.onMessage(mediaResult, () => true);
+    expect(handleXMediaResult).not.toHaveBeenCalled();
 
     opts.onWelcome?.({
       serverName: 'x-hook',
@@ -243,6 +250,13 @@ describe('hook-control runtime capability gate', () => {
     opts.onStatus('connected', null);
     opts.onMessage(delivery, () => true);
     expect(handleTurnDelivery).toHaveBeenCalledWith(expect.stringMatching(/:x$/), delivery.payload);
+    // 分块转传的回执只认声明过能力的连接; 这里 welcome 未声明, 仍不进 dispatcher。
+    opts.onMessage(mediaResult, () => true);
+    expect(handleXMediaResult).not.toHaveBeenCalled();
+    opts.onWelcome?.({ serverName: 'x-hook', features: [HOOK_FEATURE_PROVIDER_BIND, HOOK_FEATURE_PROVIDER_PREFS,
+      HOOK_FEATURE_PROVIDER_X, HOOK_FEATURE_SESSION_PICKER, HOOK_FEATURE_TURN_DELIVERY, HOOK_FEATURE_X_MEDIA_RELAY] });
+    opts.onMessage(mediaResult, () => true);
+    expect(handleXMediaResult).toHaveBeenCalledWith(expect.stringMatching(/:x$/), mediaResult.payload);
     manager.dispose();
   });
 
@@ -1607,6 +1621,7 @@ describe('Telegram provider capability, binding and prefs', () => {
       handleSessionArchive: vi.fn(),
       handleInteractionDecision: vi.fn(),
       handleTurnDelivery: vi.fn(),
+      handleXMediaResult: vi.fn(),
       activateAccount: vi.fn(),
       deactivateAccount: vi.fn(async () => undefined),
       dispose: vi.fn(),

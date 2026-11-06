@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { InlineQueueSection, type InlineQueueSectionProps } from '@/session/InlineQueueSection';
 import type { InputProjection } from '@/session/types';
+import { i18n } from '@/i18n';
 
 vi.mock('react-native', async () => {
   const { createElement } = await import('react');
@@ -87,6 +88,19 @@ it('continues a settled error without replaying its old scheduled input', async 
   await act(async () => button('retry').click());
   expect(retry).toHaveBeenCalledOnce();
   expect(onContinueAfterError).toHaveBeenCalledOnce();
+});
+
+it('explains a legacy compact failure without its discarded details and retains continuation', async () => {
+  const onContinueAfterError = vi.fn();
+  await show({
+    projection: { ...projection, error: 'Error running remote compact task', errorReason: 'context-overflow', errorRetryText: null },
+    onContinueAfterError,
+  });
+  expect(host.textContent).toContain(i18n.t('session.tail.remoteCompactEncryptedContent'));
+  expect(button('retry').disabled).toBe(false);
+  await act(async () => button('retry').click());
+  expect(onContinueAfterError).toHaveBeenCalledOnce();
+  expect(retry).not.toHaveBeenCalled();
 });
 // #7119 review: a host-confirmed scheduler failure without a retry token must
 // obey the existing history-error exclusions. Unit: render the real component;

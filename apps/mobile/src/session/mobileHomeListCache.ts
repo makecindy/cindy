@@ -184,7 +184,7 @@ function normalizeSnapshotDevices(
     .slice(0, MAX_CACHED_HOME_DEVICES);
 }
 
-// 会话字段白名单瘦身:只保留列表渲染(标题 / 预览 / 时间 / 图标)、分组(workingDir / workspaceKind)
+// 会话字段白名单瘦身:只保留列表渲染(标题 / 预览 / 时间 / 图标)、分组(projectDir / workingDir / workspaceKind)
 // 与跳转(id)需要的字段。刻意丢弃:
 //  - live-only 状态(attached / deviceLinkAttached 等):冷启动时设备尚未连上,缓存它会画出假的在线态;
 //  - orcaRole === 'worker' 的会话:mobile 全局隐藏 worker 子会话,缓存它纯占体积;
@@ -220,6 +220,8 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
     createdAt,
     updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : createdAt,
   };
+  // Project identity must round-trip exactly; truncating a path changes the project key.
+  if (typeof item.projectDir === 'string' || item.projectDir === null) session.projectDir = item.projectDir;
   if (typeof item.worktreePath === 'string') session.worktreePath = truncateText(item.worktreePath);
   if (typeof item.totalTokenUsage === 'number' && Number.isFinite(item.totalTokenUsage)) {
     session.totalTokenUsage = item.totalTokenUsage;

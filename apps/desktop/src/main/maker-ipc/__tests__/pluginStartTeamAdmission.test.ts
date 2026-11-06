@@ -4,14 +4,13 @@ import ts from 'typescript';
 import { assertPluginTaskResult, isPluginTaskPermissionAllowed, PluginTaskError } from '../pluginTaskService.js';
 import { createOrcaLifecycleService, type OrcaLifecycleDeps } from '../orcaLifecycleService.js';
 import { startOrcaTeamWithPermissionGate } from '../orcaStartTeamPermissionGate.js';
-import { hasAcceptedUserTaskInput } from '../pluginTaskInput.js';
 import { captureTaskActionGuard } from '../taskActionAuthorization.js';
 
 vi.mock('../../maker-host/codex-credential-switch.js', () => ({ isCredentialModeSwitchBusyError: () => false }));
 
 const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
 const branch = source.slice(source.indexOf("      case 'startTeam': {"), source.indexOf("      case 'setTeamPlan':"));
-const authorization = source.slice(source.indexOf('  const assertPluginWorkerAutoAuthorized ='), source.indexOf('  // Uninstall keeps the historical receipt'));
+const authorization = source.slice(source.indexOf('  const assertPluginWorkerAutoAuthorized ='), source.indexOf('  const captureOrcaTaskAuthority ='));
 const js = ts.transpileModule(`${authorization}\nreturn async function(pluginId, request) { switch(request.kind) { ${branch} } }`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
 function fixture(initial = 'active', afterConfirmation = initial, useDefaults = true, configuredPermission = 'auto') {
@@ -59,7 +58,7 @@ describe('plugin team active-task admission', () => {
 describe('public start_team Full access admission', () => {
   const helper = source.slice(source.indexOf('  const startOrcaTeamForCaller ='), source.indexOf('  const pluginPermissionRequests ='));
   const authority = source.slice(source.indexOf('  const assertPluginWorkerAutoAuthorized ='), source.indexOf('  const orcaWorkerCreationService ='));
-  const wired = ts.transpileModule(`${authority}\n${helper}\nreturn { start: startOrcaTeamForCaller, capture: captureOrcaPluginAuthority };`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const wired = ts.transpileModule(`${authority}\n${helper}\nreturn { start: startOrcaTeamForCaller, capture: captureOrcaTaskAuthority };`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   const states = ['plugin', 'ask', 'plan', 'disabled', 'revoked-running', 'ordinary', 'revoked-idle', 'revoked-human'] as const;
   const cases = (['auto', 'bypassPermissions'] as const).flatMap(preference => [
     ...states.map(state => ({ state, preference, requested: 'bypassPermissions' as 'auto' | 'bypassPermissions' | undefined })),
@@ -72,7 +71,6 @@ describe('public start_team Full access admission', () => {
       const revoked = state.startsWith('revoked-');
       const input = state === 'revoked-running' ? { clientId: 'plugin-task:run' }
         : state === 'revoked-human' ? { clientId: 'human', authoredText: 'Start a team' } : null;
-      const ordinary = ['ordinary', 'revoked-idle', 'revoked-human'].includes(state);
       const task = { status: 'active', permissionMode: state === 'ask' ? 'default' : 'auto', planModeEnabled: state === 'plan' };
       const request = vi.fn(async () => ({ confirmed: true }));
       const create = vi.fn(async () => ({ id: 'team', leadSessionId: 'lead' }));
@@ -88,7 +86,7 @@ describe('public start_team Full access admission', () => {
       } as unknown as OrcaLifecycleDeps);
       const bindings = {
         captureTaskActionGuard,
-        PluginTaskError, isPluginTaskPermissionAllowed, hasAcceptedUserTaskInput, startOrcaTeamWithPermissionGate,
+        PluginTaskError, isPluginTaskPermissionAllowed, startOrcaTeamWithPermissionGate,
         getCurrentDbClientSnapshot: () => epoch,
         maker: { getSession: () => null }, inputCoordinator: { getAcceptedInputProvenance: () => input },
         createPluginTaskStore: () => ({ get: async () => state === 'ordinary' ? null
@@ -101,22 +99,11 @@ describe('public start_team Full access admission', () => {
       const run = new Function(...Object.keys(bindings), wired)(...Object.values(bindings));
       capture = run.capture;
       const result = await run.start('lead', requested);
-      if (ordinary) {
-        expect(result).toMatchObject({ ok: true, workerPermissionMode: 'bypassPermissions' });
-        expect(request).toHaveBeenCalledTimes(preference === 'auto' ? 1 : 0);
-        expect(setPreference).toHaveBeenCalledWith('bypassPermissions');
-        expect(create).toHaveBeenCalledOnce();
-      } else if (requested === 'bypassPermissions') {
-        expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
-        expect(request).not.toHaveBeenCalled();
-        expect(setPreference).not.toHaveBeenCalled();
-        expect(create).not.toHaveBeenCalled();
-      } else {
-        expect(result).toMatchObject({ ok: true, workerPermissionMode: 'auto' });
-        expect(request).not.toHaveBeenCalled();
-        expect(setPreference).not.toHaveBeenCalled();
-        expect(create).toHaveBeenCalledOnce();
-      }
+      expect(result).toMatchObject({ ok: true, workerPermissionMode: requested ?? preference });
+      expect(request).toHaveBeenCalledTimes(requested === 'bypassPermissions' && preference === 'auto' ? 1 : 0);
+      if (requested !== undefined) expect(setPreference).toHaveBeenCalledWith(requested);
+      else expect(setPreference).not.toHaveBeenCalled();
+      expect(create).toHaveBeenCalledOnce();
     },
   );
 });
@@ -136,6 +123,9 @@ describe('plugin team activation uses the native lifecycle compensation', () => 
 
   async function exercise(existing: boolean, stage: typeof stages[number], change: typeof changes[number]) {
     let epoch = {}, unavailable = false, authorized = true, teamActive = existing;
+    // PR #7824: the real plugin startTeam + lifecycle must preserve a user's
+    // Full access default. Earlier Auto-only fixtures hid the global preference write (unit).
+    let workerPreference: 'auto' | 'bypassPermissions' = 'bypassPermissions';
     const cfg = { permissionMode: 'auto', workingDir: '/answer' };
     let role: 'lead' | null = existing ? 'lead' : null;
     let vendorActive = existing;
@@ -163,7 +153,8 @@ describe('plugin team activation uses the native lifecycle compensation', () => 
     const deps: OrcaLifecycleDeps = {
       getActiveTeamByLead: vi.fn(async () => { changeAt('lookup'); return existing ? { id: 'team', leadSessionId: 'task' } : null; }),
       createActiveTeam: vi.fn(async () => { teamActive = true; changeAt('create'); return { id: 'team', leadSessionId: 'task' }; }),
-      isOrphanedTeamInit: vi.fn(async () => false), getWorkerPermissionMode: () => 'auto', setWorkerPermissionMode: vi.fn(),
+      isOrphanedTeamInit: vi.fn(async () => false), getWorkerPermissionMode: () => workerPreference,
+      setWorkerPermissionMode: vi.fn(mode => { workerPreference = mode; }),
       createWorkerInTeam: vi.fn(), dispatchWorkerTask: vi.fn(),
       markTeamEnded: vi.fn(async () => { teamActive = false; }),
       setSessionOrcaRole: vi.fn(async (_id, next) => { role = next; task.revision++; if (next === 'lead') changeAt('role'); }),
@@ -174,13 +165,15 @@ describe('plugin team activation uses the native lifecycle compensation', () => 
     };
     const callbacks = { service, getCurrentDbClientSnapshot: () => epoch, PluginTaskError, assertPluginTaskResult, isPluginTaskPermissionAllowed,
       isPluginTaskAuthorized: () => authorized, getPluginTaskDefaults: () => ({ ...cfg }),
-      assertLeadCollabProjectEnabled: async () => {}, getWorkerPermissionModeFromCreationPrefs: () => 'auto',
+      assertLeadCollabProjectEnabled: async () => {}, getWorkerPermissionModeFromCreationPrefs: () => workerPreference,
       startOrcaTeamWithPermissionGate, orcaWorkerPermissionConfirmBridge: { request: vi.fn() }, t: (key: string) => key,
       orcaLifecycleService: createOrcaLifecycleService(deps) };
     const run = new Function(...Object.keys(callbacks), wired)(...Object.values(callbacks));
     const operation = run('plugin', { kind: 'startTeam', taskId: 'task' });
     if (change === 'healthy') {
-      await expect(operation).resolves.toMatchObject({ ok: true, teamId: 'team' });
+      await expect(operation).resolves.toMatchObject({ ok: true, teamId: 'team', workerPermissionMode: 'bypassPermissions' });
+      expect(workerPreference).toBe('bypassPermissions');
+      expect(deps.setWorkerPermissionMode).not.toHaveBeenCalled();
       expect(teamActive).toBe(true); expect(role).toBe('lead'); expect(vendorActive).toBe(true);
       expect(epoch).toBe(originalEpoch);
     } else {

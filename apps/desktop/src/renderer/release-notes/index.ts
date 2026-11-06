@@ -16,7 +16,7 @@ import {
   type RawLocalizedContent,
   type RawReleaseNotes,
 } from '../../shared/releaseNotesContent';
-import { DEFAULT_LOCALE } from '../../shared/locale';
+import { DEFAULT_LOCALE, modernLocaleOf } from '../../shared/locale';
 
 /** Per-item shape after flattening: one bullet with its author tag. */
 export interface ReleaseNoteItem {
@@ -96,8 +96,10 @@ export function selectLocalizedContent(
   locale: NoticeLocale,
 ): RawLocalizedContent | null {
   const localized = raw.contentByLocale;
-  if (locale === 'zh-CN' || locale === 'zh-TW') {
-    for (const candidate of [locale, 'zh-CN'] as const) {
+  const modern = modernLocaleOf(locale);
+  if (modern === 'zh-CN' || modern === 'zh-TW') {
+    // Notices are authored in modern Chinese; a classical edition reads its modern base.
+    for (const candidate of [locale, modern, 'zh-CN'] as const) {
       const content = localized?.[candidate];
       if (hasUsableContent(content)) return content;
     }

@@ -186,9 +186,12 @@ function normalizeRemoteDisplay(value: unknown): RemoteResourceDisplay | null {
     title,
     ...(subtitle ? { subtitle } : {}),
     ...(preview ? { preview } : {}),
+    ...(boundedString(recordOf(record.teammateActivity)?.phase, 80)
+      ? { teammateActivity: { phase: boundedString(recordOf(record.teammateActivity)?.phase, 80)! } } : {}),
     ...(generationPhase ? { generation: { phase: generationPhase, startedAt: generationStartedAt ?? null } } : {}),
     ...(timestamp !== undefined ? { timestamp } : {}),
     ...(normalizeRemoteTimestamp(record.lastReplyAt) !== undefined ? { lastReplyAt: record.lastReplyAt as number } : {}),
+    ...(normalizeRemoteTimestamp(record.lastReadAt) !== undefined ? { lastReadAt: record.lastReadAt as number } : {}),
     ...(avatar ? { avatar } : {}),
     ...(status ? { status } : {}),
     ...(Array.isArray(record.badges) ? { badges: record.badges.slice(0, 8).flatMap(value => {

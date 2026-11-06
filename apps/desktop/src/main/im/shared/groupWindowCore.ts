@@ -41,14 +41,12 @@ const CURSOR_ROLLBACK_RETRY_DELAY_MS = 25;
  * `maxRowsPerNamespace` 只是防止极端行数膨胀的安全阀(海量空消息把行开销撑爆),
  * 设得足够高, 正常使用永远碰不到 —— 它不是日常清理手段。
  *
- * **字节口径只统计 `text`**, 不含 `file_names` / `chat_name` / `author` / 各类 id
- * 与索引。这不是遗漏: `text_bytes` 由 migration 0088 的触发器维护, 改口径要动
- * schema。纯附件消息的 `text` 正是空串, 这类命名空间的增长由**行数阀**兜 ——
- * 每行的非正文开销约 200~250 字节(含索引), 500 万行即约 1.2 GiB, 与正文额度
- * 同一量级, 上限可估。要精确按整行受控字节计费得改触发器, 另立议题。
+ * 字节口径为 `text` + `image_refs` 的 UTF-8 大小；0136 更新既有统计触发器，
+ * 容量统计与下方回收边界使用同一口径。沿用 `text_bytes` / `textBytes` 名称兼容
+ * 既有调用方。其余 `file_names` / `chat_name` / `author` / id 与索引仍由行数阀兜底。
  */
 export type GroupWindowRetentionPolicy = {
-  /** 该 provider 命名空间保留的正文字节上限。 */
+  /** 该 provider 命名空间保留的正文与图片标识字节上限。 */
   maxTextBytesPerNamespace: number;
   /** 安全阀: 行数上限。 */
   maxRowsPerNamespace: number;
@@ -83,6 +81,7 @@ export interface GroupWindowEntryInput {
   author: { name: string; isBot?: boolean };
   text: string;
   fileNames?: string[];
+  imageRefs?: import('@cindy/im').TelegramHistoryImageRef[];
   sentAt: number;
 }
 
@@ -195,6 +194,7 @@ export async function recordGroupWindowEntry(
       isBot: entry.author.isBot === true ? 1 : 0,
       text: storedText,
       fileNames: entry.fileNames?.length ? JSON.stringify(entry.fileNames) : null,
+      imageRefs: entry.imageRefs?.length ? JSON.stringify(entry.imageRefs) : null,
       sentAt: entry.sentAt,
       createdAt: Date.now(),
     })
@@ -276,7 +276,7 @@ async function runNamespaceRetention(
  *   重复执行、并发执行、跨进程执行结果都一样, 不需要锁、事务或版本号 CAS,
  *   也就不需要动 schema。
  *
- * 边界取法: 从**最新往回**累计正文字节与行数, 累计量还在目标以内的那些留下,
+ * 边界取法: 从**最新往回**累计正文与图片标识字节及行数, 累计量还在目标以内的那些留下,
  * 比其中最旧那条还旧的全删。`rn = 1` 那一项保证最新一行永远留着 —— 阈值被配得
  * 极小(或单条消息就超过阈值)时不能把整个命名空间清空。
  *
@@ -294,7 +294,7 @@ async function keepNewestWithinTargets(
     .select({
       id: hookGroupMessages.id,
       cumBytes:
-        sql<number>`sum(length(cast(${hookGroupMessages.text} as blob))) over (order by ${hookGroupMessages.id} desc)`.as(
+        sql<number>`sum(length(cast(${hookGroupMessages.text} as blob)) + coalesce(length(cast(${hookGroupMessages.imageRefs} as blob)), 0)) over (order by ${hookGroupMessages.id} desc)`.as(
           'cum_bytes',
         ),
       rn: sql<number>`row_number() over (order by ${hookGroupMessages.id} desc)`.as('rn'),

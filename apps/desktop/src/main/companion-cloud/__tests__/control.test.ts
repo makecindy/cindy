@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { COMPANION_CLOUD_VERSION } from '@cindy/device-link';
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc.js';
 import { createCompanionHomeRegistry } from '../homes.js';
 import { readTranscriptPage } from '../room.js';
 import { startCompanionCloud, type CompanionCloudHost, type CompanionCloudRuntime, type CompanionRuntimeActor } from '../runtime.js';
+import type { CompanionApi } from '../types.js';
 import { fakeApi, fakeLocal, memoryState, rejection, type ApiHandler } from './fakes.js';
 
 const ROOM = '10000000-0000-4000-8000-000000000001';
@@ -17,11 +19,13 @@ const MIA = { name: 'Mia', description: '', soul: '', systemPrompt: '', user: ''
 let runtime: CompanionCloudRuntime | undefined;
 afterEach(() => { runtime?.dispose(); runtime = undefined; });
 
-function setup(options: { home: string | null; handler?: ApiHandler; devices?: DeviceLinkDeviceView[]; profiles?: string[];
+function setup(options: { home: string | null; handler?: ApiHandler; devices?: DeviceLinkDeviceView[]; profiles?: string[]; backgroundIdentityApi?: CompanionApi;
+  identityDeferred?: (error: unknown) => boolean;
   installationId?: string; probe?: (deviceId: string) => Promise<boolean>; values?: Array<{ key: string; value: unknown }>;
   readValues?: () => Promise<Array<{ key: string; value: unknown }>>; syncProfile?: (botId: string) => Promise<void>;
   turnActive?: () => boolean; homeLink?: CompanionCloudHost['homeLink']; stopBotTurns?: CompanionCloudHost['stopBotTurns'];
-  canonicalSession?: CompanionCloudHost['canonicalSession']; paused?: (botId: string) => boolean }) {
+  canonicalSession?: CompanionCloudHost['canonicalSession']; paused?: (botId: string) => boolean; refreshForeground?: () => Promise<void>;
+  store?: Parameters<typeof startCompanionCloud>[0]['store']; savedState?: string }) {
   const actors: CompanionRuntimeActor[] = [{ id: 'actor-1', kind: 'bot', externalId: 'bot_mia', name: 'Mia', avatar: null, homeDeviceId: options.home }];
   const { api, calls } = fakeApi(options.handler ?? ((route, method) => {
     // The home has uploaded the profile snapshot a take-over builds from.
@@ -33,7 +37,7 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
     throw new Error(`unexpected ${method} ${route}`);
   }));
   const local = fakeLocal();
-  const { state } = memoryState();
+  const { state, files } = memoryState(options.savedState);
   const refresh = vi.fn(async () => undefined);
   const publish = vi.fn();
   const onShadowChanged = vi.fn();
@@ -49,14 +53,46 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
     ...(options.homeLink ? { homeLink: options.homeLink } : {}),
     ...(options.stopBotTurns ? { stopBotTurns: options.stopBotTurns } : {}),
   };
-  runtime = startCompanionCloud({ api, host, endpoint: 'https://chat', humanActorId: 'human', selfDeviceId: 'desk', current: () => true,
+  runtime = startCompanionCloud({ api, ...(options.backgroundIdentityApi ? { backgroundIdentity: {
+    api: options.backgroundIdentityApi, isDeferred: options.identityDeferred ?? (() => false) } } : {}),
+    store: options.store, host, endpoint: 'https://chat', humanActorId: 'human', selfDeviceId: 'desk', current: () => true,
     bots: () => actors.filter(a => a.homeDeviceId === 'desk' && !state.isDemoted(a.externalId)).map(a => ({ botId: a.externalId, actorId: a.id, name: a.name })),
-    actors: () => actors, refresh, publish, onShadowChanged, ...(options.syncProfile ? { syncProfile: options.syncProfile } : {}),
+    actors: () => actors, refresh, refreshForeground: options.refreshForeground, publish, onShadowChanged, ...(options.syncProfile ? { syncProfile: options.syncProfile } : {}),
     ...(options.paused ? { paused: options.paused } : {}) });
-  return { runtime, actors, calls, local, state, refresh, publish, onShadowChanged };
+  return { runtime, actors, calls, local, state, files, refresh, publish, onShadowChanged };
 }
 
+describe('private report recovery', () => {
+  it('retries a failed local import into the canonical chat without duplicating the report or marking read', async () => {
+    const report = { id: 'report-1', seq: '1', authorId: 'actor-1', origin: 'bot', createdAt: '2026-10-29T06:00:00Z', content: [{ type: 'text', text: 'A pending confirmation' }] };
+    const t = setup({ home: 'desk', handler: route => {
+      if (route === '/conversations') return { id: ROOM };
+      if (route.includes('/messages?')) return [report];
+      throw new Error(`Unexpected report route: ${route}`);
+    } });
+    vi.mocked(t.local.host.insertHistory).mockRejectedValueOnce(new Error('LOCAL_BUSY'));
+    await expect(t.runtime.receivePrivateReport('bot_mia')).rejects.toThrow('LOCAL_BUSY');
+    expect(await t.runtime.receivePrivateReport('bot_mia')).toBe(true);
+    expect(await t.runtime.receivePrivateReport('bot_mia')).toBe(true);
+    expect(t.local.rows).toHaveLength(1);
+    expect(t.local.host.insertHistory).toHaveBeenLastCalledWith('session-1', expect.objectContaining({ role: 'assistant', text: 'A pending confirmation' }), expect.anything());
+    expect(t.calls.some(call => call.route.endsWith('/read'))).toBe(false);
+    t.actors[0]!.homeDeviceId = 'laptop';
+    expect(await t.runtime.receivePrivateReport('bot_mia')).toBe(false);
+  });
+});
+
 describe('take over', () => {
+  it('resolves an uncached actor through the explicit refresh channel before taking over', async () => {
+    let restore = () => {};
+    const foreground = vi.fn(async () => { restore(); });
+    const t = setup({ home: 'laptop', refreshForeground: foreground });
+    const actor = t.actors.pop()!;
+    restore = () => { t.actors.push(actor); };
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
+    expect(foreground).toHaveBeenCalledOnce();
+    expect(t.refresh).not.toHaveBeenCalled();
+  });
   it('moves the home with compare-and-set, then builds the local companion', async () => {
     const t = setup({ home: 'laptop' });
     expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
@@ -116,6 +152,43 @@ describe('take over', () => {
 });
 
 describe('reconcile', () => {
+  it.each([true, false])('distinguishes local identity deferral from a failed check and leaves rechecks due (%s)', async deferred => {
+    vi.useFakeTimers();
+    try {
+      const rejected = new Error('CHECK_NOT_COMPLETED');
+      let fail = false;
+      const background = fakeApi(() => {
+        if (fail) throw rejected;
+        return [{ key: 'companion.install.v1', revision: 1, value: { installationId: 'this-install', deviceId: 'desk' } }];
+      });
+      const t = setup({ home: 'desk', installationId: 'this-install', backgroundIdentityApi: background.api,
+        identityDeferred: error => deferred && error === rejected });
+      const locals = [{ id: 'bot_mia', status: 'active' }];
+      t.runtime.reconcile(locals); await vi.advanceTimersByTimeAsync(0);
+      expect(t.runtime.installConfirmed('bot_mia')).toBe(true);
+      await vi.advanceTimersByTimeAsync(120_000);
+      fail = true; t.runtime.reconcile(locals); await vi.advanceTimersByTimeAsync(0);
+      expect(t.runtime.installConfirmed('bot_mia')).toBe(deferred);
+      fail = false; t.runtime.reconcile(locals); await vi.advanceTimersByTimeAsync(0);
+      expect(background.calls).toHaveLength(3);
+      expect(t.runtime.installConfirmed('bot_mia')).toBe(true);
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+  it.each(['install', 'arrival', 'retirement'] as const)('uses background identity admission for %s without blocking explicit user actions', async kind => {
+    vi.useFakeTimers();
+    try {
+      const background = vi.fn(async () => { throw new Error('BACKGROUND_DEFERRED'); });
+      const t = setup({ home: 'desk', installationId: kind === 'install' ? 'this-install' : undefined, backgroundIdentityApi: background });
+      if (kind === 'retirement') t.state.update('bot_mia', 'actor-1', entry => { entry.retirePending = true; });
+      t.runtime.reconcile(kind === 'arrival' ? [] : [{ id: 'bot_mia', status: 'active' }]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(background).toHaveBeenCalledOnce();
+      expect(t.calls).toHaveLength(0);
+      // A user's explicit take-over retains its own API and full data restoration.
+      expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
+      expect(t.calls.some(call => call.route === '/preferences')).toBe(true);
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
   it('demotes a local copy whose home is another computer', () => {
     const t = setup({ home: 'laptop' });
     t.runtime.reconcile([{ id: 'bot_mia', status: 'active' }]);
@@ -276,6 +349,44 @@ describe('transfer', () => {
     expect(t.state.isDemoted('bot_mia')).toBe(false);
   });
 
+  // Regression: 127 shipped store readers but still advertised v2. Exercise the real
+  // transfer decision with the shipped declaration, not a hardcoded v3 test peer.
+  it.each([
+    { peer: 'current', version: COMPANION_CLOUD_VERSION, storeEnabled: true, succeeds: true },
+    { peer: 'old', version: 2, storeEnabled: true, succeeds: false },
+    { peer: 'current without server store', version: COMPANION_CLOUD_VERSION, storeEnabled: false, succeeds: false },
+  ])('hands large content only to a capable peer ($peer)', async ({ version, storeEnabled, succeeds }) => {
+    const key = 'companion.skill.v1:large';
+    const value = { slug: 'large', content: 'x'.repeat(70 * 1024) };
+    let stored: unknown;
+    const t = setup({ home: 'desk', devices: [device('laptop')],
+      values: [{ key: 'companion.profile.v1', value: MIA }, { key, value }],
+      store: { enabled: () => storeEnabled },
+      homeLink: { version: async () => version, targets: async () => [], handOver: async () => ({ ok: true }) },
+      handler: (route, method, data) => {
+        if (route === '/preferences') return method === 'GET' ? [{ key: 'companion.profile.v1', value: MIA, revision: 1 }] : { revision: 1 };
+        if (route.startsWith('/companion-store/changes')) return { entries: [], cursor: '0', hasMore: false };
+        if (route === '/companion-store/entry' && method === 'POST') {
+          stored = (data as { value: unknown }).value;
+          return { revision: 1 };
+        }
+        if (route.startsWith('/companion-store/entry?')) return { key, revision: 1, deleted: false, value: stored };
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        if (route.endsWith('/import') || method === 'PATCH') return {};
+        throw new Error(`unexpected ${method} ${route}`);
+      } });
+    expect(await t.runtime.switchHome('bot_mia', 'laptop')).toEqual(succeeds ? { ok: true } : { ok: false, code: 'FAILED' });
+    expect(t.actors[0]!.homeDeviceId).toBe(succeeds ? 'laptop' : 'desk');
+    expect(t.state.isDemoted('bot_mia')).toBe(succeeds);
+    expect(t.calls.some(call => call.method === 'PATCH')).toBe(succeeds);
+    if (succeeds) {
+      expect(stored).toEqual({ companionStore: 1, prefRevision: 0, value });
+      const uploaded = t.calls.findIndex(call => call.route === '/companion-store/entry' && call.method === 'POST');
+      expect(uploaded).toBeLessThan(t.calls.findIndex(call => call.method === 'PATCH'));
+    } else expect(stored).toBeUndefined();
+  });
+
   it('only transfers from the home computer', async () => {
     const t = setup({ home: 'laptop', devices: [device('tablet')] });
     expect(await t.runtime.transfer('bot_mia', 'tablet')).toMatchObject({ ok: false, code: 'FAILED', homeDeviceId: 'laptop' });
@@ -425,6 +536,50 @@ describe('transcript', () => {
 });
 
 describe('retire', () => {
+  // An explicit local deletion must survive an unavailable actor registry. Persist the
+  // known actor identity; a later registry must still prove home + installation ownership.
+  it('persists retirement without an actor registry and completes it after restart', async () => {
+    const t = setup({ home: 'desk' });
+    t.state.update('bot_mia', 'actor-1', entry => { entry.roomId = ROOM; });
+    t.actors.length = 0;
+    await t.runtime.retire('bot_mia');
+    const savedState = t.files.get('state.json');
+    expect(JSON.parse(savedState!).bots.bot_mia.retirePending).toBe(true);
+    expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
+    t.runtime.dispose();
+
+    const restarted = setup({ home: 'desk', savedState });
+    restarted.runtime.reconcile([]);
+    await vi.waitFor(() => expect(restarted.actors[0]!.disabled).toBe(true));
+    expect(restarted.state.bot('bot_mia')?.retirePending).toBeUndefined();
+    expect(restarted.local.host.createProfile).not.toHaveBeenCalled();
+  });
+
+  it.each(['laptop', 'replacement', 'disabled'])('does not apply a deferred deletion to %s', async target => {
+    const t = setup({ home: 'desk' });
+    t.state.update('bot_mia', 'actor-1', entry => { entry.retirePending = true; });
+    if (target === 'laptop') t.actors[0]!.homeDeviceId = 'laptop';
+    else if (target === 'replacement') t.actors[0]!.id = 'actor-replacement';
+    else t.actors[0]!.disabled = true;
+    // Keep a local row to avoid exercising automatic materialization in this retirement test.
+    t.runtime.reconcile([{ id: 'bot_mia', status: 'active' }]);
+    await Promise.resolve();
+    expect(t.calls.some(call => call.method === 'PATCH' && (call.data as { disabled?: boolean }).disabled)).toBe(false);
+    expect(t.actors[0]!.disabled === true).toBe(target === 'disabled');
+    expect(t.state.bot('bot_mia')?.retirePending).toBeUndefined();
+  });
+
+  it('does not queue an unknown or demoted companion when the registry is unavailable', async () => {
+    const t = setup({ home: 'desk' });
+    t.state.update('bot_mia', 'actor-1', entry => { entry.demoted = true; });
+    t.actors.length = 0;
+    await t.runtime.retire('bot_mia');
+    await t.runtime.retire('unknown');
+    expect(t.state.bot('bot_mia')?.retirePending).toBeUndefined();
+    expect(t.state.bot('unknown')).toBeNull();
+    expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
+  });
+
   it('disables the cloud companion when it is deleted on its main computer', async () => {
     const t = setup({ home: 'desk' });
     await t.runtime.retire('bot_mia');

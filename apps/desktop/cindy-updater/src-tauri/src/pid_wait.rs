@@ -13,7 +13,10 @@ pub fn wait_for_exit(pid: u32, timeout: Duration) -> bool {
     loop {
         sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[target]), true);
         if sys.process(target).is_none() {
-            logger::info(format!("[pid-wait] pid {pid} exited after {:?}", start.elapsed()));
+            logger::info(format!(
+                "[pid-wait] pid {pid} exited after {:?}",
+                start.elapsed()
+            ));
             return true;
         }
         if start.elapsed() >= timeout {

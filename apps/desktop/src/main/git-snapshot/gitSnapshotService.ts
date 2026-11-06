@@ -18,6 +18,7 @@ import { isolatedGitExec, snapshotGitIsolationArgs } from './isolatedGitExec';
 import { gitPathOutput } from '../worktree/gitPathOutput';
 import {
   buildSnapshotFilePlan,
+  checkSnapshotCaptureDeadline,
   resolveSnapshotGitPath,
   type SnapshotIncludedFile,
   type SnapshotFileFilterOptions,
@@ -414,6 +415,8 @@ export interface CreateShadowSavepointInput {
   skipIfTreeEquals?: string;
   /** Optional safety filter limit overrides, mainly for tests. */
   fileFilter?: Partial<SnapshotFileFilterOptions>;
+  /** Turn-boundary capture only; manual/pre-rollback snapshots stay unbounded. */
+  captureBudget?: { maxFiles: number; maxTotalBytes: number; timeoutMs: number };
 }
 
 /**
@@ -457,12 +460,23 @@ export async function createShadowSavepoint(
   repoPath: string,
   input: CreateShadowSavepointInput,
 ): Promise<ShadowSavepointResult> {
-  const blockedState = await detectBlockedGitState(repoPath);
+  const deadlineAtMs = input.captureBudget
+    ? performance.now() + input.captureBudget.timeoutMs
+    : undefined;
+  checkSnapshotCaptureDeadline(deadlineAtMs);
+  const blockedState = await detectBlockedGitState(repoPath, deadlineAtMs);
   if (blockedState) {
     throw new SnapshotBlockedByGitStateError(blockedState);
   }
 
-  const plan = await buildSnapshotFilePlan(repoPath, input.fileFilter);
+  const plan = await buildSnapshotFilePlan(repoPath, {
+    ...input.fileFilter,
+    ...(input.captureBudget ? {
+      maxFiles: input.captureBudget.maxFiles,
+      maxTotalBytes: input.captureBudget.maxTotalBytes,
+      deadlineAtMs,
+    } : {}),
+  });
   if (plan.statusTruncated) {
     // status 溢出时脏文件视图未知:空计划会拍出一个静默漏掉全部脏文件的
     // 基线/pre-rollback,读侧还会据此把未受保护的路径当成安全。失败关闭
@@ -486,7 +500,7 @@ export async function createShadowSavepoint(
   // the repository (a parent segment became a symlink pointing outside) must
   // be treated as deleted — never handed to `git add`, which would either
   // refuse it or, worse, snapshot out-of-repo content.
-  const skippedFingerprints = await collectSkippedFingerprints(repoPath, skippedFiles);
+  const skippedFingerprints = await collectSkippedFingerprints(repoPath, skippedFiles, deadlineAtMs);
   if (input.baselineSkippedFingerprints && skippedFingerprintsChanged(input.baselineSkippedFingerprints, skippedFingerprints)) {
     throw new Error('File rewind gap: turn changes were partially filtered');
   }
@@ -497,6 +511,7 @@ export async function createShadowSavepoint(
   let scanIndex = 0;
   for (const file of plan.includedFiles) {
     await operationYield(scanIndex++);
+    checkSnapshotCaptureDeadline(deadlineAtMs);
     const abs = resolveSnapshotGitPath(repoPath, file.path);
     if (!abs) continue;
     if (!(await pathExists(abs))) {
@@ -520,16 +535,16 @@ export async function createShadowSavepoint(
         isolatedGitExec(
           ['add', '-A', '--pathspec-from-file', pathspecFile, '--pathspec-file-nul'],
           repoPath,
-          { extraEnv },
+          { extraEnv, deadlineAtMs },
         ),
       );
     }
     for (const chunk of chunkRawPaths(missingPaths)) {
-      await gitExec(['update-index', '--force-remove', '--', ...chunk], repoPath, { extraEnv });
+      await gitExec(['update-index', '--force-remove', '--', ...chunk], repoPath, { extraEnv, deadlineAtMs });
     }
-    await removeRenameOldPaths(repoPath, renameOldPaths, extraEnv);
+    await removeRenameOldPaths(repoPath, renameOldPaths, extraEnv, deadlineAtMs);
 
-    const tree = (await gitExec(['write-tree'], repoPath, { extraEnv })).stdout.trim();
+    const tree = (await gitExec(['write-tree'], repoPath, { extraEnv, deadlineAtMs })).stdout.trim();
 
     let unchanged = false;
     if (input.skipIfTreeEquals) {
@@ -557,7 +572,7 @@ export async function createShadowSavepoint(
             // Diff against the turn baseline, not HEAD: the worktree stays
             // dirty across turns now, so a HEAD-based diff would describe the
             // cumulative session delta instead of this turn's changes.
-            await collectStagedDiff(repoPath, commitPathspecs, extraEnv, input.skipIfTreeEquals),
+            await collectStagedDiff(repoPath, commitPathspecs, extraEnv, input.skipIfTreeEquals, deadlineAtMs),
           ))
         : input.label;
     const [branch, baseHead, parent] = await Promise.all([
@@ -585,18 +600,20 @@ export async function createShadowSavepoint(
       skippedFiles,
       skippedFingerprints,
     };
-  });
+  }, deadlineAtMs);
 }
 
 /** lstat fingerprints (no content) for skipped paths that exist as files. */
 async function collectSkippedFingerprints(
   repoPath: string,
   skippedFiles: readonly SnapshotSkippedFile[],
+  deadlineAtMs?: number,
 ): Promise<SkippedFileFingerprint[]> {
   const out: SkippedFileFingerprint[] = [];
   let scanIndex = 0;
   for (const file of skippedFiles) {
     await operationYield(scanIndex++);
+    checkSnapshotCaptureDeadline(deadlineAtMs);
     const abs = resolveSnapshotGitPath(repoPath, file.path);
     if (!abs) continue;
     const stats = await fs.lstat(abs).catch(() => null);
@@ -883,12 +900,21 @@ async function collectStagedDiff(
   pathspecs: readonly string[],
   extraEnv: Record<string, string>,
   diffBase?: string,
+  deadlineAtMs?: number,
 ): Promise<StagedDiff> {
   const baseArgs = diffBase ? ['diff', '--cached', diffBase] : ['diff', '--cached'];
-  const [diffStat, rawDiffText] = await Promise.all([
-    safeGitStdoutForPathspecs([...baseArgs, '--stat'], repoPath, pathspecs, extraEnv),
-    safeGitStdoutForPathspecs([...baseArgs], repoPath, pathspecs, extraEnv),
+  // Both readers share the temporary index. A deadline failure in one must
+  // not let withTemporaryIndex remove it while the other still runs Git.
+  const reads = await Promise.allSettled([
+    safeGitStdoutForPathspecs([...baseArgs, '--stat'], repoPath, pathspecs, extraEnv, deadlineAtMs),
+    safeGitStdoutForPathspecs([...baseArgs], repoPath, pathspecs, extraEnv, deadlineAtMs),
   ]);
+  checkSnapshotCaptureDeadline(deadlineAtMs);
+  const [stat, patch] = reads;
+  if (stat.status === 'rejected') throw stat.reason;
+  if (patch.status === 'rejected') throw patch.reason;
+  const diffStat = stat.value;
+  const rawDiffText = patch.value;
   const diffText =
     rawDiffText.length > STAGED_DIFF_TEXT_MAX_BYTES
       ? `${rawDiffText.slice(0, STAGED_DIFF_TEXT_MAX_BYTES)}\n...[diff truncated]`
@@ -900,11 +926,16 @@ async function safeGitStdout(
   args: readonly string[],
   repoPath: string,
   extraEnv: Record<string, string>,
+  deadlineAtMs?: number,
 ): Promise<string> {
+  checkSnapshotCaptureDeadline(deadlineAtMs);
   try {
-    const { stdout } = await isolatedGitExec(args, repoPath, { extraEnv });
+    const { stdout } = await isolatedGitExec(args, repoPath, { extraEnv, deadlineAtMs });
     return stdout;
   } catch (err) {
+    // Best-effort label reads may degrade on ordinary Git errors, but must
+    // not swallow expiry and start another pathspec chunk without a budget.
+    checkSnapshotCaptureDeadline(deadlineAtMs);
     log.debug('[createSnapshot] git read failed, degrade to empty', {
       args: args.join(' '),
       error: err instanceof Error ? err.message : String(err),
@@ -918,10 +949,11 @@ async function safeGitStdoutForPathspecs(
   repoPath: string,
   pathspecs: readonly string[],
   extraEnv: Record<string, string>,
+  deadlineAtMs?: number,
 ): Promise<string> {
   const parts: string[] = [];
   for (const chunk of chunkPathspecArgs(pathspecs)) {
-    const stdout = await safeGitStdout([...baseArgs, '--', ...chunk], repoPath, extraEnv);
+    const stdout = await safeGitStdout([...baseArgs, '--', ...chunk], repoPath, extraEnv, deadlineAtMs);
     if (stdout) parts.push(stdout);
   }
   return parts.join('\n');
@@ -968,9 +1000,9 @@ function renameOldPathsToRemove(files: readonly SnapshotCommitFile[]): string[] 
   );
 }
 
-async function detectBlockedGitState(repoPath: string): Promise<SnapshotBlockedGitState | null> {
+async function detectBlockedGitState(repoPath: string, deadlineAtMs?: number): Promise<SnapshotBlockedGitState | null> {
   for (const { reason, marker } of BLOCKED_GIT_STATE_MARKERS) {
-    const markerPath = await resolveGitInternalPath(repoPath, marker);
+    const markerPath = await resolveGitInternalPath(repoPath, marker, deadlineAtMs);
     if (markerPath && (await pathExists(markerPath))) {
       return { reason, marker, markerPath };
     }
@@ -978,8 +1010,8 @@ async function detectBlockedGitState(repoPath: string): Promise<SnapshotBlockedG
   return null;
 }
 
-async function resolveGitInternalPath(repoPath: string, marker: string): Promise<string | null> {
-  const { stdout } = await gitExec(['rev-parse', '--git-path', marker], repoPath);
+async function resolveGitInternalPath(repoPath: string, marker: string, deadlineAtMs?: number): Promise<string | null> {
+  const { stdout } = await gitExec(['rev-parse', '--git-path', marker], repoPath, { deadlineAtMs });
   const gitPath = gitPathOutput(stdout);
   if (!gitPath) return null;
   return path.isAbsolute(gitPath) ? gitPath : path.resolve(repoPath, gitPath);
@@ -995,11 +1027,13 @@ async function pathExists(filePath: string): Promise<boolean> {
 async function withTemporaryIndex<T>(
   repoPath: string,
   fn: (extraEnv: Record<string, string>) => Promise<T>,
+  deadlineAtMs?: number,
 ): Promise<T> {
+  checkSnapshotCaptureDeadline(deadlineAtMs);
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'xdt-snapshot-index-'));
   const extraEnv = { GIT_INDEX_FILE: path.join(dir, 'index') };
   try {
-    await seedTemporaryIndex(repoPath, extraEnv);
+    await seedTemporaryIndex(repoPath, extraEnv, deadlineAtMs);
     return await fn(extraEnv);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
@@ -1009,9 +1043,10 @@ async function withTemporaryIndex<T>(
 async function seedTemporaryIndex(
   repoPath: string,
   extraEnv: Record<string, string>,
+  deadlineAtMs?: number,
 ): Promise<void> {
   try {
-    await gitExec(['read-tree', 'HEAD'], repoPath, { extraEnv });
+    await gitExec(['read-tree', 'HEAD'], repoPath, { extraEnv, deadlineAtMs });
   } catch (err) {
     if (err instanceof GitExecError && isUnbornHeadError(err)) return;
     throw err;
@@ -1038,9 +1073,10 @@ async function removeRenameOldPaths(
   repoPath: string,
   oldPaths: readonly string[],
   extraEnv: Record<string, string>,
+  deadlineAtMs?: number,
 ): Promise<void> {
   for (const chunk of chunkRawPaths(oldPaths)) {
-    await gitExec(['update-index', '--force-remove', '--', ...chunk], repoPath, { extraEnv });
+    await gitExec(['update-index', '--force-remove', '--', ...chunk], repoPath, { extraEnv, deadlineAtMs });
   }
 }
 

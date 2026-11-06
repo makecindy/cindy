@@ -1,3 +1,4 @@
+import { localAgentSettings } from './LocalAgentSection.settings-search';
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
@@ -119,8 +120,8 @@ export function LocalAgentSection() {
     }
   };
   return (
-    <div id="settings-search-target-local-agent" className="mt-6 flex flex-col gap-[14px]">
-      <h2 className={SETTINGS_SECTION_TITLE_CLASS}>{t('localAgent.title')}</h2>
+    <div id={localAgentSettings.connections.targetId} className="mt-6 flex flex-col gap-[14px]">
+      <h2 className={SETTINGS_SECTION_TITLE_CLASS}>{t(localAgentSettings.connections.titleKey)}</h2>
       <div
         className={SETTINGS_CARD_CLASS}
         aria-busy={loading || Boolean(revoking) || Boolean(saving)}
@@ -134,7 +135,7 @@ export function LocalAgentSection() {
                   {t(`localAgent.developerState.${developer.state}`)}
                 </p>
               </div>
-              <Button
+              <Button data-setting-id={localAgentSettings.connections.id}
                 variant="secondary"
                 size="sm"
                 className="shrink-0"
@@ -160,7 +161,7 @@ export function LocalAgentSection() {
                       : t('localAgent.description')}
                   </p>
                 </div>
-                <Button
+                <Button data-settings-search-action="Revoke the selected local agent connection"
                   className="shrink-0"
                   variant="secondary"
                   size="sm"
@@ -186,7 +187,7 @@ export function LocalAgentSection() {
                     {t('localAgent.createVisibleSessionsHint')}
                   </p>
                 </div>
-                <Switch
+                <Switch data-setting-id={localAgentSettings.connections.id}
                   id={`local-agent-visible-${connection.id}`}
                   aria-describedby={`local-agent-visible-hint-${connection.id}`}
                   checked={connection.createVisibleSessions === true}

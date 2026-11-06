@@ -64,9 +64,13 @@ describe('migrateGhostLibrary', () => {
     });
 
   it('全链路:文件与 sqlite 各走各的复制路径,binding 切换,旧目录进 grace', async () => {
+    // 4420466789: host sibling staging left after a crash is not a migratable user file.
+    const staging = '.cindy-library-publish-11111111-2222-3333-4444-555555555555.tmp';
+    await fs.promises.writeFile(path.join(fromRoot, 'canvases', 'c1', staging), 'unpublished');
     const res = await run();
     if (!res.ok) throw new Error(res.message);
     expect(res.files).toBe(2);
+    expect(fs.existsSync(path.join(candidate, GHOST_ID, 'canvases', 'c1', staging))).toBe(false);
     expect(appliedBindings).toEqual([candidate]);
     // 新位置数据完整。
     expect(await fs.promises.readFile(path.join(candidate, GHOST_ID, 'canvases', 'c1', 'a.png'), 'utf8')).toBe('asset-bytes');

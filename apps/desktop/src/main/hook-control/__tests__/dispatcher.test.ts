@@ -5,7 +5,7 @@
  */
 
 import path from 'node:path';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
 import { describe, expect, it, vi } from 'vitest';
@@ -34,6 +34,7 @@ import {
   HOOK_FEATURE_TELEGRAM_FINAL_OPS,
   HOOK_FEATURE_TELEGRAM_PROGRESS_OPS,
   HOOK_FEATURE_TURN_DELIVERY,
+  HOOK_FEATURE_X_MEDIA_RELAY,
   HOOK_FEATURE_TURN_REOPEN,
   type HookMessage,
   type TaskDispatchPayload,
@@ -2982,6 +2983,121 @@ describe('dispatcher 核心语义', () => {
 
     expect(c.ofType('turn.end')).toHaveLength(1);
     expect(stored.records[0]?.delivery).toBe('sent');
+  });
+
+  // 分块转传只给声明能力的 X 连接: 发给旧 server 的新帧会被丢弃, 上传只能等到超时。
+  // unit, 入口 handleDispatch。最小失败输入: 带能力的 welcome。
+  it.each([
+    ['x', [HOOK_FEATURE_X_MEDIA_RELAY], true],
+    ['x', [], false],
+    ['slack', [HOOK_FEATURE_X_MEDIA_RELAY], false],
+  ])('只有声明能力的 X 连接才转传视频 (%s, %j)', async (im, features, expected) => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, features);
+    d.handleDispatch('conn-1', dispatch({ source: { im } }), c.send);
+    await tick();
+    expect(typeof fr.calls[0]?.relayXVideo === 'function').toBe(expected);
+  });
+
+  // IM 轮次流程 §9：明确停止包含 Agent 结束后的上传；此前只 abort Agent，回执仍可能等 35 分钟。
+  // 生产入口 cancel；最小失败输入：init 在途时 task.cancel。其他连接不能取消，取消后也不能重新开始上传。
+  it('task.cancel immediately stops its video upload and prevents a late upload', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_X_MEDIA_RELAY]);
+    d.handleDispatch('conn-1', dispatch({ source: { im: 'x' } }), c.send);
+    await tick();
+    const dir = mkdtempSync(path.join(tmpdir(), 'cindy-dispatch-relay-'));
+    const file = path.join(dir, 'clip.mp4');
+    writeFileSync(file, 'video');
+    try {
+      const relayVideo = fr.calls[0]!.relayXVideo!;
+      const upload = relayVideo(file, 'video/mp4').catch((error: unknown) => error);
+      await vi.waitFor(() => expect(c.ofType('x.media.init')).toHaveLength(1));
+      d.cancel('other-connection', 'req-1');
+      expect(c.ofType('x.media.abort')).toHaveLength(0);
+      d.cancel('conn-1', 'req-1');
+      expect(await upload).toMatchObject({ code: 'X_MEDIA_RELAY_CANCELLED' });
+      expect(c.ofType('x.media.abort')).toHaveLength(1);
+      await expect(relayVideo(file, 'video/mp4')).rejects.toMatchObject({ code: 'X_MEDIA_RELAY_CANCELLED' });
+      expect(c.ofType('x.media.init')).toHaveLength(1);
+      fr.finish();
+      await tick();
+      expect(c.ofType('turn.end').at(-1)?.payload).toMatchObject({ status: 'cancelled' });
+    } finally {
+      d.dispose();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // 断线只结束已开始的上传。Agent 还在生成时短暂断连，恢复后的首个上传必须仍可开始。
+  it.each([true, false])('uses the current relay capability after reconnecting while the Agent was generating (%s)', async (supportsRelay) => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    const send = (message: HookMessage): boolean => {
+      const accepted = c.send(message);
+      if (message.type === 'x.media.init' || message.type === 'x.media.append' || message.type === 'x.media.finalize') {
+        d.handleXMediaResult('conn-1', {
+          uploadId: message.payload.uploadId,
+          step: message.type === 'x.media.init' ? 'init' : message.type === 'x.media.append' ? 'append' : 'finalize',
+          segmentIndex: message.type === 'x.media.append' ? message.payload.segmentIndex : null,
+          mediaId: message.type === 'x.media.finalize' ? '700' : null, error: null,
+        });
+      }
+      return accepted;
+    };
+    d.onConnected('conn-1', send, [HOOK_FEATURE_X_MEDIA_RELAY]);
+    d.handleDispatch('conn-1', dispatch({ source: { im: 'x' } }), send);
+    await tick();
+    d.onDisconnected('conn-1');
+    d.onConnected('conn-1', send, supportsRelay ? [HOOK_FEATURE_X_MEDIA_RELAY] : []);
+    const dir = mkdtempSync(path.join(tmpdir(), 'cindy-dispatch-relay-'));
+    const file = path.join(dir, 'clip.mp4');
+    writeFileSync(file, 'video');
+    try {
+      const upload = fr.calls[0]!.relayXVideo!(file, 'video/mp4');
+      if (supportsRelay) await expect(upload).resolves.toBe('700');
+      else {
+        await expect(upload).rejects.toMatchObject({ code: 'X_MEDIA_RELAY_OFFLINE' });
+        expect(c.ofType('x.media.init')).toHaveLength(0);
+        expect(c.ofType('x.media.abort')).toHaveLength(0);
+      }
+      fr.finish(supportsRelay ? { xMediaIds: ['700'] } : {});
+      await tick();
+      expect(c.ofType('turn.end').at(-1)?.payload).toMatchObject({ status: 'ok', ...(supportsRelay ? { xMediaIds: ['700'] } : {}) });
+    } finally {
+      d.dispose();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // media id 必须随终稿发回, 否则视频已上传但回帖不带它。
+  it('turn.end 带上已转传的 media id, 断线时结束等待中的上传', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_X_MEDIA_RELAY]);
+    d.handleDispatch('conn-1', dispatch({ source: { im: 'x' } }), c.send);
+    await tick();
+    const dir = mkdtempSync(path.join(tmpdir(), 'cindy-dispatch-relay-'));
+    const file = path.join(dir, 'clip.mp4');
+    writeFileSync(file, 'video');
+    try {
+      const upload = fr.calls[0]!.relayXVideo!(file, 'video/mp4').catch((error: unknown) => error);
+      await vi.waitFor(() => expect(c.ofType('x.media.init')).toHaveLength(1));
+      d.onDisconnected('conn-1');
+      expect(await upload).toMatchObject({ code: 'X_MEDIA_RELAY_DISCONNECTED' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_X_MEDIA_RELAY]);
+    fr.finish({ finalText: '', xMediaIds: ['700'] });
+    await tick();
+    expect(c.ofType('turn.end').at(-1)?.payload).toMatchObject({ xMediaIds: ['700'] });
   });
 
   it('协商 delivery ACK 后，accepted 前按退避重放同一 turn.end，accepted 后停止并释放正文', async () => {

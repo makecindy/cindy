@@ -7,6 +7,26 @@ import { parseUserContent } from '../../../renderer/lib/imageRef.js';
 import { projectPersistedAgentFacingUserText } from '@cindy/maker-shared/agent-input-projection';
 
 describe('plugin task pipe', () => {
+  // User regression: the Host picker returned a valid remote selection that tasks.create/setModel
+  // rejected. Exercise the actual pipe, including its capability discovery; existing cases only
+  // passed local routes. Minimum input: the same route on a paired computer or share. Tier: unit.
+  it.each(['other-computer', 'share:provider'])('preserves the execution source %s in create and setModel', async agentDeviceId => {
+    const handler = vi.fn(async () => ({ accepted: true }));
+    const deps = { getGhost: () => ghost, handler, isCurrent: () => true };
+    const route = { agentKind: 'codex', providerId: 'same-provider', model: 'same-model', effort: '', fastMode: false, agentDeviceId };
+    for (const request of [
+      { type: 'tasks-request', kind: 'create', requestKey: 'remote', title: 'Remote', route },
+      { type: 'tasks-request', kind: 'setModel', taskId: 'own', expectedRevision: 1, route },
+    ]) {
+      expect(await handlePluginTaskRequest('p', request, deps)).toEqual({ ok: true, data: { accepted: true } });
+      expect(handler).toHaveBeenLastCalledWith('p', request);
+      for (const invalid of ['', ' ', 'local', 'a/b', 'x'.repeat(129), null, 42]) {
+        expect(validPluginTaskRequest({ ...request, route: { ...route, agentDeviceId: invalid } })).toBe(false);
+      }
+    }
+    expect(await handlePluginTaskRequest('p', { type: 'tasks-request', kind: 'capabilities' }, deps))
+      .toMatchObject({ ok: true, data: { remoteRoutes: true } });
+  });
   it('round-trips collapsed context with screenshots while model history retains the full material', () => {
     const message = buildPluginMessage('Look here', 'Window text and pointer coordinates', 'Attached context');
     const persisted = JSON.stringify({ ...message,
@@ -188,6 +208,19 @@ describe('background tasks (agent.hiddenTasks)', () => {
     expect(validPluginTaskRequest({ type: 'tasks-request', kind: 'setHidden', hidden: true })).toBe(false);
     expect(validPluginTaskRequest({ type: 'tasks-request', kind: 'setHidden', taskId: 'own', hidden: true, sessionId: 'other' })).toBe(false);
     expect(validPluginTaskRequest({ type: 'tasks-request', kind: 'get', taskId: 'own', hidden: true })).toBe(false);
+  });
+
+  it('validates the archive operation shape and advertises it to every tasks plugin', async () => {
+    // Rule: archive is reversible housekeeping for a plugin's own tasks; no hiddenTasks declaration needed. tier: unit.
+    expect(validPluginTaskRequest({ type: 'tasks-request', kind: 'archive', taskId: 'own' })).toBe(true);
+    expect(validPluginTaskRequest({ type: 'tasks-request', kind: 'archive' })).toBe(false);
+    expect(validPluginTaskRequest({ type: 'tasks-request', kind: 'archive', taskId: 'own', hidden: true })).toBe(false);
+    const handler = vi.fn(async () => ({ taskId: 'own', status: 'archived' }));
+    const deps = { getGhost: () => undeclared, handler, isCurrent: () => true };
+    expect(await handlePluginTaskRequest('p', { type: 'tasks-request', kind: 'archive', taskId: 'own' }, deps))
+      .toEqual({ ok: true, data: { taskId: 'own', status: 'archived' } });
+    const caps = await handlePluginTaskRequest('p', { type: 'tasks-request', kind: 'capabilities' }, deps);
+    expect((caps as { data: { operations: string[] } }).data.operations).toContain('archive');
   });
 
   it('denies hidden creation and setHidden without the declaration, before reaching the handler', async () => {

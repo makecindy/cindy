@@ -14,6 +14,11 @@ override 语义见 [`configuration-and-overrides.md`](configuration-and-override
 
 ## 事实来源
 
+用户主动录制的性能报告见 [Desktop 性能跟踪](performance-tracing.md)：2026-10-29 用户明确要求
+通过日志链路提交完整性能文件。专用上传入口只读取该次录制的四个固定文件，将 JSON 值用现有
+脱敏器处理后压缩、分片，复用本模块的目标、授权和发送器。原始文件保留在本地；这不扩充普通
+日志来源白名单、不进入崩溃自动上传，界面明确告知路径和性能标记仍可能包含在上传副本中。
+
 | 内容 | 权威来源 |
 |---|---|
 | 记录边界格式（写侧＋读侧共用） | `apps/desktop/src/shared/mainLogRecordFormat.ts` |
@@ -26,6 +31,13 @@ override 语义见 [`configuration-and-overrides.md`](configuration-and-override
 | 上报目标（构建期注入的校验侧） | `scripts/shared/log-upload-build-env.mjs`、配置骨架 `config/log-upload.json.example` |
 | 待补传标记 | `apps/desktop/src/main/log-upload/pendingMarkers.ts` |
 | 崩溃判定 | `apps/desktop/src/main/lifecycle.ts`（`isFatalShutdownReason` / `onFatalShutdown`） |
+
+远程卡顿诊断新增精确来源 `device-link:ipc-diagnostics`、
+`device-link:execution-diagnostics`、`device-link-transfer`，仅含固定操作类别、短请求标识、
+计数、字节数和时长；其子 scope 继续默认拒绝。`device-link diagnostic` 将较大的现场拆成
+低于 2,000 字符的 JSON 记录，用 `instance + event + part` 关联，避免单条截断丢掉队头证据。
+采样省略数由 `suppressed` 明示；总量裁剪仍遵守现有上限，不放宽来源、记录边界或脱敏规则。
+新增诊断须验证默认 INFO → 正式 writer → collectLogs 后的内容，不能只断言 logger 被调用。
 
 ## 1. 三条不变量
 

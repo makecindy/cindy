@@ -1,3 +1,4 @@
+import { remoteControlSettings } from './RemoteControlSection.settings-search';
 /**
  * RemoteControlSection —— 统一的「远程控制」设置页。
  *
@@ -24,6 +25,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 
 import { useDeviceLinkSettings, type DeviceLinkSettings } from '@/hooks/useDeviceLinkSettings';
 import { MyDevicesPanel } from './MyDevicesPanel';
+import { RelayServicePanel, useSelfHostedRelayState } from './RelayServicePanel';
 import { RemoteDesktopSetting } from './RemoteDesktopSetting';
 import { RemoteSection } from './RemoteSection';
 import { useAuth } from '@/contexts/AuthContext';
@@ -74,7 +76,7 @@ function CollapsibleSubSection({
 }) {
   return (
     <section id={id} className="flex flex-col gap-3">
-      <button
+      <button data-settings-search-action="Expand or collapse the remote-control section"
         type="button"
         onClick={onToggle}
         aria-expanded={open}
@@ -165,6 +167,7 @@ export function RemoteControlSection() {
   // 深链 ?section=devices 必须在首帧就是展开态:放到 effect 里会先画一帧收起,
   // 再把下方内容顶开一格。
   const [devicesOpen, setDevicesOpen] = useState(() => isDevicesSection(location.search));
+  const relay = useSelfHostedRelayState(deviceLinkAvailable);
   const [sshOpen, setSshOpen] = useState(
     () => new URLSearchParams(location.search).get('section') === 'remoteControl.ssh',
   );
@@ -239,8 +242,10 @@ export function RemoteControlSection() {
         return copy;
       });
     });
+    const offHosts = window.electronAPI.remoteSsh.onHostsChanged?.((result) => setHosts(result.hosts));
     return () => {
       off();
+      offHosts?.();
     };
   }, [refreshHosts]);
 
@@ -269,8 +274,8 @@ export function RemoteControlSection() {
         {deviceLinkAvailable ? (
           <>
             <CollapsibleSubSection
-              id="settings-search-target-remote-devices"
-              title={t('settings.remoteControl.sections.myDevices')}
+              id={remoteControlSettings.devices.targetId}
+              title={t(remoteControlSettings.devices.titleKey)}
               summary={devSumText}
               dotColor={null}
               open={devicesOpen}
@@ -292,13 +297,25 @@ export function RemoteControlSection() {
                 focusRequestKey={focusRequestKey}
               />
             </CollapsibleSubSection>
+            {/* 设备之间经哪条线路连接:紧跟在「我的设备」下面直接展示,当前线路一眼可见,不再单独占一个入口。 */}
+            <section id={remoteControlSettings.relay.targetId} className="flex flex-col gap-3">
+              <div className="flex flex-col gap-0.5">
+                <h3 className="text-14 font-medium text-[var(--text-primary)]">
+                  {t(remoteControlSettings.relay.titleKey)}
+                </h3>
+                <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">
+                  {t('settings.remoteControl.relay.route.hint')}
+                </p>
+              </div>
+              <RelayServicePanel controller={relay} />
+            </section>
             <div className="h-px w-full bg-[var(--border-default)]" />
           </>
         ) : null}
 
         <CollapsibleSubSection
-          id="settings-search-target-remote-ssh"
-          title={t('settings.remoteControl.sections.ssh')}
+          id={remoteControlSettings.ssh.targetId}
+          title={t(remoteControlSettings.ssh.titleKey)}
           summary={sshSum?.text ?? null}
           dotColor={sshSum?.dot ?? null}
           open={sshOpen}

@@ -1,4 +1,7 @@
 /** Registry V4 local-model curation. Data only; execution stays in the client. */
+import descriptionTranslations from './localModelDescriptions.json';
+
+export type LocalModelDescriptionLocale = 'en' | 'zh-CN' | 'zh-TW' | 'ja' | 'ko' | 'es' | 'fr' | 'de' | 'pt-PT' | 'pt-BR';
 export interface LocalModelVariant {
   libraryName: string;
   sizeBytes: number;
@@ -21,7 +24,7 @@ export interface LocalCatalogModel {
   variants: LocalModelVariant[];
   llamacpp?: LocalGgufVariant[];
   descriptions?: Partial<
-    Record<"en" | "zh-CN" | "zh-TW" | "ja" | "ko", string>
+    Record<LocalModelDescriptionLocale, string>
   >;
   /** Existing client implementation, never executable server instructions. */
   runtimeProfile?: "plain" | "qwen-xhigh";
@@ -36,6 +39,18 @@ export interface LocalModelCatalog {
   models: LocalCatalogModel[];
   /** Ordered capability/speed picks; empty explicitly withdraws recommendations. */
   featuredIds: string[];
+}
+
+/** Translate only reviewed, exact source text. Never reuse a translation after a server copy change. */
+export function localModelDescription(
+  descriptions: LocalCatalogModel['descriptions'],
+  locale: string,
+): string | undefined {
+  const supplied = descriptions?.[locale as LocalModelDescriptionLocale];
+  if (supplied) return supplied;
+  const english = descriptions?.en;
+  const reviewed = descriptionTranslations.find(copy => copy.en === english);
+  return reviewed?.[locale as keyof typeof reviewed] ?? english;
 }
 const object = (v: unknown): v is Record<string, unknown> =>
   Boolean(v) && typeof v === "object" && !Array.isArray(v);
@@ -162,7 +177,7 @@ export function parseLocalModelCatalog(v: unknown): LocalModelCatalog | null {
     if (
       m.descriptions !== undefined &&
       (!object(m.descriptions) ||
-        !fields(m.descriptions, ["en", "zh-CN", "zh-TW", "ja", "ko"]) ||
+        !fields(m.descriptions, ["en", "zh-CN", "zh-TW", "ja", "ko", "es", "fr", "de", "pt-PT", "pt-BR"]) ||
         !Object.values(m.descriptions).every((s) => string(s, 500)))
     )
       return null;

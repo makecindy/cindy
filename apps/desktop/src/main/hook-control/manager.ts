@@ -38,6 +38,7 @@ import {
   HOOK_FEATURE_TELEGRAM_FINAL_OPS,
   HOOK_FEATURE_TELEGRAM_PROGRESS_OPS,
   HOOK_FEATURE_TURN_DELIVERY,
+  HOOK_FEATURE_X_MEDIA_RELAY,
   makeBindRevoke,
   makeBindStart,
   makeHello,
@@ -96,10 +97,6 @@ import {
 } from './store.js';
 import type { HookDispatcher } from './dispatcher.js';
 import { buildQueryResponse, type AgentModelSource } from './queryResponder.js';
-import {
-  autoRegisterTelegramSpeaker,
-  resetTelegramSpeakerRegistrationCache,
-} from '../im/telegram/contactsAutoRegister.js';
 import {
   groupLaneOf,
   recordGroupMessage,
@@ -1629,7 +1626,6 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       drainLanePendingBehavior(lane);
       if (lane.config.provider === 'telegram') {
         resetGroupContextCursorsSafely();
-        resetTelegramSpeakerRegistrationCache();
       }
     }
     persistLaneBinding(lane, view);
@@ -2467,6 +2463,14 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       );
       return;
     }
+    if (msg.type === 'x.media.result') {
+      if (expectedProvider !== 'x' || lane?.serverFeatures.includes(HOOK_FEATURE_X_MEDIA_RELAY) !== true) {
+        log.warn('x.media.result ignored without negotiated X media relay capability');
+        return;
+      }
+      dispatcher?.handleXMediaResult(dispatchId('x'), msg.payload);
+      return;
+    }
     if (msg.type === 'turn.delivery') {
       if (
         expectedProvider !== 'x' ||
@@ -2591,25 +2595,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
             log.warn('group.message ignored: Telegram binding principal is unavailable');
             return;
           }
-          const inserted = await recordGroupMessage(msg.payload, ownerId);
-          if (
-            inserted &&
-            expectedProvider === 'telegram' &&
-            msg.payload.author.id !== undefined &&
-            msg.payload.author.isBot !== true
-          ) {
-            autoRegisterTelegramSpeaker(
-              {
-                id: msg.payload.author.id,
-                name: msg.payload.author.name,
-                ...(msg.payload.author.username !== undefined
-                  ? { username: msg.payload.author.username }
-                  : {}),
-                isOwner: msg.payload.author.id === ownerId,
-              },
-              { chatName: msg.payload.chatName },
-            );
-          }
+          await recordGroupMessage(msg.payload, ownerId);
         })().catch((err) => log.warn(`group window record failed: ${String(err)}`)),
       );
       return;
@@ -3302,7 +3288,6 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         }
         // 普通账号边界只清内存热缓存；明确删除账号数据时才清官方群 durable cursor。
         await resetGroupContextCursors({ clearPersisted: false });
-        resetTelegramSpeakerRegistrationCache();
         notifySlackToolProviderEnabledIfChanged();
         notifyStatus(toView());
       })();

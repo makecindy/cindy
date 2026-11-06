@@ -954,7 +954,7 @@
       "sidebar-item-active-foreground": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-sidebar-item-active-foreground}",
-        "$description": "反相深字(浅钮上)"
+        "$description": "Soft selected pill with same-polarity readable foreground."
       },
       "sidebar-item-active-border": {
         "$type": "color",
@@ -964,7 +964,7 @@
       "sidebar-item-active": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-sidebar-item-active}",
-        "$description": "用户二次改稿 2026-07-20:反相胶囊 #EEEEEE 浅底(同 accent-cta-bg)"
+        "$description": "Soft selected pill with same-polarity readable foreground."
       },
       "splash-bg": {
         "$type": "color",
@@ -1015,11 +1015,6 @@
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-update-btn-text}",
         "$description": "反相深字(浅钮上)"
-      },
-      "update-btn-hover": {
-        "$type": "color",
-        "$value": "{reference.themes.cindy-dark.value-update-btn-hover}",
-        "$description": "E1D §15.10 四态 hover(实心,非 alpha 叠加)"
       },
       "accent-foreground": {
         "$type": "color",
@@ -1160,16 +1155,6 @@
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-send-btn-disabled-icon}",
         "$description": "禁用图标"
-      },
-      "send-btn-hover-bg": {
-        "$type": "color",
-        "$value": "{reference.themes.cindy-dark.value-send-btn-hover-bg}",
-        "$description": "E1D 反相中性 hover(lead 四态)"
-      },
-      "send-btn-pressed-bg": {
-        "$type": "color",
-        "$value": "{reference.themes.cindy-dark.value-send-btn-pressed-bg}",
-        "$description": "E1D 反相中性 pressed(lead 四态)"
       },
       "completion-badge-fg": {
         "$type": "color",
@@ -1866,7 +1851,7 @@
       "sidebar-item-active-foreground": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-sidebar-item-active-foreground}",
-        "$description": "用户二次改稿 2026-07-20:反相胶囊,light 深底浅字(同 accent-pure-cta-fg)"
+        "$description": "Soft selected pill with same-polarity readable foreground."
       },
       "sidebar-item-active-border": {
         "$type": "color",
@@ -1876,7 +1861,7 @@
       "sidebar-item-active": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-sidebar-item-active}",
-        "$description": "用户二次改稿 2026-07-20:反相胶囊 #3C3F43 深底(同 accent-cta-bg)"
+        "$description": "Soft selected pill with same-polarity readable foreground."
       },
       "splash-bg": {
         "$type": "color",
@@ -1927,11 +1912,6 @@
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-update-btn-text}",
         "$description": "E1D 中性字(#FCFCFC on #3C3F43 = 10.32:1)"
-      },
-      "update-btn-hover": {
-        "$type": "color",
-        "$value": "{reference.themes.cindy-light.value-update-btn-hover}",
-        "$description": "E1D §15.10 四态 hover(实心,非 alpha 叠加)"
       },
       "accent-foreground": {
         "$type": "color",
@@ -2072,16 +2052,6 @@
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-send-btn-disabled-icon}",
         "$description": "R4 禁用灰字(§2.6 send 图标)"
-      },
-      "send-btn-hover-bg": {
-        "$type": "color",
-        "$value": "{reference.themes.cindy-light.value-send-btn-hover-bg}",
-        "$description": "E1D 反相中性 hover(lead 四态)"
-      },
-      "send-btn-pressed-bg": {
-        "$type": "color",
-        "$value": "{reference.themes.cindy-light.value-send-btn-pressed-bg}",
-        "$description": "E1D 反相中性 pressed(lead 四态)"
       },
       "ask-badge-bg": {
         "$type": "color",

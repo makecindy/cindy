@@ -86,6 +86,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  manager.disposeNotificationIndex();
   await fs.promises.rm(workDir, { recursive: true, force: true });
 });
 
@@ -102,6 +103,23 @@ function goodManifest(id = 'hello'): Record<string, unknown> {
     tools: [{ name: 'do_thing', description: '做点事' }],
   };
 }
+
+// Unit integration: the index must follow real install/enable/uninstall mutations
+// without another full-list broadcast; gateway-only fixtures cannot cover this.
+it('updates notification candidates through actual installation mutations', async () => {
+  const manifest = { ...goodManifest('listener'), slots: ['tool', 'subscribe'], subscribe: { topics: ['session'] } };
+  const installed = await manager.install(await makeCindy('listener.cindy', manifest), { namespace: null });
+  expect(installed).toMatchObject({ ghost: { manifest: { id: 'listener' } } });
+  const candidates = await manager.listNotificationCandidatesAsync();
+  expect(candidates.map(g => g.manifest.id)).toEqual(['listener']);
+  const id = installedGhostPhysicalRelId(candidates[0]!);
+  await expect(manager.setEnabled(id, false)).resolves.toEqual({ ok: true });
+  await expect(manager.listNotificationCandidatesAsync()).resolves.toEqual([]);
+  await expect(manager.setEnabled(id, true)).resolves.toEqual({ ok: true });
+  expect((await manager.listNotificationCandidatesAsync()).map(g => g.manifest.id)).toEqual(['listener']);
+  await manager.uninstall(id);
+  await expect(manager.listNotificationCandidatesAsync()).resolves.toEqual([]);
+});
 
 describe('official simulator identity migration', () => {
   it.each(['prepared', 'backed-up', 'placed', 'committed'] as const)(
@@ -564,6 +582,71 @@ describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => 
     const result = await manager.update(removed, { namespace: 'acme', expectedInstalledApproval: ghostInstallApprovalToken(updated.ghost.approval) });
     expect(result).toHaveProperty('ghost.taskCapabilityApproved', true);
     expect(result).not.toHaveProperty('ghost.targetCapabilityApproved');
+  });
+
+  it('preserves delegation consent only on the same approved instance and declared capability', async () => {
+    const manifest = { ...goodManifest(), slots: ['tool', 'agent'], agent: { tasks: true, targets: true, delegation: true } };
+    const pkg = await makeCindy('delegation.cindy', manifest, { 'main.js': '// plugin' });
+    await manager.install(pkg, { taskCapabilityApproved: true, targetCapabilityApproved: true });
+    const selected = manager.list()[0]!;
+    if (selected.approval.state !== 'approved') throw new Error('fixture not approved');
+    const id = installedGhostStoragePart(selected);
+    expect(selected.delegationCapabilityApproved).toBeUndefined();
+    expect(await manager.approveTaskCapability(id, 'stale', () => true, 'delegation')).toBe(false);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => false, 'delegation')).toBe(false);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => true, 'delegation')).toBe(true);
+    const update = await makeCindy('delegation-update.cindy', { ...manifest, version: '1.0.1' }, { 'main.js': '// update' });
+    const updated = await manager.update(update, { expectedInstalledApproval: ghostInstallApprovalToken(selected.approval) });
+    expect(updated).toHaveProperty('ghost.delegationCapabilityApproved', true);
+    if (!('ghost' in updated) || updated.ghost.approval.state !== 'approved') throw new Error('fixture update failed');
+    const removed = await makeCindy('delegation-removed.cindy', { ...manifest, version: '1.0.2', agent: { tasks: true, targets: true } }, { 'main.js': '// update' });
+    const result = await manager.update(removed, { expectedInstalledApproval: ghostInstallApprovalToken(updated.ghost.approval) });
+    expect(result).toHaveProperty('ghost.targetCapabilityApproved', true);
+    expect(result).not.toHaveProperty('ghost.delegationCapabilityApproved');
+  });
+
+  it('approves observe without tasks and preserves it only while the same instance still declares it', async () => {
+    const manifest = { ...goodManifest(), slots: ['tool', 'agent'], agent: { observe: true } };
+    const pkg = await makeCindy('observe.cindy', manifest, { 'main.js': '// plugin' });
+    await manager.install(pkg, { taskCapabilityApproved: true, targetCapabilityApproved: true });
+    const selected = manager.list()[0]!;
+    if (selected.approval.state !== 'approved') throw new Error('fixture not approved');
+    const id = installedGhostStoragePart(selected);
+    expect(selected).not.toHaveProperty('observeCapabilityApproved');
+    expect(selected).not.toHaveProperty('taskCapabilityApproved');
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => true, 'tasks')).toBe(false);
+    expect(await manager.approveTaskCapability(id, 'stale', () => true, 'observe')).toBe(false);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => false, 'observe')).toBe(false);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => true, 'observe')).toBe(true);
+    expect(manager.list()[0]?.observeCapabilityApproved).toBe(true);
+    const update = await makeCindy('observe-update.cindy', { ...manifest, version: '1.0.1' }, { 'main.js': '// update' });
+    const updated = await manager.update(update, { expectedInstalledApproval: ghostInstallApprovalToken(selected.approval) });
+    expect(updated).toHaveProperty('ghost.observeCapabilityApproved', true);
+    if (!('ghost' in updated) || updated.ghost.approval.state !== 'approved') throw new Error('fixture update failed');
+    const removed = await makeCindy('observe-removed.cindy', { ...manifest, version: '1.0.2', agent: { errand: true } }, { 'main.js': '// update' });
+    const result = await manager.update(removed, { expectedInstalledApproval: ghostInstallApprovalToken(updated.ghost.approval) });
+    expect(result).not.toHaveProperty('ghost.observeCapabilityApproved');
+  });
+
+  it('approves companions on its own and keeps it only while the same instance still declares it', async () => {
+    const manifest = { ...goodManifest(), slots: ['tool', 'agent'], agent: { companions: true } };
+    const pkg = await makeCindy('companions.cindy', manifest, { 'main.js': '// plugin' });
+    await manager.install(pkg, { observeCapabilityApproved: true });
+    const selected = manager.list()[0]!;
+    if (selected.approval.state !== 'approved') throw new Error('fixture not approved');
+    const id = installedGhostStoragePart(selected);
+    expect(selected).not.toHaveProperty('companionsCapabilityApproved');
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => true, 'observe')).toBe(false);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => false, 'companions')).toBe(false);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => true, 'companions')).toBe(true);
+    expect(manager.list()[0]).toHaveProperty('companionsCapabilityApproved', true);
+    const update = await makeCindy('companions-update.cindy', { ...manifest, version: '1.0.1' }, { 'main.js': '// update' });
+    const updated = await manager.update(update, { expectedInstalledApproval: ghostInstallApprovalToken(manager.list()[0]!.approval) });
+    expect(updated).toHaveProperty('ghost.companionsCapabilityApproved', true);
+    if (!('ghost' in updated)) throw new Error('fixture update failed');
+    const removed = await makeCindy('companions-removed.cindy', { ...manifest, version: '1.0.2', agent: { errand: true } }, { 'main.js': '// update' });
+    const result = await manager.update(removed, { expectedInstalledApproval: ghostInstallApprovalToken(updated.ghost.approval) });
+    expect(result).not.toHaveProperty('ghost.companionsCapabilityApproved');
   });
 
   it.each(['future', { future: true }, ['future'], null, false])('keeps historical unknown tasks %j enabled without task approval', async (tasks) => {
@@ -3170,6 +3253,7 @@ describe('GhostManager · install', () => {
       locales: {
         en: 'locales/en.json',
         'zh-CN': 'locales/zh-CN.json',
+        'zh-TW': 'locales/zh-TW.json',
       },
     };
     const locale = (name: string, description: string, toolDescription: string) =>
@@ -3181,6 +3265,7 @@ describe('GhostManager · install', () => {
     const cindy = await makeCindy('localized.cindy', manifest, {
       'locales/en.json': locale('English name', 'English description', 'English tool'),
       'locales/zh-CN.json': locale('中文名称', '中文说明', '中文工具'),
+      'locales/zh-TW.json': locale('繁體名稱', '繁體說明', '繁體工具'),
     });
     const result = await manager.install(cindy);
     expect(result).toMatchObject({
@@ -3194,6 +3279,22 @@ describe('GhostManager · install', () => {
       },
     });
 
+    // PR #8210: approved manifest snapshots must select the modern Chinese resource
+    // for classical UI editions; app-context mapping alone does not cover this path.
+    for (const [requested, name, description, toolDescription] of [
+      ['zh-Hant-x-lzh', '繁體名稱', '繁體說明', '繁體工具'],
+      ['zh-Hans-x-lzh', '中文名称', '中文说明', '中文工具'],
+    ]) {
+      hostLocale = requested;
+      expect(manager.list()[0].manifest).toMatchObject({
+        name, description, resolvedLocale: requested,
+        tools: [{ name: 'do_thing', description: toolDescription }],
+      });
+      expect(await manager.inspect(cindy)).toMatchObject({
+        manifest: { name, description, tools: [{ name: 'do_thing', description: toolDescription }] },
+        canonicalManifest: { name: 'Base name', description: 'Base description' },
+      });
+    }
     hostLocale = 'ja';
     expect(manager.list()[0].manifest).toMatchObject({
       name: 'English name',
@@ -3383,6 +3484,23 @@ describe('GhostManager · install', () => {
     expect(fs.existsSync(path.join(outside, 'acme', 'hello'))).toBe(false);
   });
 
+
+  it('keeps root, enterprise and local copies separate through update and uninstall', async () => {
+    const file = await makeCindy('same-id.cindy', goodManifest());
+    for (const namespace of [null, 'acme', 'local']) await manager.install(file, { namespace });
+    const local = manager.list().find(item => item.namespace === 'local')!;
+    const result = await manager.update(await makeCindy('local-next.cindy', { ...goodManifest(), version: '2.0.0' }), {
+      namespace: 'local', expectedInstalledApproval: ghostInstallApprovalToken(local.approval),
+    });
+    expect(result).toMatchObject({ ghost: { namespace: 'local', instanceKey: local.instanceKey, manifest: { version: '2.0.0' } } });
+    manager = new GhostManager({ getRootDir: () => rootDir });
+    expect(manager.list().map(item => [item.namespace, item.manifest.version])).toEqual(expect.arrayContaining([
+      [null, '1.0.0'], ['acme', '1.0.0'], ['local', '2.0.0'],
+    ]));
+    await expect(manager.uninstall(installedGhostPhysicalRelId(local))).resolves.toEqual({ ok: true });
+    expect(manager.list().map(item => item.namespace)).toEqual(expect.arrayContaining([null, 'acme']));
+    expect(manager.list()).toHaveLength(2);
+  });
 
   it('reads namespaced receipts from storage part and install rel id', async () => {
     const organizationOrigin = forgeInstallOriginForMembership('org');
@@ -3598,6 +3716,33 @@ describe('GhostManager · install', () => {
       },
     });
     await expectRejection(await manager.install(cindy), 'file-invalid');
+  });
+
+  // #7924 / 4420763926: common inspect/install must reject a missing App HTML,
+  // not just Forge. Existing tests covered sidebar pages only. Unit: absent vs real file.
+  it.each(['missing', 'file', 'directory', 'symlink', 'oversized'] as const)('App HTML %s is checked by inspect and install', async (kind) => {
+    const manifest = {
+      ...goodManifest(), schemaVersion: 3, slots: undefined, minCindyVersion: '0.1.122-beta',
+      mcpApps: { ui: { resources: [{ uri: 'ui://form', file: 'ui/form.html' }],
+        tools: { do_thing: { resourceUri: 'ui://form' } } } },
+    };
+    const cindy = await makeCindy('app-page.cindy', manifest, kind === 'file' ? { 'ui/form.html': '<p>App</p>' } : {});
+    if (kind === 'directory' || kind === 'symlink' || kind === 'oversized') {
+      const zip = await JSZip.loadAsync(await fs.promises.readFile(cindy));
+      if (kind === 'directory') zip.folder('ui/form.html');
+      else if (kind === 'symlink') zip.file('ui/form.html', 'other.html', { unixPermissions: 0o120777 });
+      else zip.file('ui/form.html', 'x'.repeat(4 * 1024 * 1024 + 1));
+      await fs.promises.writeFile(cindy, await zip.generateAsync({ type: 'nodebuffer', platform: 'UNIX' }));
+    }
+    const inspected = await manager.inspect(cindy);
+    const installed = await manager.install(cindy);
+    if (kind === 'file') {
+      expect(inspected).not.toHaveProperty('rejection');
+      expect(installed).toHaveProperty('ghost');
+    } else {
+      expect(inspected).toMatchObject({ rejection: { code: 'file-invalid', reason: expect.stringContaining('ui/form.html') } });
+      await expectRejection(installed, 'file-invalid');
+    }
   });
 
   it.each(['.disabled', '.cindy-trust.json', '.CINDY-TRUST.JSON'])(
@@ -4080,11 +4225,19 @@ describe('GhostManager · list', () => {
   // and retry after a Host removal. Sync list coverage cannot exercise these
   // await windows (plugin-security-and-authoring §5; unit, one installed plugin).
   it('async scan reads fresh receipts without using the synchronous receipt reader', async () => {
+    // BWG3: production source projection consumes receipt facts. Without that
+    // callback the old test missed instanceProjection's second synchronous read.
+    const sourceFacts: unknown[] = [];
+    manager = new GhostManager({ getRootDir: () => rootDir,
+      sourcesForInstance: (_record, fact) => { sourceFacts.push(fact); return {}; },
+    });
     await manager.install(await makeCindy('async.cindy', goodManifest()));
+    sourceFacts.length = 0;
     const syncRead = vi.spyOn(GhostInstallReceiptStore.prototype, 'readForRecovery');
     try {
       const first = await manager.listAsync();
       expect(first[0]).toMatchObject({ enabled: true, approval: { state: 'approved' } });
+      expect(sourceFacts).toContainEqual(expect.objectContaining({ ghostId: 'hello', revision: first[0].approval.state === 'approved' ? first[0].approval.revision : '' }));
       expect(syncRead).not.toHaveBeenCalled();
       const receiptPath = path.join(workDir, 'ghosts-install-state', '_ns', '_root', 'hello.json');
       await fs.promises.writeFile(receiptPath, '{invalid');
@@ -6774,4 +6927,20 @@ describe('registry publish after install commit', () => {
       pluginId: 'plugin-helper',
     });
   });
+});
+
+
+it('keeps an old receipt usable when its original archive already carried an unknown approval hint', async () => {
+  const file = await makeCindy('future-hint.cindy', { ...goodManifest(), tools: [{ name: 'run', description: 'Run', approval: 'auto' }] });
+  const result = await manager.install(file, { namespace: 'local' });
+  if (!('ghost' in result)) throw new Error('fixture install failed');
+  const receiptPath = path.join(manager.approvalStateRoot(), '_ns', 'local', 'hello.json');
+  const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+  delete receipt.manifest.tools[0].approval;
+  delete receipt.approvedAutoTools;
+  fs.writeFileSync(receiptPath, JSON.stringify(receipt));
+  const [old] = new GhostManager({ getRootDir: () => rootDir }).list();
+  expect(old.approval.state).toBe('approved');
+  expect(old.approvedAutoTools).toBeUndefined();
+  expect(old.manifest.tools?.[0].approval).toBeUndefined();
 });

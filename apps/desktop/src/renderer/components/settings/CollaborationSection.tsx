@@ -1,3 +1,4 @@
+import { collaborationSettings } from './CollaborationSection.settings-search';
 /**
  * CollaborationSection — multi-worker 协同设置 (softLimit / hardLimit / idleReleaseMinutes)。
  */
@@ -97,14 +98,14 @@ export function CollaborationSection() {
         {/* Worker Soft Limit */}
         <label className={ROW_CLASS}>
           <span className="flex min-w-0 flex-col gap-1">
-            <span id="settings-search-settings-collaboration-workerSoftLimit" className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
-              {t('settings.collaboration.workerSoftLimit')}
+            <span id={collaborationSettings.workerSoftLimit.targetId} className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
+              {t(collaborationSettings.workerSoftLimit.titleKey)}
             </span>
             <span className={ROW_HINT_CLASS}>
-              {t('settings.collaboration.workerSoftLimitHint')}
+              {t(collaborationSettings.workerSoftLimit.descriptionKey)}
             </span>
           </span>
-          <SettingsTextInput
+          <SettingsTextInput data-setting-id={collaborationSettings.workerSoftLimit.id}
             type="number"
             min={1}
             max={settings.workerHardLimit}
@@ -123,14 +124,14 @@ export function CollaborationSection() {
         {/* Worker Hard Limit */}
         <label className={ROW_CLASS}>
           <span className="flex min-w-0 flex-col gap-1">
-            <span id="settings-search-settings-collaboration-workerHardLimit" className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
-              {t('settings.collaboration.workerHardLimit')}
+            <span id={collaborationSettings.workerHardLimit.targetId} className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
+              {t(collaborationSettings.workerHardLimit.titleKey)}
             </span>
             <span className={ROW_HINT_CLASS}>
-              {t('settings.collaboration.workerHardLimitHint')}
+              {t(collaborationSettings.workerHardLimit.descriptionKey)}
             </span>
           </span>
-          <SettingsTextInput
+          <SettingsTextInput data-setting-id={collaborationSettings.workerHardLimit.id}
             type="number"
             min={settings.workerSoftLimit}
             max={20}
@@ -152,14 +153,14 @@ export function CollaborationSection() {
         {/* Idle Release Minutes */}
         <label className={ROW_CLASS}>
           <span className="flex min-w-0 flex-col gap-1">
-            <span id="settings-search-settings-collaboration-idleRelease" className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
-              {t('settings.collaboration.idleRelease')}
+            <span id={collaborationSettings.idleRelease.targetId} className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
+              {t(collaborationSettings.idleRelease.titleKey)}
             </span>
             <span className={ROW_HINT_CLASS}>
-              {t('settings.collaboration.idleReleaseHint')}
+              {t(collaborationSettings.idleRelease.descriptionKey)}
             </span>
           </span>
-          <SettingsTextInput
+          <SettingsTextInput data-setting-id={collaborationSettings.idleRelease.id}
             type="number"
             min={0}
             max={120}

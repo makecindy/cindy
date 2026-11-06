@@ -313,7 +313,8 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('const [groupByProject, setGroupByProject]');
     expect(source).toContain('testID="home.deviceMenu"');
     expect(source).toContain('testID="home.chromeMenu"');
-    expect(source).toContain('testID="home.displaySettingsButton"');
+    // The display-menu e2e anchor belongs to its extracted platform component;
+    // nativeGlassControls.test.tsx checks it on the rendered menu.
     expect(source).toContain('<HomeChromeDrawer');
     expect(source).toContain('<HomeHeaderGlassButton');
     const headerGlass = readSource('src/session/HomeHeaderGlassButton.ios.tsx');

@@ -1,5 +1,11 @@
 use serde_json::{json, Value};
 
+/// Firmware keeps 20 agent threads (AG00–AG19); Cindy's keymap binds up to 13.
+const MAX_THREADS: usize = 20;
+const TASK_KEY_THREADS: u64 = 13;
+/// `fs.read` returns the whole keymap, including user macros, in one reply.
+const MAX_MESSAGE_BYTES: usize = 131_072;
+
 pub fn matches(vendor: u16, product: u16, page: u16, usage: u16) -> bool {
     (vendor, product, page, usage) == (0x303a, 0x8360, 0xff00, 1)
 }
@@ -28,7 +34,7 @@ impl Decoder {
         }
         self.bytes
             .extend_from_slice(&report[3..3 + report[2] as usize]);
-        if self.bytes.len() > 16_384 {
+        if self.bytes.len() > MAX_MESSAGE_BYTES {
             self.bytes.clear();
             return Err("Micro message too large");
         }
@@ -141,7 +147,7 @@ fn light(side: &Value) -> Value {
 pub fn lighting(frame: &Value) -> [Value; 2] {
     let threads: Vec<Value> = frame["threads"]
         .as_array()
-        .map(|items| items.iter().take(6).map(light).collect())
+        .map(|items| items.iter().take(MAX_THREADS).map(light).collect())
         .unwrap_or_default();
     [
         json!({"method":"v.oai.rgbcfg","params":{"ambient":light(&frame["ambient"]),"keys":light(&frame["keys"])}}),
@@ -151,7 +157,7 @@ pub fn lighting(frame: &Value) -> [Value; 2] {
 
 pub fn off_frame() -> Value {
     let side = json!({"color":0,"brightness":0,"effect":0,"speed":0,"magic":0});
-    let threads: Vec<Value> = (0..6).map(|id| json!({"id":id,"color":0,"brightness":0,"effect":0,"speed":0,"syncKeysLighting":false,"syncAmbientLighting":false})).collect();
+    let threads: Vec<Value> = (0..TASK_KEY_THREADS).map(|id| json!({"id":id,"color":0,"brightness":0,"effect":0,"speed":0,"syncKeysLighting":false,"syncAmbientLighting":false})).collect();
     json!({"keys":side,"ambient":side,"threads":threads})
 }
 
@@ -288,7 +294,7 @@ mod tests {
         assert!(decoder.feed(&report).unwrap().is_empty());
         report[3] = b' ';
         let mut overflow = false;
-        for _ in 0..300 {
+        for _ in 0..(MAX_MESSAGE_BYTES / 61 + 2) {
             if decoder.feed(&report).is_err() {
                 overflow = true;
                 break;
@@ -312,6 +318,14 @@ mod tests {
         assert!(input(&json!({"id":1,"result":{"k":"AG00","act":1}})).is_none());
     }
     #[test]
+    fn forwards_threads_beyond_the_first_six() {
+        let frame =
+            json!({"threads": (0..13).map(|id| json!({"id":id,"color":id})).collect::<Vec<_>>()});
+        let [_, threads] = lighting(&frame);
+        assert_eq!(threads["params"].as_array().unwrap().len(), 13);
+        assert_eq!(threads["params"][12]["id"], 12);
+    }
+    #[test]
     fn translates_lighting_field_names_and_boolean_sync_flags() {
         let [rgb, threads] = lighting(&json!({"ambient":{"color":123,"brightness":0.3},
             "keys":{"effect":1}, "threads":[{"id":0,"color":456,"syncKeysLighting":true,"syncAmbientLighting":false}]}));
@@ -322,11 +336,11 @@ mod tests {
         assert_eq!(threads["params"][0]["sa"], 0);
     }
     #[test]
-    fn disables_both_zones_and_all_six_slots_on_release() {
+    fn disables_both_zones_and_every_task_key_slot_on_release() {
         let [rgb, threads] = lighting(&off_frame());
         assert_eq!(rgb["params"]["ambient"]["b"], 0);
         assert_eq!(rgb["params"]["keys"]["e"], 0);
-        assert_eq!(threads["params"].as_array().unwrap().len(), 6);
+        assert_eq!(threads["params"].as_array().unwrap().len(), 13);
         assert!(threads["params"]
             .as_array()
             .unwrap()
