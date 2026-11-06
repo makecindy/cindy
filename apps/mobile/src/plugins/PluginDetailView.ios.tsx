@@ -334,6 +334,15 @@ export function PluginDetailView(p: PluginDetailViewProps) {
                 ) : null}
               </VStack>
             ) : null}
+            {!p.settingsOpen && model.readme && p.onOpenReadme ? (
+              <ComposerNativeRow
+                title={t("plugins.detail.readme")}
+                accessory={chevron}
+                disabled={!p.online}
+                onPress={p.onOpenReadme}
+                testID="plugins.readme"
+              />
+            ) : null}
             {p.settingsContent ? (
               <VStack
                 alignment="leading"

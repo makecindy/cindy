@@ -11,6 +11,13 @@ import { ChatInput } from '../../../src/renderer/components/new-chat/ChatInput';
 import { useAttachments } from '../../../src/renderer/hooks/useAttachments';
 import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData';
 
+// The isolated HTTP fixture lacks secure-context randomUUID. These IDs only
+// identify composer drafts in memory; production keeps its native crypto API.
+if (!crypto.randomUUID) {
+  let sequence = 0;
+  crypto.randomUUID = () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`;
+}
+
 const markdown = [
   '# Markdown 查找验证',
   '正文中的苹果。',
@@ -52,7 +59,7 @@ function Fixture({ editor, projectSearch, voice, video, askVoice }: { editor: bo
     <>
       <main className="flex h-screen flex-col gap-4 p-6">
         <p>背景聊天中的苹果不应计入文档搜索。</p>
-        <button data-testid="open-preview" onClick={() => setOpen(true)}>打开 Markdown 示例</button>
+        <button data-testid="open-preview" data-ui-page-control onClick={() => setOpen(true)}>打开 Markdown 示例</button>
         {voice && <VoiceComposer />}
         {askVoice && <VoiceQuestion />}
         {projectSearch && <div className="h-64 w-64"><WorkdirBrowseSidebar
@@ -140,5 +147,5 @@ mountPage({
     deviceLink: { onRemotePush: subscription('remote-push') },
     ghosts: { listSync: () => ({ ghosts: [] }) },
   }),
-  render: ctx => <Fixture editor={['background-editor', 'loading-editor'].includes(ctx.case)} projectSearch={ctx.case === 'background-project-search'} voice={ctx.case === 'background-voice'} video={ctx.case === 'fullscreen-video'} askVoice={ctx.case === 'background-ask-voice'} />,
+  render: ctx => <Fixture editor={['background-editor', 'loading-editor', 'source-background-editor'].includes(ctx.case)} projectSearch={ctx.case === 'background-project-search'} voice={ctx.case === 'background-voice'} video={ctx.case === 'fullscreen-video'} askVoice={ctx.case === 'background-ask-voice'} />,
 });

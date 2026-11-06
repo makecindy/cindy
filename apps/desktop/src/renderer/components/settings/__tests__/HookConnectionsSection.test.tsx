@@ -54,17 +54,20 @@ vi.mock('@/components/ui/switch', () => ({
     disabled,
     onCheckedChange,
     'aria-label': ariaLabel,
+    'data-setting-id': settingId,
   }: {
     checked: boolean;
     disabled?: boolean;
     onCheckedChange: (checked: boolean) => void;
     'aria-label'?: string;
+    'data-setting-id'?: string;
   }) => (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
       aria-label={ariaLabel}
+      data-setting-id={settingId}
       disabled={disabled}
       onClick={() => onCheckedChange(!checked)}
     />
@@ -112,6 +115,7 @@ vi.mock('../TelegramBehaviorSettings', () => ({
 
 import { deriveAlias, HookConnectionsSection, workspaceRowsToMap } from '../HookConnectionsSection';
 import { SettingsSearchNavigationContext } from '../SettingsSearchNavigation';
+import { resolveSettingsSearchEntry } from '../settingsSearchCatalog';
 import { resetXUsageNoticeMemoryState } from '@/state/xUsageNotice';
 
 /** 渠道卡收起时内容卸载(Collapse), 交互前先点开对应卡的头部行。 */
@@ -158,6 +162,16 @@ const BASE_HOOK: SlackHookView = {
 // 原名 'HookConnectionsSection Telegram binding actions' —— 本 suite 现在同时覆盖
 // Telegram 绑定动作与 X 的用法告知/确认门, 名字得跟上, 否则失败用例的定位会误导人。
 describe('HookConnectionsSection binding actions (Telegram / X)', () => {
+  // Unit regression (#8481): resolve each rendered provider switch through the
+  // production catalog to its own card, rather than accepting the parent group.
+  it.each(['telegram', 'x'])('binds the %s switch to its provider search target', async (provider) => {
+    ipc.get.mockResolvedValue({ hook: { ...BASE_HOOK, x: { ...BASE_HOOK.x, url: 'wss://x.example.test' } } });
+    render(<HookConnectionsSection />);
+    const toggle = await screen.findByRole('switch', { name: `settings.remoteControl.hook.${provider}.toggleAria` });
+    const entry = resolveSettingsSearchEntry('im-bot', toggle.getAttribute('data-setting-id'));
+    expect(entry?.id).toBe(`imBot.cindy.${provider}`);
+    expect(document.getElementById(entry!.targetId)?.contains(toggle)).toBe(true);
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     // X 用法确认门按 principalId 记账在 localStorage 里, 而 jsdom 的 localStorage
@@ -322,16 +336,35 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     const row = { teamId: 'T1', teamName: 'Workspace', slackUserId: 'U1', slackUserName: 'tester', displaced: true, communicationsEnabled: enabled };
     const view: SlackHookView = { ...BASE_HOOK, enabled: true, status: 'connected', serverMultiTeam: true, serverSlackCommunications: true, bindings: [row] };
     ipc.get.mockResolvedValue({ hook: view });
-    ipc.setSlackCommunications.mockResolvedValue({ hook: { ...view, bindings: [{ ...row, communicationsEnabled: !enabled }] } });
+    // Unit regression (PR #8470 CI): an immediate IPC mock hid the interval
+    // between dispatch and completion. Exercise real controls while pending
+    // and after completion so the second action cannot race the first.
+    let finishCommunications!: (result: { hook: SlackHookView }) => void;
+    ipc.setSlackCommunications.mockReturnValue(new Promise<{ hook: SlackHookView }>((resolve) => {
+      finishCommunications = resolve;
+    }));
     render(<HookConnectionsSection />);
     await expandChannelCard(SLACK_CARD);
     const toggle = await screen.findByRole('switch', { name: 'settings.remoteControl.hook.multi.localCommunications' });
+    // Unit regression (#8481): a bound Slack workspace is absent from the
+    // provider-switch fixture above; its search binding must resolve to Slack.
+    const entry = resolveSettingsSearchEntry('im-bot', toggle.getAttribute('data-setting-id'));
+    expect(entry?.id).toBe('imBot.cindy.slack');
+    expect(document.getElementById(entry!.targetId)?.contains(toggle)).toBe(true);
     const masterToggle = screen.getByRole('switch', { name: 'settings.remoteControl.hook.toggleAria' });
     expect(masterToggle.getAttribute('aria-checked')).toBe('true');
     expect(toggle.getAttribute('aria-checked')).toBe(String(enabled));
     fireEvent.click(toggle);
     await waitFor(() => expect(ipc.setSlackCommunications).toHaveBeenCalledWith('T1', !enabled));
     expect(masterToggle.getAttribute('aria-checked')).toBe('true');
+    expect((masterToggle as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(masterToggle);
+    expect(ipc.setEnabled).not.toHaveBeenCalled();
+    await act(async () => {
+      finishCommunications({ hook: { ...view, bindings: [{ ...row, communicationsEnabled: !enabled }] } });
+    });
+    await waitFor(() => expect((masterToggle as HTMLButtonElement).disabled).toBe(false));
+    expect(toggle.getAttribute('aria-checked')).toBe(String(!enabled));
     fireEvent.click(masterToggle);
     await waitFor(() => expect(ipc.setEnabled).toHaveBeenCalledWith(false));
     expect(ipc.rebindTeam).not.toHaveBeenCalled();

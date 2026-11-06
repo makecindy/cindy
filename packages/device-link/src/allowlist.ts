@@ -451,6 +451,14 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'maker:schedule:create-from-template',
   // script 任务能力选择器的可用性探测:纯只读查询,意识状态在被控端才有意义
   'maker:schedule:script-capability-status',
+  // Status only: webhook-set-secret carries a credential and webhook-rotate-url replaces the
+  // address; both stay on the computer that runs the schedule.
+  'maker:schedule:webhook-status',
+  'maker:schedule:webhook-receiver',
+  // 同账号查看和释放云端地址；不携带密钥、不执行任务，不要求旧设备在线。
+  'maker:schedule:webhook-account',
+  'maker:schedule:webhook-release',
+  'maker:schedule:webhook-restore',
   // —— 会话未读已读回执(控制端真实展示会话内容后,把被控端的会话未读态清掉)——
   // 准入:会话粒度状态操作(与 mark-run-read 同类),无 event.sender 依赖、无 shell/UI
   // 副作用;语义在被控端执行才正确(灵动岛 / Dock 角标 / 侧栏红绿点的未读真相都在被控端
@@ -599,6 +607,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // Same-account read-only Kimi quota; no secrets, arbitrary endpoints, shared-task or share guests.
   // Old hosts reject the channel; callers never fall back to their local account.
   'maker:usage:kimi-coding',
+  'maker:usage:opencode-go',
   // cc 默认路由会话的生效计费路由观察值(只读,'gateway' | 'subscription' | null):
   // 控制端远程会话据此判定订阅 / 网关显示形态 —— 路由真值在被控端 proxy 的按请求
   // 观察 registry 里,控制端拿本机凭证状态重算必然张冠李戴。入参 sessionId,无

@@ -60,7 +60,7 @@ export function useTabCreationMenu({
       ghost,
       title: globalTabTitleForGhost(ghost),
       icon: MAIN_VIEW_ICONS[ghost.manifest.mainView?.icon ?? 'puzzle'] ?? Puzzle,
-      open: globalTabs.some(tab => tab.kind === 'plugin-view' && (tab.state as PluginViewTabState | null)?.instanceId === instanceId),
+      open: globalTabs.some(tab => (tab.state as PluginViewTabState | null)?.instanceId === instanceId),
     };
   }).sort((a, b) => a.title.localeCompare(b.title) || a.instanceId.localeCompare(b.instanceId));
   const bots = useBotProfiles();

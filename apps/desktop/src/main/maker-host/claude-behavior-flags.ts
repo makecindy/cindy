@@ -30,15 +30,20 @@ const STATIC_CLAUDE_BEHAVIOR_FLAGS: Readonly<Record<string, string>> = {
 /**
  * ToolSearch 依赖上游接受 deferred tools / tool_reference。仅对已知支持该协议的
  * XD 网关与 Anthropic 原生路由开启；其它显式来源默认关闭，避免兼容供应商返回 400。
+ *
+ * 开启时用 'true' 而不是 'auto'：'auto' 在新会话首个请求按 MCP 工具占上下文窗口的比例
+ * 判定，1M 窗口下必然低于阈值，首轮会把全部工具 schema 内联（约 70k token），第二轮才
+ * 改为按需加载，工具集一变又让首轮写入的缓存前缀作废。'true' 下 CLI 仍会对不支持
+ * tool_reference 的模型自动关闭，端点拒绝时也会去掉 deferred tools 重发。
  */
 export function claudeToolSearchMode(
   providerId: string | null | undefined,
   credentialMode?: string,
   nativeAuth?: string,
-): 'auto' | 'false' {
+): 'true' | 'false' {
   const provider = providerId?.trim() || null;
-  if (provider) return provider === 'xd' || provider === 'anthropic' || nativeAuth === 'claude' ? 'auto' : 'false';
-  return credentialMode === 'provider-oauth' ? 'false' : 'auto';
+  if (provider) return provider === 'xd' || provider === 'anthropic' || nativeAuth === 'claude' ? 'true' : 'false';
+  return credentialMode === 'provider-oauth' ? 'false' : 'true';
 }
 
 export interface ClaudeSpawnFlagsContext {

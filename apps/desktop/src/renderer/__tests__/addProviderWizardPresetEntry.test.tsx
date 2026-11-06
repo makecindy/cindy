@@ -1622,6 +1622,79 @@ it('preserves each runtime preset media type when discovery is unavailable', asy
   expect(config.runtimes.codex?.models[0]).toMatchObject(video);
 });
 
+describe('OpenHubs complete account inventory', () => {
+  const ids = ['deepseek-v4-flash', 'kimi-k3.1-pro', 'glm-5.3'];
+  it.each(['empty', 'partial', 'full', 'failed', 'filtered', 'other-origin'] as const)
+  ('reconciles %s discovery using the account inventory rather than a model whitelist', async kind => {
+    const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'openhubs')!);
+    if (kind === 'filtered') for (const runtime of Object.values(preset.runtimes)) runtime!.modelsUrl += '?type=chat';
+    if (kind === 'other-origin') {
+      for (const runtime of Object.values(preset.runtimes)) {
+        runtime!.baseUrl = 'https://relay.example/v1';
+        runtime!.modelsUrl = 'https://relay.example/v1/models';
+      }
+    }
+    window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({ presets: [preset], modelRegistry: BUNDLED_CATALOG.modelRegistry }));
+    const discovered = kind === 'full'
+      ? Array.from({ length: 104 }, (_, i) => ({ id: `account-model-${i}`, name: `Account Model ${i}` }))
+      : kind === 'partial' ? [{ id: ids[0], name: 'DeepSeek V4 Flash' }, { id: 'new-model', name: 'New Account Model' }] : [];
+    window.electronAPI.maker.fetchProviderModels = vi.fn(async () => kind === 'failed'
+      ? { ok: false, code: 'UPSTREAM_UNREACHABLE' as const }
+      : { ok: true, models: discovered });
+    renderWizard('openhubs');
+    await screen.findByDisplayValue('OpenHubs');
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'fake-key' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
+    await waitFor(() => expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledTimes(3));
+    const expected = ['empty', 'partial', 'full'].includes(kind) ? discovered.map(model => model.id) : ids;
+    await waitFor(() => {
+      for (const model of preset.runtimes.pi!.models) {
+        expect(!!screen.queryByText(model.name!)).toBe(expected.includes(model.id));
+      }
+      for (const model of discovered) expect(screen.queryByText(model.name)).toBeTruthy();
+      expect(finish.hasAttribute('disabled')).toBe(kind === 'empty' || kind === 'full');
+    });
+    if (kind === 'partial' || kind === 'full') fireEvent.click(screen.getByText(discovered.at(-1)!.name));
+    const request = vi.mocked(window.electronAPI.maker.fetchProviderModels).mock.calls[0][0];
+    expect(request.allowEmpty === true).toBe(!['filtered', 'other-origin'].includes(kind));
+    if (expected.length) {
+      fireEvent.click(finish);
+      await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+      const config = vi.mocked(createCustomProvider).mock.calls[0][0];
+      expect(Object.keys(config.runtimes)).toEqual(['claude-code', 'codex', 'pi']);
+      for (const runtime of Object.values(config.runtimes)) expect(runtime!.models.map(model => model.id)).toEqual(expected);
+      expect(config.runtimes.pi!.models.map(model => model.id)).toEqual(expected);
+      expect(config.runtimes.pi).toMatchObject({ catalogPresetId: 'openhubs', wireProtocol: 'openai-chat' });
+      if (kind === 'partial' || kind === 'full') {
+        const provider = buildUserProvider(config, { presets: [preset], modelRegistry: BUNDLED_CATALOG.modelRegistry });
+        for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+          expect(provider.models[agent]!.find(model => model.id === discovered.at(-1)!.id))
+            .toMatchObject({ api: agent === 'claude-code' ? 'anthropic-messages' : agent === 'codex' ? 'openai-responses' : 'openai-completions', defaultEnabled: true });
+        }
+      }
+    }
+  });
+  it('preserves a hand-entered OpenHubs model when the complete inventory is empty', async () => {
+    const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'openhubs')!);
+    const model = { id: 'private-alias', name: 'My OpenHubs model', contextWindow: 4096 };
+    const runtime = { ...preset.runtimes.pi!, models: [model] };
+    window.electronAPI.maker.fetchProviderModels = vi.fn(async () => ({ ok: true, models: [] }));
+    render(<AddProviderWizard providers={[]} detected={{
+      agent: 'pi', apiKey: 'fake-key', keys: { pi: 'fake-key' }, preset,
+      config: { id: 'draft', name: 'OpenHubs', runtimes: { pi: runtime } }, catalog: { ok: true, models: [] },
+    }} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
+    await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
+    expect(screen.getByText(model.name)).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText('DeepSeek V4 Flash')).toBeNull());
+    fireEvent.click(finish);
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.pi!.models).toEqual([expect.objectContaining(model)]);
+  });
+});
+
 it('imports the same discovered OpenRouter identity, capabilities and prices into all three engines', async () => {
   const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'openrouter')!);
   for (const runtime of Object.values(preset.runtimes)) {

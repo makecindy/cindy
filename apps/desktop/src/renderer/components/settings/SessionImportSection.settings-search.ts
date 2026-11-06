@@ -1,10 +1,19 @@
-import type { SettingsSearchModule } from './settingsSearchTypes';
+import { TAB_LABEL_KEY } from '@/lib/tabLabels';
+import { defineSettings, type SettingsSearchModule } from './settingsSearchTypes';
 
 /** Static search metadata owned by this settings module; no component mounting or IPC. */
+export const sessionImportSettings = defineSettings({
+  import: {
+    id: 'import',
+    tab: 'import',
+    targetId: 'settings-panel-import',
+    titleKey: TAB_LABEL_KEY['import'],
+    sectionKey: 'settings.sections.import',
+  },
+});
+
 export default {
   id: 'import',
   order: 11,
-  entries: [
-    { id: 'import', tab: 'import', targetId: 'settings-panel-import', titleKey: 'settings.tabs.import', sectionKey: 'settings.sections.import' },
-  ],
+  entries: Object.values(sessionImportSettings),
 } satisfies SettingsSearchModule;

@@ -49,6 +49,7 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import { useAuth } from '@/contexts/AuthContext';
+import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { usePluginReviewUpdates } from '@/contexts/PluginReviewUpdatesContext';
 import { readInstalledGhostsSnapshot, useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import {
@@ -710,16 +711,21 @@ function LocalGhostPluginPage({
   const recentWorkdirs = usePluginRecentWorkdirs();
   const [scopeDir, setScopeDir] = useState<string | null>(null);
   const scopeDirRef = useRef<string | null>(scopeDir);
+  const scopeKeyRef = useRef<string | undefined>(undefined);
   scopeDirRef.current = scopeDir;
   const [projectDisabled, setProjectDisabled] = useState<Set<string>>(() => new Set());
   const handlePickScope = useCallback((dir: string | null) => {
     setScopeDir(dir);
+    scopeDirRef.current = dir;
+    scopeKeyRef.current = undefined;
     if (!dir) {
       setProjectDisabled(new Set());
       return;
     }
     try {
-      setProjectDisabled(new Set(window.electronAPI.ghosts.workdirPrefsSync(dir).disabled));
+      const policy = window.electronAPI.ghosts.workdirPrefsSync(dir);
+      scopeKeyRef.current = policy.workdirKey;
+      setProjectDisabled(new Set(policy.disabled));
     } catch {
       setProjectDisabled(new Set());
     }
@@ -739,13 +745,20 @@ function LocalGhostPluginPage({
   const [recentGhostIds, setRecentGhostIds] = useState(
     () => window.electronAPI.ghosts.recentUsageSync().ids,
   );
+  useEffect(() => window.electronAPI.ghosts.onWorkdirPrefsChanged?.((policy, ownerStamp) => {
+    if (!scopeDirRef.current || !isDataOwnerPushCurrent(ownerStamp)) return;
+    if (scopeKeyRef.current === undefined) { handlePickScope(scopeDirRef.current); return; }
+    if (scopeKeyRef.current === policy.workdirKey) setProjectDisabled(new Set(policy.disabled));
+  }), [handlePickScope]);
   useEffect(
     () =>
       window.electronAPI.ghosts.onChanged(() => {
         const dir = scopeDirRef.current;
         if (dir) {
           try {
-            setProjectDisabled(new Set(window.electronAPI.ghosts.workdirPrefsSync(dir).disabled));
+            const policy = window.electronAPI.ghosts.workdirPrefsSync(dir);
+            scopeKeyRef.current = policy.workdirKey;
+            setProjectDisabled(new Set(policy.disabled));
           } catch {
             // Keep the current project snapshot if another window races the read.
           }

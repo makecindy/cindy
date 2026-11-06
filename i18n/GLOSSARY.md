@@ -350,6 +350,10 @@ Anthropic Messages API / wire protocol 的用户可见名称。四语统一保�
 
 远程桌面操作菜单的安全设置；仅用于可选的本机保存密码自动解锁。
 
+### Trigger mode
+
+自动化何时运行的选择：定时、手动或 Webhook。独立于执行方式（AI 任务或脚本），用户于 2026-11-04 选择此交互方向。
+
 ### At a glance
 
 伙伴聊天头部网格按钮打开的浮层：电脑、待办、输出内容三块（docs/product-rules/cindy-bots-runtime.md「伙伴近况」）。取代已下线的右侧栏「工作台」标签；只指这个伙伴浮层，不泛指任务列表或其它面板。先登记为 proposed，待 Chris 实机试用后再定。
@@ -750,6 +754,10 @@ OS 进程语境(资源用量面板、浏览器 guest 进程、终端)。注意�
 
 把自己电脑上的某个供应商分享给其他 Cindy 账号使用(docs/product-rules/provider-sharing.md)。中文一律用「分享」，不用「共享」——「共享」留给共享任务，两者是独立的授权关系；ja / ko 两个功能都自然译作「共有 / 공유」，靠「プロバイダー / 제공자」与「セッション / 세션」区分。界面上「管理分享」「分享 {供应商}」「分享给我的供应商」都属于本词。
 
+### Provider transaction ID
+
+支付渠道记录的交易号，用于开票弹窗和邮件；支付宝为实际交易号，Stripe 为 PaymentIntent ID 或 Charge ID，不是本地订单号或商户订单号。
+
 ### Quote reply
 
 伙伴群聊消息操作：在当前时间线发一条带被引用者与原消息摘要的新消息，不创建话题（group-thread）；被引用的原消息作者是仍在群中的伙伴时，宿主自动将该伙伴加入接收人，与显式点名去重。引用正文中的名字不产生额外接收人。输入框上方的待发引用用「引用 {name}」，取消叫「取消引用」。与任务里「选中文字引用」（chat quote）是不同功能。
@@ -829,6 +837,10 @@ Explicit user action that replaces the current remote desktop viewer; never used
 ### Remote device
 
 远程连接、任务与设备列表中的另一台设备；明确是电脑时优先说远程电脑。不要把本地浏览器内部控制器称为远程设备。
+
+### Request Refund
+
+订单行的邮件退款申请入口；由用户确认使用客服邮件处理，不代表自动退款。
 
 ### Activity Monitor
 

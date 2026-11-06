@@ -12,6 +12,37 @@ export interface RequestInputEvidence {
 export interface CapturedAgentRequest {
   message: string;
   autoReviewUserText: AgentRequestReceipt;
+  /**
+   * The sender's review found this was not a hand-off the owner asked for. Nothing may
+   * be delivered; callers return this reason to the sending agent.
+   */
+  blocked?: string;
+  /**
+   * What an older peer, which only verifies the quoted format, receives instead: the
+   * pre-2026-11-05 envelope when the owner's words are at hand, otherwise plain text.
+   */
+  legacy?: { message: string; autoReviewUserText: AgentRequestReceipt };
+}
+
+/** Thrown where a capture cannot return a result shape; nothing was delivered. */
+export class DelegationNotAuthorizedError extends Error {
+  readonly code = 'DELEGATION_NOT_AUTHORIZED' as const;
+}
+
+/**
+ * Whether the owner asked for this hand-off, decided on the sending side where the whole
+ * conversation is visible (Auto review, the owner's own confirmation, or Full Access).
+ * `none` sends a plain message without owner authority.
+ */
+export type DelegationAuthorization =
+  | { kind: 'authorized' }
+  | { kind: 'blocked'; reason: string }
+  | { kind: 'none' };
+
+export interface DelegationCheck {
+  /** Local id of the receiving task when known; a reply to the request's origin never carries authority. */
+  targetSessionId?: string;
+  authorize(): Promise<DelegationAuthorization>;
 }
 
 export function requestSourceFromInput(sessionId: string, input: RequestInputEvidence): ForwardedRequestSource {
@@ -38,7 +69,11 @@ export async function ownerChannelInputEvidence(
   return text?.trim() ? { clientId: lane.inputClientId, authoredText: text } : null;
 }
 
-/** Host request handoffs opt in. Accepted input wins over queued text; model labels are not evidence. */
+/**
+ * Host request handoffs opt in. Accepted input wins over queued text; model labels are not evidence.
+ * Since 2026-11-05 the body is always the agent's own text. The owner's words stay in the receipt
+ * as provenance; owner authority travels only after the sender checked the hand-off itself.
+ */
 export async function captureAgentRequest(
   sessionId: string,
   supplement: string,
@@ -47,6 +82,7 @@ export async function captureAgentRequest(
   preserveUserRequest = false,
   /** The host admitted this call as the owner's request or its accepted continuation. */
   ownerVerified = false,
+  delegation?: DelegationCheck,
 ): Promise<CapturedAgentRequest> {
   if (!preserveUserRequest) return { message: supplement, autoReviewUserText: { kind: 'agent-request' } };
   let source: ForwardedRequestSource;
@@ -66,18 +102,36 @@ export async function captureAgentRequest(
       ...(delegated ? { delegatedRequest: delegated } : {}),
     }) : { userText: null };
   }
+  if (source.userText === null || !source.sessionId || !source.clientId)
+    return { message: supplement, autoReviewUserText: { kind: 'agent-request', request: { userText: null } } };
+  // Where the owner's request started; the words themselves are not carried forward.
+  const provenance: ForwardedRequestSource = { sessionId: source.sessionId, clientId: source.clientId, plainBody: true };
   // An accepted relay still names the same owner request. Only the current
   // input can carry that evidence; a historical fallback cannot revive it.
-  const request: ForwardedRequestSource = { ...source };
-  delete request.ownerVerified;
-  if ((ownerVerified || active?.delegatedRequest?.ownerVerified === true) && request.userText !== null)
-    request.ownerVerified = true;
-  return { message: formatForwardedRequest(request, supplement),
-    autoReviewUserText: { kind: 'agent-request', request } };
+  const verified = ownerVerified || active?.delegatedRequest?.ownerVerified === true
+    || active?.delegatedRequest?.delegatedText !== undefined;
+  // Older peers need the quoted owner words, available only while they are this task's own
+  // input (or an older host's quotation). A relayed plain hand-off reaches them as plain text.
+  const legacyRequest: ForwardedRequestSource | null = typeof source.userText === 'string'
+    ? { userText: source.userText, sessionId: source.sessionId, clientId: source.clientId,
+      ...(verified ? { ownerVerified: true as const } : {}) } : null;
+  const legacy = legacyRequest ? { message: formatForwardedRequest(legacyRequest, supplement),
+    autoReviewUserText: { kind: 'agent-request' as const, request: legacyRequest } }
+    : { message: supplement, autoReviewUserText: { kind: 'agent-request' as const } };
+  const plain: CapturedAgentRequest = { message: supplement,
+    autoReviewUserText: { kind: 'agent-request', request: provenance }, legacy };
+  // A result or question back to where the request came from is not a new request.
+  if (!verified || !delegation || (delegation.targetSessionId && delegation.targetSessionId === provenance.sessionId))
+    return plain;
+  const decision = await delegation.authorize();
+  if (decision.kind === 'blocked') return { ...plain, blocked: decision.reason };
+  if (decision.kind !== 'authorized') return plain;
+  return { message: supplement, legacy, autoReviewUserText: { kind: 'agent-request',
+    request: { ...provenance, delegatedText: supplement } } };
 }
 
 /** Quote only a real owner request. Missing-source envelopes remain readable through the shared legacy validator. */
 export function formatForwardedRequest(source: ForwardedRequestSource, supplement: string): string {
-  return source.userText === null ? supplement
+  return source.plainBody || source.userText == null ? supplement
     : formatLocalizedForwardedRequest(source, supplement, getResolvedMainLocale());
 }

@@ -4,6 +4,7 @@ import { runPluginUsageTransaction } from './pluginUsageTx.js';
 import { runSessionImportTransaction } from './sessionImportTx.js';
 import { runTaskTagsTransaction } from './taskTagsTx.js';
 import { recordMediaSpend } from './mediaSpendTx.js';
+import { recordPiUsage } from './piUsageTx.js';
 import { batchAutoReviewProjection, readAutoReviewProjectionTransaction } from '../../autoReviewProjection.js';
 import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../../sharedTaskClosureSql.js';
 import { botProfileModelSelectionChanged } from '../../../../shared/botModelChain.js';
@@ -71,6 +72,8 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
   const txArgs = payload.args;
 
   switch (name) {
+    case 'usage.recordPiUsage':
+      return recordPiUsage(db, txArgs as import('./piUsageTx.js').PiUsageWrite[]);
     case 'chatCache.execute':
       return runChatCacheTransaction(db, txArgs as ChatCacheTransaction);
     case 'usage.recordMediaSpend':

@@ -121,6 +121,9 @@ const ALLOWED_EXACT_SCOPES: readonly string[] = [
   // 事件(dbPath 会经家目录脱敏,userId 本就是上报身份)。精确放行而非根放行:子 scope
   // `localDb/messages` 打消息导入与媒体附件路径,`localDb/*` 一律不跟着放行(2026-08-04 review)。
   'localDb',
+  // 各进程内存采样(process-monitor/memory-log.ts):只有进程类型与 MB 数字,不带标题、
+  // serviceName、pid 或路径。用来回答「越用越卡」是哪个进程在涨。
+  'memory-usage',
 ];
 
 /**

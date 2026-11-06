@@ -1,3 +1,4 @@
+import { type OutputLimitDetails } from '@cindy/maker-shared';
 /**
  * interrupted-turn 自动续跑 —— 「上游把一个已经干到一半的 turn 打断了」这类
  * terminal error 的识别与重连决策。
@@ -46,6 +47,7 @@ export interface InterruptedTurnErrorSignals {
   errorStatus?: number;
   /** Bounded details for the live error projection; never contains raw provider data. */
   toolLoop?: AgentInputToolLoopDetails;
+  outputLimit?: OutputLimitDetails;
   /** translator 判定的账号用量 / 限流错误。 */
   usageLimit?: boolean;
   /** 上游给出的限额重置时刻(unix ms)。 */

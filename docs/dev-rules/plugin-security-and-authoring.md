@@ -257,6 +257,26 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 
 ## 3. 权限即授权边界
 
+通知发现与刷新范围：`GhostManager.listNotificationCandidatesAsync()` 只保留当前 owner
+下已启用、声明 `subscribe.topics` 的候选索引。安装、更新、启停、卸载和 owner 切换
+使索引失效；安装目录、批准记录和 `.disabled` 的外部变化由文件监听失效，监听不可用时
+退回现扫，并以 60 秒有效期兜底漏报。索引不是批准缓存：投递仍按实例键读取当前批准、
+核对批准版本和 topic；不唤醒无关插件，也不因插件尚未运行而漏掉已启用的订阅者。
+任务生命周期事件在预检查时取得一次候选及其 owner，资格查询后复用这次发现结果投递；
+监听不可用时每个事件仍现扫一次，不跨事件缓存，投递前仍检查当前 owner、实例批准、启用与 topic。
+无任务事件订阅者时仍推进带代次与 Lead 复核的焦点记录，避免停用期间切换任务导致
+重新启用后漏发切回通知；该路径跳过投递资格检查、插件唤醒和事件投递。
+订阅发现异常时释放当前代次的原始焦点与主任务去重记录，允许同一焦点重试和切回通知；
+迟到的旧代次失败不得清除新焦点。任务资格暂不可用时仍只释放原始焦点，保留同 Lead 去重。
+
+安装事实变化触发插件应用、浏览器扩展、未读与 Skill 对账。语言、OAuth 等展示变化
+只更新相关展示投影；语言变化还须更新插件 App 注册表中的本地化名称和工具说明，
+保证随后生成的卡片使用新语言，但不触发浏览器扩展、未读、Skill 或订阅索引对账。
+项目禁用只发本机 `ghosts:workdir-prefs-changed`，携带 Host 归一后的
+目录键和禁用列表，保留 setup 唤醒及远端既有插件资源失效通知。Renderer 的展示快照
+不替代调用时的目录策略检查。上述优化不改变 manifest、批准记录或跨端协议，不要求
+存量插件重新安装或确认权限。
+
 - 先判断**谁在执行**，再判断授权边界：
   - 当前 Agent 在途 `ghost_call` 是否执行插件工具，由该会话既有的 Agent 授权决定。
     普通网络和工作目录操作以 Host 下发的严格在途 `callId` 绑定会话；随包代码与
@@ -393,6 +413,14 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   代替包验证；Forge、显式 SHA 冲突及不匹配的组织／来源不进入此恢复。沿用更新确认、
   忙碌跳过和失败退避，保留启停态、实例键和同来源用户数据。实现与回归见
   `main/plugin-market/service.ts` 及其 `__tests__/service.test.ts`。
+- 本地种子（开发或个人构建放进 `resources/builtin-ghosts` 的种子；安装包不带种子，见
+  [协议兼容 §2](protocol-compatibility.md#2-插件来源)）与同 id 的服务端市场安装按版本取新、相同取商店：
+  种子版本严格更新才覆盖已装实例（旧布局 `<id>` 或新布局 `_ns/_root/<id>` 原位替换，保留启停态与数据键），
+  相同、更旧或不可比时不动商店字节。实例仍在播种台账内、种子已撤或当前种子不比 Release 新时，自动更新按原
+  商店路由把种子字节换回商店包，不算换源；播种发现已装的是商店字节后摘除台账。受众与孤儿回收不删除有商店
+  安装的实例。只放行播种台账内的根 namespace 已批准实例，不用于授权查找，其它来源冲突仍需用户显式替换。
+  实现与回归见 `main/cindy-brain/builtinGhostProvisioner.ts`、`main/plugin-market/service.ts`
+  （`seededBuiltinYieldsToRelease`）及对应测试。
 - 同一 release 自动更新失败后，在当前进程内按 owner、来源路由和 release 做指数退避
   （5 分钟起、最长 6 小时），日志记录失败次数与下次重试时间；来源发布新 release 时立即
   解除。忙碌跳过不记失败，用户手动重试不受退避限制。
@@ -907,7 +935,7 @@ Forge 新装默认 root，不按当前登录组织自动创建组织实例。已
 
 `taskView`（跟对话的任务页）的现行协议在 `FORGE_GUIDE` §4.22；v2 对应 `task-view` 槽。
 任务页页签（右侧栏 kind `plugin-task`）存在各任务自己的页签桶里，随任务切换；页面与
-panel / mainView 同一 Ghost WebView 沙箱（零桥、专属分区），只经查询参数 `session`
+panel / mainView 同一 Ghost WebView 沙箱（专属分区，仅有下述页面选模桥），只经查询参数 `session`
 得知所在任务。逻辑页经 `cindy.taskView({sessionId?, focus?})`（管子 `task-view-request`）
 打开或聚焦它：只承载包内页面、不收网址，因此不设 preview 式白名单与限速。Host 做资格审
 （已装、启用、声明 taskView）与落点解析（显式任务优先，缺省台前任务），回执带回落点
@@ -1069,6 +1097,20 @@ IPC 时追加对应专项规则要求的验证。
 
 ### 宿主统一模型选择器（新增接口，尚未发布）
 
+桌面插件的 settings / panel / mainView / taskView WebView 可调用
+`window.cindyUI.pickModel({anchor:{x,y,width,height},initial?,allowRemote?})`，锚点使用按钮
+`getBoundingClientRect()` 的页面 CSS 坐标；默认包含其他电脑与分享供应商。
+Main 只向通过安装／owner 附加校验的 guest 注入页面选模桥（原生 tabView 与普通页面共用），只暴露这一个方法，
+逐次核对真实 sender 和顶层 frame，绑定原 guest、宿主窗口与批准代次。
+Renderer 在原宿主窗口定位该 guest，把按钮坐标换算到宿主；不存在、隐藏或锚点越界时取消。
+模型目录、搜索、收藏、最近使用、说明、档位与 Fast 复用 `ModelRouteSelectorContent`，
+选中后经既有可用性校验返回完整 route；不返回凭证、endpoint 或 ProviderView。
+参数和收藏编辑沿用现有插件选模的单次草稿，不写宿主偏好。旧 `pickModel` 与
+`POST /model-picker` 保留居中确认弹窗及原默认值，不改变旧插件批准。
+页面滚动／缩放、文档导航、关闭或崩溃撤销等待，旧答案不能落到替代页。
+此页面桥仅本机 Electron guest 使用，不进入 device-link 白名单；手机、远程控制页面与旧 Host
+须检测接口并沿用电子脑 `pickModel({mobilePageId,...})` 的原生选模通道。
+
 电子脑 `cindy.pickModel({initial?,mobilePageId?,allowRemote?})` 与桌面页面同源 `POST /model-picker`
 复用 Cindy 的统一模型选择器，返回完整配置（模型、引擎、思考档位、Fast 与可选的 `agentDeviceId` 运行来源）。
 选模不需要新的 manifest 权限、不改变存量批准，不修改默认或现有任务、不执行模型调用。
@@ -1076,7 +1118,8 @@ IPC 时追加对应专项规则要求的验证。
 
 Main 按真实逻辑页或专属协议分区定位物理实例，绑定当前 owner 与安装批准版本；
 只接受目标宿主窗口或目标页面的回答，验证输入形状与实际可用路由，异步校验后再次复核绑定。
-同一 Host 仅一单，重复打开沿用目录选择的限速。取消、90 秒超时、窗口/页面关闭、账号边界、
+同一 Host 仅一单，已有选择器时返回 `BUSY`；选模不调用模型，不设关闭后重新打开的时间冷却。
+取消、90 秒超时、窗口/页面关闭、账号边界、
 插件停止均撤销等待并收起界面；不可用的来源保持选择器可编辑，不能静默换模型。
 手机与远程桌面设置页保留显式 mobilePageId，展示端读取执行电脑目录，缺失/失效来源不回退另一设备。
 原生插件页与远程 Desktop 设置控制端打开页面时声明 `modelPickerRemoteSources:true`，Host

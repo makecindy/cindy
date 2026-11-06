@@ -1,3 +1,5 @@
+import { appShortcutSettings, keyboardShortcutsSettings } from './KeyboardShortcutsSection.settings-search';
+import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import { Button } from '@/components/ui/button';
 /**
  * KeyboardShortcutsSection — Settings「键盘快捷键」tab 的主区块。
@@ -20,7 +22,7 @@ import { Button } from '@/components/ui/button';
  * 「配件」始终列出全部可见设备，不因为某台已经出现在外面就从列表里拿掉。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowLeft, ChevronRight, Package, Pencil, RotateCcw, Trash2 } from 'lucide-react';
 
@@ -31,21 +33,14 @@ import {
   comboToElectronAccelerator,
   createAppShortcutComboFromEvent,
   findAppShortcutConflict,
-  findPluginShortcutConflict,
   formatAppShortcutCombo,
   getAppShortcutDefinition,
-  getEffectivePluginShortcuts,
   isAppShortcutAvailableOnPlatform,
   isAppShortcutComboBindable,
-  isAppShortcutId,
   isGlobalAppShortcutComboUsable,
-  isPluginShortcutId,
   type AppShortcutCombo,
   type AppShortcutDefinition,
   type AppShortcutId,
-  type AppShortcutOverrides,
-  type PluginShortcutDefinition,
-  type ShortcutId,
 } from '../../../shared/appShortcuts';
 import { isSystemReservedShortcut } from '../../../shared/keyboardReserved';
 import {
@@ -56,8 +51,6 @@ import {
   subscribeAppShortcuts,
 } from '@/lib/appShortcutStore';
 import { getVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
-import { voiceInputShortcutToAppShortcutCombo } from '@/voice-input/appShortcutConflict';
-import { usePluginShortcutDefinitions } from '@/cindy-brain/usePluginShortcutDefinitions';
 import { useWorkLouderCodex } from '@/hooks/useWorkLouderCodex';
 import { useXboxGamepad } from '@/hooks/useXboxGamepad';
 import { createLogger } from '@/lib/logger';
@@ -89,7 +82,7 @@ type HardwarePane = 'list' | 'accessories' | WorkLouderModel | GamepadFamily;
 function AccessoriesEntry({ onOpen }: { onOpen(): void }) {
   const { t } = useTranslation();
   return (
-    <button
+    <button data-setting-id={keyboardShortcutsSettings.shortcutsAccessoriesTitle.id}
       type="button"
       onClick={onOpen}
       data-testid="settings-shortcuts-accessories"
@@ -104,11 +97,11 @@ function AccessoriesEntry({ onOpen }: { onOpen(): void }) {
         <Package size={18} aria-hidden="true" />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-1">
-        <span id="settings-search-settings-shortcuts-accessories-title" className="truncate text-13 font-medium text-[var(--text-primary)]">
-          {t('settings.shortcuts.accessories.title')}
+        <span id={keyboardShortcutsSettings.shortcutsAccessoriesTitle.targetId} className="truncate text-13 font-medium text-[var(--text-primary)]">
+          {t(keyboardShortcutsSettings.shortcutsAccessoriesTitle.titleKey)}
         </span>
         <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-          {t('settings.shortcuts.accessories.description')}
+          {t(keyboardShortcutsSettings.shortcutsAccessoriesTitle.descriptionKey)}
         </span>
       </span>
       <ChevronRight size={16} className="shrink-0 text-[var(--text-tertiary)]" aria-hidden="true" />
@@ -117,14 +110,13 @@ function AccessoriesEntry({ onOpen }: { onOpen(): void }) {
 }
 
 interface RecordingError {
-  id: ShortcutId;
+  id: AppShortcutId;
   message: string;
 }
 
 export function KeyboardShortcutsSection() {
   const { t } = useTranslation();
   const platform = getAppShortcutPlatform();
-  const pluginDefs = usePluginShortcutDefinitions();
   // overrides 快照订阅: 改绑 / reset 后 main 广播 → appShortcutStore 通知 →
   // 这里重渲染。快照序列化做 useSyncExternalStore 的相等性判定; 全局快捷键
   // 注册失败列表同属一次广播, 一并纳入快照。
@@ -132,16 +124,18 @@ export function KeyboardShortcutsSection() {
     JSON.stringify({
       overrides: getAppShortcutOverrides(),
       globalFailures: getAppShortcutGlobalFailures(),
-      voiceShortcut: getVoiceInputSettings().shortcut,
     }),
   );
-  const { overrides, globalFailures, voiceShortcut } = useMemo(() => JSON.parse(snapshotJson) as {
-    overrides: AppShortcutOverrides;
+  const { overrides, globalFailures } = JSON.parse(snapshotJson) as {
+    overrides: Partial<Record<AppShortcutId, AppShortcutCombo | null>>;
     globalFailures: AppShortcutId[];
-    voiceShortcut: ReturnType<typeof getVoiceInputSettings>['shortcut'];
-  }, [snapshotJson]);
-  const [recordingId, setRecordingId] = useState<ShortcutId | null>(null);
+  };
+  const [recordingId, setRecordingId] = useState<AppShortcutId | null>(null);
   const [hardwarePane, setHardwarePane] = useState<HardwarePane>('list');
+  const { entry: searchEntry, activation: searchActivation } = useSettingsSearchNavigation();
+  useEffect(() => {
+    if (searchEntry?.id.startsWith('shortcuts.')) setHardwarePane('list');
+  }, [searchEntry, searchActivation]);
   const [hardwareReturnTo, setHardwareReturnTo] = useState<'list' | 'accessories'>('list');
   const workLouderCodex = useWorkLouderCodex({ model: 'codex-micro', watchConnection: true });
   const workLouderCreator = useWorkLouderCodex({
@@ -223,7 +217,7 @@ export function KeyboardShortcutsSection() {
   }, []);
 
   const reportMutationError = useCallback(
-    (requestId: number, err: unknown, id?: ShortcutId) => {
+    (requestId: number, err: unknown, id?: AppShortcutId) => {
       if (requestId !== mutationRequestIdRef.current) return;
       const message = mutationErrorMessage(err);
       if (id) {
@@ -235,32 +229,20 @@ export function KeyboardShortcutsSection() {
     [mutationErrorMessage],
   );
 
-  const visibleDefs: (AppShortcutDefinition | PluginShortcutDefinition)[] = [
-    ...APP_SHORTCUT_DEFINITIONS.filter(
-      (def) => !def.hiddenInSettings && isAppShortcutAvailableOnPlatform(def.id, platform),
-    ),
-    ...pluginDefs,
-  ];
+  const visibleDefs = APP_SHORTCUT_DEFINITIONS.filter(
+    (def) => !def.hiddenInSettings && isAppShortcutAvailableOnPlatform(def.id, platform),
+  );
 
   const hasAnyOverride = Object.keys(overrides).length > 0;
 
   const itemLabel = useCallback(
-    (def: AppShortcutDefinition | PluginShortcutDefinition) =>
-      'pluginName' in def ? def.label : t(def.labelKey, { defaultValue: def.id }),
+    (def: AppShortcutDefinition) => t(def.labelKey, { defaultValue: def.id }),
     [t],
-  );
-  const pluginCombos = useMemo(() => {
-    const voiceCombo = voiceShortcut ? voiceInputShortcutToAppShortcutCombo(voiceShortcut) : null;
-    return getEffectivePluginShortcuts(pluginDefs, overrides, platform, voiceCombo ? [voiceCombo] : []);
-  }, [pluginDefs, overrides, platform, voiceShortcut]);
-  const combosFor = useCallback(
-    (id: ShortcutId) => isPluginShortcutId(id) ? pluginCombos.get(id) ?? [] : getAppShortcutCombos(id),
-    [pluginCombos],
   );
 
   /** 录制到合法按键后的校验; 返回错误文案, null = 通过。 */
   const validateCombo = useCallback(
-    (id: ShortcutId, combo: AppShortcutCombo): string | null => {
+    (id: AppShortcutId, combo: AppShortcutCombo): string | null => {
       if (!isAppShortcutComboBindable(combo)) {
         return t('settings.shortcuts.errors.notBindable');
       }
@@ -268,11 +250,11 @@ export function KeyboardShortcutsSection() {
       if (isSystemReservedShortcut(combo, family)) {
         return t('settings.shortcuts.errors.systemReserved');
       }
-      const selfDef = isAppShortcutId(id) ? getAppShortcutDefinition(id) : null;
+      const selfDef = APP_SHORTCUT_DEFINITIONS.find((d) => d.id === id)!;
       // darwin 上菜单专属 id (如 新对话) 只能绑可表达为菜单 accelerator 的
       // 组合, 否则绑定后按键永不生效 (与 main store 校验一致)。
       if (
-        selfDef?.menuBacked &&
+        selfDef.menuBacked &&
         platform === 'darwin' &&
         comboToElectronAccelerator(combo, 'darwin') === null
       ) {
@@ -280,18 +262,14 @@ export function KeyboardShortcutsSection() {
       }
       // 全局快捷键在所有应用里截走按键: 须能注册到系统且不占编辑惯例键
       // (与 main store 校验一致)。
-      if (selfDef?.scope === 'global' && !isGlobalAppShortcutComboUsable(combo, platform)) {
+      if (selfDef.scope === 'global' && !isGlobalAppShortcutComboUsable(combo, platform)) {
         return t('settings.shortcuts.errors.globalUnusable');
       }
       // 跨 id 冲突: 与 main store 写入兜底共用 shared 的 findAppShortcutConflict。
-      const conflictId =
-        (isAppShortcutId(id) && findAppShortcutConflict(id, combo, getAppShortcutOverrides(), platform)) ||
-        findPluginShortcutConflict(id, combo, pluginDefs, getAppShortcutOverrides(), platform);
+      const conflictId = findAppShortcutConflict(id, combo, getAppShortcutOverrides(), platform);
       if (conflictId) {
         return t('settings.shortcuts.errors.conflict', {
-          name: isAppShortcutId(conflictId)
-            ? itemLabel(getAppShortcutDefinition(conflictId))
-            : pluginDefs.find((def) => def.id === conflictId)?.label ?? conflictId,
+          name: itemLabel(getAppShortcutDefinition(conflictId)),
         });
       }
       // 语音输入全局快捷键是独立体系, 这里只做占用提示级别的冲突阻断。
@@ -309,7 +287,7 @@ export function KeyboardShortcutsSection() {
       }
       return null;
     },
-    [itemLabel, platform, pluginDefs, t],
+    [itemLabel, platform, t],
   );
 
   // 录制态: window capture 全量吞键, 合法组合 → 校验 → 写 override。
@@ -332,7 +310,7 @@ export function KeyboardShortcutsSection() {
       const combo = createAppShortcutComboFromEvent(e);
       if (!combo) return; // 纯修饰键, 等主键
       // 与当前生效组合相同 → 视为无变化, 直接退出录制
-      if (combosFor(recordingId).some((c) => appShortcutCombosEqual(c, combo))) {
+      if (getAppShortcutCombos(recordingId).some((c) => appShortcutCombosEqual(c, combo))) {
         cancel();
         return;
       }
@@ -359,7 +337,7 @@ export function KeyboardShortcutsSection() {
       window.removeEventListener('keydown', handler, true);
       window.removeEventListener('blur', cancel);
     };
-  }, [beginShortcutAction, combosFor, recordingId, reportMutationError, t, validateCombo]);
+  }, [beginShortcutAction, recordingId, reportMutationError, t, validateCombo]);
 
   const handleResetAll = useCallback(() => {
     const requestId = beginShortcutAction();
@@ -370,7 +348,7 @@ export function KeyboardShortcutsSection() {
   }, [beginShortcutAction, reportMutationError]);
 
   const handleResetOne = useCallback(
-    (id: ShortcutId) => {
+    (id: AppShortcutId) => {
       const requestId = beginShortcutAction();
       void window.electronAPI.appShortcuts.clearOverride(id).catch((err: unknown) => {
         reportMutationError(requestId, err, id);
@@ -381,7 +359,7 @@ export function KeyboardShortcutsSection() {
 
   /** 删除绑定 = override 置 null, 该快捷键禁用 (显示"未设置")。 */
   const handleDeleteOne = useCallback(
-    (id: ShortcutId) => {
+    (id: AppShortcutId) => {
       const requestId = beginShortcutAction();
       setRecordingId(null);
       void window.electronAPI.appShortcuts.setOverride(id, null).catch((err: unknown) => {
@@ -414,7 +392,7 @@ export function KeyboardShortcutsSection() {
     return (
       <div className="flex flex-col gap-[14px]">
         <div className="flex items-center gap-2">
-          <button
+          <button data-setting-id={keyboardShortcutsSettings.shortcutsAccessoriesTitle.id}
             type="button"
             onClick={() => setHardwarePane('list')}
             className="flex size-8 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-chip)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
@@ -423,7 +401,7 @@ export function KeyboardShortcutsSection() {
             <ArrowLeft size={17} />
           </button>
           <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-            {t('settings.shortcuts.accessories.title')}
+            {t(keyboardShortcutsSettings.shortcutsAccessoriesTitle.titleKey)}
           </h2>
         </div>
         <div
@@ -466,7 +444,7 @@ export function KeyboardShortcutsSection() {
           {t('settings.shortcuts.title')}
         </h2>
         {hasAnyOverride && (
-          <button
+          <button data-setting-id={keyboardShortcutsSettings.shortcuts.id}
             type="button"
             onClick={handleResetAll}
             className="shrink-0 text-12 text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
@@ -505,19 +483,24 @@ export function KeyboardShortcutsSection() {
         )}
       >
         {visibleDefs.map((def) => {
+          // Plugin commands are dynamic and belong to the shortcuts page;
+          // only built-in shortcuts have individual static search entries.
+          const setting = appShortcutSettings[def.id];
+          const controlSetting = 'pluginName' in def
+            ? keyboardShortcutsSettings.shortcuts
+            : appShortcutSettings[def.id];
           const isRecording = recordingId === def.id;
           const customized = def.id in overrides;
-          const combos = combosFor(def.id);
-          const rebindable = 'pluginName' in def || def.rebindable;
+          const combos = getAppShortcutCombos(def.id);
           // 写入错误优先; 否则提示全局快捷键当前未能注册 (被其它应用占用)。
           const rowError =
             error?.id === def.id
               ? error.message
-              : combos.length > 0 && isAppShortcutId(def.id) && globalFailures.includes(def.id)
+              : combos.length > 0 && globalFailures.includes(def.id)
                 ? t('settings.shortcuts.errors.globalOccupied')
                 : null;
           return (
-            <div key={def.id} className="flex items-center gap-2 py-2">
+            <div id={setting?.targetId} key={def.id} className="flex items-center gap-2 py-2">
               {/* 条目标题 + 说明双行: 标题主文字色 + 说明次级色,
                   对齐 LinkOpenSection 卡片条目的用色规范 */}
               <div className="flex min-w-0 flex-1 flex-col gap-[2px]">
@@ -525,7 +508,7 @@ export function KeyboardShortcutsSection() {
                   {itemLabel(def)}
                 </p>
                 <p className="truncate text-12 leading-[1.4] text-[var(--text-secondary)]">
-                  {'pluginName' in def ? def.pluginName : t(def.descriptionKey, { defaultValue: '' })}
+                  {t(def.descriptionKey, { defaultValue: '' })}
                 </p>
               </div>
               {rowError && !isRecording && (
@@ -556,7 +539,7 @@ export function KeyboardShortcutsSection() {
               </span>
 
               {isRecording ? (
-                <Button
+                <Button data-settings-search-action="Cancel recording the keyboard shortcut"
                   variant="secondary"
                   size="sm"
                   compact
@@ -568,16 +551,16 @@ export function KeyboardShortcutsSection() {
                 </Button>
               ) : (
                 <div className="flex shrink-0 items-center gap-1">
-                  <button
+                  <button data-setting-id={controlSetting.id}
                     type="button"
-                    disabled={!rebindable}
+                    disabled={!def.rebindable}
                     onClick={() => {
                       beginShortcutAction();
                       setRecordingId(def.id);
                     }}
                     className={cn(
                       iconButtonClass,
-                      !rebindable && 'opacity-50 pointer-events-none',
+                      !def.rebindable && 'opacity-50 pointer-events-none',
                     )}
                     aria-label={t('settings.shortcuts.editAria', { name: itemLabel(def) })}
                     title={t('settings.shortcuts.edit')}
@@ -585,13 +568,13 @@ export function KeyboardShortcutsSection() {
                     <Pencil size={13} />
                   </button>
                   {combos.length > 0 && (
-                    <button
+                    <button data-setting-id={controlSetting.id}
                       type="button"
-                      disabled={!rebindable}
+                      disabled={!def.rebindable}
                       onClick={() => handleDeleteOne(def.id)}
                       className={cn(
                         iconButtonClass,
-                        !rebindable && 'opacity-50 pointer-events-none',
+                        !def.rebindable && 'opacity-50 pointer-events-none',
                       )}
                       aria-label={t('settings.shortcuts.deleteAria', { name: itemLabel(def) })}
                       title={t('settings.shortcuts.delete')}
@@ -600,7 +583,7 @@ export function KeyboardShortcutsSection() {
                     </button>
                   )}
                   {customized && (
-                    <button
+                    <button data-setting-id={controlSetting.id}
                       type="button"
                       onClick={() => handleResetOne(def.id)}
                       className={iconButtonClass}

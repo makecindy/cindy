@@ -130,6 +130,9 @@
   "detail": {
     "useItIn": "使用方法",
     "openPlugin": "プラグインを開く",
+    "readme": "紹介",
+    "readmeLoadFailed": "紹介を読み込めませんでした。もう一度お試しください。",
+    "readmeUnavailable": "紹介はありません。",
     "computerSettings": "コンピューターの Cindy で「プラグイン」からこのプラグインの詳細を開き、設定してください。",
     "runtimeIssue": "プラグインが予期せず停止しました。再度開くか、タスクで再試行してください。",
     "runtimeFused": "プラグインで繰り返しエラーが発生しました。一度無効にしてから再度有効にし、お試しください。",

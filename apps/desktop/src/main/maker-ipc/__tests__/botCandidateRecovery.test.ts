@@ -244,8 +244,8 @@ describe('Bot candidate recovery', () => {
     expect(h.finalize).toHaveBeenCalledWith('s', 1, { surfaceBanner: true });
   });
 
-  // The group's failover never takes a Bot task (isProviderGroupFailoverEligible), so yielding to it
-  // would only make the declined hand-back find the Bot recovery still waiting on the group.
+  // A synchronous group candidate is not proof of ownership. This candidate-recovery
+  // callback must also work after async group eligibility declined the same failure.
   it('moves a Bot on even when its route belongs to a provider group', async () => {
     const h = harness();
     h.groupMayHandle.mockReturnValue(true);

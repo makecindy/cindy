@@ -23,6 +23,11 @@ vi.mock('../../hooks/useSessionReferences', () => ({
 vi.mock('@/hooks/useCCSessions', () => ({
   useCCSessions: () => ({ sessions: [] }),
 }));
+// Webhook account management imports the owner context; run-history fixtures
+// keep that boundary isolated just like the session and attention stores.
+vi.mock('@/contexts/AuthContext', () => ({
+  useOptionalDataOwnerGeneration: () => 0,
+}));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: vi.fn() }),
 }));

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 6,
-  "updatedAt": "2026-10-31T03:14:42.037Z",
+  "updatedAt": "2026-11-05T09:54:04.007Z",
   "models": [
     {
       "id": "openai/gpt-6.1-sol",
@@ -147,7 +147,8 @@
           "agents": [
             "claude-code",
             "codex"
-          ]
+          ],
+          "referencePriceGroup": "global"
         }
       ],
       "nativeApi": "anthropic-messages",
@@ -4547,7 +4548,29 @@
         ],
         "defaultEffort": "medium",
         "supportsImageInput": true
-      }
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 10,
+              "cacheReadPerMtok": 0.1,
+              "cacheWritePerMtok": 2.5,
+              "cacheWrite1hPerMtok": 4,
+              "effectiveFrom": "2026-11-05",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+                "verifiedAt": "2026-11-05"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "anthropic/claude-haiku-5-5",
@@ -11105,6 +11128,45 @@
         "agnes-2.5-pro",
         "agnes-2.5-pro-beta",
         "agnes-2.5-flash"
+      ]
+    },
+    {
+      "id": "openhubs-anthropic-messages",
+      "providerId": "openhubs",
+      "api": "anthropic-messages",
+      "baseUrl": "https://openhubs.zhidemai.com",
+      "inputBaseUrls": [
+        "https://openhubs.zhidemai.com",
+        "https://openhubs.zhidemai.com/v1"
+      ],
+      "defaultFor": [
+        "claude-code"
+      ]
+    },
+    {
+      "id": "openhubs-openai-responses",
+      "providerId": "openhubs",
+      "api": "openai-responses",
+      "baseUrl": "https://openhubs.zhidemai.com/v1",
+      "inputBaseUrls": [
+        "https://openhubs.zhidemai.com",
+        "https://openhubs.zhidemai.com/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ]
+    },
+    {
+      "id": "openhubs-openai-completions",
+      "providerId": "openhubs",
+      "api": "openai-completions",
+      "baseUrl": "https://openhubs.zhidemai.com/v1",
+      "inputBaseUrls": [
+        "https://openhubs.zhidemai.com",
+        "https://openhubs.zhidemai.com/v1"
+      ],
+      "defaultFor": [
+        "pi"
       ]
     }
   ],

@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createGatewayImageClient, GatewayImageError } from '../gatewayImageClient.js';
@@ -114,6 +115,35 @@ describe('gatewayImageClient 多来源通用化选项(2026-07)', () => {
     editPath: '/v1/images/edits',
   };
 
+  // #8673 / unit: real generate/edit serializers must carry unknown native
+  // fields. Existing tests only cover size/quality; a single extra field was lost.
+  it('serializes native options as JSON or multipart without a parameter allowlist', async () => {
+    const fetchImplementation = vi.fn<typeof fetch>(async () => okImageResponse());
+    const client = createGatewayImageClient({ getApiKey: () => 'invalid-test-key', proxy, fetchImplementation });
+    const nativeParameters = {
+      background: 'transparent', output_format: 'webp', output_compression: 0,
+      future_option: { enabled: false, values: [0, 'native'] },
+    };
+    await client.generateImage({ model: 'image', prompt: 'p', nativeParameters });
+    expect(JSON.parse(String(fetchImplementation.mock.calls[0]?.[1]?.body))).toEqual({
+      model: 'image', prompt: 'p', n: 1, size: 'auto', ...nativeParameters,
+    });
+    const readFile = vi.spyOn(fs, 'readFile').mockResolvedValue(Buffer.from('source'));
+    try {
+      await client.editImage({ model: 'image', prompt: 'edit', imagePaths: ['/test/source.png'],
+        nativeParameters: { ...nativeParameters, mask: 'data:image/png;base64,iVBORw0KGgo=' } });
+    } finally {
+      readFile.mockRestore();
+    }
+    const form = fetchImplementation.mock.calls[1]?.[1]?.body as FormData;
+    expect(form.get('background')).toBe('transparent');
+    expect(form.get('output_format')).toBe('webp');
+    expect(form.get('output_compression')).toBe('0');
+    expect(form.get('future_option')).toBe(JSON.stringify(nativeParameters.future_option));
+    expect(Buffer.from(await (form.get('mask') as Blob).arrayBuffer())).toEqual(Buffer.from('iVBORw0KGgo=', 'base64'));
+    expect(await (form.get('image[]') as Blob).text()).toBe('source');
+  });
+
   it('brandLabel 进错误话术;missingKeyMessage 替换缺凭证提示', async () => {
     const fetchImplementation = vi.fn(
       async () => new Response(JSON.stringify({ error: { message: 'boom' } }), { status: 500 }),
@@ -168,6 +198,12 @@ describe('gatewayImageClient 多来源通用化选项(2026-07)', () => {
       .generateImage({ model: 'm', prompt: 'p', size: '1024x1024' })
       .catch((e: unknown) => e);
     expect((err as Error).message).toContain('不支持画幅/档位参数');
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // #8673: native options must respect the same existing source capability.
+    for (const nativeParameters of [{ size: '1024x1024' }, { quality: 'high' }]) {
+      await expect(client.generateImage({ model: 'm', prompt: 'p', nativeParameters })).rejects.toThrow('不支持画幅/档位参数');
+    }
     expect(fetchMock).not.toHaveBeenCalled();
 
     await client.generateImage({ model: 'm', prompt: 'p' });

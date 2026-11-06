@@ -614,6 +614,18 @@ export function ProviderConnectionDialog({
     codex: false,
     pi: false,
   });
+  // 仅供当前表单展示；复用请求签名，使端点或凭证变化后不显示旧结果。
+  const [modelFetchSummary, setModelFetchSummary] = useState<Partial<Record<DialogAgentKind, {
+    signature: string;
+    status: 'loading' | 'success' | 'error';
+    count?: number;
+  }>>>(() => draft?.catalog?.ok && draft.catalog.models ? {
+    [draft.agent]: {
+      signature: providerModelFetchRequestSignature(rt[draft.agent], authMode),
+      status: 'success',
+      count: new Set(draft.catalog.models.map(model => model.id)).size,
+    },
+  } : {});
   // 拉取成功后的勾选弹层：行集合 = 拉取结果 ∪ 表单已填（后者默认勾选、保留用户显示名）。
   const [runtimeFill, setRuntimeFill] = useState<RuntimeFillDialogState | null>(null);
   const picker = childLayer?.kind === 'model-picker' ? childLayer.value : null;
@@ -1010,7 +1022,6 @@ export function ProviderConnectionDialog({
     draft?.catalog ? [[draft.agent, { signature: `${draft.agent}:${providerModelFetchRequestSignature(rt[draft.agent], authMode)}`,
       promise: Promise.resolve(draft.catalog) }]] : [],
   ));
-  const importedOnce = useRef(new Set<DialogAgentKind>(draft ? [draft.agent] : []));
   const detectionSignature = `${activeTab}:${providerModelFetchRequestSignature(rt[activeTab], authMode)}`;
   const detectionContext = useRef({ name, activeTab, onDetected, signature: detectionSignature });
   const previousDetectionSignatures = useRef(new Map<DialogAgentKind, string>());
@@ -1124,8 +1135,11 @@ export function ProviderConnectionDialog({
       void work.then(({ preset, catalog, ambiguous }) => {
         if (!live || detectionContext.current.signature !== signature) return;
         if (catalog?.ok && catalog.models) {
-          const first = !importedOnce.current.has(agent);
-          importedOnce.current.add(agent);
+          const requestSig = providerModelFetchRequestSignature(fields, authMode);
+          setModelFetchSummary(previous => previous[agent]?.signature === requestSig ? previous : {
+            ...previous,
+            [agent]: { signature: requestSig, status: 'success', count: new Set(catalog.models!.map(model => model.id)).size },
+          });
           setRtSynced(prev => ({ ...prev, [agent]: { ...prev[agent], models: [
             ...prev[agent].models.filter(m => m.id.trim()).map(model => {
               const fresh = catalog.models!.find(m => m.id === model.id);
@@ -1139,12 +1153,6 @@ export function ProviderConnectionDialog({
                 opaqueModelId: fresh.opaqueModelId || model.opaqueModelId,
               } : model;
             }),
-            ...(first ? catalog.models!.filter(m => !prev[agent].models.some(row => row.id === m.id) && isAgentSelectableModel({ id: m.id, mode: m.discoveredMetadata?.mode })).map(m => ({
-              id: m.id, name: m.name, discoveredMetadata: m.discoveredMetadata ?? { contextWindow: m.contextWindow }, discoveredCost: m.discoveredCost,
-              discoveredSource: m.discoveredSource,
-              discoverySnapshotId: m.discoverySnapshotId,
-              opaqueModelId: m.opaqueModelId,
-            })) : []),
           ] } }));
         }
         if (preset && !AGENTS.some(a => preset!.runtimes[a] &&
@@ -1650,12 +1658,18 @@ export function ProviderConnectionDialog({
       fetchingModels.pi
     )
       return; // 单飞（按钮已禁用，兜底）
+    const requestSig = providerModelFetchRequestSignature(rf, authMode);
+    const showFetchError = () => setModelFetchSummary((previous) => ({
+      ...previous, [agent]: { signature: requestSig, status: 'error' },
+    }));
     const baseUrl = rf.baseUrl.trim();
     if (!baseUrl) {
+      showFetchError();
       toast.error(t('settings.providers.custom.fetch.needBaseUrl'));
       return;
     }
     if (!matchesEndpointTemplate(agent, rf) || !areProviderRequestUrlsAllowed(authMode, baseUrl, rf.modelsUrl)) {
+      showFetchError();
       toast.error(t('settings.providers.custom.errors.baseUrlInvalid'));
       return;
     }
@@ -1667,7 +1681,6 @@ export function ProviderConnectionDialog({
     const requestHeaders = authMode === 'none' ? stripCredentialHeaders(headers) : headers;
     // 请求参数签名：响应回来时若该 runtime 的端点/凭证/请求头已被改动，响应按过期丢弃——
     // 不能把旧端点的模型清单当成新端点的填进表单（成功和失败 toast 都不展示）。
-    const requestSig = providerModelFetchRequestSignature(rf, authMode);
     // 编辑态且请求目标端点(baseUrl/modelsUrl)与鉴权模式相对已存配置未改动时,带上
     // savedProviderId,让 main 侧并入不回读进 renderer 的 main-only 密文鉴权头(表单显式
     // 填的头/key 仍由 main 以 renderer 值优先);端点一改就不带,避免把已存凭证外泄给新主机。
@@ -1682,6 +1695,9 @@ export function ProviderConnectionDialog({
       modelFetchCanReuseSavedCredentials(rf, savedBaseline, authMode),
     );
     modelFetchInFlightRef.current = true;
+    setModelFetchSummary((previous) => ({
+      ...previous, [agent]: { signature: requestSig, status: 'loading' },
+    }));
     setFetchingModels((prev) => ({ ...prev, [agent]: true }));
     try {
       const cached = !editing ? discoveryCache.current.get(agent) : undefined;
@@ -1787,6 +1803,10 @@ export function ProviderConnectionDialog({
             };
           }),
         ];
+        setModelFetchSummary((previous) => ({
+          ...previous,
+          [agent]: { signature: requestSig, status: 'success', count: fetchedIds.size },
+        }));
         setChildLayer({
           kind: 'model-picker',
           value: { agent, models: rows, selected: new Set(currentById.keys()), query: '' },
@@ -1795,6 +1815,7 @@ export function ProviderConnectionDialog({
         // 请求期间切过 Tab 也不会在错误上下文里确认。
         setActiveTab(agent);
       } else {
+        showFetchError();
         toast.error(t(`providerError.${result.code ?? 'UNKNOWN'}`));
       }
     } catch (e) {
@@ -1802,6 +1823,7 @@ export function ProviderConnectionDialog({
         providerModelFetchRequestSignature(rtRef.current[agent], authModeRef.current) !== requestSig
       )
         return; // 过期失败同样静默
+      showFetchError();
       const ipc = extractIpcError(e);
       toast.error(ipc?.message ?? t('settings.providers.custom.fetch.failed'));
     } finally {
@@ -1820,7 +1842,6 @@ export function ProviderConnectionDialog({
   const applyPicker = useCallback(() => {
     if (!picker) return;
     const chosen = picker.models.filter((m) => picker.selected.has(m.id));
-    if (chosen.length === 0) return;
     const pickerIds = new Set(picker.models.map((m) => m.id));
     // 重映射靠 id 而不是行号:picker 确认会任意增删/重排该 runtime 的行,旧行号
     // 不能直接套到新数组。合并结果必须同步算出一份普通数组,同时喂给状态更新和
@@ -2304,6 +2325,29 @@ export function ProviderConnectionDialog({
     authMode === 'apiKey' && detection.code === 'AUTH_INVALID';
   const detectionKeyMissing = detectionAuthFailed && !f.apiKey.trim();
 
+  const selectedModelCount = f.models.filter((model) => model.id.trim()).length;
+  const storedModelFetchSummary = modelFetchSummary[activeTab];
+  const activeModelFetchSummary = storedModelFetchSummary?.signature ===
+    providerModelFetchRequestSignature(f, authMode) &&
+    (storedModelFetchSummary.status !== 'loading' || fetchingModels[activeTab])
+      ? storedModelFetchSummary : undefined;
+  const modelSummaryTitle = selectedModelCount > 0
+    ? t('settings.providers.custom.fetch.selectedCount', { count: selectedModelCount })
+    : activeModelFetchSummary?.status === 'loading'
+      ? t('settings.providers.custom.fetch.fetching')
+      : activeModelFetchSummary?.status === 'error'
+        ? t('settings.providers.custom.fetch.failedRetry')
+        : activeModelFetchSummary?.status === 'success'
+          ? t('settings.providers.custom.fetch.selectedCount', { count: 0 })
+          : t('settings.providers.custom.fetch.notFetched');
+  const modelSummaryDetail = activeModelFetchSummary?.status === 'success'
+    ? t('settings.providers.custom.fetch.availableCount', { count: activeModelFetchSummary.count })
+    : selectedModelCount > 0 && activeModelFetchSummary?.status === 'error'
+      ? t('settings.providers.custom.fetch.retryFailed')
+      : selectedModelCount > 0 && activeModelFetchSummary?.status === 'loading'
+        ? t('settings.providers.custom.fetch.fetching')
+        : null;
+
   const activeSavedBaseline = savedBaselineFor(activeTab);
   // 共享判据：当前表单的端点相对已存基线是否未变。密钥与请求头都只在
   // 端点未变时继续有效——main 侧改端点后会清掉已存头，renderer 的徽标
@@ -2726,24 +2770,32 @@ export function ProviderConnectionDialog({
             </div>
           )}
                 <div className="flex flex-col gap-2 text-13 text-[var(--text-secondary)]">
-                  <span>{t('settings.providers.connection.modelCount', { count: f.models.filter((model) => model.id.trim()).length })}</span>
-                  {!simpleAdding && <span className="text-12">{t('settings.providers.connection.modelsAutomatic')}</span>}
-                  {simpleAdding && <>
-                    {f.models.filter(model => model.id.trim()).map(model => (
-                      <div key={model.id} className="flex items-center justify-between gap-2 border-b border-[var(--border-default)] py-2">
-                        <span className="min-w-0 break-words text-[var(--text-primary)]">
-                          {model.id}{' '}
-                          <span className="inline-flex rounded-full border border-[var(--border-default)] px-2 py-0.5 text-11 text-[var(--text-secondary)]">
-                            {t(modelTypeLabelKey(model.mode ?? model.discoveredMetadata?.mode))}
-                          </span>
-                        </span>
-                        <Button type="button" variant="secondary" size="sm" className="shrink-0"
-                          onClick={() => patch(activeTab, value => ({ ...value, models: value.models.filter(row => row.id !== model.id) }))}>
-                          {t('settings.providers.connection.removeModel')}
-                        </Button>
+                  {authMode === 'oauth' ? (
+                    <>
+                      <span>{t('settings.providers.connection.modelCount', { count: selectedModelCount })}</span>
+                      {!simpleAdding && <span className="text-12">{t('settings.providers.connection.modelsAutomatic')}</span>}
+                    </>
+                  ) : (
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-y border-[var(--border-default)] py-4">
+                      <div className="flex min-w-0 flex-col gap-1" role="status">
+                        <span className="text-[var(--settings-section-title)]">{modelSummaryTitle}</span>
+                        {modelSummaryDetail && <span className="text-12">{modelSummaryDetail}</span>}
                       </div>
-                    ))}
-                  </>}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      compact
+                      loading={fetchingModels[activeTab]}
+                  ref={modelPickerTriggerRef}
+                  type="button"
+                  onClick={() => void handleFetchModels()}
+                  disabled={anyFetching}
+                    >
+                      <RefreshCw size={13} />
+                      {t('settings.providers.custom.fetch.button')}
+                    </Button>
+                    </div>
+                  )}
                     <button type="button"
                       className="flex min-h-8 items-center gap-1 self-start text-13 font-medium text-[var(--settings-section-title)] rounded-full focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                       aria-expanded={manualOpen} aria-controls={fieldId('manual-fields')}
@@ -2752,6 +2804,17 @@ export function ProviderConnectionDialog({
                       {t('settings.providers.connection.manualAdd')}
                     </button>
                   {manualOpen && <div id={fieldId('manual-fields')} className="flex flex-col gap-3 pl-5">
+                  {simpleAdding && f.models.filter(model => model.id.trim()).map(model => (
+                    <div key={model.id} className="flex items-center justify-between gap-2 border-b border-[var(--border-default)] py-2">
+                      <span className="min-w-0 break-words text-[var(--text-primary)]">{model.id}</span>
+                      <Button type="button" variant="secondary" size="sm" className="shrink-0"
+                        data-settings-search-action="Remove this model from the current provider draft"
+                        aria-label={`${t('settings.providers.connection.removeModel')} ${model.id}`}
+                        onClick={() => patch(activeTab, value => ({ ...value, models: value.models.filter(row => row.id !== model.id) }))}>
+                        {t('settings.providers.connection.removeModel')}
+                      </Button>
+                    </div>
+                  ))}
                   <FormField id={fieldId(`${activeTab}:manualModel`)} label={t(simpleAdding ? 'settings.providers.connection.manualId' : 'settings.providers.connection.manualModel')} error={errorFor(`${activeTab}:manualModel`)}>
                         {(control) => (
                           <SettingsTextInput {...control} surface="ivory" value={manualModel}
@@ -3227,19 +3290,7 @@ export function ProviderConnectionDialog({
                     </Button>}
                     {/* 预设模板（仅新建态、有预设时显示）：下拉选择，选中即预填 baseUrl / 模型清单，
                         用户只补 key。列表已按厂商首字母分组排序（同厂商国内/海外相邻，按构建区域排序）。 */}
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      compact
-                      loading={fetchingModels[activeTab]}
-                  ref={modelPickerTriggerRef}
-                  type="button"
-                  onClick={() => void handleFetchModels()}
-                  disabled={anyFetching}
-                    >
-                      <RefreshCw size={13} />
-                      {t('settings.providers.custom.fetch.button')}
-                    </Button>
+
                 {!mediaOnly && test[activeTab].status === 'ok' && (
                   <span
                     className="flex items-center gap-1 text-12"
@@ -3611,9 +3662,9 @@ export function ModelPickerOverlay({
               size="md"
               compact
               ref={primaryButtonRef}
+              data-settings-search-action="Confirm the model picker selection for the current provider draft"
               type="button"
               onClick={onConfirm}
-              disabled={picker.selected.size === 0}
             >
               {t('settings.providers.custom.fetch.confirm', { count: picker.selected.size })}
             </Button>

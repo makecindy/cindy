@@ -115,3 +115,17 @@ describe("verified September reference-price coverage", () => {
     ).toBeUndefined();
   });
 });
+
+describe("Sonnet 5.5 adopted official reference price", () => {
+  it("resolves the direct route without inventing a price before adoption", () => {
+    const options = { at: "2026-11-05", officialOnly: true };
+    const expected = {
+      currency: "USD", variant: "standard", inputPerMtok: 2, outputPerMtok: 10,
+      cacheReadPerMtok: 0.1, cacheWritePerMtok: 2.5, cacheWrite1hPerMtok: 4,
+    };
+    expect(resolveModelReferencePrice(registry, "anthropic", "claude-sonnet-5-5", options)?.price).toMatchObject(expected);
+    expect(resolveBaseModelReferencePrice(registry, "claude-sonnet-5-5", options)?.price).toMatchObject(expected);
+    expect(resolveModelReferencePrice(registry, "anthropic", "claude-sonnet-5-5", { at: "2026-11-04", officialOnly: true })).toBeUndefined();
+    expect(resolveModelReferencePrice(registry, "anthropic", "claude-sonnet-5-5", { ...options, variant: "fast" })).toBeUndefined();
+  });
+});
