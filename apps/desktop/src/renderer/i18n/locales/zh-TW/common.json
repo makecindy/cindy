@@ -13985,6 +13985,8 @@
       "updateHost": "請先更新執行任務的電腦，再開啟側邊追問。",
       "failed": "開啟側邊追問失敗，請稍後重試。",
       "mainTaskOnly": "請從主任務開啟側邊追問。",
+      "sharedTaskUnavailable": "共享任務不支援側邊追問",
+      "archivedTask": "請先取消歸檔，再開啟側邊追問",
       "closeTitle": "關閉側邊追問？",
       "closeDescription": "將停止並刪除本次追問，主任務不受影響。",
       "closeConfirm": "關閉並刪除",

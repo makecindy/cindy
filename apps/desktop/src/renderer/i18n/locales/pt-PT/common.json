@@ -14144,6 +14144,8 @@
       "updateHost": "Atualize o computador que executa esta tarefa para abrir uma conversa paralela.",
       "failed": "Não foi possível abrir a conversa paralela. Tente novamente.",
       "mainTaskOnly": "Abra uma conversa paralela a partir da tarefa principal.",
+      "sharedTaskUnavailable": "As conversas paralelas não estão disponíveis em tarefas partilhadas.",
+      "archivedTask": "Desarquive esta tarefa para abrir uma conversa paralela.",
       "closeTitle": "Fechar conversa paralela?",
       "closeDescription": "Este seguimento será interrompido e o respetivo histórico será eliminado. A tarefa principal continua em execução.",
       "closeConfirm": "Fechar e eliminar",
