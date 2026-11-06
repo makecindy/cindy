@@ -151,6 +151,10 @@ describe("cindy_helper MCP server", () => {
       resolveSurface: async () => 'bot-main',
       resolveTeammateProjectMode: async () => projectMode,
       sessionTasks: { startSessionTask: start, getSessionTask: start, messageSessionTask: start, stopSessionTask: start },
+      botCapabilities: {
+        list: async () => ({ ok: true as const, capabilities: [] }),
+        select: async () => ({ ok: true as const, effective: 'next-turn' as const, joined: true }),
+      },
     }, { agentKind: 'claude-code', workingDir: '/repo', sessionId: 'teammate-task' });
     const client = new Client({ name: 'project-mode-test', version: '1' });
     const [ct, st] = InMemoryTransport.createLinkedPair();
@@ -161,6 +165,10 @@ describe("cindy_helper MCP server", () => {
       expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'start_session_task', args: { instruction: 'x' } } })))
         .toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
       expect(start).not.toHaveBeenCalled();
+      // Its task guide points to the ordinary tools it has, not the hidden ones.
+      const guide = parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'read_teammate_skill', args: { name: 'tasks' } } }));
+      expect(String(guide.body)).toContain('send_to_session');
+      expect(String(guide.body)).not.toContain('start_session_task');
       projectMode = false;
       const classic = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'bots' } }));
       expect((classic.tools as Array<{ name: string }>).map((tool) => tool.name)).toContain('start_session_task');
