@@ -90,7 +90,7 @@ export function createChatHandler(deps) {
     try {
       const stored = deps.readSession ? await deps.readSession(sessionId) : null;
       session = deps.maker.getSession(sessionId) ?? await deps.maker.createSession({
-        agentKind: stored?.agentKind === 'codex' || payload.agentKind === 'codex' ? 'codex' : 'claude-code',
+        agentKind: stored?.agentKind || payload.agentKind || 'claude-code',
         id: sessionId,
         workingDir: stored?.workingDir || workDir,
         model: stored?.model || (typeof payload.model === 'string' ? payload.model : deps.defaultModel),

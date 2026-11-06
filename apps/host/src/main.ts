@@ -352,10 +352,12 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     agentGraph = createHostAgentGraph({
       binaryPath: claudeBinary,
       codexBinaryPath: harnessBinaryPath('codex') ?? undefined,
+      piBinaryPath: harnessBinaryPath('pi') ?? path.join(dataDir, 'pi', '1.4.0', 'pi'),
       storage: sessionStorage,
       gateway,
       makerMemory,
       mcpProviders: createHostMemoryMcpProviders(makerMemory),
+      userDataDir: dataDir,
     });
     attachAgentsToMakerMemory(makerMemory, agentGraph.instances);
     // Second step, now that the agents exist: turn their native memory off.

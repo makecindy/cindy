@@ -74,7 +74,7 @@ export function createInputQueue(deps) {
     const maker = deps.getMaker();
     const session = maker.getSession(sessionId) ?? await maker.createSession({
       id: sessionId,
-      agentKind: stored.agentKind === 'codex' ? 'codex' : 'claude-code',
+      agentKind: stored.agentKind || 'claude-code',
       workingDir: next.workingDir || stored.workingDir,
       // The composer owns the route for this message; the row only supplies the
       // fallback when the item does not name one.

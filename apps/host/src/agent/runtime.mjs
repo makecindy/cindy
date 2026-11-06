@@ -12,9 +12,10 @@
  * ports; the host must not keep a second credential implementation.
  */
 
+import path from 'node:path';
 import { ClaudeCodeAgent } from '@cindy/maker-core/agents/claude-code';
 import { CodexAgent } from '@cindy/maker-core/agents/codex';
-import { Maker } from '@cindy/maker-core/maker';
+import { Maker, PiAgent } from '@cindy/maker-core';
 
 import { hasClaudeNativeLogin } from '../../../desktop/src/main/maker-host/claude-native-auth.ts';
 
@@ -93,6 +94,21 @@ export function createCodexLocalCliAuth(gateway) {
   };
 }
 
+export function createPiAuthAdapter(gateway) {
+  return {
+    async getState() {
+      return { authenticated: true, authSource: 'api-key', identity: 'Pi' };
+    },
+    async triggerLogin() {
+      return { authenticated: true };
+    },
+    async logout() {},
+    async getAuthEnv() {
+      return gateway?.credential ? { CINDY_PI_API_KEY: gateway.credential } : {};
+    },
+  };
+}
+
 export function createHostAgentGraph(options) {
   const mcpProviders = options.mcpProviders ?? [];
   const agent = new ClaudeCodeAgent({
@@ -116,7 +132,62 @@ export function createHostAgentGraph(options) {
         ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
       })
     : null;
-  const agents = { 'claude-code': agent, ...(codex ? { codex } : {}) };
+  const pi = options.piBinaryPath
+    ? new PiAgent({
+        auth: createPiAuthAdapter(options.gateway),
+        runtimeConfig: {
+          ...(options.gateway ? { endpoint: options.gateway.endpoint } : {}),
+        },
+        binaryPath: options.piBinaryPath,
+        logger: LOGGER,
+        resolvePiAgentHome: () => path.join(options.userDataDir ?? process.cwd(), 'pi-agent-home'),
+        resolvePiNativeProviders: async () => {
+          try {
+            const { listProviders } = await import('./providers.mjs');
+            const catalog = await listProviders(options.gateway ? { gateway: options.gateway } : {});
+            const providers = [];
+            for (const p of catalog.providers ?? []) {
+              if (p.id === 'xd' || p.id === 'cindy') continue;
+              const rawModels = Array.isArray(p.models)
+                ? p.models
+                : (p.models?.pi ?? p.models?.['claude-code'] ?? Object.values(p.models ?? {}).flat());
+              const piModels = rawModels.map((m) => ({
+                id: m.id,
+                name: m.name ?? m.id,
+                wireId: m.id,
+                contextWindow: m.contextWindow ?? 1048576,
+                maxOutputTokens: m.maxOutput ?? 128000,
+                efforts: m.efforts ?? [],
+                defaultEffort: m.defaultEffort ?? null,
+              }));
+              const baseUrl = p.runtimes?.pi?.baseUrl ?? p.routing?.pi?.upstream ?? p.routing?.['claude-code']?.upstream ?? 'http://127.0.0.1:3425/v1';
+              providers.push({
+                id: p.id,
+                sourceProviderId: p.id,
+                name: p.name,
+                baseUrl,
+                api: 'openai-completions',
+                models: piModels,
+                apiKey: '$CINDY_PI_API_KEY',
+              });
+            }
+            return {
+              providers,
+              env: { CINDY_PI_API_KEY: 'test' },
+            };
+          } catch (err) {
+            console.error('[resolvePiNativeProviders] failed:', err);
+            return { providers: [], env: {} };
+          }
+        },
+        ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
+      })
+    : null;
+  const agents = {
+    'claude-code': agent,
+    ...(codex ? { codex } : {}),
+    ...(pi ? { pi } : {}),
+  };
   const capabilitiesByAgent = Object.fromEntries(
     Object.entries(agents).map(([kind, instance]) => [kind, instance.capabilities]),
   );
@@ -126,5 +197,5 @@ export function createHostAgentGraph(options) {
     logger: LOGGER,
     ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
   });
-  return { maker, agent, codex, capabilitiesByAgent, instances: agents, agents: Object.keys(agents) };
+  return { maker, agent, codex, pi, capabilitiesByAgent, instances: agents, agents: Object.keys(agents) };
 }

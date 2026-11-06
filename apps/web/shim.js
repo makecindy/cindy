@@ -213,7 +213,7 @@
         sessionId: typeof sessionId === 'string' ? sessionId : undefined,
         workDir: createOpts?.workingDir,
         model: createOpts?.model,
-        agentKind: createOpts?.agentKind === 'codex' ? 'codex' : 'claude-code',
+        agentKind: createOpts?.agentKind ?? 'claude-code',
       };
       const response = await fetch('/chat', {
         method: 'POST',
@@ -774,13 +774,22 @@
     'maker.scanLocalCli': () => STATIC.localCliDetections,
     'maker.llamaCppStatus': () => STATIC.llamaCppStatus,
     'maker.localModelStatus': () => STATIC.localModelStatus,
-    'maker.agent.getStatus': () => ({ ready: true }),
+    'maker.agent.getStatus': (args) => {
+      const kind = args?.[0] ?? 'claude-code';
+      return {
+        ready: true,
+        binaryReady: true,
+        authReady: true,
+        binaryPath: kind,
+      };
+    },
+    'maker.prewarmSession': () => undefined,
     'maker.piKernel.getState': () => STATIC.piKernelState,
     'maker.piKernel.install': () => ({ restartRequired: false }),
     'maker.agent.getBinaryVersion': (args) => ({
       kind: args?.[0] ?? 'claude-code',
-      binaryPath: null,
-      version: '0.1.0',
+      binaryPath: args?.[0] ?? null,
+      version: '1.4.0',
       latestVersion: null,
       updateAvailable: false,
       latestCheckFailed: false,
