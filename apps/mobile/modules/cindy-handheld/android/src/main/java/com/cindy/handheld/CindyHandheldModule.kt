@@ -73,7 +73,7 @@ class CindyHandheldModule : Module() {
   private var voiceActive = false
   private var lastNavDirection = View.FOCUS_DOWN
   private var gamepadPresent = false
-  private val wrappedWindows = WeakHashMap<Window, Boolean>()
+  private val wrappedWindows = WeakHashMap<Window, HandheldWindowCallback>()
   private var ring: FocusRing? = null
   private val scroller = StickScroller()
 
@@ -91,7 +91,9 @@ class CindyHandheldModule : Module() {
 
     // Plain map like the other local modules: Record conversion does not survive R8 here.
     AsyncFunction("configure") { config: Map<String, Any?> ->
-      voiceKeyCode = (config["voiceKeyCode"] as? Number)?.toInt() ?: KeyEvent.KEYCODE_BUTTON_X
+      val nextVoiceKeyCode = (config["voiceKeyCode"] as? Number)?.toInt() ?: KeyEvent.KEYCODE_BUTTON_X
+      if (nextVoiceKeyCode != voiceKeyCode) releaseVoice()
+      voiceKeyCode = nextVoiceKeyCode
       val requestedHoldMs = (config["holdMs"] as? Number)?.toInt() ?: DEFAULT_HOLD_MS
       holdMs = min(max(requestedHoldMs, 150), 2000).toLong()
       (config["focusColor"] as? String)?.let { value -> runCatching { Color.parseColor(value) }.getOrNull()?.let { focusColor = it } }
@@ -170,19 +172,33 @@ class CindyHandheldModule : Module() {
 
     OnDestroy {
       main.removeCallbacksAndMessages(null)
-      ring?.detach()
-      ring = null
+      if (Looper.myLooper() == main.looper) uninstall() else main.post { uninstall() }
     }
+  }
+
+  private fun uninstall() {
+    enabled = false
+    capturing = false
+    voiceDown = false
+    voiceActive = false
+    scroller.stop()
+    ring?.detach()
+    ring = null
+    for ((window, callback) in wrappedWindows) {
+      if (window.callback === callback) window.callback = callback.base
+    }
+    wrappedWindows.clear()
   }
 
   private fun install() {
     val activity = appContext.currentActivity ?: return
     val window = activity.window ?: return
-    if (wrappedWindows[window] != true) {
+    if (!wrappedWindows.containsKey(window)) {
       val base = window.callback
       if (base != null) {
-        window.callback = HandheldWindowCallback(base)
-        wrappedWindows[window] = true
+        val callback = HandheldWindowCallback(base)
+        window.callback = callback
+        wrappedWindows[window] = callback
       }
     }
     installFocusAssist()
@@ -324,6 +340,16 @@ class CindyHandheldModule : Module() {
     return false
   }
 
+  private fun isVisiblyAttached(view: View): Boolean {
+    if (!view.isAttachedToWindow || !view.isShown) return false
+    var current: View? = view
+    while (current != null) {
+      if (current.alpha <= 0.01f) return false
+      current = current.parent as? View
+    }
+    return true
+  }
+
   /** Focus the top-left visible control of the page the user is looking at. */
   private fun focusTopLayer(decor: View): Boolean {
     val density = decor.resources.displayMetrics.density
@@ -387,7 +413,7 @@ class CindyHandheldModule : Module() {
     scroller.update(event.getAxisValue(MotionEvent.AXIS_RZ))
   }
 
-  private inner class HandheldWindowCallback(private val base: Window.Callback) : Window.Callback by base {
+  private inner class HandheldWindowCallback(val base: Window.Callback) : Window.Callback by base {
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
       if (handleKey(event)) return true
       return base.dispatchKeyEvent(event)
@@ -444,6 +470,7 @@ class CindyHandheldModule : Module() {
 
     fun detach() {
       if (!attached) return
+      restoreAll()
       attached = false
       val observer = decor.viewTreeObserver
       if (observer.isAlive) {
@@ -575,6 +602,10 @@ class CindyHandheldModule : Module() {
 
     fun stop() {
       velocity = 0f
+      Choreographer.getInstance().removeFrameCallback(this)
+      running = false
+      cachedTarget = null
+      cachedAt = 0L
     }
 
     fun page(direction: Int) {
@@ -608,7 +639,9 @@ class CindyHandheldModule : Module() {
     private fun target(): View? {
       val now = System.currentTimeMillis()
       cachedTarget?.get()?.let { view ->
-        if (now - cachedAt < SCROLL_TARGET_TTL_MS && view.isAttachedToWindow && view.isShown) return view
+        val decor = appContext.currentActivity?.window?.decorView
+        if (now - cachedAt < SCROLL_TARGET_TTL_MS && decor != null &&
+          isVisiblyAttached(view) && !isCovered(view, decor)) return view
       }
       val decor = appContext.currentActivity?.window?.decorView ?: return null
       val found = findScrollTarget(decor)
@@ -622,7 +655,8 @@ class CindyHandheldModule : Module() {
       val minSide = MIN_SCROLL_TARGET_DP * decor.resources.displayMetrics.density
       // Pre-warmed hidden WebViews are scrollable too; only real on-screen lists count.
       fun visibleEnough(candidate: View): Boolean =
-        candidate.getGlobalVisibleRect(rect) && rect.width() >= minSide && rect.height() >= minSide
+        isVisiblyAttached(candidate) && candidate.getGlobalVisibleRect(rect) &&
+          rect.width() >= minSide && rect.height() >= minSide && !isCovered(candidate, decor)
       var view: View? = decor.findFocus()
       while (view != null && view !== decor) {
         if (view.isShown && scrollsVertically(view) && visibleEnough(view)) return view
@@ -631,7 +665,7 @@ class CindyHandheldModule : Module() {
       var best: View? = null
       var bestArea = 0
       fun walk(candidate: View) {
-        if (!candidate.isShown) return
+        if (!candidate.isShown || candidate.alpha <= 0.01f) return
         if (scrollsVertically(candidate) && visibleEnough(candidate)) {
           val area = rect.width() * rect.height()
           if (area > bestArea) {

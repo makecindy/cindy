@@ -362,6 +362,7 @@
     "title": "Modo console portátil",
     "hint": "Use o Cindy só com o controle: o direcional ou o analógico esquerdo movem o foco, A seleciona e B volta.",
     "saveFailed": "Não foi possível salvar esta configuração. Ela continua valendo até você fechar o Cindy.",
+    "reset": "Restaurar padrão",
     "voiceKey": {
       "title": "Tecla de voz",
       "hint": "Segure esta tecla para falar e solte para parar. O texto fica na caixa de mensagem. Na tela inicial, segurar a tecla abre uma tarefa nova. Se você escolher A, B, L1 ou R1, esse botão deixa de fazer a função de sempre.",

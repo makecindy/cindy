@@ -362,6 +362,7 @@
     "title": "Handheld mode",
     "hint": "Use Cindy with just the controller: the D-pad or left stick moves focus, A selects and B goes back.",
     "saveFailed": "Couldn't save this setting. It stays in effect until Cindy closes.",
+    "reset": "Reset to default",
     "voiceKey": {
       "title": "Voice key",
       "hint": "Hold this key to talk and release it to stop. Your words stay in the message box. Holding it on the home screen starts a new task. Choosing A, B, L1 or R1 replaces what that button normally does.",

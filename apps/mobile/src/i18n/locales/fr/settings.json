@@ -362,6 +362,7 @@
     "title": "Mode console portable",
     "hint": "Utilisez Cindy uniquement à la manette : la croix directionnelle ou le stick gauche déplacent le focus, A valide et B revient en arrière.",
     "saveFailed": "Impossible d'enregistrer ce réglage. Il reste actif jusqu'à la fermeture de Cindy.",
+    "reset": "Réinitialiser",
     "voiceKey": {
       "title": "Touche vocale",
       "hint": "Maintenez cette touche pour parler et relâchez-la pour arrêter. Le texte reste dans la zone de message. Sur l'écran d'accueil, un appui long ouvre une nouvelle tâche. Si vous choisissez A, B, L1 ou R1, ce bouton perd sa fonction habituelle.",

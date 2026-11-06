@@ -12,6 +12,7 @@ import {
   HANDHELD_VOICE_KEY_OPTIONS,
   handheldKeyLabel,
   isHandheldModeSupported,
+  resetHandheldSettings,
   updateHandheldSettings,
   useHandheldSettings,
   type HandheldModeSettings,
@@ -152,6 +153,19 @@ export default function HandheldSettingsScreen() {
             <InfoRow key="scroll" label={t('settings.handheld.controls.scrollKeys')} value={t('settings.handheld.controls.scroll')} />,
             <InfoRow key="page" label="L1 / R1" value={t('settings.handheld.controls.page')} />,
           ]}
+        </SettingsGroup>
+        <SettingsGroup>
+          <ActionInfoRow
+            accessibilityLabel={t('settings.handheld.reset')}
+            chevron={false}
+            disabled={!supported || !hydrated}
+            label={t('settings.handheld.reset')}
+            onPress={() => {
+              stopCapture();
+              void resetHandheldSettings().catch(() => Alert.alert(t('settings.handheld.saveFailed')));
+            }}
+            testID="settings.handheld.reset"
+          />
         </SettingsGroup>
       </ScrollView>
     </SafeAreaView>

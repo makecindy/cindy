@@ -3306,7 +3306,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         void finishVoiceRecording();
         return;
       }
-      if (voiceStartupInFlightRef.current) handheldStopAfterStartRef.current = true;
+      if (voicePermissionRequestInFlightRef.current || voiceStartupInFlightRef.current) {
+        handheldStopAfterStartRef.current = true;
+      }
     },
   });
   useEffect(() => {

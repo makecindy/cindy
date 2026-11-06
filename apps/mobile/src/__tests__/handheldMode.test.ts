@@ -16,6 +16,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
       if (storage.failWrite) throw new Error('disk full');
       storage.value = value;
     }),
+    removeItem: vi.fn(async () => { storage.value = null; }),
   },
 }));
 
@@ -27,6 +28,7 @@ import {
   hydrateHandheldSettings,
   parseHandheldSettings,
   registerHandheldVoiceKeyHandler,
+  resetHandheldSettings,
   resetHandheldVoiceKeyForTests,
   updateHandheldSettings,
 } from '@/handheld/handheldMode';
@@ -70,7 +72,16 @@ describe('handheld settings', () => {
       settings: { enabled: true, voiceKeyCode: 188, voiceKeyName: '1', useSecondaryDisplay: true },
     });
     await updateHandheldSettings({ voiceKeyCode: 100 });
-    expect(JSON.parse(storage.value!)).toEqual({ enabled: true, voiceKeyCode: 100, useSecondaryDisplay: true });
+    expect(JSON.parse(storage.value!)).toEqual({ enabled: true, voiceKeyCode: 100 });
+  });
+
+  it('persists only explicit choices and deletes them when restoring defaults', async () => {
+    await hydrateHandheldSettings();
+    await updateHandheldSettings({ enabled: true });
+    expect(JSON.parse(storage.value!)).toEqual({ enabled: true });
+    await resetHandheldSettings();
+    expect(storage.value).toBeNull();
+    expect(getHandheldSettingsSnapshot().settings).toEqual(DEFAULT_HANDHELD_SETTINGS);
   });
 
   it('keeps the new choice in memory when saving fails', async () => {
@@ -110,8 +121,30 @@ describe('handheld voice key dispatch', () => {
     unregisterHome();
     registerHandheldVoiceKeyHandler(newTask.handler);
     dispatchHandheldVoiceKey('end');
-    expect(home.calls).toEqual(['start']);
+    expect(home.calls).toEqual(['start', 'end']);
     expect(newTask.calls).toEqual(['start', 'end']);
+  });
+
+  it('stops recording when its page blurs even if no new voice page takes over', () => {
+    const page = recorder();
+    const unregister = registerHandheldVoiceKeyHandler(page.handler);
+    dispatchHandheldVoiceKey('start');
+    unregister();
+    expect(page.calls).toEqual(['start', 'end']);
+    dispatchHandheldVoiceKey('end');
+    expect(page.calls).toEqual(['start', 'end']);
+  });
+
+  it('ends the previous recording if the next page focuses before the old page blurs', () => {
+    const first = recorder();
+    const next = recorder();
+    const unregister = registerHandheldVoiceKeyHandler(first.handler);
+    dispatchHandheldVoiceKey('start');
+    registerHandheldVoiceKeyHandler(next.handler);
+    unregister();
+    dispatchHandheldVoiceKey('end');
+    expect(first.calls).toEqual(['start', 'end']);
+    expect(next.calls).toEqual(['start', 'end']);
   });
 
   it('ignores short taps and pages that open after release', () => {

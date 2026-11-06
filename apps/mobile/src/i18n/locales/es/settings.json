@@ -362,6 +362,7 @@
     "title": "Modo portátil",
     "hint": "Usa Cindy solo con el mando: la cruceta o el stick izquierdo mueven el foco, A selecciona y B vuelve atrás.",
     "saveFailed": "No se pudo guardar este ajuste. Seguirá activo hasta que cierres Cindy.",
+    "reset": "Restablecer los valores predeterminados",
     "voiceKey": {
       "title": "Tecla de voz",
       "hint": "Mantén pulsada esta tecla para hablar y suéltala para parar. El texto se queda en el cuadro de mensaje. Si la mantienes pulsada en la pantalla de inicio, se abre una tarea nueva. Si eliges A, B, L1 o R1, ese botón deja de hacer su función habitual.",

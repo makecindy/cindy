@@ -94,28 +94,34 @@ export function isHandheldModeSupported(): boolean {
   return Platform.OS === 'android' && !!cindyHandheld?.available;
 }
 
-export function parseHandheldSettings(raw: string | null): HandheldModeSettings {
-  if (!raw) return DEFAULT_HANDHELD_SETTINGS;
+function parseHandheldOverrides(raw: string | null): Partial<HandheldModeSettings> {
+  if (!raw) return {};
   try {
-    const value = JSON.parse(raw) as Partial<HandheldModeSettings>;
-    const voiceKeyCode = typeof value.voiceKeyCode === 'number' && Number.isInteger(value.voiceKeyCode) && value.voiceKeyCode > 0
-      ? value.voiceKeyCode
-      : DEFAULT_HANDHELD_VOICE_KEY;
+    const value: unknown = JSON.parse(raw);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    const fields = value as Partial<HandheldModeSettings>;
+    const hasVoiceKey = typeof fields.voiceKeyCode === 'number' && Number.isInteger(fields.voiceKeyCode) && fields.voiceKeyCode > 0;
     return {
-      enabled: value.enabled === true,
-      voiceKeyCode,
-      ...(typeof value.voiceKeyName === 'string' && value.voiceKeyName ? { voiceKeyName: value.voiceKeyName } : {}),
-      useSecondaryDisplay: value.useSecondaryDisplay !== false,
+      ...(typeof fields.enabled === 'boolean' ? { enabled: fields.enabled } : {}),
+      ...(hasVoiceKey ? { voiceKeyCode: fields.voiceKeyCode } : {}),
+      ...(hasVoiceKey && typeof fields.voiceKeyName === 'string' && fields.voiceKeyName ? { voiceKeyName: fields.voiceKeyName } : {}),
+      ...(typeof fields.useSecondaryDisplay === 'boolean' ? { useSecondaryDisplay: fields.useSecondaryDisplay } : {}),
     };
   } catch {
-    return DEFAULT_HANDHELD_SETTINGS;
+    return {};
   }
+}
+
+export function parseHandheldSettings(raw: string | null): HandheldModeSettings {
+  return { ...DEFAULT_HANDHELD_SETTINGS, ...parseHandheldOverrides(raw) };
 }
 
 type SettingsSnapshot = { hydrated: boolean; settings: HandheldModeSettings };
 
 let snapshot: SettingsSnapshot = { hydrated: false, settings: DEFAULT_HANDHELD_SETTINGS };
+let overrides: Partial<HandheldModeSettings> = {};
 let hydration: Promise<void> | null = null;
+let settingsWriteQueue: Promise<void> = Promise.resolve();
 const settingsListeners = new Set<() => void>();
 
 function emitSettings(next: SettingsSnapshot) {
@@ -137,7 +143,10 @@ export function hydrateHandheldSettings(): Promise<void> {
   hydration ??= AsyncStorage.getItem(STORAGE_KEY)
     .then((raw) => {
       // 读取期间用户已改过设置时以用户这次的为准。
-      if (!snapshot.hydrated) emitSettings({ hydrated: true, settings: parseHandheldSettings(raw) });
+      if (!snapshot.hydrated) {
+        overrides = parseHandheldOverrides(raw);
+        emitSettings({ hydrated: true, settings: { ...DEFAULT_HANDHELD_SETTINGS, ...overrides } });
+      }
     })
     .catch(() => {
       if (!snapshot.hydrated) emitSettings({ hydrated: true, settings: DEFAULT_HANDHELD_SETTINGS });
@@ -147,10 +156,20 @@ export function hydrateHandheldSettings(): Promise<void> {
 
 /** 立即生效并落盘;写盘失败抛给调用方提示,内存里的选择保持(本次运行仍有效)。 */
 export async function updateHandheldSettings(patch: Partial<HandheldModeSettings>): Promise<void> {
-  const settings = { ...snapshot.settings, ...patch };
-  if (patch.voiceKeyCode !== undefined && patch.voiceKeyName === undefined) delete settings.voiceKeyName;
-  emitSettings({ hydrated: true, settings });
-  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+  overrides = { ...overrides, ...patch };
+  if (patch.voiceKeyCode !== undefined && patch.voiceKeyName === undefined) delete overrides.voiceKeyName;
+  emitSettings({ hydrated: true, settings: { ...DEFAULT_HANDHELD_SETTINGS, ...overrides } });
+  const serialized = JSON.stringify(overrides);
+  settingsWriteQueue = settingsWriteQueue.catch(() => undefined).then(() => AsyncStorage.setItem(STORAGE_KEY, serialized));
+  await settingsWriteQueue;
+}
+
+/** 删除自定义值,后续版本可以继续演进默认设置。 */
+export async function resetHandheldSettings(): Promise<void> {
+  overrides = {};
+  emitSettings({ hydrated: true, settings: DEFAULT_HANDHELD_SETTINGS });
+  settingsWriteQueue = settingsWriteQueue.catch(() => undefined).then(() => AsyncStorage.removeItem(STORAGE_KEY));
+  await settingsWriteQueue;
 }
 
 export function useHandheldSettings(): SettingsSnapshot {
@@ -174,13 +193,19 @@ let voiceOwner: HandheldVoiceKeyHandler | null = null;
 export function registerHandheldVoiceKeyHandler(handler: HandheldVoiceKeyHandler): () => void {
   voiceHandlers.push(handler);
   if (voiceHeld && voiceOwner !== handler) {
+    const previous = voiceOwner;
+    voiceOwner = null;
+    previous?.end();
     voiceOwner = handler;
     handler.start();
   }
   return () => {
     const index = voiceHandlers.lastIndexOf(handler);
     if (index >= 0) voiceHandlers.splice(index, 1);
-    if (voiceOwner === handler) voiceOwner = null;
+    if (voiceOwner === handler) {
+      voiceOwner = null;
+      handler.end();
+    }
   };
 }
 
@@ -218,5 +243,7 @@ export function resetHandheldVoiceKeyForTests(): void {
   voiceHeld = false;
   voiceOwner = null;
   snapshot = { hydrated: false, settings: DEFAULT_HANDHELD_SETTINGS };
+  overrides = {};
   hydration = null;
+  settingsWriteQueue = Promise.resolve();
 }

@@ -362,6 +362,7 @@
     "title": "Modo consola portátil",
     "hint": "Use o Cindy só com o comando: a cruz direcional ou o manípulo esquerdo movem o foco, A seleciona e B volta atrás.",
     "saveFailed": "Não foi possível guardar esta definição. Fica ativa até fechar o Cindy.",
+    "reset": "Repor predefinição",
     "voiceKey": {
       "title": "Tecla de voz",
       "hint": "Mantenha premida esta tecla para falar e solte-a para parar. O texto fica na caixa de mensagem. No ecrã inicial, manter premida abre uma tarefa nova. Se escolher A, B, L1 ou R1, esse botão deixa de ter a função habitual.",

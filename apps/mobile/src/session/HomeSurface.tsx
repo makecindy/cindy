@@ -2625,7 +2625,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   useHandheldVoiceKey({
     start: () => openNewSession(),
     end: () => undefined,
-  });
+  }, active && !embedded);
 
   const openSuggestedSession = useCallback((suggestion?: RemoteTaskSuggestionId) => {
     openNewSession(undefined, suggestion, taskSuggestionsDeviceId);

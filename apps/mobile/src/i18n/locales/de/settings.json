@@ -362,6 +362,7 @@
     "title": "Handheld-Modus",
     "hint": "Bediene Cindy nur mit dem Controller: Steuerkreuz oder linker Stick bewegen den Fokus, A wählt aus, B geht zurück.",
     "saveFailed": "Die Einstellung konnte nicht gespeichert werden. Sie gilt, bis du Cindy schließt.",
+    "reset": "Auf Standard zurücksetzen",
     "voiceKey": {
       "title": "Sprachtaste",
       "hint": "Halte diese Taste gedrückt, um zu sprechen, und lass sie los, um aufzuhören. Der Text bleibt im Eingabefeld. Auf dem Startbildschirm startet langes Drücken eine neue Aufgabe. Wenn du A, B, L1 oder R1 wählst, verliert diese Taste ihre übliche Funktion.",
