@@ -66,7 +66,7 @@ import {
   matchesKeyboardEvent,
   SWITCH_SESSION_SHORTCUT_IDS,
 } from '../../../shared/appShortcuts';
-import { WORKLOUDER_CODEX_AGENT_SLOT_COUNT } from '../../../shared/workLouderCodex';
+import { WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT } from '../../../shared/workLouderCodex';
 import { setSessionOrdinalBadges } from './sidebar/sessionOrdinalBadges';
 import { useOwnTopNavScrollableRows, useSidebarCollapsedState } from '../feature-context';
 import { SidebarRailNavigation, SidebarTopNav } from '@/components/sidebar/SidebarTopNav';
@@ -674,9 +674,21 @@ export function CCAgentSidebarUpper() {
     const catalogSessionIds = new Set(catalogSessions.map((session) => session.id));
     const visibleProjection = visibleSessionsWithRemote
       .filter((session) => !catalogSessionIds.has(session.id))
-      .slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
+      .slice(0, WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT);
     const remainingCatalogSlots = Math.max(0, 100 - visibleProjection.length);
-    const tasks = [...visibleProjection, ...catalogSessions.slice(0, remainingCatalogSlots)].map(
+    const remoteCount = catalogSessions.filter((session) => session.deviceLinkDeviceId).length;
+    const localQuota = remainingCatalogSlots - Math.min(remoteCount, 36);
+    const visibleLocal = new Set(
+      catalogSessions.filter(
+        (session) => !session.deviceLinkDeviceId && (sidebarOrder.get(session.id) ?? 13) < 13,
+      ),
+    );
+    let remainingLocalSlots = localQuota - visibleLocal.size;
+    const publishedCatalog = catalogSessions.filter(
+      (session) =>
+        session.deviceLinkDeviceId || visibleLocal.has(session) || remainingLocalSlots-- > 0,
+    );
+    const tasks = [...visibleProjection, ...publishedCatalog.slice(0, remainingCatalogSlots)].map(
       (session) => {
         const pinnedAtMs = session.pinnedAt ? Date.parse(session.pinnedAt) : Number.NaN;
         const userSendAtMs = session.userSendAt ? Date.parse(session.userSendAt) : Number.NaN;
