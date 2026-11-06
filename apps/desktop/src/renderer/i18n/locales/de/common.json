@@ -163,7 +163,7 @@
   "taskActionConfirmation": {
     "title": "Sitzungsaktion bestätigen",
     "once": "Prüfe unten das Ziel, die Aktion und den vollständigen Inhalt. Die Erlaubnis gilt einmalig für diese Aktion.",
-    "remove": "Dadurch wird eine Automatisierung gelöscht. Prüfe das Ziel; die Genehmigung gilt nur einmal.",
+    "remove": "Die Empfangsadresse der Automatisierung wird freigegeben. Prüfe das Ziel; die Zustimmung gilt nur für diese Aktion.",
     "permission": "Dadurch wird in deinem Namen eine Berechtigungsanfrage in einer anderen Aufgabe beantwortet. Prüfe die Aktion; die Genehmigung gilt nur einmal.",
     "resume": "Dadurch wird eine pausierte Ausführung fortgesetzt. Prüfe das Ziel; die Genehmigung gilt nur einmal.",
     "command": "Dadurch wird ein Befehl auf deinem Computer außerhalb der Tool-Genehmigung des Agent gespeichert oder ausgeführt. Prüfe den Befehl und den Arbeitsordner; die Genehmigung gilt nur einmal.",
@@ -1109,6 +1109,14 @@
     "detail": "Dadurch wird die Fernsteuerung beendet und der Bildschirm dieses Computers wiederhergestellt. Der Computer wird gesperrt, wenn die Sperre beim Beenden aktiviert ist.",
     "cancel": "Verbunden bleiben",
     "disconnect": "Trennen"
+  },
+  "awayGuard": {
+    "status": "Cindy arbeitet",
+    "hint": "Drücke eine Taste zum Sperren und entsperre dann mit Touch ID oder deinem Passwort.",
+    "lockFailed": {
+      "status": "Cindy konnte diesen Mac nicht sperren",
+      "hint": "Drücke Control-Command-Q zum Sperren. Nach einer Weile sperrt sich der Bildschirm auch von selbst."
+    }
   },
   "appBadge": {
     "attentionCount": "Aufgaben, die Aufmerksamkeit benötigen: {{count}}"
@@ -2119,6 +2127,17 @@
     "appearance": {
       "title": "Darstellung",
       "modeLabel": "Darstellung",
+      "appIcon": {
+        "label": "Dock-Symbol",
+        "description": "Wähle das Symbol, das die App im Dock verwendet",
+        "saveFailed": "Das Dock-Symbol konnte nicht gespeichert werden. Bitte versuche es erneut.",
+        "options": {
+          "default": "Standard",
+          "cat": "Schwarze Katze",
+          "wordmark": "Cindy-Wortmarke",
+          "mark": "Cindy-Symbol"
+        }
+      },
       "sidebarAndPanels": "Seitenleiste und Bereiche",
       "themeLabel": "Design",
       "themeAriaLabel": "Designauswahl",
@@ -2376,7 +2395,24 @@
       "swallowActivationClickLabel": "Versehentliche Klicks bei der Rückkehr verhindern",
       "swallowActivationClickHint": "Wenn diese Option aktiviert ist, wird ein Linksklick auf ein Hintergrundfenster nur angezeigt, um es nach vorne zu bringen. Wenn es deaktiviert ist, wirkt es sich auch auf das angeklickte Element aus, was zu versehentlichen Klicks führen kann.",
       "swallowActivationClickAria": "Schutz vor versehentlichen Klicks bei der Rückkehr zum Fenster ein-/ausschalten",
-      "macRestartNote": "Starte unter macOS die App neu, damit die Änderungen wirksam werden."
+      "macRestartNote": "Starte unter macOS die App neu, damit die Änderungen wirksam werden.",
+      "awayGuard": {
+        "label": "Weiterarbeiten, während du weg bist",
+        "hint": "Wenn aktiviert, schaltet dieser Mac den Bildschirm nicht mehr von selbst aus und sperrt sich nicht, damit die KI ihn jederzeit nutzen kann. Bist du eine Weile weg, verdeckt eine schwarze Abdeckung den Bildschirm und die KI arbeitet dahinter weiter. Ein Tastendruck oder Klick sperrt ihn sofort; entsperre ihn mit Touch ID oder deinem Passwort.",
+        "permission": "Erlaube Cindy unter Systemeinstellungen > Datenschutz & Sicherheit > Bedienungshilfen, damit der Bildschirm sofort gesperrt wird, wenn jemand diesen Mac berührt. Bis dahin geht der Bildschirm wie gewohnt in den Ruhezustand und wird gesperrt.",
+        "preview": "Jetzt ausprobieren",
+        "previewStarting": "Nimm die Hände von Maus und Tastatur. In 3 Sekunden wird der Bildschirm verdeckt; drücke eine Taste, um ihn zu sperren, und entsperre ihn dann.",
+        "previewUnavailable": "Der Bildschirm konnte nicht verdeckt werden. Starte Cindy neu und versuche es erneut.",
+        "delay": {
+          "label": "Bildschirm verdecken nach",
+          "hint": "So lange bleiben Tastatur und Maus unberührt, bevor die Abdeckung erscheint. Standardmäßig wie der Ruhezustand des Displays.",
+          "30": "30 s",
+          "60": "1 Min.",
+          "120": "2 Min.",
+          "300": "5 Min.",
+          "system": "System"
+        }
+      }
     },
     "agentIsland": {
       "title": "Agent Island",
@@ -3957,6 +3993,8 @@
         "disabledGroup": "Deaktiviert",
         "enableAllModels": "Alle aktivieren",
         "priceOverride": {
+          "resetShort": "Zurücksetzen",
+          "referenceDetails": "Referenzpreisdetails",
           "menu": "API-Preisschätzung bearbeiten",
           "title": "API-Preisschätzung für {{model}}",
           "description": "Dient nur zur Schätzung der Nutzung über deine eigene API oder dein Abonnement. Die Rechnung des Anbieters wird dadurch nicht geändert.",
@@ -5123,7 +5161,7 @@
         "ariaLabel": "Zweites Ersatz-Hilfsmodell auswählen"
       },
       "emptySlot": "Nicht ausgewählt",
-      "customHint": "Die Modelle werden in deiner gewählten Reihenfolge ausprobiert und dienen auch als Ersatz für die automatische Überprüfung, wenn deren integrierte Modelle nicht verfügbar sind. Ausgewählte Anbieter erhalten den Überprüfungskontext: Nachrichten und Referenzen, Aufgaben- und Aktionsdetails (einschließlich blockierter Aktionen), Identität und Berechtigungen, Dateipfade und Betriebssystem.",
+      "customHint": "Die Modelle werden in deiner gewählten Reihenfolge ausprobiert und dienen auch als Ersatz für die automatische Überprüfung, wenn deren integrierte Modelle nicht verfügbar sind. Ausgewählte Anbieter erhalten den Überprüfungskontext: Nachrichten und Referenzen, öffentliche Texte des Agent (nur als Referenz), Aufgaben- und Aktionsdetails (einschließlich blockierter Aktionen), Identität und Berechtigungen, Dateipfade und Betriebssystem.",
       "signInHint": "Melde dich bei Cindy an, um die automatischen Empfehlungen zu nutzen. Wenn du nicht angemeldet bist, wähle unter „Benutzerdefiniert“ ein konfiguriertes Modell eines anderen Anbieters aus.",
       "chooseAgent": "Agent auswählen",
       "backToAgents": "Zurück zur Agent-Auswahl",
@@ -13978,7 +14016,11 @@
       "mailAttach": "Anhang hinzufügen",
       "mailRemoveAttachment": "{{name}} entfernen",
       "mailUpdated": "Entwurf aktualisiert (schreibgeschützt)",
-      "mailLegacy": "Entwurfsverlauf (schreibgeschützt)"
+      "mailLegacy": "Entwurfsverlauf (schreibgeschützt)",
+      "taskAutoArchived": "„{{title}}“ archiviert",
+      "taskAutoArchivedUndo": "Rückgängig",
+      "taskAutoArchivePending": "Wird beim Verlassen archiviert",
+      "taskAutoArchiveCancel": "Diesmal behalten"
     },
     "ghostHook": {
       "blockedFallback": "Nachricht von einem Plugin blockiert; nicht gesendet",
@@ -14014,6 +14056,8 @@
       "updateHost": "Aktualisiere den Computer, auf dem diese Aufgabe läuft, um einen Nebenchat zu öffnen.",
       "failed": "Der Nebenchat konnte nicht geöffnet werden. Versuch es erneut.",
       "mainTaskOnly": "Öffne einen Nebenchat aus der Hauptaufgabe.",
+      "sharedTaskUnavailable": "Nebenchats sind in geteilten Aufgaben nicht verfügbar.",
+      "archivedTask": "Hebe die Archivierung dieser Aufgabe auf, um einen Nebenchat zu öffnen.",
       "closeTitle": "Nebenchat schließen?",
       "closeDescription": "Diese Folgeunterhaltung wird beendet und ihr Verlauf gelöscht. Die Hauptaufgabe läuft weiter.",
       "closeConfirm": "Schließen und löschen",
@@ -19170,6 +19214,9 @@
     "pendingApprovals": "{{count}} ausstehende Genehmigungen"
   },
   "richAnswer": {
+    "invalidImageReference": "Dieser Bildverweis ist ungültig.",
+    "requestImageAgain": "Erneute Anzeige anfordern",
+    "requestImageAgainMessage": "Zeige dieses vorhandene Bild erneut an ({{name}}, Verweis: {{source}}). Prüfe das ursprüngliche Werkzeugergebnis oder die Datei und verwende die tatsächliche Adresse. Erzeuge kein neues Bild; frage mich zuerst, falls du das Bild nicht eindeutig zuordnen kannst.",
     "send": "Nachricht senden",
     "sending": "Wird gesendet…",
     "sent": "Eingereicht",

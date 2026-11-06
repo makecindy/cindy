@@ -165,7 +165,7 @@
   "taskActionConfirmation": {
     "title": "Confirmar acción de sesión",
     "once": "Revise el objetivo, la acción y el contenido completo a continuación. Permitir se aplica a esta acción una vez.",
-    "remove": "Esto elimina la automatización. Revisar el objetivo; la aprobación se aplica sólo una vez.",
+    "remove": "Se liberará la dirección de recepción de la automatización. Revisa el destino; la autorización solo se aplica a esta acción.",
     "permission": "Esto responde a una solicitud de permiso en otra tarea en su nombre. Revisar la acción; la aprobación se aplica sólo una vez.",
     "resume": "Esto reanuda la ejecución pausada. Revisar el objetivo; la aprobación se aplica sólo una vez.",
     "command": "Esto guarda o ejecuta un comando en tu computadora fuera de la aprobación de herramientas del Agent. Revisa el comando y la carpeta de trabajo. La autorización es válida una sola vez.",
@@ -1126,6 +1126,14 @@
     "detail": "Esto finalizará el control remoto y restaurará la pantalla de esta computadora. La computadora se bloqueará si el bloqueo al salir está habilitado.",
     "cancel": "Mantente conectado",
     "disconnect": "Desconectar"
+  },
+  "awayGuard": {
+    "status": "Cindy está trabajando",
+    "hint": "Pulsa cualquier tecla para bloquear y desbloquea con Touch ID o tu contraseña.",
+    "lockFailed": {
+      "status": "Cindy no pudo bloquear esta Mac",
+      "hint": "Pulsa Control-Comando-Q para bloquearla. La pantalla también se bloqueará sola al cabo de un rato."
+    }
   },
   "appBadge": {
     "attentionCount": "Tareas que requieren atención: {{count}}"
@@ -2154,6 +2162,17 @@
     "appearance": {
       "title": "Apariencia",
       "modeLabel": "Modo de apariencia",
+      "appIcon": {
+        "label": "Icono del Dock",
+        "description": "Elige el icono que usa la app en el Dock",
+        "saveFailed": "No se pudo guardar el icono del Dock. Inténtalo de nuevo.",
+        "options": {
+          "default": "Predeterminado",
+          "cat": "Gato negro",
+          "wordmark": "Logotipo de Cindy",
+          "mark": "Símbolo de Cindy"
+        }
+      },
       "sidebarAndPanels": "Barra lateral y paneles",
       "themeLabel": "Tema",
       "themeAriaLabel": "Selección de tema",
@@ -2411,7 +2430,24 @@
       "swallowActivationClickLabel": "Evite clics accidentales al regresar",
       "swallowActivationClickHint": "Cuando está habilitado, un clic izquierdo en una ventana de fondo solo la hace avanzar. Cuando está deshabilitado, también actúa sobre el elemento en el que se hace clic, lo que puede provocar clics accidentales.",
       "swallowActivationClickAria": "Alternar protección contra clics accidentales al regresar a la ventana",
-      "macRestartNote": "En macOS, reinicie la aplicación para que los cambios surtan efecto."
+      "macRestartNote": "En macOS, reinicie la aplicación para que los cambios surtan efecto.",
+      "awayGuard": {
+        "label": "Seguir trabajando mientras no estás",
+        "hint": "Cuando está activado, esta Mac no apaga la pantalla ni se bloquea por sí sola, así la IA puede usarla en cualquier momento. Cuando llevas un rato fuera, una capa negra cubre la pantalla y la IA sigue trabajando detrás. Al pulsar una tecla o hacer clic se bloquea al instante; desbloquéala con Touch ID o tu contraseña.",
+        "permission": "Permite a Cindy en Ajustes del Sistema > Privacidad y seguridad > Accesibilidad para que pueda bloquear la pantalla en cuanto alguien toque esta Mac. Hasta entonces, la pantalla se apaga y se bloquea como siempre.",
+        "preview": "Probar ahora",
+        "previewStarting": "Suelta el mouse y el teclado. La pantalla se cubrirá en 3 segundos; pulsa cualquier tecla para bloquearla y luego desbloquéala.",
+        "previewUnavailable": "No se pudo cubrir la pantalla. Reinicia Cindy e inténtalo de nuevo.",
+        "delay": {
+          "label": "Cubrir la pantalla tras",
+          "hint": "Tiempo sin tocar el teclado ni el mouse antes de que aparezca la capa. Por omisión, el mismo que el reposo de la pantalla.",
+          "30": "30 s",
+          "60": "1 min",
+          "120": "2 min",
+          "300": "5 min",
+          "system": "Sistema"
+        }
+      }
     },
     "agentIsland": {
       "title": "Isla Agent",
@@ -4008,6 +4044,8 @@
         "disabledGroup": "Desactivado",
         "enableAllModels": "Habilitar todo",
         "priceOverride": {
+          "resetShort": "Restablecer",
+          "referenceDetails": "Detalles del precio de referencia",
           "menu": "Editar estimación de precio API",
           "title": "Precio estimado de {{model}} API",
           "description": "Se utiliza únicamente para estimar el uso en su propio API o ruta de suscripción. Esto no cambia la factura del proveedor.",
@@ -5178,7 +5216,7 @@
         "ariaLabel": "Elegir el segundo modelo auxiliar alternativo"
       },
       "emptySlot": "No seleccionado",
-      "customHint": "Los modelos se prueban en el orden elegido y también sirven como alternativa para la revisión automática cuando sus modelos integrados no están disponibles. Los proveedores seleccionados reciben el contexto de revisión: mensajes y referencias, detalles de tareas y acciones (incluidas las bloqueadas), identidad y permisos, rutas de archivos y sistema operativo.",
+      "customHint": "Los modelos se prueban en el orden elegido y también sirven como alternativa para la revisión automática cuando sus modelos integrados no están disponibles. Los proveedores seleccionados reciben el contexto de revisión: mensajes y referencias, texto público del Agent (solo como referencia), detalles de tareas y acciones (incluidas las bloqueadas), identidad y permisos, rutas de archivos y sistema operativo.",
       "signInHint": "Inicie sesión en Cindy para utilizar las recomendaciones automáticas. Mientras no haya iniciado sesión, elija un modelo configurado de otro proveedor en Personalizado.",
       "chooseAgent": "Elija un Agent",
       "backToAgents": "Volver a la selección Agent",
@@ -14106,7 +14144,11 @@
       "mailAttach": "Agregar archivo adjunto",
       "mailRemoveAttachment": "Quitar {{name}}",
       "mailUpdated": "Borrador actualizado (solo lectura)",
-      "mailLegacy": "Historial de borradores (solo lectura)"
+      "mailLegacy": "Historial de borradores (solo lectura)",
+      "taskAutoArchived": "Se archivó «{{title}}»",
+      "taskAutoArchivedUndo": "Deshacer",
+      "taskAutoArchivePending": "Se archiva al salir",
+      "taskAutoArchiveCancel": "Conservar esta vez"
     },
     "ghostHook": {
       "blockedFallback": "Mensaje bloqueado por un complemento; no se envió",
@@ -14142,6 +14184,8 @@
       "updateHost": "Actualiza la computadora que ejecuta esta tarea para abrir un chat secundario.",
       "failed": "No se pudo abrir el chat secundario. Inténtalo de nuevo.",
       "mainTaskOnly": "Abre un chat secundario desde la tarea principal.",
+      "sharedTaskUnavailable": "Los chats secundarios no están disponibles en tareas compartidas.",
+      "archivedTask": "Desarchiva esta tarea para abrir un chat secundario.",
       "closeTitle": "¿Cerrar el chat secundario?",
       "closeDescription": "Este seguimiento se detendrá y su historial se eliminará. La tarea principal seguirá ejecutándose.",
       "closeConfirm": "Cerrar y eliminar",
@@ -19341,6 +19385,9 @@
     "pendingApprovals": "{{count}} aprobaciones pendientes"
   },
   "richAnswer": {
+    "invalidImageReference": "La referencia de esta imagen no es válida.",
+    "requestImageAgain": "Pedir que se muestre de nuevo",
+    "requestImageAgainMessage": "Vuelve a mostrar esta imagen existente ({{name}}, referencia: {{source}}). Comprueba el resultado original de la herramienta o el archivo y usa su dirección real. No generes otra imagen; pregúntame primero si no puedes identificarla.",
     "send": "Enviar mensaje",
     "sending": "Enviando…",
     "sent": "Enviado",

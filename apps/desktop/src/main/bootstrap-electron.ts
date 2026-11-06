@@ -617,6 +617,13 @@ import {
 import { initHeartbeatService } from './heartbeatService';
 import { markStartupMilestone } from './startupTimeline';
 import { registerRemoteDesktopIpc } from './remote-desktop';
+import { isAwayCoverUp, registerAwayGuardIpc, startAwayGuard } from './remote-desktop/awayGuardService';
+import {
+  isDesktopScreenLocked,
+  seedDesktopScreenLocked,
+  msSinceForeignDesktopInput,
+  setPhysicalInputShielded,
+} from './mcp-integrations/computer.js';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
 import { initPerformanceTraceService } from './performance-trace';
@@ -1065,6 +1072,8 @@ import { CURRENT_APP_ID, CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import {
   readWindowBehaviorSettings,
   writeLinuxCloseBehavior,
+  writeAwayGuard,
+  writeAwayGuardDelay,
   writeSwallowActivationClick,
   writeWindowsCloseBehavior,
 } from './window-behavior-settings-store.js';
@@ -1127,6 +1136,7 @@ import {
   registerAppearanceSettingsIpc,
   updatePersistedWindowZoom,
 } from './appearance-settings-ipc.js';
+import { applyDockIcon } from './app-icon.js';
 import { registerBillingIpc } from './billing/index.js';
 import {
   initModelAccess,
@@ -1135,7 +1145,7 @@ import {
   refreshXdGatewayModels,
 } from './model-access/index.js';
 import { effectiveXdGatewayBaseUrl } from './model-access/effectiveEndpoint.js';
-import { withCindyGatewayKeyRejectionReport } from './model-access/gatewayKeyRejection.js';
+import { withCindyGatewayKeyRejectionReport, noteCindyGatewayKeyReplaced } from './model-access/gatewayKeyRejection.js';
 import { isLocalDbOwnerCurrent } from './appSessionPolicy.js';
 import { getAppCapabilities, requireAppCapability } from './appCapabilities.js';
 import {
@@ -2586,6 +2596,14 @@ registerAppearanceSettingsIpc();
 registerAccessibilitySupportIpc();
 registerLoginItemIpc();
 registerMenubarIpc();
+registerAwayGuardIpc({
+  read: () => {
+    const settings = readWindowBehaviorSettings();
+    return { enabled: settings.awayGuard, delaySeconds: settings.awayGuardDelaySeconds };
+  },
+  writeEnabled: writeAwayGuard,
+  writeDelay: writeAwayGuardDelay,
+});
 
 // ── 资源用量面板 IPC ─────────────────────────────────────────────────
 // 订阅驱动采样(面板不开不采样),interval 已 unref 不拖退出;terminate 只认
@@ -4708,6 +4726,18 @@ const registerIpcHandlers = () => {
     },
   });
   app.once('will-quit', stopMenubarService);
+  // macOS「离开时继续工作」(默认关):开着时本机不因空闲熄屏锁屏;主人离开后盖黑色遮罩,
+  // 本机有人按键/点击即转系统真锁屏。共享 userData 的被动实例不接管本机屏幕。
+  if (!authManager.isPassiveSharedUserDataInstance()) {
+    startAwayGuard({
+      enabled: () => readWindowBehaviorSettings().awayGuard,
+      delaySeconds: () => readWindowBehaviorSettings().awayGuardDelaySeconds,
+      screenLocked: isDesktopScreenLocked,
+      seedScreenLocked: seedDesktopScreenLocked,
+      msSinceOwnerInput: () => msSinceForeignDesktopInput(),
+    });
+    setPhysicalInputShielded(isAwayCoverUp);
+  }
   // 灵动岛余量:与菜单栏同一份余量概览(顺序、显示与隐私设置都跟菜单栏),岛开着时才读取。
   const agentIsland = getAgentIslandService();
   if (agentIsland) app.once('will-quit', startAgentIslandQuota(agentIsland, getQuotaOverviewService()));
@@ -4871,6 +4901,7 @@ const registerIpcHandlers = () => {
       );
     }
     rememberResolvedAppTheme(payload.isDark);
+    applyDockIcon(undefined, payload.isDark);
     applyWindowVibrancy(payload.familyId, payload.isDark);
   });
 
@@ -6029,11 +6060,13 @@ const registerIpcHandlers = () => {
         if (!filepath) return false;
         if (!safeStorage.isEncryptionAvailable()) return false;
         const encrypted = safeStorage.encryptString(value);
+        const keyOwnerScope = key === 'api_key' ? activeOwnerScopeKey() : null;
         const prepareResult = await prepareApiKeyChangeMaybeRestartCodex(key);
         if (!prepareResult.ok) return false;
         const dir = path.dirname(filepath);
         const hadPrevious = fs.existsSync(filepath);
         const previousContent = hadPrevious ? fs.readFileSync(filepath, 'utf-8') : null;
+        const previousXdKey = key === 'api_key' ? getProviderSecretStore().get('xd') : null;
         let mutated = false;
         let finalized = false;
         fs.mkdirSync(dir, { recursive: true });
@@ -6046,6 +6079,9 @@ const registerIpcHandlers = () => {
             // 手填 XD key 保存成功:来源标记翻 manual(endpoint 回落编译期常量,
             // 与 model-access 自动下发的 endpoint 解耦,见 credentialsStore 注释)。
             if (key === 'api_key') {
+              if (activeOwnerScopeKey() === keyOwnerScope) {
+                noteCindyGatewayKeyReplaced(previousXdKey, value);
+              }
               noteManualXdKeySaved();
               notifyProviderKeyChanged('xd');
             }
@@ -9435,20 +9471,9 @@ app.on('ready', async () => {
 
   initializeUpdatePresentationRecovery();
 
-  // mac dev 下 Dock 显示的是 Electron 默认图标——macOS 忽略 BrowserWindow.icon,
-  // Dock 图标取自可执行 bundle 的 icns,而 dev 跑的是 node_modules 里的官方
-  // Electron 二进制。这里 dev-only 手动设成 Cindy 图标;packaged 版由
-  // resources/icon.icns 自然生效,不需要也不该动。
-  // 使用 icon-dock.png（generate-mac-icns.mjs 产出，已套 Apple 圆角网格）；
-  // setIcon 会原样显示资源，不会替应用图标自动加圆角。
-  if (!app.isPackaged && process.platform === 'darwin') {
-    try {
-      app.dock?.setIcon(path.join(__dirname, '../../resources/icon-dock.png'));
-    } catch (err) {
-      // 仅影响 dev Dock 观感,失败不挡启动
-      createLogger('dock-icon').warn('setIcon failed', { error: String(err) });
-    }
-  }
+  // dev 跑的是 node_modules 里的官方 Electron 二进制，Dock 默认显示 Electron 图标；
+  // packaged 版由 icon.icns 生效。这里同时恢复用户在「外观」里选的 Dock 图标。
+  applyDockIcon();
 
   await ensureMainAppPresence('app-ready');
 
