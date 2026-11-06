@@ -77,11 +77,13 @@ import { useDelayedFlag } from './hooks/useDelayedFlag';
 import { DrawioPreview } from './DrawioPreview';
 import { ImagePreview } from './ImagePreview';
 import { PdfPreview } from './PdfPreview';
+import { OfficePreview } from './OfficePreview';
+import { isOfficePreviewSupported } from '@/lib/officePreview';
 import { UnrenderablePlaceholder } from './UnrenderablePlaceholder';
 import { DocSearchBar } from './DocSearchBar';
 import { setActiveFileBodyHandle } from './lib/activeFileBodyHandle';
 import { loadFileScroll, saveFileScroll } from './lib/fileScrollStore';
-import { basename, formatBytes, formatMtime } from './lib/fileMeta';
+import { basename, formatBytes, formatMtime, joinPath } from './lib/fileMeta';
 import { OpenInSystemActions } from './OpenInSystemActions';
 import { isDrawioPath } from './lib/drawioExt';
 import { isImagePath } from './lib/imageExt';
@@ -319,7 +321,8 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
   const isTruncated = content.kind === 'text' && content.truncated;
   // 可编辑条件:文本 + 未截断 + 有 relPath。Truncated 文件保存会把后半段截掉,
   // 直接禁掉编辑入口,避免数据丢失陷阱。
-  const canEdit = allowEdit && relPath !== null && isText && !isTruncated;
+  const canEdit = allowEdit && relPath !== null && isText && !isTruncated &&
+    !isOfficePreviewSupported(relPath);
   // markdown / 其它文本 / 代码文件都走"永远编辑态",
   // 省掉 Pencil/Check 按钮。
   // 这两个 flag 在多个 effect 和 render 分支里共用,统一在这里推一次。
@@ -809,6 +812,21 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     );
   }
 
+  // Some legacy .xls files are XML text. Keep Office routing based on the
+  // original extension, rather than the host's binary/text sniff alone.
+  if (
+    content.kind === 'text' && !remoteHostId && !deviceId &&
+    isOfficePreviewSupported(content.relPath)
+  ) {
+    return (
+      <OfficePreview
+        filePath={joinPath(workdir, content.relPath)}
+        size={content.size}
+        mtimeMs={content.mtimeMs}
+      />
+    );
+  }
+
   if (content.kind === 'binary') {
     if (remoteHostId || deviceId) {
       // remote:ImagePreview / PdfPreview 靠 xdt-file:// 读本机路径,远端文件读
@@ -840,6 +858,16 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
         <PdfPreview
           workdir={workdir}
           relPath={content.stat.relPath}
+          size={content.stat.size}
+          mtimeMs={content.stat.mtimeMs}
+        />
+      );
+    }
+
+    if (isOfficePreviewSupported(content.stat.relPath)) {
+      return (
+        <OfficePreview
+          filePath={joinPath(workdir, content.stat.relPath)}
           size={content.stat.size}
           mtimeMs={content.stat.mtimeMs}
         />
@@ -1267,6 +1295,7 @@ function CachedFileBody({
   const [videoFailed, setVideoFailed] = useState(false);
   const isImg = isImagePath(stat.relPath);
   const isPdf = isPdfPath(stat.relPath);
+  const isOffice = isOfficePreviewSupported(stat.relPath);
   // Chromium 可原生播放的视频容器;其余视频格式落占位卡走系统播放器。
   const isVideo = /\.(mp4|m4v|mov|webm)$/i.test(stat.relPath);
   // 载入缓存副本(读盘 + IPC + 首次渲染)对 30MB 级文本是秒级的,同样走
@@ -1278,7 +1307,7 @@ function CachedFileBody({
     setTextTruncated(false);
     setProbed(false);
     setVideoFailed(false);
-    if (isImg || isPdf || isVideo) return;
+    if (isImg || isPdf || isVideo || isOffice) return;
     let cancelled = false;
     void window.electronAPI.fileBrowser.readCached({ cachePath }).then((res) => {
       if (cancelled) return;
@@ -1291,7 +1320,18 @@ function CachedFileBody({
     return () => {
       cancelled = true;
     };
-  }, [cachePath, isImg, isPdf, isVideo]);
+  }, [cachePath, isImg, isPdf, isVideo, isOffice]);
+
+  if (isOffice) {
+    return (
+      <OfficePreview
+        filePath={cachePath}
+        formatPath={stat.relPath}
+        size={stat.size}
+        mtimeMs={stat.mtimeMs}
+      />
+    );
+  }
 
   if (isImg) {
     return <ImagePreview workdir={cacheDir} relPath={cacheBase} size={stat.size} mtimeMs={stat.mtimeMs} />;

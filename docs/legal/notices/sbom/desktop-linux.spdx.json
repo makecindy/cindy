@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-linux",
-  "documentNamespace": "https://cindy.app/spdx/desktop-linux/0f59dcf2cf824f63c865c31e9efee01c3d5c7b43bb4e638322170d93282a18b7",
+  "documentNamespace": "https://cindy.app/spdx/desktop-linux/15cfe0939b53fe305f38267f5d766c5437cd2c06049bb0a8668fab23afec7c4e",
   "creationInfo": {
-    "created": "2026-10-22T12:27:42Z",
+    "created": "2026-11-03T10:20:23Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -153,8 +153,8 @@
     },
     {
       "name": "pi coding agent (runtime-downloaded binary)",
-      "SPDXID": "SPDXRef-Package-9a414e8a6f3ff55d",
-      "versionInfo": "1.0.2",
+      "SPDXID": "SPDXRef-Package-23c9ac3c9c1b077c",
+      "versionInfo": "1.4.0",
       "downloadLocation": "https://github.com/earendil-works/pi",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -4567,6 +4567,23 @@
       ]
     },
     {
+      "name": "@xmldom/xmldom",
+      "SPDXID": "SPDXRef-Package-0cdd2c0670a6483a",
+      "versionInfo": "0.8.13",
+      "downloadLocation": "https://github.com/xmldom/xmldom",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40xmldom/xmldom@0.8.13"
+        }
+      ]
+    },
+    {
       "name": "@xterm/addon-clipboard",
       "SPDXID": "SPDXRef-Package-8eaddaef2aabf7b6",
       "versionInfo": "0.1.0",
@@ -7117,6 +7134,23 @@
       ]
     },
     {
+      "name": "dingbat-to-unicode",
+      "SPDXID": "SPDXRef-Package-efca996002f6aa95",
+      "versionInfo": "1.0.2",
+      "downloadLocation": "https://github.com/mwilliamson/dingbat-to-unicode",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-2-Clause",
+      "licenseDeclared": "BSD-2-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/dingbat-to-unicode@1.0.2"
+        }
+      ]
+    },
+    {
       "name": "dingtalk-stream",
       "SPDXID": "SPDXRef-Package-90f04b6ed7221e7d",
       "versionInfo": "v2.1.5",
@@ -7249,6 +7283,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/drizzle-orm@0.45.2"
+        }
+      ]
+    },
+    {
+      "name": "duck",
+      "SPDXID": "SPDXRef-Package-78edbdaada1c57b8",
+      "versionInfo": "0.1.12",
+      "downloadLocation": "https://github.com/mwilliamson/duck.js",
+      "filesAnalyzed": false,
+      "licenseConcluded": "LicenseRef-BSD-Variant",
+      "licenseDeclared": "LicenseRef-BSD-Variant",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/duck@0.1.12"
         }
       ]
     },
@@ -7950,6 +8001,23 @@
       ]
     },
     {
+      "name": "fflate",
+      "SPDXID": "SPDXRef-Package-86d9b22de2621615",
+      "versionInfo": "0.8.2",
+      "downloadLocation": "https://github.com/101arrowz/fflate",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/fflate@0.8.2"
+        }
+      ]
+    },
+    {
       "name": "file-uri-to-path",
       "SPDXID": "SPDXRef-Package-1bcc77f420740121",
       "versionInfo": "1.0.0",
@@ -8405,6 +8473,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/get-stream@6.0.1"
+        }
+      ]
+    },
+    {
+      "name": "gifenc",
+      "SPDXID": "SPDXRef-Package-489972220a87f19b",
+      "versionInfo": "1.0.3",
+      "downloadLocation": "https://github.com/mattdesl/gifenc",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/gifenc@1.0.3"
         }
       ]
     },
@@ -10568,6 +10653,23 @@
       ]
     },
     {
+      "name": "lop",
+      "SPDXID": "SPDXRef-Package-57c47aa7cbaf610f",
+      "versionInfo": "0.4.2",
+      "downloadLocation": "https://github.com/mwilliamson/lop",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-2-Clause",
+      "licenseDeclared": "BSD-2-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/lop@0.4.2"
+        }
+      ]
+    },
+    {
       "name": "loudness",
       "SPDXID": "SPDXRef-Package-907648a7d1d857c9",
       "versionInfo": "0.4.2",
@@ -10666,6 +10768,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/make-dir@3.1.0"
+        }
+      ]
+    },
+    {
+      "name": "mammoth",
+      "SPDXID": "SPDXRef-Package-5f6c7f96ed412a69",
+      "versionInfo": "1.13.0",
+      "downloadLocation": "https://github.com/mwilliamson/mammoth.js",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-2-Clause",
+      "licenseDeclared": "BSD-2-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/mammoth@1.13.0"
         }
       ]
     },
@@ -12247,6 +12366,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/openai@6.40.0"
+        }
+      ]
+    },
+    {
+      "name": "option",
+      "SPDXID": "SPDXRef-Package-b72c211d545d03ba",
+      "versionInfo": "0.2.4",
+      "downloadLocation": "https://github.com/mwilliamson/node-options",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-2-Clause",
+      "licenseDeclared": "BSD-2-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/option@0.2.4"
         }
       ]
     },
@@ -15090,6 +15226,23 @@
       ]
     },
     {
+      "name": "underscore",
+      "SPDXID": "SPDXRef-Package-5da95e868b05382d",
+      "versionInfo": "1.13.8",
+      "downloadLocation": "https://github.com/jashkenas/underscore",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/underscore@1.13.8"
+        }
+      ]
+    },
+    {
       "name": "undici",
       "SPDXID": "SPDXRef-Package-ab79753110170e63",
       "versionInfo": "6.27.0",
@@ -15770,6 +15923,23 @@
       ]
     },
     {
+      "name": "xlsx",
+      "SPDXID": "SPDXRef-Package-f56e57f1b63195a8",
+      "versionInfo": "0.20.3",
+      "downloadLocation": "https://git.sheetjs.com/SheetJS/sheetjs",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/xlsx@0.20.3"
+        }
+      ]
+    },
+    {
       "name": "xml",
       "SPDXID": "SPDXRef-Package-952c31231ba66670",
       "versionInfo": "1.0.1",
@@ -15800,6 +15970,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/xml-js@1.6.11"
+        }
+      ]
+    },
+    {
+      "name": "xmlbuilder",
+      "SPDXID": "SPDXRef-Package-807c899c85b4e57b",
+      "versionInfo": "10.1.1",
+      "downloadLocation": "https://github.com/oozcitak/xmlbuilder-js",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/xmlbuilder@10.1.1"
         }
       ]
     },
@@ -16031,7 +16218,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-9a414e8a6f3ff55d"
+      "relatedSpdxElement": "SPDXRef-Package-23c9ac3c9c1b077c"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -17346,6 +17533,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-0cdd2c0670a6483a"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-8eaddaef2aabf7b6"
     },
     {
@@ -18096,6 +18288,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-efca996002f6aa95"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-90f04b6ed7221e7d"
     },
     {
@@ -18132,6 +18329,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-bc6d5248a7fbabed"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-78edbdaada1c57b8"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -18341,6 +18543,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-86d9b22de2621615"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-1bcc77f420740121"
     },
     {
@@ -18472,6 +18679,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-aa8f1bd1b4a702d6"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-489972220a87f19b"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -19111,6 +19323,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-57c47aa7cbaf610f"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-907648a7d1d857c9"
     },
     {
@@ -19137,6 +19354,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-e67f16cb8bd24095"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-5f6c7f96ed412a69"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -19602,6 +19824,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-81506e2125344c89"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-b72c211d545d03ba"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -20441,6 +20668,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-5da95e868b05382d"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-ab79753110170e63"
     },
     {
@@ -20641,12 +20873,22 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-f56e57f1b63195a8"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-952c31231ba66670"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-db9ebd25cef24c8f"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-807c899c85b4e57b"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -20705,7 +20947,7 @@
     },
     {
       "licenseId": "LicenseRef-BSD-Variant",
-      "extractedText": "Copyright (c) 2012-2014, Bram Stein\nAll rights reserved.\n\nRedistribution and use in source and binary forms, with or without\nmodification, are permitted provided that the following conditions\nare met:\n\n 1. Redistributions of source code must retain the above copyright\n    notice, this list of conditions and the following disclaimer.\n 2. Redistributions in binary form must reproduce the above copyright\n    notice, this list of conditions and the following disclaimer in the\n    documentation and/or other materials provided with the distribution.\n 3. The name of the author may not be used to endorse or promote products\n    derived from this software without specific prior written permission.\n\nTHIS SOFTWARE IS PROVIDED BY THE AUTHOR \"AS IS\" AND ANY EXPRESS OR IMPLIED\nWARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF\nMERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO\nEVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,\nINDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,\nBUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,\nDATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY\nOF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING\nNEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,\nEVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE."
+      "extractedText": "### npm:duck@0.1.12\n\nCopyright (c) 2013, Michael Williamson\nAll rights reserved.\n\nRedistribution and use in source and binary forms, with or without\nmodification, are permitted provided that the following conditions are met:\n\n1. Redistributions of source code must retain the above copyright notice, this\n   list of conditions and the following disclaimer.\n2. Redistributions in binary form must reproduce the above copyright notice,\n   this list of conditions and the following disclaimer in the documentation\n   and/or other materials provided with the distribution.\n\nTHIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS \"AS IS\" AND\nANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED\nWARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE\nDISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR\nANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES\n(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;\nLOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND\nON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT\n(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS\nSOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n\n------------------------------------------------------------------------\n\n### npm:url-template@2.0.8\n\nCopyright (c) 2012-2014, Bram Stein\nAll rights reserved.\n\nRedistribution and use in source and binary forms, with or without\nmodification, are permitted provided that the following conditions\nare met:\n\n 1. Redistributions of source code must retain the above copyright\n    notice, this list of conditions and the following disclaimer.\n 2. Redistributions in binary form must reproduce the above copyright\n    notice, this list of conditions and the following disclaimer in the\n    documentation and/or other materials provided with the distribution.\n 3. The name of the author may not be used to endorse or promote products\n    derived from this software without specific prior written permission.\n\nTHIS SOFTWARE IS PROVIDED BY THE AUTHOR \"AS IS\" AND ANY EXPRESS OR IMPLIED\nWARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF\nMERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO\nEVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,\nINDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,\nBUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,\nDATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY\nOF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING\nNEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,\nEVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE."
     }
   ]
 }

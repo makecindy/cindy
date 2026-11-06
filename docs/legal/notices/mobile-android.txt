@@ -1055,7 +1055,7 @@ Apache License
    limitations under the License.
 
 ==============================================================================
-SECTION 2: npm packages (620 packages)
+SECTION 2: npm packages (619 packages)
 ==============================================================================
 
 - @babel/code-frame@7.29.7 — MIT — https://github.com/babel/babel
@@ -1288,7 +1288,6 @@ SECTION 2: npm packages (620 packages)
 - color-name@1.1.4 — MIT — https://github.com/colorjs/color-name
 - color-string@1.9.1 — MIT — https://github.com/Qix-/color-string
 - commander@12.1.0 — MIT — https://github.com/tj/commander.js
-- commander@2.20.3 — MIT — https://github.com/tj/commander.js
 - commander@7.2.0 — MIT — https://github.com/tj/commander.js
 - compressible@2.0.18 — MIT — https://github.com/jshttp/compressible
 - compression@1.8.1 — MIT — https://github.com/expressjs/compression
@@ -4162,7 +4161,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[64] Applies to: npm:commander@12.1.0, npm:commander@2.20.3, npm:commander@7.2.0
+[64] Applies to: npm:commander@12.1.0, npm:commander@7.2.0
 ------------------------------------------------------------------------------
 (The MIT License)
 

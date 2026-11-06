@@ -6,7 +6,7 @@ export default {
   name: 'attachment-preview-frame',
   entry: './preview.tsx',
   viewport: { width: 1280, height: 800 },
-  real: 'TextLightbox, FileLightbox, FileBodyView, UnrenderablePlaceholder, OpenInSystemActions, ImageLightbox, PreviewChrome (floating panel, scrim, header) and MarkdownRenderer',
+  real: 'TextLightbox, FileLightbox, FileBodyView, OfficePreview with real Word/Excel parsers, UnrenderablePlaceholder, OpenInSystemActions, ImageLightbox, PreviewChrome (floating panel, scrim, header) and MarkdownRenderer',
   notCovered:
     'Native traffic lights and Electron drag regions (geometry only), real file reads, Windows window controls, video/model/Mermaid viewers and Mobile; file stat, document text and image bytes are fixture data',
   stubs: {
@@ -19,6 +19,8 @@ export default {
     default: { about: 'A zip that cannot be previewed opens in a compact centered panel over the dimmed conversation' },
     markdown: { about: 'A Markdown document in the same floating panel' },
     image: { about: 'An image in the same floating panel' },
+    word: { about: 'A synthetic Word document parsed by the real browser reader in the standard panel' },
+    excel: { about: 'A synthetic Excel workbook with multiple selectable sheets in the standard panel' },
   },
   async ready(page) {
     await page.waitForFunction(
@@ -26,7 +28,9 @@ export default {
         document.querySelector('[data-preview-scrim]') &&
         ([...document.querySelectorAll('img')].some((i) => i.complete && i.naturalWidth === 1600) ||
           document.body.innerText.includes('核对步骤') ||
-          document.body.innerText.includes('269.4 KB ·')),
+          document.body.innerText.includes('269.4 KB ·') ||
+          document.body.innerText.includes('Word 示例阅读') ||
+          document.body.innerText.includes('示例扳手')),
     );
     // 入场淡入结束后再截图。
     await page.waitForTimeout(300);
@@ -55,6 +59,12 @@ export default {
       assert.equal(panel.left, MARGIN);
       assert.equal(viewport.width - panel.right, MARGIN);
       assert.equal(viewport.height - panel.bottom, MARGIN);
+    }
+    if (ui.case === 'excel') {
+      await page.getByRole('button', { name: '明细', exact: true }).click();
+      await page.getByText('第二工作表', { exact: true }).waitFor();
+      await ui.capture('second-sheet');
+      await page.getByRole('button', { name: '汇总', exact: true }).click();
     }
     if (ui.case !== 'default') return;
     await page.getByRole('button', { name: await ui.t('ccAgent.workdirBrowse.unrenderable.revealFolder') }).click();

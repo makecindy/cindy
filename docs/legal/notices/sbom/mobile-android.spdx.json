@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-mobile-android",
-  "documentNamespace": "https://cindy.app/spdx/mobile-android/0cc139c2785a4bc81044e286ef0342d7714f794c3e14cdab3ba547aa14bc34a8",
+  "documentNamespace": "https://cindy.app/spdx/mobile-android/a1f9372f1ba6d97e33f6f25b702a54c61f8417b8a447ed7887e266b22a2dce1f",
   "creationInfo": {
-    "created": "2026-10-22T12:27:42Z",
+    "created": "2026-11-03T10:20:23Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -4008,23 +4008,6 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/commander@12.1.0"
-        }
-      ]
-    },
-    {
-      "name": "commander",
-      "SPDXID": "SPDXRef-Package-9c6220e9228b2830",
-      "versionInfo": "2.20.3",
-      "downloadLocation": "https://github.com/tj/commander.js",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/commander@2.20.3"
         }
       ]
     },
@@ -11837,11 +11820,6 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-4acaedeade116262"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-9c6220e9228b2830"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
