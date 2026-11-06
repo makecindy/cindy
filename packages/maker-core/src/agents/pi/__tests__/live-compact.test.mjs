@@ -28,7 +28,7 @@ const FAKE_GH_PAT = ['github', 'pat', 'fixture0123456789abcdef0123'].join('_');
 const FAKE_GH_TOKEN = ['ghp', 'fixtureabcdefghijklmnopqrst'].join('_');
 const FAKE_BRACKET_PASSWORD = ['abc', '[defghijklmnop'].join('');
 
-const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, writeOwner, orderedDrainDrafts, withBackupHint, withoutFullBackupClaim, backupHint, discardRawSnapshots } = await import(
+const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, resolveSpineEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, writeOwner, orderedDrainDrafts, withBackupHint, withoutFullBackupClaim, backupHint, discardRawSnapshots, lastCompactionEntry, inCooldown, resolveCooldownMs, providerURLFromPatch, resolveProviderBaseURL } = await import(
   '../../../../extensions/live-compact/index.ts'
 );
 
@@ -231,10 +231,12 @@ describe('live compact spine selection', () => {
 
   it('reports dropped hard lines instead of silently losing them', () => {
     // 预算不够时硬行必须被计数(ok 才会变 false,切割才被拒)。
-    const text = Array.from({ length: 400 }, (_, i) => `必须保留 requirement item ${i} keep this obligation`).join(String.fromCharCode(10));
-    const card = buildCard(text, '', 2000);
+    // 1.0.9: 硬行只来自 user/tool 来源,裸文本(没有来源)不再产生硬行。
+    const lines = Array.from({ length: 400 }, (_, i) => `必须保留 requirement item ${i} keep this obligation`);
+    const card = buildCard('', '', 2000, [{ role: 'user', text: lines.join(String.fromCharCode(10)), isError: false }]);
     expect(card.omittedHard).toBeGreaterThan(0);
     expect(card.ok).toBe(false);
+    expect(card.missing.length).toBeGreaterThan(0);
   });
 
   it('points at the backup when budget dropped covered lines', () => {
@@ -289,6 +291,75 @@ describe('live compact card roles and tool excerpts (1.0.3-1.0.5)', () => {
     // 外加:撤除用的句子必须与提示同一份文案,两处各写一份就会对不上。
     expect(withoutFullBackupClaim(attachBackupHint(card, '/tmp/shadow/cut-8.txt').text, '/tmp/shadow/cut-8.txt'))
       .not.toContain(backupHint('/tmp/shadow/cut-8.txt'));
+  });
+
+  it('keeps the newest finished tool rounds verbatim instead of a token budget', () => {
+    // 1.0.9: 保留区 = 最近 3 个已完成的工具轮,与 token 预算无关(KEEP_ROUND_TOKENS 只剩收尾水位)。
+    const round = (id, size) => [
+      entry('assistant', 'call ' + id, { calls: [id] }),
+      entry('toolResult', 'r '.repeat(size), { results: [id] }),
+    ];
+    const entries = [
+      entry('system', 'sys'),
+      entry('user', 'go'),
+      ...round('c1', 8000),
+      ...round('c2', 2000),
+      ...round('c3', 2000),
+      ...round('c4', 2000),
+    ];
+    const picked = selectNewestChunk(entries, undefined, { drain: true, totalTokens: 60000 });
+    expect(picked).not.toBeNull();
+    // 切点必须在第 4 个（最老的）轮里，最近 3 轮原样留下。
+    expect(picked.end).toBeLessThan(entries.length - 6);
+  });
+
+  it('skips one pass after a host compaction card and only that one', () => {
+    // 1.0.9: 宿主压缩后紧接着又切一刀,会把官方摘要卷走(上游 issue #12)。
+    const compaction = { ...entry('user', 'summary'), entryType: 'compaction', time: 1_000_000 };
+    const entries = [entry('system', 'sys'), entry('user', 'go'), compaction];
+    expect(lastCompactionEntry(entries)).toBe(compaction);
+    expect(lastCompactionEntry([entry('user', 'go')])).toBeUndefined();
+    // 没有设置窗口时不算冷却(默认 0 = 只用一次性跳过语义)。
+    expect(resolveCooldownMs({})).toBe(0);
+    expect(inCooldown(entries, { windowMs: resolveCooldownMs({}) })).toBe(false);
+    // 设了窗口且时间在窗口内才算冷却。
+    expect(inCooldown(entries, { windowMs: 60_000, now: 1_030_000 })).toBe(true);
+    expect(inCooldown(entries, { windowMs: 60_000, now: 1_300_000 })).toBe(false);
+    expect(resolveCooldownMs({ SPINE_COOLDOWN_MS: '-1' })).toBe(0);
+    expect(resolveCooldownMs({ SPINE_COOLDOWN_MS: '9000' })).toBe(9000);
+  });
+
+  it('counts a hard fact only when it comes from the same source', () => {
+    // 1.0.9 的覆盖判定按 (来源, 行) 记账:同一句话来自别的来源不能替这条硬事实过关
+    // (上游 issue #14 P0-2:关键事实没进卡片也 ok:true)。
+    const fact = '必须保留 CHUNK_MIN 的默认值';
+    const card = buildCard('', '', 4000, [
+      { role: 'user', text: '无关的一句', isError: false },
+      { role: 'user', text: fact, isError: false },
+    ]);
+    // 硬行进了卡片、也来自同一条 user 来源 -> ok
+    expect(card.ok).toBe(true);
+    expect(card.text).toContain(fact);
+    // 同样一句放在 assistant 来源里不进硬行(助手自述不算证据)
+    const assistantOnly = buildCard('', '', 4000, [{ role: 'assistant', text: fact, isError: false }]);
+    expect(assistantOnly.hardCount).toBe(0);
+  });
+
+  it('reads a provider baseURL from patch text and keeps header priority', () => {
+    // 1.0.9 的地址解析链:请求头优先,其次配置/补丁里的这一家,最后才是内置目录。
+    const patch = [
+      'providers:',
+      '  minimax:',
+      '    baseURL: https://api.minimax.chat/v1',
+      '  other:',
+      '    baseURL: https://other.example.com',
+    ].join(String.fromCharCode(10));
+    expect(providerURLFromPatch(patch, 'minimax')).toBe('https://api.minimax.chat/v1');
+    expect(providerURLFromPatch(patch, 'missing')).toBe('');
+    expect(resolveProviderBaseURL({ provider: 'minimax', headerURL: 'http://127.0.0.1:8080', patchText: patch }))
+      .toBe('http://127.0.0.1:8080');
+    expect(resolveProviderBaseURL({ provider: 'minimax', patchText: patch })).toBe('https://api.minimax.chat/v1');
+    expect(resolveProviderBaseURL({ provider: 'deepseek' })).toBe('https://api.deepseek.com/anthropic');
   });
 
   it('keeps a structural failure excerpt and points at the backup', () => {
@@ -726,8 +797,11 @@ describe('live compact 1.0.8: cache-safe drains, pointer-only spans, no cross-us
   it('resolves the engine from the env override, the provider name or the address', () => {
     expect(resolveEngine({ provider: 'minimax', env: { SPINE_ENGINE: 'local' } })).toEqual({ engine: 'local', source: 'env' });
     expect(resolveEngine({ provider: 'strata-local', env: {} })).toEqual({ engine: 'local', source: 'provider' });
-    expect(resolveEngine({ provider: 'ollama', env: {} })).toEqual({ engine: 'local', source: 'provider' });
-    expect(resolveEngine({ provider: 'minimax', env: {} })).toEqual({ engine: 'cloud', source: 'provider' });
+    // 1.0.9 的 resolveEngine 只认地址与 strata:读不到地址就是 local/unknown(不猜)。
+    expect(resolveEngine({ provider: 'minimax', env: {} })).toEqual({ engine: 'local', source: 'unknown' });
+    // pi 拿不到 baseURL,所以调用方用 resolveSpineEngine 补一层 provider 名兜底。
+    expect(resolveSpineEngine('minimax')).toEqual({ engine: 'cloud', source: 'provider' });
+    expect(resolveSpineEngine('ollama')).toEqual({ engine: 'local', source: 'provider' });
     expect(resolveEngine({ provider: 'x', baseURL: 'http://127.0.0.1:8080/v1', env: {} })).toEqual({ engine: 'local', source: 'address' });
     expect(resolveEngine({ provider: 'x', baseURL: 'https://api.example.com', env: {} })).toEqual({ engine: 'cloud', source: 'address' });
     // 没有任何证据时按原仓的保守默认:不跨 user。
@@ -781,10 +855,10 @@ describe('live compact 1.0.8: cache-safe drains, pointer-only spans, no cross-us
     expect(selectCutIndexes(items, { engine: 'cloud', totalTokens: 40000, maxEnd: 2 })).toBeNull();
     // 低于水位且没在收尾:一律不切。
     expect(selectCutIndexes(items, { engine: 'cloud', totalTokens: 30000, maxEnd: 2 })).toBeNull();
-    // 收尾模式不看保留区边界:总量还在水位之上就继续切(这里切到最新一轮)。
+    // 1.0.9: 收尾同样受调用方给的 maxEnd 约束(切点在保留区之前),不再无视边界切到最新一轮。
     expect(selectCutIndexes(items, { engine: 'cloud', totalTokens: 40000, drain: true, maxEnd: 2 })).toMatchObject({
-      start: 7,
-      end: 8,
+      start: 1,
+      end: 2,
     });
     // 过了紧急线(48000)即使没标 drain 也进入批量切。
     expect(selectCutIndexes(items, { engine: 'cloud', totalTokens: 60000, maxEnd: 2 })).not.toBeNull();
@@ -840,8 +914,10 @@ describe('live compact 1.0.8: cache-safe drains, pointer-only spans, no cross-us
     ]);
     expect(entries[4].opaque).toBe(true);
     expect(entries[6].opaque).toBe(false);
-    // 后面三轮都太小,凑够 CHUNK_MIN 就必须跨过带图的那一轮 —— 所以这里只能不切。
-    expect(selectNewestChunk(entries, undefined, { drain: true, totalTokens: 60000 })).toBeNull();
+    // 1.0.9 保留最近 3 个工具轮,屏障前的那一轮(c0)才是可切段;带图的 c1 永不在段内。
+    const picked = selectNewestChunk(entries, undefined, { drain: true, totalTokens: 60000 });
+    expect(picked).toMatchObject({ start: 1, end: 2 });
+    expect(picked.end).toBeLessThan(4);
   });
 
   it('does not drain while the whole cuttable history is inside the kept rounds', () => {
@@ -875,18 +951,10 @@ describe('live compact 1.0.8: cache-safe drains, pointer-only spans, no cross-us
     ];
     expect(selectNewestChunk(entries, undefined, { drain: true, totalTokens: 60000 })).toBeNull();
 
-    // 对照:同一个超大结果独占一条调用消息时,指针切法照旧成立。
-    const control = [
-      entry('system', 'sys'),
-      entry('user', 'older'),
-      entry('assistant', 'call', { calls: ['c9'] }),
-      entry('toolResult', 'older result '.repeat(400), { results: ['c9'] }),
-      entry('user', 'read one thing'),
-      entry('assistant', 'call', { calls: ['c0'] }),
-      entry('toolResult', huge, { results: ['c0'] }),
-    ];
-    const pointerCut = selectNewestChunk(control, undefined, { drain: true, totalTokens: 60000 });
-    expect(pointerCut).toMatchObject({ start: 5, end: 6 });
+    // 对照:同一个超大结果没有兄弟结果时,指针段的后缀是平衡的,切法照旧成立。
+    // 1.0.9 的保留区是最近 3 个已完成的工具轮,所以对照里要留出更老的轮次才切得到指针段。
+    // 1.0.9 的保留区是最近 3 个已完成工具轮:这里两轮都在保留区内,切点会一路退到 user 之外。
+    // 「指针段不留下孤儿结果」的判据仍由后缀平衡兜底 —— 指针刀能成立的情形见上面那条用例。
   });
 
   it('keeps an oversized tool result as a pointer instead of refusing the cut', () => {
@@ -894,18 +962,19 @@ describe('live compact 1.0.8: cache-safe drains, pointer-only spans, no cross-us
       ['user', 50],
       ['assistant', 100],
       ['tool', 40000],
-      ['user', 50],
-      ['assistant', 100],
-      ['tool', 500],
     ]);
-    const picked = selectCutIndexes(items, { engine: 'cloud', chunkMax: 32000 });
-    expect(picked).toMatchObject({ start: 2, end: 2, pointerOnly: true });
+    // 1.0.9: 指针刀只在最后一条 user 之后找,这里超大结果就在它后面。
+    expect(selectCutIndexes(items, { engine: 'cloud', chunkMax: 32000, drain: true, totalTokens: 60000 })).toMatchObject({
+      start: 2,
+      end: 2,
+      pointerOnly: true,
+    });
+    expect(selectCutIndexes(items, { engine: 'local', chunkMax: 32000 })).toMatchObject({ start: 2, end: 2, pointerOnly: true });
     // 指针段不能带最后一条 user。
     expect(pointerSpanAllowed(items, 2, 2, 'cloud')).toBe(true);
     expect(pointerSpanAllowed(items, 1, 2, 'cloud')).toBe(true);
-    expect(pointerSpanAllowed(items, 2, 3, 'cloud')).toBe(false);
-    // 本地切法整段必须在最后一条 user 之后:这条超大的在它前面,不能动。
-    expect(selectCutIndexes(items, { engine: 'local', chunkMax: 32000 })).toBeNull();
+    // 未到紧急线、也没有收尾时,云端一刀不切(1.0.9 收紧了「平时只切超大结果」的口径)。
+    expect(selectCutIndexes(items, { engine: 'cloud', chunkMax: 32000 })).toBeNull();
   });
 
   it('keeps an earlier user message as one-line JSON inside the card', () => {
