@@ -1127,6 +1127,14 @@
     "cancel": "Manter conectado",
     "disconnect": "Desconectar"
   },
+  "awayGuard": {
+    "status": "O Cindy está trabalhando",
+    "hint": "Pressione qualquer tecla para bloquear e desbloqueie com Touch ID ou sua senha.",
+    "lockFailed": {
+      "status": "O Cindy não conseguiu bloquear este Mac",
+      "hint": "Pressione Control-Command-Q para bloquear. A tela também será bloqueada sozinha depois de um tempo."
+    }
+  },
   "appBadge": {
     "attentionCount": "Tarefas que precisam de atenção: {{count}}"
   },
@@ -2411,7 +2419,24 @@
       "swallowActivationClickLabel": "Evitar cliques acidentais ao retornar",
       "swallowActivationClickHint": "Quando ativado, um clique esquerdo em uma janela em segundo plano apenas a traz para frente. Quando desativado, ele também aciona o item clicado, o que pode causar cliques acidentais.",
       "swallowActivationClickAria": "Ativar ou desativar proteção contra cliques acidentais ao retornar à janela",
-      "macRestartNote": "No macOS, reinicie o app para aplicar as alterações."
+      "macRestartNote": "No macOS, reinicie o app para aplicar as alterações.",
+      "awayGuard": {
+        "label": "Continuar trabalhando enquanto você está fora",
+        "hint": "Quando ativado, este Mac não desliga a tela nem bloqueia sozinho, para que a IA possa usá-lo a qualquer momento. Depois de um tempo longe, uma camada preta cobre a tela e a IA continua trabalhando por trás. Pressionar uma tecla ou clicar bloqueia na hora; desbloqueie com Touch ID ou sua senha.",
+        "permission": "Permita o Cindy em Ajustes do Sistema > Privacidade e Segurança > Acessibilidade para que ele bloqueie a tela assim que alguém tocar neste Mac. Até lá, a tela apaga e é bloqueada normalmente.",
+        "preview": "Testar agora",
+        "previewStarting": "Solte o mouse e o teclado. A tela será coberta em 3 segundos; pressione qualquer tecla para bloqueá-la e depois desbloqueie.",
+        "previewUnavailable": "Não foi possível cobrir a tela. Reinicie o Cindy e tente novamente.",
+        "delay": {
+          "label": "Cobrir a tela após",
+          "hint": "Tempo sem tocar no teclado e no mouse até a camada aparecer. Por padrão, o mesmo do repouso da tela.",
+          "30": "30 s",
+          "60": "1 min",
+          "120": "2 min",
+          "300": "5 min",
+          "system": "Sistema"
+        }
+      }
     },
     "agentIsland": {
       "title": "Agent Island",

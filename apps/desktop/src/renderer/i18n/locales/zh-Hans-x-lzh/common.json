@@ -1098,6 +1098,14 @@
     "cancel": "保连接",
     "disconnect": "断连"
   },
+  "awayGuard": {
+    "status": "Cindy 正劳作",
+    "hint": "按任一键即锁屏，以 Touch ID 或密码解之",
+    "lockFailed": {
+      "status": "Cindy 未能锁此机",
+      "hint": "按 Control-Command-Q 锁屏，稍候系统亦自锁"
+    }
+  },
   "appBadge": {
     "attentionCount": "待察之差事：{{count}}"
   },
@@ -2346,7 +2354,24 @@
       "swallowActivationClickLabel": "归时防误触",
       "swallowActivationClickHint": "左键点回背景窗口时，唯唤起窗口。阖之，则兼行点击处之操作，或致误触。",
       "swallowActivationClickAria": "切换归窗口时之误触防护",
-      "macRestartNote": "macOS 上须重启应用方生效。"
+      "macRestartNote": "macOS 上须重启应用方生效。",
+      "awayGuard": {
+        "label": "离席续作",
+        "hint": "开之，此机无人操作亦不熄屏、不自锁，AI 可随时用之。君离座稍久，玄幕覆屏，AI 于其后续作；有人按键或点按即锁屏，以 Touch ID 或密码解之。",
+        "permission": "须于「系统设置 → 隐私与安全性 → 辅助功能」许 Cindy，方能于有人触机时即锁屏。未许之前，屏照常熄而锁。",
+        "preview": "即试之",
+        "previewStarting": "请释鼠标与键盘，三秒后屏将覆；按任一键即锁屏，再解之以试。",
+        "previewUnavailable": "未能覆屏，请重启 Cindy 再试。",
+        "delay": {
+          "label": "离座几时而覆屏",
+          "hint": "键盘鼠标无人触及逾此时，即覆以玄幕。默认同系统熄屏之时。",
+          "30": "三十秒",
+          "60": "一分",
+          "120": "二分",
+          "300": "五分",
+          "system": "从系统"
+        }
+      }
     },
     "agentIsland": {
       "title": "灵动岛",

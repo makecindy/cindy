@@ -1127,6 +1127,14 @@
     "cancel": "Mantente conectado",
     "disconnect": "Desconectar"
   },
+  "awayGuard": {
+    "status": "Cindy está trabajando",
+    "hint": "Pulsa cualquier tecla para bloquear y desbloquea con Touch ID o tu contraseña.",
+    "lockFailed": {
+      "status": "Cindy no pudo bloquear esta Mac",
+      "hint": "Pulsa Control-Comando-Q para bloquearla. La pantalla también se bloqueará sola al cabo de un rato."
+    }
+  },
   "appBadge": {
     "attentionCount": "Tareas que requieren atención: {{count}}"
   },
@@ -2411,7 +2419,24 @@
       "swallowActivationClickLabel": "Evite clics accidentales al regresar",
       "swallowActivationClickHint": "Cuando está habilitado, un clic izquierdo en una ventana de fondo solo la hace avanzar. Cuando está deshabilitado, también actúa sobre el elemento en el que se hace clic, lo que puede provocar clics accidentales.",
       "swallowActivationClickAria": "Alternar protección contra clics accidentales al regresar a la ventana",
-      "macRestartNote": "En macOS, reinicie la aplicación para que los cambios surtan efecto."
+      "macRestartNote": "En macOS, reinicie la aplicación para que los cambios surtan efecto.",
+      "awayGuard": {
+        "label": "Seguir trabajando mientras no estás",
+        "hint": "Cuando está activado, esta Mac no apaga la pantalla ni se bloquea por sí sola, así la IA puede usarla en cualquier momento. Cuando llevas un rato fuera, una capa negra cubre la pantalla y la IA sigue trabajando detrás. Al pulsar una tecla o hacer clic se bloquea al instante; desbloquéala con Touch ID o tu contraseña.",
+        "permission": "Permite a Cindy en Ajustes del Sistema > Privacidad y seguridad > Accesibilidad para que pueda bloquear la pantalla en cuanto alguien toque esta Mac. Hasta entonces, la pantalla se apaga y se bloquea como siempre.",
+        "preview": "Probar ahora",
+        "previewStarting": "Suelta el mouse y el teclado. La pantalla se cubrirá en 3 segundos; pulsa cualquier tecla para bloquearla y luego desbloquéala.",
+        "previewUnavailable": "No se pudo cubrir la pantalla. Reinicia Cindy e inténtalo de nuevo.",
+        "delay": {
+          "label": "Cubrir la pantalla tras",
+          "hint": "Tiempo sin tocar el teclado ni el mouse antes de que aparezca la capa. Por omisión, el mismo que el reposo de la pantalla.",
+          "30": "30 s",
+          "60": "1 min",
+          "120": "2 min",
+          "300": "5 min",
+          "system": "Sistema"
+        }
+      }
     },
     "agentIsland": {
       "title": "Isla Agent",
