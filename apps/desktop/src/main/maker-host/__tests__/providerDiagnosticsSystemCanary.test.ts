@@ -7,6 +7,7 @@
  * 覆盖：
  *   - Anthropic Messages 探针带上与真实会话同形的 system 块；
  *   - usage 不随 system 增长 → WIRE_INCOMPATIBLE（把「能连但用不了」暴露在配置阶段）；
+ *   - 命中缓存（记在 cache_read）时仍判为 ok；超大响应体不上结论；
  *   - usage 计入 → ok；响应没有 usage → 不下结论、保持 ok（不误伤合法端点）。
  */
 
@@ -64,6 +65,27 @@ describe('test-connection system canary', () => {
     expect(result).toMatchObject({ ok: false, code: 'WIRE_INCOMPATIBLE', status: 200 });
     expect(result.detail).toContain('12 input tokens');
     expect(result.detail).toContain('drops `system`');
+  });
+
+  it('200 且 system 前缀命中缓存（记在 cache_read）→ 仍判为 ok', async () => {
+    // 同一次测试连点两下时，固定前缀会进缓存；只看 input_tokens 会把正常端点误报成丢弃 system。
+    const result = await runProviderProbe(
+      { agent: 'claude-code', baseUrl: 'https://relay.example', modelId: 'm', apiKey: 'k' },
+      async () =>
+        fakeResponse(200, JSON.stringify({
+          usage: { input_tokens: 12, cache_read_input_tokens: PROBE_SYSTEM_MIN_INPUT_TOKENS + 400 },
+        })),
+    );
+    expect(result).toMatchObject({ ok: true });
+  });
+
+  it('响应体超过读取上限 → 取消读流、不下结论', async () => {
+    const result = await runProviderProbe(
+      { agent: 'claude-code', baseUrl: 'https://relay.example', modelId: 'm', apiKey: 'k' },
+      async () =>
+        fakeResponse(200, JSON.stringify({ usage: { input_tokens: 1 }, pad: 'x'.repeat(64 * 1024) })),
+    );
+    expect(result).toMatchObject({ ok: true });
   });
 
   it('200 且 usage 计入 system → ok', async () => {
