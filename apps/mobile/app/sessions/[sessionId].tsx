@@ -26,7 +26,6 @@ import { useAdaptiveWindow, PaneViewportProvider } from '@/platform/AdaptiveWind
 import { useSessionHeaderHeight } from '@/session/useSessionHeaderHeight';
 import { useDoubleTap } from '@/session/useDoubleTap';
 import { useSessionPaneLayout } from '@/session/ResidentHomeList';
-import { ComposerExpandButton } from '@/session/ComposerExpandButton';
 import { nativeComposerAvailable } from '@/session/ComposerNativeInput';
 import { getActiveMobileSessionRealm } from '@/config/env';
 import { FailedScheduleNotice } from '@/session/FailedScheduleNotice';
@@ -7628,9 +7627,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             testID="session.composerModelButton"
           />
         ) : null}
-      {Platform.OS === 'ios' && nativeComposerAvailable && (composerDocumentRef.current.nodes.reduce((count, node) => count + (node.type === 'text' ? node.text.length : 0), 0) > 300 || composerDocumentRef.current.nodes.some((node) => node.type === 'text' && node.text.split('\n').length > 4)) ? (
-            <ComposerExpandButton onPress={() => composerInputRef.current?.expand?.()} />
-          ) : null}
       </ComposerToolbarLeftGroup>
       <ComposerToolbarSpacer />
       {/* 工具排右段顺序:[停止任务][语音占位][发送槽]。停止任务在语音左边(对齐桌面),

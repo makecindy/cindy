@@ -25,7 +25,6 @@ import { COMPOSER_PASTED_IMAGE_FILE_PREFIX } from "./pastedImageAttachment";
 
 type Payload = { ack: number; nodes: ReturnType<typeof nativeComposerNodes> };
 type NativeHandle = {
-  expand(): Promise<void>;
   resolveLink(href: string, semantic: object): Promise<void>;
   focus(): Promise<void>;
   blur(): Promise<void>;
@@ -125,7 +124,6 @@ export const ComposerNativeInput = forwardRef<
     rememberSelection(draft, value) {
       rememberedSelection.current = { draft, ...value };
     },
-    expand() { void native.current?.expand(); },
     focus() {
       void native.current?.focus();
     },

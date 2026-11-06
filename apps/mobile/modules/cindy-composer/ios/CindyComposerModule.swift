@@ -12,7 +12,6 @@ public class CindyComposerModule: Module {
         view.overrideUserInterfaceStyle = value == "dark" ? .dark : .light
         view.editor.keyboardAppearance = value == "dark" ? .dark : .light
       }
-      AsyncFunction("expand") { (view: CindyComposerView) in view.expand() }
       Prop("placeholder") { (view: CindyComposerView, value: String) in view.placeholder.text = value }
       Prop("editable") { (view: CindyComposerView, value: Bool) in view.editor.isEditable = value }
       Prop("textColor") { (view: CindyComposerView, value: UIColor) in view.foreground = value; view.updateStyle() }
@@ -64,7 +63,7 @@ final class ComposerTextView: UITextView {
   // Dragging past an edge resizes the composer (JS body drag). Not starting the
   // pan here keeps UIKit's rubber band from claiming that touch first.
   override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-    if gestureRecognizer === panGestureRecognizer, owner?.expandedController == nil {
+    if gestureRecognizer === panGestureRecognizer {
       let dy = panGestureRecognizer.translation(in: self).y
       if (dy > 0 && atScrollTop) || (dy < 0 && atScrollBottom) { return false }
     }
@@ -126,7 +125,6 @@ final class CindyComposerView: ExpoView, UITextViewDelegate {
   let onPasteImages = EventDispatcher()
   let editor = ComposerTextView()
   let placeholder = UILabel()
-  var expandedController: UIViewController?
   var revision = 0
   var foreground = UIColor.label
   var chipColor = UIColor.secondarySystemFill
@@ -157,14 +155,9 @@ final class CindyComposerView: ExpoView, UITextViewDelegate {
   }
   override func layoutSubviews() {
     super.layoutSubviews()
-    guard expandedController == nil else { return }
     editor.frame = bounds
     placeholder.frame = CGRect(x: 0, y: 3, width: bounds.width, height: textFont.lineHeight)
     measure()
-  }
-  override func didMoveToWindow() {
-    super.didMoveToWindow()
-    if window == nil { expandedController?.dismiss(animated: false) }
   }
   func updateStyle() {
     guard editor.markedTextRange == nil else { return }
@@ -308,7 +301,7 @@ final class CindyComposerView: ExpoView, UITextViewDelegate {
   func textViewDidEndEditing(_ textView: UITextView) { onFocusChange(["focused": false]) }
   private func measure() {
     placeholder.isHidden = editor.attributedText.length > 0
-    guard expandedController == nil, bounds.width > 0 else { return }
+    guard bounds.width > 0 else { return }
     let height = ceil(editor.sizeThatFits(CGSize(width: bounds.width, height: .greatestFiniteMagnitude)).height)
     editor.isScrollEnabled = height > bounds.height + 1
     if height != lastHeight { lastHeight = height; onContentHeight(["height": height]) }

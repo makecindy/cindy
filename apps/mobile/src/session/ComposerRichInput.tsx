@@ -30,7 +30,6 @@ import { useComposerWebViewRecovery } from '@/session/useComposerWebViewRecovery
 import { Gesture, GestureDetector } from '@/platform/gestureHandler';
 
 export interface ComposerRichInputHandle {
-  expand?(): void;
   /** WebView read barrier; validates the caller's scope before acknowledging the draft. */
   flushDocument?(isCurrent?: () => boolean): Promise<ComposerDocument>;
   getSelection(draft: string): ComposerSelection;
