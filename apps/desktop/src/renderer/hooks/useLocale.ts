@@ -26,7 +26,12 @@ import {
   type LocalePreference,
   type SupportedLocale,
 } from '@/i18n';
-import { defaultClassicalReplyStyleFor, type ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
+import {
+  classicalReplyStyleContextOf,
+  defaultClassicalReplyStyleFor,
+  type ClassicalReplyStyleContext,
+  type ClassicalReplyStyleId,
+} from '@cindy/maker-shared/classical-reply';
 import {
   readStoredClassicalStyle,
   readStoredLocale,
@@ -89,14 +94,22 @@ export function bootstrapInitialLocale(): SupportedLocale {
 export function LocaleProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<LocalePreference>(readStoredLocale);
   const [effectiveLocale, setEffectiveLocale] = useState<SupportedLocale>(getEffectiveLocale);
-  const [storedStyle, setStoredStyle] = useState<ClassicalReplyStyleId | null>(readStoredClassicalStyle);
-  // 未手动选过文风时，文言界面默认以文言作答，现代中文界面默认照常作答。
-  const classicalStyle = storedStyle ?? defaultClassicalReplyStyleFor(effectiveLocale);
+  // 文言界面与简体 / 繁體中文界面的文风分开记忆:在文言界面选的唐诗不带进现代中文界面，
+  // 每个语境各自从未选状态起步(默认见 defaultClassicalReplyStyleFor)。
+  const [storedStyles, setStoredStyles] = useState<Record<ClassicalReplyStyleContext, ClassicalReplyStyleId | null>>(() => ({
+    classical: readStoredClassicalStyle('classical'),
+    modern: readStoredClassicalStyle('modern'),
+  }));
+  const styleContext = classicalReplyStyleContextOf(effectiveLocale);
+  const classicalStyle = storedStyles[styleContext] ?? defaultClassicalReplyStyleFor(effectiveLocale);
 
-  const setClassicalStyle = useCallback((next: ClassicalReplyStyleId) => {
-    setStoredStyle(next);
-    writeStoredClassicalStyle(next);
-  }, []);
+  const setClassicalStyle = useCallback(
+    (next: ClassicalReplyStyleId) => {
+      setStoredStyles((prev) => ({ ...prev, [styleContext]: next }));
+      writeStoredClassicalStyle(styleContext, next);
+    },
+    [styleContext],
+  );
 
   // Main builds each turn's reply note, so it keeps the current style too.
   useEffect(() => {

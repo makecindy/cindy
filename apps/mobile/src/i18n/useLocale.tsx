@@ -27,7 +27,12 @@ import { clearSessionListCollator } from '@cindy/maker-shared/session-list';
 import { setManualLocaleOverride } from './appLanguage';
 import { clearPresentationDateFormatters } from './dateFormatters';
 import { i18n, detectSystemLocale, type LocalePreference, type SupportedLocale } from './index';
-import { defaultClassicalReplyStyleFor, type ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
+import {
+  classicalReplyStyleContextOf,
+  defaultClassicalReplyStyleFor,
+  type ClassicalReplyStyleContext,
+  type ClassicalReplyStyleId,
+} from '@cindy/maker-shared/classical-reply';
 import {
   readLanguagePreference,
   saveLanguagePreference,
@@ -75,27 +80,33 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
   const [effectiveLocale, setEffectiveLocale] = useState<SupportedLocale>(detectSystemLocale);
   // 用户已手动选择过语言时置位:挂载期的异步读回不得覆盖更晚的手动选择。
   const userChoseRef = useRef(false);
-  const [storedStyle, setStoredStyle] = useState<ClassicalReplyStyleId | null>(currentClassicalStyle);
+  const [storedStyles, setStoredStyles] = useState<Record<ClassicalReplyStyleContext, ClassicalReplyStyleId | null>>(
+    () => ({ classical: currentClassicalStyle('classical'), modern: currentClassicalStyle('modern') }),
+  );
   const userChoseStyleRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
-    void readClassicalStyle().then((style) => {
-      if (!cancelled && !userChoseStyleRef.current) setStoredStyle(style);
+    void readClassicalStyle().then((styles) => {
+      if (!cancelled && !userChoseStyleRef.current) setStoredStyles(styles);
     });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // 未手动选过文风时，文言界面默认文言作答，现代中文界面默认照常作答。
-  const classicalStyle = storedStyle ?? defaultClassicalReplyStyleFor(effectiveLocale);
+  // 文言界面与简体 / 繁體中文界面的文风分开记忆,各自从未选状态起步。
+  const styleContext = classicalReplyStyleContextOf(effectiveLocale);
+  const classicalStyle = storedStyles[styleContext] ?? defaultClassicalReplyStyleFor(effectiveLocale);
 
-  const setClassicalStyle = useCallback((next: ClassicalReplyStyleId) => {
-    userChoseStyleRef.current = true;
-    setStoredStyle(next);
-    void saveClassicalStyle(next);
-  }, []);
+  const setClassicalStyle = useCallback(
+    (next: ClassicalReplyStyleId) => {
+      userChoseStyleRef.current = true;
+      setStoredStyles((prev) => ({ ...prev, [styleContext]: next }));
+      void saveClassicalStyle(styleContext, next);
+    },
+    [styleContext],
+  );
 
   // 挂载后恢复持久化的 override;读出前按系统语言渲染(与 i18n init 值一致,
   // 未设置 override 的用户全程无切换)。

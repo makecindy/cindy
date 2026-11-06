@@ -80,6 +80,19 @@ export function defaultClassicalReplyStyleFor(locale: string | null | undefined)
   return classicalFamilyOf(locale) ? DEFAULT_CLASSICAL_REPLY_STYLE : 'plain';
 }
 
+/**
+ * The classical interface and the modern Chinese interfaces keep separate style
+ * choices: picking 唐诗 for a classical interface does not turn a modern interface's
+ * replies literary, and each context starts from defaultClassicalReplyStyleFor.
+ */
+export type ClassicalReplyStyleContext = 'classical' | 'modern';
+
+export function classicalReplyStyleContextOf(
+  locale: string | null | undefined,
+): ClassicalReplyStyleContext {
+  return classicalFamilyOf(locale) ? 'classical' : 'modern';
+}
+
 const ALL_STYLE_IDS: ReadonlySet<string> = new Set(
   Object.values(CLASSICAL_REPLY_STYLES).flatMap((styles) => styles.map((style) => style.id)),
 );

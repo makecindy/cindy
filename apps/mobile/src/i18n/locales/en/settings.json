@@ -81,7 +81,7 @@
         "hant": "繁體"
       },
       "styles": {
-        "prose": "Classical prose (default)",
+        "prose": "Classical prose",
         "tang-poetry": "Tang poetry",
         "song-ci": "Song ci",
         "yuan-qu": "Yuan qu",

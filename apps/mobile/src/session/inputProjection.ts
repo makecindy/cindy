@@ -13,7 +13,7 @@ import type { RemoteSerializedAttachment } from '@/session/types';
 import { parseMobileToolLoopErrorDetails } from '@/session/agentErrorI18n';
 import { i18n } from '@/i18n';
 import { resolveSystemLocale } from '@/i18n/locale';
-import { currentClassicalStyle } from '@/i18n/classicalStyleStore';
+import { currentClassicalStyleForLocale } from '@/i18n/classicalStyleStore';
 import { defaultClassicalReplyStyleFor, replyStyleFamilyOf } from '@cindy/maker-shared/classical-reply';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import {
@@ -172,9 +172,9 @@ export function buildQueuedTextMessage(
   );
   const createdAt = now.toISOString();
   const uiLanguage = resolveSystemLocale(i18n.resolvedLanguage || i18n.language);
-  // 文言、简体中文、繁體中文界面都能选文言文风;没选过时按界面语言取默认。
+  // 文言界面与简体 / 繁體中文界面的文风分开记忆;每轮只随当前界面语境的取值上报。
   const classicalStyle = replyStyleFamilyOf(uiLanguage)
-    ? currentClassicalStyle() ?? defaultClassicalReplyStyleFor(uiLanguage)
+    ? currentClassicalStyleForLocale(uiLanguage) ?? defaultClassicalReplyStyleFor(uiLanguage)
     : undefined;
 
   return {
