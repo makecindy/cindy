@@ -435,9 +435,13 @@ describe('GitLab MR status', () => {
       nodes,
       pageInfo: { hasNextPage: false },
     };
-    const fetch = vi.fn(
-      async () => new Response(JSON.stringify({ data: { project: { mergeRequest: value } } })),
-    );
+    const fetch = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      const { query } = JSON.parse(String(init?.body));
+      value.headPipeline.jobs.nodes = /nodes\s*\{[^}]*\ballowFailure\b/.test(query)
+        ? nodes
+        : nodes.map(({ status }) => ({ status }));
+      return new Response(JSON.stringify({ data: { project: { mergeRequest: value } } }));
+    });
     expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toEqual({
       total: 4,
       passed: 0,

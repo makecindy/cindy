@@ -124,6 +124,9 @@ SUCCESS 为通过，SKIPPED 为跳过；MANUAL 仅在 `allowFailure === true` �
 否则（包括字段缺失或不是布尔值）仍为进行中。等待、准备、排队、运行、定时状态
 也为进行中。FAILED / CANCELED 仍为失败，即使允许失败也不改计数。
 
+实现见 [gitlabPrSummary.ts](../../apps/desktop/src/main/git-context/gitlabPrSummary.ts)，
+回归见 [gitContextPrStatusService.test.ts](../../apps/desktop/src/main/__tests__/gitContextPrStatusService.test.ts)。
+
 GitHub Agent 工具与脚本 `github.read` 仍只支持 GitHub。GitHub 管理工具 list 跳过
 GitLab 关联，显式 GitLab 选择器沿用现有校验拒绝；包含 GitLab 的整组排序也明确拒绝，
 避免 GitHub 工具误改不完整的排序。UI 管理和任务摘要支持两者，不新增后台跟进。
