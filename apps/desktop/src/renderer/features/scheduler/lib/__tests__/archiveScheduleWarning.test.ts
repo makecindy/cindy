@@ -158,7 +158,7 @@ describe('loadActiveBoundScheduleNames', () => {
     }
   });
 
-  // Review (#9147): silent archive has no confirm dialog, so "could not read" must not look like "no bindings".
+  // Review of PR 9147: silent archive has no confirm dialog, so "could not read" must not look like "no bindings".
   it('严格读取:读到了才给结果,超时、失败或只有可能过期的缓存时给 null', async () => {
     mocks.getSnapshot.mockReturnValue([{ id: 'a', name: 'Cached', status: 'active', targetSessionId: 'task' }]);
     expect((await loadConfirmedActiveBoundScheduleNames([{ id: 'task' }]))?.get('task')).toEqual(['Cached']);

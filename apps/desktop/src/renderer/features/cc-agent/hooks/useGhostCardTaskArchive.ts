@@ -22,7 +22,7 @@ import { useSessionLifecycleActions } from './useSessionLifecycleActions';
  * 插件卡片上的归档任务按钮(见 cindy-brain/ghostCardTaskArchive)在任务页这一侧的处理。
  *
  * - 点按钮:用 archive(与标题栏、快捷键同一套归档流程,带确认)归档这个任务。
- * - 合并后自动归档:离开任务时,如果已合并的卡片在用户眼前显示过、本次没被取消,而且这个任务
+ * - 合并后自动归档(只对本机任务):离开任务时,如果已合并的卡片在用户眼前显示过、本次没被取消,而且这个任务
  *   没有在运行、没被接管、确认没绑着定时任务(没读到也算不确认)、输入框里没有草稿、worktree
  *   确认干净,就静默归档,并给一个可撤销的提示。任一条件不满足都不归档,也不弹确认:任务留在列表里。
  * - 这里还把任务里最后一条用户发的消息报告给 ghostCardTaskArchive:待生效之后用户发了消息,
@@ -112,7 +112,9 @@ async function autoArchiveLeftTask(
 ): Promise<void> {
   const sessionId = session.id;
   const deviceId = session.deviceLinkDeviceId;
-  if (remoteWritesBlocked || session.status !== 'active') return;
+  // 只自动归档本机任务:IM 接管状态只能在任务所在电脑上查,远程任务没有确认框兜底就不静默收走
+  // (卡片上的归档按钮照旧可用,走带确认的标准流程)。
+  if (deviceId || remoteWritesBlocked || session.status !== 'active') return;
   // 先自己查运行状态:归档流程查到运行中会弹提示,自动归档应该什么都不说。
   if (makerChatStore.getRunningSnapshot().get(sessionId)?.isRunning ||
     (deviceId && isRemoteSessionActivityActive(getRemoteSessionActivity(sessionId, deviceId)))) return;

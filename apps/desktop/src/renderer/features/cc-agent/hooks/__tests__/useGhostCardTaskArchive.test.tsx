@@ -135,6 +135,14 @@ describe('useGhostCardTaskArchive', () => {
     expect(mocks.toastSuccess).not.toHaveBeenCalled();
   });
 
+  // Review of PR 9147: the IM-takeover check only knows this computer, so a task on another computer is
+  // never archived silently; its card button still archives with the standard confirmed flow.
+  it('keeps a task that lives on another computer', async () => {
+    session = { ...session, deviceLinkDeviceId: 'mac-2' } as Session;
+    await visit();
+    expect(mocks.runSessionAction).not.toHaveBeenCalled();
+  });
+
   // Review (#9147): going from task A straight to task B reuses the view, so B is already rendered when A's
   // cleanup runs; A must still be archived with A's own data.
   it('archives the task it left when the view switches straight to another task', async () => {
