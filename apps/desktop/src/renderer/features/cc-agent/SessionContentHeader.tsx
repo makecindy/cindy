@@ -1,5 +1,3 @@
-import { PluginUiContributionControls } from '@/cindy-brain/PluginUiControls';
-import { PluginUiCommandMenuItems, PluginUiCommandMenuStatus, usePluginUiCommandMenu } from '@/cindy-brain/PluginUiCommandMenu';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { SessionTaskMenu } from './sidebar/SessionTaskMenu';
 import { TaskMigrationStatus } from './TaskMigrationStatus';
@@ -200,10 +198,6 @@ export function SessionContentHeader({
   // 会停留在旧值(Codex review P2)。prop 兜底覆盖 archived 等不在
   // active 桶里的会话。
   const session = routeSessionById.get(sessionProp.id) ?? sessionProp;
-  const pluginMenu = usePluginUiCommandMenu({
-    sessionId: session.id, point: 'session.header.actions',
-    deviceId: session.deviceLinkDeviceId ?? undefined, connected: !remoteSessionUnavailable, readOnly,
-  });
   const sharedGuest = isSharedTaskPeer(session.deviceLinkDeviceId ?? '');
   const { runningSessionIds } = useSessionRunningStatus(session.id);
   // worktree 归属取 store 镜像（与 main 的 worktreeStore 同源）：回收后仍留历史路径、
@@ -754,7 +748,6 @@ export function SessionContentHeader({
             onDelete={() => void handleDelete()}
             onOpenInNewWindow={handleOpenInNewWindow}
             tags={tagMenu}
-            pluginCommands={<PluginUiCommandMenuItems menu={pluginMenu} />}
             copy={
               <DropdownMenuItem
                 onSelect={() => void handleCopyDeepLink()}
@@ -795,9 +788,6 @@ export function SessionContentHeader({
       {/* session-git-pr-context:当前分支 + 关联 PR 徽标(项目任务与对话一致;非 git 目录且无 PR 时自动隐藏) */}
       <GitContextBadge session={session} />
       <TaskMigrationStatus session={session} />
-      <div style={WINDOW_NO_DRAG_STYLE}><PluginUiContributionControls sessionId={session.id} deviceId={session.deviceLinkDeviceId ?? undefined}
-        point="session.header.actions" connected={!remoteSessionUnavailable} readOnly={readOnly} />
-        <PluginUiCommandMenuStatus menu={pluginMenu} /></div>
 
       {tagEditorOpen && <TaskTagEditor session={session} onClose={() => setTagEditorOpen(false)} />}
 
