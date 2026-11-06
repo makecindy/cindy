@@ -67,6 +67,34 @@ describe("Haiku 5.5 official prompt-length pricing", () => {
   });
 });
 
+// Unit regression: an explicit Batch quote was unknown despite the official
+// absolute prices. Keep the integer-token boundary and do not inherit caches
+// or historical dates from the existing Standard rows.
+describe("Haiku 5.5 Batch reference prices adopted on November 6 UTC", () => {
+  it.each([[100_000, 0.05, 0.25], [100_001, 0.25, 1.25], [1_000_000, 0.25, 1.25]])(
+    "resolves Batch at %i prompt tokens without guessing cache rates", (inputTokens, input, output) => {
+      const options = { at: "2026-11-06", variant: "batch" as const, currency: "USD" as const, inputTokens };
+      const price = resolveBaseModelReferencePrice(registry, "claude-haiku-5-5", options)?.price;
+      expect(price).toEqual({
+        currency: "USD", variant: "batch",
+        ...(inputTokens <= 100_000 ? { maxInputTokens: 100001 } : { minInputTokens: 100001 }),
+        inputPerMtok: input, outputPerMtok: output, effectiveFrom: "2026-11-06",
+        source: { kind: "provider-official", url: "https://platform.claude.com/docs/en/about-claude/pricing", verifiedAt: "2026-11-06" },
+      });
+      expect(resolveModelReferencePrice(registry, "anthropic", "claude-haiku-5-5", { ...options, officialOnly: true })?.price).toEqual(price);
+    },
+  );
+
+  it("keeps pre-adoption and CNY Batch unknown and leaves the default Standard quote intact", () => {
+    for (const options of [
+      { at: "2026-11-05", variant: "batch" as const },
+      { at: "2026-11-06", variant: "batch" as const, currency: "CNY" as const },
+    ]) expect(resolveBaseModelReferencePrice(registry, "claude-haiku-5-5", options)).toBeUndefined();
+    expect(resolveBaseModelReferencePrice(registry, "claude-haiku-5-5", { at: "2026-11-06" })?.price)
+      .toMatchObject({ variant: "standard", inputPerMtok: 0.1, outputPerMtok: 0.5, cacheReadPerMtok: 0.01 });
+  });
+});
+
 describe("Kimi K3 one-hour cache writes adopted on November 5", () => {
   it.each([
     ["moonshot-kimi-cn", "kimi-k3", "kimi-k3", "cn", "CNY", 20, 100, 2, 40],
