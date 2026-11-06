@@ -8,7 +8,6 @@ import {
   takeGhostCardTaskSeen,
 } from '@/cindy-brain/ghostCardTaskArchive';
 import { getDraftPresence } from '@/lib/composerDraftStore';
-import { getRemoteSessionActivity, isRemoteSessionActivityActive } from '@/features/device-link/remoteSessionActivityStore';
 import { loadConfirmedActiveBoundScheduleNames } from '@/features/scheduler/lib/archiveScheduleWarning';
 import type { Session } from '@/lib/ccAgent.types';
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
@@ -29,6 +28,24 @@ import { useSessionLifecycleActions } from './useSessionLifecycleActions';
  * - 这里还把任务里最后一条用户发的消息报告给 ghostCardTaskArchive:待生效之后用户发了消息,
  *   本次自动归档就取消。
  */
+/**
+ * 这个任务页能不能在用户离开时静默归档它(「离开后自动归档」的静态资格)。登记待生效(卡片上显示提示)
+ * 和离开时的归档都用它,提示才不会承诺一件永远不会发生的事:
+ * - 只对本机任务:IM 接管状态只能在任务所在电脑上查,远程任务没有确认框兜底就不静默收走
+ *   (卡片上的归档按钮照旧可用,走带确认的标准流程);
+ * - 任务还是活跃的(已归档的任务没有可归档的);
+ * - 没有被远程写入拦截;
+ * - 视图本身允许(普通任务页;Orca 分屏里的成员任务和伙伴会话不自动收走)。
+ * 动态条件(运行中、被接管、绑着定时任务、有草稿、worktree 不干净)只能在离开那一刻查。
+ */
+export function canAutoArchiveOnLeave(
+  session: Session | null,
+  view: { autoArchive: boolean; remoteWritesBlocked: boolean },
+): boolean {
+  return !!session && view.autoArchive && !view.remoteWritesBlocked &&
+    !session.deviceLinkDeviceId && session.status === 'active';
+}
+
 export function useGhostCardTaskArchive({
   session,
   archive,
@@ -64,8 +81,9 @@ export function useGhostCardTaskArchive({
       latest.current.delete(key);
     }
   }
+  const canAutoArchive = canAutoArchiveOnLeave(session, { autoArchive, remoteWritesBlocked });
   useEffect(() => {
-    if (!sessionId || !autoArchive) return;
+    if (!sessionId || !canAutoArchive) return;
     const disable = enableGhostCardTaskAutoArchive(sessionId);
     return () => {
       // 先取「看过」再注销:注销之后自动归档就不再待生效。
@@ -75,7 +93,7 @@ export function useGhostCardTaskArchive({
       const snapshot = latest.current.get(sessionId);
       if (snapshot) void autoArchiveLeftTask(snapshot);
     };
-  }, [sessionId, autoArchive]);
+  }, [sessionId, canAutoArchive]);
 
   // 历史加载完成后才报告:还没读到的消息不能当成新消息。
   useEffect(() => {
@@ -115,13 +133,10 @@ async function autoArchiveLeftTask(
   { session, remoteWritesBlocked, runSessionAction, unarchiveSession, t }: LeaveSnapshot,
 ): Promise<void> {
   const sessionId = session.id;
-  const deviceId = session.deviceLinkDeviceId;
-  // 只自动归档本机任务:IM 接管状态只能在任务所在电脑上查,远程任务没有确认框兜底就不静默收走
-  // (卡片上的归档按钮照旧可用,走带确认的标准流程)。
-  if (deviceId || remoteWritesBlocked || session.status !== 'active') return;
+  // 与登记待生效同一个判断(注册时已经过了一次,这里按离开前最后一次渲染的信息再核一次)。
+  if (!canAutoArchiveOnLeave(session, { autoArchive: true, remoteWritesBlocked })) return;
   // 先自己查运行状态:归档流程查到运行中会弹提示,自动归档应该什么都不说。
-  if (makerChatStore.getRunningSnapshot().get(sessionId)?.isRunning ||
-    (deviceId && isRemoteSessionActivityActive(getRemoteSessionActivity(sessionId, deviceId)))) return;
+  if (makerChatStore.getRunningSnapshot().get(sessionId)?.isRunning) return;
   const archived = await runSessionAction(sessionId, 'archive', {
     activeSessionId: null,
     prepareArchive: async (isCurrent) => {
@@ -131,9 +146,9 @@ async function autoArchiveLeftTask(
         .catch(() => true);
       if (attached) return false;
       // 没读到绑定列表不等于没有绑定:静默归档没有确认框兜底,没读到就保留任务。
-      const bound = await loadConfirmedActiveBoundScheduleNames([{ id: sessionId, deviceLinkDeviceId: deviceId }]);
+      const bound = await loadConfirmedActiveBoundScheduleNames([{ id: sessionId }]);
       if (!bound || (bound.get(sessionId)?.length ?? 0) > 0) return false;
-      const preflight = await resolveWorktreeRemovalPreflight(sessionId, deviceId);
+      const preflight = await resolveWorktreeRemovalPreflight(sessionId);
       // 检查期间用户又回到这个任务:不在眼前收走它。输入框里还有没发的草稿时也留着(归档会丢掉草稿)。
       return preflight === 'clean' && isCurrent() && !isSessionRemovalRouteCurrent(sessionId) && !getDraftPresence(sessionId);
     },

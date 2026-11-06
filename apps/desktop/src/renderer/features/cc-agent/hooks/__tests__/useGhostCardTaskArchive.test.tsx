@@ -41,10 +41,6 @@ vi.mock('@/lib/makerChatStore', () => ({
   },
 }));
 vi.mock('@/lib/composerDraftStore', () => ({ getDraftPresence: () => mocks.draft }));
-vi.mock('@/features/device-link/remoteSessionActivityStore', () => ({
-  getRemoteSessionActivity: () => undefined,
-  isRemoteSessionActivityActive: () => false,
-}));
 vi.mock('@/features/scheduler/lib/archiveScheduleWarning', () => ({
   loadConfirmedActiveBoundScheduleNames: async (rows: Array<{ id: string }>) =>
     mocks.schedulesKnown ? new Map(mocks.schedules.length ? [[rows[0].id, mocks.schedules]] : []) : null,
@@ -136,11 +132,36 @@ describe('useGhostCardTaskArchive', () => {
     expect(mocks.toastSuccess).not.toHaveBeenCalled();
   });
 
-  // Review of PR 9147: the IM-takeover check only knows this computer, so a task on another computer is
-  // never archived silently; its card button still archives with the standard confirmed flow.
-  it('keeps a task that lives on another computer', async () => {
-    session = { ...session, deviceLinkDeviceId: 'mac-2' } as Session;
-    await visit();
+  // Review of PR 9147, round 5 (convergence checkpoint). Invariant: the card's "archives when you leave" hint
+  // is shown exactly when leaving would archive the task (everything checked at leave time being clean). The
+  // earlier half-fix kept remote tasks out of the leave step only, so the hint promised an archive that never
+  // came. Every static configuration is checked on both sides of that promise.
+  it.each([
+    ['an ordinary local task', {}, {}, true],
+    ['a task on another computer', { deviceLinkDeviceId: 'mac-2' }, {}, false],
+    ['an already archived task', { status: 'archived' }, {}, false],
+    ['a view that must not auto-archive', {}, { autoArchive: false }, false],
+    ['remote writes blocked', {}, { remoteWritesBlocked: true }, false],
+  ] as const)('shows the pending hint exactly when leaving would archive: %s', async (_name, sessionPatch, view, promised) => {
+    const task = { ...session, ...sessionPatch } as Session;
+    const hook = renderHook(() => useGhostCardTaskArchive({
+      session: task, archive: vi.fn(async () => {}), remoteWritesBlocked: false, autoArchive: true, ...view,
+    }));
+    setGhostCardTaskAutoArchiveArmed(task.id, 'card-1', true);
+    markGhostCardTaskSeen(task.id);
+    expect(isGhostCardTaskAutoArchivePending(task.id)).toBe(promised);
+    await act(async () => { hook.unmount(); });
+    expect(mocks.runSessionAction.mock.calls.length > 0).toBe(promised);
+  });
+
+  it('withdraws the hint when the task stops being eligible while it is open', async () => {
+    const hook = renderHook(({ current }) => useGhostCardTaskArchive({ session: current, archive: vi.fn(async () => {}), remoteWritesBlocked: false, autoArchive: true }),
+      { initialProps: { current: session } });
+    setGhostCardTaskAutoArchiveArmed(session.id, 'card-1', true);
+    expect(isGhostCardTaskAutoArchivePending(session.id)).toBe(true);
+    await act(async () => { hook.rerender({ current: { ...session, status: 'archived' } as Session }); });
+    expect(isGhostCardTaskAutoArchivePending(session.id)).toBe(false);
+    await act(async () => { hook.unmount(); });
     expect(mocks.runSessionAction).not.toHaveBeenCalled();
   });
 
