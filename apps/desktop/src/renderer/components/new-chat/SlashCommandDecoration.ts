@@ -129,6 +129,49 @@ export function replaceSlashCommandRunWithText(
   return tr.replaceWith(from, to, schema.text(`/${commandName} `));
 }
 
+/**
+ * Resolve the slash range owned by the active palette query.
+ *
+ * Text after the caret may be an existing draft, so it is consumed only when
+ * it completes the selected command and ends at a real inline boundary.
+ */
+export function resolveSlashCommandRunEnd(
+  doc: PMNode,
+  from: number,
+  query: string,
+  commandNames: readonly string[],
+): number {
+  const cursorEnd = from + 1 + query.length;
+  if (!query) return cursorEnd;
+
+  let $cursor;
+  try {
+    $cursor = doc.resolve(cursorEnd);
+  } catch {
+    return cursorEnd;
+  }
+  const parent = $cursor.parent;
+  const queryLower = query.toLowerCase();
+
+  for (const rawName of commandNames) {
+    const name = rawName.trim();
+    if (!name.toLowerCase().startsWith(queryLower)) continue;
+    const suffix = name.slice(query.length);
+    if (!suffix) return cursorEnd;
+
+    const suffixEnd = $cursor.parentOffset + suffix.length;
+    if (suffixEnd > parent.content.size) continue;
+    const actualSuffix = parent.textBetween($cursor.parentOffset, suffixEnd, '\n', '\0');
+    if (actualSuffix.toLowerCase() !== suffix.toLowerCase()) continue;
+
+    const next = suffixEnd < parent.content.size ? parent.nodeAt(suffixEnd) : null;
+    if (next?.isText && !/^\s/.test(next.text ?? '')) continue;
+    return cursorEnd + suffix.length;
+  }
+
+  return cursorEnd;
+}
+
 function migrateLegacySlashChips(state: EditorState): Transaction | null {
   const legacy: Array<{ from: number; to: number; command: string }> = [];
   state.doc.descendants((node, pos) => {

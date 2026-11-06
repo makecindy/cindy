@@ -6,6 +6,7 @@ import {
   createSlashCommandPlugin,
   findSlashCommandMatches,
   replaceSlashCommandRunWithText,
+  resolveSlashCommandRunEnd,
 } from '../components/new-chat/SlashCommandDecoration';
 
 const schema = new Schema({
@@ -80,6 +81,30 @@ describe('SlashCommandDecoration', () => {
     state = state.apply(state.tr.delete(6, 7));
     expect(state.doc.textContent).toBe('/skil');
     expect(decorationRanges(plugin, state)).toEqual([]);
+  });
+
+  it('palette 选择只替换光标前的命令查询词并保留无空格草稿', () => {
+    let state = EditorState.create({
+      schema,
+      doc: doc(p(txt('/goal已有草稿'))),
+    });
+    const runEnd = resolveSlashCommandRunEnd(state.doc, 1, 'goal', ['goal']);
+
+    state = state.apply(replaceSlashCommandRunWithText(state.tr, schema, 1, runEnd, 'goal'));
+
+    expect(state.doc.textContent).toBe('/goal 已有草稿');
+  });
+
+  it('光标位于完整命令中间时仍替换匹配的命令后缀', () => {
+    let state = EditorState.create({
+      schema,
+      doc: doc(p(txt('/compact'))),
+    });
+    const runEnd = resolveSlashCommandRunEnd(state.doc, 1, 'compa', ['compact']);
+
+    state = state.apply(replaceSlashCommandRunWithText(state.tr, schema, 1, runEnd, 'compact'));
+
+    expect(state.doc.textContent).toBe('/compact ');
   });
 
   it('旧草稿的 slash atom 在首个 transaction 自动迁移为纯文本', () => {
