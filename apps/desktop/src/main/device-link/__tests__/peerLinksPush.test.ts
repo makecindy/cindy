@@ -9,10 +9,13 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPeerLinksPushScheduler, peerLinksStructureKey } from '../peerLinksPush';
-import type { DeviceLinkPeerLinksSnapshot } from '../../../shared/deviceLinkIpc';
+import type { DeviceLinkPeerLinksSnapshot, DeviceLinkPeerLinkView } from '../../../shared/deviceLinkIpc';
 
-function snap(links: DeviceLinkPeerLinksSnapshot['links'], relayRttMs: number | null = 20): DeviceLinkPeerLinksSnapshot {
-  return { links, relayRttMs };
+type LinkInput = Omit<DeviceLinkPeerLinkView, 'sentAgoMs' | 'receivedAgoMs'>
+  & Partial<Pick<DeviceLinkPeerLinkView, 'sentAgoMs' | 'receivedAgoMs'>>;
+
+function snap(links: LinkInput[], relayRttMs: number | null = 20): DeviceLinkPeerLinksSnapshot {
+  return { links: links.map((l) => ({ sentAgoMs: null, receivedAgoMs: null, ...l })), relayRttMs };
 }
 
 describe('createPeerLinksPushScheduler', () => {
@@ -102,13 +105,13 @@ describe('createPeerLinksPushScheduler', () => {
     for (const set of handlers.values()) expect(set.size).toBe(0);
   });
 
-  it('结构 key 与顺序无关、忽略 rttMs', () => {
+  it('结构 key 与顺序无关、忽略 rttMs 与业务收发时刻', () => {
     const a = snap([
-      { deviceId: 'b', path: 'relay', rttMs: 1, open: true },
+      { deviceId: 'b', path: 'relay', rttMs: 1, open: true, sentAgoMs: 10 },
       { deviceId: 'a', path: 'direct', rttMs: 2, open: false },
     ]);
     const b = snap([
-      { deviceId: 'a', path: 'direct', rttMs: null, open: false },
+      { deviceId: 'a', path: 'direct', rttMs: null, open: false, receivedAgoMs: 3 },
       { deviceId: 'b', path: 'relay', rttMs: 77, open: true },
     ], null);
     expect(peerLinksStructureKey(a)).toBe(peerLinksStructureKey(b));

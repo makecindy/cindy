@@ -6343,8 +6343,8 @@
       },
       "v2": {
         "switch": {
-          "title": "新式連線",
-          "hint": "以拓撲之圖觀諸裝置如何連於此機；閉之則復舊之清單。唯改此機所示。"
+          "title": "Agent-Net (Beta)",
+          "hint": "新制 device-link，漸次修成。今已成者：連接之圖（諸裝置直連或經中轉、往返之遲、方收發之線、忙者與待理者），並近事之錄。唯改此機之所見。"
         },
         "empty": "尚無他裝置。於他機或手機登同一帳號，即現於此。",
         "stats": {
@@ -6365,14 +6365,17 @@
           "offline": "離線"
         },
         "attention": {
-          "unresponsive": "連線無應，方重試",
-          "masterOff": "此機未許他裝置操控",
-          "connectionIssue": "與中轉之連線有礙"
+          "unresponsive": "連線無應，方重試"
         },
         "relay": {
           "official": "Cindy 中轉"
         },
         "ms": "{{value}} ms",
+        "flow": {
+          "out": "方遣",
+          "in": "方受",
+          "both": "方往來"
+        },
         "offlineFold": "離線者 {{count}}",
         "offlineShow": "示離線裝置",
         "offlineHide": "藏離線裝置",
@@ -6383,16 +6386,8 @@
           "attention": "待理",
           "offline": "離線"
         },
-        "tabs": {
-          "todo": "待理",
-          "recent": "近事",
-          "aria": "拓撲之下"
-        },
-        "todo": {
-          "empty": "無待理者",
-          "emptyHint": "裝置有恙，則列於此"
-        },
         "recent": {
+          "title": "近事",
           "online": "{{name}} 上線",
           "offline": "{{name}} 下線",
           "empty": "開此頁以來，裝置無上下線"
@@ -6400,6 +6395,7 @@
         "popover": {
           "status": "狀態",
           "path": "路徑",
+          "activity": "訊",
           "latency": "延遲",
           "lastSeen": "末見",
           "controlling": "方操控此機",
@@ -6408,9 +6404,6 @@
           "linkStatus": "與「{{name}}」",
           "version": "Cindy {{version}}",
           "remoteDesktopFailed": "開遠端桌面不成"
-        },
-        "sections": {
-          "devicesList": "裝置之清單"
         }
       }
     },

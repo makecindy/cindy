@@ -105,7 +105,7 @@ vi.mock('../../clientEndpointsService.js', () => ({
 }));
 vi.mock('../index', () => ({
   getDeviceLinkStatus: () => 'online',
-  getDeviceLinkPeerLinks: () => ({ links: [{ deviceId: 'dev-1', path: 'relay', rttMs: 12, open: true }], relayRttMs: 40 }),
+  getDeviceLinkPeerLinks: () => ({ links: [{ deviceId: 'dev-1', path: 'relay', rttMs: 12, open: true, sentAgoMs: null, receivedAgoMs: null }], relayRttMs: 40 }),
   hasOfflineDirectPath: () => false,
   isDeviceDataPathAvailable: () => false,
   isPeerControlAvailable: () => true,
@@ -520,7 +520,7 @@ describe('peer-links IPC 授权边界', () => {
 
   it('sender 可信 + 有 capability → 原样返回主进程快照', async () => {
     await expect(call(DEVICE_LINK_INVOKE.GET_PEER_LINKS, undefined)).resolves.toEqual({
-      links: [{ deviceId: 'dev-1', path: 'relay', rttMs: 12, open: true }],
+      links: [{ deviceId: 'dev-1', path: 'relay', rttMs: 12, open: true, sentAgoMs: null, receivedAgoMs: null }],
       relayRttMs: 40,
     });
   });

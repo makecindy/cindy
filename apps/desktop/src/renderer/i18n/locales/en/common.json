@@ -6386,8 +6386,8 @@
       },
       "v2": {
         "switch": {
-          "title": "New connection view",
-          "hint": "Shows how each device connects to this computer in a topology map. Turn it off to go back to the list. Only changes this computer."
+          "title": "Agent-Net (Beta)",
+          "hint": "The new version of device-link, still iterating. Implemented so far: a connection topology map (whether each device connects directly or through a relay, round-trip latency, lines with messages flowing, busy devices and devices that need attention) and recent activity. Only changes this computer's view."
         },
         "empty": "No other devices yet. Sign in to the same account on another computer or phone and it will appear here.",
         "stats": {
@@ -6408,14 +6408,17 @@
           "offline": "Offline"
         },
         "attention": {
-          "unresponsive": "Not responding, retrying",
-          "masterOff": "This computer does not allow remote control",
-          "connectionIssue": "Problem with the relay connection"
+          "unresponsive": "Not responding, retrying"
         },
         "relay": {
           "official": "Cindy relay"
         },
         "ms": "{{value}} ms",
+        "flow": {
+          "out": "Sending",
+          "in": "Receiving",
+          "both": "Sending and receiving"
+        },
         "offlineFold": "{{count}} offline",
         "offlineShow": "Show offline devices",
         "offlineHide": "Hide offline devices",
@@ -6426,16 +6429,8 @@
           "attention": "Needs attention",
           "offline": "Offline"
         },
-        "tabs": {
-          "todo": "Needs attention",
-          "recent": "Recent",
-          "aria": "Below the topology"
-        },
-        "todo": {
-          "empty": "Nothing needs attention",
-          "emptyHint": "Devices with a problem are listed here"
-        },
         "recent": {
+          "title": "Recent activity",
           "online": "{{name}} came online",
           "offline": "{{name}} went offline",
           "empty": "No device has come or gone since this page opened"
@@ -6443,6 +6438,7 @@
         "popover": {
           "status": "Status",
           "path": "Path",
+          "activity": "Messages",
           "latency": "Latency",
           "lastSeen": "Last seen",
           "controlling": "Controlling this computer",
@@ -6451,9 +6447,6 @@
           "linkStatus": "To {{name}}",
           "version": "Cindy {{version}}",
           "remoteDesktopFailed": "Could not open Remote Desktop"
-        },
-        "sections": {
-          "devicesList": "Device list"
         }
       }
     },

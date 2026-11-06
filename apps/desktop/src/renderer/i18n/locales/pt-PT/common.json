@@ -6448,8 +6448,8 @@
       },
       "v2": {
         "switch": {
-          "title": "Nova vista de ligação",
-          "hint": "Mostra numa topologia como cada dispositivo se liga a este computador. Desative para voltar à lista. Altera só este computador."
+          "title": "Agent-Net (Beta)",
+          "hint": "A nova versão do device-link, ainda em evolução. Já implementado: um mapa de topologia das ligações (se cada dispositivo liga diretamente ou através de um relay, latência de ida e volta, linhas com mensagens em trânsito, dispositivos ocupados e dispositivos que precisam de atenção) e a atividade recente. Muda apenas a visualização neste computador."
         },
         "empty": "Ainda não há outros dispositivos. Inicie sessão com a mesma conta noutro computador ou telemóvel e ele aparecerá aqui.",
         "stats": {
@@ -6470,14 +6470,17 @@
           "offline": "Offline"
         },
         "attention": {
-          "unresponsive": "Sem resposta, a tentar de novo",
-          "masterOff": "Este computador não permite controlo remoto",
-          "connectionIssue": "Problema na ligação ao relay"
+          "unresponsive": "Sem resposta, a tentar de novo"
         },
         "relay": {
           "official": "Relay da Cindy"
         },
         "ms": "{{value}} ms",
+        "flow": {
+          "out": "A enviar",
+          "in": "A receber",
+          "both": "A enviar e a receber"
+        },
         "offlineFold": "{{count}} offline",
         "offlineShow": "Mostrar dispositivos offline",
         "offlineHide": "Ocultar dispositivos offline",
@@ -6488,16 +6491,8 @@
           "attention": "A verificar",
           "offline": "Offline"
         },
-        "tabs": {
-          "todo": "A verificar",
-          "recent": "Recentes",
-          "aria": "Abaixo da topologia"
-        },
-        "todo": {
-          "empty": "Nada a verificar",
-          "emptyHint": "Dispositivos com problemas aparecem aqui"
-        },
         "recent": {
+          "title": "Atividade recente",
           "online": "{{name}} ficou online",
           "offline": "{{name}} ficou offline",
           "empty": "Nenhum dispositivo entrou ou saiu desde que esta página foi aberta"
@@ -6505,6 +6500,7 @@
         "popover": {
           "status": "Estado",
           "path": "Caminho",
+          "activity": "Mensagens",
           "latency": "Latência",
           "lastSeen": "Visto pela última vez",
           "controlling": "A controlar este computador",
@@ -6513,9 +6509,6 @@
           "linkStatus": "Com {{name}}",
           "version": "Cindy {{version}}",
           "remoteDesktopFailed": "Não foi possível abrir o Ambiente de Trabalho Remoto"
-        },
-        "sections": {
-          "devicesList": "Lista de dispositivos"
         }
       }
     },

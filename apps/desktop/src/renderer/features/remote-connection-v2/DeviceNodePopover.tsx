@@ -1,38 +1,73 @@
 /**
- * DeviceNodePopover —— 点一台设备 / 这台电脑后的浮层内容(共享 Popover,不透明)。
- * 只展示现有数据:名字、型号 / 系统 / 版本、状态、路径、最近测得的往返、最后在线、
- * 谁在控制本机;动作只有「远程桌面」和「管理设备…」(展开下方列表并定位那一行)。
+ * DeviceNodePopover —— 点一台设备 / 这台电脑后的卡片(共享 Popover,不透明)。
+ * ---------------------------------------------------------------------------
+ * 拓扑图只管拓扑(用户裁决 2026-11-07):卡片只展示连接信息——名字、型号 / 系统 / 版本、状态、路径、
+ * 消息、最近测得的往返、最后在线、谁在控制本机,能远程时给「远程桌面」;这台电脑的卡片是与中转的连接、
+ * 连接问题与待机说明,「管理设备…」定位到上方「我的设备」的本机卡片(其它设备不再列在那里)。
  */
 
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
+import { cn } from '@/lib/utils';
 import type { DeviceLinkLinkStatus } from '@/hooks/useDeviceLinkSettings';
 
+import { PlatformGlyph } from './PlatformGlyph';
 import type { TopologyModel, TopologyNode } from './topologyModel';
-import { formatRtt, pathLabel, platformLabel, relativeTime } from './topologyPresentation';
+import { flowLabel, formatRtt, pathLabel, platformLabel, relativeTime } from './topologyPresentation';
 
-function Row({ label, value }: { label: string; value: string }) {
+/** 卡片里的「路径」只写怎么连;要处理的原因写在「状态」里。 */
+function routeOf(node: TopologyNode): TopologyNode {
+  return node.attention ? { ...node, attention: null } : node;
+}
+
+function Row({ label, value, valueClassName }: { label: string; value: string; valueClassName?: string }) {
   return (
     <div className="flex items-baseline justify-between gap-3 text-12">
       <span className="shrink-0 text-[var(--text-tertiary)]">{label}</span>
-      <span className="min-w-0 truncate text-right text-[var(--text-primary)]" title={value}>
+      <span className={cn('min-w-0 truncate text-right', valueClassName ?? 'text-[var(--text-primary)]')} title={value}>
         {value}
       </span>
     </div>
   );
 }
 
-function Heading({ name, sub }: { name: string; sub: string }) {
+function Heading({
+  name,
+  sub,
+  platform,
+  isMobile,
+}: {
+  name: string;
+  sub: string;
+  platform: string | null;
+  isMobile: boolean;
+}) {
   return (
-    <div className="flex min-w-0 flex-col">
-      <span className="truncate text-13 font-medium text-[var(--text-primary)]" title={name}>
-        {name}
+    <div className="flex min-w-0 items-center gap-2.5">
+      {/* 与拓扑同一套外形:电脑方块,手机带「灵动岛」的竖条 */}
+      <span className="flex size-8 shrink-0 items-center justify-center" aria-hidden>
+        <span
+          className={cn(
+            'rcv2-tile relative flex items-center justify-center rounded-lg border',
+            isMobile ? 'h-8 w-5' : 'size-8',
+          )}
+          data-form={isMobile ? 'phone' : undefined}
+        >
+          {isMobile ? <span className="rcv2-island" /> : null}
+          <PlatformGlyph platform={platform} isMobile={isMobile} size={isMobile ? 12 : 15} />
+        </span>
       </span>
-      <span className="truncate text-12 text-[var(--text-secondary)]" title={sub}>
-        {sub}
-      </span>
+      <div className="flex min-w-0 flex-col">
+        <span className="truncate text-13 font-medium text-[var(--text-primary)]" title={name}>
+          {name}
+        </span>
+        {sub ? (
+          <span className="truncate text-12 text-[var(--text-secondary)]" title={sub}>
+            {sub}
+          </span>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -41,12 +76,10 @@ export function DeviceNodePopover({
   node,
   relayName,
   onRemoteDesktop,
-  onManage,
 }: {
   node: TopologyNode;
   relayName: string;
   onRemoteDesktop: (node: TopologyNode) => void;
-  onManage: (deviceId: string) => void;
 }) {
   const { t } = useTranslation();
   const sub = [
@@ -56,21 +89,34 @@ export function DeviceNodePopover({
   ]
     .filter(Boolean)
     .join(' · ');
+  // 要处理的设备,「状态」直接写原因(红);拓扑上没有别处列问题,点开卡片就能看到(用户裁决 2026-11-07)。
   const statusText =
     node.status === 'offline'
       ? t('settings.remoteControl.v2.path.offline')
-      : node.busy
-        ? t('settings.devices.status.busy')
-        : t('settings.devices.status.online');
+      : node.status === 'attention'
+        ? pathLabel(node, relayName, t)
+        : node.busy
+          ? t('settings.devices.status.busy')
+          : t('settings.devices.status.online');
+  const statusClass =
+    node.status === 'attention'
+      ? 'text-[var(--error-fg)]'
+      : node.status !== 'offline' && node.busy
+        ? 'text-[var(--warning-accent)]'
+        : undefined;
   const canRemoteDesktop =
     node.status !== 'offline' && !node.isMobile && node.remoteControlEnabled && node.controlEnabled;
   return (
     <div className="flex flex-col gap-3">
-      <Heading name={node.name} sub={sub} />
+      <Heading name={node.name} sub={sub} platform={node.platform} isMobile={node.isMobile} />
       <div className="flex flex-col gap-1.5">
-        <Row label={t('settings.remoteControl.v2.popover.status')} value={statusText} />
+        {/* 与拓扑同一套颜色:要处理是红、忙碌是心动橙(卡片在 Popover 里,拿不到拓扑容器上的变量,直接用全局 token) */}
+        <Row label={t('settings.remoteControl.v2.popover.status')} value={statusText} valueClassName={statusClass} />
         {node.status !== 'offline' ? (
-          <Row label={t('settings.remoteControl.v2.popover.path')} value={pathLabel(node, relayName, t)} />
+          <Row label={t('settings.remoteControl.v2.popover.path')} value={pathLabel(routeOf(node), relayName, t)} />
+        ) : null}
+        {node.flow ? (
+          <Row label={t('settings.remoteControl.v2.popover.activity')} value={flowLabel(node.flowText ?? node.flow, t)} />
         ) : null}
         {node.rttMs !== null ? (
           <Row
@@ -87,16 +133,13 @@ export function DeviceNodePopover({
           </span>
         ) : null}
       </div>
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        <Button variant="secondary" size="sm" compact onClick={() => onManage(node.id)}>
-          {t('settings.remoteControl.v2.popover.manage')}
-        </Button>
-        {canRemoteDesktop ? (
+      {canRemoteDesktop ? (
+        <div className="flex justify-end">
           <Button variant="primary" size="sm" compact onClick={() => onRemoteDesktop(node)}>
             {t('remoteDesktop.title')}
           </Button>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -104,15 +147,17 @@ export function DeviceNodePopover({
 export function HubNodePopover({
   model,
   linkStatus,
-  enabled,
-  onEnabledChange,
+  issue,
+  standby,
   selfDeviceId,
   onManage,
 }: {
   model: TopologyModel;
   linkStatus: DeviceLinkLinkStatus;
-  enabled: boolean;
-  onEnabledChange: (next: boolean) => void;
+  /** 连接问题的说明;没有为 null */
+  issue: string | null;
+  /** 本机另一个 Cindy 实例占着远程连接 */
+  standby: boolean;
   selfDeviceId: string | null;
   onManage: (deviceId: string) => void;
 }) {
@@ -122,6 +167,8 @@ export function HubNodePopover({
       <Heading
         name={model.self?.name ?? t('settings.remoteControl.v2.node.thisComputer')}
         sub={platformLabel(model.self?.platform ?? null)}
+        platform={model.self?.platform ?? null}
+        isMobile={false}
       />
       <div className="flex flex-col gap-1.5">
         <Row
@@ -132,10 +179,8 @@ export function HubNodePopover({
               : t(`settings.devices.linkStatus.${linkStatus}`)
           }
         />
-        <label className="flex items-center justify-between gap-3 text-12">
-          <span className="text-[var(--text-primary)]">{t('settings.devices.allowControl')}</span>
-          <Switch checked={enabled} onCheckedChange={onEnabledChange} aria-label={t('settings.devices.allowControl')} />
-        </label>
+        {issue ? <span className="text-12 text-[var(--error-fg)]">{issue}</span> : null}
+        {standby ? <span className="text-12 text-[var(--text-tertiary)]">{t('settings.devices.standbyHint')}</span> : null}
       </div>
       {selfDeviceId ? (
         <div className="flex justify-end">

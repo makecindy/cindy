@@ -6343,8 +6343,8 @@
       },
       "v2": {
         "switch": {
-          "title": "새 연결 보기",
-          "hint": "각 기기가 이 컴퓨터에 어떻게 연결되는지 토폴로지로 보여줍니다. 끄면 기존 목록으로 돌아갑니다. 이 컴퓨터의 표시만 바뀝니다."
+          "title": "Agent-Net (Beta)",
+          "hint": "새 버전의 device-link로, 계속 개선 중입니다. 현재 구현된 기능: 연결 토폴로지 지도(각 기기가 직접 연결인지 릴레이 경유인지, 왕복 지연, 메시지가 오가는 연결선, 바쁜 기기와 조치가 필요한 기기)와 최근 활동. 이 컴퓨터의 표시만 바뀝니다."
         },
         "empty": "아직 다른 기기가 없습니다. 다른 컴퓨터나 휴대폰에서 같은 계정으로 로그인하면 여기에 나타납니다.",
         "stats": {
@@ -6365,14 +6365,17 @@
           "offline": "오프라인"
         },
         "attention": {
-          "unresponsive": "응답 없음, 다시 시도 중",
-          "masterOff": "이 컴퓨터는 원격 제어를 허용하지 않습니다",
-          "connectionIssue": "중계 연결에 문제가 있습니다"
+          "unresponsive": "응답 없음, 다시 시도 중"
         },
         "relay": {
           "official": "Cindy 중계"
         },
         "ms": "{{value}} ms",
+        "flow": {
+          "out": "보내는 중",
+          "in": "받는 중",
+          "both": "주고받는 중"
+        },
         "offlineFold": "오프라인 {{count}}대",
         "offlineShow": "오프라인 기기 표시",
         "offlineHide": "오프라인 기기 숨기기",
@@ -6383,16 +6386,8 @@
           "attention": "확인 필요",
           "offline": "오프라인"
         },
-        "tabs": {
-          "todo": "확인 필요",
-          "recent": "최근",
-          "aria": "토폴로지 아래"
-        },
-        "todo": {
-          "empty": "확인할 항목이 없습니다",
-          "emptyHint": "문제가 있는 기기가 여기에 표시됩니다"
-        },
         "recent": {
+          "title": "최근 활동",
           "online": "{{name}} 온라인",
           "offline": "{{name}} 오프라인",
           "empty": "이 페이지를 연 뒤로 기기 변동이 없습니다"
@@ -6400,6 +6395,7 @@
         "popover": {
           "status": "상태",
           "path": "경로",
+          "activity": "메시지",
           "latency": "지연",
           "lastSeen": "마지막 접속",
           "controlling": "이 컴퓨터를 제어 중",
@@ -6408,9 +6404,6 @@
           "linkStatus": "「{{name}}」 연결",
           "version": "Cindy {{version}}",
           "remoteDesktopFailed": "원격 데스크톱을 열지 못했습니다"
-        },
-        "sections": {
-          "devicesList": "기기 목록"
         }
       }
     },

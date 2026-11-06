@@ -228,27 +228,37 @@ describe('RemoteControlSection devices deep link', () => {
   });
 });
 
-// 「新版连接」打开后设备列表换了标题、搬到了拓扑下面,但消息气泡上的设备标签深链
-// 必须照旧:首帧展开、聚焦参数交给两个面板。
-describe('RemoteControlSection devices deep link with 新版连接 on', () => {
-  const v2Header = () =>
-    screen.getByRole('button', { name: /^settings\.remoteControl\.v2\.sections\.devicesList/ });
+// 「Agent-Net (Beta)」打开后「我的设备」只留本机卡片,下面紧接拓扑图,其它设备不再列出(用户裁决 2026-11-07)。
+// 设备深链照旧可用:指向本机时交给本机卡片定位,指向其它设备时打开拓扑里那台设备的卡片。
+describe('RemoteControlSection with Agent-Net on', () => {
+  const phone = {
+    deviceId: 'phone-1',
+    name: 'Pixel',
+    platform: 'android',
+    appVersion: '1.0.0',
+    lastSeenAt: null,
+    online: true,
+    busy: false,
+    remoteControlEnabled: false,
+    controlEnabled: true,
+    isSelf: false,
+  };
 
   beforeEach(() => {
     localStorage.setItem('remoteConnection.v2', 'on');
     _resetRemoteConnectionV2ForTests();
+    deviceLinkSettings.devices.push(phone);
   });
 
   afterEach(() => {
     localStorage.removeItem('remoteConnection.v2');
     _resetRemoteConnectionV2ForTests();
+    deviceLinkSettings.devices.splice(deviceLinkSettings.devices.indexOf(phone), 1);
   });
 
-  it('expands the list on first paint and hands the device focus param to both panels', () => {
+  it('keeps only this computer card above the topology, with no other-devices list', () => {
     render(
-      <MemoryRouter
-        initialEntries={['/settings?tab=remote-control&section=devices&device=phone-1']}
-      >
+      <MemoryRouter initialEntries={['/settings?tab=remote-control']}>
         <RemoteControlSection />
       </MemoryRouter>,
     );
@@ -256,28 +266,46 @@ describe('RemoteControlSection devices deep link with 新版连接 on', () => {
     expect(
       screen.getByRole('switch', { name: 'settings.remoteControl.v2.switch.title' }).getAttribute('aria-checked'),
     ).toBe('true');
-    expect(v2Header().getAttribute('aria-expanded')).toBe('true');
-    for (const variant of ['self', 'others']) {
-      const panel = screen.getByTestId(`my-devices-panel-${variant}`);
-      expect(panel.getAttribute('data-focus-device')).toBe('phone-1');
-      expect(panel.getAttribute('data-focus-key')).toMatch(/^phone-1:/);
-    }
+    expect(screen.getByTestId('my-devices-panel-self')).toBeTruthy();
+    expect(screen.queryByTestId('my-devices-panel-others')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^settings\.remoteControl\.sections\.myDevices/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /^Pixel/ })).toBeTruthy();
   });
 
-  it('drops the section and device params once the user collapses the list', async () => {
+  // 用户裁决(2026-11-07):没有「需要处理 / 最近」卡片,最近活动收在拓扑右上角的图标里。
+  it('shows recent activity behind an icon instead of a separate card', async () => {
     render(
-      <MemoryRouter
-        initialEntries={['/settings?tab=remote-control&section=devices&device=phone-1']}
-      >
-        <LocationProbe />
+      <MemoryRouter initialEntries={['/settings?tab=remote-control']}>
         <RemoteControlSection />
       </MemoryRouter>,
     );
 
-    fireEvent.click(v2Header());
+    expect(screen.queryByRole('tablist')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.remoteControl.v2.recent.title' }));
+    const popover = await screen.findByRole('dialog');
+    expect(popover.textContent).toContain('settings.remoteControl.v2.recent.empty');
+  });
 
-    await waitFor(() => expect(currentSearch()).not.toContain('section=devices'));
-    expect(currentSearch()).not.toContain('device=');
-    expect(v2Header().getAttribute('aria-expanded')).toBe('false');
+  it('hands a deep link to this computer to its card', () => {
+    render(
+      <MemoryRouter initialEntries={['/settings?tab=remote-control&section=devices&device=self']}>
+        <RemoteControlSection />
+      </MemoryRouter>,
+    );
+
+    const panel = screen.getByTestId('my-devices-panel-self');
+    expect(panel.getAttribute('data-focus-device')).toBe('self');
+    expect(panel.getAttribute('data-focus-key')).toMatch(/^self:/);
+  });
+
+  it('opens the topology card of another device the deep link points at', async () => {
+    render(
+      <MemoryRouter initialEntries={['/settings?tab=remote-control&section=devices&device=phone-1']}>
+        <RemoteControlSection />
+      </MemoryRouter>,
+    );
+
+    const card = await screen.findByRole('dialog');
+    expect(card.textContent).toContain('Pixel');
   });
 });

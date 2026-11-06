@@ -774,6 +774,12 @@ interface PeerTransportState {
   lastInboundPath: DeviceLinkPeerPath;
   /** 直连尚未写出时的缓冲进展；持续不下降也要切回 relay，不能只等待已发送帧的 ACK。 */
   directBufferWait?: { channel: DeviceLinkDirectChannel; bytes: number; since: number };
+  /**
+   * 最近一次本机发出 / 收到业务消息的单调时刻（invoke / invoke-result / push，不含 ACK、
+   * 重传与直连协商）；还没有为 null。只给远程连接拓扑页画「消息在走」，不参与任何传输判定。
+   */
+  lastBusinessSentAt: number | null;
+  lastBusinessReceivedAt: number | null;
 }
 
 interface PendingInboundLinkOffer {
@@ -1624,6 +1630,8 @@ export class DeviceLinkClient {
    */
   getPeerLinkSnapshots(): DeviceLinkPeerLinkSnapshot[] {
     const out: DeviceLinkPeerLinkSnapshot[] = [];
+    const now = this.monotonicNow();
+    const ago = (at: number | null): number | null => (at === null ? null : Math.max(0, Math.round(now - at)));
     for (const [deviceId, peer] of this.peerTransport) {
       if (!peer.reliable) continue;
       out.push({
@@ -1631,6 +1639,8 @@ export class DeviceLinkClient {
         path: this.getPeerPath(deviceId),
         rttMs: peer.rtt.srttMs === null ? null : Math.round(peer.rtt.srttMs),
         open: this.isPeerLinkReady(peer),
+        sentAgoMs: ago(peer.lastBusinessSentAt),
+        receivedAgoMs: ago(peer.lastBusinessReceivedAt),
       });
     }
     return out;
@@ -2967,6 +2977,11 @@ export class DeviceLinkClient {
   }
 
   private dispatchEnvelope(env: Envelope): boolean | Promise<boolean> {
+    if (env.src && isBusinessTraffic(env)) {
+      // 在 invoke-result 配对 resolve 之前记:本机发请求、对端回包同样算「收到」。
+      const peer = this.peerTransport.get(env.src);
+      if (peer) peer.lastBusinessReceivedAt = this.monotonicNow();
+    }
     if ((env.kind === 'link-open' || env.kind === 'link-accept') && env.src && env.dst) {
       const remote = parseProviderSharePeer(env.src);
       const local = parseProviderSharePeer(env.dst);
@@ -3879,6 +3894,7 @@ export class DeviceLinkClient {
         this.log.debug(`reliable transport initial send interrupted for ${env.dst.slice(0, 8)}`, err);
       }
     }
+    if (isBusinessTraffic(env)) peer.lastBusinessSentAt = this.monotonicNow();
     if (this.isPeerSendReady(peer)) {
       if (this.getTransportBaseSeq(peer) !== previousBaseSeq) {
         this.retryPending(env.dst, { ignoreInterval: false, onlyUnsent: true });
@@ -4774,6 +4790,8 @@ export class DeviceLinkClient {
         pushAdmissionDropLogAt: 0,
         linkGeneration: 0,
         lastInboundPath: 'relay',
+        lastBusinessSentAt: null,
+        lastBusinessReceivedAt: null,
       };
       this.peerTransport.set(dst, peer);
     }
@@ -6334,6 +6352,12 @@ function resetReliableSendRound(pending: PendingReliableMessage): void {
 
 function isReliableKind(kind: Envelope['kind']): kind is 'invoke' | 'invoke-result' | 'push' {
   return kind === 'invoke' || kind === 'invoke-result' || kind === 'push';
+}
+
+/** 业务消息:可靠三类里去掉直连协商信令(协商本身不是用户在用这条链路)。ACK 走 best-effort,不经过这里。 */
+function isBusinessTraffic(env: Envelope): boolean {
+  if (!isReliableKind(env.kind)) return false;
+  return !(env.kind === 'push' && (env.payload as { channel?: string } | undefined)?.channel === DIRECT_LINK_SIGNAL);
 }
 
 /**

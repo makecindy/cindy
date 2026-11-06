@@ -37,7 +37,7 @@ export const remoteControlSettings = defineSettings({
     titleKey: 'settings.remoteControl.v2.switch.title',
     descriptionKey: 'settings.remoteControl.v2.switch.hint',
     sectionKey: 'settings.sections.remoteControl',
-    aliases: ['topology', 'new connection', '拓扑', '新版连接', '连接拓扑'],
+    aliases: ['Agent-Net', 'agent net', 'device-link', 'topology', 'new connection', '拓扑', '新版连接', '连接拓扑'],
   },
   ssh: {
     id: 'remoteControl.ssh',

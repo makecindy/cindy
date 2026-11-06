@@ -6448,8 +6448,8 @@
       },
       "v2": {
         "switch": {
-          "title": "Nouvelle vue des connexions",
-          "hint": "Affiche dans une topologie comment chaque appareil se connecte à cet ordinateur. Désactivez-la pour revenir à la liste. Ne change que cet ordinateur."
+          "title": "Agent-Net (Beta)",
+          "hint": "La nouvelle version de device-link, toujours en évolution. Déjà disponible : une carte topologique des connexions (connexion directe ou via un relais pour chaque appareil, latence aller-retour, lignes où des messages circulent, appareils occupés et appareils à traiter) et l'activité récente. Ne change que l'affichage de cet ordinateur."
         },
         "empty": "Pas encore d’autres appareils. Connectez-vous avec le même compte sur un autre ordinateur ou téléphone et il apparaîtra ici.",
         "stats": {
@@ -6470,14 +6470,17 @@
           "offline": "Hors ligne"
         },
         "attention": {
-          "unresponsive": "Ne répond pas, nouvel essai",
-          "masterOff": "Cet ordinateur n’autorise pas le contrôle à distance",
-          "connectionIssue": "Problème de connexion au relais"
+          "unresponsive": "Ne répond pas, nouvel essai"
         },
         "relay": {
           "official": "Relais Cindy"
         },
         "ms": "{{value}} ms",
+        "flow": {
+          "out": "Envoi en cours",
+          "in": "Réception en cours",
+          "both": "Échange en cours"
+        },
         "offlineFold": "{{count}} hors ligne",
         "offlineShow": "Afficher les appareils hors ligne",
         "offlineHide": "Masquer les appareils hors ligne",
@@ -6488,16 +6491,8 @@
           "attention": "À vérifier",
           "offline": "Hors ligne"
         },
-        "tabs": {
-          "todo": "À vérifier",
-          "recent": "Récents",
-          "aria": "Sous la topologie"
-        },
-        "todo": {
-          "empty": "Rien à vérifier",
-          "emptyHint": "Les appareils en difficulté apparaissent ici"
-        },
         "recent": {
+          "title": "Activité récente",
           "online": "{{name}} est en ligne",
           "offline": "{{name}} est hors ligne",
           "empty": "Aucun appareil n’est arrivé ou parti depuis l’ouverture de cette page"
@@ -6505,6 +6500,7 @@
         "popover": {
           "status": "État",
           "path": "Chemin",
+          "activity": "Messages",
           "latency": "Latence",
           "lastSeen": "Vu pour la dernière fois",
           "controlling": "Contrôle cet ordinateur",
@@ -6513,9 +6509,6 @@
           "linkStatus": "Vers {{name}}",
           "version": "Cindy {{version}}",
           "remoteDesktopFailed": "Impossible d’ouvrir le bureau à distance"
-        },
-        "sections": {
-          "devicesList": "Liste des appareils"
         }
       }
     },

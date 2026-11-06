@@ -1,12 +1,13 @@
 /**
  * topologyModel —— 远程连接 V2 拓扑的纯状态推导(可单测,不碰 DOM / IPC)。
  * ---------------------------------------------------------------------------
- * 输入:同账号设备清单(V1 目录)、本机已协商链路快照(路径 / 往返)、中转信息、正在控制本机的设备、
- * 无响应熔断中的设备。输出:每台设备一个节点(状态 / 路径 / 往返)、按「怎么连」分组并分到左右两边、
- * 离线多了折成一行、一组太多对半分,以及顶上那行数字。
+ * 输入:同账号设备清单(V1 目录)、本机已协商链路快照(路径 / 往返 / 最近业务收发)、中转信息、
+ * 正在控制本机的设备、无响应熔断中的设备。输出:每台设备一个节点(状态 / 路径 / 往返 / 消息流向)、
+ * 按「怎么连」分组并分到左右两边、离线多了折成一行、一组太多对半分,以及顶上那行数字。
  *
- * 状态只分五档,颜色各有一档(DESIGN.md §2 本页登记):直连 / 经中转(绿,在线)、在线但没建链(灰)、
- * 要处理(金:对方没开被控 / 无响应)、离线(红)。文字同时写明,颜色不是唯一信号。
+ * 状态分五档:直连、经中转、在线但没建链、要处理(对方没开被控 / 无响应)、离线。颜色只有绿(连着、
+ * 有消息时变流动虚线)和红(要处理),见 DESIGN.md §2 本页登记;状态同时靠位置、线型、组名和文字表达。
+ * 组内按名字排,往返刷新不挪位置。
  */
 
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
@@ -25,6 +26,20 @@ export const FOLD_OFFLINE_MIN = 2;
 export const DENSE_MIN = 9;
 /** 折叠离线行的虚拟节点 id。 */
 export const OFFLINE_FOLD_ID = 'offgroup';
+/**
+ * 最近这么久内本机和它之间有业务消息,就算「消息在走」。渲染层每 2 秒取一次快照,
+ * 持续收发时一直在窗口内;停下后最多再走几秒就静止。
+ */
+export const FLOW_WINDOW_MS = 4_000;
+/**
+ * 名字下面那行字的流向放宽:一个方向在 FLOW_WINDOW_MS 内有消息、另一个方向在这么久之内也有过,
+ * 就写「收发中」。远程操作是一问一答,只按 4 秒看会在「发送中 / 收发中」之间来回跳,字一直在换
+ * (用户反馈 2026-11-07:晃眼)。线上虚线的流向仍按 FLOW_WINDOW_MS。
+ */
+export const LABEL_HOLD_MS = 15_000;
+
+/** 消息流向:out 本机发给它,in 它发给本机,both 双向都有。 */
+export type TopologyFlow = 'out' | 'in' | 'both';
 
 export interface TopologyNode {
   id: string;
@@ -36,6 +51,10 @@ export interface TopologyNode {
   /** 本机到它的数据路径;没建链 / 离线为 null。 */
   path: 'direct' | 'relay' | null;
   rttMs: number | null;
+  /** 最近有没有业务消息在这条链路上走、往哪边走;没有为 null。只有直连 / 经中转的设备会有。 */
+  flow: TopologyFlow | null;
+  /** 写给人看的流向(行字、卡片):在 flow 的基础上放宽,见 LABEL_HOLD_MS;flow 为 null 时也为 null */
+  flowText: TopologyFlow | null;
   busy: boolean;
   lastSeenAt: string | null;
   /** 它正在控制这台电脑。 */
@@ -61,6 +80,8 @@ export interface TopologyRelay {
   name: string;
   selfHosted: boolean;
   rttMs: number | null;
+  /** 经中转的设备里有消息在走时,这台电脑到中转站那一段也在走(各设备流向合起来)。 */
+  flow: TopologyFlow | null;
 }
 
 export interface TopologyStats {
@@ -125,6 +146,8 @@ function deriveNode(
     status,
     path,
     rttMs: open ? link.rttMs : null,
+    flow: open && (status === 'direct' || status === 'relay') ? flowOf(link) : null,
+    flowText: open && (status === 'direct' || status === 'relay') ? flowTextOf(link) : null,
     busy: d.busy,
     lastSeenAt: d.lastSeenAt,
     controlling: controlledBy.has(d.deviceId),
@@ -135,12 +158,42 @@ function deriveNode(
   };
 }
 
-/** 组内排序:往返短的在前(没测到的靠后),再按名字。 */
+/** 快照里的最近收发 → 流向;窗口外或从没收发为 null。纯函数,可单测。 */
+export function flowOf(link: Pick<DeviceLinkPeerLinkView, 'sentAgoMs' | 'receivedAgoMs'>): TopologyFlow | null {
+  const out = link.sentAgoMs !== null && link.sentAgoMs <= FLOW_WINDOW_MS;
+  const inbound = link.receivedAgoMs !== null && link.receivedAgoMs <= FLOW_WINDOW_MS;
+  if (out && inbound) return 'both';
+  if (out) return 'out';
+  return inbound ? 'in' : null;
+}
+
+/** 行字用的流向:正在走的方向之外,另一个方向在 LABEL_HOLD_MS 内也有过就算双向。纯函数,可单测。 */
+export function flowTextOf(link: Pick<DeviceLinkPeerLinkView, 'sentAgoMs' | 'receivedAgoMs'>): TopologyFlow | null {
+  const flow = flowOf(link);
+  if (flow !== 'out' && flow !== 'in') return flow;
+  const other = flow === 'out' ? link.receivedAgoMs : link.sentAgoMs;
+  return other !== null && other <= LABEL_HOLD_MS ? 'both' : flow;
+}
+
+/** 几台设备的流向合在一起(中转站那一段用)。 */
+export function mergeFlows(flows: ReadonlyArray<TopologyFlow | null>): TopologyFlow | null {
+  let out = false;
+  let inbound = false;
+  for (const f of flows) {
+    if (f === 'out' || f === 'both') out = true;
+    if (f === 'in' || f === 'both') inbound = true;
+  }
+  if (out && inbound) return 'both';
+  if (out) return 'out';
+  return inbound ? 'in' : null;
+}
+
+/**
+ * 组内排序:只按名字(数字按数值),同名再按 id。往返、流量这些会一直变的值不参与,
+ * 否则延迟一刷新图块就换位置(用户反馈 2026-11-06)。
+ */
 export function compareNodes(a: TopologyNode, b: TopologyNode): number {
-  const ra = a.rttMs ?? Number.POSITIVE_INFINITY;
-  const rb = b.rttMs ?? Number.POSITIVE_INFINITY;
-  if (ra !== rb) return ra - rb;
-  return a.name.localeCompare(b.name);
+  return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }) || a.id.localeCompare(b.id);
 }
 
 /** 哪边行少放哪边,右边优先;纯函数,可单测。 */
@@ -209,16 +262,13 @@ export function buildTopology(input: BuildTopologyInput): TopologyModel {
     nodes,
     byId,
     groups,
-    relay: { name: input.relayName, selfHosted: input.selfHosted, rttMs: input.relayRttMs },
+    relay: {
+      name: input.relayName,
+      selfHosted: input.selfHosted,
+      rttMs: input.relayRttMs,
+      flow: mergeFlows(nodes.filter((n) => n.status === 'relay').map((n) => n.flow)),
+    },
     stats,
     dense: nodes.length >= DENSE_MIN,
   };
-}
-
-/** 往返快慢的三档:≤ 15 ms 快(绿)、≥ 80 ms 慢(金)、中间不上色。 */
-export function rttTone(ms: number | null): 'fast' | 'slow' | 'plain' {
-  if (ms === null) return 'plain';
-  if (ms <= 15) return 'fast';
-  if (ms >= 80) return 'slow';
-  return 'plain';
 }

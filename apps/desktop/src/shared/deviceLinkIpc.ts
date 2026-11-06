@@ -203,6 +203,10 @@ export interface DeviceLinkPeerLinkView {
   rttMs: number | null;
   /** link-open / link-accept 双向都已就绪 */
   open: boolean;
+  /** 距本机最近一次发出业务消息多少毫秒(取快照时算);还没发过为 null */
+  sentAgoMs: number | null;
+  /** 距最近一次从对端收到业务消息多少毫秒;还没收到过为 null */
+  receivedAgoMs: number | null;
 }
 /** GET_PEER_LINKS 返回与 PEER_LINKS_CHANGED 推送的全量快照 */
 export interface DeviceLinkPeerLinksSnapshot {

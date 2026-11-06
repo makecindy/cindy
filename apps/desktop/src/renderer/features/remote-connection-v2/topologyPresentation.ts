@@ -1,27 +1,13 @@
 /**
- * topologyPresentation —— 拓扑状态到 token / 文案 key 的映射(纯函数,拓扑图与浮层共用)。
- * 颜色登记:DESIGN.md §2「Remote connection V2 topology status colors」。
+ * topologyPresentation —— 拓扑状态到文案的映射(纯函数,拓扑图与浮层共用)。
+ * 颜色只有三种(用户裁决 2026-11-06,不用黄色):绿 = 连着、蓝 = 正在收发、红 = 出错 / 要处理(DESIGN.md §2 本页登记)。
  */
 
-import {
-  platformLabel as platformLabelOf,
-  relativeTime as relativeTimeOf,
-} from '@/components/settings/deviceLabels';
+import { relativeTime as relativeTimeOf } from '@/components/settings/deviceLabels';
 
-import type { TopologyNode, TopologyStatus } from './topologyModel';
+import type { TopologyFlow, TopologyNode } from './topologyModel';
 
 export { platformLabel, relativeTime } from '@/components/settings/deviceLabels';
-
-export const STATUS_TONE: Record<TopologyStatus, string> = {
-  direct: 'var(--status-success)',
-  relay: 'var(--status-success)',
-  unlinked: 'var(--text-tertiary)',
-  attention: 'var(--warning-fg)',
-  offline: 'var(--error-fg)',
-};
-
-/** 中转站图块:信息蓝,它不是在线 / 离线状态。 */
-export const RELAY_TONE = 'var(--status-info)';
 
 type T = (key: string, options?: Record<string, unknown>) => string;
 
@@ -35,17 +21,24 @@ export function pathLabel(node: TopologyNode, relayName: string, t: T): string {
   return t('settings.remoteControl.v2.path.unlinked');
 }
 
+export function flowLabel(flow: TopologyFlow, t: T): string {
+  return t(`settings.remoteControl.v2.flow.${flow}`);
+}
+
+export type RowSubtitleTone = 'muted' | 'error' | 'live';
+
 /**
- * 拓扑行下面那行小字:要处理的只写原因(不带系统名,留给宽度),经中转只写「经中转」
- * (中转名已在中转站下面),其它是「系统 · 路径」;离线写最后在线。
+ * 拓扑行名字下面那行小字。系统用图标表示、路径由组名表示,这里不再重复(用户要求 2026-11-06)。
+ * 先后:要处理写原因(红)→ 离线写最后在线 → 有消息在走写流向(蓝)→ 忙碌 / 型号;都没有就只显示名字。
  */
-export function rowSubtitle(node: TopologyNode, t: T): string {
+export function rowSubtitle(node: TopologyNode, t: T): { text: string; tone: RowSubtitleTone } {
+  if (node.status === 'attention') return { text: pathLabel(node, '', t), tone: 'error' };
   if (node.status === 'offline') {
-    return t('settings.devices.lastSeen', { time: relativeTimeOf(node.lastSeenAt, t) });
+    return { text: t('settings.devices.lastSeen', { time: relativeTimeOf(node.lastSeenAt, t) }), tone: 'muted' };
   }
-  if (node.status === 'attention') return pathLabel(node, '', t);
-  // 行里用组名那套短词(直连 / 经中转 / 未建链),完整说法留给浮层。
-  return `${platformLabelOf(node.platform)} · ${t(`settings.remoteControl.v2.group.${node.status}`)}`;
+  if (node.flow) return { text: flowLabel(node.flowText ?? node.flow, t), tone: 'live' };
+  const parts = [node.busy ? t('settings.devices.status.busy') : null, node.modelLabel].filter(Boolean);
+  return { text: parts.join(' · '), tone: 'muted' };
 }
 
 export function formatRtt(ms: number, t: T): string {

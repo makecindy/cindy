@@ -11578,16 +11578,23 @@ describe('automatic LAN connection through platform bridges', () => {
 });
 
 describe('直连优先、中继兜底(Device Link direct path)', () => {
-  // 远程连接拓扑页读的快照:建链后出现(relay、未测往返、已就绪),ACK 后有往返,挂上直连后路径变直连,关链后消失。
-  it('链路快照反映路径、就绪与往返,关链后消失', async () => {
+  // 远程连接拓扑页读的快照:建链后出现(relay、未测往返、已就绪、还没有业务收发),发出业务消息后有「多久前发出」,
+  // ACK 只给往返、不算收到,对端的业务消息才算收到;挂上直连后路径变直连,关链后消失。
+  it('链路快照反映路径、就绪、往返与业务收发,关链后消失', async () => {
     vi.useFakeTimers();
     const h = makeHarness({ timing: { pingIntervalMs: 1_000_000, transportRetryIntervalMs: 1_000 } });
+    const internals = h.client as unknown as { monotonicNow(): number };
+    const realNow = internals.monotonicNow.bind(h.client);
+    let offset = 0;
+    internals.monotonicNow = () => realNow() + offset;
     try {
       h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
       expect(h.client.getPeerLinkSnapshots()).toEqual([]);
       const opening = establishInboundReliableLink(h, 'peer-stream');
       await vi.advanceTimersByTimeAsync(0); await opening;
-      expect(h.client.getPeerLinkSnapshots()).toEqual([{ deviceId: 'dev-b', path: 'relay', rttMs: null, open: true }]);
+      expect(h.client.getPeerLinkSnapshots()).toEqual([
+        { deviceId: 'dev-b', path: 'relay', rttMs: null, open: true, sentAgoMs: null, receivedAgoMs: null },
+      ]);
       h.client.sendInvokeResult('dev-b', 'r1', { ok: true, result: 1 });
       await vi.advanceTimersByTimeAsync(0);
       const ws = h.current();
@@ -11597,9 +11604,20 @@ describe('直连优先、中继兜底(Device Link direct path)', () => {
         payload: { channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: { streamId: meta.streamId, ackSeq: meta.seq } },
       });
       await vi.advanceTimersByTimeAsync(0);
+      offset += 40;
       const acked = h.client.getPeerLinkSnapshots()[0];
       expect(acked.rttMs).not.toBeNull();
       expect(acked.rttMs).toBeGreaterThanOrEqual(0);
+      expect(acked.sentAgoMs).toBeGreaterThanOrEqual(40);
+      expect(acked.receivedAgoMs).toBeNull();
+      encodeReliableFrames({
+        v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b', payload: { channel: 'maker:event', payload: { n: 1 } },
+      }, 'peer-stream', 1).forEach((frame) => ws.push(frame));
+      await vi.advanceTimersByTimeAsync(0);
+      offset += 25;
+      const received = h.client.getPeerLinkSnapshots()[0];
+      expect(received.receivedAgoMs).toBeGreaterThanOrEqual(25);
+      expect(received.receivedAgoMs).toBeLessThan(received.sentAgoMs!);
       h.client.attachDirectPath('dev-b', { send() {}, close() {} });
       expect(h.client.getPeerLinkSnapshots()[0]).toMatchObject({ deviceId: 'dev-b', path: 'direct', open: true });
       h.client.closeLink('dev-b', 'user');

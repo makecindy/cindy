@@ -6343,8 +6343,8 @@
       },
       "v2": {
         "switch": {
-          "title": "新版连接",
-          "hint": "用拓扑图查看每台设备怎么连到这台电脑；关闭后恢复原来的列表。只改这台电脑的显示。"
+          "title": "Agent-Net (Beta)",
+          "hint": "新版本的 device-link，逐渐迭代中。当前实现了：连接拓扑图（每台设备直连还是经中转、往返延迟、正在收发消息的线路、忙碌与要处理的设备），以及最近活动。只改这台电脑的显示。"
         },
         "empty": "还没有其它设备。在另一台电脑或手机上登录同一账号，它就会出现在这里。",
         "stats": {
@@ -6365,14 +6365,17 @@
           "offline": "离线"
         },
         "attention": {
-          "unresponsive": "连接无响应，正在重试",
-          "masterOff": "本机未允许其它设备控制",
-          "connectionIssue": "与中转的连接有问题"
+          "unresponsive": "连接无响应，正在重试"
         },
         "relay": {
           "official": "Cindy 中转"
         },
         "ms": "{{value}} ms",
+        "flow": {
+          "out": "发送中",
+          "in": "接收中",
+          "both": "收发中"
+        },
         "offlineFold": "{{count}} 台离线",
         "offlineShow": "显示离线设备",
         "offlineHide": "收起离线设备",
@@ -6383,16 +6386,8 @@
           "attention": "要处理",
           "offline": "离线"
         },
-        "tabs": {
-          "todo": "需要处理",
-          "recent": "最近",
-          "aria": "拓扑下方内容"
-        },
-        "todo": {
-          "empty": "没有需要处理的",
-          "emptyHint": "设备出问题时会列在这里"
-        },
         "recent": {
+          "title": "最近活动",
           "online": "{{name}} 上线",
           "offline": "{{name}} 下线",
           "empty": "打开这页后还没有设备上下线"
@@ -6400,6 +6395,7 @@
         "popover": {
           "status": "状态",
           "path": "路径",
+          "activity": "消息",
           "latency": "延迟",
           "lastSeen": "最后在线",
           "controlling": "正在控制这台电脑",
@@ -6408,9 +6404,6 @@
           "linkStatus": "与「{{name}}」",
           "version": "Cindy {{version}}",
           "remoteDesktopFailed": "打开远程桌面失败"
-        },
-        "sections": {
-          "devicesList": "设备列表"
         }
       }
     },

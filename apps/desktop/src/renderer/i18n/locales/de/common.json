@@ -6386,8 +6386,8 @@
       },
       "v2": {
         "switch": {
-          "title": "Neue Verbindungsansicht",
-          "hint": "Zeigt in einer Topologie, wie jedes Gerät mit diesem Computer verbunden ist. Ausschalten bringt die Liste zurück. Ändert nur diesen Computer."
+          "title": "Agent-Net (Beta)",
+          "hint": "Die neue Version von device-link, wird schrittweise weiterentwickelt. Bisher umgesetzt: eine Verbindungstopologie (ob jedes Gerät direkt oder über ein Relay verbunden ist, Round-Trip-Latenz, Leitungen mit laufenden Nachrichten, ausgelastete Geräte und Geräte mit Handlungsbedarf) sowie die letzte Aktivität. Ändert nur die Ansicht auf diesem Computer."
         },
         "empty": "Noch keine anderen Geräte. Melde dich auf einem anderen Computer oder Telefon mit demselben Konto an, dann erscheint es hier.",
         "stats": {
@@ -6408,14 +6408,17 @@
           "offline": "Offline"
         },
         "attention": {
-          "unresponsive": "Keine Antwort, neuer Versuch",
-          "masterOff": "Dieser Computer erlaubt keine Fernsteuerung",
-          "connectionIssue": "Problem mit der Relay-Verbindung"
+          "unresponsive": "Keine Antwort, neuer Versuch"
         },
         "relay": {
           "official": "Cindy-Relay"
         },
         "ms": "{{value}} ms",
+        "flow": {
+          "out": "Sendet",
+          "in": "Empfängt",
+          "both": "Sendet und empfängt"
+        },
         "offlineFold": "{{count}} offline",
         "offlineShow": "Offline-Geräte anzeigen",
         "offlineHide": "Offline-Geräte ausblenden",
@@ -6426,16 +6429,8 @@
           "attention": "Zu prüfen",
           "offline": "Offline"
         },
-        "tabs": {
-          "todo": "Zu prüfen",
-          "recent": "Zuletzt",
-          "aria": "Unter der Topologie"
-        },
-        "todo": {
-          "empty": "Nichts zu prüfen",
-          "emptyHint": "Geräte mit einem Problem erscheinen hier"
-        },
         "recent": {
+          "title": "Letzte Aktivität",
           "online": "{{name}} ist online",
           "offline": "{{name}} ist offline",
           "empty": "Seit dem Öffnen dieser Seite hat sich kein Gerät an- oder abgemeldet"
@@ -6443,6 +6438,7 @@
         "popover": {
           "status": "Status",
           "path": "Pfad",
+          "activity": "Nachrichten",
           "latency": "Latenz",
           "lastSeen": "Zuletzt gesehen",
           "controlling": "Steuert diesen Computer",
@@ -6451,9 +6447,6 @@
           "linkStatus": "Zu {{name}}",
           "version": "Cindy {{version}}",
           "remoteDesktopFailed": "Remote-Desktop konnte nicht geöffnet werden"
-        },
-        "sections": {
-          "devicesList": "Geräteliste"
         }
       }
     },

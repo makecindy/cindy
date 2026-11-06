@@ -6448,8 +6448,8 @@
       },
       "v2": {
         "switch": {
-          "title": "Nueva vista de conexión",
-          "hint": "Muestra en una topología cómo se conecta cada dispositivo a este ordenador. Desactívala para volver a la lista. Solo cambia este ordenador."
+          "title": "Agent-Net (Beta)",
+          "hint": "La nueva versión de device-link, en desarrollo continuo. Implementado hasta ahora: un mapa de topología de conexiones (si cada dispositivo se conecta directamente o a través de un relé, latencia de ida y vuelta, líneas con mensajes en curso, dispositivos ocupados y dispositivos que requieren atención) y la actividad reciente. Solo cambia la vista de esta computadora."
         },
         "empty": "Aún no hay otros dispositivos. Inicia sesión con la misma cuenta en otro ordenador o teléfono y aparecerá aquí.",
         "stats": {
@@ -6470,14 +6470,17 @@
           "offline": "Sin conexión"
         },
         "attention": {
-          "unresponsive": "Sin respuesta, reintentando",
-          "masterOff": "Este ordenador no permite el control remoto",
-          "connectionIssue": "Problema con la conexión al relé"
+          "unresponsive": "Sin respuesta, reintentando"
         },
         "relay": {
           "official": "Relé de Cindy"
         },
         "ms": "{{value}} ms",
+        "flow": {
+          "out": "Enviando",
+          "in": "Recibiendo",
+          "both": "Enviando y recibiendo"
+        },
         "offlineFold": "{{count}} sin conexión",
         "offlineShow": "Mostrar dispositivos sin conexión",
         "offlineHide": "Ocultar dispositivos sin conexión",
@@ -6488,16 +6491,8 @@
           "attention": "Por revisar",
           "offline": "Sin conexión"
         },
-        "tabs": {
-          "todo": "Por revisar",
-          "recent": "Recientes",
-          "aria": "Debajo de la topología"
-        },
-        "todo": {
-          "empty": "Nada por revisar",
-          "emptyHint": "Los dispositivos con problemas aparecen aquí"
-        },
         "recent": {
+          "title": "Actividad reciente",
           "online": "{{name}} se conectó",
           "offline": "{{name}} se desconectó",
           "empty": "Ningún dispositivo ha entrado o salido desde que se abrió esta página"
@@ -6505,6 +6500,7 @@
         "popover": {
           "status": "Estado",
           "path": "Ruta",
+          "activity": "Mensajes",
           "latency": "Latencia",
           "lastSeen": "Visto por última vez",
           "controlling": "Controlando este ordenador",
@@ -6513,9 +6509,6 @@
           "linkStatus": "Con {{name}}",
           "version": "Cindy {{version}}",
           "remoteDesktopFailed": "No se pudo abrir el escritorio remoto"
-        },
-        "sections": {
-          "devicesList": "Lista de dispositivos"
         }
       }
     },

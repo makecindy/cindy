@@ -8,9 +8,11 @@ import { remoteControlSettings } from './RemoteControlSection.settings-search';
  *   2. SSH:原 RemoteSection 原样嵌入(showTitle=false,标题由本页统一给)
  * (Slack 连接子块已迁至「IM 机器人」页 Cindy 栏, 见 ImBotSection.tsx + HookConnectionsSection.tsx)
  *
- * 「新版连接」开关(useRemoteConnectionV2,只改这台电脑的显示,默认关):打开后同账号设备部分
- * 换成拓扑页(features/remote-connection-v2),关闭时与原来完全一致。设备列表的展开态与
- * 设备深链两种形态共用 useRemoteDevicesDeepLink。
+ * 「Agent-Net (Beta)」开关(useRemoteConnectionV2,新版本的 device-link,只改这台电脑的显示,默认关):
+ * 打开后「我的设备」只留本机卡片(改名、允许控制本机、远程桌面等),下面紧接拓扑图
+ * (features/remote-connection-v2);其它设备不再列出,在拓扑里看(用户裁决 2026-11-07)。
+ * 关闭时与原来完全一致。连接线路与 SSH 开不开都一样。设备深链在打开时:本机定位本机卡片,
+ * 其它设备打开拓扑里那台设备的卡片(useRemoteDevicesDeepLink 给出聚焦目标)。
  *
  * 两个子块都是无上限列表,页面默认全部收起;收起态 header 右侧带状态摘要,
  * 各子块独立展开,状态不持久化(刷新回默认,与 PinnedSection 先例一致)。
@@ -189,35 +191,50 @@ export function RemoteControlSection() {
         ) : null}
 
         {deviceLinkAvailable && v2.enabled ? (
-          <RemoteConnectionV2Section s={s} relay={relay} deepLink={deepLink} selfSettings={<RemoteDesktopSetting />} />
-        ) : null}
-
-        {deviceLinkAvailable && !v2.enabled ? (
           <>
-            <CollapsibleSubSection
-              id={remoteControlSettings.devices.targetId}
-              title={t(remoteControlSettings.devices.titleKey)}
-              summary={devSumText}
-              dotColor={null}
-              open={deepLink.devicesOpen}
-              onToggle={deepLink.toggleDevices}
-              pinned={
-                <MyDevicesPanel
-                  s={s}
-                  variant="self"
-                  selfSettings={<RemoteDesktopSetting />}
-                  focusDeviceId={deepLink.focusDeviceId}
-                  focusRequestKey={deepLink.focusRequestKey}
-                />
-              }
-            >
+            {/* Agent-Net:「我的设备」只留本机卡片,其它设备在下面的拓扑里看 */}
+            <section id={remoteControlSettings.devices.targetId} className="flex flex-col gap-3">
+              <h3 className="text-14 font-medium text-[var(--text-primary)]">{t(remoteControlSettings.devices.titleKey)}</h3>
               <MyDevicesPanel
                 s={s}
-                variant="others"
+                variant="self"
+                selfSettings={<RemoteDesktopSetting />}
                 focusDeviceId={deepLink.focusDeviceId}
                 focusRequestKey={deepLink.focusRequestKey}
               />
-            </CollapsibleSubSection>
+            </section>
+            <RemoteConnectionV2Section s={s} relay={relay} deepLink={deepLink} />
+          </>
+        ) : null}
+
+        {deviceLinkAvailable ? (
+          <>
+            {v2.enabled ? null : (
+              <CollapsibleSubSection
+                id={remoteControlSettings.devices.targetId}
+                title={t(remoteControlSettings.devices.titleKey)}
+                summary={devSumText}
+                dotColor={null}
+                open={deepLink.devicesOpen}
+                onToggle={deepLink.toggleDevices}
+                pinned={
+                  <MyDevicesPanel
+                    s={s}
+                    variant="self"
+                    selfSettings={<RemoteDesktopSetting />}
+                    focusDeviceId={deepLink.focusDeviceId}
+                    focusRequestKey={deepLink.focusRequestKey}
+                  />
+                }
+              >
+                <MyDevicesPanel
+                  s={s}
+                  variant="others"
+                  focusDeviceId={deepLink.focusDeviceId}
+                  focusRequestKey={deepLink.focusRequestKey}
+                />
+              </CollapsibleSubSection>
+            )}
             {/* 设备之间经哪条线路连接:紧跟在「我的设备」下面直接展示,当前线路一眼可见,不再单独占一个入口。 */}
             <section id={remoteControlSettings.relay.targetId} className="flex flex-col gap-3">
               <div className="flex flex-col gap-0.5">

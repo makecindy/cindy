@@ -6343,8 +6343,8 @@
       },
       "v2": {
         "switch": {
-          "title": "新版連線",
-          "hint": "用拓樸圖查看每台裝置怎麼連到這台電腦；關閉後恢復原本的清單。只改這台電腦的顯示。"
+          "title": "Agent-Net (Beta)",
+          "hint": "新版本的 device-link，持續迭代中。目前已實作：連線拓撲圖（每臺裝置直連還是經中轉、往返延遲、正在收發訊息的線路、忙碌與需處理的裝置），以及最近活動。只改變這臺電腦的顯示。"
         },
         "empty": "還沒有其它裝置。在另一台電腦或手機登入同一帳號，它就會出現在這裡。",
         "stats": {
@@ -6365,14 +6365,17 @@
           "offline": "離線"
         },
         "attention": {
-          "unresponsive": "連線無回應，正在重試",
-          "masterOff": "本機未允許其它裝置控制",
-          "connectionIssue": "與中轉的連線有問題"
+          "unresponsive": "連線無回應，正在重試"
         },
         "relay": {
           "official": "Cindy 中轉"
         },
         "ms": "{{value}} ms",
+        "flow": {
+          "out": "傳送中",
+          "in": "接收中",
+          "both": "收發中"
+        },
         "offlineFold": "{{count}} 台離線",
         "offlineShow": "顯示離線裝置",
         "offlineHide": "收起離線裝置",
@@ -6383,16 +6386,8 @@
           "attention": "要處理",
           "offline": "離線"
         },
-        "tabs": {
-          "todo": "需要處理",
-          "recent": "最近",
-          "aria": "拓樸下方內容"
-        },
-        "todo": {
-          "empty": "沒有需要處理的",
-          "emptyHint": "裝置出問題時會列在這裡"
-        },
         "recent": {
+          "title": "最近活動",
           "online": "{{name}} 上線",
           "offline": "{{name}} 下線",
           "empty": "開啟這頁後還沒有裝置上下線"
@@ -6400,6 +6395,7 @@
         "popover": {
           "status": "狀態",
           "path": "路徑",
+          "activity": "訊息",
           "latency": "延遲",
           "lastSeen": "最後線上",
           "controlling": "正在控制這台電腦",
@@ -6408,9 +6404,6 @@
           "linkStatus": "與「{{name}}」",
           "version": "Cindy {{version}}",
           "remoteDesktopFailed": "開啟遠端桌面失敗"
-        },
-        "sections": {
-          "devicesList": "裝置清單"
         }
       }
     },

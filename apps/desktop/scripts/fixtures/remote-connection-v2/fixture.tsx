@@ -18,10 +18,46 @@ function device(partial: Partial<Device> & { deviceId: string; name: string }): 
   };
 }
 
-const SELF = device({ deviceId: 'self', name: 'Studio Mac', selfName: 'Studio Mac', deviceInfo: { modelLabel: 'Mac Studio' } });
+const SELF = device({ deviceId: 'self', name: 'Studio Mac', selfName: 'Studio Mac', isSelf: true, deviceInfo: { modelLabel: 'Mac Studio' } });
+
+/** 一条已建链路;sent / received 是「多少毫秒前有业务消息」,不传就是闲着。 */
+function link(deviceId: string, path: Link['path'], rttMs: number | null, sent: number | null = null, received: number | null = null): Link {
+  return { deviceId, path, rttMs, open: true, sentAgoMs: sent, receivedAgoMs: received };
+}
 
 function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs: number | null } {
   if (name === 'empty') return { devices: [SELF], links: [], relayRttMs: 18 };
+  if (name === 'fleet') {
+    // 与真实账号同一形状(3 直连、7 经中转、15 离线),名字是虚构的;两台正在收发。
+    const devices: Device[] = [SELF];
+    const links: Link[] = [];
+    const direct = [
+      ['Render Box', 'win32', 38],
+      ['Home mini', 'darwin', 76],
+      ['Travel MacBook', 'darwin', 76],
+    ] as const;
+    direct.forEach(([name, platform, rtt], i) => {
+      devices.push(device({ deviceId: `dir${i}`, name, platform }));
+      links.push(link(`dir${i}`, 'direct', rtt, i === 0 ? 300 : null, i === 0 ? 120 : null));
+    });
+    const relayed = [
+      ['Build Server', 'win32', 85],
+      ['Studio Mac Pro', 'darwin', 86],
+      ['Office MacBook', 'darwin', 148],
+      ['Cloud Runner', 'linux', 194],
+      ['Lab mini', 'darwin', 286],
+      ['Spare mini', 'darwin', 308],
+      ['CI Linux', 'linux', 316],
+    ] as const;
+    relayed.forEach(([name, platform, rtt], i) => {
+      devices.push(device({ deviceId: `rel${i}`, name, platform }));
+      links.push(link(`rel${i}`, 'relay', rtt, i === 3 ? 900 : null, null));
+    });
+    for (let i = 0; i < 15; i++) {
+      devices.push(device({ deviceId: `off${i}`, name: `Old device ${i + 1}`, platform: i % 2 ? 'win32' : 'darwin', online: false, lastSeenAt: '2026-10-20T08:00:00Z' }));
+    }
+    return { devices, links, relayRttMs: 25 };
+  }
   if (name === 'many') {
     const devices: Device[] = [SELF];
     const links: Link[] = [];
@@ -31,10 +67,10 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
       const platform = i % 3 === 0 ? 'win32' : i % 3 === 1 ? 'darwin' : 'linux';
       if (kind === 0) {
         devices.push(device({ deviceId: id, name: `Desk ${i}`, platform }));
-        links.push({ deviceId: id, path: 'direct', rttMs: 2 + i, open: true });
+        links.push(link(id, 'direct', 2 + i));
       } else if (kind === 1) {
         devices.push(device({ deviceId: id, name: `Office ${i}`, platform }));
-        links.push({ deviceId: id, path: 'relay', rttMs: 40 + i * 3, open: true });
+        links.push(link(id, 'relay', 40 + i * 3));
       } else if (kind === 2) {
         devices.push(device({ deviceId: id, name: `Lab ${i}`, platform }));
       } else if (kind === 3) {
@@ -49,17 +85,19 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
     devices: [
       SELF,
       device({ deviceId: 'win', name: 'Work PC', platform: 'win32', deviceInfo: { modelLabel: 'ThinkPad X1' } }),
-      device({ deviceId: 'mini', name: 'Mac mini', deviceInfo: { modelLabel: 'Mac mini' } }),
+      device({ deviceId: 'mini', name: 'Mac mini', busy: true, deviceInfo: { modelLabel: 'Mac mini' } }),
       device({ deviceId: 'nas', name: 'Home server', platform: 'linux' }),
       device({ deviceId: 'book', name: 'MacBook Air', remoteControlEnabled: false }),
       device({ deviceId: 'phone', name: 'iPhone', platform: 'ios' }),
+      device({ deviceId: 'pixel', name: 'Pixel', platform: 'android' }),
       device({ deviceId: 'old', name: 'Old laptop', platform: 'win32', online: false, lastSeenAt: '2026-10-30T12:00:00Z' }),
       device({ deviceId: 'old2', name: 'Spare PC', platform: 'win32', online: false, lastSeenAt: '2026-09-02T12:00:00Z' }),
     ],
     links: [
-      { deviceId: 'win', path: 'direct', rttMs: 3, open: true },
-      { deviceId: 'mini', path: 'direct', rttMs: 1, open: true },
-      { deviceId: 'nas', path: 'relay', rttMs: 96, open: true },
+      // 正在操作 Work PC:双向都有消息;Home server 只收到它发来的。
+      link('win', 'direct', 3, 200, 400),
+      link('mini', 'direct', 1),
+      link('nas', 'relay', 96, null, 600),
     ],
     relayRttMs: 24,
   };
