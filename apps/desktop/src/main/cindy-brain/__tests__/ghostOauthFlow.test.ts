@@ -172,6 +172,7 @@ describe('startGhostOauthFlow', () => {
     expect(result.ok).toBe(true);
     expect(callbackHtml).toContain('You can close this page and return to ExampleApp.');
     expect(callbackHtml).toContain('>Return to ExampleApp</a>');
+    expect(callbackHtml).toContain('<title>Authorization successful · ExampleApp</title>');
     if (result.ok) {
       expect(result.bundle.accessToken).toBe('at-1');
       expect(result.bundle.refreshToken).toBe('rt-1');
@@ -338,6 +339,7 @@ describe('startGhostOauthFlow', () => {
     let bodyText = '';
     const result = await startGhostOauthFlow({
       config: BASE_CONFIG,
+      brandName: 'Custom & <App>',
       fetchImpl: vi.fn() as unknown as typeof fetch,
       openExternal: (url) => {
         const u = new URL(url);
@@ -359,6 +361,8 @@ describe('startGhostOauthFlow', () => {
     expect(bodyText).not.toContain('<b>'); // HTML 仍被转义
     expect(bodyText).toContain('&lt;b&gt;');
     expect(bodyText).toContain('授权服务器返回错误'); // Accept-Language 命中中文
+    expect(bodyText).toContain('<title>授权失败 · Custom &amp; &lt;App&gt;</title>');
+    expect(bodyText).toContain('>返回 Custom &amp; &lt;App&gt;</a>');
   });
 
   it('超时 → TIMEOUT', async () => {

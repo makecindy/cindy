@@ -315,6 +315,7 @@ function successHtml(brandName: string, lang: OAuthResultPageLang): string {
     htmlLang: OAUTH_RESULT_HTML_LANG[lang],
     variant: 'success',
     title: s.successTitle,
+    brandName,
     body,
     action: buildOAuthReturnAction(lang, 'ghost-oauth', brandName),
   });
@@ -334,6 +335,7 @@ function errorHtml(
     htmlLang: OAUTH_RESULT_HTML_LANG[lang],
     variant: 'error',
     title: s.errorTitle,
+    brandName,
     body,
     action: buildOAuthReturnAction(lang, 'ghost-oauth', brandName),
   });

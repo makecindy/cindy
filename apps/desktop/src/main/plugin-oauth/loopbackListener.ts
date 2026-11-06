@@ -42,7 +42,7 @@ export async function listenForOauthCallback(
       res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' });
       // No provider text, URL or code in the browser result.
       const lang = pickOAuthResultPageLang(req.headers['accept-language']);
-      const copy = getRemoteOAuthCallbackCopy(lang);
+      const copy = getRemoteOAuthCallbackCopy(lang, BRAND_NAME);
       const errors = getGhostOAuthResultCopy(lang);
       res.end(
         renderOAuthResultPage({

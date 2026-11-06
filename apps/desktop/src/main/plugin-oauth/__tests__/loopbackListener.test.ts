@@ -82,7 +82,12 @@ it.each(['127.0.0.1', '::1'])(
       expect(await request(host, port, { path: '/wrong-path' })).toBe(404);
     }
     expect(deliver).not.toHaveBeenCalled();
-    expect(await request(first, port)).toBe(200);
+    let acceptedHtml = '';
+    expect(await request(first, port, {
+      onBody: (body) => { acceptedHtml = body; },
+    })).toBe(200);
+    expect(acceptedHtml).toContain('Return to ExampleApp to check the authorization result on the remote device.');
+    expect(acceptedHtml).toContain('<title>Authorization callback received · ExampleApp</title>');
     const other = first === '::1' ? '127.0.0.1' : '::1';
     expect(await request(other, port)).toBe(409);
     expect(deliver).toHaveBeenCalledExactlyOnceWith({ state, error: 'access_denied' });
