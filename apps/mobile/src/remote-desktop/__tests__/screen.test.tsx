@@ -6007,6 +6007,15 @@ describe("remote desktop controls", () => {
       }),
     );
     const keys = fixture.views["remoteDesktop.keys"];
+    const keyHeight = (id: string) =>
+      Object.assign(
+        {},
+        ...fixture.views[`remoteDesktop.key.${id}`].style
+          .flat(Infinity)
+          .filter(Boolean),
+      ).height;
+    // User decision: the function strip is never taller than a key row.
+    expect(keyHeight("Escape")).toBeLessThanOrEqual(keyHeight("KeyQ"));
     const keyCenter = (id: string) => {
       const style = Object.assign(
         {},
@@ -6439,9 +6448,14 @@ describe("remote desktop controls", () => {
     expect(
       host.querySelector('[data-testid="remoteDesktop.foldKeyboard"]'),
     ).not.toBeNull();
-    act(() => fixture.views["remoteDesktop.foldOperations"].onPress());
-    act(() => fixture.views["remoteDesktop.skinSwitch"].onPress()); // Next tap wraps to classic.
-    act(() => fixture.views["remoteDesktop.operations"].onPress());
+    // User decision: the default keyboard keeps the swipe rail, so the retro
+    // skins stay one swipe away instead of only behind Controls.
+    expect(
+      host.querySelector(
+        '[data-testid="remoteDesktop.foldKeyboard"] [data-testid="remoteDesktop.skinSwipe"]',
+      ),
+    ).not.toBeNull();
+    swipe(-100); // Keyboard wraps to classic.
     expect(
       host.querySelector('[data-testid="remoteDesktop.retroKeys"]'),
     ).not.toBeNull();
