@@ -6294,7 +6294,7 @@
           }
         },
         "feishu": {
-          "description": "Feishu または Lark アカウントを連携し、Cindy bot へのメッセージやグループでのメンションでタスクを依頼できます。",
+          "description": "同じ Feishu / Lark アカウントに複数のパソコンを連携できます。ボットのメニューで作業用パソコンを切り替えられ、最後に連携したパソコンが既定で選ばれます。Cindy に直接メッセージを送るか、グループでメンションすると開始できます。",
           "disabledHint": "スイッチをオンにして、ブラウザで Feishu / Lark アカウントを認証するか、連携コードを bot に送信してください。",
           "toggleAria": "Feishu / Lark 接続を切り替え",
           "connect": "Feishu / Lark を連携",
@@ -6304,7 +6304,7 @@
           "openBot": "Bot を開く",
           "unlink": "Feishu / Lark の連携を解除",
           "unlinkConfirmTitle": "Feishu / Lark の連携を解除しますか？",
-          "unlinkConfirmDescription": "解除すると Feishu / Lark からこのデバイスへタスクを送れなくなります。ローカルプロジェクトと他のチャンネルには影響しません。",
+          "unlinkConfirmDescription": "このパソコンと Feishu / Lark の連携を解除しますか？ほかの連携済みパソコン、ローカルプロジェクト、ほかのチャネルには影響しません。",
           "unavailableHint": "所属組織で Feishu / Lark bot がまだ設定されていません。組織の管理者にお問い合わせください。",
           "unavailableHintPersonal": "Feishu / Lark bot は個人アカウントではまだご利用いただけません。",
           "status": {
@@ -6314,13 +6314,13 @@
             "disabled": "無効",
             "none": "未連携",
             "pending": "ブラウザで認証するか、連携コードを bot に送信してください",
-            "awaiting_confirmation": "Feishu / Lark でデバイス切り替えを確認してください",
+            "awaiting_confirmation": "Feishu / Lark でこのパソコンの連携アカウント変更を確認してください",
             "confirmed": "{{user}} が Feishu / Lark bot と連携済み",
             "denied": "認証が拒否されました",
             "expired": "認証の有効期限切れ",
             "failed": "連携に失敗しました",
             "revoked": "連携が解除されました",
-            "superseded": "別のデバイスで連携済み",
+            "superseded": "このパソコンは別の Feishu / Lark アカウントと連携されています",
             "appChanged": "Feishu / Lark bot が変更されました。もう一度連携してください。"
           },
           "bindCode": {

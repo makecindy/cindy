@@ -6294,7 +6294,7 @@
           }
         },
         "feishu": {
-          "description": "关联飞书或 Lark 账号，私聊 Cindy 机器人或在群里 @它即可派发任务。",
+          "description": "同一飞书 / Lark 账号可关联多台电脑，在机器人菜单中切换工作电脑，默认使用最新关联的电脑。私聊 Cindy 或在群里 @它即可开始。",
           "disabledHint": "打开开关后，在浏览器里授权飞书账号，或把关联码发给飞书机器人。",
           "toggleAria": "切换飞书 / Lark 连接",
           "connect": "关联飞书",
@@ -6304,7 +6304,7 @@
           "openBot": "打开飞书机器人",
           "unlink": "解绑飞书",
           "unlinkConfirmTitle": "解绑飞书？",
-          "unlinkConfirmDescription": "解绑后飞书将不能再向这台设备派发任务；本地项目和其它渠道连接不受影响。",
+          "unlinkConfirmDescription": "解除这台电脑与飞书 / Lark 的关联？其它已关联电脑、本地项目和其它渠道连接不受影响。",
           "unavailableHint": "你所在的组织还没有配置飞书机器人，请联系组织管理员。",
           "unavailableHintPersonal": "飞书机器人暂未向个人账号开放。",
           "status": {
@@ -6314,13 +6314,13 @@
             "disabled": "已停用",
             "none": "未绑定",
             "pending": "在浏览器里授权，或把关联码发给飞书机器人",
-            "awaiting_confirmation": "请在飞书里确认切换设备",
+            "awaiting_confirmation": "请在飞书 / Lark 里确认更换这台电脑关联的账号",
             "confirmed": "{{user}} 已关联飞书机器人",
             "denied": "已拒绝授权",
             "expired": "授权已过期",
             "failed": "关联失败",
             "revoked": "已解除关联",
-            "superseded": "已关联到另一台设备",
+            "superseded": "这台电脑已关联到另一个飞书 / Lark 账号",
             "appChanged": "飞书机器人已更换，请重新关联"
           },
           "bindCode": {

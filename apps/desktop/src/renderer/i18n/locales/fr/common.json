@@ -6399,7 +6399,7 @@
           }
         },
         "feishu": {
-          "description": "Associez votre compte Feishu ou Lark et transmettez des tâches en écrivant au bot Cindy ou en le mentionnant dans un groupe.",
+          "description": "Associez plusieurs ordinateurs à votre compte Feishu / Lark. Choisissez l’ordinateur de travail dans le menu du bot ; le dernier ordinateur associé est sélectionné par défaut. Envoyez un message privé à Cindy ou mentionnez-le dans un groupe pour commencer.",
           "disabledHint": "Activez l'interrupteur, puis autorisez votre compte Feishu / Lark dans le navigateur ou envoyez le code d'association au bot.",
           "toggleAria": "Activer/désactiver la connexion Feishu / Lark",
           "connect": "Associer Feishu / Lark",
@@ -6409,7 +6409,7 @@
           "openBot": "Ouvrir le bot",
           "unlink": "Dissocier Feishu / Lark",
           "unlinkConfirmTitle": "Dissocier Feishu / Lark ?",
-          "unlinkConfirmDescription": "Après la dissociation, Feishu / Lark ne pourra plus transmettre de tâches à cet appareil ; les projets locaux et les autres canaux ne sont pas affectés.",
+          "unlinkConfirmDescription": "Dissocier cet ordinateur de Feishu / Lark ? Les autres ordinateurs associés, les projets locaux et les autres canaux ne sont pas affectés.",
           "unavailableHint": "Votre organisation n'a pas encore configuré le bot Feishu / Lark. Contactez l'administrateur de votre organisation.",
           "unavailableHintPersonal": "Le bot Feishu / Lark n'est pas encore disponible pour les comptes personnels.",
           "status": {
@@ -6419,13 +6419,13 @@
             "disabled": "Désactivé",
             "none": "Non associé",
             "pending": "Autorisez dans le navigateur ou envoyez le code d'association au bot",
-            "awaiting_confirmation": "Confirmez le changement d'appareil dans Feishu / Lark",
+            "awaiting_confirmation": "Confirmez le changement de compte de cet ordinateur dans Feishu / Lark",
             "confirmed": "{{user}} associé au bot Feishu / Lark",
             "denied": "Autorisation refusée",
             "expired": "Autorisation expirée",
             "failed": "Échec de l'association",
             "revoked": "Dissocié",
-            "superseded": "Associé sur un autre appareil",
+            "superseded": "Cet ordinateur est associé à un autre compte Feishu / Lark",
             "appChanged": "Le bot Feishu / Lark a changé. Associez-le à nouveau."
           },
           "bindCode": {

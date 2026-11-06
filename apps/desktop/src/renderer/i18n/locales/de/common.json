@@ -6337,7 +6337,7 @@
           }
         },
         "feishu": {
-          "description": "Verknüpfe dein Feishu- oder Lark-Konto und weise Aufgaben zu, indem du dem Cindy-Bot schreibst oder ihn in einer Gruppe erwähnst.",
+          "description": "Verknüpfe mehrere Computer mit deinem Feishu-/Lark-Konto. Wähle den Arbeitscomputer im Bot-Menü; standardmäßig wird der zuletzt verknüpfte Computer ausgewählt. Sende Cindy eine Direktnachricht oder erwähne Cindy in einer Gruppe, um zu beginnen.",
           "disabledHint": "Aktiviere den Schalter und autorisiere dann dein Feishu-/Lark-Konto im Browser oder sende den Verknüpfungscode an den Bot.",
           "toggleAria": "Feishu-/Lark-Verbindung umschalten",
           "connect": "Feishu / Lark verknüpfen",
@@ -6347,7 +6347,7 @@
           "openBot": "Bot öffnen",
           "unlink": "Verknüpfung mit Feishu / Lark aufheben",
           "unlinkConfirmTitle": "Verknüpfung mit Feishu / Lark aufheben?",
-          "unlinkConfirmDescription": "Nach dem Aufheben der Verknüpfung kann Feishu / Lark keine Aufgaben mehr an dieses Gerät senden; lokale Projekte und andere Kanäle sind davon nicht betroffen.",
+          "unlinkConfirmDescription": "Diesen Computer von Feishu / Lark trennen? Andere verknüpfte Computer, lokale Projekte und andere Kanäle bleiben davon unberührt.",
           "unavailableHint": "Deine Organisation hat den Feishu-/Lark-Bot noch nicht eingerichtet. Wende dich an einen Admin deiner Organisation.",
           "unavailableHintPersonal": "Der Feishu-/Lark-Bot ist für persönliche Konten noch nicht verfügbar.",
           "status": {
@@ -6357,13 +6357,13 @@
             "disabled": "Deaktiviert",
             "none": "Nicht verknüpft",
             "pending": "Im Browser autorisieren oder den Verknüpfungscode an den Bot senden",
-            "awaiting_confirmation": "Gerätewechsel in Feishu / Lark bestätigen",
+            "awaiting_confirmation": "Bestätige den Kontowechsel für diesen Computer in Feishu / Lark",
             "confirmed": "{{user}} mit dem Feishu-/Lark-Bot verknüpft",
             "denied": "Autorisierung abgelehnt",
             "expired": "Autorisierung abgelaufen",
             "failed": "Verknüpfung fehlgeschlagen",
             "revoked": "Verknüpfung aufgehoben",
-            "superseded": "Auf einem anderen Gerät verknüpft",
+            "superseded": "Dieser Computer ist mit einem anderen Feishu-/Lark-Konto verknüpft",
             "appChanged": "Der Feishu-/Lark-Bot wurde gewechselt. Bitte erneut verknüpfen."
           },
           "bindCode": {

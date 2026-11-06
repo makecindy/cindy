@@ -6337,7 +6337,7 @@
           }
         },
         "feishu": {
-          "description": "Link your Feishu or Lark account and dispatch tasks by messaging the Cindy bot or mentioning it in a group.",
+          "description": "Link multiple computers to your Feishu / Lark account. Choose the working computer from the bot menu; the most recently linked computer is selected by default. Send a direct message or mention Cindy in a group to start.",
           "disabledHint": "Turn on the switch, then authorize your Feishu / Lark account in the browser or send the link code to the bot.",
           "toggleAria": "Toggle Feishu / Lark connection",
           "connect": "Link Feishu / Lark",
@@ -6347,7 +6347,7 @@
           "openBot": "Open bot",
           "unlink": "Unlink Feishu / Lark",
           "unlinkConfirmTitle": "Unlink Feishu / Lark?",
-          "unlinkConfirmDescription": "After unlinking, Feishu / Lark can no longer dispatch tasks to this device; local projects and other channels are unaffected.",
+          "unlinkConfirmDescription": "Unlink this computer from Feishu / Lark? Other linked computers, local projects, and other channels are unaffected.",
           "unavailableHint": "Your organization hasn't set up the Feishu / Lark bot yet. Contact your organization admin.",
           "unavailableHintPersonal": "The Feishu / Lark bot isn't available for personal accounts yet.",
           "status": {
@@ -6357,13 +6357,13 @@
             "disabled": "Disabled",
             "none": "Not linked",
             "pending": "Authorize in the browser, or send the link code to the bot",
-            "awaiting_confirmation": "Confirm the device switch in Feishu / Lark",
+            "awaiting_confirmation": "Confirm the account change for this computer in Feishu / Lark",
             "confirmed": "{{user}} linked to the Feishu / Lark bot",
             "denied": "Authorization denied",
             "expired": "Authorization expired",
             "failed": "Linking failed",
             "revoked": "Unlinked",
-            "superseded": "Linked on another device",
+            "superseded": "This computer is linked to another Feishu / Lark account",
             "appChanged": "The Feishu / Lark bot was changed. Link it again."
           },
           "bindCode": {

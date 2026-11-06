@@ -6294,7 +6294,7 @@
           }
         },
         "feishu": {
-          "description": "關聯飛書或 Lark 名籍，私訊 Cindy 機器人或於群中 @之，即可派差事。",
+          "description": "同一飛書 / Lark 帳號可繫多機，於機器人選單擇工作電腦，初取新繫之機。私訊 Cindy，或於群中 @之，即可始。",
           "disabledHint": "開此開關後，或於瀏覽器中授權飛書名籍，或將關聯碼遣予飛書機器人。",
           "toggleAria": "啟閉飛書 / Lark 連線",
           "connect": "結飛書",
@@ -6304,7 +6304,7 @@
           "openBot": "開飛書機器人",
           "unlink": "解飛書",
           "unlinkConfirmTitle": "解綁飛書乎？",
-          "unlinkConfirmDescription": "解綁之後，飛書不能再向此臺裝置派差事；本地之案與他渠道連線不受影響。",
+          "unlinkConfirmDescription": "解此機與飛書 / Lark 之繫乎？他機所繫、本機專案及他途連線皆如故。",
           "unavailableHint": "君所屬之組織尚未設飛書機器人，請洽組織管理員。",
           "unavailableHintPersonal": "飛書機器人尚未向個人帳號開放。",
           "status": {
@@ -6314,13 +6314,13 @@
             "disabled": "已停",
             "none": "未綁",
             "pending": "於瀏覽器中授權，或將關聯碼遣予飛書機器人",
-            "awaiting_confirmation": "請於飛書內確認切換裝置",
+            "awaiting_confirmation": "請於飛書 / Lark 確認更換此機所繫帳號",
             "confirmed": "{{user}} 已結飛書機器人",
             "denied": "授權已拒",
             "expired": "授權已逾期",
             "failed": "關聯未成",
             "revoked": "關聯已解",
-            "superseded": "已關聯至他臺裝置",
+            "superseded": "此機已繫另一飛書 / Lark 帳號",
             "appChanged": "飛書機器人已更易，請重為關聯"
           },
           "bindCode": {

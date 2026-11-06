@@ -7,7 +7,7 @@
 
 - 组织所有者/管理员在组织后台配置本企业的飞书或 Lark **企业自建应用**（机器人专用应用）。
 - 组织成员在 Cindy「官方」栏关联飞书账号：授权页一键关联为主，关联码兜底（外部用户）。
-- 私聊或群里 @Cindy，按**发言人**把任务派到其绑定的电脑；群里在触发消息下的**话题**里回复；带群聊上下文。
+- 私聊或群里 @Cindy，按**发言人**把任务派到其选中的工作电脑；群里在触发消息下的**话题**里回复；带群聊上下文。
 - 体验对齐官方 Telegram：离线排队、断线补发、确认卡与 Cindy 共用决定、群任务强确认。
 - Cindy 全局应用审批通过后可在后台切换，Cindy 侧不发版。
 
@@ -43,7 +43,7 @@
   唯一键 `(authEnv, orgId)`、`(brand, appId)`。
 - 桌面连接验签后保留 `ctx / orgId / orgSlug`（现 telegram 丢弃）。连接时按「组织应用（已启用）→ 全局应用（后续）→ 无」解析应用；
   无应用时 welcome 不宣告 `provider:feishu`。
-- `ProviderBinding.tenantId = appId`，`principalId = open_id`；一个飞书账号 ↔ 一台电脑（沿用两个唯一约束）。
+- `ProviderBinding.tenantId = appId`，`principalId = open_id`；一个飞书账号可绑定多台电脑，每台电脑在同一应用下只关联一个飞书账号；工作电脑在服务端按 `(appId, open_id)` 持久化选择，新关联的电脑默认选中，重连不改变选择。
 - 组织更换应用（appId 变化）或切到全局应用：旧应用下的绑定置为 `superseded`，向在线桌面推 `reason: 'app_changed'`，卡片提示一键重新关联。
 
 ### 3.2 关联
@@ -53,14 +53,15 @@
   - **关联码**：8 位分组码（只存哈希），经协议新增可选字段 `bindCode` 下发。
 - 授权回调：`code` 换 `user_access_token`（`/authen/v2/oauth/token`）→ 取 `open_id / union_id / name / tenant_key` → 认领 attempt → 回结果页（中英）→ 机器人私聊「已关联」。
 - 关联码：私聊发「关联 XXXX-XXXX」→ 按哈希认领；同一 open_id 10 分钟内错 5 次锁定；群里不处理。
-- 换绑：私聊发确认卡，本人确认后生效（同 Telegram）。解绑：桌面开关 / 私聊 `/unlink`。
+- 新设备关联成功后，机器人私聊发送当前工作电脑与用法。在底部菜单「工作电脑」（事件 key `device`）或 `/device` 打开分页选择卡，列出所有已关联电脑与在线状态。选择仅影响新消息，运行中任务留在原电脑；离线 / 繁忙时拒绝，不自动切换电脑，不积压补发。
+- 同一电脑更换关联账号仍需本人确认；桌面开关只解绑本机，私聊 `/unlink` 只解绑当前工作电脑。其他电脑及其运行中任务保留。
 
 ### 3.3 lane（externalKey）
 
 - 私聊：`feishu:dm:<appId>:<openId>:g<n>`（`/new` 换代）。
 - 群：**每次在群主界面 @ 都开一个新话题 = 一个新任务**；话题内继续 @ 接着该任务。
   `feishu:topic:<appId>:<chatId>:<rootMessageId>:<openId>:g<n>`（以话题根消息 id 为键；同一话题里不同人各自一条 lane）。
-- 话题群（每条消息都是话题）同一规则。
+- 话题群（每条消息都是话题）同一规则。服务端内部会话键按绑定隔离，每台电脑保留自己的代次、工作目录和上下文起点；外部 lane 格式不变。
 
 ### 3.4 入站（服务端，移植自 `packages/lizi-im/src/feishu/`）
 
@@ -77,7 +78,7 @@
 - 进度：首个 `turn.progress` 在话题/私聊发 v2 markdown 卡片（`update_multi`），之后 1.5 秒节流原地 patch；30 KB 截断。
 - 终稿：`turn.end` 时把同一张卡 patch 成最终回答；图片附件上传为 `image_key` 嵌入卡片，文件单独发送；失败显示原因。
 - 交互卡：`interaction.request` 渲染 v1 按钮卡；`card.action.trigger` → `interaction.decision`；群任务改投 owner 私聊并附来源链接；`interaction.cancel` 收口。
-- 命令（第一里程碑）：`/new` `/stop`（`!stop`）`/status` `/unlink` `/help` `/project`（经 `query.request`）；`/ctr` `/model` 等与私聊菜单放第二里程碑。
+- 命令（第一里程碑）：`/new` `/stop`（`!stop`）`/device` `/status` `/unlink` `/help` `/project`（经 `query.request`）；`/ctr` `/model` 等与私聊菜单放第二里程碑。
 
 ## 4. 两个仓库怎么拆
 

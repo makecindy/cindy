@@ -6294,7 +6294,7 @@
           }
         },
         "feishu": {
-          "description": "Feishu 또는 Lark 계정을 연결하고 Cindy bot에게 메시지를 보내거나 그룹에서 멘션해 작업을 요청하세요.",
+          "description": "같은 Feishu / Lark 계정에 여러 컴퓨터를 연결할 수 있습니다. 봇 메뉴에서 작업 컴퓨터를 전환하며, 가장 최근에 연결한 컴퓨터가 기본으로 선택됩니다. Cindy에게 메시지를 보내거나 그룹에서 멘션하여 시작하세요.",
           "disabledHint": "스위치를 켠 뒤 브라우저에서 Feishu / Lark 계정을 인증하거나 연동 코드를 bot에게 보내세요.",
           "toggleAria": "Feishu / Lark 연결 전환",
           "connect": "Feishu / Lark 연결",
@@ -6304,7 +6304,7 @@
           "openBot": "봇 열기",
           "unlink": "Feishu / Lark 연결 해제",
           "unlinkConfirmTitle": "Feishu / Lark 연결을 해제할까요?",
-          "unlinkConfirmDescription": "해제하면 Feishu / Lark에서 이 기기로 작업을 보낼 수 없습니다. 로컬 프로젝트와 다른 채널 연결에는 영향이 없습니다.",
+          "unlinkConfirmDescription": "이 컴퓨터와 Feishu / Lark의 연결을 해제할까요? 다른 연결된 컴퓨터, 로컬 프로젝트 및 다른 채널에는 영향이 없습니다.",
           "unavailableHint": "소속 조직에서 아직 Feishu / Lark bot을 설정하지 않았습니다. 조직 관리자에게 문의하세요.",
           "unavailableHintPersonal": "Feishu / Lark bot은 아직 개인 계정에서 사용할 수 없습니다.",
           "status": {
@@ -6314,13 +6314,13 @@
             "disabled": "비활성화됨",
             "none": "연결되지 않음",
             "pending": "브라우저에서 인증하거나 연동 코드를 bot에게 보내세요",
-            "awaiting_confirmation": "Feishu / Lark에서 기기 전환을 확인하세요",
+            "awaiting_confirmation": "Feishu / Lark에서 이 컴퓨터에 연결된 계정 변경을 확인하세요",
             "confirmed": "{{user}} 님이 Feishu / Lark bot과 연결됨",
             "denied": "인증이 거부되었습니다",
             "expired": "인증이 만료되었습니다",
             "failed": "연결에 실패했습니다",
             "revoked": "연결이 해제되었습니다",
-            "superseded": "다른 기기에서 연결됨",
+            "superseded": "이 컴퓨터는 다른 Feishu / Lark 계정에 연결되어 있습니다",
             "appChanged": "Feishu / Lark bot이 변경되었습니다. 다시 연결하세요."
           },
           "bindCode": {

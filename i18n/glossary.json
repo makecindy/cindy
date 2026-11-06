@@ -3496,6 +3496,26 @@
       },
       "checkCase": false,
       "note": "GitHub PR / GitLab MR 的合并冲突。数据行标签为 Merge / 合并，状态值为 Conflicts / 有冲突；与检查失败及应用崩溃区分。"
+    },
+    {
+      "id": "official-feishu-working-computer",
+      "status": "proposed",
+      "en": "Working computer",
+      "translations": {
+        "zh-CN": "工作电脑",
+        "zh-TW": "工作電腦",
+        "ja": "作業用パソコン",
+        "ko": "작업 컴퓨터",
+        "fr": "Ordinateur de travail",
+        "es": "Ordenador de trabajo",
+        "de": "Arbeitscomputer",
+        "pt-PT": "Computador de trabalho",
+        "pt-BR": "Computador de trabalho",
+        "zh-Hant-x-lzh": "工作電腦",
+        "zh-Hans-x-lzh": "工作电脑"
+      },
+      "checkCase": false,
+      "note": "官方飞书 / Lark 机器人中接收新消息的已关联电脑；每个应用和飞书账号独立选择，默认最新关联的电脑。"
     }
   ]
 }
