@@ -346,7 +346,7 @@ const PROBE_DETAIL_MAX_CHARS = 512;
 function sanitizeProbeDetail(detail: string | undefined): string | undefined {
   if (!detail) return undefined;
   return detail
-    .replace(/(authorization|x-api-key|x-goog-api-key)(["'\\s:=]+)[^\\s"',}]+/gi, '$1$2<redacted>')
+    .replace(/(authorization|x-api-key|x-goog-api-key)(["'\s:=]+)[^\s"',}]+/gi, '$1$2<redacted>')
     .slice(0, PROBE_DETAIL_MAX_CHARS);
 }
 
@@ -423,7 +423,7 @@ async function runProviderProbeUnlogged(
       }, AbortSignal.timeout(PROBE_TIMEOUT_MS));
       if (result.stopReason !== 'error' && result.stopReason !== 'aborted') return { ok: true, latencyMs: Date.now() - start };
       const detail = result.errorMessage ?? 'Native provider probe failed';
-      const statusMatch = detail.match(/(?:status|code)["\\s:]+(4\\d\\d|5\\d\\d)\\b|^(4\\d\\d|5\\d\\d)(?:\\s|:)/);
+      const statusMatch = detail.match(/(?:status|code)["\s:]+(4\d\d|5\d\d)\b|^(4\d\d|5\d\d)(?:\s|:)/);
       const status = statusMatch ? Number(statusMatch[1] ?? statusMatch[2]) : undefined;
       const cls = classifyProviderError({ status, bodyText: detail,
         ...(result.stopReason === 'aborted' ? { networkErrorCode: 'AbortError' } : {}) });
