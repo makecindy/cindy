@@ -1,4 +1,34 @@
 {
+  "sharedTaskRecovery": {
+    "title": "Cannot resume on the original computer",
+    "description": "Choose another computer or provider to continue with a context handoff. Your messages stay, but switching does not transfer the original computer’s full running state.",
+    "choose": "Choose another computer",
+    "cancel": "Stay here",
+    "stage": {
+      "owner": "Failed while contacting the sharing computer.",
+      "allocation": "Failed while allocating the original executor.",
+      "executor": "Failed while confirming the executor’s device-link connection.",
+      "capability": "Failed while checking the executor’s capabilities.",
+      "authorization": "Failed while installing execution authorization.",
+      "unknown": "The failing stage was not reported."
+    },
+    "reason": {
+      "offline": "The computer contacted at this stage was reported offline. Other tasks may be running on different computers.",
+      "timeout": "The request timed out. The failing stage identifies the service being contacted; neither direct-path nor relay failure has been confirmed.",
+      "relay": "The device-link connection is not ready or was closed. A failed direct path alone normally falls back to the relay.",
+      "denied": "Access was denied or remote control was disabled. Retrying cannot bypass this restriction.",
+      "model": "The shared provider or model is not allowed for this task.",
+      "budget": "The provider reported a usage limit or insufficient quota. Switching computers may still use the same quota.",
+      "capacity": "Task or connection capacity has been reached. Close unused tasks or choose another computer.",
+      "unsupported": "The executor does not support the required shared-task capabilities.",
+      "authorization": "Execution authorization could not be installed. This is not proof that the executor is offline.",
+      "history": "The original task location cannot be used. Its native history cannot be opened on a different computer.",
+      "policy": "Sharing usage rules require live checks through the sharing computer. Direct execution cannot enforce them; this does not mean the balance is empty.",
+      "unknown": "The sharing computer did not provide a precise cause. Offline status, quota and the direct/relay path could not be confirmed.",
+      "rate": "The service is rate-limiting or congested. Wait for its cooldown; another computer may share the same limit.",
+      "service": "The sharing authorization service could not be reached or returned a failure. The executor has not been confirmed offline."
+    }
+  },
   "pluginUi": {
     "renderer": "Display",
     "original": "Original",

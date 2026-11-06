@@ -88,7 +88,8 @@ export function ErrorMessageCard({
         ? t('chat.errorBanner.streamInterruptedNoRetry')
         : isGatewayProxyTokenInvalid
           ? t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')
-          : localizedReasonError ?? remoteGuidance ?? t('chat.errorBanner.replyFailed');
+          : (parsedRemoteKey?.startsWith('sharedTaskRecovery.') ? remoteGuidance : undefined)
+            ?? localizedReasonError ?? remoteGuidance ?? t('chat.errorBanner.replyFailed');
   const showRawToggle = kind === 'reply-error' && Boolean(decoded);
 
   if (!text) return null;
