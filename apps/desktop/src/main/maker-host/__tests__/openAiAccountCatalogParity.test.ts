@@ -167,6 +167,7 @@ describe('OpenAI account catalog identity', () => {
     expect(images('openai')).toEqual([expect.objectContaining({ id: 'openai/gpt-image-2', name: 'GPT Image Gen' })]);
     setOpenAiImagesApiKeyConfigured(true);
     expect(images('openai').map(m => m.id)).toEqual([
+      'openai/gpt-image-2.6-sunburst', 'openai/gpt-image-2.6-flare',
       'openai/gpt-image-2.5-sunburst', 'openai/gpt-image-2.5-flare', 'openai/gpt-image-2',
     ]);
     expect(images('openai').find(m => m.id === 'openai/gpt-image-2')?.name).toBe('GPT Image 2');

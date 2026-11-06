@@ -1,6 +1,6 @@
 {
   "schemaVersion": 6,
-  "updatedAt": "2026-11-05T09:54:04.007Z",
+  "updatedAt": "2026-11-05T14:18:16.071Z",
   "models": [
     {
       "id": "openai/gpt-6.1-sol",
@@ -2677,7 +2677,8 @@
           "agents": [
             "claude-code",
             "codex"
-          ]
+          ],
+          "referencePriceGroup": "cn"
         },
         {
           "providerId": "minimax-global",
@@ -3099,6 +3100,36 @@
       ],
       "nativeApi": "openai-completions",
       "modelRef": "xd/tencent-hy4-preview"
+    },
+    {
+      "id": "openai/gpt-image-2.6-sunburst",
+      "name": "GPT Image 2.6 Sunburst",
+      "modelRef": "openai/gpt-image-2.6-sunburst",
+      "mode": "image_generation",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "openai/gpt-image-2.6-sunburst",
+          "agents": []
+        }
+      ],
+      "nativeApi": "openai-images"
+    },
+    {
+      "id": "openai/gpt-image-2.6-flare",
+      "name": "GPT Image 2.6 Flare",
+      "modelRef": "openai/gpt-image-2.6-flare",
+      "mode": "image_generation",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "openai/gpt-image-2.6-flare",
+          "agents": []
+        }
+      ],
+      "nativeApi": "openai-images"
     },
     {
       "id": "openai/gpt-image-2.5-sunburst",
@@ -8143,6 +8174,24 @@
               }
             }
           ]
+        },
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 1,
+              "outputPerMtok": 4,
+              "cacheReadPerMtok": 0.1,
+              "effectiveFrom": "2026-11-05",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.minimaxi.com/docs/pricing/overview",
+                "verifiedAt": "2026-11-05"
+              }
+            }
+          ]
         }
       ]
     },
@@ -8260,6 +8309,44 @@
           "xhigh"
         ],
         "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "openai/gpt-image-2.6-sunburst",
+      "aliases": [
+        "gpt-image-2.6-sunburst"
+      ],
+      "defaults": {
+        "name": "GPT Image 2.6 Sunburst",
+        "mode": "image_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        }
+      }
+    },
+    {
+      "id": "openai/gpt-image-2.6-flare",
+      "aliases": [
+        "gpt-image-2.6-flare"
+      ],
+      "defaults": {
+        "name": "GPT Image 2.6 Flare",
+        "mode": "image_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        }
       }
     },
     {
