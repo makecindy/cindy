@@ -48,7 +48,7 @@ describe('mobile session list drawer', () => {
     const text = source();
     expect(text).toContain("BackHandler.addEventListener('hardwareBackPress', () => {");
     // 多处除以 panelWidth,宽度必须有正下限(除零保险,不寄托在调用方身上)。
-    expect(text).toContain('Math.max(1, width + insets.left)');
+    expect(text).toContain('Math.max(1, shownWidth + insets.left)');
     // 手势位移并回 progress:关闭动画从当前视觉位置继续,不跳帧。
     expect(text).toContain('progress.value + dragX.value / panelWidth');
     // A cancelled left swipe must animate the merged visual position back to
