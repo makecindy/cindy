@@ -14014,6 +14014,8 @@
       "updateHost": "작업을 실행하는 컴퓨터를 업데이트한 후 다시 시도해 주세요.",
       "failed": "사이드 채팅을 열지 못했습니다. 다시 시도해 주세요.",
       "mainTaskOnly": "메인 작업에서 사이드 채팅을 열어 주세요.",
+      "sharedTaskUnavailable": "공유 작업에서는 사이드 채팅을 사용할 수 없습니다.",
+      "archivedTask": "이 작업의 보관을 취소한 후 사이드 채팅을 열어 주세요.",
       "closeTitle": "사이드 채팅을 닫을까요?",
       "closeDescription": "이 채팅을 중지하고 삭제합니다. 메인 작업에는 영향을 주지 않습니다.",
       "closeConfirm": "닫고 삭제",

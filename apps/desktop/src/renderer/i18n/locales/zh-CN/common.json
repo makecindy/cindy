@@ -14014,6 +14014,8 @@
       "updateHost": "请先更新执行任务的电脑，再打开侧边追问。",
       "failed": "打开侧边追问失败，请稍后重试。",
       "mainTaskOnly": "请从主任务打开侧边追问。",
+      "sharedTaskUnavailable": "共享任务不支持侧边追问",
+      "archivedTask": "请先取消归档，再打开侧边追问",
       "closeTitle": "关闭侧边追问？",
       "closeDescription": "将停止并删除本次追问，主任务不受影响。",
       "closeConfirm": "关闭并删除",

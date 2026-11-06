@@ -14006,6 +14006,8 @@
       "updateHost": "請先更新行差事之機，再開旁問。",
       "failed": "旁問未能開，請稍後再試。",
       "mainTaskOnly": "請自主差事開旁問。",
+      "sharedTaskUnavailable": "共事不可開旁問。",
+      "archivedTask": "請先解封存，再開旁問。",
       "closeTitle": "闔旁問？",
       "closeDescription": "將止而刪此番追問，主差事不受其擾。",
       "closeConfirm": "闔而刪之",

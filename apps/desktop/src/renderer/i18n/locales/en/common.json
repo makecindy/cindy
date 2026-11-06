@@ -14080,6 +14080,8 @@
       "updateHost": "Update the computer running this task to open a side chat.",
       "failed": "Could not open the side chat. Please try again.",
       "mainTaskOnly": "Open a side chat from the main task.",
+      "sharedTaskUnavailable": "Side chats are not available in shared tasks.",
+      "archivedTask": "Unarchive this task to open a side chat.",
       "closeTitle": "Close side chat?",
       "closeDescription": "This follow-up will stop and its history will be deleted. The main task keeps running.",
       "closeConfirm": "Close and delete",

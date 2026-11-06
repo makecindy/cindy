@@ -14045,6 +14045,8 @@
       "updateHost": "Aktualisiere den Computer, auf dem diese Aufgabe läuft, um einen Nebenchat zu öffnen.",
       "failed": "Der Nebenchat konnte nicht geöffnet werden. Versuch es erneut.",
       "mainTaskOnly": "Öffne einen Nebenchat aus der Hauptaufgabe.",
+      "sharedTaskUnavailable": "Nebenchats sind in geteilten Aufgaben nicht verfügbar.",
+      "archivedTask": "Hebe die Archivierung dieser Aufgabe auf, um einen Nebenchat zu öffnen.",
       "closeTitle": "Nebenchat schließen?",
       "closeDescription": "Diese Folgeunterhaltung wird beendet und ihr Verlauf gelöscht. Die Hauptaufgabe läuft weiter.",
       "closeConfirm": "Schließen und löschen",
