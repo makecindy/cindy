@@ -466,6 +466,28 @@ export function taskActionInputGuard(
   return undefined;
 }
 
+/**
+ * A recovery copy (hidden "continue", manual retry, zero-output resend) of a turn the receiving
+ * task already accepted. The delivery guard is judged only before the first persist, and the copy
+ * has a new clientId and text: inheriting the original guard, its "requires authorization" mark or
+ * the teammate-origin rule would discard it every time. The copy runs under the receiving task's
+ * own permissions; attribution (origin, requested owner words) stays on it. Items the guard never
+ * covered are returned unchanged.
+ */
+export function acceptTaskActionRecoveryCopy(
+  original: AgentInputQueuedMessage,
+  copy: AgentInputQueuedMessage,
+): AgentInputQueuedMessage {
+  if (!taskActionInputGuard('', original)) return copy;
+  delete copy.taskActionRequiresAuthorization;
+  // Only the authorization check is waived: the original's settle callback (releasing the receiver
+  // claim and sender receipt) still has to run once the copy is dispatched or discarded.
+  const accepted: NonNullable<GuardedInput[typeof TASK_ACTION_INPUT_GUARD]> = async () => {};
+  accepted.onSettled = (original as GuardedInput)[TASK_ACTION_INPUT_GUARD]?.onSettled;
+  (copy as GuardedInput)[TASK_ACTION_INPUT_GUARD] = accepted;
+  return copy;
+}
+
 /** Share the existing pre-persistence / pre-vendor guard lifecycle with App cards. */
 export function combineInputGuards(
   ...guards: Array<(() => Promise<void>) | undefined>
