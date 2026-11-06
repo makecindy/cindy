@@ -89,7 +89,19 @@ export async function startScheduleWebhooks(scheduler: Scheduler, logger: Logger
     ownerGeneration = state.ownerGeneration;
     next.authChanged(changed);
   });
-  await next.start();
+  try {
+    await next.start();
+  } catch (error) {
+    // A delayed rejection from a stopped owner must not tear down its successor.
+    if (host === next) {
+      try {
+        await stopScheduleWebhooks();
+      } catch (stopError) {
+        logger.warn?.('[schedule-webhook] failed startup cleanup failed', { error: String(stopError) });
+      }
+    }
+    throw error;
+  }
 }
 
 export async function stopScheduleWebhooks(): Promise<void> {

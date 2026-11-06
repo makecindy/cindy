@@ -22,7 +22,7 @@ vi.mock('../../../appCapabilities.js', () => ({ getAppCapabilities: () => ({ can
 vi.mock('../../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://example.test' }));
 vi.mock('../../../maker-host/outbound-fetch.js', () => ({ createOutboundHttpAgent: vi.fn(), outboundFetch: vi.fn() }));
 
-import { getScheduleWebhookHost, startScheduleWebhooks, stopScheduleWebhooks } from '../runtime';
+import { getScheduleWebhookHost, scheduleWebhookReceiver, startScheduleWebhooks, stopScheduleWebhooks } from '../runtime';
 
 afterEach(async () => { await stopScheduleWebhooks(); vi.clearAllMocks(); });
 
@@ -55,4 +55,51 @@ it('stops an already published host while its start is still pending', async () 
   expect(getScheduleWebhookHost()).toBeNull();
   expect(mocks.stop).toHaveBeenCalledOnce();
   expect(mocks.unwatch).toHaveBeenCalledOnce();
+});
+
+// PR #8470, unit: successful/cancelled startup tests do not cover rejection.
+// A failed start must release the singleton/listener so a later start can retry.
+it('cleans up a failed startup and allows a fresh attempt', async () => {
+  const error = new Error('initial scheduler read failed');
+  mocks.start.mockRejectedValueOnce(error);
+  await expect(startScheduleWebhooks({} as Scheduler, {})).rejects.toBe(error);
+  expect(getScheduleWebhookHost()).toBeNull();
+  expect(scheduleWebhookReceiver()).toBe('unavailable');
+  expect(mocks.stop).toHaveBeenCalledOnce();
+  expect(mocks.unwatch).toHaveBeenCalledOnce();
+  const scheduler = {} as Scheduler;
+  await startScheduleWebhooks(scheduler, {});
+  expect(mocks.construct.mock.calls[1][0]).toBe(scheduler);
+  expect(scheduleWebhookReceiver()).toBe('cloud');
+});
+
+it('does not clear a new owner when an old startup rejects late', async () => {
+  const error = new Error('old startup failed');
+  let fail!: (error: Error) => void;
+  mocks.start.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { fail = reject; }));
+  const old = startScheduleWebhooks({} as Scheduler, {});
+  const rejected = expect(old).rejects.toBe(error);
+  await vi.waitFor(() => expect(mocks.start).toHaveBeenCalledOnce());
+  await stopScheduleWebhooks();
+  await startScheduleWebhooks({} as Scheduler, {});
+  const current = getScheduleWebhookHost();
+  fail(error);
+  await rejected;
+  expect(getScheduleWebhookHost()).toBe(current);
+  expect(scheduleWebhookReceiver()).toBe('cloud');
+  expect(mocks.stop).toHaveBeenCalledOnce();
+  expect(mocks.unwatch).toHaveBeenCalledOnce();
+});
+
+it('preserves the startup error if cleanup also fails', async () => {
+  const error = new Error('queue load failed');
+  const stopError = new Error('cleanup failed');
+  const warn = vi.fn();
+  mocks.start.mockRejectedValueOnce(error);
+  mocks.stop.mockRejectedValueOnce(stopError);
+  await expect(startScheduleWebhooks({} as Scheduler, { warn })).rejects.toBe(error);
+  expect(getScheduleWebhookHost()).toBeNull();
+  expect(scheduleWebhookReceiver()).toBe('unavailable');
+  expect(mocks.unwatch).toHaveBeenCalledOnce();
+  expect(warn).toHaveBeenCalledWith(expect.any(String), { error: String(stopError) });
 });
