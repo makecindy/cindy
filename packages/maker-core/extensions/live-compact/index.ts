@@ -88,6 +88,10 @@
  *     这一刀 —— 已经删成功的旧备份回不来,拒绝只会白删。
  *   - 被拒的一刀会撤掉本次刚落盘、无卡片引用的 `raw-*.txt` 与其 meta —— 原文写入不走容量轮换,
  *     不清理会一轮轮堆积突破单会话上限。
+ * 脱敏规则与上游的分道:上游只枚举少数键名,本仓键名规则按「类」匹配(大写下划线标识符以
+ * KEY/TOKEN/SECRET/PASSWORD/PASSWD/CREDENTIAL(S)/AUTH 结尾即命中,MONKEY/TURKEY/HOCKEY/
+ * WHISKEY/JOKEY 用 stoplist 挡;camel/小写保留小显式列表),并补齐认证头、npm_ 前缀等
+ * blob 形态 —— 严格强于上游,是十多轮安全 review 逼出来的收敛(语料在 live-compact.test.mjs)。
  * Logging: stderr lines prefixed "[pi-live-compact]" (grep "spine cut"), plus an
  * append-only spine.log next to the shadow directory for test verification.
  */
@@ -1168,15 +1172,22 @@ const REDACT_RULES: Array<[RegExp, string]> = [
   // `username="…", response="…"` 参数串 —— 两种形态各一条规则。
   [/((?:proxy-)?authorization["'`]?\s*[=:]\s*["'`]?(?:digest|negotiate)\s+)(?!\[REDACTED)[^\r\n]*/gi, "$1[REDACTED]"],
   [/((?:proxy-)?authorization["'`]?\s*[=:]\s*["'`]?(?:basic|token)\s+)(?!\[REDACTED)[A-Za-z0-9+/=._~-]{8,}/gi, "$1[REDACTED]"],
-  // 键名后允许再跟一个引号:JSON 形态 `{"password":"..."}` 的闭引号夹在键与冒号之间。
-  // 键名要覆盖带后缀的写法(`SECRET_KEY`、`refresh_token`),否则 `X_SECRET_KEY=...` 整条不匹配。
+  // 键名规则按「类」匹配,不再枚举厂商:十多轮 review 的漏点全是同一种形态 ——
+  // `AWS_SESSION_TOKEN=`、`NPM_TOKEN=`、`STRIPE_SECRET_KEY=` 这类「下划线大写 + 敏感后缀」。
+  // 大写下划线键名(env/配置的通用写法)只要以 KEY/TOKEN/SECRET/... 结尾就命中;
+  // MONKEY/TURKEY/HOCKEY/WHISKEY/JOKEY 这类以 KEY 结尾的普通词用小 stoplist 挡掉。
+  // 「MAX_TOKENS」「MODEL_TOKEN_LIMIT」这类不以后缀结尾的不受影响(后缀后必须紧跟引号?/=/:)。
+  [/([_A-Z0-9]*(?:KEY|TOKEN|SECRET|PASSWD|PASSWORD|CREDENTIALS?|AUTH)(?<!MONKEY)(?<!TURKEY)(?<!HOCKEY)(?<!WHISKEY)(?<!JOKEY)["'`]?\s*[=:]\s*)(["'`]?)(?!\[REDACTED)([^\s"'`]{8,})/g, "$1$2[REDACTED]"],
+  // 小写/驼峰/连字符键名没有统一后缀(apiKey、refresh-token),保留显式小列表。
   // 值里允许 `[`(密码可能含方括号),只豁免「已经是替换标记」的情况,否则会把标记再啃一口。
-  [/((?:api[_-]?key|access[_-]?key|access[_-]?token|session[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|secret[_-]?key|private[_-]?key|password|passwd|secret)["'`]?\s*[=:]\s*)(["'`]?)(?!\[REDACTED)([^\s"'`]{8,})/gi, "$1$2[REDACTED]"],
+  [/((?:api[_-]?key|access[_-]?key|access[_-]?token|auth[_-]?token|session[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|secret[_-]?key|private[_-]?key|password|passwd|secret)["'`]?\s*[=:]\s*)(["'`]?)(?!\[REDACTED)([^\s"'`]{8,})/gi, "$1$2[REDACTED]"],
   [/(?<![A-Za-z0-9])Bearer\s+[A-Za-z0-9._-]{16,}/gi, "Bearer [REDACTED]"],
   [/(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}/g, "[REDACTED]"],
   // Stripe 形态是 `sk_live_...` / `rk_test_...`:前缀分段,上一条的 `sk-` 匹配不到。
   [/(?<![A-Za-z0-9])(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}/g, "[REDACTED]"],
   [/(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9]{20,}|xox[abps]-[A-Za-z0-9-]{10,})/g, "[REDACTED]"],
+  // npm 的 registry 令牌是 `npm_` + 随机串;`.npmrc` 的 `_authToken=` 由上面的键名规则覆盖。
+  [/(?<![A-Za-z0-9])npm_[A-Za-z0-9]{16,}/g, "[REDACTED]"],
   // 云厂商固定前缀凭证:AWS AK/ASIA、Google AIza、Stripe 的 live 前缀。
   [/(?<![A-Za-z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}/g, "[REDACTED]"],
   [/(?<![A-Za-z0-9])AIza[0-9A-Za-z_-]{35}/g, "[REDACTED]"],

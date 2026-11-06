@@ -23,6 +23,8 @@ const FAKE_STRIPE_KEY = ['sk', 'live', 'fixturestripeplaceholder0123'].join('_')
 const FAKE_BASIC = ['dXNlcjpw', 'YXNzd29yZA=='].join('');
 const FAKE_AWS_SESSION_TOKEN = ['AWS_SESSION', 'TOKEN'].join('_') + '=fixture-session-' + '0123456789abcdef';
 const FAKE_AWS_SECRET = ['fixture', 'awssecret', '0123456789abcdef'].join('-');
+const FAKE_NPM_TOKEN = ['npm', 'fixture0123456789abcdef0123456789'].join('_');
+const FAKE_GH_TOKEN = ['ghp', 'fixtureabcdefghijklmnopqrst'].join('_');
 const FAKE_BRACKET_PASSWORD = ['abc', '[defghijklmnop'].join('');
 
 const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, writeOwner, orderedDrainDrafts, withBackupHint, withoutFullBackupClaim, backupHint, discardRawSnapshots } = await import(
@@ -142,6 +144,51 @@ describe('live compact spine selection', () => {
     const sessionToken = redactSecrets(FAKE_AWS_SESSION_TOKEN);
     expect(sessionToken).not.toContain('fixture-session-0123456789abcdef');
     expect(sessionToken).toContain('=[REDACTED]');
+  });
+
+  it('redaction corpus: every credential form surfaced in review, plus a negative corpus', () => {
+    // 十多轮 review 的漏点全是「下划线大写 + 敏感后缀」的新组合;键名规则已按类匹配(以
+    // KEY/TOKEN/SECRET/... 结尾即命中)。以后再发现新形态,只需要往这两张表各加一行。
+    const positives = [
+      [`AWS_SECRET_ACCESS_KEY=${FAKE_AWS_SECRET}`, FAKE_AWS_SECRET],
+      [`AWS_SESSION_TOKEN=${FAKE_AWS_SESSION_TOKEN.split('=')[1]}`, FAKE_AWS_SESSION_TOKEN.split('=')[1]],
+      [`NPM_TOKEN=${FAKE_NPM_TOKEN}`, FAKE_NPM_TOKEN],
+      [`//registry.npmjs.org/:_authToken=${FAKE_NPM_TOKEN}`, FAKE_NPM_TOKEN],
+      [`STRIPE_SECRET_KEY=${FAKE_STRIPE_KEY}`, FAKE_STRIPE_KEY],
+      [`OPENAI_API_KEY=${FAKE_OPENAI_KEY}`, FAKE_OPENAI_KEY],
+      [`GITHUB_TOKEN=${FAKE_GH_TOKEN}`, FAKE_GH_TOKEN],
+      [`2FA_TOKEN=${FAKE_REFRESH_TOKEN}`, FAKE_REFRESH_TOKEN],
+      [`{"OAUTH_TOKEN":"${FAKE_REFRESH_TOKEN}"}`, FAKE_REFRESH_TOKEN],
+      [`Authorization: Basic ${FAKE_BASIC}`, FAKE_BASIC],
+      [`{"Authorization":"Basic ${FAKE_BASIC}"}`, FAKE_BASIC],
+      [`Authorization: Digest username="alice", response="${FAKE_BASIC}", nonce="abc"`, FAKE_BASIC],
+      [`password="${FAKE_BRACKET_PASSWORD}"`, FAKE_BRACKET_PASSWORD],
+      [`postgres://cindy:${FAKE_DB_PASSWORD}@db.internal:5432/app`, FAKE_DB_PASSWORD],
+      [`echo ${FAKE_NPM_TOKEN}`, FAKE_NPM_TOKEN],
+    ];
+    for (const [text, secret] of positives) {
+      const out = redactSecrets(text);
+      expect(out, text).not.toContain(secret);
+      expect(out, text).toContain('[REDACTED]');
+    }
+    // 负语料:普通配置键、以 KEY 结尾的普通词、哈希与文档文本不能被误伤。
+    const negatives = [
+      'USE_MONKEY=monkeybusiness12',
+      'x-sector=sector-value-12345',
+      'author=alice@example.com',
+      'tokenize=input12345',
+      'sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+      'MAX_TOKENS=4096 MODEL_TOKEN_LIMIT=8192',
+      'NEXT_PUBLIC_API_URL=https://api.example.com/v1',
+      'POST /api/v1/items 201 (authorization flow)',
+      'npm_install_the_dev_dependencies_now',
+    ];
+    for (const text of negatives) {
+      expect(redactSecrets(text), text).toBe(text);
+    }
+    // 打码必须幂等:同一段文本过两遍规则,结果不再变化。
+    const once = redactSecrets(`AWS_SESSION_TOKEN=${FAKE_AWS_SESSION_TOKEN.split('=')[1]}${String.fromCharCode(10)}Authorization: Basic ${FAKE_BASIC}`);
+    expect(redactSecrets(once)).toBe(once);
   });
 
   it('masks cloud keys, connection-string passwords and PEM blocks', () => {
