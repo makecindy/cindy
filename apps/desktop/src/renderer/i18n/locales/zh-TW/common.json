@@ -6133,7 +6133,7 @@
         "hook": "Cindy IM 機器人"
       },
       "hook": {
-        "description": "把 Slack 和 Telegram 接入同一個 Cindy：訊息都會派發到這臺裝置，共享專案清單與 session 執行鏈；帳號繫結和執行偏好按渠道隔離。",
+        "description": "把 Slack、Telegram、飛書 / Lark 等渠道接入同一個 Cindy：訊息都會派發到這臺裝置，共用這裡的專案清單和任務；帳號繫結和執行偏好按渠道分開保存。",
         "slackDescription": "繫結 Slack workspace，在 Slack 裡 @Cindy 派發任務。",
         "slackDisabledHint": "開啟開關即發起 Slack 授權，繫結完成後即可在 Slack 裡派活。",
         "slackBoundHint": "已完成繫結。關閉開關將解除繫結，重新開啟需再次授權。",
@@ -6354,6 +6354,45 @@
             "revoked": "已解除關聯",
             "superseded": "已關聯到另一臺裝置"
           }
+        },
+        "feishu": {
+          "description": "從飛書發訊息，交給工作電腦處理。",
+          "disabledHint": "開啟開關後，在瀏覽器裡授權飛書帳號，或把關聯碼傳給飛書機器人。",
+          "toggleAria": "切換飛書 / Lark 連線",
+          "connect": "關聯飛書",
+          "openApp": "開啟授權頁",
+          "cancel": "取消關聯",
+          "retry": "重新關聯",
+          "openBot": "開啟飛書機器人",
+          "unlink": "解綁飛書",
+          "unlinkConfirmTitle": "解綁飛書？",
+          "unlinkConfirmDescription": "僅解除這台電腦的關聯。",
+          "unavailableHint": "你所在的組織還沒有設定飛書機器人，請聯絡組織管理員。",
+          "unavailableHintPersonal": "飛書機器人暫未向個人帳號開放。",
+          "status": {
+            "checking": "正在檢查伺服器支援…",
+            "unavailable": "組織未設定",
+            "unavailablePersonal": "暫未開放",
+            "disabled": "已停用",
+            "none": "未繫結",
+            "pending": "在瀏覽器裡授權，或把關聯碼傳給飛書機器人",
+            "awaiting_confirmation": "請在飛書 / Lark 裡確認更換這台電腦關聯的帳號",
+            "confirmed": "{{user}} 已關聯飛書機器人",
+            "denied": "已拒絕授權",
+            "expired": "授權已過期",
+            "failed": "關聯失敗",
+            "revoked": "已解除關聯",
+            "superseded": "這台電腦已關聯到另一個飛書 / Lark 帳號",
+            "appChanged": "飛書機器人已更換，請重新關聯"
+          },
+          "bindCode": {
+            "label": "關聯碼",
+            "copy": "複製關聯碼",
+            "copied": "關聯碼已複製",
+            "hint": "或者在飛書裡把關聯碼私訊傳給 Cindy 機器人"
+          },
+          "setWorkingDevice": "設為工作電腦",
+          "workingDeviceSet": "已設為工作電腦"
         }
       },
       "summary": {
@@ -6372,7 +6411,7 @@
     "tina": {
       "chat": {
         "title": "對話",
-        "description": "不落任何倉庫的純對話；在 Slack、Telegram 或 X 裡選擇 chat 即可使用，每條對話 lane 獨立對應一個任務。"
+        "description": "不落任何倉庫的純對話；在 Slack、Telegram、X 或飛書 / Lark 裡選擇 chat 即可使用，每條對話 lane 獨立對應一個任務。"
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -6382,6 +6421,7 @@
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
         "providerX": "X",
+        "providerFeishu": "飛書 / Lark",
         "requireConnected": "連線 {{provider}} 後可編輯（先在上方開啟對應開關並等待連線成功）。",
         "offlineLocal": "{{provider}} 暫時連不上，變更會保存在本機；連上後同步到對話裡的模型卡。",
         "requireBinding": "先完成 {{provider}} 帳號關聯後可編輯。",

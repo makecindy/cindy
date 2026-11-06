@@ -6,7 +6,7 @@
 > 事件观察、表情、交互、收尾或停止逻辑之前
 
 个人 IM 渠道（Telegram / 飞书 / 微信 / 钉钉 / Discord / 企业微信）与官方 hook（官方
-Telegram / Slack / X）是同一件事的两套实现：把渠道里的一条消息变成 Cindy 任务里的一轮，
+Telegram / Slack / X / 飞书 / Lark）是同一件事的两套实现：把渠道里的一条消息变成 Cindy 任务里的一轮，
 再把结果送回渠道。本文登记两套实现**今天各自在哪一步做了什么**、**持有哪些状态**、
 **合并后归谁**，以及迁移中必须守住的不变量。用户可见的两侧差异另见
 [`../product-rules/telegram-bot-parity.md`](../product-rules/telegram-bot-parity.md)；
@@ -54,7 +54,7 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 | 排队与插话 | `SessionState.sendQueue`（内存、无上限、重启丢失）；无插话 | `dispatcher.queues`（内存、上限 20）+ `drainPolls`；无插话 | **公共入口 `AgentInputCoordinator`**（见 §5 批次 3 与 §6 待决项） |
 | 输入拼装 | `prepareAgentTurnText`（群上下文 / ambient 提示）+ `buildImChannelNote` + `buildImUserMessage`；派发时前置交接 / 计划对账 / Goal 提示 | `buildContextPrefix` + `composeXPrompt` + `buildHookPromptNote`；同样前置交接 / 计划对账（仅 IM 来源）/ Goal 提示 | 共用流程（前置层同一份；渠道说明文案有意不同，见台账「入站上下文」） |
 | 用户消息落库 | 部分渠道提前落库（`persistInboundUserMessageEarly`），`onAccepted` 补 `imSource` | 只在 `onAccepted` 落库，`agentMeta.hookSource` | 共用流程（`onAccepted` 落库；提前落库保留为渠道能力） |
-| 发送 | 发送前应用任务待切换选择，再 `makerSession.send`，`MAIN_OWNED_SEND_CONTEXT.origin.kind='im'` | 复用任务先经 `acquirePendingAgentSwitchForImSend` 跟随默认并应用任务选择，再读 meta、建会话、挂观察器和 `session.send`；发送后释放锁，origin `hook`（Telegram/X）或 `im`（Slack） | 待切换选择共用既有直发流程；Pi 管理命令授权来源按渠道各自声明（hook 不得伪装成本机命令） |
+| 发送 | 发送前应用任务待切换选择，再 `makerSession.send`，`MAIN_OWNED_SEND_CONTEXT.origin.kind='im'` | 复用任务先经 `acquirePendingAgentSwitchForImSend` 跟随默认并应用任务选择，再读 meta、建会话、挂观察器和 `session.send`；发送后释放锁，origin `hook`（Telegram / X / 飞书）或 `im`（Slack） | 待切换选择共用既有直发流程；Pi 管理命令授权来源按渠道各自声明（hook 不得伪装成本机命令） |
 | 观察事件 | `turnPresenter`（buffer-replace）+ 流式 handle | `turnObserver`（finalized-segments）+ 进度发射器 | 共用流程（presenter 已同源；两个正文累积引擎有意不同） |
 | 后台轮次回传（非 IM 入站） | `orchestrator` 的 `onChannelTurn` → `turnRunner` 转播（Agent 自己唤醒的轮次只同步标记已接线的会话） | `backgroundResults` → `turn.end(background: true)` | 已同源判据：`maker-ipc/channelTurnSignal.ts` 的开始信号与 `isRelayedChannelTurnSource`（其它任务来信；后台唤醒继承当前 Session 最近实际派发的来源，Cindy 输入及内部协调不回传；scheduler 按 `turnOrigin`）；仍属原 IM 轮次的不另发 |
 | 表情 | `TurnState` 的 ack 句柄 | `ackReactions`（msg.op react） | 渠道适配（出站载体不同，档位语义同源） |
@@ -112,7 +112,10 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
    IM 写 `agentMeta.imSource`，hook 写 `agentMeta.hookSource`；新数据不得塞进 `origin`
    （coordinator 把任何 `origin.kind` 当非人工输入）。
 4. **Pi 管理命令授权来源**：个人 IM 用 `authenticated-im-command`；官方 hook 的 origin
-   是 `hook`，**不得**伪装成 `local-desktop-command`；`MAIN_OWNED_SEND_CONTEXT` 是 Symbol，
+   是 `hook`，**不得**伪装成 `local-desktop-command`；官方 Telegram、官方飞书 / Lark 与对应个人 bot
+   共用 `source.im`（`telegram` / `feishu`），hook 路径（`session-runner.ts` 的 `mainOwnedChannelOrigin`）
+   必须显式映射成 `{ kind: 'hook' }`，**不得**落到个人 bot 的可信 `im` 来源（回归：`session-runner.test.ts`
+   「线程来源」表）；`MAIN_OWNED_SEND_CONTEXT` 是 Symbol，
    跨队列快照时必须由宿主在派发时重新盖章，不能指望它随队列项持久化。
 5. **session-new-v1**：`/new` 成功时新任务已落库并出现在列表；**turn-reopen-v1**：续跑轮
    断连即终局、`turn.end` 直发不缓存。
@@ -242,6 +245,21 @@ inbound ──► admitted ──► queued? ──► dispatching ──► run
 | 模型准入（`openSession`） | 只做凭证检查 | 新任务做路由检查 | 已按 Dash 指定改走 `openSession` 准入：新任务的模型 / 来源 / 推理强度 / Fast 不被支持时直接拒绝（文案「不会自动更换模型或供应商」），准入还会规范化来源与推理强度；渠道默认配置若指向已停用的模型，新任务会建不出来（以前会照建） |
 | live session 改走 `bootstrapSession` | 不注入项目上下文 / Orca 指令 | 同左 | 未改：改了等于给 IM / hook 任务新增项目上下文与 Orca 指令注入、目录授权准备等行为，属产品决定 |
 | 缺口 2b / 2e / 2f / 默认配置取值链 | 见台账 | 见台账 | 各自保留，合并只共享实现骨架 |
+
+### 官方飞书 / Lark（第一里程碑，2026-11-04）
+
+官方飞书与 Lark 是同一个 provider `feishu`（品牌跟随组织配置的应用，不随 Cindy 版本区域切换），
+由独立部署的 feishu-hook-server 经 provider-neutral 状态机接入（`manager.ts` 的 `feishuConfig`）：
+
+- lane：私聊 `feishu:dm:…`，群消息一律在话题里回复 `feishu:topic:…`；`deriveLaneKind` 把话题 lane 视为群轮次，
+  与官方 Telegram 群一样在 send 后持有 session turn lease（不改权限档）。
+- 出站：第一里程碑由服务端排版，客户端 hello 只声明 provider-bind / provider-prefs / `provider:feishu`，
+  不声明 `session-picker-v1`（查询不带收件身份，不交出本机任务列表）、`msg-op-v1` 与任何 `telegram-*` 能力；进度、终稿与确认卡沿用 legacy
+  `turn.progress` / `turn.end` / `interaction.request`。后台轮次回传（`backgroundResults`）暂不覆盖飞书。
+- 会话：`sessions.source` 复用 `feishu`（个人飞书会话靠 `feishu_bot_app_id` 区分）；`vendorOptions.source`
+  用 `feishu-hook`，让 `cindy_feishu_bot` 追加官方会话提示而不把它当个人渠道；模型说明为
+  `buildHookPromptNote('feishu')`。
+- 绑定链接只接受飞书 / Lark 网页授权页与打开机器人的 AppLink（`feishuDeepLink.ts`），关联码只随 pending 快照出现。
 
 ### 官方 X 的伙伴路由
 

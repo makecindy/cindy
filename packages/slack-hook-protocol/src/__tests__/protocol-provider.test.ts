@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   HOOK_FEATURE_PROVIDER_BIND,
+  HOOK_FEATURE_PROVIDER_FEISHU,
   HOOK_FEATURE_PROVIDER_PREFS,
   HOOK_FEATURE_PROVIDER_TELEGRAM,
   HOOK_FEATURE_PROVIDER_X,
@@ -12,6 +13,8 @@ import {
   makeBindStart,
   makeProviderBindCancel,
   makeProviderBindRevoke,
+  makeProviderBindSelect,
+  makeProviderBindSelection,
   makeProviderBindStart,
   makeProviderBindState,
   makeProviderBindUpdate,
@@ -120,6 +123,7 @@ describe('provider feature negotiation constants', () => {
     expect(HOOK_FEATURE_SESSION_PICKER).toBe('session-picker-v1');
     expect(HOOK_FEATURE_PROVIDER_TELEGRAM).toBe('provider:telegram');
     expect(HOOK_FEATURE_PROVIDER_X).toBe('provider:x');
+    expect(HOOK_FEATURE_PROVIDER_FEISHU).toBe('provider:feishu');
   });
 
   it('does not alter the legacy Slack bind.start payload', () => {
@@ -195,6 +199,38 @@ describe('provider.bind frames', () => {
         bound: true,
         prefs: [],
       }),
+    );
+  });
+
+  it('carries the feishu bind code only on a pending attempt', () => {
+    // Feishu / Lark pending attempts carry both the web authorization URL and
+    // a short code the user can send to the bot when web authorization is
+    // unavailable (users outside the app tenant).
+    const feishuPending: ProviderBindStatusPayload = {
+      ...PENDING,
+      provider: 'feishu',
+      scopeId: 'cli_example_app',
+      scopeName: 'Cindy',
+      connectUrl:
+        'https://accounts.feishu.cn/open-apis/authen/v1/authorize?client_id=cli_example_app&state=abc',
+      bindCode: '7KQ4-M2XD',
+      actions: ['open_connect_url', 'copy_connect_url', 'copy_bind_code', 'cancel'],
+    };
+    roundTrip(makeProviderBindUpdate(feishuPending));
+    roundTrip(makeProviderBindState(feishuPending));
+    roundTrip(makeProviderBindStart({ requestId: 'request-f-1', provider: 'feishu' }));
+
+    const update = makeProviderBindUpdate(feishuPending);
+    for (const bindCode of ['7kq4-m2xd', 'ABC', '-7KQ4', '7KQ4 M2XD', 7_404_202]) {
+      expectReject(
+        { ...update, payload: { ...feishuPending, bindCode } },
+        'bindCode must be 4-32',
+      );
+    }
+    const awaiting = { ...statusFor('awaiting_confirmation'), provider: 'feishu' };
+    expectReject(
+      { ...update, payload: { ...awaiting, bindCode: '7KQ4-M2XD' } },
+      'bindCode must be null unless state is pending',
     );
   });
 
@@ -479,5 +515,17 @@ describe('query.kind=sessions', () => {
       },
       'privacy-minimised session shape',
     );
+  });
+});
+
+// The select_device action is the opt-in capability; selection acknowledgments never imply a binding.
+describe('working computer selection', () => {
+  it('round-trips an exact binding request and boolean result, rejecting incomplete identities', () => {
+    const payload = { requestId: 'select-1', provider: 'feishu' as const, bindingId: 'binding-1' };
+    roundTrip(makeProviderBindSelect(payload));
+    roundTrip(makeProviderBindSelection({ ...payload, ok: true }));
+    roundTrip(makeProviderBindSelection({ ...payload, ok: false }));
+    expectReject({ ...makeProviderBindSelect(payload), payload: { ...payload, bindingId: '' } }, 'bindingId');
+    expectReject({ ...makeProviderBindSelection({ ...payload, ok: true }), payload: { ...payload, ok: 'true' } }, 'ok');
   });
 });

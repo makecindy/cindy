@@ -6234,7 +6234,7 @@
         "hook": "Bots de mensagens do Cindy"
       },
       "hook": {
-        "description": "Conecte Slack e Telegram ao mesmo Cindy. As mensagens são encaminhadas a este dispositivo e compartilham sua lista de projetos e seu executor de sessões; cada provedor mantém sua própria conta e preferências.",
+        "description": "Conecte Slack, Telegram, Feishu / Lark e outros canais ao mesmo Cindy. As mensagens são encaminhadas a este dispositivo e compartilham sua lista de projetos e seu executor de sessões; cada provedor mantém sua própria conta e preferências.",
         "slackDescription": "Vincule espaços de trabalho do Slack e atribua tarefas ao Cindy pelo Slack.",
         "slackDisabledHint": "Ative a opção para iniciar a autorização do Slack; após a vinculação, você poderá encaminhar tarefas pelo Slack.",
         "slackBoundHint": "Vinculação concluída. Desativar a opção desvincula este dispositivo; reativá-la exige uma nova autorização.",
@@ -6459,6 +6459,45 @@
             "revoked": "Desvinculado",
             "superseded": "Vinculado em outro dispositivo"
           }
+        },
+        "feishu": {
+          "description": "Envie mensagens do Feishu para seu computador de trabalho.",
+          "disabledHint": "Ative a opção e autorize sua conta do Feishu / Lark no navegador ou envie o código de vinculação ao bot.",
+          "toggleAria": "Alternar conexão com o Feishu / Lark",
+          "connect": "Vincular Feishu / Lark",
+          "openApp": "Abrir página de autorização",
+          "cancel": "Cancelar vinculação",
+          "retry": "Tentar vincular novamente",
+          "openBot": "Abrir bot",
+          "unlink": "Desvincular Feishu / Lark",
+          "unlinkConfirmTitle": "Desvincular Feishu / Lark?",
+          "unlinkConfirmDescription": "Desvincular apenas este computador.",
+          "unavailableHint": "Sua organização ainda não configurou o bot do Feishu / Lark. Fale com o administrador da sua organização.",
+          "unavailableHintPersonal": "O bot do Feishu / Lark ainda não está disponível para contas pessoais.",
+          "status": {
+            "checking": "Verificando suporte do servidor…",
+            "unavailable": "Não configurado pela sua organização",
+            "unavailablePersonal": "Ainda não disponível",
+            "disabled": "Desativado",
+            "none": "Não vinculado",
+            "pending": "Autorize no navegador ou envie o código de vinculação ao bot",
+            "awaiting_confirmation": "Confirme a alteração de conta deste computador no Feishu / Lark",
+            "confirmed": "{{user}} vinculado ao bot do Feishu / Lark",
+            "denied": "Autorização negada",
+            "expired": "Autorização expirada",
+            "failed": "Falha na vinculação",
+            "revoked": "Desvinculado",
+            "superseded": "Este computador está vinculado a outra conta Feishu / Lark",
+            "appChanged": "O bot do Feishu / Lark foi trocado. Vincule novamente."
+          },
+          "bindCode": {
+            "label": "Código de vinculação",
+            "copy": "Copiar código",
+            "copied": "Código de vinculação copiado",
+            "hint": "Ou envie este código ao bot Cindy por mensagem direta no Feishu / Lark"
+          },
+          "setWorkingDevice": "Definir como computador de trabalho",
+          "workingDeviceSet": "Computador de trabalho definido"
         }
       },
       "summary": {
@@ -6477,7 +6516,7 @@
     "tina": {
       "chat": {
         "title": "Conversa",
-        "description": "Conversas simples sem repositório; selecione \"chat\" no Slack, Telegram ou X, com uma sessão por fluxo de conversa."
+        "description": "Conversas simples sem repositório; selecione \"chat\" no Slack, Telegram, X ou Feishu / Lark, com uma sessão por fluxo de conversa."
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -6487,6 +6526,7 @@
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
         "providerX": "X",
+        "providerFeishu": "Feishu / Lark",
         "requireConnected": "Editável quando {{provider}} estiver conectado (ative a opção acima e aguarde a conexão).",
         "offlineLocal": "{{provider}} está offline. As alterações são salvas neste computador e sincronizadas com o cartão de modelo da conversa quando ele se reconectar.",
         "requireBinding": "Primeiro, conclua a vinculação da conta de {{provider}}.",
