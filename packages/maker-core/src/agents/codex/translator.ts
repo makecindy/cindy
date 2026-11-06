@@ -403,10 +403,11 @@ const SAMPLING_ACCEPTED_TOOL_TYPES = new Set([
   'commandExecution', 'mcpToolCall', 'dynamicToolCall', 'collabAgentToolCall', 'fileChange',
 ]);
 
-function isSamplingStreamFailure(error: ClassifiedCodexError): boolean {
-  return error.errorInfoTag === 'responseStreamDisconnected' ||
-    error.errorInfoTag === 'responseTooManyFailedAttempts' ||
-    /stream disconnected|retrying sampling request|stream ended before.*response\.completed/i.test(error.message);
+function isSamplingStreamFailure(error: CodexErrorInput | null | undefined): boolean {
+  const tag = codexErrorInfoTag(error?.codexErrorInfo);
+  return tag === 'responseStreamDisconnected' ||
+    tag === 'responseTooManyFailedAttempts' ||
+    /stream disconnected|retrying sampling request|stream ended before.*response\.completed/i.test(error?.message ?? '');
 }
 
 function samplingSegment(rt: CodexRuntimeState, threadId: string, turnId: string) {
@@ -437,7 +438,7 @@ export function finishCodexSamplingTurn(
   const key = JSON.stringify([threadId, turnId]);
   const segment = rt.samplingSegments.get(key);
   const failure = status !== 'completed' && segment &&
-    (segment.attempt > 1 || (error && isSamplingStreamFailure(classifyCodexError(error))))
+    (segment.attempt > 1 || isSamplingStreamFailure(error))
     ? failSamplingSegment(rt, threadId, turnId) : undefined;
   rt.samplingSegments.delete(key);
   return failure;
@@ -645,13 +646,19 @@ export function isCodexModelUnavailableError(error: CodexErrorInput | null | und
  * 模型拒绝和远端 compact 密文 400 也识别 additionalDetails 中明确的错误信号。
  */
 export function classifyCodexError(error: CodexErrorInput | null | undefined): ClassifiedCodexError {
+  const errorInfoTag = codexErrorInfoTag(error?.codexErrorInfo);
   if (isCodexModelUnavailableError(error)) {
     return {
       message: CODEX_MODEL_UNAVAILABLE_MESSAGE,
+      ...(errorInfoTag !== undefined ? { errorInfoTag } : {}),
       usageLimit: false,
       isCapacityError: false,
       reason: CODEX_MODEL_UNAVAILABLE_REASON,
-      data: { message: CODEX_MODEL_UNAVAILABLE_MESSAGE, reason: CODEX_MODEL_UNAVAILABLE_REASON },
+      data: {
+        message: CODEX_MODEL_UNAVAILABLE_MESSAGE,
+        reason: CODEX_MODEL_UNAVAILABLE_REASON,
+        ...(errorInfoTag !== undefined ? { codexErrorInfo: errorInfoTag } : {}),
+      },
     };
   }
   const rawMessage = error?.message ?? 'codex error';
@@ -664,7 +671,6 @@ export function classifyCodexError(error: CodexErrorInput | null | undefined): C
   const signals = extractNonSecretErrorSignals(rawMessage);
   const errorStatus =
     signals.errorStatus ?? (hasMissingBearer || hasAuthErrorMarker ? 401 : undefined);
-  const errorInfoTag = codexErrorInfoTag(error?.codexErrorInfo);
   const overload = parseOverloadError(message, signals.errorStatus, errorInfoTag);
   const isCapacityError = overload?.kind === 'capacity';
   // 过载文案常顺带一句 rate limit exceeded（如 Kimi 的 `rate limit exceeded: The
@@ -710,7 +716,7 @@ export function translateErrorNotification(
   const isCapacityError = classified.isCapacityError;
   const safeErrorData = classified.data;
   const segment = ctx.rt.samplingSegments.get(JSON.stringify([params.threadId, params.turnId]));
-  const streamFailed = isSamplingStreamFailure(classified) || (!params.willRetry && (segment?.attempt ?? 1) > 1);
+  const streamFailed = isSamplingStreamFailure(params.error) || (!params.willRetry && (segment?.attempt ?? 1) > 1);
   const assistantAttemptFailure = streamFailed
     ? failSamplingSegment(ctx.rt, params.threadId, params.turnId) : undefined;
   if (assistantAttemptFailure) {

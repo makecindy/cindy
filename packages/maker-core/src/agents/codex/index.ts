@@ -8889,6 +8889,7 @@ assertRouteCurrent();
       logLabel?: string;
       ignorePendingTools?: boolean;
       allowPendingTurnStart?: boolean;
+      modelRejectionError?: Parameters<typeof finishCodexSamplingTurn>[4];
     }): void {
       if (closed) return;
       const pendingTurnId =
@@ -8923,22 +8924,18 @@ assertRouteCurrent();
       // 先立终态墓碑:下面合成的本地收口据此走 suppressTerminalUi 分支(只清状态、
       // 不再推一遍终态 UI),迟到的 item / error 也一并被 stale guard 拦住。
       if (turnId) terminalErroredTurnIds.add(turnId);
-      const timeoutEvent: AgentEvent = {
-        type: 'error',
-        data: {
-          // reason 与 claude-code 侧共用同一稳定 key(renderer i18n 映射,规则 18);
-          // message 仅作非 renderer 消费方(IM / orca / 日志)的英文兜底。
-          reason: timeoutReason,
-          message: opts?.message ??
-            (`The upstream response has been silent for ${Math.round(idleMs / 1000)}s; ` +
-              'the turn was interrupted automatically to avoid hanging forever. ' +
-              'You can send the next message to continue.'),
-          isTerminal: true,
-          ...(isModelRejection ? { willRetry: false } : {
-            idleMs, lastEventType: upstreamIdleLastEventType, msSinceLastEvent: msSinceLast,
-          }),
-        },
-        source: 'codex',
+      const timeoutData = {
+        // reason 与 claude-code 侧共用同一稳定 key(renderer i18n 映射,规则 18);
+        // message 仅作非 renderer 消费方(IM / orca / 日志)的英文兜底。
+        reason: timeoutReason,
+        message: opts?.message ??
+          (`The upstream response has been silent for ${Math.round(idleMs / 1000)}s; ` +
+            'the turn was interrupted automatically to avoid hanging forever. ' +
+            'You can send the next message to continue.'),
+        isTerminal: true,
+        ...(isModelRejection ? { willRetry: false } : {
+          idleMs, lastEventType: upstreamIdleLastEventType, msSinceLastEvent: msSinceLast,
+        }),
       };
       // Publish the failure only after interrupt settles: a late successful
       // completion must win, and recovery must not race the still-running turn.
@@ -8950,7 +8947,17 @@ assertRouteCurrent();
       const emitTimeout = (settled = false): void => {
         if (timeoutEmitted || closed) return;
         timeoutEmitted = true;
-        if (!deferTimeoutError || !interruptedSend?.isCancelled()) eventQueue.push(timeoutEvent);
+        if (!deferTimeoutError || !interruptedSend?.isCancelled()) {
+          const assistantAttemptFailure = isModelRejection && turnId
+            ? finishCodexSamplingTurn(translatorRt, threadId, turnId, 'failed', opts?.modelRejectionError)
+            : undefined;
+          if (assistantAttemptFailure && turnId) assistantReplyByTurn.delete(turnId);
+          eventQueue.push({
+            type: 'error',
+            data: { ...timeoutData, ...(assistantAttemptFailure ? { assistantAttemptFailure } : {}) },
+            source: 'codex',
+          });
+        }
         if (deferTimeoutError && settled) {
           // Session drains terminal errors with an idle tail. Do not leave its
           // drain watchdog armed when Main cannot recover this thread.
@@ -12884,6 +12891,7 @@ assertRouteCurrent();
             message: CODEX_MODEL_UNAVAILABLE_MESSAGE,
             logLabel: 'Codex rejected the selected model — interrupting current turn',
             ignorePendingTools: true,
+            modelRejectionError: params.error,
           });
           return;
         }

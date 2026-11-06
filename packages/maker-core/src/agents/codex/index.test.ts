@@ -26553,6 +26553,53 @@ describe('CodexAgent turn lifecycle', () => {
     }
   });
 
+  it.each([true, false])('marks partial sampling output failed on model rejection with willRetry=%s', async (willRetry) => {
+    const interruptAck = deferred<Record<string, never>>();
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, method => method === Method.TurnInterrupt ? interruptAck.promise : undefined);
+    const handle = await agent.startSession({
+      sessionId: 'session-model-rejection-partial-output', model: 'gpt-6.1-sol', workingDir: '/repo',
+    });
+    try {
+      const handlers = host.getThreadHandlers()!;
+      const iterator = handle.events()[Symbol.asyncIterator]();
+      const threadId = 'start-thread-id';
+      const turnId = 'turn-1';
+      const error = {
+        message: 'Reconnecting... 1/5',
+        codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 400 } },
+        additionalDetails: '{"error":{"code":"model_not_found"}}',
+      };
+
+      handlers.turnStarted?.({ threadId, turn: { id: turnId } });
+      handlers.itemCompleted?.({
+        threadId, turnId,
+        item: { type: 'agentMessage', id: 'partial', text: 'Partial answer', phase: 'final_answer' },
+      });
+      expect(await nextEvent(iterator)).toMatchObject({ type: 'text', data: { agentMessageId: 'partial' } });
+      expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+
+      handlers.error?.({ threadId, turnId, willRetry, error });
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt))
+        .toHaveLength(willRetry ? 1 : 0);
+      if (willRetry) expect(handle.isTurnRunning?.()).toBe(true);
+      interruptAck.resolve({});
+      expect(await nextEvent(iterator)).toMatchObject({
+        type: 'error',
+        data: {
+          reason: 'model_unavailable', isTerminal: true, willRetry: false,
+          assistantAttemptFailure: { threadId, turnId, attempt: 1, agentMessageIds: ['partial'] },
+        },
+      });
+      expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: false } });
+
+      handlers.turnCompleted?.({ threadId, turn: { id: turnId, status: 'failed', error } });
+      await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('lets Codex retry an internal server error with a model code in the details', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);
