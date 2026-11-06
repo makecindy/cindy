@@ -602,6 +602,31 @@ describe('companion closing reply and read position', () => {
   });
 
 
+  // 未确认的采样输出（samplingAttemptPending）与失败采样一样属于工作过程:
+  // 主进程 canonicalReplyVisibility 明确排除它，收尾判定必须同口径（#8655 review P2）。
+  it('keeps unconfirmed sampling output out of the tail replies', () => {
+    const at = (minute: number) => new Date(Date.UTC(2026, 10, 5, 1, minute)).toISOString();
+    const rows: RenderItem[] = [
+      message('u', 'user', 'Check the inbox', { createdAt: at(0) }),
+      message('wake', 'assistant', 'Woke up: inbox empty', { turnCompleted: true, createdAt: at(1) }),
+      { type: 'work_group', key: 'work-unconfirmed', isStreaming: false,
+        children: [message('unconfirmed', 'assistant', 'Drafting the summary', { createdAt: at(2) })] } as RenderItem,
+    ];
+    const messages: ChatMessage[] = [
+      message('u', 'user').message,
+      message('wake', 'assistant').message,
+      { clientId: 'unconfirmed', role: 'assistant', content: 'Drafting the summary', samplingAttemptPending: true } as ChatMessage,
+    ];
+    const projected = projectBot(rows, messages);
+    expect(proseIds(projected)).toEqual(['wake']);
+    expect(allKeys(projected)).toContain('msg-unconfirmed');
+    expect(latestSettledAssistantMs(projected)).toBe(Date.parse(at(1)));
+    // 对照:同一条正文不再是 pending 时会被当作收尾回复提升。
+    const settled = messages.map(m => m.clientId === 'unconfirmed'
+      ? { ...m, samplingAttemptPending: undefined } : m);
+    expect(proseIds(projectBot(rows, settled))).toEqual(['wake', 'unconfirmed']);
+  });
+
   // 续跑（recovery）开启的是新一次尝试:它之前的正文已被 groupWorkRuns 的 resumed 分支
   // 折进工作过程,不能因为后面没有工具就重新提升成正式回复（codex review P2）。
   it('keeps a superseded attempt folded when the recovery answers directly', () => {

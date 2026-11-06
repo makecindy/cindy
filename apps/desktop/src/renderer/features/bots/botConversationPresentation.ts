@@ -260,7 +260,7 @@ export function tailReplyClientIds(messages: readonly ChatMessage[]): ReadonlySe
     }
     if (message.role === 'assistant' && !activityAfter && !superseded
       && !message.parentToolUseId && !message.botPrivateReply && !message.systemCardType
-      && message.content.trim() && !message.failedSamplingAttempt
+      && message.content.trim() && !message.failedSamplingAttempt && !message.samplingAttemptPending
       && !(message.assistantPhase === 'commentary' && !message.explicitDelivery
         && !hasRichAnswer(message.content))) {
       ids.add(message.clientId);

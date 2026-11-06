@@ -299,3 +299,23 @@ describe('mapServerMessages — 隐藏 thinking 仍是活动边界', () => {
     expect(mapped.find((m) => m.clientId === 'prose')).toMatchObject({ hiddenThinkingAfter: true });
   });
 });
+
+describe('mapServerMessages — 未确认采样透传', () => {
+  const mapServer = makerChatStore.__mapServerMessagesForTest;
+  const assistantRow = (clientId: string, agentMeta: Record<string, unknown>): Message => ({
+    id: `row-${clientId}`, clientId, sessionId: SESSION_ID, role: 'assistant',
+    content: 'Opening the second mailbox', agentMeta, createdAt: '2026-11-05T00:02:00.000Z',
+  } as unknown as Message);
+
+  // #8655 review P2: 主进程 canonicalReplyVisibility 排除 `samplingAttemptPending` 的记录，
+  // 映射层必须把这层状态透传出去，否则收尾判定会把未确认输出当成正式回复。
+  it('passes a pending sampling attempt through to the ChatMessage', () => {
+    const mapped = mapServer([assistantRow('pending', { samplingAttemptPending: { runtimeId: 'rt-1' } })]);
+    expect(mapped[0]).toMatchObject({ samplingAttemptPending: true });
+  });
+
+  it('leaves settled sampling attempts unflagged', () => {
+    const mapped = mapServer([assistantRow('settled', { samplingAttemptPending: false })]);
+    expect(mapped[0]?.samplingAttemptPending).toBeUndefined();
+  });
+});
