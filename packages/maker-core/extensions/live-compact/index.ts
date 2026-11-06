@@ -85,7 +85,7 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -1157,7 +1157,7 @@ const REDACT_RULES: Array<[RegExp, string]> = [
   // 键名后允许再跟一个引号:JSON 形态 `{"password":"..."}` 的闭引号夹在键与冒号之间。
   // 键名要覆盖带后缀的写法(`SECRET_KEY`、`refresh_token`),否则 `X_SECRET_KEY=...` 整条不匹配。
   // 值里允许 `[`(密码可能含方括号),只豁免「已经是替换标记」的情况,否则会把标记再啃一口。
-  [/((?:api[_-]?key|access[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|secret[_-]?key|private[_-]?key|password|passwd|secret)["'`]?\s*[=:]\s*)(["'`]?)(?!\[REDACTED)([^\s"'`]{8,})/gi, "$1$2[REDACTED]"],
+  [/((?:api[_-]?key|access[_-]?key|access[_-]?token|session[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|secret[_-]?key|private[_-]?key|password|passwd|secret)["'`]?\s*[=:]\s*)(["'`]?)(?!\[REDACTED)([^\s"'`]{8,})/gi, "$1$2[REDACTED]"],
   [/(?<![A-Za-z0-9])Bearer\s+[A-Za-z0-9._-]{16,}/gi, "Bearer [REDACTED]"],
   [/(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}/g, "[REDACTED]"],
   // Stripe 形态是 `sk_live_...` / `rk_test_...`:前缀分段,上一条的 `sk-` 匹配不到。
@@ -1302,8 +1302,10 @@ export function rotateShadow(options: {
   cap?: number;
   /** 测试注入:上游同样把 unlink 做成参数。 */
   unlink?: (path: string) => void;
+  rename?: (from: string, to: string) => void;
 }) {
   const unlink = options.unlink ?? unlinkSync;
+  const rename = options.rename ?? renameSync;
   const cap = options.cap ?? shadowMaxBytes();
   const protect = new Set<string>();
   if (options.protectPath) protect.add(resolve(options.protectPath));
@@ -1318,9 +1320,9 @@ export function rotateShadow(options: {
   }
   const low = Math.floor(cap * 0.8);
   const candidates = files.filter((file) => !protect.has(resolve(file.path))).sort((left, right) => left.mtimeMs - right.mtimeMs);
-  // 先算出「要删哪些才够」,再一次性删。上游是边算边删:删完才发现装不下(受保护/删不掉的文件
+  // 先算出「要删哪些才够」,再动手。上游是边算边删:删完才发现装不下(受保护/删不掉的文件
   // 占满了额度)会带着 ok:false 返回,调用方据此放弃这一刀 —— 但旧备份已经被删,已有卡片就
-  // 指向了空文件。计划阶段能把这种「删了又不切」整段避免掉。
+  // 指向了空文件。这里的计划只用来判断「删得够不够」,不当作删除清单。
   const plan: Array<{ path: string; size: number }> = [];
   let planned = used;
   for (const file of candidates) {
@@ -1329,33 +1331,66 @@ export function rotateShadow(options: {
     planned -= file.size;
   }
   if (planned + options.incomingBytes > cap) {
-    // 删光所有候选也装不下:一个都不删。
+    // 删光所有候选也装不下:一个都不碰。
+    return { ok: false, deleted: 0, freed: 0, used, cap, oversize: false };
+  }
+  const plannedPaths = new Set(plan.map((file) => file.path));
+  // 两阶段:先把候选 rename 进隔离目录(同卷、可逆),确认装得下再真删。
+  // 直接 unlink 的话,中途遇到占用导致最终仍装不下时,已经删掉的旧备份就回不来了。
+  const trash = join(options.dir, `.rotate-${process.pid}-${Date.now()}`);
+  try {
+    mkdirSync(trash, { recursive: true, mode: 0o700 });
+  } catch {
+    return { ok: false, deleted: 0, freed: 0, used, cap, oversize: false };
+  }
+  const moved: Array<{ from: string; to: string; size: number }> = [];
+  for (const file of candidates) {
+    if (used + options.incomingBytes <= low) break;
+    if (!plannedPaths.has(file.path) && used + options.incomingBytes <= cap) break;
+    const to = join(trash, basename(file.path));
+    try {
+      rename(file.path, to);
+    } catch {
+      continue;
+    }
+    moved.push({ from: file.path, to, size: file.size });
+    used -= file.size;
+  }
+  if (used + options.incomingBytes > cap) {
+    // 装不下:原路搬回,一个都不少。搬不回去说明该文件此刻仍被占用,留一份记录便于排查。
+    for (const item of moved.slice().reverse()) {
+      try {
+        rename(item.to, item.from);
+      } catch (error) {
+        logLine({ key: "rotate" }, `spine rotation rollback failed: ${(error as Error)?.message ?? error}`);
+      }
+    }
+    try {
+      rmdirSync(trash);
+    } catch {}
     return { ok: false, deleted: 0, freed: 0, used, cap, oversize: false };
   }
   let deleted = 0;
   let freed = 0;
-  // 计划只用来判断「删得够不够」;实际删除仍遍历全部候选,计划内的删不掉(Windows 上被占用)
-  // 就继续往下删,不让一个占用的旧文件顶掉整轮压缩。
-  const plannedPaths = new Set(plan.map((file) => file.path));
-  for (const file of candidates) {
-    if (used + options.incomingBytes <= low) break;
-    if (!plannedPaths.has(file.path) && used + options.incomingBytes <= cap) break;
+  for (const item of moved) {
     try {
-      unlink(file.path);
+      unlink(item.to);
     } catch {
-      continue;
+      // 隔离目录里的文件不再被任何卡片引用;删不掉就留着,下次轮换不扫它。
     }
-    used -= file.size;
-    freed += file.size;
-    deleted += 1;
     // 原文的 .meta.json 要跟着正文一起回收;它不进容量统计(上游同样只算列出的备份文件)。
-    if (basename(file.path).startsWith("raw-")) {
+    if (basename(item.from).startsWith("raw-")) {
       try {
-        unlinkSync(`${file.path}.meta.json`);
+        unlink(`${item.from}.meta.json`);
       } catch {}
     }
+    deleted += 1;
+    freed += item.size;
   }
-  return { ok: used + options.incomingBytes <= cap, deleted, freed, used, cap, oversize: false };
+  try {
+    rmdirSync(trash);
+  } catch {}
+  return { ok: true, deleted, freed, used, cap, oversize: false };
 }
 
 /**
@@ -1874,6 +1909,19 @@ function rawPlanner(state: SpineState, entries: SpineEntry[]) {
   return { lookup, planned };
 }
 
+/** 一刀被拒时撤掉刚落盘、又没有任何卡片引用的原文快照(连同它的 meta)。 */
+export function discardRawSnapshots(paths: string[], unlink: (path: string) => void = unlinkSync): void {
+  for (const path of paths) {
+    if (!path) continue;
+    try {
+      unlink(path);
+    } catch {}
+    try {
+      unlink(`${path}.meta.json`);
+    } catch {}
+  }
+}
+
 export function selectNewestChunk(
   entries: SpineEntry[],
   diag?: (why: string) => void,
@@ -2250,20 +2298,29 @@ function attemptCut(options: {
     // 卡片引用的原文快照先落盘:写不进去就不切——否则卡片会指向一个不存在的文件。
     // 快照已经写在磁盘上,所以不再重复计入待写字节;仍要加入保护清单。
     const pending = raws.planned();
-    for (const record of pending) {
-      const committed = commitRawEntry(record);
-      if (!committed.ok) {
-        throw new Error(`spine: raw snapshot was not written (${committed.reason || "unknown"})`);
+    // 这些快照在卡片被接受之前就落盘了;这一刀随后被拒的话,它们没有任何卡片引用,
+    // 而原文写入不走容量轮换 —— 不清理就会一轮轮堆积,突破单会话上限。
+    const writtenRaw: string[] = [];
+    try {
+      for (const record of pending) {
+        const committed = commitRawEntry(record);
+        if (!committed.ok) {
+          throw new Error(`spine: raw snapshot was not written (${committed.reason || "unknown"})`);
+        }
+        if (committed.path) writtenRaw.push(committed.path);
       }
+      saveShadow(
+        state,
+        shadow,
+        file,
+        body,
+        0,
+        pending.map((record) => record.path || "").filter(Boolean),
+      );
+    } catch (error) {
+      discardRawSnapshots(writtenRaw);
+      throw error;
     }
-    saveShadow(
-      state,
-      shadow,
-      file,
-      body,
-      0,
-      pending.map((record) => record.path || "").filter(Boolean),
-    );
     pruneShadowSessions(join(spineRoot(), "shadow"));
 
     const drafts = [

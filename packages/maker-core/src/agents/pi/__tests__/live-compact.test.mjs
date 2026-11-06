@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -20,10 +20,11 @@ const FAKE_DB_PASSWORD = ['fixture', 'db-password'].join('-');
 const FAKE_OPENAI_KEY_2 = ['sk', 'fixture-openai-key-0987654321'].join('-');
 const FAKE_REFRESH_TOKEN = ['fixture', 'refresh', 'token', '0123456789'].join('-');
 const FAKE_STRIPE_KEY = ['sk', 'live', 'fixturestripeplaceholder0123'].join('_');
+const FAKE_AWS_SESSION_TOKEN = ['AWS_SESSION', 'TOKEN'].join('_') + '=fixture-session-' + '0123456789abcdef';
 const FAKE_AWS_SECRET = ['fixture', 'awssecret', '0123456789abcdef'].join('-');
 const FAKE_BRACKET_PASSWORD = ['abc', '[defghijklmnop'].join('');
 
-const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, writeOwner, orderedDrainDrafts, withBackupHint, withoutFullBackupClaim, backupHint } = await import(
+const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, writeOwner, orderedDrainDrafts, withBackupHint, withoutFullBackupClaim, backupHint, discardRawSnapshots } = await import(
   '../../../../extensions/live-compact/index.ts'
 );
 
@@ -120,6 +121,10 @@ describe('live compact spine selection', () => {
     expect(aws).not.toContain(FAKE_BRACKET_PASSWORD);
     expect(aws).toContain('AWS_SECRET_ACCESS_KEY=[REDACTED]');
     expect(aws).toContain('password="[REDACTED]"');
+    // AWS 的会话令牌是另一套键名(`_SESSION_TOKEN`),不带 access_key 后缀。
+    const sessionToken = redactSecrets(FAKE_AWS_SESSION_TOKEN);
+    expect(sessionToken).not.toContain('fixture-session-0123456789abcdef');
+    expect(sessionToken).toContain('=[REDACTED]');
   });
 
   it('masks cloud keys, connection-string passwords and PEM blocks', () => {
@@ -295,13 +300,61 @@ describe('live compact card roles and tool excerpts (1.0.3-1.0.5)', () => {
         dir,
         incomingBytes: 100,
         cap: 1000,
-        unlink: (path) => {
-          if (String(path).endsWith('locked.txt')) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
-          rmSync(path, { force: true });
+        rename: (from, to) => {
+          if (String(from).endsWith('locked.txt')) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+          renameSync(from, to);
         },
       });
       expect(result.ok).toBe(true);
       expect(readdirSync(dir).sort()).toEqual(['c.txt', 'locked.txt']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('puts evicted files back when the final rotation still cannot fit', () => {
+    // 先 rename 进隔离目录、确认装得下再真删:中途撞上占用导致最终仍装不下时,
+    // 已经搬走的旧备份必须原路搬回,否则已有卡片指向的原文就没了。
+    const dir = mkdtempSync(join(tmpdir(), 'spine-rollback-'));
+    try {
+      const names = ['a.txt', 'locked-b.txt', 'locked-c.txt'];
+      writeFileSync(join(dir, 'a.txt'), 'x'.repeat(100));
+      writeFileSync(join(dir, 'locked-b.txt'), 'y'.repeat(400));
+      writeFileSync(join(dir, 'locked-c.txt'), 'z'.repeat(400));
+      const older = new Date(2026, 0, 1);
+      utimesSync(join(dir, names[0]), older, older);
+      utimesSync(join(dir, names[1]), older, older);
+      utimesSync(join(dir, names[2]), older, older);
+      // 上限 1000、已用 900:腾出 200 才够。最旧的 a 搬得走,两个占用文件搬不走 → 回滚。
+      const result = rotateShadow({
+        dir,
+        incomingBytes: 300,
+        cap: 1000,
+        rename: (from, to) => {
+          if (String(from).includes('locked-')) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+          renameSync(from, to);
+        },
+      });
+      expect(result.ok).toBe(false);
+      expect(result.deleted).toBe(0);
+      expect(readdirSync(dir).sort()).toEqual([...names].sort());
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('removes raw snapshots that no card ended up referencing', () => {
+    // 原文写入不走容量轮换:这一刀被拒时若不清,残留会一轮轮堆积。
+    const dir = mkdtempSync(join(tmpdir(), 'spine-raw-discard-'));
+    try {
+      const raw = join(dir, 'raw-abcdef0123456789.txt');
+      writeFileSync(raw, 'x'.repeat(10));
+      writeFileSync(`${raw}.meta.json`, '{}');
+      discardRawSnapshots([raw]);
+      expect(existsSync(raw)).toBe(false);
+      expect(existsSync(`${raw}.meta.json`)).toBe(false);
+      // 已经不在的快照也不能把整刀带崩。
+      expect(() => discardRawSnapshots([raw])).not.toThrow();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
