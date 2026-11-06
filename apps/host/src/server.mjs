@@ -177,13 +177,17 @@ export function createHostServer(deps) {
           send(response, 200, await deps.historyView(String(body.sessionId ?? ''), body.before ?? null));
           return;
         }
+        if (url.pathname === '/api/messages/work-details') {
+          send(response, 200, await deps.workDetails(String(body.sessionId ?? ''), body.ref, body.after ?? null));
+          return;
+        }
         if (url.pathname === '/api/messages/create') {
           send(response, 201, await deps.createMessage(String(body.sessionId ?? ''), body.message ?? {}));
           return;
         }
         // The preload contract for `localDb.messages.list()` is a bare array.
         if (url.pathname === '/api/messages/list') {
-          send(response, 200, await deps.history(String(body.sessionId ?? ''), Number(body.limit ?? 200)));
+          send(response, 200, await (deps.messagesList ? deps.messagesList(String(body.sessionId ?? ''), Number(body.limit ?? 200), body.before ?? null) : deps.history(String(body.sessionId ?? ''), Number(body.limit ?? 200))));
           return;
         }
         if (url.pathname === '/api/turn-change-sets/list') { send(response, 200, await deps.turnChangeSets(String(body.sessionId ?? ''))); return; }

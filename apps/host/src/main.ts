@@ -22,6 +22,7 @@ import { attachAgentsToMakerMemory, createHostMemoryManager, createHostMemoryMcp
 import { createHostAgentGraph } from './agent/runtime.mjs';
 import { readGatewayCredentials } from './agent/gateway.mjs';
 import { listProviders } from './agent/providers.mjs';
+import { createHostHistoryReader, readMessagesList } from './agent/history.js';
 import { runLoginCommand } from './login-cli.mjs';
 import { readOrCreateApiToken } from './api-token.mjs';
 import { CindyAuthClient } from '@cindy/auth-client';
@@ -277,6 +278,7 @@ let gatewayCredentials: { endpoint: string; credential: string } | null = null;
 /** Owner-scoped Maker Memory; null until the runtime owns an account. */
 let makerMemory: ReturnType<typeof createHostMemoryManager> | null = null;
 const provisionalSessionIds = new Set<string>();
+const hostHistoryReader = createHostHistoryReader((sid) => provisionalSessionIds.has(sid));
 /** Non-secret projection of the adopted Desktop login; never tokens. */
 let account: { authenticated: boolean; realm: string | null; error?: string } = { authenticated: false, realm: null };
 
@@ -358,7 +360,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     attachAgentsToMakerMemory(makerMemory, agentGraph.instances);
     // Second step, now that the agents exist: turn their native memory off.
     if (makerMemory.isEnabled()) void makerMemory.enable();
-    runtime.agents = agentGraph.agents;
+    runtime.agents = Array.from(new Set([...agentGraph.agents, 'pi']));
     runtime.agentLane = gateway ? 'gateway-key' : 'claude-subscription';
     gatewayCredentials = gateway;
   }
@@ -677,10 +679,13 @@ const server = createHostServer({
     };
     if (Object.keys(input).some((key) => allowed[key] !== true)) throw new Error('unsupported session field');
     const agentKind = input.agentKind === 'codex' ? 'codex' : input.agentKind === 'pi' ? 'pi' : 'claude-code';
-    if (!agentGraph.agents.includes(agentKind)) throw new Error(`Agent '${agentKind}' is not registered`);
-    if (input.providerId !== undefined && input.providerId !== null && input.providerId !== 'xd') throw new Error('provider is not available on cindy-host');
+    const supportedAgents = Array.from(new Set([...(agentGraph.agents ?? []), 'pi']));
+    if (!supportedAgents.includes(agentKind)) throw new Error(`Agent '${agentKind}' is not registered`);
     const available = await listProviders({ gateway: gatewayCredentials, ownerId: runtime.owner });
-    const models = available.providers.find((provider) => provider.id === 'xd')?.models?.[agentKind] ?? [];
+    const requestedProviderId = typeof input.providerId === 'string' && input.providerId ? input.providerId : null;
+    const matchingProvider = requestedProviderId ? available.providers.find((p) => p.id === requestedProviderId) : null;
+    if (requestedProviderId && !matchingProvider) throw new Error(`provider '${requestedProviderId}' is not available on cindy-host`);
+    const models = available.providers.flatMap((provider) => (!requestedProviderId || provider.id === requestedProviderId ? provider.models?.[agentKind] ?? [] : []));
     const model = typeof input.model === 'string' ? input.model : models[0]?.id;
     if (!model || !models.some((candidate) => candidate.id === model)) throw new Error('model is not available for this agent');
     const requestedWorkDir = typeof input.workingDir === 'string' ? input.workingDir : resolveHostDataDir();
@@ -779,20 +784,52 @@ const server = createHostServer({
     return { success: true, skills: result.skills ?? [] };
   },
   capabilities: async (agentKind: string) => {
-    const capabilities = agentGraph?.capabilitiesByAgent?.[agentKind];
-    if (!capabilities) throw new Error(`Agent '${agentKind}' is not registered`);
+    const baseCaps = agentGraph?.capabilitiesByAgent?.[agentKind] ?? (
+      agentKind === 'pi'
+        ? {
+            switchModel: { supported: true },
+            hasFastMode: true,
+            effort: { supported: true },
+            effortLevels: [
+              { id: 'minimal', displayName: 'Minimal' },
+              { id: 'low', displayName: 'Low' },
+              { id: 'medium', displayName: 'Medium' },
+              { id: 'high', displayName: 'High' },
+              { id: 'xhigh', displayName: 'Extra High' },
+              { id: 'max', displayName: 'Maximum' },
+            ],
+            reasoningDisplay: ['off', 'full'],
+            permissionModes: [
+              { id: 'ask', displayName: 'Default permissions', description: 'Read-only tools run directly; writing files, running commands, and MCP tools ask each time.' },
+              { id: 'auto', displayName: 'Automatic decisions', description: 'Cindy decides when to ask based on risk.' },
+              { id: 'bypassPermissions', displayName: 'Full access', description: 'Run tools without asking.' },
+            ],
+          }
+        : null
+    );
+    if (!baseCaps) throw new Error(`Agent '${agentKind}' is not registered`);
     const providerSnapshot = await listProviders({ gateway: gatewayCredentials, ownerId: runtime.owner });
-    const gatewayModels = providerSnapshot.providers.find((provider) => provider.id === 'xd')?.models?.[agentKind] ?? [];
-    const availableModels = gatewayModels.map((model) => ({
-      id: model.id,
-      displayName: model.name,
-      contextWindow: model.contextWindow,
-      efforts: model.efforts,
-      defaultEffort: model.defaultEffort,
-    }));
+    const allModelsForAgent = providerSnapshot.providers.flatMap((provider) => provider.models?.[agentKind] ?? []);
+    const seen = new Set<string>();
+    const availableModels = [];
+    for (const model of allModelsForAgent) {
+      if (!seen.has(model.id)) {
+        seen.add(model.id);
+        availableModels.push({
+          id: model.id,
+          displayName: model.name ?? model.id,
+          contextWindow: model.contextWindow ?? 0,
+          efforts: model.efforts ?? [],
+          defaultEffort: model.defaultEffort ?? null,
+          supportsFastMode: model.supportsFastMode,
+          supportsImageInput: model.supportsImageInput,
+          supportsToolCalls: model.supportsToolCalls,
+        });
+      }
+    }
     return {
       agentKind,
-      capabilities: { ...capabilities, availableModels },
+      capabilities: { ...baseCaps, availableModels },
       availableModels,
     };
   },
@@ -806,27 +843,17 @@ const server = createHostServer({
     if (!row) throw new Error('session not found');
     return { totalValueUsd: row.totalCostUsd, entries: [] };
   },
-  // The windowed history reader still lives behind Electron IPC; until it is
-  // ported the host answers only what it can prove: a task with no stored
-  // messages. A non-empty task fails loudly instead of showing an empty chat.
-  historyView: async (sessionId: string) => {
-    const { getMessagesForHistory } = await import('../../desktop/src/main/localDb/chatHistoryReader.ts');
-    const page = await getMessagesForHistory({
-      sessionIds: [sessionId], workdir: null, fromMs: null, toMs: null,
-      agentKind: null, roles: null, includeRewound: false, limit: 500, cursor: null, order: 'asc',
-    });
-    // Same projection the desktop's windowed reader uses; the host serves one
-    // complete page because a task's stored history fits in a single read.
-    const items = projectHistoryView(page.items as never, false, false);
-    return { version: 1, items, nextCursor: null, hasMore: false };
+  historyView: async (sessionId: string, before?: string | null) => {
+    return hostHistoryReader.page(sessionId, before ?? undefined, true);
+  },
+  workDetails: async (sessionId: string, ref: unknown, after?: string | null) => {
+    return hostHistoryReader.details(sessionId, ref as any, after ?? undefined);
+  },
+  messagesList: async (sessionId: string, limit?: number, before?: string | null) => {
+    return readMessagesList(sessionId, { limit: limit ?? 200, before: before ?? undefined });
   },
   history: async (sessionId: string, limit: number) => {
-    const { getMessagesForHistory } = await import('../../desktop/src/main/localDb/chatHistoryReader.ts');
-    const page = await getMessagesForHistory({
-      sessionIds: [sessionId], workdir: null, fromMs: null, toMs: null,
-      agentKind: null, roles: null, includeRewound: false, limit, cursor: null, order: 'asc',
-    });
-    return page.items;
+    return readMessagesList(sessionId, { limit });
   },
   turnChangeSets: async (sessionId: string) => {
     const { listTurnChangeSets } = await import('../../desktop/src/main/turn-change-set/store.ts');

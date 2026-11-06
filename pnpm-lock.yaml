@@ -663,6 +663,9 @@ importers:
       '@cindy/maker-shared':
         specifier: workspace:*
         version: link:../../packages/maker-shared
+      '@cindy/model-providers':
+        specifier: workspace:*
+        version: link:../../packages/model-providers
       better-sqlite3:
         specifier: ^12.9.0
         version: 12.11.1

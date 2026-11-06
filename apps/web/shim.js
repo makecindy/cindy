@@ -564,9 +564,10 @@
     'localDb.sessions.messages': async (args) => rpc('/sessions/messages', args),
     'localDb.rightSidebarTabs.list': () => STATIC.rightSidebarTabs,
     'localDb.messages.create': (args) => rpc('/messages/create', { sessionId: args?.[0], message: args?.[1] ?? {} }),
-    'localDb.messages.list': (args) => rpc('/messages/list', { sessionId: args?.[0], limit: args?.[1]?.limit }),
+    'localDb.messages.list': (args) => rpc('/messages/list', { sessionId: args?.[0], limit: args?.[1]?.limit, before: args?.[1]?.before ?? null }),
     'localDb.messages.estimatedSessionValue': (args) => rpc('/messages/estimated-value', { sessionId: args?.[0] }),
     'localDb.messages.historyView': (args) => rpc('/messages/history-view', { sessionId: args?.[0], before: args?.[1]?.before ?? null }),
+    'localDb.messages.workDetails': (args) => rpc('/messages/work-details', { sessionId: args?.[0], ref: args?.[1], after: args?.[2]?.after ?? null }),
     'pluginMarket.listInstalled': () => rpc('/plugins/list'),
     'logToMain': (args) => {
       const [, scope, message] = args ?? [];

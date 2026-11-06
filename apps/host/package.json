@@ -15,10 +15,11 @@
     "tsx": "^4.19.0"
   },
   "dependencies": {
-    "@cindy/maker-core": "workspace:*",
-    "better-sqlite3": "^12.9.0",
     "@cindy/auth-client": "workspace:*",
-    "node-machine-id": "^1.1.12",
-    "@cindy/maker-shared": "workspace:*"
+    "@cindy/maker-core": "workspace:*",
+    "@cindy/maker-shared": "workspace:*",
+    "@cindy/model-providers": "workspace:*",
+    "better-sqlite3": "^12.9.0",
+    "node-machine-id": "^1.1.12"
   }
 }
