@@ -82,7 +82,10 @@ function scanClaudeCustomizationsAtConfig(
   // Enabled Claude Code plugins contribute Skills with a `plugin:skill`
   // namespace. They are not part of the user/project folder sources above.
   if (!kindFilter || kindFilter.has('skill')) {
-    for (const skill of scanClaudePluginSkills(configDir)) {
+    // 技能管理页可能同时扫描多个工作目录；插件安装与项目 settings 按第一个
+    // 目录判定，与 buildClaudeSources 的 project 源保持一致。
+    const pluginWorkingDir = workingDirs.find((dir) => path.isAbsolute(dir));
+    for (const skill of scanClaudePluginSkills(configDir, { workingDir: pluginWorkingDir })) {
       result.items.push(
         readFolderSkill(
           {

@@ -242,4 +242,22 @@ describe('remote Skill scanners', () => {
 
     expect(skills.map((skill) => skill.name)).toEqual(['buildy:build']);
   });
+
+  it('probes a multi-Skill plugin without dropping or reordering entries', async () => {
+    const files: Record<string, string> = {
+      '$HOME/.claude/plugins/installed_plugins.json': JSON.stringify({
+        plugins: { 'bulk@market': [{ scope: 'user', installPath: '$HOME/plugins/bulk' }] },
+      }),
+      '$HOME/plugins/bulk/.claude-plugin/plugin.json': JSON.stringify({ name: 'bulk' }),
+    };
+    const names = Array.from({ length: 20 }, (_, index) => `s${String(index).padStart(2, '0')}`);
+    for (const name of names) {
+      files[`$HOME/plugins/bulk/skills/${name}/SKILL.md`] = `---\ndescription: ${name}\n---`;
+    }
+
+    // 并发批量探测不能丢条目或打乱顺序：菜单顺序必须稳定。
+    const skills = await scanRemoteClaudePluginSkills(fakeRemoteFiles(files));
+
+    expect(skills.map((skill) => skill.name)).toEqual(names.map((name) => `bulk:${name}`));
+  });
 });

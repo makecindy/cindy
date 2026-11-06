@@ -6,6 +6,32 @@ import { shouldPruneSkillScanDirectory } from './skill-scan-limits.js';
 
 const SKILL_READ_LIMIT = 1_048_576;
 
+/**
+ * Each remote probe is a separate SSH exec, so walking a plugin's Skills one at
+ * a time costs two sequential round trips per Skill — a 55-Skill plugin spends
+ * 110 round trips before the palette can render. Probe in bounded batches
+ * instead; the result order is preserved.
+ */
+const REMOTE_PROBE_CONCURRENCY = 8;
+
+async function mapLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  run: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await run(items[index]!);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 function stripYamlQuotes(value: string): string {
   const trimmed = value.trim();
   if (
@@ -270,26 +296,26 @@ async function scanRemotePluginSkillRoot(
       && !/\.bak\.\d+$/.test(name))
     .sort((a, b) => a.localeCompare(b));
 
-  const found: AgentSkillCommand[] = [];
-  for (const name of names) {
-    const skillFile = await existingSkillFile(fileOps, path.posix.join(root, name));
-    // Prune names only apply to namespaces; a directory that is itself a Skill
-    // keeps its name (`build/SKILL.md` is `/plugin:build`).
-    if (!skillFile) {
-      if (shouldPruneSkillScanDirectory(name)) continue;
-      continue;
-    }
-    found.push({
-      kind: 'agent-skill',
-      name: `${pluginName}:${name}`,
-      description: await readDescription(fileOps, skillFile),
-      source: 'skill',
-      path: skillFile,
-      scope: 'global',
-      enabled: true,
-    });
-  }
-  return found;
+  const probed = await mapLimit(
+    names,
+    REMOTE_PROBE_CONCURRENCY,
+    async (name): Promise<AgentSkillCommand | null> => {
+      const skillFile = await existingSkillFile(fileOps, path.posix.join(root, name));
+      // Prune names only apply to namespaces; a directory that is itself a
+      // Skill keeps its name (`build/SKILL.md` is `/plugin:build`).
+      if (!skillFile) return null;
+      return {
+        kind: 'agent-skill',
+        name: `${pluginName}:${name}`,
+        description: await readDescription(fileOps, skillFile),
+        source: 'skill',
+        path: skillFile,
+        scope: 'global',
+        enabled: true,
+      };
+    },
+  );
+  return probed.filter((skill): skill is AgentSkillCommand => skill !== null);
 }
 
 /** Enabled, user-scoped Claude Code plugin Skills on the remote host. */
