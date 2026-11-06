@@ -16,7 +16,7 @@ export function registerScheduleGetTool(
     name: 'schedule_get',
     category: 'scheduler',
     description:
-      '按 id 取单条定时任务的完整字段（与 GUI 详情同源）。默认查本机；id 只在它所在的电脑上有效，其它电脑上的任务传 device=<deviceId>（或 all 逐台查找）。不存在时 data=null（不算错误）。本机开启了 Webhook 触发的任务另带 webhookStatus（接收地址、是否已生成密钥、最近收到事件的时间），不含密钥本身。',
+      '按 id 取单条定时任务的完整字段（与 GUI 详情同源）。默认查本机；id 只在它所在的电脑上有效，其它电脑上的任务传 device=<deviceId>（或 all 逐台查找）。不存在时 data=null（不算错误）。开启了 Webhook 触发的任务另带 webhookStatus（接收地址、是否已生成密钥、最近收到事件的时间），不含密钥本身。',
     inputShape: {
       id: z.string().min(1).describe('Schedule id（来自 schedule_list / schedule_create 返回）'),
       ...readDeviceShape,

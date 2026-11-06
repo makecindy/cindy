@@ -27,6 +27,70 @@ function setup(invoke = vi.fn<Invoke>(async () => ({ ok: true, result: [] }))) {
 }
 
 describe('desktop scheduler cross-device transport', () => {
+  // PR #8470 / discussion_r4488542876, unit: remote get skipped the local
+  // webhook-status callback. Existing get coverage only used plain schedules.
+  // The adapter must return the receiver URL, report failed reads, and reject
+  // replies from a previous account when ownership changes between the reads.
+  it.each([
+    { receiver: 'cloud', url: 'https://webhook.example/hooks/whk_test', hasSecret: true },
+    null,
+  ])('reads webhook status from the same target when getting a webhook schedule: %s', async (webhookStatus) => {
+    const s = setup();
+    const schedule = { id: 's1', webhookTrigger: { endpointId: 'whk_test' } };
+    s.invoke.mockResolvedValueOnce({ ok: true, result: schedule });
+    s.invoke.mockResolvedValueOnce({ ok: true, result: webhookStatus });
+    expect(await s.remote.invoke('mac', 'get', ['s1'])).toEqual({
+      ok: true,
+      data: webhookStatus ? { ...schedule, webhookStatus } : schedule,
+    });
+    expect(s.invoke.mock.calls.map(([device, channel, args]) => [device, channel, args])).toEqual([
+      ['mac', 'maker:schedule:get', ['s1']],
+      ['mac', 'maker:schedule:webhook-status', ['s1']],
+    ]);
+    expect(s.invoke.mock.calls[1][3]?.preSend).toBe(s.invoke.mock.calls[0][3]?.preSend);
+    expect(s.invoke.mock.calls[1][3]?.preSend).toEqual(expect.any(Function));
+  });
+
+  it('does not request webhook status for a missing schedule', async () => {
+    const s = setup();
+    s.invoke.mockResolvedValueOnce({ ok: true, result: null });
+    expect(await s.remote.invoke('mac', 'get', ['missing'])).toEqual({ ok: true, data: null });
+    expect(s.invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { outcome: { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'unsupported' } } as InvokeResultPayload, code: 'REMOTE_UNSUPPORTED' },
+    { outcome: new DeviceLinkError('INVOKE_TIMEOUT', 'slow'), code: 'REMOTE_TIMEOUT' },
+  ])('reports a failed webhook status read instead of a complete schedule: $code', async ({ outcome, code }) => {
+    const s = setup();
+    s.invoke.mockResolvedValueOnce({ ok: true, result: { id: 's1', webhookTrigger: { endpointId: 'whk_test' } } });
+    s.invoke.mockImplementationOnce(async () => {
+      if (outcome instanceof Error) throw outcome;
+      return outcome;
+    });
+    const result = await s.remote.invoke('mac', 'get', ['s1']);
+    expect(result).toMatchObject({ ok: false, code });
+    expect(result).not.toHaveProperty('data');
+    expect(s.invoke).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['maker:schedule:get', 'maker:schedule:webhook-status'])(
+    'does not expose webhook results after ownership changes during %s', async (changedDuring) => {
+      const s = setup();
+      s.invoke.mockImplementation(async (_device, channel, _args, options) => {
+        options?.preSend?.();
+        if (channel === changedDuring) s.changeOwner();
+        return { ok: true, result: channel === 'maker:schedule:get'
+          ? { id: 's1', webhookTrigger: { endpointId: 'whk_test' } }
+          : { receiver: 'cloud', url: 'https://webhook.example/hooks/whk_test', hasSecret: true } };
+      });
+      const result = await s.remote.invoke('mac', 'get', ['s1']);
+      expect(result).toMatchObject({ ok: false, code: 'REMOTE_UNAVAILABLE' });
+      expect(result).not.toHaveProperty('data');
+      expect(s.invoke).toHaveBeenCalledTimes(changedDuring === 'maker:schedule:get' ? 1 : 2);
+    },
+  );
+
   // PR #8470, unit: old peers drop webhookTrigger; unavailable receivers cannot
   // receive. Existing capability tests only cover directory/model selection.
   it.each([

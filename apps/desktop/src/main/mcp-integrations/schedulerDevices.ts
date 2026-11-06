@@ -144,6 +144,20 @@ export function createSchedulerRemoteDeps(deps: {
         }
         operationStarted = true;
         response = await deps.invoke(deviceId, CHANNELS[op], args, { preSend: assertCurrent });
+        if (op === 'get') {
+          assertCurrent();
+          const schedule = response.ok ? response.result : null;
+          if (schedule && typeof schedule === 'object' && !Array.isArray(schedule)
+            && 'webhookTrigger' in schedule && schedule.webhookTrigger) {
+            // Remote reads skip the local schedule_get callback, so enrich through
+            // the target's existing read-only channel under the same owner snapshot.
+            const status = await deps.invoke(deviceId, 'maker:schedule:webhook-status', [args[0]], { preSend: assertCurrent });
+            assertCurrent();
+            response = status.ok
+              ? { ok: true, result: status.result ? { ...schedule, webhookStatus: status.result } : schedule }
+              : status;
+          }
+        }
       } catch (error) {
         if (error instanceof DeviceLinkError) {
           // inFlight = 请求已发出、回执丢失。

@@ -115,6 +115,7 @@ Webhook 配置和详情提供「接收地址 已用 / 上限 · 管理」，管�
 - 跨设备不开放密钥或普通地址轮换。`maker:schedule:webhook-status`、`webhook-receiver`、`webhook-account`、`webhook-release`、`webhook-restore` 在同账号 Device Link 白名单内；`webhook-set-secret`（携带密钥）和 `webhook-rotate-url` 不在。是否显示开关由任务所在电脑决定，所以读 `webhook-receiver`，不看控制端的登录状态。共享任务与供应商访客无账号管理权限。
 - `supportsScheduleWebhookTrigger` 标记主机支持；旧主机只保留已知列，会报告成功却丢掉配置，新调用方须先查这个标记。
 - Agent 设置或清空远程任务的触发条件复用原有创建／更新通道：先检查目标电脑的能力标记；开启时再检查目标的 `webhook-receiver`，只有已登录且有接收服务才发送写入。清空不要求接收服务可用。预读与写入均保留同账号访问复核，不新增密钥、权限或传输通道。
+- `schedule_get(device=...)`（含 `all`）查询到目标电脑的 Webhook 配置后，再通过同一电脑的 `maker:schedule:webhook-status` 补齐接收地址和状态。普通或不存在的任务不增加读取；状态接口返回空值时沿用本机的无状态结果，接口失败则明确报告该电脑查询失败。两次读取共用账号复核，不新增轮询或重试。
 - 旧客户端读写新主机时配置保留：缺 key 表示不修改。纯 Webhook 任务存为 `manual: true`，旧版本只显示“手动”，不会按占位 cron 触发。
 - 项目文件自动化不支持：地址和密钥不能进仓库。复制任务不带 Webhook 配置。
 
