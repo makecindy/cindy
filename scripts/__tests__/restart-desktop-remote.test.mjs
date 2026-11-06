@@ -263,6 +263,22 @@ test("restart kill scope ignores a node runtime borrowed from this checkout by a
 	assert.equal(commandBelongsToCheckout(processes[2].command, otherRoot, checkoutPaths), true);
 });
 
+test("restart kill scope ignores a borrowed node whose unquoted path contains spaces", () => {
+	// `ps` 不给带空格的参数补引号：借用的 node 路径含空格时仍要整段剥掉。
+	const ownRoot = path.resolve("/repo/cindy src");
+	const otherRoot = path.resolve("/repo/other");
+	const borrowedNode = path.join(ownRoot, ".tooling/node-v22/bin/node");
+	const forge = (root) => path.join(root, "node_modules/@electron-forge/cli/dist/electron-forge-start.js");
+	const checkoutPaths = [ownRoot, otherRoot];
+	const processes = [
+		{ pid: 1, command: `${borrowedNode} ${forge(otherRoot)}` },
+		{ pid: 2, command: `${borrowedNode} ${forge(ownRoot)}` },
+		{ pid: 3, command: `"${borrowedNode}" ${forge(otherRoot)}` },
+	];
+	const { targets } = partitionDesktopDevProcesses(processes, ownRoot, checkoutPaths);
+	assert.deepEqual(targets.map((proc) => proc.pid), [2]);
+});
+
 test("restart from the main checkout keeps dev instances of nested managed worktrees", () => {
 	const mainRoot = path.resolve("/repo/cindy-src");
 	const nestedRoot = path.join(mainRoot, ".cindy-worktrees", "fierce-newton");

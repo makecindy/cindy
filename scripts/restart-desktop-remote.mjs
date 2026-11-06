@@ -118,13 +118,14 @@ function stripTrailingSlashes(value) {
   return value.replace(/\/+$/, '');
 }
 
-const LAUNCHER_TOKEN_RE = /^\s*(?:"([^"]*)"|'([^']*)'|(\S+))/;
-const LAUNCHER_BASENAMES = new Set([
-  'node', 'node.exe',
-  'pnpm', 'pnpm.cjs', 'pnpm.js', 'pnpm.exe', 'pnpm.cmd',
-  'npm', 'npm-cli.js', 'npm.cmd', 'npx', 'npx-cli.js', 'npx.cmd',
-  'corepack', 'corepack.js', 'corepack.cmd',
-]);
+// 启动器入口：引号包裹的一段，或「任意前缀 + / + 启动器文件名」。`ps` 不会给带空格的参数补引号，
+// 所以前缀允许含空格（以第一个后接空白的启动器文件名为界；前缀里不跨过 ` -` 开头的选项）。
+const LAUNCHER_ENTRY = String.raw`(?:node(?:\.exe)?|pnpm(?:\.cjs|\.js|\.exe|\.cmd)?|npm(?:-cli\.js|\.cmd)?|npx(?:-cli\.js|\.cmd)?|corepack(?:\.js|\.cmd)?)`;
+const LAUNCHER_TOKEN_RE = new RegExp(
+  String.raw`^\s*(?:"[^"]*"|'[^']*'|(?:(?:(?! -).)*?/)?${LAUNCHER_ENTRY})(?=\s|$)`,
+);
+
+const LAUNCHER_PATH_RE = new RegExp(String.raw`(?:^|/)${LAUNCHER_ENTRY}$`);
 
 /**
  * 去掉命令行开头的 Node 运行时与包管理器入口（node / pnpm / npm / corepack）。
@@ -138,8 +139,8 @@ function stripLauncherPrefix(normalizedCommand) {
   for (let i = 0; i < 4; i += 1) {
     const match = rest.match(LAUNCHER_TOKEN_RE);
     if (!match) break;
-    const token = match[1] ?? match[2] ?? match[3];
-    if (!LAUNCHER_BASENAMES.has(path.posix.basename(token))) break;
+    const token = match[0].trim().replace(/^["']|["']$/g, '');
+    if (!LAUNCHER_PATH_RE.test(token)) break;
     rest = rest.slice(match[0].length);
   }
   return rest;
