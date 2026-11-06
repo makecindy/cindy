@@ -1,6 +1,6 @@
 {
   "schemaVersion": 6,
-  "updatedAt": "2026-11-05T09:54:04.007Z",
+  "updatedAt": "2026-11-06T06:37:59.679Z",
   "models": [
     {
       "id": "openai/gpt-6.1-sol",
@@ -3101,6 +3101,36 @@
       "modelRef": "xd/tencent-hy4-preview"
     },
     {
+      "id": "openai/gpt-image-2.6-sunburst",
+      "name": "GPT Image 2.6 Sunburst",
+      "modelRef": "openai/gpt-image-2.6-sunburst",
+      "mode": "image_generation",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "openai/gpt-image-2.6-sunburst",
+          "agents": []
+        }
+      ],
+      "nativeApi": "openai-images"
+    },
+    {
+      "id": "openai/gpt-image-2.6-flare",
+      "name": "GPT Image 2.6 Flare",
+      "modelRef": "openai/gpt-image-2.6-flare",
+      "mode": "image_generation",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "openai/gpt-image-2.6-flare",
+          "agents": []
+        }
+      ],
+      "nativeApi": "openai-images"
+    },
+    {
       "id": "openai/gpt-image-2.5-sunburst",
       "name": "GPT Image 2.5 Sunburst",
       "modelRef": "openai/gpt-image-2.5-sunburst",
@@ -4524,6 +4554,21 @@
                 "verifiedAt": "2026-09-23"
               },
               "cacheWrite1hPerMtok": 16
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 2,
+              "outputPerMtok": 10,
+              "effectiveFrom": "2026-10-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
+                "verifiedAt": "2026-11-06"
+              },
+              "cacheReadPerMtok": 0.1,
+              "cacheWritePerMtok": 2.5,
+              "cacheWrite1hPerMtok": 4
             }
           ]
         }
@@ -5391,6 +5436,21 @@
               "cacheReadPerMtok": 0.25,
               "cacheWritePerMtok": 12.5,
               "cacheWrite1hPerMtok": 20
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 5,
+              "outputPerMtok": 25,
+              "effectiveFrom": "2026-10-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
+                "verifiedAt": "2026-11-06"
+              },
+              "cacheReadPerMtok": 0.125,
+              "cacheWritePerMtok": 6.25,
+              "cacheWrite1hPerMtok": 10
             }
           ]
         }
@@ -5434,6 +5494,21 @@
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
                 "verifiedAt": "2026-07-31"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 5,
+              "outputPerMtok": 25,
+              "effectiveFrom": "2026-10-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
+                "verifiedAt": "2026-11-06"
+              },
+              "cacheReadPerMtok": 0.5,
+              "cacheWritePerMtok": 6.25,
+              "cacheWrite1hPerMtok": 10
             }
           ]
         }
@@ -5476,6 +5551,21 @@
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
                 "verifiedAt": "2026-07-31"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 5,
+              "outputPerMtok": 25,
+              "effectiveFrom": "2026-10-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
+                "verifiedAt": "2026-11-06"
+              },
+              "cacheReadPerMtok": 0.5,
+              "cacheWritePerMtok": 6.25,
+              "cacheWrite1hPerMtok": 10
             }
           ]
         }
@@ -5534,6 +5624,21 @@
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
                 "verifiedAt": "2026-08-02"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 2.5,
+              "outputPerMtok": 12.5,
+              "effectiveFrom": "2026-10-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
+                "verifiedAt": "2026-11-06"
+              },
+              "cacheReadPerMtok": 0.25,
+              "cacheWritePerMtok": 3.125,
+              "cacheWrite1hPerMtok": 5
             }
           ]
         }
@@ -5592,6 +5697,21 @@
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
                 "verifiedAt": "2026-08-02"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 2.5,
+              "outputPerMtok": 12.5,
+              "effectiveFrom": "2026-10-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
+                "verifiedAt": "2026-11-06"
+              },
+              "cacheReadPerMtok": 0.25,
+              "cacheWritePerMtok": 3.125,
+              "cacheWrite1hPerMtok": 5
             }
           ]
         }
@@ -5635,6 +5755,21 @@
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
                 "verifiedAt": "2026-07-31"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 2.5,
+              "outputPerMtok": 12.5,
+              "effectiveFrom": "2026-10-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
+                "verifiedAt": "2026-11-06"
+              },
+              "cacheReadPerMtok": 0.25,
+              "cacheWritePerMtok": 3.125,
+              "cacheWrite1hPerMtok": 5
             }
           ]
         }
@@ -5677,6 +5812,21 @@
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
                 "verifiedAt": "2026-07-31"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 2.5,
+              "outputPerMtok": 12.5,
+              "effectiveFrom": "2026-10-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
+                "verifiedAt": "2026-11-06"
+              },
+              "cacheReadPerMtok": 0.25,
+              "cacheWritePerMtok": 3.125,
+              "cacheWrite1hPerMtok": 5
             }
           ]
         }
@@ -5718,6 +5868,22 @@
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
                 "verifiedAt": "2026-07-31"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 2.5,
+              "outputPerMtok": 12.5,
+              "effectiveFrom": "2026-10-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
+                "verifiedAt": "2026-11-06"
+              },
+              "cacheReadPerMtok": 0.25,
+              "cacheWritePerMtok": 3.125,
+              "cacheWrite1hPerMtok": 5,
+              "maxInputTokens": 200001
             }
           ]
         }
@@ -5761,6 +5927,21 @@
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
                 "verifiedAt": "2026-08-12"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 1,
+              "outputPerMtok": 5,
+              "effectiveFrom": "2026-10-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
+                "verifiedAt": "2026-11-06"
+              },
+              "cacheReadPerMtok": 0.1,
+              "cacheWritePerMtok": 1.25,
+              "cacheWrite1hPerMtok": 2
             }
           ]
         }
@@ -5803,6 +5984,21 @@
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
                 "verifiedAt": "2026-07-31"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 1.5,
+              "outputPerMtok": 7.5,
+              "effectiveFrom": "2026-10-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
+                "verifiedAt": "2026-11-06"
+              },
+              "cacheReadPerMtok": 0.15,
+              "cacheWritePerMtok": 1.875,
+              "cacheWrite1hPerMtok": 3
             }
           ]
         }
@@ -5839,6 +6035,19 @@
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
                 "verifiedAt": "2026-07-31"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 1.5,
+              "outputPerMtok": 7.5,
+              "effectiveFrom": "2026-11-06",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+                "verifiedAt": "2026-11-06"
+              },
+              "maxInputTokens": 200001
             }
           ]
         }
@@ -5875,6 +6084,22 @@
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
                 "verifiedAt": "2026-07-31"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 0.5,
+              "outputPerMtok": 2.5,
+              "effectiveFrom": "2026-10-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
+                "verifiedAt": "2026-11-06"
+              },
+              "cacheReadPerMtok": 0.05,
+              "cacheWritePerMtok": 0.625,
+              "cacheWrite1hPerMtok": 1,
+              "maxInputTokens": 200001
             }
           ]
         }
@@ -8260,6 +8485,44 @@
           "xhigh"
         ],
         "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "openai/gpt-image-2.6-sunburst",
+      "aliases": [
+        "gpt-image-2.6-sunburst"
+      ],
+      "defaults": {
+        "name": "GPT Image 2.6 Sunburst",
+        "mode": "image_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        }
+      }
+    },
+    {
+      "id": "openai/gpt-image-2.6-flare",
+      "aliases": [
+        "gpt-image-2.6-flare"
+      ],
+      "defaults": {
+        "name": "GPT Image 2.6 Flare",
+        "mode": "image_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        }
       }
     },
     {

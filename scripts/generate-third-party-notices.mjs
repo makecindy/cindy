@@ -673,6 +673,13 @@ function buildProviderBrandingEntries() {
       url: "https://github.com/BerriAI/litellm-docs/blob/main/static/img/logo.svg",
       licenseText: MIT_TEXT("MIT License\n\nCopyright (c) 2026 Berri AI"),
     }),
+    bundledComponent({
+      name: "Magpie SVG mark (adapted)",
+      version: "adapted",
+      license: "MIT",
+      url: "https://github.com/yetone/magpie/blob/main/site/public/img/magpie-small.svg",
+      licenseText: MIT_TEXT("MIT License\n\nCopyright (c) 2026 yetone"),
+    }),
   ];
   return entries.sort(
     (a, b) =>

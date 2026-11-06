@@ -26,6 +26,46 @@ function fakeResponse(status: number, body: string): Response {
 }
 
 describe('import discovery limits', () => {
+  // Provider onboarding contract: real discovery entry, no new preset/schema flag.
+  // Previously a valid empty Magpie catalog was indistinguishable from malformed data.
+  it.each(['claude-code', 'codex', 'pi'] as const)
+  ('recognizes an empty Magpie catalog for %s without sending credentials to hello', async agent => {
+    const result = await fetchProviderModels(spec({ agent,
+      baseUrl: agent === 'claude-code' ? 'http://127.0.0.1:3425' : 'http://127.0.0.1:3425/v1',
+    }), async (url, init) => {
+      if (url === 'http://127.0.0.1:3425/v1/models') {
+        expect(new Headers(init?.headers).get('authorization')).toBe('Bearer sk-test');
+        return fakeResponse(200, JSON.stringify({ object: 'list', data: [] }));
+      }
+      expect(url).toBe('http://127.0.0.1:3425/api/hello');
+      expect(init?.headers).toBeUndefined();
+      expect(init?.redirect).toBe('error');
+      return fakeResponse(200, JSON.stringify({ name: 'magpie' }));
+    });
+    expect(result).toEqual({ ok: true, models: [] });
+  });
+
+  it.each([
+    { data: [{}] }, { models: [] }, { error: 'unavailable', data: [] },
+    { error_code: 401, data: [] },
+  ])('does not identify malformed or business-error empty catalogs as Magpie: %j', async body => {
+    const fetcher = vi.fn(async () => fakeResponse(200, JSON.stringify(body)));
+    expect(await fetchProviderModels(spec({ baseUrl: 'http://127.0.0.1:3425/v1' }), fetcher))
+      .toMatchObject({ ok: false });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { status: 200, body: { name: 'other' } },
+    { status: 401, body: { name: 'magpie' } },
+    { status: 200, body: { name: 'magpie', error: 'unavailable' } },
+  ])('keeps an unconfirmed gateway empty response conservative: %j', async hello => {
+    expect(await fetchProviderModels(spec({ baseUrl: 'https://relay.example/v1' }), async url =>
+      fakeResponse(String(url).endsWith('/api/hello') ? hello.status : 200,
+        JSON.stringify(String(url).endsWith('/api/hello') ? hello.body : { data: [] }))))
+      .toMatchObject({ ok: false });
+  });
+
   it.each(['claude-code', 'codex', 'pi'] as const)
   ('accepts an empty official Ollama Cloud catalog for %s without a caller opt-in', async agent => {
     const request = spec({ agent, baseUrl: agent === 'claude-code' ? 'https://ollama.com' : 'https://ollama.com/v1',

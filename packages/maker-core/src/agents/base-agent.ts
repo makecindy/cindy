@@ -485,6 +485,8 @@ export interface RefreshLocalModelsOptions {
    * 捕获监听器,让调用方按发起时的登录代际决定是否采用。
    */
   onSupportedModels?: (models: unknown[]) => void;
+  /** Codex: route a complete live snapshot to this caller instead of OAuth discovery. */
+  onModelsListed?: (models: readonly CodexModelListItem[]) => void | Promise<void>;
 }
 
 export interface ClaudeSubagentTaskRegistration {

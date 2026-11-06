@@ -5066,13 +5066,13 @@ interface ElectronAPI {
       }) => Promise<unknown[]>;
       /** Host-side companion read positions shared with the phone and other Macs. */
       readState?: {
-        get: () => Promise<{ ownerId: string | null; positions: Record<string, number> }>;
+        get: () => Promise<{ ownerId: string | null; positions: Record<string, number>; acknowledgedPositions?: Record<string, number> }>;
         update: (body: {
           ownerId: string;
           mark?: Record<string, number>;
           seed?: Record<string, number>;
           prune?: { botIds?: string[]; groupIds?: string[] };
-        }) => Promise<{ ownerId: string | null; positions: Record<string, number> }>;
+        }) => Promise<{ ownerId: string | null; positions: Record<string, number>; acknowledgedPositions?: Record<string, number> }>;
         onChanged: (
           callback: (payload: unknown, ownerStamp?: unknown) => void,
         ) => () => void;
@@ -5667,9 +5667,14 @@ interface ElectronAPI {
     deleteBotGroup: (groupId: string) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
     sendBotGroupMessage: (
       input: import('../shared/botGroupChat').BotGroupSendInput,
+      execution?: import('../shared/botGroupOutboxStorage').BotGroupOutboxExecution,
     ) => Promise<import('../shared/botGroupChat').BotGroupSendResult>;
     chatDisplayCache: (request: import('../shared/chatDisplayCache').ChatDisplayCacheRequest) => Promise<unknown>;
     botGroupOutbox: (input: import('../shared/botGroupOutboxStorage').BotGroupOutboxStorageRequest) => Promise<import('../shared/botGroupOutboxStorage').BotGroupOutboxStoredEntry[]>;
+    botGroupOutboxCommand: (input: import('../shared/botGroupOutboxStorage').BotGroupOutboxCommandRequest) => Promise<import('../shared/botGroupOutboxStorage').BotGroupOutboxCommandResult>;
+    onBotGroupOutboxChanged: (callback: (event: import('../shared/botGroupOutboxStorage').BotGroupOutboxChanged) => void) => (() => void);
+    botReadState: (input: import('../shared/botReadStateStorage').BotReadStateRequest) => Promise<import('../shared/botReadStateStorage').BotReadStateResult>;
+    onBotReadStateChanged: (callback: (event: import('../shared/botReadStateStorage').BotReadStateChanged) => void) => (() => void);
     continueBotGroupRound: (groupId: string) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
     stopBotGroupRound: (groupId: string, scope?: 'all') => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
     startBotGroupPlan: (

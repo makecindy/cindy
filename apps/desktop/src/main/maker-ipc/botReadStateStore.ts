@@ -24,6 +24,8 @@ export type BotReadStateMap = Record<string, number>;
 
 interface BotReadStateShape {
   positions: BotReadStateMap;
+  /** Optional for backwards-compatible reads of the original scalar ledger. */
+  acknowledgedPositions?: BotReadStateMap;
 }
 
 /** Bounded: companions, local groups and topics of one account, not a history. */
@@ -123,9 +125,14 @@ export function readBotReadPosition(key: string): number | null {
   return loadBotReadState()[key] ?? null;
 }
 
-function commit(result: { next: BotReadStateMap; changed: string[] }): string[] {
-  if (!result.changed.length) return result.changed;
-  getStore().set('positions', result.next);
+/** Old scalar positions are retained as legacy acknowledgements, never discarded. */
+export function loadAcknowledgedBotReadState(): BotReadStateMap {
+  return normalizeBotReadState(getStore().get('acknowledgedPositions') ?? loadBotReadState());
+}
+
+function commit(result: { next: BotReadStateMap; changed: string[] }, acknowledgements: BotReadStateMap): string[] {
+  // Save both facts atomically, including a first seed that must not become an ack.
+  getStore().set({ positions: result.next, acknowledgedPositions: acknowledgements });
   for (const listener of listeners) {
     try { listener(result.changed); } catch { /* observers never block the write */ }
   }
@@ -134,16 +141,24 @@ function commit(result: { next: BotReadStateMap; changed: string[] }): string[] 
 
 /** Advance positions (never back). Returns the changed keys. */
 export function markBotReadPositions(positions: unknown): string[] {
-  return commit(applyBotReadPositions(loadBotReadState(), positions, 'mark'));
+  const result = applyBotReadPositions(loadBotReadState(), positions, 'mark');
+  const acks = applyBotReadPositions(loadAcknowledgedBotReadState(), positions, 'mark');
+  result.changed = [...new Set([...result.changed, ...acks.changed])];
+  if (!result.changed.length) return [];
+  return commit(result, acks.next);
 }
 
 /** Give conversations without a position one; existing positions stay. */
 export function seedBotReadPositions(positions: unknown): string[] {
-  return commit(applyBotReadPositions(loadBotReadState(), positions, 'seed'));
+  const result = applyBotReadPositions(loadBotReadState(), positions, 'seed');
+  return result.changed.length ? commit(result, loadAcknowledgedBotReadState()) : [];
 }
 
 export function pruneBotReadState(alive: { botIds?: readonly string[]; groupIds?: readonly string[] }): string[] {
-  return commit(pruneBotReadPositions(loadBotReadState(), alive));
+  const result = pruneBotReadPositions(loadBotReadState(), alive);
+  const acks = pruneBotReadPositions(loadAcknowledgedBotReadState(), alive);
+  result.changed = [...new Set([...result.changed, ...acks.changed])];
+  return result.changed.length ? commit(result, acks.next) : [];
 }
 
 /** In-process observers (window push, device-link invalidation). */

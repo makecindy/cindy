@@ -1505,33 +1505,6 @@
       }
     },
     {
-      "id": "magpie",
-      "name": "Magpie",
-      "docsUrl": "https://usemagpie.ai",
-      "authMethod": "apiKey",
-      "models": [],
-      "runtimes": {
-        "claude-code": {
-          "baseUrl": "http://127.0.0.1:3425",
-          "wireProtocol": "anthropic-messages",
-          "modelsUrl": "http://127.0.0.1:3425/v1/models",
-          "baseUrlEditable": true
-        },
-        "codex": {
-          "baseUrl": "http://127.0.0.1:3425/v1",
-          "wireProtocol": "openai-responses",
-          "modelsUrl": "http://127.0.0.1:3425/v1/models",
-          "baseUrlEditable": true
-        },
-        "pi": {
-          "baseUrl": "http://127.0.0.1:3425/v1",
-          "wireProtocol": "openai-chat",
-          "modelsUrl": "http://127.0.0.1:3425/v1/models",
-          "baseUrlEditable": true
-        }
-      }
-    },
-    {
       "id": "litellm",
       "name": "LiteLLM Proxy",
       "docsUrl": "https://docs.litellm.ai/docs/proxy/quick_start",
@@ -2396,6 +2369,33 @@
         "pi": {
           "baseUrl": "https://ollama.com/v1",
           "modelsUrl": "https://ollama.com/v1/models",
+          "wireProtocol": "openai-chat"
+        }
+      }
+    },
+    {
+      "id": "magpie",
+      "name": "Magpie",
+      "docsUrl": "https://usemagpie.ai/docs/integrate",
+      "authMethod": "apiKey",
+      "models": [],
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "http://127.0.0.1:3425",
+          "modelsUrl": "http://127.0.0.1:3425/v1/models",
+          "baseUrlEditable": true,
+          "wireProtocol": "anthropic-messages"
+        },
+        "codex": {
+          "baseUrl": "http://127.0.0.1:3425/v1",
+          "modelsUrl": "http://127.0.0.1:3425/v1/models",
+          "baseUrlEditable": true,
+          "wireProtocol": "openai-responses"
+        },
+        "pi": {
+          "baseUrl": "http://127.0.0.1:3425/v1",
+          "modelsUrl": "http://127.0.0.1:3425/v1/models",
+          "baseUrlEditable": true,
           "wireProtocol": "openai-chat"
         }
       }

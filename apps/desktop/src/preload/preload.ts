@@ -580,7 +580,7 @@ function createIpcFanOut(channel: string): FanOut {
 // Stage 2 C1: cc-agent:* push channel fanout 全部退役 (renderer 已切到 maker:event 等),
 // 老 7 个 fanOut + fanOutUserMessagePersisted 一起拿掉。
 const fanOutUpdateStatus = createIpcFanOut('update-status');
-const fanOutBotReadStateChanged = createIpcFanOut('local-db:bots:read-state:changed');
+const fanOutHostBotReadStateChanged = createIpcFanOut('local-db:bots:read-state:changed');
 const fanOutSkillhubLocalStateChanged = createIpcFanOut('skillhub:local-state-changed');
 const fanOutDatabaseSizeWarningChanged = createIpcFanOut('database-size-warning:changed');
 const fanOutDbSlimmingStartupProgress = createIpcFanOut(
@@ -866,6 +866,8 @@ const fanOutMakerSessionBackgroundActivityChanged = createIpcFanOut(
 const fanOutBotDelegationChanged = createIpcFanOut('maker:bot-delegation:changed');
 const fanOutBotDirectMessageChanged = createIpcFanOut('maker:bot-direct-message:changed');
 const fanOutBotGroupChanged = createIpcFanOut('maker:bot-group:changed');
+const fanOutBotGroupOutboxChanged = createIpcFanOut('maker:bot-group:outbox-changed');
+const fanOutBotReadStateChanged = createIpcFanOut('maker:bot-read-state:changed');
 const fanOutCompanionCloudChanged = createIpcFanOut('maker:companion-cloud:changed');
 const fanOutBotProfileChanged = createIpcFanOut('maker:bot-profile:changed');
 const fanOutBotWorkbenchChanged = createIpcFanOut('maker:bot-workbench:changed');
@@ -6087,16 +6089,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
         locale?: import('../shared/locale').SupportedLocale;
       }): Promise<unknown[]> => ipcRenderer.invoke('local-db:bots:list', body),
       readState: {
-        get: (): Promise<{ ownerId: string | null; positions: Record<string, number> }> =>
+        get: (): Promise<{ ownerId: string | null; positions: Record<string, number>; acknowledgedPositions?: Record<string, number> }> =>
           ipcRenderer.invoke('local-db:bots:read-state:get'),
         update: (body: {
           ownerId: string;
           mark?: Record<string, number>;
           seed?: Record<string, number>;
           prune?: { botIds?: string[]; groupIds?: string[] };
-        }): Promise<{ ownerId: string | null; positions: Record<string, number> }> =>
+        }): Promise<{ ownerId: string | null; positions: Record<string, number>; acknowledgedPositions?: Record<string, number> }> =>
           ipcRenderer.invoke('local-db:bots:read-state:update', body),
-        onChanged: fanOutBotReadStateChanged,
+        onChanged: fanOutHostBotReadStateChanged,
       },
       get: (botId: string): Promise<unknown> => ipcRenderer.invoke('local-db:bots:get', botId),
       chooseAvatarSource: (): Promise<{ canceled: boolean; previewDataUrl?: string }> =>
@@ -6630,12 +6632,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:bot-group:delete', groupId),
     sendBotGroupMessage: (
       input: import('../shared/botGroupChat').BotGroupSendInput,
+      execution?: import('../shared/botGroupOutboxStorage').BotGroupOutboxExecution,
     ): Promise<import('../shared/botGroupChat').BotGroupSendResult> =>
-      ipcRenderer.invoke('maker:bot-group:send', input),
+      ipcRenderer.invoke('maker:bot-group:send', input, execution),
     chatDisplayCache: (request: import('../shared/chatDisplayCache').ChatDisplayCacheRequest): Promise<unknown> =>
       ipcRenderer.invoke('maker:chat:display-cache', request),
     botGroupOutbox: (input: import('../shared/botGroupOutboxStorage').BotGroupOutboxStorageRequest): Promise<import('../shared/botGroupOutboxStorage').BotGroupOutboxStoredEntry[]> =>
       ipcRenderer.invoke('maker:bot-group:outbox', input),
+    botGroupOutboxCommand: (input: import('../shared/botGroupOutboxStorage').BotGroupOutboxCommandRequest): Promise<import('../shared/botGroupOutboxStorage').BotGroupOutboxCommandResult> =>
+      ipcRenderer.invoke('maker:bot-group:outbox-command', input),
+    onBotGroupOutboxChanged: (callback: (event: import('../shared/botGroupOutboxStorage').BotGroupOutboxChanged) => void): (() => void) =>
+      fanOutBotGroupOutboxChanged(callback as IpcCallback),
+    botReadState: (input: import('../shared/botReadStateStorage').BotReadStateRequest): Promise<import('../shared/botReadStateStorage').BotReadStateResult> =>
+      ipcRenderer.invoke('maker:bot-read-state', input),
+    onBotReadStateChanged: (callback: (event: import('../shared/botReadStateStorage').BotReadStateChanged) => void): (() => void) =>
+      fanOutBotReadStateChanged(callback as IpcCallback),
     continueBotGroupRound: (groupId: string): Promise<import('../shared/botGroupChat').BotGroupMutationResult> =>
       ipcRenderer.invoke('maker:bot-group:continue', groupId),
     /** Stops your own work; `all` (owners/admins of server groups) stops everyone's. */
