@@ -441,6 +441,7 @@ it.each([
     if (special === 'duplicate-id') remoteRows[remoteRows.length - 1].id = 'local-0';
     const visible = makeRows(archived, 'archived', 'archived');
     const publishTasks = vi.fn().mockResolvedValue(undefined);
+    // 编译并执行真实发布回调，隔离侧栏组件依赖，检查实际传给 publishTasks 的载荷。
     const callback = extractBetween(
       sidebarUpperSource,
       'const publishSidebarTasks = useCallback(',
