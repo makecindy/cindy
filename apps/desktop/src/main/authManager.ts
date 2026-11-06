@@ -517,6 +517,18 @@ export function isPassiveSharedUserDataInstance(): boolean {
   return !app.isPackaged && process.env.XDT_PASSIVE_SHARED_USER_DATA === '1';
 }
 
+let authRefreshOverride: ((options?: { networkRecovered?: boolean }) => Promise<boolean>) | null = null;
+/**
+ * In host client mode, the background cindy-host is the single writer that
+ * owns token refresh and rotation. This override delegates refresh without
+ * touching persisted credentials on disk.
+ */
+export function setAuthRefreshOverride(
+  fn: ((options?: { networkRecovered?: boolean }) => Promise<boolean>) | null,
+): void {
+  authRefreshOverride = fn;
+}
+
 /**
  * passive 实例「本进程已登出」的墓碑(进程内,不落盘)。
  *
@@ -4826,14 +4838,24 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
   // 进程内去重:主窗流程还挂着(黑洞网络)时,副窗 / 右侧栏窗口 mount 触发的
   // initialize() 复用同一个 in-flight promise,避免并发轮换同一枚 refresh token。
   if (coldStartAuthInFlight === null) {
-    coldStartAuthInFlight = runColdStartRefreshFlow(storedToken, persistedSession.realm).finally(
-      () => {
-        // Keep every fallback edge until the shared refresh settles: sibling renderer
-        // timeouts may append another edge while the network flow is still pending.
+    if (authRefreshOverride !== null) {
+      coldStartAuthInFlight = authRefreshOverride().then((ok) => {
+        if (!ok) return snapshotLoggedOutAuthState();
+        return snapshotAuthState();
+      }).finally(() => {
         coldStartTimeoutFallbacks.clear();
         coldStartAuthInFlight = null;
-      },
-    );
+      });
+    } else {
+      coldStartAuthInFlight = runColdStartRefreshFlow(storedToken, persistedSession.realm).finally(
+        () => {
+          // Keep every fallback edge until the shared refresh settles: sibling renderer
+          // timeouts may append another edge while the network flow is still pending.
+          coldStartTimeoutFallbacks.clear();
+          coldStartAuthInFlight = null;
+        },
+      );
+    }
   }
   // 黑洞 / captive-portal 网络护栏:限时等待,超时先以未登录返回解锁 splash,
   // 流程继续后台跑;迟到成功由流程内部广播登录态(renderer 自动跳回主界面)。
@@ -6044,6 +6066,9 @@ export async function dispatchLoginAction(action: unknown): Promise<DesktopLogin
 }
 
 export async function refresh(_options?: { networkRecovered?: boolean }): Promise<boolean> {
+  if (authRefreshOverride !== null) {
+    return authRefreshOverride(_options);
+  }
   if (getActiveAppSession().mode === 'local') {
     log.debug('runtime refresh skipped in local mode');
     return false;

@@ -60,6 +60,32 @@ test('me reports the bound owner without leaking credentials', async (t) => {
   assert.equal(JSON.stringify(me.body).includes('token'), false);
 });
 
+test('api auth endpoints report state and allow refreshing without leaking tokens', async (t) => {
+  let refreshed = false;
+  const request = await withServer(t, {
+    getAuthState: () => ({ authenticated: true, owner: 'owner-1', realm: 'global', user: { id: 'u1' } }),
+    refreshAuth: () => {
+      refreshed = true;
+      return { ok: true, authenticated: true, user: { id: 'u1' } };
+    },
+  });
+
+  const state = await request('/api/auth/state', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${TOKEN}` },
+  });
+  assert.equal(state.status, 200);
+  assert.deepEqual(state.body, { authenticated: true, owner: 'owner-1', realm: 'global', user: { id: 'u1' } });
+
+  const refresh = await request('/api/auth/refresh', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${TOKEN}` },
+  });
+  assert.equal(refresh.status, 200);
+  assert.deepEqual(refresh.body, { ok: true, authenticated: true, user: { id: 'u1' } });
+  assert.equal(refreshed, true);
+});
+
 test('unknown routes and internal failures stay JSON', async (t) => {
   const request = await withServer(t, {
     listSessions: () => { throw new Error('storage offline'); },

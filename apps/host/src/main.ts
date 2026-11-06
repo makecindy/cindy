@@ -234,6 +234,31 @@ let activeOwner: string | null = null;
 let closeStorage: (() => Promise<void>) | null = null;
 let sessionStorage: OwnerSessionStorage | null = null;
 let runtimeLease: HostRuntimeLease | null = null;
+let refreshTimer: NodeJS.Timeout | null = null;
+
+async function refreshAuthSession(): Promise<boolean> {
+  try {
+    const user = await resolveAccountUser();
+    if (user) {
+      accountUser = user;
+      account = { authenticated: true, realm: account.realm ?? resolveHostRegion() };
+      eventHub.publish({ type: 'auth_changed', authenticated: true, user });
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.warn('[host] auth refresh failed:', error instanceof Error ? error.message : String(error));
+    return false;
+  }
+}
+
+function schedulePeriodicRefresh(): void {
+  if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer = setInterval(() => {
+    void refreshAuthSession();
+  }, 30 * 60 * 1000);
+  refreshTimer.unref();
+}
 /** Claude subscription state read once per boot; never on the health path. */
 let claudeState: Record<string, unknown> | null = null;
 /** Real maker-core agents registered in this process. */
@@ -499,6 +524,16 @@ const server = createHostServer({
     realm: account.realm,
     user: accountUser,
   }),
+  getAuthState: async () => ({
+    owner: runtime.owner,
+    authenticated: account.authenticated,
+    realm: account.realm,
+    user: accountUser,
+  }),
+  refreshAuth: async () => {
+    const ok = await refreshAuthSession();
+    return { ok, authenticated: account.authenticated, user: accountUser };
+  },
   logout: async () => {
     const realm = (account.realm ?? resolveHostRegion()) as 'cn' | 'global';
     const endpoints = readAuthEndpoints(realm);
@@ -817,7 +852,10 @@ server.listen(PORT, '127.0.0.1', () => {
     account = state;
     if (state.authenticated) {
       void resolveAccountUser()
-        .then((user) => { accountUser = user; })
+        .then((user) => {
+          accountUser = user;
+          schedulePeriodicRefresh();
+        })
         .catch((error: unknown) => {
           console.warn('[host] account profile unavailable:', error instanceof Error ? error.message : String(error));
         });

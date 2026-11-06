@@ -113,7 +113,8 @@
     // Boot-time snapshot; the host has no microphone permission surface.
     // Voice settings/history come from owners/<key>/voice-input-data.v1.json.
     'voiceInput.getDataSnapshot': () => settingsMirror.voiceInput,
-    'auth.getState': () => rpc('/me'),
+    'auth.getState': () => rpc('/api/auth/state'),
+    'auth.refresh': () => rpc('/api/auth/refresh'),
     // Renderer boot gates: answer with the host defaults instead of stalling.
     'maker.send': async (args) => {
       const [sessionId, message, createOpts] = args ?? [];

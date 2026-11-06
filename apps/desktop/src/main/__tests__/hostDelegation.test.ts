@@ -301,7 +301,7 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
     });
   });
 
-  it('covers appearance, layout, and project aliases in PROXIED_CHANNELS', () => {
+  it('covers appearance, layout, project aliases, and auth in PROXIED_CHANNELS', () => {
     const channelNames = PROXIED_CHANNELS.map((c) => c.channel);
     expect(channelNames).toContain('appearance-settings:set-patch');
     expect(channelNames).toContain('appearance-settings:reset');
@@ -309,6 +309,8 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
     expect(channelNames).toContain('layout:reset');
     expect(channelNames).toContain('local-db:project-aliases:set');
     expect(channelNames).toContain('local-db:project-aliases:delete');
+    expect(channelNames).toContain('auth:refresh');
+    expect(channelNames).toContain('auth:get-state');
   });
 
   it('relays SSE events through startHostEventBridge and dispatches typed callbacks', async () => {

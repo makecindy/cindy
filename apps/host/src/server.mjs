@@ -133,6 +133,14 @@ export function createHostServer(deps) {
           return;
         }
         if (url.pathname === '/api/me') { send(response, 200, await deps.me()); return; }
+        if (url.pathname === '/api/auth/state') {
+          send(response, 200, await (deps.getAuthState ? deps.getAuthState() : deps.me()));
+          return;
+        }
+        if (url.pathname === '/api/auth/refresh') {
+          send(response, 200, await (deps.refreshAuth ? deps.refreshAuth() : { ok: true }));
+          return;
+        }
         // The preload contract for `localDb.sessions.list()` is a bare array.
         if (url.pathname === '/api/sessions/list') { send(response, 200, await deps.listSessions()); return; }
         if (url.pathname === '/api/project-aliases/list') { send(response, 200, await deps.listProjectAliases()); return; }

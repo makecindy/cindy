@@ -292,6 +292,21 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     map: (response) => ({ layout: response, persisted: true }),
   },
 
+  // --- Auth (Single Writer) ---
+  {
+    desktopChannel: 'auth:refresh',
+    webPath: 'auth.refresh',
+    hostPath: '/api/auth/refresh',
+    body: () => ({}),
+    map: (response) => Boolean((response as { ok?: boolean; authenticated?: boolean })?.authenticated ?? (response as { ok?: boolean })?.ok),
+  },
+  {
+    desktopChannel: 'auth:get-state',
+    webPath: 'auth.getState',
+    hostPath: '/api/auth/state',
+    body: () => ({}),
+  },
+
   // --- Plugins / Ghosts ---
   {
     desktopChannel: 'plugin-market:list-installed',

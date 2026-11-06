@@ -1309,6 +1309,17 @@ function installHostClientMode(): boolean {
     client: hostClient,
     ipcMain,
   });
+  authManager.setAuthRefreshOverride(async () => {
+    try {
+      const res = (await hostClient.request('/api/auth/refresh', {})) as {
+        ok?: boolean;
+        authenticated?: boolean;
+      };
+      return Boolean(res?.authenticated ?? res?.ok);
+    } catch {
+      return false;
+    }
+  });
   const sendToAllWindows = (channel: string, ...args: unknown[]) => {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send(channel, ...args);
