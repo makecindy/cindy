@@ -500,6 +500,44 @@ describe('createComputerMcpServer', () => {
     await h.cleanup();
   });
 
+  // CU-018: driver errors suggested unsupported x/y or a foreground retry.
+  // Unit: real MCP entry, both returned refusals and thrown adapter errors;
+  // verify guidance and partial-delivery evidence without dispatching another input.
+  it.each(['throw', 'return'] as const)('normalizes input failure advice (%s)', async mode => {
+    for (const code of ['background_unavailable', 'type_text_incomplete']) {
+      const progress = { completed_chars: 2, remaining_chars: 3 };
+      const rawMessage = 'Use pixel-targeted type_text (x,y) or delivery_mode:"foreground"; retry only the remaining suffix';
+      const deps: ComputerMcpDeps = { getStatus: vi.fn(), callTool: vi.fn(async name => {
+        if (name !== 'type_text') return { windows: [] };
+        if (mode === 'throw') throw Object.assign(new Error(rawMessage), {
+          code, outcomeUnknown: true, inputProgress: progress,
+        });
+        const refusal = { ok: false, code, message: rawMessage, hint: rawMessage,
+          next_call: { tool: 'type_text', arguments: { x: 1, y: 2 } },
+          outcome_unknown: true, input_progress: progress };
+        // Chunked long text nests the raw refused chunk under lastResult.
+        return { ...refusal, lastResult: refusal };
+      }) };
+      const h = await makeHarness(deps);
+      try {
+        const result = await h.client.callTool({ name: 'call_tool', arguments: {
+          name: 'type_text', args: { pid: 123, text: 'hello' },
+        } });
+        const payload = textPayload(result) as { data: { message: string } };
+        expect(payload).toMatchObject({ ok: false, errorCode: code,
+          data: { outcome_unknown: true, input_progress: progress } });
+        expect(payload.data.message).toContain('get_window_state');
+        expect(payload.data.message).toContain(code === 'background_unavailable' ? 'set_value' : 'Do not resend');
+        expect(JSON.stringify(payload)).not.toContain(rawMessage);
+        expect(payload.data).not.toHaveProperty('next_call');
+        if (mode === 'return') expect(payload.data).toMatchObject({ lastResult: { code, outcome_unknown: true, input_progress: progress } });
+        const calls = vi.mocked(deps.callTool).mock.calls;
+        expect(calls.filter(([name]) => name === 'type_text')).toHaveLength(1);
+        expect(calls.map(([name]) => name)).toEqual(mode === 'throw' ? ['type_text', 'list_windows'] : ['type_text']);
+      } finally { await h.cleanup(); }
+    }
+  });
+
   it('dispatches zoom with cua-driver 0.5 region bounds', async () => {
     const deps: ComputerMcpDeps = {
       getStatus: vi.fn(),

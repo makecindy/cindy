@@ -128,7 +128,7 @@ export function registerScheduleUpdateTool(
           feishu: z.boolean(),
         })
         .optional(),
-      expireAt: z.number().int().optional(),
+      expireAt: z.number().int().nullable().optional().describe('Unix ms 截止时间戳；省略保留，null 清除。到期后不再自动触发，已开始的运行继续完成。'),
       ...writeDeviceShape,
     },
     handler: async ({ id, bindToCurrentSession, device, ...patch }) => {
@@ -162,8 +162,8 @@ export function registerScheduleUpdateTool(
           : (patch as { agentDeviceId?: string | null }).agentDeviceId !== undefined
             ? '其它电脑上的定时任务不能设运行位置 agentDeviceId'
           : Object.entries(patch).some(([key, value]) => value === null
-              && !['intervalMs', 'modelAgentDeviceId', 'modelAgentKind', 'model', 'providerId', 'effort'].includes(key))
-            ? '其它电脑上的定时任务只支持用 null 清空间隔和模型选择字段'
+              && !['intervalMs', 'expireAt', 'modelAgentDeviceId', 'modelAgentKind', 'model', 'providerId', 'effort'].includes(key))
+            ? '其它电脑上的定时任务只支持用 null 清空间隔、截止时间和模型选择字段'
             : null;
         if (unsupported) {
           return buildJsonResult(

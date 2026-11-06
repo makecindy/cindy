@@ -28,7 +28,8 @@ import {
   useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { isLightboxCovered } from '@/lib/lightboxLayer';
-import { isPreviewPopupKeyEvent } from '@/components/find-in-page/findInPageOwnership';
+import { acquireFindInPage, isPreviewPopupKeyEvent } from '@/components/find-in-page/findInPageOwnership';
+import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { Copy, Search, WrapText, ListOrdered, ExternalLink, TriangleAlert } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -268,7 +269,24 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  // F6: Esc key listener
+  // Rendered Markdown delegates to the shared search host. Source/plain text
+  // owns editor search; the claim makes global window-capture find yield first.
+  useEffect(acquireFindInPage, []);
+  const isCovered = useCallback(() => !overlayRef.current || isLightboxCovered(overlayRef.current) ||
+    overlayRef.current.contains(document.fullscreenElement), []);
+  useAppShortcut('find-in-page', (event) => {
+    if (event.defaultPrevented || event.keyCode === 229 || isCovered() ||
+        (renderable.kind === 'markdown' && !showSource)) return false;
+    setShowSource(true);
+    setSearch(true);
+    queueMicrotask(() => {
+      searchInput.current?.focus();
+      searchInput.current?.select();
+    });
+    return true;
+  }, { stopImmediate: true });
+
+  // Escape runs after menus/tooltips have claimed it.
   useEffect(() => {
     let fullscreen = Boolean(overlayRef.current?.contains(document.fullscreenElement));
     let exitedFullscreenAt = -Infinity;
@@ -284,45 +302,31 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.key === 'Escape') exitedFullscreenAt = -Infinity;
     };
-    const handler = (e: KeyboardEvent) => {
-      if (e.repeat || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
+    const onEscape = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.repeat || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
       const overlay = overlayRef.current;
       if (!overlay || isLightboxCovered(overlay)) return;
-      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
-        // Rendered Markdown delegates find to FindInPageBar, including its
-        // refusal while video or a nested preview owns the foreground.
-        if (renderable.kind === 'markdown' && !showSource) return;
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        setShowSource(true);
-        setSearch(true);
+      if (isPreviewPopupKeyEvent(e, overlay)) return;
+      const ownsNativeFullscreen = overlay.contains(document.fullscreenElement);
+      // Chromium may exit fullscreen before delivering this same keydown,
+      // even with find closed. Preserve the document in either event order.
+      if (fullscreen || ownsNativeFullscreen || performance.now() - exitedFullscreenAt < 250) {
+        exitedFullscreenAt = -Infinity;
+        handledFullscreenExit = fullscreen || ownsNativeFullscreen;
         return;
       }
-      if (e.key === 'Escape' && isPreviewPopupKeyEvent(e, overlay)) return;
-      if (e.key === 'Escape') {
-        const ownsNativeFullscreen = overlay.contains(document.fullscreenElement);
-        // Chromium may exit fullscreen before delivering this same keydown,
-        // even with find closed. Preserve the document in either event order.
-        if (fullscreen || ownsNativeFullscreen || performance.now() - exitedFullscreenAt < 250) {
-          exitedFullscreenAt = -Infinity;
-          handledFullscreenExit = fullscreen || ownsNativeFullscreen;
-          return;
-        }
-      }
-      if (e.key === 'Escape' && search) {
+      if (search) {
         e.preventDefault();
         setSearch(false);
         return;
       }
-      if (e.key === 'Escape' && overlayRef.current && !isLightboxCovered(overlayRef.current)) {
-        handleClose();
-      }
+      handleClose();
     };
-    document.addEventListener('keydown', handler, true);
+    document.addEventListener('keydown', onEscape);
     document.addEventListener('fullscreenchange', onFullscreenChange);
     window.addEventListener('keyup', onKeyUp, true);
     return () => {
-      document.removeEventListener('keydown', handler, true);
+      document.removeEventListener('keydown', onEscape);
       document.removeEventListener('fullscreenchange', onFullscreenChange);
       window.removeEventListener('keyup', onKeyUp, true);
     };
@@ -537,7 +541,7 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
       {/* F3: Doc Card — clicks inside MUST NOT close (per F6 异常流). */}
       <div
         data-text-lightbox-card
-        data-text-lightbox-search-host={renderable.kind === 'markdown' ? '' : undefined}
+        data-text-lightbox-search-host={renderable.kind === 'markdown' && !showSource ? '' : undefined}
         className={cn(
           'cursor-auto flex flex-col pt-16',
           collection && 'pb-16',

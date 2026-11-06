@@ -130,6 +130,9 @@
   "detail": {
     "useItIn": "Use it in",
     "openPlugin": "Open plugin",
+    "readme": "About",
+    "readmeLoadFailed": "The introduction could not be loaded. Try again.",
+    "readmeUnavailable": "No introduction is available.",
     "computerSettings": "To configure this plugin, open its details in Cindy → Plugins on your computer.",
     "runtimeIssue": "The plugin stopped unexpectedly. Try opening it again or using it in a task.",
     "runtimeFused": "The plugin stopped after repeated failures. Turn it off and on to try again.",

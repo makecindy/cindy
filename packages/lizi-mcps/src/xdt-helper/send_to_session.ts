@@ -71,6 +71,8 @@ export type SendToSessionCallback = (params: {
     | "LEAD_NOT_SUPPORTED"
     | "WORKTREE_UNAVAILABLE"
     | "HOST_NOT_READY"
+    /** The sending task's review did not confirm the owner asked for this hand-off; nothing was sent. */
+    | "DELEGATION_NOT_AUTHORIZED"
   >
 >;
 
@@ -194,7 +196,7 @@ export function registerSendToSessionTool(
         .string()
         .min(1)
         .describe(
-          "要发送的消息。当前输入属于主人请求或已核实转交时，宿主保留同一份用户原话；只补充必要上下文，不扩大范围或要求重复确认。缺少背景先查看来源任务。自主消息、自动化通知和结果回传按正文发送。",
+          "要发送的消息，对方收到的就是这段原文。当前输入属于用户请求或已核实转交时，宿主会在发送前核对这次转交在用户要求的范围内（Auto 下超出范围会被拒绝、不发送），通过后对方按这段内容处理；写清要做的事和必要背景，不扩大范围或要求重复确认。缺少背景先查看来源任务。自主消息、自动化通知和结果回传不代表用户。",
         ),
       message_purpose: z.enum(["coordination", "user-visible"]).optional().describe(
         "委派子任务发给发起伙伴默认 coordination：原始来信隐藏，伙伴处理后的进度和结果可直接正常回复。user-visible 让来信本身可见。其他普通任务默认保持可见；coordination 仅限宿主核实的委派关系，不改变操作权限。正常完成自动回传，无需重发。",

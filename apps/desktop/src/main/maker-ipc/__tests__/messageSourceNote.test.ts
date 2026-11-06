@@ -45,6 +45,22 @@ describe('buildWireMessageSourceNote', () => {
       .toBe(buildWireMessageSourceNote({ origin }));
   });
 
+  // 2026-11-05: the body is the sender's own text. Only a hand-off the sending host checked
+  // speaks for the owner; a plain relay without that check is an ordinary task message.
+  it('speaks for the owner only for a checked plain hand-off', () => {
+    const origin = { ...taskOrigin, senderBotId: 'filo' };
+    const request = { sessionId: 's-1', clientId: 'u1', plainBody: true };
+    const checked = buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request',
+      request: { ...request, delegatedText: 'Fix #12 and merge it.' } } });
+    expect(checked).toContain('代表用户对本任务的请求');
+    expect(checked).not.toContain('用户原话');
+    expect(buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request', request } }))
+      .toBe(buildWireMessageSourceNote({ origin }));
+    // The older owner mark alone does not make a plain relay speak for the owner.
+    expect(buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request', request: { ...request, ownerVerified: true } } }))
+      .toBe(buildWireMessageSourceNote({ origin }));
+  });
+
   it('describes task, partner, plugin and shared-member senders with ids', () => {
     expect(buildWireMessageSourceNote({ origin: taskOrigin })).toBe(
       '[消息来源] 本条由任务「周报」(session_id: s-1) 发送，不是用户本人输入。',

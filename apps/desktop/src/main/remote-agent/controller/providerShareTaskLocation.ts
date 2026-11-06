@@ -7,6 +7,7 @@ import { RemoteAgentRunClient, remoteAgentInvoker } from './runClient.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
 import { getClientEndpoint } from '../../clientEndpointsService.js';
 import { findReceivedShare, providerShareAccessEpoch } from '../../device-link/providerShareGuest.js';
+import { probeSharedTask, sharedTaskFailureReason, sharedTaskRecoveryError, sharedTaskRecoveryReason } from '../../../shared/sharedTaskRecovery.js';
 
 type SharedTaskAuthorization = { target: string; direct: boolean; reused?: boolean; generation?: string; leaseDeadline?: number; wallDeadline?: number; authorizedUntil?: number; renewAt?: number };
 const GRANT_ID = /^[0-9a-f-]{36}$/;
@@ -90,7 +91,7 @@ export async function authorizeSharedTaskExecutor(
     || retainedWindow.target !== target || retainedWindow.agentKind !== agentKind || retainedWindow.model !== model
     || (['generation', 'leaseDeadline', 'wallDeadline', 'authorizedUntil', 'renewAt'] as const)
       .some(key => retainedHistory[key] !== retainedWindow[key]))) {
-    throw new Error('[REMOTE_AGENT_UNAVAILABLE] original shared executor authorization is no longer retained');
+    throw sharedTaskRecoveryError('authorization', 'history');
   }
   const closeEpoch = getRemoteLinkCloseEpoch(target);
   const owner = activeOwnerScopeKey(), endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
@@ -100,51 +101,47 @@ export async function authorizeSharedTaskExecutor(
   const requestedWall = Date.now();
   const value = await remoteAgentInvoker(ownerRoute, remoteBackgroundInvoke)([{
     op: 'allocate', sessionId, agentKind, model, preferredExecutorDeviceId: deviceId,
-  }]).catch(error => { signal?.throwIfAborted(); throw error; });
+  }]).catch(error => {
+    signal?.throwIfAborted();
+    if (error instanceof Error && sharedTaskRecoveryReason(error.message)) throw error;
+    throw sharedTaskRecoveryError('allocation', sharedTaskFailureReason(error), error);
+  });
   const row = value && typeof value === 'object' ? value as { deviceId?: unknown; generation?: unknown } : null;
   const generation = typeof row?.generation === 'string' && GRANT_ID.test(row.generation) ? row.generation : undefined;
   try {
     signal?.throwIfAborted();
     if (row?.deviceId !== deviceId) {
-      throw new Error('[REMOTE_AGENT_UNAVAILABLE] the computer holding this shared task is unavailable');
+      // A legacy O returns null without a reason. Never invent an offline verdict.
+      throw sharedTaskRecoveryError('allocation', row?.deviceId ? 'history' : 'unknown');
     }
     const requireCurrentLink = (): void => {
       signal?.throwIfAborted();
       if (retainedWindow && !retainedWindow.current()) {
-        throw new Error('[REMOTE_AGENT_UNAVAILABLE] original shared executor authorization is no longer retained');
+        throw sharedTaskRecoveryError('authorization', 'history');
       }
       if (getRemoteLinkCloseEpoch(target) !== closeEpoch) {
-        throw new Error('[REMOTE_AGENT_UNAVAILABLE] shared executor link was closed during authorization');
+        throw sharedTaskRecoveryError('executor', 'relay');
       }
       if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner
         || getClientEndpoint('deviceLinkApiBaseUrl') !== endpoint
         || (accessEpoch !== undefined && (findReceivedShare(shareId)?.status !== 'active'
           || providerShareAccessEpoch(shareId) !== accessEpoch))) {
-        throw new Error('[REMOTE_AGENT_UNAVAILABLE] shared task permission changed during authorization');
+        throw sharedTaskRecoveryError('authorization', 'denied');
       }
     };
     requireCurrentLink();
     // A restarted M can lose its transport while G still considers the peer
     // ready. Reconfirm only this peer after its fresh grant, before native IDs
     // or task contents are sent. Preserve the share's existing regional relay.
-    if (isCrossRegionProviderShareTarget(target)) await renewCrossRegionProviderShareLink(target);
-    else {
-      try { await openRemoteLink(target); }
-      catch (error) {
-        // The timed-out caps RPC can have started a single-flight recovery
-        // before O installed the replacement grant. Once that flight settles,
-        // confirm again under the new grant; never retry a denial or closure.
-        const code = (error as { code?: unknown })?.code;
-        if (!retainedWindow || !['TIMEOUT', 'INVOKE_TIMEOUT', 'DEVICE_UNRESPONSIVE'].includes(String(code))) throw error;
-        requireCurrentLink();
-        await openRemoteLink(target);
-      }
-    }
+    await probeSharedTask('executor', async () => {
+      if (isCrossRegionProviderShareTarget(target)) await renewCrossRegionProviderShareLink(target);
+      else await openRemoteLink(target);
+    }, requireCurrentLink);
     requireCurrentLink();
-    const caps = await RemoteAgentRunClient.caps(remoteAgentInvoker(target, remoteBackgroundInvoke));
+    const caps = await probeSharedTask('capability', () => RemoteAgentRunClient.caps(remoteAgentInvoker(target, remoteBackgroundInvoke)), requireCurrentLink);
     requireCurrentLink();
     if (!caps.directGuestExecution || !caps.agents.some(agent => agent.kind === agentKind && agent.available)) {
-      throw new Error('[REMOTE_AGENT_PEER_TOO_OLD] the computer holding this shared task cannot accept it');
+      throw sharedTaskRecoveryError('capability', 'unsupported');
     }
     const leaseDeadline = sharedTaskLeaseDeadline(value, requestedAt);
     const grant: SharedTaskAuthorization = { target, direct: true, ...(generation ? { generation } : {}),
@@ -186,8 +183,9 @@ export async function authorizeSharedTaskHistory(
     try {
       const caps = await RemoteAgentRunClient.caps(remoteAgentInvoker(retained.target, remoteBackgroundInvoke));
       signal?.throwIfAborted();
-      if (!retained.current() || !caps.directGuestExecution || !caps.agents.some(agent => agent.kind === agentKind && agent.available)) {
-        throw new Error('[REMOTE_AGENT_UNAVAILABLE] original shared executor authorization is unavailable');
+      if (!retained.current()) throw sharedTaskRecoveryError('authorization', 'history');
+      if (!caps.directGuestExecution || !caps.agents.some(agent => agent.kind === agentKind && agent.available)) {
+        throw sharedTaskRecoveryError('capability', 'unsupported');
       }
       return { target: retained.target, direct: true, reused: true, generation: retained.generation,
         leaseDeadline: retained.leaseDeadline, wallDeadline: retained.wallDeadline,
@@ -201,7 +199,10 @@ export async function authorizeSharedTaskHistory(
       const code = (error as { code?: unknown })?.code;
       const peer = parseProviderSharePeer(retained.target);
       if (!retained.current() || !peer || peer.role !== 'host'
-        || !['TIMEOUT', 'INVOKE_TIMEOUT', 'DEVICE_UNRESPONSIVE'].includes(String(code))) throw error;
+        || !['TIMEOUT', 'INVOKE_TIMEOUT', 'DEVICE_UNRESPONSIVE'].includes(String(code))) {
+        if (error instanceof Error && sharedTaskRecoveryReason(error.message)) throw error;
+        throw sharedTaskRecoveryError('capability', sharedTaskFailureReason(error), error);
+      }
       return authorizeSharedTaskExecutor(agentDeviceId, sessionId, agentKind, model, peer.deviceId, false, signal, retained);
     }
   }
@@ -221,7 +222,8 @@ export async function authorizeSharedTaskHistory(
     if (code === 'REMOTE_AGENT_INVALID' || code === 'REMOTE_AGENT_PEER_TOO_OLD' || code === 'PEER_TOO_OLD') {
       return { target: agentDeviceId, direct: false };
     }
-    throw error;
+    if (error instanceof Error && sharedTaskRecoveryReason(error.message)) throw error;
+    throw sharedTaskRecoveryError('owner', sharedTaskFailureReason(error), error);
   }
   if (location === null) return { target: agentDeviceId, direct: false };
   const deviceId = location && typeof location === 'object' ? (location as { deviceId?: unknown }).deviceId : undefined;
