@@ -2097,6 +2097,17 @@
     "appearance": {
       "title": "儀容",
       "modeLabel": "顯示之式",
+      "appIcon": {
+        "label": "Dock 之標",
+        "description": "擇應用於 Dock 所用之標",
+        "saveFailed": "Dock 之標未能存，請稍後再試",
+        "options": {
+          "default": "本然",
+          "cat": "玄貓",
+          "wordmark": "Cindy 字標",
+          "mark": "Cindy 符記"
+        }
+      },
       "sidebarAndPanels": "側欄與面板",
       "themeLabel": "格調",
       "themeAriaLabel": "擇主題",
@@ -14006,6 +14017,8 @@
       "updateHost": "請先更新行差事之機，再開旁問。",
       "failed": "旁問未能開，請稍後再試。",
       "mainTaskOnly": "請自主差事開旁問。",
+      "sharedTaskUnavailable": "共事不可開旁問。",
+      "archivedTask": "請先解封存，再開旁問。",
       "closeTitle": "闔旁問？",
       "closeDescription": "將止而刪此番追問，主差事不受其擾。",
       "closeConfirm": "闔而刪之",

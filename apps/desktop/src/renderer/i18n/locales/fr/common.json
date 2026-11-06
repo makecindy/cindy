@@ -2162,6 +2162,17 @@
     "appearance": {
       "title": "Apparence",
       "modeLabel": "Mode d'apparence",
+      "appIcon": {
+        "label": "Icône du Dock",
+        "description": "Choisissez l’icône utilisée par l’app dans le Dock",
+        "saveFailed": "Impossible d’enregistrer l’icône du Dock. Veuillez réessayer.",
+        "options": {
+          "default": "Par défaut",
+          "cat": "Chat noir",
+          "wordmark": "Logotype Cindy",
+          "mark": "Symbole Cindy"
+        }
+      },
       "sidebarAndPanels": "Barre latérale et panneaux",
       "themeLabel": "Thème",
       "themeAriaLabel": "Sélection du thème",
@@ -14173,6 +14184,8 @@
       "updateHost": "Mettez à jour l'ordinateur qui exécute cette tâche pour ouvrir une conversation annexe.",
       "failed": "Impossible d'ouvrir la conversation annexe. Veuillez réessayer.",
       "mainTaskOnly": "Ouvrez une conversation annexe depuis la tâche principale.",
+      "sharedTaskUnavailable": "Les conversations annexes ne sont pas disponibles dans les tâches partagées.",
+      "archivedTask": "Désarchivez cette tâche pour ouvrir une conversation annexe.",
       "closeTitle": "Fermer la conversation annexe ?",
       "closeDescription": "Ce suivi va s'arrêter et son historique sera supprimé. La tâche principale continue de s'exécuter.",
       "closeConfirm": "Fermer et supprimer",

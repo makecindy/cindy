@@ -2162,6 +2162,17 @@
     "appearance": {
       "title": "Aparência",
       "modeLabel": "Modo de aparência",
+      "appIcon": {
+        "label": "Ícone do Dock",
+        "description": "Escolha o ícone que o app usa no Dock",
+        "saveFailed": "Não foi possível salvar o ícone do Dock. Tente novamente.",
+        "options": {
+          "default": "Padrão",
+          "cat": "Gato preto",
+          "wordmark": "Logotipo da Cindy",
+          "mark": "Símbolo da Cindy"
+        }
+      },
       "sidebarAndPanels": "Barra lateral e painéis",
       "themeLabel": "Tema",
       "themeAriaLabel": "Seleção de tema",
@@ -14173,6 +14184,8 @@
       "updateHost": "Atualize o computador que executa esta tarefa para abrir uma conversa paralela.",
       "failed": "Não foi possível abrir a conversa paralela. Tente novamente.",
       "mainTaskOnly": "Abra uma conversa paralela a partir da tarefa principal.",
+      "sharedTaskUnavailable": "Conversas paralelas não estão disponíveis em tarefas compartilhadas.",
+      "archivedTask": "Desarquive esta tarefa para abrir uma conversa paralela.",
       "closeTitle": "Fechar conversa paralela?",
       "closeDescription": "Esta conversa de acompanhamento será interrompida e seu histórico será excluído. A tarefa principal continua em execução.",
       "closeConfirm": "Fechar e excluir",

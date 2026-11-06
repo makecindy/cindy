@@ -2097,6 +2097,17 @@
     "appearance": {
       "title": "外観",
       "modeLabel": "表示モード",
+      "appIcon": {
+        "label": "Dock アイコン",
+        "description": "Dock に表示するアプリのアイコンを選択します",
+        "saveFailed": "Dock アイコンを保存できませんでした。もう一度お試しください",
+        "options": {
+          "default": "デフォルト",
+          "cat": "黒猫",
+          "wordmark": "Cindy ロゴタイプ",
+          "mark": "Cindy シンボル"
+        }
+      },
       "sidebarAndPanels": "サイドバーとパネル",
       "themeLabel": "テーマ",
       "themeAriaLabel": "テーマの選択",
@@ -14014,6 +14025,8 @@
       "updateHost": "タスクを実行するパソコンを更新してから再度お試しください。",
       "failed": "サイドチャットを開けませんでした。もう一度お試しください。",
       "mainTaskOnly": "メインタスクからサイドチャットを開いてください。",
+      "sharedTaskUnavailable": "共有タスクではサイドチャットを利用できません。",
+      "archivedTask": "このタスクのアーカイブを解除してから、サイドチャットを開いてください。",
       "closeTitle": "サイドチャットを閉じますか？",
       "closeDescription": "このサイドチャットを停止して削除します。メインタスクには影響しません。",
       "closeConfirm": "閉じて削除",
