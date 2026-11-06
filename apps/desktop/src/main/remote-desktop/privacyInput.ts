@@ -108,6 +108,8 @@ export interface AwayGuardInputMonitor extends PrivacyInputMonitor {
  */
 export async function watchAwayGuardInput(
   ended: (locked: boolean) => void,
+  /** Fixed word naming what made the helper lock (key, click, heartbeat, …), for logs. */
+  lockingBecause: (reason: string) => void = () => {},
   runtime = {
     resolveBinary: resolveDesktopInputBinary,
     spawn: (binary: string): ChildProcessWithoutNullStreams =>
@@ -159,6 +161,8 @@ export async function watchAwayGuardInput(
       if (line === 'ready') {
         ready = true;
         settleReady?.();
+      } else if (/^reason [a-z-]{1,16}$/.test(line)) {
+        lockingBecause(line.slice('reason '.length));
       } else if (line === 'locked') {
         locked = true;
         lockedNow?.();

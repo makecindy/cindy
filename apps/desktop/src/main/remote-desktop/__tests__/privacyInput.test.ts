@@ -107,7 +107,7 @@ it.each([
   const f = fixture();
   Object.assign(f.child.stdin, { writable: true });
   const ended = vi.fn();
-  const starting = watchAwayGuardInput(ended, f.runtime);
+  const starting = watchAwayGuardInput(ended, undefined, f.runtime);
   await Promise.resolve();
   f.line('ready\n');
   const monitor = await starting;

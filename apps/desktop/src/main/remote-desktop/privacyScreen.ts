@@ -3,6 +3,7 @@ import { createLogger } from '../logger';
 import { t } from '../i18n';
 import { privacyScreenHtml } from './privacyScreenHtml';
 import { watchPrivacyInput, type PrivacyInputMonitor } from './privacyInput';
+import { scheduleMainAppPresenceRestore } from '../appPresence';
 
 export type PrivacyInputWatcher = (
   localInput: () => void,
@@ -29,8 +30,17 @@ export class PrivacyScreen {
     private readonly stopped: () => void | Promise<void>,
     private readonly suspendInput: () => Promise<() => Promise<void>>,
     private readonly watchInput: PrivacyInputWatcher = watchPrivacyInput,
-    /** Text on the masks; the away guard explains its own unlock path. */
-    private readonly copy = () => ({ status: t('privacyExit.status'), hint: t('privacyExit.hint') }),
+    private readonly options: {
+      /** Text on the masks; the away guard explains its own unlock path. */
+      copy?: () => { status: string; hint: string };
+      /**
+       * macOS non-activating panels that join full-screen Spaces without Electron's
+       * dock hide. The away guard needs this: the owner keeps using Cindy afterwards,
+       * and the dock hide left the whole app as a background-only process. Remote
+       * desktop keeps its dialog-capable windows and only restores Dock presence.
+       */
+      nonActivating?: boolean;
+    } = {},
   ) {}
   private async disconnect(generation: number): Promise<void> {
     if (generation !== this.generation) return;
@@ -127,7 +137,11 @@ export class PrivacyScreen {
       this.partitionConfigured = true;
     }
     const displays = screen.getAllDisplays();
-    const copy = this.copy();
+    const copy = this.options.copy?.() ?? {
+      status: t('privacyExit.status'),
+      hint: t('privacyExit.hint'),
+    };
+    const nonActivating = this.options.nonActivating === true && process.platform === 'darwin';
     try {
       for (const display of displays) {
         const window = new BrowserWindow({
@@ -148,6 +162,7 @@ export class PrivacyScreen {
           fullscreenable: false,
           skipTaskbar: true,
           hasShadow: false,
+          ...(nonActivating ? { type: 'panel' } : {}),
           // Functional blackout pixels, independent of the application's theme.
           backgroundColor: '#000000',
           webPreferences: {
@@ -191,7 +206,10 @@ export class PrivacyScreen {
         // Remote system injection must reach the app behind this passive mask.
         // Physical input is identified and consumed by the native hook instead.
         window.setIgnoreMouseEvents(true);
-        window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+        window.setVisibleOnAllWorkspaces(true, {
+          visibleOnFullScreen: true,
+          ...(nonActivating ? { skipTransformProcessType: true } : {}),
+        });
         window.setAlwaysOnTop(true, 'screen-saver', 1);
         window.webContents.on('render-process-gone', () => {
           void this.disconnect(generation);
@@ -248,5 +266,8 @@ export class PrivacyScreen {
     this.windows = [];
     for (const window of windows) if (!window.isDestroyed()) window.destroy();
     this.excluded([]);
+    // visibleOnFullScreen hides the Dock tile and never brings it back by itself.
+    if (windows.length && process.platform === 'darwin')
+      scheduleMainAppPresenceRestore('privacy-screen-stopped');
   }
 }

@@ -1052,9 +1052,11 @@ final class AwayGuard {
   private var ended = false
   private let lockSession: () -> Bool
   init(lockSession: @escaping () -> Bool) { self.lockSession = lockSession }
-  func finish(lock: Bool) {
+  /// `reason` is a fixed word for Main's log; it never carries event contents.
+  func finish(lock: Bool, reason: String) {
     if ended { return }
     ended = true
+    if lock { print("reason \(reason)"); fflush(stdout) }
     DispatchQueue.global().async { [self] in
       if !lock { print("released"); fflush(stdout); exit(0) }
       guard lockSession() else { print("lock-failed"); fflush(stdout); exit(3) }
@@ -1076,7 +1078,7 @@ if CommandLine.arguments == [CommandLine.arguments[0], "--away-guard"] {
     options: .defaultTap, eventsOfInterest: mask, callback: { _, type, event, info in
       let away = Unmanaged<AwayGuard>.fromOpaque(info!).takeUnretainedValue()
       if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-        away.finish(lock: true)
+        away.finish(lock: true, reason: "tap-disabled")
         return Unmanaged.passUnretained(event)
       }
       let physical = event.getIntegerValueField(.eventSourceUnixProcessID) == 0
@@ -1086,7 +1088,11 @@ if CommandLine.arguments == [CommandLine.arguments[0], "--away-guard"] {
       // receivers report small movements on their own (2026-11-06: every preview locked
       // within 0.1 s). A key, modifier, click or scroll means someone is at this Mac.
       let moved = [CGEventType.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains(type)
-      if !moved { away.finish(lock: true) }
+      if !moved {
+        let reason = type == .scrollWheel ? "scroll" : type == .flagsChanged ? "modifier"
+          : type == .keyDown || type == .keyUp ? "key" : "click"
+        away.finish(lock: true, reason: reason)
+      }
       return nil
     }, userInfo: Unmanaged.passUnretained(away).toOpaque()), let runSource = CFMachPortCreateRunLoopSource(nil, tap, 0) else {
       print("error"); fflush(stdout); exit(2)
@@ -1101,18 +1107,20 @@ if CommandLine.arguments == [CommandLine.arguments[0], "--away-guard"] {
         heartbeat = Date()
         switch command {
         case "ping": break
-        case "release": away.finish(lock: false)
-        // "lock" and anything unexpected end in the safe state.
-        default: away.finish(lock: true)
+        case "release": away.finish(lock: false, reason: "")
+        case "lock": away.finish(lock: true, reason: "requested")
+        // Anything unexpected ends in the safe state.
+        default: away.finish(lock: true, reason: "command")
         }
       }
     }
-    DispatchQueue.main.async { away.finish(lock: true) }
+    DispatchQueue.main.async { away.finish(lock: true, reason: "main-closed") }
   }
   let timer = DispatchSource.makeTimerSource(queue: .main)
   timer.schedule(deadline: .now() + 1, repeating: 1)
   timer.setEventHandler {
-    if Date().timeIntervalSince(heartbeat) > 5 || inputCaller.code() == nil { away.finish(lock: true) }
+    if Date().timeIntervalSince(heartbeat) > 5 { away.finish(lock: true, reason: "heartbeat") }
+    if inputCaller.code() == nil { away.finish(lock: true, reason: "main-gone") }
   }
   timer.resume()
   CFRunLoopRun()

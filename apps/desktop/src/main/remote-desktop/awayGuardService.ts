@@ -57,10 +57,8 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
   let awayAfterMs = DEFAULT_AWAY_MS;
   let displaySleepReadAt = 0;
   let generation = 0;
-  // Covering every Space briefly turns Cindy into a background app (Electron's
-  // visibleOnFullScreen), which drops its windows behind everything else and hides the
-  // Dock icon for a moment (2026-11-06: the test build looked like it had quit after
-  // unlocking). Give the owner back the Cindy window they were using.
+  // The system lock screen takes the front; after unlock, give the owner back the
+  // Cindy window they were using rather than whatever macOS picks.
   let restoreWindow: BrowserWindow | null = null;
   const restoreFront = () => {
     const window = restoreWindow;
@@ -111,15 +109,21 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     async () => async () => {},
     async (_localInput, failed) => {
       helperLocked = false;
-      const watched = await watchAwayGuardInput((locked) => {
-        helperLocked = locked;
-        if (monitor === watched) monitor = null;
-        failed();
-      });
+      const watched = await watchAwayGuardInput(
+        (locked) => {
+          helperLocked = locked;
+          if (monitor === watched) monitor = null;
+          failed();
+        },
+        (reason) => log.info('away guard locking', { reason }),
+      );
       monitor = watched;
       return watched;
     },
-    () => ({ status: t('awayGuard.status'), hint: t('awayGuard.hint') }),
+    {
+      copy: () => ({ status: t('awayGuard.status'), hint: t('awayGuard.hint') }),
+      nonActivating: true,
+    },
   );
 
   controller = new AwayGuardController({
