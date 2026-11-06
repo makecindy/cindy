@@ -2154,7 +2154,8 @@ export class DeviceLinkClient {
     let deadlineWallAt = startedAt + sendWaitMs;
     const requestDescription = `${this.describeRequest(env, expectKind)} request=${id.slice(0, 8)}`;
 
-    const logFinished = (outcome: 'ok' | 'timeout' | 'error', err?: DeviceLinkError, frame?: Envelope): void => {
+    const logFinished = (outcome: 'ok' | 'timeout' | 'error', err?: DeviceLinkError, frame?: Envelope,
+      transportSnapshot?: Record<string, unknown>): void => {
       const elapsedMs = Math.max(0, Math.round(this.monotonicNow() - startedMonotonicAt));
       const wallElapsedMs = Math.max(0, Date.now() - startedAt);
       const replyBytes = frame ? this.receivedDiagnosticBytes.get(frame) : undefined;
@@ -2165,7 +2166,7 @@ export class DeviceLinkClient {
           admissionMs: diagnostic?.admissionMs ?? 0,
           firstWriteWaitMs: firstWriteAt === undefined ? null : Math.round(firstWriteAt - startedMonotonicAt),
           afterFirstWriteMs: firstWriteAt === undefined ? null : Math.round(this.monotonicNow() - firstWriteAt),
-          replyBytes: replyBytes ?? null, transport: env.dst ? this.transportDiagnostic(env.dst) : undefined,
+          replyBytes: replyBytes ?? null, transport: transportSnapshot ?? (env.dst ? this.transportDiagnostic(env.dst) : undefined),
           admission: env.dst ? this.invokeScheduler.snapshot(env.dst) : undefined });
       }
       const stages = firstWriteAt === undefined ? ' firstWrite=none'
@@ -2191,10 +2192,13 @@ export class DeviceLinkClient {
     return new Promise<Envelope>((resolve, reject) => {
       const expire = () => {
         if (!this.pending.delete(id)) return;
+        // Retirement replaces the original frame with a small skip and may send
+        // it immediately. Preserve the causal evidence before that mutation.
+        const transportSnapshot = env.dst ? this.transportDiagnostic(env.dst) : undefined;
         clearTimeout(timer);
         if (env.dst) this.settleOutboundRouteAttemptsForId(env.dst, id);
         if (env.dst && env.kind === 'invoke') this.dropReliablePendingForRequest(env.dst, id);
-        logFinished('timeout');
+        logFinished('timeout', undefined, undefined, transportSnapshot);
         // No physical write is local backpressure, not evidence against the peer.
         const err = firstWriteAt === undefined
           ? new DeviceLinkError('BACKPRESSURE', `request expired before socket write within ${sendWaitMs}ms`)
@@ -5989,7 +5993,9 @@ export class DeviceLinkClient {
     const peer = this.peerTransport.get(dst);
     const now = this.monotonicNow();
     const others = [...this.peerTransport].filter(([id, p]) => id !== dst && p.pendingBytes > 0)
-      .sort((a, b) => b[1].pendingBytes - a[1].pendingBytes);
+      .map(([id, p]) => ({ peer: diagnosticRef(id), pending: p.pending.size, bytes: p.pendingBytes,
+        relayBytes: [...p.pending.values()].reduce((sum, frame) => sum + (frame.path === 'direct' ? 0 : frame.bytes), 0) }))
+      .sort((a, b) => b.relayBytes - a.relayBytes || b.bytes - a.bytes);
     return { stream: diagnosticRef(peer?.streamId), relay: this.status, socketBytes: this.ws?.bufferedAmount ?? 0, directBytes: this.directPaths.get(dst)?.bufferedAmount ?? null,
       sendPhase: peer?.sendPhase ?? 'absent', ack: peer?.highestAckSeq ?? null, next: peer?.nextSeq ?? null,
       pending: peer?.pending.size ?? 0, bytes: peer?.pendingBytes ?? 0,
@@ -5999,8 +6005,7 @@ export class DeviceLinkClient {
       receive: [...(peer?.receive.entries() ?? [])].slice(0, 2).map(([stream, r]) => ({ stream: diagnosticRef(stream), delivered: r.lastDeliveredSeq, delivering: r.deliveringSeq,
         firstReady: r.ready.size ? Math.min(...r.ready.keys()) : null, firstAssembly: r.assemblies.size ? Math.min(...r.assemblies.keys()) : null,
         ready: r.ready.size, assembling: r.assemblies.size, bytes: r.bufferedBytes })),
-      otherPeers: others.slice(0, 3).map(([id, p]) => ({ peer: diagnosticRef(id), pending: p.pending.size, bytes: p.pendingBytes,
-        relayBytes: [...p.pending.values()].reduce((sum, frame) => sum + (frame.path === 'direct' ? 0 : frame.bytes), 0) })),
+      otherPeers: others.slice(0, 3),
       omittedPeers: Math.max(0, others.length - 3),
     };
   }

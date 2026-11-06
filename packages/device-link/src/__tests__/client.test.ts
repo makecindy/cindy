@@ -148,6 +148,68 @@ function makeHarness(opts?: {
 const tick = (ms = 0): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe('outbound invoke admission', () => {
+  // Unit, PR #9153: three larger direct-only queues must not hide the smaller
+  // queue sharing the relay socket. Exercise production links and timeout logs.
+  it('ranks competing relay backlog ahead of larger direct-only queues in stall evidence', async () => {
+    vi.useFakeTimers();
+    const info = vi.fn();
+    const h = makeHarness({ logger: { info, debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      timing: { pingIntervalMs: 60_000, transportRetryIntervalMs: 60_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      for (const [index, peer] of ['aaaa0001', 'aaaa0002', 'aaaa0003', 'bbbb0001'].entries()) {
+        const linked = establishInboundReliableLink(h, `stream-${peer}`, 1, peer);
+        await vi.advanceTimersByTimeAsync(0); await linked;
+        if (index < 3) h.client.attachDirectPath(peer, { send() {}, close() {} });
+        h.client.sendInvokeResult(peer, `reply-${index}`, { ok: true, result: 'x'.repeat((4 - index) * 1000) });
+      }
+      const request = h.client.invoke('cccc0001', { channel: 'maker:list-active', args: [] }, 1000);
+      const rejected = expect(request).rejects.toMatchObject({ code: 'INVOKE_TIMEOUT' });
+      await vi.advanceTimersByTimeAsync(1000); await rejected;
+      const record = info.mock.calls.filter(([s]) => s.startsWith('device-link diagnostic '))
+        .map(([s]) => JSON.parse(s.slice('device-link diagnostic '.length)))
+        .find(row => row.stage === 'request' && row.outcome === 'timeout');
+      expect(record.transport.otherPeers).toHaveLength(3);
+      expect(record.transport.otherPeers[0]).toMatchObject({ peer: 'bbbb0001', relayBytes: expect.any(Number) });
+      expect(record.transport.otherPeers[0].relayBytes).toBeGreaterThan(1000);
+      expect(record.transport.otherPeers.slice(1).every((peer: { relayBytes: number }) => peer.relayBytes === 0)).toBe(true);
+      expect(record.transport.omittedPeers).toBe(1);
+      for (const peer of ['aaaa0001', 'aaaa0002', 'aaaa0003', 'bbbb0001']) {
+        expect(h.client.getReliableSendQueueDepth(peer)).toBe(1);
+      }
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  // Unit, PR #9153: timeout cleanup replaced a large unacknowledged invoke with
+  // a small skip before taking its diagnostic snapshot, hiding the original size.
+  it('captures the original reliable timeout head before replacing it with a skip', async () => {
+    vi.useFakeTimers();
+    const info = vi.fn();
+    const h = makeHarness({ logger: { info, debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      timing: { pingIntervalMs: 60_000, transportRetryIntervalMs: 60_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      const linked = establishInboundReliableLink(h, 'peer-stream');
+      await vi.advanceTimersByTimeAsync(0); await linked;
+      const request = h.client.invoke('dev-b', { channel: 'maker:send', args: ['PRIVATE'.repeat(50_000)] }, 1000);
+      const rejected = expect(request).rejects.toMatchObject({ code: 'INVOKE_TIMEOUT', inFlight: true });
+      const sent = h.current().sent.find(frame => frame.kind === 'invoke')!;
+      await vi.advanceTimersByTimeAsync(1000); await rejected;
+      const record = info.mock.calls.filter(([s]) => s.startsWith('device-link diagnostic '))
+        .map(([s]) => JSON.parse(s.slice('device-link diagnostic '.length)))
+        .find(row => row.stage === 'request' && row.outcome === 'timeout');
+      expect(record.transport.head[0]).toMatchObject({ request: sent.id!.slice(0, 8), attempts: 1,
+        channel: 'invoke:maker:send', sent: true, path: 'relay', ageMs: 1000 });
+      expect(record.transport.head[0].bytes).toBeGreaterThan(350_000);
+      const retired = h.current().sent.filter(frame => frame.kind === 'invoke').at(-1)!;
+      const skip = parseTransportPayload(retired.payload)!;
+      expect(retired.id).toBe(sent.id);
+      expect(skip.meta.seq).toBe(parseTransportPayload(sent.payload)!.meta.seq);
+      expect(isTransportSkipPayload(JSON.parse(skip.data))).toBe(true);
+      expect(JSON.stringify(info.mock.calls)).not.toContain('PRIVATE');
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
   // Unit: default-level evidence must distinguish time after write from a large
   // reply, without logging either request arguments or response text.
   it('records split request timings and reply bytes at INFO without payloads', async () => {
