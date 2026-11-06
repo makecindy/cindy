@@ -2097,6 +2097,17 @@
     "appearance": {
       "title": "외관",
       "modeLabel": "표시 모드",
+      "appIcon": {
+        "label": "Dock 아이콘",
+        "description": "Dock에 표시할 앱 아이콘을 선택합니다",
+        "saveFailed": "Dock 아이콘을 저장하지 못했습니다. 다시 시도해 주세요",
+        "options": {
+          "default": "기본",
+          "cat": "검은 고양이",
+          "wordmark": "Cindy 워드마크",
+          "mark": "Cindy 심볼"
+        }
+      },
       "sidebarAndPanels": "사이드바 및 패널",
       "themeLabel": "테마",
       "themeAriaLabel": "테마 선택",

@@ -2127,6 +2127,17 @@
     "appearance": {
       "title": "Darstellung",
       "modeLabel": "Darstellung",
+      "appIcon": {
+        "label": "Dock-Symbol",
+        "description": "Wähle das Symbol, das die App im Dock verwendet",
+        "saveFailed": "Das Dock-Symbol konnte nicht gespeichert werden. Bitte versuche es erneut.",
+        "options": {
+          "default": "Standard",
+          "cat": "Schwarze Katze",
+          "wordmark": "Cindy-Wortmarke",
+          "mark": "Cindy-Symbol"
+        }
+      },
       "sidebarAndPanels": "Seitenleiste und Bereiche",
       "themeLabel": "Design",
       "themeAriaLabel": "Designauswahl",

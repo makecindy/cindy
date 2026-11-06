@@ -2127,6 +2127,17 @@
     "appearance": {
       "title": "Appearance",
       "modeLabel": "Appearance Mode",
+      "appIcon": {
+        "label": "Dock icon",
+        "description": "Choose the icon the app uses in the Dock",
+        "saveFailed": "Couldn’t save the Dock icon. Please try again.",
+        "options": {
+          "default": "Default",
+          "cat": "Black cat",
+          "wordmark": "Cindy wordmark",
+          "mark": "Cindy symbol"
+        }
+      },
       "sidebarAndPanels": "Sidebar & panels",
       "themeLabel": "Theme",
       "themeAriaLabel": "Theme selection",

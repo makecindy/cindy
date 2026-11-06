@@ -2097,6 +2097,17 @@
     "appearance": {
       "title": "外觀",
       "modeLabel": "顯示模式",
+      "appIcon": {
+        "label": "Dock 圖示",
+        "description": "選擇應用程式在 Dock 中使用的圖示",
+        "saveFailed": "無法儲存 Dock 圖示，請稍後再試",
+        "options": {
+          "default": "預設",
+          "cat": "黑貓",
+          "wordmark": "Cindy 字標",
+          "mark": "Cindy 符號"
+        }
+      },
       "sidebarAndPanels": "側邊欄與面板",
       "themeLabel": "主題",
       "themeAriaLabel": "主題選擇",

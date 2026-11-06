@@ -2162,6 +2162,17 @@
     "appearance": {
       "title": "Apparence",
       "modeLabel": "Mode d'apparence",
+      "appIcon": {
+        "label": "Icône du Dock",
+        "description": "Choisissez l’icône utilisée par l’app dans le Dock",
+        "saveFailed": "Impossible d’enregistrer l’icône du Dock. Veuillez réessayer.",
+        "options": {
+          "default": "Par défaut",
+          "cat": "Chat noir",
+          "wordmark": "Logotype Cindy",
+          "mark": "Symbole Cindy"
+        }
+      },
       "sidebarAndPanels": "Barre latérale et panneaux",
       "themeLabel": "Thème",
       "themeAriaLabel": "Sélection du thème",

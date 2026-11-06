@@ -1136,6 +1136,7 @@ import {
   registerAppearanceSettingsIpc,
   updatePersistedWindowZoom,
 } from './appearance-settings-ipc.js';
+import { applyDockIcon } from './app-icon.js';
 import { registerBillingIpc } from './billing/index.js';
 import {
   initModelAccess,
@@ -4900,6 +4901,7 @@ const registerIpcHandlers = () => {
       );
     }
     rememberResolvedAppTheme(payload.isDark);
+    applyDockIcon(undefined, payload.isDark);
     applyWindowVibrancy(payload.familyId, payload.isDark);
   });
 
@@ -9469,20 +9471,9 @@ app.on('ready', async () => {
 
   initializeUpdatePresentationRecovery();
 
-  // mac dev 下 Dock 显示的是 Electron 默认图标——macOS 忽略 BrowserWindow.icon,
-  // Dock 图标取自可执行 bundle 的 icns,而 dev 跑的是 node_modules 里的官方
-  // Electron 二进制。这里 dev-only 手动设成 Cindy 图标;packaged 版由
-  // resources/icon.icns 自然生效,不需要也不该动。
-  // 使用 icon-dock.png（generate-mac-icns.mjs 产出，已套 Apple 圆角网格）；
-  // setIcon 会原样显示资源，不会替应用图标自动加圆角。
-  if (!app.isPackaged && process.platform === 'darwin') {
-    try {
-      app.dock?.setIcon(path.join(__dirname, '../../resources/icon-dock.png'));
-    } catch (err) {
-      // 仅影响 dev Dock 观感,失败不挡启动
-      createLogger('dock-icon').warn('setIcon failed', { error: String(err) });
-    }
-  }
+  // dev 跑的是 node_modules 里的官方 Electron 二进制，Dock 默认显示 Electron 图标；
+  // packaged 版由 icon.icns 生效。这里同时恢复用户在「外观」里选的 Dock 图标。
+  applyDockIcon();
 
   await ensureMainAppPresence('app-ready');
 

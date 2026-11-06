@@ -2097,6 +2097,17 @@
     "appearance": {
       "title": "外观",
       "modeLabel": "显示模式",
+      "appIcon": {
+        "label": "Dock 图标",
+        "description": "选择应用在 Dock 中使用的图标",
+        "saveFailed": "无法保存 Dock 图标，请稍后重试",
+        "options": {
+          "default": "默认",
+          "cat": "黑猫",
+          "wordmark": "Cindy 字标",
+          "mark": "Cindy 符号"
+        }
+      },
       "sidebarAndPanels": "侧边栏与面板",
       "themeLabel": "主题",
       "themeAriaLabel": "主题选择",
