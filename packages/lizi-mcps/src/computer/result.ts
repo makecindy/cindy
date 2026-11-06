@@ -89,12 +89,22 @@ export function computerResultOutcome(
 function isSelectionOnlyClick(name: string, result: Record<string, unknown>): boolean {
   return name === 'click'
     && typeof result.summary === 'string'
-    && /Selected nearest \S+ for \[\d+\].*confirmed AXSelected=true\.?\s*$/s.test(result.summary);
+    && result.summary.includes('Selected nearest ')
+    && /confirmed AXSelected=true\.?$/.test(result.summary.trimEnd());
 }
 
 const POINTER_TOOLS: ReadonlySet<string> = new Set(['click', 'double_click', 'right_click', 'drag']);
 // cua-driver 0.37+ delivery note: "... confirm via screenshot and retry with delivery_mode:"foreground" if nothing changed".
-const FOREGROUND_RETRY_ADVICE = /\s*(?:and|or)?\s*retry with delivery_mode:\s*"foreground"\s*if nothing changed/gi;
+const FOREGROUND_RETRY_PHRASE = 'retry with delivery_mode:"foreground" if nothing changed';
+
+/** Plain string scan: the text comes from the driver, so no backtracking regex runs over it. */
+function withoutForegroundRetryAdvice(text: string): string {
+  const parts = text.split(FOREGROUND_RETRY_PHRASE);
+  // Drop the connective ("... and retry ...") that led into each removed phrase.
+  return parts.map((part, index) =>
+    index < parts.length - 1 ? part.trimEnd().replace(/ (?:and|or)$/, '') : part).join('');
+}
+
 const BACKGROUND_FIRST_HINT = 'If the expected change is missing, first try another background route: the element\'s window-local coordinates, double_click, a menu bar item, a keyboard shortcut or set_value. Foreground delivery moves the person\'s pointer and is refused while they use this computer; use it only when no background route works.';
 const SELECTION_ONLY_HINT = 'Only the accessibility selection was written; the app may not have run its click action (Xcode\'s project navigator does not). If the expected change is missing, click the row\'s window-local coordinates or double_click it in the background.';
 
@@ -110,7 +120,7 @@ export function normalizePointerAdvice(name: string, data: unknown): unknown {
   if (!POINTER_TOOLS.has(name) || !data || typeof data !== 'object' || Array.isArray(data)) return data;
   const result = data as Record<string, unknown>;
   if (!computerResultOutcome(name, result).ok) return data;
-  const stripped = (value: unknown) => typeof value === 'string' ? value.replace(FOREGROUND_RETRY_ADVICE, '') : value;
+  const stripped = (value: unknown) => typeof value === 'string' ? withoutForegroundRetryAdvice(value) : value;
   const summary = stripped(result.summary);
   const hint = stripped(result.hint);
   const selectionOnly = isSelectionOnlyClick(name, result);
