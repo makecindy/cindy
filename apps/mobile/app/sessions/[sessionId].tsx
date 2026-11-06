@@ -11002,7 +11002,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             selectedId={composerPreviewAttachmentId}
             annotation={composerAnnotations.trayAnnotation}
             resolveRemoteMedia={resolveRemoteMedia}
-            onSelect={setComposerPreviewAttachmentId}
             onClose={() => setComposerPreviewAttachmentId(null)}
           />
           {composerAnnotations.host}
