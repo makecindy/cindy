@@ -20,6 +20,8 @@ const FAKE_DB_PASSWORD = ['fixture', 'db-password'].join('-');
 const FAKE_OPENAI_KEY_2 = ['sk', 'fixture-openai-key-0987654321'].join('-');
 const FAKE_REFRESH_TOKEN = ['fixture', 'refresh', 'token', '0123456789'].join('-');
 const FAKE_STRIPE_KEY = ['sk', 'live', 'fixturestripeplaceholder0123'].join('_');
+const FAKE_AWS_SECRET = ['fixture', 'awssecret', '0123456789abcdef'].join('-');
+const FAKE_BRACKET_PASSWORD = ['abc', '[defghijklmnop'].join('');
 
 const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, writeOwner, orderedDrainDrafts } = await import(
   '../../../../extensions/live-compact/index.ts'
@@ -109,6 +111,15 @@ describe('live compact spine selection', () => {
     expect(more).not.toContain(FAKE_REFRESH_TOKEN);
     expect(more).not.toContain(FAKE_STRIPE_KEY);
     expect(more).toContain('[REDACTED]');
+    // AWS_SECRET_ACCESS_KEY 这类 `_ACCESS_KEY` 后缀,以及密码里带方括号(不能因 `[` 提前截断)。
+    const aws = redactSecrets([
+      `AWS_SECRET_ACCESS_KEY=${FAKE_AWS_SECRET}`,
+      `password="${FAKE_BRACKET_PASSWORD}"`,
+    ].join(String.fromCharCode(10)));
+    expect(aws).not.toContain(FAKE_AWS_SECRET);
+    expect(aws).not.toContain(FAKE_BRACKET_PASSWORD);
+    expect(aws).toContain('AWS_SECRET_ACCESS_KEY=[REDACTED]');
+    expect(aws).toContain('password="[REDACTED]"');
   });
 
   it('masks cloud keys, connection-string passwords and PEM blocks', () => {
