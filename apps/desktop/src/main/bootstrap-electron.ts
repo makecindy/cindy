@@ -8836,11 +8836,11 @@ const registerIpcHandlers = () => {
       };
     };
     const withSpineDir = async <T>(
-      action: (spineDir: string) => Promise<T>,
+      action: (spineDir: string, isCurrentOwner: () => boolean) => Promise<T>,
       options: { allowOwnerChangeAfterAction?: boolean } = {},
     ): Promise<T> => {
       const { spineDir, isCurrentOwner } = captureSpineDir();
-      const result = await action(spineDir);
+      const result = await action(spineDir, isCurrentOwner);
       if (!options.allowOwnerChangeAfterAction && !isCurrentOwner()) {
         throwIpcError('PRECONDITION_FAILED', 'live compact directory owner changed');
       }
@@ -8872,10 +8872,16 @@ const registerIpcHandlers = () => {
       // 打开目录一律走 Electron shell + 统一的目标解析:目录由本机拼出来、不接受
       // renderer 传路径,仍过一次 resolveShellOpenPathTarget,保证这条调用面永远不碰命令执行。
       openSpineDir: () =>
-        withSpineDir(async (spineDir) => {
+        withSpineDir(async (spineDir, isCurrentOwner) => {
           const target = resolveShellOpenPathTarget(spineDir);
           if (!target) return false;
-          return openOrCreateFixedDirectory(target, { openPath: (filePath) => shell.openPath(filePath) });
+          // canOpen 在 mkdir/lstat 的 await 之后、真正 shell.openPath 之前再核一次归属:
+          // 账号在文件系统等待期间切换时,不再打开上一个账号的私有备份目录
+          // (allowOwnerChangeAfterAction 只豁免「打开之后」的复检,打开本身必须过门)。
+          return openOrCreateFixedDirectory(target, {
+            canOpen: isCurrentOwner,
+            openPath: (filePath) => shell.openPath(filePath),
+          });
         }, { allowOwnerChangeAfterAction: true }),
       clearSpineDir: () => withSpineDir((spineDir) => clearFixedDirectory(spineDir)),
       // 未登录/账号边界未稳定时没有归属:按 0 报数,不读任何账号的目录。

@@ -24,6 +24,7 @@ const FAKE_BASIC = ['dXNlcjpw', 'YXNzd29yZA=='].join('');
 const FAKE_AWS_SESSION_TOKEN = ['AWS_SESSION', 'TOKEN'].join('_') + '=fixture-session-' + '0123456789abcdef';
 const FAKE_AWS_SECRET = ['fixture', 'awssecret', '0123456789abcdef'].join('-');
 const FAKE_NPM_TOKEN = ['npm', 'fixture0123456789abcdef0123456789'].join('_');
+const FAKE_GH_PAT = ['github', 'pat', 'fixture0123456789abcdef0123'].join('_');
 const FAKE_GH_TOKEN = ['ghp', 'fixtureabcdefghijklmnopqrst'].join('_');
 const FAKE_BRACKET_PASSWORD = ['abc', '[defghijklmnop'].join('');
 
@@ -165,6 +166,7 @@ describe('live compact spine selection', () => {
       [`password="${FAKE_BRACKET_PASSWORD}"`, FAKE_BRACKET_PASSWORD],
       [`postgres://cindy:${FAKE_DB_PASSWORD}@db.internal:5432/app`, FAKE_DB_PASSWORD],
       [`echo ${FAKE_NPM_TOKEN}`, FAKE_NPM_TOKEN],
+      [`echo ${FAKE_GH_PAT}`, FAKE_GH_PAT],
     ];
     for (const [text, secret] of positives) {
       const out = redactSecrets(text);

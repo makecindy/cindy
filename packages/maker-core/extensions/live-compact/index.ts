@@ -1188,7 +1188,8 @@ const REDACT_RULES: Array<[RegExp, string]> = [
   [/(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}/g, "[REDACTED]"],
   // Stripe 形态是 `sk_live_...` / `rk_test_...`:前缀分段,上一条的 `sk-` 匹配不到。
   [/(?<![A-Za-z0-9])(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9]{20,}|xox[abps]-[A-Za-z0-9-]{10,})/g, "[REDACTED]"],
+  // GitHub:传统 PAT 是 gh[pousr]_,细粒度 PAT 是 github_pat_ 前缀(长度不固定)。
+  [/(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{22,}|xox[abps]-[A-Za-z0-9-]{10,})/g, "[REDACTED]"],
   // npm 的 registry 令牌是 `npm_` + 随机串;`.npmrc` 的 `_authToken=` 由上面的键名规则覆盖。
   [/(?<![A-Za-z0-9])npm_[A-Za-z0-9]{16,}/g, "[REDACTED]"],
   // 云厂商固定前缀凭证:AWS AK/ASIA、Google AIza、Stripe 的 live 前缀。
