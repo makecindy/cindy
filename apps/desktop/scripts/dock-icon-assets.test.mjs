@@ -19,7 +19,8 @@ afterEach(() => {
   process.argv = originalArgv;
 });
 
-async function emittedPngs() {
+async function emittedPngs(entryPath = entry) {
+  const normalizedEntry = entryPath.replace(/\\/g, '/');
   const config = rendererConfig({ command: 'build', mode: 'production' });
   const result = await build({
     ...config,
@@ -32,10 +33,10 @@ async function emittedPngs() {
       write: false,
       assetsInlineLimit: 0,
       rollupOptions: {
-        input: entry,
+        input: normalizedEntry,
         // Keep the actual PNG imports on Vite's asset pipeline; unrelated React
         // and application imports need not be bundled for this packaging regression.
-        external: (id) => id !== entry && !id.includes('.png'),
+        external: (id) => id !== entryPath && !id.includes('.png'),
       },
     },
   });
@@ -45,6 +46,11 @@ async function emittedPngs() {
 }
 
 describe('Dock preview assets in renderer builds', () => {
+  it('builds the real entry with Windows path separators', async () => {
+    vi.stubEnv('ELECTRON_FORGE_PLATFORM', 'win32');
+    expect(await emittedPngs(entry.replace(/\//g, '\\'))).toEqual([]);
+  });
+
   it.each(['win32', 'linux'])('omits Dock PNGs for %s', async (platform) => {
     vi.stubEnv('ELECTRON_FORGE_PLATFORM', platform);
     expect(await emittedPngs()).toEqual([]);
