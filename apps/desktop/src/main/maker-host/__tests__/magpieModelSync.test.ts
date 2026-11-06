@@ -9,6 +9,10 @@ import type {
 import type { ProviderModelsFetchResult, ProviderModelsFetchSpec } from '../provider-model-fetch.js';
 import {
   createMagpieModelSyncCoordinator,
+  configureMagpieModelSync,
+  requestMagpieModelSyncAfterChange,
+  syncMagpieProviderNow,
+  type MagpieModelSyncDeps,
   type MagpieSyncStatusState,
   type MagpieSyncStatusStore,
 } from '../magpie-model-sync.js';
@@ -66,41 +70,49 @@ function discovered(id: string, nativeEndpoints?: string[]): DiscoveredModel {
   };
 }
 
-function harness(initial: CustomProviderConfig, response: () => ProviderModelsFetchResult | Promise<ProviderModelsFetchResult>) {
+function harness(initial: CustomProviderConfig, response: (spec: ProviderModelsFetchSpec) => ProviderModelsFetchResult | Promise<ProviderModelsFetchResult>) {
   let config: CustomProviderConfig | null = structuredClone(initial);
   const status = memoryStore();
   let now = 1_000_000;
   let scope = 1;
   const getConfig = vi.fn(async (): Promise<CustomProviderConfig | null> => config ? structuredClone(config) : null);
-  const fetchModels = vi.fn(async (_spec: ProviderModelsFetchSpec) => response());
+  const fetchModels = vi.fn(async (spec: ProviderModelsFetchSpec) => response(spec));
+  const refreshCatalog = vi.fn(async (): Promise<void> => undefined);
+  const broadcastChanged = vi.fn(() => ({ scope, state: structuredClone(status.read('magpie')) }));
   const updateConfigIfUnchanged = vi.fn(async (
     _id: string,
-    _expected: CustomProviderConfig,
+    expected: CustomProviderConfig,
     next: CustomProviderConfig,
   ) => {
-    if (!config) return false;
+    if (!config || JSON.stringify(config) !== JSON.stringify(expected)) return false;
     config = structuredClone(next);
     return true;
   });
-  const coordinator = createMagpieModelSyncCoordinator({
+  const deps: MagpieModelSyncDeps = {
     listConfigs: async () => (config ? [structuredClone(config)] : []),
     getConfig,
     readKey: (_id, agent) => `gateway-${agent}`,
     fetchModels,
     updateConfigIfUnchanged,
-    refreshCatalog: async () => undefined,
+    refreshCatalog,
+    broadcastChanged,
     getScopeKey: () => scope,
     appVersion: '1.2.3',
     now: () => now,
     log: { debug: vi.fn(), warn: vi.fn() },
     statusStore: status,
-  });
+  };
+  const coordinator = createMagpieModelSyncCoordinator(deps);
   return {
+    deps,
     coordinator,
     getConfig,
     fetchModels,
     status,
+    refreshCatalog,
+    broadcastChanged,
     current: () => config!,
+    setConfig: (next: CustomProviderConfig) => { config = structuredClone(next); },
     setNow: (value: number) => {
       now = value;
     },
@@ -109,6 +121,70 @@ function harness(initial: CustomProviderConfig, response: () => ProviderModelsFe
 }
 
 describe('Magpie model synchronization', () => {
+  it.each([true, false])('syncs the latest saved endpoint after the pending request settles (old success: %s)', async (oldSucceeds) => {
+    const initial = configWith({ id: 'existing', name: 'Existing' });
+    initial.runtimes = { codex: initial.runtimes.codex };
+    let finishOld!: (result: ProviderModelsFetchResult) => void;
+    let notifyStarted!: () => void;
+    const pending = new Promise<ProviderModelsFetchResult>((resolve) => { finishOld = resolve; });
+    const started = new Promise<void>((resolve) => { notifyStarted = resolve; });
+    const setup = harness(initial, (spec) => {
+      if (spec.baseUrl === initial.runtimes.codex!.baseUrl) {
+        notifyStarted();
+        return pending;
+      }
+      return { ok: true, models: [discovered('fresh', ['/v1/responses'])] };
+    });
+    configureMagpieModelSync(setup.deps);
+    const old = syncMagpieProviderNow('magpie');
+    await started;
+    const edited = structuredClone(initial);
+    edited.runtimes.codex!.baseUrl = 'http://127.0.0.1:3426/v1';
+    edited.runtimes.codex!.modelsUrl = 'http://127.0.0.1:3426/v1/models';
+    setup.setConfig(edited);
+    const firstSave = requestMagpieModelSyncAfterChange('magpie');
+    edited.runtimes.codex!.baseUrl = 'http://127.0.0.1:3427/v1';
+    edited.runtimes.codex!.modelsUrl = 'http://127.0.0.1:3427/v1/models';
+    setup.setConfig(edited);
+    const secondSave = requestMagpieModelSyncAfterChange('magpie');
+    finishOld(oldSucceeds
+      ? { ok: true, models: [discovered('obsolete', ['/v1/responses'])] }
+      : { ok: false, code: 'UPSTREAM_UNREACHABLE' });
+    await Promise.all([old, firstSave, secondSave]);
+    expect(setup.fetchModels.mock.calls.map(([spec]) => spec.baseUrl)).toEqual([
+      initial.runtimes.codex!.baseUrl, edited.runtimes.codex!.baseUrl,
+    ]);
+    expect(setup.current().runtimes.codex!.models.map((model) => model.id).sort()).toEqual(['existing', 'fresh']);
+    expect(setup.coordinator.getStatus('magpie').failure).toBeNull();
+  });
+
+  it('notifies after writing a missing-runtime status without refreshing the catalog', async () => {
+    const setup = harness({ ...configWith({ id: 'existing', name: 'Existing' }), runtimes: {} }, () => ({ ok: true, models: [] }));
+    await setup.coordinator.requestAutoRefresh('startup');
+    expect(setup.broadcastChanged).toHaveBeenCalledTimes(1);
+    expect(setup.broadcastChanged.mock.results[0].value).toMatchObject({ scope: 1, state: { failure: { code: 'NOT_CONFIGURED' } } });
+    expect(setup.refreshCatalog).not.toHaveBeenCalled();
+  });
+
+  it('does not defer a status notification across an owner change during catalog refresh', async () => {
+    const setup = harness(configWith({ id: 'existing', name: 'Existing' }), () => ({ ok: true, models: [] }));
+    let finishCatalog!: () => void;
+    let notifyStarted!: () => void;
+    const started = new Promise<void>((resolve) => { notifyStarted = resolve; });
+    setup.refreshCatalog.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      finishCatalog = resolve;
+      notifyStarted();
+    }));
+    const pending = setup.coordinator.syncNow('magpie');
+    await started;
+    const notifiedScopes = setup.broadcastChanged.mock.results.map((result) => result.value.scope);
+    setup.setScope(2);
+    finishCatalog();
+    await pending;
+    expect(notifiedScopes).toEqual([1]);
+    expect(setup.broadcastChanged).toHaveBeenCalledTimes(1);
+  });
+
   it('does not write status after the owner changes while loading the connection', async () => {
     const setup = harness(configWith({ id: 'existing', name: 'Existing' }), () => ({ ok: true, models: [] }));
     let finish!: (config: CustomProviderConfig) => void;
@@ -149,12 +225,18 @@ describe('Magpie model synchronization', () => {
       }
       return { ok: true, models: [discovered('current', ['/v1/messages'])] };
     });
-    const old = setup.coordinator.syncNow('magpie');
+    configureMagpieModelSync(setup.deps);
+    const old = syncMagpieProviderNow('magpie');
     await started;
+    const afterSave = requestMagpieModelSyncAfterChange('magpie');
     setup.setScope(2);
-    const current = await setup.coordinator.syncNow('magpie');
+    const current = await syncMagpieProviderNow('magpie');
     finishOld({ ok: true, models: [discovered('former-owner', ['/v1/messages'])] });
     expect(await old).toMatchObject({ ok: false, code: 'CONFIG_CHANGED' });
+    await afterSave;
+    expect(setup.fetchModels).toHaveBeenCalledTimes(4);
+    expect(setup.broadcastChanged).toHaveBeenCalledTimes(1);
+    expect(setup.broadcastChanged.mock.results[0].value.scope).toBe(2);
     expect(setup.coordinator.getStatus('magpie')).toEqual(current.status);
     for (const runtime of Object.values(setup.current().runtimes)) {
       expect(runtime?.models.map((model) => model.id).sort()).toEqual(['current', 'existing']);
@@ -256,14 +338,24 @@ describe('Magpie model synchronization', () => {
     const modelsAfterSuccess = h.current().runtimes.pi!.models.map((model) => model.id);
 
     ok = false;
-    h.setNow(2_000_000);
-    const failed = await h.coordinator.syncNow('magpie');
+    h.setNow(3_000_000);
+    await h.coordinator.requestAutoRefresh('providers-open');
+    const failed = h.coordinator.getStatus('magpie');
 
-    expect(failed.ok).toBe(false);
-    expect(failed.status.failure).toMatchObject({ code: 'UPSTREAM_UNREACHABLE', status: 502 });
-    expect(failed.status.lastSuccessAt).toBe(first.status.lastSuccessAt);
-    expect(failed.status.stale).toBe(true);
+    expect(failed.failure).toMatchObject({ code: 'UPSTREAM_UNREACHABLE', status: 502 });
+    expect(failed.lastSuccessAt).toBe(first.status.lastSuccessAt);
+    expect(failed.stale).toBe(true);
     expect(h.current().runtimes.pi!.models.map((model) => model.id)).toEqual(modelsAfterSuccess);
+    expect(h.broadcastChanged).toHaveBeenCalledTimes(2);
+    expect(h.broadcastChanged.mock.results[1].value.state).toEqual(h.status.read('magpie'));
+    expect(h.refreshCatalog).toHaveBeenCalledTimes(1);
+
+    ok = true;
+    h.setNow(3_400_000);
+    await h.coordinator.requestAutoRefresh('providers-open');
+    expect(h.broadcastChanged).toHaveBeenCalledTimes(3);
+    expect(h.broadcastChanged.mock.results[2].value.state.failure).toBeNull();
+    expect(h.refreshCatalog).toHaveBeenCalledTimes(2);
   });
 
   it('honors the automatic cooldown but lets startup and explicit sync through', async () => {

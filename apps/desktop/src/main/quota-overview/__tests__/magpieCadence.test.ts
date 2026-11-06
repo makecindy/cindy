@@ -75,6 +75,34 @@ afterEach(() => { release(); vi.clearAllTimers(); vi.useRealTimers(); });
 
 const flush = async (ms: number) => { await vi.advanceTimersByTimeAsync(ms); };
 
+it('collects each gateway once across connection aliases and retains the same cached source after reordering', async () => {
+  const connection = (id: string, upstream: string) => ({
+    id, name: id, source: 'user', connected: true, suspended: false, removed: false,
+    auth: { method: 'apiKey' }, access: { kind: 'api' }, routing: { codex: { upstream } },
+  });
+  const first = connection('magpie-a', ORIGIN + '/v1');
+  const alias = connection('magpie-b', ORIGIN + '/v1/');
+  const different = connection('magpie-c', 'http://127.0.0.1:3426/v1');
+  mocks.providers = [alias, different, first];
+  mocks.readMagpieQuotas.mockImplementation(async (providerId: string, origin: string) => ({
+    notMagpie: false,
+    accounts: [{ ...account(origin), id: 'magpie:' + providerId + ':account', providerId }],
+  }));
+  await flush(0);
+  expect(mocks.readMagpieQuotas.mock.calls.map(([providerId, origin]) => [providerId, origin]).sort()).toEqual([
+    ['magpie-a', ORIGIN], ['magpie-c', 'http://127.0.0.1:3426'],
+  ]);
+  const sources = overview.latest()!.input.sources;
+  expect(sources.map((source) => source.id).sort()).toEqual(['magpie:magpie-a:account', 'magpie:magpie-c:account']);
+  expect(sources.every((source) => source.kind === 'magpie')).toBe(true);
+  mocks.providers = [first, different, alias];
+  overview.updateSettings({ hidden: ['magpie:magpie-a:account'] });
+  await flush(0);
+  expect(mocks.readMagpieQuotas).toHaveBeenCalledTimes(2);
+  expect(overview.latest()!.input.sources.map((source) => source.id).sort()).toEqual(sources.map((source) => source.id).sort());
+  expect(overview.latest()!.view.sources.map((source) => source.id)).toEqual(['magpie:magpie-c:account']);
+});
+
 it('does not repeatedly probe other loopback gateways while the panel stays open', async () => {
   mocks.readMagpieQuotas.mockResolvedValue({ notMagpie: true, accounts: [] });
   overview.setInteractive(true);

@@ -136,9 +136,15 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
   // One gateway read covers every upstream account; a provider whose accounts were read
   // shows them instead of its pay-as-you-go row (one connection, one card).
   const magpieByProvider = new Map<string, MenubarMagpieInput[]>();
+  const magpieGateways = new Map<string, ReturnType<typeof magpieGateProviders>>();
+  for (const entry of magpieGateProviders(providers).sort((left, right) => left.provider.id.localeCompare(right.provider.id))) {
+    const group = magpieGateways.get(entry.origin) ?? [];
+    group.push(entry);
+    magpieGateways.set(entry.origin, group);
+  }
   if (deps.readMagpie) {
     await Promise.all(
-      magpieGateProviders(providers).map(async (entry) => {
+      [...magpieGateways.values()].map(async ([entry, ...aliases]) => {
         const accounts = await safe(
           `magpie:${entry.provider.id}`,
           () => deps.readMagpie!(entry.provider.id, entry.origin),
@@ -146,6 +152,7 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
         );
         if (accounts && accounts.length > 0) {
           magpieByProvider.set(entry.provider.id, accounts.map((account) => magpieSource(account)));
+          for (const alias of aliases) magpieByProvider.set(alias.provider.id, []);
         }
       }),
     );
@@ -202,6 +209,11 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
 
   const tasks = await collectTasks(deps, localUsage, today, safe);
   const consuming = consumingSourceIds(tasks, providers);
+  for (const [entry, ...aliases] of magpieGateways.values()) {
+    if (magpieByProvider.has(entry.provider.id) && aliases.some((alias) => consuming.has(alias.provider.id))) {
+      consuming.add(entry.provider.id);
+    }
+  }
   for (const source of sources) {
     if (consuming.has(source.id)) source.consuming = true;
     // A task routed through the Magpie connection ripples on that gateway's accounts.

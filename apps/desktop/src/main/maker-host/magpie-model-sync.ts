@@ -79,7 +79,7 @@ export interface MagpieModelSyncDeps {
 
 export interface MagpieModelSyncCoordinator {
   requestAutoRefresh(trigger: ProviderModelAutoRefreshTrigger): Promise<void>;
-  syncNow(providerId: string): Promise<ProviderModelSyncResult>;
+  syncNow(providerId: string, options?: { afterChange?: boolean }): Promise<ProviderModelSyncResult>;
   getStatus(providerId: string): ProviderModelSyncStatus;
 }
 
@@ -186,6 +186,11 @@ export function createMagpieModelSyncCoordinator(
     return remaining > 0 ? remaining : undefined;
   }
 
+  function publishStatus(providerId: string, state: MagpieSyncStatusState): void {
+    deps.statusStore.write(providerId, state);
+    deps.broadcastChanged?.();
+  }
+
   async function performSync(providerId: string): Promise<ProviderModelSyncResult> {
     const scopeAtStart = deps.getScopeKey?.();
     const config = await deps.getConfig(providerId);
@@ -201,7 +206,7 @@ export function createMagpieModelSyncCoordinator(
     const agents = MAGPIE_SYNC_AGENTS.filter((agent) => config.runtimes[agent]);
     if (agents.length === 0) {
       const now = deps.now();
-      deps.statusStore.write(providerId, nextState(deps.statusStore.read(providerId), now, {
+      publishStatus(providerId, nextState(deps.statusStore.read(providerId), now, {
         code: 'NOT_CONFIGURED',
       }));
       return {
@@ -304,7 +309,7 @@ export function createMagpieModelSyncCoordinator(
 
     const ok = successes > 0 && firstFailure === null;
     const now = deps.now();
-    deps.statusStore.write(providerId, nextState(deps.statusStore.read(providerId), now, ok ? null : firstFailure ?? {
+    publishStatus(providerId, nextState(deps.statusStore.read(providerId), now, ok ? null : firstFailure ?? {
       code: 'DISCOVERY_FAILED',
     }));
     if (added.size > 0 || successes > 0) {
@@ -313,7 +318,6 @@ export function createMagpieModelSyncCoordinator(
       } catch {
         deps.log.warn('magpie model sync catalog refresh failed', { providerId });
       }
-      deps.broadcastChanged?.();
     }
     const status = statusFromState(providerId, deps.statusStore.read(providerId), deps.now());
     if (!ok) {
@@ -393,7 +397,16 @@ export function createMagpieModelSyncCoordinator(
       }
     },
 
-    async syncNow(providerId): Promise<ProviderModelSyncResult> {
+    async syncNow(providerId, options): Promise<ProviderModelSyncResult> {
+      syncScope();
+      const scopeAtStart = deps.getScopeKey?.();
+      const pending = options?.afterChange ? inFlight.get(providerId) : undefined;
+      if (pending) {
+        await pending;
+        if (deps.getScopeKey?.() !== scopeAtStart) {
+          return { ok: false, status: getStatus(providerId), added: 0, code: 'CONFIG_CHANGED' };
+        }
+      }
       return syncProvider(providerId, true);
     },
 
@@ -454,7 +467,7 @@ export function getMagpieProviderSyncStatus(providerId: string): ProviderModelSy
 }
 
 /** Fire-and-forget refresh after a committed create/update. */
-export function requestMagpieModelSyncAfterChange(providerId: string): void {
+export async function requestMagpieModelSyncAfterChange(providerId: string): Promise<void> {
   if (!configuredCoordinator) return;
-  void configuredCoordinator.syncNow(providerId).catch(() => undefined);
+  await configuredCoordinator.syncNow(providerId, { afterChange: true }).catch(() => undefined);
 }

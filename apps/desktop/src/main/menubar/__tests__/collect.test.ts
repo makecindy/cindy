@@ -349,8 +349,14 @@ describe('magpie collect integration', () => {
   });
 
   it('falls back to the pay-as-you-go row when the gateway is not Magpie', async () => {
-    const collected = await collectMenubarInputs(deps({ readMagpie: async () => [] }));
-    expect(collected.sources.map((s) => s.kind)).toEqual(['payg']);
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => [loopbackProvider(), { ...loopbackProvider(), id: 'magpie-alias' }],
+      readMagpie: async () => [],
+      activities: () => [{ sessionId: 'on-alias', phase: 'running', startedAtMs: NOW - 1000 } as never],
+      sessionRow: async () => ({ title: 'task', model: 'gpt-5.5', agentKind: 'codex', providerId: 'magpie-alias' }),
+    }));
+    expect(collected.sources.map((s) => s.kind)).toEqual(['payg', 'payg']);
+    expect(collected.sources.filter((s) => s.consuming).map((s) => s.id)).toEqual(['magpie-alias']);
   });
 
   it('drops only the Magpie sources when the reader fails', async () => {
@@ -381,11 +387,12 @@ describe('magpie collect integration', () => {
     expect(withMagpie.updatedAtMs).toBe(withoutMagpie.updatedAtMs);
   });
 
-  it('marks the Magpie accounts consuming when a task routes through the gateway', async () => {
+  it.each(['magpie', 'magpie-alias'])('marks the gateway accounts consuming for a task through %s', async (providerId) => {
     const collected = await collectMenubarInputs(deps({
+      listProviders: async () => [loopbackProvider(), { ...loopbackProvider(), id: 'magpie-alias' }],
       readMagpie: async () => [magpieAccount()],
       activities: () => [{ sessionId: 'on-magpie', phase: 'running', startedAtMs: NOW - 1000 } as never],
-      sessionRow: async () => ({ title: 'task', model: 'gpt-5.5', agentKind: 'codex', providerId: 'magpie' }),
+      sessionRow: async () => ({ title: 'task', model: 'gpt-5.5', agentKind: 'codex', providerId }),
     }));
     expect(collected.sources.find((s) => s.kind === 'magpie')?.consuming).toBe(true);
   });
