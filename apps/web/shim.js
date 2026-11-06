@@ -11,6 +11,37 @@
 (function installCindyHostShim() {
   const pending = new Map();
 
+  /**
+   * The Desktop's own settings, inlined when the host serves this page. They
+   * come from the same files the Desktop main process reads, so the browser and
+   * the client show one copy instead of two. Writes below go back to those same
+   * files through the host, which is why this is a mirror and not a store.
+   */
+  const boot = window.__cindyBoot ?? {};
+  const settingsMirror = {
+    appearance: boot.appearance ?? {},
+    layout: boot.layout ?? null,
+    analytics: boot.analytics ?? {},
+    appShortcuts: boot.appShortcuts ?? { overrides: {}, platform: 'linux' },
+    sidebar: boot.sidebar ?? { pinnedOrder: [], hiddenProjectKeys: [], hiddenMainViewGhostIds: [] },
+    voiceInput: boot.voiceInput ?? { settings: {}, history: [] },
+  };
+  const ownerStamp = () => ({
+    dataOwnerId: boot.auth?.ownerId ?? null,
+    ownerGeneration: 1,
+  });
+  const pinnedOrder = () => Array.from(settingsMirror.sidebar.pinnedOrder ?? []);
+  function saveSidebar(next) {
+    settingsMirror.sidebar = { ...settingsMirror.sidebar, ...next };
+    return rpc('/settings/sidebar/set', { value: settingsMirror.sidebar }).then((saved) => {
+      if (saved && typeof saved === 'object') settingsMirror.sidebar = saved;
+      return settingsMirror.sidebar;
+    });
+  }
+  function requireOwner() {
+    if (!ownerStamp().dataOwnerId) throw new Error('sidebar settings require an active account');
+  }
+
   async function rpc(path, args) {
     const response = await fetch(`/api${path}`, {
       method: 'POST',
@@ -80,9 +111,8 @@
     // result, so the browser must not answer with a rejected promise.
     'reportStartupGateStall': () => undefined,
     // Boot-time snapshot; the host has no microphone permission surface.
-    'voiceInput.getDataSnapshot': () => window.__cindyBoot?.voiceInput ?? {
-      settings: {}, history: [],
-    },
+    // Voice settings/history come from owners/<key>/voice-input-data.v1.json.
+    'voiceInput.getDataSnapshot': () => settingsMirror.voiceInput,
     'auth.getState': () => rpc('/me'),
     // Renderer boot gates: answer with the host defaults instead of stalling.
     'maker.send': async (args) => {
@@ -275,10 +305,28 @@
       };
     },
     'localThemes.listSync': () => STATIC.localThemes,
-    'authHasPersistedSessionHintSync': () => Boolean(window.__cindyBoot?.auth?.user),
-    'appearanceSettings.getSync': () => window.__cindyBoot?.appearance ?? {},
-    'appearanceSettings.get': () => Promise.resolve(window.__cindyBoot?.appearance ?? {}),
-    'getAnalyticsSettings': () => ({ allowed: false }),
+    'authHasPersistedSessionHintSync': () => Boolean(boot.auth?.user),
+    // Appearance comes from <dataDir>/appearance-settings.json, the Desktop's file.
+    'appearanceSettings.getSync': () => settingsMirror.appearance,
+    'appearanceSettings.get': () => Promise.resolve({ value: settingsMirror.appearance, overrides: {} }),
+    'appearanceSettings.setPatch': async (args) => {
+      settingsMirror.appearance = await rpc('/settings/appearance/set', { patch: args?.[0] ?? {} });
+      emit('appearanceSettings.onChanged', settingsMirror.appearance);
+      return settingsMirror.appearance;
+    },
+    'appearanceSettings.reset': async () => {
+      settingsMirror.appearance = await rpc('/settings/appearance/reset');
+      emit('appearanceSettings.onChanged', settingsMirror.appearance);
+      return settingsMirror.appearance;
+    },
+    // Consent + opt-out live in <dataDir>/analytics-settings.json.
+    'getAnalyticsSettings': () => ({
+      ...settingsMirror.analytics,
+      allowed:
+        settingsMirror.analytics?.privacyConsentAccepted === true &&
+        settingsMirror.analytics?.analyticsEnabled === true,
+      analyticsEnabledCustomized: false,
+    }),
     'voiceInput.setGlobalShortcut': () => ({ ok: false }),
     'worktreeListAll': () => STATIC.emptyList,
     'localDb.bots.list': () => STATIC.emptyList,
@@ -294,15 +342,98 @@
     'modelFavoritesHost.ready': () => undefined,
     'modelFavoritesHost.changed': () => () => {},
     'gitContext.listAllPrRefs': () => [],
-    'layout.getStateSync': () => ({ layout: window.__cindyBoot?.layout ?? null }),
+    // Layout tree comes from <dataDir>/layout.v1.json.
+    'layout.getStateSync': () => ({ layout: settingsMirror.layout }),
+    'layout.set': async (args) => {
+      const layout = await rpc('/settings/layout/set', { layout: args?.[0] ?? null });
+      settingsMirror.layout = layout;
+      emit('layout.onChanged', { layout });
+      return { layout, persisted: true };
+    },
+    'layout.reset': async () => {
+      const layout = await rpc('/settings/layout/reset');
+      settingsMirror.layout = layout;
+      emit('layout.onChanged', { layout });
+      return { layout, persisted: true };
+    },
     // Preloaded at boot (sync channel): the desktop answers this from memory too.
     'ghosts.listSync': () => ({ ghosts: ghostsCache ?? [] }),
     'ghosts.recommendationsSync': () => STATIC.ghostRecommendations,
+    // Sidebar identity state comes from owners/<key>/sidebar-settings.json.
     'sidebarSettings.loadSnapshot': () => ({
-      ...STATIC.sidebarSettings,
-      dataOwnerId: window.__cindyBoot?.auth?.ownerId ?? null,
-      ownerGeneration: 1,
+      ...ownerStamp(),
+      pinnedOrderIsAuthoritative: true,
+      pinnedOrder: pinnedOrder(),
+      hiddenProjectKeys: Array.from(settingsMirror.sidebar.hiddenProjectKeys ?? []),
+      hiddenMainViewGhostIds: Array.from(settingsMirror.sidebar.hiddenMainViewGhostIds ?? []),
     }),
+    'sidebarSettings.mutatePinnedOrder': async (args) => {
+      requireOwner();
+      const mutation = args?.[0] ?? {};
+      let next = pinnedOrder();
+      if (mutation.kind === 'reorder' || mutation.kind === 'migrate-legacy') {
+        next = Array.from(mutation.order ?? []).filter((entry) => typeof entry === 'string');
+      } else if (mutation.kind === 'promote' && typeof mutation.entryId === 'string') {
+        next = [mutation.entryId, ...next.filter((entry) => entry !== mutation.entryId)];
+      } else if (mutation.kind === 'remove' && typeof mutation.entryId === 'string') {
+        next = next.filter((entry) => entry !== mutation.entryId);
+      }
+      const saved = await saveSidebar({ pinnedOrder: next });
+      const order = Array.from(saved.pinnedOrder ?? []);
+      emit('sidebarSettings.onPinnedOrderChanged', order, ownerStamp());
+      return order;
+    },
+    'sidebarSettings.setProjectHidden': async (args) => {
+      requireOwner();
+      const projectKey = typeof args?.[0] === 'string' ? args[0] : '';
+      const hidden = args?.[1] === true;
+      if (!projectKey) return false;
+      const current = Array.from(settingsMirror.sidebar.hiddenProjectKeys ?? []);
+      const next = hidden
+        ? [...current.filter((key) => key !== projectKey), projectKey]
+        : current.filter((key) => key !== projectKey);
+      const saved = await saveSidebar({ hiddenProjectKeys: next });
+      emit('sidebarSettings.onHiddenProjectKeysChanged', Array.from(saved.hiddenProjectKeys ?? []), ownerStamp());
+      return hidden;
+    },
+    'sidebarSettings.setMainViewHidden': async (args) => {
+      requireOwner();
+      const ghostId = typeof args?.[0] === 'string' ? args[0] : '';
+      const hidden = args?.[1] === true;
+      if (!ghostId) return Array.from(settingsMirror.sidebar.hiddenMainViewGhostIds ?? []);
+      const current = Array.from(settingsMirror.sidebar.hiddenMainViewGhostIds ?? []);
+      const next = hidden
+        ? [...current.filter((id) => id !== ghostId), ghostId]
+        : current.filter((id) => id !== ghostId);
+      const saved = await saveSidebar({ hiddenMainViewGhostIds: next });
+      const ids = Array.from(saved.hiddenMainViewGhostIds ?? []);
+      emit('sidebarSettings.onHiddenMainViewGhostIdsChanged', ids, ownerStamp());
+      return ids;
+    },
+    // Application shortcut overrides come from <dataDir>/app-shortcuts.v1.json.
+    'appShortcuts.getState': () => settingsMirror.appShortcuts,
+    'appShortcuts.setOverride': async (args) => {
+      const id = String(args?.[0] ?? '');
+      const combo = args?.[1] ?? null;
+      const overrides = { ...(settingsMirror.appShortcuts.overrides ?? {}) };
+      if (id) overrides[id] = combo;
+      settingsMirror.appShortcuts = await rpc('/settings/shortcuts/set', { overrides });
+      emit('appShortcuts.onChanged', settingsMirror.appShortcuts);
+      return { overrides: settingsMirror.appShortcuts.overrides ?? {} };
+    },
+    'appShortcuts.clearOverride': async (args) => {
+      const id = String(args?.[0] ?? '');
+      const overrides = { ...(settingsMirror.appShortcuts.overrides ?? {}) };
+      delete overrides[id];
+      settingsMirror.appShortcuts = await rpc('/settings/shortcuts/set', { overrides });
+      emit('appShortcuts.onChanged', settingsMirror.appShortcuts);
+      return { overrides: settingsMirror.appShortcuts.overrides ?? {} };
+    },
+    'appShortcuts.resetAll': async () => {
+      settingsMirror.appShortcuts = await rpc('/settings/shortcuts/set', { overrides: {} });
+      emit('appShortcuts.onChanged', settingsMirror.appShortcuts);
+      return { overrides: {} };
+    },
     'maker.listActive': () => STATIC.emptyList,
     'remoteDesktop.state': () => Promise.resolve(STATIC.remoteDesktopState),
     'sidebarSettings.claimLegacyRendererOwner': () => STATIC.claimDenied,
@@ -318,6 +449,9 @@
     'localDb.sessions.update': (args) => rpc('/sessions/update', { sessionId: args?.[0], patch: args?.[1] ?? {} }),
     'localDb.sessions.get': (args) => rpc('/sessions/get', { sessionId: args?.[0] }),
     'localDb.sessions.list': () => rpc('/sessions/list'),
+    // Same table the Desktop groups the sidebar by; read-only on the web for now.
+    'localDb.projectAliases.list': () => rpc('/project-aliases/list'),
+    'localDb.projectAliases.onChanged': () => () => {},
     'localDb.sessions.messages': async (args) => rpc('/sessions/messages', args),
     'localDb.rightSidebarTabs.list': () => STATIC.rightSidebarTabs,
     'localDb.messages.create': (args) => rpc('/messages/create', { sessionId: args?.[0], message: args?.[1] ?? {} }),
@@ -418,9 +552,9 @@
 
   /** Event listeners registered through `onX` members. */
   const listeners = new Map();
-  function emit(channel, payload) {
+  function emit(channel, ...args) {
     for (const cb of listeners.get(channel) ?? []) {
-      try { cb(payload); } catch (error) { console.error('[cindy-web] listener failed', channel, error); }
+      try { cb(...args); } catch (error) { console.error('[cindy-web] listener failed', channel, error); }
     }
   }
 
@@ -512,6 +646,21 @@
 
   window.electronAPI = makeNode('');
   window.__cindyShim = true;
+  /**
+   * A browser tab has the browser's own window chrome. Renderer code checks this
+   * flag to skip the desktop minimize/maximize/close cluster; the style below is
+   * the same rule for bundles built before that check existed, which the host
+   * serves from the Desktop's last build.
+   */
+  window.__CINDY_HOST_WEB__ = true;
+  {
+    const style = document.createElement('style');
+    style.dataset.cindyHostWeb = 'window-controls';
+    style.textContent = [
+      '[data-tooltip-exempt="windows-system-control"]{display:none!important}',
+    ].join('\n');
+    document.head.appendChild(style);
+  }
   window.__cindyCalls = [];
   window.__cindyErrors = [];
   window.addEventListener('error', (event) => {

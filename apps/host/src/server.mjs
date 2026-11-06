@@ -105,9 +105,37 @@ export function createHostServer(deps) {
           request.on('data', (chunk) => { raw += chunk; });
           request.on('end', () => resolve(raw || '{}'));
         }));
+        // Settings the browser client renders: read from, and written to, the
+        // Desktop's own files so both clients show one copy of the account.
+        if (url.pathname === '/api/profile') { send(response, 200, await deps.profile()); return; }
+        if (url.pathname === '/api/settings/appearance/set') {
+          send(response, 200, await deps.settings.setAppearance(body.patch ?? body));
+          return;
+        }
+        if (url.pathname === '/api/settings/appearance/reset') {
+          send(response, 200, await deps.settings.resetAppearance());
+          return;
+        }
+        if (url.pathname === '/api/settings/layout/set') {
+          send(response, 200, await deps.settings.setLayout(body.layout ?? body));
+          return;
+        }
+        if (url.pathname === '/api/settings/layout/reset') {
+          send(response, 200, await deps.settings.resetLayout());
+          return;
+        }
+        if (url.pathname === '/api/settings/sidebar/set') {
+          send(response, 200, await deps.settings.setSidebar(body.value ?? body));
+          return;
+        }
+        if (url.pathname === '/api/settings/shortcuts/set') {
+          send(response, 200, await deps.settings.setShortcuts(body.overrides ?? body ?? {}));
+          return;
+        }
         if (url.pathname === '/api/me') { send(response, 200, await deps.me()); return; }
         // The preload contract for `localDb.sessions.list()` is a bare array.
         if (url.pathname === '/api/sessions/list') { send(response, 200, await deps.listSessions()); return; }
+        if (url.pathname === '/api/project-aliases/list') { send(response, 200, await deps.listProjectAliases()); return; }
         if (url.pathname === '/api/sessions/create') { send(response, 201, await deps.createSession(body)); return; }
         if (url.pathname === '/api/sessions/update') { send(response, 200, await deps.updateSession(String(body.sessionId ?? ''), body.patch ?? {})); return; }
         if (url.pathname === '/api/sessions/get') { send(response, 200, await deps.getSession(String(body.sessionId ?? ''))); return; }

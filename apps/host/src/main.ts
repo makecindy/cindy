@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { getDefaultVoiceInputSettings } from '../../desktop/src/shared/voiceInputData.ts';
+import { DEFAULT_APPEARANCE_SETTINGS } from '../../desktop/src/shared/appearanceSettings.ts';
 import { createDefaultLayout } from '../../desktop/src/shared/layoutTree.ts';
 
 import { randomBytes } from 'node:crypto';
@@ -15,6 +16,7 @@ import { openOwnerDatabase, OwnerDatabaseError } from '../../desktop/src/main/lo
 import { discoverHostOwner, ownerDatabasePath, resolveHostDataDir, resolveHostRegion } from './profile-path.mjs';
 import { acquireHostRuntimeLease, type HostRuntimeLease } from './runtime-lock.js';
 import { readAdoptedSessionState } from './credentials/session.mjs';
+import { refreshHostSession } from './auth/refresh.mjs';
 import { configureHostOwner, readClaudeSubscriptionState } from './agent/claude-auth.mjs';
 import { attachAgentsToMakerMemory, createHostMemoryManager, createHostMemoryMcpProviders } from './agent/memory.mjs';
 import { createHostAgentGraph } from './agent/runtime.mjs';
@@ -30,6 +32,13 @@ import { logoutHostSession } from './auth/logout.mjs';
 import { listInstalledPlugins } from './plugins.mjs';
 import { listInstalledGhosts } from './plugins-installed.ts';
 import { listActiveSessions } from './sessions.mjs';
+import {
+  readProfileSettings,
+  writeAppearanceSettingsPatch,
+  writeAppShortcutOverrides,
+  writeLayout,
+  writeSidebarSettings,
+} from './profile-settings.mjs';
 import { createPreparedLinuxCredentialStore } from './credentials/store.mjs';
 import { createHostServer } from './server.mjs';
 import { createChatHandler } from './chat.mjs';
@@ -37,12 +46,11 @@ import { createEventHub } from './events.mjs';
 import { createInputQueue } from './agent/input-queue.mjs';
 import { createInteractionBroker } from './agent/interactions.mjs';
 import { messageToCamel, sessionToCamel } from '../../desktop/src/main/localDb/mapper.ts';
-import { messages as messageTable, sessions as sessionTable } from '../../desktop/src/main/localDb/schema.js';
+import { messages as messageTable, projectAliases as projectAliasTable, sessions as sessionTable } from '../../desktop/src/main/localDb/schema.js';
 import { eq } from 'drizzle-orm';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
 
 const DEFAULT_VOICE_INPUT_SETTINGS = getDefaultVoiceInputSettings();
-const DEFAULT_LAYOUT = createDefaultLayout();
 const VALID_EFFORTS: Record<string, true> = {
   minimal: true, low: true, medium: true, high: true, xhigh: true, max: true, ultra: true,
 };
@@ -143,6 +151,85 @@ function harnessStatus(): Record<string, boolean> {
     return [kind, status.binaryReady];
   }));
 }
+/**
+ * The Desktop's `AuthState.user` projection, resolved from the same adopted
+ * session so the browser identifies the account exactly like the client does.
+ */
+interface AccountUser {
+  id: string;
+  name: string;
+  avatar: string | null;
+  email: string | null;
+  defaultModel: string;
+  defaultEffort: string;
+  membershipKind: 'personal' | 'org';
+  membershipRole: 'owner' | 'admin' | 'member';
+  orgId: string | null;
+  orgName: string | null;
+  orgLogoUrl: string | null;
+  orgSlug: string | null;
+  passportId: string;
+}
+
+/** Same defaults the Desktop applies when an account has no stored preference. */
+const ACCOUNT_DEFAULT_MODEL = 'claude-sonnet-4-6';
+const ACCOUNT_DEFAULT_EFFORT = 'medium';
+
+/**
+ * Resolve the signed-in account profile through the adopted Desktop session.
+ *
+ * The auth-server `me` document is a membership, not a user row, so this maps it
+ * exactly like the Desktop's `mapMembershipToAuthUser` does. Only the display
+ * projection is kept; the access token never leaves this function, and the
+ * refresh token is written back through the shared safeStorage record both
+ * clients read (same path, same rotation semantics as the Desktop).
+ */
+async function resolveAccountUser(): Promise<AccountUser | null> {
+  const realm = (account.realm ?? resolveHostRegion()) as 'cn' | 'global';
+  const endpoints = readAuthEndpoints(realm);
+  const store = await createPreparedLinuxCredentialStore({
+    userDataDir: resolveHostDataDir(),
+    keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
+  });
+  const { machineIdSync } = createRequire(import.meta.url)('node-machine-id');
+  const client = new CindyAuthClient({
+    baseUrl: endpoints.authApiBaseUrl,
+    region: realm,
+    deviceId: machineIdSync(),
+    clientType: 'desktop',
+    fetch: (input, init) => globalThis.fetch(input, init),
+  });
+  const { sessionToken } = await refreshHostSession({
+    store,
+    refresh: (token) => client.refresh(token),
+  });
+  const me = await client.getMe(sessionToken) as Record<string, any>;
+  const membership = me?.membership as Record<string, any> | undefined;
+  if (!membership || typeof membership.id !== 'string' || !membership.id) return null;
+  const email = typeof membership.email === 'string' ? membership.email : null;
+  const displayName = typeof membership.displayName === 'string' ? membership.displayName : '';
+  return {
+    id: membership.id,
+    name: displayName || email || 'Cindy',
+    avatar: typeof membership.avatarUrl === 'string' ? membership.avatarUrl : null,
+    email,
+    defaultModel: ACCOUNT_DEFAULT_MODEL,
+    defaultEffort: ACCOUNT_DEFAULT_EFFORT,
+    membershipKind: membership.kind === 'org' ? 'org' : 'personal',
+    membershipRole:
+      membership.role === 'owner' || membership.role === 'admin' || membership.role === 'member'
+        ? membership.role
+        : 'member',
+    orgId: typeof membership.orgId === 'string' ? membership.orgId : null,
+    orgName: typeof membership.orgName === 'string' ? membership.orgName : null,
+    orgLogoUrl: typeof membership.orgLogoUrl === 'string' ? membership.orgLogoUrl : null,
+    orgSlug: null,
+    passportId: typeof me?.passportId === 'string' ? me.passportId : (membership.passportId ?? ''),
+  };
+}
+
+/** Real account profile from the adopted session; null until it resolves. */
+let accountUser: AccountUser | null = null;
 let activeOwner: string | null = null;
 let closeStorage: (() => Promise<void>) | null = null;
 let sessionStorage: OwnerSessionStorage | null = null;
@@ -324,20 +411,55 @@ const apiToken = readOrCreateApiToken(resolveHostDataDir());
 const webSession = randomBytes(24).toString('base64url');
 const webDir = process.env.CINDY_HOST_WEB_DIR?.trim()
   || path.resolve(desktopRoot, '.vite', 'renderer', 'main_window');
+/** The profile the browser client reads: same account, same files, no copy. */
+function hostProfileInput() {
+  return { dataDir: resolveHostDataDir(), ownerId: runtime.owner ?? null };
+}
+
+function currentProfileSettings() {
+  return readProfileSettings(hostProfileInput());
+}
+
+function writeProfileAppearance(patch: unknown) {
+  const applied = writeAppearanceSettingsPatch(
+    hostProfileInput(),
+    patch && typeof patch === 'object' ? (patch as Record<string, unknown>) : {},
+  );
+  eventHub.publish({ type: 'appearance_changed', appearance: applied });
+  return applied;
+}
+
 const server = createHostServer({
   token: apiToken,
   webSession,
   shimPath: path.resolve(desktopRoot, '..', 'web', 'shim.js'),
   // Inline the shared defaults so the synchronous snapshot API can answer.
-  bootValues: () => ({
-    voiceInput: { settings: DEFAULT_VOICE_INPUT_SETTINGS, history: [] },
-    harness: harnessStatus(),
-    auth: account.authenticated
-      ? { user: { id: runtime.owner ?? 'owner', name: runtime.owner ?? 'owner', email: null, avatar: null }, ownerId: runtime.owner }
-      : {},
-    appearance: {},
-    layout: DEFAULT_LAYOUT,
-  }),
+  // The browser client reads the Desktop's own settings files, so the snapshot
+  // it boots with is the same one the Desktop renders — never a host-side copy.
+  bootValues: () => {
+    const profile = currentProfileSettings();
+    return {
+      voiceInput: profile.voiceInput,
+      harness: harnessStatus(),
+      auth: account.authenticated
+        ? { user: accountUser ?? { id: runtime.owner ?? 'owner', name: runtime.owner ?? 'owner', email: null, avatar: null }, ownerId: runtime.owner }
+        : {},
+      appearance: profile.appearance,
+      layout: profile.layout,
+      sidebar: profile.sidebar,
+      analytics: profile.analytics,
+      appShortcuts: profile.appShortcuts,
+    };
+  },
+  profile: async () => currentProfileSettings(),
+  settings: {
+    setAppearance: async (patch: unknown) => writeProfileAppearance(patch),
+    resetAppearance: async () => writeProfileAppearance({ ...DEFAULT_APPEARANCE_SETTINGS }),
+    setLayout: async (layout: unknown) => writeLayout(hostProfileInput(), layout),
+    resetLayout: async () => writeLayout(hostProfileInput(), createDefaultLayout()),
+    setSidebar: async (value: unknown) => writeSidebarSettings(hostProfileInput(), value),
+    setShortcuts: async (overrides: unknown) => writeAppShortcutOverrides(hostProfileInput(), overrides),
+  },
   // Resolved per request so a bundle built after startup is picked up.
   webDir: () => (existsSync(path.join(webDir, 'index.html')) ? webDir : null),
   probe: async () => ({
@@ -352,7 +474,12 @@ const server = createHostServer({
     maker: agentGraph ? { agents: agentGraph.agents } : null,
     sessions: sessionStorage ? (await listActiveSessions(sessionStorage)).length : null,
   }),
-  me: async () => ({ owner: runtime.owner, authenticated: account.authenticated, realm: account.realm }),
+  me: async () => ({
+    owner: runtime.owner,
+    authenticated: account.authenticated,
+    realm: account.realm,
+    user: accountUser,
+  }),
   logout: async () => {
     const realm = (account.realm ?? resolveHostRegion()) as 'cn' | 'global';
     const endpoints = readAuthEndpoints(realm);
@@ -377,6 +504,16 @@ const server = createHostServer({
     return result;
   },
   listSessions: async () => (sessionStorage ? listActiveSessions(sessionStorage) : []),
+  // Project aliases are rows in the same owner database; the sidebar groups by
+  // them on both clients, so they come straight from that table.
+  listProjectAliases: async () => {
+    const rows = await getDbClient().drizzle.select().from(projectAliasTable);
+    return rows.map((row: Record<string, unknown>) => ({
+      projectKey: String(row.projectKey ?? ''),
+      alias: String(row.alias ?? ''),
+      updatedAt: new Date(Number(row.updatedAt ?? 0)).toISOString(),
+    }));
+  },
   interruptedPending: async () => {
     const { listInterruptedPendingRows } = await import('../../desktop/src/main/localDb/sessionActiveTurn.ts');
     return (await listInterruptedPendingRows({ includeBotTasks: false })).map((row) => row.sessionId);
@@ -640,6 +777,13 @@ server.listen(PORT, '127.0.0.1', () => {
     keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
   }).then((state) => {
     account = state;
+    if (state.authenticated) {
+      void resolveAccountUser()
+        .then((user) => { accountUser = user; })
+        .catch((error: unknown) => {
+          console.warn('[host] account profile unavailable:', error instanceof Error ? error.message : String(error));
+        });
+    }
   }).catch((error: unknown) => {
     account = {
       authenticated: false,
