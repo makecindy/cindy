@@ -104,13 +104,17 @@ it.each(['cindy-media://__SCALE__', 'cindy-media://__A2__', `cindy-media://blobs
   },
 );
 
-it('keeps invalid-image recovery disabled in read-only views and accepts a corrected source', () => {
+// #9164 review: client-wallpaper is also served by the Desktop media protocol.
+it.each([
+  `cindy-media://blobs/${'a'.repeat(64)}.png`,
+  `cindy-media://client-wallpaper/${'a'.repeat(64)}.webp`,
+  `cindy-media://client-wallpaper/${'a'.repeat(64)}.mp4`,
+])('keeps invalid-image recovery read-only and routes a corrected supported source: %s', (src) => {
   const source = line(1, { op: 'create', id: 'image', kind: 'image', props: { src: 'cindy-media://__IMAGE__', alt: 'Preview' } });
   const renderMedia = vi.fn((node: RichNode) => <span data-image-source={String(node.props.src)}>Loaded image</span>);
   const props = { stateKey: 'invalid-image-readonly', renderMedia, renderMarkdown: (text: string) => <span>{text}</span>, complete: true };
   const view = render(<RichAnswer {...props} source={source} />);
   expect((screen.getByRole('button', { name: 'richAnswer.requestImageAgain' }) as HTMLButtonElement).disabled).toBe(true);
-  const src = `cindy-media://blobs/${'a'.repeat(64)}.png`;
   view.rerender(<RichAnswer {...props} source={source + line(2, { op: 'patch', id: 'image', props: { src } })} />);
   expect(screen.queryByRole('status')).toBeNull();
   expect(screen.queryByRole('button')).toBeNull();

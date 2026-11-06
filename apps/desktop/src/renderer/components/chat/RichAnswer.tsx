@@ -204,10 +204,11 @@ function RichAnswerDocument({
     const node = doc.nodes.get(id);
     if (!node) return null;
     const imageSource = node.kind === 'image' ? richString(node, 'src').trim() : '';
-    // Managed blob addresses contain a complete fingerprint. Reloading a
+    // Both media namespaces are served by the Desktop protocol. Reloading a
     // placeholder or truncated reference cannot recover the existing image.
     if (/^cindy-media:/i.test(imageSource)
-      && !/^cindy-media:\/\/blobs\/[a-f0-9]{64}\.[a-zA-Z0-9]+$/.test(imageSource)) {
+      && !/^cindy-media:\/\/blobs\/[a-f0-9]{64}\.[a-zA-Z0-9]+$/.test(imageSource)
+      && !/^cindy-media:\/\/client-wallpaper\/[a-f0-9]{64}\.(webp|mp4)$/.test(imageSource)) {
       const message = t('richAnswer.requestImageAgainMessage', {
         name: JSON.stringify(richString(node, 'alt', id)),
         source: JSON.stringify(imageSource),
