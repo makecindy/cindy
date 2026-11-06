@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import defaultIconUrl from '@/../../resources/icon-dock.png?url';
@@ -32,30 +32,57 @@ export function DockIconPicker() {
   const { t } = useTranslation();
   const isDark = useIsDarkMode();
   const [selected, setSelected] = useState<AppIcon>(() => getInitialAppearanceSettings().appIcon);
+  const selectedRef = useRef(selected);
+  const confirmedRef = useRef(selected);
+  const pendingRef = useRef<Array<{ icon: AppIcon }>>([]);
+  const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  const syncSelection = useCallback(() => {
+    const next = pendingRef.current.at(-1)?.icon ?? confirmedRef.current;
+    selectedRef.current = next;
+    setSelected(next);
+  }, []);
 
   useEffect(
     () =>
       window.electronAPI?.appearanceSettings?.onChanged?.((next) => {
-        setSelected(normalizeAppearanceSettings(next).appIcon);
+        confirmedRef.current = normalizeAppearanceSettings(next).appIcon;
+        syncSelection();
       }),
-    [],
+    [syncSelection],
   );
 
   const select = (next: AppIcon) => {
-    if (next === selected) return;
-    const previous = selected;
+    if (next === selectedRef.current) return;
+    selectedRef.current = next;
     setSelected(next);
-    window.electronAPI?.appearanceSettings?.setPatch({ appIcon: next }).catch(() => {
-      setSelected(previous);
-      toast.error(t('settings.appearance.appIcon.saveFailed'));
-    });
+    const bridge = window.electronAPI?.appearanceSettings;
+    if (!bridge) return;
+    const request = { icon: next };
+    pendingRef.current.push(request);
+    // Match font/wallpaper saves: a file-lock retry must not let a newer
+    // choice persist first, and older broadcasts must not replace pending UI.
+    writeQueueRef.current = writeQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          const saved = await bridge.setPatch({ appIcon: next });
+          confirmedRef.current = normalizeAppearanceSettings(saved).appIcon;
+        } catch {
+          toast.error(t('settings.appearance.appIcon.saveFailed'));
+        } finally {
+          pendingRef.current = pendingRef.current.filter((pending) => pending !== request);
+          syncSelection();
+        }
+      });
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
     const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key];
     if (!step) return;
     event.preventDefault();
-    const index = (APP_ICONS.indexOf(selected) + step + APP_ICONS.length) % APP_ICONS.length;
+    const index =
+      (APP_ICONS.indexOf(selectedRef.current) + step + APP_ICONS.length) % APP_ICONS.length;
     select(APP_ICONS[index]);
     (event.currentTarget.parentElement?.children[index] as HTMLElement | undefined)?.focus();
   };
