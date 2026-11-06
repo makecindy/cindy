@@ -272,6 +272,11 @@ describe('live compact spine selection', () => {
     expect(wrapped).not.toContain('b3BlbnNzaC1rZXk');
     expect(wrapped).not.toContain('OPENSSH');
     expect(wrapped).toContain('private_key=');
+    // 工具调用参数是 JSON.stringify 后的字符串:多行私钥的换行变成字面量 `\n`,整块规则
+    // 的正文类必须收反斜杠,否则只吃掉 BEGIN 标记,密钥正文和 END 原样落盘(实测)。
+    const jsonWrapped = redactSecrets(JSON.stringify({ command: 'cat id_rsa', private_key: pem }));
+    expect(jsonWrapped).not.toContain('b3BlbnNzaC1rZXk');
+    expect(jsonWrapped).not.toContain('END OPENSSH');
     // 连接串的主机与用户名要留着,否则模型无法判断是哪套库。
     expect(out).toContain('postgres://cindy:');
     expect(out).toContain('@db.internal');

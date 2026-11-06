@@ -1517,10 +1517,13 @@ const REDACT_RULES: Array<[RegExp, string]> = [
   // 重扫到文末(140K / 2000 个标记实测 300ms,退化成平方),而这条规则跑在同步的 settle 钩子里。
   // 真密钥 PEM 最多几 KB(RSA 4096 约 3.2K),8192 足够。正文只走 base64/头行字符,
   // 这样「BEGIN 后面紧跟另一个 BEGIN」只花一步就放弃,不会每个标记都白扫 8K。
-  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[A-Za-z0-9+/=:,\s]{0,8192}?-----END [A-Z ]*PRIVATE KEY-----/g, "[REDACTED PRIVATE KEY]"],
+  // `\\` 必须在类里:工具调用参数是 JSON.stringify 后的字符串,多行私钥里的换行变成
+  // 了字面量 `\n` 两个字符 —— 不许反斜杠的话整块规则认不到终结符,下面那条半块规则
+  // 只能吃掉 BEGIN 标记,私钥正文和 END 会原样写进影子文件(实测)。
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[A-Za-z0-9+/=:,\s\\]{0,8192}?-----END [A-Z ]*PRIVATE KEY-----/g, "[REDACTED PRIVATE KEY]"],
   // 只留开始标记(输出被截断)的那半块同样是密钥正文:上一条只吃有终结符的块,这里把没等到
   // 终结符的半块一并打掉 —— 否则截断得越巧,密钥越完整地留在备份里。长度同样有上界。
-  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[A-Za-z0-9+/=:,\s]{0,8192}/g, "[REDACTED PRIVATE KEY]"],
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[A-Za-z0-9+/=:,\s\\]{0,8192}/g, "[REDACTED PRIVATE KEY]"],
   // HTTP 认证头要先单独处理:`Authorization: Basic dXNlcjpwYXNz` 的值不是"键名=值"形态,
   // 键名规则只认到方案名(不足 8 字),base64 里的可复用凭证会原样留下。Bearer 仍由下面那条兜。
   // 冒号后可能是引号(JSON `{"Authorization":"Basic …"}`),方案后面也可能是 Digest 那种
