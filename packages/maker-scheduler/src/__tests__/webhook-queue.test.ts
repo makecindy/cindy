@@ -202,6 +202,49 @@ describe('ScheduleWebhookQueue', () => {
     expect(h.queue.snapshot('s1').ignored).toBe(3);
   });
 
+  // PR #8470, unit: the existing pause test stops before preparation begins.
+  // A delayed remote refresh / run insertion can outlive that first state check.
+  it.each(['paused', 'expired', 'disabled', 'deleted'] as const)(
+    'rechecks %s state at handoff and never replays the discarded batch', async (state) => {
+      const h = setup();
+      const dispatch = vi.fn();
+      let finishPreparation!: () => void;
+      const preparation = new Promise<void>((resolve) => { finishPreparation = resolve; });
+      h.fire.mockImplementationOnce(async (_id, _batch, onRunCreated) => {
+        await preparation;
+        await onRunCreated();
+        dispatch();
+        return {};
+      });
+      await h.queue.start();
+      await h.queue.accept('s1', event('old'));
+      await h.queue.addOmitted('s1', 2);
+      await vi.advanceTimersByTimeAsync(LIMITS.debounceMs);
+      expect(h.fire).toHaveBeenCalledOnce();
+      const active = { id: 's1', status: 'active', webhookTrigger: { endpointId: 'e1' } } as Schedule;
+      h.setSchedule(state === 'deleted' ? null : {
+        ...active,
+        ...(state === 'paused' ? { status: 'paused' } : {}),
+        ...(state === 'expired' ? { expireAt: Date.now() } : {}),
+        ...(state === 'disabled' ? { webhookTrigger: undefined } : {}),
+      });
+      finishPreparation();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(h.saved().endpoints.s1).toMatchObject({ pending: [], ignored: 3 });
+      expect(h.saved().endpoints.s1?.preparing).toBeUndefined();
+      expect(h.saved().endpoints.s1?.lastStartedAt).toBeUndefined();
+      h.setSchedule(active);
+      await vi.advanceTimersByTimeAsync(LIMITS.minGapMs);
+      expect(h.fire).toHaveBeenCalledOnce();
+      await h.queue.accept('s1', event('new'));
+      await vi.advanceTimersByTimeAsync(LIMITS.debounceMs);
+      expect(h.fire).toHaveBeenCalledTimes(2);
+      expect(h.fire.mock.calls[1][1].events.map(e => e.deliveryId)).toEqual(['new']);
+      h.queue.stop();
+    },
+  );
+
   it('carries the count of events the server already dropped into the next batch, once', async () => {
     const { queue, fire } = setup();
     await queue.start();

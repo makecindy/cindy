@@ -246,20 +246,32 @@ export class ScheduleWebhookQueue {
       });
       if (!batch || this.stopped) return;
       let handedOff = false;
+      let discarded = false;
       try {
         const result = await this.deps.fire(id, { events: batch.events, omitted: batch.omitted }, async () => {
-          await this.mutate(state => {
+          // Remote refresh and run persistence may outlive the earlier check.
+          // Re-read at the durable handoff, before the caller can dispatch.
+          const latest = await this.deps.getSchedule(id);
+          const accepted = await this.mutate(state => {
             const current = state.endpoints[id];
             if (this.stopped || !current?.preparing) throw new Error('webhook batch cancelled before dispatch');
+            if (!canReceive(latest, this.deps.now())) {
+              current.ignored += current.preparing.events.length + current.preparing.omitted;
+              current.preparing = undefined;
+              return false;
+            }
             current.preparing = undefined;
             current.lastStartedAt = this.deps.now();
+            return true;
           });
+          discarded = !accepted;
+          if (discarded) throw new Error('schedule webhook no longer active before dispatch');
           handedOff = true;
         });
-        retry = Boolean(result.deferred) || !handedOff;
+        retry = !discarded && (Boolean(result.deferred) || !handedOff);
       } catch (error) {
-        retry = !handedOff;
-        this.deps.onError?.('schedule webhook run failed', { scheduleId: id, error: String(error) });
+        retry = !discarded && !handedOff;
+        if (!discarded) this.deps.onError?.('schedule webhook run failed', { scheduleId: id, error: String(error) });
       }
       if (retry && !this.stopped) {
         this.retries.set(id, batch);
