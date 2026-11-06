@@ -8,6 +8,27 @@ import {
 const registry = BUNDLED_CATALOG.modelRegistry;
 const at = "2026-09-23";
 
+describe("Kimi K3 one-hour cache writes adopted on November 5", () => {
+  it.each([
+    ["moonshot-kimi-cn", "cn", "CNY", 20, 100, 2, 40],
+    ["moonshot-kimi-global", "global", "USD", 3, 15, 0.3, 6],
+  ] as const)("resolves %s without backfilling the historical gap",
+    (provider, priceGroup, currency, input, output, read, write1h) => {
+      const options = { at: "2026-11-05", officialOnly: true };
+      const price = resolveModelReferencePrice(registry, provider, "kimi-k3", options)?.price;
+      expect(price).toMatchObject({
+        currency, variant: "standard", inputPerMtok: input, outputPerMtok: output,
+        cacheReadPerMtok: read, cacheWritePerMtok: input, cacheWrite1hPerMtok: write1h,
+        effectiveFrom: "2026-11-05",
+      });
+      expect(resolveBaseModelReferencePrice(registry, "kimi-k3", { ...options, priceGroup })?.price).toEqual(price);
+      const historical = resolveModelReferencePrice(registry, provider, "kimi-k3", { ...options, at: "2026-11-04" })?.price;
+      expect(historical).toMatchObject({ currency, cacheWritePerMtok: input });
+      expect(historical?.cacheWrite1hPerMtok).toBeUndefined();
+      expect(resolveModelReferencePrice(registry, provider, "kimi-k3", { ...options, variant: "fast" })).toBeUndefined();
+    });
+});
+
 describe("verified September reference-price coverage", () => {
   it("resolves the existing Muse 1.2 route to its official tariff", () => {
     expect(

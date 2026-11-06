@@ -1,6 +1,6 @@
 {
   "schemaVersion": 6,
-  "updatedAt": "2026-11-05T09:54:04.007Z",
+  "updatedAt": "2026-11-05T14:18:33.000Z",
   "models": [
     {
       "id": "openai/gpt-6.1-sol",
@@ -3099,6 +3099,36 @@
       ],
       "nativeApi": "openai-completions",
       "modelRef": "xd/tencent-hy4-preview"
+    },
+    {
+      "id": "openai/gpt-image-2.6-sunburst",
+      "name": "GPT Image 2.6 Sunburst",
+      "modelRef": "openai/gpt-image-2.6-sunburst",
+      "mode": "image_generation",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "openai/gpt-image-2.6-sunburst",
+          "agents": []
+        }
+      ],
+      "nativeApi": "openai-images"
+    },
+    {
+      "id": "openai/gpt-image-2.6-flare",
+      "name": "GPT Image 2.6 Flare",
+      "modelRef": "openai/gpt-image-2.6-flare",
+      "mode": "image_generation",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "openai/gpt-image-2.6-flare",
+          "agents": []
+        }
+      ],
+      "nativeApi": "openai-images"
     },
     {
       "id": "openai/gpt-image-2.5-sunburst",
@@ -7756,7 +7786,23 @@
                 "url": "https://platform.kimi.com/",
                 "verifiedAt": "2026-09-23"
               },
-              "cacheWritePerMtok": 20
+              "cacheWritePerMtok": 20,
+              "effectiveUntil": "2026-11-05"
+            },
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 20,
+              "outputPerMtok": 100,
+              "cacheReadPerMtok": 2,
+              "effectiveFrom": "2026-11-05",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.kimi.com/docs/guide/context-caching",
+                "verifiedAt": "2026-11-05"
+              },
+              "cacheWritePerMtok": 20,
+              "cacheWrite1hPerMtok": 40
             }
           ]
         },
@@ -7789,7 +7835,23 @@
                 "url": "https://platform.kimi.ai/",
                 "verifiedAt": "2026-09-23"
               },
-              "cacheWritePerMtok": 3
+              "cacheWritePerMtok": 3,
+              "effectiveUntil": "2026-11-05"
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 3,
+              "outputPerMtok": 15,
+              "cacheReadPerMtok": 0.3,
+              "effectiveFrom": "2026-11-05",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.kimi.ai/docs/guide/context-caching",
+                "verifiedAt": "2026-11-05"
+              },
+              "cacheWritePerMtok": 3,
+              "cacheWrite1hPerMtok": 6
             }
           ]
         }
@@ -8260,6 +8322,44 @@
           "xhigh"
         ],
         "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "openai/gpt-image-2.6-sunburst",
+      "aliases": [
+        "gpt-image-2.6-sunburst"
+      ],
+      "defaults": {
+        "name": "GPT Image 2.6 Sunburst",
+        "mode": "image_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        }
+      }
+    },
+    {
+      "id": "openai/gpt-image-2.6-flare",
+      "aliases": [
+        "gpt-image-2.6-flare"
+      ],
+      "defaults": {
+        "name": "GPT Image 2.6 Flare",
+        "mode": "image_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        }
       }
     },
     {
