@@ -1,3 +1,4 @@
+import { seedBotReadPositions, markBotReadPositions, pruneBotReadState as pruneHostBotReads } from '../../../maker-ipc/botReadStateStore';
 import { createTaskCompletionDeliveryHost } from '../../../maker-ipc/taskCompletionDeliveryHost';
 import { emitSessionCreated } from '../sessionCreatedBroadcast.js';
 import { captureAgentRequest } from '../../../maker-ipc/forwardedRequest';
@@ -64,7 +65,10 @@ vi.mock('../sessionCreatedBroadcast.js', () => ({ emitSessionCreated: vi.fn(), e
 vi.mock('electron-store', () => ({ default: class {
   private values = new Map<string, unknown>();
   get(key: string, fallback?: unknown) { return this.values.get(key) ?? fallback; }
-  set(key: string, value: unknown) { this.values.set(key, value); }
+  set(key: string | Record<string, unknown>, value?: unknown) {
+    if (typeof key === 'string') this.values.set(key, value);
+    else for (const [name, item] of Object.entries(key)) this.values.set(name, item);
+  }
   delete(key: string) { this.values.delete(key); }
 } }));
 vi.mock('../../../maker-ipc/appDefaultModelControl.js', async importOriginal => ({
@@ -4262,6 +4266,20 @@ describe('Bots list unread projection', () => {
     )) as Array<{ id: string; unreadCount: number }>;
     return rows.find((row) => row.id === botId)!.unreadCount;
   }
+
+  // Merge compatibility: test the real list handler and SQLite-visible replies,
+  // not only the renderer projection. Host seeds must not hide a reply after a
+  // complete window's earlier seed; actual host acknowledgements still clear it.
+  it('does not let a host automatic seed hide replies past a complete window read position', async () => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, { id: 'host-seed-reply', role: 'assistant', content: 'Unread reply', createdAt: 2000 });
+    try {
+      seedBotReadPositions({ 'bot-1': 3000 });
+      expect(await unreadFor('bot-1', { 'bot-1': 1000 })).toBe(1);
+      markBotReadPositions({ 'bot-1': 2000 });
+      expect(await unreadFor('bot-1', { 'bot-1': 1000 })).toBe(0);
+    } finally { pruneHostBotReads({ botIds: [] }); }
+  });
 
   it('remote reply watermark ignores user activity and private timeline traces', async () => {
     const sessionId = await canonicalFor('bot-1');

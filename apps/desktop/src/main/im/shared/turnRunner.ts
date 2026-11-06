@@ -163,6 +163,7 @@ import {
 } from './fbotTitle';
 import { localTaskImagePath, rewriteTaskImageReferences, taskImageReferences } from '../../cindy-media/taskImageMarkdown';
 import { materializeLocalMarkdownImageRefs, materializeLocalMarkdownImages } from './localMarkdownImages';
+import { unlinkLocalFileLinks } from './localFileLinks';
 import {
   applyStatusTokenRate,
   clearRunningIndicators,
@@ -2944,7 +2945,7 @@ export function createTurnRunner(
 
   /** Project only the outbound copy; persistence keeps the original component events. */
   function composeOutboundBody(source: string, final: boolean): string {
-    let body = stripInternalWebCitations(richAnswerText(source));
+    let body = unlinkLocalFileLinks(stripInternalWebCitations(richAnswerText(source)));
     // Card channels patch the live body; a machine-local image path must not show before finalize imports it.
     if (!final && output.kind === 'rich-card' && body.includes('![')) {
       const local = new Map(
