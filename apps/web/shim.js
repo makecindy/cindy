@@ -371,7 +371,20 @@
       return Boolean(result?.ok);
     },
     'maker.input.remove': (args) => rpc('/input/remove', { sessionId: args?.[0], clientId: args?.[1] }),
+    'maker.input.updateContent': (args) => rpc('/input/update-content', { sessionId: args?.[0], clientId: args?.[1], item: args?.[2] }),
+    'maker.input.updateText': (args) => rpc('/input/update-text', { sessionId: args?.[0], clientId: args?.[1], newText: args?.[2] }),
+    'maker.input.move': (args) => rpc('/input/move', { sessionId: args?.[0], clientId: args?.[1], targetIndex: args?.[2] }),
+    'maker.input.setExpanded': (args) => rpc('/input/set-expanded', { sessionId: args?.[0], expanded: args?.[1] }),
+    'maker.input.setInteractionLock': (args) => rpc('/input/set-interaction-lock', { sessionId: args?.[0], lockId: args?.[1], locked: args?.[2] }),
+    'maker.input.setEditLock': (args) => rpc('/input/set-edit-lock', { sessionId: args?.[0], clientId: args?.[1], locked: args?.[2] }),
+    'maker.input.clearSession': (args) => rpc('/input/clear-session', { sessionId: args?.[0] }),
     'maker.input.resume': (args) => rpc('/input/resume', { sessionId: args?.[0] }),
+    'maker.getPendingInteractions': (args) => rpc('/interactions/pending', { sessionId: args?.[0] }),
+    'maker.resolveInteraction': async (args) => {
+      const [requestId, decision] = args ?? [];
+      const res = await rpc('/interactions/respond', { requestId, decision });
+      return { accepted: Boolean(res?.ok || res?.accepted) };
+    },
     'maker.listAvailableAgents': () => rpc('/agents'),
     'maker.setPermissionMode': (args) => {
       const sessionId = args?.[0];
@@ -1076,6 +1089,8 @@
                   }
                 } else if (parsed.type === 'message_created') {
                   emit('localDb.messages.onCreated', { sessionId: parsed.sessionId, message: parsed.message });
+                } else if (parsed.type === 'input_projection') {
+                  emit('maker.onInputProjection', parsed.projection);
                 } else if (parsed.type === 'project_aliases_changed') {
                   emit('localDb.projectAliases.onChanged');
                 } else {

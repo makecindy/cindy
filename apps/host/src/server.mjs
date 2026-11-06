@@ -202,9 +202,9 @@ export function createHostServer(deps) {
         if (url.pathname === '/api/interactions/pending') { send(response, 200, deps.interactions.pending(String(body.sessionId ?? ''))); return; }
         if (url.pathname === '/api/interactions/respond') {
           const accepted = deps.interactions.respond(
-            String(body.sessionId ?? ''), String(body.requestId ?? ''), body.decision,
+            body.sessionId ? String(body.sessionId) : null, String(body.requestId ?? ''), body.decision,
           );
-          send(response, accepted ? 200 : 404, { ok: accepted });
+          send(response, accepted ? 200 : 404, { ok: accepted, accepted });
           return;
         }
         if (url.pathname === '/api/input/projection') { send(response, 200, deps.input.projection(String(body.sessionId ?? ''))); return; }
@@ -219,6 +219,34 @@ export function createHostServer(deps) {
         }
         if (url.pathname === '/api/input/remove') {
           send(response, 200, await deps.input.remove(String(body.sessionId ?? ''), String(body.clientId ?? '')));
+          return;
+        }
+        if (url.pathname === '/api/input/update-content') {
+          send(response, 200, await deps.input.updateContent(String(body.sessionId ?? ''), String(body.clientId ?? ''), body.item ?? {}));
+          return;
+        }
+        if (url.pathname === '/api/input/update-text') {
+          send(response, 200, await deps.input.updateText(String(body.sessionId ?? ''), String(body.clientId ?? ''), body.newText));
+          return;
+        }
+        if (url.pathname === '/api/input/move') {
+          send(response, 200, await deps.input.move(String(body.sessionId ?? ''), String(body.clientId ?? ''), Number(body.targetIndex ?? 0)));
+          return;
+        }
+        if (url.pathname === '/api/input/set-expanded') {
+          send(response, 200, await deps.input.setExpanded(String(body.sessionId ?? ''), Boolean(body.expanded)));
+          return;
+        }
+        if (url.pathname === '/api/input/set-interaction-lock') {
+          send(response, 200, await deps.input.setInteractionLock(String(body.sessionId ?? ''), String(body.lockId ?? ''), Boolean(body.locked)));
+          return;
+        }
+        if (url.pathname === '/api/input/set-edit-lock') {
+          send(response, 200, await deps.input.setEditLock(String(body.sessionId ?? ''), String(body.clientId ?? ''), Boolean(body.locked)));
+          return;
+        }
+        if (url.pathname === '/api/input/clear-session') {
+          send(response, 200, await deps.input.clearSession(String(body.sessionId ?? '')));
           return;
         }
         if (url.pathname === '/api/input/resume') { send(response, 200, await deps.input.resume(String(body.sessionId ?? ''))); return; }

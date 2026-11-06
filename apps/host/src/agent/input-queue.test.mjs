@@ -102,7 +102,7 @@ test('dispatches a queued message and stores the user and assistant rows', async
   assert.equal(assistant.clientId, 'assistant-1');
   assert.equal(h.queue.projection('task-1').turnInProgress, false);
   assert.deepEqual(
-    h.events.map((event) => event.type).filter((type) => type !== undefined).slice(0, 2),
+    h.events.map((event) => event.type).filter((type) => type === 'text').slice(0, 2),
     ['text', 'text'],
   );
 });
@@ -158,4 +158,59 @@ test('the projection carries every field the renderer reads', () => {
   ]) {
     assert.ok(key in projection, `missing projection field: ${key}`);
   }
+});
+
+test('updateContent updates queued item text and preserves metadata', async () => {
+  const h = createHarness();
+  await h.queue.enqueue('task-5', { clientId: 'a', text: 'running' });
+  await h.queue.enqueue('task-5', { clientId: 'b', text: 'original text', files: [{ id: 'f1' }] });
+
+  const proj = await h.queue.updateContent('task-5', 'b', {
+    text: 'updated text',
+    files: [{ id: 'f1' }],
+    chatMessage: { text: 'updated text' },
+  });
+
+  const updatedItem = proj.pendingQueue.find((item) => item.clientId === 'b');
+  assert.ok(updatedItem);
+  assert.equal(updatedItem.text, 'updated text');
+  assert.deepEqual(updatedItem.files, [{ id: 'f1' }]);
+  assert.equal(updatedItem.chatMessage.text, 'updated text');
+});
+
+test('updateText and move modify pending queue entries', async () => {
+  const h = createHarness();
+  await h.queue.enqueue('task-6', { clientId: 'a', text: 'running' });
+  await h.queue.enqueue('task-6', { clientId: 'b', text: 'first queued' });
+  await h.queue.enqueue('task-6', { clientId: 'c', text: 'second queued' });
+
+  const proj1 = await h.queue.updateText('task-6', 'b', 'first queued edited');
+  assert.equal(proj1.pendingQueue[0].text, 'first queued edited');
+
+  const proj2 = await h.queue.move('task-6', 'b', 1);
+  assert.deepEqual(proj2.pendingQueue.map((item) => item.clientId), ['c', 'b']);
+});
+
+test('setExpanded, setInteractionLock, setEditLock, clearSession update projection state', async () => {
+  const h = createHarness();
+  let proj = await h.queue.setExpanded('task-7', true);
+  assert.equal(proj.queueExpanded, true);
+
+  proj = await h.queue.setInteractionLock('task-7', 'lock-1', true);
+  assert.deepEqual(proj.queueInteractionLocks, ['lock-1']);
+
+  proj = await h.queue.setInteractionLock('task-7', 'lock-1', false);
+  assert.deepEqual(proj.queueInteractionLocks, []);
+
+  proj = await h.queue.setEditLock('task-7', 'msg-1', true);
+  assert.deepEqual(proj.queueEditLocks, ['msg-1']);
+
+  await h.queue.enqueue('task-7', { clientId: 'a', text: 'first' });
+  await h.queue.enqueue('task-7', { clientId: 'b', text: 'second' });
+  assert.equal(proj.pendingQueue.length, 0); // before enqueue was empty
+  proj = h.queue.projection('task-7');
+  assert.equal(proj.pendingQueue.length, 1); // 'a' was dispatched, 'b' is pending
+
+  proj = await h.queue.clearSession('task-7');
+  assert.equal(proj.pendingQueue.length, 0);
 });

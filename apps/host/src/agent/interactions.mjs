@@ -64,12 +64,27 @@ export function createInteractionBroker(deps) {
     },
 
     respond(sessionId, requestId, decision) {
-      const entries = pending.get(sessionId);
-      const entry = entries?.get(String(requestId));
-      if (!entry) return false;
-      entries.delete(String(requestId));
-      entry.resolve(decision ?? { kind: 'permission', behavior: 'deny', reason: 'dismissed' });
-      return true;
+      const rid = String(requestId ?? '');
+      if (!rid) return false;
+      const fallbackDecision = decision ?? { kind: 'permission', behavior: 'deny', reason: 'dismissed' };
+      if (sessionId) {
+        const entries = pending.get(sessionId);
+        const entry = entries?.get(rid);
+        if (entry) {
+          entries.delete(rid);
+          entry.resolve(fallbackDecision);
+          return true;
+        }
+      }
+      for (const entries of pending.values()) {
+        const entry = entries.get(rid);
+        if (entry) {
+          entries.delete(rid);
+          entry.resolve(fallbackDecision);
+          return true;
+        }
+      }
+      return false;
     },
   };
 }

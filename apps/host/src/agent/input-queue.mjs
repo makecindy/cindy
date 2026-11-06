@@ -37,7 +37,15 @@ export function createInputQueue(deps) {
   function stateFor(sessionId) {
     let state = sessions.get(sessionId);
     if (!state) {
-      state = { items: [], active: null, running: false, unsubscribe: null };
+      state = {
+        items: [],
+        active: null,
+        running: false,
+        unsubscribe: null,
+        queueExpanded: false,
+        queueInteractionLocks: [],
+        queueEditLocks: [],
+      };
       sessions.set(sessionId, state);
     }
     return state;
@@ -60,10 +68,10 @@ export function createInputQueue(deps) {
       continuationInFlightClientId: null,
       continuationTurnClientId: null,
       steeringQueueClientIds: [],
-      queuePaused: false,
-      queueExpanded: false,
-      queueInteractionLocks: [],
-      queueEditLocks: [],
+      queuePaused: Boolean(state?.queuePaused),
+      queueExpanded: Boolean(state?.queueExpanded),
+      queueInteractionLocks: [...(state?.queueInteractionLocks ?? [])],
+      queueEditLocks: [...(state?.queueEditLocks ?? [])],
       queueAbortPending: false,
       error: null,
       recovery: null,
@@ -73,9 +81,15 @@ export function createInputQueue(deps) {
     };
   }
 
+  function emitProjection(sessionId) {
+    const proj = projection(sessionId);
+    deps.hub?.publish({ type: 'input_projection', sessionId, projection: proj });
+    return proj;
+  }
+
   async function dispatch(sessionId) {
     const state = stateFor(sessionId);
-    if (state.running) return;
+    if (state.running || state.queuePaused) return;
     // The running message leaves the queue: the projection's pendingQueue is
     // what is still waiting, matching the desktop renderer's expectation.
     const next = state.items.shift();
@@ -103,6 +117,7 @@ export function createInputQueue(deps) {
     deps.interactions?.attach(session, sessionId);
 
     state.running = true;
+    emitProjection(sessionId);
 
     state.unsubscribe?.();
     let finished = false;
@@ -113,6 +128,7 @@ export function createInputQueue(deps) {
       state.unsubscribe?.();
       state.unsubscribe = null;
       state.active = null;
+      emitProjection(sessionId);
       // A turn stopped before its final event still leaves what the user saw.
       if (!finalTextPersisted && assistantText.trim() && deps.persistMessage) {
         void deps.persistMessage(sessionId, {
@@ -206,6 +222,7 @@ export function createInputQueue(deps) {
         permissionMode: typeof item?.permissionMode === 'string' ? item.permissionMode : '',
         workingDir: typeof item?.workingDir === 'string' ? item.workingDir : '',
       });
+      emitProjection(sessionId);
       await dispatch(sessionId);
       return projection(sessionId);
     },
@@ -217,8 +234,9 @@ export function createInputQueue(deps) {
         state.running = false;
         state.unsubscribe?.();
         state.unsubscribe = null;
+        state.queuePaused = state.items.length > 0;
       }
-      return projection(sessionId);
+      return emitProjection(sessionId);
     },
     async steer(sessionId, item) {
       const session = deps.getMaker().getSession(sessionId);
@@ -231,11 +249,84 @@ export function createInputQueue(deps) {
     async remove(sessionId, clientId) {
       const state = sessions.get(sessionId);
       if (state) state.items = state.items.filter((entry) => entry.clientId !== clientId);
-      return projection(sessionId);
+      return emitProjection(sessionId);
+    },
+    async updateContent(sessionId, clientId, item) {
+      const state = stateFor(sessionId);
+      const index = state.items.findIndex((entry) => entry.clientId === clientId);
+      if (index !== -1) {
+        state.items[index] = {
+          ...state.items[index],
+          ...item,
+          clientId,
+          text: typeof item?.text === 'string' ? item.text : state.items[index].text,
+          persistedContent: typeof item?.persistedContent === 'string'
+            ? item.persistedContent
+            : typeof item?.text === 'string'
+              ? item.text
+              : state.items[index].persistedContent,
+        };
+      }
+      return emitProjection(sessionId);
+    },
+    async updateText(sessionId, clientId, newText) {
+      const state = stateFor(sessionId);
+      const index = state.items.findIndex((entry) => entry.clientId === clientId);
+      if (index !== -1) {
+        state.items[index] = {
+          ...state.items[index],
+          text: String(newText ?? ''),
+        };
+      }
+      return emitProjection(sessionId);
+    },
+    async move(sessionId, clientId, targetIndex) {
+      const state = stateFor(sessionId);
+      const index = state.items.findIndex((entry) => entry.clientId === clientId);
+      if (index !== -1 && typeof targetIndex === 'number' && Number.isFinite(targetIndex)) {
+        const [moved] = state.items.splice(index, 1);
+        const clampedIndex = Math.max(0, Math.min(targetIndex, state.items.length));
+        state.items.splice(clampedIndex, 0, moved);
+      }
+      return emitProjection(sessionId);
+    },
+    async setExpanded(sessionId, expanded) {
+      const state = stateFor(sessionId);
+      state.queueExpanded = Boolean(expanded);
+      return emitProjection(sessionId);
+    },
+    async setInteractionLock(sessionId, lockId, locked) {
+      const state = stateFor(sessionId);
+      if (locked) {
+        if (!state.queueInteractionLocks.includes(lockId)) {
+          state.queueInteractionLocks.push(lockId);
+        }
+      } else {
+        state.queueInteractionLocks = state.queueInteractionLocks.filter((id) => id !== lockId);
+      }
+      return emitProjection(sessionId);
+    },
+    async setEditLock(sessionId, clientId, locked) {
+      const state = stateFor(sessionId);
+      if (locked) {
+        if (!state.queueEditLocks.includes(clientId)) {
+          state.queueEditLocks.push(clientId);
+        }
+      } else {
+        state.queueEditLocks = state.queueEditLocks.filter((id) => id !== clientId);
+      }
+      return emitProjection(sessionId);
+    },
+    async clearSession(sessionId) {
+      const state = sessions.get(sessionId);
+      if (state) state.items = [];
+      return emitProjection(sessionId);
     },
     async resume(sessionId) {
+      const state = stateFor(sessionId);
+      state.queuePaused = false;
       await dispatch(sessionId);
-      return projection(sessionId);
+      return emitProjection(sessionId);
     },
   };
 }
