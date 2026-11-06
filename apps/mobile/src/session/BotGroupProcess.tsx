@@ -41,19 +41,30 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
   const observedSubscription = useRef(subscriptionIdentity);
   const [result, setResult] = useState<{ messages: BotGroupProcessMessage[]; failed: boolean }>();
   const [attempt, retry] = useState(0);
+  const [subscriptionFailed, setSubscriptionFailed] = useState(false);
   const [loading, setLoading] = useState(true);
   const projection = useMemo(() => projectBotGroupProcess(result?.messages ?? [], false), [result]);
   const title = useTeammateElapsedTitle(false, undefined, process.durationMs ?? projection.durationMs);
   useFocusEffect(useCallback(() => {
     let cancelled = false;
+    let closed = false;
+    setSubscriptionFailed(false);
     let reading = false;
     let refreshPending = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const lease = remoteSessionStore.acquireSessionMessageWork(process.sessionId, true);
     const offTopic = startFocusedTopicSubscription({ deviceId, owner: `group-history:${process.executionId}`,
-      topic: `session:${process.sessionId}`, subscribe, unsubscribe });
-    let closed = false;
-    const stopUpdates = () => { if (closed) return; closed = true; clearTimeout(timer); off(); offTopic(); lease.release(); };
+      topic: `session:${process.sessionId}`, unsubscribe,
+      subscribe: async (...args) => {
+        try {
+          await subscribe(...args);
+          if (!cancelled && !closed) setSubscriptionFailed(false);
+        } catch (error) {
+          if (!cancelled && !closed) setSubscriptionFailed(true);
+          throw error;
+        }
+      } });
+    const stopUpdates = () => { if (closed) return; closed = true; clearTimeout(timer); off(); offTopic(); lease.release(); if (!cancelled) setSubscriptionFailed(false); };
     const refresh = () => {
       if (cancelled || closed) return;
       if (reading) { refreshPending = true; return; }
@@ -102,13 +113,17 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
   useEffect(() => {
     if (observedSubscription.current === subscriptionIdentity) return;
     observedSubscription.current = subscriptionIdentity;
-    if (subscriptionIdentity !== null) refreshAfterRecovery.current?.();
+    if (subscriptionIdentity !== null) {
+      setSubscriptionFailed(false);
+      refreshAfterRecovery.current?.();
+    }
   }, [subscriptionIdentity]);
+  const failed = result?.failed || subscriptionFailed;
   // Resolve availability before advertising a disclosure, just like private chat.
-  if (!result || (!result.failed && !projection.segments.length)) return null;
+  if (!result || (!failed && !projection.segments.length)) return null;
   return <TeammateProcess id={`group-process:${process.executionId}`} title={title}>
     {loading && <ActivityIndicator color={colors.textSecondary} />}
-    {result.failed && !loading && <MainWindowActionButton action={{ label: t('message.renderer.retryPreview'), onPress: () => retry(v => v + 1) }} />}
+    {failed && !loading && <MainWindowActionButton action={{ label: t('message.renderer.retryPreview'), onPress: () => retry(v => v + 1) }} />}
     {result && <BotGroupProcessEntries messages={result.messages} id={`group-process:${process.executionId}`} deviceId={deviceId} sessionId={process.sessionId} />}
   </TeammateProcess>;
 }

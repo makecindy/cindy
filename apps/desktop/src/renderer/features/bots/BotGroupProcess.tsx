@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { SESSION_SYNC_CHANNEL } from '@cindy/device-link';
 import { projectBotGroupProcess, readBotGroupProcessMessages, type BotGroupProcessRef, type BotGroupProcessMessage, type BotGroupMemberView } from '../../../shared/botGroupChat';
 import { WorkGroupBlock, TeammateWorkSegment, type WorkGroupChild } from '@/components/chat/WorkGroupBlock';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
@@ -71,8 +72,10 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
     };
     const off = deviceId
       ? window.electronAPI.deviceLink.onRemotePush((push, stamp) => {
-        if (isDataOwnerPushCurrent(stamp) && push.deviceId === deviceId
-          && push.channel === 'local-db:messages:created') changed((push.payload as { sessionId?: string } | null)?.sessionId);
+        if (!isDataOwnerPushCurrent(stamp) || push.deviceId !== deviceId) return;
+        const payload = push.payload as { sessionId?: string; resyncRequired?: boolean } | null;
+        if (push.channel === 'local-db:messages:created'
+          || push.channel === SESSION_SYNC_CHANNEL && payload?.resyncRequired === true) changed(payload?.sessionId);
       })
       : window.electronAPI.localDb.messages.onCreated(({ sessionId }, stamp) => {
         if (isDataOwnerPushCurrent(stamp)) changed(sessionId);
