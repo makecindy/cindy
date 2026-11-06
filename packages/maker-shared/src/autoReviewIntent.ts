@@ -237,7 +237,7 @@ export function createAutoReviewIntentProjection() {
       return candidate;
     // Keep only the newest contiguous messages so a kept grant never outlives a dropped later
     // restriction; flag the gap and never sample the latest text. Trimming down to half the
-    // budget leaves later appends prefix-stable, so reviewer prompt caches survive many turns.
+    // budget leaves later appends prefix-stable, which lets a provider that caches prefixes reuse them.
     const omitted = {
       earlierUserMessages: [] as string[],
       currentUserMessage,

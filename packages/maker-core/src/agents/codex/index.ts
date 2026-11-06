@@ -3685,8 +3685,10 @@ assertRouteCurrent();
     {
       const push = eventQueue.push.bind(eventQueue);
       eventQueue.push = (event) => {
-        autoReviewAgentText.observe(event);
-        return push(event);
+        // Only events the queue accepted count: a refused (ended-queue) event never reaches the user.
+        const accepted = push(event);
+        if (accepted) autoReviewAgentText.observe(event);
+        return accepted;
       };
     }
     const usageTracker = new UsageTracker();

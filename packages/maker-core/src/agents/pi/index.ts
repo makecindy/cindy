@@ -4179,8 +4179,10 @@ export class PiAgent extends BaseAgent {
     {
       const push = queue.push.bind(queue);
       queue.push = (event) => {
-        autoReviewAgentText.observe(event);
-        return push(event);
+        // Only events the queue accepted count: a refused (ended-queue) event never reaches the user.
+        const accepted = push(event);
+        if (accepted) autoReviewAgentText.observe(event);
+        return accepted;
       };
     }
     const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger);
