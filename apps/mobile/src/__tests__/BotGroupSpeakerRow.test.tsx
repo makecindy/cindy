@@ -129,12 +129,16 @@ it('does not subscribe without a lane or while the computer is offline', async (
   expect(h.invoke).not.toHaveBeenCalled();
 });
 
-// Regression: a group lane must open its original task on the correct computer.
-it('opens the ordinary task with no companion wrapper or new execution', async () => {
-  await render({ sessionId: 'group-lane', deviceId: 'studio', online: false });
+// Product decision: hide the whole-task shortcut; keep the execution's stop footer usable.
+it('hides original-task navigation while keeping the group stop action available', async () => {
+  const stop = vi.fn();
+  await render({ sessionId: 'group-lane', deviceId: 'studio', online: false,
+    footer: el('button', { onClick: stop }, 'Stop') });
   h.invoke.mockClear();
+  expect(node.textContent).not.toContain(i18n.t('groupChat.progress.viewProcess'));
   await act(async () => node.querySelector('button')!.click());
-  expect(h.push).toHaveBeenCalledWith({ pathname: '/sessions/[sessionId]', params: { sessionId: 'group-lane', deviceId: 'studio' } });
+  expect(stop).toHaveBeenCalledOnce();
+  expect(h.push).not.toHaveBeenCalled();
   expect(h.invoke).not.toHaveBeenCalled();
 });
 

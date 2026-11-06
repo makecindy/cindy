@@ -12,11 +12,10 @@ import { useRemoteSessionMessages } from './remoteSessionStore';
  */
 import { useCallback, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import type { BotGroupSpeakerActivity, BotGroupSpeaker } from '@cindy/maker-shared/botGroupChat';
 import { Text } from '@/components/AppText';
-import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 import { useThemedStyles, type ThemeColors } from '@/theme';
@@ -47,7 +46,6 @@ export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, on
   onError(message: string | null): void;
 }) {
   const { t } = useTranslation();
-  const router = useRouter();
   const styles = useThemedStyles(makeStyles);
   const { invoke, subscribe, unsubscribe } = useDeviceLink();
   const lane = revealWaiting && executionStatus !== 'queued' ? sessionId ?? '' : '';
@@ -92,13 +90,7 @@ export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, on
         companionIdentity={{ name: identity.name, avatar: <BotGroupAvatar deviceId={deviceId} identity={identity} size={BOT_GROUP_INLINE_AVATAR_SIZE} online={online} /> }}
         deviceId={deviceId} sessionId={lane} interactions={pending} onError={onError} />
         : null}
-      {(lane && deviceId) || footer ? <View style={styles.actions}>
-        {lane && deviceId ? <MainWindowActionButton density="compact" style={styles.quietAction} action={{
-          label: t('groupChat.progress.viewProcess'),
-          onPress: () => router.push({ pathname: '/sessions/[sessionId]', params: { sessionId: lane, deviceId } }),
-        }} /> : null}
-        {footer}
-      </View> : null}
+      {footer ? <View style={styles.actions}>{footer}</View> : null}
     </View>
   </View>;
 }
@@ -110,7 +102,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   processName: { color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
   processState: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   actions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs },
-  quietAction: { backgroundColor: 'transparent', borderWidth: 0 },
   statusText: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
 });
 
