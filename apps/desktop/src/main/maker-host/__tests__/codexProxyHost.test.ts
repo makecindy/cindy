@@ -8559,14 +8559,19 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
       for (const route of routes) {
         const endpoint = host.getCodexCustomContextProxyEndpoint('byok-image-test');
         for (const operation of ['generations', 'edits']) {
+          // Regression: the frozen BYOK route must forward client admission metadata,
+          // but never account identity. The existing HTTP fixture did not send either.
           const response = await fetch(`${endpoint}/_cindy/custom-provider/${route.routeId}/images/${operation}`, {
-            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+            method: 'POST', headers: { 'content-type': 'application/json',
+              originator: 'cindy', 'chatgpt-account-id': 'fake-account' }, body: JSON.stringify(payload),
           });
           expect(response.status).toBe(200);
           await response.text();
           const request = received.at(-1)!;
           expect(request.path).toBe(`/v1/images/${operation}`);
           expect(request.headers.authorization).toBe(`Bearer fake-${route.providerId}`);
+          expect(request.headers.originator).toBe('cindy');
+          expect(request.headers).not.toHaveProperty('chatgpt-account-id');
           expect(JSON.parse(request.body.toString())).toEqual({ ...payload, model: `${route.providerId}/gpt-image-2` });
           expect(request.headers['content-length']).toBe(String(request.body.length));
         }
