@@ -7,8 +7,10 @@
  * 描述不出来时退回原文案(而不是编一个范围),以及按钮的授权载荷一字不改地转发 agent
  * 建议 —— 文案怎么写都不该动实际授权内容。
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { useRef, useState } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PendingPermission } from '@/lib/makerChatStore';
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../../shared/providerShareCredentialConsent';
@@ -33,8 +35,17 @@ vi.mock('@/components/ui/tooltip', () => ({
 }));
 
 import { PermissionPrompt } from '../PermissionPrompt';
+import { InteractionPromptHost } from '@/components/interaction-portal';
+import { setSlotElement } from '@/components/interaction-portal/store';
+import { useSessionSwitchFocusIntent } from '@/features/cc-agent/useSessionSwitchFocusIntent';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { useSettingsEscape } from '@/components/settings/useSettingsEscape';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 
 afterEach(cleanup);
+
+// 本地已有切换时挂起的请求，不走 Host 查询。
+const noHostQuery = () => Promise.resolve([]);
 
 const bashRule = {
   type: 'addRules',
@@ -226,5 +237,572 @@ describe('PermissionPrompt 的插件安装确认', () => {
     expect(list.textContent).not.toContain('版本 1.0.0');
     expect(screen.queryByText(/weather-chip/)).toBeNull();
     expect(screen.queryByRole('button', { name: /alwaysAllow/ })).toBeNull();
+  });
+});
+
+describe('PermissionPrompt 切换任务后聚焦「允许一次」', () => {
+  it('autoFocus 时把焦点从侧栏行移到「允许一次」，回车即允许一次', () => {
+    const sidebarRow = document.createElement('div');
+    sidebarRow.tabIndex = 0;
+    document.body.append(sidebarRow);
+    sidebarRow.focus();
+    const onRespond = vi.fn();
+    const onAutoFocusHandled = vi.fn();
+    render(
+      <PermissionPrompt
+        permission={permission()}
+        onRespond={onRespond}
+        autoFocus
+        onAutoFocusHandled={onAutoFocusHandled}
+      />,
+    );
+    const allowOnce = screen.getByRole('button', { name: /allowOnce/ });
+    expect(document.activeElement).toBe(allowOnce);
+    expect(onAutoFocusHandled).toHaveBeenCalledTimes(1);
+    fireEvent.click(allowOnce);
+    expect(onRespond).toHaveBeenCalledWith({ behavior: 'allow' });
+    sidebarRow.remove();
+  });
+
+  it('不传 autoFocus 时不动焦点', () => {
+    render(<PermissionPrompt permission={permission()} onRespond={vi.fn()} />);
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('焦点在别处的输入框或菜单里时不抢焦点，但仍消费意图', () => {
+    const search = document.createElement('input');
+    document.body.append(search);
+    search.focus();
+    const onAutoFocusHandled = vi.fn();
+    render(
+      <PermissionPrompt
+        permission={permission()}
+        onRespond={vi.fn()}
+        autoFocus
+        onAutoFocusHandled={onAutoFocusHandled}
+      />,
+    );
+    expect(document.activeElement).toBe(search);
+    expect(onAutoFocusHandled).toHaveBeenCalledTimes(1);
+    search.remove();
+  });
+
+  // 右栏浏览器是 <webview>：用户点进去打字时，宿主文档里只看到焦点在 webview 元素上，
+  // 访客页面的按键本窗口收不到，切换意图也就撤销不了。确认卡这时不能把焦点抢出来。
+  it.each(['webview', 'iframe'])('焦点在内嵌页面（%s）里时不抢焦点，但仍消费意图', (tag) => {
+    const guest = document.createElement(tag);
+    guest.tabIndex = 0;
+    document.body.append(guest);
+    guest.focus();
+    expect(document.activeElement).toBe(guest);
+    const onAutoFocusHandled = vi.fn();
+    render(
+      <PermissionPrompt
+        permission={permission()}
+        onRespond={vi.fn()}
+        autoFocus
+        onAutoFocusHandled={onAutoFocusHandled}
+      />,
+    );
+    expect(document.activeElement).toBe(guest);
+    expect(onAutoFocusHandled).toHaveBeenCalledTimes(1);
+    guest.remove();
+  });
+
+  it('提交中按钮不可聚焦时先保留意图，提交结束后再聚焦', () => {
+    const onAutoFocusHandled = vi.fn();
+    const request = permission();
+    const { rerender } = render(
+      <PermissionPrompt
+        permission={{ ...request, submitting: true }}
+        onRespond={vi.fn()}
+        autoFocus
+        onAutoFocusHandled={onAutoFocusHandled}
+      />,
+    );
+    expect(onAutoFocusHandled).not.toHaveBeenCalled();
+    rerender(
+      <PermissionPrompt
+        permission={{ ...request, submitting: false, submissionFailed: true }}
+        onRespond={vi.fn()}
+        autoFocus
+        onAutoFocusHandled={onAutoFocusHandled}
+      />,
+    );
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /allowOnce/ }));
+    expect(onAutoFocusHandled).toHaveBeenCalledTimes(1);
+  });
+});
+
+// 从文件页（/cc-agent/files/:id）切到等授权的任务：旧路由的 InteractionPromptSlot 在被动
+// cleanup 前仍登记着，新视图的卡片先被 portal 进一个已脱离文档的节点，聚焦不会生效；
+// 等 slot 注销、卡片回到行内重新挂载后，意图必须还在，焦点才能落到「允许一次」。
+describe('PermissionPrompt 经交互卡 portal 切换路由', () => {
+  function SwitchedView() {
+    const intent = useSessionSwitchFocusIntent('task-b', true, 'req-1', noHostQuery);
+    return (
+      <InteractionPromptHost hasInteraction>
+        <PermissionPrompt
+          permission={permission()}
+          onRespond={vi.fn()}
+          autoFocus={intent.armed}
+          onAutoFocusHandled={intent.consume}
+        />
+      </InteractionPromptHost>
+    );
+  }
+
+  afterEach(() => setSlotElement(null));
+
+  // 文件页聊天栏里在任务链接上按住 Enter 打开等授权的任务：链接随旧视图卸载，焦点落到
+  // body，卡片还在已脱离的 slot 里，但 window 上的快捷键已经生效。这期间的连发不能替用户
+  // 批准（带 Ctrl 的也不能变成「本对话都允许」）；卡片回到行内后还要一次新的按键。
+  it.each([
+    ['Enter', '{Enter>4}', '{/Enter}'],
+    ['Ctrl+Enter', '{Control>}{Enter>4}', '{/Enter}{/Control}'],
+  ])('卡片在已脱离的 slot 里时，按住 %s 打开任务的连发不批准', async (_name, hold, release) => {
+    const user = userEvent.setup();
+    const onRespond = vi.fn();
+    const staleSlot = document.createElement('div');
+    setSlotElement(staleSlot);
+    function LinkSwitch() {
+      const [switched, setSwitched] = useState(false);
+      const intent = useSessionSwitchFocusIntent(switched ? 'task-b' : 'task-a', true, switched ? 'req-1' : null, noHostQuery);
+      return switched ? (
+        <InteractionPromptHost hasInteraction>
+          <PermissionPrompt
+            permission={permission([bashRule])}
+            onRespond={onRespond}
+            autoFocus={intent.armed}
+            onAutoFocusHandled={intent.consume}
+          />
+        </InteractionPromptHost>
+      ) : (
+        <button
+          type="button"
+          data-split-pane-route-action=""
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              setSwitched(true);
+            }
+          }}
+        >
+          task-link
+        </button>
+      );
+    }
+    render(<LinkSwitch />);
+    screen.getByRole('button', { name: 'task-link' }).focus();
+
+    await user.keyboard(hold);
+    expect(staleSlot.isConnected).toBe(false);
+    expect(onRespond).not.toHaveBeenCalled();
+
+    act(() => setSlotElement(null));
+    const allowOnce = screen.getByRole('button', { name: /allowOnce/ });
+    expect(document.activeElement).toBe(allowOnce);
+    await user.keyboard(release);
+    expect(onRespond).not.toHaveBeenCalled();
+
+    await user.keyboard('{Enter}');
+    expect(onRespond).toHaveBeenCalledWith({ behavior: 'allow' });
+  });
+
+  it('卡片先渲染进已脱离的 slot 时保留意图，回到行内后聚焦「允许一次」', () => {
+    const staleSlot = document.createElement('div');
+    setSlotElement(staleSlot);
+    render(<SwitchedView />);
+    expect(staleSlot.isConnected).toBe(false);
+    expect(document.activeElement).toBe(document.body);
+
+    act(() => setSlotElement(null));
+
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /allowOnce/ }));
+  });
+});
+
+// 收起侧栏的搜索弹层里选中一个等授权的任务：同一事件里关闭弹层并切换。真实的 Radix
+// Popover 要等退场动画播完才卸载，这期间焦点还在弹层里的结果上；卸载后焦点还给搜索按钮。
+// 意图必须撑过这段时间，焦点最终落到「允许一次」，而不是停在搜索按钮上。
+describe('PermissionPrompt 经搜索弹层切换任务', () => {
+  // jsdom 不播动画。按 data-state 给出 popover.tsx 的 float-in / float-out 动画名，
+  // Radix Presence 就会像真实环境那样等 animationend 才卸载内容（做法同
+  // MyPluginsPage.test.tsx）。jsdom 也没有 CSS.escape，动画名都是普通标识符。
+  beforeEach(() => {
+    vi.stubGlobal('CSS', { escape: (value: string) => value });
+    const computedStyle = window.getComputedStyle.bind(window);
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((element) => {
+      const style = computedStyle(element);
+      if (element.hasAttribute('data-state')) {
+        Object.defineProperty(style, 'animationName', {
+          get: () => (element.getAttribute('data-state') === 'closed' ? 'float-out' : 'float-in'),
+        });
+      }
+      return style;
+    });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  function SearchSwitch({ onRespond = vi.fn() }: { onRespond?: (r: unknown) => void }) {
+    const [open, setOpen] = useState(false);
+    const [taskId, setTaskId] = useState('task-a');
+    const intent = useSessionSwitchFocusIntent(taskId, true, taskId === 'task-b' ? 'req-1' : null, noHostQuery);
+    return (
+      <>
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger>search</PopoverTrigger>
+          <PopoverContent data-testid="search-popover">
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                setTaskId('task-b');
+              }}
+            >
+              result
+            </button>
+          </PopoverContent>
+        </Popover>
+        {taskId === 'task-b' ? (
+          <PermissionPrompt
+            permission={permission([bashRule])}
+            onRespond={onRespond}
+            autoFocus={intent.armed}
+            onAutoFocusHandled={intent.consume}
+          />
+        ) : null}
+      </>
+    );
+  }
+
+  it('弹层退场期间保留意图，焦点归还后落到「允许一次」', async () => {
+    render(<SearchSwitch />);
+    // 像真实收起侧栏那样从搜索按钮打开，Radix 关闭后把焦点还给它。
+    const trigger = screen.getByRole('button', { name: 'search' });
+    act(() => trigger.focus());
+    act(() => trigger.click());
+    const result = screen.getByRole('button', { name: 'result' });
+    act(() => result.focus());
+    // 不经 pointer / 键盘事件触发（那些本身会撤销意图），只看关闭 + 切换的时序。
+    act(() => result.click());
+    const popover = screen.getByTestId('search-popover');
+    expect(popover.getAttribute('data-state')).toBe('closed');
+    expect(document.activeElement).toBe(result);
+
+    const end = new Event('animationend', { bubbles: true });
+    Object.defineProperty(end, 'animationName', { value: 'float-out' });
+    act(() => {
+      fireEvent(popover, end);
+    });
+
+    expect(result.isConnected).toBe(false);
+    // Radix 在卸载后的下一个 tick 把焦点还给搜索按钮。
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(document.activeElement).not.toBe(trigger);
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /allowOnce/ }));
+  });
+
+  // 在结果上按住 Enter 选中：弹层卸载后、焦点还回来之前，焦点会短暂落到 body，卡片的
+  // window 快捷键此时已生效；这段空档里仍在重复的 Enter 不能替用户「允许一次」。
+  it('按住 Enter 选中搜索结果，弹层卸载到焦点归还之间的重复不批准', async () => {
+    const onRespond = vi.fn();
+    render(<SearchSwitch onRespond={onRespond} />);
+    const trigger = screen.getByRole('button', { name: 'search' });
+    act(() => trigger.focus());
+    act(() => trigger.click());
+    const result = screen.getByRole('button', { name: 'result' });
+    act(() => result.focus());
+    act(() => result.click());
+    const popover = screen.getByTestId('search-popover');
+    fireEvent.keyDown(result, { key: 'Enter', repeat: true });
+
+    const end = new Event('animationend', { bubbles: true });
+    Object.defineProperty(end, 'animationName', { value: 'float-out' });
+    act(() => {
+      fireEvent(popover, end);
+    });
+    expect(result.isConnected).toBe(false);
+    expect(document.activeElement).toBe(document.body);
+    fireEvent.keyDown(document.body, { key: 'Enter', repeat: true });
+    fireEvent.keyDown(document.body, { key: 'Enter', repeat: true, ctrlKey: true });
+    expect(onRespond).not.toHaveBeenCalled();
+
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    const allowOnce = screen.getByRole('button', { name: /allowOnce/ });
+    expect(document.activeElement).toBe(allowOnce);
+    fireEvent.keyDown(allowOnce, { key: 'Enter', repeat: true, ctrlKey: true });
+    fireEvent.keyUp(allowOnce, { key: 'Enter' });
+    expect(onRespond).not.toHaveBeenCalled();
+
+    // 新的一次按键照常生效。
+    fireEvent.keyDown(allowOnce, { key: 'Enter', ctrlKey: true });
+    expect(onRespond).toHaveBeenCalledWith(
+      expect.objectContaining({ decisionClassification: 'user_permanent' }),
+    );
+  });
+});
+
+// 键盘切换：在侧栏行上按住 Enter，第一次 keydown 切任务、焦点随即落到「允许一次」；
+// 同一次按住产生的重复 keydown（以及最后的松开）不能激活按钮或卡片快捷键，替用户批准。
+// 分屏里已挂载的非主 pane：用户直接 Tab 到它授权卡上的「拒绝」，焦点进入 pane 让它成为
+// 主视图、切换意图随之武装。用户已经选定了「拒绝」，焦点不能被挪到「允许一次」，否则
+// 下一下回车就成了批准。
+describe('PermissionPrompt 焦点已在卡片控件上时不改道', () => {
+  function SplitPaneCard({ onRespond }: { onRespond: (r: unknown) => void }) {
+    const [owner, setOwner] = useState(false);
+    const intent = useSessionSwitchFocusIntent('task-b', owner, 'req-1', noHostQuery);
+    return (
+      <>
+        <button type="button">pane-a</button>
+        <div onFocusCapture={() => setOwner(true)}>
+          <PermissionPrompt
+            permission={permission([bashRule])}
+            onRespond={onRespond}
+            autoFocus={intent.armed}
+            onAutoFocusHandled={intent.consume}
+          />
+        </div>
+      </>
+    );
+  }
+
+  it('Tab 到「拒绝」使 pane 成为主视图后，焦点留在「拒绝」，回车即拒绝', async () => {
+    const user = userEvent.setup();
+    const onRespond = vi.fn();
+    render(<SplitPaneCard onRespond={onRespond} />);
+    screen.getByRole('button', { name: 'pane-a' }).focus();
+
+    await user.tab();
+    const deny = screen.getByRole('button', { name: /deny/ });
+    expect(document.activeElement).toBe(deny);
+    await user.keyboard('{Enter}');
+    expect(onRespond).toHaveBeenCalledTimes(1);
+    expect(onRespond).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'deny' }));
+  });
+});
+
+// 按住 Esc 退出设置：设置页只认首个 keydown（连发被它忽略），导航回到等授权的任务后，
+// 同一次按住的连发会落到授权卡的 Esc 快捷键上。经真实 useSettingsEscape 与路由切换验证
+// 这些连发不会替用户拒绝。
+describe('PermissionPrompt 按住 Esc 退出设置后不替用户拒绝', () => {
+  function SettingsPage() {
+    const ref = useRef<HTMLDivElement | null>(null);
+    const navigate = useNavigate();
+    useSettingsEscape(ref, true, () => navigate('/task-b'));
+    return <div ref={ref}>settings</div>;
+  }
+
+  function TaskPage({ onRespond }: { onRespond: (r: unknown) => void }) {
+    const intent = useSessionSwitchFocusIntent('task-b', true, 'req-1', noHostQuery);
+    return (
+      <PermissionPrompt
+        permission={permission([bashRule])}
+        onRespond={onRespond}
+        autoFocus={intent.armed}
+        onAutoFocusHandled={intent.consume}
+      />
+    );
+  }
+
+  it('连发的 Esc 不拒绝；松开后再按一次才拒绝', async () => {
+    const user = userEvent.setup();
+    const onRespond = vi.fn();
+    render(
+      <MemoryRouter initialEntries={['/settings']}>
+        <Routes>
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/task-b" element={<TaskPage onRespond={onRespond} />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.keyboard('{Escape>4}');
+    expect(screen.getByRole('button', { name: /allowOnce/ })).toBeTruthy();
+    await user.keyboard('{/Escape}');
+    expect(onRespond).not.toHaveBeenCalled();
+
+    await user.keyboard('{Escape}');
+    expect(onRespond).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'deny' }));
+  });
+});
+
+// 共享任务访客：等授权时输入框仍和授权卡一起显示，切到任务时视图自己把焦点放进输入框
+// （本地挂起请求还没重建），随后授权卡才出现。这个焦点不是用户在打字，授权卡仍要接管；
+// 用户切换后真的在输入框里按过键时，意图已撤销，焦点留在输入框。
+describe('PermissionPrompt 本视图输入框的自动聚焦', () => {
+  function GuestView({ pending }: { pending: string | null }) {
+    const intent = useSessionSwitchFocusIntent('task-b', true, pending, () =>
+      Promise.resolve([{ requestId: 'req-1', pendingForMs: 60_000 }]),
+    );
+    return (
+      <div data-cc-agent-session-view="">
+        {pending ? (
+          <PermissionPrompt
+            permission={permission([bashRule])}
+            onRespond={vi.fn()}
+            autoFocus={intent.armed}
+            onAutoFocusHandled={intent.consume}
+          />
+        ) : null}
+        <div data-chat-input-root="">
+          <div contentEditable suppressContentEditableWarning aria-label="composer" tabIndex={0} />
+        </div>
+      </div>
+    );
+  }
+
+  // jsdom 没有实现 isContentEditable；真实输入框是 TipTap 的 contenteditable。
+  function composerElement() {
+    const composer = screen.getByLabelText('composer');
+    Object.defineProperty(composer, 'isContentEditable', { value: true });
+    return composer;
+  }
+
+  it('视图自动聚焦的输入框不挡授权卡接管焦点', async () => {
+    const { rerender } = render(<GuestView pending={null} />);
+    const composer = composerElement();
+    composer.focus();
+    await act(async () => {});
+    rerender(<GuestView pending="req-1" />);
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /allowOnce/ }));
+  });
+
+  it('用户切换后在输入框里按过键时焦点留在输入框', async () => {
+    const { rerender } = render(<GuestView pending={null} />);
+    const composer = composerElement();
+    composer.focus();
+    await act(async () => {});
+    fireEvent.keyDown(composer, { key: 'a' });
+    rerender(<GuestView pending="req-1" />);
+    expect(document.activeElement).toBe(composer);
+  });
+});
+
+describe('PermissionPrompt 键盘切换时不替按住的按键批准', () => {
+  function SidebarSwitch({ onRespond }: { onRespond: (r: unknown) => void }) {
+    const [switched, setSwitched] = useState(false);
+    const intent = useSessionSwitchFocusIntent(switched ? 'task-b' : 'task-a', switched, 'req-1', noHostQuery);
+    return (
+      <>
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label="sidebar-row"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              setSwitched(true);
+            }
+          }}
+        />
+        {switched ? (
+          <PermissionPrompt
+            permission={permission([bashRule])}
+            onRespond={onRespond}
+            autoFocus={intent.armed}
+            onAutoFocusHandled={intent.consume}
+          />
+        ) : null}
+      </>
+    );
+  }
+
+  it.each([
+    ['Enter', '{Enter>4}'],
+    ['Ctrl+Enter', '{Control>}{Enter>4}'],
+    ['Space', '{ >4}'],
+  ])('按住 %s 切换后，重复与松开都不批准；再按一次才生效', async (_name, hold) => {
+    const user = userEvent.setup();
+    const onRespond = vi.fn();
+    render(<SidebarSwitch onRespond={onRespond} />);
+    screen.getByRole('button', { name: 'sidebar-row' }).focus();
+
+    await user.keyboard(hold);
+    const allowOnce = screen.getByRole('button', { name: /allowOnce/ });
+    expect(document.activeElement).toBe(allowOnce);
+    await user.keyboard('{/Enter}{/ }{/Control}');
+    expect(onRespond).not.toHaveBeenCalled();
+
+    await user.keyboard('{Enter}');
+    expect(onRespond).toHaveBeenCalledWith({ behavior: 'allow' });
+  });
+
+  // 真实顺序：键盘切换后确认卡要等挂起交互异步重建才出现，期间用户可能同时按着 Enter
+  // 和空格。卡片出现前的重复不能撤销意图；卡片拿到焦点后，先松开其中一个键也不能放行
+  // 另一个仍在重复的键。
+  it('确认卡晚到且 Enter、空格同时按着时，松开其一后另一个的重复不批准', () => {
+    const onRespond = vi.fn();
+    function DelayedPrompt() {
+      const intent = useSessionSwitchFocusIntent('task-b', true, 'req-1', noHostQuery);
+      const [restored, setRestored] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setRestored(true)}>
+            restore
+          </button>
+          {restored ? (
+            <PermissionPrompt
+              permission={permission([bashRule])}
+              onRespond={onRespond}
+              autoFocus={intent.armed}
+              onAutoFocusHandled={intent.consume}
+            />
+          ) : null}
+        </>
+      );
+    }
+    render(<DelayedPrompt />);
+    // 卡片出现前：两个键都在重复。
+    fireEvent.keyDown(window, { key: 'Enter', repeat: true });
+    fireEvent.keyDown(window, { key: ' ', repeat: true });
+    // 重建完成（用不经 pointer / 键盘的方式触发，免得本身撤销意图）。
+    act(() => {
+      (screen.getByRole('button', { name: 'restore' }) as HTMLButtonElement).click();
+    });
+    const allowOnce = screen.getByRole('button', { name: /allowOnce/ });
+    expect(document.activeElement).toBe(allowOnce);
+
+    fireEvent.keyUp(allowOnce, { key: ' ' });
+    fireEvent.keyDown(allowOnce, { key: 'Enter', repeat: true });
+    fireEvent.keyDown(allowOnce, { key: 'Enter', repeat: true, ctrlKey: true });
+    fireEvent.keyUp(allowOnce, { key: 'Enter' });
+    expect(onRespond).not.toHaveBeenCalled();
+
+    // 卡片自己处理的 Ctrl+Enter 能直接看出保护已解除（普通 Enter 交给按钮原生激活，
+    // jsdom 不模拟）。
+    fireEvent.keyDown(allowOnce, { key: 'Enter', ctrlKey: true });
+    expect(onRespond).toHaveBeenCalledWith(
+      expect.objectContaining({ decisionClassification: 'user_permanent' }),
+    );
+  });
+
+  // 按住 Enter 切换后、松开前再按下 Ctrl：修饰键不能解除保护，仍在重复的 Enter（此时带
+  // ctrlKey）不能变成「本对话都允许」。userEvent 无法表达「Enter 一直按着再按 Ctrl」
+  // （再写 {Enter>} 会先松开再按），所以按真实事件顺序逐个派发。
+  it('按住 Enter 切换后补按 Ctrl，继续重复的 Enter 不批准本对话', () => {
+    const onRespond = vi.fn();
+    render(<SidebarSwitch onRespond={onRespond} />);
+    const row = screen.getByRole('button', { name: 'sidebar-row' });
+    row.focus();
+    fireEvent.keyDown(row, { key: 'Enter' });
+    const allowOnce = screen.getByRole('button', { name: /allowOnce/ });
+    expect(document.activeElement).toBe(allowOnce);
+
+    fireEvent.keyDown(allowOnce, { key: 'Enter', repeat: true });
+    fireEvent.keyDown(allowOnce, { key: 'Control', ctrlKey: true });
+    fireEvent.keyDown(allowOnce, { key: 'Enter', repeat: true, ctrlKey: true });
+    fireEvent.keyDown(allowOnce, { key: 'Enter', repeat: true, ctrlKey: true });
+    expect(onRespond).not.toHaveBeenCalled();
+
+    // 松开后重新按下 Ctrl+Enter 是一次主动操作，照常生效。
+    fireEvent.keyUp(allowOnce, { key: 'Enter', ctrlKey: true });
+    fireEvent.keyDown(allowOnce, { key: 'Enter', ctrlKey: true });
+    expect(onRespond).toHaveBeenCalledWith(
+      expect.objectContaining({ decisionClassification: 'user_permanent' }),
+    );
   });
 });

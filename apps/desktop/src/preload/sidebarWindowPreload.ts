@@ -707,8 +707,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:agent-task:stop', sessionId, taskId),
     controlPiSubagent: (input: unknown): Promise<unknown> =>
       ipcRenderer.invoke('maker:pi-subagent:control', input),
-    getPendingInteractions: (sessionId: string): Promise<unknown> =>
-      ipcRenderer.invoke('maker:get-pending-interactions', sessionId),
+    getPendingInteractions: (sessionId: string, options?: { includeAge?: boolean }): Promise<unknown> =>
+      options
+        ? ipcRenderer.invoke('maker:get-pending-interactions', sessionId, options)
+        : ipcRenderer.invoke('maker:get-pending-interactions', sessionId),
   },
   /** 涓荤獥鎺ㄩ€?RSB 娴忚鍣ㄦ寜閿懡浠?鈱樷嚙鈫?绛?鍒板瓙绐楀彛銆?*/
   search: {

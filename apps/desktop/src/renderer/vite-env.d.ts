@@ -6630,11 +6630,15 @@ interface ElectronAPI {
       value: string;
     }) => Promise<void>;
 
-    /** 快照:某会话当前挂起交互(permission/ask/plan),打开/重连/刷新会话时拉一次重建面板。 */
-    getPendingInteractions: (sessionId: string) => Promise<
+    /**
+     * 快照:某会话当前挂起交互(permission/ask/plan),打开/重连/刷新会话时拉一次重建面板。
+     * includeAge 时 agent 交互附带 pendingForMs(Host 上已挂起多久);旧 Host 不带该字段。
+     */
+    getPendingInteractions: (sessionId: string, options?: { includeAge?: boolean }) => Promise<
       Array<{
         request: { kind: string; requestId: string; [k: string]: unknown };
         persistId?: string;
+        pendingForMs?: number;
       }>
     >;
     /** Detached Bot workbench only: approve its current local permission row. */

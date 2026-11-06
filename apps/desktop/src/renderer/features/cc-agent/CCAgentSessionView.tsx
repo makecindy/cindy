@@ -140,6 +140,10 @@ import {
   tryRequestFollowLatest,
 } from '@/components/chat/autoFollowIntent';
 import { useComposerOverlayMetrics } from './useComposerOverlayMetrics';
+import {
+  queryHostPendingPermissions,
+  useSessionSwitchFocusIntent,
+} from './useSessionSwitchFocusIntent';
 import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
 import {
   shareSelectionStore,
@@ -1943,6 +1947,23 @@ function CCAgentSessionContent({
     updateQueueItemContent,
     chatDisplaySnapshot,
   } = useCCAgentChat(sessionId, handleTitleUpdate, { chatRealtime });
+  // 从侧栏等入口切到这个任务时，若它正等着授权，把焦点交给确认卡，直接按键就能处理。
+  // 只有拥有路由的主视图这样做；分屏非主 pane、文件页 rail、只读回查都不抢焦点。
+  // 只交接切换那一刻已挂起的请求：本地还没重建时向任务所在的 Host 查一次。归属
+  // （本机 / 哪台被控端）没解析前不查，否则远程任务刷新后会问到本机、拿到空列表。
+  const pendingPermissionQuery = useMemo(
+    () =>
+      rightSidebarDeviceLinkDeviceId === undefined
+        ? null
+        : (id: string) => queryHostPendingPermissions(rightSidebarDeviceLinkDeviceId, id),
+    [rightSidebarDeviceLinkDeviceId],
+  );
+  const permissionSwitchFocus = useSessionSwitchFocusIntent(
+    sessionId,
+    ownsRoute && viewVisible && !disableAutofocus && !readOnly,
+    pendingPermission?.requestId ?? null,
+    pendingPermissionQuery,
+  );
   useBotIslandVisibleSession(
     viewVisible && session?.id === sessionId && historyLoaded ? sessionId ?? null : null,
     ownsWindowRoute && !isCompactRail && !isOrcaMode,
@@ -6036,6 +6057,8 @@ function CCAgentSessionContent({
                     permission={pendingPermission}
                     companion={botChatIdentity}
                     onRespond={respondToPermission}
+                    autoFocus={permissionSwitchFocus.armed}
+                    onAutoFocusHandled={permissionSwitchFocus.consume}
                   />
                 ) : pendingAskUser ? (
                   <AskUserQuestionPrompt
@@ -6524,6 +6547,8 @@ function CCAgentSessionContent({
     <div
       ref={containerRef}
       data-plugin-ui-session={sessionId}
+      // PermissionPrompt 据此认出「本视图自己的输入框」，见 isOwnViewComposer。
+      data-cc-agent-session-view=""
       className={cn('relative h-full w-full', isCompact && 'chat-rail-compact')}
     >
       {/* TopRightChipStackProvider 必须包住 MessageStream(消费 slot 的后代)

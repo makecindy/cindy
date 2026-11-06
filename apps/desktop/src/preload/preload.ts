@@ -7666,14 +7666,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // 快照:某会话当前挂起的交互(permission/ask/plan)。打开/重连/刷新会话时拉一次重建面板
     // —— pending 状态原本只由实时 INTERACTION_REQUEST push 设置,后加入的窗口靠它补回。
+    // includeAge: 每条 agent 交互附带 pendingForMs(Host 上已挂起多久),切换任务后聚焦用。
     getPendingInteractions: (
       sessionId: string,
+      options?: { includeAge?: boolean },
     ): Promise<
       Array<{
         request: { kind: string; requestId: string; [k: string]: unknown };
         persistId?: string;
+        pendingForMs?: number;
       }>
-    > => ipcRenderer.invoke('maker:get-pending-interactions', sessionId),
+    > =>
+      options
+        ? ipcRenderer.invoke('maker:get-pending-interactions', sessionId, options)
+        : ipcRenderer.invoke('maker:get-pending-interactions', sessionId),
 
     // ── 运行时切换 (Stage 2 B) ─────────────────────────────────────────────
     // session 不存在(没 send 过/已 close)时 main 侧 no-op,renderer 可乐观调用。

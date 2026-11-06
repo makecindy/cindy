@@ -76,6 +76,16 @@ O 只向声明能力的 M 发送。M 复用该次服务端委托核验，按已�
 旧端保留原先绑定确认流程；新版任务的 Fast ACK 暂时失败不阻止普通速度执行。
 官方和自建 relay 只透传既有消息，无新帧或 relay 行为，无需中转／服务端升级。
 
+## 挂起交互快照的已挂起时长（2026-11-05）
+
+`maker:get-pending-interactions` 可选追加第二个参数 `{ includeAge: true }`。带上时，Host 为每条
+Agent 交互（permission / ask_user_question / plan_review）附加 `pendingForMs`：按 Host 单调时钟
+计算的已挂起毫秒数，不暴露绝对时间。Host 自有的确认卡不带该字段。Desktop 控制端在切换任务后
+用它判断授权请求是否在切换前就已挂起，只有这样的请求才接管焦点。不带参数时返回形状不变，
+Mobile 与旧控制端不受影响；旧 Host 忽略多出的参数、不返回该字段，新控制端按「时长未知」
+处理，不自动聚焦。共享任务访客沿用原 `history.read` 授权，参数不含会话引用。没有新 channel、
+帧、能力位或 allowlist 变化，官方与自建中转只透传 invoke，无需适配。
+
 ## 远程输入框的轻量插件授权查询（2026-11-05，未发布）
 
 `plugins` 集合新增只读 action `management:ui-consent`，返回 `{version:1, uiCapabilityApproval?, item?}`。

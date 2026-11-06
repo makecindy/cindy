@@ -1,12 +1,17 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { useLayoutEffect } from 'react';
+import { useLayoutEffect, useState, type ReactNode } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 import { ApiError } from '@/lib/httpClient';
+import { PermissionPrompt } from '@/components/new-chat/PermissionPrompt';
 import { SplitGroup } from '../SplitGroup';
+import {
+  useSessionSwitchFocusIntent,
+  type HostPendingPermission,
+} from '../useSessionSwitchFocusIntent';
 import { getSplitPanes, splitGroupStore } from '../splitGroupStore';
 
 const {
@@ -15,6 +20,7 @@ const {
   resolveSessionRouteMock,
   routeActionMock,
   sessionGetMock,
+  sessionViewHookMock,
   sessionViewRenderMock,
   useCCSessionsMock,
 } = vi.hoisted(() => ({
@@ -23,6 +29,8 @@ const {
   resolveSessionRouteMock: vi.fn(async (sessionId: string) => `/cc-agent/${sessionId}`),
   routeActionMock: vi.fn(),
   sessionGetMock: vi.fn(),
+  // 个别用例在假视图里跑真实 hook（按 pane 的 sessionId / 路由主权），返回值渲染进视图；默认什么都不做。
+  sessionViewHookMock: vi.fn(),
   sessionViewRenderMock: vi.fn(),
   useCCSessionsMock: vi.fn(),
 }));
@@ -75,6 +83,7 @@ vi.mock('../CCAgentSessionView', () => ({
     disableAutofocus?: boolean;
   }) => {
     sessionViewRenderMock(sessionIdProp);
+    const probe = sessionViewHookMock(sessionIdProp, routeOwner) as ReactNode;
     return (
       <div
         data-testid={`session-view-${sessionIdProp}`}
@@ -85,6 +94,7 @@ vi.mock('../CCAgentSessionView', () => ({
         onDragOver={(event) => event.stopPropagation()}
         onDrop={(event) => event.stopPropagation()}
       >
+        {probe ?? null}
         <button
           type="button"
           data-testid={`route-action-${sessionIdProp}`}
@@ -151,6 +161,7 @@ describe('SplitGroup', () => {
     resolveSessionRouteMock.mockClear();
     routeActionMock.mockClear();
     sessionGetMock.mockReset();
+    sessionViewHookMock.mockReset();
     sessionViewRenderMock.mockClear();
     useCCSessionsMock.mockReset();
     useCCSessionsMock.mockReturnValue({ sessions: [], isLoading: true, error: null });
@@ -515,6 +526,121 @@ describe('SplitGroup', () => {
 
     expect(resolveSessionRouteMock).toHaveBeenCalledTimes(1);
     expect(resolveSessionRouteMock).toHaveBeenCalledWith('session-b', null);
+  });
+
+  // 分屏在 pointerdown 时就切换路由主权；路由在松开前解析完时，pane 已经成为主视图、
+  // 切换聚焦意图已武装并在向 Host 查询，同一次按压随后的可信 click 不能把它撤掉，否则
+  // 查询结果作废、授权卡永远拿不到焦点。jsdom 造不出 isTrusted=true 的事件，所以取 hook
+  // 实际挂上的 click 监听，按浏览器给指针点击的 detail=1 调用。
+  it('点选非活动 pane 切换主权后，同一次按压的 click 不撤销该 pane 的切换聚焦意图', async () => {
+    let resolveQuery!: (list: readonly HostPendingPermission[]) => void;
+    const query = vi.fn(
+      () =>
+        new Promise<readonly HostPendingPermission[]>((resolve) => {
+          resolveQuery = resolve;
+        }),
+    );
+    const intents = new Map<string, { armed: boolean; setPending: (id: string | null) => void }>();
+    function useIntentProbe(sessionId: string, routeOwner: boolean) {
+      const [pending, setPending] = useState<string | null>(null);
+      const intent = useSessionSwitchFocusIntent(sessionId, routeOwner, pending, query);
+      intents.set(sessionId, { armed: intent.armed, setPending });
+    }
+    sessionViewHookMock.mockImplementation(useIntentProbe);
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+    });
+    const view = renderSplitGroup('session-a');
+    const add = vi.spyOn(window, 'addEventListener');
+
+    await act(async () => {
+      fireEvent.pointerDown(screen.getByTestId('composer-action-session-b'), { button: 0 });
+      await Promise.resolve();
+    });
+    expect(navigateMock).toHaveBeenCalledWith('/cc-agent/session-b');
+    view.rerender(
+      <MemoryRouter>
+        <SplitGroup activeSessionId="session-b">
+          <div data-testid="route-outlet" />
+        </SplitGroup>
+      </MemoryRouter>,
+    );
+    expect(screen.getByTestId('session-view-session-b').dataset.routeOwner).toBe('true');
+    expect(query).toHaveBeenCalledWith('session-b');
+
+    const clickListener = add.mock.calls.filter(([type]) => type === 'click').at(-1)?.[1] as
+      | ((e: Pick<MouseEvent, 'isTrusted' | 'detail'>) => void)
+      | undefined;
+    expect(clickListener).toBeTypeOf('function');
+    act(() => clickListener?.({ isTrusted: true, detail: 1 }));
+    await act(async () => resolveQuery([{ requestId: 'p1', pendingForMs: 60_000 }]));
+    act(() => intents.get('session-b')?.setPending('p1'));
+
+    expect(intents.get('session-b')?.armed).toBe(true);
+    add.mockRestore();
+  });
+
+  // 在非主 pane 里按下普通控件：pointerdown 切换主权、控件拿到焦点并在 click 时照常执行，
+  // 授权卡随之武装。焦点必须留在这个控件上，否则下一下回车成了批准；只有专门用来打开
+  // 任务的控件（pane 标题）才把焦点交给「允许一次」。
+  describe('非主 pane 的授权卡在 pane 成为主视图后', () => {
+    function renderWithPrompt() {
+      sessionViewHookMock.mockImplementation(function usePromptProbe(
+        sessionId: string,
+        routeOwner: boolean,
+      ) {
+        const intent = useSessionSwitchFocusIntent(sessionId, routeOwner, 'p1', () =>
+          Promise.resolve([]),
+        );
+        if (sessionId !== 'session-b') return null;
+        return (
+          <PermissionPrompt
+            permission={{ requestId: 'p1', toolName: 'Bash', input: { command: 'ls' } }}
+            onRespond={vi.fn()}
+            autoFocus={intent.armed}
+            onAutoFocusHandled={intent.consume}
+          />
+        );
+      });
+      act(() => {
+        splitGroupStore.addSession('session-b', 'session-a', 'right');
+      });
+      return renderSplitGroup('session-a');
+    }
+
+    async function pressAndTakeOwnership(view: ReturnType<typeof renderSplitGroup>, control: HTMLElement) {
+      await act(async () => {
+        fireEvent.pointerDown(control, { button: 0 });
+        control.focus();
+        await Promise.resolve();
+      });
+      view.rerender(
+        <MemoryRouter>
+          <SplitGroup activeSessionId="session-b">
+            <div data-testid="route-outlet" />
+          </SplitGroup>
+        </MemoryRouter>,
+      );
+      expect(screen.getByTestId('session-view-session-b').dataset.routeOwner).toBe('true');
+    }
+
+    it('按下的是 pane 里的普通控件时，焦点留在该控件上', async () => {
+      const view = renderWithPrompt();
+      const composerAction = screen.getByTestId('composer-action-session-b');
+      await pressAndTakeOwnership(view, composerAction);
+      expect(document.activeElement).toBe(composerAction);
+    });
+
+    it('按下的是 pane 标题（打开任务的控件）时，焦点落到「允许一次」', async () => {
+      const view = renderWithPrompt();
+      const paneTitle = screen
+        .getByTestId('session-view-session-b')
+        .closest('[data-split-pane-key]')
+        ?.querySelector<HTMLElement>('[data-session-switch-opener]');
+      expect(paneTitle).toBeTruthy();
+      await pressAndTakeOwnership(view, paneTitle!);
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: /allowOnce/ }));
+    });
   });
 
   it('键盘焦点进入非活动 pane 的关闭按钮时不切换路由主权', () => {

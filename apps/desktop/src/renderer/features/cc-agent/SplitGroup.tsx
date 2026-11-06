@@ -862,6 +862,8 @@ const SplitPaneView = memo(function SplitPaneView({
         <div className="flex h-8 shrink-0 items-center gap-1.5 border-b border-border/40 px-2">
           <button
             type="button"
+            // Opens this pane's task: the permission prompt may take focus from it.
+            data-session-switch-opener=""
             onClick={() => focusSession(viewSessionId)}
             className={cn(
               'min-w-0 flex-1 truncate rounded-full px-2 py-1 text-left text-xs transition-colors',

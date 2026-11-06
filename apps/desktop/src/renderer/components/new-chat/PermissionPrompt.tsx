@@ -11,16 +11,27 @@
  *   Enter       → Allow once
  *   Ctrl+Enter  → Always allow for session
  *   Esc         → Deny
+ *
+ * `autoFocus`: the host passes it right after the user switches to this task,
+ * so focus moves off the sidebar row onto 「Allow once」 and the keyboard
+ * (Enter / Space / Tab) acts on this card directly.
  */
 
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { describePermissionAction, type PermissionActionSummary } from '@cindy/maker-shared/interaction';
 
 import { BotAvatar } from '@/features/bots/BotAvatar';
 import type { BotChatIdentity } from '@/features/bots/BotSessionContentHeader';
 
-import { shouldCardShortcutYield } from '@/lib/editableKeyboardTarget';
+import {
+  isEditableKeyboardTarget,
+  isEmbeddedContentHost,
+  isInsideClosingKeyboardLayer,
+  isForeignKeyboardControl,
+  isInsideKeyboardLayer,
+  shouldCardShortcutYield,
+} from '@/lib/editableKeyboardTarget';
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
@@ -36,6 +47,13 @@ interface PermissionPromptProps {
   permission: PendingPermission;
   companion?: BotChatIdentity | null;
   onRespond: (result: CCAgentPermissionResult) => void;
+  /**
+   * Move focus to 「Allow once」 once the card can take it. Called back through
+   * `onAutoFocusHandled` so the host only does this once per task switch.
+   * Focus stays put when it is in a text field, menu or dialog elsewhere.
+   */
+  autoFocus?: boolean;
+  onAutoFocusHandled?: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -87,9 +105,87 @@ const allowActionClass = cn(actionClass, '[--button-face-border:var(--chat-input
 // Component
 // ---------------------------------------------------------------------------
 
-export function PermissionPrompt({ permission, onRespond, companion }: PermissionPromptProps) {
+/**
+ * After focus is moved onto the card, a key that is still held from the switch
+ * (Enter / Space on a sidebar row, with or without Ctrl/⌘) keeps sending repeat
+ * keydowns, now to 「Allow once」 and to the card shortcuts. Swallow those repeats
+ * and the activation-key keyups until the user presses Enter / Space afresh, so
+ * approving always takes a fresh press. A repeat before any fresh press can only
+ * come from a key carried over from the switch, so nothing short of a fresh
+ * activation press ends the guard: not other keys (pressing Ctrl while Enter is
+ * held must not turn it into 「Always allow」), and not releasing one of several
+ * carried keys (Enter and Space can both be down). Returns the disposer.
+ */
+function swallowHeldActivationKeys(): () => void {
+  const isActivationKey = (e: KeyboardEvent) => e.key === 'Enter' || e.key === ' ';
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (!isActivationKey(e)) return;
+    if (!e.repeat) {
+      // A fresh press is deliberate: let it (and its keyup) through.
+      dispose();
+      return;
+    }
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  };
+  const onKeyUp = (e: KeyboardEvent) => {
+    if (!isActivationKey(e)) return;
+    // Without a press after focus, the release must not activate the button.
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  };
+  function dispose() {
+    window.removeEventListener('keydown', onKeyDown, true);
+    window.removeEventListener('keyup', onKeyUp, true);
+  }
+  window.addEventListener('keydown', onKeyDown, true);
+  window.addEventListener('keyup', onKeyUp, true);
+  return dispose;
+}
+
+/** Split-pane container, and the controls whose only job is to open a task there. */
+const SPLIT_PANE_SELECTOR = '[data-split-pane-key]';
+const SESSION_OPENER_SELECTOR = '[data-split-pane-route-action], [data-session-switch-opener]';
+
+/**
+ * Pressing (or tabbing to) an ordinary control in a non-owner split pane hands that
+ * pane the route on pointerdown / focus, which arms the switch intent while the
+ * control keeps focus and still runs its own action. The user is operating that
+ * control; moving focus to 「Allow once」 would turn their next Enter into an approval.
+ * Only controls that exist to open the task (the pane title, task links) give way.
+ */
+function isOwnPaneControl(active: Element, card: Element | null): boolean {
+  const pane = card?.closest(SPLIT_PANE_SELECTOR);
+  if (!pane?.contains(active) || active.closest(SESSION_OPENER_SELECTOR)) return false;
+  return isForeignKeyboardControl(active);
+}
+
+/**
+ * Focus in this session view's own composer while the switch intent is still armed
+ * was put there by the view itself: the composer autofocuses on the task change, and
+ * a shared-task guest keeps the composer next to the card. Any genuine typing or
+ * click since the switch has already disarmed the intent, so this focus does not mean
+ * the user is typing and must not keep the card from taking focus. Text fields
+ * elsewhere (sidebar search, other panes) still keep it.
+ */
+function isOwnViewComposer(active: Element, card: Element | null): boolean {
+  const view = card?.closest('[data-cc-agent-session-view]');
+  return Boolean(view?.contains(active) && active.closest('[data-chat-input-root]'));
+}
+
+export function PermissionPrompt({
+  permission,
+  onRespond,
+  companion,
+  autoFocus = false,
+  onAutoFocusHandled,
+}: PermissionPromptProps) {
   const { t } = useTranslation();
   const cardRef = useRef<HTMLDivElement>(null);
+  const allowOnceRef = useRef<HTMLButtonElement>(null);
+  const heldKeyGuardRef = useRef<(() => void) | null>(null);
+  // Bumped when focus moves while the switch focus waits for a closing popover.
+  const [focusSettleCount, setFocusSettleCount] = useState(0);
   const { toolName, input, title, displayName, description, suggestions, autoReviewUnavailable,
     autoReviewReason, submitting, submissionFailed } = permission;
   const isMediaDownload = toolName === 'cindy.media.download';
@@ -168,6 +264,10 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
       // 按键已有归属时不替用户做授权决定：输入法组字、正在打字、刚被菜单处理的 Esc、
       // 焦点在「拒绝」等按钮上的回车（交给按钮本身激活）都让位。
       if (e.key !== 'Enter' && e.key !== 'Escape') return;
+      // Esc 连发不是新的一下（与设置页 Esc 同一规则）：按住 Esc 退出设置、回到等授权的
+      // 任务时，首个 keydown 已被设置页用掉，接着的连发不能替用户拒绝。卡片在场时首个
+      // keydown 已经拒绝并收起卡片，忽略连发不改变正常按 Esc 的结果。
+      if (e.key === 'Escape' && e.repeat) return;
       const shortcutKind =
         e.key === 'Escape' ? 'dismiss' : e.ctrlKey || e.metaKey ? 'modifiedActivate' : 'activate';
       if (shouldCardShortcutYield(e, shortcutKind, cardRef.current)) return;
@@ -186,6 +286,73 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [handleAllowOnce, handleAlwaysAllow, handleDeny]);
+
+  // ── Focus on task switch ──
+
+  // Re-installing is safe: until a fresh Enter / Space press (which also ends the
+  // switch intent), any repeat still comes from a key carried over from the switch.
+  const guardHeldKeys = () => {
+    heldKeyGuardRef.current?.();
+    heldKeyGuardRef.current = swallowHeldActivationKeys();
+  };
+
+  useEffect(() => {
+    // Disabled buttons cannot take focus; keep the request until submission settles.
+    if (!autoFocus || submitting) return;
+    const button = allowOnceRef.current;
+    if (!button) return;
+    const active = document.activeElement;
+    // Focus already sits on another control of this card (e.g. Tab straight onto Deny in a
+    // split pane, which is what makes that pane the route owner): the user chose it, and
+    // the button's own activation wins over the card shortcuts. Don't redirect it.
+    if (
+      active instanceof Element &&
+      active !== button &&
+      (cardRef.current?.contains(active) || isOwnPaneControl(active, cardRef.current))
+    ) {
+      onAutoFocusHandled?.();
+      return;
+    }
+    const keyboardOwnedElsewhere =
+      active instanceof Element &&
+      !cardRef.current?.contains(active) &&
+      !isOwnViewComposer(active, cardRef.current) &&
+      (isEditableKeyboardTarget(active) ||
+        isInsideKeyboardLayer(active) ||
+        isEmbeddedContentHost(active));
+    if (keyboardOwnedElsewhere) {
+      if (isInsideClosingKeyboardLayer(active)) {
+        // Choosing a search result closes its popover and navigates in one event. The
+        // popover keeps focus through its exit animation, then hands it back to its
+        // trigger. Keep the request and look again once focus settles. The card's
+        // window shortcut is already live during the wait (focus can fall to body once
+        // the result detaches), so guard a key still held from the choice right away.
+        guardHeldKeys();
+        const retry = () => setFocusSettleCount((n) => n + 1);
+        document.addEventListener('focusin', retry, true);
+        return () => document.removeEventListener('focusin', retry, true);
+      }
+      // The user is typing, in a menu, or inside an embedded page (its keys never reach
+      // this window, so the switch intent cannot see them): leave focus there.
+      onAutoFocusHandled?.();
+      return;
+    }
+    // The card can briefly render into a detached node (e.g. the files route's
+    // prompt slot is still registered during navigation, then the card remounts
+    // inline). Keep the request until focus actually lands on a live button. The
+    // window shortcut is already live meanwhile and focus is usually on body (the
+    // opener unmounted), so guard a key still held from the switch first.
+    if (!button.isConnected) {
+      guardHeldKeys();
+      return;
+    }
+    button.focus({ preventScroll: true });
+    if (document.activeElement !== button) return;
+    guardHeldKeys();
+    onAutoFocusHandled?.();
+  }, [autoFocus, onAutoFocusHandled, submitting, focusSettleCount]);
+
+  useEffect(() => () => heldKeyGuardRef.current?.(), []);
 
   // ── Render ──
 
@@ -309,6 +476,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
 
         {/* Allow once (primary) */}
         <Button
+          ref={allowOnceRef}
           pressFeedback={false}
           variant="secondary"
           palette="permission"
