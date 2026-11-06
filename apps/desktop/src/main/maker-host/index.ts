@@ -3294,7 +3294,8 @@ export function getMaker(): Maker {
         });
         return refreshed && applied;
       },
-      onApplied: () => refreshSelectableModelsAndBroadcast({ provider: 'openai-api', engine: 'codex' }),
+      // setCodexApiModelCapabilities already notifies the catalog listener.
+      onApplied: () => {},
       log: desktopMakerLogger,
     });
     const apiModelBackfill = _codexApiModelBackfill;

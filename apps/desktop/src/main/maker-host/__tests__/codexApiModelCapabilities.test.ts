@@ -150,6 +150,21 @@ describe('Codex API engine capabilities', () => {
     expect(getActiveCatalog().providers.find(p => p.id === 'openai')!.models.codex).toEqual(oauth);
   });
 
+  // PR #9109: a model route replaces runtime requestPath, just as dispatch does.
+  it('discovers capabilities when a model Responses route replaces a runtime chat path', () => {
+    const stored = config();
+    Object.assign(stored.runtimes.codex!, {
+      baseUrl: 'https://relay.example/v1', requestPath: '/chat/completions',
+    });
+    stored.runtimes.codex!.models[0]!.route = {
+      baseUrl: 'https://api.openai.com/v1', wireProtocol: 'openai-responses',
+    };
+    setCustomProviderConfigs([stored]);
+    expect(hasCodexApiConnections(getActiveCatalog())).toBe(true);
+    setCodexApiModelCapabilities([live()]);
+    expect(model()).toMatchObject({ efforts: [...efforts], supportsFastMode: true });
+  });
+
   it('uses the current route after configuration changes and clears on owner reset', () => {
     setCodexApiModelCapabilities([live()]);
     setCustomProviderConfigs([config()]);

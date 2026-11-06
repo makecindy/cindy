@@ -11,7 +11,8 @@ function isOpenAiApiCodexRoute(
   if (agent !== 'codex' || routing.authStrategy !== 'api-key-header') return false;
   const wire = model.route?.wireProtocol ?? routing.wireProtocol ?? 'openai-responses';
   if (wire !== 'openai-responses' || (model.api && model.api !== 'openai-responses')) return false;
-  const requestPath = model.route?.requestPath ?? routing.requestPath;
+  // Match providerRoutingForModel: a model route replaces the runtime path.
+  const requestPath = model.route ? model.route.requestPath : routing.requestPath;
   if (requestPath && requestPath !== '/responses') return false;
   try {
     const url = new URL(model.route?.baseUrl ?? routing.upstream);
