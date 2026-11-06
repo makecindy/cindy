@@ -163,7 +163,7 @@
   "taskActionConfirmation": {
     "title": "Confirm session action",
     "once": "Review the target, action and full content below. Allow applies to this action once.",
-    "remove": "This deletes automation. Review the target; approval applies only once.",
+    "remove": "This will release the automation’s receiving address. Check the target; approval applies only to this action.",
     "permission": "This answers a permission request in another task on your behalf. Review the action; approval applies only once.",
     "resume": "This resumes paused execution. Review the target; approval applies only once.",
     "command": "This saves or runs a command on your computer outside the agent’s tool approval. Review the command and working folder; approval applies only once.",
@@ -5125,7 +5125,7 @@
         "ariaLabel": "Choose the second fallback auxiliary model"
       },
       "emptySlot": "Not selected",
-      "customHint": "Models are tried in your chosen order and also back up Auto-review when its built-in models are unavailable. Selected providers receive review context: messages and references, task and action details (including blocked actions), identity and permissions, file paths, and operating system.",
+      "customHint": "Models are tried in your chosen order and also back up Auto-review when its built-in models are unavailable. Selected providers receive review context: messages and references, the agent's public text (reference only), task and action details (including blocked actions), identity and permissions, file paths, and operating system.",
       "signInHint": "Sign in to Cindy to use the automatic recommendations. While signed out, choose a configured model from another provider under Custom.",
       "chooseAgent": "Choose an Agent",
       "backToAgents": "Back to Agent selection",
@@ -14015,7 +14015,11 @@
       "mailAttach": "Add attachment",
       "mailRemoveAttachment": "Remove {{name}}",
       "mailUpdated": "Draft updated (read-only)",
-      "mailLegacy": "Draft history (read-only)"
+      "mailLegacy": "Draft history (read-only)",
+      "taskAutoArchived": "Archived \"{{title}}\"",
+      "taskAutoArchivedUndo": "Undo",
+      "taskAutoArchivePending": "Archives when you leave",
+      "taskAutoArchiveCancel": "Keep this time"
     },
     "ghostHook": {
       "blockedFallback": "Message blocked by a plugin; not sent",
@@ -19172,6 +19176,9 @@
     "pendingApprovals": "{{count}} pending approvals"
   },
   "richAnswer": {
+    "invalidImageReference": "This image reference is invalid.",
+    "requestImageAgain": "Ask to show image again",
+    "requestImageAgainMessage": "Please show this existing image again ({{name}}, reference: {{source}}). Check the original tool result or file and use its real address. Do not generate a new image; ask me first if you cannot identify the image.",
     "send": "Send Message",
     "sending": "Sending…",
     "sent": "Submitted",

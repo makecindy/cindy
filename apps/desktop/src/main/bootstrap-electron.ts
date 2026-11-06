@@ -1135,7 +1135,7 @@ import {
   refreshXdGatewayModels,
 } from './model-access/index.js';
 import { effectiveXdGatewayBaseUrl } from './model-access/effectiveEndpoint.js';
-import { withCindyGatewayKeyRejectionReport } from './model-access/gatewayKeyRejection.js';
+import { withCindyGatewayKeyRejectionReport, noteCindyGatewayKeyReplaced } from './model-access/gatewayKeyRejection.js';
 import { isLocalDbOwnerCurrent } from './appSessionPolicy.js';
 import { getAppCapabilities, requireAppCapability } from './appCapabilities.js';
 import {
@@ -6029,11 +6029,13 @@ const registerIpcHandlers = () => {
         if (!filepath) return false;
         if (!safeStorage.isEncryptionAvailable()) return false;
         const encrypted = safeStorage.encryptString(value);
+        const keyOwnerScope = key === 'api_key' ? activeOwnerScopeKey() : null;
         const prepareResult = await prepareApiKeyChangeMaybeRestartCodex(key);
         if (!prepareResult.ok) return false;
         const dir = path.dirname(filepath);
         const hadPrevious = fs.existsSync(filepath);
         const previousContent = hadPrevious ? fs.readFileSync(filepath, 'utf-8') : null;
+        const previousXdKey = key === 'api_key' ? getProviderSecretStore().get('xd') : null;
         let mutated = false;
         let finalized = false;
         fs.mkdirSync(dir, { recursive: true });
@@ -6046,6 +6048,9 @@ const registerIpcHandlers = () => {
             // 手填 XD key 保存成功:来源标记翻 manual(endpoint 回落编译期常量,
             // 与 model-access 自动下发的 endpoint 解耦,见 credentialsStore 注释)。
             if (key === 'api_key') {
+              if (activeOwnerScopeKey() === keyOwnerScope) {
+                noteCindyGatewayKeyReplaced(previousXdKey, value);
+              }
               noteManualXdKeySaved();
               notifyProviderKeyChanged('xd');
             }

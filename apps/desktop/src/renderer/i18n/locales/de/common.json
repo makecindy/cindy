@@ -163,7 +163,7 @@
   "taskActionConfirmation": {
     "title": "Sitzungsaktion bestätigen",
     "once": "Prüfe unten das Ziel, die Aktion und den vollständigen Inhalt. Die Erlaubnis gilt einmalig für diese Aktion.",
-    "remove": "Dadurch wird eine Automatisierung gelöscht. Prüfe das Ziel; die Genehmigung gilt nur einmal.",
+    "remove": "Die Empfangsadresse der Automatisierung wird freigegeben. Prüfe das Ziel; die Zustimmung gilt nur für diese Aktion.",
     "permission": "Dadurch wird in deinem Namen eine Berechtigungsanfrage in einer anderen Aufgabe beantwortet. Prüfe die Aktion; die Genehmigung gilt nur einmal.",
     "resume": "Dadurch wird eine pausierte Ausführung fortgesetzt. Prüfe das Ziel; die Genehmigung gilt nur einmal.",
     "command": "Dadurch wird ein Befehl auf deinem Computer außerhalb der Tool-Genehmigung des Agent gespeichert oder ausgeführt. Prüfe den Befehl und den Arbeitsordner; die Genehmigung gilt nur einmal.",
@@ -5125,7 +5125,7 @@
         "ariaLabel": "Zweites Ersatz-Hilfsmodell auswählen"
       },
       "emptySlot": "Nicht ausgewählt",
-      "customHint": "Die Modelle werden in deiner gewählten Reihenfolge ausprobiert und dienen auch als Ersatz für die automatische Überprüfung, wenn deren integrierte Modelle nicht verfügbar sind. Ausgewählte Anbieter erhalten den Überprüfungskontext: Nachrichten und Referenzen, Aufgaben- und Aktionsdetails (einschließlich blockierter Aktionen), Identität und Berechtigungen, Dateipfade und Betriebssystem.",
+      "customHint": "Die Modelle werden in deiner gewählten Reihenfolge ausprobiert und dienen auch als Ersatz für die automatische Überprüfung, wenn deren integrierte Modelle nicht verfügbar sind. Ausgewählte Anbieter erhalten den Überprüfungskontext: Nachrichten und Referenzen, öffentliche Texte des Agent (nur als Referenz), Aufgaben- und Aktionsdetails (einschließlich blockierter Aktionen), Identität und Berechtigungen, Dateipfade und Betriebssystem.",
       "signInHint": "Melde dich bei Cindy an, um die automatischen Empfehlungen zu nutzen. Wenn du nicht angemeldet bist, wähle unter „Benutzerdefiniert“ ein konfiguriertes Modell eines anderen Anbieters aus.",
       "chooseAgent": "Agent auswählen",
       "backToAgents": "Zurück zur Agent-Auswahl",
@@ -13980,7 +13980,11 @@
       "mailAttach": "Anhang hinzufügen",
       "mailRemoveAttachment": "{{name}} entfernen",
       "mailUpdated": "Entwurf aktualisiert (schreibgeschützt)",
-      "mailLegacy": "Entwurfsverlauf (schreibgeschützt)"
+      "mailLegacy": "Entwurfsverlauf (schreibgeschützt)",
+      "taskAutoArchived": "„{{title}}“ archiviert",
+      "taskAutoArchivedUndo": "Rückgängig",
+      "taskAutoArchivePending": "Wird beim Verlassen archiviert",
+      "taskAutoArchiveCancel": "Diesmal behalten"
     },
     "ghostHook": {
       "blockedFallback": "Nachricht von einem Plugin blockiert; nicht gesendet",
@@ -19172,6 +19176,9 @@
     "pendingApprovals": "{{count}} ausstehende Genehmigungen"
   },
   "richAnswer": {
+    "invalidImageReference": "Dieser Bildverweis ist ungültig.",
+    "requestImageAgain": "Erneute Anzeige anfordern",
+    "requestImageAgainMessage": "Zeige dieses vorhandene Bild erneut an ({{name}}, Verweis: {{source}}). Prüfe das ursprüngliche Werkzeugergebnis oder die Datei und verwende die tatsächliche Adresse. Erzeuge kein neues Bild; frage mich zuerst, falls du das Bild nicht eindeutig zuordnen kannst.",
     "send": "Nachricht senden",
     "sending": "Wird gesendet…",
     "sent": "Eingereicht",

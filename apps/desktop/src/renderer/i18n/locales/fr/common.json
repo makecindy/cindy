@@ -165,7 +165,7 @@
   "taskActionConfirmation": {
     "title": "Confirmer l'action sur la session",
     "once": "Vérifiez ci-dessous la cible, l'action et le contenu complet. « Autoriser » s'applique à cette action une seule fois.",
-    "remove": "Cette action supprime une automatisation. Vérifiez la cible ; l'approbation ne vaut que pour cette fois.",
+    "remove": "Cette action libère l’adresse de réception de l’automatisation. Vérifiez la cible ; l’autorisation ne vaut que pour cette action.",
     "permission": "Cette action répond à votre place à une demande d'autorisation dans une autre tâche. Vérifiez l'action ; l'approbation ne vaut que pour cette fois.",
     "resume": "Cette action reprend une exécution en pause. Vérifiez la cible ; l'approbation ne vaut que pour cette fois.",
     "command": "Cette action enregistre ou exécute une commande sur votre ordinateur, en dehors de l'approbation des outils de l'Agent. Vérifiez la commande et le dossier de travail ; l'approbation ne vaut que pour cette fois.",
@@ -5180,7 +5180,7 @@
         "ariaLabel": "Choisir le second modèle auxiliaire de secours"
       },
       "emptySlot": "Non sélectionné",
-      "customHint": "Les modèles sont essayés dans l'ordre choisi et servent aussi de secours à la revue automatique lorsque ses modèles intégrés sont indisponibles. Les fournisseurs sélectionnés reçoivent le contexte de la revue : messages et références, détails des tâches et des actions (y compris les actions bloquées), identité et autorisations, chemins de fichiers et système d'exploitation.",
+      "customHint": "Les modèles sont essayés dans l'ordre choisi et servent aussi de secours à la revue automatique lorsque ses modèles intégrés sont indisponibles. Les fournisseurs sélectionnés reçoivent le contexte de la revue : messages et références, texte public de l'Agent (à titre indicatif), détails des tâches et des actions (y compris les actions bloquées), identité et autorisations, chemins de fichiers et système d'exploitation.",
       "signInHint": "Connectez-vous à Cindy pour utiliser les recommandations automatiques. Sans connexion, choisissez un modèle configuré d'un autre fournisseur sous Personnalisé.",
       "chooseAgent": "Choisir un Agent",
       "backToAgents": "Retour à la sélection de l'Agent",
@@ -14108,7 +14108,11 @@
       "mailAttach": "Ajouter une pièce jointe",
       "mailRemoveAttachment": "Retirer {{name}}",
       "mailUpdated": "Brouillon mis à jour (lecture seule)",
-      "mailLegacy": "Historique du brouillon (lecture seule)"
+      "mailLegacy": "Historique du brouillon (lecture seule)",
+      "taskAutoArchived": "« {{title}} » archivée",
+      "taskAutoArchivedUndo": "Annuler",
+      "taskAutoArchivePending": "Archivée à la sortie",
+      "taskAutoArchiveCancel": "Garder cette fois"
     },
     "ghostHook": {
       "blockedFallback": "Message bloqué par un plugin ; non envoyé",
@@ -19343,6 +19347,9 @@
     "pendingApprovals": "{{count}} demandes en attente d’approbation"
   },
   "richAnswer": {
+    "invalidImageReference": "La référence de cette image est invalide.",
+    "requestImageAgain": "Demander de réafficher l’image",
+    "requestImageAgainMessage": "Réaffiche cette image existante ({{name}}, référence : {{source}}). Vérifie le résultat d’origine de l’outil ou le fichier et utilise son adresse réelle. Ne génère pas de nouvelle image ; demande-moi d’abord si tu ne peux pas identifier l’image.",
     "send": "Envoyer le message",
     "sending": "Envoi…",
     "sent": "Envoyé",

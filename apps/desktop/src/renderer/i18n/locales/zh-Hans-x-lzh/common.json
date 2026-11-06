@@ -163,7 +163,7 @@
   "taskActionConfirmation": {
     "title": "确认差事操作",
     "once": "请核下方之目标、动作与全文。所许仅及此一操作。",
-    "remove": "此举将删自运。请核其目标，仅许此一次。",
+    "remove": "此将释自动化之接收址。请核其目标，仅许此次。",
     "permission": "此举将代君答他差事之授权请求。请核其操作，仅许此一次。",
     "resume": "此举将复已暂停之运行。请核其目标，仅许此一次。",
     "command": "此举将于机上存或行命令，运行时不经 Agent 之工具审批。请核命令与工作目录，仅许此一次。",
@@ -5082,7 +5082,7 @@
         "ariaLabel": "择第二备选辅佐模型"
       },
       "emptySlot": "未择",
-      "customHint": "轻简文字依所择之序试之；内置审核不可用时，亦充自动审核之备。所择供方将收审核上下文，含讯与引用内容、差事与操作详情及拦截之录、身分与权柄、卷之路径及操作系统。",
+      "customHint": "轻简文字依所择之序试之；内置审核不可用时，亦充自动审核之备。所择供方将收审核上下文，含讯与引用内容、Agent 之公开文字（仅作参考）、差事与操作详情及拦截之录、身分与权柄、卷之路径及操作系统。",
       "signInHint": "登门 Cindy 后方可用自荐；未登门时，请于自订中择已设之他供方模型。",
       "chooseAgent": "择 Agent",
       "backToAgents": "归择 Agent",
@@ -13940,7 +13940,11 @@
       "mailAttach": "增附件",
       "mailRemoveAttachment": "除 {{name}}",
       "mailUpdated": "草稿已更（唯读）",
-      "mailLegacy": "旧稿（唯读）"
+      "mailLegacy": "旧稿（唯读）",
+      "taskAutoArchived": "「{{title}}」已封存",
+      "taskAutoArchivedUndo": "撤",
+      "taskAutoArchivePending": "去则自封存",
+      "taskAutoArchiveCancel": "此番不封"
     },
     "ghostHook": {
       "blockedFallback": "讯为法器所拦，未遣",
@@ -19100,6 +19104,9 @@
     "pendingApprovals": "{{count}} 项待确"
   },
   "richAnswer": {
+    "invalidImageReference": "图之引用无效，未能示之。",
+    "requestImageAgain": "请重示此图",
+    "requestImageAgainMessage": "请重示此既有之图（{{name}}，引用：{{source}}）。核原工具之果或原档，以实址示之，勿另生新图；若未能辨其所指，先问于我。",
     "send": "遣讯",
     "sending": "方遣…",
     "sent": "已呈",

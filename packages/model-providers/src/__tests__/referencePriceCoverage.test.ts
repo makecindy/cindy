@@ -45,6 +45,29 @@ describe("Haiku 5.5 official prompt-length pricing", () => {
   });
 });
 
+describe("Kimi K3 one-hour cache writes adopted on November 5", () => {
+  it.each([
+    ["moonshot-kimi-cn", "kimi-k3", "kimi-k3", "cn", "CNY", 20, 100, 2, 40],
+    ["moonshot-kimi-global", "kimi-k3", "kimi-k3", "global", "USD", 3, 15, 0.3, 6],
+    ["xd", "moonshot/kimi-k3", "xd/moonshotai-kimi-k3", "global", "USD", 3, 15, 0.3, 6],
+    ["xd", "moonshotai/kimi-k3", "xd/moonshotai-kimi-k3", "global", "USD", 3, 15, 0.3, 6],
+  ] as const)("resolves %s/%s without backfilling the historical gap",
+    (provider, model, baseModel, priceGroup, currency, input, output, read, write1h) => {
+      const options = { at: "2026-11-05", officialOnly: true };
+      const price = resolveModelReferencePrice(registry, provider, model, options)?.price;
+      expect(price).toMatchObject({
+        currency, variant: "standard", inputPerMtok: input, outputPerMtok: output,
+        cacheReadPerMtok: read, cacheWritePerMtok: input, cacheWrite1hPerMtok: write1h,
+        effectiveFrom: "2026-11-05",
+      });
+      expect(resolveBaseModelReferencePrice(registry, baseModel, { ...options, priceGroup })?.price).toEqual(price);
+      const historical = resolveModelReferencePrice(registry, provider, model, { ...options, at: "2026-11-04" })?.price;
+      expect(historical).toMatchObject({ currency, cacheWritePerMtok: input });
+      expect(historical?.cacheWrite1hPerMtok).toBeUndefined();
+      expect(resolveModelReferencePrice(registry, provider, model, { ...options, variant: "fast" })).toBeUndefined();
+    });
+});
+
 // Unit: production price resolution from the complete bundled Registry. K3.1 had no
 // prices; cover both models/markets, historical unknowns and channel isolation.
 describe("Kimi K3.1 official API reference prices", () => {

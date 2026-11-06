@@ -163,7 +163,7 @@
   "taskActionConfirmation": {
     "title": "確認任務操作",
     "once": "請核對下方的目標、動作與完整內容。允許僅對本次操作生效。",
-    "remove": "這會刪除自動化。請核對目標，僅允許這一次。",
+    "remove": "這會釋放自動化的接收位址。請核對目標，僅允許這一次。",
     "permission": "這會代你回答另一個任務的授權請求。請核對操作，僅允許這一次。",
     "resume": "這會恢復已暫停的執行。請核對目標，僅允許這一次。",
     "command": "這會在電腦上儲存或執行命令，執行時不經過 Agent 的工具審批。請核對命令與工作目錄，僅允許這一次。",
@@ -5082,7 +5082,7 @@
         "ariaLabel": "選擇第二備選輔助模型"
       },
       "emptySlot": "未選擇",
-      "customHint": "輕量文字按所選順序嘗試；內建審核無法使用時，也用於自動審核備援。所選供應商會收到審核上下文，包括訊息與引用內容、任務與操作詳情及攔截記錄、身分與權限、檔案路徑和作業系統。",
+      "customHint": "輕量文字按所選順序嘗試；內建審核無法使用時，也用於自動審核備援。所選供應商會收到審核上下文，包括訊息與引用內容、Agent 的公開文字（僅作參考）、任務與操作詳情及攔截記錄、身分與權限、檔案路徑和作業系統。",
       "signInHint": "登入 Cindy 後可使用自動推薦；未登入時請在自訂中選擇已設定的其他供應商模型。",
       "chooseAgent": "選擇 Agent",
       "backToAgents": "返回選擇 Agent",
@@ -13948,7 +13948,11 @@
       "mailAttach": "新增附件",
       "mailRemoveAttachment": "移除 {{name}}",
       "mailUpdated": "草稿已更新（唯讀）",
-      "mailLegacy": "歷史草稿（唯讀）"
+      "mailLegacy": "歷史草稿（唯讀）",
+      "taskAutoArchived": "已歸檔「{{title}}」",
+      "taskAutoArchivedUndo": "撤銷",
+      "taskAutoArchivePending": "離開後自動歸檔",
+      "taskAutoArchiveCancel": "這次不歸檔"
     },
     "ghostHook": {
       "blockedFallback": "訊息被插件攔下，未傳送",
@@ -19100,6 +19104,9 @@
     "pendingApprovals": "{{count}} 個待確認"
   },
   "richAnswer": {
+    "invalidImageReference": "圖片引用無效，無法顯示。",
+    "requestImageAgain": "請助手重新顯示",
+    "requestImageAgainMessage": "請重新顯示這張既有圖片（{{name}}，引用：{{source}}）。請核對原工具結果或原始檔案並使用真實位址，不要重新產生；無法確認是哪張圖片時先問我。",
     "send": "傳送訊息",
     "sending": "正在傳送…",
     "sent": "已提交",

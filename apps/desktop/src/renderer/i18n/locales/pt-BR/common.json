@@ -165,7 +165,7 @@
   "taskActionConfirmation": {
     "title": "Confirmar ação da sessão",
     "once": "Revise o destino, a ação e o conteúdo completo abaixo. A permissão vale apenas para esta ação, uma vez.",
-    "remove": "Isso exclui a automação. Revise o destino; a aprovação vale apenas uma vez.",
+    "remove": "O endereço de recebimento da automação será liberado. Confira o destino; a autorização se aplica apenas a esta ação.",
     "permission": "Isso responde a uma solicitação de permissão em outra tarefa em seu nome. Revise a ação; a aprovação vale apenas uma vez.",
     "resume": "Isso retoma a execução pausada. Revise o destino; a aprovação vale apenas uma vez.",
     "command": "Isso salva ou executa um comando no seu computador fora da aprovação de ferramentas do Agent. Revise o comando e a pasta de trabalho; a aprovação vale apenas uma vez.",
@@ -5180,7 +5180,7 @@
         "ariaLabel": "Escolher o segundo modelo auxiliar alternativo"
       },
       "emptySlot": "Não selecionado",
-      "customHint": "Os modelos são testados na ordem escolhida e também servem de alternativa à Revisão automática quando os modelos integrados estão indisponíveis. Os provedores selecionados recebem o contexto da revisão: mensagens e referências, detalhes de tarefas e ações (incluindo ações bloqueadas), identidade e permissões, caminhos de arquivos e sistema operacional.",
+      "customHint": "Os modelos são testados na ordem escolhida e também servem de alternativa à Revisão automática quando os modelos integrados estão indisponíveis. Os provedores selecionados recebem o contexto da revisão: mensagens e referências, texto público do Agent (apenas referência), detalhes de tarefas e ações (incluindo ações bloqueadas), identidade e permissões, caminhos de arquivos e sistema operacional.",
       "signInHint": "Entre na Cindy para usar as recomendações automáticas. Sem fazer login, escolha um modelo configurado de outro provedor em Personalizado.",
       "chooseAgent": "Escolher um Agent",
       "backToAgents": "Voltar à seleção de Agent",
@@ -14108,7 +14108,11 @@
       "mailAttach": "Adicionar anexo",
       "mailRemoveAttachment": "Remover {{name}}",
       "mailUpdated": "Rascunho atualizado (somente leitura)",
-      "mailLegacy": "Histórico de rascunhos (somente leitura)"
+      "mailLegacy": "Histórico de rascunhos (somente leitura)",
+      "taskAutoArchived": "\"{{title}}\" arquivada",
+      "taskAutoArchivedUndo": "Desfazer",
+      "taskAutoArchivePending": "Arquiva ao sair",
+      "taskAutoArchiveCancel": "Manter desta vez"
     },
     "ghostHook": {
       "blockedFallback": "Mensagem bloqueada por um plugin; não enviada",
@@ -19343,6 +19347,9 @@
     "pendingApprovals": "{{count}} aprovações pendentes"
   },
   "richAnswer": {
+    "invalidImageReference": "A referência desta imagem é inválida.",
+    "requestImageAgain": "Pedir para mostrar novamente",
+    "requestImageAgainMessage": "Mostre novamente esta imagem existente ({{name}}, referência: {{source}}). Confira o resultado original da ferramenta ou o arquivo e use o endereço real. Não gere outra imagem; pergunte-me antes se não conseguir identificar a imagem.",
     "send": "Enviar mensagem",
     "sending": "Enviando…",
     "sent": "Enviado",

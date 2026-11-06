@@ -733,6 +733,15 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 
 ## 5. 存量插件兼容：升级必须无感（红线）
 
+`tools[].parameters` 的 16KB 约束：新包入口 `validateGhostManifest` 按 JSON 序列化后的
+UTF-8 字节计量；历史市场 release 入口 `validateStoredGhostManifest` 和已装快照入口
+`validateInstalledGhostManifest` 保留原 UTF-16 长度上限 16,384。市场详情解析与
+`GhostManager` 的 `stored-release` 安装／更新因此可继续读取旧口径合法的多字节 schema，
+无需以服务端历史数据盘点作为客户端兼容的前提。旧口径超限、参数非对象及其它不合法字段仍拒绝；
+市场历史参数兼容独立于已装快照的 agent 声明兼容，不放宽新的能力声明。
+实现同步于协议正本与 Desktop 镜像；回归见协议包 `delivery.test.ts`、Desktop
+`ghost.test.ts` 与 `ghostLocalInstallIdentity.test.ts`（含安装、更新和 receipt 重载）。
+
 **红线**：插件系统的任何改动，都不得让用户本地**已安装、已启用**的插件在 Cindy 升级
 后变得不可用，也不得要求用户重新安装、额外确认、重新配置凭证或重新落一次技能。
 升级后的默认结果只有一个：用户什么都不做，插件照旧能用。
