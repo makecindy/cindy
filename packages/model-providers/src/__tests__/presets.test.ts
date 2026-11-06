@@ -864,16 +864,19 @@ describe('BUNDLED_CATALOG 首批预设自检', () => {
     expect(sanitizePresets(presets)).toHaveLength(presets.length);
   });
 
-  it('内置预设仅允许 https；明确无鉴权且可编辑的回环代理可使用 http', () => {
+  it('内置预设仅允许 https；明确无鉴权或 Magpie 官方可编辑回环代理可使用 http', () => {
     for (const p of BUNDLED_CATALOG.presets ?? []) {
       for (const rt of Object.values(p.runtimes)) {
         const url = new URL(rt.baseUrl);
-        const secureLocal =
-          p.authMethod === 'none'
-          && rt.baseUrlEditable === true
+        const isLoopbackHttp =
+          rt.baseUrlEditable === true
           && url.protocol === 'http:'
           && (url.hostname === '127.0.0.1' || url.hostname === 'localhost');
-        expect(url.protocol === 'https:' || secureLocal, `${p.id}: ${rt.baseUrl}`).toBe(true);
+        const noAuthLocal = p.authMethod === 'none' && isLoopbackHttp;
+        // Magpie deliberately uses API-key auth on its documented local gateway so
+        // Usage can attribute calls to Cindy. Remote connections require a real key.
+        const magpieLocal = p.id === 'magpie' && p.authMethod !== 'none' && isLoopbackHttp;
+        expect(url.protocol === 'https:' || noAuthLocal || magpieLocal, `${p.id}: ${rt.baseUrl}`).toBe(true);
       }
     }
   });
