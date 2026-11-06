@@ -324,6 +324,15 @@ both sides. Duplicate candidates are applied once. A timed-out exchange does
 not tear down healthy video; polling is bounded to 30 seconds. SDP, candidate
 addresses, credentials and desktop content are not added to logs.
 
+The iOS viewer offers with `max-bundle`, so video, audio and the input channel
+gather candidates on one transport. The default balanced policy gathers a full
+set per media type: a phone with Wi-Fi, cellular and several IPv6 addresses
+produced 108 host candidates for one attempt, close to the 128 limit that ends
+the attempt without a retry. With max-bundle the same networks yield about a
+third of that. Desktop answerers already accept the offered BUNDLE group, so
+older Desktops need no change; the setting is native and ships with a new app
+build.
+
 | Phase                      | Bound                                                   |
 | -------------------------- | ------------------------------------------------------- |
 | Desktop source enumeration | 2 seconds with native capture, 5 seconds otherwise      |
