@@ -568,6 +568,40 @@ describe('GitContextBadge', () => {
     }
   });
 
+  // Unit: conflicts must be visible independently of checks, while main status keeps priority.
+  it.each([
+    ['open', true, 'var(--warning-fg)', true],
+    ['draft', true, 'var(--text-tertiary)', true],
+    ['open', false, 'var(--diff-add-fg)', false],
+    ['open', null, 'var(--diff-add-fg)', false],
+    ['merged', true, 'var(--focus-ring)', false],
+    ['closed', true, 'var(--error-fg)', false],
+  ] as const)(
+    'shows conflicts for %s/%s without replacing its state icon',
+    (kind, conflicts, color, shown) => {
+      const { context, rerender } = renderHeader(0);
+      const status = context.prStatuses.get('github:github.com/octo/repo#7')!;
+      gitContextMock.mockReturnValue({
+        ...context,
+        prStatuses: new Map([
+          ['github:github.com/octo/repo#7', { ...status, status: kind, conflicts, checks: null }],
+        ]),
+      });
+      rerender(
+        <Tooltip.Provider>
+          <GitContextBadge session={dialogueSession} />
+        </Tooltip.Provider>,
+      );
+      const trigger = screen.getAllByRole('button', { name: /pr.openAria/ })[0];
+      expect(trigger.querySelector('svg')?.style.color).toBe(color);
+      expect(trigger.getAttribute('aria-label')?.includes('pr.conflicts')).toBe(shown);
+      pointer(trigger, 'over');
+      advance(300);
+      expect(Boolean(screen.queryByText('ccAgent.gitContext.pr.merge'))).toBe(shown);
+      expect(Boolean(screen.queryByText('ccAgent.gitContext.pr.conflicts'))).toBe(shown);
+    },
+  );
+
   // Merged PRs drop the header check signal, whatever the checks say; the panel keeps them.
   it.each([
     [{ total: 3, passed: 3, skipped: 0, failed: 0, pending: 0 }, 'check'],

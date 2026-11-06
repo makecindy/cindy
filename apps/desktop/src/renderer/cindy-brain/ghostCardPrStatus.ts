@@ -5,6 +5,9 @@
  * 插件卡片在调用结束后是静态快照,PR 的检查状态却随时在变;交给宿主填写后,卡片和标题栏
  * 永远一致,也不必等 Agent 下一轮回写。插件写在里面的内容是兜底:旧版宿主、手机,或这条
  * PR 不在本任务的 PR 列表里(宿主查不到)时原样显示。
+ *
+ * `data-ghost-pr-open-only="owner/repo#123"` 标的是只在 PR 开着时成立的部分(跟进中、操作按钮):
+ * 同一份状态显示已合并或关闭时宿主把它们藏起来,查不到状态时照原样显示。
  */
 import { Check, CircleMinus, CircleX, Clock, type LucideIcon } from 'lucide-react';
 import { prStatusItemKeys, type PrStatusItemKey, type PrStatusItemTone } from '@cindy/maker-shared';
@@ -12,7 +15,8 @@ import type { PrStatusResult } from '@/lib/gitContext.types';
 import { appIconMarkup, preloadAppIconMarkup } from './ghostCardIcons';
 
 const SLOT_SELECTOR = 'div[data-ghost-pr-status]';
-const SLOT_ATTR_RE = / data-ghost-pr-status="([^"]+)"/;
+const SLOT_ATTR_RE = / data-ghost-pr-(?:status|open-only)="([^"]+)"/;
+const OPEN_ONLY_SELECTOR = '[data-ghost-pr-open-only]';
 const SLOT_VALUE_RE = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#(\d+)$/;
 
 type Tone = PrStatusItemTone;
@@ -24,7 +28,7 @@ export function prStatusSlotKey(value: string): string | null {
   return m ? `${m[1].toLowerCase()}/${m[2].toLowerCase()}#${Number(m[3])}` : null;
 }
 
-/** 从净化后的卡片 html 里取第一个状态位的 key(订阅用;没有状态位返回 null)。 */
+/** 从净化后的卡片 html 里取第一个状态位或 open-only 标记的 key(订阅用;都没有返回 null)。 */
 export function readPrStatusSlotKey(html: string): string | null {
   const m = SLOT_ATTR_RE.exec(html);
   return m ? prStatusSlotKey(m[1]) : null;
@@ -64,6 +68,26 @@ export function prStatusItems(status: Extract<PrStatusResult, { ok: true }>, t: 
 
 /** 状态位被宿主内容替换前的原始子节点:之后查不到状态时据此恢复插件的兜底内容。 */
 const slotFallbacks = new WeakMap<HTMLElement, Node[]>();
+/** 被藏起来的 open-only 元素原本的内联 display,恢复时还原。 */
+const hiddenDisplays = new WeakMap<HTMLElement, { value: string; priority: string }>();
+
+/** PR 已合并或关闭时藏起 open-only 部分;状态回到开着或查不到时还原。可反复调用。 */
+function applyOpenOnly(doc: Document, lookup: (key: string) => PrStatusResult | undefined): void {
+  for (const el of Array.from(doc.querySelectorAll<HTMLElement>(OPEN_ONLY_SELECTOR))) {
+    const key = prStatusSlotKey(el.getAttribute('data-ghost-pr-open-only') ?? '');
+    const status = key ? lookup(key) : undefined;
+    const ended = status?.ok === true && (status.status === 'merged' || status.status === 'closed');
+    const saved = hiddenDisplays.get(el);
+    if (ended && !saved) {
+      hiddenDisplays.set(el, { value: el.style.getPropertyValue('display'), priority: el.style.getPropertyPriority('display') });
+      el.style.setProperty('display', 'none', 'important');
+    } else if (!ended && saved) {
+      hiddenDisplays.delete(el);
+      if (saved.value) el.style.setProperty('display', saved.value, saved.priority);
+      else el.style.removeProperty('display');
+    }
+  }
+}
 
 /**
  * 用宿主的 PR 状态替换卡片文档里的状态位。查不到状态(或状态失败、一项都没有)时保留插件的
@@ -74,6 +98,7 @@ export function fillGhostCardPrStatus(
   lookup: (key: string) => PrStatusResult | undefined,
   t: Label,
 ): void {
+  applyOpenOnly(doc, lookup);
   for (const slot of Array.from(doc.querySelectorAll<HTMLElement>(SLOT_SELECTOR))) {
     const key = prStatusSlotKey(slot.getAttribute('data-ghost-pr-status') ?? '');
     const status = key ? lookup(key) : undefined;

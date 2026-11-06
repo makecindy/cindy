@@ -41,6 +41,9 @@ const mocks = vi.hoisted(() => ({
   remoteCodexDeviceIds: [] as Array<string | null>,
   remoteClaudeQuota: null as Record<string, unknown> | null,
   remoteXaiSnapshot: null as Record<string, unknown> | null,
+  openCodeUsageProviderIds: [] as Array<string | undefined>,
+  openCodeUsageDeviceIds: [] as Array<string | null>,
+  openCodeUsage: null as Record<string, unknown> | null,
   sessionUsage: {
     actualMoney: null,
     estimatedValueMoney: null,
@@ -110,6 +113,19 @@ vi.mock('@/hooks/useAccountUsage', async (importOriginal) => {
     useAccountUsage: () => null,
   };
 });
+vi.mock('@/hooks/useProviderAccountUsage', () => ({
+  useProviderAccountUsage: (
+    provider: { id: string } | undefined,
+    _agent?: string,
+    deviceId: string | null = null,
+  ) => {
+    mocks.openCodeUsageProviderIds.push(provider?.id);
+    mocks.openCodeUsageDeviceIds.push(deviceId);
+    return provider && mocks.openCodeUsage
+      ? { supported: true, result: mocks.openCodeUsage, busy: false, refresh: vi.fn() }
+      : { supported: false, result: null, busy: false, refresh: vi.fn() };
+  },
+}));
 vi.mock('@/hooks/useClaudeAccountUsage', () => ({ useClaudeAccountUsage: () => null }));
 vi.mock('@/hooks/useModelAccessCreditUsage', () => ({ useModelAccessCreditUsage: () => null }));
 vi.mock('@/hooks/useClaudeSubscriptionUsage', () => ({
@@ -195,6 +211,9 @@ beforeEach(() => {
   mocks.remoteCodexDeviceIds = [];
   mocks.remoteClaudeQuota = null;
   mocks.remoteXaiSnapshot = null;
+  mocks.openCodeUsageProviderIds = [];
+  mocks.openCodeUsageDeviceIds = [];
+  mocks.openCodeUsage = null;
   mocks.sessionUsage = {
     actualMoney: null,
     estimatedValueMoney: null,
@@ -229,6 +248,46 @@ describe('TodaySpendChip device-link remote sessions', () => {
     expect(container.textContent).toContain('Fable 周限 剩余 66%');
     // 远程订阅会话读的是被控端镜像 hook(deviceId 透传),不读本机快照。
     expect(mocks.remoteHookDeviceIds).toContain('device-abc');
+  });
+
+  it('renders remote OpenCode Go rolling, weekly, and monthly meters independently', () => {
+    mocks.deviceProviders = [{
+      id: 'opencode-go',
+      connected: true,
+      suspended: false,
+      auth: { method: 'apiKey' },
+      routing: {},
+      opencodeGoUsageAgents: ['codex'],
+    } as unknown as TestProvider];
+    mocks.openCodeUsage = {
+      status: 'ready',
+      stale: false,
+      snapshot: {
+        kind: 'opencode-go-quota',
+        fetchedAt: Date.now(),
+        windows: [
+          { id: 'rolling', usedPercent: 10, limited: false, resetsAt: null },
+          { id: 'weekly', usedPercent: 45, limited: false, resetsAt: null },
+          { id: 'monthly', usedPercent: 65, limited: false, resetsAt: null },
+        ],
+      },
+    };
+
+    const { container } = render(
+      <TodaySpendChip
+        vendorKey="codex"
+        providerId="opencode-go"
+        modelId="opencode-go/kimi-k2"
+        sessionId="session-remote-opencode-go"
+        deviceLinkDeviceId="device-opencode-go"
+      />,
+    );
+
+    expect(mocks.openCodeUsageProviderIds).toContain('opencode-go');
+    expect(mocks.openCodeUsageDeviceIds).toContain('device-opencode-go');
+    expect(container.textContent).toContain('90%');
+    expect(container.textContent).toContain('55%');
+    expect(container.textContent).toContain('35%');
   });
 
   it('远程订阅会话悬停出额度卡,chip 不可点(看板属被控端账号)', () => {

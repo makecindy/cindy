@@ -594,6 +594,23 @@ describe('Session graceful-stop control state', () => {
 });
 
 describe('Session current-generation terminal observation', () => {
+  it('retains bounded output-limit details in the observed terminal snapshot', async () => {
+    const stub = createHandle();
+    const session = createSession(stub);
+    await session.send('work');
+    const error = waitForSessionEvent(session, 'error');
+    stub.push({ type: 'error', data: { message: 'limit', reason: 'output-limit', isTerminal: true,
+      outputLimit: { outputTokens: 131072, reasoningTokens: 131064, raw: 'discard' } } });
+    await error;
+    expect(session.getObservedCurrentTurnTerminal().outputLimit).toEqual({ outputTokens: 131072, reasoningTokens: 131064 });
+    const done = waitForSessionEvent(session, 'done');
+    stub.push({ type: 'done', data: {} });
+    await done;
+    expect(session.getObservedCurrentTurnTerminal().outputLimit).toEqual({ outputTokens: 131072, reasoningTokens: 131064 });
+    await session.send('next');
+    expect(session.getObservedCurrentTurnTerminal().outputLimit).toBeUndefined();
+  });
+
   it('reports done until the next reservation, and keeps error ahead of a paired done tail', async () => {
     const stub = createHandle();
     const session = createSession(stub);

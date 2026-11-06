@@ -2,21 +2,29 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { palettes, type ThemeMode } from '@/theme/tokens';
+
+const theme = vi.hoisted(() => ({ mode: 'light' as 'light' | 'dark' }));
+
+const actions = vi.hoisted(() => ({ open: vi.fn(async (_url: string) => undefined), copy: vi.fn(async (_text: string) => undefined) }));
 
 // 把 style 展平进 data-style,断言每个 Text 实际叠了哪些样式。
 vi.mock('react-native', async () => {
   const React = await import('react');
   const flat = (style: unknown): Record<string, unknown> =>
     Object.assign({}, ...[style].flat(Infinity).filter(Boolean));
-  const host = (tag: string) => ({ children, style, horizontal, onLayout, testID, selectable }: any) => {
+  const host = (tag: string) => ({ children, style, horizontal, onLayout, testID, selectable, onPress, onTouchStart, accessibilityRole }: any) => {
     React.useEffect(() => { onLayout?.({ nativeEvent: { layout: { width: 280 } } }); }, [onLayout]);
     return React.createElement(tag, { 'data-style': JSON.stringify(flat(style)),
-      'data-horizontal': horizontal, 'data-testid': testID, 'data-selectable': selectable }, children);
+      'data-horizontal': horizontal, 'data-testid': testID, 'data-selectable': selectable, 'data-role': accessibilityRole, onClick: onPress, onTouchStart }, children);
   };
   return {
     View: host('div'),
     ScrollView: host('section'),
     Text: host('span'),
+    Pressable: host('button'),
+    ActivityIndicator: () => null,
+    Linking: { openURL: actions.open },
     useWindowDimensions: () => ({ width: 360, height: 800, fontScale: 1, scale: 3 }),
     StyleSheet: { create: (s: any) => s, flatten: flat, hairlineWidth: 1 },
     Platform: { OS: 'ios', select: (s: any) => s.ios ?? s.default },
@@ -26,29 +34,96 @@ vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native
 vi.mock('react-native-uitextview', async () => {
   const React = await import('react');
   const { StyleSheet } = await import('react-native');
-  return { UITextView: ({ children, uiTextView, selectable, style }: any) => React.createElement('span', {
+  return { UITextView: ({ children, uiTextView, selectable, style, onPress, onTouchStart, accessibilityRole }: any) => React.createElement('span', {
     'data-uitextview': uiTextView ? 'root' : 'span', 'data-selectable': selectable,
-    'data-style': JSON.stringify(StyleSheet.flatten(style) ?? {}),
+    'data-style': JSON.stringify(StyleSheet.flatten(style) ?? {}), 'data-role': accessibilityRole, onClick: onPress, onTouchStart,
   }, children) };
 });
 vi.mock('@/session/SelectionMenuText', async () => ({ SelectionMenuText: (await import('react-native')).Text }));
 vi.mock('@/session/ShareMessageCheckbox', () => ({ useCancelShareSelectionRowTap: () => null }));
 vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
-vi.mock('@/theme', () => ({
-  fontWeight: { regular: '400', medium: '500', semibold: '600', bold: '700' },
-  monoFont: 'Menlo',
-  useThemedStyles: (make: (colors: any) => any) => make(new Proxy({}, { get: () => '#000' })),
+vi.mock('@/theme', async () => ({
+  ...await import('@/theme/tokens'), monoFont: 'Menlo',
+  useThemedStyles: (make: (colors: any) => any) => make(palettes[theme.mode]),
+  useTheme: () => ({ colors: palettes[theme.mode], mode: theme.mode }),
 }));
+
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('lucide-react-native', () => ({ Copy: () => null, Check: () => null, CircleAlert: () => null }));
+vi.mock('@/session/messageActions', () => ({ writeClipboardText: actions.copy }));
+vi.mock('expo-file-system', () => ({ Directory: class {}, File: class {}, Paths: { cache: 'mock-cache' } }));
+vi.mock('react-native-webview', async () => {
+  const React = await import('react');
+  return { WebView: React.forwardRef(({ source, ...props }: any, ref) => {
+    React.useImperativeHandle(ref, () => ({ injectJavaScript() {} }));
+    return React.createElement('div', { 'data-webview': source?.html?.includes('katex') ? 'math' : 'mermaid', 'data-testid': props.testID });
+  }) };
+});
 
 import { BotGroupMarkdownText, BotGroupUserText } from '@/session/BotGroupMessageText';
 
 let root: Root;
 let node: HTMLDivElement;
 beforeEach(() => {
+  theme.mode = 'light';
+  actions.open.mockClear();
+  actions.copy.mockClear();
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   node = document.createElement('div');
   document.body.append(node);
   root = createRoot(node);
+});
+
+// Unit / A04：补齐完整群正文的链接覆盖；HTTP(S) 可打开，本机及任务链接保持不可操作。
+it('opens HTTP(S) links in rich group bodies while local and task links stay inert', async () => {
+  await act(async () => root.render(createElement(BotGroupMarkdownText, {
+    richContent: true,
+    content: '[网页](https://example.com/a) http://example.com/b [文件](/private/report.md) [任务](cindy://session/private)',
+  })));
+  for (const label of ['网页', 'http://example.com/b']) {
+    const span = [...node.querySelectorAll('span')].filter(el => el.textContent === label).at(-1)!;
+    await act(async () => span.click());
+    expect(styleOf(label).textDecorationLine).toBe('underline');
+  }
+  expect(actions.open.mock.calls.map(call => call[0])).toEqual(['https://example.com/a', 'http://example.com/b']);
+  for (const label of ['文件', '任务']) {
+    const span = [...node.querySelectorAll('span')].filter(el => el.textContent === label).at(-1)!;
+    await act(async () => span.click());
+    expect(styleOf(label).textDecorationLine).toBeUndefined();
+  }
+  expect(actions.open).toHaveBeenCalledTimes(2);
+});
+
+// Unit / A04：复制不含围栏、图表传递原文、公式挂载现有 WebView；原生宿主用 fake 替代。
+it('reuses code coloring and block copy, diagram opening and formula rendering in complete group bodies', async () => {
+  const openDiagram = vi.fn();
+  const code = 'const answer = 42;';
+  const diagram = 'flowchart LR\nA --> B';
+  await act(async () => root.render(createElement(BotGroupMarkdownText, {
+    richContent: true, onOpenDiagram: openDiagram,
+    content: '```typescript\n' + code + '\n```\n\n```mermaid\n' + diagram + '\n```\n\n$$\n\\frac{1}{2}\n$$\n\n$x^2$',
+  })));
+  expect(styleOf('const').color).toBe(palettes.light.syntaxKeyword);
+  await act(async () => node.querySelector<HTMLButtonElement>('[data-testid="message.markdownCodeCopyButton"]')!.click());
+  expect(actions.copy).toHaveBeenCalledWith(code);
+  expect(node.querySelector('[data-testid="botGroup.mermaidDiagram"]')).not.toBeNull();
+  await act(async () => node.querySelector<HTMLButtonElement>('[data-testid="botGroup.openDiagram"]')!.click());
+  expect(openDiagram).toHaveBeenCalledWith(diagram);
+  expect(node.querySelector('[data-testid="botGroup.mathFormula"]')).not.toBeNull();
+  expect(node.textContent).toContain('x²');
+});
+
+it('keeps group image selection free of link, code-copy and diagram actions', async () => {
+  const openDiagram = vi.fn();
+  await act(async () => root.render(createElement(BotGroupMarkdownText, {
+    richContent: true, interactive: false, onOpenDiagram: openDiagram,
+    content: '[网页](https://example.com)\n\n```js\nconst a = 1;\n```\n\n```mermaid\ngraph LR\nA --> B\n```',
+  })));
+  await act(async () => [...node.querySelectorAll('span')].filter(el => el.textContent === '网页').at(-1)!.click());
+  expect(actions.open).not.toHaveBeenCalled();
+  expect(node.querySelector('[data-testid="message.markdownCodeCopyButton"]')).toBeNull();
+  expect(node.querySelector('[data-testid="botGroup.openDiagram"]')).toBeNull();
+  expect(styleOf('const').color).toBe(palettes.light.syntaxKeyword);
 });
 
 // #6713: real group body previously flattened tables into one Text. DOM hosts do not
@@ -178,4 +253,95 @@ it.each(['ios', 'android'])('uses system partial-selection text for formatted gr
   } finally {
     Platform.OS = 'ios';
   }
+});
+
+// A01 / unit: production sent body must resolve ids before exposing a touch action.
+// Existing selection tests cover carriers only. Minimal failure: @Ann with one
+// explicit id; namesakes, broadcasts and email/code must never open the wrong person.
+it.each([['ios', 'light'], ['ios', 'dark'], ['android', 'light'], ['android', 'dark']])('keeps PC mention styling, identity and text boundaries on %s / %s', async (platform, mode) => {
+  theme.mode = mode as ThemeMode;
+  const { Platform } = await import('react-native');
+  Platform.OS = platform as typeof Platform.OS;
+  const member = (botId: string, name: string) => ({ botId, name, avatar: '', avatarColor: '', status: 'active' as const });
+  const ann = member('ann-1', 'Ann');
+  const other = member('ann-2', 'Ann');
+  const reserved = member('all', '所有人');
+  const onPress = vi.fn();
+  const context = { members: [ann, other, reserved], mentions: { all: false, botIds: ['ann-1'] },
+    serverBacked: false, allLabels: ['所有人'], allBotsLabels: ['所有伙伴'], labels: ['Ann', '所有人', '所有伙伴'], onPress };
+  const renderBody = async (content: string, changes = {}) => {
+    const nextContext = { ...context, ...changes };
+    await act(async () => root.render(createElement(BotGroupUserText, {
+      content, mentionLabels: nextContext.labels, mentionContext: nextContext,
+    })));
+  };
+  const links = () => [...node.querySelectorAll('span')].filter(span => span.getAttribute('data-role') === 'link');
+  try {
+    await renderBody('@Ann mail@Ann.test @Anna @Unknown 正文');
+    expect(links().map(span => span.textContent)).toEqual(['@Ann']);
+    const mentionStyle = JSON.parse(links()[0]!.getAttribute('data-style')!);
+    expect(mentionStyle).toMatchObject({ color: palettes[theme.mode].groupMentionText });
+    expect(mentionStyle.textDecorationLine).toBeUndefined();
+    expect(mentionStyle.fontWeight).toBeUndefined();
+    expect(mentionStyle.backgroundColor).toBeUndefined();
+    const touch = new Event('touchstart', { bubbles: true });
+    Object.defineProperties(touch, { pageX: { value: 108 }, pageY: { value: 246 } });
+    await act(async () => { links()[0]!.dispatchEvent(touch); links()[0]!.click(); });
+    expect(onPress).toHaveBeenLastCalledWith(ann, { x: 108, y: 246 });
+    expect(node.textContent).toBe('@Ann mail@Ann.test @Anna @Unknown 正文');
+    await renderBody('@Ann', { mentions: { all: false, botIds: ['ann-1', 'ann-2'] } });
+    expect(links()).toHaveLength(0);
+    await renderBody('@Ann', { serverBacked: true, mentions: { all: false, botIds: [] } });
+    expect(links()).toHaveLength(0); // Server fallback still refuses namesakes.
+    await renderBody('@Ann', { members: [ann], serverBacked: true, mentions: { all: false, botIds: [] } });
+    expect(links()).toHaveLength(1);
+    await renderBody('@Ann', { members: [] });
+    expect(links()).toHaveLength(0); // Departed/unknown target.
+    await renderBody('@所有人 @所有伙伴', { mentions: { all: true, allBots: true, botIds: [] } });
+    expect(links()).toHaveLength(0);
+    const broadcasts = [...node.querySelectorAll('span')].filter(span => ['@所有人', '@所有伙伴'].includes(span.textContent ?? ''));
+    expect(broadcasts).toHaveLength(2);
+    for (const span of broadcasts) expect(JSON.parse(span.getAttribute('data-style')!)).toMatchObject({ color: palettes[theme.mode].groupMentionText });
+    await renderBody('@所有人', { mentions: { all: false, botIds: ['all'] } });
+    expect(links()).toHaveLength(1); // Explicitly picked namesake is a person, as on PC.
+    // Localized teammate broadcast with a colliding member name (PR #8818).
+    const spanish = { members: [member('todos', 'Todos los compañeros')], allBotsLabels: ['Todos los compañeros'],
+      labels: ['Todos los compañeros'], mentions: { all: false, allBots: true, botIds: ['todos'] } };
+    await renderBody('@Todos los compañeros', spanish);
+    expect(links()).toHaveLength(0);
+    await renderBody('@Todos los compañeros', { ...spanish, mentions: { all: false, botIds: ['todos'] } });
+    expect(links()).toHaveLength(1); // Without broadcast intent the explicit person remains clickable.
+    await act(async () => root.render(createElement(BotGroupMarkdownText, {
+      content: '**@Ann** `@Ann` [website](https://example.test)\n\n~~~text\n@Ann\n~~~', mentionContext: context,
+    })));
+    expect(links().map(span => span.textContent)).toEqual(['@Ann']);
+    expect(JSON.parse(links()[0]!.getAttribute('data-style')!)).toMatchObject({ fontWeight: '600', color: palettes[theme.mode].groupMentionText });
+    expect(styleOf('website').textDecorationLine).toBeUndefined();
+  } finally { Platform.OS = 'ios'; }
+});
+
+// PR #8818 / component: per-inline matching mistook **@Ann**a for Ann.
+// Existing carrier/identity tests do not cross formatting boundaries. Check the
+// rendered word through the production body, including a valid split mention.
+it.each(['ios', 'android'])('matches complete rendered words across formatting on %s', async platform => {
+  const { Platform } = await import('react-native');
+  Platform.OS = platform as typeof Platform.OS;
+  const ann = { botId: 'ann', name: 'Ann', avatar: '', avatarColor: '', status: 'active' as const };
+  const context = { members: [ann], mentions: { all: false, botIds: [] }, serverBacked: true,
+    allLabels: ['所有人'], allBotsLabels: ['所有伙伴'], labels: ['Ann'], onPress: vi.fn() };
+  try {
+    await act(async () => root.render(createElement(BotGroupMarkdownText, {
+      richContent: true,
+      content: '**@Ann**a mail**@Ann**.test @**Ann** [网页](https://example.com)', mentionContext: context,
+    })));
+    expect(node.textContent).toBe('@Anna mail@Ann.test @Ann 网页');
+    const links = [...node.querySelectorAll('[data-role="link"]')];
+    expect(links.map(span => span.textContent)).toEqual(['@', 'Ann']);
+    const highlighted = [...node.querySelectorAll('[data-style]')].filter(span =>
+      JSON.parse(span.getAttribute('data-style')!).color === palettes.light.groupMentionText);
+    expect(highlighted.map(span => span.textContent)).toEqual(['@', 'Ann']);
+    expect(styleOf('网页').textDecorationLine).toBe('underline');
+    await act(async () => [...node.querySelectorAll('span')].find(span => span.textContent === '网页')!.click());
+    expect(actions.open).toHaveBeenCalledWith('https://example.com');
+  } finally { Platform.OS = 'ios'; }
 });

@@ -25,10 +25,18 @@ export interface TurnUsageDetails extends UsageBillingSource {
   totalTokens: number;
   /** 可证明的纯模型生成耗时；不含工具执行/用户等待，用于计算输出速率。 */
   durationMs?: number;
-  /** 整轮 wall-clock 耗时，仅供诊断展示；绝不用于计算输出速率。 */
+  /**
+   * 整轮 wall-clock 耗时。不能直接当输出速率的分母（含工具执行/用户等待）；
+   * 仅作为 durationMs 的上限，避免并行请求累加的生成耗时超过整轮实际耗时。
+   */
   turnDurationMs?: number;
   /** cacheRead / (input + cacheRead + cacheCreate)，无输入分母时为 null。 */
   cacheHitRate: number | null;
+  /**
+   * 本轮是任务（或 /clear 之后）的第一轮用户请求：此前没有可复用的 prompt cache，
+   * 命中率为 0 是必然而非缓存被打断。老消息无此字段。
+   */
+  firstUserRound?: true;
   /** 本轮主要模型；能确定时填写。 */
   model?: string;
   /** 本轮涉及多个模型时的分桶列表。 */
@@ -61,6 +69,7 @@ export interface BuildTurnUsageDetailsInput extends UsageBillingSource {
   >;
   durationMs?: number;
   turnDurationMs?: number;
+  firstUserRound?: boolean;
 }
 
 function sanitizeToken(value: unknown): number {
@@ -169,6 +178,7 @@ export function aggregateTurnUsageDetails(
     models: modelNames,
     perModelCost: perModel,
     additionalCosts: [...details].reverse().find(detail => detail.additionalCosts)?.additionalCosts,
+    firstUserRound: details.some((detail) => detail.firstUserRound === true),
   });
 }
 
@@ -232,6 +242,7 @@ export function buildTurnUsageDetails(input: BuildTurnUsageDetailsInput): TurnUs
     ...(model ? { model } : {}),
     ...(models ? { models } : {}),
     ...(perModelCost ? { perModelCost } : {}),
+    ...(input.firstUserRound === true ? { firstUserRound: true as const } : {}),
   };
 }
 
@@ -254,6 +265,7 @@ export function normalizeTurnUsageDetails(value: unknown): TurnUsageDetails | un
         : undefined,
       durationMs: typeof raw.durationMs === 'number' ? raw.durationMs : undefined,
       turnDurationMs: typeof raw.turnDurationMs === 'number' ? raw.turnDurationMs : undefined,
+      firstUserRound: raw.firstUserRound === true,
       perModelCost: Array.isArray(raw.perModelCost)
         ? raw.perModelCost.map((e) =>
             e && typeof e === 'object'

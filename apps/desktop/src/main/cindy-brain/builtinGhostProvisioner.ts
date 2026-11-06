@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import os from 'node:os';
 
-import { authorDeclaredNamespaceReason } from '@cindy/plugin-protocol';
+import { authorDeclaredNamespaceReason, compareCindyVersions } from '@cindy/plugin-protocol';
 import {
   GHOST_MANIFEST_FILE,
   ghostIconMimeType,
@@ -11,6 +11,7 @@ import {
   validateGhostManifest,
   type GhostManifest,
 } from '../../shared/ghost.js';
+import { PLUGIN_ROOT_INSTALL_ROOT } from '../../shared/pluginIdentity.js';
 import {
   classifyGhostDirEntry,
   classifyGhostDirEntrySync,
@@ -38,6 +39,10 @@ import { withGhostInstallLock } from './ghostInstallLock.js';
  *   孤儿回收(空根无法区分"仓里真没有"和"没 checkout",宁可不删),只做装/覆盖;
  * - 「永远以最新包为准」:对每个种子做内容指纹比对(逐字节收敛),本地没装
  *   就装、指纹不同就覆盖 —— 不看 version 字段,dev 改源码重启即生效;
+ * - **商店同名安装按版本取新**(2026-11):同 id 已从商店装过时,种子版本更新才覆盖,
+ *   版本相同或更旧让给商店;商店的版本追上种子后,商店自动更新会把种子覆盖回来
+ *   (plugin-market 按 seeded 台账放行),这里随后摘掉台账。根 namespace 的安装可能
+ *   在旧布局 `<id>` 或新布局 `_ns/_root/<id>`,两处都按同一实例对待;
  * - **受众(audience)**:种子根下可选的 provisioning.json 按 id 声明给谁装
  *   ("all" 或按登录身份命中);不在配置里的种子默认人人都装。身份不再命中
  *   时,把"当初由播种装上的"(seeded 台账)回收删除 —— 用户手动装的同 id
@@ -65,6 +70,15 @@ export interface BuiltinProvisionerLogger {
 }
 
 /** 播种时的登录身份快照(登出 = null;字段来自 authManager 的 User)。 */
+/**
+ * 同 id 的商店安装事实。`version` 是商店账本里已装 release 的版本;
+ * `ownsInstalledBytes` = 已装目录的 ghost.json 与账本记录一致(装着的是商店的包)。
+ */
+export interface BuiltinStoreInstallFact {
+  version: string;
+  ownsInstalledBytes: boolean;
+}
+
 export interface ProvisionIdentity {
   userId: string;
   email: string | null;
@@ -128,6 +142,11 @@ export interface ProvisionDeps {
    * 广播"播种进行中"的 UI 提示;指纹全一致的 no-op 轮永不触发(不闪提示)。
    */
   onApplyStart?: () => void;
+  /**
+   * 已装实例对应的商店安装(null = 没有已装的商店记录;抛错 = 账本读不了,本轮不动它)。
+   * 缺省 = 不看商店,行为与旧版一致。
+   */
+  storeInstall?: (id: string, installedDir: string) => BuiltinStoreInstallFact | null;
   log?: BuiltinProvisionerLogger;
 }
 
@@ -223,6 +242,39 @@ function isExternalTempAncestor(segment: string, target: string): boolean {
   }
 }
 
+/**
+ * 根 namespace 实例的已装目录:旧布局 `<id>` 优先(与 GhostManager 的物理定位一致),
+ * 其次新布局 `_ns/_root/<id>`;都没有 ghost.json 时返回 null。
+ */
+export function resolveBuiltinInstalledDir(repoRootDir: string, id: string): string | null {
+  for (const dir of [path.join(repoRootDir, id), path.join(repoRootDir, ...PLUGIN_ROOT_INSTALL_ROOT.split('/'), id)]) {
+    if (!isRealDirectoryPath(dir)) continue;
+    try {
+      if (classifyGhostDirEntrySync(path.join(dir, GHOST_MANIFEST_FILE)) === 'file') return dir;
+    } catch {
+      // 读不到 manifest 的目录不算已装
+    }
+  }
+  return null;
+}
+
+/**
+ * 种子版本是否严格新于商店版本;任一侧不是可比版本号时按「不更新」处理,让给商店。
+ * plugin-market 放行商店覆盖种子时用同一判据,两侧必须一致。
+ */
+export function seedIsNewerThanStore(seedVersion: string, storeVersion: string): boolean {
+  return compareCindyVersions(seedVersion, storeVersion) === 1;
+}
+
+/** 当前生效的种子版本(同 id 取先到的根,与播种一致);没有可用种子时返回 null。 */
+export function readBuiltinSeedVersion(seedRootDirs: string[], id: string): string | null {
+  for (const root of seedRootDirs) {
+    if (!listSeedIdsInRoot(root).includes(id)) continue;
+    return readSeedManifest(path.join(root, id), id)?.version ?? null;
+  }
+  return null;
+}
+
 /** Verify that an approval source is the exact, link-free bundled seed directory for an id. */
 export function isTrustedBuiltinSeedSource(
   seedRootDirs: string[],
@@ -298,6 +350,18 @@ function listSeedIdsInRoot(seedRootDir: string): string[] {
  * fail closed;不能阻断的消费者(如 legacy 恢复状态查询)必须自己 try/catch 降级,
  * 而不是把损坏当空(见 getLegacyGhostRecoveryStatusForActiveSession)。
  */
+/**
+ * 读 seeded 台账(由播种装上、仍归播种管理的 id)。状态文件缺失 = 空;损坏则抛错,
+ * 调用方按 fail closed 处理。
+ */
+export function readBuiltinSeededIds(repoRootDir: string): string[] {
+  const result = readState(repoRootDir);
+  if (!result.readable) {
+    throw new Error('builtin provisioning state is unreadable');
+  }
+  return result.state.seeded;
+}
+
 export function readBuiltinTombstones(repoRootDir: string): string[] {
   const result = readState(repoRootDir);
   if (!result.readable) {
@@ -637,20 +701,18 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
         }
 
         await withGhostInstallLock(id, async () => {
-          const installedDir = path.join(repoRootDir, id);
-          const installedExists =
-            isRealDirectoryPath(installedDir) &&
-            (() => {
-              try {
-                return classifyGhostDirEntrySync(path.join(installedDir, GHOST_MANIFEST_FILE)) === 'file';
-              } catch {
-                return false;
-              }
-            })();
+          const existingDir = resolveBuiltinInstalledDir(repoRootDir, id);
+          const installedDir = existingDir ?? path.join(repoRootDir, id);
+          const installedExists = existingDir !== null;
+          const store = existingDir ? (deps.storeInstall?.(id, existingDir) ?? null) : null;
 
           // 3) 受众:不命中 → 回收"播种装的"(seeded 台账内),手动装的不动。
+          //    同 id 有商店安装时交给商店,不删(已是商店字节就摘台账)。
           if (!matchesAudience(config.get(id)?.audience, identity)) {
-            if (seeded.has(id) && installedExists) {
+            if (store) {
+              if (store.ownsInstalledBytes) seeded.delete(id);
+              outcome.skipped.push(id);
+            } else if (seeded.has(id) && installedExists) {
               markApplyStart();
               await deps.beforeRemove?.(id);
               await fs.promises.rm(installedDir, { recursive: true, force: true });
@@ -663,7 +725,21 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
             return;
           }
 
-          // 4) 指纹比对(忽略点开头文件:`.disabled` 是用户状态不是内容)。
+          // 4) 商店同名安装:种子版本更新才覆盖;相同或更旧让给商店,不动它的字节。
+          //    已装的是商店字节就摘台账(此后是普通商店插件);仍是种子字节时保留台账,
+          //    等商店自动更新覆盖回来。
+          if (store && !seedIsNewerThanStore(manifest.version, store.version)) {
+            if (store.ownsInstalledBytes) seeded.delete(id);
+            outcome.skipped.push(id);
+            log?.info('builtin seed yields to the store install', {
+              id,
+              seedVersion: manifest.version,
+              storeVersion: store.version,
+            });
+            return;
+          }
+
+          // 5) 指纹比对(忽略点开头文件:`.disabled` 是用户状态不是内容)。
           // 种子是随应用发布的第一方输入,出现链接/FIFO/设备节点属于打包事故:
           // 必须整颗 fail closed,不能在复制时静默丢掉条目后批准一个残缺安装。
           const seedFingerprint = await fingerprintDirContent(seedDir);
@@ -775,17 +851,25 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
         continue;
       }
       if (allSeedIds.has(id)) continue;
-      const installedDir = path.join(repoRootDir, id);
-      if (
-        isRealDirectoryPath(installedDir) &&
-        (() => {
-          try {
-            return classifyGhostDirEntrySync(path.join(installedDir, GHOST_MANIFEST_FILE)) === 'file';
-          } catch {
-            return false;
-          }
-        })()
-      ) {
+      const installedDir = resolveBuiltinInstalledDir(repoRootDir, id);
+      if (installedDir) {
+        // 同 id 有商店安装:不删,交给商店。已是商店字节就摘台账;仍是种子字节时
+        // 保留台账,等商店自动更新覆盖回来后下一轮再摘。
+        let store: BuiltinStoreInstallFact | null;
+        try {
+          store = deps.storeInstall?.(id, installedDir) ?? null;
+        } catch (err) {
+          outcome.retryPending = true;
+          log?.warn('builtin ghost orphan store lookup failed', {
+            id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          continue;
+        }
+        if (store) {
+          if (store.ownsInstalledBytes) seeded.delete(id);
+          continue;
+        }
         try {
           markApplyStart();
           await deps.beforeRemove?.(id);

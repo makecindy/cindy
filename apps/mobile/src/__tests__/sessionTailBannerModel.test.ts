@@ -92,6 +92,17 @@ describe('resolveSessionTailBanner — error-tail', () => {
     expect((state as { text: string }).text).toContain('设置 → 模型供应商');
   });
 
+  it('shows reasoning exhaustion details from a restored error tail', () => {
+    const state = resolveSessionTailBanner(baseInput({
+      messages: [errorRow('limit', '2026-01-01T00:00:02.000Z', {
+        message: 'limit', reason: 'output-limit', outputLimit: { outputTokens: 131072, reasoningTokens: 131064 },
+      })],
+    }));
+    expect(state).toMatchObject({ kind: 'error-tail', retryable: true });
+    expect((state as { text: string }).text).toContain('131064');
+    expect((state as { text: string }).text).toContain(i18n.t('session.tail.outputLimitReasoning'));
+  });
+
   it('localizes a persisted output limit and keeps manual continuation available', () => {
     const state = resolveSessionTailBanner(baseInput({
       messages: [errorRow('limit', '2026-01-01T00:00:02.000Z', {

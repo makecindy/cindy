@@ -38,11 +38,18 @@ interface TargetRetry {
 }
 let retryOwner: string | undefined;
 const retries = new Map<string, { revision: number; targets: Map<string, TargetRetry> }>();
+const refreshed = new Map<string, { revision: number; wall: number; mono: number }>();
+const refreshKey = (group: string, device: string) => JSON.stringify([activeOwnerScopeKey(), group, device]);
+const refreshDue = (group: string, device: string, revision: number) => {
+  const value = refreshed.get(refreshKey(group, device));
+  return !value || value.revision !== revision || Date.now() >= value.wall || performance.now() >= value.mono;
+};
 
 function retriesFor(group: string, revision: number): Map<string, TargetRetry> {
   const owner = activeOwnerScopeKey();
   if (retryOwner !== owner) {
     retries.clear();
+    refreshed.clear();
     retryOwner = owner;
   }
   let state = retries.get(group);
@@ -57,7 +64,8 @@ async function send(
   device: string,
   command: RemoteAgentFastPolicy,
   assertCurrent: () => void,
-): Promise<void> {
+  bestEffort = false,
+): Promise<boolean> {
   assertCurrent();
   const invoke = async (request: Record<string, unknown>) => {
     try {
@@ -81,7 +89,15 @@ async function send(
       '[REMOTE_AGENT_PEER_TOO_OLD] Update this computer to enforce the subscription Fast policy',
     );
   }
-  const result = await invoke({ op: 'fast-policy', ...command });
+  // New executors can continue at ordinary speed without a fresh policy ACK.
+  // Older executors still need the original enforcement handshake.
+  let result;
+  try { result = await invoke({ op: 'fast-policy', ...command }); }
+  catch (error) {
+    assertCurrent();
+    if (bestEffort && parseRemoteAgentCaps(caps.result).subscriptionFastPolicyCache) return false;
+    throw error;
+  }
   assertCurrent();
   const ack = (result.ok ? result.result : undefined) as
     { revision?: number; allowFast?: boolean } | undefined;
@@ -91,8 +107,21 @@ async function send(
     ack.revision !== command.revision ||
     ack.allowFast !== command.allowFast
   ) {
+    if (bestEffort && parseRemoteAgentCaps(caps.result).subscriptionFastPolicyCache) return false;
     throw new Error('[REMOTE_AGENT_UNAVAILABLE] Subscription Fast policy has not been confirmed');
   }
+  return true;
+}
+
+/** Piggyback on an already authenticated task grant/renewal; never grants model access. */
+export async function groupFastPolicyForGrant(group: string): Promise<RemoteAgentFastPolicy | undefined> {
+  if (!eligible(group)) return undefined;
+  const assertCurrent = captureProviderManagementScope();
+  let policy;
+  try { policy = await groupFastPolicyStore.prepare(group, readProviderGroup(group)?.allowFast !== false, [], assertCurrent); }
+  catch { assertCurrent(); return undefined; }
+  assertCurrent();
+  return { group, revision: policy.revision, allowFast: policy.allowFast };
 }
 
 export async function receiveGroupFastPolicy(
@@ -122,10 +151,12 @@ export async function receiveGroupFastPolicy(
     getSelfDeviceId(),
     assertCurrent,
     directTask,
+    false,
+    origin === getSelfDeviceId(),
   );
   await notifySubscriptionFastPolicyChanged();
   assertCurrent();
-  return result;
+  return { revision: result.revision, allowFast: result.allowFast };
 }
 
 export async function bindLocalHostedGroupFastPolicy(
@@ -134,22 +165,29 @@ export async function bindLocalHostedGroupFastPolicy(
 ): Promise<void> {
   if (!eligible(group)) return;
   const assertCurrent = captureProviderManagementScope();
-  const state = await groupFastPolicyStore.prepare(
-    group,
-    readProviderGroup(group)?.allowFast !== false,
-    [],
-    assertCurrent,
-  );
   const self = getSelfDeviceId();
   if (!self) throw new Error('[REMOTE_AGENT_UNAVAILABLE] Computer identity is not ready');
-  await groupFastPolicyStore.receive(
-    self,
-    { group, ...state, binding: { sessionId: hostSessionId } },
-    self,
-    assertCurrent,
-    hostSessionId,
-  );
-  await notifySubscriptionFastPolicyChanged();
+  try {
+    const state = await groupFastPolicyStore.prepare(
+      group,
+      readProviderGroup(group)?.allowFast !== false,
+      [],
+      assertCurrent,
+    );
+    await groupFastPolicyStore.receive(
+      self,
+      { group, ...state, binding: { sessionId: hostSessionId } },
+      self,
+      assertCurrent,
+      hostSessionId,
+      false,
+      true,
+    );
+    await notifySubscriptionFastPolicyChanged().catch(() => undefined);
+  } catch {
+    assertCurrent();
+    groupFastPolicyStore.suppress(hostSessionId, self, group);
+  }
 }
 
 /** Registration is authenticated from group owner to executor, before returning a route to the consumer. */
@@ -164,12 +202,21 @@ export async function bindGroupFastPolicy(input: {
   if (!eligible(input.group)) return;
   const assertCurrent = captureProviderManagementScope();
   const config = readProviderGroup(input.group);
-  const state = await groupFastPolicyStore.prepare(
+  let state;
+  try { state = await groupFastPolicyStore.prepare(
     input.group,
     config?.allowFast !== false,
     input.deviceId ? [input.deviceId] : [],
     assertCurrent,
-  );
+  ); } catch (error) {
+    assertCurrent();
+    if (input.deviceId) {
+      const caps = await remoteBackgroundInvoke(input.deviceId, REMOTE_AGENT_CHANNEL, [{ op: 'caps' }]);
+      assertCurrent();
+      if (caps.ok && parseRemoteAgentCaps(caps.result).subscriptionFastPolicyCache) return;
+    }
+    throw error;
+  }
   const command: RemoteAgentFastPolicy = {
     group: input.group,
     revision: state.revision,
@@ -183,8 +230,7 @@ export async function bindGroupFastPolicy(input: {
   };
   if (input.deviceId) {
     try {
-      await send(input.deviceId, command, assertCurrent);
-      await groupFastPolicyStore.acknowledge(
+      if (await send(input.deviceId, command, assertCurrent, true)) await groupFastPolicyStore.acknowledge(
         input.group,
         input.deviceId,
         state.revision,
@@ -250,13 +296,15 @@ export function syncGroupFastPolicy(group: string): Promise<void> {
     const active = new Set(destinations);
     const retryTargets = retriesFor(group, state.revision);
     for (const device of retryTargets.keys()) {
-      if (state.targets[device] === undefined || state.targets[device] === state.revision) {
+      // A revision ACK can predate a failed periodic refresh. Only the
+      // successful send below (or target removal) ends that retry cooldown.
+      if (state.targets[device] === undefined) {
         retryTargets.delete(device);
       }
     }
     await Promise.allSettled(
       Object.entries(state.targets)
-        .filter(([, ack]) => ack !== state.revision)
+        .filter(([device, ack]) => ack !== state.revision || refreshDue(group, device, state.revision))
         .map(async ([device]) => {
           const retry = retryTargets.get(device);
           if (retry && performance.now() < retry.retryAt) return;
@@ -272,7 +320,11 @@ export function syncGroupFastPolicy(group: string): Promise<void> {
                 throw new Error('[REMOTE_AGENT_UNAVAILABLE] Computer identity is not ready');
               await receiveGroupFastPolicy(self, command);
             } else await send(device, command, assertCurrent);
-            await groupFastPolicyStore.acknowledge(group, device, state.revision, assertCurrent);
+            if (state.targets[device] !== state.revision)
+              await groupFastPolicyStore.acknowledge(group, device, state.revision, assertCurrent);
+            if (active.has(device)) refreshed.set(refreshKey(group, device), { revision: state.revision,
+              wall: Date.now() + 15 * 60_000, mono: performance.now() + 15 * 60_000 });
+            else refreshed.delete(refreshKey(group, device));
             retryTargets.delete(device);
           } catch (error) {
             assertCurrent();
@@ -304,7 +356,7 @@ export function startGroupFastPolicySync(): () => void {
         !state ||
         state.allowFast !== (!eligible(group) || groups[group]?.allowFast !== false) ||
         JSON.stringify(state.members) !== JSON.stringify([...new Set(targets(group))].sort()) ||
-        Object.values(state.targets).some((ack) => ack !== state.revision)
+        Object.entries(state.targets).some(([device, ack]) => ack !== state.revision || refreshDue(group, device, state.revision))
       ) {
         void syncGroupFastPolicy(group).catch(() => undefined);
       }
@@ -315,5 +367,6 @@ export function startGroupFastPolicySync(): () => void {
   return () => {
     clearInterval(timer);
     retries.clear();
+    refreshed.clear();
   };
 }

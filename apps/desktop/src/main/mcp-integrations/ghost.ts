@@ -161,6 +161,8 @@ import {
   readAllowedBuiltinPluginIds,
 } from './codexBuiltinToolPolicy.js';
 import { t } from '../i18n.js';
+import { connectGithubSignInResult } from '../git-context/githubConnection.js';
+import { openGithubSignIn, readGithubConnection } from '../git-context/githubSetupIpc.js';
 import { createLogger } from '../logger.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 
@@ -2103,6 +2105,15 @@ export function getCindyGhostsMcpDeps(
       if (!visible.ok) return visible;
       const instanceId = installedGhostStoragePart(visible.ghost);
       const assessment = getGhostSetupAssessment(instanceId);
+      const ghCliSecret = visible.ghost.manifest.network?.secrets?.find((secret) => secret.source === 'gh-cli');
+      if (assessment.state === 'ready' && assessment.groups.length === 0 && ghCliSecret) {
+        // gh-cli plugins sign in through this computer's GitHub login, which Cindy owns; the fallback
+        // token checked is the one this plugin's own requests would use.
+        return connectGithubSignInResult(target.id, target.reauthorize === true, {
+          readConnection: () => readGithubConnection({ instanceId, key: ghCliSecret.key }),
+          openSignIn: openGithubSignIn,
+        });
+      }
       if (assessment.state === 'ready' && assessment.groups.length === 0) {
         // gh-cli and other Host-derived sources deliberately have no synchronous
         // setup requirement. An empty assessment is not proof of platform login.
@@ -2983,6 +2994,7 @@ export function getCindyGhostsMcpDeps(
             version: packed.manifest.version,
             publishToken: staged.ticket,
             note: `${iconNote}已打包为待发布产物。仅企业组织成员可用 ghost_forge_publish 提交;个人账号不可用。`,
+            ...(packed.warnings?.length ? { warnings: packed.warnings } : {}),
           };
         }
         log.info('ghost forge packed', { dir, cindyPath: packed.cindyPath, id: packed.manifest.id });
@@ -2993,6 +3005,7 @@ export function getCindyGhostsMcpDeps(
           name: packed.manifest.name,
           version: packed.manifest.version,
           note: `${iconNote}已完成校验和打包；本工具不会安装或更新插件。`,
+          ...(packed.warnings?.length ? { warnings: packed.warnings } : {}),
         };
       });
     },

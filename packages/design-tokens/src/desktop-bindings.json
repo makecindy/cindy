@@ -372,10 +372,6 @@
       "light": "semantic.defaults.confirm-btn-primary-text.light",
       "dark": "semantic.defaults.confirm-btn-primary-text.dark"
     },
-    "confirm-btn-primary-hover": {
-      "light": "component.defaults.confirm-btn-primary-hover.light",
-      "dark": "component.defaults.confirm-btn-primary-hover.dark"
-    },
     "confirm-btn-secondary-text": {
       "light": "semantic.defaults.confirm-btn-secondary-text.light",
       "dark": "semantic.defaults.confirm-btn-secondary-text.dark"
@@ -875,14 +871,6 @@
     "send-btn-disabled-icon": {
       "light": "component.defaults.send-btn-disabled-icon.light",
       "dark": "component.defaults.send-btn-disabled-icon.dark"
-    },
-    "send-btn-hover-bg": {
-      "light": "component.defaults.send-btn-hover-bg.light",
-      "dark": "component.defaults.send-btn-hover-bg.dark"
-    },
-    "send-btn-pressed-bg": {
-      "light": "component.defaults.send-btn-pressed-bg.light",
-      "dark": "component.defaults.send-btn-pressed-bg.dark"
     },
     "perm-code-bg": {
       "light": "semantic.defaults.perm-code-bg.light",
@@ -2084,10 +2072,6 @@
       "light": "component.defaults.caret-accent.light",
       "dark": "component.defaults.caret-accent.dark"
     },
-    "button-cta-hover": {
-      "light": "component.defaults.button-cta-hover.light",
-      "dark": "component.defaults.button-cta-hover.dark"
-    },
     "shadow-soft-panel": {
       "light": "semantic.defaults.shadow-soft-panel.light",
       "dark": "semantic.defaults.shadow-soft-panel.dark"
@@ -2224,7 +2208,17 @@
     "button-primary-pressed": "Runtime color-mix: retain theme-responsive mixing in the existing registration",
     "button-secondary-hover": "Runtime color-mix: retain theme-responsive mixing in the existing registration",
     "button-secondary-pressed": "Runtime color-mix: retain theme-responsive mixing in the existing registration",
-    "button-cta-pressed": "Runtime color-mix: retain theme-responsive mixing in the existing registration"
+    "button-cta-pressed": "Runtime relative color: derived from the base fill by the filled-button state rule",
+    "button-cta-hover": "Runtime relative color: derived from the base fill by the filled-button state rule",
+    "send-btn-hover-bg": "Runtime relative color: derived from the base fill by the filled-button state rule",
+    "send-btn-pressed-bg": "Runtime relative color: derived from the base fill by the filled-button state rule",
+    "confirm-btn-primary-hover": "Runtime relative color: derived from the base fill by the filled-button state rule",
+    "confirm-btn-primary-pressed": "Runtime relative color: derived from the base fill by the filled-button state rule",
+    "perm-allow-btn-hover": "Runtime relative color: derived from the base fill by the filled-button state rule",
+    "perm-allow-btn-pressed": "Runtime relative color: derived from the base fill by the filled-button state rule",
+    "button-danger-solid-hover": "Runtime relative color: derived from the base fill by the filled-button state rule",
+    "button-danger-solid-pressed": "Runtime relative color: derived from the base fill by the filled-button state rule",
+    "update-btn-pressed": "Alias of update-btn-hover by default; the solid Cindy pill derives it from the base fill"
   },
   "themes": {
     "atom-one-light.ts": {
@@ -2455,7 +2449,6 @@
         "update-btn-border": "themes.cindy-dark.update-btn-border",
         "update-btn-bg": "themes.cindy-dark.update-btn-bg",
         "update-btn-text": "themes.cindy-dark.update-btn-text",
-        "update-btn-hover": "themes.cindy-dark.update-btn-hover",
         "accent-foreground": "themes.cindy-dark.accent-foreground",
         "panel-bg": "themes.cindy-dark.panel-bg",
         "primary": "themes.cindy-dark.primary",
@@ -2484,8 +2477,6 @@
         "send-btn-icon": "themes.cindy-dark.send-btn-icon",
         "send-btn-disabled-bg": "themes.cindy-dark.send-btn-disabled-bg",
         "send-btn-disabled-icon": "themes.cindy-dark.send-btn-disabled-icon",
-        "send-btn-hover-bg": "themes.cindy-dark.send-btn-hover-bg",
-        "send-btn-pressed-bg": "themes.cindy-dark.send-btn-pressed-bg",
         "completion-badge-fg": "themes.cindy-dark.completion-badge-fg",
         "create-agent-control-bg": "themes.cindy-dark.create-agent-control-bg",
         "create-agent-control-bg-hover": "themes.cindy-dark.create-agent-control-bg-hover",
@@ -2522,7 +2513,9 @@
         "segmented-hover-bg": "themes.cindy-dark.segmented-hover-bg"
       },
       "retained": {
-        "surface-translucent-sidebar": "CINDY_ACRYLIC_WINDOW_BACKING.dark"
+        "surface-translucent-sidebar": "CINDY_ACRYLIC_WINDOW_BACKING.dark",
+        "update-btn-hover": "filledButtonHover('var(--update-btn-bg)')",
+        "update-btn-pressed": "filledButtonPressed('var(--update-btn-bg)')"
       },
       "type": "dark"
     },
@@ -2637,7 +2630,6 @@
         "update-btn-border": "themes.cindy-light.update-btn-border",
         "update-btn-bg": "themes.cindy-light.update-btn-bg",
         "update-btn-text": "themes.cindy-light.update-btn-text",
-        "update-btn-hover": "themes.cindy-light.update-btn-hover",
         "accent-foreground": "themes.cindy-light.accent-foreground",
         "panel-bg": "themes.cindy-light.panel-bg",
         "primary": "themes.cindy-light.primary",
@@ -2666,8 +2658,6 @@
         "send-btn-icon": "themes.cindy-light.send-btn-icon",
         "send-btn-disabled-bg": "themes.cindy-light.send-btn-disabled-bg",
         "send-btn-disabled-icon": "themes.cindy-light.send-btn-disabled-icon",
-        "send-btn-hover-bg": "themes.cindy-light.send-btn-hover-bg",
-        "send-btn-pressed-bg": "themes.cindy-light.send-btn-pressed-bg",
         "ask-badge-bg": "themes.cindy-light.ask-badge-bg",
         "ask-header-chip-bg": "themes.cindy-light.ask-header-chip-bg",
         "cmd-palette-item-hover": "themes.cindy-light.cmd-palette-item-hover",
@@ -2707,7 +2697,9 @@
         "segmented-hover-bg": "themes.cindy-light.segmented-hover-bg"
       },
       "retained": {
-        "surface-translucent-sidebar": "CINDY_ACRYLIC_WINDOW_BACKING.light"
+        "surface-translucent-sidebar": "CINDY_ACRYLIC_WINDOW_BACKING.light",
+        "update-btn-hover": "filledButtonHover('var(--update-btn-bg)')",
+        "update-btn-pressed": "filledButtonPressed('var(--update-btn-bg)')"
       },
       "type": "light"
     },
