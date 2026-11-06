@@ -435,6 +435,7 @@ export function BotTaskCard({
         <StatusGlyph state={state} />
         <span className="sr-only">{statusLabel}</span>
         <button
+          data-chat-copy-content
           type="button"
           disabled={!canOpen}
           onClick={ref.open}
@@ -537,7 +538,7 @@ export function BotTaskCard({
           ) : null}
         </div>
       ) : null}
-      <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
+      <div data-chat-copy-exclude className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
         {state === 'waiting' && canOpen ? (
           <Chip onClick={ref.open}>
             <Eye size={12} aria-hidden="true" />

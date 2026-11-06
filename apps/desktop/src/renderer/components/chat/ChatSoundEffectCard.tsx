@@ -169,6 +169,7 @@ export function ChatSoundEffectCard({ track, sessionId }: ChatSoundEffectCardPro
       <Tip text={playing ? t('chat.media.audioPause') : t('chat.media.audioPlay')}>
         <button
           type="button"
+          data-chat-copy-exclude
           onClick={handleTogglePlay}
           aria-label={playing ? t('chat.media.audioPause') : t('chat.media.audioPlay')}
           className={CHAT_MEDIA_PLAY_BUTTON_CLASS}
@@ -190,10 +191,11 @@ export function ChatSoundEffectCard({ track, sessionId }: ChatSoundEffectCardPro
       </div>
 
       {/* Current time */}
-      <span className="shrink-0 text-11 font-medium tabular-nums text-[var(--msg-tool-card-chevron)]">
+      <span data-chat-copy-exclude className="shrink-0 text-11 font-medium tabular-nums text-[var(--msg-tool-card-chevron)]">
         {currentLabel}
       </span>
 
+      <div data-chat-copy-exclude className="contents">
           <MediaScrubber currentTime={currentTime} duration={duration}
             label={t('chat.media.audioProgress')}
             onSeek={(seconds) => {
@@ -202,9 +204,10 @@ export function ChatSoundEffectCard({ track, sessionId }: ChatSoundEffectCardPro
               audio.currentTime = seconds;
               setCurrentTime(audio.currentTime);
             }} />
+      </div>
 
       {/* Duration */}
-      <span className="shrink-0 text-11 font-medium tabular-nums text-[var(--msg-tool-card-chevron)]">
+      <span data-chat-copy-exclude className="shrink-0 text-11 font-medium tabular-nums text-[var(--msg-tool-card-chevron)]">
         {durationLabel}
       </span>
 
