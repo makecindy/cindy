@@ -26,6 +26,23 @@ function fakeResponse(status: number, body: string): Response {
 }
 
 describe('import discovery limits', () => {
+  // #9045, unit: saved refresh must distinguish a complete empty catalog from
+  // HTTP-200 errors and failed pagination before replacing persisted membership.
+  it.each([{ data: [] }, { models: [] }, []])('accepts a saved connection empty snapshot: %j', async body => {
+    expect(await fetchProviderModels(spec({ savedProviderId: 'saved-custom' }),
+      async () => fakeResponse(200, JSON.stringify(body)))).toEqual({ ok: true, models: [] });
+  });
+
+  it.each([{ error: 'unavailable', data: [] }, { data: [{}] }, { data: [{ id: 'valid' }, {}] }, { data: ['first'], next_cursor: 'page2' }])(
+    'does not accept an invalid or incomplete saved snapshot: %j', async body => {
+      let count = 0;
+      const result = await fetchProviderModels(spec({ savedProviderId: 'saved-custom' }), async () => {
+        if (count++ > 0) throw new Error('page unavailable');
+        return fakeResponse(200, JSON.stringify(body));
+      });
+      expect(result.ok).toBe(false);
+    },
+  );
   it.each(['claude-code', 'codex', 'pi'] as const)
   ('accepts an empty official Ollama Cloud catalog for %s without a caller opt-in', async agent => {
     const request = spec({ agent, baseUrl: agent === 'claude-code' ? 'https://ollama.com' : 'https://ollama.com/v1',

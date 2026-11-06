@@ -104,6 +104,7 @@ export async function fetchSavedOAuthProviderModels(
   const modelsUrl = route.modelsUrl ?? oauth.modelsDiscoveryUrl;
   const result = await fetchProviderModels({
     agent,
+    savedProviderId: storageProviderId,
     baseUrl: resolveCopilotAccountUrl(route.upstream, token),
     modelsUrl: modelsUrl ? resolveCopilotAccountUrl(modelsUrl, token) : modelsUrl,
     wireProtocol: route.wireProtocol,
@@ -327,7 +328,7 @@ export async function fetchProviderModels(
     const page = await fetchImpl(nextUrl, { ...init, redirect: 'error', signal: AbortSignal.timeout(Math.max(1, Math.min(FETCH_TIMEOUT_MS, pageDeadline - Date.now()))) });
     if (!page.ok) { await page.body?.cancel(); throw new Error('catalog page failed'); }
     return JSON.parse(await readLimitedBody(page, spec.responseByteLimit ?? 8 * 1024 * 1024));
-  });
+  }, Boolean(spec.savedProviderId));
   // Ollama Cloud's public, unfiltered catalog can legitimately be empty. Keep
   // that success distinct in every consumer (wizard, edit and saved refresh),
   // without treating an error envelope as an empty catalog or an account grant.
@@ -337,7 +338,7 @@ export async function fetchProviderModels(
   // The parser can drop invalid members; only an originally empty data array is empty success.
   const ollamaCloudEmpty = ollamaCloudCatalog && json !== null && typeof json === 'object'
     && 'data' in json && Array.isArray(json.data) && json.data.length === 0;
-  if (!models || ollamaCloudError || (models.length === 0 && (ollamaCloudCatalog ? !ollamaCloudEmpty : !spec.allowEmpty))) {
+  if (!models || ollamaCloudError || (models.length === 0 && (ollamaCloudCatalog ? !ollamaCloudEmpty : !(spec.allowEmpty || spec.savedProviderId)))) {
     // 端点 200 但响应不是可识别的模型列表（或为空）——按「模型不存在」类引导用户手填。
     return {
       ok: false,

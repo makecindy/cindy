@@ -162,8 +162,8 @@ export function providerViewToCustomProviderConfig(p: ProviderView): CustomProvi
   };
 }
 
-/** Refresh metadata and append new models; native-engine defaults decide visibility. */
-export function appendDiscoveredCustomProviderModels(
+/** Synchronize a successful upstream snapshot; retain overrides only for returned IDs. */
+export function syncDiscoveredCustomProviderModels(
   existing: readonly ProviderRuntimeModelConfig[],
   discovered: readonly DiscoveredModel[],
   discoveryUrl?: string,
@@ -188,7 +188,8 @@ export function appendDiscoveredCustomProviderModels(
     }
     prior = [...normalized.values()];
   }
-  const models = mergeDiscoveredRuntimeModels(prior, discovered);
+  const returnedIds = new Set(discovered.filter(model => model.id && model.name).map(model => model.id));
+  const models = mergeDiscoveredRuntimeModels(prior, discovered).filter(model => returnedIds.has(model.id));
   const known = new Set(existing.map((model) => model.id));
   return {
     models,

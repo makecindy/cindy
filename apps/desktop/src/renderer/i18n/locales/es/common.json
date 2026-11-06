@@ -3989,7 +3989,7 @@
         "subscriptionProduct": "Suscripción {{product}}",
         "noResults": "No hay modelos que coincidan",
         "capabilityNote": "No configurado para {{agent}}",
-        "refreshAria": "Actualizar lista de modelos (solo adiciones)",
+        "refreshAria": "Actualizar lista de modelos",
         "refreshBuiltinAria": "Actualizar lista de modelos",
         "refreshingAria": "Lista de modelos refrescante…",
         "refreshDone": "Lista de modelos actualizada",

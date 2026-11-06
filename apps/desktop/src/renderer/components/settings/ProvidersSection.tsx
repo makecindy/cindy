@@ -22,7 +22,7 @@ import { providerWeeklyQuotaSource } from '../new-chat/useProviderWeeklyQuota';
  *   - Anthropic: maker.claudeOAuth*;OpenAI: useCodexAuth();xAI: maker.xaiOAuth*。
  *   - XD 网关: 凭据由 model-access 自动下发(useModelAccessStatus;无手填入口)。
  *   - 自定义供应商: CRUD IPC + safeStorage 密钥;「刷新模型」= 读回密钥后走
- *     fetchProviderModels,additions-only 合并进配置(与 OAuth 动态发现同语义)。
+ *     fetchProviderModels，以成功的完整响应同步该连接的模型名单。
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -63,7 +63,7 @@ import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from '@/lib/toast';
 import {
-  appendDiscoveredCustomProviderModels,
+  syncDiscoveredCustomProviderModels,
   deleteCustomProvider,
   providerViewToCustomProviderConfig,
   readCustomProviderKey,
@@ -2934,15 +2934,14 @@ export function ProvidersSection() {
 
   /**
    * 自定义供应商「刷新模型」:读回各 runtime 密钥 → fetchProviderModels →
-   * additions-only 合并进配置;已确认的 API Key 连接缺少语音型号时补一个参考。
-   * 已有型号及其显式可见性不变;后台自动刷新不补参考型号。
+   * 成功的完整响应替换对应 runtime 的模型成员，保留仍在名单内的用户设置。
+   * 请求失败保留旧名单；不在刷新时追加接口没有返回的参考型号。
    */
   const handleRefreshModels = useCallback(
     async (p: ProviderView) => {
       if (!beginProviderRefresh(p.id)) return;
       try {
         const config = providerViewToCustomProviderConfig(p);
-        let added = 0;
         const refreshedAgents = new Set<AgentKind>();
         for (const agent of p.agents) {
           const rt = config.runtimes[agent];
@@ -2971,37 +2970,20 @@ export function ProvidersSection() {
           const openRouterCatalog = /^https:\/\/openrouter\.ai\/api(?:\/v1)?\/?$/.test(rt.baseUrl)
             ? (rt.modelsUrl ?? 'https://openrouter.ai/api/v1/models')
             : undefined;
-          const merged = appendDiscoveredCustomProviderModels(
+          const merged = syncDiscoveredCustomProviderModels(
             rt.models,
             r.models,
             openRouterCatalog,
           );
           rt.models = merged.models;
-          added += merged.addedIds.length;
         }
         if (!refreshedAgents.size) {
           toast.error(t('settings.providers.models.refreshFailed'));
           return;
         }
-        // Main owns the active Registry and classifies the complete discovery
-        // result in the same save, without freezing defaults into user overrides.
-        let speechReferenceAdded = false;
-        const saved = await confirmProviderChange(async (options) => {
-          const result = await updateCustomProvider(config, {}, {
-            ...options,
-            ...(providerSpeechSetup(p) ? { speechReferenceRefreshAgents: [...refreshedAgents] } : {}),
-          });
-          speechReferenceAdded = result.ok && result.speechReferenceAdded === true;
-          return result;
-        });
+        const saved = await confirmProviderChange((options) => updateCustomProvider(config, {}, options));
         if (!saved) return;
-        if (speechReferenceAdded) {
-          toast.success(t('settings.providers.models.refreshSpeechAdded'));
-        } else if (added > 0) {
-          toast.success(t('settings.providers.models.refreshAdded', { count: added }));
-        } else {
-          toast.success(t('settings.providers.models.refreshNoNew'));
-        }
+        toast.success(t('settings.providers.models.refreshDone'));
         refetch();
       } catch {
         toast.error(t('settings.providers.models.refreshFailed'));

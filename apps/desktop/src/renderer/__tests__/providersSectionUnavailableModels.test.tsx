@@ -239,6 +239,29 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 双栏管理', () => {
+  // #9045, renderer unit: a real refresh click must persist the upstream member
+  // set. Prior fixtures only added IDs; they never removed a model or returned []
+  // for one engine while another engine's request failed.
+  it.each([false, true])('synchronizes successful engines (empty=%s) and preserves failed engines', async empty => {
+    const config: CustomProviderConfig = { id: 'custom', name: 'Custom', runtimes: {
+      codex: { baseUrl: 'https://proxy.example/v1', models: [
+        { id: 'removed', name: 'Removed' }, { id: 'kept', name: 'My name', contextWindow: 64000 },
+      ] },
+      pi: { baseUrl: 'https://other.example/v1', models: [{ id: 'pi-only', name: 'Pi only' }] },
+    } };
+    selectSpeechProvider(config);
+    window.electronAPI.maker.fetchProviderModels = vi.fn(async ({ agent }) => agent === 'pi'
+      ? { ok: false, code: 'UNKNOWN' as const }
+      : { ok: true, models: empty ? [] : [{ id: 'kept', name: 'Upstream name' }, { id: 'new', name: 'New' }] });
+    render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' })); });
+    const saved = vi.mocked(updateCustomProvider).mock.lastCall![0];
+    expect(saved.runtimes.codex!.models.map(model => model.id).sort()).toEqual(empty ? [] : ['kept', 'new']);
+    expect(saved.runtimes.pi!.models).toEqual(config.runtimes.pi!.models);
+    if (!empty) expect(saved.runtimes.codex!.models.find(model => model.id === 'kept')).toMatchObject({ name: 'My name', contextWindow: 64000 });
+    expect(vi.mocked(updateCustomProvider).mock.lastCall![2]).toEqual({ source: 'manual-settings' });
+    expect(refetchProvidersSpy).toHaveBeenCalledOnce();
+  });
   // Renderer unit: click the real provider refresh/menu, inspect the persisted
   // config and visible dialog. Earlier refresh cases only used chat-only proxies;
   // a MiniMax API connection with no speech is the minimal missing-default case.
@@ -272,11 +295,7 @@ describe('ProvidersSection — 双栏管理', () => {
       window.electronAPI.maker.fetchProviderModels = vi.fn(async () => ({ ok: true, models: [
         { id: 'MiniMax-M3', name: 'Upstream name' }, ...discovered,
       ] }));
-      // Reference persistence is covered by the real Main handler tests. The
-      // renderer must display Main's result and send only the discovery merge.
-      if (kind === 'missing') vi.mocked(updateCustomProvider).mockResolvedValueOnce({
-        ok: true, speechReferenceAdded: true,
-      });
+      // #9045: refresh saves only returned IDs; reference models are an explicit add action.
       const view = render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
       // Opening Settings only schedules discovery, never writes reference models.
       expect(updateCustomProvider).not.toHaveBeenCalled();
@@ -285,22 +304,20 @@ describe('ProvidersSection — 双栏管理', () => {
       expect(saved.name).toBe(config.name);
       expect(saved.runtimes.codex!.models.find(model => model.id === 'MiniMax-M3')).toMatchObject(config.runtimes.codex.models[0]);
       const speech = buildUserProvider(saved, { modelRegistry: BUNDLED_CATALOG.modelRegistry }).audioModels?.filter(model => model.mode === 'audio_speech') ?? [];
-      expect(speech.map(model => model.id)).toEqual(kind === 'missing' ? []
-        : kind === 'discovered' ? ['new-voice'] : kind === 'hidden' ? ['speech-2.8-hd'] : []);
-      if (kind === 'hidden') expect(speech[0].defaultEnabled).toBe(false);
+      expect(speech.map(model => model.id)).toEqual(kind === 'discovered' ? ['new-voice'] : []);
       expect(setModelVisibilities).not.toHaveBeenCalled();
       expect(vi.mocked(updateCustomProvider).mock.lastCall![2])
-        .toEqual({ source: 'manual-settings', speechReferenceRefreshAgents: ['codex'] });
+        .toEqual({ source: 'manual-settings' });
       if (kind === 'missing') {
-        expect(toast.success).toHaveBeenLastCalledWith('settings.providers.models.refreshSpeechAdded');
-        // A second click sees the saved reference; it does not add HD/other defaults.
+        expect(toast.success).toHaveBeenLastCalledWith('settings.providers.models.refreshDone');
+        // A second refresh removes a reference manually added after the first snapshot.
         const persisted = structuredClone(saved);
         persisted.runtimes.codex!.models.push({ id: 'speech-2.8-turbo', name: 'Speech 2.8 Turbo', defaultEnabled: true });
         selectSpeechProvider(persisted);
         view.rerender(<MemoryRouter><ProvidersSection /></MemoryRouter>);
         await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.refreshAria' })); });
         expect(vi.mocked(updateCustomProvider).mock.lastCall![0].runtimes.codex!.models.map(model => model.id))
-          .toEqual(persisted.runtimes.codex!.models.map(model => model.id));
+          .toEqual(['MiniMax-M3']);
       }
     },
   );
@@ -320,12 +337,11 @@ describe('ProvidersSection — 双栏管理', () => {
     await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' })); });
     const saved = vi.mocked(updateCustomProvider).mock.lastCall![0];
     expect(vi.mocked(updateCustomProvider).mock.lastCall![2])
-      .toEqual({ source: 'manual-settings', speechReferenceRefreshAgents: ['codex'] });
+      .toEqual({ source: 'manual-settings' });
     expect(buildUserProvider(saved, { modelRegistry }).audioModels?.map(model => model.id))
       .toEqual([discovered.id]);
     expect(saved.runtimes.codex!.models.find(model => model.id === discovered.id)?.mode).toBeUndefined();
-    expect(saved.runtimes.codex!.models.find(model => model.id === 'MiniMax-M3'))
-      .toMatchObject(config.runtimes.codex.models[0]);
+    expect(saved.runtimes.codex!.models.find(model => model.id === 'MiniMax-M3')).toBeUndefined();
   });
   // Keep raw saved settings through refresh. Main's real handler regression
   // separately proves classification and reference persistence for these modes.
@@ -347,11 +363,15 @@ describe('ProvidersSection — 双栏管理', () => {
     expect(providerSnapshotState.customOverride!.audioModels).toEqual([
       expect.objectContaining({ id: savedAudio.id, mode, defaultEnabled, sourceAgent: agent }),
     ]);
-    window.electronAPI.maker.fetchProviderModels = vi.fn(async () => ({ ok: true, models: [] }));
+    window.electronAPI.maker.fetchProviderModels = vi.fn(async ({ agent }: { agent: 'codex' | 'claude-code' | 'pi' }) => ({ ok: true,
+      models: config.runtimes[agent]!.models.map(({ id, name }) => ({ id, name })),
+    }));
     render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
     await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' })); });
     const saved = vi.mocked(updateCustomProvider).mock.lastCall![0];
-    expect(saved.runtimes[agent]!.models.find(model => model.id === savedAudio.id)).toEqual(savedAudio);
+    expect(saved.runtimes[agent]!.models.find(model => model.id === savedAudio.id)).toEqual({
+      ...savedAudio, nameExplicit: true, discoveredMetadata: { name: savedAudio.name },
+    });
     expect(saved.runtimes.codex!.models.some(model => model.id === 'speech-2.8-turbo'))
       .toBe(false);
     expect(buildUserProvider(saved, { modelRegistry }).audioModels)
@@ -437,9 +457,10 @@ describe('ProvidersSection — 双栏管理', () => {
       await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' })); });
       const saved = vi.mocked(updateCustomProvider).mock.lastCall![0];
       expect(saved.runtimes.codex!.models.some(model => model.id === 'speech-2.8-turbo')).toBe(false);
-      expect(saved.runtimes.pi!.models).toEqual(expect.arrayContaining(config.runtimes.pi.models));
+      expect(saved.runtimes.pi!.models.map(model => model.id)).toEqual(['another-chat']);
+      if (kind === 'failed-target') expect(saved.runtimes.codex!.models).toEqual(config.runtimes.codex!.models);
       expect(vi.mocked(updateCustomProvider).mock.lastCall![2])
-        .toEqual({ source: 'manual-settings', speechReferenceRefreshAgents: kind === 'failed-target' ? ['pi'] : ['codex', 'pi'] });
+        .toEqual({ source: 'manual-settings' });
       expect(setModelVisibilities).not.toHaveBeenCalled();
     },
   );
@@ -466,14 +487,14 @@ describe('ProvidersSection — 双栏管理', () => {
   });
   // #6928 P1, renderer unit: real refresh -> existing confirmation -> save/retry.
   // Earlier chat-only cases did not protect a busy Responses image Host from
-  // a speech-only addition. Cancel must stay silent; retry must retain discovery
-  // options and use the final save result, even if Main no longer adds a model.
+  // a model-list change. Cancel must stay silent; retry must preserve the
+  // explicit restart policy and the synchronized snapshot.
   it.each(['cancel', 'interrupt', 'idle', 'no-add-on-retry'] as const)(
-    'confirms speech refresh Host changes: %s', async action => {
+    'confirms synchronized model-list Host changes: %s', async action => {
       const config: CustomProviderConfig = { id: 'openai-api', name: 'My OpenAI', runtimes: {
         codex: { baseUrl: 'https://api.openai.com/v1', wireProtocol: 'openai-responses',
           supportsImageGeneration: true,
-          models: [{ id: 'chat-model', name: 'My chat', defaultEnabled: false }] },
+          models: [{ id: 'chat-model', name: 'My chat', defaultEnabled: false }, { id: 'removed', name: 'Removed' }] },
       } };
       selectSpeechProvider(config);
       window.electronAPI.maker.fetchProviderModels = vi.fn(async () => ({ ok: true,
@@ -488,7 +509,7 @@ describe('ProvidersSection — 双栏管理', () => {
       const saved = vi.mocked(updateCustomProvider).mock.calls[0][0];
       expect(saved.runtimes.codex!.models[0]).toMatchObject(config.runtimes.codex!.models[0]);
       expect(updateCustomProvider).toHaveBeenNthCalledWith(1, saved, {}, {
-        source: 'manual-settings', speechReferenceRefreshAgents: ['codex'],
+        source: 'manual-settings',
       });
       expect(confirmSpy).toHaveBeenCalledTimes(action === 'idle' ? 0 : 1);
       if (action !== 'idle') expect(confirmSpy).toHaveBeenCalledWith(expect.objectContaining({
@@ -500,7 +521,6 @@ describe('ProvidersSection — 双栏管理', () => {
       if (action === 'interrupt' || action === 'no-add-on-retry') {
         expect(updateCustomProvider).toHaveBeenNthCalledWith(2, saved, {}, {
           source: 'manual-settings', codexImageGenerationRestartPolicy: 'interrupt',
-          speechReferenceRefreshAgents: ['codex'],
         });
       }
       expect(toast.error).not.toHaveBeenCalled();
@@ -508,8 +528,7 @@ describe('ProvidersSection — 双栏管理', () => {
         expect(toast.success).not.toHaveBeenCalled();
         expect(refetchProvidersSpy).not.toHaveBeenCalled();
       } else {
-        expect(toast.success).toHaveBeenCalledWith(action === 'no-add-on-retry'
-          ? 'settings.providers.models.refreshNoNew' : 'settings.providers.models.refreshSpeechAdded');
+        expect(toast.success).toHaveBeenCalledWith('settings.providers.models.refreshDone');
         expect(refetchProvidersSpy).toHaveBeenCalledOnce();
       }
       expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledOnce();
