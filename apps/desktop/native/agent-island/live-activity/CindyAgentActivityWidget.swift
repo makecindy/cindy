@@ -175,14 +175,14 @@ private struct CompactStatus: View {
   }
 }
 
-/// `● Needs input · 2 more tasks running`
+/// `Needs input · 2 more tasks running`, in the status color. No leading dot: it sits next
+/// to the avatar, whose corner dot already carries the status.
 private struct StatusLine: View {
   let state: CindyAgentActivityAttributes.ContentState
   let secondary: Color
 
   var body: some View {
     HStack(spacing: 5) {
-      Circle().fill(state.tint).frame(width: 6, height: 6)
       Text(state.detail).foregroundStyle(state.tint)
       if !state.summary.isEmpty {
         Text("·").foregroundStyle(secondary)
