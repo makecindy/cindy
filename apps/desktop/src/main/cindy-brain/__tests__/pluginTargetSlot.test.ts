@@ -68,6 +68,32 @@ describe('plugin target queries and delivery', () => {
       requestKey: 'send', text: 'context' };
     return { slot, call, request, send, create, withdraw, candidates, guard, approvalRevision, assertCreatePermission, assertProjectDispatch };
   }
+  // Isolation is explicit: it must reach the creator, stay out of other targets and join the idempotency digest.
+  it('passes worktree:true only for project creation and includes it in the request identity', async () => {
+    const f = fixture();
+    const project = { ...f.request, target: { kind: 'project', id: 'chosen' } };
+    await expect(f.call({ kind: 'capabilities' })).resolves.toMatchObject({ projectWorktree: true });
+    await f.call({ ...project, requestKey: 'isolated', worktree: true });
+    expect(f.create).toHaveBeenCalledWith('plugin', 'chosen', expect.any(String), 'Chosen target', undefined,
+      expect.any(Function), undefined, undefined, true);
+    await expect(f.call({ ...project, requestKey: 'isolated' })).rejects.toMatchObject({ code: 'REQUEST_KEY_CONFLICT' });
+    await expect(f.call({ ...f.request, requestKey: 'task', worktree: true })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    await expect(f.call({ ...project, requestKey: 'typed', worktree: 'yes' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+  });
+  it('keeps the original creator call when worktree is omitted or false', async () => {
+    const f = fixture();
+    const project = { ...f.request, target: { kind: 'project', id: 'chosen' } };
+    await f.call({ ...project, requestKey: 'plain' });
+    await f.call({ ...project, requestKey: 'off', worktree: false });
+    for (const call of f.create.mock.calls) expect(call).toHaveLength(6);
+  });
+  it('does not send the message when the worktree cannot be created', async () => {
+    const f = fixture();
+    f.create.mockRejectedValueOnce(Object.assign(new Error('not a repo'), { code: 'WORKTREE_UNAVAILABLE' }));
+    await expect(f.call({ ...f.request, target: { kind: 'project', id: 'chosen' }, worktree: true }))
+      .rejects.toMatchObject({ code: 'WORKTREE_UNAVAILABLE' });
+    expect(f.send).not.toHaveBeenCalled();
+  });
   // unit: scoped sends were previously attribution-only. Cover immutable scope,
   // independent consent, execution availability and revocation at restored dispatch.
   function delegatedFixture() {
@@ -350,6 +376,7 @@ describe('plugin target queries and delivery', () => {
   it.each([
     ['INVALID_INVOCATION', 'INVALID_INVOCATION'],
     ['TASK_BUSY', 'TASK_BUSY'],
+    ['WORKTREE_UNAVAILABLE', 'WORKTREE_UNAVAILABLE'],
     ['private adapter failure', 'HOST_NOT_READY'],
   ])('preserves the public target error boundary for %s', async (cause, expected) => {
     const f = fixture();

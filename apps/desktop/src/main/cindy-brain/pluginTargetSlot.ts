@@ -58,6 +58,7 @@ export interface PluginTargetAdapter {
     guard: () => void,
     autoTitle?: boolean,
     permissionMode?: PluginTaskPermissionMode,
+    worktree?: boolean,
   ): Promise<void>;
   session(kind: 'task' | 'bot', id: string): Promise<string>;
   send(
@@ -128,7 +129,7 @@ export class PluginTargetSlot {
     const request = raw as PluginTargetRequest;
     if (!request || !['capabilities', 'list', 'resolve', 'send', 'get', 'cancel'].includes(request.kind))
       return fail('INVALID_PARAMS');
-    if (request.kind === 'capabilities') return { delegation: { version: 1, execution: this.supportsDelegationExecution(), targetKinds: ['bot'], delivery: ['queue'], receiptQuery: true, settled: true } };
+    if (request.kind === 'capabilities') return { delegation: { version: 1, execution: this.supportsDelegationExecution(), targetKinds: ['bot'], delivery: ['queue'], receiptQuery: true, settled: true }, projectWorktree: true };
     const resolve = async (target: PluginTargetRef): Promise<PluginTargetView> => {
       const candidates = await adapter.candidates(target.kind);
       authorized();
@@ -186,6 +187,8 @@ export class PluginTargetSlot {
       (request.autoTitle === true && (request.target.kind !== 'project' || request.title !== undefined)) ||
       (request.permissionMode !== undefined &&
         (request.target.kind !== 'project' || !isPluginTaskPermissionMode(request.permissionMode))) ||
+      (request.worktree !== undefined && typeof request.worktree !== 'boolean') ||
+      (request.worktree === true && request.target.kind !== 'project') ||
       (request.delivery !== undefined && !['queue', 'steer'].includes(request.delivery)) ||
       (request.invocationId !== undefined && !keyString(request.invocationId)) ||
       (request.title !== undefined && (typeof request.title !== 'string' || request.title.length > 200))
@@ -222,7 +225,8 @@ export class PluginTargetSlot {
         ...(request.context ? [{ context: request.context }] : []),
         ...(delegation ? [{ delegation: { task: delegationTask } }] : []),
         ...(request.autoTitle ? [{ autoTitle: true }] : []),
-        ...(request.permissionMode !== undefined ? [{ permissionMode: request.permissionMode }] : [])];
+        ...(request.permissionMode !== undefined ? [{ permissionMode: request.permissionMode }] : []),
+        ...(request.worktree ? [{ worktree: true }] : [])];
       const hash = createHash('sha256')
         .update(JSON.stringify(request.invocationId === undefined ? contentIdentity : [...contentIdentity, request.invocationId]))
         .digest('hex');
@@ -281,7 +285,9 @@ export class PluginTargetSlot {
           await this.assertTargetReceipt(taskId, receipt.id, 'create');
           guard();
           const title = request.autoTitle ? DEFAULT_DRAFT_SESSION_TITLE : request.title || candidate.label;
-          if (request.permissionMode !== undefined)
+          if (request.worktree)
+            await adapter.create(pluginId, target.id, taskId, title, route, guard, request.autoTitle || undefined, request.permissionMode, true);
+          else if (request.permissionMode !== undefined)
             await adapter.create(pluginId, target.id, taskId, title, route, guard, request.autoTitle || undefined, request.permissionMode);
           else if (request.autoTitle) await adapter.create(pluginId, target.id, taskId, title, route, guard, true);
           else await adapter.create(pluginId, target.id, taskId, title, route, guard);

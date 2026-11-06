@@ -163,6 +163,34 @@ export async function prepareHandoffWorktree(
   return { ok: true, sessionId, meta: resp.meta };
 }
 
+/**
+ * targets.send worktree:true:在项目的新托管 worktree 里创建任务(绑定与回收同
+ * use_worktree)。显式要隔离却建不成时硬报 WORKTREE_UNAVAILABLE,不静默落回共享工作树。
+ * 创建报错后会话行可能已写入,只有确认没有会话才回收;查询失败时保留目录。
+ */
+export async function createTaskInNewWorktree(
+  deps: Omit<HandoffWorktreeDeps, 'createId'> & {
+    sessionExists: (sessionId: string) => Promise<boolean>;
+    removeWorktree: (sessionId: string) => Promise<unknown>;
+    syncWorktreePath: (sessionId: string, worktreePath: string) => Promise<void>;
+  },
+  input: { sessionId: string; project: string; create: (workingDir: string) => Promise<void> },
+): Promise<void> {
+  const { sessionId, project, create } = input;
+  const prepared = await prepareHandoffWorktree({ ...deps, createId: () => sessionId }, undefined, project);
+  if (!prepared.ok) throw Object.assign(new Error(prepared.message), { code: 'WORKTREE_UNAVAILABLE' });
+  try {
+    await create(prepared.meta.path);
+  } catch (error) {
+    const sessionCreated = await deps.sessionExists(sessionId).catch(() => true);
+    if (shouldRecycleHandoffWorktreeOnFailure(sessionCreated))
+      await deps.removeWorktree(sessionId).catch(() => undefined);
+    throw error;
+  }
+  // createWorktree 时会话行还不存在,这里补写 sessions.worktree_path 快照。
+  await deps.syncWorktreePath(sessionId, prepared.meta.path);
+}
+
 export type PrepareTaskWorktreeResult =
   | { ok: true; meta: WorktreeMeta; created: boolean }
   | { ok: false; errorCode: 'PRECONDITION_FAILED' | 'INVALID_ARGS' | 'WORKTREE_UNAVAILABLE'; message: string };

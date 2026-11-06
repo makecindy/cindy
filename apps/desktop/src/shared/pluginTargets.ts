@@ -36,6 +36,8 @@ export type PluginTargetRequest =
       route?: PluginTaskRoute;
       /** Only project creation may select a permission within the user's plugin policy. */
       permissionMode?: PluginTaskPermissionMode;
+      /** Only project creation may run the new task in its own Host-managed worktree. */
+      worktree?: boolean;
       delivery?: PluginTargetDelivery;
       /** Opt-in scoped Auto work; requires independent agent.delegation approval. Bot + queue only. */
       delegation?: { task: string };

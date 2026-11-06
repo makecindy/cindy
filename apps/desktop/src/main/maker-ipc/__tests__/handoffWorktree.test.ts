@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { WorktreeMeta } from '../../worktree/types.js';
 import {
+  createTaskInNewWorktree,
   prepareHandoffWorktree,
   prepareTaskWorktree,
   resolveHandoffBaseRepo,
@@ -303,5 +304,52 @@ describe('prepareTaskWorktree', () => {
     });
     const res = await prepareTaskWorktree(deps, { sessionId: 'task-1', caller });
     expect(res).toMatchObject({ ok: false, errorCode: 'WORKTREE_UNAVAILABLE' });
+  });
+});
+
+describe('createTaskInNewWorktree', () => {
+  function setup(overrides: Partial<HandoffWorktreeDeps> = {}, sessionExists: () => Promise<boolean> = async () => false) {
+    const deps = {
+      ...makeDeps(overrides),
+      sessionExists: vi.fn(sessionExists),
+      removeWorktree: vi.fn(async () => {}),
+      syncWorktreePath: vi.fn(async () => {}),
+    };
+    return { deps, input: { sessionId: 'task-1', project: BASE, create: vi.fn(async (_workingDir: string) => {}) } };
+  }
+
+  it('binds the worktree to the task id, creates the task inside it, then syncs the path', async () => {
+    const { deps, input } = setup();
+    await createTaskInNewWorktree(deps, input);
+    expect(deps.createWorktree).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'task-1', baseRepo: BASE }));
+    expect(input.create).toHaveBeenCalledWith(WT);
+    expect(deps.syncWorktreePath).toHaveBeenCalledWith('task-1', WT);
+    expect(deps.removeWorktree).not.toHaveBeenCalled();
+  });
+
+  it('reports WORKTREE_UNAVAILABLE and creates no task outside a git repository', async () => {
+    const { deps, input } = setup({
+      detectCwd: vi.fn(async () => ({ isGitRepo: false, isInsideWorktree: false, gitInstalled: true })),
+    });
+    await expect(createTaskInNewWorktree(deps, input)).rejects.toMatchObject({ code: 'WORKTREE_UNAVAILABLE' });
+    expect(input.create).not.toHaveBeenCalled();
+  });
+
+  it('recycles the worktree only when creation failed and no session exists', async () => {
+    const { deps, input } = setup();
+    input.create.mockRejectedValueOnce(new Error('boom'));
+    await expect(createTaskInNewWorktree(deps, input)).rejects.toThrow('boom');
+    expect(deps.removeWorktree).toHaveBeenCalledWith('task-1');
+    expect(deps.syncWorktreePath).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['the session row was written', async () => true],
+    ['the session lookup failed', async () => { throw new Error('db gone'); }],
+  ])('keeps the worktree when %s', async (_name, sessionExists) => {
+    const { deps, input } = setup({}, sessionExists);
+    input.create.mockRejectedValueOnce(new Error('boom'));
+    await expect(createTaskInNewWorktree(deps, input)).rejects.toThrow('boom');
+    expect(deps.removeWorktree).not.toHaveBeenCalled();
   });
 });

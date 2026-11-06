@@ -966,6 +966,7 @@ import {
 } from './remoteDirectoryGrantUpdate.js';
 import { consumeWritableDirectoryPickerGrants } from './writableDirectoryPickerGrant.js';
 import {
+  createTaskInNewWorktree,
   prepareHandoffWorktree,
   shouldRecycleHandoffWorktreeOnFailure,
 } from './handoffWorktree.js';
@@ -1387,7 +1388,7 @@ import {
   closeRejectedRuntimeAndRestoreControlStores,
   isRemoteModelSwitchRouteChangeError,
 } from './runtimeSetModel.js';
-import { patchSessionMetaInDb, updateSessionInDb } from '../localDb/ipc/sessions.js';
+import { patchSessionMetaInDb, setWorktreePathInDb, updateSessionInDb } from '../localDb/ipc/sessions.js';
 import { codexThreadTransferSourcePredicate, commitCodexThreadTransfer, relinkCodexProviderThread } from './codexProviderThreadRelink.js';
 import {
   codexCustomProviderConfigSignature,
@@ -15318,12 +15319,32 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertProjectDispatch: async (pluginId, taskId) => {
       await pluginTaskServiceForCurrentOwner!().assertDispatch(pluginId, taskId);
     },
-    create: async (pluginId, project, taskId, title, route, guard, autoTitle, permissionMode) => {
+    create: async (pluginId, project, taskId, title, route, guard, autoTitle, permissionMode, worktree) => {
       guard();
-      await pluginTaskServiceForCurrentOwner!().create(pluginId, {
-        requestKey: `target-project:${taskId}`, ...(autoTitle ? { autoTitle: true } : { title }), route,
-        ...(permissionMode !== undefined ? { permissionMode } : {}),
-      }, { taskId, workingDir: project, assertCurrent: guard });
+      const createIn = async (workingDir: string) => {
+        await pluginTaskServiceForCurrentOwner!().create(pluginId, {
+          requestKey: `target-project:${taskId}`, ...(autoTitle ? { autoTitle: true } : { title }), route,
+          ...(permissionMode !== undefined ? { permissionMode } : {}),
+        }, { taskId, workingDir, assertCurrent: guard });
+      };
+      if (worktree) {
+        const snapshot = getCurrentDbClientSnapshot();
+        if (!snapshot) throw new Error('HOST_NOT_READY');
+        await createTaskInNewWorktree({
+          getForSession: worktreeManager.getForSession, listAll: worktreeManager.listAll,
+          detectCwd: worktreeManager.detectCwd, suggestName: worktreeManager.suggestName,
+          listBranches: worktreeManager.listBranches, resolveCommit: worktreeManager.revParseCommit,
+          // The queued first message starts as soon as the task exists: the tree must already be there.
+          createWorktree: req => worktreeManager.createWorktree(req, { awaitFullCheckout: true }),
+          resolveFreshSource: resolveFreshSourceBranch,
+          sessionExists: async id => (await snapshot.client.drizzle.select({ id: sessions.id })
+            .from(sessions).where(eq(sessions.id, id)).limit(1)).length > 0,
+          removeWorktree: worktreeManager.removeWorktreeForSession,
+          syncWorktreePath: setWorktreePathInDb,
+        }, { sessionId: taskId, project, create: createIn });
+      } else {
+        await createIn(project);
+      }
       guard();
     },
     send: async (pluginId, taskId, clientId, text, guard, validateTarget, delivery, images = [], options) => {

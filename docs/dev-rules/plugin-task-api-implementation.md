@@ -145,6 +145,11 @@ Session/Plan 仍独立检查。旧 Host 可能只隐藏 UI，依赖停用语义�
 跨 Agent 的只读保证；历史 acceptEdits 配置也原样保留。新选项统一为默认权限（ask）、
 自动审批（auto）和完全访问（bypassPermissions），用户明确选择后才覆盖旧值。
 
+project 的 `targets.send` 接收可选 `worktree: true`（`targets.capabilities().projectWorktree` 宣告）：走
+`createTaskInNewWorktree`，复用 `send_to_session` 的 `use_worktree` 路径，先按预生成的 taskId 建托管 worktree 并绑定，再以它为
+workingDir 创建 Session；首条消息紧跟创建入队，所以等检出完成。建不成报 `WORKTREE_UNAVAILABLE`，不静默退回共享工作树；
+创建报错后只有确认没有 Session 行才回收，查询失败时保留目录。不新增权限：目标仍须是已登记项目，并复核 `agent.tasks` + `agent.targets` 批准。
+
 `tasks.capabilities().createPermissionMode` 表示创建接口支持按次选择 ask／auto／bypassPermissions。
 `tasks.create` 和 project 的 `targets.send` 接收可选 `permissionMode`，仅写入新 Session，不修改插件偏好。
 启用卡片时保留当前设置上限，不足返回 PERMISSION_DENIED；隐藏时不读取或比较卡片，插件自行传参，未传为 ask。
