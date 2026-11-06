@@ -6234,7 +6234,7 @@
         "hook": "Bots de messagerie Cindy"
       },
       "hook": {
-        "description": "Connectez Slack et Telegram au même Cindy. Les messages sont transmis à cet appareil et partagent sa liste de projets et son exécuteur de sessions ; chaque fournisseur conserve son propre compte et ses préférences.",
+        "description": "Connectez Slack, Telegram, Feishu / Lark et d'autres canaux au même Cindy. Les messages sont transmis à cet appareil et partagent sa liste de projets et son exécuteur de sessions ; chaque fournisseur conserve son propre compte et ses préférences.",
         "slackDescription": "Associez des espaces de travail Slack et confiez des tâches à Cindy depuis Slack.",
         "slackDisabledHint": "Activez l'interrupteur pour lancer l'autorisation Slack ; une fois l'association faite, vous pourrez envoyer des tâches depuis Slack.",
         "slackBoundHint": "Association terminée. Désactiver l'interrupteur dissocie cet appareil ; le réactiver nécessite une nouvelle autorisation.",
@@ -6459,6 +6459,45 @@
             "revoked": "Dissocié",
             "superseded": "Associé sur un autre appareil"
           }
+        },
+        "feishu": {
+          "description": "Envoyez vos messages Feishu à votre ordinateur de travail.",
+          "disabledHint": "Activez l'interrupteur, puis autorisez votre compte Feishu / Lark dans le navigateur ou envoyez le code d'association au bot.",
+          "toggleAria": "Activer/désactiver la connexion Feishu / Lark",
+          "connect": "Associer Feishu / Lark",
+          "openApp": "Ouvrir la page d'autorisation",
+          "cancel": "Annuler l'association",
+          "retry": "Réessayer l'association",
+          "openBot": "Ouvrir le bot",
+          "unlink": "Dissocier Feishu / Lark",
+          "unlinkConfirmTitle": "Dissocier Feishu / Lark ?",
+          "unlinkConfirmDescription": "Dissocier uniquement cet ordinateur.",
+          "unavailableHint": "Votre organisation n'a pas encore configuré le bot Feishu / Lark. Contactez l'administrateur de votre organisation.",
+          "unavailableHintPersonal": "Le bot Feishu / Lark n'est pas encore disponible pour les comptes personnels.",
+          "status": {
+            "checking": "Vérification de la prise en charge par le serveur…",
+            "unavailable": "Non configuré par votre organisation",
+            "unavailablePersonal": "Pas encore disponible",
+            "disabled": "Désactivé",
+            "none": "Non associé",
+            "pending": "Autorisez dans le navigateur ou envoyez le code d'association au bot",
+            "awaiting_confirmation": "Confirmez le changement de compte de cet ordinateur dans Feishu / Lark",
+            "confirmed": "{{user}} associé au bot Feishu / Lark",
+            "denied": "Autorisation refusée",
+            "expired": "Autorisation expirée",
+            "failed": "Échec de l'association",
+            "revoked": "Dissocié",
+            "superseded": "Cet ordinateur est associé à un autre compte Feishu / Lark",
+            "appChanged": "Le bot Feishu / Lark a changé. Associez-le à nouveau."
+          },
+          "bindCode": {
+            "label": "Code d'association",
+            "copy": "Copier le code",
+            "copied": "Code d'association copié",
+            "hint": "Ou envoyez ce code au bot Cindy en message privé dans Feishu / Lark"
+          },
+          "setWorkingDevice": "Définir comme ordinateur de travail",
+          "workingDeviceSet": "Ordinateur de travail défini"
         }
       },
       "summary": {
@@ -6477,7 +6516,7 @@
     "tina": {
       "chat": {
         "title": "Conversation",
-        "description": "Conversations simples sans dépôt ; sélectionnez « chat » depuis Slack, Telegram ou X, une session par fil de conversation."
+        "description": "Conversations simples sans dépôt ; sélectionnez « chat » depuis Slack, Telegram, X ou Feishu / Lark, une session par fil de conversation."
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -6487,6 +6526,7 @@
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
         "providerX": "X",
+        "providerFeishu": "Feishu / Lark",
         "requireConnected": "Modifiable une fois {{provider}} connecté (activez son interrupteur ci-dessus et attendez la connexion).",
         "offlineLocal": "{{provider}} est hors ligne. Les modifications sont enregistrées sur cet ordinateur et seront synchronisées avec la fiche du modèle de conversation à la reconnexion.",
         "requireBinding": "Terminez d'abord l'association du compte {{provider}}.",

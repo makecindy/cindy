@@ -19,6 +19,7 @@ const VALID_MANIFEST = {
   heartbeatUrl: 'https://heartbeat.example.com',
   telegramHookWsUrl: 'wss://telegram-hook.example.com',
   xHookWsUrl: 'wss://x-hook.example.com',
+  feishuHookWsUrl: 'wss://feishu-hook.example.com',
   slackHookWsUrl: 'wss://slack-hook.example.com',
   webhookApiBaseUrl: 'https://webhook.example.com',
   websiteUrl: 'https://www.example.com',

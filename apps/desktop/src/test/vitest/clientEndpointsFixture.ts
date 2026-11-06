@@ -35,6 +35,7 @@ export const TEST_CLIENT_ENDPOINTS: ClientEndpointMap = {
   xHookWsUrl: 'wss://x-hook.test.invalid',
   webhookApiBaseUrl: 'https://webhook.test.invalid',
   slackHookWsUrl: 'wss://slack-hook.test.invalid',
+  feishuHookWsUrl: 'wss://feishu-hook.test.invalid',
   websiteUrl: 'https://website.test.invalid',
   modelAccessApiBaseUrl: 'https://model-access.test.invalid',
   voiceApiBaseUrl: 'https://voice.test.invalid',

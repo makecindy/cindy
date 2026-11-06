@@ -6133,7 +6133,7 @@
         "hook": "Cindy IM 使者"
       },
       "hook": {
-        "description": "将 Slack 与 Telegram 接入同一 Cindy：讯皆派至此台设备，共享案之清单与 session 运行链；名籍绑定与运行偏好依渠道各自隔离。",
+        "description": "将 Slack、Telegram、飞书 / Lark 诸渠道接入同一 Cindy：讯皆派至此台设备，共用此间案之清单与差事；名籍绑定与运行偏好依渠道各自隔离。",
         "slackDescription": "绑定 Slack workspace，于 Slack 中 @Cindy 派差事。",
         "slackDisabledHint": "开此开关即发起 Slack 授权，绑定毕即可于 Slack 中派活。",
         "slackBoundHint": "绑定已毕。关此开关将解除绑定，重开须再授权。",
@@ -6354,6 +6354,45 @@
             "revoked": "关联已解",
             "superseded": "已关联至他台设备"
           }
+        },
+        "feishu": {
+          "description": "由飞书发讯，交工作电脑处理。",
+          "disabledHint": "开此开关后，或于浏览器中授权飞书名籍，或将关联码遣予飞书机器人。",
+          "toggleAria": "启闭飞书 / Lark 连接",
+          "connect": "结飞书",
+          "openApp": "开授权页",
+          "cancel": "罢关联",
+          "retry": "重关联",
+          "openBot": "开飞书机器人",
+          "unlink": "解飞书",
+          "unlinkConfirmTitle": "解绑飞书乎？",
+          "unlinkConfirmDescription": "仅解此机之系。",
+          "unavailableHint": "君所属之组织尚未设飞书机器人，请洽组织管理员。",
+          "unavailableHintPersonal": "飞书机器人尚未向个人账号开放。",
+          "status": {
+            "checking": "方察服务器支持…",
+            "unavailable": "组织未设",
+            "unavailablePersonal": "尚未开放",
+            "disabled": "已停",
+            "none": "未绑",
+            "pending": "于浏览器中授权，或将关联码遣予飞书机器人",
+            "awaiting_confirmation": "请于飞书 / Lark 确认更换此机所系账号",
+            "confirmed": "{{user}} 已结飞书机器人",
+            "denied": "授权已拒",
+            "expired": "授权已逾期",
+            "failed": "关联未成",
+            "revoked": "关联已解",
+            "superseded": "此机已系另一飞书 / Lark 账号",
+            "appChanged": "飞书机器人已更易，请重为关联"
+          },
+          "bindCode": {
+            "label": "关联码",
+            "copy": "录关联码",
+            "copied": "关联码已录",
+            "hint": "或于飞书中将关联码私遣予 Cindy 机器人"
+          },
+          "setWorkingDevice": "设为工作电脑",
+          "workingDeviceSet": "已设为工作电脑"
         }
       },
       "summary": {
@@ -6372,7 +6411,7 @@
     "tina": {
       "chat": {
         "title": "言谈",
-        "description": "不落任何仓库之纯言谈；于 Slack、Telegram 或 X 中选 chat 即可用之，每条言谈 lane 各对应一差事。"
+        "description": "不落任何仓库之纯言谈；于 Slack、Telegram、X 或飞书 / Lark 中选 chat 即可用之，每条言谈 lane 各对应一差事。"
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -6382,6 +6421,7 @@
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
         "providerX": "X",
+        "providerFeishu": "飞书 / Lark",
         "requireConnected": "连上 {{provider}} 后方可修（先于上方打开相应开关，候其连接成功）。",
         "offlineLocal": "{{provider}} 暂连不上，变更存于此机；连上后同步至言谈中之模型卡。",
         "requireBinding": "须先完成 {{provider}} 名籍关联，方可修。",

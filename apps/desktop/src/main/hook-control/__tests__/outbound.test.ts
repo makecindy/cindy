@@ -69,8 +69,23 @@ describe('buildHookPromptNote', () => {
     expect(x).not.toContain('最后一条助手消息');
   });
 
-  it('两个平台都在开头声明「不是用户消息」,防止模型把渠道说明当成用户请求(2026-07 实踩)', () => {
-    for (const im of ['telegram', 'slack', 'x'] as const) {
+  it('官方飞书 / Lark 说明点名渠道与格式, 且不把个人飞书机器人当作当前对话的出口', () => {
+    // 回归依据: 未登记的 provider 会落到 Slack 文案, 模型被告知「本会话来自 Slack」
+    // 且「除非用户要求发到飞书」才用 cindy_feishu_bot —— 在飞书里这句话自相矛盾。
+    const feishu = buildHookPromptNote('feishu');
+    expect(feishu).toContain('本会话来自 飞书 / Lark。');
+    expect(feishu).toContain('作为 飞书 / Lark 附件发回');
+    expect(feishu).toContain('[飞书回复格式]');
+    expect(feishu).toContain('回复会自动发回当前飞书 / Lark 对话');
+    expect(feishu).toContain('那是用户另行配置的个人机器人');
+    expect(feishu).not.toContain('本会话来自 Slack');
+    expect(feishu).not.toContain('除非用户明确要求发到飞书');
+    expect(feishu).not.toContain('[Telegram 回复格式]');
+    expect(buildHookPromptNote('slack')).not.toContain('[飞书回复格式]');
+  });
+
+  it('所有平台都在开头声明「不是用户消息」,防止模型把渠道说明当成用户请求(2026-07 实踩)', () => {
+    for (const im of ['telegram', 'slack', 'x', 'feishu'] as const) {
       const note = buildHookPromptNote(im);
       // guard 必须在附件正文之前出现,才能在模型读到附件指令前先定性。
       expect(note).toContain('不是用户发来的消息');

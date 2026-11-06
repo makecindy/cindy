@@ -6176,7 +6176,7 @@
         "hook": "Cindy IM bots"
       },
       "hook": {
-        "description": "Connect Slack and Telegram to the same Cindy. Messages are dispatched to this device and share its project list and session runner; each provider keeps its own account and preferences.",
+        "description": "Connect Slack, Telegram, Feishu / Lark and other channels to the same Cindy. Messages are dispatched to this device and share its project list and session runner; each provider keeps its own account and preferences.",
         "slackDescription": "Bind Slack workspaces and hand tasks to Cindy from Slack.",
         "slackDisabledHint": "Turn on the switch to start Slack authorization; once bound you can dispatch tasks from Slack.",
         "slackBoundHint": "Binding complete. Turning the switch off unbinds this device; turning it back on requires authorizing again.",
@@ -6397,6 +6397,45 @@
             "revoked": "Unlinked",
             "superseded": "Linked on another device"
           }
+        },
+        "feishu": {
+          "description": "Send Feishu messages to your working computer.",
+          "disabledHint": "Turn on the switch, then authorize your Feishu / Lark account in the browser or send the link code to the bot.",
+          "toggleAria": "Toggle Feishu / Lark connection",
+          "connect": "Link Feishu / Lark",
+          "openApp": "Open authorization page",
+          "cancel": "Cancel linking",
+          "retry": "Retry linking",
+          "openBot": "Open bot",
+          "unlink": "Unlink Feishu / Lark",
+          "unlinkConfirmTitle": "Unlink Feishu / Lark?",
+          "unlinkConfirmDescription": "Unlink this computer only.",
+          "unavailableHint": "Your organization hasn't set up the Feishu / Lark bot yet. Contact your organization admin.",
+          "unavailableHintPersonal": "The Feishu / Lark bot isn't available for personal accounts yet.",
+          "status": {
+            "checking": "Checking server support…",
+            "unavailable": "Not set up by your organization",
+            "unavailablePersonal": "Not available yet",
+            "disabled": "Disabled",
+            "none": "Not linked",
+            "pending": "Authorize in the browser, or send the link code to the bot",
+            "awaiting_confirmation": "Confirm the account change for this computer in Feishu / Lark",
+            "confirmed": "{{user}} linked to the Feishu / Lark bot",
+            "denied": "Authorization denied",
+            "expired": "Authorization expired",
+            "failed": "Linking failed",
+            "revoked": "Unlinked",
+            "superseded": "This computer is linked to another Feishu / Lark account",
+            "appChanged": "The Feishu / Lark bot was changed. Link it again."
+          },
+          "bindCode": {
+            "label": "Link code",
+            "copy": "Copy code",
+            "copied": "Link code copied",
+            "hint": "Or send this code to the Cindy bot in a direct message in Feishu / Lark"
+          },
+          "setWorkingDevice": "Set as working computer",
+          "workingDeviceSet": "Working computer set"
         }
       },
       "summary": {
@@ -6415,7 +6454,7 @@
     "tina": {
       "chat": {
         "title": "Chat",
-        "description": "Plain conversations without any repository; select \"chat\" from Slack, Telegram, or X, one session per conversation lane."
+        "description": "Plain conversations without any repository; select \"chat\" from Slack, Telegram, X, or Feishu / Lark, one session per conversation lane."
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -6425,6 +6464,7 @@
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
         "providerX": "X",
+        "providerFeishu": "Feishu / Lark",
         "requireConnected": "Editable once {{provider}} is connected (enable its switch above and wait for the connection).",
         "offlineLocal": "{{provider}} is offline. Changes are saved on this computer and sync to the chat model card when it reconnects.",
         "requireBinding": "Complete {{provider}} account linking first.",

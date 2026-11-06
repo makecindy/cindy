@@ -89,6 +89,13 @@ function isSafeHttpsUrl(v: unknown): v is string {
   }
 }
 
+/** One-time bind code: 4-32 uppercase letters or digits, inner hyphens allowed. */
+const PROVIDER_BIND_CODE_PATTERN = /^[A-Z0-9][A-Z0-9-]{2,30}[A-Z0-9]$/;
+
+function isProviderBindCode(v: unknown): v is string {
+  return typeof v === 'string' && PROVIDER_BIND_CODE_PATTERN.test(v);
+}
+
 function validateProvider(v: unknown, path: string): string | null {
   if (!HOOK_PROVIDERS.includes(v as never)) {
     return `${path} must be one of: ${HOOK_PROVIDERS.join(', ')}`;
@@ -853,6 +860,14 @@ function validateProviderBindRevoke(p: Record<string, unknown>): string | null {
   return null;
 }
 
+function validateProviderBindSelect(p: Record<string, unknown>): string | null {
+  return validateProviderBindRevoke(p)?.replaceAll('provider.bind.revoke', 'provider.bind.select') ?? null;
+}
+function validateProviderBindSelection(p: Record<string, unknown>): string | null {
+  return validateProviderBindRevoke(p)?.replaceAll('provider.bind.revoke', 'provider.bind.selection')
+    ?? (typeof p.ok === 'boolean' ? null : 'provider.bind.selection.ok must be boolean');
+}
+
 const PROVIDER_BIND_ID_FIELDS = [
   'attemptId',
   'bindingId',
@@ -890,6 +905,11 @@ function validateProviderBindStatus(
   }
   if (p.connectUrl !== null && !isSafeHttpsUrl(p.connectUrl)) {
     return `${label}.connectUrl must be a safe HTTPS URL or null`;
+  }
+  // Optional field: peers that predate it omit it entirely.
+  const bindCode = p.bindCode === undefined ? null : p.bindCode;
+  if (bindCode !== null && !isProviderBindCode(bindCode)) {
+    return `${label}.bindCode must be 4-32 uppercase letters, digits or inner hyphens, or null`;
   }
   if (p.remediationUrl !== null && !isSafeHttpsUrl(p.remediationUrl)) {
     return `${label}.remediationUrl must be a safe HTTPS URL or null`;
@@ -942,6 +962,9 @@ function validateProviderBindStatus(
   if (state !== 'pending' && p.connectUrl !== null) {
     return `${label}.connectUrl must be null unless state is pending`;
   }
+  if (state !== 'pending' && bindCode !== null) {
+    return `${label}.bindCode must be null unless state is pending`;
+  }
   if (state === 'confirmed') {
     for (const field of ['bindingId', 'principalId', 'scopeId'] as const) {
       if (!isNonEmptyString(p[field])) {
@@ -976,6 +999,12 @@ function validateQueryRequest(p: Record<string, unknown>): string | null {
   if (!isNonEmptyString(p.queryId)) return 'query.request.queryId must be a non-empty string';
   if (!QUERY_KINDS.includes(p.kind as never)) {
     return `query.request.kind must be one of: ${QUERY_KINDS.join(', ')}`;
+  }
+  if (
+    p.recipient !== undefined &&
+    !(isPlainObject(p.recipient) && isNonEmptyString(p.recipient.scopeId) && isNonEmptyString(p.recipient.principalId))
+  ) {
+    return 'query.request.recipient must be { scopeId, principalId } non-empty strings when present';
   }
   if (p.kind === 'session-new') {
     if (!isPlainObject(p.sessionNew)) {
@@ -1641,6 +1670,8 @@ const PAYLOAD_VALIDATORS: Record<HookMessageType, (p: Record<string, unknown>) =
   'provider.bind.start': validateProviderBindStart,
   'provider.bind.cancel': validateProviderBindCancel,
   'provider.bind.revoke': validateProviderBindRevoke,
+  'provider.bind.select': validateProviderBindSelect,
+  'provider.bind.selection': validateProviderBindSelection,
   'provider.bind.update': (p) => validateProviderBindStatus(p, 'provider.bind.update'),
   'provider.bind.state': (p) => validateProviderBindStatus(p, 'provider.bind.state'),
   'query.request': validateQueryRequest,
