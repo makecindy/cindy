@@ -303,6 +303,8 @@ it('quotes explicit Anthropic Batch caches and preserves the standard tariff', (
   expect(providerReferencePriceQuote('anthropic', 'claude-opus-5-5', registry, { at: '2026-11-06' }))
     .toMatchObject({ inputPerMtok: 4, outputPerMtok: 20, cacheReadPerMtok: 0.2,
       priority: { inputPerMtok: 8, outputPerMtok: 40 } });
-  expect(providerReferencePriceQuote('anthropic', 'claude-opus-5-5', registry, { at: '2026-11-05', variant: 'batch' }))
+  expect(providerReferencePriceQuote('anthropic', 'claude-opus-5-5', registry, { at: '2026-10-21', variant: 'batch' }))
     .toBeUndefined();
+  expect(providerReferencePriceQuote('anthropic', 'claude-opus-5-5', registry, { at: '2026-10-22', variant: 'batch' }))
+    .toMatchObject({ currency: 'USD', inputPerMtok: 2, outputPerMtok: 10 });
 });

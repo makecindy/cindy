@@ -4560,7 +4560,7 @@
               "variant": "batch",
               "inputPerMtok": 2,
               "outputPerMtok": 10,
-              "effectiveFrom": "2026-11-06",
+              "effectiveFrom": "2026-10-22",
               "source": {
                 "kind": "provider-official",
                 "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
@@ -5442,7 +5442,7 @@
               "variant": "batch",
               "inputPerMtok": 5,
               "outputPerMtok": 25,
-              "effectiveFrom": "2026-11-06",
+              "effectiveFrom": "2026-10-22",
               "source": {
                 "kind": "provider-official",
                 "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
@@ -5500,7 +5500,7 @@
               "variant": "batch",
               "inputPerMtok": 5,
               "outputPerMtok": 25,
-              "effectiveFrom": "2026-11-06",
+              "effectiveFrom": "2026-10-22",
               "source": {
                 "kind": "provider-official",
                 "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
@@ -5557,7 +5557,7 @@
               "variant": "batch",
               "inputPerMtok": 5,
               "outputPerMtok": 25,
-              "effectiveFrom": "2026-11-06",
+              "effectiveFrom": "2026-10-22",
               "source": {
                 "kind": "provider-official",
                 "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
@@ -5630,7 +5630,7 @@
               "variant": "batch",
               "inputPerMtok": 2.5,
               "outputPerMtok": 12.5,
-              "effectiveFrom": "2026-11-06",
+              "effectiveFrom": "2026-10-22",
               "source": {
                 "kind": "provider-official",
                 "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
@@ -5703,7 +5703,7 @@
               "variant": "batch",
               "inputPerMtok": 2.5,
               "outputPerMtok": 12.5,
-              "effectiveFrom": "2026-11-06",
+              "effectiveFrom": "2026-10-22",
               "source": {
                 "kind": "provider-official",
                 "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
@@ -5761,7 +5761,7 @@
               "variant": "batch",
               "inputPerMtok": 2.5,
               "outputPerMtok": 12.5,
-              "effectiveFrom": "2026-11-06",
+              "effectiveFrom": "2026-10-22",
               "source": {
                 "kind": "provider-official",
                 "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
@@ -5818,7 +5818,7 @@
               "variant": "batch",
               "inputPerMtok": 2.5,
               "outputPerMtok": 12.5,
-              "effectiveFrom": "2026-11-06",
+              "effectiveFrom": "2026-10-22",
               "source": {
                 "kind": "provider-official",
                 "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
@@ -5874,7 +5874,7 @@
               "variant": "batch",
               "inputPerMtok": 2.5,
               "outputPerMtok": 12.5,
-              "effectiveFrom": "2026-11-06",
+              "effectiveFrom": "2026-10-22",
               "source": {
                 "kind": "provider-official",
                 "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
@@ -5933,7 +5933,7 @@
               "variant": "batch",
               "inputPerMtok": 1,
               "outputPerMtok": 5,
-              "effectiveFrom": "2026-11-06",
+              "effectiveFrom": "2026-10-22",
               "source": {
                 "kind": "provider-official",
                 "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
@@ -5990,7 +5990,7 @@
               "variant": "batch",
               "inputPerMtok": 1.5,
               "outputPerMtok": 7.5,
-              "effectiveFrom": "2026-11-06",
+              "effectiveFrom": "2026-10-22",
               "source": {
                 "kind": "provider-official",
                 "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
@@ -6090,7 +6090,7 @@
               "variant": "batch",
               "inputPerMtok": 0.5,
               "outputPerMtok": 2.5,
-              "effectiveFrom": "2026-11-06",
+              "effectiveFrom": "2026-10-22",
               "source": {
                 "kind": "provider-official",
                 "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
