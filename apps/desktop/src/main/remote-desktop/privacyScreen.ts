@@ -162,9 +162,15 @@ export class PrivacyScreen {
           fullscreenable: false,
           skipTaskbar: true,
           hasShadow: false,
-          ...(nonActivating ? { type: 'panel' } : {}),
           // Functional blackout pixels, independent of the application's theme.
-          backgroundColor: '#000000',
+          // Away masks are non-opaque windows painted by the page instead: an opaque
+          // full-screen window makes macOS report every window behind it as occluded,
+          // and Chromium/Electron apps then stop drawing, so Agents behind the cover
+          // read a frozen screen (2026-11-06: a settings click behind the mask never
+          // repainted).
+          ...(nonActivating
+            ? { type: 'panel', transparent: true, backgroundColor: '#00000000' }
+            : { backgroundColor: '#000000' }),
           webPreferences: {
             session: partition,
             sandbox: true,
