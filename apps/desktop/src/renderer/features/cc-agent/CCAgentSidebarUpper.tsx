@@ -671,8 +671,13 @@ export function CCAgentSidebarUpper() {
     // 否则 AG 键还会打开上一份已经看不见的任务。完整活动表仍要带上,最近发送
     // / 优先 / 自定义不能被折叠裁掉。
     // active 表示未归档，不表示正在运行；可见的非 active 任务另作侧栏映射投影。
-    const catalogSessions = sessionsWithRemote.filter((session) => session.status === 'active');
-    const catalogSessionIds = new Set(catalogSessions.map((session) => session.id));
+    // 键盘目录只按任务 ID 寻址，同 ID 保留首条；本机在前时优先保留本机，避免重复占键。
+    const catalogSessionIds = new Set<string>();
+    const catalogSessions = sessionsWithRemote.filter((session) => {
+      if (session.status !== 'active' || catalogSessionIds.has(session.id)) return false;
+      catalogSessionIds.add(session.id);
+      return true;
+    });
     const visibleProjection = visibleSessionsWithRemote
       .filter((session) => !catalogSessionIds.has(session.id))
       .slice(0, WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT);

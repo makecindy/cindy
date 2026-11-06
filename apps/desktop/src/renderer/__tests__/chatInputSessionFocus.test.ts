@@ -108,9 +108,6 @@ describe('ChatInput session switch focus contract', () => {
     );
     expect(newMakerDraftRouteSource).toContain('readNewMakerFolderPickerRequest(location.state)');
     expect(newMakerDraftRouteSource).toContain('setFolderPickerOpen(true)');
-    expect(sidebarUpperSource).toContain(
-      "const catalogSessions = sessionsWithRemote.filter((session) => session.status === 'active');",
-    );
     expect(sidebarUpperSource).toContain('catalogEligible: false');
     expect(sidebarUpperSource).toContain(
       'const remainingCatalogSlots = Math.max(0, 100 - visibleProjection.length);',
@@ -427,6 +424,7 @@ it.each([
   [100, 36, 13, '', 51, 36],
   [100, 36, 0, 'local-70', 64, 36],
   [100, 37, 0, 'duplicate-id', 64, 36],
+  [100, 36, 0, 'duplicate-first', 65, 35],
 ] as const)(
   'publishes keyboard candidates for %i local / %i remote / %i archived / %s',
   (local, remote, archived, special, expectedLocal, expectedRemote) => {
@@ -439,6 +437,7 @@ it.each([
       }));
     const remoteRows = makeRows(remote, 'remote');
     if (special === 'duplicate-id') remoteRows[remoteRows.length - 1].id = 'local-0';
+    if (special === 'duplicate-first') remoteRows[0].id = 'local-0';
     const visible = makeRows(archived, 'archived', 'archived');
     const publishTasks = vi.fn().mockResolvedValue(undefined);
     // 编译并执行真实发布回调，隔离侧栏组件依赖，检查实际传给 publishTasks 的载荷。
@@ -455,7 +454,11 @@ it.each([
         sessionsWithRemote: [...makeRows(local, 'local'), ...remoteRows, ...visible],
         visibleSessionsWithRemote: visible,
         getVisibleSidebarSessionIds: () =>
-          special.startsWith('local-') ? [special] : visible.map((row) => row.id),
+          special === 'duplicate-first'
+            ? makeRows(13, 'local').map((row) => row.id)
+            : special.startsWith('local-')
+              ? [special]
+              : visible.map((row) => row.id),
         isSecondaryWindow: () => false,
         useCallback: (publish: () => void) => publish,
         publishedTaskKeyRef: { current: '' },
@@ -469,6 +472,7 @@ it.each([
       sidebarOrder?: number;
     }>;
     expect(rows).toHaveLength(100);
+    expect(new Set(rows.map((row) => row.id)).size).toBe(rows.length);
     expect(rows.filter((row) => row.title.startsWith('local-'))).toHaveLength(expectedLocal);
     expect(rows.filter((row) => row.title.startsWith('remote-'))).toHaveLength(expectedRemote);
     if (special.startsWith('local-')) {
