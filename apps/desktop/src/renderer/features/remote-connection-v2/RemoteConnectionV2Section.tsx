@@ -56,7 +56,7 @@ function RecentActivity({ events }: { events: readonly PresenceEvent[] }) {
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="inline-flex size-6 items-center justify-center rounded-md text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)] data-[state=open]:text-[var(--text-primary)]"
+          className="inline-flex size-6 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)] data-[state=open]:text-[var(--text-primary)]"
           aria-label={label}
           title={label}
         >

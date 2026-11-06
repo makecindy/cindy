@@ -10,7 +10,8 @@
  * 设备深链指向某台设备时直接打开它的卡片。
  *
  * 状态只用颜色表达,名字下面不写状态字(用户裁决 2026-11-07;文字状态在卡片、悬停提示与读屏标签里):
- * 绿 --rcv2-ok 是连着(实线),有消息在走时同一条绿线变成朝消息方向流动的虚线、图块描边也变绿;
+ * 绿 --rcv2-ok 是连着但没消息:实线、图块描边与图标都是绿;蓝 --rcv2-live 是有消息在走:这条线变成朝消息方向
+ * 流动的蓝色虚线,图块描边与图标变蓝并带一圈蓝色柔光(用户裁决 2026-11-07);
  * 心动橙 --warning-accent(应用里「运行中」的颜色,DESIGN.md §2 登记)是设备忙碌:图块右上角一个呼吸的小圆点;
  * 红 --rcv2-error 是出错 / 要处理(图块和它的点线)。灰色只留给离线和未建链。
  * 强调只有两种:有消息在走的线(TopologyFlow:绿色虚线朝消息方向流)和
@@ -42,9 +43,10 @@ const HUB = 56;
 /** 手机图块:竖着的窄条(intrinsic-geometry,见 CSS)。 */
 const PHONE_W = 24;
 const PHONE_H = 38;
-/** 拓扑容器上定义的两种颜色,子元素与 CSS 只引用 --rcv2-ok / --rcv2-error(忙碌直接读 --warning-accent)。 */
+/** 拓扑容器上定义的颜色,子元素与 CSS 只引用 --rcv2-ok / --rcv2-live / --rcv2-error(忙碌直接读 --warning-accent)。 */
 const LIVE_STYLE = {
   ['--rcv2-ok' as string]: 'var(--status-success)',
+  ['--rcv2-live' as string]: 'var(--status-info)',
   ['--rcv2-error' as string]: 'var(--error-fg)',
 } as CSSProperties;
 
@@ -141,7 +143,7 @@ function lineAttrs(kind: LineKind, emphasis: LineEmphasis) {
     emphasis === 'focus'
       ? { stroke: 'var(--text-primary)', strokeOpacity: 0.8, strokeWidth: 2 }
       : emphasis === 'live'
-        ? { stroke: 'var(--rcv2-ok)', strokeOpacity: 1, strokeWidth: 2 }
+        ? { stroke: 'var(--rcv2-live)', strokeOpacity: 1, strokeWidth: 2 }
         : emphasis === 'dim'
           ? { ...rest, strokeOpacity: rest.strokeOpacity * 0.3 }
           : rest;
@@ -438,6 +440,7 @@ export function RemoteConnectionTopology({
             {/* 外层按钮只管位置与点击(定位用 transform),里层是看得见的图块 */}
             <button
               type="button"
+              // design: intrinsic-geometry — 手机图块是竖着的窄条,外层点击区与看得见的那层(.rcv2-tile[data-form=phone])同一外形
               className={cn('rcv2-hit', phone ? 'rounded-[7px]' : 'rounded-lg')}
               style={placed(p.x, p.y, phone ? PHONE_W : TILE, phone ? PHONE_H : TILE, animate)}
               aria-label={sub.text ? `${node.name} · ${sub.text}` : node.name}
@@ -451,6 +454,7 @@ export function RemoteConnectionTopology({
                 data-form={phone ? 'phone' : undefined}
                 data-dim={node.status === 'offline' ? 'true' : undefined}
                 data-live={node.flow ? 'true' : undefined}
+                data-linked={node.status === 'direct' || node.status === 'relay' ? 'true' : undefined}
                 data-error={node.status === 'attention' ? 'true' : undefined}
               >
                 {phone ? <span className="rcv2-island" aria-hidden /> : null}
