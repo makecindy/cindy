@@ -282,17 +282,23 @@ async function verifyAnthropicSystemAccounting(
   res: Response,
   latencyMs: number,
 ): Promise<ProviderConnectionTestResult | null> {
+  const raw = await readBodyWithLimit(res, MAX_ERROR_BODY_BYTES);
+  if (raw === null) return null;
   let payload: unknown;
   try {
-    payload = await res.json();
+    payload = JSON.parse(raw);
   } catch {
     return null;
   }
   if (!isPlainObject(payload)) return null;
   const usage = payload.usage;
   if (!isPlainObject(usage)) return null;
-  const counted = usage.input_tokens;
-  if (typeof counted !== 'number' || !Number.isFinite(counted) || counted <= 0) return null;
+  // Anthropic 兼容端点会把命中缓存的 system 前缀记在 cache_read / cache_creation 里，
+  // 只读 input_tokens 会在「同一次测试连点两下」时把正常端点误报成丢弃 system。
+  const counted = readUsageTokenCount(usage, 'input_tokens')
+    + readUsageTokenCount(usage, 'cache_read_input_tokens')
+    + readUsageTokenCount(usage, 'cache_creation_input_tokens');
+  if (counted <= 0) return null;
   if (counted >= PROBE_SYSTEM_MIN_INPUT_TOKENS) return null;
   return {
     ok: false,
@@ -303,6 +309,44 @@ async function verifyAnthropicSystemAccounting(
       `${PROBE_SYSTEM_TEXT.length} characters (expected >= ${PROBE_SYSTEM_MIN_INPUT_TOKENS}); ` +
       'the endpoint likely drops `system`, so agent instructions would never apply',
   };
+}
+
+/** 取一个可用的 usage 计数；非数字 / 负数一律当 0，避免 NaN 扩散。 */
+function readUsageTokenCount(usage: Record<string, unknown>, key: string): number {
+  const value = usage[key];
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/**
+ * 限量读取响应体：超过上限立即取消读流，避免中转返回的超大响应体撑爆主进程内存。
+ * 返回 null 表示超限或读失败，调用方按「无法判定」处理。
+ */
+async function readBodyWithLimit(res: Response, maxBytes: number): Promise<string | null> {
+  if (!res.body) return null;
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let received = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (value) {
+        received += value.byteLength;
+        if (received > maxBytes) return null;
+        text += decoder.decode(value, { stream: !done });
+      }
+      if (done) {
+        text += decoder.decode();
+        return text;
+      }
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      /* no-op */
+    }
+  }
 }
 
 function classifyStreamedError(error: Record<string, unknown>): ProviderErrorClassification {
