@@ -773,7 +773,8 @@ describe("companion text selection and actions", () => {
     }
   });
 
-  it("keeps inserting the link from rows that cannot be quoted", () => {
+  // Error notices stay action-free even when the companion exposes reply callbacks.
+  it("hides error actions even when reply callbacks are available", () => {
     const onQuote = vi.fn();
     const onAddMessageToComposer = vi.fn();
     const h = mount([{ ...msg("e1", "Boom", { turnCompleted: true }), role: "error" }], {
@@ -782,10 +783,11 @@ describe("companion text selection and actions", () => {
       onAddMessageToComposer,
     });
     try {
-      const reply = h.host.querySelector('[data-testid="companion.messageReply"]')!;
-      act(() => reply.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+      expect(h.host.textContent).toContain(i18n.t('session.tail.showErrorDetails'));
+      expect(h.host.querySelector('[data-testid="companion.messageActions"]')).toBeNull();
+      expect(h.host.querySelector('[data-testid="companion.messageReply"]')).toBeNull();
       expect(onQuote).not.toHaveBeenCalled();
-      expect(onAddMessageToComposer).toHaveBeenCalledExactlyOnceWith("e1");
+      expect(onAddMessageToComposer).not.toHaveBeenCalled();
     } finally { h.unmount(); }
   });
 });
