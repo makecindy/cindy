@@ -281,6 +281,10 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     expect(payload.categories).toEqual([
       { name: 'scheduler', tool_count: 11, description: expect.stringMatching(/各自的电脑.*schedule_create.*只在本机/) },
     ]);
+    // Agent/user parity: the first discovery result must expose remote trigger
+    // configuration while keeping secret/URL operations out of Agent tools.
+    expect(payload.categories[0].description).toMatch(/Webhook[^。；]*触发配置[^。；]*可指定电脑/);
+    expect(payload.categories[0].description).toMatch(/密钥.*更换地址.*用户.*详情/);
     await h.cleanup();
   });
 

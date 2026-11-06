@@ -204,7 +204,7 @@ describe('ScheduleWebhookQueue', () => {
 
   // PR #8470, unit: the existing pause test stops before preparation begins.
   // A delayed remote refresh / run insertion can outlive that first state check.
-  it.each(['paused', 'expired', 'disabled', 'deleted'] as const)(
+  it.each(['paused', 'expired', 'disabled', 'deleted', 'replaced'] as const)(
     'rechecks %s state at handoff and never replays the discarded batch', async (state) => {
       const h = setup();
       const dispatch = vi.fn();
@@ -227,6 +227,7 @@ describe('ScheduleWebhookQueue', () => {
         ...(state === 'paused' ? { status: 'paused' } : {}),
         ...(state === 'expired' ? { expireAt: Date.now() } : {}),
         ...(state === 'disabled' ? { webhookTrigger: undefined } : {}),
+        ...(state === 'replaced' ? { webhookTrigger: { endpointId: 'e2' } } : {}),
       });
       finishPreparation();
       await vi.advanceTimersByTimeAsync(0);
@@ -244,6 +245,64 @@ describe('ScheduleWebhookQueue', () => {
       h.queue.stop();
     },
   );
+
+  // PR #8470, unit: a revoked route must not own a batch after a restart or
+  // delayed reconciliation. Existing restart cases keep the same route.
+  it.each(['pending', 'preparing'] as const)('discards %s events from a replaced route after restart', async (phase) => {
+    const first = setup();
+    first.fire.mockImplementationOnce(() => new Promise(() => {}));
+    await first.queue.start();
+    await first.queue.accept('s1', event('old'));
+    if (phase === 'preparing') await vi.advanceTimersByTimeAsync(LIMITS.debounceMs);
+    first.queue.stop();
+    const second = setup(first.saved());
+    second.setSchedule({ id: 's1', status: 'active', webhookTrigger: { endpointId: 'e2' } } as Schedule);
+    await second.queue.start();
+    await vi.advanceTimersByTimeAsync(LIMITS.minGapMs);
+    expect(second.fire).not.toHaveBeenCalled();
+    expect(second.queue.snapshot('s1').ignored).toBe(1);
+    await second.queue.accept('s1', event('new'));
+    await vi.advanceTimersByTimeAsync(LIMITS.debounceMs);
+    expect(second.fire.mock.calls[0][1].events.map(e => e.deliveryId)).toEqual(['new']);
+    second.queue.stop();
+  });
+
+  // The old attempt may reject its handoff or return a no-effects deferral
+  // after forget() and a new arrival. Neither may restore its batch over the new queue.
+  it.each([
+    ['handoff', 'forgotten'], ['deferred', 'forgotten'],
+    ['handoff', 'replaced'], ['deferred', 'replaced'],
+  ] as const)('does not restore a late %s batch after it was %s', async (phase, change) => {
+    const h = setup();
+    const dispatch = vi.fn();
+    let release!: () => void;
+    const waiting = new Promise<void>(resolve => { release = resolve; });
+    h.fire.mockImplementationOnce(async (_id, _batch, onRunCreated) => {
+      if (phase === 'deferred') await onRunCreated();
+      await waiting;
+      if (phase === 'handoff') {
+        await onRunCreated();
+        dispatch();
+      }
+      return { deferred: true };
+    });
+    await h.queue.start();
+    await h.queue.accept('s1', event('old'));
+    await vi.advanceTimersByTimeAsync(LIMITS.debounceMs);
+    if (change === 'forgotten') {
+      // Account release/restore can retain the local route id.
+      await h.queue.forget('s1');
+    } else {
+      h.setSchedule({ id: 's1', status: 'active', webhookTrigger: { endpointId: 'e2' } } as Schedule);
+    }
+    await h.queue.accept('s1', event('new'));
+    release();
+    await vi.advanceTimersByTimeAsync(LIMITS.minGapMs);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(h.fire).toHaveBeenCalledTimes(2);
+    expect(h.fire.mock.calls[1][1].events.map(e => e.deliveryId)).toEqual(['new']);
+    h.queue.stop();
+  });
 
   it('carries the count of events the server already dropped into the next batch, once', async () => {
     const { queue, fire } = setup();

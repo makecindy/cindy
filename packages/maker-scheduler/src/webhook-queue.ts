@@ -11,6 +11,8 @@ export const SCHEDULE_WEBHOOK_LIMITS = {
 } as const;
 
 export interface ScheduleWebhookEndpointState {
+  /** Local trigger identity; optional for queue files from earlier versions. */
+  endpointId?: string;
   pending: ScheduleWebhookEvent[];
   /** Still recoverable until the durable run hands off to actual execution. */
   preparing?: { events: ScheduleWebhookEvent[]; omitted: number; firstPendingAt?: number };
@@ -29,7 +31,7 @@ export interface ScheduleWebhookQueueState {
   endpoints: Record<string, ScheduleWebhookEndpointState>;
 }
 
-type RetryBatch = NonNullable<ScheduleWebhookEndpointState['preparing']> & { previousStartedAt?: number };
+type RetryBatch = NonNullable<ScheduleWebhookEndpointState['preparing']> & { endpointId?: string; previousStartedAt?: number };
 
 export interface ScheduleWebhookQueueDeps {
   load(): Promise<ScheduleWebhookQueueState>;
@@ -66,6 +68,7 @@ export class ScheduleWebhookQueue {
   private state: ScheduleWebhookQueueState = { endpoints: {} };
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly running = new Set<string>();
+  private readonly cancelled = new Set<string>();
   // A known no-effects deferral may outlive a failed restore write. Retain it
   // until the next successful transaction, without replaying started runs on restart.
   private readonly retries = new Map<string, RetryBatch>();
@@ -115,6 +118,12 @@ export class ScheduleWebhookQueue {
     const schedule = await this.deps.getSchedule(id);
     const result = await this.mutate(state => {
       const endpoint = state.endpoints[id] ??= emptyEndpoint();
+      const endpointId = schedule?.webhookTrigger?.endpointId;
+      if (endpointId && endpoint.endpointId && endpoint.endpointId !== endpointId) {
+        this.discardPending(endpoint);
+        endpoint.receipts = {};
+      }
+      if (endpointId) endpoint.endpointId = endpointId;
       endpoint.lastReceivedAt = now;
       if (endpoint.receipts[event.deliveryId] !== undefined && now - endpoint.receipts[event.deliveryId] < SCHEDULE_WEBHOOK_LIMITS.receiptTtlMs) return 'duplicate';
       const result: ScheduleWebhookAcceptResult = canReceive(schedule, now) ? 'queued' : 'ignored';
@@ -145,6 +154,7 @@ export class ScheduleWebhookQueue {
 
   /** Called when a schedule was deleted or its trigger removed. */
   async forget(id: string): Promise<void> {
+    if (this.running.has(id)) this.cancelled.add(id);
     if (!this.state.endpoints[id]) return;
     const timer = this.timers.get(id);
     if (timer) clearTimeout(timer);
@@ -177,7 +187,7 @@ export class ScheduleWebhookQueue {
       const retries = [...this.retries];
       for (const [id, batch] of retries) {
         const endpoint = snapshot.endpoints[id];
-        if (!endpoint) continue;
+        if (!endpoint || endpoint.endpointId !== batch.endpointId) continue;
         endpoint.preparing ??= batch;
         this.restorePreparing(endpoint);
         endpoint.lastStartedAt = batch.previousStartedAt;
@@ -227,13 +237,13 @@ export class ScheduleWebhookQueue {
       const batch = await this.mutate(state => {
         const endpoint = state.endpoints[id];
         if (!endpoint) return;
+        // Earlier queue files have no identity; retain their existing recovery
+        // behavior. Newly accepted batches always retain their own route id.
+        endpoint.endpointId ??= schedule?.webhookTrigger?.endpointId;
         // A previous preparation failed, or the process exited before handoff.
         this.restorePreparing(endpoint);
-        if (!canReceive(schedule, this.deps.now())) {
-          endpoint.ignored += endpoint.pending.length + endpoint.omitted;
-          endpoint.pending = [];
-          endpoint.omitted = 0;
-          endpoint.firstPendingAt = undefined;
+        if (!canReceive(schedule, this.deps.now()) || endpoint.endpointId !== schedule.webhookTrigger?.endpointId) {
+          this.discardPending(endpoint);
           return;
         }
         if (!endpoint.pending.length) return;
@@ -242,9 +252,9 @@ export class ScheduleWebhookQueue {
         endpoint.pending = [];
         endpoint.omitted = 0;
         endpoint.firstPendingAt = undefined;
-        return { ...preparing, previousStartedAt: endpoint.lastStartedAt };
+        return { ...preparing, endpointId: endpoint.endpointId, previousStartedAt: endpoint.lastStartedAt };
       });
-      if (!batch || this.stopped) return;
+      if (!batch || this.stopped || this.cancelled.has(id)) return;
       let handedOff = false;
       let discarded = false;
       try {
@@ -254,8 +264,9 @@ export class ScheduleWebhookQueue {
           const latest = await this.deps.getSchedule(id);
           const accepted = await this.mutate(state => {
             const current = state.endpoints[id];
-            if (this.stopped || !current?.preparing) throw new Error('webhook batch cancelled before dispatch');
-            if (!canReceive(latest, this.deps.now())) {
+            if (this.stopped) throw new Error('webhook batch cancelled before dispatch');
+            if (this.cancelled.has(id) || !current?.preparing || current.endpointId !== batch.endpointId) return false;
+            if (!canReceive(latest, this.deps.now()) || latest.webhookTrigger?.endpointId !== batch.endpointId) {
               current.ignored += current.preparing.events.length + current.preparing.omitted;
               current.preparing = undefined;
               return false;
@@ -264,13 +275,13 @@ export class ScheduleWebhookQueue {
             current.lastStartedAt = this.deps.now();
             return true;
           });
-          discarded = !accepted;
+          discarded = !accepted || this.cancelled.has(id);
           if (discarded) throw new Error('schedule webhook no longer active before dispatch');
           handedOff = true;
         });
-        retry = !discarded && (Boolean(result.deferred) || !handedOff);
+        retry = !discarded && !this.cancelled.has(id) && (Boolean(result.deferred) || !handedOff);
       } catch (error) {
-        retry = !discarded && !handedOff;
+        retry = !discarded && !this.cancelled.has(id) && !handedOff;
         if (!discarded) this.deps.onError?.('schedule webhook run failed', { scheduleId: id, error: String(error) });
       }
       if (retry && !this.stopped) {
@@ -279,8 +290,18 @@ export class ScheduleWebhookQueue {
       }
     } finally {
       this.running.delete(id);
+      this.cancelled.delete(id);
       this.arm(id, retry ? SCHEDULE_WEBHOOK_LIMITS.retryMs : 0);
     }
+  }
+
+  private discardPending(endpoint: ScheduleWebhookEndpointState): void {
+    endpoint.ignored += endpoint.pending.length + endpoint.omitted
+      + (endpoint.preparing?.events.length ?? 0) + (endpoint.preparing?.omitted ?? 0);
+    endpoint.pending = [];
+    endpoint.omitted = 0;
+    endpoint.firstPendingAt = undefined;
+    endpoint.preparing = undefined;
   }
 
   private restorePreparing(endpoint: ScheduleWebhookEndpointState): void {
