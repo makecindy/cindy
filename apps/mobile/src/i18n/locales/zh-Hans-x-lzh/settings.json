@@ -351,5 +351,44 @@
     "title": "开发者",
     "identity": "标识信息",
     "updateInfo": "更新之讯"
+  },
+  "handheld": {
+    "sectionTitle": "掌机",
+    "label": "掌机之式",
+    "entryHint": "于游戏掌机上以手柄驭 Cindy，长按语音键即可言。",
+    "on": "已启",
+    "off": "未启",
+    "openAccessibility": "启「掌机之式」之设",
+    "title": "掌机之式",
+    "hint": "启之，则可独以手柄驭之：十字键或左摇杆移焦点，A 为准，B 为返。",
+    "saveFailed": "此设未能存，然此番使用中仍有效。",
+    "reset": "复预设",
+    "voiceKey": {
+      "title": "语音键",
+      "hint": "长按此键始言，释之则止，所言之字留于输入框。于首页长按，则径开新务。若择 A、B、L1、R1，则其本有之准、返、翻页皆为所占。",
+      "capture": "按手柄之键以设之",
+      "capturing": "请按欲用之键…"
+    },
+    "display": {
+      "title": "屏",
+      "secondary": "示于副屏",
+      "hint": "启之，则 Cindy 移至副屏（如双屏掌机之下屏）；罢掌机之式，则归主屏。",
+      "none": "此设备唯一屏，Cindy 自适其尺寸。",
+      "current": "今之屏",
+      "single": "主屏"
+    },
+    "controls": {
+      "title": "手柄之用",
+      "gamepad": "手柄",
+      "noGamepad": "未察得",
+      "moveKeys": "十字键 / 左摇杆",
+      "move": "移焦点",
+      "confirm": "准",
+      "back": "返",
+      "voice": "长按而言",
+      "scrollKeys": "右摇杆",
+      "scroll": "卷动",
+      "page": "翻页"
+    }
   }
 }

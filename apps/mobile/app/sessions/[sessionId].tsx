@@ -509,6 +509,7 @@ import { ComposerFrame, nativeComposerFrameAvailable } from '@/session/ComposerF
 import { VoiceRecordingPillContent, useMobileVoiceRecordingTimer } from '@/session/VoiceRecordingPill';
 import { VoicePillWidthFrame } from '@/session/voicePillWidthMotion';
 import { useMobileVoiceProcessingIndicator } from '@/session/useMobileVoiceProcessingIndicator';
+import { useHandheldVoiceKey } from '@/handheld/handheldMode';
 import { useComposerCardTransition } from '@/session/useComposerCardTransition';
 import { ComposerKeyboardAvoidingView } from '@/session/ComposerKeyboardAvoidingView';
 import { useComposerResize } from '@/session/useComposerResize';
@@ -6127,6 +6128,23 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         if (voiceStartPendingSeqRef.current === pendingSeq) setVoiceStartPending(false);
       });
   }, [deviceId, startVoiceRecording, voiceIsProcessing, voiceState]);
+
+  // 掌机模式:长按手柄语音键 = 按住麦克风说话;松手停止,文字留在输入框里,不自动发送。
+  // 与触屏长按同一条起录/收尾路径,启动未完成就松手时由 voiceStopAfterStartRef 在起录后收尾。
+  useHandheldVoiceKey({
+    start: () => {
+      voiceSuppressNextPressRef.current = false;
+      handleVoiceButtonPressIn();
+      voiceStartedOnPressInRef.current = false;
+    },
+    end: () => {
+      if (!voiceRecordingActiveRef.current) {
+        voiceStopAfterStartRef.current = true;
+        return;
+      }
+      void finishVoiceRecording({ sendAfterTranscribe: false });
+    },
+  });
 
   const removeRemoteFileAttachment = useCallback((id: string) => {
     // 已上传中转区的对象移除时 best-effort 回收,避免未发送附件在 OSS 留孤儿(codex review #504)。
