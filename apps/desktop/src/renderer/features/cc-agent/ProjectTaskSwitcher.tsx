@@ -21,7 +21,7 @@ import { useCCSessions } from '@/hooks/useCCSessions';
 import type { Session } from '@/lib/ccAgent.types';
 import { isOrcaWorkerSession, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import type { WorktreeMeta } from '@/lib/worktree.types';
-import { DESKTOP_TASK_LIST_SESSION_SOURCES } from '../../../shared/sessionSource';
+import { DESKTOP_TASK_LIST_SESSION_SOURCES, isOrdinaryTaskListSession } from '../../../shared/sessionSource';
 import {
   compareSessionsByStatusThenSortTimeDesc,
   projectIdentityKeyForSession,
@@ -41,7 +41,9 @@ function isEligibleTask(task: Session, provisionalId: string | null, privateTask
     && (task.status === 'active' || task.status === 'archived')
     && !task.remoteHostId && !task.deviceLinkDeviceId && !task.hiddenAt
     && task.id !== provisionalId && !privateTaskIds.has(task.id)
-    && DESKTOP_TASK_LIST_SESSION_SOURCES.includes(task.source ?? 'desktop')
+    && (task.source === 'bot'
+      ? isOrdinaryTaskListSession(task)
+      : DESKTOP_TASK_LIST_SESSION_SOURCES.includes(task.source ?? 'desktop'))
     && !isOrcaWorkerSession(task) && !isEmptyDraftSession(task);
 }
 

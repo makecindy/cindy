@@ -125,6 +125,28 @@ describe('ProjectTaskSwitcher', () => {
     expect(state.getSession).not.toHaveBeenCalled();
   });
 
+  it('opens from a teammate routine and lists the same project’s archived channel task', async () => {
+    const routine = task('Teammate routine', { source: 'bot', companion: { id: 'bot', role: 'routine' } });
+    state.useSessions.mockReturnValue({
+      sessions: [
+        routine,
+        task('Archived channel', { source: 'bot', status: 'archived', companion: { id: 'bot', role: 'channel' } }),
+        task('Private teammate thread', { source: 'bot', companion: { id: 'bot', role: 'thread' } }),
+        task('Remote routine', { source: 'bot', remoteHostId: 'ssh', companion: { id: 'bot', role: 'routine' } }),
+      ],
+      isLoading: false,
+      error: null,
+    });
+    renderSwitcher(routine);
+    openSwitcher();
+
+    const rows = await screen.findAllByRole('menuitemradio');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].textContent).toBe('Teammate routine');
+    expect(rows[0].getAttribute('aria-checked')).toBe('true');
+    expect(rows[1].textContent).toBe('Archived channelarchived');
+  });
+
   it('restores focus on Escape and opens the selected archived task with the keyboard', async () => {
     state.useSessions.mockReturnValue({
       sessions: [task('old-task', { title: 'Older task', status: 'archived' })], isLoading: false, error: null,

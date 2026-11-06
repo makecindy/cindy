@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 const projectDir = '/demo/projects/ledger';
 const worktreePath = '/demo/worktrees/reconcile-invoices';
 const worktreeBranch = 'cindy/reconcile-invoices';
-const worktreeTitle = 'Implement invoice reconciliation';
+const worktreeTitle = 'Reconcile nightly ledger';
 const currentTitle = 'Review the billing ledger release and coordinate follow-up across the entire reporting project';
 const archivedTitle = 'Review earlier reporting changes';
 const taskDefaults = {
@@ -34,8 +34,10 @@ const sessions = [
   { id: 'current-task', title: currentTitle },
   { id: 'parallel-task', title: 'Investigate export timeouts', userSendAt: '2026-11-06T10:00:00.000Z' },
   { id: 'worktree-task', title: worktreeTitle, workingDir: worktreePath, worktreePath,
+    source: 'bot', companion: { id: 'fixture-bot', role: 'routine' },
     userSendAt: '2026-11-06T11:00:00.000Z' },
-  { id: 'archived-task', title: archivedTitle, status: 'archived' },
+  { id: 'archived-task', title: archivedTitle, status: 'archived',
+    source: 'bot', companion: { id: 'fixture-bot', role: 'channel' } },
   { id: 'other-project', title: 'Unrelated reporting workspace', workingDir: `${projectDir}-tools`, projectDir: `${projectDir}-tools` },
   { id: 'remote-ssh', title: 'Remote SSH invoice task', remoteHostId: 'fixture-host' },
   { id: 'remote-device', title: 'Other computer invoice task', deviceLinkDeviceId: 'fixture-device' },
@@ -109,7 +111,7 @@ export default {
       },
     },
     'same-project-switch': {
-      about: 'Switch between local tasks in the same project from a narrow header. Worktree and archived tasks are available, unrelated and remote tasks stay out.',
+      about: 'Switch between local tasks in the same project from a narrow header, including a teammate routine in a Worktree and an archived channel task. Unrelated and remote tasks stay out.',
       data: { sessions, worktrees, runningSessionIds: ['worktree-task'] },
     },
   },
@@ -138,19 +140,21 @@ export default {
     await page.keyboard.press('ArrowDown');
     const menu = page.getByTestId('project-task-switcher-menu');
     await menu.waitFor();
+    await ui.capture('project-menu');
     const items = menu.getByRole('menuitemradio');
     assert.equal(await items.count(), 4, 'the menu contains only this project’s local tasks');
     const current = items.filter({ hasText: currentTitle });
     assert.equal(await current.getAttribute('aria-checked'), 'true');
     assert.equal(await items.first().getAttribute('aria-checked'), 'true', 'the current task comes first');
     const checkout = items.filter({ hasText: worktreeTitle });
+    assert.equal(await checkout.count(), 1, 'the same-project teammate routine is available');
     assert.equal(await checkout.getByText(worktreeBranch, { exact: true }).count(), 1, 'the task shows its managed branch');
     const runningLabel = checkout.getByText(await ui.t('ccAgent.sidebar.status.running'), { exact: true });
     const archivedLabel = items.filter({ hasText: archivedTitle })
       .getByText(await ui.t('ccAgent.sidebar.taskStatus.archived'), { exact: true });
     assert.equal(await runningLabel.count(), 1, 'the running task shows its status');
     assert.equal(await archivedLabel.count(), 1,
-      'archived tasks remain reachable and are labeled');
+      'the archived teammate channel task remains reachable and labeled');
     if (ui.viewport.width <= 500) {
       assert.equal(await runningLabel.evaluate(fitsHorizontally), true, 'the running label fits beside the Worktree details');
       assert.equal(await archivedLabel.evaluate(fitsHorizontally), true, 'the archived label fits in the menu');
@@ -159,7 +163,6 @@ export default {
     const menuBox = await menu.boundingBox();
     assert.ok(menuBox && menuBox.x >= 0 && menuBox.x + menuBox.width <= ui.viewport.width + 1,
       'the menu fits inside the narrow viewport');
-    await ui.capture('project-menu');
 
     await page.keyboard.press('Escape');
     await menu.waitFor({ state: 'hidden' });
@@ -186,7 +189,7 @@ export default {
     await trigger.focus();
     await page.keyboard.press('ArrowDown');
     await menu.waitFor();
-    assert.equal(await items.count(), 4, 'the same project tasks are available from its Worktree');
+    assert.equal(await items.count(), 4, 'the same project tasks are available from the teammate routine header');
     assert.equal(await items.first().getAttribute('aria-checked'), 'true');
     assert.equal(await checkout.getAttribute('aria-checked'), 'true', 'the switched task becomes the current selection');
     assert.equal(await checkout.getByText(worktreeBranch, { exact: true }).count(), 1);
