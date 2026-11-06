@@ -106,7 +106,9 @@ export function useComposerResize(input: UseComposerResizeInput) {
       // 拉开：只有拉出了一行以上才记成手动高度，否则沿用点开时的高度（auto 或上次手动值）。
       if (successful && shouldCommitComposerOpenDrag(translationY)) {
         if (height > currentBounds.minContentHeight + COMPOSER_RESIZE_DRAG_ACTIVATION_THRESHOLD) {
-          setUserContentHeight(settleComposerResizeDrag({ bounds: currentBounds, contentHeight: current.contentHeight, draggedContentHeight: height }));
+          // Keep exactly what was pulled out: the downward snap-to-one-line rule
+          // (settleComposerResizeDrag) would hide the lines the user just revealed.
+          setUserContentHeight(Math.min(Math.max(Math.round(height), currentBounds.minContentHeight), currentBounds.maxContentHeight));
         }
         current.onDragOpenCommit?.();
       } else {

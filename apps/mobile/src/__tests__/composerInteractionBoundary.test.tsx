@@ -541,6 +541,21 @@ describe('composer body drag (press anywhere on the card)', () => {
     expect(harness.result.mode).toBe('manual');
     expect(harness.result.visibleContentHeight).toBe(80);
 
+    // Pulling only a little past the unfolded toolbar keeps that height even for a long draft.
+    const longInput = { ...composerInput(), contentHeight: 500, collapsed: true, bodyDragEnabled: true, onDragOpenChange: vi.fn(), onDragOpenCommit: vi.fn() };
+    const long = mountComposer(longInput);
+    const lp = bodyDrag(long.result.bodyGesture);
+    lp.down(800);
+    lp.move(790);
+    lp.move(770);
+    lp.up(760);
+    flushJS();
+    expect(longInput.onDragOpenCommit).toHaveBeenCalledOnce();
+    longInput.collapsed = false;
+    long.rerender();
+    expect(long.result.mode).toBe('manual');
+    expect(long.result.visibleContentHeight).toBeGreaterThan(20 + 3);
+
     const shortInput = { ...composerInput(), collapsed: true, bodyDragEnabled: true, onDragOpenChange: vi.fn(), onDragOpenCommit: vi.fn() };
     const short = mountComposer(shortInput);
     const pull = bodyDrag(short.result.bodyGesture);
