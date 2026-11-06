@@ -21,6 +21,11 @@ type KeySurfaceProps = Omit<
   "compact" | "mode" | "strip"
 >;
 
+const MIN_TARGET = 44;
+// Smallest strip the deck can get (the 96pt pad minimum on a short window), so
+// the slop below always completes a 44pt target.
+const STRIP_HEIGHT_FLOOR = 24;
+
 function FoldDeckOperations({ onPress }: { onPress(): void }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
@@ -31,13 +36,21 @@ function FoldDeckOperations({ onPress }: { onPress(): void }) {
       accessibilityRole="button"
       accessibilityLabel={t("remoteDesktop.operations")}
       onPress={onPress}
-      style={({ pressed }) => [styles.round, pressed && styles.roundPressed]}
+      // The strip is shorter than 44pt: the whole cell is the target, and the
+      // missing height reaches up into the empty lower part of the skin rail,
+      // never down onto the keys.
+      hitSlop={{ top: MIN_TARGET - STRIP_HEIGHT_FLOOR }}
+      style={styles.target}
     >
-      <Ellipsis
-        size={iconSize.action}
-        strokeWidth={iconStroke.regular}
-        color={colors.textSecondary}
-      />
+      {({ pressed }) => (
+        <View style={[styles.round, pressed && styles.roundPressed]}>
+          <Ellipsis
+            size={iconSize.action}
+            strokeWidth={iconStroke.regular}
+            color={colors.textSecondary}
+          />
+        </View>
+      )}
     </Pressable>
   );
 }
@@ -122,6 +135,7 @@ const makeStyles = (colors: ThemeColors) =>
       borderColor: colors.borderTranslucent,
       backgroundColor: colors.surfaceElevated,
     },
+    target: { width: "100%", height: "100%", alignItems: "center" },
     // Follows the strip's height, so the pressed circle never spills onto the keys.
     round: {
       height: "100%",
