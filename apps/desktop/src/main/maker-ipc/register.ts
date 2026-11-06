@@ -10016,6 +10016,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return !!snapshot?.runtimeEpochChanged;
       },
     });
+    if (outcome === 'kept-current-runtime') {
+      log.info('Bot capability refresh waits for background tasks; input runs on current runtime', {
+        sessionId: live.id,
+      });
+    }
     if (outcome === 'deferred') {
       throwIpcError(
         'PRECONDITION_FAILED',
