@@ -853,3 +853,45 @@ it.each([null, 'legacy', [], { ui: { resources: [{ uri: 'ui://help', file: '../p
       currentRelease: { ...plugin.currentRelease, manifest: { ...plugin.currentRelease.manifest, entry: '../main.js' } } } })).toThrow();
   },
 );
+
+describe('Plugin detail readme', () => {
+  // 协议(PluginReadmeDelivery):详细介绍只用于展示,格式不合法时整体丢弃,详情其余部分照常可用;
+  // 若改成抛错,一个作者写坏的介绍会让整个插件详情打不开。
+  const manifest = { ...validManifest, readme: { en: 'README.md' } };
+  const detail = (readme: unknown) =>
+    parseGetPluginResponse({
+      schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+      plugin: {
+        id: pluginId,
+        ghostId: manifest.id,
+        name: manifest.name,
+        description: null,
+        author: null,
+        scope: 'public',
+        organizationId: null,
+        defaultInstall: false,
+        currentRelease: {
+          id: 'release-1',
+          version: manifest.version,
+          sha256: 'a'.repeat(64),
+          sizeBytes: 1024,
+          publishedAt: '2026-07-19T00:00:00.000Z',
+          manifest,
+        },
+        readme,
+      },
+    }).plugin;
+
+  it('parses a declared readme and drops a malformed one without failing the detail', () => {
+    const image = { ...validIcon, path: 'assets/shot.png' };
+    expect(detail({ path: 'README.md', markdown: '# Hi', images: [image] }).readme).toEqual({
+      path: 'README.md',
+      markdown: '# Hi',
+      images: [image],
+    });
+    const undeclared = detail({ path: 'OTHER.md', markdown: '# Hi', images: [] });
+    expect(undeclared.currentRelease.manifest.id).toBe(manifest.id);
+    expect(undeclared).not.toHaveProperty('readme');
+    expect(detail(undefined)).not.toHaveProperty('readme');
+  });
+});

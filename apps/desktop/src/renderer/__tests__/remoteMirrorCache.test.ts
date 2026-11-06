@@ -1123,15 +1123,38 @@ describe('缓存写点纪律', () => {
 });
 
 describe('remoteProjectsStore.hydrateFromCache', () => {
-  it('种入的设备一律标 disconnected(缓存不是 live 设备)', () => {
+  it('种入的设备一律标 connecting(缓存不是 live 设备,但也不是确认离线)', () => {
     remoteProjectsStore.hydrateFromCache([
       { deviceId: 'dev-cold', deviceName: 'Cold Mac', sessions: [{ id: 's-cold' }] as never },
     ]);
     const sessions = remoteProjectsStore.getDeviceSessions('dev-cold');
     expect(sessions).toHaveLength(1);
-    expect(sessions[0].deviceLinkConnectionStatus).toBe('disconnected');
+    expect(sessions[0].deviceLinkConnectionStatus).toBe('connecting');
     expect(sessions[0].deviceLinkDeviceName).toBe('Cold Mac');
     expect(remoteProjectsStore.getDeviceList()[0]?.connected).toBe(false);
+  });
+
+  // 「失联」只能往更不确定的方向走:connected → connecting → disconnected。
+  // relay 重连把 connected 降为 connecting;已确认离线的不会被重连升回检测中;
+  // 宽限到期把 connecting 降为 disconnected。写路径对两者一视同仁(见 remoteSessionWriteGuard)。
+  it('markAllConnecting 只降 connected,不升 disconnected;markAllDisconnected 把 connecting 收口', () => {
+    remoteProjectsStore.setDeviceSessions('dev-live', 'Live Mac', [{ id: 's-live' }] as never);
+    remoteProjectsStore.hydrateFromCache([
+      { deviceId: 'dev-cold', deviceName: 'Cold Mac', sessions: [{ id: 's-cold' }] as never },
+    ]);
+    remoteProjectsStore.markDeviceDisconnected('dev-cold');
+    const statusOf = (deviceId: string) => remoteProjectsStore.getDeviceSessions(deviceId)[0]?.deviceLinkConnectionStatus;
+    expect([statusOf('dev-live'), statusOf('dev-cold')]).toEqual(['connected', 'disconnected']);
+
+    remoteProjectsStore.markAllConnecting();
+    expect([statusOf('dev-live'), statusOf('dev-cold')]).toEqual(['connecting', 'disconnected']);
+    expect(remoteProjectsStore.getDeviceList().every((d) => d.connected === false)).toBe(true);
+
+    remoteProjectsStore.markAllDisconnected();
+    expect([statusOf('dev-live'), statusOf('dev-cold')]).toEqual(['disconnected', 'disconnected']);
+
+    remoteProjectsStore.setDeviceSessions('dev-live', 'Live Mac', [{ id: 's-live' }] as never);
+    expect(statusOf('dev-live')).toBe('connected');
   });
 
   it('已有权威分片的设备不被覆盖', () => {

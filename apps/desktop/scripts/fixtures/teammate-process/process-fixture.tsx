@@ -1,4 +1,5 @@
 import { BotAvatar } from '../../../src/renderer/features/bots/BotAvatar';
+import { ThreadPanel } from '../../../src/renderer/features/bots/ThreadPanel';
 import { useState } from 'react';
 import { mountPage, subscription } from '../../ui-page/harness';
 import { MessageStream } from '../../../src/renderer/components/chat/MessageStream';
@@ -28,17 +29,73 @@ const retryMessages: ChatMessage[] = [
   { ...text('retry-two-result', '{"isError":true,"content":[{"type":"text","text":"Unavailable"}]}'), role: 'tool_result', toolUseId: 'retry-two' },
   { ...text('retry-active', ''), role: 'tool_use', toolName: 'Read', toolInput: { file_path: '/repo/skills.md' }, toolUseId: 'retry-active' },
 ];
-function Subject({ done, retry }: { done: boolean; retry: boolean }) {
+const artifactMessages: ChatMessage[] = [
+  { ...text('ask-artifacts', '整理这周的交付清单，生成表格并保留整理脚本。'), role: 'user' },
+  { ...text('make-sheet', ''), role: 'tool_use', toolName: 'make_xlsx', toolUseId: 'make-sheet', toolInput: {
+    outPath: '/repo/deliveries.xlsx', title: '本周交付清单',
+    sheets: [{ name: '交付清单', header: ['事项', '说明', '状态'], rows: [['界面对齐', '成果与回复同列', '完成'], ['回归验证', '检查窄栏与主题', '完成']] }],
+  } },
+  { ...text('sheet-result', '{"ok":true}'), role: 'tool_result', toolUseId: 'make-sheet' },
+  { ...text('write-script', ''), role: 'tool_use', toolName: 'Write', toolUseId: 'write-script', toolInput: { file_path: '/repo/prepare.py', content: '# fixture' } },
+  { ...text('script-result', 'File created'), role: 'tool_result', toolUseId: 'write-script' },
+  { ...text('topic-summary', ''), systemCardType: 'bot-session-task-result', systemCardData: {
+    v: 1, role: 'delegation-result', delegationId: 'fixture-topic', fromBotId: 'fixture', fromBotName: 'Cindy',
+    toBotId: null, toBotName: 'Cindy', parentSessionId: null, childSessionId: null, objective: '整理交付记录',
+    result: { title: '整理交付记录', runSequence: 1, status: 'completed', text: '已核对清单内容。', artifacts: [] },
+  } },
+  { ...text('artifact-answer', '交付清单已经整理好。表格按事项列出说明和完成状态，方便你逐项核对。\n\n同时保留了整理脚本，之后有新增记录时可以继续更新。下方是本次生成的表格和相关文件。', 'final_answer'), turnCompleted: true,
+    // Several saves in one turn join into one long footer row.
+    botLearning: ['按工作流分批与独立推进节奏', '七机 CI 管理基线', '游戏开发与测试电脑', 'CI 优先用自有机器，减少 GitHub 云机器开支', '内部 CI 采用务实方案，避免过度安全设计', '每件事新任务，派活使用用户原话']
+      .map((title, index) => ({ kind: 'memory' as const, key: `memory-${index}`, title, action: 'updated' as const })) },
+];
+
+let holdArtifactStats = false;
+const pendingArtifactStats: Array<(missing: boolean) => void> = [];
+function settleArtifactStats(missing: boolean) {
+  holdArtifactStats = false;
+  for (const settle of pendingArtifactStats.splice(0)) settle(missing);
+}
+
+function ArtifactStream({ artifactCase }: { artifactCase: string }) {
+  const [generation, setGeneration] = useState(0);
+  const stream = <MessageStream key={generation} workingDir="/repo" historyLoaded messages={artifactMessages}
+    assistantAvatar={artifactCase === 'artifacts-task' || artifactCase === 'artifacts-no-avatar' ? undefined : <BotAvatar bot={{ id: 'fixture', name: 'Cindy', avatar: 'cindy://avatar/preset/cindy' }} size="sm" />}
+    simplifiedBotConversation={artifactCase !== 'artifacts-task'} contentWidth={720} />;
+  if (artifactCase === 'artifacts-thread') return <div className="flex h-screen w-full" data-ui-page-subject>
+    <div className="flex-1" />
+    <ThreadPanel onClose={() => undefined}>
+      <div className="chat-rail-compact flex min-h-0 flex-1 flex-col">{stream}</div>
+    </ThreadPanel>
+  </div>;
+  return <div className="flex h-screen w-full min-w-0 flex-col bg-[var(--surface)]" data-ui-page-subject>
+    {artifactCase === 'artifacts-cached' && <div className="flex gap-2" data-ui-page-control>
+      <Button data-testid="fixture-remount" onClick={() => { holdArtifactStats = true; setGeneration(value => value + 1); }}>Remount</Button>
+      <Button data-testid="fixture-confirm" onClick={() => settleArtifactStats(false)}>Confirm</Button>
+      <Button data-testid="fixture-remove" onClick={() => settleArtifactStats(true)}>Remove</Button>
+    </div>}
+    {stream}
+  </div>;
+}
+
+function Subject({ done, retry, artifactCase }: { done: boolean; retry: boolean; artifactCase?: string }) {
   const [finished, setFinished] = useState(done);
   const rows = retry ? retryMessages : messages;
+  if (artifactCase) return <ArtifactStream artifactCase={artifactCase} />;
   return <div className="flex h-screen w-full min-w-0 flex-col bg-[var(--surface)]" data-ui-page-subject>
-    <div className="self-end p-2"><Button onClick={() => setFinished(true)} data-testid="fixture-finish">Finish fixture</Button></div>
+    <div className="self-end p-2" data-ui-page-control><Button onClick={() => setFinished(true)} data-testid="fixture-finish">Finish fixture</Button></div>
     <MessageStream workingDir="" historyLoaded messages={finished ? [...rows, { ...text('final_answer', '任务与 PR 的进展已整理。未处理完的事项和需要你判断的部分，已分别列出。', 'final_answer'), turnCompleted: true }] : rows}
-      assistantAvatar={<BotAvatar bot={{ id: "fixture", name: "Cindy", avatar: "cindy://avatar/preset/cindy" }} size="sm" />} simplifiedBotConversation isSessionStreaming={!finished} contentWidth={720} />
+      assistantAvatar={<span data-testid="fixture-partner-avatar"><BotAvatar bot={{ id: "fixture", name: "Cindy", avatar: "cindy://avatar/preset/cindy" }} size="sm" /></span>} simplifiedBotConversation isSessionStreaming={!finished} contentWidth={720} />
   </div>;
 }
 void mountPage({
   route: '/fixture',
-  host: () => ({ agentIsland: { onSessionActivity: subscription('activity') }, maker: { polishWorkingStatus: async () => null } }),
-  render: ctx => <Subject done={ctx.data.done === true} retry={ctx.data.retry === true} />,
+  host: ctx => ({ agentIsland: { onSessionActivity: subscription('activity') }, maker: { polishWorkingStatus: async () => null },
+    fsBrowse: { statPath: async () => {
+      const root = document.documentElement;
+      root.dataset.fixtureFileStats = String(Number(root.dataset.fixtureFileStats ?? 0) + 1);
+      const missing = holdArtifactStats ? await new Promise<boolean>(resolve => pendingArtifactStats.push(resolve)) : ctx.case === 'artifacts-missing';
+      return { kind: missing ? 'missing' : 'file', birthtimeMs: Date.now() - 46000, mtimeMs: Date.now() - 46000 };
+    } },
+  }),
+  render: ctx => <Subject done={ctx.data.done === true} retry={ctx.data.retry === true} artifactCase={ctx.case.startsWith('artifacts-') ? ctx.case : undefined} />,
 });

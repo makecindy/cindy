@@ -1969,6 +1969,15 @@ it('validates read-only observe access without a tasks dependency', () => {
   expect(validateGhostManifest({ ...base, agent: { observe: false } }).ok).toBe(false);
 });
 
+// Companion viewing is standalone; a non-boolean value must not install.
+it('validates companion viewing without a tasks dependency', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'companions-test', name: 'Companions', version: '1.0.0', entry: 'main.js' };
+  const approved = validateGhostManifest({ ...base, agent: { companions: true } });
+  expect(approved.ok && approved.manifest.agent).toEqual({ companions: true });
+  expect(validateGhostManifest({ ...base, agent: { companions: 1 } }).ok).toBe(false);
+  expect(validateGhostManifest({ ...base, agent: { companions: false } }).ok).toBe(false);
+});
+
 describe('package release notes', () => {
   const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'notes-test', name: 'Notes test', version: '1.0.0', entry: 'main.js' };
   it('keeps old packages without notes installable', () => {
@@ -2075,3 +2084,53 @@ it.each(['../page.html', '/page.html', 'ui/../page.html', 'ui\\page.html', 'con.
     expect(pluginUiPermissionsExpand(manifest, valid)).toBe(true);
   },
 );
+
+it('keeps a liveScreen declaration as a granted capability only in v3', () => {
+  const base = {
+    schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION,
+    minCindyVersion: '0.1.116',
+    id: 'sim',
+    name: 'Simulator',
+    version: '1.0.0',
+    entry: 'main.js',
+    node: { entry: 'node/worker.cjs', protocol: 'json-rpc-stdio' },
+  };
+  const declared = validateGhostManifest({ ...base, liveScreen: true });
+  expect(declared.ok && declared.manifest.liveScreen).toBe(true);
+  const absent = validateGhostManifest(base);
+  expect(absent.ok && absent.manifest).not.toHaveProperty('liveScreen');
+  // Without a node worker the declaration could never run: refuse it at install.
+  const { node: _node, ...withoutNode } = base;
+  expect(validateGhostManifest({ ...withoutNode, liveScreen: true }).ok).toBe(false);
+});
+
+describe('tool approval declaration', () => {
+  it.each(['auto', 'each-call'] as const)('retains %s through protocol normalization', (approval) => {
+    const raw = { ...validManifest, tools: [{ name: 'run', description: 'Run', approval }] };
+    const result = validateGhostManifest(raw);
+    expect(result).toMatchObject({ ok: true, manifest: { tools: raw.tools } });
+    if (result.ok) expect(validateGhostManifest(result.manifest)).toEqual(result);
+  });
+  it('rejects an unknown approval policy', () => {
+    expect(validateGhostManifest({ ...validManifest, tools: [{ name: 'run', description: 'Run', approval: 'bypass' }] }))
+      .toMatchObject({ ok: false });
+  });
+});
+
+describe('readme declarations', () => {
+  // 作者契约(FORGE_GUIDE §2「详细介绍」):readme 规范化保留在 manifest 上,与已声明文件冲突时拒绝。
+  it('keeps a valid readme map and rejects paths that collide with other declared files', () => {
+    const readme = { en: 'README.md', 'zh-CN': 'README.zh-CN.md' };
+    expect(validateGhostManifest({ ...validManifest, readme })).toMatchObject({
+      ok: true,
+      manifest: { readme },
+    });
+    expect(
+      validateGhostManifest({
+        ...validManifest,
+        manual: { items: [{ dir: 'docs', name: 'docs', description: 'Docs' }] },
+        readme: { en: 'docs/README.md' },
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('readme.en') });
+  });
+});

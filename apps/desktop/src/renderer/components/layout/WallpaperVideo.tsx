@@ -8,6 +8,9 @@ import {
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { HIDDEN_ANIMATION_ATTR } from '@/lib/hiddenAnimationGate';
 import { isSceneWallpaper } from '@/lib/wallpaper';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('wallpaper-video');
 
 /** One decoder and one viewport canvas. Custom videos retain a paused frame in static mode. */
 export function WallpaperVideo({
@@ -114,6 +117,49 @@ function PlayingWallpaper({
     // Effect replay (StrictMode/HMR) may follow a cleanup on the same element.
     video.src = src;
     let generation = 0;
+    let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+    let recoveryAttempts = 0;
+    let interrupted = false;
+    const hidden = () =>
+      document.hidden || document.documentElement.hasAttribute(HIDDEN_ANIMATION_ATTR);
+    const cancelRecovery = () => {
+      clearTimeout(recoveryTimer);
+      recoveryTimer = undefined;
+    };
+    const recover = () => {
+      if (recoveryTimer !== undefined || hidden() || !playingRef.current || recoveryAttempts >= 2)
+        return;
+      // Only interrupted playback owns a timer. No polling/decoder work while
+      // hidden, and a broken source cannot cause an unbounded reload loop.
+      recoveryTimer = setTimeout(() => {
+        recoveryTimer = undefined;
+        if (hidden() || !playingRef.current) return;
+        recoveryAttempts++;
+        log.warn('Reloading interrupted wallpaper playback', {
+          attempt: recoveryAttempts,
+          readyState: video.readyState,
+          networkState: video.networkState,
+          mediaError: video.error?.code ?? null,
+        });
+        video.src = src;
+        video.load();
+        sync();
+        recover();
+      }, 5_000);
+    };
+    const onInterrupted = (event: Event) => {
+      // A stalled download can still have a valid paused/current frame. Keep it
+      // unless the decoder is actually waiting or has discarded its data.
+      if (event.type === 'stalled' && video.readyState >= 2) return;
+      if (!playingRef.current && video.readyState >= 2) return;
+      interrupted = true;
+      setReady(false);
+      recover();
+    };
+    const onPlaying = () => {
+      interrupted = false;
+      cancelRecovery();
+    };
     const sync = () => {
       const current = ++generation;
       // The shared gate also covers Electron minimize/hide with throttling disabled.
@@ -122,10 +168,13 @@ function PlayingWallpaper({
         document.hidden ||
         document.documentElement.hasAttribute(HIDDEN_ANIMATION_ATTR)
       ) {
+        cancelRecovery();
         video.pause();
       } else {
+        if (interrupted) recover();
         void video.play().catch(() => {
           if (generation === current) {
+            log.warn('Wallpaper playback rejected', { mediaError: video.error?.code ?? null });
             setFailed(true);
             onFailureRef.current?.();
           }
@@ -133,6 +182,9 @@ function PlayingWallpaper({
       }
     };
     syncPlaybackRef.current = sync;
+    for (const event of ['waiting', 'emptied', 'stalled'])
+      video.addEventListener(event, onInterrupted);
+    video.addEventListener('playing', onPlaying);
     const observer = new MutationObserver(sync);
     observer.observe(document.documentElement, {
       attributes: true,
@@ -142,6 +194,10 @@ function PlayingWallpaper({
     sync();
     return () => {
       generation++;
+      cancelRecovery();
+      for (const event of ['waiting', 'emptied', 'stalled'])
+        video.removeEventListener(event, onInterrupted);
+      video.removeEventListener('playing', onPlaying);
       syncPlaybackRef.current = () => {};
       observer.disconnect();
       document.removeEventListener('visibilitychange', sync);
@@ -180,6 +236,7 @@ function PlayingWallpaper({
           onReady?.();
         }}
         onError={() => {
+          log.warn('Wallpaper media failed', { mediaError: ref.current?.error?.code ?? null });
           setFailed(true);
           onFailureRef.current?.();
         }}

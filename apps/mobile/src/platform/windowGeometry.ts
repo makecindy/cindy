@@ -92,7 +92,7 @@ export function floatingTopRow(g: WindowGeometry, rowHeight: number): {
   const left = g.insets.left + spacing.md, right = g.insets.right + spacing.md;
   if (g.barEdge !== 'none') return { top: Math.max(g.insets.top, spacing.md), left, right, sharedStatusRow: false };
   const ordinary = { top: g.insets.top, left, right, sharedStatusRow: false };
-  const status = g.regions.filter(r => r.kind === 'occlusion' && r.y === 0 && r.x + r.width >= g.width);
+  const status = trailingStatusRegions(g);
   const top = g.insets.top - rowHeight - spacing.md;
   if (!g.reservedRegionsSupported || !g.regularWidth || !status.length || top < spacing.md) return ordinary;
   const sharedRight = Math.max(right, g.width - Math.min(...status.map(r => r.x)) + spacing.sm);
@@ -100,6 +100,25 @@ export function floatingTopRow(g: WindowGeometry, rowHeight: number): {
   // Close, title and menu must all fit beside the status area, clear of any other reservation.
   if (row.width < rowHeight * 5 || avoidReservedRegions(row, g.regions.filter(r => !status.includes(r))) !== row) return ordinary;
   return { top, left, right: sharedRight, sharedStatusRow: true };
+}
+
+/** Status area reported in the top trailing corner (Duo portrait), which a top bar may share. */
+function trailingStatusRegions(g: WindowGeometry): ReservedRegion[] {
+  return g.regions.filter(r => r.kind === 'occlusion' && r.y === 0 && r.x + r.width >= g.width);
+}
+
+/**
+ * Extra trailing width the native top bar keeps clear when it shares the status row (Duo
+ * portrait): the system moves the trailing items left of the status area, so a title view sized
+ * for the full bar runs under them. The status area grows with its content (a Live Activity
+ * widens it), so this follows the reported region and adds the bar's item spacing before it.
+ * 0 for bars below the status area or beside a vertical rail.
+ */
+export function sharedStatusRowTrailingReserve(g: WindowGeometry): number {
+  if (!g.reservedRegionsSupported || g.barEdge !== 'none') return 0;
+  const status = trailingStatusRegions(g);
+  if (!status.length) return 0;
+  return Math.max(0, g.width - Math.min(...status.map(r => r.x)) + spacing.lg);
 }
 
 /**

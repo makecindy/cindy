@@ -88,6 +88,9 @@ export const CLIENT_ENDPOINT_KEYS = [
   // card stays hidden, which is the intended gradual-rollout switch.
   'xHookWsUrl',
   'slackHookWsUrl',
+  // webhook-server（自动化任务的外部事件）基址，按区域部署。纯增可选字段：留空时客户端
+  // 隐藏 Webhook 触发入口，也是灰度开关。长连接地址由它派生。
+  'webhookApiBaseUrl',
   'websiteUrl',
   // model-access-server(登录后自动下发 LLM 网关凭据)的 API 基址。
   'modelAccessApiBaseUrl',
@@ -162,6 +165,7 @@ const FIELD_PROTOCOLS: Record<ClientEndpointKey, readonly string[]> = {
   telegramHookWsUrl: ['wss:'],
   xHookWsUrl: ['wss:'],
   slackHookWsUrl: ['wss:'],
+  webhookApiBaseUrl: ['https:'],
   websiteUrl: ['https:'],
   modelAccessApiBaseUrl: ['https:'],
   voiceApiBaseUrl: ['https:'],

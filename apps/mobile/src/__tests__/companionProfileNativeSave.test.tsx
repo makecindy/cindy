@@ -9,6 +9,7 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, expect, it, vi } from 'vitest';
 import { CompanionProfileNativeView } from '@/session/CompanionProfileNativeView.ios';
 import type { CompanionProfileNativeViewProps } from '@/session/CompanionProfileNativeView';
+import { parseCompanionProfileData } from '@/session/companionProfileData';
 const native = vi.hoisted(() => ({ glass: true }));
 vi.mock('@/session/useLiquidGlassAvailable', () => ({ useLiquidGlassAvailable: () => native.glass }));
 
@@ -44,7 +45,7 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({
   t: (key: string) => key === 'devices.common.save' ? '保存' : key,
   i18n: { language: 'zh-CN' },
 }) }));
-vi.mock('@/session/ComposerNativeSection', () => ({ ComposerNativeSection: ({ children }: any) => <section>{children}</section> }));
+vi.mock('@/session/ComposerNativeSection', () => ({ ComposerNativeSection: ({ children, title }: any) => <section>{title ? <h3>{title}</h3> : null}{children}</section> }));
 vi.mock('@/session/CompanionNativeContent.ios', () => ({ CompanionNativeContent: ({ children }: any) => children }));
 vi.mock('@/session/CompanionPortraitPicker', () => ({ CompanionPortraitPicker: () => null }));
 vi.mock('@/components/RemoteCompanionAvatar', () => ({ RemoteCompanionAvatar: () => null }));
@@ -120,4 +121,23 @@ it('keeps other form saves in place and removes the model action on page changes
   expect(container.querySelector('[data-testid="companionProfile.models.save"]')).toBeNull();
   render({ panel, loading: true });
   expect(container.querySelector('[data-testid="companionProfile.models.save"]')).toBeNull();
+});
+
+// Skill layers (cindy-bots-runtime.md §6「伙伴技能分层」) on the real iOS editor list: block titles become section
+// headers and a subtitle (a Skill turned off) sits under the row title; untitled hosts keep one section.
+// Minimal input: the host's skills page parsed by the real reader; unit.
+it('sections a host editor list by block title and shows entry subtitles', () => {
+  const id = 'settings:bot/skills'; const ref = { collectionId: 'teammates', kind: 'bot', id };
+  const editor = parseCompanionProfileData({ ref, revision: 'r1', display: { title: 'Skills' }, links: [], blocks: [
+    { id: 'core', primitive: 'list', fallbackMarkdown: '', data: { entries: [{ id: 'core', title: 'Core Skill', subtitle: 'Shared by every teammate', resourceId: `${id}/_core` }] } },
+    { id: 'system', title: 'System Skills', primitive: 'list', fallbackMarkdown: '', data: { entries: [
+      { id: 'todo', title: 'Todos', resourceId: `${id}/_todo` }, { id: 'routine', title: 'Routines', subtitle: 'Off', resourceId: `${id}/_routine` }] } },
+    { id: 'skills', title: 'Personal Skills', primitive: 'list', fallbackMarkdown: '', data: { entries: [{ id: 'learned', title: 'Write briefs', resourceId: `${id}/learned` }] } },
+  ] }, ref);
+  const { container, props } = mount({ page: 'editor', panel: undefined, editor, dirty: false });
+  const sections = [...container.querySelectorAll('section')].filter(node => node.querySelector('button'));
+  expect(sections.map(node => [node.querySelector('h3')?.textContent ?? null, [...node.querySelectorAll('button')].map(button => button.textContent)])).toEqual([
+    [null, ['Core SkillShared by every teammate']], ['System Skills', ['Todos', 'RoutinesOff']], ['Personal Skills', ['Write briefs']]]);
+  act(() => [...container.querySelectorAll('button')].find(button => button.textContent === 'RoutinesOff')!.click());
+  expect(props.onEditor).toHaveBeenCalledExactlyOnceWith(`${id}/_routine`);
 });

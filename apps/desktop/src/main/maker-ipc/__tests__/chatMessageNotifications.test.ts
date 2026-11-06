@@ -121,3 +121,25 @@ it('rechecks read state when the room changes during notification presentation',
   expect(present).toHaveBeenCalledOnce();
   service.dispose();
 });
+
+// Unit: the new personal range must affect native alerts only. A merged burst
+// uses one snapshot, filters before sender/media preparation, and never replays.
+it('filters a mentions-only burst without changing the island projection or adding per-message reads', async () => {
+  vi.useFakeTimers();
+  const ordinary = message('ordinary', { seq: '9007199254740994' });
+  const snapshot = { room: { name: 'Team', kind: 'group' }, messages: [ordinary, message('mention', { mentions: ['me'] }), message('my-bot', { mentions: ['bot-owned-by-me'] })],
+    reads: [{ thread_key: 'main', read_seq: '0', notification_scope: 'mentions' as const }] };
+  const read = vi.fn(async () => snapshot), notify = vi.fn();
+  const present = vi.fn(async () => ({ senderName: 'Peer', avatar: '', preview: 'Hello' }));
+  const service = createChatMessageNotifications({ current: () => true, selfId: () => 'me', snapshot: read, present, notify });
+  for (const m of snapshot.messages) service.enqueue('room', m.id);
+  await vi.advanceTimersByTimeAsync(1200);
+  expect(read).toHaveBeenCalledOnce();
+  expect(present).toHaveBeenCalledOnce();
+  expect(notify.mock.calls.map(([event]) => event.messageId)).toEqual(['mention']);
+  expect(selectChatAttentionMessage({ ...snapshot, messages: [ordinary] }, 'me')).toBe(ordinary);
+  service.enqueue('room', ordinary.id);
+  await vi.advanceTimersByTimeAsync(1200);
+  expect(read).toHaveBeenCalledOnce();
+  service.dispose();
+});

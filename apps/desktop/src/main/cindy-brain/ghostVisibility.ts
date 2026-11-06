@@ -32,6 +32,8 @@ export type GhostVisibilityResult =
 
 export interface GhostVisibilityDeps {
   listGhosts: () => InstalledGhost[];
+  /** Fresh exact-instance lookup, never a completed authorization cache. */
+  findInstalledInstance?: (instanceKey: string) => InstalledGhost | undefined;
   isAvailableForActiveSession: (ghostId: string) => boolean;
   isDisabledForWorkdir: (ghostId: string, workdir: string | null) => boolean;
 }
@@ -140,7 +142,10 @@ export function classifyInstalledGhostVisibility(
   deps: GhostVisibilityDeps,
 ): GhostVisibilityResult {
   const identity = installedGhostLogicalIdentity(target);
-  const ghost = findInstalledGhostByInstanceId(deps.listGhosts(), installedGhostStoragePart(target));
+  const key = installedGhostStoragePart(target);
+  const ghost = deps.findInstalledInstance
+    ? deps.findInstalledInstance(key)
+    : findInstalledGhostByInstanceId(deps.listGhosts(), key);
   if (!ghost || ghost.manifest.id !== identity.ghostId ||
       installedGhostLogicalIdentity(ghost).namespace !== identity.namespace ||
       ghost.dir !== target.dir ||

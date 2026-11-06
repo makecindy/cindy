@@ -124,6 +124,8 @@ import {
   appendAutoReviewUserIntent,
   normalizeAutoReviewUserIntent,
   createAutoReviewActionContext,
+  createAutoReviewAgentTextTracker,
+  isAutoReviewNewUserInput,
   type AutoReviewUserIntent,
   isSystemPermissionDenialReason,
   formatPermissionDenial,
@@ -2821,7 +2823,7 @@ assertRouteCurrent();
 
     const key = codexLocalAuthHostIdentity(
       options?.providerId ? `local-account:${options.providerId}:models` : localControlPlaneHostKey(credentialMode),
-      credentialMode === 'gateway-key' ? 'isolated' : 'legacy-shared',
+      credentialMode === 'gateway-key' || credentialMode === 'provider-oauth' ? 'isolated' : 'legacy-shared',
     );
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<never>((_, reject) => {
@@ -2856,21 +2858,23 @@ assertRouteCurrent();
     const key = codexLocalAuthHostIdentity(
       options?.providerId ? `local-account:${options.providerId}:models` : credentialMode
         ? localControlPlaneHostKey(credentialMode) : hostKey(),
-      credentialMode === 'gateway-key' ? 'isolated' : 'legacy-shared',
+      credentialMode === 'gateway-key' || credentialMode === 'provider-oauth' ? 'isolated' : 'legacy-shared',
     );
     return this.withHostOperation(async () => ({
       key: credentialMode ? key : hostKey(),
       host: credentialMode
         ? await this.getHost(undefined, credentialMode, {
           providerId: options?.providerId,
-          ...(credentialMode === 'gateway-key' ? { localAuthPolicy: 'isolated' as const } : {}),
+          ...(credentialMode === 'gateway-key' || credentialMode === 'provider-oauth'
+            ? { localAuthPolicy: 'isolated' as const } : {}),
           keyOverride: key,
           hostPurpose: 'control-plane',
         })
         : (await this.getUtilityHost()).host,
     }), async (host) => {
       const init = await host.ensureStarted();
-      if (init.codexHome && !options?.providerId) this.codexHome = init.codexHome;
+      // API capability probes use an isolated control plane, not the shared history home.
+      if (init.codexHome && !options?.providerId && credentialMode !== 'provider-oauth') this.codexHome = init.codexHome;
 
       const models: CodexModelListResponse['data'] = [];
       const seenCursors = new Set<string>();
@@ -2908,8 +2912,10 @@ assertRouteCurrent();
 
       // Auth 切换 / logout 可能在分页请求期间 retire 旧 host。旧账号的迟到响应绝不能
       // 覆盖新账号目录；只有仍登记为当前 local host 的结果才允许交给宿主。
-      if (this.hosts.get(key) !== host || !this.deps.onCodexLocalModelsListed) return false;
-      if (options?.providerId) await this.deps.onCodexLocalModelsListed(models, options.providerId);
+      if (this.hosts.get(key) !== host) return false;
+      if (options?.onModelsListed) await options.onModelsListed(models);
+      else if (!this.deps.onCodexLocalModelsListed) return false;
+      else if (options?.providerId) await this.deps.onCodexLocalModelsListed(models, options.providerId);
       else await this.deps.onCodexLocalModelsListed(models);
       return true;
     });
@@ -3412,6 +3418,8 @@ assertRouteCurrent();
         model: opts?.model ?? 'gpt-5.4-mini',
         approvalPolicy: 'never',
         sandbox: 'read-only', // kebab-case (v2.rs SandboxMode)
+        // Auxiliary title/summary calls must not start a native Goal loop either.
+        config: { 'features.goals': false },
         ...(developerInstructions ? { developerInstructions } : {}),
       } as ThreadStartParams);
       const threadId = startResp.thread.id;
@@ -3676,6 +3684,17 @@ assertRouteCurrent();
     }
 
     const eventQueue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
+    // Reviewer context only: the agent's public text and tool calls, in the order the user sees them.
+    const autoReviewAgentText = createAutoReviewAgentTextTracker();
+    {
+      const push = eventQueue.push.bind(eventQueue);
+      eventQueue.push = (event) => {
+        // Only events the queue accepted count: a refused (ended-queue) event never reaches the user.
+        const accepted = push(event);
+        if (accepted) autoReviewAgentText.observe(event);
+        return accepted;
+      };
+    }
     const usageTracker = new UsageTracker();
     const translatorRt: CodexRuntimeState = newCodexRuntimeState();
     const liveUsageSnapshot = () => {
@@ -4846,8 +4865,10 @@ assertRouteCurrent();
     let currentAutoReviewAuthority: ReturnType<typeof autoReviewContext>;
     const priorAutoReviewIntent = () => !autoReviewIntentInitialized ? undefined : JSON.stringify(currentAutoReviewAuthority ?? null) === JSON.stringify(autoReviewContext() ?? null) ? currentAutoReviewIntent : '';
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
-    const setAutoReviewIntent = (content: AutoReviewUserIntent, source = { authority: currentAutoReviewAuthority }): void => {
+    // A synthetic continuation is not new user input, so it must not move the reply the user answered.
+    const setAutoReviewIntent = (content: AutoReviewUserIntent, source = { authority: currentAutoReviewAuthority }, newUserInput = true): void => {
       autoReviewActionContext.advance(typeof content !== 'string' && JSON.stringify(currentAutoReviewAuthority ?? null) === JSON.stringify(source.authority ?? null));
+      if (newUserInput) autoReviewAgentText.beginUserInput();
       currentAutoReviewIntent = normalizeAutoReviewUserIntent(content);
       autoReviewIntentInitialized = true;
       currentAutoReviewAuthority = source.authority && { ...source.authority };
@@ -5570,6 +5591,11 @@ assertRouteCurrent();
     // 受邀者(另一个账号)不读本机用户的技能停用偏好(本机技能在上面已整体关闭)。
     const disabledSkillPaths = opts.remoteHostId || opts.botRuntimeProfile || reviewMode || hostedGuest
       ? [] : [...(this.deps.getDisabledSkillPaths?.() ?? [])];
+    // 任务所在电脑提供了托管技能(已作为项目技能放在影子目录)：共用 CODEX_HOME 里本机的那份对这个线程停用。
+    if (hosted?.controllerManagedSkills && !hostedGuest && !reviewMode) {
+      for (const skill of await this.deps.getManagedSkills?.() ?? []) if (skill.path) disabledSkillPaths.push(skill.path);
+      assertCurrentHost('Local Skill configuration');
+    }
     const disabledSkillLaunch = snapshotDisabledSkillLaunch(disabledSkillPaths);
     const disabledSkillSnapshot = disabledSkillLaunch.identities;
     if (disabledSkillPaths.length > 0) {
@@ -5694,7 +5720,7 @@ assertRouteCurrent();
     // 关掉抹平 → fail-closed(不把远端 /private/tmp 误当 /tmp 区内)。本地用真实 process.platform。
     // 定义在此(startSession 作用域,opts=session)以避开 awaitApprovalDecision 内层 opts 的遮蔽。
     const sessionReviewPlatform: NodeJS.Platform = opts.remoteHostId ? 'linux' : hosted ? hosted.platform : process.platform;
-    const reviewAutoAction = (action: ReviewableAction, hostAutoApprove = false, hostShortcutOnly = false): Promise<AutoReviewDecision> => {
+    const reviewAutoAction = (action: ReviewableAction, hostAutoApprove = false, hostShortcutOnly = false, subagentCall = false): Promise<AutoReviewDecision> => {
       const directoryGeneration = autoReviewDirectoryGeneration;
       const request = {
         sessionId: opts.sessionId,
@@ -5706,6 +5732,7 @@ assertRouteCurrent();
         model: mutableCatalogModel ?? mutableModel,
         userIntent: currentAutoReviewIntent,
         precedingBlockedActions: autoReviewActionContext.precedingBlockedActions,
+        ...((agentContext) => agentContext ? { agentContext } : {})(autoReviewAgentText.snapshot(undefined, !subagentCall)),
         ...(currentAutoReviewAuthority ? { authorizationContext: currentAutoReviewAuthority } : {}),
         action,
         workspaceRoots: runtimeWorkspaceRoots().filter(
@@ -8105,6 +8132,8 @@ assertRouteCurrent();
                 : opts.autoReviewAction,
               opts?.hostAutoApprove === true && !forcePrompt,
               reviewPermissionMode !== 'auto',
+              // A subagent's call must not borrow the main agent's explanation.
+              descendant,
             );
           } finally {
             if (pendingApprovals.get(requestId) === reviewEntry) pendingApprovals.delete(requestId);
@@ -13328,7 +13357,7 @@ assertRouteCurrent();
           autoReviewIntent !== currentAutoReviewIntent
           || JSON.stringify(currentAutoReviewAuthority ?? null) !== JSON.stringify(autoReviewContext() ?? null)
         ) {
-          setAutoReviewIntent(autoReviewIntent ?? appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts), { authority: autoReviewContext() });
+          setAutoReviewIntent(autoReviewIntent ?? appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts), { authority: autoReviewContext() }, isAutoReviewNewUserInput(sendOpts));
         }
         assertCurrentHost('turn/start');
         // 本条消息的计划意图:sendOpts.planMode 是点击发送瞬间的快照(排队行透传),
@@ -14095,7 +14124,7 @@ assertRouteCurrent();
             turnId: steeredTurnId,
           });
         }
-        setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts));
+        setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts), undefined, isAutoReviewNewUserInput(sendOpts));
       },
 
       async requestGracefulStop(stopOpts) {

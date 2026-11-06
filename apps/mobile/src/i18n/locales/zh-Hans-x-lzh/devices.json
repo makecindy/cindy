@@ -703,7 +703,15 @@
       "running": "方作",
       "done": "已毕",
       "unread": "未阅"
-    }
+    },
+    "viewMr": "观 MR",
+    "viewPrMr": "观 PR",
+    "mrCount": "MR {{count}} 个",
+    "prMrCount": "PR {{count}} 个",
+    "mrCount_one": "MR {{count}} 个",
+    "prMrCount_one": "PR {{count}} 个",
+    "mrCount_other": "MR {{count}} 个",
+    "prMrCount_other": "PR {{count}} 个"
   },
   "companionProfile": {
     "avatar": "肖像",
@@ -742,7 +750,7 @@
     "search": "寻讯",
     "models": "模型次第",
     "permissions": "所为之权柄",
-    "personalSkills": "自习之技艺",
+    "personalSkills": "技艺",
     "connections": "所引技艺与连接",
     "save": "存所改",
     "offline": "请重连 {{deviceName}} 后续之，未存之修改仍在。",

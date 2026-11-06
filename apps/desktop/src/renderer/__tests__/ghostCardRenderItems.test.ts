@@ -14,6 +14,7 @@ import { buildRenderItems, buildCachedRenderItems, type RenderItem } from '../co
 import type { ChatMessage } from '@/lib/makerChatStore';
 import { makerChatStore } from '@/lib/makerChatStore';
 import type { GhostCardSnapshot, GhostCardEntry, GhostLiveCard } from '@/cindy-brain/ghostCardStore';
+import type { TurnChangeSetSummary } from '../../shared/turnChangeSet';
 
 const GHOST_TOOL = 'mcp__cindy__ghost_call';
 const HASH = 'a'.repeat(64);
@@ -102,6 +103,19 @@ describe('ghost_card · settled 配对', () => {
       { callId: 'old', ghostId: 'gmail', sessionId: 'session-a', toolUseId: 'tu-old', receivedAt: 1 },
     ]));
     expect(live.some(i => i.type === 'ghost_card' || i.type === 'tool_segment')).toBe(false);
+  });
+  // A plugin card moved to the latest reply (pr_card to_latest) used to leave its old frame in place.
+  it('hides a plugin card the Host marked superseded, and never lets it claim the call it moved to', () => {
+    const moved: GhostCardEntry = { ...readyEntry('cindy-github'), html: '<div data-cindy-superseded-by="new" hidden></div><div>octo/repo</div>' };
+    const cards = { old: moved, new: readyEntry('cindy-github') };
+    const settled = itemsOf([mkGhostCall('old', 'cindy-github', 'pr_card'), mkResult('r-old', 'tu-old', { xdt_card_id: 'old' })], snapshot(cards));
+    expect(settled.some(i => i.type === 'ghost_card' || i.type === 'tool_segment')).toBe(false);
+    // The old card's update arrives first; the in-flight call without a tool ID still gets the new card.
+    const live = itemsOf([mkGhostCall('cur', 'cindy-github', 'pr_card')], snapshot(cards, [
+      { callId: 'old', ghostId: 'cindy-github', sessionId: 'session-a', toolUseId: null, receivedAt: 1 },
+      { callId: 'new', ghostId: 'cindy-github', sessionId: 'session-a', toolUseId: null, receivedAt: 2 },
+    ]));
+    expect(live.filter(i => i.type === 'ghost_card').map(i => i.callId)).toEqual(['new']);
   });
   it('keeps the card store physical id for a namespaced settled call', () => {
     const call = { ...mkGhostCall('org', 'helper'), toolInput: { ghost_id: 'helper', namespace: 'acme', tool: 'run' } };
@@ -622,6 +636,43 @@ describe('ghost_card · 行合并(卡片是该次调用的唯一呈现)', () => 
     );
     const card = items.find((it) => it.type === 'ghost_card');
     expect(card && card.type === 'ghost_card' ? card.toolCall.clientId : null).toBe('g1');
+  });
+});
+
+// Unit: the PR card ("要发 PR 吗") sat above the turn's changed-files card, so the
+// decision the user had to make was buried mid-turn. A card that declares
+// data-ghost-placement="turn-end" moves after that card, live and settled; others stay put.
+describe('ghost_card · data-ghost-placement="turn-end"', () => {
+  const turnEnd = { ...readyEntry('cindy-github'), html: '<div data-ghost-placement="turn-end"><p>pr</p></div>' };
+  const changeSet: TurnChangeSetSummary = {
+    id: 'changes-1', sessionId: 'session-a', anchorClientId: 'user-1', provider: 'codex',
+    providerTurnId: 'turn-1', cwd: '/fixture', state: 'complete', workspaceState: 'applied',
+    isReversible: true, incompleteReasons: [], createdAt: 1, completedAt: 2,
+    files: [{ id: 'f', path: 'README.md', oldPath: null, status: 'modified', additions: 1, deletions: 0 }],
+    fileCount: 1, additions: 1, deletions: 0,
+  };
+  const user = (id: string): ChatMessage => ({ clientId: id, role: 'user', content: id });
+  const keys = (messages: ChatMessage[], snap: GhostCardSnapshot) =>
+    buildRenderItems(messages, undefined, snap, { sessionId: 'session-a', turnChangeSets: [changeSet] })
+      .items.map((item) => item.key);
+
+  it('moves after the changed-files card, before the next turn', () => {
+    const rows = [user('user-1'), mkGhostCall('pr', 'cindy-github', 'pr_card'),
+      mkResult('r-pr', 'tu-pr', { xdt_card_id: 'pr-card' }), mkGhostCall('art'),
+      mkResult('r-art', 'tu-art', { xdt_card_id: 'art-card' }),
+      { clientId: 'answer', role: 'assistant', content: 'Done' } as ChatMessage, user('user-2')];
+    expect(keys(rows, snapshot({ 'pr-card': turnEnd, 'art-card': readyEntry() }))).toEqual([
+      'msg-user-1', 'ghostcard-art', 'msg-answer', 'turnchanges-changes-1', 'ghostcard-pr', 'msg-user-2',
+    ]);
+  });
+
+  it('stays at the bottom of a running turn', () => {
+    const live = snapshot({ 'pr-card': turnEnd }, [
+      { callId: 'pr-card', ghostId: 'cindy-github', sessionId: 'session-a', toolUseId: 'tu-pr', receivedAt: 1 },
+    ]);
+    const rows = [user('user-1'), mkGhostCall('pr', 'cindy-github', 'pr_card'),
+      { clientId: 'answer', role: 'assistant', content: 'Writing', isStreaming: true } as ChatMessage];
+    expect(keys(rows, live).slice(-1)).toEqual(['ghostcard-pr']);
   });
 });
 

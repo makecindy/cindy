@@ -77,23 +77,35 @@ describe('session Agent switch UI wiring', () => {
     // 唯一写出口把 intent 的位置作为第 7 参转给被控端;没有位置时不发(旧 6 参 wire)。
     expect(writer).toContain('nextIntent.agentDeviceId !== undefined');
     expect(writer).toContain('? { agentDeviceId: nextIntent.agentDeviceId }');
-    // Orca 可以切 Agent，但和共享任务访客一样不能挪运行位置。
+    // Orca 可以切 Agent；Lead / 本机 Worker 要被控电脑声明 supportsOrcaAgentRelocation 才能挪运行位置，
+    // 运行设备 Worker 与共享任务访客一样始终不能挪。
     expect(source).toContain('const agentLocationMovable = sessionAgentSwitchSupported');
     const locationGate = source.slice(source.indexOf('const agentLocationMovable ='),
       source.indexOf('/** Agent 现在所在的电脑'));
-    expect(locationGate).toContain('&& !currentSession.orcaRole');
+    expect(locationGate).toContain('&& !orcaAgentLocationLocked');
     expect(locationGate).toContain('&& !currentSession.orcaRemoteLead');
     const expression = locationGate.match(/const agentLocationMovable = ([\s\S]*?);/)?.[1];
     expect(expression).toBeDefined();
-    const movable = new Function('currentSession',
+    const lockExpression = source.match(/const orcaAgentLocationLocked = ([\s\S]*?);/)?.[1];
+    expect(lockExpression).toBeDefined();
+    const movable = new Function('currentSession', 'capabilities',
       `const sessionAgentSwitchSupported = true, deviceId = 'host', isSharedTaskPeer = () => false;
+       const orcaAgentLocationLocked = ${lockExpression};
        return !!(${expression});`);
     const worker = { agentDeviceId: null, orcaRole: null,
       orcaRemoteLead: { leadDeviceId: 'lead', leadSessionId: 'lead-s1', workerLabel: 'worker' } };
+    const relocation = { supportsOrcaAgentRelocation: true };
     expect(movable(worker)).toBe(false);
+    expect(movable(worker, relocation)).toBe(false);
     expect(movable({ ...worker, orcaRemoteLead: { ...worker.orcaRemoteLead, releasedAt: 1 } })).toBe(false);
     expect(movable({ ...worker, orcaRemoteLead: null })).toBe(true);
     expect(movable(null)).toBe(false);
+    for (const orcaRole of ['lead', 'worker']) {
+      const member = { agentDeviceId: null, orcaRole, orcaRemoteLead: null };
+      expect(movable(member)).toBe(false);
+      expect(movable(member, {})).toBe(false);
+      expect(movable(member, relocation)).toBe(true);
+    }
     expect(source).toContain("&& !isSharedTaskPeer(deviceId)");
     expect(source).toContain("Object.prototype.hasOwnProperty.call(currentSession, 'agentDeviceId')");
     // 模型列表另列其他电脑的供应商,选中态跟着下一条消息时 Agent 所在的电脑。

@@ -324,6 +324,15 @@ both sides. Duplicate candidates are applied once. A timed-out exchange does
 not tear down healthy video; polling is bounded to 30 seconds. SDP, candidate
 addresses, credentials and desktop content are not added to logs.
 
+The iOS viewer offers with `max-bundle`, so video, audio and the input channel
+gather candidates on one transport. The default balanced policy gathers a full
+set per media type: a phone with Wi-Fi, cellular and several IPv6 addresses
+produced 108 host candidates for one attempt, close to the 128 limit that ends
+the attempt without a retry. With max-bundle the same networks yield about a
+third of that. Desktop answerers already accept the offered BUNDLE group, so
+older Desktops need no change; the setting is native and ships with a new app
+build.
+
 | Phase                      | Bound                                                   |
 | -------------------------- | ------------------------------------------------------- |
 | Desktop source enumeration | 2 seconds with native capture, 5 seconds otherwise      |
@@ -1122,11 +1131,19 @@ the settings page's "remove service" action, which asks for administrator
 consent. A leftover registration is inert — the service is demand-start and
 exits with the Cindy process it was authorized for.
 
-Both helpers import `VCRUNTIME140.dll` and the UCRT api-sets, as the shipped
-helpers already did before staging; the UCRT is part of Windows, and
-`VCRUNTIME140.dll` comes from the Visual C++ redistributable, which setup does
-not install. Where it is missing the service cannot start, which surfaces as the
-`service-ready` step rather than silently.
+Both Windows helpers and the Main-only Node-API transport statically link the
+MSVC C runtime through `native/remote-desktop/.cargo/config.toml`. Packaging and
+source-mode builds explicitly load this configuration, and source-mode cache
+invalidation includes it. Neither the uninstaller nor the protected service
+bootstrap requires a machine-wide Visual C++ redistributable installation.
+Check the two EXEs and the `.node` artifact's PE imports and Electron loading
+when changing this build configuration.
+
+This applies to newly built versions. An older installed version still runs
+its own uninstaller during replacement; recovery for those versions is outside
+this change. On a clean Windows machine without the VC++ runtime, release
+validation must cover a fresh install, replacement of this fixed version, and
+direct uninstall, both with and without a registered remote desktop service.
 
 #### Authorization and validation
 

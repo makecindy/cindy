@@ -8,9 +8,9 @@ import { createHash } from 'node:crypto';
 import JSZip from 'jszip';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import type { GhostInstallConsentRequest } from '../../../shared/ghostInstallConsent.js';
-import { findInstalledGhostForDeliveryTarget, installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
+import { findInstalledGhostForDeliveryTarget, findInstalledGhostByInstanceId, installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import { assertGhostInstallConsent, confirmedControlPoints, confirmedUiCapability, confirmedTaskCapability, obtainGhostInstallConsent } from '../ghostInstallConsent.js';
-import { ghostInstallApprovalToken } from '../../../shared/ghost.js';
+import { ghostInstallApprovalToken, ghostRequiresCindyAccount } from '../../../shared/ghost.js';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
 import { GhostManager, type GhostManagerOptions } from '../GhostManager.js';
 import { effectiveInstallOrigin } from '../ghostInstallReceipt.js';
@@ -29,8 +29,8 @@ const createCallbacks = createGhostProductionCallbacks<{
   callbacks: { install: ['ipcMain.handle', 'ghosts:install'] },
 });
 
-describe('local root installation consent identity', () => {
-  it.each([true, false])('confirms an independent root beside an approved organization (allow=%s)', async (allow) => {
+describe('local installation consent identity', () => {
+  it.each([true, false])('confirms an independent local copy beside an approved organization (allow=%s)', async (allow) => {
     const manifest: InstalledGhost['manifest'] = {
       schemaVersion: 3, minCindyVersion: '0.0.0', id: 'helper', name: 'Helper',
       version: '1.0.0', kind: 'chip', entry: 'main.js',
@@ -74,7 +74,7 @@ describe('local root installation consent identity', () => {
     }
     expect(prompt).toHaveBeenCalledOnce();
     expect(prompt.mock.calls[0]?.[0]).toMatchObject({ facts: { kind: 'install' } });
-    expect(prompt.mock.calls[0]?.[0]).toMatchObject({ target: { namespace: null, sourceChanged: false, otherCopies: 1 } });
+    expect(prompt.mock.calls[0]?.[0]).toMatchObject({ target: { namespace: 'local', sourceChanged: false, otherCopies: 1 } });
   });
 });
 
@@ -110,9 +110,9 @@ it.each(['choose', 'update', 'copy', 'cancel', 'changed'] as const)('Forge insta
   if (['cancel', 'changed'].includes(mode)) {
     await expect(pending).rejects.toThrow();
     expect(install).not.toHaveBeenCalled(); expect(update).not.toHaveBeenCalled();
-  } else if (mode === 'copy') {
+  } else if (mode === 'copy' || mode === 'choose') {
     expect((await pending).action).toBe('installed');
-    expect(install.mock.calls[0]?.[2]).toMatchObject({ namespace: 'acme', enable: true });
+    expect(install.mock.calls[0]?.[2]).toMatchObject({ namespace: mode === 'copy' ? 'acme' : 'local', enable: true });
     expect(update).not.toHaveBeenCalled();
   } else {
     expect((await pending).action).toBe('updated');
@@ -133,7 +133,7 @@ const sharedPackageCallbacks = createGhostProductionCallbacks<{
 // Exercise the production entry and source classifier, including a declined replacement.
 it.each(['new', 'update', 'cancel', 'cancel-update', 'different-bytes', 'owner-changed'] as const)('shared local package consent: %s', async mode => {
   const manifest: InstalledGhost['manifest'] = { schemaVersion: 3, minCindyVersion: '99.0.0', id: 'helper', name: 'Helper', version: '1.0.0', kind: 'chip', entry: 'main.js' };
-  const root: InstalledGhost = { manifest, namespace: null, instanceKey: '_root__helper', dir: '/plugins/_root/helper', enabled: true,
+  const root: InstalledGhost = { manifest, namespace: 'local', instanceKey: '_ns__local__helper', dir: '/plugins/_ns/local/helper', enabled: true,
     approval: { state: 'approved', revision: '11111111-1111-4111-8111-111111111111' } };
   const digest = 'a'.repeat(64);
   let current = true;
@@ -153,8 +153,8 @@ it.each(['new', 'update', 'cancel', 'cancel-update', 'different-bytes', 'owner-c
     findInstalledGhostForDeliveryTarget, ghostInstallApprovalToken, installedGhostStoragePart,
     readLocalGhostUpdateSource: () => ({ ...classifyGhostLocalUpdateSource({
       existingSourceChanged: false,
-      previousApprovedReceipt: { id: manifest.id, namespace: null, packageSha256: 'b'.repeat(64), trust },
-      inspectedPackage: { ghostId: manifest.id, namespace: null, packageSha256: digest, trust },
+      previousApprovedReceipt: { id: manifest.id, namespace: 'local', packageSha256: 'b'.repeat(64), trust },
+      inspectedPackage: { ghostId: manifest.id, namespace: 'local', packageSha256: digest, trust },
     }), authorizationOverrides: {} }),
     obtainGhostInstallConsent, withGhostInstallLock: async (_id: string, run: () => unknown) => run(),
     installAndDock: install, updateLocalGhostPackageLocked: update,
@@ -170,17 +170,17 @@ it.each(['new', 'update', 'cancel', 'cancel-update', 'different-bytes', 'owner-c
     expect(release).toHaveBeenCalledOnce();
     if (mode === 'update') {
       expect(install).not.toHaveBeenCalled();
-      expect(update.mock.calls[0]?.[5]).toBe('_root__helper');
+      expect(update.mock.calls[0]?.[5]).toBe('_ns__local__helper');
       expect(update.mock.calls[0]?.[6]).toMatchObject({ mode: 'confirmed', forced: true });
       expect(update.mock.calls[0]?.[9]).toBe(false);
     } else {
-      expect(install.mock.calls[0]?.[2]).toMatchObject({ namespace: null, enable: true, registrySource: 'manual', expectedPackageSha256: digest });
+      expect(install.mock.calls[0]?.[2]).toMatchObject({ namespace: 'local', enable: true, registrySource: 'manual', expectedPackageSha256: digest });
     }
   }
   if (replacing) {
     expect(prompt).toHaveBeenCalledOnce();
     expect(prompt.mock.calls[0]?.[0]).toMatchObject({ purpose: 'share-replace',
-      facts: { kind: 'update', added: [] }, target: { namespace: null, sourceChanged: false } });
+      facts: { kind: 'update', added: [] }, target: { namespace: 'local', sourceChanged: false } });
   }
 });
 
@@ -413,4 +413,89 @@ it('keeps an already installed plugin enabled when its page is absent at startup
     expect(pluginToolVisible(reloaded.manifest, 'run', 'model')).toBe(true);
     expect(await fs.readFile(path.join(reloaded.dir, 'main.js'), 'utf8')).toBe('// ok\n');
   } finally { await fs.rm(directory, { recursive: true, force: true }); }
+});
+
+
+it.each([false, true])('Forge same local instance with another copy: sourceChanged=%s', async sourceChanged => {
+  const manifest: InstalledGhost['manifest'] = { schemaVersion: 3, minCindyVersion: '0.0.0', id: 'helper', name: 'Helper', version: '1.0.0', kind: 'chip', entry: 'main.js' };
+  const local: InstalledGhost = { manifest, namespace: 'local', instanceKey: '_ns__local__helper', dir: '/plugins/_ns/local/helper', enabled: true,
+    approval: { state: 'approved', revision: '11111111-1111-4111-8111-111111111111' } };
+  const root = { ...local, namespace: null, instanceKey: '_root__helper', dir: '/plugins/_ns/_root/helper' };
+  const prompt = vi.fn(async () => true), update = vi.fn<(...args: unknown[]) => Promise<InstalledGhost>>(async () => local);
+  const entry = forgeCallbacks({
+    getGhostManager: () => ({ list: () => [local, root], inspect: async () => ({ manifest, canonicalManifest: manifest, packageSha256: 'a'.repeat(64), trust: { level: 'unverified' } }) }),
+    rejectReservedGhostId() {}, rejectBrokerWithoutDeclaredRedirectPort() {}, rejectUnauthorizedTokenBroker() {},
+    getAuthState: () => ({ isAuthenticated: true, user: { membershipKind: 'org', orgSlug: 'acme' } }),
+    forgeInstallOriginForMembership: () => 'agent-forge', isValidPluginNamespace: () => true,
+    readLocalGhostUpdateSource: () => ({ sourceChanged, authorizationOverrides: {} }),
+    ghostInstallApprovalToken, obtainGhostInstallConsent, forgeOidcInstallConfirmFacts: () => null,
+    beginGhostMutation: () => () => {}, withGhostInstallLock: async (_id: string, run: () => unknown) => run(),
+    updateLocalGhostPackageLocked: update, markGhostRecommendationInstalled() {},
+    throwIpcError: (code: string) => { throw new Error(code); }, log: { warn() {} },
+  }).installOrUpdateLocalGhostPackageFromForge;
+  await expect(entry('/tmp/helper.cindy', { ghostId: 'helper', packageSha256: 'a'.repeat(64), mutationOwner: {}, consentPrompt: prompt }))
+    .resolves.toMatchObject({ action: 'updated' });
+  expect(prompt).toHaveBeenCalledTimes(sourceChanged ? 1 : 0);
+  expect(update.mock.calls[0]?.[5]).toBe('_ns__local__helper');
+});
+
+
+it('accepts ordinary name prefixes while retaining member publisher identity protection', () => {
+  const create = createGhostProductionCallbacks<{ rejectReservedGhostId(id: string): void }>({ functions: ['rejectReservedGhostId', 'rejectReservedPublisherSlug'] });
+  const entry = create({
+    isReservedConnectionPluginSlug: (id: string) => ['cindy-publisher', 'xd-publisher'].includes(id),
+    throwIpcError: (code: string) => { throw new Error(code); },
+  });
+  for (const id of ['cindy-art', 'cindy-web-search', 'xd-feishu', 'filo-google', 'helper'])
+    expect(() => entry.rejectReservedGhostId(id)).not.toThrow();
+  for (const id of ['cindy-publisher', 'xd-publisher'])
+    expect(() => entry.rejectReservedGhostId(id)).toThrow('GHOST_ID_RESERVED');
+});
+
+
+it('keeps an account-free local copy usable beside a same-ID account-managed market copy', async () => {
+  const base = { manifest: { schemaVersion: 3 as const, id: 'helper', name: 'Helper', version: '1.0.0', kind: 'chip' as const, entry: 'main.js' },
+    namespaceState: 'confirmed' as const, enabled: true, approval: { state: 'approved' as const, revision: 'receipt' } };
+  const local = { ...base, namespace: 'local', instanceKey: '_ns__local__helper', dir: '/plugins/_ns/local/helper' };
+  const root = { ...base, namespace: null, instanceKey: '_root__helper', dir: '/plugins/_ns/_root/helper', manifest: { ...base.manifest, cindy: { image: ['generate'] } } };
+  const manager = { list: () => [root, local], findInstalledInstance: (id: string) => [root, local].find(ghost => ghost.instanceKey === id) };
+  const create = createGhostProductionCallbacks<{
+    findGhostForInstanceId(id: string): InstalledGhost | null;
+    listAvailableGhostsAsync(): Promise<InstalledGhost[]>;
+  }>({ functions: ['isGhostAvailableForActiveSession', 'availableGhosts', 'findGhostForInstanceId', 'listAvailableGhostsAsync'] });
+  const callbacks = create({ managerSingleton: manager, getGhostManager: () => manager,
+    isAppSessionBoundaryPending: () => false, getAppCapabilities: () => ({ canUseCindyAccountServices: false }),
+    findInstalledGhostByInstanceId, ghostRequiresCindyAccount,
+    listInstalledGhostsAsync: async () => [root, local],
+  });
+  expect(callbacks.findGhostForInstanceId(local.instanceKey)).toEqual(local);
+  expect(callbacks.findGhostForInstanceId(root.instanceKey)).toBeNull();
+  const rescans = vi.spyOn(manager, 'list');
+  await expect(callbacks.listAvailableGhostsAsync()).resolves.toEqual([local]);
+  expect(rescans).not.toHaveBeenCalled();
+});
+
+
+it.each([
+  { instanceKey: 'cindy-web-search', namespace: undefined, namespaceState: 'pending', original: true },
+  { instanceKey: 'cindy-web-search', namespace: null, namespaceState: 'confirmed', original: true },
+  { instanceKey: 'cindy-web-search', namespace: 'acme', namespaceState: 'confirmed', original: true },
+  { instanceKey: '_root__cindy-web-search', namespace: null, namespaceState: 'confirmed', original: false },
+  { instanceKey: '_ns__local__cindy-web-search', namespace: 'local', namespaceState: 'confirmed', original: false },
+] as const)('migrates only original bare Web Search: $instanceKey / $namespaceState', async ({ instanceKey, namespace, namespaceState, original }) => {
+  const ghost = { manifest: { id: 'cindy-web-search' }, dir: '/plugins/cindy-web-search',
+    instanceKey, namespace, namespaceState, approval: { state: 'approved' } };
+  const manager = { list: () => [ghost], findInstalledInstance: () => ghost,
+    migrateLegacyApprovalsOnce: async () => ({ retryPending: [] }), hasPendingLegacyApprovalMigration: () => false,
+    isPendingLegacyNamespace: () => namespaceState === 'pending', runExclusiveMutation: async () => false };
+  const migrate = vi.fn(() => true);
+  const create = createGhostProductionCallbacks<{ reconcileBuiltinGhosts(reason: string, owner: string): Promise<string> }>({ functions: ['reconcileBuiltinGhosts'] });
+  const callbacks = create({ getGhostManager: () => manager, captureGhostMutationOwner: () => 'owner',
+    beginGhostMutation: () => () => {}, withGhostInstallLock: async (_id: string, run: () => unknown) => run(),
+    loadGhostFirstPartyFactsForGhost: () => ({ kind: 'unavailable' }), migrateInstalledGhostSecretAliases: migrate,
+    log: { info() {}, warn() {} },
+  });
+  expect(await callbacks.reconcileBuiltinGhosts('startup', 'owner')).toBe('completed');
+  if (original) expect(migrate).toHaveBeenCalledWith({ instanceKey, ghostId: 'cindy-web-search', eligible: true });
+  else expect(migrate).not.toHaveBeenCalled();
 });

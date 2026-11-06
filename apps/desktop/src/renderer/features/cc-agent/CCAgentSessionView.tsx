@@ -48,6 +48,7 @@ import {
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import { CindyMakeSessionGate } from './CindyMakeSessionGate';
 import { SessionRouteOriginGate } from './SessionRouteOriginGate';
+import { usePluginSkillSetup } from './pluginSkillSetup';
 import { useBotIslandVisibleSession } from '@/features/bots/useBotIslandVisibleSession';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import { useTranslation } from 'react-i18next';
@@ -141,6 +142,7 @@ import {
   useShareSelectionActive,
 } from '@/components/chat/shareSelectionStore';
 import { ErrorBanner } from '@/components/chat/ErrorBanner';
+import { useSharedTaskRecovery } from '@/hooks/useSharedTaskRecovery';
 import {
   ErrorTailErrorBanner,
   InterruptedTurnBanner,
@@ -313,6 +315,7 @@ import {
   forkCurrentTaskFromKeyboard,
 } from '@/lib/workLouderCodexTaskActions';
 import { useSessionHardwareTaskActions } from './lib/sessionHardwareTaskActions';
+import { useGhostCardTaskArchive } from './hooks/useGhostCardTaskArchive';
 import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
 import { getModelById, getDefaultModelForVendor } from '@/lib/modelDefinitions';
 import { resolveDisplayContextWindow } from '@/lib/contextWindow';
@@ -1262,6 +1265,9 @@ function CCAgentSessionContent({
     onRemoteWriteBlocked: showRemoteWriteBlockedToast,
     patchLocal: patchLocalSession,
   });
+  // 插件卡片上的归档任务按钮,以及 PR 合并后「看过并离开」的自动归档(只在普通任务页,
+  // Orca 分屏里的成员任务和伙伴会话不自动收走)。
+  useGhostCardTaskArchive({ session, archive, remoteWritesBlocked, autoArchive: !isOrcaMode && !botChatIdentity });
   // 列表级 activity 在重 topic 的 maker status 之前就可用。远程 turn 正在执行 / 等待
   // 交互时,session 行天然是 startedAt > endedAt,不能把这个正常在飞窗口误判成
   // 「应用退出中断」。直接门控首帧,再锁存本次视图,避免 activity 终态与 ended patch
@@ -1867,6 +1873,7 @@ function CCAgentSessionContent({
     continueAfterSilentStop,
     errorReason,
     toolLoop,
+    outputLimit,
     insertSystemCard,
     updateSystemCardData,
     error,
@@ -2213,6 +2220,22 @@ function CCAgentSessionContent({
       startedAt: session?.activeTurnStartedAt ?? null,
       endedAt: session?.lastTurnEndedAt ?? null,
     });
+  // `/` 面板里待装插件的技能(如 /pr):与首页 Gmail 推荐同一套安装接续,装好后回到本任务
+  // 并把 `/技能 ` 填进输入框。SSH / 被控电脑 / 只读与编辑排队消息时不提供。
+  const pluginSkillSetup = usePluginSkillSetup({
+    enabled:
+      !!session &&
+      !!sessionId &&
+      !session.remoteHostId &&
+      rightSidebarDeviceLinkDeviceId === null &&
+      !readOnly &&
+      session.source !== 'review' &&
+      !activeQueueComposerEdit,
+    ownerId: dataOwnerId,
+    workingDir: session?.workingDir ?? null,
+    targetKey: JSON.stringify(['session', sessionId ?? null]),
+    draftKey: sessionId ?? '',
+  });
   // Agent 在另一台电脑运行的任务:模型目录同样以那台为准(任务本身在本机)。
   const agentDeviceId = remoteDeviceId ? undefined : (session?.agentDeviceId ?? undefined);
   // 远程 Agent:本机任务的模型面板也列出其他电脑的供应商(选中 = 把 Agent 挪过去,下一条消息
@@ -2527,6 +2550,16 @@ function CCAgentSessionContent({
     if (!errorTailMsg || errorTailKind !== 'error') return '';
     return remoteErrorMessageForBanner(errorTailMsg.content);
   }, [errorTailKind, errorTailMsg]);
+  const sharedTaskRecovery = useSharedTaskRecovery({
+    sessionId: sessionId ?? undefined,
+    agentDeviceId: session?.agentDeviceId,
+    error: error || errorTailText,
+    handledUsageLimit: usageLimitRecovery?.isAccountUsageLimit === true,
+    agentKind: session?.agentKind,
+    active: viewVisible && ownsHardwareTaskActions && !readOnly && !botChatIdentity
+      && !isStreaming && !agentStatus.isRunning && !errorIsRecoverable
+      && !syntheticContinuationPending && !usageLimitWait,
+  });
   // 本地隐藏态:点主按钮后立即隐藏,不等新消息入流(视觉连续性,规则 7)。
   // 「忽略/关闭」走 store 的乐观 errorDismissed 更新,无需本地态。
   // 按错误行 clientId 归属(不是 sessionId,review P2):续跑后同一会话再次以
@@ -5312,7 +5345,7 @@ function CCAgentSessionContent({
     <MessageReadAloudContext.Provider value={messageReadAloud.value}>
     <MessageStream
       header={messageStreamHeader}
-      footer={pendingMcpSetup ? <McpSetupPrompt key={pendingMcpSetup.requestId} request={pendingMcpSetup} /> : null}
+      footer={pendingMcpSetup ? <McpSetupPrompt key={pendingMcpSetup.requestId} request={pendingMcpSetup} teammate={!!botChatIdentity} /> : null}
       key={sessionId}
       sessionId={sessionId}
       sessionTitle={session?.title ?? null}
@@ -5775,10 +5808,12 @@ function CCAgentSessionContent({
                 />
               ) : (
                 <ErrorTailErrorBanner
+                  onChooseComputer={sharedTaskRecovery.askAgain}
                   errorText={errorTailText}
                   dismissOnEscape={viewVisible && ownsHardwareTaskActions}
                   errorReason={errorTailMsg?.errorReason}
                   toolLoop={errorTailMsg?.toolLoop}
+                  outputLimit={errorTailMsg?.outputLimit}
                   onContinue={handleErrorTailContinue}
                   onDismiss={handleErrorTailDismiss}
                   onSilentStopContinue={handleSilentStopContinue}
@@ -5833,6 +5868,7 @@ function CCAgentSessionContent({
                   dataOwnerId={dataOwnerId}
                   sessionId={sessionId}
                   latestFailedRun={scheduleSessionInfo.latestFailedRun}
+                  remote={rightSidebarDeviceLinkDeviceId !== null}
                   onDiagnose={canDiagnoseError ? handleDiagnoseError : undefined}
                   style={{ width: inputWidth }}
                   className="py-1"
@@ -5848,10 +5884,12 @@ function CCAgentSessionContent({
               continuationTurnClientId,
             }) && (
               <ErrorBanner
+                onChooseComputer={sharedTaskRecovery.askAgain}
                 error={error}
                 dismissOnEscape={viewVisible && ownsHardwareTaskActions}
                 errorReason={errorReason}
                 toolLoop={toolLoop}
+                outputLimit={outputLimit}
                 isRecoverable={errorIsRecoverable}
                 retryText={errorRetryText}
                 onRetry={handleRetry}
@@ -6115,6 +6153,8 @@ function CCAgentSessionContent({
                   aria-hidden={voiceModeOpen && voiceSurfaceAvailable ? true : undefined}
                 >
                 <ChatInput
+                  modelPickerRequest={sharedTaskRecovery.modelPickerRequest}
+                  onModelPickerRequestConsumed={sharedTaskRecovery.consumeModelPickerRequest}
                   topSlot={cindyMakeRecoveryId && session ? (
                     <CindyMakeEditingActions
                       key={`${session.id}:${cindyMakeRecoveryId}`}
@@ -6161,6 +6201,7 @@ function CCAgentSessionContent({
                   initialPermissionMode={session?.permissionMode}
                   planModeEnabled={planModeEnabled}
                   onPlanModeChange={setPlanMode}
+                  pluginSkillSetup={pluginSkillSetup}
                   fastMode={fastMode}
                   onFastModeChange={setFastMode}
                   onWorkingDirChange={handleWorkingDirChange}
@@ -6815,8 +6856,9 @@ function RunningStatusBar({
     latestRate,
   });
   const latestRateText = latestRate !== null ? formatRecentOutputTokenRate(latestRate) : null;
+  // 工具执行期间(host 已 pause)不显示流速:那不是生成速度,残留读数只会误导。
   const rateText =
-    !isHidden && !reconnecting && usageMeta.kind === 'rate'
+    !isHidden && !reconnecting && usageMeta.kind === 'rate' && !(tokenSpeed && !tokenSpeed.streaming)
       ? latestRateText !== null
         ? t('chat.runningStatus.tokenRate', { rate: latestRateText })
         : null
@@ -6913,9 +6955,15 @@ function RunningStatusBar({
             {showRatePanel && (
               <RunningTokenRatePopover
                 elapsedText={elapsedText}
-                rate={latestRateText}
+                // 工具执行期间(host 已 pause)没有"当前"速度:latestRate 缓存着生成
+                // 结束前的读数(60s 内仍新),打开浮窗会显示成仍在跑。平均速度与峰值
+                // 仍然保留,它们描述的是已经发生的生成。
+                rate={tokenSpeed && !tokenSpeed.streaming ? null : latestRateText}
                 rateText={
-                  workflowWaiting || sideTaskRunning || backgroundTasksRunning
+                  workflowWaiting ||
+                  sideTaskRunning ||
+                  backgroundTasksRunning ||
+                  (tokenSpeed && !tokenSpeed.streaming)
                     ? null
                     : usageMeta.kind === 'tokens'
                       ? tokenCountText

@@ -2,7 +2,7 @@
  * 观察层的宿主读取：本机数据库、伙伴目录与逐任务责任、设备互联。只读，不写库。
  * 调用方负责账号边界（service 在每次调用前后校验 owner scope）。
  */
-import { and, desc, gte, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current.js';
 import {
@@ -12,9 +12,10 @@ import {
   botSessionLinks,
   sessions,
 } from '../localDb/schema.js';
+import type { BotSystemSkillId } from '../../shared/botSystemSkills.js';
 import { readTaskResponsibilities, responsibleSessionIds } from '../maker-ipc/botTaskResponsibility.js';
 import { isCompanionShadowed } from '../companion-cloud/homes.js';
-import { readAllowSchedulerFollow, type FollowerBotState } from './follower.js';
+import { readAllowSchedulerFollow, readSystemSkillsOff, type FollowerBotState } from './follower.js';
 import type { LocalSessionMeta, OwnershipSnapshot, RemoteDeviceTarget } from './taskWatch.js';
 
 const SESSION_BATCH = 256;
@@ -119,7 +120,7 @@ export async function readInterruptedSessionMetas(
   return selected.map(row => toMeta(row, roles.get(row.id) ?? null));
 }
 
-/** 伙伴目录：状态、能力位 allowSchedulerFollow、是否在别的电脑运行（云端伙伴）。 */
+/** 伙伴目录：状态、能力位 allowSchedulerFollow、是否关掉「跟进」、是否在别的电脑运行（云端伙伴）。 */
 export async function readBotDirectory(): Promise<Map<string, FollowerBotState>> {
   const db = getDbClient().drizzle;
   const rows = await db
@@ -141,9 +142,24 @@ export async function readBotDirectory(): Promise<Map<string, FollowerBotState>>
       allowSchedulerFollow: readAllowSchedulerFollow(row.capabilities),
       shadowed: isCompanionShadowed(row.id),
       canonicalSessionId: row.canonicalSessionId ?? null,
+      ...(readSystemSkillsOff(row.capabilities).includes('follow') ? { followOff: true } : {}),
     });
   }
   return out;
+}
+
+/** 某个伙伴当前资料里关掉的系统技能；伙伴不存在时按全开（调用方另有存在性检查）。 */
+export async function readBotSystemSkillsOffFor(botId: string): Promise<BotSystemSkillId[]> {
+  const [row] = await getDbClient().drizzle
+    .select({ capabilities: botProfileVersions.capabilitiesJson })
+    .from(botProfiles)
+    .innerJoin(
+      botProfileVersions,
+      and(sql`${botProfileVersions.botId} = ${botProfiles.id}`, sql`${botProfileVersions.version} = ${botProfiles.currentVersion}`),
+    )
+    .where(eq(botProfiles.id, botId))
+    .limit(1);
+  return readSystemSkillsOff(row?.capabilities);
 }
 
 /**

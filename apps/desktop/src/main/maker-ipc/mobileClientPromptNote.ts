@@ -100,7 +100,7 @@ function singleTextContent(message: unknown): string | null {
 
 /**
  * 原生命令必须位于消息开头；环境说明不能抢占这个位置。
- * Claude 旁路 /compact；Pi 的 slash 输入交由运行时自己的命令发现处理。
+ * Claude 旁路 /compact 和 Learn 技能调用；Pi 的 slash 输入交由运行时自己的命令发现处理。
  */
 export function shouldPrependMobileClientPromptNote(
   message: unknown,
@@ -117,7 +117,11 @@ export function shouldPrependMobileClientPromptNote(
     return !(text ?? firstText ?? '').trimStart().startsWith('/');
   }
   if (agentKind !== 'claude-code') return true;
-  return text === null || !/^\/compact(?:\s|$)/.test(text);
+  if (text === null) return true;
+  // Learn's exact-path pin is expanded at the provider boundary, where the
+  // command must still lead the input. Keep its aliases free of wire notes.
+  return !/^\/compact(?:\s|$)/.test(text)
+    && !/^\/(?:(?:skill|cindy):)?learn(?:\s|$)/i.test(text.trimStart());
 }
 
 /**

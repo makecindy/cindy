@@ -50,7 +50,7 @@ ghost_forge_install({ dir: '<插件源码目录的绝对路径>' });
 
 工具仍声明在 `tools[]`，包括只供页面调用的工具。`mcpApps.ui.resources`
 把一个 `ui://` 名字对应到包内 HTML；`mcpApps.ui.tools` 指定页面和可见性。
-下面是从[完整清单](examples/interactive-pages/loader/ghost.json)抽出的对应关系：
+摘自[完整清单](examples/interactive-pages/loader/ghost.json)：
 
 ```json
 {
@@ -107,8 +107,8 @@ cindy.send({ type: 'tool-result', callId: msg.callId, ok: true, result: {
 
 由 AI 写首屏时使用 show_page({title,html})，返回结构相同。生成页面的 LLM（后端模型或
 对话 AI）读[MCP Apps 页面生成手册](examples/interactive-pages/PAGE-GENERATION.md)；
-loader 用 `manual.items` 挂上同一份，show_page 说明指向 `ghost_manual`。页面不能
-创造插件未提供的能力。
+show_page 说明让 AI 先调 `ghost_forge_guide({section:"pages"})` 读宿主的这份
+（旧版可自带一份）。页面不能创造插件未提供的能力。
 
 ### 5. 加载器显示首屏，生成的页面自己连接
 
@@ -220,7 +220,7 @@ innerHTML 只接转义过动态值的可信模板，不接普通数据。片段�
 尝试读回。声明方式见[网络 §4.7](plugin-network.md)。
 
 页面选文件：pick_files 写入 Library，再 upload_files 上传。接收用户在对话里发的表格，
-必须用声明了 `cindy_handoff_files` 的工具（0.1.123-beta 起，规则见
+必须用声明了 `cindy_handoff_files` 的工具（0.1.122-beta 起，规则见
 [§4.10.3](plugin-files-and-library.md)）：AI 用 ghost_call 的 attachments 交给它 → Cindy
 存副本，插件只收到 `handoff:` 引用 → 首屏只显示名称和大小，按钮带上引用 → 用户点击时
 插件用 `upload.handoff` 上传，或页面在本机读取。工具说明写明「用户在对话里发的文件，
@@ -254,7 +254,7 @@ innerHTML 只接转义过动态值的可信模板，不接普通数据。片段�
 | 明确结果归属 | content/structuredContent 给 AI；页面专用内容放根 _meta |
 
 使用 `new App(info, capabilities, {autoResize:true})` 自动报告尺寸，通过
-`app.getHostContext()` 取主题和 styles.variables。表单应能适应窄屏。
+`app.getHostContext()` 取主题、styles.variables 和 locale。表单应能适应窄屏。
 全屏、下载等能力先探测，不能把桌面成功当成所有查看端都支持，详见参考页。
 
 打包后实际打开页面：检查首屏只请求一次；查询不清掉表单输入；按 Enter 和点击

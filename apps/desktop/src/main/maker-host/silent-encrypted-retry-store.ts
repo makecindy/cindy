@@ -13,6 +13,7 @@ import path from 'node:path';
 import { desktopMakerLogger } from './logger-adapter.js';
 import {
   createOverrideSettingsFile,
+  portableOverrideSettings,
   type OverrideSettingsState,
 } from './override-settings-file.js';
 
@@ -62,3 +63,6 @@ export function writeSilentEncryptedRetryEnabled(enabled: boolean): void {
 export function resetSilentEncryptedRetrySettings(): SilentEncryptedRetrySettings {
   return store.reset();
 }
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const silentEncryptedRetryPortableSettings = portableOverrideSettings(store);

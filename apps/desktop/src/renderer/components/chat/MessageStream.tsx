@@ -1,7 +1,9 @@
+import { AttachmentCollectionContext, type AttachmentCollectionItem } from './AttachmentCollection';
+import { attachmentPreviewKind, previewSourceName } from '@cindy/maker-shared/attachment-preview';
 import { TeammateProcessStatus } from '@/features/bots/TeammateProcessStatus';
 import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
 import { historyAfter } from './historyAfter';
-import { readMailCard } from '@cindy/maker-shared/ghost-card-form';
+import { readGhostCardSupersededBy, readMailCard } from '@cindy/maker-shared/ghost-card-form';
 import { animateFocusScroll } from './animateFocusScroll';
 import { botProcessItems } from '@/features/bots/botConversationPresentation';
 import { isVisibleVoiceCallMessage } from '@/features/bots/voice/voiceCallPresentation';
@@ -120,8 +122,11 @@ import { useTurnChangeSets } from './useTurnChangeSets';
 import {
   canCompensateMessageHeight,
   findRenderItemElement,
+  isRestoredScrollTakeover,
+  measureRestoredScrollGeometry,
   rememberedItemIntrinsicSize,
   viewportAnchorCorrection,
+  type RestoredScrollGeometry,
 } from './messageViewportCompensation';
 import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
 import { createLogger } from '@/lib/logger';
@@ -163,12 +168,6 @@ import { isValidPluginNamespace } from '@cindy/plugin-protocol';
 // logToMain 照样走 IPC 再被 main 按级别丢弃,每次切换白付两次 IPC。无 PII。
 const perfLog = createLogger('perf/session-switch');
 
-// jump-down chip 静止隐藏时长 — 用户向下滚动停止后多久淡出。2s 是用户要求,
-// 与 prev-msg-jump 的 IDLE_HIDE_MS=3000 区分(向上 chip 显示更长方便回看,
-// 向下 chip 是快捷跳转 affordance,短一些不打扰)。
-const JUMP_DOWN_IDLE_MS = 2000;
-// 方向判断死区 — 1px 内的 scrollTop 变化不算方向。
-const SCROLL_DIRECTION_DEAD_ZONE_PX = 1;
 const TOUCH_HISTORY_INTENT_THRESHOLD_PX = 8;
 const HISTORY_NAVIGATION_KEYS: ReadonlySet<string> = new Set(['PageUp', 'ArrowUp', 'Home']);
 
@@ -369,12 +368,12 @@ import {
   createGhostCardSpawnIndex,
 } from '@/cindy-brain/ghostCardGallery';
 import { ChatImageView } from './ChatImageView';
-import { ImageGalleryContext, type GalleryImage } from './ImageGalleryContext';
+import { galleryImagePreviewItem, ImageGalleryContext, type GalleryImage } from './ImageGalleryContext';
 import { GhostFulfillmentContext } from './GhostSummonCard';
 import { ChatSessionFileProvider, useChatSessionFileValue } from './ChatSessionFileContext';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '@/../shared/remoteMediaUrl';
-import { isGhostCallToolName } from '@/../shared/ghost';
+import { isGhostCallToolName, isTurnEndGhostCardHtml } from '@/../shared/ghost';
 import { ChatVideoView } from './ChatVideoView';
 import { ChatAudioCard } from './ChatAudioCard';
 import { ChatSoundEffectCard } from './ChatSoundEffectCard';
@@ -382,6 +381,7 @@ import { PrevMessageJumpChip, firstNonEmptyLine } from './PrevMessageJumpChip';
 import { useTopRightChipSlot } from './TopRightChipStack';
 import { usePrevUserMessageInView } from './usePrevUserMessageInView';
 import { JumpToBottomChip } from './JumpToBottomChip';
+import { SCROLL_DIRECTION_DEAD_ZONE_PX, useJumpToBottomVisibility } from './useJumpToBottomVisibility';
 import { MessageNavRail } from './MessageNavRail';
 import {
   NAV_RAIL_BACKFILL_MAX_ROUNDS,
@@ -1820,16 +1820,25 @@ export function buildRenderItems(
   // 卡槽③:当前 segment 内累计的意识卡片(与 tool_media 同节奏 flush,
   // 每张卡各自锚定自己的 ghost_call clientId,不像媒体那样按段合并)。
   let pendingSegmentGhostCards: Extract<RenderItem, { type: 'ghost_card' }>[] = [];
+  // 声明 turn-end 的卡(isTurnEndGhostCardHtml)不跟段走,攒到本轮末尾、排在改动卡之后。
+  let pendingTurnEndGhostCards: Extract<RenderItem, { type: 'ghost_card' }>[] = [];
+  const queueGhostCardItem = (
+    item: Extract<RenderItem, { type: 'ghost_card' }>,
+    html: string,
+  ): void => {
+    (isTurnEndGhostCardHtml(html) ? pendingTurnEndGhostCards : pendingSegmentGhostCards).push(item);
+  };
   // 本次 build 内已被认领的活卡(claude 精确锚 / codex 启发式各认领一次)。
   const claimedLiveCallIds = new Set<string>();
   const sessionLiveCards = opts?.sessionId
-    ? ghostCards?.liveCards.filter(lc => lc.sessionId === opts.sessionId) ?? []
+    ? (ghostCards?.liveCards.filter((lc) => lc.sessionId === opts.sessionId) ?? [])
     : [];
   // Mail is a finished document, not plugin progress. Without an exact tool ID,
   // wait for its result rather than attach it to a schema/read call by guesswork.
-  const guessableLiveCards = sessionLiveCards.filter(lc => {
+  // A card moved to a newer call belongs to an earlier call and must not claim this one.
+  const guessableLiveCards = sessionLiveCards.filter((lc) => {
     const entry = ghostCards?.byCallId.get(lc.callId);
-    return !(entry?.status === 'ready' && readMailCard(entry.html));
+    return !(entry?.status === 'ready' && (readMailCard(entry.html) || readGhostCardSupersededBy(entry.html)));
   });
   // Old partial history may omit a tool result. It cannot claim a new card just
   // because the same plugin was used there. Exact IDs still work across turns.
@@ -1887,6 +1896,11 @@ export function buildRenderItems(
   };
 
   let turnStartIdx = 0;
+  const flushTurnEnd = (lo: number, hi: number): void => {
+    flushTurnChanges(lo, hi);
+    for (const gc of pendingTurnEndGhostCards) items.push(gc);
+    pendingTurnEndGhostCards = [];
+  };
   const flushTurnChanges = (lo: number, hi: number): void => {
     if (hi <= lo) return;
     const anchorClientId = messages[lo]?.clientId;
@@ -1971,7 +1985,7 @@ export function buildRenderItems(
       const end = Date.parse(messages[hi]?.createdAt ?? '');
       const artifacts = (opts?.historyArtifacts ?? []).filter((artifact) => {
         const time = Date.parse(artifact.createdAt);
-        return !(Number.isFinite(start) && time < start || Number.isFinite(end) && time >= end);
+        return !((Number.isFinite(start) && time < start) || (Number.isFinite(end) && time >= end));
       });
       const editedPaths = new Set(artifacts.filter((file) => file.exclude && file.ready)
         .map((file) => pathKey(resolveToolFilePath(file.path, workingDir))));
@@ -2033,7 +2047,7 @@ export function buildRenderItems(
     // so the preceding turn's file-change card stays above them.
     if (isRenderTurnBoundary(msg)) {
       flushSegment();
-      flushTurnChanges(turnStartIdx, i);
+      flushTurnEnd(turnStartIdx, i);
       turnStartIdx = i;
     }
 
@@ -2154,7 +2168,7 @@ export function buildRenderItems(
           suppressMediaForCard = true;
           hideRowForCard = true;
           if (entry?.status === 'ready') {
-            if (readMailCard(entry.html)?.supersededBy) return;
+            if (readGhostCardSupersededBy(entry.html)) return;
             const cardItem: Extract<RenderItem, { type: 'ghost_card' }> = {
               type: 'ghost_card',
               key: `ghostcard-${msg.clientId}`,
@@ -2168,7 +2182,7 @@ export function buildRenderItems(
                   ? resultTsByToolUseId.get(msg.toolUseId)
                   : undefined,
             };
-            pendingSegmentGhostCards.push(cardItem);
+            queueGhostCardItem(cardItem, entry.html);
             ghostCardItemByCallId.set(cardId, cardItem);
           }
           return;
@@ -2199,7 +2213,7 @@ export function buildRenderItems(
         if (liveEntry?.status !== 'ready') return;
         claimedLiveCallIds.add(live.callId);
         hideRowForCard = true;
-        if (readMailCard(liveEntry.html)?.supersededBy) { suppressMediaForCard = true; return; }
+        if (readGhostCardSupersededBy(liveEntry.html)) { suppressMediaForCard = true; return; }
         const liveCardItem: Extract<RenderItem, { type: 'ghost_card' }> = {
           type: 'ghost_card',
           key: `ghostcard-${msg.clientId}`,
@@ -2209,7 +2223,7 @@ export function buildRenderItems(
           toolCall: msg,
           settled: false,
         };
-        pendingSegmentGhostCards.push(liveCardItem);
+        queueGhostCardItem(liveCardItem, liveEntry.html);
         ghostCardItemByCallId.set(live.callId, liveCardItem);
       };
       // 媒体收集:结果带 xdt_anchor_card_id(ghost_call 的"提交开卡 → 轮询出
@@ -2372,8 +2386,8 @@ export function buildRenderItems(
   // Flush trailing segment — important for streaming, where the turn often
   // ends mid-segment (no closing text yet).
   flushSegment();
-  // 末尾 turn 的产出文件卡(没有后续 user 边界触发)。
-  flushTurnChanges(turnStartIdx, messages.length);
+  // 末尾 turn 的改动卡 / 产出文件卡 / 排在本轮末尾的插件卡(没有后续 user 边界触发)。
+  flushTurnEnd(turnStartIdx, messages.length);
 
   if (taskUpdates) {
     // 父会话自己的 Bash 调用集合:local_bash 任务卡(#247 的「后台命令」卡,含
@@ -2886,7 +2900,7 @@ function renderWorkGroupChild(
   }
 
   // 工作组里的中间过程文字不挂 assistantAvatar:折叠块里逐条画脸只会变噪音,
-  // 身份标记只属于对话流里真正的那句回复(见 MessageItem 的 assistantAvatar)。
+  // 过程区外层与最终回复各显示一次头像，展开明细不重复。
   return (
     <div data-message-client-id={item.message.clientId}>
       <MessageItem
@@ -2932,13 +2946,13 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
   item,
   context,
   compact,
-  replyColumnSpacer,
+  companionAvatar,
 }: {
   item: Extract<RenderItem, { type: 'work_group' }>;
   context: WorkGroupRenderContext;
   compact: boolean;
-  /** 伙伴聊天：隐形头像占位，让工作过程与回复正文同列对齐。 */
-  replyColumnSpacer?: ReactNode;
+  /** 伙伴聊天：过程区与最终回复各显示一个头像，正文保持同列。 */
+  companionAvatar?: ReactNode;
 }) {
   // 完成态外层时间线可包含内层 work_group。递归只负责形状映射,
   // 具体折叠 / 直接详情逻辑全部复用 WorkGroupBlock。
@@ -2986,9 +3000,12 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
       childItems={childItems}
       compact={compact}
       deferred={item.deferred}
-      fitHeader={Boolean(replyColumnSpacer)}
+      fitHeader={Boolean(companionAvatar)}
       journal={item.teammateJournal}
-      journalTitle={item.isStreaming ? elapsed => <TeammateProcessStatus sessionId={context.sessionId}>{elapsed}</TeammateProcessStatus> : undefined}
+      journalTitle={item.isStreaming ? (elapsed) => (
+              <TeammateProcessStatus sessionId={context.sessionId}>{elapsed}</TeammateProcessStatus>
+            )
+          : undefined}
     />
   );
   return (
@@ -3002,7 +3019,7 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
       className="scroll-mt-20"
       data-message-client-ids={collectWorkGroupClientIds(item.children).join(' ')}
     >
-      {replyColumnSpacer ? withAssistantAvatar(replyColumnSpacer, block) : block}
+      {companionAvatar ? withAssistantAvatar(companionAvatar, block) : block}
     </div>
   );
 });
@@ -3130,6 +3147,7 @@ export function MessageStream({
     restoreSnapshotRef.current ? restoreSnapshotRef.current.isNearBottom === false : false,
   );
   const restoreLoadRef = useRef<'idle' | 'pending' | 'loaded' | 'failed' | 'settled'>('idle');
+  const restoredScrollGeometryRef = useRef<RestoredScrollGeometry | null>(null);
   const restoreMountedRef = useRef(false);
   const [restoreRevision, setRestoreRevision] = useState(0);
   const restoreCancelledRef = useRef(false);
@@ -3540,7 +3558,7 @@ export function MessageStream({
   visibleRenderItemsRef.current = visibleRenderItems;
   // Keep complex/stateful cards alive. Plain historical message bodies can be
   // replaced by measured-height placeholders without browser display locking.
-  const viewportEntries = useMemo(() => visibleRenderItems.map(item => ({
+  const viewportEntries = useMemo(() => visibleRenderItems.map((item) => ({
     key: item.key,
     retain: item.type !== 'message' || item.message.isStreaming === true || Boolean(item.message.systemCardType) ||
       (item.message.role !== 'user' && item.message.role !== 'assistant') ||
@@ -3615,7 +3633,7 @@ export function MessageStream({
         : findRenderItemElement(itemsRef.current, previous.viewportTopKey);
       const rect = target?.getBoundingClientRect();
       const viewport = container.getBoundingClientRect();
-      const offset = previous.messageClientId ? previous.messageOffset ?? 0 : previous.offset;
+      const offset = previous.messageClientId ? (previous.messageOffset ?? 0) : previous.offset;
       // Native anchoring also emits scroll events during prepend/size settling.
       // An already aligned reading row must not be replaced by a new offscreen
       // row whose content-visibility estimate temporarily crosses the top edge.
@@ -4086,15 +4104,54 @@ export function MessageStream({
     () => toRemoteMediaOrigin(sessionFileValue.origin, sessionFileValue.workingDir),
     [sessionFileValue],
   );
-  const sessionImageSrcs = useMemo(
+  const messageImageCollections = useMemo(
     () =>
-      collectSessionImageSrcs(
-        renderMetadataItems,
+      new Map(
+        renderMetadataItems.map((item) => [
+          item.key,
+          collectSessionImageSrcs(
+            [item],
         galleryMediaOrigin,
         ghostCardSnapshot,
         isSessionStreaming,
+          ),
+        ]),
       ),
     [renderMetadataItems, galleryMediaOrigin, ghostCardSnapshot, isSessionStreaming],
+  );
+
+  const messageAttachmentCollections = useMemo(
+    () =>
+      new Map(
+        renderMetadataItems.map((item) => {
+          const entries: AttachmentCollectionItem[] = (
+            messageImageCollections.get(item.key) ?? []
+          ).map((image, index) => galleryImagePreviewItem(image, `${item.key}:image:${index}`));
+          if (item.type === 'message' && item.message.role === 'user') {
+            for (const [index, file] of (item.message.files ?? []).entries())
+              entries.push({
+                id: `${item.key}:file:${index}`,
+                name: file.name,
+                source: file.path,
+                kind: attachmentPreviewKind(file.name),
+              });
+          }
+          if (item.type === 'tool_media') {
+            for (const [index, media] of item.items.entries()) {
+              if ((media.kind === 'video' || media.kind === 'audio') && media.url)
+                entries.push({
+                  id: `${item.key}:media:${index}`,
+                  name: previewSourceName(media.url, media.kind),
+                  source: rewriteToRemoteMediaOrigin(media.url, galleryMediaOrigin),
+                  kind: media.kind,
+                  media: true,
+                });
+            }
+          }
+          return [item.key, entries] as const;
+        }),
+      ),
+    [renderMetadataItems, messageImageCollections, galleryMediaOrigin],
   );
 
   // 把可见窗口往前(更早)推 RENDER_WINDOW_GROWTH_ITEMS 个 item,用于滚到顶时的客户端扩窗。
@@ -4285,6 +4342,7 @@ export function MessageStream({
     ) {
       restoreLoadRef.current = 'settled';
       refreshViewportAnchor();
+      restoredScrollGeometryRef.current = measureRestoredScrollGeometry(container, target);
       return true;
     }
     const cTop = container.getBoundingClientRect().top;
@@ -4294,11 +4352,13 @@ export function MessageStream({
     if (Math.abs(delta) < 1) {
       restoreLoadRef.current = 'settled';
       refreshViewportAnchor();
+      restoredScrollGeometryRef.current = measureRestoredScrollGeometry(container, target);
       return true;
     }
     const generation = beginProgrammaticScroll();
     container.scrollTop += delta;
     restoreLoadRef.current = 'settled';
+    restoredScrollGeometryRef.current = measureRestoredScrollGeometry(container, target);
     requestAnimationFrame(() => {
       if (finishProgrammaticScroll(generation) === false) refreshViewportAnchor();
     });
@@ -4673,21 +4733,8 @@ export function MessageStream({
 
   // ── jump-to-bottom chip ──
   // 用户向下滚动且未到底时显示扁平的"跳到底部" chip,2s 内无滚动自动隐藏。
-  // 与 NewMessageIndicator 互斥(它有未读时优先)。state 用 setter 直接控制,
-  // timer 走 ref 持有句柄方便 reset / cleanup。
-  const [showJumpDown, setShowJumpDown] = useState(false);
-  const jumpDownIdleTimerRef = useRef<number | null>(null);
-
-  // 卸载时清掉 idle timer 防泄漏
-  useEffect(
-    () => () => {
-      if (jumpDownIdleTimerRef.current !== null) {
-        window.clearTimeout(jumpDownIdleTimerRef.current);
-        jumpDownIdleTimerRef.current = null;
-      }
-    },
-    [],
-  );
+  // 与 NewMessageIndicator 互斥(它有未读时优先)，与群聊共用显隐策略。
+  const { visible: showJumpDown, onScroll: updateJumpDown } = useJumpToBottomVisibility();
 
   // ── chip-jump expand/load 抑制 ──
   // chip click 跳转的 smooth scroll 期间,如果路径穿过 scrollTop<50 会触发
@@ -4729,8 +4776,8 @@ export function MessageStream({
   );
   // wheel/touch/键盘接管：结束当前 smooth，但让期间延期的删除补偿重放。
   const clearChipJumpSuppression = useCallback(() => {
-    // Only input intent ends restoration. Chromium's intrinsic-size correction
-    // also emits scroll events and must not be mistaken for a user scroll.
+    // Direct input (or a settled, layout-stable chained scroll) ends restoration.
+    // Chromium's intrinsic-size corrections must still preserve the anchor.
     restoringRef.current = false;
     suppressHeightCompensationUntilRef.current = 0;
     disclosureAnchorRef.current = null;
@@ -5867,9 +5914,18 @@ export function MessageStream({
 
     const draggingScrollbar = scrollbarDragStartTopRef.current != null;
     if (restoringRef.current && !draggingScrollbar) {
-      applyRestoreRef.current();
-      prevScrollTopRef.current = el.scrollTop;
-      return;
+      if (isRestoredScrollTakeover(
+        el, restoredScrollGeometryRef.current,
+        restoreLoadRef.current === 'settled', programmaticScrollRef.current,
+      )) {
+        // An iframe's chained wheel never reached onWheel. Let the normal
+        // scroll path save this new reading position and update follow intent.
+        clearChipJumpSuppression();
+      } else {
+        applyRestoreRef.current();
+        prevScrollTopRef.current = el.scrollTop;
+        return;
+      }
     }
     const draggingUp =
       draggingScrollbar &&
@@ -5951,31 +6007,7 @@ export function MessageStream({
           }
         }
       }
-      if (effectiveNearBottom) {
-        // 到底了:无论方向都隐藏 chip,清掉 timer
-        if (jumpDownIdleTimerRef.current !== null) {
-          window.clearTimeout(jumpDownIdleTimerRef.current);
-          jumpDownIdleTimerRef.current = null;
-        }
-        setShowJumpDown((cur) => (cur ? false : cur));
-      } else if (delta > SCROLL_DIRECTION_DEAD_ZONE_PX) {
-        // 向下滚 + 未到底:显示 chip,reset idle timer
-        setShowJumpDown((cur) => (cur ? cur : true));
-        if (jumpDownIdleTimerRef.current !== null) {
-          window.clearTimeout(jumpDownIdleTimerRef.current);
-        }
-        jumpDownIdleTimerRef.current = window.setTimeout(() => {
-          jumpDownIdleTimerRef.current = null;
-          setShowJumpDown(false);
-        }, JUMP_DOWN_IDLE_MS);
-      } else if (delta < -SCROLL_DIRECTION_DEAD_ZONE_PX) {
-        // 向上滚:立即隐藏 chip(用户改变方向了,跳底意图消失)
-        if (jumpDownIdleTimerRef.current !== null) {
-          window.clearTimeout(jumpDownIdleTimerRef.current);
-          jumpDownIdleTimerRef.current = null;
-        }
-        setShowJumpDown((cur) => (cur ? false : cur));
-      }
+      updateJumpDown(delta, effectiveNearBottom);
 
       // render-window-bidirectional 要点 5: 向下扩窗。
       // 用户向下滚动接近当前窗口下缘时，扩 anchoredForwardItems 纳入更多 item。
@@ -6045,6 +6077,7 @@ export function MessageStream({
     prevScrollTopAtLoadRef.current = el.scrollTop;
     onLoadMore();
   }, [
+    updateJumpDown,
     onLoadMore,
     isLoadingMore,
     hasMoreMessages,
@@ -6062,6 +6095,7 @@ export function MessageStream({
     setAnchoredForwardItems,
     sessionId,
     unpinAutoFollowForUserUpIntent,
+    clearChipJumpSuppression,
   ]);
 
   // 渲染窗口下移到 render-item 轴后,U2 "末尾窗口全是 orphan tool_result"
@@ -6319,8 +6353,7 @@ export function MessageStream({
     previousLocalFileRefsRef.current = localFileRefs;
   }, [localFileRefs]);
 
-  // 伙伴聊天的工作过程与回复正文同列：只占头像宽度，不重复画脸。memo 住以保持
-  // WorkGroupRenderItemView 的 memo 比较成立。
+  // 成果与回复正文同列，只占头像宽度；过程区单独显示伙伴头像。
   const botReplyColumnSpacer = useMemo(
     () =>
       simplifiedBotConversation && assistantAvatar ? (
@@ -6329,6 +6362,14 @@ export function MessageStream({
         </span>
       ) : undefined,
     [assistantAvatar, simplifiedBotConversation],
+  );
+  const renderBotArtifacts = useCallback(
+    (content: ReactNode, renderItemKey?: string) => (
+      <div data-render-item-key={renderItemKey}>
+        {withAssistantAvatar(botReplyColumnSpacer, content)}
+      </div>
+    ),
+    [botReplyColumnSpacer],
   );
   const workGroupRenderContext = useMemo<WorkGroupRenderContext>(
     () => ({
@@ -6470,7 +6511,7 @@ export function MessageStream({
   return (
     <ChatSessionFileProvider value={sessionFileValue}>
       <GhostFulfillmentContext.Provider value={ghostCallsByUserTurn}>
-        <ImageGalleryContext.Provider value={sessionImageSrcs}>
+        <>
           <div className="relative h-full w-full">
             {/* chat-text-quote:选中消息文字 → 浮出"添加到对话"按钮(portal 到 body)。
           绑定本流的滚动容器:协同模式多流并存时,选区归属按各自容器判定。 */}
@@ -6527,7 +6568,8 @@ export function MessageStream({
                   disabled: shareSelectionActive,
                   // Refresh ownership before virtualization mutates the DOM.
                   onProgrammaticScroll: () => handleScroll(),
-                }}>{messageViewport => <div
+                }}>{(messageViewport) => (
+                    <div
                   ref={itemsRef}
                   data-share-selection-active={shareSelectionActive ? '' : undefined}
                   className={cn(
@@ -6543,15 +6585,25 @@ export function MessageStream({
                     'transition-[padding] duration-[var(--motion-base)] ease-[var(--motion-ease-move)] motion-reduce:transition-none',
                   )}
                 >
-                  {visibleRenderItems.map((item, itemIndex) => {
+                  {visibleRenderItems.map((item, itemIndex) => (
+                        <AttachmentCollectionContext.Provider
+                          key={item.key}
+                          value={messageAttachmentCollections.get(item.key) ?? null}
+                        >
+                          <ImageGalleryContext.Provider
+                            value={messageImageCollections.get(item.key) ?? null}
+                          >
+                            {(() => {
                     if (!messageViewport.shouldMount(viewportEntries[itemIndex])) {
-                      return <div key={item.key} data-render-item-key={item.key}
+                      return (
+                                  <div key={item.key} data-render-item-key={item.key}
                         data-message-client-id={item.type === 'message' ? item.message.clientId : undefined}
                         // Previous-question navigation must still find offscreen user rows.
                         data-user-msg-id={item.type === 'message' && item.message.role === 'user'
                           && !item.message.isSyntheticTrigger ? item.message.clientId : undefined}
                         data-message-placeholder="" aria-hidden="true"
-                        style={{ height: messageViewport.placeholderHeight(item.key), flexShrink: 0 }} />;
+                        style={{ height: messageViewport.placeholderHeight(item.key), flexShrink: 0 }} />
+                                );
                     }
                     if (item.type === 'fork_origin') {
                       return (
@@ -6599,6 +6651,7 @@ export function MessageStream({
                         <GeneratedFilesCard
                           key={item.key}
                           renderItemKey={item.key}
+                          renderBotArtifacts={botReplyColumnSpacer ? renderBotArtifacts : undefined}
                           files={item.files}
                           turnStartMs={item.turnStartMs}
                           turnEndMs={item.turnEndMs}
@@ -6654,7 +6707,7 @@ export function MessageStream({
                           // 伙伴聊天与普通任务同一套工作过程：运行中露最近 5 条活动与计时，
                           // 组头按内容宽；最终答复后保留折叠过程，按需展开。
                           compact={false}
-                          replyColumnSpacer={botReplyColumnSpacer}
+                          companionAvatar={simplifiedBotConversation ? assistantAvatar : undefined}
                         />
                       );
                     }
@@ -6666,7 +6719,7 @@ export function MessageStream({
                       // 下一次 store 变更自愈。
                       const entry = ghostCardSnapshot.byCallId.get(item.callId);
                       if (!entry || entry.status !== 'ready') return null;
-                      if (readMailCard(entry.html)?.supersededBy) return null;
+                      if (readGhostCardSupersededBy(entry.html)) return null;
                       // 常态包一层 div(结构稳定,回锚媒体到达时卡片 iframe 不重挂);
                       // 回锚媒体(如 mivo 视频)挂卡正下方,与 tool_media 同款间距。
                       return (
@@ -6849,9 +6902,15 @@ export function MessageStream({
                         {messageNode}
                       </div>
                     );
-                  })}
-                </div>}</MessageViewport>
-                {footer ? <div className="mt-3.5" data-message-stream-footer>{footer}</div> : null}
+                  })()}
+                          </ImageGalleryContext.Provider>
+                        </AttachmentCollectionContext.Provider>
+                      ))}
+                </div>
+                  )}</MessageViewport>
+                {footer ? (
+                  <div className="mt-3.5" data-message-stream-footer>{footer}</div>
+                ) : null}
               </div>
             </div>
 
@@ -6907,7 +6966,7 @@ export function MessageStream({
                 chipSlot,
               )}
           </div>
-        </ImageGalleryContext.Provider>
+        </>
       </GhostFulfillmentContext.Provider>
     </ChatSessionFileProvider>
   );
@@ -7211,6 +7270,7 @@ const MessageItem = memo(function MessageItem({
           reason={message.errorReason}
           providerId={message.errorProviderId}
           toolLoop={message.toolLoop}
+          outputLimit={message.outputLimit}
           sessionSource={sessionSource}
           onDiagnose={onDiagnoseError}
         />

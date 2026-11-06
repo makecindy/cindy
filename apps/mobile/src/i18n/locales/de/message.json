@@ -450,5 +450,32 @@
       "provider": "API-Anbieter",
       "unknown": "Kanal nicht erfasst"
     }
+  },
+  "attachmentPreview": {
+    "more": "Weitere Aktionen",
+    "retry": "Erneut versuchen",
+    "image": "Bild",
+    "video": "Video",
+    "file": "Datei",
+    "close": "Schließen",
+    "reset": "Ansicht zurücksetzen",
+    "open": "Vorschau öffnen",
+    "zoomIn": "Vergrößern",
+    "zoomOut": "Verkleinern",
+    "fit": "An Fenster anpassen",
+    "actualSize": "Originalgröße (1:1)",
+    "save": "Original speichern",
+    "share": "Teilen",
+    "previous": "Vorheriger Anhang",
+    "next": "Nächster Anhang",
+    "password": "PDF-Passwort eingeben",
+    "find": "Im Dokument suchen",
+    "matches": "{{count}} passende Seiten",
+    "previousPage": "Vorherige Seite",
+    "nextPage": "Nächste Seite",
+    "redo": "Wiederherstellen",
+    "wrap": "Zeilenumbruch",
+    "lineNumbers": "Zeilennummern",
+    "rendered": "Dokument anzeigen"
   }
 }

@@ -86,7 +86,7 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 
 - 省略：同名实例只有一个时解析到它，包括升级普查中还没有 namespace 字段的旧安装。
 - `null`：已确认的 root。不能用来点名唯一的待迁移旧安装。
-- 字符串：该企业的 orgSlug。
+- `"local"`：本地开发副本；其它字符串为企业 orgSlug。
 
 调用参数必须保留发现结果中的 JSON 类型：`null` 与字符串 `"null"` 不同，后者是合法的
 企业 slug，不能自动转成 root。插件名已安装但显式 namespace 不匹配时，共用可见性入口返回
@@ -99,7 +99,7 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 旧 Host 仍返回原错误，旧查看端可照常显示文本。实现与回归见 `ghostVisibility.ts`、
 `ghostVisibility.test.ts` 和 `ghostWorkdirGate.test.ts`。
 
-同名多实例返回 `GHOST_AMBIGUOUS`，`candidates` 是 `{ ghostId, namespace }`。已确认 root 的 namespace 为 null，企业实例为 orgSlug。待迁移旧安装没有 namespace 字段；它和另一个实例同名时，候选里的 null 可以点到这个待迁移实例。`/命令` 对没有 namespace 字段的旧安装不写 namespace，沿用 `(id: <ghostId>)`。已确认 root 写 `namespace: null`，企业实例写 `namespace: <orgSlug>`。
+同名多实例返回 `GHOST_AMBIGUOUS`，`candidates` 是 `{ ghostId, namespace }`。已确认 root 的 namespace 为 null，local 副本为字符串 local，企业实例为 orgSlug。待迁移旧安装没有 namespace 字段；它和另一个实例同名时，候选里的 null 可以点到这个待迁移实例。`/命令` 对没有 namespace 字段的旧安装不写 namespace，沿用 `(id: <ghostId>)`。已确认 root 写 `namespace: null`，企业实例写 `namespace: <orgSlug>`。
 
 ## 3. 花名册（roster）
 
@@ -253,8 +253,9 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 ## 7. 明确不做的事
 
 - 不新增使用插件的全局路由 Skill；不把插件业务手册铺成全局 Skill。内置
-  `cindy-plugin-creator` 仅负责编写插件，不替代插件业务的渐进发现。新插件使用按需读取的
-  `manual`；存量 Skill 槽处于停止新增、未来整体废弃的兼容期。
+  `cindy-plugin-creator` 仅负责编写插件，不替代插件业务的渐进发现。插件工具的深入用法
+  使用按需读取的 `manual`；需要斜杠命令或本地脚本的完整工作流可用插件 Skill 槽，它装在
+  Cindy 私有目录，随插件启停（见插件编写手册 §4.16）。
 - 不维护排他的 active plugin / active context；插件切换不做上下文替换，规则
   适用范围由 `ghost_id + category` 边界保证。
 - 不引入宿主级 rules_revision / receipt 回执协议。
@@ -286,3 +287,5 @@ Desktop 的 Claude/Codex/Pi Host 追加同一静态授权指引，复用现有�
 私密值只填原卡片，不进入工具参数或对话。先等待 Host 完成，再以最小只读调用验证平台权限。
 提示词保持原 system 前缀，无设备 ID、凭据、时间戳或动态账号状态；详见
 [远程授权契约](remote-plugin-oauth.md) 的兼容性与缓存影响。
+
+本地文件与 Forge 默认安装到 local。花名册、详情和调用始终保留真实 namespace；同名多份必须按用户目标选择，禁止按公开市场、企业或 local 排隐式优先级。已有任务绑定的实例键继续指向原实例，不迁移任务。

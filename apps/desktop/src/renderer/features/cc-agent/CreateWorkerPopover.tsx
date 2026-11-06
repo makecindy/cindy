@@ -1083,9 +1083,9 @@ export function CreateWorkerPopover({
                 onEffortChange={updateEffort}
                 vendorKey={vendorKey}
                 deviceId={catalogDeviceId}
-                {...(remoteAgentOptions && !(deviceId && remoteProviders.unsupported)
-                  ? { remoteAgent: remoteAgentOptions }
-                  : {})}
+                remoteAgent={remoteAgentOptions && !(deviceId && remoteProviders.unsupported)
+                  ? remoteAgentOptions
+                  : undefined}
                 // Worker 的 Agent 在另一台电脑运行：trigger 用带信号波纹的远程供应商 Logo。
                 agentDevice={agentDeviceId ? { deviceId: agentDeviceId, name: agentDeviceName } : undefined}
                 // SSH 远程 Lead:与 ChatInput 同口径藏掉仅本地可桥接的模型/来源

@@ -6,6 +6,8 @@
  *   只在用户改过时显示「恢复默认」，恢复 = 删除 override（docs/dev-rules/configuration-and-overrides.md）。
  * - 它开的任务也交给负责所有任务的伙伴跟：每伙伴的能力位（默认关 = 只看不跟），随伙伴设置自动保存；
  *   负责所有任务的伙伴自己、以及当前没有伙伴负责时不显示。
+ * - 主人关掉了这位伙伴的系统技能「跟进」：它不能负责所有任务，开关置灰并说明，由技能里那一个开关决定；
+ *   宿主同样不把它当总调度，但保留原来的选择，重新打开技能后恢复。
  */
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -25,11 +27,14 @@ export function BotAutonomySettings({
   botName,
   allowSchedulerFollow,
   onAllowSchedulerFollowChange,
+  followOff = false,
 }: {
   botId: string;
   botName: string;
   allowSchedulerFollow: boolean;
   onAllowSchedulerFollowChange: (value: boolean) => void;
+  /** capabilities.systemSkillsOff 含 follow。 */
+  followOff?: boolean;
 }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
@@ -90,7 +95,9 @@ export function BotAutonomySettings({
         <div className="min-w-0 flex-1">
           <p className={TITLE_CLASS}>{t('bots.autonomy.title')}</p>
           <p className={HINT_CLASS} role="status">{status}</p>
-          <p className={HINT_CLASS}>{t('bots.autonomy.routineScopeHint')}</p>
+          <p className={HINT_CLASS}>
+            {followOff ? t('bots.systemSkills.followOffHint', { name: botName }) : t('bots.autonomy.routineScopeHint')}
+          </p>
           {settings.isCustomized ? (
             <Button
               variant="secondary"
@@ -109,7 +116,7 @@ export function BotAutonomySettings({
           aria-label={t('bots.autonomy.title')}
           className="mt-0.5 shrink-0"
           checked={isHolder}
-          disabled={pending}
+          disabled={pending || followOff}
           onCheckedChange={(value) => toggle(value === true)}
         />
       </div>

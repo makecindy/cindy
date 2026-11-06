@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   resolveError: null as Error | null,
   bridge: vi.fn(async () => 'http://127.0.0.1:5555'),
   spawn: vi.fn(),
+  workers: [] as EventEmitter[],
 }));
 
 vi.mock('electron', () => ({ app: { isPackaged: true, getPath: () => '/tmp/cindy-test-user-data' } }));
@@ -33,6 +34,21 @@ vi.mock('@cindy/anthropic-compat-proxy', async (original) => ({
 }));
 vi.mock('../claude-cli-proxy-bridge.js', () => ({ ensureClaudeCliProxyBridge: h.bridge }));
 vi.mock('node:child_process', () => ({ spawn: h.spawn }));
+vi.mock('node:worker_threads', () => ({
+  Worker: class extends EventEmitter {
+    constructor(_file: string, { workerData }: { workerData: { binary: string; env: NodeJS.ProcessEnv } }) {
+      super();
+      h.workers.push(this);
+      // The worker transport is simulated; existing status/login cases still
+      // drive the production client and observe the public authentication result.
+      const child = h.spawn(workerData.binary, ['auth', 'status', '--json'], { env: workerData.env });
+      let stdout = '';
+      child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+      child.once('error', (error: Error) => this.emit('error', error));
+      child.once('close', () => { this.emit('message', { stdout }); this.emit('exit', 0); });
+    }
+  },
+}));
 
 import {
   claudeCliNetworkEnv,
@@ -92,6 +108,7 @@ beforeEach(() => {
   h.bridge.mockClear();
   h.bridge.mockImplementation(async () => 'http://127.0.0.1:5555');
   h.spawn.mockReset();
+  h.workers.length = 0;
 });
 
 describe('parseClaudeCliLoginStatus', () => {
@@ -167,6 +184,19 @@ describe('claudeCliNetworkEnv', () => {
 });
 
 describe('登录态读取', () => {
+  // KFJS unit regression: a worker dying before its response must release the
+  // in-flight status query and keep the previous login result (no hung refresh).
+  it('worker 提前退出时保留上次状态，force 可以重新查询', async () => {
+    h.spawn.mockImplementationOnce(() => fakeChild({ stdout: SUBSCRIPTION }));
+    await refreshClaudeCliLoginStatus();
+    h.spawn.mockImplementationOnce(() => fakeChild('hang'));
+    const pending = refreshClaudeCliLoginStatus({ force: true });
+    await vi.waitFor(() => expect(h.workers).toHaveLength(2));
+    h.workers[1]!.emit('exit', 1);
+    await expect(pending).resolves.toMatchObject({ loggedIn: true });
+    h.spawn.mockImplementationOnce(() => fakeChild({ stdout: LOGGED_OUT, code: 1 }));
+    await expect(refreshClaudeCliLoginStatus({ force: true })).resolves.toMatchObject({ loggedIn: false });
+  });
   it('读失败后退避,期间不再反复拉起 CLI;force 绕过退避', async () => {
     h.spawn.mockImplementation(() => fakeChild({ error: new Error('ENOENT') }));
     await expect(refreshClaudeCliLoginStatus()).resolves.toEqual({ loggedIn: false });

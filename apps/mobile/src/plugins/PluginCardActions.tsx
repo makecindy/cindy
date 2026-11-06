@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { prStatusItemKeys, type PrStatusKind, type PrStatusResult } from "@cindy/maker-shared";
 import {
   parseGhostCardForm,
   parseMailCard,
@@ -15,9 +16,12 @@ import {
   insertMailImage,
   mailPreviewImages,
   type GhostCardFormField,
+  ghostCardLinkOpensDirectly,
 } from "@cindy/maker-shared/ghost-card-form";
 import {
+  AccessibilityInfo,
   Alert,
+  Animated,
   AppState,
   Linking,
   KeyboardAvoidingView,
@@ -25,6 +29,7 @@ import {
   Platform,
   Pressable,
   StyleSheet,
+  Switch,
   View,
 } from "react-native";
 import { useIsFocused } from "expo-router";
@@ -42,10 +47,13 @@ import {
 } from "@/auth/authOwnerGeneration";
 import {
   fontWeight,
+  iconSize,
+  iconStroke,
   lineHeight,
   radius,
   spacing,
   typeScale,
+  useTheme,
   useThemedStyles,
   type ThemeColors,
 } from "@/theme";
@@ -55,6 +63,8 @@ import { pickMobileMailAttachment } from "./mobileMailAttachment";
 import { PluginCardRecipients } from "./PluginCardRecipients";
 import { invokePlugin } from "./pluginClient";
 import { FileTypeIcon } from '@/components/FileTypeIcon';
+import { Check, CircleMinus, CircleX, Clock, ExternalLink } from 'lucide-react-native';
+import { prStatusVisual } from '@/session/prStatusVisual';
 import { formatByteSize } from '@cindy/maker-shared/file-preview';
 
 interface Action {
@@ -64,6 +74,43 @@ interface Action {
   url?: string;
   disabled: boolean;
   submit?: boolean;
+  /** Rich hints from hosts that honour `plugin-card-rich`. */
+  primary?: boolean;
+  toggle?: { on: boolean; title: string; hint?: string };
+  /** The linked PR's current state (desktop hosts that know the task's PRs). */
+  prState?: PrStatusKind;
+}
+const PR_STATES: readonly PrStatusKind[] = ["open", "draft", "merged", "closed"];
+interface PrStatusSlot { key: string; fallback: string[]; status?: Extract<PrStatusResult, { ok: true }> }
+
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+/** The host sends the title bar's PR status; keep only fields the status row reads. */
+function parsePrStatus(value: unknown): PrStatusSlot["status"] {
+  const v = value as Record<string, unknown> | null;
+  if (!v || v.ok !== true || !["open", "draft", "merged", "closed"].includes(v.status as string)) return undefined;
+  const checks = v.checks as Record<string, unknown> | null | undefined;
+  const validChecks = checks && ["total", "failed", "passed", "pending", "skipped"].every((k) => isCount(checks[k]));
+  const text = (x: unknown) => (typeof x === "string" ? x : null);
+  return {
+    ok: true, owner: "", repo: "", prNumber: 0, title: "", htmlUrl: "", branch: "",
+    status: v.status as "open" | "draft" | "merged" | "closed",
+    unresolvedCount: isCount(v.unresolvedCount) ? v.unresolvedCount : null,
+    checks: validChecks ? (checks as unknown as NonNullable<Extract<PrStatusResult, { ok: true }>["checks"]>) : null,
+    ...("mergeState" in v ? { mergeState: text(v.mergeState) } : {}),
+    ...("reviewDecision" in v ? { reviewDecision: text(v.reviewDecision) } : {}),
+  };
+}
+function parsePrStatusSlots(value: unknown): PrStatusSlot[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 4).flatMap((slot) => {
+    const s = slot as Record<string, unknown> | null;
+    if (!s || typeof s.key !== "string" || !Array.isArray(s.fallback)) return [];
+    const fallback = s.fallback.filter((x): x is string => typeof x === "string" && x.length <= 200).slice(0, 8);
+    const status = parsePrStatus(s.status);
+    return [{ key: s.key, fallback, ...(status ? { status } : {}) }];
+  });
 }
 function parse(value: unknown): {
   pluginId: string;
@@ -74,6 +121,8 @@ function parse(value: unknown): {
   mail?: MailCardData | null;
   legacyMail?: boolean;
   mailUpload?: boolean;
+  live?: string;
+  prStatus: PrStatusSlot[];
 } | null {
   if (!value || typeof value !== "object") return null;
   const data = value as Record<string, unknown>;
@@ -94,7 +143,12 @@ function parse(value: unknown): {
       typeof item.disabled === "boolean" &&
       (item.prompt === undefined || typeof item.prompt === "string") &&
       (item.submit === undefined || typeof item.submit === "boolean") &&
-      (item.url === undefined || typeof item.url === "string"),
+      (item.url === undefined || typeof item.url === "string") &&
+      (item.primary === undefined || typeof item.primary === "boolean") &&
+      (item.prState === undefined || PR_STATES.includes(item.prState)) &&
+      (item.toggle === undefined || (typeof item.toggle === "object" && item.toggle !== null &&
+        typeof item.toggle.on === "boolean" && typeof item.toggle.title === "string" && item.toggle.title.length <= 200 &&
+        (item.toggle.hint === undefined || (typeof item.toggle.hint === "string" && item.toggle.hint.length <= 400)))),
   );
   return {
     mail: parseMailCard(data.mail),
@@ -106,6 +160,8 @@ function parse(value: unknown): {
     form: parseGhostCardForm(data.form),
     changeAction:
       typeof data.changeAction === "string" ? data.changeAction : undefined,
+    live: typeof data.live === "string" && data.live.length <= 64 ? data.live : undefined,
+    prStatus: parsePrStatusSlots(data.prStatus),
   };
 }
 export function PluginCardActions({
@@ -114,12 +170,15 @@ export function PluginCardActions({
   sessionId,
   callId,
   onOpenAttachment,
+  text,
 }: {
   data: unknown;
   deviceId?: string;
   sessionId: string;
   callId: string;
   onOpenAttachment?: (url: string, name: string) => void;
+  /** The card's projected text; drawn here as the card's title and detail lines. */
+  text?: string;
 }) {
   const parsed = parse(data);
   return parsed && !parsed.mail?.supersededBy && deviceId ? (
@@ -130,6 +189,7 @@ export function PluginCardActions({
       sessionId={sessionId}
       callId={callId}
       onOpenAttachment={onOpenAttachment}
+      text={text}
     />
   ) : null;
 }
@@ -142,11 +202,17 @@ function CardControls({
   pluginId,
   revision,
   items,
+  live,
+  prStatus,
   deviceId,
   sessionId,
   callId,
   onOpenAttachment,
+  text,
 }: {
+  text?: string;
+  live?: string;
+  prStatus: PrStatusSlot[];
   form: GhostCardFormField[] | null;
   changeAction?: string;
   mail?: MailCardData | null;
@@ -162,7 +228,19 @@ function CardControls({
 }) {
   const { t } = useTranslation(),
     styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
   const history = !!mail?.supersededBy || !!legacyMail;
+  // Non-mail cards read like Desktop's: a title (the card's own link when it has one), quiet
+  // detail lines, and compact buttons. Mail cards keep their editor layout.
+  const compact = !mail && !legacyMail;
+  const lines = compact && text ? text.split("\n").map((line) => line.trim()).filter(Boolean) : [];
+  const titleLink = lines.length ? items.find((action) => action.url && !action.disabled && action.label === lines[0]) : undefined;
+  const titleHost = titleLink?.url ? linkHost(titleLink.url) : undefined;
+  // A PR link leads with the app's own PR icon in its status colour (as on the home task row);
+  // other links end with a quiet external-link mark.
+  const titlePr = titleLink?.url && /^https:\/\/(?:www\.)?github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(titleLink.url)
+    ? prStatusVisual(titleLink.prState ?? prStatus.find((slot) => slot.key === githubPrKeyOfUrl(titleLink.url!))?.status?.status ?? null, colors) : undefined;
+  const buttons = (history ? [] : items).filter((action) => !action.toggle && action !== titleLink);
   const { getAccessToken } = useAuth();
   const readonly = history || ['sent', 'sending', 'unconfirmed', 'deleting', 'deleted'].includes(mail?.state ?? '');
   const [countdownNow, setCountdownNow] = useState(Date.now);
@@ -410,6 +488,10 @@ function CardControls({
         return;
       }
       if (!["http:", "https:"].includes(url.protocol)) return;
+      if (ghostCardLinkOpensDirectly(url.href)) {
+        void Linking.openURL(url.href).catch(() => setUnknown(true));
+        return;
+      }
       Alert.alert(t("plugins.externalTitle"), url.href, [
         { text: t("plugins.cancel"), style: "cancel" },
         {
@@ -491,6 +573,30 @@ function CardControls({
   }
   return (
     <View style={[styles.root, mail && !history && styles.mailCard]}>
+      {lines.length ? (
+        <View style={styles.cardHeader}>
+          {titleLink && titleHost ? (
+            <Pressable
+              accessibilityRole="link"
+              accessibilityLabel={`${lines[0]}: ${t("plugins.openLinkHost", { host: titleHost })}`}
+              hitSlop={{ top: spacing.xs, bottom: spacing.xs }}
+              onPress={() => choose(titleLink)}
+              style={({ pressed }) => [styles.titleRow, pressed && styles.pressed]}
+            >
+              {titlePr ? <titlePr.Icon size={iconSize.md} strokeWidth={iconStroke.regular} color={titlePr.color} style={styles.titleMark} /> : null}
+              <Text style={[styles.cardTitle, styles.titleText]}>{lines[0]}</Text>
+              {!titlePr ? (
+                <ExternalLink size={iconSize.sm} strokeWidth={iconStroke.thin} color={colors.textTertiary} style={styles.titleIcon} />
+              ) : null}
+            </Pressable>
+          ) : (
+            <Text selectable style={styles.cardTitle}>{lines[0]}</Text>
+          )}
+          {lines.slice(1).map((line, index) => (
+            <Text key={index} selectable style={styles.note}>{line}</Text>
+          ))}
+        </View>
+      ) : null}
       {history ? <Pressable accessibilityRole="button" accessibilityState={{ expanded: historyExpanded }} onPress={() => setHistoryExpanded(!historyExpanded)}>
         <Text style={styles.note}>{historyExpanded ? '▾ ' : '▸ '}{t(legacyMail ? 'plugins.mailLegacy' : 'plugins.mailUpdated')}{' · '}{form?.find(f => f.name === 'subject')?.value}</Text>
       </Pressable> : null}
@@ -500,7 +606,7 @@ function CardControls({
             <Text style={styles.body}>{field.kind === 'mail-attachments' ? visibleMailAttachments(formValues, field.name).map(file => file.filename).join(' · ') : field.value}</Text>}
         </View>
       )}</View> : null}
-      {!history ? <View style={styles.form}>
+      {!history && form?.length ? <View style={styles.form}>
         {form?.map((field) => {
           if (field.kind === 'hidden') return null;
           if (field.kind === 'mail-html') return <MobileMailHtmlPreview key={field.name} html={formValues[field.name]} images={mailPreviewImages(formValues, mail?.images)} deviceId={deviceId}
@@ -590,7 +696,7 @@ function CardControls({
           );
         })}
       </View> : null}
-      <View style={mail && !history ? styles.mailFooter : undefined}>
+      {(mail && !history) || prStatus.length || buttons.length || live || items.some((action) => action.toggle) ? <View style={mail && !history ? styles.mailFooter : compact ? styles.compactFooter : undefined}>
         {mail && !history ? (
           <View style={styles.mailInfo}>
             <Text style={styles.note}>{mail.fromLabel}: {mail.from}</Text>
@@ -600,16 +706,35 @@ function CardControls({
             <Text style={styles.note}>{mailCardStatus(mail, countdownNow)}</Text>
           </View>
         ) : null}
-        <View style={styles.actions}>
-          {(history ? [] : items).map((action) => {
+        {prStatus.map((slot) => <PrStatusRow key={slot.key} slot={slot} />)}
+        {(history ? [] : items).filter((action) => action.toggle).map((action) => (
+          <View key={action.id} style={styles.toggleRow}>
+            <View style={styles.toggleText}>
+              <Text style={styles.label}>{action.toggle!.title}</Text>
+              {action.toggle!.hint ? <Text style={styles.note}>{action.toggle!.hint}</Text> : null}
+            </View>
+            <Switch
+              accessibilityLabel={action.toggle!.title}
+              value={action.toggle!.on}
+              disabled={action.disabled || busy || unknown || status !== "online"}
+              onValueChange={() => choose(action)}
+            />
+          </View>
+        ))}
+        {buttons.length || live ? <View style={[styles.actions, compact && styles.compactActions]}>
+          {buttons.map((action) => {
             const sendNow = !!mail?.pendingSend && action.id === `mail:now:${mail.key}`;
+            const primary = action.primary || (!!mail && action.id === `mail:send:${mail.key}`);
+            const host = action.url ? linkHost(action.url) : undefined;
+            const label = host ? t("plugins.openLinkHost", { host }) : action.label;
             return (
               <Pressable
                 key={action.id}
-                accessibilityRole="button"
-                accessibilityLabel={sendNow && mail ? `${action.label}, ${mailCardStatus(mail, countdownNow)}` : action.label}
+                accessibilityRole={action.url ? "link" : "button"}
+                accessibilityLabel={sendNow && mail ? `${action.label}, ${mailCardStatus(mail, countdownNow)}` : host ? `${label}: ${action.label}` : action.label}
                 disabled={action.disabled || busy || uploading || unknown || status !== "online" || (readonly && !mail?.pendingSend && !action.id.startsWith('mail:continue:'))}
-                style={[styles.button, mail && action.id === `mail:send:${mail.key}` && styles.sendButton, sendNow && styles.sendNowButton]}
+                hitSlop={compact ? { top: spacing.xs, bottom: spacing.xs } : undefined}
+                style={[styles.button, compact && styles.compactButton, primary && styles.sendButton, sendNow && styles.sendNowButton, host && styles.quietButton]}
                 onPress={() => choose(action)}
               >
                 {sendNow && mail ? (
@@ -617,12 +742,13 @@ function CardControls({
                     <View style={[styles.countdownFill, { width: `${(1 - mailSendRemainingFraction(mail, countdownNow)) * 100}%` }]} />
                   </View>
                 ) : null}
-                <Text style={[styles.label, mail && action.id === `mail:send:${mail.key}` && styles.sendLabel]}>{action.label}</Text>
+                <Text style={[styles.label, compact && styles.compactLabel, primary && styles.sendLabel, host && styles.quietLabel]}>{label}</Text>
               </Pressable>
             );
           })}
-        </View>
-      </View>
+          {live ? <View style={compact && styles.liveEnd}><LiveStatus label={live} /></View> : null}
+        </View> : null}
+      </View> : null}
       {unknown ? (
         <Text style={styles.note}>{t("plugins.pageUnconfirmed")}</Text>
       ) : null}
@@ -687,6 +813,100 @@ function CardControls({
     </View>
   );
 }
+/** `owner/repo#N` (lower-case) of a GitHub pull request URL, the key the Host's PR status slots use. */
+function githubPrKeyOfUrl(url: string): string | undefined {
+  const m = /^https:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/.exec(url);
+  return m ? `${m[1].toLowerCase()}/${m[2].toLowerCase()}#${Number(m[3])}` : undefined;
+}
+/** A plugin link reads as "open github.com" instead of repeating the card's title. */
+function linkHost(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+    return ["http:", "https:"].includes(parsed.protocol) ? parsed.host.replace(/^www\./, "") : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** PR checks from the title bar's status (desktop host); the plugin's snapshot otherwise. */
+/** Check counts read like the desktop title bar's PR summary: same categories, icons and colours. */
+const CHECK_ICONS = { checksFailed: CircleX, checksPending: Clock, checksPassed: Check, checksSkipped: CircleMinus } as const;
+
+function PrStatusRow({ slot }: { slot: PrStatusSlot }) {
+  const { t } = useTranslation();
+  const { colors } = useTheme();
+  const styles = useThemedStyles(makeStyles);
+  if (!slot.status) {
+    if (!slot.fallback.length) return null;
+    return (
+      <View style={styles.statusRow}>
+        {slot.fallback.map((label, index) => (
+          <View key={`${index}:${label}`} style={styles.statusItem}>
+            <View style={[styles.statusDot, styles.dotWait]} />
+            <Text style={styles.note}>{label}</Text>
+          </View>
+        ))}
+      </View>
+    );
+  }
+  const items = prStatusItemKeys(slot.status);
+  if (!items.length) return null;
+  return (
+    <View style={styles.statusRow}>
+      {items.map(({ tone, key, count }) => {
+        if (key in CHECK_ICONS) {
+          const Icon = CHECK_ICONS[key as keyof typeof CHECK_ICONS];
+          const failed = key === "checksFailed";
+          return (
+            <View key={key} style={styles.statusItem}>
+              <Icon size={iconSize.xs} strokeWidth={iconStroke.regular}
+                color={failed ? colors.statusError : key === "checksPassed" ? colors.statusDone : colors.textSecondary} />
+              <Text style={styles.note}>
+                <Text style={styles.statusCount}>{count}</Text> {t(`plugins.prStatus.${key}`)}
+              </Text>
+            </View>
+          );
+        }
+        const color = key === "threadsOpen" ? styles.statusAccentText : tone === "bad" ? styles.statusBadText
+          : key === "mergeReady" || key === "merged" ? styles.statusGoodText : undefined;
+        return (
+          <Text key={key} style={[styles.note, color]}>
+            {t(`plugins.prStatus.${key}`, count === undefined ? undefined : { count })}
+          </Text>
+        );
+      })}
+    </View>
+  );
+}
+
+/** A long-running state (e.g. following a PR) with a breathing dot; still when motion is reduced. */
+function LiveStatus({ label }: { label: string }) {
+  const styles = useThemedStyles(makeStyles);
+  const pulse = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    let loop: Animated.CompositeAnimation | undefined;
+    let cancelled = false;
+    void AccessibilityInfo.isReduceMotionEnabled().then((reduced) => {
+      if (cancelled || reduced) return;
+      loop = Animated.loop(Animated.timing(pulse, { toValue: 1, duration: 1800, useNativeDriver: true }));
+      loop.start();
+    });
+    return () => { cancelled = true; loop?.stop(); };
+  }, [pulse]);
+  return (
+    <View style={styles.liveStatus} accessibilityRole="text" accessibilityLabel={label}>
+      <View style={styles.liveDotWrap}>
+        <Animated.View style={[styles.liveDot, styles.dotGood, {
+          opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.55, 0] }),
+          transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 2.6] }) }],
+        }]} />
+        <View style={[styles.liveDot, styles.dotGood]} />
+      </View>
+      <Text style={styles.note}>{label}</Text>
+    </View>
+  );
+}
+
 const makeStyles = (c: ThemeColors) =>
   StyleSheet.create({
     root: { gap: spacing.sm },
@@ -731,7 +951,37 @@ const makeStyles = (c: ThemeColors) =>
       textAlignVertical: "top",
     },
     actions: { flexDirection: "row", flexWrap: "wrap", justifyContent: 'flex-end', gap: spacing.sm },
+    compactActions: { justifyContent: "flex-start", alignItems: "center" },
+    compactButton: { minHeight: 36, paddingVertical: 0, paddingHorizontal: spacing.md },
+    compactLabel: { fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
+    liveEnd: { marginLeft: "auto" },
+    compactFooter: { gap: spacing.xs },
+    cardHeader: { gap: 2 },
+    cardTitle: { color: c.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.semibold },
+    titleRow: { flexDirection: "row", alignItems: "flex-start", alignSelf: "flex-start", maxWidth: "100%", gap: 6 },
+    titleText: { flexShrink: 1 },
+    // Marks are centred on the title's first line.
+    titleMark: { marginTop: (lineHeight.body - iconSize.md) / 2 },
+    titleIcon: { marginTop: (lineHeight.body - iconSize.sm) / 2 },
+    pressed: { opacity: 0.72 },
     sendButton: { backgroundColor: c.cta },
+    quietButton: { backgroundColor: "transparent", paddingHorizontal: spacing.sm },
+    quietLabel: { color: c.textSecondary },
+    toggleRow: { flexDirection: "row", alignItems: "center", gap: spacing.md, minHeight: 44 },
+    toggleText: { flex: 1, minWidth: 0 },
+    statusRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: spacing.md, rowGap: spacing.xs },
+    statusItem: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
+    statusDot: { width: 7, height: 7, borderRadius: radius.pill },
+    statusGoodText: { color: c.statusDone },
+    statusBadText: { color: c.errorText },
+    statusAccentText: { color: c.statusAccent },
+    statusCount: { fontWeight: fontWeight.medium, fontVariant: ["tabular-nums"] },
+    dotGood: { backgroundColor: c.statusDone },
+    dotBad: { backgroundColor: c.statusError },
+    dotWait: { borderWidth: 1.5, borderColor: c.textTertiary },
+    liveStatus: { flexDirection: "row", alignItems: "center", gap: spacing.sm, minHeight: 44, paddingHorizontal: spacing.xs },
+    liveDotWrap: { width: 7, height: 7 },
+    liveDot: { position: "absolute", width: 7, height: 7, borderRadius: radius.pill },
     sendLabel: { color: c.ctaText },
     countdownFill: { height: "100%", backgroundColor: c.textPrimary, opacity: 0.14 },
     sendNowButton: { backgroundColor: c.surface, overflow: "hidden", borderWidth: StyleSheet.hairlineWidth, borderColor: c.border },

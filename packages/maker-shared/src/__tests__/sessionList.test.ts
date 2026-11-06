@@ -1170,3 +1170,56 @@ describe('formatRemoteSessionSidebarTime', () => {
     expect(formatRemoteSessionSidebarTime('2025-12-30T12:00:00.000Z', now, t)).toBe('2 天');
   });
 });
+
+describe('project sections fold Windows path spelling', () => {
+  const now = new Date('2026-01-01T00:10:00.000Z').getTime();
+
+  it('keeps one section when Windows sessions report the same project differently', () => {
+    const sessions = [
+      session('win-backslash', { workingDir: 'C:\\Repo\\App' }),
+      session('win-forward', { workingDir: 'c:/repo/app' }),
+    ];
+    const sections = buildRemoteSessionSections(sessions, now);
+    const projectSections = sections.filter((section) => section.key.startsWith('project:'));
+    expect(projectSections).toHaveLength(1);
+    expect(projectSections[0].data).toHaveLength(2);
+    // 标题取组内首条会话的原始写法，不能被分组键的小写归一覆盖。
+    expect(projectSections[0].title).toBe('App');
+    expect(summarizeRemoteSessionOverview(sessions, new Map(), new Map()).projectCount).toBe(1);
+  });
+
+  it('folds a trailing separator and a projectDir/workingDir split into one section', () => {
+    const trailing = buildRemoteSessionSections(
+      [session('no-slash', { workingDir: '/repo/app' }), session('slash', { workingDir: '/repo/app/' })],
+      now,
+    );
+    expect(trailing.filter((section) => section.key.startsWith('project:'))).toHaveLength(1);
+
+    const mixed = buildRemoteSessionSections(
+      [
+        session('with-project-dir', { workingDir: 'C:\\Repo\\App', projectDir: 'C:\\Repo\\App' }),
+        session('cwd-only', { workingDir: 'c:/repo/app' }),
+      ],
+      now,
+    );
+    const mixedProjects = mixed.filter((section) => section.key.startsWith('project:'));
+    expect(mixedProjects).toHaveLength(1);
+    expect(mixedProjects[0].title).toBe('App');
+  });
+});
+
+describe('trim whitespace before grouping', () => {
+  const now = new Date('2026-01-01T00:10:00.000Z').getTime();
+
+  it('does not lose the section title when a session reports a padded working dir', () => {
+    const sessions = [
+      session('padded', { workingDir: ' /repo/app/ ' }),
+      session('plain', { workingDir: '/repo/app' }),
+    ];
+    const sections = buildRemoteSessionSections(sessions, now);
+    const projectSections = sections.filter((section) => section.key.startsWith('project:'));
+    expect(projectSections).toHaveLength(1);
+    expect(projectSections[0].title).toBe('app');
+    expect(summarizeRemoteSessionOverview(sessions, new Map(), new Map()).projectCount).toBe(1);
+  });
+});

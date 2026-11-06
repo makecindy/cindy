@@ -43,9 +43,16 @@ export function countUserExtraDirs(dirs: readonly string[]): number {
   return dirs.filter((dir) => !isLibraryExtraDirSlot(dir)).length;
 }
 
+/**
+ * 比较用形态：保留根目录(`/`、`D:/`，否则根会被比成空串、认不出它是任何目录的上级)；
+ * Windows 盘符 / UNC 路径不区分大小写，与 Main recent_workdirs 的身份口径一致。
+ */
 function normalizedPathForComparison(raw: string | null | undefined): string | null {
   const normalized = normalizeWorkingDirForStorage(raw);
-  return normalized ? stripTrailingPathSeparators(normalized) : null;
+  if (!normalized) return null;
+  return /^[A-Za-z]:\//.test(normalized) || normalized.startsWith('//')
+    ? normalized.toLowerCase()
+    : normalized;
 }
 
 /**
@@ -57,7 +64,7 @@ function isSelfOrSubdir(candidate: string, base: string): boolean {
   const b = normalizedPathForComparison(base);
   if (!c || !b) return false;
   if (c === b) return true;
-  return c.startsWith(b + '/');
+  return c.startsWith(b.endsWith('/') ? b : `${b}/`);
 }
 
 function isSameStoragePath(a: string, b: string): boolean {
@@ -115,8 +122,59 @@ export interface PickAndAddExtraDirOptions {
 }
 
 /**
+ * 「添加目录」最近列表里可以直接加的目录：去掉已不在磁盘上的、已添加的(含另一授权组)，
+ * 以及当前工作目录自身 / 子目录(加了也会被忽略)与上级目录(范围过大，走系统选择器并二次确认)。
+ */
+export function selectableRecentExtraDirs<T extends { path: string; missing?: boolean }>(
+  options: readonly T[],
+  { addedDirs, workingDir }: { addedDirs: readonly string[]; workingDir?: string | null },
+): T[] {
+  return options.filter(
+    (option) =>
+      !option.missing &&
+      !hasExtraDir(addedDirs, option.path) &&
+      !(
+        workingDir &&
+        (isSelfOrSubdir(option.path, workingDir) || isParentOrAncestor(option.path, workingDir))
+      ),
+  );
+}
+
+export interface AddRecentWritableDirOptions {
+  /** recent_workdirs 里原样保存的路径；Main 只认这个形态。 */
+  path: string;
+  writableDirs: readonly string[];
+  /** 另一授权组中的目录；用于总上限。 */
+  otherDirs?: readonly string[];
+  writableGrantScope: string;
+  onChange: (next: string[]) => void | Promise<void>;
+}
+
+/**
+ * 把最近项目目录加为可写目录：先由 Main 核对它在最近列表里并签发任务授权，再保存。
+ * 授权失败直接抛出(调用方展示)，不保存。
+ */
+export async function addRecentWritableDir({
+  path,
+  writableDirs,
+  otherDirs = [],
+  writableGrantScope,
+  onChange,
+}: AddRecentWritableDirOptions): Promise<void> {
+  if (countUserExtraDirs(writableDirs) + countUserExtraDirs(otherDirs) >= MAX_EXTRA_DIRS) return;
+  const normalized = normalizeWorkingDirForStorage(path);
+  if (!normalized || hasExtraDir([...writableDirs, ...otherDirs], normalized)) return;
+  await window.electronAPI.dialog.authorizeRecentWritableDirectory({
+    directory: path,
+    writableGrantScope,
+  });
+  await onChange([...writableDirs, normalized]);
+}
+
+/**
  * 打开系统目录选择器并把结果并入 extraDirs(带 UX 预判)。
  * 上限判断由调用方负责(达到 MAX_EXTRA_DIRS 时入口应 disabled)。
+ * 返回是否真的加入了目录：取消选择、重复、被忽略或父目录确认被拒都返回 false。
  */
 export async function pickAndAddExtraDir({
   extraDirs,
@@ -126,8 +184,8 @@ export async function pickAndAddExtraDir({
   onChange,
   confirm,
   parentDirectoryConfirm,
-}: PickAndAddExtraDirOptions): Promise<void> {
-  if (countUserExtraDirs(extraDirs) + countUserExtraDirs(otherDirs) >= MAX_EXTRA_DIRS) return;
+}: PickAndAddExtraDirOptions): Promise<boolean> {
+  if (countUserExtraDirs(extraDirs) + countUserExtraDirs(otherDirs) >= MAX_EXTRA_DIRS) return false;
   let picked: string | null = null;
   try {
     const r = await window.electronAPI.dialog.showOpenDirectory(
@@ -136,19 +194,19 @@ export async function pickAndAddExtraDir({
     picked = r?.success ? r.path : null;
   } catch (e) {
     log.warn('showOpenDirectory failed', { error: String(e) });
-    return;
+    return false;
   }
   const normalizedPicked = normalizeWorkingDirForStorage(picked);
-  if (!normalizedPicked) return;
+  if (!normalizedPicked) return false;
 
   // UX 预判: 完全重复 / 是 workingDir 子目录 → 静默忽略(main validator 也会兜)。
-  if (hasExtraDir([...extraDirs, ...otherDirs], normalizedPicked)) return;
+  if (hasExtraDir([...extraDirs, ...otherDirs], normalizedPicked)) return false;
   if (workingDir && isSelfOrSubdir(normalizedPicked, workingDir)) {
     log.debug('add: silently skipped (subdir of workingDir)', {
       picked: normalizedPicked,
       workingDir,
     });
-    return;
+    return false;
   }
 
   // 父目录 / 祖先警告 — 通过则继续。
@@ -159,8 +217,9 @@ export async function pickAndAddExtraDir({
       confirmText: parentDirectoryConfirm.confirmText,
       cancelText: parentDirectoryConfirm.cancelText,
     });
-    if (!ok) return;
+    if (!ok) return false;
   }
 
   await onChange([...extraDirs, normalizedPicked]);
+  return true;
 }

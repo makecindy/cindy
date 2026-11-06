@@ -3,3 +3,7 @@
 "Computer" = "電腦";
 "Automatic" = "自動";
 "The computer that answered last" = "優先上次回應的電腦";
+"Account" = "帳號";
+"Choose which computer this widget shows, which accounts come first and which to hide. Other accounts, including ones added later, follow in that computer's order." = "選擇這個小工具顯示哪台電腦的資料、哪些帳號排在前面、哪些隱藏。其餘帳號（包括以後新加的）按那台電腦上的順序排在後面。";
+"Accounts first" = "排在前面的帳號";
+"Hidden accounts" = "隱藏的帳號";

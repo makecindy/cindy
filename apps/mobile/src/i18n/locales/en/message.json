@@ -450,5 +450,32 @@
       "provider": "API provider",
       "unknown": "Channel not recorded"
     }
+  },
+  "attachmentPreview": {
+    "more": "More actions",
+    "retry": "Retry",
+    "image": "Image",
+    "video": "Video",
+    "file": "File",
+    "close": "Close",
+    "reset": "Reset view",
+    "open": "Open preview",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "fit": "Fit to window",
+    "actualSize": "Actual size (1:1)",
+    "save": "Save original",
+    "share": "Share",
+    "previous": "Previous attachment",
+    "next": "Next attachment",
+    "password": "Enter the PDF password",
+    "find": "Find in document",
+    "matches": "{{count}} matching pages",
+    "previousPage": "Previous page",
+    "nextPage": "Next page",
+    "redo": "Redo",
+    "wrap": "Wrap lines",
+    "lineNumbers": "Line numbers",
+    "rendered": "View document"
   }
 }

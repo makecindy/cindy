@@ -1,3 +1,4 @@
+import { prNumberLabel } from '@cindy/maker-shared';
 /**
  * GitContextBadge — 会话顶栏的 git 上下文徽标(session-git-pr-context)。
  *
@@ -50,7 +51,7 @@ import { useSessionGitContext } from '@/hooks/useSessionGitContext';
 import { GithubSetupDialog } from './GithubSetupDialog';
 import { prStatusKey, MAX_STATUS_QUERIES } from '@/lib/prStatus';
 import {
-  PR_STATUS_COLOR,
+  prStatusColor,
   PR_STATUS_ICON,
   pickBranchLabel,
   prFailureCopyKey,
@@ -231,20 +232,29 @@ function PrChip({
   };
 
   const kind: PrStatusKind | null = status?.ok ? status.status : null;
+  const conflicts =
+    status?.ok && status.conflicts === true && (kind === 'open' || kind === 'draft');
   const Icon = kind ? PR_STATUS_ICON[kind] : GitPullRequest;
-  const color = kind ? PR_STATUS_COLOR[kind] : 'var(--text-tertiary)';
+  const color = prStatusColor(kind, status?.ok ? status.conflicts : null);
   const guidance = prGuidanceFor(status, { remoteHostId, deviceLinkDeviceId, readOnly });
-  const failureCopyKey = prFailureCopyKey(status);
+  const failureCopyKey = prFailureCopyKey(status, { remoteHostId, deviceLinkDeviceId, readOnly });
 
   const statusLine = kind
     ? t(`ccAgent.gitContext.pr.status.${kind}`)
     : failureCopyKey
-      ? t(failureCopyKey)
+      ? prRef.provider === 'gitlab'
+        ? t(failureCopyKey, { host: prRef.host })
+        : t(failureCopyKey)
       : t('ccAgent.gitContext.pr.statusNotFetched');
   // Installation and login are host-owned and independent of the task composer.
   const ariaLabel = guidance
     ? t(`ccAgent.gitContext.pr.guidance.${guidance}.aria`, { number: prRef.prNumber })
-    : t('ccAgent.gitContext.pr.openAria', { number: prRef.prNumber });
+    : t(
+        prRef.provider === 'gitlab'
+          ? 'ccAgent.gitContext.pr.gitlab.openAria'
+          : 'ccAgent.gitContext.pr.openAria',
+        { number: prRef.prNumber },
+      );
 
   const handleClick = () => {
     closeSummary();
@@ -296,7 +306,9 @@ function PrChip({
           <button
             ref={triggerRef}
             type="button"
-            aria-label={ariaLabel}
+            aria-label={
+              conflicts ? `${ariaLabel} · ${t('ccAgent.gitContext.pr.conflicts')}` : ariaLabel
+            }
             data-pr-guidance={guidance ?? undefined}
             data-pr-chip=""
             style={WINDOW_NO_DRAG_STYLE}
@@ -371,7 +383,7 @@ function PrChip({
               )}
             >
               <Icon size={12} strokeWidth={1.5} className="shrink-0" style={{ color }} />
-              <span>#{prRef.prNumber}</span>
+              <span>{prNumberLabel(prRef)}</span>
               {unresolved !== null && unresolved > 0 && (
                 <span
                   className="inline-flex items-center gap-0.5 text-10 font-medium leading-none text-[var(--status-bar-accent)]"
@@ -443,7 +455,12 @@ function PrChip({
             align="start"
             collisionPadding={8}
             className={cn('w-[320px] max-w-[calc(100vw-16px)] p-4', className)}
-            aria-label={t('ccAgent.gitContext.pr.summaryAria', { number: prRef.prNumber })}
+            aria-label={t(
+              prRef.provider === 'gitlab'
+                ? 'ccAgent.gitContext.pr.gitlab.summaryAria'
+                : 'ccAgent.gitContext.pr.summaryAria',
+              { number: prRef.prNumber },
+            )}
           >
             <div className="flex items-start gap-2">
               <a
@@ -457,7 +474,7 @@ function PrChip({
                 <span className="flex items-center gap-1 text-12 text-[var(--text-secondary)]">
                   <Icon size={12} strokeWidth={1.5} className="shrink-0" style={{ color }} />
                   <span className="min-w-0 break-words group-hover:underline">
-                    {prRef.owner}/{prRef.repo} #{prRef.prNumber}
+                    {prRef.owner}/{prRef.repo} {prNumberLabel(prRef)}
                     {status?.ok && <> · {statusLine}</>}
                   </span>
                 </span>
@@ -498,8 +515,18 @@ function PrChip({
                 )}
               </div>
             )}
-            {((unresolved !== null && unresolved > 0) || checks !== null) && (
+            {(conflicts || (unresolved !== null && unresolved > 0) || checks !== null) && (
               <div className="mt-3 space-y-3 border-t border-[var(--border-default)] pt-3 text-13">
+                {conflicts && (
+                  <div className="flex items-center justify-between gap-3 whitespace-nowrap">
+                    <span className="text-[var(--text-primary)]">
+                      {t('ccAgent.gitContext.pr.merge')}
+                    </span>
+                    <span className="shrink-0 font-medium text-[var(--warning-fg)]">
+                      {t('ccAgent.gitContext.pr.conflicts')}
+                    </span>
+                  </div>
+                )}
                 {unresolved !== null && unresolved > 0 && (
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-[var(--text-primary)]">

@@ -13,3 +13,5 @@ export { registerSshReloadConfigTool } from './reload_config.js';
 
 export { classifySshError, resolveHost, truncateOutput, wrapCwd } from './_shared.js';
 export type { SshErrorCode } from './_shared.js';
+
+export { registerSshManageHostTools } from './manage_host.js';

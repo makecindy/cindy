@@ -59,6 +59,7 @@ async function resolveBinary(): Promise<string> {
     digest.update(callerSource);
     if (process.platform === 'darwin') digest.update(process.execPath).update('dev-caller-v1');
     if (process.platform === 'win32') {
+      digest.update(await fs.readFile(path.join(sourceRoot, '.cargo', 'config.toml')));
       digest.update(await fs.readFile(path.join(sourceRoot, 'windows-input', 'src', 'desktop.rs')));
       digest.update(await fs.readFile(path.join(sourceRoot, 'windows-input', 'src', 'privacy.rs')));
       digest.update(
@@ -103,6 +104,8 @@ async function resolveBinary(): Promise<string> {
           'build',
           '--release',
           '--locked',
+          '--config',
+          path.join(sourceRoot, '.cargo', 'config.toml'),
           '--manifest-path',
           manifest,
           '--target-dir',

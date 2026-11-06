@@ -1,4 +1,34 @@
 {
+  "sharedTaskRecovery": {
+    "title": "无法在原电脑上恢复任务",
+    "description": "可以选择其他电脑或供应商，通过上下文交接继续。原消息保留，但切换不会迁移原电脑上的完整运行状态。",
+    "choose": "选择其他电脑",
+    "cancel": "留在这里",
+    "stage": {
+      "owner": "失败环节：联系分享所在电脑。",
+      "allocation": "失败环节：为原执行电脑重新分配授权。",
+      "executor": "失败环节：确认执行电脑的 device-link 连接。",
+      "capability": "失败环节：检查执行电脑的能力。",
+      "authorization": "失败环节：安装执行授权。",
+      "unknown": "未收到具体失败环节。"
+    },
+    "reason": {
+      "offline": "本次联系的电脑被报告为离线。其他任务可能运行在不同电脑上。",
+      "timeout": "请求超时；具体正在联系哪个服务请看失败环节。尚不能确定是直连还是中继出了问题。",
+      "relay": "device-link 连接尚未就绪或已关闭。仅直连失败时，通常会自动改走中继。",
+      "denied": "访问被拒绝或远程控制已关闭，重试不能绕过此限制。",
+      "model": "此任务不允许使用该分享供应商或模型。",
+      "budget": "供应商报告了用量上限或配额不足。切换电脑后也可能使用同一份配额。",
+      "capacity": "任务或连接资源已达容量上限。可以关闭闲置任务或选择其他电脑。",
+      "unsupported": "执行电脑不支持此分享任务所需的能力。",
+      "authorization": "无法安装执行授权。这不能证明执行电脑已离线。",
+      "history": "原任务位置无法使用，不能把原生历史直接放到另一台电脑上打开。",
+      "policy": "分享用量规则要求经分享所在电脑实时核验，直连执行无法落实此规则；这不代表余额耗尽。",
+      "unknown": "分享所在电脑未提供具体原因，尚不能确认离线、配额或直连/中继的状态。",
+      "rate": "服务正限流或拥塞，需要等待冷却。切换电脑也可能受到同一个限制。",
+      "service": "连接分享授权服务失败，或服务返回了失败；尚未确认执行电脑离线。"
+    }
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "刷新配额",
@@ -133,7 +163,7 @@
   "taskActionConfirmation": {
     "title": "确认任务操作",
     "once": "请核对下面的目标、动作和完整内容。允许仅对本次操作生效。",
-    "remove": "这会删除自动化。请核对目标，仅允许这一次。",
+    "remove": "这会释放自动化的接收地址。请核对目标，仅允许这一次。",
     "permission": "这会代你回答另一个任务的授权请求。请核对操作，仅允许这一次。",
     "resume": "这会恢复已暂停的执行。请核对目标，仅允许这一次。",
     "command": "这会在电脑上保存或运行命令，执行时不经过 Agent 的工具审批。请核对命令和工作目录，仅允许这一次。",
@@ -995,8 +1025,14 @@
     },
     "saveFileName": "截图",
     "saveFailed": "未能保存截图",
+    "translation": {
+      "action": "翻译成{{language}}",
+      "targetLanguage": "翻译目标语言",
+      "followUi": "跟随界面语言",
+      "saveFailed": "未能保存语言选择，请重新选择。"
+    },
     "prompt": {
-      "translate": "请识别这张截图中的文字并翻译成简体中文，保留原有的段落和列表结构，只输出译文。如果原文已经是中文，就翻译成英文。",
+      "translate": "自动识别截图中的语言，将文字翻译成{{language}}，保留原有的段落、列表和表格。已经是目标语言的内容保持原样；混合语言内容只翻译其他语言。如果全部文字已是目标语言，简短说明即可，不要改译成其他语言。其余情况只输出译文。",
       "explain": "请解释这张截图的内容。如果是报错，说明原因和解决办法；如果是图表、代码或界面，说明它在表达什么、有哪些要点。",
       "extract": "请把这张截图中的文字原样提取出来，保留原有的换行、段落和列表；表格用 Markdown 表格输出。只输出提取的文字。"
     },
@@ -1018,11 +1054,19 @@
       "copied": "已复制",
       "copyFailed": "复制失败，可以重试或保存文件。",
       "scrollHint": "在选区内向上或向下滚动，也可点击自动滚动",
-      "recordHint": "在预览上绘制标注，标注会进入录像。不录制声音",
+      "recordHint": "在预览上绘制标注，标注会进入录像。",
       "format": "格式",
       "videoFormat": "视频 (WebM)",
-      "prepareHint": "点击开始后倒计时 3 秒，不录制声音。",
+      "prepareHint": "点击开始后倒计时 3 秒。",
       "countdown": "{{count}} 秒后开始录制",
+      "systemAudio": "扬声器",
+      "microphone": "麦克风",
+      "audioHint": "选择声源后开始录制，可同时开启",
+      "preparingAudio": "正在准备声音…",
+      "systemAudioFailed": "无法录入扬声器声音，请检查系统权限或关闭此声源",
+      "microphoneFailed": "无法使用麦克风，请检查权限和输入设备或关闭此声源",
+      "audioFailed": "无法开始录音，请检查设备或关闭声音后录制",
+      "audioInterrupted": "声音已中断，请结束录制以保存已录内容",
       "countdownHint": "即将开始，按 Esc 取消。",
       "annotate": "标注",
       "finishing": "正在完成…",
@@ -1901,6 +1945,8 @@
       "add": {
         "title": "添加一台远端机器",
         "alias": "别名",
+        "aliasHint": "1–128 个字符，仅限英文字母、数字及 . _ @ : -；中文名称请填写在「显示名」。",
+        "aliasInvalid": "别名包含不支持的字符或超过 128 个字符，请按上述规则修改。",
         "displayName": "显示名",
         "displayNamePlaceholder": "可选，仅在 Cindy 中显示",
         "hostname": "主机名",
@@ -2305,6 +2351,9 @@
     "agentIsland": {
       "title": "灵动岛",
       "unsupported": "灵动岛需要 macOS 14 或更高版本。",
+      "subtleRemindersLabel": "轻提醒",
+      "subtleRemindersHint": "有新消息、待回复事项或错误时，不向下弹出通知卡片，通过图标变化提示。点击灵动岛可查看完整任务列表。",
+      "subtleRemindersFailed": "未能保存提醒设置，请重试。",
       "enableLabel": "显示灵动岛",
       "enableHint": "在屏幕顶部显示正在运行、待交互和未读完成的任务。启用后会抑制同类系统通知，避免重复打扰。",
       "enableAria": "切换灵动岛",
@@ -2618,6 +2667,13 @@
       "storage": {
         "dialogueDirectoryTitle": "对话工作区",
         "dialogueDirectoryDescription": "仅用于新建任务，已有文件保持原位置。",
+        "projectsRootTitle": "新项目存放位置",
+        "projectsRootInferred": "推荐",
+        "projectsRootDefault": "默认",
+        "projectsRootChoose": "更改目录",
+        "projectsRootReset": "恢复推荐位置",
+        "projectsRootDescription": "在任务里新建项目时，项目文件夹放在这里。未设置时，按你现有项目所在的文件夹推荐。",
+        "projectsRootFailed": "无法更新新项目存放位置",
         "dialogueDirectoryOpen": "打开目录",
         "dialogueDirectoryChoose": "更改目录",
         "dialogueDirectoryReset": "恢复默认位置",
@@ -3588,6 +3644,8 @@
         "simpleSubtitle": "多种模型，统一账户结算。"
       },
       "custom": {
+        "nameSearchUnavailable": "此供应商当前不可用，可继续配置自定义端点或重新搜索。",
+        "nameSearchHint": "也可以保留当前名称，继续配置自定义端点。",
         "tag": "自定义",
         "editAria": "编辑连接设置",
         "deleteAria": "删除",
@@ -3724,7 +3782,12 @@
           "stop": "停止测试"
         },
         "fetch": {
-          "button": "获取模型列表",
+          "selectedCount": "已选 {{count}} 个模型",
+          "availableCount": "已获取 {{count}} 个可选模型",
+          "notFetched": "尚未获取模型列表",
+          "failedRetry": "获取模型列表失败，请重试",
+          "retryFailed": "本次获取失败，请重试",
+          "button": "获取并选择模型",
           "fetching": "正在获取模型…",
           "needBaseUrl": "请先填写基础 URL",
           "failed": "获取模型列表失败",
@@ -3852,6 +3915,8 @@
         "disabledGroup": "已停用",
         "enableAllModels": "全部启用",
         "priceOverride": {
+          "resetShort": "重置",
+          "referenceDetails": "参考价详情",
           "menu": "编辑 API 估价",
           "title": "{{model}} API 估价",
           "description": "仅用于估算你自己的 API 或订阅通道用量，不会改变供应商的实际账单。",
@@ -3903,6 +3968,7 @@
             "hint": "应用于 {{agent}} 的图片连接。仅声明接口实际支持的能力，保存后重新打开 Art 详情。"
           },
           "capabilityHint": "优先使用当前供应商声明的能力；未声明时，图片能力参考模型名称。",
+          "imageInputDefault": "{{value}}（默认）",
           "imageInput": "图片输入",
           "imageInputMixed": "各引擎不同",
           "supported": "支持",
@@ -5016,7 +5082,7 @@
         "ariaLabel": "选择第二备选辅助模型"
       },
       "emptySlot": "未选择",
-      "customHint": "轻量文本按所选顺序尝试；内置审核不可用时，也用于自动审核兜底。所选供应商会收到审核上下文，包括消息与引用内容、任务与操作详情及拦截记录、身份与权限、文件路径和操作系统。",
+      "customHint": "轻量文本按所选顺序尝试；内置审核不可用时，也用于自动审核兜底。所选供应商会收到审核上下文，包括消息与引用内容、Agent 的公开文字（仅作参考）、任务与操作详情及拦截记录、身份与权限、文件路径和操作系统。",
       "signInHint": "登录 Cindy 后可使用自动推荐；未登录时请在自定义中选择已配置的其他供应商模型。",
       "chooseAgent": "选择 Agent",
       "backToAgents": "返回选择 Agent",
@@ -5603,6 +5669,7 @@
           "checking": "正在检查更新…",
           "upToDate": "已是最新版本",
           "checkFailed": "检查更新失败",
+          "rateLimited": "GitHub 更新接口已限流，稍后再试",
           "lastChecked": "上次检查 {{time}}",
           "check": "检查更新",
           "retry": "重试",
@@ -6009,8 +6076,10 @@
       "accessRevokedByPeer": "访问权限已被撤销，需对方在选项中恢复",
       "deviceControlToggleAria": "切换是否控制 {{name}}",
       "myDevices": {
-        "controlIt": "我控制它",
-        "allowInbound": "允许它控制本机",
+        "iCan": "我可以",
+        "itCan": "它可以",
+        "controlIt": "控制它",
+        "controlThisDevice": "控制本机",
         "allowInboundAria": "切换是否允许 {{name}} 控制本机",
         "peerControlOff": "对方未允许远程控制",
         "masterOffHint": "需先开启上方总开关",
@@ -6658,8 +6727,6 @@
             "task": "任务键",
             "action": "动作键"
           },
-          "lightingLimit": "固件最多给板上顺序的前 6 颗任务键独立亮灯。多出来的任务键仍能切换任务。",
-          "unlitKey": "这颗键排在前 6 颗之后，没有独立状态灯。",
           "taskHint": "推荐使用透明键帽，任务状态会有不同颜色的灯效显示。"
         },
         "commandKeys": {
@@ -7468,6 +7535,8 @@
         "cancel": "取消",
         "updateNeedsConsent": "需确认新权限",
         "targetIdentity": "安装位置：{{name}}",
+        "localTarget": "本地开发版",
+        "localOidcUnavailable": "此开发副本不会获得企业身份。需要自测时，请通过 Forge 明确安装到当前企业。",
         "personalTarget": "个人",
         "sourceChanged": "这次更新会改为本地来源。旧账号和数据会隔离保存，需要重新连接账号。",
         "otherCopies": "已有 {{count}} 份同名插件；它们不会被覆盖或停用。另装的插件需要单独连接账号。"
@@ -7537,6 +7606,9 @@
         "agentObserve": "可查看本机项目的任务列表和状态",
         "agentObserveDetail": "可查看已登记本机项目中任务的标题、Agent 类型、归档情况和状态（运行中、待处理、最近活动时间），并在主窗口打开某个任务。不能读取消息、计划或文件，也不能发送消息或修改任务。",
         "agentObserveRequest": "确认任务查看权限",
+        "agentCompanions": "可查看伙伴、状态和最近对话",
+        "agentCompanionsDetail": "可查看所有伙伴（包括在你其他电脑上运行的伙伴）的名称、简介、头像和状态（工作中、等你处理、空闲、离线），每位伙伴正在做哪类事（如思考、执行工具），等你处理的请求内容（提问、要执行的命令、计划，和对话里看到的一样），以及伙伴主对话里最近的对话（最多 50 条你说的话和伙伴的回复，不含工具过程），并在主窗口打开伙伴的对话。同时获准投递消息时，可以把你在插件里给的回答交给伙伴：回答提问、拒绝请求、对计划提意见；允许执行仍要你在 Cindy 自己的确认框里点。不能读取文件，也看不到工具过程和思考内容。",
+        "agentCompanionsRequest": "确认伙伴查看权限",
         "agentHiddenTasks": "可创建不显示在任务列表里的后台任务",
         "agentHiddenTasksDetail": "本插件创建的任务可以不出现在任务列表、搜索和通知里。你可以随时在插件详情的「后台任务」中查看、打开，或显示到任务列表；卸载插件时这些任务会恢复显示。",
         "agentErrand": "可以新建任务、执行工作并读取结果",
@@ -7551,6 +7623,8 @@
         "nodeResident": "Node 程序可常驻后台",
         "nodeResidentDetail": "插件启用期间会一直运行；停用、更新、卸载或退出 Cindy 时关闭。",
         "tool": "工具「{{name}}」",
+        "toolAutoApprove": "Agent 调用工具「{{name}}」时无需确认",
+        "toolAutoApproveDetail": "Agent 调用这个工具时直接执行，不再逐次询问或审阅。",
         "command": "对话指令 ${{command}}",
         "panelLeft": "面板「{{title}}」· 显示在侧边栏",
         "panelTab": "面板「{{title}}」· 插件页内打开",
@@ -7616,9 +7690,13 @@
         "workspaceDetail": "它发起请求时，由你亲手选择文件夹，或在确认卡上看到完整路径后再决定；它正在处理你发起的调用时，当前任务工作目录内的子文件夹可直接使用，不再单独确认。文件夹已有任务时直接复用，不重复创建。创建的只是空任务，不会自动开始运行。",
         "sessionContext": "可获知当前任务正在使用的项目文件夹位置",
         "sessionContextDetail": "只在它为当前任务干活时告知位置信息(任务编号与项目文件夹路径)，不包含文件内容，也不因此获得文件访问权。",
+        "liveScreen": "在手机上查看与操作设备画面",
+        "liveScreenDetail": "通过远程桌面，你的手机可以查看它提供的设备画面（例如模拟器）并直接触控、按键和输入文字。只在你从手机打开时连接，不会打开电脑的其他内容。",
         "preview": "可在右侧栏浏览器中打开以下网站的预览页面",
         "previewDetail": "只能打开下方列出的网站；每次打开都会提示是哪个插件打开的。",
         "browserExtension": "可让它自带的浏览器扩展连接到 Cindy",
+        "browserNativeHost": "可注册浏览器连接“{{name}}”",
+        "browserNativeHostDetail": "注册的程序在沙箱外运行，按你的系统账号与系统授权访问本机。",
         "browserExtensionDetail": "只有下方列出的扩展能连接；连接经本机回环地址，由 Cindy 把扩展发起的请求转交给这个插件。",
         "browserExtensionPageControlDetail": "只有下方列出的扩展能连接。该扩展还实现页面控制：选择「我的浏览器」后，Agent 可经它读取和操作你正在使用的浏览器页面。",
         "nodeChildSpawn": "Node 程序可请宿主再启动包内申报过的子进程",
@@ -7701,6 +7779,7 @@
         "customSlotAsleep": "插件已停用，启用后这里将显示它的设置界面。",
         "descriptionExpand": "展开",
         "descriptionCollapse": "收起",
+        "readmeTitle": "介绍",
         "useAction": "使用",
         "chatAction": "对话",
         "enabledLabel": "已启用",
@@ -7713,6 +7792,18 @@
         "settingsTitle": "{{name}} 设置",
         "settingsUnavailableUntilRestore": "恢复插件后可继续使用这项配置。",
         "oauthScopeStale": "当前授权未包含插件新增权限，请重新连接补齐授权。",
+        "localDevelopment": "本地开发版",
+        "publicInstall": "公开市场",
+        "organizationInstall": "企业：{{name}}",
+        "browserUse": "使用此浏览器扩展",
+        "browserActivated": "已选择此浏览器扩展",
+        "browserActivationFailed": "未能选择此扩展，请确认插件已启用，并完成连接切换确认。",
+        "browserSwitchTitle": "切换浏览器扩展连接？",
+        "browserSwitchMessage": "将此浏览器连接交给“{{name}}”？",
+        "browserSwitchDetail": "实例：{{instance}}\n注册名：{{host}}\n这会替换当前注册，扩展将连接到此插件。",
+        "portReclaimTitle": "结束占用回调端口的程序？",
+        "portReclaimMessage": "“{{name}}”需要使用端口 {{port}}，是否结束以下程序？",
+        "portReclaimDetail": "结束程序可能中断其工作或丢失未保存的数据。取消后可自行关闭占用程序。",
         "configurationTitle": "配置",
         "sidebarEntryTitle": "导航入口",
         "showInSidebar": "显示在左侧导航",
@@ -8244,7 +8335,8 @@
       "dialog": {
         "createTitle": "添加 MCP 服务器",
         "editTitle": "编辑 MCP 服务器",
-        "desc": "仅支持远程 http / sse 型 MCP。保存后新建或重启的 Agent 会话即可调用，正在运行的 Agent 会话不受影响。"
+        "desc": "仅支持远程 http / sse 型 MCP。保存后新建或重启的 Agent 会话即可调用，正在运行的 Agent 会话不受影响。",
+        "teammateDesc": "仅支持远程 http / sse 型 MCP。保存后伙伴会把它加入自己的工具，在本对话的下一条消息起即可使用，无需新建任务。"
       },
       "fields": {
         "name": "显示名称",
@@ -8278,6 +8370,26 @@
         "title": "删除 “{{name}}”？",
         "message": "删除后新建或重启的 Agent 会话将不再加载该 MCP。",
         "confirm": "删除"
+      },
+      "duplicates": {
+        "title": "疑似重复的 MCP 连接",
+        "description": "Cindy 与 Claude Code 的用户配置中有相同或相近的连接，可能重复加载工具。请选择保留的来源；不确定时可以都保留。",
+        "scope": "仅影响这台电脑上 Cindy 的普通 Claude Code 任务，下次 Agent 启动时生效。不会修改 Claude Code 配置。相互关联的重复连接共用选择。",
+        "unavailable": "未能完整读取配置，暂未更改连接。返回此页面时会重新检查。",
+        "endpoint": "连接地址相同",
+        "similar": "连接地址相近",
+        "keep": {
+          "both": "本组都保留"
+        },
+        "selected": {
+          "cindy": "已选择保留 Cindy 连接",
+          "claude": "已选择保留 Claude Code 连接",
+          "both": "已保留本组两边的连接"
+        },
+        "reset": "重新选择",
+        "saveFailed": "未能保存，连接可能已变化。请根据当前列表重新选择。",
+        "keepThis": "保留此连接",
+        "keepThese": "保留这些连接"
       }
     },
     "remotePermission": {
@@ -10182,6 +10294,7 @@
       "continueEditing": "继续编辑"
     },
     "profileSaveFailed": "伙伴设置未能保存，变更没有生效。",
+    "profileSaveOffline": "无法连接伙伴所在的电脑，请恢复连接后重新保存。",
     "modelLabel": "模型",
     "modelUnavailable": "{{model}}（当前不可用）",
     "codexAutomaticCompact": "Codex 伙伴会自己压缩上下文，/new 也会保留当前任务。只有确实需要从头开始时，才去开新任务。",
@@ -10512,6 +10625,11 @@
           "NETWORK_ERROR": "{{name}}无法回复：网络连接失败。\n请检查网络或 Proxy 后重新发送。",
           "RUNTIME_TIMEOUT": "{{name}}本次回复超时。\n请重新发送消息，或选择其他可用模型。",
           "RUNTIME_ERROR": "{{name}}这次没能回复。\n请重新发送消息；如果仍失败，请查看日志并反馈问题。"
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
+          "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。"
         }
       },
       "settings": {
@@ -10581,7 +10699,8 @@
         "lifecycleUnavailable": "当前服务器或电脑暂不支持此操作。",
         "groupDissolved": "群聊已解散，仍可查看有权访问的历史消息。",
         "lastOwner": "请先转让群主或解散群聊，再退出。",
-        "allBotsMentionDisabled": "群主尚未开启 @所有伙伴。"
+        "allBotsMentionDisabled": "群主尚未开启 @所有伙伴。",
+        "turnAlreadyStarted": "这位伙伴已开始执行，不能跳过"
       },
       "organizer": "负责人",
       "plan": {
@@ -10612,7 +10731,17 @@
         "stepSpoken": "说完了",
         "allTurns_one": "共 {{count}} 位",
         "allTurns_other": "共 {{count}} 位",
-        "foldTurns": "收起"
+        "foldTurns": "收起",
+        "stepQueued": "等待开始",
+        "stepExecuting": "运行中",
+        "stepSkipped": "已跳过",
+        "skippingTurn": "跳过中…",
+        "queueWaiting": "等你点继续",
+        "skipTurnLabel": "跳过 {{name}}",
+        "queueEnded": "本轮结束",
+        "talkTitle": "依次说说看法",
+        "talkPending": "待开始",
+        "skipTurn": "跳过"
       },
       "speaking": {
         "planning": "正在安排…"
@@ -10703,6 +10832,18 @@
         "reactorFormer": "{{name}}（已不在群中）",
         "reactorsUnavailable_one": "另有 {{count}} 位成员的信息暂不可用",
         "reactorsUnavailable_other": "另有 {{count}} 位成员的信息暂不可用",
+        "readStatusSent": "已发送",
+        "readStatusRead": "已读",
+        "readersCount_one": "{{count}} 人已读",
+        "readersCount_other": "{{count}} 人已读",
+        "readersView": "查看已读",
+        "readersTooLarge": "群成员太多，暂不显示已读名单",
+        "readersNone": "无人已读",
+        "readersLoading": "加载中…",
+        "readersFailed": "无法加载已读名单",
+        "readersHeading": "已读",
+        "readersOfTotal": "已读 {{read}}/{{total}}",
+        "readerUnknown": "未知成员",
         "invite": "邀请加入群聊",
         "groupCreated": "群聊已创建",
         "inviteFriends": "邀请朋友加入，一起使用伙伴",
@@ -10735,6 +10876,17 @@
         "copyFailed": "复制失败，请选中链接手动复制。",
         "createDescription": "伙伴可以选，也可以先建群，再邀请朋友加入。",
         "settings": {
+          "notifications": {
+            "title": "消息通知",
+            "all": "所有消息",
+            "mentions": "仅 @我",
+            "none": "关闭通知",
+            "allHint": "群聊消息和已关注话题的新回复都会提醒",
+            "mentionsHint": "有人 @你或 @所有人时提醒，分工待处理仍会提醒",
+            "noneHint": "关闭本群所有系统提醒，未读消息仍会保留",
+            "saving": "正在保存…",
+            "saveFailed": "未能保存通知设置，请重试"
+          },
           "name": "群名称",
           "topic": "群主题",
           "description": "群简介",
@@ -10908,22 +11060,112 @@
       "skill": "技能",
       "mcp": "MCP",
       "toolset": "内置工具",
-      "unavailable": "不可用",
       "empty": "没有匹配的能力",
-      "accessHint": "逐项选择伙伴可使用的内置工具、MCP 与技能。更改从下一次请求生效，也适用于已授权的群内请求。",
-      "inheritedHint": "当前跟随本机已开启的工具。关闭任意一项后，此列表只使用你选择的项目。",
-      "selectedHint": "此列表中，伙伴只使用已选中的项目。",
-      "personalHint": "伙伴自己学到的技能，随伙伴自动加载。",
       "unavailableHint": "本机或当前执行环境暂不可用，请先配置连接或系统授权。",
       "notOnThisComputer": "这台电脑不可用",
-      "configure": "前往配置",
       "empty_toolset": "当前执行环境没有可用的内置工具。",
       "empty_mcp": "尚未添加自定义 MCP 服务。",
       "empty_skill": "暂无可选的技能。",
       "inputHandoff": {
         "title": "代输入",
         "description": "遇到需要你本人输入的登录信息、密码或验证码时，允许这位伙伴请你在任意设备上填写。你填写的内容不会交给它。"
-      }
+      },
+      "intro": "选择这位伙伴能用的技能、工具和 MCP，从下一条消息开始生效。",
+      "alwaysOn": "始终开启",
+      "core": {
+        "group": "核心技能",
+        "name": "伙伴核心技能",
+        "hint": "开任务、联系伙伴、换模型、用工具和插件、记忆。随 Cindy 更新。",
+        "meta": "所有伙伴共用 · 始终开启 · 随 Cindy 更新",
+        "note": "每位伙伴都有的编排能力，不能关闭或修改。想让它换种做法，在对话里告诉它，它会记成自己的技能。",
+        "covers": "包括",
+        "raw": "查看原文",
+        "items": {
+          "tasks": {
+            "title": "任务",
+            "body": "了解当前可控制的任务和可用电脑，按你的要求安排、跟进任务，把结果带回；跨电脑操作前查询实际支持范围。"
+          },
+          "teammates": {
+            "title": "联系伙伴",
+            "body": "给其他伙伴发消息，或帮你创建新伙伴。"
+          },
+          "models": {
+            "title": "模型与工具",
+            "body": "按你的要求切换模型，按需找到并使用工具和插件。"
+          },
+          "memory": {
+            "title": "记忆",
+            "body": "记住你的偏好和背景，用前先查、有变化就更新。"
+          },
+          "self": {
+            "title": "了解与设置 Cindy",
+            "body": "了解 Cindy 的功能和用法，按你的要求查询、调整设置；需要你填写或确认时，在任务里交给你完成。"
+          }
+        }
+      },
+      "system": {
+        "group": "系统技能",
+        "meta": "已开 {{on}} / 共 {{total}}",
+        "pageMeta": "系统技能 · 随 Cindy 更新",
+        "use": "为这位伙伴开启",
+        "whenOff": "关闭后",
+        "items": {
+          "todo": {
+            "name": "待办",
+            "hint": "记下你交代的事和它发现的事，到期提醒你。",
+            "off": "不再记录、整理和提醒待办；已有待办保留，重新开启后继续。"
+          },
+          "routine": {
+            "name": "例行任务",
+            "hint": "帮你建立和维护定期执行的例行任务。",
+            "off": "不再新建或修改例行任务；已有例行任务照常运行，你仍可在「例行任务」页管理。"
+          },
+          "follow": {
+            "name": "工作台与跟进",
+            "hint": "关注你所有任务的近况，跟进你交给它的任务。",
+            "off": "不再主动查看和跟进你的任务；你仍可以在对话里直接问它。"
+          }
+        }
+      },
+      "learned": {
+        "group": "学会的技能",
+        "empty": "还没有学会的技能。夜间学习会把反复用到的做法整理成技能，你也可以在对话里让它记下来。",
+        "meta": "自己学会的 · 更新于 {{date}}",
+        "metaUndated": "自己学会的",
+        "missing": "这个技能已不存在。",
+        "use": "使用这个技能",
+        "useHint": "关闭后保留内容，伙伴暂时不用它。",
+        "edit": "修改",
+        "delete": "删除",
+        "cancel": "取消",
+        "save": "保存",
+        "saveFailed": "没能保存，请稍后再试。",
+        "deleteFailed": "没能删除，请稍后再试。",
+        "deleteTitle": "删除「{{name}}」？",
+        "deleteBody": "删除后伙伴不再使用这个技能，内容无法恢复。以后需要时，可以在对话里让它重新记下。",
+        "unsavedTitle": "尚有未保存的修改",
+        "unsavedDescription": "离开后会丢弃这次对技能的修改。",
+        "discard": "放弃修改",
+        "continueEditing": "继续编辑",
+        "descriptionLabel": "什么时候用",
+        "bodyLabel": "做法"
+      },
+      "local": {
+        "group": "本机技能"
+      },
+      "followMeta": "跟随本机 · {{count}} 项",
+      "selectedMeta": "已选 {{count}} / 共 {{total}}",
+      "showRest": "显示其余 {{count}} 项",
+      "showLess": "收起",
+      "manage": "管理",
+      "toolSettings": "工具设置",
+      "notTurnedOn": "这台电脑还没开启",
+      "turnOn": "去开启",
+      "permissions": "权限"
+    },
+    "systemSkills": {
+      "followOffHint": "{{name}} 的系统技能「工作台与跟进」已关闭，在能力页重新开启后才能使用。",
+      "offHint": "系统技能「{{skill}}」已关闭，在能力页重新开启后才会运行。"
     },
     "guided": {
       "title": "创建伙伴",
@@ -12560,7 +12802,40 @@
         "unavailable-route": "{{plugin}} 选的模型现在用不了，这个任务用"
       }
     },
-    "teammateProcess": {"record":"处理记录","operations":"操作记录","elapsed":"已处理 {{duration}}","took":"用时 {{duration}}","processing":"正在处理","worked":"处理记录","thinking":"正在思考","thought":"已思考","failed_other":"{{count}} 次调用失败","separator":"、","actions":{"running":{"read":"正在查看文件","edit":"正在编辑文件","search":"正在查找内容","web":"正在查阅网页","command":"正在运行命令","tools":"正在使用工具","delegate":"正在委派工作","plan":"正在整理计划"},"done":{"read":"查看了文件","edit":"编辑了文件","search":"查找了内容","web":"查阅了网页","command":"运行了命令","tools":"使用了工具","delegate":"委派了工作","plan":"整理了计划"}}},
+    "teammateProcess": {
+      "record": "处理记录",
+      "operations": "操作记录",
+      "elapsed": "已处理 {{duration}}",
+      "took": "用时 {{duration}}",
+      "processing": "正在处理",
+      "worked": "处理记录",
+      "thinking": "正在思考",
+      "thought": "已思考",
+      "failed_other": "{{count}} 次调用失败",
+      "separator": "、",
+      "actions": {
+        "running": {
+          "read": "正在查看文件",
+          "edit": "正在编辑文件",
+          "search": "正在查找内容",
+          "web": "正在查阅网页",
+          "command": "正在运行命令",
+          "tools": "正在使用工具",
+          "delegate": "正在委派工作",
+          "plan": "正在整理计划"
+        },
+        "done": {
+          "read": "查看了文件",
+          "edit": "编辑了文件",
+          "search": "查找了内容",
+          "web": "查阅了网页",
+          "command": "运行了命令",
+          "tools": "使用了工具",
+          "delegate": "委派了工作",
+          "plan": "整理了计划"
+        }
+      }
+    },
     "imageDelivery": {
       "stored": "图片已交付",
       "failed": "图片交付失败，可重试传输已有图片。",
@@ -12865,6 +13140,12 @@
       "text": "此前有自动运行失败。",
       "precheck": "自动检查暂时受阻。",
       "rateLimited": "自动检查暂时受阻：请求限流。",
+      "pluginMissing": "自动检查暂时受阻：「{{name}}」插件未安装，装好后自动恢复。",
+      "pluginMissingUnnamed": "自动检查暂时受阻：需要的插件未安装，装好后自动恢复。",
+      "pluginDisabled": "自动检查暂时受阻：「{{name}}」插件未启用，启用后自动恢复。",
+      "pluginDisabledUnnamed": "自动检查暂时受阻：需要的插件未启用，启用后自动恢复。",
+      "installPlugin": "安装插件",
+      "openPlugin": "查看插件",
       "dismissTitle": "关闭历史失败提示"
     },
     "worktreeRestoreBanner": {
@@ -13213,6 +13494,24 @@
           "autocompactBuffer": "自动压缩缓冲",
           "compactBuffer": "压缩缓冲",
           "freeSpace": "剩余可用"
+        },
+        "estimate": {
+          "title": "文本估算",
+          "delivery": "答案交付",
+          "host": "Cindy 规则",
+          "plugins": "插件目录",
+          "memoryRules": "记忆规则",
+          "memoryIndex": "记忆索引",
+          "profile": "伙伴资料",
+          "user": "用户指令",
+          "directories": "附加目录",
+          "native": "Pi 原生规则",
+          "skills": "技能目录",
+          "project": "项目指令",
+          "tools": "工具定义",
+          "messages": "对话正文",
+          "other": "其他指令",
+          "note": "按当前文本粗估，并非模型分词结果。不含图片与供应商格式开销，分项之和不等于原生总量。"
         }
       },
       "compact": {
@@ -13509,7 +13808,7 @@
       "REMOTE_PROVIDER_UPDATING": "这个模型供应商的凭据正在更新。请稍后再试。",
       "REMOTE_WORKDIR_UNAVAILABLE": "远端工作目录现在不可用。请确认那台电脑上的目录还在，然后重试。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "电脑端暂时无法确认这条消息是否已经发出。请稍后再试，不要重复发送同一条。",
-      "REMOTE_AGENT_UNAVAILABLE": "运行 Agent 的电脑暂时连不上。确认那台电脑在线并允许远程控制后重试。",
+      "REMOTE_AGENT_UNAVAILABLE": "和运行 Agent 的电脑断开了连接。请重试；如果反复出现，再确认那台电脑在线并允许远程控制。",
       "REMOTE_AGENT_PEER_TOO_OLD": "那台电脑上的 Cindy 版本过旧，暂不支持此操作。请先在那台电脑上更新 Cindy。",
       "REMOTE_AGENT_EXPIRED": "这个任务在运行 Agent 的电脑上已经结束。请重新发送。",
       "REMOTE_AGENT_NOT_FOUND": "这个任务在运行 Agent 的电脑上已经结束。请重新发送。",
@@ -13618,6 +13917,18 @@
       "cancelTitle": "取消等待并移除这条消息"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "没有待处理意见",
+        "mergeReady": "可以合并",
+        "mergeConflict": "有冲突",
+        "mergeBehind": "需要同步目标分支",
+        "mergeApproval": "等待审批",
+        "mergeChanges": "需要修改",
+        "mergeWaiting": "等待合并",
+        "merged": "已合并",
+        "closed": "已关闭",
+        "draft": "草稿"
+      },
       "verb": "调用插件",
       "cardRunning": "插件绘制中",
       "cardDone": "已完成",
@@ -13631,13 +13942,18 @@
       "collapseFields": "收起",
       "formSyncFailed": "卡片修改尚未同步，请检查连接后继续编辑；消息尚未发送。",
       "linkOpenFailed": "链接打开失败",
+      "modelSelectFailed": "模型没有换成，请重新选择",
       "mailPreview": "邮件预览",
       "mailEnlarge": "放大查看",
       "mailInsertImage": "插入正文",
       "mailAttach": "添加附件",
       "mailRemoveAttachment": "移除 {{name}}",
       "mailUpdated": "草稿已更新（只读）",
-      "mailLegacy": "历史草稿（只读）"
+      "mailLegacy": "历史草稿（只读）",
+      "taskAutoArchived": "已归档「{{title}}」",
+      "taskAutoArchivedUndo": "撤销",
+      "taskAutoArchivePending": "离开后自动归档",
+      "taskAutoArchiveCancel": "本次不归档"
     },
     "ghostHook": {
       "blockedFallback": "消息被插件拦下，未发送",
@@ -14225,6 +14541,26 @@
           "cancel": "取消"
         }
       },
+      "newProjectDialog": {
+        "title": "新建项目",
+        "description": "新建一个项目文件夹，并把这个任务移到新项目。",
+        "descriptionMoveFiles": "新建一个项目文件夹，把这个任务里的文件搬进去，并把任务移到新项目。",
+        "nameLabel": "项目名称",
+        "namePlaceholder": "例如 my-app",
+        "targetPath": "将创建 {{path}}",
+        "location": "位置",
+        "locationInferred": "根据你现有的项目推荐",
+        "locationWillCreate": "这个文件夹还不存在，确认后会自动创建",
+        "changeLocation": "更改…",
+        "remember": "以后新建项目都放这里",
+        "cancel": "取消",
+        "create": "新建项目",
+        "nameTaken": "已有同名文件夹，换一个名称",
+        "nameInvalid": "名称不能包含 \\ / : * ? \" < > |，也不能以点或空格结尾",
+        "loadFailed": "无法读取项目位置",
+        "failed": "新建项目失败",
+        "done": "已新建项目并移入任务"
+      },
       "sessionMenu": {
         "moreActions": "更多",
         "rename": "重命名",
@@ -14238,6 +14574,7 @@
         "moveToProject": "移动任务",
         "moveToProjectHeading": "当前电脑的项目",
         "browseProjectFolder": "选择项目文件夹",
+        "newProject": "新建项目…",
         "moveToDialogue": "移到对话",
         "noProjects": "暂无最近项目",
         "moveToProjectDone": "已移动到项目",
@@ -14468,7 +14805,7 @@
         "manage": {
           "title": "管理 PR 链接",
           "hint": "顶栏最多显示 3 个，固定的 PR 优先显示",
-          "empty": "粘贴 GitHub PR 链接即可添加",
+          "empty": "粘贴 GitHub PR 或 GitLab MR 链接即可添加",
           "removed": "已移除 {{count}} 个",
           "legacy": "未确认的历史引用：{{count}}",
           "addLabel": "添加 PR 链接",
@@ -14479,18 +14816,29 @@
           "unpin": "取消固定",
           "pinLimit": "最多固定 3 个 PR",
           "reorderHint": "按 Alt+↑/↓ 在已固定或未固定组内调整顺序。",
-          "dragHandle": "拖动排序 {{repo}} #{{number}}",
+          "dragHandle": "拖动排序 {{repo}} {{numberLabel}}",
           "remove": "移除 PR",
           "errors": {
             "duplicate": "此 PR 已关联；已移除的链接可在列表中恢复",
             "notFound": "找不到此 PR，或没有访问权限",
-            "invalidUrl": "请输入有效的 GitHub PR 链接",
+            "invalidUrl": "请输入有效的 GitHub PR 或 GitLab MR 链接",
             "reorderFailed": "顺序没有保存，请重试",
-            "verifyFailed": "无法验证 PR，请检查 GitHub 登录与访问权限",
+            "verifyFailed": "无法验证 PR，请检查 GitHub 或 GitLab 登录与访问权限",
             "unsupported": "这台电脑的版本暂不支持管理 PR 链接",
             "failed": "无法更新 PR 链接"
           }
-        }
+        },
+        "gitlab": {
+          "missing": "未检测到 GitLab CLI（glab），看不到 MR 状态。安装 glab 并登录后即可显示。",
+          "notLoggedIn": "本机 glab 尚未登录 {{host}}，看不到 MR 状态。在终端运行 glab auth login 登录后即可显示。",
+          "unsupported": "此电脑暂不支持 GitLab MR 状态",
+          "openAria": "在浏览器中打开 MR !{{number}}",
+          "summaryAria": "MR !{{number}} 汇总",
+          "urlPlaceholder": "GitHub PR 或 GitLab MR 链接",
+          "notFound": "MR 不存在，或当前账号无权限查看"
+        },
+        "merge": "合并",
+        "conflicts": "有冲突"
       }
     },
     "schedule": {
@@ -14884,7 +15232,8 @@
         "resume": "恢复",
         "pause": "暂停",
         "deleteAutomation": "删除自动化"
-      }
+      },
+      "tagWebhook": "Webhook"
     },
     "detail": {
       "manualTrigger": "手动触发",
@@ -14959,7 +15308,7 @@
         "titleCreate": "创建自动化",
         "titleProjectCreate": "新建项目自动化",
         "titleProjectEdit": "编辑项目自动化",
-        "subtitle": "用 Claude、Codex 或 Pi 按计划运行 Prompt。",
+        "subtitle": "选择触发方式，运行 AI 任务或脚本。",
         "subtitleFromGhost": "「{{name}}」请你新建一个自动化。选好模型后保存即可生效。",
         "save": "保存",
         "create": "创建",
@@ -15007,7 +15356,7 @@
       },
       "fields": {
         "title": "标题",
-        "schedule": "计划",
+        "schedule": "触发方式",
         "notify": "通知",
         "prompt": "提示词",
         "once": "一次",
@@ -15123,7 +15472,87 @@
         "preRunPluginRequired": "请为前置检查选择插件",
         "templateParamRequired": "请填写{{label}}",
         "templateApplyFailed": "无法应用模板，请检查参数后重试"
-      }
+      },
+      "layout": {
+        "content": "执行内容",
+        "notifications": "通知与静默",
+        "contentTab": "内容与触发",
+        "optionsTab": "运行选项",
+        "sections": "自动化配置"
+      },
+      "webhook": {
+        "quotaHint": "每天的 Webhook 接收次数有上限，这里的筛选不会减少次数。请在发送方（如 GitHub）只勾选需要的事件。",
+        "sourceLabel": "发送方",
+        "sourceCustom": "自定义",
+        "customLabel": "格式描述（JSON）",
+        "customHint": "用 JSON 描述签名方式，以及事件名和投递 ID 的位置。",
+        "customInvalid": "自定义格式不合法，请检查 JSON 内容。",
+        "signedLabel": "验证签名",
+        "signedHint": "只接收持有密钥的发送方的请求。",
+        "unsignedWarning": "关闭签名后，拿到地址的人都能触发这个任务，并消耗每天的 Webhook 接收次数。地址泄露时请在任务详情里更换地址。",
+        "eventPicker": {
+          "label": "响应事件",
+          "choose": "选择事件",
+          "selected": "已选 {{count}} 项",
+          "all": "全部事件",
+          "search": "搜索事件",
+          "customGroup": "其他已选事件",
+          "noResults": "没有匹配的事件，可在高级入口添加。",
+          "noPresets": "这个来源没有固定事件目录。可接收全部事件，或在高级入口添加事件名称。",
+          "custom": "自定义事件（高级）",
+          "customLabel": "事件名称",
+          "invalid": "请输入 1–100 个字母、数字或 _ . : -，每次添加一个事件。",
+          "add": "添加",
+          "limit": "最多选择 32 项。",
+          "chooseOne": "请选择至少一项，或明确选择“全部事件”。",
+          "cancel": "取消",
+          "apply": "应用",
+          "remove": "移除 {{name}}",
+          "groups": {
+            "issues": "Issue",
+            "pullRequests": "PR",
+            "issueComments": "Issue / PR 评论",
+            "reviews": "PR 评审",
+            "checks": "检查套件",
+            "workflows": "工作流运行",
+            "repository": "仓库",
+            "releases": "版本发布",
+            "mergeRequests": "合并请求",
+            "comments": "评论",
+            "pipelines": "流水线",
+            "projects": "项目",
+            "payments": "付款",
+            "checkout": "结账",
+            "invoices": "账单",
+            "subscriptions": "订阅"
+          },
+          "actions": {
+            "all": "全部变化",
+            "created": "新建",
+            "closed": "关闭",
+            "reopened": "重新打开",
+            "edited": "编辑",
+            "commitsUpdated": "提交更新",
+            "submitted": "提交评审",
+            "completed": "完成",
+            "pushed": "代码推送",
+            "published": "发布",
+            "merged": "合并",
+            "updated": "更新",
+            "tagsChanged": "标签推送",
+            "declined": "拒绝",
+            "deleted": "删除",
+            "succeeded": "成功",
+            "failed": "失败",
+            "paid": "已支付"
+          }
+        }
+      },
+      "trigger": {
+        "label": "触发方式",
+        "timed": "定时"
+      },
+      "runSettings": "运行设置"
     },
     "chips": {
       "selectProject": "选择项目",
@@ -15322,6 +15751,91 @@
           "description": "每月体检工作目录文档，找出过期与矛盾内容",
           "prompt": "体检工作目录中的文档，找出需要更新的内容。\n约束：\n- 检查过期信息（旧日期、失效链接、已废弃的流程或工具）、前后矛盾和重复内容\n- 每个问题都注明文件路径和具体位置，说明判断依据\n- 按\"建议更新 / 建议合并 / 建议删除\"分类，给出修订建议清单\n- 只输出体检报告，不要直接修改文档"
         }
+      }
+    },
+    "deadline": {
+      "label": "截止时间",
+      "clear": "清除",
+      "hint": "留空不限制。时间按 {{timezone}} 显示；到期后不再自动运行，已开始的运行会继续完成。",
+      "invalid": "请输入有效的日期和时间",
+      "expired": "已到期"
+    },
+    "webhook": {
+      "title": "Webhook 触发",
+      "url": "接收地址",
+      "secret": "密钥",
+      "copy": "复制",
+      "copied": "{{label}}已复制",
+      "copyFailed": "未能复制{{label}}，请手动选择并复制。",
+      "urlUnavailable": "接收地址暂时不可用。",
+      "quotaNotifyTitle": "Webhook 接收次数已用完",
+      "quotaExhausted": "今天的 {{limit}} 次 Webhook 接收次数已用完，{{time}} 恢复。在此之前外部事件不会触发任务；定时运行和模型额度不受影响。",
+      "signedOut": "登录 Cindy 账号后恢复接收，配置已保留。",
+      "serviceUnavailable": "当前环境暂不提供 Webhook 接收服务。",
+      "suspended": "这个账号的 Webhook 已被停用。",
+      "endpointLimit": "接收地址名额已满，请释放不用的地址。",
+      "offline": "这台电脑暂时没有连上服务器。事件会暂存，连接恢复后送达。",
+      "localOnlyHint": "此地址只在这台电脑上有效。公网事件需要转发过来，比如用 gh webhook forward。",
+      "eventsSummary": "事件：{{events}}",
+      "lastReceived": "最近事件：{{time}}",
+      "neverReceived": "还没有收到事件",
+      "ignored": "已忽略 {{count}} 个",
+      "generateSecret": "生成密钥",
+      "rotateSecret": "重新生成密钥",
+      "secretOnce": "请现在复制此密钥，之后不会再显示。",
+      "secretMissing": "生成密钥之前，事件都会被拒绝。",
+      "rotateFailed": "无法生成密钥。密钥只能在运行此任务的电脑上管理。",
+      "genericSender": "发送方",
+      "secretFillHint": "把它填到 {{sender}} 的「{{field}}」。",
+      "secretPastePlaceholder": "粘贴 {{sender}} 的「{{field}}」",
+      "secretSave": "保存密钥",
+      "secretSaved": "密钥已保存。",
+      "secretSaveFailed": "无法保存密钥。密钥只能在运行此任务的电脑上管理。",
+      "secretInvalid": "密钥格式不正确，请从发送方重新复制。",
+      "secretPasteMissing": "粘贴发送方提供的密钥之前，事件都会被拒绝。",
+      "unsignedNotice": "未开启签名：拿到地址的人都能触发这个任务。地址泄露时请更换地址。",
+      "rotateUrl": "更换地址",
+      "rotateUrlConfirmTitle": "更换接收地址？",
+      "rotateUrlConfirmBody": "旧地址会立即失效，需要把新地址填到发送方。配置和密钥保持不变。",
+      "rotateUrlFailed": "无法更换地址，请稍后重试。",
+      "addressHint": "将此地址填到 {{sender}} 的 Webhook 设置中。",
+      "testHint": "在 {{sender}} 触发一个符合筛选条件的事件，执行结果会显示在下方。",
+      "waitingEvent": "等待事件",
+      "manageConnection": "连接设置",
+      "preparing": "正在准备接收地址…",
+      "noRunsHint": "收到符合筛选条件的 Webhook 事件后，执行结果会显示在这里。",
+      "account": {
+        "title": "接收地址",
+        "manage": "管理",
+        "usage": "接收地址 {{used}} / {{limit}}",
+        "description": "此账号在所有电脑上的接收地址共用名额。旧电脑不在线，也可以释放。",
+        "remaining": "剩余 {{count}} 个",
+        "unavailable": "当前服务暂不支持账号地址管理，请等待服务更新。",
+        "loadFailed": "无法获取地址列表，请检查连接后刷新。",
+        "releaseFailed": "未能确认释放结果，请刷新列表核对后再试。",
+        "retry": "刷新",
+        "loading": "正在读取接收地址…",
+        "empty": "还没有使用接收地址",
+        "thisDevice": "本机",
+        "unnamed": "自动化 {{id}}",
+        "unnamedDevice": "设备 {{id}}",
+        "suspended": "已停用，仍占用名额",
+        "lastReceived": "最近接收：{{time}}",
+        "neverReceived": "尚未接收事件",
+        "open": "查看自动化",
+        "release": "释放",
+        "confirm": "释放 {{device}} 上「{{name}}」的接收地址？",
+        "confirmHint": "旧地址、密钥和服务器暂存事件将失效，旧电脑重新上线也不会自动恢复。自动化及运行记录保留，已开始的运行不受影响。",
+        "cancel": "取消",
+        "confirmRelease": "释放地址",
+        "viewAddress": "查看地址",
+        "done": "完成",
+        "released": "已释放「{{name}}」的接收地址。",
+        "releasedHint": "该接收地址已释放，不再占用名额。重新连接会生成新地址，需要重新配置发送方。",
+        "reconnect": "重新连接",
+        "reconnectConfirm": "重新连接 Webhook？",
+        "reconnectConfirmHint": "将占用一个名额并生成新的接收地址。请把新地址和密钥更新到发送方。",
+        "reconnectFailed": "暂时无法重新连接，请检查剩余名额后重试。"
       }
     }
   },
@@ -15638,6 +16152,7 @@
     "agentControlled": "这个界面由 Agent 打开。填写前请确认它确实是你要登录的地方。",
     "agentPicture": "这张二维码来自 Agent 的截图，Cindy 看不到原来的画面，扫完也不会自动继续。请确认它指向的网站是你要登录的地方，扫完点「交还给 Agent」。",
     "error": {
+      "raise": "无法打开窗口，请在电脑上切换到它。",
       "decision": "操作没有送达，请重试。",
       "stale": "界面已经变化，请按最新内容操作。",
       "submit": "输入没有送达，请重试。"
@@ -15673,6 +16188,9 @@
       "picture": "看画面",
       "backToForm": "回到表单",
       "liveView": "实时画面",
+      "openWindow": "打开登录窗口",
+      "openRemoteDesktop": "打开远程桌面",
+      "useForm": "改用表单填写",
       "fill": "填写",
       "skip": "跳过",
       "continue": "继续",
@@ -15680,6 +16198,9 @@
       "showPassword": "显示密码",
       "hidePassword": "隐藏密码",
       "scan": "扫码"
+    },
+    "directSignIn": {
+      "hint": "请直接在窗口里登录，完成后会自动继续。"
     },
     "remoteUnavailable": "这台电脑不能从远程接收输入。请在宿主电脑上完成这一步，再交还给 Agent。",
     "unnamedField": "输入框",
@@ -15748,7 +16269,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "查看技能详情",
-    "projectSkillNotLoaded": "当前 Pi 任务尚未加载此项目 Skill，新任务会自动尝试加载"
+    "projectSkillNotLoaded": "当前 Pi 任务尚未加载此项目 Skill，新任务会自动尝试加载",
+    "pluginSkillSetup": {
+      "install": "未安装",
+      "enable": "未启用"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "发 PR、修 CI 和评审、跟进到合并 · 需要安装 GitHub 插件",
+        "enable": "发 PR、修 CI 和评审、跟进到合并 · 需要启用 GitHub 插件"
+      }
+    }
   },
   "skillhub": {
     "remote": {
@@ -16512,7 +17043,10 @@
       "registrationFailed": "创建失败，请稍后重试",
       "silentStopExhausted": "模型连续多次返回空响应，自动续跑已暂停。点击「继续」恢复任务。",
       "executionResultUnavailable": "未能取回执行结果，已停止自动续接。可以让助手检查已有的执行结果。",
-      "outputLimit": "模型已达到输出长度上限，本轮回复可能不完整。可以直接发送下一条消息继续。",
+      "outputLimit": "模型已达到输出长度上限，本轮回复可能不完整。可以发送新消息继续；若反复触发，请降低推理强度或先压缩对话记录。",
+      "outputLimitReasoning": "思考已消耗本次输出的大部分预算，回复可能不完整。建议降低推理强度，或先压缩对话记录，再继续。",
+      "outputLimitUsage": "本次模型请求已输出 {{outputTokens}} tokens，其中 {{reasoningTokens}} tokens 用于思考。",
+      "outputLimitOutputUsage": "本次模型请求已输出 {{outputTokens}} tokens。",
       "permissionTightenInterruptFailed": "收紧权限时未能停止正在运行的任务，它可能会继续免确认执行直到结束；如有需要请手动停止。",
       "codexAutoReviewUnavailable": "自动审批暂时不可用，当前操作已阻止并切换为默认权限。请重试，需要时会询问你。",
       "hostShellCommandBlocked": "Cindy 已阻止这条 Shell 命令。请检查命令，并使用可用的工具或命令继续。",
@@ -16736,7 +17270,14 @@
     "sectionTitle": "目录",
     "empty": "还没有引用目录",
     "add": "添加目录…",
-    "addReadOnly": "添加只读目录…",
+    "back": "返回",
+    "addTitle": "添加目录",
+    "writableHint": "Agent 可读写",
+    "writableHintDetail": "Agent 可以读取、创建、修改和删除这些目录里的文件",
+    "searchRecent": "搜索目录",
+    "noRecent": "还没有最近使用的目录",
+    "noMatchingRecent": "没有匹配的目录",
+    "addFailed": "无法添加这个目录，请重试或选择其他文件夹。",
     "atLimit": "已达上限 {{max}} 个",
     "remove": "移除 {{name}}",
     "writableParentConfirmTitle": "允许读写父目录？",
@@ -16988,6 +17529,7 @@
     "sidebar": "余额与订阅",
     "settings": {
       "title": "用量和计费",
+      "supportHint": "遇到问题？可通过 {{email}} 寻求帮助。",
       "subscriptionCard": {
         "title": "当前套餐",
         "empty": "当前没有生效中的订阅",
@@ -17062,14 +17604,38 @@
     },
     "orders": {
       "title": "订单记录",
-      "description": "仅显示在 Cindy 内发起的充值与订阅订单。待支付订单超时后自动取消。",
+      "description": "展示已支付的充值订单和已结清的订阅账单。",
+      "history": {
+        "loadFailed": "订单记录未能加载",
+        "retry": "重新加载订单",
+        "unknownPaidAt": "付款时间未知",
+        "unknownAmount": "金额未知",
+        "refundedAmount": "已退 {{amount}}",
+        "refunded": "已退款",
+        "partiallyRefunded": "部分退款",
+        "noPayment": "无需付款",
+        "page": "第 {{page}} 页",
+        "previous": "上一页",
+        "next": "下一页"
+      },
       "count": "{{count}} 笔",
-      "incomplete": "订单记录较多，当前仅显示最近的 {{count}} 笔。",
       "orderId": "NO. {{id}}",
       "copy": {
         "action": "复制订单 ID {{id}}",
         "success": "订单 ID 已复制",
         "failed": "复制订单 ID 失败，请重试"
+      },
+      "refund": {
+        "action": "申请退款",
+        "title": "申请退款",
+        "description": "请将以下信息发送至客服邮箱 {{email}}，以申请退款。",
+        "emailSubject": "Cindy 退款申请 - {{orderId}}",
+        "sendAction": "发送退款申请",
+        "gmailFallbackDescription": "退款申请中包含订单信息。打开 Gmail 会将这些信息分享给 Google，是否继续？",
+        "emailBody": "您好，我想申请以下订单的退款，请协助处理。\n\n订单号：{{orderId}}\n渠道交易号：{{providerTransactionId}}\n应用：{{application}}\n支付方式：{{paymentMethod}}\n支付金额：{{amount}}\n\n遇到的问题：\n（请简单描述您遇到的情况）\n\n谢谢。",
+        "fields": {
+          "amount": "支付金额"
+        }
       },
       "invoice": {
         "action": "申请开票",
@@ -17079,7 +17645,7 @@
         "emailSubject": "申请开具订单 {{orderId}} 的发票",
         "personalInvoicePolicy": "Cindy 个人版充值默认开具<strong>个人抬头发票</strong>，抬头可填写姓名或“个人”。如需开具企业抬头发票用于公司报销，请提供<strong>加盖公司公章的报销说明</strong>，并在说明中注明开票抬头。",
         "invoiceTitleHint": "填写说明：个人抬头请填写姓名或“个人”；如需企业抬头用于公司报销，请随邮件附上加盖公司公章、注明开票抬头的报销说明。",
-        "emailBody": "您好，\n\n我想申请开具以下订单的发票：\n\n────────────────────\n订单号：{{orderId}}\n应用：{{application}}\n支付方式：{{paymentMethod}}\n开票金额：{{amount}}\n发票抬头：\n{{invoiceTitleHint}}\n\n联系人：\n联系电话：\n邮箱：\n────────────────────\n\n谢谢。",
+        "emailBody": "您好，\n\n我想申请开具以下订单的发票：\n\n────────────────────\n订单号：{{orderId}}\n渠道交易号：{{providerTransactionId}}\n应用：{{application}}\n支付方式：{{paymentMethod}}\n开票金额：{{amount}}\n发票抬头：\n{{invoiceTitleHint}}\n\n联系人：\n联系电话：\n邮箱：\n────────────────────\n\n谢谢。",
         "sendAction": "发送开票申请",
         "emailCopied": "客服邮箱已复制",
         "emailCopyFailed": "复制客服邮箱失败，请重试",
@@ -17090,6 +17656,7 @@
         "notAvailable": "暂无信息",
         "fields": {
           "orderId": "订单号",
+          "providerTransactionId": "渠道交易号",
           "application": "应用",
           "paymentMethod": "支付方式",
           "amount": "开票金额",
@@ -18445,6 +19012,21 @@
     "allow": "允许并继续",
     "cancel": "暂不允许"
   },
+  "pluginCompanionAnswer": {
+    "title": "确认允许",
+    "planMessage": "让{{companion}}按这份计划开始执行？",
+    "permissionMessage": {
+      "command": "允许{{companion}}运行这条命令？",
+      "file-read": "允许{{companion}}读取这些文件？",
+      "file-write": "允许{{companion}}修改这些文件？",
+      "browser": "允许{{companion}}在浏览器里执行这一步？",
+      "plugin": "允许{{companion}}使用「{{tool}}」？",
+      "tool": "允许{{companion}}使用 {{tool}}？"
+    },
+    "source": "你在插件「{{plugin}}」里选了允许，{{appName}} 在这里再确认一次；允许后伙伴会继续执行。",
+    "allow": "允许",
+    "cancel": "取消"
+  },
   "groupTools": {
     "authorizationRequired": "群内授权已失效或不允许此操作，请由伙伴主人在当前群重新发起。",
     "localPeersOnly": "群内私聊只能发送给本机同账号伙伴。",
@@ -18522,6 +19104,9 @@
     "pendingApprovals": "{{count}} 个待确认"
   },
   "richAnswer": {
+    "invalidImageReference": "图片引用无效，无法显示。",
+    "requestImageAgain": "请助手重新显示",
+    "requestImageAgainMessage": "请重新显示这张已有图片（{{name}}，引用：{{source}}）。请核对原工具结果或原文件并使用真实地址，不要重新生成；无法确认是哪张图片时先问我。",
     "send": "发送消息",
     "sending": "正在发送…",
     "sent": "已提交",
@@ -18530,6 +19115,297 @@
     "openVideoSource": "打开原视频",
     "calculationUnavailable": "此项暂时无法计算。",
     "incomplete": "部分内容未能显示。"
+  },
+  "setupMigration": {
+    "title": "迁移助理",
+    "back": "← 上一步",
+    "cancel": "取消",
+    "listSeparator": "、",
+    "steps": {
+      "label": "迁移步骤",
+      "source": "选择电脑",
+      "review": "选择内容",
+      "apply": "迁移"
+    },
+    "source": {
+      "description": "选一台登录了同一账号的电脑。它的插件、技能、设置和连接会照原样装到这台电脑；密钥只在你在那台电脑上点「允许」后复制，登录状态不会离开那台电脑。",
+      "loading": "正在查找你的其他电脑…",
+      "empty": "没有找到这个账号的其他电脑。在另一台电脑上登录 Cindy 后再打开这里",
+      "loadFailed": "未能读取电脑列表",
+      "reload": "重新读取",
+      "ready": "在线，可以迁移",
+      "next": "读取设置",
+      "readAgain": "重新读取",
+      "unavailable": {
+        "offline": "离线。打开那台电脑上的 Cindy 后可以迁移",
+        "remote-control-off": "需要先在那台电脑开启「允许同账号设备控制本机」",
+        "control-disabled": "这台电脑已关闭对它的控制，可在「远程连接」中重新打开"
+      }
+    },
+    "reading": "正在读取「{{name}}」上的设置…",
+    "errors": {
+      "SETUP_SOURCE_OUTDATED": "「{{name}}」上的 Cindy 版本较旧，不支持迁移。更新那台电脑上的 Cindy 后再试",
+      "SETUP_SOURCE_UNAVAILABLE": "未能读取「{{name}}」上的设置。迁移需要那台电脑在线，并开启「允许同账号设备控制本机」",
+      "SETUP_SNAPSHOT_INVALID": "「{{name}}」返回的设置无法识别。两台电脑的 Cindy 版本不同时会出现这种情况，更新到同一版本后再试",
+      "SETUP_PLAN_EXPIRED": "迁移清单已过期，需要重新读取「{{name}}」上的设置",
+      "GENERIC": "未能读取「{{name}}」上的设置"
+    },
+    "review": {
+      "description": "勾选要从「{{name}}」迁移到这台电脑的内容。这台电脑上已经改过的设置会保留，不会被覆盖。",
+      "partial": "那台电脑上有部分内容这次没能读取，下面只列出读到的内容。",
+      "groupCount": "已选 {{selected}} / {{total}}",
+      "present_one": "另有 {{count}} 项与这台电脑相同，无需迁移",
+      "present_other": "另有 {{count}} 项与这台电脑相同，无需迁移",
+      "start_one": "迁移 {{count}} 项",
+      "start_other": "迁移 {{count}} 项",
+      "continue": "继续",
+      "version": "版本 {{version}}",
+      "pluginDisabled": "在那台电脑上已停用，迁移后保持停用",
+      "pluginConsentLater": "来自插件市场「{{market}}」，安装时单独确认权限",
+      "skillTeam": "团队技能",
+      "settingsChanges_one": "{{count}} 项设置",
+      "settingsChanges_other": "{{count}} 项设置",
+      "settingsKept_one": "保留这台电脑的 {{count}} 项设置",
+      "settingsKept_other": "保留这台电脑的 {{count}} 项设置",
+      "settingsChangesKept_one": "{{count}} 项设置，保留这台电脑的 {{kept}} 项",
+      "settingsChangesKept_other": "{{count}} 项设置，保留这台电脑的 {{kept}} 项",
+      "kept": "保留这台电脑的设置",
+      "rendererPrefs": "界面偏好",
+      "rendererPrefsHint": "主题、语言、通知与对话显示偏好",
+      "toolOn": "开启内置工具「{{name}}」",
+      "toolOff": "关闭内置工具「{{name}}」",
+      "mcp": "MCP · {{url}}",
+      "mcpToken": "MCP · {{url}} · 访问凭证需要在这台电脑上重新填写",
+      "checklistTitle": "迁移后需要在这台电脑上完成",
+      "checklistDescription": "登录状态、密钥和系统权限不会离开原来的电脑。迁移完成后，可以按这份清单逐项补上。",
+      "groups": {
+        "plugins": "插件",
+        "skills": "技能",
+        "settings": "设置",
+        "connections": "模型供应商与 MCP",
+        "access": "这台电脑的访问",
+        "secrets": "密钥",
+        "ssh": "SSH 服务器"
+      },
+      "reason": {
+        "not-in-catalog": "这台电脑的插件市场里没有它",
+        "source-not-added": "来自这台电脑读不到的插件市场",
+        "local-only": "只存在于那台电脑，需要手动处理",
+        "needs-sign-in": "需要先登录",
+        "platform": "只适用于另一种系统",
+        "invalid": "这台电脑无法识别"
+      },
+      "providerAuth": {
+        "apiKey": "API Key 需要在这台电脑上重新填写",
+        "oauth": "需要在这台电脑上重新登录",
+        "native": "需要在这台电脑上登录订阅账号",
+        "none": "无需密钥",
+        "apiKeyCopy": "API Key 可随「密钥」一起复制"
+      },
+      "access": {
+        "remote-control": "允许同账号设备控制本机",
+        "remote-controlHint": "与「{{name}}」上的设置相同，可随时在「远程连接」中关闭",
+        "keep-awake": "保持电脑唤醒",
+        "keep-awakeHint": "与「{{name}}」上的设置相同，这台电脑不会进入休眠"
+      },
+      "secrets": {
+        "title_one": "复制 {{count}} 项的密钥",
+        "title_other": "复制 {{count}} 项的密钥",
+        "description": "需要在「{{name}}」上点「允许」后才会复制，只用这一次请求加密传给这台电脑。账号登录不会复制，迁移后可在清单里依次登录。"
+      },
+      "sshDescription": "这台电脑会生成一把新的 SSH 密钥，由「{{name}}」加到这些服务器上（同样需要在那台电脑上允许），再逐台测试连接。私钥不会离开各自的电脑。",
+      "sshHost": "{{user}}@{{host}}:{{port}}",
+      "mcpTokenCopy": "MCP · {{url}} · 访问凭证可随「密钥」一起复制",
+      "checklistDescriptionWithKeys": "登录状态和系统权限不会离开原来的电脑；密钥在「{{name}}」允许后才会复制。迁移完成后，可以按这份清单逐项补上。"
+    },
+    "permissions": {
+      "title": "确认插件权限",
+      "description_one": "下面 {{count}} 个插件安装后会获得这些权限。确认后会一起安装。",
+      "description_other": "下面 {{count}} 个插件安装后会获得这些权限。确认后会一起安装。",
+      "pluginTitle": "{{name}} · 版本 {{version}}",
+      "confirm_one": "允许并安装 {{count}} 个插件",
+      "confirm_other": "允许并安装 {{count}} 个插件"
+    },
+    "running": {
+      "progress": "正在迁移：已完成 {{completed}} / {{total}}",
+      "label": "正在迁移…",
+      "confirm": "请在「{{name}}」上点「允许」。",
+      "confirmCode": "两台电脑显示的校验码应一致："
+    },
+    "done": {
+      "summary_one": "已从「{{name}}」迁移 {{count}} 项",
+      "summary_other": "已从「{{name}}」迁移 {{count}} 项",
+      "applyFailed": "插件、技能和设置的迁移没有完成",
+      "failedTitle_one": "{{count}} 项未能迁移",
+      "failedTitle_other": "{{count}} 项未能迁移",
+      "checklistTitle": "还需要在这台电脑上完成",
+      "checklistEmpty": "没有需要在这台电脑上补做的事",
+      "checklistDescription": "这份清单之后也可以在「设置 → 通用」中查看。",
+      "restartHint": "部分设置在重新打开 Cindy 后生效。",
+      "finish": "完成",
+      "finishReload": "完成并刷新界面"
+    },
+    "failure": {
+      "generic": "未能迁移（{{code}}）",
+      "SOURCE_NOT_ADDED": "未能添加它所在的插件市场",
+      "MUTATION_CANCELLED": "已取消安装",
+      "PRECONDITION_FAILED": "迁移时插件或这台电脑的状态发生了变化",
+      "PERMISSION_DENIED": "当前账号无权安装",
+      "NOT_FOUND": "在这台电脑的插件市场里找不到它",
+      "ALREADY_EXISTS": "这台电脑上已有同名项目",
+      "SETUP_PLAN_EXPIRED": "迁移清单已过期",
+      "SETUP_TRANSFER_DECLINED": "那台电脑上没有点「允许」，或 2 分钟内没有回应",
+      "SETUP_TRANSFER_BUSY": "那台电脑正在处理另一个迁移请求，请稍后重试",
+      "SETUP_TRANSFER_INVALID": "那台电脑的回复无法识别",
+      "SETUP_SOURCE_OUTDATED": "那台电脑的 Cindy 版本过旧，更新后才能复制",
+      "SETUP_SOURCE_UNAVAILABLE": "那台电脑现在没有回应",
+      "SSH_AUTHORIZE_FAILED": "那台电脑没能把新密钥加到这台服务器上",
+      "SSH_KEYGEN_FAILED": "这台电脑没能生成 SSH 密钥（需要系统自带的 ssh-keygen）",
+      "SSH_HOST_NOT_FOUND": "那台电脑上已经没有这台服务器",
+      "SSH_AUTH_FAILED": "新密钥已加好，但服务器拒绝了这台电脑的连接",
+      "SSH_CONNECT_FAILED": "这台电脑连不上这台服务器，它可能只在那台电脑的网络里可达",
+      "SSH_KEY_FILE_NOT_FOUND": "找不到这台电脑上的新密钥文件"
+    },
+    "checklist": {
+      "done": "已完成",
+      "markDone": "标记为完成",
+      "needs": "需要：{{items}}",
+      "voiceAsrName": "语音识别",
+      "plugin-setup": {
+        "title": "连接「{{name}}」的账号",
+        "action": "去连接"
+      },
+      "plugin-manual": {
+        "title": "手动安装插件「{{name}}」",
+        "detail": "它是在那台电脑上直接导入的插件。在那台电脑的插件详情中导出安装包，再在这台电脑导入",
+        "action": "打开插件"
+      },
+      "market-source": {
+        "title": "添加插件市场「{{name}}」",
+        "detail": "这个市场的地址只保存在那台电脑上，添加后可以安装其中的插件",
+        "action": "打开插件"
+      },
+      "skill-manual": {
+        "title": "复制技能「{{name}}」",
+        "detail": "它不是从 SkillHub 安装的，只存在于那台电脑",
+        "action": "打开技能"
+      },
+      "provider-key": {
+        "title": "为「{{name}}」填写 API Key",
+        "action": "去填写"
+      },
+      "provider-connection": {
+        "title": "为「{{name}}」重新填写连接地址",
+        "detail": "原地址里的账号信息或查询参数可能含有凭证，没有一起迁移",
+        "action": "去填写"
+      },
+      "provider-sign-in": {
+        "title": "登录「{{name}}」",
+        "action": "去登录"
+      },
+      "local-model": {
+        "title": "在这台电脑上准备本地模型「{{name}}」",
+        "detail": "本地模型运行在原来的电脑上，这台电脑需要单独安装",
+        "action": "打开供应商"
+      },
+      "mcp-token": {
+        "title": "为 MCP「{{name}}」填写访问凭证",
+        "action": "去填写"
+      },
+      "builtin-key": {
+        "title": "填写「{{name}}」的 API Key",
+        "action": "去填写"
+      },
+      "im-channel": {
+        "title": "连接「{{name}}」",
+        "detail": "同一个机器人同时只在一台电脑上接收消息，连接前先确认由哪台电脑接收",
+        "action": "去连接"
+      },
+      "computer-use": {
+        "title": "开启自动操作",
+        "detail": "需要在这台电脑上授予辅助功能与屏幕录制权限",
+        "action": "去开启"
+      },
+      "remote-desktop": {
+        "title": "开启远程桌面",
+        "detail": "需要在这台电脑上单独开启，并授予屏幕录制权限",
+        "action": "去开启"
+      },
+      "ssh": {
+        "title_one": "复制 {{count}} 台远程主机的 SSH 密钥与配置",
+        "title_other": "复制 {{count}} 台远程主机的 SSH 密钥与配置",
+        "detail": "~/.ssh 中的密钥与配置不会自动迁移，需要复制到这台电脑",
+        "action": "打开远程连接"
+      },
+      "ssh-host": {
+        "title": "配置 SSH 服务器「{{name}}」",
+        "detail": "没能自动配好。可以在 SSH 设置里为它选择密钥并测试连接",
+        "action": "打开远程连接"
+      },
+      "startAll_one": "依次完成（{{count}} 项）",
+      "startAll_other": "依次完成（{{count}} 项）"
+    },
+    "settingsGroups": {
+      "appearance": "外观",
+      "windowBehavior": "应用行为",
+      "menubar": "菜单栏余量",
+      "collaboration": "协同",
+      "agentResource": "Agent 资源占用",
+      "gitSafety": "Git 安全",
+      "goal": "目标模式",
+      "memory": "记忆",
+      "compaction": "上下文压缩",
+      "silentEncryptedRetry": "静默丢弃协议加密内容并重试",
+      "silentStopAutoResume": "意外停止后自动继续",
+      "sessionRuntimeFallback": "任务模型自动降级",
+      "subagentModels": "Subagent",
+      "auxiliaryModels": "辅助模型",
+      "visionBridge": "视觉桥",
+      "modelVisibility": "模型显示与隐藏",
+      "providerOrder": "供应商顺序",
+      "modelCatalogOverrides": "模型参数调整",
+      "modelPriceOverrides": "模型单价",
+      "autoUpdate": "空闲时自动安装更新",
+      "updateChannel": "Beta 测试渠道"
+    },
+    "settings": {
+      "title": "迁移助理",
+      "description": "在一台新电脑上，把其他旧机器上 Cindy 所有接入的功能、插件和设置复制过来，成为成品能用。",
+      "start": "打开迁移助理",
+      "pending_one": "还有 {{count}} 项需要在这台电脑上完成",
+      "pending_other": "还有 {{count}} 项需要在这台电脑上完成",
+      "allDone": "这台电脑上需要补做的事已全部完成",
+      "from": "来自「{{name}}」的迁移",
+      "closeChecklist": "关闭清单"
+    },
+    "suggestion": {
+      "title": "用迁移助理从「{{name}}」迁移？",
+      "description": "可以把那台电脑上的插件、技能、设置和连接搬到这台电脑。需要在这台电脑上重新登录或授权的内容会列成清单。之后也可以在「设置 → 通用 → 迁移助理」中打开。",
+      "confirm": "打开迁移助理",
+      "later": "以后再说"
+    },
+    "walkthrough": {
+      "progress": "迁移清单 {{current}} / {{total}}",
+      "open": "打开",
+      "skip": "跳过",
+      "next": "完成，下一项",
+      "stop": "结束",
+      "allDone": "清单已经走完"
+    },
+    "transfer": {
+      "prompt": {
+        "title": "迁移助理",
+        "message": "「{{name}}」请求从这台电脑复制以下内容",
+        "secrets": "密钥（只复制到这一台电脑，这台电脑上的密钥保持不变）：",
+        "ssh": "把那台电脑的新 SSH 公钥加到这些服务器：",
+        "sshKey": "公钥指纹：{{fingerprint}}",
+        "code": "校验码：{{code}}。只有和那台电脑上显示的一致时才允许。",
+        "notice": "如果不是你自己在设置新电脑，请拒绝。",
+        "more": "以及另外 {{count}} 项",
+        "allow": "允许",
+        "deny": "拒绝"
+      }
+    }
   },
   "forwardedRequest": {
     "sourcePresent": "[来源] 用户原话由宿主原样保留，作为请求背景；当前请求在 Agent补充。",
@@ -18632,5 +19508,35 @@
     "unavailable": "当前版本未配置报告上传地址。可打开本地文件，交给支持人员。",
     "consent": "请先在设置中同意隐私政策，再提交报告。本地文件已保留。",
     "failed": "操作未完成，请重试或查看本地文件。"
+  },
+  "attachmentPreview": {
+    "fitWidth": "适应宽度",
+    "fitPage": "适应页面",
+    "pageNumber": "页码",
+    "more": "更多操作",
+    "retry": "重试",
+    "image": "图片",
+    "video": "视频",
+    "file": "文件",
+    "close": "关闭",
+    "reset": "重置视角",
+    "open": "打开预览",
+    "zoomIn": "放大",
+    "zoomOut": "缩小",
+    "fit": "适配窗口",
+    "actualSize": "原始尺寸（1:1）",
+    "save": "保存原件",
+    "share": "分享",
+    "previous": "上一个附件",
+    "next": "下一个附件",
+    "password": "输入 PDF 密码",
+    "find": "在文档中查找",
+    "matches": "{{count}} 页匹配",
+    "previousPage": "上一页",
+    "nextPage": "下一页",
+    "source": "查看源码",
+    "rendered": "查看文稿",
+    "wrap": "自动换行",
+    "lineNumbers": "行号"
   }
 }

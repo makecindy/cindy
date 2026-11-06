@@ -703,7 +703,15 @@
       "running": "In Arbeit",
       "done": "Abgeschlossen",
       "unread": "Ungelesen"
-    }
+    },
+    "viewMr": "MR ansehen",
+    "viewPrMr": "PR ansehen",
+    "mrCount": "{{count}} MRs",
+    "prMrCount": "{{count}} PRs",
+    "mrCount_one": "{{count}} MR",
+    "prMrCount_one": "{{count}} PR",
+    "mrCount_other": "{{count}} MRs",
+    "prMrCount_other": "{{count}} PRs"
   },
   "companionProfile": {
     "avatar": "Avatar",
@@ -742,7 +750,7 @@
     "search": "Nachrichten durchsuchen",
     "models": "Modellkette",
     "permissions": "Aktionsberechtigungen",
-    "personalSkills": "Persönliche Skills",
+    "personalSkills": "Skills",
     "connections": "Referenzierte Skills & Verbindungen",
     "save": "Änderungen speichern",
     "offline": "Verbinde dich erneut mit {{deviceName}}, um fortzufahren. Deine Änderungen bleiben erhalten.",

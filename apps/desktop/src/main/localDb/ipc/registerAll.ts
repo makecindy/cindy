@@ -37,6 +37,7 @@ import { registerSearchIpc } from './search';
 import { registerRemoteHistoryIpc } from './history';
 import { registerHistoryQueryIpc } from './historyQuery';
 import { recoverActiveTeammateInvitations, registerBotIpc } from './bots';
+import { registerBotSkillSettingsIpc } from './botSkillSettingsIpc';
 import { botRemoteManagement } from './botRemoteManagement';
 import { registerBotRemoteResourceProvider } from './botRemoteResourceProvider';
 
@@ -222,6 +223,7 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
   registerRemoteHistoryIpc();
   registerHistoryQueryIpc();
   registerBotIpc();
+  registerBotSkillSettingsIpc();
   registerCompanionImport();
   registerRoutinesIpc();
   registerNightlyLearningIpc();

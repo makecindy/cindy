@@ -19,7 +19,7 @@ import { app } from 'electron';
 import path from 'node:path';
 
 import { desktopMakerLogger } from './maker-host/logger-adapter.js';
-import { createOverrideSettingsFile } from './maker-host/override-settings-file.js';
+import { createOverrideSettingsFile, portableOverrideSettings } from './maker-host/override-settings-file.js';
 import {
   isLinuxCloseBehavior,
   isWindowsCloseBehavior,
@@ -90,3 +90,6 @@ export function writeLinuxCloseBehavior(linuxCloseBehavior: LinuxCloseBehavior):
 }
 
 export const __testing = { normalize };
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const windowBehaviorPortableSettings = portableOverrideSettings(store);

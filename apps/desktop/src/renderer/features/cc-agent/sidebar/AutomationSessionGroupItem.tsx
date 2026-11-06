@@ -276,8 +276,16 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
       ? latestRemoteActivity
       : latestLocalActivity;
     const scheduleId = group.scheduleId;
+    // Deleting an automation leaves its past runs grouped under a fallback key, so the group
+    // has no scheduleId any more. Those sessions are still real and still archivable: the
+    // generic group archive works off group.sessions, not off the schedule. Teammate-routine
+    // lanes are excluded because their lifecycle belongs to the bot and main rejects a
+    // generic archive for them.
+    const canArchiveGroupSessions = !isRemoteGroup && !teammateRoutine;
+    const hasArchivableSessions =
+      canArchiveGroupSessions && group.sessions.some((session) => session.status === 'active');
     // 组头右侧悬停操作槽：schedule 分组恒有（运行 + 更多），例行任务分组仅在有菜单项时有。
-    const hasHoverActions = !!scheduleId || (!!teammateRoutine && hasMoreMenuItems);
+    const hasHoverActions = !!scheduleId || (!!teammateRoutine && hasMoreMenuItems) || hasArchivableSessions;
     // 「已停止」= paused(用户主动暂停)+ expired(计划到期不再触发);两者对用户体验
     // 而言都是「不会再自动跑」,视觉上都在 Timer chip 上叠 Pause 徽标,并在 tooltip
     // 里显示「已停止」文案,避免用户误判为普通空闲态。
@@ -492,6 +500,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
           side="right"
           delay={0}
           controlledOpen={rowTooltipOpen}
+          onOpenChange={setRowTooltipOpen}
           contentClassName={cn(
             'bg-[var(--surface-elevated)] text-[var(--text-primary)]',
             'border-[var(--border-default)] dark:border-[var(--border-default)] shadow-sm',
@@ -846,32 +855,30 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                                         : t('ccAgent.sidebar.automationGroup.menu.pause')}
                                     </DropdownMenuItem>
                                   )}
-                                  {scheduleId && !isRemoteGroup && (
+                                  {canArchiveGroupSessions && (
                                     <>
                                       <DropdownMenuSeparator />
                                       <DropdownMenuItem
                                         onSelect={() => onScheduleAction(group, 'archive-all')}
-                                        disabled={
-                                          !group.sessions.some(
-                                            (session) => session.status === 'active',
-                                          )
-                                        }
+                                        disabled={!hasArchivableSessions}
                                         className={MENU_ITEM_CLASS}
                                       >
                                         {t('ccAgent.sidebar.projectAction.archivedAll')}
                                       </DropdownMenuItem>
-                                      <DropdownMenuItem
-                                        onSelect={() => onScheduleAction(group, 'delete')}
-                                        disabled={
-                                          group.scheduleSource === 'project' &&
-                                          (!group.workingDir || !group.projectConfigId)
-                                        }
-                                        variant="danger"
-                                        className={MENU_ITEM_CLASS}
-                                      >
-                                        {t('ccAgent.sidebar.automationGroup.menu.delete')}
-                                      </DropdownMenuItem>
                                     </>
+                                  )}
+                                  {scheduleId && !isRemoteGroup && (
+                                    <DropdownMenuItem
+                                      onSelect={() => onScheduleAction(group, 'delete')}
+                                      disabled={
+                                        group.scheduleSource === 'project' &&
+                                        (!group.workingDir || !group.projectConfigId)
+                                      }
+                                      variant="danger"
+                                      className={MENU_ITEM_CLASS}
+                                    >
+                                      {t('ccAgent.sidebar.automationGroup.menu.delete')}
+                                    </DropdownMenuItem>
                                   )}
                                 </>
                               )}

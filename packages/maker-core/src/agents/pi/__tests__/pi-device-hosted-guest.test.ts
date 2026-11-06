@@ -189,6 +189,7 @@ describe('Pi device-hosted guest sessions', () => {
     deps?: Partial<AgentDeps>;
     ghostRosterSnapshot?: string;
     mcpServers?: string[];
+    controllerManagedSkills?: boolean;
   } = {}) {
     const model = extra.model ?? 'm';
     const providerId = extra.providerId ?? (guest ? 'xd' : undefined);
@@ -209,6 +210,7 @@ describe('Pi device-hosted guest sessions', () => {
       ...(guest ? { guest: true } : {}),
       ...(extra.guestHome ? { guestHome: extra.guestHome } : {}),
       ...(guest && guestProvider ? { guestProvider } : {}),
+      ...(extra.controllerManagedSkills ? { controllerManagedSkills: { claudePluginRoots: [] } } : {}),
     };
     const handle = await new PiAgent(buildDeps(extra.deps)).startSession({
       sessionId: guest ? 'guest-session' : 'owner-session',
@@ -424,6 +426,17 @@ describe('Pi device-hosted guest sessions', () => {
         { id: 'byom-a', name: 'byom-a', provider: 'byom-a', keyEnv: 'CINDY_PI_KEY_BYOM_A', remoteProviderId: 'byom-a' },
         { id: 'byom-b', name: 'byom-b', provider: 'byom-b', keyEnv: 'CINDY_PI_KEY_BYOM_B', remoteProviderId: 'byom-b' },
       ]);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  // 任务所在电脑带来的托管 Skill 已作为项目 Skill 放在影子目录：本机的不再挂载。
+  it('skips this computer managed skills when the task computer brings its own', async () => {
+    const { handle, args, configHome } = await start(false, { controllerManagedSkills: true });
+    try {
+      expect(repeatedArgValues(args, '--skill')).not.toContain(path.join(configHome, 'cindy-managed-skills'));
+      expect(spies.getManagedSkills).not.toHaveBeenCalled();
     } finally {
       await handle.close();
     }

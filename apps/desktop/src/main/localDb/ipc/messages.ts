@@ -52,6 +52,7 @@ import {
 import { adoptLegacySessionBeforeOpen } from '../../session-import/legacy';
 import { getDeviceLinkInvokeContext, isDeviceLinkInvoke } from '../../device-link/invoke-context';
 import { onMessageCreated as onChatMessageCreatedForEmbedding } from '../../embedders/chat-history-embedder';
+import { recomputePrRefsForSession, recordPrRefsForMessage } from '../../git-context/prRefsStore';
 import {
   isSyntheticTriggerText,
   mergeDismissedIntoErrorContent,
@@ -92,6 +93,7 @@ function notAutoResumeAgentMetaSql() {
 
 // Normal publication stays non-blocking. Authoritative corrections/retractions
 // settle the exact row's create/update hooks before reconciling derived state.
+const pendingPrRefWrites = new WeakMap<DbClient, Map<string, Promise<void>>>();
 const pendingMediaWrites = new WeakMap<DbClient, Map<string, Set<Promise<void>>>>();
 
 function trackMessageMediaWrite(dbClient: DbClient, rowId: string, write: Promise<void>): Promise<void> {
@@ -259,6 +261,8 @@ export interface PriorUserRoundCost {
   money: RegionalMoney | null;
   costUsd: number;
   hasEstimatedValue: boolean;
+  /** 本轮是该任务（或 /clear 之后）第一条真实用户请求。 */
+  isFirstUserRound?: boolean;
 }
 
 const VALID_ROLES: ReadonlySet<MessageRole> = new Set([
@@ -381,6 +385,8 @@ export function registerMessageIpc(
 
   const historyView = createHistoryViewReader({
     list: readMessagesList,
+    // readMessagesList skips paged imports only for device-link callers (#318).
+    shareScope: () => (isDeviceLinkInvoke() ? 'device-link' : 'local'),
     revision: async () => {
       const current = getCurrentDbClientSnapshot();
       if (!current) throw new Error('DbClient not ready');
@@ -1131,6 +1137,8 @@ export async function commitMessageDeletion(
     });
   }
 
+  void recomputePrRefsForSession(sessionId).catch(() => undefined);
+
   // sessions:patched 的消费者只做 shallow merge，不会主动重拉。删除后同步带出 canonical
   // preview，避免其它窗口 / device-link 控制端继续显示已删除的末条消息。preview 口径与
   // sessions:list 的 LATEST_MSG_CONTENT_SQL 一致：可见 user/assistant，过滤 rewind_at /
@@ -1299,6 +1307,7 @@ export function broadcastMessageDeleted(
 export async function rewindPersistedUserMessageAfterClear(
   sessionId: string,
   clientId: string,
+  options?: { discard?: boolean },
 ): Promise<void> {
   const ownerScope = captureOwnerBroadcastScope();
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
@@ -1324,6 +1333,7 @@ export async function rewindPersistedUserMessageAfterClear(
     sessionId,
     clientId,
     rewoundAt,
+    ...(options?.discard ? { discard: true } : {}),
   });
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
   if (updated.changes === 0) return;
@@ -1358,8 +1368,17 @@ export async function rewindPersistedUserMessageAfterClear(
     });
   }
   broadcastMessageDeleted({ sessionId, clientId, clientIds: [clientId] }, ownerScope);
+  void recomputePrRefsForSession(sessionId).catch(() => undefined);
 }
 
+export async function purgeRewoundSchedulerPrompts(
+  limit = 100,
+  cursor = 0,
+): Promise<{ deleted: number; sessionIds: string[]; cursor: number | null }> {
+  const ownerScope = captureOwnerBroadcastScope();
+  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return { deleted: 0, sessionIds: [], cursor: null };
+  return getDbClient().tx('message.purgeRewoundSchedulerPrompts', { limit, cursor });
+}
 export async function dismissErrorMessage(
   sessionId: string,
   clientId: string,
@@ -1518,6 +1537,15 @@ async function reconcileAssistantDerivedState(
       error: error instanceof Error ? error.message : String(error),
     });
   });
+  await pendingPrRefWrites.get(dbClient)?.get(row.id);
+  try {
+    if (isCurrent()) await recomputePrRefsForSession(row.sessionId, { dbClient, isCurrent });
+  } catch (error) {
+    log.warn('assistant correction PR reference reconciliation failed', {
+      sessionId: row.sessionId, clientId: row.clientId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
   if (!refreshPreview || !isCurrent()) return;
   try {
     const latest = await latestVisiblePreviewRow(row.sessionId);
@@ -1634,6 +1662,10 @@ export async function updateMessageContent(
   // The correction already committed: settle its original publication even if
   // clear/owner changed or another deletion removed the row during readback.
   if (original) await reconcileAssistantDerivedState(original, dbClient, isCurrent, ownerScope, false);
+  else if (row && (row.role === 'user' || row.role === 'assistant')) {
+    await pendingPrRefWrites.get(dbClient)?.get(row.id);
+    if (isCurrent()) await recomputePrRefsForSession(sessionId, { dbClient, isCurrent });
+  }
   return row ? messageToCamel(row) : null;
 }
 
@@ -1958,6 +1990,20 @@ export async function createMessage(
     // 双保险: chat-history-embedder.onMessageCreated 内部已 try/catch,
     // 此处 .catch 仅防御该函数将来被 refactor 时漏掉的异常路径。
   });
+  // session-git-pr-context hook —— fire-and-forget。内部限定 user/assistant 角色,
+  // 每条消息跑一次锚定正则线性扫描(开销可忽略);失败仅 log warn。
+  const prRefsWrite = recordPrRefsForMessage(msg).catch(() => {
+    // recordPrRefsForMessage 内部已 try/catch,此处兜底防御 refactor 漏网异常。
+  });
+  let pendingPrRefs = pendingPrRefWrites.get(dbClient);
+  if (!pendingPrRefs) {
+    pendingPrRefs = new Map();
+    pendingPrRefWrites.set(dbClient, pendingPrRefs);
+  }
+  pendingPrRefs.set(msg.id, prRefsWrite);
+  void prRefsWrite.then(() => {
+    if (pendingPrRefs.get(msg.id) === prRefsWrite) pendingPrRefs.delete(msg.id);
+  });
   return msg;
 }
 
@@ -2088,7 +2134,9 @@ export async function patchMessageAgentMetaWithResult(
   // 损坏的 JSON 以 {} 为底重建(补丁字段仍写入,旧字段无法挽救)。
   const previous = parseAgentMetaRecord(rows[0].agentMeta) ?? {};
   const next = { ...previous, ...patch };
-  await updateAgentMeta(sessionId, clientId, JSON.stringify(next));
+  // Keep the read and write on the same owner even if login changes across await.
+  await db.update(messages).set({ agentMeta: JSON.stringify(next) })
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)));
   return { previous, next };
 }
 
@@ -2221,8 +2269,13 @@ export async function readPriorUserRoundCost(
       ),
     )
     .orderBy(desc(messages.createdAt), desc(messageRowid));
-  const boundary = userRows.find((row) => !isAutoResumeUserMessage(row.agentMeta));
+  const realUserRows = userRows.filter((row) => !isAutoResumeUserMessage(row.agentMeta));
+  const boundary = realUserRows[0];
   if (!boundary) return { money: null, costUsd: 0, hasEstimatedValue: false };
+  // 运行中插话（delivery: 'steer'）与界面一样归在同一轮，不算新的用户请求。
+  const isFirstUserRound =
+    realUserRows.filter((row) => parseAgentMetaRecord(row.agentMeta)?.delivery !== 'steer')
+      .length === 1;
 
   const afterBoundary = or(
     gt(messages.createdAt, boundary.createdAt),
@@ -2282,6 +2335,7 @@ export async function readPriorUserRoundCost(
     costUsd: money?.currency === 'USD' ? money.amount : 0,
     hasEstimatedValue,
     ...(additionalCosts.length ? { additionalCosts } : {}),
+    ...(isFirstUserRound ? { isFirstUserRound } : {}),
   };
 }
 
