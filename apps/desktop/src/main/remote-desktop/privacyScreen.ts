@@ -5,6 +5,9 @@ import { privacyScreenHtml } from './privacyScreenHtml';
 import { watchPrivacyInput, type PrivacyInputMonitor } from './privacyInput';
 import { scheduleMainAppPresenceRestore } from '../appPresence';
 
+/** Below 1 so windows behind stay "visible" to macOS; high enough to hide them from people. */
+const AWAY_MASK_OPACITY = 0.99;
+
 export type PrivacyInputWatcher = (
   localInput: () => void,
   failed: () => void,
@@ -163,14 +166,13 @@ export class PrivacyScreen {
           skipTaskbar: true,
           hasShadow: false,
           // Functional blackout pixels, independent of the application's theme.
-          // Away masks are non-opaque windows painted by the page instead: an opaque
-          // full-screen window makes macOS report every window behind it as occluded,
-          // and Chromium/Electron apps then stop drawing, so Agents behind the cover
-          // read a frozen screen (2026-11-06: a settings click behind the mask never
-          // repainted).
-          ...(nonActivating
-            ? { type: 'panel', transparent: true, backgroundColor: '#00000000' }
-            : { backgroundColor: '#000000' }),
+          backgroundColor: '#000000',
+          // Away masks are very slightly translucent: a fully opaque full-screen window
+          // makes macOS report every window behind it as occluded, and Chromium/Electron
+          // apps then stop drawing, so Agents behind the cover read a frozen screen
+          // (2026-11-06: a click behind the mask changed the page, its pixels did not).
+          // A transparent window whose page is opaque is still treated as occluding.
+          ...(nonActivating ? { type: 'panel', opacity: AWAY_MASK_OPACITY } : {}),
           webPreferences: {
             session: partition,
             sandbox: true,

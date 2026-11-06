@@ -40,7 +40,11 @@ export interface AwayGuardDeps {
 
 /** After masks fail to start, fall back to the system lock instead of retrying every tick. */
 export const AWAY_GUARD_RETRY_MS = 60_000;
-/** Settings → "Try it": cover now; if nobody touches the Mac, lock when this runs out. */
+/**
+ * Settings → "Try it": cover now; if nobody touches the Mac, simply uncover when this
+ * runs out. The owner was at this unlocked Mac a moment ago, so ending without a lock
+ * leaves it exactly as it was.
+ */
 export const AWAY_GUARD_PREVIEW_MS = 2 * 60_000;
 
 type MaskState = 'none' | 'showing' | 'shown' | 'ending';
@@ -72,8 +76,8 @@ export class AwayGuardController {
 
   /**
    * Settings → "Try it": cover the displays now, without waiting for work or absence,
-   * so the owner can check the lock and unlock path. Ends like a real cover: physical
-   * input locks, and so does the preview running out.
+   * so the owner can check the lock and unlock path. Physical input locks as with a
+   * real cover; running out uncovers without a lock.
    */
   async preview(): Promise<void> {
     if (this.mask !== 'none' || this.deps.screenLocked() || this.deps.remoteDesktopActive()) return;
@@ -121,7 +125,7 @@ export class AwayGuardController {
     if (this.previewUntil) {
       if (this.mask === 'shown' && now < this.previewUntil) return deps.keepDisplayAwake(true);
       this.previewUntil = 0;
-      if (this.mask === 'shown') return this.end(true, 'preview ended');
+      if (this.mask === 'shown') return this.end(false, 'preview ended');
     }
     if (!deps.enabled()) return this.standDown(true, 'disabled');
     // An unreadable activity source keeps an existing cover; it never starts one.

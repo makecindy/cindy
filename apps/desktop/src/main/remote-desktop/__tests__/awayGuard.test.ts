@@ -151,7 +151,7 @@ describe('AwayGuardController', () => {
     expect(state.events).toEqual(['show', 'hide', 'show', 'lock']);
   });
 
-  it('previews the cover even with the setting off and no work, then locks when it runs out', async () => {
+  it('previews the cover even with the setting off and no work, then uncovers when it runs out', async () => {
     const { state, guard } = setup();
     state.enabled = false;
     state.busy = false;
@@ -161,7 +161,7 @@ describe('AwayGuardController', () => {
     expect(state.awake).toBe(true);
     state.now += AWAY_GUARD_PREVIEW_MS;
     await guard.tick();
-    expect(state.events).toEqual(['show', 'lock']);
+    expect(state.events).toEqual(['show', 'hide']);
     expect(state.awake).toBe(false);
   });
 });

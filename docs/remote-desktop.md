@@ -47,7 +47,13 @@ fixed system lock shortcut, while pointer movement alone is swallowed without lo
 (idle mice and wireless receivers report movement on their own). The owner unlocks with
 Touch ID or password through macOS itself, and the tap is disabled as soon as the lock
 is up. Covering every Space briefly makes Electron a background app, so Main brings the
-Cindy window that was focused back to the front after unlock. It also locks on
+Cindy window that was focused back to the front after unlock. Away masks are
+non-activating panels that skip Electron's Dock-hiding process transform (it left Cindy
+a background-only app), and they are 99% opaque: a fully opaque full-screen window makes
+macOS mark the windows behind as occluded and Electron apps stop painting, so an Agent
+read stale screenshots even though its clicks landed. Settings → "Try it" covers the
+displays three seconds after the click; touching locks as usual, and an untouched
+preview uncovers after two minutes without locking (the owner was just using the Mac). It also locks on
 stdin EOF, a missed heartbeat or a dead parent, so a crashed Cindy leaves a locked
 screen rather than an uncovered desktop. Main locks before removing masks when work
 ends, the setting is turned off, a display is added, or a mask window fails. Remote
