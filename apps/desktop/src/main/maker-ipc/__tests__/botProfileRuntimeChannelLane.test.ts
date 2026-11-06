@@ -192,6 +192,8 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     const snapshot = await hydrateBotProfileRuntime(main, deps, { persistSnapshot: false });
     expect(main.botRuntimeProfile?.projectContext).toBe(true);
     expect(main.makerMemoryScopeKey).toBeUndefined();
+    // Project memory, switched by the teammate's own memory setting, not the global one.
+    expect(main.makerMemoryEnabled).toBe(true);
     expect(deps.readMemoryIndex).not.toHaveBeenCalled();
     expect(snapshot?.disabledToolsets).toEqual([]);
     expect(main.extraDirs).toEqual(['/code/app']);

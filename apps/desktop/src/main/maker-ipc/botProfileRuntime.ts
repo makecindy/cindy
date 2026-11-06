@@ -616,9 +616,10 @@ export async function hydrateBotProfileRuntime(
   const fullLane = ownerChat || (projectContext && row.role === 'channel');
   // Bot Memory belongs to the Bot Home and is independent from Cindy's global
   // Maker Memory switch. The profile can still explicitly disable its own memory.
-  // A V2 teammate uses its project's memory exactly like an ordinary task.
+  // A V2 teammate uses its project's memory like an ordinary task, still switched
+  // by the teammate's own memory setting rather than the global one.
   const memoryEngineEnabled = !projectContext && config.memory !== false;
-  if (!projectContext) opts.makerMemoryEnabled = memoryEngineEnabled;
+  opts.makerMemoryEnabled = projectContext ? config.memory !== false : memoryEngineEnabled;
   const botMemoryScopeKey = buildBotMemoryScopeKey(row.botId);
   if (memoryEngineEnabled) opts.makerMemoryScopeKey = botMemoryScopeKey;
   const memoryActive = memoryEngineEnabled;
