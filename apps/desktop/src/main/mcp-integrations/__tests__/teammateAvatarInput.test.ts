@@ -34,7 +34,7 @@ describe('teammate avatar input', () => {
   it('downloads a public HTTPS image with a byte limit and validates its bytes', async () => {
     const fetchImage = vi.fn().mockResolvedValue({ buffer: png, mimeType: 'image/png' });
     const result = await resolveTeammateAvatarInput({ ...baseInput, avatar: 'https://example.com/avatar.png' }, deps({ fetchImage }));
-    expect(result).toEqual({ ok: true, avatarImageBase64: png.toString('base64') });
+    expect(result).toMatchObject({ ok: true, avatarImageBase64: png.toString('base64') });
     expect(fetchImage).toHaveBeenCalledWith('https://example.com/avatar.png', 5 * 1024 * 1024, undefined, { timeoutMs: 15_000 });
   });
 
@@ -43,7 +43,7 @@ describe('teammate avatar input', () => {
     const readPicture = vi.fn();
     expect(await resolveTeammateAvatarInput({ ...baseInput, remoteHostId: 'ssh-1', workingDir: null,
       avatar: 'https://example.com/avatar.png' }, deps({ fetchImage, readPicture })))
-      .toEqual({ ok: true, avatarImageBase64: png.toString('base64') });
+      .toMatchObject({ ok: true, avatarImageBase64: png.toString('base64') });
     expect(fetchImage).toHaveBeenCalledOnce();
     expect(readPicture).not.toHaveBeenCalled();
   });
@@ -91,6 +91,22 @@ describe('teammate avatar input', () => {
       authorizePath: authorization, readPicture,
     }))).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
   });
+
+  it.each(['https://example.com/avatar.png', 'avatar.png'])(
+    'rejects an image result after its task instance closes: %s', async avatar => {
+      let live = true;
+      const result = await resolveTeammateAvatarInput({ ...baseInput, avatar }, deps({
+        isCurrentSession: () => live,
+        fetchImage: vi.fn().mockResolvedValue({ buffer: png, mimeType: 'image/png' }),
+        readPicture: async () => ({ ok: true, bytes: png }),
+      }));
+      expect(result).toMatchObject({ ok: true, avatarImageBase64: png.toString('base64') });
+      if (!result.ok) throw new Error('expected image result');
+      expect(result.isAccessCurrent?.()).toBe(true);
+      live = false;
+      expect(result.isAccessCurrent?.()).toBe(false);
+    },
+  );
 
   it('never reads a controller-local file for a remote task', async () => {
     const readPicture = vi.fn();

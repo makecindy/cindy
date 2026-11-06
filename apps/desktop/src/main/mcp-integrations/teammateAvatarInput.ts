@@ -59,11 +59,10 @@ export async function resolveTeammateAvatarInput(
   }
   try { validateBotAvatarBuffer(image); }
   catch { return { ok: false, errorCode: 'INVALID_ARGS', message: '头像只支持小于 5 MB 的 PNG、JPEG 或 WebP 图片' }; }
-  if (!deps.isCurrentSession(sessionId, sessionInstanceId) || isGrantCurrent?.() === false)
-    return { ok: false, errorCode: 'PERMISSION_DENIED', message: '当前任务实例已变化，请重新操作' };
-  // Retain the grant snapshot until the host finishes storing the avatar.
+  // Keep both the task instance and any external-file grant live until persistence.
   const granted = isGrantCurrent;
-  return { ok: true, avatarImageBase64: image.toString('base64'),
-    ...(granted ? { isAccessCurrent: () => deps.isCurrentSession(sessionId, sessionInstanceId) && granted() } : {}),
-  };
+  const isAccessCurrent = () => deps.isCurrentSession(sessionId, sessionInstanceId) && (granted?.() ?? true);
+  if (!isAccessCurrent())
+    return { ok: false, errorCode: 'PERMISSION_DENIED', message: '当前任务实例已变化，请重新操作' };
+  return { ok: true, avatarImageBase64: image.toString('base64'), isAccessCurrent };
 }

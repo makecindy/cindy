@@ -1426,6 +1426,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             remoteHostId: sessions.remoteHostId,
             canonicalSessionId: botProfiles.canonicalSessionId,
             profileStatus: botProfiles.status,
+            currentAvatar: botProfiles.avatar,
           }).from(botSessionLinks)
             .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
             .innerJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
@@ -1450,7 +1451,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               const buffer = Buffer.from(resolvedAvatar.avatarImageBase64, 'base64');
               await setBotProfileAvatar(owned.botId, {
                 buffer, mimeType: validateBotAvatarBuffer(buffer),
-              }, expectedVersion, undefined, assertAvatarAccess);
+              }, expectedVersion, owned.currentAvatar, assertAvatarAccess);
             } else if (resolvedAvatar.avatar) {
               await updateBotProfile({ id: owned.botId, avatar: resolvedAvatar.avatar }, expectedVersion);
             } else {

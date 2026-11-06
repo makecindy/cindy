@@ -1640,6 +1640,18 @@ describe('Bot canonical Session lifecycle', () => {
     expect(readProvenance(untrusted.id)).toBeUndefined();
   });
 
+  it('preserves a newer avatar when a delayed image import carries the previous avatar', async () => {
+    const created = await createBotProfile({ name: 'Delayed avatar import', avatar: '🤖' });
+    const source = await createBotProfile({ name: 'Image source' });
+    const image = { buffer: readFileSync(resolveSafe(source.avatar).absPath), mimeType: 'image/png' };
+    const userEdit = await updateStoredBotProfile({ id: created.id, avatar: '🦊' });
+    expect(userEdit.currentVersion).toBe(created.currentVersion);
+
+    await expect(setBotProfileAvatar(created.id, image, created.currentVersion, created.avatar))
+      .rejects.toThrow('Teammate avatar changed during update');
+    expect((await invoke('local-db:bots:get', created.id)).avatar).toBe('🦊');
+  });
+
   it('creates a real gallery portrait when the shared tool entry receives only a name', async () => {
     const { createBotProfile } = await import('../bots');
     const created = await createBotProfile({ name: 'Name only' });
