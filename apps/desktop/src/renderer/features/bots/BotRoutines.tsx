@@ -191,7 +191,6 @@ export function BotRoutines({
       enabled: value.enabled,
       triggers: value.triggers,
       silentWhenIdle: value.silentWhenIdle ?? true,
-      requireOwnerActivity: value.requireOwnerActivity ?? false,
       preRunHook: value.preRunHook ?? null,
       preRunPlugin: value.preRunPlugin ?? null,
       modelOverride: value.modelOverride ?? null,
@@ -504,12 +503,6 @@ export function BotRoutines({
               {t('routines.quiet')}
             </label>
             <p className="text-12 text-[var(--text-secondary)]">{t('routines.quietHint')}</p>
-            {/* Older remote hosts drop unknown routine fields; offer it where the host is known to keep it. */}
-            {localTarget && <><label className="flex min-h-8 items-center gap-2">
-              <Switch aria-label={t('routines.requireOwnerActivity')} checked={draft.requireOwnerActivity ?? false} onCheckedChange={(requireOwnerActivity) => setDraft({ ...draft, requireOwnerActivity })} />
-              {t('routines.requireOwnerActivity')}
-            </label>
-            <p className="text-12 text-[var(--text-secondary)]">{t('routines.requireOwnerActivityHint')}</p></>}
             {localTarget && (
               <div className="flex flex-wrap items-center gap-2.5">
                 <span className="text-[var(--text-secondary)]">{t('routines.checkSource')}</span>
@@ -1049,7 +1042,6 @@ function routineInput(routine: Routine): RoutineInput {
     ...(routine.modelOverride !== undefined ? { modelOverride: routine.modelOverride } : {}),
     ...(routine.delivery !== undefined ? { delivery: routine.delivery } : {}),
     ...(routine.sessionMode !== undefined ? { sessionMode: routine.sessionMode } : {}),
-    ...(routine.requireOwnerActivity !== undefined ? { requireOwnerActivity: routine.requireOwnerActivity } : {}),
   };
 }
 

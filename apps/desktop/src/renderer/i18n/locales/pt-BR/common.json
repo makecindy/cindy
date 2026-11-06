@@ -18008,8 +18008,6 @@
     "sessionModeFresh": "Nova sessão a cada gatilho (isolar contexto)",
     "sessionModeHint": "A opção persistente mantém uma única conversa da rotina. Uma nova sessão cria e fecha uma conversa isolada para cada gatilho.",
     "quietHint": "Relate apenas alterações ou problemas. Desative para lembretes e mensagens agendadas.",
-    "requireOwnerActivity": "Só se vocês conversaram desde a última execução",
-    "requireOwnerActivityHint": "Execuções agendadas são puladas sem chamar um modelo se você não conversou com este colega desde a última execução bem-sucedida. Executar agora sempre prossegue.",
     "checkSource": "Verificar com",
     "checkCommand": "Comando de verificação prévia",
     "checkHint": "Opcional. Verifica o computador antes de cada execução: exit 2 pula a execução, exit 0 continua, erros permanecem visíveis. Limpe para remover.",

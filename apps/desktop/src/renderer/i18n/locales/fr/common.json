@@ -18008,8 +18008,6 @@
     "sessionModeFresh": "Nouvelle session à chaque déclenchement (isoler le contexte)",
     "sessionModeHint": "Le mode persistant conserve une seule conversation pour la routine. Le mode nouvelle session crée puis ferme une conversation isolée à chaque déclenchement.",
     "quietHint": "Signaler uniquement les changements ou les problèmes. Désactivez pour les rappels et les messages planifiés.",
-    "requireOwnerActivity": "Seulement si vous avez échangé depuis la dernière exécution",
-    "requireOwnerActivityHint": "Les exécutions planifiées sont ignorées sans appeler de modèle si vous n’avez pas échangé avec ce coéquipier depuis la dernière exécution réussie. « Exécuter maintenant » s’exécute toujours.",
     "checkSource": "Vérifier avec",
     "checkCommand": "Commande de vérification préalable",
     "checkHint": "Facultatif. Vérifie sur l'ordinateur avant chaque exécution : le code de sortie 2 ignore l'exécution, 0 la poursuit, les erreurs restent visibles. Videz le champ pour la retirer.",

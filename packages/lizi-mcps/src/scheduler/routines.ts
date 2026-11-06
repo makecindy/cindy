@@ -86,7 +86,6 @@ export function registerRoutineTools(
         z.object({ kind: z.literal('none') }),
       ]).optional().describe('Final delivery: default companion/direct displays the result without another model call. companion/process asks the companion to process it only when requested. im uses an id from routine_delivery_targets. none keeps only the independent task. Omission preserves saved choices; silent checks still suppress idle delivery.'),
       silentWhenIdle: z.boolean().optional().describe('Set true for checks: no routine chatter, report only when needed via schedule_notify_current_run. Reminders and scheduled delivery default to false. Preserve existing user choices.'),
-      requireOwnerActivity: z.boolean().optional().describe('true skips scheduled and event runs, without calling a model, when the owner has not talked with this teammate since the routine\'s last successful run (manual runs always proceed). The run data then carries previousSuccessAt. Omission preserves the saved choice.'),
       preRunPlugin: z.object({
         pluginId: z.string().min(1).max(512),
         onFailure: z.enum(['allow', 'skip', 'block']),

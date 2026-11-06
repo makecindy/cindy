@@ -42,6 +42,12 @@ export interface PreRunHookStdinPayload {
    * skip 都会把它推新,脚本会永久自锁;这类条件应自己落盘记录上次放行时间。
    */
   lastFinishedAt?: number;
+  /**
+   * 伙伴例行任务专有：主人最近一轮和这个伙伴已完成对话的时间戳(ms);从未对话或读取失败时缺省。
+   * 与 lastFinishedAt 比较即可判断「上次之后有没有新对话」(被跳过的轮次说明期间没有对话,
+   * 推新 lastFinishedAt 不会漏掉之后的对话)。
+   */
+  ownerActiveAt?: number;
 }
 
 export interface PreRunHookInput {

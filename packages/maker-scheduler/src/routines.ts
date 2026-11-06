@@ -99,11 +99,6 @@ export interface Routine {
   /** Omission preserves saved choices; ordinary routines default to their initiating companion. */
   delivery?: RoutineDelivery;
   /**
-   * Scheduled runs are skipped before any model call when the owner has not talked with this
-   * teammate since the routine's last successful run. Manual runs always proceed. Omission = false.
-   */
-  requireOwnerActivity?: boolean;
-  /**
    * 宿主内置规则（每个伙伴一条的「跟进」与「夜间学习」）。由宿主模板生成，不接受用户/模型
    * 改写指令与触发条件、不能删除；可暂停（enabled），普通 Agent 规则可单独选模型。可选字段：旧数据与旧客户端缺省即普通规则，
    * state 版本不变。
@@ -122,7 +117,7 @@ export interface Routine {
 export type RoutineInput = Pick<
   Routine,
   "name" | "prompt" | "enabled" | "triggers" | "silentWhenIdle" | "preRunHook" | "preRunPlugin" | "modelOverride"
-  | "sessionMode" | "delivery" | "requireOwnerActivity"
+  | "sessionMode" | "delivery"
 >;
 
 function record(value: unknown): Record<string, unknown> {
@@ -210,8 +205,6 @@ export function parseRoutineInput(value: unknown): RoutineInput {
   }
   if (input.silentWhenIdle !== undefined && typeof input.silentWhenIdle !== "boolean")
     throw new Error("silentWhenIdle must be boolean");
-  if (input.requireOwnerActivity !== undefined && typeof input.requireOwnerActivity !== "boolean")
-    throw new Error("requireOwnerActivity must be boolean");
   let preRunHook: PreRunHookConfig | null | undefined;
   if (input.preRunHook === null) preRunHook = null;
   else if (input.preRunHook !== undefined) {
@@ -260,7 +253,6 @@ export function parseRoutineInput(value: unknown): RoutineInput {
     ...(preRunHook === undefined ? {} : { preRunHook }),
     ...(preRunPlugin === undefined ? {} : { preRunPlugin }),
     ...(sessionMode === undefined ? {} : { sessionMode }),
-    ...(input.requireOwnerActivity === undefined ? {} : { requireOwnerActivity: input.requireOwnerActivity as boolean }),
     name: string(input.name, 200),
     prompt: string(input.prompt, 100_000),
     enabled: input.enabled,

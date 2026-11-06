@@ -1,6 +1,7 @@
 /**
- * 「主人和这个伙伴有没有新对话」：例行任务的通用前置条件 `requireOwnerActivity` 用它在派发前判断，
- * 没有就跳过，不建任务、不调用模型（bot-routines.md「只在主人有新对话时运行」）。
+ * 主人最近一次和这个伙伴说话的时间：伙伴例行任务的前置检查经 stdin 的 `ownerActiveAt` 读到它，
+ * 与 `lastFinishedAt` 比较就能判断「上次之后有没有新对话」（内置夜间学习就是这样跳过的，
+ * bot-routines.md「内置夜间学习例行任务」）。
  *
  * 口径：伙伴主任务、私聊话题与 IM 渠道专线里，主人本人发起、伙伴已经答完的轮次。不算子代理、
  * 私下回复、群专线，也不算自动化 / 目标 / 协同 / 其他任务投递的输入。
@@ -31,11 +32,18 @@ function textOf(raw: string): string {
   return typeof text === 'string' ? text : '';
 }
 
-/** 自 `after`（不含）以来是否有一轮主人与伙伴已完成的对话。 */
-export async function hasOwnerActivitySince(botId: string, after: number): Promise<boolean> {
-  let cursor = after;
+/** 这条伙伴专线所属伙伴的主人最近一轮已完成对话的时间（ms）；不是伙伴专线或从未对话时为 undefined。 */
+export async function lastOwnerActivityAt(laneSessionId: string): Promise<number | undefined> {
+  const db = getDbClient();
+  const lane = await db.query<{ botId: string }>(
+    `SELECT bot_id AS botId FROM bot_session_links WHERE session_id=? LIMIT 1 /* routine-owner-activity-lane */`,
+    [laneSessionId],
+  );
+  const botId = lane[0]?.botId;
+  if (!botId) return undefined;
+  let cursor = Number.MAX_SAFE_INTEGER;
   for (;;) {
-    const rows = await getDbClient().query<{
+    const rows = await db.query<{
       createdAt: number; meta: string; role: string;
       inputId: string | null; inputContent: string | null; inputMeta: string | null;
     }>(
@@ -53,24 +61,26 @@ export async function hasOwnerActivitySince(botId: string, after: number): Promi
              AND x.rowid < m.rowid ORDER BY x.rowid DESC LIMIT 1))
        WHERE b.bot_id=? AND b.role IN ('canonical','thread','channel') AND b.archived_at IS NULL
          AND s.source='bot' AND s.status='active' AND s.remote_host_id IS NULL
-         AND m.role='assistant' AND m.rewind_at IS NULL AND m.created_at > ?
+         AND m.role='assistant' AND m.rewind_at IS NULL AND m.created_at < ?
          AND m.created_at > COALESCE(s.cleared_at, 0)
          AND json_extract(m.agent_meta, '$.turnCompleted') = 1
-       ORDER BY m.created_at ASC LIMIT ${PAGE} /* routine-owner-activity */`,
+       ORDER BY m.created_at DESC LIMIT ${PAGE} /* routine-owner-activity */`,
       [botId, cursor],
     );
-    for (const row of rows) {
-      const meta = parseMeta(row.meta);
-      if (meta.parentUuid || meta.botPrivateReply || meta.botGroupLane || !row.inputId) continue;
-      const inputMeta = parseMeta(row.inputMeta);
-      if (isAutomaticInputOriginKind(inputMeta.origin?.kind)) continue;
-      const source = inputMeta.imSource;
-      if (row.role === 'channel' && source?.origin?.sender?.isOwner !== true) continue;
-      const userText = row.role === 'channel' && typeof source?.userText === 'string'
-        ? source.userText : textOf(row.inputContent ?? '');
-      if (userText.trim() && !isSyntheticTriggerText(userText)) return true;
-    }
-    if (rows.length < PAGE) return false;
+    for (const row of rows) if (isOwnerTurn(row)) return row.createdAt;
+    if (rows.length < PAGE) return undefined;
     cursor = rows[rows.length - 1]!.createdAt;
   }
+}
+
+function isOwnerTurn(row: { meta: string; role: string; inputId: string | null; inputContent: string | null; inputMeta: string | null }): boolean {
+  const meta = parseMeta(row.meta);
+  if (meta.parentUuid || meta.botPrivateReply || meta.botGroupLane || !row.inputId) return false;
+  const inputMeta = parseMeta(row.inputMeta);
+  if (isAutomaticInputOriginKind(inputMeta.origin?.kind)) return false;
+  const source = inputMeta.imSource;
+  if (row.role === 'channel' && source?.origin?.sender?.isOwner !== true) return false;
+  const userText = row.role === 'channel' && typeof source?.userText === 'string'
+    ? source.userText : textOf(row.inputContent ?? '');
+  return !!userText.trim() && !isSyntheticTriggerText(userText);
 }

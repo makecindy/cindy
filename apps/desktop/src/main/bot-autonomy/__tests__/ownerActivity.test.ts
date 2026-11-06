@@ -1,27 +1,29 @@
 /**
  * 测试价值
- * - 生产入口与可观察结果：hasOwnerActivitySince（例行任务 requireOwnerActivity 的判定）只把主人本人发起、
- *   伙伴已答完的轮次算作新对话；自动输入、私下回复、群专线、IM 里非主人的消息和合成触发都不算，
- *   结果直接决定这次定时运行是否调用模型。
- * - Bug／规则依据：docs/product-rules/bot-routines.md「只在主人有新对话时运行」；口径沿用旧版夜间学习计数器
+ * - 生产入口与可观察结果：lastOwnerActivityAt（伙伴例行任务前置检查 stdin 的 ownerActiveAt）只把主人本人发起、
+ *   伙伴已答完的轮次算作对话；自动输入、任务回执、私下回复、群专线、IM 里非主人的消息都不算。它决定内置夜间学习
+ *   这次是否调用模型。
+ * - Bug／规则依据：docs/product-rules/bot-routines.md「内置夜间学习例行任务」；口径沿用旧版夜间学习计数器
  *   （随专用实现一起删除，原测试不再覆盖）。
- * - 现有覆盖缺口：routines/service 的测试替换了这个模块，只验证跳过与派发两条分支。
- * - 最小失败输入：一页里只有自动续跑、任务回执、非主人 IM 消息时误判为有新对话；满页后漏看下一页的主人轮次。
- * - tier：unit（数据库查询为内存替身，按真实查询的游标参数返回分页结果）。
+ * - 现有覆盖缺口：前置检查测试只验证比较脚本，不验证这个时间怎么来。
+ * - 最小失败输入：最近一页全是自动续跑时返回了它们的时间；满页后漏看更早一页的主人轮次；不是伙伴专线却返回时间。
+ * - tier：unit（数据库查询为内存替身，按真实查询的游标参数倒序分页返回）。
  */
 import { beforeEach, expect, it, vi } from 'vitest';
 
-const h = vi.hoisted(() => ({ rows: [] as Array<Record<string, unknown>>, queries: [] as unknown[][] }));
+const h = vi.hoisted(() => ({ botId: 'bot' as string | null, rows: [] as Array<Record<string, unknown>>, cursors: [] as unknown[] }));
 vi.mock('../../localDb/client/current.js', () => ({
   getDbClient: () => ({
-    query: vi.fn(async (_sql: string, params: unknown[]) => {
-      h.queries.push(params);
-      return h.rows.filter((row) => (row.createdAt as number) > (params[1] as number)).slice(0, 200);
+    query: vi.fn(async (sql: string, params: unknown[]) => {
+      if (sql.includes('routine-owner-activity-lane')) return h.botId ? [{ botId: h.botId }] : [];
+      h.cursors.push(params[1]);
+      return h.rows.filter((row) => (row.createdAt as number) < (params[1] as number))
+        .sort((a, b) => (b.createdAt as number) - (a.createdAt as number)).slice(0, 200);
     }),
   }),
 }));
 
-import { hasOwnerActivitySince } from '../ownerActivity.js';
+import { lastOwnerActivityAt } from '../ownerActivity.js';
 
 const reply = (createdAt: number, input: { text?: string; meta?: object }, extra: { role?: string; meta?: object } = {}) => ({
   createdAt,
@@ -32,7 +34,7 @@ const reply = (createdAt: number, input: { text?: string; meta?: object }, extra
   inputMeta: JSON.stringify(input.meta ?? {}),
 });
 
-beforeEach(() => { h.rows = []; h.queries = []; });
+beforeEach(() => { h.botId = 'bot'; h.rows = []; h.cursors = []; });
 
 it.each([
   ['an automatic continuation', reply(1, { meta: { origin: { kind: 'scheduler' } } })],
@@ -43,14 +45,20 @@ it.each([
   ['an empty input', reply(1, { text: '   ' })],
 ])('does not count %s as owner activity', async (_label, row) => {
   h.rows = [row];
-  expect(await hasOwnerActivitySince('bot', 0)).toBe(false);
+  expect(await lastOwnerActivityAt('lane')).toBeUndefined();
 });
 
-it('finds an owner turn on a later page after a full page of automatic input', async () => {
+it('returns the latest owner turn, reading past a full page of automatic input', async () => {
   h.rows = [
-    ...Array.from({ length: 200 }, (_, i) => reply(i + 1, { meta: { origin: { kind: 'scheduler' } } })),
-    reply(500, { text: 'please remember this' }),
+    reply(10, { text: 'please remember this' }),
+    ...Array.from({ length: 200 }, (_, i) => reply(100 + i, { meta: { origin: { kind: 'scheduler' } } })),
   ];
-  expect(await hasOwnerActivitySince('bot', 0)).toBe(true);
-  expect(h.queries.map((params) => params[1])).toEqual([0, 200]);
+  expect(await lastOwnerActivityAt('lane')).toBe(10);
+  expect(h.cursors).toEqual([Number.MAX_SAFE_INTEGER, 100]);
+});
+
+it('gives no time for a session that is not a teammate lane', async () => {
+  h.botId = null;
+  h.rows = [reply(10, {})];
+  expect(await lastOwnerActivityAt('task')).toBeUndefined();
 });

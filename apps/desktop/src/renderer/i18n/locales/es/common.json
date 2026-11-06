@@ -18008,8 +18008,6 @@
     "sessionModeFresh": "Nueva sesión con cada activador (aislar contexto)",
     "sessionModeHint": "La sesión persistente mantiene una sola conversación de la rutina. La nueva sesión crea y cierra una conversación aislada con cada activador.",
     "quietHint": "Informa solo sobre cambios o problemas. Desactiva esta opción para recordatorios y mensajes programados.",
-    "requireOwnerActivity": "Solo si habéis hablado desde la última ejecución",
-    "requireOwnerActivityHint": "Las ejecuciones programadas se omiten sin llamar a ningún modelo si no has hablado con este compañero desde la última ejecución correcta. Ejecutar ahora siempre se lleva a cabo.",
     "checkSource": "Comprobar con",
     "checkCommand": "Comando de comprobación previa a la ejecución",
     "checkHint": "Opcional. Realiza comprobaciones en la computadora antes de cada ejecución: el código de salida 2 omite la ejecución, el código 0 continúa y los errores permanecen visibles. Déjalo vacío para quitarlo.",

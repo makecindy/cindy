@@ -17779,8 +17779,6 @@
     "sessionModeFresh": "每次新建任務（隔離上下文）",
     "sessionModeHint": "沿用同一任務會在同一個例行任務的對話裡繼續；每次新建會為每次觸發建立一個獨立任務，執行結束後關閉。",
     "quietHint": "僅回報變化或問題。提醒和定時傳送可關閉此項。",
-    "requireOwnerActivity": "只在上次之後有新對話時執行",
-    "requireOwnerActivityHint": "上次成功執行之後你沒和這個夥伴說過話，定時到點就略過，不呼叫模型。手動「立即執行」不受影響。",
     "checkSource": "檢查方式",
     "checkCommand": "前置檢查命令",
     "checkHint": "選填。在電腦上先檢查：結束代碼 2 跳過本次執行，0 繼續執行，異常仍會回報。清空可移除。",

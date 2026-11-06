@@ -17779,8 +17779,6 @@
     "sessionModeFresh": "每次新建任务（隔离上下文）",
     "sessionModeHint": "沿用同一任务会在同一条例行任务的对话里继续；每次新建会为每次触发创建一条独立任务，运行结束后关闭。",
     "quietHint": "仅报告变化或问题。提醒和定时发送可关闭此项。",
-    "requireOwnerActivity": "只在上次之后有新对话时运行",
-    "requireOwnerActivityHint": "上次成功运行之后你没和这个伙伴说过话，定时到点就跳过，不调用模型。手动「立即运行」不受影响。",
     "checkSource": "检查方式",
     "checkCommand": "前置检查命令",
     "checkHint": "可选。在电脑上先检查：退出码 2 跳过本轮，0 继续执行，异常仍会报告。清空可移除。",

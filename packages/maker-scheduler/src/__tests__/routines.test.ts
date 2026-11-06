@@ -835,7 +835,7 @@ describe('routine check configuration', () => {
   /*
    * 测试价值
    * - 生产入口与可观察结果：RoutineEngine.ensureBuiltin 把旧版「夜间学习」对齐到新模板：主人从没选过的运行方式
-   *   跟随模板（fresh），主人选过的保留；主人可以给夜间学习单独选模型，requireOwnerActivity 随模板落盘。
+   *   跟随模板（fresh），主人选过的保留；主人可以给夜间学习单独选模型。
    * - Bug／规则依据：docs/product-rules/bot-routines.md「内置夜间学习」改为普通 Agent 例行任务；旧规则从未保存
    *   sessionMode，若照搬「保留主人选择」会让升级后的夜间学习永远停在持久专线。
    * - 现有覆盖缺口：上一用例只覆盖跟进规则，且没有覆盖模板自带运行方式、主人未作选择的组合。
@@ -848,16 +848,15 @@ describe('routine check configuration', () => {
     try {
       const legacy = await f.engine.ensureBuiltin('bot', 'nightly-learning', input, id, 1);
       expect(legacy?.sessionMode).toBeUndefined();
-      const template = { ...input, prompt: 'v2', sessionMode: 'fresh' as const, requireOwnerActivity: true };
+      const template = { ...input, prompt: 'v2', sessionMode: 'fresh' as const };
       const upgraded = await f.engine.ensureBuiltin('bot', 'nightly-learning', template, id, 2);
-      expect(upgraded).toMatchObject({ prompt: 'v2', sessionMode: 'fresh', requireOwnerActivity: true, builtinVersion: 2 });
+      expect(upgraded).toMatchObject({ prompt: 'v2', sessionMode: 'fresh', builtinVersion: 2 });
       const modelOverride = { agentKind: 'claude-code' as const, model: 'strong-model' };
       const chosen = await f.engine.put('bot', { ...template, modelOverride, sessionMode: 'persistent' }, id);
       expect(chosen).toMatchObject({ modelOverride, sessionMode: 'persistent' });
-      await expect(f.engine.put('bot', { ...template, requireOwnerActivity: false }, id)).rejects.toThrow('BUILTIN_ROUTINE');
+      await expect(f.engine.put('bot', { ...template, prompt: 'edited' }, id)).rejects.toThrow('BUILTIN_ROUTINE');
       expect(await f.engine.ensureBuiltin('bot', 'nightly-learning', { ...template, prompt: 'v3' }, id, 3))
         .toMatchObject({ prompt: 'v3', modelOverride, sessionMode: 'persistent' });
-      expect(() => parseRoutineInput({ ...input, requireOwnerActivity: 'yes' })).toThrow('requireOwnerActivity must be boolean');
     } finally { await f.engine.stop(); }
   });
 

@@ -17847,8 +17847,6 @@
     "sessionModeFresh": "Neue Sitzung bei jedem Auslöser (Kontext isolieren)",
     "sessionModeHint": "Dauerhaft behält eine Unterhaltung für die Routine bei. Eine neue Sitzung erstellt und schließt bei jedem Auslöser eine isolierte Unterhaltung.",
     "quietHint": "Nur Änderungen oder Probleme melden. Für Erinnerungen und geplante Nachrichten deaktivieren.",
-    "requireOwnerActivity": "Nur ausführen, wenn seit dem letzten Lauf gesprochen wurde",
-    "requireOwnerActivityHint": "Geplante Läufe werden ohne Modellaufruf übersprungen, wenn du seit dem letzten erfolgreichen Lauf nicht mit diesem Teammitglied gesprochen hast. „Jetzt ausführen“ läuft immer.",
     "checkSource": "Prüfen mit",
     "checkCommand": "Prüfbefehl vor der Ausführung",
     "checkHint": "Optional. Prüft vor jeder Ausführung auf dem Computer: Exit-Code 2 überspringt die Ausführung, Exit-Code 0 setzt sie fort, Fehler bleiben sichtbar. Zum Entfernen leeren.",

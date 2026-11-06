@@ -17847,8 +17847,6 @@
     "sessionModeFresh": "New session each trigger (isolate context)",
     "sessionModeHint": "Persistent keeps one routine conversation. New session creates and closes an isolated conversation for each trigger.",
     "quietHint": "Report changes or problems only. Turn off for reminders and scheduled messages.",
-    "requireOwnerActivity": "Only when you've talked since the last run",
-    "requireOwnerActivityHint": "Scheduled runs are skipped without calling a model if you haven't talked with this teammate since the last successful run. Run Now always goes ahead.",
     "checkSource": "Check with",
     "checkCommand": "Pre-run check command",
     "checkHint": "Optional. Checks on the computer before each run: exit 2 skips the run, exit 0 continues, errors stay visible. Clear to remove.",

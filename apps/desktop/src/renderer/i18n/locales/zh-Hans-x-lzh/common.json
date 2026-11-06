@@ -17779,8 +17779,6 @@
     "sessionModeFresh": "每番新开差事（隔上下文）",
     "sessionModeHint": "沿用同一差事，则于同一例行差事之言谈中续之；每番新开，则每触发立一独立差事，行毕即阖。",
     "quietHint": "唯报变化或问题。提醒与定时发送可关此项。",
-    "requireOwnerActivity": "唯前次之后有新语乃行",
-    "requireOwnerActivityHint": "前次成行之后，汝未与此伴言，则届时略之，不召模型。「即行」者不在此限。",
     "checkCommand": "行前检查命令",
     "checkHint": "选填。先于机上检查：结束代码 2 略此番运行，0 续行，异常仍当回报。清空即移除。",
     "timeoutMs": "检查逾时（毫秒，留空不限）",

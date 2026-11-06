@@ -130,7 +130,7 @@ export function buildHookScriptPrompt(input: {
     '- The script is executed with Node.js (>= 18) as an ES module (.mjs file).',
     '- Exit code 0 = let the task run this round. Exit code 2 = skip this round. Any other exit code, crash, or timeout blocks the task (fail-closed), so prefer explicit process.exit(0) / process.exit(2).',
     '- After a complete, successful check, print CINDY_PRECHECK_OK as a standalone stdout line before exit 0 or 2 (including normal no-work skips). This clears past precheck warnings only, never task execution failures. Never emit it for rate-limit/backoff skips or incomplete/degraded checks; exit 2 alone is not proof of recovery.',
-    '- The working directory is the task project directory (if any). stdin receives a JSON payload ({ scheduleId, scheduleName, firedAt, workingDir, lastFinishedAt }) — reading it is optional.',
+    '- The working directory is the task project directory (if any). stdin receives a JSON payload ({ scheduleId, scheduleName, firedAt, workingDir, lastFinishedAt }; teammate routines also get ownerActiveAt, when the owner last talked with that teammate) — reading it is optional.',
     '- CAUTION: lastFinishedAt is also refreshed by rounds this very script skips (exit 2). Never build "run only if enough time passed since the last real run" on top of it — the script would lock itself out forever. Persist your own timestamp file if you need that.',
     '- Use only Node.js built-in modules (node:fs, node:child_process, node:https, ...). No npm dependencies.',
     '- External CLI tools (git, gh, curl ...) may be invoked via child_process. Unexpected failures must exit non-zero so the scheduler blocks the task instead of silently bypassing the gate.',
