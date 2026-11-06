@@ -43,3 +43,19 @@ export function toAgentSkillListFailure(
     skills: [],
   };
 }
+
+/** Palette-only work sharing. Do not use this inside a Skill install/uninstall
+ * lease: those callers own separate mutation authority. Nothing survives settle. */
+export function createProjectSkillPreparation(prepare: (workingDir: string) => Promise<boolean>) {
+  const pending = new Map<string, Promise<boolean>>();
+  return (ownerScope: string, workingDir: string): Promise<boolean> => {
+    const key = JSON.stringify([ownerScope, workingDir]);
+    const existing = pending.get(key);
+    if (existing) return existing;
+    const promise = prepare(workingDir).finally(() => {
+      if (pending.get(key) === promise) pending.delete(key);
+    });
+    pending.set(key, promise);
+    return promise;
+  };
+}
