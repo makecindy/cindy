@@ -9,6 +9,68 @@
  */
 
 (function installCindyHostShim() {
+  // Polyfill Web Crypto randomUUID in insecure contexts (e.g. plain HTTP over LAN IP).
+  // Modern browsers (Firefox, Chromium) gate crypto.randomUUID behind [SecureContext],
+  // leaving it undefined when Cindy Host is accessed over LAN http://<ip>:<port>.
+  if (typeof window !== 'undefined') {
+    if (!window.crypto) {
+      window.crypto = {};
+    }
+    if (typeof window.crypto.randomUUID !== 'function') {
+      window.crypto.randomUUID = function() {
+        if (typeof window.crypto.getRandomValues === 'function') {
+          return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, function(c) {
+            return (+c ^ (window.crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (+c / 4)))).toString(16);
+          });
+        }
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+          var r = (Math.random() * 16) | 0;
+          var v = c === 'x' ? r : (r & 0x3) | 0x8;
+          return v.toString(16);
+        });
+      };
+    }
+  }
+
+  // Polyfill clipboard copy in insecure contexts where navigator.clipboard is unavailable.
+  if (typeof navigator !== 'undefined') {
+    try {
+      if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+        const fallbackClipboard = {
+          writeText: function(text) {
+            return new Promise(function(resolve, reject) {
+              try {
+                var ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.focus();
+                ta.select();
+                var ok = document.execCommand('copy');
+                document.body.removeChild(ta);
+                if (ok) resolve();
+                else reject(new Error('copy_command_failed'));
+              } catch (e) {
+                reject(e);
+              }
+            });
+          }
+        };
+        try {
+          Object.defineProperty(navigator, 'clipboard', {
+            value: fallbackClipboard,
+            configurable: true,
+            writable: true,
+          });
+        } catch {
+          // If defineProperty fails on navigator, attach to fallback object
+          navigator.clipboard = fallbackClipboard;
+        }
+      }
+    } catch {}
+  }
+
   const pending = new Map();
 
   /**
@@ -43,9 +105,11 @@
   }
 
   async function rpc(path, args) {
+    const headers = { 'content-type': 'application/json' };
+    if (boot.apiToken) headers['authorization'] = `Bearer ${boot.apiToken}`;
     const response = await fetch(`/api${path}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers,
       body: JSON.stringify(args ?? null),
       credentials: 'same-origin',
     });
@@ -215,9 +279,11 @@
         model: createOpts?.model,
         agentKind: createOpts?.agentKind ?? 'claude-code',
       };
+      const headers = { 'content-type': 'application/json' };
+      if (boot.apiToken) headers['authorization'] = `Bearer ${boot.apiToken}`;
       const response = await fetch('/chat', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers,
         body: JSON.stringify(body),
         credentials: 'same-origin',
       });
@@ -941,6 +1007,7 @@
         try {
           const url = lastEventSeq != null ? `/events?since=${lastEventSeq}` : '/events';
           const headers = {};
+          if (boot.apiToken) headers['authorization'] = `Bearer ${boot.apiToken}`;
           if (lastEventSeq != null) headers['last-event-id'] = String(lastEventSeq);
           const response = await fetch(url, { credentials: 'same-origin', headers });
           if (!response.ok || !response.body) throw new Error(`events ${response.status}`);

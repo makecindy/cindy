@@ -6254,7 +6254,10 @@ export function ChatInput({
           if (sourceStorageKey) clearComposerDraft(sourceStorageKey);
         };
         let optimisticComposerRestored = false;
-        const immediateRestoreClientId = `local-restore:${crypto.randomUUID()}`;
+        const immediateRestoreClientId =
+          typeof crypto?.randomUUID === 'function'
+            ? `local-restore:${crypto.randomUUID()}`
+            : `local-restore:${Date.now()}-${Math.random().toString(36).slice(2)}`;
         const restoreOptimisticallyClearedComposer = (
           clientId = immediateRestoreClientId,
           {

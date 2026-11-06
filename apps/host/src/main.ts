@@ -474,6 +474,7 @@ const server = createHostServer({
     const profile = currentProfileSettings();
     return {
       appVersion: '0.1.124',
+      apiToken,
       voiceInput: profile.voiceInput,
       harness: harnessStatus(),
       auth: account.authenticated
