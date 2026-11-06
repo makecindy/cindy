@@ -3,6 +3,7 @@ import { Stack } from "expo-router";
 import { centeredHomeTitleWidth, HomeStackHeader } from "./HomeStackHeader";
 import { homeDisplayAttentionIcon, homeDisplayIcon } from "./homeDisplayIcon";
 import { nativeToolbarMenuItems } from "./nativeToolbarMenuItems";
+import { AnimationVisibilityProvider, useAnimationVisibility } from "@/hooks/useLoopingAnimation";
 import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
 import { useDelayedConnectionNotice } from '@/components/ConnectionNoticeOverlay';
 import { ChevronDown } from "lucide-react-native";
@@ -127,6 +128,9 @@ export const HomeNativeStackHeader = memo(function HomeNativeStackHeader({
   // does not take taps, the rest of the name and the chevron do. Until the menu's position is
   // known the name stays inside the item.
   const sideTitle = keepMenuTopLeft && !showRemoteGuide;
+  // The trailing item is rendered by the native bar, outside this route's providers: carry the
+  // route's visibility with the title so its sync glyph still pauses on hidden surfaces.
+  const animationVisible = useAnimationVisibility();
   const sideRequest = Math.max(navigationChrome.target, Math.min(360,
     barWidth - navigationChrome.target - spacing.lg * 4 - spacing.xs));
   const [sideLayoutWidth, setSideLayoutWidth] = useState<number | null>(null);
@@ -223,9 +227,11 @@ export const HomeNativeStackHeader = memo(function HomeNativeStackHeader({
         <Stack.Toolbar placement="right">
           {sideTitle ? (
             <Stack.Toolbar.View hidesSharedBackground>
-              <View onLayout={onSideLayout} style={[styles.titleFrame, { width: sideRequest }]}>
-                {titleMeasure}{titleNode}
-              </View>
+              <AnimationVisibilityProvider visible={animationVisible}>
+                <View onLayout={onSideLayout} style={[styles.titleFrame, { width: sideRequest }]}>
+                  {titleMeasure}{titleNode}
+                </View>
+              </AnimationVisibilityProvider>
             </Stack.Toolbar.View>
           ) : null}
           {onOpenRemoteDesktop ? <Stack.Toolbar.Button icon={require("../../../assets/navigation/monitor.png")} iconRenderingMode="template"

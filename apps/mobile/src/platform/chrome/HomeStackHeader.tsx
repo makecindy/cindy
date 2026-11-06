@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, type ReactNode } from 'react';
 import { Image, StyleSheet, View } from 'react-native';
 import { Stack } from 'expo-router';
+import { useAnimationVisibilityBridge } from '@/hooks/useLoopingAnimation';
 import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
 import { useTheme } from '@/theme';
 import { navigationChrome, spacing } from '@/theme/tokens';
@@ -51,11 +52,12 @@ export const HomeStackHeader = memo(function HomeStackHeader({
       menuRef.current?.measureInWindow((x, _y, width) => { if (width > 0) onMenuFrame(x, width); });
     }, MENU_SETTLE_MS);
   } : undefined;
+  const visibleTitle = useAnimationVisibilityBridge(title);
   return <>
     <Stack.Screen options={{
       headerBackVisible: false, headerShadowVisible: false, headerShown: true,
       headerStyle: { backgroundColor: 'transparent' }, headerTintColor: colors.textPrimary,
-      headerTransparent: true, headerTitleAlign: 'center', headerTitle: () => title,
+      headerTransparent: true, headerTitleAlign: 'center', headerTitle: () => visibleTitle,
     }} />
     <Stack.Header style={{ backgroundColor: 'transparent', color: colors.textPrimary, shadowColor: 'transparent' }} />
     <Stack.Toolbar placement="left">
