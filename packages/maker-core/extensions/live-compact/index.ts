@@ -84,7 +84,8 @@
  *   - 容量轮换先 rename 进 `.rotate-<pid>-<ts>` 隔离目录,确认装得下再真删,装不下原路搬回。
  *     上游边算边删,中途撞上占用会「删了旧备份又放弃这一刀」,已有卡片就指向空文件。
  *     隔离目录里删不掉的文件搬回原位,占用照实算(不把「移走」当「已释放」);两次都失败的
- *     残留在下一次轮换补删,补删前仍计入用量。
+ *     残留在下一次轮换补删,补删前仍计入用量。这类回滚会让用量短暂超出上限,但**不因此拒绝**
+ *     这一刀 —— 已经删成功的旧备份回不来,拒绝只会白删。
  *   - 被拒的一刀会撤掉本次刚落盘、无卡片引用的 `raw-*.txt` 与其 meta —— 原文写入不走容量轮换,
  *     不清理会一轮轮堆积突破单会话上限。
  * Logging: stderr lines prefixed "[pi-live-compact]" (grep "spine cut"), plus an
@@ -1161,6 +1162,9 @@ const REDACT_RULES: Array<[RegExp, string]> = [
   // PEM 私钥整块必须**排在最前**:键名规则会把 `private_key="-----BEGIN` 先换成 `[REDACTED]`,
   // 之后整块规则就认不出开始标记,密钥正文会原样留下。先按块整体吃掉,再让键名规则收尾。
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "[REDACTED PRIVATE KEY]"],
+  // HTTP 认证头要先单独处理:`Authorization: Basic dXNlcjpwYXNz` 的值不是"键名=值"形态,
+  // 键名规则只认到方案名(不足 8 字),base64 里的可复用凭证会原样留下。Bearer 仍由下面那条兜。
+  [/((?:proxy-)?authorization["'`]?\s*[=:]\s*(?:basic|digest|negotiate|token)\s+)(?!\[REDACTED)([A-Za-z0-9+/=._~-]{8,})/gi, "$1[REDACTED]"],
   // 键名后允许再跟一个引号:JSON 形态 `{"password":"..."}` 的闭引号夹在键与冒号之间。
   // 键名要覆盖带后缀的写法(`SECRET_KEY`、`refresh_token`),否则 `X_SECRET_KEY=...` 整条不匹配。
   // 值里允许 `[`(密码可能含方括号),只豁免「已经是替换标记」的情况,否则会把标记再啃一口。
@@ -1379,6 +1383,10 @@ export function rotateShadow(options: {
   }
   let deleted = 0;
   let freed = 0;
+  // 删不掉的文件已经搬回原位(卡片路径仍然有效),这里不再拿「装不装得下」当拒绝条件:
+  // 走到这一步说明按计划删得下,只有个别文件删不掉才回滚 —— 此时若因为超上限而放弃这一刀,
+  // 前面删成功的旧备份就白删了。宁可让用量短暂超一点(下一次轮换会再淘汰),也不制造孤儿。
+  let undeletable = 0;
   for (const item of moved) {
     try {
       unlink(item.to);
@@ -1391,6 +1399,7 @@ export function rotateShadow(options: {
         logLine({ key: "rotate" }, `spine rotation restore failed: ${(error as Error)?.message ?? error}`);
       }
       used += item.size;
+      undeletable += 1;
       continue;
     }
     // 原文的 .meta.json 要跟着正文一起回收;它不进容量统计(上游同样只算列出的备份文件)。
@@ -1405,7 +1414,10 @@ export function rotateShadow(options: {
   try {
     rmdirSync(trash);
   } catch {}
-  return { ok: used + options.incomingBytes <= cap, deleted, freed, used, cap, oversize: false };
+  if (undeletable > 0 && used + options.incomingBytes > cap) {
+    logLine({ key: "rotate" }, `spine shadow over cap after ${undeletable} undeletable file(s): used=${used} incoming=${options.incomingBytes} cap=${cap}`);
+  }
+  return { ok: true, deleted, freed, used, cap, oversize: false, undeletable };
 }
 
 /**

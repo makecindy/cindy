@@ -20,6 +20,7 @@ const FAKE_DB_PASSWORD = ['fixture', 'db-password'].join('-');
 const FAKE_OPENAI_KEY_2 = ['sk', 'fixture-openai-key-0987654321'].join('-');
 const FAKE_REFRESH_TOKEN = ['fixture', 'refresh', 'token', '0123456789'].join('-');
 const FAKE_STRIPE_KEY = ['sk', 'live', 'fixturestripeplaceholder0123'].join('_');
+const FAKE_BASIC = ['dXNlcjpw', 'YXNzd29yZA=='].join('');
 const FAKE_AWS_SESSION_TOKEN = ['AWS_SESSION', 'TOKEN'].join('_') + '=fixture-session-' + '0123456789abcdef';
 const FAKE_AWS_SECRET = ['fixture', 'awssecret', '0123456789abcdef'].join('-');
 const FAKE_BRACKET_PASSWORD = ['abc', '[defghijklmnop'].join('');
@@ -121,6 +122,10 @@ describe('live compact spine selection', () => {
     expect(aws).not.toContain(FAKE_BRACKET_PASSWORD);
     expect(aws).toContain('AWS_SECRET_ACCESS_KEY=[REDACTED]');
     expect(aws).toContain('password="[REDACTED]"');
+    // HTTP Basic 认证头:base64 里是可直接复用的用户名口令。
+    const basic = redactSecrets(`Authorization: Basic ${FAKE_BASIC}`);
+    expect(basic).not.toContain(FAKE_BASIC);
+    expect(basic).toContain('Authorization: Basic [REDACTED]');
     // AWS 的会话令牌是另一套键名(`_SESSION_TOKEN`),不带 access_key 后缀。
     const sessionToken = redactSecrets(FAKE_AWS_SESSION_TOKEN);
     expect(sessionToken).not.toContain('fixture-session-0123456789abcdef');
@@ -363,11 +368,42 @@ describe('live compact card roles and tool excerpts (1.0.3-1.0.5)', () => {
           throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
         },
       });
-      expect(result.ok).toBe(false);
+      // 删不掉的文件搬回原位后已经超上限,但这里不能拒绝这一刀 —— 拒绝会白删前面删成功的旧备份。
+      expect(result.ok).toBe(true);
       expect(result.deleted).toBe(0);
       expect(result.freed).toBe(0);
       expect(result.used).toBe(1000);
+      expect(result.undeletable).toBe(1);
       expect(readdirSync(dir).sort()).toEqual(['a.txt', 'b.txt']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('still commits the cut when only some old files cannot be deleted', () => {
+    // 上限 1000、已用 1000、新写 100:只要删掉 200 就够。a 删得掉、b 删不掉 ——
+    // 这一刀必须成功(否则删掉的 a 白删),b 搬回原位继续算占用。
+    const dir = mkdtempSync(join(tmpdir(), 'spine-partial-'));
+    try {
+      writeFileSync(join(dir, 'a.txt'), 'a'.repeat(200));
+      writeFileSync(join(dir, 'b.txt'), 'b'.repeat(800));
+      const older = new Date(2026, 0, 1);
+      utimesSync(join(dir, 'a.txt'), older, older);
+      utimesSync(join(dir, 'b.txt'), older, older);
+      const result = rotateShadow({
+        dir,
+        incomingBytes: 100,
+        cap: 1000,
+        unlink: (path) => {
+          if (String(path).includes('b.txt')) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+          rmSync(path, { force: true });
+        },
+      });
+      expect(result.ok).toBe(true);
+      expect(result.deleted).toBe(1);
+      expect(result.freed).toBe(200);
+      expect(result.used).toBe(800);
+      expect(readdirSync(dir).sort()).toEqual(['b.txt']);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
