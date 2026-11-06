@@ -514,6 +514,10 @@ const server = createHostServer({
       updatedAt: new Date(Number(row.updatedAt ?? 0)).toISOString(),
     }));
   },
+  listRecentWorkdirs: async () => {
+    const { listRecentWorkdirs } = await import('../../desktop/src/main/localDb/ipc/recentWorkdirs.ts');
+    return listRecentWorkdirs();
+  },
   interruptedPending: async () => {
     const { listInterruptedPendingRows } = await import('../../desktop/src/main/localDb/sessionActiveTurn.ts');
     return (await listInterruptedPendingRows({ includeBotTasks: false })).map((row) => row.sessionId);

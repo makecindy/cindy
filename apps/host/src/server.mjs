@@ -136,6 +136,7 @@ export function createHostServer(deps) {
         // The preload contract for `localDb.sessions.list()` is a bare array.
         if (url.pathname === '/api/sessions/list') { send(response, 200, await deps.listSessions()); return; }
         if (url.pathname === '/api/project-aliases/list') { send(response, 200, await deps.listProjectAliases()); return; }
+        if (url.pathname === '/api/recent-workdirs/list') { send(response, 200, await deps.listRecentWorkdirs()); return; }
         if (url.pathname === '/api/sessions/create') { send(response, 201, await deps.createSession(body)); return; }
         if (url.pathname === '/api/sessions/update') { send(response, 200, await deps.updateSession(String(body.sessionId ?? ''), body.patch ?? {})); return; }
         if (url.pathname === '/api/sessions/get') { send(response, 200, await deps.getSession(String(body.sessionId ?? ''))); return; }
