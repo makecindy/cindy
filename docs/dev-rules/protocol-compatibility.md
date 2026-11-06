@@ -3610,6 +3610,9 @@ POSIX 大小写保留。既有分组若包含不同主机项目身份，仍显�
   开发不应因此失败。
 - 不要重新引入预装／播种机制或私有种子 submodule；需要推荐插件时走 SkillHub 的
   分发与用户主动安装流程。
+- 开发或个人构建仍可在本地 `apps/desktop/resources/builtin-ghosts` 放种子测试未发布的插件
+  （安装包不带）；与同名商店安装按版本取新，规则见
+  [插件安全 §3.1](plugin-security-and-authoring.md#31-安装与自动更新)。
 
 ## 预创建 worktree 的终止确认
 
