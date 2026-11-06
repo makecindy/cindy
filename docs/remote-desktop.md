@@ -30,6 +30,36 @@ media reconnect preserves the live host lease and its idle deadline until resume
 failed recovery reaches heartbeat expiry instead of renewing the idle budget.
 Only this desktop lease ends: other Device Link tasks and channels remain intact.
 
+## Keep working while away (macOS, 2026-11-06)
+
+Settings → App behavior → **Keep working while away** (macOS 14+, default off) reuses
+the privacy masks without a remote viewer. While any Agent turn, background job or
+scheduled run is in progress, Main holds `prevent-display-sleep`, so the display does
+not idle-sleep into the lock screen. When the owner has been away for the system's own
+display-sleep time (`pmset` `displaysleep`, or an earlier screen saver; 10 minutes when
+both are Never), every display
+gets a mask and Agents keep working behind it: masks ignore mouse events and the
+`--away-guard` helper passes injected input. Owner absence is the HID idle time minus
+`cindy_computer`'s own dispatch, so Agent clicks never count as the owner.
+
+The helper consumes physical input and turns it into the fixed system lock shortcut;
+the owner unlocks with Touch ID or password through macOS itself. It also locks on
+stdin EOF, a missed heartbeat or a dead parent, so a crashed Cindy leaves a locked
+screen rather than an uncovered desktop. Main locks before removing masks when work
+ends, the setting is turned off, a display is added, or a mask window fails. Remote
+desktop takes over without a lock (its own privacy screen and lock-on-exit apply);
+an already-locked screen just drops the masks.
+
+Fail-safe direction: missing Accessibility for the input helper, masks that cannot
+start, or an unreadable idle time release the display assertion, so macOS sleeps and
+locks exactly as it would without Cindy; mask setup is not retried for 60 seconds.
+After the owner unlocks, absence is measured from the unlock, so the screen is never
+covered again immediately while work continues (Codex Locked use regression). Nothing
+in this path unlocks the screen, edits authorization rules or stores a password; a
+screen that was already locked when work started stays locked. Logic lives in
+`apps/desktop/src/main/remote-desktop/awayGuard.ts` (unit-tested state machine) and
+`awayGuardService.ts`; shared-userData passive instances do not run it.
+
 ## Desktop viewer
 
 The desktop interaction hierarchy follows a canvas-first approach: device and

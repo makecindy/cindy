@@ -11,6 +11,17 @@ export const windowBehaviorSettings = defineSettings({
     sectionKey: 'settings.sections.windowBehavior',
     descriptionKey: 'settings.devices.keepAwakeHint',
   },
+  awayGuard: {
+    id: 'settings.windowBehavior.awayGuard.label',
+    fallbackTargetId: 'settings-window-behavior',
+    tab: 'general',
+    targetId: 'settings-search-away-guard',
+    titleKey: 'settings.windowBehavior.awayGuard.label',
+    aliases: ['锁屏', '防窥', '遮挡屏幕', 'lock screen', 'privacy screen'],
+    sectionKey: 'settings.sections.windowBehavior',
+    descriptionKey: 'settings.windowBehavior.awayGuard.hint',
+    isVisible: ({ platform }) => platform === 'darwin',
+  },
   loginItemLabel: {
     id: 'settings.windowBehavior.loginItem.label',
     fallbackTargetId: 'settings-window-behavior',

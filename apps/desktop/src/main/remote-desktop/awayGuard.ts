@@ -1,0 +1,152 @@
+/**
+ * Away guard (Settings → App behavior → Keep working while away, macOS, default off).
+ *
+ * While an Agent is working, the display does not idle-sleep into the lock screen.
+ * Once the owner has been away for the system's own display-sleep time, every
+ * display is covered by the remote desktop privacy masks and Agents keep working
+ * behind them. Physical input at this Mac turns into the real system lock (the
+ * native helper does this itself), so the owner unlocks with Touch ID or password.
+ * Work ending, the setting being turned off, a new display, or the masks failing
+ * also end in the real lock. Nothing here ever unlocks the screen.
+ *
+ * Fail-safe direction: whenever the guard cannot prove masks are up (missing
+ * permission, mask failure, unknown input state), it releases the display
+ * assertion so macOS sleeps and locks exactly as it would without Cindy.
+ */
+
+export interface AwayGuardDeps {
+  enabled(): boolean;
+  /** Any Agent turn, background job or scheduled run in progress. */
+  busy(): Promise<boolean>;
+  remoteDesktopActive(): boolean;
+  screenLocked(): boolean;
+  /**
+   * Milliseconds since the owner's last keyboard/pointer input. Infinity when the
+   * newest input was the Agent's own; null when the system cannot tell.
+   */
+  msSinceOwnerInput(): number | null;
+  /** Owner absence that the system itself would answer with display sleep. */
+  awayAfterMs(): number;
+  keepDisplayAwake(awake: boolean): void;
+  /** Rejects when masks or the native input guard cannot start. */
+  showMasks(): Promise<void>;
+  /** Locks the screen, then removes the masks. */
+  lockAndHideMasks(): Promise<void>;
+  /** Removes the masks without locking (already locked, or remote desktop took over). */
+  hideMasks(): void;
+  now(): number;
+  log(event: string, detail?: Record<string, unknown>): void;
+}
+
+/** After masks fail to start, fall back to the system lock instead of retrying every tick. */
+export const AWAY_GUARD_RETRY_MS = 60_000;
+
+type MaskState = 'none' | 'showing' | 'shown' | 'ending';
+
+export class AwayGuardController {
+  private mask: MaskState = 'none';
+  private ownerInputAt: number;
+  private retryAt = 0;
+  private ticking = false;
+
+  constructor(private readonly deps: AwayGuardDeps) {
+    this.ownerInputAt = deps.now();
+  }
+
+  get masked(): boolean {
+    return this.mask !== 'none';
+  }
+
+  async tick(): Promise<void> {
+    if (this.ticking) return;
+    this.ticking = true;
+    try {
+      await this.evaluate();
+    } finally {
+      this.ticking = false;
+    }
+  }
+
+  /** The masks or the helper went away on their own (input lock, window loss). */
+  masksEnded(): void {
+    if (this.mask === 'none') return;
+    this.mask = 'none';
+    // Whoever touched this Mac counts as present: never re-cover right away.
+    this.ownerInputAt = this.deps.now();
+    this.deps.log('masks ended');
+  }
+
+  /** A display was added while covered: it is not masked, so lock. */
+  async displaysChanged(): Promise<void> {
+    if (this.mask !== 'shown') return;
+    await this.end(true, 'display added');
+  }
+
+  private async evaluate(): Promise<void> {
+    const { deps } = this;
+    const now = deps.now();
+    if (!deps.enabled()) return this.standDown(true, 'disabled');
+    if (deps.screenLocked() || deps.remoteDesktopActive()) {
+      // The owner unlocking (or viewing remotely) starts a fresh absence period.
+      this.ownerInputAt = now;
+      return this.standDown(false, 'locked or remote');
+    }
+    // An unreadable activity source keeps an existing cover; it never starts one.
+    const busy = await deps.busy().catch(() => this.mask === 'shown');
+    if (!busy) return this.standDown(true, 'idle');
+    if (this.mask !== 'none') {
+      deps.keepDisplayAwake(this.mask !== 'ending');
+      return;
+    }
+    const since = deps.msSinceOwnerInput();
+    if (since === null) {
+      deps.keepDisplayAwake(false);
+      return;
+    }
+    if (Number.isFinite(since)) this.ownerInputAt = Math.max(this.ownerInputAt, now - since);
+    if (now < this.retryAt) {
+      deps.keepDisplayAwake(false);
+      return;
+    }
+    deps.keepDisplayAwake(true);
+    if (now - this.ownerInputAt < deps.awayAfterMs()) return;
+    this.mask = 'showing';
+    try {
+      await deps.showMasks();
+      if (this.mask !== 'showing') return;
+      this.mask = 'shown';
+      deps.log('masks shown');
+    } catch (error) {
+      if (this.mask === 'showing') this.mask = 'none';
+      this.retryAt = now + AWAY_GUARD_RETRY_MS;
+      deps.keepDisplayAwake(false);
+      deps.log('masks unavailable', { error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  private async standDown(lock: boolean, reason: string): Promise<void> {
+    if (this.mask === 'shown' || this.mask === 'showing') {
+      if (lock) {
+        await this.end(true, reason);
+      } else {
+        this.mask = 'none';
+        this.deps.hideMasks();
+        this.deps.log('masks released', { reason });
+      }
+    }
+    if (this.mask === 'none') this.deps.keepDisplayAwake(false);
+  }
+
+  private async end(lock: boolean, reason: string): Promise<void> {
+    this.mask = 'ending';
+    try {
+      if (lock) await this.deps.lockAndHideMasks();
+      else this.deps.hideMasks();
+    } finally {
+      this.mask = 'none';
+      this.ownerInputAt = this.deps.now();
+      this.deps.keepDisplayAwake(false);
+      this.deps.log('masks ended', { reason, locked: lock });
+    }
+  }
+}

@@ -1127,6 +1127,10 @@
     "cancel": "Manter conectado",
     "disconnect": "Desconectar"
   },
+  "awayGuard": {
+    "status": "O Cindy está trabalhando neste Mac",
+    "hint": "Pressione qualquer tecla ou clique para bloquear a tela e depois desbloqueie com Touch ID ou sua senha."
+  },
   "appBadge": {
     "attentionCount": "Tarefas que precisam de atenção: {{count}}"
   },
@@ -2411,7 +2415,12 @@
       "swallowActivationClickLabel": "Evitar cliques acidentais ao retornar",
       "swallowActivationClickHint": "Quando ativado, um clique esquerdo em uma janela em segundo plano apenas a traz para frente. Quando desativado, ele também aciona o item clicado, o que pode causar cliques acidentais.",
       "swallowActivationClickAria": "Ativar ou desativar proteção contra cliques acidentais ao retornar à janela",
-      "macRestartNote": "No macOS, reinicie o app para aplicar as alterações."
+      "macRestartNote": "No macOS, reinicie o app para aplicar as alterações.",
+      "awayGuard": {
+        "label": "Continuar trabalhando enquanto você está fora",
+        "hint": "Enquanto uma tarefa estiver em andamento, a tela não será bloqueada quando você se afastar: o Cindy cobre a tela e continua trabalhando. Tocar no teclado, no mouse ou no trackpad bloqueia na hora; desbloqueie com Touch ID ou sua senha. A tela também é bloqueada quando o trabalho termina.",
+        "permission": "Permita o Cindy em Ajustes do Sistema > Privacidade e Segurança > Acessibilidade para que ele bloqueie a tela assim que alguém tocar neste Mac. Até lá, a tela apaga e é bloqueada normalmente."
+      }
     },
     "agentIsland": {
       "title": "Agent Island",

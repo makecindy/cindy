@@ -3689,8 +3689,11 @@ export function isDesktopScreenLocked(): boolean {
   }
 }
 
-/** Milliseconds since the last system HID input not explained by the Agent's own dispatch, or null when unknown. */
-function msSinceForeignDesktopInput(now = Date.now()): number | null {
+/**
+ * Milliseconds since the last system HID input not explained by the Agent's own dispatch, or null when unknown.
+ * Also tells the away guard whether its owner is still at this Mac.
+ */
+export function msSinceForeignDesktopInput(now = Date.now()): number | null {
   let idleSeconds: number;
   try {
     idleSeconds = powerMonitor.getSystemIdleTime();

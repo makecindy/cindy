@@ -1110,6 +1110,10 @@
     "cancel": "Verbunden bleiben",
     "disconnect": "Trennen"
   },
+  "awayGuard": {
+    "status": "Cindy arbeitet auf diesem Mac",
+    "hint": "Drücke eine Taste oder klicke, um den Bildschirm zu sperren, und entsperre ihn dann mit Touch ID oder deinem Passwort."
+  },
   "appBadge": {
     "attentionCount": "Aufgaben, die Aufmerksamkeit benötigen: {{count}}"
   },
@@ -2376,7 +2380,12 @@
       "swallowActivationClickLabel": "Versehentliche Klicks bei der Rückkehr verhindern",
       "swallowActivationClickHint": "Wenn diese Option aktiviert ist, wird ein Linksklick auf ein Hintergrundfenster nur angezeigt, um es nach vorne zu bringen. Wenn es deaktiviert ist, wirkt es sich auch auf das angeklickte Element aus, was zu versehentlichen Klicks führen kann.",
       "swallowActivationClickAria": "Schutz vor versehentlichen Klicks bei der Rückkehr zum Fenster ein-/ausschalten",
-      "macRestartNote": "Starte unter macOS die App neu, damit die Änderungen wirksam werden."
+      "macRestartNote": "Starte unter macOS die App neu, damit die Änderungen wirksam werden.",
+      "awayGuard": {
+        "label": "Weiterarbeiten, während du weg bist",
+        "hint": "Während eine Aufgabe läuft, wird der Bildschirm nicht gesperrt, wenn du weggehst. Stattdessen verdeckt Cindy den Bildschirm und arbeitet weiter. Eine Berührung von Tastatur, Maus oder Trackpad sperrt ihn sofort; entsperre ihn mit Touch ID oder deinem Passwort. Nach Abschluss der Arbeit wird er ebenfalls gesperrt.",
+        "permission": "Erlaube Cindy unter Systemeinstellungen > Datenschutz & Sicherheit > Bedienungshilfen, damit der Bildschirm sofort gesperrt wird, wenn jemand diesen Mac berührt. Bis dahin geht der Bildschirm wie gewohnt in den Ruhezustand und wird gesperrt."
+      }
     },
     "agentIsland": {
       "title": "Agent Island",

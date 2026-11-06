@@ -1098,6 +1098,10 @@
     "cancel": "保持連線",
     "disconnect": "中斷連線"
   },
+  "awayGuard": {
+    "status": "Cindy 正在使用這台電腦",
+    "hint": "按任意鍵或點按即可鎖定螢幕，然後用 Touch ID 或密碼解鎖。"
+  },
   "appBadge": {
     "attentionCount": "需要關注的任務：{{count}}"
   },
@@ -2346,7 +2350,12 @@
       "swallowActivationClickLabel": "切回時防誤觸",
       "swallowActivationClickHint": "左鍵點回背景視窗時，只喚起視窗。關閉後會同時操作點擊位置，可能誤觸。",
       "swallowActivationClickAria": "切換返回視窗時的誤點保護",
-      "macRestartNote": "macOS 上需要重啟應用才能生效。"
+      "macRestartNote": "macOS 上需要重啟應用才能生效。",
+      "awayGuard": {
+        "label": "離開時繼續工作",
+        "hint": "有任務在進行時，你離開電腦螢幕也不會鎖定，而是由 Cindy 遮住螢幕繼續工作。有人碰鍵盤、滑鼠或觸控板會立即鎖定螢幕，用 Touch ID 或密碼解鎖。任務完成後也會自動鎖定螢幕。",
+        "permission": "需要在「系統設定 → 隱私權與安全性 → 輔助使用」中允許 Cindy，才能在有人碰電腦時立即鎖定螢幕。允許之前，電腦會照常關閉螢幕並鎖定。"
+      }
     },
     "agentIsland": {
       "title": "靈動島",

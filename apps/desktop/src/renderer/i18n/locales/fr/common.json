@@ -1127,6 +1127,10 @@
     "cancel": "Rester connecté",
     "disconnect": "Déconnecter"
   },
+  "awayGuard": {
+    "status": "Cindy travaille sur ce Mac",
+    "hint": "Appuyez sur une touche ou cliquez pour verrouiller l'écran, puis déverrouillez avec Touch ID ou votre mot de passe."
+  },
   "appBadge": {
     "attentionCount": "Tâches nécessitant votre attention : {{count}}"
   },
@@ -2411,7 +2415,12 @@
       "swallowActivationClickLabel": "Éviter les clics accidentels au retour",
       "swallowActivationClickHint": "Si activé, un clic gauche sur une fenêtre en arrière-plan la fait seulement passer au premier plan. Si désactivé, il agit aussi sur l'élément cliqué, ce qui peut provoquer des clics accidentels.",
       "swallowActivationClickAria": "Activer ou désactiver la protection contre les clics accidentels au retour dans la fenêtre",
-      "macRestartNote": "Sous macOS, redémarrez l'application pour appliquer les modifications."
+      "macRestartNote": "Sous macOS, redémarrez l'application pour appliquer les modifications.",
+      "awayGuard": {
+        "label": "Continuer à travailler en votre absence",
+        "hint": "Quand une tâche est en cours, l'écran ne se verrouille pas si vous vous absentez : Cindy le masque et continue de travailler. Toucher le clavier, la souris ou le trackpad le verrouille aussitôt ; déverrouillez avec Touch ID ou votre mot de passe. L'écran se verrouille aussi une fois le travail terminé.",
+        "permission": "Autorisez Cindy dans Réglages Système > Confidentialité et sécurité > Accessibilité pour qu'il verrouille l'écran dès que quelqu'un touche ce Mac. En attendant, l'écran se met en veille et se verrouille comme d'habitude."
+      }
     },
     "agentIsland": {
       "title": "Agent Island",

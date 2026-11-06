@@ -1110,6 +1110,10 @@
     "cancel": "Keep connected",
     "disconnect": "Disconnect"
   },
+  "awayGuard": {
+    "status": "Cindy is working on this Mac",
+    "hint": "Press any key or click to lock the screen, then unlock with Touch ID or your password."
+  },
   "appBadge": {
     "attentionCount": "Tasks needing attention: {{count}}"
   },
@@ -2376,7 +2380,12 @@
       "swallowActivationClickLabel": "Prevent Accidental Clicks When Returning",
       "swallowActivationClickHint": "When enabled, a left-click on a background window only brings it forward. When disabled, it also acts on the clicked item, which may cause accidental clicks.",
       "swallowActivationClickAria": "Toggle protection from accidental clicks when returning to the window",
-      "macRestartNote": "On macOS, restart the app for changes to take effect."
+      "macRestartNote": "On macOS, restart the app for changes to take effect.",
+      "awayGuard": {
+        "label": "Keep working while you're away",
+        "hint": "While a task is running, the screen won't lock when you step away. Cindy covers the screen and keeps working instead. Touching the keyboard, mouse or trackpad locks it right away; unlock with Touch ID or your password. The screen also locks when the work is done.",
+        "permission": "Allow Cindy in System Settings > Privacy & Security > Accessibility so it can lock the screen as soon as someone touches this Mac. Until then, the screen sleeps and locks as usual."
+      }
     },
     "agentIsland": {
       "title": "Agent Island",

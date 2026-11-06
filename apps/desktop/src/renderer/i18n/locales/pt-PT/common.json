@@ -1127,6 +1127,10 @@
     "cancel": "Manter ligação",
     "disconnect": "Desligar"
   },
+  "awayGuard": {
+    "status": "O Cindy está a trabalhar neste Mac",
+    "hint": "Prima qualquer tecla ou clique para bloquear o ecrã e, depois, desbloqueie com Touch ID ou a sua palavra-passe."
+  },
   "appBadge": {
     "attentionCount": "Tarefas que precisam de atenção: {{count}}"
   },
@@ -2411,7 +2415,12 @@
       "swallowActivationClickLabel": "Evitar cliques acidentais ao regressar",
       "swallowActivationClickHint": "Quando ativado, um clique com o botão esquerdo numa janela em segundo plano apenas a traz para primeiro plano. Quando desativado, também atua sobre o item clicado, o que pode causar cliques acidentais.",
       "swallowActivationClickAria": "Ativar ou desativar a proteção contra cliques acidentais ao regressar à janela",
-      "macRestartNote": "No macOS, reinicie a aplicação para aplicar as alterações."
+      "macRestartNote": "No macOS, reinicie a aplicação para aplicar as alterações.",
+      "awayGuard": {
+        "label": "Continuar a trabalhar quando se ausenta",
+        "hint": "Enquanto uma tarefa está em curso, o ecrã não bloqueia quando se ausenta: o Cindy tapa o ecrã e continua a trabalhar. Tocar no teclado, no rato ou no trackpad bloqueia-o de imediato; desbloqueie com Touch ID ou a sua palavra-passe. O ecrã também bloqueia quando o trabalho termina.",
+        "permission": "Permita o Cindy em Definições do Sistema > Privacidade e segurança > Acessibilidade para que possa bloquear o ecrã assim que alguém tocar neste Mac. Até lá, o ecrã desliga-se e bloqueia como habitualmente."
+      }
     },
     "agentIsland": {
       "title": "Agent Island",

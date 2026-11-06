@@ -4,6 +4,11 @@ import { t } from '../i18n';
 import { privacyScreenHtml } from './privacyScreenHtml';
 import { watchPrivacyInput, type PrivacyInputMonitor } from './privacyInput';
 
+export type PrivacyInputWatcher = (
+  localInput: () => void,
+  failed: () => void,
+) => Promise<PrivacyInputMonitor>;
+
 const log = createLogger('remote-desktop:privacy');
 
 /** Ephemeral physical-screen masks, not reusable tool windows.
@@ -23,7 +28,9 @@ export class PrivacyScreen {
     private readonly excluded: (ids: number[]) => void,
     private readonly stopped: () => void | Promise<void>,
     private readonly suspendInput: () => Promise<() => Promise<void>>,
-    private readonly watchInput = watchPrivacyInput,
+    private readonly watchInput: PrivacyInputWatcher = watchPrivacyInput,
+    /** Text on the masks; the away guard explains its own unlock path. */
+    private readonly copy = () => ({ status: t('privacyExit.status'), hint: t('privacyExit.hint') }),
   ) {}
   private async disconnect(generation: number): Promise<void> {
     if (generation !== this.generation) return;
@@ -120,6 +127,7 @@ export class PrivacyScreen {
       this.partitionConfigured = true;
     }
     const displays = screen.getAllDisplays();
+    const copy = this.copy();
     try {
       for (const display of displays) {
         const window = new BrowserWindow({
@@ -175,7 +183,7 @@ export class PrivacyScreen {
         });
         window.setMenuBarVisibility(false);
         await window.loadURL(
-          `data:text/html;charset=utf-8,${encodeURIComponent(privacyScreenHtml(t('privacyExit.status'), t('privacyExit.hint')))}`,
+          `data:text/html;charset=utf-8,${encodeURIComponent(privacyScreenHtml(copy.status, copy.hint))}`,
         );
         window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
         window.webContents.on('will-navigate', (event) => event.preventDefault());

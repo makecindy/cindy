@@ -53,6 +53,7 @@ it.skipIf(process.platform !== 'darwin')(
         [],
         ['--check'],
         ['--privacy-input'],
+        ['--away-guard'],
         ['--lock-screen'],
         ['--request-permission'],
         ['--clipboard-version'],

@@ -1098,6 +1098,10 @@
     "cancel": "保持连接",
     "disconnect": "断开连接"
   },
+  "awayGuard": {
+    "status": "Cindy 正在使用这台电脑",
+    "hint": "按任意键或点按即可锁定屏幕，然后用 Touch ID 或密码解锁。"
+  },
   "appBadge": {
     "attentionCount": "需要关注的任务：{{count}}"
   },
@@ -2346,7 +2350,12 @@
       "swallowActivationClickLabel": "切回时防误触",
       "swallowActivationClickHint": "左键点回后台窗口时，只唤起窗口。关闭后会同时操作点击位置，可能误触。",
       "swallowActivationClickAria": "切换返回窗口时的误点保护",
-      "macRestartNote": "macOS 上需要重启应用才能生效。"
+      "macRestartNote": "macOS 上需要重启应用才能生效。",
+      "awayGuard": {
+        "label": "离开时继续工作",
+        "hint": "有任务在进行时，你离开电脑屏幕也不会锁上，而是由 Cindy 遮住屏幕继续工作。有人碰键盘、鼠标或触控板会立即锁屏，用 Touch ID 或密码解锁。任务做完也会自动锁屏。",
+        "permission": "需要在「系统设置 → 隐私与安全性 → 辅助功能」中允许 Cindy，才能在有人碰电脑时立即锁屏。允许之前，电脑会照常熄屏、锁屏。"
+      }
     },
     "agentIsland": {
       "title": "灵动岛",

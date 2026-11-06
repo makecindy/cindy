@@ -1098,6 +1098,10 @@
     "cancel": "接続を維持",
     "disconnect": "切断"
   },
+  "awayGuard": {
+    "status": "Cindy がこの Mac で作業しています",
+    "hint": "いずれかのキーを押すかクリックすると画面がロックされます。Touch ID またはパスワードで解除してください。"
+  },
   "appBadge": {
     "attentionCount": "対応が必要なセッション：{{count}}"
   },
@@ -2346,7 +2350,12 @@
       "swallowActivationClickLabel": "戻るときの誤クリックを防ぐ",
       "swallowActivationClickHint": "背面のウィンドウを左クリックしたときは、手前に表示するだけにします。オフにするとクリックした場所も操作するため、誤操作につながることがあります。",
       "swallowActivationClickAria": "ウィンドウに戻るときの誤クリック防止を切り替え",
-      "macRestartNote": "macOS では変更を反映するにはアプリの再起動が必要です。"
+      "macRestartNote": "macOS では変更を反映するにはアプリの再起動が必要です。",
+      "awayGuard": {
+        "label": "離席中も作業を続ける",
+        "hint": "タスクの実行中は、席を離れても画面がロックされず、Cindy が画面を覆って作業を続けます。キーボード、マウス、トラックパッドに触れるとすぐにロックされ、Touch ID またはパスワードで解除できます。作業が終わったときも自動でロックされます。",
+        "permission": "誰かがこの Mac に触れたときにすぐロックするには、「システム設定 > プライバシーとセキュリティ > アクセシビリティ」で Cindy を許可してください。許可するまでは、通常どおり画面がスリープしてロックされます。"
+      }
     },
     "agentIsland": {
       "title": "Agent Island",

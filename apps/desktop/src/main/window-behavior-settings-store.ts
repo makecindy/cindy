@@ -9,6 +9,7 @@
  *    防误触的用户需在设置里显式打开)
  *  - windowsCloseBehavior: null (Windows 首次关闭时弹窗询问,选择后持久化)
  *  - linuxCloseBehavior: null (Linux 首次关闭时弹窗询问,选择后持久化)
+ *  - awayGuard: false (macOS「离开时继续工作」;开启后由 remote-desktop/awayGuard 执行)
  *
  * swallowActivationClick 仍由 renderer localStorage 承担运行时事实标准,main
  * 侧文件只供下次创建 BrowserWindow 时读取。平台关闭行为则完全由 main 侧
@@ -33,12 +34,14 @@ export interface WindowBehaviorSettings {
   swallowActivationClick: boolean;
   windowsCloseBehavior: WindowsCloseBehavior | null;
   linuxCloseBehavior: LinuxCloseBehavior | null;
+  awayGuard: boolean;
 }
 
 const DEFAULTS: WindowBehaviorSettings = {
   swallowActivationClick: false,
   windowsCloseBehavior: null,
   linuxCloseBehavior: null,
+  awayGuard: false,
 };
 
 function settingsFilePath(): string {
@@ -59,6 +62,7 @@ function normalize(raw: unknown): WindowBehaviorSettings {
     linuxCloseBehavior: isLinuxCloseBehavior(r.linuxCloseBehavior)
       ? r.linuxCloseBehavior
       : DEFAULTS.linuxCloseBehavior,
+    awayGuard: typeof r.awayGuard === 'boolean' ? r.awayGuard : DEFAULTS.awayGuard,
   };
 }
 
@@ -87,6 +91,11 @@ export function writeWindowsCloseBehavior(windowsCloseBehavior: WindowsCloseBeha
 export function writeLinuxCloseBehavior(linuxCloseBehavior: LinuxCloseBehavior): void {
   store.writePatch({ linuxCloseBehavior });
   log.info('Linux close behavior written', { linuxCloseBehavior });
+}
+
+export function writeAwayGuard(awayGuard: boolean): void {
+  store.writePatch({ awayGuard });
+  log.info('away guard setting written', { awayGuard });
 }
 
 export const __testing = { normalize };
