@@ -17,7 +17,7 @@ import { inferBotTemplatePresetId } from '../../../../shared/botTemplatePreset.j
 
 import type Database from 'better-sqlite3';
 
-import type { DbTxName, SessionsSetTerminalStatusResult } from '../../client/tx/types.js';
+import type { BotsFinishDelegationResult, DbTxName, SessionsSetTerminalStatusResult } from '../../client/tx/types.js';
 import { runChatCacheTransaction, type ChatCacheTransaction } from './chatCacheTx.js';
 import { computeForkSourceMessagesDigest, type ForkSourceMessage } from '../../forkRecoverySnapshot.js';
 import { normalizeWorkingDirForStorage } from '../../../../shared/workingDir.js';
@@ -1007,7 +1007,7 @@ function botsArchiveChannelLanes(
 function botsFinishDelegation(
   db: Database.Database,
   args: unknown,
-): { id: string; parentSessionId: string | null; childSessionId: string | null; targetBotId: string | null; runSequence: number; status: string } | null {
+): BotsFinishDelegationResult | null {
   const p = asRecord(args, 'bots.finishDelegation args');
   return db.transaction(() => {
     const values: unknown[] = [
@@ -1031,10 +1031,9 @@ function botsFinishDelegation(
     const row = db.prepare(`UPDATE bot_delegations SET status = ?, result_summary = ?, output_artifacts_json = ?, last_error = ?
       ${tokenSet}, pending_interaction_json = NULL, completed_at = ?, completion_delivered_at = NULL, updated_at = ?
       WHERE id = ? AND status IN ('queued','running','waiting') ${receiptGuard}
-      RETURNING id, parent_session_id AS parentSessionId, child_session_id AS childSessionId, target_bot_id AS targetBotId, run_sequence AS runSequence, status`)
-      .get(...values) as
-      | { id: string; parentSessionId: string | null; childSessionId: string | null; targetBotId: string | null; runSequence: number; status: string }
-      | undefined;
+      RETURNING id, requesting_bot_id AS requestingBotId, parent_session_id AS parentSessionId,
+        child_session_id AS childSessionId, target_bot_id AS targetBotId, run_sequence AS runSequence, status`)
+      .get(...values) as BotsFinishDelegationResult | undefined;
     if (!row) return null;
     if (row.childSessionId && row.targetBotId !== null) {
       // Only legacy Bot-to-Bot execution containers have this archive lifecycle.

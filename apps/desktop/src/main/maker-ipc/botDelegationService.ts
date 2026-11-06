@@ -701,7 +701,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     }
   };
 
-  const emitChanged = (payload: BotDelegationChangedPayload): void => {
+  const emitChanged = (payload: BotDelegationChangedPayload & { requestingBotId: string }): void => {
     signalBotAutonomyBotsChanged();
     deps.onChanged?.(payload);
   };
@@ -1479,6 +1479,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       pendingInteractions.delete(params.delegationId);
       emitChanged({
         delegationId: updated.id,
+        requestingBotId: updated.requestingBotId,
         parentSessionId: updated.parentSessionId,
         childSessionId: updated.childSessionId,
         status: updated.status as DelegationStatus,
@@ -1828,6 +1829,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     clearTimer(row.id);
     emitChanged({
       delegationId: row.id,
+      requestingBotId: row.requestingBotId,
       parentSessionId: row.parentSessionId,
       childSessionId,
       status: 'waiting',
@@ -1877,6 +1879,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     clearInteractionRetryTimer(row.id);
     emitChanged({
       delegationId: row.id,
+      requestingBotId: row.requestingBotId,
       parentSessionId: row.parentSessionId,
       childSessionId,
       status: 'running',
@@ -2072,6 +2075,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           clearRetryTimer(accepted.id);
           emitChanged({
             delegationId: accepted.id,
+            requestingBotId: row.requestingBotId,
             parentSessionId: accepted.parentSessionId,
             childSessionId: accepted.childSessionId,
             status: accepted.status as DelegationStatus,
@@ -2139,6 +2143,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     if (retrying) {
       emitChanged({
         delegationId: retrying.id,
+        requestingBotId: row.requestingBotId,
         parentSessionId: retrying.parentSessionId,
         childSessionId: retrying.childSessionId,
         status: 'queued',
@@ -2167,6 +2172,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       ) ?? row.permissionSnapshotJson;
       emitChanged({
         delegationId: row.id,
+        requestingBotId: row.requestingBotId,
         parentSessionId: row.parentSessionId,
         childSessionId: row.childSessionId,
         status: 'waiting',
@@ -2330,6 +2336,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       if (row.status === 'waiting') {
         emitChanged({
           delegationId: row.id,
+          requestingBotId: row.requestingBotId,
           parentSessionId: row.parentSessionId,
           childSessionId: row.childSessionId,
           status: 'running',
@@ -2590,6 +2597,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       }
       emitChanged({
         delegationId,
+        requestingBotId: input.caller.botId,
         parentSessionId,
         childSessionId,
         status: 'queued',
@@ -3214,6 +3222,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     });
     emitChanged({
       delegationId: row.id,
+      requestingBotId: row.requestingBotId,
       parentSessionId: row.parentSessionId,
       childSessionId: row.childSessionId,
       status: row.status as DelegationStatus,
@@ -3272,6 +3281,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     });
     emitChanged({
       delegationId: row.id,
+      requestingBotId: row.requestingBotId,
       parentSessionId: row.parentSessionId,
       childSessionId: row.childSessionId,
       status: row.status as DelegationStatus,
@@ -3463,6 +3473,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       clearCleanupRetryTimer(row.id);
       emitChanged({
         delegationId: row.id,
+        requestingBotId: row.requestingBotId,
         parentSessionId: callerSessionId,
         childSessionId,
         status: 'queued',
@@ -3858,7 +3869,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       const deadline = readDeadline(row.permissionSnapshotJson);
       if (deadline !== null) scheduleTimeout(row.id, deadline);
     }
-    emitChanged({ delegationId: row.id, parentSessionId: row.parentSessionId,
+    emitChanged({ delegationId: row.id, requestingBotId: row.requestingBotId, parentSessionId: row.parentSessionId,
       childSessionId: row.childSessionId, status,
       pendingInteraction: awaitingInteraction ? pendingInteractionView(awaitingInteraction) : null });
     return { ok: true as const, childSessionId: row.childSessionId, resumed: true,
@@ -3989,7 +4000,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           clearTimer(row.id);
           clearRetryTimer(row.id);
           clearInteractionRetryTimer(row.id);
-          emitChanged({ delegationId: row.id, parentSessionId: row.parentSessionId,
+          emitChanged({ delegationId: row.id, requestingBotId: row.requestingBotId, parentSessionId: row.parentSessionId,
             childSessionId: row.childSessionId, status: row.status as DelegationStatus });
         }
       }
@@ -4151,7 +4162,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       clearTimer(row.id);
       clearRetryTimer(row.id);
       clearInteractionRetryTimer(row.id);
-      emitChanged({ delegationId: row.id, parentSessionId: row.parentSessionId,
+      emitChanged({ delegationId: row.id, requestingBotId: row.requestingBotId, parentSessionId: row.parentSessionId,
         childSessionId: row.childSessionId, status: row.status === 'queued' ? 'queued' : 'waiting' });
       return { ok: true as const, childSessionId: row.childSessionId,
         control: { ...taskControlView({ ...row, permissionSnapshotJson: snapshot }), stop_status: result.status } };

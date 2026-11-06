@@ -37,7 +37,7 @@ interface SessionEntry {
   listeners: Set<() => void>;
   unsubscribe: (() => void) | null;
   reloadGeneration: number;
-  requesterWideListeners: number;
+  requesterWideListeners: Map<string, number>;
   requesterWideDirty: boolean;
   scheduleLocalReload?: (read: () => Promise<void>) => Promise<void>;
 }
@@ -72,7 +72,7 @@ function ensureEntry(key: string): SessionEntry {
     listeners: new Set(),
     unsubscribe: null,
     reloadGeneration: 0,
-    requesterWideListeners: 0,
+    requesterWideListeners: new Map(),
     requesterWideDirty: false,
   };
   sessions.set(key, entry);
@@ -114,11 +114,13 @@ function subscribe(
   sessionId: string,
   key: string,
   listener: () => void,
-  requesterWide: boolean,
+  requestingBotId?: string,
 ): () => void {
   const entry = ensureEntry(key);
   entry.listeners.add(listener);
-  if (requesterWide) entry.requesterWideListeners += 1;
+  if (requestingBotId) {
+    entry.requesterWideListeners.set(requestingBotId, (entry.requesterWideListeners.get(requestingBotId) ?? 0) + 1);
+  }
   if (!entry.unsubscribe) {
     const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
     if (!deviceId) entry.scheduleLocalReload = createCoalescedRefresh<void>();
@@ -135,9 +137,11 @@ function subscribe(
         })
       : window.electronAPI.maker.onBotDelegationChanged((payload, ownerStamp) => {
           if (!isDataOwnerPushCurrent(ownerStamp)) return;
-          // The canonical query includes the requester's other lanes. Only an
-          // open local background-task list needs those lanes' invalidations.
-          if (payload.parentSessionId === sessionId || entry.requesterWideListeners > 0) {
+          // Older pushes omit the requester. Keep their broad invalidation for open lists.
+          const requesterListOpen = payload.requestingBotId
+            ? entry.requesterWideListeners.has(payload.requestingBotId)
+            : entry.requesterWideListeners.size > 0;
+          if (payload.parentSessionId === sessionId || requesterListOpen) {
             void reload(sessionId, key);
           } else {
             entry.requesterWideDirty = true;
@@ -157,12 +161,16 @@ function subscribe(
       offStatus();
     };
     void reload(sessionId, key);
-  } else if (requesterWide && entry.requesterWideDirty) {
+  } else if (requestingBotId && entry.requesterWideDirty) {
     void reload(sessionId, key);
   }
   return () => {
     entry.listeners.delete(listener);
-    if (requesterWide) entry.requesterWideListeners -= 1;
+    if (requestingBotId) {
+      const count = entry.requesterWideListeners.get(requestingBotId) ?? 0;
+      if (count > 1) entry.requesterWideListeners.set(requestingBotId, count - 1);
+      else entry.requesterWideListeners.delete(requestingBotId);
+    }
     if (entry.listeners.size > 0) return;
     entry.unsubscribe?.();
     if (sessions.get(key) === entry) sessions.delete(key);
@@ -172,12 +180,12 @@ function subscribe(
 function useDelegationSnapshot(
   sessionId: string | null,
   key: string | null,
-  requesterWide = false,
+  requestingBotId?: string,
 ): DelegationSnapshot {
   const subscribeSnapshot = useCallback((listener: () => void) => {
     if (!sessionId || !key) return () => {};
-    return subscribe(sessionId, key, listener, requesterWide);
-  }, [sessionId, key, requesterWide]);
+    return subscribe(sessionId, key, listener, requestingBotId);
+  }, [sessionId, key, requestingBotId]);
   const read = useCallback(() => {
     if (!sessionId || !key || key !== sessionKey(sessionId, getDataOwnerGeneration())) return EMPTY_SNAPSHOT;
     return sessions.get(key)?.snapshot ?? EMPTY_SNAPSHOT;
@@ -215,9 +223,9 @@ export function useBotDelegations(sessionId: string | null): readonly BotDelegat
 }
 
 /** 本机伙伴主聊天的后台任务列表，与原协作卡共享快照和订阅。 */
-export function useBotDelegationList(sessionId: string | null): DelegationSnapshot & { retry: () => void } {
+export function useBotDelegationList(sessionId: string | null, requestingBotId: string): DelegationSnapshot & { retry: () => void } {
   const key = useDelegationKey(sessionId);
-  const snapshot = useDelegationSnapshot(sessionId, key, true);
+  const snapshot = useDelegationSnapshot(sessionId, key, requestingBotId);
   const retry = useCallback(() => {
     if (sessionId && key) void reload(sessionId, key);
   }, [sessionId, key]);

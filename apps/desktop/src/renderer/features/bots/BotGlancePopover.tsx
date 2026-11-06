@@ -692,7 +692,7 @@ function BackgroundTasks({ botId, sessionId, onBack, onClose }: {
 }) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
-  const { rows, resolved, stale, retry } = useBotDelegationList(sessionId);
+  const { rows, resolved, stale, retry } = useBotDelegationList(sessionId, botId);
   const running = useSyncExternalStore(makerChatStore.subscribeAll, makerChatStore.getRunningSnapshot);
   const { sessions: localSessions } = useCCSessions({ includeArchived: 'all' });
   const [filter, setFilter] = useState<BackgroundTaskFilter>('all');

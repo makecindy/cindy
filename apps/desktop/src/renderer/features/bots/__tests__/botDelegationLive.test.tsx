@@ -43,13 +43,14 @@ function deferRead() {
   return { response, resolve };
 }
 
-function publishOtherLane(stamp?: DataOwnerPushStamp) {
+function publishOtherLane(stamp?: DataOwnerPushStamp, change: Partial<BotDelegationChangedPayload> = {}) {
   for (const listener of listeners) {
     listener({
       delegationId: 'other-lane-task',
       parentSessionId: 'thread',
       childSessionId: 'task',
       status: 'running',
+      ...change,
     }, stamp);
   }
 }
@@ -78,7 +79,7 @@ describe('canonical background-task snapshot', () => {
   it('refreshes the shared list for other lanes only while the list is in use', async () => {
     const { result, rerender } = renderHook(({ open }) => ({
       cards: useBotDelegations('canonical'),
-      list: useBotDelegationList(open ? 'canonical' : null),
+      list: useBotDelegationList(open ? 'canonical' : null, 'requester'),
     }), { initialProps: { open: false } });
     await act(async () => {});
 
@@ -109,6 +110,18 @@ describe('canonical background-task snapshot', () => {
     expect(listBotDelegations).toHaveBeenCalledTimes(3);
   });
 
+  it('only refreshes an open list for its requester or the shared parent session', async () => {
+    const { result } = renderHook(() => useBotDelegationList('canonical', 'requester'));
+    await waitFor(() => expect(result.current.resolved).toBe(true));
+
+    await act(async () => publishOtherLane(undefined, { requestingBotId: 'another-bot' }));
+    expect(listBotDelegations).toHaveBeenCalledTimes(1);
+    await act(async () => publishOtherLane(undefined, { requestingBotId: 'requester' }));
+    expect(listBotDelegations).toHaveBeenCalledTimes(2);
+    await act(async () => publishOtherLane(undefined, { requestingBotId: 'another-bot', parentSessionId: 'canonical' }));
+    expect(listBotDelegations).toHaveBeenCalledTimes(3);
+  });
+
   it('does not flash the previous companion when switching, and retries a failed list read', async () => {
     listBotDelegations.mockImplementation(async (sessionId: string) => (
       sessionId === 'first'
@@ -117,7 +130,7 @@ describe('canonical background-task snapshot', () => {
     ));
     const seen: Array<{ sessionId: string; rowIds: string[] }> = [];
     const { result, rerender } = renderHook(({ sessionId }) => {
-      const list = useBotDelegationList(sessionId);
+      const list = useBotDelegationList(sessionId, sessionId);
       seen.push({ sessionId, rowIds: list.rows.map((row) => row.id) });
       return list;
     }, { initialProps: { sessionId: 'first' } });
@@ -144,7 +157,7 @@ describe('canonical background-task snapshot', () => {
       .mockResolvedValueOnce({ ok: true, delegations: [{ id: 'previous-confirmed' }] })
       .mockReturnValueOnce(previous.response)
       .mockReturnValueOnce(current.response);
-    const { result } = renderHook(() => useBotDelegationList('canonical'));
+    const { result } = renderHook(() => useBotDelegationList('canonical', 'requester'));
     await waitFor(() => expect(result.current.rows).toMatchObject([{ id: 'previous-confirmed' }]));
     await act(async () => result.current.retry());
     expect(listBotDelegations).toHaveBeenCalledTimes(2);
@@ -165,7 +178,7 @@ describe('canonical background-task snapshot', () => {
     const inFlight = deferRead();
     const trailing = deferRead();
     listBotDelegations.mockReturnValueOnce(inFlight.response).mockReturnValueOnce(trailing.response);
-    const { result } = renderHook(() => useBotDelegationList('canonical'));
+    const { result } = renderHook(() => useBotDelegationList('canonical', 'requester'));
     await act(async () => {});
     expect(listBotDelegations).toHaveBeenCalledTimes(1);
 

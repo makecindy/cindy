@@ -4780,6 +4780,10 @@ worker 的任务，按最近更新取前 200 条；伙伴行 `revision` 追加�
 切账号、撤权、断线后的旧响应仍受原请求代次隔离。只读关系请求失败不重启 relay、
 不影响其它设备、不重放任何任务操作。不增加 IPC、权限、服务端字段或数据库迁移。
 
+桌面 Host 的既有 `maker:bot-delegation:changed` 事件可携带 `requestingBotId`。
+本机「后台任务」面板用它筛掉其他伙伴的跨会话更新。同一父任务的协作卡照常刷新，
+旧 Host 省略该字段时沿用原失效行为。远程推送仍按既有设备和父任务归属处理。
+
 Task creator filtering resolves built-in Cindy identity through the existing local `listCindyCopies` read,
 which now returns even a single remaining cloud Cindy. The merge settings entry still requires two copies.
 This allows old remote hosts without template metadata to participate in the unified filter without
