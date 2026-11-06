@@ -385,6 +385,8 @@ export function registerMessageIpc(
 
   const historyView = createHistoryViewReader({
     list: readMessagesList,
+    // readMessagesList skips paged imports only for device-link callers (#318).
+    shareScope: () => (isDeviceLinkInvoke() ? 'device-link' : 'local'),
     revision: async () => {
       const current = getCurrentDbClientSnapshot();
       if (!current) throw new Error('DbClient not ready');

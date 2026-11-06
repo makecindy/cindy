@@ -93,6 +93,7 @@ import { BotFollowMark, useSessionFollowers } from '@/features/bots/BotFollowMar
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
 import { useCindyMakeActivity } from './useCindyMakeActivity';
+import { SIDEBAR_LIST_ROW_ACTIVE_CLASS, SIDEBAR_LIST_ROW_HEIGHT_CLASS } from './listRowStyle';
 import { CINDY_MAKE_SESSION_SOURCE } from '../../../../shared/cindyMakeSession';
 import {
   finishSessionDrag,
@@ -719,7 +720,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
               // 把下方所有行整体推移,选中/取消时列表跳动(2026-08-12 用户反馈)。
               // inset shadow 画在盒内、不参与布局,行高与未选中时逐像素一致。
               isActive
-                ? 'bg-sidebar-item-active [--task-tag-ring-bg:hsl(var(--sidebar-item-active))] text-sidebar-item-active-foreground shadow-[inset_0_0_0_1px_var(--sidebar-item-active-border)]'
+                ? cn(SIDEBAR_LIST_ROW_ACTIVE_CLASS, '[--task-tag-ring-bg:hsl(var(--sidebar-item-active))]')
                 : cn(
                     // 标签色球描边不随 hover 换色(同 SessionItem):半透明 hover 底
                     // 用作描边会透出色球本色,描边消失。
@@ -746,7 +747,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
       {variant === 'list' ? (
         // ── list 变体:扁平 Telegram 风行 ── 第 1 行标题 + 右上角时间(hover 让位
         // 给 More/Archive 操作钮,逻辑同对话列表);下方最多 2 行预览。无卡片描边底色。
-        <div className="relative px-2.5 py-2">
+        <div className={cn('relative px-2.5 py-2', SIDEBAR_LIST_ROW_HEIGHT_CLASS)}>
           {/* 浅分割线:左右内缩(inset-x-2.5,短于圆角高亮方块、不触其圆角)。每行底部
               一条 → 覆盖"行间分割 + 列表底";首行额外补一条顶线 → 列表顶。本行高亮
               (active/选中/hover)时整条隐藏——不在圆角方块上/下方露出横线。 */}

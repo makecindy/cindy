@@ -351,17 +351,19 @@ export default {
       const colors = await selectedRow.evaluate(node => {
         const surface = node.closest('.bg-sidebar-item-active');
         const probe = document.createElement('span');
-        probe.style.backgroundColor = 'hsl(var(--surface-hover-hsl))';
-        probe.style.color = 'var(--sidebar-nav-text)';
+        probe.style.backgroundColor = 'hsl(var(--sidebar-item-active))';
+        probe.style.color = 'var(--sidebar-item-active-foreground)';
         node.append(probe);
         const expected = getComputedStyle(probe);
         const actual = getComputedStyle(surface);
-        const result = { background: actual.backgroundColor, foreground: actual.color,
+        const result = { background: actual.backgroundColor, foreground: actual.color, shadow: actual.boxShadow,
           expectedBackground: expected.backgroundColor, expectedForeground: expected.color };
         probe.remove(); return result;
       });
-      assert.equal(colors.background, colors.expectedBackground, 'selection uses the quiet theme surface');
-      assert.equal(colors.foreground, colors.expectedForeground, 'selection keeps normal text contrast');
+      // 2026-11-06: same selected pill as list-mode task rows (fill, text and 1px inset outline).
+      assert.equal(colors.background, colors.expectedBackground, 'selection uses the task row fill');
+      assert.equal(colors.foreground, colors.expectedForeground, 'selection uses the task row text color');
+      assert.match(colors.shadow, /inset/, 'selection draws the task row inset outline');
     }
     if (ui.case === 'states') {
       const expandedAvatar = await selectedRow.locator('[aria-hidden="true"]').first().boundingBox();

@@ -30,6 +30,33 @@ describe("MiniMax M3.1 Flash verified China tariff", () => {
   });
 });
 
+// Unit: production price resolution from the complete bundled Registry. K3.1 had no
+// prices; cover both models/markets, historical unknowns and channel isolation.
+describe("Kimi K3.1 official API reference prices", () => {
+  it.each([
+    ["kimi-k3.1-pro", "cn", "CNY", 13, 68, 1.3, 13, 26],
+    ["kimi-k3.1-pro", "global", "USD", 2, 10, 0.2, 2, 4],
+    ["kimi-k3.1-pro-highspeed", "cn", "CNY", 26, 136, 1.3, 26, 52],
+    ["kimi-k3.1-pro-highspeed", "global", "USD", 4, 20, 0.2, 4, 8],
+  ] as const)(
+    "resolves %s/%s without guessing another currency or historical price",
+    (model, market, currency, input, output, read, write, write1h) => {
+      const options = { at: "2026-11-05", officialOnly: true };
+      const price = resolveModelReferencePrice(registry, `moonshot-kimi-${market}`, model, options)?.price;
+      expect(price).toMatchObject({
+        currency, variant: "standard", inputPerMtok: input, outputPerMtok: output,
+        cacheReadPerMtok: read, cacheWritePerMtok: write, cacheWrite1hPerMtok: write1h,
+      });
+      expect(resolveBaseModelReferencePrice(registry, model, { ...options, priceGroup: market })?.price).toEqual(price);
+      expect(resolveBaseModelReferencePrice(registry, model, options)).toBeUndefined();
+      expect(resolveModelReferencePrice(registry, `moonshot-kimi-${market}`, model, { ...options, currency: currency === "CNY" ? "USD" : "CNY" })).toBeUndefined();
+      expect(resolveModelReferencePrice(registry, `moonshot-kimi-${market}`, model, { at: "2026-11-04" })).toBeUndefined();
+      expect(resolveModelReferencePrice(registry, `moonshot-kimi-${market}`, model, { ...options, variant: "fast" })).toBeUndefined();
+      expect(resolveModelReferencePrice(registry, "moonshot-kimi-code", model.replace("kimi-", ""), options)).toBeUndefined();
+    },
+  );
+});
+
 describe("verified September reference-price coverage", () => {
   it("resolves the existing Muse 1.2 route to its official tariff", () => {
     expect(
