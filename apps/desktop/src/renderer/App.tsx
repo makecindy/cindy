@@ -41,6 +41,7 @@ import { ForgeOidcInstallConfirmHost } from '@/cindy-brain/ForgeOidcInstallConfi
 import { GhostInstallConsentHost } from '@/cindy-brain/GhostInstallConsentHost';
 import { SetupMigrationHost } from '@/features/setup-migration/SetupMigrationHost';
 import { PluginPublisherConfirmHost } from '@/features/plugin/PluginPublisherConfirmHost';
+import { GithubSetupRequestHost } from '@/features/cc-agent/GithubSetupRequestHost';
 import { makerChatStore } from '@/lib/makerChatStore';
 import {
   initializePromptRecommendationStore,
@@ -479,6 +480,7 @@ export function App() {
                               {/* 新电脑设置:只挂主窗(应答界面偏好读取、首次建议与迁移弹窗)。 */}
                               {!isSecondaryWindow() && !isSidebarWindow() && <SetupMigrationHost />}
                               <PluginPublisherConfirmHost />
+                              <GithubSetupRequestHost />
                               <OwnerScopedRouter />
                             </EnvCheckGuard>
                             {!isSecondaryWindow() && !isSidebarWindow() && <StartupLogSupport />}

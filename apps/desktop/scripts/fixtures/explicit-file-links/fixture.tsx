@@ -1,4 +1,4 @@
-import { mountPage, forbid } from '../../ui-page/harness';
+import { mountPage, forbid, subscription } from '../../ui-page/harness';
 import { MarkdownRenderer } from '../../../src/renderer/components/chat/MarkdownRenderer';
 import { ChatSessionFileProvider } from '../../../src/renderer/components/chat/ChatSessionFileContext';
 import { ToastContainer } from '../../../src/renderer/components/ui/toast/ToastContainer';
@@ -22,6 +22,9 @@ mountPage({
     },
     fileBrowser: {
       chatStat: async () => ({ verdict: 'nonfile' }),
+      readFile: async () => ({ ok: false, code: 'BINARY_FILE', message: 'binary' }),
+      stat: async ({ relPath }: { relPath: string }) => ({ relPath, type: 'file', size: 128, mtimeMs: 1 }),
+      onEvent: subscription('file-browser'),
     },
   }),
   render: ctx => <main style={{ padding: '120px 24px 24px', maxWidth: 560, margin: '0 auto' }}>

@@ -130,6 +130,9 @@
   "detail": {
     "useItIn": "Verwenden in",
     "openPlugin": "Plugin öffnen",
+    "readme": "Über",
+    "readmeLoadFailed": "Die Beschreibung konnte nicht geladen werden. Versuche es erneut.",
+    "readmeUnavailable": "Keine Beschreibung verfügbar.",
     "computerSettings": "Öffne zum Konfigurieren dieses Plugins seine Details unter Cindy → Plugins auf deinem Computer.",
     "runtimeIssue": "Das Plugin wurde unerwartet beendet. Versuche, es erneut zu öffnen oder in einer Aufgabe zu verwenden.",
     "runtimeFused": "Das Plugin wurde nach wiederholten Fehlern gestoppt. Deaktiviere und aktiviere es, um es erneut zu versuchen.",

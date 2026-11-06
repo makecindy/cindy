@@ -90,6 +90,7 @@ function harness() {
     }
     if (path === '/api/billing/catalog') return { products: [] };
     if (path === '/api/billing/orders?limit=20') return { orders: [], nextCursor: null };
+    if (path.startsWith('/api/billing/payment-history?')) return { records: [], nextCursor: null };
     if (path === '/api/billing/subscription') return { subscription };
     if (path.includes('/subscriptions')) return subscription;
     return paymentOrder;
@@ -121,6 +122,25 @@ function harness() {
 }
 
 describe('billing IPC', () => {
+  // 新成功历史必须经固定账号接口取下一页，renderer 不得覆盖账号或请求路径。
+  it('passes a bounded history cursor to the fixed personal history endpoint', async () => {
+    const { call, fetch } = harness();
+    await expect(call('billing:list-payment-history', { limit: 10, cursor: 'previous_page' }))
+      .resolves.toEqual({ records: [], nextCursor: null });
+    expect(fetch).toHaveBeenCalledWith('/api/billing/payment-history?limit=10&cursor=previous_page', {
+      baseUrl: expect.any(Function), timeoutMs: 20_000, redactErrorDetails: true,
+    });
+  });
+
+  it.each([
+    { limit: 0 }, { limit: 101 }, { limit: 10, cursor: '../other' },
+    { limit: 10, cursor: 'a'.repeat(1025) }, { limit: 10, membershipId: 'another-account' },
+  ])('rejects unsafe history payload before network access: %j', async (payload) => {
+    const { call, fetch } = harness();
+    await expect(call('billing:list-payment-history', payload)).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('queries the fixed current-account balance endpoint without a renderer payload', async () => {
     const { call, fetch } = harness();
 

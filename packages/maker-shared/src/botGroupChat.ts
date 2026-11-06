@@ -332,6 +332,8 @@ export interface BotGroupThreadShareView {
   authorName: string;
   /** The sharer wrote the reply themselves (sent to the thread and the main chat). */
   sharedByAuthor: boolean;
+  /** Original reply's targets, paired with its content. Older projections omit this. */
+  mentions?: BotGroupMention;
   content: string;
   attachments: BotGroupAttachment[];
   createdAt: number | null;
@@ -798,6 +800,11 @@ export interface BotGroupRemoteChatData extends BotGroupDetail {
   projectDirName: string | null;
   /** Host forwards a measured main-timeline read to the chat server. Older hosts omit it. */
   supportsReadReceipts?: boolean;
+  /**
+   * Early local group: the host keeps its read position and accepts `read` with `{ at }`
+   * (host time of the newest message shown), so reading on the phone clears the computer's badge.
+   */
+  supportsLocalReadSync?: boolean;
   supportsPersonalMask?: boolean;
   /**
    * The computer accepts attachments on `send` (absent on older computers, which would

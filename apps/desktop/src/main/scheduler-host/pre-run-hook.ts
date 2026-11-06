@@ -42,6 +42,11 @@ export interface PreRunHookStdinPayload {
    * skip 都会把它推新,脚本会永久自锁;这类条件应自己落盘记录上次放行时间。
    */
   lastFinishedAt?: number;
+  /**
+   * Present when host code started this run early instead of the cron or a user, for example
+   * `{ kind: 'watch', source: 'pr-status', detail: <PR URL> }` when a watched PR's status changed.
+   */
+  trigger?: { kind: 'watch'; source: string; detail?: string };
 }
 
 export interface PreRunHookInput {
@@ -342,6 +347,13 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
 
 /** 给 run 错误、通知和日志共用的前置检查失败摘要。 */
 export function formatPreRunHookFailure(result: PreRunHookResult): string {
+  const plugin = result.missingPlugin;
+  if (plugin) {
+    const label = plugin.name ? `"${plugin.name}" (${plugin.ghostId})` : `"${plugin.ghostId}"`;
+    return `pre-run hook failed: plugin ${label} is ${
+      plugin.installed ? 'not enabled' : 'not installed'
+    }, so its check script is missing. ${plugin.installed ? 'Enable' : 'Install'} the plugin to resume this task.`;
+  }
   if (result.status === 'timed_out') return result.error ?? 'pre-run hook timed out';
   if (result.error) return `pre-run hook failed: ${result.error}`;
   return `pre-run hook failed with exit code ${result.exitCode ?? 'unknown'}`;

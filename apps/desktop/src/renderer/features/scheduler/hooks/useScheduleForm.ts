@@ -9,9 +9,11 @@
  */
 
 import { useCallback, useRef, useState } from 'react';
+import { formatScheduleDeadline, parseScheduleDeadline } from '@cindy/maker-shared/schedule-form';
 import type { CreateScheduleInput, Schedule, ScheduleTemplate, ScheduleWorkspaceKind } from '@cindy/maker-scheduler';
-import type { ProviderView } from '@cindy/model-providers';
+import { effectiveSourceIdForModel, type ProviderView } from '@cindy/model-providers';
 import { getDraft, getPersistedVendorModel } from '@/state/newMakerDraft';
+import { isModelEnabled } from '@/state/modelVisibilityPrefs';
 import { resolveNewTaskDefaultRoute } from '@/lib/draftModelCalibration';
 import { GHOST_CONTROL_POINTS } from '../../../../shared/ghost';
 import type { Session } from '@/lib/ccAgent.types';
@@ -163,7 +165,8 @@ export function getScheduleAgentPrefs(agentKind: ScheduleFormState['agentKind'])
  *      一起落到表单:只存模型会让 runner 把空来源重新解析成原生默认(可能是网关)。
  * 不变量:返回值是原子的 (模型, 来源) 对,调用方整对应用,不拿别处的来源去拼模型。
  * 三级都返回与模型成对的来源(一级取任务记忆的来源,二级取对话草稿记着的来源),
- * 没有记来源时为 null(跟随原生默认)。`preferredProviderId` 是表单 / 模板已定下的来源:
+ * 清单未到位且没有记来源时为 null；清单就绪后保留校验命中的可见来源。
+ * `preferredProviderId` 是表单 / 模板已定下的来源:
  * 给定时只接受同一来源的一、二级结果,第三级只在该来源内挑,保证模型一定由这个来源提供。
  */
 export function getScheduleDefaultRoute(
@@ -171,24 +174,37 @@ export function getScheduleDefaultRoute(
   providers?: readonly ProviderView[],
   preferredProviderId?: string | null,
 ): { model: string; providerId: string | null } {
+  // Match the picker before both history validation and fallback. Catalog membership
+  // alone includes bridge routes hidden by default and user-disabled display rows.
+  const candidates = providers?.map((provider) => ({
+    ...provider,
+    models: { ...provider.models, [agentKind]: (provider.models[agentKind] ?? [])
+      .filter((model) => isModelEnabled(agentKind, provider.id, model)) },
+  }));
   const preferred = preferredProviderId?.trim() || null;
   const compatible = (providerId: string | null) => !preferred || providerId === preferred;
+  const rememberedRoute = (model: string, providerId: string | null) => {
+    if (!model.trim() || !compatible(providerId)) return null;
+    if (!candidates) return { model, providerId };
+    const sourceId = effectiveSourceIdForModel(candidates, providerId, model, agentKind);
+    // Pin the source that passed visibility checks. Returning the remembered null
+    // would let downstream resolution use the full catalog and pick a hidden copy.
+    // Auto relocation may resolve another source; an explicit template/source
+    // constraint still applies to the result, not only to the remembered input.
+    return sourceId && compatible(sourceId) ? { model, providerId: sourceId } : null;
+  };
   const prefs = getScheduleAgentPrefs(agentKind);
-  const prefsProviderId = prefs.providerId || null;
-  if (prefs.model.trim() && compatible(prefsProviderId)) {
-    return { model: prefs.model, providerId: prefsProviderId };
-  }
+  const scheduleRoute = rememberedRoute(prefs.model, prefs.providerId || null);
+  if (scheduleRoute) return scheduleRoute;
   const vendor = agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : 'cc';
   const draft = getDraft();
   const chatLast = getPersistedVendorModel(vendor);
-  const chatProviderId = draft.lastByVendor[vendor]?.providerId || null;
-  if (chatLast.trim() && compatible(chatProviderId)) {
-    return { model: chatLast, providerId: chatProviderId };
-  }
-  if (!providers) return { model: '', providerId: preferred };
+  const chatRoute = rememberedRoute(chatLast, draft.lastByVendor[vendor]?.providerId || null);
+  if (chatRoute) return chatRoute;
+  if (!candidates) return { model: '', providerId: preferred };
   return (
     resolveNewTaskDefaultRoute({
-      providers,
+      providers: candidates,
       agent: agentKind,
       requiredProviderId: preferred,
       draft: {
@@ -264,6 +280,8 @@ export function makeFormFromSchedule(s: Schedule | null): ScheduleFormState {
     cronExpr: s.cronExpr,
     intervalMs: s.intervalMs,
     timezone: s.timezone,
+    deadline: formatScheduleDeadline(s.expireAt),
+    sourceExpireAt: s.expireAt,
     recurring: s.recurring,
     manual: s.manual,
     agentKind: s.modelAgentKind ?? s.agentKind,
@@ -389,7 +407,8 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
       // 模板的模型与来源属于本机目录;路由变了就回到本机运行。
       const sameRoute = selection.agentKind === f.agentKind && selection.model === f.model && selection.providerId === f.providerId;
       return { ...f, ...selection, agentDeviceId: sameRoute ? f.agentDeviceId : '',
-        modelAgentKind: selection.model.trim() || selection.modelAgentDeviceId === '' ? selection.agentKind : undefined };
+        modelAgentKind: template.model?.trim() || (f.targetSessionId.trim() && selection.modelAgentDeviceId === '')
+          ? selection.agentKind : sameRoute ? f.modelAgentKind : undefined };
     });
   }, []);
 
@@ -455,6 +474,9 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
   }, []);
 
   const validate = useCallback((): { key: string; values?: Record<string, string> } | null => {
+    if (Number.isNaN(parseScheduleDeadline(form.deadline ?? '', form.sourceExpireAt))) {
+      return { key: 'scheduler.deadline.invalid' };
+    }
     if (!form.name.trim()) return { key: 'scheduler.editor.validation.nameRequired' };
     if ((form.executionMode ?? 'agent') === 'agent' && !form.prompt.trim()) {
       return { key: 'scheduler.editor.validation.promptRequired' };

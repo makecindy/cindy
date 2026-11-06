@@ -56,6 +56,10 @@ pnpm restart:desktop:remote -- --mock --isolated=<名字>   # 另开一份模拟
   `localDb/uiMockSeed.ts`。
 - 单个组件的改动仍优先用 `pnpm ui:check`（几秒出全部场景截图）；`--mock` 用于需要完整
   主界面、真实路由和侧栏交互的检查。
+- 外部工具的重复连接提醒在隔离 `--mock` 中只读取沙箱内
+  `ui-mock/claude/.claude.json` 的 `mcpServers`，不读取真实 Claude Code 用户配置。
+  可写入虚拟 HTTP/SSE 地址，再通过设置添加对应的 Cindy MCP，验证选择与持久化。
+  该文件只用于设置页验收，真实 Agent 的连接装配仍按实际运行环境解析。
 
 ## Mobile 模拟器
 
@@ -74,6 +78,7 @@ pnpm mobile:sim:whoami -- --mock --json
 - 邮件阅读页：`cindy://mail-preview?deviceId=cindy-visual-mock-mac&sessionId=visual-running&url=<编码后的地址>`，
   地址取 `apps/mobile/src/debug/mailVisualFixture.ts` 的 `VISUAL_MAIL_URLS`（宽版营销邮件、三封往来邮件），均为合成数据。
 - 写邮件卡片：`cindy://sessions/visual-mail-draft?deviceId=cindy-visual-mock-mac`（仅手机端的模拟任务，含一张回复草稿卡）。
+- 群聊点名：`cindy://companions/groups/mention-qa?deviceId=cindy-visual-mock-mac`，合成成员覆盖显式身份、唯一名称回退、重名、未知及群体提及。沿用实际群聊组件与成员身份 sheet，只用于界面验收；话题入口另由直连 Chat Server 的组件回归覆盖。
 
 ## 可复用的展示项目：Orbit Garden
 

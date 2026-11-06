@@ -39,6 +39,9 @@ import {
 import { __resetGlobalTabsForTest, addGlobalPluginTab } from '../globalTabs';
 import { _resetStore } from '../store';
 import { useTabGroupPanes } from '../tabGroupPanes';
+import { EDGE_TAB_GROUP_IDS } from '../tabGroupPanes';
+import { usePluginUiVisibilityOwner } from '@/cindy-brain/usePluginUiVisibility';
+import type { PluginUiVisibilityValues } from '@cindy/maker-shared/plugin-ui';
 import { __resetTabGroupsForTest, setTabGroup } from '../tabGroups';
 
 let currentLayout: Layout;
@@ -81,6 +84,32 @@ afterEach(() => {
 });
 
 describe('useTabGroupPanes', () => {
+  // PR #8909: tools visibility must park every native edge group without
+  // removing its mount or changing the user's layout and tab assignments.
+  it.each(EDGE_TAB_GROUP_IDS)('parks and restores the %s group with plugin tools visibility', async group => {
+    const tab = addGlobalPluginTab('alpha')!;
+    act(() => setTabGroup(tab.id, group));
+    const visible: PluginUiVisibilityValues = { workspace: true, sidebar: true, header: true,
+      messages: true, composer: true, tools: true, windowControls: true };
+    let request!: (value: { requestId: string; values: PluginUiVisibilityValues }) => void;
+    window.electronAPI.pluginUiVisibility = {
+      get: async () => visible, onApply: listener => { request = listener; return () => {}; },
+      applied: async () => {}, release: async () => {},
+    };
+    renderHook(() => {
+      usePluginUiVisibilityOwner();
+      useTabGroupPanes({ sessionId: null, enabled: true, remoteHostId: null });
+    });
+    await act(async () => {});
+    const layout = JSON.stringify(currentLayout);
+    act(() => request({ requestId: 'hide', values: { ...visible, tools: false } }));
+    expect(hasPanelKind(`tab-group:${group}`)).toBe(true);
+    expect(isPanelKindParked(`tab-group:${group}`)).toBe(true);
+    expect(JSON.stringify(currentLayout)).toBe(layout);
+    act(() => request({ requestId: 'restore', values: visible }));
+    expect(isPanelKindParked(`tab-group:${group}`)).toBe(false);
+    expect(setLayout).toHaveBeenCalledTimes(1);
+  });
   it('registers an edge group and inserts its pane when a visible tab lands there; unregisters when it leaves', () => {
     const tab = addGlobalPluginTab('alpha')!;
     const { rerender } = renderHook(

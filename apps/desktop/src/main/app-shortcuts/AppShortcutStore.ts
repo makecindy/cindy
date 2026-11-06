@@ -5,17 +5,22 @@ import { createLogger } from '../logger.js';
 import {
   comboToElectronAccelerator,
   findAppShortcutConflict,
+  findPluginShortcutConflict,
   getAppShortcutDefinition,
   getEffectiveAppShortcuts,
+  getEffectivePluginShortcuts,
   isAppShortcutAvailableOnPlatform,
   isAppShortcutComboBindable,
   isAppShortcutId,
+  isPluginShortcutId,
   isGlobalAppShortcutComboUsable,
   normalizeAppShortcutCombo,
   normalizeAppShortcutOverrides,
   type AppShortcutCombo,
   type AppShortcutId,
   type AppShortcutOverrides,
+  type PluginShortcutDefinition,
+  type PluginShortcutId,
 } from '../../shared/appShortcuts.js';
 import { isSystemReservedShortcut } from '../../shared/keyboardReserved.js';
 
@@ -57,6 +62,7 @@ export interface AppShortcutStoreOptions {
  */
 export class AppShortcutStore {
   private overrides: AppShortcutOverrides | null = null;
+  private pluginShortcuts: PluginShortcutDefinition[] = [];
   private readonly changeListeners = new Set<(overrides: AppShortcutOverrides) => void>();
 
   constructor(private readonly options: AppShortcutStoreOptions) {}
@@ -69,6 +75,24 @@ export class AppShortcutStore {
 
   getOverrides(): AppShortcutOverrides {
     return { ...this.load() };
+  }
+
+  /** Runtime declarations are a projection; only explicit overrides are stored. */
+  setPluginShortcuts(definitions: readonly PluginShortcutDefinition[]): void {
+    const next = definitions.map(definition => ({ ...definition, ...(definition.defaultCombo ? { defaultCombo: { ...definition.defaultCombo } } : {}) }));
+    if (JSON.stringify(next) === JSON.stringify(this.pluginShortcuts)) return;
+    this.pluginShortcuts = next;
+    const snapshot = this.getOverrides();
+    this.options.onChanged?.(snapshot);
+    this.changeListeners.forEach(listener => listener(snapshot));
+  }
+
+  getPluginShortcuts(): PluginShortcutDefinition[] {
+    return this.pluginShortcuts.map(definition => ({ ...definition, ...(definition.defaultCombo ? { defaultCombo: { ...definition.defaultCombo } } : {}) }));
+  }
+
+  getPluginShortcutCombos(id: PluginShortcutId): AppShortcutCombo[] {
+    return getEffectivePluginShortcuts(this.pluginShortcuts, this.load(), this.options.platform).get(id) ?? [];
   }
 
   /** main 消费端 (菜单 accelerator / before-input-event) 实时取某 id 的生效组合。 */
@@ -89,10 +113,11 @@ export class AppShortcutStore {
    * combo 传 null = 删除绑定 (该快捷键禁用), 跳过组合键校验。
    */
   setOverride(id: unknown, combo: unknown): AppShortcutOverrideRejection | null {
-    if (!isAppShortcutId(id)) return 'unknown-id';
-    const def = getAppShortcutDefinition(id);
-    if (!def.rebindable) return 'not-rebindable';
-    if (!isAppShortcutAvailableOnPlatform(id, this.options.platform)) return 'platform-unavailable';
+    if (!isAppShortcutId(id) && !isPluginShortcutId(id)) return 'unknown-id';
+    if (isPluginShortcutId(id) && !this.pluginShortcuts.some(definition => definition.id === id)) return 'unknown-id';
+    const def = isAppShortcutId(id) ? getAppShortcutDefinition(id) : null;
+    if (def && !def.rebindable) return 'not-rebindable';
+    if (isAppShortcutId(id) && !isAppShortcutAvailableOnPlatform(id, this.options.platform)) return 'platform-unavailable';
     if (combo === null) {
       const current = this.load();
       this.replaceOverrides({ ...current, [id]: null });
@@ -107,19 +132,20 @@ export class AppShortcutStore {
     // darwin 上菜单专属 id 的组合必须能表达为 Electron accelerator, 否则
     // 菜单无 accelerator 且没有任何按键 fallback —— 绑定形同虚设。
     if (
-      def.menuBacked &&
+      def?.menuBacked &&
       this.options.platform === 'darwin' &&
       comboToElectronAccelerator(normalized, 'darwin') === null
     ) {
       return 'menu-inexpressible';
     }
-    if (def.scope === 'global' && !isGlobalAppShortcutComboUsable(normalized, this.options.platform)) {
+    if (def?.scope === 'global' && !isGlobalAppShortcutComboUsable(normalized, this.options.platform)) {
       return 'global-unusable';
     }
     const current = this.load();
     // 跨 id 冲突兜底 (renderer 已前置校验, 这里防多窗口并发 / 直调 IPC):
     // 与重叠 scope 域内其它 id 的生效组合撞键则拒绝。
-    if (findAppShortcutConflict(id, normalized, current, this.options.platform)) {
+    if ((isAppShortcutId(id) && findAppShortcutConflict(id, normalized, current, this.options.platform)) ||
+        findPluginShortcutConflict(id, normalized, this.pluginShortcuts, current, this.options.platform)) {
       return 'conflict';
     }
     this.replaceOverrides({ ...current, [id]: normalized });
@@ -128,7 +154,8 @@ export class AppShortcutStore {
 
   /** 恢复单项默认 = 删除该 id 的 override。id 未知时静默无操作 (幂等)。 */
   clearOverride(id: unknown): void {
-    if (!isAppShortcutId(id)) return;
+    if (!isAppShortcutId(id) && !isPluginShortcutId(id)) return;
+    if (isPluginShortcutId(id) && !this.pluginShortcuts.some(definition => definition.id === id)) return;
     const current = this.load();
     if (!(id in current)) return;
     const next = { ...current };

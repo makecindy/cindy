@@ -379,6 +379,18 @@ type ResultUsageAggregate = {
   cacheCreateTokens?: number;
 };
 
+/**
+ * Anthropic 在 usage.cache_creation 里把缓存写入按 TTL 拆开；1h 写入单价高于 5m，
+ * 计价需单独带上这部分。上游不给拆分时返回 undefined（按 5m 单价兜底）。
+ */
+function cacheCreate1hTokensFromUsage(usage: unknown): number | undefined {
+  if (!usage || typeof usage !== 'object') return undefined;
+  const split = (usage as { cache_creation?: unknown }).cache_creation;
+  if (!split || typeof split !== 'object') return undefined;
+  const value = (split as { ephemeral_1h_input_tokens?: unknown }).ephemeral_1h_input_tokens;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
 function resultUsageToTurnDelta(
   previous: ResultUsageAggregate | null,
   current: ResultUsageAggregate,
@@ -1851,6 +1863,7 @@ function handleStreamEvent(
       const dOut = usage.output_tokens ?? 0;
       const dCacheRead = usage.cache_read_input_tokens ?? 0;
       const dCacheCreate = usage.cache_creation_input_tokens ?? 0;
+      const dCacheCreate1h = cacheCreate1hTokensFromUsage(usage);
       // 累加进 tracker (跨多个 message_delta 会一直涨 —— 对标老 agentManager.ts:2362-2365
       // 的 session.currentTurn{Input,Output,CacheRead,CacheCreate}Tokens += dX)
       const segmentId =
@@ -1877,6 +1890,7 @@ function handleStreamEvent(
         outputTokens: dOut,
         cacheReadTokens: dCacheRead,
         cacheCreateTokens: dCacheCreate,
+        ...(dCacheCreate1h !== undefined ? { cacheCreate1hTokens: dCacheCreate1h } : {}),
         complete: hasCompleteUsageSnapshot,
       });
       if (parentToolUseId) noteClaudeSubagent(ctx.rt.generation);
@@ -1946,6 +1960,7 @@ function handleStreamEvent(
       const dIn = usage.input_tokens ?? 0;
       const dCacheRead = usage.cache_read_input_tokens ?? 0;
       const dCacheCreate = usage.cache_creation_input_tokens ?? 0;
+      const dCacheCreate1h = cacheCreate1hTokensFromUsage(usage);
       if (dIn > 0 || dCacheRead > 0 || dCacheCreate > 0) {
         ctx.tracker.upsertApiCallUsage(segmentId, {
           id: segmentId,
@@ -1955,6 +1970,7 @@ function handleStreamEvent(
           outputTokens: 0,
           cacheReadTokens: dCacheRead,
           cacheCreateTokens: dCacheCreate,
+          ...(dCacheCreate1h !== undefined ? { cacheCreate1hTokens: dCacheCreate1h } : {}),
           complete: false,
         });
       }

@@ -59,6 +59,7 @@ export interface PrRemoteState {
   unresolved_count?: number | null;
   checks?: PrChecksSummary | null;
   merge_state?: string | null;
+  conflicts?: boolean | null;
   review_decision?: string | null;
   head_sha?: string;
   base_branch?: string;
@@ -84,6 +85,8 @@ export interface PrStatusServiceDeps {
   staleTtlMs?: number;
   now?: () => number;
   scope?: () => Promise<string>;
+  /** Every fresh, cached result (ok / not-found) as it lands; for prFollowWatch. Must not throw. */
+  onObserved?: (query: PrStatusQuery, result: PrStatusResult) => void;
 }
 
 /** 把远端字段映射为四态。merged 优先于 closed;draft 仅在 open 时有意义。 */
@@ -218,6 +221,11 @@ export class PrStatusService {
             expiresAt: fetchedAt + this.ttlMs,
             staleUntil: fetchedAt + this.ttlMs + this.staleTtlMs,
           });
+          try {
+            this.deps.onObserved?.(q, result);
+          } catch {
+            // Observers are best-effort and never fail a status read.
+          }
         }
         return result;
       })
@@ -266,6 +274,9 @@ export class PrStatusService {
         unresolvedCount: remote.unresolved_count ?? null,
         checks: remote.checks ?? null,
         mergeState: remote.merge_state ?? null,
+        conflicts:
+          remote.conflicts ??
+          (typeof remote.metadata?.mergeable === 'boolean' ? !remote.metadata.mergeable : null),
         reviewDecision: remote.review_decision ?? null,
         headSha: remote.head_sha,
         baseBranch: remote.base_branch,

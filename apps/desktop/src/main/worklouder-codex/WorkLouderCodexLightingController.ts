@@ -2,6 +2,7 @@ import {
   WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
   WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
   WORKLOUDER_CODEX_KEYCAP_ACTIONS,
+  WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT,
   WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS,
   WORKLOUDER_HID_AG_CODES,
   normalizeWorkLouderCreatorTaskKeys,
@@ -16,6 +17,7 @@ import {
   workLouderLayoutMerges,
   workLouderMergeForKey,
   workLouderShouldMuteKeyZone,
+  workLouderUsesFactoryKeymap,
   type WorkLouderCodexAction,
   type WorkLouderCodexAgentSlotState,
   type WorkLouderCodexAnalogDirection,
@@ -359,7 +361,7 @@ export class WorkLouderCodexLightingController {
       return;
     }
     const creatorRole = this.settings.layout.taskKeys
-      ? resolveWorkLouderHidRole(event.key, this.settings.layout.taskKeys, this.device.deviceType)
+      ? resolveWorkLouderHidRole(event.key, this.settings.layout.taskKeys, this.device)
       : null;
     if (creatorRole?.role === 'task') {
       if (event.act === 1) this.handleAgentKeyPress(creatorRole.slot);
@@ -389,11 +391,7 @@ export class WorkLouderCodexLightingController {
     const merge = workLouderMergeForKey(workLouderLayoutMerges(this.settings.layout), key);
     if (merge) return merge.origin as WorkLouderCodexPreviewPart;
     if (this.settings.layout.taskKeys) {
-      const role = resolveWorkLouderHidRole(
-        key,
-        this.settings.layout.taskKeys,
-        this.device.deviceType,
-      );
+      const role = resolveWorkLouderHidRole(key, this.settings.layout.taskKeys, this.device);
       if (role) return role.physical as WorkLouderCodexPreviewPart;
     }
     return previewPartForHidKey(key);
@@ -614,7 +612,7 @@ export class WorkLouderCodexLightingController {
   private releaseHeldVoiceFromEvent(event: WorkLouderCodexHidEvent): void {
     if (event.act !== 0) return;
     const creatorRole = this.settings.layout.taskKeys
-      ? resolveWorkLouderHidRole(event.key, this.settings.layout.taskKeys, this.device.deviceType)
+      ? resolveWorkLouderHidRole(event.key, this.settings.layout.taskKeys, this.device)
       : null;
     const slot =
       creatorRole?.role === 'command'
@@ -699,8 +697,9 @@ export class WorkLouderCodexLightingController {
       };
     });
     const sessionIdsByTaskSlot = this.agentSlots.map((slot) => slot.sessionId ?? '');
-    const taskKeys = normalizeWorkLouderCreatorTaskKeys(this.settings.layout.taskKeys);
-    if (this.device.deviceType === 'codex-micro') {
+    if (workLouderUsesFactoryKeymap(this.device)) {
+      // Factory codes: thread N lights the physical key named AG0N.
+      const taskKeys = normalizeWorkLouderCreatorTaskKeys(this.settings.layout.taskKeys);
       this.slotSessionIds = WORKLOUDER_HID_AG_CODES.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT).map(
         (physical) => {
           if (!isWorkLouderCreatorProgrammableKey(physical)) return '';
@@ -710,8 +709,9 @@ export class WorkLouderCodexLightingController {
       );
       return;
     }
+    // Cindy's keymap gives task key N the AG code for thread N.
     this.slotSessionIds = Array.from(
-      { length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT },
+      { length: WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT },
       (_, slot) => sessionIdsByTaskSlot[slot] ?? '',
     );
   }
@@ -762,12 +762,12 @@ export class WorkLouderCodexLightingController {
     return [...prioritized, ...this.taskCatalog.sidebar.filter((task) => !included.has(task.id))];
   }
 
-  private lightingThreadCount(): number {
-    return WORKLOUDER_CODEX_AGENT_SLOT_COUNT;
-  }
-
   private updateLightingFrame(wakeOnBaseFrameChange = false): WorkLouderCodexLightingFrame {
-    const threadCount = this.lightingThreadCount();
+    // Every thread of Cindy's keymap, so a key that stops being a task key loses its
+    // last colour. A factory keymap only binds AG00–AG05.
+    const threadCount = workLouderUsesFactoryKeymap(this.device)
+      ? WORKLOUDER_CODEX_AGENT_SLOT_COUNT
+      : WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT;
     const projected = createWorkLouderCodexLightingFrame(
       this.latestActivity,
       this.slotSessionIds,
@@ -875,9 +875,13 @@ export class WorkLouderCodexLightingController {
 
   private handleDeviceState(device: WorkLouderCodexDeviceState): void {
     const previousType = this.device.deviceType;
+    const previousFactory = workLouderUsesFactoryKeymap(this.device);
     this.device = { ...device };
     if (device.deviceType) this.devicePresent = true;
-    if (previousType !== this.device.deviceType) {
+    if (
+      previousType !== this.device.deviceType ||
+      previousFactory !== workLouderUsesFactoryKeymap(this.device)
+    ) {
       this.publishAgentSlots();
       this.updateLightingFrame();
     }

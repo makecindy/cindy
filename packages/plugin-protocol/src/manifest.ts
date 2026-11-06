@@ -1,9 +1,11 @@
 import { isSafeGhostRelativePath } from './internal/ghostPath.js';
+import { parseGhostNativeUi, validateWithStoredNativeUi } from './nativeUi.js';
 import { validateWithStoredMcpApps, parseGhostMcpApps, type GhostMcpApps } from './toolUi.js';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from './secretCheck.js';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from './routineEvents.js';
 import { parseGhostModelsNeeds, type GhostModelsNeeds } from './pluginModels.js';
 import { GHOST_LOCALES, type GhostLocale } from './locales.js';
+import { validateGhostReadmeDeclaration } from './readme.js';
 export { GHOST_LOCALES, type GhostLocale } from './locales.js';
 
 /** `.cindy` 包根目录中的 manifest 文件名。 */
@@ -896,6 +898,8 @@ export const GHOST_SETUP_KV_KEY_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 
 /** 已校验的 ghost.json 协议文档；Desktop 会再投影成无 slots 的运行时模型。 */
 export interface GhostManifest {
+  /** Optional native Cindy UI contributions; unrelated to MCP Apps. */
+  ui?: unknown;
   /** Optional MCP Apps resources and links to existing tools. */
   mcpApps?: unknown;
   /** Host-owned mail editor; providers supply mailbox adapters only. */
@@ -939,6 +943,12 @@ export interface GhostManifest {
    * 花名册回落用 description。
    */
   whenToUse?: string;
+  /**
+   * 详细介绍(仅展示用):语言到包内 Markdown 文件的映射,必须提供 en。插件详情页
+   * 在简短的 description 之下展示;图片只能引用包内文件,不进模型上下文。
+   * 解析与读取规则见 readme.ts。
+   */
+  readme?: GhostManifestLocales;
   /**
    * 图标图片(包内相对路径,装入后位于安装目录)。仅允许白名单扩展名
    * (见 ghostIconMimeType);由 main 读盘转 data URL 随清单下发,
@@ -1205,6 +1215,7 @@ function isGhostManifestReservedRecordKey(value: string): boolean {
 }
 
 const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
+  'ui',
   'mcpApps',
   'routineEvents',
   'models',
@@ -1218,6 +1229,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'locales',
   'description',
   'whenToUse',
+  'readme',
   'icon',
   'kind',
   'entry',
@@ -1400,7 +1412,7 @@ function dropEmptyLegacyCapabilitySlots(
 /** Historical persisted data only; new packages must use validateGhostManifest. */
 export function validateStoredGhostManifest(value: unknown):
   { ok: true; manifest: GhostManifest } | { ok: false; reason: string } {
-  return validateWithStoredMcpApps(value, validateGhostManifest);
+  return validateWithStoredNativeUi(value, raw => validateWithStoredMcpApps(raw, validateGhostManifest));
 }
 
 export function validateGhostManifest(value: unknown): ManifestValidation {
@@ -1408,6 +1420,8 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
   if (!preparation.ok) return preparation;
   const prepared = preparation.prepared;
   const raw = prepared.raw;
+  const ui = raw.ui === undefined ? undefined : parseGhostNativeUi(raw.ui);
+  if (ui === null) return { ok: false, reason: 'ui 必须声明合法的 version 与唯一的 contributions' };
   if (raw.mail !== undefined && raw.mail !== true) return { ok: false, reason: 'mail 出现时必须是 true' };
   // Keep this shape aligned with maker-shared's runtime reader parser.
   const reader = raw.mailReader as Record<string, unknown> | undefined;
@@ -1569,6 +1583,23 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       ...normalized,
       en: normalized.en!,
     };
+  }
+  let readme: GhostManifest['readme'];
+  if (raw.readme !== undefined) {
+    const localeFolds = Object.values(locales ?? {}).map((path) => path.toLowerCase());
+    const contentDirFolds = [raw.skill, raw.manual]
+      .flatMap((decl) => (isPlainObject(decl) && Array.isArray(decl.items) ? decl.items : []))
+      .map((item) => (isPlainObject(item) ? item.dir : undefined))
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => value.toLowerCase());
+    const result = validateGhostReadmeDeclaration(
+      raw.readme,
+      (fold) =>
+        [...declaredFilePathFolds, ...localeFolds].some((path) => pathsConflict(path, fold)) ||
+        contentDirFolds.some((dir) => pathsConflict(dir, fold)),
+    );
+    if (!result.ok) return result;
+    readme = result.readme;
   }
   if (
     raw.description !== undefined &&
@@ -3909,6 +3940,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
     ok: true,
     manifest: {
       ...prepared.unknownV3Fields,
+      ...(ui !== undefined ? { ui } : {}),
       ...(mcpApps !== undefined ? { mcpApps } : {}),
       schemaVersion: prepared.schemaVersion,
       id: raw.id,
@@ -3923,6 +3955,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       ...(locales !== undefined ? { locales } : {}),
       ...(raw.description !== undefined ? { description: raw.description as string } : {}),
       ...(raw.whenToUse !== undefined ? { whenToUse: raw.whenToUse as string } : {}),
+      ...(readme !== undefined ? { readme } : {}),
       ...(raw.icon !== undefined ? { icon: raw.icon as string } : {}),
       entry: raw.entry,
       ...(raw.launch !== undefined ? { launch: raw.launch as GhostLaunchMode } : {}),
