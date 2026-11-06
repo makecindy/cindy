@@ -46,6 +46,18 @@ export const AWAY_GUARD_RETRY_MS = 60_000;
  */
 export const AWAY_GUARD_PREVIEW_MS = 2 * 60_000;
 
+/**
+ * This user's console session from `ioreg -n Root -d1`: locked when its screen is
+ * locked or another user has the console. Null when the session is not listed.
+ */
+export function consoleSessionLocked(ioreg: string, uid: number | undefined): boolean | null {
+  if (uid === undefined) return null;
+  const user = new RegExp(`"kCGSSessionUserIDKey"=${uid}(?![0-9])`);
+  const session = ioreg.match(/\{[^{}]*\}/g)?.find((entry) => user.test(entry));
+  if (!session) return null;
+  return session.includes('"CGSSessionScreenIsLocked"=Yes') || !session.includes('"kCGSSessionOnConsoleKey"=Yes');
+}
+
 type MaskState = 'none' | 'showing' | 'shown' | 'ending';
 
 export class AwayGuardController {

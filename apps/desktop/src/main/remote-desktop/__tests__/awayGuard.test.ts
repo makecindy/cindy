@@ -5,7 +5,8 @@
  * - 规则依据：主人 2026-11-06 要求「要么没锁，要么锁了解不开」都不能发生；Codex
  *   Locked use 解锁后被立即锁回的回归。
  * - 现有覆盖缺口：新模块，远程桌面 controller 测试不覆盖离开时的遮罩生命周期。
- * - 最小失败输入：主人解锁后仍有任务运行（不应立即重新遮罩）；遮罩建立失败（必须放弃常亮）。
+ * - 最小失败输入：主人解锁后仍有任务运行（不应立即重新遮罩）；遮罩建立失败（必须放弃常亮）；
+ *   在已锁屏时启动（2026-11-06 实测：没有锁屏事件，测试版在锁屏后面一直常亮）。
  * - tier：unit，内存 fake，无 Electron / 原生进程。
  */
 import { describe, expect, it } from 'vitest';
@@ -13,6 +14,7 @@ import {
   AWAY_GUARD_PREVIEW_MS,
   AWAY_GUARD_RETRY_MS,
   AwayGuardController,
+  consoleSessionLocked,
   type AwayGuardDeps,
 } from '../awayGuard';
 
@@ -167,5 +169,18 @@ describe('AwayGuardController', () => {
     await guard.tick();
     expect(state.events).toEqual(['show', 'hide']);
     expect(state.awake).toBe(false);
+  });
+
+  it('reads this user\'s lock state from the console session list', () => {
+    const user = (uid: number, extra: string) =>
+      `{"kCGSSessionOnConsoleKey"=Yes,"kCGSSessionUserIDKey"=${uid}${extra}}`;
+    const ioreg = (...users: string[]) => `"IOConsoleUsers" = (${users.join(',')})`;
+    expect(consoleSessionLocked(ioreg(user(501, ',"CGSSessionScreenIsLocked"=Yes')), 501)).toBe(true);
+    expect(consoleSessionLocked(ioreg(user(501, '')), 501)).toBe(false);
+    // Another user's locked session, or a longer uid, is not this user's.
+    expect(consoleSessionLocked(ioreg(user(5010, ',"CGSSessionScreenIsLocked"=Yes'), user(501, '')), 501)).toBe(false);
+    // Fast user switching: this session lost the console.
+    expect(consoleSessionLocked(ioreg('{"kCGSSessionOnConsoleKey"=No,"kCGSSessionUserIDKey"=501}'), 501)).toBe(true);
+    expect(consoleSessionLocked(ioreg(user(502, '')), 501)).toBeNull();
   });
 });

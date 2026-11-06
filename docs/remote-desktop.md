@@ -64,7 +64,9 @@ stdin EOF, a missed heartbeat or a dead parent, so a crashed Cindy leaves a lock
 screen rather than an uncovered desktop. Main locks before removing masks when the
 setting is turned off, a display is added, or a mask window fails. Remote
 desktop takes over without a lock (its own privacy screen and lock-on-exit apply);
-an already-locked screen just drops the masks.
+an already-locked screen just drops the masks. A Cindy started on a locked screen reads
+the lock from the console session (`ioreg`), because Electron's idle-state probe never
+reports `locked` on macOS and the guard would otherwise keep the display on behind it.
 
 Fail-safe direction: missing Accessibility for the input helper, masks that cannot
 start, or an unreadable idle time release the display assertion, so macOS sleeps and

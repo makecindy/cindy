@@ -620,6 +620,7 @@ import { registerRemoteDesktopIpc, remoteDesktop } from './remote-desktop';
 import { isAwayCoverUp, registerAwayGuardIpc, startAwayGuard } from './remote-desktop/awayGuardService';
 import {
   isDesktopScreenLocked,
+  seedDesktopScreenLocked,
   msSinceForeignDesktopInput,
   setPhysicalInputShielded,
 } from './mcp-integrations/computer.js';
@@ -4732,6 +4733,7 @@ const registerIpcHandlers = () => {
       delaySeconds: () => readWindowBehaviorSettings().awayGuardDelaySeconds,
       remoteDesktopActive: () => remoteDesktop.state !== null,
       screenLocked: isDesktopScreenLocked,
+      seedScreenLocked: seedDesktopScreenLocked,
       msSinceOwnerInput: () => msSinceForeignDesktopInput(),
     });
     setPhysicalInputShielded(isAwayCoverUp);

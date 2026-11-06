@@ -6,7 +6,7 @@ import { t } from '../i18n';
 import { onQuit } from '../lifecycle';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { requireBoolean, throwIpcError } from '../utils/ipcValidate';
-import { AwayGuardController } from './awayGuard';
+import { AwayGuardController, consoleSessionLocked } from './awayGuard';
 import {
   lockDesktopScreen,
   readDesktopInputPermission,
@@ -40,6 +40,8 @@ export interface AwayGuardServiceDeps {
   delaySeconds(): AwayGuardDelaySeconds | null;
   remoteDesktopActive(): boolean;
   screenLocked(): boolean;
+  /** Startup lock state, used until the first lock/unlock event. */
+  seedScreenLocked(locked: boolean): void;
   msSinceOwnerInput(): number | null;
 }
 
@@ -79,6 +81,14 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     app.focus({ steal: true });
   };
   powerMonitor.on('unlock-screen', restoreFront);
+  // Started on a locked screen there is no lock event yet; read the console session so
+  // the guard does not hold the display on behind the lock screen.
+  void exec('/usr/sbin/ioreg', ['-n', 'Root', '-d1'], { timeout: 5000, maxBuffer: 1024 * 1024 })
+    .then(({ stdout }) => {
+      const locked = consoleSessionLocked(stdout, process.getuid?.());
+      if (locked !== null) deps.seedScreenLocked(locked);
+    })
+    .catch(() => {});
 
   const refreshDisplaySleep = () => {
     if (Date.now() - displaySleepReadAt < DISPLAY_SLEEP_REFRESH_MS) return;

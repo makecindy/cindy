@@ -3678,7 +3678,17 @@ function hookPowerMonitor(): void {
   }
 }
 
-/** True when the screen is locked, from events when seen, else the idle-state probe. */
+/**
+ * Lock state read from the console session at startup, before any lock/unlock event:
+ * Electron's idle-state probe never reports 'locked' on macOS, so a Cindy started on a
+ * locked screen would otherwise believe it is unlocked. A later event always wins.
+ */
+export function seedDesktopScreenLocked(locked: boolean): void {
+  hookPowerMonitor();
+  if (screenLockedByEvent === undefined) screenLockedByEvent = locked;
+}
+
+/** True when the screen is locked, from events (or the startup seed), else the idle-state probe. */
 export function isDesktopScreenLocked(): boolean {
   hookPowerMonitor();
   if (screenLockedByEvent !== undefined) return screenLockedByEvent;
