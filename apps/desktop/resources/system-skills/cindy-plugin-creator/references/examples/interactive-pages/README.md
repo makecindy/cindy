@@ -10,7 +10,6 @@
 | --- | --- |
 | `loader/` | 后端或 Cindy AI 生成完整页面；页面脚本查询 JSON、保存记录、切换内容 |
 | `static/` | 包内静态表单，打开后编辑并保存 |
-| `structured/` | 模型只传结构化数据，包内页面从首次工具结果的根 `_meta` 读取并统一渲染，无需生成 HTML |
 | `files/` | 按需裁剪的文件、进度、导出、消息及显示能力示例 |
 | `PAGE-GENERATION.md` | 《Cindy MCP Apps 页面生成手册》，交给生成页面的 LLM；宿主用 `ghost_forge_guide({section:"pages"})` 提供同一份，loader 的 show_page 说明指向它 |
 
@@ -26,7 +25,6 @@ loader 中的模拟后端是 main.js 的 mockBackend、fullPage 和 viewFragment
 3. 使用 loader 时说“打开记录页面”；AI 调用 open_view，未知意图按总览打开。
 4. 查询列表后填写标题，点保存；再切换 Form、Chart。查询不改变输入，保存只更新结果。
 5. static 也由 open_view 打开，完整逻辑只有一个表单和 save_record。
-6. structured 用 open_view 传入 `title` 和 `rows: [{name, value}]`；main.js 先校验，包内页面通过 `ontoolresult` 显示首屏，不经过加载器整页替换。
 
 浅色、深色由 Host Context 提供；不要另存一份主题。示例文字是中文教材内容，正式
 插件应按[清单本地化](../../plugin-manifest.md)及宿主语言制作自己的多语言文案。

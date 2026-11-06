@@ -23,27 +23,19 @@
 | 首屏来源 | 适用场景 | 起点 |
 | --- | --- | --- |
 | 后端生成完整 HTML | 界面随意图变化，希望修改后端就能更新界面 | loader 的 open_view |
-| 包内静态 HTML | 小表单、固定图表，界面和插件一起发布 | static |
+| 包内静态 HTML | 小表单、固定图表，或模型只传 JSON、由页面统一渲染；界面和插件一起发布 | [static](examples/interactive-pages/static/) |
 | Cindy 对话中的 AI 生成完整 HTML | 用户临时需要组合界面，数据由既有工具提供 | loader 的 show_page |
-| 模型只传结构化数据，包内页面统一渲染 | 页面布局固定，模型只组织标题、列表等数据 | [structured](examples/interactive-pages/structured/) |
 
 后端可选：插件也可以只用自己的存储（[library §4.10.1](plugin-files-and-library.md)）
 自闭环，页面写法不变。无论首屏由谁生成，之后页面脚本都查询 JSON、更新局部，遵守同样的
 工具、凭证和数据规则。
 
-**结构化数据首屏**：页面随包发布，模型调用开页面工具时只传 JSON。main.js 校验后把数据
-放在结果的根 `_meta`，包内页面在 `app.connect()` 前注册 `ontoolresult`，从根 `_meta`
-取数据并渲染。它直接接收宿主的首次结果，不经过加载器整页替换。后文和
-[页面生成手册](examples/interactive-pages/PAGE-GENERATION.md)里“不要等 `ontoolresult`”
-专指**加载器换出的新页面**：加载器已经消费过首次结果，新页面重连不会重发。
-
-嵌套对象、数组及必填字段写进工具真实的 `parameters` JSON Schema，不要只写在可选读取的
-Manual 里；信息分工按 [§3.6](plugin-manual.md)。`parameters` 上限为 16KB
-（当前实现按 `JSON.stringify(parameters).length <= 16_384` 校验）。
-[最小清单](examples/interactive-pages/structured/ghost.json)、
-[调用时校验](examples/interactive-pages/structured/main.js)和
-[包内渲染页](examples/interactive-pages/structured/ui/page.html)可直接复制打包。
-校验与错误反馈要求统一见 [§3](plugin-tools.md)，此示例不需要 Node 或后端。
+结构化首屏可沿用 static 的接线：模型调用开页面工具，插件先校验，再把只供页面的数据放入
+结果根 `_meta`；页面在 connect 前注册 `ontoolresult`，从根 `_meta` 取数据。
+static 原例使用 `structuredContent`，那部分数据也会进入模型。
+包内页面直接收到首次结果；加载器换出的新页面则不会重收已消费的结果，所以后者必须把首屏数据写进 HTML。
+嵌套字段写进真实 `parameters` schema，不只放在可选读取的 Manual；分工见 [§3.6](plugin-manual.md)，
+调用时校验见 [§3](plugin-tools.md)。schema 上限为 `JSON.stringify(parameters).length <= 16_384`。
 
 ### 2. 运行完整示例
 
@@ -91,11 +83,8 @@ ghost_forge_install({ dir: '<插件源码目录的绝对路径>' });
 声明的工具同时对两者可见；未写 UI 声明的工具仍只对 AI 可见。需要文件时再加入
 示例里的文件工具，删掉不用的能力声明。
 
-Manual 和模型可见工具的 description 都可能进入模型上下文。提到页面专用工具名时，明确写“由页面调用”，
-并指出模型应先调用哪个开页面工具，例如“api_read 由页面调用，模型先调 open_view”。
-模型误调时，宿主仍返回 `TOOL_NOT_FOUND`，但会说明工具已声明、只供页面调用，并列出
-模型可见且带 `resourceUri` 的开页面工具；没有这类入口时列出模型可见工具，提醒不要据此
-判定插件缺少能力。真正未声明的工具仍走原来的缺失／二级分派提示。
+Manual 或模型可见工具说明提到页面专用工具时，写清“由页面调用”，并指出模型应先调用的开页面工具。
+模型误调会收到仅供页面调用的提示及可用页面入口；没有入口时列出模型可见工具，不应据此判断插件缺少能力。
 
 ### 4. main.js 为第一次调用准备整页
 
@@ -122,9 +111,8 @@ cindy.send({ type: 'tool-result', callId: msg.callId, ok: true, result: {
 错误用 `{isError:true, content:[{type:'text',text:'可采取行动的提示'}]}` 返回。不要把
 堆栈、响应头、令牌或未经控制的服务错误正文转给页面和 AI。
 
-本次由 AI 调用，`content` / `structuredContent` 会进入模型，根 `_meta.view.html` 只给页面。
-页面后续调用的结果只回页面；完整流向与主动告知 AI 的方法见 [§3](plugin-tools.md)。
-HTML 内不要放凭证或不必要的大数据。
+本例由 AI 调用，`content` / `structuredContent` 进入模型，根 `_meta.view.html` 给页面。
+页面调用的结果归属及告知 AI 的方法见 [§3](plugin-tools.md)；HTML 不放凭证或不必要的大数据。
 
 由 AI 写首屏时使用 show_page({title,html})，返回结构相同。生成页面的 LLM（后端模型或
 对话 AI）读[MCP Apps 页面生成手册](examples/interactive-pages/PAGE-GENERATION.md)；
@@ -272,7 +260,7 @@ innerHTML 只接转义过动态值的可信模板，不接普通数据。片段�
 | 写入使用请求编号 | 写入方去重；失败保留编号，不自动重试 |
 | 处理取消与卸载 | 用 AbortController 停止等待，关闭后不继续更新 DOM |
 | 支持浅色和深色 | 从 getHostContext 取主题，监听 onhostcontextchanged，不写死白底黑字 |
-| 明确结果归属 | 按调用方区分：AI 调用时根 _meta 只给页面；页面调用的结果只回页面。见 [§3](plugin-tools.md) |
+| 明确结果归属 | 区分模型与页面调用，见 [§3](plugin-tools.md)；只供页面的数据放根 _meta |
 
 使用 `new App(info, capabilities, {autoResize:true})` 自动报告尺寸，通过
 `app.getHostContext()` 取主题、styles.variables 和 locale。表单应能适应窄屏。
@@ -281,26 +269,10 @@ innerHTML 只接转义过动态值的可信模板，不接普通数据。片段�
 打包后实际打开页面：检查首屏只请求一次；查询不清掉表单输入；按 Enter 和点击
 都只保存一次；HTTP 401/500 显示错误；取消后按钮恢复；重复编号不会新增记录；
 浅色、深色和窄屏没有溢出。最后关闭再打开卡片，确认恢复的是哪一屏。
-再用不提“页面/UI”的普通业务提问（如“帮我比较这些记录”），检查 AI 是否按工具说明主动
-打开页面；选择指引的落点见 [§3](plugin-tools.md)。清单校验通过不代表页面脚本、网络和交互正常。
+再用不提“页面/UI”的普通业务提问，检查模型是否按工具 description 主动打开页面。
+清单校验通过不代表页面脚本、网络和交互正常。
 
-#### 从 Node 进程到页面的大小限制
-
-以下限额分别生效，后续通道更宽不代表前面的通道能通过。除参数 schema 的字符计数外，
-下表按 UTF-8 序列化字节计算；应预留 JSON 包装和转义空间。
-
-| 环节 | 上限 | 超限后果与做法 |
-| --- | --- | --- |
-| Node 单次 `params` | 256 KiB（256KB） | 返回 `INVALID_REQUEST`，调用未下发；缩小输入或分批处理 |
-| Node stdout 单行 | 1 MiB（1MB） | 未收齐换行的缓冲区超限会触发协议失败、杀掉该工作进程，该进程所有在途请求一起失败；在写 stdout 前控制完整 JSON 行大小 |
-| 页面与 Cindy 单条消息 | 4 MiB | 拒绝过大的消息；分页查询、只传当前需要的字段 |
-| 远程结果 | 4 MiB − 64 KiB | 为路由包装预留空间；本机可用不代表远程可用，缩小返回结果 |
-| 卡片持久保存 | 1 MiB | 预算包括整张卡片（参数、工具元数据、结果及包装）；超限时结果换为 `MCP_APP_RESULT_TOO_LARGE`，替换后仍超限则报 `MCP_APP_CARD_TOO_LARGE`；不改变已返回给模型的结果 |
-
-**把多份响应拼成一个结果时，按 Node 的 1MB 单行限制控制合并后的总量**，不能只检查每份
-响应。不要依赖换行或分块时机绕过缓冲区检查，也不要把多条任意 JSON 当作一次 RPC 结果。
-先做字段裁剪和分页；大文件走 Library／文件引用，首屏只留摘要与必要数据，页面按需读取。
-即使全放根 `_meta`，仍会计入页面、远程和卡片预算。
+经 Node 的结果要先满足 [§4.12](plugin-node-worker.md) 的单行限制，不能按更宽的页面通道放大；根 `_meta` 同样计入预算，页面和卡片限额见[参考](examples/interactive-pages/REFERENCE.md)。
 
 ### 按场景找完整代码
 
@@ -309,7 +281,6 @@ innerHTML 只接转义过动态值的可信模板，不接普通数据。片段�
 | 后端生成首屏、AI 生成首屏 | [loader 清单](examples/interactive-pages/loader/ghost.json)与[main.js](examples/interactive-pages/loader/main.js) |
 | 最小加载器 | [loader/ui/page.html](examples/interactive-pages/loader/ui/page.html) |
 | JSON 查询、写入、内容切换 | [loader/main.js 的 pageClient](examples/interactive-pages/loader/main.js) |
-| 模型传数据、包内页面渲染 | [structured](examples/interactive-pages/structured/) |
 | 包内固定表单 | [static](examples/interactive-pages/static/) |
 | 文件交接、暂存、预览、确认 | [文件导入说明](examples/interactive-pages/README.md#文件导入) |
 | 文件、下载、进度及其他 SDK 方法 | [files 能力全集](examples/interactive-pages/files/) |

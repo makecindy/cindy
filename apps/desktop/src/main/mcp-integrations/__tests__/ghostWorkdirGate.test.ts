@@ -3851,7 +3851,7 @@ describe('plugin page audience and shared tool execution', () => {
     expect(result).toHaveProperty('message', expect.stringContaining('模型可见的工具: (无)'));
     expect(dispatchMock).not.toHaveBeenCalled();
   });
-  // xindong/cindy-xd-plugin#94: the real ghost_call entry used to mistake an
+  // The real ghost_call entry used to mistake an
   // app-only tool for a missing capability. Existing case checked only the code.
   // Minimal input: one app-only tool + one model opener; unit, no sandbox/network.
   it.each(['run', 'missing', 'nested_operation'])('guides model calls to %s without dispatching', async tool => {

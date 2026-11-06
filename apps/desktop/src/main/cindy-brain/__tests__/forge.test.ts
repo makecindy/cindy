@@ -2608,37 +2608,6 @@ describe('packGhostDir · manual 渐进披露手册', () => {
   });
 });
 
-// #94 / §4.23: authors need a valid data-only first-screen example. Existing
-// scaffold cases only pack static forms. Unit: pack the shipped asset, inspect
-// its install manifest and execute main.js with one valid/invalid nested row.
-it('packs the structured page example and reports invalid rows before page rendering', async () => {
-  const source = fileURLToPath(new URL('../../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/structured/', import.meta.url));
-  const dir = path.join(workDir, 'structured');
-  await fs.promises.cp(source, dir, { recursive: true });
-  const packed = await packGhostDir(dir);
-  expect(packed, JSON.stringify(packed)).toMatchObject({ ok: true });
-  if (!packed.ok) return;
-  const manager = new GhostManager({ getRootDir: () => path.join(workDir, 'ghosts') });
-  const inspected = await manager.inspect(packed.cindyPath);
-  expect(inspected).toHaveProperty('manifest.id', 'structured-records');
-  expect(getPluginToolUi(packed.manifest)?.tools.open_view).toEqual({ resourceUri: 'ui://structured-records/v1', visibility: ['model'] });
-
-  let handler: ((message: unknown) => void) | undefined;
-  const messages: unknown[] = [];
-  runInNewContext(await fs.promises.readFile(path.join(dir, 'main.js'), 'utf8'), {
-    cindy: { onHostMessage: (callback: typeof handler) => { handler = callback; }, send: (message: unknown) => messages.push(message) },
-  });
-  const args = { title: '比较记录', rows: [{ name: '方案 A', value: '可用' }] };
-  handler!({ type: 'tool-call', tool: 'open_view', callId: 'valid', args });
-  expect(messages[0]).toEqual({ type: 'tool-result', callId: 'valid', ok: true, result: {
-    content: [{ type: 'text', text: '记录已整理到页面。' }], _meta: { view: args },
-  } });
-  handler!({ type: 'tool-call', tool: 'open_view', callId: 'invalid', args: { ...args, rows: [{ name: '方案 A' }] } });
-  expect(messages[1]).toMatchObject({ callId: 'invalid', result: { isError: true,
-    content: [{ type: 'text', text: expect.stringContaining('rows[0]') }] } });
-  expect(messages[1]).not.toHaveProperty('result._meta');
-});
-
 // Unit / §3.2: the real packer must include the page and enforce its first release.
 // Generic pack cases lack ui and do not distinguish a prerelease floor from a
 // stable-only floor. Minimal input: one HTML page, changing only minCindyVersion;

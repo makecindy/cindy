@@ -7,7 +7,7 @@
 - 一个**完整 HTML 文档**（`<!doctype html>` 开头），显示在对话卡片里。
 - 用官方 SDK：`import { App } from '@modelcontextprotocol/ext-apps'`。Cindy 为所有页面提供 SDK。**不写 importmap，不从 CDN 或其他地址加载 SDK。**（加载器换出的页面再写映射会被浏览器忽略。）
 - 每个页面只建一个 `App`，先 `connect()` 再调其他方法。
-- **加载器换出的页面，首屏数据直接写进 HTML**，不要等 `ontoolresult`：加载器已消费首次结果，新页面重连不会重发。包内页面直接渲染结构化数据是另一条路径，应在 connect 前注册 `ontoolresult`，从根 `_meta` 取首屏数据；详见插件编写手册 §4.23（Cindy 中可调 `ghost_forge_guide({section:"4.23"})`）。
+- **首屏数据直接写进 HTML**，不要等 `ontoolresult`。
 - 动态值一律转义；接口数据用 `textContent` / `value` / 创建元素显示，不拼进 `innerHTML`、`<script>` 或 `onclick`。
 - 页面只调用所属插件提供的工具。工具背后是插件自己的存储还是业务后端由插件决定，**后端可选**；不要在页面里写后端地址。
 
@@ -75,7 +75,7 @@
 | `getHostContext()` / `onhostcontextchanged` | 读 `theme`、`styles.variables`，跟随深浅色 |
 | `createSamplingMessage` | 不支持。需要 AI 时用 `sendMessage` 交回对话 |
 
-结果流向取决于调用方：AI 调用时 `content` / `structuredContent` 进入模型、根 `_meta` 只给页面；页面 `callServerTool` 的整个结果只回页面，不自动进入模型。页面要告知 AI，显式使用上表的 `updateModelContext` 或 `sendMessage`；双向可见工具仍把只供页面的数据放根 `_meta`。完整规则见插件编写手册 §3（`ghost_forge_guide({section:"3"})`）。
+页面 `callServerTool` 的整个结果只回页面；要告知 AI，用上表的 `updateModelContext` 或 `sendMessage`。AI 调用工具时 `content` / `structuredContent` 进入模型，根 `_meta` 只给页面；双向可见工具应把只供页面的数据放根 `_meta`。
 
 ## 4. 标准工具
 
@@ -115,7 +115,7 @@
   }
   ```
 - **导入（CSV / XLSX）**：显示文件 → 用户点按钮上传，暂存后返回批次和预览（总行数、前几行、出错的行、「确认导入」「取消」）→ 确认后 `api_write({path:'/api/imports/confirm', body:{batchId}, idempotencyKey})`。解析和校验在工具背后，预览和导入用同一套规则。交接的和 `pick_files` 选的文件都交给 `upload_files`；预览渲染进容器，不换文档。
-- **大小**：页面与 Cindy 单条消息 ≤ 4 MiB，卡片保存总预算为 1 MiB，超限结果会换成 `MCP_APP_RESULT_TOO_LARGE`；完整通道限额与处理方法见插件编写手册 §4.23 的大小限制表。远程和手机打开时 SDK（约 337 KB，gzip 约 78 KB）随页面传输，页面上限约 3.94 MB，加上 SDK 才超限时不带 SDK 打开，`import` 失败。插件可能对 `html` 长度另有限制（如示例 show_page 限 200,000 字符）。首屏只放必要数据，其余按需读取。
+- **大小**：页面与 Cindy 单条消息 ≤ 4 MiB，整张卡片保存预算 1 MiB（含参数和工具元数据），超限时结果会被换成 `MCP_APP_RESULT_TOO_LARGE`。远程和手机打开时 SDK（约 337 KB，gzip 约 78 KB）随页面传输，页面上限约 3.94 MB，加上 SDK 才超限时不带 SDK 打开，`import` 失败。插件可能对 `html` 长度另有限制（如示例 show_page 限 200,000 字符）。首屏只放必要数据，其余按需读取。
 - **不能做**：弹新窗口或让整个窗口跳转。用户文档里的内容不能当脚本执行。
 
 ## 6. 常见错误
@@ -123,6 +123,6 @@
 | 现象 | 怎么改 |
 | --- | --- |
 | `import` SDK 失败 | 确认执行端和查看端 ≥ 0.1.122-beta；远程打开时缩小页面。不要改用 CDN |
-| 加载器换出的页面一直显示加载中 | 别等已经被加载器消费的 `ontoolresult`，首屏数据写进 HTML；包内直接渲染数据的页面则应监听首次结果 |
+| 页面一直显示加载中 | 别等 `ontoolresult`，首屏数据写进 HTML |
 | 直接请求返回 401、被拦截或跨域报错 | 见「凭证」：需要身份走 `api_read` / `api_write`，否则声明域名、对方开 CORS |
 | 换内容后页面空白、按钮失灵 | 把片段 `document.write` 进了整个文档；改用 `innerHTML` 替换容器 |

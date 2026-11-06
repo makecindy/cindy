@@ -336,7 +336,7 @@ describe('资格审(结构化错误分类)', () => {
 });
 
 describe('toolNotFoundMessage(纯函数直测)', () => {
-  // #94: validate opener selection independently of the ghost_call setup mocks.
+  // Validate opener selection independently of the ghost_call setup mocks.
   // The old formatter only knew a filtered tool list. Unit; minimal visibility map.
   it.each([true, false])('页面工具优先提示开页面入口，无入口时只列模型工具（opener=%s）', opener => {
     const manifest = { tools: ['read_page', 'open_view', 'call_tool', 'list_tools'].map(name => ({ name, description: name })),
