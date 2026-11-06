@@ -6076,13 +6076,16 @@ function MarkdownBodyBase({
   // 偏矮的 onLayout 裁切 agent 回复;点分享会换上确定宽度的容器从而完整显示。
   // 外层始终 stretch 测可用宽,内层再钉像素宽:测宽不能钉在自己身上,否则旋转/
   // 分屏变宽后 onLayout 仍报旧值。1px 内抖动忽略,避免公式 WebView 重挂。
+  // Android RN Text 在 stretch 宽度下测高正确;钉宽靠换 key 重挂文本,会让每条
+  // agent 回复挂载两遍,所以只在 iOS 测宽。外层 stretch 两端保留,版面宽度一致。
+  const measuresSettledWidth = pinContentWidth && Platform.OS === 'ios';
   const [contentWidth, setContentWidth] = useRecyclingState(0);
   const handleSettledWidthLayout = useCallback((event: LayoutChangeEvent) => {
-    if (!pinContentWidth) return;
+    if (!measuresSettledWidth) return;
     const nextWidth = Math.round(event.nativeEvent.layout.width);
     setContentWidth((current) => nextSettledContentWidth(current, nextWidth));
-  }, [pinContentWidth]);
-  const pinSettledWidth = pinContentWidth && contentWidth > 0;
+  }, [measuresSettledWidth]);
+  const pinSettledWidth = measuresSettledWidth && contentWidth > 0;
   const settledTextStyle = useMemo(() => pinSettledWidth
     ? [styles.messageText, { width: contentWidth }]
     : styles.messageText, [contentWidth, pinSettledWidth, styles.messageText]);
@@ -6468,7 +6471,7 @@ function MarkdownBodyBase({
   return (
     <View
       collapsable={false}
-      onLayout={handleSettledWidthLayout}
+      onLayout={measuresSettledWidth ? handleSettledWidthLayout : undefined}
       style={[
         styles.markdownBody,
         { maxWidth: '100%' },

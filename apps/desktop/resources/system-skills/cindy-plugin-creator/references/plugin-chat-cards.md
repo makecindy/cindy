@@ -110,6 +110,12 @@ cindy.onHostMessage(async function (msg) {
   同一份状态把这些部分藏起来,手机上也不再显示;状态查不到时原样显示,旧版主机忽略这个属性。
   手机只在卡片含 PR 状态位或指向该 PR 的链接时定时重读,所以带这个标记的卡片要同时保留其中之一
   (例如标题链接到 PR),否则手机上的卡片要等重新进入页面才会更新。
+- **PR 结束后的归档任务按钮**:`button` 加 `data-ghost-task-archive="owner/repo#123"`,不要再加
+  `data-ghost-action` / `data-ghost-link`(加了主机就不认这个标记)。写成 `display:none`,按钮名放在
+  `aria-label`,用你自己的样式(如 `::before{content:attr(aria-label)}`)画出文字。主机按标题栏同一份状态在
+  PR 已合并或关闭时露出它(查不到状态时看 `data-ghost-task-archive-state="merged|closed"` 快照),点击由主机
+  走标准归档流程,插件收不到这次点击。用户开了自动归档时再加空值 `data-ghost-task-archive-auto`:主机自己确认
+  已合并、用户看过并离开、且归档不会丢东西时才归档。旧版主机和手机不显示这颗按钮。
 - **手机端呈现提示**(手机不跑卡片 HTML,只收文字和原生按钮;这几个属性让它画得更像卡片):
   - 主操作 `button` 加空值属性 `data-ghost-primary`,手机画成主按钮;
   - 开关型设置的 `button` 加 `data-ghost-toggle="on|off"`,按钮里第一行文字是标题、其余是说明,

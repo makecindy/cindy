@@ -1,5 +1,16 @@
 # 跨端协议兼容
 
+## 插件自有任务远程模型（2026-11-06，未发布）
+
+插件管子的 `tasks.create / setModel` 在原 route 上增加可选 `agentDeviceId`；
+`tasks.capabilities()` 追加 `remoteRoutes:true`。同账号电脑和 `share:<shareId>` 的语义
+与统一模型选择器一致，缺省保持插件宿主。旧 Host 缺标记时只提供本机选模，不能剥掉来源后重试。
+新 Host 保持所有旧 route、批准记录、幂等摘要及任务回执兼容；位置只在选择远程时出现。
+任务 resolvedConfig、run.acceptedConfig 和改模 pending profile 保留位置；无 DB schema 迁移。
+仅复用既有远程 Agent 的目录、open/send/poll/stop 通道，任务和历史仍归插件电脑，
+不添加 device-link allowlist、帧、relay 能力或服务端请求。官方与自建中转继续透传既有协议，无需升级。
+同账号与跨账号授权仍由原通道及执行电脑核验，来源不可用不回落本机、不重放付费输入。
+
 ## 插件详细介绍 `manifest.readme`（2026-11-06，未发布）
 
 `ghost.json` 新增可选 `readme`：语言到包内 `.md` 文件的映射，必须提供 `en`，规则正本在
@@ -99,6 +110,39 @@ remote-resource invoke，无需服务端或中转升级。
 `{method:"text-heuristic",items:[{source,tokens}]}`。它是文字粗估，独立于原生总量；
 Desktop 与 Mobile 明确标注估算和排除项。旧端忽略可选字段，新端收到缺字段或未知 method
 时只显示原有总量，不要求双端同时升级。返回值不含模型上下文正文或工具定义正文。
+
+## 官方飞书 / Lark 渠道的协议增量（2026-11-04）
+
+两仓 `slack-hook-protocol` 同步追加，全部是可选新增：
+
+- `HOOK_PROVIDERS` 追加 `'feishu'`（飞书与 Lark 共用），能力位 `provider:feishu`。与 Telegram／X
+  相同，由服务端 welcome 宣告、桌面 hello 声明，双方都有才启用。
+- `provider.bind.update`／`state` 新增可选 `bindCode`：一次性短关联码（4–32 位大写字母或数字，
+  可含中间连字符），只允许在 `pending` 时非空，缺省等同 `null`；新增 UI 动作提示 `copy_bind_code`。
+  `pending` 仍要求 `connectUrl`（飞书为网页授权地址），关联码只是网页授权不可用时的兜底。
+- `query.request` 新增可选 `recipient = { scopeId, principalId }`：多个组织共用的服务（官方飞书）发出的查询
+  代表哪个应用的哪个账号；带上时两项都须是非空字符串。其它服务不发，旧桌面端忽略。
+- 客户端端点清单新增 `feishuHookWsUrl`（`wss:`），登记为跨区域端点：服务只在海外部署一套，
+  两份区域清单都指向 `cindy.app`。服务部署前正式清单不写该字段，入口不显示。
+
+飞书群上下文由服务端组装进 `task.dispatch.prompt`（含 `<thread_context>`、引用与当前发言人）；`source.threadContext` 同时供来源卡展示，客户端继续保留服务端完整 prompt，不再从展示元数据重复注入。X 的客户端 prompt 组装只作用于 X，不能据此推断其它渠道丢失上下文。
+
+多设备（2026-11-07）：同一应用下，同一飞书账号可同时保留多个设备的 `confirmed` 绑定；新绑定默认成为工作电脑，重连不改变选择。工作电脑通过机器人菜单 `device` / `/device` 或已绑定电脑的「设为工作电脑」按钮选择，绑定成功后机器人私聊说明用法。服务端内部会话代次、工作目录与偏好按设备绑定隔离，外部 lane 格式仍相同（设备各自存本地任务）。选择仅影响后续消息，运行中任务沿原设备继续；离线 / 繁忙时拒绝，不改派、不补发。`superseded/rebound` 仅表示同一设备的旧账号绑定被替换；其它电脑的绑定不失效。桌面解绑只影响本机。
+
+桌面选择是可选增量：本机 `confirmed` 快照的 `actions` 提供 `select_device` 时，客户端才显示按钮。客户端发 `provider.bind.select { requestId, provider, bindingId }`，服务端按已认证连接的设备核对本机绑定、应用和归属，回 `provider.bind.selection { requestId, provider, bindingId, ok }`；只有匹配的成功回执才能提示「已设为工作电脑」。请求不能创建绑定，不改变其它电脑的绑定状态；服务端从收到请求起限制处理时间，不依赖客户端时钟。断线、解绑、切账号及超时让在途请求失败，不补发。旧服务端不提供动作时隐藏按钮；客户端不缓存可能被其它设备切换而过时的「当前工作电脑」标签。
+
+客户端接线：desktop 的飞书线 hello 只声明 `provider-bind-v1`、`provider-prefs-v1` 与 `provider:feishu`
+（不声明 `msg-op-v1` 及 `telegram-*`），welcome 同样须含这三项才启用。不声明 `session-picker-v1`：飞书服务由多个组织
+共用；会话列表查询要双方都声明才回答，服务端单方面宣告不算。飞书线的工作目录 / 模型查询必须带 `recipient`，且与
+这条连接上服务端确认过的绑定（`scopeId` / `principalId`，等到绑定快照之后）一致才回答，否则回 `ok:false`。`pending` 的
+`connectUrl` 与 `remediationUrl` 在进入设置页快照前按飞书 / Lark 精确主机白名单校验（`feishuDeepLink.ts`），且授权页 `client_id` 必须与当前宣告的 `scopeId` 一致；不一致时转为 `failed/invalid-connect-url`，清除链接与关联码，不向 Renderer 暴露或自动打开；
+「打开机器人」的 AppLink 还须指向绑定的应用（`appId` 等于 `scopeId`），否则连同 `open_provider` 一起去掉。
+
+兼容：旧校验器不读取 `bindCode`；不认识 `feishu` 的旧端按未知 provider 拒绝该帧但不断连，也不会
+协商到 `provider:feishu`；新客户端连旧服务端收不到飞书帧，连不发 `recipient` 的旧飞书服务端时 `/project`、`/model`
+查询失败（两端都未发布，飞书服务端须先于客户端上线）。客户端里协议渠道值进入本地类型的
+回调（`onHookReadyForPrefsMirror`）按客户端支持集收窄。没有服务端部署、数据库、环境变量、
+Device Link 或自建中转变化；协议包改动会触发服务端全部服务的 CI。
 
 ## 群内能力提示（非执行终态）
 
@@ -5002,6 +5046,23 @@ Chat Server 请求复用既有消息 `content` 的 media 块及 `threadRootId`�
 电脑端藏起这些元素，手机投影在宿主侧把它们连同文字、`live` 与按钮一起去掉，所以新旧手机都无需改动；查不到状态时照常显示。
 手机只对含 PR 状态位或 PR 链接的卡片定时重读，带该标记的卡片需保留其中之一（GitHub 插件的 PR 卡片标题始终链接到 PR）。旧宿主的净化器丢掉这个属性，卡片维持原快照。不改握手、白名单、relay 或服务端，无数据库迁移。
 回归入口：`cardSanitizer.test.ts`、`cardRemoteResource.test.ts`、`ghostCardPrStatus.test.ts`。
+
+插件卡片可放一颗归档任务按钮：`button` 上标 `data-ghost-task-archive="owner/repo#N"`（不得同时带 `data-ghost-action`
+或 `data-ghost-link`，否则净化器丢掉这个标记），可选 `data-ghost-task-archive-state="merged|closed"`（插件读到的状态快照）
+与空值 `data-ghost-task-archive-auto`（用户开了「合并后自动归档」）。插件把它写成 `display:none`，文字放在 `aria-label`
+并用自己的 `::before` 画出来。新电脑端按标题栏同源状态在 PR 已合并或已关闭时以 `inline-flex` 露出（查不到状态时按快照），
+点击不回传插件，由任务页走与标题栏归档相同的流程，只作用于卡片所在任务。带 `-auto`、宿主自己查到已合并，且任务页满足静态资格（`canAutoArchiveOnLeave`：普通任务页、本机任务、任务还是活跃的、没有被远程写入拦截）时，
+自动归档待生效：宿主在按钮左边插入自己的「离开后自动归档 · 本次不归档」（文字与点击都归宿主），卡片在可见、聚焦的窗口里
+进入视野记为「看过」（只在内存）。用户点「本次不归档」，或待生效之后任务里出现用户发的消息（本机发送立即取消，但只取消已经待生效的，合并前发的消息不算；
+手机、IM、共享成员的消息在历史加载完成后按最后一条用户消息比较；官方 IM Hook 的渠道消息虽然复用 scheduler 形态的 origin，但是真人发的，要算；真正的自动化与插件代发的不算），本次就取消，直到任务里不再有符合条件
+的卡片才重新开始。同一任务可以有多张卡片，按卡片登记资格，任一张符合就待生效，只有符合条件的那张卡片在眼前显示才记「看过」。
+提示只在静态资格成立时显示，离开时用同一个判断（IM 接管状态只能在任务所在电脑上查，远程任务没有确认框兜底就不静默收走，卡片上的归档按钮照旧可用），所以提示不会承诺一次不会发生的归档。
+离开普通任务页（包括直接切到另一个任务，按离开那个任务最后一次渲染的信息处理）时，看过、没取消、任务没在运行、没被接管、
+确认没有绑定活跃定时任务（读取失败、超时、上次刷新失败后留下的旧缓存，都算不确认，保留任务）、输入框没有草稿、worktree 确认干净且用户没有
+回到它，才静默归档并给可撤销提示，否则不归档也不弹确认。旧电脑端的净化器丢掉这些属性，按钮一直藏着；
+手机投影不含无动作的按钮且按钮内没有文字，新旧手机都不显示、也不计「看过」。不给插件新增运行期能力，不改 manifest、
+批准记录、握手、白名单、relay 或服务端，无数据库迁移。
+回归入口：`cardSanitizer.test.ts`、`ghostCardPrStatus.test.ts`、`useGhostCardTaskArchive.test.tsx`。
 
 ## 插件卡片的手机原生呈现（`plugin-card-rich`）
 

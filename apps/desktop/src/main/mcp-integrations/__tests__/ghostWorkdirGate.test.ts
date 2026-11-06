@@ -3846,7 +3846,32 @@ describe('plugin page audience and shared tool execution', () => {
     const info = await deps.getAwakeGhost('art');
     expect(info).toMatchObject({ ok: true, ghost: { tools: [] } });
     const result = await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {} });
+    expect(result).toMatchObject({ ok: false, errorCode: 'TOOL_NOT_FOUND',
+      message: expect.stringContaining('只供插件页面调用') });
+    expect(result).toHaveProperty('message', expect.stringContaining('模型可见的工具: (无)'));
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+  // The real ghost_call entry used to mistake an
+  // app-only tool for a missing capability. Existing case checked only the code.
+  // Minimal input: one app-only tool + one model opener; unit, no sandbox/network.
+  it.each(['run', 'missing', 'nested_operation'])('guides model calls to %s without dispatching', async tool => {
+    const ghost = pageGhost();
+    ghost.manifest.tools!.push({ name: 'open_view', description: '打开页面' });
+    ghost.manifest.mcpApps = { ui: {
+      resources: [{ uri: 'ui://records', file: 'ui/page.html' }],
+      tools: { run: { visibility: ['app'] }, open_view: { resourceUri: 'ui://records', visibility: ['model'] } },
+    } };
+    if (tool === 'nested_operation') ghost.manifest.tools!.push({ name: 'call_tool', description: '分派' });
+    listMock.mockReturnValue([ghost]);
+    const result = await makeDeps().callGhostTool({ ghostId: 'art', tool, args: {} });
     expect(result).toMatchObject({ ok: false, errorCode: 'TOOL_NOT_FOUND' });
+    if (tool === 'run') {
+      expect(result).toHaveProperty('message', '插件 art 已声明工具 run，但它只供插件页面调用，模型不能直接 ghost_call。请先通过 ghost_call 调用模型可见的开页面工具: open_view，再由页面调用 run。不要据此判定插件缺少该能力。');
+    } else if (tool === 'missing') {
+      expect(result).toHaveProperty('message', '插件 art 没有工具 missing;可用工具: open_view');
+    } else {
+      expect(result).toHaveProperty('message', expect.stringContaining('tool:"call_tool",args:{name:"nested_operation"'));
+    }
     expect(dispatchMock).not.toHaveBeenCalled();
   });
   // #4421074557, unit: real ghost_call entry must strip page-private metadata even

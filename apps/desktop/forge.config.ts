@@ -831,6 +831,8 @@ function extraResourcesForTarget(targetPlatform: string): string[] {
   // 仅 darwin 有此功能,其它平台不打进包。exec 位由 git 跟踪,extraResource 拷贝时保留。
   if (targetPlatform === 'darwin') {
     base.push('resources/cli');
+    // 「设置 → 外观 → Dock 图标」运行期交给 app.dock.setIcon 的圆角 PNG。
+    base.push('resources/icon-dock.png', 'resources/app-icons');
   }
   if (targetPlatform === 'linux') base.push('resources/linux');
 
