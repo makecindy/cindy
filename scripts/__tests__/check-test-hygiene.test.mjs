@@ -477,6 +477,16 @@ test("compareWithBaseline only lets counts stay or shrink", () => {
 			assert.equal(fs.readFileSync(baselinePath, "utf8"), raised);
 		}
 		const eventPath = path.join(root, "github-event.json");
+		// Regression: after fixing source debt, --update used to reject the old
+		// raised JSON before it could generate a safe replacement. The real CLI
+		// must repair it while still rejecting outstanding increases above.
+		writeReads(1);
+		const repaired = cli(["--update"]);
+		assert.equal(repaired.status, 0, output(repaired));
+		assert.deepEqual(JSON.parse(fs.readFileSync(baselinePath, "utf8")).files,
+			{ [relativeTestPath]: { sourceReads: 1 } });
+		writeReads(2);
+		writeBaseline({ [relativeTestPath]: { sourceReads: 2 } });
 		for (const [eventName, event] of [["pull_request", { pull_request: { base: { sha: trusted } } }], ["merge_group", { merge_group: { base_sha: trusted } }], ["push", { before: trusted }]]) {
 			fs.writeFileSync(eventPath, JSON.stringify(event));
 			const result = cli([], { GITHUB_EVENT_NAME: eventName, GITHUB_EVENT_PATH: eventPath, GITHUB_BASE_REF: eventName === "pull_request" ? "main" : "" });

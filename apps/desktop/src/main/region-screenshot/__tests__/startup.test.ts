@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   shortcut: null as (() => void) | null,
   capture: vi.fn(),
+  nativeCapture: vi.fn(),
+  displays: vi.fn(),
   start: vi.fn(),
   dispose: vi.fn(),
   windows: vi.fn(async () => []),
@@ -13,6 +15,7 @@ vi.mock('electron', () => ({
   app: {},
   clipboard: {},
   desktopCapturer: { getSources: mocks.capture },
+  nativeImage: { createFromBitmap: () => ({ isEmpty: () => false, native: true }) },
   dialog: { showMessageBox: vi.fn() },
   globalShortcut: {
     register: (_key: string, callback: () => void) => {
@@ -25,7 +28,8 @@ vi.mock('electron', () => ({
   screen: {
     on: vi.fn(),
     removeListener: vi.fn(),
-    getAllDisplays: () => [{ id: 1, bounds: { width: 10, height: 10 }, scaleFactor: 1 }],
+    getAllDisplays: mocks.displays,
+    dipToScreenRect: (_window: unknown, rect: unknown) => rect,
   },
   shell: {},
   systemPreferences: { getMediaAccessStatus: () => 'granted' },
@@ -83,6 +87,7 @@ import { initRegionScreenshot, stopRegionScreenshot } from '../index';
 // 最小失败输入为 capture reject 早于 helper resolve；tier: unit，假定时器和内存依赖。
 describe('screenshot startup cleanup', () => {
   const helper = {
+    capture: mocks.nativeCapture,
     dispose: mocks.dispose,
     windows: mocks.windows,
     frontmostPid: mocks.frontmostPid,
@@ -91,6 +96,9 @@ describe('screenshot startup cleanup', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    vi.stubGlobal('process', Object.create(process, { platform: { value: 'win32' } }));
+    mocks.activeSession = null;
+    mocks.displays.mockReturnValue([{ id: 1, bounds: { width: 10, height: 10 }, scaleFactor: 1 }]);
     mocks.start.mockResolvedValue(helper);
     mocks.capture.mockResolvedValue([]);
     initRegionScreenshot();
@@ -98,6 +106,7 @@ describe('screenshot startup cleanup', () => {
   afterEach(() => {
     stopRegionScreenshot();
     vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
   // User-selected lazy lifecycle: registration must not schedule shell creation,
   // capture, or native compilation. Earlier tests only invoked the shortcut.
@@ -143,5 +152,59 @@ describe('screenshot startup cleanup', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(mocks.dispose).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // Unit regression: the real shortcut must retain native frames when optional
+  // window enumeration stalls the serial helper. Previous cleanup tests used
+  // only Electron; two displays also catch interleaving windows between frames.
+  // Standalone Vitest duration: 2.45s on Windows.
+  it('finishes all native frames before a slow window query can expire the helper', async () => {
+    mocks.displays.mockReturnValue([1, 2].map(id => ({
+      id, bounds: { x: (id - 1) * 10, y: 0, width: 10, height: 10 }, scaleFactor: 1,
+      depthPerComponent: 8, colorSpace: '{primaries:BT709, transfer:SRGB, matrix:RGB, range:FULL}',
+    })));
+    let blocked = false;
+    mocks.windows.mockImplementationOnce(() => {
+      blocked = true;
+      return new Promise(resolve => setTimeout(() => resolve([]), 1500));
+    });
+    mocks.nativeCapture.mockImplementation(() => new Promise(resolve => {
+      setTimeout(() => resolve(blocked ? null : { width: 10, height: 10, data: new Uint8Array(400) }), 10);
+    }));
+    mocks.shortcut!();
+    await vi.advanceTimersByTimeAsync(1600);
+    expect(mocks.activeSession).not.toBeNull();
+    expect(mocks.nativeCapture).toHaveBeenCalledTimes(2);
+    expect(mocks.capture).not.toHaveBeenCalled();
+    expect(mocks.windows).toHaveBeenCalledTimes(1);
+  });
+
+  // Unit regression (review): ordering frames first must not also delay window
+  // queries behind Electron capture, which never uses the helper. Minimum input:
+  // one wide-gamut Windows display. getSources blocks synchronously in Electron,
+  // so the query must already be sent when it is entered, not merely later.
+  it('keeps window queries parallel with Electron capture on wide-gamut displays', async () => {
+    mocks.displays.mockReturnValue([{ id: 1, bounds: { x: 0, y: 0, width: 10, height: 10 }, scaleFactor: 1,
+      depthPerComponent: 10, colorSpace: '{primaries:BT2020, transfer:PQ, matrix:RGB, range:FULL}' }]);
+    let windowsAtFallback = -1;
+    mocks.capture.mockImplementation(async () => { windowsAtFallback = mocks.windows.mock.calls.length; return []; });
+    mocks.shortcut!();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(windowsAtFallback).toBe(1);
+    expect(mocks.nativeCapture).not.toHaveBeenCalled();
+  });
+
+  // Same review regression for a native frame that fails after precheck: the
+  // window query must be sent before getSources starts its blocking work.
+  it('sends window queries before the Electron fallback after a failed native frame', async () => {
+    mocks.displays.mockReturnValue([{ id: 1, bounds: { x: 0, y: 0, width: 10, height: 10 }, scaleFactor: 1,
+      depthPerComponent: 8, colorSpace: '{primaries:BT709, transfer:SRGB, matrix:RGB, range:FULL}' }]);
+    mocks.nativeCapture.mockResolvedValue(null);
+    let windowsAtFallback = -1;
+    mocks.capture.mockImplementation(async () => { windowsAtFallback = mocks.windows.mock.calls.length; return []; });
+    mocks.shortcut!();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(mocks.nativeCapture).toHaveBeenCalledTimes(1);
+    expect(windowsAtFallback).toBe(1);
   });
 });

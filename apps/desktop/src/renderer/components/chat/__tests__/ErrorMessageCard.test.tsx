@@ -124,3 +124,12 @@ describe('ErrorMessageCard', () => {
     expect(screen.getByText(raw)).toBeTruthy();
   });
 });
+
+
+describe('output-limit guidance', () => {
+  it.each([131064, 1000])('renders reasoning-aware usage and guidance (%s)', (reasoningTokens) => {
+    render(createElement(ErrorMessageCard, { message: 'limit', reason: 'output-limit', outputLimit: { outputTokens: 131072, reasoningTokens } }));
+    const expected = reasoningTokens === 131064 ? 'logic.errors.outputLimitReasoning' : 'logic.errors.outputLimit';
+    expect(screen.getByText(`logic.errors.outputLimitUsage ${expected}`)).toBeTruthy();
+  });
+});

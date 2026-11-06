@@ -16,6 +16,7 @@ import {
 } from '../git-context/prStatusService';
 import type { GhCliTokenReadResult } from '../git-context/ghCliTokenSource';
 import { fetchPrSummary, summarizeChecks } from '../git-context/prSummary';
+import { PrFollowWatch, prStatusSignature } from '../git-context/prFollowWatch';
 import type { GithubClient } from '@cindy/github-client';
 
 const Q = { owner: 'makecindy', repo: 'cindy', prNumber: 85 };
@@ -372,7 +373,7 @@ it.each([
 });
 
 // Unit: production MR fetch + shared status service, not a copied mapper.
-// GitHub fixtures cannot detect SHA/paging mismatches or credentials crossing hosts.
+// GitHub fixtures cannot detect GitLab pipeline selection/paging or credentials crossing hosts.
 describe('GitLab MR status', () => {
   const q = {
     provider: 'gitlab' as const,
@@ -391,7 +392,6 @@ describe('GitLab MR status', () => {
     resolvedDiscussionsCount: 3,
     headPipeline: {
       status: 'RUNNING',
-      sha: 'head',
       jobs: {
         count: 5,
         nodes: ['SUCCESS', 'FAILED', 'MANUAL', 'SKIPPED', 'CANCELED'].map((status) => ({ status })),
@@ -421,8 +421,83 @@ describe('GitLab MR status', () => {
     });
     expect(fetch).toHaveBeenCalledTimes(1);
   });
-  it('queries the MR host once, counts discussions and conservatively summarizes complete current-head jobs', async () => {
+  it('skips optional manual jobs but keeps blocking or unknown manual jobs pending', async () => {
     const value = mr();
+    value.headPipeline.status = 'SUCCESS';
+    const nodes = [
+      { status: 'MANUAL', allowFailure: true },
+      { status: 'MANUAL', allowFailure: false },
+      { status: 'MANUAL' },
+      { status: 'MANUAL', allowFailure: 'true' },
+    ];
+    value.headPipeline.jobs = {
+      count: nodes.length,
+      nodes,
+      pageInfo: { hasNextPage: false },
+    };
+    const fetch = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      const { query } = JSON.parse(String(init?.body));
+      value.headPipeline.jobs.nodes = /nodes\s*\{[^}]*\ballowFailure\b/.test(query)
+        ? nodes
+        : nodes.map(({ status }) => ({ status }));
+      return new Response(JSON.stringify({ data: { project: { mergeRequest: value } } }));
+    });
+    expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toEqual({
+      total: 4,
+      passed: 0,
+      failed: 0,
+      pending: 3,
+      skipped: 1,
+    });
+  });
+  it('counts only latest GitLab jobs after a failed attempt is retried successfully', async () => {
+    const attempts = [
+      { status: 'FAILED', retried: true },
+      { status: 'SUCCESS', retried: false },
+      { status: 'SUCCESS', retried: false },
+    ];
+    const fetch = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      const { query } = JSON.parse(String(init?.body));
+      const nodes = /jobs\s*\([^)]*retried\s*:\s*false/.test(query)
+        ? attempts.filter((job) => !job.retried)
+        : attempts;
+      const value = mr();
+      value.headPipeline.status = 'SUCCESS';
+      value.headPipeline.jobs = {
+        count: nodes.length,
+        nodes,
+        pageInfo: { hasNextPage: false },
+      };
+      return new Response(JSON.stringify({ data: { project: { mergeRequest: value } } }));
+    });
+
+    expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toEqual({
+      total: 2,
+      passed: 2,
+      failed: 0,
+      pending: 0,
+      skipped: 0,
+    });
+  });
+  it('reports zero checks without a head pipeline but keeps a missing diff head unknown', async () => {
+    const value = { ...mr(), headPipeline: null };
+    const fetch = vi.fn(
+      async () => new Response(JSON.stringify({ data: { project: { mergeRequest: value } } })),
+    );
+    expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toEqual({
+      total: 0,
+      failed: 0,
+      passed: 0,
+      pending: 0,
+      skipped: 0,
+    });
+    value.diffHeadSha = '';
+    expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toBeNull();
+  });
+  it('summarizes GitLab-selected merged-result jobs', async () => {
+    const value = mr();
+    const pipeline = { ...value.headPipeline, sha: 'synthetic-merge-commit' };
+    value.headPipeline = pipeline;
     const fetch = vi
       .fn()
       .mockImplementation(
@@ -438,9 +513,6 @@ describe('GitLab MR status', () => {
       path: 'group/sub/project',
       iid: '7',
     });
-    value.headPipeline.sha = 'old';
-    expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toBeNull();
-    value.headPipeline.sha = 'head';
     value.headPipeline.jobs.pageInfo.hasNextPage = true;
     expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toBeNull();
     value.headPipeline.jobs.pageInfo.hasNextPage = false;
@@ -588,4 +660,114 @@ describe('GitLab MR status', () => {
       expect(reportError).toHaveBeenCalledExactlyOnceWith(error);
     },
   );
+});
+
+// Rule (Dash, 2026-11-06): a PR follow-up should react when the title-bar refresh already saw the
+// PR change, instead of waiting for its next cron look; no test covered status → schedule.
+// Production entry: PrStatusService.getStatuses feeding the real PrFollowWatch (unit, fake clock).
+// Minimal inputs: one head change, a schedule for #8 next to one for #85, one in flight.
+describe('PR follow watch', () => {
+  const schedule = (id: string, url: string, extra: Record<string, unknown> = {}) =>
+    ({ id, status: 'active', recurring: true, manual: false, preRunHook: { command: `node "/s/pr-heartbeat-gate.mjs" ${url}` }, ...extra }) as never;
+  function setup() {
+    let now = 0;
+    let head = 'a1';
+    const runNow = vi.fn(async () => ({ runId: 'r' }));
+    const inflight = vi.fn(() => 0);
+    const hasCapacity = vi.fn(() => true);
+    const autoRunAllowed = vi.fn(() => true);
+    const watch = new PrFollowWatch({
+      listActive: async () => [
+        schedule('follow-85', 'https://github.com/MakeCindy/cindy/pull/85'),
+        schedule('follow-8', 'https://github.com/makecindy/cindy/pull/8'),
+        schedule('other', 'https://github.com/makecindy/cindy/pull/850'),
+        schedule('once', 'https://github.com/makecindy/cindy/pull/85', { recurring: false }),
+        schedule('manual', 'https://github.com/makecindy/cindy/pull/85', { manual: true }),
+      ],
+      inflight,
+      hasCapacity,
+      autoRunAllowed,
+      runNow,
+      now: () => now,
+    });
+    const svc = new PrStatusService({
+      readToken: TOKEN_OK,
+      fetchPr: async () => remote({ head_sha: head } as Partial<PrRemoteState>),
+      cacheTtlMs: 1,
+      staleTtlMs: 0,
+      now: () => now,
+      onObserved: (query, result) => watch.observe(query, result),
+    });
+    const look = async (at: number, nextHead = head) => {
+      now = at;
+      head = nextHead;
+      await svc.getStatuses([Q], { waitForFresh: true });
+      await new Promise((resolve) => setImmediate(resolve));
+    };
+    return { look, runNow, inflight, hasCapacity, autoRunAllowed };
+  }
+
+  it('runs only recurring schedules naming this PR, once per change, skipping in-flight and recent ones', async () => {
+    const { look, runNow, inflight } = setup();
+    await look(10);
+    await look(20);
+    expect(runNow).not.toHaveBeenCalled();
+    await look(30, 'b2');
+    expect(runNow.mock.calls).toEqual([['follow-85', { kind: 'watch', source: 'pr-status', detail: 'https://github.com/makecindy/cindy/pull/85' }]]);
+    await look(40, 'c3');
+    expect(runNow).toHaveBeenCalledTimes(1);
+    inflight.mockReturnValue(1);
+    await look(70_000, 'd4');
+    expect(runNow).toHaveBeenCalledTimes(1);
+    inflight.mockReturnValue(0);
+    await look(80_000, 'e5');
+    expect(runNow).toHaveBeenCalledTimes(2);
+  });
+
+  // Review (Greptile P1 on #9022): run-now skips the scheduler's concurrency cap, so a burst of PR
+  // changes could start more agents than maxConcurrentRuns. Minimal input: one change while no slot is
+  // free, then a later refresh once a slot opens (unit).
+  it('waits for a free scheduler slot instead of exceeding the cap, and runs on the next refresh', async () => {
+    const { look, runNow, hasCapacity } = setup();
+    await look(10);
+    hasCapacity.mockReturnValue(false);
+    await look(100_000, 'b2');
+    expect(runNow).not.toHaveBeenCalled();
+    hasCapacity.mockReturnValue(true);
+    await look(200_000);
+    expect(runNow).toHaveBeenCalledTimes(1);
+    await look(300_000);
+    expect(runNow).toHaveBeenCalledTimes(1);
+  });
+
+  // Review (Codex P2 on #9022): a passive instance shares data with another one that owns automatic runs.
+  it('never starts runs on a passive scheduler instance', async () => {
+    const { look, runNow, autoRunAllowed } = setup();
+    autoRunAllowed.mockReturnValue(false);
+    await look(10);
+    await look(100_000, 'b2');
+    expect(runNow).not.toHaveBeenCalled();
+  });
+
+  it('treats failed reads as no news and keeps the baseline', async () => {
+    const runNow = vi.fn(async () => null);
+    const watch = new PrFollowWatch({
+      listActive: async () => [schedule('follow-85', 'https://github.com/makecindy/cindy/pull/85')],
+      inflight: () => 0,
+      hasCapacity: () => true,
+      autoRunAllowed: () => true,
+      runNow,
+    });
+    const ok = (headSha: string) => ({ ok: true, status: 'open', prNumber: 85, headSha }) as never;
+    const settle = () => new Promise((resolve) => setImmediate(resolve));
+    watch.observe(Q, ok('a1'));
+    watch.observe(Q, { ok: false, prNumber: 85, reason: 'fetch-failed' } as never);
+    watch.observe(Q, ok('a1'));
+    await settle();
+    expect(runNow).not.toHaveBeenCalled();
+    watch.observe(Q, ok('b2'));
+    await settle();
+    expect(runNow).toHaveBeenCalledTimes(1);
+    expect(prStatusSignature({ ok: false, prNumber: 85, reason: 'fetch-failed' } as never)).toBeNull();
+  });
 });

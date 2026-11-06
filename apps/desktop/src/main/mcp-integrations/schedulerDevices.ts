@@ -18,6 +18,7 @@ const CHANNELS: Record<SchedulerRemoteOp, string> = {
   resume: 'maker:schedule:resume',
   delete: 'maker:schedule:delete',
   'run-now': 'maker:schedule:run-now',
+  'webhook-restore': 'maker:schedule:webhook-restore',
 };
 
 /** 远程失败说明。只陈述事实；旧版本对方不认识的请求明确说不支持。 */
@@ -40,6 +41,7 @@ const WRITE_OPS: ReadonlySet<SchedulerRemoteOp> = new Set([
   'resume',
   'delete',
   'run-now',
+  'webhook-restore',
 ]);
 
 /**
@@ -101,26 +103,29 @@ export function createSchedulerRemoteDeps(deps: {
         };
       }
       let response: InvokeResultPayload;
+      let operationStarted = false;
       try {
-        if (op === 'create') {
-          const capabilities = await deps.invoke(deviceId, 'maker:get-capabilities', ['claude-code'], { preSend: assertCurrent });
-          assertCurrent();
-          const supported = capabilities.ok ? capabilities.result as { supportsRemoteScheduleDirectoryCheck?: boolean } | null : null;
-          if (supported?.supportsRemoteScheduleDirectoryCheck !== true) {
-            return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持远程创建定时任务，请先更新目标电脑' };
-          }
-        }
         const patch = op === 'update' ? args[1] as Record<string, unknown> | undefined : undefined;
+        const input = op === 'create' ? args[0] as Record<string, unknown> | undefined : patch;
+        const needsWebhook = input?.webhookTrigger !== undefined;
         const needsModelSelection = patch?.modelAgentKind != null;
         const needsLocationSelection = patch && (Object.prototype.hasOwnProperty.call(patch, 'modelAgentDeviceId')
           || ['modelAgentKind', 'model', 'providerId', 'effort'].some((key) => patch[key] === null));
-        if (needsModelSelection || needsLocationSelection) {
+        if (op === 'create' || needsModelSelection || needsLocationSelection || needsWebhook) {
           const capabilities = await deps.invoke(deviceId, 'maker:get-capabilities', ['claude-code'], { preSend: assertCurrent });
           assertCurrent();
           const supported = capabilities.ok ? capabilities.result as {
             supportsScheduleModelSelection?: boolean;
             supportsScheduleAgentDeviceSelection?: boolean;
+            supportsRemoteScheduleDirectoryCheck?: boolean;
+            supportsScheduleWebhookTrigger?: boolean;
           } | null : null;
+          if (op === 'create' && supported?.supportsRemoteScheduleDirectoryCheck !== true) {
+            return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持远程创建定时任务，请先更新目标电脑' };
+          }
+          if (needsWebhook && supported?.supportsScheduleWebhookTrigger !== true) {
+            return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持 Webhook 触发，请先更新目标电脑' };
+          }
           if (needsModelSelection && supported?.supportsScheduleModelSelection !== true) {
             return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持自动化完整模型选择，请先更新目标电脑' };
           }
@@ -128,11 +133,35 @@ export function createSchedulerRemoteDeps(deps: {
             return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持自动化选择远程或分享供应商，请先更新目标电脑' };
           }
         }
+        if (needsWebhook && input?.webhookTrigger !== null) {
+          const receiver = await deps.invoke(deviceId, 'maker:schedule:webhook-receiver', [], { preSend: assertCurrent });
+          assertCurrent();
+          if (!receiver.ok) return failure(receiver.error.code, receiver.error.message);
+          if (receiver.result !== 'cloud' && receiver.result !== 'local') {
+            return { ok: false, code: 'INVALID_PARAMS', message: receiver.result === 'signed-out'
+              ? '目标电脑需要登录 Cindy 账号才能配置 Webhook' : '目标电脑没有可用的 Webhook 接收服务' };
+          }
+        }
+        operationStarted = true;
         response = await deps.invoke(deviceId, CHANNELS[op], args, { preSend: assertCurrent });
+        if (op === 'get') {
+          assertCurrent();
+          const schedule = response.ok ? response.result : null;
+          if (schedule && typeof schedule === 'object' && !Array.isArray(schedule)
+            && 'webhookTrigger' in schedule && schedule.webhookTrigger) {
+            // Remote reads skip the local schedule_get callback, so enrich through
+            // the target's existing read-only channel under the same owner snapshot.
+            const status = await deps.invoke(deviceId, 'maker:schedule:webhook-status', [args[0]], { preSend: assertCurrent });
+            assertCurrent();
+            response = status.ok
+              ? { ok: true, result: status.result ? { ...schedule, webhookStatus: status.result } : schedule }
+              : status;
+          }
+        }
       } catch (error) {
         if (error instanceof DeviceLinkError) {
           // inFlight = 请求已发出、回执丢失。
-          if (error.inFlight) return unknownOutcome(op);
+          if (error.inFlight) return operationStarted ? unknownOutcome(op) : unknownOutcome('get');
           return failure(error.code, error.message);
         }
         const message = error instanceof Error ? error.message : '';

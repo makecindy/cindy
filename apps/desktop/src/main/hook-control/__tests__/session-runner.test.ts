@@ -2195,6 +2195,31 @@ describe('进度快照(turn.progress 链路)', () => {
     }
   });
 
+  it('Telegram: 本机文件链接只保留文字', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-tg'),
+      );
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(baseReq({ source: { im: 'telegram' } }));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      // 实踩: 对方打不开这台电脑上的文件, Telegram 还会原样显示整段 Markdown。
+      cb({
+        type: 'text',
+        data: { text: '要发 PR 吗？[PR 技能](</Users/a b/SKILL.md>)、[文档](https://example.com)', isFinal: true },
+      });
+      cb({ type: 'done', data: null });
+
+      const outcome = await p;
+      expect(outcome.finalText).toBe('要发 PR 吗？PR 技能、[文档](https://example.com)');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('X: 一条回帖仍保留标题/长正文等桌面版正式内容', async () => {
     vi.useFakeTimers();
     try {
@@ -2934,8 +2959,25 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
       expect(outcome.finalText).not.toContain('shot.png');
     } else expect(outcome.finalText).toBe(reason === 'output-limit' ? text : '');
     expect(outcome.errorMessage).toBe(reason === 'output-limit'
-      ? '模型已达到输出长度上限，本轮回复可能不完整。可以直接发送下一条消息继续。'
+      ? '模型已达到输出长度上限，本轮回复可能不完整。可以发送新消息继续；若反复触发，请降低推理强度或先压缩对话记录。'
       : 'provider failure');
+  });
+
+  it('official Telegram carries reasoning exhaustion details into its terminal notice', async () => {
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) => makeManualSession(opts.id ?? 'sess-x'));
+    const runner = createMakerHookSessionRunner({ log });
+    const pending = runner.run(baseReq({ source: { im: 'telegram', userText: 'hello' } }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    h.eventCbs.get('sess-new')!({ type: 'error', source: 'pi', data: {
+      reason: 'output-limit', message: 'limit', isTerminal: true,
+      outputLimit: { outputTokens: 131072, reasoningTokens: 131064 },
+    } });
+    const outcome = await pending;
+    expect(outcome.status).toBe('error');
+    expect(outcome.errorMessage).toContain('131064');
+    expect(outcome.errorMessage).toContain('131072');
+    expect(outcome.errorMessage).toContain('降低推理强度');
+    expect(outcome.errorMessage).not.toContain('可以发送新消息继续');
   });
 
   it('工具循环终态在官方 bot 也走共享安全文案, 不透出内部分类', async () => {
@@ -4315,7 +4357,7 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
       expect(ends[0]?.finalText).not.toContain('shot.png');
     } else expect(ends[0]?.finalText).toBe(reason === 'output-limit' ? text : '');
     expect(ends[0]?.errorMessage).toBe(reason === 'output-limit'
-      ? '模型已达到输出长度上限，本轮回复可能不完整。可以直接发送下一条消息继续。'
+      ? '模型已达到输出长度上限，本轮回复可能不完整。可以发送新消息继续；若反复触发，请降低推理强度或先压缩对话记录。'
       : 'provider failure');
   });
 

@@ -712,7 +712,7 @@ export class UserBrowserBackend implements BrowserBackend {
           }
         : {}),
       capabilities: userBrowserCapabilities(control),
-      note: '用户自己的浏览器:新页面开在 Cindy 的后台窗口里,不抢焦点;不要关闭、重排或切换用户自己的标签页,除非任务需要。',
+      note: '用户自己的浏览器:用 open 在 Cindy 的后台窗口里开自己的页面,和用户共用登录态,不抢焦点;不要在用户自己的标签页上操作,也不要关闭、重排或切换它们。',
       ...(doctor
         ? {
             port: status.port,
@@ -783,6 +783,8 @@ export class UserBrowserBackend implements BrowserBackend {
     // budget) would otherwise turn a tab the agent just opened into an unknown targetId.
     const complete = new Set<string>();
     for (const client of clients) {
+      // 新版扩展标出 Cindy 自己窗口里的页签,其余都是用户的;旧版不标,就不猜归属。
+      const knowsOwner = this.parity(gate.control, client.id);
       const listed = await gate.control.bridge.act('tabs', {
         browser: client.id,
         limit: Math.min(100, Math.max(1, req.limit ?? 50)),
@@ -813,6 +815,7 @@ export class UserBrowserBackend implements BrowserBackend {
         seen.add(record.targetId);
         tabs.push({
           ...this.describe(record),
+          ...(knowsOwner ? { owner: tab.cindyWindow === true ? 'cindy' : 'user' } : {}),
           active: tab.active === true,
           ...(tab.status ? { status: tab.status } : {}),
         });
@@ -825,7 +828,7 @@ export class UserBrowserBackend implements BrowserBackend {
     return actionOk(req.action, {
       backend: this.kind,
       tabs,
-      note: '这些是用户浏览器里当前打开的标签页;只在需要时操作,不要关闭或重排它们。',
+      note: '这些是用户浏览器里当前打开的标签页。owner:"user" 是用户自己的页签:不要在上面点击、输入或跳转,也不要关闭或重排;要用同一网站就 open 一个新页面(和用户共用登录态),需要它的账号或位置时把它的 url 传给 open。只有用户明确让你看这一页时才读取它。owner:"cindy" 是 Cindy 窗口里的页面,可以直接复用。',
     });
   }
 

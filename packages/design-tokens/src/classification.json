@@ -1,12 +1,12 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
   "generatedBy": "packages/design-tokens/src/classify.ts",
-  "snapshotCount": 570,
+  "snapshotCount": 576,
   "categories": {
     "literal": 283,
-    "alias": 249,
+    "alias": 246,
     "hsl-triplet": 6,
-    "runtime-derived-or-protected": 32
+    "runtime-derived-or-protected": 41
   },
   "entries": [
     {
@@ -944,14 +944,18 @@
     },
     {
       "id": "confirm-btn-primary-hover",
-      "category": "alias",
-      "destination": "semantic-or-component-candidate",
-      "lightKind": "alias",
-      "darkKind": "alias",
-      "aliasOf": {
-        "light": "accent-hover",
-        "dark": "accent-hover"
-      },
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "mixed",
+      "darkKind": "mixed",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "confirm-btn-primary-pressed",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "mixed",
+      "darkKind": "mixed",
       "modeledAsSemantic": false
     },
     {
@@ -1140,6 +1144,18 @@
       "destination": "reference-candidate",
       "lightKind": "transparent",
       "darkKind": "transparent",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "update-btn-pressed",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "update-btn-hover",
+        "dark": "update-btn-hover"
+      },
       "modeledAsSemantic": false
     },
     {
@@ -2148,26 +2164,18 @@
     },
     {
       "id": "send-btn-hover-bg",
-      "category": "alias",
-      "destination": "semantic-or-component-candidate",
-      "lightKind": "alias",
-      "darkKind": "alias",
-      "aliasOf": {
-        "light": "send-btn-bg",
-        "dark": "send-btn-bg"
-      },
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "mixed",
+      "darkKind": "mixed",
       "modeledAsSemantic": false
     },
     {
       "id": "send-btn-pressed-bg",
-      "category": "alias",
-      "destination": "semantic-or-component-candidate",
-      "lightKind": "alias",
-      "darkKind": "alias",
-      "aliasOf": {
-        "light": "send-btn-bg",
-        "dark": "send-btn-bg"
-      },
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "mixed",
+      "darkKind": "mixed",
       "modeledAsSemantic": false
     },
     {
@@ -2204,6 +2212,22 @@
       "destination": "reference-candidate",
       "lightKind": "hex",
       "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "perm-allow-btn-hover",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "mixed",
+      "darkKind": "mixed",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "perm-allow-btn-pressed",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "mixed",
+      "darkKind": "mixed",
       "modeledAsSemantic": false
     },
     {
@@ -5414,21 +5438,33 @@
     },
     {
       "id": "button-cta-hover",
-      "category": "alias",
-      "destination": "semantic-or-component-candidate",
-      "lightKind": "alias",
-      "darkKind": "alias",
-      "aliasOf": {
-        "light": "accent-hover",
-        "dark": "accent-hover"
-      },
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "mixed",
+      "darkKind": "mixed",
       "modeledAsSemantic": false
     },
     {
       "id": "button-cta-pressed",
       "category": "runtime-derived-or-protected",
       "destination": "register-only",
-      "lightKind": "color-mix",
+      "lightKind": "mixed",
+      "darkKind": "mixed",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "button-danger-solid-hover",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "mixed",
+      "darkKind": "color-mix",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "button-danger-solid-pressed",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "mixed",
       "darkKind": "color-mix",
       "modeledAsSemantic": false
     },

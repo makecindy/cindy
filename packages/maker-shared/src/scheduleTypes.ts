@@ -29,6 +29,8 @@ export interface RemoteScheduleWriteInput {
    * create 里省略 = 不设间隔(纯 cron 语义),update 里省略 = 不修改现有值。
    */
   intervalMs?: number | null;
+  /** Absolute Unix milliseconds; null clears, omission preserves on update. */
+  expireAt?: number | null;
   agentKind: RemoteScheduleAgentKind;
   modelAgentKind?: RemoteScheduleAgentKind;
   /** Absent = inherit bound task; empty string = automation host. */
@@ -107,6 +109,8 @@ export interface RemoteSchedule {
   timezone?: string;
   recurring?: boolean;
   manual?: boolean;
+  /** 存在 = 开启了 Webhook 触发；旧版本电脑不返回。 */
+  webhookTrigger?: { endpointId: string; events?: string[] };
   intervalMs?: number;
   agentKind?: RemoteScheduleAgentKind;
   modelAgentKind?: RemoteScheduleAgentKind;
@@ -146,7 +150,9 @@ export interface RemoteScheduleRun {
   /** Optional lightweight host projection; history and read receipts stay unchanged. */
   failureKind?: 'precheck' | 'rate-limit' | 'execution';
   failureRecovered?: boolean;
-  preRunHookResult?: { decision?: string; checkSucceeded?: boolean; stderr?: string };
+  /** Lightweight host projection of preRunHookResult.missingPlugin. */
+  missingPlugin?: unknown;
+  preRunHookResult?: { decision?: string; checkSucceeded?: boolean; stderr?: string; missingPlugin?: unknown };
   resultText?: string;
   costUsd?: number;
   estimatedValueUsd?: number;

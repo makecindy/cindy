@@ -1,6 +1,6 @@
 /**
  * Shared Plugin icon renderer for catalog, detail, and composer surfaces.
- * Package assets win; missing assets use a theme-aware functional symbol.
+ * Real package assets win; missing assets and the legacy scaffold use a theme-aware functional symbol.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -17,7 +17,11 @@ import {
 import { useEffect, useState, type Ref } from 'react';
 
 import { cn } from '@/lib/utils';
-import { ghostFallbackIconKind, type GhostFallbackIconKind } from './lib/ghostPluginViewModel';
+import {
+  ghostFallbackIconKind,
+  ghostPluginIconSource,
+  type GhostFallbackIconKind,
+} from './lib/ghostPluginViewModel';
 import './plugin-motion.css';
 
 const FALLBACK_ICONS: Record<GhostFallbackIconKind, LucideIcon> = {
@@ -78,7 +82,7 @@ export function GhostPluginIcon({
   useEffect(() => {
     setFailedSrc(null);
   }, [iconDataUrl]);
-  const resolvedIconDataUrl = iconDataUrl && failedSrc !== iconDataUrl ? iconDataUrl : undefined;
+  const resolvedIconDataUrl = failedSrc !== iconDataUrl ? ghostPluginIconSource(iconDataUrl) : undefined;
   const svg = resolvedIconDataUrl ? isSvgIconSrc(resolvedIconDataUrl) : false;
   const fallbackKind = ghostFallbackIconKind(iconName, iconId);
   const FallbackIcon = FALLBACK_ICONS[fallbackKind];

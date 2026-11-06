@@ -3,7 +3,7 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-win",
-  "documentNamespace": "https://cindy.app/spdx/desktop-win/bf77ba884603fb69269ced0fa87695a28fc363a8382be9b8e7254d89bebef13a",
+  "documentNamespace": "https://cindy.app/spdx/desktop-win/356ef0b53c7edc959f8f73e6fef2fc84dc05a755b4e231d924f76bb20fced496",
   "creationInfo": {
     "created": "2026-10-22T12:27:42Z",
     "creators": [
@@ -76,6 +76,16 @@
       "SPDXID": "SPDXRef-Package-82458194310410e0",
       "versionInfo": "5.14.0",
       "downloadLocation": "https://github.com/lobehub/lobe-icons/tree/v5.14.0",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "Magpie SVG mark (adapted)",
+      "SPDXID": "SPDXRef-Package-4ca8318bb935f57f",
+      "versionInfo": "adapted",
+      "downloadLocation": "https://github.com/yetone/magpie/blob/main/site/public/img/magpie-small.svg",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
@@ -20854,6 +20864,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-82458194310410e0"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-4ca8318bb935f57f"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

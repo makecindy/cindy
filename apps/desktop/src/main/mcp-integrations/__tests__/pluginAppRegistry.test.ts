@@ -7,6 +7,10 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { sharedPluginConnection, type AppServerConfig } from '../../mcp-apps/connection.js';
 import { McpAppsHost, appServerRevision } from '../../mcp-apps/host.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
+import type { McpAppRecord } from '../../../shared/mcpApps.js';
+import { publishPluginAppResult } from '../../mcp-apps/pluginCards.js';
+import { refreshGhostLocalizationIfChanged } from '../../cindy-brain/ghostLocalizationRefresh.js';
+import { createGhostProductionCallbacks } from '../../cindy-brain/__tests__/ghostProductionCallbacksFixture.js';
 const state = vi.hoisted(() => ({
   owner: 'A',
   configs: new Map<string, () => AppServerConfig>(),
@@ -87,6 +91,47 @@ function fixture() {
     },
   };
 }
+
+// PR #8752: locale-only refresh skipped App registry localization, so new cards
+// retained the old title. Unit through the real locale entry, registry and card writer;
+// the existing direct-registry refresh test cannot catch the missing caller update.
+const localeCallbacks = createGhostProductionCallbacks<{ refreshGhostLocalization(locale: string): void }>({
+  functions: ['refreshGhostLocalization'],
+});
+it('uses the new locale for cards published after a locale-only refresh', async () => {
+  const f = fixture();
+  f.refresh();
+  const owner = {};
+  const records: McpAppRecord[] = [];
+  const host = new McpAppsHost({
+    owner: () => owner, config: readAppServer,
+    readCard: async () => { throw new Error('no existing card'); },
+    writeCard: async (_session, _client, record) => { records.push(record); },
+    authorizeTool: async () => {}, sendMessage: async () => {},
+  });
+  setMcpAppsHost(host);
+  try {
+    await publishPluginAppResult(f.ghost, 'task', 'open', {}, 'done');
+    expect(records.at(-1)?.tool.title).toBe('Planner');
+    const localized = { ...f.ghost, manifest: { ...f.ghost.manifest, name: 'Planificateur' } };
+    f.setGhost(localized);
+    const manager = { list: () => [localized], approvedInstallEvidence: () => ({ packageSha256: 'hash' }) };
+    const { refreshGhostLocalization } = localeCallbacks({
+      managerSingleton: manager, getGhostManager: () => manager,
+      currentGhostAppContext: () => ({ context: { region: 'global' } }),
+      getResolvedMainLocale: () => 'fr', refreshGhostLocalizationIfChanged, refreshPluginApps,
+      findGhostForInstanceId: () => localized, isGhostBoundaryPending: () => false,
+      broadcastGhostsChanged: vi.fn(), sendToGhostLogic: vi.fn(),
+    });
+    refreshGhostLocalization('en');
+    await publishPluginAppResult(localized, 'task', 'open', {}, 'done');
+    expect(records.at(-1)?.tool).toMatchObject({
+      title: 'Planificateur', _meta: { 'cindy/plugin': { name: 'Planificateur' } },
+    });
+  } finally {
+    await host.reset();
+  }
+});
 it.each(['unapproved', 'disabled', 'invalid'] as const)(
   'does not register or read HTML for %s page authority',
   (kind) => {

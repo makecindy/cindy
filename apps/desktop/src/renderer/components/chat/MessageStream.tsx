@@ -1,10 +1,9 @@
-import { PluginUiMessageContributions } from '@/cindy-brain/PluginUiMessageContributions';
 import { AttachmentCollectionContext, type AttachmentCollectionItem } from './AttachmentCollection';
 import { attachmentPreviewKind, previewSourceName } from '@cindy/maker-shared/attachment-preview';
 import { TeammateProcessStatus } from '@/features/bots/TeammateProcessStatus';
 import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
 import { historyAfter } from './historyAfter';
-import { readMailCard } from '@cindy/maker-shared/ghost-card-form';
+import { readGhostCardSupersededBy, readMailCard } from '@cindy/maker-shared/ghost-card-form';
 import { animateFocusScroll } from './animateFocusScroll';
 import { botProcessItems } from '@/features/bots/botConversationPresentation';
 import { isVisibleVoiceCallMessage } from '@/features/bots/voice/voiceCallPresentation';
@@ -79,7 +78,6 @@ export type { RenderItem, WorkChildItem } from './messageWorkGroups';
 import { useTranslation } from 'react-i18next';
 import { richAnswerMediaSources } from '@cindy/maker-shared/rich-answer';
 import {
-  collectPluginUiTurnAnchors,
   findMessageTodoInsertions,
   getLatestMessageTodoState,
   isAgentPlanToolName,
@@ -1837,9 +1835,10 @@ export function buildRenderItems(
     : [];
   // Mail is a finished document, not plugin progress. Without an exact tool ID,
   // wait for its result rather than attach it to a schema/read call by guesswork.
+  // A card moved to a newer call belongs to an earlier call and must not claim this one.
   const guessableLiveCards = sessionLiveCards.filter((lc) => {
     const entry = ghostCards?.byCallId.get(lc.callId);
-    return !(entry?.status === 'ready' && readMailCard(entry.html));
+    return !(entry?.status === 'ready' && (readMailCard(entry.html) || readGhostCardSupersededBy(entry.html)));
   });
   // Old partial history may omit a tool result. It cannot claim a new card just
   // because the same plugin was used there. Exact IDs still work across turns.
@@ -2169,7 +2168,7 @@ export function buildRenderItems(
           suppressMediaForCard = true;
           hideRowForCard = true;
           if (entry?.status === 'ready') {
-            if (readMailCard(entry.html)?.supersededBy) return;
+            if (readGhostCardSupersededBy(entry.html)) return;
             const cardItem: Extract<RenderItem, { type: 'ghost_card' }> = {
               type: 'ghost_card',
               key: `ghostcard-${msg.clientId}`,
@@ -2214,7 +2213,7 @@ export function buildRenderItems(
         if (liveEntry?.status !== 'ready') return;
         claimedLiveCallIds.add(live.callId);
         hideRowForCard = true;
-        if (readMailCard(liveEntry.html)?.supersededBy) { suppressMediaForCard = true; return; }
+        if (readGhostCardSupersededBy(liveEntry.html)) { suppressMediaForCard = true; return; }
         const liveCardItem: Extract<RenderItem, { type: 'ghost_card' }> = {
           type: 'ghost_card',
           key: `ghostcard-${msg.clientId}`,
@@ -2877,7 +2876,6 @@ function renderWorkGroupChild(
     singleResultMap: Map<string, string>;
     assistantsWithFollowingUserBoundary: ReadonlySet<string>;
     turnFinalAssistantClientIds: ReadonlySet<string>;
-    pluginUiTurnAnchors?: ReadonlyMap<string, string>;
     subagentModelByToolUseId: ReadonlyMap<string, string>;
     userTurnUsageDetailsByAssistantId: ReadonlyMap<string, TurnUsageDetails>;
   },
@@ -2922,7 +2920,6 @@ function renderWorkGroupChild(
           props.assistantsWithFollowingUserBoundary,
         )}
         assistantIsTurnFinal={props.turnFinalAssistantClientIds.has(item.message.clientId)}
-        pluginUiTurnAnchor={props.pluginUiTurnAnchors?.get(item.message.clientId)}
         userTurnUsageDetails={props.userTurnUsageDetailsByAssistantId.get(item.message.clientId)}
         isFirstUserMessage={item.message.clientId === props.firstUserMessageClientId}
         isLastUserMessage={item.message.clientId === props.lastUserMessageClientId}
@@ -3408,7 +3405,6 @@ export function MessageStream({
     () => collectTurnFinalAssistantClientIds(visibleMetadataMessages),
     [visibleMetadataMessages],
   );
-  const pluginUiTurnAnchors = useMemo(() => collectPluginUiTurnAnchors(visibleMetadataMessages), [visibleMetadataMessages]);
   // subagent-model-chip: parentToolUseId(Agent/Task 行 id)→ 子代理模型,
   // 供 AgentActionsBlock 给 Agent/Task 行反查并渲染模型 chip。
   const subagentModelByToolUseId = useMemo(() => {
@@ -6394,7 +6390,6 @@ export function MessageStream({
       singleResultMap,
       assistantsWithFollowingUserBoundary,
       turnFinalAssistantClientIds,
-      pluginUiTurnAnchors,
       subagentModelByToolUseId,
       userTurnUsageDetailsByAssistantId,
     }),
@@ -6416,7 +6411,6 @@ export function MessageStream({
       singleResultMap,
       assistantsWithFollowingUserBoundary,
       turnFinalAssistantClientIds,
-      pluginUiTurnAnchors,
       subagentModelByToolUseId,
       userTurnUsageDetailsByAssistantId,
     ],
@@ -6725,7 +6719,7 @@ export function MessageStream({
                       // 下一次 store 变更自愈。
                       const entry = ghostCardSnapshot.byCallId.get(item.callId);
                       if (!entry || entry.status !== 'ready') return null;
-                      if (readMailCard(entry.html)?.supersededBy) return null;
+                      if (readGhostCardSupersededBy(entry.html)) return null;
                       // 常态包一层 div(结构稳定,回锚媒体到达时卡片 iframe 不重挂);
                       // 回锚媒体(如 mivo 视频)挂卡正下方,与 tool_media 同款间距。
                       return (
@@ -6814,7 +6808,6 @@ export function MessageStream({
                           assistantsWithFollowingUserBoundary,
                         )}
                         assistantIsTurnFinal={turnFinalAssistantClientIds.has(msg.clientId)}
-                        pluginUiTurnAnchor={pluginUiTurnAnchors.get(msg.clientId)}
                         userTurnUsageDetails={userTurnUsageDetailsByAssistantId.get(msg.clientId)}
                         isFirstUserMessage={msg.clientId === firstUserMessageClientId}
                         isLastUserMessage={msg.clientId === lastUserMessageClientId}
@@ -7017,7 +7010,6 @@ const MessageItem = memo(function MessageItem({
   sessionRunning,
   assistantForkBlocked,
   assistantIsTurnFinal,
-  pluginUiTurnAnchor,
   userTurnUsageDetails,
   isFirstUserMessage,
   isLastUserMessage,
@@ -7055,7 +7047,6 @@ const MessageItem = memo(function MessageItem({
    *  (collectTurnFinalAssistantClientIds). Gates the hover action bar —
    *  mid-turn texts don't mount it, keeping the stream compact. */
   assistantIsTurnFinal?: boolean;
-  pluginUiTurnAnchor?: string;
   /** Aggregated token/cache/model details for this assistant's visible user turn. */
   userTurnUsageDetails?: TurnUsageDetails;
   /** True iff this message is the first user message in the visible list.
@@ -7150,7 +7141,6 @@ const MessageItem = memo(function MessageItem({
             simplifiedBotConversation={simplifiedBotConversation}
             replyQuote={message.replyQuote}
           />
-          {sessionId ? <PluginUiMessageContributions sessionId={sessionId} messageClientId={message.clientId} /> : null}
           {message.usageLimitAutoResumeInfo && (
             <SystemCard
               cardType="auto-resume"
@@ -7231,8 +7221,6 @@ const MessageItem = memo(function MessageItem({
             starterOptionsLocked={starterOptionsLocked}
             botTaskResults={message.turnCompleted === true ? message.botTaskResults : undefined}
           />
-          {sessionId && !message.isStreaming ? <PluginUiMessageContributions sessionId={sessionId} messageClientId={message.clientId}
-            turnAnchor={assistantIsTurnFinal && !assistantForkBlocked ? pluginUiTurnAnchor : undefined} /> : null}
         </>,
       );
     case 'tool_use':
@@ -7282,6 +7270,7 @@ const MessageItem = memo(function MessageItem({
           reason={message.errorReason}
           providerId={message.errorProviderId}
           toolLoop={message.toolLoop}
+          outputLimit={message.outputLimit}
           sessionSource={sessionSource}
           onDiagnose={onDiagnoseError}
         />

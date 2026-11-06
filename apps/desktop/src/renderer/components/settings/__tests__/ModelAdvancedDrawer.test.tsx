@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   imageMixed: false,
   imageError: false,
   limit: null as number | null,
+  mixed: false,
 }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -33,6 +34,7 @@ vi.mock('@/hooks/useModelContextLimit', () => ({
     return {
       limit: mocks.limit,
       isCustomized: mocks.limit !== null,
+      mixed: mocks.mixed,
       loading: false,
       error: false,
       setLimit: mocks.setLimit,
@@ -119,6 +121,7 @@ beforeEach(() => {
   mocks.limit = null;
   mocks.catalogError = null;
   mocks.refetch.mockReset().mockResolvedValue(true);
+  mocks.mixed = false;
   mocks.imageValue = null;
   mocks.imageMixed = false;
   mocks.imageError = false;
@@ -1101,6 +1104,80 @@ describe('model advanced editor', () => {
     expect(
       screen.getByRole('radio', { name: 'effortLevels.max' }).getAttribute('aria-checked'),
     ).toBe('true');
+  });
+
+  it('removes stale engine windows after saving a shared budget and restores them on reset', () => {
+    const unverified = { ...model, contextWindow: 200_000, contextWindowVerified: false };
+    const { rerender } = draw(unverified);
+    expect(screen.getAllByTitle('200K')).toHaveLength(2);
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: '700K' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenLastCalledWith(700_000);
+
+    // Reflect the committed hook result, including reopening with an existing override.
+    mocks.limit = 700_000;
+    rerender(drawer(unverified));
+    expect((input as HTMLInputElement).value).toBe('700000');
+    expect(screen.queryByTitle('200K')).toBeNull();
+    cleanup();
+    const reopened = draw(unverified);
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('700000');
+    expect(screen.queryByTitle('200K')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.restoreDefault' }));
+    expect(mocks.reset).toHaveBeenCalledOnce();
+    mocks.limit = null;
+    reopened.rerender(drawer(unverified));
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('200000');
+    expect(screen.getAllByTitle('200K')).toHaveLength(2);
+  });
+
+  it.each([null, 700_000])('does not label an unknown route capacity as an engine difference (budget %s)', (limit) => {
+    mocks.limit = limit;
+    draw({ ...model, contextWindow: 200_000, contextWindowMax: 0, contextWindowVerified: false });
+    expect(screen.queryByTitle('200K')).toBeNull();
+  });
+
+  it.each([undefined, 0])('preserves a verified secondary window when primary capacity is %s', (contextWindowMax) => {
+    const primary = { ...model, contextWindow: 200_000, contextWindowMax, contextWindowVerified: false };
+    const secondary = { ...model, contextWindow: 1_000_000, contextWindowMax: 1_000_000, contextWindowVerified: true };
+    const source = { ...provider, id: 'custom-unknown-primary', source: 'user' } as ProviderView;
+    const row = { id: model.id, name: model.name, avail: provider.agents,
+      byAgent: { codex: primary, 'claude-code': secondary } };
+    const view = () => <ModelAdvancedDrawer provider={source} row={row} open onOpenChange={vi.fn()}
+      pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />;
+    const { rerender } = render(view());
+    expect(screen.queryByTitle('200K')).toBeNull();
+    expect(screen.getByTitle('1M')).toBeTruthy();
+    expect(screen.getByText('settings.providers.models.advanced.catalogMissing')).toBeTruthy();
+
+    mocks.limit = 700_000;
+    rerender(view());
+    expect(screen.queryByTitle('1M')).toBeNull();
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('700000');
+    mocks.limit = null;
+    rerender(view());
+    expect(screen.getByTitle('1M')).toBeTruthy();
+  });
+
+  it('preserves native per-engine window differences without a shared override', () => {
+    const row = {
+      id: model.id, name: model.name, avail: provider.agents,
+      byAgent: { codex: { ...model, contextWindowMax: 1_000_000 },
+        'claude-code': { ...model, contextWindow: 1_000_000 } },
+    };
+    render(<ModelAdvancedDrawer provider={provider} row={row} open onOpenChange={vi.fn()}
+      pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+    expect(screen.getByTitle('272K')).toBeTruthy();
+    expect(screen.queryByTitle('1M')).toBeNull();
+  });
+
+  it('does not treat differing legacy overrides as a shared budget', () => {
+    mocks.limit = 700_000;
+    mocks.mixed = true;
+    draw();
+    expect(screen.getAllByTitle('272K')).toHaveLength(2);
+    expect(screen.getByText('settings.providers.models.advanced.contextMixed')).toBeTruthy();
   });
 
   it('allows an intentional override above the maximum and rejects invalid input', () => {

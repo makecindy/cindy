@@ -3180,6 +3180,41 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     }
   });
 
+  // A Telegram reply showed `[PR 技能](</Users/…/SKILL.md>)` verbatim: the
+  // recipient cannot open this computer's files, so only the label is sent.
+  it('keeps only the label of local file links in the committed output', async () => {
+    const previousOutput = fakeAdapter.output;
+    const commitFinal = vi.fn(async () => undefined);
+    fakeAdapter.output = {
+      kind: 'chunked-text',
+      im: mocks.feishuIm as unknown as ChannelIM,
+      beginReply: vi.fn(async () => undefined),
+      commitFinal,
+    };
+    try {
+      const h = setupSession(async () => ({ accepted: true }));
+      const { turnPromise } = await startDefaultTurn();
+      await turnPromise;
+
+      h.emit({
+        type: 'text',
+        data: {
+          text: '[PR 技能](</Users/a b/SKILL.md>)、[a.ts](src/a.ts:12)、[文档](https://example.com)、'
+            + '[报告](xdt-file:///tmp/r.pdf)、`[x](/tmp/x)`',
+          isFinal: true,
+        },
+      });
+      h.emit({ type: 'done', data: {} });
+      await flushMicrotasks();
+
+      expect(commitFinal).toHaveBeenCalledWith(expect.objectContaining({
+        text: 'PR 技能、a.ts、[文档](https://example.com)、[报告](xdt-file:///tmp/r.pdf)、`[x](/tmp/x)`',
+      }));
+    } finally {
+      fakeAdapter.output = previousOutput;
+    }
+  });
+
   // #7125 review: image components must reach the existing attachment pipeline,
   // including error finalization; otherwise WeChat removes the projected image.
   it.each(['markdown', 'component', 'component-error'] as const)('materializes %s images before committing chunked-text output', async (kind) => {

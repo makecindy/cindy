@@ -2,7 +2,7 @@ import { createRoot } from 'react-dom/client';
 import { MediaScrubber } from '@/components/ui/media-scrubber';
 import { GhostMailHistory } from './GhostMailHistory';
 import { GhostCardForm } from './GhostCardForm';
-import { readGhostCardForm, readMailCard, mailCardStatus, mailSendRemainingFraction, isLegacyMailCard, readGhostCardFormChange, mergeGhostCardFormValues, trackGhostCardFormDelivery, releaseGhostCardFormDelivery, pendingGhostCardFormDelivery, ghostCardLinkOpensDirectly } from '@cindy/maker-shared/ghost-card-form';
+import { readGhostCardForm, readGhostCardSupersededBy, readMailCard, mailCardStatus, mailSendRemainingFraction, isLegacyMailCard, readGhostCardFormChange, mergeGhostCardFormValues, trackGhostCardFormDelivery, releaseGhostCardFormDelivery, pendingGhostCardFormDelivery, ghostCardLinkOpensDirectly } from '@cindy/maker-shared/ghost-card-form';
 import { openMailCard } from '@/features/right-sidebar/lib/mailPreview';
 import sliderCss from '@/components/ui/slider.css?inline';
 /**
@@ -350,7 +350,7 @@ function GhostCardCanvas({
     // scrollHeight is at least the iframe viewport height, so it cannot shrink a footer.
     const h = Math.ceil(formFields ? body.getBoundingClientRect().height : body.scrollHeight);
     if (h <= 0) return;
-    const clamped = Math.min(GHOST_CARD_HEIGHT_MAX, Math.max(formFields ? 1 : GHOST_CARD_HEIGHT_MIN, h));
+    const clamped = Math.min(GHOST_CARD_HEIGHT_MAX, Math.max(GHOST_CARD_HEIGHT_MIN, h));
     const imagesPending = Array.from(doc.images).some((img) => !img.complete);
     if (imagesPending) {
       // 图未到齐只涨不缩(相对当前生效高度,含声明值):文档刚换时只有文字,
@@ -485,7 +485,9 @@ function GhostCardCanvas({
   // 监听器随文档重建,无需清理。
   const attachClickBridge = useCallback(() => {
     const doc = iframeRef.current?.contentDocument;
-    if (!doc) return;
+    // Effects can run while srcDoc is replacing the document, before its root
+    // or body exists. The existing iframe onLoad retries the bridge once ready.
+    if (!doc?.documentElement || !doc.body) return;
     // 与宿主的装饰动画闸门对齐一次:窗口可能在本卡挂载之前就已隐藏,那时闸门的遍历
     // 还看不到这个 iframe。走闸门自己的入口,由它登记进共享的恢复集合 —— 自行 pause
     // 而不登记的话,窗口切回来时统一恢复路径不会 play 它们,这张卡的动画会永久停住。
@@ -1039,7 +1041,7 @@ export function GhostToolCard({
   const historyFields = mail?.fields ?? readGhostCardForm(html);
   const ariaTitle = t('chat.ghostCall.cardAria', { name, tool: toolName });
 
-  if (mail?.supersededBy) return null;
+  if (readGhostCardSupersededBy(html)) return null;
 
   return (
     <div

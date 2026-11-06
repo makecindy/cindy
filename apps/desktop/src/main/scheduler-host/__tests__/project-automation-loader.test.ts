@@ -133,6 +133,21 @@ function projectSchedule(notify: Schedule['notify']): Schedule {
   };
 }
 
+// #8886 / unit: a project editor writes config, not the regular scheduler input.
+// Existing reconciliation coverage omitted deadlines and could silently lose them.
+it('reconciles deadline additions, changes and removal from project configuration', () => {
+  const expireAt = 1_800_000_000_000;
+  const config = projectConfig({ expireAt });
+  const input = __testing.scheduleConfigToUpdateInput(config, workingDir);
+  expect(input.expireAt).toBe(expireAt);
+  const saved = { ...input, id: 'deadline' } as Schedule;
+  expect(schedulesDiffer(saved, config, workingDir)).toBe(false);
+  expect(schedulesDiffer(saved, { ...config, expireAt: expireAt + 60_000 }, workingDir)).toBe(true);
+  expect(schedulesDiffer(saved, { ...config, expireAt: undefined }, workingDir)).toBe(true);
+  expect(__testing.scheduleConfigToUpdateInput({ ...config, expireAt: undefined }, workingDir))
+    .toHaveProperty('expireAt', undefined);
+});
+
 describe('project automation WeCom group notification reconciliation', () => {
   it('emits an explicit false update when the project disables the channel', () => {
     const input = __testing.scheduleConfigToUpdateInput(
