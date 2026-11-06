@@ -14,13 +14,14 @@
  *   7. recordRecentUsage 开启时选择成功才写 recentModels(「最近」区当场出现)。
  */
 
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastMode } from '@cindy/maker-shared';
 import { MemoryRouter } from 'react-router-dom';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { CreateWorkerPopover } from '@/features/cc-agent/CreateWorkerPopover';
+import { useTransientModelPickerPreferences } from '@/components/new-chat/modelPickerPreferences';
 import { PluginModelPickerDialog } from '@/cindy-brain/PluginModelPickerHost';
 import type { AgentCapabilities } from '@/hooks/useAgentCapabilities';
 
@@ -83,7 +84,10 @@ vi.mock('@/hooks/useAgentCapabilities', () => ({
     error: null,
   }),
 }));
-vi.mock('@/hooks/useApiKey', () => ({ useApiKey: () => ({ hasSavedKey: true }) }));
+const keyPresence = vi.hoisted(() => ({ available: true, canReadKey: true }));
+vi.mock('@/hooks/useApiKey', () => ({ useApiKey: () => ({
+  hasSavedKey: keyPresence.available, canReadKey: keyPresence.canReadKey,
+}) }));
 vi.mock('@/hooks/useAvailableAgents', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/hooks/useAvailableAgents')>()),
   useModelPickerAgents: () => ['claude-code', 'codex'],
@@ -287,6 +291,23 @@ it('keeps plugin engine and favorite edits local after cancelling the real dialo
   expect(listModelFavorites()).toEqual(baseline);
 });
 
+// Bug: browsing a share used the persistent remote-model memory. One request must isolate
+// identical model IDs by source and discard edits on unmount. Existing cancel case covers only
+// local engine/favorite edits. Minimal input: two sources, same tuple, different effort. Tier: unit.
+it('isolates request model tuning by location and discards it when the picker closes', () => {
+  const request = renderHook(() => useTransientModelPickerPreferences());
+  act(() => {
+    request.result.current.memoryForLocation!('share:fixture').setEffort('codex', 'xd', 'gpt-5.5', 'high');
+    request.result.current.memoryForLocation!(null).setEffort('codex', 'xd', 'gpt-5.5', 'low');
+  });
+  expect(request.result.current.memoryForLocation!('share:fixture').getEffort('codex', 'xd', 'gpt-5.5')).toBe('high');
+  expect(request.result.current.memory.getEffort('codex', 'xd', 'gpt-5.5')).toBe('low');
+  request.unmount();
+  const next = renderHook(() => useTransientModelPickerPreferences());
+  expect(next.result.current.memoryForLocation!('share:fixture').getEffort('codex', 'xd', 'gpt-5.5')).toBeUndefined();
+  next.unmount();
+});
+
 function renderPanel(
   props: Partial<React.ComponentProps<typeof ModelSelectorContent>> = {},
 ): ReturnType<typeof render> {
@@ -325,6 +346,8 @@ async function openFlyoutForRow(row: HTMLElement): Promise<HTMLElement> {
 }
 
 beforeEach(() => {
+  keyPresence.available = true;
+  keyPresence.canReadKey = true;
   onProviderChange.mockClear();
   resetEnginePrefs();
   resetFavorites();
@@ -428,6 +451,19 @@ describe('统一面板 · 打折 GPT-5.6 与 GPT-6 包月互切', () => {
       { from: routes[2]!, to: discounted, fast },
     ]),
   );
+  // Test value: a detached plugin panel deliberately cannot read raw gateway keys. Its connected
+  // Main catalog must still permit the same XD row. Existing tests always supplied a key.
+  // Minimal input: one connected XD provider, missing credential bridge; tier: unit.
+  it('selects a connected gateway model without a renderer credential read', async () => {
+    keyPresence.available = false;
+    keyPresence.canReadKey = false;
+    const onUnifiedSelect = vi.fn(() => true);
+    renderPanel({ vendorKey: 'codex', currentProviderId: 'openai', modelId: 'gpt-6-astra', onUnifiedSelect });
+    fireEvent.click(screen.getByText('Discount Sol'));
+    await waitFor(() => expect(onUnifiedSelect).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'xd', modelId: 'codex/gpt-5.6-sol', engine: 'codex',
+    })));
+  });
   it.each(cases)(
     '$from.modelId → $to.modelId，Fast=$fast，失败可重试且不误报成功',
     async ({ from, to, fast }) => {
@@ -3597,14 +3633,15 @@ describe('统一面板 · 合并行与 wire id', () => {
     expect(getEffort.mock.calls).not.toContainEqual(['claude-code', 'openai', 'gpt-5.6']);
   });
 
-  it('全部模型优先显示来源，Cindy AI 保留单行本地简介', () => {
+  it('全部模型保留来源，Cindy AI 在原描述行显示供应商', () => {
     renderPanel();
     const row = rowFor('GPT-5.6');
     expect(row.textContent).not.toContain('A very long English');
     expect(row.querySelector('[data-model-source-details]')?.textContent).toBe('OpenAI');
     expect(within(row).queryByText('用于编写代码、排查错误与改进程序。')).toBeNull();
-    const desc = within(rowFor('GPT-5.5')).getByText('用于编写代码、排查错误与改进程序。');
-    expect(desc.getAttribute('title')).toBe('用于编写代码、排查错误与改进程序。');
+    const desc = within(rowFor('GPT-5.5')).getByText('Cindy AI');
+    expect(within(rowFor('GPT-5.5')).queryByText('用于编写代码、排查错误与改进程序。')).toBeNull();
+    expect(desc.getAttribute('title')).toBe('Cindy AI');
     expect(desc).toBeTruthy();
     expect(desc.className).toContain('truncate');
     const name = within(row).getByText('GPT-5.6');
@@ -3639,7 +3676,7 @@ describe('统一面板 · 合并行与 wire id', () => {
     }
   });
 
-  it('收藏保持来源第二行，切到单供应商分栏恢复简介', () => {
+  it('收藏保持来源第二行，单供应商分栏在原描述行显示供应商', () => {
     renderPanel();
     fireEvent.click(within(rowFor('GPT-5.6')).getByRole('button', { name: '存为收藏' }));
     fireEvent.click(document.querySelector('[data-rail-item="favorites"]')!);
@@ -3649,7 +3686,8 @@ describe('统一面板 · 合并行与 wire id', () => {
     for (const name of providerRows) {
       const row = name.closest('[data-unified-anchor]') as HTMLElement;
       expect(row.querySelector('[data-model-source-details]')).toBeNull();
-      expect(within(row).getByText('用于编写代码、排查错误与改进程序。')).toBeTruthy();
+      expect(within(row).getByText('OpenAI')).toBeTruthy();
+      expect(within(row).queryByText('用于编写代码、排查错误与改进程序。')).toBeNull();
     }
   });
 
@@ -4949,5 +4987,36 @@ describe('模态对话框滚动锁下的面板滚轮放行', () => {
     } finally {
       document.removeEventListener('wheel', reachedDocument);
     }
+  });
+});
+
+describe('verified DeepSeek aliases in the actual model panel', () => {
+  const originalProviders = providersRef.providers;
+  afterEach(() => { providersRef.providers = originalProviders; });
+  const models = () => ['deepseek-flash', 'deepseek-v4-flash'].map((id) => ({
+    id, name: 'DeepSeek V4.1 Flash', selectionAliasKey: 'deepseek-flash',
+    contextWindow: id === 'deepseek-flash' ? 1_048_576 : 1_000_000,
+    efforts: ['low', 'high'], defaultEffort: 'high', supportsImageInput: true,
+  }));
+  it('renders one row, inherits the legacy effort, and selects a real canonical wire ID', async () => {
+    providersRef.providers = [{ id: 'direct-ds', name: 'DeepSeek', source: 'user', agents: ['codex'], auth: { method: 'api-key' },
+      routing: { codex: { upstream: 'https://api.deepseek.com', wireProtocol: 'openai-chat' } }, connected: true, models: { codex: models() } }];
+    const change = vi.fn();
+    renderPanel({ vendorKey: 'codex', currentProviderId: 'other', modelId: 'other', onProviderChange: change,
+      modelMemory: { getEffort: (_, __, id) => id === 'deepseek-v4-flash' ? 'low' : undefined,
+        getFast: () => undefined, setEffort: vi.fn(), setFast: vi.fn(), editMany: () => true } });
+    expect(within(screen.getByRole('listbox')).getAllByText('DeepSeek V4.1 Flash')).toHaveLength(1);
+    await act(async () => { fireEvent.click(rowFor('DeepSeek V4.1 Flash')); });
+    expect(change).toHaveBeenCalledWith('direct-ds', 'deepseek-flash', 'low', false);
+  });
+  it('retains the exact old ID when the existing task is already using it', async () => {
+    providersRef.providers = [{ id: 'direct-ds', name: 'DeepSeek', source: 'user', agents: ['codex'], auth: { method: 'api-key' },
+      routing: { codex: {} }, connected: true, models: { codex: models() } }];
+    const change = vi.fn();
+    renderPanel({ actualRoute: true, vendorKey: 'codex', currentProviderId: 'direct-ds', modelId: 'deepseek-v4-flash', onProviderChange: change,
+      modelMemory: { getEffort: () => undefined, getFast: () => undefined, setEffort: vi.fn(), setFast: vi.fn(), editMany: () => true } });
+    expect(within(screen.getByRole('listbox')).getAllByText('DeepSeek V4.1 Flash')).toHaveLength(1);
+    await act(async () => { fireEvent.click(rowFor('DeepSeek V4.1 Flash')); });
+    expect(change).toHaveBeenCalledWith('direct-ds', 'deepseek-v4-flash', expect.any(String), false);
   });
 });

@@ -155,7 +155,12 @@
         "details": "メッセージを再送してください。再度失敗する場合は、ログを確認して問題を報告してください。"
       }
     },
-    "runtimeFailureSetupHint": "モデルや設定を変更する場合は、この仲間が動作するパソコンで行ってください。"
+    "runtimeFailureSetupHint": "モデルや設定を変更する場合は、この仲間が動作するパソコンで行ってください。",
+    "capability": {
+      "GROUP_AUTHORIZATION_REQUIRED": "{{name}} のツールは実行されませんでした。グループの許可が失効しているか、この操作が許可されていません。仲間の所有者がこのグループで改めて依頼してください。",
+      "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}} のグループでの許可を確認できず、ツールは実行されませんでした。接続が回復してから再試行してください。",
+      "ATTACHMENTS_UNAVAILABLE": "ダウンロードの失敗または添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。"
+    }
   },
   "plan": {
     "intro_one": "この件は {{count}} ステップに分けて、次のように分担します:",
@@ -186,7 +191,21 @@
     "awaitingStart": "開始待ち",
     "progressRunning": "作業中 {{current}} / {{total}}",
     "progressDone": "完了 {{done}} / {{total}}",
-    "allDone": "すべて完了"
+    "allDone": "すべて完了",
+    "stepQueued": "開始待ち",
+    "stepExecuting": "実行中",
+    "stepSkipped": "スキップ済み",
+    "skippingTurn": "スキップ中…",
+    "queueWaiting": "続行待ち",
+    "skipTurnLabel": "スキップ {{name}}",
+    "stepSpoken": "発言済み",
+    "allTurns_one": "全 {{count}} 人",
+    "allTurns_other": "全 {{count}} 人",
+    "foldTurns": "折りたたむ",
+    "talkTitle": "順番に意見を聞く",
+    "talkPending": "未開始",
+    "skipTurn": "スキップ",
+    "queueEnded": "このラウンドは終了"
   },
   "speaking": {
     "queued": "待機中",
@@ -304,7 +323,8 @@
     "lifecycleUnavailable": "現在のサーバーまたはコンピューターは、この操作にまだ対応していません。",
     "groupDissolved": "このグループは解散しました。閲覧権限のある履歴は引き続き確認できます。",
     "lastOwner": "退出する前にオーナーを譲渡するか、グループを解散してください。",
-    "allBotsMentionDisabled": "グループ所有者がすべての仲間への @ を有効にしていません。"
+    "allBotsMentionDisabled": "グループ所有者がすべての仲間への @ を有効にしていません。",
+    "turnAlreadyStarted": "この仲間はすでに実行を開始しているため、スキップできません"
   },
   "followUp": {
     "next": "分担 · 次のステップ",
@@ -500,6 +520,7 @@
     "searchMembers": "メンバーを検索",
     "membersNoMatch": "「{{query}}」に一致するメンバーはいません",
     "you": "あなた",
+    "companionOf": "{{name}} のパートナー",
     "teammateTag": "仲間",
     "paused": "一時停止中",
     "accessNone": "オーナーのみ",

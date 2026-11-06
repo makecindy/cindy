@@ -46,14 +46,14 @@ function Scenario({ kind }: { kind: string }) {
   const [wallpaperEnabled, setWallpaperEnabled] = useState(false);
   useWallpaperBackground({
     background: wallpaperEnabled ? `url("${wallpaper}")` : undefined,
-    pending: false, visibility: 0.65, blur: 0, reducedMotion: true,
+    visibility: 0.65, blur: 0, reducedMotion: true,
   });
   return <div className="flex h-screen" data-ui-page-subject>
     <div className="min-w-0 flex-1 p-4">
-      <button type="button" aria-pressed={wallpaperEnabled}
+      <button type="button" aria-pressed={wallpaperEnabled} data-ui-page-control
         onClick={() => setWallpaperEnabled(enabled => !enabled)}>Wallpaper</button>
       {kind === 'group-cache-pending' && closed ?
-        <button type="button" onClick={() => setClosed(false)}>Reopen thread</button> : null}
+        <button type="button" onClick={() => setClosed(false)} data-ui-page-control>Reopen thread</button> : null}
     </div>
     {closed ? <span data-closed="" /> : kind.startsWith('group') ? <ChatThreadPanel
       group={{ id: 'fixture-group', members: [], messages: [kind === 'group-narrow' ? reportRoot : root] } as unknown as BotGroupDetail}

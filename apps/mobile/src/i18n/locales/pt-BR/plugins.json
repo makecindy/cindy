@@ -132,6 +132,9 @@
   "detail": {
     "useItIn": "Usar em",
     "openPlugin": "Abrir plugin",
+    "readme": "Sobre",
+    "readmeLoadFailed": "Não foi possível carregar a apresentação. Tente novamente.",
+    "readmeUnavailable": "Nenhuma apresentação disponível.",
     "computerSettings": "Para configurar este plugin, abra seus detalhes em Cindy → Plugins no seu computador.",
     "runtimeIssue": "O plugin parou inesperadamente. Tente abri-lo novamente ou usá-lo em uma tarefa.",
     "runtimeFused": "O plugin parou após falhas repetidas. Desative-o e ative-o para tentar novamente.",
@@ -286,6 +289,8 @@
       "workspaceDetail": "Quando solicitado, você escolhe a pasta ou vê o caminho completo em um cartão de confirmação antes de decidir; ao processar uma chamada iniciada por você, subpastas dentro do diretório de trabalho da sessão atual são usadas diretamente, sem solicitação adicional. Pastas que já têm uma sessão são reutilizadas, e a sessão criada fica vazia — nada começa a ser executado por conta própria.",
       "sessionContext": "Pode descobrir em qual pasta de projeto a sessão atual está trabalhando",
       "sessionContextDetail": "Compartilha apenas informações de localização (ID da sessão e caminho da pasta do projeto) enquanto trabalha para a sessão atual — nenhum conteúdo de arquivo, e nenhum acesso a arquivos é concedido.",
+      "liveScreen": "Ver e controlar telas de dispositivos no celular",
+      "liveScreenDetail": "Pela área de trabalho remota, seu celular pode mostrar as telas de dispositivos que ele oferece (como simuladores) e enviar toques, botões e texto para elas. Só conecta quando você abre pelo celular e não mostra mais nada deste computador.",
       "preview": "Pode abrir páginas de prévia dos sites abaixo no navegador da barra lateral",
       "previewDetail": "Somente os sites listados abaixo podem ser abertos; cada página aberta é atribuída a este plugin.",
       "nodeChildSpawn": "Seu programa Node pode pedir ao host para iniciar subprocessos declarados no pacote",
@@ -343,5 +348,23 @@
     "purpose": "Revisar permissões de páginas interativas",
     "updateHost": "Atualize a Cindy no computador de execução para confirmar aqui. As ferramentas de texto continuam disponíveis.",
     "failed": "Não foi possível ativar as páginas interativas. Verifique a conexão e a versão do plugin e tente novamente."
+  },
+  "openLinkHost": "Abrir {{host}}",
+  "prStatus": {
+    "checksFailed": "Falhas",
+    "checksPending": "Pendentes",
+    "checksPassed": "Aprovadas",
+    "checksSkipped": "Ignoradas ou neutras",
+    "threadsOpen": "Discussões de revisão não resolvidas: {{count}}",
+    "threadsNone": "Nenhum tópico de revisão aberto",
+    "mergeReady": "Pronta para mesclar",
+    "mergeConflict": "Tem conflitos",
+    "mergeBehind": "Atrás do branch base",
+    "mergeApproval": "Aguardando aprovação",
+    "mergeChanges": "Alterações solicitadas",
+    "mergeWaiting": "Aguardando mesclagem",
+    "merged": "Mesclada",
+    "closed": "Fechada",
+    "draft": "Rascunho"
   }
 }

@@ -126,6 +126,15 @@ const kimiProvider = {
 const kimiReady: ProviderAccountUsageResult = {
   status: 'ready', stale: false, snapshot: { kind: 'kimi-coding-quota', fetchedAt: 10, windows: [{ id: 'limit_5h', usedPercent: 20, resetsAt: null }] },
 };
+const opencodeGoProvider = {
+  ...provider, id: 'opencode-go', source: 'user', connected: true,
+  auth: { method: 'apiKey' },
+  routing: { codex: { upstream: 'https://opencode.ai/zen/go/v1' } },
+} as ProviderView;
+const opencodeGoReady: ProviderAccountUsageResult = {
+  status: 'ready', stale: false, snapshot: { kind: 'opencode-go-quota', fetchedAt: 10,
+    windows: [{ id: 'weekly', usedPercent: 35, limited: false, resetsAt: null }] },
+};
 // Unit/jsdom: same provider id on two computers must not borrow local quota or trust
 // malformed remote values. No live network or credentials are used.
 it('reads only the selected remote Kimi account and rejects malformed remote quota', async () => {
@@ -144,6 +153,17 @@ it('reads only the selected remote Kimi account and rejects malformed remote quo
   hook.rerender({ device: 'share:guest' });
   expect(hook.result.current.supported).toBe(false);
   expect(invoke).toHaveBeenCalledTimes(2);
+});
+
+it('reads OpenCode Go quota from the selected computer on its own allowlisted channel', async () => {
+  const invoke = vi.fn().mockResolvedValueOnce(opencodeGoReady);
+  Object.assign(window.electronAPI, { deviceLink: { invoke } });
+  const remoteProvider = { ...opencodeGoProvider, routing: {}, opencodeGoUsageAgents: ['codex'] } as unknown as ProviderView;
+  const hook = renderHook(() => useProviderAccountUsage(remoteProvider, 'codex', 'mac-a'));
+  await act(async () => {});
+  expect(hook.result.current.result).toEqual(opencodeGoReady);
+  expect(invoke).toHaveBeenCalledWith('mac-a', 'maker:usage:opencode-go', [{ providerId: 'opencode-go', agent: 'codex', forceRefresh: false }]);
+  expect(fetchUsage).not.toHaveBeenCalled();
 });
 
 it('clears Kimi quota when the host broadcasts a credential change on the same connection', async () => {

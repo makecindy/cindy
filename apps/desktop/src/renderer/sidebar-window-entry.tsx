@@ -32,6 +32,7 @@ import { WallpaperSettingsProvider } from './hooks/useWallpaperSettings';
 import { bootstrapLocalThemesSync } from './themes/local-themes';
 import { themeService } from './themes/theme-service';
 import { installHiddenAnimationGate } from './lib/hiddenAnimationGate';
+import { PluginModelPickerHost } from './cindy-brain/PluginModelPickerHost';
 
 document.documentElement.dataset.platform = window.electronAPI.platform;
 installHiddenAnimationGate();
@@ -50,6 +51,7 @@ createRoot(rootElement).render(
         <AuthProvider enableSessionExpiredPrompt={false}>
           <WallpaperSettingsProvider>
             {isSidebarTabWindow() ? <SidebarTabWindowLayout /> : <SidebarWindowLayout />}
+            <PluginModelPickerHost bootstrapCatalog />
           </WallpaperSettingsProvider>
         </AuthProvider>
       </ConfirmDialogProvider>

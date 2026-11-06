@@ -2,7 +2,7 @@
   "githubPrs": {
     "title": "管理 PR 链接",
     "hint": "顶栏最多显示 3 个，固定的 PR 优先显示",
-    "empty": "粘贴 GitHub PR 链接即可添加",
+    "empty": "粘贴 GitHub PR 或 GitLab MR 链接即可添加",
     "removed": "已移除 {{count}} 个",
     "legacy": "未确认的历史引用：{{count}}",
     "addLabel": "添加 PR 链接",
@@ -18,12 +18,13 @@
     "errors": {
       "duplicate": "此 PR 已关联；已移除的链接可在列表中恢复",
       "notFound": "找不到此 PR，或没有访问权限",
-      "invalidUrl": "请输入有效的 GitHub PR 链接",
+      "invalidUrl": "请输入有效的 GitHub PR 或 GitLab MR 链接",
       "reorderFailed": "顺序没有保存，请重试",
-      "verifyFailed": "无法验证 PR，请检查 GitHub 登录与访问权限",
+      "verifyFailed": "无法验证 PR，请检查 GitHub 或 GitLab 登录与访问权限",
       "unsupported": "这台电脑的版本暂不支持管理 PR 链接",
       "failed": "无法更新 PR 链接"
     },
+    "urlPlaceholder": "GitHub PR 或 GitLab MR 链接",
     "moveUp": "上移"
   },
   "paneResize": {
@@ -72,6 +73,10 @@
     "text": "此前有自动运行失败。",
     "precheck": "自动检查暂时受阻。",
     "rateLimited": "自动检查暂时受阻：请求限流。",
+    "pluginMissing": "自动检查暂时受阻：「{{name}}」插件未安装，在电脑上装好后自动恢复。",
+    "pluginMissingUnnamed": "自动检查暂时受阻：需要的插件未安装，在电脑上装好后自动恢复。",
+    "pluginDisabled": "自动检查暂时受阻：「{{name}}」插件未启用，在电脑上启用后自动恢复。",
+    "pluginDisabledUnnamed": "自动检查暂时受阻：需要的插件未启用，在电脑上启用后自动恢复。",
     "dismissTitle": "关闭历史失败提示"
   },
   "common": {
@@ -223,7 +228,25 @@
       },
       "context": {
         "title": "上下文用量",
-        "unavailable": "暂无上下文数据"
+        "unavailable": "暂无上下文数据",
+        "estimate": {
+          "title": "文本估算",
+          "delivery": "答案交付",
+          "host": "Cindy 规则",
+          "plugins": "插件目录",
+          "memoryRules": "记忆规则",
+          "memoryIndex": "记忆索引",
+          "profile": "伙伴资料",
+          "user": "用户指令",
+          "directories": "附加目录",
+          "native": "Pi 原生规则",
+          "skills": "技能目录",
+          "project": "项目指令",
+          "tools": "工具定义",
+          "messages": "对话正文",
+          "other": "其他指令",
+          "note": "按当前文本粗估，并非模型分词结果。不含图片与供应商格式开销，分项之和不等于原生总量。"
+        }
       },
       "rateLimit": {
         "plan": "套餐",
@@ -447,6 +470,7 @@
     "chipArchived": "已归档",
     "titleFallback": "远程任务",
     "unnamedTitle": "未命名任务",
+    "openSection": "打开",
     "renameAction": "重命名任务",
     "copyLinkAction": "复制任务链接",
     "unpin": "取消置顶",
@@ -582,7 +606,10 @@
     "dismissNotice": "关闭提示",
     "ignore": "忽略",
     "executionResultUnavailable": "未能取回执行结果，已停止自动续接。可以让助手检查已有的执行结果。",
-    "outputLimit": "模型已达到输出长度上限，本轮回复可能不完整。可以直接发送下一条消息继续。",
+    "outputLimit": "模型已达到输出长度上限，本轮回复可能不完整。可以发送新消息继续；若反复触发，请降低推理强度或先压缩对话记录。",
+    "outputLimitReasoning": "思考已消耗本次输出的大部分预算，回复可能不完整。建议降低推理强度，或先压缩对话记录，再继续。",
+    "outputLimitUsage": "本次模型请求已输出 {{outputTokens}} tokens，其中 {{reasoningTokens}} tokens 用于思考。",
+    "outputLimitOutputUsage": "本次模型请求已输出 {{outputTokens}} tokens。",
     "toolUseLoopDetected": "模型重复调用工具次数过多，Cindy 已停止本轮以避免无限循环。可以发送新消息继续。",
     "toolUseLoopDetectedWithCount": "模型连续触发了无效的工具调用，Cindy 已在 {{count}} 次失败后停止本轮，以避免无限循环。可以发送新消息继续。",
     "toolUseLoopDetectedConsecutiveWithCount": "模型重复调用同一个工具 {{count}} 次，Cindy 已停止本轮以避免无限循环。可以发送新消息继续。",
@@ -643,7 +670,7 @@
     "REMOTE_PROVIDER_UPDATING": "这个模型供应商的凭据正在更新。请稍后再试。",
     "REMOTE_WORKDIR_UNAVAILABLE": "远程工作目录现在不可用。请确认那台电脑上的目录还在，然后重试。",
     "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "电脑端暂时无法确认这条消息是否已经发出。请稍后再试，不要重复发送同一条。",
-    "REMOTE_AGENT_UNAVAILABLE": "运行 Agent 的电脑暂时连不上。确认那台电脑在线并允许远程控制后重试。",
+    "REMOTE_AGENT_UNAVAILABLE": "和运行 Agent 的电脑断开了连接。请重试；如果反复出现，再确认那台电脑在线并允许远程控制。",
     "REMOTE_AGENT_PEER_TOO_OLD": "那台电脑上的 Cindy 版本过旧，还不能替这台电脑运行 Agent。请先在那台电脑上更新 Cindy。",
     "REMOTE_AGENT_EXPIRED": "这个任务在运行 Agent 的电脑上已经结束。请重新发送。",
     "REMOTE_AGENT_NOT_FOUND": "这个任务在运行 Agent 的电脑上已经结束。请重新发送。",

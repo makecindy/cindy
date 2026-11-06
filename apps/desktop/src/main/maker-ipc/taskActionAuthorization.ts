@@ -17,6 +17,11 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'steer_session',
   'stop_session_turn',
   'set_session_runtime',
+  'set_app_default_model',
+  'update_app_settings',
+  'set_model_configuration',
+  'configure_model_provider',
+  'reset_app_settings',
   'update_session_queued_message',
   'cancel_session_queued_message',
   'steer_session_queued_message',
@@ -30,6 +35,7 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'rename_sessions',
   'move_session',
   'manage_session_prs',
+  'create_shared_task_invitation',
 ]);
 
 export const ORCA_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
@@ -381,11 +387,15 @@ const REVOKED_MESSAGES: ReadonlySet<string> = new Set([
  * message stays queued for retry instead of being destroyed. Group errors are matched by
  * code (`GROUP_AUTHORIZATION_UNAVAILABLE` is the temporary one) to avoid importing the group module.
  */
-export function isTaskActionRevoked(error: unknown): boolean {
-  if (error instanceof TaskActionAuthorizationError) return true;
+export function taskActionRevocationCode(error: unknown): string | undefined {
+  if (error instanceof TaskActionAuthorizationError) return 'TASK_ACTION_AUTHORIZATION_EXPIRED';
   if (typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'GROUP_AUTHORIZATION_REQUIRED')
-    return true;
-  return error instanceof Error && REVOKED_MESSAGES.has(error.message);
+    return 'GROUP_AUTHORIZATION_REQUIRED';
+  return error instanceof Error && REVOKED_MESSAGES.has(error.message) ? error.message : undefined;
+}
+
+export function isTaskActionRevoked(error: unknown): boolean {
+  return taskActionRevocationCode(error) !== undefined;
 }
 
 /** Capture once; late callbacks must not pick up another invocation's authority. */
@@ -454,6 +464,28 @@ export function taskActionInputGuard(
       throw new Error('TASK_ACTION_AUTHORIZATION_REQUIRED');
     };
   return undefined;
+}
+
+/**
+ * A recovery copy (hidden "continue", manual retry, zero-output resend) of a turn the receiving
+ * task already accepted. The delivery guard is judged only before the first persist, and the copy
+ * has a new clientId and text: inheriting the original guard, its "requires authorization" mark or
+ * the teammate-origin rule would discard it every time. The copy runs under the receiving task's
+ * own permissions; attribution (origin, requested owner words) stays on it. Items the guard never
+ * covered are returned unchanged.
+ */
+export function acceptTaskActionRecoveryCopy(
+  original: AgentInputQueuedMessage,
+  copy: AgentInputQueuedMessage,
+): AgentInputQueuedMessage {
+  if (!taskActionInputGuard('', original)) return copy;
+  delete copy.taskActionRequiresAuthorization;
+  // Only the authorization check is waived: the original's settle callback (releasing the receiver
+  // claim and sender receipt) still has to run once the copy is dispatched or discarded.
+  const accepted: NonNullable<GuardedInput[typeof TASK_ACTION_INPUT_GUARD]> = async () => {};
+  accepted.onSettled = (original as GuardedInput)[TASK_ACTION_INPUT_GUARD]?.onSettled;
+  (copy as GuardedInput)[TASK_ACTION_INPUT_GUARD] = accepted;
+  return copy;
 }
 
 /** Share the existing pre-persistence / pre-vendor guard lifecycle with App cards. */

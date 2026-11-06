@@ -30,3 +30,11 @@ describe('publishing provenance does not grant authorship', () => {
     expect(projectPluginPublishingSource(installed, receipt, { kind: 'found', record: { ...market, scope: 'personal' } }).kind).toBe('unavailable');
   });
 });
+
+
+it('projects local authoring identity without treating it as an enterprise or a market source', () => {
+  const local = { ...record, namespace: 'local', instanceKey: '_ns__local__example', contentRelId: '_ns/local/example' };
+  expect(projectPluginPublishingSource(local, { ...receipt, namespace: 'local' }, { kind: 'absent' }))
+    .toEqual({ kind: 'local', source: 'manual' });
+  expect(projectPluginPublishingSource(local, receipt, { kind: 'absent' }).kind).toBe('unavailable');
+});

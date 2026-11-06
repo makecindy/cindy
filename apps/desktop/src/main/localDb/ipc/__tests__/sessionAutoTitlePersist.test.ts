@@ -58,6 +58,8 @@ const SESSION_ID = 's1';
 function createDb(initialTitle: string): void {
   const sqlite = new Database(':memory:');
   sqlite.exec(`
+    CREATE TABLE bot_session_links(session_id TEXT, bot_id TEXT, role TEXT, route_key TEXT);
+    CREATE TABLE bot_profiles(id TEXT, status TEXT, hidden_at INTEGER);
     CREATE TABLE task_tags (
       id TEXT PRIMARY KEY NOT NULL,
       name TEXT NOT NULL,
@@ -76,6 +78,7 @@ function createDb(initialTitle: string): void {
       id TEXT PRIMARY KEY NOT NULL,
       title TEXT NOT NULL DEFAULT 'New Maker',
       working_dir TEXT,
+      project_dir TEXT,
       model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
       scheduled_model_baseline TEXT,
       effort TEXT NOT NULL DEFAULT 'high',

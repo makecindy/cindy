@@ -48,7 +48,7 @@ vi.mock('lucide-react-native', () => ({
   Mail: () => null, CalendarDays: () => null, Folder: () => null, ChartColumn: () => null, Info: () => null, Clock: () => null, MapPin: () => null, Coffee: () => null, Image: () => null, Users: () => null, Star: () => null,
   Database: () => null, FileArchive: () => null, FileAudio: () => null, FileChartColumn: () => null,
   FileCode: () => null, FileImage: () => null, FileSpreadsheet: () => null, FileText: () => null, FileVideo: () => null,
-  ArrowLeftRight: () => null, ArrowUp: () => null, Bot: () => null, Check: () => null, ChevronDown: () => null, ChevronRight: () => null, ChevronUp: () => null, Circle: () => null, CircleAlert: () => null, CircleCheck: () => null, CircleDashed: () => null, CircleStop: () => null, Copy: () => null, Ellipsis: () => null, ExternalLink: () => null, File: () => null, Ghost: () => null, Layers: () => null, ListTodo: () => null, LoaderCircle: () => null, PencilLine: () => null, RefreshCw: () => null, Send: () => null, Share: () => null, Sparkles: () => null, Split: () => null, Timer: () => null, Trash2: () => null, TriangleAlert: () => null, Undo2: () => null, X: () => null,
+  ArrowLeftRight: () => null, ArrowUp: () => null, Bot: () => null, Check: () => null, ChevronDown: () => null, ChevronRight: () => null, ChevronUp: () => null, Circle: () => null, CircleAlert: () => null, CircleCheck: () => null, CircleDashed: () => null, CircleMinus: () => null, CircleStop: () => null, CircleX: () => null, Copy: () => null, Ellipsis: () => null, ExternalLink: () => null, File: () => null, Ghost: () => null, Layers: () => null, ListTodo: () => null, LoaderCircle: () => null, PencilLine: () => null, RefreshCw: () => null, Send: () => null, Share: () => null, Sparkles: () => null, Split: () => null, Timer: () => null, Trash2: () => null, TriangleAlert: () => null, Undo2: () => null, X: () => null,
 }));
 vi.mock('react-native-svg', () => ({ default: () => null, Circle: () => null }));
 vi.mock('react-native-uitextview', () => ({ UITextView: () => null }));
@@ -81,7 +81,7 @@ vi.mock('@/session/mediaPlayerWebView', () => ({ RemoteMediaPlayerWebView: () =>
 vi.mock('@/session/MarkdownBlockContent', () => ({ MarkdownBlockContent: () => null }));
 vi.mock('@/session/MessageActionSheet', () => ({ MessageActionSheet: () => null }));
 vi.mock('@/session/AuthorizationMessageCard', () => ({ AuthorizationMessageCard: () => null }));
-vi.mock('@/session/CompanionMessageActions', () => ({ CompanionMessageActions: () => null }));
+vi.mock('@/session/CompanionMessageActions', () => ({ CompanionMessageActions: () => <div data-testid="companion.messageActions" /> }));
 vi.mock('@/session/CompanionMessageCard', () => ({ CompanionMessageCard: () => null }));
 vi.mock('@/session/PendingSendBubble', () => ({ PendingSendBubble: () => null }));
 vi.mock('@/session/messageActions', async (original) => ({ ...await original<object>(), copyMessageText: vi.fn(), writeClipboardText: vi.fn() }));
@@ -119,6 +119,28 @@ describe('attachment-only user plugin bubble', () => {
 });
 
 describe('partner work feedback', () => {
+  // unit regression: run the real normalizer, message model, and renderer. The existing
+  // failed-reply test checked the notice text but not the stray copy/reply/more bar.
+  it.each([false, true])('keeps error notices action-free without hiding ordinary messages (companion=%s)', (companion) => {
+    const host = document.createElement('div');
+    const errorItems = buildMobileMessageRenderItems([
+      msg('error', 'error', 'Connection interrupted'),
+    ], { isSessionStreaming: false });
+    host.innerHTML = renderClient(<MessageRenderer items={errorItems} companion={companion} />);
+    expect(host.textContent).toContain('Could not complete the reply');
+    expect(host.textContent).toContain('Error Details');
+    expect(host.querySelectorAll('[data-testid="message.actionBar"], [data-testid="companion.messageActions"], [data-testid="message.actionSlot"]')).toHaveLength(0);
+
+    const messages = buildMobileMessageRenderItems([
+      msg('user', 'user', 'Please continue'),
+      msg('answer', 'assistant', 'Completed answer', { agentMeta: { turnCompleted: true } }),
+    ], { isSessionStreaming: false });
+    host.innerHTML = renderClient(<MessageRenderer items={messages} companion={companion} />);
+    expect(host.querySelectorAll(companion
+      ? '[data-testid="companion.messageActions"]'
+      : '[data-testid="message.actionBar"]')).toHaveLength(2);
+  });
+
   it('retains failed reply warnings inside expanded work and the upstream error notice', () => {
     const items = buildMobileMessageRenderItems([
       msg('failed', 'assistant', 'Incomplete opening', { agentMeta: { failedSamplingAttempt: {
@@ -262,9 +284,9 @@ describe('partner conversation presentation', () => {
     for (const element of cases) expect(renderClient(element)).not.toContain('companion.taskResult');
   });
 
-  // Regression: expanding process prose must not duplicate the final reply's portrait.
+  // Regression: the process and final reply each own one portrait; nested details do not.
   // Exercise the production projection and renderer, including nested work groups.
-  it('keeps expanded companion work readable without repeating the reply portrait', () => {
+  it('shows one process portrait and one reply portrait without repeating them in expanded details', () => {
     const items = companionConversationItems(buildMobileMessageRenderItems([
       msg('u', 'user', 'Check it'),
       msg('p', 'assistant', 'Checking the details', { agentMeta: { assistantPhase: 'commentary' } }),
@@ -277,7 +299,37 @@ describe('partner conversation presentation', () => {
       expect(html.match(/message\.agentBubble/g)).toHaveLength(2);
       expect(html).toContain('message.toolRow');
       expect(html.match(/companion\.replyRow/g)).toHaveLength(1);
-      expect(html.match(/partner-portrait/g)).toHaveLength(1);
+      expect(html.match(/companion\.processRow/g)).toHaveLength(1);
+      expect(html.match(/partner-portrait/g)).toHaveLength(2);
+    } finally {
+      viewportHarness.expanded = false;
+    }
+  });
+
+  // PR #8864: an Agent's nested tool work must not inherit the main partner's
+  // portrait. Existing process expansion coverage did not cross SubagentCard.
+  // Production projection + renderer, unit tier; Agent -> tool -> child answer
+  // is the smallest input that exposes the extra process portrait.
+  it('keeps the main partner portrait out of expanded subagent work', () => {
+    const items = companionConversationItems(buildMobileMessageRenderItems([
+      msg('u', 'user', 'Research it'),
+      msg('agent', 'tool_use', { toolName: 'Agent', toolUseId: 'agent', input: { description: 'Research' } }, { toolUseId: 'agent' }),
+      msg('tool', 'tool_use', { toolName: 'Bash', toolUseId: 'tool', input: { command: 'pwd' } }, { toolUseId: 'tool', agentMeta: { parentUuid: 'agent' } }),
+      msg('tool-result', 'tool_result', '/repo', { toolUseId: 'tool', agentMeta: { parentUuid: 'agent' } }),
+      msg('child-answer', 'assistant', 'Child research complete', { agentMeta: { parentUuid: 'agent', assistantPhase: 'final_answer' } }),
+      msg('agent-result', 'tool_result', 'Research summary', { toolUseId: 'agent' }),
+      msg('answer', 'assistant', 'Main partner answer', { agentMeta: { assistantPhase: 'final_answer' } }),
+    ], { isSessionStreaming: false }));
+    viewportHarness.expanded = true;
+    try {
+      const html = renderClient(<MessageRenderer items={items} companion companionAvatar={<i data-testid="partner-portrait" />} />);
+      const host = document.createElement('div');
+      host.innerHTML = html;
+      expect(host.querySelector('[data-testid="message.subagentToggle"]')).toBeTruthy();
+      expect(host.querySelector('[data-testid="message.toolRow"]')).toBeTruthy();
+      expect(host.textContent).toContain('Research summary');
+      expect(host.querySelectorAll('[data-testid="companion.processRow"]')).toHaveLength(0);
+      expect(host.querySelectorAll('[data-testid="partner-portrait"]')).toHaveLength(1);
     } finally {
       viewportHarness.expanded = false;
     }

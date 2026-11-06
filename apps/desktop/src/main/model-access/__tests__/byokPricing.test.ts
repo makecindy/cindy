@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ByokModel, ByokProvider } from '@cindy/model-providers';
 import { buildByokPricing } from '../byokPricing.js';
-import { computePriceQuoteTurnMoney, resolveTurnCost } from '../../usage/turnCostCalculator.js';
+import { computeGatewayTurnCost, computePriceQuoteTurnMoney, resolveTurnCost } from '../../usage/turnCostCalculator.js';
 import { gatewayModelPriceQuote, modelPricingKey } from '../../../shared/modelPriceQuote.js';
 const model: ByokModel = {
   id: 'byok/a/chat',
@@ -120,4 +120,76 @@ it('prices a Pi-only enterprise model using its Pi quote', () => {
   expect(money?.amount).toBeCloseTo(6.4);
   expect(money).toMatchObject({ kind: 'value-estimate', currency: 'USD', approximate: true });
   expect(resolveTurnCost(request).money).toBeNull();
+});
+
+// Regression: threshold-only BYOK quotes omitted the base range and resolved to null.
+// Build -> resolve covers the directory projection and actual Pi pricing path, which
+// explicit-tier tests did not exercise. Minimal failure: exactly 200k input. Tier: unit.
+describe('enterprise threshold reference money', () => {
+  const base: ByokModel = {
+    ...model, currency: 'USD', agents: ['pi'], costDiscount: undefined,
+    inputCostPerToken: 0.000001, outputCostPerToken: 0.000002,
+    cacheReadInputTokenCost: 0.0000001,
+  };
+  const thresholdModel = (threshold: 200 | 272): ByokModel => ({
+    ...base,
+    ...(threshold === 200 ? {
+      costDiscount: 0.25,
+      inputCostPerTokenAbove200kTokens: 0.000003,
+      outputCostPerTokenAbove200kTokens: 0.000004,
+      cacheReadInputTokenCostAbove200kTokens: 0.0000002,
+    } : {
+      inputCostPerTokenAbove272kTokens: 0.000003,
+      outputCostPerTokenAbove272kTokens: 0.000004,
+      cacheReadInputTokenCostAbove272kTokens: 0.0000002,
+    }),
+  });
+  const resolve = (entry: ByokModel, promptTokens: number, cacheReadTokens = 0) => {
+    const tokens = { inputTokens: promptTokens - cacheReadTokens, outputTokens: 10,
+      cacheReadTokens, cacheCreateTokens: 0 };
+    return resolveTurnCost({
+      rawModel: entry.id, agent: 'pi', tokens, sdkCostDelta: 99,
+      pricing: buildByokPricing([provider(entry)]),
+      context: { providerId: 'byok-a', billingRoute: 'provider-api', accessKind: 'managed', region: 'global' },
+    }).money;
+  };
+
+  it.each([
+    [200, 200_000, 0, 0.150015],
+    [200, 200_001, 0, 0.45003225],
+    [200, 200_001, 80, 0.44986425],
+    [272, 272_000, 0, 0.27202],
+    [272, 272_001, 0, 0.816043],
+    [272, 272_001, 80, 0.815819],
+  ] as const)('prices the %sk threshold at %s prompt tokens with %s cached', (threshold, prompt, cached, amount) => {
+    const entry = thresholdModel(threshold);
+    expect(resolve(entry, prompt, cached)?.amount).toBeCloseTo(amount, 12);
+    // The same directory rates must retain Cindy AI's existing overlay behavior.
+    const gatewayQuote = gatewayModelPriceQuote(entry, 'USD');
+    expect(computePriceQuoteTurnMoney({ inputTokens: prompt - cached, outputTokens: 10,
+      cacheReadTokens: cached, cacheCreateTokens: 0 }, gatewayQuote, 'USD')?.amount).toBeCloseTo(amount, 12);
+  });
+
+  it('keeps the base price when the directory has no threshold fields', () => {
+    expect(resolve(base, 200_001)?.amount).toBeCloseTo(0.200021, 12);
+  });
+
+  it('uses the declared priority baseline below a priority threshold', () => {
+    const entry = { ...base, inputCostPerTokenPriority: 0.000002,
+      outputCostPerTokenPriority: 0.000004, inputCostPerTokenAbove272kTokensPriority: 0.000006 };
+    const quote = buildByokPricing([provider(entry)])['byok-a'][modelPricingKey(entry.id, 'pi')];
+    const tokens = { inputTokens: 272_000, outputTokens: 10, cacheReadTokens: 0, cacheCreateTokens: 0 };
+    expect(computeGatewayTurnCost(tokens, quote, 'priority')).toBeCloseTo(0.54404, 12);
+    expect(computeGatewayTurnCost({ ...tokens, inputTokens: 272_001 }, quote, 'priority')).toBeCloseTo(1.632046, 12);
+  });
+
+  it('keeps explicit reference ranges bounded even when threshold fields are also present', () => {
+    const entry = { ...thresholdModel(200), tieredPricing: [
+      { range: [100, 200] as [number, number], inputCostPerToken: 0.000005 },
+    ] };
+    expect(resolve(entry, 100)?.amount).toBeCloseTo(0.00039, 12);
+    expect(resolve(entry, 99)).toBeNull();
+    expect(resolve(entry, 200)).toBeNull();
+    expect(resolve(entry, 200_001)).toBeNull();
+  });
 });

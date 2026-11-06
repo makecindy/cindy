@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 3,
+  "id": "native-ui-reference",
+  "name": "Native UI Reference",
+  "version": "1.1.0",
+  "minCindyVersion": "0.1.64",
+  "entry": "main.js",
+  "command": "native-ui-reference",
+  "description": "Preview task text and demonstrate two independently managed plugin views.",
+  "whenToUse": "Use when testing native UI contributions, named views and positioning parameters.",
+  "sessionContext": true,
+  "ui": {
+    "version": 1,
+    "tabViews": [
+      { "id": "build-log", "title": "构建日志", "scope": "session", "page": "views/build-log.html" },
+      { "id": "result-preview", "title": "结果预览", "scope": "session", "page": "views/result-preview.html" }
+    ],
+    "contributions": [
+      {
+        "id": "output-format",
+        "point": "composer.tools",
+        "scope": "session"
+      },
+      {
+        "id": "format-status",
+        "point": "session.statusbar",
+        "scope": "session"
+      },
+      {
+        "id": "open-log",
+        "point": "session.header.actions",
+        "scope": "session"
+      },
+      {
+        "id": "open-preview",
+        "point": "message.actions",
+        "scope": "message"
+      }
+    ]
+  },
+  "tools": [
+    {
+      "name": "preview",
+      "description": "Read this task’s current format and preview text without changing it.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 4000
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

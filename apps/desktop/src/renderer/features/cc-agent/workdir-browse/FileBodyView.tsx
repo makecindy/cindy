@@ -56,7 +56,7 @@ import { createFileTransferProgressValues } from '@/lib/fileTransferProgress';
 import { Spinner } from '@/components/ui/spinner';
 import {
   acquireFindInPage,
-  getTextPreviewSearchHost,
+  getTextPreviewHost,
 } from '@/components/find-in-page/findInPageOwnership';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import {
@@ -540,7 +540,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
   useAppShortcut(
     'find-in-page',
     () => {
-      if (mermaidModalOpen() || getTextPreviewSearchHost()) return false;
+      if (mermaidModalOpen() || getTextPreviewHost()) return false;
       setBarVisible(true);
       queueMicrotask(() => {
         searchInputRef.current?.focus();
@@ -665,7 +665,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
   useEffect(() => {
     if (!barVisible) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || getTextPreviewSearchHost()) return;
+      if (e.key !== 'Escape' || getTextPreviewHost()) return;
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
@@ -765,10 +765,13 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
           : null;
     return (
       <div
-        className="flex h-full w-full items-center justify-center px-8 text-center text-13 text-[var(--cmd-palette-item-meta)]"
+        className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-y-auto p-4 text-center text-13 text-[var(--cmd-palette-item-meta)]"
         title={content.message}
       >
-        {friendly ?? t('ccAgent.workdirBrowse.fileBody.readFailed', { message: content.message })}
+        {/* Auto margins center short errors without scrolling the start of tall errors out of reach. */}
+        <div className="my-auto w-full shrink-0 select-text [overflow-wrap:anywhere]">
+          {friendly ?? t('ccAgent.workdirBrowse.fileBody.readFailed', { message: content.message })}
+        </div>
       </div>
     );
   }
@@ -1333,7 +1336,7 @@ function CachedFileBody({
             </>
           )}
         </div>
-        <OpenInSystemActions absPath={cachePath} folderPath={cacheDir} className="shrink-0" />
+        <OpenInSystemActions absPath={cachePath} className="shrink-0" />
       </div>
     );
   }

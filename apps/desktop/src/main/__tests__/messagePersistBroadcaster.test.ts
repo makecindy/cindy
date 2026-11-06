@@ -3,6 +3,19 @@ vi.mock('../cindy-media/toolProcessMedia.js', () => ({ materializeToolProcessMed
   { kind: 'image', url: 'cindy-media://blobs/' + 'a'.repeat(64) + '.png' },
 ]) }));
 vi.mock('../localDb/client/current.js', () => ({ getDbClient: vi.fn(() => ({ drizzle: {} })) }));
+import type { PendingSamplingSettlement } from '../assistantSamplingSettlement.js';
+const settlements = vi.hoisted(() => ({ entries: new Map<string, PendingSamplingSettlement>(), sequence: 0 }));
+vi.mock('../assistantSamplingSettlement.js', () => ({ assistantSamplingSettlements: {
+  put(entry: Omit<PendingSamplingSettlement, 'file'>) {
+    const file = `${ownerScopeState.scope.ownerScopeKey}/${++settlements.sequence}`;
+    const stored = { ...entry, file };
+    settlements.entries.set(file, stored);
+    return stored;
+  },
+  list(sessionId: string) { return [...settlements.entries.values()].filter(entry =>
+    entry.sessionId === sessionId && entry.file.startsWith(`${ownerScopeState.scope.ownerScopeKey}/`)); },
+  acknowledge(entry: PendingSamplingSettlement) { settlements.entries.delete(entry.file); },
+} }));
 vi.mock('../botTaskReplyResults.js', () => ({ readTaskResultsForReply: vi.fn(async () => []) }));
 import { readTaskResultsForReply } from '../botTaskReplyResults.js';
 /**
@@ -20,6 +33,37 @@ import { readTaskResultsForReply } from '../botTaskReplyResults.js';
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createSessionBindingLifecycle } from '../maker-ipc/sessionBindingLifecycle.js';
+
+it.each([false, true])('retires old native items on same-kind instance replacement (buffered=%s)', async buffered => {
+  const sessionId = `sampling-replacement-${buffered}`;
+  clearSessionPersistState(sessionId);
+  const bindings = createSessionBindingLifecycle({
+    log: { warn: vi.fn() }, restoreInteractionListener: vi.fn(), beforeReplace: vi.fn(),
+    onBind: () => noteSessionAgentKind(sessionId, 'codex'), broadcastStatus: vi.fn(),
+    captureCloseContext: () => null, cleanupClosedSession: vi.fn(), beforeCloseTeardown: vi.fn(), finalizeClosedSession: vi.fn(),
+  });
+  const session = () => ({ id: sessionId, onStatusChange: vi.fn(() => () => {}), setInteractionListener: vi.fn() });
+  const first = session();
+  bindings.beginBinding(first);
+  const oldEpoch = getAssistantSamplingRuntimeId(sessionId);
+  const oldId = onAssistantTextEvent(sessionId, { agentMessageId: 'reused-item', text: 'retained prose', isFinal: !buffered }, null);
+  expect(bindings.beginBinding(first)).toBeNull();
+  expect(getAssistantSamplingRuntimeId(sessionId)).toBe(oldEpoch);
+  bindings.beginBinding(session());
+  const newEpoch = getAssistantSamplingRuntimeId(sessionId);
+  expect(newEpoch).not.toBe(oldEpoch);
+  // Even identical replayed prose/item IDs belong to the new native runtime.
+  const newId = onAssistantTextEvent(sessionId, { agentMessageId: 'reused-item', text: 'retained prose', isFinal: true }, null);
+  expect(newId).not.toBe(oldId);
+  onAssistantSamplingAccepted(sessionId);
+  await drainPersistQueue();
+  expect(createMessage).toHaveBeenCalledWith(sessionId, expect.objectContaining({ clientId: oldId,
+    agentMeta: expect.objectContaining({ samplingAttemptPending: { runtimeId: oldEpoch } }) }), expect.anything());
+  expect(patchMessageAgentMetaWithResult).not.toHaveBeenCalledWith(sessionId, oldId, expect.anything());
+  expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(sessionId, newId, { samplingAttemptPending: false });
+  clearSessionPersistState(sessionId);
+});
 
 // #6351: a completed text item can still belong to a failed sampling request.
 // The observable contract is durable metadata plus the existing row broadcast;
@@ -46,6 +90,7 @@ it('marks exact failed assistant items, including a live block, without rewritin
   await drainPersistQueue();
   expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(sessionId, first, {
     failedSamplingAttempt: { threadId: 'native-thread', turnId: 'native-turn', attempt: 1, itemId: 'failed-1' },
+    samplingAttemptPending: false,
     turnCompleted: false,
   });
   expect(createMessage).toHaveBeenCalledWith(sessionId, expect.objectContaining({
@@ -68,6 +113,72 @@ it('marks exact failed assistant items, including a live block, without rewritin
   expect(patchMessageAgentMetaWithResult).not.toHaveBeenCalled();
   clearSessionPersistState(sessionId);
   clearSessionPersistState(otherSession);
+});
+
+// A completed item is durable before its sampling request succeeds. Protect that
+// interval, but release accepted pre-tool text without waiting for the whole turn.
+it('persists native sampling uncertainty and releases exact accepted items without reviving failed ones', async () => {
+  const sessionId = 'pending-sampling';
+  clearSessionPersistState(sessionId);
+  noteSessionAgentKind(sessionId, 'codex');
+  noteAgentMeta(sessionId, { model: 'test-model' });
+  const text = (id: string) => onAssistantTextEvent(sessionId, { agentMessageId: id, text: id, isFinal: true, isFullText: true }, null);
+  const accepted = onAssistantTextEvent(sessionId, { agentMessageId: 'accepted', text: 'accepted' }, null);
+  flushAssistantBlock(sessionId);
+  const failed = text('failed');
+  await drainPersistQueue();
+  expect(createMessage).toHaveBeenCalledWith(sessionId, expect.objectContaining({ clientId: accepted,
+    agentMeta: { agentMessageId: 'accepted', model: 'test-model', samplingAttemptPending: { runtimeId: expect.any(String) } } }), expect.anything());
+  onAssistantAttemptFailure(sessionId, { assistantAttemptFailure: {
+    threadId: 't', turnId: 'u', attempt: 1, agentMessageIds: ['failed'],
+  } });
+  onAssistantSamplingAccepted(sessionId, ['accepted', 'failed']);
+  await drainPersistQueue();
+  expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(sessionId, failed, expect.objectContaining({
+    failedSamplingAttempt: expect.anything(), samplingAttemptPending: false,
+  }));
+  expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(sessionId, accepted, { samplingAttemptPending: false });
+  const patches = vi.mocked(patchMessageAgentMetaWithResult).mock.calls.filter(([id, clientId]) => id === sessionId && clientId === failed);
+  expect(patches).toHaveLength(1);
+  // Late calibration of an already accepted item must not put it back in pending.
+  text('accepted');
+  await drainPersistQueue();
+  expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(sessionId, accepted, expect.objectContaining({ samplingAttemptPending: false }));
+  const final = text('final');
+  onAssistantSamplingAccepted(sessionId);
+  await drainPersistQueue();
+  expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(sessionId, final, { samplingAttemptPending: false });
+  clearSessionPersistState(sessionId);
+});
+
+it.each(['accepted', 'failed'])('retries a rejected %s metadata patch and retires its native runtime on close', async outcome => {
+  const sessionId = `sampling-retry-${outcome}`;
+  clearSessionPersistState(sessionId);
+  noteSessionAgentKind(sessionId, 'codex');
+  const runtimeId = getAssistantSamplingRuntimeId(sessionId);
+  const persistId = onAssistantTextEvent(sessionId, { agentMessageId: 'item', text: 'retained locally', isFinal: true }, null);
+  await drainPersistQueue();
+  vi.mocked(patchMessageAgentMetaWithResult).mockRejectedValueOnce(new Error('transient write failure'));
+  if (outcome === 'accepted') onAssistantSamplingAccepted(sessionId);
+  else onAssistantAttemptFailure(sessionId, { assistantAttemptFailure: {
+    threadId: 't', turnId: 'u', attempt: 1, agentMessageIds: ['item'],
+  } });
+  await drainPersistQueue();
+  // Close before any mirror read: the durable intent must outlive runtime cleanup.
+  clearSessionPersistState(sessionId);
+  vi.mocked(patchMessageAgentMetaWithResult).mockRejectedValueOnce(new Error('still unavailable after restart'));
+  expect(await flushAssistantSamplingMetadata(sessionId)).toBe(false);
+  expect(await flushAssistantSamplingMetadata(`${sessionId}-unrelated`)).toBe(true);
+  expect(await flushAssistantSamplingMetadata(sessionId)).toBe(true);
+  expect(patchMessageAgentMetaWithResult).toHaveBeenLastCalledWith(sessionId, persistId, expect.objectContaining({ samplingAttemptPending: false }));
+  const patches = vi.mocked(patchMessageAgentMetaWithResult).mock.calls.filter(([id]) => id === sessionId);
+  expect(patches).toHaveLength(3);
+  if (outcome === 'failed') expect(patches[1]![2]).toHaveProperty('failedSamplingAttempt');
+  clearSessionPersistState(sessionId);
+  expect(getAssistantSamplingRuntimeId(sessionId)).toBeNull();
+  noteSessionAgentKind(sessionId, 'codex');
+  expect(getAssistantSamplingRuntimeId(sessionId)).not.toBe(runtimeId);
+  clearSessionPersistState(sessionId);
 });
 
 vi.mock('../localDb/ipc/messages.js', () => ({
@@ -144,6 +255,9 @@ import {
   prepareSyntheticToolEventForBroadcast,
   onAssistantTextEvent,
   onAssistantAttemptFailure,
+  onAssistantSamplingAccepted,
+  flushAssistantSamplingMetadata,
+  getAssistantSamplingRuntimeId,
   drainPersistQueue,
   onStandaloneTextEvent,
   getSessionTextSnapshot,
@@ -3578,6 +3692,17 @@ describe('consumeLastAssistantPersistId(per-turn 费用挂载的目标消息追�
 });
 
 describe('onTurnErrorEvent — terminal error 持久化', () => {
+  it('persists only bounded output-limit usage for later history rendering', async () => {
+    onTurnErrorEvent(SESSION, { message: 'limit', reason: 'output-limit',
+      outputLimit: { outputTokens: 131072, reasoningTokens: 131064, raw: 'discard' } });
+    await flushWrites();
+    const [, bodyArg] = vi.mocked(createMessage).mock.calls[0];
+    expect((bodyArg as { content: unknown }).content).toMatchObject({
+      reason: 'output-limit', outputLimit: { outputTokens: 131072, reasoningTokens: 131064 },
+    });
+    expect((bodyArg as { content: { outputLimit: object } }).content.outputLimit).not.toHaveProperty('raw');
+  });
+
   it('落一条 role=error 行,content 保留 message/reason/sdkError,且绝不广播', async () => {
     const persistId = onTurnErrorEvent(SESSION, {
       message: '任务执行失败（模型未返回错误详情）。',

@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { AppFrame, ctx, forbid, mountPage, subscription } from '../../ui-page/harness';
+import { FadeSwitcher } from '../../../src/renderer/components/layout/FadeSwitcher';
 import { BotGroupChatView } from '../../../src/renderer/features/bots/BotGroupChatView';
 import { BotGroupSettingsDrawer } from '../../../src/renderer/features/bots/BotGroupSettingsDrawer';
 import { refreshBotGroups } from '../../../src/renderer/features/bots/botGroupStore';
@@ -86,7 +87,7 @@ void mountPage({
 
 function Fixture() {
   const [settings, setSettings] = useState<GroupMaskSettings>({ companionId: ctx.case === 'unbound' ? null : companions[0].id,
-    enabled: ctx.case !== 'off', trigger: ctx.case === 'manual' ? 'manual' : ctx.case === 'scheduled' ? 'scheduled' : 'always',
+    enabled: ctx.data.maskEnabled ?? ctx.case !== 'off', trigger: ctx.case === 'manual' ? 'manual' : ctx.case === 'scheduled' ? 'scheduled' : 'always',
     start: '15:00', end: '18:00', resumeMinutes: 15, collectTodos: true, digest: 'daily' });
   const [online, setOnline] = useState(ctx.case !== 'offline');
   const [manualRunning, setManual] = useState(false);
@@ -156,7 +157,7 @@ function Fixture() {
     markMentionsRead: ids => setUnreadMentions(previous => ids ? previous.filter(entry => !ids.includes(entry.messageId)) : []) };
   return <GroupMaskContext.Provider value={value}>
     <div className="flex h-screen min-h-0 flex-col">
-      <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-[var(--border-default)] px-4 py-2 text-12 text-[var(--text-secondary)]" data-testid="mask-preview-controls">
+      <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-[var(--border-default)] px-4 py-2 text-12 text-[var(--text-secondary)]" data-testid="mask-preview-controls" data-ui-page-control>
         <span>测试版 · 示例群，不发送真实消息</span>
         <button type="button" onClick={request}>模拟 @ 我</button>
         <button type="button" onClick={advance}>模拟离开 {settings.resumeMinutes} 分钟</button>
@@ -164,7 +165,7 @@ function Fixture() {
         <button type="button" onClick={() => { const next = !owner; setOwner(next); group = { ...group, members: group.members.map(m => m.botId === 'self' ? { ...m, role: next ? 'owner' : 'member' } : m) }; changed(); }}>{owner ? '群主视角' : '普通成员视角'}</button>
         <span className="ml-auto tabular-nums">{new Date(now).toLocaleTimeString(ctx.locale, { hour: '2-digit', minute: '2-digit' })}</span>
       </div>
-      <div className="min-h-0 flex-1 [&_[data-ui-frame=window]]:h-full"><AppFrame><Routes><Route path="/bots/groups/:groupId" element={<BotGroupChatView />} /></Routes></AppFrame></div>
+      <div className="min-h-0 flex-1 [&_[data-ui-frame=window]]:h-full"><AppFrame><FadeSwitcher><Routes><Route path="/bots/groups/:groupId" element={<BotGroupChatView />} /></Routes></FadeSwitcher></AppFrame></div>
       <BotGroupSettingsDrawer />
     </div>
   </GroupMaskContext.Provider>;

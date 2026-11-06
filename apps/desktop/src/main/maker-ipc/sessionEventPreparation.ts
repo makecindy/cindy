@@ -1,3 +1,4 @@
+import { parseOutputLimitDetails } from '@cindy/maker-shared';
 import { taskResultClientIdForInput } from '../../shared/botCollaboration.js';
 import { readChannelToolScope } from '../im/shared/channelToolScope.js';
 import { isQuietScheduledOutput, revealScheduledOutput } from '../scheduler-host/silent-output.js';
@@ -85,7 +86,8 @@ export interface PrepareSessionEventDeps {
     decision: InteractionDecision | Record<string, unknown>,
   ) => void;
   readonly broadcastToAllWindows: (channel: string, payload: unknown) => void;
-  readonly broadcastCodexImageAsToolResult: (sessionId: string, event: AgentEvent) => Promise<void>;
+  /** Starts live delivery; resolves with the tool events it published (never rejects). */
+  readonly deliverCodexGeneratedImage: (sessionId: string, event: AgentEvent) => Promise<readonly AgentEvent[]>;
   readonly autoResumeBookkeeping: Pick<
     AutoResumeBookkeeping,
     'discardReplacementProvenByProviderEvent' | 'clearFailedTurnCompletionTail' | 'settleOutcome'
@@ -144,6 +146,9 @@ export function prepareSessionEvent(
   session: Session,
   event: AgentEvent,
 ) {
+  // Host projections (Session.holdEventStream follow-ups) were already persisted
+  // and published to renderers by the host that requested the hold.
+  if (event.hostProjection) return;
   // Exact patches are main-owned durable data. They have a dedicated summary push and
   // on-demand detail IPC; forwarding the raw diff through maker:event would duplicate a
   // potentially multi-megabyte payload to every renderer and device-link controller.
@@ -304,7 +309,12 @@ export function prepareSessionEvent(
     return;
   }
   if (event.type === 'image' && event.source === 'codex') {
-    if (!isQuietScheduledOutput(event)) void deps.broadcastCodexImageAsToolResult(session.id, event);
+    if (!isQuietScheduledOutput(event)) {
+      // Hold the stream until the stored result is published so IM / hook
+      // listeners receive it before this turn's done. A refused hold (not the
+      // loop's current event) leaves delivery running in the background as before.
+      session.holdEventStream(deps.deliverCodexGeneratedImage(session.id, event));
+    }
     return;
   }
   // turn 结束的 status event (isRunning=false + status='Done') 携带 endSnapshot。
@@ -523,6 +533,7 @@ export function prepareSessionEvent(
                 sdkError?: unknown;
                 errorStatus?: unknown;
                 toolLoop?: unknown;
+                outputLimit?: unknown;
                 usageLimit?: unknown;
                 usageResetAt?: unknown;
                 codexErrorInfo?: unknown;
@@ -533,6 +544,7 @@ export function prepareSessionEvent(
     // Keep only the bounded tool-loop shape; never let a provider-controlled object become
     // live projection state or renderer interpolation.
     const toolLoop = parseAgentInputToolLoopDetails(errData?.toolLoop);
+    const outputLimit = parseOutputLimitDetails(errData?.outputLimit);
     // 计划内 cc-mgr 升级窗口的 daemon 关闭(reason='remote_daemon_closed')是
     // 预期噪音: renderer 事件路径按同语义静默 banner, 这里同样不给 coordinator
     // 记 error —— 否则 paired-done 保留会让升级后的 projection 复现
@@ -569,6 +581,7 @@ export function prepareSessionEvent(
           ...(typeof errData?.reason === 'string' ? { reason: errData.reason } : {}),
           ...(typeof errData?.errorStatus === 'number' ? { errorStatus: errData.errorStatus } : {}),
           ...(toolLoop ? { toolLoop } : {}),
+          ...(outputLimit ? { outputLimit } : {}),
           // 账号限额信号:普通任务据此等额度重置后自动继续(见 usageLimitAutoResume.ts)。
           ...(errData?.usageLimit === true ? { usageLimit: true } : {}),
           ...(typeof errData?.usageResetAt === 'number' && Number.isFinite(errData.usageResetAt)

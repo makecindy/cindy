@@ -153,6 +153,7 @@ const D_GHOST_FORGE_SCAFFOLD = [
   "template 可选:plain(普通沙箱工具)、agent-action(卡片点击后让 Agent 继续/分叉/新建)、",
   "node-json-rpc(普通随包 Node 服务)、node-mcp(随包 stdio MCP)。Node 模板只写零依赖示例",
   "源码，不会执行 npm install / npx / postinstall。生成后按需求修改，再调用 ghost_forge_pack。",
+  "骨架不生成占位图或预填 icon；请用户提供图标，或经用户同意后生成，见手册 §7.1。",
   "四种模板均可叠加 withUi:true，生成标准 MCP Apps 交互页面和 main.js 工具；不需要页面构建。参见 §4.23。",
   "骨架不自动填写 ghost.json.releaseNotes；首次上架可省略，后续更新须补写相对上一已上架版本完整变化的纯文本说明，见 ghost_forge_guide 的第 2、7.3 章。",
   "会话工作目录内直接生成；工作目录外(例如相邻 worktree)走当前会话权限:",
@@ -162,22 +163,22 @@ const D_GHOST_FORGE_SCAFFOLD = [
 const D_GHOST_FORGE_PACK = [
   "把一个插件源码目录校验并打包成 .cindy。只生成产物，不安装或更新插件。",
   "缺省只打包并返回产物路径；intent=publish 时额外返回一次性 publishToken。",
-  "intent=publish 仅企业组织成员可用；个人账号仍可使用缺省的纯打包模式。",
+  "intent=publish 仅企业组织成员可用，用于发布到当前组织；公开市场投稿走 §7.3，个人账号仍可使用缺省的纯打包模式。",
   "releaseNotes 若填写须为 ghost.json 顶层纯文本；缺字段仍可打包、安装；首次上架可省略，曾上架插件的后续提审必须非空。打包成功不代表通过发布预检，个人发布从已安装实例走 ghost_contribution_prepare，见手册 §7.3。",
   "dir 传源码目录的绝对路径(目录里须有 ghost.json;打包自动跳过 .git / node_modules /",
   "隐藏文件 / *.cindy)。会话工作目录内直接打包；工作目录外走当前会话权限",
   "(本地 Full Access 自动放行,Auto 交审阅,Ask 向用户确认),不要因此改换目录或空转重试。",
   "仅当用户明确选择 AI 生成图标时,可把图片工具结果的",
-  "xdt_image_url 取单张地址；若只有 xdt_image_urls 则取数组第一项，再把得到的 cindy-media:// 地址传给 icon_source;主机会 best-effort 嵌入,失败保留默认图标继续打包。",
+  "xdt_image_url 取单张地址；若只有 xdt_image_urls 则取数组第一项，再把得到的 cindy-media:// 地址传给 icon_source;主机会 best-effort 嵌入，失败时保留原图标或缺省状态继续打包，不制作占位图。",
   "失败返回结构化错误(MANIFEST_INVALID 等,message 带具体原因),",
   "按 message 修正源码后重新打包即可。成功只表示 cindyPath 对应的产物已经生成；",
   "只有用户明确发起安装后，插件才会进入 Cindy。publish 同样不会触发装入。",
 ].join("\n");
 
 const D_GHOST_FORGE_INSTALL = [
-  "把当前源码目录重新校验、打包，并立即安装到 Cindy；同 id 已安装时原位更新。",
+  "把当前源码目录重新校验、打包，并立即安装到 Cindy；同 id 的目标实例已安装时原位更新。",
   "只有用户明确要求安装或更新当前插件时才调用。不要因为 scaffold 或 pack 成功就自动调用。",
-  "新装默认个人范围(namespace:null)，不会因登录组织而新建组织副本；已有个人实例优先更新，唯一的旧组织实例原位更新。只有用户明确要求组织安装时传当前组织 namespace，不能从登录身份推断安装归属。",
+  "缺省安装到本地开发副本(namespace:\"local\")，仅更新同 id 的 local 实例，不覆盖个人或组织市场实例。企业身份自测须显式传当前组织 namespace；local 不获得企业 OIDC 或 Broker。不能从登录身份推断安装归属。",
   "首次安装后直接启用；同来源更新保留启用状态、配置、数据与面板位置；换源会隔离旧账号与数据，需要重新连接。",
   "遇到 INSTALL_TARGET_REQUIRED，向用户展示 targets 的身份与版本，让用户选择更新已有实例(target_instance_id)，或另装一份(install_copy:true)。不得替用户默认另装或迁移账号。",
   "dir 传插件源码目录绝对路径(工作目录外走与 pack 相同的会话权限)。成功返回本次真实执行的是 installed 还是 updated；",
@@ -885,6 +886,10 @@ const AUDIO_IN_CARD_HOIST_KEY = "xdt_audio_in_card";
  *  永远收不到生成图,只能追问一次让模型手动补发。 */
 const IMAGES_IN_CARD_HOIST_KEY = "xdt_images_in_card";
 
+/** 卡片排到本轮末尾的令牌(布尔 true 才上提;host 按卡片声明注入):手机端据此
+ *  把卡片排到本轮最后,桌面渲染层直接读卡片 html,不看它。 */
+const CARD_TURN_END_HOIST_KEY = "xdt_card_turn_end";
+
 function hoistMediaFields(result: unknown): Record<string, unknown> {
   if (!result || typeof result !== "object" || Array.isArray(result)) return {};
   const out: Record<string, unknown> = {};
@@ -905,7 +910,7 @@ function hoistMediaFields(result: unknown): Record<string, unknown> {
   if (audioTracks) out[AUDIO_TRACKS_HOIST_KEY] = audioTracks;
   // 入卡令牌(布尔;意识把媒体画进了自己的卡片时置 true):桌面渲染层据此
   // 跳过基座渲染防双份;手机端无卡片体系,忽略令牌照常渲染基座。
-  for (const key of [AUDIO_IN_CARD_HOIST_KEY, IMAGES_IN_CARD_HOIST_KEY]) {
+  for (const key of [AUDIO_IN_CARD_HOIST_KEY, IMAGES_IN_CARD_HOIST_KEY, CARD_TURN_END_HOIST_KEY]) {
     if ((result as Record<string, unknown>)[key] === true) {
       out[key] = true;
     }
@@ -1504,13 +1509,13 @@ export function createCindyGhostsMcpServer(
         .string()
         .optional()
         .describe(
-          "可选；仅当用户明确选择 AI 生成图标时，传图片工具结果的 xdt_image_url，或 xdt_image_urls 数组第一项(cindy-media:// 地址)；失败会保留默认图标继续打包",
+          "可选；仅当用户明确选择 AI 生成图标时，传图片工具结果的 xdt_image_url，或 xdt_image_urls 数组第一项(cindy-media:// 地址)；失败时保留原图标或缺省状态继续打包，不制作占位图",
         ),
       intent: z
         .enum(["publish"])
         .optional()
         .describe(
-          "缺省不传:只打包并返回产物路径；publish:额外返回一次性发布票据。publish 仅企业组织成员可用，个人账号仍可使用缺省的纯打包模式",
+          "缺省不传:只打包并返回产物路径；publish:为发布到当前组织返回一次性发布票据。publish 仅企业组织成员可用，个人账号仍可使用缺省的纯打包模式；公开市场投稿走贡献流程",
         ),
     },
     async (input) => handleForgePack(deps, input),
@@ -1522,13 +1527,13 @@ export function createCindyGhostsMcpServer(
     {
       dir: z.string().describe("插件源码目录的绝对路径(目录里须有 ghost.json)"),
       target_instance_id: z.string().max(256).optional().describe("用户选择更新的已有实例 ID，来自 INSTALL_TARGET_REQUIRED.targets；不能与 install_copy:true 同用"),
-      namespace: z.string().min(1).max(128).nullable().optional().describe("仅用户明确选择安装范围时传；null 为个人，字符串仅允许当前组织。新装默认个人，更新保留已有实例；不能与 target_instance_id 同用"),
+      namespace: z.string().min(1).max(128).nullable().optional().describe("省略为本地开发副本 local；字符串允许 local 或当前组织 namespace，null 为个人范围(root)。企业 OIDC/Broker 自测须显式传当前组织；不能与 target_instance_id 同用"),
       install_copy: z.boolean().optional().describe("仅用户明确另装一份时传 true；不覆盖或停用其它身份的插件，需要独立连接账号"),
       icon_source: z
         .string()
         .optional()
         .describe(
-          "可选；仅当用户明确选择 AI 生成图标时，传图片工具结果的 cindy-media:// 地址；失败会保留默认图标继续安装",
+          "可选；仅当用户明确选择 AI 生成图标时，传图片工具结果的 cindy-media:// 地址；失败时保留原图标或缺省状态继续安装，不制作占位图",
         ),
     },
     async (input) => handleForgeInstall(deps, input),

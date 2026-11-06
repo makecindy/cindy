@@ -17,6 +17,8 @@ import { hostSessionIdFor } from '../remote-agent/host/sessionIdentity.js';
 interface Policy {
   revision: number;
   allowFast: boolean;
+  confirmedAt?: number;
+  local?: boolean;
 }
 interface Outgoing extends Policy {
   targets: Record<string, number>;
@@ -38,7 +40,48 @@ const object = (value: unknown): value is Record<string, unknown> =>
 const empty = (): State => ({ sources: {}, bindings: {}, outgoing: {} });
 
 /** Per-owner durable constraints. A reconnect cannot erase a prohibition or reuse another guest's binding. */
-export function createGroupFastPolicyStore(options: { filePath(): string; scopeKey(): string }) {
+export function createGroupFastPolicyStore(options: {
+  filePath(): string; scopeKey(): string;
+  clock?: { wall(): number; mono(): number };
+}) {
+  const lifetime = 30 * 60_000;
+  const wallNow = () => options.clock?.wall() ?? Date.now();
+  const monoNow = () => options.clock?.mono() ?? performance.now();
+  // Wall time survives a restart; monotonic time prevents a clock rollback from
+  // extending trust in this process. Bind/read operations never renew a source.
+  // The singleton can load before account initialization. Bind each empty
+  // in-memory map to the current owner on its first use, not during import.
+  let deadlineOwner: string | undefined;
+  const deadlines = new Map<string, { confirmedAt: number; wall: number; mono: number; expired: boolean }>();
+  let suppressionOwner: string | undefined;
+  const suppressed = new Map<string, Set<string>>();
+  const requiredOrigins = new Map<string, string>();
+  const suppression = () => {
+    if (suppressionOwner !== options.scopeKey()) { suppressed.clear(); requiredOrigins.clear(); suppressionOwner = options.scopeKey(); }
+    return suppressed;
+  };
+  const suppressSource = (task: string, source: string) => {
+    const entries = suppression();
+    const pending = entries.get(task) ?? new Set<string>();
+    pending.add(source);
+    entries.set(task, pending);
+  };
+  const fresh = (source: string, policy: Policy) => {
+    if (!Number.isFinite(policy.confirmedAt) || policy.confirmedAt! > wallNow()) return false;
+    if (deadlineOwner !== options.scopeKey()) {
+      deadlines.clear();
+      deadlineOwner = options.scopeKey();
+    }
+    let deadline = deadlines.get(source);
+    if (!deadline || deadline.confirmedAt !== policy.confirmedAt) {
+      const wall = policy.confirmedAt! + lifetime;
+      deadline = { confirmedAt: policy.confirmedAt!, wall,
+        mono: monoNow() + Math.max(0, Math.min(lifetime, wall - wallNow())), expired: false };
+      deadlines.set(source, deadline);
+    }
+    deadline.expired ||= wallNow() >= deadline.wall || monoNow() >= deadline.mono;
+    return !deadline.expired;
+  };
   // Keep resumable tasks' constraints without putting every task in one bounded
   // settings file. Shards use the same atomic/owner-guarded writer as policies.
   // Legacy bindings remain readable; no age-based eviction can restore Fast.
@@ -99,7 +142,9 @@ export function createGroupFastPolicyStore(options: { filePath(): string; scopeK
         return { ...empty(), unreadable: true };
       const valid =
         Object.values(raw.sources).every(
-          (p) => object(p) && Number.isSafeInteger(p.revision) && typeof p.allowFast === 'boolean',
+          (p) => object(p) && Number.isSafeInteger(p.revision) && typeof p.allowFast === 'boolean'
+            && (p.confirmedAt === undefined || typeof p.confirmedAt === 'number' && Number.isFinite(p.confirmedAt))
+            && (p.local === undefined || typeof p.local === 'boolean'),
         ) &&
         Object.values(raw.bindings).every(
           (b) =>
@@ -141,16 +186,39 @@ export function createGroupFastPolicyStore(options: { filePath(): string; scopeK
     if (value.unreadable) throw new Error('Group Fast policy could not be read');
   };
   return {
-    allows(sessionId: string): boolean {
+    requireOrigin(sessionId: string, origin: string) {
+      suppression();
+      requiredOrigins.set(sessionId, origin);
+    },
+    suppress(sessionId: string, origin: string, group: string) {
+      suppressSource(sessionId, JSON.stringify([origin, group]));
+    },
+    received(origin: string, group: string): Policy | null {
+      const value = read();
+      const source = value.sources[JSON.stringify([origin, group])];
+      return !value.unreadable && source && fresh(JSON.stringify([origin, group]), source)
+        ? { revision: source.revision, allowFast: source.allowFast } : null;
+    },
+    allows(sessionId: string, required = false): boolean {
       const value = read();
       const shard = bindingShard(sessionId);
       shard.invalidateIfChanged();
       const bindings = shard.read();
+      const sources = Object.values({ ...value.bindings[sessionId], ...bindings.bindings[sessionId] });
+      suppression();
+      const origin = requiredOrigins.get(sessionId);
+      const prefix = origin ? `${JSON.stringify([origin]).slice(0, -1)},` : undefined;
       return (
         !value.unreadable &&
         !bindings.unreadable &&
-        Object.values({ ...value.bindings[sessionId], ...bindings.bindings[sessionId] }).every(
-          (source) => value.sources[source]?.allowFast === true,
+        !suppression().get(sessionId)?.size &&
+        // M's own live permission is a ceiling, not evidence that O has
+        // confirmed this group task. A local default cannot fill a missing O.
+        (!required || sources.some(source => !!value.sources[source] && value.sources[source].local !== true
+          && (!prefix || source.startsWith(prefix)))) &&
+        sources.every(
+          (source) => value.sources[source]?.allowFast === true
+            && (value.sources[source].local === true || fresh(source, value.sources[source])),
         )
       );
     },
@@ -160,10 +228,20 @@ export function createGroupFastPolicyStore(options: { filePath(): string; scopeK
       selfDeviceId: string | null,
       assertCurrent: () => void,
       trustedLocalTask?: string,
+      cached = false,
+      local = false,
     ): Promise<Policy> {
       const source = JSON.stringify([origin, command.group]);
+      const receivedAt = wallNow();
+      const receivedMono = monoNow();
       assertCurrent();
       writable(read());
+      let boundTask: string | undefined;
+      const failedWrite = (error: unknown): never => {
+        assertCurrent();
+        if (boundTask) suppressSource(boundTask, source);
+        throw error;
+      };
       if (command.binding) {
         const peer = parseProviderSharePeer(origin);
         const device = command.binding.controllerDeviceId;
@@ -181,6 +259,7 @@ export function createGroupFastPolicyStore(options: { filePath(): string; scopeK
           (!peer && device === selfDeviceId && !command.binding.relay
             ? command.binding.sessionId
             : hostSessionIdFor(scope, command.binding.sessionId));
+        boundTask = task;
         // Persist the binding first. A missing/uncommitted source is denied by
         // allows(), and an ACK is returned only after both writes are durable.
         await bindingShard(task).updateAtomic(({ value }) => {
@@ -189,7 +268,11 @@ export function createGroupFastPolicyStore(options: { filePath(): string; scopeK
           return {
             bindings: { ...value.bindings, [task]: { ...value.bindings[task], [origin]: source } },
           };
-        });
+        }).catch(failedWrite);
+      }
+      if (cached) {
+        assertCurrent();
+        return read().sources[source] ?? { revision: command.revision, allowFast: false };
       }
       const value = await store.updateAtomic(({ value }) => {
         assertCurrent();
@@ -197,13 +280,35 @@ export function createGroupFastPolicyStore(options: { filePath(): string; scopeK
         const sources = { ...value.sources };
         const previous = sources[source];
         if (!previous || command.revision > previous.revision)
-          sources[source] = { revision: command.revision, allowFast: command.allowFast };
+          sources[source] = { revision: command.revision, allowFast: command.allowFast,
+            confirmedAt: receivedAt, ...(local && origin === selfDeviceId ? { local: true } : {}) };
         // Equal revisions with conflicting values may only tighten, never loosen.
         else if (command.revision === previous.revision && !command.allowFast)
-          sources[source] = { ...previous, allowFast: false };
+          sources[source] = { ...previous, allowFast: false, confirmedAt: receivedAt };
+        else if (command.revision === previous.revision)
+          sources[source] = { ...previous, confirmedAt: receivedAt };
+        if (local && origin === selfDeviceId) sources[source] = { ...sources[source], local: true };
         return { sources };
-      });
+      }).catch(failedWrite);
       assertCurrent();
+      if (boundTask) {
+        const entries = suppression();
+        if (value.sources[source].revision === command.revision
+          && value.sources[source].allowFast === command.allowFast) {
+          entries.get(boundTask)?.delete(source);
+          if (!entries.get(boundTask)?.size) entries.delete(boundTask);
+        } else {
+          // Every binding entry shares this confirmation rule, including
+          // independent fast-policy/relay and delegated grants. A stale ACK
+          // cannot authorize Fast, even when its sender continues best-effort.
+          suppressSource(boundTask, source);
+        }
+      }
+      if (command.revision === value.sources[source].revision && value.sources[source].confirmedAt === receivedAt) {
+        if (deadlineOwner !== options.scopeKey()) { deadlines.clear(); deadlineOwner = options.scopeKey(); }
+        deadlines.set(source, { confirmedAt: receivedAt, wall: receivedAt + lifetime,
+          mono: receivedMono + lifetime, expired: false });
+      }
       return value.sources[source];
     },
     async prepare(
@@ -278,6 +383,7 @@ export function createGroupFastPolicyStore(options: { filePath(): string; scopeK
     /** Only after permanent guest-history purge; never on ordinary close/idle. */
     async forgetSessions(sessionIds: readonly string[], assertCurrent: () => void): Promise<void> {
       assertCurrent();
+      for (const id of sessionIds) { suppression().delete(id); requiredOrigins.delete(id); }
       if (!sessionIds.length) return;
       await store.updateAtomic(({ value }) => {
         assertCurrent();

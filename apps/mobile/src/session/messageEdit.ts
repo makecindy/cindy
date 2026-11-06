@@ -65,13 +65,15 @@ export function buildMessageEditAttachments(
   return result;
 }
 
-/** 与桌面 RUNNING_RETRY_DEFAULTS 同预算(≈15s):点编辑已发出停止,这里消化停止收尾的尾差。 */
+/** 与桌面 RUNNING_RETRY_DEFAULTS 同预算(≈15s):发送时才发出停止,这里等停止收尾。 */
 export const MESSAGE_EDIT_RUNNING_RETRY = { attempts: 20, delayMs: 750 } as const;
 
 export async function commitMessageEditRewind<T>(input: {
   rewindCommit: (opts: { requireLatestUser: true; allowFileRestore?: false }) => Promise<T>;
   /** 预览判定只能截断对话时绑定 false,提交不得意外恢复文件(与桌面编辑框一致)。 */
   allowFileRestore?: false;
+  /** 被控端仍在运行时中断当前 turn;点编辑不中断,只在发送时调用一次。 */
+  requestStop?: () => void;
   /** 每次重试前确认这次编辑仍然有效;返回 false 时放弃,不再发起 rewind。 */
   stillCurrent?: () => boolean;
   sleep?: (ms: number) => Promise<void>;
@@ -92,6 +94,10 @@ export async function commitMessageEditRewind<T>(input: {
       return await input.rewindCommit(opts);
     } catch (err) {
       if (!isMessageEditErrorCode(err, 'SESSION_RUNNING') || attempt >= attempts) throw err;
+      // 以被控端的运行判定为准(手机侧状态可能滞后),首次被拒时中断一次再等。
+      // 迟到的 SESSION_RUNNING 若已遇上切换任务 / 放弃编辑,不得再停掉旧任务。
+      if (input.stillCurrent && !input.stillCurrent()) throw err;
+      if (attempt === 0) input.requestStop?.();
       await sleep(delayMs);
       if (input.stillCurrent && !input.stillCurrent()) throw err;
     }

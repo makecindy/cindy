@@ -11,6 +11,7 @@ import { resolveCompanionRuntimeEnvironment } from '../bot-import/runtime.js';
 import { registerCodexTextOnlyPolicy } from './codex-text-only-policy.js';
 import { ensureCodexCliLauncher } from '../agent-binaries/codex-cli-launcher.js';
 import { readDisabledSkillPaths } from '../skillhub/activationPreferences';
+import { resolveLocalMcpDuplicateChoices } from './mcp-duplicate-preferences.js';
 import { cindyMakeManager } from '../cindy-make/manager.js';
 import { makeSourceRoot } from '../cindy-make/sourcePaths.js';
 import { clearCodexAccountUsageSnapshot } from '../usageBroadcaster.js';
@@ -91,6 +92,7 @@ import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
 import { getWorkerLink, updateWorkerStatus, getRemoteOrcaSession, listWorkersByLead, getActiveTeamByLead } from '../localDb/orcaTeamStore.js';
 import { createOrcaRemoteWorkerBridge } from '../maker-ipc/orcaRemoteWorkerBridge.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { makerStartupGate } from './startup-gate.js';
 import { cleanupSessionTempAttachments } from '../maker-ipc/normalizeAttachments.js';
 import { resolveGhostFsSessionSnapshot } from '../maker-ipc/ghostFsSessionSnapshot.js';
 import { HOST_CONFIRM_TIMEOUT_MS } from '../maker-ipc/hostConfirmTiming.js';
@@ -138,7 +140,10 @@ import { readProviderGroupBinding } from '../provider-group/bindings.js';
 import { createSubscriptionFastPolicy } from './subscription-fast-policy.js';
 import { getProviderGroupGuestSwitch } from '../provider-group/guestSwitch.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
-import { openRemoteLink, remoteBackgroundInvoke, remoteInvoke } from '../device-link/index.js';
+import { isSharedTaskAvailable, isSharedTaskRelayOnline, openRemoteLink, remoteBackgroundInvoke, remoteInvoke, waitForSharedTaskRelay } from '../device-link/index.js';
+import { captureSharedTaskAgentCommand } from '../device-link/sharedTaskCommands.js';
+import { tryGetSharedTaskHost } from '../device-link/sharedTaskRuntime.js';
+import { runWithSharedTaskCallerGuard } from '../device-link/sharedTaskApi.js';
 import { isCrossRegionProviderShareTarget, renewCrossRegionProviderShareLink } from '../device-link/providerShareCrossRegion.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { parseProviderShareAgentDeviceId } from '../device-link/providerShareGuest.js';
@@ -381,7 +386,7 @@ import {
 import { getOutboundPathSnapshotFor } from './outbound-proxy-resolver.js';
 import { attachAgentsToMakerMemory, createDesktopMakerMemoryManager } from './maker-memory-host.js';
 import { createMemoryReviewOneShot } from './memory-review-one-shot.js';
-import { prepareExternalCodexSessionForResume, readCodexThreadStorageForArchive } from './codex-local-sessions.js';
+import { prepareExternalCodexSessionForResume } from './codex-local-sessions.js';
 import {
   rehydrateCloseSuppression,
   withRehydrateCloseSuppressed,
@@ -1000,8 +1005,7 @@ function broadcastVisionBridgeEvent(
 
 export function getMaker(): Maker {
   if (!_maker) {
-    // splash 已经 prepare 过, 这里只是同步读 cache 路径; 任一缺失说明 bootstrap
-    // 顺序错了, 早抛比 session.start 时再炸更清晰。
+    makerStartupGate.assertComplete();
     // splash 已经 prepare 过, 这里只是同步读 cache 路径; 任一缺失说明 bootstrap
     // 顺序错了, 早抛比 session.start 时再炸更清晰。
     const claudePath = getReadyBinaryPath('claude-code');
@@ -1091,6 +1095,10 @@ export function getMaker(): Maker {
       lspPool: getLspPool(),
       pluginRegistry,
       invokeRemote: remoteInvoke,
+      captureSharedTaskCommand: (sessionId: string, assertCurrent: () => void) => captureSharedTaskAgentCommand(sessionId, assertCurrent, {
+        ready: waitForSharedTaskRelay, online: isSharedTaskRelayOnline, available: isSharedTaskAvailable,
+        host: tryGetSharedTaskHost, runScoped: runWithSharedTaskCallerGuard,
+      }),
       machineDirectory: {
         listDevices: async () => (await handleListDevices(deviceDirectoryDeps())).devices,
         // Reading a status must not put the other computer under control, old versions included.
@@ -1415,6 +1423,7 @@ export function getMaker(): Maker {
       log: desktopMakerLogger.child('command-gate'),
     });
     const claudeAgent = new ClaudeCodeAgent({
+      resolveLocalMcpDuplicateChoices,
       resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
       getDisabledSkillPaths: readDisabledSkillPaths,
       getManagedSkills: listCindyManagedSkills,
@@ -2264,7 +2273,7 @@ export function getMaker(): Maker {
         return ownerCodexThreadLocations().prepareResume(threadId, prepareExternalCodexSessionForResume);
       },
       resolveCodexThreadStorage: async (threadId, options) => {
-        if (!getActiveAppSession().dataOwnerId) return options?.readOnly ? readCodexThreadStorageForArchive(threadId) : undefined;
+        if (!getActiveAppSession().dataOwnerId) return options?.readOnly ? readCodexThreadStorageReadOnly(threadId) : undefined;
         const ownerScope = activeOwnerScopeKey();
         const storage = options?.readOnly
           ? await readCodexThreadStorageReadOnly(threadId)
@@ -2924,6 +2933,9 @@ export function getMaker(): Maker {
         makerMemory: () => makerMemoryManager,
         // 插件工具经隧道回到本机：对方 Agent 的插件花名册也按本机真实工作目录给。
         ghostRosterPrompt: (workingDir) => getGhostRosterPrompt({ workingDir }),
+        // 内置与插件带的 Skill 同样以本机为准：说明与它要用的工具、脚本都在本机。
+        managedSkills: listCindyManagedSkills,
+        disabledSkillPaths: readDisabledSkillPaths,
         captureKnownFileBefore,
         noteOpaqueTurnChange,
         // 与审查读 PDF 交付物同一个一次性抽取进程。
@@ -3186,7 +3198,12 @@ export function getMaker(): Maker {
       },
     });
     // 本机作为「Agent 运行的电脑」：同账号另一台电脑的任务可让 Agent 在这里运行。
-    installRemoteAgentHost({ getMaker: () => getMaker(), userDataDir: app.getPath('userData') });
+    installRemoteAgentHost({
+      getMaker: () => getMaker(),
+      userDataDir: app.getPath('userData'),
+      managedSkills: async () => (await listCindyManagedSkills()).flatMap((skill) =>
+        skill.path ? [{ command: skill.claudeCommandName, dir: path.dirname(skill.path) }] : []),
+    });
     installLocalAgentHost(_maker);
     botRuntimeResourcePreflight = async (opts) => {
       const preflightOpts = { ...opts };

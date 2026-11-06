@@ -429,6 +429,56 @@ describe('Claude Code translator context window', () => {
     expect(tracker.snapshot().contextTokens).toBe(105);
   });
 
+  // Wire contract with the desktop billing path: done.usageSegments must carry
+  // the 1h-TTL share of cache writes, otherwise every 1h write is priced at the
+  // cheaper 5m tariff (Claude Code subscriptions write all cache with 1h TTL).
+  it('carries the 1h cache-write split from stream usage into done.usageSegments', () => {
+    const events: AgentEvent[] = [];
+    const queue = { push: (event: AgentEvent) => events.push(event) > 0 } as unknown as ReturnType<typeof createAsyncQueue<AgentEvent>>;
+    const usage = {
+      input_tokens: 2,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 106_846,
+      cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 106_846 },
+    };
+    const ctx = {
+      rt: newRuntimeState(),
+      turn: createTurnState(),
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
+      getModel: () => 'claude-opus-5-5',
+      getEffort: () => 'high' as const,
+      getPermissionMode: () => 'auto' as const,
+      onSessionId: vi.fn(),
+      getSdkSessionId: () => undefined,
+      getLogTitle: () => undefined,
+      tracker: new UsageTracker(),
+      getModelContextWindow: () => 1_000_000,
+    };
+    translateSdkMessage({
+      type: 'stream_event',
+      event: { type: 'message_start', message: { model: 'claude-opus-5-5', usage } },
+    }, queue, ctx);
+    translateSdkMessage({
+      type: 'stream_event',
+      event: { type: 'message_delta', usage: { ...usage, output_tokens: 501 } },
+    }, queue, ctx);
+    translateSdkMessage({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      num_turns: 1,
+      usage: { ...usage, output_tokens: 501 },
+      modelUsage: { 'claude-opus-5-5': { inputTokens: 2, outputTokens: 501, costUSD: 0 } },
+    }, queue, ctx);
+
+    const done = events.find((event) => event.type === 'done') as
+      | { data?: { usageSegments?: Array<Record<string, unknown>> } }
+      | undefined;
+    expect(done?.data?.usageSegments).toEqual([
+      expect.objectContaining({ cacheCreateTokens: 106_846, cacheCreate1hTokens: 106_846, outputTokens: 501 }),
+    ]);
+  });
+
   it('uses result cache tokens for single-call turns even after message_start input usage', () => {
     const tracker = new UsageTracker();
     const queue = createAsyncQueue<AgentEvent>();

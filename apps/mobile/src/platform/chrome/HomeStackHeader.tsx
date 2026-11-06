@@ -1,6 +1,7 @@
 import { memo, type ReactNode } from 'react';
 import { Image, StyleSheet, View } from 'react-native';
 import { Stack } from 'expo-router';
+import { useAnimationVisibilityBridge } from '@/hooks/useLoopingAnimation';
 import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
 import { useTheme } from '@/theme';
 import { navigationChrome, spacing } from '@/theme/tokens';
@@ -37,11 +38,12 @@ export const HomeStackHeader = memo(function HomeStackHeader({
   children?: ReactNode;
 }) {
   const { colors } = useTheme();
+  const visibleTitle = useAnimationVisibilityBridge(title);
   return <>
     <Stack.Screen options={{
       headerBackVisible: false, headerShadowVisible: false, headerShown: true,
       headerStyle: { backgroundColor: 'transparent' }, headerTintColor: colors.textPrimary,
-      headerTransparent: true, headerTitleAlign: 'center', headerTitle: () => title,
+      headerTransparent: true, headerTitleAlign: 'center', headerTitle: () => visibleTitle,
     }} />
     <Stack.Header style={{ backgroundColor: 'transparent', color: colors.textPrimary, shadowColor: 'transparent' }} />
     <Stack.Toolbar placement="left">

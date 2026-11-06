@@ -4,7 +4,35 @@
 
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { safeStorage } from 'electron';
+import { randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
+
+const setupDialog = vi.hoisted(() => ({ showMessageBox: vi.fn() }));
+vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
+
+vi.mock('electron', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('electron')>();
+  return { ...actual, dialog: { ...actual.dialog, showMessageBox: setupDialog.showMessageBox }, safeStorage: { ...actual.safeStorage, getSelectedStorageBackend: () => 'gnome_libsecret' } };
+});
+
+// Exercise the real store with authenticated encryption; no OS keychain or user profile.
+const cipherKey = randomBytes(32);
+beforeEach(() => {
+  vi.spyOn(safeStorage, 'isEncryptionAvailable').mockReturnValue(true);
+  vi.spyOn(safeStorage, 'encryptString').mockImplementation((value) => {
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', cipherKey, iv);
+    const data = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
+    return Buffer.concat([iv, cipher.getAuthTag(), data]);
+  });
+  vi.spyOn(safeStorage, 'decryptString').mockImplementation((value) => {
+    const decipher = createDecipheriv('aes-256-gcm', cipherKey, value.subarray(0, 12));
+    decipher.setAuthTag(value.subarray(12, 28));
+    return Buffer.concat([decipher.update(value.subarray(28)), decipher.final()]).toString('utf8');
+  });
+});
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); setupDialog.showMessageBox.mockReset(); });
 
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
@@ -14,9 +42,13 @@ import {
   deleteCustomMcpServer,
   getCustomMcpServer,
   listCustomMcpServers,
+  listCustomMcpNamesForSetup,
   updateCustomMcpServer,
   validateCustomMcpConfig,
 } from '../custom-mcp-store.js';
+import { confirmSetupTransfer } from '../../setup-migration/transferPrompt.js';
+import { createSetupTransferSource, SetupTransferBox } from '../../setup-migration/transfer.js';
+import { parseSetupSecretBundle, type SetupSecretBundle } from '@cindy/device-link';
 import type { CustomMcpConfig } from '../../../shared/customMcp.js';
 
 const CREATE_SQL = `
@@ -217,5 +249,203 @@ describe('custom-mcp-store CRUD', () => {
     raw?.close();
     mountDb();
     expect(await listCustomMcpServers()).toEqual([]);
+  });
+});
+
+// Regression: PR #6473 two-device test found fake Authorization values in SQLite/WAL.
+// Existing CRUD tests only checked round-trips. Minimum failure: one nonempty header.
+// Tier: existing in-memory DB store suite; validates persistence, upgrade and failure semantics.
+describe('encrypted MCP headers', () => {
+  const headers = { Authorization: 'Bearer invalid-test-only-secret' };
+  const stored = () => (raw!.prepare('SELECT headers FROM custom_mcp_servers WHERE id = ?').get(valid.id) as { headers: string }).headers;
+
+  it('never stores new or updated header values as plaintext and still resolves them', async () => {
+    mountDb();
+    await createCustomMcpServer({ ...valid, headers });
+    expect(stored()).not.toContain(headers.Authorization);
+    expect((await getCustomMcpServer(valid.id))?.headers).toEqual(headers);
+    await updateCustomMcpServer(valid.id, { ...valid, headers: { 'X-Key': 'invalid-replacement' } });
+    expect(stored()).not.toContain('invalid-replacement');
+    expect((await listCustomMcpServers())[0].headers).toEqual({ 'X-Key': 'invalid-replacement' });
+  });
+
+  it('upgrades legacy headers before returning them without changing the runtime generation', async () => {
+    mountDb();
+    await createCustomMcpServer(valid, 100);
+    raw!.prepare('UPDATE custom_mcp_servers SET headers = ?').run(JSON.stringify(headers));
+    expect((await listCustomMcpServers())[0].headers).toEqual(headers);
+    expect(stored()).not.toContain(headers.Authorization);
+    expect(raw!.prepare('SELECT updated_at FROM custom_mcp_servers').get()).toEqual({ updated_at: 100 });
+  });
+
+  it('preserves the entire existing row when encryption is unavailable', async () => {
+    mountDb();
+    await createCustomMcpServer({ ...valid, headers });
+    const before = stored();
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false);
+    await expect(updateCustomMcpServer(valid.id, { ...valid, name: 'changed', headers })).rejects.toThrow();
+    expect(stored()).toBe(before);
+    expect(raw!.prepare('SELECT name FROM custom_mcp_servers').get()).toEqual({ name: valid.name });
+  });
+
+  it('retains old credentials when a database write fails after encryption', async () => {
+    mountDb();
+    await createCustomMcpServer({ ...valid, headers });
+    const before = stored();
+    raw!.exec("CREATE TRIGGER reject_update BEFORE UPDATE ON custom_mcp_servers BEGIN SELECT RAISE(ABORT, 'test write failure'); END");
+    await expect(updateCustomMcpServer(valid.id, { ...valid, headers: { Authorization: 'invalid-new' } })).rejects.toThrow('test write failure');
+    expect(stored()).toBe(before);
+    expect((await getCustomMcpServer(valid.id))?.headers).toEqual(headers);
+  });
+
+  it('keeps legacy data on failed conversion and does not return it as a successful read', async () => {
+    mountDb();
+    await createCustomMcpServer(valid);
+    raw!.prepare('UPDATE custom_mcp_servers SET headers = ?').run(JSON.stringify(headers));
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false);
+    await expect(listCustomMcpServers()).rejects.toThrow();
+    expect(stored()).toBe(JSON.stringify(headers));
+  });
+
+  it('reports corrupt ciphertext without replacing it with an empty header map', async () => {
+    mountDb();
+    await createCustomMcpServer({ ...valid, headers });
+    const before = stored();
+    vi.mocked(safeStorage.decryptString).mockImplementation(() => { throw new Error('decrypt failed'); });
+    await expect(getCustomMcpServer(valid.id)).rejects.toThrow();
+    expect(stored()).toBe(before);
+  });
+});
+
+// Regression #6473: preparing source consent used listCustomMcpServers, decrypting/upgrading
+// headers before the user answered. Existing round-trip tests did not cover prompt preparation.
+// Tier: existing in-memory store suite. Minimum input: selected legacy row + unselected bad ciphertext.
+// Timing: not run in the edit-only window; measure with the next authorized targeted run.
+describe('setup consent MCP metadata', () => {
+  async function rows() {
+    mountDb();
+    await createCustomMcpServer(valid, 100);
+    await createCustomMcpServer({ ...valid, id: 'other', name: 'Other' }, 101);
+    raw!.prepare('UPDATE custom_mcp_servers SET headers = ? WHERE id = ?')
+      .run('{"Authorization":"invalid-legacy-test-only"}', valid.id);
+    raw!.prepare('UPDATE custom_mcp_servers SET headers = ? WHERE id = ?')
+      .run('safe-storage:v1:not-valid-ciphertext', 'other');
+    raw!.exec("CREATE TRIGGER no_consent_update BEFORE UPDATE ON custom_mcp_servers BEGIN SELECT RAISE(ABORT, 'unexpected consent write'); END");
+    vi.mocked(safeStorage.decryptString).mockClear();
+    vi.mocked(safeStorage.encryptString).mockClear();
+  }
+
+  it('selects only requested names without touching legacy or corrupt headers', async () => {
+    await rows();
+    const before = raw!.prepare('SELECT * FROM custom_mcp_servers ORDER BY id').all();
+    expect(await listCustomMcpNamesForSetup([valid.id, valid.id, 'missing']))
+      .toEqual([{ id: valid.id, name: valid.name }]);
+    expect(await listCustomMcpNamesForSetup([])).toEqual([]);
+    expect(safeStorage.decryptString).not.toHaveBeenCalled();
+    expect(safeStorage.encryptString).not.toHaveBeenCalled();
+    expect(raw!.prepare('SELECT * FROM custom_mcp_servers ORDER BY id').all()).toEqual(before);
+  });
+
+  it.each([false, true])('reads secrets only after consent allowed=%s', async (allowed) => {
+    await rows();
+    // Use the corrupt selected row: denial must never try to open it; approval must report
+    // its real read error instead of silently converting it to an empty credential bundle.
+    const collect = vi.fn(async (): Promise<SetupSecretBundle> => {
+      await getCustomMcpServer('other');
+      return { providers: [], mcpServers: [], builtinKeys: [], plugins: [] };
+    });
+    const authorize = vi.fn(async () => []);
+    const seal = vi.spyOn(SetupTransferBox.prototype, 'seal');
+    const confirm = vi.fn(async () => {
+      expect(safeStorage.decryptString).not.toHaveBeenCalled();
+      expect(safeStorage.encryptString).not.toHaveBeenCalled();
+      expect(collect).not.toHaveBeenCalled();
+      expect(seal).not.toHaveBeenCalled();
+      return allowed;
+    });
+    const handle = createSetupTransferSource({
+      ownerKey: () => 'owner-test', requesterName: async () => 'New computer',
+      describeSecrets: async (request) => (await listCustomMcpNamesForSetup(request.mcpServers)).map((row) => row.name),
+      describeSshHosts: async () => ['test-host'], sshKeyFingerprint: () => 'SHA256:test',
+      confirm, collectSecrets: collect, authorizeSsh: authorize,
+    });
+    await expect(handle({
+      action: 'transfer', requestId: 'request-test-001', publicKey: new SetupTransferBox().publicKey,
+      secrets: { providers: [], mcpServers: ['other'], builtinKeys: [], plugins: [] },
+      ssh: { publicKey: `ssh-ed25519 ${'A'.repeat(68)} test`, hosts: ['test-host'] },
+    }, 'requester-test')).rejects.toThrow(allowed ? 'MCP header credentials are unreadable' : 'SETUP_TRANSFER_DECLINED');
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(collect).toHaveBeenCalledTimes(allowed ? 1 : 0);
+    expect(safeStorage.decryptString).toHaveBeenCalledTimes(allowed ? 1 : 0);
+    expect(seal).not.toHaveBeenCalled();
+    expect(authorize).not.toHaveBeenCalled();
+    expect(raw!.prepare('SELECT headers FROM custom_mcp_servers WHERE id = ?').get(valid.id))
+      .toEqual({ headers: '{"Authorization":"invalid-legacy-test-only"}' });
+  });
+
+  it('times out the native consent prompt without opening credentials or authorizing SSH', async () => {
+    await rows();
+    vi.useFakeTimers();
+    let shown!: () => void;
+    const dialogShown = new Promise<void>((resolve) => { shown = resolve; });
+    setupDialog.showMessageBox.mockImplementation((options: { signal: AbortSignal }) => {
+      shown();
+      return new Promise<{ response: number }>((resolve) => {
+        options.signal.addEventListener('abort', () => resolve({ response: 0 }), { once: true });
+      });
+    });
+    const collect = vi.fn(async (): Promise<SetupSecretBundle> => {
+      await listCustomMcpServers();
+      return { providers: [], mcpServers: [], builtinKeys: [], plugins: [] };
+    });
+    const authorize = vi.fn(async () => []);
+    const seal = vi.spyOn(SetupTransferBox.prototype, 'seal');
+    const handle = createSetupTransferSource({
+      ownerKey: () => 'owner-test', requesterName: async () => 'New computer',
+      describeSecrets: async (request) => (await listCustomMcpNamesForSetup(request.mcpServers)).map((row) => row.name),
+      describeSshHosts: async () => ['test-host'], sshKeyFingerprint: () => 'SHA256:test',
+      confirm: (prompt, timeout) => confirmSetupTransfer(prompt, timeout, null),
+      collectSecrets: collect, authorizeSsh: authorize,
+    });
+    const result = handle({
+      action: 'transfer', requestId: 'request-test-001', publicKey: new SetupTransferBox().publicKey,
+      secrets: { providers: [], mcpServers: [valid.id], builtinKeys: [], plugins: [] },
+      ssh: { publicKey: `ssh-ed25519 ${'A'.repeat(68)} test`, hosts: ['test-host'] },
+    }, 'requester-test');
+    const rejected = expect(result).rejects.toThrow('SETUP_TRANSFER_DECLINED');
+    await dialogShown;
+    await vi.advanceTimersByTimeAsync(120_000);
+    await rejected;
+    expect(safeStorage.decryptString).not.toHaveBeenCalled();
+    expect(safeStorage.encryptString).not.toHaveBeenCalled();
+    expect(collect).not.toHaveBeenCalled();
+    expect(seal).not.toHaveBeenCalled();
+    expect(authorize).not.toHaveBeenCalled();
+    expect(raw!.prepare('SELECT headers FROM custom_mcp_servers WHERE id = ?').get(valid.id))
+      .toEqual({ headers: '{"Authorization":"invalid-legacy-test-only"}' });
+  });
+
+  it('propagates metadata errors rather than returning an empty consent list', async () => {
+    mountDb();
+    raw!.exec('DROP TABLE custom_mcp_servers');
+    await expect(listCustomMcpNamesForSetup([valid.id])).rejects.toThrow();
+  });
+});
+
+
+describe('stored MCP credentials versus transfer bounds', () => {
+  it.each([
+    Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`X-${i}`, 'fake-value'])),
+    { 'X-Key': 'x'.repeat(4097) },
+  ])('does not report a filtered stored credential as a complete copied MCP', async (headers) => {
+    mountDb();
+    const config = { ...valid, headers };
+    expect(validateCustomMcpConfig(config)).toEqual({ ok: true });
+    await createCustomMcpServer(config);
+    const saved = (await listCustomMcpServers())[0];
+    expect(saved.headers).toEqual(headers);
+    const parsed = parseSetupSecretBundle({ mcpServers: [{ id: saved.id, url: saved.url, headers: saved.headers, token: null }], builtinKeys: [{ id: 'brave', value: 'fake-brave' }] });
+    expect(parsed.mcpServers).toEqual([]);
+    expect(parsed.builtinKeys).toEqual([{ id: 'brave', value: 'fake-brave' }]);
   });
 });

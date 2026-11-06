@@ -1,8 +1,9 @@
 /** Group plan cards and handoffs follow docs/product-rules/bot-group-chat.md §7. */
 import type { ReactNode } from 'react';
 import { Alert, Animated as RNAnimated, Easing, Pressable, StyleSheet, View } from 'react-native';
-import { useEffect, useRef } from 'react';
-import { CircleAlert, CircleCheck, CircleDashed, FileText, ListChecks } from 'lucide-react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Check, ChevronDown, ChevronUp, Circle, CircleAlert, CircleCheck, CircleDashed, CircleMinus, FileText, ListChecks, Minus, Sparkles } from 'lucide-react-native';
+import { botGroupPlanStepState, botGroupQueueWindow, canSkipBotGroupPlanStep } from '@cindy/maker-shared/botGroupPresentation';
 import { useTranslation } from 'react-i18next';
 import { botGroupPathBasename, isActiveBotGroupMember, type BotGroupPlanFollowUp } from '@cindy/maker-shared/botGroupPresentation';
 import type { BotGroupMemberView, BotGroupPlanStepView, BotGroupPlanView } from '@cindy/maker-shared/botGroupChat';
@@ -68,21 +69,25 @@ function StepLead({ plan, step, index }: { plan: BotGroupPlanView; step: BotGrou
     <CircleCheck size={iconSize.md} color={colors.textSecondary} />
   </CompanionFadeIn>;
   // K7: running breathes in Heart Orange, the list's running language.
-  if (step.status === 'running' && plan.status !== 'stopped') return <RunningDot />;
+  if (botGroupPlanStepState(plan, step) === 'running' && plan.status !== 'stopped') return <RunningDot />;
+  if (step.status === 'skipped') return <CircleMinus size={iconSize.md} color={colors.textTertiary} />;
   if (step.status === 'failed') return <CircleAlert size={iconSize.md} color={colors.errorText} />;
   return <CircleDashed size={iconSize.md} color={colors.textTertiary} />;
 }
 
-const STEP_STATUS_KEYS: Partial<Record<BotGroupPlanStepView['status'], string>> = {
+const STEP_STATUS_KEYS: Partial<Record<ReturnType<typeof botGroupPlanStepState>, string>> = {
+  queued: 'groupChat.plan.stepQueued',
+  skipped: 'groupChat.plan.stepSkipped',
+  stopped: 'groupChat.plan.stopped',
   done: 'groupChat.plan.stepDone',
   running: 'groupChat.plan.stepRunning',
   failed: 'groupChat.plan.stepFailed',
 };
 
 function stepStatusKey(plan: BotGroupPlanView, step: BotGroupPlanStepView) {
-  // A server stop ends the plan before the executor necessarily updates its step.
-  return plan.status === 'stopped' && step.status === 'running'
-    ? 'groupChat.plan.stopped' : STEP_STATUS_KEYS[step.status];
+  if (plan.status === 'stopped' && step.status === 'running') return 'groupChat.plan.stopped';
+  const state = botGroupPlanStepState(plan, step);
+  return plan.kind === 'talk' && state === 'running' ? 'groupChat.plan.stepExecuting' : STEP_STATUS_KEYS[state];
 }
 
 function StepRowContent({ plan, step, index, identity, deviceId, online, muted }: {
@@ -113,6 +118,74 @@ function stepAccessibility(t: (key: string, options?: Record<string, unknown>) =
   return [status, name, step.task].filter(Boolean).join(', ');
 }
 
+/** The discussion queue has its own compact bubble; work-plan cards keep their existing actions. */
+function BotGroupTalkCard({ plan, identityFor, deviceId, online, pending, onEditStep }: {
+  plan: BotGroupPlanView;
+  identityFor: BotGroupIdentityLookup;
+  deviceId: string;
+  online: boolean;
+  pending: BotGroupPlanCardAction | null;
+  onEditStep(step: BotGroupPlanStepView, action: 'reassign' | 'remove' | 'skip', botId?: string): void;
+}) {
+  const { t } = useTranslation();
+  const styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
+  const [expanded, setExpanded] = useState(false);
+  const turns = botGroupQueueWindow(plan);
+  const foldable = turns.end - turns.start < plan.steps.length;
+  const shown = foldable && !expanded ? plan.steps.slice(turns.start, turns.end) : plan.steps;
+  const current = plan.steps.find(step => step.position === plan.currentStep);
+  const statusKey = (step: BotGroupPlanStepView) => step.status === 'done' ? 'groupChat.plan.stepSpoken'
+    : stepStatusKey(plan, step) ?? 'groupChat.plan.talkPending';
+  const progress = plan.status === 'done' ? t('groupChat.plan.queueEnded')
+    : plan.status === 'waiting' ? t(current?.status === 'failed' ? 'groupChat.plan.stepFailed' : 'groupChat.plan.queueWaiting')
+    : ['stopped', 'superseded', 'dismissed'].includes(plan.status) ? t(`groupChat.plan.${plan.status}`)
+    : current ? `${t(statusKey(current))} · ${current.position + 1} / ${plan.steps.length}` : '';
+  const busy = pending !== null;
+  return <View style={styles.talkCard} testID="botGroup.plan">
+    <View style={styles.talkHeader}>
+      <Circle size={iconSize.md} color={colors.textTertiary} />
+      <Text style={styles.talkTitle}>{t('groupChat.plan.talkTitle')}</Text>
+      <Text style={styles.talkProgress}>{progress}</Text>
+    </View>
+    <View style={styles.steps}>
+      {shown.map(step => {
+        const identity = identityFor(step.botId, step.botName);
+        const state = botGroupPlanStepState(plan, step);
+        return <View key={step.position} style={styles.talkRow} testID="botGroup.plan.step">
+          <BotGroupAvatar deviceId={deviceId} identity={identity} size={BOT_GROUP_INLINE_AVATAR_SIZE} online={online} />
+          <View style={styles.talkMember}>
+            <Text style={styles.talkName}>{identity.name}</Text>
+            <View style={[styles.talkTail, canSkipBotGroupPlanStep(plan, step) && styles.talkActionTail]}>
+              <View style={styles.talkStatus}>
+                {state === 'done' ? <Check size={iconSize.sm} color={colors.statusDone} />
+                  : state === 'running' ? <Sparkles size={iconSize.sm} color={colors.statusAccent} />
+                  : state === 'skipped' || state === 'stopped' ? <Minus size={iconSize.sm} color={colors.textTertiary} />
+                  : state === 'failed' ? <CircleAlert size={iconSize.sm} color={colors.statusError} /> : null}
+                <Text style={styles.stepStatus}>{t(statusKey(step))}</Text>
+              </View>
+              {canSkipBotGroupPlanStep(plan, step) ? <Pressable accessibilityRole="button"
+                accessibilityLabel={t('groupChat.plan.skipTurnLabel', { name: identity.name })}
+                accessibilityState={{ disabled: busy || !online, busy }} disabled={busy || !online}
+                hitSlop={{ top: 8, bottom: 8 }} testID="botGroup.plan.skipTurn" onPress={() => onEditStep(step, 'skip')}
+                style={({ pressed }) => [styles.talkButton, pressed && mobileInteractionStyles.pressed, (busy || !online) && styles.muted]}>
+                <Text style={styles.talkButtonLabel}>{t(busy ? 'groupChat.plan.skippingTurn' : 'groupChat.plan.skipTurn')}</Text>
+              </Pressable> : null}
+            </View>
+          </View>
+        </View>;
+      })}
+    </View>
+    {foldable ? <Pressable accessibilityRole="button" accessibilityState={{ expanded }}
+      accessibilityLabel={expanded ? t('groupChat.plan.foldTurns') : t('groupChat.plan.allTurns', { count: plan.steps.length })}
+      hitSlop={{ top: 8, bottom: 8 }} onPress={() => setExpanded(open => !open)} testID="botGroup.plan.fold"
+      style={({ pressed }) => [styles.talkFold, pressed && mobileInteractionStyles.pressed]}>
+      <Text style={styles.talkButtonLabel}>{expanded ? t('groupChat.plan.foldTurns') : t('groupChat.plan.allTurns', { count: plan.steps.length })}</Text>
+      {expanded ? <ChevronUp size={iconSize.sm} color={colors.textSecondary} /> : <ChevronDown size={iconSize.sm} color={colors.textSecondary} />}
+    </Pressable> : null}
+  </View>;
+}
+
 export function BotGroupPlanCard({
   plan, fallback, members, identityFor, deviceId, online, actionable, reassignable, pending, onStart, onDismiss, onEditStep,
 }: {
@@ -127,7 +200,7 @@ export function BotGroupPlanCard({
   pending: BotGroupPlanCardAction | null;
   onStart(): void;
   onDismiss(): void;
-  onEditStep(step: BotGroupPlanStepView, action: 'reassign' | 'remove', botId?: string): void;
+  onEditStep(step: BotGroupPlanStepView, action: 'reassign' | 'remove' | 'skip', botId?: string): void;
 }) {
   const { t, i18n } = useTranslation();
   const styles = useThemedStyles(makeStyles);
@@ -136,6 +209,8 @@ export function BotGroupPlanCard({
     {fallback ? <Text selectable style={styles.stepText}>{fallback}</Text> : null}
     <Text style={styles.note}>{t('groupChat.plan.missing')}</Text>
   </View>;
+  if (plan.kind === 'talk') return <BotGroupTalkCard plan={plan} identityFor={identityFor} deviceId={deviceId}
+    online={online} pending={pending} onEditStep={onEditStep} />;
   const muted = plan.status === 'superseded' || plan.status === 'dismissed';
   const finalNote = plan.status === 'superseded' ? 'groupChat.plan.superseded'
     : plan.status === 'dismissed' ? 'groupChat.plan.dismissed'
@@ -301,6 +376,23 @@ export function BotGroupPlanFollowUpRow({ followUp, identityFor, deviceId, onlin
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
+  // Approved r3 talk bubble: one surface, 28pt inline pills with 44pt touch targets.
+  talkCard: { backgroundColor: colors.surfaceElevated, borderColor: colors.border, borderWidth: 1,
+    borderRadius: radius.container, paddingHorizontal: spacing.md + 2, paddingVertical: spacing.sm + 2, width: '100%', maxWidth: 720 },
+  talkHeader: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: spacing.sm, rowGap: spacing.xs },
+  talkTitle: { flexGrow: 1, flexShrink: 1, color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodyRelaxed, fontWeight: fontWeight.semibold },
+  talkProgress: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.bodyRelaxed, fontVariant: ['tabular-nums'] },
+  talkRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm + 2, paddingVertical: spacing.sm - 1 },
+  talkMember: { flex: 1, minWidth: 0, gap: 2 },
+  talkName: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.medium },
+  talkTail: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: spacing.sm, minHeight: lineHeight.bodySmall },
+  // Keep the expanded hitSlop inside the parent's bounds on native platforms.
+  talkActionTail: { minHeight: 44 },
+  talkStatus: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  talkButton: { minHeight: 28, paddingHorizontal: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center' },
+  talkButtonLabel: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.medium },
+  talkFold: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: spacing.xs, minHeight: 28, paddingHorizontal: spacing.md, marginTop: spacing.xs, borderRadius: radius.pill },
+
   organizerBadge: { borderRadius: radius.pill, backgroundColor: colors.surfaceChip, paddingHorizontal: spacing.sm, flexShrink: 0 },
   organizerBadgeText: { color: colors.textSecondary, fontSize: typeScale.micro, lineHeight: lineHeight.micro, fontWeight: fontWeight.semibold },
   // K1 card shell: raised surface, hairline border, radius 12, padding 16; steps have no row dividers.

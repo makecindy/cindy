@@ -351,3 +351,36 @@ describe('withOptimisticConfig', () => {
     ).toBe(config);
   });
 });
+
+// #8485: the storage namespace must survive favorites/recents while requests
+// still carry the full opaque model ID. Older exact-first favorites are unsafe.
+it.each(['foo', 'chatgpt/foo'])('stores an exact gateway shortcut but selects wire ID %s', async modelId => {
+  const { resolveUnifiedRowConfig, resolveFavoriteRowConfig, buildUnifiedListSections } = await import('../components/new-chat/unifiedModelSelection');
+  const { parseRemoteModelFavorite } = await import('@cindy/device-link');
+  const recent = await import('../state/recentModels');
+  const previousOwner = recent.getRecentModelsOwner();
+  recent.setRecentModelsOwner('magpie-shortcut-regression');
+  try {
+    const gateway: UnifiedModelEntry = {
+      ...entry, candidates: ['codex'], recommended: 'codex', nativeAgent: 'codex',
+      modelId, enginePreferenceId: JSON.stringify(['magpie-route', modelId]),
+      capabilities: { codex: { ...config.capability!, agent: 'codex', wireModelId: modelId,
+        efforts: ['medium'], supportsFastMode: false, contextWindow: 200000, contextWindowVerified: false } },
+    };
+    const rowAnchor: UnifiedAnchor = { kind: 'model', providerId: gateway.providerId, modelId };
+    const rowConfig = resolveUnifiedRowConfig({ entry: gateway });
+    const add = vi.fn();
+    const onSelect = vi.fn();
+    const hook = renderActions({ recordRecentUsage: true, onSelect,
+      favoriteStore: { get: vi.fn(), add, update: vi.fn(), remove: vi.fn() } });
+    act(() => { hook.result.current.addFavorite(rowAnchor, rowConfig); });
+    const stored = parseRemoteModelFavorite(JSON.parse(JSON.stringify({ uid: 'fav-gateway', ...add.mock.calls[0][0] })));
+    expect(stored.modelId).toBe(gateway.enginePreferenceId);
+    const rows = buildUnifiedListSections({ entries: [gateway], favorites: [stored], query: '', rail: { kind: 'favorites' } })[0].rows;
+    const favorite = rows[0].favorite!;
+    act(() => { hook.result.current.selectRow(rows[0].anchor, resolveFavoriteRowConfig({ entry: gateway, item: favorite }), favorite, gateway); });
+    expect(onSelect).toHaveBeenCalledWith(gateway.providerId, modelId, expect.any(String), expect.objectContaining({ rowModelId: modelId }));
+    expect(recent.listRecentModels().some(item => item.modelId === gateway.enginePreferenceId)).toBe(true);
+    hook.unmount();
+  } finally { recent.setRecentModelsOwner(previousOwner); }
+});

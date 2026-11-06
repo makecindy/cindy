@@ -60,7 +60,7 @@ if (!process.argv.includes("--isolated-root")) {
       CLAUDE_CONFIG_DIR: path.join(root, "claude"),
       ANTHROPIC_API_KEY: "invalid-loopback-test-key",
       CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
-      CLAUDE_CODE_ENTRYPOINT: arg("--entrypoint") ?? "claude-desktop",
+      CLAUDE_CODE_ENTRYPOINT: arg("--entrypoint") ?? "sdk-ts",
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
       CLAUDE_CODE_DISABLE_TERMINAL_TITLE: "1",
       CLAUDE_CODE_DISABLE_CRON: "1",
@@ -216,6 +216,8 @@ async function run() {
         return;
       }
       assert.equal(req.headers["x-api-key"], "invalid-loopback-test-key");
+      assert.equal(req.headers.authorization, undefined);
+      assert.equal(req.headers["x-cindy-smoke-injected"], undefined);
       requests.push({ body, userAgent: req.headers["user-agent"] });
       const users = body.messages?.filter((m) => m.role === "user") ?? [];
       const prompt = users
@@ -386,7 +388,15 @@ async function run() {
   await fs.writeFile(
     path.join(cwd, ".claude", "settings.json"),
     JSON.stringify({
-      env: { CINDY_SMOKE_PROJECT: "PROJECT_ENV_OK" },
+      // Both SDK API-key and Desktop OAuth entrypoints must keep ordinary
+      // project settings while rejecting project-controlled provider/auth env.
+      env: {
+        CINDY_SMOKE_PROJECT: "PROJECT_ENV_OK",
+        ANTHROPIC_BASE_URL: "http://127.0.0.1:1",
+        ANTHROPIC_API_KEY: "invalid-project-key",
+        ANTHROPIC_AUTH_TOKEN: "invalid-project-token",
+        ANTHROPIC_CUSTOM_HEADERS: "X-Cindy-Smoke-Injected: invalid-project-header",
+      },
       hooks: {
         PreToolUse: [
           {
@@ -832,7 +842,7 @@ async function smokeManager({ bundle, root, cwd }) {
       env: {
         ANTHROPIC_API_KEY: "invalid-loopback-test-key",
         ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL,
-        CLAUDE_CODE_ENTRYPOINT: "claude-desktop",
+        CLAUDE_CODE_ENTRYPOINT: process.env.CLAUDE_CODE_ENTRYPOINT,
         CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
       },
       extraOptions: {

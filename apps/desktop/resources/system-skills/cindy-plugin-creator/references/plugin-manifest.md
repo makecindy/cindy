@@ -7,7 +7,11 @@
   "name": "我的插件",           // 展示名
   "description": "一句话说清这个插件是干嘛的(给人看:插件详情页)",  // 1–300 字
   "whenToUse": "需要生成图片、插画、配图、修图、P 图、改图时找我",  // 1–300 字,给模型看:进 agent 会话的插件花名册,是"用户不点名时 AI 能不能想起你"的关键。写成场景枚举,可反复调优;花名册会折叠连续空白,异常数据会截断;缺省时花名册回落用 description
-  "icon": "assets/icon.png",   // 建议:插件图标(包内相对路径;扩展名限 png/jpg/jpeg/webp/gif,不收 svg——svg 可携带脚本,虽经 <img> 渲染不执行,仍不给这个面)。不配则面板与消息身份头显示默认拼图占位符;官方插件仓惯例放 assets/icon.png
+  "icon": "assets/icon.png",   // 建议:插件图标(包内相对路径;扩展名限 png/jpg/jpeg/webp/gif,不收 svg——svg 可携带脚本,虽经 <img> 渲染不执行,仍不给这个面)。图片由用户提供或同意后生成，禁止用纯色占位图；未设置时省略此字段，客户端显示默认符号；官方插件仓惯例放 assets/icon.png
+  "readme": {                  // 可选:详细介绍(给人看:详情页「介绍」区,不进模型上下文);语言到包内 .md 文件,必须提供 en,见下文「详细介绍」
+    "en": "README.md",
+    "zh-CN": "README.zh-CN.md"
+  },
   "locales": {                 // 可选:插件只跟随宿主语言;不支持/缺失语言固定回退 en
     "en": "locales/en.json",
     "zh-CN": "locales/zh-CN.json",
@@ -26,6 +30,10 @@
   // 否则请始终声明一个 command。
   "tools": [ /* 见 §3；下方 open_view 必须在此声明 */ ],
   // 可选交互页面，完整示例见 §4.23；需要 minCindyVersion >= 0.1.122-beta
+  // 原生位置的贡献与多个独立视图另用 ui；开发中，完整契约见 plugin-native-ui.md。
+  // "ui": { "version": 1, "contributions": [{ "id": "format", "point": "composer.tools", "scope": "session" }] },
+  // 可并列 tabViews: [{ "id": "logs", "title": "日志", "scope": "session", "page": "views/logs.html" }]。
+  // 只登记可打开的页面，不自动打开；不替代 mainView / panel / taskView。
   "mcpApps": { "ui": {
     "resources": [{ "uri": "ui://records/v1", "file": "ui/page.html" }],
     "tools": { "open_view": { "resourceUri": "ui://records/v1" } }
@@ -97,6 +105,29 @@ Desktop 信任来源已经完成的版本选择，不再按 `minCindyVersion` �
 "whenToUse": "需要查询、创建或更新项目、任务、成员、迭代与发布状态时找我"
 ```
 
+### 详细介绍(readme)
+
+`description` 是卡片和详情页标题下的一句话(≤300 字)。需要讲清用法、放截图时,另写
+详细介绍:`readme` 是语言到包内 Markdown 文件的映射,与 `locales` 同一组语言、必须提供
+`en`;缺少当前宿主语言时显示英文。多个语言可以共用同一份文件。
+
+- 显示位置:安装后的插件详情页、安装前的市场详情页(官方市场需服务端支持;自定义市场
+  直接读源里的文件)与手机插件详情。正文较长时先折叠。内容只给人看,**不进模型上下文**,
+  也不会出现在插件花名册或市场搜索结果里——写给 AI 的说明仍放 `whenToUse`。
+- 写法:普通 Markdown(标题、列表、表格、代码块、链接)。HTML 不渲染,包括 `<img>`,插图一律用
+  Markdown 图片语法(行内 `![说明](路径)` 或引用式均可;代码块里的示例不算)。链接只开放
+  http(s) 与 mailto,用系统浏览器打开。
+- **图片只能用包内文件**:相对介绍文件所在目录写路径(如 `![搜索结果](assets/readme/search.png)`,
+  可用 `./`、可用不越出包根的 `../`)。外部图片地址、`data:` 图片和不支持的格式一律不显示。
+  格式与图标相同(png / jpg / jpeg / webp / gif,不收 svg);路径每段只用字母、数字、
+  `_`、`.`、`-`。
+- 上限:单份 Markdown ≤ 128 KB;单张图片 ≤ 512 KB;每份介绍最多 8 张、合计 ≤ 3 MB。手机端
+  经电脑转发,图片约 1.5 MB 以内能完整显示,超出的按出现顺序省略、文字保留——想让手机也
+  看全,把图片总量控制在 1.5 MB 内。打包时(`ghost_forge_pack`)缺文件、超限或引用的图片不存在会直接
+  报错;运行时超出的图片按出现顺序跳过。
+- 截图建议用 webp 或压缩后的 png,宽度 1200–1600 像素即可;深浅两种模式下都要看得清。
+- 旧版客户端会忽略 `readme`,只显示 `description`,不需要为它提高 `minCindyVersion`。
+
 ## 2.1 本地化资源(locales)
 
 插件语言**只跟随 Cindy 宿主当前语言**。不要读取 `navigator.language`、操作系统语言或
@@ -166,7 +197,7 @@ node secretBindings key、setup kv key——都不能使用 `__proto__`、`const
 v3 直接用顶层字段声明插件贡献项与自主 Host 能力，不再有 `slots`。带详单的字段是 `tools`、`cindy`、
 `agent`、`panel`、`mainView`、`taskView`、`card`、`subscribe`、`network`、`node`、`preview`、
 `browserExtension`、`skill`；布尔能力写成字面量 `true`：`notify`、`badge`、`confirm`、`fs`、
-`library`、`deviceSync`、`sessionContext`、`pick`、`workspace`。不用的字段直接省略。
+`library`、`deviceSync`、`sessionContext`、`pick`、`workspace`、`liveScreen`(需同时声明 `node`,见 [§4.22.1](plugin-task-view.md#4221-在手机上查看与操作设备画面livescreen-能力))。不用的字段直接省略。
 `deviceSync` 的声明与调用约定见 [§4.10.2 资料同步](plugin-files-and-library.md#4102-同账号电脑间的插件资料同步)。
 邮件插件声明 `mail: true`，调用 Cindy 内置 `cindyMail.register(adapter)`
 （version 1），不生成卡片 HTML、不打包公共流程；纯邮件插件不需要 `card`。
@@ -300,7 +331,7 @@ node 详单**不接受** `command` / `args` / `shell` / `env` 或其它自造字
   "secrets": [{                                     // 可选 0–4 条:需要用户填的凭证(你只声明名字和注入位置,值用户填、主机保管)
     "key": "api_token",                             // 小写字母开头,小写/数字/下划线,1–32;禁用宿主保留键(见 §2.1)
     "label": "Example API Token",                   // 给用户看的名称(设置页/详情页)
-    "source": "user",                               // 可选:凭证值来源。"user"(缺省)=用户可在调用前的主机 Setup 卡内填写,也可在你的 settingsHtml 里长期管理/替换/清除(当前仍要求同时声明 settingsHtml,见 §4.7);"login-email"=主机登录邮箱自动派生(用户不填;声明它时不允许再写 url,见 §4.7);"oauth"=主机托管 OAuth 授权,值 = 授权换来的 access token(必须同时声明 oauth 详单,见 §4.7 与下方 oauth 字段);"gh-cli"=仅官方 cindy-github 可用,优先复用本机 gh 登录、不可用时回落同 key 的设置页 PAT;"oidc-token"=主机为当前企业 Membership 按需签发短时 Connection JWT(插件不可读取,必须显式限制 inject.hosts,固定 Authorization: Bearer {value},见 §4.7)
+    "source": "user",                               // 可选:凭证值来源。"user"(缺省)=用户可在调用前的主机 Setup 卡内填写,也可在你的 settingsHtml 里长期管理/替换/清除(当前仍要求同时声明 settingsHtml,见 §4.7);"login-email"=主机登录邮箱自动派生(用户不填;声明它时不允许再写 url,见 §4.7);"oauth"=主机托管 OAuth 授权,值 = 授权换来的 access token(必须同时声明 oauth 详单,见 §4.7 与下方 oauth 字段);"gh-cli"=已批准且身份已确认的实例可声明,优先复用本机 gh 登录、不可用时回落同 key 的设置页 PAT;"oidc-token"=主机为当前企业 Membership 按需签发短时 Connection JWT(插件不可读取,必须显式限制 inject.hosts,固定 Authorization: Bearer {value},见 §4.7)
     "hint": "在控制台生成后粘贴",                     // 可选提示(主机 Setup 卡与 settingsHtml 都会用到)
     "url": "https://example.com/settings/keys",     // 可选:控制台/申请地址(仅 https)。调用前缺凭证时,主机 Setup 卡会在输入框旁展示本地化的「获取凭证」入口；settingsHtml 也可用 <a href> 逐字引用它,点击经主机转系统浏览器打开(见 §4.8「外链」)
     "inject": {                                     // 必填:这条凭证怎么进请求
@@ -325,9 +356,9 @@ node 详单**不接受** `command` / `args` / `shell` / `env` 或其它自造字
       "scopeDelimiter": ",",                        // 可选:authorize URL 的 scope 拼接分隔符;缺省空格(OAuth 标准),Slack 这类逗号分隔的服务商声明 ","(目前只认这一个值)
       "pkce": true,                                 // 可选:PKCE(S256)开关,缺省 true
       "extraAuthorizeParams": { "access_type": "offline", "prompt": "consent" },  // 可选 ≤8 条:服务商特有授权参数(协议保留参数禁写)
-      "identity": { "url": "https://api.example.com/userinfo", "labelPath": "email", "displayTemplate": "{team} · {user}", "avatarPath": "data.avatar_thumb" },  // 可选:授权后拉一次身份端点给账号打标签(设置页"已连接为 xxx";url 域名须命中 hosts)。labelPath 应指向**唯一且稳定**字段(如邮箱 / user_id)——它是重复授权时的同身份合并判定键,选 name 这类可重名可改名字段会误合并。displayTemplate 可选:人类可读展示名模板,`{点分路径}` 占位符从同一份身份响应取值(至少一个占位符,≤200 字符),任一占位符取不到值整体降级为空、回落显示 labelPath 的值——labelPath 的稳定字段不可读(如 Slack 的 user_id)时声明它,设置页与账号工具展示的就是渲染后的名字(邮箱这类本身可读的服务商不需要)。avatarPath 可选:头像 URL 在身份响应里的点分路径(如飞书的 "data.avatar_thumb")——主机取 https 地址后**不带凭证**下载小图(仅 png/jpeg/webp/gif、≤256KB)转 data URL 存库,`/oauth` 回查里以 account.avatarDataUrl 给你的 settingsHtml 展示(<img> 直接用)。**下载仅对第一方官方插件生效**(头像地址不受 hosts 白名单约束,第三方声明合法但恒降级 null)——所以页面必须能没头像也好看(如回落姓名首字圆片)
+      "identity": { "url": "https://api.example.com/userinfo", "labelPath": "email", "displayTemplate": "{team} · {user}", "avatarPath": "data.avatar_thumb" },  // 可选:授权后拉一次身份端点给账号打标签(设置页"已连接为 xxx";url 域名须命中 hosts)。labelPath 应指向**唯一且稳定**字段(如邮箱 / user_id)——它是重复授权时的同身份合并判定键,选 name 这类可重名可改名字段会误合并。displayTemplate 可选:人类可读展示名模板,`{点分路径}` 占位符从同一份身份响应取值(至少一个占位符,≤200 字符),任一占位符取不到值整体降级为空、回落显示 labelPath 的值——labelPath 的稳定字段不可读(如 Slack 的 user_id)时声明它,设置页与账号工具展示的就是渲染后的名字(邮箱这类本身可读的服务商不需要)。avatarPath 可选:头像 URL 在身份响应里的点分路径(如飞书的 "data.avatar_thumb")——主机取 https 地址后**不带凭证**下载小图(仅 png/jpeg/webp/gif、≤256KB)转 data URL 存库,`/oauth` 回查里以 account.avatarDataUrl 给你的 settingsHtml 展示(<img> 直接用)。所有插件统一经过安全下载防护，拦截内网、回环和不安全跳转；下载失败降级 null，页面应能回落姓名首字圆片
       "redirectPort": 53682,                        // 可选:loopback 回调固定端口(1024–65535);声明 tokenBroker 时必填。服务商要求回调 URI 与注册值精确匹配(如 Atlassian)时声明,回调恒为 http://127.0.0.1:<端口>/callback;非 broker 模式缺省 = 随机端口(Google 等允许任意 loopback 端口的服务商不用声明)
-      "tokenBroker": "jira",                        // 可选:三路资格:随包官方种子或受信任公开市场的官方插件(名称本身不构成资格);当前组织的服务端 organization market 包满足来源/组织/namespace/整包 sha256 绑定;或企业作者用 ghost_forge_install 明确安装到当前组织 namespace。后两路只给 Broker 与 oidc-token,不给宿主原语;手动导入与个人身份不放行。声明时必须同时声明 redirectPort;code/refresh 交换经 Cindy 服务端 broker 完成(client secret 在服务端,不随包分发),与 clientSecret 互斥;设置页不再支持自填 client
+      "tokenBroker": "jira",                        // 可选:企业绑定两路资格:当前组织的服务端 organization market 包满足来源/组织/namespace/整包 sha256 绑定;或企业作者用 ghost_forge_install 明确安装到当前组织 namespace。旧企业兼容分支保留;官方公共来源、随包来源和 local 副本不构成资格;手动导入与个人身份不放行。声明时必须同时声明 redirectPort;code/refresh 交换经 Cindy 服务端 broker 完成(client secret 在服务端,不随包分发),与 clientSecret 互斥;设置页不再支持自填 client
       "brokerBounce": { "path": "/example/bounce", "callbackPath": "/example/callback" }  // 可选:双地址弹跳回调(服务商后台只收 https redirect、不收 http loopback 时用)。必须与 tokenBroker、redirectPort 同时声明;报给服务商的 redirect_uri = broker 服务基地址 + path(主机运行时拼,清单不落域名),浏览器授权后由弹跳路由 302 回 http://127.0.0.1:<redirectPort><callbackPath>
     }
   }],

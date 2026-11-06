@@ -9,6 +9,22 @@ import type { Session } from '@/lib/ccAgent.types';
 import { useScheduleForm } from '../useScheduleForm';
 import { formToProjectConfig } from '../../lib/projectAutomationConfig';
 
+// Issue 8886 / unit: edit initialization, validation and clear must survive the real hook.
+it('restores the saved deadline and validates edits before saving', () => {
+  const expireAt = new Date(2027, 3, 5, 10, 30, 15).getTime();
+  const saved = { id: 'deadline', name: 'Deadline', prompt: 'check', cronExpr: '0 9 * * *',
+    timezone: 'UTC', recurring: true, agentKind: 'claude-code', notify: {}, expireAt } as Schedule;
+  const { result } = renderHook(() => useScheduleForm(saved));
+  expect(result.current.form.deadline).toBe('2027-04-05T10:30');
+  act(() => result.current.setField('name', 'Renamed'));
+  expect(result.current.toInput().expireAt).toBe(expireAt);
+  act(() => result.current.setField('deadline', '2027-02-30T10:00'));
+  expect(result.current.validate()).toEqual({ key: 'scheduler.deadline.invalid' });
+  act(() => result.current.setField('deadline', ''));
+  expect(result.current.toInput().expireAt).toBeNull();
+  expect(result.current.validate()).toBeNull();
+});
+
 it('keeps a blank reminder audible until the user opts into quiet checks', () => {
   const { result } = renderHook(() => useScheduleForm(null));
   expect(result.current.toInput().silentWhenIdle).toBe(false);

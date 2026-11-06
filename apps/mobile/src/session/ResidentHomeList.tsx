@@ -4,6 +4,7 @@ import Animated from 'react-native-reanimated';
 import { useSegments } from 'expo-router';
 import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
+import { AnimationVisibilityProvider } from '@/hooks/useLoopingAnimation';
 import { motionDuration } from '@/theme/tokens';
 import { RemoteSessionStoreSubscriptionGate } from './remoteSessionStore';
 import { sessionPaneLayout } from './sessionPaneLayout';
@@ -61,8 +62,7 @@ export function ResidentHomeListProvider({ children }: { children: ReactNode }) 
   // iOS Home keeps its list in its own route; Android draws it here on the home too.
   const rootHome = Platform.OS !== 'ios';
   const visible = (rootHome && homeRoute)
-    || (persistent && segments[0] === 'sessions'
-      && (segments[1] === '[sessionId]' || segments[1] === 'new'));
+    || (persistent && isPaneDetailRoute(segments));
   const host = useRef<View>(null);
   const mounted = useRef(false);
   const [entry, setEntry] = useState<Entry | null>(null);
@@ -88,7 +88,9 @@ export function ResidentHomeListProvider({ children }: { children: ReactNode }) 
           // after release; keep the sidebar's native host above the route.
           transitionDuration: !persistent && reduceMotion === false ? motionDuration.fast : 0,
         }, { opacity: visible ? 1 : 0 }]}>
-        <RemoteSessionStoreSubscriptionGate enabled={visible}>{entry.children}</RemoteSessionStoreSubscriptionGate>
+        <AnimationVisibilityProvider visible={visible}>
+          <RemoteSessionStoreSubscriptionGate enabled={visible}>{entry.children}</RemoteSessionStoreSubscriptionGate>
+        </AnimationVisibilityProvider>
       </Animated.View> : null}
       {visible && !homeRoute && paneLayout.resizeBounds ? <SessionPaneDivider
         width={paneLayout.sidebarWidth} bounds={paneLayout.resizeBounds}
@@ -134,6 +136,13 @@ export function ResidentHomeList({ children, focused, top, left, right }: {
   return <View ref={anchor} collapsable={false} pointerEvents="none" onLayout={measure}
     style={{ flex: 1, marginTop: top, marginLeft: -left, marginRight: -right }} />;
 }
+/** Routes shown beside the resident list: tasks (including a teammate's own
+ * chat) and group chats, which share one teammate list with them. */
+function isPaneDetailRoute(segments: string[]) {
+  if (segments[0] === 'sessions') return segments[1] === '[sessionId]' || segments[1] === 'new';
+  return segments[0] === 'companions' && segments[1] === 'groups' && segments[2] === '[groupId]';
+}
+
 const styles = StyleSheet.create({
   root: { flex: 1 },
   host: { position: 'absolute', zIndex: 1 },

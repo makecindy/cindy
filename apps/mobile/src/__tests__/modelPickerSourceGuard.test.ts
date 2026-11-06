@@ -16,8 +16,7 @@ const ENTRIES: Record<string, Source> = {
   'app/sessions/[sessionId].tsx': 'remote',
   'src/session/CompanionModelChain.tsx': 'remote',
   'src/plugins/PluginScheduleDraft.tsx': 'remote',
-  // #8460 合并后 PluginModelPicker 改为 remote。
-  'src/plugins/PluginModelPicker.tsx': 'plugin-task-local-route',
+  'src/plugins/PluginModelPicker.tsx': 'remote',
   'src/plugins/PluginTaskSettings.tsx': 'plugin-task-local-route',
 };
 

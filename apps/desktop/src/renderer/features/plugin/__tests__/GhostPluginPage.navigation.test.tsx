@@ -248,6 +248,36 @@ it('keeps linked computer and project scope in the page heading without changing
   expect(screen.getByText(detail.name)).toBe(recommended);
 });
 
+// Unit: another window's project toggle must update the real detail switch
+// without a global installed-list broadcast or another synchronous policy read.
+it('updates the selected project from a scoped push without refreshing unrelated projects', async () => {
+  const installed: InstalledGhost = {
+    manifest: { ...detail.manifest, name: 'Scoped Plugin' },
+    dir: path.join('plugins', detail.ghostId), enabled: true,
+    approval: { state: 'approved', revision: 'scoped-revision' },
+  };
+  let push!: (policy: { workdirKey: string; disabled: string[] }) => void;
+  const workdirPrefsSync = vi.fn(() => ({ disabled: [], workdirKey: '/fixture/Cindy' }));
+  Object.assign(window.electronAPI, { showOpenDirectoryDialog: async () => ({ canceled: false, path: '/fixture/Cindy/' }) });
+  Object.assign(window.electronAPI.ghosts, {
+    listSync: () => ({ ghosts: [installed] }), workdirPrefsSync,
+    onWorkdirPrefsChanged: (callback: typeof push) => { push = callback; return () => {}; },
+  });
+  render(page('/plugins'));
+  fireEvent.keyDown(screen.getByRole('button', { name: 'settings.ghosts.remote.device' }), { key: 'ArrowDown' });
+  fireEvent.keyDown(await screen.findByRole('menuitem', { name: 'settings.ghosts.scopePicker.ariaLabel' }), { key: 'ArrowRight' });
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.ghosts.scopePicker.browse' }));
+  await screen.findByText('settings.ghosts.projectBanner.desc');
+  fireEvent.click(await screen.findByText('Scoped Plugin'));
+  const control = await screen.findByRole('switch', { name: 'settings.ghosts.enableAria' });
+  expect(control.getAttribute('aria-checked')).toBe('true');
+  act(() => push({ workdirKey: '/other', disabled: [detail.ghostId] }));
+  expect(control.getAttribute('aria-checked')).toBe('true');
+  act(() => push({ workdirKey: '/fixture/Cindy', disabled: [detail.ghostId] }));
+  expect(control.getAttribute('aria-checked')).toBe('false');
+  expect(workdirPrefsSync).toHaveBeenCalledOnce();
+});
+
 async function openFromCatalog() {
   const plugin = await screen.findByText(detail.name);
   const catalog = screen.getByRole('main');
@@ -386,7 +416,7 @@ describe('plugin page return navigation', () => {
     });
     render(page('/plugins'));
     const card = screen.getByRole('button', { name: detail.name });
-    await within(card).findByText('settings.ghosts.page.origin.public');
+    await within(card).findByText('settings.ghosts.detail.publicInstall');
     if (expected) expect(within(card).getByText(expected)).toBeTruthy();
     if (author !== expected && author) expect(within(card).queryByText(author)).toBeNull();
     expect(within(card).queryByText('Package author must not leak')).toBeNull();
@@ -408,16 +438,16 @@ describe('plugin page return navigation', () => {
     });
     render(page('/plugins'));
     const card = screen.getByRole('button', { name: detail.name });
-    await within(card).findByText('settings.ghosts.page.origin.local');
+    await within(card).findByText(`settings.ghosts.detail.${kind === 'local' ? 'localDevelopment' : 'publicInstall'}`);
     expect(Boolean(within(card).queryByText('Local package author'))).toBe(kind === 'local');
   });
 
   it.each([
-    { id: 'cindy-art', namespace: null, namespaceState: 'confirmed', publishingSource: { kind: 'local', source: 'manual' }, approval: 'approved', reason: 'reservedId' },
-    { id: 'personal-plugin', namespace: 'org', namespaceState: 'confirmed', publishingSource: { kind: 'local', source: 'manual' }, approval: 'approved', reason: 'privatePlugin' },
-    { id: 'personal-plugin', namespace: null, namespaceState: 'pending', approval: 'approved', reason: 'identityPending' },
-    { id: 'personal-plugin', namespace: null, namespaceState: 'confirmed', publishingSource: { kind: 'local', source: 'manual' }, approval: 'invalid', reason: 'approvalRequired' },
-  ])('keeps publishing restrictions out of use details for $id ($reason)', async ({ id, namespace, namespaceState, approval, reason }) => {
+    { id: 'cindy-art', namespace: null, namespaceState: 'confirmed', publishingSource: { kind: 'local', source: 'manual' }, approval: 'approved', reason: 'reservedId', canPublish: true },
+    { id: 'personal-plugin', namespace: 'org', namespaceState: 'confirmed', publishingSource: { kind: 'local', source: 'manual' }, approval: 'approved', reason: 'privatePlugin', canPublish: false },
+    { id: 'personal-plugin', namespace: null, namespaceState: 'pending', approval: 'approved', reason: 'identityPending', canPublish: false },
+    { id: 'personal-plugin', namespace: null, namespaceState: 'confirmed', publishingSource: { kind: 'local', source: 'manual' }, approval: 'invalid', reason: 'approvalRequired', canPublish: false },
+  ])('uses installation facts for publishing without cluttering use details for $id ($reason)', async ({ id, namespace, namespaceState, approval, reason, canPublish }) => {
     const installed = {
       manifest: { ...detail.manifest, id, name: 'Installed Plugin' },
       dir: '/tmp/brain/' + id, namespace, namespaceState, publishingSource: { kind: 'local', source: 'manual' },
@@ -428,7 +458,7 @@ describe('plugin page return navigation', () => {
     render(page('/plugins'));
     fireEvent.click(await screen.findByText('Installed Plugin'));
     expect(screen.queryByText('settings.ghosts.contribution.versionUpdates')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'settings.ghosts.contribution.publishPlugin' })).toBeNull();
+    expect(Boolean(screen.queryByRole('button', { name: 'settings.ghosts.contribution.publishPlugin' }))).toBe(canPublish);
     expect(screen.queryByText('settings.ghosts.contribution.unavailable.' + reason)).toBeNull();
   });
 
@@ -440,19 +470,21 @@ describe('plugin page return navigation', () => {
       enabled: true, approval: { state: 'approved', revision: 'revision' },
     } as InstalledGhost;
     const unavailable = [
-      { ...installed, manifest: { ...installed.manifest, id: 'cindy-art', name: 'Reserved Plugin' } },
       { ...installed, manifest: { ...installed.manifest, id: 'organization-plugin', name: 'Organization Plugin' }, namespace: 'org' },
       { ...installed, manifest: { ...installed.manifest, id: 'unapproved-plugin', name: 'Unapproved Plugin' }, approval: { state: 'legacy-unapproved' } },
       { ...installed, manifest: { ...installed.manifest, id: 'pending-plugin', name: 'Pending Identity Plugin' }, namespaceState: 'pending' },
     ] as InstalledGhost[];
-    const ghosts = [...unavailable.map((ghost) => ({ ...ghost, dir: path.join(path.dirname(installed.dir), ghost.manifest.id) })), installed];
+    const sameNameLocal = { ...installed, manifest: { ...installed.manifest, id: 'cindy-art', name: 'Same-name Local Plugin' },
+      dir: '/tmp/brain/cindy-art', namespace: 'local' } as InstalledGhost;
+    const ghosts = [...unavailable.map((ghost) => ({ ...ghost, dir: path.join(path.dirname(installed.dir), ghost.manifest.id) })), installed, sameNameLocal];
     window.electronAPI.ghosts.listSync = () => ({ ghosts });
     const api = { list: vi.fn().mockResolvedValue({ plugins: [], nextCursor: null, queriedAt: '2026-10-15T00:00:00Z' }), transfers: vi.fn().mockResolvedValue([]), prepare: vi.fn().mockResolvedValue({ preparedId: 'preview', instanceId: 'local-author-plugin', version: '1.0.0', releaseNotes: 'Initial release', preflight: { blockers: [], actions: { canSubmit: true } } }), discard: vi.fn().mockResolvedValue(undefined), submit: vi.fn() };
     Object.assign(window.electronAPI, { pluginContributions: api });
     render(page('/plugins?myPlugins=1'));
     fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.contribution.publishPlugin' }));
     const picker = screen.getByRole('dialog');
-    expect(within(picker).getAllByRole('button')).toHaveLength(2); // One installation and Close; select before submitting.
+    expect(within(picker).getAllByRole('button')).toHaveLength(3); // Two installations and Close; select before submitting.
+    expect(within(picker).getByRole('button', { name: 'Same-name Local Plugin · 1.0.0 · cindy-art' })).toBeTruthy();
     for (const ghost of unavailable) expect(within(picker).queryByText(ghost.manifest.name)).toBeNull();
     const option = within(picker).getByRole('button', { name: 'Local Author Plugin · 1.0.0 · local-author-plugin' });
     await waitFor(() => expect(option).toHaveProperty('disabled', false));
@@ -497,10 +529,11 @@ describe('plugin page return navigation', () => {
     },
   );
 
-  it('shows no publishable installations instead of no installations when only a reserved plugin is installed', async () => {
+  it('shows no publishable installations instead of no installations when only a builtin plugin is installed', async () => {
     auth.mode = 'cloud';
     const installed: InstalledGhost = {
       manifest: { ...detail.manifest, id: 'cindy-art', name: 'Art' },
+      builtin: true,
       dir: path.resolve('brain', 'cindy-art'),
       namespace: null, namespaceState: 'confirmed', publishingSource: { kind: 'local', source: 'manual' }, enabled: true,
       approval: { state: 'approved', revision: 'revision' },

@@ -67,6 +67,9 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
   broadcastMessageRow: state.broadcast,
   createMessage: (...args: unknown[]) => state.create(...args),
 }));
+vi.mock('../../git-context/prRefsStore.js', () => ({
+  recomputePrRefsForSession: vi.fn(async () => {}),
+}));
 vi.mock('../../device-link/broadcast-tap.js', () => ({
   captureDataOwnerBroadcastScope: () => ({ owner: state.owner }),
 }));
@@ -333,7 +336,8 @@ it.each(['allow', 'block', 'ask'] as const)('routes page approval through Auto (
     { clientId: 'card', serverId: 'custom', title: 'Planner' });
   if (verdict === 'block') await expect(result).rejects.toThrow('MCP_APP_TOOL_DENIED');
   else await result;
-  expect(review).toHaveBeenCalledWith('task', 'custom', 'form', { value: 3 });
+  expect(review).toHaveBeenCalledWith('task', 'custom', 'form', { value: 3 }, undefined,
+    { name: record.tool.name, description: undefined, inputSchema: record.tool.inputSchema });
   expect(request).toHaveBeenCalledTimes(verdict === 'ask' ? 1 : 0);
   if (verdict === 'ask') expect(request).toHaveBeenCalledWith('task', expect.objectContaining({ metadata: expect.objectContaining({ mcpApp: { clientId: 'card', serverId: 'custom', title: 'Planner', scope: 'once' } }) }), expect.any(AbortSignal));
 });
@@ -452,7 +456,8 @@ it.each([
 // a page grant, while Full Access, media policy and Auto produce distinct outcomes.
 describe('plugin page ghost_call approval policy', () => {
   const source = { clientId: 'card', serverId: 'plugin-example', title: 'Page' };
-  const tool = { name: 'save', inputSchema: { type: 'object' as const } };
+  const tool = { name: 'save', description: 'Save a local draft; does not send messages.',
+    inputSchema: { type: 'object' as const, properties: { value: { type: 'number' } } } };
   function bind(ghostId = 'notes', namespace?: string | null) {
     vi.mocked(readAppServer).mockReturnValue({ id: source.serverId, url: '', transport: 'in-process', plugin: {
       ghostId, ...(namespace !== undefined ? { namespace } : {}), instance: '_root__' + ghostId, revision: 'approved', packageSha256: 'hash', directory: '/fixture', title: 'Page',
@@ -502,22 +507,25 @@ describe('plugin page ghost_call approval policy', () => {
     await expect(call()).rejects.toThrow('MCP_APP_TOOL_DENIED');
     expect(mode === 'auto' ? review : prompt).toHaveBeenCalledOnce();
   });
-  it.each(['bypassPermissions', 'media', 'media-auto'] as const)('does not ask for %s', async mode => {
+  it.each(['bypassPermissions', 'media', 'media-auto'] as const)('uses session approval for undeclared plugin tools (%s)', async mode => {
     bind(mode === 'bypassPermissions' ? 'notes' : 'cindy-art');
     state.session.permissionMode = mode === 'media-auto' ? 'auto' : mode === 'media' ? 'default' : mode;
     const review = vi.fn(async () => ({ verdict: 'ask' as const }));
     registerMcpAppsIpc(async () => {}, request, review);
     await call(mode === 'bypassPermissions' ? tool : { ...tool, name: 'gen_image' });
-    expect(review).not.toHaveBeenCalled();
-    expect(request).not.toHaveBeenCalled();
+    expect(review).toHaveBeenCalledTimes(mode === 'media-auto' ? 1 : 0);
+    expect(request).toHaveBeenCalledTimes(mode === 'bypassPermissions' ? 0 : 1);
   });
-  it.each([undefined, null, 'example'])('reviews the original ghost_call identity and page origin in Auto: %s', async namespace => {
+  // Unit regression: the real page authorizer dropped plugin tool contracts, so
+  // Auto could not distinguish a draft from a send. A named tool with a description
+  // and schema must reach review with its original identity; prior coverage omitted both.
+  it.each([undefined, null, 'example'])('reviews the original ghost_call identity, page origin and tool definition in Auto: %s', async namespace => {
     bind('notes', namespace); state.session.permissionMode = 'auto';
     const review = vi.fn(async () => ({ verdict: 'allow' as const }));
     registerMcpAppsIpc(async () => {}, request, review);
     await call();
     expect(review).toHaveBeenCalledWith('task', 'cindy', 'ghost_call',
-      { ghost_id: 'notes', ...(namespace !== undefined ? { namespace } : {}), tool: 'save', args: { value: 3 } }, expect.stringContaining('由插件交互页面发起'));
+      { ghost_id: 'notes', ...(namespace !== undefined ? { namespace } : {}), tool: 'save', args: { value: 3 } }, expect.stringContaining('由插件交互页面发起'), tool);
     expect(request).not.toHaveBeenCalled();
   });
 });
