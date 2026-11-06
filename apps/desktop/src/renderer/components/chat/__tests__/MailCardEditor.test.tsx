@@ -136,3 +136,39 @@ it('sends the latest delivered text when the other view has not repainted yet', 
   expect(dispatch.mock.calls[1][1]).toBe(`mail:send:${mail.key}`);
   expect(dispatch.mock.calls[1][3].body).toBe('Edited in sidebar');
 });
+
+// #9118 (unit): exercise the shared production GhostCardCanvas through its
+// existing editor entry. Prior tests only loaded complete iframe documents.
+// A Document with no root during srcdoc replacement must not crash the task;
+// the subsequent load must still bind actions exactly once.
+it('waits for the iframe root and body and binds actions after each document loads', async () => {
+  vi.stubGlobal('matchMedia', () => ({ matches: true }));
+  const dispatch = vi.fn().mockResolvedValue({ ok: true });
+  vi.stubGlobal('electronAPI', { ghosts: { dispatchCardAction: dispatch } });
+  let current = document.implementation.createHTMLDocument('');
+  current.removeChild(current.documentElement);
+  const content = vi.spyOn(HTMLIFrameElement.prototype, 'contentDocument', 'get')
+    .mockImplementation(() => current);
+  try {
+    const props = { callId: 'loading-card', sessionId: 'loading-session', height: 80 };
+    const html = '<button data-ghost-action="retry">Retry</button>';
+    const view = render(<MailCardEditor {...props} html={html} />);
+    const frame = screen.getByTitle('mailReader.title');
+    for (const action of ['retry', 'next']) {
+      current = document.implementation.createHTMLDocument('');
+      current.body.remove();
+      view.rerender(<MailCardEditor {...props} html={`${html}<!--${action}-->`} />);
+      const body = current.createElement('body');
+      body.innerHTML = `<button data-ghost-action="${action}">Continue</button>`;
+      current.documentElement.append(body);
+      fireEvent.load(frame);
+      fireEvent.load(frame);
+      body.querySelector('button')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await act(async () => {});
+      expect(dispatch).toHaveBeenLastCalledWith(props.callId, action);
+    }
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  } finally {
+    content.mockRestore();
+  }
+});

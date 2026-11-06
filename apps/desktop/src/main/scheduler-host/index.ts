@@ -74,6 +74,7 @@ import { withScheduleLock } from './scheduleLock';
 import { wecomGroupNotificationService } from '../wecomGroupNotification';
 import { runSchedulerStartup } from './scheduler-startup-lifecycle';
 import { getRoutineEngine, stopRoutines } from '../routines/service.js';
+import { startScheduleWebhooks, stopScheduleWebhooks } from './webhook/runtime.js';
 
 export interface StartSchedulerDeps {
   maker: Maker;
@@ -310,6 +311,11 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
   setSilencedRunProbe((runId) => scheduler.isRunSilenced(runId));
   void getRoutineEngine().catch((error) => deps.logger.warn?.('routine startup failed', { error: String(error) }));
   _loader = loader;
+  if (!passive) {
+    void startScheduleWebhooks(scheduler, deps.logger).catch((error) => {
+      deps.logger.warn?.(`[scheduler-host] schedule webhooks failed to start (non-fatal): ${String(error)}`);
+    });
+  }
   deps.logger.info?.(`[scheduler-host] started${passive ? ' (passive: auto-fire disabled)' : ''}`);
   void loader.reconcileAll().catch((err) => {
     deps.logger.warn?.(
@@ -373,6 +379,7 @@ export function getProjectAutomationLoader(): ProjectAutomationLoader {
 export async function resetScheduler(): Promise<void> {
   stopRewoundSchedulerPromptCleanup();
   await stopRoutines();
+  await stopScheduleWebhooks();
   _startupGeneration++;
   const pendingStartup = _startupPromise;
   if (pendingStartup) {

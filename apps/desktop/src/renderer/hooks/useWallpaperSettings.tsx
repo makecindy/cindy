@@ -36,7 +36,6 @@ export interface WallpaperSettings {
   wallpaperBlur?: number | null;
   wallpaperMotion: WallpaperMotion;
   customWallpaperUrl?: string;
-  customWallpaperFallbackUrl?: string;
 }
 
 interface WallpaperSettingsContextValue extends WallpaperSettings {
@@ -77,7 +76,6 @@ function pickWallpaperSettings(settings: AppearanceSettings): WallpaperSettings 
     wallpaperBlur: settings.wallpaperBlur,
     wallpaperMotion: settings.wallpaperMotion,
     customWallpaperUrl: settings.customWallpaperUrl,
-    customWallpaperFallbackUrl: settings.customWallpaperFallbackUrl,
   };
 }
 
@@ -113,7 +111,7 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
     settings.wallpaperId === 'custom'
       ? customUrl
         ? isCustomWallpaperVideo(customUrl)
-          ? settings.customWallpaperFallbackUrl ? `url("${normalizeCustomWallpaperUrl(settings.customWallpaperFallbackUrl)}")` : 'none'
+          ? 'none'
           : `url("${customUrl}")`
         : undefined
       : imageAsset.url

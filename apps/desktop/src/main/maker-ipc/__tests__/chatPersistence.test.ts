@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({ root: '', owner: { dataOwnerId: 'a', generatio
 vi.mock('../../appSessionState.js', () => ({
   ownerScopedUserDataPath: (...parts: string[]) => path.join(state.root, state.owner.dataOwnerId, ...parts),
   getActiveAppSession: () => state.owner, isAppSessionBoundaryPending: () => false,
+  onAppSessionInvalidated: () => () => {},
 }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.example' }));
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzle: {} }) }));

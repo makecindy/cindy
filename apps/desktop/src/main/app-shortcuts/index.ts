@@ -86,7 +86,6 @@ export function registerAppShortcutIpc(): void {
       overrides: store.getOverrides(),
       platform: process.platform,
       globalFailures: [...globalFailures],
-      pluginShortcuts: store.getPluginShortcuts(),
     };
   });
 
@@ -165,7 +164,6 @@ function broadcastAppShortcutsChanged(overrides: AppShortcutOverrides): void {
     window.webContents.send('app-shortcuts:changed', {
       overrides,
       globalFailures: [...globalFailures],
-      pluginShortcuts: getAppShortcutStore().getPluginShortcuts(),
     });
   });
 }

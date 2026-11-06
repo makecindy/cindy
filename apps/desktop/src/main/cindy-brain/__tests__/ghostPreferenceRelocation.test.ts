@@ -17,7 +17,6 @@ vi.mock('../../maker-host/logger-adapter.js', () => ({
 import * as locks from '../../device-link/crossProcessLock.js';
 import {
   relocateGhostCindyPrefs, readGhostCindyInflightLimit, writeGhostCindyInflightLimit,
-  readPluginUiRendererChoice, writePluginUiRendererChoice,
 } from '../cindyPrefsStore.js';
 import {
   relocateGhostErrandPrefs, readPluginTaskConfig, readGhostErrandSessionId,
@@ -29,45 +28,6 @@ import { updateGhostPrefsForRelocation } from '../ghostPreferenceRelocation.js';
 
 const from = 'helper';
 const to = '_ns__acme__helper';
-const rendererTarget = { point: 'tool.body' as const, source: { kind: 'plugin' as const, instanceId: from, name: 'format' } };
-
-/* A view choice is owner-scoped presentation, not permission. The existing
- * relocation cases cover top-level maps but not a renderer selected for a
- * different plugin's records. Minimum failure: a same-name moved instance or
- * a switch to another owner. Tier: actual settings files and production API. */
-it('isolates renderer choices by owner and preserves explicit original versus default', async () => {
-  expect(readPluginUiRendererChoice(rendererTarget)).toBeUndefined();
-  await writePluginUiRendererChoice(rendererTarget, { instanceId: to, contributionId: 'render' });
-  expect(readPluginUiRendererChoice(rendererTarget)).toEqual({ instanceId: to, contributionId: 'render' });
-  owner.id = 'owner-b';
-  expect(readPluginUiRendererChoice(rendererTarget)).toBeUndefined();
-  await writePluginUiRendererChoice(rendererTarget, null);
-  expect(readPluginUiRendererChoice(rendererTarget)).toBeNull();
-  owner.id = 'owner-a';
-  expect(readPluginUiRendererChoice(rendererTarget)).toEqual({ instanceId: to, contributionId: 'render' });
-  await writePluginUiRendererChoice(rendererTarget, undefined);
-  expect(readPluginUiRendererChoice(rendererTarget)).toBeUndefined();
-});
-
-it('moves both renderer source and selected instance with the plugin identity', async () => {
-  const another = { point: 'message.body' as const, source: { kind: 'plugin' as const, instanceId: 'other' } };
-  await writePluginUiRendererChoice(rendererTarget, { instanceId: from, contributionId: 'own' });
-  await writePluginUiRendererChoice(another, { instanceId: from, contributionId: 'external' });
-  await relocateGhostCindyPrefs(from, to);
-  const moved = { ...rendererTarget, source: { ...rendererTarget.source, instanceId: to } };
-  expect(readPluginUiRendererChoice(rendererTarget)).toBeUndefined();
-  expect(readPluginUiRendererChoice(moved)).toEqual({ instanceId: to, contributionId: 'own' });
-  expect(readPluginUiRendererChoice(another)).toEqual({ instanceId: to, contributionId: 'external' });
-});
-
-it('refuses to merge renderer choices when moving onto an existing source identity', async () => {
-  const destination = { ...rendererTarget, source: { ...rendererTarget.source, instanceId: to } };
-  await writePluginUiRendererChoice(rendererTarget, null);
-  await writePluginUiRendererChoice(destination, { instanceId: to, contributionId: 'other' });
-  await expect(relocateGhostCindyPrefs(from, to)).rejects.toThrow(/collision/);
-  expect(readPluginUiRendererChoice(rendererTarget)).toBeNull();
-  expect(readPluginUiRendererChoice(destination)).toEqual({ instanceId: to, contributionId: 'other' });
-});
 const resources = [
   {
     name: 'Cindy overrides and limits',
