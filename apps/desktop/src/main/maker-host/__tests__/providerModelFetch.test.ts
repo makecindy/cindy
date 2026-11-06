@@ -26,6 +26,35 @@ function fakeResponse(status: number, body: string): Response {
 }
 
 describe('import discovery limits', () => {
+  // #9101, unit: saved refresh omits allowEmpty. Exercise the production fetch
+  // contract, including raw empty vs parser-filtered empty and business errors;
+  // existing generic/Ollama cases do not cover Hinoki's authenticated view.
+  it.each(['claude-code', 'codex', 'pi'] as const)
+  ('keeps Hinoki %s discovery authenticated and distinguishes empty from failure', async agent => {
+    const request = spec({ agent, baseUrl: 'https://inference.hinoki.security/v1',
+      modelsUrl: 'https://inference.hinoki.security/v1/models', wireProtocol: 'openai-chat' });
+    for (const [status, body, ok] of [
+      [200, { data: [{ id: 'hinoki-offensive' }, { id: 'future-model' }] }, true],
+      [200, { data: [] }, true],
+      [200, { data: [{}] }, false],
+      [200, { error: { message: 'invalid key' }, data: [] }, false],
+      [401, { error: { message: 'invalid key' } }, false],
+    ] as const) {
+      const result = await fetchProviderModels(request, async (url, init) => {
+        expect(url).toBe(request.modelsUrl);
+        const headers = new Headers(init?.headers);
+        expect(headers.get('authorization')).toBe('Bearer sk-test');
+        expect(headers.has('x-api-key') || headers.has('anthropic-version')).toBe(false);
+        return fakeResponse(status, JSON.stringify(body));
+      });
+      expect(result.ok).toBe(ok);
+      if (ok) expect(result.models?.map(m => m.id)).toEqual('data' in body ? body.data.map(m => 'id' in m ? m.id : undefined) : []);
+    }
+    for (const modelsUrl of [request.modelsUrl + '?filter=chat', 'https://inference.hinoki.security.evil.test/v1/models']) {
+      expect(await fetchProviderModels({ ...request, baseUrl: new URL(modelsUrl).origin + '/v1', modelsUrl },
+        async () => fakeResponse(200, '{"data":[]}'))).toMatchObject({ ok: false });
+    }
+  });
   it.each(['claude-code', 'codex', 'pi'] as const)
   ('accepts an empty official Ollama Cloud catalog for %s without a caller opt-in', async agent => {
     const request = spec({ agent, baseUrl: agent === 'claude-code' ? 'https://ollama.com' : 'https://ollama.com/v1',
