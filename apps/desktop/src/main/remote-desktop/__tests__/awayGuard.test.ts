@@ -9,7 +9,12 @@
  * - tier：unit，内存 fake，无 Electron / 原生进程。
  */
 import { describe, expect, it } from 'vitest';
-import { AWAY_GUARD_RETRY_MS, AwayGuardController, type AwayGuardDeps } from '../awayGuard';
+import {
+  AWAY_GUARD_PREVIEW_MS,
+  AWAY_GUARD_RETRY_MS,
+  AwayGuardController,
+  type AwayGuardDeps,
+} from '../awayGuard';
 
 const AWAY_MS = 5 * 60_000;
 /** Two of these pass the retry window; one does not. */
@@ -145,5 +150,18 @@ describe('AwayGuardController', () => {
     await guard.displaysChanged();
     expect(state.events).toEqual(['show', 'hide', 'show', 'lock']);
   });
-});
 
+  it('previews the cover even with the setting off and no work, then locks when it runs out', async () => {
+    const { state, guard } = setup();
+    state.enabled = false;
+    state.busy = false;
+    await guard.preview();
+    await guard.tick();
+    expect(state.events).toEqual(['show']);
+    expect(state.awake).toBe(true);
+    state.now += AWAY_GUARD_PREVIEW_MS;
+    await guard.tick();
+    expect(state.events).toEqual(['show', 'lock']);
+    expect(state.awake).toBe(false);
+  });
+});

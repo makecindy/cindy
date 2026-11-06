@@ -2419,7 +2419,10 @@
       "awayGuard": {
         "label": "Seguir trabajando mientras no estás",
         "hint": "Mientras haya una tarea en curso, la pantalla no se bloqueará cuando te alejes: Cindy la cubre y sigue trabajando. Al tocar el teclado, el mouse o el trackpad se bloquea al instante; desbloquéala con Touch ID o tu contraseña. También se bloquea cuando termina el trabajo.",
-        "permission": "Permite a Cindy en Ajustes del Sistema > Privacidad y seguridad > Accesibilidad para que pueda bloquear la pantalla en cuanto alguien toque esta Mac. Hasta entonces, la pantalla se apaga y se bloquea como siempre."
+        "permission": "Permite a Cindy en Ajustes del Sistema > Privacidad y seguridad > Accesibilidad para que pueda bloquear la pantalla en cuanto alguien toque esta Mac. Hasta entonces, la pantalla se apaga y se bloquea como siempre.",
+        "preview": "Probar ahora",
+        "previewStarting": "Suelta el mouse y el teclado. La pantalla se cubrirá en 3 segundos; pulsa cualquier tecla para bloquearla y luego desbloquéala.",
+        "previewUnavailable": "No se pudo cubrir la pantalla. Reinicia Cindy e inténtalo de nuevo."
       }
     },
     "agentIsland": {

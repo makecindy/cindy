@@ -1960,6 +1960,7 @@ interface ElectronAPI {
     setMenubarEnabled: (enabled: boolean) => Promise<import('../shared/menubarQuota').MenubarState>;
     getAwayGuardState: () => Promise<import('../shared/awayGuard').AwayGuardState>;
     setAwayGuardEnabled: (enabled: boolean) => Promise<import('../shared/awayGuard').AwayGuardState>;
+    previewAwayGuard: () => Promise<import('../shared/awayGuard').AwayGuardPreviewResult>;
     setSwallowActivationClick: (enabled: boolean) => Promise<{ ok: true }>;
     getWindowsCloseBehavior: () => Promise<'quit' | 'tray' | null>;
     setWindowsCloseBehavior: (behavior: 'quit' | 'tray') => Promise<'quit' | 'tray'>;

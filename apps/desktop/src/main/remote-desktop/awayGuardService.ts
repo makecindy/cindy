@@ -16,7 +16,10 @@ import { watchAwayGuardInput, type AwayGuardInputMonitor } from './privacyInput'
 import { PrivacyScreen } from './privacyScreen';
 import {
   AWAY_GUARD_GET_STATE_CHANNEL,
+  AWAY_GUARD_PREVIEW_CHANNEL,
+  AWAY_GUARD_PREVIEW_DELAY_MS,
   AWAY_GUARD_SET_ENABLED_CHANNEL,
+  type AwayGuardPreviewResult,
   type AwayGuardState,
 } from '../../shared/awayGuard';
 
@@ -187,5 +190,17 @@ export function registerAwayGuardIpc(settings: {
     // Apply now: turning it off while covered locks before the masks go.
     void controller?.tick();
     return readAwayGuardState(next);
+  });
+  ipcMain.handle(AWAY_GUARD_PREVIEW_CHANNEL, async (event): Promise<AwayGuardPreviewResult> => {
+    assertTrustedAppRendererEvent(event);
+    if (!supportsAwayGuard() || !controller) return { ok: false, reason: 'unavailable' };
+    await prepareAwayGuardPermission();
+    if ((await readDesktopInputPermission()) !== 'granted') return { ok: false, reason: 'permission' };
+    const target = controller;
+    // The click that asked for this must not count as someone touching the Mac.
+    setTimeout(() => {
+      void target.preview().catch((error) => log.warn('away guard preview failed', error));
+    }, AWAY_GUARD_PREVIEW_DELAY_MS);
+    return { ok: true };
   });
 }

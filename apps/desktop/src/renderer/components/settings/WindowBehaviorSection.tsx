@@ -20,6 +20,7 @@ import { windowBehaviorSettings } from './WindowBehaviorSection.settings-search'
 import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { Button } from '@/components/ui/button';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 
 import { Switch } from '@/components/ui/switch';
@@ -174,11 +175,35 @@ export function WindowBehaviorSection() {
           onCheckedChange={(enabled) => void awayGuard.setEnabled(enabled)}
           ariaLabel={t(windowBehaviorSettings.awayGuard.titleKey)}
           note={
-            awayGuard.state?.enabled && awayGuard.state.permission === 'missing' ? (
-              <p className={SETTINGS_ROW_HINT_CLASS} role="status">
-                {t('settings.windowBehavior.awayGuard.permission')}
-              </p>
-            ) : undefined
+            <div className="flex flex-col items-start gap-2 pt-1">
+              {awayGuard.preview === 'permission' ||
+              (awayGuard.state?.enabled && awayGuard.state.permission === 'missing') ? (
+                <p className={SETTINGS_ROW_HINT_CLASS} role="status">
+                  {t('settings.windowBehavior.awayGuard.permission')}
+                </p>
+              ) : null}
+              <div className="flex flex-wrap items-center gap-2" aria-live="polite">
+                <Button
+                  data-settings-search-action="Shows the away cover now so the owner can check locking and unlocking"
+                  variant="secondary"
+                  size="sm"
+                  type="button"
+                  disabled={awayGuard.preview === 'starting'}
+                  onClick={() => void awayGuard.startPreview()}
+                >
+                  {t('settings.windowBehavior.awayGuard.preview')}
+                </Button>
+                {awayGuard.preview === 'starting' ? (
+                  <p className={SETTINGS_ROW_HINT_CLASS}>
+                    {t('settings.windowBehavior.awayGuard.previewStarting')}
+                  </p>
+                ) : awayGuard.preview === 'unavailable' ? (
+                  <p className={SETTINGS_ROW_HINT_CLASS} role="alert">
+                    {t('settings.windowBehavior.awayGuard.previewUnavailable')}
+                  </p>
+                ) : null}
+              </div>
+            </div>
           }
         />
       ),

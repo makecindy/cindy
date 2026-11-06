@@ -2354,7 +2354,10 @@
       "awayGuard": {
         "label": "離席續作",
         "hint": "有差事在行，君離座而屏不鎖，Cindy 覆屏續作。有人觸鍵盤、滑鼠或觸控板，即鎖屏，以 Touch ID 或密碼解之。事畢亦自鎖。",
-        "permission": "須於「系統設定 → 隱私權與安全性 → 輔助使用」許 Cindy，方能於有人觸機時即鎖屏。未許之前，屏照常熄而鎖。"
+        "permission": "須於「系統設定 → 隱私權與安全性 → 輔助使用」許 Cindy，方能於有人觸機時即鎖屏。未許之前，屏照常熄而鎖。",
+        "preview": "即試之",
+        "previewStarting": "請釋滑鼠與鍵盤，三秒後屏將覆；按任一鍵即鎖屏，再解之以試。",
+        "previewUnavailable": "未能覆屏，請重啟 Cindy 再試。"
       }
     },
     "agentIsland": {

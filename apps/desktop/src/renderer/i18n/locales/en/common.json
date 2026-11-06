@@ -2384,7 +2384,10 @@
       "awayGuard": {
         "label": "Keep working while you're away",
         "hint": "While a task is running, the screen won't lock when you step away. Cindy covers the screen and keeps working instead. Touching the keyboard, mouse or trackpad locks it right away; unlock with Touch ID or your password. The screen also locks when the work is done.",
-        "permission": "Allow Cindy in System Settings > Privacy & Security > Accessibility so it can lock the screen as soon as someone touches this Mac. Until then, the screen sleeps and locks as usual."
+        "permission": "Allow Cindy in System Settings > Privacy & Security > Accessibility so it can lock the screen as soon as someone touches this Mac. Until then, the screen sleeps and locks as usual.",
+        "preview": "Try it now",
+        "previewStarting": "Take your hands off the mouse and keyboard. The screen is covered in 3 seconds; press any key to lock it, then unlock.",
+        "previewUnavailable": "Couldn't cover the screen. Restart Cindy and try again."
       }
     },
     "agentIsland": {

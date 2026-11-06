@@ -134,7 +134,9 @@ import {
 } from '../shared/menubarQuota';
 import {
   AWAY_GUARD_GET_STATE_CHANNEL,
+  AWAY_GUARD_PREVIEW_CHANNEL,
   AWAY_GUARD_SET_ENABLED_CHANNEL,
+  type AwayGuardPreviewResult,
   type AwayGuardState,
 } from '../shared/awayGuard';
 import {
@@ -2073,6 +2075,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getAwayGuardState: (): Promise<AwayGuardState> => ipcRenderer.invoke(AWAY_GUARD_GET_STATE_CHANNEL),
     setAwayGuardEnabled: (enabled: boolean): Promise<AwayGuardState> =>
       ipcRenderer.invoke(AWAY_GUARD_SET_ENABLED_CHANNEL, enabled),
+    previewAwayGuard: (): Promise<AwayGuardPreviewResult> => ipcRenderer.invoke(AWAY_GUARD_PREVIEW_CHANNEL),
     // 通知 main 落盘"首次点击是否吞掉"。仅落盘,不改变已创建窗口的行为——macOS
     // acceptFirstMouse 是 BrowserWindow 构造参数,需要下次启动才读到新值。Windows
     // 上此调用只是保持 userData 落盘和 renderer localStorage 一致,Windows JS

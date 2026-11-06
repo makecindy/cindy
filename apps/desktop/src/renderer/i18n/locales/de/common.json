@@ -2384,7 +2384,10 @@
       "awayGuard": {
         "label": "Weiterarbeiten, während du weg bist",
         "hint": "Während eine Aufgabe läuft, wird der Bildschirm nicht gesperrt, wenn du weggehst. Stattdessen verdeckt Cindy den Bildschirm und arbeitet weiter. Eine Berührung von Tastatur, Maus oder Trackpad sperrt ihn sofort; entsperre ihn mit Touch ID oder deinem Passwort. Nach Abschluss der Arbeit wird er ebenfalls gesperrt.",
-        "permission": "Erlaube Cindy unter Systemeinstellungen > Datenschutz & Sicherheit > Bedienungshilfen, damit der Bildschirm sofort gesperrt wird, wenn jemand diesen Mac berührt. Bis dahin geht der Bildschirm wie gewohnt in den Ruhezustand und wird gesperrt."
+        "permission": "Erlaube Cindy unter Systemeinstellungen > Datenschutz & Sicherheit > Bedienungshilfen, damit der Bildschirm sofort gesperrt wird, wenn jemand diesen Mac berührt. Bis dahin geht der Bildschirm wie gewohnt in den Ruhezustand und wird gesperrt.",
+        "preview": "Jetzt ausprobieren",
+        "previewStarting": "Nimm die Hände von Maus und Tastatur. In 3 Sekunden wird der Bildschirm verdeckt; drücke eine Taste, um ihn zu sperren, und entsperre ihn dann.",
+        "previewUnavailable": "Der Bildschirm konnte nicht verdeckt werden. Starte Cindy neu und versuche es erneut."
       }
     },
     "agentIsland": {

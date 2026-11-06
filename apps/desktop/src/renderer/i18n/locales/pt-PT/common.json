@@ -2419,7 +2419,10 @@
       "awayGuard": {
         "label": "Continuar a trabalhar quando se ausenta",
         "hint": "Enquanto uma tarefa está em curso, o ecrã não bloqueia quando se ausenta: o Cindy tapa o ecrã e continua a trabalhar. Tocar no teclado, no rato ou no trackpad bloqueia-o de imediato; desbloqueie com Touch ID ou a sua palavra-passe. O ecrã também bloqueia quando o trabalho termina.",
-        "permission": "Permita o Cindy em Definições do Sistema > Privacidade e segurança > Acessibilidade para que possa bloquear o ecrã assim que alguém tocar neste Mac. Até lá, o ecrã desliga-se e bloqueia como habitualmente."
+        "permission": "Permita o Cindy em Definições do Sistema > Privacidade e segurança > Acessibilidade para que possa bloquear o ecrã assim que alguém tocar neste Mac. Até lá, o ecrã desliga-se e bloqueia como habitualmente.",
+        "preview": "Experimentar agora",
+        "previewStarting": "Largue o rato e o teclado. O ecrã fica tapado dentro de 3 segundos; prima qualquer tecla para o bloquear e, depois, desbloqueie-o.",
+        "previewUnavailable": "Não foi possível tapar o ecrã. Reinicie o Cindy e tente novamente."
       }
     },
     "agentIsland": {

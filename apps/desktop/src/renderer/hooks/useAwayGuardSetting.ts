@@ -50,5 +50,31 @@ export function useAwayGuardSetting() {
     [refresh],
   );
 
-  return { available: supported && state?.available === true, state, busy, setEnabled };
+  const [preview, setPreview] = useState<'idle' | 'starting' | 'permission' | 'unavailable'>('idle');
+  const startPreview = useCallback(async () => {
+    setPreview('starting');
+    try {
+      const result = await window.electronAPI.windowBehavior.previewAwayGuard();
+      if (!mounted.current) return;
+      setPreview(result.ok ? 'starting' : result.reason);
+      if (!result.ok) void refresh();
+    } catch {
+      if (mounted.current) setPreview('unavailable');
+    }
+  }, [refresh]);
+  // The masks arrive a few seconds after the click; the hint goes back once they did.
+  useEffect(() => {
+    if (preview !== 'starting') return;
+    const timer = setTimeout(() => setPreview('idle'), 6_000);
+    return () => clearTimeout(timer);
+  }, [preview]);
+
+  return {
+    available: supported && state?.available === true,
+    state,
+    busy,
+    setEnabled,
+    preview,
+    startPreview,
+  };
 }

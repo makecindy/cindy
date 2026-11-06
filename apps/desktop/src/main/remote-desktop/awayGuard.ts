@@ -40,6 +40,8 @@ export interface AwayGuardDeps {
 
 /** After masks fail to start, fall back to the system lock instead of retrying every tick. */
 export const AWAY_GUARD_RETRY_MS = 60_000;
+/** Settings → "Try it": cover now; if nobody touches the Mac, lock when this runs out. */
+export const AWAY_GUARD_PREVIEW_MS = 2 * 60_000;
 
 type MaskState = 'none' | 'showing' | 'shown' | 'ending';
 
@@ -47,6 +49,7 @@ export class AwayGuardController {
   private mask: MaskState = 'none';
   private ownerInputAt: number;
   private retryAt = 0;
+  private previewUntil = 0;
   private ticking = false;
 
   constructor(private readonly deps: AwayGuardDeps) {
@@ -67,8 +70,30 @@ export class AwayGuardController {
     }
   }
 
+  /**
+   * Settings → "Try it": cover the displays now, without waiting for work or absence,
+   * so the owner can check the lock and unlock path. Ends like a real cover: physical
+   * input locks, and so does the preview running out.
+   */
+  async preview(): Promise<void> {
+    if (this.mask !== 'none' || this.deps.screenLocked() || this.deps.remoteDesktopActive()) return;
+    this.mask = 'showing';
+    try {
+      await this.deps.showMasks();
+    } catch (error) {
+      if (this.mask === 'showing') this.mask = 'none';
+      throw error;
+    }
+    if (this.mask !== 'showing') return;
+    this.mask = 'shown';
+    this.previewUntil = this.deps.now() + AWAY_GUARD_PREVIEW_MS;
+    this.deps.keepDisplayAwake(true);
+    this.deps.log('preview shown');
+  }
+
   /** The masks or the helper went away on their own (input lock, window loss). */
   masksEnded(): void {
+    this.previewUntil = 0;
     if (this.mask === 'none') return;
     this.mask = 'none';
     // Whoever touched this Mac counts as present: never re-cover right away.
@@ -84,13 +109,21 @@ export class AwayGuardController {
 
   private async evaluate(): Promise<void> {
     const { deps } = this;
+    // A preview is still putting its masks up; let it finish first.
+    if (this.mask === 'showing') return;
     const now = deps.now();
-    if (!deps.enabled()) return this.standDown(true, 'disabled');
     if (deps.screenLocked() || deps.remoteDesktopActive()) {
       // The owner unlocking (or viewing remotely) starts a fresh absence period.
       this.ownerInputAt = now;
+      this.previewUntil = 0;
       return this.standDown(false, 'locked or remote');
     }
+    if (this.previewUntil) {
+      if (this.mask === 'shown' && now < this.previewUntil) return deps.keepDisplayAwake(true);
+      this.previewUntil = 0;
+      if (this.mask === 'shown') return this.end(true, 'preview ended');
+    }
+    if (!deps.enabled()) return this.standDown(true, 'disabled');
     // An unreadable activity source keeps an existing cover; it never starts one.
     const busy = await deps.busy().catch(() => this.mask === 'shown');
     if (!busy) return this.standDown(true, 'idle');
@@ -139,6 +172,7 @@ export class AwayGuardController {
 
   private async end(lock: boolean, reason: string): Promise<void> {
     this.mask = 'ending';
+    this.previewUntil = 0;
     try {
       if (lock) await this.deps.lockAndHideMasks();
       else this.deps.hideMasks();
