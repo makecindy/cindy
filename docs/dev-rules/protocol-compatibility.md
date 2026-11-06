@@ -4959,6 +4959,17 @@ Chat Server 请求复用既有消息 `content` 的 media 块及 `threadRootId`�
 手机只对含 PR 状态位或 PR 链接的卡片定时重读，带该标记的卡片需保留其中之一（GitHub 插件的 PR 卡片标题始终链接到 PR）。旧宿主的净化器丢掉这个属性，卡片维持原快照。不改握手、白名单、relay 或服务端，无数据库迁移。
 回归入口：`cardSanitizer.test.ts`、`cardRemoteResource.test.ts`、`ghostCardPrStatus.test.ts`。
 
+插件卡片可放一颗归档任务按钮：`button` 上标 `data-ghost-task-archive="owner/repo#N"`（不得同时带 `data-ghost-action`
+或 `data-ghost-link`，否则净化器丢掉这个标记），可选 `data-ghost-task-archive-state="merged|closed"`（插件读到的状态快照）
+与空值 `data-ghost-task-archive-auto`（用户开了「合并后自动归档」）。插件把它写成 `display:none`，文字放在 `aria-label`
+并用自己的 `::before` 画出来。新电脑端按标题栏同源状态在 PR 已合并或已关闭时以 `inline-flex` 露出（查不到状态时按快照），
+点击不回传插件，由任务页走与标题栏归档相同的流程，只作用于卡片所在任务。带 `-auto` 且宿主自己查到已合并时，卡片在可见、
+聚焦的窗口里进入视野记为「看过」（只在内存）；离开普通任务页时，任务没在运行、没被接管、没绑定活跃定时任务、worktree
+确认干净且用户没有回到它，才静默归档并给可撤销提示，否则不归档也不弹确认。旧电脑端的净化器丢掉这些属性，按钮一直藏着；
+手机投影不含无动作的按钮且按钮内没有文字，新旧手机都不显示、也不计「看过」。不给插件新增运行期能力，不改 manifest、
+批准记录、握手、白名单、relay 或服务端，无数据库迁移。
+回归入口：`cardSanitizer.test.ts`、`ghostCardPrStatus.test.ts`、`useGhostCardTaskArchive.test.tsx`。
+
 ## 插件卡片的手机原生呈现（`plugin-card-rich`）
 
 手机读取 `plugin-results` 卡片时在 `client.primitives` 里多声明 `plugin-card-rich`。只有声明了的手机，宿主才在

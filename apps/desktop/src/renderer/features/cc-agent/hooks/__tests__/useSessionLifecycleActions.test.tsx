@@ -157,7 +157,7 @@ describe('archive uses current state after asynchronous checks', () => {
       let reject!: (error: Error) => void;
       const preparation = new Promise<boolean>((done, fail) => { resolve = done; reject = fail; });
       const { result } = renderHook(() => useSessionLifecycleActions());
-      let action!: Promise<void>;
+      let action!: Promise<unknown>;
       await act(async () => {
         action = result.current.runSessionAction('session-1', 'archive', {
           activeSessionId: 'session-1', prepareArchive: () => preparation,
@@ -205,7 +205,7 @@ describe('archive uses current state after asynchronous checks', () => {
       finishTarget = resolve;
     }));
     const { result } = renderHook(() => useSessionLifecycleActions());
-    let pending!: Promise<void>;
+    let pending!: Promise<unknown>;
     await act(async () => {
       pending = result.current.runSessionAction('session-1', 'archive', { activeSessionId: 'session-1' });
     });
@@ -521,7 +521,7 @@ describe('useSessionLifecycleActions archive optimistic ordering', () => {
     );
     const { result } = renderHook(() => useSessionLifecycleActions({ includeArchived: 'all' }));
 
-    let archiving!: Promise<void>;
+    let archiving!: Promise<unknown>;
     let unarchiving!: Promise<void>;
     await act(async () => {
       archiving = result.current.runSessionAction('remote-session', 'archive', {

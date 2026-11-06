@@ -14119,7 +14119,9 @@
       "mailAttach": "Adicionar anexo",
       "mailRemoveAttachment": "Remover {{name}}",
       "mailUpdated": "Rascunho atualizado (só de leitura)",
-      "mailLegacy": "Histórico de rascunhos (só de leitura)"
+      "mailLegacy": "Histórico de rascunhos (só de leitura)",
+      "taskAutoArchived": "\"{{title}}\" arquivada",
+      "taskAutoArchivedUndo": "Desfazer"
     },
     "ghostHook": {
       "blockedFallback": "Mensagem bloqueada por um plugin; não enviada",

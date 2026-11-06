@@ -14119,7 +14119,9 @@
       "mailAttach": "Ajouter une pièce jointe",
       "mailRemoveAttachment": "Retirer {{name}}",
       "mailUpdated": "Brouillon mis à jour (lecture seule)",
-      "mailLegacy": "Historique du brouillon (lecture seule)"
+      "mailLegacy": "Historique du brouillon (lecture seule)",
+      "taskAutoArchived": "« {{title}} » archivée",
+      "taskAutoArchivedUndo": "Annuler"
     },
     "ghostHook": {
       "blockedFallback": "Message bloqué par un plugin ; non envoyé",

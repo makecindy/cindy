@@ -14119,7 +14119,9 @@
       "mailAttach": "Agregar archivo adjunto",
       "mailRemoveAttachment": "Quitar {{name}}",
       "mailUpdated": "Borrador actualizado (solo lectura)",
-      "mailLegacy": "Historial de borradores (solo lectura)"
+      "mailLegacy": "Historial de borradores (solo lectura)",
+      "taskAutoArchived": "Se archivó «{{title}}»",
+      "taskAutoArchivedUndo": "Deshacer"
     },
     "ghostHook": {
       "blockedFallback": "Mensaje bloqueado por un complemento; no se envió",

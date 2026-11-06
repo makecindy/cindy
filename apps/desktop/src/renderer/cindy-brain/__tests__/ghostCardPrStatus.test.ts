@@ -60,6 +60,23 @@ describe('fillGhostCardPrStatus', () => {
     expect(el.style.display).toBe('none');
   });
 
+  // Rule (2026-11-06): the archive-task button shows once the PR ended. The host's own status wins
+  // over the plugin snapshot; auto-archive is offered only for a PR the host itself saw merged.
+  it('reveals the archive-task button for an ended PR and reports auto-archive only for a live merge', () => {
+    document.body.innerHTML = '<button data-ghost-task-archive="Octo/Repo#9" data-ghost-task-archive-state="merged" data-ghost-task-archive-auto style="display:none"></button>';
+    const el = document.querySelector('button')!;
+    expect(readPrStatusSlotKey(document.body.innerHTML)).toBe('octo/repo#9');
+    expect(fillGhostCardPrStatus(document, () => undefined, t)).toBe(false);
+    expect(el.style.display).toBe('inline-flex');
+    expect(fillGhostCardPrStatus(document, () => status(), t)).toBe(false);
+    expect(el.style.display).toBe('none');
+    expect(fillGhostCardPrStatus(document, () => status({ status: 'closed' }), t)).toBe(false);
+    expect(el.style.display).toBe('inline-flex');
+    expect(fillGhostCardPrStatus(document, () => status({ status: 'merged' }), t)).toBe(true);
+    el.removeAttribute('data-ghost-task-archive-auto');
+    expect(fillGhostCardPrStatus(document, () => status({ status: 'merged' }), t)).toBe(false);
+  });
+
   it('puts the plugin snapshot back when the live status later disappears', () => {
     const slot = card();
     fillGhostCardPrStatus(document, () => status(), t);

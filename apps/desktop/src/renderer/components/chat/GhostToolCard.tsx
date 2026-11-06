@@ -65,6 +65,7 @@ import { useGhostCardThemeVars } from '@/cindy-brain/useGhostCardThemeVars';
 import { alignFrameWithGate } from '@/lib/hiddenAnimationGate';
 import { startGhostCardLiveIndicators } from '@/cindy-brain/ghostCardLive';
 import { fillGhostCardPrStatus, readPrStatusSlotKey } from '@/cindy-brain/ghostCardPrStatus';
+import { forgetGhostCardTaskSeen, markGhostCardTaskSeen, requestGhostCardTaskArchive } from '@/cindy-brain/ghostCardTaskArchive';
 import { fillGhostCardIcons } from '@/cindy-brain/ghostCardIcons';
 import { usePrStatuses } from '@/contexts/PrRefsContext';
 import {
@@ -335,9 +336,41 @@ function GhostCardCanvas({
   const { statuses: prStatuses } = usePrStatuses(prSlotKey ? (sessionId ?? '') : '');
   const prStatusesRef = useRef(prStatuses);
   prStatusesRef.current = prStatuses;
+  // 卡上有已合并、可在看过后自动归档的 PR(宿主自己查到的状态,见 applyTaskArchive)。
+  const [taskAutoArchive, setTaskAutoArchive] = useState(false);
   const fillPrStatus = useCallback((doc: Document) => {
-    if (prSlotKey) fillGhostCardPrStatus(doc, (key) => prStatusesRef.current.get(key), t);
+    if (prSlotKey) setTaskAutoArchive(fillGhostCardPrStatus(doc, (key) => prStatusesRef.current.get(key), t));
   }, [prSlotKey, t]);
+  // 「看过」= 卡片在可见、聚焦的窗口里进入视野;用户离开任务时任务页据此决定是否归档。
+  // 不再满足(PR 重新打开、关了开关)时忘掉之前的「看过」。
+  const taskAutoArchiveRef = useRef(false);
+  useEffect(() => {
+    const was = taskAutoArchiveRef.current;
+    taskAutoArchiveRef.current = taskAutoArchive;
+    if (!sessionId) return;
+    if (!taskAutoArchive) {
+      if (was) forgetGhostCardTaskSeen(sessionId);
+      return;
+    }
+    const el = anchorRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    let inView = false;
+    const check = () => {
+      if (inView && document.visibilityState === 'visible' && document.hasFocus()) markGhostCardTaskSeen(sessionId);
+    };
+    const observer = new IntersectionObserver((entries) => {
+      inView = entries.some((entry) => entry.isIntersecting);
+      check();
+    });
+    observer.observe(el);
+    window.addEventListener('focus', check);
+    document.addEventListener('visibilitychange', check);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('focus', check);
+      document.removeEventListener('visibilitychange', check);
+    };
+  }, [sessionId, taskAutoArchive]);
   const gallerySrcs = useMemo(
     () => extractGhostCardGallerySrcs(renderedCardHtml),
     [renderedCardHtml],
@@ -653,6 +686,19 @@ function GhostCardCanvas({
         }
         lockActionEl(el);
         void window.electronAPI?.ghosts?.dispatchCardAction?.(callId, actionId)?.catch(() => {});
+      });
+    });
+    // 归档任务按钮:点击不回传插件,交给打开这个任务的任务页走标准归档流程。
+    // 净化器保证它没有 data-ghost-action / data-ghost-link;藏着的时候(PR 还开着)不响应。
+    doc.querySelectorAll<HTMLElement>('button[data-ghost-task-archive]').forEach((el) => {
+      if (el.dataset.xdtArchiveBridged === '1') return;
+      el.dataset.xdtArchiveBridged = '1';
+      el.style.cursor = 'pointer';
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!sessionId || el.style.display === 'none') return;
+        iframeRef.current?.blur();
+        requestGhostCardTaskArchive(sessionId);
       });
     });
     // 卡内外链(v3):data-ghost-link 元素点击 → 宿主确认框 → openExternal。

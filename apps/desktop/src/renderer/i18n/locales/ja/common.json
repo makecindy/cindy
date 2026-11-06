@@ -13960,7 +13960,9 @@
       "mailAttach": "添付ファイルを追加",
       "mailRemoveAttachment": "{{name}}を削除",
       "mailUpdated": "更新済みの下書き（読み取り専用）",
-      "mailLegacy": "下書きの履歴（読み取り専用）"
+      "mailLegacy": "下書きの履歴（読み取り専用）",
+      "taskAutoArchived": "「{{title}}」をアーカイブしました",
+      "taskAutoArchivedUndo": "元に戻す"
     },
     "ghostHook": {
       "blockedFallback": "メッセージはプラグインによりブロックされました(未送信)",

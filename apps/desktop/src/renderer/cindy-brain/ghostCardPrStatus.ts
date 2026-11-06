@@ -8,6 +8,9 @@
  *
  * `data-ghost-pr-open-only="owner/repo#123"` 标的是只在 PR 开着时成立的部分(跟进中、操作按钮):
  * 同一份状态显示已合并或关闭时宿主把它们藏起来,查不到状态时照原样显示。
+ *
+ * `button[data-ghost-task-archive="owner/repo#123"]` 是归档任务按钮,插件写成 display:none:
+ * 这条 PR 已合并或关闭时宿主把它露出来(查不到状态时按插件的 -state 快照),回到开着时再藏起。
  */
 import { Check, CircleMinus, CircleX, Clock, type LucideIcon } from 'lucide-react';
 import { prStatusItemKeys, type PrStatusItemKey, type PrStatusItemTone } from '@cindy/maker-shared';
@@ -15,8 +18,9 @@ import type { PrStatusResult } from '@/lib/gitContext.types';
 import { appIconMarkup, preloadAppIconMarkup } from './ghostCardIcons';
 
 const SLOT_SELECTOR = 'div[data-ghost-pr-status]';
-const SLOT_ATTR_RE = / data-ghost-pr-(?:status|open-only)="([^"]+)"/;
+const SLOT_ATTR_RE = / data-ghost-(?:pr-status|pr-open-only|task-archive)="([^"]+)"/;
 const OPEN_ONLY_SELECTOR = '[data-ghost-pr-open-only]';
+const TASK_ARCHIVE_SELECTOR = 'button[data-ghost-task-archive]';
 const SLOT_VALUE_RE = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#(\d+)$/;
 
 type Tone = PrStatusItemTone;
@@ -90,15 +94,36 @@ function applyOpenOnly(doc: Document, lookup: (key: string) => PrStatusResult | 
 }
 
 /**
+ * 归档任务按钮:PR 已合并或关闭时露出,否则藏起。返回是否有一颗露出的按钮可以在用户看过后
+ * 自动归档——要求插件标了 -auto,且宿主自己查到这条 PR 已合并(快照和「已关闭」都不算)。
+ */
+function applyTaskArchive(doc: Document, lookup: (key: string) => PrStatusResult | undefined): boolean {
+  let autoArchive = false;
+  for (const el of Array.from(doc.querySelectorAll<HTMLElement>(TASK_ARCHIVE_SELECTOR))) {
+    const key = prStatusSlotKey(el.getAttribute('data-ghost-task-archive') ?? '');
+    const status = key ? lookup(key) : undefined;
+    const live = status?.ok === true ? status.status : undefined;
+    const state = live ?? el.getAttribute('data-ghost-task-archive-state');
+    const ended = !!key && (state === 'merged' || state === 'closed');
+    if (ended) el.style.setProperty('display', 'inline-flex', 'important');
+    else el.style.setProperty('display', 'none', 'important');
+    if (ended && live === 'merged' && el.hasAttribute('data-ghost-task-archive-auto')) autoArchive = true;
+  }
+  return autoArchive;
+}
+
+/**
  * 用宿主的 PR 状态替换卡片文档里的状态位。查不到状态(或状态失败、一项都没有)时保留插件的
  * 兜底内容——已经换成宿主内容的状态位会恢复成它;同一份文档可反复调用(状态刷新时重填)。
+ * 返回卡片上是否有可在看过后自动归档的已合并 PR(见 applyTaskArchive)。
  */
 export function fillGhostCardPrStatus(
   doc: Document,
   lookup: (key: string) => PrStatusResult | undefined,
   t: Label,
-): void {
+): boolean {
   applyOpenOnly(doc, lookup);
+  const autoArchive = applyTaskArchive(doc, lookup);
   for (const slot of Array.from(doc.querySelectorAll<HTMLElement>(SLOT_SELECTOR))) {
     const key = prStatusSlotKey(slot.getAttribute('data-ghost-pr-status') ?? '');
     const status = key ? lookup(key) : undefined;
@@ -139,4 +164,5 @@ export function fillGhostCardPrStatus(
     }
     slot.replaceChildren(row);
   }
+  return autoArchive;
 }

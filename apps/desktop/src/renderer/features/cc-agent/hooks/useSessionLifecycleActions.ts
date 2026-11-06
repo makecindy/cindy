@@ -329,6 +329,8 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       if (action === 'delete' && sessionId === activeSessionId) {
         navigate(deleteRedirectRoute ?? '/cc-agent');
       }
+      // 写库成功:需要知道结果的调用方(如合并后自动归档的撤销提示)据此继续。
+      return true;
     },
     [navigate, patchLocal, listFilter, beginRemoteArchive, archiveBlockedByRunning, t],
   );
