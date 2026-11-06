@@ -1,4 +1,3 @@
-import { PluginUiMessageContributions } from '@/cindy-brain/PluginUiMessageContributions';
 import { AttachmentCollectionContext, type AttachmentCollectionItem } from './AttachmentCollection';
 import { attachmentPreviewKind, previewSourceName } from '@cindy/maker-shared/attachment-preview';
 import { TeammateProcessStatus } from '@/features/bots/TeammateProcessStatus';
@@ -79,7 +78,6 @@ export type { RenderItem, WorkChildItem } from './messageWorkGroups';
 import { useTranslation } from 'react-i18next';
 import { richAnswerMediaSources } from '@cindy/maker-shared/rich-answer';
 import {
-  collectPluginUiTurnAnchors,
   findMessageTodoInsertions,
   getLatestMessageTodoState,
   isAgentPlanToolName,
@@ -2878,7 +2876,6 @@ function renderWorkGroupChild(
     singleResultMap: Map<string, string>;
     assistantsWithFollowingUserBoundary: ReadonlySet<string>;
     turnFinalAssistantClientIds: ReadonlySet<string>;
-    pluginUiTurnAnchors?: ReadonlyMap<string, string>;
     subagentModelByToolUseId: ReadonlyMap<string, string>;
     userTurnUsageDetailsByAssistantId: ReadonlyMap<string, TurnUsageDetails>;
   },
@@ -2923,7 +2920,6 @@ function renderWorkGroupChild(
           props.assistantsWithFollowingUserBoundary,
         )}
         assistantIsTurnFinal={props.turnFinalAssistantClientIds.has(item.message.clientId)}
-        pluginUiTurnAnchor={props.pluginUiTurnAnchors?.get(item.message.clientId)}
         userTurnUsageDetails={props.userTurnUsageDetailsByAssistantId.get(item.message.clientId)}
         isFirstUserMessage={item.message.clientId === props.firstUserMessageClientId}
         isLastUserMessage={item.message.clientId === props.lastUserMessageClientId}
@@ -3409,7 +3405,6 @@ export function MessageStream({
     () => collectTurnFinalAssistantClientIds(visibleMetadataMessages),
     [visibleMetadataMessages],
   );
-  const pluginUiTurnAnchors = useMemo(() => collectPluginUiTurnAnchors(visibleMetadataMessages), [visibleMetadataMessages]);
   // subagent-model-chip: parentToolUseId(Agent/Task 行 id)→ 子代理模型,
   // 供 AgentActionsBlock 给 Agent/Task 行反查并渲染模型 chip。
   const subagentModelByToolUseId = useMemo(() => {
@@ -6395,7 +6390,6 @@ export function MessageStream({
       singleResultMap,
       assistantsWithFollowingUserBoundary,
       turnFinalAssistantClientIds,
-      pluginUiTurnAnchors,
       subagentModelByToolUseId,
       userTurnUsageDetailsByAssistantId,
     }),
@@ -6417,7 +6411,6 @@ export function MessageStream({
       singleResultMap,
       assistantsWithFollowingUserBoundary,
       turnFinalAssistantClientIds,
-      pluginUiTurnAnchors,
       subagentModelByToolUseId,
       userTurnUsageDetailsByAssistantId,
     ],
@@ -6815,7 +6808,6 @@ export function MessageStream({
                           assistantsWithFollowingUserBoundary,
                         )}
                         assistantIsTurnFinal={turnFinalAssistantClientIds.has(msg.clientId)}
-                        pluginUiTurnAnchor={pluginUiTurnAnchors.get(msg.clientId)}
                         userTurnUsageDetails={userTurnUsageDetailsByAssistantId.get(msg.clientId)}
                         isFirstUserMessage={msg.clientId === firstUserMessageClientId}
                         isLastUserMessage={msg.clientId === lastUserMessageClientId}
@@ -7018,7 +7010,6 @@ const MessageItem = memo(function MessageItem({
   sessionRunning,
   assistantForkBlocked,
   assistantIsTurnFinal,
-  pluginUiTurnAnchor,
   userTurnUsageDetails,
   isFirstUserMessage,
   isLastUserMessage,
@@ -7056,7 +7047,6 @@ const MessageItem = memo(function MessageItem({
    *  (collectTurnFinalAssistantClientIds). Gates the hover action bar —
    *  mid-turn texts don't mount it, keeping the stream compact. */
   assistantIsTurnFinal?: boolean;
-  pluginUiTurnAnchor?: string;
   /** Aggregated token/cache/model details for this assistant's visible user turn. */
   userTurnUsageDetails?: TurnUsageDetails;
   /** True iff this message is the first user message in the visible list.
@@ -7151,7 +7141,6 @@ const MessageItem = memo(function MessageItem({
             simplifiedBotConversation={simplifiedBotConversation}
             replyQuote={message.replyQuote}
           />
-          {sessionId ? <PluginUiMessageContributions sessionId={sessionId} messageClientId={message.clientId} /> : null}
           {message.usageLimitAutoResumeInfo && (
             <SystemCard
               cardType="auto-resume"
@@ -7232,8 +7221,6 @@ const MessageItem = memo(function MessageItem({
             starterOptionsLocked={starterOptionsLocked}
             botTaskResults={message.turnCompleted === true ? message.botTaskResults : undefined}
           />
-          {sessionId && !message.isStreaming ? <PluginUiMessageContributions sessionId={sessionId} messageClientId={message.clientId}
-            turnAnchor={assistantIsTurnFinal && !assistantForkBlocked ? pluginUiTurnAnchor : undefined} /> : null}
         </>,
       );
     case 'tool_use':

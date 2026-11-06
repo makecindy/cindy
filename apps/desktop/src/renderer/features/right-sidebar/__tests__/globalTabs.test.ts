@@ -17,8 +17,6 @@ import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import {
   __resetGlobalTabsForTest,
   addGlobalPluginTab,
-  addGlobalPluginTabView,
-  findGlobalTabByInstance,
   defaultGroupForGhost,
   effectivePluginView,
   getActiveGlobalTabId,
@@ -51,25 +49,6 @@ afterEach(() => {
 });
 
 describe('globalTabs', () => {
-  // 4.2: two named views must coexist without becoming the legacy main/panel.
-  // Unit: production add/hydration/close and old lookup; no webview needed.
-  it('keeps named tabs separate and preserves native placement when reopened', () => {
-    const a = addGlobalPluginTabView('alpha', 'log')!;
-    const b = addGlobalPluginTabView('alpha', 'preview')!;
-    const c = addGlobalPluginTabView('org_alpha', 'log')!;
-    expect(new Set([a.id, b.id, c.id]).size).toBe(3);
-    expect(findGlobalTabByInstance('alpha')).toBeNull();
-    const legacy = addGlobalPluginTab('alpha')!;
-    expect(findGlobalTabByInstance('alpha')).toEqual(legacy);
-    expect(addGlobalPluginTabView('alpha', 'log')).toEqual(a);
-    setTabGroup(a.id, 'bottom');
-    removeGlobalTab(a.id);
-    expect(getGlobalTabsSnapshot().dismissedInstanceIds).toEqual([]);
-    expect(addGlobalPluginTabView('alpha', 'log')).toEqual(a);
-    expect(getTabGroup(a.id)).toBe('bottom');
-    const raw = JSON.parse(localStorage.getItem('xdt:rightSidebarGlobalTabs:v1:owner-a')!);
-    expect(sanitizeGlobalTabsSnapshot(raw).tabs).toEqual(getGlobalTabs());
-  });
   it('adds one tab per plugin instance, persists per data owner and remembers dismissals', () => {
     const tab = addGlobalPluginTab('alpha')!;
     expect(addGlobalPluginTab('alpha')).toEqual(tab);

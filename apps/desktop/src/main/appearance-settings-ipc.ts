@@ -187,9 +187,8 @@ function appearanceForWindow(
   win: BrowserWindow | null,
 ): AppearanceSettings {
   if (isAppContentWindow(win)) return settings;
-  const { customWallpaperUrl: _privateUrl, customWallpaperFallbackUrl: _fallback,
-    uiFontResource: _ui, codeFontResource: _code, bodyFontResource: _body, ...publicSettings } = settings;
-  void _privateUrl; void _fallback; void _ui; void _code; void _body;
+  const { customWallpaperUrl: _privateUrl, ...publicSettings } = settings;
+  void _privateUrl;
   return {
     ...publicSettings,
     wallpaperId: settings.wallpaperId === 'custom' ? 'none' : settings.wallpaperId,
@@ -205,11 +204,6 @@ function broadcast(settings: AppearanceSettings): void {
       // A window may be torn down between enumeration and send.
     }
   }
-}
-
-export function publishAppearanceSettings(settings = readAppearanceSettings()): void {
-  applyAppearanceToWindows(settings);
-  broadcast(settings);
 }
 
 function parsePatch(rawPatch: unknown): AppearanceOverrides {
@@ -235,8 +229,8 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
     if (!allowed.has(key)) throwIpcError('INVALID_PARAMS', `unknown appearance field: ${key}`);
   }
   const patch: AppearanceOverrides = {};
-  if ('uiFamily' in raw) { patch.uiFamily = parseFamily(raw.uiFamily, 'uiFamily'); patch.uiFontResource = undefined; }
-  if ('codeFamily' in raw) { patch.codeFamily = parseFamily(raw.codeFamily, 'codeFamily'); patch.codeFontResource = undefined; }
+  if ('uiFamily' in raw) patch.uiFamily = parseFamily(raw.uiFamily, 'uiFamily');
+  if ('codeFamily' in raw) patch.codeFamily = parseFamily(raw.codeFamily, 'codeFamily');
   if ('terminalFamily' in raw)
     patch.terminalFamily = parseFamily(raw.terminalFamily, 'terminalFamily');
   if ('uiSize' in raw)

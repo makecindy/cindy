@@ -5,6 +5,8 @@ import type { BotGroupChangedPayload, BotGroupSummary } from '../../../../shared
 import { getBotGroupListSnapshot, refreshBotGroups, resetBotGroupStoreForTests, startBotGroupSync, subscribeBotGroups } from '../botGroupStore';
 import { getAllDraftAttachmentUrls, getDraft, saveDraft } from '@/lib/composerDraftStore';
 import { botGroupThreadDraftKey } from '../botGroupAttachments';
+import { getBotLastReadAt, markBotRead, resetBotReadStateForTests, startBotReadStateSync, getBotReadStateSyncStatus } from '../botReadState';
+import { botReadStateFixture } from './botReadStateFixture';
 
 const dataOwner = vi.hoisted(() => ({ generation: 1 }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({
@@ -40,6 +42,44 @@ afterEach(() => {
 });
 
 describe('group list mirror', () => {
+  // R3 / unit: a stale list and personal hide are not deletion authority for shared read positions.
+  it('retains a newly discovered group acknowledgement across a stale list and hiding another group', async () => {
+    resetBotReadStateForTests();
+    const reads = botReadStateFixture();
+    Object.assign(window.electronAPI.maker, reads.bridge);
+    const stopReads = startBotReadStateSync();
+    const stopGroups = startBotGroupSync();
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getBotReadStateSyncStatus().phase).toBe('ready');
+      let finish!: (value: unknown) => void;
+      listBotGroups.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      refreshBotGroups();
+      markBotRead('group:new', 300); markBotRead('group:g1', 200);
+      finish({ ok: true, groups: [] });
+      await vi.advanceTimersByTimeAsync(0);
+      push({ groupId: 'g1', change: 'list', listState: { hidden: true, revision: 1 } });
+      expect(getBotLastReadAt('group:new')).toBe(300);
+      expect(getBotLastReadAt('group:g1')).toBe(200);
+      expect(getBotGroupListSnapshot().groups).toEqual([]);
+    } finally {
+      stopGroups(); stopReads(); resetBotReadStateForTests();
+      await reads.bridge.botReadState({ owner: { dataOwnerId: 'owner', generation: 1 }, action: 'snapshot' });
+      reads.dispose();
+    }
+  });
+  it('loads and updates a secondary group mirror without replacing the shared display cache', async () => {
+    window.history.replaceState({}, '', '/?secondaryWindow=1');
+    const stop = startBotGroupSync();
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getBotGroupListSnapshot().groups[0]?.id).toBe('g1');
+      listBotGroups.mockResolvedValue({ ok: true, groups: [summary('Renamed')] });
+      push({ groupId: 'g1', change: 'updated' }); await vi.advanceTimersByTimeAsync(300);
+      expect(getBotGroupListSnapshot().groups[0]?.name).toBe('Renamed');
+      expect(chatDisplayCache.mock.calls.every(([request]) => request.action === 'read')).toBe(true);
+    } finally { stop(); window.history.replaceState({}, '', '/'); }
+  });
   // #8084: a deletion observed while a different room is open must also release thread media.
   // Unit: real sync push entry, without mounting the deleted group's chat view.
   it.each(['deleted', 'hidden'] as const)('discards closed thread drafts on an authoritative %s push', async boundary => {
