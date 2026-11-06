@@ -5227,7 +5227,10 @@ export function ChatInput({
 
   useEffect(() => {
     if (!slashOpen) return;
-    reloadSlashCommands({ forceReload: true });
+    // Opening the panel reuses the roster that is already on screen; forcing a
+    // reload here made every `/` repay the whole discovery chain. Change events
+    // (SkillHub activation, Pi packages, runtime retry) still force.
+    reloadSlashCommands();
   }, [slashOpen, reloadSlashCommands]);
   useEffect(() => {
     if (!slashOpen) {

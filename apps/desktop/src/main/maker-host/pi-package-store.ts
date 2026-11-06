@@ -83,6 +83,13 @@ const MAX_INSPECTED_PACKAGES = 128;
 const MAX_ALL_INSPECTION_MS = 10_000;
 const MAX_EXTENSION_FILES = 128;
 const INSPECTION_CACHE_MS = 1_000;
+/**
+ * Command-palette reads may reuse a finished inspection for longer. They only list
+ * package Skills/prompts, and every local mutation or package-change token edge
+ * invalidates the cache, so the only stale window is an install made outside Cindy
+ * (`pi install` in a terminal). Settings keeps the blocking one-second path.
+ */
+const PALETTE_INSPECTION_REUSE_MS = 60_000;
 const SNAPSHOT_UNAVAILABLE_RETRY_MS = 6 * 60 * 60 * 1_000;
 const SNAPSHOT_COPY_CHUNK_BYTES = 256 * 1024;
 const DEFAULT_SNAPSHOT_LIMITS: PiPackageSnapshotLimits = {
@@ -528,7 +535,7 @@ class PiPackageInspectionLimitError extends Error {
 
 let mutationTail: Promise<void> = Promise.resolve();
 let inspectionPromise: Promise<InspectedPackage[]> | undefined;
-let inspectionCache: { expiresAt: number; value: InspectedPackage[] } | undefined;
+let inspectionCache: { computedAt: number; value: InspectedPackage[] } | undefined;
 let inspectionGeneration = 0;
 const snapshotUnavailablePackages = new Map<string, SnapshotUnavailablePackageProjection>();
 const pendingEnabledSources = new Set<string>();
@@ -2063,9 +2070,12 @@ async function inspectPackage(
       ...(staleApproval ? { staleApproval: true } : {}),
     };
   } catch (error) {
+    const limit = inspectionLimitDiagnostic(error);
     log.warn('failed to inspect Pi package', {
       source: displaySource,
-      failureCategory: piPackageMutationFailureCategory(error),
+      // A rejected local budget is not a native command failure; say which one.
+      failureCategory: limit ? 'inspection-limit' : piPackageMutationFailureCategory(error),
+      ...(limit ? { limit } : {}),
       diagnostic: piPackageCommandDiagnostic(error),
     });
     const deterministicLimit = isDurableInspectionFailure(error);
@@ -2255,8 +2265,13 @@ function invalidateInspectionCache(): void {
   inspectionPromise = undefined;
 }
 
-async function inspectAllPackages(startupTiming?: PiPackageStartupTiming): Promise<InspectedPackage[]> {
-  if (inspectionCache && inspectionCache.expiresAt > Date.now()) return inspectionCache.value;
+async function inspectAllPackages(
+  startupTiming?: PiPackageStartupTiming,
+  reuseMs = INSPECTION_CACHE_MS,
+): Promise<InspectedPackage[]> {
+  if (inspectionCache && Date.now() - inspectionCache.computedAt < reuseMs) {
+    return inspectionCache.value;
+  }
   if (inspectionPromise) {
     // Reusing in-flight work still blocks this startup. Attribute only its wait
     // to inspection; completed-cache hits above remain skipped.
@@ -2266,7 +2281,7 @@ async function inspectAllPackages(startupTiming?: PiPackageStartupTiming): Promi
   const generation = inspectionGeneration;
   const pending = inspectAllPackagesUncached({ startupTiming }).then((value) => {
     if (generation === inspectionGeneration) {
-      inspectionCache = { expiresAt: Date.now() + INSPECTION_CACHE_MS, value };
+      inspectionCache = { computedAt: Date.now(), value };
     }
     return value;
   }).finally(() => {
@@ -2506,7 +2521,12 @@ export async function resolveManagedPiPackageResources(
     const resolveResources = async (forceFresh = false): Promise<PiManagedPackageResources> => {
       const inspected = forceFresh
         ? await inspectAllPackagesFreshUnderMutationLock({ startupTiming })
-        : await inspectAllPackages(startupTiming);
+        // A following snapshot copy verifies approved extensions against these
+        // fingerprints, so it keeps the short window instead of a palette reuse one.
+        : await inspectAllPackages(
+            startupTiming,
+            snapshotRoot ? INSPECTION_CACHE_MS : PALETTE_INSPECTION_REUSE_MS,
+          );
       if (snapshotRoot) {
         const staleApprovals = inspected
           .filter((pkg) => pkg.staleApproval)
@@ -2764,7 +2784,7 @@ export async function resolveManagedPiPackageResources(
 export async function listManagedPiPromptCommands(): Promise<Array<{ name: string; description: string }>> {
   await mutationTail;
   try {
-    const inspected = await inspectAllPackages();
+    const inspected = await inspectAllPackages(undefined, PALETTE_INSPECTION_REUSE_MS);
     return inspected.flatMap((pkg) => (
       snapshotUnavailableWarningForPackage(pkg) ? [] : pkg.promptCommands
     ));
@@ -2981,6 +3001,15 @@ class PiPackageSnapshotLimitError extends Error {
     super('Pi extension snapshot exceeds the safe resource limit');
     this.name = 'PiPackageSnapshotLimitError';
   }
+}
+
+/** Which local inspection budget rejected the package, for logs and diagnostics. */
+function inspectionLimitDiagnostic(
+  error: unknown,
+): { scope: 'package' | 'aggregate'; reason: PiPackageSnapshotLimitReason } | undefined {
+  if (error instanceof PiPackageInspectionLimitError) return { scope: 'package', reason: error.reason };
+  if (error instanceof PiPackageSnapshotLimitError) return { scope: error.scope, reason: error.reason };
+  return undefined;
 }
 
 function isDurableInspectionFailure(error: unknown): boolean {

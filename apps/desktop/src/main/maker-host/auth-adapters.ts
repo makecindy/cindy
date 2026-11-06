@@ -616,14 +616,17 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
         const sharedProjection = await prepareSharedGlobalSkillLinks({
           assertOwnerStable: () => assertGhostSkillProjectionBoundaryStableForOwner(ownerId),
         });
-        const persistent = new Set(sharedProjection.persistentWarnings);
+        const persistent = new Set([
+          ...sharedProjection.persistentWarnings,
+          ...preparedBuiltIns.persistentWarnings,
+        ]);
         return {
           warnings: [
             ...preparedBuiltIns.warnings,
             ...migrationWarnings,
             ...sharedProjection.warnings.filter((warning) => !persistent.has(warning)),
           ],
-          persistentWarnings: sharedProjection.persistentWarnings,
+          persistentWarnings: [...persistent],
         };
       });
       for (const warning of result.warnings) {

@@ -214,6 +214,7 @@ import { AUTO_REVIEW_DELEGATED_CONTINUATION, readAutoReviewUserText, restoreAuto
 import type {
   AgentEvent,
   AgentKind,
+  AgentSkillCommand,
   Effort,
   ContextUsageData,
   InteractionDecision,
@@ -1467,6 +1468,7 @@ import {
   createProjectSkillPreparation,
   toAgentSkillListFailure,
 } from './agentSkillListIpcBoundary.js';
+import { createPaletteDiscoveryReuse } from './paletteDiscoveryReuse.js';
 import {
   captureDataOwnerBroadcastScope,
   isDataOwnerBroadcastScopeCurrent,
@@ -1615,6 +1617,17 @@ import { installSessionTurnObserver } from './sessionTurnObserver.js';
 
 const log = createLogger('maker-ipc');
 const workdirLog = createLogger('workdir-diagnostics');
+
+/**
+ * `/` palette Skill listings are discovery snapshots, so a repeat load inside the
+ * window may read the previous answer. Every Cindy-side change (SkillHub activation,
+ * Pi package install/update, the Pi runtime catalog retry) already passes
+ * `forceReload`, which refreshes this snapshot instead of reading it.
+ */
+const SKILL_LIST_REUSE_MS = 30_000;
+const skillListReuse = createPaletteDiscoveryReuse<{ success: true; skills: AgentSkillCommand[] }>(
+  { ttlMs: SKILL_LIST_REUSE_MS },
+);
 const workingDirectoryRecovery = createWorkingDirectoryRecovery({ stat: statWorkingDirectory, mkdir: mkdirWorkingDirectory, realpath: realpathWorkingDirectory, requiredRoot: requiredDialogueRecoveryRoot, findFallback: findDialogueRecoveryWorkspace }, allocateDialogueRecoveryWorkspace, workdirLog);
 
 function localModelWindowSwitchErrorCode(code: IpcErrorCode): IpcErrorCode {
@@ -8469,6 +8482,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           forceReload?: boolean;
           sessionId?: string;
         };
+        const reuseKey = JSON.stringify([
+          kind,
+          skillParams.workingDir ?? null,
+          skillParams.sessionId ?? null,
+          skillParams.remoteHostId ?? null,
+        ]);
+        if (skillParams.forceReload !== true) {
+          const reused = skillListReuse.read(reuseKey);
+          if (reused) return reused;
+        }
         const linksChanged = skillParams.remoteHostId
           ? false
           : await measureTraceOperation('maker:list-agent-skills:project-links',
@@ -8493,8 +8516,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const descriptors = await measureTraceOperation('maker:list-agent-skills:identity',
           () => builtInSkillDescriptorsAsync(app.getPath('userData'), app.getPath('appData')));
         const disabled = new Set(readDisabledSkillPaths(descriptors));
-        return {
-          success: true,
+        const listing = {
+          success: true as const,
           ...result,
           skills: activeCindyBuiltInAgentSkills(
             result.skills,
@@ -8502,6 +8525,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             (source) => !disabled.has(skillActivationKey(source)),
           ),
         };
+        skillListReuse.write(reuseKey, listing);
+        return listing;
       } catch (err) {
         return toAgentSkillListFailure(err, {
           reportError: (error) => {
