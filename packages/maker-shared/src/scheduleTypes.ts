@@ -109,6 +109,8 @@ export interface RemoteSchedule {
   timezone?: string;
   recurring?: boolean;
   manual?: boolean;
+  /** 存在 = 开启了 Webhook 触发；旧版本电脑不返回。 */
+  webhookTrigger?: { endpointId: string; events?: string[] };
   intervalMs?: number;
   agentKind?: RemoteScheduleAgentKind;
   modelAgentKind?: RemoteScheduleAgentKind;

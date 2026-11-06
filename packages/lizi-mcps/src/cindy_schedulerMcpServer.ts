@@ -29,6 +29,7 @@ import {
   registerScheduleCreateTool,
   registerScheduleDeleteTool,
   registerScheduleGetTool,
+  registerScheduleWebhookTools,
   registerScheduleListRunsTool,
   registerScheduleListModelsTool,
   registerScheduleListTool,
@@ -90,7 +91,7 @@ const CATEGORY_ENUM = ['scheduler'] as const;
 /** 类目概览的一句话用途 + 作用范围(本机 / 可跨电脑);改工具作用范围时同步改这里。 */
 export const SCHEDULER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number], string> = {
   scheduler:
-    '定时任务（自动化 / 心跳）的查询与管理。定时任务保存在各自的电脑上：查询、修改、暂停、恢复、删除、立即运行，以及 schedule_create(device=) 新建，均可指定电脑（查询可传 all）；检查脚本安装、当前运行的通知设置只在本机。本机定时任务可完整选择本机、远程或分享来源的模型（schedule_list_models 查位置与模型），并为自动化显式指定模型运行位置。',
+    '定时任务（自动化 / 心跳）的查询与管理。定时任务保存在各自的电脑上：查询、修改、暂停、恢复、删除、立即运行，以及 schedule_create(device=) 新建，均可指定电脑（查询可传 all）；检查脚本安装、当前运行的通知设置只在本机。Webhook 触发配置可指定电脑；密钥与更换地址由用户在目标电脑详情操作。地址清单与名额释放覆盖账号全部电脑，重新连接可指定电脑。本机定时任务可完整选择本机、远程或分享来源的模型（schedule_list_models 查位置与模型），并为自动化显式指定模型运行位置。',
 };
 
 function registerListToolsEntry(
@@ -214,6 +215,7 @@ export function createSchedulerMcpServer(
   // 注册顺序 = list_tools 里的位次。读优先 → 写次之 → 危险写在最后。
   registerScheduleListTool(registry, deps);
   registerScheduleGetTool(registry, deps);
+  registerScheduleWebhookTools(registry, deps);
   registerScheduleListRunsTool(registry, deps);
   // 运行位置与模型目录;host 未注入 listModels 时内部跳过注册。
   registerScheduleListModelsTool(registry, deps);

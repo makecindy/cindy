@@ -10,6 +10,17 @@ import {
 afterEach(() => setGhostToolApprovalResolver(null));
 
 describe('desktop Claude read-only allowlist', () => {
+  // Account release disables another device's receiver; both direct and progressive
+  // routes must pass the normal write review instead of trusted-server read approval.
+  it('reviews Webhook release and restoration while preserving read access', () => {
+    for (const tool of ['schedule_webhook_release', 'schedule_webhook_restore']) {
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_scheduler', toolName: tool })).toBe('prompt-each-time');
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_scheduler', toolName: 'call_tool',
+        toolParams: { name: tool, args: { id: 'whk_old' } } })).toBe('prompt-each-time');
+    }
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_scheduler', toolName: 'call_tool',
+      toolParams: { name: 'schedule_webhook_list', args: {} } })).toBe('auto-approve');
+  });
   it('allows only explicitly reviewed read-only tools', () => {
     const tools = getDesktopClaudeReadOnlyAllowedTools();
 

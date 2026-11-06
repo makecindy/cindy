@@ -1,6 +1,4 @@
 import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validateWithStoredMcpApps, parseGhostMcpApps } from '@cindy/plugin-protocol';
-import { parseGhostNativeUi, validateWithStoredNativeUi } from '@cindy/plugin-protocol';
-import { PLUGIN_UI_CAPABILITIES, PLUGIN_UI_CONTEXT_FIELDS, pluginUiPointAcceptsScope } from '../../../../packages/maker-shared/src/pluginUi.js';
 import { pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '@cindy/plugin-protocol';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from '@cindy/plugin-protocol';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from '@cindy/plugin-protocol';
@@ -1644,8 +1642,6 @@ export function isGhostSetupErrorCode(value: unknown): value is GhostSetupErrorC
 
 /** ghost.json 清单(不变量由 validateGhostManifest 保证)。 */
 export interface GhostManifest {
-  /** Native Cindy contributions. Unknown versions remain declaration data. */
-  ui?: unknown;
   /** Optional MCP Apps resources and links to existing tools. */
   mcpApps?: unknown;
   /** Optional v3 extension, validated only when projecting homepage recommendations. */
@@ -2212,36 +2208,6 @@ export function ghostDeclaresHiddenTasks(manifest: Pick<GhostManifest, 'agent'> 
 
 export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionItem[] {
   const items: GhostPermissionItem[] = [];
-  const nativeUi = parseGhostNativeUi(manifest.ui);
-  if (nativeUi?.version === 1) for (const view of nativeUi.tabViews ?? []) {
-    items.push({ key: `ui:tab-view:${view.id}`, kind: 'panel', labelKey: 'nativeTabView', labelArgs: { title: view.title },
-      detail: `${view.title} (${view.scope}); page: ${view.page}` });
-  }
-  if (nativeUi?.version === 1 && nativeUi.appearance) {
-    const fields = nativeUi.appearance.fields.filter(field => ['wallpaper', 'uiFont', 'codeFont', 'bodyFont', 'theme', 'reading', 'contentStyle', 'visibility'].includes(field)).sort();
-    if (fields.length) items.push({ key: 'ui:appearance', kind: 'panel', labelKey: 'nativeUi', detail: `appearance: ${fields.join(', ')}` });
-  }
-  if (nativeUi?.version === 1) for (const c of nativeUi.contributions ?? []) {
-    if (PLUGIN_UI_CAPABILITIES.points.includes(c.point) && pluginUiPointAcceptsScope(c.point, c.scope)) {
-      const context = c.scope === 'app' ? [] : (c.context ?? []).filter(field => PLUGIN_UI_CONTEXT_FIELDS.includes(field)).sort();
-      const editor = c.scope === 'app' ? [] : (c.editor ?? []).filter(operation => ['append', 'replace-selection'].includes(operation)).sort();
-      const match = (c.point === 'message.body' || c.point === 'tool.body') && c.match &&
-        ['self', 'plugin', 'tool'].includes(c.match.kind) ? JSON.stringify({ kind: c.match.kind,
-          ...(c.match.instanceId ? { instanceId: c.match.instanceId } : {}), ...(c.match.name ? { name: c.match.name } : {}) }) : '';
-      items.push({ key: `ui:native:${c.id}`, kind: 'panel', labelKey: 'nativeUi', detail: `${c.point} (${c.scope})` +
-        (match ? `; match: ${match}` : '') + (context.length ? `; context: ${context.join(', ')}` : '') + (editor.length ? `; editor: ${editor.join(', ')}` : '') });
-    }
-  }
-  if (nativeUi?.version === 1) for (const command of nativeUi.commands ?? []) {
-    if (command.scope !== 'session' && command.scope !== 'message') continue;
-    const points = (command.points ?? []).filter(point => PLUGIN_UI_CAPABILITIES.points.includes(point) &&
-      pluginUiPointAcceptsScope(point, command.scope)).sort();
-    const context = (command.context ?? []).filter(field => ['session.summary', 'message.content', 'selection'].includes(field)).sort();
-    const editor = (command.editor ?? []).filter(operation => ['append', 'replace-selection'].includes(operation)).sort();
-    items.push({ key: `ui:command:${command.id}`, kind: 'panel', labelKey: 'nativeUi',
-      detail: `${points.join(', ') || 'shortcut'} (${command.scope})` +
-        (context.length ? `; context: ${context.join(', ')}` : '') + (editor.length ? `; editor: ${editor.join(', ')}` : '') });
-  }
   if (pluginHasToolUi(manifest)) items.push({ key: 'ui:pages', kind: 'panel', labelKey: 'mcpUi',
     detailKey: 'uiPageAccess', detailArgs: {
       pages: (getPluginToolUi(manifest)?.resources ?? []).map(resource => resource.uri).sort().join(', ') || '—',
@@ -3399,11 +3365,6 @@ function isPortableGhostRelativePath(p: unknown): p is string {
  */
 export function ghostWebviewEntryPaths(manifest: GhostManifest): string[] {
   const paths: string[] = [];
-  const nativeUi = parseGhostNativeUi(manifest.ui);
-  if (nativeUi?.version === 1) for (const view of nativeUi.tabViews ?? []) {
-    const p = `/${view.page}`;
-    if (!paths.includes(p)) paths.push(p);
-  }
   if (manifest.panel?.html) paths.push(`/${manifest.panel.html}`);
   if (manifest.mainView?.html) {
     const p = `/${manifest.mainView.html}`;
@@ -3440,7 +3401,6 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
-  'ui',
   'mcpApps',
   'routineEvents',
   'models',
@@ -4358,12 +4318,12 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
 
 /** Stored market releases tolerate only historical mcpApps; other fields remain strict. */
 export function validateStoredGhostManifest(value: unknown): ManifestValidation {
-  return validateWithStoredNativeUi(value, raw => validateWithStoredMcpApps(raw, validateGhostManifest));
+  return validateWithStoredMcpApps(value, validateGhostManifest);
 }
 
 /** Installed snapshots retain historical unknown tasks data without granting it. */
 export function validateInstalledGhostManifest(value: unknown): ManifestValidation {
-  return validateWithStoredNativeUi(value, raw => validateWithStoredMcpApps(raw, input => validateGhostManifestInput(input, true)));
+  return validateWithStoredMcpApps(value, raw => validateGhostManifestInput(raw, true));
 }
 
 function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boolean): ManifestValidation {
@@ -4371,8 +4331,6 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
   if (!preparation.ok) return preparation;
   const prepared = preparation.prepared;
   const raw = prepared.raw;
-  const ui = raw.ui === undefined ? undefined : parseGhostNativeUi(raw.ui);
-  if (ui === null) return { ok: false, reason: 'ui 必须声明合法的 version 与唯一的 contributions' };
   if (raw.mail !== undefined && raw.mail !== true) return { ok: false, reason: 'mail 出现时必须是 true' };
   const mailReader = raw.mailReader === undefined ? undefined : parseMailReader(raw.mailReader);
   if (raw.mailReader !== undefined && !mailReader) {
@@ -6757,7 +6715,6 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
     ok: true,
     manifest: {
       ...prepared.unknownV3Fields,
-      ...(ui !== undefined ? { ui } : {}),
       ...(mcpApps !== undefined ? { mcpApps } : {}),
       schemaVersion: prepared.schemaVersion,
       id: raw.id,
