@@ -773,13 +773,13 @@ export function normalizeMarkdownImageSrc(
   allowPrivilegedLinks: boolean,
 ): string | undefined {
   if (!src) return src;
+  if (!allowPrivilegedLinks) {
+    return /^https?:\/\//i.test(src) ? src : undefined;
+  }
   // Older task messages sometimes use xdt-image for a hostless absolute path
   // (`xdt-image:///C:/...`). Route this legacy shape through the safe local-file URL.
   if (src.startsWith('xdt-image:///')) {
     return normalizeXdtFileUrlForRenderer(src.replace(/^xdt-image:/, 'xdt-file:'));
-  }
-  if (!allowPrivilegedLinks) {
-    return /^https?:\/\//i.test(src) ? src : undefined;
   }
   if (
     src.startsWith('data:') ||

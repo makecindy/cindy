@@ -130,6 +130,7 @@ describe('Markdown local image path encoding', () => {
       'relative/private.png',
       'file:///tmp/private.png',
       'xdt-file://local/?path=%2Ftmp%2Fprivate.png',
+      'xdt-image:///tmp/private.png',
     ]) {
       expect(normalizeMarkdownImageSrc(src, '/repo', false)).toBeUndefined();
     }
