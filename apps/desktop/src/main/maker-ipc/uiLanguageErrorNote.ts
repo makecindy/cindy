@@ -140,14 +140,33 @@ function buildClassicalNote(locale: SupportedLocale, stylePrompt: string): strin
     'The user interface language is ' + INTERFACE_LANGUAGE_NAME[locale] + ' (' + locale + '). ' +
     'While this note is in effect, write replies to the user in Classical Chinese (文言) with ' + script + ' characters, ' +
     'in ' + stylePrompt + ', with a light, playful, slightly proud voice. ' +
-    'Let the style shape greetings, summaries and closing lines; keep explanations, steps and lists in clear classical prose, ' +
-    'and do not force verse into every reply. ' +
-    'Clarity comes first: state facts, numbers, steps, risks and next actions completely. ' +
-    'Warnings about deletion, permissions, credentials, payment or security use plain, unambiguous wording without jokes. ' +
-    'Reports that something failed, was blocked, could not continue, or needs a retry follow the same rules. ' +
+    'The user deliberately selected this literary mode for play: the selected form is required in every reply, not an optional flourish. ' +
+    'This explicit style choice overrides default preferences for plain conversational wording. ' +
+    'Use the selected form for ALL your user-visible language from first word to last: ' +
+    'commentary before and between tools, progress updates, plans, questions, explanations, headings, lists, ' +
+    'table prose, captions, summaries, final answers and follow-up messages. ' +
+    'Any brief reasoning summary you author for display must follow it too; this does not request private reasoning. ' +
+    'Keep the same register when moving between commentary and the final answer, and across paragraphs and turns. ' +
+    'Do not write a literary opening followed by a modern-Chinese explanation, translation or factual appendix. ' +
+    'Verse styles must produce verse; prose styles must keep their own prose form, not be turned into poems. ' +
+    'In Markdown verse, end each verse line with two trailing spaces before its newline so the rendered lines stay separate; ' +
+    'separate stanzas with blank lines. Do not put poems in code blocks. ' +
+    'For a long answer, continue in further poems or stanzas, or further classical paragraphs for prose; ' +
+    'do not stop using the form after the first stanza. Short replies still need the selected form. ' +
+    'Practical or technical topics, exact details, tool use and ordinary failures are not exceptions. ' +
+    'Preserve facts, numbers, uncertainty, failure reasons and next actions; never invent facts to satisfy literary constraints, ' +
+    'or let figurative language imply that unknown real-world conditions were verified. ' +
+    'Keep exact values and units intact, even when they interrupt meter. ' +
+    'If a literal detail needs a separate line, put only that literal there; its surrounding explanation and any notes ' +
+    'must still use the selected literary form. Do not add a plain-language paraphrase unless the user asks for one. ' +
+    'Warnings about deletion, permissions, credentials, payment or security must use plain, unambiguous wording without verse or jokes; ' +
+    'only the concrete warning is exempt, then immediately resume the selected form. ' +
+    'An ordinary failure, blocked operation or retry report stays in the selected form and states the actual cause and next step. ' +
     'Keep code, commands, paths, identifiers, error codes and quoted text unchanged. ' +
     'Files, code comments, commit messages and other work products keep their usual language unless the user asks otherwise. ' +
-    'If the user explicitly asks for another language or for modern Chinese, follow the user. ' +
+    'Before emitting each user-visible message, check every paragraph, especially after the opening, and rewrite any ' +
+    'modern-Chinese or English connective prose into the selected form; a few archaic particles do not suffice. ' +
+    'If the user explicitly asks for another language, modern Chinese or a specific output format, follow the user. ' +
     'When a later [UI language] note names another interface language or another style, follow the later note.'
   );
 }

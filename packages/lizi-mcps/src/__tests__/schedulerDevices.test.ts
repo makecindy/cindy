@@ -10,6 +10,7 @@ import {
   type SchedulerToolResult,
 } from "../cindy_schedulerToolRegistry.js";
 import {
+  registerScheduleCreateTool,
   registerScheduleDeleteTool,
   registerScheduleGetTool,
   registerScheduleListRunsTool,
@@ -391,13 +392,14 @@ describe("cindy_scheduler cross-device routing", () => {
       device: "mbp",
       name: "renamed",
       intervalMs: null,
+      expireAt: null,
     });
     expect(s.invoke.mock.calls).toEqual([
       ["mbp", "pause", ["r1"]],
       ["mbp", "delete", ["r1"]],
       ["mbp", "resume", ["r1"]],
       ["mbp", "run-now", ["r1"]],
-      ["mbp", "update", ["r1", { name: "renamed", intervalMs: null }]],
+      ["mbp", "update", ["r1", { name: "renamed", intervalMs: null, expireAt: null }]],
     ]);
     for (const method of [
       "pause",
@@ -508,4 +510,90 @@ describe("cindy_scheduler cross-device routing", () => {
       });
     }
   });
+});
+
+describe('remote schedule create', () => {
+  function setup() {
+    const scheduler = {
+      create: vi.fn(async () => ({ id: 'local' })),
+    };
+    const invoke = vi.fn(async (_deviceId: string, op: string, args: unknown[]): Promise<SchedulerRemoteResult> => {
+      if (op === 'create') return { ok: true, data: { ...(args[0] as object), id: 'dst', status: 'active' } };
+      return { ok: false, code: 'REMOTE_UNSUPPORTED', message: op };
+    });
+    const registry = new SchedulerToolRegistry();
+    const deps = {
+      getScheduler: () => scheduler as unknown as Scheduler,
+      remote: { listDevices: async () => [], invoke },
+      listModels: vi.fn(async () => ({
+        ok: true as const,
+        pi: [{ id: 'grok-4.6', label: 'Grok 4.6', providers: [{ id: 'xai-2fdb5bc7', name: 'xAI' }], defaultProviderId: 'xai-2fdb5bc7' }],
+      })),
+    };
+    registerScheduleCreateTool(registry, deps);
+    return { registry, invoke, scheduler };
+  }
+
+  it('creates on the named computer and does not touch the local scheduler', async () => {
+    const s = setup();
+    const result = parse(await s.registry.call('schedule_create', {
+      device: 'spark',
+      name: '游戏领域雷达',
+      prompt: '围绕主题搜集动态',
+      cronExpr: '0 9 * * 1-5',
+      timezone: 'Asia/Shanghai',
+      recurring: true,
+      agentKind: 'pi',
+      model: 'grok-4.6',
+      providerId: 'xai-2fdb5bc7',
+      useWorktree: false,
+      notify: { desktop: true, feishu: false },
+    }));
+    expect(result.ok).toBe(true);
+    expect(s.invoke).toHaveBeenCalledWith('spark', 'create', [expect.objectContaining({
+      name: '游戏领域雷达',
+      providerId: 'xai-2fdb5bc7',
+    })]);
+    expect(s.scheduler.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects binding the current session when creating remotely', async () => {
+    const s = setup();
+    const result = parse(await s.registry.call('schedule_create', {
+      device: 'spark',
+      bindToCurrentSession: true,
+      name: 'n',
+      prompt: 'p',
+      cronExpr: '0 9 * * *',
+      timezone: 'Asia/Shanghai',
+      recurring: true,
+      agentKind: 'pi',
+      useWorktree: false,
+      notify: { desktop: true, feishu: false },
+    }));
+    expect(result).toMatchObject({ ok: false, code: 'INVALID_PARAMS' });
+    expect(s.invoke).not.toHaveBeenCalled();
+  });
+
+  // PR #8470, unit: the host adapter negotiates target capabilities; the MCP
+  // must forward non-secret configuration instead of rejecting every remote target.
+  it('forwards webhook creation without touching the local scheduler', async () => {
+    const s = setup();
+    const result = parse(await s.registry.call('schedule_create', {
+      device: 'spark', name: 'n', prompt: 'p', cronExpr: '0 9 * * *',
+      timezone: 'Asia/Shanghai', recurring: true, agentKind: 'pi', useWorktree: false,
+      notify: { desktop: true, feishu: false }, webhookTrigger: { events: ['issues.opened'] },
+    }));
+    expect(result.ok).toBe(true);
+    expect(s.invoke).toHaveBeenCalledWith('spark', 'create', [expect.objectContaining({ webhookTrigger: { events: ['issues.opened'] } })]);
+    expect(s.scheduler.create).not.toHaveBeenCalled();
+  });
+});
+
+it.each([{ events: ['issues.opened'] }, null])('forwards remote webhook update/clear through the target host: %j', async (webhookTrigger) => {
+  const s = setup();
+  const result = parse(await s.registry.call('schedule_update', { id: 'r1', device: 'mbp', webhookTrigger }));
+  expect(result.ok).toBe(true);
+  expect(s.invoke).toHaveBeenCalledWith('mbp', 'update', ['r1', { webhookTrigger }]);
+  expect(s.scheduler.updateFromCurrent).not.toHaveBeenCalled();
 });

@@ -4,7 +4,7 @@ import { CallToolResultSchema, type CallToolResult } from '@modelcontextprotocol
 import { pluginAppTool } from './pluginServer.js';
 import { getMcpAppsHost, readAppServer } from './runtime.js';
 import { pluginAppServerId } from '../mcp-integrations/plugin-app-registry.js';
-import { hasGhostUiPermission, type InstalledGhost } from '../../shared/ghost.js';
+import { hasGhostUiPermission, type GhostHandoffFile, type InstalledGhost } from '../../shared/ghost.js';
 import type { McpAppRecord } from '../../shared/mcpApps.js';
 
 export function pluginAppResult(result: unknown): CallToolResult {
@@ -36,6 +36,7 @@ export async function publishPluginAppResult(
   args: Record<string, unknown>,
   result: unknown,
   attachmentHashes: readonly string[] = [],
+  handoffFiles: readonly GhostHandoffFile[] = [],
 ): Promise<void> {
   const declared = ghost.manifest.tools?.find((tool) => tool.name === name);
   if (!declared || !getPluginToolUi(ghost.manifest)?.tools[name]?.resourceUri) return;
@@ -56,7 +57,7 @@ export async function publishPluginAppResult(
     ...tool._meta,
     'cindy/plugin': { name: config.plugin.title, trust: config.plugin.trust },
   };
-  if (attachmentHashes.length) {
+  if (attachmentHashes.length || handoffFiles.length) {
     const { getBlobInfo, ghostCanRead } = await import('../cindy-media/ledger.js');
     const attachments = [];
     for (const hash of attachmentHashes) {
@@ -65,6 +66,9 @@ export async function publishPluginAppResult(
       if (info) attachments.push({ type: 'resource_link', name: `${hash.slice(0, 12)}${info.ext}`,
         uri: `cindy-media://blobs/${hash}${info.ext}`, mimeType: info.mimeType, size: info.bytes });
     }
+    // Handoff copies are references only; the View signs a read URL while the copy is live.
+    for (const file of handoffFiles)
+      attachments.push({ type: 'resource_link', name: file.name, uri: file.ref, mimeType: file.mimeType, size: file.size });
     config.plugin.assertCurrent(sessionId);
     tool._meta['cindy/attachments'] = attachments;
   }

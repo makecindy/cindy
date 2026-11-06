@@ -1,3 +1,4 @@
+import { imBotSettings } from './ImBotSection.settings-search';
 import { Button } from '@/components/ui/button';
 import { ImConnectionError, ImReconnectButton } from './ImConnectionRecovery';
 import { useCallback, useState } from 'react';
@@ -84,8 +85,8 @@ export function WecomBotSection({
 
   return (
     <ImChannelSettingsCard
-      id="personal-im-wecom"
-      title={t('settings.wecomBot.title')}
+      id={imBotSettings.wecom.targetId}
+      title={t(imBotSettings.wecom.titleKey)}
       description={t('settings.wecomBot.description')}
       routeSummary={
         routeSummary
@@ -145,7 +146,7 @@ export function WecomBotSection({
               </div>
             </div>
           </div>
-          <Button
+          <Button data-setting-id={imBotSettings.wecom.id}
             variant="secondary"
             size="lg"
             loading={isDisconnecting}
@@ -165,7 +166,7 @@ export function WecomBotSection({
           <label className="text-12 font-medium text-[var(--settings-section-desc)]">
             {t('settings.wecomBot.botIdLabel')}
           </label>
-          <input
+          <input data-setting-id={imBotSettings.wecom.id}
             type="text"
             value={botId}
             onChange={(event) => setBotId(event.target.value)}
@@ -178,7 +179,7 @@ export function WecomBotSection({
             {t('settings.wecomBot.secretLabel')}
           </label>
           <div className="relative">
-            <input
+            <input data-setting-id={imBotSettings.wecom.id}
               type={showSecret ? 'text' : 'password'}
               value={secret}
               onChange={(event) => setSecret(event.target.value)}
@@ -187,7 +188,7 @@ export function WecomBotSection({
               autoComplete="new-password"
               className={cn(fieldClassName, 'pr-10')}
             />
-            <button
+            <button data-setting-id={imBotSettings.wecom.id}
               type="button"
               onClick={() => setShowSecret((shown) => !shown)}
               className="absolute right-[14px] top-1/2 -translate-y-1/2 text-[var(--settings-eye-icon)] hover:text-[var(--settings-eye-icon-hover)]"
@@ -222,7 +223,7 @@ export function WecomBotSection({
                 {t('settings.wecomBot.reconnect')}
               </ImReconnectButton>
             ) : (
-              <Button
+              <Button data-setting-id={imBotSettings.wecom.id}
                 variant="cta"
                 size="lg"
                 loading={isSaving || status.kind === 'connecting'}
@@ -235,7 +236,7 @@ export function WecomBotSection({
               </Button>
             )}
             {botId.trim() ? (
-              <Button
+              <Button data-setting-id={imBotSettings.wecom.id}
                 variant="secondary"
                 size="lg"
                 loading={isDisconnecting}
@@ -269,7 +270,7 @@ export function WecomBotSection({
                 : t('settings.notifications.wecomGroupHint')}
             </p>
           </div>
-          <Switch
+          <Switch data-setting-id={imBotSettings.wecom.id}
             checked={wecomGroup.enabled && wecomGroup.configured}
             onCheckedChange={(next) => {
               void wecomGroup
@@ -283,7 +284,7 @@ export function WecomBotSection({
 
         {wecomGroup.configured ? (
           <div className="flex gap-2">
-            <Button
+            <Button data-setting-id={imBotSettings.wecom.id}
               variant="secondary"
               size="lg"
               loading={wecomGroup.busy}
@@ -300,7 +301,7 @@ export function WecomBotSection({
               <Send size={13} />
               {t('settings.notifications.wecomGroupTest')}
             </Button>
-            <Button
+            <Button data-setting-id={imBotSettings.wecom.id}
               variant="secondary"
               size="lg"
               type="button"
@@ -319,7 +320,7 @@ export function WecomBotSection({
           </div>
         ) : (
           <div className="flex flex-col gap-2">
-            <input
+            <input data-setting-id={imBotSettings.wecom.id}
               type="password"
               value={webhookUrl}
               onChange={(event) => setWebhookUrl(event.target.value)}
@@ -335,7 +336,7 @@ export function WecomBotSection({
                 'focus:border-[var(--settings-input-border-focus)]',
               )}
             />
-            <Button
+            <Button data-setting-id={imBotSettings.wecom.id}
               variant="cta"
               size="lg"
               loading={wecomGroup.busy}

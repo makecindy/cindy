@@ -9,7 +9,6 @@ import {
 import {
   clearRateHistoryCache,
   emptyRateHistory,
-  recordRunningTokenRate,
 } from '@/features/cc-agent/lib/runningTokenRateHistory';
 
 vi.mock('react-i18next', () => ({
@@ -45,7 +44,7 @@ it('expires the displayed rate without losing history, including after remount',
   } finally { clearRateHistoryCache(); vi.useRealTimers(); }
 });
 
-it('distinguishes an unobserved peak from measured zero throughput', () => {
+it('shows the observed peak as soon as one exists, without waiting for a chart sample', () => {
   const props = {
     elapsedText: '1s',
     rate: null,
@@ -53,21 +52,23 @@ it('distinguishes an unobserved peak from measured zero throughput', () => {
     averageRate: null,
     outputTokens: 0,
   };
-  let history = emptyRateHistory(1);
-  const { rerender } = render(<RunningTokenRatePopover {...props} history={history} />);
-  fireEvent.click(screen.getByRole('button'));
   const peak = () => screen.getByText('chat.runningStatus.observedPeak').nextElementSibling;
+  // No measurement yet: nothing observed, so no peak to report.
+  const { rerender } = render(
+    <RunningTokenRatePopover {...props} history={emptyRateHistory(1)} />,
+  );
+  fireEvent.click(screen.getByRole('button'));
   expect(peak()?.textContent).toBe('—');
-  for (const generationDurationMs of [0, 1000]) {
-    history = recordRunningTokenRate(history, {
-      startedAt: 1,
-      outputTokens: 0,
-      generationDurationMs,
-      generationReliable: true,
-    });
-  }
-  rerender(<RunningTokenRatePopover {...props} history={history} />);
-  expect(peak()?.textContent).toBe('0 tok/s');
+
+  // A short turn measured 120 tok/s but is still too short to produce a chart point.
+  rerender(
+    <RunningTokenRatePopover
+      {...props}
+      history={{ ...emptyRateHistory(1), peak: 120 }}
+    />,
+  );
+  expect(screen.getByRole('img').querySelectorAll('path')).toHaveLength(1);
+  expect(peak()?.textContent).toBe('120 tok/s');
 });
 
 it('keeps pinned history while its trigger falls back to tokens or elapsed-only', () => {

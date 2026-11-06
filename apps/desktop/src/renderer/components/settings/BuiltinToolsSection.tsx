@@ -1,3 +1,4 @@
+import { builtinToolsSettings } from './BuiltinToolsSection.settings-search';
 /**
  * BuiltinToolsSection — Settings → Connections 下的内置工具管理面板。
  * ---------------------------------------------------------------------------
@@ -199,11 +200,11 @@ export function BuiltinToolsSection({ workingDir }: BuiltinToolsSectionProps) {
     <div className="flex flex-col gap-[14px]">
       <div className="flex items-start justify-between gap-3">
         <div className="flex flex-col gap-1 min-w-0">
-          <h2 id="settings-search-settings-builtinTools-title" className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-            {t('settings.builtinTools.title')}
+          <h2 id={builtinToolsSettings.title.targetId} className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
+            {t(builtinToolsSettings.title.titleKey)}
           </h2>
           <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-            {t('settings.builtinTools.description')}
+            {t(builtinToolsSettings.title.descriptionKey)}
           </p>
         </div>
         <ScopePicker
@@ -334,7 +335,7 @@ export function BuiltinToolRow({
             onReset={() => onClearOverride(plugin.id, name)}
           />
         ) : null}
-        <Switch
+        <Switch data-setting-id={builtinToolsSettings.title.id}
           checked={checked ?? plugin.effectiveEnabled}
           disabled={disabled}
           onCheckedChange={(v) => onToggle(plugin.id, v, name)}
@@ -385,7 +386,7 @@ function ScopePicker({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
+        <button data-setting-id={builtinToolsSettings.title.id}
           type="button"
           aria-label={t('settings.builtinTools.scopePicker.ariaLabel')}
           title={effectiveWorkingDir ?? undefined}

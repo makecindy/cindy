@@ -43,7 +43,7 @@ import {
 } from '../mcp-integrations/codexHttpBridge.js';
 import { getRemoteMcpBridgeToken } from '../mcp-integrations/remoteMcpBridgeToken.js';
 import { appServerIds } from '../mcp-apps/runtime.js';
-import { isFrozenMcpServerAllowed } from '../mcp-integrations/codexBuiltinToolPolicy.js';
+import { isFrozenBuiltinPluginAllowed, isFrozenMcpServerAllowed } from '../mcp-integrations/codexBuiltinToolPolicy.js';
 
 const log = createLogger('codex-remote-mcp');
 
@@ -205,7 +205,8 @@ export function invalidateRemoteCodexMcpEndpointState(hostId: string): void {
 
 /** Bind the remote daemon's disabled helper and App transports to one concrete Session.
  * Read the port at use time: SSH forwarding is established after host construction.
- * Only Bot MCP policy enables the helper; Apps follow the thread's frozen mounts.
+ * Helper introspection is available to ordinary tasks too; both transports
+ * follow the thread's frozen policy and require its bound instance.
  */
 export function buildRemoteCodexSessionMcpConfig(
   hostId: string,
@@ -242,8 +243,9 @@ export function buildRemoteCodexSessionMcpConfig(
         `http://127.0.0.1:${prefs.remotePort}/mcp/${name}`, { sessionInstanceId },
       )],
       [`mcp_servers.${name}.bearer_token_env_var`, TOKEN_ENV],
-      [`mcp_servers.${name}.enabled`, name !== REMOTE_BOT_HELPER_SERVER_NAME &&
-        isFrozenMcpServerAllowed(opts.vendorOptions, name)],
+      [`mcp_servers.${name}.enabled`, name === REMOTE_BOT_HELPER_SERVER_NAME
+        ? isFrozenBuiltinPluginAllowed(opts.vendorOptions, 'xdt_helper')
+        : isFrozenMcpServerAllowed(opts.vendorOptions, name)],
     ]));
 }
 
@@ -904,7 +906,7 @@ async function doEnsureRemoteCodexMcpBridge(
     let serverNames = selectRemoteInjectableServerNames(bridge.serverNames, {
       collabEnabled,
       memoryEnabled: deps.isMakerMemoryEnabled?.() ?? false,
-      // Shared transport stays disabled; the Bot policy enables it per thread.
+      // Shared transport stays disabled; the bound Session config enables it.
       botHelperEnabled: true,
     });
     if (

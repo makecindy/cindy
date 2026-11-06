@@ -28,6 +28,7 @@ import {
 import { Text } from "@/components/AppText";
 import { MainWindowOptionButton } from "@/components/MobilePrimitives";
 import { RemoteDesktopActionButton } from "./RemoteDesktopActionButton";
+import type { RemoteDesktopDeviceButton } from "./RemoteDesktopChrome";
 import {
   NativePullDownMenu,
   usesNativePullDownMenu,
@@ -64,7 +65,13 @@ export function RemoteDesktopControls({
   security,
   page,
   onPage,
+  device,
 }: {
+  /**
+   * A plugin live screen: fingers are always device touches, so there is no
+   * input mode; device buttons that do not fit the toolbar are listed here.
+   */
+  device?: { buttons: RemoteDesktopDeviceButton[] };
   page: "controls" | "display" | "security";
   onPage(page: "controls" | "display" | "security"): void;
   connected: boolean;
@@ -126,7 +133,15 @@ export function RemoteDesktopControls({
     onPress(): void;
     disabled?: boolean;
     selected?: boolean;
+    label?: string;
   }> = [
+    ...(device?.buttons ?? []).map((button) => ({
+      key: button.key,
+      icon: button.icon,
+      onPress: button.press,
+      disabled: !controlling || viewOnly,
+      label: button.label,
+    })),
     {
       key: "rotate",
       icon: RotateCw,
@@ -164,12 +179,12 @@ export function RemoteDesktopControls({
       {!displaySettings && (
         <View style={styles.quickActions}>
           {quickActions.map(
-            ({ key, icon: Icon, onPress, disabled, selected }) => (
+            ({ key, icon: Icon, onPress, disabled, selected, label }) => (
               <RemoteDesktopActionButton
                 key={key}
                 testID={`remoteDesktop.${key}`}
                 accessibilityRole="button"
-                accessibilityLabel={t(`remoteDesktop.${key}`)}
+                accessibilityLabel={label ?? t(`remoteDesktop.${key}`)}
                 accessibilityHint={
                   key === "smallWindow"
                     ? t("remoteDesktop.backgroundRunningHint")
@@ -196,7 +211,7 @@ export function RemoteDesktopControls({
                     selected && styles.quickSelectedLabel,
                   ]}
                 >
-                  {t(`remoteDesktop.${key}`)}
+                  {label ?? t(`remoteDesktop.${key}`)}
                 </Text>
               </RemoteDesktopActionButton>
             ),
@@ -210,7 +225,7 @@ export function RemoteDesktopControls({
         </Text>
       )}
 
-      {!displaySettings && (
+      {!displaySettings && !device && (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>
             {t("remoteDesktop.inputMode")}

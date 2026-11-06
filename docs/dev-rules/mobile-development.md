@@ -7,7 +7,22 @@
 
 ## 日常模拟器入口
 
-普通开发使用根脚本维护 Metro、区域配置和 worktree 归属：
+macOS 上启动手机版只需要一条命令，可重复运行（比如设备闲置关机后）：
+
+```bash
+pnpm mobile:sim:up            # 只看界面加 -- --mock
+```
+
+它依次选设备、开机、准备 Metro、安装匹配的原生包、启动 App 并核对身份。进度写 stderr，stdout
+最后一行是结果 JSON：`ok`、`code`、`step`、`udid`、`port`、`bundleVerified`、`foreground`，以及下一步 `next`。
+`pageVerified` 始终是 `false`，页面仍要截图目检。原生层变化时会完整编译，可能要 20–30 分钟，放后台
+运行并等完成通知，不要重复启动。失败时按 `next` 处理，再看
+[`simulator-debugging.md`](../../apps/mobile/docs/simulator-debugging.md#截图与当前版本测试)。
+
+判断手机版无法启动或编译，须以本轮运行返回的 `code` 为据；之前的对话、其他任务的结论、手动运行
+`pod --version` 都不算证据（Agent 进程的 `PATH` 常常不含已安装的 CocoaPods）。
+
+需要单独控制某一步时使用根脚本，它们维护 Metro、区域配置和 worktree 归属：
 
 ```bash
 pnpm mobile:sim:start
@@ -18,8 +33,8 @@ pnpm mobile:sim:whoami
 与 Desktop 共用的模拟任务；`whoami`、`rebuild` 也要带同一个开关，见
 [UI 模拟数据](ui-mock-data.md)。
 
-iOS 模拟器不在仓库里固定：`whoami`、`rebuild`、`open` 默认先用 Cindy 模拟器（官方 Baguette
-插件的独立设备目录）中已启动的设备，没有或插件关闭运行时用系统（Xcode）模拟器；个人选择用
+iOS 模拟器不在仓库里固定：`whoami`、`rebuild`、`open` 默认用 Cindy 模拟器（官方 Baguette
+插件的独立设备目录），只有插件未安装或关闭运行时才用系统（Xcode）模拟器；个人选择用
 仓库外的 `CINDY_MOBILE_SIMULATOR=auto|cindy|system|<设备目录绝对路径>`，细节见
 [`simulator-debugging.md`](../../apps/mobile/docs/simulator-debugging.md#which-ios-simulator)。
 
@@ -94,15 +109,21 @@ JSON 已包含 `worktree` / `expectedSource`、`region` / `bundleId`、目标设
 
 ### 仓库与个人配置的边界
 
-- 仓库维护工具要求、脚本参数、缓存与身份校验、mock 场景和验收合同；个人 Skill 调用这些入口，
-  不再实现第二套指纹、bundle ID 或缓存解析。
-- 默认区域、设备偏好、模拟器后端、接管时机与工具管理方式属于开发者的本地 profile/工作流。
-  本次明确指定的设备或区域高于个人默认；本次覆盖不自动写回 profile。
+- 仓库维护工具要求、脚本参数、缓存与身份校验、mock 场景、测试授权范围、接管与并行规则和
+  验收合同；Agent 直接按模拟器调试手册「截图与当前版本测试」执行，不另设个人测试 Skill，
+  也不实现第二套指纹、bundle ID 或缓存解析。
+- 只有完全属于个人的偏好留在仓库外：常用机型、模拟器后端（`CINDY_MOBILE_SIMULATOR`）等。
+  本次明确指定的设备或区域高于个人默认；本次覆盖不自动写回个人偏好。
 - 自定义 bundle ID、签名团队与私有端点留在本地配置；仓库提供模板和校验，凭证进入凭证存储。
 - 设备在线状态、已安装包、Metro 占用、工具位置和缓存命中是现场事实，每次探测，不作为长期偏好。
 
 不要用临时 Metro、端口探测或手工修改 `.env` 代替这些脚本。多 worktree、原生构建、
 登录态和日志排查见 `apps/mobile/docs/simulator-debugging.md`。
+
+多个 iOS 模拟器可以同时跑不同 worktree：每台设备的开发版 App 按自己的 `RCT_jsLocation` 选择
+Metro，那里没有 Metro 响应时才退回 `8081`。`8081` 属于其他任务、又不接管时，给本任务单独的
+设备和端口，步骤、验证与收尾见该手册的
+[Parallel devices](../../apps/mobile/docs/simulator-debugging.md#parallel-devices-another-task-owns-8081)。
 
 ## 分层验证
 
@@ -122,6 +143,7 @@ pnpm --filter mobile test:smoke
 
 - TypeScript 改动至少运行 typecheck 和相关定向测试。
 - 修改跨端协议、Device Link、导航主流程或原生边界时，追加 scope、smoke 或相应 E2E。
+- 用模拟器验证后运行 `pnpm mobile:sim:logcheck` 并汇报结果：`ERROR` 要修复或说明与本次改动无关，新 `WARN` 要写进汇报，无法判定不算通过。详见[模拟器调试手册](../../apps/mobile/docs/simulator-debugging.md#logs)。
 - 视觉改动同时遵守 [Cindy 设计规范](../design-rules/cindy-design-system.md) 与
   [Mobile 设计规范](../../apps/mobile/docs/mobile-design-guide.md)。
 - 记录实际执行和结果；未执行的高相关检查必须说明原因。
@@ -146,6 +168,24 @@ DOM，保留输入法组字与光标。点击发送后，在发送防重锁内�
 可用 mock 模式配合 CDP `Input.imeSetComposition` 检查点击原生发送按钮后的完整文本；
 它不替代三星真机键盘或真实跨设备送达验收。
 
+### iOS 键盘坐标异常（画中画后）
+
+iPhone Duo（iOS 27）在远程桌面返回并进入画中画后，系统发来的键盘通知坐标会改按另一块屏幕的
+坐标系（如 `{192,524} 274×154` 落在 466×678 的右下角，或整宽却悬在屏幕中间），键盘实际仍停靠在
+窗口底部；画中画结束、切后台都不恢复，直到冷启动。错的坐标就是画中画小窗的位置（16:9，随小窗动画变化）。
+系统原始通知本身就是错的，不是 RN 换算问题：出错与正常时第一响应者（我们的输入框）、所在窗口、
+`UITextEffectsWindow` 与屏幕完全相同；改按宿主窗口换算、让隐藏的远程桌面 WebView 放弃键盘焦点都无效，
+只有私有键盘视图位置正确（不可依赖）。判定为 iOS 缺陷（双屏设备 + 画中画，约三分之一的进入小窗会触发）。
+`keyboardOverlap.ts` 因此在 iPhone（非 iPad，没有悬浮键盘）上把「显示中却不整宽或不贴底」的
+坐标视为异常，改用「同窗口宽度下见过的最高完整停靠高度」与「按窗口高度估算（竖屏 38%、横屏 42% 且不低于
+220pt）」中较大者：转屏中途和换输入法会出现更矮的整宽帧，沿用偏矮会盖住输入框；转屏后 1 秒内的整宽帧也不记录（过渡帧偏高，记下后会一直抬得过高）；记录持久化在本机，
+冷启动后直接进远程桌面也能用（记录异步读出，读完后两个 hook 会重算已显示的键盘占位），并记 `keyboard` scope 的
+`implausible frame replaced`。复现：开「后台运行」、等远程画面出来后返回进入小窗、点输入框，多试几次；
+冷启动后不先打字、从首页直接进远程桌面最容易触发；
+看 Debug 日志里 `frame received` 的 `frame` 是否整宽贴底。输入卡片（`useMobileKeyboardState`）与浮动输入框（新建任务页的 `useComposerDockKeyboardHeight`）必须共用这一判据，
+只修一条会出现「任务页正常、新建页仍被盖住」。RN 自带 `KeyboardAvoidingView`（群聊、共享任务、部分弹窗）
+在这种状态下会抬得过高，尚未处理。回归：`composerKeyboard.test.tsx`、`composerDockKeyboard.test.tsx`。
+
 ### 相册选图与 iCloud 原图
 
 iOS 的系统选图器在确认后立即把选中项交给现有附件队列。首帧预览只读取本机小缩略图，
@@ -162,6 +202,23 @@ iOS 的系统选图器在确认后立即把选中项交给现有附件队列。�
 `useMobileLocalAttachmentsAbandon.test.tsx`。新增原生模块需要冷更，不能作为旧安装包的 OTA
 独立交付；旧原生包缺模块时继续使用 Expo 选图入口。首次发布应随下一次 iOS 原生包交付，
 指纹与存量装机影响仍须按下文冷更门确认。Android 保持系统选图器和既有附件队列。
+
+### 相册照片与视频附件
+
+新建任务、已有任务及群聊的「+」面板使用单个「照片与视频」入口，支持同批混选。
+iOS 的 `CindyPhotoPicker.pickMedia` 在选择后立即把图片占位与视频文件交给现有附件队列；
+原图／视频字节在 resolve 阶段读取，沿用 iCloud 下载、取消、重试和发件箱交接。
+视频按文件上传，不经过图片转换或压缩；Live Photo 维持静态图片路径。仅使用选择器的访问授权，
+不为混选扩大相册权限；最近照片条的既有授权流程保持不变。数量与传输体积规则沿用普通附件。
+
+旧原生包缺 `pickMedia`（包括只有 `pick` 的包）时，回退 Expo 混合选择器，避免统一入口只能选照片。
+此回退在选择器内等原件就绪；新原生包保留延迟读取体验。原有 `pick` 方法继续提供照片选择合同，
+拍照仍仅拍照片，「文件」继续接收视频，不新增录像或专用视频编辑器。
+扩展原生模块会改变 iOS fingerprint，需随原生包发布，不能作为旧安装包的独立 OTA 交付；
+合并前遵守冷更确认门。Android 使用现有 Expo 系统混合选择器，无原生改动。
+
+实现：`modules/cindy-photo-picker/`、`deferredPhotoLibrary.ts`、`useMobileLocalAttachments.ts`；
+回归：`deferredPhotoLibrary.test.ts`、`useMobileLocalAttachmentsAbandon.test.tsx`。
 
 ### 已发送图片的离线读取
 
@@ -281,6 +338,11 @@ iOS 的系统选图器在确认后立即把选中项交给现有附件队列。�
   新身份前完成缓存清理；清理失败沿用登录错误与回滚路径，不能激活下一账号。
   退出账号仍完成凭证清除；若缓存清理失败，下次登录会先重试。无有效账号期间禁止
   读取或写入消息缓存，避免退出后的卸载回调重新落盘。
+- 首页任务行与伙伴速览的 PR 关联和状态按账号存入 AsyncStorage
+  `cindy.mobile.homeSessionPr.v1.<userId>`（最多 200 条、128 KB，只存 PR 引用与最近一次状态）。
+  冷启动先显示上次结果，读回的结果算作本次未查过，连上电脑后照常重查；查询失败保留旧值，
+  查到「没有 PR」则不再写回。退出与切换账号随首页列表缓存一起清除。
+  实现见 `homeSessionPrStore.ts`，回归见 `homeDisplaySettings.test.ts`。
 - 首页分组等偏好继续使用 AsyncStorage。合并保存时读失败不得当成空配置；写失败
   必须向用户提示，不能把未落盘的选择当成已保存。
 - 文件写入失败（含磁盘空间不足）会提示检查剩余空间，并说明离线内容可能不完整。
@@ -367,6 +429,24 @@ SDK 规则随依赖一起进入应用的最终 R8 配置，不在应用侧重复
 升级 SDK 时核对其 AAR/JAR 的 consumer rules、应用的最终 `configuration.txt` 和 release
 运行结果。共享的 Expo 配置也可能改变 iOS 指纹，冷更范围以指纹比对为准。
 
+## Android 掌机模式
+
+含 `cindy-handheld` 原生模块的 Android 包在「设置 → 掌机 → 掌机模式」提供入口，默认关闭。
+开启后十字键 / 左摇杆移动焦点、A 确认、B 返回，右摇杆滚动，L1 / R1 翻页；近乎不可见的
+预热 WebView 不作为手柄焦点目标。语音键默认 X，可从列表选择或直接按手柄键录入；改用
+A、B、L1、R1 会占用其原有操作，设置页有明确提示。
+
+长按语音键开始录音，松开停止，识别文字留在输入框，不自动发送。首页长按先打开新建任务页，
+新页接手同一次按住及松手。录音复用既有权限、音频与转写入口，不另建语音通道。
+默认在开启时移到首个非默认显示屏；关闭模式或副屏选项回到主屏。换屏只在偏好意图改变或
+冷启动恢复时执行，用户之后手动换屏不会被持续拉回；没有副屏时继续使用当前屏幕。
+偏好只保存在本机，不跟随账号或其他设备同步；只保存显式选择，「恢复默认」删除覆盖值。
+旧原生包和 iOS 不显示入口。
+
+实现：`modules/cindy-handheld/`、`src/handheld/` 和 `app/settings/handheld.tsx`；
+偏好与跨页按住交接回归：`src/__tests__/handheldMode.test.ts`。Android 窗口按键拦截和换屏
+必须随新原生包交付，仍受下文冷更审核门约束。
+
 ## 原生配置与 runtime fingerprint(冷更边界)
 
 ### 伙伴通信通知
@@ -387,8 +467,37 @@ Swift 源码和打包头像显式进入 fingerprint。首次发布需要原生�
 `device-link:usage-widget:snapshot:v1` 读取电脑快照，由本地模块 `cindy-usage-widgets` 写入 App Group 并刷新组件；
 App Group 里存每台电脑最近一次的快照和「自动」所选电脑（优先上次回应的那台）。组件「编辑小组件」里的
 「数据来源电脑」可选自动或某台电脑；组件绘制时把所选电脑记进 App Group，App 每次刷新也会读取这些电脑。
+「订阅余量」另有两项，与 Mac 菜单栏设置同一思路：「排在前面的账号」（小 / 中 / 大最多 4 / 6 / 7 个，可拖动调整、删除）
+和「隐藏的账号」。可选项是所选电脑快照里的账号（电脑上隐藏的不在快照里）。显示时先排所选账号，其余账号（含以后新加的）
+按电脑顺序跟在后面，隐藏的不显示，既排在前面又隐藏时以隐藏为准；同一账号重复只算一次；全部隐藏时照常显示全部（仍按排在前面的顺序）。
+连接 id 只在所属电脑内有意义（各电脑内置的 OpenAI 连接 id 相同、登录账号却可以不同），所以跨电脑按同一图标与名字认同一账号，id 只作确认，不单凭 id 回退。在编辑页改「电脑」时系统会清空这两项。
+这些选择只存在系统的组件配置里，不写 App Group；改尺寸会保留。
 切换或退出账号时清空。组件只读快照，回满倒计时按 `resetsAtMs` 在本机推进。Swift 源码、图标资源与数字字体
 显式进入 fingerprint；旧包没有该原生模块时 JS 侧静默跳过。真机测试包若签名缺少 App Group，组件只会显示空状态。
+
+### Android 桌面小组件
+
+同一对组件（订阅余量、每日用量）在 Android 上由本地模块 `cindy-usage-widgets` 的 `android/` 提供：两个
+`AppWidgetProvider`（`QuotaWidgetProvider`、`UsageWidgetProvider`）、数据来源选择页 `ComputerConfigActivity`
+都由模块自己的 `AndroidManifest.xml` 合并进应用，不经 config plugin。数据通道、快照格式与「自动 / 固定电脑」规则与 iOS
+相同（`UsageWidgetBridge` 两端共用，`readSnapshot` / `writeSnapshot` / `readPinnedDeviceIds` / `clearSnapshot` 同名）：
+快照存在应用私有的 `noBackupFilesDir/usage-widget-snapshot.json`（不进自动备份），组件选中的电脑与记录的固定电脑在
+SharedPreferences `cindy-usage-widgets`。「订阅余量」的设置页另有「排在前面的账号」（最多 7 个，可上移、下移、移除）与
+「隐藏的账号」，与 iOS 编辑页、Mac 菜单栏设置同一规则：排在前面的先显示，其余账号（含以后新加的）按电脑顺序跟在后面，隐藏的不显示，
+全部隐藏时照常显示全部；按组件存在同一 SharedPreferences（`pinned.<id>` / `hidden.<id>`，与 iOS 相同的 `AccountKey` 字符串，
+按 id 找不到时按同一图标与名字匹配）。换电脑不清空这两项。液面顶角与 iOS 一样是 4dp 圆角。
+
+组件内容由 `WidgetRenderer` 按启动器格子的实际尺寸直接画成位图（版式与 iOS 的小 / 中 / 大一致，格子比 iOS 尺寸小时整体
+等比缩小，大时靠弹性空白撑开），浅 / 深两套都画好，由 `layout` 与 `layout-night` 选择可见的一张，所以系统切换深浅色不需要
+重绘。一行高、宽度 ≥ 250dp 的格子（高度 < 120dp 且宽 ≥ 1.4 倍高）用 Android 独有的单行版式，更窄的一行沿用等比缩小的小号版式（4 个来源仍可见）（液柱在左、数字名称重置时间叠在右；每日用量是今日数字加迷你柱图），
+启动器里一行的实际高度因启动器而异（40–110dp），最小可缩到 40dp 高。每 30 分钟（`updatePeriodMillis`）、App 写入新数据、调整大小时重绘。Barlow Condensed 数字字体由 Gradle 任务从
+`apps/desktop/native/menubar` 复制进 assets，不再提交第三份；文案表 `assets/usage-widgets/text.json` 由
+`plugins/usage-widgets/UsageWidgetModel.swift` 的 `WidgetText` 转出并追加数据来源页文案，两处同步修改；选择器里的名称与说明
+在 `res/values*/cindy_usage_widgets_strings.xml`（同源生成）。
+
+调试：debug 包响应 `adb shell am broadcast -a app.cindy.usagewidgets.RENDER_PREVIEWS --es variant multi|single|stale|offline|empty
+-n <applicationId>/app.cindy.usagewidgets.QuotaWidgetProvider`，把示例数据下的全部版式与深浅色写到 `cache/widget-previews`；
+选择器预览图 `res/drawable*/cindy_*_widget_preview.png` 由它生成。Kotlin 与资源改动进入 Android runtime fingerprint，需要新原生包。
 
 Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致**的装机上生效,
 指纹一旦变化就必须**冷更出包**(新商店包 / 自建重装),存量装机拿不到该次热更。

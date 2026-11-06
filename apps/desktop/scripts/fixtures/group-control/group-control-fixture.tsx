@@ -51,6 +51,14 @@ interface GroupData {
   threadUnread?: boolean;
   /** The Thread panel answers reads and keeps the reader's follow switch. */
   threadPanel?: boolean;
+  /** A server group that reports who has read a message: own messages with one or two checks and the read list. */
+  readReceipts?: boolean;
+  /** Many one-paragraph messages of growing length, to catch a last line that is just full. */
+  readReceiptsFill?: boolean;
+  /** My messages sent in 面具模式 (a teammate replied in my name): still mine, with the mask avatar beside the bubble. */
+  readReceiptsMask?: boolean;
+  /** A group of me and two teammates: a teammate reads a message when its computer takes the execution up. */
+  readReceiptsTeammates?: boolean;
 }
 
 const T0 = 1700000000000;
@@ -84,6 +92,58 @@ function bodyMessages() {
       content: '这是检查结果。\n\n' + component + '\n\n以上是本轮结论。', createdAt: T0 + MINUTE }),
     message({ id: 'body-plain', sequence: 3, authorKind: 'bot', authorBotId: 'b', authorName: 'Nova',
       content: '普通回复的 **加粗** 和段落保持原样。', createdAt: T0 + 2 * MINUTE }),
+  ];
+}
+
+/** My messages in a group of people: sent, read, one line, many lines, quote, attachment, reaction (bot-group-chat.md「消息已读」). */
+function readReceiptMessages(fill = false) {
+  const mine = (id: string, sequence: number, content: string, readByOthers: boolean, extra: Record<string, unknown> = {}) =>
+    message({ id, sequence, isSelf: true, content, readByOthers, serverSequence: String(sequence), createdAt: T0 + sequence * MINUTE, ...extra });
+  // One message per length: whichever lands with its last line just full wraps the check onto a row of its own.
+  if (fill) return Array.from({ length: 30 }, (_, index) => mine(`rr-fill-${index}`, index + 1, '一二三四五六七八九十'.repeat(9).slice(0, 50 + index * 2) + '。', index % 2 === 0));
+  return [
+    message({ id: 'rr-peer', sequence: 1, authorKind: 'user', isSelf: false, authorBotId: 'g', authorName: 'Ada', content: '周四的发版说明谁来写？', serverSequence: '1', createdAt: T0 }),
+    mine('rr-short-read', 2, '好的', true),
+    mine('rr-short-sent', 3, '收到', false),
+    mine('rr-many', 4, '初稿已经放进共享文档了，大家有空都看看。', true),
+    mine('rr-multi', 5, '周五评审的安排：\n1. 上午十点过需求\n2. 下午两点看设计稿，有问题当场提\n3. 五点前把结论写进文档', true),
+    mine('rr-quote', 6, '我来写，今天下班前给大家看。', false, {
+      quote: { messageId: 'rr-peer', authorName: 'Ada', authorKind: 'user', excerpt: '周四的发版说明谁来写？', attachmentCount: 0, attachmentName: null, sequence: 1 } }),
+    mine('rr-file', 7, '', true, { attachments: [
+      { id: 'rr-file-1', name: '发版说明-草稿.pdf', category: 'pdf', mimeType: 'application/pdf', size: 20480, url: null, path: null }] }),
+    mine('rr-reaction', 8, '另外周五的评审我可能会晚到十分钟。', true, { reactions: [{ emoji: '👍', count: 2, me: false }] }),
+    mine('rr-fill', 9, '周五的评审改到了下午三点半在四楼会议室，请各位提前十分钟到场。', false),
+    mine('rr-list', 10, '评审前请确认：\n- 需求文档已更新\n- 设计稿已上传到共享目录\n- 测试用例已经评审过', true),
+    mine('rr-code', 11, '构建命令如下：\n```sh\npnpm install && pnpm build\n```', false),
+    mine('rr-thread', 12, '大家看看这个话题里的几条回复。', true, { replyCount: 3, threadPreview: { replies: [
+      { id: 'rt-1', authorKind: 'user', authorBotId: null, authorName: 'Me', isSelf: true, text: '这条已读', attachments: [], createdAt: T0 + 10 * MINUTE },
+      { id: 'rt-2', authorKind: 'user', authorBotId: null, authorName: 'Me', isSelf: true, text: '这条还没人读到', attachments: [], createdAt: T0 + 11 * MINUTE },
+    ], responders: [{ id: 'rt-1', authorKind: 'user', authorBotId: null, authorName: 'Me' }] } }),
+  ];
+}
+
+/** 面具模式: a teammate answers in my name. The server stores them as mine (my author id, human), plus the attribution. */
+function maskReceiptMessages() {
+  const attribution = { self: { id: 'me', name: 'You', avatarUrl: null }, companion: { id: 'a', name: 'Aster', avatarUrl: null }, sourceMessageId: 'mk-peer' };
+  const mask = (id: string, sequence: number, content: string, readByOthers: boolean) =>
+    message({ id, sequence, isSelf: true, content, readByOthers, serverSequence: String(sequence), createdAt: T0 + sequence * MINUTE, maskAttribution: attribution });
+  return [
+    message({ id: 'mk-peer', sequence: 1, authorKind: 'user', isSelf: false, authorBotId: 'g', authorName: 'Ada', content: '周五评审前要确认哪些事？', serverSequence: '1', createdAt: T0 }),
+    mask('mk-short-read', 2, '好的，已经处理完了。', true),
+    mask('mk-short-sent', 3, '收到', false),
+    mask('mk-long', 4, '先说结论：**需求文档**和**设计稿**都已经就绪，测试用例还在评审中。\n\n- 需求文档已更新到 v3\n- 设计稿已上传到共享目录\n- 测试用例等 QA 的评审意见\n\n如果周五之前 QA 还没有回复，我会在评审会上直接请他们当场确认。', true),
+    message({ id: 'mk-own', sequence: 5, isSelf: true, content: '这条是我自己发的。', readByOthers: false, serverSequence: '5', createdAt: T0 + 5 * MINUTE }),
+  ];
+}
+
+/** My messages in a group of only teammates: the first has been taken up by both of them, the second by none yet. */
+function teammateReadMessages() {
+  const mine = (id: string, sequence: number, content: string, readByOthers: boolean) =>
+    message({ id, sequence, isSelf: true, content, readByOthers, serverSequence: String(sequence), createdAt: T0 + sequence * MINUTE });
+  return [
+    mine('tr-read', 1, '帮我整理一下周五评审前要确认的事。', true),
+    mine('tr-sent', 2, '再补一条：设计稿也一起看。', false),
+    mine('tr-mixed', 3, '评审会的结论我整理好了，大家看一下。', true),
   ];
 }
 
@@ -245,6 +305,7 @@ function threadSummaries() {
 
 function groupFrom(data: GroupData) {
   const bubbles = data.bubbles ? bubbleMessages(data.wrappedReactions) : null;
+  const receipts = data.readReceipts ? (data.readReceiptsTeammates ? teammateReadMessages() : data.readReceiptsMask ? maskReceiptMessages() : readReceiptMessages(data.readReceiptsFill)) : null;
   const planKind = data.workMentioned ? 'work' : 'talk';
   return {
     id: 'fixture-group',
@@ -276,13 +337,15 @@ function groupFrom(data: GroupData) {
       ? { id: 'p1', status: 'waiting', currentStep: 4, stepCount: 7, currentBotName: 'Pax', currentStepStatus: 'done', kind: planKind }
       : data.arrangement === 'running' ? { id: 'p1', status: 'running', currentStep: 1, stepCount: 2, currentBotName: 'Nova', currentStepStatus: 'running', kind: planKind } : null,
       singleSpeaker: true } : {}),
-    ...(data.bubbles || data.arrangement || data.division ? { serverBacked: true } : {}),
+    ...(data.bubbles || data.arrangement || data.division || data.readReceipts ? { serverBacked: true } : {}),
+    ...(data.readReceipts ? { supportsMessageReaders: true } : {}),
     ...(data.settings ? { autoContinue: false } : {}),
     ...(data.threadUnread ? { threads: threadSummaries() } : {}),
     messages: data.remoteLimits ? ['REMOTE_DEVICE_LIMIT', 'REMOTE_TOTAL_LIMIT'].map((runtimeFailureCode, i) =>
       message({ id: `limit-${i}`, sequence: i + 1, kind: 'notice', authorKind: 'system',
         authorBotId: data.members[i].botId, authorName: data.members[i].name, content: '',
         noticeCode: 'member-unavailable', runtimeFailureCode, createdAt: T0 + i * MINUTE })) : data.bodyAnswer ? bodyMessages() : data.arrangement ? arrangementMessages(data.arrangement) : data.division ? divisionMessages()
+      : receipts ? receipts
       : bubbles ? bubbles.map(m => (data.threadUnread && UNREAD[m.id as string] ? { ...m, threadUnread: UNREAD[m.id as string] } : m))
       : Array.from({ length: data.messages }, (_, i) => ({
       id: `m${i}`,
@@ -328,7 +391,10 @@ void mountPage({
         id: reply.id, sequence: 100 + index, threadRootId: input.rootId, authorKind: reply.authorKind, authorBotId: reply.authorBotId,
         authorName: reply.authorName, isSelf: reply.isSelf, content: reply.text, createdAt: reply.createdAt,
       }));
-      return { ok: true, root, replies, hasMore: false, following };
+      // Reading is per Thread: the first reply has been read by another member, the second not yet.
+      const receipts = (data as GroupData).readReceipts;
+      const marked = receipts ? replies.map((reply, index) => ({ ...reply, readByOthers: index === 0, serverSequence: String(100 + index) })) : replies;
+      return { ok: true, root: receipts ? { ...root, readByOthers: true } : root, replies: marked, hasMore: false, following };
     };
     return {
       agentIsland: { onSessionActivity: subscription('sessionActivity') },
@@ -360,10 +426,25 @@ void mountPage({
         stopBotGroupRound: forbid('maker.stopBotGroupRound'),
         chatServer: {
           reactors: async () => ({ ok: true, reactors: [{ actorId: 'me', isSelf: true, name: 'You', formerMember: false }] }),
+          readers: async (input: { messageId: string }) => {
+            // A very large group: the server gives only the counts.
+            // Teammates read with no time (the server knows only that its computer took the execution up).
+            if (input.messageId === 'tr-read') return { ok: true, readers: { messageId: input.messageId, eligibleCount: 2, readCount: 2, listed: true,
+              readers: [{ actorId: 'a', name: 'Aster', readAt: null, formerMember: false }, { actorId: 'b', name: 'Nova', readAt: null, formerMember: false }] } };
+            // A person and a teammate in one list, in the server's order.
+            if (input.messageId === 'tr-mixed') return { ok: true, readers: { messageId: input.messageId, eligibleCount: 3, readCount: 2, listed: true,
+              readers: [{ actorId: 'g', name: 'Ada', readAt: T0 + 5 * MINUTE, formerMember: false }, { actorId: 'a', name: 'Aster', readAt: null, formerMember: false }] } };
+            if (input.messageId === 'tr-sent') return { ok: true, readers: { messageId: input.messageId, eligibleCount: 2, readCount: 0, listed: true, readers: [] } };
+            if (input.messageId === 'rr-list') return { ok: true, readers: { messageId: input.messageId, eligibleCount: 180, readCount: 37, listed: false, readers: [] } };
+            const readers = input.messageId === 'rr-many' || input.messageId === 'mk-long'
+              ? ['g', 'h', 'c', 'd'].map((actorId, index) => ({ actorId, name: ['Ada', 'Kai', 'Leo', 'Mira'][index]!, readAt: T0 + (5 + index) * MINUTE, formerMember: false }))
+              : input.messageId.endsWith('short-sent') ? [] : [{ actorId: 'g', name: 'Ada', readAt: T0 + 5 * MINUTE, formerMember: false }];
+            return { ok: true, readers: { messageId: input.messageId, eligibleCount: 6, readCount: readers.length, listed: true, readers } };
+          },
           react: forbid('maker.chatServer.react'),
           ownedBots: async () => ({ ok: true, bots: [] }),
           manage: forbid('maker.chatServer.manage'),
-          ...(data.threadPanel ? { thread, followThread } : {}),
+          ...(data.threadPanel || data.readReceipts ? { thread, followThread } : {}),
           ...(data.sharePending ? { shareToMain: () => new Promise(() => {}) } : {}),
         },
         updateBotGroup: forbid('maker.updateBotGroup'),

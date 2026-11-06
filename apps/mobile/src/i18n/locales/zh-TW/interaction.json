@@ -299,6 +299,8 @@
       "picture": "看畫面",
       "backToForm": "回到表單",
       "liveView": "即時畫面",
+      "openRemoteDesktop": "開啟遠端桌面",
+      "useForm": "改用表單填寫",
       "fill": "填寫",
       "skip": "略過",
       "continue": "繼續",
@@ -306,6 +308,9 @@
       "showPassword": "顯示密碼",
       "hidePassword": "隱藏密碼",
       "scan": "掃碼"
+    },
+    "directSignIn": {
+      "hint": "請直接在視窗裡登入，完成後會自動繼續。"
     },
     "remoteUnavailable": "這台電腦無法從遠端接收輸入。請在主機電腦上完成這一步，再交還給 Agent。",
     "unnamedField": "輸入框",

@@ -264,12 +264,16 @@ describe('buildAgentIslandRemoteSessionInputs', () => {
     expect(parseAgentIslandRemoteSessions(inputs)).not.toBeNull();
   });
 
-  it('skips Bot tasks and disconnected devices', () => {
+  // Review (#8381): a relay reconnect now leaves sessions `connecting` instead of
+  // `disconnected`; their retained running / waiting activity must not stay live in the island.
+  it('skips Bot tasks and disconnected or still-reconnecting devices', () => {
     expect(
       buildAgentIslandRemoteSessionInputs(
         [
           remoteSession('a-1', 'device-a', { source: 'bot' }),
           remoteSession('b-1', 'device-b', { deviceLinkConnectionStatus: 'disconnected' }),
+          // b-2 has retained activity; while its device reconnects it must not be shown as live.
+          remoteSession('b-2', 'device-c', { deviceLinkConnectionStatus: 'connecting' }),
         ],
         MACHINE_ALL,
         readActivity,

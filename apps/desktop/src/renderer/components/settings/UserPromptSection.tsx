@@ -1,3 +1,5 @@
+import { personalizationDetailsSettings } from './PersonalizationDetails.settings-search';
+import { useSettingDefinition } from './useSettingDefinition';
 import { Button } from '@/components/ui/button';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -10,6 +12,7 @@ import { toast } from '@/lib/toast';
 export function UserPromptSection() {
   const { value, setValue } = useUserPrompt();
   const { t } = useTranslation();
+  const setting = useSettingDefinition(personalizationDetailsSettings.userInstructions);
 
   const [draft, setDraft] = useState(value);
 
@@ -53,14 +56,14 @@ export function UserPromptSection() {
             className="text-13 font-medium text-[var(--settings-section-sublabel)]"
             style={{ letterSpacing: '0.12px' }}
           >
-            {t('settings.personalization.subtitle')}
+            {setting.title}
           </p>
           <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-            {t('settings.personalization.description')}
+            {setting.description}
           </p>
         </div>
 
-        <textarea
+        <textarea {...setting.anchorProps} {...setting.controlProps}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           placeholder={t('settings.personalization.placeholder')}
@@ -94,7 +97,7 @@ export function UserPromptSection() {
             {overLimit ? t('settings.personalization.overLimit') : ''}
           </p>
 
-          <Button
+          <Button {...setting.controlProps}
             variant="cta"
             size="md"
             compact

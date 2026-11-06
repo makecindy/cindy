@@ -73,7 +73,7 @@ Cindy Make 的设置入口和指令前置弹窗共用源码准备流程：切到
 fingerprint 缓存。命中兼容产物就直接安装，不要求 CocoaPods；只有缓存不可复用时才编译。
 
 完整编译需要选中的完整 Xcode、iOS Simulator SDK、目标设备所需的已安装 runtime，
-以及当前 Agent 的 `PATH` 中可运行的 CocoaPods。仅安装 Command Line Tools 不够。
+以及可运行的 CocoaPods。仅安装 Command Line Tools 不够。
 在实际运行任务的终端核对（终端 App 可用不代表 Agent 子进程也可用）：
 
 ```bash
@@ -88,12 +88,16 @@ Xcode 选择由本机 `xcode-select` 或本次进程的 `DEVELOPER_DIR` 决定�
 runtime 下载在 Xcode 完成。机器上的实际安装位置、选中的设备和工具是否可用应现场检测，
 不写成仓库默认值。模拟器的 SDK/runtime 不等于 CocoaPods，也不等于可复用 App。
 
-CocoaPods 使用开发者已有的工具管理方式：
+`pod --version` 找不到命令不等于没有安装。Agent 子进程的 `PATH` 通常不含用户 gem 目录，
+先检查 `"$(ruby -r rubygems -e 'puts Gem.user_dir')/bin/pod" --version`。能运行就是已安装，
+不论它由哪个 Ruby 安装，都不要再装 Homebrew 或另一份 CocoaPods。iOS 构建脚本在 `PATH`
+找不到 `pod` 时会自动把这个目录追加到本次进程的 `PATH`。
+
+确实没有安装时，CocoaPods 使用开发者已有的工具管理方式：
 
 - 已安装 Homebrew：`brew install cocoapods`，随后确认当前 Agent 的 `PATH` 能找到它。
 - 已有独立 Ruby（例如 rbenv/RVM 管理）：先核对 `ruby --version` 和 `gem --version`，
-  然后 `gem install cocoapods --user-install`；将 `ruby -r rubygems -e 'puts Gem.user_dir'`
-  输出目录下的 `bin` 加到该工具环境的 `PATH`，再验证 `pod --version`。
+  然后 `gem install cocoapods --user-install`，再用上面的用户 gem 路径验证。
 - 两者都没有：先按开发者选定的方式准备独立 Ruby 或 Homebrew，再安装 CocoaPods。
   不因系统带有 Ruby 2.6 就假定当前 CocoaPods 及其依赖可安装，也不自动替换系统 Ruby。
 
@@ -102,7 +106,8 @@ CocoaPods 使用开发者已有的工具管理方式：
 系统路径调整与许可证接受遵循当前用户授权，不由仓库脚本静默执行。
 
 缓存未命中时，`rebuild` 在生成 `ios/` 前运行只读工具检查，输出 `SIM_BUILD_PREFLIGHT`；
-缺失、执行失败或超时以 `IOS_BUILD_TOOLS_UNAVAILABLE` 结束。先修复回执中失败的工具，
+缺失、执行失败或超时以 `IOS_BUILD_TOOLS_UNAVAILABLE` 结束。其中 `pod=missing` 表示 `PATH`
+和用户 gem 目录都没有。先修复回执中失败的工具，
 用原来的 region / UDID / `--mock` 参数重试，不通过换区域、清缓存或换真机掩盖环境故障。
 
 ## Linux：Electron SUID sandbox 权限
@@ -129,6 +134,23 @@ sudo chmod 4755 chrome-sandbox
 - 只做上述针对性修复；不要放开系统级 user namespace 限制，更不要用 `--no-sandbox`
   绕过（违反 Electron 安全边界，参见
   [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)）。
+
+## 多 worktree 仓库的 git 自动维护
+
+挂了几十个 worktree 的部分克隆（`blob:none`，例如本地的 `cindy-src` 主 checkout）要把
+git 自动维护留在前台：
+
+```bash
+git config maintenance.auto true
+git config maintenance.autoDetach false
+```
+
+原因：git 2.54（Xcode 附带的 Apple Git-157）把 `maintenance run --auto --detach` 转入后台后
+会丢失 `maintenance.lock`，geometric-repack 又不经过 `gc.pid`，于是每次按需拉取、commit、
+rebase、fetch（包括 Cindy 自己的快照提交与 worktree 池 fetch）都可能再起一个重复压缩。
+2026-10-29 实测堆积了 649 组后台维护进程，占用 3297% CPU、48 GB 内存，对象库膨胀到 26 GB；
+改成前台后锁有效、只跑一个，偶尔某次操作慢十几秒属于正常。这是仓库级配置，与换 git 版本
+无关。症状复现时先 `ps aux | grep 'git maintenance'` 清掉积压，再手动 `git gc`。
 
 ## 不变量
 

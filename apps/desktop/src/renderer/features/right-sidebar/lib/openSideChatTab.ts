@@ -27,16 +27,40 @@ export interface SideChatTabPlacement {
 const log = createLogger('side-chat');
 const restoring = new Map<string, { revision: number; schedule: ReturnType<typeof createCoalescedRefresh<void>> }>();
 
+export type SideChatUnavailableKey =
+  | 'chat.sideChat.sharedTaskUnavailable'
+  | 'chat.sideChat.mainTaskOnly'
+  | 'chat.sideChat.archivedTask'
+  | 'chat.sideChat.failed';
+
+/**
+ * Why this task cannot open a side chat, as an i18n key; null when it can.
+ * `deviceId` is the caller's resolved origin; the list snapshot may not carry it yet.
+ */
+export function sideChatUnavailableKey(
+  session: Session | null | undefined,
+  deviceId?: string | null,
+): SideChatUnavailableKey | null {
+  // The host never lets shared-task guests create or list branches (#9136).
+  if (isSharedTaskPeer(deviceId ?? '') || isSharedTaskPeer(session?.deviceLinkDeviceId ?? '')) {
+    return 'chat.sideChat.sharedTaskUnavailable';
+  }
+  if (!session) return 'chat.sideChat.failed';
+  if (['side-chat', 'bot', 'review'].includes(session.source ?? '')) return 'chat.sideChat.mainTaskOnly';
+  if (session.status === 'archived') return 'chat.sideChat.archivedTask';
+  return session.status === 'active' ? null : 'chat.sideChat.failed';
+}
+
 export function canOpenSideChat(session: Session | null | undefined): boolean {
-  return Boolean(session
-    && session.status === 'active'
-    && !['side-chat', 'bot', 'review'].includes(session.source ?? '')
-    && !isSharedTaskPeer(session.deviceLinkDeviceId ?? ''));
+  return sideChatUnavailableKey(session) === null;
 }
 
 /** Reconcile the host's branches on both the execution computer and its controllers. */
 export function restoreSideChatTabs(sessionId: string, isActive: () => boolean = () => true): Promise<void> {
   const deviceId = getStickySessionDeviceId(sessionId) ?? null;
+  // Shared-task guests own no branches; the host rejects their list reads. Check
+  // on every read: a watcher may start before the guest origin resolves.
+  if (isSharedTaskPeer(deviceId ?? '')) return Promise.resolve();
   const owner = getDataOwnerGeneration();
   const key = JSON.stringify([owner.dataOwnerId, owner.generation, deviceId, sessionId]);
   let entry = restoring.get(key);
@@ -134,6 +158,12 @@ export async function openSideChatTab(
   sessionId: string,
   options: { prompt?: string; attachments?: AttachedFile[]; quote?: string; placement?: SideChatTabPlacement } = {},
 ): Promise<boolean> {
+  // Shared-task guests cannot create branches on the host (#9136). Answer
+  // locally instead of sending a request the host will deny.
+  if (isSharedTaskPeer(getStickySessionDeviceId(sessionId) ?? '')) {
+    toast.info(i18n.t('chat.sideChat.sharedTaskUnavailable'));
+    return false;
+  }
   try {
     if ((await window.electronAPI.rightSidebarWindow?.getState())?.detached) {
       await mergeSidebarWindowBack(sessionId);

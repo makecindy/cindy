@@ -234,7 +234,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-const SSH_HOST_ID_PATTERN = /^[A-Za-z0-9._@:-]{1,128}$/;
+/** Alias character/length rules shared with the new SSH host form. */
+export const SSH_HOST_ID_PATTERN = /^[A-Za-z0-9._@:-]{1,128}$/;
 const RELAY_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export const RELAY_NAME_MAX_LENGTH = 64;
 

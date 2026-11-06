@@ -16,6 +16,7 @@ import {
   AGENT_ISLAND_PREVIEW_SOUND_CHANNEL,
   AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL,
   AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL,
+  AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL,
   AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL,
   AGENT_ISLAND_SET_COMPANION_CHATS_CHANNEL,
   AGENT_ISLAND_READ_COMPANION_CHAT_CHANNEL,
@@ -35,6 +36,27 @@ import type { AgentIslandService } from '../service.js';
 import type { AgentIslandCompanionIdentity } from '../companionIdentity.js';
 import { setDeepLinkMainWindow, takePendingDeepLink } from '../../deepLink.js';
 import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
+
+// Keep the real implementation; record each instance so its scheduled publishing
+// cannot outlive a test and run against reset Electron mocks in the next test.
+const serviceInstances = vi.hoisted(() => new Set<AgentIslandService>());
+vi.mock('../service.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../service.js')>();
+  return {
+    ...actual,
+    AgentIslandService: class extends actual.AgentIslandService {
+      constructor(...args: ConstructorParameters<typeof actual.AgentIslandService>) {
+        super(...args);
+        serviceInstances.add(this);
+      }
+    },
+  };
+});
+
+afterEach(() => {
+  for (const service of serviceInstances) service.resetRuntimeState();
+  serviceInstances.clear();
+});
 
 const REMOTE_DAEMON_CLOSED_REASON = 'remote_daemon_closed';
 
@@ -639,6 +661,25 @@ describe('AgentIslandService native publishing', () => {
     headless.setEnabled(true);
     expect(headless.notifyGroupChat('group')).toBe(false);
     headless.resetRuntimeState();
+  });
+
+  it('account switch: reset drops the previous account quota and tells enabled subscribers, so the overview is released', async () => {
+    // 灵动岛余量跟随账号:reset 把 enabled 置 false 却不通知订阅者时,概览仍被持有,重新开启会先显示旧账号余量。
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn<(state: AgentIslandDisplayState) => boolean>(() => true);
+    const service = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish } });
+    syncEnabledForTest(service, publish);
+    const item = { id: 'a', logoSvg: '<svg/>', text: '50%', level: 'normal' as const, stale: false,
+      accessibilityLabel: 'a', lowest: true, width: 35, textWidth: 22 };
+    service.setQuota([item]);
+    expect(publish.mock.calls.at(-1)![0].quota).toEqual([item]);
+    const enabledChanges: boolean[] = [];
+    service.subscribeEnabled(enabled => enabledChanges.push(enabled));
+    service.resetRuntimeState();
+    expect(enabledChanges).toEqual([false]);
+    service.setEnabled(true);
+    expect(publish.mock.calls.at(-1)![0].quota).toBeUndefined();
+    service.resetRuntimeState();
   });
 
   it('keeps group lane approvals but lets chat unread own the successful reply reminder', async () => {
@@ -1466,7 +1507,7 @@ describe('AgentIslandService native publishing', () => {
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
     try {
       const { AgentIslandService } = await import('../service.js');
-      const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
+      const { AGENT_ISLAND_COMPLETED_RETENTION_MS } = await import('../state.js');
       const publish = vi.fn((state: AgentIslandDisplayState) => {
         void state;
         return true;
@@ -1486,7 +1527,7 @@ describe('AgentIslandService native publishing', () => {
       expect(sessions.sessions.has('s1')).toBe(true);
       mocks.tapWindowBroadcast.mockClear();
 
-      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 50);
+      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_COMPLETED_RETENTION_MS + 50);
       expect(sessions.sessions.has('s1')).toBe(false);
       expect(sessions.remoteUnreadTerminals.has('s1')).toBe(true);
       expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(
@@ -1512,7 +1553,7 @@ describe('AgentIslandService native publishing', () => {
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
     try {
       const { AgentIslandService } = await import('../service.js');
-      const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
+      const { AGENT_ISLAND_COMPLETED_RETENTION_MS } = await import('../state.js');
       const publish = vi.fn((state: AgentIslandDisplayState) => {
         void state;
         return true;
@@ -1532,7 +1573,7 @@ describe('AgentIslandService native publishing', () => {
       });
       mocks.tapWindowBroadcast.mockClear();
 
-      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 50);
+      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_COMPLETED_RETENTION_MS + 50);
       expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ totalCount: 0 });
       expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(
         SESSION_ACTIVITY_CHANNEL,
@@ -3252,6 +3293,63 @@ describe('AgentIslandService native publishing', () => {
     });
   });
 
+  // Unit: new presentation IPC must reject bad senders/values and deliver compact
+  // reminders to the native host; previous settings tests do not exercise this path.
+  it('accepts subtle reminders only from the app and preserves automatic cards when disabled', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState) => { void state; return true; });
+    const service = new AgentIslandService({ getMainWindow: () => null,
+      nativeHost: { failed: false, publish } });
+    syncEnabledForTest(service, publish);
+    service.registerIpc();
+    const set = registeredIpcHandler(AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL);
+    expect(() => set({}, 'true')).toThrow('INVALID_PARAMS');
+    mocks.assertTrustedAppRendererEvent.mockImplementationOnce(() => { throw new Error('[PERMISSION_DENIED] Untrusted renderer'); });
+    expect(() => set({}, true)).toThrow('PERMISSION_DENIED');
+    set({}, true);
+    service.handleAgentEvent({ sessionId: 'subtle' }, doneEvent());
+    expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ mode: 'compact', compactReminder: { phase: 'completed' } });
+    set({}, false);
+    expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ mode: 'expanded', displaySurface: 'completionCard' });
+    expect(publish.mock.calls.at(-1)?.[0].compactReminder).toBeUndefined();
+  });
+
+  // Unit regression #8848: a dismissed waiting task must not silence a different
+  // task's completion. Existing sound tests do not cover the subtle projection.
+  it.each([false, true])('keeps completion sound after dismissing another task (subtle=%s)', async (subtle) => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const { AgentIslandService } = await import('../service.js');
+      const publish = vi.fn((state: AgentIslandDisplayState) => { void state; return true; });
+      const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+      const service = new AgentIslandService({ getMainWindow: () => null,
+        nativeHost: { failed: false, publish, playSound } });
+      syncEnabledForTest(service, publish);
+      service.registerIpc();
+      service.setSoundSettings({ enabled: true, sounds: {
+        ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds, complete: customSound('complete.wav'),
+      } });
+      handleInteractionRequestForTest(service, { sessionId: 'waiting' }, {
+        kind: 'permission', requestId: 'p', toolName: 'Bash', input: { command: 'pwd' },
+      });
+      vi.setSystemTime(2_000);
+      (service as unknown as { handleOutsideClick(): void }).handleOutsideClick();
+      expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ mode: 'compact', smartSuppressed: true });
+      registeredIpcHandler(AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL)({}, subtle);
+      playSound.mockClear();
+
+      service.handleAgentEvent({ sessionId: 'done' }, doneEvent());
+      expect(playSound).toHaveBeenCalledExactlyOnceWith(customSound('complete.wav'));
+      expect(publish.mock.calls.at(-1)?.[0].mode).toBe(subtle ? 'compact' : 'expanded');
+      // Republishing the same state must not replay the completion sound.
+      registeredIpcHandler(AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL)({}, subtle);
+      expect(playSound).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('publishes the selected mascot skin through native state', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
@@ -4373,6 +4471,44 @@ describe('AgentIslandService native publishing', () => {
     ]);
   });
 
+  // Codex Micro lit only local tasks: other-device tasks the island shows never reached it.
+  it('gives activity consumers the other-device tasks the island shows, without relaying them', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((_state: AgentIslandDisplayState, _frame: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => true);
+    const onSessionActivityChange = vi.fn();
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+      onSessionActivityChange,
+    });
+    syncEnabledForTest(service, publish);
+    const remote = {
+      sessionId: 'r1', deviceId: 'd1', deviceName: 'Studio', title: 'Remote task', workingDir: null,
+      workspaceKind: null, agentKind: null, phase: 'running' as const, detail: 'Working',
+    };
+
+    service.handleUserPrompt({ sessionId: 'local', agentKind: 'codex' }, 'Work');
+    service.setDeviceSessions([remote]);
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ sessionId: 'local', phase: 'running' }),
+      expect.objectContaining({ sessionId: 'r1', phase: 'running' }),
+    ]);
+    // The relay payload still carries only this computer's tasks.
+    expect(service.getSessionActivitySnapshots().map((item) => item.sessionId)).toEqual(['local']);
+
+    service.setDeviceSessions([{ ...remote, phase: 'completed' }]);
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toContainEqual(
+      expect.objectContaining({ sessionId: 'r1', phase: 'completed', attention: true }),
+    );
+
+    // Leaving the sidebar scope or disconnecting drops the task from the consumer too.
+    service.setDeviceSessions([]);
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ sessionId: 'local' }),
+    ]);
+    service.resetRuntimeState();
+  });
+
   it.each([
     [false, 'user'], [true, 'user'], [false, 'scheduler'], [true, 'scheduler'],
   ] as const)('keeps direct IM completions quiet (headless=%s, kind=%s)', async (headless, kind) => {
@@ -4718,7 +4854,10 @@ describe('AgentIslandService native publishing', () => {
     }
   });
 
-  it.each([false, true])('keeps scheduled completions silent on source and remote devices (oldUnread=%s)', async oldUnread => {
+  // B2B completion must not reach the remote desktop toast callback, even if
+  // an older owner reply keeps the session unread. The same silent relay state
+  // also gates the renderer's Feishu/mobile notification callback.
+  it.each([false, true].flatMap(oldUnread => ['scheduled', 'b2b'].map(origin => ({ oldUnread, origin }))))('keeps internal completions silent on source and remote devices (%j)', async ({ oldUnread, origin }) => {
     vi.useFakeTimers();
     const { AgentIslandService } = await import('../service.js');
     const sourcePublish = vi.fn((state: AgentIslandDisplayState) => state.visible);
@@ -4747,13 +4886,17 @@ describe('AgentIslandService native publishing', () => {
         source.handleAgentEvent(meta, doneEvent());
         await vi.advanceTimersByTimeAsync(2000);
       }
-      source.handleScheduleEvent({ type: 'silenced', scheduleId: 'schedule', runId: 'run', sessionId: meta.sessionId });
+      if (origin === 'scheduled') source.handleScheduleEvent({ type: 'silenced', scheduleId: 'schedule', runId: 'run', sessionId: meta.sessionId });
       source.handleUserPrompt(meta, 'Scheduled check');
       await vi.advanceTimersByTimeAsync(2000);
       sourceSound.mockClear(); remoteSound.mockClear(); desktopEvent.mockClear();
-      source.handleAgentEvent(meta, doneEvent());
-      source.handleScheduleEvent({ type: 'completed', scheduleId: 'schedule', runId: 'run', sessionId: meta.sessionId, silenced: true });
+      source.handleAgentEvent(meta, { ...doneEvent(), ...(origin === 'b2b' ? { agentMeta: { botPrivateReply: true } } : {}) });
+      if (origin === 'scheduled') source.handleScheduleEvent({ type: 'completed', scheduleId: 'schedule', runId: 'run', sessionId: meta.sessionId, silenced: true });
       await vi.advanceTimersByTimeAsync(0);
+      // With no old unread, the quiet completion drops out of the activity list.
+      // Otherwise retain the old unread, explicitly marking this completion silent.
+      if (oldUnread) expect(source.getSessionActivitySnapshot(meta.sessionId)).toMatchObject({ completionNotification: 'silent' });
+      else expect(source.getSessionActivitySnapshot(meta.sessionId)?.attention).not.toBe(true);
       expect(sourceSound).not.toHaveBeenCalled();
       expect(desktopEvent).not.toHaveBeenCalled();
       expect(remoteSound).not.toHaveBeenCalled();
@@ -7104,7 +7247,7 @@ describe('会话关闭原因决定条目去留', () => {
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
     try {
       const { AgentIslandService } = await import('../service.js');
-      const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
+      const { AGENT_ISLAND_COMPLETED_RETENTION_MS } = await import('../state.js');
       const publish = vi.fn(() => true);
       const service = new AgentIslandService({
         getMainWindow: () => null,
@@ -7113,7 +7256,7 @@ describe('会话关闭原因决定条目去留', () => {
       service.setEnabled(false);
       service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
       service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
-      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 50);
+      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_COMPLETED_RETENTION_MS + 50);
       const islandState = (
         service as unknown as { state: { sessions: Map<string, unknown>; remoteUnreadTerminals: Map<string, unknown> } }
       ).state;
@@ -7137,7 +7280,7 @@ describe('会话关闭原因决定条目去留', () => {
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
     try {
       const { AgentIslandService } = await import('../service.js');
-      const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
+      const { AGENT_ISLAND_COMPLETED_RETENTION_MS } = await import('../state.js');
       const publish = vi.fn(() => true);
       const service = new AgentIslandService({
         getMainWindow: () => null,
@@ -7146,7 +7289,7 @@ describe('会话关闭原因决定条目去留', () => {
       service.setEnabled(false);
       service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
       service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
-      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 50);
+      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_COMPLETED_RETENTION_MS + 50);
       const islandState = (
         service as unknown as { state: { sessions: Map<string, unknown>; remoteUnreadTerminals: Map<string, unknown> } }
       ).state;
@@ -7362,7 +7505,7 @@ describe('Agent Island device sessions', () => {
   });
 });
 
-it('does not sound or mark attention for internal coordination completion, but surfaces a failure', async () => {
+it.each([{ botTaskCoordination: true, botPrivateReply: false }, { botPrivateReply: true }])('does not sound or mark attention for internal completion (%j), but surfaces a failure', async (agentMeta) => {
   const { AgentIslandService } = await import('../service.js');
   const publish = vi.fn(() => true);
   const playSound = vi.fn(() => true);
@@ -7373,7 +7516,7 @@ it('does not sound or mark attention for internal coordination completion, but s
   const meta = { sessionId: 'coordination', agentKind: 'codex' as const };
   service.handleAgentEvent(meta, { type: 'status', source: 'codex', data: { isRunning: true } });
   playSound.mockClear();
-  service.handleAgentEvent(meta, { ...doneEvent(), agentMeta: { botTaskCoordination: true, botPrivateReply: false } });
+  service.handleAgentEvent(meta, { ...doneEvent(), agentMeta });
   expect(playSound).not.toHaveBeenCalled();
   expect(service.getSessionActivitySnapshot(meta.sessionId)?.attention).not.toBe(true);
   service.handleAgentEvent(meta, terminalErrorEvent('User action required'));

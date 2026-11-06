@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ensurePluginTaskApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, PluginTaskApprovalGate } from '../taskCapability.js';
+import { ensurePluginTaskApproval, hasPluginCompanionsApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, hasPluginObserveApproval, PluginTaskApprovalGate } from '../taskCapability.js';
 import { handlePluginTaskRequest } from '../taskSlot.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
+import type { GhostInstallConsentFacts } from '../../../shared/ghostInstallConsent.js';
 
 const legacy = () =>
   ({
@@ -176,5 +177,63 @@ it.each(['missing-declaration', 'old-receipt', 'deny', 'account-change', 'approv
     expect(hasPluginTargetApproval(ghost)).toBe(true);
     expect(ghost.enabled).toBe(true);
     if (scenario !== 'approve') expect(approve).not.toHaveBeenCalled();
+  },
+);
+
+// unit: read-only observation needs its own receipt fact; tasks/targets grants and declarations alone never imply it.
+it.each(['missing-declaration', 'old-receipt', 'deny', 'account-change', 'approve'] as const)(
+  'keeps observe independently approved without requiring tasks: %s', async scenario => {
+    const ghost = legacy();
+    ghost.manifest.agent = scenario === 'missing-declaration' ? { tasks: true, targets: true } : { observe: true };
+    ghost.taskCapabilityApproved = true; ghost.targetCapabilityApproved = true;
+    let current = true;
+    const confirm = vi.fn(async facts => {
+      expect(facts.added.map((item: { key: string }) => item.key)).toEqual(['agent:observe']);
+      if (scenario === 'account-change') current = false;
+      return scenario !== 'deny';
+    });
+    const approve = vi.fn(async (_id, _revision, capabilityCurrent) => {
+      if (!capabilityCurrent()) return false;
+      ghost.observeCapabilityApproved = true;
+      return true;
+    });
+    expect(hasPluginObserveApproval(ghost)).toBe(false);
+    if (scenario !== 'old-receipt') expect(await ensurePluginTaskApproval('p', {
+      getGhost: () => ghost, isCurrent: () => current, confirm, approve,
+    }, 'observe')).toBe(scenario === 'approve');
+    expect(hasPluginObserveApproval(ghost)).toBe(scenario === 'approve');
+    expect(hasPluginTaskApproval(ghost)).toBe(scenario === 'missing-declaration');
+    if (scenario === 'missing-declaration' || scenario === 'old-receipt') expect(confirm).not.toHaveBeenCalled();
+    if (scenario !== 'approve') expect(approve).not.toHaveBeenCalled();
+    ghost.enabled = false;
+    expect(hasPluginObserveApproval(ghost)).toBe(false);
+  },
+);
+
+// unit: companion viewing needs its own receipt fact; tasks, targets or observe grants never imply it.
+it.each(['missing-declaration', 'deny', 'account-change', 'approve'] as const)(
+  'keeps companions independently approved without requiring tasks: %s', async scenario => {
+    const ghost = legacy();
+    ghost.manifest.agent = scenario === 'missing-declaration' ? { tasks: true, observe: true } : { companions: true };
+    ghost.taskCapabilityApproved = true; ghost.observeCapabilityApproved = true;
+    let current = true;
+    const confirm = vi.fn(async (facts: GhostInstallConsentFacts) => {
+      expect(facts.kind === 'update' && facts.added.map(item => item.key)).toEqual(['agent:companions']);
+      if (scenario === 'account-change') current = false;
+      return scenario !== 'deny';
+    });
+    const approve = vi.fn(async (_id: string, _revision: string, capabilityCurrent: () => boolean) => {
+      if (!capabilityCurrent()) return false;
+      ghost.companionsCapabilityApproved = true;
+      return true;
+    });
+    expect(hasPluginCompanionsApproval(ghost)).toBe(false);
+    expect(await ensurePluginTaskApproval('p', { getGhost: () => ghost, isCurrent: () => current, confirm, approve }, 'companions'))
+      .toBe(scenario === 'approve');
+    expect(hasPluginCompanionsApproval(ghost)).toBe(scenario === 'approve');
+    if (scenario === 'missing-declaration') expect(confirm).not.toHaveBeenCalled();
+    if (scenario !== 'approve') expect(approve).not.toHaveBeenCalled();
+    ghost.enabled = false;
+    expect(hasPluginCompanionsApproval(ghost)).toBe(false);
   },
 );

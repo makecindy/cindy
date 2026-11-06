@@ -23,6 +23,53 @@ beforeAll(async () => {
 });
 
 describe('incremental mobile Markdown parsing', () => {
+  // Performance regression through the production stream parser: completed
+  // inline prefixes must be reused, while a new delimiter can still change the tail.
+  it('reuses a completed formatted paragraph prefix without freezing an unfinished tail', () => {
+    const prefix = '**字段** 和 `value` '.repeat(80);
+    let previous = parseMobileMarkdownIncremental(prefix + '**未完成');
+    const next = parseMobileMarkdownIncremental(prefix + '**未完成内容** tail', previous);
+    expect(next.blocks).toEqual(parseMobileMarkdownDocument(next.source).blocks);
+    expect(next.blocks[0]).toMatchObject({ inlines: parseMobileMarkdownInlines(next.source) });
+    expect(next.reusedInlineUtf16Length).toBeGreaterThan(1000);
+    const first = previous.blocks[0];
+    const last = next.blocks[0];
+    if (first.type !== 'paragraph' || last.type !== 'paragraph') throw new Error('paragraph expected');
+    expect(last.inlines[0]).toBe(first.inlines[0]);
+    for (const tail of [' [link](https://example.com)', ' ![图](https://example.com/a.png)', ' <div>x</div>', ' $x$', '\\(x\\)']) {
+      previous = parseMobileMarkdownIncremental(prefix);
+      for (let n = 1; n <= tail.length; n++) {
+        const value = prefix + tail.slice(0, n);
+        previous = parseMobileMarkdownIncremental(value, previous);
+        expect(previous.blocks).toEqual(parseMobileMarkdownDocument(value).blocks);
+      }
+    }
+  });
+  it('keeps paragraph cache boundaries equivalent to the unsplit inline parser', () => {
+    const prefix = '**字段** 和 `value` '.repeat(80);
+    for (const tail of ['**pending', '**done** more', '`pending', '`done` more',
+      'src/a.ts ', 'https://example.com ', '<!-- hidden --> visible ',
+      '**https://example.com** ', '😀文字 ', 'a_b_c ', '\\*escaped* ',
+      '[file](src/a.ts:17) ', '$x$ ', '~~strike~~ ']) {
+      let result = parseMobileMarkdownIncremental(prefix + tail);
+      const snapshot = JSON.stringify(result.blocks);
+      const initial = result;
+      for (const part of ['x', ' **y** ', '`z`']) {
+        result = parseMobileMarkdownIncremental(result.source + part, result);
+        expect(result.blocks[0]).toMatchObject({ inlines: parseMobileMarkdownInlines(result.source.trim()) });
+      }
+      expect(JSON.stringify(initial.blocks)).toBe(snapshot);
+      const edited = parseMobileMarkdownIncremental('changed ' + result.source.slice(8), result);
+      expect(edited.reusedInlineUtf16Length).toBe(0);
+      expect(edited.blocks[0]).toMatchObject({ inlines: parseMobileMarkdownInlines(edited.source.trim()) });
+    }
+    let result = parseMobileMarkdownIncremental('first\n\n' + prefix);
+    for (const tail of [' **tail**', '\n\nnext', '\n---', '\n\n<!-- hidden\n\nmore', '\n--> end']) {
+      result = parseMobileMarkdownIncremental(result.source + tail, result);
+      expect(result.blocks).toEqual(parseMobileMarkdownDocument(result.source).blocks);
+    }
+  });
+
   it('reuses completed blocks after a safe blank-line checkpoint', () => {
     const first = parseMobileMarkdownDocument('# title\n\nfirst paragraph');
     const next = parseMobileMarkdownIncremental(
@@ -2104,4 +2151,28 @@ it.each([
   ]],
 ])('keeps overlapping and consumed-prefix rendering for %s', (source, expected) => {
   expect(parseMobileMarkdownInlines(source as string)).toEqual(expected);
+});
+
+// A pending image used to be validated/normalized for every earlier inline even
+// after its regex match was cached. Measure actual normalization work, not time.
+it('validates a distant image once per paragraph without losing following images', () => {
+  const url = 'https://example.invalid/pending.png';
+  const source = '**one** `two` '.repeat(30) + `![photo](${url}) ![next](src/next.png)`;
+  const replace = String.prototype.replace;
+  let normalizations = 0;
+  const spy = vi.spyOn(String.prototype, 'replace').mockImplementation(function (this: string, ...args: Parameters<typeof replace>) {
+    if (String(this) === url) normalizations += 1;
+    return Reflect.apply(replace, this, args);
+  });
+  try {
+    const parsed = parseMobileMarkdownInlines(source);
+    expect(parsed.filter(token => token.type === 'strong')).toHaveLength(30);
+    expect(parsed.filter(token => token.type === 'code')).toHaveLength(30);
+    expect(parsed.slice(-3)).toEqual([
+      { type: 'image', alt: 'photo', url },
+      { type: 'text', text: ' ' },
+      { type: 'image', alt: 'next', url: 'src/next.png' },
+    ]);
+    expect(normalizations).toBeLessThanOrEqual(2);
+  } finally { spy.mockRestore(); }
 });

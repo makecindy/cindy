@@ -22,23 +22,29 @@ function isInside(parent: string, child: string): boolean {
 export async function resolveUploadFiles(
   candidates: unknown,
   allowedRoots: string[],
+  maxBytes = MAX_FILE_BYTES,
+  maxTotalBytes = MAX_TOTAL_BYTES,
 ): Promise<string[]> {
-  return resolveUploadFilesSync(candidates, allowedRoots);
+  return resolveUploadFilesSync(candidates, allowedRoots, maxBytes, maxTotalBytes);
 }
 
 /** Recipes consume the descriptor that was checked, never reopen its path.
  * The second path check also rejects an ancestor replaced during open. */
-export function openRecipeInputFileSync(candidate: string, allowedRoots: string[]): number {
-  const resolved = resolveUploadFilesSync([candidate], allowedRoots)[0];
+export function openRecipeInputFileSync(
+  candidate: string,
+  allowedRoots: string[],
+  maxBytes = MAX_FILE_BYTES,
+): number {
+  const resolved = resolveUploadFilesSync([candidate], allowedRoots, maxBytes, maxBytes)[0];
   const expected = fs.lstatSync(resolved, { bigint: true });
   if (!expected.isFile() || expected.ino === 0n) throw new Error('recipe input identity is unavailable');
   const descriptor = fs.openSync(resolved, fs.constants.O_RDONLY
     | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
   try {
     const opened = fs.fstatSync(descriptor, { bigint: true });
-    const current = resolveUploadFilesSync([candidate], allowedRoots)[0];
+    const current = resolveUploadFilesSync([candidate], allowedRoots, maxBytes, maxBytes)[0];
     if (!opened.isFile() || opened.dev !== expected.dev || opened.ino !== expected.ino
-      || current !== resolved || opened.size > BigInt(MAX_FILE_BYTES)) {
+      || current !== resolved || opened.size > BigInt(maxBytes)) {
       throw new Error('recipe input changed during open');
     }
     return descriptor;
@@ -76,7 +82,12 @@ export function createRecipeFileBroker(inputRoots: string[], sessionRoots: strin
 }
 
 /** Synchronous adapters share exactly the same file policy as native uploads. */
-export function resolveUploadFilesSync(candidates: unknown, allowedRoots: string[]): string[] {
+export function resolveUploadFilesSync(
+  candidates: unknown,
+  allowedRoots: string[],
+  maxBytes = MAX_FILE_BYTES,
+  maxTotalBytes = MAX_TOTAL_BYTES,
+): string[] {
   if (!Array.isArray(candidates) || candidates.length === 0) {
     throw new Error('paths must contain at least one file');
   }
@@ -119,12 +130,12 @@ export function resolveUploadFilesSync(candidates: unknown, allowedRoots: string
     if (!roots.some((root) => isInside(root, resolved))) {
       throw new Error('upload files must stay inside the current session directory');
     }
-    if (stat.size > MAX_FILE_BYTES) {
-      throw new Error(`upload file exceeds ${MAX_FILE_BYTES} bytes: ${path.basename(resolved)}`);
+    if (stat.size > maxBytes) {
+      throw new Error(`upload file exceeds ${maxBytes} bytes: ${path.basename(resolved)}`);
     }
     totalBytes += stat.size;
-    if (totalBytes > MAX_TOTAL_BYTES) {
-      throw new Error(`upload batch exceeds ${MAX_TOTAL_BYTES} bytes`);
+    if (totalBytes > maxTotalBytes) {
+      throw new Error(`upload batch exceeds ${maxTotalBytes} bytes`);
     }
     files.push(resolved);
   }

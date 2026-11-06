@@ -126,6 +126,8 @@ export {
   isAutoReviewUnavailableNotice,
   isSystemPermissionDenialReason,
   MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
+  MAX_AUTO_REVIEW_AGENT_CONTEXT_CHARS,
+  type AutoReviewAgentContext,
   type AutoReviewDecision,
   type AutoReviewDelegate,
   type AutoReviewRequest,
@@ -133,6 +135,13 @@ export {
 } from './shared/auto-review-decision.js';
 export { toolAutoReviewAction } from './shared/auto-review-decision.js';
 export { AUTO_REVIEW_CONTINUATION_POLICY } from './shared/continuation-policy.js';
+// 桌面键鼠只走 cindy_computer:shell 模拟输入的判定与拒绝理由(Claude PreToolUse 守卫与
+// auto-review 共用一份,见 shared/desktop-input-shell.ts)。
+export {
+  isShellDesktopInputCommand,
+  SHELL_DESKTOP_INPUT_DENIAL_CODE,
+  SHELL_DESKTOP_INPUT_DENIAL_REASON,
+} from './shared/desktop-input-shell.js';
 export type { CredentialCommandOptions, GitRead, ReviewableAction } from './shared/auto-review.js';
 export { classifyShellCommand, reviewAction, shellCommandReadsCredentials } from './shared/auto-review.js';
 export type {

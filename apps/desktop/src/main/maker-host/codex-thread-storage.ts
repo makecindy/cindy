@@ -1,7 +1,7 @@
 import path from 'node:path';
-import { getActiveAppSession } from '../appSessionState.js';
+import { activeOwnerScopeKey, getActiveAppSession } from '../appSessionState.js';
 import { codexAccountHome } from './codex-account-auth.js';
-import { readCodexThreadStorageForArchive, prepareCodexRolloutForResume } from './codex-local-sessions.js';
+import { readCodexThreadStorageForArchiveAsync, prepareCodexRolloutForResume } from './codex-local-sessions.js';
 import { CodexThreadLocations } from './codex-thread-locations.js';
 
 /** Thread locations of the active owner. Multi-account history lives outside the desktop Codex home. */
@@ -16,7 +16,11 @@ export function ownerCodexThreadLocations(): CodexThreadLocations {
 export async function readCodexThreadStorageReadOnly(threadId: string): Promise<
   { historyHome: string; sqliteHome: string; rolloutPath?: string } | undefined
 > {
-  if (!getActiveAppSession().dataOwnerId) return readCodexThreadStorageForArchive(threadId);
-  return await ownerCodexThreadLocations().readStorage(threadId)
-    ?? readCodexThreadStorageForArchive(threadId);
+  const owner = activeOwnerScopeKey();
+  const indexed = getActiveAppSession().dataOwnerId
+    ? await ownerCodexThreadLocations().readStorage(threadId) : undefined;
+  if (owner !== activeOwnerScopeKey()) throw new Error('Codex history owner changed');
+  const storage = indexed ?? await readCodexThreadStorageForArchiveAsync(threadId);
+  if (owner !== activeOwnerScopeKey()) throw new Error('Codex history owner changed');
+  return storage;
 }

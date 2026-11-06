@@ -9,10 +9,20 @@
 自动化下次触发时，按用户向已归档普通任务发送消息的语义恢复原任务，沿用原会话历史与工作目录，
 完成后保持激活，不重新归档。**持续会话**（`persistentSession`）同样恢复原任务，不会仅因归档另建替代任务。
 归档那一刻本身不改动自动化；归档或取消归档都不会重新启用已暂停的自动化。
+要停止后续运行，应使用自动化自己的暂停入口，而不是归档目标任务。
 删除或丢失目标、伙伴例行任务及协作托管任务继续遵循原有生命周期，不适用普通任务恢复规则。
 
 实现入口：`apps/desktop/src/main/scheduler-host/restore-target.ts`、`runner.ts`、`script-runner.ts`；
 回归用例见同目录 `__tests__/runnerSendOutcome.test.ts`、`runnerModelSelection.test.ts`、`scriptRunner.test.ts`。
+
+## 自动任务失败后的手动继续
+
+自动任务失败后的调度收口，不应取消用户手动继续原任务的入口。原恢复记录已释放、
+宿主确认该错误属于已落库的自动任务输入且任务已停止时，桌面与手机复用隐藏续跑指令，
+从失败处继续；不能仅凭历史中有用户消息就续跑，`/compact` 等控制操作失败不符合条件。
+不重放旧调度、不阻塞下一次定时触发。认证或配置错误仍使用各自的恢复入口，续跑发送失败
+保留错误与重试操作。共同判据见 `packages/maker-shared/src/syntheticTrigger.ts` 的
+`canContinueFailedTurn`（2026-10-25 决定，原记录在核心产品原则，本文为正本）。
 
 ## 产品不变量
 
@@ -30,8 +40,8 @@
 ## 原因
 
 归档只收起当前任务，不代表停止后续自动输入。归档前说明自动化会恢复原任务，避免用户误以为
-归档会暂停自动化，也避免持续会话因归档换绑而分散上下文；与
-[`core-product-principles.md`](core-product-principles.md)「自动任务与归档」保持一致。
+归档会暂停自动化，也避免持续会话因归档换绑而分散上下文；原则见
+[`core-product-principles.md`](core-product-principles.md)「多端连接与任务连续性」。
 
 ## 验收
 

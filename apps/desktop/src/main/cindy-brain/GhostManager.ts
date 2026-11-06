@@ -2,6 +2,7 @@ import { getPluginToolUi, pluginHasToolUi } from '@cindy/plugin-protocol';
 import { MCP_APPS_MAX_BYTES } from '../mcp-apps/protocol.js';
 import { findFeatureRetirement } from '../../shared/featureRetirements.js';
 import { FeatureRetirementStore } from './featureRetirementStore.js';
+import { GhostNotificationIndex } from './ghostNotificationIndex.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -59,6 +60,8 @@ import {
   type GhostManifestLocaleResource,
   type GhostTrustInfo,
   type InstalledGhost,
+  declaredAutoApproveTools,
+  declaredGhostControlPoints,
 } from '../../shared/ghost.js';
 import { verifyGhostZipSignatures, type GhostTrustRegistry } from './ghostSignature.js';
 import { isPathInsideDir } from './dirDeposit.js';
@@ -125,6 +128,20 @@ import {
   ghostManualLogicalPathForEntry,
 } from './ghostManualValidation.js';
 import { installedFileModeFromZip, isZipSymbolicLinkMode } from './ghostZipPermissions.js';
+
+/** receipt 里批准过、manifest 仍声明为 `approval: "auto"` 的工具。 */
+function approvedAutoToolsProjection(receipt: Pick<GhostInstallReceipt, 'approvedAutoTools' | 'manifest'>) {
+  const approved = new Set(receipt.approvedAutoTools ?? []);
+  const tools = declaredAutoApproveTools(receipt.manifest).filter((tool) => approved.has(tool));
+  return tools.length > 0 ? { approvedAutoTools: tools } : {};
+}
+
+/** receipt 里批准过、manifest 仍声明、当前 Host 也认识的控制节点。 */
+function approvedControlPointsProjection(receipt: Pick<GhostInstallReceipt, 'approvedControlPoints' | 'manifest'>) {
+  const approved = new Set(receipt.approvedControlPoints ?? []);
+  const points = declaredGhostControlPoints(receipt.manifest).filter((point) => approved.has(point));
+  return points.length > 0 ? { approvedControlPoints: points } : {};
+}
 
 /** 普通沙箱插件维持小包上限；随包 Node/CLI 允许更大的预打包产物。 */
 export const MAX_BASIC_CINDY_FILE_BYTES = 8 * 1024 * 1024;
@@ -222,13 +239,12 @@ export function isCindyOfficialTrustInfo(
 
 /** Shared gh-cli eligibility for plugin networking and host connection recovery. */
 export function canUseGithubHostCredentials(
-  ghost: Pick<InstalledGhost, 'manifest' | 'namespace' | 'namespaceState' | 'trust'>,
+  ghost: Pick<InstalledGhost, 'manifest' | 'namespaceState' | 'approval'>,
 ): boolean {
-  return ghost.manifest.id === 'cindy-github' &&
-    ghost.namespace == null &&
+  return ghost.approval?.state === 'approved' &&
     ghost.namespaceState !== 'pending' &&
     ghost.namespaceState !== 'unconfirmed' &&
-    isCindyOfficialTrustInfo(ghost.trust);
+    ghost.manifest.network?.secrets?.some(secret => secret.source === 'gh-cli') === true;
 }
 
 /** 完整校验官方 Host receipt；只看 level 会把损坏 receipt 误当成已回填。 */
@@ -690,6 +706,10 @@ function canTakeBareKey(
 }
 
 export class GhostManager {
+  private readonly notificationIndex = new GhostNotificationIndex({
+    roots: () => this.managedRootDirs(),
+    scan: () => this.listAsync(),
+  });
   private readonly receiptStore: GhostInstallReceiptStore;
   private readonly retirements = new FeatureRetirementStore(() => this.receiptStore.rootDir());
   private ownerContextKey: string;
@@ -980,7 +1000,7 @@ export class GhostManager {
   }
 
 
-  private instanceProjection(relId: string, ghostId: string): {
+  private instanceProjection(relId: string, ghostId: string, approval: GhostInstallReceiptReadResult): {
     instanceKey?: string;
     publishingSource?: InstalledGhost['publishingSource'];
     namespace?: string | null;
@@ -992,7 +1012,7 @@ export class GhostManager {
     if (!record || record.ghostId !== ghostId) return {};
     return {
       instanceKey: record.instanceKey,
-      ...this.options.sourcesForInstance?.(record, this.receiptFact(relId)),
+      ...this.options.sourcesForInstance?.(record, this.receiptFact(relId, approval)),
       namespaceState: record.namespaceState,
       ...(record.namespaceState === 'confirmed' || record.namespaceState === 'unconfirmed'
         ? { namespace: record.namespace } : {}),
@@ -1383,6 +1403,7 @@ export class GhostManager {
     if (next === this.ownerContextKey) return;
     this.assertDisjointRoots(this.resolveContentRoot(), this.resolveStateRoot());
     this.ownerContextKey = next;
+    this.notificationIndex.dispose();
     this.instanceRegistryService.clear();
     this.recoverInterruptedMutationsSync();
   }
@@ -2174,6 +2195,7 @@ export class GhostManager {
     operation: (mutation: GhostExclusiveMutation) => Promise<T>,
   ): Promise<T> {
     this.ensureCurrentOwnerContextSync();
+    this.notificationIndex.invalidate();
     const queuedOwnerContextKey = this.ownerContextKey;
     const previous = this.mutationTail;
     let release!: () => void;
@@ -2236,6 +2258,7 @@ export class GhostManager {
     } finally {
       capabilityActive = false;
       this.activeMutationContext = null;
+      this.notificationIndex.invalidate();
       release();
     }
   }
@@ -2784,6 +2807,20 @@ export class GhostManager {
     return (await this.scanInstalledAsync()).ghosts;
   }
 
+  /** Topic discovery only; never use these candidates to authorize execution. */
+  listNotificationCandidatesAsync(): Promise<InstalledGhost[]> {
+    this.ensureCurrentOwnerContextSync();
+    return this.notificationIndex.read();
+  }
+
+  invalidateNotificationCandidates(): void {
+    this.notificationIndex.invalidate();
+  }
+
+  disposeNotificationIndex(): void {
+    this.notificationIndex.dispose();
+  }
+
   /** Only the caller's current market refresh retains this read-only view. */
   createBackgroundRefresh(): GhostBackgroundRefresh {
     return createGhostBackgroundRefresh({
@@ -3007,7 +3044,7 @@ export class GhostManager {
         result.push({
           manifest: localizedManifest,
           dir,
-          ...this.instanceProjection(relId, identity.ghostId),
+          ...this.instanceProjection(relId, identity.ghostId, approvalResult),
           enabled: !retired && enabled,
           ...(retirement ? { retirement } : {}),
           approval: { state: 'approved', revision: receipt.revision },
@@ -3015,6 +3052,10 @@ export class GhostManager {
           ...(receipt.uiCapabilityApproved === true && pluginHasToolUi(localizedManifest) ? { uiCapabilityApproved: true as const } : {}),
           ...(receipt.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
           ...(receipt.delegationCapabilityApproved === true ? { delegationCapabilityApproved: true as const } : {}),
+          ...approvedControlPointsProjection(receipt),
+          ...approvedAutoToolsProjection(receipt),
+          ...(receipt.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
+          ...(receipt.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
           trust: receipt.trust,
           ...(!retired && receipt.manifest.skill?.items.length
             ? {
@@ -3088,7 +3129,7 @@ export class GhostManager {
       result.push({
         manifest: localizedManifest,
         dir,
-        ...this.instanceProjection(relId, identity.ghostId),
+        ...this.instanceProjection(relId, identity.ghostId, approvalResult),
         enabled: false,
         approval: { state: approvalResult.state },
         ...(retired ? { retirement: { id: retired.id, eligible: false, unread: false } } : {}),
@@ -3223,17 +3264,17 @@ export class GhostManager {
   }
 
   /** Called only after Host permission UI confirms this exact installed revision. */
-  async approveTaskCapability(id: string, revision: string, isCurrent: () => boolean, capability: 'tasks' | 'targets' | 'delegation' = 'tasks'): Promise<boolean> {
+  async approveTaskCapability(id: string, revision: string, isCurrent: () => boolean, capability: 'tasks' | 'targets' | 'delegation' | 'observe' | 'companions' = 'tasks'): Promise<boolean> {
     return this.runExclusiveMutation(async () => {
       const relId = this.approvalRelIdFor(id);
       if (!relId) return false;
       const approval = this.readApproval(relId);
       if (!isCurrent() || approval.state !== 'approved' || approval.receipt.revision !== revision ||
-          approval.receipt.manifest.agent?.tasks !== true ||
-          (capability === 'targets' && (approval.receipt.manifest.agent.targets !== true || approval.receipt.taskCapabilityApproved !== true)) ||
-          (capability === 'delegation' && (approval.receipt.manifest.agent.delegation !== true || approval.receipt.manifest.agent.targets !== true || approval.receipt.targetCapabilityApproved !== true || approval.receipt.taskCapabilityApproved !== true)) ||
+          (capability === 'observe' || capability === 'companions' ? approval.receipt.manifest.agent?.[capability] !== true : approval.receipt.manifest.agent?.tasks !== true) ||
+          (capability === 'targets' && (approval.receipt.manifest.agent?.targets !== true || approval.receipt.taskCapabilityApproved !== true)) ||
+          (capability === 'delegation' && (approval.receipt.manifest.agent?.delegation !== true || approval.receipt.manifest.agent?.targets !== true || approval.receipt.targetCapabilityApproved !== true || approval.receipt.taskCapabilityApproved !== true)) ||
           !findInstalledGhostByInstanceId(this.list(), id)?.enabled) return false;
-      const field = capability === 'delegation' ? 'delegationCapabilityApproved' : capability === 'targets' ? 'targetCapabilityApproved' : 'taskCapabilityApproved';
+      const field = capability === 'companions' ? 'companionsCapabilityApproved' : capability === 'observe' ? 'observeCapabilityApproved' : capability === 'delegation' ? 'delegationCapabilityApproved' : capability === 'targets' ? 'targetCapabilityApproved' : 'taskCapabilityApproved';
       if (approval.receipt[field] !== true) {
         const expired = new Error('Task capability approval owner changed');
         try {
@@ -3965,6 +4006,12 @@ export class GhostManager {
       /** Main-only provenance: immutable market release or shared installed snapshot, never local authoring. */
       manifestSource?: 'stored-release';
       delegationCapabilityApproved?: true;
+      /** Control points whose permission row the user saw in this confirmation. */
+      approvedControlPoints?: readonly string[];
+      /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
+      approvedAutoTools?: readonly string[];
+      observeCapabilityApproved?: true;
+      companionsCapabilityApproved?: true;
       initiallyEnabled?: boolean;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
@@ -3994,6 +4041,12 @@ export class GhostManager {
       /** Main-only provenance: immutable market release or shared installed snapshot, never local authoring. */
       manifestSource?: 'stored-release';
       delegationCapabilityApproved?: true;
+      /** Control points whose permission row the user saw in this confirmation. */
+      approvedControlPoints?: readonly string[];
+      /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
+      approvedAutoTools?: readonly string[];
+      observeCapabilityApproved?: true;
+      companionsCapabilityApproved?: true;
       initiallyEnabled?: boolean;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
@@ -4170,6 +4223,10 @@ export class GhostManager {
           ...(opts?.taskCapabilityApproved === true && approvedManifest.agent?.tasks === true ? {taskCapabilityApproved:true as const} : {}),
           ...(opts?.targetCapabilityApproved === true && approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true ? {targetCapabilityApproved:true as const} : {}),
           ...(opts?.delegationCapabilityApproved === true && approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true && approvedManifest.agent.delegation === true ? {delegationCapabilityApproved:true as const} : {}),
+          ...(opts?.approvedControlPoints?.length ? { approvedControlPoints: opts.approvedControlPoints } : {}),
+          ...(opts?.approvedAutoTools?.length ? { approvedAutoTools: opts.approvedAutoTools } : {}),
+          ...(opts?.observeCapabilityApproved === true && approvedManifest.agent?.observe === true ? {observeCapabilityApproved:true as const} : {}),
+          ...(opts?.companionsCapabilityApproved === true && approvedManifest.agent?.companions === true ? { companionsCapabilityApproved: true as const } : {}),
           trust,
           // 指纹取自包投影而不是刚发布的 finalDir:发布后被换的字节应当在快照
           // 对账时被拒,而不是被首读钉成批准基线(P0-8)。
@@ -4297,6 +4354,12 @@ export class GhostManager {
       /** Main-only provenance: immutable market release or shared installed snapshot, never local authoring. */
       manifestSource?: 'stored-release';
       delegationCapabilityApproved?: true;
+      /** Control points whose permission row the user saw in this confirmation. */
+      approvedControlPoints?: readonly string[];
+      /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
+      approvedAutoTools?: readonly string[];
+      observeCapabilityApproved?: true;
+      companionsCapabilityApproved?: true;
       expectedInstalledApproval: string;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
@@ -4323,6 +4386,12 @@ export class GhostManager {
       /** Main-only provenance: immutable market release or shared installed snapshot, never local authoring. */
       manifestSource?: 'stored-release';
       delegationCapabilityApproved?: true;
+      /** Control points whose permission row the user saw in this confirmation. */
+      approvedControlPoints?: readonly string[];
+      /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
+      approvedAutoTools?: readonly string[];
+      observeCapabilityApproved?: true;
+      companionsCapabilityApproved?: true;
       expectedInstalledApproval: string;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
@@ -4603,6 +4672,21 @@ export class GhostManager {
           approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true ? { targetCapabilityApproved: true as const } : {}),
         ...((opts.delegationCapabilityApproved === true || (archiveId === undefined && approvalResult.state === 'approved' && approvalResult.receipt.delegationCapabilityApproved === true)) &&
           approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true && approvedManifest.agent.delegation === true ? { delegationCapabilityApproved: true as const } : {}),
+        // 已批准节点随同一实例延续(仍声明的才保留，receipt 构造时按新 manifest 过滤)；
+        // 本次确认新显示的节点并入。换源归档(archiveId)不继承旧批准。
+        approvedControlPoints: [
+          ...(opts.approvedControlPoints ?? []),
+          ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedControlPoints ?? [] : []),
+        ],
+        // 免确认工具同口径：同实例延续已批准项，本次确认新显示的并入，换源不继承。
+        approvedAutoTools: [
+          ...(opts.approvedAutoTools ?? []),
+          ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedAutoTools ?? [] : []),
+        ],
+        ...((opts.observeCapabilityApproved === true || (archiveId === undefined && approvalResult.state === 'approved' && approvalResult.receipt.observeCapabilityApproved === true)) &&
+          approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),
+        ...((opts.companionsCapabilityApproved === true || (archiveId === undefined && approvalResult.state === 'approved' && approvalResult.receipt.companionsCapabilityApproved === true)) &&
+          approvedManifest.agent?.companions === true ? { companionsCapabilityApproved: true as const } : {}),
         trust,
         // 同 install:指纹取自包投影,发布后的目录漂移在快照对账时 fail closed(P0-8)。
         skillContentSha256: await this.hashSkillContentFromPackage(
@@ -5017,6 +5101,13 @@ export class GhostManager {
           approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true ? { targetCapabilityApproved: true as const } : {}),
         ...(current.state === 'approved' && current.receipt.delegationCapabilityApproved === true &&
           approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true && approvedManifest.agent.delegation === true ? { delegationCapabilityApproved: true as const } : {}),
+        // 随包种子由 Cindy 自己发布，声明的控制节点与免确认工具视为已随版本批准。
+        approvedControlPoints: approvedManifest.subscribe?.hooks ?? [],
+        approvedAutoTools: declaredAutoApproveTools(approvedManifest),
+        ...(current.state === 'approved' && current.receipt.observeCapabilityApproved === true &&
+          approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),
+        ...(current.state === 'approved' && current.receipt.companionsCapabilityApproved === true &&
+          approvedManifest.agent?.companions === true ? { companionsCapabilityApproved: true as const } : {}),
         ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
         namespace: null,
       }),

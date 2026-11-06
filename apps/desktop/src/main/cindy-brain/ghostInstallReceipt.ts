@@ -19,6 +19,7 @@ import {
 import {
   GHOST_LOCALE_MAX_BYTES,
   GHOST_SKILL_MD_MAX_BYTES,
+  declaredAutoApproveTools,
   ghostManifestToAuthorFormat,
   isValidGhostId,
   validateGhostManifestLocaleResource,
@@ -132,6 +133,18 @@ export interface GhostInstallReceipt {
   /** Host-only: historical archive UI entries were absent, non-regular or oversized. Canonical manifest stays intact. */
   unavailableUiResources?: true;
   delegationCapabilityApproved?: true;
+  /**
+   * 用户在安装/更新确认里看到并接受过的控制节点(will- 拦截点)。缺项 = 一个都没
+   * 批准：插件提前声明 Host 当时还不认识的节点，升级后不会静默生效。
+   */
+  approvedControlPoints?: string[];
+  /**
+   * 用户在安装/更新确认里看到并接受过的免确认工具(`tools[].approval: "auto"`)。
+   * 缺项 = 一个都没批准：旧 receipt 与旧 Host 装下的声明不会随升级静默生效。
+   */
+  approvedAutoTools?: string[];
+  observeCapabilityApproved?: true;
+  companionsCapabilityApproved?: true;
   schemaVersion: typeof RECEIPT_SCHEMA_VERSION;
   id: string;
   /** Missing is a pre-namespace receipt. null is root; a string is an organization. */
@@ -1267,6 +1280,25 @@ export function readLegacyInstallTrust(dir: string): GhostTrustInfo | null {
   }
 }
 
+/** 只保留本次批准 manifest 仍声明为 `approval: "auto"` 的工具名。空列表省略字段。 */
+function approvedAutoToolsField(raw: unknown, manifest: GhostManifest): { approvedAutoTools?: string[] } {
+  if (!Array.isArray(raw)) return {};
+  const declared = new Set(declaredAutoApproveTools(manifest));
+  const tools = [...new Set(raw.filter((item): item is string => typeof item === 'string' && declared.has(item)))];
+  return tools.length > 0 ? { approvedAutoTools: tools.sort() } : {};
+}
+
+/**
+ * 只保留仍在本次批准 manifest 里声明的节点名(格式合法即可，不按当前 Host 目录过滤：
+ * 回退到旧版再升级时，旧版不认识的已批准节点不应丢)。空列表省略字段。
+ */
+function approvedControlPointsField(raw: unknown, manifest: GhostManifest): { approvedControlPoints?: string[] } {
+  if (!Array.isArray(raw)) return {};
+  const declared = new Set(manifest.subscribe?.hooks ?? []);
+  const points = [...new Set(raw.filter((item): item is string => typeof item === 'string' && declared.has(item as never)))];
+  return points.length > 0 ? { approvedControlPoints: points.sort() } : {};
+}
+
 export function createGhostInstallReceipt(input: {
   simulatorPreviousRelId?: string;
   simulatorMarketRelease?: GhostInstallReceipt['simulatorMarketRelease'];
@@ -1276,6 +1308,10 @@ export function createGhostInstallReceipt(input: {
   /** Host-only: historical archive UI entries were absent, non-regular or oversized. Canonical manifest stays intact. */
   unavailableUiResources?: true;
   delegationCapabilityApproved?: true;
+  approvedControlPoints?: readonly string[];
+  approvedAutoTools?: readonly string[];
+  observeCapabilityApproved?: true;
+  companionsCapabilityApproved?: true;
   manifest: GhostManifest;
   localeResources: Record<string, GhostManifestLocaleResource>;
   enabled: boolean;
@@ -1311,6 +1347,10 @@ export function createGhostInstallReceipt(input: {
     ...(input.taskCapabilityApproved === true ? { taskCapabilityApproved: true as const } : {}),
     ...(input.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
     ...(input.delegationCapabilityApproved === true ? { delegationCapabilityApproved: true as const } : {}),
+    ...approvedControlPointsField(input.approvedControlPoints, input.manifest),
+    ...approvedAutoToolsField(input.approvedAutoTools, input.manifest),
+    ...(input.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
+    ...(input.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
     ...(input.packageSha256 ? { packageSha256: input.packageSha256 } : {}),
     ...(input.iconDataUrl ? { iconDataUrl: input.iconDataUrl } : {}),
     ...(input.installOrigin !== undefined ? { installOrigin: input.installOrigin } : {}),
@@ -1527,6 +1567,10 @@ function validateReceipt(
       ...(value.taskCapabilityApproved === true ? { taskCapabilityApproved: true as const } : {}),
       ...(value.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
       ...(value.delegationCapabilityApproved === true ? { delegationCapabilityApproved: true as const } : {}),
+      ...approvedControlPointsField(value.approvedControlPoints, manifestResult.manifest),
+      ...approvedAutoToolsField(value.approvedAutoTools, manifestResult.manifest),
+      ...(value.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
+      ...(value.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
       ...(typeof value.packageSha256 === 'string' ? { packageSha256: value.packageSha256 } : {}),
       ...(typeof value.iconDataUrl === 'string' ? { iconDataUrl: value.iconDataUrl } : {}),
       ...(installOrigin !== undefined ? { installOrigin } : {}),

@@ -2,7 +2,7 @@
  * Plugin list/detail view models derived only from the installed Ghost contract.
  *
  * Inputs: shared Ghost manifests and install records.
- * Outputs: renderer-safe list/detail facts, including the optional Host task settings card.
+ * Outputs: renderer-safe list/detail facts, legacy icon presentation and the optional Host task settings card.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -25,6 +25,8 @@ export interface GhostPluginListItem {
   id: string;
   /** Logical plugin id from the manifest. */
   ghostId: string;
+  installationLabelKey?: 'localDevelopment' | 'publicInstall' | 'organizationInstall';
+  installationNamespace?: string;
   name: string;
   description: string;
   publisherKind?: PluginMarketItem['publisherKind'];
@@ -151,9 +153,23 @@ export function marketPresentationForInstalledGhost(
     publisherKind,
     iconDataUrl:
       marketItem.sourceType === 'git-market' && !marketItem.icon
-        ? ghost.iconDataUrl
-        : marketItem.icon?.url,
+        ? ghostPluginIconSource(ghost.iconDataUrl)
+        : ghostPluginIconSource(marketItem.icon?.url, marketItem.icon?.sha256),
   };
+}
+
+// Exact asset shipped by the old scaffold. Other solid-color author assets remain valid.
+const LEGACY_SCAFFOLD_ICON_DATA_URL =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAABEElEQVR42u3SMREAIAwAsfpFAAsKOETgtCyYgGZ4A3+J1leqbmECAEYAIABuY259HAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJgEgAAQAAJAAAgAASAABIAAEAACQAAIAAEgAASAABAAAkAACAABIAAEgAAQAAJAAAgAASAABIAAEAACQAAIAAEgAASAABAAAkAACAABIAAEgAAQAAJAAAgAASAABIAAEAACQAAIAAEgAASAABAAAkAACAABIAAEgAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAmASAABAAAkAACAABIAAEgAAQAAJAAAgAASAABIAAEAACQADodQCqFQAAmACAynYAQtWXyojiIUQAAAAASUVORK5CYII=';
+const LEGACY_SCAFFOLD_ICON_SHA256 =
+  'd4b6d2997b1472f9bdfd48a034aec12d341b5a0d541a9d19122dcb79015bf3ee';
+
+/** Treat the historical placeholder as missing without modifying the Plugin package. */
+export function ghostPluginIconSource(source?: string, sha256?: string): string | undefined {
+  if (source === LEGACY_SCAFFOLD_ICON_DATA_URL || sha256 === LEGACY_SCAFFOLD_ICON_SHA256) {
+    return undefined;
+  }
+  return source;
 }
 
 export type GhostFallbackIconKind =
@@ -161,7 +177,7 @@ export type GhostFallbackIconKind =
 
 /**
  * Chooses a restrained local symbol when a Plugin package has no icon asset.
- * This is presentation-only: a package-provided icon always wins.
+ * This is presentation-only: a real package-provided icon always wins.
  */
 export function ghostFallbackIconKind(name: string, id: string): GhostFallbackIconKind {
   const identity = `${id} ${name}`.toLocaleLowerCase();
@@ -287,6 +303,13 @@ export function toGhostPluginListItem(
   return {
     id: installedGhostStoragePart(ghost),
     ghostId: manifest.id,
+    ...(ghost.namespaceState === 'confirmed' ? {
+      installationLabelKey: ghost.namespace === 'local' || ghost.publishingSource?.kind === 'local'
+        ? 'localDevelopment' as const : typeof ghost.namespace === 'string'
+          ? 'organizationInstall' as const : ghost.publishingSource?.kind === 'public-market'
+            ? 'publicInstall' as const : undefined,
+      installationNamespace: typeof ghost.namespace === 'string' ? ghost.namespace : undefined,
+    } : {}),
     name: display.name,
     description: display.description,
     publisherKind: presentation?.publisherKind,

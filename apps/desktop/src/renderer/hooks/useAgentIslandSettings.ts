@@ -31,13 +31,25 @@ const STORAGE_KEY = 'notifications.agentIslandEnabled';
 const SOUND_STORAGE_KEY = 'notifications.agentIslandSoundSettings';
 const MASCOT_SKIN_STORAGE_KEY = 'notifications.agentIslandMascotSkin';
 const DISPLAY_TARGET_STORAGE_KEY = 'notifications.agentIslandDisplayTarget';
+const SUBTLE_REMINDERS_STORAGE_KEY = 'notifications.agentIslandSubtleReminders';
 const DEFAULT_ENABLED = false;
+const DEFAULT_SUBTLE_REMINDERS = false;
 
 const log = createLogger('AgentIslandSettings');
 const subscribers = new Set<() => void>();
 
 function notifySubscribers(): void {
   for (const cb of subscribers) cb();
+}
+
+/** Observe preferences without syncing native state or loading display options. */
+export function subscribeAgentIslandSettings(onChange: () => void): () => void {
+  subscribers.add(onChange);
+  window.addEventListener('storage', onChange);
+  return () => {
+    subscribers.delete(onChange);
+    window.removeEventListener('storage', onChange);
+  };
 }
 
 function persistAgentIslandDisplayTargetLocally(target: AgentIslandDisplayTarget): void {
@@ -81,6 +93,60 @@ export function getAgentIslandEnabled(): boolean {
     // localStorage 不可用——退回默认。
   }
   return DEFAULT_ENABLED;
+}
+
+export function getAgentIslandSubtleReminders(): boolean {
+  try {
+    const raw = localStorage.getItem(SUBTLE_REMINDERS_STORAGE_KEY);
+    if (raw === 'true') return true;
+    if (raw === 'false') return false;
+  } catch {
+    // localStorage 不可用时使用当前默认值。
+  }
+  return DEFAULT_SUBTLE_REMINDERS;
+}
+
+function isAgentIslandSubtleRemindersCustomized(): boolean {
+  try {
+    return localStorage.getItem(SUBTLE_REMINDERS_STORAGE_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
+async function applyAgentIslandSubtleRemindersToMain(enabled: boolean): Promise<boolean> {
+  if (!isAgentIslandSupported()) return false;
+  const apply = window.electronAPI?.agentIsland?.setSubtleReminders;
+  if (typeof apply !== 'function') return false;
+  try {
+    await apply(enabled);
+    return true;
+  } catch (err) {
+    log.warn('agent island setSubtleReminders failed', err);
+    return false;
+  }
+}
+
+export async function setAgentIslandSubtleReminders(next: boolean): Promise<boolean> {
+  return updateAgentIslandSubtleRemindersOverride(next);
+}
+
+export async function resetAgentIslandSubtleReminders(): Promise<boolean> {
+  return updateAgentIslandSubtleRemindersOverride(null);
+}
+
+async function updateAgentIslandSubtleRemindersOverride(next: boolean | null): Promise<boolean> {
+  const previous = getAgentIslandSubtleReminders();
+  if (!await applyAgentIslandSubtleRemindersToMain(next ?? DEFAULT_SUBTLE_REMINDERS)) return false;
+  try {
+    if (next === null) localStorage.removeItem(SUBTLE_REMINDERS_STORAGE_KEY);
+    else localStorage.setItem(SUBTLE_REMINDERS_STORAGE_KEY, String(next));
+  } catch {
+    await applyAgentIslandSubtleRemindersToMain(previous);
+    return false;
+  }
+  notifySubscribers();
+  return true;
 }
 
 export function getAgentIslandSoundSettings(): AgentIslandSoundSettings {
@@ -250,6 +316,7 @@ export function syncAgentIslandEnabledToMain(): void {
   if (!isAgentIslandSupported()) return;
   void (async () => {
     await Promise.all([
+      applyAgentIslandSubtleRemindersToMain(getAgentIslandSubtleReminders()),
       applyAgentIslandSoundSettingsToMain(getAgentIslandSoundSettings()),
       applyAgentIslandMascotSkinToMain(getAgentIslandMascotSkin()),
       applyAgentIslandDisplayTargetToMain(getAgentIslandDisplayTarget()),
@@ -358,6 +425,10 @@ export function previewAgentIslandSound(sound: AgentIslandSoundChoice): void {
 export function useAgentIslandSettings(): {
   enabled: boolean;
   setEnabled: (next: boolean) => void;
+  subtleReminders: boolean;
+  subtleRemindersCustomized: boolean;
+  setSubtleReminders: (next: boolean) => Promise<boolean>;
+  resetSubtleReminders: () => Promise<boolean>;
   soundSettings: AgentIslandSoundSettings;
   soundCustomized: boolean;
   mascotSkin: AgentIslandMascotSkin;
@@ -373,6 +444,8 @@ export function useAgentIslandSettings(): {
   supported: boolean;
 } {
   const [enabled, setEnabledState] = useState<boolean>(getAgentIslandEnabled);
+  const [subtleReminders, setSubtleRemindersState] = useState(getAgentIslandSubtleReminders);
+  const [subtleRemindersCustomized, setSubtleRemindersCustomizedState] = useState(isAgentIslandSubtleRemindersCustomized);
   const [soundSettings, setSoundSettingsState] = useState<AgentIslandSoundSettings>(getAgentIslandSoundSettings);
   const [soundCustomized, setSoundCustomizedState] = useState<boolean>(isAgentIslandSoundSettingsCustomized);
   const [mascotSkin, setMascotSkinState] = useState<AgentIslandMascotSkin>(getAgentIslandMascotSkin);
@@ -463,22 +536,23 @@ export function useAgentIslandSettings(): {
   useEffect(() => {
     const onChange = () => {
       setEnabledState(getAgentIslandEnabled());
+      setSubtleRemindersState(getAgentIslandSubtleReminders());
+      setSubtleRemindersCustomizedState(isAgentIslandSubtleRemindersCustomized());
       setSoundSettingsState(getAgentIslandSoundSettings());
       setSoundCustomizedState(isAgentIslandSoundSettingsCustomized());
       setMascotSkinState(getAgentIslandMascotSkin());
       setDisplayTargetState(getAgentIslandDisplayTarget());
     };
-    subscribers.add(onChange);
-    window.addEventListener('storage', onChange);
-    return () => {
-      subscribers.delete(onChange);
-      window.removeEventListener('storage', onChange);
-    };
+    return subscribeAgentIslandSettings(onChange);
   }, []);
 
   return {
     enabled,
     setEnabled,
+    subtleReminders,
+    subtleRemindersCustomized,
+    setSubtleReminders: setAgentIslandSubtleReminders,
+    resetSubtleReminders: resetAgentIslandSubtleReminders,
     soundSettings,
     soundCustomized,
     mascotSkin,

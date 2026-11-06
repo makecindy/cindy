@@ -15,6 +15,10 @@ export interface BotCompactBoundary {
 
 export type BotCompactRuntimeRefreshOutcome = 'refreshed' | 'not-bot' | 'deferred';
 
+/** Send admission adds one outcome: the refresh stays pending, but the input
+ * may run on the current runtime because only background jobs block it. */
+export type BotCapabilityEpochSendOutcome = BotCompactRuntimeRefreshOutcome | 'kept-current-runtime';
+
 /** Model switching may already bootstrap the latest Profile. Do not close that
  * fresh handle again: a native thread may not persist a rollout until its first
  * turn. An unchanged (including busy) handle still needs the safe refresh path.
@@ -138,6 +142,16 @@ export function createBotCompactRuntimeRefreshCoordinator(
     return operation;
   }
 
+  /** Background jobs live inside the runtime, so refresh (close + bootstrap)
+   * must wait for them. Unlike a running turn or a pending interaction, they do
+   * not stop the session from taking a new turn on its current runtime. */
+  function isBlockedOnlyByBackgroundTasks(session: BotCompactRuntimeSession): boolean {
+    return !session.isTurnRunning()
+      && !deps.hasPendingInteraction(session.id)
+      && !inFlight.has(session.id)
+      && session.listBackgroundTasks().length > 0;
+  }
+
   function clearForClosedSession(session: BotCompactRuntimeSession): void {
     if (pending.get(session.id)?.session === session) pending.delete(session.id);
   }
@@ -151,6 +165,7 @@ export function createBotCompactRuntimeRefreshCoordinator(
     noteBoundary,
     attempt,
     clearForClosedSession,
+    isBlockedOnlyByBackgroundTasks,
     hasPending: (sessionId: string, session?: BotCompactRuntimeSession) => {
       const entry = pending.get(sessionId);
       return !!entry && (!session || (entry.session === session
@@ -167,6 +182,9 @@ export type BotCompactRuntimeRefreshCoordinator = ReturnType<
 /** Only live Bot chats require a capability refresh before accepting input.
  * Ordinary and delegated tasks also emit compaction events, but keep their
  * existing runtime and queue semantics. Resolve ownership before the busy gate.
+ * Background jobs never block input (a turn's end does not wait for them): the
+ * input runs on the current runtime and the refresh waits for a truly idle
+ * session (turn end / agent_task_update retry it).
  */
 export async function prepareBotCapabilityEpochBeforeSend<T extends {
   role: string;
@@ -177,7 +195,7 @@ export async function prepareBotCapabilityEpochBeforeSend<T extends {
   readSession(): Promise<T | null | undefined>;
   preflight(row: T & { workingDir: string }): Promise<boolean>;
   coordinator: BotCompactRuntimeRefreshCoordinator;
-}): Promise<BotCompactRuntimeRefreshOutcome> {
+}): Promise<BotCapabilityEpochSendOutcome> {
   const row = await deps.readSession();
   if (!row || (row.role !== 'canonical' && row.role !== 'group' && row.role !== 'channel' && row.role !== 'thread' && row.role !== 'routine')
     || row.source !== 'bot' || row.status !== 'active' || !row.workingDir) {
@@ -189,5 +207,6 @@ export async function prepareBotCapabilityEpochBeforeSend<T extends {
     coordinator.noteBoundary(session);
   }
   const outcome = await coordinator.attempt(session);
-  return coordinator.hasPending(session.id, session) ? 'deferred' : outcome;
+  if (!coordinator.hasPending(session.id, session)) return outcome;
+  return coordinator.isBlockedOnlyByBackgroundTasks(session) ? 'kept-current-runtime' : 'deferred';
 }

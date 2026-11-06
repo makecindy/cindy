@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { formatLocalizedDuration } from './sessionDurationFormat';
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Animated, Pressable, StyleSheet, View } from 'react-native';
-import { ChevronRight, Layers, Sparkles, Terminal, CircleAlert } from 'lucide-react-native';
+import { ChevronRight, Layers, Sparkles, Terminal } from 'lucide-react-native';
 import { Text } from '@/components/AppText';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { spacing, typeScale, lineHeight, listDisclosureMotion, iconSize } from '@/theme/tokens';
@@ -130,8 +130,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
 });
 
 /** Shared visual for private/group work segments; no raw reasoning is rendered. */
-export function TeammateWorkSegment({ id, title, running, hasTools, failed, children, last = false }: {
-  id: string; title: string; running: boolean; hasTools: boolean; failed: boolean; children?: ReactNode; last?: boolean;
+export function TeammateWorkSegment({ id, title, running, hasTools, children, last = false }: {
+  id: string; title: string; running: boolean; hasTools: boolean; children?: ReactNode; last?: boolean;
 }) {
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
@@ -140,7 +140,7 @@ export function TeammateWorkSegment({ id, title, running, hasTools, failed, chil
     <Text style={styles.title}>{title}</Text>
   </View>;
   return <TeammateProcess id={id} secondary railFooter={last} running={running} title={title}
-    statusIcon={failed ? <CircleAlert size={iconSize.sm} color={colors.errorText} /> : running ? <ActivityIndicator color={colors.textSecondary} size="small" style={styles.spinner} /> : <Terminal size={iconSize.sm} color={colors.textSecondary} />}>
+    statusIcon={running ? <ActivityIndicator color={colors.textSecondary} size="small" style={styles.spinner} /> : <Terminal size={iconSize.sm} color={colors.textSecondary} />}>
     {children}
   </TeammateProcess>;
 }

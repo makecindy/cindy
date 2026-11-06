@@ -1687,8 +1687,8 @@ describe('远程交互接线不变式', () => {
     expect(src).toContain('let linkOnline: boolean | null = null');
     expect(src).toContain("if (!linkStatusPushSeen) linkOnline = state.linkStatus === 'online'");
     expect(src).toContain('linkStatusPushSeen = true');
-    // debounce 排队后 relay 可能已进入 connecting；执行时必须重查实时状态，不能离线重试。
-    expect(src).toContain('if (!disposed && linkOnline && eligible.has(deviceId))');
+    // debounce 排队后仍按该目标的实时可读链路判断；健康直连无需等 relay 恢复。
+    expect(src).toContain('if (!disposed && peerReadable(deviceId) && eligible.has(deviceId))');
   });
 
   it('F4: extraDirs 的本地/远程持久化均由 Main 会话事务拥有', () => {

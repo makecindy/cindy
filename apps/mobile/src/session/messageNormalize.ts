@@ -3,7 +3,7 @@ import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source'
 import { formatDuration } from '@cindy/maker-shared/message-render';
 import { parseMcpAppHistory } from '@cindy/maker-shared/mcp-apps';
 import { collectPluginInvocations, type PluginInvocation } from './pluginInvocations';
-import { extractPayloadToolResultFiles, extractPayloadToolCardIds, type PayloadToolFile } from '@cindy/maker-shared/payload-summary';
+import { extractPayloadToolResultFiles, extractPayloadToolCardIds, extractPayloadTurnEndCardIds, type PayloadToolFile } from '@cindy/maker-shared/payload-summary';
 import { placeBotTaskCardsAfterIntroduction, readBotCollaborationMeta, type BotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
 import { readBotDirectMessageMeta, type BotDirectMessageMeta } from '@cindy/maker-shared/botDirectMessage';
 import type { RemoteMessage, RemoteMessageRole } from '@/session/types';
@@ -117,6 +117,7 @@ export interface NormalizedRemoteMessage {
   media?: NormalizedToolMedia[];
   files?: PayloadToolFile[];
   cardIds?: string[];
+  turnEndCardIds?: string[];
   pluginInvocations?: PluginInvocation[];
   diff?: NormalizedToolDiff;
   align: 'user' | 'agent';
@@ -367,6 +368,7 @@ export function normalizeRemoteMessages(
         media: extractToolResultMedia(secondaryBody ?? ''),
         files: extractPayloadToolResultFiles(secondaryBody ?? ''),
         cardIds: extractPayloadToolCardIds(secondaryBody ?? ''),
+        turnEndCardIds: extractPayloadTurnEndCardIds(secondaryBody ?? ''),
         diff: tool.diff,
         align: 'agent',
         createdAt: message.createdAt,
@@ -404,7 +406,7 @@ export function normalizeRemoteMessages(
       const c = parseMaybeJsonObject(message.content);
       const rawText = typeof c?.message === 'string' ? c.message : contentToPreview(message.content);
       const toolLoop = parseMobileToolLoopErrorDetails(c?.toolLoop);
-      const guidance = describeAgentAuthError(rawText) ?? localizeAgentError(c?.reason, toolLoop, rawText);
+      const guidance = describeAgentAuthError(rawText) ?? localizeAgentError(c?.reason, toolLoop, rawText, c?.outputLimit);
       const errText = guidance ?? localizeUnclassifiedAgentError(rawText, options.sessionSource);
       result.push({
         key: messageNormalizeKey(message),
@@ -459,6 +461,22 @@ export function normalizeRemoteMessages(
       const goalCard = normalizeGoalCard(message);
       if (goalCard) {
         result.push(goalCard);
+        continue;
+      }
+      const routeNote = readRecord(message.agentMeta?.pluginModelRoute);
+      if (routeNote) {
+        result.push({
+          key: messageNormalizeKey(message),
+          source: message,
+          kind: 'system',
+          role: message.role,
+          label: 'system:plugin-model-route',
+          body: '',
+          systemCardType: 'plugin-model-route',
+          systemCardData: routeNote,
+          align: 'agent',
+          createdAt: message.createdAt,
+        });
         continue;
       }
     }

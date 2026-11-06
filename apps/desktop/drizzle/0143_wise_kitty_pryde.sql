@@ -1,0 +1,1 @@
+ALTER TABLE `session_pr_refs` ADD `association_origin` text;

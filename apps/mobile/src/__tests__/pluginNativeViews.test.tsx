@@ -205,6 +205,7 @@ vi.mock("lucide-react-native", () =>
       "Radio",
       "ShieldCheck",
       "Shield",
+      "Smartphone",
       "Sparkles",
       "Terminal",
       "Wrench",
@@ -270,6 +271,9 @@ vi.mock("@/auth/authOwnerGeneration", () => ({
 }));
 vi.mock('@/device-link/useDeviceProviders', () => ({ useDeviceProviders: () => ({ providers: [], ready: true }) }));
 vi.mock('@/device-link/useMobileMakerTransport', () => ({ useMobileMakerTransport: () => bridge.maker }));
+// This native-view fixture has no directory transport or Expo runtime. Remote directory
+// behavior is covered by remoteAgentCatalogsProviderShare and pluginModelPickerDraft.
+vi.mock('@/session/useRemoteAgentCatalogs', () => ({ useRemoteAgentCatalogs: () => [] }));
 vi.mock('@/session/ModelPickerSheet', () => ({ ModelPickerSheet: (props: unknown) => {
   bridge.props.set('plugin-model-picker', props);
   return null;

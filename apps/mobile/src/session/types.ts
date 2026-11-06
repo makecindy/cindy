@@ -1,3 +1,4 @@
+import type { OutputLimitDetails } from '@cindy/maker-shared';
 import type { MobileSessionAgentSwitchIntent } from '@cindy/maker-shared/device-link-contract';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import type { RemoteMoney } from '@/session/remoteMoney';
@@ -156,6 +157,8 @@ export interface RemoteMessage {
     | 'help' | 'context' | 'cost' | 'pwd' | 'status' | 'compact' | 'cmd' | 'goal-complete' | 'goal-resumed' | 'context-rebuild' | 'auto-resume' | 'learn' | 'agent-switch'
     /** 代输入结束留痕(由隐藏续接行派生,无输入值)。 */
     | 'input-handoff'
+    /** 新任务「让插件选」的结果(由 agentMeta.pluginModelRoute 派生)。 */
+    | 'plugin-model-route'
     | 'mcp-app';
 }
 
@@ -297,6 +300,7 @@ export interface InputProjection {
   errorReason?: string | null;
   /** Bounded details for tool-loop errors; older projections may omit them. */
   toolLoop?: MobileToolLoopErrorDetails | null;
+  outputLimit?: OutputLimitDetails | null;
   recovery?: unknown;
   errorRetryText: string | null;
   /** Explicit failed-turn continuation eligibility; absent on older hosts. */

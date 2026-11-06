@@ -253,7 +253,7 @@ const COMPUTER_TOOL_DEFINITIONS: readonly ComputerToolDef[] = [
   {
     name: 'type_text',
     description:
-      'Type or set text in the target app. Always include pid and include window_id when targeting a specific window.',
+      'Type text into the focused element of the target app by keystrokes. Always include pid and include window_id when targeting a specific window. Not for Electron/browser/web-content fields: background delivery is refused there and foreground keystrokes are unreliable; use set_value with the field\'s element_token instead. A refusal (background_unavailable, type_text_incomplete, USER_INPUT_ACTIVE) is a result to report, never to replace with shell-simulated keys.',
     inputShape: {
       pid: z.number().int().positive(),
       text: z.string(),
@@ -269,7 +269,7 @@ const COMPUTER_TOOL_DEFINITIONS: readonly ComputerToolDef[] = [
   {
     name: 'set_value',
     description:
-      'Set a text field value through accessibility. Prefer this for minimized/background text fields when typing cannot commit.',
+      'Set a text field value through accessibility, without focus or keystrokes. Preferred for Electron/browser/web-content text fields (verified on Cindy\'s own composer: the field updates and its send button enables) and for minimized/background fields. Requires element_token from the latest get_window_state (query:"AXTextArea" or "AXTextField" finds it). Replaces the whole value; confirm with observe:{}.',
     inputShape: {
       pid: z.number().int().positive(),
       window_id: z.number().int().nonnegative(),
@@ -297,7 +297,7 @@ const COMPUTER_TOOL_DEFINITIONS: readonly ComputerToolDef[] = [
   },
   {
     name: 'hotkey',
-    description: 'Press a keyboard shortcut in the target app, e.g. ["cmd","c"].',
+    description: 'Press a keyboard shortcut in the target app, e.g. ["cmd","c"]. Session-level chords (lock screen, log out, sleep) are refused with HOTKEY_BLOCKED.',
     inputShape: {
       pid: z.number().int().positive(),
       keys: z.array(z.string()).min(2),

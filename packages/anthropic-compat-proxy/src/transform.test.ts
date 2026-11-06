@@ -14,6 +14,8 @@ import {
   createImageGenerationIdRecoveryRule,
   createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
+  createToolReferenceRecoveryRule,
+  lowerToolReferencesFromBody,
   dedupeDuplicateToolUseIds,
   dedupeDuplicateToolUseIdsFromBody,
   repairToolExchangeAdjacency,
@@ -46,6 +48,34 @@ const ctx: RequestTransformCtx = {
   url: '/v1/responses',
   headers: { 'thread-id': 'thread-a' },
 };
+
+describe('tool reference protocol lowering (#8593)', () => {
+  it('only lowers tool-result content, preserving opaque inputs and other content', () => {
+    const reference = { type: 'tool_reference', tool_name: 'lookup' };
+    const image = { type: 'image', source: { type: 'base64', data: 'opaque' } };
+    const tool = { type: 'tool_use', id: 'call-1', name: 'lookup', input: { content: [reference] } };
+    const schema = { name: 'lookup', input_schema: { example: reference } };
+    const body = { model: 'glm-5.3-flash', tools: [schema], messages: [
+      { role: 'assistant', content: [tool] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call-1', is_error: false,
+        content: [reference, image] }] },
+    ] };
+    const lowered = JSON.parse(lowerToolReferencesFromBody(buf(body))!.toString());
+    expect(lowered.messages[0].content).toEqual([tool]);
+    expect(lowered.tools).toEqual([schema]);
+    expect(lowered.messages[1].content[0]).toEqual({ type: 'tool_result', tool_use_id: 'call-1', is_error: false,
+      content: [{ type: 'text', text: 'Available tool: lookup' }, image] });
+    expect(lowerToolReferencesFromBody(buf(lowered))).toBeNull();
+    expect(body.messages[1]!.content[0]).toMatchObject({ content: [reference, image] });
+  });
+  it('does not rewrite clean or invalid requests or match unrelated failures', () => {
+    for (const raw of [Buffer.from('invalid'), buf({ input: [{ type: 'tool_reference', tool_name: 'lookup' }] }),
+      buf({ messages: [{ content: 'hello' }] })]) expect(lowerToolReferencesFromBody(raw)).toBeNull();
+    const rule = createToolReferenceRecoveryRule();
+    expect(rule.matches('invalid API key')).toBe(false);
+    expect(rule.matches('Unknown field tool_reference')).toBe(false);
+  });
+});
 
 describe('compactOversizedImageHistory', () => {
   it('drops older history images before the newest tool-result and newest user image', () => {

@@ -24,12 +24,13 @@ import {
   collectPersonalConfig,
   collectProjectInstructionFiles,
 } from '../controller/projectFiles';
-import { shadowAliases, startRemoteAgentSession } from '../controller/startRemote';
+import { managedAliasSources, shadowAliases, startRemoteAgentSession } from '../controller/startRemote';
 import { EXEC_SERVER_NOT_FOUND_CODE } from '../host/execServerShortcut';
 import { createRemoteAgentHost, mirrorSegments, type HostedStartInput } from '../host/runHost';
 import { createProviderShareMemberPurger, hostedStartOptions } from '../host/service';
 import { ExecutorWorkspace } from '../executor/workspace';
-import { MAX_ANCESTOR_LEVELS } from '../wire';
+import { managedSkillDigest } from '../managedSkillDigest';
+import { MAX_ANCESTOR_LEVELS, MAX_MANAGED_SKILLS, decodeOpenPayload } from '../wire';
 
 const RG = path.resolve(__dirname, '../../../../../ripgrep-bin', `${process.platform}-${process.arch}`, process.platform === 'win32' ? 'rg.exe' : 'rg');
 
@@ -418,6 +419,146 @@ describe('collectPersonalConfig', () => {
       { path: '.agents/skills/review/SKILL.md', data: '' },
     ], { env: {}, home });
     expect(pi.personal.files).toEqual([]);
+  });
+
+  // 内置与插件带的 Skill 以本机为准：整个带过去(放不下就不带，不留半个)，停用的个人 Skill 不带；
+  // Claude Code 的还要把新运行端挪去的插件目录对应回本机，Skill 里的脚本路径才能在本机执行。
+  it('brings managed Skills whole where the agent looks for them and leaves out disabled personal Skills', async () => {
+    const home = path.join(root, 'home');
+    write(path.join(home, '.claude', 'skills', 'mine', 'SKILL.md'), 'mine');
+    write(path.join(home, '.claude', 'skills', 'off', 'SKILL.md'), 'off');
+    const pr = path.join(root, 'bundle', 'pr');
+    write(path.join(pr, 'SKILL.md'), 'pr skill');
+    write(path.join(pr, 'scripts', 'run.mjs'), 'run');
+    const big = path.join(root, 'bundle', 'big');
+    write(path.join(big, 'SKILL.md'), 'big');
+    for (let index = 0; index < 600; index += 1) write(path.join(big, 'references', `r${index}.txt`), 'x');
+    const managedSkills = [{ command: 'cindy-plugin-x:big', dir: big }, { command: 'cindy:pr', dir: pr }];
+    const disabledSkillPaths = [path.join(home, '.claude', 'skills', 'off', 'SKILL.md')];
+
+    const claude = await collectPersonalConfig('claude-code', [], { env: {}, home, disabledSkillPaths, managedSkills });
+    expect(decode(claude.personal.files)).toEqual({
+      '.claude/skills/mine/SKILL.md': 'mine',
+      '.claude/skills/cindy-pr/SKILL.md': 'pr skill',
+      '.claude/skills/cindy-pr/scripts/run.mjs': 'run',
+    });
+    expect(claude.personal.managedSkills).toEqual([{ command: 'cindy:pr', dir: '.claude/skills/cindy-pr' }]);
+    expect(claude.roots).toEqual(expect.arrayContaining([
+      { relative: '.claude/skills/cindy-pr', local: pr, managed: true },
+      { relative: '.cindy/managed-skills/cindy/skills/pr', local: pr, managed: true },
+    ]));
+
+    const codex = await collectPersonalConfig('codex', [], { env: {}, home, managedSkills: [] });
+    // 本机没有可用的托管 Skill 也要声明，对方才不会改用它自己的。
+    expect(codex.personal.managedSkills).toEqual([]);
+    const pi = await collectPersonalConfig('pi', [], { env: {}, home, managedSkills });
+    expect(pi.personal.managedSkills).toEqual([{ command: 'cindy:pr', dir: '.agents/skills/cindy-pr' }]);
+    expect(pi.roots).toEqual([{ relative: '.agents/skills/cindy-pr', local: pr, managed: true }]);
+  });
+
+  // 新运行端：与它指纹相同的只报名字，其余放进单独的托管额度，不挤占个人配置。
+  it('names managed Skills the agent computer already has and sends the rest outside the personal budget', async () => {
+    const home = path.join(root, 'home');
+    write(path.join(home, '.claude', 'skills', 'mine', 'SKILL.md'), 'mine');
+    const pr = path.join(root, 'bundle', 'pr');
+    write(path.join(pr, 'SKILL.md'), 'pr skill');
+    const learn = path.join(root, 'bundle', 'learn');
+    write(path.join(learn, 'SKILL.md'), 'learn skill');
+    const digest = await managedSkillDigest(pr);
+    const { personal } = await collectPersonalConfig('claude-code', [], {
+      env: {}, home,
+      managedSkills: [{ command: 'cindy:pr', dir: pr }, { command: 'cindy:learn', dir: learn }],
+      agentDigests: { 'cindy:pr': digest!, 'cindy:learn': '0'.repeat(64) },
+    });
+    expect(personal.managedSkills).toEqual([
+      { command: 'cindy:pr', dir: '.claude/skills/cindy-pr', digest, reuse: true },
+      { command: 'cindy:learn', dir: '.claude/skills/cindy-learn', digest: await managedSkillDigest(learn) },
+    ]);
+    expect(decode(personal.files)).toEqual({ '.claude/skills/mine/SKILL.md': 'mine' });
+    expect(decode(personal.managedFiles ?? [])).toEqual({ '.claude/skills/cindy-learn/SKILL.md': 'learn skill' });
+  });
+
+  // 整个带或整个不带：有单个过大的文件、或受邀者任务里的凭证类文件，该 Skill 整个不带(不留只有 SKILL.md 的半个)；
+  // 名字里带 `-` 的两个命令拍平后相同，也各自得到不同的目录，不会有一个被悄悄丢掉。
+  it('never sends half a managed Skill and gives commands that flatten alike different directories', async () => {
+    const home = path.join(root, 'home');
+    const make = (name: string, files: Record<string, string>) => {
+      const dir = path.join(root, 'bundle', name);
+      for (const [file, data] of Object.entries(files)) write(path.join(dir, file), data);
+      return dir;
+    };
+    const big = make('big', { 'SKILL.md': 'big', 'references/huge.txt': 'x'.repeat(600 * 1024) });
+    const secret = make('secret', { 'SKILL.md': 'secret', '.env': 'TOKEN=1' });
+    // 超过清单深度上限(与指纹同一份)：整个 Skill 不带，不是只丢掉最深的文件。
+    const deep = make('deep', { 'SKILL.md': 'deep', 'a/b/c/d/e/f/g/h/i/leaf.txt': 'leaf' });
+    const a = make('a', { 'SKILL.md': 'a' });
+    const b = make('b', { 'SKILL.md': 'b' });
+    const managedSkills = [
+      { command: 'cindy-plugin-x:big', dir: big }, { command: 'cindy-plugin-x:secret', dir: secret },
+      { command: 'cindy-plugin-x:deep', dir: deep },
+      { command: 'cindy-plugin-foo:bar-baz', dir: a }, { command: 'cindy-plugin-foo-bar:baz', dir: b },
+    ];
+    const shared = await collectPersonalConfig('claude-code', [], { env: {}, home, managedSkills, skipCredentials: true });
+    expect(shared.personal.managedSkills?.map((skill) => skill.command)).toEqual([
+      'cindy-plugin-foo:bar-baz', 'cindy-plugin-foo-bar:baz',
+    ]);
+    const dirs = shared.personal.managedSkills!.map((skill) => skill.dir);
+    expect(new Set(dirs).size).toBe(2);
+    expect(decode(shared.personal.files)).toEqual({ [`${dirs[0]}/SKILL.md`]: 'a', [`${dirs[1]}/SKILL.md`]: 'b' });
+    // 自己的任务(不是受邀者)里 .env 也是 Skill 的一部分，整个带过去。
+    const own = await collectPersonalConfig('claude-code', [], { env: {}, home, managedSkills: [managedSkills[1]] });
+    expect(Object.keys(decode(own.personal.files)).sort()).toEqual([
+      `${own.personal.managedSkills![0].dir}/.env`, `${own.personal.managedSkills![0].dir}/SKILL.md`,
+    ]);
+  });
+
+  // 连回时托管 Skill 的映射以这次为准：更新过的指向新目录，上次有、这次已停用的撤掉，个人 Skill 的映射不动。
+  it('replaces managed Skill aliases on reconnect, including ones that went away', () => {
+    const roots = (list: Array<[string, string, boolean]>) => list.map(([relative, local, managed]) => ({ relative, local, ...(managed ? { managed: true as const } : {}) }));
+    const shadow = path.join(root, 'shadow');
+    const project = path.join(root, 'project');
+    const dirs = Object.fromEntries(['pr-v1', 'pr-v2', 'learn', 'mine'].map((name) => [name, path.join(root, name)]));
+    for (const dir of [project, ...Object.values(dirs)]) fs.mkdirSync(dir, { recursive: true });
+    const projection = { shadowDir: shadow, mirrorRoot: path.dirname(shadow) };
+    const first = roots([['.claude/skills/cindy-pr', dirs['pr-v1'], true], ['.claude/skills/cindy-learn', dirs.learn, true], ['.claude/skills/mine', dirs.mine, false]]);
+    const workspace = new ExecutorWorkspace({ workingDir: project });
+    workspace.setAliases(shadowAliases(projection, project, first));
+    workspace.setVirtualRoot(path.dirname(shadow));
+    const previous = managedAliasSources(shadow, first);
+    // 重连：pr 更新到新目录、learn 被停用。
+    const second = roots([['.claude/skills/cindy-pr', dirs['pr-v2'], true], ['.claude/skills/mine', dirs.mine, false]]);
+    const current = managedAliasSources(shadow, second);
+    workspace.addAliases(shadowAliases(projection, project, second), new Set([...previous, ...current]));
+    const localOf = (relative: string) => path.normalize(workspace.mapTextFromAgent(`${shadow}/${relative}`));
+    expect(localOf('.claude/skills/cindy-pr/run.mjs')).toBe(path.join(dirs['pr-v2'], 'run.mjs'));
+    expect(localOf('.claude/skills/mine/a.md')).toBe(path.join(dirs.mine, 'a.md'));
+    // 已停用的不再指向它原来的本机目录，只剩工作区的普通映射。
+    expect(localOf('.claude/skills/cindy-learn/x.md')).toBe(path.join(project, '.claude/skills/cindy-learn/x.md'));
+  });
+
+  // 本机里托管的 `cindy:pr` 与个人的 `cindy-pr` 是两个命令：暂存目录撞名时共存，不丢掉托管的；
+  // 条目数不超过线上上限，否则对方拒绝整个打开。
+  it('keeps a managed Skill next to a personal one with the staging name, and caps the entries', async () => {
+    const home = path.join(root, 'home');
+    write(path.join(home, '.claude', 'skills', 'cindy-pr', 'SKILL.md'), 'personal cindy-pr');
+    const pr = path.join(root, 'bundle', 'pr');
+    write(path.join(pr, 'SKILL.md'), 'managed pr');
+    const both = await collectPersonalConfig('claude-code', [], { env: {}, home, managedSkills: [{ command: 'cindy:pr', dir: pr }] });
+    const [managed] = both.personal.managedSkills!;
+    expect(managed.dir).toMatch(/^\.claude\/skills\/cindy-pr-[0-9a-f]{8}$/);
+    expect(decode(both.personal.files)).toEqual({
+      '.claude/skills/cindy-pr/SKILL.md': 'personal cindy-pr',
+      [`${managed.dir}/SKILL.md`]: 'managed pr',
+    });
+    const many = Array.from({ length: MAX_MANAGED_SKILLS + 1 }, (_, index) => {
+      const dir = path.join(root, 'many', `s${index}`);
+      write(path.join(dir, 'SKILL.md'), String(index));
+      return { command: `cindy:s${index}`, dir };
+    });
+    const capped = await collectPersonalConfig('claude-code', [], { env: {}, home: path.join(root, 'nobody'), managedSkills: many, agentDigests: {} });
+    expect(capped.personal.managedSkills).toHaveLength(MAX_MANAGED_SKILLS);
+    expect(decodeOpenPayload({ sessionId: 's1', options: { model: 'm' }, workspace: { workingDir: '/p', platform: 'darwin', shell: 'zsh' }, personal: capped.personal }).personal.managedSkills)
+      .toHaveLength(MAX_MANAGED_SKILLS);
   });
 
   it('leaves credential files in personal Skills for later on a shared provider', async () => {

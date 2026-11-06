@@ -1,3 +1,4 @@
+import { storageManagementCardSettings } from './StorageManagementCard.settings-search';
 /**
  * StorageManagementCard — 关于页「存储空间」卡片。
  * ---------------------------------------------------------------------------
@@ -36,6 +37,7 @@ import { Switch } from '@/components/ui/switch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { DialogueDirectorySection } from './DialogueDirectorySection';
+import { ProjectsRootSection } from './ProjectsRootSection';
 import {
   DB_SLIMMING_ARCHIVE_AGE_OPTIONS,
   DB_SLIMMING_DEFAULT_ARCHIVE_AGE,
@@ -273,7 +275,7 @@ export function StorageManagementCard() {
       <div className="flex items-end justify-between gap-4 px-0.5">
         <div className="min-w-0">
           <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-            {t('settings.about.storage.title')}
+            {t(storageManagementCardSettings.storage.sectionKey)}
           </h2>
           <p className="mt-1 text-13 leading-[1.5] text-[var(--settings-section-desc)]">
             {t('settings.about.storage.overviewDescription')}
@@ -282,6 +284,8 @@ export function StorageManagementCard() {
       </div>
 
       <DialogueDirectorySection />
+
+      <ProjectsRootSection />
 
       {/* 占用总览 */}
       <div
@@ -298,9 +302,9 @@ export function StorageManagementCard() {
           <p className="mt-1 text-12 leading-[1.5] text-[var(--settings-section-sublabel)]">
             {t('settings.about.storage.overviewDescription')}
           </p>
-          <div id="settings-search-settings-about-storage-databaseSectionTitle"
+          <div id={storageManagementCardSettings.aboutStorageDatabaseSectionTitle.targetId}
             role="progressbar"
-            aria-label={t('settings.about.storage.databaseSectionTitle')}
+            aria-label={t(storageManagementCardSettings.aboutStorageDatabaseSectionTitle.titleKey)}
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={overviewPercent ?? undefined}
@@ -319,13 +323,13 @@ export function StorageManagementCard() {
             <strong className="block text-24 font-medium leading-none tracking-[-0.04em] text-[var(--settings-section-title)]">
               {totalBytes === null ? t('settings.about.storage.unknown') : formatBytes(totalBytes)}
             </strong>
-            <span id="settings-search-settings-about-storage-mediaSectionTitle" className="mt-1 block text-11 text-[var(--settings-section-sublabel)]">
+            <span id={storageManagementCardSettings.aboutStorageMediaSectionTitle.targetId} className="mt-1 block text-11 text-[var(--settings-section-sublabel)]">
               {t('settings.about.storage.databaseUsage', {
                 size: databaseBytes === null
                   ? t('settings.about.storage.unknown')
                   : formatBytes(databaseBytes),
               })}{' '}
-              · {t('settings.about.storage.mediaSectionTitle')} {mediaBytes === null
+              · {t(storageManagementCardSettings.aboutStorageMediaSectionTitle.titleKey)} {mediaBytes === null
                 ? t('settings.about.storage.unknown')
                 : formatBytes(mediaBytes)}{' '}
               · {t('settings.about.storage.legacyImagesLabel')} {fixedCacheBytes === null
@@ -341,7 +345,7 @@ export function StorageManagementCard() {
               </span>
             )}
           </div>
-          <Button
+          <Button data-setting-id={storageManagementCardSettings.aboutStorageMediaSectionTitle.id}
             variant="secondary"
             size="md"
             onClick={() => void refreshStats()}
@@ -356,10 +360,10 @@ export function StorageManagementCard() {
 
       <div className="flex items-baseline justify-between gap-3 px-0.5">
         <h3 className="text-13 font-medium text-[var(--settings-section-title)]">
-          {t('settings.about.storage.mediaSectionTitle')}
+          {t(storageManagementCardSettings.aboutStorageMediaSectionTitle.titleKey)}
         </h3>
         <span className="text-11 text-[var(--settings-section-sublabel)]">
-          {t('settings.about.storage.mediaSectionHint')}
+          {t(storageManagementCardSettings.aboutStorageMediaSectionTitle.descriptionKey)}
         </span>
       </div>
       <div
@@ -415,11 +419,11 @@ export function StorageManagementCard() {
         <div className="flex items-center justify-between gap-3 px-[18px] py-4">
           <div className="flex min-w-0 flex-col gap-1">
             <span className="text-13 text-[var(--settings-section-sublabel)]">
-              <span id="settings-search-settings-about-storage-remoteMediaLabel">{t('settings.about.storage.remoteMediaLabel')}</span>
+              <span id={storageManagementCardSettings.aboutStorageRemoteMediaLabel.targetId}>{t(storageManagementCardSettings.aboutStorageRemoteMediaLabel.titleKey)}</span>
               {' · '}{stats?.remoteMedia ? formatBytes(stats.remoteMedia.bytes) : t('settings.about.storage.unknown')}
             </span>
             <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t('settings.about.storage.remoteMediaDescription')}
+              {t(storageManagementCardSettings.aboutStorageRemoteMediaLabel.descriptionKey)}
             </p>
           </div>
           <CardButton onClick={handleClearRemoteMedia}>
@@ -430,7 +434,7 @@ export function StorageManagementCard() {
 
       <div className="flex items-baseline justify-between gap-3 px-0.5">
         <h3 className="text-13 font-medium text-[var(--settings-section-title)]">
-          {t('settings.about.storage.databaseSectionTitle')}
+          {t(storageManagementCardSettings.aboutStorageDatabaseSectionTitle.titleKey)}
         </h3>
         <span className="text-11 text-[var(--settings-section-sublabel)]">
           {databaseBytes === null
@@ -468,11 +472,11 @@ export function StorageManagementCard() {
       >
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 flex-col gap-1">
-            <span id="settings-search-settings-about-storage-cleanupLabel" className="text-13 text-[var(--settings-section-sublabel)]">
-              {t('settings.about.storage.cleanupLabel')}
+            <span id={storageManagementCardSettings.aboutStorageCleanupLabel.targetId} className="text-13 text-[var(--settings-section-sublabel)]">
+              {t(storageManagementCardSettings.aboutStorageCleanupLabel.titleKey)}
             </span>
             <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t('settings.about.storage.cleanupDescription')}
+              {t(storageManagementCardSettings.aboutStorageCleanupLabel.descriptionKey)}
             </p>
           </div>
           <CardButton onClick={handleScan}>
@@ -567,11 +571,11 @@ export function StorageManagementCard() {
       >
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 flex-col gap-1">
-            <span id="settings-search-settings-about-storage-reconcileLabel" className="text-13 text-[var(--settings-section-sublabel)]">
-              {t('settings.about.storage.reconcileLabel')}
+            <span id={storageManagementCardSettings.aboutStorageReconcileLabel.targetId} className="text-13 text-[var(--settings-section-sublabel)]">
+              {t(storageManagementCardSettings.aboutStorageReconcileLabel.titleKey)}
             </span>
             <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t('settings.about.storage.reconcileDescription')}
+              {t(storageManagementCardSettings.aboutStorageReconcileLabel.descriptionKey)}
             </p>
           </div>
           <CardButton onClick={handleReconcile}>
@@ -890,14 +894,14 @@ function DatabaseSlimmingSection({
     <div className="flex flex-col gap-3 px-[18px] py-4" aria-busy={scanLoading}>
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <span id="settings-search-settings-about-storage-dbSlimmingLabel" className="text-13 text-[var(--settings-section-sublabel)]">
-            {t('settings.about.storage.dbSlimmingLabel')}
+          <span id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.targetId} className="text-13 text-[var(--settings-section-sublabel)]">
+            {t(storageManagementCardSettings.aboutStorageDbSlimmingLabel.titleKey)}
           </span>
           <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {t('settings.about.storage.dbSlimmingDescription')}
+            {t(storageManagementCardSettings.aboutStorageDbSlimmingLabel.descriptionKey)}
           </p>
         </div>
-        <Button
+        <Button data-setting-id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.id}
           variant="cta"
           size="md"
           className="gap-1.5"
@@ -921,7 +925,7 @@ function DatabaseSlimmingSection({
             onValueChange={handleArchiveAgeChange}
             disabled={scanLoading}
           >
-            <Select.Trigger
+            <Select.Trigger data-setting-id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.id}
               id="db-slimming-archive-age"
               aria-label={t('settings.about.storage.dbSlimmingArchiveAgeLabel')}
               className={cn(
@@ -994,7 +998,7 @@ function DatabaseSlimmingSection({
             {t('settings.about.storage.dbSlimmingIncludeActiveDescription')}
           </span>
         </label>
-        <Switch
+        <Switch data-setting-id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.id}
           id="db-slimming-include-active"
           checked={includeActiveTasks}
           disabled={scanLoading}
@@ -1015,7 +1019,7 @@ function DatabaseSlimmingSection({
               : t('settings.about.storage.dbSlimmingBackupDefaultLocation')}
           </span>
         </label>
-        <Switch
+        <Switch data-setting-id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.id}
           id="db-slimming-backup-enabled"
           checked={backupEnabled}
           onCheckedChange={(checked) => setBackupEnabled(checked)}
@@ -1081,18 +1085,18 @@ function DatabaseSlimmingSection({
         onConfirm={handleSchedule}
       />
 
-      <div id="settings-search-settings-about-storage-dbSizeWarningThresholdLabel" className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
+      <div id={storageManagementCardSettings.aboutStorageDbSizeWarningThresholdLabel.targetId} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
         <FormField
           id="db-size-warning-threshold"
-          label={t('settings.about.storage.dbSizeWarningThresholdLabel')}
-          hint={t('settings.about.storage.dbSizeWarningThresholdDescription')}
+          label={t(storageManagementCardSettings.aboutStorageDbSizeWarningThresholdLabel.titleKey)}
+          hint={t(storageManagementCardSettings.aboutStorageDbSizeWarningThresholdLabel.descriptionKey)}
           error={warningThresholdInvalid ? t('settings.about.storage.dbSizeWarningThresholdInvalid') : undefined}
           reserveFeedback
           className="col-span-2 grid grid-cols-[minmax(0,1fr)_auto] items-center [&>div:last-child]:col-span-2"
         >
           {({ error, ...control }) => (
             <div className="flex items-center gap-1.5">
-              <input
+              <input data-setting-id={storageManagementCardSettings.aboutStorageDbSizeWarningThresholdLabel.id}
                 {...control}
                 type="number"
                 min={1}
@@ -1121,19 +1125,19 @@ function DatabaseSlimmingSection({
           htmlFor="db-size-warning-disabled"
           className="flex min-w-0 cursor-pointer flex-col gap-0.5"
         >
-          <span id="settings-search-settings-about-storage-dbSizeWarningDisableLabel" className="text-12 text-[var(--settings-section-sublabel)]">
-            {t('settings.about.storage.dbSizeWarningDisableLabel')}
+          <span id={storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.targetId} className="text-12 text-[var(--settings-section-sublabel)]">
+            {t(storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.titleKey)}
           </span>
           <span className="text-11 leading-[1.4] text-[var(--text-secondary)]">
-            {t('settings.about.storage.dbSizeWarningDisableDescription')}
+            {t(storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.descriptionKey)}
           </span>
         </label>
-        <Switch
+        <Switch data-setting-id={storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.id}
           id="db-size-warning-disabled"
           checked={warningDisabled}
           disabled={warningSaving}
           onCheckedChange={(checked) => void persistWarningSettings({ disabled: checked })}
-          aria-label={t('settings.about.storage.dbSizeWarningDisableLabel')}
+          aria-label={t(storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.titleKey)}
         />
         <div className="col-span-2 flex justify-end">
           <DefaultOverrideControls
@@ -1278,11 +1282,11 @@ function DatabaseCleanupDialog({
                   </div>
                   <div className="mt-6 flex shrink-0 justify-end gap-2.5">
                     <AlertDialog.Cancel asChild>
-                      <Button variant="secondary" size="lg" type="button" className="min-w-[96px]">
+                      <Button data-settings-search-action="Cancel database cleanup" variant="secondary" size="lg" type="button" className="min-w-[96px]">
                         {t('settings.about.storage.cancelButton')}
                       </Button>
                     </AlertDialog.Cancel>
-                    <Button
+                    <Button data-settings-search-action="Confirm the selected database cleanup"
                       variant="secondary"
                       size="lg"
                       tone="danger-solid"
@@ -1324,7 +1328,7 @@ function CardButton({
   busy?: boolean;
 }) {
   return (
-    <Button
+    <Button data-settings-search-action="Run the labeled storage cleanup or folder action"
       variant={emphasis ? 'cta' : 'secondary'}
       size="sm"
       compact

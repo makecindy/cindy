@@ -31,7 +31,7 @@
 - 用户磁盘上的原始文件如果只需就地读取，可以继续走已有受控本地文件通道；不要仅为
   预览就复制一份。远程设备或 SSH 文件必须保留真实来源，不能把远程绝对路径当成本机路径。
 - docx、PDF、zip 等非媒体文件不进入媒体字节仓，继续使用已有 `xdt-file` 等受控文件
-  通道。`xdt-audio` 只保留播放用户本地散文件的直读职责，不作为新的托管媒体写入口。
+  通道。交给插件的非媒体文件同样不入仓，由插件交接副本（`ghost-handoff`，7 天未使用即删除）承接。`xdt-audio` 只保留播放用户本地散文件的直读职责，不作为新的托管媒体写入口。
 - 飞书、Discord、Telegram、企业微信四个个人 IM 渠道的入站附件，去处只由 `@cindy/im` 的
   `classifyInboundAttachment` 判定（MIME 或扩展名任一命中即可）：
   - 图片与音视频经 `IMHost.media` 进总仓（`cacheImage` 一律带 `staging: true`，另有
@@ -123,7 +123,9 @@
   窗边陪伴、未来工作室、梦境漫游从选择器下架（`RETIRED_WALLPAPER_IDS`），清单条目与 CDN 对象保留，
   已选用户的静态与动态照常可用，并在其设置中临时显示为选中项；
   静态条目不暴露动态选项、不下载视频。默认无壁纸和浏览设置列表不下载，
-  选中且可见时下载对应高清图，动态模式且未启用减少动态效果时再下载视频；下载或解码失败保留可用背景。
+  选中且可见时下载对应高清图，动态模式且未启用减少动态效果时再下载视频。
+  官方壁纸切换时立即显示所选项的内置预览图，原图解码成功后替换；下载或解码失败保留该预览图，
+  不保留上一张壁纸（2026-11-03 用户裁决，#8591）。已有解码缓存时直接复用原图。
   传输复用统一下载器并保留 guardedOutboundFetch 的来源校验，清单大小及 SHA-256 校验后入仓。
   缓存位于既有 `userData/cindy-media/client-wallpaper/`，仅以内容哈希和扩展名寻址，
   **不含应用版本或账号**；启动与升级先核对本地文件，有效即返回，不请求 CDN。
@@ -145,16 +147,26 @@
   静态缩略图复用现有 `thumbnails/`，当前随包预览资源合计约 0.55 MiB。
   清单见 Desktop 的 `src/shared/wallpaper-video-manifest.json`。
 - 《Cindy MCP Apps 页面生成手册》（内置 Skill 的 `cindy-plugin-creator/references/examples/interactive-pages/PAGE-GENERATION.md`）
-  沿用壁纸的按内容寻址发布：对象名为 `plugin-pages/manual/<sha256>.md`，客户端用内置手册的 sha256 拼
-  `{cdnBaseUrl}/plugin-pages/manual/<sha256>.md` 交给业务后端，路径约定只在
-  `apps/desktop/src/shared/pluginPageManual.mjs` 定义；手册在 `.gitattributes` 固定 LF，保证各平台打包出同一份字节、
-  同一个 sha256。脚本读取当前检出里的手册，因此发布与 `--check-cdn` 都在本次发版所用的提交（发版分支或 tag
-  的检出）上执行，不要在最新 main 上执行。手册改动后、对应客户端上线前，在每个区域手动执行
-  `node --env-file=<发布配置> scripts/publish-page-manual.mjs --region=global|cn|dev`（区域必填，仓库没有手册时
-  跳过）；`--dry-run` 不连 OSS、不联网，只打印 key、sha256 与 CDN 地址。**发版前检查项**：
-  `node scripts/publish-page-manual.mjs --check-cdn --region=global` 与 `--region=cn` 都通过，即当前手册已在
-  两个区域线上；只读校验的 CDN 地址取法同壁纸。同一 key 只有一种内容，远端已有相同内容时不再上传，上传仍带
-  `x-oss-forbid-overwrite`；该检查不进 CI，避免 CI 依赖外网。
+  按「版本号 + 内容」寻址发布：对象名为 `mcp-apps/manual/<版本号>/<sha256>.md`，客户端用 `app.getVersion()`
+  与内置手册的 sha256 拼 `{cdnBaseUrl}/mcp-apps/manual/<版本号>/<sha256>.md` 交给业务后端。版本号便于排查
+  对应哪个客户端；sha256 保证同一版本号打出不同手册（重新出包、各区域从不同提交出包）时不会悄悄对错文件。
+  路径约定只在 `apps/desktop/src/shared/pluginPageManual.mjs` 定义；手册在 `.gitattributes` 固定 LF，保证各平台
+  打包出同一份字节、同一个 sha256。仓库 `apps/desktop/package.json` 的版本是占位的 0.0.0，打包时才临时写入真实
+  版本，所以脚本三种模式都从 `package-desktop.mjs` 产出的 `build-info.json`（`--build-info=<路径>`，必填）读取版本号、
+  区域与发版提交：版本无关包（version 为 null）、0.0.0 及带路径字符的版本号直接报错，开发版（0.0.0）没有发布的手册；
+  `commitSha` 必须等于当前检出的 HEAD 且手册没有未提交改动，否则报错，由此自动保证在这个包的发版提交上执行。
+  打包侧（`package-desktop.mjs`）在有版本打包时拒绝带未提交改动的手册，并把安装包里实际打进去的手册写入
+  `build-info.json` 的 `mcpAppsManual: { sha256, size }`（版本无关包或没有内置手册时为 `null`）；发布脚本要求
+  检出里手册的 sha256 与 size 与它一致，缺这个字段（旧打包脚本产出）也拒绝，需重新打包。
+  对应客户端上线前，对每个区域的 `build-info.json`（`apps/desktop/release/artifacts/<region>/<version>/<platform-arch>/`）
+  各执行一次 `node --env-file=<发布配置> scripts/publish-page-manual.mjs --build-info=<路径>`（发版提交里没有手册时
+  跳过）；`--dry-run` 不连 OSS、不联网，只打印 key、sha256 与 CDN 地址。**发版前检查项**：global 与 cn 两份
+  `build-info.json` 的 `node scripts/publish-page-manual.mjs --build-info=<路径> --check-cdn` 都通过，即本版本的手册已在
+  两个区域线上；只读校验的 CDN 地址取法同壁纸。同一 key 只有一种内容，远端已有相同内容时
+  不再上传，上传仍带 `x-oss-forbid-overwrite`；该检查不进 CI，避免 CI 依赖外网。客户端开始在 `cindy.fetch` 中自动
+  带手册地址（`Cindy-MCP-Apps-Manual` / `-Sha256` 请求头，`apps/desktop/src/main/cindy-brain/mcpAppsManualHeaders.ts`）
+  后，**每个发版版本、每个区域都必须发布手册**，否则该版本带出去的地址会 404；因此带地址的客户端上线前，必须先把
+  这一步接进发版流程。
 - 伙伴头像的本机副本（2026-10-17 用户裁决：读过的头像在本机缓存一份，显示前先读缓存）：另一台电脑上
   伙伴的 `cindy-media://blobs/…` 头像与云端伙伴身份的 `https://` 公开头像，经 `companion-cloud/avatarCache.ts`
   复用集成缓存的索引（`integration-cache` 引用行，键 `companion-avatar:…`，`isCache: true`）入仓，由回收器按
@@ -292,9 +304,25 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
 - Art 返回的画幅、成品尺寸、分辨率和质量意图不得在客户端适配层静默丢弃。
   第三方图像通道声明自己的协议，`cindy-media/imageParameters.ts` 同时生成调用指南和
   验证实际请求；账号 ID 不参与协议推断。旧调用省略新增参数仍然可用。
+- 图片参数是开放的：`prepare.input_schema` 中的命名字段是便捷参数，不是上游参数白名单。
+  已声明协议的通道允许在 `body` 直接传入该协议的其他原生字段，并按官方文档保留字段名、
+  值与嵌套结构；Core 用 `nativeParameters` 在内部传递，生成和编辑的执行器都必须序列化。
+  Gemini 的 `generationConfig` / `imageConfig` 与便捷参数合并，显式原生字段优先。
+  模型、请求端点、鉴权、取消信号和主参考图仍走宿主原有路径，原生字段不能改写这些对象。
+  当前交付合同只接收一张最终图片，改变结果形态的批量或流式选项在付费提交前明确拒绝。
+- 参数开放不等于替上游声明支持情况：新增模型参数不需要逐项修改客户端白名单，由实际
+  执行通道的上游校验并保留错误原因。公开 Images API 与 Codex 订阅接口分别执行，不能
+  依据公开 API 文档宣称订阅接口支持同一字段。未指定参数时保持各通道既有默认；例如订阅
+  图片的 `opaque` 默认仅在调用方没有明确背景选项时生效，不再覆盖显式原生参数。
+- 原生参数内的受管媒体引用沿用已有取件、数量和字节预算；multipart 编辑将展开后的媒体
+  字节作为文件字段提交，普通对象按 JSON 序列化，不把对象变成 `[object Object]`。
+  图片结果仍按真实 MIME 原样入库；透明背景、格式、压缩等都是原生参数的使用场景，
+  不另建透明生图流程，也不在通用透传层替上游追加背景或格式默认。
 - `size` 表示生成像素尺寸，`resolution` 表示供应商的分辨率档，`quality` 是原生质量。
   不把不同来源的枚举互相套用，不强制 `medium` 或 `1k`。明确参数优先，省略时由上游决定。
-  已知 GPT Image 尺寸约束在付费提交前检查；不合法时保留 prepared 调用供更正。
+  Gateway/Guide 驱动的图像调用以服务端 Guide 和实际模型为准，客户端不再按型号代际预检
+  `size`/`quality`；不合法参数由上游拒绝，调用按已提交失败处理，不保留 prepared 供更正。
+  直连供应商通道仍由 `imageParameters.ts` 在付费提交前校验其已知约束，不合法时保留 prepared。
   目标成品尺寸不满足模型约束时，由 Agent 选择合法生成尺寸并单独完成成品缩放，不能谎报
   请求尺寸就是实际输出尺寸。没有自动缩放或偷偷裁切。
 - Codex SSE 的 partial image 仅为预览，不能在失败、未完成或只有预览的断流中当成成品。
@@ -333,6 +361,15 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   清空若发生在引用写入期间，释放会按同一任务的可见消息条件补偿；其它任务或清空后
   新消息仍引用同一图片时保留引用。释放日志保留受管地址，重启可继续未完成的引用清理。
   同一任务并发交付/恢复合并，重复 native 完成事件复用消息 ID 与附件引用。
+- 实时交付在回合结束前送达所有会话订阅方（2026-11-03 Telegram 群的设计稿只发出文字）：
+  wire listener 处理 `image` 事件时调用 `Session.holdEventStream`，交付把 tool_use /
+  tool_result_full / tool_result 推给界面后，Session 再把这三条作为 `hostProjection`
+  事件发给全部监听方，然后才读下一条 provider 事件（通常就是 `done`）。官方 hook、个人
+  IM、伙伴 bot 与插件 tap 因此和普通工具结果一样拿到 `cindy-media://` 地址，消费方不另写
+  分支；wire pipeline 遇到 `hostProjection` 直接跳过，不重复落库或广播。暂停至多
+  `EVENT_STREAM_HOLD_MS`（20 秒）；超时、停止、关闭或拆离立即放行，图片仍在后台交付到
+  界面与恢复流程，但本轮 IM 回复不再带上它。静默定时任务不交付、不暂停；恢复、对账与
+  “重试交付”仍只推界面。
 
 ## 多端与远程
 
@@ -365,7 +402,11 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   与图片共用目标的普通链接也指向保存后的同一图片；外发时这些本地链接降为显示文字，
   并清除对应引用定义，不能把原始路径留在 definition 中。网页链接和代码示例不改写。
   兼容仅限 hostless `xdt-image:///绝对路径` / `xdt-file:///绝对路径` 图片引用；协议读取器
-  不放宽。本机任务归属、账号、清空、编辑及 rewind 在提交时复核，不扫描其它任务目录。
+  不放宽。目标含裸空格的本机图片（如 `![说明](/Users/me/Library/Application Support/a.png)`，
+  CommonMark 不认）由 `shared/bareSpaceLocalImages.ts` 从普通文本节点的**原文片段**补认（不用解码后的 `value`：同节点里的 `&amp;` 不会让图片漏掉，转义的 `\![` 保持字面）：只认 POSIX／
+  Windows 盘符绝对路径或 hostless `xdt-image:///`、以图片扩展名结尾，不解码、不碰代码；
+  主进程 `taskImageReferences` 与桌面渲染 `remarkBareSpaceLocalImages` 共用，手机端
+  `parseLocalMarkdownDestination` 早已支持。改写回 Markdown 时含空格的地址用 `<…>` 包住。本机任务归属、账号、清空、编辑及 rewind 在提交时复核，不扫描其它任务目录。
   自动导入在首次文件系统访问前拒绝 UNC、WebDAV 和 Windows 设备命名空间；先解码兼容
   图片 URL，再检查路径，不能等 `realpath` 触发网络解析后才判断目录范围。
   确认消息未发布时，新建引用的回滚复用原账号的补偿日志；旧数据库已关闭时保留待补偿 ID，
@@ -379,6 +420,25 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   是否仍被消息引用，不能在正文尚未替换地址时删除导入正在复用的引用。
   无可信 SDK session、原生长目录 hash 布局、SSH 或已删除源文件不能靠此恢复；未成功
   导入的直接路径仍依赖源文件存在，不得声称已持久入库。
+- Desktop 本机任务的消息里，嵌入的图片、视频、音频若写的是相对路径，直接拼到任务工作
+  目录找不到时，复用正文路径 chip 的同一套解析（`fs:resolve-path`：任务工作目录内按后缀
+  搜索，唯一命中才采用）换成真实文件；没有命中或命中多个时保持原拼接。Agent 常先进入
+  子文件夹工作再交付相对该子文件夹的路径，这一兜底让播放器与正文路径的结论一致。搜索
+  默认跳过 `out`、`build`、`dist` 等目录，但路径自己点名经过的那一层会进入（`renders/out/
+  clip.mp4` 只进入父目录为 `renders` 的 `out`，首段就是被跳过目录时仍跳过；批量解析时
+  这一放行只对点名它的那条路径生效）。解析
+  完成前不加载媒体，避免播放器先用拼接地址进入失败态；含 `%` 的路径不搜索（主进程查找前
+  会解码，可能换成另一个文件）；查找前把 `./`、重复分隔符、`..` 规范掉（越出任务目录的路径不搜索），
+  没有命中时仍按原始写法加载。本地音频统一走 `xdt-audio://`，`xdt-file://` 只放行图片和
+  视频。只在会话视图已确认任务在本机执行时搜索（`ChatSessionFileContext` 的
+  `localConfirmed`）：远程任务仍按拼接结果经远程媒体通道取件；设备归属可能晚于首次渲染
+  才注入，归属未确认前同样不搜索。伙伴协作卡展开的子任务结果按子任务自己的归属判定（父任务
+  是本机不代表子任务是本机）；右栏 Cindy Make 页签按宿主给出的归属判定。没有命中 / 命中多个
+  不是最终结论（回复可能先引用产物、文件后写出）：新挂载、流式结束、窗口重新聚焦时重查，
+  主进程同时跳过它对否定结论的 30 秒缓存；流式结束 / 聚焦时若有更早发出的查找还没回来，
+  它回来仍未命中就再补查一次；流式结束随渲染方式切换而重挂载时，由新实例接上这一时机；
+  从未命中变成找到时重建媒体元素（文件恰好写在直接拼接位置时地址不变，失败态不会自行重试）；
+  唯一命中不重查。实现见 `useWorkspaceMediaPath.tsx`。
 - Desktop 的图片加载失败默认显示暂不可用，通过现有 preload 图片读取接口确认源文件
   `ENOENT`（IPC `NOT_FOUND`）才显示缺失；不使用被受管协议 CORS 策略禁止的 renderer fetch。
   流式输出时保留加载状态，流式结束、地址更新、窗口重新聚焦或网络恢复时自然重试，

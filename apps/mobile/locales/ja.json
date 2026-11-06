@@ -1,0 +1,7 @@
+{
+  "ios": {
+    "NSMicrophoneUsageDescription": "Cindy はリモートセッションで音声入力を行うためにマイクへのアクセスを必要とします。",
+    "NSCameraUsageDescription": "Cindy は写真を撮影してリモートセッションに添付するためにカメラへのアクセスを必要とします。",
+    "NSPhotoLibraryUsageDescription": "Cindy は最近の写真やスクリーンショットを表示してすばやく添付できるように、写真ライブラリへのアクセスを必要とします。"
+  }
+}

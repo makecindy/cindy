@@ -13,6 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
+import type { MockInstance } from 'vitest';
 import { createHash } from 'node:crypto';
 import { AsyncResource } from 'node:async_hooks';
 import { withPluginPageTicket, consumePluginPageTicket, restorePluginPageSession } from '../../mcp-apps/pluginPageCall.js';
@@ -69,6 +70,7 @@ const {
     orgName: 'Acme',
   })),
 }));
+const handoffHolder = vi.hoisted(() => ({ store: null as unknown }));
 const releaseMutationMock = vi.fn();
 const appSessionBoundaryPendingMock = vi.fn(() => false);
 const appVersionMock = vi.fn(() => '2.3.4');
@@ -116,9 +118,15 @@ const dirDepositMock = vi.fn(() => ({ ok: true, receipt: { token: 'dir-ticket' }
 const saveDepositMock = vi.fn(() => ({ ok: true, receipt: { token: 'save-ticket' } }));
 const liveGrantStateMock = vi.fn();
 const alsSessionContextMock = vi.fn();
+const cardRegisterMock = vi.hoisted(() => vi.fn());
 const resolvedAttachmentOrigins: Array<'user' | 'tool' | undefined> = [];
 
 vi.mock('electron', () => ({ app: { getPath: () => tmpUserData } }));
+const githubSignIn = vi.hoisted(() => ({ read: vi.fn(), open: vi.fn(() => true) }));
+vi.mock('../../git-context/githubSetupIpc.js', () => ({
+  readGithubConnection: githubSignIn.read,
+  openGithubSignIn: githubSignIn.open,
+}));
 vi.mock('../../appSessionState.js', () => ({
   ownerScopedUserDataPath: (...parts: string[]) => path.join(tmpUserData, ...parts),
   getActiveAppSession: () => ({ mode: 'cloud', dataOwnerId: 'member-1', generation: 7 }),
@@ -141,7 +149,8 @@ vi.mock('../../logger.js', () => ({
   createLogger: () => ({ info: logInfoMock, warn: logWarnMock, error: () => {}, debug: () => {} }),
 }));
 // Claude 走建线闭包 ctx；Codex / Pi 用此 mock 模拟 HTTP bridge 的 ALS 恢复。
-vi.mock('@cindy/mcps', () => ({
+vi.mock('@cindy/mcps', async (importOriginal) => ({
+  resolveLiziMcpSessionContext: (await importOriginal<typeof import('@cindy/mcps')>()).resolveLiziMcpSessionContext,
   getLiziMcpSessionContext: () => alsSessionContextMock(),
 }));
 
@@ -186,7 +195,10 @@ const sessionSnapshotMock = vi.fn(async (): Promise<{
   remoteHostId: null,
 }));
 vi.mock('../../cindy-brain/index.js', () => ({
-  getGhostManager: () => ({ list: listMock, readApprovedInstallReceipt: approvedReceiptMock, managedRootDirs: () => [] }),
+  getGhostManager: () => ({ list: listMock,
+    findInstalledInstance: (id: string) => listMock().find(ghost => installedGhostStoragePart(ghost as InstalledGhost) === id),
+    readApprovedInstallReceipt: approvedReceiptMock, managedRootDirs: () => [] }),
+  listInstalledGhostsAsync: async () => listMock(),
   ghostForgeForbiddenRootDirs: () => [],
   listAvailableGhostsForAuthorization: () => listMock(),
   findAvailableGhostForAuthorization: (id: string) =>
@@ -195,9 +207,10 @@ vi.mock('../../cindy-brain/index.js', () => ({
   acquireGhostMutationLeaseForMcp: acquireMutationLeaseMock,
   installOrUpdateLocalGhostPackageFromForge: forgeInstallPackageMock,
   getGhostPipeDispatcher: () => ({ callGhostTool: dispatchMock }),
-  getGhostCardService: () => ({ registerCall: () => {}, finalizeCall: () => null }),
+  getGhostCardService: () => ({ registerCall: cardRegisterMock, finalizeCall: () => null, isTurnEnd: () => false }),
   getGhostSetupAssessment: setupAssessmentMock,
   isGhostAvailableForActiveSession: activeSessionAvailableMock,
+  getGhostHandoffStore: () => handoffHolder.store,
 }));
 vi.mock('../../cindy-brain/ghostSetupCoordinator.js', () => ({
   getGhostSetupCoordinator: () => ({
@@ -216,6 +229,7 @@ vi.mock('../../cindy-brain/dirDeposit.js', () => ({
   getDirDepositVault: () => ({ deposit: dirDepositMock }),
   getSaveDepositVault: () => ({ deposit: saveDepositMock }),
   isPathInsideDir: () => false,
+  isDepositExcludedFileName: (name: string) => name === '.env' || name.startsWith('.env.'),
 }));
 vi.mock('../../cindy-brain/ghostGrantConfirmBridge.js', () => ({
   getGhostGrantConfirmBridge: () => ({ request: confirmRequestMock }),
@@ -246,7 +260,8 @@ vi.mock('../../plugin-publisher/host.js', () => ({
   getPluginPublisherOrchestrator: vi.fn(),
   startPluginPublish: startPluginPublishMock,
 }));
-vi.mock('../../cindy-media/blobStore.js', () => ({ mimeForExt: () => 'image/png' }));
+// Existing cases classify through the mock below; only handoff routing reads non-media extensions.
+vi.mock('../../cindy-media/blobStore.js', () => ({ mimeForExt: (ext: string) => (['.csv', ''].includes(ext) ? null : 'image/png') }));
 vi.mock('../../cindy-media/ledger.js', () => ({
   hasRef: ledgerHasRefMock,
   hasGhostToolGrant: ledgerHasGhostToolGrantMock,
@@ -463,6 +478,7 @@ beforeEach(() => {
   liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: null, isCurrent: () => true });
   callCindyMediaMock.mockReset();
   alsSessionContextMock.mockReset();
+  cardRegisterMock.mockClear();
   logWarnMock.mockClear();
   logInfoMock.mockClear();
   releaseMutationMock.mockClear();
@@ -1332,6 +1348,30 @@ describe('connect_account ordinary task entry', () => {
     expect(ensureReadyMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();
     expect(grantAttachmentsMock).not.toHaveBeenCalled();
+  });
+  // Rule (Dash, 2026-11-06, plan D): when this computer is not signed in to GitHub, connecting the
+  // GitHub plugin from a task should lead to Cindy's own GitHub sign-in instead of "no setup action".
+  // Minimal input: a gh-cli plugin, signed out → signed in → explicit reconnect (unit).
+  it('opens Cindy\'s GitHub sign-in for a gh-cli plugin and reports ready once signed in', async () => {
+    listMock.mockReturnValue([chipGhost('cindy-github', ['tool'], {
+      network: { secrets: [{ key: 'my_token', label: 'GitHub', source: 'gh-cli' }] },
+    })]);
+    githubSignIn.read.mockResolvedValueOnce({ status: 'missing' });
+    expect(await makeDeps().connectAccount!({ kind: 'plugin', id: 'cindy-github' }))
+      .toMatchObject({ ok: false, errorCode: 'GITHUB_SIGN_IN_REQUIRED', signInOpened: true, connection: 'missing' });
+    expect(githubSignIn.open).toHaveBeenCalledTimes(1);
+    // Review (Codex P2 / Greptile P1 on #9022): readiness must use the fallback token this plugin's own
+    // requests read (its instance and declared key), not the GitHub plugin's.
+    expect(githubSignIn.read).toHaveBeenCalledWith({ instanceId: 'cindy-github', key: 'my_token' });
+    githubSignIn.read.mockResolvedValue({ status: 'connected', login: 'octo', source: 'gh-cli' });
+    expect(await makeDeps().connectAccount!({ kind: 'plugin', id: 'cindy-github' }))
+      .toMatchObject({ ok: true, status: 'ready', login: 'octo' });
+    expect(githubSignIn.open).toHaveBeenCalledTimes(1);
+    expect(await makeDeps().connectAccount!({ kind: 'plugin', id: 'cindy-github', reauthorize: true }))
+      .toMatchObject({ ok: false, errorCode: 'GITHUB_SIGN_IN_REQUIRED', signInOpened: true });
+    expect(githubSignIn.open).toHaveBeenCalledTimes(2);
+    expect(ensureReadyMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
   });
   it('blocks disabled GitHub before offering its existing connection method', async () => {
     listMock.mockReturnValue([chipGhost('cindy-github')]);
@@ -3806,7 +3846,32 @@ describe('plugin page audience and shared tool execution', () => {
     const info = await deps.getAwakeGhost('art');
     expect(info).toMatchObject({ ok: true, ghost: { tools: [] } });
     const result = await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {} });
+    expect(result).toMatchObject({ ok: false, errorCode: 'TOOL_NOT_FOUND',
+      message: expect.stringContaining('只供插件页面调用') });
+    expect(result).toHaveProperty('message', expect.stringContaining('模型可见的工具: (无)'));
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+  // The real ghost_call entry used to mistake an
+  // app-only tool for a missing capability. Existing case checked only the code.
+  // Minimal input: one app-only tool + one model opener; unit, no sandbox/network.
+  it.each(['run', 'missing', 'nested_operation'])('guides model calls to %s without dispatching', async tool => {
+    const ghost = pageGhost();
+    ghost.manifest.tools!.push({ name: 'open_view', description: '打开页面' });
+    ghost.manifest.mcpApps = { ui: {
+      resources: [{ uri: 'ui://records', file: 'ui/page.html' }],
+      tools: { run: { visibility: ['app'] }, open_view: { resourceUri: 'ui://records', visibility: ['model'] } },
+    } };
+    if (tool === 'nested_operation') ghost.manifest.tools!.push({ name: 'call_tool', description: '分派' });
+    listMock.mockReturnValue([ghost]);
+    const result = await makeDeps().callGhostTool({ ghostId: 'art', tool, args: {} });
     expect(result).toMatchObject({ ok: false, errorCode: 'TOOL_NOT_FOUND' });
+    if (tool === 'run') {
+      expect(result).toHaveProperty('message', '插件 art 已声明工具 run，但它只供插件页面调用，模型不能直接 ghost_call。请先通过 ghost_call 调用模型可见的开页面工具: open_view，再由页面调用 run。不要据此判定插件缺少该能力。');
+    } else if (tool === 'missing') {
+      expect(result).toHaveProperty('message', '插件 art 没有工具 missing;可用工具: open_view');
+    } else {
+      expect(result).toHaveProperty('message', expect.stringContaining('tool:"call_tool",args:{name:"nested_operation"'));
+    }
     expect(dispatchMock).not.toHaveBeenCalled();
   });
   // #4421074557, unit: real ghost_call entry must strip page-private metadata even
@@ -3857,6 +3922,19 @@ describe('plugin page audience and shared tool execution', () => {
     const business = { content: [{ id: 1 }], _meta: { business: 'legacy' } };
     dispatchMock.mockResolvedValueOnce({ ok: true, result: business } as never);
     expect(await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {} })).toMatchObject({ ok: true, result: business });
+  });
+  // Unit: a task woken by another task's tool call (send_to_session) started its Claude process
+  // inside the waker's async context; its plugin cards were then recorded under the waker, so the
+  // phone could not open them. A Claude server's own task context wins over that ambient context.
+  it('attributes a Claude task call to its own task, not to an ambient context from the task that woke it', async () => {
+    const ghost = pageGhost(); delete ghost.manifest.mcpApps;
+    listMock.mockReturnValue([ghost]);
+    const deps = makeDeps('claude-code', 's1');
+    alsSessionContextMock.mockReturnValue({ sessionId: 'waking-task', sessionInstanceId: 'waking-instance', workingDir: '/other' });
+    expect(await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {} })).toMatchObject({ ok: true });
+    expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1' }));
+    expect(cardRegisterMock).toHaveBeenCalledTimes(1);
+    expect(cardRegisterMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ sessionId: 's1', sessionInstanceId: 's1-instance' }));
   });
   it('uses the explicit card task context and still enforces its workdir gate', async () => {
     const { withPluginPageTicket, consumePluginPageTicket } = await import('../../mcp-apps/pluginPageCall.js');
@@ -3915,5 +3993,294 @@ describe('「我的浏览器」取代插件自有页面工具', () => {
     const [ghost] = await makeDeps().listAwakeGhosts();
     expect(ghost.tools.map((tool) => tool.name)).toEqual(['browser_read', 'browser_act', 'browser_policy']);
     expect(ghost.manual?.map((item) => item.name)).toEqual(['browser']);
+  });
+});
+
+describe('对话文件交接(cindy_handoff_files)', async () => {
+  // Rule: plugin-security-and-authoring.md §4 handoff + §5 compatibility red line.
+  // Gap: non-media attachments had no host-owned reference path. Tier: unit through
+  // callGhostTool with the real classifier and a real store under the temp userData.
+  const { GhostHandoffStore } = await import('../../cindy-brain/handoffStore');
+  const { classifyLocalAttachmentPath: realClassify } =
+    await vi.importActual<typeof import('../../cindy-brain/ghostLocalPathGrant')>('../../cindy-brain/ghostLocalPathGrant');
+  const handoffTool = { name: 'run', description: 'd', parameters: { type: 'object', properties: { cindy_handoff_files: { type: 'array' } } } };
+  let store: InstanceType<typeof GhostHandoffStore>;
+  let root = 0;
+  const useStore = (quota?: { files: number; bytes: number }) => {
+    const dir = path.join(tmpUserData, `ghost-handoff-${++root}`);
+    store = new GhostHandoffStore({ root: () => dir, quota });
+    handoffHolder.store = store;
+  };
+  const csv = (name: string, content: string) => {
+    const file = path.join(outsideDir, name);
+    fs.writeFileSync(file, content);
+    return file;
+  };
+  const dispatchedArgs = () => (dispatchMock.mock.calls.at(-1) as unknown as [{ args: Record<string, unknown> }] | undefined)?.[0].args;
+  beforeEach(() => {
+    useStore();
+    classifyLocalAttachmentPathMock.mockImplementation(realClassify);
+    listMock.mockReturnValue([chipGhost('art', ['tool'], { tools: [handoffTool] })]);
+  });
+
+  // Minimal input: one 3-byte CSV inside the working directory, no confirmation needed.
+  it('gives a declaring tool a reference whose copy matches the original bytes', async () => {
+    classifyLocalAttachmentPathMock.mockImplementation((...args: Parameters<typeof realClassify>) => {
+      const result = realClassify(...args);
+      return result.kind === 'outside-workdir' ? { ...result, kind: 'inside-workdir' } : result;
+    });
+    const file = csv('a.csv', 'a,b');
+
+    const result = await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, attachments: [file] });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(confirmRequestMock).not.toHaveBeenCalled();
+    const [handed] = dispatchedArgs()!.cindy_handoff_files as Array<{ ref: string; name: string; size: number; sha256: string; createdAt: number; expiresAt: number }>;
+    expect(handed).toMatchObject({ name: 'a.csv', size: 3, sha256: createHash('sha256').update('a,b').digest('hex') });
+    expect(handed!.expiresAt - handed!.createdAt).toBe(7 * 24 * 60 * 60_000);
+    expect(dispatchedArgs()).not.toHaveProperty('attachments');
+    const opened = await store.open('art', handed!.ref);
+    expect(await opened!.file.readFile({ encoding: 'utf8' })).toBe('a,b');
+    await opened!.file.close();
+  });
+
+  // Compatibility: without the reserved parameter (even with Library) nothing changes.
+  it('keeps the existing non-media error for tools that do not declare it', async () => {
+    listMock.mockReturnValue([chipGhost('art', ['tool'], { library: true })]);
+    const file = csv('legacy.csv', 'x');
+
+    const result = await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, attachments: [file] });
+
+    expect(result).toEqual({
+      ok: false,
+      errorCode: 'ATTACHMENT_INVALID',
+      message: '该文件类型不能走 attachments 过户(legacy.csv):attachments 仅收媒体文件(图片/视频/音频);其它类型请改用 ghost_call 顶层 dir 参数按单文件过户',
+    });
+    expect(await store.list('art')).toEqual([]);
+  });
+
+  // Compatibility: a same-name business parameter that is not the reserved array keeps its behaviour.
+  it('ignores a same-name parameter that is not declared as an array', async () => {
+    listMock.mockReturnValue([chipGhost('art', ['tool'], { tools: [{ ...handoffTool, parameters: { type: 'object', properties: { cindy_handoff_files: { type: 'string' } } } }] })]);
+    const result = await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: { cindy_handoff_files: 'business' }, attachments: [csv('string.csv', 'x')] });
+    expect(result).toMatchObject({ ok: false, errorCode: 'ATTACHMENT_INVALID', message: expect.stringContaining('其它类型请改用 ghost_call 顶层 dir') });
+    expect(await store.list('art')).toEqual([]);
+  });
+
+  // Unit: preserve the post-classification redirect rejection on Windows without symlink
+  // privileges (§3.3). Follow the native-approval attachment fixture above: a real parent
+  // junction redirects a regular file. Keep the file-link variant where privileges allow it.
+  it('refuses a classified path that became a link before reading', async () => {
+    const sourceDir = fs.mkdtempSync(path.join(outsideDir, 'classified-'));
+    const targetDir = fs.mkdtempSync(path.join(outsideDir, 'redirected-'));
+    const source = path.join(sourceDir, 'swapped.csv');
+    const target = path.join(targetDir, 'swapped.csv');
+    fs.writeFileSync(source, 'original');
+    fs.writeFileSync(target, 'secret');
+    let redirected = false;
+    let classifiedPath = '';
+    classifyLocalAttachmentPathMock.mockImplementation((...args: Parameters<typeof realClassify>) => {
+      const result = realClassify(...args);
+      if (result.kind !== 'outside-workdir') return result;
+      classifiedPath = result.absPath;
+      fs.unlinkSync(source);
+      try {
+        fs.symlinkSync(target, source);
+      } catch (error) {
+        if (process.platform !== 'win32' || (error as NodeJS.ErrnoException).code !== 'EPERM') throw error;
+        // A parent junction needs no file-symlink privilege and still redirects a regular
+        // file to different bytes. The opened file must fail identity / realpath validation.
+        fs.rmdirSync(sourceDir);
+        fs.symlinkSync(targetDir, sourceDir, 'junction');
+      }
+      expect(fs.realpathSync.native(source)).toBe(fs.realpathSync.native(target));
+      redirected = true;
+      return { ...result, kind: 'inside-workdir' };
+    });
+    const realOpen = fs.promises.open.bind(fs.promises);
+    const reads: MockInstance[] = [];
+    const open = vi.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+      const handle = await realOpen(...args);
+      if (args[0] === classifiedPath) reads.push(vi.spyOn(handle, 'read'));
+      return handle;
+    });
+    try {
+      const result = await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, attachments: [source] });
+      expect(redirected).toBe(true);
+      expect(result).toMatchObject({ ok: false, errorCode: 'ATTACHMENT_INVALID', message: '附件读取失败:swapped.csv(文件不可读或已被移动)' });
+      expect(open).toHaveBeenCalledWith(classifiedPath, expect.any(Number));
+      for (const read of reads) expect(read).not.toHaveBeenCalled();
+      expect(dispatchMock).not.toHaveBeenCalled();
+      expect(confirmRequestMock).not.toHaveBeenCalled();
+      expect(await store.list('art')).toEqual([]);
+    } finally {
+      open.mockRestore();
+      for (const read of reads) read.mockRestore();
+    }
+  });
+
+  // An approval that lapses while the copies are written is re-checked before dispatch.
+  it('drops new copies when authorization lapses during the final write', async () => {
+    const write = store.import.bind(store);
+    vi.spyOn(store, 'import').mockImplementation(async (...args) => {
+      const files = await write(...args);
+      activeSessionAvailableMock.mockReturnValue(false);
+      return files;
+    });
+    const result = await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, attachments: [csv('lapse.csv', 'x')] });
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(await store.list('art')).toEqual([]);
+  });
+
+  // Approved bytes are the stored bytes; a denial leaves no copy behind.
+  it('stores the bytes read before confirmation and nothing after a denial', async () => {
+    const file = csv('changed.csv', 'before');
+    confirmRequestMock.mockImplementationOnce(async () => {
+      fs.writeFileSync(file, 'after');
+      return { confirmed: true, allowDirs: false };
+    });
+    await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, attachments: [file] });
+    expect(confirmRequestMock).toHaveBeenCalledWith('s1', expect.objectContaining({ lane: 'handoff' }));
+    const [handed] = dispatchedArgs()!.cindy_handoff_files as Array<{ ref: string }>;
+    const opened = await store.open('art', handed!.ref);
+    expect(await opened!.file.readFile({ encoding: 'utf8' })).toBe('before');
+    await opened!.file.close();
+
+    useStore();
+    dispatchMock.mockClear();
+    confirmRequestMock.mockResolvedValueOnce({ confirmed: false, allowDirs: false });
+    const denied = await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, attachments: [file] });
+    expect(denied).toMatchObject({ ok: false, errorCode: 'ATTACHMENT_INVALID' });
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(await store.list('art')).toEqual([]);
+  });
+
+  // Full Access is not a user grant: switching back to Ask asks again.
+  it('auto-approves under Full Access without remembering it for Ask', async () => {
+    let permissionMode = 'bypassPermissions';
+    liveGrantStateMock.mockImplementation(() => ({ permissionMode, remoteHostId: null }));
+    const deps = makeDeps('claude-code', 'handoff-full');
+    const file = csv('full.csv', 'x');
+
+    await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {}, attachments: [file] });
+    expect(confirmRequestMock).not.toHaveBeenCalled();
+    expect(ledgerRefs).toEqual([]);
+
+    permissionMode = 'ask';
+    await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {}, attachments: [file] });
+    expect(confirmRequestMock).toHaveBeenCalledWith('handoff-full', expect.objectContaining({ lane: 'handoff' }));
+  });
+
+  // Limits and quota reject before a confirmation card is shown.
+  it('rejects oversize files and a full quota before asking', async () => {
+    const big = path.join(outsideDir, 'big.csv');
+    fs.writeFileSync(big, '');
+    fs.truncateSync(big, 64 * 1024 * 1024 + 1);
+    const oversize = await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, attachments: [big] });
+    expect(oversize).toMatchObject({ ok: false, errorCode: 'ATTACHMENT_INVALID' });
+
+    useStore({ files: 1, bytes: 1024 });
+    await store.import('art', [{ name: 'old.csv', bytes: new Uint8Array([1]) }], () => {});
+    const full = await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, attachments: [csv('new.csv', 'x')] });
+    expect(full).toMatchObject({ ok: false, errorCode: 'ATTACHMENT_INVALID' });
+    expect(confirmRequestMock).not.toHaveBeenCalled();
+    expect(await store.list('art')).toHaveLength(1);
+  });
+
+  // Copies are stored last: a later gate that fails (here the dir card) leaves no copy.
+  it('stores no copy when a later handoff gate is denied', async () => {
+    const dir = path.join(outsideDir, 'later-gate');
+    fs.mkdirSync(dir, { recursive: true });
+    confirmRequestMock.mockImplementation(async (...args: unknown[]) =>
+      ({ confirmed: (args[1] as { lane: string }).lane === 'handoff', allowDirs: false }));
+    const result = await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, attachments: [csv('late.csv', 'x')], dir });
+    expect(result).toMatchObject({ ok: false, errorCode: 'DIR_INVALID' });
+    expect(await store.list('art')).toEqual([]);
+  });
+
+  // A file that grew past the cap after classification is not read into memory.
+  it('rejects a file that grew past the cap after classification', async () => {
+    const grown = path.join(outsideDir, 'grown.csv');
+    fs.writeFileSync(grown, '');
+    fs.truncateSync(grown, 64 * 1024 * 1024 + 1);
+    classifyLocalAttachmentPathMock.mockImplementation((...args: Parameters<typeof realClassify>) => {
+      const result = realClassify(...args);
+      return 'size' in result ? { ...result, kind: 'inside-workdir', size: 1 } : result;
+    });
+    const result = await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, attachments: [grown] });
+    expect(result).toMatchObject({ ok: false, errorCode: 'ATTACHMENT_INVALID', message: expect.stringContaining('文件过大') });
+    expect(await store.list('art')).toEqual([]);
+  });
+
+  // Cleanup after an account switch still deletes under the account that stored the copies.
+  it('discards failed-call copies under the owner root they were written to', async () => {
+    const first = path.join(tmpUserData, `ghost-handoff-owner-a-${++root}`);
+    let current = first;
+    store = new GhostHandoffStore({ root: () => current });
+    handoffHolder.store = store;
+    const write = store.import.bind(store);
+    vi.spyOn(store, 'import').mockImplementation(async (...args) => {
+      const files = await write(...args);
+      current = path.join(tmpUserData, `ghost-handoff-owner-b-${root}`);
+      return files;
+    });
+    dispatchMock.mockResolvedValueOnce({ ok: false, errorCode: 'GHOST_CRASHED', message: 'offline' } as never);
+    await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, attachments: [csv('switch.csv', 'x')] });
+    current = first;
+    expect(await store.list('art')).toEqual([]);
+  });
+
+  // Stored copies hold the instance until dispatch settles, so a source change waits for the call.
+  it('holds the instance from storing the copies until dispatch settles', async () => {
+    let busyDuringDispatch: boolean | undefined;
+    dispatchMock.mockImplementationOnce(async () => {
+      busyDuringDispatch = store.isBusy('art');
+      return { ok: true as const, result: 'done' };
+    });
+    await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, attachments: [csv('hold.csv', 'x')] });
+    expect(busyDuringDispatch).toBe(true);
+    expect(store.isBusy('art')).toBe(false);
+  });
+
+  // During a source change the call is refused before storing anything (Codex 4431230310).
+  it('refuses the handoff while the instance is changing source', async () => {
+    const unblock = store.blockForRelocation(['art']);
+    try {
+      const result = await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, attachments: [csv('moving.csv', 'x')] });
+      expect(result).toMatchObject({ ok: false, errorCode: 'ATTACHMENT_INVALID' });
+    } finally {
+      unblock();
+    }
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(await store.list('art')).toEqual([]);
+  });
+
+  // A call that never succeeds publishes no card; its copies must not fill the quota.
+  it('drops the copies when the plugin call fails', async () => {
+    dispatchMock.mockResolvedValueOnce({ ok: false, errorCode: 'GHOST_CRASHED', message: 'offline' } as never);
+    // Codex 4431531968: dropped while still held, or a source change could move them first.
+    const heldWhileDeleting: boolean[] = [];
+    const remove = store.delete.bind(store);
+    const spy = vi.spyOn(store, 'delete').mockImplementation((...args) => {
+      heldWhileDeleting.push(store.isBusy('art'));
+      return remove(...args);
+    });
+    try {
+      const result = await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, attachments: [csv('crash.csv', 'x')] });
+      expect(result).toMatchObject({ ok: false, errorCode: 'GHOST_CRASHED' });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(heldWhileDeleting).toEqual([true]);
+    expect(await store.list('art')).toEqual([]);
+  });
+
+  // The reserved value is host-minted: a model-supplied one never reaches the plugin.
+  it('strips a forged reserved argument when nothing is handed over', async () => {
+    await makeDeps().callGhostTool({
+      ghostId: 'art', tool: 'run', args: { keep: 1, cindy_handoff_files: [{ ref: 'handoff:00000000-0000-4000-8000-000000000000' }] },
+    });
+    expect(dispatchedArgs()).toEqual({ keep: 1 });
   });
 });

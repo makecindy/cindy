@@ -22,6 +22,7 @@
  */
 
 import { stripTrailingPathSeparators } from '../../shared/pathText';
+import { isWindowsPathLike } from '../../shared/workingDir';
 
 /** Image extension whitelist. Case-insensitive. Allows `?v=2`-style suffix. */
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|bmp|ico)(\?.*)?$/i;
@@ -236,6 +237,7 @@ export function resolveKnownLocalFileHref(
  *
  * Behavior:
  *   - `file://...`                    → decode + strip leading slash on Win
+ *   - `/C:/...` + Windows cwd         → strip the extra leading slash
  *   - POSIX absolute (`^/`)           → return as-is
  *   - Windows absolute (`^[A-Za-z]:`) → return as-is
  *   - relative                        → joinPath(cwd, href)
@@ -260,6 +262,7 @@ export function resolveLocalPath(href: string, cwd: string): string {
     if (/^\/[A-Za-z]:[\\/]/.test(p)) p = p.slice(1);
     return p;
   }
+  href = normalizeWindowsDriveHref(href, cwd);
   if (href.startsWith('/')) return href;
   if (WIN_ABS_RE.test(href)) return href;
   // UNC share (`\\server\share\...`) is already absolute on Windows — joining
@@ -294,6 +297,8 @@ export function resolveLocalPath(href: string, cwd: string): string {
  */
 export function resolveToolFilePath(rawPath: string, workingDir: string): string {
   if (!rawPath || !workingDir) return rawPath;
+  // Tool paths are literal runtime results, not model-authored Markdown hrefs.
+  if (rawPath.startsWith('/')) return rawPath;
   return resolveLocalPath(rawPath, workingDir);
 }
 
@@ -323,8 +328,18 @@ export type SmartResolveResult =
   | { status: 'multiple'; candidates: string[] }
   | { status: 'none'; fallbackAbsPath: string };
 
+/** Model-authored /C:/ links name a drive only for a Windows file owner.
+ * Use the task's cwd, never the viewing device's OS: /C: is legal on POSIX. */
+function normalizeWindowsDriveHref(href: string, workingDir: string): string {
+  if (!isWindowsPathLike(workingDir)) return href;
+  // Directory classification strips /C:/ to /C:. Keep the drive-root slash:
+  // C: alone names the drive's current directory, not its root.
+  if (/^\/[A-Za-z]:$/.test(href)) return `${href.slice(1)}/`;
+  return /^\/[A-Za-z]:[\\/]/.test(href) ? href.slice(1) : href;
+}
+
 function toMainLookupHref(href: string, workingDir: string): string {
-  if (!href.startsWith('file://')) return href;
+  if (!href.startsWith('file://')) return normalizeWindowsDriveHref(href, workingDir);
   // File URL conversion yields literal text; main still decodes its href input.
   return resolveLocalPath(href, workingDir).replace(/%/g, '%25');
 }
@@ -378,6 +393,14 @@ export async function resolveLocalPathSmart(
 const SMART_RESOLVE_CACHE_CAP = 500;
 const smartResolveCache = new Map<string, SmartResolveResult>();
 const smartResolveInflight = new Map<string, Promise<SmartResolveResult>>();
+// When each cached entry was last answered, and re-checks in flight; see
+// `revalidateNegativeLocalPathSmart`.
+const smartResolveCheckedAt = new Map<string, number>();
+const smartRevalidateInflight = new Map<string, Promise<SmartResolveResult>>();
+// When an in-flight lookup was sent to the main process (absent while queued).
+const smartLookupSentAt = new Map<string, number>();
+/** A negative answer younger than this is not re-checked (remount bursts reuse it). */
+const NEGATIVE_RECHECK_MIN_MS = 2_000;
 
 function smartResolveCacheKey(workingDir: string, href: string): string {
   return `${workingDir}::${href}`;
@@ -407,7 +430,29 @@ interface PendingBatchEntry {
 }
 // workingDir → (href → waiters). Swapped for a fresh Map on each flush.
 let pendingBatch = new Map<string, Map<string, PendingBatchEntry>>();
+// Same shape for re-checks of cached negative answers; flushed in the same
+// microtask as one `revalidateNegative` IPC per workingDir.
+let pendingRevalidateBatch = new Map<string, Map<string, PendingBatchEntry>>();
 let flushScheduled = false;
+
+function enqueueBatch(
+  batches: Map<string, Map<string, PendingBatchEntry>>,
+  workingDir: string,
+  href: string,
+  resolve: (result: SmartResolveResult) => void,
+): void {
+  let hrefMap = batches.get(workingDir);
+  if (!hrefMap) {
+    hrefMap = new Map();
+    batches.set(workingDir, hrefMap);
+  }
+  let entry = hrefMap.get(href);
+  if (!entry) {
+    entry = { resolvers: [] };
+    hrefMap.set(href, entry);
+  }
+  entry.resolvers.push(resolve);
+}
 
 /** Convert one main-process batch entry into a SmartResolveResult. */
 function smartResultFromBatch(
@@ -426,6 +471,19 @@ function smartResultFromBatch(
   return { status: 'none', fallbackAbsPath: resolveLocalPath(href, workingDir) };
 }
 
+function storeSmartResult(key: string, result: SmartResolveResult): void {
+  // Capacity eviction: drop oldest insertion (Map preserves order).
+  if (!smartResolveCache.has(key) && smartResolveCache.size >= SMART_RESOLVE_CACHE_CAP) {
+    const oldest = smartResolveCache.keys().next().value;
+    if (oldest !== undefined) {
+      smartResolveCache.delete(oldest);
+      smartResolveCheckedAt.delete(oldest);
+    }
+  }
+  smartResolveCache.set(key, result);
+  smartResolveCheckedAt.set(key, Date.now());
+}
+
 /** Cache a resolved result, evict if over capacity, and wake every waiter. */
 function settleSmartResult(
   workingDir: string,
@@ -434,13 +492,10 @@ function settleSmartResult(
   result: SmartResolveResult,
 ): void {
   const key = smartResolveCacheKey(workingDir, href);
-  // Capacity eviction: drop oldest insertion (Map preserves order).
-  if (smartResolveCache.size >= SMART_RESOLVE_CACHE_CAP) {
-    const oldest = smartResolveCache.keys().next().value;
-    if (oldest !== undefined) smartResolveCache.delete(oldest);
-  }
-  smartResolveCache.set(key, result);
+  storeSmartResult(key, result);
   smartResolveInflight.delete(key);
+  smartRevalidateInflight.delete(key);
+  smartLookupSentAt.delete(key);
   const entry = hrefMap.get(href);
   if (entry) for (const resolve of entry.resolvers) resolve(result);
 }
@@ -448,8 +503,11 @@ function settleSmartResult(
 async function runBatchForDir(
   workingDir: string,
   hrefMap: Map<string, PendingBatchEntry>,
+  revalidateNegative = false,
 ): Promise<void> {
   const hrefs = [...hrefMap.keys()];
+  const sentAt = Date.now();
+  for (const href of hrefs) smartLookupSentAt.set(smartResolveCacheKey(workingDir, href), sentAt);
   const api = (typeof window !== 'undefined' ? window.electronAPI : undefined) as
     | { resolvePathBatch?: typeof window.electronAPI.resolvePathBatch }
     | undefined;
@@ -472,18 +530,28 @@ async function runBatchForDir(
   const lookups = [...new Set(lookupOf.values())];
 
   try {
-    const raw = await api.resolvePathBatch({ hrefs: lookups, workingDir });
+    const raw = await api.resolvePathBatch({
+      hrefs: lookups,
+      workingDir,
+      ...(revalidateNegative ? { revalidateNegative: true } : {}),
+    });
     for (const href of hrefs) {
       const result = smartResultFromBatch(href, workingDir, raw[lookupOf.get(href)!]);
       settleSmartResult(workingDir, href, hrefMap, result);
     }
   } catch {
-    // IPC failure shouldn't break clicks — every href falls back to legacy.
+    // IPC failure shouldn't break clicks — every href falls back to legacy. A
+    // failed re-check keeps the answer it was re-checking.
     for (const href of hrefs) {
-      settleSmartResult(workingDir, href, hrefMap, {
-        status: 'none',
-        fallbackAbsPath: resolveLocalPath(href, workingDir),
-      });
+      const kept = revalidateNegative
+        ? smartResolveCache.get(smartResolveCacheKey(workingDir, href))
+        : undefined;
+      settleSmartResult(
+        workingDir,
+        href,
+        hrefMap,
+        kept ?? { status: 'none', fallbackAbsPath: resolveLocalPath(href, workingDir) },
+      );
     }
   }
 }
@@ -491,9 +559,14 @@ async function runBatchForDir(
 function flushSmartResolveBatch(): void {
   flushScheduled = false;
   const batches = pendingBatch;
+  const rechecks = pendingRevalidateBatch;
   pendingBatch = new Map();
+  pendingRevalidateBatch = new Map();
   for (const [workingDir, hrefMap] of batches) {
     void runBatchForDir(workingDir, hrefMap);
+  }
+  for (const [workingDir, hrefMap] of rechecks) {
+    void runBatchForDir(workingDir, hrefMap, true);
   }
 }
 
@@ -517,23 +590,85 @@ export async function resolveLocalPathSmartCached(
   const key = smartResolveCacheKey(workingDir, href);
   const cached = smartResolveCache.get(key);
   if (cached) return cached;
-  const inflight = smartResolveInflight.get(key);
+  // A negative re-check still in flight answers this lookup too: the cache may have
+  // dropped the entry meanwhile, and a second plain lookup would race it.
+  const inflight = smartResolveInflight.get(key) ?? smartRevalidateInflight.get(key);
   if (inflight) return inflight;
 
   const promise = new Promise<SmartResolveResult>((resolve) => {
-    let hrefMap = pendingBatch.get(workingDir);
-    if (!hrefMap) {
-      hrefMap = new Map();
-      pendingBatch.set(workingDir, hrefMap);
-    }
-    let entry = hrefMap.get(href);
-    if (!entry) {
-      entry = { resolvers: [] };
-      hrefMap.set(href, entry);
-    }
-    entry.resolvers.push(resolve);
+    enqueueBatch(pendingBatch, workingDir, href, resolve);
   });
   smartResolveInflight.set(key, promise);
+  scheduleSmartResolveFlush();
+  return promise;
+}
+
+/**
+ * Re-check a cached `none` / `multiple` answer. A reply can cite an output file
+ * before it is written, so negative answers are not final for embedded media:
+ * callers re-check at their own boundaries (new mount, stream end, window
+ * focus). The main process skips its TTL cache for these hrefs too, otherwise
+ * it would hand back the same stale answer for 30s. Re-checks registered within
+ * one microtask share one IPC (and one workspace walk) per workingDir, like the
+ * initial batch.
+ *
+ * Without `boundaryAt` (a new mount) a negative answer from the last
+ * `NEGATIVE_RECHECK_MIN_MS` is reused, so a burst of remounts walks once. With
+ * `boundaryAt` (stream end, window focus — the moment files may have appeared)
+ * the answer is always re-checked, and a lookup already sent before that moment
+ * is followed by one more pass if it settles negative: its walk may have passed
+ * the output directory before the file was written. A lookup still queued, or
+ * sent after the boundary, already covers it.
+ *
+ * Returns null when there is nothing to re-check: no cached answer and nothing
+ * in flight, a unique match, or a recent negative answer on a plain mount.
+ */
+export function revalidateNegativeLocalPathSmart(
+  href: string,
+  workingDir: string,
+  boundaryAt?: number,
+): Promise<SmartResolveResult> | null {
+  const key = smartResolveCacheKey(workingDir, href);
+  if (boundaryAt !== undefined) {
+    const inflight = smartRevalidateInflight.get(key) ?? smartResolveInflight.get(key);
+    if (inflight) {
+      const sentAt = smartLookupSentAt.get(key);
+      // Same millisecond: the order is unknown, so treat it as sent before the boundary.
+      if (sentAt === undefined || sentAt > boundaryAt) return inflight;
+      return inflight.then((result) =>
+        result.status === 'unique' ? result : (queueNegativeRevalidation(key, href, workingDir) ?? result),
+      );
+    }
+  }
+  const cached = smartResolveCache.get(key);
+  if (!cached || cached.status === 'unique') return null;
+  const inflight = smartRevalidateInflight.get(key);
+  if (inflight) return inflight;
+  if (
+    boundaryAt === undefined &&
+    Date.now() - (smartResolveCheckedAt.get(key) ?? 0) < NEGATIVE_RECHECK_MIN_MS
+  ) {
+    return null;
+  }
+  return queueNegativeRevalidation(key, href, workingDir);
+}
+
+function queueNegativeRevalidation(
+  key: string,
+  href: string,
+  workingDir: string,
+): Promise<SmartResolveResult> | null {
+  const queued = smartRevalidateInflight.get(key);
+  if (queued) return queued;
+  const api = (typeof window !== 'undefined' ? window.electronAPI : undefined) as
+    | { resolvePathBatch?: typeof window.electronAPI.resolvePathBatch }
+    | undefined;
+  if (!api?.resolvePathBatch) return null;
+
+  const promise = new Promise<SmartResolveResult>((resolve) => {
+    enqueueBatch(pendingRevalidateBatch, workingDir, href, resolve);
+  });
+  smartRevalidateInflight.set(key, promise);
   scheduleSmartResolveFlush();
   return promise;
 }
@@ -542,7 +677,11 @@ export async function resolveLocalPathSmartCached(
 export function _clearSmartResolveCache(): void {
   smartResolveCache.clear();
   smartResolveInflight.clear();
+  smartResolveCheckedAt.clear();
+  smartRevalidateInflight.clear();
+  smartLookupSentAt.clear();
   pendingBatch = new Map();
+  pendingRevalidateBatch = new Map();
   flushScheduled = false;
 }
 

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
+import { mobileToolRowWording } from '@/i18n/toolWording';
 import { projectBotGroupProcess, readBotGroupProcessMessages, type BotGroupProcessRef, type BotGroupProcessMessage } from '@cindy/maker-shared/botGroupChat';
 import { projectWorkActivities, summarizeTeammateWork, teammateWorkSummaryText } from '@cindy/maker-shared/work-activity-projection';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
@@ -59,9 +60,9 @@ export function BotGroupProcessEntries({ messages, id, running = false }: { mess
       const activities = projectWorkActivities(segment.items, active, true).activities;
       const summary = summarizeTeammateWork(activities);
       summary.thinking ||= segment.items.some(item => item.kind === 'thinking');
-      return <TeammateWorkSegment key={segment.key} id={`${id}:${segment.key}`} title={teammateWorkSummaryText(summary, active, t)}
+      return <TeammateWorkSegment key={segment.key} id={`${id}:${segment.key}`} title={teammateWorkSummaryText(summary, active, t, mobileToolRowWording)}
         running={active && (summary.running || !summary.toolCount)} hasTools={summary.toolCount > 0}
-        failed={summary.failedCount > 0} last={index === projection.segments.length - 1}>
+        last={index === projection.segments.length - 1}>
         {activities.map(activity => activity.kind === 'tool' ? <View key={activity.key} style={{ gap: spacing.xs }}>
           <Text selectable style={{ color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>{activity.message.toolName}</Text>
           <Text selectable style={{ color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>{JSON.stringify(activity.message.toolInput, null, 2)}</Text>
@@ -69,6 +70,6 @@ export function BotGroupProcessEntries({ messages, id, running = false }: { mess
         </View> : null)}
       </TeammateWorkSegment>;
     })}
-    {running && (!projection.segments.length || projection.segments.at(-1)?.kind === 'content') && <TeammateWorkSegment id={`${id}:pending`} title={t(projection.segments.length ? 'chat.teammateProcess.thinking' : 'chat.teammateProcess.processing')} running hasTools={false} failed={false} />}
+    {running && (!projection.segments.length || projection.segments.at(-1)?.kind === 'content') && <TeammateWorkSegment id={`${id}:pending`} title={t(projection.segments.length ? 'chat.teammateProcess.thinking' : 'chat.teammateProcess.processing')} running hasTools={false} />}
   </View>;
 }

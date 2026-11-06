@@ -12,7 +12,7 @@ import {
 import { useTranslation } from "react-i18next";
 import type { MobileProviderMarkProps } from "./MobileProviderMark";
 import type { AgentKind } from "@cindy/model-providers/types";
-import type { UnifiedModelEntry } from "@cindy/model-providers";
+import { resolveStoredModelEntry, type UnifiedModelEntry } from "@cindy/model-providers";
 import type { MobileAgentCapabilities } from "./agentCapabilities";
 import type { ModelPickerSheetProps } from "./ModelPickerSheet";
 import { buildMobileModelSections } from "./providerModelSections";
@@ -68,7 +68,43 @@ function createFavoriteUid(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-export interface UnifiedMobilePickerOptions {
+/**
+ * 远程 Agent(已建任务):同账号其他电脑上开放了远程调用的供应商,接在被控电脑自己的供应商
+ * 之后,每个供应商一段、标题带电脑名(与桌面模型面板同口径)。
+ */
+export interface UnifiedMobileRemoteOptions {
+  catalogs: readonly RemoteAgentCatalog[];
+  /** 当前选中态(下一条消息时 Agent 所在电脑)属于哪份目录;null = 被控电脑。 */
+  selectedDeviceId: string | null;
+  /**
+   * 被控电脑的设备 id:按目录里的组摘要把组里其他电脑上的这个供应商收进组那一项,标题带台数
+   * (provider-groups.md §10)。缺省 = 不收起。
+   */
+  hostDeviceId?: string;
+  /**
+   * 已建任务:这个任务此刻归哪个组(null = 没归组)与 Agent 此刻在哪台、用哪个供应商(null = 被控电脑)。
+   * 归组的任务在组那一项里显示为正在用的,在里面选模型 = 留在此刻运行的那台、只换模型。
+   */
+  providerGroup?: {
+    bound: MobileProviderGroupEntry | null;
+    running: { deviceId: string | null; providerId: string | null };
+  };
+}
+
+/**
+ * 只限本机的原因是封闭清单，与桌面 ModelSelectorLocalOnlyReason 同口径；规则见
+ * docs/product-rules/model-selector-unified.md。
+ */
+export type MobileModelPickerLocalOnlyReason = 'plugin-task-local-route';
+
+/** 每个入口都必须声明模型来源；remote 为 undefined 只表示此刻不可用（如旧版被控电脑）。 */
+export type MobileModelPickerSource =
+  | { remote: UnifiedMobileRemoteOptions | undefined; localOnlyReason?: never }
+  | { remote?: never; localOnlyReason: MobileModelPickerLocalOnlyReason };
+
+export type UnifiedMobilePickerOptions = UnifiedMobilePickerBaseOptions & MobileModelPickerSource;
+
+export interface UnifiedMobilePickerBaseOptions {
   /** Request-owned edits, including favorites, never change persisted preferences. */
   preferenceScope?: 'request';
   /** Editing a selected row can update a draft without submitting the selection. */
@@ -84,28 +120,6 @@ export interface UnifiedMobilePickerOptions {
   scope: string;
   agents: readonly AgentKind[];
   loadCapabilities(agent: AgentKind): Promise<MobileAgentCapabilities>;
-  /**
-   * 远程 Agent(已建任务):同账号其他电脑上开放了远程调用的供应商,接在被控电脑自己的供应商
-   * 之后,每个供应商一段、标题带电脑名(与桌面模型面板同口径)。缺省 = 只列被控电脑的目录。
-   */
-  remote?: {
-    catalogs: readonly RemoteAgentCatalog[];
-    /** 当前选中态(下一条消息时 Agent 所在电脑)属于哪份目录;null = 被控电脑。 */
-    selectedDeviceId: string | null;
-    /**
-     * 被控电脑的设备 id:按目录里的组摘要把组里其他电脑上的这个供应商收进组那一项,标题带台数
-     * (provider-groups.md §10)。缺省 = 不收起。
-     */
-    hostDeviceId?: string;
-    /**
-     * 已建任务:这个任务此刻归哪个组(null = 没归组)与 Agent 此刻在哪台、用哪个供应商(null = 被控电脑)。
-     * 归组的任务在组那一项里显示为正在用的,在里面选模型 = 留在此刻运行的那台、只换模型。
-     */
-    providerGroup?: {
-      bound: MobileProviderGroupEntry | null;
-      running: { deviceId: string | null; providerId: string | null };
-    };
-  };
   /** source.deviceId = 这一行来自哪台电脑的目录(null / 缺省 = 被控电脑)。 */
   onSelect(
     configuration: MobileModelConfiguration,
@@ -626,11 +640,7 @@ export function UnifiedModelPickerSheet(
         (value) =>
           value.catalog.deviceId === source.deviceId && !value.catalog.offline,
       );
-      const entry = directory?.entries.find(
-        (value) =>
-          value.providerId === source.providerId &&
-          matchesEntry(value, item.modelId),
-      );
+      const entry = directory && resolveStoredModelEntry(directory.entries, source.providerId, item.modelId);
       return directory && entry
         ? [
             makeRemoteRow(directory, entry, {
@@ -640,11 +650,7 @@ export function UnifiedModelPickerSheet(
           ]
         : [];
     }
-    const entry = entries.find(
-      (entry) =>
-        entry.providerId === item.providerId &&
-        matchesEntry(entry, item.modelId),
-    );
+    const entry = resolveStoredModelEntry(entries, item.providerId, item.modelId);
     return entry ? [makeRow(entry, item)] : [];
   });
   const rowProviderName = (row: UnifiedMobileRow) => {
@@ -775,13 +781,16 @@ export function UnifiedModelPickerSheet(
   const favoriteSource = row ? favoriteSourceOf(row) : null;
   // A source model can have several saved configurations. Match the complete
   // configuration without applying capability fallbacks to the saved values.
+  const favoriteEntries = row?.remoteDevice
+    ? remoteDirectories.find(directory => directory.catalog.deviceId === row.remoteDevice!.deviceId)?.entries ?? []
+    : entries;
   const matchingFavorite =
     row &&
     favoriteSource !== null &&
     prefs.value.favorites.find(
       (item) =>
         item.providerId === favoriteSource &&
-        matchesEntry(row.entry, item.modelId) &&
+        resolveStoredModelEntry(favoriteEntries, row.entry.providerId, item.modelId) === row.entry &&
         sameConfiguration(
           { ...item, providerId: row.config.providerId, modelId: row.config.modelId },
           row.config,
@@ -1232,7 +1241,7 @@ export function UnifiedModelPickerSheet(
                         ? {
                             ...config,
                             providerId: item.providerId,
-                            modelId: row.entry.modelId,
+                            modelId: row.entry.enginePreferenceId ?? row.entry.modelId,
                             uid: item.uid,
                           }
                         : item,
@@ -1264,7 +1273,7 @@ export function UnifiedModelPickerSheet(
                         {
                           ...row.config,
                           providerId: favoriteSource,
-                          modelId: row.entry.modelId,
+                          modelId: row.entry.enginePreferenceId ?? row.entry.modelId,
                         },
                         createFavoriteUid(),
                       ),

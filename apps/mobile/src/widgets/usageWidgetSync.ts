@@ -11,7 +11,7 @@ export type UsageWidgetState =
   | { kind: 'update-desktop'; receivedAtMs: number };
 
 /**
- * What the iOS widgets read from the App Group. Each widget shows either "automatic" (the
+ * What the home-screen widgets read (iOS App Group, Android app files). Each widget shows either "automatic" (the
  * computer that answered last) or the computer it was set to in its edit sheet. A request
  * that gets no answer keeps that computer's previous state, so the widgets show its age.
  */

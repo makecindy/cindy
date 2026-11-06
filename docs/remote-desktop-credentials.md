@@ -27,8 +27,8 @@ Mac confirmation dialog. Successful native password verification stores the secr
 and exact Mac public key together. Later connections require the stored key before
 any saved-secret read. A changed key fails closed; no silent replacement is allowed.
 
-This follows the existing Cindy contacts-sync trust pattern in
-`apps/desktop/src/main/contacts-sync/driver.ts` and `keyStore.ts`: first keys arrive
+This follows the existing Cindy device-sync trust pattern in
+`apps/desktop/src/main/device-sync-keys/keyStore.ts` (used by plugin device sync): first keys arrive
 only over the authenticated account route, with persistent key continuity afterward.
 It deliberately trusts the account service and relay at first setup. It does not
 claim protection against a malicious relay substituting the very first key, or

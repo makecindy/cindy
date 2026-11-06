@@ -121,7 +121,10 @@ describe('草稿页:建到被控电脑的任务也能选第三台电脑', () => 
   });
 
   it('普通发送与新建目标都把 agentDeviceId 交给被控电脑', () => {
-    expect(draftRouteSource.split('agentDeviceId: effectiveAgentDeviceId,').length - 1).toBe(2);
+    // The final per-submit location includes a plugin override, or the original draft
+    // location when kept. Both create payloads must forward it; behavior is exercised
+    // by newMakerDraftSubmission.test.ts for absent/kept/changed/local routes.
+    expect(draftRouteSource.split('agentDeviceId: routeAgentDeviceId,').length - 1).toBe(2);
   });
 
   it('两条标识都显示:上一条写任务在哪台,下一条写 Agent 在哪台', () => {

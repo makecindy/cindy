@@ -69,6 +69,7 @@
     "titleHost": "Exécuter à nouveau l'Agent sur « {{host}} » ?",
     "titleHostUnnamed": "Exécuter à nouveau l'Agent sur l'ordinateur de la session ?",
     "message": "L'historique de la conversation sur l'autre ordinateur ne peut pas être transféré : elle reprend donc à partir d'un résumé de transfert. La réflexion et les détails similaires peuvent ne pas être entièrement conservés. Prend effet à l'envoi du prochain message.",
+    "messageNativeHistory": "L'historique complet de la conversation est copié et elle reprend là où elle en était. S'il ne peut pas être restauré, elle reprend à partir d'un résumé de transfert, et la réflexion et les détails similaires peuvent ne pas être entièrement conservés. Prend effet à l'envoi du prochain message.",
     "confirm": "Changer d'ordinateur",
     "cancel": "Ne rien changer"
   },
