@@ -92,6 +92,7 @@ describe('OAuth result page language and copy', () => {
       expect(getRemoteOAuthCallbackCopy(lang).body).toContain('Example & Co');
       expect(getRemoteOAuthCallbackCopy(lang, 'CustomApp').body).toContain('CustomApp');
     }
+    expect(getRemoteOAuthCallbackCopy('ko', 'ExampleApp').body).toBe('ExampleApp(으)로 돌아가 원격 기기의 인증 결과를 확인하세요.');
   });
 });
 

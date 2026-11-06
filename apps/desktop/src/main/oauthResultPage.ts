@@ -21,7 +21,7 @@ export function getRemoteOAuthCallbackCopy(
     'zh-TW': { title: '已收到授權回呼', body: `請返回 ${brandName}，查看遠端裝置的授權結果。` },
     en: { title: 'Authorization callback received', body: `Return to ${brandName} to check the authorization result on the remote device.` },
     ja: { title: '認証コールバックを受信しました', body: `${brandName} に戻り、リモートデバイスの認証結果を確認してください。` },
-    ko: { title: '인증 콜백을 받았습니다', body: `${brandName}로 돌아가 원격 기기의 인증 결과를 확인하세요.` },
+    ko: { title: '인증 콜백을 받았습니다', body: `${brandName}(으)로 돌아가 원격 기기의 인증 결과를 확인하세요.` },
 
   "es": {
     "title": "Respuesta de autorización recibida",
