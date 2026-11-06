@@ -2372,6 +2372,29 @@
           "wireProtocol": "openai-chat"
         }
       }
+    },
+    {
+      "id": "magpie",
+      "name": "Magpie",
+      "docsUrl": "https://usemagpie.ai/docs/integrate",
+      "models": [],
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "http://127.0.0.1:3425",
+          "baseUrlEditable": true,
+          "wireProtocol": "anthropic-messages"
+        },
+        "codex": {
+          "baseUrl": "http://127.0.0.1:3425/v1",
+          "baseUrlEditable": true,
+          "wireProtocol": "openai-responses"
+        },
+        "pi": {
+          "baseUrl": "http://127.0.0.1:3425/v1",
+          "baseUrlEditable": true,
+          "wireProtocol": "openai-chat"
+        }
+      }
     }
   ]
 }
