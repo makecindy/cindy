@@ -71,6 +71,7 @@ import {
   type GhostSourceLabels,
 } from './GhostCommandDecoration';
 import {
+  commandPaletteReplacementNames,
   replaceSlashCommandRunWithText,
   resolveSlashCommandRunEnd,
   setSlashCommandRoster,
@@ -5356,14 +5357,11 @@ export function ChatInput({
       const { from } = trigger;
       // Preserve any draft after the caret. Only consume a suffix when it
       // completes this exact command (e.g. `/compa|ct`) at a real boundary.
-      const commandNames = cmd.kind === 'agent-skill' && cmd.runtimeCommandName
-        ? [cmd.name, cmd.runtimeCommandName]
-        : [cmd.name];
       const runEnd = resolveSlashCommandRunEnd(
         editor.state.doc,
         from,
         trigger.query,
-        commandNames,
+        commandPaletteReplacementNames(cmd),
       );
       const setupSkillName = pluginSkillSetupName(cmd);
       if (setupSkillName) {

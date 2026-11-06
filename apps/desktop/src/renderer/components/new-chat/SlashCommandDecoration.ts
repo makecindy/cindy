@@ -129,6 +129,16 @@ export function replaceSlashCommandRunWithText(
   return tr.replaceWith(from, to, schema.text(`/${commandName} `));
 }
 
+/** Names that may already be visible in the editor for a selected palette row. */
+export function commandPaletteReplacementNames(command: UnifiedCommand): string[] {
+  const names = [command.name];
+  if (command.kind === 'desktop' && command.label) names.push(command.label);
+  if (command.kind === 'agent-skill' && command.runtimeCommandName) {
+    names.push(command.runtimeCommandName);
+  }
+  return names;
+}
+
 /**
  * Resolve the slash range owned by the active palette query.
  *

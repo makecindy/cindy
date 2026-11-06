@@ -3,6 +3,7 @@ import { Schema, type Node as PMNode } from '@tiptap/pm/model';
 import { EditorState } from '@tiptap/pm/state';
 
 import {
+  commandPaletteReplacementNames,
   createSlashCommandPlugin,
   findSlashCommandMatches,
   replaceSlashCommandRunWithText,
@@ -105,6 +106,29 @@ describe('SlashCommandDecoration', () => {
     state = state.apply(replaceSlashCommandRunWithText(state.tr, schema, 1, runEnd, 'compact'));
 
     expect(state.doc.textContent).toBe('/compact 参数');
+  });
+
+  it('意识指令按显示标签补全光标后的后缀', () => {
+    let state = EditorState.create({
+      schema,
+      doc: doc(p(txt('$draw'))),
+    });
+    const command = {
+      kind: 'desktop' as const,
+      name: 'draw/@root',
+      label: 'draw',
+      description: '',
+    };
+    const runEnd = resolveSlashCommandRunEnd(
+      state.doc,
+      1,
+      'dra',
+      commandPaletteReplacementNames(command),
+    );
+
+    state = state.apply(state.tr.replaceWith(1, runEnd, schema.text('$draw/@root ')));
+
+    expect(state.doc.textContent).toBe('$draw/@root ');
   });
 
   it('旧草稿的 slash atom 在首个 transaction 自动迁移为纯文本', () => {
