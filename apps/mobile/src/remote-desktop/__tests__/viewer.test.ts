@@ -569,7 +569,7 @@ describe("remote desktop viewport", () => {
     expect(v.messages.filter((m) => m.type === 'input')).toHaveLength(0);
     expect(v.messages.filter((m) => m.type === 'inputOverflow')).toHaveLength(1);
   });
-  it.each([0, 59])(
+  it.each([0, 59, 123])(
     "fits between the top safe area (%s) and toolbar with correct touch coordinates",
     (topInset) => {
       const v = viewer();
