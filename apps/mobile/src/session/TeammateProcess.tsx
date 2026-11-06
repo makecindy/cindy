@@ -40,9 +40,10 @@ export function TeammateProcessLink({ title, onPress }: { title: string; onPress
 }
 
 /** One turn, one guide. Public notes remain selectable; only the header owns a gesture. */
-export function TeammateProcess({ id, title, running = false, children, secondary = false, statusIcon, railFooter = false }: {
+export function TeammateProcess({ id, title, titleContent, running = false, children, secondary = false, statusIcon, railFooter = false }: {
   id: string;
   title: string;
+  titleContent?: ReactNode;
   running?: boolean;
   secondary?: boolean;
   statusIcon?: ReactNode;
@@ -113,7 +114,7 @@ export function TeammateProcess({ id, title, running = false, children, secondar
         style={styles.header} onLayout={event => footer.setRowHeight(event.nativeEvent.layout.height)}>
         {(statusIcon || !secondary) && <View style={styles.statusIcon}>{statusIcon ?? <>{running ? <ActivityIndicator color={colors.textSecondary} size="small" style={styles.spinner} />
           : <Layers size={iconSize.sm} color={colors.textSecondary} />}</>}</View>}
-        <Text style={[styles.title, secondary && styles.secondary]} onLayout={event => footer.setTextHeight(event.nativeEvent.layout.height)}>{title}</Text>
+        <Text style={[styles.title, secondary && styles.secondary]} onLayout={event => footer.setTextHeight(event.nativeEvent.layout.height)}>{titleContent ?? title}</Text>
         <Animated.View style={{ transform: [{ rotate: rotation.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '90deg'] }) }] }}>
           <ChevronRight size={iconSize.sm} color={colors.textTertiary} />
         </Animated.View>

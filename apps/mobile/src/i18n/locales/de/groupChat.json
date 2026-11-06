@@ -4,7 +4,8 @@
     "stopMine": "Meine stoppen",
     "stopAll": "Alle stoppen",
     "stopAllHint": "Schließt Anfragen anderer Personen ein",
-    "step": "Schritt {{step}}/{{total}}"
+    "step": "Schritt {{step}}/{{total}}",
+    "viewProcess": "Arbeit anzeigen"
   },
   "work": {
     "queued": "In Warteschlange {{count}}",

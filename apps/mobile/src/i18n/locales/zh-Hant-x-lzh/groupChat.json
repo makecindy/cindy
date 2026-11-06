@@ -4,7 +4,8 @@
     "stopMine": "止我所發",
     "stopAll": "盡止",
     "stopAllHint": "兼及他人所發",
-    "step": "第 {{step}}/{{total}} 步"
+    "step": "第 {{step}}/{{total}} 步",
+    "viewProcess": "觀其過程"
   },
   "work": {
     "queued": "待次 {{count}}",

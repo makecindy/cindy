@@ -14,8 +14,8 @@ const members = [
 const prompts: Record<string, PendingInteraction[]> = {
   'qa-permission': [{ request: { kind: 'permission', requestId: 'qa-permission-request', toolName: 'Bash',
     input: { command: 'pnpm --filter mobile typecheck', description: '核对移动端改动的类型；这是合成的权限卡，不会执行命令。' } } }],
-  'qa-question': [{ request: { kind: 'ask_user_question', requestId: 'qa-question-request', header: '验收顺序', questions: [
-    { question: '先核对哪个屏幕？选择只保存在模拟数据中，不会发给真实伙伴。', options: [
+  'qa-question': [{ request: { kind: 'ask_user_question', requestId: 'qa-question-request', questions: [
+    { header: '验收顺序', question: '先核对哪个屏幕？选择只保存在模拟数据中，不会发给真实伙伴。', options: [
       { label: '群内执行', description: '先检查三位伙伴的进展与两个等待卡。' },
       { label: '分工步骤', description: '先检查长步骤、状态与继续操作。' },
     ] },
@@ -30,9 +30,9 @@ export function groupExecutionVisualFixture(channel: string, args: unknown[]): u
   }
   if (channel === 'maker:get-pending-interactions' && typeof args[0] === 'string' && args[0].startsWith('qa-')) return prompts[args[0]] ?? [];
   if (channel === 'local-db:messages:around-client-id' && typeof args[0] === 'string' && args[0].startsWith('qa-')) {
-    const bot = args[0] === 'qa-permission' ? 'qa-design' : args[0] === 'qa-question' ? 'qa-check' : 'qa-research';
-    const execution = args[0] === 'qa-permission' ? 'qa-e2' : args[0] === 'qa-question' ? 'qa-e3' : 'qa-e1';
-    return [{ clientId: BOT_GROUP_CLIENT_ID.memberTurn(GROUP, execution, bot), role: 'user', type: 'text', content: '合成执行输入', createdAt: new Date(NOW - 30_000).toISOString() },
+    const bot = args[0] === 'qa-work' || args[0] === 'qa-permission' ? 'qa-design' : args[0] === 'qa-question' ? 'qa-check' : 'qa-research';
+    const execution = args[0] === 'qa-work' ? 'qa-e2-work' : args[0] === 'qa-permission' ? 'qa-e2' : args[0] === 'qa-question' ? 'qa-e3' : 'qa-e1';
+    return [{ clientId: BOT_GROUP_CLIENT_ID.memberTurn(args[0] === 'qa-work' ? `${GROUP}-work` : GROUP, execution, bot), role: 'user', type: 'text', content: '合成执行输入', createdAt: new Date(NOW - 30_000).toISOString() },
       { clientId: `note-${execution}`, role: 'assistant', type: 'text', content: '已核对现有信息，正在整理下一步。', createdAt: new Date(NOW - 25_000).toISOString() }];
   }
   const groupId = request?.ref?.id ?? request?.resourceRef?.id;
@@ -58,7 +58,7 @@ export function groupExecutionVisualFixture(channel: string, args: unknown[]): u
           { id: 'qa-done', sequence: 2, kind: 'message', planId: plan.id, authorKind: 'bot', authorBotId: members[0].botId,
           authorName: members[0].name, content: '调研结果已整理好，可以继续核对。', createdAt: NOW - 25_000 }],
         round: { status: talk ? 'idle' : 'running', canContinue: false, speakers: talk ? [] : [
-          { botId: members[1].botId, sessionId: null, activity: 'step', executionId: 'qa-e2-work', executionStatus: 'running', startedAt: NOW - 20_000 },
+          { botId: members[1].botId, sessionId: 'qa-work', activity: 'step', executionId: 'qa-e2-work', executionStatus: 'running', startedAt: NOW - 20_000 },
         ] },
       } }] };
   }

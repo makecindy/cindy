@@ -233,9 +233,9 @@ vi.mock('@/session/BotGroupAvatars', () => {
 }; });
 vi.mock('@/session/TeammateProcess', () => ({ useTeammateElapsedTitle: () => 'Working', TeammateWorkSegment: ({ title, children }: any) => el('div', null, title, children), TeammateProcessLink: ({ title, onPress }: any) => el('button', { onClick: onPress }, title), TeammateProcess: ({ title, children }: any) => el('section', null, title, children) }));
 vi.mock('@/session/BotGroupSpeakerRow', () => ({
-  BotGroupSpeakerRow: ({ identity, activity, sessionId, onStop, stopPending }: any) => {
+  BotGroupSpeakerRow: ({ identity, activity, sessionId, onStop, stopPending, footer }: any) => {
     const inspect = useContext(ProcessDisclosureViewport);
-    return el('div', { 'data-testid': `speaker.${identity.botId}.${activity}`, 'data-session': sessionId }, identity.name,
+    return el('div', { 'data-testid': `speaker.${identity.botId}.${activity}`, 'data-session': sessionId }, identity.name, footer,
       h.speakerDisclosure ? el('button', { 'data-testid': 'fixture.processCollapse', onClick: () => inspect?.(300) }, 'Collapse process') : null,
       onStop ? el('button', { 'data-testid': 'botGroup.work.stop', disabled: stopPending, onClick: onStop }, 'stop') : null);
   },
@@ -1314,7 +1314,7 @@ describe('group timeline', () => {
       steps: [{ ...data.plans[0]!.steps[0]!, status: 'done' }, { ...data.plans[0]!.steps[1]!, status: 'failed' }] };
     await render(data);
     expect(byId('botGroup.followUp.retry')?.textContent).toContain('groupChat.timeline.retryStep');
-    expect(node.textContent).toContain('groupChat.followUp.failedStep(step=2)');
+    expect(node.textContent).toContain('groupChat.timeline.stepFailed(name=阿布)');
     await click('botGroup.followUp.retry');
     expect(h.chat.act).toHaveBeenLastCalledWith('plan-retry', { planId: 'p1' });
   });

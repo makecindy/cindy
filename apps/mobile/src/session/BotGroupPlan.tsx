@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { botGroupPathBasename, isActiveBotGroupMember, type BotGroupPlanFollowUp } from '@cindy/maker-shared/botGroupPresentation';
 import type { BotGroupMemberView, BotGroupPlanStepView, BotGroupPlanView } from '@cindy/maker-shared/botGroupChat';
 import { Text } from '@/components/AppText';
+import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { motionDuration, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
@@ -346,7 +347,7 @@ export function BotGroupPlanEndDivider({ stepCount }: { stepCount: number | null
   </BotGroupDivider>;
 }
 
-export function BotGroupPlanFollowUpRow({ plan, followUp, identityFor, deviceId, online, pending, stepNumber, stepTotal, onContinue, onRetry, onEnd }: {
+export function BotGroupPlanFollowUpRow({ plan, followUp, identityFor, deviceId, online, pending, onContinue, onRetry, onEnd }: {
   plan?: BotGroupPlanView;
   followUp: BotGroupPlanFollowUp;
   identityFor: BotGroupIdentityLookup;
@@ -362,7 +363,6 @@ export function BotGroupPlanFollowUpRow({ plan, followUp, identityFor, deviceId,
 }) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
-  const { colors } = useTheme();
   const step = followUp.kind === 'continue' ? followUp.next : followUp.failed;
   const identity = identityFor(step.botId, step.botName);
   const busy = pending !== null;
@@ -371,27 +371,42 @@ export function BotGroupPlanFollowUpRow({ plan, followUp, identityFor, deviceId,
   const label = failed
     ? t('groupChat.timeline.stepFailed', { name: identity.name })
     : `${t('groupChat.timeline.nextStep')}${identity.name} ${step.task}`;
-  return <View style={styles.card} testID={`botGroup.followUpRow.${followUp.kind}`}>
-    <View style={styles.eyebrow} accessible accessibilityLabel={label}>
-      {failed ? <CircleAlert size={iconSize.sm} color={colors.statusError} /> : <ListChecks size={iconSize.sm} color={colors.textSecondary} />}
-      <Text style={styles.eyebrowText}>{plan?.kind === 'talk' ? t(failed ? 'groupChat.timeline.stepFailed' : 'groupChat.timeline.nextStep', { name: identity.name }) : failed ? t('groupChat.followUp.failedStep', { step: stepNumber }) : t('groupChat.followUp.next')}</Text>
-      <Text style={styles.eyebrowStatus}>{`${stepNumber} / ${stepTotal}`}</Text>
+  return <View style={styles.followUp} testID={`botGroup.followUpRow.${followUp.kind}`}>
+    <View style={styles.followUpLine} />
+    <View style={styles.followUpContent}>
+      {failed ? <Text style={styles.followUpText} accessibilityLabel={label}>{label}</Text>
+        : <View style={styles.followUpWho}>
+          <Text style={styles.followUpText}>{t('groupChat.timeline.nextStep')}</Text>
+          <BotGroupAvatar deviceId={deviceId} identity={identity} size={BOT_GROUP_INLINE_AVATAR_SIZE} online={online} />
+          <Text style={styles.followUpName}>{identity.name}</Text>
+          {step.task ? <Text style={styles.followUpTask}>{step.task}</Text> : null}
+        </View>}
+      <View style={styles.followUpActions}>
+        <MainWindowActionButton density="compact" numberOfLines={0} action={{
+          label: t(failed ? 'groupChat.timeline.retryStep' : 'groupChat.timeline.continuePlan'),
+          busy: pending === primary, disabled: busy || !online, onPress: failed ? onRetry : onContinue,
+          testID: `botGroup.followUp.${primary}`,
+        }} />
+        <MainWindowActionButton density="compact" numberOfLines={0} style={styles.quietAction} action={{
+          label: t(plan?.kind === 'talk' ? 'groupChat.timeline.endTalk' : 'groupChat.timeline.endPlan'),
+          busy: pending === 'dismiss', disabled: busy || !online, onPress: onEnd, testID: 'botGroup.followUp.end',
+        }} />
+      </View>
     </View>
-    <View style={styles.who}>
-      <View style={styles.whoAvatar}><BotGroupAvatar deviceId={deviceId} identity={identity} size={BOT_GROUP_INLINE_AVATAR_SIZE} online={online} /></View>
-      <Text style={styles.whoText}><Text style={styles.whoName}>{identity.name}</Text>{` ${step.task}`}</Text>
-    </View>
-    <CompanionCardActions>
-      <CompanionCardButton label={t(plan?.kind === 'talk' ? 'groupChat.timeline.endTalk' : 'groupChat.timeline.endPlan')} busy={pending === 'dismiss'} disabled={busy || !online}
-        onPress={onEnd} testID="botGroup.followUp.end" />
-      <CompanionCardButton primary label={t(failed ? 'groupChat.timeline.retryStep' : 'groupChat.timeline.continuePlan')}
-        busy={pending === primary} disabled={busy || !online}
-        onPress={failed ? onRetry : onContinue} testID={`botGroup.followUp.${primary}`} />
-    </CompanionCardActions>
+    <View style={styles.followUpLine} />
   </View>;
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
+  followUp: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.sm },
+  followUpLine: { height: StyleSheet.hairlineWidth, width: spacing.md, backgroundColor: colors.border },
+  followUpContent: { flex: 1, minWidth: 0, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.sm },
+  followUpWho: { flex: 1, minWidth: 120, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs },
+  followUpText: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  followUpName: { color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
+  followUpTask: { flexShrink: 1, color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  followUpActions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs, marginLeft: 'auto' },
+  quietAction: { backgroundColor: 'transparent', borderWidth: 0 },
   // Approved r3 talk bubble: one surface, 28pt inline pills with 44pt touch targets.
   talkCard: { backgroundColor: colors.surfaceElevated, borderColor: colors.border, borderWidth: 1,
     borderRadius: radius.container, paddingHorizontal: spacing.md + 2, paddingVertical: spacing.sm + 2, width: '100%', maxWidth: 720 },

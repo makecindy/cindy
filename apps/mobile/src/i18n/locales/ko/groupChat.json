@@ -4,7 +4,8 @@
     "stopMine": "내 요청 중지",
     "stopAll": "모두 중지",
     "stopAllHint": "다른 사람의 요청도 포함",
-    "step": "{{step}}/{{total}}단계"
+    "step": "{{step}}/{{total}}단계",
+    "viewProcess": "과정 보기"
   },
   "title": "그룹 채팅",
   "memberSeparator": ", ",

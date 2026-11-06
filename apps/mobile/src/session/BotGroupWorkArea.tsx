@@ -81,8 +81,17 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
     disabled={stopPending} style={styles.stop} onPress={onPress}>
     <Text style={styles.stopText}>{t(stopPending ? 'groupChat.speaking.stopping' : 'groupChat.progress.stop')}</Text>
   </Pressable>;
+  const stopControl = online && onStop ? group.supportsScopedStop && group.canStopAll && group.round.othersActive
+      ? <BotGroupMenu title={t('groupChat.progress.stop')} accessibilityLabel={t('groupChat.composer.stop')}
+          disabled={stopPending} testID="botGroup.work.stopMenu" sections={[{ id: 'scope', options: [
+            { id: 'mine', title: t('groupChat.progress.stopMine') },
+            { id: 'all', title: t('groupChat.progress.stopAll'), subtitle: t('groupChat.progress.stopAllHint'), destructive: true },
+          ] }]} onSelect={id => { void onStop(id === 'all' ? 'all' : undefined); }}>
+          {stopButton}
+        </BotGroupMenu>
+      : stopButton(() => { void onStop(); }) : null;
   return <View testID="botGroup.work" style={styles.container}>
-      {speakers.map((speaker) => {
+      {speakers.map((speaker, index) => {
         const member = group.members.find(member => member.botId === speaker.botId);
         if (!member) return null;
         const target = speaker.executionId && resolved?.scope === scope ? resolved.targets.get(speaker.executionId) : undefined;
@@ -99,24 +108,15 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
           identity={{ ...identityFor(member.botId, member.name), ...(target ? { botId: target.botId } : {}) }} sessionId={member.isOwned === false ? null : speaker.sessionId ?? target?.sessionId ?? null}
           executionId={speaker.executionId} startedAt={speaker.startedAt} groupId={group.id}
           workStep={plan && step ? { position: step.position + 1, total: plan.steps.length, task: step.task } : undefined}
-          revealWaiting={member.isOwned !== false}
+          revealWaiting={member.isOwned !== false} footer={index === speakers.length - 1 ? stopControl : undefined}
           activity={speaker.activity} executionStatus={speaker.executionStatus} stopping={speaker.stopping} onError={onError} />;
       })}
-    {online && onStop ? group.supportsScopedStop && group.canStopAll && group.round.othersActive
-      ? <BotGroupMenu title={t('groupChat.progress.stop')} accessibilityLabel={t('groupChat.composer.stop')}
-          disabled={stopPending} testID="botGroup.work.stopMenu" sections={[{ id: 'scope', options: [
-            { id: 'mine', title: t('groupChat.progress.stopMine') },
-            { id: 'all', title: t('groupChat.progress.stopAll'), subtitle: t('groupChat.progress.stopAllHint'), destructive: true },
-          ] }]} onSelect={id => { void onStop(id === 'all' ? 'all' : undefined); }}>
-          {stopButton}
-        </BotGroupMenu>
-      : stopButton(() => { void onStop(); }) : null}
   </View>;
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   container: { flexShrink: 0, gap: spacing.sm },
-  stop: { alignSelf: 'flex-start', minHeight: 44, minWidth: 48, marginLeft: spacing.xl,
+  stop: { alignSelf: 'flex-start', minHeight: 44, minWidth: 48,
     paddingHorizontal: spacing.sm, justifyContent: 'center', alignItems: 'center' },
-  stopText: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  stopText: { color: colors.destructive, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
 });

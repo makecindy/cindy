@@ -4,7 +4,8 @@
     "stopMine": "停止我發起的",
     "stopAll": "全部停止",
     "stopAllHint": "包括其他人發起的",
-    "step": "第 {{step}}/{{total}} 步"
+    "step": "第 {{step}}/{{total}} 步",
+    "viewProcess": "看過程"
   },
   "title": "群聊",
   "memberSeparator": "、",

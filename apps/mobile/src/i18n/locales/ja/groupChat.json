@@ -4,7 +4,8 @@
     "stopMine": "自分の依頼を停止",
     "stopAll": "すべて停止",
     "stopAllHint": "他の人の依頼も含みます",
-    "step": "ステップ {{step}}/{{total}}"
+    "step": "ステップ {{step}}/{{total}}",
+    "viewProcess": "経過を見る"
   },
   "title": "グループチャット",
   "memberSeparator": "、",

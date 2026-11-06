@@ -4,7 +4,8 @@
     "stopMine": "Parar minhas solicitações",
     "stopAll": "Parar tudo",
     "stopAllHint": "Inclui solicitações de outras pessoas",
-    "step": "Etapa {{step}}/{{total}}"
+    "step": "Etapa {{step}}/{{total}}",
+    "viewProcess": "Mostrar trabalho"
   },
   "work": {
     "queued": "Na fila {{count}}",

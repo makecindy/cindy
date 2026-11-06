@@ -290,6 +290,7 @@ iOS 新增与改造界面遵循 [iOS 原生界面规范](../../../docs/design-ru
   标题 16/22 medium,状态行 13/18 二级色;只有运行中(`statusAccent` 呼吸)与失败(`statusError`)带颜色。
 - **卡片按钮 `CompanionCardButton`**:高 38(hitSlop 补到 44)、pill、15/20 medium,**文字始终居中**;一行里等宽
   平分,次要在左、主操作在右;次要按钮用 `surfaceChip` 填充不加描边。不要在卡片里写 `textAlign: 'left'` 的按钮。
+- **群内执行与确认（2026-11-06，按 PC 当前组件对齐）**：下一步／重试是轻量分隔操作行，不使用整张卡和等宽大按钮；看过程与群停止在过程折叠外。`InteractionPanel` 的伙伴权限／提问卡采用 PC 的标题层级、带描边的选项组与按内容宽度排列的末尾操作，次要透明描边、主操作在后，长文案可换行；视觉按钮 38、触控补到 44。权限卡标题为请求伙伴，操作种类放次级行；提问优先展示题目标签。手机保留选择后提交，避免单次触摸立即作答。其它仍使用 `CompanionCardButton` 的卡片沿用上一条规范。
 - **动效**:新消息与卡片用 `CompanionEntering` / `CompanionFadeIn`(RN `Animated`,原生驱动,只动 opacity /
   transform,系统减弱动效时静止);工作中用 `CompanionPresenceRing` + `ThinkingDots`,不另写循环动画。
 

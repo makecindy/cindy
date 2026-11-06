@@ -4,7 +4,8 @@
     "stopMine": "Arrêter les miennes",
     "stopAll": "Tout arrêter",
     "stopAllHint": "Inclut les demandes des autres participants",
-    "step": "Étape {{step}}/{{total}}"
+    "step": "Étape {{step}}/{{total}}",
+    "viewProcess": "Afficher le travail"
   },
   "work": {
     "queued": "En attente {{count}}",

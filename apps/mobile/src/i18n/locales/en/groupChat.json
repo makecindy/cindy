@@ -4,7 +4,8 @@
     "stopMine": "Stop Mine",
     "stopAll": "Stop All",
     "stopAllHint": "Includes other people’s requests",
-    "step": "Step {{step}}/{{total}}"
+    "step": "Step {{step}}/{{total}}",
+    "viewProcess": "Show work"
   },
   "title": "Group Chats",
   "memberSeparator": ", ",
