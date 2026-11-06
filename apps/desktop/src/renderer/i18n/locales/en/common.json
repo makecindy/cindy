@@ -163,7 +163,7 @@
   "taskActionConfirmation": {
     "title": "Confirm session action",
     "once": "Review the target, action and full content below. Allow applies to this action once.",
-    "remove": "This deletes automation. Review the target; approval applies only once.",
+    "remove": "This will release the automation’s receiving address. Check the target; approval applies only to this action.",
     "permission": "This answers a permission request in another task on your behalf. Review the action; approval applies only once.",
     "resume": "This resumes paused execution. Review the target; approval applies only once.",
     "command": "This saves or runs a command on your computer outside the agent’s tool approval. Review the command and working folder; approval applies only once.",

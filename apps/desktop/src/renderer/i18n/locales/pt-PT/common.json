@@ -165,7 +165,7 @@
   "taskActionConfirmation": {
     "title": "Confirmar ação da sessão",
     "once": "Reveja o destino, a ação e o conteúdo completo abaixo. A permissão aplica-se apenas a esta ação, uma vez.",
-    "remove": "Esta ação elimina a automatização. Reveja o destino; a aprovação aplica-se apenas uma vez.",
+    "remove": "O endereço de receção da automatização será libertado. Verifica o destino; a autorização aplica-se apenas a esta ação.",
     "permission": "Esta ação responde a um pedido de permissão noutra tarefa em seu nome. Reveja a ação; a aprovação aplica-se apenas uma vez.",
     "resume": "Esta ação retoma a execução em pausa. Reveja o destino; a aprovação aplica-se apenas uma vez.",
     "command": "Esta ação guarda ou executa um comando no seu computador fora da aprovação de ferramentas do Agent. Reveja o comando e a pasta de trabalho; a aprovação aplica-se apenas uma vez.",

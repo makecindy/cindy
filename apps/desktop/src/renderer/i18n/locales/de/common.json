@@ -163,7 +163,7 @@
   "taskActionConfirmation": {
     "title": "Sitzungsaktion bestätigen",
     "once": "Prüfe unten das Ziel, die Aktion und den vollständigen Inhalt. Die Erlaubnis gilt einmalig für diese Aktion.",
-    "remove": "Dadurch wird eine Automatisierung gelöscht. Prüfe das Ziel; die Genehmigung gilt nur einmal.",
+    "remove": "Die Empfangsadresse der Automatisierung wird freigegeben. Prüfe das Ziel; die Zustimmung gilt nur für diese Aktion.",
     "permission": "Dadurch wird in deinem Namen eine Berechtigungsanfrage in einer anderen Aufgabe beantwortet. Prüfe die Aktion; die Genehmigung gilt nur einmal.",
     "resume": "Dadurch wird eine pausierte Ausführung fortgesetzt. Prüfe das Ziel; die Genehmigung gilt nur einmal.",
     "command": "Dadurch wird ein Befehl auf deinem Computer außerhalb der Tool-Genehmigung des Agent gespeichert oder ausgeführt. Prüfe den Befehl und den Arbeitsordner; die Genehmigung gilt nur einmal.",
