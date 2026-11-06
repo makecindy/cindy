@@ -4,7 +4,7 @@ import {
   isModelSelectableForNewRoute,
   type ProviderView,
 } from '@cindy/model-providers';
-import { GHOST_PICK_MIN_INTERVAL_MS, type InstalledGhost } from '../../shared/ghost.js';
+import type { InstalledGhost } from '../../shared/ghost.js';
 import {
   isPluginModelPickerRoute,
   type PluginModelPickerRequest,
@@ -37,6 +37,18 @@ export function setPluginModelPickerAgentProvider(provider: () => readonly strin
 }
 export function getPluginModelPickerAgents(): readonly string[] {
   return agentProvider();
+}
+
+/**
+ * 选择器只发给用户看得见的应用窗口:优先当前聚焦的那个。预热的隐藏窗口也是应用窗口,
+ * 发给它们时选择器看不见,插件只能等到超时(表现为「点了没反应」)。
+ */
+export function chooseModelPickerWindow<W>(
+  focused: W | null,
+  all: readonly W[],
+  usable: (win: W) => boolean,
+): W | undefined {
+  return focused && usable(focused) ? focused : all.find(usable);
 }
 
 type AgentBinaryStatus = (agent: string) => Promise<{ binaryReady?: boolean } | null | undefined>;
@@ -100,6 +112,28 @@ export function isPluginModelPickerRouteAvailable(
   );
 }
 
+/**
+ * 卡内模型下拉框选中的模型当前是否可用:本机的按本机目录;带运行位置(另一台电脑或分享来的供应商)的,
+ * 那个位置必须是现在可选的,模型也必须在那里允许远程调用的目录里。执行时那台电脑还会再校验一次。
+ */
+export async function isGhostCardModelRouteAvailable(
+  route: PluginModelPickerRoute,
+  sources: {
+    localViews(): Promise<ProviderView[]>;
+    localAgents(): readonly string[];
+    locations?: (() => Promise<{ locations: readonly { agentDeviceId: string }[] }>) | null;
+    remoteViews?: ((agentDeviceId: string) => Promise<ProviderView[]>) | null;
+  },
+): Promise<boolean> {
+  const { agentDeviceId, ...base } = route;
+  if (!agentDeviceId) return isPluginModelPickerRouteAvailable(base, await sources.localViews(), sources.localAgents());
+  if (!sources.locations || !sources.remoteViews) return false;
+  const { locations } = await sources.locations();
+  if (!locations.some((location) => location.agentDeviceId === agentDeviceId)) return false;
+  // 远程位置上的引擎是否就绪由那里的目录决定,这里不按本机安装情况过滤。
+  return isPluginModelPickerRouteAvailable(base, await sources.remoteViews(agentDeviceId), GHOST_REMOTE_AGENT_MODELS);
+}
+
 interface Pending {
   request: PluginModelPickerRequest;
   target: PluginModelPickerTarget;
@@ -110,7 +144,6 @@ interface Pending {
 /** One Host-owned picker, bound to its originating installation, page and answering window. */
 export class GhostModelPicker {
   private pending?: Pending;
-  private readonly lastAttempt = new Map<string, number>();
 
   constructor(
     private readonly deps: {
@@ -128,6 +161,7 @@ export class GhostModelPicker {
     raw: unknown = {},
     isCurrent = () => true,
     signal?: AbortSignal,
+    pageTarget?: PluginModelPickerTarget,
   ): Promise<PluginModelPickerResult> {
     const fail = (
       errorCode: Extract<PluginModelPickerResult, { ok: false }>['errorCode'],
@@ -158,14 +192,12 @@ export class GhostModelPicker {
     )
       return fail('INVALID_REQUEST', 'Invalid model picker options');
     if (this.pending) return fail('BUSY', 'A model picker is already open');
-    const now = this.deps.now?.() ?? Date.now(),
-      last = this.lastAttempt.get(ghostId);
-    this.lastAttempt.set(ghostId, now);
-    if (last !== undefined && now - last < GHOST_PICK_MIN_INTERVAL_MS)
-      return fail('RATE_LIMITED', 'Please wait before opening the model picker again');
+    // Selection is UI, not inference. The active-request guard prevents overlapping pickers;
+    // closing one must not impose a cooldown on the next user interaction.
+    const now = this.deps.now?.() ?? Date.now();
     let target: PluginModelPickerTarget | null;
     try {
-      target = this.deps.target(ghostId, options.mobilePageId as string | undefined);
+      target = pageTarget ?? this.deps.target(ghostId, options.mobilePageId as string | undefined);
     } catch {
       target = null;
     }

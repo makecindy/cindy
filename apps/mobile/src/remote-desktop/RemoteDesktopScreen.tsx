@@ -7,6 +7,9 @@ import { RemoteKeySurface, type SystemKeyAction } from "./RemoteKeySurface";
 import {
   AllWindowsIcon,
   OmarchyMenuIcon,
+  PostureClosedIcon,
+  PostureFlatIcon,
+  PostureOpenIcon,
   ShowDesktopIcon,
   WorkspaceLeftIcon,
   WorkspaceRightIcon,
@@ -16,11 +19,10 @@ import {
   FoldDesktopBezel,
   FoldDesktopDeck,
   FoldDesktopSkinSwitch,
-  DEFAULT_FOLD_DESKTOP_SKIN,
   retroDesktopViewport,
   foldDesktopSkinColors,
-  type FoldDesktopSkin,
 } from "./FoldDesktopSkin";
+import { useFoldSkinPreference } from "./useFoldSkinPreference";
 import {
   useCallback,
   useMemo,
@@ -53,6 +55,7 @@ import {
   LayoutGrid,
   Monitor,
   Search,
+  type LucideIcon,
 } from "lucide-react-native";
 import { useReduceMotionEnabled } from "@/hooks/useReduceMotion";
 import { motionDuration } from "@/theme/tokens";
@@ -169,6 +172,7 @@ import type { RemoteDesktopDeviceButton } from "./RemoteDesktopChrome";
 import {
   LIVE_SCREEN_ICONS,
   LIVE_SCREEN_NOT_IN_MENU,
+  LIVE_SCREEN_POSTURES,
   LIVE_SCREEN_TOOLBAR_BUTTONS,
   parseLiveScreenParam,
 } from "./liveScreen";
@@ -185,6 +189,12 @@ type ChannelOutcome =
   | { kind: "relay" }
   | { kind: "error"; code: string };
 const KEY_BAR_HEIGHT = 44;
+/** The desktop viewer's posture glyphs, by the plugin's button id. */
+const POSTURE_ICONS: Record<string, LucideIcon> = {
+  "posture-closed": PostureClosedIcon,
+  "posture-open": PostureOpenIcon,
+  "posture-flat": PostureFlatIcon,
+};
 const LABELS: Record<string, string> = {
   Minus: "− _",
   Equal: "= +",
@@ -606,9 +616,7 @@ export function RemoteDesktopSession({
     keyboardPanelHeight,
     keyboard,
   );
-  const [foldSkin, setFoldSkin] = useState<FoldDesktopSkin>(
-    DEFAULT_FOLD_DESKTOP_SKIN,
-  );
+  const [foldSkin, setFoldSkin] = useFoldSkinPreference();
   const foldSkinAvailable = Boolean(foldLayout);
   const retroDesktop =
     foldSkinAvailable &&
@@ -644,7 +652,14 @@ export function RemoteDesktopSession({
   const retroViewport =
     retroDesktop && foldLayout
       ? retroDesktopViewport(
-          hardwareMedia,
+          foldSkin === "macbook"
+            ? {
+                ...hardwareMedia,
+                // Keep the display flush at the top; the physical fold band
+                // belongs to the silver case rather than the video surface.
+                height: foldLayout.media.y + foldLayout.media.height,
+              }
+            : hardwareMedia,
           foldSkin,
           foldLayout.media,
           lease && lease.display.height > 0
@@ -3451,7 +3466,11 @@ export function RemoteDesktopSession({
     hasButton("orientation-portrait") && hasButton("orientation-landscape");
   const rotatable = hasButton("rotate-left") && hasButton("rotate-right");
   const following = turn === null;
-  const deviceLandscape = following ? landscape : turn % 2 === 1;
+  // Following matches the window's own shape. Not `landscape`, which also
+  // means a system side rail: iPhone Duo's cover screen has one upright.
+  const deviceLandscape = following
+    ? orientationSize.width > orientationSize.height
+    : turn % 2 === 1;
   // Follow the device's shape as it turns: the host answers a screenShape
   // request once the shape differs from the one we know (or after a few
   // seconds), so one request is always waiting. Older hosts refuse it; then
@@ -3633,6 +3652,15 @@ export function RemoteDesktopSession({
     foldLayout ? foldControls.height : windowSize.height * 0.7,
   );
   const keySurface = {
+    onKeyDown: (code: string) => {
+      const feedback = remotePresentation?.keyFeedbackForSkin
+        ? remotePresentation.keyFeedbackForSkin(
+            retroDesktop ? foldSkin : "modern",
+            code,
+          )
+        : remotePresentation?.keyFeedback?.();
+      void feedback?.catch(() => {});
+    },
     platform: caps?.platform,
     // Inactive already released host input; latched modifiers must not outlive it.
     enabled: canInput && appState === "active",
@@ -3684,9 +3712,20 @@ export function RemoteDesktopSession({
   const volumeDown = liveScreenAction("volume-down");
   const volumeUp = liveScreenAction("volume-up");
   const liveScreenActions: LiveScreenAction[] = (liveScreen?.buttons ?? [])
-    .filter((b) => shownButton(b.id) && !b.id.startsWith("volume-"))
+    .filter(
+      (b) =>
+        shownButton(b.id) &&
+        !b.id.startsWith("volume-") &&
+        !LIVE_SCREEN_POSTURES.includes(b.id),
+    )
     .map((b) => liveScreenAction(b.id)!)
     .filter(Boolean);
+  // A foldable's postures get a row of their own, in the plugin's order,
+  // with the desktop viewer's glyphs.
+  const postureActions = LIVE_SCREEN_POSTURES.flatMap((id) => {
+    const action = liveScreenAction(id);
+    return action ? [{ ...action, icon: POSTURE_ICONS[id] }] : [];
+  });
   const rotation = (direction: "left" | "right") => {
     const action = rotatable && liveScreenAction(`rotate-${direction}`);
     return action
@@ -3725,6 +3764,13 @@ export function RemoteDesktopSession({
     >
       {Platform.OS === "android" && focused && <StatusBar hidden />}
       <View style={[styles.body, landscape && styles.landscape]}>
+        {retroDesktop && focused && foldLayout && foldSkin === "macbook" ? (
+          <FoldDesktopBezel
+            region={hardwareMedia}
+            skin={foldSkin}
+            viewport={retroViewport}
+          />
+        ) : null}
         <View
           style={[
             styles.canvas,
@@ -3754,7 +3800,7 @@ export function RemoteDesktopSession({
                 },
           ]}
         >
-          {retroDesktop && focused && foldLayout ? (
+          {retroDesktop && focused && foldLayout && foldSkin !== "macbook" ? (
             <FoldDesktopBezel
               region={hardwareMedia}
               skin={foldSkin}
@@ -3773,7 +3819,7 @@ export function RemoteDesktopSession({
                 top: retroViewport.y,
                 bottom:
                   geometry.height - retroViewport.y - retroViewport.height,
-                borderRadius: radius.control,
+                borderRadius: foldSkin === "macbook" ? 0 : radius.control,
                 overflow: "hidden",
               },
             ]}
@@ -4219,6 +4265,8 @@ export function RemoteDesktopSession({
             {keyboardDeck ? (
               <FoldDesktopKeyboard
                 {...keySurface}
+                skin={foldSkin}
+                onSkinChange={setFoldSkin}
                 onInputMethod={openFoldInputMethod}
                 onOperations={toggleOperations}
                 clipboard={deckClipboard}
@@ -4542,6 +4590,7 @@ export function RemoteDesktopSession({
               ? { down: volumeDown, up: volumeUp }
               : undefined
           }
+          posture={postureActions.length ? postureActions : undefined}
           orientation={
             rotateLeft && rotateRight
               ? {
@@ -4578,6 +4627,7 @@ export function RemoteDesktopSession({
             menu: t("remoteDesktop.deviceMenu"),
             orientation: t("remoteDesktop.orientation"),
             follow: t("remoteDesktop.orientationFollow"),
+            posture: t("remoteDesktop.posture"),
             picture: t("remoteDesktop.picture"),
             pictures: {
               fit: t("remoteDesktop.pictureFit"),

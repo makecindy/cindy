@@ -161,7 +161,12 @@
         "details": "Sende deine Nachricht erneut. Falls es weiterhin nicht klappt, prüfe die Logs und melde das Problem."
       }
     },
-    "runtimeFailureSetupHint": "Ändere das Modell oder die Einstellungen auf dem Computer, auf dem dieses Teammitglied läuft."
+    "runtimeFailureSetupHint": "Ändere das Modell oder die Einstellungen auf dem Computer, auf dem dieses Teammitglied läuft.",
+    "capability": {
+      "GROUP_AUTHORIZATION_REQUIRED": "{{name}} konnte dieses Werkzeug nicht ausführen: Die Gruppenberechtigung ist abgelaufen oder erlaubt diese Aktion nicht. Der Besitzer des Teammitglieds kann die Anfrage in dieser Gruppe erneut stellen.",
+      "GROUP_AUTHORIZATION_UNAVAILABLE": "Die Gruppenberechtigung für {{name}} konnte nicht überprüft werden. Dieses Werkzeug wurde daher nicht ausgeführt. Versuche es erneut, sobald die Verbindung wiederhergestellt ist.",
+      "ATTACHMENTS_UNAVAILABLE": "Einige Anhänge wurden {{name}} wegen eines Downloadfehlers oder der maximalen Anzahl an Anhängen nicht übermittelt. Sende die für diese Anfrage benötigten Anhänge erneut."
+    }
   },
   "plan": {
     "intro_one": "Dafür ist {{count}} Schritt nötig. Das übernimmt:",
@@ -192,7 +197,21 @@
     "awaitingStart": "Wartet auf dich",
     "progressRunning": "In Arbeit {{current}} / {{total}}",
     "progressDone": "Erledigt {{done}} / {{total}}",
-    "allDone": "Alles erledigt"
+    "allDone": "Alles erledigt",
+    "stepQueued": "Wartet auf Start",
+    "stepExecuting": "Wird ausgeführt",
+    "stepSkipped": "Übersprungen",
+    "skippingTurn": "Wird übersprungen…",
+    "queueWaiting": "Wartet auf Fortsetzen",
+    "skipTurnLabel": "Überspringen {{name}}",
+    "stepSpoken": "Fertig",
+    "allTurns_one": "Alle {{count}} Teammitglied",
+    "allTurns_other": "Alle {{count}} Teammitglieder",
+    "foldTurns": "Weniger anzeigen",
+    "talkTitle": "Nacheinander zu Wort kommen",
+    "talkPending": "Nicht gestartet",
+    "skipTurn": "Überspringen",
+    "queueEnded": "Runde beendet"
   },
   "speaking": {
     "queued": "In der Warteschlange",
@@ -304,7 +323,8 @@
     "lifecycleUnavailable": "Der aktuelle Server oder Computer unterstützt diese Aktion noch nicht.",
     "groupDissolved": "Diese Gruppe wurde aufgelöst. Du kannst den verfügbaren Verlauf weiterhin lesen.",
     "lastOwner": "Übertrage die Inhaberschaft oder löse diese Gruppe auf, bevor du sie verlässt.",
-    "allBotsMentionDisabled": "Der Gruppeninhaber hat @Alle Teammitglieder noch nicht aktiviert."
+    "allBotsMentionDisabled": "Der Gruppeninhaber hat @Alle Teammitglieder noch nicht aktiviert.",
+    "turnAlreadyStarted": "Dieser Teamkollege hat bereits begonnen und kann nicht übersprungen werden"
   },
   "followUp": {
     "next": "Plan · Nächster Schritt",
@@ -500,6 +520,7 @@
     "searchMembers": "Mitglieder suchen",
     "membersNoMatch": "Keine Mitglieder passen zu „{{query}}“",
     "you": "Du",
+    "companionOf": "Teammitglied von {{name}}",
     "teammateTag": "Teammitglied",
     "paused": "Pausiert",
     "accessNone": "Nur Inhaber",

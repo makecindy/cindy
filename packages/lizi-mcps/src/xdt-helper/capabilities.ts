@@ -66,7 +66,19 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       `【怎么判断没开】cindy_computer 这个 MCP 只在 Computer Use 开启时注册;当前工具列表里找不到 mcp__cindy_computer__* 时,说明用户没开,不是 ${BRAND_NAME} 没有这个能力。不要改用 osascript 按键、cliclick、CGEvent 脚本或 cua-driver CLI 代替,这些会被拒绝。`,
       '【怎么引导】告诉用户这一步需要操作桌面,请在「设置 → 内置工具 → Computer Use」打开开关;macOS 还会要求授予「辅助功能」和「屏幕录制」权限,设置页里有逐步引导。给用户这条链接可直接跳到那一页:cindy://settings/builtin-tools(桌面端点击即打开;手机或 IM 里收到时回到电脑上点)。开关和权限都要用户本人操作,agent 不能代为开启。',
       '【开启之后】Codex 任务的工具桥会自动刷新;Claude Code 任务的 MCP 列表在任务启动时固定,开启后让用户再发一条消息或新建任务,然后用 cindy_computer 的 list_tools 确认它已出现,再继续。',
-      '【能做什么】list_windows / get_window_state 读窗口与无障碍树和截图,click / set_value / type_text / press_key / hotkey / scroll 操作目标窗口。Electron 与网页里的文本用 set_value;iOS 模拟器窗口不接受合成输入,用 xcrun simctl 或 AXe;有人正在用电脑时前台输入会被拒(USER_INPUT_ACTIVE),锁屏类快捷键被拒(HOTKEY_BLOCKED)。',
+      '【能做什么】list_windows / get_window_state 读窗口与无障碍树和截图,click / set_value / type_text / press_key / hotkey / scroll 操作目标窗口。Electron 与网页里的文本用 set_value;iOS 模拟器窗口不接受合成输入,用 xcrun simctl 或 AXe;有人正在用电脑时前台输入会被拒(USER_INPUT_ACTIVE),此时先改走后台(后台点击、菜单、set_value、文件或命令行),都不行才等待或询问;锁屏类快捷键被拒(HOTKEY_BLOCKED)。',
+    ].join(' '),
+  },
+  {
+    key: 'settings-control',
+    title: 'Cindy 设置与模型管理',
+    oneLiner: '通过原生工具查询和修改当前电脑的设置、默认模型、模型高级配置与 SSH 连接。',
+    detail: [
+      '先用 cindy_helper.list_tools({category:"settings"})。普通任务和伙伴共用入口，Claude Code、Codex、Pi 走相同宿主服务。工具是否可见取决于实时宿主接线；请以 list_tools 为准。',
+      'list_app_settings 列出当前已接通的分类和操作；get_app_settings 返回当前值与严格 schema；update_app_settings 只提交要改的字段；reset_app_settings 只对声明支持恢复默认的分类可用。结果说明仅本机及生效时点，不把保存成功说成所有在途任务都已切换。',
+      'get_app_default_model / set_app_default_model 管新任务默认；list_model_providers 包含关闭的型号和完整供应商；get_model_configuration / set_model_configuration 管单模型高级参数；configure_model_provider 管名称、顺序、开关和重新发现。当前任务换模型继续使用 control 类的 set_session_runtime。',
+      'SSH 使用 cindy_ssh 的 ssh_list_hosts / ssh_update_host / ssh_remove_host；改显示名只传 id 和 displayName，不用桌面点击，也不改系统 hostname。',
+      '没有一个额外的“AI 全开”设置。已提供的操作沿用任务权限、账号归属及群成员/共享访客规则；缺接口不能靠提高权限获得。此入口不提供任意 IPC、文件键值写入、密钥回读或当前任务自行提权。需要账号登录、密钥或原生系统授权时，仍使用 Cindy 的安全输入和授权流程。',
     ].join(' '),
   },
   {
@@ -76,6 +88,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       '用户本人能对自己的任务、定时任务、项目、伙伴做的操作，Agent 有哪些对应工具、哪些能管到另一台电脑。',
     detail: [
       '【任务链接】已知任务 id 时调用 history/get_task_digest，返回的 sessionUrl 可直接写成 [任务标题](sessionUrl)。list_sessions、search_chat_history、get_chat_history 的任务元数据也附带 sessionUrl，含所属电脑，支持桌面与手机打开。',
+      '【邀请协助当前任务】control 类 create_shared_task_invitation / get_shared_task_state 生成原生共享邀请或查询状态；只针对调用工具的原任务，在任务宿主执行，手机或同账号另一台电脑控制该任务时也适用。访客能读完整历史、附件与工具结果，使用同一 Agent 和既有任务权限；链接可转发，不绑定收件人。工具不发通知、不另建任务，不能指定其他任务。将回执中的 invitationLink 原样交给发送流程；通知插件负责收件人、预览与发送确认。结果未知时先查询状态再决定是否重试，不自动重复。',
       '【机器】cindy_helper 的顶层工具 list_machines（不经 list_tools）：看账号下所有电脑的实时 CPU、可用内存、磁盘、空闲时长和在跑任务，以及这台电脑配置的 SSH 主机；只报事实，放哪台由你决定。',
       '【原则】用户本人能做的操作(含跨电脑)，Agent 也应有对应工具；是否执行由权限档与自动审核决定。数据保存在各自的电脑上：下结论「没有 / 没人在跟」之前，先确认查的是不是只有本机。',
       '【任务】cindy_helper history 类：list_sessions / search_chat_history(device=local|all|<deviceId>)、get_chat_history(deviceId::sessionId)、get_task_digest(一件任务的 ≤2KB 摘要：状态、已持续分钟、最后的要求与回答、待答问题、错误、模型路线与建议换到的下一条、PR、排队数；deviceId::sessionId 只读)、list_history_devices 可跨电脑；list_workdirs、list_session_queue 仅本机。handoff 类 send_to_session：发给既有任务可跨电脑(deviceId::sessionId)，新建任务仅本机。control 类 archive_sessions / unarchive_sessions 可跨电脑(deviceId::sessionId，单次限定一台电脑)；改名、移动、标签、排队消息、插话、停止、运行设置、list_projects 与项目增删改仅本机。',
@@ -247,7 +260,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     detail: [
       '输入框处随时可调:换模型(当前账号与供应商可用的模型)、「推理强度」、「速度」(标准 / 快速 / 超快;只在模型支持时出现,目前快速主要由 GPT / Codex 系模型提供,超快取决于当前账号的 Codex 目录)。',
       '权限模式:「默认权限」「自动审批」「完全访问」,Claude Code 另有「允许编辑」;另可开「计划模式」。',
-      '模型、推理强度、速度的修改对下一条消息生效(运行中则在当前轮结束后)。agent 可用 cindy_helper control 类 set_session_runtime 调整本机任务的模型来源、模型、推理强度与速度(get_session_runtime 先读);伙伴任务另有 bots 类 get_app_default_model / set_app_default_model 读改以后新建任务的默认模型;agent 不能切换权限模式。',
+      '模型、推理强度、速度的修改对下一条消息生效(运行中则在当前轮结束后)。agent 可用 cindy_helper control 类 set_session_runtime 调整本机任务的模型来源、模型、推理强度与速度(get_session_runtime 先读);普通任务与伙伴共用 settings 类 get_app_default_model / set_app_default_model 读改以后新建任务的默认模型;agent 不能切换权限模式。',
     ].join(' '),
   },
   {
@@ -340,7 +353,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     title: '远程连接(手机 / 其他电脑控制,SSH 远端主机)',
     oneLiner: '同账号的手机与其他电脑可远程操控这台桌面上的任务;也可经 SSH 让 agent 在远端主机上运行。',
     detail: [
-      '入口:设置 →「远程连接」。同一 Cindy 账号登录的设备自动出现,无需手动配对;每台设备有「我控制它」与「允许它控制本机」两个独立开关,本机另有允许被控制的总开关。手机 App 只做控制端,任务与数据都在被控电脑上。',
+      '入口:设置 →「远程连接」。同一 Cindy 账号登录的设备自动出现,无需手动配对;每台设备卡上按方向分两行:「我可以:控制它」与「它可以:控制本机」,两项各自独立开关,本机另有允许被控制的总开关。手机 App 只做控制端,任务与数据都在被控电脑上。',
       '控制端可查看与推进被控电脑上的任务(发消息、审批、切模型等),账号密钥与全局设置等不开放给控制端。主列表标题「全部任务 ▾」可切换只看本机或某台远程电脑。',
       'SSH 远端主机:在同一页添加主机(也读取 ~/.ssh/config),可在远端安装 Claude Code / Codex / Pi(未安装时首条消息自动安装)并新建远端任务,agent 进程与文件都在远端。',
       'agent 侧跨电脑能力(查任务、给另一台电脑的任务发消息、管定时任务等)见 self-management。',

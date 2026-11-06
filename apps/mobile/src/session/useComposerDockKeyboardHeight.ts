@@ -11,7 +11,11 @@ import {
   useDerivedValue,
   useSharedValue,
 } from "react-native-reanimated";
-import { isDockedKeyboard } from "@/auth/loginKeyboardAvoidance";
+import {
+  iosKeyboardOverlap,
+  loadDockedKeyboardHeights,
+  subscribeDockedKeyboardHeights,
+} from "@/session/keyboardOverlap";
 
 /** Keep UI-thread motion, but use the public keyboard frame once it settles.
  * Reanimated 4.5's iOS observer only subscribes to show/hide and can retain an
@@ -24,20 +28,17 @@ export function useComposerDockKeyboardHeight() {
   const settledHeight = useSharedValue(-1);
 
   useLayoutEffect(() => {
-    const overlap = (frame: KeyboardMetrics | undefined) => {
-      if (!frame || frame.screenY === 0) return 0;
-      return isDockedKeyboard(
-        { x: frame.screenX, y: frame.screenY, ...frame },
-        viewport.width,
-      ) && frame.screenY + frame.height >= viewport.height
-        ? Math.max(0, Math.min(frame.height, viewport.height - frame.screenY))
-        : 0;
-    };
-    settledHeight.value = Keyboard.isVisible()
-      ? overlap(Keyboard.metrics())
-      : -1;
+    loadDockedKeyboardHeights();
+    // Same judgement as the composer card, including iOS's impossible frames after PiP.
+    const overlap = (frame: KeyboardMetrics | undefined) =>
+      !frame || frame.screenY === 0 ? 0 : iosKeyboardOverlap(frame, viewport);
+    let lastFrame: KeyboardMetrics | undefined = Keyboard.isVisible()
+      ? Keyboard.metrics()
+      : undefined;
+    settledHeight.value = Keyboard.isVisible() ? overlap(lastFrame) : -1;
     const settle = (event: KeyboardEvent) => {
-      settledHeight.value = overlap(event.endCoordinates);
+      lastFrame = event.endCoordinates;
+      settledHeight.value = overlap(lastFrame);
     };
     const invalidate = () => {
       settledHeight.value = -1;
@@ -48,10 +49,19 @@ export function useComposerDockKeyboardHeight() {
       Keyboard.addListener("keyboardDidShow", settle),
       Keyboard.addListener("keyboardDidChangeFrame", settle),
       Keyboard.addListener("keyboardDidHide", () => {
+        lastFrame = undefined;
         settledHeight.value = 0;
       }),
     ];
+    // Saved heights arrive asynchronously; recompute a settled keyboard that
+    // used the estimate. -1 (moving/not settled) and 0 (hidden) stay as they are.
+    const unsubscribe = subscribeDockedKeyboardHeights(() => {
+      if (lastFrame && settledHeight.value >= 0) {
+        settledHeight.value = overlap(lastFrame);
+      }
+    });
     return () => {
+      unsubscribe();
       for (const subscription of subscriptions) subscription.remove();
     };
   }, [settledHeight, viewport.width, viewport.height]);

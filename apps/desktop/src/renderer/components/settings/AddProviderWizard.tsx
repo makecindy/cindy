@@ -59,6 +59,7 @@ import { isSpeechModel, SPEECH_API_PRESETS, speechReferenceModels, speechSetupTa
 
 import {
   isOpenRouterModelsUrl,
+  isOpenHubsModelsUrl,
   isLoopbackProviderUrl,
   isProviderRequestPath,
   presetDisplayName,
@@ -1098,6 +1099,9 @@ export function AddProviderWizard({
         ];
         return sources.map(async (source) => {
           try {
+            const openHubsInventory = preset.id === 'openhubs' && !source.route
+              && /^https:\/\/openhubs\.zhidemai\.com(?:\/v1)?\/?$/.test(source.baseUrl)
+              && !!source.modelsUrl && isOpenHubsModelsUrl(source.modelsUrl);
             const reuseDetection = detected?.catalog?.ok && agent === detected.agent
               && apiKey === detected.apiKey && source.baseUrl === detected.preset.runtimes[agent]?.baseUrl
               && !source.route && !source.modelsUrl?.includes('client_version=');
@@ -1107,6 +1111,7 @@ export function AddProviderWizard({
               baseUrl: source.baseUrl,
               authMethod: preset.authMethod ?? 'apiKey',
               modelsUrl: source.modelsUrl,
+              ...(openHubsInventory ? { allowEmpty: true } : {}),
               apiKey: apiKey.trim() || null,
               ...(source.wireProtocol ? { wireProtocol: source.wireProtocol } : {}),
               ...(rt.headers ? { headers: rt.headers } : {}),
@@ -1114,8 +1119,8 @@ export function AddProviderWizard({
             return {
               agent,
               modelsUrl: source.modelsUrl,
-              completeInventory: /^https:\/\/openrouter\.ai\/api(?:\/v1)?\/?$/.test(source.baseUrl)
-                && (!source.modelsUrl || isOpenRouterModelsUrl(source.modelsUrl)),
+              completeInventory: openHubsInventory || (/^https:\/\/openrouter\.ai\/api(?:\/v1)?\/?$/.test(source.baseUrl)
+                && (!source.modelsUrl || isOpenRouterModelsUrl(source.modelsUrl))),
               route: source.route,
               ok: !!(r.ok && r.models),
               models: r.models ?? [],
@@ -1594,7 +1599,7 @@ export function AddProviderWizard({
             {wizardTitle}
           </h3></Dialog.Title>
           {step === 1 ? (
-            <button
+            <button data-settings-search-action="Open the custom provider connection form"
               type="button"
               disabled={saving}
               onClick={() => { if (!savingRef.current) onOpenCustomForm(); }}

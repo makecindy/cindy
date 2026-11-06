@@ -1,3 +1,4 @@
+import { configureModelSettingsActions, manageAppModels } from '../../app-settings/models';
 import Database from 'better-sqlite3';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
@@ -4927,11 +4928,33 @@ describe('model context limit IPC', () => {
     const target = { ...primary, relatedTargets: [related] };
     await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, target, 500_000, stamp)).resolves.toMatchObject({ limit: 500_000, isCustomized: true, mixed: false });
     expect(deps.writeModelContextLimit).toHaveBeenCalledExactlyOnceWith([primary, related], 500_000);
+    expect(deps.broadcastChanged).toHaveBeenCalledTimes(1);
     await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, target, 400_000, { ...stamp, ownerGeneration: 0 })).rejects.toThrow();
     await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, { ...primary, relatedTargets: [primary] }, 400_000, stamp)).rejects.toThrow();
     await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, { ...primary, relatedTargets: [{ ...related, providerId: 'other' }] }, 400_000, stamp)).rejects.toThrow();
     expect(deps.writeModelContextLimit).toHaveBeenCalledTimes(1);
+    expect(deps.broadcastChanged).toHaveBeenCalledTimes(1);
+    await harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_RESET, target, stamp);
+    expect(deps.writeModelContextLimit).toHaveBeenLastCalledWith([primary, related], null);
+    expect(deps.broadcastChanged).toHaveBeenCalledTimes(2);
   });
+
+  it.each([MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, MAKER_INVOKE.MODEL_CONTEXT_LIMIT_RESET])(
+    'does not publish a changed projection after a failed context write: %s', async (channel) => {
+      const harness = new IpcHarness();
+      const deps = makeDeps({
+        currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+        listProviders: async () => [catalogView('openai', { codex: ['gpt-6'] })],
+        readModelContextLimit: () => ({ limit: null, isCustomized: false }),
+        writeModelContextLimit: vi.fn().mockRejectedValue(new Error('write failed')),
+      });
+      registerProviderHandlers(harness, deps);
+      const args = channel === MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET
+        ? [primary, 500_000, stamp] : [primary, stamp];
+      await expect(harness.invoke(channel, ...args)).rejects.toThrow();
+      expect(deps.broadcastChanged).not.toHaveBeenCalled();
+    },
+  );
 
   it('does not save a window when native catalog preparation fails', async () => {
     const harness = new IpcHarness();
@@ -5703,4 +5726,29 @@ describe('Magpie discovery source lifecycle through real IPC and persistence', (
     } } });
     expect((await getCustomProvider(config.id))!.runtimes.pi!.models[0].discoveredSource).toBeUndefined();
   });
+});
+
+// Unit: AI and Settings use the same domain action, while the renderer retains
+// its sender fence. The minimal regression is a valid context override via AI
+// followed by an untrusted IPC attempt on the same handler instance.
+it('shares model actions with AI without making untrusted renderer writes valid', async () => {
+  const harness = new IpcHarness();
+  let contextLimit: number | null = null;
+  const deps = makeDeps({
+    assertTrustedSender: () => { throwIpcError('PERMISSION_DENIED', 'untrusted'); },
+    listProviders: async () => [catalogView('custom', { pi: ['model'] })],
+    currentOwnerSession: () => ({ dataOwnerId: 'test-user', generation: 1 }),
+    readModelContextLimit: () => ({ limit: contextLimit, isCustomized: contextLimit !== null }),
+    writeModelContextLimit: async (_targets, value) => { contextLimit = value; },
+  });
+  const actions = registerProviderHandlers(harness, deps);
+  const target = { providerId: 'custom', agent: 'pi', modelId: 'model' };
+  const owner = actions.owner();
+  configureModelSettingsActions(actions);
+  await manageAppModels({ operation: 'set', target: { ...target, agent: 'pi' }, change: { setting: 'contextLimit', value: 16000 } }, async () => {});
+  expect(await actions.getContext(target)).toMatchObject({ limit: 16000, isCustomized: true });
+  await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, target, 32000, owner)).rejects.toThrow('untrusted');
+  expect(contextLimit).toBe(16000);
+  await actions.resetContext(target, owner);
+  expect(contextLimit).toBe(null);
 });

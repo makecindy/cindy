@@ -1,3 +1,4 @@
+import { generalSettings } from './GeneralSettings.settings-search';
 import { Button } from '@/components/ui/button';
 /**
  * ExperimentalSection — Settings → General 的"实验功能"区块。
@@ -22,11 +23,14 @@ import {
 import { LspBetaCell } from './LspBetaCell';
 import { SETTINGS_CARD_CLASS, SETTINGS_ROW_DIVIDER_CLASS } from './settingsRowClasses';
 import { BetaChannelCell } from './BetaChannelCell';
+import { additionalSettings } from './AdditionalSettings.settings-search';
 
 export function ExperimentalSection() {
   const { t } = useTranslation();
-  const betaChannelSupported =
-    window.electronAPI?.supportsBetaUpdateChannel ?? window.electronAPI?.platform !== 'linux';
+  const betaChannelSupported = additionalSettings.betaChannel.isVisible({
+    platform: window.electronAPI?.platform ?? '',
+    supportsBetaUpdateChannel: window.electronAPI?.supportsBetaUpdateChannel,
+  });
   const rows: { key: string; node: ReactNode }[] = [
     { key: 'lsp', node: <LspBetaCell /> },
     ...(betaChannelSupported ? [{ key: 'beta-channel', node: <BetaChannelCell /> }] : []),
@@ -82,7 +86,7 @@ function ExperimentalFeatureRow({ feature }: { feature: ExperimentalFeatureMeta 
           </p>
         </div>
 
-        <Switch
+        <Switch data-setting-id={generalSettings.experimental.id}
           checked={enabled}
           onCheckedChange={setEnabled}
           aria-label={t('settings.experimental.toggleAria', { title })}
@@ -92,7 +96,7 @@ function ExperimentalFeatureRow({ feature }: { feature: ExperimentalFeatureMeta 
       {/* toggle on 后才显示入口按钮 */}
       {enabled && feature.openAction && (
         <div className="flex items-center justify-end pt-1">
-          <Button
+          <Button data-settings-search-action="Open the enabled experimental feature"
             variant="cta"
             size="md"
             compact

@@ -1,3 +1,5 @@
+import { prNumberLabel } from '@cindy/maker-shared';
+import { prStatusQuery } from '@cindy/maker-shared';
 import { formatLocalizedSeconds } from './sessionDurationFormat';
 import { CompanionTaskResultCard } from './CompanionTaskResultCard';
 import { Component, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
@@ -256,7 +258,7 @@ export function CompanionTaskCard({
     [
       {
         sessionId: childSessionId,
-        queries: prs.map(({ owner, repo, prNumber }) => ({ owner, repo, prNumber })),
+        queries: prs.map(prStatusQuery),
       },
     ],
     {
@@ -268,7 +270,11 @@ export function CompanionTaskCard({
     const result = Array.isArray(prStatuses.value)
       ? prStatuses.value.find((s) => prStatusKey(s) === prStatusKey(ref))
       : undefined;
-    const { Icon, color } = prStatusVisual(result?.ok ? result.status : null, colors);
+    const { Icon, color } = prStatusVisual(
+      result?.ok ? result.status : null,
+      colors,
+      result?.ok ? result.conflicts : null,
+    );
     return <Icon size={iconSize.sm} color={color} />;
   };
   const openPr = (url: string) => {
@@ -302,8 +308,21 @@ export function CompanionTaskCard({
     || (Array.isArray(prStatuses.value) && prStatuses.value.some((result) => !result.ok))) && (row || task.session);
   const facts = [
     duration,
-    Array.isArray(row?.artifacts) && row.artifacts.length > 0 ? t('devices.companions.artifactCount', { count: row.artifacts.length }) : null,
-    prs.length === 1 ? `${prs[0].owner}/${prs[0].repo} #${prs[0].prNumber}` : prs.length > 1 ? t('devices.companions.prCount', { count: prs.length }) : null,
+    Array.isArray(row?.artifacts) && row.artifacts.length > 0
+      ? t('devices.companions.artifactCount', { count: row.artifacts.length })
+      : null,
+    prs.length === 1
+      ? `${prs[0].owner}/${prs[0].repo} ${prNumberLabel(prs[0])}`
+      : prs.length > 1
+        ? t(
+            prs.every((pr) => pr.provider === 'gitlab')
+              ? 'devices.companions.mrCount'
+              : prs.some((pr) => pr.provider === 'gitlab')
+                ? 'devices.companions.prMrCount'
+                : 'devices.companions.prCount',
+            { count: prs.length },
+          )
+        : null,
   ].filter((part): part is string => !!part);
   return (
     <View style={styles.card} testID="companion.taskCard">
@@ -342,37 +361,65 @@ export function CompanionTaskCard({
           {row.lastError.replace(/^[A-Z_]+:\s*/, '')}
         </Text>
       ) : null}
-      {prs.length > 0 || active || error ? <View style={styles.actions}>
-        {prs.length > 0 ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityState={prs.length > 1 ? { expanded: showPrs } : undefined}
-            hitSlop={AUX_HIT_SLOP}
-            style={({ pressed }) => [styles.action, pressed && mobileInteractionStyles.pressed]}
-            onPress={() => (prs.length === 1 ? openPr(sessionPrUrl(prs[0])) : setShowPrs(!showPrs))}
-          >
-            {prs.length === 1 ? prIcon(prs[0]) : <GitPullRequest size={iconSize.sm} color={colors.textPrimary} />}
-            <Text style={styles.actionLabel}>{t('devices.companions.viewPr')}</Text>
-          </Pressable>
-        ) : null}
-        {active ? (
-          <Pressable
-            accessibilityRole="button"
-            disabled={!online || pending}
-            hitSlop={AUX_HIT_SLOP}
-            style={({ pressed }) => [styles.action, (!online || pending) && styles.disabled, pressed && mobileInteractionStyles.pressed]}
-            onPress={() => void stop()}
-          >
-            <Square size={iconSize.sm} color={colors.textPrimary} />
-            <Text style={styles.actionLabel}>{t('devices.companions.stopTask')}</Text>
-          </Pressable>
-        ) : null}
-        {error ? (
-          <Pressable accessibilityRole="button" hitSlop={AUX_HIT_SLOP} style={({ pressed }) => [styles.action, pressed && mobileInteractionStyles.pressed]} onPress={() => { refresh(); task.refresh(); }}>
-            <Text style={styles.actionLabel}>{t('devices.resources.retry')}</Text>
-          </Pressable>
-        ) : null}
-      </View> : null}
+      {prs.length > 0 || active || error ? (
+        <View style={styles.actions}>
+          {prs.length > 0 ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={prs.length > 1 ? { expanded: showPrs } : undefined}
+              hitSlop={AUX_HIT_SLOP}
+              style={({ pressed }) => [styles.action, pressed && mobileInteractionStyles.pressed]}
+              onPress={() =>
+                prs.length === 1 ? openPr(sessionPrUrl(prs[0])) : setShowPrs(!showPrs)
+              }
+            >
+              {prs.length === 1 ? (
+                prIcon(prs[0])
+              ) : (
+                <GitPullRequest size={iconSize.sm} color={colors.textPrimary} />
+              )}
+              <Text style={styles.actionLabel}>
+                {t(
+                  prs.some((pr) => pr.provider === 'gitlab')
+                    ? prs.every((pr) => pr.provider === 'gitlab')
+                      ? 'devices.companions.viewMr'
+                      : 'devices.companions.viewPrMr'
+                    : 'devices.companions.viewPr',
+                )}
+              </Text>
+            </Pressable>
+          ) : null}
+          {active ? (
+            <Pressable
+              accessibilityRole="button"
+              disabled={!online || pending}
+              hitSlop={AUX_HIT_SLOP}
+              style={({ pressed }) => [
+                styles.action,
+                (!online || pending) && styles.disabled,
+                pressed && mobileInteractionStyles.pressed,
+              ]}
+              onPress={() => void stop()}
+            >
+              <Square size={iconSize.sm} color={colors.textPrimary} />
+              <Text style={styles.actionLabel}>{t('devices.companions.stopTask')}</Text>
+            </Pressable>
+          ) : null}
+          {error ? (
+            <Pressable
+              accessibilityRole="button"
+              hitSlop={AUX_HIT_SLOP}
+              style={({ pressed }) => [styles.action, pressed && mobileInteractionStyles.pressed]}
+              onPress={() => {
+                refresh();
+                task.refresh();
+              }}
+            >
+              <Text style={styles.actionLabel}>{t('devices.resources.retry')}</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
       {showPrs && prs.length > 1 ? (
         <View>
           {prs.map((pr) => (
@@ -384,7 +431,7 @@ export function CompanionTaskCard({
             >
               {prIcon(pr)}
               <Text style={styles.note}>
-                {pr.owner}/{pr.repo} #{pr.prNumber}
+                {pr.owner}/{pr.repo} {prNumberLabel(pr)}
               </Text>
             </Pressable>
           ))}

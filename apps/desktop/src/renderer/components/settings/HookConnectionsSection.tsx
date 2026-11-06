@@ -1,3 +1,4 @@
+import { imBotSettings } from './ImBotSection.settings-search';
 /**
  * HookConnectionsSection —— 「IM 机器人」页「官方」栏(Cindy 渠道)。
  * i18n key 刻意留在 settings.remoteControl.hook.* 命名空间(50+ 条 × 4 语言的
@@ -309,7 +310,7 @@ function LegacyGlobalDefaultsNotice({
           </li>
         ))}
       </ul>
-      <Button
+      <Button data-settings-search-action="Restore legacy global IM defaults"
         variant="secondary"
         size="sm"
         compact
@@ -380,7 +381,7 @@ function DefaultWorkspaceRadio({
   disabled?: boolean;
 }) {
   return (
-    <button
+    <button data-setting-id={imBotSettings.cindy.id}
       type="button"
       role="radio"
       aria-checked={selected}
@@ -1254,7 +1255,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
           <div className="flex items-center gap-2 text-11 text-[var(--text-tertiary)]">
             <span>{prefsState.hint}</span>
             {prefsState.retry !== null && (
-              <Button variant="secondary" size="xs" compact type="button" onClick={prefsState.retry}>
+              <Button data-settings-search-action="Retry loading channel preferences" variant="secondary" size="xs" compact type="button" onClick={prefsState.retry}>
                 {t('settings.tina.prefs.retry')}
               </Button>
             )}
@@ -1325,7 +1326,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                     }}
                   />
                 ) : null}
-                <input
+                <input data-setting-id={imBotSettings.cindy.id}
                   value={row.alias}
                   onChange={(e) => {
                     const next = rows.slice();
@@ -1336,7 +1337,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                   maxLength={32}
                   className="shrink-0 w-36 rounded-lg border border-transparent px-2.5 py-1.5 text-13 text-[var(--settings-input-text)] bg-transparent outline-none hover:border-[var(--border-default)] focus:border-[var(--border-default)] transition-colors"
                 />
-                <button
+                <button data-setting-id={imBotSettings.cindy.id}
                   type="button"
                   onClick={() => void handleChangeDir(i)}
                   title={t('settings.remoteControl.hook.form.changeDir')}
@@ -1344,7 +1345,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                 >
                   {row.dir}
                 </button>
-                <button
+                <button data-settings-search-action="Remove this workspace from the bot connection"
                   type="button"
                   onClick={() => void handleRemoveWorkspace(i)}
                   aria-label={t('settings.remoteControl.hook.form.removeWorkspace')}
@@ -1358,7 +1359,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             </div>
           ))}
         </div>
-        <Button
+        <Button data-setting-id={imBotSettings.cindy.id}
           variant="secondary"
           size="sm"
           compact
@@ -1403,6 +1404,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
   };
 
   const renderProviderCard = (provider: NeutralCardProvider) => {
+    const setting = provider === 'telegram' ? imBotSettings.cindyTelegram : imBotSettings.cindyX;
     const view = hook[provider] as ProviderHookView | undefined;
     if (view === undefined) return null; // 旧 main 快照尚无该 provider 字段时不渲染
     const cs = providerCardState(provider, view);
@@ -1420,7 +1422,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
         routeSummary={companion ? null : cs.bindingLine}
         status={<ChannelStatusBadge tone={cs.badge.tone} label={cs.badge.label} />}
         headerAction={
-          <Switch
+          <Switch data-setting-id={setting.id}
             checked={cs.toggleChecked}
             disabled={!view.enabled && view.url.length === 0}
             onCheckedChange={(enabled) => handleProviderToggle(provider, enabled)}
@@ -1466,7 +1468,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
               {cs.inProgress && cs.binding?.connectUrl ? (
                 <>
                   {cs.actions.includes('open_connect_url') ? (
-                    <Button
+                    <Button data-settings-search-action="Open the channel connection or group setup link"
                       variant="secondary"
                       size="xs"
                       compact
@@ -1477,7 +1479,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                     </Button>
                   ) : null}
                   {cs.actions.includes('copy_connect_url') ? (
-                    <Button
+                    <Button data-settings-search-action="Copy the channel connection link"
                       variant="secondary"
                       size="xs"
                       compact
@@ -1490,7 +1492,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                 </>
               ) : null}
               {cs.inProgress && cs.actions.includes('cancel') ? (
-                <Button
+                <Button data-settings-search-action="Start or cancel linking this bot account"
                   variant="secondary"
                   size="xs"
                   compact
@@ -1503,7 +1505,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
               {cs.confirmed ? (
                 <>
                   {cs.actions.includes('open_provider') ? (
-                    <Button
+                    <Button data-settings-search-action="Open the channel connection or group setup link"
                       variant="secondary"
                       size="xs"
                       compact
@@ -1514,7 +1516,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                     </Button>
                   ) : null}
                   {cs.actions.includes('add_to_group') ? (
-                    <Button
+                    <Button data-settings-search-action="Open the channel connection or group setup link"
                       variant="secondary"
                       size="xs"
                       compact
@@ -1525,7 +1527,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                     </Button>
                   ) : null}
                   {cs.actions.includes('revoke') ? (
-                    <Button
+                    <Button data-settings-search-action="Unlink this bot account"
                       variant="secondary"
                       size="xs"
                       compact
@@ -1537,7 +1539,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                   ) : null}
                 </>
               ) : cs.canStartLink ? (
-                <Button
+                <Button data-settings-search-action="Start or cancel linking this bot account"
                   variant="secondary"
                   size="xs"
                   compact
@@ -1569,7 +1571,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                   {t(view.companionBotId === companion.id ? 'bots.channels.officialX.bound'
                     : view.companionBotId ? 'bots.channels.officialX.boundElsewhere' : 'bots.channels.officialX.unbound', { name: companion.name })}
                 </p>
-                <Button variant="secondary" size="sm" type="button" disabled={companionPending}
+                <Button data-setting-id={imBotSettings.cindy.id} variant="secondary" size="sm" type="button" disabled={companionPending}
                   onClick={() => void changeXCompanion()}>
                   {t(view.companionBotId === companion.id ? 'bots.channels.officialX.remove' : 'bots.channels.officialX.bind')}
                 </Button>
@@ -1577,7 +1579,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             ) : view.companionBotId ? (
               <div className="flex flex-col gap-2 border-t border-[var(--border-default)] pt-3">
                 <p className="text-12 leading-relaxed text-[var(--text-secondary)]">{t('bots.channels.officialX.managed')}</p>
-                <Button variant="secondary" size="sm" type="button" disabled={companionPending}
+                <Button data-setting-id={imBotSettings.cindy.id} variant="secondary" size="sm" type="button" disabled={companionPending}
                   onClick={() => void changeXCompanion()}>{t('bots.channels.officialX.remove')}</Button>
               </div>
             ) : null}
@@ -1635,7 +1637,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
 
       {/* ── Slack 渠道卡 ─────────────────────────────────────────────── */}
       {!companion ? <ImChannelSettingsCard
-        id="cindy-im-slack"
+        id={imBotSettings.cindySlack.targetId}
         title={t('settings.tina.prefs.providerSlack')}
         description={t('settings.remoteControl.hook.slackDescription')}
         routeSummary={slackSummary}
@@ -1648,7 +1650,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
           />
         }
         headerAction={
-          <Switch
+          <Switch data-setting-id={imBotSettings.cindySlack.id}
             checked={toggleChecked}
             disabled={slackAuthActionPending}
             onCheckedChange={(next) => {
@@ -1686,7 +1688,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
               <span className="min-w-0 flex-1 truncate text-12 text-[var(--text-tertiary)]">
                 {t('settings.remoteControl.hook.authorizing')}
               </span>
-              <Button variant="secondary" size="xs" compact type="button" onClick={() => void handleCopyLink()}>
+              <Button data-setting-id={imBotSettings.cindySlack.id} variant="secondary" size="xs" compact type="button" onClick={() => void handleCopyLink()}>
                 {t('settings.remoteControl.hook.binding.copyLink')}
               </Button>
             </div>
@@ -1700,7 +1702,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                 <span className="min-w-0 flex-1 text-11 leading-relaxed text-[var(--error-fg)]">
                   {t('settings.remoteControl.hook.notInstalled.title')}
                 </span>
-                <Button
+                <Button data-setting-id={imBotSettings.cindySlack.id}
                   variant="secondary"
                   size="xs"
                   compact
@@ -1711,7 +1713,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                 >
                   {t('settings.remoteControl.hook.installApp')}
                 </Button>
-                <Button
+                <Button data-setting-id={imBotSettings.cindySlack.id}
                   variant="secondary"
                   size="xs"
                   compact
@@ -1740,7 +1742,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                     : (hook.binding?.message ??
                       t(`settings.remoteControl.hook.binding.state.${bindingState}`))}
                 </span>
-                <Button
+                <Button data-setting-id={imBotSettings.cindySlack.id}
                   variant="secondary"
                   size="xs"
                   compact
@@ -1778,7 +1780,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                     : (hook.pendingBind.message ??
                       t(`settings.remoteControl.hook.binding.state.${hook.pendingBind.state}`))}
                 </span>
-                <Button
+                <Button data-setting-id={imBotSettings.cindySlack.id}
                   variant="secondary"
                   size="xs"
                   compact
@@ -1825,7 +1827,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                       <span className={`shrink-0 text-11 ${b.communicationsEnabled !== undefined ? 'text-[var(--text-tertiary)]' : 'text-[var(--error-fg)]'}`}>
                         {t(b.communicationsEnabled !== undefined ? 'settings.remoteControl.hook.multi.botNotReceiving' : 'settings.remoteControl.hook.multi.displaced')}
                       </span>
-                      <Button
+                      <Button data-settings-search-action="Reauthorize this Slack workspace"
                         variant="secondary"
                         size="xs"
                         compact
@@ -1847,7 +1849,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                       </Button>
                     </>
                   ) : null}
-                  <button
+                  <button data-settings-search-action="Remove this Slack workspace binding"
                     type="button"
                     onClick={() => void handleRemoveBinding(b)}
                     aria-label={t('settings.remoteControl.hook.multi.removeAria')}
@@ -1858,7 +1860,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                   {hook.serverSlackCommunications ? (
                     <label className="flex basis-full items-center justify-between gap-2 text-12 text-[var(--text-secondary)]">
                       {t('settings.remoteControl.hook.multi.localCommunications')}
-                      <Switch
+                      <Switch data-setting-id={imBotSettings.cindySlack.id}
                         checked={b.communicationsEnabled === true}
                         disabled={hook.status !== 'connected' || slackAuthActionPending || hook.pendingBind?.state === 'pending'}
                         onCheckedChange={(enabled) => runSlackAuthAction(
@@ -1878,11 +1880,11 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                     {t('settings.remoteControl.hook.authorizing')}
                   </span>
                   {hook.pendingBind.authorizeUrl ? (
-                    <Button variant="secondary" size="xs" compact type="button" onClick={() => void handleCopyLink()}>
+                    <Button data-setting-id={imBotSettings.cindySlack.id} variant="secondary" size="xs" compact type="button" onClick={() => void handleCopyLink()}>
                       {t('settings.remoteControl.hook.binding.copyLink')}
                     </Button>
                   ) : null}
-                  <Button
+                  <Button data-setting-id={imBotSettings.cindySlack.id}
                     variant="secondary"
                     size="xs"
                     compact
@@ -1906,7 +1908,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                     <span className="min-w-0 flex-1 text-11 leading-relaxed text-[var(--error-fg)]">
                       {t('settings.remoteControl.hook.notInstalled.title')}
                     </span>
-                    <Button
+                    <Button data-setting-id={imBotSettings.cindySlack.id}
                       variant="secondary"
                       size="xs"
                       compact
@@ -1917,7 +1919,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                     >
                       {t('settings.remoteControl.hook.installApp')}
                     </Button>
-                    <Button
+                    <Button data-setting-id={imBotSettings.cindySlack.id}
                       variant="secondary"
                       size="xs"
                       compact
@@ -1926,7 +1928,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                     >
                       {t('settings.remoteControl.hook.binding.copyLink')}
                     </Button>
-                    <Button
+                    <Button data-setting-id={imBotSettings.cindySlack.id}
                       variant="secondary"
                       size="xs"
                       compact
@@ -1966,7 +1968,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                         : (hook.pendingBind.message ??
                           t(`settings.remoteControl.hook.binding.state.${hook.pendingBind.state}`))}
                   </span>
-                  <Button
+                  <Button data-setting-id={imBotSettings.cindySlack.id}
                     variant="secondary"
                     size="xs"
                     compact
@@ -1996,7 +1998,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                         : 'settings.remoteControl.hook.binding.reauthorize',
                     )}
                   </Button>
-                  <Button
+                  <Button data-setting-id={imBotSettings.cindySlack.id}
                     variant="secondary"
                     size="xs"
                     compact
@@ -2014,7 +2016,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                 </div>
               ) : null}
               {hook.serverMultiTeam ? (
-                <Button
+                <Button data-setting-id={imBotSettings.cindySlack.id}
                   variant="secondary"
                   size="sm"
                   compact
@@ -2059,7 +2061,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                       {t('settings.remoteControl.hook.lifecycleAnnouncement.hint')}
                     </span>
                   </div>
-                  <Switch
+                  <Switch data-setting-id={imBotSettings.cindySlack.id}
                     checked={hook.lifecycleAnnouncement}
                     onCheckedChange={handleLifecycleAnnouncementToggle}
                     aria-label={t('settings.remoteControl.hook.lifecycleAnnouncement.label')}

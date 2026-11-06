@@ -189,7 +189,7 @@ export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions):
     isRefreshableUnauthorizedCode(firstCode)
   ) {
     opts.signal?.throwIfAborted();
-    const refreshed = await waitForRefresh(authManager.refresh(), opts.signal);
+    const refreshed = await waitForRefresh(authManager.refresh({ serverRejectedToken: true }), opts.signal);
     opts.signal?.throwIfAborted();
     if (refreshed) {
       refreshedAndRetried = true;

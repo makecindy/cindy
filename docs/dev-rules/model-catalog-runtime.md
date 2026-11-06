@@ -240,6 +240,16 @@ Codex 的 `context_window` 是工作默认，`max_context_window` 是原生最�
 
 2026-09-07 的全目录核对与源侧待办见 [2026-09-07 核对记录](../model-catalog-audit-2026-09-07.md)。
 
+官方 OpenAI API 的 Codex 连接另行读取 API 模式的 `model/list`，将明确报告的思考档位与
+Fast 合入 discovery 层；仅适用于 `https://api.openai.com/v1` Responses 路由及精确型号 ID。
+不从订阅账号复制能力、不扩充已配置模型成员，也不授予 Ultrafast；未知别名、中转和其它
+引擎保持原有能力来源。显式用户配置、服务端强制覆盖及本地覆盖仍按既有优先级处理。
+该快照只存内存，账号边界清空；API 探测不改写共享 Codex 历史目录。能力报告不证明 API
+账号的服务端权限。实现见 `codex-api-model-capabilities.ts`，原生验证见
+`packages/maker-core/src/agents/codex/api-capabilities.integration.test.ts`。
+Ultra 由 Codex 原生解释（含多 Agent 行为及普通 HTTP effort 映射），不能把字符串
+`ultra` 直接当成公共 Responses API 的 reasoning effort。
+
 ### 型号标准与 Gateway 控制（2026-09-07 用户裁决）
 
 Gateway 下发不是所有模型事实的唯一依据。先对照官方规格、当前原生目录和实际通道，

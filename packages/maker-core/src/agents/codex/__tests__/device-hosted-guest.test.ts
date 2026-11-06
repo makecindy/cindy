@@ -10,7 +10,7 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AgentDeps, DeviceHostedSession } from '../../base-agent.js';
+import type { AgentDeps, DeviceHostedSession, StartSessionOptions } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import { AppServerClient, type RequestProgressDeadline } from '../app-server/client.js';
 import { Method } from '../app-server/protocol.js';
@@ -113,6 +113,9 @@ async function makeTempDir(prefix: string): Promise<string> {
 
 interface Fixture {
   guest: boolean;
+  permissionMode?: StartSessionOptions['permissionMode'];
+  extraDirs?: string[];
+  writableDirs?: string[];
   codexHomeInstructions?: string;
   resume?: boolean;
   /**
@@ -312,8 +315,8 @@ async function startHosted(fixture: Fixture) {
 
   const deviceHosted: DeviceHostedSession = {
     workingDir,
-    extraDirs: [],
-    writableDirs: [],
+    extraDirs: fixture.extraDirs ?? [],
+    writableDirs: fixture.writableDirs ?? [],
     platform: 'darwin',
     shell: 'zsh',
     isGitRepo: false,
@@ -331,7 +334,9 @@ async function startHosted(fixture: Fixture) {
     model: 'gpt-5.5',
     ...(fixture.guest ? { providerId: fixture.providerId ?? SHARED_PROVIDER.providerId } : {}),
     workingDir,
-    permissionMode: 'acceptEdits',
+    permissionMode: fixture.permissionMode ?? 'acceptEdits',
+    extraDirs: fixture.extraDirs,
+    writableDirs: fixture.writableDirs,
     deviceHosted,
     ...(fixture.ghostRosterSnapshot !== undefined ? { ghostRosterSnapshot: fixture.ghostRosterSnapshot } : {}),
     ...(fixture.resume ? { resumeSessionId: '0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000' } : {}),
@@ -361,6 +366,45 @@ afterEach(async () => {
 });
 
 describe('Codex device-hosted guest sessions', () => {
+  // 测试价值：startSession / setWritableDirs / send 生成的 exec-server 环境必须带齐模型可见的目录。
+  // 依据：本 PR 修复了 Claude hosted 遗漏附加目录；Codex 原有 runtimeWorkspaceRoots 用例只覆盖本机路径。
+  // 最小失败输入：hosted 初始只读、可写目录各一个，追加可写目录后发送；完全访问也不能省略目录。
+  // tier：unit，复用内存 app-server fake，断言 thread/start 和 turn/start 的真实协议参数。
+  it.each(['acceptEdits', 'bypassPermissions'] as const)('routes hosted workspace roots through the execution environment in %s mode', async (permissionMode) => {
+    const root = await makeTempDir('maker-core-codex-hosted-roots-');
+    const referenceDir = path.join(root, 'reference');
+    const writableDir = path.join(root, 'output');
+    const addedDir = path.join(root, 'additional-output');
+    const fixture = await startHosted({
+      guest: false,
+      permissionMode,
+      extraDirs: [referenceDir],
+      writableDirs: [writableDir],
+    });
+    const handle = await fixture.started;
+    try {
+      const initial = threadParams(fixture.request, Method.ThreadStart);
+      expect(initial).not.toHaveProperty('runtimeWorkspaceRoots');
+      expect.soft(initial.environments).toEqual([{
+        environmentId: expect.any(String),
+        cwd: fixture.workingDir,
+        runtimeWorkspaceRoots: [fixture.workingDir, referenceDir, writableDir],
+      }]);
+
+      await handle.setWritableDirs?.([writableDir, addedDir]);
+      await handle.send({ type: 'user', content: 'use the added output directory' });
+      const turn = threadParams(fixture.request, Method.TurnStart);
+      expect(turn).not.toHaveProperty('runtimeWorkspaceRoots');
+      expect(turn.environments).toEqual([{
+        environmentId: expect.any(String),
+        cwd: fixture.workingDir,
+        runtimeWorkspaceRoots: [fixture.workingDir, referenceDir, writableDir, addedDir],
+      }]);
+    } finally {
+      await handle.close();
+    }
+  });
+
   // Provider sharing §9.5: even a history-only native fork initializes MCP and
   // connectors. Existing fork tests covered proxy/history ownership only.
   // Minimal input: one guest source and a native turn anchor; tier: unit.

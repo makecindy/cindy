@@ -1,3 +1,5 @@
+import { agentResourceSettings } from './AgentResourceSection.settings-search';
+import { useAppSettingsRevision } from '@/hooks/useAppSettingsRevision';
 /**
  * AgentResourceSection — Agent 资源占用设置(命令并发上限/进程优先级/工具链限核)。
  *
@@ -30,7 +32,6 @@ type SettingKey = 'maxConcurrentCommands' | 'processPriority' | 'capToolchainThr
 
 type PresetId = 'full' | 'balanced' | 'background';
 
-const PRIORITY_OPTIONS: AgentResourceProcessPriority[] = ['normal', 'low', 'lowest'];
 const MAX_CONCURRENT_CAP = 64;
 
 /** 档位提示的全部取值(含 activePreset 为 null 时的 custom);顺序即 DOM 叠放顺序。 */
@@ -89,6 +90,7 @@ function matchPreset(s: Pick<Wire, SettingKey>): PresetId | null {
 }
 
 export function AgentResourceSection() {
+  const settingsRevision = useAppSettingsRevision('agent-resources');
   const { t } = useTranslation();
   const [settings, setSettings] = useState<Wire | null>(null);
   // 预设三键写入的 in-flight 闸:防并发点击交错出"杂交档位"落盘。
@@ -129,7 +131,7 @@ export function AgentResourceSection() {
           },
         });
       });
-  }, []);
+  }, [settingsRevision]);
 
   const activePreset = useMemo(() => (settings ? matchPreset(settings) : null), [settings]);
 
@@ -234,8 +236,8 @@ export function AgentResourceSection() {
             才能像同卡其它行一样相对「标签 + 说明」整块垂直居中。 */}
         <div className={cn(ROW_CLASS, 'cindy-segmented-row')}>
           <div className="flex min-w-0 flex-col gap-1">
-            <p id="settings-search-settings-agentResource-preset" className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
-              {t('settings.agentResource.preset')}
+            <p id={agentResourceSettings.preset.targetId} className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
+              {t(agentResourceSettings.preset.titleKey)}
             </p>
             {/* 四段提示全部常挂载、叠在同一个 grid 格里,只有当前档位那段可见(其余
                 visibility:hidden —— 不进无障碍树、不可聚焦,但仍参与撑高)。 */}
@@ -255,14 +257,11 @@ export function AgentResourceSection() {
               })}
             </div>
           </div>
-          <SegmentedControl
-            aria-label={t('settings.agentResource.preset')}
+          <SegmentedControl data-setting-id={agentResourceSettings.preset.id}
+            aria-label={t(agentResourceSettings.preset.titleKey)}
             value={activePreset}
             onValueChange={(id) => void applyPreset(id)}
-            options={(['full', 'balanced', 'background'] as const).map((id) => ({
-              value: id,
-              label: t(`settings.agentResource.presets.${id}`),
-            }))}
+            options={agentResourceSettings.preset.options.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
             disabled={applyingPreset}
           />
         </div>
@@ -272,12 +271,12 @@ export function AgentResourceSection() {
         {/* 并发命令上限 */}
         <label className={ROW_CLASS}>
           <span className="flex min-w-0 flex-col gap-1">
-            <span id="settings-search-settings-agentResource-maxConcurrent" className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
-              {t('settings.agentResource.maxConcurrent')}
+            <span id={agentResourceSettings.maxConcurrent.targetId} className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
+              {t(agentResourceSettings.maxConcurrent.titleKey)}
             </span>
-            <span className={ROW_HINT_CLASS}>{t('settings.agentResource.maxConcurrentHint')}</span>
+            <span className={ROW_HINT_CLASS}>{t(agentResourceSettings.maxConcurrent.descriptionKey)}</span>
           </span>
-          <SettingsTextInput
+          <SettingsTextInput data-setting-id={agentResourceSettings.maxConcurrent.id}
             type="number"
             min={0}
             max={MAX_CONCURRENT_CAP}
@@ -306,19 +305,16 @@ export function AgentResourceSection() {
         {/* 进程优先级 */}
         <div className={cn(ROW_CLASS, 'cindy-segmented-row')}>
           <div className="flex min-w-0 flex-col gap-1">
-            <p id="settings-search-settings-agentResource-priority" className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
-              {t('settings.agentResource.priority')}
+            <p id={agentResourceSettings.priority.targetId} className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
+              {t(agentResourceSettings.priority.titleKey)}
             </p>
-            <p className={ROW_HINT_CLASS}>{t('settings.agentResource.priorityHint')}</p>
+            <p className={ROW_HINT_CLASS}>{t(agentResourceSettings.priority.descriptionKey)}</p>
           </div>
-          <SegmentedControl
-            aria-label={t('settings.agentResource.priority')}
+          <SegmentedControl data-setting-id={agentResourceSettings.priority.id}
+            aria-label={t(agentResourceSettings.priority.titleKey)}
             value={settings.processPriority}
             onValueChange={(tier) => persist('processPriority', tier)}
-            options={PRIORITY_OPTIONS.map((tier) => ({
-              value: tier,
-              label: t(`settings.agentResource.priorityOptions.${tier}`),
-            }))}
+            options={agentResourceSettings.priority.options.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
             disabled={applyingPreset}
           />
         </div>
@@ -328,16 +324,16 @@ export function AgentResourceSection() {
         {/* 工具链限核 */}
         <div className={ROW_CLASS}>
           <div className="flex min-w-0 flex-col gap-1">
-            <p id="settings-search-settings-agentResource-capThreads" className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
-              {t('settings.agentResource.capThreads')}
+            <p id={agentResourceSettings.capThreads.targetId} className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
+              {t(agentResourceSettings.capThreads.titleKey)}
             </p>
-            <p className={ROW_HINT_CLASS}>{t('settings.agentResource.capThreadsHint')}</p>
+            <p className={ROW_HINT_CLASS}>{t(agentResourceSettings.capThreads.descriptionKey)}</p>
           </div>
-          <Switch
+          <Switch data-setting-id={agentResourceSettings.capThreads.id}
             checked={settings.capToolchainThreads}
             disabled={applyingPreset}
             onCheckedChange={(next) => persist('capToolchainThreads', next)}
-            aria-label={t('settings.agentResource.capThreads')}
+            aria-label={t(agentResourceSettings.capThreads.titleKey)}
           />
         </div>
       </div>

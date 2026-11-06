@@ -761,3 +761,40 @@ describe('cindy_ssh MCP server (in-process smoke)', () => {
     await cleanup();
   });
 });
+
+// Unit, actual MCP transport: a display-only rename must be discoverable and
+// must not require/read back the existing private-key path.
+it('lists, renames and removes SSH hosts through native tools with safe receipts', async () => {
+  const original = snapshot({ id: 'home', identityFile: '/private/key', hostname: 'host.example' });
+  const { pool } = makeFakePool([original]);
+  let displayName = '旧名字';
+  const update = vi.fn(async (patch: { id: string; displayName?: string }) => {
+    displayName = patch.displayName!;
+    return { ...original, config: { ...original.config, displayName } };
+  });
+  const remove = vi.fn(async () => {});
+  const { deps } = makeDeps(pool, { updateHost: update, removeHost: remove,
+    listHosts: async () => [{ ...original, config: { ...original.config, displayName } }] });
+  const server = createSshMcpServer(deps);
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'ssh-management', version: '1' });
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  try {
+    const catalog = await client.callTool({ name: 'list_tools', arguments: { category: 'ssh' } });
+    expect(JSON.stringify(catalog)).toContain('ssh_update_host');
+    const call = (name: string, args = {}) => client.callTool({ name: 'call_tool', arguments: { name, args } });
+    expect(JSON.stringify(await call('ssh_list_hosts'))).toContain('旧名字');
+    const described = await client.callTool({ name: 'list_tools', arguments: { name: 'ssh_update_host' } });
+    const metadata = JSON.parse((described.content as Array<{ text: string }>)[0].text);
+    expect(metadata.tool.inputSchema.properties).toHaveProperty('displayName');
+    expect(update).not.toHaveBeenCalled();
+    const receipt = await call('ssh_update_host', { id: 'home', displayName: '家里主机' });
+    expect(receipt.isError).not.toBe(true);
+    expect(update).toHaveBeenCalledExactlyOnceWith({ id: 'home', displayName: '家里主机' });
+    expect(JSON.stringify(receipt)).toContain('家里主机');
+    expect(JSON.stringify(receipt)).not.toContain('/private/key');
+    expect((await call('ssh_update_host', { id: 'home' })).isError).toBe(true);
+    await call('ssh_remove_host', { id: 'home' });
+    expect(remove).toHaveBeenCalledExactlyOnceWith('home');
+  } finally { await client.close(); await server.close(); }
+});

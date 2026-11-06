@@ -1,5 +1,6 @@
 {
   "skin_macii": "Macintosh II",
+  "skin_macbook": "MacBook",
   "skin_powerbook": "PowerBook 170",
   "skin_thinkpad": "ThinkPad 701C",
   "skin_classic": "经典原版",
@@ -122,6 +123,7 @@
   "deviceMenu": "设备菜单",
   "orientation": "方向",
   "orientationFollow": "跟随手机",
+  "posture": "折叠",
   "picture": "画面",
   "pictureFit": "适应",
   "pictureFill": "填满",

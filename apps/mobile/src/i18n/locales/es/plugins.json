@@ -132,6 +132,9 @@
   "detail": {
     "useItIn": "Úselo en",
     "openPlugin": "Abrir complemento",
+    "readme": "Acerca de",
+    "readmeLoadFailed": "No se pudo cargar la presentación. Inténtalo de nuevo.",
+    "readmeUnavailable": "No hay presentación disponible.",
     "computerSettings": "Para configurar este complemento, abra sus detalles en Cindy → Complementos en su computadora.",
     "runtimeIssue": "El complemento se detuvo inesperadamente. Intente abrirlo nuevamente o usarlo en una tarea.",
     "runtimeFused": "El complemento se detuvo después de repetidos fallos. Apágalo y enciéndelo para volver a intentarlo.",
@@ -345,5 +348,23 @@
     "purpose": "Revisar los permisos de la página interactiva",
     "updateHost": "Actualice Cindy en la computadora de ejecución para confirmar aquí. Las herramientas de texto siguen estando disponibles.",
     "failed": "No se pudieron habilitar las páginas interactivas. Verifique la conexión y la versión del complemento, luego inténtelo nuevamente."
+  },
+  "openLinkHost": "Abrir {{host}}",
+  "prStatus": {
+    "checksFailed": "Con errores",
+    "checksPending": "En espera",
+    "checksPassed": "Con éxito",
+    "checksSkipped": "Omitidas o neutrales",
+    "threadsOpen": "Hilos de revisión sin resolver: {{count}}",
+    "threadsNone": "Sin hilos de revisión abiertos",
+    "mergeReady": "Lista para fusionar",
+    "mergeConflict": "Tiene conflictos",
+    "mergeBehind": "Por detrás de la rama base",
+    "mergeApproval": "Esperando aprobación",
+    "mergeChanges": "Cambios solicitados",
+    "mergeWaiting": "Esperando la fusión",
+    "merged": "Fusionada",
+    "closed": "Cerrada",
+    "draft": "Borrador"
   }
 }

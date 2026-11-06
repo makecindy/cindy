@@ -131,6 +131,7 @@ import { describeInteractionSource } from '../im/shared/interactionSource';
 import { hookAutoReviewReferences } from '../im/shared/autoReviewReferences.js';
 import { isQuotaExhaustionFailure, terminalErrorText } from '../im/shared/turnRetryNotice.js';
 import { resolveSessionErrorContext } from '../im/shared/sessionProviderLabel.js';
+import { unlinkLocalFileLinks } from '../im/shared/localFileLinks.js';
 import { fingerprintImDefaultSettings } from '../im/shared/channelDefaultRoute.js';
 import { createDefaultRouteFollower } from '../im/shared/channelDefaultRouteSync.js';
 import { isHookDefaultRouteRow, writeHookDefaultRouteRecord } from './defaultRouteFollow.js';
@@ -609,8 +610,9 @@ async function collectOutboundForFinalText(
     ? await materializeTaskImageTextResult(sessionId, scanText, log)
     : { text: scanText, replacements: new Map<string, string>() };
   const wholeTurn = materialized.text;
-  const publicText = texts.wholeTurn === texts.publicText ? wholeTurn
-    : rewriteTaskImageReferences(stripInternalWebCitations(texts.publicText), materialized.replacements);
+  // Recipients cannot open this computer's files: links to local paths keep only their label.
+  const publicText = unlinkLocalFileLinks(texts.wholeTurn === texts.publicText ? wholeTurn
+    : rewriteTaskImageReferences(stripInternalWebCitations(texts.publicText), materialized.replacements));
   if (!hasOutboundRefs(wholeTurn) && extraImageAbsPaths.length === 0) {
     return { finalText: publicText };
   }

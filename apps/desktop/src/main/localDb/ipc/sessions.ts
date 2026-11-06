@@ -574,7 +574,7 @@ function broadcastRecentWorkdirsChanged(path: string, ownerScope: OwnerScope): v
  * 只广播给本机窗口、不进 device-link tap:控制端(手机/另一台桌面)的远程会话
  * worktree 元数据走 device-link 自己的镜像链路,不经本机 WorktreeContext。
  */
-function broadcastWorktreeChanged(sessionId: string): void {
+export function broadcastWorktreeChanged(sessionId: string): void {
   for (const w of BrowserWindow.getAllWindows()) {
     if (!w.isDestroyed()) w.webContents.send('worktree:changed', { sessionId });
   }

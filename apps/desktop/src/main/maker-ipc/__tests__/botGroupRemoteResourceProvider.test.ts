@@ -388,6 +388,14 @@ describe('bot group remote resources', () => {
       input: { planId: 'p1' },
     });
     expect(service.continuePlan).toHaveBeenCalledWith({ groupId: 'g1', planId: 'p1' });
+    // The phone must forward the displayed attempt, not only the current position.
+    await remoteResourceRegistry.invoke(context, {
+      client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, actionId: 'plan-edit', resourceRef: ref('g1'),
+      input: { planId: 'p1', position: 0, action: 'skip', executionId: 'displayed-attempt' },
+    });
+    expect(service.editPlanStep).toHaveBeenCalledWith({ groupId: 'g1', planId: 'p1', position: 0,
+      action: 'skip', executionId: 'displayed-attempt', botId: undefined });
+
 
     service.startPlan.mockResolvedValue({ ok: false, errorCode: 'PLAN_CLOSED', message: '已经开始了' });
     await expect(remoteResourceRegistry.invoke(context, {
