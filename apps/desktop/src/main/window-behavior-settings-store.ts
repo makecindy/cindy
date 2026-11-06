@@ -101,4 +101,6 @@ export function writeAwayGuard(awayGuard: boolean): void {
 export const __testing = { normalize };
 
 /** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
-export const windowBehaviorPortableSettings = portableOverrideSettings(store);
+// The away guard needs this computer's own Accessibility grant, like remote desktop,
+// so it is turned on per computer instead of being copied over.
+export const windowBehaviorPortableSettings = portableOverrideSettings(store, { omitKeys: ['awayGuard'] });

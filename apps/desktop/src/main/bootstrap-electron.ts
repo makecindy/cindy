@@ -617,8 +617,12 @@ import {
 import { initHeartbeatService } from './heartbeatService';
 import { markStartupMilestone } from './startupTimeline';
 import { registerRemoteDesktopIpc, remoteDesktop } from './remote-desktop';
-import { registerAwayGuardIpc, startAwayGuard } from './remote-desktop/awayGuardService';
-import { isDesktopScreenLocked, msSinceForeignDesktopInput } from './mcp-integrations/computer.js';
+import { isAwayCoverUp, registerAwayGuardIpc, startAwayGuard } from './remote-desktop/awayGuardService';
+import {
+  isDesktopScreenLocked,
+  msSinceForeignDesktopInput,
+  setPhysicalInputShielded,
+} from './mcp-integrations/computer.js';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
 import { initPerformanceTraceService } from './performance-trace';
@@ -4725,6 +4729,7 @@ const registerIpcHandlers = () => {
       screenLocked: isDesktopScreenLocked,
       msSinceOwnerInput: () => msSinceForeignDesktopInput(),
     });
+    setPhysicalInputShielded(isAwayCoverUp);
   }
   // 灵动岛余量:与菜单栏同一份余量概览(顺序、显示与隐私设置都跟菜单栏),岛开着时才读取。
   const agentIsland = getAgentIslandService();

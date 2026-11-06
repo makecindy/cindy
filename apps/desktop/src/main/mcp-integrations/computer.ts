@@ -3711,9 +3711,19 @@ export function msSinceForeignDesktopInput(now = Date.now()): number | null {
   return idleSeconds * 1000;
 }
 
+let physicalInputShielded: () => boolean = () => false;
+/**
+ * The away cover swallows all physical input and locks on a deliberate press, so
+ * device noise under it (a drifting mouse) is not a person using this computer.
+ */
+export function setPhysicalInputShielded(isShielded: () => boolean): void {
+  physicalInputShielded = isShielded;
+}
+
 /** Refuse foreground delivery while a person is using this computer. */
 export function assertNoRecentUserInput(name: ComputerMcpToolName, args: Record<string, unknown>): void {
   if (getComputerTool(name)?.readOnly === true || args.delivery_mode !== 'foreground') return;
+  if (physicalInputShielded()) return;
   const since = msSinceForeignDesktopInput();
   if (since === null || since >= USER_INPUT_ACTIVE_WINDOW_MS) return;
   throw new ComputerDriverError(

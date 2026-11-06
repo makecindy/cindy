@@ -49,6 +49,11 @@ export function supportsAwayGuard(): boolean {
 
 let controller: AwayGuardController | null = null;
 
+/** True while the away cover is up (physical input cannot reach any app). */
+export function isAwayCoverUp(): boolean {
+  return controller?.masked === true;
+}
+
 export function startAwayGuard(deps: AwayGuardServiceDeps): void {
   if (controller || !supportsAwayGuard()) return;
   let monitor: AwayGuardInputMonitor | null = null;

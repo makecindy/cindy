@@ -114,8 +114,8 @@ it.each([
   const finishing = command === 'lock' ? monitor.lock() : monitor.stop().then(() => false);
   expect(f.child.stdin.write).toHaveBeenLastCalledWith(`${command}\n`);
   f.line(`${reply}\n`);
-  // A confirmed lock is reported at once: the helper lingers until unlock to give the
-  // owner's app back, and Main must not wait for (or kill) it before removing masks.
+  // A confirmed lock is reported at once: the helper is already exiting by itself, and
+  // Main must not wait for (or kill) it before removing masks.
   if (!locked) f.child.emit('close');
   await expect(finishing).resolves.toBe(locked);
   expect(ended).toHaveBeenCalledExactlyOnceWith(locked);
