@@ -3262,16 +3262,13 @@ async function handleInvoke(
           message,
         },
       };
-    });
+    }).finally(finishDiagnostic);
   const resultPromise = settleRemoteInvokeWithOrphanDeadline(
     executionPromise,
     src,
     payload?.channel,
     payload?.args,
-  ).finally(() => {
-    finishDiagnostic();
-    releaseBusyLease();
-  });
+  ).finally(releaseBusyLease);
   const inFlightEntry = {
     channel: payload?.channel,
     promise: resultPromise,

@@ -3506,11 +3506,12 @@ export class DeviceLinkClient {
           if (!this.isReceiveStreamActive(src, streamId, stream)) break;
           const nextSeq = stream.lastDeliveredSeq + 1;
           const ready = stream.ready.get(nextSeq)!;
+          const deliveredBytes = byteLength(ready.json);
           let logical: Envelope;
           try {
             const payload = decodeTransportJson(ready.json);
             logical = { ...ready.env, payload };
-            if (logical.kind === 'invoke-result') this.receivedDiagnosticBytes.set(logical, byteLength(ready.json));
+            if (logical.kind === 'invoke-result') this.receivedDiagnosticBytes.set(logical, deliveredBytes);
           } catch {
             this.log.warn(`dropping reliable payload decode failure seq=${nextSeq}`);
             break;
@@ -3522,7 +3523,7 @@ export class DeviceLinkClient {
           if ((logical.kind === 'invoke' || logical.kind === 'invoke-result')
             && (assemblyMs >= 250 || orderedWaitMs >= 250)) {
             this.stallDiagnostics.record('receive', { request: diagnosticRef(logical.id), src: diagnosticRef(src), seq: nextSeq,
-              assemblyMs, orderedWaitMs, bytes: byteLength(ready.json) });
+              assemblyMs, orderedWaitMs, bytes: deliveredBytes });
             this.log.debug(`device-link receive timing kind=${logical.kind} request=${logical.id?.slice(0, 8) ?? 'none'}`
               + ` src=${src.slice(0, 8)} seq=${nextSeq}`
               + ` assemblyMs=${assemblyMs} orderedWaitMs=${orderedWaitMs}`);
@@ -3542,7 +3543,6 @@ export class DeviceLinkClient {
             break;
           }
           stream.ready.delete(nextSeq);
-          const deliveredBytes = byteLength(ready.json);
           stream.bufferedBytes -= deliveredBytes;
           stream.lastDeliveredSeq = nextSeq;
           this.applyReceiveStreamBase(stream);
