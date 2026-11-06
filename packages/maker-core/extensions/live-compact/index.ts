@@ -839,6 +839,16 @@ export function withoutFullBackupClaim(text: string, shadowFile: string): string
   return String(text).replace(backupHint(shadowFile), "这次切文件里没有完整工具原文。没有指针的结果按无完整备份处理。");
 }
 
+/**
+ * 1.0.6: 卡片确需指向备份时才加提示。切范围内有被修剪过的工具结果(shadow 里只有修剪后的
+ * 表面文本)时,提示必须在**加完之后**再撤掉——先撤后加等于没撤。
+ */
+export function withBackupHint(card: any, shadowFile: string, claimable = true) {
+  const hinted = attachBackupHint(card, shadowFile);
+  if (claimable || !hinted?.text) return hinted;
+  return { ...hinted, text: withoutFullBackupClaim(hinted.text, shadowFile) };
+}
+
 export function toolExcerpt(spans: SpanPiece[] | null, backupId = "") {
   const tools = (spans || []).filter((span) => span.role === "tool" && String(span.text || "").trim().length > 0);
   if (tools.length === 0) return { text: "", omitted: 0, needsBackup: false };
@@ -924,7 +934,8 @@ export function attachBackupHint(card: any, shadowFile?: string) {
   return {
     ...card,
     shadowFile,
-    text: `${card.text}\n省略的工具原文在 ${shadowFile}。需要这条原文再读,不要默认读进来。`,
+    // 与 withoutFullBackupClaim 用同一句提示:两处各写一份就一定会漂,删除时对不上。
+    text: `${card.text}\n${backupHint(shadowFile)}`,
   };
 }
 
@@ -2223,10 +2234,7 @@ function attemptCut(options: {
     // 卡片正文会一直留在上下文里(小工具结果是整段原样进卡片),脱敏必须在这一侧也做。
     const redacted = { ...chunk.card, text: redactSecrets(chunk.card.text) };
     // 1.0.6: 切范围内存在被修剪过的工具结果时,不宣称「有完整备份」。
-    const claimed = backupClaimOk(spanEntries)
-      ? redacted
-      : { ...redacted, text: withoutFullBackupClaim(redacted.text, file) };
-    const card = attachBackupHint(claimed, file);
+    const card = withBackupHint(redacted, file, backupClaimOk(spanEntries));
     // 1.0.8: 卡片不再用官方摘要标记,改成自己的正文开头(原仓 SPINE_SOURCE_KIND 的对应物)。
     const content = [{ type: "text", text: `${CHECKPOINT_PREAMBLE}\n\n${MARK}` }, { type: "text", text: card.text }];
     const framedTokens = estimateTokens({ role: "user", content, timestamp: Date.now() });
