@@ -278,21 +278,23 @@ test("restart kill scope ignores a node runtime borrowed from this checkout by a
 	}
 });
 
-test("restart kill scope strips a borrowed node whose unquoted path contains spaces", () => {
-	// `ps` 不给带空格的参数补引号：借用的 node 路径含空格时仍要整段剥掉。
-	const fx = makeLauncherFixture("cindy src");
-	try {
-		const processes = [
-			{ pid: 1, command: `${fx.borrowedNode} ${fx.forge(fx.otherRoot)}` },
-			{ pid: 2, command: `${fx.borrowedNode} ${fx.forge(fx.ownRoot)}` },
-			{ pid: 3, command: `"${fx.borrowedNode}" ${fx.forge(fx.otherRoot)}` },
-		];
-		const { targets } = partitionDesktopDevProcesses(processes, fx.ownRoot, fx.checkoutPaths);
-		assert.deepEqual(targets.map((proc) => proc.pid), [2]);
-	} finally {
-		fs.rmSync(fx.base, { recursive: true, force: true });
-	}
-});
+for (const ownDirName of ["cindy src", "cindy src - old"]) {
+	test(`restart kill scope strips a borrowed node whose unquoted path contains spaces (${ownDirName})`, () => {
+		// `ps` 不给带空格的参数补引号：借用的 node 路径含空格（含「空格 + 横线」）时仍要整段剥掉。
+		const fx = makeLauncherFixture(ownDirName);
+		try {
+			const processes = [
+				{ pid: 1, command: `${fx.borrowedNode} ${fx.forge(fx.otherRoot)}` },
+				{ pid: 2, command: `${fx.borrowedNode} ${fx.forge(fx.ownRoot)}` },
+				{ pid: 3, command: `"${fx.borrowedNode}" ${fx.forge(fx.otherRoot)}` },
+			];
+			const { targets } = partitionDesktopDevProcesses(processes, fx.ownRoot, fx.checkoutPaths);
+			assert.deepEqual(targets.map((proc) => proc.pid), [2]);
+		} finally {
+			fs.rmSync(fx.base, { recursive: true, force: true });
+		}
+	});
+}
 
 test("restart kill scope keeps a checkout whose directory name looks like a launcher", () => {
 	// /…/node workspace/cindy 里的 `/…/node` 只是目录名前缀，不是启动器。

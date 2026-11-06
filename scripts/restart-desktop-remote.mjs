@@ -148,7 +148,6 @@ function launcherPrefixLength(rest) {
   for (const match of rest.matchAll(LAUNCHER_PATH_END_RE)) {
     const end = match.index + match[0].length;
     const candidate = rest.slice(leading, end);
-    if (candidate.includes(' -')) break;
     if (ABSOLUTE_PATH_RE.test(candidate) && isExistingFile(candidate)) return end;
   }
   return 0;
