@@ -167,11 +167,13 @@ export function resolveSlashCommandRunEnd(
     const next = suffixEnd < parent.content.size ? parent.childAfter(suffixEnd) : null;
     const nextNode = next?.node;
     const nextOffset = next?.offset;
+    let followingWhitespaceLength = 0;
     if (nextNode?.isText && nextOffset !== undefined) {
       const nextCharacter = (nextNode.text ?? '')[suffixEnd - nextOffset];
       if (nextCharacter && !/\s/.test(nextCharacter)) continue;
+      if (nextCharacter) followingWhitespaceLength = nextCharacter.length;
     }
-    return cursorEnd + suffix.length;
+    return cursorEnd + suffix.length + followingWhitespaceLength;
   }
 
   return cursorEnd;

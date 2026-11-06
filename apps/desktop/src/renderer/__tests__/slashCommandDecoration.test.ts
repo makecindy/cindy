@@ -104,7 +104,7 @@ describe('SlashCommandDecoration', () => {
 
     state = state.apply(replaceSlashCommandRunWithText(state.tr, schema, 1, runEnd, 'compact'));
 
-    expect(state.doc.textContent).toBe('/compact  参数');
+    expect(state.doc.textContent).toBe('/compact 参数');
   });
 
   it('旧草稿的 slash atom 在首个 transaction 自动迁移为纯文本', () => {
