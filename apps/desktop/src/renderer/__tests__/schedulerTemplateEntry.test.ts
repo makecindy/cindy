@@ -255,6 +255,7 @@ beforeEach(() => {
         // SchedulerPage 通过 useRunNowBusyGuard 订阅 schedule 事件(派发即释放 runNow busy)。
         // 返回一个 no-op 退订函数即可。
         onEvent: vi.fn(() => vi.fn()),
+        webhookReceiver: vi.fn(async () => 'unavailable'),
       },
       projectAutomation: {
         upsertSchedule: vi.fn(),

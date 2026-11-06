@@ -574,4 +574,26 @@ describe('remote schedule create', () => {
     expect(result).toMatchObject({ ok: false, code: 'INVALID_PARAMS' });
     expect(s.invoke).not.toHaveBeenCalled();
   });
+
+  // PR #8470, unit: the host adapter negotiates target capabilities; the MCP
+  // must forward non-secret configuration instead of rejecting every remote target.
+  it('forwards webhook creation without touching the local scheduler', async () => {
+    const s = setup();
+    const result = parse(await s.registry.call('schedule_create', {
+      device: 'spark', name: 'n', prompt: 'p', cronExpr: '0 9 * * *',
+      timezone: 'Asia/Shanghai', recurring: true, agentKind: 'pi', useWorktree: false,
+      notify: { desktop: true, feishu: false }, webhookTrigger: { events: ['issues.opened'] },
+    }));
+    expect(result.ok).toBe(true);
+    expect(s.invoke).toHaveBeenCalledWith('spark', 'create', [expect.objectContaining({ webhookTrigger: { events: ['issues.opened'] } })]);
+    expect(s.scheduler.create).not.toHaveBeenCalled();
+  });
+});
+
+it.each([{ events: ['issues.opened'] }, null])('forwards remote webhook update/clear through the target host: %j', async (webhookTrigger) => {
+  const s = setup();
+  const result = parse(await s.registry.call('schedule_update', { id: 'r1', device: 'mbp', webhookTrigger }));
+  expect(result.ok).toBe(true);
+  expect(s.invoke).toHaveBeenCalledWith('mbp', 'update', ['r1', { webhookTrigger }]);
+  expect(s.scheduler.updateFromCurrent).not.toHaveBeenCalled();
 });

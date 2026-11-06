@@ -64,6 +64,7 @@ function setup(running = false) {
         providerId: profile.providerId,
         effort: profile.effort,
         fastMode: profile.fastMode,
+        ...(profile.agentDeviceId !== undefined ? { agentDeviceId: profile.agentDeviceId } : {}),
         runtimeSource: 'agent',
         assertSelectionCurrent: assertCurrent,
         beforeMutation,
@@ -91,6 +92,25 @@ const request = {
 };
 
 describe('runtime harness selection', () => {
+  // The plugin task API now stages remote selections through this same production
+  // controller. Previously its projection lost the source, hiding location-only changes.
+  // Minimal pending relocation, including an explicit return to local; tier: unit.
+  it.each(['other-computer', 'share:provider', null])('preserves location %s through staging and pending projection', async agentDeviceId => {
+    const h = setup(true);
+    if (agentDeviceId === null) {
+      h.effective.agentDeviceId = 'original-computer';
+      const row = await h.switchDeps.getSessionRow('s1');
+      h.switchDeps.getSessionRow = vi.fn(async () => ({ ...row!, agentDeviceId: 'original-computer' }));
+    }
+    Object.assign(h.switchDeps, { assertAgentDeviceRouteUsable: vi.fn(async () => {}) });
+    const result = await setSessionRuntimeHarness(h.deps, {
+      ...request, patch: { ...request.patch, agentDeviceId },
+    });
+    expect(result).toMatchObject({ ok: true, status: 'deferred',
+      pendingMutation: { profile: { agentDeviceId, agentKind: 'codex' } } });
+    expect(h.close).not.toHaveBeenCalled();
+    expect(h.persist).not.toHaveBeenCalled();
+  });
   it('routes a configured cross-harness task choice through the runtime controller', async () => {
     const h = setup();
     const bridge = createBotSessionTaskRouteBridge({
