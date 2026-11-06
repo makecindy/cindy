@@ -211,10 +211,9 @@ describe('scanClaudePluginSkills', () => {
     ]);
   });
 
-  it('includes a project-scoped install only inside its own project', () => {
+  it('lists project-scoped installs nowhere while project support is pending', () => {
     const configDir = tempRoot();
     const projectA = path.join(configDir, 'work', 'a');
-    const projectB = path.join(configDir, 'work', 'b');
     const plugin = path.join(configDir, 'plugins', 'cache', 'alpha');
     writeSkill(path.join(plugin, 'skills', 'one'), 'one');
     writeJson(path.join(plugin, '.claude-plugin', 'plugin.json'), { name: 'alpha' });
@@ -224,39 +223,8 @@ describe('scanClaudePluginSkills', () => {
       },
     });
 
-    expect(scanClaudePluginSkills(configDir, { workingDir: projectA })
-      .map((skill) => skill.name)).toEqual(['alpha:one']);
-    // 无关项目与无项目上下文的扫描都不应看到它。
-    expect(scanClaudePluginSkills(configDir, { workingDir: projectB })).toEqual([]);
+    // 项目级插件需要项目根、全部候选项目与逐项目 settings 才能定位正确，
+    // 在补齐之前一律不展示，避免把只在某个项目生效的条目标成全局。
     expect(scanClaudePluginSkills(configDir)).toEqual([]);
-  });
-
-  it('lets project settings layers override the user enabledPlugins', () => {
-    const configDir = tempRoot();
-    const project = path.join(configDir, 'work', 'a');
-    const plugin = path.join(configDir, 'plugins', 'cache', 'alpha');
-    writeSkill(path.join(plugin, 'skills', 'one'), 'one');
-    writeJson(path.join(plugin, '.claude-plugin', 'plugin.json'), { name: 'alpha' });
-    writeJson(path.join(configDir, 'plugins', 'installed_plugins.json'), {
-      plugins: { 'alpha@market': [{ scope: 'user', installPath: plugin }] },
-    });
-    writeJson(path.join(configDir, 'settings.json'), {
-      enabledPlugins: { 'alpha@market': true },
-    });
-    writeJson(path.join(project, '.claude', 'settings.json'), {
-      enabledPlugins: { 'alpha@market': false },
-    });
-
-    // 无项目上下文时只看用户层 → 启用。
-    expect(scanClaudePluginSkills(configDir)).toHaveLength(1);
-    // 项目层禁用 → 该项目的菜单里不该出现。
-    expect(scanClaudePluginSkills(configDir, { workingDir: project })).toEqual([]);
-
-    // local 层优先级最高，重新启用。
-    writeJson(path.join(project, '.claude', 'settings.local.json'), {
-      enabledPlugins: { 'alpha@market': true },
-    });
-    expect(scanClaudePluginSkills(configDir, { workingDir: project })
-      .map((skill) => skill.name)).toEqual(['alpha:one']);
   });
 });

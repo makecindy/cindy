@@ -179,60 +179,24 @@ function resolveDirectoryPluginDir(
 }
 
 /**
- * Claude merges `enabledPlugins` across settings layers, with the project's
- * own files winning over the user file. Reading only the user layer would
- * advertise plugins a project explicitly disabled (and hide ones it enabled).
- */
-function readEnabledPlugins(
-  configDir: string,
-  workingDir?: string,
-): Record<string, unknown> {
-  const layers = [path.join(configDir, 'settings.json')];
-  if (workingDir) {
-    layers.push(
-      path.join(workingDir, '.claude', 'settings.json'),
-      path.join(workingDir, '.claude', 'settings.local.json'),
-    );
-  }
-  const merged: Record<string, unknown> = {};
-  for (const file of layers) {
-    Object.assign(merged, asRecord(asRecord(readJson(file))?.enabledPlugins) ?? {});
-  }
-  return merged;
-}
-
-/**
- * User-scoped installs apply everywhere; project / local ones only inside the
- * project they were installed for. Records without a scope predate the field
- * and are user-level. An install that cannot be placed is skipped rather than
- * advertised in every project.
- */
-function installMatchesProject(
-  record: Record<string, unknown> | null,
-  workingDir?: string,
-): boolean {
-  if (!record) return false;
-  const scope = record.scope;
-  if (typeof scope !== 'string' || scope === 'user') return true;
-  if (!workingDir) return false;
-  const projectPath = record?.projectPath;
-  if (typeof projectPath !== 'string' || !projectPath) return false;
-  return path.resolve(projectPath) === path.resolve(workingDir);
-}
-
-/**
  * List enabled Claude Code plugin Skills at `configDir`.
  * Deterministic order: plugin name, then Skill name.
+ *
+ * Only user-scoped installs are listed. Project / local scoped plugins load
+ * exclusively inside their own project, and placing them correctly needs the
+ * project root, every candidate project, and per-project settings layers —
+ * tracked separately. Until that lands they are excluded rather than shown as
+ * global entries the running session may not load.
  */
 export function scanClaudePluginSkills(
   configDir = path.join(os.homedir(), '.claude'),
-  opts?: { workingDir?: string },
 ): ClaudePluginSkill[] {
   const installed = asRecord(readJson(path.join(configDir, 'plugins', 'installed_plugins.json')));
   const plugins = asRecord(installed?.plugins);
   if (!plugins) return [];
 
-  const enabledPlugins = readEnabledPlugins(configDir, opts?.workingDir);
+  const settings = asRecord(readJson(path.join(configDir, 'settings.json')));
+  const enabledPlugins = asRecord(settings?.enabledPlugins) ?? {};
   const marketplaces = asRecord(
     readJson(path.join(configDir, 'plugins', 'known_marketplaces.json')),
   );
@@ -243,17 +207,19 @@ export function scanClaudePluginSkills(
     if (enabledPlugins[pluginKey] === false) continue;
     if (!Array.isArray(installs)) continue;
 
-    // Project / local scoped plugins only load inside their own project, so a
-    // scan without project context keeps just the user-scoped installs.
-    const scopedInstalls = installs
+    // Project / local scoped installs are excluded: they only load inside their
+    // own project, and advertising them everywhere would offer commands the
+    // running session cannot resolve. Records without a scope predate the field
+    // and are user-level.
+    const userInstalls = installs
       .map((install) => asRecord(install))
-      .filter((record) => installMatchesProject(record, opts?.workingDir));
-    if (scopedInstalls.length === 0) continue;
+      .filter((record) => record && (typeof record.scope !== 'string' || record.scope === 'user'));
+    if (userInstalls.length === 0) continue;
 
     const directoryDir = resolveDirectoryPluginDir(pluginKey, marketplaces);
     const pluginDirs = directoryDir
       ? [directoryDir]
-      : scopedInstalls
+      : userInstalls
           .map((record) => record?.installPath)
           .filter((value): value is string => typeof value === 'string' && value.length > 0);
 

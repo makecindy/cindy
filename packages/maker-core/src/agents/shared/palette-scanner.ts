@@ -372,12 +372,7 @@ export async function scanClaudeSlashCommands(
   // would never load. Offering them in a partner catalog would be a choice that
   // silently does nothing, so the host excludes them there.
   if (!opts?.excludePluginSkills) {
-    // Project-scoped plugin installs and the project's own settings layers only
-    // apply when the scan carries a usable project path.
-    const pluginWorkingDir = workingDir && path.isAbsolute(workingDir) ? workingDir : undefined;
-    for (const skill of scanClaudePluginSkills(path.join(home, '.claude'), {
-      workingDir: pluginWorkingDir,
-    })) {
+    for (const skill of scanClaudePluginSkills(path.join(home, '.claude'))) {
       discovered.push({
         name: skill.name,
         description: await readMarkdownDescription(skill.mdPath),
