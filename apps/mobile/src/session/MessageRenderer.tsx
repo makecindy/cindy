@@ -3597,6 +3597,7 @@ function MessageBubble({
   // 不挂。分享态只保留与导出图片一致的消息内容,不显示操作图标、时间或费用。
   // 流式回复不显示操作，但保留最终操作行的占位，收尾时不把正在看的正文推走。
   const showCompletedActionBar = !shareSelectionActive && mobileMessageShowsActionBar({
+    role: item.message.role,
     hasSystemCard: !!item.message.systemCardType,
     isStreamingAssistant,
     isTurnFinalAssistant: item.message.isTurnFinalAssistant === true,
