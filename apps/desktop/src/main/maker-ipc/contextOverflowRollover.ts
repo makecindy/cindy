@@ -33,6 +33,7 @@ import {
   buildHandoffText,
   extractPlainText,
   prependNoteToWireUserMessage,
+  type BuildHandoffOptions,
   type HandoffSourceMessage,
   type HandoffWireMessage,
 } from './agentHandoff.js';
@@ -473,6 +474,7 @@ export interface ContextOverflowRolloverDeps {
       sourceAgentKind?: 'cc' | 'codex' | 'pi';
       sourceModel?: string | null;
       sourceProviderId?: string | null;
+      followUpHandoff?: string;
       expectedClearedAt?: number | null;
       replacementRoute?: NativeSessionRecoveryTarget & { expectedSdkSessionId: string };
     },
@@ -594,12 +596,13 @@ export function shouldRebuildForModelWindowSwitch(input: {
 
 export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps): {
   claim(sessionId: string, turnIdentity?: RecoveryTurnIdentity, recoverable?: boolean): OverflowClaimResult;
-  cancelRecovery(sessionId: string): void;
+  cancelRecovery(sessionId: string, reason?: 'queued-input'): void;
   tryRecover(
     sessionId: string,
     errorData: unknown,
     /** 产生该终态错误的 turn 身份：区分「同一轮的重复投递」与「重放后的新一轮失败」。 */
     turnIdentity?: { instanceId?: string; generation?: number },
+    surfaceQueuedFailure?: () => void,
   ): Promise<boolean>;
   prepareUnhealthySession(sessionId: string, outboundUserClientId?: string): Promise<boolean>;
   prepareNativeSessionRecovery(
@@ -623,6 +626,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
 } {
   const inFlight = new Map<string, AbortController | undefined>();
   const claimTurns = new WeakMap<AbortController, RecoveryTurnIdentity>();
+  const queuedInputCancellations = new WeakSet<AbortController>();
   // One automatic continuation per source input, not one per replacement thread.
   const continuedInputs = new Map<string, string>();
   // 自愈成功时那一轮的 turn 身份：同身份再次到达 = 同一轮的重复终态投递（丢弃）；
@@ -655,7 +659,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     turnIdentity?: { instanceId?: string; generation?: number },
     externalOwnerAtFailure = false,
   ): Promise<boolean> => {
-    if (signal?.aborted) return true;
+    signal?.throwIfAborted();
     const oversized = isOversizedHistoryErrorData(errorData);
     const piRequestTooLarge = isPiRequestBodyTooLarge(errorData);
     const unsupportedOption = isUnsupportedRequestOptionErrorData(errorData);
@@ -858,7 +862,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       signal?.throwIfAborted();
       if ((oversized || piRequestTooLarge) && deps.hasExternalRecoveryOwner?.(sessionId)) return false;
       const label = engineLabelForOverflow(sessionRow.agentKind);
-      const handoff = buildHandoffText(plan.handoffMessages, {
+      const handoffOptions: BuildHandoffOptions = {
         fromLabel: label,
         toLabel: label,
         sessionId,
@@ -866,7 +870,13 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         includeToolResults: oversized || piRequestTooLarge || isBotChatContext(sessionRow),
         companion: isBotChatContext(sessionRow),
         ...(await companionRecall(sessionId, isBotChatContext(sessionRow))),
-      });
+      };
+      const handoff = buildHandoffText(plan.handoffMessages, handoffOptions);
+      // A queued message may cancel Pi replay after the replacement is committed.
+      // Persist the failed input in the fallback; only the actual replay omits it.
+      const followUpHandoff = piRequestTooLarge
+        ? buildHandoffText(source.filter((message) => message.role !== 'error'), handoffOptions)
+        : undefined;
       if (piRequestTooLarge && deps.hasExternalRecoveryOwner?.(sessionId)) return false;
       await deps.commitRebuild(sessionId, handoff, {
         reason: 'context-overflow',
@@ -874,49 +884,62 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         sourceAgentKind: normalizeOverflowDbAgentKind(sessionRow.agentKind),
         sourceModel: sessionRow.model ?? null,
         sourceProviderId: sessionRow.providerId ?? null,
+        ...(followUpHandoff === undefined ? {} : { followUpHandoff }),
         expectedClearedAt: sessionRow.clearedAt,
       }, signal);
-      signal?.throwIfAborted();
-      deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
-      if (plan.skipGenericReplay) {
-        deps.log.info('overflow rebuilt; external owner must retry send', {
+      let replayAccepted = false;
+      try {
+        signal?.throwIfAborted();
+        deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
+        if (plan.skipGenericReplay) {
+          deps.log.info('overflow rebuilt; external owner must retry send', {
+            sessionId,
+            sourceUserClientId: plan.sourceUserClientId,
+          });
+          return true;
+        }
+        if ((oversized || piRequestTooLarge) && deps.hasExternalRecoveryOwner?.(sessionId)) return false;
+        const sourceWire = persistedUserContentToWireMessage(
+          plan.sourceUserAgentFacingWireContent ?? plan.sourceUserContent,
+        );
+        const sourceText = typeof sourceWire === 'string' ? sourceWire : sourceWire.content;
+        const replay = await deps.replayUserMessage(
+          sessionId,
+          oversized ? CODEX_HISTORY_CONTINUE_MESSAGE : plan.sourceUserContent,
+          oversized ? undefined : replayWireWithSourceNotes(sourceWire, plan),
+          oversized ? {
+            signal,
+            continueFromHistory: true,
+            sourceUserContent: plan.sourceUserContent,
+            sourceUserClientId: plan.sourceUserClientId,
+            sourceCapabilitySelectionText: typeof sourceText === 'string' ? sourceText : extractPlainText(sourceText),
+          } : { signal },
+        );
+        replayAccepted = replay.accepted;
+        signal?.throwIfAborted();
+        if (!replayAccepted) {
+          deps.log.warn('context overflow rollover replay was not accepted', {
+            sessionId,
+            sourceUserClientId: plan.sourceUserClientId,
+          });
+          return false;
+        }
+        // 重放被接受后再清 recovery：失败时要保留 Retry，不能先 clearError。
+        deps.onRebuilt?.(sessionId);
+        deps.log.info(oversized ? 'codex image history rebuilt and continued' : 'context overflow rollover replayed user message', {
           sessionId,
           sourceUserClientId: plan.sourceUserClientId,
         });
         return true;
+      } catch (error) {
+        // The replacement already holds the original input when replay is cancelled.
+        if (signal?.aborted) return true;
+        throw error;
+      } finally {
+        if (followUpHandoff !== undefined && !replayAccepted) {
+          deps.setPendingHandoff(sessionId, followUpHandoff, handoffGeneration);
+        }
       }
-      if ((oversized || piRequestTooLarge) && deps.hasExternalRecoveryOwner?.(sessionId)) return false;
-      const sourceWire = persistedUserContentToWireMessage(
-        plan.sourceUserAgentFacingWireContent ?? plan.sourceUserContent,
-      );
-      const sourceText = typeof sourceWire === 'string' ? sourceWire : sourceWire.content;
-      const replay = await deps.replayUserMessage(
-        sessionId,
-        oversized ? CODEX_HISTORY_CONTINUE_MESSAGE : plan.sourceUserContent,
-        oversized ? undefined : replayWireWithSourceNotes(sourceWire, plan),
-        oversized ? {
-          signal,
-          continueFromHistory: true,
-          sourceUserContent: plan.sourceUserContent,
-          sourceUserClientId: plan.sourceUserClientId,
-          sourceCapabilitySelectionText: typeof sourceText === 'string' ? sourceText : extractPlainText(sourceText),
-        } : { signal },
-      );
-      signal?.throwIfAborted();
-      if (!replay.accepted) {
-        deps.log.warn('context overflow rollover replay was not accepted', {
-          sessionId,
-          sourceUserClientId: plan.sourceUserClientId,
-        });
-        return false;
-      }
-      // 重放被接受后再清 recovery：失败时要保留 Retry，不能先 clearError。
-      deps.onRebuilt?.(sessionId);
-      deps.log.info(oversized ? 'codex image history rebuilt and continued' : 'context overflow rollover replayed user message', {
-        sessionId,
-        sourceUserClientId: plan.sourceUserClientId,
-      });
-      return true;
     });
   };
 
@@ -1287,7 +1310,10 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         if (changedTurn) {
           // The replay already ended. Preserve its error and prevent the older
           // acceptance callback from clearing it; never start another recovery.
-          controller?.abort();
+          if (controller) {
+            queuedInputCancellations.delete(controller);
+            controller.abort();
+          }
           return 'idle';
         }
         // Non-recoverable errors keep their existing normal error path.
@@ -1301,22 +1327,28 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       return 'claimed';
     },
 
-    cancelRecovery(sessionId: string): void {
+    cancelRecovery(sessionId: string, reason?: 'queued-input'): void {
       // Keep the claim until its async work unwinds; only the hidden send is
       // cancelled, never the newer input or the session's normal generation.
-      inFlight.get(sessionId)?.abort();
+      const controller = inFlight.get(sessionId);
+      if (!controller) return;
+      if (reason !== 'queued-input') queuedInputCancellations.delete(controller);
+      else if (!controller.signal.aborted) queuedInputCancellations.add(controller);
+      controller.abort();
     },
 
     async tryRecover(
       sessionId: string,
       errorData: unknown,
       turnIdentity?: { instanceId?: string; generation?: number },
+      surfaceQueuedFailure?: () => void,
     ): Promise<boolean> {
       let signal: AbortSignal | undefined;
       try {
         // IM may not persist this input (protected content), and an attached IM
         // turn can outlive its binding. Check live ownership before any await.
-        if ((isOversizedHistoryErrorData(errorData) || isPiRequestBodyTooLarge(errorData)) && deps.hasExternalRecoveryOwner?.(sessionId)) return false;
+        const piRequestTooLarge = isPiRequestBodyTooLarge(errorData);
+        if ((isOversizedHistoryErrorData(errorData) || piRequestTooLarge) && deps.hasExternalRecoveryOwner?.(sessionId)) return false;
         // Terminal subscribers may release a headless/IM marker immediately.
         // Keep learning, but never take over that turn's replay after an await.
         const externalOwnerAtFailure = isUnsupportedRequestOptionErrorData(errorData)
@@ -1328,14 +1360,19 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         // A queued input cancels replay of the failed turn. For a Pi body-limit
         // error, still surface the terminal so pre-send recovery can find its
         // persisted evidence and rebuild before dispatching that queued input.
-        if (inputSignal?.aborted && isPiRequestBodyTooLarge(errorData)) return false;
+        if (inputSignal?.aborted && piRequestTooLarge) return false;
         signal = inputSignal ? AbortSignal.any([claim.signal, inputSignal]) : claim.signal;
-        if (deps.withSessionLock) {
-          return await deps.withSessionLock(sessionId, () =>
-            runRecover(sessionId, errorData, signal, turnIdentity, externalOwnerAtFailure),
-          );
-        }
-        return await runRecover(sessionId, errorData, signal, turnIdentity, externalOwnerAtFailure);
+        const recover = async (): Promise<boolean> => {
+          try {
+            return await runRecover(sessionId, errorData, signal, turnIdentity, externalOwnerAtFailure);
+          } catch (error) {
+            if (!piRequestTooLarge || !queuedInputCancellations.has(claim) || inputSignal?.aborted) throw error;
+            // Schedule the 413 write before releasing the lock to the queued send.
+            surfaceQueuedFailure?.();
+            return false;
+          }
+        };
+        return await (deps.withSessionLock ? deps.withSessionLock(sessionId, recover) : recover());
       } catch (error) {
         if (signal?.aborted) return true;
         deps.log.warn('context overflow rollover failed', {

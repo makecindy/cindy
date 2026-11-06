@@ -1053,7 +1053,8 @@ describe('maker SEND transaction', () => {
 
   it('links both attachment and text inputs to accepted Pi entries for exact retries', async () => {
     const prepareUnhealthySession = vi.fn(async () => false);
-    const { deps, session } = createDeps({ prepareUnhealthySession });
+    const peekPendingHandoff = vi.fn(async () => null);
+    const { deps, session } = createDeps({ prepareUnhealthySession, peekPendingHandoff });
     session.agentKind = 'pi';
     const transaction = createMakerSendTransaction(deps);
 
@@ -1105,6 +1106,7 @@ describe('maker SEND transaction', () => {
       ['session-1', 'plain-client'],
     ]);
     expect(vi.mocked(session.send).mock.lastCall?.[1]?.retryTranscriptUserEntryId).toBe('pi-user-entry');
+    expect(peekPendingHandoff).toHaveBeenLastCalledWith('session-1', 'plain-client');
   });
 
   it('relinks the existing user row when cache recovery accepts a replacement native entry', async () => {

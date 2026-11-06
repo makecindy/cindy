@@ -1058,6 +1058,22 @@ describe('findPendingAgentHandoff 持久消费位', () => {
       .run(createdAt);
   }
 
+  function insertContextBoundary(
+    sqlite: Database.Database,
+    content: Record<string, unknown>,
+  ): void {
+    sqlite
+      .prepare(
+        `
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, tool_use_id, agent_meta,
+        agent_kind, created_at, rewind_at
+      ) VALUES ('ctx', 'ctx', 's1', 'context_rebuild', ?, NULL, NULL, ?, 3000, 3000)
+    `,
+      )
+      .run(JSON.stringify(content), content.sourceAgentKind ?? 'cc');
+  }
+
   it('失败首发已落 user 行但 consumed=false,重启重建仍返回 handoff', async () => {
     const sqlite = createDb();
     sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
@@ -1084,17 +1100,9 @@ describe('findPendingAgentHandoff 持久消费位', () => {
   it('restores a hidden context rebuild marker after app restart', async () => {
     const sqlite = createDb();
     sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
-    sqlite
-      .prepare(
-        `
-      INSERT INTO messages (
-        id, client_id, session_id, role, content, tool_use_id, agent_meta,
-        agent_kind, created_at, rewind_at
-      ) VALUES ('ctx', 'ctx', 's1', 'context_rebuild', ?, NULL, NULL, 'cc', 3000, 3000)
-    `,
-      )
-      .run(JSON.stringify({ handoff: 'FILTERED-HISTORY', consumed: false }));
+    insertContextBoundary(sqlite, { handoff: 'FILTERED-HISTORY', consumed: false });
     await expect(findPendingAgentHandoff('s1')).resolves.toBe('FILTERED-HISTORY');
+    await expect(findPendingAgentHandoff('s1', 'source')).resolves.toBeNull();
     await markLatestAgentHandoffConsumed('s1');
     await expect(findPendingAgentHandoff('s1')).resolves.toBeNull();
     const stored = sqlite
@@ -1108,6 +1116,26 @@ describe('findPendingAgentHandoff 持久消费位', () => {
       consumed: true,
     });
     expect(stored.rewind_at).toBe(3000);
+  });
+
+  it('restores the Pi 413 follow-up handoff and omits the source only for its exact retry', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    insertContextBoundary(sqlite, {
+      handoff: 'Earlier history',
+      followUpHandoff: 'Earlier history\nGenerate the expense report',
+      sourceAgentKind: 'pi',
+      sourceUserClientId: 'failed-request',
+      consumed: false,
+    });
+
+    await expect(findPendingAgentHandoff('s1')).resolves.toContain('Generate the expense report');
+    await expect(findPendingAgentHandoff('s1', 'failed-request')).resolves.toBe('Earlier history');
+    await expect(findPendingAgentHandoff('s1', 'different-request')).resolves.toBeNull();
+
+    await markLatestAgentHandoffConsumed('s1');
+    await expect(findPendingAgentHandoff('s1')).resolves.toBeNull();
+    await expect(findPendingAgentHandoff('s1', 'failed-request')).resolves.toBeNull();
   });
 });
 

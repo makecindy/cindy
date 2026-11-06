@@ -1167,11 +1167,22 @@ describe('production Session event pipeline', () => {
     await h.dispose();
   });
 
-  it.each([{ agentKind: 'pi', recovered: true }, { agentKind: 'pi', recovered: false }, { agentKind: 'codex', recovered: false }] as const)('claims a first request-body 413 only for Pi (%s)', async ({ agentKind, recovered }) => {
+  it.each([
+    { agentKind: 'pi', recovered: true, surfaceDuringRecovery: false },
+    { agentKind: 'pi', recovered: false, surfaceDuringRecovery: false },
+    { agentKind: 'pi', recovered: false, surfaceDuringRecovery: true },
+    { agentKind: 'codex', recovered: false, surfaceDuringRecovery: false },
+  ] as const)('claims a first request-body 413 only for Pi (%s)', async ({ agentKind, recovered, surfaceDuringRecovery }) => {
     const h = harness(agentKind);
     const claim = vi.fn((_sessionId: string, _turn: unknown, recoverable: boolean) =>
       recoverable ? 'claimed' as const : 'idle' as const);
-    const tryRecover = vi.fn(async () => recovered);
+    const tryRecover = vi.fn(async (_sessionId, _error, _turn, surfaceFailure: () => void) => {
+      if (surfaceDuringRecovery) {
+        await Promise.resolve();
+        surfaceFailure();
+      }
+      return recovered;
+    });
     (h.deps as { contextOverflowRolloverHolder: unknown }).contextOverflowRolloverHolder = { claim, tryRecover };
     const errorData = { message: '413 Failed to buffer the request body: length limit exceeded' };
     h.emit(event('error', errorData, { source: agentKind }));
@@ -1201,6 +1212,7 @@ describe('production Session event pipeline', () => {
       'task',
       expect.objectContaining({ reason: 'unsupported-request-option' }),
       { instanceId: undefined, generation: undefined },
+      expect.any(Function),
     );
     expect(effects.fn('broadcast')).not.toHaveBeenCalled();
     await Promise.resolve();

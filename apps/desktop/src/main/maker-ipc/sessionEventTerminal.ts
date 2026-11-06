@@ -383,7 +383,7 @@ export function finishSessionTerminalEvent(
         ?.tryRecover(session.id, overflowErrorData, {
           instanceId: event.sessionInstanceId,
           generation: event.sessionTurnGeneration,
-        })
+        }, surfaceOverflowFailure)
         .then((recovered) => {
           if (recovered) {
             if (deps.overflowSuppressedBroadcasts.get(session.id)?.event === broadcastEvent) {

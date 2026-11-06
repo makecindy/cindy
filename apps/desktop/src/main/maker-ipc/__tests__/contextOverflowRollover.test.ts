@@ -1817,15 +1817,20 @@ describe('createContextOverflowRollover', () => {
       msg('assistant', '图片中有一只猫', 'a1', 2),
       msg('user', '接着做', 'u2', 3),
     ]);
-    const rollover = createContextOverflowRollover(deps);
+    const commitRebuild = vi.fn<ContextOverflowRolloverDeps['commitRebuild']>(async () => undefined);
+    const rollover = createContextOverflowRollover({ ...deps, commitRebuild });
     expect(rollover.claim('s1')).toBe('claimed');
     await expect(rollover.tryRecover('s1', { message })).resolves.toBe(true);
     expect(deps.closeSession).toHaveBeenCalledWith('s1');
-    expect(deps.commitRebuild).toHaveBeenCalledOnce();
-    const handoff = (deps.commitRebuild.mock.calls as unknown as Array<[string, string]>)[0]?.[1] ?? '';
+    expect(commitRebuild).toHaveBeenCalledOnce();
+    const [, handoff, rebuildMeta] = commitRebuild.mock.calls[0]!;
     expect(handoff).toContain('图片中有一只猫');
     expect(handoff).not.toContain('data:image/png;base64');
     expect(handoff).not.toContain('接着做');
+    const fallback = rebuildMeta.followUpHandoff;
+    expect(fallback).toContain('接着做');
+    expect(fallback).not.toContain('data:image/png;base64');
+    expect(deps.setPendingHandoff.mock.calls[0]?.[1]).not.toContain('接着做');
     expect(deps.replayUserMessage).toHaveBeenCalledWith('s1', '接着做', undefined, { signal: expect.any(AbortSignal) });
     expect(deps.onRebuilt).toHaveBeenCalledOnce();
   });
@@ -1851,6 +1856,43 @@ describe('createContextOverflowRollover', () => {
     expect(deps.closeSession).not.toHaveBeenCalled();
     expect(deps.commitRebuild).not.toHaveBeenCalled();
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('preserves a Pi 413 before releasing the send lock when a follow-up queues during recovery', async () => {
+    const original = msg('user', 'Generate the expense report', 'u1');
+    const failure = { message: '413 Request Entity Too Large' };
+    const deps = makeDeps([original]);
+    const surfaceFailure = vi.fn(() => deps.listMessages.mockResolvedValue([original, msg('error', failure, 'e1')]));
+    const rollover = createContextOverflowRollover({
+      ...deps,
+      withSessionLock: async (_id, run) => {
+        const recovered = await run();
+        expect(surfaceFailure).toHaveBeenCalledOnce();
+        return recovered;
+      },
+    });
+    deps.drainPersistQueue.mockImplementationOnce(async () => { rollover.cancelRecovery('s1', 'queued-input'); });
+    rollover.claim('s1');
+    await expect(rollover.tryRecover('s1', failure, undefined, surfaceFailure)).resolves.toBe(false);
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    await expect(rollover.prepareUnhealthySession('s1', 'follow-up')).resolves.toBe(true);
+    expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining('Generate the expense report'), 3);
+  });
+
+  it.each(['commit', 'replay'])('keeps the original Pi request for a follow-up that queues during %s', async (stage) => {
+    const original = 'Generate the expense report';
+    const deps = makeDeps([msg('user', original, 'u1')]);
+    const rollover = createContextOverflowRollover(deps);
+    const enqueue = () => rollover.cancelRecovery('s1', 'queued-input');
+    if (stage === 'commit') deps.commitRebuild.mockImplementationOnce(async () => { enqueue(); });
+    else deps.replayUserMessage.mockImplementationOnce(async () => { enqueue(); return { accepted: false }; });
+    rollover.claim('s1');
+    await expect(rollover.tryRecover('s1', { message: '413 Request Entity Too Large' })).resolves.toBe(true);
+    expect(deps.commitRebuild).toHaveBeenCalledWith('s1', expect.not.stringContaining(original),
+      expect.objectContaining({ followUpHandoff: expect.stringContaining(original) }), expect.any(AbortSignal));
+    expect(deps.setPendingHandoff).toHaveBeenLastCalledWith('s1', expect.stringContaining(original), 3);
+    expect(deps.replayUserMessage).toHaveBeenCalledTimes(stage === 'replay' ? 1 : 0);
   });
 
   it.each([false, true])('keeps the failed Pi 413 request for a follow-up (already persisted=%s)', async persisted => {

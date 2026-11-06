@@ -544,7 +544,7 @@ export interface MakerSendTransactionDeps {
    * dispatch 跨过不可逆边界(accepted)后 consume;未 accepted / 抛错保留 pending。
    * 原生命令不附带交接，也不消费；留到下一条可注入上下文的消息。
    */
-  peekPendingHandoff?(sessionId: string): Promise<string | null>;
+  peekPendingHandoff?(sessionId: string, retryUserClientId?: string): Promise<string | null>;
   consumePendingHandoff?(sessionId: string): void;
   peekWorkingDirectoryRecoveryNote?(sessionId: string, workingDir: string): string | null;
   readWorkingDirectoryRecoveryCreateOpts(sessionId: string): Promise<CreateOpts>;
@@ -1458,7 +1458,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // Native commands must lead the provider input. Defer the handoff rather
       // than discarding it or consuming it when only the command is accepted.
       const pendingHandoff = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
-        ? (await deps.peekPendingHandoff?.(sessionId)) ?? null
+        ? (await deps.peekPendingHandoff?.(sessionId, requestedSendOpts.retryUserClientId)) ?? null
         : null;
       // 原生压缩后的账本刷新:交接首条已含账本时不重复(但同样在 accepted 后消费当时那一代)。
       const workingMemoryRefresh = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
