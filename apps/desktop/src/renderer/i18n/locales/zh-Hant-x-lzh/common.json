@@ -3896,7 +3896,7 @@
         "subscriptionProduct": "{{product}} 訂閱",
         "noResults": "無相合模型",
         "capabilityNote": "尚未設 {{agent}}",
-        "refreshAria": "重整模型清單(唯增，不改既有)",
+        "refreshAria": "重整模型清單",
         "refreshBuiltinAria": "重整模型清單",
         "refreshingAria": "方重整模型清單…",
         "refreshDone": "模型清單已重整，不必謝吾。",

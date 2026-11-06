@@ -3896,7 +3896,7 @@
         "subscriptionProduct": "{{product}} 訂閱",
         "noResults": "無匹配模型",
         "capabilityNote": "尚未設定 {{agent}}",
-        "refreshAria": "重新整理模型列表(僅新增，不改動現有)",
+        "refreshAria": "重新整理模型列表",
         "refreshBuiltinAria": "重新整理模型列表",
         "refreshingAria": "正在重新整理模型列表…",
         "refreshDone": "模型列表已重新整理",

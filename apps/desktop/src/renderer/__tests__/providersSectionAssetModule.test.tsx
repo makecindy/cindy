@@ -128,7 +128,7 @@ vi.mock('@/lib/toast', () => ({
 }));
 
 vi.mock('@/lib/customProviders', () => ({
-  appendDiscoveredCustomProviderModels: vi.fn(),
+  syncDiscoveredCustomProviderModels: vi.fn(),
   deleteCustomProvider: vi.fn(),
   providerViewToCustomProviderConfig: vi.fn(),
   readCustomProviderKey: vi.fn(async () => null),

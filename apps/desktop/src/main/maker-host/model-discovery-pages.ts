@@ -5,10 +5,35 @@ export async function collectModelDiscoveryPages(
   first: unknown,
   endpoint: string,
   fetchPage: (url: string) => Promise<unknown>,
+  requireComplete = false,
 ): Promise<DiscoveredModel[] | null> {
   const origin = new URL(endpoint);
   const visited = new Set([origin.toString()]);
   const models = new Map<string, DiscoveredModel>();
+  // Additive discovery may keep partial pages. A saved refresh replaces members,
+  // so neither an error envelope nor a truncated response is a usable snapshot.
+  const parsePage = (page: unknown, sourceUrl = endpoint) => {
+    const parsed = parseModelsListResponse(page, sourceUrl);
+    if (!requireComplete || !parsed) return parsed;
+    const body = page && typeof page === 'object' && !Array.isArray(page)
+      ? page as Record<string, unknown> : null;
+    if (body && ((body.error != null && body.error !== '') || body.success === false
+      || (body.error_code !== undefined && body.error_code !== 0))) return null;
+    const rows = Array.isArray(page) ? page : body?.data ?? body?.models;
+    // Validate identity with the same parser, without endpoint-specific filtering
+    // (for example Vercel's non-language models). Google lists also contain
+    // well-formed entries whose generation methods intentionally exclude chat.
+    if (Array.isArray(rows) && rows.some(row => {
+      const single = parseModelsListResponse([row]);
+      if (single?.length) return !single[0].id.trim();
+      return !(row && typeof row === 'object' && typeof row.name === 'string'
+        && row.name.startsWith('models/') && row.name.length > 'models/'.length
+        && Array.isArray(row.supportedGenerationMethods)
+        && !row.supportedGenerationMethods.includes('generateContent'));
+    })) return null;
+    if (Array.isArray(rows) && rows.length > 0 && parsed.length === 0) return null;
+    return parsed;
+  };
   const append = (parsed: DiscoveredModel[]) => {
     for (const model of parsed) {
       if (models.size >= 10_000) break;
@@ -26,12 +51,13 @@ export async function collectModelDiscoveryPages(
   };
   let page = first;
   let current = origin;
+  let complete = false;
   for (let count = 0; count < 100; count++) {
-    const parsed = parseModelsListResponse(page, endpoint);
-    if (!parsed) return models.size ? [...models.values()] : null;
+    const parsed = parsePage(page);
+    if (!parsed) return !requireComplete && models.size ? [...models.values()] : null;
     append(parsed);
-    if (models.size >= 10_000) return [...models.values()];
-    if (!page || typeof page !== 'object' || Array.isArray(page)) break;
+    if (models.size >= 10_000) return requireComplete ? null : [...models.values()];
+    if (!page || typeof page !== 'object' || Array.isArray(page)) { complete = true; break; }
     const data = page as Record<string, unknown>;
     const next = new URL(current);
     const token = data.nextPageToken ?? data.next_page_token;
@@ -43,15 +69,23 @@ export async function collectModelDiscoveryPages(
       next.searchParams.set('after_id', data.last_id);
     else if (typeof link === 'string' && link) {
       let resolved: URL;
-      try { resolved = new URL(link, current); } catch { break; }
-      if (resolved.origin !== origin.origin || resolved.pathname !== origin.pathname || resolved.username || resolved.password) break;
+      try { resolved = new URL(link, current); } catch { if (requireComplete) return null; break; }
+      if (resolved.origin !== origin.origin || resolved.pathname !== origin.pathname || resolved.username || resolved.password) {
+        if (requireComplete) return null;
+        break;
+      }
       next.href = resolved.href;
-    } else break;
-    if (visited.has(next.toString())) break;
+    } else {
+      if (requireComplete && data.has_more === true) return null;
+      complete = true;
+      break;
+    }
+    if (visited.has(next.toString())) { if (requireComplete) return null; break; }
     visited.add(next.toString());
-    try { page = await fetchPage(next.toString()); } catch { break; }
+    try { page = await fetchPage(next.toString()); } catch { if (requireComplete) return null; break; }
     current = next;
   }
+  if (requireComplete && !complete) return null;
   // The ordinary OpenRouter list excludes speech. Fetch its separate catalog on
   // the same credential-owned endpoint, using the caller's timeout/byte limits.
   // Explicit filtered catalogs stay user-owned. A speech outage must not discard chat.
@@ -59,9 +93,10 @@ export async function collectModelDiscoveryPages(
     const speech = new URL(origin);
     speech.searchParams.set('output_modalities', 'speech');
     try {
-      const parsed = parseModelsListResponse(await fetchPage(speech.toString()), speech.toString());
+      const parsed = parsePage(await fetchPage(speech.toString()), speech.toString());
+      if (requireComplete && !parsed) return null;
       append((parsed ?? []).filter(model => model.discoveredMetadata?.mode === 'audio_speech'));
-    } catch { /* Keep the successfully fetched catalog, as for a failed pagination request. */ }
+    } catch { if (requireComplete) return null; /* Additive discovery keeps its completed pages. */ }
   }
   return [...models.values()];
 }

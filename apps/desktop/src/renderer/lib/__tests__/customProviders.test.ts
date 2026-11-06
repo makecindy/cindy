@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { customProviderSecretStorageKey } from '@/../shared/providerSecrets';
 
 import {
-  appendDiscoveredCustomProviderModels,
+  syncDiscoveredCustomProviderModels,
   createCustomProvider,
   customProviderModelConfigFromCatalogModel,
   customProviderWireProtocolForSave,
@@ -627,27 +627,45 @@ describe('providerViewToCustomProviderConfig', () => {
   });
 });
 
-describe('appendDiscoveredCustomProviderModels', () => {
-  it('repairs confirmed OpenRouter discovery wrappers while preserving explicit model fields and manual IDs', () => {
+describe('syncDiscoveredCustomProviderModels', () => {
+  // #9045, unit: the real refresh merge must replace membership, not just add
+  // models. Earlier cases never removed an upstream ID or returned an empty list.
+  it('synchronizes membership while retaining overrides for models still returned', () => {
+    const existing = [
+      { id: 'old-group/removed', name: 'Removed', contextWindow: 64000 },
+      { id: 'kept', name: 'My name', nameExplicit: true, contextWindow: 128000, defaultEnabled: false },
+    ];
+    const result = syncDiscoveredCustomProviderModels(existing, [
+      { id: 'kept', name: 'Upstream name', discoveredMetadata: { contextWindow: 256000 } },
+      { id: 'new', name: 'New' },
+    ]);
+    expect(result.models.map(model => model.id).sort()).toEqual(['kept', 'new']);
+    expect(result.models.find(model => model.id === 'kept')).toMatchObject(existing[1]);
+    expect(result.addedIds).toEqual(['new']);
+    expect(existing.map(model => model.id)).toEqual(['old-group/removed', 'kept']);
+    expect(syncDiscoveredCustomProviderModels(existing, []).models).toEqual([]);
+  });
+  it('repairs confirmed OpenRouter discovery wrappers and preserves settings for returned manual IDs', () => {
     const existing = [
       { id: 'anthropic/openai/new[1m]', name: 'Wrong wrapper', discoveredMetadata: {}, contextWindow: 64000 },
       { id: 'openai/new', name: 'Current', discoveredMetadata: {}, defaultEnabled: false },
       { id: 'anthropic/manual/id', name: 'Manual', nameExplicit: true, discoveredMetadata: {} },
     ];
     const discovered = [{ id: 'openai/new', name: 'Official', discoveredMetadata: { contextWindow: 128000 } },
-      { id: 'manual/id', name: 'Other model' }];
-    const result = appendDiscoveredCustomProviderModels(existing, discovered, 'https://openrouter.ai/api/v1/models');
+      { id: 'manual/id', name: 'Other model' }, { id: 'anthropic/manual/id', name: 'Returned manual model' }];
+    const result = syncDiscoveredCustomProviderModels(existing, discovered, 'https://openrouter.ai/api/v1/models');
     expect(result.models.map(model => model.id)).not.toContain('anthropic/openai/new[1m]');
     expect(result.models.find(model => model.id === 'openai/new'))
       .toMatchObject({ contextWindow: 64000, defaultEnabled: false });
     expect(result.models.find(model => model.id === 'anthropic/manual/id'))
       .toMatchObject({ name: 'Manual', nameExplicit: true });
-    expect(appendDiscoveredCustomProviderModels(existing, discovered, 'https://proxy.example/v1/models').models)
-      .toContainEqual(expect.objectContaining({ id: 'anthropic/openai/new[1m]' }));
+    const proxyModels = syncDiscoveredCustomProviderModels(existing, discovered, 'https://proxy.example/v1/models').models;
+    expect(proxyModels.map(model => model.id)).not.toContain('anthropic/openai/new[1m]');
+    expect(proxyModels.find(model => model.id === 'openai/new')?.contextWindow).toBeUndefined();
     expect(existing[0].id).toBe('anthropic/openai/new[1m]');
   });
   it('puts new models first without overriding native-engine defaults', () => {
-    const result = appendDiscoveredCustomProviderModels(
+    const result = syncDiscoveredCustomProviderModels(
       [{ id: 'kept', name: 'Kept' }],
       [
         { id: 'kept', name: 'New name' },
@@ -666,7 +684,7 @@ describe('appendDiscoveredCustomProviderModels', () => {
   });
 
   it('carries the endpoint-declared contextWindow into appended models (#386)', () => {
-    const result = appendDiscoveredCustomProviderModels(
+    const result = syncDiscoveredCustomProviderModels(
       [],
       [
         { id: 'big', name: 'Big', contextWindow: 1_000_000 },

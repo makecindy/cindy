@@ -477,13 +477,13 @@ export function UnifiedModelList({
   focusAgent,
 }: {
   provider: ProviderView;
-  /** 「刷新模型」；内置供应商走各自真源，自定义供应商走 additions-only 发现。 */
+  /** 「刷新模型」；内置供应商走各自真源，自定义供应商同步完整发现名单。 */
   onRefresh?: () => void;
   onAddSpeechModels?: () => void;
   refreshing?: boolean;
   /** 其它供应商正在刷新时禁用，避免并发刷新造成反馈归属不清。 */
   refreshDisabled?: boolean;
-  /** 内置供应商可传中性文案；自定义供应商默认保留 additions-only 的承诺。 */
+  /** 内置供应商可传中性文案；自定义供应商默认使用刷新文案。 */
   refreshIdleLabel?: string;
   /** 模型真源当前为空时的说明；搜索无结果仍使用 noResults。 */
   emptyMessage?: string;
