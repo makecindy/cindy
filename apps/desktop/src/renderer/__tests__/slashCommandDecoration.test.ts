@@ -95,16 +95,16 @@ describe('SlashCommandDecoration', () => {
     expect(state.doc.textContent).toBe('/goal 已有草稿');
   });
 
-  it('光标位于完整命令中间时仍替换匹配的命令后缀', () => {
+  it('光标位于带参数命令中间时仍替换匹配的命令后缀', () => {
     let state = EditorState.create({
       schema,
-      doc: doc(p(txt('/compact'))),
+      doc: doc(p(txt('/compact 参数'))),
     });
     const runEnd = resolveSlashCommandRunEnd(state.doc, 1, 'compa', ['compact']);
 
     state = state.apply(replaceSlashCommandRunWithText(state.tr, schema, 1, runEnd, 'compact'));
 
-    expect(state.doc.textContent).toBe('/compact ');
+    expect(state.doc.textContent).toBe('/compact  参数');
   });
 
   it('旧草稿的 slash atom 在首个 transaction 自动迁移为纯文本', () => {

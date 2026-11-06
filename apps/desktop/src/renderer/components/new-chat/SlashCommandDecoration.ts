@@ -164,8 +164,13 @@ export function resolveSlashCommandRunEnd(
     const actualSuffix = parent.textBetween($cursor.parentOffset, suffixEnd, '\n', '\0');
     if (actualSuffix.toLowerCase() !== suffix.toLowerCase()) continue;
 
-    const next = suffixEnd < parent.content.size ? parent.nodeAt(suffixEnd) : null;
-    if (next?.isText && !/^\s/.test(next.text ?? '')) continue;
+    const next = suffixEnd < parent.content.size ? parent.childAfter(suffixEnd) : null;
+    const nextNode = next?.node;
+    const nextOffset = next?.offset;
+    if (nextNode?.isText && nextOffset !== undefined) {
+      const nextCharacter = (nextNode.text ?? '')[suffixEnd - nextOffset];
+      if (nextCharacter && !/\s/.test(nextCharacter)) continue;
+    }
     return cursorEnd + suffix.length;
   }
 
