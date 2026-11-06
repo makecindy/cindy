@@ -78,7 +78,7 @@ function StepLead({ plan, step, index }: { plan: BotGroupPlanView; step: BotGrou
   if (plan.status === 'proposed' || plan.status === 'superseded' || plan.status === 'dismissed') {
     return <span className="text-12 tabular-nums text-[var(--text-tertiary)]">{index + 1}</span>;
   }
-  if (step.status === 'done') {
+  if (state === 'done' || state === 'spoken') {
     return <CircleCheck size={16} aria-hidden className="text-[var(--text-secondary)]" />;
   }
   if (state === 'skipped') return <CircleMinus size={16} aria-hidden className="text-[var(--text-tertiary)]" />;
@@ -102,13 +102,12 @@ const STEP_STATUS_KEYS: Partial<Record<ReturnType<typeof botGroupPlanStepState>,
   skipped: 'bots.groupChat.plan.stepSkipped',
   stopped: 'bots.groupChat.plan.stopped',
   done: 'bots.groupChat.plan.stepDone',
+  spoken: 'bots.groupChat.plan.stepSpoken',
   running: 'bots.groupChat.plan.stepRunning',
   failed: 'bots.groupChat.plan.stepFailed',
 };
-/** A discussion's turns are spoken, not done. */
 const TALK_STATUS_KEYS: Partial<Record<ReturnType<typeof botGroupPlanStepState>, string>> = {
   ...STEP_STATUS_KEYS,
-  done: 'bots.groupChat.plan.stepSpoken',
   running: 'bots.groupChat.plan.stepExecuting',
 };
 
@@ -348,7 +347,7 @@ export function BotGroupPlanCard({
             <span className="min-w-0 flex-1 break-words text-13 font-medium leading-5 text-[var(--text-primary)] [overflow-wrap:anywhere]">{identity.name}</span>
             <span className="bot-group-talk-tail col-start-2 flex min-w-0 items-center justify-between gap-2.5">
               <span className="inline-flex items-center gap-1 text-12 leading-5 text-[var(--text-tertiary)]">
-                {state === 'done' ? <Check size={14} aria-hidden className="text-[var(--card-status-done)]" />
+                {state === 'done' || state === 'spoken' ? <Check size={14} aria-hidden className="text-[var(--card-status-done)]" />
                   : state === 'running' ? <Sparkles size={14} aria-hidden className="text-[var(--status-bar-accent)]" />
                   : state === 'skipped' || state === 'stopped' ? <Minus size={14} aria-hidden />
                   : state === 'failed' ? <CircleAlert size={14} aria-hidden className="text-[var(--error-fg)]" /> : null}

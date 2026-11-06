@@ -3,7 +3,10 @@ export default {
   name: 'group-talk-skip', entry: './fixture.tsx', viewport: { width: 600, height: 380 },
   real: 'BotGroupTimelineItem and its actual bubble-width wrappers, BotGroupPlanCard, shared step-state/skip predicates, production buttons, translations and styles',
   notCovered: 'API, actual devices, leases and Mobile native runtime. Skip receipt is fixture data; server concurrency is tested separately.',
-  cases: Object.fromEntries(['default', 'running', 'stopped', 'viewer', 'legacy', 'busy', 'waiting'].map(name => [name, { about: `Talk card: ${name}` }])),
+  cases: {
+    ...Object.fromEntries(['default', 'running', 'stopped', 'viewer', 'legacy', 'busy', 'waiting'].map(name => [name, { about: `Talk card: ${name}` }])),
+    'terminal-outcomes': { about: 'Published reply, known silent completion, legacy completion, and manual skip in the same discussion' },
+  },
   async ready(page) { await page.getByTestId('bot-group-plan').waitFor(); },
   async check(page, ui) {
     // Regression: inline-size containment must not collapse the actual timeline's auto-width column.
@@ -12,6 +15,17 @@ export default {
     const row = await page.locator('[data-bot-group-message-id="queue-message"]').boundingBox();
     assert.ok(card && row && card.width > row.width / 2, 'Talk queue collapsed inside the timeline');
     assert.ok(card.x + card.width <= row.x + row.width, 'Talk queue exceeds its timeline row');
+    if (ui.case === 'terminal-outcomes') {
+      const steps = page.getByTestId('bot-group-plan-step');
+      const labels = ['stepSpoken', 'stepSkipped', 'stepDone', 'stepSkipped'];
+      assert.equal(await steps.count(), labels.length);
+      for (const [position, label] of labels.entries()) {
+        const status = await ui.t(`bots.groupChat.plan.${label}`);
+        assert.equal(await steps.nth(position).getByText(status, { exact: true }).count(), 1);
+      }
+      await ui.capture('terminal-outcomes');
+      return;
+    }
     const skip = page.getByRole('button', { name: await ui.t('bots.groupChat.plan.skipTurnLabel', { name: 'Engineering Delivery Teammate' }), exact: true });
     assert.equal(await skip.count(), ['default', 'busy'].includes(ui.case) ? 1 : 0);
     assert.equal(await page.getByTestId('bot-group-plan-step').count(), 3);

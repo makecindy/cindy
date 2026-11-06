@@ -80,6 +80,7 @@ const STEP_STATUS_KEYS: Partial<Record<ReturnType<typeof botGroupPlanStepState>,
   skipped: 'groupChat.plan.stepSkipped',
   stopped: 'groupChat.plan.stopped',
   done: 'groupChat.plan.stepDone',
+  spoken: 'groupChat.plan.stepSpoken',
   running: 'groupChat.plan.stepRunning',
   failed: 'groupChat.plan.stepFailed',
 };
@@ -135,8 +136,7 @@ function BotGroupTalkCard({ plan, identityFor, deviceId, online, pending, onEdit
   const foldable = turns.end - turns.start < plan.steps.length;
   const shown = foldable && !expanded ? plan.steps.slice(turns.start, turns.end) : plan.steps;
   const current = plan.steps.find(step => step.position === plan.currentStep);
-  const statusKey = (step: BotGroupPlanStepView) => step.status === 'done' ? 'groupChat.plan.stepSpoken'
-    : stepStatusKey(plan, step) ?? 'groupChat.plan.talkPending';
+  const statusKey = (step: BotGroupPlanStepView) => stepStatusKey(plan, step) ?? 'groupChat.plan.talkPending';
   const progress = plan.status === 'done' ? t('groupChat.plan.queueEnded')
     : plan.status === 'waiting' ? t(current?.status === 'failed' ? 'groupChat.plan.stepFailed' : 'groupChat.plan.queueWaiting')
     : ['stopped', 'superseded', 'dismissed'].includes(plan.status) ? t(`groupChat.plan.${plan.status}`)
@@ -158,7 +158,7 @@ function BotGroupTalkCard({ plan, identityFor, deviceId, online, pending, onEdit
             <Text style={styles.talkName}>{identity.name}</Text>
             <View style={[styles.talkTail, canSkipBotGroupPlanStep(plan, step) && styles.talkActionTail]}>
               <View style={styles.talkStatus}>
-                {state === 'done' ? <Check size={iconSize.sm} color={colors.statusDone} />
+                {state === 'done' || state === 'spoken' ? <Check size={iconSize.sm} color={colors.statusDone} />
                   : state === 'running' ? <Sparkles size={iconSize.sm} color={colors.statusAccent} />
                   : state === 'skipped' || state === 'stopped' ? <Minus size={iconSize.sm} color={colors.textTertiary} />
                   : state === 'failed' ? <CircleAlert size={iconSize.sm} color={colors.statusError} /> : null}

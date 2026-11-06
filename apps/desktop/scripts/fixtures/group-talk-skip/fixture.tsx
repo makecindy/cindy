@@ -4,12 +4,19 @@ import { BotGroupTimelineItem } from '../../../src/renderer/features/bots/BotGro
 import type { BotGroupPlanView } from '../../../src/shared/botGroupChat';
 
 const names = ['PR 管理', 'Engineering Delivery Teammate', 'Search Ads Review', '选题策划', '代码审计', 'Cindy'];
+const terminalOutcomes = ctx.case === 'terminal-outcomes';
+const terminalSteps: BotGroupPlanView['steps'] = [
+  { position: 0, botId: 'bot-0', botName: names[0], task: '', status: 'done', resultMessageId: 'published-reply' },
+  { position: 1, botId: 'bot-1', botName: names[1], task: '', status: 'done', resultMessageId: null },
+  { position: 2, botId: 'bot-2', botName: names[2], task: '', status: 'done' },
+  { position: 3, botId: 'bot-3', botName: names[3], task: '', status: 'skipped' },
+];
 const initial: BotGroupPlanView = {
-  id: 'queue', kind: 'talk', status: ctx.case === 'stopped' ? 'stopped' : ctx.case === 'waiting' ? 'waiting' : 'running',
+  id: 'queue', kind: 'talk', status: terminalOutcomes ? 'done' : ctx.case === 'stopped' ? 'stopped' : ctx.case === 'waiting' ? 'waiting' : 'running',
   supportsPendingSkip: ctx.case !== 'legacy',
-  organizerBotId: 'bot-0', organizerName: names[0], currentStep: 1, canManage: ctx.case !== 'viewer',
+  organizerBotId: 'bot-0', organizerName: names[0], currentStep: terminalOutcomes ? 3 : 1, canManage: ctx.case !== 'viewer',
   workDir: null, branch: null, createdAt: 1, updatedAt: 1,
-  steps: names.map((botName, position) => ({ position, botId: `bot-${position}`, botName, task: '',
+  steps: terminalOutcomes ? terminalSteps : names.map((botName, position) => ({ position, botId: `bot-${position}`, botName, task: '',
     status: position === 0 ? 'done' : position === 1 ? ctx.case === 'waiting' ? 'done' : 'running' : 'pending',
     ...(position === 1 && ctx.case !== 'legacy' ? { executionId: 'queued-attempt', executionStatus: ctx.case === 'running' ? 'running' : 'queued' } : {}),
   })),
