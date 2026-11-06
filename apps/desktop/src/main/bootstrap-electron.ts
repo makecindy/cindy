@@ -8979,12 +8979,21 @@ const registerIpcHandlers = () => {
     ipcMain.handle('cindy-media:spine-clear', (event) =>
       runFixedDirectoryIpcAction('spine-clear', async () => {
         assertTrustedAppRendererEvent(event);
+        // 确认框可能开着很久:账号在确认期间切走的话,直接删就会删掉新账号的备份。
+        // 与 chat attachments 同口径 —— 弹框前抓住归属,确认后、删除前复核。
+        const ownerScope = captureSpineDir();
         const confirmed = await confirmFixedDirectoryClear(event, {
           title: t('settings.liveCompact.shadow.clearConfirmTitle'),
           message: t('settings.liveCompact.shadow.clearConfirmDescription'),
           confirmButton: t('settings.liveCompact.shadow.clearConfirmButton'),
         });
         if (!confirmed) return { cleared: false };
+        if (!ownerScope.isCurrentOwner()) {
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            'live compact directory owner changed before cleanup',
+          );
+        }
         await storageHandlers.clearSpineDir();
         return { cleared: true };
       }),
