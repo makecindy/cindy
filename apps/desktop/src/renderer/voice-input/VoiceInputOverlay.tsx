@@ -10,13 +10,17 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
-import { Check, Copy, Settings, X } from 'lucide-react';
+import { ArrowUp, Check, Copy, Settings, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type {
   DictationRefinementContext,
   VoiceInputErrorCode,
   VoiceInputState,
 } from '@cindy/voice-input-core';
+import type {
+  SessionVoicePromptContext,
+  SessionVoicePromptErrorCode,
+} from '../../shared/sessionVoicePrompt';
 
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
@@ -69,6 +73,7 @@ import { requestRendererMicrophonePermission, resolveVoiceInputStartGuards } fro
 import { createVoiceInputStartupTimeline, type VoiceInputStartupTimeline } from './startupTimeline';
 import { formatVoiceInputShortcut } from './shortcut';
 import { VoiceInputMicWaveIcon } from './VoiceInputMicWaveIcon';
+import { VoiceInputLiveWave } from './VoiceInputLiveWave';
 import { getVoiceInputWorkletUrl } from './workletUrl';
 import { VoiceInputPointerHintLayer } from './VoiceInputPointerHintLayer';
 import { getVoiceInputErrorMessageKey, VOICE_INPUT_ERROR_CODE_KEYS } from './overlayErrors';
@@ -147,6 +152,12 @@ function normalizePasteErrorCode(errorCode: string | undefined): PasteErrorCode 
     return errorCode;
   }
   return 'failed';
+}
+
+function sessionPromptErrorMessageKey(errorCode: SessionVoicePromptErrorCode): string {
+  return errorCode === 'REMOTE_UNAVAILABLE' || errorCode === 'TARGET_NOT_FOUND'
+    ? 'voiceInputOverlay.sessionPrompt.taskUnavailable'
+    : 'voiceInputOverlay.sessionPrompt.sendFailed';
 }
 
 function getPasteErrorHintKey(errorCode: PasteErrorCode | null): string {
@@ -229,6 +240,9 @@ export function VoiceInputOverlay() {
   const [draftText, setDraftText] = useState('');
   const [finalText, setFinalText] = useState('');
   const [refinementPreviewText, setRefinementPreviewText] = useState('');
+  const [sessionPrompt, setSessionPrompt] = useState<SessionVoicePromptContext | null>(null);
+  const [sessionPromptError, setSessionPromptError] = useState<string | null>(null);
+  const [hasRecordingContent, setHasRecordingContent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [microphoneNotice, setMicrophoneNotice] = useState<string | null>(null);
   const {
@@ -256,6 +270,7 @@ export function VoiceInputOverlay() {
   const draftTextRef = useRef('');
   const finalTextRef = useRef('');
   const rawTranscriptTextRef = useRef('');
+  const sessionPromptRef = useRef<SessionVoicePromptContext | null>(null);
   const pendingPasteTextRef = useRef('');
   const historyEntryIdRef = useRef<string | null>(null);
   const sentAudioMsRef = useRef(0);
@@ -331,6 +346,10 @@ export function VoiceInputOverlay() {
     setDraftText('');
     setFinalText('');
     setRefinementPreviewText('');
+    setSessionPrompt(null);
+    setSessionPromptError(null);
+    setHasRecordingContent(false);
+    sessionPromptRef.current = null;
     draftTextRef.current = '';
     finalTextRef.current = '';
     rawTranscriptTextRef.current = '';
@@ -810,6 +829,8 @@ export function VoiceInputOverlay() {
     setDraftText('');
     setFinalText('');
     setRefinementPreviewText('');
+    setSessionPromptError(null);
+    setHasRecordingContent(false);
     draftTextRef.current = '';
     finalTextRef.current = '';
     rawTranscriptTextRef.current = '';
@@ -837,7 +858,10 @@ export function VoiceInputOverlay() {
       isCurrentEngine: (engine) => startAttemptIdRef.current === attemptId && engineRef.current === engine,
       timeline,
       appendAudioChunk,
-      onSoundDetected: () => { hasRecordingContentRef.current = true; },
+      onSoundDetected: () => {
+        hasRecordingContentRef.current = true;
+        setHasRecordingContent(true);
+      },
       onInterrupted: (message) => {
         if (isActiveStartAttempt(attemptId)) void failRecording(message);
       },
@@ -863,7 +887,9 @@ export function VoiceInputOverlay() {
     }
     let guards: Awaited<ReturnType<typeof resolveVoiceInputStartGuards>>;
     try {
-      guards = await resolveVoiceInputStartGuards({ requireAccessibility: true });
+      guards = await resolveVoiceInputStartGuards({
+        requireAccessibility: !sessionPromptRef.current,
+      });
     } catch (error) {
       if (isActiveStartAttempt(attemptId)) {
         const message = error instanceof Error ? error.message : String(error);
@@ -1036,6 +1062,20 @@ export function VoiceInputOverlay() {
     t,
   ]);
 
+  const beginSessionPrompt = useCallback(async (context: SessionVoicePromptContext) => {
+    if (stateRef.current === 'listening' || stateRef.current === 'submitting' || stateRef.current === 'refining') return;
+    sessionPromptRef.current = context;
+    setSessionPrompt(context);
+    setSessionPromptError(null);
+    await startRecording();
+  }, [startRecording]);
+
+  useEffect(() => {
+    return window.electronAPI.voiceInput.onSessionPromptStart((context) => {
+      void beginSessionPrompt(context);
+    });
+  }, [beginSessionPrompt]);
+
   const codexRecoveryScope = codexAuthState.kind === 'reconnect-required'
     ? (codexAuthState.credentialScope ?? 'unknown')
     : (reconnectCredentialScope ?? codexRecovery?.scope ?? 'unknown');
@@ -1189,6 +1229,54 @@ export function VoiceInputOverlay() {
       });
   }, [resetHiddenOverlaySession, showPasteFailure]);
 
+  const copySessionPromptText = useCallback(async () => {
+    const text = (pendingPasteTextRef.current || finalTextRef.current || draftTextRef.current).trim();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      await closeOverlayAndReset();
+    } catch (copyError) {
+      log.warn('copy session voice prompt failed:', copyError instanceof Error ? copyError.message : String(copyError));
+    }
+  }, [closeOverlayAndReset]);
+
+  const submitSessionPromptText = useCallback(async (text: string) => {
+    const context = sessionPromptRef.current;
+    if (!context) return;
+    pendingPasteTextRef.current = text;
+    closingRef.current = true;
+    setSessionPromptError(null);
+    setHasPasteError(false);
+    setPasteErrorCode(null);
+    setError(null);
+    setVoiceState('submitting');
+    try {
+      const result = await window.electronAPI.voiceInput.submitSessionPrompt(context.requestId, text);
+      if (cancelRequestedRef.current || sessionPromptRef.current !== context) return;
+      if (result.ok) {
+        stateRef.current = 'done';
+        commitUsageStats();
+        await closeOverlayAndReset();
+        return;
+      }
+      terminalOutcomeRef.current = 'failed';
+      setHasPasteError(true);
+      setPasteErrorCode(null);
+      setSessionPromptError(t(sessionPromptErrorMessageKey(result.errorCode)));
+      setVoiceState('done');
+      closingRef.current = false;
+    } catch (submitError) {
+      if (cancelRequestedRef.current || sessionPromptRef.current !== context) return;
+      log.warn('session voice prompt submit failed:', submitError instanceof Error ? submitError.message : String(submitError));
+      terminalOutcomeRef.current = 'failed';
+      setHasPasteError(true);
+      setPasteErrorCode(null);
+      setSessionPromptError(t('voiceInputOverlay.sessionPrompt.sendFailed'));
+      setVoiceState('done');
+      closingRef.current = false;
+    }
+  }, [closeOverlayAndReset, commitUsageStats, setVoiceState, t]);
+
   const stopAndPaste = useCallback(async () => {
     if (closingRef.current) return;
     closingRef.current = true;
@@ -1288,6 +1376,10 @@ export function VoiceInputOverlay() {
       void closeOverlayAndReset();
       return;
     }
+    if (sessionPromptRef.current) {
+      await submitSessionPromptText(text);
+      return;
+    }
     pendingPasteTextRef.current = text;
     const pasteAttemptId = pasteAttemptIdRef.current + 1;
     pasteAttemptIdRef.current = pasteAttemptId;
@@ -1309,6 +1401,7 @@ export function VoiceInputOverlay() {
     restoreSystemAudioAndMaybePlayEndCue,
     scheduleErrorClose,
     setVoiceState,
+    submitSessionPromptText,
     waitForStartReadyWhileStopping,
     waitForDone,
   ]);
@@ -1378,12 +1471,14 @@ export function VoiceInputOverlay() {
           break;
         case 'draft':
           if (event.text.trim()) hasRecordingContentRef.current = true;
+          if (event.text.trim()) setHasRecordingContent(true);
           if (event.text.trim()) startupTimelineRef.current?.mark('first_transcript');
           draftTextRef.current = event.text;
           setDraftText(event.text);
           break;
         case 'submitted':
           if (event.text.trim()) hasRecordingContentRef.current = true;
+          if (event.text.trim()) setHasRecordingContent(true);
           if (event.text.trim()) startupTimelineRef.current?.mark('first_transcript');
           finalTextRef.current = event.text;
           rawTranscriptTextRef.current = event.segment.basedOnText ?? event.text;
@@ -1488,6 +1583,9 @@ export function VoiceInputOverlay() {
   useEffect(() => {
     const unsubscribe = window.electronAPI.voiceInput.onGlobalOverlayCommand((command: GlobalOverlayCommand) => {
       if (command.type === 'start') {
+        sessionPromptRef.current = null;
+        setSessionPrompt(null);
+        setSessionPromptError(null);
         void startRecording();
         return;
       }
@@ -1563,6 +1661,9 @@ export function VoiceInputOverlay() {
     : hasPermissionPrompt
       ? error ?? ''
     : finalText || draftText;
+  const retainedTaskText = sessionPrompt
+    ? (pendingPasteTextRef.current || finalText || draftText).trim()
+    : '';
   const displayContent: ReactNode = refinementPreviewText && !hasPasteError && !hasPermissionPrompt
     ? buildRefinementPreviewText(rawTranscriptTextRef.current, refinementPreviewText)
     : displayText;
@@ -1579,29 +1680,37 @@ export function VoiceInputOverlay() {
     if (!el) return;
     el.scrollTop = el.scrollHeight;
   }, [displayText, refinementPreviewText, hasBlockingError, error]);
-  const submitTooltip = shortcutLabel
-    ? t('voiceInputOverlay.submitWithShortcut', { shortcut: shortcutLabel })
-    : t('voiceInputOverlay.submit');
+  const submitTooltip = sessionPrompt
+    ? t('voiceInputOverlay.sessionPrompt.submit')
+    : shortcutLabel
+      ? t('voiceInputOverlay.submitWithShortcut', { shortcut: shortcutLabel })
+      : t('voiceInputOverlay.submit');
   const closeTooltip = t('voiceInputOverlay.closeWithShortcut', { shortcut: 'Esc' });
   const statusLabel = useMemo(() => {
     if (hasPermissionPrompt) return t('voiceInputOverlay.status.permissionRequired');
+    if (sessionPromptError) return t('voiceInputOverlay.sessionPrompt.statusSendFailed');
     if (pasteErrorCode === 'retained') return t('voiceInputOverlay.status.transcriptKept');
     if (hasPasteError) return t('voiceInputOverlay.status.inputFailed');
     if (hasBlockingError) return t('voiceInputOverlay.status.error');
     if ((state === 'submitting' || state === 'refining') && !showProcessing) return '';
     if (state === 'refining') return t('voiceInputOverlay.status.refining');
-    if (state === 'submitting') return t('voiceInputOverlay.status.submitting');
+    if (state === 'submitting') {
+      return sessionPrompt ? t('voiceInputOverlay.sessionPrompt.sending') : t('voiceInputOverlay.status.submitting');
+    }
+    if (sessionPrompt) return t('voiceInputOverlay.sessionPrompt.listening', { title: sessionPrompt.title });
     return t('voiceInputOverlay.status.listening');
-  }, [hasBlockingError, hasPasteError, hasPermissionPrompt, pasteErrorCode, state, showProcessing, t]);
+  }, [hasBlockingError, hasPasteError, hasPermissionPrompt, pasteErrorCode, sessionPrompt, sessionPromptError, state, showProcessing, t]);
   // The retained-transcript panel shows the session's own error (cause + "text
   // was kept"); every other code is an actual paste failure with its own hint.
-  const pasteFailureHint = pasteErrorCode === 'retained'
+  const pasteFailureHint = sessionPromptError ?? (pasteErrorCode === 'retained'
     ? error ?? t('voiceInputOverlay.status.transcriptKept')
-    : t(getPasteErrorHintKey(pasteErrorCode));
+    : t(getPasteErrorHintKey(pasteErrorCode)));
   const permissionPromptHint = permissionPrompt
     ? t(`voiceInputOverlay.permissionPrompts.${permissionPrompt}.hint`)
     : '';
-  const transcriptClassName = hasPasteError || hasPermissionPrompt || hasSettingsRecovery
+  const transcriptClassName = hasBlockingError && retainedTaskText
+    ? 'min-h-[88px] max-h-[140px] cursor-default overflow-y-auto whitespace-pre-wrap break-words text-15 leading-6 text-[var(--cmd-palette-item-text)]'
+    : hasPasteError || hasPermissionPrompt || hasSettingsRecovery
     ? 'min-h-[44px] max-h-[72px] cursor-default overflow-y-auto whitespace-pre-wrap break-words text-15 leading-6 text-[var(--cmd-palette-item-text)]'
     : 'h-[88px] cursor-default overflow-y-auto whitespace-pre-wrap break-words text-15 leading-6 text-[var(--cmd-palette-item-text)]';
   const showLiveMicWave = state === 'listening' && !hasBlockingError && !hasPasteError && !hasPermissionPrompt;
@@ -1635,7 +1744,10 @@ export function VoiceInputOverlay() {
               className="inline-flex h-4 w-4 text-[var(--cmd-palette-item-text)]"
             />
           )}
-          <span className="font-medium text-[var(--cmd-palette-item-text)]">{statusLabel}</span>
+          {sessionPrompt && showLiveMicWave && (
+            <VoiceInputLiveWave className="shrink-0 text-[var(--cmd-palette-item-text)]" />
+          )}
+          <span className="min-w-0 truncate font-medium text-[var(--cmd-palette-item-text)]">{statusLabel}</span>
           {/* Beside the status, not below the transcript: the card height stays fixed. */}
           {speakerFiltered && !hasBlockingError && !hasPasteError && !hasPermissionPrompt && (
             <span className="min-w-0 truncate text-12">{t('voiceInputOverlay.speakerFiltered')}</span>
@@ -1647,8 +1759,11 @@ export function VoiceInputOverlay() {
                   type="button"
                   aria-label={submitTooltip}
                   tabIndex={-1}
-                  className="rounded-full p-1.5 text-[var(--cmd-palette-item-meta)] transition hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--cmd-palette-item-text)] active:scale-95 disabled:cursor-default disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-[var(--cmd-palette-item-meta)]"
-                  disabled={state === 'submitting' || state === 'refining'}
+                  className={sessionPrompt
+                    ? 'flex h-7 w-7 items-center justify-center rounded-full bg-[var(--send-btn-bg)] text-[var(--send-btn-icon)] transition hover:bg-[var(--send-btn-hover-bg)] active:scale-95 active:bg-[var(--send-btn-pressed-bg)] disabled:cursor-default disabled:bg-[var(--send-btn-disabled-bg)] disabled:text-[var(--send-btn-disabled-icon)]'
+                    : 'rounded-full p-1.5 text-[var(--cmd-palette-item-meta)] transition hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--cmd-palette-item-text)] active:scale-95 disabled:cursor-default disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-[var(--cmd-palette-item-meta)]'}
+                  disabled={state === 'submitting' || state === 'refining'
+                    || (Boolean(sessionPrompt) && !displayText.trim() && !hasRecordingContent)}
                   onFocus={preventOverlayButtonFocus}
                   onPointerDown={(event) => {
                     beginOverlayButtonAction(event);
@@ -1656,7 +1771,7 @@ export function VoiceInputOverlay() {
                   }}
                   onClick={suppressOverlayButtonClick}
                 >
-                  <Check className="h-3.5 w-3.5" />
+                  {sessionPrompt ? <ArrowUp className="h-3.5 w-3.5" /> : <Check className="h-3.5 w-3.5" />}
                 </button>
               </Tip>
             )}
@@ -1693,35 +1808,60 @@ export function VoiceInputOverlay() {
                 className="w-full justify-start rounded-[12px] shadow-none"
                 maxWidthClassName="max-w-none"
               />
-              <Button
-                variant="cta"
-                size="lg"
-                type="button"
-                tabIndex={-1}
-                onFocus={preventOverlayButtonFocus}
-                onPointerDown={(event) => {
-                  beginOverlayButtonAction(event);
-                  void (codexRecovery ? handleCodexRecovery() : startRecording());
-                }}
-                onClick={suppressOverlayButtonClick}
-                // The stop IPC gate remains the primary retry guard (disabled={stopInFlight});
-                // auth recovery adds its own busy state while focus/visibility rechecks run.
-                disabled={stopInFlight || codexRecoveryBusy || codexRecoveryPromptPending}
-              >
-                {codexRecovery
-                  ? codexRecoveryRecovered
-                    ? t('voiceInputOverlay.retry')
-                    : t(codexRecoveryActionKey(
-                        codexRecoveryScope,
-                        codexRecoveryBusy ? 'checking' : codexRecoveryCheck,
-                      ))
-                  : t('voiceInputOverlay.retry')}
-              </Button>
+              {retainedTaskText && (
+                <div className="w-full truncate text-12 leading-5 text-[var(--cmd-palette-item-meta)]" title={retainedTaskText}>
+                  {retainedTaskText}
+                </div>
+              )}
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {retainedTaskText && !codexRecovery && (
+                  <Button
+                    variant="cta"
+                    size="lg"
+                    type="button"
+                    tabIndex={-1}
+                    onFocus={preventOverlayButtonFocus}
+                    onPointerDown={(event) => {
+                      beginOverlayButtonAction(event);
+                      void submitSessionPromptText(retainedTaskText);
+                    }}
+                    onClick={suppressOverlayButtonClick}
+                    disabled={state === 'submitting' || state === 'refining'}
+                  >
+                    <ArrowUp className="h-3.5 w-3.5" />
+                    {t('voiceInputOverlay.sessionPrompt.submit')}
+                  </Button>
+                )}
+                <Button
+                  variant={retainedTaskText && !codexRecovery ? 'secondary' : 'cta'}
+                  size="lg"
+                  type="button"
+                  tabIndex={-1}
+                  onFocus={preventOverlayButtonFocus}
+                  onPointerDown={(event) => {
+                    beginOverlayButtonAction(event);
+                    void (codexRecovery ? handleCodexRecovery() : startRecording());
+                  }}
+                  onClick={suppressOverlayButtonClick}
+                  disabled={stopInFlight || codexRecoveryBusy || codexRecoveryPromptPending}
+                >
+                  {codexRecovery
+                    ? codexRecoveryRecovered
+                      ? t('voiceInputOverlay.retry')
+                      : t(codexRecoveryActionKey(
+                          codexRecoveryScope,
+                          codexRecoveryBusy ? 'checking' : codexRecoveryCheck,
+                        ))
+                    : t('voiceInputOverlay.retry')}
+                </Button>
+              </div>
             </div>
           ) : displayText ? (
             displayContent
           ) : (
-            <span className="text-[var(--cmd-palette-item-meta)]">{t('voiceInputOverlay.placeholder')}</span>
+            <span className="text-[var(--cmd-palette-item-meta)]">
+              {sessionPrompt ? t('voiceInputOverlay.sessionPrompt.placeholder') : t('voiceInputOverlay.placeholder')}
+            </span>
           )}
         </VoiceInputPointerHintLayer>
         {microphoneNotice && !hasBlockingError && !hasPasteError && !hasPermissionPrompt && (
@@ -1816,6 +1956,25 @@ export function VoiceInputOverlay() {
                   {t('voiceInputOverlay.openPermissionSettings')}
                 </Button>
               )}
+              {sessionPrompt && displayText.trim() && (
+                <Button
+                  variant="cta"
+                  size="lg"
+                  type="button"
+                  tabIndex={-1}
+                  onFocus={preventOverlayButtonFocus}
+                  onPointerDown={(event) => {
+                    beginOverlayButtonAction(event);
+                    void submitSessionPromptText((pendingPasteTextRef.current || finalTextRef.current || draftTextRef.current).trim());
+                  }}
+                  onClick={suppressOverlayButtonClick}
+                  disabled={state === 'submitting' || state === 'refining'}
+                  className="shrink-0 shadow-sm"
+                >
+                  <ArrowUp className="h-3.5 w-3.5" />
+                  {sessionPromptError ? t('voiceInputOverlay.retry') : t('voiceInputOverlay.sessionPrompt.submit')}
+                </Button>
+              )}
               <Button
                 variant="secondary"
                 size="lg"
@@ -1824,7 +1983,7 @@ export function VoiceInputOverlay() {
                 onFocus={preventOverlayButtonFocus}
                 onPointerDown={(event) => {
                   beginOverlayButtonAction(event);
-                  void copyPendingText();
+                  void (sessionPromptError ? copySessionPromptText() : copyPendingText());
                 }}
                 onClick={suppressOverlayButtonClick}
                 className="shrink-0 shadow-sm"

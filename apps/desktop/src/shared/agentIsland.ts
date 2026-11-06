@@ -62,6 +62,8 @@ export interface AgentIslandSessionSnapshot {
   interactionKind?: AgentIslandInteractionKind;
   permissionAction: AgentIslandPermissionActionSnapshot | null;
   attention: boolean;
+  /** Terminal task cards may start a voice reply that is sent back to this session. */
+  voicePromptAvailable?: boolean;
   activityLines: AgentIslandActivityLine[];
   startedAt: number;
   lastActivityAt: number;
@@ -460,6 +462,7 @@ export interface AgentIslandStrings {
   allowOnce: string;
   alwaysAllowForSession: string;
   deny: string;
+  voiceReply?: string;
 }
 
 export const DEFAULT_AGENT_ISLAND_STRINGS: AgentIslandStrings = {
@@ -487,6 +490,7 @@ export const DEFAULT_AGENT_ISLAND_STRINGS: AgentIslandStrings = {
   allowOnce: 'Allow once',
   alwaysAllowForSession: 'Always allow',
   deny: 'Deny',
+  voiceReply: 'Voice reply',
 };
 
 export const AGENT_ISLAND_MAX_EXPANDED_WIDTH = 440;

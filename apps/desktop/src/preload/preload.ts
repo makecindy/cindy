@@ -259,6 +259,10 @@ import {
 } from '../shared/sidebarSettings';
 import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../shared/dataOwnerPush';
 import type { VoiceInputSyncErrorResult } from '../shared/voiceInputData';
+import type {
+  SessionVoicePromptContext,
+  SessionVoicePromptResult,
+} from '../shared/sessionVoicePrompt';
 import type { UtilityTextFailure } from '../shared/utilityTextResult';
 import { DB_SLIMMING_STARTUP_PROGRESS_CHANGED_CHANNEL } from '../shared/localDbMaintenance';
 import type { BrowserBackendHealth, BrowserBackendRecoveryResult } from '../shared/browserBackend';
@@ -1946,6 +1950,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     cancel: (params?: { runId?: string }): Promise<{ ok: true }> =>
       ipcRenderer.invoke('voice-input:cancel', params),
     onEvent: fanOutVoiceInputEvent,
+    onSessionPromptStart: (callback: (context: SessionVoicePromptContext) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: SessionVoicePromptContext) => callback(payload);
+      ipcRenderer.on('voice-input:session-prompt:start', listener);
+      return () => ipcRenderer.removeListener('voice-input:session-prompt:start', listener);
+    },
+    submitSessionPrompt: (requestId: string, text: string): Promise<SessionVoicePromptResult> =>
+      ipcRenderer.invoke('voice-input:session-prompt:submit', requestId, text),
     getDataSnapshot: voiceInputDataSnapshot.read,
     migrateLegacyRendererData: (payload: {
       settingsRaw?: string | null;

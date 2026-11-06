@@ -70,6 +70,7 @@ interface MacAgentIslandNativeHostOptions {
   onExpand: (displayId?: number | null) => void;
   onCollapse: (displayId?: number | null) => void;
   onFocusSession: (sessionId: string) => void;
+  onVoicePrompt?: (sessionId: string, displayId: number | null) => void;
   onCompletionAction?: (sessionId: string, action: 'mark-read' | 'archive', completionToken: string) => Promise<boolean>;
   onOpenSettings: () => void;
   onNewMessage: () => void;
@@ -514,6 +515,16 @@ export class MacAgentIslandNativeHost {
 
     if (payload.type === 'focus-session' && this.child === child && typeof payload.sessionId === 'string') {
       this.options.onFocusSession(payload.sessionId);
+      return;
+    }
+
+    if (
+      payload.type === 'voice-prompt' && this.child === child
+      && typeof payload.sessionId === 'string'
+      && payload.sessionId.length > 0 && payload.sessionId.length <= 256
+    ) {
+      this.options.onVoicePrompt?.(payload.sessionId,
+        typeof payload.displayId === 'number' && Number.isFinite(payload.displayId) ? payload.displayId : null);
       return;
     }
 
