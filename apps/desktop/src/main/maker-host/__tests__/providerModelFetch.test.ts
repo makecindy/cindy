@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { acceptsModelSourceSnapshot, modelSourceRequestSignature } from '../model-source-snapshots.js';
 
 import {
   buildModelsFetchRequest,
@@ -26,6 +27,86 @@ function fakeResponse(status: number, body: string): Response {
 }
 
 describe('import discovery limits', () => {
+  // #9101 review regression: three identical Chat runtimes must perform one
+  // HTTP read, while each consumer still issues its own agent-bound receipt.
+  it('coalesces concurrent Hinoki reads without sharing agent provenance', async () => {
+    const agents = ['claude-code', 'codex', 'pi'] as const;
+    const request = spec({ baseUrl: 'https://inference.hinoki.security/v1',
+      modelsUrl: 'https://inference.hinoki.security/v1/models', wireProtocol: 'openai-chat' });
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const fetcher = vi.fn(async () => {
+      await gate;
+      // Controlled provenance-marker counterexample, not an observed Hinoki payload.
+      return fakeResponse(200, JSON.stringify({ data: [{ id: 'future-model',
+        owned_by: 'fake-source', magpie_label: 'Model · fake-source' }] }));
+    });
+    const pending = agents.map(agent => fetchProviderModels({ ...request, agent }, fetcher));
+    await Promise.resolve();
+    expect(fetcher).toHaveBeenCalledOnce();
+    release();
+    const results = await Promise.all(pending);
+    const { url, init } = buildModelsFetchRequest(request);
+    const signature = modelSourceRequestSignature(url, init);
+    const snapshotIds = new Set<string>();
+    results.forEach((result, index) => {
+      expect(result.ok).toBe(true);
+      const model = result.models![0];
+      expect(model.id).toBe('future-model');
+      snapshotIds.add(model.discoverySnapshotId!);
+      expect(acceptsModelSourceSnapshot(model.id, model.discoveredSource, 'new', agents[index], signature)).toBe(true);
+      expect(acceptsModelSourceSnapshot(model.id, model.discoveredSource, 'new', agents[(index + 1) % agents.length], signature)).toBe(false);
+    });
+    expect(snapshotIds.size).toBe(3);
+    expect(results[0].models).not.toBe(results[1].models);
+    expect(results[0].models![0]).not.toBe(results[1].models![0]);
+  });
+
+  it('isolates Hinoki reads by credentials, headers, redirect policy, view and transport', async () => {
+    const request = spec({ agent: 'pi', baseUrl: 'https://inference.hinoki.security/v1',
+      modelsUrl: 'https://inference.hinoki.security/v1/models', wireProtocol: 'openai-chat' });
+    const fetcher = vi.fn(async () => fakeResponse(200, '{"data":[{"id":"future-model"}]}'));
+    const otherOwner = vi.fn(async () => fakeResponse(200, '{"data":[{"id":"future-model"}]}'));
+    const results = await Promise.all([
+      fetchProviderModels(request, fetcher),
+      fetchProviderModels({ ...request, apiKey: 'sk-other-fake' }, fetcher),
+      fetchProviderModels({ ...request, headers: { 'X-Account': 'other-fake' } }, fetcher),
+      fetchProviderModels({ ...request, redirect: 'error' }, fetcher),
+      fetchProviderModels({ ...request, modelsUrl: request.modelsUrl + '?filter=chat' }, fetcher),
+      fetchProviderModels({ ...request, wireProtocol: 'anthropic-messages' }, fetcher),
+      fetchProviderModels(request, otherOwner),
+    ]);
+    expect(results.every(result => result.ok)).toBe(true);
+    expect(fetcher).toHaveBeenCalledTimes(6);
+    expect(otherOwner).toHaveBeenCalledOnce();
+    const before = fetcher.mock.calls.length;
+    expect(await fetchProviderModels({ ...request, authMethod: 'none' }, fetcher)).toMatchObject({ ok: false });
+    expect(fetcher).toHaveBeenCalledTimes(before);
+  });
+
+  it.each(['network', 'http', 'invalid-json', 'business-error', 'empty'] as const)
+  ('releases shared Hinoki %s reads and keeps failures distinct from empty success', async kind => {
+    const request = spec({ baseUrl: 'https://inference.hinoki.security/v1',
+      modelsUrl: 'https://inference.hinoki.security/v1/models', wireProtocol: 'openai-chat' });
+    let recovered = false;
+    const fetcher = vi.fn(async () => {
+      if (recovered) return fakeResponse(200, '{"data":[{"id":"recovered"}]}');
+      if (kind === 'network') throw new TypeError('fake network failure');
+      return fakeResponse(kind === 'http' ? 401 : 200, kind === 'invalid-json' ? 'not-json'
+        : JSON.stringify(kind === 'business-error' ? { error: 'fake invalid key', data: [] } : { data: [] }));
+    });
+    const results = await Promise.all((['claude-code', 'codex', 'pi'] as const)
+      .map(agent => fetchProviderModels({ ...request, agent }, fetcher)));
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(results.every(result => result.ok === (kind === 'empty'))).toBe(true);
+    if (kind === 'http') expect(results.every(result => result.status === 401)).toBe(true);
+    if (kind === 'empty') expect(results.map(result => result.models)).toEqual([[], [], []]);
+    recovered = true;
+    expect(await fetchProviderModels({ ...request, agent: 'pi' }, fetcher))
+      .toMatchObject({ ok: true, models: [{ id: 'recovered' }] });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
   // #9101, unit: saved refresh omits allowEmpty. Exercise the production fetch
   // contract, including raw empty vs parser-filtered empty and business errors;
   // existing generic/Ollama cases do not cover Hinoki's authenticated view.

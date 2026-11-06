@@ -37,6 +37,39 @@ const FETCH_TIMEOUT_MS = 10_000;
 const MAX_ERROR_BODY_BYTES = 16 * 1024;
 const INVALID_DISCOVERY_URL = 'model discovery requires HTTP(S) URLs without embedded credentials';
 
+// Share only an in-flight Hinoki HTTP read, not parsed models or agent-bound
+// provenance receipts. Every caller keeps its own parsing/error policy below.
+const hinokiReads = new WeakMap<typeof fetch, Map<string, {
+  response: Promise<Response>;
+  consumers: number;
+}>>();
+
+async function fetchModelsResponse(url: string, init: RequestInit, fetchImpl: typeof fetch): Promise<Response> {
+  if (url !== 'https://inference.hinoki.security/v1/models') return fetchImpl(url, init);
+  let reads = hinokiReads.get(fetchImpl);
+  if (!reads) { reads = new Map(); hinokiReads.set(fetchImpl, reads); }
+  // The existing process-local HMAC includes all effective headers (including
+  // credentials) without retaining plaintext keys in the map key. Never share
+  // across redirect policies or injected transport/credential-owner closures.
+  const signature = `${modelSourceRequestSignature(url, init)}:${init.redirect ?? 'follow'}`;
+  let read = reads.get(signature);
+  if (!read) {
+    read = { response: Promise.resolve().then(() => fetchImpl(url, init)), consumers: 0 };
+    reads.set(signature, read);
+  }
+  read.consumers++;
+  try {
+    return (await read.response).clone();
+  } finally {
+    if (--read.consumers === 0) {
+      reads.delete(signature);
+      // Each consumer owns a clone. Release the unused original branch without
+      // awaiting stream tee cancellation, which waits for the clones to finish.
+      void read.response.then(response => response.body?.cancel().catch(() => undefined), () => undefined);
+    }
+  }
+}
+
 /** 一次「获取模型列表」的完整参数（表单值内存透传，不落盘）。 */
 export interface ProviderModelsFetchSpec {
   /** Add-flow callers distinguish an empty directory from an invalid response. */
@@ -283,7 +316,7 @@ export async function fetchProviderModels(
   const { url, init } = request;
   let res: Response;
   try {
-    res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    res = await fetchModelsResponse(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }, fetchImpl);
   } catch (err) {
     const cls = classifyProviderError({ networkErrorCode: networkErrorCode(err) });
     return { ok: false, code: cls.code, detail: cls.detail };
