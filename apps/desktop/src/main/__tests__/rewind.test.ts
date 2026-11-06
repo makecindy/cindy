@@ -24,10 +24,11 @@ import path from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import { enqueueGitRepoWrite } from '../git-snapshot/gitRepoWriteQueue';
+import { setBroadcastTapListener } from '../device-link/broadcast-tap.js';
 const attemptJournal = vi.hoisted(() => ({ read: vi.fn<() => Promise<Array<{ id: string; anchor?: string }> | null>>() }));
 vi.mock('../git-snapshot/snapshotAttemptStore', () => ({ SnapshotAttemptStore: class { read = attemptJournal.read; } }));
 
-// ── mock(必须在延迟 import 前 hoist) ─────────────────────────────────────
+// ── mock(在被测模块 import 前 hoist) ─────────────────────────────────────
 
 // Local rewind reuses fork's history helpers, but must not initialize the entire
 // device-link host in this unit fixture (#6563 CI import hook timeout).
@@ -176,26 +177,29 @@ const fakeDb = {
 
 const txMock = vi.fn((name: string, args: unknown) => {
   txCalls.push({ name, args });
-  return Promise.resolve({});
+  return Promise.resolve(['client-id', 'assistant-client-id']);
 });
+const remotePush = vi.fn();
 const queryOneMock = vi.fn(async (_sql?: string, _params?: unknown[]) => ({ cleared_at: null as number | null, created_at: null as number | null }));
 
 vi.mock('../localDb/client/current', () => ({
   getDbClient: () => ({ drizzle: fakeDb, tx: txMock, queryOne: queryOneMock }),
 }));
 
-let commitRewindAtMessage: typeof import('../maker-orchestration/rewind').commitRewindAtMessage;
-let previewRewindAtMessage: typeof import('../maker-orchestration/rewind').previewRewindAtMessage;
+// Load once after the mock instances exist; cold compilation is not a per-case hook.
+const { commitRewindAtMessage, previewRewindAtMessage } = await import('../maker-orchestration/rewind');
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const tempDirs: string[] = [];
 
-beforeEach(async () => {
+beforeEach(() => {
   attemptJournal.read.mockReset().mockResolvedValue([]);
   if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
   selectQueue.length = 0;
   txCalls.length = 0;
   txMock.mockClear();
+  remotePush.mockClear();
+  setBroadcastTapListener(remotePush);
   queryOneMock.mockReset();
   queryOneMock.mockResolvedValue({ cleared_at: null, created_at: null });
   setLastAssistantTranscriptUuidMock.mockClear();
@@ -252,14 +256,10 @@ beforeEach(async () => {
   getSessionMetaMock.mockImplementation(async () =>
     fakeSession ? { sdkSessionId: fakeSession.sdkSessionId } : null,
   );
-  if (!commitRewindAtMessage) {
-    const mod = await import('../maker-orchestration/rewind');
-    commitRewindAtMessage = mod.commitRewindAtMessage;
-    previewRewindAtMessage = mod.previewRewindAtMessage;
-  }
 });
 
 afterEach(async () => {
+  setBroadcastTapListener(null);
   if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
@@ -390,6 +390,11 @@ describe('commitRewindAtMessage', () => {
     });
     expect(typeof (txCall.args as { now: unknown }).now).toBe('number');
     expect(setLastAssistantTranscriptUuidMock).toHaveBeenCalledWith('sess-1', 'sdk-msg-uuid-prior-asst');
+    expect(remotePush).toHaveBeenCalledExactlyOnceWith('local-db:messages:deleted', {
+      sessionId: 'sess-1',
+      clientId: 'client-id',
+      clientIds: ['client-id', 'assistant-client-id'],
+    });
 
     expect(result.id).toBe('sess-1');
   });
@@ -418,6 +423,7 @@ describe('commitRewindAtMessage', () => {
     const txCall = txCalls.find((c) => c.name === 'rewind.commit');
     if (!txCall) throw new Error('缺少 rewind.commit tx 调用');
     expect(txCall.args).toMatchObject({ requireLatestUser: true });
+    expect(remotePush).not.toHaveBeenCalled();
   });
 
   it('requireLatestUser: 事务临界区内断言失败不被 warn 吞掉,以 REWIND_TARGET_NOT_LATEST 上抛', async () => {
@@ -873,6 +879,7 @@ describe('commitRewindAtMessage', () => {
     );
     expect(txCalls.some((c) => c.name === 'rewind.commit')).toBe(true);
     expect(setLastAssistantTranscriptUuidMock).not.toHaveBeenCalled();
+    expect(remotePush).not.toHaveBeenCalled();
   });
 
   it('throws SESSION_RUNNING when session.isTurnRunning()=true; commitRewindFiles not called, no DB update', async () => {

@@ -1,4 +1,4 @@
-import type { PreRunHookRunResult, RunStatus, Schedule, ScheduleRunTrigger } from '../types.js';
+import type { PreRunHookRunResult, RunStatus, Schedule, ScheduleWebhookEvent, ScheduleRunTrigger } from '../types.js';
 
 export interface ChildRunInput {
   sessionId?: string;
@@ -16,6 +16,8 @@ export interface FireContext {
   deferToCaller?: boolean;
   /** Internal caller validity, checked at the accepted -> vendor-dispatch boundary. Never persisted. */
   canDispatch?: () => boolean;
+  /** Events that woke this run. Untrusted external data; never persisted with the run. */
+  webhook?: { events: ScheduleWebhookEvent[]; omitted: number };
   /** Bound pre-run hooks must execute in the directory shown in the approval card. */
   expectedPreRunWorkingDir?: string;
   /**

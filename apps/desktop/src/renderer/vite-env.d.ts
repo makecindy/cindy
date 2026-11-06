@@ -1208,16 +1208,7 @@ interface ElectronAPI {
   pageZoomReset: () => Promise<{ ok: true; zoomFactor: number }>;
   accessibilitySupport: import('../shared/accessibilitySupport').AccessibilitySupportBridge;
   appPreferenceControl?: import('../shared/appPreferenceControl').AppPreferenceControlBridge;
-  pluginUiVisibility?: {
-    get: () => Promise<import('@cindy/maker-shared/plugin-ui').PluginUiVisibilityValues>;
-    release: () => Promise<void>;
-    onApply: (callback: (request: import('../shared/pluginUiVisibility').PluginUiVisibilityApplication) => void) => () => void;
-    applied: (requestId: string) => Promise<void>;
-  };
   appearanceSettings: {
-    loadPluginFont?: (role: 'uiFont' | 'codeFont' | 'bodyFont') => Promise<{ family: string; base64: string }>;
-    onPluginApply?: (callback: (request: import('../shared/pluginAppearance').PluginAppearanceApplication) => void) => () => void;
-    pluginApplied?: (requestId: string, status: 'applied' | 'saved' | 'failed') => Promise<void>;
     importWallpaper: () => Promise<import('../shared/appearanceSettings').AppearanceSettings | null>;
     ensureWallpaperVideo?: (id: import('../shared/appearanceSettings').WallpaperId) => Promise<string | null>;
     ensureWallpaperImage?: (id: import('../shared/appearanceSettings').WallpaperId) => Promise<string | null>;
@@ -1273,14 +1264,13 @@ interface ElectronAPI {
       platform: string;
       /** 运行态: 注册失败 (多为被其它应用占用) 的全局快捷键 id。 */
       globalFailures?: unknown;
-      pluginShortcuts?: import('../shared/appShortcuts').PluginShortcutDefinition[];
     };
     setOverride: (
-      id: import('../shared/appShortcuts').ShortcutId,
+      id: import('../shared/appShortcuts').AppShortcutId,
       combo: import('../shared/appShortcuts').AppShortcutCombo | null,
     ) => Promise<{ overrides: import('../shared/appShortcuts').AppShortcutOverrides }>;
     clearOverride: (
-      id: import('../shared/appShortcuts').ShortcutId,
+      id: import('../shared/appShortcuts').AppShortcutId,
     ) => Promise<{ overrides: import('../shared/appShortcuts').AppShortcutOverrides }>;
     resetAll: () => Promise<{ overrides: import('../shared/appShortcuts').AppShortcutOverrides }>;
     setRecording: (active: boolean) => void;
@@ -1288,7 +1278,6 @@ interface ElectronAPI {
       callback: (payload: {
         overrides: import('../shared/appShortcuts').AppShortcutOverrides;
         globalFailures?: unknown;
-        pluginShortcuts?: import('../shared/appShortcuts').PluginShortcutDefinition[];
       }) => void,
     ) => () => void;
   };
@@ -1312,25 +1301,6 @@ interface ElectronAPI {
   /** 意识仓库 —— 数据模型与校验见 shared/ghost.ts,main 端见 main/cindy-brain/。 */
   ghosts: {
     activateBrowser: (id: string) => Promise<{ ok: boolean }>;
-    ui: {
-      tabViews: {
-        ready(): Promise<void>;
-        navigate(requestId: string): Promise<import('@cindy/maker-shared').PluginUiNavigationResult>;
-        onRequest(callback: (input: unknown) => void): () => void;
-        opened(requestId: string, tabId: string | null): Promise<void>;
-        mount(input: import('../shared/pluginUi').PluginTabViewMountRequest): Promise<import('../shared/pluginUi').PluginTabViewMountResult>;
-        update(input: { token: string; params: import('@cindy/maker-shared').PluginUiValues; sequence: number; visible: boolean }): Promise<void>;
-        release(token: string, moving: boolean): Promise<void>;
-      };
-      read: (request: import('../shared/pluginUi').PluginUiReadRequest) => Promise<import('../shared/pluginUi').PluginUiReadResult>;
-      invoke: (request: import('../shared/pluginUi').PluginUiInvokeRequest) => Promise<import('../shared/pluginUi').PluginUiInvokeResult>;
-      chooseRenderer: (request: import('../shared/pluginUi').PluginUiChooseRendererRequest) => Promise<void>;
-      openPage: (request: import('../shared/pluginUi').PluginUiPageOpenRequest) => Promise<string>;
-      closePage: (request: { pageId: string }) => Promise<void>;
-      release: (request: { subscriptionId: string }) => Promise<void>;
-      onChanged: (callback: (value: import('../shared/pluginUi').PluginUiChanged) => void) => () => void;
-      inspect: () => Promise<unknown>;
-    };
     mailPreview: (sessionId: string, url: string, read: boolean, opened?: boolean, providerId?: string) => Promise<import('@cindy/maker-shared/mail-message').MailPreviewResult>;
     openRemoteSettings: (target: import('../shared/remotePluginSettings').RemotePluginSettingsTarget) => Promise<import('../shared/remotePluginSettings').RemotePluginSettingsView>;
     closeRemoteSettings: (id: string) => Promise<void>;
@@ -5096,13 +5066,13 @@ interface ElectronAPI {
       }) => Promise<unknown[]>;
       /** Host-side companion read positions shared with the phone and other Macs. */
       readState?: {
-        get: () => Promise<{ ownerId: string | null; positions: Record<string, number> }>;
+        get: () => Promise<{ ownerId: string | null; positions: Record<string, number>; acknowledgedPositions?: Record<string, number> }>;
         update: (body: {
           ownerId: string;
           mark?: Record<string, number>;
           seed?: Record<string, number>;
           prune?: { botIds?: string[]; groupIds?: string[] };
-        }) => Promise<{ ownerId: string | null; positions: Record<string, number> }>;
+        }) => Promise<{ ownerId: string | null; positions: Record<string, number>; acknowledgedPositions?: Record<string, number> }>;
         onChanged: (
           callback: (payload: unknown, ownerStamp?: unknown) => void,
         ) => () => void;
@@ -5697,9 +5667,14 @@ interface ElectronAPI {
     deleteBotGroup: (groupId: string) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
     sendBotGroupMessage: (
       input: import('../shared/botGroupChat').BotGroupSendInput,
+      execution?: import('../shared/botGroupOutboxStorage').BotGroupOutboxExecution,
     ) => Promise<import('../shared/botGroupChat').BotGroupSendResult>;
     chatDisplayCache: (request: import('../shared/chatDisplayCache').ChatDisplayCacheRequest) => Promise<unknown>;
     botGroupOutbox: (input: import('../shared/botGroupOutboxStorage').BotGroupOutboxStorageRequest) => Promise<import('../shared/botGroupOutboxStorage').BotGroupOutboxStoredEntry[]>;
+    botGroupOutboxCommand: (input: import('../shared/botGroupOutboxStorage').BotGroupOutboxCommandRequest) => Promise<import('../shared/botGroupOutboxStorage').BotGroupOutboxCommandResult>;
+    onBotGroupOutboxChanged: (callback: (event: import('../shared/botGroupOutboxStorage').BotGroupOutboxChanged) => void) => (() => void);
+    botReadState: (input: import('../shared/botReadStateStorage').BotReadStateRequest) => Promise<import('../shared/botReadStateStorage').BotReadStateResult>;
+    onBotReadStateChanged: (callback: (event: import('../shared/botReadStateStorage').BotReadStateChanged) => void) => (() => void);
     continueBotGroupRound: (groupId: string) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
     stopBotGroupRound: (groupId: string, scope?: 'all') => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
     startBotGroupPlan: (
@@ -7344,6 +7319,27 @@ interface ElectronAPI {
       pause: (id: string) => Promise<unknown>;
       resume: (id: string) => Promise<unknown>;
       runNow: (id: string) => Promise<{ runId: string }>;
+      /** Webhook 触发的接收地址与最近投递情况;未开启时返回 null。 */
+      webhookReceiver: () => Promise<'cloud' | 'local' | 'signed-out' | 'unavailable'>;
+      webhookStatus: (id: string) => Promise<{
+        receiver: 'cloud' | 'local' | 'signed-out' | 'unavailable';
+        url?: string;
+        hasSecret: boolean;
+        lastReceivedAt?: number;
+        received: number;
+        ignored: number;
+        connected?: boolean;
+        problem?: 'limit' | 'failed' | 'suspended' | 'quota' | 'released';
+        quotaLimit?: number;
+        quotaResetAt?: number;
+      } | null>;
+      /** 设置签名密钥:传入时保存从发送方复制的密钥;不传时生成新密钥,明文只在这次返回。仅任务所在电脑可用。 */
+      setWebhookSecret: (id: string, secret?: string) => Promise<{ secret?: string }>;
+      /** 换一个新的接收地址,旧地址立即失效。仅任务所在电脑可用。 */
+      rotateWebhookUrl: (id: string) => Promise<{ url: string }>;
+      webhookAccount: () => Promise<import('../shared/webhookAccount').WebhookAccountOverview>;
+      releaseWebhookEndpoint: (id: string) => Promise<void>;
+      restoreWebhookEndpoint: (id: string) => Promise<void>;
       /** script 任务能力选择器:各能力的运行时可用性(依赖意识的装入/唤醒态)。 */
       scriptCapabilityStatus: () => Promise<{
         statuses: Array<{

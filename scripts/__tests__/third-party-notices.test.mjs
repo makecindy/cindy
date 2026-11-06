@@ -225,10 +225,12 @@ test("desktop resources include both open-source and restricted disclosures", ()
     const notice = read(noticePath);
     const liteLlmIndex = notice.indexOf("LiteLLM mascot SVG path (adapted)");
     const lobeIndex = notice.indexOf("Lobe Icons SVG paths (vendored)");
+    const magpieIndex = notice.indexOf("Magpie SVG mark (adapted)");
     assert.notEqual(liteLlmIndex, -1, `${noticePath} includes the LiteLLM notice`);
     assert.notEqual(lobeIndex, -1, `${noticePath} includes the Lobe Icons notice`);
+    assert.notEqual(magpieIndex, -1, `${noticePath} includes the Magpie notice`);
     assert.ok(
-      liteLlmIndex < lobeIndex,
+      liteLlmIndex < lobeIndex && lobeIndex < magpieIndex,
       `${noticePath} keeps provider branding notices in canonical name order`,
     );
   };
