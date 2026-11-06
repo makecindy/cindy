@@ -108,6 +108,9 @@ pnpm --filter desktop preview:island-mascots
   `<应用 id>.agent-activity`。必须按 Xcode 的方式用 `-e _NSExtensionMain` 链接：从 Swift `main`
   启动会跳过 ExtensionFoundation 的进程身份初始化，被 chronod 拉起即崩溃。共享的
   `CindyAgentActivityAttributes` 在扩展与原生扩展里都以 `-module-name CindyAgentActivity` 编译。
+- **扩展里的界面**：图片只认编译进 Asset Catalog 的（`build.mjs` 用 `actool` 把 `mascots/` 编成
+  `Assets.car`），从文件读的 `NSImage` 会渲染成灰块；灵动岛与菜单栏药丸背景恒为深色，文字用白色而
+  不是 `.primary`；菜单栏会省略只有文字的紧凑右侧区域，状态位要带一个图标。
 - **构建条件**：`live-activity/build.mjs` 需要 macOS 27.3 SDK 与 Apple 芯片，否则整段跳过、应用不带
   此功能；`CINDY_LIVE_ACTIVITY=0` 可主动跳过。本地验证：
   `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer node build.mjs addon <out.node> arm64`，

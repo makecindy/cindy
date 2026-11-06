@@ -17,8 +17,15 @@ struct CindyAgentActivityBundle: WidgetBundle {
 private extension CindyAgentActivityAttributes.ContentState {
   var needsUser: Bool { status == "attention" && attentionCount > 0 }
   var isCompleted: Bool { status == "completed" }
-  /// Semantic status colors: system colors adapt to light and dark appearance.
-  var tint: Color {
+  /// The Dynamic Island and the menu bar Live Activity pill are always dark in both
+  /// appearances, so neutral content is white there; `.primary` would turn black.
+  var islandTint: Color {
+    if needsUser { return .orange }
+    if isCompleted { return .green }
+    return .white
+  }
+  /// The banner sits on system material that follows the appearance.
+  var bannerTint: Color {
     if needsUser { return .orange }
     if isCompleted { return .green }
     return .primary
@@ -31,26 +38,21 @@ private struct MascotView: View {
 
   var body: some View {
     Group {
-      if let image = Self.image(for: skin) {
-        Image(nsImage: image).resizable().interpolation(.high).scaledToFit()
-      } else {
-        Image(systemName: "sparkles").resizable().scaledToFit()
-      }
+      // WidgetKit archives only asset-catalog images; build.mjs compiles the mascots
+      // into Assets.car. Skins without artwork (drawn in code) fall back to Cindy.
+      Image(NSImage(named: skin) != nil ? skin : "cindy")
+        .resizable()
+        .interpolation(.high)
+        .scaledToFit()
     }
     .frame(width: size, height: size)
-  }
-
-  static func image(for skin: String) -> NSImage? {
-    let bundle = Bundle.main
-    let url = bundle.url(forResource: skin, withExtension: "png", subdirectory: "mascots")
-      ?? bundle.url(forResource: "cindy", withExtension: "png", subdirectory: "mascots")
-    return url.flatMap(NSImage.init(contentsOf:))
   }
 }
 
 /// Compact trailing indicator: what waits on the user first, else the running count.
 private struct StatusIndicator: View {
   let state: CindyAgentActivityAttributes.ContentState
+  var tint: Color? = nil
 
   var body: some View {
     HStack(spacing: 3) {
@@ -60,11 +62,13 @@ private struct StatusIndicator: View {
       } else if state.isCompleted {
         Image(systemName: "checkmark.circle.fill")
       } else {
+        // The menu bar drops a text-only trailing region, so running keeps a glyph too.
+        Image(systemName: "ellipsis.circle.fill")
         Text("\(max(1, state.runningCount))").monospacedDigit()
       }
     }
     .font(.system(size: 13, weight: .semibold))
-    .foregroundStyle(state.tint)
+    .foregroundStyle(tint ?? state.islandTint)
   }
 }
 
@@ -85,7 +89,7 @@ private struct ActivityBanner: View {
           .lineLimit(1)
       }
       Spacer(minLength: 8)
-      StatusIndicator(state: state)
+      StatusIndicator(state: state, tint: state.bannerTint)
     }
     .padding(.horizontal, 14)
     .padding(.vertical, 10)
@@ -107,12 +111,13 @@ struct CindyAgentActivityWidget: Widget {
         DynamicIslandExpandedRegion(.center) {
           Text(context.state.title.isEmpty ? context.attributes.appName : context.state.title)
             .font(.headline)
+            .foregroundStyle(.white)
             .lineLimit(1)
         }
         DynamicIslandExpandedRegion(.bottom) {
           Text(context.state.detail)
             .font(.subheadline)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.white.opacity(0.7))
             .lineLimit(1)
         }
       } compactLeading: {
@@ -122,7 +127,7 @@ struct CindyAgentActivityWidget: Widget {
       } minimal: {
         MascotView(skin: context.state.mascot, size: 18)
       }
-      .keylineTint(context.state.tint)
+      .keylineTint(context.state.islandTint)
     }
   }
 }

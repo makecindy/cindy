@@ -107,6 +107,40 @@ function plistSet(plist, key, type, value) {
 }
 
 /**
+ * WidgetKit only archives images from an asset catalog (a file-loaded NSImage renders
+ * as a grey placeholder), so the island mascots are compiled into Assets.car.
+ */
+function compileMascotAssets(resources) {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-agent-activity-assets-'));
+  try {
+    const catalog = path.join(work, 'Assets.xcassets');
+    fs.mkdirSync(catalog, { recursive: true });
+    fs.writeFileSync(path.join(catalog, 'Contents.json'), JSON.stringify({ info: { author: 'xcode', version: 1 } }));
+    const mascots = path.join(source, '../mascots');
+    for (const file of fs.readdirSync(mascots).filter((name) => name.endsWith('.png'))) {
+      const set = path.join(catalog, `${path.basename(file, '.png')}.imageset`);
+      fs.mkdirSync(set);
+      fs.copyFileSync(path.join(mascots, file), path.join(set, file));
+      fs.writeFileSync(
+        path.join(set, 'Contents.json'),
+        JSON.stringify({ images: [{ filename: file, idiom: 'universal' }], info: { author: 'xcode', version: 1 } }),
+      );
+    }
+    fs.mkdirSync(resources, { recursive: true });
+    execFileSync(
+      'xcrun',
+      [
+        'actool', '--compile', resources, '--platform', 'macosx', '--minimum-deployment-target', '27.3',
+        '--output-format', 'human-readable-text', '--warnings', '--errors', catalog,
+      ],
+      { stdio: ['ignore', 'ignore', 'inherit'] },
+    );
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+}
+
+/**
  * Installs the widget extension into a packaged `.app` and declares Live Activity
  * support in its Info.plist. Local builds are ad-hoc signed; release signing must
  * sign the `.appex` with `extension.entitlements` (App Sandbox) before the app.
@@ -140,7 +174,7 @@ export function installAgentActivityExtension(appPath, arch = process.arch) {
     '-Xlinker', '-e', '-Xlinker', '_NSExtensionMain',
     '-o', path.join(appex, 'Contents/MacOS', EXTENSION_NAME),
   ]);
-  fs.cpSync(path.join(source, '../mascots'), path.join(appex, 'Contents/Resources/mascots'), { recursive: true });
+  compileMascotAssets(path.join(appex, 'Contents/Resources'));
   fs.writeFileSync(
     path.join(appex, 'Contents/Info.plist'),
     `<?xml version="1.0" encoding="UTF-8"?>
