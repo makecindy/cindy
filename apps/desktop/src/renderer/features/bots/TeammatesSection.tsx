@@ -672,7 +672,7 @@ export function TeammatesSection() {
                 return (
                   <button key={remoteBotKey(bot)} type="button" aria-current={selected ? 'page' : undefined}
                     onClick={() => navigate(`/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}`)}
-                    className={cn('relative flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring', SIDEBAR_LIST_ROW_HEIGHT_CLASS, selected ? SIDEBAR_LIST_ROW_ACTIVE_CLASS : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover')}>
+                    className={cn('relative flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring', SIDEBAR_LIST_ROW_HEIGHT_CLASS, selected ? SIDEBAR_LIST_ROW_ACTIVE_CLASS : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover')}>
                     <span className="relative flex shrink-0"><BotAvatar bot={bot} size="row" /></span>
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="flex min-w-0 items-baseline gap-2">
@@ -729,7 +729,8 @@ export function TeammatesSection() {
                       它下线后 `pr-2` 的占位残留了下来 —— 右边比左边窄一截,
                       单看不出问题,和左侧头像一比就是歪的。这里的行内边距与下方按钮样式
                       保持同一套几何基线。行高与任务列表模式的一条任务相同(SIDEBAR_LIST_ROW_HEIGHT_CLASS,
-                      随界面字号缩放),头像与文字垂直居中。头像外层必须是 flex,行内盒会落在
+                      随界面字号缩放),头像与文字垂直居中;py-2 保留,时间列 self-start 靠它
+                      落在名称同一行。头像外层必须是 flex,行内盒会落在
                       文字基线上把整行撑高。 */}
                   <button
                     type="button"
@@ -748,7 +749,7 @@ export function TeammatesSection() {
                       const rect = event.currentTarget.getBoundingClientRect();
                       openContextMenu('bot', bot.id, event.currentTarget, rect.left + 10, rect.bottom);
                     }}
-                    className={cn('flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring', SIDEBAR_LIST_ROW_HEIGHT_CLASS)}
+                    className={cn('flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring', SIDEBAR_LIST_ROW_HEIGHT_CLASS)}
                   >
                     <span className="relative flex shrink-0"><BotAvatar bot={bot} size="row" /></span>
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">

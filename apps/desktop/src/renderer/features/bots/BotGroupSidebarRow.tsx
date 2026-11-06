@@ -204,7 +204,7 @@ export function BotGroupSidebarRow({
       onKeyDown={onKeyDown}
       aria-haspopup={onContextMenu ? 'menu' : undefined}
       className={cn(
-        'group flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2.5 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+        'group flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
         SIDEBAR_LIST_ROW_HEIGHT_CLASS,
         selected
           ? SIDEBAR_LIST_ROW_ACTIVE_CLASS

@@ -31,6 +31,7 @@
  * SIDEBAR_LIST_ROW_HEIGHT_CLASS(默认约 59px,随界面字号缩放),头像与文字垂直居中;
  * 头像外层用 flex,不再落在文字基线上把行撑到 66px。随后选中样式(SIDEBAR_LIST_ROW_ACTIVE_CLASS)
  * 与行间 2px 也统一为任务行的值,取代 10-29 的淡色选中。
+ * 行高由共用常量固定,py-2 仍保留:时间列 self-start 靠它落在名称同一行(否则时间高于名称约 8px)。
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -50,7 +51,7 @@ const code = source
 
 /** 可点行本体(头像 + 两行文字)的类名串。 */
 const ROW_BUTTON_CLASS =
-  'flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2.5 text-left';
+  'flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left';
 const ROW_CONTAINER_CLASS = 'group relative flex w-full items-center rounded-lg transition-colors';
 
 describe('伙伴行的间距基线', () => {
@@ -151,7 +152,7 @@ describe('群聊与伙伴行同一套几何', () => {
   ).replace(/\r\n/g, '\n');
 
   it('群行沿用对称的 10px 内边距、任务行高度、44px 头像位、14/12/11 字号', () => {
-    expect(groupRow).toContain('gap-2.5 rounded-lg px-2.5 text-left');
+    expect(groupRow).toContain('gap-2.5 rounded-lg px-2.5 py-2 text-left');
     expect(groupRow).toContain('SIDEBAR_LIST_ROW_HEIGHT_CLASS,');
     expect(groupRow).toContain('<span className="relative flex shrink-0"><BotGroupSidebarAvatar');
     expect(groupRow).toContain('<span className="flex min-w-0 flex-1 flex-col gap-0.5">');
