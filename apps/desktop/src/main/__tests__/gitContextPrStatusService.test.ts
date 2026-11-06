@@ -476,6 +476,21 @@ describe('GitLab MR status', () => {
       skipped: 0,
     });
   });
+  it('reports zero checks without a head pipeline but keeps a missing diff head unknown', async () => {
+    const value = { ...mr(), headPipeline: null };
+    const fetch = vi.fn(
+      async () => new Response(JSON.stringify({ data: { project: { mergeRequest: value } } })),
+    );
+    expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toEqual({
+      total: 0,
+      failed: 0,
+      passed: 0,
+      pending: 0,
+      skipped: 0,
+    });
+    value.diffHeadSha = '';
+    expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toBeNull();
+  });
   it('queries the MR host once, counts discussions and conservatively summarizes complete current-head jobs', async () => {
     const value = mr();
     const fetch = vi

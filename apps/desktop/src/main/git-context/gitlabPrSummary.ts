@@ -34,7 +34,9 @@ type MergeRequest = {
 
 export function gitlabChecks(mr: MergeRequest): PrChecksSummary | null {
   const pipeline = mr.headPipeline;
-  if (!pipeline || !mr.diffHeadSha || pipeline.sha !== mr.diffHeadSha) return null;
+  if (!mr.diffHeadSha) return null;
+  if (pipeline === null) return { total: 0, failed: 0, passed: 0, pending: 0, skipped: 0 };
+  if (!pipeline || pipeline.sha !== mr.diffHeadSha) return null;
   const jobs = pipeline.jobs;
   if (
     !jobs ||

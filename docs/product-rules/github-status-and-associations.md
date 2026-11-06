@@ -113,8 +113,10 @@ HTTPS origin，重定向不得跨 origin 或降级 HTTP。没有令牌不请求 
 远程、SSH 和只读任务不展示本机登录引导；GitLab 不使用 GitHub 安装登录窗口。
 
 每个 MR 一次 GraphQL 汇总读取，复用 60 秒缓存、并发合并和前台 90 秒刷新。
-未解决数为 resolvableDiscussionsCount 减 resolvedDiscussionsCount。流水线 SHA
-不同于 diffHeadSha、作业未完整返回或出现未知状态时 checks 不可用，不能算通过。
+未解决数为 resolvableDiscussionsCount 减 resolvedDiscussionsCount。缺少 diffHeadSha、
+流水线 SHA 不同于 diffHeadSha、作业未完整返回或出现未知状态时 checks 不可用，不能算通过。
+已知 diff head 但 headPipeline 为 null 时记为 0 项检查，与 GitHub 无检查一致。推送后、
+新流水线创建前也可能短暂显示 0 项，后续刷新拿到流水线后再显示进行中等实际状态。
 作业使用 `jobs(retried: false)` 只读取最新尝试，不计已被重试替换的旧作业。
 SUCCESS 为通过，SKIPPED 为跳过；MANUAL 仅在 `allowFailure === true` 时计入跳过，
 否则（包括字段缺失或不是布尔值）仍为进行中。等待、准备、排队、运行、定时状态
