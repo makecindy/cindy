@@ -7,7 +7,7 @@ export const GITLAB_MR_QUERY = `query MrStatus($path: ID!, $iid: String!) {
     mergeRequest(iid: $iid) {
       state draft title webUrl sourceBranch diffHeadSha conflicts
       resolvableDiscussionsCount resolvedDiscussionsCount
-      headPipeline { status sha jobs(retried: false, first: 100) { count nodes { status allowFailure } pageInfo { hasNextPage } } }
+      headPipeline { status jobs(retried: false, first: 100) { count nodes { status allowFailure } pageInfo { hasNextPage } } }
     }
   }
 }`;
@@ -23,7 +23,6 @@ type MergeRequest = {
   resolvedDiscussionsCount: number | null;
   headPipeline: null | {
     status: string;
-    sha: string;
     jobs: {
       count: number;
       nodes: Array<{ status: string; allowFailure?: boolean }>;
@@ -36,7 +35,7 @@ export function gitlabChecks(mr: MergeRequest): PrChecksSummary | null {
   const pipeline = mr.headPipeline;
   if (!mr.diffHeadSha) return null;
   if (pipeline === null) return { total: 0, failed: 0, passed: 0, pending: 0, skipped: 0 };
-  if (!pipeline || pipeline.sha !== mr.diffHeadSha) return null;
+  if (!pipeline) return null;
   const jobs = pipeline.jobs;
   if (
     !jobs ||

@@ -114,7 +114,9 @@ HTTPS origin，重定向不得跨 origin 或降级 HTTP。没有令牌不请求 
 
 每个 MR 一次 GraphQL 汇总读取，复用 60 秒缓存、并发合并和前台 90 秒刷新。
 未解决数为 resolvableDiscussionsCount 减 resolvedDiscussionsCount。缺少 diffHeadSha、
-流水线 SHA 不同于 diffHeadSha、作业未完整返回或出现未知状态时 checks 不可用，不能算通过。
+headPipeline 字段缺失、作业未完整返回或出现未知状态时 checks 不可用，不能算通过。
+headPipeline 由 GitLab 按当前 diff head 匹配，包含合并结果流水线和合并队列：这些流水线
+的 SHA 是临时合并提交，GitLab 使用 source_sha 关联当前 diff head，Cindy 不再自行比对 SHA。
 已知 diff head 但 headPipeline 为 null 时记为 0 项检查，与 GitHub 无检查一致。推送后、
 新流水线创建前也可能短暂显示 0 项，后续刷新拿到流水线后再显示进行中等实际状态。
 作业使用 `jobs(retried: false)` 只读取最新尝试，不计已被重试替换的旧作业。

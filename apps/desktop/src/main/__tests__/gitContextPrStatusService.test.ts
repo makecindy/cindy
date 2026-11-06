@@ -373,7 +373,7 @@ it.each([
 });
 
 // Unit: production MR fetch + shared status service, not a copied mapper.
-// GitHub fixtures cannot detect SHA/paging mismatches or credentials crossing hosts.
+// GitHub fixtures cannot detect GitLab pipeline selection/paging or credentials crossing hosts.
 describe('GitLab MR status', () => {
   const q = {
     provider: 'gitlab' as const,
@@ -392,7 +392,6 @@ describe('GitLab MR status', () => {
     resolvedDiscussionsCount: 3,
     headPipeline: {
       status: 'RUNNING',
-      sha: 'head',
       jobs: {
         count: 5,
         nodes: ['SUCCESS', 'FAILED', 'MANUAL', 'SKIPPED', 'CANCELED'].map((status) => ({ status })),
@@ -491,8 +490,10 @@ describe('GitLab MR status', () => {
     value.diffHeadSha = '';
     expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toBeNull();
   });
-  it('queries the MR host once, counts discussions and conservatively summarizes complete current-head jobs', async () => {
+  it('summarizes GitLab-selected merged-result jobs', async () => {
     const value = mr();
+    const pipeline = { ...value.headPipeline, sha: 'synthetic-merge-commit' };
+    value.headPipeline = pipeline;
     const fetch = vi
       .fn()
       .mockImplementation(
@@ -508,9 +509,6 @@ describe('GitLab MR status', () => {
       path: 'group/sub/project',
       iid: '7',
     });
-    value.headPipeline.sha = 'old';
-    expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toBeNull();
-    value.headPipeline.sha = 'head';
     value.headPipeline.jobs.pageInfo.hasNextPage = true;
     expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toBeNull();
     value.headPipeline.jobs.pageInfo.hasNextPage = false;
