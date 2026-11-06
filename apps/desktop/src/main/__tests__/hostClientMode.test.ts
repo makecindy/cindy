@@ -14,6 +14,8 @@ describe('localDb in host client mode', () => {
     setHostClientMode(true);
     const result = await ensureReady('owner-under-host');
     expect(result.ready).toBe(false);
-    expect(result.error?.message).toContain('cindy-host owns the profile database');
+    if (!result.ready) {
+      expect(result.error.message).toContain('cindy-host owns the profile database');
+    }
   });
 });

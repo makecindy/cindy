@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import type { IpcMainInvokeEvent } from 'electron';
+import { HOST_CONTRACT_CHANNELS, type HostChannelDef } from '@cindy/maker-shared/host-channel-contract';
 
 export interface HostDelegationConfig {
   readonly baseUrl: string;
@@ -113,128 +114,14 @@ interface ProxiedChannel {
   readonly map?: (response: unknown) => unknown;
 }
 
-/** Channels the host implements; everything else is intentionally absent. */
+/** Channels the host implements, derived from shared host-channel-contract. */
 export const PROXIED_CHANNELS: readonly ProxiedChannel[] = [
-  { channel: 'local-db:sessions:list', path: '/api/sessions/list', body: () => null },
-  {
-    channel: 'local-db:sessions:get',
-    path: '/api/sessions/get',
-    body: ([sessionId]) => ({ sessionId }),
-  },
-  {
-    channel: 'local-db:sessions:update',
-    path: '/api/sessions/update',
-    body: ([sessionId, patch]) => ({ sessionId, patch: patch ?? {} }),
-  },
-  {
-    channel: 'local-db:sessions:create',
-    path: '/api/sessions/create',
-    body: ([body]) => body ?? {},
-  },
-  {
-    channel: 'local-db:messages:estimated-value',
-    path: '/api/messages/estimated-value',
-    body: ([sessionId]) => ({ sessionId }),
-  },
-  {
-    channel: 'maker:turn-change-sets:list',
-    path: '/api/turn-change-sets/list',
-    body: ([sessionId]) => ({ sessionId }),
-  },
-  {
-    channel: 'maker:get-pending-interactions',
-    path: '/api/interactions/pending',
-    body: ([sessionId]) => ({ sessionId }),
-  },
-  {
-    channel: 'maker:resolve-interaction',
-    path: '/api/interactions/respond',
-    body: ([sessionId, requestId, decision]) => ({ sessionId, requestId, decision }),
-  },
-  {
-    channel: 'maker:list-available-agents',
-    path: '/api/agents',
-    body: () => null,
-  },
-  {
-    channel: 'maker:list-agent-commands',
-    path: '/api/agent-commands',
-    body: ([agentKind, params]) => ({
-      agentKind,
-      sessionId: (params as { sessionId?: string } | undefined)?.sessionId,
-    }),
-  },
-  {
-    channel: 'maker:list-agent-skills',
-    path: '/api/agent-skills',
-    body: ([agentKind, params]) => ({
-      agentKind,
-      workingDir: (params as { workingDir?: string } | undefined)?.workingDir,
-      sessionId: (params as { sessionId?: string } | undefined)?.sessionId,
-      forceReload: (params as { forceReload?: boolean } | undefined)?.forceReload === true,
-    }),
-  },
-  {
-    channel: 'maker:input:remove',
-    path: '/api/input/remove',
-    body: ([sessionId, clientId]) => ({ sessionId, clientId }),
-  },
-  {
-    channel: 'maker:usage:model-pricing',
-    path: '/api/usage/model-pricing',
-    body: () => null,
-  },
-  {
-    channel: 'maker:usage:model-pricing-v2',
-    path: '/api/usage/model-pricing',
-    body: () => null,
-  },
-  {
-    channel: 'maker:usage:reference-model-pricing',
-    path: '/api/usage/reference-model-pricing',
-    body: () => null,
-  },
-  {
-    channel: 'model-access:get-status',
-    path: '/api/model-access',
-    body: () => null,
-  },
-  {
-    channel: 'local-db:sessions:interrupted-pending',
-    path: '/api/sessions/interrupted-pending',
-    body: () => null,
-  },
-  {
-    channel: 'local-db:sessions:error-tail-pending',
-    path: '/api/sessions/error-tail-pending',
-    body: () => null,
-  },
-  {
-    channel: 'local-db:sessions:interrupted-resume-candidates',
-    path: '/api/sessions/interrupted-candidates',
-    body: () => null,
-  },
-  {
-    channel: 'local-db:messages:list',
-    path: '/api/messages/list',
-    body: ([sessionId, opts]) => ({
-      sessionId,
-      limit: (opts as { limit?: number } | undefined)?.limit,
-    }),
-  },
-  {
-    channel: 'local-db:messages:view',
-    path: '/api/messages/history-view',
-    body: ([sessionId, opts]) => ({
-      sessionId,
-      before: (opts as { before?: string | null } | undefined)?.before ?? null,
-    }),
-  },
-  {
-    channel: 'local-db:messages:create',
-    path: '/api/messages/create',
-    body: ([sessionId, message]) => ({ sessionId, message }),
-  },
+  ...HOST_CONTRACT_CHANNELS.map((def: HostChannelDef) => ({
+    channel: def.desktopChannel,
+    path: def.hostPath,
+    body: def.body ?? (() => null),
+    map: def.map,
+  })),
   {
     // Legacy composer path: enqueue and report acceptance; the answer arrives on
     // the event stream like any other turn.
@@ -259,42 +146,6 @@ export const PROXIED_CHANNELS: readonly ProxiedChannel[] = [
       };
     },
     map: () => ({ accepted: true }),
-  },
-  {
-    channel: 'maker:list-active',
-    path: '/api/sessions/list',
-    body: () => null,
-  },
-  { channel: 'maker:provider:list', path: '/api/providers', body: () => null },
-  {
-    channel: 'maker:get-capabilities',
-    path: '/api/capabilities',
-    body: ([agentKind]) => ({ agentKind }),
-  },
-  {
-    channel: 'maker:input:get-projection',
-    path: '/api/input/projection',
-    body: ([sessionId]) => ({ sessionId }),
-  },
-  {
-    channel: 'maker:input:enqueue',
-    path: '/api/input/enqueue',
-    body: ([sessionId, item]) => ({ sessionId, item }),
-  },
-  {
-    channel: 'maker:input:stop',
-    path: '/api/input/stop',
-    body: ([sessionId]) => ({ sessionId }),
-  },
-  {
-    channel: 'maker:input:steer',
-    path: '/api/input/steer',
-    body: ([sessionId, item]) => ({ sessionId, item }),
-  },
-  {
-    channel: 'maker:input:resume',
-    path: '/api/input/resume',
-    body: ([sessionId]) => ({ sessionId }),
   },
 ];
 
