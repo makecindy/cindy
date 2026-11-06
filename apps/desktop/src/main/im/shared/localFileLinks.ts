@@ -13,6 +13,15 @@ function isOpenableTarget(url: string): boolean {
 }
 
 /**
+ * Cheap superset of what `unlinkLocalFileLinks` rewrites: a link or definition
+ * target without an openable scheme, a `file:` target, or a `<file:` autolink.
+ * Streaming calls this on every delta, so replies with only web links (or none)
+ * must not pay for a Markdown parse.
+ */
+const MAY_HAVE_LOCAL_LINK =
+  /\][(:](?!\s*<?[a-z][a-z0-9+.-]+:)|\][(:]\s*<?file:|<file:/i;
+
+/**
  * IM recipients cannot open this computer's files, and channels without
  * Markdown links show `[label](</abs/path>)` verbatim. Keep only the label of
  * links to local paths, relative paths or `file:` URLs. Images, managed media
@@ -20,7 +29,7 @@ function isOpenableTarget(url: string): boolean {
  * channel's own delivery; code examples are not links in the AST.
  */
 export function unlinkLocalFileLinks(text: string): string {
-  if (!text.includes('](') && !text.includes(']:') && !text.includes('<file:')) return text;
+  if (!MAY_HAVE_LOCAL_LINK.test(text)) return text;
   const tree = parser.parse(text);
   const definitions = new Map<string, Definition>();
   visit(tree, 'definition', (node) => {
