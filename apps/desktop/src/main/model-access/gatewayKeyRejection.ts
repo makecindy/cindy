@@ -6,7 +6,7 @@ import { getAppCapabilities } from '../appCapabilities.js';
 import { isAppSessionBoundaryPending } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
-import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
+import { addProviderSecretsClearedListener, getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import { getModelAccessCredentialsStore } from './credentialsStore.js';
 
 /**
@@ -78,6 +78,24 @@ export interface GatewayKeyRejectionReporter {
 
 function keyFingerprint(key: string): string {
   return createHash('sha256').update(key).digest('hex');
+}
+
+// Only keys actually replaced during this app run are eligible for Codex proxy repair.
+// Keep fingerprints, never credentials; owner changes invalidate the entire history.
+const replacedGatewayKeyFingerprints = new Set<string>();
+let historyClearListenerInstalled = false;
+
+export function noteCindyGatewayKeyReplaced(previousKey: string | null, nextKey: string): void {
+  if (!previousKey || !nextKey || previousKey === nextKey || isAppSessionBoundaryPending()) return;
+  if (!historyClearListenerInstalled) {
+    addProviderSecretsClearedListener(() => replacedGatewayKeyFingerprints.clear());
+    historyClearListenerInstalled = true;
+  }
+  replacedGatewayKeyFingerprints.add(keyFingerprint(previousKey));
+}
+
+export function isReplacedCindyGatewayKey(key: string): boolean {
+  return !isAppSessionBoundaryPending() && replacedGatewayKeyFingerprints.has(keyFingerprint(key));
 }
 
 interface TriggerRecord {

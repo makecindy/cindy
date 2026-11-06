@@ -42,7 +42,7 @@ import {
 } from '../../shared/modelAccess.js';
 import { getModelAccessCredentialsStore } from './credentialsStore.js';
 import { getAppCapabilities } from '../appCapabilities.js';
-import { installCindyGatewayKeyRejectionReporter } from './gatewayKeyRejection.js';
+import { installCindyGatewayKeyRejectionReporter, noteCindyGatewayKeyReplaced } from './gatewayKeyRejection.js';
 import {
   createCredentialsSync,
   type CredentialsPayload,
@@ -108,7 +108,7 @@ function rotateCredentials(): Promise<CredentialsPayload> {
 /**
  * 写 XD key(main 侧自动下发路径),带 codex env-key 重启副作用:
  * env-key spawn 的 codex app-server 把 gateway key 冻在子进程 env 里,写盘后
- * 必须重建才生效。服务端可能已经撤销旧 key，不能因进程忙碌而拒绝保存新 key。
+ * 代理识别已替换的旧 key 后现读新 key；空闲重建仍作兜底。不能因进程忙碌而拒绝保存新 key。
  * 写入同步完成，相关 host 的刷新独立登记，忙碌或启动中的 host 延后到空闲。
  */
 async function writeXdKeyWithCodexSideEffect(key: string): Promise<boolean> {
@@ -118,8 +118,10 @@ async function writeXdKeyWithCodexSideEffect(key: string): Promise<boolean> {
   if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScope) {
     return false;
   }
+  const previousKey = store.get('xd');
   const ok = store.set('xd', key);
   if (!ok) return false;
+  noteCindyGatewayKeyReplaced(previousKey, key);
   notifyXdProviderKeyChanged();
   try {
     scheduleCodexGatewayKeyRefresh();

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // 单例的默认依赖(仅 singleton 用例经 install 使用;工厂用例全部显式注入)。
 const defaults = vi.hoisted(() => ({
+  clearedListeners: new Set<() => void>(),
   providerDisabled: false,
   canUseCindyGateway: true,
   boundaryPending: false,
@@ -23,6 +24,10 @@ vi.mock('../../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({
+  addProviderSecretsClearedListener: (listener: () => void) => {
+    defaults.clearedListeners.add(listener);
+    return () => defaults.clearedListeners.delete(listener);
+  },
   getProviderSecretStore: () => ({ get: (id: string) => (id === 'xd' ? defaults.currentKey : null) }),
 }));
 vi.mock('../credentialsStore.js', () => ({
@@ -34,6 +39,8 @@ vi.mock('../../maker-host/model-disable-store.js', () => ({
 
 import {
   bearerKeyFromHeaders,
+  noteCindyGatewayKeyReplaced,
+  isReplacedCindyGatewayKey,
   createGatewayKeyRejectionReporter,
   CINDY_KEY_REJECTION_RETRIGGER_WINDOW_MS,
   installCindyGatewayKeyRejectionReporter,
@@ -431,5 +438,43 @@ describe('withCindyGatewayKeyRejectionReport', () => {
     const wrapped = withCindyGatewayKeyRejectionReport(fetchImpl, report);
     await expect(wrapped('https://gateway.invalid/v1/embeddings')).rejects.toThrow('fetch failed');
     expect(report).not.toHaveBeenCalled();
+  });
+});
+
+// Unit regression: the proxy must recognize previous process credentials without
+// retaining plaintext or authorizing an earlier owner's process after handoff.
+describe('replaced gateway key history', () => {
+  afterEach(() => {
+    defaults.boundaryPending = false;
+    for (const listener of defaults.clearedListeners) listener();
+  });
+
+  it('remembers each replaced key across successive rotations', () => {
+    noteCindyGatewayKeyReplaced(KEY_A, KEY_B);
+    noteCindyGatewayKeyReplaced(KEY_B, 'invalid-next-key');
+    expect(isReplacedCindyGatewayKey(KEY_A)).toBe(true);
+    expect(isReplacedCindyGatewayKey(KEY_B)).toBe(true);
+    expect(isReplacedCindyGatewayKey('invalid-next-key')).toBe(false);
+    expect(isReplacedCindyGatewayKey('invalid-unknown-key')).toBe(false);
+  });
+
+  it.each([null, '', KEY_B])('does not record initial writes or unchanged keys: %s', previousKey => {
+    noteCindyGatewayKeyReplaced(previousKey, KEY_B);
+    expect(isReplacedCindyGatewayKey(KEY_B)).toBe(false);
+  });
+
+  it('clears old credentials at the provider owner boundary', () => {
+    noteCindyGatewayKeyReplaced(KEY_A, KEY_B);
+    for (const listener of defaults.clearedListeners) listener();
+    expect(isReplacedCindyGatewayKey(KEY_A)).toBe(false);
+  });
+
+  it('does not authorize or record keys during account handoff', () => {
+    noteCindyGatewayKeyReplaced(KEY_A, KEY_B);
+    defaults.boundaryPending = true;
+    expect(isReplacedCindyGatewayKey(KEY_A)).toBe(false);
+    noteCindyGatewayKeyReplaced(KEY_B, 'invalid-next-key');
+    defaults.boundaryPending = false;
+    expect(isReplacedCindyGatewayKey(KEY_B)).toBe(false);
   });
 });
