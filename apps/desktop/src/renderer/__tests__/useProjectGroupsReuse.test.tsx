@@ -7,9 +7,8 @@ import type { Session } from '@/lib/ccAgent.types';
 import { useProjectGroups } from '@/features/cc-agent/hooks/useProjectGroups';
 import { sessionCardVisualCases } from '@/features/cc-agent/sidebar/__fixtures__/sessionCardVisualCases';
 
-const state = vi.hoisted(() => ({ hosts: [] as unknown[], bots: [] as unknown[], aliases: new Map() as ProjectAliasesByDevice }));
+const state = vi.hoisted(() => ({ hosts: [] as unknown[], aliases: new Map() as ProjectAliasesByDevice }));
 vi.mock('@/hooks/useRemoteSshHosts', () => ({ useRemoteSshHosts: () => state.hosts }));
-vi.mock('@/features/bots/botStore', () => ({ useBotProfiles: () => state.bots }));
 vi.mock('@/features/device-link/remoteProjectAliases', () => ({ remoteProjectAliases: {
   subscribe: () => () => {}, getSnapshot: () => state.aliases,
 } }));

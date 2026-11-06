@@ -3932,6 +3932,7 @@ class CindyMcpGateway {
   }
 
   register(pi: any, options: { botMemoryFacade?: boolean; deniedTools?: string[] } = {}): void {
+    const deniedTools = new Set(options.deniedTools ?? []);
     // Aborted turns may approve a call that Pi never executes.
     pi.on?.('agent_end', () => { this.approvedDefinitions.clear(); });
     pi.on?.('tool_result', (event: any) => {
@@ -4008,7 +4009,7 @@ class CindyMcpGateway {
       });
     }
 
-    if (this.resolveStartSessionTask({})) {
+    if (!deniedTools.has(CINDY_START_SESSION_TASK_TOOL) && this.resolveStartSessionTask({})) {
       pi.registerTool({
         name: CINDY_START_SESSION_TASK_TOOL,
         label: 'Start a Cindy Session task',
@@ -4089,7 +4090,7 @@ class CindyMcpGateway {
       });
     }
 
-    if (this.resolveDirectHelperTool(CINDY_CHECK_SESSION_TASK_TOOL, {})) {
+    if (!deniedTools.has(CINDY_CHECK_SESSION_TASK_TOOL) && this.resolveDirectHelperTool(CINDY_CHECK_SESSION_TASK_TOOL, {})) {
       pi.registerTool({
         name: CINDY_CHECK_SESSION_TASK_TOOL,
         label: 'Check Session task',
@@ -4105,7 +4106,7 @@ class CindyMcpGateway {
       });
     }
 
-    if (this.resolveDirectHelperTool(CINDY_MESSAGE_SESSION_TASK_TOOL, {})) {
+    if (!deniedTools.has(CINDY_MESSAGE_SESSION_TASK_TOOL) && this.resolveDirectHelperTool(CINDY_MESSAGE_SESSION_TASK_TOOL, {})) {
       pi.registerTool({
         name: CINDY_MESSAGE_SESSION_TASK_TOOL,
         label: 'Message Session task',
@@ -4130,7 +4131,7 @@ class CindyMcpGateway {
       });
     }
 
-    if (this.resolveDirectHelperTool(CINDY_STOP_SESSION_TASK_TOOL, {})) {
+    if (!deniedTools.has(CINDY_STOP_SESSION_TASK_TOOL) && this.resolveDirectHelperTool(CINDY_STOP_SESSION_TASK_TOOL, {})) {
       pi.registerTool({
         name: CINDY_STOP_SESSION_TASK_TOOL,
         label: 'Stop Session task',
@@ -4232,7 +4233,6 @@ class CindyMcpGateway {
       { name: 'read_workbench_task', description: 'Read the recent bounded transcript of a task you follow (all tasks if you follow every task).', properties: { task_id: taskIdProperty }, required: ['task_id'] },
       { name: 'continue_workbench_task', description: 'Send one message into a task you follow so it continues. Use get_task_digest first; never resend after DELIVERY_UNKNOWN without checking.', properties: { task_id: taskIdProperty, message: { type: 'string', minLength: 1, maxLength: 4000 } }, required: ['task_id', 'message'] },
     ];
-    const deniedTools = new Set(options.deniedTools ?? []);
     for (const tool of [...routineTools, ...followUpTools]) {
       if (deniedTools.has(tool.name) || !this.resolveDirectHelperTool(tool.name, {})) continue;
       pi.registerTool({

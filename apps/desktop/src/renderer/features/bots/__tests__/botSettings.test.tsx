@@ -885,7 +885,7 @@ describe('Bot settings unified autosave', () => {
     });
     renderSettings({ capabilities: capabilities({ memory: false }) });
     fireEvent.click(screen.getByRole('button', { name: 'bots.homeFolder.title' }));
-    expect(screen.queryByRole('switch')).toBeNull();
+    expect(screen.queryByRole('switch', { name: 'bots.memory.enabled' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
     fireEvent.click(screen.getByRole('button', { name: 'bots.memory.title' }));
     expect(screen.getByText('bots.memory.disabledHint')).toBeTruthy();

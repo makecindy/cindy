@@ -111,6 +111,7 @@ async function startBotSession(input: {
   disabled?: boolean;
   allowManaged?: boolean;
   catalogState?: 'failed' | 'disabled' | 'missing' | 'user-collision';
+  projectContext?: boolean;
 }) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -185,6 +186,7 @@ async function startBotSession(input: {
       },
       mcpPolicy: { mode: 'inherit', configured: [], catalog: [] },
       toolsetPolicy: { mode: 'inherit', configured: [], catalog: [] },
+      ...(input.projectContext ? { projectContext: true } : {}),
     },
   });
 
@@ -317,6 +319,23 @@ describe('Claude Code mounts the Bot\'s own learned Skills', () => {
       expect(duplicateResolver).not.toHaveBeenCalled();
     },
   );
+  // 伙伴 V2(项目模式):就是普通项目任务加一层伙伴身份。SDK 选项与普通任务一致(用户/项目设置、
+  // 宿主提示词、不收窄 MCP),伙伴身份与自有技能照常挂上。依据:伙伴 = 包装过的项目 + session
+  // (主人 2026-11-06)。最小输入:projectContext 开关;unit,无进程。
+  it('runs a V2 teammate as an ordinary task with its identity on top', async () => {
+    const ordinary = await startBotSession({ ordinary: true });
+    const v2 = await startBotSession({ projectContext: true, ownSkillPluginRoots: [OWN_SKILL_ROOT] });
+    expect(v2.settingSources).toEqual(ordinary.settingSources);
+    expect(v2.strictMcpConfig).toBeUndefined();
+    expect(v2.settings?.autoMemoryEnabled).toBe(ordinary.settings?.autoMemoryEnabled);
+    expect(v2.plugins).toEqual([{ type: 'local', path: OWN_SKILL_ROOT }]);
+    expect(v2.systemPrompt?.append).toContain('GLOBAL USER PROMPT');
+    expect(v2.systemPrompt?.append).toContain('BOT SOUL');
+    const classic = await startBotSession({});
+    expect(classic.settingSources).toEqual([]);
+    expect(classic.systemPrompt?.append).not.toContain('GLOBAL USER PROMPT');
+  });
+
   it('passes the per-Bot skill root as a local plugin', async () => {
     const options = await startBotSession({ ownSkillPluginRoots: [OWN_SKILL_ROOT] });
     expect(options.plugins).toEqual([{ type: 'local', path: OWN_SKILL_ROOT }]);

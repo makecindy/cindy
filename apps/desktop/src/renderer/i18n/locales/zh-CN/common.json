@@ -10118,9 +10118,6 @@
     },
     "creationName": "名字",
     "settingsBack": "返回设置",
-    "sidebar": {
-      "newTaskWith": "和{{name}}开个新任务"
-    },
     "title": "伙伴",
     "add": "添加伙伴",
     "createWizard": {
@@ -10131,7 +10128,11 @@
       "description": "伙伴会自己维护记忆和学会的做法。只有需要纠正时，才直接打开它的文件夹。",
       "contents": "包含 SOUL.md、USER.md、system_prompt.md，以及 Skill 和记忆文件夹。模型、权限和连接仍由 Cindy 管理。",
       "open": "打开文件夹",
-      "openFailed": "无法打开伙伴文件夹。"
+      "openFailed": "无法打开伙伴文件夹。",
+      "projectMode": {
+        "title": "作为项目工作（实验）",
+        "description": "伙伴的工作区会成为侧栏里的一个项目。其中的 AGENTS.md 是伙伴自己的做事规则，伙伴可以修改；每次改动都会保留版本，可以撤销。"
+      }
     },
     "profile": {
       "title": "资料",

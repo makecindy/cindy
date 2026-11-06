@@ -10118,9 +10118,6 @@
     },
     "creationName": "名前",
     "settingsBack": "設定に戻る",
-    "sidebar": {
-      "newTaskWith": "{{name}}と新しいタスクを始める"
-    },
     "title": "仲間",
     "add": "仲間を追加",
     "createWizard": {
@@ -10131,7 +10128,11 @@
       "description": "仲間は記憶と身につけた手順を自分で管理します。修正が必要なときだけフォルダを直接開いてください。",
       "contents": "SOUL.md、USER.md、system_prompt.md、skills/、memories/ が入っています。モデル、権限、接続は Cindy が管理します。",
       "open": "フォルダを開く",
-      "openFailed": "仲間のフォルダを開けませんでした。"
+      "openFailed": "仲間のフォルダを開けませんでした。",
+      "projectMode": {
+        "title": "プロジェクトとして作業（試験運用）",
+        "description": "仲間の作業フォルダがサイドバーのプロジェクトになります。中の AGENTS.md は仲間自身の作業ルールで、仲間が編集できます。変更はすべてバージョンとして残り、元に戻せます。"
+      }
     },
     "profile": {
       "title": "プロフィール",

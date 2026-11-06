@@ -95,6 +95,7 @@ export function registerSearchChatHistoryTool(
     inputShape: {
       ...historyDeviceShape,
       teammate_id: z.string().min(1).max(256).optional().describe('限定已保存归属的伙伴聊天（含历史、话题、渠道专线），使用 get_teammate_state 的 profile.id。不限制当前 workdir；未关联的旧 IM 记录不自动认领。'),
+      teammate_main_only: z.boolean().optional().describe('只看这个伙伴的主聊天（当前的和重置/换掉的旧主聊天），不含话题、渠道专线和例行任务。需配合 teammate_id。'),
       source: z.string().min(1).max(64).optional().describe('精确匹配任务原始 source，如 telegram（旧独立机器人）或 bot（伙伴）。不指定则跨来源搜索。'),
       query: z.string().min(1).max(256).describe('自然语言查询(必填, 最长 256)。例: "上次怎么修的语音输入授权问题"。'),
       session_ids: stringArrayParam(z.array(z.string().min(1)).max(50))
@@ -175,7 +176,7 @@ export function registerSearchChatHistoryTool(
       const searchArgs = {
         query: query.trim(),
         sessionIds: scope.sessionIds,
-        ...(args.teammate_id ? { teammateId: args.teammate_id } : {}),
+        ...(args.teammate_id ? { teammateId: args.teammate_id, ...(args.teammate_main_only ? { teammateMainOnly: true } : {}) } : {}),
         ...(args.source ? { source: args.source } : {}),
         workdir: workdir ?? null,
         fromMs,

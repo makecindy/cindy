@@ -73,6 +73,8 @@ export interface BotCapabilities {
   allowSchedulerFollow?: boolean;
   /** System Skills this teammate has turned off (shared/botSystemSkills.ts). Missing = all on. */
   systemSkillsOff?: BotSystemSkillId[];
+  /** Experimental: the teammate's workspace is a project (shared/botProjectMode.ts). Missing = off. */
+  projectMode?: boolean;
 }
 
 export interface BotModelOverride {

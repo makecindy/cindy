@@ -78,6 +78,9 @@ import { syncBotProfileFromFolder } from '../../maker-ipc/botProfileFolderSync.j
 import { requestBotRuntimeEpochRefresh } from '../../maker-ipc/botRuntimeEpochRefreshSignal.js';
 import { createLogger } from '../../logger.js';
 import { collectTaskResponsibilityScopes } from '../../maker-ipc/botTaskResponsibility.js';
+import { prepareBotProjectWorkspace } from '../../maker-ipc/botProjectMode.js';
+import { setBotProjectSkillsDir } from '../../maker-ipc/botSkillStore.js';
+import { readBotProjectMode } from '../../../shared/botProjectMode.js';
 import {
   readBotWorkbenchTaskForOwner,
   readBotResponsibilityScope,
@@ -1273,6 +1276,7 @@ async function readProfile(
     lastReadAt,
   );
   const config = normalizeBotToolCapabilities(parseJson(version?.capabilitiesJson ?? '{}'));
+  setBotProjectSkillsDir(owner.userDataDir, profile.id, readBotProjectMode(config));
   const modelChain = await readEffectiveBotModelChain(config);
   const primaryModelRoute = modelChain[0];
   const invitation = botInvitationProgress(config.invitation);
@@ -1374,6 +1378,7 @@ async function readProfile(
       // back from here, so an explicit choice must survive a reload. Absent keeps the defaults.
       ...(config.inputHandoff === false ? { inputHandoff: false } : {}),
       ...(config.allowSchedulerFollow === true ? { allowSchedulerFollow: true } : {}),
+      ...(readBotProjectMode(config) ? { projectMode: true } : {}),
       // Absent = every system Skill on (shared/botSystemSkills.ts).
       ...(readBotSystemSkillsOff(config.systemSkillsOff).length
         ? { systemSkillsOff: readBotSystemSkillsOff(config.systemSkillsOff) } : {}),
@@ -2309,6 +2314,19 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   owner.assertCurrent();
   if (Object.keys(folderPatch).length > 0) {
     await syncBotProfileFolder(id, folderPatch, owner.userDataDir);
+    owner.assertCurrent();
+  }
+  // Project mode (experimental): turning it on makes the workspace a registered,
+  // versioned project before the refreshed chat loads its AGENTS.md.
+  if (readBotProjectMode(normalizedNextConfig) && !readBotProjectMode(previous)) {
+    await prepareBotProjectWorkspace({
+      botId: id,
+      displayName: patch.displayName ?? current.displayName,
+      ownerRoot: owner.userDataDir,
+      legacyUserDataDir: app.getPath('userData'),
+    }).catch((error) => {
+      log.warn('teammate project preparation failed', { botId: id, error: String(error) });
+    });
     owner.assertCurrent();
   }
   if (profileContentChanged || acceptsSavedModel) {

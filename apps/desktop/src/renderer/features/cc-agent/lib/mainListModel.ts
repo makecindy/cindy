@@ -42,14 +42,12 @@ import {
   type SidebarSessionEntry,
 } from './automationSidebarGrouping';
 import { sessionActivityMs, sessionCreatedMs } from './dateSessionGrouping';
-import type { BotGroupNode, ProjectNode } from './projectGrouping';
+import type { ProjectNode } from './projectGrouping';
 
 export type MainListEntry =
   | { kind: 'project'; project: ProjectNode }
   | { kind: 'dialogue-group'; sessions: Session[] }
   | { kind: 'cindy-make-group'; sessions: Session[] }
-  /** 一个伙伴名下的全部任务。与项目行并列 —— 项目是实体目录,伙伴名是用户起的。 */
-  | { kind: 'bot-group'; bot: BotGroupNode }
   | SidebarSessionEntry;
 
 /** 优先级排序的运行时上下文(组装层的运行中 / 需关注集合)。 */
@@ -187,7 +185,6 @@ export function sessionPriorityRecencyMs(session: Session, ctx: MainListPriority
 export function getMainListEntrySessions(entry: MainListEntry): readonly Session[] {
   if (entry.kind === 'project') return entry.project.sessions;
   if (entry.kind === 'dialogue-group' || entry.kind === 'cindy-make-group') return entry.sessions;
-  if (entry.kind === 'bot-group') return entry.bot.sessions;
   if (entry.kind === 'automation-group') return entry.group.sessions;
   return [entry.session];
 }
@@ -283,8 +280,6 @@ export interface BuildMainListEntriesInput {
   projects: readonly ProjectNode[];
   /** 无项目归属(workspaceKind dialogue)的可见会话。 */
   dialogues: readonly Session[];
-  /** 按伙伴分的组。平铺模式下与项目内会话一样摊成顶层条目。 */
-  bots?: readonly BotGroupNode[];
   /** 未绑定目录的草稿。按设备分组时随条目进对应设备段。 */
   unclassified?: readonly Session[];
   /** 'project' = 项目行;'flat' = 项目内会话平铺为顶层条目。 */
@@ -355,7 +350,6 @@ function buildFlatSessionEntries(
 export function buildMainListEntries({
   projects,
   dialogues,
-  bots = [],
   unclassified = [],
   groupBy,
   groupDialogue,
@@ -376,11 +370,6 @@ export function buildMainListEntries({
     });
     dialogues = dialogues.filter(keep);
     unclassified = unclassified.filter(keep);
-    bots = bots.flatMap((bot) => {
-      const sessions = bot.sessions.filter(keep);
-      if (sessions.length === bot.sessions.length) return [bot];
-      return sessions.length ? [{ ...bot, sessions }] : [];
-    });
   }
   const entries: MainListEntry[] = [];
   const partitioned = partitionCindyMakeSessions({ projects, dialogues, unclassified });
@@ -398,7 +387,6 @@ export function buildMainListEntries({
     const flatEntries = buildFlatSessionEntries(
       [
         ...projects.flatMap((project) => project.sessions),
-        ...bots.flatMap((bot) => bot.sessions),
         ...dialogues,
         ...unclassified,
       ],
@@ -434,13 +422,6 @@ export function buildMainListEntries({
     entries.push({
       kind: 'project',
       project: withProjectSessions(project, sortSessionsForMainList(project.sessions, sortBy, ctx)),
-    });
-  }
-
-  for (const bot of bots) {
-    entries.push({
-      kind: 'bot-group',
-      bot: { ...bot, sessions: sortSessionsForMainList(bot.sessions, sortBy, ctx) },
     });
   }
 
@@ -570,11 +551,7 @@ function entryDeviceId(entry: MainListEntry): string | null {
   if (entry.kind === 'automation-group') {
     return entry.group.sessions[0]?.deviceLinkDeviceId ?? null;
   }
-  // 对话组与伙伴组已经按成员设备拆分,此时首条会话代表整个片段。
-  if (entry.kind === 'bot-group') {
-    return entry.bot.sessions[0]?.deviceLinkDeviceId ?? null;
-  }
-  // 对话组同样已拆成单设备片段。
+  // 对话组已经按成员设备拆分,此时首条会话代表整个片段。
   return entry.sessions[0]?.deviceLinkDeviceId ?? null;
 }
 
@@ -583,7 +560,7 @@ function entryDeviceId(entry: MainListEntry): string | null {
  *   - 段顺序:本机在前,远程设备按 deviceOrder(设备切换栏同序);
  *     不在 deviceOrder 里的设备(断线缓存等)按段内最新活动排在其后。
  *   - 段内按当前 sortBy 重排(跨设备对话组拆开后,不能再沿用整组位置)。
- *   - 「对话归为一组」开启时,跨设备的对话组和伙伴组会被拆成每设备一组——调用方无需
+ *   - 「对话归为一组」开启时,跨设备的对话组会被拆成每设备一组——调用方无需
  *     预切分,分组身份不变,成员只保留本设备的任务。
  */
 export function splitEntriesByDevice(
@@ -600,11 +577,7 @@ export function splitEntriesByDevice(
   // 先把跨设备会话组拆开,再按每个片段的成员计算排序和设备聚合灯。
   const flattened: MainListEntry[] = [];
   for (const entry of entries) {
-    if (
-      entry.kind !== 'dialogue-group' &&
-      entry.kind !== 'cindy-make-group' &&
-      entry.kind !== 'bot-group'
-    ) {
+    if (entry.kind !== 'dialogue-group' && entry.kind !== 'cindy-make-group') {
       flattened.push(entry);
       continue;
     }
@@ -616,9 +589,7 @@ export function splitEntriesByDevice(
       else byDevice.set(key, [s]);
     }
     for (const sessions of byDevice.values()) {
-      if (entry.kind === 'bot-group')
-        flattened.push({ kind: 'bot-group', bot: { ...entry.bot, sessions } });
-      else flattened.push({ kind: entry.kind, sessions });
+      flattened.push({ kind: entry.kind, sessions });
     }
   }
 

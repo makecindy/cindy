@@ -38,7 +38,6 @@ vi.mock('../features/cc-agent/sidebar/DeviceSectionHeader', () => ({
   DeviceSectionHeader: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 vi.mock('../features/cc-agent/sidebar/sections/UnclassifiedSection', () => ({ UnclassifiedSection: () => null }));
-vi.mock('@/features/bots/BotAvatar', () => ({ BotAvatar: () => <span>Bot avatar</span> }));
 // Keep ProjectsSection, its private SessionGroupNode, SessionEntryList, collapse model,
 // lamp aggregation and remote store real. Only unrelated services/leaf rows are stubbed.
 const leafRowRenders = vi.hoisted(() => new Map<string, number>());
@@ -51,14 +50,16 @@ vi.mock('../features/cc-agent/sidebar/SessionItem', () => ({
 vi.mock('../features/cc-agent/sidebar/SessionCard', () => ({ SessionCard: () => null }));
 vi.mock('../features/cc-agent/sidebar/AutomationSessionGroupItem', () => ({ AutomationSessionGroupItem: () => null }));
 
-function props(groupDevice: boolean): ProjectsSectionProps {
-  const sessions = ['first', 'idle', 'lit'].map((id, i) => ({
+function remoteSessions(): Session[] {
+  return ['first', 'idle', 'lit'].map((id, i) => ({
     id, title: id, status: 'active', createdAt: `2026-09-0${3 - i}T00:00:00Z`,
     updatedAt: `2026-09-0${3 - i}T00:00:00Z`, deviceLinkDeviceId: 'remote',
   } as Session));
+}
+
+function props(groupDevice: boolean): ProjectsSectionProps {
   return {
     unclassified: [], projects: [], dialogues: [], allKnownProjects: [], allProjectKeysForOrder: ['local:known-project'],
-    bots: [{ botId: 'demo', displayName: 'Demo Bot', avatar: '', avatarColor: '', sessions, latestActivityAt: sessions[0].updatedAt }],
     filter: {
       creators: 'all', creatorOptions: [], toggleCreator: vi.fn(), setCreatorsAll: vi.fn(), setCreatorsNone: vi.fn(),
       groupBy: 'project', groupDialogue: true, groupDevice, sortBy: 'recency',
@@ -81,6 +82,11 @@ function props(groupDevice: boolean): ProjectsSectionProps {
   };
 }
 
+/** Three remote tasks in the shared dialogue group (limit 1, so two rows fold). */
+function groupProps(groupDevice: boolean): ProjectsSectionProps {
+  return { ...props(groupDevice), dialogues: remoteSessions() };
+}
+
 beforeEach(() => {
   localStorage.clear();
   localStorage.setItem('sidebar.collapse.projectSessionLimit', '1');
@@ -100,11 +106,10 @@ const phases = ['running', 'needs-interaction', 'error', 'completed'] as const;
 // expose needless subtree rendering while retaining live remote lamp updates.
 it('skips an untouched project subtree on a title patch and still updates its remote lamp', () => {
   const p = props(false);
-  const rows = p.bots![0].sessions.slice(0, 2).map((s, i) => ({
+  const rows = remoteSessions().slice(0, 2).map((s, i) => ({
     ...s, workingDir: `/project-${i}`, workspaceKind: 'project' as const,
     userSendAt: s.updatedAt, _count: { messages: 1 },
   }));
-  p.bots = [];
   p.projects = groupSessions(rows).projects;
   p.allKnownProjects = p.projects;
   const view = render(<ProjectsSection {...p} />);
@@ -132,7 +137,7 @@ function activity(phase: typeof phases[number]) {
 // boundary that opens the ancestor's organize menu. Existing lamp/drag tests do
 // not right-click headers. Minimal regression input: one grouped dialogue and a
 // bubbling, cancelable contextmenu event. Reuse this unit fixture to cover both
-// device layouts, shared Bot/Make headers and the real ProjectNode menu.
+// device layouts, the shared Make header and the real ProjectNode menu.
 // Standalone: 6.47s including pnpm (Vitest 5.01s, 2.68s collection); reuses
 // the existing component fixture without another jsdom file or module resets.
 describe('Sidebar group context menus', () => {
@@ -141,7 +146,6 @@ describe('Sidebar group context menus', () => {
   // hiding the lost focus. Unit: real menu opened by either keyboard shortcut.
   it.each(['ContextMenu', 'F10'])('returns focus to the dialogue header after %s then Escape', async (key) => {
     const p = props(false);
-    p.bots = [];
     p.dialogues = [{ id: 'dialogue', title: 'Dialogue task', status: 'active', workspaceKind: 'dialogue' } as Session];
     render(<ProjectsSection {...p} />);
     const header = screen.getByText('ccAgent.sidebar.dialogues').closest<HTMLElement>('[role="button"]')!;
@@ -161,7 +165,6 @@ describe('Sidebar group context menus', () => {
 
   it('keeps focus in the search field opened by a dialogue menu action', async () => {
     const p = props(false);
-    p.bots = [];
     p.dialogues = [{ id: 'dialogue', title: 'Dialogue task', status: 'active', workspaceKind: 'dialogue' } as Session];
     function SidebarWithSearch() {
       const [openSignal, setOpenSignal] = useState(0);
@@ -186,7 +189,6 @@ describe('Sidebar group context menus', () => {
   // owner; a real confirmation or search input must keep its own focus.
   it('returns focus after an archive action opens no follow-up dialog', async () => {
     const p = props(false);
-    p.bots = [];
     p.dialogues = [{ id: 'running', title: 'Running', status: 'active', workspaceKind: 'dialogue' } as Session];
     p.runningSessionIds = new Set(['running']);
     render(<ProjectsSection {...p} />);
@@ -202,7 +204,6 @@ describe('Sidebar group context menus', () => {
 
   it('keeps focus in the confirmation opened by an archive action', async () => {
     const p = props(false);
-    p.bots = [];
     p.dialogues = [{ id: 'dialogue', title: 'Dialogue task', status: 'active', workspaceKind: 'dialogue' } as Session];
     function SidebarWithConfirmation() {
       const { confirm } = useConfirmDialog();
@@ -221,7 +222,6 @@ describe('Sidebar group context menus', () => {
 
   it('preserves focus on an outside input when the menu is dismissed', async () => {
     const p = props(false);
-    p.bots = [];
     p.dialogues = [{ id: 'dialogue', title: 'Dialogue task', status: 'active', workspaceKind: 'dialogue' } as Session];
     render(<><ProjectsSection {...p} /><input aria-label="Outside search" /></>);
     const outside = screen.getByRole('textbox', { name: 'Outside search' });
@@ -242,7 +242,6 @@ describe('Sidebar group context menus', () => {
   // participate in remote guards and stay within their owning device section.
   it.each(['active', 'archived'] as const)('offers scoped search and bulk %s actions for local dialogues', async (status) => {
     const p = props(false);
-    p.bots = [];
     p.filter.status = status;
     p.dialogues = ['first', 'folded'].map((id) => ({
       id, title: id, status, workspaceKind: 'dialogue', pinnedAt: null,
@@ -270,7 +269,6 @@ describe('Sidebar group context menus', () => {
 
   it('disables bulk actions when the only remote member is pinned', async () => {
     const p = props(false);
-    p.bots = [];
     p.dialogues = [{ id: 'local', title: 'Local', status: 'active', workspaceKind: 'dialogue' } as Session];
     const remotePinned = { ...p.dialogues[0], id: 'pinned-remote', pinnedAt: '2026-10-21', deviceLinkDeviceId: 'remote' };
     p.dialogueActionSessions = [...p.dialogues, remotePinned];
@@ -287,7 +285,6 @@ describe('Sidebar group context menus', () => {
 
   it('keeps pinned members within their own device section for group actions', async () => {
     const p = props(true);
-    p.bots = [];
     p.dialogues = [{ id: 'local', title: 'Local', status: 'active', workspaceKind: 'dialogue' } as Session];
     const localPinned = { ...p.dialogues[0], id: 'pinned-local', pinnedAt: '2026-10-21' };
     const remotePinned = { ...localPinned, id: 'pinned-remote', deviceLinkDeviceId: 'remote' };
@@ -300,8 +297,7 @@ describe('Sidebar group context menus', () => {
 
   it.each([false, true])('disables bulk actions when a dialogue group contains remote tasks, mixed %s', async (mixed) => {
     const p = props(false);
-    p.dialogues = [{ ...p.bots![0].sessions[0], id: 'remote-dialogue' }];
-    p.bots = [];
+    p.dialogues = [{ ...remoteSessions()[0], id: 'remote-dialogue' }];
     if (mixed) p.dialogues.push({ ...p.dialogues[0], id: 'local-dialogue', deviceLinkDeviceId: undefined });
     render(<ProjectsSection {...p} />);
     fireEvent.contextMenu(screen.getByText('ccAgent.sidebar.dialogues').closest('[role="button"]')!);
@@ -317,7 +313,7 @@ describe('Sidebar group context menus', () => {
 
   it.each([false, true])('contains dialogue right-clicks and preserves its controls, device grouping %s', async (groupDevice) => {
     const p = props(groupDevice);
-    p.dialogues = [{ ...p.bots![0].sessions[0], id: 'dialogue', title: 'Dialogue task' }];
+    p.dialogues = [{ ...remoteSessions()[0], id: 'dialogue', title: 'Dialogue task' }];
     const onSidebarContextMenu = vi.fn();
     render(<div onContextMenu={onSidebarContextMenu}><ProjectsSection {...p} /></div>);
     const header = screen.getByText('ccAgent.sidebar.dialogues').closest<HTMLElement>('[role="button"]')!;
@@ -345,9 +341,9 @@ describe('Sidebar group context menus', () => {
     expect(header.getAttribute('aria-expanded')).toBe('false');
   });
 
-  it('preserves shared Bot/Make headers, blank-area events and the project menu', async () => {
+  it('preserves the shared Make header, blank-area events and the project menu', async () => {
     const p = props(false);
-    p.dialogues = [{ ...p.bots![0].sessions[0], id: 'make', source: 'cindy-make' }];
+    p.dialogues = [{ ...remoteSessions()[0], id: 'make', source: 'cindy-make' }];
     p.projects = [{
       projectKey: 'local:/Project', workingDir: '/Project', displayName: 'Project',
       scope: 'local', sessions: [], segments: 1, latestActivityAt: '2026-09-03T00:00:00Z',
@@ -361,18 +357,16 @@ describe('Sidebar group context menus', () => {
       <ProjectsSection {...p} />
       <span>Sidebar blank area</span>
     </div>);
-    for (const title of ['Demo Bot', 'settings.cindyMake.title']) {
-      const header = screen.getByText(title).closest<HTMLElement>('[role="button"]')!;
-      const event = createEvent.contextMenu(header);
-      fireEvent(header, event);
-      expect(event.defaultPrevented).toBe(false);
-    }
+    const header = screen.getByText('settings.cindyMake.title').closest<HTMLElement>('[role="button"]')!;
+    const event = createEvent.contextMenu(header);
+    fireEvent(header, event);
+    expect(event.defaultPrevented).toBe(false);
     fireEvent.contextMenu(screen.getByText('Sidebar blank area'));
-    expect(onSidebarContextMenu).toHaveBeenCalledTimes(3);
+    expect(onSidebarContextMenu).toHaveBeenCalledTimes(2);
 
     fireEvent.contextMenu(screen.getByText('Project').closest('[data-project-header]')!);
     expect(await screen.findByRole('menu')).toBeTruthy();
-    expect(onSidebarContextMenu).toHaveBeenCalledTimes(3);
+    expect(onSidebarContextMenu).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -384,7 +378,6 @@ describe('Sidebar group context menus', () => {
 describe('Manual project sorting', () => {
   it('leaves the real project header draggable and persists a completed reorder', () => {
     const p = props(false);
-    p.bots = [];
     p.projects = ['First', 'Second'].map((name) => ({
       projectKey: 'local:/' + name, workingDir: '/' + name, displayName: name,
       scope: 'local', sessions: [], segments: 1, latestActivityAt: '2026-09-03T00:00:00Z',
@@ -418,30 +411,20 @@ describe('Manual project sorting', () => {
   });
 });
 
-describe.each([false, true])('Bot groups with device grouping %s', (groupDevice) => {
-  it.each(phases)('renders the collapsed Bot header lamp for remote %s', (phase) => {
+describe.each([false, true])('Dialogue groups with device grouping %s', (groupDevice) => {
+  it.each(phases)('renders the collapsed group header lamp for remote %s', (phase) => {
     activity(phase);
-    render(<ProjectsSection {...props(groupDevice)} />);
+    render(<ProjectsSection {...groupProps(groupDevice)} />);
     expect(Boolean(screen.queryByText('Remote device'))).toBe(groupDevice);
-    const header = screen.getByText('Demo Bot').closest('[role="button"]')!;
+    const header = groupHeader();
     expectLamp(header, null);
     fireEvent.click(header);
-    if (phase === 'running') {
-      expect(header.querySelector('.session-status-breathing')).not.toBeNull();
-      // 伙伴头像不吃 wrapper 的 currentColor,运行色必须以静态描边落在 wrapper 上,
-      // 减弱动效(动画被全局关掉)时仍可见(Codex review)。
-      const marker = header.querySelector('[data-running-marker]')!;
-      expect(marker.getAttribute('data-running-marker')).toBe('ring');
-      expect(marker.className).toContain('ring-[var(--status-bar-accent)]');
-    } else {
-      expect(header.querySelector('[data-running-marker]')).toBeNull();
-      expectLamp(header, phase);
-    }
+    expectLamp(header, phase);
   });
 
   it.each(phases)('reveals the remote %s row beyond the group limit without Show all', (phase) => {
     activity(phase);
-    render(<ProjectsSection {...props(groupDevice)} />);
+    render(<ProjectsSection {...groupProps(groupDevice)} />);
     expect(screen.getByTestId('row-first')).toBeTruthy();
     expect(screen.queryByTestId('row-idle')).toBeNull();
     expect(screen.queryByTestId('row-lit')).not.toBeNull();
@@ -449,9 +432,9 @@ describe.each([false, true])('Bot groups with device grouping %s', (groupDevice)
   });
 
   it('updates the rendered group on remote activity and shows its header lamp only while collapsed', () => {
-    render(<ProjectsSection {...props(groupDevice)} />);
+    render(<ProjectsSection {...groupProps(groupDevice)} />);
     expect(screen.queryByTestId('row-lit')).toBeNull();
-    const header = screen.getByText('Demo Bot').closest('[role="button"]')!;
+    const header = groupHeader();
     expect(header.querySelector('.session-status-breathing')).toBeNull();
     act(() => activity('running'));
     expect(screen.queryByTestId('row-lit')).not.toBeNull();
@@ -475,8 +458,8 @@ function StartingSidebar(p: ProjectsSectionProps) {
   const starting = useStartingSessionIds(p.runningSessionIds);
   return <ProjectsSection {...p} runningSessionIds={new Set([...p.runningSessionIds, ...starting])} />;
 }
-function botHeader(root: HTMLElement = document.body) {
-  return within(root).getByText('Demo Bot').closest<HTMLElement>('[role="button"]')!;
+function groupHeader(root: HTMLElement = document.body) {
+  return within(root).getByText('ccAgent.sidebar.dialogues').closest<HTMLElement>('[role="button"]')!;
 }
 function deviceHeader(name: string) { return screen.getByText(name).closest('button')!; }
 function expectLamp(header: Element, phase: typeof phases[number] | null) {
@@ -487,46 +470,46 @@ function expectLamp(header: Element, phase: typeof phases[number] | null) {
   }
 }
 
-describe.each([false, true])('Bot starting lifecycle, device grouping %s', (groupDevice) => {
+describe.each([false, true])('Dialogue group starting lifecycle, device grouping %s', (groupDevice) => {
   for (const first of ['running', 'needs-interaction'] as const) {
     it.each(['completed', 'error'] as const)(`${first} settles starting before %s without waiting for TTL`, (terminal) => {
       vi.useFakeTimers();
-      const p = props(groupDevice);
+      const p = groupProps(groupDevice);
       remoteProjectsStore.pinSessionOrigin('remote', 'lit');
       markSessionStarting('lit');
       render(<StartingSidebar {...p} />);
-      expectLamp(botHeader(), null);
-      fireEvent.click(botHeader());
-      expectLamp(botHeader(), 'running');
+      expectLamp(groupHeader(), null);
+      fireEvent.click(groupHeader());
+      expectLamp(groupHeader(), 'running');
       act(() => activity(first));
       expect.soft(getStartingSessionIds().has('lit')).toBe(false);
       act(() => activity(terminal));
-      expectLamp(botHeader(), terminal);
+      expectLamp(groupHeader(), terminal);
       if (groupDevice) expectLamp(deviceHeader('Remote device'), null);
-      fireEvent.click(botHeader());
-      expectLamp(botHeader(), null);
+      fireEvent.click(groupHeader());
+      expectLamp(groupHeader(), null);
       expect(screen.getByTestId('row-lit')).toBeTruthy();
       // No timer advancement: the terminal UI must be correct immediately.
     });
   }
 
-  it('settles when only the bots prop arrives after the remote activity', () => {
+  it('settles when only the dialogues prop arrives after the remote activity', () => {
     vi.useFakeTimers();
-    const p = props(groupDevice);
+    const p = groupProps(groupDevice);
     markSessionStarting('lit');
     activity('running');
-    const view = render(<StartingSidebar {...p} bots={[]} />);
+    const view = render(<StartingSidebar {...p} dialogues={[]} />);
     expect(getStartingSessionIds().has('lit')).toBe(true);
     view.rerender(<StartingSidebar {...p} />);
     expect(getStartingSessionIds().has('lit')).toBe(false);
-    fireEvent.click(botHeader());
+    fireEvent.click(groupHeader());
     act(() => activity('completed'));
-    expectLamp(botHeader(), 'completed');
+    expectLamp(groupHeader(), 'completed');
   });
 
   it('keeps the existing no-in-flight terminal fallback and local running settlement', () => {
     vi.useFakeTimers();
-    const p = props(groupDevice);
+    const p = groupProps(groupDevice);
     markSessionStarting('lit');
     activity('completed');
     const view = render(<StartingSidebar {...p} />);
@@ -538,25 +521,23 @@ describe.each([false, true])('Bot starting lifecycle, device grouping %s', (grou
 
 function multiDeviceProps(): ProjectsSectionProps {
   const p = props(true);
-  const bot = p.bots![0];
-  p.bots = [{ ...bot, sessions: [
-    { ...bot.sessions[0], id: 'a-first', deviceLinkDeviceId: 'a' },
-    { ...bot.sessions[1], id: 'a-idle', deviceLinkDeviceId: 'a' },
-    { ...bot.sessions[0], id: 'b-first', deviceLinkDeviceId: 'b' },
-    { ...bot.sessions[1], id: 'b-idle', deviceLinkDeviceId: 'b' },
-    { ...bot.sessions[2], id: 'lit', deviceLinkDeviceId: 'b' },
-  ] }];
+  const sessions = remoteSessions();
+  p.dialogues = [
+    { ...sessions[0], id: 'a-first', deviceLinkDeviceId: 'a' },
+    { ...sessions[1], id: 'a-idle', deviceLinkDeviceId: 'a' },
+    { ...sessions[0], id: 'b-first', deviceLinkDeviceId: 'b' },
+    { ...sessions[1], id: 'b-idle', deviceLinkDeviceId: 'b' },
+    { ...sessions[2], id: 'lit', deviceLinkDeviceId: 'b' },
+  ];
   p.remoteDeviceIndex = new Map([['a', { name: 'Device A', online: true }], ['b', { name: 'Device B', online: true }]]);
-  p.onOpenBot = vi.fn();
   return p;
 }
 
-describe('Bot groups across devices', () => {
+describe('Dialogue groups across devices', () => {
   it('keeps awaiting visible in a collapsed project while its device is expanded', () => {
     const p = props(true);
-    const session = p.bots![0].sessions[2];
+    const session = remoteSessions()[2];
     const projectKey = 'device-link:remote:/demo';
-    p.bots = [];
     p.projects = [{
       projectKey, displayName: 'Demo project', workingDir: '/demo', scope: 'local',
       sessions: [session], remoteHostId: null, deviceLinkDeviceId: 'remote',
@@ -588,21 +569,19 @@ describe('Bot groups across devices', () => {
     const a = deviceHeader('Device A').parentElement!;
     const b = deviceHeader('Device B').parentElement!;
     expectLamp(deviceHeader('Device B'), null);
-    expectLamp(botHeader(a), null);
-    expectLamp(botHeader(b), null);
-    fireEvent.click(botHeader(b));
-    expectLamp(botHeader(b), phase);
-    fireEvent.click(botHeader(b));
-    expectLamp(botHeader(b), null);
+    expectLamp(groupHeader(a), null);
+    expectLamp(groupHeader(b), null);
+    fireEvent.click(groupHeader(b));
+    expectLamp(groupHeader(b), phase);
+    fireEvent.click(groupHeader(b));
+    expectLamp(groupHeader(b), null);
     expect(within(a).queryByTestId('row-lit')).toBeNull();
     expect(within(b).getByTestId('row-lit')).toBeTruthy();
-    expect(screen.getAllByText('Demo Bot')).toHaveLength(2);
+    expect(screen.getAllByText('ccAgent.sidebar.dialogues')).toHaveLength(2);
     expect(within(a).getAllByTestId(/^row-/)).toHaveLength(1);
     expect(within(b).getAllByTestId(/^row-/)).toHaveLength(2);
     fireEvent.click(within(b).getByTestId('row-lit'));
     expect(p.onSessionClick).toHaveBeenCalledWith('lit');
-    fireEvent.click(within(b).getByRole('button', { name: 'bots.sidebar.newTaskWith' }));
-    expect(p.onOpenBot).toHaveBeenCalledWith('demo');
     fireEvent.click(deviceHeader('Device B'));
     expect(deviceHeader('Device B').getAttribute('aria-expanded')).toBe('false');
     expectLamp(deviceHeader('Device B'), phase);
@@ -611,7 +590,7 @@ describe('Bot groups across devices', () => {
     expectLamp(deviceHeader('Device B'), null);
   });
 
-  it('keeps show-all state per device and stable across task reorder and Bot rename', () => {
+  it('keeps show-all state per device and stable across task reorder', () => {
     const p = multiDeviceProps();
     const view = render(<ProjectsSection {...p} />);
     const a = deviceHeader('Device A').parentElement!;
@@ -619,35 +598,35 @@ describe('Bot groups across devices', () => {
     fireEvent.click(within(b).getByText('ccAgent.sidebar.showAllSessions'));
     expect(within(b).getAllByTestId(/^row-/)).toHaveLength(3);
     expect(within(a).getAllByTestId(/^row-/)).toHaveLength(1);
-    const bHeader = botHeader(b);
-    view.rerender(<ProjectsSection {...p} bots={[{ ...p.bots![0], displayName: 'Renamed Bot', sessions: [...p.bots![0].sessions].reverse() }]} />);
-    expect(within(b).getByText('Renamed Bot').closest('[role="button"]')).toBe(bHeader);
+    const bHeader = groupHeader(b);
+    view.rerender(<ProjectsSection {...p} dialogues={[...p.dialogues].reverse()} />);
+    expect(groupHeader(b)).toBe(bHeader);
     expect(within(b).getAllByTestId(/^row-/)).toHaveLength(3);
     expect(within(a).getAllByTestId(/^row-/)).toHaveLength(1);
   });
 
-  it('folds Bot groups independently per device and includes them in fold-all', () => {
+  it('folds dialogue groups independently per device and includes them in fold-all', () => {
     vi.useFakeTimers();
     render(<ProjectsSection {...multiDeviceProps()} />);
     const a = deviceHeader('Device A').parentElement!;
     const b = deviceHeader('Device B').parentElement!;
-    fireEvent.click(botHeader(a));
-    expect(botHeader(a).getAttribute('aria-expanded')).toBe('false');
-    expect(botHeader(b).getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(groupHeader(a));
+    expect(groupHeader(a).getAttribute('aria-expanded')).toBe('false');
+    expect(groupHeader(b).getAttribute('aria-expanded')).toBe('true');
     fireEvent.click(screen.getByText('ccAgent.sidebar.foldAll.collapseProjects'));
-    expect(botHeader(b).getAttribute('aria-expanded')).toBe('false');
+    expect(groupHeader(b).getAttribute('aria-expanded')).toBe('false');
     fireEvent.click(screen.getByText('ccAgent.sidebar.foldAll.collapseDevices'));
     expect(deviceHeader('Device A').getAttribute('aria-expanded')).toBe('false');
     fireEvent.click(screen.getByText('ccAgent.sidebar.foldAll.expandAll'));
-    expect(botHeader(a).getAttribute('aria-expanded')).toBe('true');
-    expect(botHeader(b).getAttribute('aria-expanded')).toBe('true');
+    expect(groupHeader(a).getAttribute('aria-expanded')).toBe('true');
+    expect(groupHeader(b).getAttribute('aria-expanded')).toBe('true');
   });
 
-  it('keeps one Bot group with every task when device grouping is off', () => {
+  it('keeps one dialogue group with every task when device grouping is off', () => {
     const p = multiDeviceProps();
     p.filter.groupDevice = false;
     render(<ProjectsSection {...p} />);
-    expect(screen.getAllByText('Demo Bot')).toHaveLength(1);
+    expect(screen.getAllByText('ccAgent.sidebar.dialogues')).toHaveLength(1);
     expect(screen.queryByText('Device A')).toBeNull();
     fireEvent.click(screen.getByText('ccAgent.sidebar.showAllSessions'));
     expect(screen.getAllByTestId(/^row-/)).toHaveLength(5);

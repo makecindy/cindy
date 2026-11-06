@@ -54,7 +54,7 @@ it('creates and reads back a persistent routine through the essential companion 
   expect(snapshot!.routines[0]).toMatchObject({ silentWhenIdle: false, preRunHook: args.preRunHook,
     modelOverride: args.modelOverride, sessionMode: 'fresh', delivery: args.delivery });
   expect(snapshot!.routines[0].triggers).toEqual(args.triggers);
-  expect(resolveBotId).toHaveBeenCalledWith('canonical-session');
+  expect(resolveBotId).toHaveBeenCalledWith('canonical-session', undefined);
   now += 60000;
   await engine.tick();
   await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1));

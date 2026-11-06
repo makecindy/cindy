@@ -174,6 +174,43 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     expect(lane.vendorOptions?.[BOT_IM_CHANNELS_VENDOR_KEY]).toBeUndefined();
   });
 
+  // 伙伴 V2:在自己 workspace 里干活时就是普通项目任务——不用伙伴记忆、不收窄工具集与技能,只叠加身份;
+  // 本机关联项目只读挂载。别的目录(群分工)和未开启时保持原伙伴。依据:主人 2026-11-06。unit,mock DB。
+  it('runs a V2 teammate in its workspace as an ordinary project task', async () => {
+    const deps = {
+      readProfileFolder: vi.fn(async () => ({ homeDir: '/bots/bot', systemPromptOverride: '' })),
+      readMemoryIndex: vi.fn(async () => 'BOT MEMORY'),
+      listToolsets: vi.fn(async () => [
+        { id: 'browser', name: 'Browser', available: true },
+        { id: 'docs', name: 'Docs', available: true },
+      ]),
+      listLinkedProjectDirs: vi.fn(async () => ['/code/app']),
+    };
+    const narrow = { toolCapabilityVersion: 1, memory: true, mcpMode: 'allowlist', mcpServers: [], toolsetMode: 'allowlist', toolsets: [] };
+    seed('canonical', null, { ...narrow, projectMode: true });
+    const main = { id: 'main', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+    const snapshot = await hydrateBotProfileRuntime(main, deps, { persistSnapshot: false });
+    expect(main.botRuntimeProfile?.projectContext).toBe(true);
+    expect(main.makerMemoryScopeKey).toBeUndefined();
+    expect(deps.readMemoryIndex).not.toHaveBeenCalled();
+    expect(snapshot?.disabledToolsets).toEqual([]);
+    expect(main.extraDirs).toEqual(['/code/app']);
+    expect(main.botProfileContextPrompt).toContain('/bots/bot/workspace');
+
+    seed('canonical', null, { ...narrow, projectMode: true });
+    const elsewhere = { id: 'plan', agentKind: 'pi', workingDir: '/code/app', model: 'm' } as MakerSessionCreateOpts;
+    const planSnapshot = await hydrateBotProfileRuntime(elsewhere, deps, { persistSnapshot: false });
+    expect(elsewhere.botRuntimeProfile?.projectContext).toBeUndefined();
+    expect(planSnapshot?.disabledToolsets).toEqual(['browser', 'docs']);
+
+    seed('canonical', null, narrow);
+    const classic = { id: 'main', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+    await hydrateBotProfileRuntime(classic, deps, { persistSnapshot: false });
+    expect(classic.botRuntimeProfile?.projectContext).toBeUndefined();
+    expect(classic.makerMemoryScopeKey).toBe('bot:bot');
+    expect(classic.extraDirs).toBeUndefined();
+  });
+
   it('still refuses read-only history links', async () => {
     seed('history', null);
     const opts = { id: 'old', agentKind: 'claude-code', workingDir: '/x', model: 'm' } as MakerSessionCreateOpts;

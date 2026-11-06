@@ -10163,9 +10163,6 @@
     },
     "creationName": "Name",
     "settingsBack": "Back to Settings",
-    "sidebar": {
-      "newTaskWith": "Start a task with {{name}}"
-    },
     "title": "Teammates",
     "add": "Add teammate",
     "createWizard": {
@@ -10176,7 +10173,11 @@
       "description": "The teammate maintains its own memory and reusable ways of working. Open its folder only when something needs correcting.",
       "contents": "Contains SOUL.md, USER.md, system_prompt.md, skills/, and memories/. Models, permissions, and connections remain managed by Cindy.",
       "open": "Open folder",
-      "openFailed": "The teammate folder could not be opened."
+      "openFailed": "The teammate folder could not be opened.",
+      "projectMode": {
+        "title": "Work as a project (experimental)",
+        "description": "The teammate's workspace becomes a project in your sidebar. Its AGENTS.md holds the teammate's own working rules, which it can edit; every change is kept as a version you can undo."
+      }
     },
     "profile": {
       "title": "Profile",

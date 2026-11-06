@@ -58,7 +58,7 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
       'utf8',
     );
     expect(entriesHook).toContain('buildMainListEntries({');
-    expect(entriesHook).toContain('projects, dialogues, bots, unclassified');
+    expect(entriesHook).toContain('projects, dialogues, unclassified');
   });
 
   it('drops the removed date-grouped section entirely', () => {

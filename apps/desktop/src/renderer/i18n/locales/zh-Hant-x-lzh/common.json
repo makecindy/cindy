@@ -10118,9 +10118,6 @@
     },
     "creationName": "名",
     "settingsBack": "歸規制",
-    "sidebar": {
-      "newTaskWith": "與{{name}}新開差事"
-    },
     "title": "同僚",
     "add": "增同僚",
     "createWizard": {
@@ -10131,7 +10128,11 @@
       "description": "同僚自守其記憶與所習之法。唯須匡正時，方直啟其卷匣。",
       "contents": "內有 SOUL.md、USER.md、system_prompt.md，及 Skill 與記憶之卷匣。模型、權柄與連線仍由 Cindy 掌之。",
       "open": "啟卷匣",
-      "openFailed": "不能啟同僚之卷匣。"
+      "openFailed": "不能啟同僚之卷匣。",
+      "projectMode": {
+        "title": "以專案行事（試行）",
+        "description": "同僚之工坊化為側欄一專案。其中 AGENTS.md 乃同僚自守之規，可自修之；每一改皆存其版，可復。"
+      }
     },
     "profile": {
       "title": "行狀",

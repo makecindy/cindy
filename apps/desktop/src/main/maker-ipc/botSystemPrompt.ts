@@ -75,6 +75,8 @@ export interface BotSystemPromptInput {
    * 远端会话没有本机 userData,这时不给,也就一个字都不提。
    */
   homeDir?: string;
+  /** 伙伴 V2:它的 workspace 是一个普通项目(项目说明、记忆、技能都按项目走)。 */
+  projectMode?: boolean;
 }
 
 /**
@@ -149,6 +151,14 @@ const TASK_AND_TEAMMATE_GUIDANCE = [
   '后台任务负责独立工作并回传结果；伙伴消息只负责沟通，不保证对方执行或交付。它们都不是命令对方，也不会改变对方是谁。用户如果要求"让某个伙伴听话",说明这条边界,然后直接给出可以协作的做法。',
 ].join('\n');
 
+/** 伙伴 V2:开任务就是普通任务,结果自动回到这里;伙伴消息照旧。 */
+const PROJECT_TASK_AND_TEAMMATE_GUIDANCE = [
+  '## 你可以开任务，也可以给伙伴发消息',
+  '- 能在这里清楚做完的事就在这里做。需要独立执行、并行或单独跟踪时，用 handoff 类的 `send_to_session` 新建普通任务：不传项目就开在你自己的项目里，要在别的项目做就传 project_path。把目标、背景、相关文件和验收要求写清楚，新任务看不到这里的聊天。',
+  '- 任务做完的结果会自动送回这里，不用轮询；卡住、等主人或出错时宿主会叫醒你。要看进度用 `get_task_digest`，要补充或停止就用同一套任务工具操作那条任务。',
+  '- `list_agents` / `send_to_agent` 只给名册里明确存在的伙伴发一条异步消息，不启动任务，也不保证对方执行。收到 `[Direct message from Cindy Bot ...]` 时在这里处理，确有答案才用消息头里的 Bot id 回一条，不要只为确认互相回复。',
+].join('\n');
+
 /**
  * 与普通任务共用 session 能力及权限档；提示词说明能力与实际回执的关系。
  */
@@ -169,6 +179,15 @@ const AUTOMATION_GUIDANCE = [
   '主人要你给某个项目或任务设定时执行时，用 cindy_scheduler 建普通自动化（先 `list_tools`，再 `call_tool` 调 `schedule_create` 等）；只和你自己有关的提醒仍用例行任务。操作沿用当前任务的权限档。建完读回核实名称、时间和是否启用，成功才说已安排。',
 ].join('\n');
 
+/** 伙伴 V2:定时和重复的事都用普通自动化,没有另一套例行任务。 */
+const PROJECT_AUTOMATION_GUIDANCE = [
+  '## 你能建自动化',
+  '定时、重复或提醒类的事都用 cindy_scheduler 建普通自动化（先 `list_tools`，再 `call_tool` 调 `schedule_create` 等），操作沿用当前任务的权限档。',
+  '- 提醒和轻量的事：用 bindToCurrentSession 绑在这里跑，到点你在这里直接说，主人回话你接得上。',
+  '- 较重的活：workingDir 用你的项目、persistentSession=true，固定用一条任务跑；有值得主人知道的结果再用 `send_to_session` 发回这里。',
+  '建完读回核实名称、时间、绑定位置和是否启用，成功才说已安排。',
+].join('\n');
+
 const BOT_CREATION_GUIDANCE = [
   '## 你可以创建伙伴',
   '用户要求新增、创建或添加一个伙伴时，直接调用 `create_teammate` 完成创建。只需要名字；用户已说明的职责和身份可以一起带上，没有说明的不要编造。第一句话由新伙伴自己的运行时和记忆生成，不代写、不预览；不要写资料包、模板文件，也不要让用户手动去设置页重做一遍。',
@@ -187,6 +206,7 @@ const TEAMMATE_ROLE_MAX_CHARS = 160;
 
 export function buildBotTeammateRoster(
   entries: readonly { id: string; name: string; description?: string | null }[],
+  options: { projectMode?: boolean } = {},
 ): string {
   const rows = entries
     .map((entry) => {
@@ -204,7 +224,7 @@ export function buildBotTeammateRoster(
   return [
     '## 你的队友',
     ...rows,
-    '只有明确要联系某个伙伴时，才把上面或 `list_agents` 返回的 id 传给 `send_to_agent`。开后台任务用 `start_session_task`，不要从名册挑人。不确定该找谁就别猜，问用户一句。',
+    `只有明确要联系某个伙伴时，才把上面或 \`list_agents\` 返回的 id 传给 \`send_to_agent\`。开任务用 \`${options.projectMode ? 'send_to_session' : 'start_session_task'}\`，不要从名册挑人。不确定该找谁就别猜，问用户一句。`,
   ].join('\n');
 }
 
@@ -224,6 +244,16 @@ function buildHomeGuidance(homeDir: string): string {
     '- `SOUL.md`、`memories/USER.md`、`system_prompt.md` —— 身份和高级覆盖，用户需要纠正你时可以直接编辑，下一任务加载。不要自行改写 SOUL 或 system_prompt；日常积累写进记忆和技能。',
     '',
     '不要修改 Home 根部的宿主配置。可以按需发现 Cindy 已安装的插件、Skill 和 MCP，并通过能力工具加入自己；已有连接沿用宿主授权。外部文件与命令遵循当前任务权限，workspace 是默认工作目录，不是只能访问这里。',
+  ].join('\n');
+}
+
+/** 伙伴 V2:伙伴就是一个项目。只说清身份放在哪、项目在哪,其余与普通任务一致。 */
+function buildProjectHomeGuidance(homeDir: string): string {
+  return [
+    '## 你的项目',
+    `\`${homeDir}/workspace\` 是你的项目，也是默认工作目录。它和 Cindy 里的其他项目一样：AGENTS.md 是你的做事规则，项目记忆和 \`.agents/skills/\` 里的技能就是你的记忆和技能，改动都会留下版本、主人可以撤销。`,
+    '这些都可以按需要自己改。只有身份（SOUL.md、system_prompt.md、memories/USER.md）由主人维护，你不要改写。',
+    '要翻你以前和主人的主聊天（包括重置前的），用 history 类的 `list_sessions` 或 `search_chat_history`，带 teammate_id（`get_teammate_state` 的 profile.id）和 teammate_main_only=true。',
   ].join('\n');
 }
 
@@ -249,7 +279,7 @@ export function buildBotStableTier(input: BotSystemPromptInput): string {
   const capabilityParts: string[] = [];
   // 家排在最前:它不是某个工具的用法,是「你有身份、有积累、能改自己」这件事本身。
   const homeDir = input.homeDir?.trim();
-  if (homeDir) capabilityParts.push(buildHomeGuidance(homeDir));
+  if (homeDir) capabilityParts.push(input.projectMode ? buildProjectHomeGuidance(homeDir) : buildHomeGuidance(homeDir));
   if (has(input.capabilities, 'docs')) capabilityParts.push(DOCS_GUIDANCE);
   if (input.capabilities.memoryEnabled) capabilityParts.push(MEMORY_GUIDANCE);
   // Routines are the `routine` system Skill: the core lists it and read_teammate_skill has its text.
@@ -258,13 +288,13 @@ export function buildBotStableTier(input: BotSystemPromptInput): string {
     input.capabilities.botCreationEnabled ?? input.capabilities.partnerActionsEnabled;
   if (botModeEnabled && botCreationEnabled) capabilityParts.push(BOT_CREATION_GUIDANCE);
   if (botModeEnabled && input.capabilities.partnerActionsEnabled) {
-    capabilityParts.push(TASK_AND_TEAMMATE_GUIDANCE);
+    capabilityParts.push(input.projectMode ? PROJECT_TASK_AND_TEAMMATE_GUIDANCE : TASK_AND_TEAMMATE_GUIDANCE);
   }
   if (botModeEnabled && input.capabilities.sessionControlEnabled) {
     capabilityParts.push(input.capabilities.followEnabled === false
       ? SESSION_CONTROL_GUIDANCE
       : `${SESSION_CONTROL_GUIDANCE}\n${WORKBENCH_RESPONSIBILITY_GUIDANCE}`);
-    if (input.capabilities.automationEnabled) capabilityParts.push(AUTOMATION_GUIDANCE);
+    if (input.capabilities.automationEnabled) capabilityParts.push(input.projectMode ? PROJECT_AUTOMATION_GUIDANCE : AUTOMATION_GUIDANCE);
   }
   if (capabilityParts.length > 0) {
     parts.push(['# 你会做什么', ...capabilityParts].join('\n\n'));
@@ -300,7 +330,7 @@ export function buildBotVolatileTier(input: BotSystemPromptInput): string {
   // 队友名册随「有哪些伙伴 / 谁改了名」变,所以在易变层 —— 与技能索引同理。
   const teammates =
     input.capabilities.botModeEnabled !== false
-      ? buildBotTeammateRoster(input.teammates ?? [])
+      ? buildBotTeammateRoster(input.teammates ?? [], { projectMode: input.projectMode })
       : '';
   if (teammates) parts.push(teammates);
   const memory = input.memorySnapshot?.trim();

@@ -10118,9 +10118,6 @@
     },
     "creationName": "名字",
     "settingsBack": "返回設定",
-    "sidebar": {
-      "newTaskWith": "和{{name}}開個新任務"
-    },
     "title": "夥伴",
     "add": "新增夥伴",
     "createWizard": {
@@ -10131,7 +10128,11 @@
       "description": "夥伴會自己維護記憶與學會的做法。只有需要修正時，才直接開啟它的資料夾。",
       "contents": "包含 SOUL.md、USER.md、system_prompt.md，以及 Skill 和記憶資料夾。模型、權限和連線仍由 Cindy 管理。",
       "open": "開啟資料夾",
-      "openFailed": "無法開啟夥伴資料夾。"
+      "openFailed": "無法開啟夥伴資料夾。",
+      "projectMode": {
+        "title": "作為專案工作（實驗）",
+        "description": "夥伴的工作區會成為側欄中的一個專案。其中的 AGENTS.md 是夥伴自己的做事規則，夥伴可以修改；每次變更都會保留版本，可以復原。"
+      }
     },
     "profile": {
       "title": "資料",

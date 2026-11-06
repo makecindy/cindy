@@ -7,6 +7,8 @@ import { errorPayload, okPayload } from './_payload.js';
 export interface CreateTeammateCallbacks {
   create(params: {
     callerSessionId: string;
+    /** This turn's runtime instance; lets the host check who started the turn on IM lanes. */
+    callerSessionInstanceId?: string;
     name: string;
     description: string;
     identitySource: string;
@@ -41,8 +43,10 @@ export function registerCreateTeammateTool(
       if (!callerSessionId) {
         return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定 Cindy 伙伴任务。');
       }
+      const callerSessionInstanceId = deps.getSessionContext().sessionInstanceId;
       const result = await deps.callbacks.create({
         callerSessionId,
+        ...(callerSessionInstanceId ? { callerSessionInstanceId } : {}),
         name: name.trim(),
         description: description?.trim() ?? '',
         identitySource: identity_source?.trim() ?? '',

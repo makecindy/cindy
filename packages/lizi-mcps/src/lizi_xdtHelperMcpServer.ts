@@ -825,6 +825,8 @@ export interface XdtHelperMcpDeps {
    * denied at call time and left out of new tool listings; the core prompt stops naming them.
    */
   resolveSystemSkillsOff?: (input: { sessionId: string }) => Promise<readonly string[]>;
+  /** The calling teammate runs as a project (V2): teammate-only delegation tools are left out. */
+  resolveTeammateProjectMode?: (input: { sessionId: string }) => Promise<boolean>;
   runtimeCapabilities?: (
     context: import('./types.js').LiziMcpSessionContext,
     query: import('./xdt-helper/get_capabilities.js').RuntimeCapabilityQuery,
@@ -971,7 +973,10 @@ export function createXdtHelperMcpServer(
       const off = deps.resolveSystemSkillsOff
         ? await deps.resolveSystemSkillsOff({ sessionId }).catch(() => [] as readonly string[])
         : [];
-      return { categories: new Set([...categories, 'bots']), deniedTools: teammateDeniedTools(off) };
+      const projectMode = deps.resolveTeammateProjectMode
+        ? await deps.resolveTeammateProjectMode({ sessionId }).catch(() => false)
+        : false;
+      return { categories: new Set([...categories, 'bots']), deniedTools: teammateDeniedTools(off, projectMode) };
     }
     if (surface === 'restricted') return none;
     return allow(remoteBotOnly ? new Set(['auth', 'cindy']) : defaultCategories);

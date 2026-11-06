@@ -7,6 +7,8 @@
  * The ids mirror `TEAMMATE_SYSTEM_SKILL_IDS` in `@cindy/mcps` (main asserts they match); renderer
  * code cannot import that package.
  */
+import { readBotProjectMode } from './botProjectMode.js';
+
 export const BOT_SYSTEM_SKILL_IDS = ['todo', 'routine', 'follow'] as const;
 
 /** vendorOptions key carrying the tools a teammate's turned-off system Skills deny (Pi bridge listing). */
@@ -22,6 +24,16 @@ export function isBotSystemSkillId(value: unknown): value is BotSystemSkillId {
 export function readBotSystemSkillsOff(raw: unknown): BotSystemSkillId[] {
   if (!Array.isArray(raw)) return [];
   return BOT_SYSTEM_SKILL_IDS.filter((id) => raw.includes(id));
+}
+
+/**
+ * The ids in effect for a profile. A project-mode teammate (V2) manages automations with the
+ * ordinary scheduler, so its own routine Skill is off; built-in routines keep running.
+ */
+export function effectiveBotSystemSkillsOff(config: Record<string, unknown>): BotSystemSkillId[] {
+  const off = readBotSystemSkillsOff(config.systemSkillsOff);
+  if (!readBotProjectMode(config) || off.includes('routine')) return off;
+  return BOT_SYSTEM_SKILL_IDS.filter((id) => id === 'routine' || off.includes(id));
 }
 
 export function isBotSystemSkillOn(capabilities: { systemSkillsOff?: unknown } | null | undefined, id: BotSystemSkillId): boolean {
