@@ -1529,9 +1529,29 @@ const REDACT_RULES: Array<[RegExp, string]> = [
   [/(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{22,}|glpat-[A-Za-z0-9_-]{20,}|xox[abps]-[A-Za-z0-9-]{10,})/g, "[REDACTED]"],
   // npm 的 registry 令牌是 `npm_` + 随机串;`.npmrc` 的 `_authToken=` 由上面的键名规则覆盖。
   [/(?<![A-Za-z0-9])npm_[A-Za-z0-9]{16,}/g, "[REDACTED]"],
-  // 云厂商固定前缀凭证:AWS AK/ASIA、Google AIza、Stripe 的 live 前缀。
+  // 厂商固定前缀凭证:AWS AK/ASIA、Google AIza、Stripe 的 live 前缀。
   [/(?<![A-Za-z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}/g, "[REDACTED]"],
   [/(?<![A-Za-z0-9])AIza[0-9A-Za-z_-]{35}/g, "[REDACTED]"],
+  // 厂商前缀表(按 gitleaks / secrets-patterns 的公开前缀补齐)。前缀是确定字符串,
+  // 与熵检测的区别就在这里:不靠「看着像随机串」判断,不会误伤 sha256 / base64 / 内容 ID,
+  // 也不会误伤本来就是公开值的东西(ssh 公钥 `ssh-ed25519 AAAA…`、Mapbox `pk.` 公钥)。
+  // 漏掉的都是具体厂商:靠一篇一篇 review 补一个前缀永远追不上,所以按表一次补齐。
+  [/(?<![A-Za-z0-9])gl(?:pat|rt|dt|soat|cbt|ptt|ft|imt|agent)-[A-Za-z0-9_-]{20,}/g, "[REDACTED]"],
+  [/(?<![A-Za-z0-9])hf_[A-Za-z0-9]{30,}/g, "[REDACTED]"],
+  [/(?<![A-Za-z0-9])dckr_pat_[A-Za-z0-9_-]{20,}/g, "[REDACTED]"],
+  [/(?<![A-Za-z0-9])pypi-AgEIcHlwa[A-Za-z0-9_-]{10,}/g, "[REDACTED]"],
+  [/(?<![A-Za-z0-9])(?:sbp|vercel|ddapi|ddapp|lin_api)_[A-Za-z0-9]{20,}/g, "[REDACTED]"],
+  [/(?<![A-Za-z0-9])(?:shpat|shpca|shppa|shpss)_[A-Za-z0-9]{20,}/g, "[REDACTED]"],
+  [/(?<![A-Za-z0-9])do[or]_v1_[A-Za-z0-9]{20,}/g, "[REDACTED]"],
+  [/(?<![A-Za-z0-9])SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{30,}/g, "[REDACTED]"],
+  [/(?<![A-Za-z0-9])atlasv1\.[A-Za-z0-9_-]{20,}/g, "[REDACTED]"],
+  // Mailgun 的 `key-<32 位十六进制>`:限定长度,不误伤 `key-value` 这类普通标识。
+  [/(?<![A-Za-z0-9])key-[0-9a-f]{32}(?![0-9a-f])/g, "[REDACTED]"],
+  [/(?<![A-Za-z0-9])NRAK-[A-Z0-9]{27}/g, "[REDACTED]"],
+  [/(?<![A-Za-z0-9])xapp-[0-9]+-[A-Z0-9]+-[0-9]+-[a-z0-9]+/g, "[REDACTED]"],
+  [/(?<![A-Za-z0-9])whsec_[A-Za-z0-9]{20,}/g, "[REDACTED]"],
+  // JWT:三段都带固定头部形状,宽松的 base64 不会命中。
+  [/(?<![A-Za-z0-9])eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, "[REDACTED]"],
   // 连接串里内嵌的密码:postgres://user:pass@host → 只打码密码段。
   // 起始边界同样是性能红线:没有它,/i 下连续 [a-z0-9+.-] 类字符段(含大写)会从每个
   // 起点贪吃再逐位回溯,128K 要 17 秒(实测);有它每个 scheme 起点只试一次。

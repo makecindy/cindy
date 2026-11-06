@@ -27,6 +27,25 @@ const FAKE_NPM_TOKEN = ['npm', 'fixture0123456789abcdef0123456789'].join('_');
 const FAKE_GH_PAT = ['github', 'pat', 'fixture0123456789abcdef0123'].join('_');
 const FAKE_GH_TOKEN = ['ghp', 'fixtureabcdefghijklmnopqrst'].join('_');
 const FAKE_GITLAB_PAT = ['glpat', 'fixture0123456789abcdef'].join('-');
+const FAKE_VENDOR_TOKENS = [
+  ['glrt', 'abcdefghij0123456789'].join('-'),
+  ['gldt', 'abcdefghij0123456789'].join('-'),
+  ['glsoat', 'abcdefghij0123456789'].join('-'),
+  ['hf', 'abcdefghijklmnopqrstuvwxyz012345'].join('_'),
+  ['dckr', 'pat', 'abcdefghijklmnopqrstuvwxyz0'].join('_'),
+  ['pypi', 'AgEIcHlwaS5vcmcCJGFiY2RlZmdoaWprbG1ub3A'].join('-'),
+  ['sbp', 'abcdefghijklmnopqrstuvwxyz0123456789'].join('_'),
+  ['lin', 'api', 'abcdefghijklmnopqrstuvwxyz0123'].join('_'),
+  ['shpat', 'abcdefghijklmnopqrstuvwxyz0123'].join('_'),
+  ['doo', 'v1', 'abcdefghijklmnopqrstuvwxyz0123'].join('_'),
+  ['SG', 'abcdefghijklmnopqrstuv', 'abcdefghijklmnopqrstuvwxyz0123456789AB'].join('.'),
+  ['atlasv1', 'abcdefghijklmnopqrstuvwxyz0123456789'].join('.'),
+  ['key', '0123456789abcdef0123456789abcdef'].join('-'),
+  ['NRAK', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ01234'].join('-'),
+  ['xapp', '1'].join('-') + '-ABCDEFGHIJK-0123456789012-abcdef0123456789',
+  ['whsec', 'abcdefghijklmnopqrstuvwxyz012345'].join('_'),
+  ['eyJhbGciOiJIUzI1NiJ9', 'eyJzdWIiOiIxMjM0NSJ9', 'abcdefghijklmnopqrstuvwxyz'].join('.'),
+];
 const FAKE_BRACKET_PASSWORD = ['abc', '[defghijklmnop'].join('');
 
 const extensionModule = await import('../../../../extensions/live-compact/index.ts');
@@ -172,6 +191,8 @@ describe('live compact spine selection', () => {
       [`token: ${FAKE_GITLAB_PAT}`, FAKE_GITLAB_PAT],
       [`{"private_token":"${FAKE_GITLAB_PAT}"}`, FAKE_GITLAB_PAT],
     ];
+    // 厂商前缀表（gitleaks 公开前缀）:一张表覆盖完,不用每轮 review 补一个。
+    for (const token of FAKE_VENDOR_TOKENS) positives.push([`token: ${token}`, token]);
     for (const [text, secret] of positives) {
       const out = redactSecrets(text);
       expect(out, text).not.toContain(secret);
@@ -188,6 +209,10 @@ describe('live compact spine selection', () => {
       'NEXT_PUBLIC_API_URL=https://api.example.com/v1',
       'POST /api/v1/items 201 (authorization flow)',
       'npm_install_the_dev_dependencies_now',
+      // 公开值不打码:ssh 公钥、Mapbox 公钥、普通 key-value 标识。
+      'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabcdefghijklmnopqrstuvwxyz0123456789',
+      'pk.eyJ1IjoiYWJjIiwiYSI6ImNsYWJjZGVmZ2hpamtsbW5vcHFyc3QifQ',
+      'key-value-store-name',
     ];
     for (const text of negatives) {
       expect(redactSecrets(text), text).toBe(text);
