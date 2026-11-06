@@ -537,6 +537,8 @@ export interface BotGroupSummary {
   canInvite?: boolean;
   /** Server groups: an owner or admin may also stop everyone's work, not only their own. */
   canStopAll?: boolean;
+  /** Explicit host/client support for stop scope; older hosts ignore scope and must not offer all. */
+  supportsScopedStop?: boolean;
   /**
    * Server groups whose server gives each request one teammate (the lead when nobody is named)
    * and arranges turns itself; no speaking modes (bot-group-chat.md §4).

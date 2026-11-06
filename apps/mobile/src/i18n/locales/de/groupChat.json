@@ -1,6 +1,10 @@
 {
   "progress": {
-    "stop": "Stoppen"
+    "stop": "Stoppen",
+    "stopMine": "Meine stoppen",
+    "stopAll": "Alle stoppen",
+    "stopAllHint": "Schließt Anfragen anderer Personen ein",
+    "step": "Schritt {{step}}/{{total}}"
   },
   "work": {
     "queued": "In Warteschlange {{count}}",
@@ -85,7 +89,8 @@
     "planDone_one": "{{count}} Schritt ist erledigt",
     "planDone_other": "Alle {{count}} Schritte sind erledigt",
     "planDoneGeneric": "Arbeitsaufteilung abgeschlossen",
-    "olderOnComputer": "Frühere Nachrichten sind auf deinem Computer"
+    "olderOnComputer": "Frühere Nachrichten sind auf deinem Computer",
+    "endTalk": "Beenden"
   },
   "quote": {
     "label": "Zitat von {{name}}: {{summary}}",
@@ -331,7 +336,9 @@
     "groupDissolved": "Diese Gruppe wurde aufgelöst. Du kannst den verfügbaren Verlauf weiterhin lesen.",
     "lastOwner": "Übertrage die Inhaberschaft oder löse diese Gruppe auf, bevor du sie verlässt.",
     "allBotsMentionDisabled": "Der Gruppeninhaber hat @Alle Teammitglieder noch nicht aktiviert.",
-    "turnAlreadyStarted": "Dieser Teamkollege hat bereits begonnen und kann nicht übersprungen werden"
+    "turnAlreadyStarted": "Dieser Teamkollege hat bereits begonnen und kann nicht übersprungen werden",
+    "stopOwnershipUnknown": "Ein Teil der Arbeit konnte nicht gestoppt werden, da nicht überprüft werden konnte, wer sie angefordert hat.",
+    "nothingToStop": "Es gibt keine laufende Arbeit zum Stoppen."
   },
   "followUp": {
     "next": "Plan · Nächster Schritt",
@@ -630,5 +637,6 @@
       "uncertain": "Beitrittsergebnis nicht bestätigt"
     },
     "externalFormatError": "Öffne den vollständigen Link aus der ursprünglichen Nachricht erneut."
-  }
+  },
+  "waitingForOwner": "Wartet auf Bestätigung"
 }

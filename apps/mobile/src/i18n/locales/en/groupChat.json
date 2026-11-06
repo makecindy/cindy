@@ -1,6 +1,10 @@
 {
   "progress": {
-    "stop": "Stop"
+    "stop": "Stop",
+    "stopMine": "Stop Mine",
+    "stopAll": "Stop All",
+    "stopAllHint": "Includes other people’s requests",
+    "step": "Step {{step}}/{{total}}"
   },
   "title": "Group Chats",
   "memberSeparator": ", ",
@@ -79,7 +83,8 @@
     "planDone_one": "{{count}} step is done",
     "planDone_other": "All {{count}} steps are done",
     "planDoneGeneric": "Work split finished",
-    "olderOnComputer": "Earlier messages are on your computer"
+    "olderOnComputer": "Earlier messages are on your computer",
+    "endTalk": "End"
   },
   "quote": {
     "label": "Quoting {{name}}: {{summary}}",
@@ -331,7 +336,9 @@
     "groupDissolved": "This group has been dissolved. You can still read the available history.",
     "lastOwner": "Transfer ownership or dissolve this group before leaving.",
     "allBotsMentionDisabled": "The group owner has not enabled @all teammates.",
-    "turnAlreadyStarted": "This teammate has already started and cannot be skipped"
+    "turnAlreadyStarted": "This teammate has already started and cannot be skipped",
+    "stopOwnershipUnknown": "Could not stop some work because its requester could not be verified.",
+    "nothingToStop": "There is no active work to stop."
   },
   "followUp": {
     "next": "Plan · Next step",
@@ -630,5 +637,6 @@
       "uncertain": "Join result not confirmed"
     },
     "externalFormatError": "Reopen the complete link from the original message."
-  }
+  },
+  "waitingForOwner": "Waiting for confirmation"
 }

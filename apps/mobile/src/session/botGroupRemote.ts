@@ -283,6 +283,7 @@ function parseStep(value: unknown): BotGroupPlanStepView | null {
   const task = text(record?.task, 4_096);
   if (!record || position === null || !botId || !status || task === null) return null;
   return { position, botId, botName: text(record.botName, MAX_NAME) ?? '', task, status,
+    ...(id(record.resultMessageId) ? { resultMessageId: id(record.resultMessageId)! } : {}),
     ...(id(record.executionId) ? { executionId: id(record.executionId)! } : {}),
     ...(typeof record.executionStatus === 'string' ? { executionStatus: record.executionStatus } : {}) };
 }
@@ -355,6 +356,7 @@ function parseRound(value: unknown): BotGroupRoundView {
     status: record?.status === 'running' ? 'running' : 'idle',
     speakers,
     canContinue: record?.canContinue === true,
+    ...(record?.othersActive === true ? { othersActive: true } : {}),
   };
 }
 
@@ -402,6 +404,8 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
     name,
     serverBacked: record.serverBacked === true,
     singleSpeaker: record.singleSpeaker === true,
+    canStopAll: record.canStopAll === true,
+    supportsScopedStop: record.supportsScopedStop === true,
     supportsMentionAudiences: record.supportsMentionAudiences === true,
     allowMentionAllBots: record.allowMentionAllBots === true,
     supportsDivision: record.supportsDivision === true,

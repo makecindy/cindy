@@ -126,6 +126,23 @@ describe('bot group remote resources', () => {
 
   afterEach(() => h.sqlite?.close());
 
+  // Unit: real resource handler must not silently discard all scope (group chat §4.0).
+  // Previous coverage only checked visibility rejection; one server group is sufficient.
+  it('advertises scoped stop only for upgraded server groups and forwards explicit all', async () => {
+    expect(botGroupRemoteChatData(detail()).supportsScopedStop).toBe(false);
+    const group = detail({ serverBacked: true, singleSpeaker: true, canStopAll: true });
+    expect(botGroupRemoteChatData(group).supportsScopedStop).toBe(true);
+    service.getGroup.mockResolvedValue({ ok: true, group });
+    await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      actionId: 'stop', resourceRef: ref('g1'), input: { scope: 'all' } });
+    expect(service.stopRound).toHaveBeenCalledWith('g1', 'all');
+    service.stopRound.mockClear();
+    service.getGroup.mockResolvedValue({ ok: true, group: { ...group, canStopAll: false } });
+    await expect(remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      actionId: 'stop', resourceRef: ref('g1'), input: { scope: 'all' } })).rejects.toMatchObject({ code: 'INVALID_PARAMS', message: 'ROLE_REQUIRED' });
+    expect(service.stopRound).not.toHaveBeenCalled();
+  });
+
   it('omits archived groups from phone lists while keeping authorized history readable', async () => {
     const archived = detail({ serverBacked: true, archived: true });
     service.listGroups.mockResolvedValue({ ok: true, groups: [archived, summary({ id: 'active' })] });

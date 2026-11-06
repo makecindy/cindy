@@ -440,13 +440,13 @@ async function openTopicMenu(messageId: string) {
   expect(menu).not.toBeNull();
   await click(`botGroup.thread.more.${messageId}`);
 }
-async function render(data: BotGroupRemoteChatData | null = group(), kind: 'ready' | 'loading' | 'missing' | 'error' = 'ready', threadRootId?: string, deviceId = 'mac') {
+async function render(data: BotGroupRemoteChatData | null = group(), kind: 'ready' | 'loading' | 'missing' | 'error' = 'ready', threadRootId?: string, deviceId = 'mac', routeGroupId = 'g1') {
   h.chat = { pending: [],
     ...h.chat,
     state: kind === 'ready' ? { kind, group: data } : kind === 'error' ? { kind, message: 'x' } : { kind },
   };
   await act(async () => root.render(el(testThemeContext.Provider, { value: h.themeMode },
-    el(BotGroupChatScreen, { deviceId, deviceName: deviceId ? 'Mac' : '', groupId: 'g1', threadRootId }))));
+    el(BotGroupChatScreen, { deviceId, deviceName: deviceId ? 'Mac' : '', groupId: routeGroupId, threadRootId }))));
 }
 
 beforeEach(() => {
@@ -2592,6 +2592,9 @@ it('keeps one group stop for concurrent work and clears header and strip on the 
   h.chat.act.mockImplementation(() => new Promise<void>(resolve => { finish = resolve; }));
   await click('botGroup.work.stop');
   expect(byId('botGroup.work.stop')!.disabled).toBe(true);
+  expect(byId('botGroup.composer.stop')!.disabled).toBe(true);
+  await click('botGroup.composer.stop');
+  expect(h.chat.act).toHaveBeenCalledTimes(1);
   expect(h.chat.act).toHaveBeenCalledWith('stop');
   await act(async () => finish());
   expect(byId('botGroup.work')).not.toBeNull();
@@ -3217,4 +3220,82 @@ it('keeps message text mounted through initial viewport updates', async () => {
   await render({ ...data, messages: [...data.messages, message('next', 2, { content: 'New reply' })] });
   expect(node.textContent).toContain('New reply');
   expect(h.textRender.mock.calls.length).toBeGreaterThan(before);
+});
+
+// Unit regression: both stop surfaces share a scoped controller; a late failure
+// from the previous group must neither alert nor unlock a new group's request.
+it('isolates pending stop receipts when the group changes', async () => {
+  const running = { status: 'running' as const, canContinue: false, speakers: [{ botId: 'abu', sessionId: 's', activity: 'reply' as const }] };
+  let refuse!: (error: Error) => void;
+  await render(group({ round: running }));
+  h.chat.act.mockImplementationOnce(() => new Promise((_, reject) => { refuse = reject; }));
+  await click('botGroup.work.stop');
+  await render(group({ id: 'another', round: running }), 'ready', undefined, 'mac', 'another');
+  expect(byId('botGroup.work.stop')!.disabled).toBe(false);
+  await render(group({ round: running }));
+  let finish!: () => void;
+  h.chat.act.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+  await click('botGroup.work.stop');
+  await act(async () => refuse(new Error('old stop failed')));
+  expect(h.alert).not.toHaveBeenCalled();
+  expect(byId('botGroup.work.stop')!.disabled).toBe(true);
+  expect(byId('botGroup.composer.stop')!.disabled).toBe(true);
+  await act(async () => finish());
+  expect(byId('botGroup.work.stop')!.disabled).toBe(false);
+});
+
+it.each([false, true])('offers all stop only when this host explicitly supports it (%s)', async supportsScopedStop => {
+  await render(group({ supportsScopedStop, canStopAll: true,
+    round: { status: 'running', canContinue: false, othersActive: true, speakers: [{ botId: 'abu', sessionId: 's', activity: 'reply' }] } }));
+  if (!supportsScopedStop) {
+    expect(byId('botGroup.work.stopMenu.action.all')).toBeNull();
+    await click('botGroup.work.stop');
+    expect(h.chat.act).toHaveBeenCalledWith('stop');
+  } else {
+    await click('botGroup.work.stopMenu.action.all');
+    expect(h.chat.act).toHaveBeenCalledWith('stop', { scope: 'all' });
+  }
+});
+
+// Unit: talk and work share controls but have different user meaning (§7/8.2).
+it.each(['pending', 'failed'] as const)('keeps a paused discussion independent of its organizer: %s', async status => {
+  const data = group();
+  data.plans[0] = { ...data.plans[0]!, kind: 'talk', status: 'waiting', currentStep: 0, canManage: true, organizerBotId: 'organizer-not-in-queue', organizerName: 'Organizer outside discussion',
+    steps: data.plans[0]!.steps.map((step, index) => ({ ...step, status: index === 0 ? (status === 'failed' ? 'failed' : 'done') : 'pending' })) };
+  await render(data);
+  expect(byId('botGroup.message.plan')?.textContent).not.toContain('Organizer outside discussion');
+  expect(byId('botGroup.message.plan')?.textContent).not.toContain('groupChat.followUp.failedStep');
+  expect(byId('botGroup.organizerTag')).toBeNull();
+  expect(byId('botGroup.followUp.end')?.textContent).toBe('groupChat.timeline.endTalk');
+  await click(`botGroup.followUp.${status === 'failed' ? 'retry' : 'continue'}`);
+  expect(h.chat.act).toHaveBeenLastCalledWith(status === 'failed' ? 'plan-retry' : 'plan-continue', { planId: 'p1' });
+});
+
+// Unit: missing timing must not be replaced by when the screen opened; completed
+// step time belongs to its exact result message, even when another bot is running.
+it('shows the real step start and handoff time and keeps missing timing absent', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(40_000);
+  await i18n.changeLanguage('zh-CN');
+  const data = group();
+  data.plans[0] = { ...data.plans[0]!, status: 'running', currentStep: 1, updatedAt: 0,
+    steps: data.plans[0]!.steps.map((step, index) => ({ ...step, status: index === 0 ? 'done' : 'running', ...(index === 0 ? { resultMessageId: 'result' } : {}) })) };
+  data.messages.push(message('result', 20, { authorBotId: 'mimi', planId: 'p1', createdAt: 25_000 }));
+  data.round = { status: 'running', canContinue: false, speakers: [{ botId: 'abu', sessionId: null, activity: 'step', startedAt: 35_000 }] };
+  await render(data);
+  const card = byId('botGroup.plan')!;
+  expect(card.textContent).toContain('5 秒');
+  expect(card.textContent).toContain(new Date(25_000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }));
+  await act(async () => vi.advanceTimersByTime(1000));
+  expect(card.textContent).toContain('6 秒');
+  data.plans[0]!.steps[1]!.executionId = 'current-execution';
+  data.round.speakers.unshift({ botId: 'abu', sessionId: null, activity: 'step', executionId: 'old-execution', startedAt: 1_000 });
+  data.round.speakers[1].executionId = 'current-execution';
+  await render(data);
+  expect(card.textContent).toContain('6 秒');
+  expect(card.textContent).not.toContain('40 秒');
+  data.round.speakers[1].startedAt = undefined;
+  data.plans[0]!.updatedAt = 35_000;
+  await render(data);
+  expect(card.textContent).not.toContain('6 秒');
+  vi.useRealTimers();
 });

@@ -1,6 +1,10 @@
 {
   "progress": {
-    "stop": "중지"
+    "stop": "중지",
+    "stopMine": "내 요청 중지",
+    "stopAll": "모두 중지",
+    "stopAllHint": "다른 사람의 요청도 포함",
+    "step": "{{step}}/{{total}}단계"
   },
   "title": "그룹 채팅",
   "memberSeparator": ", ",
@@ -79,7 +83,8 @@
     "planDone_one": "{{count}}단계를 모두 마쳤습니다",
     "planDone_other": "{{count}}단계를 모두 마쳤습니다",
     "planDoneGeneric": "역할 분담을 마쳤습니다",
-    "olderOnComputer": "이전 메시지는 컴퓨터에서 확인하세요"
+    "olderOnComputer": "이전 메시지는 컴퓨터에서 확인하세요",
+    "endTalk": "끝내기"
   },
   "quote": {
     "label": "{{name}} 인용: {{summary}}",
@@ -331,7 +336,9 @@
     "groupDissolved": "이 그룹은 해산되었습니다. 열람 권한이 있는 기록은 계속 볼 수 있습니다.",
     "lastOwner": "나가기 전에 소유권을 이전하거나 그룹을 해산하세요.",
     "allBotsMentionDisabled": "그룹 소유자가 모든 동료 멘션을 켜지 않았습니다.",
-    "turnAlreadyStarted": "이 동료는 이미 실행을 시작하여 건너뛸 수 없습니다"
+    "turnAlreadyStarted": "이 동료는 이미 실행을 시작하여 건너뛸 수 없습니다",
+    "stopOwnershipUnknown": "요청자를 확인할 수 없어 일부 작업을 중지하지 못했습니다.",
+    "nothingToStop": "현재 중지할 수 있는 작업이 없습니다."
   },
   "followUp": {
     "next": "분담 · 다음 단계",
@@ -630,5 +637,6 @@
       "uncertain": "참여 결과가 확인되지 않음"
     },
     "externalFormatError": "원래 메시지에서 전체 링크를 다시 열어 주세요."
-  }
+  },
+  "waitingForOwner": "소유자 확인 대기 중"
 }

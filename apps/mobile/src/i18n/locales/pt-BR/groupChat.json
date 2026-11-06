@@ -1,6 +1,10 @@
 {
   "progress": {
-    "stop": "Parar"
+    "stop": "Parar",
+    "stopMine": "Parar minhas solicitações",
+    "stopAll": "Parar tudo",
+    "stopAllHint": "Inclui solicitações de outras pessoas",
+    "step": "Etapa {{step}}/{{total}}"
   },
   "work": {
     "queued": "Na fila {{count}}",
@@ -88,7 +92,8 @@
     "planDoneGeneric": "Divisão de trabalho concluída",
     "olderOnComputer": "As mensagens anteriores estão no seu computador",
     "newMessages_many": "{{count}} novas mensagens",
-    "planDone_many": "Todas as {{count}} etapas concluídas"
+    "planDone_many": "Todas as {{count}} etapas concluídas",
+    "endTalk": "Encerrar"
   },
   "quote": {
     "label": "Citando {{name}}: {{summary}}",
@@ -337,7 +342,9 @@
     "groupDissolved": "Este grupo foi dissolvido. Você ainda pode ler o histórico disponível.",
     "lastOwner": "Transfira a propriedade ou dissolva este grupo antes de sair.",
     "allBotsMentionDisabled": "O proprietário do grupo ainda não ativou @Todos os colegas.",
-    "turnAlreadyStarted": "Este colega já começou e não pode ser pulado"
+    "turnAlreadyStarted": "Este colega já começou e não pode ser pulado",
+    "stopOwnershipUnknown": "Não foi possível parar parte do trabalho porque não foi possível verificar quem o solicitou.",
+    "nothingToStop": "Não há trabalho em andamento para parar."
   },
   "followUp": {
     "next": "Plano · Próxima etapa",
@@ -639,5 +646,6 @@
     },
     "externalFormatError": "Abra novamente o link completo da mensagem original."
   },
-  "memberCount_many": "{{count}} membros"
+  "memberCount_many": "{{count}} membros",
+  "waitingForOwner": "Aguardando confirmação"
 }

@@ -20,6 +20,7 @@ import {
   BotGroupAvatar,
   type BotGroupIdentity,
 } from './BotGroupAvatars';
+import { formatLocalizedSeconds } from './sessionDurationFormat';
 import { BotGroupMenu, type BotGroupMenuSection } from './BotGroupMenu';
 
 /** Compact actions are 38pt tall; this makes their touch target 44pt. */
@@ -90,23 +91,35 @@ function stepStatusKey(plan: BotGroupPlanView, step: BotGroupPlanStepView) {
   return plan.kind === 'talk' && state === 'running' ? 'groupChat.plan.stepExecuting' : STEP_STATUS_KEYS[state];
 }
 
-function StepRowContent({ plan, step, index, identity, deviceId, online, muted }: {
+function StepRowContent({ plan, step, index, identity, deviceId, online, muted, runningSince, doneAt }: {
   plan: BotGroupPlanView; step: BotGroupPlanStepView; index: number; identity: BotGroupIdentity;
-  deviceId: string; online: boolean; muted: boolean;
+  deviceId: string; online: boolean; muted: boolean; runningSince: number | null; doneAt?: number;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const statusKey = started(plan) ? stepStatusKey(plan, step) : undefined;
+  const running = plan.status === 'running' && botGroupPlanStepState(plan, step) === 'running' && runningSince !== null && Number.isFinite(runningSince) && runningSince > 0;
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!running) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [running, runningSince]);
+  const timing = running ? formatLocalizedSeconds((now - runningSince!) / 1000)
+    : step.status === 'done' && doneAt !== undefined && Number.isFinite(doneAt) && doneAt > 0 ? new Date(doneAt).toLocaleTimeString(i18n.language, { hour: '2-digit', minute: '2-digit' }) : null;
   return <>
     <View style={styles.stepLead}><StepLead plan={plan} step={step} index={index} /></View>
     <View style={muted ? styles.muted : undefined}>
       <BotGroupAvatar deviceId={deviceId} identity={identity} size={BOT_GROUP_STEP_AVATAR_SIZE} online={online} />
     </View>
-    <Text numberOfLines={1} style={[styles.stepText, muted && styles.stepTextMuted]}>
-      <Text style={[styles.stepName, muted && styles.stepTextMuted]}>{identity.name}</Text>
-      {' '}{step.task}
-    </Text>
-    {statusKey ? <Text numberOfLines={1} style={styles.stepStatus}>{t(statusKey)}</Text> : null}
+    <View style={styles.stepBody}>
+      <Text style={[styles.stepText, muted && styles.stepTextMuted]}>
+        <Text style={[styles.stepName, muted && styles.stepTextMuted]}>{identity.name}</Text>
+        {' '}{step.task}
+      </Text>
+      {statusKey ? <Text style={styles.stepStatus}>{[t(statusKey), timing].filter(Boolean).join(' · ')}</Text> : null}
+    </View>
   </>;
 }
 
@@ -187,10 +200,12 @@ function BotGroupTalkCard({ plan, identityFor, deviceId, online, pending, onEdit
 }
 
 export function BotGroupPlanCard({
-  plan, fallback, members, identityFor, deviceId, online, actionable, reassignable, pending, onStart, onDismiss, onEditStep,
+  plan, fallback, members, identityFor, deviceId, online, actionable, reassignable, pending, runningSince = null, doneAt, onStart, onDismiss, onEditStep,
 }: {
   plan: BotGroupPlanView | undefined;
   fallback?: string;
+  runningSince?: number | null;
+  doneAt?: ReadonlyMap<number, number>;
   members: readonly BotGroupMemberView[];
   identityFor: BotGroupIdentityLookup;
   deviceId: string;
@@ -238,7 +253,7 @@ export function BotGroupPlanCard({
         const label = stepAccessibility(t, plan, step, index, identity.name);
         if (!editable) {
           return <View key={step.position} accessible accessibilityLabel={label} style={styles.stepRow} testID="botGroup.plan.step">
-            <StepRowContent plan={plan} step={step} index={index} identity={identity} deviceId={deviceId} online={online} muted={muted} />
+            <StepRowContent plan={plan} step={step} index={index} identity={identity} deviceId={deviceId} online={online} muted={muted} runningSince={runningSince} doneAt={doneAt?.get(step.position)} />
           </View>;
         }
         const sections: BotGroupMenuSection[] = [{
@@ -273,7 +288,7 @@ export function BotGroupPlanCard({
             accessibilityState={{ disabled: busy }} onPress={open}
             style={({ pressed }) => [styles.stepRow, pressed && mobileInteractionStyles.pressed, busy && styles.muted]}
             testID="botGroup.plan.step">
-            <StepRowContent plan={plan} step={step} index={index} identity={identity} deviceId={deviceId} online={online} muted={false} />
+            <StepRowContent plan={plan} step={step} index={index} identity={identity} deviceId={deviceId} online={online} muted={false} runningSince={runningSince} doneAt={doneAt?.get(step.position)} />
           </Pressable>}
         </BotGroupMenu>;
       })}
@@ -331,7 +346,8 @@ export function BotGroupPlanEndDivider({ stepCount }: { stepCount: number | null
   </BotGroupDivider>;
 }
 
-export function BotGroupPlanFollowUpRow({ followUp, identityFor, deviceId, online, pending, stepNumber, stepTotal, onContinue, onRetry, onEnd }: {
+export function BotGroupPlanFollowUpRow({ plan, followUp, identityFor, deviceId, online, pending, stepNumber, stepTotal, onContinue, onRetry, onEnd }: {
+  plan?: BotGroupPlanView;
   followUp: BotGroupPlanFollowUp;
   identityFor: BotGroupIdentityLookup;
   deviceId: string;
@@ -358,15 +374,15 @@ export function BotGroupPlanFollowUpRow({ followUp, identityFor, deviceId, onlin
   return <View style={styles.card} testID={`botGroup.followUpRow.${followUp.kind}`}>
     <View style={styles.eyebrow} accessible accessibilityLabel={label}>
       {failed ? <CircleAlert size={iconSize.sm} color={colors.statusError} /> : <ListChecks size={iconSize.sm} color={colors.textSecondary} />}
-      <Text style={styles.eyebrowText}>{failed ? t('groupChat.followUp.failedStep', { step: stepNumber }) : t('groupChat.followUp.next')}</Text>
+      <Text style={styles.eyebrowText}>{plan?.kind === 'talk' ? t(failed ? 'groupChat.timeline.stepFailed' : 'groupChat.timeline.nextStep', { name: identity.name }) : failed ? t('groupChat.followUp.failedStep', { step: stepNumber }) : t('groupChat.followUp.next')}</Text>
       <Text style={styles.eyebrowStatus}>{`${stepNumber} / ${stepTotal}`}</Text>
     </View>
     <View style={styles.who}>
       <View style={styles.whoAvatar}><BotGroupAvatar deviceId={deviceId} identity={identity} size={BOT_GROUP_INLINE_AVATAR_SIZE} online={online} /></View>
-      <Text numberOfLines={2} style={styles.whoText}><Text style={styles.whoName}>{identity.name}</Text>{` ${step.task}`}</Text>
+      <Text style={styles.whoText}><Text style={styles.whoName}>{identity.name}</Text>{` ${step.task}`}</Text>
     </View>
     <CompanionCardActions>
-      <CompanionCardButton label={t('groupChat.timeline.endPlan')} busy={pending === 'dismiss'} disabled={busy || !online}
+      <CompanionCardButton label={t(plan?.kind === 'talk' ? 'groupChat.timeline.endTalk' : 'groupChat.timeline.endPlan')} busy={pending === 'dismiss'} disabled={busy || !online}
         onPress={onEnd} testID="botGroup.followUp.end" />
       <CompanionCardButton primary label={t(failed ? 'groupChat.timeline.retryStep' : 'groupChat.timeline.continuePlan')}
         busy={pending === primary} disabled={busy || !online}
@@ -404,7 +420,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   eyebrowStatus: { flexShrink: 0, color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontVariant: ['tabular-nums'] },
   planTitle: { marginTop: 2, color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
   steps: { marginTop: spacing.xs },
-  stepRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 40 },
+  stepRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm, minHeight: 44, paddingVertical: spacing.sm },
   runningDot: { width: 8, height: 8, borderRadius: radius.pill, backgroundColor: colors.statusAccent },
   who: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm, marginTop: 2 },
   whoAvatar: { marginTop: 1 },
@@ -412,7 +428,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   whoName: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
   stepLead: { width: iconSize.md, alignItems: 'center', justifyContent: 'center' },
   stepNumber: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontVariant: ['tabular-nums'] },
-  stepText: { flex: 1, minWidth: 0, color: colors.textSecondary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
+  stepBody: { flex: 1, minWidth: 0, gap: spacing.xs },
+  stepText: { color: colors.textSecondary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
   stepName: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.medium },
   stepTextMuted: { color: colors.textTertiary, fontWeight: fontWeight.regular },
   stepStatus: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, flexShrink: 0 },

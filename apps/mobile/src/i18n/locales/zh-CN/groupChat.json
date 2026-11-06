@@ -1,6 +1,10 @@
 {
   "progress": {
-    "stop": "停止"
+    "stop": "停止",
+    "stopMine": "停止我发起的",
+    "stopAll": "全部停止",
+    "stopAllHint": "包括其他人发起的",
+    "step": "第 {{step}}/{{total}} 步"
   },
   "title": "群聊",
   "memberSeparator": "、",
@@ -79,7 +83,8 @@
     "planDone_one": "{{count}} 步都做完了",
     "planDone_other": "{{count}} 步都做完了",
     "planDoneGeneric": "分工做完了",
-    "olderOnComputer": "更早的消息请在电脑上查看"
+    "olderOnComputer": "更早的消息请在电脑上查看",
+    "endTalk": "结束"
   },
   "quote": {
     "label": "引用 {{name}}：{{summary}}",
@@ -331,7 +336,9 @@
     "groupDissolved": "群聊已解散，仍可查看有权访问的历史消息。",
     "lastOwner": "请先转让群主或解散群聊，再退出。",
     "allBotsMentionDisabled": "群主尚未开启 @所有伙伴。",
-    "turnAlreadyStarted": "这位伙伴已开始执行，不能跳过"
+    "turnAlreadyStarted": "这位伙伴已开始执行，不能跳过",
+    "stopOwnershipUnknown": "部分工作未能停止：无法确认由谁发起",
+    "nothingToStop": "当前没有可停止的工作"
   },
   "followUp": {
     "next": "分工 · 下一步",
@@ -630,5 +637,6 @@
       "uncertain": "暂未确认加入结果"
     },
     "externalFormatError": "请从原消息重新打开完整链接。"
-  }
+  },
+  "waitingForOwner": "等待主人确认"
 }

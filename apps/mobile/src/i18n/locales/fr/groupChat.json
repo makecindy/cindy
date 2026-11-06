@@ -1,6 +1,10 @@
 {
   "progress": {
-    "stop": "Arrêter"
+    "stop": "Arrêter",
+    "stopMine": "Arrêter les miennes",
+    "stopAll": "Tout arrêter",
+    "stopAllHint": "Inclut les demandes des autres participants",
+    "step": "Étape {{step}}/{{total}}"
   },
   "work": {
     "queued": "En attente {{count}}",
@@ -88,7 +92,8 @@
     "planDoneGeneric": "Répartition du travail terminée",
     "olderOnComputer": "Les messages précédents se trouvent sur votre ordinateur",
     "newMessages_many": "{{count}} nouveaux messages",
-    "planDone_many": "Les {{count}} étapes sont terminées"
+    "planDone_many": "Les {{count}} étapes sont terminées",
+    "endTalk": "Terminer"
   },
   "quote": {
     "label": "Citation de {{name}} : {{summary}}",
@@ -337,7 +342,9 @@
     "groupDissolved": "Ce groupe a été dissous. Vous pouvez toujours lire l'historique disponible.",
     "lastOwner": "Transférez la propriété ou dissolvez ce groupe avant de le quitter.",
     "allBotsMentionDisabled": "Le propriétaire du groupe n’a pas encore activé @Tous les coéquipiers.",
-    "turnAlreadyStarted": "Ce coéquipier a déjà commencé et ne peut plus être ignoré"
+    "turnAlreadyStarted": "Ce coéquipier a déjà commencé et ne peut plus être ignoré",
+    "stopOwnershipUnknown": "Impossible d’arrêter une partie du travail, car son demandeur n’a pas pu être vérifié.",
+    "nothingToStop": "Il n’y a aucun travail en cours à arrêter."
   },
   "followUp": {
     "next": "Plan · Étape suivante",
@@ -639,5 +646,6 @@
     },
     "externalFormatError": "Rouvrez le lien complet du message d'origine."
   },
-  "memberCount_many": "{{count}} membres"
+  "memberCount_many": "{{count}} membres",
+  "waitingForOwner": "En attente de confirmation"
 }
