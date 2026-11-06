@@ -29,6 +29,7 @@ import { useCCSessions } from '@/hooks/useCCSessions';
 import { usePrActions, usePrRefsForSessions, usePrStatuses } from '@/contexts/PrRefsContext';
 import { prStatusKey, sessionPrUrl, type SessionPrRef } from '@cindy/maker-shared';
 import { PR_STATUS_ICON, prStatusColor } from '@/features/cc-agent/gitContextPrVisuals';
+import { useSessionDisplayRunningState } from '@/features/cc-agent/hooks/useSessionDisplayRunningState';
 import { sessionActivityMs } from '@/features/cc-agent/lib/dateSessionGrouping';
 import { AutomationTimerIcon } from '@/features/cc-agent/sidebar/AutomationTimerIcon';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
@@ -708,19 +709,29 @@ function BackgroundTasks({ botId, sessionId, onBack, onClose }: {
     dateStyle: 'medium', timeStyle: 'short',
   }), [i18n.language]);
   const sessionsById = useMemo(() => new Map(localSessions.map(task => [task.id, task])), [localSessions]);
-  const tasks = useMemo(() => rows.flatMap(row => {
+  const delegations = useMemo(() => rows.flatMap(row => {
     const taskId = row.childSessionId;
     // targetProfileVersion survives deletion of a recipient teammate.
     if (row.requestingBotId !== botId || row.targetBotId !== null || row.targetProfileVersion !== null || !taskId) return [];
     const session = sessionsById.get(taskId);
     if (session?.status === 'deleted') return [];
+    return [{ row, taskId, session }];
+  }), [rows, botId, sessionsById]);
+  const taskSessions = useMemo(() => delegations.flatMap(({ session }) => session ? [session] : []), [delegations]);
+  const runningSessionIds = useMemo(() => new Set(
+    [...running].filter(([, status]) => status.isRunning).map(([id]) => id),
+  ), [running]);
+  const { displayRunningSessionIds } = useSessionDisplayRunningState(taskSessions, runningSessionIds);
+
+  const tasks = useMemo(() => delegations.map(({ row, taskId, session }) => {
     const runtime = running.get(taskId);
     const needsInput = Boolean(row.pendingInteraction || runtime?.hasPendingAskUser || runtime?.hasPendingPermission
       || runtime?.hasPendingPlanReview || runtime?.hasPendingPluginSetup || runtime?.hasActionableInputHandoff);
-    const status = needsInput || row.status === 'waiting' ? 'waiting' : runtime?.isRunning ? 'running' : row.status;
+    const status = needsInput || row.status === 'waiting' ? 'waiting'
+      : displayRunningSessionIds.has(taskId) ? 'running' : row.status;
     const updatedAt = Math.max(row.updatedAt, session ? sessionActivityMs(session) : 0);
-    return [{ row, taskId, title: session?.title || row.title, status, needsInput, updatedAt }];
-  }).sort((a, b) => b.updatedAt - a.updatedAt || a.row.id.localeCompare(b.row.id)), [rows, botId, running, sessionsById]);
+    return { row, taskId, title: session?.title || row.title, status, needsInput, updatedAt };
+  }).sort((a, b) => b.updatedAt - a.updatedAt || a.row.id.localeCompare(b.row.id)), [delegations, running, displayRunningSessionIds]);
 
   const visible = tasks.filter(({ status }) => {
     switch (filter) {

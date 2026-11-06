@@ -13,9 +13,10 @@
  * - 实测耗时：见 PR（pnpm --dir apps/desktop exec vitest run 本文件）。
  */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { buildTodoReferenceHref } from '@cindy/maker-shared/agent-input-projection';
 import { todoLocalDate, type TeammateTodo } from '@cindy/maker-shared/teammate-todo';
+import { resetSessionBackgroundActivityStoreForTests } from '@/lib/sessionBackgroundActivityStore';
 import type { BotChatIdentity } from '../BotSessionContentHeader';
 
 const h = vi.hoisted(() => ({
@@ -53,7 +54,10 @@ vi.mock('react-router-dom', () => ({ useNavigate: () => h.navigate }));
 vi.mock('../remoteBotSettingsClient', () => ({ invokeBotSettings: h.remoteRoutines }));
 vi.mock('@/lib/composerActionsBus', () => ({ insertTodoReferenceIntoComposer: h.insert }));
 vi.mock('@/lib/toast', () => ({ toast: { info: h.toastInfo, error: h.toastError } }));
-vi.mock('@/lib/orcaSessionIdentity', () => ({ resolveSessionRoute: async (id: string) => `/cc-agent/${id}` }));
+vi.mock('@/lib/orcaSessionIdentity', async importOriginal => ({
+  ...await importOriginal<typeof import('@/lib/orcaSessionIdentity')>(),
+  resolveSessionRoute: async (id: string) => `/cc-agent/${id}`,
+}));
 vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: {
   sendMessage: h.send, getRunningSnapshot: () => h.running, subscribeAll: () => () => {},
 } }));
@@ -156,6 +160,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  resetSessionBackgroundActivityStoreForTests();
   vi.clearAllMocks();
 });
 
@@ -197,6 +202,35 @@ describe('BotGlanceButton', () => {
     await waitFor(() => expect(h.navigate).toHaveBeenCalledExactlyOnceWith('/cc-agent/approve'));
     expect(h.getSession).toHaveBeenCalledExactlyOnceWith('approve');
     expect(screen.queryByTestId('bot-glance-background-list')).toBeNull();
+  });
+
+  it('keeps a completed delegation in the running filter while the child session has background activity', async () => {
+    h.delegations = [{ id: 'd1', title: 'Review release', childSessionId: 'review', requestingBotId: bot.id,
+      targetBotId: null, targetProfileVersion: null, status: 'completed', updatedAt: 20, artifacts: [] }];
+    h.sessions = [{ id: 'review', status: 'active' }];
+    const maker = window.electronAPI.maker;
+    let backgroundChanged: Parameters<typeof maker.onSessionBackgroundActivityChanged>[0] | undefined;
+    maker.onSessionBackgroundActivityChanged = listener => {
+      backgroundChanged = listener;
+      return () => undefined;
+    };
+
+    await openGlance();
+    fireEvent.click(screen.getByTestId('bot-glance-background-tasks'));
+    expect(screen.getByTestId('bot-glance-background-task').textContent).toContain('bots.collab.status.completed');
+
+    act(() => backgroundChanged?.({ sessionId: 'review', active: true }));
+    expect(screen.getByTestId('bot-glance-background-task').textContent).toContain('bots.collab.status.running');
+
+    const scrollIntoView = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    onTestFinished(() => { HTMLElement.prototype.scrollIntoView = scrollIntoView; });
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'bots.glance.background.filter' }), { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: 'bots.collab.status.running' }));
+    expect(screen.getByTestId('bot-glance-background-task')).toBeTruthy();
+
+    act(() => backgroundChanged?.({ sessionId: 'review', active: false }));
+    expect(screen.queryByTestId('bot-glance-background-task')).toBeNull();
   });
 
   it('keeps the task view open and reports failure when the original task was deleted', async () => {
