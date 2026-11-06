@@ -446,8 +446,8 @@ export function BotGroupComposer({
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
-  topicOption: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 44 },
-  topicOptionText: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
+  topicOption: { flexDirection: 'row', flexShrink: 1, minWidth: 0, alignItems: 'center', gap: spacing.sm, minHeight: 44 },
+  topicOptionText: { flexShrink: 1, color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
   wrap: { gap: spacing.sm, paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.sm },
   // The badge brings its own trailing margin (shared with the task composer).
   leading: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
