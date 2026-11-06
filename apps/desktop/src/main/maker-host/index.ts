@@ -11,6 +11,7 @@ import { resolveCompanionRuntimeEnvironment } from '../bot-import/runtime.js';
 import { registerCodexTextOnlyPolicy } from './codex-text-only-policy.js';
 import { ensureCodexCliLauncher } from '../agent-binaries/codex-cli-launcher.js';
 import { readDisabledSkillPaths } from '../skillhub/activationPreferences';
+import { resolveLocalMcpDuplicateChoices } from './mcp-duplicate-preferences.js';
 import { cindyMakeManager } from '../cindy-make/manager.js';
 import { makeSourceRoot } from '../cindy-make/sourcePaths.js';
 import { clearCodexAccountUsageSnapshot } from '../usageBroadcaster.js';
@@ -36,6 +37,7 @@ import { remoteCodexProvider } from './ssh-codex-models.js';
 import { getActiveAuthRealm } from '../authManager.js';
 import { getCustomProvider, updateCustomProviderIfUnchanged } from './custom-provider-store.js';
 import { refreshCustomProvidersIntoCatalog } from './createDesktopProviderService.js';
+import { hasCodexApiConnections, setCodexApiModelProbe } from './codex-api-model-capabilities.js';
 import { acquireWorktreeRuntimeLease, releaseWorktreeRuntimeLease, type WorktreeRuntimeLease } from '../worktree/runtimeLeases';
 import { assertPrecreatedSessionNotCancelled } from '../worktree/precreatedCancellation';
 import { readCodexContextWindowInfo } from './codex-context-window.js';
@@ -64,6 +66,8 @@ import {
   getLocalCatalogOverridesSnapshot,
   setActiveCatalogChangedListener,
   setDiscoveredCodexModels,
+  hasCodexApiModelCapabilities,
+  setCodexApiModelCapabilities,
 } from './active-catalog.js';
 import {
   createCodexModelBackfillCoordinator,
@@ -139,7 +143,10 @@ import { readProviderGroupBinding } from '../provider-group/bindings.js';
 import { createSubscriptionFastPolicy } from './subscription-fast-policy.js';
 import { getProviderGroupGuestSwitch } from '../provider-group/guestSwitch.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
-import { openRemoteLink, remoteBackgroundInvoke, remoteInvoke } from '../device-link/index.js';
+import { isSharedTaskAvailable, isSharedTaskRelayOnline, openRemoteLink, remoteBackgroundInvoke, remoteInvoke, waitForSharedTaskRelay } from '../device-link/index.js';
+import { captureSharedTaskAgentCommand } from '../device-link/sharedTaskCommands.js';
+import { tryGetSharedTaskHost } from '../device-link/sharedTaskRuntime.js';
+import { runWithSharedTaskCallerGuard } from '../device-link/sharedTaskApi.js';
 import { isCrossRegionProviderShareTarget, renewCrossRegionProviderShareLink } from '../device-link/providerShareCrossRegion.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { parseProviderShareAgentDeviceId } from '../device-link/providerShareGuest.js';
@@ -486,6 +493,7 @@ reviewAutoPermissionAction.prepareRequest = async request => {
  * null = maker 尚未构造:那时既没有 agent 也没有会话,没有任何东西在等模型清单。
  */
 let _codexModelBackfill: CodexModelBackfillCoordinator | null = null;
+let _codexApiModelBackfill: CodexModelBackfillCoordinator | null = null;
 
 /** Refresh selectable model capabilities, then notify every local/remote renderer. */
 export function refreshSelectableModelsAndBroadcast(payload: Record<string, unknown>): void {
@@ -1091,6 +1099,10 @@ export function getMaker(): Maker {
       lspPool: getLspPool(),
       pluginRegistry,
       invokeRemote: remoteInvoke,
+      captureSharedTaskCommand: (sessionId: string, assertCurrent: () => void) => captureSharedTaskAgentCommand(sessionId, assertCurrent, {
+        ready: waitForSharedTaskRelay, online: isSharedTaskRelayOnline, available: isSharedTaskAvailable,
+        host: tryGetSharedTaskHost, runScoped: runWithSharedTaskCallerGuard,
+      }),
       machineDirectory: {
         listDevices: async () => (await handleListDevices(deviceDirectoryDeps())).devices,
         // Reading a status must not put the other computer under control, old versions included.
@@ -1415,6 +1427,7 @@ export function getMaker(): Maker {
       log: desktopMakerLogger.child('command-gate'),
     });
     const claudeAgent = new ClaudeCodeAgent({
+      resolveLocalMcpDuplicateChoices,
       resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
       getDisabledSkillPaths: readDisabledSkillPaths,
       getManagedSkills: listCindyManagedSkills,
@@ -3264,6 +3277,30 @@ export function getMaker(): Maker {
       log: desktopMakerLogger,
     });
     void _codexModelBackfill.request();
+    _codexApiModelBackfill = createCodexModelBackfillCoordinator({
+      hasCodexLogin: async () => hasCodexApiConnections(getActiveCatalog()),
+      hasCodexModels: hasCodexApiModelCapabilities,
+      refreshLive: async () => {
+        const owner = getActiveAppSession().generation;
+        let applied = false;
+        const refreshed = await makerRef.refreshAgentLocalModels('codex', {
+          credentialMode: 'provider-oauth',
+          onModelsListed: models => {
+            if (_maker !== makerRef || isAppSessionBoundaryPending()
+              || getActiveAppSession().generation !== owner) return;
+            setCodexApiModelCapabilities(mapCodexAppServerModelsToCatalog(models));
+            applied = true;
+          },
+        });
+        return refreshed && applied;
+      },
+      // setCodexApiModelCapabilities already notifies the catalog listener.
+      onApplied: () => {},
+      log: desktopMakerLogger,
+    });
+    const apiModelBackfill = _codexApiModelBackfill;
+    setCodexApiModelProbe(() => { void apiModelBackfill.request(); });
+    void apiModelBackfill.request();
     // Anthropic 清单只来自 Claude Code SDK:maker 就绪后主动读一次,不等用户先跑任务
     // (旧缓存也可能缺少 SDK 只以简称返回的当前型号)。登录 / 认领后由对应收口再次请求。
     setAnthropicModelProbe((onSupportedModels) =>
@@ -3407,6 +3444,10 @@ export function resetMaker(): void {
   // coordinator 闭包捕获了刚作废的那个 maker —— 不清掉的话,换账号窗口期内到达的 auth
   // 事件会拿旧实例去拉模型清单(串号)。下次 getMaker() 会带着干净记账重建它。
   _codexModelBackfill = null;
+  _codexApiModelBackfill?.reset();
+  _codexApiModelBackfill = null;
+  setCodexApiModelProbe(null);
+  setCodexApiModelCapabilities(null);
   // Anthropic 清单探测同样捕获了旧 maker:注销后,旧实例的在途结果也不再生效。
   setAnthropicModelProbe(null);
   _initialCustomMcpRefresh = undefined;

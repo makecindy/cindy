@@ -22,6 +22,9 @@ const mockState = vi.hoisted(() => ({
   ) => ({ ok: true as const })),
   capturedProvidersConfig: null as null | Record<string, unknown>,
   afterSelectCompanion: null as null | (() => void),
+  invitationSession: null as null | { instanceId: string; stablePermissionModeState: { mode: string; generation: number } },
+  invitationInput: null as null | { key: string; boundary: string; permission: { isCurrent(): boolean; planModeEnabled: boolean; permissionMode: string } },
+  invitationOwner: true,
   personalFeishu: {
     getOwnerOpenId: () => 'ou_personal',
     sendMarkdownText: vi.fn(async () => ({ messageId: 'om_personal_text' })),
@@ -47,8 +50,9 @@ vi.mock('../../logger.js', () => ({
 vi.mock('../../maker-ipc/register.js', () => ({
   tryGetOrcaCollabService: () => mockState.collabService,
   isSessionInTurn: () => false,
-  getTaskActionInputState: () => ({ key: 'owner-input', ownerInput: true, boundary: 'runtime-1' }),
-  getTaskActionSession: () => undefined,
+  getTaskActionInputState: () => mockState.invitationInput ?? ({ key: 'owner-input', ownerInput: true, boundary: 'runtime-1' }),
+  getTaskActionSession: () => mockState.invitationSession ?? undefined,
+  isActiveInputAccountScoped: () => mockState.invitationOwner,
   confirmTaskAction: vi.fn(async () => true),
   captureTaskActionPermissionRequest: vi.fn(async () => null),
 }));
@@ -138,7 +142,7 @@ import {
 import { createDesktopMcpProviders } from '../mcp-providers.js';
 import { createDbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
-import type { FeishuBotMcpHostDeps } from '@cindy/mcps';
+import type { FeishuBotMcpHostDeps, XdtHelperMcpDeps } from '@cindy/mcps';
 import { beginAppSessionBoundary, commitVolatileAppSession } from '../../appSessionState.js';
 
 const botCapabilities = {
@@ -205,7 +209,52 @@ describe('collab send outcome semantics', () => {
     mockState.consumeLearnInvocationGrant.mockReset();
     mockState.consumeLearnInvocationGrant.mockResolvedValue({ ok: true });
     mockState.capturedProvidersConfig = null;
+    mockState.invitationSession = null;
+    mockState.invitationInput = null;
+    mockState.invitationOwner = true;
     vi.clearAllMocks();
+  });
+
+  // Unit: actual Desktop provider + worker DB. Host tests inject caller facts;
+  // this covers production wiring of live instance, owner input and permissions.
+  it('binds invitations to live task authority regardless of the Agent execution device', async () => {
+    const client = await createDbClient({ transport: 'worker-thread', useInlineWorker: true });
+    try {
+      commitVolatileAppSession('cloud', 'invitation-test-owner');
+      await client.exec('CREATE TABLE bot_session_links (session_id TEXT, bot_id TEXT, role TEXT)');
+      setCurrentDbClient(client, 'invitation-test-owner');
+      mockState.invitationSession = { instanceId: 'instance', stablePermissionModeState: { mode: 'bypass', generation: 1 } };
+      mockState.invitationInput = { key: 'input', boundary: 'instance:1', permission: { isCurrent: () => true, planModeEnabled: false, permissionMode: 'bypass' } };
+      const invitation = 'A'.repeat(43);
+      let changeDuringInvite = false;
+      const command = vi.fn(async (request: { action: string }) => {
+        if (request.action === 'state') return { available: true, detail: { sessionId: 'task', sharedTaskId: 'shared', status: 'active' } };
+        if (changeDuringInvite) mockState.invitationSession!.stablePermissionModeState.generation++;
+        return { sharedTaskId: 'shared', invitation, invitationLink: 'https://relay.example.test/shared-task/join#' + invitation };
+      });
+      createDesktopMcpProviders({ botCapabilities, getMakerMemoryManager: vi.fn(), lspPool: {} as never,
+        pluginRegistry: { isEnabled: () => true, getPlugins: () => [] } as never, invokeRemote: vi.fn(),
+        captureSharedTaskCommand: () => command,
+      });
+      const sharedTask = (mockState.capturedProvidersConfig!.xdtHelper as XdtHelperMcpDeps).sharedTask!;
+      const context = { agentKind: 'codex' as const, workingDir: '/fixture', sessionId: 'task', sessionInstanceId: 'instance', remoteHostId: 'ssh-workspace' };
+      expect(await sharedTask(context, 'invite')).toMatchObject({ ok: true, sessionId: 'task', device: 'local', sharedTaskId: 'shared' });
+      command.mockClear();
+      mockState.invitationOwner = false;
+      expect(await sharedTask(context, 'invite')).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+      mockState.invitationOwner = true;
+      expect(await sharedTask({ ...context, sessionInstanceId: 'old' }, 'invite')).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+      mockState.invitationInput.permission.planModeEnabled = true;
+      expect(await sharedTask(context, 'invite')).toMatchObject({ ok: false, errorCode: 'PLAN_MODE' });
+      expect(command).not.toHaveBeenCalled();
+      expect(await sharedTask(context, 'state')).toMatchObject({ ok: true });
+      mockState.invitationInput.permission.planModeEnabled = false;
+      changeDuringInvite = true;
+      expect(await sharedTask(context, 'invite')).toMatchObject({ ok: false, errorCode: 'SHARED_TASK_RESULT_UNKNOWN' });
+    } finally {
+      mockState.invitationSession = null; mockState.invitationInput = null;
+      commitVolatileAppSession('signed-out'); clearCurrentDbClient(client); await client.dispose();
+    }
   });
 
   it('keeps cindy_orca registered when project policy is disabled at session startup', () => {

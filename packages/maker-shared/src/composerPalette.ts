@@ -97,14 +97,29 @@ export function insertSlashCommand(
   return `${text.slice(0, trigger.from)}/${command.name} `;
 }
 
-/** Pi runtime invocation is `/skill:name`. Display layer always shows `/name`. */
-const PI_SKILL_RUNTIME_TOKEN_RE = /^\/skill:(\S+)$/i;
-const PI_SKILL_RUNTIME_PREFIX = 'skill:';
+/**
+ * Runtime invocation prefixes the composer adds only at dispatch: Pi's `skill:`
+ * and the namespaces Cindy mounts managed Skills under for Claude Code
+ * (`cindy:` built-ins, `cindy-plugin-<plugin>:` plugin Skills). Display layer
+ * always shows `/name`.
+ */
+const SKILL_RUNTIME_PREFIX_RE = /^(?:skill|cindy|cindy-plugin-[^\s:/]+):(?=\S+$)/i;
 
-/** Project a stored slash token (`/skill:git` or `/git`) to the human label. */
+/** Length of the runtime prefix in a slash command name (`skill:git` → 6); zero when none. */
+function skillRuntimePrefixLength(name: string): number {
+  return SKILL_RUNTIME_PREFIX_RE.exec(name)?.[0].length ?? 0;
+}
+
+/** Project a stored slash token (`/skill:git`, `/cindy-plugin-github:pr` or `/git`) to the human label. */
 export function slashCommandDisplayLabel(commandText: string): string {
-  const match = commandText.match(PI_SKILL_RUNTIME_TOKEN_RE);
-  return match ? `/${match[1]}` : commandText;
+  if (!commandText.startsWith('/')) return commandText;
+  const prefixLength = skillRuntimePrefixLength(commandText.slice(1));
+  return prefixLength > 0 ? `/${commandText.slice(1 + prefixLength)}` : commandText;
+}
+
+/** True when a slash token carries a runtime prefix that the display layer hides. */
+export function isSlashCommandRuntimeAlias(commandText: string): boolean {
+  return commandText.startsWith('/') && skillRuntimePrefixLength(commandText.slice(1)) > 0;
 }
 
 /**
@@ -160,8 +175,9 @@ export function restoreSlashCommandRuntimeAlias(
   const edited = findSlashCommandToken(editedText);
   if (!original || !edited) return editedText;
   if (!slashCommandRangeCoversToken(confirmedRanges, original)) return editedText;
-  if (!original.name.toLowerCase().startsWith(PI_SKILL_RUNTIME_PREFIX)) return editedText;
-  const humanName = original.name.slice(PI_SKILL_RUNTIME_PREFIX.length);
+  const prefixLength = skillRuntimePrefixLength(original.name);
+  if (prefixLength === 0) return editedText;
+  const humanName = original.name.slice(prefixLength);
   if (!humanName || edited.name.toLowerCase() !== humanName.toLowerCase()) return editedText;
   return `${editedText.slice(0, edited.start)}/${original.name}${editedText.slice(edited.end)}`;
 }
@@ -190,18 +206,20 @@ export function leadingSlashInvocation(
 }
 
 /**
- * Length of the hidden `skill:` run after `/` when the visible token is a Pi
- * runtime alias. Zero when the document already uses the human name.
+ * Length of the hidden runtime prefix (`skill:`, `cindy-plugin-<plugin>:`) after
+ * `/` when the visible token is the runtime alias. Zero when the document
+ * already uses the human name, or when the palette itself lists the namespaced
+ * name to tell same-named Skills apart.
  */
 export function slashCommandRuntimePrefixLength(
   commandText: string,
   command: { name?: string; runtimeCommandName?: string },
 ): number {
   const runtime = command.runtimeCommandName?.trim();
-  if (!runtime || !runtime.toLowerCase().startsWith(PI_SKILL_RUNTIME_PREFIX)) return 0;
+  if (!runtime || runtime.toLowerCase() === command.name?.trim().toLowerCase()) return 0;
   const body = commandText.startsWith('/') ? commandText.slice(1) : commandText;
   if (body.toLowerCase() !== runtime.toLowerCase()) return 0;
-  return PI_SKILL_RUNTIME_PREFIX.length;
+  return skillRuntimePrefixLength(runtime);
 }
 
 export function insertAtResource(

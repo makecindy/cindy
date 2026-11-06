@@ -20,14 +20,14 @@
 1. **先探测状态,别盲目开始**
    - `action: "status"` —— 浏览器是否可用、是否已启动;同时读结果里的 `data.backend` 认环境(见「两种浏览器模式」);不可用先看下面的「环境」。
    - 用户明确指定内置或外置浏览器时,模式不匹配就调用 `action: "setBackend", backend: "rsb-webview"`(内置)或 `"external"`(外置),成功后重新查询 `status`。`start` 只启动当前模式,不会切换模式;工具名 `cindy_browser` 不代表内置浏览器。
-   - `action: "tabs"` —— 列已有标签页,**复用**已开的页而不是无脑开新页(否则一屏堆满窗口)。
+   - `action: "tabs"` —— 列已有标签页,**复用**自己开过的页而不是无脑开新页(否则一屏堆满窗口);「我的浏览器」里用户自己的页签不复用,见下文。
    - 怀疑环境异常时 `action: "doctor"` 自检。
 
 2. **用稳定的标签页句柄**
    - 打开重要页面用 `action: "open"` 时带上 `label`(如 `label: "checkout"`),后续靠 label 复用。
    - `open` 默认在后台创建页面,供自动读取时**不要**紧接着调用 `focus`;只有遇到登录、授权、验证码、2FA、其他必须由用户完成的交互,或用户明确要求查看页面时才 `focus`。
    - `targetId` 优先用 `tabs` / `open` 返回的 `suggestedTargetId` / `tabId` / `label`,**不要**把裸序号(`"2"`)当 `targetId` 传。
-   - 开新页前先 `tabs`;按 label 或 URL 命中已有页就复用,不重复开。
+   - 开新页前先 `tabs`;按 label 或 URL 命中自己开过的页就复用,不重复开。
 
 3. **先读后点(snapshot → ref)**
    - 点击 / 输入前先 `action: "snapshot"`(同一个 `targetId`,`refs: "aria"`)拿到页面结构和元素 `ref`。
@@ -81,7 +81,10 @@
 
 #### 先复用已打开的页面(三种浏览器通用)
 
-开新页之前先 `tabs`:目标网站已有打开的页面时(用户开的或之前任务留下的),它往往已在正确的账号和位置,直接在它上面 `navigate` / 操作,不要另开新页从入口重新找账号。`open` 结果带 `sameSiteTabs` 就是在提醒这一点;新开的页面用不上时 `close`。需要用户亲手完成登录、验证码时,对那一页 `focus` 再告诉用户,不要自己尝试。
+开新页之前先 `tabs`:目标网站已有打开的页面时,它往往已在正确的账号和位置,不要另开新页从入口重新找账号。`open` 结果带 `sameSiteTabs` 就是在提醒这一点;新开的页面用不上时 `close`。需要用户亲手完成登录、验证码时,对那一页 `focus` 再告诉用户,不要自己尝试。
+
+- **自己开过的页面**(专用浏览器与侧边栏的全部页面,「我的浏览器」里 `owner:"cindy"` 的页面):直接在上面 `navigate` / 操作。
+- **用户自己的页签**(「我的浏览器」里 `owner:"user"` 的页面):不要在上面点击、输入或跳转,用户可能正在用它。用 `open` 在 Cindy 窗口里开自己的页面,登录态与用户共用;多账号网站(如带 `/u/1/` 的 Google 后台)需要那一页的账号或位置时,把它的 `url` 传给 `open` 或你自己页面的 `navigate`。只有用户明确让你看「这一页」时才读取它,需要改动时先问用户。
 
 #### 三种浏览器目标(先认环境,再谈登录)
 
@@ -91,7 +94,7 @@
   - 仅此模式支持:`act:saveResource`(托管下载)、以及 `query` 语义元素查询(role / name / text / label / placeholder / testId / css)。在外置模式下用这两个会被 schema 或运行时门控直接拒掉,别当通用能力使。
 - **`data.backend === "external"` = 独立外置浏览器**:一个专属持久自动化浏览器窗口(profile 显示为 "Cindy")。`act:saveResource` 与语义 `query` 在此模式不可用,元素定位改用 snapshot 的 `ref` 或 `selector`。旧宿主可能省略该字段,不要把缺少模式信息当成已使用内置浏览器。
   - 此模式的 `status.data.proxy` 报告当前启动路由:`direct`、`proxied`(带脱敏 `server`)或无法确认继承进程路由时的 `unknown`。需要指定代理时必须重新调用 `start` 并检查结果,不要从已有 tab 猜测出口。代理模式下只有 `proxyAllowedHostnames` 列出的公网域名可导航,内网地址不在其中。
-- **`data.backend === "user-browser"` = 用户正在使用的浏览器(经 Cindy 扩展)**:页面活在用户自己的 Chrome / Edge 里,带着用户本人的登录态;Cindy 不启停它。`open` 的新页面开在 Cindy 自己的后台窗口里,不抢焦点;用户自己的标签页只在任务需要时操作,不要关闭、重排或切换它们。
+- **`data.backend === "user-browser"` = 用户正在使用的浏览器(经 Cindy 扩展)**:页面活在用户自己的 Chrome / Edge 里,带着用户本人的登录态;Cindy 不启停它。`open` 的新页面开在 Cindy 自己的后台窗口里,不抢焦点,登录态与用户共用;默认用 `open` 开自己的页面,不在用户自己的标签页(`tabs` 里 `owner:"user"`)上操作,也不要关闭、重排或切换它们。
     - 不改变用户眼前的东西:不切换用户窗口里的标签页(`focus` 对用户窗口会被拒绝),也不把任何窗口带到前台。需要用户亲手操作(登录、验证码)时对 Cindy 窗口里的那一页 `focus`:它在 Cindy 窗口内切到这一页并让浏览器图标闪动提醒,然后告诉用户切到 Chrome 的 Cindy 窗口去完成。截图(只限可视区域)、`evaluate`、`requests` / `responseBody`、上传、原生弹窗、`focus` / `close`、坐标点击、拖拽、`resize` 可用,但有这些差别:
     - 这些动作要 Chrome 的调试接口,而 Chrome 不允许扩展按需申请,所以这里做不了:`pdf`、读 Cookie 或抓网络请求的配方;整页 / 元素截图退回可视区域并在 `note` 里说明,用户窗口里的后台标签页不能截图。不要让用户去找开启入口;需要时告诉用户可以改用 Cindy 专用浏览器,由用户决定。大文件上传不受影响,最大 1 GB。`resize` 只作用于 Cindy 自己的窗口。
     - 快照已包含所有 iframe 和开放 Shadow DOM 里的内容,主内容区与对话框排在最前,ref 可直接操作,不需要 `frame` 参数(`evaluate`、`extract` 与 selector 定位的动作仍只作用于顶层页面)。`truncated:true` 表示后面还有内容:加大 `limit` / `maxChars` 或用 `selector` 限定(如 `[role=main]`),不要据此判断页面上没有或工具做不到。

@@ -1223,11 +1223,11 @@ export function UserMessage({
     }
   }, [sessionId]);
 
-  // 点编辑 = 立即中断运行中的 turn(产品决策,对齐 2026-07 的 Codex 调研:
-  // 用户点编辑的意图就是"停下来我要改",且 interrupt 终止性、无恢复原语,
-  // 取消编辑后 AI **不会**继续工作——Codex 同语义,用户已知悉接受)。
-  // 发送侧不依赖这里的 stop 已完成:EditBox 会等 sessionRunning 翻 false 再
-  // 提交(含超时兜底 + 发送时再补一次 stop 的保险),两端解耦。
+  // 点编辑不中断运行中的 turn(2026-11 产品决策):interrupt 终止性、无恢复
+  // 原语,点编辑就停会让「误点 / 改主意取消」白白丢掉这轮工作。中断推迟到
+  // 编辑框点「发送」:EditBox 经 onRequestStop 中断并等 sessionRunning 翻 false
+  // 再提交(含超时兜底);取消编辑对运行中的 turn 零影响。
+  // 运行中编辑按钮不外显、收进 More 菜单(editInMenu),停下后回到操作行。
   //
   // 队列门槛:有排队中的消息时拒绝进入编辑(toast 说明)。排队消息是针对
   // rewind 前的旧上下文写的,而编辑重发只会追加到 paused 队列尾部——Continue
@@ -1239,9 +1239,8 @@ export function UserMessage({
       toast.error(t('chat.userMessage.editQueueNotEmpty'));
       return;
     }
-    if (sessionRunning) stopForEdit();
     setEditing(true);
-  }, [sessionId, sessionRunning, stopForEdit, t]);
+  }, [sessionId, t]);
 
   // 稳定引用:内联箭头会让 EditBox 的 doCommit(依赖 onSent)每次父组件
   // 重渲都重建,连带"等待停止接力" effect 无谓重跑(bot review 指出)。
@@ -1307,6 +1306,7 @@ export function UserMessage({
       onShareAsImage={handleShareAsImage}
       onDelete={!sharedGuest && !isBlocked && sessionId && messageClientId ? handleDelete : undefined}
       onEdit={canEdit ? handleEdit : undefined}
+      editInMenu={sessionRunning === true}
       onRewind={!isBlocked && canRewind ? handleRewind : undefined}
       rewindInFlight={rewindOpen}
     />

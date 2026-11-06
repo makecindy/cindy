@@ -65,6 +65,22 @@ describe('cardActionDispatch owner boundary', () => {
     expect(await dispatcher.dispatch('call', 'save', undefined, undefined, { body: 'x'.repeat(16001) })).toEqual({ ok: false, reason: 'bad-form-values' });
     expect(sendToGhost).toHaveBeenCalledTimes(1);
   });
+  it('delivers a model choice only for a declared dropdown and an available model', async () => {
+    const route = { agentKind: 'cc', providerId: 'anthropic', model: 'm', effort: 'low', fastMode: false };
+    const html = '<button data-ghost-action="pick" data-ghost-model-select="" type="button">x</button>';
+    const isModelRouteAvailable = vi.fn(async () => true);
+    const { dispatcher, sendToGhost } = makeDispatcher({
+      resolvePersistedCard: async () => ({ ghostId: 'cindy-mivo', sessionId: null, html }), isModelRouteAvailable,
+    });
+    expect(await dispatcher.dispatch('c', 'pick', undefined, undefined, undefined, false, undefined, route)).toEqual({ ok: true });
+    expect(sendToGhost.mock.calls[0][1].modelSelection).toEqual(route);
+    // A plain button cannot be fed a model, and an unavailable model is not handed over.
+    expect(await dispatcher.dispatch('c', 'other', undefined, undefined, undefined, false, undefined, route)).toEqual({ ok: false, reason: 'no-model-select' });
+    isModelRouteAvailable.mockResolvedValueOnce(false);
+    expect(await dispatcher.dispatch('c', 'pick', undefined, undefined, undefined, false, undefined, route)).toEqual({ ok: false, reason: 'model-unavailable' });
+    expect(await dispatcher.dispatch('c', 'pick', undefined, undefined, undefined, false, undefined, { ...route, x: 1 })).toEqual({ ok: false, reason: 'bad-model-selection' });
+    expect(sendToGhost).toHaveBeenCalledTimes(1);
+  });
   it('rechecks the owner after wake and never sends to a stale Ghost', async () => {
     let releaseWake!: () => void;
     let ownerValid = true;

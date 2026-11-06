@@ -231,6 +231,16 @@ describe('MessageActionBar', () => {
     expect(onRewind).toHaveBeenCalledTimes(1);
   });
 
+  // 任务运行中编辑不外显(点编辑不中断任务),只能从 More 菜单进入;停下后按钮回到操作行。
+  it('moves edit into the More menu while the task is running', () => {
+    const onEdit = vi.fn();
+    render(<MessageActionBar copyText="body" align="right" hovered onEdit={onEdit} editInMenu />);
+    expect(screen.queryByRole('button', { name: 'chat.messageActionBar.edit' })).toBeNull();
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'chat.messageActionBar.moreActions' }), { button: 0, ctrlKey: false });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'chat.messageActionBar.edit' }));
+    expect(onEdit).toHaveBeenCalledTimes(1);
+  });
+
   it.each(['left', 'right'] as const)('does not invent user actions without callbacks with %s alignment', (align) => {
     render(<MessageActionBar copyText="body" align={align} hovered />);
     expect(screen.queryByRole('button', { name: 'chat.messageActionBar.edit' })).toBeNull();

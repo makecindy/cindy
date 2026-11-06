@@ -134,6 +134,9 @@ importers:
       '@cindy/github-client':
         specifier: workspace:*
         version: link:../../packages/github-client
+      '@cindy/gitlab-client':
+        specifier: workspace:*
+        version: link:../../packages/gitlab-client
       '@cindy/heartbeat-client':
         specifier: workspace:*
         version: link:../../packages/heartbeat-client

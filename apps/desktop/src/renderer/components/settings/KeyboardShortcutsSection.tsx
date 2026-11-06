@@ -1,3 +1,5 @@
+import { appShortcutSettings, keyboardShortcutsSettings } from './KeyboardShortcutsSection.settings-search';
+import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import { Button } from '@/components/ui/button';
 /**
  * KeyboardShortcutsSection — Settings「键盘快捷键」tab 的主区块。
@@ -80,7 +82,7 @@ type HardwarePane = 'list' | 'accessories' | WorkLouderModel | GamepadFamily;
 function AccessoriesEntry({ onOpen }: { onOpen(): void }) {
   const { t } = useTranslation();
   return (
-    <button
+    <button data-setting-id={keyboardShortcutsSettings.shortcutsAccessoriesTitle.id}
       type="button"
       onClick={onOpen}
       data-testid="settings-shortcuts-accessories"
@@ -95,11 +97,11 @@ function AccessoriesEntry({ onOpen }: { onOpen(): void }) {
         <Package size={18} aria-hidden="true" />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-1">
-        <span id="settings-search-settings-shortcuts-accessories-title" className="truncate text-13 font-medium text-[var(--text-primary)]">
-          {t('settings.shortcuts.accessories.title')}
+        <span id={keyboardShortcutsSettings.shortcutsAccessoriesTitle.targetId} className="truncate text-13 font-medium text-[var(--text-primary)]">
+          {t(keyboardShortcutsSettings.shortcutsAccessoriesTitle.titleKey)}
         </span>
         <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-          {t('settings.shortcuts.accessories.description')}
+          {t(keyboardShortcutsSettings.shortcutsAccessoriesTitle.descriptionKey)}
         </span>
       </span>
       <ChevronRight size={16} className="shrink-0 text-[var(--text-tertiary)]" aria-hidden="true" />
@@ -130,6 +132,10 @@ export function KeyboardShortcutsSection() {
   };
   const [recordingId, setRecordingId] = useState<AppShortcutId | null>(null);
   const [hardwarePane, setHardwarePane] = useState<HardwarePane>('list');
+  const { entry: searchEntry, activation: searchActivation } = useSettingsSearchNavigation();
+  useEffect(() => {
+    if (searchEntry?.id.startsWith('shortcuts.')) setHardwarePane('list');
+  }, [searchEntry, searchActivation]);
   const [hardwareReturnTo, setHardwareReturnTo] = useState<'list' | 'accessories'>('list');
   const workLouderCodex = useWorkLouderCodex({ model: 'codex-micro', watchConnection: true });
   const workLouderCreator = useWorkLouderCodex({
@@ -386,7 +392,7 @@ export function KeyboardShortcutsSection() {
     return (
       <div className="flex flex-col gap-[14px]">
         <div className="flex items-center gap-2">
-          <button
+          <button data-setting-id={keyboardShortcutsSettings.shortcutsAccessoriesTitle.id}
             type="button"
             onClick={() => setHardwarePane('list')}
             className="flex size-8 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-chip)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
@@ -395,7 +401,7 @@ export function KeyboardShortcutsSection() {
             <ArrowLeft size={17} />
           </button>
           <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-            {t('settings.shortcuts.accessories.title')}
+            {t(keyboardShortcutsSettings.shortcutsAccessoriesTitle.titleKey)}
           </h2>
         </div>
         <div
@@ -438,7 +444,7 @@ export function KeyboardShortcutsSection() {
           {t('settings.shortcuts.title')}
         </h2>
         {hasAnyOverride && (
-          <button
+          <button data-setting-id={keyboardShortcutsSettings.shortcuts.id}
             type="button"
             onClick={handleResetAll}
             className="shrink-0 text-12 text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
@@ -477,6 +483,12 @@ export function KeyboardShortcutsSection() {
         )}
       >
         {visibleDefs.map((def) => {
+          // Plugin commands are dynamic and belong to the shortcuts page;
+          // only built-in shortcuts have individual static search entries.
+          const setting = appShortcutSettings[def.id];
+          const controlSetting = 'pluginName' in def
+            ? keyboardShortcutsSettings.shortcuts
+            : appShortcutSettings[def.id];
           const isRecording = recordingId === def.id;
           const customized = def.id in overrides;
           const combos = getAppShortcutCombos(def.id);
@@ -488,7 +500,7 @@ export function KeyboardShortcutsSection() {
                 ? t('settings.shortcuts.errors.globalOccupied')
                 : null;
           return (
-            <div key={def.id} className="flex items-center gap-2 py-2">
+            <div id={setting?.targetId} key={def.id} className="flex items-center gap-2 py-2">
               {/* 条目标题 + 说明双行: 标题主文字色 + 说明次级色,
                   对齐 LinkOpenSection 卡片条目的用色规范 */}
               <div className="flex min-w-0 flex-1 flex-col gap-[2px]">
@@ -527,7 +539,7 @@ export function KeyboardShortcutsSection() {
               </span>
 
               {isRecording ? (
-                <Button
+                <Button data-settings-search-action="Cancel recording the keyboard shortcut"
                   variant="secondary"
                   size="sm"
                   compact
@@ -539,7 +551,7 @@ export function KeyboardShortcutsSection() {
                 </Button>
               ) : (
                 <div className="flex shrink-0 items-center gap-1">
-                  <button
+                  <button data-setting-id={controlSetting.id}
                     type="button"
                     disabled={!def.rebindable}
                     onClick={() => {
@@ -556,7 +568,7 @@ export function KeyboardShortcutsSection() {
                     <Pencil size={13} />
                   </button>
                   {combos.length > 0 && (
-                    <button
+                    <button data-setting-id={controlSetting.id}
                       type="button"
                       disabled={!def.rebindable}
                       onClick={() => handleDeleteOne(def.id)}
@@ -571,7 +583,7 @@ export function KeyboardShortcutsSection() {
                     </button>
                   )}
                   {customized && (
-                    <button
+                    <button data-setting-id={controlSetting.id}
                       type="button"
                       onClick={() => handleResetOne(def.id)}
                       className={iconButtonClass}

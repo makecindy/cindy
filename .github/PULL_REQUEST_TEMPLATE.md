@@ -32,9 +32,10 @@ type：feat / fix / refactor / perf / chore / docs / test / revert / build / ci
 
 <!-- 涉及 UI 时附截图或录屏，并注明平台；不涉及则写“不涉及”。
 普通 Desktop 界面改动用单页验证截图即可：`pnpm ui:check --changed --theme all`（修旧问题加
-`--compare` 出改前／改后对照），再运行 `pnpm ui:check:publish`，它把截图发到作者 fork 的
-`pr-assets/<分支>`，输出带图片链接的本段内容，原样贴到这里。涉及登录、发送、跨设备等单页验证
-覆盖不到的变化，仍附完整 Cindy 截图；设计系统 PR 的证据要求见
+`--compare` 出改前／改后对照，改动集中在一个元素时加 `--focus`），再运行 `pnpm ui:check:publish`，
+它把截图发到作者 fork 的 `pr-assets/<分支>`，输出本段内容，原样贴到这里：正文只放与改动
+相关的并排截图，全量总览只给链接；不要把总览图直接嵌进正文。涉及登录、发送、跨设备等
+单页验证覆盖不到的变化，仍附完整 Cindy 截图，只放能说明改动的画面；设计系统 PR 的证据要求见
 docs/design-rules/design-governance.md §6。
 公开截图遵循 docs/dev-rules/desktop-development.md 里 PR 截图那一段的隐私原则。 -->
 

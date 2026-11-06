@@ -48,6 +48,7 @@ import {
   handleGhostPreviewNavigation,
   noteGhostUserGesture,
   resolveGhostWebviewAttach,
+  attachGhostPageModelPicker,
 } from './cindy-brain/index.js';
 import { classifyGhostPanelNavigation } from './cindy-brain/previewGate.js';
 import { ghostMediaHandoverDragScript, ghostMediaHandoverTargetTracker } from './cindy-brain/ghostMediaHandoverTargetTracker.js';
@@ -208,6 +209,8 @@ export function authorizeGhostWebviewAttach(
   params.partition = resolved.partition;
   webPreferences.partition = resolved.partition;
   applyGhostWebviewHardening(webPreferences, params);
+  // A single page-scoped picker method; never reuse the logic page or main-window bridge.
+  webPreferences.preload = path.join(__dirname, 'ghostPagePreload.js');
   return {
     id: resolved.ghost.manifest.id,
     instanceId,
@@ -1074,6 +1077,8 @@ export function installWebviewHardener(): void {
         // 崩溃豁免登记(lifecycle 的全局 render-process-gone 守卫据此放行,
         // 面板错误接管态负责用户侧收尾)。
         registerGhostWebContents(guestContents.id);
+        attachGhostPageModelPicker(contents, guestContents, authorized.instanceId,
+          () => authorized.isCurrent());
         installNativeTrackpad(contents, guestContents, () => {
           if (!isGhostGuestOwnerActive(authorized.owner)) return false;
           return authorized.isCurrent();

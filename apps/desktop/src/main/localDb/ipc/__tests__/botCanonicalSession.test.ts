@@ -1,8 +1,8 @@
+import { seedBotReadPositions, markBotReadPositions, pruneBotReadState as pruneHostBotReads } from '../../../maker-ipc/botReadStateStore';
 import { createTaskCompletionDeliveryHost } from '../../../maker-ipc/taskCompletionDeliveryHost';
 import { emitSessionCreated } from '../sessionCreatedBroadcast.js';
 import { captureAgentRequest } from '../../../maker-ipc/forwardedRequest';
 import { admitTaskAction, assertTaskActionCurrent, TaskActionAuthorizationError } from '../../../maker-ipc/taskActionAuthorization';
-import { formatForwardedRequest } from '../../../../shared/forwardedRequest';
 import { AcceptedCallbackDispatchCancelled, runAcceptedCallback } from '../../../maker-ipc/acceptedCallbackRunner';
 import { setSessionOpeningModelAdmission } from '../../sessionOpening';
 import { ScriptTarget, transpileModule } from 'typescript';
@@ -65,7 +65,10 @@ vi.mock('../sessionCreatedBroadcast.js', () => ({ emitSessionCreated: vi.fn(), e
 vi.mock('electron-store', () => ({ default: class {
   private values = new Map<string, unknown>();
   get(key: string, fallback?: unknown) { return this.values.get(key) ?? fallback; }
-  set(key: string, value: unknown) { this.values.set(key, value); }
+  set(key: string | Record<string, unknown>, value?: unknown) {
+    if (typeof key === 'string') this.values.set(key, value);
+    else for (const [name, item] of Object.entries(key)) this.values.set(name, item);
+  }
   delete(key: string) { this.values.delete(key); }
 } }));
 vi.mock('../../../maker-ipc/appDefaultModelControl.js', async importOriginal => ({
@@ -4264,6 +4267,20 @@ describe('Bots list unread projection', () => {
     return rows.find((row) => row.id === botId)!.unreadCount;
   }
 
+  // Merge compatibility: test the real list handler and SQLite-visible replies,
+  // not only the renderer projection. Host seeds must not hide a reply after a
+  // complete window's earlier seed; actual host acknowledgements still clear it.
+  it('does not let a host automatic seed hide replies past a complete window read position', async () => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, { id: 'host-seed-reply', role: 'assistant', content: 'Unread reply', createdAt: 2000 });
+    try {
+      seedBotReadPositions({ 'bot-1': 3000 });
+      expect(await unreadFor('bot-1', { 'bot-1': 1000 })).toBe(1);
+      markBotReadPositions({ 'bot-1': 2000 });
+      expect(await unreadFor('bot-1', { 'bot-1': 1000 })).toBe(0);
+    } finally { pruneHostBotReads({ botIds: [] }); }
+  });
+
   it('remote reply watermark ignores user activity and private timeline traces', async () => {
     const sessionId = await canonicalFor('bot-1');
     insertMessage(sessionId, { id: 'reply', role: 'assistant', content: 'Visible result', createdAt: 1000 });
@@ -8320,12 +8337,15 @@ describe('Bot Session task end-to-end runtime', () => {
       restored = createDelegationRuntime({ captureRequest });
       await restored.delegation.restore();
       const first = restored.dispatch.mock.calls.find(([p]) => p.targetSessionId === task.childSessionId)![0];
-      expect(first.persistedContent).toBe(formatForwardedRequest({ userText: '  只检查\n不要发布  ', sessionId: 'session-1', clientId: 'human' }, '用户原话：可以发布'));
+      // 2026-11-05: the body is the objective itself; the receipt keeps where the request started.
+      expect(first.persistedContent).toBe('用户原话：可以发布');
+      expect(first.autoReviewUserText?.request).toEqual({ sessionId: 'session-1', clientId: 'human', plainBody: true });
       expect(first.message).not.toContain('Work independently');
       await restored.settleChild(task.childSessionId, 'Checked');
       await restored.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text: '继续检查' });
       const next = restored.dispatch.mock.calls.filter(([p]) => p.targetSessionId === task.childSessionId).at(-1)![0];
-      expect(next.persistedContent).toBe(formatForwardedRequest({ userText: original, sessionId: 'session-1', clientId: 'human' }, '继续检查'));
+      expect(next.persistedContent).toBe('继续检查');
+      expect(next.autoReviewUserText?.request).toEqual({ sessionId: 'session-1', clientId: 'human', plainBody: true });
     } finally { runtime.dispose(); restored?.dispose(); }
   });
 
@@ -10882,6 +10902,7 @@ describe('Teammate model selection shares profile persistence and route reconcil
     const waiting = new Promise<void>((resolve) => { savingReachedLock = resolve; });
     configureBotModelSelectionCoordinator(createBotModelSelectionCoordinator({
       acquireSessionLock: (id) => { savingReachedLock(); return acquireSendToSessionLock(id); },
+      cancelRecovery: () => {}, // This fixture has no input coordinator or pending continuation.
       invalidate: reconcile.invalidate,
     }));
     const deps = { read, apply, isBusy: () => false, createId: () => 'race-scope',

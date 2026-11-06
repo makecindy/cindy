@@ -287,7 +287,11 @@ export function getDesktopMcpToolApprovalPolicy(
     if (action === 'schedule_set_pre_run_hook' || (action === 'routine_save' && args?.preRunHook != null)) {
       return 'prompt-each-time';
     }
-    if (action === 'move_session' || action === 'publish_skill') return 'prompt-each-time';
+    // Creating a task worktree adds a branch and directory to the repository and binds them
+    // to the task, like `git worktree add`; the task's permission mode decides.
+    if (action === 'move_session' || action === 'publish_skill' || action === 'create_task_worktree') {
+      return 'prompt-each-time';
+    }
     // Moving a teammate hands its running to another computer: the task's permission mode decides.
     if (action === 'manage_session_prs' && args?.action !== 'list') return 'prompt-each-time';
     if (action === 'move_teammate_home') return 'prompt-each-time';
@@ -307,10 +311,12 @@ export function getDesktopMcpToolApprovalPolicy(
   }
   // 改动另一台电脑上的定时任务（可改写并触发那台电脑上的命令）同样交给权限档：Full Access
   // 免审批，Auto 走统一审阅，Ask 由用户确认。本机操作与跨电脑读取保持原样。
+  if (serverName === 'cindy_scheduler' && (toolName === 'schedule_webhook_release' || toolName === 'schedule_webhook_restore')) return 'prompt-each-time';
   if (serverName === 'cindy_scheduler' && (toolName === 'call_tool' || !toolName)) {
     const params = readJsonObject(toolParams);
     const innerName = typeof params?.name === 'string' ? params.name.trim() : '';
     const args = readJsonObject(params?.args);
+    if (innerName === 'schedule_webhook_release' || innerName === 'schedule_webhook_restore') return 'prompt-each-time';
     if (SCHEDULER_CROSS_DEVICE_WRITE_TOOLS.has(innerName) && targetsAnotherComputer(args?.device)) {
       return 'prompt-each-time';
     }

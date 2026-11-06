@@ -151,7 +151,7 @@ export type GhostAssistantScreenResult =
 export interface GhostSubscriptionGatewayDeps {
   /** 当前已装且启用的意识清单(现读跟随装卸/启停热更)。 */
   listGhosts(): InstalledGhost[];
-  /** Fresh asynchronous discovery for notifications; never an authorization cache. */
+  /** Asynchronous notification candidates; may be indexed, never an authorization cache. */
   listGhostsAsync?(): Promise<InstalledGhost[]>;
   /** Recheck the exact installation after asynchronous discovery. */
   findGhostForDelivery?(id: string): InstalledGhost | null;
@@ -220,6 +220,23 @@ export class GhostSubscriptionGateway {
 
   constructor(private readonly deps: GhostSubscriptionGatewayDeps) {}
 
+  /** Discover once for one event; the returned sender still checks live approvals and owner. */
+  async preparePublish(topic: GhostSubscribeTopic): Promise<
+    ((name: GhostDidEventName, data: GhostDidEventData) => void) | null
+  > {
+    const owner = this.captureOwnerScope();
+    if (!this.ownerScopeUsable(owner)) return null;
+    const ghosts = this.deps.listGhostsAsync
+      ? await this.deps.listGhostsAsync()
+      : this.deps.listGhosts();
+    if (!this.ownerScopeUsable(owner) || !ghosts.some(ghost =>
+      ghost.enabled && ghost.manifest.subscribe?.topics?.includes(topic))) return null;
+    return (name, data) => {
+      if (!this.ownerScopeUsable(owner)) return;
+      this.publishTo(ghosts, topic, name, data);
+    };
+  }
+
   /* ── did- 旁听 ─────────────────────────────────────────────────────── */
 
   /** 向所有订阅了该 topic 的启用意识扇出一条 did- 事件。 */
@@ -231,7 +248,7 @@ export class GhostSubscriptionGateway {
     if (this.deps.listGhostsAsync) {
       const owner = this.captureOwnerScope();
       if (!this.ownerScopeUsable(owner)) return;
-      // Only share work already in flight. The next burst reads fresh receipts.
+      // Share concurrent discovery; exact live approvals are checked in publishTo.
       if (this.discovery && !this.ownerScopeUsable(this.discovery.owner)) this.discovery = null;
       const discovery = this.discovery ??= { owner, promise: this.deps.listGhostsAsync() };
       void discovery.promise.then((ghosts) => {
@@ -917,7 +934,7 @@ export function createGhostPrimarySessionFocusTracker(
   notify: (
     sessionId: string,
     claim: () => Promise<boolean>,
-    releaseRaw: () => void,
+    releaseRaw: (resetPrimary?: boolean) => void,
   ) => void,
 ): { note(sessionId: string | null): void } {
   let lastRawSessionId: string | null = null;
@@ -963,8 +980,12 @@ export function createGhostPrimarySessionFocusTracker(
             if (primarySessionId === lastPrimarySessionId) return false;
             lastPrimarySessionId = primarySessionId;
             return true;
-          }, () => {
-            if (currentGeneration === generation) lastRawSessionId = null;
+          }, (resetPrimary = false) => {
+            if (currentGeneration !== generation) return;
+            lastRawSessionId = null;
+            // Discovery failures invalidate the whole focus claim. Eligibility
+            // retries retain the published Lead for same-Lead worker deduplication.
+            if (resetPrimary) lastPrimarySessionId = null;
           });
         })
         .catch(() => {

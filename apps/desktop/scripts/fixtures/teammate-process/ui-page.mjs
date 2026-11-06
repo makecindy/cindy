@@ -79,13 +79,20 @@ export default {
         const sheet = sheetNode.getBoundingClientRect();
         const related = artifacts.querySelector('button[aria-expanded]').getBoundingClientRect();
         const summary = document.querySelector('[data-bot-task-card]').getBoundingClientRect();
-        return { replyX: reply.x, titleX: title.x, sheetX: sheet.x, relatedX: related.x, summaryX: summary.x, sheetWidth: sheet.width, maxSheetWidth: parseFloat(getComputedStyle(sheetNode).maxWidth), sheetRight: sheet.right, viewport: innerWidth };
+        return { replyX: reply.x, replyRight: reply.right, titleX: title.x, sheetX: sheet.x, relatedX: related.x, summaryX: summary.x, sheetWidth: sheet.width, maxSheetWidth: parseFloat(getComputedStyle(sheetNode).maxWidth), sheetRight: sheet.right, viewport: innerWidth };
       });
       console.log(`ARTIFACT_LAYOUT ${ui.case} ${JSON.stringify(layout)}`);
       assert.ok([layout.titleX, layout.sheetX, layout.relatedX, layout.summaryX].every(x => Math.abs(x - layout.replyX) <= 0.5), `Deliverables share the reply column: ${JSON.stringify(layout)}`);
       if (ui.case === 'artifacts-wide' || ui.case === 'artifacts-no-avatar')
         assert.equal(layout.sheetWidth, layout.maxSheetWidth, 'Wide cards keep their existing maximum width');
       assert.ok(layout.sheetRight <= layout.viewport, 'Sheet stays within the narrow column');
+      // Screenshot bug: a long learning row sized the footer to its text and ran past the column.
+      const footer = await page.locator('[data-bot-learning-footer]').evaluate(node => {
+        const box = node.getBoundingClientRect();
+        const text = node.querySelector('span');
+        return { x: box.x, right: box.right, truncated: text.scrollWidth > text.clientWidth };
+      });
+      assert.ok(Math.abs(footer.x - layout.replyX) <= 0.5 && footer.right <= layout.replyRight + 0.5 && footer.truncated, `Learning footer truncates inside the reply bubble column: ${JSON.stringify({ footer, replyRight: layout.replyRight })}`);
       await related.click();
       const file = page.getByRole('button', { name: 'prepare.py', exact: true });
       await file.waitFor();
@@ -97,6 +104,11 @@ export default {
     const journal = page.locator('[data-teammate-process]');
     await journal.waitFor();
     assert.equal(await journal.count(), 1, 'One disclosure owns all intermediate notes');
+    // Visible UI regression: process and reply each own a portrait; expansion
+    // must not repeat it in tool details. Hidden spacers failed this check.
+    const processPortrait = journal.locator('xpath=../..').getByTestId('fixture-partner-avatar');
+    assert.equal(await processPortrait.count(), 1);
+    assert.equal(await processPortrait.isVisible(), true, 'The process portrait is visible');
     const heading = journal.locator(':scope > button');
     if (definition.data.retry) {
       const action = journal.locator('[data-teammate-segment] > button');
@@ -138,6 +150,8 @@ export default {
       assert.equal(await heading.getAttribute('aria-expanded'), 'true', 'Keep inspected work open on completion');
     }
     await ui.capture('records');
+    assert.equal(await page.getByTestId('fixture-partner-avatar').count(), 2, 'Expanded process and final reply each have one portrait');
+    assert.equal(await processPortrait.isVisible(), true);
     await heading.click();
     assert.equal(await heading.getAttribute('aria-expanded'), 'false');
   },

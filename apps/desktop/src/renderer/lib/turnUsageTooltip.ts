@@ -51,9 +51,14 @@ export function formatOutputTokenRateValue(
 }
 
 export function formatOutputTokenRate(details: TurnUsageDetails): string | null {
-  return typeof details.durationMs === 'number'
-    ? formatOutputTokenRateValue(details.outputTokens, details.durationMs)
-    : null;
+  if (typeof details.durationMs !== 'number') return null;
+  // 生成耗时按每个 API 请求累加，并行请求（子代理、SDK 后台请求）会让它超过整轮
+  // 实际耗时。速率与「耗时」并排展示，分母不能超过那一列，否则两数互相矛盾。
+  const durationMs =
+    typeof details.turnDurationMs === 'number' && details.turnDurationMs > 0
+      ? Math.min(details.durationMs, details.turnDurationMs)
+      : details.durationMs;
+  return formatOutputTokenRateValue(details.outputTokens, durationMs);
 }
 
 export function formatTurnDuration(durationMs: number, t?: TFunction): string | null {
@@ -113,6 +118,8 @@ const LOW_CACHE_MIN_INPUT_TOKENS = 50_000;
 const LOW_CACHE_MAX_HIT_RATE = 0.2;
 
 export function getTurnUsageSuggestion(details: TurnUsageDetails, t: TFunction): string | null {
+  // 第一轮没有可复用的缓存，命中率为 0 是必然，不是可避免的浪费。
+  if (details.firstUserRound) return null;
   const inputTotal = details.inputTokens + details.cacheReadTokens + details.cacheCreateTokens;
   if (
     inputTotal >= LOW_CACHE_MIN_INPUT_TOKENS &&

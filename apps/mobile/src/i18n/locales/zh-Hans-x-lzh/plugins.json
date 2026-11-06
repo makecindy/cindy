@@ -128,6 +128,9 @@
   "detail": {
     "useItIn": "用法",
     "openPlugin": "启法器",
+    "readme": "介绍",
+    "readmeLoadFailed": "介绍未能载入，请再试。",
+    "readmeUnavailable": "暂无介绍。",
     "computerSettings": "请于机上 Cindy 之「法器」中启此法器详情，以竟其设。",
     "runtimeIssue": "法器前次行之有异，可重启或于差事中再试。",
     "runtimeFused": "法器屡止。关之再启，然后再试。",
@@ -341,5 +344,23 @@
     "purpose": "确认交互页之权柄",
     "updateHost": "请更新行事之机上之 Cindy，再于此确认。文字工具仍可用。",
     "failed": "交互之页未能启，请察连接与法器之版后再试。"
+  },
+  "openLinkHost": "启 {{host}}",
+  "prStatus": {
+    "checksFailed": "未成",
+    "checksPending": "方行",
+    "checksPassed": "已过",
+    "checksSkipped": "略过或居中",
+    "threadsOpen": "{{count}} 条未决之 review 评论",
+    "threadsNone": "无待理之意见",
+    "mergeReady": "可合并",
+    "mergeConflict": "有冲突",
+    "mergeBehind": "须同步目标分支",
+    "mergeApproval": "待批",
+    "mergeChanges": "须修改",
+    "mergeWaiting": "待合并",
+    "merged": "已合并",
+    "closed": "已闭",
+    "draft": "草稿"
   }
 }

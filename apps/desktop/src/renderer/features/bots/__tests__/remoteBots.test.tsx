@@ -22,8 +22,13 @@ vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
 }));
 vi.mock('@/lib/remoteDataOwnerPushFence', () => ({ isDeviceLinkRemotePushCurrent: () => true }));
 import { useRemoteBotSync, useRemoteBots, useRemoteCindyIds, markRemoteBotRead } from '../useRemoteBots';
-import { parseRemoteCollectionListRequest, REMOTE_RESOURCE_LIST_CHANNEL, REMOTE_RESOURCE_CHANGED_CHANNEL } from '@cindy/device-link';
+import { parseRemoteCollectionListRequest, REMOTE_RESOURCE_INVOKE_CHANNEL, REMOTE_RESOURCE_LIST_CHANNEL, REMOTE_RESOURCE_CHANGED_CHANNEL } from '@cindy/device-link';
 import { parseRemoteBots, remoteBotKey, isRemoteBotUnread } from '../remoteBotRoster';
+import { setDataOwnerGeneration, getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { resetBotReadStateForTests, startBotReadStateSync, getBotReadStateSyncStatus } from '../botReadState';
+import { botReadStateFixture } from './botReadStateFixture';
+let reads: ReturnType<typeof botReadStateFixture>;
+let stopReads: () => void;
 const host = (deviceId: string, online = true) => ({
   deviceId,
   name: deviceId,
@@ -46,14 +51,20 @@ function useRoster() {
   useRemoteBotSync();
   return useRemoteBots();
 }
-beforeEach(() => {
+beforeEach(async () => {
+  window.history.replaceState({}, '', '/');
+  window.localStorage.clear();
+  resetBotReadStateForTests();
   h.cloudEnabled = false;
   h.copies.mockReset();
   h.owner = `owner-${Math.random()}`;
+  setDataOwnerGeneration(h.owner);
+  reads = botReadStateFixture();
   h.devices = [host('a'), host('b')];
   h.invoke.mockReset().mockResolvedValue(collection());
   vi.stubGlobal('electronAPI', undefined);
   window.electronAPI = {
+    maker: reads.bridge,
     deviceLink: {
       invoke: h.invoke,
       getState: vi.fn().mockResolvedValue({ linkStatus: 'online' }),
@@ -67,11 +78,73 @@ beforeEach(() => {
       },
     },
   } as any;
+  stopReads = startBotReadStateSync();
+  await vi.waitFor(() => expect(getBotReadStateSyncStatus().phase).toBe('ready'));
 });
-afterEach(() => {
-  cleanup();
-  vi.unstubAllGlobals();
+afterEach(async () => {
+  cleanup(); stopReads(); resetBotReadStateForTests();
+  const owner = getDataOwnerGeneration();
+  await reads.bridge.botReadState({ owner: { ...owner, dataOwnerId: owner.dataOwnerId! }, action: 'snapshot' });
+  reads.dispose(); vi.restoreAllMocks(); vi.unstubAllGlobals();
+  window.history.replaceState({}, '', '/');
 });
+// R4: hook/store unit coverage, no real remote sockets. The old aggregate cache slice
+// dropped identities after 200; old progressive publication repeatedly scanned read storage.
+it('keeps more than 200 device-qualified companions and never scans read storage per delegation', async () => {
+  const get = vi.spyOn(Storage.prototype, 'getItem');
+  const keys = vi.spyOn(Storage.prototype, 'key');
+  const many = { collectionId: 'teammates', items: Array.from({ length: 110 }, (_, i) => ({
+    ref: { collectionId: 'teammates', kind: 'bot', id: `bot-${i}` },
+    display: { title: `Writer ${i}`, lastReplyAt: 100 },
+    links: [{ rel: 'conversation', target: { kind: 'session', sessionId: `canonical-${i}` } }],
+  })) };
+  h.invoke.mockImplementation(async (_device, channel) => channel === REMOTE_RESOURCE_LIST_CHANNEL
+    ? many : { ok: true, delegations: [] });
+  const { result, rerender } = renderHook(useRoster);
+  await waitFor(() => expect(result.current).toHaveLength(220));
+  await waitFor(() => expect(result.current.every(bot => bot.delegatedSessionIds !== undefined)).toBe(true));
+  expect(keys).not.toHaveBeenCalled();
+  expect(get).toHaveBeenCalledTimes(1); // one roster-cache read, no read-position scans
+  act(() => markRemoteBotRead('b', 'bot-109', 300));
+  h.devices = [host('a', false), host('b', false)]; rerender();
+  const late = result.current.find(bot => bot.deviceId === 'b' && bot.id === 'bot-109')!;
+  expect(late.readAt).toBe(300);
+  expect(result.current).toHaveLength(220);
+});
+it('restores all cached rows beyond 200 and imports legacy device-qualified acknowledgements', async () => {
+  stopReads(); resetBotReadStateForTests();
+  const rows = Array.from({ length: 205 }, (_, i) => ({ id: `old-${i}`, deviceId: 'a', deviceName: 'A', name: 'Writer',
+    avatar: '', avatarColor: '', description: '', preview: '', activityAt: 100, lastReplyAt: 200, readAt: 300 }));
+  localStorage.setItem(`cindy.remoteBots.v1.${h.owner}`, JSON.stringify(rows));
+  stopReads = startBotReadStateSync();
+  await vi.waitFor(() => expect(getBotReadStateSyncStatus().phase).toBe('ready'));
+  h.devices = [host('a', false)];
+  const { result } = renderHook(useRoster);
+  await waitFor(() => expect(result.current).toHaveLength(205));
+  expect(result.current[204].readAt).toBe(300);
+  expect(result.current.some(isRemoteBotUnread)).toBe(false);
+});
+it('keeps a corrupt migration source intact even after the main window obtains a live roster', async () => {
+  stopReads(); resetBotReadStateForTests();
+  const key = `cindy.remoteBots.v1.${h.owner}`;
+  localStorage.setItem(key, '{corrupt');
+  stopReads = startBotReadStateSync();
+  await vi.waitFor(() => expect(getBotReadStateSyncStatus().phase).toBe('ready'));
+  const { result } = renderHook(useRoster);
+  await waitFor(() => expect(result.current).toHaveLength(2));
+  expect(getBotReadStateSyncStatus().corruptSources).toContain(key);
+  expect(localStorage.getItem(key)).toBe('{corrupt');
+});
+it('lets secondary mirrors update but never replace the main window roster cache', async () => {
+  window.history.replaceState({}, '', '/?secondaryWindow=1');
+  const write = vi.spyOn(Storage.prototype, 'setItem');
+  const { result } = renderHook(useRoster);
+  await waitFor(() => expect(result.current).toHaveLength(2));
+  act(() => markRemoteBotRead('a', 'same-bot', 300));
+  expect(result.current.find(bot => bot.deviceId === 'a')?.readAt).toBe(300);
+  expect(write).not.toHaveBeenCalled();
+});
+
 describe('remote teammate roster', () => {
   it('keeps identical bot ids on two hosts distinct and retains only the offline host as offline', async () => {
     const { result, rerender } = renderHook(useRoster);
@@ -113,6 +186,7 @@ describe('remote teammate roster', () => {
     const { result, rerender } = renderHook(useRoster);
     await waitFor(() => expect(h.invoke).toHaveBeenCalled());
     h.owner = 'new-account';
+    setDataOwnerGeneration(h.owner);
     h.devices = [];
     rerender();
     await act(async () => finish(collection('Old account')));
@@ -156,6 +230,40 @@ it('keeps cached companions offline on reconnect and preserves device-qualified 
   act(() => markRemoteBotRead('a', 'same-bot', 200));
   expect(isRemoteBotUnread(result.current.find((bot) => bot.deviceId === 'a')!)).toBe(false);
   expect(isRemoteBotUnread(result.current.find((bot) => bot.deviceId === 'b')!)).toBe(true);
+});
+
+// Reading while the home computer is unreachable (or a request fails) advances the local read
+// position first. The computer must still hear about it: showing the same reply again, or the
+// next reconnect, sends it, and once the computer has it nothing is sent again.
+it('re-sends a read position the home computer has not acknowledged, on the next read and on reconnect', async () => {
+  let hostRead = 100;
+  let failing = true;
+  const published = () => { const value = collection(); Object.assign(value.items[0].display, { lastReplyAt: 200, lastReadAt: hostRead }); return value; };
+  h.invoke.mockImplementation(async (_device, channel) => {
+    if (channel === REMOTE_RESOURCE_LIST_CHANNEL) return published();
+    if (channel === REMOTE_RESOURCE_INVOKE_CHANNEL) { if (failing) throw new Error('offline'); return { effects: [], lastReadAt: 200 }; }
+    return { ok: true, delegations: [] };
+  });
+  const reads = () => h.invoke.mock.calls.filter(call => call[0] === 'a' && call[1] === REMOTE_RESOURCE_INVOKE_CHANNEL);
+  const { result } = renderHook(useRoster);
+  await waitFor(() => expect(result.current).toHaveLength(2));
+  await act(async () => markRemoteBotRead('a', 'same-bot', 200));
+  expect(reads()).toHaveLength(1);
+  expect(reads()[0][2][0]).toMatchObject({ actionId: 'read', resourceRef: { id: 'same-bot' }, input: { at: 200 } });
+  await act(async () => markRemoteBotRead('a', 'same-bot', 200)); // same reply shown again
+  expect(reads()).toHaveLength(2);
+  const lists = () => h.invoke.mock.calls.filter(call => call[1] === REMOTE_RESOURCE_LIST_CHANNEL).length;
+  failing = false;
+  let before = lists();
+  act(() => h.status({ status: 'online' })); // reconnect: the roster read carries the position
+  await waitFor(() => expect(reads()).toHaveLength(3));
+  hostRead = 200; // the computer now has it
+  before = lists();
+  act(() => h.status({ status: 'online' }));
+  await waitFor(() => expect(lists()).toBeGreaterThan(before));
+  expect(reads()).toHaveLength(3);
+  expect(isRemoteBotUnread(result.current.find((bot) => bot.deviceId === 'a')!)).toBe(false);
+  expect(reads().every(call => call[0] === 'a')).toBe(true);
 });
 
 it('does not reinterpret a resource read error as device disconnection', async () => {
@@ -238,6 +346,7 @@ it('cannot restore old attribution when a pending task-card read completes after
   const { result, rerender } = renderHook(useRoster);
   await waitFor(() => expect(finish).toBeDefined());
   h.owner = 'new-owner';
+  setDataOwnerGeneration(h.owner);
   h.devices = [];
   rerender();
   await act(async () => finish({ ok: true, delegations: [{ requestingBotId: 'same-bot', childSessionId: 'old-child' }] }));
@@ -257,11 +366,13 @@ it('applies cloud Cindy identity regardless of roster arrival order and rejects 
   await act(async () => {});
   expect(result.current.every(bot => bot.templateId === 'cindy')).toBe(true);
   h.owner = 'another-owner';
+  setDataOwnerGeneration(h.owner);
   rerender();
   await act(async () => {});
   expect(result.current.every(bot => bot.templateId === undefined)).toBe(true);
   const oldFinish = finish;
   h.owner = 'third-owner';
+  setDataOwnerGeneration(h.owner);
   h.cloudEnabled = false;
   rerender();
   await act(async () => oldFinish([{ botId: 'same-bot' }]));
@@ -281,6 +392,7 @@ it('exposes known Cindy IDs before an offline home provides its roster and clear
   await waitFor(() => expect(result.current.ids.has('same-bot')).toBe(true));
   expect(result.current.rows).toEqual([]);
   h.owner = 'new-empty-owner';
+  setDataOwnerGeneration(h.owner);
   h.cloudEnabled = false;
   rerender();
   expect(result.current.ids.size).toBe(0);
