@@ -46,6 +46,8 @@ const FAKE_VENDOR_TOKENS = [
   ['whsec', 'abcdefghijklmnopqrstuvwxyz012345'].join('_'),
   ['eyJhbGciOiJIUzI1NiJ9', 'eyJzdWIiOiIxMjM0NSJ9', 'abcdefghijklmnopqrstuvwxyz'].join('.'),
 ];
+// 长载荷 JWT:段长不设上界,载荷接近 4K 也必须整条打码(设上界会整条跳过)。
+const FAKE_LONG_JWT = ['eyJhbGciOiJSUzI1NiJ9', 'BD'.repeat(1945), 'c2lnbmF0dXJlLXNpZ25hdHVyZQ'].join('.');
 const FAKE_BRACKET_PASSWORD = ['abc', '[defghijklmnop'].join('');
 
 const extensionModule = await import('../../../../extensions/live-compact/index.ts');
@@ -190,6 +192,8 @@ describe('live compact spine selection', () => {
       // GitLab 的 PAT 没有大写下划线键名可依:值带 glpat- 前缀,键可能是小写 token。
       [`token: ${FAKE_GITLAB_PAT}`, FAKE_GITLAB_PAT],
       [`{"private_token":"${FAKE_GITLAB_PAT}"}`, FAKE_GITLAB_PAT],
+      // 长载荷 JWT 走的是前缀规则,不能靠键名:
+      [`echo ${FAKE_LONG_JWT}`, FAKE_LONG_JWT],
     ];
     // 厂商前缀表（gitleaks 公开前缀）:一张表覆盖完,不用每轮 review 补一个。
     for (const token of FAKE_VENDOR_TOKENS) positives.push([`token: ${token}`, token]);
