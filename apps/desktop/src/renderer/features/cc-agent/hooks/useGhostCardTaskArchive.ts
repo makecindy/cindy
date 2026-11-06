@@ -9,7 +9,7 @@ import {
 } from '@/cindy-brain/ghostCardTaskArchive';
 import { getDraftPresence } from '@/lib/composerDraftStore';
 import { getRemoteSessionActivity, isRemoteSessionActivityActive } from '@/features/device-link/remoteSessionActivityStore';
-import { loadActiveBoundScheduleNames } from '@/features/scheduler/lib/archiveScheduleWarning';
+import { loadConfirmedActiveBoundScheduleNames } from '@/features/scheduler/lib/archiveScheduleWarning';
 import type { Session } from '@/lib/ccAgent.types';
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 import { toast } from '@/lib/toast';
@@ -23,8 +23,8 @@ import { useSessionLifecycleActions } from './useSessionLifecycleActions';
  *
  * - 点按钮:用 archive(与标题栏、快捷键同一套归档流程,带确认)归档这个任务。
  * - 合并后自动归档:离开任务时,如果已合并的卡片在用户眼前显示过、本次没被取消,而且这个任务
- *   没有在运行、没被接管、没绑着定时任务、输入框里没有草稿、worktree 确认干净,就静默归档,并给
- *   一个可撤销的提示。任一条件不满足都不归档,也不弹确认:任务留在列表里。
+ *   没有在运行、没被接管、确认没绑着定时任务(没读到也算不确认)、输入框里没有草稿、worktree
+ *   确认干净,就静默归档,并给一个可撤销的提示。任一条件不满足都不归档,也不弹确认:任务留在列表里。
  * - 这里还把任务里最后一条用户发的消息报告给 ghostCardTaskArchive:待生效之后用户发了消息,
  *   本次自动归档就取消。
  */
@@ -51,9 +51,18 @@ export function useGhostCardTaskArchive({
     });
   }, [archive, sessionId]);
 
-  // 离开时(换任务或离开任务页)才归档:读的是离开那一刻的任务信息。
-  const latest = useRef({ session, remoteWritesBlocked, runSessionAction, unarchiveSession, t });
-  latest.current = { session, remoteWritesBlocked, runSessionAction, unarchiveSession, t };
+  // 离开时(换任务或离开任务页)才归档,读的是离开那个任务最后一次渲染时的信息。按任务保存:
+  // 从任务 A 直接切到 B 时,新一轮渲染先于 A 的清理函数,只留一份「最新」会读到 B。
+  const latest = useRef(new Map<string, LeaveSnapshot>());
+  if (session) {
+    latest.current.delete(session.id);
+    latest.current.set(session.id, { session, remoteWritesBlocked, runSessionAction, unarchiveSession, t });
+    // 视图可能连续换很多任务:只留最近几个。
+    for (const key of latest.current.keys()) {
+      if (latest.current.size <= LEAVE_SNAPSHOTS_KEPT) break;
+      latest.current.delete(key);
+    }
+  }
   useEffect(() => {
     if (!sessionId || !autoArchive) return;
     const disable = enableGhostCardTaskAutoArchive(sessionId);
@@ -62,8 +71,8 @@ export function useGhostCardTaskArchive({
       const seen = takeGhostCardTaskSeen(sessionId);
       disable();
       if (!seen) return;
-      const { session: left, ...deps } = latest.current;
-      if (left?.id === sessionId) void autoArchiveLeftTask(left, deps);
+      const snapshot = latest.current.get(sessionId);
+      if (snapshot) void autoArchiveLeftTask(snapshot);
     };
   }, [sessionId, autoArchive]);
 
@@ -88,14 +97,18 @@ function lastUserAuthoredMessage(messages: readonly ChatMessage[]): string | nul
   return null;
 }
 
+interface LeaveSnapshot {
+  session: Session;
+  remoteWritesBlocked: boolean;
+  runSessionAction: ReturnType<typeof useSessionLifecycleActions>['runSessionAction'];
+  unarchiveSession: (sessionId: string) => Promise<void>;
+  t: (key: string, options?: Record<string, unknown>) => string;
+}
+
+const LEAVE_SNAPSHOTS_KEPT = 4;
+
 async function autoArchiveLeftTask(
-  session: Session,
-  { remoteWritesBlocked, runSessionAction, unarchiveSession, t }: {
-    remoteWritesBlocked: boolean;
-    runSessionAction: ReturnType<typeof useSessionLifecycleActions>['runSessionAction'];
-    unarchiveSession: (sessionId: string) => Promise<void>;
-    t: (key: string, options?: Record<string, unknown>) => string;
-  },
+  { session, remoteWritesBlocked, runSessionAction, unarchiveSession, t }: LeaveSnapshot,
 ): Promise<void> {
   const sessionId = session.id;
   const deviceId = session.deviceLinkDeviceId;
@@ -111,9 +124,9 @@ async function autoArchiveLeftTask(
         .then((binding) => binding.attached)
         .catch(() => true);
       if (attached) return false;
-      const scheduleNames =
-        (await loadActiveBoundScheduleNames([{ id: sessionId, deviceLinkDeviceId: deviceId }])).get(sessionId) ?? [];
-      if (scheduleNames.length > 0) return false;
+      // 没读到绑定列表不等于没有绑定:静默归档没有确认框兜底,没读到就保留任务。
+      const bound = await loadConfirmedActiveBoundScheduleNames([{ id: sessionId, deviceLinkDeviceId: deviceId }]);
+      if (!bound || (bound.get(sessionId)?.length ?? 0) > 0) return false;
       const preflight = await resolveWorktreeRemovalPreflight(sessionId, deviceId);
       // 检查期间用户又回到这个任务:不在眼前收走它。输入框里还有没发的草稿时也留着(归档会丢掉草稿)。
       return preflight === 'clean' && isCurrent() && !isSessionRemovalRouteCurrent(sessionId) && !getDraftPresence(sessionId);

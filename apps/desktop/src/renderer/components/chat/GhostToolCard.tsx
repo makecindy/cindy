@@ -363,8 +363,8 @@ function GhostCardCanvas({
   useEffect(() => {
     const was = taskAutoArchiveRef.current;
     taskAutoArchiveRef.current = taskAutoArchive;
-    if (sessionId && taskAutoArchive !== was) setGhostCardTaskAutoArchiveArmed(sessionId, taskAutoArchive);
-  }, [sessionId, taskAutoArchive]);
+    if (sessionId && taskAutoArchive !== was) setGhostCardTaskAutoArchiveArmed(sessionId, callId, taskAutoArchive);
+  }, [sessionId, callId, taskAutoArchive]);
   useEffect(() => {
     if (!sessionId) return;
     const sync = (id: string) => {
@@ -373,9 +373,10 @@ function GhostCardCanvas({
     sync(sessionId);
     return onGhostCardTaskAutoArchiveChange(sync);
   }, [sessionId]);
-  // 「看过」= 待生效的卡片在可见、聚焦的窗口里进入视野;用户离开任务时任务页据此决定是否归档。
+  // 「看过」= 这张符合条件、待生效的卡片在可见、聚焦的窗口里进入视野(别的卡片进入视野不算:
+  // 用户没看到已合并那张卡及其取消提示);用户离开任务时任务页据此决定是否归档。
   useEffect(() => {
-    if (!sessionId || !autoArchivePending) return;
+    if (!sessionId || !autoArchivePending || !taskAutoArchive) return;
     const el = anchorRef.current;
     if (!el || typeof IntersectionObserver === 'undefined') return;
     let inView = false;
@@ -394,7 +395,7 @@ function GhostCardCanvas({
       window.removeEventListener('focus', check);
       document.removeEventListener('visibilitychange', check);
     };
-  }, [sessionId, autoArchivePending]);
+  }, [sessionId, autoArchivePending, taskAutoArchive]);
   const gallerySrcs = useMemo(
     () => extractGhostCardGallerySrcs(renderedCardHtml),
     [renderedCardHtml],

@@ -3,11 +3,14 @@
  *
  * - 点按钮:卡片只发出「归档这个任务」的请求,由打开这个任务的任务页走与标题栏、侧边栏
  *   同一套归档流程(运行中、接管、绑定的定时任务、worktree 预检与确认)。插件拿不到这个能力。
- * - 合并后自动归档:普通任务页登记「这里离开时可以自动归档」;卡片上有宿主自己查到已合并、
- *   插件标了 -auto 的 PR 时,自动归档进入待生效,卡片上显示提示和「本次不归档」。
- *   - 卡片在用户眼前显示过就记下「看过」;用户离开这个任务时任务页取走它,条件都满足才归档。
+ * - 合并后自动归档:普通任务页登记「这里离开时可以自动归档」;任务里有卡片(可以不止一张)
+ *   上有宿主自己查到已合并、插件标了 -auto 的 PR 时,自动归档进入待生效,卡片上显示提示和
+ *   「本次不归档」。
+ *   - 待生效的卡片在用户眼前显示过就记下「看过」;用户离开这个任务时任务页取走它,条件都满足
+ *     才归档。
  *   - 用户点了「本次不归档」,或待生效之后这个任务里出现了用户发的消息(本机、手机、IM 都算,
  *     自动化与插件代发的不算),本次就取消:提示消失,离开时不归档,手动的归档按钮照旧可用。
+ *     取消一直保留到任务里不再有符合条件的卡片(PR 重新打开、关了开关),之后重新开始。
  *   状态只在内存里,重启或刷新后不保留:没有确定看过就不归档。
  */
 
@@ -17,8 +20,11 @@ const archiveRequests = new Set<Listener>();
 const changeListeners = new Set<Listener>();
 /** 可以自动归档的任务页(按任务计数:同一任务可能有不止一个视图)。 */
 const enabledViews = new Map<string, number>();
-/** 待生效:值是进入待生效时最后一条用户消息的 clientId;undefined = 当时还不知道。 */
-const armed = new Map<string, { baseline: string | null | undefined }>();
+/**
+ * 待生效:按任务记着哪些卡片符合条件(任一张符合就待生效,一张退出不影响其它张),以及进入
+ * 待生效时最后一条用户消息的 clientId(undefined = 当时还不知道)。
+ */
+const armed = new Map<string, { cards: Set<string>; baseline: string | null | undefined }>();
 /** 任务里最后一条用户发的消息(由任务页在历史加载完成后报告)。 */
 const lastUserMessage = new Map<string, string | null>();
 const seen = new Set<string>();
@@ -56,14 +62,21 @@ export function enableGhostCardTaskAutoArchive(sessionId: string): () => void {
   };
 }
 
-/** 卡片上出现(或不再有)可自动归档的已合并 PR。 */
-export function setGhostCardTaskAutoArchiveArmed(sessionId: string, on: boolean): void {
-  if (on === armed.has(sessionId)) return;
-  if (on) armed.set(sessionId, { baseline: lastUserMessage.get(sessionId) });
-  else {
-    armed.delete(sessionId);
-    seen.delete(sessionId);
+/** 一张卡片是否(不再)符合自动归档:宿主查到已合并、插件标了 -auto。 */
+export function setGhostCardTaskAutoArchiveArmed(sessionId: string, cardId: string, on: boolean): void {
+  const entry = armed.get(sessionId);
+  if (on) {
+    if (!entry) {
+      armed.set(sessionId, { cards: new Set([cardId]), baseline: lastUserMessage.get(sessionId) });
+      changed(sessionId);
+    } else entry.cards.add(cardId);
+    return;
   }
+  if (!entry?.cards.delete(cardId) || entry.cards.size > 0) return;
+  // 任务里最后一张符合条件的卡片也退出了:忘掉看过和取消,下次重新开始。
+  armed.delete(sessionId);
+  seen.delete(sessionId);
+  cancelled.delete(sessionId);
   changed(sessionId);
 }
 
@@ -78,6 +91,11 @@ export function cancelGhostCardTaskAutoArchive(sessionId: string): void {
   if (cancelled.has(sessionId)) return;
   cancelled.add(sessionId);
   changed(sessionId);
+}
+
+/** 用户在这个任务里发了消息:只取消已经待生效的自动归档;还没待生效的不受影响。 */
+export function cancelPendingGhostCardTaskAutoArchive(sessionId: string): void {
+  if (isGhostCardTaskAutoArchivePending(sessionId)) cancelGhostCardTaskAutoArchive(sessionId);
 }
 
 /**

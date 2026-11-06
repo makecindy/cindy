@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   cancelGhostCardTaskAutoArchive,
+  cancelPendingGhostCardTaskAutoArchive,
   isGhostCardTaskAutoArchivePending,
   markGhostCardTaskSeen,
   requestGhostCardTaskArchive,
@@ -23,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   chatListeners: new Set<() => void>(),
   attached: false,
   schedules: [] as string[],
+  schedulesKnown: true,
   preflight: 'clean' as 'clean' | 'dirty' | 'unknown',
   routeCurrent: false,
   draft: false,
@@ -44,8 +46,8 @@ vi.mock('@/features/device-link/remoteSessionActivityStore', () => ({
   isRemoteSessionActivityActive: () => false,
 }));
 vi.mock('@/features/scheduler/lib/archiveScheduleWarning', () => ({
-  loadActiveBoundScheduleNames: async (rows: Array<{ id: string }>) =>
-    new Map(mocks.schedules.length ? [[rows[0].id, mocks.schedules]] : []),
+  loadConfirmedActiveBoundScheduleNames: async (rows: Array<{ id: string }>) =>
+    mocks.schedulesKnown ? new Map(mocks.schedules.length ? [[rows[0].id, mocks.schedules]] : []) : null,
 }));
 vi.mock('@/lib/worktreeRemovalWarning', () => ({ resolveWorktreeRemovalPreflight: async () => mocks.preflight }));
 vi.mock('../../lib/sessionRemovalNavigation', () => ({ isSessionRemovalRouteCurrent: () => mocks.routeCurrent }));
@@ -68,7 +70,7 @@ describe('useGhostCardTaskArchive', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     session = { id: `task-${++n}`, title: '#12 Fix it', status: 'active' } as Session;
-    Object.assign(mocks, { attached: false, schedules: [], preflight: 'clean', routeCurrent: false, draft: false });
+    Object.assign(mocks, { attached: false, schedules: [], schedulesKnown: true, preflight: 'clean', routeCurrent: false, draft: false });
     mocks.chat = { historyLoaded: true, messages: [{ role: 'user', clientId: 'u1' }] };
     mocks.running.clear();
     mocks.chatListeners.clear();
@@ -83,7 +85,7 @@ describe('useGhostCardTaskArchive', () => {
   const visit = async ({ seen = true, autoArchive = true, during = () => {} }: { seen?: boolean; autoArchive?: boolean; during?: () => void } = {}) => {
     const archive = vi.fn(async () => {});
     const hook = renderHook(() => useGhostCardTaskArchive({ session, archive, remoteWritesBlocked: false, autoArchive }));
-    setGhostCardTaskAutoArchiveArmed(session.id, true);
+    setGhostCardTaskAutoArchiveArmed(session.id, 'card-1', true);
     if (seen) markGhostCardTaskSeen(session.id);
     during();
     await act(async () => { hook.unmount(); });
@@ -122,6 +124,7 @@ describe('useGhostCardTaskArchive', () => {
     ['dirty worktree', () => { mocks.preflight = 'dirty'; }],
     ['unknown worktree state', () => { mocks.preflight = 'unknown'; }],
     ['bound automation', () => { mocks.schedules = ['PR #12']; }],
+    ['bindings could not be read', () => { mocks.schedulesKnown = false; }],
     ['taken over by IM', () => { mocks.attached = true; }],
     ['user is back on the task', () => { mocks.routeCurrent = true; }],
     ['unsent draft', () => { mocks.draft = true; }],
@@ -130,6 +133,59 @@ describe('useGhostCardTaskArchive', () => {
     setup();
     await visit();
     expect(mocks.toastSuccess).not.toHaveBeenCalled();
+  });
+
+  // Review (#9147): going from task A straight to task B reuses the view, so B is already rendered when A's
+  // cleanup runs; A must still be archived with A's own data.
+  it('archives the task it left when the view switches straight to another task', async () => {
+    const other = { id: `${session.id}-b`, title: 'B', status: 'active' } as Session;
+    const archive = vi.fn(async () => {});
+    const hook = renderHook(({ current }) => useGhostCardTaskArchive({ session: current, archive, remoteWritesBlocked: false, autoArchive: true }),
+      { initialProps: { current: session } });
+    setGhostCardTaskAutoArchiveArmed(session.id, 'card-1', true);
+    markGhostCardTaskSeen(session.id);
+    await act(async () => { hook.rerender({ current: other }); });
+    expect(mocks.runSessionAction).toHaveBeenCalledWith(session.id, 'archive', expect.anything());
+    expect(mocks.toastSuccess.mock.calls[0][0]).toBe('chat.ghostCall.taskAutoArchived');
+    expect(mocks.runSessionAction).toHaveBeenCalledTimes(1);
+  });
+
+  // Review (#9147): a message sent before the PR merged must not cancel a later auto-archive.
+  it('only a message sent after auto-archive became pending cancels it', async () => {
+    cancelPendingGhostCardTaskAutoArchive(session.id);
+    await visit();
+    expect(mocks.toastSuccess).toHaveBeenCalledTimes(1);
+    const another = { id: `${session.id}-c`, title: 'C', status: 'active' } as Session;
+    const archive = vi.fn(async () => {});
+    const hook = renderHook(() => useGhostCardTaskArchive({ session: another, archive, remoteWritesBlocked: false, autoArchive: true }));
+    setGhostCardTaskAutoArchiveArmed(another.id, 'card-1', true);
+    markGhostCardTaskSeen(another.id);
+    cancelPendingGhostCardTaskAutoArchive(another.id);
+    await act(async () => { hook.unmount(); });
+    expect(mocks.runSessionAction).toHaveBeenCalledTimes(1);
+  });
+
+  // Review (#9147): with several eligible cards in one task, one card dropping out must not erase the others.
+  it('stays pending while any card of the task is still eligible', async () => {
+    const archive = vi.fn(async () => {});
+    const hook = renderHook(() => useGhostCardTaskArchive({ session, archive, remoteWritesBlocked: false, autoArchive: true }));
+    setGhostCardTaskAutoArchiveArmed(session.id, 'card-1', true);
+    setGhostCardTaskAutoArchiveArmed(session.id, 'card-2', true);
+    markGhostCardTaskSeen(session.id);
+    setGhostCardTaskAutoArchiveArmed(session.id, 'card-1', false);
+    expect(isGhostCardTaskAutoArchivePending(session.id)).toBe(true);
+    await act(async () => { hook.unmount(); });
+    expect(mocks.toastSuccess).toHaveBeenCalledTimes(1);
+  });
+
+  it('forgets a cancellation once no card of the task is eligible any more', () => {
+    renderHook(() => useGhostCardTaskArchive({ session, archive: vi.fn(async () => {}), remoteWritesBlocked: false, autoArchive: true }));
+    setGhostCardTaskAutoArchiveArmed(session.id, 'card-1', true);
+    cancelGhostCardTaskAutoArchive(session.id);
+    expect(isGhostCardTaskAutoArchivePending(session.id)).toBe(false);
+    setGhostCardTaskAutoArchiveArmed(session.id, 'card-1', false);
+    setGhostCardTaskAutoArchiveArmed(session.id, 'card-1', true);
+    expect(isGhostCardTaskAutoArchivePending(session.id)).toBe(true);
   });
 
   it('archives only its own task when the card button is clicked', () => {

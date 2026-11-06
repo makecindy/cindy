@@ -34,6 +34,7 @@ import {
   archiveScheduleWarningMany,
   COLD_SCHEDULE_LOAD_WAIT_MS,
   loadActiveBoundScheduleNames,
+  loadConfirmedActiveBoundScheduleNames,
 } from '../archiveScheduleWarning';
 import { __resetBindingMemoForTest } from '../scheduleBindingIndex';
 
@@ -155,6 +156,32 @@ describe('loadActiveBoundScheduleNames', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // Review (#9147): silent archive has no confirm dialog, so "could not read" must not look like "no bindings".
+  it('严格读取:读到了才给结果,超时、失败或只有可能过期的缓存时给 null', async () => {
+    mocks.getSnapshot.mockReturnValue([{ id: 'a', name: 'Cached', status: 'active', targetSessionId: 'task' }]);
+    expect((await loadConfirmedActiveBoundScheduleNames([{ id: 'task' }]))?.get('task')).toEqual(['Cached']);
+    expect((await loadConfirmedActiveBoundScheduleNames([{ id: 'other' }]))?.size).toBe(0);
+
+    vi.useFakeTimers();
+    try {
+      mocks.pendingRefresh.mockReturnValue(new Promise(() => {}));
+      const stalled = loadConfirmedActiveBoundScheduleNames([{ id: 'task' }]);
+      await vi.advanceTimersByTimeAsync(COLD_SCHEDULE_LOAD_WAIT_MS);
+      expect(await stalled).toBeNull();
+
+      mocks.pendingRefresh.mockReturnValue(null);
+      mocks.invoke.mockReturnValue(new Promise(() => {}));
+      mocks.getSessionScheduleBindings.mockReturnValue([]);
+      const remote = loadConfirmedActiveBoundScheduleNames([{ id: 'a', deviceLinkDeviceId: 'mac-2' }]);
+      await vi.advanceTimersByTimeAsync(COLD_SCHEDULE_LOAD_WAIT_MS);
+      expect(await remote).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+    mocks.invoke.mockReset().mockRejectedValue(new Error('offline'));
+    expect(await loadConfirmedActiveBoundScheduleNames([{ id: 'a', deviceLinkDeviceId: 'mac-2' }])).toBeNull();
   });
 
   it('本机与冷远程设备同时读取,共用一个等待窗口', async () => {
