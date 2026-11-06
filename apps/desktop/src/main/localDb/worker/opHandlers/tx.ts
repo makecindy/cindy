@@ -2586,7 +2586,7 @@ function imRotateSession(
   })();
 }
 
-function rewindCommit(db: Database.Database, args: unknown): void {
+function rewindCommit(db: Database.Database, args: unknown): string[] {
   const payload = asRecord(args, 'rewind.commit args');
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const targetCreatedAt = expectNumber(payload.targetCreatedAt, 'targetCreatedAt');
@@ -2648,6 +2648,7 @@ function rewindCommit(db: Database.Database, args: unknown): void {
     targetMessageUuid,
     preserveMessageUuid,
   });
+  const rewoundIds = new Set(idsToRewind);
   const updateMessage = db.prepare('UPDATE messages SET rewind_at = ? WHERE id = ?');
   const hasSubagentRuns = Boolean(
     db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'subagent_runs'").get(),
@@ -2696,7 +2697,6 @@ function rewindCommit(db: Database.Database, args: unknown): void {
     // 保留下来的消息若持有旧 thread 的原生 turn 锚点,随 thread 替换一起重映射
     // (与 fork.session 复制消息时的处理一致),软删与重映射同一事务。
     if (nativeForkAnchorSessionMap.size > 0) {
-      const rewoundIds = new Set(idsToRewind);
       for (const row of rows) {
         if (rewoundIds.has(row.id) || !row.agent_meta) continue;
         const remapped = remapNativeForkAnchorSession(row.agent_meta, nativeForkAnchorSessionMap);
@@ -2704,7 +2704,6 @@ function rewindCommit(db: Database.Database, args: unknown): void {
       }
     }
     if (rewindSubagentByParent && rewindParentlessSubagentTail) {
-      const rewoundIds = new Set(idsToRewind);
       const parentToolUseIds = new Set(
         rows.flatMap((row) => (rewoundIds.has(row.id) && row.tool_use_id ? [row.tool_use_id] : [])),
       );
@@ -2754,6 +2753,7 @@ function rewindCommit(db: Database.Database, args: unknown): void {
     }
   });
   transaction();
+  return rows.filter((row) => rewoundIds.has(row.id)).map((row) => row.client_id);
 }
 
 interface TreeAttachmentSourceRow {
