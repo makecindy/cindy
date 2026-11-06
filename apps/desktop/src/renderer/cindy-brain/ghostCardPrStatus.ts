@@ -112,6 +112,41 @@ function applyTaskArchive(doc: Document, lookup: (key: string) => PrStatusResult
   return autoArchive;
 }
 
+const AUTO_ARCHIVE_HINT_ATTR = 'data-x-auto-archive-hint';
+
+/**
+ * 自动归档待生效时,在露出的归档按钮左边放一行宿主自己的提示:「离开后自动归档 · 本次不归档」。
+ * 文字与行为都归宿主(插件只标了 -auto);不再待生效时去掉。可反复调用。
+ */
+export function fillGhostCardTaskAutoArchiveHint(
+  doc: Document,
+  pending: boolean,
+  labels: { pending: string; cancel: string },
+  onCancel: () => void,
+): void {
+  for (const el of Array.from(doc.querySelectorAll(`[${AUTO_ARCHIVE_HINT_ATTR}]`))) el.remove();
+  if (!pending) return;
+  const button = Array.from(doc.querySelectorAll<HTMLElement>(TASK_ARCHIVE_SELECTOR))
+    .find((el) => el.hasAttribute('data-ghost-task-archive-auto') && el.style.display !== 'none');
+  if (!button?.parentElement) return;
+  const hint = doc.createElement('span');
+  hint.setAttribute(AUTO_ARCHIVE_HINT_ATTR, '');
+  hint.style.cssText = 'display:inline-flex;align-items:center;gap:2px;margin-right:6px;font-size:12px;white-space:nowrap;color:var(--text-secondary)';
+  const label = doc.createElement('span');
+  label.textContent = labels.pending;
+  const cancel = doc.createElement('button');
+  cancel.type = 'button';
+  cancel.textContent = labels.cancel;
+  cancel.style.cssText = 'height:32px;padding:0 8px;border:0;border-radius:9999px;background:transparent;' +
+    'font:inherit;font-weight:500;color:var(--text-primary);cursor:pointer';
+  cancel.addEventListener('click', (e) => {
+    e.stopPropagation();
+    onCancel();
+  });
+  hint.append(label, doc.createTextNode(' · '), cancel);
+  button.parentElement.insertBefore(hint, button);
+}
+
 /**
  * 用宿主的 PR 状态替换卡片文档里的状态位。查不到状态(或状态失败、一项都没有)时保留插件的
  * 兜底内容——已经换成宿主内容的状态位会恢复成它;同一份文档可反复调用(状态刷新时重填)。

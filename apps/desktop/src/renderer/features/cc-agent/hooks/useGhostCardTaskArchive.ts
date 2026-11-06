@@ -2,13 +2,16 @@ import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import {
+  enableGhostCardTaskAutoArchive,
+  noteGhostCardTaskUserMessage,
   onGhostCardTaskArchiveRequest,
   takeGhostCardTaskSeen,
 } from '@/cindy-brain/ghostCardTaskArchive';
+import { getDraftPresence } from '@/lib/composerDraftStore';
 import { getRemoteSessionActivity, isRemoteSessionActivityActive } from '@/features/device-link/remoteSessionActivityStore';
 import { loadActiveBoundScheduleNames } from '@/features/scheduler/lib/archiveScheduleWarning';
 import type { Session } from '@/lib/ccAgent.types';
-import { makerChatStore } from '@/lib/makerChatStore';
+import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 import { toast } from '@/lib/toast';
 import { resolveWorktreeRemovalPreflight } from '@/lib/worktreeRemovalWarning';
 
@@ -19,9 +22,11 @@ import { useSessionLifecycleActions } from './useSessionLifecycleActions';
  * 插件卡片上的归档任务按钮(见 cindy-brain/ghostCardTaskArchive)在任务页这一侧的处理。
  *
  * - 点按钮:用 archive(与标题栏、快捷键同一套归档流程,带确认)归档这个任务。
- * - 合并后自动归档:离开任务时,如果已合并的卡片在用户眼前显示过,而且这个任务没有在运行、
- *   没被接管、没绑着定时任务、worktree 确认干净,就静默归档,并给一个可撤销的提示。
- *   任一条件不满足都不归档,也不弹确认:任务留在列表里,用户下次看过再离开时重新判断。
+ * - 合并后自动归档:离开任务时,如果已合并的卡片在用户眼前显示过、本次没被取消,而且这个任务
+ *   没有在运行、没被接管、没绑着定时任务、输入框里没有草稿、worktree 确认干净,就静默归档,并给
+ *   一个可撤销的提示。任一条件不满足都不归档,也不弹确认:任务留在列表里。
+ * - 这里还把任务里最后一条用户发的消息报告给 ghostCardTaskArchive:待生效之后用户发了消息,
+ *   本次自动归档就取消。
  */
 export function useGhostCardTaskArchive({
   session,
@@ -51,12 +56,36 @@ export function useGhostCardTaskArchive({
   latest.current = { session, remoteWritesBlocked, runSessionAction, unarchiveSession, t };
   useEffect(() => {
     if (!sessionId || !autoArchive) return;
+    const disable = enableGhostCardTaskAutoArchive(sessionId);
     return () => {
-      if (!takeGhostCardTaskSeen(sessionId)) return;
+      // 先取「看过」再注销:注销之后自动归档就不再待生效。
+      const seen = takeGhostCardTaskSeen(sessionId);
+      disable();
+      if (!seen) return;
       const { session: left, ...deps } = latest.current;
       if (left?.id === sessionId) void autoArchiveLeftTask(left, deps);
     };
   }, [sessionId, autoArchive]);
+
+  // 历史加载完成后才报告:还没读到的消息不能当成新消息。
+  useEffect(() => {
+    if (!sessionId) return;
+    const report = () => {
+      const state = makerChatStore.getSnapshot(sessionId);
+      if (state.historyLoaded) noteGhostCardTaskUserMessage(sessionId, lastUserAuthoredMessage(state.messages));
+    };
+    report();
+    return makerChatStore.subscribe(sessionId, report);
+  }, [sessionId]);
+}
+
+/** 最后一条由人发出的消息(本机、手机、IM、共享成员都算;自动化、其他任务和插件代发的不算)。 */
+function lastUserAuthoredMessage(messages: readonly ChatMessage[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (m.role === 'user' && !m.automationOrigin && !m.sourcePlugin) return m.clientId;
+  }
+  return null;
 }
 
 async function autoArchiveLeftTask(
@@ -86,8 +115,8 @@ async function autoArchiveLeftTask(
         (await loadActiveBoundScheduleNames([{ id: sessionId, deviceLinkDeviceId: deviceId }])).get(sessionId) ?? [];
       if (scheduleNames.length > 0) return false;
       const preflight = await resolveWorktreeRemovalPreflight(sessionId, deviceId);
-      // 检查期间用户又回到这个任务:不在眼前收走它。
-      return preflight === 'clean' && isCurrent() && !isSessionRemovalRouteCurrent(sessionId);
+      // 检查期间用户又回到这个任务:不在眼前收走它。输入框里还有没发的草稿时也留着(归档会丢掉草稿)。
+      return preflight === 'clean' && isCurrent() && !isSessionRemovalRouteCurrent(sessionId) && !getDraftPresence(sessionId);
     },
   });
   if (archived !== true) return;

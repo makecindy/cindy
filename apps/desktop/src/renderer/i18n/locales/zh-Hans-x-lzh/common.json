@@ -13953,7 +13953,9 @@
       "mailUpdated": "草稿已更（唯读）",
       "mailLegacy": "旧稿（唯读）",
       "taskAutoArchived": "「{{title}}」已封存",
-      "taskAutoArchivedUndo": "撤"
+      "taskAutoArchivedUndo": "撤",
+      "taskAutoArchivePending": "去则自封存",
+      "taskAutoArchiveCancel": "此番不封"
     },
     "ghostHook": {
       "blockedFallback": "讯为法器所拦，未遣",

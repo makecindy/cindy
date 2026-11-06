@@ -13961,7 +13961,9 @@
       "mailUpdated": "草稿已更新（唯讀）",
       "mailLegacy": "歷史草稿（唯讀）",
       "taskAutoArchived": "已歸檔「{{title}}」",
-      "taskAutoArchivedUndo": "撤銷"
+      "taskAutoArchivedUndo": "撤銷",
+      "taskAutoArchivePending": "離開後自動歸檔",
+      "taskAutoArchiveCancel": "這次不歸檔"
     },
     "ghostHook": {
       "blockedFallback": "訊息被插件攔下，未傳送",

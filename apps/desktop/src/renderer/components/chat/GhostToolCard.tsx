@@ -64,8 +64,15 @@ import {
 import { useGhostCardThemeVars } from '@/cindy-brain/useGhostCardThemeVars';
 import { alignFrameWithGate } from '@/lib/hiddenAnimationGate';
 import { startGhostCardLiveIndicators } from '@/cindy-brain/ghostCardLive';
-import { fillGhostCardPrStatus, readPrStatusSlotKey } from '@/cindy-brain/ghostCardPrStatus';
-import { forgetGhostCardTaskSeen, markGhostCardTaskSeen, requestGhostCardTaskArchive } from '@/cindy-brain/ghostCardTaskArchive';
+import { fillGhostCardPrStatus, fillGhostCardTaskAutoArchiveHint, readPrStatusSlotKey } from '@/cindy-brain/ghostCardPrStatus';
+import {
+  cancelGhostCardTaskAutoArchive,
+  isGhostCardTaskAutoArchivePending,
+  markGhostCardTaskSeen,
+  onGhostCardTaskAutoArchiveChange,
+  requestGhostCardTaskArchive,
+  setGhostCardTaskAutoArchiveArmed,
+} from '@/cindy-brain/ghostCardTaskArchive';
 import { fillGhostCardIcons } from '@/cindy-brain/ghostCardIcons';
 import { usePrStatuses } from '@/contexts/PrRefsContext';
 import {
@@ -338,20 +345,37 @@ function GhostCardCanvas({
   prStatusesRef.current = prStatuses;
   // 卡上有已合并、可在看过后自动归档的 PR(宿主自己查到的状态,见 applyTaskArchive)。
   const [taskAutoArchive, setTaskAutoArchive] = useState(false);
+  // 自动归档待生效(任务页允许、卡片已合并、本次没取消):卡上显示提示与「本次不归档」。
+  const [autoArchivePending, setAutoArchivePending] = useState(false);
+  const autoArchivePendingRef = useRef(false);
+  autoArchivePendingRef.current = autoArchivePending;
   const fillPrStatus = useCallback((doc: Document) => {
-    if (prSlotKey) setTaskAutoArchive(fillGhostCardPrStatus(doc, (key) => prStatusesRef.current.get(key), t));
-  }, [prSlotKey, t]);
-  // 「看过」= 卡片在可见、聚焦的窗口里进入视野;用户离开任务时任务页据此决定是否归档。
-  // 不再满足(PR 重新打开、关了开关)时忘掉之前的「看过」。
+    if (!prSlotKey) return;
+    setTaskAutoArchive(fillGhostCardPrStatus(doc, (key) => prStatusesRef.current.get(key), t));
+    fillGhostCardTaskAutoArchiveHint(doc, autoArchivePendingRef.current, {
+      pending: t('chat.ghostCall.taskAutoArchivePending'),
+      cancel: t('chat.ghostCall.taskAutoArchiveCancel'),
+    }, () => { if (sessionId) cancelGhostCardTaskAutoArchive(sessionId); });
+  }, [prSlotKey, sessionId, t]);
+  // 同一任务里可能有好几张卡:只在这张卡变成(或不再是)可自动归档时改登记,卸载不撤销
+  // (离开任务会卸载卡片,那正是要归档的时候)。
   const taskAutoArchiveRef = useRef(false);
   useEffect(() => {
     const was = taskAutoArchiveRef.current;
     taskAutoArchiveRef.current = taskAutoArchive;
+    if (sessionId && taskAutoArchive !== was) setGhostCardTaskAutoArchiveArmed(sessionId, taskAutoArchive);
+  }, [sessionId, taskAutoArchive]);
+  useEffect(() => {
     if (!sessionId) return;
-    if (!taskAutoArchive) {
-      if (was) forgetGhostCardTaskSeen(sessionId);
-      return;
-    }
+    const sync = (id: string) => {
+      if (id === sessionId) setAutoArchivePending(isGhostCardTaskAutoArchivePending(sessionId));
+    };
+    sync(sessionId);
+    return onGhostCardTaskAutoArchiveChange(sync);
+  }, [sessionId]);
+  // 「看过」= 待生效的卡片在可见、聚焦的窗口里进入视野;用户离开任务时任务页据此决定是否归档。
+  useEffect(() => {
+    if (!sessionId || !autoArchivePending) return;
     const el = anchorRef.current;
     if (!el || typeof IntersectionObserver === 'undefined') return;
     let inView = false;
@@ -370,7 +394,7 @@ function GhostCardCanvas({
       window.removeEventListener('focus', check);
       document.removeEventListener('visibilitychange', check);
     };
-  }, [sessionId, taskAutoArchive]);
+  }, [sessionId, autoArchivePending]);
   const gallerySrcs = useMemo(
     () => extractGhostCardGallerySrcs(renderedCardHtml),
     [renderedCardHtml],
@@ -758,7 +782,7 @@ function GhostCardCanvas({
     if (!doc?.body || !prSlotKey) return;
     fillPrStatus(doc);
     measureHeight();
-  }, [prStatuses, prSlotKey, fillPrStatus, measureHeight]);
+  }, [prStatuses, prSlotKey, fillPrStatus, measureHeight, autoArchivePending]);
 
   // 权威实测的高度提交落地后才放开缓动开关:依赖 measuredHeight = 只在
   // 新高度**已渲染提交**的那次 commit 之后翻闸——若挂在"每次渲染后跑",

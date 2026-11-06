@@ -14121,7 +14121,9 @@
       "mailUpdated": "Rascunho atualizado (só de leitura)",
       "mailLegacy": "Histórico de rascunhos (só de leitura)",
       "taskAutoArchived": "\"{{title}}\" arquivada",
-      "taskAutoArchivedUndo": "Desfazer"
+      "taskAutoArchivedUndo": "Desfazer",
+      "taskAutoArchivePending": "Arquiva ao sair",
+      "taskAutoArchiveCancel": "Manter desta vez"
     },
     "ghostHook": {
       "blockedFallback": "Mensagem bloqueada por um plugin; não enviada",

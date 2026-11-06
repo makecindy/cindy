@@ -14121,7 +14121,9 @@
       "mailUpdated": "Brouillon mis à jour (lecture seule)",
       "mailLegacy": "Historique du brouillon (lecture seule)",
       "taskAutoArchived": "« {{title}} » archivée",
-      "taskAutoArchivedUndo": "Annuler"
+      "taskAutoArchivedUndo": "Annuler",
+      "taskAutoArchivePending": "Archivée à la sortie",
+      "taskAutoArchiveCancel": "Garder cette fois"
     },
     "ghostHook": {
       "blockedFallback": "Message bloqué par un plugin ; non envoyé",

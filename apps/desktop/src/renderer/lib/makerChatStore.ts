@@ -92,6 +92,7 @@ import { parseToolLoopErrorDetails } from '@cindy/maker-shared/tool-loop-error';
 import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 import type { AgentMeta, MessageRole, Message, MessageAutomationOrigin } from '@/lib/ccAgent.types';
 import { toMessageAutomationOrigin } from '@/lib/messageAutomationOrigin';
+import { cancelGhostCardTaskAutoArchive } from '@/cindy-brain/ghostCardTaskArchive';
 import {
   readMessageSourceDevice,
   readMessageSourceGroup,
@@ -15311,6 +15312,8 @@ function sendMessage(
   if ((!text.trim() && (!files || files.length === 0)) || !workingDir)
     return Promise.resolve(false);
   if (isRemoteDeletedSessionSendBlocked(sessionId)) return Promise.resolve(false);
+  // 用户在任务里发了消息:本次不再合并后自动归档(插件卡片上的提示随之消失)。
+  cancelGhostCardTaskAutoArchive(sessionId);
   const formDelivery = pendingGhostCardFormDelivery(sessionId);
   if (formDelivery) {
     const beforeEnqueue = opts?.beforeEnqueue;
