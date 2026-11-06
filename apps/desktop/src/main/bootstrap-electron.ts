@@ -9439,6 +9439,8 @@ app.on('ready', async () => {
   // Dock 图标取自可执行 bundle 的 icns,而 dev 跑的是 node_modules 里的官方
   // Electron 二进制。这里 dev-only 手动设成 Cindy 图标;packaged 版由
   // resources/icon.icns 自然生效,不需要也不该动。
+  // 使用 icon-dock.png（generate-mac-icns.mjs 产出，已套 Apple 圆角网格）；
+  // setIcon 会原样显示资源，不会替应用图标自动加圆角。
   if (!app.isPackaged && process.platform === 'darwin') {
     try {
       app.dock?.setIcon(path.join(__dirname, '../../resources/icon-dock.png'));

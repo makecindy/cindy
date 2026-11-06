@@ -2,8 +2,6 @@ import type { InstalledGhost } from '../../../shared/ghost';
 import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
 import { FEATURE_RETIREMENTS } from '../../../shared/featureRetirements';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
-import { parseGhostNativeUi } from '@cindy/plugin-protocol';
-import { parsePluginTabViewState } from '../../../shared/pluginUi';
 import { isGlobalTabCapableGhost, type PluginViewTabState } from './globalTabs';
 import type { TabState } from './types';
 
@@ -73,15 +71,6 @@ function retiredTab(
 }
 
 function isUnavailableTab(tab: TabState, availability: RightSidebarTabAvailability): boolean {
-  if (tab.kind === 'plugin-tab-view') {
-    const state = parsePluginTabViewState(tab.state);
-    if (!state) return true;
-    const ghosts = state.scope === 'global' ? availability.pluginViewGhosts : availability.pluginTaskGhosts ?? availability.installedGhosts;
-    const ghost = ghosts?.find(candidate => installedGhostStoragePart(candidate) === state.instanceId);
-    const ui = parseGhostNativeUi(ghost?.manifest.ui);
-    if (ghosts && (!ghost || ghost.enabled === false || ui?.version !== 1 ||
-        !ui.tabViews?.some(view => view.id === state.id && view.scope === state.scope))) return true;
-  }
   return (
     availability.hiddenTabIds?.has(tab.id) === true ||
     isUnavailablePluginView(tab, availability) ||

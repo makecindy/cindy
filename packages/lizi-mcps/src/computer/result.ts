@@ -71,12 +71,66 @@ export function computerResultOutcome(
     return {
       ok: true,
       outcome: {
-        status: result.effect === 'confirmed' ? 'confirmed' : 'unknown',
+        status: result.effect === 'confirmed' && !isSelectionOnlyClick(name, result) ? 'confirmed' : 'unknown',
         next_step: 'verify_state',
       },
     };
   }
   return { ok: true };
+}
+
+/**
+ * The driver answers a click on a row label that has no AXPress by writing
+ * AXSelected on the row and reports the write-back as confirmed. That proves the
+ * selection, not that the app ran its click handler: Xcode's project navigator
+ * keeps "No Selection" (2026-11-06). The coordinate-click selection variant
+ * delivered a real click and is not matched.
+ */
+function isSelectionOnlyClick(name: string, result: Record<string, unknown>): boolean {
+  return name === 'click'
+    && typeof result.summary === 'string'
+    && result.summary.includes('Selected nearest ')
+    && /confirmed AXSelected=true\.?$/.test(result.summary.trimEnd());
+}
+
+const POINTER_TOOLS: ReadonlySet<string> = new Set(['click', 'double_click', 'right_click', 'drag']);
+// cua-driver 0.37+ delivery note: "... confirm via screenshot and retry with delivery_mode:"foreground" if nothing changed".
+const FOREGROUND_RETRY_PHRASE = 'retry with delivery_mode:"foreground" if nothing changed';
+
+/** Plain string scan: the text comes from the driver, so no backtracking regex runs over it. */
+function withoutForegroundRetryAdvice(text: string): string {
+  const parts = text.split(FOREGROUND_RETRY_PHRASE);
+  // Drop the connective ("... and retry ...") that led into each removed phrase.
+  return parts.map((part, index) =>
+    index < parts.length - 1 ? part.trimEnd().replace(/ (?:and|or)$/, '') : part).join('');
+}
+
+const BACKGROUND_FIRST_HINT = 'If the expected change is missing, first try another background route: the element\'s window-local coordinates, double_click, a menu bar item, a keyboard shortcut or set_value. Foreground delivery moves the person\'s pointer and is refused while they use this computer; use it only when no background route works.';
+const SELECTION_ONLY_HINT = 'Only the accessibility selection was written; the app may not have run its click action (Xcode\'s project navigator does not). If the expected change is missing, click the row\'s window-local coordinates or double_click it in the background.';
+
+/**
+ * A delivered background pointer action carries driver prose that suggests a
+ * foreground retry when nothing changed. That sends the Agent straight into
+ * USER_INPUT_ACTIVE while the person is working, although a background route
+ * usually exists. Replace that advice and keep every evidence field. Refusals
+ * (background_unavailable) are left alone: there the driver has proven that only
+ * the foreground can reach the target.
+ */
+export function normalizePointerAdvice(name: string, data: unknown): unknown {
+  if (!POINTER_TOOLS.has(name) || !data || typeof data !== 'object' || Array.isArray(data)) return data;
+  const result = data as Record<string, unknown>;
+  if (!computerResultOutcome(name, result).ok) return data;
+  const stripped = (value: unknown) => typeof value === 'string' ? withoutForegroundRetryAdvice(value) : value;
+  const summary = stripped(result.summary);
+  const hint = stripped(result.hint);
+  const selectionOnly = isSelectionOnlyClick(name, result);
+  if (!selectionOnly && summary === result.summary && hint === result.hint) return data;
+  const advice = selectionOnly ? SELECTION_ONLY_HINT : BACKGROUND_FIRST_HINT;
+  return {
+    ...result,
+    ...(summary === undefined ? {} : { summary }),
+    hint: typeof hint === 'string' && hint.trim() ? `${hint.trim()} ${advice}` : advice,
+  };
 }
 
 /** Driver recovery prose may advertise parameters/routes the Cindy MCP does not expose. */

@@ -2195,6 +2195,31 @@ describe('进度快照(turn.progress 链路)', () => {
     }
   });
 
+  it('Telegram: 本机文件链接只保留文字', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-tg'),
+      );
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(baseReq({ source: { im: 'telegram' } }));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      // 实踩: 对方打不开这台电脑上的文件, Telegram 还会原样显示整段 Markdown。
+      cb({
+        type: 'text',
+        data: { text: '要发 PR 吗？[PR 技能](</Users/a b/SKILL.md>)、[文档](https://example.com)', isFinal: true },
+      });
+      cb({ type: 'done', data: null });
+
+      const outcome = await p;
+      expect(outcome.finalText).toBe('要发 PR 吗？PR 技能、[文档](https://example.com)');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('X: 一条回帖仍保留标题/长正文等桌面版正式内容', async () => {
     vi.useFakeTimers();
     try {
