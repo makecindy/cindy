@@ -15,11 +15,10 @@
   "ui": {
     "version": 1,
     "appearance": {
-      "fields": ["wallpaper", "uiFont", "codeFont", "bodyFont", "theme", "reading", "contentStyle", "appIcon"],
+      "fields": ["wallpaper", "uiFont", "codeFont", "bodyFont", "theme", "reading", "contentStyle"],
       "resources": [
         {"id": "regular", "kind": "font", "path": "assets/regular.ttf"},
         {"id": "background", "kind": "image", "path": "assets/background.webp"},
-        {"id": "client-icon", "kind": "image", "path": "assets/client-icon.png"}
       ]
     }
   }
@@ -35,7 +34,7 @@ if (appearance) {
     bodyFont: { resource: 'asset:regular', size: 16 },
     reading: { bodyLineHeight: 1.8, maxWidth: 760 }
   }, { ifRevision: before.revision });
-  // applied 表示目标已应用：页面外观由查看窗口确认，应用图标由原生接口确认。
+  // applied 表示目标已应用：页面外观由查看窗口确认。
   // saved 是已保存但尚无应用确认，failed 是应用失败。
   console.log(result.application.status);
 }
@@ -60,7 +59,6 @@ if (appearance) {
 | reading | bodyLineHeight 1.2–2.4、codeLineHeight 1.1–2.4、maxWidth 320–1400 px | 登记消息正文／代码的行距和最大阅读宽度；宽度不超过容器 |
 | contentStyle | messageGap 0–48 px、messagePadding／messageRadius 0–32 px | 登记消息区域的间距、内边距和圆角 |
 | theme | light／dark 中的 text、secondaryText、surface、border、userBubble、userText、assistantBubble | 登记消息区域的语义色和气泡；颜色只接受 #RRGGBB |
-| appIcon | resource | 本机 Cindy 的运行时应用图标；macOS Dock、Windows／Linux 的 Cindy 运行窗口 |
 
 `family` 是字体名称；`resource` 是自有字体文件引用，二者不同时指定。
 字体、壁纸设置沿 Desktop 原有 profile 设置所有者保存；不建立另一套可写偏好。
@@ -79,29 +77,6 @@ Library 和媒体访问继续按原绑定及归属校验；裸路径、任意 UR
 停用／卸载／换源或账号边界使旧资源失效；用户后来手动替换的字体和壁纸不会被旧插件清理。
 无查看窗口、应用未确认或被后续设置覆盖时返回 saved；不得将它显示为“已生效”。
 set 跨资源准备和原设置入口，不承诺多份文件的业务事务；失败后通过 read 查看实际保存值，不自动重试。
-
-## 运行时应用图标
-
-声明 `appIcon` 后，使用已声明的 `kind: "image"` 资源或本插件可读的 Library／媒体引用：
-
-```js
-const result = await cindy.ui.appearance.set({ appIcon: { resource: 'asset:client-icon' } });
-// 单独更换图标由 Main 调用原生接口，不等待前台页面，不刷新页面。
-console.log(result.application.status);
-await cindy.ui.appearance.reset(['appIcon']);
-```
-
-只接受静态 PNG／JPEG／WebP，最多 20 MiB、16,777,216 像素，保留透明度和长宽比，
-按需缩小到不超过 1024×1024，在内存中转换成原生 PNG。图片无效时不修改当前选择。
-设置只保存本插件来源、资源引用和内容身份，不复制图片到另一套存储。
-`read()` 仅在当前选择来自本插件时返回 `appIcon.resource`，否则省略该字段。
-客户端启动后从仍有效的已批准资源重建图标；插件停用、卸载或来源失效时释放该选择。
-清理旧插件不会覆盖其他插件后续选中的图标；原设置页的恢复默认入口也恢复默认图标。
-
-macOS 使用 Electron `app.dock.setIcon`；Windows／Linux 使用 `BrowserWindow.setIcon`，
-后续新开的 Cindy 内容窗口也应用当前选择。此字段不改变 Finder 中的应用、桌面／开始菜单快捷方式、
-固定任务栏、安装包或托盘图标，不修改包身份、签名或系统图标缓存。多插件沿原外观设置的写入顺序，
-需要避免覆盖时使用已有 `ifRevision`，不新增提供方管理或确认流程。
 
 ## 界面元素显隐
 

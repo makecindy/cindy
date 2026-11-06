@@ -14,19 +14,9 @@ import {
   readAppearanceSettingsState,
   writeAppearanceSettingsPatch,
   updateAppearanceSettingsAtomic,
-  resetAppearanceSettings,
 } from '../appearance-settings-store';
 
 describe('terminal appearance overrides', () => {
-  it('persists only app icon provenance and removes it through the original reset', async () => {
-    const appIconResource = { reference: 'asset:icon', hash: 'a'.repeat(64), source: { instanceId: 'example', key: 'b'.repeat(64) } };
-    await writeAppearanceSettingsPatch({ appIconResource });
-    const file = path.join(fixture.userData, 'appearance-settings.json');
-    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ appIconResource });
-    expect(readAppearanceSettingsState().value.appIconResource).toEqual(appIconResource);
-    await resetAppearanceSettings();
-    expect(readAppearanceSettingsState().value.appIconResource).toBeUndefined();
-  });
   // C11/configuration §2: new plugin fields share the original override owner;
   // removing one override must not freeze defaults or erase manual font choices.
   it('stores content appearance overrides without copying defaults', async () => {

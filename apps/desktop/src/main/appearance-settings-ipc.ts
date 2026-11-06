@@ -23,7 +23,6 @@ import {
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 import { isAppContentWindow } from './windowFocusClassifier.js';
-import { resetRuntimeAppIcon } from './app-icon.js';
 import {
   readAppearanceSettings,
   readAppearanceSettingsState,
@@ -189,8 +188,8 @@ function appearanceForWindow(
 ): AppearanceSettings {
   if (isAppContentWindow(win)) return settings;
   const { customWallpaperUrl: _privateUrl, customWallpaperFallbackUrl: _fallback,
-    uiFontResource: _ui, codeFontResource: _code, bodyFontResource: _body, appIconResource: _icon, ...publicSettings } = settings;
-  void _privateUrl; void _fallback; void _ui; void _code; void _body; void _icon;
+    uiFontResource: _ui, codeFontResource: _code, bodyFontResource: _body, ...publicSettings } = settings;
+  void _privateUrl; void _fallback; void _ui; void _code; void _body;
   return {
     ...publicSettings,
     wallpaperId: settings.wallpaperId === 'custom' ? 'none' : settings.wallpaperId,
@@ -352,7 +351,6 @@ export async function updateAppearanceFromSettings(rawPatch: unknown) {
 }
 export async function resetAppearanceFromSettings() {
   const settings = await resetAppearanceSettings();
-  resetRuntimeAppIcon();
   applyAppearanceToWindows(settings);
   broadcast(settings);
   return settings;

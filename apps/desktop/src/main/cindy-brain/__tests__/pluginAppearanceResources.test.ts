@@ -1,7 +1,6 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import sharp from 'sharp';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadPluginAppearanceResource } from '../pluginAppearanceResources.js';
 
@@ -18,21 +17,6 @@ async function fixture() {
   return { instanceId: 'test', ghost, assertCurrent: () => {}, files: { describe: async () => null, read: async () => new Response(null, { status: 404 }) } };
 }
 describe('plugin appearance resources', () => {
-  it('decodes a declared app icon into native PNG bytes without wallpaper conversion', async () => {
-    const f = await fixture();
-    f.ghost.ui.appearance.resources = [{ id: 'icon', kind: 'image', path: 'icon.webp' }];
-    const bytes = await sharp({ create: { width: 32, height: 32, channels: 4, background: '#12345680' } }).webp().toBuffer();
-    await fs.writeFile(path.join(f.ghost.dir, 'icon.webp'), bytes);
-    const result = await loadPluginAppearanceResource(f, 'asset:icon', 'icon');
-    expect(result).toMatchObject({ kind: 'image', mimeType: 'image/png' });
-    expect(await sharp(result.bytes).metadata()).toMatchObject({ format: 'png', width: 32, height: 32, hasAlpha: true });
-  });
-  it('rejects invalid or non-image app icon bytes before native application', async () => {
-    const f = await fixture();
-    f.ghost.ui.appearance.resources = [{ id: 'icon', kind: 'image', path: 'icon.png' }];
-    await fs.writeFile(path.join(f.ghost.dir, 'icon.png'), '<svg xmlns="http://www.w3.org/2000/svg"/>');
-    await expect(loadPluginAppearanceResource(f, 'asset:icon', 'icon')).rejects.toThrow('RESOURCE_TYPE');
-  });
   it('reads declared bounded font bytes and gives them a content identity', async () => {
     const f = await fixture();
     const bytes = Buffer.alloc(12 + 4 * 16 + 4);

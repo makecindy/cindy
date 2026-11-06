@@ -8,7 +8,6 @@ export interface PluginFontResource {
   source: PluginAppearanceSource; reference: string; hash: string; family: string;
 }
 export interface PluginAppearanceSettingsFields {
-  appIconResource?: Omit<PluginFontResource, 'family'>;
   uiFontResource?: PluginFontResource;
   codeFontResource?: PluginFontResource;
   bodyFontResource?: PluginFontResource;
@@ -36,13 +35,6 @@ export function parsePluginAppearanceSource(value: unknown): PluginAppearanceSou
 
 export function normalizePluginAppearanceSettings(raw: Record<string, unknown>): PluginAppearanceSettingsFields {
   const result: PluginAppearanceSettingsFields = {};
-  const icon = raw.appIconResource;
-  if (pluginUiRecord(icon)) {
-    const source = parsePluginAppearanceSource(icon.source);
-    if (source && isPluginAppearanceResource(icon.reference) && typeof icon.hash === 'string' && /^[a-f0-9]{64}$/.test(icon.hash)) {
-      result.appIconResource = { source, reference: icon.reference, hash: icon.hash };
-    }
-  }
   for (const field of ['uiFontResource', 'codeFontResource', 'bodyFontResource'] as const) {
     const value = raw[field];
     if (!pluginUiRecord(value)) continue;
