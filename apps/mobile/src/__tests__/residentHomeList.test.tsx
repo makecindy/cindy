@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, expect, it, vi } from 'vitest';
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 import { homeRowPropsEqual } from '../session/homeRowPropsEqual';
-import { ResidentHomeList, ResidentHomeListProvider, useResidentHomeList, useSessionPaneLayout } from '../session/ResidentHomeList';
+import { ResidentHomeList, ResidentHomeListProvider, useResidentHomeList, useSessionPaneLayout, useSessionSidebarWidthPreference } from '../session/ResidentHomeList';
 import { SessionRightSpinner } from '../session/SessionRightSpinner';
 import { CompanionPresenceRing } from '../session/CompanionPresenceRing';
 import { AnimationVisibilityProvider } from '../hooks/useLoopingAnimation';
@@ -179,6 +179,33 @@ it('drags both panes together, clamps the bounds and retains width through route
   expect(list?.textContent).toBe('240');
   expect(state.mounts).toBe(1);
   expect(state.unmounts).toBe(0);
+});
+// Unit: user request 2026-11-06 — the floating drawer (portrait) and the side
+// column (landscape) record one width. Dragging either moves the other.
+it('shares one task-list width between the side column and the floating drawer', () => {
+  state.platform = 'ios'; state.segments = ['sessions', '[sessionId]'];
+  let layout: ReturnType<typeof useSessionPaneLayout>;
+  let preference: ReturnType<typeof useSessionSidebarWidthPreference>;
+  function Probe() {
+    layout = useSessionPaneLayout();
+    preference = useSessionSidebarWidthPreference();
+    state.anchorWidth = layout.sidebarWidth;
+    return <ResidentHomeList focused top={80} left={0} right={0}><div /></ResidentHomeList>;
+  }
+  const host = document.createElement('div'), root = createRoot(host); roots.push(root);
+  const render = () => act(() => root.render(<ResidentHomeListProvider><Probe /></ResidentHomeListProvider>));
+  render();
+  expect(preference!.width).toBeNull();
+  const start = layout!.sidebarWidth;
+  act(() => state.pan.onPanResponderGrant());
+  act(() => state.pan.onPanResponderRelease(null, { dx: 380 - start }));
+  expect(preference!.width).toBe(380);
+  // Portrait drawer drags write the same value; the column clamps it on return.
+  state.width = 744; render();
+  act(() => preference!.setWidth(520));
+  state.width = 1000; render();
+  expect(layout!.sidebarWidth).toBe(420);
+  expect(preference!.width).toBe(520);
 });
 const ListProbe = memo(function ListProbe({ onSelect }: { onSelect(): void }) {
   const [position, setPosition] = useState(0);
